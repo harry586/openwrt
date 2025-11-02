@@ -1,0 +1,8 @@
+工作流检查-YAML 验证工具（检查 YAML 语法）：
+
+https://www.yamllint.com/
+
+验证 JSON 格式：
+
+https://jsonformatter.curiousconcept.com/
+
