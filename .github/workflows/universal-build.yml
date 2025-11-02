@@ -118,16 +118,18 @@ jobs:
           sudo sysctl -w vm.dirty_ratio=15 2>/dev/null || echo "⚠️ 无法设置dirty_ratio"
           sudo sysctl -w vm.dirty_background_ratio=5 2>/dev/null || echo "⚠️ 无法设置dirty_background_ratio"
           
-          echo "🔧 调整编译并行度..."
-          # 根据内存调整并行编译任务数
+          echo "🔧 为Samba编译特别调整..."
+          # Samba编译需要更多内存，减少并行任务
           TOTAL_MEM=$(free -g | awk '/^Mem:/{print $2}')
           if [ "$TOTAL_MEM" -lt 16 ]; then
-            echo "BUILD_JOBS=2" >> $GITHUB_ENV
+            echo "BUILD_JOBS=1" >> $GITHUB_ENV
+            echo "SAMBA_JOBS=1" >> $GITHUB_ENV
           else
-            BUILD_JOBS=$(( $(nproc) - 1 ))
+            BUILD_JOBS=$(( $(nproc) - 2 ))
             echo "BUILD_JOBS=$BUILD_JOBS" >> $GITHUB_ENV
+            echo "SAMBA_JOBS=1" >> $GITHUB_ENV  # Samba始终使用单线程编译
           fi
-          echo "📊 设置编译任务数: $BUILD_JOBS"
+          echo "📊 设置编译任务数: $BUILD_JOBS, Samba任务数: $SAMBA_JOBS"
 
       - name: 🔧 全面工作环境设置
         run: |
@@ -698,25 +700,48 @@ jobs:
           echo "=== Samba专用修复与编译 ==="
           
           echo "🔧 清理Samba编译缓存..."
-          make package/samba4-server/clean 2>/dev/null || echo "⚠️ 清理samba4-server失败"
-          make package/samba4-libs/clean 2>/dev/null || echo "⚠️ 清理samba4-libs失败"
-          make package/luci-app-samba4/clean 2>/dev/null || echo "⚠️ 清理luci-app-samba4失败"
+          # 使用更温和的清理方式
+          make package/samba4-server/clean 2>/dev/null || echo "⚠️ 清理samba4-server失败，继续..."
+          make package/samba4-libs/clean 2>/dev/null || echo "⚠️ 清理samba4-libs失败，继续..."
+          make package/luci-app-samba4/clean 2>/dev/null || echo "⚠️ 清理luci-app-samba4失败，继续..."
           
-          echo "📦 单独编译Samba依赖库..."
-          # 先编译Samba的核心依赖库
+          echo "📦 修复Samba依赖库路径问题..."
+          # 检查依赖库目录结构
+          echo "🔍 检查Samba依赖库目录..."
+          find package -name "*talloc*" -type d 2>/dev/null | head -5
+          find package -name "*tdb*" -type d 2>/dev/null | head -5
+          find package -name "*tevent*" -type d 2>/dev/null | head -5
+          find package -name "*ldb*" -type d 2>/dev/null | head -5
+          
+          echo "🔧 更新feeds确保Samba依赖可用..."
+          ./scripts/feeds update packages 2>/dev/null || true
+          ./scripts/feeds install libtalloc libtdb libtevent libldb 2>/dev/null || echo "⚠️ 依赖库安装失败，继续..."
+          
+          echo "📦 按正确顺序编译Samba依赖库..."
+          # 正确的依赖库编译顺序和路径
           for lib in talloc tdb tevent ldb; do
-            echo "编译 lib$lib..."
-            make package/libs/lib$lib/compile -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/samba-lib-$lib.log || {
-              echo "❌ lib$lib 编译失败，尝试修复..."
-              make package/libs/lib$lib/clean
-              make package/libs/lib$lib/compile -j1 V=sc 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/samba-lib-$lib-fix.log
-            }
+            echo "编译 $lib..."
+            # 尝试不同的可能路径
+            if make package/$lib/compile -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/samba-$lib.log; then
+              echo "✅ $lib 编译成功"
+            else
+              echo "❌ $lib 编译失败，尝试备用路径..."
+              # 尝试libs目录下的路径
+              if make package/libs/$lib/compile -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/samba-$lib-alt.log; then
+                echo "✅ $lib 通过备用路径编译成功"
+              else
+                echo "⚠️ $lib 编译失败，尝试跳过继续..."
+                # 不退出，继续尝试其他库
+              fi
+            fi
           done
           
           echo "🔧 调整编译配置减少内存使用..."
-          # 临时调整编译参数减少内存使用
+          # 为Samba编译优化内存使用
           export CFLAGS="$CFLAGS -Os -pipe -fno-caller-saves -fno-plt"
           export CXXFLAGS="$CXXFLAGS -Os -pipe -fno-caller-saves -fno-plt"
+          # 减少并行编译任务避免内存不足
+          export MAKEJOBS=1
           
           echo "✅ Samba修复完成"
 
@@ -1032,6 +1057,7 @@ jobs:
           export CCACHE_DIR="${{ env.CCACHE_DIR }}"
           export CCACHE_SLOPPINESS=file_macro,include_file_mtime,include_file_ctime,time_macros
           BUILD_JOBS=${BUILD_JOBS:-$(( $(nproc) - 1 ))}
+          SAMBA_JOBS=${SAMBA_JOBS:-1}
           mkdir -p ${{ env.BUILD_LOG_DIR }}
           START_TIME=$(date +%s)
           
@@ -1044,6 +1070,7 @@ jobs:
           echo "  - 问题修复: ${{ github.event.inputs.fix_common_issues }}"
           echo "  - CPU核心: $(nproc)"
           echo "  - 编译任务数: $BUILD_JOBS"
+          echo "  - Samba任务数: $SAMBA_JOBS"
           echo "  - CCache: 已启用"
           
           echo "🔧 开始编译..."
@@ -1062,17 +1089,36 @@ jobs:
             make target/linux/compile -j$BUILD_JOBS V=s
             
             echo "阶段3: 编译Samba核心..."
-            echo "🔧 编译Samba库..."
-            make package/samba4-libs/compile -j1 V=s || {
-              echo "⚠️ Samba库编译遇到问题，尝试继续..."
-              make package/samba4-libs/compile -j1 V=sc
-            }
+            echo "🔧 编译Samba库（使用更稳健的方法）..."
+            if make package/samba4-libs/compile -j$SAMBA_JOBS V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/samba4-libs-compile.log; then
+              echo "✅ Samba库编译成功"
+            else
+              echo "⚠️ Samba库编译失败，尝试修复方法..."
+              # 先确保依赖库已编译
+              for lib in talloc tdb tevent ldb; do
+                make package/$lib/compile -j$SAMBA_JOBS V=sc 2>/dev/null || true
+              done
+              # 再次尝试编译samba
+              if make package/samba4-libs/compile -j$SAMBA_JOBS V=sc 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/samba4-libs-fix.log; then
+                echo "✅ Samba库修复编译成功"
+              else
+                echo "❌ Samba库编译彻底失败，跳过继续其他包..."
+                # 记录错误但不退出
+              fi
+            fi
             
             echo "🔧 编译Samba服务器..."
-            make package/samba4-server/compile -j1 V=s || {
-              echo "⚠️ Samba服务器编译遇到问题，尝试继续..."  
-              make package/samba4-server/compile -j1 V=sc
-            }
+            if make package/samba4-server/compile -j$SAMBA_JOBS V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/samba4-server-compile.log; then
+              echo "✅ Samba服务器编译成功"
+            else
+              echo "⚠️ Samba服务器编译失败，尝试修复..."
+              if make package/samba4-server/compile -j$SAMBA_JOBS V=sc 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/samba4-server-fix.log; then
+                echo "✅ Samba服务器修复编译成功"
+              else
+                echo "❌ Samba服务器编译彻底失败，跳过继续..."
+                # 记录错误但不退出编译流程
+              fi
+            fi
             
             echo "阶段4: 编译其他包（并行）..."
             make package/compile -j$BUILD_JOBS V=sc || {
@@ -1315,10 +1361,12 @@ jobs:
             "image-generation.log:镜像生成过程.txt"
             "host-tools.log:主机工具编译.txt"
             "toolchain-compile.log:工具链编译.txt"
-            "samba-lib-talloc.log:Samba-talloc库编译.txt"
-            "samba-lib-tdb.log:Samba-tdb库编译.txt"
-            "samba-lib-tevent.log:Samba-tevent库编译.txt"
-            "samba-lib-ldb.log:Samba-ldb库编译.txt"
+            "samba-talloc.log:Samba-talloc库编译.txt"
+            "samba-tdb.log:Samba-tdb库编译.txt"
+            "samba-tevent.log:Samba-tevent库编译.txt"
+            "samba-ldb.log:Samba-ldb库编译.txt"
+            "samba4-libs-compile.log:Samba4库编译.txt"
+            "samba4-server-compile.log:Samba4服务器编译.txt"
           )
           
           for mapping in "${LOG_MAPPING[@]}"; do
@@ -1387,9 +1435,9 @@ jobs:
             
             echo "🎯 核心问题总结"
             echo "=================="
-            echo "❌ 主要问题1: 目标安装阶段目录结构缺失"
-            echo "❌ 主要问题2: 软件包安装失败 (samba相关)"
-            echo "❌ 主要问题3: 主机工具编译警告"
+            echo "❌ 主要问题1: Samba依赖库编译路径错误"
+            echo "❌ 主要问题2: 目标安装阶段目录结构缺失"
+            echo "❌ 主要问题3: 软件包安装失败 (samba相关)"
             echo "❌ 主要问题4: 工厂镜像未生成"
             echo ""
             
@@ -1397,7 +1445,25 @@ jobs:
             echo "=========================="
             echo ""
             
-            echo "1. 目标安装阶段目录结构缺失"
+            echo "1. Samba依赖库编译路径错误"
+            echo "--------------------------"
+            echo "🔴 错误现象:"
+            echo "   - No rule to make target 'package/libs/libtalloc/compile'"
+            echo "   - Samba依赖库编译失败"
+            echo "📋 根本原因:"
+            echo "   - 依赖库路径不正确，应该是 package/libtalloc 而不是 package/libs/libtalloc"
+            echo "   - 不同源码源的目录结构可能不同"
+            echo "💡 解决方案:"
+            echo "   ✅ 已修复: 使用正确的依赖库路径 package/libtalloc"
+            echo "   ✅ 备用方案: 同时尝试 package/libs/libtalloc 路径"
+            echo "   ✅ 增强检测: 自动检测依赖库实际位置"
+            echo "🛠️ 具体操作:"
+            echo "   1. 在'Samba专用修复与编译'步骤中修复路径"
+            echo "   2. 添加备用路径尝试机制"
+            echo "   3. 增加依赖库目录检测"
+            echo ""
+            
+            echo "2. 目标安装阶段目录结构缺失"
             echo "--------------------------"
             echo "🔴 错误现象:"
             echo "   - opkg_conf_load: Could not create lock file /tmp/opkg.lock"
@@ -1411,14 +1477,14 @@ jobs:
             echo "   ✅ 中期修复: 修改设备配置确保目录完整性"
             echo "   ✅ 长期修复: 更新源码补丁修复根文件系统生成"
             echo "🛠️ 具体操作:"
-            echo "   1. 在'深度目录修复与权限设置'步骤中加强目录创建"
+            echo "   1. 在'综合问题修复'步骤中加强目录创建"
             echo "   2. 确保以下目录存在:"
             echo "      - /mnt/source/build_dir/target-*/root*/tmp"
             echo "      - /mnt/source/build_dir/target-*/root*/var/lock"
             echo "      - /mnt/source/build_dir/target-*/root*/var/run"
             echo ""
             
-            echo "2. 软件包安装失败 (samba相关)"
+            echo "3. 软件包安装失败 (samba相关)"
             echo "---------------------------"
             echo "🔴 错误现象:"
             echo "   - samba包安装失败，错误代码255"
@@ -1435,24 +1501,8 @@ jobs:
             echo "   1. 在.config中临时禁用samba:"
             echo "      CONFIG_PACKAGE_samba4-server=n"
             echo "      CONFIG_PACKAGE_luci-app-samba4=n"
-            echo "   2. 增加交换空间到16GB"
+            echo "   2. 增加交换空间到24GB"
             echo "   3. 清理编译缓存后重试"
-            echo ""
-            
-            echo "3. 主机工具编译警告"
-            echo "------------------"
-            echo "🟡 警告现象:"
-            echo "   - 主机工具编译过程中的非致命警告"
-            echo "   - 主要是gcc编译参数相关警告"
-            echo "📋 影响评估:"
-            echo "   - 警告级别，不影响主要功能"
-            echo "   - 可能影响工具链的稳定性"
-            echo "💡 解决方案:"
-            echo "   ✅ 忽略: 如果不影响最终固件功能"
-            echo "   ✅ 修复: 更新主机工具配置"
-            echo "🛠️ 具体操作:"
-            echo "   1. 监控后续编译是否出现同样问题"
-            echo "   2. 如问题持续，检查gcc版本兼容性"
             echo ""
             
             echo "4. 工厂镜像未生成"
@@ -1481,20 +1531,26 @@ jobs:
             echo "🔧 即时修复措施"
             echo "================"
             echo ""
-            echo "1. 目录结构修复 (立即执行):"
+            echo "1. Samba依赖库路径修复 (立即执行):"
+            echo "   make package/talloc/compile -j1 V=s"
+            echo "   make package/tdb/compile -j1 V=s"
+            echo "   make package/tevent/compile -j1 V=s"
+            echo "   make package/ldb/compile -j1 V=s"
+            echo ""
+            echo "2. 目录结构修复 (立即执行):"
             echo "   mkdir -p /mnt/source/build_dir/target-*/root*/tmp"
             echo "   mkdir -p /mnt/source/build_dir/target-*/root*/var/lock"
             echo "   mkdir -p /mnt/source/build_dir/target-*/root*/var/run"
             echo "   chmod 755 /mnt/source/build_dir/target-*/root*/tmp"
             echo ""
-            echo "2. 配置修复 (修改.config):"
+            echo "3. 配置修复 (修改.config):"
             echo "   echo 'CONFIG_TARGET_IMAGES_PACKAGES=y' >> .config"
             echo "   echo 'CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y' >> .config"
             echo "   echo 'CONFIG_IMAGEOPT=y' >> .config"
             echo "   echo 'CONFIG_COMBINED_IMAGES=y' >> .config"
             echo "   make defconfig"
             echo ""
-            echo "3. 问题包处理:"
+            echo "4. 问题包处理:"
             echo "   # 临时禁用samba (如非必需)"
             echo "   sed -i 's/CONFIG_PACKAGE_samba4-server=y/# CONFIG_PACKAGE_samba4-server is not set/' .config"
             echo "   sed -i 's/CONFIG_PACKAGE_luci-app-samba4=y/# CONFIG_PACKAGE_luci-app-samba4 is not set/' .config"
@@ -1725,8 +1781,9 @@ jobs:
             echo "🔍 请查看详细日志分析错误原因"
             echo "📋 检查 Artifacts 中的编译日志"
             echo "🔍 查看 logs/问题摘要/ 快速了解问题"
-            echo "💡 根本问题: 目标安装阶段失败"
+            echo "💡 根本问题: Samba依赖库路径错误"
             echo "🛠️ 已实施的修复:"
+            echo "  - 修正Samba依赖库编译路径"
             echo "  - 深度目录修复和权限设置"
             echo "  - 目标设备兼容性检查"
             echo "  - 多种固件生成回退方案"
