@@ -1,0 +1,50 @@
+name: Update Configs List
+
+on:
+  push:
+    paths:
+      - 'firmware-config/configs/**'
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-list:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Generate config list
+        run: |
+          cd firmware-config
+          CONFIG_FILES=$(find configs -name ".config_*" -type f 2>/dev/null | sort || echo "")
+          CONFIG_COUNT=$(echo "$CONFIG_FILES" | grep -c '^' || echo "0")
+          
+          echo "# 设备配置文件列表" > configs-list.md
+          echo "" >> configs-list.md
+          echo "> 最后更新: $(date)" >> configs-list.md
+          echo "> 配置文件数量: $CONFIG_COUNT 个" >> configs-list.md
+          echo "" >> configs-list.md
+          echo "## 可用配置文件" >> configs-list.md
+          echo "" >> configs-list.md
+          echo '```' >> configs-list.md
+          echo "$CONFIG_FILES" >> configs-list.md
+          echo '```' >> configs-list.md
+          echo "" >> configs-list.md
+          echo "## 使用方法" >> configs-list.md
+          echo "" >> configs-list.md
+          echo '复制上面的配置文件路径，在工作流的"设备配置文件"字段中粘贴使用。' >> configs-list.md
+          echo "" >> configs-list.md
+          echo '文件命名格式: `.config_设备名_源码库`' >> configs-list.md
+          
+      - name: Commit changes
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add firmware-config/configs-list.md
+          git diff --staged --quiet || git commit -m "更新配置文件列表"
+          git push
