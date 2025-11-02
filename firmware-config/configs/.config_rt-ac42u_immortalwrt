@@ -337,6 +337,36 @@ CONFIG_DEVFREQ_THERMAL=y
 CONFIG_ARM_ARCH_TIMER=y
 
 # ======================
+# Samba编译优化配置
+# ======================
+
+# 确保Samba依赖库正确配置
+CONFIG_PACKAGE_libtalloc=y
+CONFIG_PACKAGE_libtdb=y  
+CONFIG_PACKAGE_libtevent=y
+CONFIG_PACKAGE_libldb=y
+
+# Samba编译优化
+CONFIG_SAMBA4_SMALL=y
+CONFIG_SAMBA4_OPTIMIZE_SIZE=y
+
+# 禁用不必要的Samba组件减小体积
+# CONFIG_SAMBA4_SERVER_AVAHI is not set
+# CONFIG_SAMBA4_SERVER_DC is not set
+# CONFIG_SAMBA4_UTILS is not set
+# CONFIG_SAMBA4_CLIENT is not set
+
+# 启用必要的Samba组件
+CONFIG_SAMBA4_ENABLE_SMBD=y
+CONFIG_SAMBA4_ENABLE_NMBD=y
+# CONFIG_SAMBA4_ENABLE_WINBIND is not set  # 禁用winbind减少依赖
+
+# 编译优化
+CONFIG_SAMBA4_EMBEDDED=y
+CONFIG_SAMBA4_NO_LDAP=y
+CONFIG_SAMBA4_NO_ADS=y
+
+# ======================
 # 明确禁用的功能 (减小体积，避免冲突)
 # ======================
 
