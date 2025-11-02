@@ -3,6 +3,7 @@
 # 设备平台: ipq40xx (Qualcomm IPQ4019)
 # 设备树: qcom-ipq4019-rt-ac42u.dts
 # 已修复所有软件包冲突和Samba编译问题
+# 添加预下载验证支持
 # =============================================
 
 # ======================
@@ -367,6 +368,17 @@ CONFIG_SAMBA4_NO_LDAP=y
 CONFIG_SAMBA4_NO_ADS=y
 
 # ======================
+# 预下载优化配置
+# ======================
+
+# 启用并行下载
+CONFIG_DOWNLOAD_PARALLEL=y
+CONFIG_DOWNLOAD_TIMEOUT=60
+
+# 启用源码完整性检查
+CONFIG_CHECK_SIGNATURE=y
+
+# ======================
 # 明确禁用的功能 (减小体积，避免冲突)
 # ======================
 
@@ -392,7 +404,7 @@ CONFIG_SAMBA4_NO_ADS=y
 # CONFIG_PACKAGE_collectd-mod-interface is not set
 # CONFIG_PACKAGE_collectd-mod-memory is not set
 # CONFIG_PACKAGE_collectd-mod-network is not set
-# CONFIG_PACKAGE_collectd-mod-ping is not set
+# CONFIG_PACKAGE_collectd-mod-ping is set
 # CONFIG_PACKAGE_collectd-mod-rrdtool is not set
 
 # 禁用网络唤醒
@@ -434,6 +446,7 @@ CONFIG_SAMBA4_NO_ADS=y
 # - Samba4 文件共享 (已优化)
 # - FTP 服务器
 # - 工厂镜像生成
+# - 预下载验证支持
 
 # ❌ 已禁用的功能:
 # - KMS 视频流媒体 (减小体积)
@@ -452,6 +465,8 @@ CONFIG_SAMBA4_NO_ADS=y
 # - 编译优化
 # - 内存优化
 # - Samba 编译优化
+# - 预下载优化
 
 # 📊 预估固件大小: 25-35MB
 # ⏱️ 预估编译时间: 2-4小时
+# 💾 预估所需空间: 25-30GB
