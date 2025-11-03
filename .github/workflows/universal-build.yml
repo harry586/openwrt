@@ -1,5 +1,5 @@
 name: Universal Firmware Builder - Optimized Version
-# 工作流文件生成时间: 2024-06-12 14:30:00
+# 工作流文件生成时间: 2025-10-20 14:30:00
 
 on:
   workflow_dispatch:
@@ -431,7 +431,7 @@ jobs:
             CACHED_PATH=$(grep "$CONFIG_PROFILE" "${{ env.BUILD_LOG_DIR }}/all_config_files.txt" | head -1)
             if [ -n "$CACHED_PATH" ]; then
               if [[ "$CACHED_PATH" == ./* ]]; then
-                CONFIG_FOUND="$GITHUB_WORKSPACE/${CACHED_PATH#./}"
+                CONFIG_FOUND="$GITHUB_WORKSPACE/${Cached_PATH#./}"
               else
                 CONFIG_FOUND="$CACHED_PATH"
               fi
@@ -554,6 +554,145 @@ jobs:
           
           echo "✅ Samba验证完成"
 
+      - name: 📦 详细自定义功能处理
+        if: github.event.inputs.enable_custom_features == 'true'
+        timeout-minutes: 10
+        run: |
+          cd ${{ env.SOURCE_DIR }}
+          echo "=== 详细自定义功能处理 ==="
+          
+          # 使用配置仓库的绝对路径
+          CONFIG_REPO_DIR="$GITHUB_WORKSPACE"
+          CUSTOM_FEATURES_DIR="${{ env.CUSTOM_FEATURES_DIR }}"
+          
+          # 如果环境变量中有设置，使用环境变量，否则尝试默认路径
+          if [ -z "$CUSTOM_FEATURES_DIR" ]; then
+            CUSTOM_FEATURES_DIR="$CONFIG_REPO_DIR/firmware-config/custom-features"
+            echo "ℹ️ 使用默认自定义功能目录: $CUSTOM_FEATURES_DIR"
+          fi
+          
+          if [ -n "$CUSTOM_FEATURES_DIR" ] && [ -d "$CUSTOM_FEATURES_DIR" ]; then
+            echo "🔍 使用自定义功能目录: $CUSTOM_FEATURES_DIR"
+            
+            # 验证目录内容
+            echo "📁 目录内容验证:"
+            ls -la "$CUSTOM_FEATURES_DIR" 2>/dev/null || echo "无法访问目录"
+            
+            # 详细处理预编译IPK包
+            echo "📦 详细处理预编译IPK包..."
+            IPK_DIRS=("$CUSTOM_FEATURES_DIR/prebuilt-ipks" "$CUSTOM_FEATURES_DIR/ipks" "$CUSTOM_FEATURES_DIR/packages")
+            IPK_PROCESSED=false
+            
+            for ipk_dir in "${IPK_DIRS[@]}"; do
+              if [ -d "$ipk_dir" ]; then
+                echo "🔍 检查IPK目录: $ipk_dir"
+                IPK_FILES=$(find "$ipk_dir" -name "*.ipk" -type f 2>/dev/null)
+                IPK_COUNT=$(echo "$IPK_FILES" | grep -v '^$' | wc -l 2>/dev/null || echo 0)
+                
+                if [ "$IPK_COUNT" -gt 0 ]; then
+                  echo "✅ 在 $ipk_dir 找到 $IPK_COUNT 个IPK文件"
+                  mkdir -p package/base-files/files/usr/lib/opkg/custom
+                  
+                  echo "📋 IPK文件列表:"
+                  for ipk in $IPK_FILES; do
+                    if [ -f "$ipk" ]; then
+                      filename=$(basename "$ipk")
+                      filesize=$(stat -c%s "$ipk" 2>/dev/null || echo "未知")
+                      echo "  - $filename ($(($filesize/1024))KB)"
+                      cp "$ipk" package/base-files/files/usr/lib/opkg/custom/
+                      echo "    ✅ 已复制到固件"
+                    fi
+                  done
+                  IPK_PROCESSED=true
+                  break
+                else
+                  echo "ℹ️ 目录 $ipk_dir 中没有找到IPK文件"
+                fi
+              fi
+            done
+            
+            if [ "$IPK_PROCESSED" = "false" ]; then
+              echo "ℹ️ 未找到任何IPK文件"
+            fi
+            
+            # 详细处理自定义脚本
+            echo ""
+            echo "📜 详细处理自定义脚本..."
+            SCRIPT_DIRS=("$CUSTOM_FEATURES_DIR/scripts" "$CUSTOM_FEATURES_DIR/script")
+            SCRIPT_PROCESSED=false
+            
+            for script_dir in "${SCRIPT_DIRS[@]}"; do
+              if [ -d "$script_dir" ]; then
+                echo "🔍 检查脚本目录: $script_dir"
+                SCRIPT_FILES=$(find "$script_dir" -name "*.sh" -type f 2>/dev/null)
+                SCRIPT_COUNT=$(echo "$SCRIPT_FILES" | grep -v '^$' | wc -l 2>/dev/null || echo 0)
+                
+                if [ "$SCRIPT_COUNT" -gt 0 ]; then
+                  echo "✅ 在 $script_dir 找到 $SCRIPT_COUNT 个脚本文件"
+                  
+                  echo "📋 脚本文件列表:"
+                  for script in $SCRIPT_FILES; do
+                    if [ -f "$script" ]; then
+                      filename=$(basename "$script")
+                      echo "  - $filename"
+                      echo "    ▶️ 执行脚本..."
+                      chmod +x "$script"
+                      export SOURCE_DIR="${{ env.SOURCE_DIR }}"
+                      export BUILD_DIR="${{ env.SOURCE_DIR }}/build_dir"
+                      export STAGING_DIR="${{ env.SOURCE_DIR }}/staging_dir"
+                      
+                      if timeout 300 bash "$script"; then
+                        echo "    ✅ 脚本执行成功"
+                      else
+                        EXIT_CODE=$?
+                        if [ $EXIT_CODE -eq 124 ]; then
+                          echo "    ⏰ 脚本执行超时"
+                        else
+                          echo "    ⚠️ 脚本执行失败 (退出码: $EXIT_CODE)"
+                        fi
+                      fi
+                    fi
+                  done
+                  SCRIPT_PROCESSED=true
+                  break
+                else
+                  echo "ℹ️ 目录 $script_dir 中没有找到脚本文件"
+                fi
+              fi
+            done
+            
+            if [ "$SCRIPT_PROCESSED" = "false" ]; then
+              echo "ℹ️ 未找到任何脚本文件"
+            fi
+            
+            # 处理自定义补丁
+            echo ""
+            echo "🔧 处理自定义补丁..."
+            PATCH_FILES=$(find "$CUSTOM_FEATURES_DIR" -name "*.patch" -type f 2>/dev/null)
+            PATCH_COUNT=$(echo "$PATCH_FILES" | grep -v '^$' | wc -l 2>/dev/null || echo 0)
+            
+            if [ "$PATCH_COUNT" -gt 0 ]; then
+              echo "✅ 找到 $PATCH_COUNT 个补丁文件"
+              for patch in $PATCH_FILES; do
+                if [ -f "$patch" ]; then
+                  echo "🔧 应用补丁: $(basename $patch)"
+                  if patch -p1 -N < "$patch"; then
+                    echo "✅ 补丁应用成功: $(basename $patch)"
+                  else
+                    echo "⚠️ 补丁应用失败或已应用: $(basename $patch)"
+                  fi
+                fi
+              done
+            else
+              echo "ℹ️ 未找到补丁文件"
+            fi
+            
+          else
+            echo "ℹ️ 无自定义功能目录或目录不存在，跳过自定义功能处理"
+            echo "搜索的目录: $CUSTOM_FEATURES_DIR"
+          fi
+          echo "✅ 自定义功能处理完成"
+
       - name: 📥 快速预下载
         if: github.event.inputs.enable_pre_download == 'true'
         timeout-minutes: 20
@@ -580,36 +719,6 @@ jobs:
           }
           
           echo "✅ 工具链编译完成"
-
-      - name: 📦 快速自定义功能处理
-        if: github.event.inputs.enable_custom_features == 'true'
-        timeout-minutes: 5
-        run: |
-          cd ${{ env.SOURCE_DIR }}
-          echo "=== 快速自定义功能处理 ==="
-          
-          CONFIG_REPO_DIR="$GITHUB_WORKSPACE"
-          CUSTOM_FEATURES_DIR="$CONFIG_REPO_DIR/firmware-config/custom-features"
-          
-          if [ -d "$CUSTOM_FEATURES_DIR" ]; then
-            echo "🔍 处理自定义功能..."
-            
-            # 快速处理IPK包
-            if [ -d "$CUSTOM_FEATURES_DIR/prebuilt-ipks" ]; then
-              mkdir -p package/base-files/files/usr/lib/opkg/custom
-              find "$CUSTOM_FEATURES_DIR/prebuilt-ipks" -name "*.ipk" -exec cp {} package/base-files/files/usr/lib/opkg/custom/ \; 2>/dev/null || true
-              echo "✅ IPK包已复制"
-            fi
-            
-            # 快速处理脚本
-            if [ -d "$CUSTOM_FEATURES_DIR/scripts" ]; then
-              find "$CUSTOM_FEATURES_DIR/scripts" -name "*.sh" -exec chmod +x {} \; -exec bash {} \; 2>/dev/null || true
-              echo "✅ 脚本已执行"
-            fi
-          else
-            echo "ℹ️ 无自定义功能目录，跳过"
-          fi
-          echo "✅ 自定义功能处理完成"
 
       - name: 🏗️ 高效编译固件
         timeout-minutes: 120
