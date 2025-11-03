@@ -73,7 +73,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 180  # 减少总超时时间
+    timeout-minutes: 180
     steps:
       - name: 📥 检出配置仓库
         uses: actions/checkout@v4
@@ -143,7 +143,7 @@ jobs:
         run: |
           echo "设置高级缓存与性能优化..."
           mkdir -p ${{ env.CCACHE_DIR }}
-          ccache -M 8G  # 减少缓存大小
+          ccache -M 8G
           ccache -o compression=true
           ccache -o compression_level=6
           echo "CCACHE_DIR=${{ env.CCACHE_DIR }}" >> $GITHUB_ENV
@@ -195,7 +195,7 @@ jobs:
           
           echo "✅ 源码配置解析完成"
 
-      - name: 📥 智能源码获取
+      - name: 📥 智能源码获取（多镜像）
         id: clone-source
         run: |
           echo "开始智能源码获取..."
@@ -204,68 +204,221 @@ jobs:
           SOURCE_URL="${{ env.SOURCE_URL }}"
           echo "🎯 请求分支: $REQUESTED_BRANCH"
           
+          # 定义备用镜像（根据预设选择）
+          case "${{ env.SOURCE_PRESET }}" in
+            "immortalwrt")
+              BACKUP_MIRRORS=(
+                "https://github.com/immortalwrt/immortalwrt.git"
+                "https://gitee.com/immortalwrt/immortalwrt.git"
+              )
+              ;;
+            "openwrt")
+              BACKUP_MIRRORS=(
+                "https://github.com/openwrt/openwrt.git"
+                "https://git.openwrt.org/openwrt/openwrt.git"
+              )
+              ;;
+            "lede")
+              BACKUP_MIRRORS=(
+                "https://github.com/coolsnowwolf/lede.git"
+                "https://gitee.com/coolsnowwolf/lede.git"
+              )
+              ;;
+            *)
+              BACKUP_MIRRORS=(
+                "https://github.com/immortalwrt/immortalwrt.git"
+                "https://gitee.com/immortalwrt/immortalwrt.git"
+              )
+              ;;
+          esac
+          
           rm -rf .[!.]* * 2>/dev/null || true
           
           CLONE_SUCCESS=false
+          # 首先尝试主镜像
           for strategy in "指定分支" "main" "master" "默认分支"; do
-            echo "🔄 尝试策略: $strategy"
+            echo "🔄 尝试主镜像策略: $strategy"
             rm -rf .[!.]* * 2>/dev/null || true
+            
             case $strategy in
               "指定分支")
-                git clone --depth 1 --branch "$REQUESTED_BRANCH" "$SOURCE_URL" . || continue
+                git clone --depth 1 --branch "$REQUESTED_BRANCH" "$SOURCE_URL" . && CLONE_SUCCESS=true || continue
                 ;;
               "main")
-                git clone --depth 1 --branch main "$SOURCE_URL" . || continue
+                git clone --depth 1 --branch main "$SOURCE_URL" . && CLONE_SUCCESS=true || continue
                 ;;
-              "master")
-                git clone --depth 1 --branch master "$SOURCE_URL" . || continue
+              "master")  
+                git clone --depth 1 --branch master "$SOURCE_URL" . && CLONE_SUCCESS=true || continue
                 ;;
               "默认分支")
-                git clone --depth 1 "$SOURCE_URL" . || continue
+                git clone --depth 1 "$SOURCE_URL" . && CLONE_SUCCESS=true || continue
                 ;;
             esac
             
-            if [ -d ".git" ] && [ -f "scripts/feeds" ]; then
+            if [ "$CLONE_SUCCESS" = "true" ] && [ -d ".git" ] && [ -f "scripts/feeds" ]; then
               ACTUAL_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
               COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-              echo "✅ 克隆成功: $strategy"
-              CLONE_SUCCESS=true
+              echo "✅ 主镜像克隆成功: $strategy"
               break
             fi
           done
           
+          # 如果主镜像失败，尝试备用镜像
           if [ "$CLONE_SUCCESS" = "false" ]; then
-            echo "❌ 所有克隆策略都失败"
-            exit 1
+            echo "🔄 主镜像失败，尝试备用镜像..."
+            for mirror in "${BACKUP_MIRRORS[@]}"; do
+              echo "🔄 尝试备用镜像: $mirror"
+              rm -rf .[!.]* * 2>/dev/null || true
+              
+              # 对每个镜像尝试不同的分支策略
+              for branch_strategy in "$REQUESTED_BRANCH" "main" "master" "default"; do
+                echo "  🔄 尝试分支: $branch_strategy"
+                rm -rf .[!.]* * 2>/dev/null || true
+                
+                if git clone --depth 1 --branch "$branch_strategy" "$mirror" . 2>/dev/null; then
+                  if [ -d ".git" ] && [ -f "scripts/feeds" ]; then
+                    ACTUAL_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown") 
+                    COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+                    echo "✅ 备用镜像克隆成功: $mirror (分支: $branch_strategy)"
+                    CLONE_SUCCESS=true
+                    break 2
+                  fi
+                fi
+              done
+            done
+          fi
+          
+          if [ "$CLONE_SUCCESS" = "false" ]; then
+            echo "❌ 所有克隆策略和镜像都失败"
+            echo "🔧 尝试最后的解决方案：浅克隆+完整拉取"
+            rm -rf .[!.]* * 2>/dev/null || true
+            git clone --depth 1 "$SOURCE_URL" . || git clone --filter=blob:none "$SOURCE_URL" .
+            if [ -d ".git" ] && [ -f "scripts/feeds" ]; then
+              ACTUAL_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
+              COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+              echo "✅ 最终方案克隆成功"
+              CLONE_SUCCESS=true
+            else
+              echo "❌ 所有源码获取方法都失败"
+              exit 1
+            fi
           fi
           
           echo "ACTUAL_BRANCH=$ACTUAL_BRANCH" >> $GITHUB_ENV
           echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
           echo "✅ 源码获取完成"
 
-      - name: 🔄 快速源码初始化
+      - name: 🔄 智能源码初始化与镜像切换
         timeout-minutes: 15
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "开始快速源码初始化..."
+          echo "开始智能源码初始化..."
           
           if [ ! -f "scripts/feeds" ]; then
             echo "❌ 错误: scripts/feeds 文件不存在"
             exit 1
           fi
           
-          # 快速feeds配置
+          # 定义多个镜像源
+          PACKAGES_MIRRORS=(
+            "https://git.openwrt.org/feed/packages.git"
+            "https://github.com/openwrt/packages.git"
+            "https://gitee.com/openwrt-mirror/packages.git"
+          )
+          
+          LUCI_MIRRORS=(
+            "https://git.openwrt.org/feed/luci.git"
+            "https://github.com/openwrt/luci.git" 
+            "https://gitee.com/openwrt-mirror/luci.git"
+          )
+          
+          # 智能feeds配置
           if [ ! -f "feeds.conf" ]; then
-            echo "创建通用 feeds.conf"
-            echo "src-git packages https://git.openwrt.org/feed/packages.git" > feeds.conf
-            echo "src-git luci https://git.openwrt.org/feed/luci.git" >> feeds.conf
+            echo "创建智能 feeds.conf"
+            # 使用第一个镜像作为默认
+            echo "src-git packages ${PACKAGES_MIRRORS[0]}" > feeds.conf
+            echo "src-git luci ${LUCI_MIRRORS[0]}" >> feeds.conf
+            echo "src-git routing https://git.openwrt.org/feed/routing.git" >> feeds.conf
+            echo "src-git telephony https://git.openwrt.org/feed/telephony.git" >> feeds.conf
           fi
           
-          echo "🔄 快速更新Feeds..."
-          ./scripts/feeds update -a
-          echo "📦 快速安装基础Feeds..."
-          ./scripts/feeds install -a
-          echo "✅ 源码初始化完成"
+          echo "🔄 开始智能更新Feeds..."
+          
+          # 更新feeds的函数，支持重试和镜像切换
+          update_feeds_with_retry() {
+            local max_retries=3
+            local retry_count=0
+            
+            while [ $retry_count -lt $max_retries ]; do
+              echo "🔄 尝试更新Feeds (第 $((retry_count + 1)) 次)..."
+              
+              if ./scripts/feeds update -a; then
+                echo "✅ Feeds更新成功"
+                return 0
+              else
+                retry_count=$((retry_count + 1))
+                echo "⚠️ 第 $retry_count 次更新失败"
+                
+                if [ $retry_count -eq 1 ]; then
+                  # 第一次失败后切换到GitHub镜像
+                  echo "🔄 切换到GitHub镜像..."
+                  cat > feeds.conf << EOF
+src-git packages ${PACKAGES_MIRRORS[1]}
+src-git luci ${LUCI_MIRRORS[1]}
+src-git routing https://github.com/openwrt/routing.git
+src-git telephony https://github.com/openwrt/telephony.git
+EOF
+                elif [ $retry_count -eq 2 ]; then
+                  # 第二次失败后切换到Gitee镜像
+                  echo "🔄 切换到Gitee镜像..."
+                  cat > feeds.conf << EOF
+src-git packages ${PACKAGES_MIRRORS[2]}
+src-git luci ${LUCI_MIRRORS[2]}
+src-git routing https://gitee.com/openwrt-mirror/routing.git
+src-git telephony https://gitee.com/openwrt-mirror/telephony.git
+EOF
+                fi
+                
+                if [ $retry_count -lt $max_retries ]; then
+                  echo "⏳ 等待 3 秒后重试..."
+                  sleep 3
+                fi
+              fi
+            done
+            
+            echo "❌ 所有更新尝试都失败"
+            return 1
+          }
+          
+          # 执行更新
+          if update_feeds_with_retry; then
+            echo "📦 开始安装Feeds..."
+            if ./scripts/feeds install -a; then
+              echo "✅ 所有Feeds安装成功"
+            else
+              echo "⚠️ 部分Feeds安装失败，尝试逐个安装..."
+              ./scripts/feeds update -a
+              for feed in packages luci routing telephony; do
+                echo "📦 安装 $feed..."
+                ./scripts/feeds install $feed || echo "⚠️ $feed 安装失败，继续..."
+              done
+            fi
+            echo "✅ 源码初始化完成"
+          else
+            echo "❌ Feeds更新失败，尝试最小化安装继续..."
+            
+            # 尝试只更新和安装packages（必需）
+            echo "🔄 尝试仅更新packages..."
+            ./scripts/feeds update packages
+            ./scripts/feeds install -a
+            
+            if [ $? -eq 0 ]; then
+              echo "⚠️ 已使用最小化feeds配置，继续编译流程"
+            else
+              echo "❌ 关键feeds安装失败"
+              exit 1
+            fi
+          fi
 
       - name: 🎯 快速配置文件查找与应用
         timeout-minutes: 1
