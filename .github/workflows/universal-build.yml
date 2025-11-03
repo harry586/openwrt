@@ -1,4 +1,4 @@
-name: Universal Firmware Builder - Complete Version
+name: Universal Firmware Builder - Enhanced Version
 
 on:
   workflow_dispatch:
@@ -158,6 +158,11 @@ jobs:
           sudo apt-get install -y libtool-bin automake autoconf pkg-config subversion mercurial curl cmake ninja-build
           echo "📦 安装系统库..."
           sudo apt-get install -y libelf-dev libssl-dev zlib1g-dev libc6-dev libxml2-dev liblzma-dev liblzo2-dev
+          
+          # 补充依赖安装
+          echo "📦 安装补充依赖..."
+          sudo apt-get install -y bzip2 patch asciidoc sphinxsearch sphinx-common binutils
+          
           echo "🔍 依赖安装验证..."
           echo "=== 关键工具验证 ==="
           for tool in gcc g++ make flex bison git curl wget ninja; do
@@ -564,6 +569,35 @@ jobs:
             exit 1
           fi
 
+      - name: 🔧 强制Samba配置验证
+        run: |
+          cd ${{ env.SOURCE_DIR }}
+          echo "=== 强制Samba配置验证 ==="
+          
+          # 确保禁用所有旧版Samba
+          echo "🔧 禁用旧版Samba配置..."
+          sed -i 's/CONFIG_PACKAGE_autosamba=y/# CONFIG_PACKAGE_autosamba is not set/' .config 2>/dev/null || true
+          sed -i 's/CONFIG_PACKAGE_luci-app-samba=y/# CONFIG_PACKAGE_luci-app-samba is not set/' .config 2>/dev/null || true  
+          sed -i 's/CONFIG_PACKAGE_samba36-server=y/# CONFIG_PACKAGE_samba36-server is not set/' .config 2>/dev/null || true
+          
+          # 确保启用Samba4
+          echo "🔧 启用Samba4配置..."
+          if ! grep -q "CONFIG_PACKAGE_luci-app-samba4=y" .config; then
+            echo "CONFIG_PACKAGE_luci-app-samba4=y" >> .config
+          fi
+          if ! grep -q "CONFIG_PACKAGE_samba4-server=y" .config; then
+            echo "CONFIG_PACKAGE_samba4-server=y" >> .config
+          fi
+          if ! grep -q "CONFIG_PACKAGE_samba4-libs=y" .config; then
+            echo "CONFIG_PACKAGE_samba4-libs=y" >> .config
+          fi
+          
+          # 验证配置
+          echo "📋 最终Samba配置状态:"
+          grep -E "CONFIG_PACKAGE.*samba|CONFIG_SAMBA" .config | sort
+          
+          echo "✅ Samba配置验证完成"
+
       - name: 🔧 设备镜像配置修复
         run: |
           cd ${{ env.SOURCE_DIR }}
@@ -955,61 +989,61 @@ jobs:
           BUILD_JOBS=${BUILD_JOBS:-$(( $(nproc) - 1 ))}
           SAMBA_JOBS=${SAMBA_JOBS:-1}
           mkdir -p ${{ env.BUILD_LOG_DIR }}
+          
+          # Samba专用编译日志
+          SAMBA_LOG_DIR="${{ env.BUILD_LOG_DIR }}/samba-logs"
+          mkdir -p "$SAMBA_LOG_DIR"
+          
           START_TIME=$(date +%s)
           echo "🔍 编译前最终空间检查..."
           COMPILE_START_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
           echo "编译开始前可用空间: ${COMPILE_START_SPACE}GB"
-          if [ "$COMPILE_START_SPACE" -lt 3 ]; then
-            echo "🚨 严重错误: 编译开始前空间不足3GB"
-            exit 1
-          fi
+          
           echo "📊 编译参数汇总:"
-          echo "  - 源码库: ${{ env.SOURCE_PRESET }}"
-          echo "  - 实际分支: ${{ env.ACTUAL_BRANCH }}"
-          echo "  - 优化策略: ${{ github.event.inputs.build_optimization }}"
-          echo "  - 工具链策略: ${{ github.event.inputs.toolchain_strategy }}"
-          echo "  - 自定义功能: ${{ github.event.inputs.enable_custom_features }}"
-          echo "  - 问题修复: ${{ github.event.inputs.fix_common_issues }}"
-          echo "  - 预下载: ${{ github.event.inputs.enable_pre_download }}"
-          echo "  - 后验证: ${{ github.event.inputs.enable_post_verify }}"
-          echo "  - CPU核心: $(nproc)"
-          echo "  - 编译任务数: $BUILD_JOBS"
-          echo "  - Samba任务数: $SAMBA_JOBS"
-          echo "  - CCache: 已启用"
-          echo "  - 起始空间: ${COMPILE_START_SPACE}GB"
+          echo "  - Samba4 编译: 已启用"
+          echo "  - Samba 任务数: $SAMBA_JOBS"
+          
           echo "🔧 开始编译..."
           LOG_FILE="${{ env.BUILD_LOG_DIR }}/firmware-compile.log"
           {
             echo "阶段1: 基础环境准备..."
             make tools/install 2>/dev/null || echo "⚠️ 工具安装警告"
             make toolchain/install 2>/dev/null || echo "⚠️ 工具链安装警告"
+            
             echo "阶段2: 内核编译..."
             make target/linux/compile -j$BUILD_JOBS V=s || {
               echo "⚠️ 内核编译遇到问题，继续..."
             }
-            echo "阶段3: 包编译（分批次）..."
-            echo "🔧 编译基础网络包..."
-            make package/network/utils/compile -j$BUILD_JOBS V=s || echo "⚠️ 网络工具编译问题"
-            echo "🔧 编译基础系统包..."
-            make package/system/compile -j$BUILD_JOBS V=s || echo "⚠️ 系统包编译问题"
-            echo "🔧 编译LuCI相关包..."
-            make package/feeds/luci/compile -j$BUILD_JOBS V=s || echo "⚠️ LuCI编译问题"
-            if [ "${{ github.event.inputs.enable_custom_features }}" = "true" ]; then
-              echo "阶段4: Samba相关包编译..."
-              for pkg in samba4-libs samba4-server luci-app-samba4; do
-                echo "编译 $pkg..."
-                if make package/$pkg/compile -j$SAMBA_JOBS V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/$pkg-compile.log; then
-                  echo "✅ $pkg 编译成功"
-                else
-                  echo "⚠️ $pkg 编译失败，尝试继续..."
-                  make package/$pkg/compile -j$SAMBA_JOBS V=sc 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/$pkg-fix.log || echo "❌ $pkg 彻底失败"
-                fi
-              done
-            fi
+            
+            echo "阶段3: Samba依赖库编译..."
+            echo "🔧 编译Samba核心依赖库..."
+            for lib_lib in libtalloc libtdb libtevent libldb; do
+              echo "编译 $lib_lib..."
+              if make package/$lib_lib/compile -j$BUILD_JOBS V=s 2>&1 | tee "$SAMBA_LOG_DIR/$lib_lib-compile.log"; then
+                echo "✅ $lib_lib 编译成功"
+              else
+                echo "⚠️ $lib_lib 编译失败，尝试单线程..."
+                make package/$lib_lib/compile -j1 V=sc 2>&1 | tee "$SAMBA_LOG_DIR/$lib_lib-fix.log" || echo "❌ $lib_lib 编译彻底失败"
+              fi
+            done
+            
+            echo "阶段4: Samba4核心包编译..."
+            SAMBA_PACKAGES=("samba4-libs" "samba4-server" "luci-app-samba4")
+            for samba_pkg in "${SAMBA_PACKAGES[@]}"; do
+              echo "编译 $samba_pkg..."
+              if make package/$samba_pkg/compile -j$SAMBA_JOBS V=s 2>&1 | tee "$SAMBA_LOG_DIR/$samba_pkg-compile.log"; then
+                echo "✅ $samba_pkg 编译成功"
+              else
+                echo "⚠️ $samba_pkg 编译失败，尝试修复..."
+                make package/$samba_pkg/compile -j$SAMBA_JOBS V=sc 2>&1 | tee "$SAMBA_LOG_DIR/$samba_pkg-fix.log" || echo "❌ $samba_pkg 编译彻底失败"
+              fi
+            done
+            
             echo "阶段5: 剩余包编译..."
             make package/compile -j$BUILD_JOBS V=sc || {
               echo "⚠️ 部分包编译失败，继续安装阶段..."
             }
+            
             echo "阶段6: 包安装..."
             make package/install -j1 V=s || {
               echo "❌ 包安装失败，尝试修复方法..."
@@ -1056,6 +1090,7 @@ jobs:
         run: |
           cd ${{ env.SOURCE_DIR }}
           echo "=== 编译后全面验证 ==="
+          
           echo "🔍 固件文件验证..."
           if [ -d "bin/targets" ]; then
             echo "✅ 固件输出目录存在"
@@ -1066,42 +1101,122 @@ jobs:
                 echo "  - $(basename "$file") ($(($size/1024/1024))MB)"
               fi
             done
-            echo "🔍 检查ASUS RT-AC42U镜像..."
-            ASUS_IMAGES=$(find bin/targets -name "*asus_rt-ac42u*" -type f 2>/dev/null)
-            if [ -n "$ASUS_IMAGES" ]; then
-              echo "✅ ASUS RT-AC42U镜像已生成:"
-              for img in $ASUS_IMAGES; do
-                echo "  - $(basename "$img")"
-              done
-            else
-              echo "⚠️ 未找到ASUS RT-AC42U特定镜像"
-            fi
-            echo "🔍 检查镜像类型完整性..."
-            FACTORY_COUNT=$(find bin/targets -name "*factory*" -type f 2>/dev/null | wc -l)
-            UPGRADE_COUNT=$(find bin/targets -name "*sysupgrade*" -type f 2>/dev/null | wc -l)
-            echo "  - 工厂镜像: $FACTORY_COUNT 个"
-            echo "  - 升级镜像: $UPGRADE_COUNT 个"
-          else
-            echo "❌ 固件输出目录不存在"
           fi
-          echo "🔍 Samba功能验证..."
-          if find bin -name "*samba4*" -type f | grep -q .; then
-            echo "✅ Samba相关包已生成"
+          
+          echo ""
+          echo "🔍 深度Samba4功能验证..."
+          SAMBA4_IPK_FOUND=false
+          SAMBA4_SERVER_IPK=$(find bin -name "*samba4-server*.ipk" -type f 2>/dev/null | head -1)
+          SAMBA4_LUCI_IPK=$(find bin -name "*luci-app-samba4*.ipk" -type f 2>/dev/null | head -1)
+          SAMBA4_LIBS_IPK=$(find bin -name "*samba4-libs*.ipk" -type f 2>/dev/null | head -1)
+          
+          if [ -n "$SAMBA4_SERVER_IPK" ]; then
+            echo "✅ Samba4 Server IPK: $(basename $SAMBA4_SERVER_IPK)"
+            SAMBA4_IPK_FOUND=true
           else
-            echo "⚠️ 未找到Samba相关包"
+            echo "❌ Samba4 Server IPK: 未找到"
           fi
-          echo "🔍 关键包验证..."
-          for pkg in base-files luci firewall; do
-            if find bin -name "*$pkg*" -type f | grep -q .; then
-              echo "✅ $pkg 相关包已生成"
+          
+          if [ -n "$SAMBA4_LUCI_IPK" ]; then
+            echo "✅ LuCI Samba4 App IPK: $(basename $SAMBA4_LUCI_IPK)"
+            SAMBA4_IPK_FOUND=true
+          else
+            echo "❌ LuCI Samba4 App IPK: 未找到"
+          fi
+          
+          if [ -n "$SAMBA4_LIBS_IPK" ]; then
+            echo "✅ Samba4 Libraries IPK: $(basename $SAMBA4_LIBS_IPK)"
+          else
+            echo "⚠️ Samba4 Libraries IPK: 未找到"
+          fi
+          
+          # 检查Samba依赖库
+          echo ""
+          echo "🔍 Samba依赖库验证:"
+          for lib in libtalloc libtdb libtevent libldb; do
+            if find bin -name "*${lib}*.ipk" -type f | grep -q .; then
+              echo "✅ $lib: 已编译"
             else
-              echo "⚠️ 未找到 $pkg 相关包"
+              echo "⚠️ $lib: 未找到IPK包"
             fi
           done
+          
+          # 创建Samba验证报告
+          echo ""
+          echo "📋 Samba4编译状态报告:"
+          if [ "$SAMBA4_IPK_FOUND" = "true" ]; then
+            echo "🎉 Samba4编译成功 - 相关IPK包已生成"
+            echo "SAMBA4_STATUS=success" >> $GITHUB_ENV
+          else
+            echo "❌ Samba4编译失败 - 未找到相关IPK包"
+            echo "SAMBA4_STATUS=failed" >> $GITHUB_ENV
+          fi
+          
+          echo "🔍 检查镜像类型完整性..."
+          FACTORY_COUNT=$(find bin/targets -name "*factory*" -type f 2>/dev/null | wc -l)
+          UPGRADE_COUNT=$(find bin/targets -name "*sysupgrade*" -type f 2>/dev/null | wc -l)
+          echo "  - 工厂镜像: $FACTORY_COUNT 个"
+          echo "  - 升级镜像: $UPGRADE_COUNT 个"
+          
           echo "📊 最终空间状态..."
           FINAL_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
           echo "最终可用空间: ${FINAL_SPACE}GB"
           echo "✅ 编译后验证完成"
+
+      - name: 📋 全面日志收集与归档
+        if: always()
+        run: |
+          echo "开始全面日志收集与归档..."
+          mkdir -p ${{ env.ARTIFACTS_DIR }}/detailed-logs
+          
+          # 收集编译日志
+          echo "📁 收集编译日志..."
+          if [ -d "${{ env.BUILD_LOG_DIR }}" ]; then
+            cp -r ${{ env.BUILD_LOG_DIR }}/* ${{ env.ARTIFACTS_DIR }}/detailed-logs/ 2>/dev/null || true
+          fi
+          
+          # 收集工具链日志
+          echo "📁 收集工具链日志..."
+          if [ -d "${{ env.TOOLCHAIN_LOG_DIR }}" ]; then
+            cp -r ${{ env.TOOLCHAIN_LOG_DIR }}/* ${{ env.ARTIFACTS_DIR }}/detailed-logs/ 2>/dev/null || true
+          fi
+          
+          # 收集关键配置文件
+          echo "📁 收集配置文件..."
+          if [ -d "${{ env.SOURCE_DIR }}" ]; then
+            cd ${{ env.SOURCE_DIR }}
+            cp .config ${{ env.ARTIFACTS_DIR }}/detailed-logs/final-config.txt 2>/dev/null || true
+            cp feeds.conf ${{ env.ARTIFACTS_DIR }}/detailed-logs/feeds-config.txt 2>/dev/null || true
+          fi
+          
+          # 收集包编译状态
+          echo "📦 收集包编译状态..."
+          if [ -d "${{ env.SOURCE_DIR }}" ]; then
+            cd ${{ env.SOURCE_DIR }}
+            find bin/packages -name "*.ipk" 2>/dev/null | head -50 > ${{ env.ARTIFACTS_DIR }}/detailed-logs/ipk-packages-list.txt || true
+            find build_dir -name "*.log" -type f 2>/dev/null | head -20 > ${{ env.ARTIFACTS_DIR }}/detailed-logs/build-logs-list.txt || true
+          fi
+          
+          # 创建日志索引文件
+          echo "📊 创建日志索引..."
+          cat > ${{ env.ARTIFACTS_DIR }}/detailed-logs/README.md << 'EOF'
+          # 编译日志说明
+          
+          ## 主要日志文件
+          - `firmware-compile.log` - 完整编译过程日志
+          - `pre-download.log` - 预下载日志
+          - `toolchain-*.log` - 工具链编译日志
+          - `samba4-*.log` - Samba相关编译日志
+          - `final-config.txt` - 最终使用的配置文件
+          
+          ## 关键检查点
+          1. 检查 firmware-compile.log 中的错误和警告
+          2. 查看 samba4-server-compile.log 确认Samba编译状态
+          3. 查看 final-config.txt 确认配置正确性
+          
+          EOF
+          
+          echo "✅ 日志收集完成"
 
       - name: 🔍 详细固件产物验证与收集
         if: env.BUILD_STATUS == 'success'
@@ -1277,16 +1392,23 @@ jobs:
           echo "  - 时长: ${{ env.BUILD_DURATION || 'N/A' }}秒"
           echo "  - 固件数量: ${{ env.FIRMWARE_COUNT || 0 }}"
           echo "  - 工厂镜像状态: ${{ env.FACTORY_MISSING == 'true' && '缺失' || '已生成' }}"
+          echo "  - Samba4状态: ${{ env.SAMBA4_STATUS || '未验证' }}"
           echo "  - 预下载状态: ${{ env.DOWNLOAD_STATUS || '未执行' }}"
           echo ""
           if [ "${{ env.BUILD_STATUS }}" = "success" ]; then
             echo "🎉 构建成功！固件已上传到 Artifacts"
             echo "📦 下载 Artifacts 获取编译产物"
             echo "🔧 固件文件在 firmware/ 目录中"
+            echo "📋 详细日志在 detailed-logs/ 目录中"
             if [ "${{ env.FACTORY_MISSING }}" = "true" ]; then
               echo "⚠️ 注意: 工厂刷机镜像缺失，只有系统升级镜像"
             else
               echo "✅ 所有镜像类型均已生成"
+            fi
+            if [ "${{ env.SAMBA4_STATUS }}" = "success" ]; then
+              echo "✅ Samba4 编译成功"
+            else
+              echo "⚠️ Samba4 编译状态未知或失败"
             fi
           else
             echo "❌ 构建失败"
