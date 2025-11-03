@@ -1,9 +1,10 @@
 # =============================================
-# ASUS RT-AC42U 优化编译配置
+# ASUS RT-AC42U 优化编译配置 - 增强版
 # 设备平台: ipq40xx (Qualcomm IPQ4019)
 # 设备树: qcom-ipq4019-rt-ac42u.dts
 # 已修复所有软件包冲突和Samba编译问题
 # 添加预下载验证支持
+# 增强日志和调试功能
 # =============================================
 
 # ======================
@@ -205,14 +206,15 @@ CONFIG_PACKAGE_miniupnpd=y
 CONFIG_PACKAGE_luci-app-upnp=y
 
 # ======================
-# Samba4 文件共享 (优化配置)
+# Samba4 文件共享 (完整优化配置)
 # ======================
 
+# 明确启用Samba4
 CONFIG_PACKAGE_luci-app-samba4=y
 CONFIG_PACKAGE_samba4-server=y
 CONFIG_PACKAGE_samba4-libs=y
 
-# Samba依赖库
+# Samba核心依赖库 (确保全部启用)
 CONFIG_PACKAGE_libtalloc=y
 CONFIG_PACKAGE_libtdb=y
 CONFIG_PACKAGE_libtevent=y
@@ -220,21 +222,32 @@ CONFIG_PACKAGE_libldb=y
 CONFIG_PACKAGE_libncurses=y
 CONFIG_PACKAGE_libreadline=y
 
-# 禁用不必要的Samba组件（减少体积和依赖）
-# CONFIG_PACKAGE_samba4-server-avahi is not set
-# CONFIG_PACKAGE_samba4-server-python is not set
-# CONFIG_PACKAGE_samba4-server-dc is not set
-# CONFIG_PACKAGE_samba4-client is not set
-# CONFIG_PACKAGE_samba4-utils is not set
+# 禁用所有旧版Samba (避免冲突)
+# CONFIG_PACKAGE_autosamba is not set
+# CONFIG_PACKAGE_luci-app-samba is not set
+# CONFIG_PACKAGE_samba36-server is not set
+# CONFIG_PACKAGE_samba3-libs is not set
+# CONFIG_PACKAGE_samba3-server is not set
 
-# 优化Samba编译选项
-CONFIG_SAMBA4_OPTIMIZE_SIZE=y
+# Samba4 编译优化
 CONFIG_SAMBA4_SMALL=y
+CONFIG_SAMBA4_EMBEDDED=y
+CONFIG_SAMBA4_OPTIMIZE_SIZE=y
 
-# Samba基础配置
+# 启用必要组件，禁用不必要组件以减小体积
 CONFIG_SAMBA4_ENABLE_SMBD=y
 CONFIG_SAMBA4_ENABLE_NMBD=y
-CONFIG_SAMBA4_ENABLE_WINBIND=y
+# CONFIG_SAMBA4_ENABLE_WINBIND is not set
+# CONFIG_SAMBA4_SERVER_AVAHI is not set
+# CONFIG_SAMBA4_SERVER_DC is not set
+# CONFIG_SAMBA4_UTILS is not set
+# CONFIG_SAMBA4_CLIENT is not set
+
+# 精简功能配置
+CONFIG_SAMBA4_NO_LDAP=y
+CONFIG_SAMBA4_NO_ADS=y
+CONFIG_SAMBA4_NO_PYTHON=y
+CONFIG_SAMBA4_MINIMAL=y
 
 # ======================
 # 请求的 LuCI 应用程序
@@ -338,34 +351,27 @@ CONFIG_DEVFREQ_THERMAL=y
 CONFIG_ARM_ARCH_TIMER=y
 
 # ======================
-# Samba编译优化配置
+# 编译验证和调试配置
 # ======================
 
-# 确保Samba依赖库正确配置
-CONFIG_PACKAGE_libtalloc=y
-CONFIG_PACKAGE_libtdb=y  
-CONFIG_PACKAGE_libtevent=y
-CONFIG_PACKAGE_libldb=y
+# 启用详细编译日志
+CONFIG_DEBUG=y
+CONFIG_VERBOSE=y
 
-# Samba编译优化
-CONFIG_SAMBA4_SMALL=y
-CONFIG_SAMBA4_OPTIMIZE_SIZE=y
+# 保留编译中间文件用于调试
+# CONFIG_STRIP_KERNEL_EXPORTS is not set
 
-# 禁用不必要的Samba组件减小体积
-# CONFIG_SAMBA4_SERVER_AVAHI is not set
-# CONFIG_SAMBA4_SERVER_DC is not set
-# CONFIG_SAMBA4_UTILS is not set
-# CONFIG_SAMBA4_CLIENT is not set
+# 启用包依赖验证
+CONFIG_CHECK_ALL_DEPS=y
 
-# 启用必要的Samba组件
-CONFIG_SAMBA4_ENABLE_SMBD=y
-CONFIG_SAMBA4_ENABLE_NMBD=y
-# CONFIG_SAMBA4_ENABLE_WINBIND is not set  # 禁用winbind减少依赖
+# 保留编译日志
+CONFIG_KEEP_BUILD_LOG=y
 
-# 编译优化
-CONFIG_SAMBA4_EMBEDDED=y
-CONFIG_SAMBA4_NO_LDAP=y
-CONFIG_SAMBA4_NO_ADS=y
+# 启用IPK包生成验证
+CONFIG_IPK_FILES_CHECK=y
+
+# Samba特定调试
+CONFIG_SAMBA4_DEBUG=y
 
 # ======================
 # 预下载优化配置
@@ -447,17 +453,20 @@ CONFIG_CHECK_SIGNATURE=y
 # - FTP 服务器
 # - 工厂镜像生成
 # - 预下载验证支持
+# - 编译调试支持
 
 # ❌ 已禁用的功能:
 # - KMS 视频流媒体 (减小体积)
 # - 动态DNS (DDNS)
 # - 带宽监控统计
 # - 网络唤醒 (WOL)
+# - 所有旧版Samba组件
 
 # 🔧 已修复的冲突:
 # - DNSMasq 冲突 (使用 dnsmasq-full)
 # - 无线驱动冲突 (使用 kmod-ath10k-ct)
 # - Samba 依赖冲突 (单独编译依赖库)
+# - Samba版本冲突 (禁用所有旧版)
 
 # 🚀 性能优化:
 # - NSS 硬件加速
