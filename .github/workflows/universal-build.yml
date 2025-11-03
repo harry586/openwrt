@@ -207,28 +207,16 @@ jobs:
           # 定义备用镜像（根据预设选择）
           case "${{ env.SOURCE_PRESET }}" in
             "immortalwrt")
-              BACKUP_MIRRORS=(
-                "https://github.com/immortalwrt/immortalwrt.git"
-                "https://gitee.com/immortalwrt/immortalwrt.git"
-              )
+              BACKUP_MIRRORS=("https://github.com/immortalwrt/immortalwrt.git" "https://gitee.com/immortalwrt/immortalwrt.git")
               ;;
             "openwrt")
-              BACKUP_MIRRORS=(
-                "https://github.com/openwrt/openwrt.git"
-                "https://git.openwrt.org/openwrt/openwrt.git"
-              )
+              BACKUP_MIRRORS=("https://github.com/openwrt/openwrt.git" "https://git.openwrt.org/openwrt/openwrt.git")
               ;;
             "lede")
-              BACKUP_MIRRORS=(
-                "https://github.com/coolsnowwolf/lede.git"
-                "https://gitee.com/coolsnowwolf/lede.git"
-              )
+              BACKUP_MIRRORS=("https://github.com/coolsnowwolf/lede.git" "https://gitee.com/coolsnowwolf/lede.git")
               ;;
             *)
-              BACKUP_MIRRORS=(
-                "https://github.com/immortalwrt/immortalwrt.git"
-                "https://gitee.com/immortalwrt/immortalwrt.git"
-              )
+              BACKUP_MIRRORS=("https://github.com/immortalwrt/immortalwrt.git" "https://gitee.com/immortalwrt/immortalwrt.git")
               ;;
           esac
           
@@ -320,17 +308,8 @@ jobs:
           fi
           
           # 定义多个镜像源
-          PACKAGES_MIRRORS=(
-            "https://git.openwrt.org/feed/packages.git"
-            "https://github.com/openwrt/packages.git"
-            "https://gitee.com/openwrt-mirror/packages.git"
-          )
-          
-          LUCI_MIRRORS=(
-            "https://git.openwrt.org/feed/luci.git"
-            "https://github.com/openwrt/luci.git" 
-            "https://gitee.com/openwrt-mirror/luci.git"
-          )
+          PACKAGES_MIRRORS=("https://git.openwrt.org/feed/packages.git" "https://github.com/openwrt/packages.git" "https://gitee.com/openwrt-mirror/packages.git")
+          LUCI_MIRRORS=("https://git.openwrt.org/feed/luci.git" "https://github.com/openwrt/luci.git" "https://gitee.com/openwrt-mirror/luci.git")
           
           # 智能feeds配置
           if [ ! -f "feeds.conf" ]; then
@@ -362,21 +341,17 @@ jobs:
                 if [ $retry_count -eq 1 ]; then
                   # 第一次失败后切换到GitHub镜像
                   echo "🔄 切换到GitHub镜像..."
-                  cat > feeds.conf << EOF
-src-git packages ${PACKAGES_MIRRORS[1]}
-src-git luci ${LUCI_MIRRORS[1]}
-src-git routing https://github.com/openwrt/routing.git
-src-git telephony https://github.com/openwrt/telephony.git
-EOF
+                  echo "src-git packages ${PACKAGES_MIRRORS[1]}" > feeds.conf
+                  echo "src-git luci ${LUCI_MIRRORS[1]}" >> feeds.conf
+                  echo "src-git routing https://github.com/openwrt/routing.git" >> feeds.conf
+                  echo "src-git telephony https://github.com/openwrt/telephony.git" >> feeds.conf
                 elif [ $retry_count -eq 2 ]; then
                   # 第二次失败后切换到Gitee镜像
                   echo "🔄 切换到Gitee镜像..."
-                  cat > feeds.conf << EOF
-src-git packages ${PACKAGES_MIRRORS[2]}
-src-git luci ${LUCI_MIRRORS[2]}
-src-git routing https://gitee.com/openwrt-mirror/routing.git
-src-git telephony https://gitee.com/openwrt-mirror/telephony.git
-EOF
+                  echo "src-git packages ${PACKAGES_MIRRORS[2]}" > feeds.conf
+                  echo "src-git luci ${LUCI_MIRRORS[2]}" >> feeds.conf
+                  echo "src-git routing https://gitee.com/openwrt-mirror/routing.git" >> feeds.conf
+                  echo "src-git telephony https://gitee.com/openwrt-mirror/telephony.git" >> feeds.conf
                 fi
                 
                 if [ $retry_count -lt $max_retries ]; then
