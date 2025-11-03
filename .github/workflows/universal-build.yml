@@ -1,4 +1,5 @@
 name: Universal Firmware Builder - Optimized Version
+# 工作流文件修改时间: 2024-06-12
 
 on:
   workflow_dispatch:
@@ -398,29 +399,18 @@ jobs:
       - name: 🎯 快速配置文件查找与应用
         timeout-minutes: 1
         run: |
-          cd ${{ env.SOURCE_DIR }}
           echo "快速配置文件查找与应用..."
           CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
           
-          CONFIG_FOUND=""
-          # 直接路径查找
-          if [ -f "$CONFIG_PROFILE" ]; then
-            CONFIG_FOUND="$CONFIG_PROFILE"
-          elif [ -f "../$CONFIG_PROFILE" ]; then
-            CONFIG_FOUND="../$CONFIG_PROFILE"
-          elif [ -f "$GITHUB_WORKSPACE/$CONFIG_PROFILE" ]; then
-            CONFIG_FOUND="$GITHUB_WORKSPACE/$CONFIG_PROFILE"
-          else
-            # 快速搜索
-            CONFIG_FOUND=$(find . -maxdepth 3 -name "$CONFIG_PROFILE" -type f 2>/dev/null | head -1)
-          fi
-          
-          if [ -n "$CONFIG_FOUND" ] && [ -f "$CONFIG_FOUND" ]; then
-            echo "📋 复制配置文件: $CONFIG_FOUND -> .config"
-            cp "$CONFIG_FOUND" .config
+          # 原来的配置文件查找逻辑
+          if [ -f "$GITHUB_WORKSPACE/$CONFIG_PROFILE" ]; then
+            echo "📋 复制配置文件: $GITHUB_WORKSPACE/$CONFIG_PROFILE -> ${{ env.SOURCE_DIR }}/.config"
+            cp "$GITHUB_WORKSPACE/$CONFIG_PROFILE" ${{ env.SOURCE_DIR }}/.config
             echo "✅ 配置应用完成"
           else
-            echo "❌ 错误: 无法找到配置文件 '$CONFIG_PROFILE'"
+            echo "❌ 错误: 无法找到配置文件 '$GITHUB_WORKSPACE/$CONFIG_PROFILE'"
+            echo "🔍 可用文件:"
+            find "$GITHUB_WORKSPACE" -name "*.config*" -type f 2>/dev/null | head -10
             exit 1
           fi
 
