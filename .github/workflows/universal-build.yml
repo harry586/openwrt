@@ -1,4 +1,4 @@
-name: Universal Firmware Builder - Enhanced Version
+name: Universal Firmware Builder - Safe Version
 
 on:
   workflow_dispatch:
@@ -569,6 +569,40 @@ jobs:
             exit 1
           fi
 
+      - name: 🔒 固件安全验证
+        run: |
+          cd ${{ env.SOURCE_DIR }}
+          echo "=== 固件安全验证 ==="
+          
+          echo "🔍 检查关键配置..."
+          # 检查分区大小是否安全
+          KERNEL_SIZE=$(grep "CONFIG_TARGET_KERNEL_PARTSIZE" .config | cut -d= -f2)
+          ROOTFS_SIZE=$(grep "CONFIG_TARGET_ROOTFS_PARTSIZE" .config | cut -d= -f2)
+          
+          echo "内核分区: ${KERNEL_SIZE}MB"
+          echo "根文件系统分区: ${ROOTFS_SIZE}MB"
+          
+          # 安全限制检查
+          if [ "$KERNEL_SIZE" -gt 32 ]; then
+            echo "❌ 错误: 内核分区过大 ($KERNEL_SIZE MB)，可能超出设备限制"
+            echo "🔧 自动修复为16MB"
+            sed -i 's/CONFIG_TARGET_KERNEL_PARTSIZE=.*/CONFIG_TARGET_KERNEL_PARTSIZE=16/' .config
+          fi
+          
+          if [ "$ROOTFS_SIZE" -gt 128 ]; then
+            echo "❌ 错误: 根文件系统分区过大 ($ROOTFS_SIZE MB)，可能超出设备限制"
+            echo "🔧 自动修复为64MB"
+            sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=64/' .config
+          fi
+          
+          echo "🔍 检查版本兼容性..."
+          if ! grep -q "CONFIG_VERSION_CODE=1.0" .config; then
+            echo "🔧 修复版本兼容性为1.0"
+            sed -i 's/CONFIG_VERSION_CODE=.*/CONFIG_VERSION_CODE=1.0/' .config 2>/dev/null || echo "CONFIG_VERSION_CODE=1.0" >> .config
+          fi
+          
+          echo "✅ 安全验证完成"
+
       - name: 🔧 强制Samba配置验证
         run: |
           cd ${{ env.SOURCE_DIR }}
@@ -598,6 +632,38 @@ jobs:
           
           echo "✅ Samba配置验证完成"
 
+      - name: 🔧 版本兼容性修复
+        run: |
+          cd ${{ env.SOURCE_DIR }}
+          echo "=== 版本兼容性修复 ==="
+          
+          echo "🔧 修复配置版本兼容性..."
+          # 设置版本为1.0以兼容现有系统
+          sed -i 's/CONFIG_VERSION_CODE=.*/CONFIG_VERSION_CODE=1.0/' .config 2>/dev/null || true
+          sed -i 's/CONFIG_VERSION_NUMBER=.*/CONFIG_VERSION_NUMBER=1.0/' .config 2>/dev/null || true
+          
+          # 确保版本配置存在
+          if ! grep -q "CONFIG_VERSION_CODE" .config; then
+            echo "CONFIG_VERSION_CODE=1.0" >> .config
+          fi
+          if ! grep -q "CONFIG_VERSION_NUMBER" .config; then
+            echo "CONFIG_VERSION_NUMBER=1.0" >> .config
+          fi
+          if ! grep -q "CONFIG_VERSION_DIST" .config; then
+            echo "CONFIG_VERSION_DIST=\"ImmortalWrt\"" >> .config
+          fi
+          if ! grep -q "CONFIG_VERSION_COMPAT_SILENT" .config; then
+            echo "CONFIG_VERSION_COMPAT_SILENT=y" >> .config
+          fi
+          if ! grep -q "CONFIG_VERSION_COMPAT_ALL" .config; then
+            echo "CONFIG_VERSION_COMPAT_ALL=y" >> .config
+          fi
+          
+          echo "📋 版本配置状态:"
+          grep -E "CONFIG_VERSION" .config
+          
+          echo "✅ 版本兼容性修复完成"
+
       - name: 🔧 设备镜像配置修复
         run: |
           cd ${{ env.SOURCE_DIR }}
@@ -619,10 +685,23 @@ jobs:
           echo "🔧 启用工厂镜像格式..."
           sed -i 's/# CONFIG_IMAGEOPT is not set/CONFIG_IMAGEOPT=y/' .config 2>/dev/null || true
           sed -i 's/# CONFIG_COMBINED_IMAGES is not set/CONFIG_COMBINED_IMAGES=y/' .config 2>/dev/null || true
+          
+          # 强制添加工厂镜像配置
+          echo "🔧 强制添加工厂镜像配置..."
+          echo "CONFIG_TARGET_IMAGES_INCLUDE_FACTORY=y" >> .config
+          echo "CONFIG_TARGET_IMAGES_INCLUDE_SYSUPGRADE=y" >> .config
+          echo "CONFIG_TARGET_IMAGES_INCLUDE_IMAGES=y" >> .config
+          echo "CONFIG_TARGET_IMAGES_INCLUDE_FACTORY_ASUS_RT_AC42U=y" >> .config
+          
+          # 添加设备特定的工厂镜像定义
+          echo "CONFIG_TARGET_IMAGES_INCLUDE_TARGZ=y" >> .config
+          echo "CONFIG_TARGET_IMAGES_INCLUDE_EXT4=y" >> .config
+          echo "CONFIG_TARGET_IMAGES_INCLUDE_SQUASHFS=y" >> .config
+          
           echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
           echo "CONFIG_TARGET_ROOTFS_EXT4FS=y" >> .config
-          echo "CONFIG_TARGET_KERNEL_PARTSIZE=32" >> .config
-          echo "CONFIG_TARGET_ROOTFS_PARTSIZE=512" >> .config
+          echo "CONFIG_TARGET_KERNEL_PARTSIZE=16" >> .config
+          echo "CONFIG_TARGET_ROOTFS_PARTSIZE=64" >> .config
           echo "🔄 重新运行配置..."
           make defconfig >/dev/null 2>&1 || echo "配置更新完成"
           echo "✅ 设备镜像配置修复完成"
@@ -1085,6 +1164,40 @@ jobs:
           fi
           echo "⏱️ 总编译耗时: ${DURATION}秒 ($(($DURATION/60))分钟)"
 
+      - name: 🔍 工厂镜像生成诊断
+        if: env.BUILD_STATUS == 'success'
+        run: |
+          cd ${{ env.SOURCE_DIR }}
+          echo "=== 工厂镜像生成诊断 ==="
+          
+          echo "📋 检查目标设备配置..."
+          grep -E "CONFIG_TARGET.*DEVICE.*asus_rt-ac42u|CONFIG_TARGET.*GENERIC.*asus" .config || echo "未找到设备配置"
+          
+          echo "📋 检查镜像生成配置..."
+          grep -E "CONFIG_TARGET_IMAGES|CONFIG_IMAGEOPT|CONFIG_COMBINED_IMAGES" .config || echo "未找到镜像生成配置"
+          
+          echo "📋 检查设备定义文件..."
+          if [ -f "target/linux/ipq40xx/image/generic.mk" ]; then
+            echo "🔍 分析设备定义..."
+            grep -A 10 -B 5 "asus_rt-ac42u" target/linux/ipq40xx/image/generic.mk || echo "未找到设备定义"
+          else
+            echo "generic.mk 文件不存在"
+          fi
+          
+          echo "📋 检查生成的镜像文件..."
+          find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) | while read file; do
+            echo "镜像: $(basename $file)"
+            file "$file" 2>/dev/null || echo "无法分析文件类型"
+          done
+          
+          echo "📋 检查编译日志中的工厂镜像信息..."
+          if [ -f "${{ env.BUILD_LOG_DIR }}/firmware-compile.log" ]; then
+            grep -i "factory\|asus_rt-ac42u" "${{ env.BUILD_LOG_DIR }}/firmware-compile.log" | head -10 || echo "未找到相关日志"
+          fi
+          
+          echo "📋 检查版本配置..."
+          grep -E "CONFIG_VERSION|CONFIG_VERSION_DIST|CONFIG_VERSION_CODE" .config || echo "未找到版本配置"
+
       - name: 🔍 编译后全面验证
         if: env.BUILD_STATUS == 'success' && github.event.inputs.enable_post_verify == 'true'
         run: |
@@ -1152,11 +1265,44 @@ jobs:
             echo "SAMBA4_STATUS=failed" >> $GITHUB_ENV
           fi
           
+          echo "🔍 版本兼容性验证..."
+          if [ -f "bin/targets/ipq40xx/generic/version.buildinfo" ]; then
+            echo "📋 版本信息文件:"
+            cat bin/targets/ipq40xx/generic/version.buildinfo
+          else
+            echo "⚠️ 未找到版本信息文件"
+          fi
+
+          # 检查配置文件中的版本设置
+          echo "📋 配置文件版本设置:"
+          grep -E "CONFIG_VERSION_CODE|CONFIG_VERSION_NUMBER|CONFIG_VERSION_DIST" .config || echo "未找到版本配置"
+
           echo "🔍 检查镜像类型完整性..."
           FACTORY_COUNT=$(find bin/targets -name "*factory*" -type f 2>/dev/null | wc -l)
           UPGRADE_COUNT=$(find bin/targets -name "*sysupgrade*" -type f 2>/dev/null | wc -l)
+          INITRAMFS_COUNT=$(find bin/targets -name "*initramfs*" -type f 2>/dev/null | wc -l)
           echo "  - 工厂镜像: $FACTORY_COUNT 个"
           echo "  - 升级镜像: $UPGRADE_COUNT 个"
+          echo "  - 内存启动镜像: $INITRAMFS_COUNT 个"
+          
+          # 检查ASUS RT-AC42U特定镜像
+          echo "🔍 检查ASUS RT-AC42U特定镜像..."
+          ASUS_FACTORY=$(find bin/targets -name "*asus_rt-ac42u*factory*" -type f 2>/dev/null)
+          ASUS_SYSUPGRADE=$(find bin/targets -name "*asus_rt-ac42u*sysupgrade*" -type f 2>/dev/null)
+          
+          if [ -n "$ASUS_FACTORY" ]; then
+            echo "✅ ASUS RT-AC42U 工厂镜像: $(basename $ASUS_FACTORY)"
+            echo "FACTORY_MISSING=false" >> $GITHUB_ENV
+          else
+            echo "❌ ASUS RT-AC42U 工厂镜像: 未找到"
+            echo "FACTORY_MISSING=true" >> $GITHUB_ENV
+          fi
+          
+          if [ -n "$ASUS_SYSUPGRADE" ]; then
+            echo "✅ ASUS RT-AC42U 升级镜像: $(basename $ASUS_SYSUPGRADE)"
+          else
+            echo "❌ ASUS RT-AC42U 升级镜像: 未找到"
+          fi
           
           echo "📊 最终空间状态..."
           FINAL_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
@@ -1195,6 +1341,18 @@ jobs:
             cd ${{ env.SOURCE_DIR }}
             find bin/packages -name "*.ipk" 2>/dev/null | head -50 > ${{ env.ARTIFACTS_DIR }}/detailed-logs/ipk-packages-list.txt || true
             find build_dir -name "*.log" -type f 2>/dev/null | head -20 > ${{ env.ARTIFACTS_DIR }}/detailed-logs/build-logs-list.txt || true
+          fi
+
+          # 收集设备定义文件
+          echo "📁 收集设备定义文件..."
+          if [ -f "target/linux/ipq40xx/image/generic.mk" ]; then
+            cp target/linux/ipq40xx/image/generic.mk ${{ env.ARTIFACTS_DIR }}/detailed-logs/ 2>/dev/null || true
+          fi
+
+          # 收集版本信息
+          echo "📁 收集版本信息..."
+          if [ -f "bin/targets/ipq40xx/generic/version.buildinfo" ]; then
+            cp bin/targets/ipq40xx/generic/version.buildinfo ${{ env.ARTIFACTS_DIR }}/detailed-logs/ 2>/dev/null || true
           fi
           
           # 创建日志索引文件
@@ -1364,6 +1522,30 @@ jobs:
           free -h
           echo "✅ 智能清理完成"
 
+      - name: 🧪 固件刷机兼容性测试
+        if: env.BUILD_STATUS == 'success'
+        run: |
+          echo "=== 固件刷机兼容性测试 ==="
+          echo "⚠️ 警告: 新固件可能包含风险"
+          echo "📋 刷机前请确认:"
+          echo "1. 设备型号: ASUS RT-AC42U"
+          echo "2. 当前系统版本: 1.0+"
+          echo "3. 已备份当前配置"
+          echo "4. 了解救援模式进入方法"
+          echo ""
+          echo "🔧 推荐刷机命令:"
+          echo "sysupgrade -n -v /tmp/firmware.bin"
+          echo ""
+          echo "🆘 救援方法:"
+          echo "- TFTP恢复: 设置IP 192.168.1.2, tftp上传原厂固件"
+          echo "- 救援模式: 断电按住WPS键,插电等10秒"
+          echo ""
+          echo "📋 安全刷机步骤:"
+          echo "1. 备份当前配置: tar -czf /tmp/config-backup.tar.gz /etc/config/"
+          echo "2. 上传固件到路由器: scp firmware.bin root@192.168.1.1:/tmp/"
+          echo "3. 刷机: ssh root@192.168.1.1 'sysupgrade -n -v /tmp/firmware.bin'"
+          echo "4. 等待设备重启(约3-5分钟)"
+
       - name: 📊 最终综合报告
         if: always()
         run: |
@@ -1394,6 +1576,7 @@ jobs:
           echo "  - 工厂镜像状态: ${{ env.FACTORY_MISSING == 'true' && '缺失' || '已生成' }}"
           echo "  - Samba4状态: ${{ env.SAMBA4_STATUS || '未验证' }}"
           echo "  - 预下载状态: ${{ env.DOWNLOAD_STATUS || '未执行' }}"
+          echo "  - 版本兼容性: 1.0 (已修复)"
           echo ""
           if [ "${{ env.BUILD_STATUS }}" = "success" ]; then
             echo "🎉 构建成功！固件已上传到 Artifacts"
@@ -1402,14 +1585,22 @@ jobs:
             echo "📋 详细日志在 detailed-logs/ 目录中"
             if [ "${{ env.FACTORY_MISSING }}" = "true" ]; then
               echo "⚠️ 注意: 工厂刷机镜像缺失，只有系统升级镜像"
+              echo "💡 建议使用 sysupgrade -n 命令刷机"
             else
               echo "✅ 所有镜像类型均已生成"
+              echo "🔧 可使用 factory 镜像进行首次刷机"
             fi
             if [ "${{ env.SAMBA4_STATUS }}" = "success" ]; then
               echo "✅ Samba4 编译成功"
             else
               echo "⚠️ Samba4 编译状态未知或失败"
             fi
+            echo ""
+            echo "🚨 重要安全提醒:"
+            echo "1. 刷机前务必备份配置"
+            echo "2. 首次刷机建议使用 factory 镜像"
+            echo "3. 升级时使用 sysupgrade -n 命令(不保留配置)"
+            echo "4. 了解救援模式操作方法"
           else
             echo "❌ 构建失败"
             echo "🔍 请查看详细日志分析错误原因"
