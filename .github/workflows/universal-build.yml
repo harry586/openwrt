@@ -539,20 +539,20 @@ jobs:
           done
           echo "✅ 源码初始化完成"
 
-      - name: 🎯 增强配置文件搜索与应用
+      - name: 🎯 修复配置文件搜索与应用
         timeout-minutes: 3
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🎯 增强配置文件搜索与应用 ==="
+          echo "=== 🎯 修复配置文件搜索与应用 ==="
           CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
           echo "🔍 查找配置文件: $CONFIG_PROFILE"
           
           CONFIG_FOUND=""
-          SEARCH_PATHS=(".", "..", "$GITHUB_WORKSPACE", "configs", "../configs", "$GITHUB_WORKSPACE/configs")
+          SEARCH_PATHS=(".configs" "configs" "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/configs" "../configs" "../.configs")
           
           echo "📋 搜索路径: ${SEARCH_PATHS[*]}"
           
-          # 多路径精确搜索
+          # 多路径精确搜索配置文件
           for path in "${SEARCH_PATHS[@]}"; do
             if [ -f "$path/$CONFIG_PROFILE" ]; then
               CONFIG_FOUND="$path/$CONFIG_PROFILE"
@@ -562,47 +562,55 @@ jobs:
             fi
           done
           
-          # 如果精确搜索失败，进行模糊搜索
+          # 如果精确搜索失败，在配置仓库中搜索
           if [ -z "$CONFIG_FOUND" ]; then
-            echo "🔍 精确查找失败，尝试模糊搜索..."
-            CONFIG_FOUND=$(find . -maxdepth 4 -name "*$CONFIG_PROFILE*" -type f 2>/dev/null | head -1)
+            echo "🔍 在配置仓库中搜索..."
+            CONFIG_FOUND=$(find "$GITHUB_WORKSPACE" -maxdepth 3 -name "$CONFIG_PROFILE" -type f 2>/dev/null | head -1)
             if [ -n "$CONFIG_FOUND" ]; then
               FILE_SIZE=$(du -h "$CONFIG_FOUND" | cut -f1)
-              echo "✅ 模糊搜索找到: $CONFIG_FOUND ($FILE_SIZE)"
+              echo "✅ 在配置仓库中找到: $CONFIG_FOUND ($FILE_SIZE)"
             fi
           fi
           
-          # 最终搜索尝试 - 查找任何配置文件
+          # 搜索.config文件
           if [ -z "$CONFIG_FOUND" ]; then
-            echo "🔍 尝试搜索任何配置文件..."
-            CONFIG_FOUND=$(find . -maxdepth 3 -name "*.config*" -type f 2>/dev/null | head -1)
+            echo "🔍 搜索任何.config文件..."
+            CONFIG_FOUND=$(find "$GITHUB_WORKSPACE" -maxdepth 3 -name "*.config*" -type f 2>/dev/null | grep -v "node_modules\|feeds" | head -1)
             if [ -n "$CONFIG_FOUND" ]; then
               FILE_SIZE=$(du -h "$CONFIG_FOUND" | cut -f1)
               echo "⚠️ 使用找到的默认配置文件: $CONFIG_FOUND ($FILE_SIZE)"
-            else
-              echo "❌ 错误: 无法找到任何配置文件"
-              echo "📁 当前目录内容:"
-              find . -maxdepth 2 -type f -name "*.config*" -exec ls -la {} \; 2>/dev/null
-              echo "💡 建议: 请确保配置文件存在或检查配置路径"
-              exit 1
             fi
           fi
           
+          # 最终验证
           if [ -n "$CONFIG_FOUND" ] && [ -f "$CONFIG_FOUND" ]; then
-            echo "📋 复制配置文件: $CONFIG_FOUND -> .config"
-            cp "$CONFIG_FOUND" .config
-            echo "✅ 配置应用完成"
-            
-            # 验证配置基本结构
-            if grep -q "CONFIG_TARGET" .config && grep -q "CONFIG_PACKAGE" .config; then
-              echo "✅ 配置文件基本结构验证通过"
-              CONFIG_LINES=$(wc -l < .config)
-              echo "📊 配置文件信息: $CONFIG_LINES 行配置"
+            # 验证文件确实是配置文件（包含CONFIG_关键字）
+            if grep -q "CONFIG_" "$CONFIG_FOUND"; then
+              echo "📋 复制配置文件: $CONFIG_FOUND -> .config"
+              cp "$CONFIG_FOUND" .config
+              echo "✅ 配置应用完成"
+              
+              # 验证配置基本结构
+              if grep -q "CONFIG_TARGET" .config && grep -q "CONFIG_PACKAGE" .config; then
+                echo "✅ 配置文件基本结构验证通过"
+                CONFIG_LINES=$(wc -l < .config)
+                echo "📊 配置文件信息: $CONFIG_LINES 行配置"
+              else
+                echo "⚠️ 警告: 配置文件可能不完整"
+                echo "🔍 配置文件前10行:"
+                head -10 .config
+              fi
             else
-              echo "⚠️ 警告: 配置文件可能不完整"
+              echo "❌ 错误: 找到的文件不是有效的配置文件"
+              echo "🔍 文件内容示例:"
+              head -5 "$CONFIG_FOUND"
+              exit 1
             fi
           else
-            echo "❌ 错误: 无法找到配置文件 '$CONFIG_PROFILE'"
+            echo "❌ 错误: 无法找到有效的配置文件 '$CONFIG_PROFILE'"
+            echo "📁 配置仓库目录结构:"
+            find "$GITHUB_WORKSPACE" -maxdepth 2 -type f -name "*.config*" -exec ls -la {} \; 2>/dev/null
+            echo "💡 建议: 请确保配置文件存在于配置仓库中"
             exit 1
           fi
 
