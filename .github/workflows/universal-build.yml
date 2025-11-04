@@ -88,22 +88,66 @@ jobs:
           path: .
           fetch-depth: 0
 
-      - name: 🔍 解析配置文件
+      - name: 🔍 智能文件发现与配置解析
         id: config-parser
         run: |
-          echo "=== 🔍 解析配置文件 ==="
-          if [ ! -f "repositories.json" ]; then
-            echo "❌ 错误: repositories.json 文件不存在"
-            exit 1
+          echo "=== 🔍 智能文件发现与配置解析 ==="
+          
+          echo "📋 查找 repositories.json 文件..."
+          REPO_JSON_FOUND=""
+          SEARCH_PATHS=(".", "..", "$GITHUB_WORKSPACE", "configs", "../configs")
+          
+          # 多路径精确搜索
+          for path in "${SEARCH_PATHS[@]}"; do
+            if [ -f "$path/repositories.json" ]; then
+              REPO_JSON_FOUND="$path/repositories.json"
+              FILE_SIZE=$(du -h "$REPO_JSON_FOUND" | cut -f1)
+              echo "✅ 在路径 '$path' 找到 repositories.json ($FILE_SIZE)"
+              break
+            fi
+          done
+          
+          # 如果精确搜索失败，进行模糊搜索
+          if [ -z "$REPO_JSON_FOUND" ]; then
+            echo "🔍 精确查找失败，尝试模糊搜索..."
+            REPO_JSON_FOUND=$(find . -maxdepth 3 -name "*repositories*.json" -type f 2>/dev/null | head -1)
+            if [ -n "$REPO_JSON_FOUND" ]; then
+              FILE_SIZE=$(du -h "$REPO_JSON_FOUND" | cut -f1)
+              echo "✅ 模糊搜索找到: $REPO_JSON_FOUND ($FILE_SIZE)"
+            fi
           fi
-          echo "✅ 找到 repositories.json 文件"
-          echo "REPO_JSON_PATH=repositories.json" >> $GITHUB_ENV
-          DEFAULT_REPO=$(jq -r '.defaults.repository' repositories.json)
-          DEFAULT_TIMEOUT=$(jq -r '.defaults.timeout_minutes' repositories.json)
-          CUSTOM_FEATURES_DIR=$(jq -r '.custom_features_support.features_directory' repositories.json)
+          
+          # 最终搜索尝试
+          if [ -z "$REPO_JSON_FOUND" ]; then
+            echo "🔍 尝试全目录深度搜索..."
+            REPO_JSON_FOUND=$(find . -name "*repositories*.json" -type f 2>/dev/null | head -1)
+            if [ -n "$REPO_JSON_FOUND" ]; then
+              FILE_SIZE=$(du -h "$REPO_JSON_FOUND" | cut -f1)
+              echo "✅ 深度搜索找到: $REPO_JSON_FOUND ($FILE_SIZE)"
+            else
+              echo "❌ 所有搜索尝试都失败，请确保 repositories.json 文件存在"
+              echo "📁 当前目录结构:"
+              find . -maxdepth 2 -type d -exec ls -la {} \; 2>/dev/null | head -20
+              exit 1
+            fi
+          fi
+          
+          echo "REPO_JSON_PATH=$REPO_JSON_FOUND" >> $GITHUB_ENV
+          
+          # 解析配置文件内容
+          echo "📖 解析配置文件内容..."
+          DEFAULT_REPO=$(jq -r '.defaults.repository' "$REPO_JSON_FOUND" 2>/dev/null || echo "immortalwrt")
+          DEFAULT_TIMEOUT=$(jq -r '.defaults.timeout_minutes' "$REPO_JSON_FOUND" 2>/dev/null || echo "180")
+          CUSTOM_FEATURES_DIR=$(jq -r '.custom_features_support.features_directory' "$REPO_JSON_FOUND" 2>/dev/null || echo "firmware-config/custom-features")
+          
           echo "DEFAULT_REPO=$DEFAULT_REPO" >> $GITHUB_ENV
           echo "CUSTOM_FEATURES_DIR=$CUSTOM_FEATURES_DIR" >> $GITHUB_ENV
+          
           echo "✅ 配置文件解析完成"
+          echo "📊 配置摘要:"
+          echo "  - 默认仓库: $DEFAULT_REPO"
+          echo "  - 超时时间: $DEFAULT_TIMEOUT 分钟"
+          echo "  - 自定义功能目录: $CUSTOM_FEATURES_DIR"
 
       - name: 💾 智能系统资源分析
         timeout-minutes: 2
@@ -495,42 +539,70 @@ jobs:
           done
           echo "✅ 源码初始化完成"
 
-      - name: 🎯 快速配置文件查找与应用
-        timeout-minutes: 2
+      - name: 🎯 增强配置文件搜索与应用
+        timeout-minutes: 3
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🎯 快速配置文件查找与应用 ==="
+          echo "=== 🎯 增强配置文件搜索与应用 ==="
           CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
           echo "🔍 查找配置文件: $CONFIG_PROFILE"
+          
           CONFIG_FOUND=""
-          SEARCH_PATHS=(".", "..", "$GITHUB_WORKSPACE", "configs", "../configs")
+          SEARCH_PATHS=(".", "..", "$GITHUB_WORKSPACE", "configs", "../configs", "$GITHUB_WORKSPACE/configs")
+          
+          echo "📋 搜索路径: ${SEARCH_PATHS[*]}"
+          
+          # 多路径精确搜索
           for path in "${SEARCH_PATHS[@]}"; do
             if [ -f "$path/$CONFIG_PROFILE" ]; then
               CONFIG_FOUND="$path/$CONFIG_PROFILE"
-              echo "✅ 在路径 '$path' 找到配置文件"
+              FILE_SIZE=$(du -h "$CONFIG_FOUND" | cut -f1)
+              echo "✅ 在路径 '$path' 找到配置文件 ($FILE_SIZE)"
               break
             fi
           done
+          
+          # 如果精确搜索失败，进行模糊搜索
           if [ -z "$CONFIG_FOUND" ]; then
             echo "🔍 精确查找失败，尝试模糊搜索..."
-            CONFIG_FOUND=$(find . -maxdepth 3 -name "*$CONFIG_PROFILE*" -type f 2>/dev/null | head -1)
+            CONFIG_FOUND=$(find . -maxdepth 4 -name "*$CONFIG_PROFILE*" -type f 2>/dev/null | head -1)
             if [ -n "$CONFIG_FOUND" ]; then
-              echo "✅ 模糊搜索找到: $CONFIG_FOUND"
+              FILE_SIZE=$(du -h "$CONFIG_FOUND" | cut -f1)
+              echo "✅ 模糊搜索找到: $CONFIG_FOUND ($FILE_SIZE)"
             fi
           fi
+          
+          # 最终搜索尝试 - 查找任何配置文件
+          if [ -z "$CONFIG_FOUND" ]; then
+            echo "🔍 尝试搜索任何配置文件..."
+            CONFIG_FOUND=$(find . -maxdepth 3 -name "*.config*" -type f 2>/dev/null | head -1)
+            if [ -n "$CONFIG_FOUND" ]; then
+              FILE_SIZE=$(du -h "$CONFIG_FOUND" | cut -f1)
+              echo "⚠️ 使用找到的默认配置文件: $CONFIG_FOUND ($FILE_SIZE)"
+            else
+              echo "❌ 错误: 无法找到任何配置文件"
+              echo "📁 当前目录内容:"
+              find . -maxdepth 2 -type f -name "*.config*" -exec ls -la {} \; 2>/dev/null
+              echo "💡 建议: 请确保配置文件存在或检查配置路径"
+              exit 1
+            fi
+          fi
+          
           if [ -n "$CONFIG_FOUND" ] && [ -f "$CONFIG_FOUND" ]; then
             echo "📋 复制配置文件: $CONFIG_FOUND -> .config"
             cp "$CONFIG_FOUND" .config
             echo "✅ 配置应用完成"
+            
+            # 验证配置基本结构
             if grep -q "CONFIG_TARGET" .config && grep -q "CONFIG_PACKAGE" .config; then
               echo "✅ 配置文件基本结构验证通过"
+              CONFIG_LINES=$(wc -l < .config)
+              echo "📊 配置文件信息: $CONFIG_LINES 行配置"
             else
               echo "⚠️ 警告: 配置文件可能不完整"
             fi
           else
             echo "❌ 错误: 无法找到配置文件 '$CONFIG_PROFILE'"
-            echo "🔍 搜索路径: ${SEARCH_PATHS[*]}"
-            ls -la
             exit 1
           fi
 
@@ -593,97 +665,162 @@ jobs:
           fi
           echo "✅ Samba验证完成"
 
-      - name: 📦 详细自定义功能处理
+      - name: 📦 增强自定义功能处理
         if: github.event.inputs.enable_custom_features == 'true'
         timeout-minutes: 15
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 📦 详细自定义功能处理 ==="
+          echo "=== 📦 增强自定义功能处理 ==="
           CONFIG_REPO_DIR="$GITHUB_WORKSPACE"
           CUSTOM_FEATURES_DIR="$CONFIG_REPO_DIR/${{ env.CUSTOM_FEATURES_DIR }}"
-          echo "🔍 开始验证自定义功能目录结构..."
+          
+          echo "🔍 搜索自定义功能目录..."
           echo "配置仓库目录: $CONFIG_REPO_DIR"
-          echo "自定义功能目录: $CUSTOM_FEATURES_DIR"
+          echo "目标自定义功能目录: $CUSTOM_FEATURES_DIR"
+          
+          # 搜索自定义功能目录
           if [ -d "$CUSTOM_FEATURES_DIR" ]; then
-            echo "✅ 找到自定义功能目录"
-            echo "📁 目录结构:"
+            CUSTOM_DIR_SIZE=$(du -sh "$CUSTOM_FEATURES_DIR" | cut -f1)
+            echo "✅ 找到自定义功能目录 ($CUSTOM_DIR_SIZE)"
+            echo "📁 目录详细内容:"
             find "$CUSTOM_FEATURES_DIR" -type f -name "*" 2>/dev/null | while read file; do
               size=$(du -h "$file" | cut -f1)
               echo "   - $file ($size)"
             done || echo "   ℹ️ 无文件或无法访问"
+            
+            # 处理预构建IPK包
             if [ -d "$CUSTOM_FEATURES_DIR/prebuilt-ipks" ]; then
               echo "📦 处理预构建IPK包..."
-              IPK_COUNT=$(find "$CUSTOM_FEATURES_DIR/prebuilt-ipks" -name "*.ipk" 2>/dev/null | wc -l)
+              IPK_FILES=$(find "$CUSTOM_FEATURES_DIR/prebuilt-ipks" -name "*.ipk" 2>/dev/null)
+              IPK_COUNT=$(echo "$IPK_FILES" | wc -l)
               echo "📊 找到 $IPK_COUNT 个IPK文件"
-              mkdir -p package/base-files/files/usr/lib/opkg/custom
-              echo "🔄 复制IPK文件到自定义OPKG目录..."
-              find "$CUSTOM_FEATURES_DIR/prebuilt-ipks" -name "*.ipk" -exec cp -v {} package/base-files/files/usr/lib/opkg/custom/ \; 2>/dev/null
-              COPIED_COUNT=$(find package/base-files/files/usr/lib/opkg/custom -name "*.ipk" 2>/dev/null | wc -l)
-              echo "✅ 成功复制 $COPIED_COUNT 个IPK包"
-              echo '#!/bin/sh' > package/base-files/files/etc/uci-defaults/99-custom-ipks
-              echo '[ -d "/usr/lib/opkg/custom" ] && {' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
-              echo '    for ipk in /usr/lib/opkg/custom/*.ipk; do' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
-              echo '        [ -f "$ipk" ] && opkg install "$ipk"' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
-              echo '    done' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
-              echo '}' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
-              echo 'exit 0' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
-              chmod +x package/base-files/files/etc/uci-defaults/99-custom-ipks
-              echo "✅ 创建IPK自动安装脚本"
+              
+              if [ "$IPK_COUNT" -gt 0 ]; then
+                mkdir -p package/base-files/files/usr/lib/opkg/custom
+                echo "🔄 复制IPK文件到自定义OPKG目录..."
+                echo "$IPK_FILES" | while read ipk; do
+                  ipk_size=$(du -h "$ipk" | cut -f1)
+                  echo "   - 复制: $(basename "$ipk") ($ipk_size)"
+                  cp "$ipk" package/base-files/files/usr/lib/opkg/custom/
+                done
+                
+                COPIED_COUNT=$(find package/base-files/files/usr/lib/opkg/custom -name "*.ipk" 2>/dev/null | wc -l)
+                echo "✅ 成功复制 $COPIED_COUNT 个IPK包"
+                
+                # 创建安装脚本
+                echo '#!/bin/sh' > package/base-files/files/etc/uci-defaults/99-custom-ipks
+                echo '[ -d "/usr/lib/opkg/custom" ] && {' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
+                echo '    for ipk in /usr/lib/opkg/custom/*.ipk; do' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
+                echo '        [ -f "$ipk" ] && opkg install "$ipk"' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
+                echo '    done' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
+                echo '}' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
+                echo 'exit 0' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
+                chmod +x package/base-files/files/etc/uci-defaults/99-custom-ipks
+                echo "✅ 创建IPK自动安装脚本"
+              else
+                echo "ℹ️ prebuilt-ipks 目录为空"
+              fi
             else
               echo "ℹ️ 未找到 prebuilt-ipks 目录"
             fi
+            
+            # 处理自定义脚本
             if [ -d "$CUSTOM_FEATURES_DIR/scripts" ]; then
               echo "🔧 处理自定义脚本..."
-              SCRIPT_COUNT=$(find "$CUSTOM_FEATURES_DIR/scripts" -name "*.sh" 2>/dev/null | wc -l)
+              SCRIPT_FILES=$(find "$CUSTOM_FEATURES_DIR/scripts" -name "*.sh" 2>/dev/null)
+              SCRIPT_COUNT=$(echo "$SCRIPT_FILES" | wc -l)
               echo "📊 找到 $SCRIPT_COUNT 个脚本文件"
-              echo "🔄 设置脚本执行权限并执行..."
-              find "$CUSTOM_FEATURES_DIR/scripts" -name "*.sh" -exec chmod -v +x {} \; 2>/dev/null
-              find "$CUSTOM_FEATURES_DIR/scripts" -name "*.sh" | sort | while read script; do
-                echo "🚀 执行脚本: $(basename "$script")"
-                echo "--- 脚本输出开始 ---"
-                if bash "$script" 2>&1; then
-                  echo "--- 脚本输出结束 ---"
-                  echo "✅ 脚本执行成功: $(basename "$script")"
-                else
-                  echo "--- 脚本输出结束 ---"
-                  echo "❌ 脚本执行失败: $(basename "$script")"
-                fi
-                echo ""
-              done
+              
+              if [ "$SCRIPT_COUNT" -gt 0 ]; then
+                echo "🔄 设置脚本执行权限并执行..."
+                echo "$SCRIPT_FILES" | while read script; do
+                  chmod +x "$script"
+                  script_size=$(du -h "$script" | cut -f1)
+                  echo "   - 设置权限: $(basename "$script") ($script_size)"
+                done
+                
+                # 按顺序执行脚本
+                echo "$SCRIPT_FILES" | sort | while read script; do
+                  echo "🚀 执行脚本: $(basename "$script")"
+                  echo "--- 脚本输出开始 ---"
+                  if bash "$script" 2>&1; then
+                    echo "--- 脚本输出结束 ---"
+                    echo "✅ 脚本执行成功: $(basename "$script")"
+                  else
+                    echo "--- 脚本输出结束 ---"
+                    echo "❌ 脚本执行失败: $(basename "$script")"
+                  fi
+                  echo ""
+                done
+              else
+                echo "ℹ️ scripts 目录为空"
+              fi
             else
               echo "ℹ️ 未找到 scripts 目录"
             fi
+            
+            # 处理自定义补丁
             if [ -d "$CUSTOM_FEATURES_DIR/patches" ]; then
               echo "🩹 处理自定义补丁..."
-              PATCH_COUNT=$(find "$CUSTOM_FEATURES_DIR/patches" -name "*.patch" 2>/dev/null | wc -l)
+              PATCH_FILES=$(find "$CUSTOM_FEATURES_DIR/patches" -name "*.patch" 2>/dev/null)
+              PATCH_COUNT=$(echo "$PATCH_FILES" | wc -l)
               echo "📊 找到 $PATCH_COUNT 个补丁文件"
-              find "$CUSTOM_FEATURES_DIR/patches" -name "*.patch" | sort | while read patch; do
-                echo "🔧 应用补丁: $(basename "$patch")"
-                if patch -p1 --forward -r - < "$patch" 2>&1; then
-                  echo "✅ 补丁应用成功: $(basename "$patch")"
-                else
-                  echo "⚠️ 补丁应用可能有问题: $(basename "$patch")"
-                fi
-                echo ""
-              done
+              
+              if [ "$PATCH_COUNT" -gt 0 ]; then
+                echo "$PATCH_FILES" | sort | while read patch; do
+                  patch_size=$(du -h "$patch" | cut -f1)
+                  echo "🔧 应用补丁: $(basename "$patch") ($patch_size)"
+                  if patch -p1 --forward -r - < "$patch" 2>&1; then
+                    echo "✅ 补丁应用成功: $(basename "$patch")"
+                  else
+                    echo "⚠️ 补丁应用可能有问题: $(basename "$patch")"
+                  fi
+                  echo ""
+                done
+              else
+                echo "ℹ️ patches 目录为空"
+              fi
             else
               echo "ℹ️ 未找到 patches 目录"
             fi
+            
+            # 处理自定义配置
             if [ -d "$CUSTOM_FEATURES_DIR/configs" ]; then
               echo "⚙️ 处理自定义配置..."
-              find "$CUSTOM_FEATURES_DIR/configs" -name "*" -type f | while read config; do
-                rel_path=$(realpath --relative-to="$CUSTOM_FEATURES_DIR/configs" "$config")
-                target_dir="package/base-files/files/$(dirname "$rel_path")"
-                mkdir -p "$target_dir"
-                cp "$config" "$target_dir/"
-                echo "✅ 复制配置: $rel_path"
-              done
+              CONFIG_FILES=$(find "$CUSTOM_FEATURES_DIR/configs" -type f 2>/dev/null)
+              CONFIG_COUNT=$(echo "$CONFIG_FILES" | wc -l)
+              echo "📊 找到 $CONFIG_COUNT 个配置文件"
+              
+              if [ "$CONFIG_COUNT" -gt 0 ]; then
+                echo "$CONFIG_FILES" | while read config; do
+                  rel_path=$(realpath --relative-to="$CUSTOM_FEATURES_DIR/configs" "$config")
+                  target_dir="package/base-files/files/$(dirname "$rel_path")"
+                  mkdir -p "$target_dir"
+                  config_size=$(du -h "$config" | cut -f1)
+                  cp "$config" "$target_dir/"
+                  echo "✅ 复制配置: $rel_path ($config_size)"
+                done
+              else
+                echo "ℹ️ configs 目录为空"
+              fi
+            else
+              echo "ℹ️ 未找到 configs 目录"
             fi
+            
             echo "🎉 自定义功能处理完成"
           else
             echo "ℹ️ 无自定义功能目录，跳过详细处理"
+            echo "🔍 搜索替代的自定义目录..."
+            ALT_CUSTOM_DIRS=$(find "$CONFIG_REPO_DIR" -maxdepth 2 -name "*custom*" -type d 2>/dev/null)
+            if [ -n "$ALT_CUSTOM_DIRS" ]; then
+              echo "💡 发现可能的自定义目录:"
+              echo "$ALT_CUSTOM_DIRS" | while read dir; do
+                dir_size=$(du -sh "$dir" 2>/dev/null | cut -f1 || echo "未知")
+                echo "   - $dir ($dir_size)"
+              done
+            fi
           fi
-          echo "✅ 详细自定义功能处理完成"
+          echo "✅ 自定义功能处理完成"
 
       - name: 📥 快速预下载
         if: github.event.inputs.enable_pre_download == 'true'
@@ -712,9 +849,10 @@ jobs:
             fi
           fi
           echo "📊 下载结果统计:"
-          find dl/ -type f 2>/dev/null | wc -l
-          echo "📦 下载文件总大小:"
-          du -sh dl/ 2>/dev/null || echo "无法统计"
+          DOWNLOAD_COUNT=$(find dl/ -type f 2>/dev/null | wc -l)
+          DOWNLOAD_SIZE=$(du -sh dl/ 2>/dev/null || echo "未知")
+          echo "  - 文件数量: $DOWNLOAD_COUNT"
+          echo "  - 总大小: $DOWNLOAD_SIZE"
           echo "✅ 预下载完成"
 
       - name: 🛠️ 快速工具链编译
@@ -741,7 +879,12 @@ jobs:
             fi
           fi
           echo "📊 工具链状态:"
-          find staging_dir/toolchain-* -name "*-gcc" 2>/dev/null | head -1 | xargs ls -la 2>/dev/null || echo "⚠️ 无法找到工具链"
+          TOOLCHAIN_FILES=$(find staging_dir/toolchain-* -name "*-gcc" 2>/dev/null | head -1)
+          if [ -n "$TOOLCHAIN_FILES" ]; then
+            ls -la "$TOOLCHAIN_FILES"
+          else
+            echo "⚠️ 无法找到工具链"
+          fi
           echo "✅ 工具链编译完成"
 
       - name: 🏗️ 高效编译固件
@@ -794,7 +937,8 @@ jobs:
           KEYWORDS=("error:" "Error 1" "Error 2" "failed" "No such file" "undefined reference" "cannot find" "not found" "fatal:")
           for log_file in ${{ env.BUILD_LOG_DIR }}/*.log ${{ env.TOOLCHAIN_LOG_DIR }}/*.log; do
             if [ -f "$log_file" ]; then
-              echo "📄 分析日志文件: $(basename "$log_file")" | tee -a "$ERROR_LOG_FILE"
+              LOG_SIZE=$(du -h "$log_file" | cut -f1)
+              echo "📄 分析日志文件: $(basename "$log_file") ($LOG_SIZE)" | tee -a "$ERROR_LOG_FILE"
               echo "==========================================" | tee -a "$ERROR_LOG_FILE"
               for keyword in "${KEYWORDS[@]}"; do
                 if grep -n -i "$keyword" "$log_file" > /dev/null; then
@@ -815,25 +959,40 @@ jobs:
           done
           if [ -f "$ERROR_LOG_FILE" ] && [ -s "$ERROR_LOG_FILE" ]; then
             ERROR_COUNT=$(grep -c "🚨 发现关键词" "$ERROR_LOG_FILE" || echo "0")
-            echo "📋 错误分析完成，发现 $ERROR_COUNT 类错误"
+            ERROR_LOG_SIZE=$(du -h "$ERROR_LOG_FILE" | cut -f1)
+            echo "📋 错误分析完成，发现 $ERROR_COUNT 类错误 ($ERROR_LOG_SIZE)"
             echo "⚠️ 发现编译过程中的错误和警告，请检查错误分析报告"
           else
             echo "✅ 未发现明显的错误信息"
           fi
 
-      - name: 🔍 编译产物验证
+      - name: 🔍 编译产物验证与搜索
         if: env.BUILD_STATUS == 'success'
         timeout-minutes: 5
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔍 编译产物验证 ==="
+          echo "=== 🔍 编译产物验证与搜索 ==="
           mkdir -p ${{ env.ARTIFACTS_DIR }}/firmware
           echo "🔍 搜索固件文件..."
           if [ -d "bin/targets" ]; then
             echo "✅ 找到固件输出目录"
             cp -r bin/targets/* ${{ env.ARTIFACTS_DIR }}/firmware/ 2>/dev/null || true
-            FIRMWARE_COUNT=$(find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" 2>/dev/null | wc -l)
+            
+            # 搜索所有固件文件
+            FIRMWARE_FILES=$(find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" 2>/dev/null)
+            FIRMWARE_COUNT=$(echo "$FIRMWARE_FILES" | wc -l)
             echo "📊 找到 $FIRMWARE_COUNT 个固件文件"
+            
+            # 显示固件文件详情
+            if [ "$FIRMWARE_COUNT" -gt 0 ]; then
+              echo "📦 固件文件列表:"
+              echo "$FIRMWARE_FILES" | while read firmware; do
+                size=$(du -h "$firmware" | cut -f1)
+                echo "  - $firmware ($size)"
+              done
+            fi
+            
+            # 搜索ASUS特定镜像
             ASUS_IMAGES=$(find bin/targets -name "*asus_rt-ac42u*" -type f 2>/dev/null)
             if [ -n "$ASUS_IMAGES" ]; then
               echo "✅ ASUS RT-AC42U 镜像已生成:"
@@ -843,16 +1002,25 @@ jobs:
               done
             else
               echo "⚠️ 未找到ASUS RT-AC42U特定镜像"
-              echo "🔍 可用的镜像文件:"
+              echo "🔍 可用的设备镜像:"
               find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null | head -10 | while read img; do
                 size=$(du -h "$img" | cut -f1)
                 echo "  - $(basename "$img") ($size)"
               done
             fi
+            
+            # 生成文件清单
             find bin/targets -type f > ${{ env.ARTIFACTS_DIR }}/firmware/filelist.txt 2>/dev/null || true
+            ARTIFACT_SIZE=$(du -sh ${{ env.ARTIFACTS_DIR }}/firmware/ 2>/dev/null | cut -f1 || echo "未知")
+            echo "📦 产物总大小: $ARTIFACT_SIZE"
+            
           else
             echo "❌ 未找到固件输出目录"
-            ls -la
+            echo "🔍 搜索编译输出..."
+            find . -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null | head -10 | while read file; do
+              size=$(du -h "$file" | cut -f1)
+              echo "  - $file ($size)"
+            done
             exit 1
           fi
           echo "FIRMWARE_COUNT=$FIRMWARE_COUNT" >> $GITHUB_ENV
@@ -865,25 +1033,42 @@ jobs:
           echo "=== 📋 快速日志收集 ==="
           echo "开始快速日志收集..."
           mkdir -p ${{ env.ARTIFACTS_DIR }}/logs
+          
+          # 收集构建日志
           if [ -d "${{ env.BUILD_LOG_DIR }}" ]; then
+            BUILD_LOG_COUNT=$(find ${{ env.BUILD_LOG_DIR }} -name "*.log" 2>/dev/null | wc -l)
             cp ${{ env.BUILD_LOG_DIR }}/*.log ${{ env.ARTIFACTS_DIR }}/logs/ 2>/dev/null || true
-            echo "✅ 构建日志收集完成"
+            echo "✅ 构建日志收集完成 ($BUILD_LOG_COUNT 个文件)"
           fi
+          
+          # 收集工具链日志
           if [ -d "${{ env.TOOLCHAIN_LOG_DIR }}" ]; then
+            TOOLCHAIN_LOG_COUNT=$(find ${{ env.TOOLCHAIN_LOG_DIR }} -name "*.log" 2>/dev/null | wc -l)
             cp ${{ env.TOOLCHAIN_LOG_DIR }}/*.log ${{ env.ARTIFACTS_DIR }}/logs/ 2>/dev/null || true
-            echo "✅ 工具链日志收集完成"
+            echo "✅ 工具链日志收集完成 ($TOOLCHAIN_LOG_COUNT 个文件)"
           fi
+          
+          # 收集最终配置
           if [ -d "${{ env.SOURCE_DIR }}" ]; then
             cd ${{ env.SOURCE_DIR }}
             cp .config ${{ env.ARTIFACTS_DIR }}/logs/final-config.txt 2>/dev/null || true
             echo "✅ 最终配置收集完成"
           fi
+          
+          # 收集CCache统计
           ccache -s > ${{ env.ARTIFACTS_DIR }}/logs/ccache-stats.txt 2>/dev/null || true
-          echo "📊 收集的日志文件:"
-          find ${{ env.ARTIFACTS_DIR }}/logs -type f -name "*.log" -o -name "*.txt" | while read file; do
+          
+          # 显示收集的日志文件详情
+          LOG_FILES=$(find ${{ env.ARTIFACTS_DIR }}/logs -type f -name "*.log" -o -name "*.txt" 2>/dev/null)
+          LOG_COUNT=$(echo "$LOG_FILES" | wc -l)
+          LOG_TOTAL_SIZE=$(du -sh ${{ env.ARTIFACTS_DIR }}/logs 2>/dev/null | cut -f1 || echo "未知")
+          
+          echo "📊 收集的日志文件 ($LOG_COUNT 个文件, $LOG_TOTAL_SIZE):"
+          echo "$LOG_FILES" | while read file; do
             size=$(du -h "$file" | cut -f1)
             echo "  - $(basename "$file") ($size)"
           done
+          
           echo "✅ 日志收集完成"
 
       - name: 💾 上传构建产物
@@ -937,6 +1122,7 @@ jobs:
           echo "  - 自定义功能: ${{ github.event.inputs.enable_custom_features }}"
           echo "  - 预下载: ${{ github.event.inputs.enable_pre_download }}"
           echo "  - 问题修复: ${{ github.event.inputs.fix_common_issues }}"
+          echo "  - 调试模式: ${{ github.event.inputs.debug_mode }}"
           echo ""
           if [ "${{ env.BUILD_STATUS }}" = "success" ]; then
             echo "🎉 构建成功！"
