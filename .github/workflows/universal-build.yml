@@ -872,25 +872,21 @@ jobs:
           sed -i 's|https://github.com|https://ghproxy.com/https://github.com|g' scripts/download.pl
           sed -i 's|https://git.kernel.org|https://mirror.gitkernel.org|g' scripts/download.pl
           
-          cat > scripts/download-with-retry << 'SCRIPT_EOF'
-#!/bin/sh
-MAX_RETRIES=3
-RETRY_COUNT=0
-DOWNLOAD_SCRIPT="/mnt/source/scripts/download.pl"
-
-while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    if $DOWNLOAD_SCRIPT "$@"; then
-        echo "✅ 下载成功"
-        exit 0
-    fi
-    RETRY_COUNT=$((RETRY_COUNT+1))
-    echo "❌ 下载失败，第 $RETRY_COUNT 次重试..."
-    sleep 5
-done
-
-echo "❌ 下载失败，已达到最大重试次数"
-exit 1
-SCRIPT_EOF
+          echo '#!/bin/sh' > scripts/download-with-retry
+          echo 'MAX_RETRIES=3' >> scripts/download-with-retry
+          echo 'RETRY_COUNT=0' >> scripts/download-with-retry
+          echo 'DOWNLOAD_SCRIPT="/mnt/source/scripts/download.pl"' >> scripts/download-with-retry
+          echo 'while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do' >> scripts/download-with-retry
+          echo '    if $DOWNLOAD_SCRIPT "$@"; then' >> scripts/download-with-retry
+          echo '        echo "✅ 下载成功"' >> scripts/download-with-retry
+          echo '        exit 0' >> scripts/download-with-retry
+          echo '    fi' >> scripts/download-with-retry
+          echo '    RETRY_COUNT=$((RETRY_COUNT+1))' >> scripts/download-with-retry
+          echo '    echo "❌ 下载失败，第 $RETRY_COUNT 次重试..."' >> scripts/download-with-retry
+          echo '    sleep 5' >> scripts/download-with-retry
+          echo 'done' >> scripts/download-with-retry
+          echo 'echo "❌ 下载失败，已达到最大重试次数"' >> scripts/download-with-retry
+          echo 'exit 1' >> scripts/download-with-retry
           chmod +x scripts/download-with-retry
           echo "✅ 下载源优化完成"
 
