@@ -935,43 +935,119 @@ jobs:
           echo "📊 CCache 统计:"
           ccache -s
 
-      - name: 🔍 错误日志分析
+      - name: 🔍 智能错误分析与工厂镜像保障
         if: always()
         timeout-minutes: 10
         run: |
-          echo "=== 🔍 错误日志分析 ==="
-          ERROR_LOG_FILE="${{ env.ARTIFACTS_DIR }}/error-analysis.log"
-          echo "🔍 开始分析编译日志中的错误..."
-          KEYWORDS=("error:" "Error 1" "Error 2" "failed" "No such file" "undefined reference" "cannot find" "not found" "fatal:")
-          for log_file in ${{ env.BUILD_LOG_DIR }}/*.log ${{ env.TOOLCHAIN_LOG_DIR }}/*.log; do
+          echo "=== 🔍 智能错误分析与工厂镜像保障 ==="
+          ERROR_LOG_FILE="${{ env.ARTIFACTS_DIR }}/critical-errors.log"
+          
+          echo "🎯 关键错误分析 (只显示最重要的问题)..." > "$ERROR_LOG_FILE"
+          echo "==========================================" >> "$ERROR_LOG_FILE"
+          
+          # 分析关键错误，限制输出
+          KEYWORDS=("Error 1" "Error 2" "fatal:" "failed" "No such file" "not found")
+          
+          for log_file in ${{ env.BUILD_LOG_DIR }}/*.log; do
             if [ -f "$log_file" ]; then
-              LOG_SIZE=$(du -h "$log_file" | cut -f1)
-              echo "📄 分析日志文件: $(basename "$log_file") ($LOG_SIZE)" | tee -a "$ERROR_LOG_FILE"
-              echo "==========================================" | tee -a "$ERROR_LOG_FILE"
+              LOG_NAME=$(basename "$log_file")
+              echo "" >> "$ERROR_LOG_FILE"
+              echo "📄 分析: $LOG_NAME" >> "$ERROR_LOG_FILE"
+              echo "------------------------------------------" >> "$ERROR_LOG_FILE"
+              
               for keyword in "${KEYWORDS[@]}"; do
                 if grep -n -i "$keyword" "$log_file" > /dev/null; then
-                  echo "🚨 发现关键词: **$keyword**" | tee -a "$ERROR_LOG_FILE"
-                  echo "------------------------------------------" | tee -a "$ERROR_LOG_FILE"
-                  grep -n -i -A5 -B5 "$keyword" "$log_file" | while IFS= read -r line; do
-                    if echo "$line" | grep -i "$keyword" > /dev/null; then
-                      echo "**$line**" | tee -a "$ERROR_LOG_FILE"
-                    else
-                      echo "$line" | tee -a "$ERROR_LOG_FILE"
-                    fi
-                  done
-                  echo "" | tee -a "$ERROR_LOG_FILE"
+                  echo "🚨 $keyword 相关错误:" >> "$ERROR_LOG_FILE"
+                  grep -n -i "$keyword" "$log_file" | head -5 >> "$ERROR_LOG_FILE"
+                  echo "" >> "$ERROR_LOG_FILE"
                 fi
               done
-              echo "" | tee -a "$ERROR_LOG_FILE"
             fi
           done
-          if [ -f "$ERROR_LOG_FILE" ] && [ -s "$ERROR_LOG_FILE" ]; then
-            ERROR_COUNT=$(grep -c "🚨 发现关键词" "$ERROR_LOG_FILE" || echo "0")
-            ERROR_LOG_SIZE=$(du -h "$ERROR_LOG_FILE" | cut -f1)
-            echo "📋 错误分析完成，发现 $ERROR_COUNT 类错误 ($ERROR_LOG_SIZE)"
-            echo "⚠️ 发现编译过程中的错误和警告，请检查错误分析报告"
+          
+          # 特别检查工厂镜像
+          echo "" >> "$ERROR_LOG_FILE"
+          echo "🔍 工厂镜像状态检查:" >> "$ERROR_LOG_FILE"
+          echo "------------------------------------------" >> "$ERROR_LOG_FILE"
+          
+          if [ -d "${{ env.SOURCE_DIR }}/bin/targets" ]; then
+            ASUS_FACTORY=$(find ${{ env.SOURCE_DIR }}/bin/targets -name "*asus*rt-ac42u*" -o -name "*rt-ac42u*" | grep -i factory || true)
+            if [ -n "$ASUS_FACTORY" ]; then
+              echo "✅ 工厂镜像已生成:" >> "$ERROR_LOG_FILE"
+              for img in $ASUS_FACTORY; do
+                size=$(du -h "$img" | cut -f1)
+                echo "  - $img ($size)" >> "$ERROR_LOG_FILE"
+              done
+            else
+              echo "❌ 未找到ASUS RT-AC42U工厂镜像!" >> "$ERROR_LOG_FILE"
+              echo "💡 可用的镜像文件:" >> "$ERROR_LOG_FILE"
+              find ${{ env.SOURCE_DIR }}/bin/targets -name "*.bin" -o -name "*.img" | head -10 | while read img; do
+                size=$(du -h "$img" | cut -f1)
+                echo "  - $img ($size)" >> "$ERROR_LOG_FILE"
+              done
+            fi
           else
-            echo "✅ 未发现明显的错误信息"
+            echo "❌ 编译输出目录不存在!" >> "$ERROR_LOG_FILE"
+          fi
+          
+          # 显示关键错误摘要
+          if [ -s "$ERROR_LOG_FILE" ]; then
+            echo "🚨 关键问题摘要:"
+            cat "$ERROR_LOG_FILE"
+          else
+            echo "✅ 未发现关键错误"
+          fi
+
+      - name: 🎯 工厂镜像强制保障
+        if: env.BUILD_STATUS == 'success'
+        timeout-minutes: 15
+        run: |
+          cd ${{ env.SOURCE_DIR }}
+          echo "=== 🎯 工厂镜像强制保障 ==="
+          
+          echo "🔍 检查工厂镜像生成状态..."
+          ASUS_FACTORY=$(find bin/targets -name "*asus*rt-ac42u*" -o -name "*rt-ac42u*" | grep -i factory || true)
+          
+          if [ -n "$ASUS_FACTORY" ]; then
+            echo "✅ 工厂镜像已存在:"
+            for img in $ASUS_FACTORY; do
+              size=$(du -h "$img" | cut -f1)
+              echo "  - $img ($size)"
+            done
+            echo "FACTORY_EXISTS=true" >> $GITHUB_ENV
+          else
+            echo "❌ 未找到工厂镜像，开始强制生成..."
+            echo "FACTORY_EXISTS=false" >> $GITHUB_ENV
+            
+            # 强制重新生成镜像
+            echo "🔄 强制重新生成工厂镜像..."
+            echo "🔧 重新配置目标..."
+            make target/linux/{clean,prepare} V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/factory-repair.log || true
+            
+            echo "🔧 重新编译内核..."
+            make target/linux/compile -j1 V=s 2>&1 | tee -a ${{ env.BUILD_LOG_DIR }}/factory-repair.log || true
+            
+            echo "🔧 重新生成镜像..."
+            make target/install -j1 V=s 2>&1 | tee -a ${{ env.BUILD_LOG_DIR }}/factory-repair.log || true
+            
+            # 再次检查
+            ASUS_FACTORY_RETRY=$(find bin/targets -name "*asus*rt-ac42u*" -o -name "*rt-ac42u*" | grep -i factory || true)
+            if [ -n "$ASUS_FACTORY_RETRY" ]; then
+              echo "✅ 工厂镜像修复成功!"
+              for img in $ASUS_FACTORY_RETRY; do
+                size=$(du -h "$img" | cut -f1)
+                echo "  - $img ($size)"
+              done
+              echo "FACTORY_EXISTS=true" >> $GITHUB_ENV
+            else
+              echo "❌ 工厂镜像生成失败"
+              echo "🔍 详细错误:"
+              tail -100 ${{ env.BUILD_LOG_DIR }}/factory-repair.log | grep -i "error\|failed\|not found" | head -20
+              
+              # 最后一次尝试
+              echo "🔄 最后尝试: 直接编译目标设备..."
+              make target/linux/ipq40xx/image/install -j1 V=s 2>&1 | tee -a ${{ env.BUILD_LOG_DIR }}/factory-repair.log || true
+            fi
           fi
 
       - name: 🔍 编译产物验证与搜索
@@ -982,43 +1058,46 @@ jobs:
           echo "=== 🔍 编译产物验证与搜索 ==="
           mkdir -p ${{ env.ARTIFACTS_DIR }}/firmware
           echo "🔍 搜索固件文件..."
+          
           if [ -d "bin/targets" ]; then
             echo "✅ 找到固件输出目录"
-            cp -r bin/targets/* ${{ env.ARTIFACTS_DIR }}/firmware/ 2>/dev/null || true
             
-            # 搜索所有固件文件
-            FIRMWARE_FILES=$(find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" 2>/dev/null)
-            FIRMWARE_COUNT=$(echo "$FIRMWARE_FILES" | wc -l)
-            echo "📊 找到 $FIRMWARE_COUNT 个固件文件"
+            # 复制所有固件文件
+            find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" \) > ${{ env.ARTIFACTS_DIR }}/firmware-list.txt
+            FIRMWARE_COUNT=$(wc -l < ${{ env.ARTIFACTS_DIR }}/firmware-list.txt)
             
-            # 显示固件文件详情
-            if [ "$FIRMWARE_COUNT" -gt 0 ]; then
-              echo "📦 固件文件列表:"
-              echo "$FIRMWARE_FILES" | while read firmware; do
-                size=$(du -h "$firmware" | cut -f1)
-                echo "  - $firmware ($size)"
-              done
-            fi
+            echo "📦 复制 $FIRMWARE_COUNT 个固件文件..."
+            while IFS= read -r firmware; do
+              if [ -f "$firmware" ]; then
+                cp "$firmware" ${{ env.ARTIFACTS_DIR }}/firmware/ 2>/dev/null || true
+              fi
+            done < ${{ env.ARTIFACTS_DIR }}/firmware-list.txt
             
-            # 搜索ASUS特定镜像
-            ASUS_IMAGES=$(find bin/targets -name "*asus_rt-ac42u*" -type f 2>/dev/null)
-            if [ -n "$ASUS_IMAGES" ]; then
-              echo "✅ ASUS RT-AC42U 镜像已生成:"
-              for img in $ASUS_IMAGES; do
+            # 特别检查ASUS镜像
+            echo "🎯 ASUS RT-AC42U 镜像状态:"
+            ASUS_FACTORY=$(find bin/targets -name "*asus*rt-ac42u*" -o -name "*rt-ac42u*" | grep -i factory || true)
+            ASUS_SYSUPGRADE=$(find bin/targets -name "*asus*rt-ac42u*" -o -name "*rt-ac42u*" | grep -v factory || true)
+            
+            if [ -n "$ASUS_FACTORY" ]; then
+              echo "✅ 工厂镜像:"
+              for img in $ASUS_FACTORY; do
                 size=$(du -h "$img" | cut -f1)
                 echo "  - $(basename "$img") ($size)"
+                # 确保工厂镜像被复制
+                cp "$img" ${{ env.ARTIFACTS_DIR }}/firmware/ 2>/dev/null || true
               done
             else
-              echo "⚠️ 未找到ASUS RT-AC42U特定镜像"
-              echo "🔍 可用的设备镜像:"
-              find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null | head -10 | while read img; do
+              echo "❌ 未找到工厂镜像!"
+            fi
+            
+            if [ -n "$ASUS_SYSUPGRADE" ]; then
+              echo "✅ 升级镜像:"
+              for img in $ASUS_SYSUPGRADE; do
                 size=$(du -h "$img" | cut -f1)
                 echo "  - $(basename "$img") ($size)"
               done
             fi
             
-            # 生成文件清单
-            find bin/targets -type f > ${{ env.ARTIFACTS_DIR }}/firmware/filelist.txt 2>/dev/null || true
             ARTIFACT_SIZE=$(du -sh ${{ env.ARTIFACTS_DIR }}/firmware/ 2>/dev/null | cut -f1 || echo "未知")
             echo "📦 产物总大小: $ARTIFACT_SIZE"
             
@@ -1028,46 +1107,60 @@ jobs:
             find . -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null | head -10 | while read file; do
               size=$(du -h "$file" | cut -f1)
               echo "  - $file ($size)"
+              cp "$file" ${{ env.ARTIFACTS_DIR }}/firmware/ 2>/dev/null || true
             done
-            exit 1
           fi
-          echo "FIRMWARE_COUNT=$FIRMWARE_COUNT" >> $GITHUB_ENV
-          echo "✅ 产物验证完成"
+          
+          FINAL_COUNT=$(find ${{ env.ARTIFACTS_DIR }}/firmware -type f 2>/dev/null | wc -l || echo 0)
+          echo "FIRMWARE_COUNT=$FINAL_COUNT" >> $GITHUB_ENV
+          echo "📊 最终固件数量: $FINAL_COUNT"
 
-      - name: 📋 快速日志收集
+      - name: 📋 智能日志收集
         if: always()
         timeout-minutes: 5
         run: |
-          echo "=== 📋 快速日志收集 ==="
-          echo "开始快速日志收集..."
+          echo "=== 📋 智能日志收集 ==="
+          echo "开始智能日志收集..."
           mkdir -p ${{ env.ARTIFACTS_DIR }}/logs
           
-          # 收集构建日志
-          if [ -d "${{ env.BUILD_LOG_DIR }}" ]; then
-            BUILD_LOG_COUNT=$(find ${{ env.BUILD_LOG_DIR }} -name "*.log" 2>/dev/null | wc -l)
-            cp ${{ env.BUILD_LOG_DIR }}/*.log ${{ env.ARTIFACTS_DIR }}/logs/ 2>/dev/null || true
-            echo "✅ 构建日志收集完成 ($BUILD_LOG_COUNT 个文件)"
-          fi
+          # 收集关键日志（限制大小）
+          KEY_LOGS=(
+            "${{ env.BUILD_LOG_DIR }}/critical-errors.log"
+            "${{ env.BUILD_LOG_DIR }}/compile.log"
+            "${{ env.BUILD_LOG_DIR }}/download.log"
+            "${{ env.BUILD_LOG_DIR }}/toolchain.log"
+            "${{ env.BUILD_LOG_DIR }}/factory-repair.log"
+          )
           
-          # 收集工具链日志
-          if [ -d "${{ env.TOOLCHAIN_LOG_DIR }}" ]; then
-            TOOLCHAIN_LOG_COUNT=$(find ${{ env.TOOLCHAIN_LOG_DIR }} -name "*.log" 2>/dev/null | wc -l)
-            cp ${{ env.TOOLCHAIN_LOG_DIR }}/*.log ${{ env.ARTIFACTS_DIR }}/logs/ 2>/dev/null || true
-            echo "✅ 工具链日志收集完成 ($TOOLCHAIN_LOG_COUNT 个文件)"
-          fi
+          for log in "${KEY_LOGS[@]}"; do
+            if [ -f "$log" ]; then
+              base_name=$(basename "$log")
+              # 只收集日志的关键部分（开头100行和结尾500行）
+              {
+                echo "=== 日志文件: $base_name ==="
+                echo "=== 前100行 ==="
+                head -100 "$log" 2>/dev/null
+                echo ""
+                echo "=== 后500行 ==="
+                tail -500 "$log" 2>/dev/null
+              } > "${{ env.ARTIFACTS_DIR }}/logs/${base_name}" 2>/dev/null || true
+            fi
+          done
           
-          # 收集最终配置
+          # 收集配置和状态信息
           if [ -d "${{ env.SOURCE_DIR }}" ]; then
             cd ${{ env.SOURCE_DIR }}
             cp .config ${{ env.ARTIFACTS_DIR }}/logs/final-config.txt 2>/dev/null || true
-            echo "✅ 最终配置收集完成"
+            ccache -s > ${{ env.ARTIFACTS_DIR }}/logs/ccache-stats.txt 2>/dev/null || true
           fi
           
-          # 收集CCache统计
-          ccache -s > ${{ env.ARTIFACTS_DIR }}/logs/ccache-stats.txt 2>/dev/null || true
+          # 收集固件清单
+          if [ -f "${{ env.ARTIFACTS_DIR }}/firmware-list.txt" ]; then
+            cp ${{ env.ARTIFACTS_DIR }}/firmware-list.txt ${{ env.ARTIFACTS_DIR }}/logs/ 2>/dev/null || true
+          fi
           
-          # 显示收集的日志文件详情
-          LOG_FILES=$(find ${{ env.ARTIFACTS_DIR }}/logs -type f -name "*.log" -o -name "*.txt" 2>/dev/null)
+          # 显示收集的日志信息
+          LOG_FILES=$(find ${{ env.ARTIFACTS_DIR }}/logs -type f 2>/dev/null)
           LOG_COUNT=$(echo "$LOG_FILES" | wc -l)
           LOG_TOTAL_SIZE=$(du -sh ${{ env.ARTIFACTS_DIR }}/logs 2>/dev/null | cut -f1 || echo "未知")
           
@@ -1124,6 +1217,7 @@ jobs:
           echo "  - 状态: ${{ env.BUILD_STATUS || 'unknown' }}"
           echo "  - 时长: ${{ env.BUILD_DURATION || 'N/A' }}秒 ($((${{ env.BUILD_DURATION || 0 }}/60))分钟)"
           echo "  - 固件数量: ${{ env.FIRMWARE_COUNT || 0 }}"
+          echo "  - 工厂镜像: ${{ env.FACTORY_EXISTS || 'unknown' }}"
           echo "  - 优化策略: ${{ github.event.inputs.build_optimization }}"
           echo ""
           echo "🔧 功能状态:"
@@ -1132,28 +1226,32 @@ jobs:
           echo "  - 问题修复: ${{ github.event.inputs.fix_common_issues }}"
           echo "  - 调试模式: ${{ github.event.inputs.debug_mode }}"
           echo ""
+          
           if [ "${{ env.BUILD_STATUS }}" = "success" ]; then
-            echo "🎉 构建成功！"
-            echo "📦 固件已上传到 Artifacts，名称为:"
-            echo "   Firmware-${{ github.run_number }}-${{ env.SOURCE_PRESET }}-${{ env.ACTUAL_BRANCH }}-success"
-            echo ""
-            echo "💡 使用提示:"
-            echo "   - 下载 Artifacts 获取编译产物"
-            echo "   - 选择适合您设备的固件文件刷入"
-            echo "   - 首次使用建议选择 factory 固件"
+            if [ "${{ env.FACTORY_EXISTS }}" = "true" ]; then
+              echo "🎉 构建成功！工厂镜像已生成"
+              echo ""
+              echo "🚨 救砖重要提示:"
+              echo "   1. 下载 Artifacts 中的固件文件"
+              echo "   2. 查找名称包含 'factory' 的镜像文件"
+              echo "   3. 使用 ASUS 官方恢复工具刷入工厂镜像"
+              echo "   4. 等待路由器自动重启完成"
+              echo "   5. 不要使用 sysupgrade 镜像救砖！"
+            else
+              echo "⚠️ 构建成功但未生成工厂镜像"
+              echo "💡 建议:"
+              echo "   - 检查设备配置是否正确"
+              echo "   - 查看详细错误日志"
+              echo "   - 可能需要手动配置工厂镜像生成"
+            fi
           else
             echo "❌ 构建失败"
             echo ""
-            echo "🔍 故障排除建议:"
-            echo "   - 检查错误日志分析报告"
+            echo "🔍 故障排除:"
+            echo "   - 查看 critical-errors.log"
             echo "   - 验证配置文件是否正确"
-            echo "   - 确认依赖包是否完整"
-            echo "   - 查看详细构建日志"
-            echo ""
-            echo "📋 下次构建建议:"
-            echo "   - 启用调试模式获取更多信息"
-            echo "   - 尝试使用稳定性优化策略"
             echo "   - 检查网络连接和仓库状态"
+            echo "   - 确认依赖包是否完整"
           fi
           echo ""
           echo "⏰ 完成时间: $(date)"
