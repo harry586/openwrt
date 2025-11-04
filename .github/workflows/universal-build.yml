@@ -1,103 +1,92 @@
-name: Universal Firmware Builder - Enhanced Version
+name: "Universal Firmware Builder - Strict Validation Version"
 
 on:
   workflow_dispatch:
     inputs:
       source_preset:
-        description: 选择源码库
+        description: "选择源码库"
         required: true
         type: choice
-        options:
-          - immortalwrt
-          - openwrt
-          - lede
-        default: immortalwrt
+        options: ["immortalwrt", "openwrt", "lede"]
+        default: "immortalwrt"
       source_branch:
-        description: 源码分支
+        description: "源码分支"
         required: true
-        default: auto
+        default: "auto"
         type: string
       config_profile:
-        description: 设备配置文件路径
+        description: "设备配置文件路径"
         required: true
         type: string
-        default: .config_rt-ac42u_immortalwrt
+        default: ".config_rt-ac42u_immortalwrt"
       build_optimization:
-        description: 编译优化策略
+        description: "编译优化策略"
         required: true
         type: choice
-        options:
-          - balanced
-          - speed
-          - stability
-        default: balanced
+        options: ["balanced", "speed", "stability"]
+        default: "balanced"
       toolchain_strategy:
-        description: 工具链策略
+        description: "工具链策略"
         required: true
         type: choice
-        options:
-          - prebuilt
-          - local
-          - auto
-        default: auto
+        options: ["prebuilt", "local", "auto"]
+        default: "auto"
       enable_custom_features:
-        description: 启用自定义功能
+        description: "启用自定义功能"
         required: false
         default: true
         type: boolean
       fix_common_issues:
-        description: 自动修复常见问题
+        description: "自动修复常见问题"
         required: false
         default: true
         type: boolean
       enable_pre_download:
-        description: 启用预下载验证
+        description: "启用预下载验证"
         required: false
         default: true
         type: boolean
       enable_post_verify:
-        description: 启用编译后验证
+        description: "启用编译后验证"
         required: false
         default: true
         type: boolean
       debug_mode:
-        description: 启用调试模式
+        description: "启用调试模式"
         required: false
         default: false
         type: boolean
 
 env:
-  TZ: Asia/Shanghai
-  SOURCE_DIR: /mnt/source
-  ARTIFACTS_DIR: /mnt/artifacts
-  CCACHE_DIR: /mnt/ccache
-  BUILD_LOG_DIR: /mnt/build-logs
-  DOWNLOAD_DIR: /mnt/downloads
-  TOOLCHAIN_LOG_DIR: /mnt/toolchain-logs
-  DEBUG_MODE: ${{ github.event.inputs.debug_mode }}
+  TZ: "Asia/Shanghai"
+  SOURCE_DIR: "/mnt/source"
+  ARTIFACTS_DIR: "/mnt/artifacts"
+  CCACHE_DIR: "/mnt/ccache"
+  BUILD_LOG_DIR: "/mnt/build-logs"
+  DOWNLOAD_DIR: "/mnt/downloads"
+  TOOLCHAIN_LOG_DIR: "/mnt/toolchain-logs"
+  DEBUG_MODE: "${{ github.event.inputs.debug_mode }}"
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 180
+    runs-on: "ubuntu-22.04"
+    timeout-minutes: 240
     
     steps:
-      - name: 📥 检出配置仓库
-        uses: actions/checkout@v4
+      - name: "📥 检出配置仓库"
+        uses: "actions/checkout@v4"
         with:
-          path: .
+          path: "."
           fetch-depth: 0
 
-      - name: 🔍 智能文件发现与配置解析
-        id: config-parser
+      - name: "🔍 智能文件发现与配置解析"
+        id: "config-parser"
         run: |
           echo "=== 🔍 智能文件发现与配置解析 ==="
-          
           echo "📋 查找 repositories.json 文件..."
           REPO_JSON_FOUND=""
           SEARCH_PATHS=(".", "..", "$GITHUB_WORKSPACE", "configs", "../configs")
           
-          # 多路径精确搜索
           for path in "${SEARCH_PATHS[@]}"; do
             if [ -f "$path/repositories.json" ]; then
               REPO_JSON_FOUND="$path/repositories.json"
@@ -107,7 +96,6 @@ jobs:
             fi
           done
           
-          # 如果精确搜索失败，进行模糊搜索
           if [ -z "$REPO_JSON_FOUND" ]; then
             echo "🔍 精确查找失败，尝试模糊搜索..."
             REPO_JSON_FOUND=$(find . -maxdepth 3 -name "*repositories*.json" -type f 2>/dev/null | head -1)
@@ -117,7 +105,6 @@ jobs:
             fi
           fi
           
-          # 最终搜索尝试
           if [ -z "$REPO_JSON_FOUND" ]; then
             echo "🔍 尝试全目录深度搜索..."
             REPO_JSON_FOUND=$(find . -name "*repositories*.json" -type f 2>/dev/null | head -1)
@@ -126,30 +113,19 @@ jobs:
               echo "✅ 深度搜索找到: $REPO_JSON_FOUND ($FILE_SIZE)"
             else
               echo "❌ 所有搜索尝试都失败，请确保 repositories.json 文件存在"
-              echo "📁 当前目录结构:"
               find . -maxdepth 2 -type d -exec ls -la {} \; 2>/dev/null | head -20
               exit 1
             fi
           fi
           
           echo "REPO_JSON_PATH=$REPO_JSON_FOUND" >> $GITHUB_ENV
-          
-          # 解析配置文件内容
-          echo "📖 解析配置文件内容..."
           DEFAULT_REPO=$(jq -r '.defaults.repository' "$REPO_JSON_FOUND" 2>/dev/null || echo "immortalwrt")
-          DEFAULT_TIMEOUT=$(jq -r '.defaults.timeout_minutes' "$REPO_JSON_FOUND" 2>/dev/null || echo "180")
           CUSTOM_FEATURES_DIR=$(jq -r '.custom_features_support.features_directory' "$REPO_JSON_FOUND" 2>/dev/null || echo "firmware-config/custom-features")
-          
           echo "DEFAULT_REPO=$DEFAULT_REPO" >> $GITHUB_ENV
           echo "CUSTOM_FEATURES_DIR=$CUSTOM_FEATURES_DIR" >> $GITHUB_ENV
-          
           echo "✅ 配置文件解析完成"
-          echo "📊 配置摘要:"
-          echo "  - 默认仓库: $DEFAULT_REPO"
-          echo "  - 超时时间: $DEFAULT_TIMEOUT 分钟"
-          echo "  - 自定义功能目录: $CUSTOM_FEATURES_DIR"
 
-      - name: 💾 智能系统资源分析
+      - name: "💾 智能系统资源分析"
         timeout-minutes: 2
         run: |
           echo "=== 💾 智能系统资源分析 ==="
@@ -161,7 +137,7 @@ jobs:
           df -h | grep -E '(/|/mnt)' | while read line; do echo "  $line"; done
           echo "💻 CPU 资源:"
           echo "  - 核心数: $(nproc)"
-          echo "  - CPU型号: $(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | xargs)"
+          echo "  - CPU型号: $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)"
           echo "🧠 内存信息:"
           free -h
           ROOT_AVAILABLE=$(df / | awk 'NR==2 {gsub("G","",$4); print int($4)}')
@@ -177,7 +153,7 @@ jobs:
           fi
           echo "✅ 资源分析完成"
 
-      - name: 💾 增强内存管理与环境设置
+      - name: "💾 增强内存管理与环境设置"
         timeout-minutes: 5
         run: |
           echo "=== 💾 增强内存管理与环境设置 ==="
@@ -213,7 +189,7 @@ jobs:
           export TERM=xterm-256color
           echo "✅ 环境设置完成"
 
-      - name: 🛠️ 智能编译依赖安装
+      - name: "🛠️ 智能编译依赖安装"
         timeout-minutes: 10
         run: |
           echo "=== 🛠️ 智能编译依赖安装 ==="
@@ -230,9 +206,20 @@ jobs:
           sudo apt-get install -y axel curl wget net-tools
           CURRENT_GIT_VERSION=$(git --version | cut -d' ' -f3)
           echo "🔍 当前 Git 版本: $CURRENT_GIT_VERSION"
+          echo "🔍 验证关键工具安装..."
+          REQUIRED_TOOLS=("gcc" "g++" "make" "git" "curl" "wget" "python3" "cmake" "ninja")
+          for tool in "${REQUIRED_TOOLS[@]}"; do
+            if command -v $tool >/dev/null 2>&1; then
+              version=$($tool --version 2>/dev/null | head -1 || echo "unknown")
+              echo "✅ $tool: $version"
+            else
+              echo "❌ $tool: 未安装"
+              exit 1
+            fi
+          done
           echo "✅ 依赖安装完成"
 
-      - name: ⚡ 高级缓存与性能优化
+      - name: "⚡ 高级缓存与性能优化"
         timeout-minutes: 3
         run: |
           echo "=== ⚡ 高级缓存与性能优化 ==="
@@ -271,8 +258,8 @@ jobs:
           echo "vm.vfs_cache_pressure=50" | sudo tee -a /etc/sysctl.conf
           echo "✅ 性能优化完成"
 
-      - name: 🔧 智能源码配置解析
-        id: source-config
+      - name: "🔧 智能源码配置解析"
+        id: "source-config"
         run: |
           echo "=== 🔧 智能源码配置解析 ==="
           PRESET="${{ github.event.inputs.source_preset }}"
@@ -321,14 +308,12 @@ jobs:
           echo "  - 特性: $FEATURES"
           echo "  - 备注: $NOTES"
           echo "  - 编译提示: $BUILD_TIPS"
-          echo "  - Feeds配置: $FEEDS_CONFIG"
-          echo "  - 分支-Feeds映射: $BRANCH_FEEDS_MAPPING"
 
-      - name: 📥 智能源码获取与验证
-        id: clone-source
-        timeout-minutes: 15
+      - name: "📥 严格源码获取与验证"
+        id: "clone-source"
+        timeout-minutes: 20
         run: |
-          echo "=== 📥 智能源码获取与验证 ==="
+          echo "=== 📥 严格源码获取与验证 ==="
           cd ${{ env.SOURCE_DIR }}
           REQUESTED_BRANCH="${{ env.SOURCE_BRANCH }}"
           SOURCE_URL="${{ env.SOURCE_URL }}"
@@ -338,47 +323,72 @@ jobs:
           echo "🎯 预设类型: $PRESET"
           echo "🧹 清理工作目录..."
           rm -rf .[!.]* * 2>/dev/null || true
-          CLONE_SUCCESS=false
-          BRANCH_STRATEGIES=("$REQUESTED_BRANCH")
+          
           case "$PRESET" in
-            "immortalwrt")
-              BRANCH_STRATEGIES+=("openwrt-21.02" "openwrt-23.05" "master" "main")
-              ;;
-            "openwrt")
-              BRANCH_STRATEGIES+=("main" "master" "v23.05.x" "v22.03.x")
-              ;;
-            "lede")
-              BRANCH_STRATEGIES+=("master" "main")
-              ;;
+            "immortalwrt") BRANCH_STRATEGIES=("$REQUESTED_BRANCH" "openwrt-21.02" "openwrt-23.05" "master" "main") ;;
+            "openwrt") BRANCH_STRATEGIES=("$REQUESTED_BRANCH" "main" "master" "v23.05.x" "v22.03.x") ;;
+            "lede") BRANCH_STRATEGIES=("$REQUESTED_BRANCH" "master" "main") ;;
+            *) BRANCH_STRATEGIES=("$REQUESTED_BRANCH" "master" "main") ;;
           esac
+          
           BRANCH_STRATEGIES=($(printf "%s\n" "${BRANCH_STRATEGIES[@]}" | sort -u))
           echo "🔄 将尝试的分支策略: ${BRANCH_STRATEGIES[*]}"
+          
+          CLONE_SUCCESS=false
           for branch in "${BRANCH_STRATEGIES[@]}"; do
             echo "🔄 尝试分支: $branch"
             rm -rf .[!.]* * 2>/dev/null || true
-            if git clone --depth 1 --branch "$branch" "$SOURCE_URL" . 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/clone-$branch.log; then
-              if [ -d ".git" ] && [ -f "scripts/feeds" ]; then
-                ACTUAL_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-                COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-                COMMIT_DATE=$(git log -1 --format=%ci 2>/dev/null || echo "unknown")
-                COMMIT_MESSAGE=$(git log -1 --format=%s 2>/dev/null || echo "unknown")
-                echo "✅ 克隆成功!"
-                echo "📊 克隆详情:"
-                echo "  - 实际分支: $ACTUAL_BRANCH"
-                echo "  - 提交哈希: $COMMIT_HASH"
-                echo "  - 提交时间: $COMMIT_DATE"
-                echo "  - 提交信息: $COMMIT_MESSAGE"
+            
+            MAX_CLONE_RETRIES=2
+            for ((retry=1; retry<=MAX_CLONE_RETRIES; retry++)); do
+              echo "📥 克隆尝试 $retry/$MAX_CLONE_RETRIES..."
+              if git clone --depth 1 --branch "$branch" "$SOURCE_URL" . 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/clone-$branch-attempt$retry.log; then
+                break
+              else
+                echo "❌ 克隆尝试 $retry 失败"
+                if [ $retry -eq $MAX_CLONE_RETRIES ]; then
+                  continue 2
+                fi
+                sleep 3
+              fi
+            done
+            
+            if [ -d ".git" ] && [ -f "scripts/feeds" ]; then
+              ACTUAL_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
+              COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+              COMMIT_DATE=$(git log -1 --format=%ci 2>/dev/null || echo "unknown")
+              COMMIT_MESSAGE=$(git log -1 --format=%s 2>/dev/null || echo "unknown")
+              echo "✅ 克隆成功!"
+              echo "📊 克隆详情:"
+              echo "  - 实际分支: $ACTUAL_BRANCH"
+              echo "  - 提交哈希: $COMMIT_HASH"
+              echo "  - 提交时间: $COMMIT_DATE"
+              echo "  - 提交信息: $COMMIT_MESSAGE"
+              
+              REQUIRED_FILES=("scripts/feeds" "rules.mk" "Config.in" "Makefile" "include/image.mk" "target/linux/Makefile")
+              MISSING_FILES=0
+              for file in "${REQUIRED_FILES[@]}"; do
+                if [ ! -f "$file" ]; then
+                  echo "❌ 必需文件 '$file' 不存在"
+                  MISSING_FILES=$((MISSING_FILES+1))
+                else
+                  echo "✅ 文件 '$file' 存在"
+                fi
+              done
+              
+              if [ $MISSING_FILES -eq 0 ]; then
                 CLONE_SUCCESS=true
                 break
               else
-                echo "❌ 仓库结构不完整，尝试下一个分支"
+                echo "❌ 缺失 $MISSING_FILES 个必需文件，尝试下一个分支"
                 continue
               fi
             else
-              echo "❌ 分支 '$branch' 克隆失败，尝试下一个"
+              echo "❌ 仓库结构不完整，尝试下一个分支"
               continue
             fi
           done
+          
           if [ "$CLONE_SUCCESS" = "false" ]; then
             echo "❌ 所有分支策略都失败，尝试默认分支..."
             rm -rf .[!.]* * 2>/dev/null || true
@@ -393,41 +403,36 @@ jobs:
               fi
             fi
           fi
+          
           if [ "$CLONE_SUCCESS" = "false" ]; then
             echo "❌ 所有克隆策略都失败"
-            tail -20 ${{ env.BUILD_LOG_DIR }}/clone-*.log 2>/dev/null || echo "无日志文件"
+            echo "🔍 最后错误日志:"
+            tail -50 ${{ env.BUILD_LOG_DIR }}/clone-*.log 2>/dev/null || echo "无日志文件"
             exit 1
           fi
-          echo "🔍 验证源码完整性..."
-          REQUIRED_FILES=("scripts/feeds" "rules.mk" "Config.in" "Makefile")
-          for file in "${REQUIRED_FILES[@]}"; do
-            if [ ! -f "$file" ]; then
-              echo "❌ 错误: 必需文件 '$file' 不存在"
-              exit 1
-            fi
-          done
-          echo "✅ 源码完整性验证通过"
+          
           echo "ACTUAL_BRANCH=$ACTUAL_BRANCH" >> $GITHUB_ENV
           echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
           echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_ENV
           echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_ENV
-          echo "✅ 源码获取完成"
+          echo "✅ 源码获取与验证完成"
 
-      - name: 🔄 智能源码初始化与Feeds修复
-        timeout-minutes: 25
+      - name: "🔄 严格源码初始化与Feeds修复"
+        timeout-minutes: 30
         run: |
+          echo "=== 🔄 严格源码初始化与Feeds修复 ==="
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔄 智能源码初始化与Feeds修复 ==="
           if [ ! -f "scripts/feeds" ]; then
             echo "❌ 错误: scripts/feeds 文件不存在"
             exit 1
           fi
-          echo "🔧 检测源码类型并配置Feeds..."
+          
           SOURCE_PRESET="${{ env.SOURCE_PRESET }}"
           ACTUAL_BRANCH="${{ env.ACTUAL_BRANCH }}"
           FEEDS_CONFIG="${{ env.SOURCE_FEEDS_CONFIG }}"
           BRANCH_FEEDS_MAPPING="${{ env.SOURCE_BRANCH_FEEDS_MAPPING }}"
           echo "📦 源码类型: $SOURCE_PRESET, 实际分支: $ACTUAL_BRANCH"
+          
           echo "🎯 生成智能Feeds配置..."
           FEEDS_BRANCH=""
           if [ -n "$BRANCH_FEEDS_MAPPING" ]; then
@@ -441,6 +446,7 @@ jobs:
               fi
             done
           fi
+          
           if [ -n "$FEEDS_CONFIG" ]; then
             echo "📋 使用预设Feeds配置..."
             rm -f feeds.conf
@@ -484,23 +490,31 @@ jobs:
                 ;;
             esac
           fi
+          
           echo "📋 Feeds配置内容:"
           cat feeds.conf
-          echo "🔄 开始更新Feeds..."
+          
+          echo "🔄 开始严格Feeds更新..."
           MAX_RETRIES=3
           RETRY_COUNT=0
           FEEDS_SUCCESS=false
+          
           while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
             echo "🔄 尝试更新Feeds (第 $((RETRY_COUNT+1)) 次)..."
-            if ./scripts/feeds update -a 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/feeds-update-$RETRY_COUNT.log; then
-              echo "✅ Feeds更新成功!"
-              FEEDS_SUCCESS=true
-              break
+            FEEDS_UPDATE_LOG="${{ env.BUILD_LOG_DIR }}/feeds-update-$RETRY_COUNT.log"
+            
+            if ./scripts/feeds update -a 2>&1 | tee "$FEEDS_UPDATE_LOG"; then
+              if grep -q "Updated" "$FEEDS_UPDATE_LOG" || grep -q "Create index" "$FEEDS_UPDATE_LOG"; then
+                echo "✅ Feeds更新成功!"
+                FEEDS_SUCCESS=true
+                break
+              else
+                echo "⚠️ Feeds更新无输出，可能失败"
+              fi
             else
               RETRY_COUNT=$((RETRY_COUNT+1))
               echo "⚠️ Feeds更新失败，准备重试 ($RETRY_COUNT/$MAX_RETRIES)..."
               if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-                echo "⏳ 等待5秒后重试..."
                 sleep 5
                 if [ $RETRY_COUNT -eq 1 ]; then
                   echo "🔄 尝试使用GitHub镜像源..."
@@ -512,24 +526,41 @@ jobs:
               fi
             fi
           done
+          
           if [ "$FEEDS_SUCCESS" = "false" ]; then
             echo "❌ Feeds更新失败，尝试最小化feeds配置..."
             echo "src-git packages https://github.com/openwrt/packages.git" > feeds.conf
             echo "src-git luci https://github.com/openwrt/luci.git" >> feeds.conf
-            ./scripts/feeds update -a || {
+            if ! ./scripts/feeds update -a 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/feeds-update-minimal.log; then
               echo "❌ 最小化feeds配置也失败"
               if [ -f "${{ env.BUILD_LOG_DIR }}/feeds-update-0.log" ]; then
+                echo "🔍 详细错误:"
                 grep -n -i -A3 -B3 "error\|failed\|not found" ${{ env.BUILD_LOG_DIR }}/feeds-update-0.log | head -20
               fi
               exit 1
-            }
+            fi
           fi
+          
           echo "📦 安装Feeds..."
           if ! ./scripts/feeds install -a 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/feeds-install.log; then
             echo "⚠️ Feeds安装有警告，但继续执行..."
           fi
-          echo "🔧 修复可能的包配置问题..."
-          COMMON_PACKAGES=("zstd" "zsh" "openssl" "libubox")
+          
+          echo "🔍 验证Feeds安装..."
+          if [ -d "feeds/packages" ] && [ -d "feeds/luci" ]; then
+            echo "✅ Feeds安装验证通过"
+            PACKAGE_COUNT=$(find feeds/packages -name "Makefile" 2>/dev/null | wc -l)
+            LUCI_COUNT=$(find feeds/luci -name "Makefile" 2>/dev/null | wc -l)
+            echo "📊 Feeds统计:"
+            echo "  - 包数量: $PACKAGE_COUNT"
+            echo "  - LuCI应用数量: $LUCI_COUNT"
+          else
+            echo "❌ Feeds安装验证失败"
+            exit 1
+          fi
+          
+          echo "🔧 修复常见的包配置问题..."
+          COMMON_PACKAGES=("zstd" "zsh" "openssl" "libubox" "libjson-c" "libuv")
           for pkg in "${COMMON_PACKAGES[@]}"; do
             if [ -f "feeds/packages/utils/$pkg/Makefile" ]; then
               echo "🛠️ 检查 $pkg 配置..."
@@ -537,22 +568,36 @@ jobs:
               sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=latest/' feeds/packages/utils/$pkg/Makefile 2>/dev/null || true
             fi
           done
+          
           echo "✅ 源码初始化完成"
 
-      - name: 🎯 修复配置文件搜索与应用
-        timeout-minutes: 3
+      - name: "💾 空间检测 - 编译前检查"
+        timeout-minutes: 2
         run: |
+          echo "=== 💾 空间检测 - 编译前检查 ==="
+          echo "🔍 检查编译前磁盘空间..."
+          df -h | grep -E '(/|/mnt)' | while read line; do echo "  $line"; done
+          AVAILABLE_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
+          echo "📊 可用空间: ${AVAILABLE_SPACE}GB"
+          if [ "$AVAILABLE_SPACE" -lt 15 ]; then
+            echo "🚨 警告: 可用空间不足15GB，编译可能失败"
+          else
+            echo "✅ 磁盘空间充足"
+          fi
+          echo "🧠 内存状态:"
+          free -h
+
+      - name: "🎯 严格配置文件搜索与应用"
+        timeout-minutes: 5
+        run: |
+          echo "=== 🎯 严格配置文件搜索与应用 ==="
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🎯 修复配置文件搜索与应用 ==="
           CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
-          echo "🔍 查找配置文件: $CONFIG_PROFILE"
+          echo "🔍 严格查找配置文件: $CONFIG_PROFILE"
           
           CONFIG_FOUND=""
           SEARCH_PATHS=(".configs" "configs" "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/configs" "../configs" "../.configs")
           
-          echo "📋 搜索路径: ${SEARCH_PATHS[*]}"
-          
-          # 多路径精确搜索配置文件
           for path in "${SEARCH_PATHS[@]}"; do
             if [ -f "$path/$CONFIG_PROFILE" ]; then
               CONFIG_FOUND="$path/$CONFIG_PROFILE"
@@ -562,17 +607,29 @@ jobs:
             fi
           done
           
-          # 如果精确搜索失败，在配置仓库中搜索
           if [ -z "$CONFIG_FOUND" ]; then
-            echo "🔍 在配置仓库中搜索..."
-            CONFIG_FOUND=$(find "$GITHUB_WORKSPACE" -maxdepth 3 -name "$CONFIG_PROFILE" -type f 2>/dev/null | head -1)
+            echo "🔍 在配置仓库中深度搜索..."
+            CONFIG_FOUND=$(find "$GITHUB_WORKSPACE" -maxdepth 4 -name "$CONFIG_PROFILE" -type f 2>/dev/null | head -1)
             if [ -n "$CONFIG_FOUND" ]; then
               FILE_SIZE=$(du -h "$CONFIG_FOUND" | cut -f1)
               echo "✅ 在配置仓库中找到: $CONFIG_FOUND ($FILE_SIZE)"
             fi
           fi
           
-          # 搜索.config文件
+          if [ -z "$CONFIG_FOUND" ]; then
+            echo "🔍 搜索配置文件变体..."
+            CONFIG_VARIANTS=("$CONFIG_PROFILE" ".config_$CONFIG_PROFILE" "${CONFIG_PROFILE}.config" "config_$CONFIG_PROFILE")
+            for variant in "${CONFIG_VARIANTS[@]}"; do
+              FOUND=$(find "$GITHUB_WORKSPACE" -maxdepth 3 -name "$variant" -type f 2>/dev/null | head -1)
+              if [ -n "$FOUND" ]; then
+                CONFIG_FOUND="$FOUND"
+                FILE_SIZE=$(du -h "$CONFIG_FOUND" | cut -f1)
+                echo "✅ 找到配置文件变体: $CONFIG_FOUND ($FILE_SIZE)"
+                break
+              fi
+            done
+          fi
+          
           if [ -z "$CONFIG_FOUND" ]; then
             echo "🔍 搜索任何.config文件..."
             CONFIG_FOUND=$(find "$GITHUB_WORKSPACE" -maxdepth 3 -name "*.config*" -type f 2>/dev/null | grep -v "node_modules\|feeds" | head -1)
@@ -582,57 +639,50 @@ jobs:
             fi
           fi
           
-          # 最终验证
           if [ -n "$CONFIG_FOUND" ] && [ -f "$CONFIG_FOUND" ]; then
-            # 验证文件确实是配置文件（包含CONFIG_关键字）
-            if grep -q "CONFIG_" "$CONFIG_FOUND"; then
+            if grep -q "CONFIG_" "$CONFIG_FOUND" && (grep -q "CONFIG_TARGET" "$CONFIG_FOUND" || grep -q "CONFIG_PACKAGE" "$CONFIG_FOUND"); then
               echo "📋 复制配置文件: $CONFIG_FOUND -> .config"
               cp "$CONFIG_FOUND" .config
-              echo "✅ 配置应用完成"
-              
-              # 验证配置基本结构
-              if grep -q "CONFIG_TARGET" .config && grep -q "CONFIG_PACKAGE" .config; then
-                echo "✅ 配置文件基本结构验证通过"
-                CONFIG_LINES=$(wc -l < .config)
-                echo "📊 配置文件信息: $CONFIG_LINES 行配置"
-              else
-                echo "⚠️ 警告: 配置文件可能不完整"
-                echo "🔍 配置文件前10行:"
-                head -10 .config
-              fi
+              CONFIG_LINES=$(wc -l < .config)
+              TARGET_CONFIGS=$(grep -c "CONFIG_TARGET" .config || true)
+              PACKAGE_CONFIGS=$(grep -c "CONFIG_PACKAGE" .config || true)
+              echo "✅ 配置文件应用完成"
+              echo "📊 配置文件信息:"
+              echo "  - 总行数: $CONFIG_LINES"
+              echo "  - 目标配置: $TARGET_CONFIGS"
+              echo "  - 包配置: $PACKAGE_CONFIGS"
             else
               echo "❌ 错误: 找到的文件不是有效的配置文件"
-              echo "🔍 文件内容示例:"
-              head -5 "$CONFIG_FOUND"
+              head -10 "$CONFIG_FOUND"
               exit 1
             fi
           else
             echo "❌ 错误: 无法找到有效的配置文件 '$CONFIG_PROFILE'"
-            echo "📁 配置仓库目录结构:"
-            find "$GITHUB_WORKSPACE" -maxdepth 2 -type f -name "*.config*" -exec ls -la {} \; 2>/dev/null
-            echo "💡 建议: 请确保配置文件存在于配置仓库中"
             exit 1
           fi
 
-      - name: 🔧 EXT4文件系统空间紧急修复
+      - name: "🔧 EXT4文件系统空间严格修复"
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔧 EXT4文件系统空间紧急修复 ==="
-          echo "🔧 设置分区大小: 内核=20MB, 根文件系统=96MB"
+          echo "=== 🔧 EXT4文件系统空间严格修复 ==="
+          echo "🔧 设置严格分区大小限制..."
+          cp .config .config.backup
           sed -i 's/CONFIG_TARGET_KERNEL_PARTSIZE=.*/CONFIG_TARGET_KERNEL_PARTSIZE=20/' .config 2>/dev/null || true
           sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=96/' .config 2>/dev/null || true
-          echo "CONFIG_TARGET_KERNEL_PARTSIZE=20" >> .config
-          echo "CONFIG_TARGET_ROOTFS_PARTSIZE=96" >> .config
+          grep -q "CONFIG_TARGET_KERNEL_PARTSIZE" .config || echo "CONFIG_TARGET_KERNEL_PARTSIZE=20" >> .config
+          grep -q "CONFIG_TARGET_ROOTFS_PARTSIZE" .config || echo "CONFIG_TARGET_ROOTFS_PARTSIZE=96" >> .config
           echo "CONFIG_TARGET_ROOTFS_EXT4FS=y" >> .config
           echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
           echo "# CONFIG_DEBUG_INFO is not set" >> .config
           echo "# CONFIG_DEBUG_KERNEL is not set" >> .config
-          echo "✅ 分区大小修复完成"
+          echo "# CONFIG_KERNEL_DEBUG_INFO is not set" >> .config
+          echo "✅ 分区大小严格修复完成"
 
-      - name: 🔧 设备镜像配置修复
+      - name: "🔧 严格设备镜像配置修复"
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔧 设备镜像配置修复 ==="
+          echo "=== 🔧 严格设备镜像配置修复 ==="
+          echo "🔍 验证当前设备配置..."
           if grep -q "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u" .config; then
             echo "✅ 找到 ASUS RT-AC42U 设备配置"
             sed -i 's/# CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u is not set/CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y/' .config
@@ -640,21 +690,31 @@ jobs:
             echo "🔧 添加 ASUS RT-AC42U 设备配置"
             echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
           fi
-          echo "CONFIG_TARGET_IMAGES_INCLUDE_FACTORY=y" >> .config
-          echo "CONFIG_TARGET_IMAGES_INCLUDE_SYSUPGRADE=y" >> .config
-          echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
-          if ! grep -q "CONFIG_TARGET_ipq40xx" .config; then
-            echo "🔧 设置目标架构为 ipq40xx"
-            echo "CONFIG_TARGET_ipq40xx=y" >> .config
-            echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+          
+          REQUIRED_CONFIGS=("CONFIG_TARGET_IMAGES_INCLUDE_FACTORY=y" "CONFIG_TARGET_IMAGES_INCLUDE_SYSUPGRADE=y" "CONFIG_TARGET_IMAGES_GZIP=y" "CONFIG_TARGET_ipq40xx=y" "CONFIG_TARGET_ipq40xx_generic=y")
+          
+          for config in "${REQUIRED_CONFIGS[@]}"; do
+            config_name=$(echo "$config" | cut -d'=' -f1)
+            if ! grep -q "$config_name" .config; then
+              echo "🔧 添加缺失配置: $config"
+              echo "$config" >> .config
+            fi
+          done
+          
+          echo "🔄 运行严格defconfig..."
+          if ! make defconfig 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/defconfig.log; then
+            echo "⚠️ defconfig 有警告，检查配置..."
           fi
-          echo "🔄 运行 defconfig..."
-          make defconfig >/dev/null 2>&1 || {
-            echo "⚠️ defconfig 有警告，但继续执行..."
-          }
-          echo "✅ 设备镜像配置修复完成"
+          
+          if grep -q "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" .config; then
+            echo "✅ ASUS RT-AC42U 设备配置验证通过"
+          else
+            echo "❌ ASUS RT-AC42U 设备配置验证失败"
+            exit 1
+          fi
+          echo "✅ 设备镜像配置严格修复完成"
 
-      - name: 🔧 快速Samba验证
+      - name: "🔧 快速Samba验证"
         if: github.event.inputs.enable_custom_features == 'true'
         timeout-minutes: 2
         run: |
@@ -673,7 +733,7 @@ jobs:
           fi
           echo "✅ Samba验证完成"
 
-      - name: 📦 增强自定义功能处理
+      - name: "📦 增强自定义功能处理"
         if: github.event.inputs.enable_custom_features == 'true'
         timeout-minutes: 15
         run: |
@@ -683,20 +743,10 @@ jobs:
           CUSTOM_FEATURES_DIR="$CONFIG_REPO_DIR/${{ env.CUSTOM_FEATURES_DIR }}"
           
           echo "🔍 搜索自定义功能目录..."
-          echo "配置仓库目录: $CONFIG_REPO_DIR"
-          echo "目标自定义功能目录: $CUSTOM_FEATURES_DIR"
-          
-          # 搜索自定义功能目录
           if [ -d "$CUSTOM_FEATURES_DIR" ]; then
             CUSTOM_DIR_SIZE=$(du -sh "$CUSTOM_FEATURES_DIR" | cut -f1)
             echo "✅ 找到自定义功能目录 ($CUSTOM_DIR_SIZE)"
-            echo "📁 目录详细内容:"
-            find "$CUSTOM_FEATURES_DIR" -type f -name "*" 2>/dev/null | while read file; do
-              size=$(du -h "$file" | cut -f1)
-              echo "   - $file ($size)"
-            done || echo "   ℹ️ 无文件或无法访问"
             
-            # 处理预构建IPK包
             if [ -d "$CUSTOM_FEATURES_DIR/prebuilt-ipks" ]; then
               echo "📦 处理预构建IPK包..."
               IPK_FILES=$(find "$CUSTOM_FEATURES_DIR/prebuilt-ipks" -name "*.ipk" 2>/dev/null)
@@ -705,17 +755,16 @@ jobs:
               
               if [ "$IPK_COUNT" -gt 0 ]; then
                 mkdir -p package/base-files/files/usr/lib/opkg/custom
-                echo "🔄 复制IPK文件到自定义OPKG目录..."
                 echo "$IPK_FILES" | while read ipk; do
                   ipk_size=$(du -h "$ipk" | cut -f1)
-                  echo "   - 复制: $(basename "$ipk") ($ipk_size)"
+                  echo "复制: $(basename "$ipk") ($ipk_size)"
                   cp "$ipk" package/base-files/files/usr/lib/opkg/custom/
                 done
                 
                 COPIED_COUNT=$(find package/base-files/files/usr/lib/opkg/custom -name "*.ipk" 2>/dev/null | wc -l)
                 echo "✅ 成功复制 $COPIED_COUNT 个IPK包"
                 
-                # 创建安装脚本
+                mkdir -p package/base-files/files/etc/uci-defaults
                 echo '#!/bin/sh' > package/base-files/files/etc/uci-defaults/99-custom-ipks
                 echo '[ -d "/usr/lib/opkg/custom" ] && {' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
                 echo '    for ipk in /usr/lib/opkg/custom/*.ipk; do' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
@@ -732,7 +781,6 @@ jobs:
               echo "ℹ️ 未找到 prebuilt-ipks 目录"
             fi
             
-            # 处理自定义脚本
             if [ -d "$CUSTOM_FEATURES_DIR/scripts" ]; then
               echo "🔧 处理自定义脚本..."
               SCRIPT_FILES=$(find "$CUSTOM_FEATURES_DIR/scripts" -name "*.sh" 2>/dev/null)
@@ -744,21 +792,16 @@ jobs:
                 echo "$SCRIPT_FILES" | while read script; do
                   chmod +x "$script"
                   script_size=$(du -h "$script" | cut -f1)
-                  echo "   - 设置权限: $(basename "$script") ($script_size)"
+                  echo "设置权限: $(basename "$script") ($script_size)"
                 done
                 
-                # 按顺序执行脚本
                 echo "$SCRIPT_FILES" | sort | while read script; do
-                  echo "🚀 执行脚本: $(basename "$script")"
-                  echo "--- 脚本输出开始 ---"
+                  echo "执行脚本: $(basename "$script")"
                   if bash "$script" 2>&1; then
-                    echo "--- 脚本输出结束 ---"
                     echo "✅ 脚本执行成功: $(basename "$script")"
                   else
-                    echo "--- 脚本输出结束 ---"
                     echo "❌ 脚本执行失败: $(basename "$script")"
                   fi
-                  echo ""
                 done
               else
                 echo "ℹ️ scripts 目录为空"
@@ -767,7 +810,6 @@ jobs:
               echo "ℹ️ 未找到 scripts 目录"
             fi
             
-            # 处理自定义补丁
             if [ -d "$CUSTOM_FEATURES_DIR/patches" ]; then
               echo "🩹 处理自定义补丁..."
               PATCH_FILES=$(find "$CUSTOM_FEATURES_DIR/patches" -name "*.patch" 2>/dev/null)
@@ -777,13 +819,12 @@ jobs:
               if [ "$PATCH_COUNT" -gt 0 ]; then
                 echo "$PATCH_FILES" | sort | while read patch; do
                   patch_size=$(du -h "$patch" | cut -f1)
-                  echo "🔧 应用补丁: $(basename "$patch") ($patch_size)"
+                  echo "应用补丁: $(basename "$patch") ($patch_size)"
                   if patch -p1 --forward -r - < "$patch" 2>&1; then
                     echo "✅ 补丁应用成功: $(basename "$patch")"
                   else
                     echo "⚠️ 补丁应用可能有问题: $(basename "$patch")"
                   fi
-                  echo ""
                 done
               else
                 echo "ℹ️ patches 目录为空"
@@ -792,7 +833,6 @@ jobs:
               echo "ℹ️ 未找到 patches 目录"
             fi
             
-            # 处理自定义配置
             if [ -d "$CUSTOM_FEATURES_DIR/configs" ]; then
               echo "⚙️ 处理自定义配置..."
               CONFIG_FILES=$(find "$CUSTOM_FEATURES_DIR/configs" -type f 2>/dev/null)
@@ -818,194 +858,374 @@ jobs:
             echo "🎉 自定义功能处理完成"
           else
             echo "ℹ️ 无自定义功能目录，跳过详细处理"
-            echo "🔍 搜索替代的自定义目录..."
-            ALT_CUSTOM_DIRS=$(find "$CONFIG_REPO_DIR" -maxdepth 2 -name "*custom*" -type d 2>/dev/null)
-            if [ -n "$ALT_CUSTOM_DIRS" ]; then
-              echo "💡 发现可能的自定义目录:"
-              echo "$ALT_CUSTOM_DIRS" | while read dir; do
-                dir_size=$(du -sh "$dir" 2>/dev/null | cut -f1 || echo "未知")
-                echo "   - $dir ($dir_size)"
-              done
-            fi
           fi
           echo "✅ 自定义功能处理完成"
 
-      - name: 📥 快速预下载
-        if: github.event.inputs.enable_pre_download == 'true'
-        timeout-minutes: 30
+      - name: "🔧 下载源优化与修复"
+        timeout-minutes: 5
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 📥 快速预下载 ==="
-          echo "📥 开始快速预下载..."
-          echo "🔧 使用并行下载: ${{ env.PARALLEL_JOBS }} 个任务"
+          echo "=== 🔧 下载源优化与修复 ==="
+          echo "🔧 设置备用下载镜像..."
+          cp scripts/download.pl scripts/download.pl.backup
+          sed -i 's|https://downloads.openwrt.org|https://mirror2.openwrt.org/sources|g' scripts/download.pl
+          sed -i 's|https://github.com|https://ghproxy.com/https://github.com|g' scripts/download.pl
+          sed -i 's|https://git.kernel.org|https://mirror.gitkernel.org|g' scripts/download.pl
+          
+          cat > scripts/download-with-retry << 'SCRIPT_EOF'
+#!/bin/sh
+MAX_RETRIES=3
+RETRY_COUNT=0
+DOWNLOAD_SCRIPT="/mnt/source/scripts/download.pl"
+
+while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    if $DOWNLOAD_SCRIPT "$@"; then
+        echo "✅ 下载成功"
+        exit 0
+    fi
+    RETRY_COUNT=$((RETRY_COUNT+1))
+    echo "❌ 下载失败，第 $RETRY_COUNT 次重试..."
+    sleep 5
+done
+
+echo "❌ 下载失败，已达到最大重试次数"
+exit 1
+SCRIPT_EOF
+          chmod +x scripts/download-with-retry
+          echo "✅ 下载源优化完成"
+
+      - name: "💾 空间检测 - 预下载前检查"
+        timeout-minutes: 2
+        run: |
+          echo "=== 💾 空间检测 - 预下载前检查 ==="
+          echo "🔍 检查预下载前磁盘空间..."
+          df -h | grep -E '(/|/mnt)' | while read line; do echo "  $line"; done
+          AVAILABLE_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
+          echo "📊 可用空间: ${AVAILABLE_SPACE}GB"
+          if [ "$AVAILABLE_SPACE" -lt 10 ]; then
+            echo "🚨 警告: 可用空间不足10GB，下载可能失败"
+          else
+            echo "✅ 磁盘空间充足"
+          fi
+
+      - name: "📥 严格预下载验证"
+        if: github.event.inputs.enable_pre_download == 'true'
+        timeout-minutes: 45
+        run: |
+          cd ${{ env.SOURCE_DIR }}
+          echo "=== 📥 严格预下载验证 ==="
+          echo "🔧 设置下载目录..."
           mkdir -p ${{ env.DOWNLOAD_DIR }}
           [ -d "dl" ] && rm -rf dl
           ln -sf ${{ env.DOWNLOAD_DIR }} dl
+          
           DOWNLOAD_LOG="${{ env.BUILD_LOG_DIR }}/download.log"
-          if make download -j${{ env.PARALLEL_JOBS }} V=sc 2>&1 | tee "$DOWNLOAD_LOG"; then
-            echo "✅ 预下载成功完成"
-          else
-            echo "⚠️ 下载有警告但继续..."
-            if grep -q "Error [0-9]" "$DOWNLOAD_LOG"; then
-              echo "🚨 发现下载错误，尝试单线程下载..."
-              if make download -j1 V=s 2>&1 | tee "$DOWNLOAD_LOG"; then
-                echo "✅ 单线程下载成功"
+          MAX_DOWNLOAD_RETRIES=2
+          DOWNLOAD_SUCCESS=false
+          
+          echo "📥 开始严格预下载验证..."
+          echo "🔧 使用并行下载: ${{ env.PARALLEL_JOBS }} 个任务"
+          
+          for ((retry=1; retry<=MAX_DOWNLOAD_RETRIES; retry++)); do
+            echo "🔄 下载尝试 $retry/$MAX_DOWNLOAD_RETRIES..."
+            
+            if make download -j${{ env.PARALLEL_JOBS }} V=sc 2>&1 | tee "$DOWNLOAD_LOG"; then
+              if grep -q "Downloaded\|File already downloaded" "$DOWNLOAD_LOG"; then
+                echo "✅ 下载成功完成"
+                DOWNLOAD_SUCCESS=true
+                break
               else
-                echo "❌ 下载失败"
-                exit 1
+                echo "⚠️ 下载无输出，可能失败"
+              fi
+            else
+              echo "❌ 下载尝试 $retry 失败"
+              if [ $retry -lt $MAX_DOWNLOAD_RETRIES ]; then
+                sleep 10
               fi
             fi
-          fi
-          echo "📊 下载结果统计:"
-          DOWNLOAD_COUNT=$(find dl/ -type f 2>/dev/null | wc -l)
-          DOWNLOAD_SIZE=$(du -sh dl/ 2>/dev/null || echo "未知")
-          echo "  - 文件数量: $DOWNLOAD_COUNT"
-          echo "  - 总大小: $DOWNLOAD_SIZE"
-          echo "✅ 预下载完成"
-
-      - name: 🛠️ 快速工具链编译
-        timeout-minutes: 60
-        run: |
-          cd ${{ env.SOURCE_DIR }}
-          echo "=== 🛠️ 快速工具链编译 ==="
-          echo "🔧 开始工具链编译..."
-          echo "⚡ 使用并行编译: ${{ env.PARALLEL_JOBS }} 个任务"
-          TOOLCHAIN_LOG="${{ env.TOOLCHAIN_LOG_DIR }}/toolchain.log"
-          START_TIME=$(date +%s)
-          if make toolchain/compile -j${{ env.PARALLEL_JOBS }} V=sc 2>&1 | tee "$TOOLCHAIN_LOG"; then
-            END_TIME=$(date +%s)
-            DURATION=$((END_TIME - START_TIME))
-            echo "✅ 工具链编译成功!"
-            echo "⏱️ 工具链编译耗时: ${DURATION}秒 ($(($DURATION/60))分钟)"
-          else
-            echo "⚠️ 工具链编译有警告，但继续执行..."
-            if [ -d "staging_dir/toolchain" ]; then
-              echo "✅ 工具链目录存在，继续执行"
+          done
+          
+          if [ "$DOWNLOAD_SUCCESS" = "false" ]; then
+            echo "⚠️ 并行下载失败，尝试单线程下载..."
+            if make download -j1 V=s 2>&1 | tee -a "$DOWNLOAD_LOG"; then
+              echo "✅ 单线程下载成功"
+              DOWNLOAD_SUCCESS=true
             else
-              echo "❌ 工具链编译失败"
+              echo "❌ 所有下载尝试都失败"
+              grep -i "error\|failed\|not found\|hash mismatch" "$DOWNLOAD_LOG" | head -20
               exit 1
             fi
           fi
-          echo "📊 工具链状态:"
-          TOOLCHAIN_FILES=$(find staging_dir/toolchain-* -name "*-gcc" 2>/dev/null | head -1)
-          if [ -n "$TOOLCHAIN_FILES" ]; then
-            ls -la "$TOOLCHAIN_FILES"
+          
+          echo "🔍 严格验证下载文件..."
+          DOWNLOAD_COUNT=$(find dl/ -type f 2>/dev/null | wc -l)
+          DOWNLOAD_SIZE=$(du -sh dl/ 2>/dev/null | cut -f1 || echo "未知")
+          echo "📊 下载结果统计:"
+          echo "  - 文件数量: $DOWNLOAD_COUNT"
+          echo "  - 总大小: $DOWNLOAD_SIZE"
+          
+          if [ "$DOWNLOAD_COUNT" -lt 10 ]; then
+            echo "⚠️ 警告: 下载的文件数量较少，可能有问题"
           else
-            echo "⚠️ 无法找到工具链"
+            echo "✅ 下载文件数量正常"
           fi
-          echo "✅ 工具链编译完成"
+          
+          KEY_FILES=("linux-*.tar.xz" "toolchain-*.tar.xz" "*.tar.gz" "*.tar.bz2")
+          for pattern in "${KEY_FILES[@]}"; do
+            files=$(find dl/ -name "$pattern" 2>/dev/null | head -5)
+            if [ -n "$files" ]; then
+              echo "✅ 找到文件模式: $pattern"
+            else
+              echo "⚠️ 未找到文件模式: $pattern"
+            fi
+          done
+          
+          echo "✅ 严格预下载验证完成"
 
-      - name: 🏗️ 高效编译固件
+      - name: "💾 空间检测 - 工具链编译前检查"
+        timeout-minutes: 2
+        run: |
+          echo "=== 💾 空间检测 - 工具链编译前检查 ==="
+          echo "🔍 检查工具链编译前磁盘空间..."
+          df -h | grep -E '(/|/mnt)' | while read line; do echo "  $line"; done
+          AVAILABLE_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
+          echo "📊 可用空间: ${AVAILABLE_SPACE}GB"
+          if [ "$AVAILABLE_SPACE" -lt 8 ]; then
+            echo "🚨 警告: 可用空间不足8GB，工具链编译可能失败"
+          else
+            echo "✅ 磁盘空间充足"
+          fi
+
+      - name: "🛠️ 严格工具链编译验证"
         timeout-minutes: 120
-        id: compile-firmware
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🏗️ 高效编译固件 ==="
+          echo "=== 🛠️ 严格工具链编译验证 ==="
+          echo "🔧 第一步: 编译基础工具..."
+          TOOLS_LOG="${{ env.TOOLCHAIN_LOG_DIR }}/tools-compile.log"
+          if ! make tools/install -j${{ env.PARALLEL_JOBS }} V=s 2>&1 | tee "$TOOLS_LOG"; then
+            echo "⚠️ 基础工具编译有警告，继续执行..."
+          fi
+          
+          REQUIRED_TOOLS=("staging_dir/host/bin/mkhash" "staging_dir/host/bin/cmake" "staging_dir/host/bin/ninja")
+          for tool in "${REQUIRED_TOOLS[@]}"; do
+            if [ -f "$tool" ]; then
+              echo "✅ $tool 存在"
+            else
+              echo "❌ $tool 缺失"
+            fi
+          done
+          
+          echo "🔧 第二步: 严格工具链编译..."
+          MAX_RETRIES=2
+          RETRY_COUNT=0
+          TOOLCHAIN_SUCCESS=false
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            echo "🔄 工具链编译尝试 $((RETRY_COUNT+1))/$MAX_RETRIES"
+            TOOLCHAIN_LOG="${{ env.TOOLCHAIN_LOG_DIR }}/toolchain-attempt-$RETRY_COUNT.log"
+            START_TIME=$(date +%s)
+            
+            if make toolchain/compile -j${{ env.PARALLEL_JOBS }} V=s 2>&1 | tee "$TOOLCHAIN_LOG"; then
+              END_TIME=$(date +%s)
+              DURATION=$((END_TIME - START_TIME))
+              echo "✅ 工具链编译成功!"
+              echo "⏱️ 耗时: ${DURATION}秒"
+              TOOLCHAIN_SUCCESS=true
+              break
+            else
+              RETRY_COUNT=$((RETRY_COUNT+1))
+              END_TIME=$(date +%s)
+              DURATION=$((END_TIME - START_TIME))
+              echo "❌ 工具链编译失败 (耗时: ${DURATION}秒)，准备重试..."
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                make toolchain/clean
+                sleep 15
+              fi
+            fi
+          done
+          
+          if [ "$TOOLCHAIN_SUCCESS" = "false" ]; then
+            echo "❌ 工具链编译失败，尝试单线程编译..."
+            TOOLCHAIN_SINGLE_LOG="${{ env.TOOLCHAIN_LOG_DIR }}/toolchain-single.log"
+            START_TIME=$(date +%s)
+            
+            if make toolchain/compile -j1 V=s 2>&1 | tee "$TOOLCHAIN_SINGLE_LOG"; then
+              END_TIME=$(date +%s)
+              DURATION=$((END_TIME - START_TIME))
+              echo "✅ 单线程工具链编译成功! (耗时: ${DURATION}秒)"
+              TOOLCHAIN_SUCCESS=true
+            else
+              echo "❌ 工具链编译完全失败"
+              grep -i "error:\|failed\|No such file\|undefined reference" "$TOOLCHAIN_SINGLE_LOG" | head -20
+              exit 1
+            fi
+          fi
+          
+          echo "🔍 严格验证工具链..."
+          TOOLCHAIN_PATHS=$(find staging_dir/toolchain-* -type d -name "bin" 2>/dev/null | head -1)
+          if [ -n "$TOOLCHAIN_PATHS" ]; then
+            echo "✅ 找到工具链目录: $TOOLCHAIN_PATHS"
+            REQUIRED_COMPILERS=("*-gcc" "*-g++" "*-ld" "*-ar" "*-strip")
+            for compiler in "${REQUIRED_COMPILERS[@]}"; do
+              compiler_path=$(find "$TOOLCHAIN_PATHS" -name "$compiler" 2>/dev/null | head -1)
+              if [ -n "$compiler_path" ] && [ -f "$compiler_path" ]; then
+                echo "✅ $compiler 存在 ($(du -h "$compiler_path" | cut -f1))"
+                if "$compiler_path" --version >/dev/null 2>&1; then
+                  echo "✅ $compiler 可执行"
+                else
+                  echo "❌ $compiler 不可执行"
+                fi
+              else
+                echo "❌ $compiler 缺失"
+              fi
+            done
+          else
+            echo "❌ 工具链目录不存在"
+            exit 1
+          fi
+          
+          echo "📊 工具链编译统计:"
+          TOOLCHAIN_SIZE=$(du -sh staging_dir/toolchain-* 2>/dev/null | cut -f1 || echo "未知")
+          echo "  - 工具链大小: $TOOLCHAIN_SIZE"
+          echo "✅ 严格工具链编译验证完成"
+
+      - name: "💾 空间检测 - 编译前最终检查"
+        timeout-minutes: 2
+        run: |
+          echo "=== 💾 空间检测 - 编译前最终检查 ==="
+          echo "🔍 检查编译前最终磁盘空间..."
+          df -h | grep -E '(/|/mnt)' | while read line; do echo "  $line"; done
+          AVAILABLE_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
+          echo "📊 可用空间: ${AVAILABLE_SPACE}GB"
+          if [ "$AVAILABLE_SPACE" -lt 5 ]; then
+            echo "🚨 严重警告: 可用空间不足5GB，编译极可能失败"
+          else
+            echo "✅ 磁盘空间充足"
+          fi
+          echo "🧠 最终内存状态:"
+          free -h
+
+      - name: "🔍 编译前最终验证"
+        timeout-minutes: 5
+        run: |
+          cd ${{ env.SOURCE_DIR }}
+          echo "=== 🔍 编译前最终验证 ==="
+          echo "🔍 验证所有必要组件..."
+          if [ -d "dl" ] && [ "$(find dl/ -type f 2>/dev/null | wc -l)" -gt 10 ]; then
+            echo "✅ 下载文件验证通过"
+          else
+            echo "❌ 下载文件不足，可能有问题"
+            exit 1
+          fi
+          
+          if [ -d "staging_dir/toolchain-" ] && [ -n "$(find staging_dir/toolchain-*/bin -name '*-gcc' 2>/dev/null | head -1)" ]; then
+            echo "✅ 工具链验证通过"
+          else
+            echo "❌ 工具链验证失败"
+            exit 1
+          fi
+          
+          if [ -f ".config" ] && grep -q "CONFIG_TARGET" .config && grep -q "CONFIG_PACKAGE" .config; then
+            echo "✅ 配置验证通过"
+          else
+            echo "❌ 配置验证失败"
+            exit 1
+          fi
+          
+          if [ -d "feeds/packages" ] && [ -d "feeds/luci" ]; then
+            echo "✅ Feeds验证通过"
+          else
+            echo "❌ Feeds验证失败"
+            exit 1
+          fi
+          
+          AVAILABLE_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
+          if [ "$AVAILABLE_SPACE" -gt 10 ]; then
+            echo "✅ 磁盘空间充足: ${AVAILABLE_SPACE}GB"
+          else
+            echo "❌ 磁盘空间不足: ${AVAILABLE_SPACE}GB"
+            exit 1
+          fi
+          
+          SWAP_SIZE=$(free -g | awk 'NR==3 {print $2}')
+          if [ "$SWAP_SIZE" -ge 8 ]; then
+            echo "✅ 交换空间充足: ${SWAP_SIZE}GB"
+          else
+            echo "❌ 交换空间不足: ${SWAP_SIZE}GB"
+          fi
+          
+          echo "🎉 所有前置验证通过，开始编译..."
+          echo "READY_FOR_COMPILE=true" >> $GITHUB_ENV
+
+      - name: "🏗️ 分阶段严格编译"
+        if: env.READY_FOR_COMPILE == 'true'
+        timeout-minutes: 150
+        id: "compile-firmware"
+        run: |
+          cd ${{ env.SOURCE_DIR }}
+          echo "=== 🏗️ 分阶段严格编译 ==="
           export FORCE_UNSAFE_CONFIGURE=1
-          START_TIME=$(date +%s)
+          
+          echo "🔧 阶段1: 准备编译环境..."
+          if ! make target/linux/prepare V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/prepare.log; then
+            echo "⚠️ 环境准备有警告，继续执行..."
+          fi
+          
+          echo "🔧 阶段2: 编译内核..."
+          KERNEL_LOG="${{ env.BUILD_LOG_DIR }}/kernel-compile.log"
+          if ! make target/linux/compile -j${{ env.PARALLEL_JOBS }} V=s 2>&1 | tee "$KERNEL_LOG"; then
+            echo "❌ 内核编译失败，尝试单线程..."
+            if ! make target/linux/compile -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/kernel-compile-single.log; then
+              echo "❌ 内核编译完全失败"
+              exit 1
+            fi
+          fi
+          
+          if [ -d "build_dir/target-*/linux-*/linux-*" ] && [ -f "build_dir/target-*/linux-*/linux-*/vmlinux" ]; then
+            echo "✅ 内核编译验证通过"
+          else
+            echo "❌ 内核编译验证失败"
+            exit 1
+          fi
+          
+          echo "🔧 阶段3: 完整系统编译..."
           LOG_FILE="${{ env.BUILD_LOG_DIR }}/compile.log"
-          PARALLEL_JOBS="${{ env.PARALLEL_JOBS }}"
-          echo "🔧 开始并行编译..."
-          echo "⚡ 并行任务数: $PARALLEL_JOBS"
-          echo "🎯 优化策略: ${{ github.event.inputs.build_optimization }}"
           BUILD_STATUS="unknown"
-          echo "🚀 第一阶段: 并行编译..."
-          if make -j$PARALLEL_JOBS V=sc 2>&1 | tee "$LOG_FILE"; then
+          START_TIME=$(date +%s)
+          
+          echo "🚀 开始并行编译..."
+          if make -j${{ env.PARALLEL_JOBS }} V=s 2>&1 | tee "$LOG_FILE"; then
             BUILD_STATUS="success"
             echo "🎉 并行编译成功!"
           else
             echo "⚠️ 并行编译失败，尝试单线程编译..."
-            echo "🚀 第二阶段: 单线程编译..."
-            if make -j1 V=s 2>&1 | tee "$LOG_FILE"; then
+            if make -j1 V=s 2>&1 | tee -a "$LOG_FILE"; then
               BUILD_STATUS="success"
               echo "🎉 单线程编译成功!"
             else
               BUILD_STATUS="failed"
               echo "❌ 编译失败"
-              echo "🔍 编译失败分析:"
-              grep -i -A5 -B5 "error:\|Error [0-9]\|failed\|No such file\|undefined reference\|cannot find\|not found" "$LOG_FILE" | head -50
+              grep -i "error:\|failed\|No such file\|undefined reference" "$LOG_FILE" | head -30
               exit 1
             fi
           fi
+          
           END_TIME=$(date +%s)
           DURATION=$((END_TIME - START_TIME))
           echo "BUILD_DURATION=$DURATION" >> $GITHUB_ENV
           echo "BUILD_STATUS=$BUILD_STATUS" >> $GITHUB_ENV
           echo "⏱️ 编译总耗时: ${DURATION}秒 ($(($DURATION/60))分钟)"
-          echo "📊 CCache 统计:"
           ccache -s
+          echo "✅ 分阶段严格编译完成"
 
-      - name: 🔍 智能错误分析与工厂镜像保障
-        if: always()
-        timeout-minutes: 10
-        run: |
-          echo "=== 🔍 智能错误分析与工厂镜像保障 ==="
-          ERROR_LOG_FILE="${{ env.ARTIFACTS_DIR }}/critical-errors.log"
-          
-          echo "🎯 关键错误分析 (只显示最重要的问题)..." > "$ERROR_LOG_FILE"
-          echo "==========================================" >> "$ERROR_LOG_FILE"
-          
-          # 分析关键错误，限制输出
-          KEYWORDS=("Error 1" "Error 2" "fatal:" "failed" "No such file" "not found")
-          
-          for log_file in ${{ env.BUILD_LOG_DIR }}/*.log; do
-            if [ -f "$log_file" ]; then
-              LOG_NAME=$(basename "$log_file")
-              echo "" >> "$ERROR_LOG_FILE"
-              echo "📄 分析: $LOG_NAME" >> "$ERROR_LOG_FILE"
-              echo "------------------------------------------" >> "$ERROR_LOG_FILE"
-              
-              for keyword in "${KEYWORDS[@]}"; do
-                if grep -n -i "$keyword" "$log_file" > /dev/null; then
-                  echo "🚨 $keyword 相关错误:" >> "$ERROR_LOG_FILE"
-                  grep -n -i "$keyword" "$log_file" | head -5 >> "$ERROR_LOG_FILE"
-                  echo "" >> "$ERROR_LOG_FILE"
-                fi
-              done
-            fi
-          done
-          
-          # 特别检查工厂镜像
-          echo "" >> "$ERROR_LOG_FILE"
-          echo "🔍 工厂镜像状态检查:" >> "$ERROR_LOG_FILE"
-          echo "------------------------------------------" >> "$ERROR_LOG_FILE"
-          
-          if [ -d "${{ env.SOURCE_DIR }}/bin/targets" ]; then
-            ASUS_FACTORY=$(find ${{ env.SOURCE_DIR }}/bin/targets -name "*asus*rt-ac42u*" -o -name "*rt-ac42u*" | grep -i factory || true)
-            if [ -n "$ASUS_FACTORY" ]; then
-              echo "✅ 工厂镜像已生成:" >> "$ERROR_LOG_FILE"
-              for img in $ASUS_FACTORY; do
-                size=$(du -h "$img" | cut -f1)
-                echo "  - $img ($size)" >> "$ERROR_LOG_FILE"
-              done
-            else
-              echo "❌ 未找到ASUS RT-AC42U工厂镜像!" >> "$ERROR_LOG_FILE"
-              echo "💡 可用的镜像文件:" >> "$ERROR_LOG_FILE"
-              find ${{ env.SOURCE_DIR }}/bin/targets -name "*.bin" -o -name "*.img" | head -10 | while read img; do
-                size=$(du -h "$img" | cut -f1)
-                echo "  - $img ($size)" >> "$ERROR_LOG_FILE"
-              done
-            fi
-          else
-            echo "❌ 编译输出目录不存在!" >> "$ERROR_LOG_FILE"
-          fi
-          
-          # 显示关键错误摘要
-          if [ -s "$ERROR_LOG_FILE" ]; then
-            echo "🚨 关键问题摘要:"
-            cat "$ERROR_LOG_FILE"
-          else
-            echo "✅ 未发现关键错误"
-          fi
-
-      - name: 🎯 工厂镜像强制保障
+      - name: "🎯 严格工厂镜像保障"
         if: env.BUILD_STATUS == 'success'
-        timeout-minutes: 15
+        timeout-minutes: 25
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🎯 工厂镜像强制保障 ==="
-          
-          echo "🔍 检查工厂镜像生成状态..."
+          echo "=== 🎯 严格工厂镜像保障 ==="
+          echo "🔍 严格检查工厂镜像生成状态..."
           ASUS_FACTORY=$(find bin/targets -name "*asus*rt-ac42u*" -o -name "*rt-ac42u*" | grep -i factory || true)
           
           if [ -n "$ASUS_FACTORY" ]; then
@@ -1016,21 +1236,21 @@ jobs:
             done
             echo "FACTORY_EXISTS=true" >> $GITHUB_ENV
           else
-            echo "❌ 未找到工厂镜像，开始强制生成..."
+            echo "❌ 未找到工厂镜像，开始严格修复流程..."
             echo "FACTORY_EXISTS=false" >> $GITHUB_ENV
             
-            # 强制重新生成镜像
-            echo "🔄 强制重新生成工厂镜像..."
-            echo "🔧 重新配置目标..."
-            make target/linux/{clean,prepare} V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/factory-repair.log || true
+            echo "🔧 第一步: 重新配置目标..."
+            make target/linux/{clean,prepare} V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/factory-repair-step1.log || true
             
-            echo "🔧 重新编译内核..."
-            make target/linux/compile -j1 V=s 2>&1 | tee -a ${{ env.BUILD_LOG_DIR }}/factory-repair.log || true
+            echo "🔧 第二步: 重新编译内核..."
+            make target/linux/compile -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/factory-repair-step2.log || true
             
-            echo "🔧 重新生成镜像..."
-            make target/install -j1 V=s 2>&1 | tee -a ${{ env.BUILD_LOG_DIR }}/factory-repair.log || true
+            echo "🔧 第三步: 专门编译目标设备镜像..."
+            make target/linux/ipq40xx/image/install -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/factory-repair-step3.log || true
             
-            # 再次检查
+            echo "🔧 第四步: 最后尝试完整目标编译..."
+            make target/install -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/factory-repair-step4.log || true
+            
             ASUS_FACTORY_RETRY=$(find bin/targets -name "*asus*rt-ac42u*" -o -name "*rt-ac42u*" | grep -i factory || true)
             if [ -n "$ASUS_FACTORY_RETRY" ]; then
               echo "✅ 工厂镜像修复成功!"
@@ -1041,40 +1261,33 @@ jobs:
               echo "FACTORY_EXISTS=true" >> $GITHUB_ENV
             else
               echo "❌ 工厂镜像生成失败"
-              echo "🔍 详细错误:"
-              tail -100 ${{ env.BUILD_LOG_DIR }}/factory-repair.log | grep -i "error\|failed\|not found" | head -20
-              
-              # 最后一次尝试
-              echo "🔄 最后尝试: 直接编译目标设备..."
-              make target/linux/ipq40xx/image/install -j1 V=s 2>&1 | tee -a ${{ env.BUILD_LOG_DIR }}/factory-repair.log || true
             fi
           fi
 
-      - name: 🔍 编译产物验证与搜索
+      - name: "🔍 严格编译产物验证"
         if: env.BUILD_STATUS == 'success'
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔍 编译产物验证与搜索 ==="
+          echo "=== 🔍 严格编译产物验证 ==="
           mkdir -p ${{ env.ARTIFACTS_DIR }}/firmware
-          echo "🔍 搜索固件文件..."
           
+          echo "🔍 严格搜索固件文件..."
           if [ -d "bin/targets" ]; then
             echo "✅ 找到固件输出目录"
-            
-            # 复制所有固件文件
             find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" \) > ${{ env.ARTIFACTS_DIR }}/firmware-list.txt
             FIRMWARE_COUNT=$(wc -l < ${{ env.ARTIFACTS_DIR }}/firmware-list.txt)
             
             echo "📦 复制 $FIRMWARE_COUNT 个固件文件..."
+            COPIED_COUNT=0
             while IFS= read -r firmware; do
               if [ -f "$firmware" ]; then
-                cp "$firmware" ${{ env.ARTIFACTS_DIR }}/firmware/ 2>/dev/null || true
+                cp "$firmware" ${{ env.ARTIFACTS_DIR }}/firmware/ 2>/dev/null && COPIED_COUNT=$((COPIED_COUNT+1)) || true
               fi
             done < ${{ env.ARTIFACTS_DIR }}/firmware-list.txt
             
-            # 特别检查ASUS镜像
-            echo "🎯 ASUS RT-AC42U 镜像状态:"
+            echo "✅ 成功复制 $COPIED_COUNT 个固件文件"
+            
             ASUS_FACTORY=$(find bin/targets -name "*asus*rt-ac42u*" -o -name "*rt-ac42u*" | grep -i factory || true)
             ASUS_SYSUPGRADE=$(find bin/targets -name "*asus*rt-ac42u*" -o -name "*rt-ac42u*" | grep -v factory || true)
             
@@ -1083,7 +1296,6 @@ jobs:
               for img in $ASUS_FACTORY; do
                 size=$(du -h "$img" | cut -f1)
                 echo "  - $(basename "$img") ($size)"
-                # 确保工厂镜像被复制
                 cp "$img" ${{ env.ARTIFACTS_DIR }}/firmware/ 2>/dev/null || true
               done
             else
@@ -1096,122 +1308,86 @@ jobs:
                 size=$(du -h "$img" | cut -f1)
                 echo "  - $(basename "$img") ($size)"
               done
+            else
+              echo "❌ 未找到升级镜像!"
             fi
             
             ARTIFACT_SIZE=$(du -sh ${{ env.ARTIFACTS_DIR }}/firmware/ 2>/dev/null | cut -f1 || echo "未知")
             echo "📦 产物总大小: $ARTIFACT_SIZE"
-            
           else
             echo "❌ 未找到固件输出目录"
-            echo "🔍 搜索编译输出..."
-            find . -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null | head -10 | while read file; do
-              size=$(du -h "$file" | cut -f1)
-              echo "  - $file ($size)"
-              cp "$file" ${{ env.ARTIFACTS_DIR }}/firmware/ 2>/dev/null || true
-            done
           fi
           
           FINAL_COUNT=$(find ${{ env.ARTIFACTS_DIR }}/firmware -type f 2>/dev/null | wc -l || echo 0)
           echo "FIRMWARE_COUNT=$FINAL_COUNT" >> $GITHUB_ENV
           echo "📊 最终固件数量: $FINAL_COUNT"
+          
+          if [ "$FINAL_COUNT" -eq 0 ]; then
+            echo "❌ 错误: 没有生成任何固件文件"
+            exit 1
+          else
+            echo "✅ 固件生成验证通过"
+          fi
 
-      - name: 📋 智能日志收集
+      - name: "📋 严格日志收集与分析"
         if: always()
-        timeout-minutes: 5
+        timeout-minutes: 8
         run: |
-          echo "=== 📋 智能日志收集 ==="
-          echo "开始智能日志收集..."
+          echo "=== 📋 严格日志收集与分析 ==="
           mkdir -p ${{ env.ARTIFACTS_DIR }}/logs
           
-          # 收集关键日志（限制大小）
-          KEY_LOGS=(
-            "${{ env.BUILD_LOG_DIR }}/critical-errors.log"
-            "${{ env.BUILD_LOG_DIR }}/compile.log"
-            "${{ env.BUILD_LOG_DIR }}/download.log"
-            "${{ env.BUILD_LOG_DIR }}/toolchain.log"
-            "${{ env.BUILD_LOG_DIR }}/factory-repair.log"
-          )
+          KEY_LOGS=("${{ env.BUILD_LOG_DIR }}/critical-errors.log" "${{ env.BUILD_LOG_DIR }}/compile.log" "${{ env.BUILD_LOG_DIR }}/download.log" "${{ env.BUILD_LOG_DIR }}/toolchain.log" "${{ env.BUILD_LOG_DIR }}/feeds-update-0.log" "${{ env.BUILD_LOG_DIR }}/feeds-install.log" "${{ env.BUILD_LOG_DIR }}/kernel-compile.log" "${{ env.BUILD_LOG_DIR }}/factory-repair.log")
           
           for log in "${KEY_LOGS[@]}"; do
             if [ -f "$log" ]; then
               base_name=$(basename "$log")
-              # 只收集日志的关键部分（开头100行和结尾500行）
-              {
-                echo "=== 日志文件: $base_name ==="
-                echo "=== 前100行 ==="
-                head -100 "$log" 2>/dev/null
-                echo ""
-                echo "=== 后500行 ==="
-                tail -500 "$log" 2>/dev/null
-              } > "${{ env.ARTIFACTS_DIR }}/logs/${base_name}" 2>/dev/null || true
+              cp "$log" "${{ env.ARTIFACTS_DIR }}/logs/${base_name}" 2>/dev/null || true
             fi
           done
           
-          # 收集配置和状态信息
           if [ -d "${{ env.SOURCE_DIR }}" ]; then
             cd ${{ env.SOURCE_DIR }}
             cp .config ${{ env.ARTIFACTS_DIR }}/logs/final-config.txt 2>/dev/null || true
             ccache -s > ${{ env.ARTIFACTS_DIR }}/logs/ccache-stats.txt 2>/dev/null || true
           fi
           
-          # 收集固件清单
           if [ -f "${{ env.ARTIFACTS_DIR }}/firmware-list.txt" ]; then
             cp ${{ env.ARTIFACTS_DIR }}/firmware-list.txt ${{ env.ARTIFACTS_DIR }}/logs/ 2>/dev/null || true
           fi
           
-          # 显示收集的日志信息
-          LOG_FILES=$(find ${{ env.ARTIFACTS_DIR }}/logs -type f 2>/dev/null)
-          LOG_COUNT=$(echo "$LOG_FILES" | wc -l)
-          LOG_TOTAL_SIZE=$(du -sh ${{ env.ARTIFACTS_DIR }}/logs 2>/dev/null | cut -f1 || echo "未知")
-          
-          echo "📊 收集的日志文件 ($LOG_COUNT 个文件, $LOG_TOTAL_SIZE):"
-          echo "$LOG_FILES" | while read file; do
-            size=$(du -h "$file" | cut -f1)
-            echo "  - $(basename "$file") ($size)"
-          done
-          
-          echo "✅ 日志收集完成"
+          echo "✅ 严格日志收集完成"
 
-      - name: 💾 上传构建产物
+      - name: "💾 上传构建产物"
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: "actions/upload-artifact@v4"
         with:
-          name: Firmware-${{ github.run_number }}-${{ env.SOURCE_PRESET }}-${{ env.ACTUAL_BRANCH }}-${{ env.BUILD_STATUS || 'unknown' }}
-          path: ${{ env.ARTIFACTS_DIR }}
+          name: "Firmware-${{ github.run_number }}-${{ env.SOURCE_PRESET }}-${{ env.ACTUAL_BRANCH }}-${{ env.BUILD_STATUS || 'unknown' }}"
+          path: "${{ env.ARTIFACTS_DIR }}"
           retention-days: 30
           compression-level: 9
 
-      - name: 🧹 智能清理
+      - name: "🧹 智能清理"
         if: always()
-        timeout-minutes: 3
+        timeout-minutes: 5
         run: |
           echo "=== 🧹 智能清理 ==="
-          echo "开始智能清理..."
           sudo swapoff /mnt/swapfile 2>/dev/null || true
           sudo rm -f /mnt/swapfile 2>/dev/null || true
-          echo "📊 最终CCache统计:"
           ccache -s
-          if [ -d "${{ env.SOURCE_DIR }}" ]; then
-            cd ${{ env.SOURCE_DIR }}
-            echo "🧹 清理源码目录临时文件..."
-            rm -rf tmp/ 2>/dev/null || true
-            rm -f .config.old 2>/dev/null || true
-          fi
-          echo "✅ 清理完成"
+          echo "✅ 智能清理完成"
 
-      - name: 📊 最终报告
+      - name: "📊 最终详细报告"
         if: always()
-        timeout-minutes: 3
+        timeout-minutes: 5
         run: |
-          echo "=== 📊 最终报告 ==="
+          echo "=== 📊 最终详细报告 ==="
           echo ""
-          echo "🎯 构建摘要"
+          echo "🎯 构建详细摘要"
           echo "=========================================="
           echo "📦 源码信息:"
           echo "  - 预设: ${{ env.SOURCE_PRESET }}"
           echo "  - 分支: ${{ env.ACTUAL_BRANCH }}"
           echo "  - 提交: ${{ env.COMMIT_HASH || 'unknown' }}"
-          echo "  - 描述: ${{ env.SOURCE_DESCRIPTION }}"
           echo ""
           echo "📈 构建结果:"
           echo "  - 状态: ${{ env.BUILD_STATUS || 'unknown' }}"
@@ -1239,19 +1415,14 @@ jobs:
               echo "   5. 不要使用 sysupgrade 镜像救砖！"
             else
               echo "⚠️ 构建成功但未生成工厂镜像"
-              echo "💡 建议:"
-              echo "   - 检查设备配置是否正确"
-              echo "   - 查看详细错误日志"
-              echo "   - 可能需要手动配置工厂镜像生成"
             fi
           else
             echo "❌ 构建失败"
             echo ""
-            echo "🔍 故障排除:"
+            echo "🔍 故障排除建议:"
             echo "   - 查看 critical-errors.log"
             echo "   - 验证配置文件是否正确"
             echo "   - 检查网络连接和仓库状态"
-            echo "   - 确认依赖包是否完整"
           fi
           echo ""
           echo "⏰ 完成时间: $(date)"
