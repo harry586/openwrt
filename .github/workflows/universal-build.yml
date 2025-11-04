@@ -1,5 +1,4 @@
 name: Universal Firmware Builder - Optimized Version
-# 工作流文件生成时间: 2025-10-20 14:30:00
 
 on:
   workflow_dispatch:
@@ -74,7 +73,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 240  # 增加到240分钟
+    timeout-minutes: 180
     steps:
       - name: 📥 检出配置仓库
         uses: actions/checkout@v4
@@ -196,7 +195,7 @@ jobs:
           
           echo "✅ 源码配置解析完成"
 
-      - name: 📥 智能源码获取（多镜像）
+      - name: 📥 智能源码获取
         id: clone-source
         run: |
           echo "开始智能源码获取..."
@@ -205,196 +204,68 @@ jobs:
           SOURCE_URL="${{ env.SOURCE_URL }}"
           echo "🎯 请求分支: $REQUESTED_BRANCH"
           
-          # 定义备用镜像（根据预设选择）
-          case "${{ env.SOURCE_PRESET }}" in
-            "immortalwrt")
-              BACKUP_MIRRORS=("https://github.com/immortalwrt/immortalwrt.git" "https://gitee.com/immortalwrt/immortalwrt.git")
-              ;;
-            "openwrt")
-              BACKUP_MIRRORS=("https://github.com/openwrt/openwrt.git" "https://git.openwrt.org/openwrt/openwrt.git")
-              ;;
-            "lede")
-              BACKUP_MIRRORS=("https://github.com/coolsnowwolf/lede.git" "https://gitee.com/coolsnowwolf/lede.git")
-              ;;
-            *)
-              BACKUP_MIRRORS=("https://github.com/immortalwrt/immortalwrt.git" "https://gitee.com/immortalwrt/immortalwrt.git")
-              ;;
-          esac
-          
           rm -rf .[!.]* * 2>/dev/null || true
           
           CLONE_SUCCESS=false
-          # 首先尝试主镜像
           for strategy in "指定分支" "main" "master" "默认分支"; do
-            echo "🔄 尝试主镜像策略: $strategy"
+            echo "🔄 尝试策略: $strategy"
             rm -rf .[!.]* * 2>/dev/null || true
-            
             case $strategy in
               "指定分支")
-                git clone --depth 1 --branch "$REQUESTED_BRANCH" "$SOURCE_URL" . && CLONE_SUCCESS=true || continue
+                git clone --depth 1 --branch "$REQUESTED_BRANCH" "$SOURCE_URL" . || continue
                 ;;
               "main")
-                git clone --depth 1 --branch main "$SOURCE_URL" . && CLONE_SUCCESS=true || continue
+                git clone --depth 1 --branch main "$SOURCE_URL" . || continue
                 ;;
-              "master")  
-                git clone --depth 1 --branch master "$SOURCE_URL" . && CLONE_SUCCESS=true || continue
+              "master")
+                git clone --depth 1 --branch master "$SOURCE_URL" . || continue
                 ;;
               "默认分支")
-                git clone --depth 1 "$SOURCE_URL" . && CLONE_SUCCESS=true || continue
+                git clone --depth 1 "$SOURCE_URL" . || continue
                 ;;
             esac
             
-            if [ "$CLONE_SUCCESS" = "true" ] && [ -d ".git" ] && [ -f "scripts/feeds" ]; then
+            if [ -d ".git" ] && [ -f "scripts/feeds" ]; then
               ACTUAL_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
               COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-              echo "✅ 主镜像克隆成功: $strategy"
+              echo "✅ 克隆成功: $strategy"
+              CLONE_SUCCESS=true
               break
             fi
           done
           
-          # 如果主镜像失败，尝试备用镜像
           if [ "$CLONE_SUCCESS" = "false" ]; then
-            echo "🔄 主镜像失败，尝试备用镜像..."
-            for mirror in "${BACKUP_MIRRORS[@]}"; do
-              echo "🔄 尝试备用镜像: $mirror"
-              rm -rf .[!.]* * 2>/dev/null || true
-              
-              # 对每个镜像尝试不同的分支策略
-              for branch_strategy in "$REQUESTED_BRANCH" "main" "master" "default"; do
-                echo "  🔄 尝试分支: $branch_strategy"
-                rm -rf .[!.]* * 2>/dev/null || true
-                
-                if git clone --depth 1 --branch "$branch_strategy" "$mirror" . 2>/dev/null; then
-                  if [ -d ".git" ] && [ -f "scripts/feeds" ]; then
-                    ACTUAL_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown") 
-                    COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-                    echo "✅ 备用镜像克隆成功: $mirror (分支: $branch_strategy)"
-                    CLONE_SUCCESS=true
-                    break 2
-                  fi
-                fi
-              done
-            done
-          fi
-          
-          if [ "$CLONE_SUCCESS" = "false" ]; then
-            echo "❌ 所有克隆策略和镜像都失败"
-            echo "🔧 尝试最后的解决方案：浅克隆+完整拉取"
-            rm -rf .[!.]* * 2>/dev/null || true
-            git clone --depth 1 "$SOURCE_URL" . || git clone --filter=blob:none "$SOURCE_URL" .
-            if [ -d ".git" ] && [ -f "scripts/feeds" ]; then
-              ACTUAL_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-              COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-              echo "✅ 最终方案克隆成功"
-              CLONE_SUCCESS=true
-            else
-              echo "❌ 所有源码获取方法都失败"
-              exit 1
-            fi
+            echo "❌ 所有克隆策略都失败"
+            exit 1
           fi
           
           echo "ACTUAL_BRANCH=$ACTUAL_BRANCH" >> $GITHUB_ENV
           echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
           echo "✅ 源码获取完成"
 
-      - name: 🔄 智能源码初始化与镜像切换
+      - name: 🔄 快速源码初始化
         timeout-minutes: 15
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "开始智能源码初始化..."
+          echo "开始快速源码初始化..."
           
           if [ ! -f "scripts/feeds" ]; then
             echo "❌ 错误: scripts/feeds 文件不存在"
             exit 1
           fi
           
-          # 定义多个镜像源
-          PACKAGES_MIRRORS=("https://git.openwrt.org/feed/packages.git" "https://github.com/openwrt/packages.git" "https://gitee.com/openwrt-mirror/packages.git")
-          LUCI_MIRRORS=("https://git.openwrt.org/feed/luci.git" "https://github.com/openwrt/luci.git" "https://gitee.com/openwrt-mirror/luci.git")
-          
-          # 智能feeds配置
+          # 快速feeds配置
           if [ ! -f "feeds.conf" ]; then
-            echo "创建智能 feeds.conf"
-            # 使用第一个镜像作为默认
-            echo "src-git packages ${PACKAGES_MIRRORS[0]}" > feeds.conf
-            echo "src-git luci ${LUCI_MIRRORS[0]}" >> feeds.conf
-            echo "src-git routing https://git.openwrt.org/feed/routing.git" >> feeds.conf
-            echo "src-git telephony https://git.openwrt.org/feed/telephony.git" >> feeds.conf
+            echo "创建通用 feeds.conf"
+            echo "src-git packages https://git.openwrt.org/feed/packages.git" > feeds.conf
+            echo "src-git luci https://git.openwrt.org/feed/luci.git" >> feeds.conf
           fi
           
-          echo "🔄 开始智能更新Feeds..."
-          
-          # 更新feeds的函数，支持重试和镜像切换
-          update_feeds_with_retry() {
-            local max_retries=3
-            local retry_count=0
-            
-            while [ $retry_count -lt $max_retries ]; do
-              echo "🔄 尝试更新Feeds (第 $((retry_count + 1)) 次)..."
-              
-              if ./scripts/feeds update -a; then
-                echo "✅ Feeds更新成功"
-                return 0
-              else
-                retry_count=$((retry_count + 1))
-                echo "⚠️ 第 $retry_count 次更新失败"
-                
-                if [ $retry_count -eq 1 ]; then
-                  # 第一次失败后切换到GitHub镜像
-                  echo "🔄 切换到GitHub镜像..."
-                  echo "src-git packages ${PACKAGES_MIRRORS[1]}" > feeds.conf
-                  echo "src-git luci ${LUCI_MIRRORS[1]}" >> feeds.conf
-                  echo "src-git routing https://github.com/openwrt/routing.git" >> feeds.conf
-                  echo "src-git telephony https://github.com/openwrt/telephony.git" >> feeds.conf
-                elif [ $retry_count -eq 2 ]; then
-                  # 第二次失败后切换到Gitee镜像
-                  echo "🔄 切换到Gitee镜像..."
-                  echo "src-git packages ${PACKAGES_MIRRORS[2]}" > feeds.conf
-                  echo "src-git luci ${LUCI_MIRRORS[2]}" >> feeds.conf
-                  echo "src-git routing https://gitee.com/openwrt-mirror/routing.git" >> feeds.conf
-                  echo "src-git telephony https://gitee.com/openwrt-mirror/telephony.git" >> feeds.conf
-                fi
-                
-                if [ $retry_count -lt $max_retries ]; then
-                  echo "⏳ 等待 3 秒后重试..."
-                  sleep 3
-                fi
-              fi
-            done
-            
-            echo "❌ 所有更新尝试都失败"
-            return 1
-          }
-          
-          # 执行更新
-          if update_feeds_with_retry; then
-            echo "📦 开始安装Feeds..."
-            if ./scripts/feeds install -a; then
-              echo "✅ 所有Feeds安装成功"
-            else
-              echo "⚠️ 部分Feeds安装失败，尝试逐个安装..."
-              ./scripts/feeds update -a
-              for feed in packages luci routing telephony; do
-                echo "📦 安装 $feed..."
-                ./scripts/feeds install $feed || echo "⚠️ $feed 安装失败，继续..."
-              done
-            fi
-            echo "✅ 源码初始化完成"
-          else
-            echo "❌ Feeds更新失败，尝试最小化安装继续..."
-            
-            # 尝试只更新和安装packages（必需）
-            echo "🔄 尝试仅更新packages..."
-            ./scripts/feeds update packages
-            ./scripts/feeds install -a
-            
-            if [ $? -eq 0 ]; then
-              echo "⚠️ 已使用最小化feeds配置，继续编译流程"
-            else
-              echo "❌ 关键feeds安装失败"
-              exit 1
-            fi
-          fi
+          echo "🔄 快速更新Feeds..."
+          ./scripts/feeds update -a
+          echo "📦 快速安装基础Feeds..."
+          ./scripts/feeds install -a
+          echo "✅ 源码初始化完成"
 
       - name: 🎯 快速配置文件查找与应用
         timeout-minutes: 1
@@ -402,121 +273,28 @@ jobs:
           cd ${{ env.SOURCE_DIR }}
           echo "快速配置文件查找与应用..."
           CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
-          echo "输入配置模式: $CONFIG_PROFILE"
-          echo "🔍 快速配置文件搜索..."
+          
           CONFIG_FOUND=""
-          echo "🎯 直接路径查找..."
+          # 直接路径查找
           if [ -f "$CONFIG_PROFILE" ]; then
             CONFIG_FOUND="$CONFIG_PROFILE"
-            echo "✅ 在当前目录找到配置文件: $CONFIG_FOUND"
           elif [ -f "../$CONFIG_PROFILE" ]; then
             CONFIG_FOUND="../$CONFIG_PROFILE"
-            echo "✅ 在上级目录找到配置文件: $CONFIG_FOUND"
           elif [ -f "$GITHUB_WORKSPACE/$CONFIG_PROFILE" ]; then
             CONFIG_FOUND="$GITHUB_WORKSPACE/$CONFIG_PROFILE"
-            echo "✅ 在工作区找到配置文件: $CONFIG_FOUND"
-          fi
-          if [ -z "$CONFIG_FOUND" ]; then
-            echo "🔍 受限深度搜索..."
+          else
+            # 快速搜索
             CONFIG_FOUND=$(find . -maxdepth 3 -name "$CONFIG_PROFILE" -type f 2>/dev/null | head -1)
-            if [ -z "$CONFIG_FOUND" ]; then
-              CONFIG_FOUND=$(find $GITHUB_WORKSPACE -maxdepth 3 -name "$CONFIG_PROFILE" -type f 2>/dev/null | head -1)
-            fi
-            if [ -n "$CONFIG_FOUND" ]; then
-              echo "✅ 通过受限搜索找到配置文件: $CONFIG_FOUND"
-            fi
           fi
-          if [ -z "$CONFIG_FOUND" ] && [ -f "${{ env.BUILD_LOG_DIR }}/all_config_files.txt" ]; then
-            echo "🔍 使用文件发现缓存..."
-            CACHED_PATH=$(grep "$CONFIG_PROFILE" "${{ env.BUILD_LOG_DIR }}/all_config_files.txt" | head -1)
-            if [ -n "$CACHED_PATH" ]; then
-              if [[ "$CACHED_PATH" == ./* ]]; then
-                CONFIG_FOUND="$GITHUB_WORKSPACE/${Cached_PATH#./}"
-              else
-                CONFIG_FOUND="$CACHED_PATH"
-              fi
-              if [ -f "$CONFIG_FOUND" ]; then
-                echo "✅ 通过缓存找到配置文件: $CONFIG_FOUND"
-              else
-                echo "⚠️ 缓存中的文件不存在: $CONFIG_FOUND"
-                CONFIG_FOUND=""
-              fi
-            fi
-          fi
-          if [ -z "$CONFIG_FOUND" ] && [[ "$CONFIG_PROFILE" == *"*"* ]]; then
-            echo "🔍 快速模式匹配..."
-            CONFIG_FOUND=$(find . -maxdepth 3 -name "$CONFIG_PROFILE" -type f 2>/dev/null | head -1)
-            if [ -z "$CONFIG_FOUND" ]; then
-              CONFIG_FOUND=$(find $GITHUB_WORKSPACE -maxdepth 3 -name "$CONFIG_PROFILE" -type f 2>/dev/null | head -1)
-            fi
-            if [ -n "$CONFIG_FOUND" ]; then
-              echo "✅ 通过模式匹配找到配置文件: $CONFIG_FOUND"
-            fi
-          fi
-          if [ -z "$CONFIG_FOUND" ]; then
-            echo "🔍 显示可用配置文件..."
-            AVAILABLE_CONFIGS=$(find . -maxdepth 3 -name "*.config" -o -name ".config_*" -o -name "config_*" 2>/dev/null | head -5)
-            if [ -z "$AVAILABLE_CONFIGS" ]; then
-              AVAILABLE_CONFIGS=$(find $GITHUB_WORKSPACE -maxdepth 3 -name "*.config" -o -name ".config_*" -o -name "config_*" 2>/dev/null | head -5)
-            fi
-            if [ -n "$AVAILABLE_CONFIGS" ]; then
-              CONFIG_FOUND=$(echo "$AVAILABLE_CONFIGS" | head -1)
-              echo "⚠️ 使用第一个找到的配置文件: $CONFIG_FOUND"
-              echo "可用配置文件:"
-              echo "$AVAILABLE_CONFIGS"
-            fi
-          fi
-          if [ -n "$CONFIG_FOUND" ]; then
+          
+          if [ -n "$CONFIG_FOUND" ] && [ -f "$CONFIG_FOUND" ]; then
             echo "📋 复制配置文件: $CONFIG_FOUND -> .config"
-            if [ -f "$CONFIG_FOUND" ]; then
-              cp "$CONFIG_FOUND" .config
-              echo "🔍 配置文件基本信息:"
-              CONFIG_SIZE=$(stat -c%s .config 2>/dev/null || echo "未知")
-              echo "  - 文件: $(basename $CONFIG_FOUND)"
-              echo "  - 大小: ${CONFIG_SIZE} 字节"
-              echo "  - 来源: $CONFIG_FOUND"
-              TARGET_ARCH=$(grep "CONFIG_TARGET_ARCH_PACKAGES" .config 2>/dev/null | cut -d= -f2 | tr -d '"' | head -1 || echo "未知")
-              echo "  - 架构: $TARGET_ARCH"
-              echo "✅ 配置应用完成"
-            else
-              echo "❌ 错误: 配置文件不存在: $CONFIG_FOUND"
-              echo "🔍 验证文件存在性..."
-              ls -la "$(dirname "$CONFIG_FOUND")" 2>/dev/null || echo "目录不存在"
-              exit 1
-            fi
+            cp "$CONFIG_FOUND" .config
+            echo "✅ 配置应用完成"
           else
             echo "❌ 错误: 无法找到配置文件 '$CONFIG_PROFILE'"
-            echo ""
-            echo "🔍 调试信息:"
-            echo "当前目录: $(pwd)"
-            echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
-            echo "快速配置文件列表:"
-            find . -maxdepth 2 -name "*.config" -o -name ".config_*" 2>/dev/null | head -10 || echo "当前目录无配置文件"
-            find $GITHUB_WORKSPACE -maxdepth 2 -name "*.config" -o -name ".config_*" 2>/dev/null | head -10 || echo "工作区无配置文件"
             exit 1
           fi
-
-      - name: 🔧 修复 ucode 依赖问题
-        run: |
-          cd ${{ env.SOURCE_DIR }}
-          echo "=== 修复 ucode 依赖问题 ==="
-          
-          echo "🔧 确保 ucode 基础包已编译..."
-          # 先编译 ucode 基础包
-          echo "CONFIG_PACKAGE_ucode=y" >> .config
-          echo "CONFIG_PACKAGE_ucode-mod-html=y" >> .config
-          echo "CONFIG_PACKAGE_ucode-mod-lua=y" >> .config
-          
-          # 重新运行配置
-          make defconfig
-          
-          echo "🔄 先编译 ucode 基础包..."
-          # 单独编译 ucode 包以确保依赖正确
-          make package/ucode/compile -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/ucode-compile.log || {
-            echo "⚠️ ucode 基础包编译有警告，继续..."
-          }
-          
-          echo "✅ ucode 依赖修复完成"
 
       - name: 🔧 EXT4文件系统空间紧急修复
         run: |
@@ -581,139 +359,84 @@ jobs:
         timeout-minutes: 10
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 详细自定义功能处理 ==="
+          echo "=== 📦 详细自定义功能处理 ==="
           
-          # 使用配置仓库的绝对路径
           CONFIG_REPO_DIR="$GITHUB_WORKSPACE"
-          CUSTOM_FEATURES_DIR="${{ env.CUSTOM_FEATURES_DIR }}"
+          CUSTOM_FEATURES_DIR="$CONFIG_REPO_DIR/firmware-config/custom-features"
           
-          # 如果环境变量中有设置，使用环境变量，否则尝试默认路径
-          if [ -z "$CUSTOM_FEATURES_DIR" ]; then
-            CUSTOM_FEATURES_DIR="$CONFIG_REPO_DIR/firmware-config/custom-features"
-            echo "ℹ️ 使用默认自定义功能目录: $CUSTOM_FEATURES_DIR"
-          fi
+          echo "🔍 开始验证自定义功能目录结构..."
+          echo "配置仓库目录: $CONFIG_REPO_DIR"
+          echo "自定义功能目录: $CUSTOM_FEATURES_DIR"
           
-          if [ -n "$CUSTOM_FEATURES_DIR" ] && [ -d "$CUSTOM_FEATURES_DIR" ]; then
-            echo "🔍 使用自定义功能目录: $CUSTOM_FEATURES_DIR"
+          # 详细目录验证
+          if [ -d "$CUSTOM_FEATURES_DIR" ]; then
+            echo "✅ 找到自定义功能目录"
+            echo "📁 目录内容:"
+            find "$CUSTOM_FEATURES_DIR" -type f -name "*" 2>/dev/null | while read file; do
+              echo "   - $file"
+            done || echo "   ℹ️ 无文件或无法访问"
             
-            # 验证目录内容
-            echo "📁 目录内容验证:"
-            ls -la "$CUSTOM_FEATURES_DIR" 2>/dev/null || echo "无法访问目录"
-            
-            # 详细处理预编译IPK包
-            echo "📦 详细处理预编译IPK包..."
-            IPK_DIRS=("$CUSTOM_FEATURES_DIR/prebuilt-ipks" "$CUSTOM_FEATURES_DIR/ipks" "$CUSTOM_FEATURES_DIR/packages")
-            IPK_PROCESSED=false
-            
-            for ipk_dir in "${IPK_DIRS[@]}"; do
-              if [ -d "$ipk_dir" ]; then
-                echo "🔍 检查IPK目录: $ipk_dir"
-                IPK_FILES=$(find "$ipk_dir" -name "*.ipk" -type f 2>/dev/null)
-                IPK_COUNT=$(echo "$IPK_FILES" | grep -v '^$' | wc -l 2>/dev/null || echo 0)
-                
-                if [ "$IPK_COUNT" -gt 0 ]; then
-                  echo "✅ 在 $ipk_dir 找到 $IPK_COUNT 个IPK文件"
-                  mkdir -p package/base-files/files/usr/lib/opkg/custom
-                  
-                  echo "📋 IPK文件列表:"
-                  for ipk in $IPK_FILES; do
-                    if [ -f "$ipk" ]; then
-                      filename=$(basename "$ipk")
-                      filesize=$(stat -c%s "$ipk" 2>/dev/null || echo "未知")
-                      echo "  - $filename ($(($filesize/1024))KB)"
-                      cp "$ipk" package/base-files/files/usr/lib/opkg/custom/
-                      echo "    ✅ 已复制到固件"
-                    fi
-                  done
-                  IPK_PROCESSED=true
-                  break
-                else
-                  echo "ℹ️ 目录 $ipk_dir 中没有找到IPK文件"
-                fi
-              fi
-            done
-            
-            if [ "$IPK_PROCESSED" = "false" ]; then
-              echo "ℹ️ 未找到任何IPK文件"
+            # 详细处理预构建IPK包
+            if [ -d "$CUSTOM_FEATURES_DIR/prebuilt-ipks" ]; then
+              echo "📦 处理预构建IPK包..."
+              IPK_COUNT=$(find "$CUSTOM_FEATURES_DIR/prebuilt-ipks" -name "*.ipk" 2>/dev/null | wc -l)
+              echo "📊 找到 $IPK_COUNT 个IPK文件"
+              
+              mkdir -p package/base-files/files/usr/lib/opkg/custom
+              echo "🔄 复制IPK文件到自定义OPKG目录..."
+              find "$CUSTOM_FEATURES_DIR/prebuilt-ipks" -name "*.ipk" -exec cp -v {} package/base-files/files/usr/lib/opkg/custom/ \; 2>/dev/null
+              
+              COPIED_COUNT=$(find package/base-files/files/usr/lib/opkg/custom -name "*.ipk" 2>/dev/null | wc -l)
+              echo "✅ 成功复制 $COPIED_COUNT 个IPK包"
+            else
+              echo "ℹ️ 未找到 prebuilt-ipks 目录"
             fi
             
             # 详细处理自定义脚本
-            echo ""
-            echo "📜 详细处理自定义脚本..."
-            SCRIPT_DIRS=("$CUSTOM_FEATURES_DIR/scripts" "$CUSTOM_FEATURES_DIR/script")
-            SCRIPT_PROCESSED=false
-            
-            for script_dir in "${SCRIPT_DIRS[@]}"; do
-              if [ -d "$script_dir" ]; then
-                echo "🔍 检查脚本目录: $script_dir"
-                SCRIPT_FILES=$(find "$script_dir" -name "*.sh" -type f 2>/dev/null)
-                SCRIPT_COUNT=$(echo "$SCRIPT_FILES" | grep -v '^$' | wc -l 2>/dev/null || echo 0)
-                
-                if [ "$SCRIPT_COUNT" -gt 0 ]; then
-                  echo "✅ 在 $script_dir 找到 $SCRIPT_COUNT 个脚本文件"
-                  
-                  echo "📋 脚本文件列表:"
-                  for script in $SCRIPT_FILES; do
-                    if [ -f "$script" ]; then
-                      filename=$(basename "$script")
-                      echo "  - $filename"
-                      echo "    ▶️ 执行脚本..."
-                      chmod +x "$script"
-                      export SOURCE_DIR="${{ env.SOURCE_DIR }}"
-                      export BUILD_DIR="${{ env.SOURCE_DIR }}/build_dir"
-                      export STAGING_DIR="${{ env.SOURCE_DIR }}/staging_dir"
-                      
-                      if timeout 300 bash "$script"; then
-                        echo "    ✅ 脚本执行成功"
-                      else
-                        EXIT_CODE=$?
-                        if [ $EXIT_CODE -eq 124 ]; then
-                          echo "    ⏰ 脚本执行超时"
-                        else
-                          echo "    ⚠️ 脚本执行失败 (退出码: $EXIT_CODE)"
-                        fi
-                      fi
-                    fi
-                  done
-                  SCRIPT_PROCESSED=true
-                  break
+            if [ -d "$CUSTOM_FEATURES_DIR/scripts" ]; then
+              echo "🔧 处理自定义脚本..."
+              SCRIPT_COUNT=$(find "$CUSTOM_FEATURES_DIR/scripts" -name "*.sh" 2>/dev/null | wc -l)
+              echo "📊 找到 $SCRIPT_COUNT 个脚本文件"
+              
+              echo "🔄 设置脚本执行权限并执行..."
+              find "$CUSTOM_FEATURES_DIR/scripts" -name "*.sh" -exec chmod -v +x {} \; 2>/dev/null
+              
+              # 按顺序执行脚本
+              find "$CUSTOM_FEATURES_DIR/scripts" -name "*.sh" | sort | while read script; do
+                echo "🚀 执行脚本: $script"
+                if bash "$script"; then
+                  echo "✅ 脚本执行成功: $script"
                 else
-                  echo "ℹ️ 目录 $script_dir 中没有找到脚本文件"
-                fi
-              fi
-            done
-            
-            if [ "$SCRIPT_PROCESSED" = "false" ]; then
-              echo "ℹ️ 未找到任何脚本文件"
-            fi
-            
-            # 处理自定义补丁
-            echo ""
-            echo "🔧 处理自定义补丁..."
-            PATCH_FILES=$(find "$CUSTOM_FEATURES_DIR" -name "*.patch" -type f 2>/dev/null)
-            PATCH_COUNT=$(echo "$PATCH_FILES" | grep -v '^$' | wc -l 2>/dev/null || echo 0)
-            
-            if [ "$PATCH_COUNT" -gt 0 ]; then
-              echo "✅ 找到 $PATCH_COUNT 个补丁文件"
-              for patch in $PATCH_FILES; do
-                if [ -f "$patch" ]; then
-                  echo "🔧 应用补丁: $(basename $patch)"
-                  if patch -p1 -N < "$patch"; then
-                    echo "✅ 补丁应用成功: $(basename $patch)"
-                  else
-                    echo "⚠️ 补丁应用失败或已应用: $(basename $patch)"
-                  fi
+                  echo "❌ 脚本执行失败: $script"
                 fi
               done
             else
-              echo "ℹ️ 未找到补丁文件"
+              echo "ℹ️ 未找到 scripts 目录"
             fi
             
+            # 处理自定义补丁
+            if [ -d "$CUSTOM_FEATURES_DIR/patches" ]; then
+              echo "🩹 处理自定义补丁..."
+              PATCH_COUNT=$(find "$CUSTOM_FEATURES_DIR/patches" -name "*.patch" 2>/dev/null | wc -l)
+              echo "📊 找到 $PATCH_COUNT 个补丁文件"
+              
+              find "$CUSTOM_FEATURES_DIR/patches" -name "*.patch" | while read patch; do
+                echo "🔧 应用补丁: $(basename "$patch")"
+                if patch -p1 --forward < "$patch" 2>/dev/null; then
+                  echo "✅ 补丁应用成功: $(basename "$patch")"
+                else
+                  echo "⚠️ 补丁应用可能有问题: $(basename "$patch")"
+                fi
+              done
+            else
+              echo "ℹ️ 未找到 patches 目录"
+            fi
+            
+            echo "🎉 自定义功能处理完成"
           else
-            echo "ℹ️ 无自定义功能目录或目录不存在，跳过自定义功能处理"
-            echo "搜索的目录: $CUSTOM_FEATURES_DIR"
+            echo "ℹ️ 无自定义功能目录，跳过详细处理"
           fi
-          echo "✅ 自定义功能处理完成"
+          echo "✅ 详细自定义功能处理完成"
 
       - name: 📥 快速预下载
         if: github.event.inputs.enable_pre_download == 'true'
@@ -742,55 +465,84 @@ jobs:
           
           echo "✅ 工具链编译完成"
 
-      - name: 🏗️ 智能编译固件
-        timeout-minutes: 150
+      - name: 🏗️ 高效编译固件
+        timeout-minutes: 120
         id: compile-firmware
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "开始智能编译固件..."
+          echo "开始高效编译固件..."
           export FORCE_UNSAFE_CONFIGURE=1
           
           START_TIME=$(date +%s)
           LOG_FILE="${{ env.BUILD_LOG_DIR }}/compile.log"
           
-          echo "🔧 开始智能编译..."
-          # 使用更智能的编译检测
-          set +e  # 禁用立即退出错误模式
-          
-          # 尝试并行编译
-          make -j$(($(nproc) - 1)) V=sc 2>&1 | tee "$LOG_FILE"
-          PARALLEL_EXIT_CODE=${PIPESTATUS[0]}
-          
-          if [ $PARALLEL_EXIT_CODE -eq 0 ]; then
+          echo "🔧 开始并行编译..."
+          if make -j$(($(nproc) - 1)) V=sc 2>&1 | tee "$LOG_FILE"; then
             BUILD_STATUS="success"
             echo "🎉 并行编译成功!"
           else
-            echo "⚠️ 并行编译退出码: $PARALLEL_EXIT_CODE，检查是否为可接受的错误..."
-            
-            # 检查是否有实际的固件生成
-            if find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null | grep -q .; then
-              echo "✅ 检测到固件文件生成，编译视为成功"
+            echo "⚠️ 并行编译失败，尝试单线程编译..."
+            if make -j1 V=s 2>&1 | tee "$LOG_FILE"; then
               BUILD_STATUS="success"
+              echo "🎉 单线程编译成功!"
             else
-              echo "⚠️ 未找到固件文件，尝试单线程编译..."
-              if make -j1 V=s 2>&1 | tee "$LOG_FILE"; then
-                BUILD_STATUS="success"
-                echo "🎉 单线程编译成功!"
-              else
-                BUILD_STATUS="failed"
-                echo "❌ 编译失败"
-                exit 1
-              fi
+              BUILD_STATUS="failed"
+              echo "❌ 编译失败"
+              exit 1
             fi
           fi
-          
-          set -e  # 重新启用错误检测
           
           END_TIME=$(date +%s)
           DURATION=$((END_TIME - START_TIME))
           echo "BUILD_DURATION=$DURATION" >> $GITHUB_ENV
           echo "BUILD_STATUS=$BUILD_STATUS" >> $GITHUB_ENV
           echo "⏱️ 编译耗时: ${DURATION}秒 ($(($DURATION/60))分钟)"
+
+      - name: 🔍 错误日志分析
+        if: always()
+        timeout-minutes: 5
+        run: |
+          echo "=== 🔍 错误日志分析 ==="
+          ERROR_LOG_FILE="${{ env.BUILD_LOG_DIR }}/error-analysis.log"
+          
+          # 分析所有日志文件中的错误
+          echo "🔍 开始分析编译日志中的错误..."
+          
+          # 关键词列表
+          KEYWORDS=("error:" "Error 1" "Error 2" "failed" "No such file" "undefined reference" "cannot find" "not found")
+          
+          for log_file in ${{ env.BUILD_LOG_DIR }}/*.log ${{ env.TOOLCHAIN_LOG_DIR }}/*.log; do
+            if [ -f "$log_file" ]; then
+              echo "📄 分析日志文件: $(basename "$log_file")" | tee -a "$ERROR_LOG_FILE"
+              echo "==========================================" | tee -a "$ERROR_LOG_FILE"
+              
+              for keyword in "${KEYWORDS[@]}"; do
+                if grep -n -i "$keyword" "$log_file" > /dev/null; then
+                  echo "🚨 发现关键词: **$keyword**" | tee -a "$ERROR_LOG_FILE"
+                  echo "------------------------------------------" | tee -a "$ERROR_LOG_FILE"
+                  
+                  # 获取匹配行及其前后5行内容
+                  grep -n -i -A5 -B5 "$keyword" "$log_file" | while IFS= read -r line; do
+                    # 高亮显示包含关键词的行
+                    if echo "$line" | grep -i "$keyword" > /dev/null; then
+                      echo "**$line**" | tee -a "$ERROR_LOG_FILE"
+                    else
+                      echo "$line" | tee -a "$ERROR_LOG_FILE"
+                    fi
+                  done
+                  echo "" | tee -a "$ERROR_LOG_FILE"
+                fi
+              done
+              echo "" | tee -a "$ERROR_LOG_FILE"
+            fi
+          done
+          
+          if [ -f "$ERROR_LOG_FILE" ] && [ -s "$ERROR_LOG_FILE" ]; then
+            echo "📋 错误分析完成，详情已保存到: $ERROR_LOG_FILE"
+            echo "⚠️ 发现编译过程中的错误和警告，请检查上述输出"
+          else
+            echo "✅ 未发现明显的错误信息"
+          fi
 
       - name: 🔍 编译产物验证
         if: env.BUILD_STATUS == 'success'
