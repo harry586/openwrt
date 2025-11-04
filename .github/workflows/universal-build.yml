@@ -79,7 +79,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: ${{ fromJson(github.event.inputs.build_optimization == 'speed' && 240 || github.event.inputs.build_optimization == 'stability' && 300 || 180) }}
+    timeout-minutes: 180
     
     steps:
       - name: 📥 检出配置仓库
@@ -96,15 +96,11 @@ jobs:
             echo "❌ 错误: repositories.json 文件不存在"
             exit 1
           fi
-          
           echo "✅ 找到 repositories.json 文件"
           echo "REPO_JSON_PATH=repositories.json" >> $GITHUB_ENV
-          
-          # 解析默认配置
           DEFAULT_REPO=$(jq -r '.defaults.repository' repositories.json)
           DEFAULT_TIMEOUT=$(jq -r '.defaults.timeout_minutes' repositories.json)
           CUSTOM_FEATURES_DIR=$(jq -r '.custom_features_support.features_directory' repositories.json)
-          
           echo "DEFAULT_REPO=$DEFAULT_REPO" >> $GITHUB_ENV
           echo "CUSTOM_FEATURES_DIR=$CUSTOM_FEATURES_DIR" >> $GITHUB_ENV
           echo "✅ 配置文件解析完成"
@@ -117,128 +113,87 @@ jobs:
           echo "🏷️ 系统版本: $(lsb_release -d | cut -f2)"
           echo "🐧 内核版本: $(uname -r)"
           echo "💻 CPU 架构: $(uname -m)"
-          
           echo "📊 磁盘空间分析:"
-          df -h | grep -E '(/|/mnt)' | while read line; do
-            echo "  $line"
-          done
-          
+          df -h | grep -E '(/|/mnt)' | while read line; do echo "  $line"; done
           echo "💻 CPU 资源:"
           echo "  - 核心数: $(nproc)"
           echo "  - CPU型号: $(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2 | xargs)"
-          
           echo "🧠 内存信息:"
           free -h
-          
-          # 资源检查
           ROOT_AVAILABLE=$(df / | awk 'NR==2 {gsub("G","",$4); print int($4)}')
           MEM_AVAILABLE=$(free -g | awk 'NR==2 {print int($7)}')
-          
           echo "📈 资源状态:"
           echo "  - 根分区可用: ${ROOT_AVAILABLE}GB"
           echo "  - 可用内存: ${MEM_AVAILABLE}GB"
-          
           if [ "$ROOT_AVAILABLE" -lt 5 ]; then
             echo "🚨 警告: 根分区空间不足5GB，可能影响系统稳定性"
           fi
-          
           if [ "$MEM_AVAILABLE" -lt 2 ]; then
             echo "🚨 警告: 可用内存不足2GB，编译可能失败"
           fi
-          
           echo "✅ 资源分析完成"
 
       - name: 💾 增强内存管理与环境设置
         timeout-minutes: 5
         run: |
           echo "=== 💾 增强内存管理与环境设置 ==="
-          
-          # 检查 /mnt 分区空间
           MNT_AVAILABLE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}' 2>/dev/null || echo 0)
           echo "/mnt 分区可用空间: ${MNT_AVAILABLE}GB"
-          
           if [ "$MNT_AVAILABLE" -lt 20 ]; then
             echo "🚨 严重错误: /mnt 分区空间不足20GB，无法编译"
-            echo "💡 建议: 检查工作流运行器的存储配置"
             exit 1
           fi
-          
-          # 创建交换文件
           echo "🔄 创建智能交换文件..."
           SWAP_SIZE="8G"
           if [ "$MNT_AVAILABLE" -gt 50 ]; then
             SWAP_SIZE="12G"
             echo "💡 检测到充足空间，使用 ${SWAP_SIZE} 交换文件"
           fi
-          
           if [ -f /mnt/swapfile ]; then
             echo "🔄 清理现有交换文件..."
             sudo swapoff /mnt/swapfile 2>/dev/null || true
             sudo rm -f /mnt/swapfile 2>/dev/null || true
           fi
-          
           echo "📦 创建 ${SWAP_SIZE} 交换文件..."
-          sudo dd if=/dev/zero of=/mnt/swapfile bs=1M count=$(( ${SWAP_SIZE%G} * 1024 )) status=progress || \
-          sudo fallocate -l $SWAP_SIZE /mnt/swapfile
-          
+          sudo dd if=/dev/zero of=/mnt/swapfile bs=1M count=$(( ${SWAP_SIZE%G} * 1024 )) status=progress || sudo fallocate -l $SWAP_SIZE /mnt/swapfile
           sudo chmod 600 /mnt/swapfile
           sudo mkswap /mnt/swapfile
           sudo swapon /mnt/swapfile
-          
           echo "📊 当前内存状态:"
           free -h
-          
-          # 创建工作目录
           echo "🔧 创建工作目录结构..."
-          sudo mkdir -p ${{ env.SOURCE_DIR }} ${{ env.ARTIFACTS_DIR }} ${{ env.CCACHE_DIR }} \
-            ${{ env.BUILD_LOG_DIR }} ${{ env.DOWNLOAD_DIR }} ${{ env.TOOLCHAIN_LOG_DIR }}
-          
-          sudo chown -R $USER:$USER ${{ env.SOURCE_DIR }} ${{ env.ARTIFACTS_DIR }} ${{ env.CCACHE_DIR }} \
-            ${{ env.BUILD_LOG_DIR }} ${{ env.DOWNLOAD_DIR }} ${{ env.TOOLCHAIN_LOG_DIR }}
-            
+          sudo mkdir -p ${{ env.SOURCE_DIR }} ${{ env.ARTIFACTS_DIR }} ${{ env.CCACHE_DIR }} ${{ env.BUILD_LOG_DIR }} ${{ env.DOWNLOAD_DIR }} ${{ env.TOOLCHAIN_LOG_DIR }}
+          sudo chown -R $USER:$USER ${{ env.SOURCE_DIR }} ${{ env.ARTIFACTS_DIR }} ${{ env.CCACHE_DIR }} ${{ env.BUILD_LOG_DIR }} ${{ env.DOWNLOAD_DIR }} ${{ env.TOOLCHAIN_LOG_DIR }}
           sudo chmod -R 755 ${{ env.SOURCE_DIR }} ${{ env.ARTIFACTS_DIR }}
-          
-          # 设置环境变量
           export FORCE_UNSAFE_CONFIGURE=1
           export TERM=xterm-256color
-          
           echo "✅ 环境设置完成"
 
       - name: 🛠️ 智能编译依赖安装
         timeout-minutes: 10
         run: |
           echo "=== 🛠️ 智能编译依赖安装 ==="
-          
           echo "📦 更新软件包列表..."
           sudo apt-get update
-          
           echo "🔧 安装核心编译工具..."
           sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib
-          
           echo "📚 安装开发库..."
           sudo apt-get install -y gettext git libncurses5-dev libssl-dev python3 python3-pip
           sudo apt-get install -y rsync unzip zlib1g-dev file wget jq ccache
           sudo apt-get install -y libtool-bin automake autoconf pkg-config subversion curl cmake ninja-build
           sudo apt-get install -y libelf-dev libssl-dev zlib1g-dev libxml2-dev liblzma-dev liblzo2-dev
-          
           echo "🌐 安装网络工具..."
           sudo apt-get install -y axel curl wget net-tools
-          
-          # 安装最新 git (如果版本太老)
           CURRENT_GIT_VERSION=$(git --version | cut -d' ' -f3)
           echo "🔍 当前 Git 版本: $CURRENT_GIT_VERSION"
-          
           echo "✅ 依赖安装完成"
 
       - name: ⚡ 高级缓存与性能优化
         timeout-minutes: 3
         run: |
           echo "=== ⚡ 高级缓存与性能优化 ==="
-          
-          # 根据优化策略配置缓存
           OPTIMIZATION_STRATEGY="${{ github.event.inputs.build_optimization }}"
           echo "🎯 编译优化策略: $OPTIMIZATION_STRATEGY"
-          
           case "$OPTIMIZATION_STRATEGY" in
             "speed")
               CCACHE_SIZE="12G"
@@ -256,27 +211,20 @@ jobs:
               echo "⚖️ 平衡模式: CCache=${CCACHE_SIZE}, 并行作业=${PARALLEL_JOBS}"
               ;;
           esac
-          
-          # 设置CCache
           mkdir -p ${{ env.CCACHE_DIR }}
           ccache -M $CCACHE_SIZE
           ccache -o compression=true
           ccache -o compression_level=6
           ccache -o max_files=100000
-          
           echo "CCACHE_DIR=${{ env.CCACHE_DIR }}" >> $GITHUB_ENV
           echo "CCACHE_COMPRESS=1" >> $GITHUB_ENV
           echo "CCACHE_MAXSIZE=$CCACHE_SIZE" >> $GITHUB_ENV
           echo "PARALLEL_JOBS=$PARALLEL_JOBS" >> $GITHUB_ENV
-          
           echo "📊 初始CCache统计:"
           ccache -s
-          
-          # 系统性能调优
           echo "🔧 系统性能调优..."
           echo "vm.swappiness=10" | sudo tee -a /etc/sysctl.conf
           echo "vm.vfs_cache_pressure=50" | sudo tee -a /etc/sysctl.conf
-          
           echo "✅ 性能优化完成"
 
       - name: 🔧 智能源码配置解析
@@ -285,18 +233,12 @@ jobs:
           echo "=== 🔧 智能源码配置解析 ==="
           PRESET="${{ github.event.inputs.source_preset }}"
           REPO_JSON_PATH="${{ env.REPO_JSON_PATH }}"
-          
           echo "🎯 正在解析预设: $PRESET"
-          
-          # 验证预设是否存在
           if ! jq -e ".repositories.$PRESET" "$REPO_JSON_PATH" >/dev/null 2>&1; then
             echo "❌ 错误: 预设 '$PRESET' 在 repositories.json 中不存在"
-            echo "📋 可用的预设:"
             jq -r '.repositories | keys_unsorted[]' "$REPO_JSON_PATH"
             exit 1
           fi
-          
-          # 提取仓库详细信息
           SOURCE_URL=$(jq -r ".repositories.$PRESET.url" "$REPO_JSON_PATH")
           DESCRIPTION=$(jq -r ".repositories.$PRESET.description // \"未知\"" "$REPO_JSON_PATH")
           RECOMMENDED_BRANCH=$(jq -r ".repositories.$PRESET.recommended_branch" "$REPO_JSON_PATH")
@@ -306,21 +248,16 @@ jobs:
           BUILD_TIPS=$(jq -r ".repositories.$PRESET.build_tips // \"无\"" "$REPO_JSON_PATH")
           FEEDS_CONFIG=$(jq -r ".repositories.$PRESET.feeds_config | to_entries | map(\"\(.key)=\(.value)\") | join(\";\")" "$REPO_JSON_PATH" 2>/dev/null || echo "")
           BRANCH_FEEDS_MAPPING=$(jq -r ".repositories.$PRESET.branch_feeds_mapping | to_entries | map(\"\(.key)=\(.value)\") | join(\";\")" "$REPO_JSON_PATH" 2>/dev/null || echo "")
-          
-          # 分支处理逻辑
           BRANCH="${{ github.event.inputs.source_branch }}"
           if [ "$BRANCH" = "auto" ]; then
             BRANCH="$RECOMMENDED_BRANCH"
             echo "🤖 自动选择推荐分支: $BRANCH"
           else
-            # 验证用户指定的分支是否在稳定分支列表中
             if [ -n "$STABLE_BRANCHES" ] && ! echo "$STABLE_BRANCHES" | grep -q "$BRANCH"; then
               echo "⚠️ 警告: 指定分支 '$BRANCH' 不在已知稳定分支列表中"
               echo "📋 推荐的稳定分支: $STABLE_BRANCHES"
             fi
           fi
-          
-          # 设置环境变量
           echo "SOURCE_URL=$SOURCE_URL" >> $GITHUB_ENV
           echo "SOURCE_BRANCH=$BRANCH" >> $GITHUB_ENV
           echo "SOURCE_PRESET=$PRESET" >> $GITHUB_ENV
@@ -330,8 +267,6 @@ jobs:
           echo "SOURCE_BUILD_TIPS=$BUILD_TIPS" >> $GITHUB_ENV
           echo "SOURCE_FEEDS_CONFIG=$FEEDS_CONFIG" >> $GITHUB_ENV
           echo "SOURCE_BRANCH_FEEDS_MAPPING=$BRANCH_FEEDS_MAPPING" >> $GITHUB_ENV
-          
-          # 输出详细信息
           echo "✅ 源码配置解析完成"
           echo "📦 仓库详细信息:"
           echo "  - URL: $SOURCE_URL"
@@ -351,23 +286,16 @@ jobs:
         run: |
           echo "=== 📥 智能源码获取与验证 ==="
           cd ${{ env.SOURCE_DIR }}
-          
           REQUESTED_BRANCH="${{ env.SOURCE_BRANCH }}"
           SOURCE_URL="${{ env.SOURCE_URL }}"
           PRESET="${{ env.SOURCE_PRESET }}"
-          
           echo "🎯 目标仓库: $SOURCE_URL"
           echo "🎯 请求分支: $REQUESTED_BRANCH"
           echo "🎯 预设类型: $PRESET"
-          
-          # 清理目录
           echo "🧹 清理工作目录..."
           rm -rf .[!.]* * 2>/dev/null || true
-          
           CLONE_SUCCESS=false
           BRANCH_STRATEGIES=("$REQUESTED_BRANCH")
-          
-          # 根据预设添加特定的分支策略
           case "$PRESET" in
             "immortalwrt")
               BRANCH_STRATEGIES+=("openwrt-21.02" "openwrt-23.05" "master" "main")
@@ -379,30 +307,23 @@ jobs:
               BRANCH_STRATEGIES+=("master" "main")
               ;;
           esac
-          
-          # 去重
           BRANCH_STRATEGIES=($(printf "%s\n" "${BRANCH_STRATEGIES[@]}" | sort -u))
-          
           echo "🔄 将尝试的分支策略: ${BRANCH_STRATEGIES[*]}"
-          
           for branch in "${BRANCH_STRATEGIES[@]}"; do
             echo "🔄 尝试分支: $branch"
             rm -rf .[!.]* * 2>/dev/null || true
-            
             if git clone --depth 1 --branch "$branch" "$SOURCE_URL" . 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/clone-$branch.log; then
               if [ -d ".git" ] && [ -f "scripts/feeds" ]; then
                 ACTUAL_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
                 COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
                 COMMIT_DATE=$(git log -1 --format=%ci 2>/dev/null || echo "unknown")
                 COMMIT_MESSAGE=$(git log -1 --format=%s 2>/dev/null || echo "unknown")
-                
                 echo "✅ 克隆成功!"
                 echo "📊 克隆详情:"
                 echo "  - 实际分支: $ACTUAL_BRANCH"
                 echo "  - 提交哈希: $COMMIT_HASH"
                 echo "  - 提交时间: $COMMIT_DATE"
                 echo "  - 提交信息: $COMMIT_MESSAGE"
-                
                 CLONE_SUCCESS=true
                 break
               else
@@ -414,7 +335,6 @@ jobs:
               continue
             fi
           done
-          
           if [ "$CLONE_SUCCESS" = "false" ]; then
             echo "❌ 所有分支策略都失败，尝试默认分支..."
             rm -rf .[!.]* * 2>/dev/null || true
@@ -429,15 +349,11 @@ jobs:
               fi
             fi
           fi
-          
           if [ "$CLONE_SUCCESS" = "false" ]; then
             echo "❌ 所有克隆策略都失败"
-            echo "🔍 最后尝试的日志:"
             tail -20 ${{ env.BUILD_LOG_DIR }}/clone-*.log 2>/dev/null || echo "无日志文件"
             exit 1
           fi
-          
-          # 验证源码完整性
           echo "🔍 验证源码完整性..."
           REQUIRED_FILES=("scripts/feeds" "rules.mk" "Config.in" "Makefile")
           for file in "${REQUIRED_FILES[@]}"; do
@@ -447,13 +363,10 @@ jobs:
             fi
           done
           echo "✅ 源码完整性验证通过"
-          
-          # 设置环境变量
           echo "ACTUAL_BRANCH=$ACTUAL_BRANCH" >> $GITHUB_ENV
           echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
           echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_ENV
           echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_ENV
-          
           echo "✅ 源码获取完成"
 
       - name: 🔄 智能源码初始化与Feeds修复
@@ -461,24 +374,17 @@ jobs:
         run: |
           cd ${{ env.SOURCE_DIR }}
           echo "=== 🔄 智能源码初始化与Feeds修复 ==="
-          
           if [ ! -f "scripts/feeds" ]; then
             echo "❌ 错误: scripts/feeds 文件不存在"
             exit 1
           fi
-          
           echo "🔧 检测源码类型并配置Feeds..."
           SOURCE_PRESET="${{ env.SOURCE_PRESET }}"
           ACTUAL_BRANCH="${{ env.ACTUAL_BRANCH }}"
           FEEDS_CONFIG="${{ env.SOURCE_FEEDS_CONFIG }}"
           BRANCH_FEEDS_MAPPING="${{ env.SOURCE_BRANCH_FEEDS_MAPPING }}"
-          
           echo "📦 源码类型: $SOURCE_PRESET, 实际分支: $ACTUAL_BRANCH"
-          
-          # 智能Feeds配置
           echo "🎯 生成智能Feeds配置..."
-          
-          # 如果有分支-Feeds映射，使用映射
           FEEDS_BRANCH=""
           if [ -n "$BRANCH_FEEDS_MAPPING" ]; then
             IFS=';' read -ra MAPPINGS <<< "$BRANCH_FEEDS_MAPPING"
@@ -491,8 +397,6 @@ jobs:
               fi
             done
           fi
-          
-          # 生成feeds.conf
           if [ -n "$FEEDS_CONFIG" ]; then
             echo "📋 使用预设Feeds配置..."
             rm -f feeds.conf
@@ -506,7 +410,6 @@ jobs:
               fi
             done
           else
-            # 回退到默认配置
             echo "📋 使用默认Feeds配置..."
             case "$SOURCE_PRESET" in
               "immortalwrt")
@@ -518,45 +421,33 @@ jobs:
                 elif [[ "$ACTUAL_BRANCH" == *"23.05"* ]]; then
                   BRANCH_SUFFIX=";openwrt-23.05"
                 fi
-                
-                cat > feeds.conf << EOF
-src-git packages https://github.com/immortalwrt/packages.git$BRANCH_SUFFIX
-src-git luci https://github.com/immortalwrt/luci.git$BRANCH_SUFFIX
-src-git routing https://github.com/immortalwrt/routing.git$BRANCH_SUFFIX
-src-git telephony https://github.com/immortalwrt/telephony.git$BRANCH_SUFFIX
-EOF
+                echo "src-git packages https://github.com/immortalwrt/packages.git$BRANCH_SUFFIX" > feeds.conf
+                echo "src-git luci https://github.com/immortalwrt/luci.git$BRANCH_SUFFIX" >> feeds.conf
+                echo "src-git routing https://github.com/immortalwrt/routing.git$BRANCH_SUFFIX" >> feeds.conf
+                echo "src-git telephony https://github.com/immortalwrt/telephony.git$BRANCH_SUFFIX" >> feeds.conf
                 ;;
               "openwrt")
-                cat > feeds.conf << 'EOF'
-src-git packages https://git.openwrt.org/feed/packages.git
-src-git luci https://git.openwrt.org/project/luci.git
-src-git routing https://git.openwrt.org/feed/routing.git
-src-git telephony https://git.openwrt.org/feed/telephony.git
-EOF
+                echo "src-git packages https://git.openwrt.org/feed/packages.git" > feeds.conf
+                echo "src-git luci https://git.openwrt.org/project/luci.git" >> feeds.conf
+                echo "src-git routing https://git.openwrt.org/feed/routing.git" >> feeds.conf
+                echo "src-git telephony https://git.openwrt.org/feed/telephony.git" >> feeds.conf
                 ;;
               "lede")
-                cat > feeds.conf << 'EOF'
-src-git packages https://github.com/coolsnowwolf/packages.git
-src-git luci https://github.com/coolsnowwolf/luci.git
-src-git routing https://github.com/coolsnowwolf/routing.git
-src-git telephony https://github.com/coolsnowwolf/telephony.git
-EOF
+                echo "src-git packages https://github.com/coolsnowwolf/packages.git" > feeds.conf
+                echo "src-git luci https://github.com/coolsnowwolf/luci.git" >> feeds.conf
+                echo "src-git routing https://github.com/coolsnowwolf/routing.git" >> feeds.conf
+                echo "src-git telephony https://github.com/coolsnowwolf/telephony.git" >> feeds.conf
                 ;;
             esac
           fi
-          
           echo "📋 Feeds配置内容:"
           cat feeds.conf
-          
           echo "🔄 开始更新Feeds..."
           MAX_RETRIES=3
           RETRY_COUNT=0
           FEEDS_SUCCESS=false
-          
           while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
             echo "🔄 尝试更新Feeds (第 $((RETRY_COUNT+1)) 次)..."
-            
-            # 更新feeds并捕获输出
             if ./scripts/feeds update -a 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/feeds-update-$RETRY_COUNT.log; then
               echo "✅ Feeds更新成功!"
               FEEDS_SUCCESS=true
@@ -564,12 +455,9 @@ EOF
             else
               RETRY_COUNT=$((RETRY_COUNT+1))
               echo "⚠️ Feeds更新失败，准备重试 ($RETRY_COUNT/$MAX_RETRIES)..."
-              
               if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
                 echo "⏳ 等待5秒后重试..."
                 sleep 5
-                
-                # 如果是网络问题，尝试使用GitHub镜像源
                 if [ $RETRY_COUNT -eq 1 ]; then
                   echo "🔄 尝试使用GitHub镜像源..."
                   sed -i 's|git.openwrt.org|github.com/openwrt|g' feeds.conf
@@ -580,42 +468,31 @@ EOF
               fi
             fi
           done
-          
           if [ "$FEEDS_SUCCESS" = "false" ]; then
             echo "❌ Feeds更新失败，尝试最小化feeds配置..."
-            # 使用最小化feeds配置
-            cat > feeds.conf << 'EOF'
-src-git packages https://github.com/openwrt/packages.git
-src-git luci https://github.com/openwrt/luci.git
-EOF
+            echo "src-git packages https://github.com/openwrt/packages.git" > feeds.conf
+            echo "src-git luci https://github.com/openwrt/luci.git" >> feeds.conf
             ./scripts/feeds update -a || {
               echo "❌ 最小化feeds配置也失败"
-              echo "🔍 分析feeds错误日志..."
               if [ -f "${{ env.BUILD_LOG_DIR }}/feeds-update-0.log" ]; then
                 grep -n -i -A3 -B3 "error\|failed\|not found" ${{ env.BUILD_LOG_DIR }}/feeds-update-0.log | head -20
               fi
               exit 1
             }
           fi
-          
           echo "📦 安装Feeds..."
           if ! ./scripts/feeds install -a 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/feeds-install.log; then
             echo "⚠️ Feeds安装有警告，但继续执行..."
           fi
-          
           echo "🔧 修复可能的包配置问题..."
-          # 修复常见包的问题
           COMMON_PACKAGES=("zstd" "zsh" "openssl" "libubox")
           for pkg in "${COMMON_PACKAGES[@]}"; do
             if [ -f "feeds/packages/utils/$pkg/Makefile" ]; then
               echo "🛠️ 检查 $pkg 配置..."
-              # 跳过哈希验证
               sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/' feeds/packages/utils/$pkg/Makefile 2>/dev/null || true
-              # 修复可能的版本问题
               sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=latest/' feeds/packages/utils/$pkg/Makefile 2>/dev/null || true
             fi
           done
-          
           echo "✅ 源码初始化完成"
 
       - name: 🎯 快速配置文件查找与应用
@@ -623,14 +500,10 @@ EOF
         run: |
           cd ${{ env.SOURCE_DIR }}
           echo "=== 🎯 快速配置文件查找与应用 ==="
-          
           CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
           echo "🔍 查找配置文件: $CONFIG_PROFILE"
-          
           CONFIG_FOUND=""
           SEARCH_PATHS=(".", "..", "$GITHUB_WORKSPACE", "configs", "../configs")
-          
-          # 多路径查找
           for path in "${SEARCH_PATHS[@]}"; do
             if [ -f "$path/$CONFIG_PROFILE" ]; then
               CONFIG_FOUND="$path/$CONFIG_PROFILE"
@@ -638,8 +511,6 @@ EOF
               break
             fi
           done
-          
-          # 如果没找到，尝试模糊搜索
           if [ -z "$CONFIG_FOUND" ]; then
             echo "🔍 精确查找失败，尝试模糊搜索..."
             CONFIG_FOUND=$(find . -maxdepth 3 -name "*$CONFIG_PROFILE*" -type f 2>/dev/null | head -1)
@@ -647,13 +518,10 @@ EOF
               echo "✅ 模糊搜索找到: $CONFIG_FOUND"
             fi
           fi
-          
           if [ -n "$CONFIG_FOUND" ] && [ -f "$CONFIG_FOUND" ]; then
             echo "📋 复制配置文件: $CONFIG_FOUND -> .config"
             cp "$CONFIG_FOUND" .config
             echo "✅ 配置应用完成"
-            
-            # 验证配置基本结构
             if grep -q "CONFIG_TARGET" .config && grep -q "CONFIG_PACKAGE" .config; then
               echo "✅ 配置文件基本结构验证通过"
             else
@@ -662,7 +530,6 @@ EOF
           else
             echo "❌ 错误: 无法找到配置文件 '$CONFIG_PROFILE'"
             echo "🔍 搜索路径: ${SEARCH_PATHS[*]}"
-            echo "📁 当前目录内容:"
             ls -la
             exit 1
           fi
@@ -671,31 +538,21 @@ EOF
         run: |
           cd ${{ env.SOURCE_DIR }}
           echo "=== 🔧 EXT4文件系统空间紧急修复 ==="
-          
           echo "🔧 设置分区大小: 内核=20MB, 根文件系统=96MB"
           sed -i 's/CONFIG_TARGET_KERNEL_PARTSIZE=.*/CONFIG_TARGET_KERNEL_PARTSIZE=20/' .config 2>/dev/null || true
           sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=96/' .config 2>/dev/null || true
-          
-          # 确保配置存在
           echo "CONFIG_TARGET_KERNEL_PARTSIZE=20" >> .config
           echo "CONFIG_TARGET_ROOTFS_PARTSIZE=96" >> .config
-          
-          # 启用必要的文件系统
           echo "CONFIG_TARGET_ROOTFS_EXT4FS=y" >> .config
           echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-          
-          # 禁用不必要的调试信息以节省空间
           echo "# CONFIG_DEBUG_INFO is not set" >> .config
           echo "# CONFIG_DEBUG_KERNEL is not set" >> .config
-          
           echo "✅ 分区大小修复完成"
 
       - name: 🔧 设备镜像配置修复
         run: |
           cd ${{ env.SOURCE_DIR }}
           echo "=== 🔧 设备镜像配置修复 ==="
-          
-          # 确保设备配置正确
           if grep -q "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u" .config; then
             echo "✅ 找到 ASUS RT-AC42U 设备配置"
             sed -i 's/# CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u is not set/CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y/' .config
@@ -703,24 +560,18 @@ EOF
             echo "🔧 添加 ASUS RT-AC42U 设备配置"
             echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
           fi
-          
-          # 启用镜像生成
           echo "CONFIG_TARGET_IMAGES_INCLUDE_FACTORY=y" >> .config
           echo "CONFIG_TARGET_IMAGES_INCLUDE_SYSUPGRADE=y" >> .config
           echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
-          
-          # 确保目标架构正确
           if ! grep -q "CONFIG_TARGET_ipq40xx" .config; then
             echo "🔧 设置目标架构为 ipq40xx"
             echo "CONFIG_TARGET_ipq40xx=y" >> .config
             echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
           fi
-          
           echo "🔄 运行 defconfig..."
           make defconfig >/dev/null 2>&1 || {
             echo "⚠️ defconfig 有警告，但继续执行..."
           }
-          
           echo "✅ 设备镜像配置修复完成"
 
       - name: 🔧 快速Samba验证
@@ -729,7 +580,6 @@ EOF
         run: |
           cd ${{ env.SOURCE_DIR }}
           echo "=== 🔧 快速Samba验证 ==="
-          
           echo "🔍 检查Samba配置状态..."
           if grep -q "CONFIG_PACKAGE_samba4-server=y" .config; then
             echo "✅ Samba4已在配置中启用"
@@ -741,7 +591,6 @@ EOF
             echo "CONFIG_PACKAGE_luci-app-samba4=y" >> .config
             echo "✅ Samba4配置已添加"
           fi
-          
           echo "✅ Samba验证完成"
 
       - name: 📦 详细自定义功能处理
@@ -750,15 +599,11 @@ EOF
         run: |
           cd ${{ env.SOURCE_DIR }}
           echo "=== 📦 详细自定义功能处理 ==="
-          
           CONFIG_REPO_DIR="$GITHUB_WORKSPACE"
           CUSTOM_FEATURES_DIR="$CONFIG_REPO_DIR/${{ env.CUSTOM_FEATURES_DIR }}"
-          
           echo "🔍 开始验证自定义功能目录结构..."
           echo "配置仓库目录: $CONFIG_REPO_DIR"
           echo "自定义功能目录: $CUSTOM_FEATURES_DIR"
-          
-          # 详细目录验证
           if [ -d "$CUSTOM_FEATURES_DIR" ]; then
             echo "✅ 找到自定义功能目录"
             echo "📁 目录结构:"
@@ -766,46 +611,33 @@ EOF
               size=$(du -h "$file" | cut -f1)
               echo "   - $file ($size)"
             done || echo "   ℹ️ 无文件或无法访问"
-            
-            # 详细处理预构建IPK包
             if [ -d "$CUSTOM_FEATURES_DIR/prebuilt-ipks" ]; then
               echo "📦 处理预构建IPK包..."
               IPK_COUNT=$(find "$CUSTOM_FEATURES_DIR/prebuilt-ipks" -name "*.ipk" 2>/dev/null | wc -l)
               echo "📊 找到 $IPK_COUNT 个IPK文件"
-              
               mkdir -p package/base-files/files/usr/lib/opkg/custom
               echo "🔄 复制IPK文件到自定义OPKG目录..."
               find "$CUSTOM_FEATURES_DIR/prebuilt-ipks" -name "*.ipk" -exec cp -v {} package/base-files/files/usr/lib/opkg/custom/ \; 2>/dev/null
-              
               COPIED_COUNT=$(find package/base-files/files/usr/lib/opkg/custom -name "*.ipk" 2>/dev/null | wc -l)
               echo "✅ 成功复制 $COPIED_COUNT 个IPK包"
-              
-              # 创建安装脚本
-              cat > package/base-files/files/etc/uci-defaults/99-custom-ipks << 'EOF'
-#!/bin/sh
-[ -d "/usr/lib/opkg/custom" ] && {
-    for ipk in /usr/lib/opkg/custom/*.ipk; do
-        [ -f "$ipk" ] && opkg install "$ipk"
-    done
-}
-exit 0
-EOF
+              echo '#!/bin/sh' > package/base-files/files/etc/uci-defaults/99-custom-ipks
+              echo '[ -d "/usr/lib/opkg/custom" ] && {' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
+              echo '    for ipk in /usr/lib/opkg/custom/*.ipk; do' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
+              echo '        [ -f "$ipk" ] && opkg install "$ipk"' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
+              echo '    done' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
+              echo '}' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
+              echo 'exit 0' >> package/base-files/files/etc/uci-defaults/99-custom-ipks
               chmod +x package/base-files/files/etc/uci-defaults/99-custom-ipks
               echo "✅ 创建IPK自动安装脚本"
             else
               echo "ℹ️ 未找到 prebuilt-ipks 目录"
             fi
-            
-            # 详细处理自定义脚本
             if [ -d "$CUSTOM_FEATURES_DIR/scripts" ]; then
               echo "🔧 处理自定义脚本..."
               SCRIPT_COUNT=$(find "$CUSTOM_FEATURES_DIR/scripts" -name "*.sh" 2>/dev/null | wc -l)
               echo "📊 找到 $SCRIPT_COUNT 个脚本文件"
-              
               echo "🔄 设置脚本执行权限并执行..."
               find "$CUSTOM_FEATURES_DIR/scripts" -name "*.sh" -exec chmod -v +x {} \; 2>/dev/null
-              
-              # 按顺序执行脚本
               find "$CUSTOM_FEATURES_DIR/scripts" -name "*.sh" | sort | while read script; do
                 echo "🚀 执行脚本: $(basename "$script")"
                 echo "--- 脚本输出开始 ---"
@@ -821,13 +653,10 @@ EOF
             else
               echo "ℹ️ 未找到 scripts 目录"
             fi
-            
-            # 处理自定义补丁
             if [ -d "$CUSTOM_FEATURES_DIR/patches" ]; then
               echo "🩹 处理自定义补丁..."
               PATCH_COUNT=$(find "$CUSTOM_FEATURES_DIR/patches" -name "*.patch" 2>/dev/null | wc -l)
               echo "📊 找到 $PATCH_COUNT 个补丁文件"
-              
               find "$CUSTOM_FEATURES_DIR/patches" -name "*.patch" | sort | while read patch; do
                 echo "🔧 应用补丁: $(basename "$patch")"
                 if patch -p1 --forward -r - < "$patch" 2>&1; then
@@ -840,8 +669,6 @@ EOF
             else
               echo "ℹ️ 未找到 patches 目录"
             fi
-            
-            # 处理自定义配置
             if [ -d "$CUSTOM_FEATURES_DIR/configs" ]; then
               echo "⚙️ 处理自定义配置..."
               find "$CUSTOM_FEATURES_DIR/configs" -name "*" -type f | while read config; do
@@ -852,7 +679,6 @@ EOF
                 echo "✅ 复制配置: $rel_path"
               done
             fi
-            
             echo "🎉 自定义功能处理完成"
           else
             echo "ℹ️ 无自定义功能目录，跳过详细处理"
@@ -865,21 +691,16 @@ EOF
         run: |
           cd ${{ env.SOURCE_DIR }}
           echo "=== 📥 快速预下载 ==="
-          
           echo "📥 开始快速预下载..."
           echo "🔧 使用并行下载: ${{ env.PARALLEL_JOBS }} 个任务"
-          
-          # 创建下载目录
           mkdir -p ${{ env.DOWNLOAD_DIR }}
           [ -d "dl" ] && rm -rf dl
           ln -sf ${{ env.DOWNLOAD_DIR }} dl
-          
           DOWNLOAD_LOG="${{ env.BUILD_LOG_DIR }}/download.log"
           if make download -j${{ env.PARALLEL_JOBS }} V=sc 2>&1 | tee "$DOWNLOAD_LOG"; then
             echo "✅ 预下载成功完成"
           else
             echo "⚠️ 下载有警告但继续..."
-            # 检查是否有严重错误
             if grep -q "Error [0-9]" "$DOWNLOAD_LOG"; then
               echo "🚨 发现下载错误，尝试单线程下载..."
               if make download -j1 V=s 2>&1 | tee "$DOWNLOAD_LOG"; then
@@ -890,12 +711,10 @@ EOF
               fi
             fi
           fi
-          
           echo "📊 下载结果统计:"
           find dl/ -type f 2>/dev/null | wc -l
           echo "📦 下载文件总大小:"
           du -sh dl/ 2>/dev/null || echo "无法统计"
-          
           echo "✅ 预下载完成"
 
       - name: 🛠️ 快速工具链编译
@@ -903,13 +722,10 @@ EOF
         run: |
           cd ${{ env.SOURCE_DIR }}
           echo "=== 🛠️ 快速工具链编译 ==="
-          
           echo "🔧 开始工具链编译..."
           echo "⚡ 使用并行编译: ${{ env.PARALLEL_JOBS }} 个任务"
-          
           TOOLCHAIN_LOG="${{ env.TOOLCHAIN_LOG_DIR }}/toolchain.log"
           START_TIME=$(date +%s)
-          
           if make toolchain/compile -j${{ env.PARALLEL_JOBS }} V=sc 2>&1 | tee "$TOOLCHAIN_LOG"; then
             END_TIME=$(date +%s)
             DURATION=$((END_TIME - START_TIME))
@@ -917,7 +733,6 @@ EOF
             echo "⏱️ 工具链编译耗时: ${DURATION}秒 ($(($DURATION/60))分钟)"
           else
             echo "⚠️ 工具链编译有警告，但继续执行..."
-            # 检查工具链是否基本可用
             if [ -d "staging_dir/toolchain" ]; then
               echo "✅ 工具链目录存在，继续执行"
             else
@@ -925,10 +740,8 @@ EOF
               exit 1
             fi
           fi
-          
           echo "📊 工具链状态:"
           find staging_dir/toolchain-* -name "*-gcc" 2>/dev/null | head -1 | xargs ls -la 2>/dev/null || echo "⚠️ 无法找到工具链"
-          
           echo "✅ 工具链编译完成"
 
       - name: 🏗️ 高效编译固件
@@ -937,20 +750,14 @@ EOF
         run: |
           cd ${{ env.SOURCE_DIR }}
           echo "=== 🏗️ 高效编译固件 ==="
-          
           export FORCE_UNSAFE_CONFIGURE=1
-          
           START_TIME=$(date +%s)
           LOG_FILE="${{ env.BUILD_LOG_DIR }}/compile.log"
           PARALLEL_JOBS="${{ env.PARALLEL_JOBS }}"
-          
           echo "🔧 开始并行编译..."
           echo "⚡ 并行任务数: $PARALLEL_JOBS"
           echo "🎯 优化策略: ${{ github.event.inputs.build_optimization }}"
-          
-          # 编译状态跟踪
           BUILD_STATUS="unknown"
-          
           echo "🚀 第一阶段: 并行编译..."
           if make -j$PARALLEL_JOBS V=sc 2>&1 | tee "$LOG_FILE"; then
             BUILD_STATUS="success"
@@ -964,20 +771,15 @@ EOF
             else
               BUILD_STATUS="failed"
               echo "❌ 编译失败"
-              
-              # 分析失败原因
               echo "🔍 编译失败分析:"
               grep -i -A5 -B5 "error:\|Error [0-9]\|failed\|No such file\|undefined reference\|cannot find\|not found" "$LOG_FILE" | head -50
-              
               exit 1
             fi
           fi
-          
           END_TIME=$(date +%s)
           DURATION=$((END_TIME - START_TIME))
           echo "BUILD_DURATION=$DURATION" >> $GITHUB_ENV
           echo "BUILD_STATUS=$BUILD_STATUS" >> $GITHUB_ENV
-          
           echo "⏱️ 编译总耗时: ${DURATION}秒 ($(($DURATION/60))分钟)"
           echo "📊 CCache 统计:"
           ccache -s
@@ -988,26 +790,17 @@ EOF
         run: |
           echo "=== 🔍 错误日志分析 ==="
           ERROR_LOG_FILE="${{ env.ARTIFACTS_DIR }}/error-analysis.log"
-          
-          # 分析所有日志文件中的错误
           echo "🔍 开始分析编译日志中的错误..."
-          
-          # 关键词列表
           KEYWORDS=("error:" "Error 1" "Error 2" "failed" "No such file" "undefined reference" "cannot find" "not found" "fatal:")
-          
           for log_file in ${{ env.BUILD_LOG_DIR }}/*.log ${{ env.TOOLCHAIN_LOG_DIR }}/*.log; do
             if [ -f "$log_file" ]; then
               echo "📄 分析日志文件: $(basename "$log_file")" | tee -a "$ERROR_LOG_FILE"
               echo "==========================================" | tee -a "$ERROR_LOG_FILE"
-              
               for keyword in "${KEYWORDS[@]}"; do
                 if grep -n -i "$keyword" "$log_file" > /dev/null; then
                   echo "🚨 发现关键词: **$keyword**" | tee -a "$ERROR_LOG_FILE"
                   echo "------------------------------------------" | tee -a "$ERROR_LOG_FILE"
-                  
-                  # 获取匹配行及其前后5行内容
                   grep -n -i -A5 -B5 "$keyword" "$log_file" | while IFS= read -r line; do
-                    # 高亮显示包含关键词的行
                     if echo "$line" | grep -i "$keyword" > /dev/null; then
                       echo "**$line**" | tee -a "$ERROR_LOG_FILE"
                     else
@@ -1020,7 +813,6 @@ EOF
               echo "" | tee -a "$ERROR_LOG_FILE"
             fi
           done
-          
           if [ -f "$ERROR_LOG_FILE" ] && [ -s "$ERROR_LOG_FILE" ]; then
             ERROR_COUNT=$(grep -c "🚨 发现关键词" "$ERROR_LOG_FILE" || echo "0")
             echo "📋 错误分析完成，发现 $ERROR_COUNT 类错误"
@@ -1035,21 +827,13 @@ EOF
         run: |
           cd ${{ env.SOURCE_DIR }}
           echo "=== 🔍 编译产物验证 ==="
-          
           mkdir -p ${{ env.ARTIFACTS_DIR }}/firmware
-          
           echo "🔍 搜索固件文件..."
           if [ -d "bin/targets" ]; then
             echo "✅ 找到固件输出目录"
-            
-            # 复制所有固件文件
             cp -r bin/targets/* ${{ env.ARTIFACTS_DIR }}/firmware/ 2>/dev/null || true
-            
-            # 统计固件文件
             FIRMWARE_COUNT=$(find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" 2>/dev/null | wc -l)
             echo "📊 找到 $FIRMWARE_COUNT 个固件文件"
-            
-            # 检查ASUS特定镜像
             ASUS_IMAGES=$(find bin/targets -name "*asus_rt-ac42u*" -type f 2>/dev/null)
             if [ -n "$ASUS_IMAGES" ]; then
               echo "✅ ASUS RT-AC42U 镜像已生成:"
@@ -1065,17 +849,12 @@ EOF
                 echo "  - $(basename "$img") ($size)"
               done
             fi
-            
-            # 生成文件清单
             find bin/targets -type f > ${{ env.ARTIFACTS_DIR }}/firmware/filelist.txt 2>/dev/null || true
-            
           else
             echo "❌ 未找到固件输出目录"
-            echo "📁 当前目录内容:"
             ls -la
             exit 1
           fi
-          
           echo "FIRMWARE_COUNT=$FIRMWARE_COUNT" >> $GITHUB_ENV
           echo "✅ 产物验证完成"
 
@@ -1086,35 +865,25 @@ EOF
           echo "=== 📋 快速日志收集 ==="
           echo "开始快速日志收集..."
           mkdir -p ${{ env.ARTIFACTS_DIR }}/logs
-          
-          # 收集构建日志
           if [ -d "${{ env.BUILD_LOG_DIR }}" ]; then
             cp ${{ env.BUILD_LOG_DIR }}/*.log ${{ env.ARTIFACTS_DIR }}/logs/ 2>/dev/null || true
             echo "✅ 构建日志收集完成"
           fi
-          
-          # 收集工具链日志
           if [ -d "${{ env.TOOLCHAIN_LOG_DIR }}" ]; then
             cp ${{ env.TOOLCHAIN_LOG_DIR }}/*.log ${{ env.ARTIFACTS_DIR }}/logs/ 2>/dev/null || true
             echo "✅ 工具链日志收集完成"
           fi
-          
-          # 收集最终配置
           if [ -d "${{ env.SOURCE_DIR }}" ]; then
             cd ${{ env.SOURCE_DIR }}
             cp .config ${{ env.ARTIFACTS_DIR }}/logs/final-config.txt 2>/dev/null || true
             echo "✅ 最终配置收集完成"
           fi
-          
-          # 收集CCache统计
           ccache -s > ${{ env.ARTIFACTS_DIR }}/logs/ccache-stats.txt 2>/dev/null || true
-          
           echo "📊 收集的日志文件:"
           find ${{ env.ARTIFACTS_DIR }}/logs -type f -name "*.log" -o -name "*.txt" | while read file; do
             size=$(du -h "$file" | cut -f1)
             echo "  - $(basename "$file") ($size)"
           done
-          
           echo "✅ 日志收集完成"
 
       - name: 💾 上传构建产物
@@ -1132,23 +901,16 @@ EOF
         run: |
           echo "=== 🧹 智能清理 ==="
           echo "开始智能清理..."
-          
-          # 禁用交换文件
           sudo swapoff /mnt/swapfile 2>/dev/null || true
           sudo rm -f /mnt/swapfile 2>/dev/null || true
-          
-          # 清理CCache（保留缓存以供下次使用）
           echo "📊 最终CCache统计:"
           ccache -s
-          
-          # 清理临时文件
           if [ -d "${{ env.SOURCE_DIR }}" ]; then
             cd ${{ env.SOURCE_DIR }}
             echo "🧹 清理源码目录临时文件..."
             rm -rf tmp/ 2>/dev/null || true
             rm -f .config.old 2>/dev/null || true
           fi
-          
           echo "✅ 清理完成"
 
       - name: 📊 最终报告
@@ -1176,7 +938,6 @@ EOF
           echo "  - 预下载: ${{ github.event.inputs.enable_pre_download }}"
           echo "  - 问题修复: ${{ github.event.inputs.fix_common_issues }}"
           echo ""
-          
           if [ "${{ env.BUILD_STATUS }}" = "success" ]; then
             echo "🎉 构建成功！"
             echo "📦 固件已上传到 Artifacts，名称为:"
@@ -1200,7 +961,6 @@ EOF
             echo "   - 尝试使用稳定性优化策略"
             echo "   - 检查网络连接和仓库状态"
           fi
-          
           echo ""
           echo "⏰ 完成时间: $(date)"
           echo "=========================================="
