@@ -8,9 +8,24 @@
       "features": {
         "custom_plugins_support": true,
         "patch_friendly": true,
-        "luci_themes": true
+        "luci_themes": true,
+        "china_optimized": true,
+        "samba_support": true
       },
-      "notes": "推荐用于需要丰富功能和国内优化的场景"
+      "feeds_config": {
+        "packages": "https://github.com/immortalwrt/packages.git",
+        "luci": "https://github.com/immortalwrt/luci.git",
+        "routing": "https://github.com/immortalwrt/routing.git",
+        "telephony": "https://github.com/immortalwrt/telephony.git"
+      },
+      "branch_feeds_mapping": {
+        "openwrt-21.02": "openwrt-21.02",
+        "openwrt-23.05": "openwrt-23.05",
+        "master": "master",
+        "main": "main"
+      },
+      "notes": "推荐用于需要丰富功能和国内优化的场景",
+      "build_tips": "ImmortalWrt 对自定义功能支持良好，建议启用自定义功能"
     },
     "openwrt": {
       "url": "https://github.com/openwrt/openwrt",
@@ -20,9 +35,18 @@
       "features": {
         "custom_plugins_support": true,
         "patch_friendly": true,
-        "luci_themes": false
+        "luci_themes": false,
+        "china_optimized": false,
+        "samba_support": true
       },
-      "notes": "推荐用于追求稳定性和官方支持的环境"
+      "feeds_config": {
+        "packages": "https://git.openwrt.org/feed/packages.git",
+        "luci": "https://git.openwrt.org/project/luci.git",
+        "routing": "https://git.openwrt.org/feed/routing.git",
+        "telephony": "https://git.openwrt.org/feed/telephony.git"
+      },
+      "notes": "推荐用于追求稳定性和官方支持的环境",
+      "build_tips": "OpenWrt 官方源稳定性好，但国内访问可能较慢"
     },
     "lede": {
       "url": "https://github.com/coolsnowwolf/lede",
@@ -32,19 +56,57 @@
       "features": {
         "custom_plugins_support": true,
         "patch_friendly": true,
-        "luci_themes": true
+        "luci_themes": true,
+        "china_optimized": true,
+        "samba_support": true
       },
-      "notes": "推荐用于需要最新功能和丰富插件的场景"
+      "feeds_config": {
+        "packages": "https://github.com/coolsnowwolf/packages.git",
+        "luci": "https://github.com/coolsnowwolf/luci.git",
+        "routing": "https://github.com/coolsnowwolf/routing.git",
+        "telephony": "https://github.com/coolsnowwolf/telephony.git"
+      },
+      "notes": "推荐用于需要最新功能和丰富插件的场景",
+      "build_tips": "LEDE 集成了很多实用插件，适合追求功能的用户"
     }
   },
   "defaults": {
     "repository": "immortalwrt",
     "branch": "auto",
-    "config_path": "configs/.config_default"
+    "config_path": "configs/.config_default",
+    "timeout_minutes": 180
   },
   "custom_features_support": {
     "supported_repositories": ["immortalwrt", "openwrt", "lede"],
     "recommended_for_custom": "immortalwrt",
-    "notes": "自定义功能在 ImmortalWrt 和 LEDE 中支持最好"
-  }
+    "notes": "自定义功能在 ImmortalWrt 和 LEDE 中支持最好",
+    "features_directory": "firmware-config/custom-features"
+  },
+  "build_optimization": {
+    "balanced": {
+      "ccache_size": "8G",
+      "parallel_jobs": "nproc-1",
+      "description": "平衡编译速度和系统资源"
+    },
+    "speed": {
+      "ccache_size": "12G",
+      "parallel_jobs": "nproc",
+      "description": "优先编译速度，占用更多资源"
+    },
+    "stability": {
+      "ccache_size": "4G",
+      "parallel_jobs": "nproc-2",
+      "description": "优先稳定性，减少资源竞争"
+    }
+  },
+  "device_profiles": {
+    "asus_rt-ac42u": {
+      "config_path": "configs/.config_rt-ac42u",
+      "target": "ipq40xx/generic",
+      "device_name": "asus_rt-ac42u",
+      "notes": "ASUS RT-AC42U 路由器配置"
+    }
+  },
+  "version": "2.0",
+  "last_updated": "2024-01-20"
 }
