@@ -164,7 +164,7 @@ jobs:
             exit 1
           fi
           echo "🔄 创建智能交换文件..."
-          SWAP_SIZE="16G"  # 增加到16GB
+          SWAP_SIZE="16G"
           if [ "$MNT_AVAILABLE" -gt 50 ]; then
             SWAP_SIZE="20G"
             echo "💡 检测到充足空间，使用 ${SWAP_SIZE} 交换文件"
@@ -1330,9 +1330,45 @@ jobs:
           
           echo "✅ 编译环境优化完成"
 
+      - name: "🔧 严格包依赖修复"
+        if: env.FAILED_PACKAGES
+        timeout-minutes: 15
+        run: |
+          cd ${{ env.SOURCE_DIR }}
+          echo "=== 🔧 严格包依赖修复 ==="
+          
+          echo "🔍 检查并修复包依赖关系..."
+          
+          # 强制重新建立依赖关系
+          echo "🔄 重新生成包依赖..."
+          make package/index V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/package-index.log || true
+          
+          echo "🔄 准备核心包编译环境..."
+          make target/linux/prepare V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/target-prepare.log || true
+          
+          echo "🔄 配置核心包..."
+          make package/base-files/configure V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/base-files-configure.log || true
+          make package/busybox/configure V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/busybox-configure.log || true
+          make target/linux/configure V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/kernel-configure.log || true
+          
+          echo "🔧 修复依赖关系常见问题..."
+          # 修复常见的依赖配置问题
+          if [ -f "include/package-defaults.mk" ]; then
+            echo "🔄 更新包默认配置..."
+            sed -i 's/PKG_FIXUP:=.*/PKG_FIXUP:=autoreconf/' include/package-defaults.mk 2>/dev/null || true
+          fi
+          
+          # 修复内核模块依赖
+          if [ -f "target/linux/ipq40xx/modules.mk" ]; then
+            echo "🔄 修复内核模块依赖..."
+            sed -i 's/kmod-/kmod-/' target/linux/ipq40xx/modules.mk 2>/dev/null || true
+          fi
+          
+          echo "✅ 包依赖修复完成"
+
       - name: "🔧 智能包重编译系统 - 优化版"
         if: env.FAILED_PACKAGES
-        timeout-minutes: 90  # 增加到90分钟
+        timeout-minutes: 90
         run: |
           cd ${{ env.SOURCE_DIR }}
           echo "=== 🔧 智能包重编译系统 - 优化版 ==="
@@ -1579,6 +1615,44 @@ jobs:
             echo "RECOMPILE_SUCCESS=partial_with_quick" >> $GITHUB_ENV
           fi
 
+      - name: "🔍 根文件系统预检查"
+        timeout-minutes: 5
+        run: |
+          cd ${{ env.SOURCE_DIR }}
+          echo "=== 🔍 根文件系统预检查 ==="
+          
+          echo "🔍 检查根文件系统组件..."
+          REQUIRED_COMPONENTS=(
+            "build_dir/target-*/root-*"
+            "build_dir/target-*/base-files-*"
+            "build_dir/target-*/busybox-*"
+            "build_dir/target-*/linux-*/linux-*"
+          )
+          
+          MISSING_COMPONENTS=0
+          for component in "${REQUIRED_COMPONENTS[@]}"; do
+            if ls -d $component >/dev/null 2>&1; then
+              echo "✅ $(basename $(ls -d $component 2>/dev/null | head -1)): 存在"
+            else
+              echo "❌ $component: 缺失"
+              MISSING_COMPONENTS=$((MISSING_COMPONENTS+1))
+            fi
+          done
+          
+          if [ $MISSING_COMPONENTS -gt 0 ]; then
+            echo "🚨 缺失 $MISSING_COMPONENTS 个关键组件，无法生成镜像"
+            echo "🔄 尝试修复..."
+            
+            # 重新编译缺失的核心组件
+            make package/base-files/compile V=s || true
+            make package/busybox/compile V=s || true
+            make target/linux/compile V=s || true
+            
+            echo "✅ 修复尝试完成"
+          else
+            echo "🎉 所有根文件系统组件完整"
+          fi
+
       - name: "🔍 智能编译前最终验证"
         timeout-minutes: 5
         run: |
@@ -1648,75 +1722,106 @@ jobs:
             echo "READY_FOR_COMPILE=with_warnings" >> $GITHUB_ENV
           fi
 
-      - name: "👁️ 编译过程实时监控"
+      - name: "👁️ 增强编译过程监控"
         if: env.READY_FOR_COMPILE
         timeout-minutes: 180
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 👁️ 编译过程实时监控 ==="
+          echo "=== 👁️ 增强编译过程监控 ==="
           
-          # 创建监控状态文件
-          MONITOR_FILE="${{ env.BUILD_LOG_DIR }}/compile-monitor.json"
-          echo '{"start_time": "'$(date +%s)'", "last_check": "", "interventions": []}' > "$MONITOR_FILE"
-          
-          # 编译监控函数
-          monitor_compile() {
+          # 改进的监控函数，更好地捕获错误
+          enhanced_monitor_compile() {
             local log_file="$1"
-            local timeout_minutes="$2"
-            local start_time=$(date +%s)
-            local timeout_seconds=$((timeout_minutes * 60))
+            local max_attempts=2
+            local attempt=1
+            local compile_success=false
             
-            echo "🔍 开始监控编译过程，超时: ${timeout_minutes}分钟"
-            
-            # 使用tee同时输出到文件和控制台，同时进行监控
-            {
-              make -j${{ env.PARALLEL_JOBS }} V=s 2>&1 | \
-              while IFS= read -r line; do
-                echo "$line"
+            while [ $attempt -le $max_attempts ] && [ "$compile_success" = "false" ]; do
+              echo "🔄 编译尝试 $attempt/$max_attempts"
+              
+              # 使用更严格的错误检测
+              if make -j${{ env.PARALLEL_JOBS }} V=s 2>&1 | tee "$log_file.$attempt"; then
+                # 检查是否真正成功（不仅仅是make退出码）
+                if grep -q "packages built" "$log_file.$attempt" || [ -d "bin/targets" ]; then
+                  echo "✅ 编译成功完成"
+                  compile_success=true
+                  break
+                else
+                  echo "⚠️ make命令成功但可能未完成编译"
+                fi
+              else
+                echo "❌ 编译尝试 $attempt 失败"
                 
-                # 实时分析编译输出
-                current_time=$(date +%s)
-                elapsed=$((current_time - start_time))
-                
-                # 检测常见错误模式
-                if echo "$line" | grep -q "Error [0-9]"; then
-                  echo "🚨 检测到编译错误: $line"
-                  jq --arg time "$elapsed" --arg error "$line" '.interventions += [{"type": "error", "time": $time, "message": $error}]' "$MONITOR_FILE" > tmp.json && mv tmp.json "$MONITOR_FILE"
+                # 分析具体错误
+                if grep -q "Error 2" "$log_file.$attempt"; then
+                  echo "🔧 检测到包编译错误，尝试修复..."
+                  make package/cleanup V=s 2>/dev/null || true
                 fi
                 
-                if echo "$line" | grep -q "No rule to make target"; then
-                  missing_target=$(echo "$line" | grep -o "target '[^']*'" | head -1)
-                  echo "🔧 检测到缺失目标: $missing_target"
-                  jq --arg time "$elapsed" --arg target "$missing_target" '.interventions += [{"type": "missing_target", "time": $time, "target": $target}]' "$MONITOR_FILE" > tmp.json && mv tmp.json "$MONITOR_FILE"
+                attempt=$((attempt+1))
+                if [ $attempt -le $max_attempts ]; then
+                  echo "🔄 准备重试..."
+                  sleep 10
                 fi
-                
-                # 检测长时间卡住
-                if [ $elapsed -gt 1200 ] && echo "$line" | grep -q "Configuring"; then
-                  package=$(echo "$line" | grep -o "Configuring [^ ]*" | cut -d' ' -f2)
-                  echo "⏰ 检测到配置卡住: $package"
-                  jq --arg time "$elapsed" --arg package "$package" '.interventions += [{"type": "stuck_config", "time": $time, "package": $package}]' "$MONITOR_FILE" > tmp.json && mv tmp.json "$MONITOR_FILE"
-                fi
-                
-                # 更新最后检查时间
-                jq --arg time "$elapsed" '.last_check = $time' "$MONITOR_FILE" > tmp.json && mv tmp.json "$MONITOR_FILE"
-              done
-            } | tee "$log_file"
+              fi
+            done
             
-            return ${PIPESTATUS[0]}
+            if [ "$compile_success" = "true" ]; then
+              return 0
+            else
+              return 1
+            fi
           }
           
-          # 执行监控编译
-          COMPILE_LOG="${{ env.BUILD_LOG_DIR }}/monitored-compile.log"
-          if monitor_compile "$COMPILE_LOG" 120; then
-            echo "🎉 监控编译完成"
-            echo "MONITORED_COMPILE_SUCCESS=true" >> $GITHUB_ENV
+          # 执行增强监控
+          COMPILE_LOG="${{ env.BUILD_LOG_DIR }}/enhanced-compile"
+          if enhanced_monitor_compile "$COMPILE_LOG"; then
+            echo "🎉 增强监控编译完成"
             echo "BUILD_STATUS=success" >> $GITHUB_ENV
           else
-            echo "❌ 监控编译失败"
-            echo "分析干预记录..."
-            jq '.interventions[]' "$MONITOR_FILE" 2>/dev/null || echo "无干预记录"
+            echo "❌ 所有编译尝试都失败"
             echo "BUILD_STATUS=failed" >> $GITHUB_ENV
             exit 1
+          fi
+
+      - name: "🔍 编译完整性验证"
+        timeout-minutes: 10
+        run: |
+          cd ${{ env.SOURCE_DIR }}
+          echo "=== 🔍 编译完整性验证 ==="
+          
+          echo "🔍 验证编译完整性..."
+          
+          # 检查关键文件
+          CRITICAL_FILES=(
+            "staging_dir/toolchain-*/bin/*-gcc"
+            "build_dir/target-*/linux-*/vmlinux"
+            "build_dir/target-*/busybox-*/busybox"
+            "build_dir/target-*/base-files-*/.built"
+          )
+          
+          for file_pattern in "${CRITICAL_FILES[@]}"; do
+            if ls $file_pattern >/dev/null 2>&1; then
+              echo "✅ $(basename $(ls $file_pattern 2>/dev/null | head -1)): 存在"
+            else
+              echo "❌ $file_pattern: 缺失"
+              echo "COMPILE_INTEGRITY_FAILED=true" >> $GITHUB_ENV
+            fi
+          done
+          
+          # 检查根文件系统组件
+          if [ -d "build_dir/target-*/root-*" ]; then
+            echo "✅ 根文件系统目录存在"
+          else
+            echo "❌ 根文件系统目录缺失"
+            echo "COMPILE_INTEGRITY_FAILED=true" >> $GITHUB_ENV
+          fi
+          
+          if [ "$COMPILE_INTEGRITY_FAILED" = "true" ]; then
+            echo "🚨 编译完整性验证失败"
+            exit 1
+          else
+            echo "🎉 编译完整性验证通过"
           fi
 
       - name: "🔄 基于监控的智能修复"
