@@ -559,33 +559,7 @@ jobs:
             exit 1
           fi
           
-          echo "🔧 修复常见的包配置问题..."
-          COMMON_PACKAGES=("zstd" "zsh" "openssl" "libubox" "libjson-c" "libuv")
-          for pkg in "${COMMON_PACKAGES[@]}"; do
-            if [ -f "feeds/packages/utils/$pkg/Makefile" ]; then
-              echo "🛠️ 检查 $pkg 配置..."
-              sed -i 's/PKG_HASH:=.*/PKG_HASH:=skip/' feeds/packages/utils/$pkg/Makefile 2>/dev/null || true
-              sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=latest/' feeds/packages/utils/$pkg/Makefile 2>/dev/null || true
-            fi
-          done
-          
           echo "✅ 源码初始化完成"
-
-      - name: "💾 空间检测 - 编译前检查"
-        timeout-minutes: 2
-        run: |
-          echo "=== 💾 空间检测 - 编译前检查 ==="
-          echo "🔍 检查编译前磁盘空间..."
-          df -h | grep -E '(/|/mnt)' | while read line; do echo "  $line"; done
-          AVAILABLE_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          echo "📊 可用空间: ${AVAILABLE_SPACE}GB"
-          if [ "$AVAILABLE_SPACE" -lt 15 ]; then
-            echo "🚨 警告: 可用空间不足15GB，编译可能失败"
-          else
-            echo "✅ 磁盘空间充足"
-          fi
-          echo "🧠 内存状态:"
-          free -h
 
       - name: "🎯 严格配置文件搜索与应用"
         timeout-minutes: 5
@@ -661,22 +635,36 @@ jobs:
             exit 1
           fi
 
-      - name: "🔧 EXT4文件系统空间严格修复"
+      - name: "🔧 严格磁盘空间优化"
+        timeout-minutes: 5
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔧 EXT4文件系统空间严格修复 ==="
-          echo "🔧 设置严格分区大小限制..."
+          echo "=== 🔧 严格磁盘空间优化 ==="
+          
+          # 检查当前磁盘空间
+          echo "📊 当前磁盘空间状态:"
+          df -h | grep -E '(/|/mnt)'
+          AVAILABLE_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
+          echo "可用空间: ${AVAILABLE_SPACE}GB"
+          
+          # 设置更保守的分区大小
+          echo "🔧 设置保守分区大小..."
           cp .config .config.backup
-          sed -i 's/CONFIG_TARGET_KERNEL_PARTSIZE=.*/CONFIG_TARGET_KERNEL_PARTSIZE=20/' .config 2>/dev/null || true
-          sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=96/' .config 2>/dev/null || true
-          grep -q "CONFIG_TARGET_KERNEL_PARTSIZE" .config || echo "CONFIG_TARGET_KERNEL_PARTSIZE=20" >> .config
-          grep -q "CONFIG_TARGET_ROOTFS_PARTSIZE" .config || echo "CONFIG_TARGET_ROOTFS_PARTSIZE=96" >> .config
-          echo "CONFIG_TARGET_ROOTFS_EXT4FS=y" >> .config
-          echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+          
+          # 修复分区大小配置
+          sed -i 's/CONFIG_TARGET_KERNEL_PARTSIZE=.*/CONFIG_TARGET_KERNEL_PARTSIZE=16/' .config 2>/dev/null || echo "CONFIG_TARGET_KERNEL_PARTSIZE=16" >> .config
+          sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=64/' .config 2>/dev/null || echo "CONFIG_TARGET_ROOTFS_PARTSIZE=64" >> .config
+          
+          # 禁用调试信息以节省空间
           echo "# CONFIG_DEBUG_INFO is not set" >> .config
-          echo "# CONFIG_DEBUG_KERNEL is not set" >> .config
           echo "# CONFIG_KERNEL_DEBUG_INFO is not set" >> .config
-          echo "✅ 分区大小严格修复完成"
+          echo "CONFIG_STRIP_KERNEL_EXPORTS=y" >> .config
+          
+          # 优化编译选项
+          echo "CONFIG_SMALL_FLASH=y" >> .config
+          echo "CONFIG_KERNEL_KALLSYMS=n" >> .config
+          
+          echo "✅ 磁盘空间优化完成"
 
       - name: "🔧 严格设备镜像配置修复"
         run: |
@@ -713,25 +701,6 @@ jobs:
             exit 1
           fi
           echo "✅ 设备镜像配置严格修复完成"
-
-      - name: "🔧 快速Samba验证"
-        if: github.event.inputs.enable_custom_features == 'true'
-        timeout-minutes: 2
-        run: |
-          cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔧 快速Samba验证 ==="
-          echo "🔍 检查Samba配置状态..."
-          if grep -q "CONFIG_PACKAGE_samba4-server=y" .config; then
-            echo "✅ Samba4已在配置中启用"
-          else
-            echo "🔧 启用Samba4配置..."
-            echo "CONFIG_PACKAGE_samba4-server=y" >> .config
-            echo "CONFIG_PACKAGE_samba4-libs=y" >> .config
-            echo "CONFIG_PACKAGE_samba4-client=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-samba4=y" >> .config
-            echo "✅ Samba4配置已添加"
-          fi
-          echo "✅ Samba验证完成"
 
       - name: "📦 增强自定义功能处理"
         if: github.event.inputs.enable_custom_features == 'true'
@@ -861,49 +830,6 @@ jobs:
           fi
           echo "✅ 自定义功能处理完成"
 
-      - name: "🔧 下载源优化与修复"
-        timeout-minutes: 5
-        run: |
-          cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔧 下载源优化与修复 ==="
-          echo "🔧 设置备用下载镜像..."
-          cp scripts/download.pl scripts/download.pl.backup
-          sed -i 's|https://downloads.openwrt.org|https://mirror2.openwrt.org/sources|g' scripts/download.pl
-          sed -i 's|https://github.com|https://ghproxy.com/https://github.com|g' scripts/download.pl
-          sed -i 's|https://git.kernel.org|https://mirror.gitkernel.org|g' scripts/download.pl
-          
-          echo '#!/bin/sh' > scripts/download-with-retry
-          echo 'MAX_RETRIES=3' >> scripts/download-with-retry
-          echo 'RETRY_COUNT=0' >> scripts/download-with-retry
-          echo 'DOWNLOAD_SCRIPT="/mnt/source/scripts/download.pl"' >> scripts/download-with-retry
-          echo 'while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do' >> scripts/download-with-retry
-          echo '    if $DOWNLOAD_SCRIPT "$@"; then' >> scripts/download-with-retry
-          echo '        echo "✅ 下载成功"' >> scripts/download-with-retry
-          echo '        exit 0' >> scripts/download-with-retry
-          echo '    fi' >> scripts/download-with-retry
-          echo '    RETRY_COUNT=$((RETRY_COUNT+1))' >> scripts/download-with-retry
-          echo '    echo "❌ 下载失败，第 $RETRY_COUNT 次重试..."' >> scripts/download-with-retry
-          echo '    sleep 5' >> scripts/download-with-retry
-          echo 'done' >> scripts/download-with-retry
-          echo 'echo "❌ 下载失败，已达到最大重试次数"' >> scripts/download-with-retry
-          echo 'exit 1' >> scripts/download-with-retry
-          chmod +x scripts/download-with-retry
-          echo "✅ 下载源优化完成"
-
-      - name: "💾 空间检测 - 预下载前检查"
-        timeout-minutes: 2
-        run: |
-          echo "=== 💾 空间检测 - 预下载前检查 ==="
-          echo "🔍 检查预下载前磁盘空间..."
-          df -h | grep -E '(/|/mnt)' | while read line; do echo "  $line"; done
-          AVAILABLE_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          echo "📊 可用空间: ${AVAILABLE_SPACE}GB"
-          if [ "$AVAILABLE_SPACE" -lt 10 ]; then
-            echo "🚨 警告: 可用空间不足10GB，下载可能失败"
-          else
-            echo "✅ 磁盘空间充足"
-          fi
-
       - name: "📥 严格预下载验证"
         if: github.event.inputs.enable_pre_download == 'true'
         timeout-minutes: 45
@@ -978,680 +904,83 @@ jobs:
           
           echo "✅ 严格预下载验证完成"
 
-      - name: "💾 空间检测 - 工具链编译前检查"
-        timeout-minutes: 2
-        run: |
-          echo "=== 💾 空间检测 - 工具链编译前检查 ==="
-          echo "🔍 检查工具链编译前磁盘空间..."
-          df -h | grep -E '(/|/mnt)' | while read line; do echo "  $line"; done
-          AVAILABLE_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          echo "📊 可用空间: ${AVAILABLE_SPACE}GB"
-          if [ "$AVAILABLE_SPACE" -lt 8 ]; then
-            echo "🚨 警告: 可用空间不足8GB，工具链编译可能失败"
-          else
-            echo "✅ 磁盘空间充足"
-          fi
-
-      - name: "🛠️ 严格工具链编译验证 - 增强版"
+      - name: "🛠️ 稳定工具链编译"
         timeout-minutes: 120
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🛠️ 严格工具链编译验证 - 增强版 ==="
+          echo "=== 🛠️ 稳定工具链编译 ==="
           
-          # 定义最大重试次数
-          MAX_TOOLCHAIN_RETRIES=3
+          echo "🔧 设置编译环境..."
+          export FORCE_UNSAFE_CONFIGURE=1
+          export LC_ALL=C
+          ulimit -S -n 8192
+          
+          echo "📦 第一步: 编译基础工具..."
+          if ! make tools/install -j2 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/tools-compile.log; then
+            echo "⚠️ 基础工具编译有警告，继续执行..."
+          fi
+          
+          echo "🔧 第二步: 稳定工具链编译..."
+          MAX_RETRIES=3
           RETRY_COUNT=0
           TOOLCHAIN_SUCCESS=false
           
-          while [ $RETRY_COUNT -lt $MAX_TOOLCHAIN_RETRIES ] && [ "$TOOLCHAIN_SUCCESS" = "false" ]; do
-            echo "🔄 工具链编译尝试 $((RETRY_COUNT+1))/$MAX_TOOLCHAIN_RETRIES"
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$TOOLCHAIN_SUCCESS" = "false" ]; do
+            echo "🔄 工具链编译尝试 $((RETRY_COUNT+1))/$MAX_RETRIES"
             
-            # 清理之前的工具链编译
+            # 清理之前的编译
             if [ $RETRY_COUNT -gt 0 ]; then
-              echo "🧹 清理工具链编译目录..."
+              echo "🧹 清理工具链..."
               make toolchain/clean 2>/dev/null || true
-              rm -rf build_dir/toolchain-* 2>/dev/null || true
-              rm -rf staging_dir/toolchain-* 2>/dev/null || true
-              
-              # 如果是第二次重试，重新下载工具链源码
-              if [ $RETRY_COUNT -eq 2 ]; then
-                echo "📥 重新下载工具链源码..."
-                rm -rf dl/{gcc*,binutils*,linux*,glibc*,musl*} 2>/dev/null || true
-                make toolchain/download -j1 V=s 2>&1 | tee ${{ env.TOOLCHAIN_LOG_DIR }}/toolchain-download-retry.log || true
-              fi
+              sleep 5
             fi
             
-            echo "🔧 第一步: 编译基础工具..."
-            TOOLS_LOG="${{ env.TOOLCHAIN_LOG_DIR }}/tools-compile-attempt-$RETRY_COUNT.log"
-            if ! make tools/install -j${{ env.PARALLEL_JOBS }} V=s 2>&1 | tee "$TOOLS_LOG"; then
-              echo "⚠️ 基础工具编译有警告，继续执行..."
+            # 根据重试次数调整并行任务数
+            if [ $RETRY_COUNT -eq 0 ]; then
+              JOBS=$(( ${{ env.PARALLEL_JOBS }} / 2 ))
+            else
+              JOBS=1
             fi
             
-            echo "🔧 第二步: 工具链编译..."
-            TOOLCHAIN_LOG="${{ env.TOOLCHAIN_LOG_DIR }}/toolchain-attempt-$RETRY_COUNT.log"
-            START_TIME=$(date +%s)
+            TOOLCHAIN_LOG="${{ env.BUILD_LOG_DIR }}/toolchain-attempt-$RETRY_COUNT.log"
+            echo "🔧 使用 $JOBS 个并行任务编译工具链..."
             
-            if make toolchain/compile -j${{ env.PARALLEL_JOBS }} V=s 2>&1 | tee "$TOOLCHAIN_LOG"; then
-              END_TIME=$(date +%s)
-              DURATION=$((END_TIME - START_TIME))
-              echo "✅ 工具链编译成功!"
-              echo "⏱️ 耗时: ${DURATION}秒"
-              
-              # 验证工具链完整性
-              if ls staging_dir/toolchain-*/bin/*-gcc >/dev/null 2>&1 && ls staging_dir/toolchain-*/bin/*-g++ >/dev/null 2>&1; then
+            if make toolchain/compile -j$JOBS V=s 2>&1 | tee "$TOOLCHAIN_LOG"; then
+              # 验证工具链是否真正成功
+              if [ -f "staging_dir/toolchain-*/bin/*-gcc" ] || [ -d "staging_dir/toolchain-*/bin" ]; then
+                echo "✅ 工具链编译验证成功!"
                 TOOLCHAIN_SUCCESS=true
-                echo "🎉 工具链验证通过!"
+                break
               else
-                echo "❌ 工具链文件不完整，准备重试..."
-                TOOLCHAIN_SUCCESS=false
+                echo "⚠️ 编译完成但工具链文件不完整"
               fi
             else
               RETRY_COUNT=$((RETRY_COUNT+1))
-              END_TIME=$(date +%s)
-              DURATION=$((END_TIME - START_TIME))
-              echo "❌ 工具链编译失败 (耗时: ${DURATION}秒)"
+              echo "❌ 工具链编译失败"
               
               # 分析失败原因
-              if grep -q "No such file\|not found" "$TOOLCHAIN_LOG"; then
-                echo "🔍 失败原因: 文件缺失，可能需要重新下载"
-              elif grep -q "error:" "$TOOLCHAIN_LOG"; then
-                echo "🔍 失败原因: 编译错误"
-              elif grep -q "undefined reference" "$TOOLCHAIN_LOG"; then
-                echo "🔍 失败原因: 链接错误"
+              if grep -q "No space left" "$TOOLCHAIN_LOG"; then
+                echo "💾 失败原因: 磁盘空间不足"
+                # 清理缓存释放空间
+                make dirclean 2>/dev/null || true
+                rm -rf build_dir/toolchain-* 2>/dev/null || true
               fi
               
-              if [ $RETRY_COUNT -lt $MAX_TOOLCHAIN_RETRIES ]; then
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
                 echo "🔄 等待10秒后重试..."
                 sleep 10
               fi
             fi
           done
           
-          # 最终单线程尝试
           if [ "$TOOLCHAIN_SUCCESS" = "false" ]; then
-            echo "🔄 最终尝试: 单线程工具链编译..."
-            make toolchain/clean 2>/dev/null || true
-            TOOLCHAIN_SINGLE_LOG="${{ env.TOOLCHAIN_LOG_DIR }}/toolchain-final-single.log"
-            
-            if make toolchain/compile -j1 V=s 2>&1 | tee "$TOOLCHAIN_SINGLE_LOG"; then
-              echo "✅ 单线程工具链编译成功!"
-              TOOLCHAIN_SUCCESS=true
-            else
-              echo "❌ 所有工具链编译尝试都失败"
-              echo "🔍 分析错误日志..."
-              grep -i "error:\|failed\|No such file\|undefined reference" "$TOOLCHAIN_SINGLE_LOG" | head -20
-              exit 1
-            fi
+            echo "❌ 所有工具链编译尝试都失败"
+            echo "🔍 最后错误日志:"
+            tail -50 ${{ env.BUILD_LOG_DIR }}/toolchain-attempt-*.log 2>/dev/null || echo "无日志文件"
+            exit 1
           fi
           
-          echo "✅ 工具链编译验证完成"
-
-      - name: "🔍 智能文件级验证与重试机制"
-        timeout-minutes: 10
-        run: |
-          cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔍 智能文件级验证与重试机制 ==="
-          
-          # 创建验证状态文件
-          VALIDATION_STATUS_FILE="${{ env.BUILD_LOG_DIR }}/validation-status.json"
-          if [ ! -f "$VALIDATION_STATUS_FILE" ]; then
-            echo '{"verified_files": {}, "failed_files": {}, "retry_attempts": {}}' > "$VALIDATION_STATUS_FILE"
-          fi
-
-          echo "🔍 开始文件级验证..."
-          
-          # 定义验证项目和对应的修复命令
-          declare -A VALIDATION_ITEMS=(
-            # 工具链关键文件
-            ["toolchain_gcc"]="staging_dir/toolchain-*/bin/*-gcc|CRITICAL|make toolchain/gcc/{clean,compile}"
-            ["toolchain_g++"]="staging_dir/toolchain-*/bin/*-g++|CRITICAL|make toolchain/gcc/{clean,compile}"
-            ["toolchain_ld"]="staging_dir/toolchain-*/bin/*-ld|CRITICAL|make toolchain/binutils/{clean,compile}"
-            ["toolchain_ar"]="staging_dir/toolchain-*/bin/*-ar|CRITICAL|make toolchain/binutils/{clean,compile}"
-            
-            # 基础工具
-            ["host_mkhash"]="staging_dir/host/bin/mkhash|CRITICAL|make tools/mkhash/{clean,compile}"
-            ["host_cmake"]="staging_dir/host/bin/cmake|IMPORTANT|make tools/cmake/{clean,compile}"
-            ["host_ninja"]="staging_dir/host/bin/ninja|IMPORTANT|make tools/ninja/{clean,compile}"
-            
-            # 核心配置文件
-            ["main_config"]=".config|CRITICAL|cp $GITHUB_WORKSPACE/${{ github.event.inputs.config_profile }} .config"
-            ["feeds_config"]="feeds.conf|IMPORTANT|./scripts/feeds update -a"
-            
-            # 下载文件验证（抽样检查）
-            ["download_kernel"]="dl/linux-*.tar.xz|IMPORTANT|make target/linux/download"
-            ["download_gcc"]="dl/gcc-*.tar.xz|IMPORTANT|make toolchain/gcc/download"
-            ["download_binutils"]="dl/binutils-*.tar.xz|IMPORTANT|make toolchain/binutils/download"
-          )
-          
-          # 执行验证
-          FAILED_ITEMS=()
-          NEEDS_RETRY=()
-          
-          for item_key in "${!VALIDATION_ITEMS[@]}"; do
-            IFS='|' read -r pattern level repair_cmd <<< "${VALIDATION_ITEMS[$item_key]}"
-            
-            echo "🔍 验证: $item_key ($level)"
-            
-            # 检查文件是否存在
-            if ls $pattern >/dev/null 2>&1; then
-              # 文件存在，检查是否可执行（如果是二进制文件）
-              first_file=$(ls $pattern 2>/dev/null | head -1)
-              if [[ "$first_file" == *"/bin/"* ]]; then
-                if [ -x "$first_file" ]; then
-                  echo "✅ $item_key: 存在且可执行"
-                  # 更新验证状态
-                  jq --arg key "$item_key" --arg file "$first_file" '.verified_files[$key] = $file' "$VALIDATION_STATUS_FILE" > tmp.json && mv tmp.json "$VALIDATION_STATUS_FILE"
-                else
-                  echo "❌ $item_key: 存在但不可执行"
-                  FAILED_ITEMS+=("$item_key")
-                  NEEDS_RETRY+=("$item_key|$repair_cmd")
-                fi
-              else
-                echo "✅ $item_key: 存在"
-                jq --arg key "$item_key" --arg file "$first_file" '.verified_files[$key] = $file' "$VALIDATION_STATUS_FILE" > tmp.json && mv tmp.json "$VALIDATION_STATUS_FILE"
-              fi
-            else
-              echo "❌ $item_key: 不存在"
-              FAILED_ITEMS+=("$item_key")
-              NEEDS_RETRY+=("$item_key|$repair_cmd")
-            fi
-          done
-          
-          # 处理验证结果
-          if [ ${#FAILED_ITEMS[@]} -eq 0 ]; then
-            echo "🎉 所有文件验证通过!"
-            echo "VALIDATION_PASSED=true" >> $GITHUB_ENV
-          else
-            echo "⚠️ 发现 ${#FAILED_ITEMS[@]} 个验证失败项"
-            echo "📋 失败项目: ${FAILED_ITEMS[*]}"
-            
-            # 检查是否有CRITICAL级别失败
-            CRITICAL_FAILED=0
-            for failed_item in "${FAILED_ITEMS[@]}"; do
-              IFS='|' read -r pattern level repair_cmd <<< "${VALIDATION_ITEMS[$failed_item]}"
-              if [ "$level" = "CRITICAL" ]; then
-                echo "🚨 CRITICAL级别失败: $failed_item"
-                CRITICAL_FAILED=1
-              fi
-            done
-            
-            if [ $CRITICAL_FAILED -eq 1 ]; then
-              echo "❌ 有关键文件验证失败，无法继续编译"
-              exit 1
-            else
-              echo "🔄 将尝试修复非关键失败项..."
-              echo "NEEDS_RETRY_ITEMS=${NEEDS_RETRY[*]}" >> $GITHUB_ENV
-              echo "VALIDATION_PASSED=with_retry" >> $GITHUB_ENV
-            fi
-          fi
-
-      - name: "🔧 智能文件级修复与重编译"
-        if: env.NEEDS_RETRY_ITEMS
-        timeout-minutes: 30
-        run: |
-          cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔧 智能文件级修复与重编译 ==="
-          
-          RETRY_ITEMS=(${NEEDS_RETRY_ITEMS// / })
-          echo "🔄 需要重试的项目: ${#RETRY_ITEMS[@]}个"
-          
-          SUCCESSFUL_RETRIES=0
-          FAILED_RETRIES=0
-          
-          for retry_item in "${RETRY_ITEMS[@]}"; do
-            IFS='|' read -r item_key repair_cmd <<< "$retry_item"
-            
-            echo "🔧 修复: $item_key"
-            echo "📝 执行: $repair_cmd"
-            
-            # 执行修复命令
-            if eval "$repair_cmd" 2>&1 | tee "${{ env.BUILD_LOG_DIR }}/retry-$item_key.log"; then
-              echo "✅ $item_key 修复成功"
-              SUCCESSFUL_RETRIES=$((SUCCESSFUL_RETRIES+1))
-              
-              # 验证修复结果
-              IFS='|' read -r pattern level original_cmd <<< "${VALIDATION_ITEMS[$item_key]}"
-              if ls $pattern >/dev/null 2>&1; then
-                echo "✅ $item_key 验证通过"
-              else
-                echo "⚠️ $item_key 修复但验证未通过"
-              fi
-            else
-              echo "❌ $item_key 修复失败"
-              FAILED_RETRIES=$((FAILED_RETRIES+1))
-            fi
-          done
-          
-          echo "📊 修复结果:"
-          echo "  - 成功: $SUCCESSFUL_RETRIES"
-          echo "  - 失败: $FAILED_RETRIES"
-          
-          if [ $FAILED_RETRIES -eq 0 ]; then
-            echo "🎉 所有修复成功!"
-            echo "RETRY_SUCCESS=true" >> $GITHUB_ENV
-          else
-            echo "⚠️ 有 $FAILED_RETRIES 个项目修复失败"
-            echo "RETRY_SUCCESS=partial" >> $GITHUB_ENV
-          fi
-
-      - name: "📦 包级别编译状态监控与重试 - 优化版"
-        timeout-minutes: 10
-        run: |
-          cd ${{ env.SOURCE_DIR }}
-          echo "=== 📦 包级别编译状态监控与重试 - 优化版 ==="
-          
-          # 创建包状态跟踪文件
-          PACKAGE_STATUS_FILE="${{ env.BUILD_LOG_DIR }}/package-status.json"
-          if [ ! -f "$PACKAGE_STATUS_FILE" ]; then
-            echo '{"compiled_packages": {}, "failed_packages": {}, "retry_history": {}}' > "$PACKAGE_STATUS_FILE"
-          fi
-          
-          # 关键包列表和它们的验证文件 - 使用更宽松的验证
-          declare -A CRITICAL_PACKAGES=(
-            ["toolchain"]="staging_dir/toolchain-*/bin/*-gcc"
-            ["kernel"]="build_dir/target-*/linux-*/linux-*"  # 放宽验证，只要目录存在
-            ["base-files"]="build_dir/target-*/base-files-*" # 放宽验证
-            ["busybox"]="build_dir/target-*/busybox-*"       # 放宽验证
-            ["libc"]="staging_dir/target-*/usr/lib/"         # 放宽验证
-          )
-          
-          echo "🔍 检查关键包编译状态..."
-          
-          FAILED_PACKAGES=()
-          for pkg in "${!CRITICAL_PACKAGES[@]}"; do
-            pattern="${CRITICAL_PACKAGES[$pkg]}"
-            
-            if ls -d $pattern >/dev/null 2>&1; then
-              echo "✅ $pkg: 编译迹象存在"
-              jq --arg pkg "$pkg" --arg status "success" '.compiled_packages[$pkg] = $status' "$PACKAGE_STATUS_FILE" > tmp.json && mv tmp.json "$PACKAGE_STATUS_FILE"
-            else
-              echo "❌ $pkg: 无编译迹象"
-              FAILED_PACKAGES+=("$pkg")
-              jq --arg pkg "$pkg" --arg status "failed" '.failed_packages[$pkg] = $status' "$PACKAGE_STATUS_FILE" > tmp.json && mv tmp.json "$PACKAGE_STATUS_FILE"
-            fi
-          done
-          
-          if [ ${#FAILED_PACKAGES[@]} -gt 0 ]; then
-            echo "🔄 需要重编译的包: ${FAILED_PACKAGES[*]}"
-            echo "FAILED_PACKAGES=${FAILED_PACKAGES[*]}" >> $GITHUB_ENV
-          else
-            echo "🎉 所有关键包编译正常"
-            echo "PACKAGES_VALID=true" >> $GITHUB_ENV
-          fi
-
-      - name: "🔧 编译环境深度优化"
-        if: env.FAILED_PACKAGES
-        timeout-minutes: 10
-        run: |
-          cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔧 编译环境深度优化 ==="
-          
-          echo "💾 深度磁盘空间优化..."
-          # 清理不必要的文件
-          find . -name "*.o" -type f -delete 2>/dev/null || true
-          find . -name "*.a" -type f -delete 2>/dev/null || true
-          find . -name "*.so" -type f -delete 2>/dev/null || true
-          find build_dir -name ".*.cmd" -delete 2>/dev/null || true
-          find build_dir -name ".*.d" -delete 2>/dev/null || true
-          
-          # 清理旧的日志文件但保留最新的
-          ls -1t ${{ env.BUILD_LOG_DIR }}/*.log 2>/dev/null | tail -n +10 | xargs rm -f 2>/dev/null || true
-          
-          echo "🧠 内存和交换优化..."
-          # 增加交换空间
-          if [ -f /mnt/swapfile ]; then
-            sudo swapoff /mnt/swapfile 2>/dev/null || true
-            sudo rm -f /mnt/swapfile 2>/dev/null || true
-          fi
-          
-          # 创建更大的交换文件
-          sudo dd if=/dev/zero of=/mnt/swapfile bs=1M count=16384 status=progress
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
-          
-          echo "📊 优化后资源状态:"
-          df -h | grep -E '(/|/mnt)' | while read line; do echo "  $line"; done
-          echo "交换空间:"
-          free -h
-          
-          echo "🔧 修复常见编译配置问题..."
-          # 修复内核配置
-          if [ -f target/linux/ipq40xx/config-4.4 ]; then
-            sed -i 's/CONFIG_KALLSYMS=.*/CONFIG_KALLSYMS=y/' target/linux/ipq40xx/config-4.4 2>/dev/null || true
-          fi
-          
-          # 修复busybox配置
-          if [ -f package/utils/busybox/config/*.config ]; then
-            for config in package/utils/busybox/config/*.config; do
-              sed -i 's/CONFIG_FEATURE_.*=.*/# CONFIG_FEATURE_UNSET/' "$config" 2>/dev/null || true
-            done
-          fi
-          
-          echo "✅ 编译环境优化完成"
-
-      - name: "🔧 严格包依赖修复"
-        if: env.FAILED_PACKAGES
-        timeout-minutes: 15
-        run: |
-          cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔧 严格包依赖修复 ==="
-          
-          echo "🔍 检查并修复包依赖关系..."
-          
-          # 强制重新建立依赖关系
-          echo "🔄 重新生成包依赖..."
-          make package/index V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/package-index.log || true
-          
-          echo "🔄 准备核心包编译环境..."
-          make target/linux/prepare V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/target-prepare.log || true
-          
-          echo "🔄 配置核心包..."
-          make package/base-files/configure V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/base-files-configure.log || true
-          make package/busybox/configure V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/busybox-configure.log || true
-          make target/linux/configure V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/kernel-configure.log || true
-          
-          echo "🔧 修复依赖关系常见问题..."
-          # 修复常见的依赖配置问题
-          if [ -f "include/package-defaults.mk" ]; then
-            echo "🔄 更新包默认配置..."
-            sed -i 's/PKG_FIXUP:=.*/PKG_FIXUP:=autoreconf/' include/package-defaults.mk 2>/dev/null || true
-          fi
-          
-          # 修复内核模块依赖
-          if [ -f "target/linux/ipq40xx/modules.mk" ]; then
-            echo "🔄 修复内核模块依赖..."
-            sed -i 's/kmod-/kmod-/' target/linux/ipq40xx/modules.mk 2>/dev/null || true
-          fi
-          
-          echo "✅ 包依赖修复完成"
-
-      - name: "🔧 智能包重编译系统 - 优化版"
-        if: env.FAILED_PACKAGES
-        timeout-minutes: 90
-        run: |
-          cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔧 智能包重编译系统 - 优化版 ==="
-          
-          FAILED_PACKAGES=(${FAILED_PACKAGES// / })
-          echo "🔄 需要重编译的包: ${FAILED_PACKAGES[*]}"
-          
-          # 包重编译优先级和策略
-          declare -A PACKAGE_RECOMPILE_STRATEGY=(
-            # 高优先级 - 基础依赖
-            ["libc"]="make toolchain/compile -j1 V=s"
-            ["toolchain"]="make toolchain/compile -j1 V=s"
-            
-            # 中优先级 - 核心组件
-            ["kernel"]="make target/linux/compile -j1 V=s"
-            ["busybox"]="make package/busybox/compile -j1 V=s"
-            
-            # 低优先级 - 系统文件
-            ["base-files"]="make package/base-files/compile -j1 V=s"
-          )
-          
-          # 包依赖关系
-          declare -A PACKAGE_DEPENDENCIES=(
-            ["kernel"]="libc toolchain"
-            ["busybox"]="libc toolchain kernel"
-            ["base-files"]="libc toolchain kernel busybox"
-          )
-          
-          # 计算编译顺序（拓扑排序）
-          compile_order=()
-          compiled_packages=()
-          
-          calculate_order() {
-            local pkg="$1"
-            local visited="$2"
-            
-            # 检查是否已经访问过（防止循环依赖）
-            if [[ " $visited " == *" $pkg "* ]]; then
-              return
-            fi
-            
-            visited="$visited $pkg"
-            
-            # 先编译依赖
-            if [ -n "${PACKAGE_DEPENDENCIES[$pkg]}" ]; then
-              for dep in ${PACKAGE_DEPENDENCIES[$pkg]}; do
-                if [[ " ${FAILED_PACKAGES[*]} " == *" $dep "* ]]; then
-                  calculate_order "$dep" "$visited"
-                fi
-              done
-            fi
-            
-            # 添加当前包到编译顺序
-            if [[ ! " ${compile_order[*]} " == *" $pkg "* ]]; then
-              compile_order+=("$pkg")
-            fi
-          }
-          
-          echo "📋 计算编译顺序..."
-          for pkg in "${FAILED_PACKAGES[@]}"; do
-            calculate_order "$pkg" ""
-          done
-          
-          echo "🔧 编译顺序: ${compile_order[*]}"
-          
-          SUCCESSFUL_RECOMPILES=()
-          FAILED_RECOMPILES=()
-          SKIPPED_PACKAGES=()
-          
-          # 编译前资源检查
-          echo "💾 编译前资源检查..."
-          AVAILABLE_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          AVAILABLE_MEM=$(free -g | awk 'NR==2 {print int($7)}')
-          
-          echo "📊 当前资源状态:"
-          echo "  - 可用磁盘空间: ${AVAILABLE_SPACE}GB"
-          echo "  - 可用内存: ${AVAILABLE_MEM}GB"
-          
-          if [ "$AVAILABLE_SPACE" -lt 5 ]; then
-            echo "🚨 磁盘空间严重不足，尝试清理..."
-            make dirclean 2>/dev/null || true
-            rm -rf build_dir/target-*/linux-*/linux-* 2>/dev/null || true
-            AVAILABLE_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-            echo "🔄 清理后可用空间: ${AVAILABLE_SPACE}GB"
-          fi
-          
-          # 按顺序编译包
-          for pkg in "${compile_order[@]}"; do
-            if [ -n "${PACKAGE_RECOMPILE_STRATEGY[$pkg]}" ]; then
-              echo ""
-              echo "🔧 编译包: $pkg"
-              echo "📝 策略: ${PACKAGE_RECOMPILE_STRATEGY[$pkg]}"
-              
-              # 检查依赖是否满足
-              DEPENDENCY_MET=true
-              if [ -n "${PACKAGE_DEPENDENCIES[$pkg]}" ]; then
-                for dep in ${PACKAGE_DEPENDENCIES[$pkg]}; do
-                  if [[ " ${FAILED_PACKAGES[*]} " == *" $dep "* ]] && [[ ! " ${SUCCESSFUL_RECOMPILES[*]} " == *" $dep "* ]]; then
-                    echo "❌ 依赖未满足: $pkg 需要 $dep"
-                    DEPENDENCY_MET=false
-                    SKIPPED_PACKAGES+=("$pkg")
-                    break
-                  fi
-                done
-              fi
-              
-              if [ "$DEPENDENCY_MET" = "false" ]; then
-                echo "⏭️  跳过 $pkg (依赖未满足)"
-                continue
-              fi
-              
-              # 执行编译
-              RECOMPILE_LOG="${{ env.BUILD_LOG_DIR }}/recompile-$pkg.log"
-              START_TIME=$(date +%s)
-              
-              echo "🔄 开始编译 $pkg..."
-              
-              # 设置超时保护
-              timeout_seconds=1800  # 30分钟
-              
-              if timeout $timeout_seconds bash -c "${PACKAGE_RECOMPILE_STRATEGY[$pkg]}" 2>&1 | tee "$RECOMPILE_LOG"; then
-                END_TIME=$(date +%s)
-                DURATION=$((END_TIME - START_TIME))
-                
-                # 验证编译结果
-                pattern="${CRITICAL_PACKAGES[$pkg]}"
-                if ls -d $pattern >/dev/null 2>&1; then
-                  echo "✅ $pkg 编译成功 (耗时: ${DURATION}秒)"
-                  SUCCESSFUL_RECOMPILES+=("$pkg")
-                  
-                  # 更新资源状态
-                  AVAILABLE_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-                  echo "💾 编译后可用空间: ${AVAILABLE_SPACE}GB"
-                  
-                  # 如果空间紧张，清理中间文件
-                  if [ "$AVAILABLE_SPACE" -lt 3 ]; then
-                    echo "🧹 空间紧张，清理中间文件..."
-                    find build_dir -name ".*.o" -delete 2>/dev/null || true
-                    find build_dir -name ".*.cmd" -delete 2>/dev/null || true
-                  fi
-                else
-                  echo "⚠️ $pkg 编译完成但验证失败"
-                  FAILED_RECOMPILES+=("$pkg")
-                fi
-              else
-                EXIT_CODE=$?
-                END_TIME=$(date +%s)
-                DURATION=$((END_TIME - START_TIME))
-                
-                if [ $EXIT_CODE -eq 124 ]; then
-                  echo "⏰ $pkg 编译超时 (超过30分钟)"
-                else
-                  echo "❌ $pkg 编译失败 (耗时: ${DURATION}秒)"
-                fi
-                FAILED_RECOMPILES+=("$pkg")
-                
-                # 分析失败原因
-                echo "🔍 分析失败原因..."
-                if grep -q "No space left" "$RECOMPILE_LOG"; then
-                  echo "💾 失败原因: 磁盘空间不足"
-                  make dirclean 2>/dev/null || true
-                elif grep -q "Killed" "$RECOMPILE_LOG"; then
-                  echo "🧠 失败原因: 内存不足被系统杀死"
-                elif grep -q "undefined reference" "$RECOMPILE_LOG"; then
-                  echo "🔗 失败原因: 链接错误"
-                elif grep -q "No rule to make target" "$RECOMPILE_LOG"; then
-                  echo "📁 失败原因: 缺少依赖文件"
-                fi
-              fi
-            else
-              echo "⚠️ 没有为 $pkg 定义编译策略"
-              SKIPPED_PACKAGES+=("$pkg")
-            fi
-          done
-          
-          echo ""
-          echo "📊 重编译最终结果:"
-          echo "  - ✅ 成功: ${#SUCCESSFUL_RECOMPILES[@]} (${SUCCESSFUL_RECOMPILES[*]})"
-          echo "  - ❌ 失败: ${#FAILED_RECOMPILES[@]} (${FAILED_RECOMPILES[*]})"
-          echo "  - ⏭️  跳过: ${#SKIPPED_PACKAGES[@]} (${SKIPPED_PACKAGES[*]})"
-          
-          # 最终资源报告
-          echo ""
-          echo "💾 最终资源状态:"
-          df -h | grep -E '(/|/mnt)' | while read line; do echo "  $line"; done
-          echo "🧠 内存状态:"
-          free -h
-          
-          if [ ${#FAILED_RECOMPILES[@]} -eq 0 ]; then
-            echo "🎉 所有包重编译成功!"
-            echo "RECOMPILE_SUCCESS=true" >> $GITHUB_ENV
-          else
-            echo "⚠️ 有 ${#FAILED_RECOMPILES[@]} 个包重编译失败"
-            echo "RECOMPILE_SUCCESS=partial" >> $GITHUB_ENV
-          fi
-
-      - name: "🚀 备用快速编译策略"
-        if: env.RECOMPILE_SUCCESS == 'partial' && env.FAILED_PACKAGES
-        timeout-minutes: 30
-        run: |
-          cd ${{ env.SOURCE_DIR }}
-          echo "=== 🚀 备用快速编译策略 ==="
-          
-          FAILED_PACKAGES=(${FAILED_PACKAGES// / })
-          echo "🔄 对失败包使用快速编译策略: ${FAILED_PACKAGES[*]}"
-          
-          # 快速编译策略 - 跳过验证和调试
-          declare -A QUICK_COMPILE_STRATEGY=(
-            ["kernel"]="make target/linux/compile -j1 V=0"
-            ["busybox"]="make package/busybox/compile -j1 V=0"
-            ["base-files"]="make package/base-files/compile -j1 V=0"
-            ["libc"]="make toolchain/compile -j1 V=0"
-          )
-          
-          QUICK_SUCCESS=()
-          QUICK_FAILED=()
-          
-          for pkg in "${FAILED_PACKAGES[@]}"; do
-            if [ -n "${QUICK_COMPILE_STRATEGY[$pkg]}" ]; then
-              echo "🚀 快速编译: $pkg"
-              
-              # 简化编译 - 禁用调试和额外检查
-              export KERNEL_DEBUG=""
-              export DEBUG=""
-              export EXTRA_CFLAGS="-O2"
-              
-              QUICK_LOG="${{ env.BUILD_LOG_DIR }}/quick-$pkg.log"
-              if eval "${QUICK_COMPILE_STRATEGY[$pkg]}" 2>&1 | tee "$QUICK_LOG"; then
-                echo "✅ $pkg 快速编译成功"
-                QUICK_SUCCESS+=("$pkg")
-              else
-                echo "❌ $pkg 快速编译失败"
-                QUICK_FAILED+=("$pkg")
-              fi
-            fi
-          done
-          
-          echo "📊 快速编译结果:"
-          echo "  - 成功: ${#QUICK_SUCCESS[@]}"
-          echo "  - 失败: ${#QUICK_FAILED[@]}"
-          
-          if [ ${#QUICK_SUCCESS[@]} -gt 0 ]; then
-            echo "🔄 更新重编译状态..."
-            echo "RECOMPILE_SUCCESS=partial_with_quick" >> $GITHUB_ENV
-          fi
-
-      - name: "🔍 根文件系统预检查"
-        timeout-minutes: 5
-        run: |
-          cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔍 根文件系统预检查 ==="
-          
-          echo "🔍 检查根文件系统组件..."
-          REQUIRED_COMPONENTS=(
-            "build_dir/target-*/root-*"
-            "build_dir/target-*/base-files-*"
-            "build_dir/target-*/busybox-*"
-            "build_dir/target-*/linux-*/linux-*"
-          )
-          
-          MISSING_COMPONENTS=0
-          for component in "${REQUIRED_COMPONENTS[@]}"; do
-            if ls -d $component >/dev/null 2>&1; then
-              echo "✅ $(basename $(ls -d $component 2>/dev/null | head -1)): 存在"
-            else
-              echo "❌ $component: 缺失"
-              MISSING_COMPONENTS=$((MISSING_COMPONENTS+1))
-            fi
-          done
-          
-          if [ $MISSING_COMPONENTS -gt 0 ]; then
-            echo "🚨 缺失 $MISSING_COMPONENTS 个关键组件，无法生成镜像"
-            echo "🔄 尝试修复..."
-            
-            # 重新编译缺失的核心组件
-            make package/base-files/compile V=s || true
-            make package/busybox/compile V=s || true
-            make target/linux/compile V=s || true
-            
-            echo "✅ 修复尝试完成"
-          else
-            echo "🎉 所有根文件系统组件完整"
-          fi
+          echo "✅ 工具链编译完成"
 
       - name: "🔍 智能编译前最终验证"
         timeout-minutes: 5
@@ -1722,66 +1051,120 @@ jobs:
             echo "READY_FOR_COMPILE=with_warnings" >> $GITHUB_ENV
           fi
 
-      - name: "👁️ 增强编译过程监控"
+      - name: "🚀 智能编译与重试机制"
         if: env.READY_FOR_COMPILE
         timeout-minutes: 180
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 👁️ 增强编译过程监控 ==="
+          echo "=== 🚀 智能编译与重试机制 ==="
           
-          # 改进的监控函数，更好地捕获错误
-          enhanced_monitor_compile() {
-            local log_file="$1"
-            local max_attempts=2
-            local attempt=1
-            local compile_success=false
+          # 设置环境优化
+          export FORCE_UNSAFE_CONFIGURE=1
+          export LC_ALL=C
+          ulimit -S -n 8192
+          
+          MAX_COMPILE_ATTEMPTS=2
+          ATTEMPT=1
+          COMPILE_SUCCESS=false
+          
+          while [ $ATTEMPT -le $MAX_COMPILE_ATTEMPTS ] && [ "$COMPILE_SUCCESS" = "false" ]; do
+            echo "🔄 编译尝试 $ATTEMPT/$MAX_COMPILE_ATTEMPTS"
             
-            while [ $attempt -le $max_attempts ] && [ "$compile_success" = "false" ]; do
-              echo "🔄 编译尝试 $attempt/$max_attempts"
-              
-              # 使用更严格的错误检测
-              if make -j${{ env.PARALLEL_JOBS }} V=s 2>&1 | tee "$log_file.$attempt"; then
-                # 检查是否真正成功（不仅仅是make退出码）
-                if grep -q "packages built" "$log_file.$attempt" || [ -d "bin/targets" ]; then
-                  echo "✅ 编译成功完成"
-                  compile_success=true
-                  break
-                else
-                  echo "⚠️ make命令成功但可能未完成编译"
-                fi
+            # 调整并行任务数：第一次用正常，第二次减少
+            if [ $ATTEMPT -eq 1 ]; then
+              JOBS=${{ env.PARALLEL_JOBS }}
+            else
+              JOBS=$(( ${{ env.PARALLEL_JOBS }} / 2 ))
+              echo "🧹 清理之前的构建..."
+              make target/linux-clean 2>/dev/null || true
+              make package-cleanup 2>/dev/null || true
+            fi
+            
+            COMPILE_LOG="${{ env.BUILD_LOG_DIR }}/compile-attempt-$ATTEMPT.log"
+            echo "🔧 使用 $JOBS 个并行任务编译..."
+            
+            if make -j$JOBS V=s 2>&1 | tee "$COMPILE_LOG"; then
+              # 验证编译是否真正成功
+              if [ -d "bin/targets" ] && find bin/targets -name "*.bin" 2>/dev/null | grep -q .; then
+                echo "✅ 编译验证成功!"
+                COMPILE_SUCCESS=true
+                echo "BUILD_STATUS=success" >> $GITHUB_ENV
+                break
               else
-                echo "❌ 编译尝试 $attempt 失败"
+                echo "⚠️ 编译完成但未生成固件文件"
+              fi
+            else
+              echo "❌ 编译尝试 $ATTEMPT 失败"
+              ATTEMPT=$((ATTEMPT+1))
+              
+              if [ $ATTEMPT -le $MAX_COMPILE_ATTEMPTS ]; then
+                echo "🔄 准备重试编译..."
+                sleep 10
                 
-                # 分析具体错误
-                if grep -q "Error 2" "$log_file.$attempt"; then
-                  echo "🔧 检测到包编译错误，尝试修复..."
-                  make package/cleanup V=s 2>/dev/null || true
-                fi
-                
-                attempt=$((attempt+1))
-                if [ $attempt -le $max_attempts ]; then
-                  echo "🔄 准备重试..."
-                  sleep 10
+                # 检查磁盘空间，不足则清理
+                AVAILABLE_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
+                if [ "$AVAILABLE_SPACE" -lt 5 ]; then
+                  echo "🧹 磁盘空间不足，执行深度清理..."
+                  make dirclean 2>/dev/null || true
                 fi
               fi
-            done
-            
-            if [ "$compile_success" = "true" ]; then
-              return 0
-            else
-              return 1
             fi
-          }
+          done
           
-          # 执行增强监控
-          COMPILE_LOG="${{ env.BUILD_LOG_DIR }}/enhanced-compile"
-          if enhanced_monitor_compile "$COMPILE_LOG"; then
-            echo "🎉 增强监控编译完成"
-            echo "BUILD_STATUS=success" >> $GITHUB_ENV
-          else
+          if [ "$COMPILE_SUCCESS" = "false" ]; then
             echo "❌ 所有编译尝试都失败"
             echo "BUILD_STATUS=failed" >> $GITHUB_ENV
             exit 1
+          fi
+
+      - name: "🎯 严格工厂镜像保障"
+        if: env.BUILD_STATUS == 'success'
+        timeout-minutes: 25
+        run: |
+          cd ${{ env.SOURCE_DIR }}
+          echo "=== 🎯 严格工厂镜像保障 ==="
+          
+          echo "🔧 确保工厂镜像配置..."
+          # 强制启用工厂镜像生成
+          echo "CONFIG_TARGET_IMAGES_INCLUDE_FACTORY=y" >> .config
+          echo "CONFIG_TARGET_IMAGES_INCLUDE_SYSUPGRADE=y" >> .config
+          echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
+          
+          echo "🔄 重新运行defconfig确保配置生效..."
+          make defconfig 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/factory-defconfig.log
+          
+          echo "🔍 检查工厂镜像生成状态..."
+          ASUS_FACTORY=$(find bin/targets -name "*asus*rt-ac42u*" -o -name "*rt-ac42u*" | grep -i factory || true)
+          
+          if [ -n "$ASUS_FACTORY" ]; then
+            echo "✅ 工厂镜像已生成:"
+            for img in $ASUS_FACTORY; do
+              size=$(du -h "$img" | cut -f1)
+              echo "  - $img ($size)"
+            done
+            echo "FACTORY_EXISTS=true" >> $GITHUB_ENV
+          else
+            echo "❌ 未找到工厂镜像，执行专门编译..."
+            echo "🔄 专门编译目标设备镜像..."
+            
+            # 专门编译工厂镜像
+            make target/linux/install -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/factory-special.log || true
+            
+            # 最后尝试完整目标编译
+            make target/install -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/factory-final.log || true
+            
+            ASUS_FACTORY_RETRY=$(find bin/targets -name "*asus*rt-ac42u*" -o -name "*rt-ac42u*" | grep -i factory || true)
+            if [ -n "$ASUS_FACTORY_RETRY" ]; then
+              echo "✅ 工厂镜像修复成功!"
+              for img in $ASUS_FACTORY_RETRY; do
+                size=$(du -h "$img" | cut -f1)
+                echo "  - $img ($size)"
+              done
+              echo "FACTORY_EXISTS=true" >> $GITHUB_ENV
+            else
+              echo "❌ 工厂镜像生成失败"
+              echo "FACTORY_EXISTS=false" >> $GITHUB_ENV
+            fi
           fi
 
       - name: "🔍 编译完整性验证"
@@ -1822,96 +1205,6 @@ jobs:
             exit 1
           else
             echo "🎉 编译完整性验证通过"
-          fi
-
-      - name: "🔄 基于监控的智能修复"
-        if: failure() && env.BUILD_STATUS == 'failed'
-        timeout-minutes: 30
-        run: |
-          cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔄 基于监控的智能修复 ==="
-          
-          MONITOR_FILE="${{ env.BUILD_LOG_DIR }}/compile-monitor.json"
-          if [ -f "$MONITOR_FILE" ]; then
-            echo "🔍 分析监控数据..."
-            
-            # 提取常见的失败模式
-            STUCK_PACKAGES=$(jq -r '.interventions[] | select(.type == "stuck_config") | .package' "$MONITOR_FILE" 2>/dev/null | head -3)
-            MISSING_TARGETS=$(jq -r '.interventions[] | select(.type == "missing_target") | .target' "$MONITOR_FILE" 2>/dev/null | head -3)
-            
-            if [ -n "$STUCK_PACKAGES" ]; then
-              echo "🔧 处理卡住的包: $STUCK_PACKAGES"
-              for pkg in $STUCK_PACKAGES; do
-                echo "🔄 重新配置: $pkg"
-                make "package/$pkg/{clean,configure}" -j1 V=s 2>&1 | tee "${{ env.BUILD_LOG_DIR }}/fix-$pkg.log" || true
-              done
-            fi
-            
-            if [ -n "$MISSING_TARGETS" ]; then
-              echo "🔧 处理缺失目标..."
-              for target in $MISSING_TARGETS; do
-                clean_target=$(echo "$target" | sed "s/'//g")
-                echo "🔄 清理目标: $clean_target"
-                make "$clean_target/clean" 2>&1 | tee "${{ env.BUILD_LOG_DIR }}/clean-$clean_target.log" || true
-              done
-            fi
-            
-            echo "🔄 尝试继续编译..."
-            if make -j${{ env.PARALLEL_JOBS }} V=s 2>&1 | tee "${{ env.BUILD_LOG_DIR }}/resume-compile.log"; then
-              echo "🎉 修复后编译成功!"
-              echo "BUILD_STATUS=success" >> $GITHUB_ENV
-            else
-              echo "❌ 修复后编译仍然失败"
-              exit 1
-            fi
-          else
-            echo "❌ 无监控数据，无法智能修复"
-            exit 1
-          fi
-
-      - name: "🎯 严格工厂镜像保障"
-        if: env.BUILD_STATUS == 'success'
-        timeout-minutes: 25
-        run: |
-          cd ${{ env.SOURCE_DIR }}
-          echo "=== 🎯 严格工厂镜像保障 ==="
-          echo "🔍 严格检查工厂镜像生成状态..."
-          ASUS_FACTORY=$(find bin/targets -name "*asus*rt-ac42u*" -o -name "*rt-ac42u*" | grep -i factory || true)
-          
-          if [ -n "$ASUS_FACTORY" ]; then
-            echo "✅ 工厂镜像已存在:"
-            for img in $ASUS_FACTORY; do
-              size=$(du -h "$img" | cut -f1)
-              echo "  - $img ($size)"
-            done
-            echo "FACTORY_EXISTS=true" >> $GITHUB_ENV
-          else
-            echo "❌ 未找到工厂镜像，开始严格修复流程..."
-            echo "FACTORY_EXISTS=false" >> $GITHUB_ENV
-            
-            echo "🔧 第一步: 重新配置目标..."
-            make target/linux/{clean,prepare} V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/factory-repair-step1.log || true
-            
-            echo "🔧 第二步: 重新编译内核..."
-            make target/linux/compile -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/factory-repair-step2.log || true
-            
-            echo "🔧 第三步: 专门编译目标设备镜像..."
-            make target/linux/ipq40xx/image/install -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/factory-repair-step3.log || true
-            
-            echo "🔧 第四步: 最后尝试完整目标编译..."
-            make target/install -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/factory-repair-step4.log || true
-            
-            ASUS_FACTORY_RETRY=$(find bin/targets -name "*asus*rt-ac42u*" -o -name "*rt-ac42u*" | grep -i factory || true)
-            if [ -n "$ASUS_FACTORY_RETRY" ]; then
-              echo "✅ 工厂镜像修复成功!"
-              for img in $ASUS_FACTORY_RETRY; do
-                size=$(du -h "$img" | cut -f1)
-                echo "  - $img ($size)"
-              done
-              echo "FACTORY_EXISTS=true" >> $GITHUB_ENV
-            else
-              echo "❌ 工厂镜像生成失败"
-            fi
           fi
 
       - name: "🔍 严格编译产物验证"
