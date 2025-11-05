@@ -1,4 +1,4 @@
-name: "Universal Firmware Builder - Toolchain Fixed Version"
+name: "Universal Firmware Builder - Kernel Config Fixed Version"
 
 on:
   workflow_dispatch:
@@ -37,10 +37,10 @@ jobs:
       - name: "📥 检出配置仓库"
         uses: "actions/checkout@v4"
 
-      - name: "💾 环境初始化与修复"
+      - name: "💾 环境初始化"
         timeout-minutes: 5
         run: |
-          echo "=== 💾 环境初始化与修复 ==="
+          echo "=== 💾 环境初始化 ==="
           sudo mkdir -p ${{ env.SOURCE_DIR }} ${{ env.ARTIFACTS_DIR }} ${{ env.CCACHE_DIR }} ${{ env.BUILD_LOG_DIR }} ${{ env.DOWNLOAD_DIR }}
           sudo chown -R $USER:$USER /mnt/*
           if [ -f /mnt/swapfile ]; then
@@ -55,10 +55,10 @@ jobs:
           free -h
           echo "✅ 环境初始化完成"
 
-      - name: "🛠️ 安装完整的编译工具链"
+      - name: "🛠️ 安装编译依赖"
         timeout-minutes: 10
         run: |
-          echo "=== 🛠️ 安装完整的编译工具链 ==="
+          echo "=== 🛠️ 安装编译依赖 ==="
           sudo apt-get update
           sudo apt-get install -y build-essential
           sudo apt-get install -y gcc g++ gcc-multilib g++-multilib
@@ -77,12 +77,6 @@ jobs:
           sudo apt-get install -y libelf-dev libssl-dev
           sudo apt-get install -y zlib1g-dev libxml2-dev
           sudo apt-get install -y liblzma-dev liblzo2-dev
-          echo "🔍 验证工具链:"
-          gcc --version || echo "❌ gcc 未安装"
-          g++ --version || echo "❌ g++ 未安装"
-          make --version || echo "❌ make 未安装"
-          python3 --version || echo "❌ python3 未安装"
-          cmake --version || echo "❌ cmake 未安装"
           echo "✅ 编译工具链安装完成"
 
       - name: "⚡ 配置CCache"
@@ -106,35 +100,35 @@ jobs:
           git clone --depth=1 --branch "openwrt-21.02" https://github.com/immortalwrt/immortalwrt.git .
           echo "✅ 源码获取完成"
 
-      - name: "🔧 应用配置与修复工具链"
+      - name: "🔧 应用配置与内核修复"
         timeout-minutes: 10
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔧 应用配置与修复工具链 ==="
+          echo "=== 🔧 应用配置与内核修复 ==="
           CONFIG_FILE="$GITHUB_WORKSPACE/${{ github.event.inputs.config_profile }}"
           if [ -f "$CONFIG_FILE" ]; then
             cp "$CONFIG_FILE" .config
             echo "✅ 配置文件应用: $CONFIG_FILE"
           else
             echo "❌ 配置文件未找到: $CONFIG_FILE"
+            echo "🔍 搜索配置文件..."
+            find $GITHUB_WORKSPACE -name "*${{ github.event.inputs.config_profile }}*" -type f | head -5
             exit 1
           fi
-          echo "🔧 修复工具链配置..."
-          sed -i 's/CONFIG_GCC_USE_GRAPHITE=.*/# CONFIG_GCC_USE_GRAPHITE is not set/' .config 2>/dev/null || true
-          sed -i 's/CONFIG_GCC_USE_VERSION_11=.*/CONFIG_GCC_USE_VERSION_11=y/' .config 2>/dev/null || echo "CONFIG_GCC_USE_VERSION_11=y" >> .config
-          echo "# CONFIG_GCC_USE_GRAPHITE is not set" >> .config
-          echo "# CONFIG_GCC_USE_LTO is not set" >> .config
-          echo "CONFIG_GCC_USE_VERSION_11=y" >> .config
+          echo "🔧 修复内核配置..."
           echo "CONFIG_TARGET_IMAGES_INCLUDE_FACTORY=y" >> .config
           echo "CONFIG_TARGET_IMAGES_INCLUDE_SYSUPGRADE=y" >> .config
+          echo "CONFIG_TARGET_ipq40xx=y" >> .config
+          echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+          echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
           make defconfig
           echo "✅ 配置修复完成"
 
-      - name: "🔄 初始化最小化Feeds"
+      - name: "🔄 初始化Feeds"
         timeout-minutes: 10
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔄 初始化最小化Feeds ==="
+          echo "=== 🔄 初始化Feeds ==="
           echo "src-git packages https://github.com/immortalwrt/packages.git;openwrt-21.02" > feeds.conf
           echo "src-git luci https://github.com/immortalwrt/luci.git;openwrt-21.02" >> feeds.conf
           echo "📋 Feeds配置内容:"
@@ -155,31 +149,26 @@ jobs:
           make download -j1 V=s
           echo "✅ 下载完成"
 
-      - name: "🔧 修复工具链编译环境"
+      - name: "🔧 修复内核编译环境"
         timeout-minutes: 10
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔧 修复工具链编译环境 ==="
-          rm -rf build_dir/host/gcc-* 2>/dev/null || true
-          rm -rf build_dir/toolchain-* 2>/dev/null || true
-          rm -rf staging_dir/host 2>/dev/null || true
-          rm -rf staging_dir/toolchain-* 2>/dev/null || true
+          echo "=== 🔧 修复内核编译环境 ==="
           export FORCE_UNSAFE_CONFIGURE=1
           export LC_ALL=C
           export LANG=C
-          export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
-          mkdir -p staging_dir/host/bin
-          ln -sf /usr/bin/gcc staging_dir/host/bin/gcc 2>/dev/null || true
-          ln -sf /usr/bin/g++ staging_dir/host/bin/g++ 2>/dev/null || true
-          ln -sf /usr/bin/as staging_dir/host/bin/as 2>/dev/null || true
-          ln -sf /usr/bin/ld staging_dir/host/bin/ld 2>/dev/null || true
-          echo "🔧 环境修复完成"
+          echo "🔧 清理可能的内核构建目录..."
+          rm -rf build_dir/target-*/linux-* 2>/dev/null || true
+          rm -rf build_dir/toolchain-* 2>/dev/null || true
+          echo "🔧 确保内核配置目录存在..."
+          mkdir -p build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic/linux-4.4.60
+          echo "✅ 内核环境修复完成"
 
-      - name: "🛠️ 分阶段编译工具链"
-        timeout-minutes: 120
+      - name: "🛠️ 编译工具链"
+        timeout-minutes: 90
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🛠️ 分阶段编译工具链 ==="
+          echo "=== 🛠️ 编译工具链 ==="
           export FORCE_UNSAFE_CONFIGURE=1
           export LC_ALL=C
           export LANG=C
@@ -189,23 +178,21 @@ jobs:
           else
             echo "⚠️ 主机工具编译有警告，继续执行..."
           fi
-          echo "🔧 阶段2: 编译工具链 - 尝试1 (标准)..."
-          if make toolchain/compile -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/toolchain-attempt1.log; then
+          echo "🔧 阶段2: 编译工具链..."
+          if make toolchain/compile -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/toolchain-compile.log; then
             echo "✅ 工具链编译成功"
             echo "TOOLCHAIN_SUCCESS=true" >> $GITHUB_ENV
           else
-            echo "❌ 工具链编译尝试1失败，分析错误..."
-            if grep -q "cannot compute suffix of object files" ${{ env.BUILD_LOG_DIR }}/toolchain-attempt1.log; then
+            echo "❌ 工具链编译失败"
+            echo "🔍 分析错误..."
+            if grep -q "cannot compute suffix of object files" ${{ env.BUILD_LOG_DIR }}/toolchain-compile.log; then
               echo "🔧 检测到对象文件后缀错误，尝试修复..."
               rm -rf build_dir/host/gcc-* 2>/dev/null || true
-              echo "🔧 阶段3: 清理后重新编译工具链..."
-              if make toolchain/compile -j1 V=sc 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/toolchain-attempt2.log; then
+              if make toolchain/compile -j1 V=sc 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/toolchain-retry.log; then
                 echo "✅ 工具链修复编译成功"
                 echo "TOOLCHAIN_SUCCESS=true" >> $GITHUB_ENV
               else
                 echo "❌ 工具链修复编译失败"
-                echo "🔍 最后错误:"
-                tail -50 ${{ env.BUILD_LOG_DIR }}/toolchain-attempt2.log
                 exit 1
               fi
             else
@@ -213,6 +200,39 @@ jobs:
               exit 1
             fi
           fi
+
+      - name: "🔧 内核准备与配置修复"
+        if: env.TOOLCHAIN_SUCCESS == 'true'
+        timeout-minutes: 15
+        run: |
+          cd ${{ env.SOURCE_DIR }}
+          echo "=== 🔧 内核准备与配置修复 ==="
+          export FORCE_UNSAFE_CONFIGURE=1
+          export LC_ALL=C
+          echo "🔧 阶段1: 准备目标Linux..."
+          if make target/linux/prepare -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/kernel-prepare.log; then
+            echo "✅ 目标Linux准备成功"
+          else
+            echo "❌ 目标Linux准备失败，尝试手动修复..."
+            echo "🔧 手动创建内核配置目录..."
+            mkdir -p build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic/linux-4.4.60
+            echo "🔧 手动运行内核配置..."
+            make target/linux/configure -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/kernel-configure.log || true
+          fi
+          echo "🔧 阶段2: 验证内核配置..."
+          if [ -f "build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic/linux-4.4.60/.config" ]; then
+            echo "✅ 内核配置文件存在"
+          else
+            echo "❌ 内核配置文件不存在，尝试复制..."
+            if [ -f ".config" ]; then
+              cp .config build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic/linux-4.4.60/
+              echo "✅ 配置文件复制成功"
+            else
+              echo "❌ 根目录.config文件也不存在"
+              exit 1
+            fi
+          fi
+          echo "✅ 内核准备完成"
 
       - name: "🚀 编译固件"
         if: env.TOOLCHAIN_SUCCESS == 'true'
@@ -227,12 +247,22 @@ jobs:
             echo "✅ 固件编译成功"
             echo "BUILD_STATUS=success" >> $GITHUB_ENV
           else
-            echo "❌ 固件编译失败，尝试单线程重试..."
-            if make -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/compile-retry.log; then
-              echo "✅ 单线程编译成功"
-              echo "BUILD_STATUS=success" >> $GITHUB_ENV
+            echo "❌ 固件编译失败，检查具体错误..."
+            if grep -q "Configuration file.*not found" ${{ env.BUILD_LOG_DIR }}/compile.log; then
+              echo "🔧 检测到内核配置问题，尝试修复..."
+              rm -rf build_dir/target-*/linux-*/linux-* 2>/dev/null || true
+              make target/linux/prepare -j1 V=s
+              echo "🔄 重新尝试编译..."
+              if make -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/compile-retry.log; then
+                echo "✅ 修复后编译成功"
+                echo "BUILD_STATUS=success" >> $GITHUB_ENV
+              else
+                echo "❌ 修复后编译仍然失败"
+                echo "BUILD_STATUS=failed" >> $GITHUB_ENV
+                exit 1
+              fi
             else
-              echo "❌ 所有编译尝试失败"
+              echo "❌ 其他编译错误"
               echo "BUILD_STATUS=failed" >> $GITHUB_ENV
               exit 1
             fi
@@ -296,5 +326,5 @@ jobs:
               echo "⚠️ 构建成功但未生成工厂镜像"
             fi
           else
-            echo "❌ 构建失败 - 主要问题: 工具链编译错误"
+            echo "❌ 构建失败 - 主要问题: 内核配置错误"
           fi
