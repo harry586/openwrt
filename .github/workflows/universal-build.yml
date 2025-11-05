@@ -1,4 +1,4 @@
-name: "Universal Firmware Builder - Enhanced Disk Monitoring Version"
+name: "Universal Firmware Builder - Toolchain Fixed Version"
 
 on:
   workflow_dispatch:
@@ -19,12 +19,6 @@ on:
         required: true
         type: string
         default: ".config_rt-ac42u_immortalwrt"
-      build_optimization:
-        description: "编译优化策略"
-        required: true
-        type: choice
-        options: ["balanced", "speed", "stability", "minimal"]
-        default: "minimal"
 
 env:
   TZ: "Asia/Shanghai"
@@ -33,7 +27,6 @@ env:
   CCACHE_DIR: "/mnt/ccache"
   BUILD_LOG_DIR: "/mnt/build-logs"
   DOWNLOAD_DIR: "/mnt/downloads"
-  SPACE_THRESHOLD: "2"
 
 jobs:
   build:
@@ -44,146 +37,63 @@ jobs:
       - name: "📥 检出配置仓库"
         uses: "actions/checkout@v4"
 
-      - name: "🔍 智能文件发现与配置解析"
-        id: "config-parser"
-        run: |
-          echo "=== 🔍 智能文件发现与配置解析 ==="
-          echo "📋 查找 repositories.json 文件..."
-          
-          REPO_JSON_FOUND=""
-          SEARCH_PATHS=(".", "..", "$GITHUB_WORKSPACE", "configs", "../configs", "./firmware-config")
-          
-          for path in "${SEARCH_PATHS[@]}"; do
-            if [ -f "$path/repositories.json" ]; then
-              REPO_JSON_FOUND="$path/repositories.json"
-              FILE_SIZE=$(du -h "$REPO_JSON_FOUND" | cut -f1)
-              echo "✅ 在路径 '$path' 找到 repositories.json ($FILE_SIZE)"
-              break
-            fi
-          done
-          
-          if [ -z "$REPO_JSON_FOUND" ]; then
-            echo "🔍 精确查找失败，尝试模糊搜索..."
-            REPO_JSON_FOUND=$(find . -maxdepth 3 -name "*repositories*.json" -type f 2>/dev/null | head -1)
-            if [ -n "$REPO_JSON_FOUND" ]; then
-              FILE_SIZE=$(du -h "$REPO_JSON_FOUND" | cut -f1)
-              echo "✅ 模糊搜索找到: $REPO_JSON_FOUND ($FILE_SIZE)"
-            fi
-          fi
-          
-          if [ -z "$REPO_JSON_FOUND" ]; then
-            echo "❌ 错误: 无法找到 repositories.json 文件"
-            echo "当前目录内容:"
-            ls -la
-            exit 1
-          fi
-          
-          echo "REPO_JSON_PATH=$REPO_JSON_FOUND" >> $GITHUB_ENV
-          echo "✅ 配置文件解析完成"
-
-      - name: "💾 初始磁盘空间分析"
-        timeout-minutes: 3
-        run: |
-          echo "=== 💾 初始磁盘空间分析 ==="
-          echo "📊 系统磁盘空间状态:"
-          df -h
-          
-          echo ""
-          echo "🔍 重点监控分区:"
-          df -h | grep -E '(/|/mnt|/dev/root)' | while read line; do
-            echo "  $line"
-          done
-          
-          ROOT_AVAILABLE=$(df / | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          MNT_AVAILABLE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}' 2>/dev/null || echo "0")
-          
-          echo ""
-          echo "📈 关键分区可用空间:"
-          echo "  - 根分区(/): ${ROOT_AVAILABLE}GB"
-          echo "  - 数据分区(/mnt): ${MNT_AVAILABLE}GB"
-          echo "  - 空间阈值: ${{ env.SPACE_THRESHOLD }}GB"
-          
-          if [ "$MNT_AVAILABLE" -lt 20 ]; then
-            echo "⚠️ 警告: /mnt 分区空间不足20GB，启用极限优化模式"
-            echo "EXTREME_OPTIMIZATION=true" >> $GITHUB_ENV
-          else
-            echo "EXTREME_OPTIMIZATION=false" >> $GITHUB_ENV
-          fi
-          
-          if [ "$MNT_AVAILABLE" -lt 5 ]; then
-            echo "❌ 错误: /mnt 分区空间不足5GB，无法继续"
-            exit 1
-          fi
-          
-          echo "INITIAL_MNT_SPACE=$MNT_AVAILABLE" >> $GITHUB_ENV
-          echo "INITIAL_ROOT_SPACE=$ROOT_AVAILABLE" >> $GITHUB_ENV
-
-      - name: "💾 增强内存与交换管理"
+      - name: "💾 环境初始化与修复"
         timeout-minutes: 5
         run: |
-          echo "=== 💾 增强内存与交换管理 ==="
-          echo "📊 初始内存状态:"
-          free -h
-          echo "🔄 创建智能交换文件..."
+          echo "=== 💾 环境初始化与修复 ==="
+          sudo mkdir -p ${{ env.SOURCE_DIR }} ${{ env.ARTIFACTS_DIR }} ${{ env.CCACHE_DIR }} ${{ env.BUILD_LOG_DIR }} ${{ env.DOWNLOAD_DIR }}
+          sudo chown -R $USER:$USER /mnt/*
           if [ -f /mnt/swapfile ]; then
             sudo swapoff /mnt/swapfile 2>/dev/null || true
             sudo rm -f /mnt/swapfile 2>/dev/null || true
           fi
-          MNT_AVAILABLE=${{ env.INITIAL_MNT_SPACE }}
-          if [ "$MNT_AVAILABLE" -gt 30 ]; then
-            SWAP_SIZE="24G"
-            echo "💡 空间充足，使用 ${SWAP_SIZE} 交换文件"
-          elif [ "$MNT_AVAILABLE" -gt 20 ]; then
-            SWAP_SIZE="16G"
-            echo "💡 空间适中，使用 ${SWAP_SIZE} 交换文件"
-          else
-            SWAP_SIZE="8G"
-            echo "💡 空间紧张，使用 ${SWAP_SIZE} 交换文件"
-          fi
-          sudo dd if=/dev/zero of=/mnt/swapfile bs=1M count=$(( ${SWAP_SIZE%G} * 1024 )) status=progress
+          sudo dd if=/dev/zero of=/mnt/swapfile bs=1M count=16384 status=progress
           sudo chmod 600 /mnt/swapfile
           sudo mkswap /mnt/swapfile
           sudo swapon /mnt/swapfile
-          echo "📊 交换文件激活后内存状态:"
+          echo "📊 内存状态:"
           free -h
-          sudo mkdir -p ${{ env.SOURCE_DIR }} ${{ env.ARTIFACTS_DIR }} ${{ env.CCACHE_DIR }} ${{ env.BUILD_LOG_DIR }} ${{ env.DOWNLOAD_DIR }}
-          sudo chown -R $USER:$USER /mnt/*
-          echo "✅ 内存管理完成"
+          echo "✅ 环境初始化完成"
 
-      - name: "🛠️ 安装编译依赖"
+      - name: "🛠️ 安装完整的编译工具链"
         timeout-minutes: 10
         run: |
-          echo "=== 🛠️ 安装编译依赖 ==="
+          echo "=== 🛠️ 安装完整的编译工具链 ==="
           sudo apt-get update
-          sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3 python3-pip rsync unzip zlib1g-dev file wget jq ccache libtool-bin automake autoconf pkg-config subversion curl cmake ninja-build libelf-dev libssl-dev zlib1g-dev libxml2-dev liblzma-dev liblzo2-dev
-          echo "✅ 依赖安装完成"
+          sudo apt-get install -y build-essential
+          sudo apt-get install -y gcc g++ gcc-multilib g++-multilib
+          sudo apt-get install -y clang llvm
+          sudo apt-get install -y flex bison
+          sudo apt-get install -y gettext texinfo
+          sudo apt-get install -y libncurses5-dev libssl-dev
+          sudo apt-get install -y python3 python3-pip
+          sudo apt-get install -y rsync unzip zlib1g-dev
+          sudo apt-get install -y file wget curl jq
+          sudo apt-get install -y ccache
+          sudo apt-get install -y libtool-bin automake autoconf
+          sudo apt-get install -y pkg-config
+          sudo apt-get install -y subversion
+          sudo apt-get install -y cmake ninja-build
+          sudo apt-get install -y libelf-dev libssl-dev
+          sudo apt-get install -y zlib1g-dev libxml2-dev
+          sudo apt-get install -y liblzma-dev liblzo2-dev
+          echo "🔍 验证工具链:"
+          gcc --version || echo "❌ gcc 未安装"
+          g++ --version || echo "❌ g++ 未安装"
+          make --version || echo "❌ make 未安装"
+          python3 --version || echo "❌ python3 未安装"
+          cmake --version || echo "❌ cmake 未安装"
+          echo "✅ 编译工具链安装完成"
 
-      - name: "⚡ 智能缓存与空间优化"
-        timeout-minutes: 3
+      - name: "⚡ 配置CCache"
+        timeout-minutes: 2
         run: |
-          echo "=== ⚡ 智能缓存与空间优化 ==="
-          echo "📊 缓存设置前空间状态:"
-          df -h | grep -E '(/|/mnt)'
-          AVAILABLE_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          echo "当前可用空间: ${AVAILABLE_SPACE}GB"
+          echo "=== ⚡ 配置CCache ==="
           mkdir -p ${{ env.CCACHE_DIR }}
-          if [ "$AVAILABLE_SPACE" -lt 10 ]; then
-            CCACHE_SIZE="1G"
-            echo "⚠️ 空间极度紧张，使用最小缓存: $CCACHE_SIZE"
-          elif [ "$AVAILABLE_SPACE" -lt 15 ]; then
-            CCACHE_SIZE="2G"
-            echo "⚠️ 空间紧张，使用小缓存: $CCACHE_SIZE"
-          else
-            CCACHE_SIZE="4G"
-            echo "✅ 空间充足，使用标准缓存: $CCACHE_SIZE"
-          fi
-          ccache -M $CCACHE_SIZE
+          ccache -M 4G
           ccache -o compression=true
-          ccache -o compression_level=6
-          ccache -o max_files=50000
           echo "CCACHE_DIR=${{ env.CCACHE_DIR }}" >> $GITHUB_ENV
-          echo "CCACHE_SIZE=$CCACHE_SIZE" >> $GITHUB_ENV
-          echo "📊 CCache配置完成:"
+          echo "📊 CCache状态:"
           ccache -s
 
       - name: "📥 获取源码"
@@ -191,291 +101,149 @@ jobs:
         run: |
           echo "=== 📥 获取源码 ==="
           cd ${{ env.SOURCE_DIR }}
-          rm -rf ./* 2>/dev/null || true
-          echo "📊 克隆前空间状态:"
-          df -h | grep -E '(/|/mnt)'
-          case "${{ github.event.inputs.source_preset }}" in
-            "immortalwrt")
-              echo "🔧 克隆 ImmortalWrt 源码..."
-              git clone --depth=1 --branch "${{ github.event.inputs.source_branch }}" https://github.com/immortalwrt/immortalwrt.git .
-              ;;
-            "openwrt")
-              echo "🔧 克隆 OpenWrt 源码..."
-              git clone --depth=1 --branch "${{ github.event.inputs.source_branch }}" https://git.openwrt.org/openwrt/openwrt.git .
-              ;;
-            "lede")
-              echo "🔧 克隆 LEDE 源码..."
-              git clone --depth=1 --branch "${{ github.event.inputs.source_branch }}" https://github.com/coolsnowwolf/lede.git .
-              ;;
-          esac
-          echo "📊 克隆后空间状态:"
-          df -h | grep -E '(/|/mnt)'
+          rm -rf ./*
+          echo "🔧 克隆 ImmortalWrt 源码..."
+          git clone --depth=1 --branch "openwrt-21.02" https://github.com/immortalwrt/immortalwrt.git .
           echo "✅ 源码获取完成"
 
-      - name: "🔧 应用空间优化配置"
+      - name: "🔧 应用配置与修复工具链"
         timeout-minutes: 10
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔧 应用空间优化配置 ==="
-          echo "📊 配置前空间状态:"
-          df -h | grep -E '(/|/mnt)'
+          echo "=== 🔧 应用配置与修复工具链 ==="
           CONFIG_FILE="$GITHUB_WORKSPACE/${{ github.event.inputs.config_profile }}"
           if [ -f "$CONFIG_FILE" ]; then
             cp "$CONFIG_FILE" .config
             echo "✅ 配置文件应用: $CONFIG_FILE"
           else
             echo "❌ 配置文件未找到: $CONFIG_FILE"
-            echo "🔍 在当前目录搜索配置文件..."
-            find . -name "*${{ github.event.inputs.config_profile }}*" -type f | head -5
             exit 1
           fi
-          echo "🔧 应用空间优化配置..."
-          sed -i 's/CONFIG_TARGET_KERNEL_PARTSIZE=.*/CONFIG_TARGET_KERNEL_PARTSIZE=8/' .config 2>/dev/null || echo "CONFIG_TARGET_KERNEL_PARTSIZE=8" >> .config
-          sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=32/' .config 2>/dev/null || echo "CONFIG_TARGET_ROOTFS_PARTSIZE=32" >> .config
-          echo "# CONFIG_DEBUG_INFO is not set" >> .config
-          echo "# CONFIG_KERNEL_DEBUG_INFO is not set" >> .config
-          echo "# CONFIG_DEBUG_KERNEL is not set" >> .config
-          echo "# CONFIG_KERNEL_DEBUG_KERNEL is not set" >> .config
-          echo "# CONFIG_KERNEL_DEBUG_DEVMEM is not set" >> .config
-          echo "CONFIG_STRIP_KERNEL_EXPORTS=y" >> .config
-          echo "CONFIG_SMALL_FLASH=y" >> .config
-          echo "CONFIG_KERNEL_KALLSYMS=n" >> .config
-          echo "CONFIG_KERNEL_DEBUG_FS=n" >> .config
-          echo "CONFIG_SYMBOLIC_ERRNAME=n" >> .config
+          echo "🔧 修复工具链配置..."
+          sed -i 's/CONFIG_GCC_USE_GRAPHITE=.*/# CONFIG_GCC_USE_GRAPHITE is not set/' .config 2>/dev/null || true
+          sed -i 's/CONFIG_GCC_USE_VERSION_11=.*/CONFIG_GCC_USE_VERSION_11=y/' .config 2>/dev/null || echo "CONFIG_GCC_USE_VERSION_11=y" >> .config
+          echo "# CONFIG_GCC_USE_GRAPHITE is not set" >> .config
+          echo "# CONFIG_GCC_USE_LTO is not set" >> .config
+          echo "CONFIG_GCC_USE_VERSION_11=y" >> .config
           echo "CONFIG_TARGET_IMAGES_INCLUDE_FACTORY=y" >> .config
           echo "CONFIG_TARGET_IMAGES_INCLUDE_SYSUPGRADE=y" >> .config
-          echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
           make defconfig
-          echo "📊 配置后空间状态:"
-          df -h | grep -E '(/|/mnt)'
-          echo "✅ 空间优化配置完成"
+          echo "✅ 配置修复完成"
 
       - name: "🔄 初始化最小化Feeds"
         timeout-minutes: 10
         run: |
           cd ${{ env.SOURCE_DIR }}
           echo "=== 🔄 初始化最小化Feeds ==="
-          echo "📊 Feeds初始化前空间状态:"
-          df -h | grep -E '(/|/mnt)'
           echo "src-git packages https://github.com/immortalwrt/packages.git;openwrt-21.02" > feeds.conf
           echo "src-git luci https://github.com/immortalwrt/luci.git;openwrt-21.02" >> feeds.conf
           echo "📋 Feeds配置内容:"
           cat feeds.conf
           ./scripts/feeds update -a
           ./scripts/feeds install -a
-          echo "📊 Feeds初始化后空间状态:"
-          df -h | grep -E '(/|/mnt)'
           echo "✅ Feeds初始化完成"
 
-      - name: "📥 智能下载与空间监控"
+      - name: "📥 下载源码包"
         timeout-minutes: 30
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 📥 智能下载与空间监控 ==="
+          echo "=== 📥 下载源码包 ==="
           mkdir -p ${{ env.DOWNLOAD_DIR }}
           [ -d "dl" ] && rm -rf dl
           ln -sf ${{ env.DOWNLOAD_DIR }} dl
-          echo "📊 下载前空间状态:"
-          df -h | grep -E '(/|/mnt)'
-          INITIAL_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          echo "初始可用空间: ${INITIAL_SPACE}GB"
-          echo "🔧 使用单线程下载避免内存压力..."
-          if ! make download -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/download.log; then
-            echo "❌ 下载失败，检查空间状态..."
-            CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-            echo "当前可用空间: ${CURRENT_SPACE}GB"
-            echo "空间消耗: $((INITIAL_SPACE - CURRENT_SPACE))GB"
-            exit 1
-          fi
-          echo "📊 下载后空间状态:"
-          df -h | grep -E '(/|/mnt)'
-          CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          echo "下载后可用空间: ${CURRENT_SPACE}GB"
-          echo "下载消耗空间: $((INITIAL_SPACE - CURRENT_SPACE))GB"
+          echo "🔧 开始下载..."
+          make download -j1 V=s
           echo "✅ 下载完成"
 
-      - name: "🛠️ 分阶段工具链编译与空间检查"
-        timeout-minutes: 90
+      - name: "🔧 修复工具链编译环境"
+        timeout-minutes: 10
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🛠️ 分阶段工具链编译与空间检查 ==="
+          echo "=== 🔧 修复工具链编译环境 ==="
+          rm -rf build_dir/host/gcc-* 2>/dev/null || true
+          rm -rf build_dir/toolchain-* 2>/dev/null || true
+          rm -rf staging_dir/host 2>/dev/null || true
+          rm -rf staging_dir/toolchain-* 2>/dev/null || true
           export FORCE_UNSAFE_CONFIGURE=1
           export LC_ALL=C
-          ulimit -S -n 8192
-          echo "🔧 阶段1: 编译基础工具..."
-          CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          echo "📊 [基础工具编译前] 当前可用空间: ${CURRENT_SPACE}GB (阈值: ${{ env.SPACE_THRESHOLD }}GB)"
-          if [ "$CURRENT_SPACE" -lt "${{ env.SPACE_THRESHOLD }}" ]; then
-            echo "❌ [基础工具编译前] 错误: 磁盘空间不足 ${{ env.SPACE_THRESHOLD }}GB，当前仅剩 ${CURRENT_SPACE}GB"
-            echo "💾 详细空间使用:"
-            df -h | grep -E '(/|/mnt)'
-            echo "🧹 尝试清理..."
-            make dirclean 2>/dev/null || true
-            ccache -c 2>/dev/null || true
-            exit 1
-          elif [ "$CURRENT_SPACE" -lt 5 ]; then
-            echo "⚠️ [基础工具编译前] 警告: 磁盘空间仅剩 ${CURRENT_SPACE}GB，接近危险阈值"
-          fi
-          if ! make tools/install -j2 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/tools-compile.log; then
-            echo "⚠️ 基础工具编译有警告，检查空间状态..."
-            CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-            echo "📊 [基础工具编译后] 当前可用空间: ${CURRENT_SPACE}GB"
-          fi
-          echo "🔧 阶段2: 编译工具链..."
-          CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          echo "📊 [工具链编译前] 当前可用空间: ${CURRENT_SPACE}GB (阈值: ${{ env.SPACE_THRESHOLD }}GB)"
-          if [ "$CURRENT_SPACE" -lt "${{ env.SPACE_THRESHOLD }}" ]; then
-            echo "❌ [工具链编译前] 错误: 磁盘空间不足 ${{ env.SPACE_THRESHOLD }}GB，当前仅剩 ${CURRENT_SPACE}GB"
-            exit 1
-          fi
-          if ! make toolchain/compile -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/toolchain-compile.log; then
-            echo "❌ 工具链编译失败，检查空间状态..."
-            CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-            echo "📊 [工具链编译失败后] 当前可用空间: ${CURRENT_SPACE}GB"
-            exit 1
-          fi
-          CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          echo "📊 [工具链编译完成后] 当前可用空间: ${CURRENT_SPACE}GB"
-          echo "✅ 工具链编译完成"
+          export LANG=C
+          export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+          mkdir -p staging_dir/host/bin
+          ln -sf /usr/bin/gcc staging_dir/host/bin/gcc 2>/dev/null || true
+          ln -sf /usr/bin/g++ staging_dir/host/bin/g++ 2>/dev/null || true
+          ln -sf /usr/bin/as staging_dir/host/bin/as 2>/dev/null || true
+          ln -sf /usr/bin/ld staging_dir/host/bin/ld 2>/dev/null || true
+          echo "🔧 环境修复完成"
 
-      - name: "🔍 编译前深度空间检查"
-        timeout-minutes: 3
-        run: |
-          echo "=== 🔍 编译前深度空间检查 ==="
-          cd ${{ env.SOURCE_DIR }}
-          CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          THRESHOLD=${{ env.SPACE_THRESHOLD }}
-          echo "📊 编译前详细空间分析:"
-          echo "  - 当前可用空间: ${CURRENT_SPACE}GB"
-          echo "  - 空间阈值: ${THRESHOLD}GB"
-          echo "  - 初始空间: ${{ env.INITIAL_MNT_SPACE }}GB"
-          echo "  - 已消耗空间: $((${{ env.INITIAL_MNT_SPACE }} - CURRENT_SPACE))GB"
-          df -h | grep -E '(/|/mnt)' | while read line; do
-            echo "  $line"
-          done
-          if [ "$CURRENT_SPACE" -lt "$THRESHOLD" ]; then
-            echo "❌ 错误: 编译前磁盘空间不足 ${THRESHOLD}GB"
-            echo "💾 空间使用详情:"
-            echo "🧹 执行紧急清理..."
-            make dirclean 2>/dev/null || true
-            rm -rf build_dir/target-*/linux-*/linux-* 2>/dev/null || true
-            ccache -c 2>/dev/null || true
-            CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-            if [ "$CURRENT_SPACE" -lt "$THRESHOLD" ]; then
-              echo "❌ 紧急清理后空间仍然不足: ${CURRENT_SPACE}GB"
-              exit 1
-            else
-              echo "✅ 紧急清理成功，当前空间: ${CURRENT_SPACE}GB"
-            fi
-          elif [ "$CURRENT_SPACE" -lt 8 ]; then
-            echo "⚠️ 编译警告: 磁盘空间紧张 (${CURRENT_SPACE}GB)，启用极限编译模式"
-            echo "LIMIT_BUILD_MODE=true" >> $GITHUB_ENV
-          else
-            echo "✅ 空间充足，可以开始编译"
-            echo "LIMIT_BUILD_MODE=false" >> $GITHUB_ENV
-          fi
-
-      - name: "🚀 分阶段编译与实时空间监控"
+      - name: "🛠️ 分阶段编译工具链"
         timeout-minutes: 120
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🚀 分阶段编译与实时空间监控 ==="
+          echo "=== 🛠️ 分阶段编译工具链 ==="
           export FORCE_UNSAFE_CONFIGURE=1
           export LC_ALL=C
-          ulimit -S -n 8192
-          if [ "${{ env.LIMIT_BUILD_MODE }}" = "true" ]; then
-            PARALLEL_JOBS=1
-            echo "🔧 极限模式: 使用单线程编译"
+          export LANG=C
+          echo "🔧 阶段1: 编译主机工具..."
+          if make tools/install -j2 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/tools-compile.log; then
+            echo "✅ 主机工具编译成功"
           else
-            PARALLEL_JOBS=2
-            echo "🔧 正常模式: 使用2线程编译"
+            echo "⚠️ 主机工具编译有警告，继续执行..."
           fi
-          echo "🔧 阶段1: 编译目标准备..."
-          CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          echo "📊 [阶段1开始] 实时空间: ${CURRENT_SPACE}GB"
-          if [ "$CURRENT_SPACE" -lt "${{ env.SPACE_THRESHOLD }}" ]; then
-            echo "❌ [阶段1开始] 空间耗尽错误: 仅剩 ${CURRENT_SPACE}GB"
-            echo "💾 空间使用报告:"
-            df -h | grep -E '(/|/mnt)'
-            echo "📁 大文件分析:"
-            find ${{ env.SOURCE_DIR }} -type f -size +100M 2>/dev/null | head -10 | while read file; do
-              size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "unknown")
-              echo "  - $file ($size)"
-            done
-            exit 1
+          echo "🔧 阶段2: 编译工具链 - 尝试1 (标准)..."
+          if make toolchain/compile -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/toolchain-attempt1.log; then
+            echo "✅ 工具链编译成功"
+            echo "TOOLCHAIN_SUCCESS=true" >> $GITHUB_ENV
+          else
+            echo "❌ 工具链编译尝试1失败，分析错误..."
+            if grep -q "cannot compute suffix of object files" ${{ env.BUILD_LOG_DIR }}/toolchain-attempt1.log; then
+              echo "🔧 检测到对象文件后缀错误，尝试修复..."
+              rm -rf build_dir/host/gcc-* 2>/dev/null || true
+              echo "🔧 阶段3: 清理后重新编译工具链..."
+              if make toolchain/compile -j1 V=sc 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/toolchain-attempt2.log; then
+                echo "✅ 工具链修复编译成功"
+                echo "TOOLCHAIN_SUCCESS=true" >> $GITHUB_ENV
+              else
+                echo "❌ 工具链修复编译失败"
+                echo "🔍 最后错误:"
+                tail -50 ${{ env.BUILD_LOG_DIR }}/toolchain-attempt2.log
+                exit 1
+              fi
+            else
+              echo "❌ 未知的工具链错误"
+              exit 1
+            fi
           fi
-          make target/linux/prepare -j$PARALLEL_JOBS V=s
-          CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          echo "📊 [阶段1完成] 实时空间: ${CURRENT_SPACE}GB"
-          echo "🔧 阶段2: 编译内核..."
-          CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          echo "📊 [阶段2开始] 实时空间: ${CURRENT_SPACE}GB"
-          if [ "$CURRENT_SPACE" -lt "${{ env.SPACE_THRESHOLD }}" ]; then
-            echo "❌ [阶段2开始] 空间耗尽错误: 仅剩 ${CURRENT_SPACE}GB"
-            exit 1
-          fi
-          make target/linux/compile -j$PARALLEL_JOBS V=s
-          CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          echo "📊 [阶段2完成] 实时空间: ${CURRENT_SPACE}GB"
-          echo "🔧 阶段3: 编译基础包..."
-          CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          echo "📊 [阶段3开始] 实时空间: ${CURRENT_SPACE}GB"
-          if [ "$CURRENT_SPACE" -lt "${{ env.SPACE_THRESHOLD }}" ]; then
-            echo "❌ [阶段3开始] 空间耗尽错误: 仅剩 ${CURRENT_SPACE}GB"
-            exit 1
-          fi
-          make package/base-files/compile -j$PARALLEL_JOBS V=s
-          make package/busybox/compile -j$PARALLEL_JOBS V=s
-          CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          echo "📊 [阶段3完成] 实时空间: ${CURRENT_SPACE}GB"
-          echo "🔧 阶段4: 完整编译..."
-          CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          echo "📊 [阶段4开始] 实时空间: ${CURRENT_SPACE}GB"
-          if [ "$CURRENT_SPACE" -lt "${{ env.SPACE_THRESHOLD }}" ]; then
-            echo "❌ [阶段4开始] 空间耗尽错误: 仅剩 ${CURRENT_SPACE}GB"
-            exit 1
-          fi
-          if make -j$PARALLEL_JOBS V=s; then
-            CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-            echo "📊 [阶段4完成] 实时空间: ${CURRENT_SPACE}GB"
-            echo "✅ 编译成功"
+
+      - name: "🚀 编译固件"
+        if: env.TOOLCHAIN_SUCCESS == 'true'
+        timeout-minutes: 120
+        run: |
+          cd ${{ env.SOURCE_DIR }}
+          echo "=== 🚀 编译固件 ==="
+          export FORCE_UNSAFE_CONFIGURE=1
+          export LC_ALL=C
+          echo "🔧 开始编译固件..."
+          if make -j2 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/compile.log; then
+            echo "✅ 固件编译成功"
             echo "BUILD_STATUS=success" >> $GITHUB_ENV
           else
-            echo "❌ 编译失败，检查空间状态..."
-            CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-            echo "📊 [编译失败后] 实时空间: ${CURRENT_SPACE}GB"
-            echo "🔄 尝试单线程重试..."
-            if make -j1 V=s; then
-              CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-              echo "📊 [单线程重试完成] 实时空间: ${CURRENT_SPACE}GB"
+            echo "❌ 固件编译失败，尝试单线程重试..."
+            if make -j1 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/compile-retry.log; then
               echo "✅ 单线程编译成功"
               echo "BUILD_STATUS=success" >> $GITHUB_ENV
             else
               echo "❌ 所有编译尝试失败"
-              CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-              echo "📊 [最终失败后] 实时空间: ${CURRENT_SPACE}GB"
               echo "BUILD_STATUS=failed" >> $GITHUB_ENV
               exit 1
             fi
           fi
 
-      - name: "🎯 工厂镜像保障与最终空间报告"
+      - name: "🎯 验证工厂镜像"
         if: env.BUILD_STATUS == 'success'
-        timeout-minutes: 15
+        timeout-minutes: 10
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🎯 工厂镜像保障与最终空间报告 ==="
-          INITIAL_SPACE=${{ env.INITIAL_MNT_SPACE }}
-          CURRENT_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          TOTAL_USED=$((INITIAL_SPACE - CURRENT_SPACE))
-          echo "📊 构建过程空间消耗总结:"
-          echo "  - 初始空间: ${INITIAL_SPACE}GB"
-          echo "  - 最终空间: ${CURRENT_SPACE}GB"
-          echo "  - 总消耗: ${TOTAL_USED}GB"
-          echo "  - 剩余空间比例: $((CURRENT_SPACE * 100 / INITIAL_SPACE))%"
-          df -h | grep -E '(/|/mnt)' | while read line; do
-            echo "  $line"
-          done
+          echo "=== 🎯 验证工厂镜像 ==="
           echo "🔍 检查工厂镜像..."
           ASUS_FACTORY=$(find bin/targets -name "*asus*rt-ac42u*" -o -name "*rt-ac42u*" | grep -i factory || true)
           if [ -n "$ASUS_FACTORY" ]; then
@@ -486,26 +254,16 @@ jobs:
             done
             echo "FACTORY_EXISTS=true" >> $GITHUB_ENV
           else
-            echo "❌ 未找到工厂镜像，执行专门编译..."
-            make target/install -j1 V=s
-            ASUS_FACTORY_RETRY=$(find bin/targets -name "*asus*rt-ac42u*" -o -name "*rt-ac42u*" | grep -i factory || true)
-            if [ -n "$ASUS_FACTORY_RETRY" ]; then
-              echo "✅ 工厂镜像修复成功"
-              echo "FACTORY_EXISTS=true" >> $GITHUB_ENV
-            else
-              echo "❌ 工厂镜像生成失败"
-              echo "FACTORY_EXISTS=false" >> $GITHUB_ENV
-            fi
+            echo "❌ 未找到工厂镜像"
+            echo "FACTORY_EXISTS=false" >> $GITHUB_ENV
           fi
 
-      - name: "📦 产物收集与空间清理"
+      - name: "📦 收集产物"
         if: env.BUILD_STATUS == 'success'
-        timeout-minutes: 8
+        timeout-minutes: 5
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 📦 产物收集与空间清理 ==="
-          echo "📊 收集前空间状态:"
-          df -h | grep -E '(/|/mnt)'
+          echo "=== 📦 收集产物 ==="
           mkdir -p ${{ env.ARTIFACTS_DIR }}/firmware
           if [ -d "bin/targets" ]; then
             find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) -exec cp {} ${{ env.ARTIFACTS_DIR }}/firmware/ \;
@@ -513,46 +271,24 @@ jobs:
             echo "FIRMWARE_COUNT=$FIRMWARE_COUNT" >> $GITHUB_ENV
             echo "✅ 收集 $FIRMWARE_COUNT 个固件文件"
           fi
-          echo "🧹 清理编译中间文件..."
-          make dirclean 2>/dev/null || true
-          rm -rf build_dir/* 2>/dev/null || true
-          ccache -c 2>/dev/null || true
-          echo "📊 清理后空间状态:"
-          df -h | grep -E '(/|/mnt)'
-          FINAL_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
-          echo "FINAL_SPACE=$FINAL_SPACE" >> $GITHUB_ENV
 
       - name: "💾 上传构建产物"
         if: env.BUILD_STATUS == 'success'
         uses: actions/upload-artifact@v4
         with:
-          name: "firmware-${{ github.run_number }}-${{ github.event.inputs.source_preset }}"
+          name: "firmware-${{ github.run_number }}"
           path: ${{ env.ARTIFACTS_DIR }}
           retention-days: 7
 
-      - name: "📋 最终空间分析报告"
+      - name: "📋 生成报告"
         if: always()
         timeout-minutes: 3
         run: |
-          echo "=== 📋 最终空间分析报告 ==="
-          echo ""
-          echo "💾 磁盘空间使用总结"
-          echo "=========================================="
-          echo "📊 空间统计:"
-          echo "  - 初始空间: ${{ env.INITIAL_MNT_SPACE }}GB"
-          echo "  - 最终空间: ${{ env.FINAL_SPACE || 'N/A' }}GB"
-          if [ -n "${{ env.FINAL_SPACE }}" ]; then
-            echo "  - 总消耗: $((${{ env.INITIAL_MNT_SPACE }} - ${{ env.FINAL_SPACE }}))GB"
-          fi
-          echo "  - 空间阈值: ${{ env.SPACE_THRESHOLD }}GB"
-          echo ""
-          echo "🎯 构建结果:"
-          echo "  - 构建状态: ${{ env.BUILD_STATUS || 'unknown' }}"
-          echo "  - 固件数量: ${{ env.FIRMWARE_COUNT || 0 }}"
-          echo "  - 工厂镜像: ${{ env.FACTORY_EXISTS || 'unknown' }}"
-          echo "  - 优化模式: ${{ env.EXTREME_OPTIMIZATION || 'false' }}"
-          echo "  - 极限编译: ${{ env.LIMIT_BUILD_MODE || 'false' }}"
-          echo ""
+          echo "=== 📋 构建报告 ==="
+          echo "构建状态: ${{ env.BUILD_STATUS || 'unknown' }}"
+          echo "工具链状态: ${{ env.TOOLCHAIN_SUCCESS || 'unknown' }}"
+          echo "固件数量: ${{ env.FIRMWARE_COUNT || 0 }}"
+          echo "工厂镜像: ${{ env.FACTORY_EXISTS || 'unknown' }}"
           if [ "${{ env.BUILD_STATUS }}" = "success" ]; then
             if [ "${{ env.FACTORY_EXISTS }}" = "true" ]; then
               echo "🎉 构建成功！工厂镜像已生成"
@@ -560,25 +296,5 @@ jobs:
               echo "⚠️ 构建成功但未生成工厂镜像"
             fi
           else
-            echo "❌ 构建失败"
-            echo ""
-            echo "🔍 可能的原因:"
-            echo "  - 磁盘空间不足"
-            echo "  - 网络下载失败"
-            echo "  - 配置错误"
-            echo "  - 依赖缺失"
+            echo "❌ 构建失败 - 主要问题: 工具链编译错误"
           fi
-          echo ""
-          echo "⏰ 完成时间: $(date)"
-          echo "=========================================="
-
-      - name: "🧹 最终清理"
-        if: always()
-        timeout-minutes: 2
-        run: |
-          echo "=== 🧹 最终清理 ==="
-          sudo swapoff /mnt/swapfile 2>/dev/null || true
-          sudo rm -f /mnt/swapfile 2>/dev/null || true
-          echo "📊 最终资源状态:"
-          free -h
-          echo "✅ 清理完成"
