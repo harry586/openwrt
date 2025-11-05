@@ -1,4 +1,4 @@
-name: "Universal Firmware Builder - Enhanced Validation Version"
+name: "Universal Firmware Builder - Enhanced Toolchain Version"
 
 on:
   workflow_dispatch:
@@ -904,79 +904,149 @@ jobs:
           
           echo "✅ 严格预下载验证完成"
 
-      - name: "🛠️ 稳定工具链编译"
-        timeout-minutes: 120
+      - name: "🛠️ 增强工具链编译（防超时版）"
+        timeout-minutes: 150
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🛠️ 稳定工具链编译 ==="
+          echo "=== 🛠️ 增强工具链编译（防超时版） ==="
           
           echo "🔧 设置编译环境..."
           export FORCE_UNSAFE_CONFIGURE=1
           export LC_ALL=C
           ulimit -S -n 8192
           
+          echo "📊 编译前资源检查..."
+          AVAILABLE_SPACE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
+          echo "可用磁盘空间: ${AVAILABLE_SPACE}GB"
+          
+          if [ "$AVAILABLE_SPACE" -lt 15 ]; then
+            echo "🧹 磁盘空间紧张，清理缓存..."
+            make dirclean 2>/dev/null || true
+            rm -rf build_dir/target-* 2>/dev/null || true
+          fi
+          
           echo "📦 第一步: 编译基础工具..."
+          echo "🔧 使用保守的并行任务数: 2"
           if ! make tools/install -j2 V=s 2>&1 | tee ${{ env.BUILD_LOG_DIR }}/tools-compile.log; then
             echo "⚠️ 基础工具编译有警告，继续执行..."
           fi
           
-          echo "🔧 第二步: 稳定工具链编译..."
-          MAX_RETRIES=3
+          echo "🔄 第二步: 分段工具链编译..."
+          MAX_RETRIES=4
           RETRY_COUNT=0
           TOOLCHAIN_SUCCESS=false
           
           while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$TOOLCHAIN_SUCCESS" = "false" ]; do
             echo "🔄 工具链编译尝试 $((RETRY_COUNT+1))/$MAX_RETRIES"
             
-            # 清理之前的编译
-            if [ $RETRY_COUNT -gt 0 ]; then
-              echo "🧹 清理工具链..."
-              make toolchain/clean 2>/dev/null || true
-              sleep 5
-            fi
-            
-            # 根据重试次数调整并行任务数
-            if [ $RETRY_COUNT -eq 0 ]; then
-              JOBS=$(( ${{ env.PARALLEL_JOBS }} / 2 ))
-            else
-              JOBS=1
-            fi
+            # 根据重试次数调整策略
+            case $RETRY_COUNT in
+              0)
+                # 第一次尝试：正常编译
+                JOBS=$(( ${{ env.PARALLEL_JOBS }} / 2 ))
+                CLEAN_LEVEL="none"
+                echo "🎯 策略: 正常编译 (${JOBS} jobs)"
+                ;;
+              1)
+                # 第二次尝试：清理后单线程编译
+                JOBS=1
+                CLEAN_LEVEL="light"
+                echo "🧹 执行轻度清理..."
+                make toolchain/clean 2>/dev/null || true
+                sleep 5
+                echo "🎯 策略: 单线程编译"
+                ;;
+              2)
+                # 第三次尝试：深度清理后单线程详细编译
+                JOBS=1
+                CLEAN_LEVEL="deep"
+                echo "🧹 执行深度清理..."
+                make toolchain/clean 2>/dev/null || true
+                rm -rf build_dir/toolchain-* 2>/dev/null || true
+                sleep 10
+                echo "🎯 策略: 详细模式单线程编译"
+                ;;
+              *)
+                # 第四次尝试：最保守策略
+                JOBS=1
+                CLEAN_LEVEL="full"
+                echo "🧹 执行完全清理..."
+                make dirclean 2>/dev/null || true
+                sleep 15
+                echo "🎯 策略: 最保守编译"
+                ;;
+            esac
             
             TOOLCHAIN_LOG="${{ env.BUILD_LOG_DIR }}/toolchain-attempt-$RETRY_COUNT.log"
             echo "🔧 使用 $JOBS 个并行任务编译工具链..."
             
-            if make toolchain/compile -j$JOBS V=s 2>&1 | tee "$TOOLCHAIN_LOG"; then
+            # 设置超时保护
+            timeout_minutes=45
+            if [ $RETRY_COUNT -ge 2 ]; then
+              timeout_minutes=60  # 最后尝试给更多时间
+            fi
+            
+            echo "⏰ 设置编译超时: ${timeout_minutes}分钟"
+            
+            # 使用timeout命令防止无限挂起
+            if timeout ${timeout_minutes}m make toolchain/compile -j$JOBS V=s 2>&1 | tee "$TOOLCHAIN_LOG"; then
               # 验证工具链是否真正成功
-              if [ -f "staging_dir/toolchain-*/bin/*-gcc" ] || [ -d "staging_dir/toolchain-*/bin" ]; then
+              if find staging_dir/toolchain-*/bin -name "*-gcc" 2>/dev/null | grep -q .; then
                 echo "✅ 工具链编译验证成功!"
+                GCC_PATH=$(find staging_dir/toolchain-*/bin -name "*-gcc" 2>/dev/null | head -1)
+                GCC_VERSION=$($GCC_PATH --version 2>/dev/null | head -1 || echo "unknown")
+                echo "🔧 工具链信息: $GCC_VERSION"
                 TOOLCHAIN_SUCCESS=true
                 break
               else
                 echo "⚠️ 编译完成但工具链文件不完整"
+                RETRY_COUNT=$((RETRY_COUNT+1))
               fi
             else
+              EXIT_CODE=$?
               RETRY_COUNT=$((RETRY_COUNT+1))
-              echo "❌ 工具链编译失败"
+              
+              if [ $EXIT_CODE -eq 124 ]; then
+                echo "⏰ 工具链编译超时 (${timeout_minutes}分钟)"
+              else
+                echo "❌ 工具链编译失败 (退出码: $EXIT_CODE)"
+              fi
               
               # 分析失败原因
               if grep -q "No space left" "$TOOLCHAIN_LOG"; then
                 echo "💾 失败原因: 磁盘空间不足"
-                # 清理缓存释放空间
                 make dirclean 2>/dev/null || true
-                rm -rf build_dir/toolchain-* 2>/dev/null || true
+              fi
+              
+              if grep -q "Killed" "$TOOLCHAIN_LOG"; then
+                echo "🧠 失败原因: 内存不足被系统杀死"
               fi
               
               if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-                echo "🔄 等待10秒后重试..."
-                sleep 10
+                RETRY_DELAY=$((RETRY_COUNT * 10))
+                echo "🔄 等待${RETRY_DELAY}秒后重试..."
+                sleep $RETRY_DELAY
               fi
             fi
           done
           
           if [ "$TOOLCHAIN_SUCCESS" = "false" ]; then
             echo "❌ 所有工具链编译尝试都失败"
-            echo "🔍 最后错误日志:"
-            tail -50 ${{ env.BUILD_LOG_DIR }}/toolchain-attempt-*.log 2>/dev/null || echo "无日志文件"
+            echo "🔍 分析最后错误日志..."
+            
+            # 生成错误摘要
+            echo "=== 🚨 工具链编译失败分析 ===" > ${{ env.BUILD_LOG_DIR }}/toolchain-failure-analysis.log
+            find ${{ env.BUILD_LOG_DIR }} -name "toolchain-attempt-*.log" | head -3 | while read log; do
+              echo "=== $(basename "$log") ===" >> ${{ env.BUILD_LOG_DIR }}/toolchain-failure-analysis.log
+              grep -i "error\|failed\|killed\|timeout\|no space" "$log" | head -10 >> ${{ env.BUILD_LOG_DIR }}/toolchain-failure-analysis.log
+            done
+            
+            echo "💡 建议:"
+            echo "  - 检查磁盘空间和内存"
+            echo "  - 尝试使用更稳定的源码分支"
+            echo "  - 减少编译并行任务数"
+            echo "  - 考虑使用预编译工具链"
+            
             exit 1
           fi
           
@@ -1272,6 +1342,121 @@ jobs:
             echo "✅ 固件生成验证通过"
           fi
 
+      - name: "🔍 智能错误日志过滤与分析"
+        if: always()
+        timeout-minutes: 8
+        run: |
+          echo "=== 🔍 智能错误日志过滤与分析 ==="
+          
+          # 创建专门的过滤日志目录
+          FILTERED_LOG_DIR="${{ env.ARTIFACTS_DIR }}/filtered-logs"
+          mkdir -p "$FILTERED_LOG_DIR"
+          
+          echo "🎯 开始过滤关键错误信息..."
+          
+          # 定义关键词列表
+          KEYWORDS=("error" "failed" "fatal" "warning" "undefined" "missing" "not found" "cannot" "failed to" "segmentation" "core dumped")
+          
+          # 搜索所有日志文件
+          find ${{ env.BUILD_LOG_DIR }} -name "*.log" -type f | while read logfile; do
+            filename=$(basename "$logfile")
+            echo "📄 处理文件: $filename"
+            
+            # 为每个日志文件创建过滤版本
+            filtered_file="$FILTERED_LOG_DIR/${filename%.*}_filtered.txt"
+            
+            # 使用多关键词过滤，显示关键词前后5行内容
+            for keyword in "${KEYWORDS[@]}"; do
+              if grep -q -i "$keyword" "$logfile" 2>/dev/null; then
+                echo "=== 关键词: '$keyword' 在 $filename 中找到 ===" >> "$filtered_file"
+                grep -n -i -A5 -B5 "$keyword" "$logfile" 2>/dev/null >> "$filtered_file"
+                echo -e "\n" >> "$filtered_file"
+              fi
+            done
+            
+            # 如果过滤文件有内容，统计关键词出现次数
+            if [ -f "$filtered_file" ] && [ -s "$filtered_file" ]; then
+              echo "📊 关键词统计 ($filename):" >> "$filtered_file"
+              echo "=========================" >> "$filtered_file"
+              for keyword in "${KEYWORDS[@]}"; do
+                count=$(grep -c -i "$keyword" "$logfile" 2>/dev/null || echo "0")
+                if [ "$count" -gt 0 ]; then
+                  echo "  $keyword: $count 次" >> "$filtered_file"
+                fi
+              done
+              echo "✅ 已生成过滤版本: $(basename "$filtered_file")"
+            else
+              rm -f "$filtered_file" 2>/dev/null || true
+              echo "ℹ️ 无关键错误信息: $filename"
+            fi
+          done
+          
+          # 特别处理0_build.txt文件（如果存在）
+          if [ -f "${{ env.BUILD_LOG_DIR }}/0_build.txt" ]; then
+            echo "🎯 特别处理 0_build.txt..."
+            build_log="${{ env.BUILD_LOG_DIR }}/0_build.txt"
+            filtered_build="$FILTERED_LOG_DIR/0_build_filtered.txt"
+            
+            # 提取关键错误段落的更详细上下文（前后10行）
+            echo "=== 🚨 0_build.txt 关键错误分析 ===" > "$filtered_build"
+            echo "生成时间: $(date)" >> "$filtered_build"
+            echo "文件大小: $(du -h "$build_log" | cut -f1)" >> "$filtered_build"
+            echo -e "\n" >> "$filtered_build"
+            
+            # 按严重程度分类提取
+            echo "=== 🔴 严重错误 (ERROR/FATAL) ===" >> "$filtered_build"
+            grep -n -i -A10 -B5 "error\|fatal" "$build_log" 2>/dev/null >> "$filtered_build"
+            echo -e "\n" >> "$filtered_build"
+            
+            echo "=== 🟡 警告信息 (WARNING) ===" >> "$filtered_build"
+            grep -n -i -A5 -B2 "warning" "$build_log" 2>/dev/null >> "$filtered_build"
+            echo -e "\n" >> "$filtered_build"
+            
+            echo "=== 🔵 失败信息 (FAILED) ===" >> "$filtered_build"
+            grep -n -i -A5 -B2 "failed" "$build_log" 2>/dev/null >> "$filtered_build"
+            echo -e "\n" >> "$filtered_build"
+            
+            echo "=== 🟣 缺失/未找到 (MISSING/NOT FOUND) ===" >> "$filtered_build"
+            grep -n -i -A5 -B2 "missing\|not found" "$build_log" 2>/dev/null >> "$filtered_build"
+            echo -e "\n" >> "$filtered_build"
+            
+            # 统计信息
+            echo "=== 📊 错误统计 ===" >> "$filtered_build"
+            total_lines=$(wc -l < "$build_log")
+            error_count=$(grep -c -i "error" "$build_log" 2>/dev/null || echo "0")
+            warning_count=$(grep -c -i "warning" "$build_log" 2>/dev/null || echo "0")
+            failed_count=$(grep -c -i "failed" "$build_log" 2>/dev/null || echo "0")
+            
+            echo "总行数: $total_lines" >> "$filtered_build"
+            echo "错误数量: $error_count" >> "$filtered_build"
+            echo "警告数量: $warning_count" >> "$filtered_build"
+            echo "失败数量: $failed_count" >> "$filtered_build"
+            
+            echo "✅ 0_build.txt 过滤完成"
+          fi
+          
+          # 生成错误摘要报告
+          echo "=== 📋 错误摘要报告 ===" > "$FILTERED_LOG_DIR/error_summary.txt"
+          find "$FILTERED_LOG_DIR" -name "*_filtered.txt" -type f | while read filtered; do
+            if [ -s "$filtered" ]; then
+              echo "文件: $(basename "$filtered")" >> "$FILTERED_LOG_DIR/error_summary.txt"
+              echo "大小: $(du -h "$filtered" | cut -f1)" >> "$FILTERED_LOG_DIR/error_summary.txt"
+              echo "---" >> "$FILTERED_LOG_DIR/error_summary.txt"
+            fi
+          done
+          
+          FILTERED_COUNT=$(find "$FILTERED_LOG_DIR" -name "*_filtered.txt" -type f | wc -l)
+          echo "✅ 日志过滤完成，共生成 $FILTERED_COUNT 个过滤文件"
+          
+          # 如果有错误，显示最重要的几个
+          if [ "$FILTERED_COUNT" -gt 0 ]; then
+            echo "🔍 最重要的错误信息:"
+            find "$FILTERED_LOG_DIR" -name "*_filtered.txt" -type f | head -3 | while read file; do
+              echo "=== $(basename "$file") ==="
+              grep -i "error\|fatal" "$file" | head -5
+            done
+          fi
+
       - name: "📋 严格日志收集与分析"
         if: always()
         timeout-minutes: 8
@@ -1363,9 +1548,10 @@ jobs:
             echo "❌ 构建失败"
             echo ""
             echo "🔍 故障排除建议:"
-            echo "   - 查看 critical-errors.log"
+            echo "   - 查看 filtered-logs 目录中的过滤日志"
             echo "   - 验证配置文件是否正确"
             echo "   - 检查网络连接和仓库状态"
+            echo "   - 查看工具链编译日志"
           fi
           echo ""
           echo "⏰ 完成时间: $(date)"
