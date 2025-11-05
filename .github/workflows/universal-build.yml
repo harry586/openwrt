@@ -1,4 +1,4 @@
-name: "Universal Firmware Builder - Reliable Version"
+name: "Universal Firmware Builder - Fixed File Search"
 
 on:
   workflow_dispatch:
@@ -34,8 +34,27 @@ jobs:
     timeout-minutes: 240
     
     steps:
-      - name: "📥 检出配置仓库"
+      - name: "📥 检出配置仓库（完整检出）"
         uses: "actions/checkout@v4"
+        with:
+          path: "config-repo"
+          fetch-depth: 0  # 获取完整历史，确保所有文件都检出
+
+      - name: "🔍 调试：显示仓库内容"
+        timeout-minutes: 2
+        run: |
+          echo "=== 🔍 调试：显示仓库内容 ==="
+          echo "📁 根目录内容:"
+          ls -la
+          echo ""
+          echo "📁 config-repo 目录内容:"
+          ls -la config-repo/
+          echo ""
+          echo "📁 搜索配置文件..."
+          find config-repo -name "*${{ github.event.inputs.config_profile }}*" -type f 2>/dev/null | head -10
+          echo ""
+          echo "📁 搜索所有.config文件..."
+          find config-repo -name "*.config*" -type f 2>/dev/null | head -10
 
       - name: "💾 基础环境设置"
         timeout-minutes: 5
@@ -70,51 +89,64 @@ jobs:
           git clone --depth=1 https://github.com/immortalwrt/immortalwrt.git .
           echo "✅ 源码获取完成"
 
-      - name: "🔧 应用配置文件"
+      - name: "🔧 查找并应用配置文件"
         timeout-minutes: 5
         run: |
           cd ${{ env.SOURCE_DIR }}
-          echo "=== 🔧 应用配置文件 ==="
+          echo "=== 🔧 查找并应用配置文件 ==="
           
-          # 使用简单直接的文件查找方法
           CONFIG_FILE=""
+          CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
           
-          # 首先尝试用户指定的路径
-          if [ -f "$GITHUB_WORKSPACE/${{ github.event.inputs.config_profile }}" ]; then
-            CONFIG_FILE="$GITHUB_WORKSPACE/${{ github.event.inputs.config_profile }}"
-            echo "✅ 在指定路径找到配置文件: $CONFIG_FILE"
-          else
-            # 在常见位置搜索
-            echo "🔍 在常见位置搜索配置文件..."
-            POSSIBLE_PATHS=(
-              "$GITHUB_WORKSPACE/${{ github.event.inputs.config_profile }}"
-              "$GITHUB_WORKSPACE/configs/${{ github.event.inputs.config_profile }}"
-              "$GITHUB_WORKSPACE/firmware-config/${{ github.event.inputs.config_profile }}"
-              "$GITHUB_WORKSPACE/../${{ github.event.inputs.config_profile }}"
-              "./${{ github.event.inputs.config_profile }}"
-            )
-            
-            for path in "${POSSIBLE_PATHS[@]}"; do
-              if [ -f "$path" ]; then
-                CONFIG_FILE="$path"
-                echo "✅ 找到配置文件: $CONFIG_FILE"
-                break
-              fi
-            done
+          echo "🔍 搜索配置文件: $CONFIG_PROFILE"
+          
+          # 在配置仓库中搜索
+          SEARCH_PATHS=(
+            "config-repo/$CONFIG_PROFILE"
+            "config-repo/configs/$CONFIG_PROFILE"
+            "config-repo/firmware-config/$CONFIG_PROFILE"
+            "config-repo/.github/$CONFIG_PROFILE"
+            "config-repo/../$CONFIG_PROFILE"
+          )
+          
+          for path in "${SEARCH_PATHS[@]}"; do
+            if [ -f "$path" ]; then
+              CONFIG_FILE="$path"
+              echo "✅ 找到配置文件: $CONFIG_FILE"
+              break
+            fi
+          done
+          
+          # 如果没找到，尝试模糊搜索
+          if [ -z "$CONFIG_FILE" ]; then
+            echo "🔍 精确搜索失败，尝试模糊搜索..."
+            FOUND_FILES=$(find config-repo -name "*$CONFIG_PROFILE*" -type f 2>/dev/null | head -1)
+            if [ -n "$FOUND_FILES" ]; then
+              CONFIG_FILE="$FOUND_FILES"
+              echo "✅ 模糊搜索找到: $CONFIG_FILE"
+            fi
+          fi
+          
+          # 如果还是没找到，搜索任何.config文件
+          if [ -z "$CONFIG_FILE" ]; then
+            echo "🔍 搜索任何.config文件..."
+            FOUND_FILES=$(find config-repo -name "*.config*" -type f 2>/dev/null | head -1)
+            if [ -n "$FOUND_FILES" ]; then
+              CONFIG_FILE="$FOUND_FILES"
+              echo "⚠️ 使用找到的默认配置文件: $CONFIG_FILE"
+            fi
           fi
           
           if [ -z "$CONFIG_FILE" ]; then
-            echo "❌ 错误: 无法找到配置文件 '${{ github.event.inputs.config_profile }}'"
-            echo "📁 当前目录内容:"
-            ls -la
-            echo "📁 GITHUB_WORKSPACE 内容:"
-            ls -la "$GITHUB_WORKSPACE"
+            echo "❌ 致命错误: 无法找到任何配置文件"
+            echo "📁 config-repo 目录结构:"
+            find config-repo -type f -name "*.config*" -o -name "*.json*" | head -20
             exit 1
           fi
           
           # 复制配置文件
           cp "$CONFIG_FILE" .config
-          echo "✅ 配置文件应用完成"
+          echo "✅ 配置文件 '$CONFIG_FILE' 应用完成"
 
       - name: "🔧 基础配置修复"
         timeout-minutes: 5
