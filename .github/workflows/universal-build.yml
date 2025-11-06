@@ -1,4 +1,4 @@
-name: "Universal Firmware Builder - Complete Version"
+name: "Universal Firmware Builder"
 
 on:
   workflow_dispatch:
@@ -25,34 +25,8 @@ on:
         type: choice
         options: ["balanced", "speed", "stability"]
         default: "balanced"
-      toolchain_strategy:
-        description: "工具链策略"
-        required: true
-        type: choice
-        options: ["prebuilt", "local", "auto"]
-        default: "auto"
-      enable_custom_features:
-        description: "启用自定义功能"
-        required: false
-        default: true
-        type: boolean
-      fix_common_issues:
-        description: "自动修复常见问题"
-        required: false
-        default: true
-        type: boolean
-      enable_pre_download:
-        description: "启用预下载验证"
-        required: false
-        default: true
-        type: boolean
-      enable_post_verify:
-        description: "启用编译后验证"
-        required: false
-        default: true
-        type: boolean
-      debug_mode:
-        description: "启用调试模式"
+      enable_advanced:
+        description: "启用高级功能"
         required: false
         default: false
         type: boolean
@@ -66,6 +40,11 @@ on:
         required: false
         default: ""
         type: string
+      debug_mode:
+        description: "启用调试模式"
+        required: false
+        default: false
+        type: boolean
 
 env:
   TZ: "Asia/Shanghai"
@@ -96,18 +75,15 @@ jobs:
           mkdir -p /mnt/build-logs
           MAIN_LOG="/mnt/build-logs/build_timeline.log"
           echo "🏁 构建开始时间: $(date)" > $MAIN_LOG
-          echo "🔧 工作流版本: Complete Version" >> $MAIN_LOG
+          echo "🔧 工作流版本: Optimized Inputs" >> $MAIN_LOG
           echo "📋 输入参数:" >> $MAIN_LOG
           echo "  - 源码预设: ${{ github.event.inputs.source_preset }}" >> $MAIN_LOG
           echo "  - 源码分支: ${{ github.event.inputs.source_branch }}" >> $MAIN_LOG
           echo "  - 配置方案: ${{ github.event.inputs.config_profile }}" >> $MAIN_LOG
-          echo "  - 自定义功能: ${{ github.event.inputs.enable_custom_features }}" >> $MAIN_LOG
-          echo "  - 修复问题: ${{ github.event.inputs.fix_common_issues }}" >> $MAIN_LOG
-          echo "  - 预下载: ${{ github.event.inputs.enable_pre_download }}" >> $MAIN_LOG
-          echo "  - 后验证: ${{ github.event.inputs.enable_post_verify }}" >> $MAIN_LOG
-          echo "  - 调试模式: ${{ github.event.inputs.debug_mode }}" >> $MAIN_LOG
+          echo "  - 高级功能: ${{ github.event.inputs.enable_advanced }}" >> $MAIN_LOG
           echo "  - 自定义补丁: ${{ github.event.inputs.custom_patches }}" >> $MAIN_LOG
           echo "  - 额外包: ${{ github.event.inputs.extra_packages }}" >> $MAIN_LOG
+          echo "  - 调试模式: ${{ github.event.inputs.debug_mode }}" >> $MAIN_LOG
           echo "==========================================" >> $MAIN_LOG
           echo "MAIN_LOG=$MAIN_LOG" >> $GITHUB_ENV
           echo "CONFIG_REPO_DIR=${{ github.workspace }}/config-repo" >> $GITHUB_ENV
@@ -339,12 +315,12 @@ jobs:
             exit 1
           fi
 
-      - name: "🔧 应用自定义功能"
-        if: github.event.inputs.enable_custom_features == 'true'
+      - name: "🔧 应用高级功能"
+        if: github.event.inputs.enable_advanced == 'true'
         run: |
           set -e
           MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔧 应用自定义功能 ===" | tee -a "$MAIN_LOG"
+          echo "=== 🔧 应用高级功能 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
           # 应用自定义补丁
@@ -370,19 +346,7 @@ jobs:
             done
           fi
           
-          # 重新运行defconfig确保配置正确
-          echo "🔄 重新运行defconfig..." | tee -a "$MAIN_LOG"
-          make defconfig 2>&1 | tee -a "$MAIN_LOG" || echo "⚠️ defconfig有警告" | tee -a "$MAIN_LOG"
-          
-          echo "✅ 自定义功能应用完成" | tee -a "$MAIN_LOG"
-
-      - name: "🔧 修复依赖问题"
-        if: github.event.inputs.fix_common_issues == 'true'
-        run: |
-          set -e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔧 修复依赖问题 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
+          # 修复依赖问题
           echo "🔧 修复缺失的依赖包..." | tee -a "$MAIN_LOG"
           mkdir -p staging_dir/host/include
           touch staging_dir/host/include/libev.h
@@ -392,10 +356,14 @@ jobs:
           touch staging_dir/host/include/libnetsnmp
           touch staging_dir/host/include/glib2.h
           touch staging_dir/host/include/libgpiod.h
-          echo "✅ 依赖修复完成" | tee -a "$MAIN_LOG"
+          
+          # 重新运行defconfig确保配置正确
+          echo "🔄 重新运行defconfig..." | tee -a "$MAIN_LOG"
+          make defconfig 2>&1 | tee -a "$MAIN_LOG" || echo "⚠️ defconfig有警告" | tee -a "$MAIN_LOG"
+          
+          echo "✅ 高级功能应用完成" | tee -a "$MAIN_LOG"
 
       - name: "📥 预下载依赖"
-        if: github.event.inputs.enable_pre_download == 'true'
         run: |
           set -e
           MAIN_LOG="${{ env.MAIN_LOG }}"
@@ -504,7 +472,7 @@ jobs:
           echo "✅ 固件编译完成" | tee -a "$MAIN_LOG"
 
       - name: "🎯 验证工厂镜像"
-        if: env.BUILD_STATUS == 'success' && github.event.inputs.enable_post_verify == 'true'
+        if: env.BUILD_STATUS == 'success'
         run: |
           set -e
           MAIN_LOG="${{ env.MAIN_LOG }}"
@@ -570,8 +538,8 @@ jobs:
             echo "📥 下载问题:" >> "$TIMELINE_ERRORS"
             { grep -n -i "404\|curl.*failed\|download failed" "$MAIN_LOG" || echo "无下载问题"; } >> "$TIMELINE_ERRORS"
             echo "" >> "$TIMELINE_ERRORS"
-            echo "🔧 自定义功能问题:" >> "$TIMELINE_ERRORS"
-            { grep -n -i "patch\|custom" "$MAIN_LOG" || echo "无自定义功能问题"; } >> "$TIMELINE_ERRORS"
+            echo "🔧 高级功能问题:" >> "$TIMELINE_ERRORS"
+            { grep -n -i "patch\|custom\|advanced" "$MAIN_LOG" || echo "无高级功能问题"; } >> "$TIMELINE_ERRORS"
           fi
           echo "✅ 智能日志分析完成"
 
@@ -603,7 +571,8 @@ jobs:
           echo "  - 固件数量: ${{ env.FIRMWARE_COUNT || 0 }}"
           echo "  - 工厂镜像: ${{ env.FACTORY_EXISTS || 'unknown' }}"
           echo ""
-          echo "🔧 自定义功能:"
+          echo "🔧 高级功能:"
+          echo "  - 启用状态: ${{ github.event.inputs.enable_advanced || 'false' }}"
           echo "  - 自定义补丁: ${{ github.event.inputs.custom_patches || '无' }}"
           echo "  - 额外软件包: ${{ github.event.inputs.extra_packages || '无' }}"
           echo ""
@@ -628,5 +597,6 @@ jobs:
             echo "  - 确保配置文件正确"
             echo "  - 检查自定义补丁兼容性"
           fi
+          echo ""
           echo "⏰ 完成时间: $(date)"
           echo "=========================================="
