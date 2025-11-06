@@ -28,7 +28,7 @@ on:
       enable_advanced:
         description: "启用高级功能"
         required: false
-        default: false
+        default: true
         type: boolean
       custom_patches:
         description: "自定义补丁URL或路径"
@@ -38,7 +38,7 @@ on:
       extra_packages:
         description: "额外软件包列表(逗号分隔)"
         required: false
-        default: ""
+        default: "luci,luci-theme-material,luci-app-upnp,luci-app-wireguard,luci-app-samba4,luci-app-turboacc"
         type: string
       debug_mode:
         description: "启用调试模式"
@@ -75,7 +75,7 @@ jobs:
           mkdir -p /mnt/build-logs
           MAIN_LOG="/mnt/build-logs/build_timeline.log"
           echo "🏁 构建开始时间: $(date)" > $MAIN_LOG
-          echo "🔧 工作流版本: Optimized Inputs" >> $MAIN_LOG
+          echo "🔧 工作流版本: Enhanced Customization" >> $MAIN_LOG
           echo "📋 输入参数:" >> $MAIN_LOG
           echo "  - 源码预设: ${{ github.event.inputs.source_preset }}" >> $MAIN_LOG
           echo "  - 源码分支: ${{ github.event.inputs.source_branch }}" >> $MAIN_LOG
@@ -168,8 +168,8 @@ jobs:
           set -e
           MAIN_LOG="${{ env.MAIN_LOG }}"
           echo "=== 🔧 源码配置与获取 ===" | tee -a "$MAIN_LOG"
-          REPO_JSON_FOUND=$(find ${{ env.CONFIG_REPO_DIR }} -name "*repositories*.json" -type f 2>/dev/null | head -1)
-          if [ -z "$REPO_JSON_FOUND" ]; then
+          REPO_JSON_FOUND="${{ env.CONFIG_REPO_DIR }}/firmware-config/repositories.json"
+          if [ ! -f "$REPO_JSON_FOUND" ]; then
             echo "❌ 错误: 未找到 repositories.json 文件" | tee -a "$MAIN_LOG"
             exit 1
           fi
@@ -284,7 +284,7 @@ jobs:
           CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
           echo "🔍 查找配置文件: $CONFIG_PROFILE" | tee -a "$MAIN_LOG"
           CONFIG_FOUND=""
-          SEARCH_PATHS=("${{ env.CONFIG_REPO_DIR }}/.configs" "${{ env.CONFIG_REPO_DIR }}/configs" "${{ env.CONFIG_REPO_DIR }}" "$GITHUB_WORKSPACE/configs")
+          SEARCH_PATHS=("${{ env.CONFIG_REPO_DIR }}/firmware-config/configs" "${{ env.CONFIG_REPO_DIR }}/firmware-config" "${{ env.CONFIG_REPO_DIR }}")
           for path in "${SEARCH_PATHS[@]}"; do
             if [ -f "$path/$CONFIG_PROFILE" ]; then
               CONFIG_FOUND="$path/$CONFIG_PROFILE"
@@ -292,7 +292,7 @@ jobs:
             fi
           done
           if [ -z "$CONFIG_FOUND" ]; then
-            CONFIG_FOUND=$(find "${{ env.CONFIG_REPO_DIR }}" -maxdepth 3 -name "$CONFIG_PROFILE" -type f 2>/dev/null | head -1)
+            CONFIG_FOUND=$(find "${{ env.CONFIG_REPO_DIR }}/firmware-config" -maxdepth 3 -name "$CONFIG_PROFILE" -type f 2>/dev/null | head -1)
           fi
           if [ -n "$CONFIG_FOUND" ] && [ -f "$CONFIG_FOUND" ]; then
             echo "✅ 找到配置文件: $CONFIG_FOUND" | tee -a "$MAIN_LOG"
@@ -304,6 +304,13 @@ jobs:
             echo "CONFIG_TARGET_IMAGES_INCLUDE_SYSUPGRADE=y" >> .config
             echo "CONFIG_SDK=y" >> .config
             echo "CONFIG_BUILD_LOG=y" >> .config
+            # 确保基础包被包含
+            echo "CONFIG_PACKAGE_luci=y" >> .config
+            echo "CONFIG_PACKAGE_luci-theme-material=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-wireguard=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-samba4=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
             echo "🔄 运行defconfig..." | tee -a "$MAIN_LOG"
             if make defconfig 2>&1; then
               echo "✅ 配置应用完成" | tee -a "$MAIN_LOG"
@@ -323,17 +330,26 @@ jobs:
           echo "=== 🔧 应用高级功能 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
+          echo "🔧 高级功能状态: 已启用" | tee -a "$MAIN_LOG"
+          echo "📋 高级功能配置:" | tee -a "$MAIN_LOG"
+          echo "  - 自定义补丁: ${{ github.event.inputs.custom_patches || '无' }}" | tee -a "$MAIN_LOG"
+          echo "  - 额外软件包: ${{ github.event.inputs.extra_packages || '无' }}" | tee -a "$MAIN_LOG"
+          
           # 应用自定义补丁
           if [ -n "${{ github.event.inputs.custom_patches }}" ]; then
             echo "🔧 应用自定义补丁..." | tee -a "$MAIN_LOG"
             PATCH_URL="${{ github.event.inputs.custom_patches }}"
             if [[ $PATCH_URL == http* ]]; then
               echo "📥 下载补丁: $PATCH_URL" | tee -a "$MAIN_LOG"
-              wget -O custom.patch "$PATCH_URL" && patch -p1 < custom.patch && echo "✅ 补丁应用成功" | tee -a "$MAIN_LOG" || echo "⚠️ 补丁应用失败" | tee -a "$MAIN_LOG"
-            elif [ -f "${{ env.CONFIG_REPO_DIR }}/$PATCH_URL" ]; then
+              wget -O custom.patch "$PATCH_URL" && (patch -p1 < custom.patch && echo "✅ 补丁应用成功" | tee -a "$MAIN_LOG" || echo "⚠️ 补丁应用失败" | tee -a "$MAIN_LOG") || echo "❌ 补丁下载失败" | tee -a "$MAIN_LOG"
+            elif [ -f "${{ env.CONFIG_REPO_DIR }}/firmware-config/$PATCH_URL" ]; then
               echo "📥 应用本地补丁: $PATCH_URL" | tee -a "$MAIN_LOG"
-              patch -p1 < "${{ env.CONFIG_REPO_DIR }}/$PATCH_URL" && echo "✅ 补丁应用成功" | tee -a "$MAIN_LOG" || echo "⚠️ 补丁应用失败" | tee -a "$MAIN_LOG"
+              patch -p1 < "${{ env.CONFIG_REPO_DIR }}/firmware-config/$PATCH_URL" && echo "✅ 补丁应用成功" | tee -a "$MAIN_LOG" || echo "⚠️ 补丁应用失败" | tee -a "$MAIN_LOG"
+            else
+              echo "❌ 补丁文件不存在: $PATCH_URL" | tee -a "$MAIN_LOG"
             fi
+          else
+            echo "ℹ️ 未提供自定义补丁" | tee -a "$MAIN_LOG"
           fi
           
           # 添加额外软件包
@@ -341,9 +357,57 @@ jobs:
             echo "📦 配置额外软件包..." | tee -a "$MAIN_LOG"
             IFS=',' read -ra PKGS <<< "${{ github.event.inputs.extra_packages }}"
             for pkg in "${PKGS[@]}"; do
-              echo "CONFIG_PACKAGE_${pkg}=y" >> .config
-              echo "✅ 添加包: $pkg" | tee -a "$MAIN_LOG"
+              # 清理包名中的空格
+              CLEAN_PKG=$(echo "$pkg" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+              if [ -n "$CLEAN_PKG" ]; then
+                echo "CONFIG_PACKAGE_${CLEAN_PKG}=y" >> .config
+                echo "✅ 添加包: $CLEAN_PKG" | tee -a "$MAIN_LOG"
+              fi
             done
+          else
+            echo "ℹ️ 未提供额外软件包" | tee -a "$MAIN_LOG"
+          fi
+          
+          # 安装自定义IPK包
+          echo "📦 安装自定义IPK包..." | tee -a "$MAIN_LOG"
+          IPK_DIR="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/prebuilt-ipks"
+          if [ -d "$IPK_DIR" ]; then
+            echo "🔍 查找自定义IPK包..." | tee -a "$MAIN_LOG"
+            IPK_FILES=$(find "$IPK_DIR" -name "*.ipk" -type f 2>/dev/null || true)
+            if [ -n "$IPK_FILES" ]; then
+              echo "✅ 找到自定义IPK包:" | tee -a "$MAIN_LOG"
+              mkdir -p package/custom
+              for ipk in $IPK_FILES; do
+                ipk_name=$(basename "$ipk")
+                echo "  - 复制 $ipk_name" | tee -a "$MAIN_LOG"
+                cp "$ipk" package/custom/
+                # 添加到配置
+                pkg_base=$(echo "$ipk_name" | sed 's/\.ipk$//' | tr '-' '_')
+                echo "CONFIG_PACKAGE_${pkg_base}=y" >> .config
+                echo "✅ 添加自定义包: $pkg_base" | tee -a "$MAIN_LOG"
+              done
+            else
+              echo "ℹ️ 未找到自定义IPK包" | tee -a "$MAIN_LOG"
+            fi
+          else
+            echo "ℹ️ 自定义IPK目录不存在: $IPK_DIR" | tee -a "$MAIN_LOG"
+          fi
+          
+          # 执行自定义脚本
+          echo "🔧 执行自定义脚本..." | tee -a "$MAIN_LOG"
+          CUSTOM_SCRIPT="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/scripts/diy2.sh"
+          if [ -f "$CUSTOM_SCRIPT" ]; then
+            echo "📜 找到 diy2.sh 脚本，开始执行..." | tee -a "$MAIN_LOG"
+            chmod +x "$CUSTOM_SCRIPT"
+            # 在源码目录中执行脚本
+            cd /mnt/source
+            if bash "$CUSTOM_SCRIPT" 2>&1; then
+              echo "✅ 自定义脚本执行成功" | tee -a "$MAIN_LOG"
+            else
+              echo "⚠️ 自定义脚本执行有错误" | tee -a "$MAIN_LOG"
+            fi
+          else
+            echo "ℹ️ 未找到 diy2.sh 脚本: $CUSTOM_SCRIPT" | tee -a "$MAIN_LOG"
           fi
           
           # 修复依赖问题
@@ -362,6 +426,33 @@ jobs:
           make defconfig 2>&1 | tee -a "$MAIN_LOG" || echo "⚠️ defconfig有警告" | tee -a "$MAIN_LOG"
           
           echo "✅ 高级功能应用完成" | tee -a "$MAIN_LOG"
+
+      - name: "🔍 验证配置"
+        run: |
+          set -e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔍 验证配置 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "📋 当前配置摘要:" | tee -a "$MAIN_LOG"
+          echo "🔧 已启用的LUCI应用:" | tee -a "$MAIN_LOG"
+          grep "CONFIG_PACKAGE_luci" .config | grep "=y" | tee -a "$MAIN_LOG" || echo "ℹ️ 未找到LUCI应用配置" | tee -a "$MAIN_LOG"
+          
+          echo "📦 自定义IPK包:" | tee -a "$MAIN_LOG"
+          if [ -d "package/custom" ]; then
+            ls -la package/custom/ | tee -a "$MAIN_LOG"
+          else
+            echo "ℹ️ 无自定义IPK包" | tee -a "$MAIN_LOG"
+          fi
+          
+          echo "📦 固件大小预估:" | tee -a "$MAIN_LOG"
+          if grep -q "CONFIG_PACKAGE_luci=y" .config; then
+            echo "✅ LUCI已启用 - 固件大小应该 >20MB" | tee -a "$MAIN_LOG"
+          else
+            echo "❌ LUCI未启用 - 固件大小可能 <15MB" | tee -a "$MAIN_LOG"
+          fi
+          
+          echo "✅ 配置验证完成" | tee -a "$MAIN_LOG"
 
       - name: "📥 预下载依赖"
         run: |
@@ -471,6 +562,56 @@ jobs:
           done
           echo "✅ 固件编译完成" | tee -a "$MAIN_LOG"
 
+      - name: "🔍 分析生成的固件"
+        if: env.BUILD_STATUS == 'success'
+        run: |
+          set -e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔍 分析生成的固件 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "📁 所有生成的文件:" | tee -a "$MAIN_LOG"
+          find bin/targets -type f 2>/dev/null | head -20 | tee -a "$MAIN_LOG"
+          
+          echo "📊 固件详细信息:" | tee -a "$MAIN_LOG"
+          if [ -d "bin/targets" ]; then
+            echo "🎯 目标目录结构:" | tee -a "$MAIN_LOG"
+            find bin/targets -type d 2>/dev/null | tee -a "$MAIN_LOG"
+            
+            echo "🔍 查找所有固件文件:" | tee -a "$MAIN_LOG"
+            FIRMWARE_FILES=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" \) 2>/dev/null || true)
+            if [ -n "$FIRMWARE_FILES" ]; then
+              echo "📦 找到的固件文件:" | tee -a "$MAIN_LOG"
+              TOTAL_SIZE=0
+              for file in $FIRMWARE_FILES; do
+                if [ -f "$file" ]; then
+                  size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "unknown")
+                  bytes=$(du -b "$file" 2>/dev/null | cut -f1 || echo "0")
+                  TOTAL_SIZE=$((TOTAL_SIZE + bytes))
+                  echo "  - $file ($size)" | tee -a "$MAIN_LOG"
+                fi
+              done
+              # 转换为MB
+              TOTAL_SIZE_MB=$((TOTAL_SIZE / 1024 / 1024))
+              echo "📏 固件总大小: ${TOTAL_SIZE_MB}MB" | tee -a "$MAIN_LOG"
+              
+              # 检查固件大小是否正常
+              if [ $TOTAL_SIZE_MB -lt 15 ]; then
+                echo "❌ 警告: 固件大小异常小 (<15MB)，可能缺少插件" | tee -a "$MAIN_LOG"
+              elif [ $TOTAL_SIZE_MB -gt 30 ]; then
+                echo "✅ 固件大小正常 (>30MB)，包含完整插件" | tee -a "$MAIN_LOG"
+              else
+                echo "ℹ️ 固件大小中等 (15-30MB)，可能缺少部分插件" | tee -a "$MAIN_LOG"
+              fi
+              
+              echo "FIRMWARE_SIZE_MB=$TOTAL_SIZE_MB" >> $GITHUB_ENV
+            else
+              echo "❌ 未找到任何固件文件" | tee -a "$MAIN_LOG"
+            fi
+          else
+            echo "❌ bin/targets 目录不存在" | tee -a "$MAIN_LOG"
+          fi
+
       - name: "🎯 验证工厂镜像"
         if: env.BUILD_STATUS == 'success'
         run: |
@@ -478,17 +619,54 @@ jobs:
           MAIN_LOG="${{ env.MAIN_LOG }}"
           echo "=== 🎯 验证工厂镜像 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
-          ASUS_FACTORY=$(find bin/targets -name "*asus*rt-ac42u*" -o -name "*rt-ac42u*" | grep -i factory || true)
-          if [ -n "$ASUS_FACTORY" ]; then
-            echo "✅ 工厂镜像已生成:" | tee -a "$MAIN_LOG"
-            for img in $ASUS_FACTORY; do
-              size=$(du -h "$img" | cut -f1)
-              echo "  - $(basename "$img") ($size)" | tee -a "$MAIN_LOG"
+          
+          # 多种方式查找工厂镜像
+          echo "🔍 查找工厂镜像..." | tee -a "$MAIN_LOG"
+          
+          # 方法1: 查找包含 factory 的文件
+          FACTORY_FILES=$(find bin/targets -type f -iname "*factory*" 2>/dev/null || true)
+          
+          # 方法2: 查找包含 ac42u 的文件
+          AC42U_FILES=$(find bin/targets -type f -iname "*ac42u*" 2>/dev/null || true)
+          
+          # 方法3: 查找包含 asus 的文件
+          ASUS_FILES=$(find bin/targets -type f -iname "*asus*" 2>/dev/null || true)
+          
+          # 方法4: 查找所有固件文件
+          ALL_FIRMWARE=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null || true)
+          
+          echo "📋 查找结果:" | tee -a "$MAIN_LOG"
+          echo "  - 包含 'factory' 的文件: $([ -n "$FACTORY_FILES" ] && echo "找到" || echo "无")" | tee -a "$MAIN_LOG"
+          echo "  - 包含 'ac42u' 的文件: $([ -n "$AC42U_FILES" ] && echo "找到" || echo "无")" | tee -a "$MAIN_LOG"
+          echo "  - 包含 'asus' 的文件: $([ -n "$ASUS_FILES" ] && echo "找到" || echo "无")" | tee -a "$MAIN_LOG"
+          echo "  - 所有固件文件: $(echo "$ALL_FIRMWARE" | wc -l)" | tee -a "$MAIN_LOG"
+          
+          # 合并所有可能的工厂镜像
+          ALL_FACTORY_CANDIDATES=$(echo "$FACTORY_FILES" "$AC42U_FILES" "$ASUS_FILES" | tr ' ' '\n' | sort -u | grep -v '^$')
+          
+          if [ -n "$ALL_FACTORY_CANDIDATES" ]; then
+            echo "✅ 找到可能的工厂镜像:" | tee -a "$MAIN_LOG"
+            for img in $ALL_FACTORY_CANDIDATES; do
+              if [ -f "$img" ]; then
+                size=$(du -h "$img" | cut -f1)
+                file_type=$(file "$img" 2>/dev/null | cut -d: -f2 || echo "unknown")
+                echo "  - $(basename "$img") ($size) - $file_type" | tee -a "$MAIN_LOG"
+              fi
             done
             echo "FACTORY_EXISTS=true" >> $GITHUB_ENV
+            echo "FACTORY_FILES=$ALL_FACTORY_CANDIDATES" >> $GITHUB_ENV
           else
             echo "❌ 未找到工厂镜像" | tee -a "$MAIN_LOG"
             echo "FACTORY_EXISTS=false" >> $GITHUB_ENV
+            
+            # 如果没有找到工厂镜像，显示所有固件文件供分析
+            echo "📁 所有可用的固件文件:" | tee -a "$MAIN_LOG"
+            for firmware in $ALL_FIRMWARE; do
+              if [ -f "$firmware" ]; then
+                size=$(du -h "$firmware" | cut -f1)
+                echo "  - $(basename "$firmware") ($size)" | tee -a "$MAIN_LOG"
+              fi
+            done
           fi
 
       - name: "📦 收集构建产物"
@@ -499,17 +677,37 @@ jobs:
           echo "=== 📦 收集构建产物 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           mkdir -p /mnt/artifacts/firmware
-          find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" \) > /mnt/artifacts/firmware-list.txt
-          FIRMWARE_COUNT=$(wc -l < /mnt/artifacts/firmware-list.txt)
+          
+          # 收集所有固件文件
+          find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" \) > /mnt/artifacts/firmware-list.txt 2>/dev/null || true
+          
+          FIRMWARE_COUNT=0
+          if [ -f "/mnt/artifacts/firmware-list.txt" ]; then
+            FIRMWARE_COUNT=$(wc -l < /mnt/artifacts/firmware-list.txt)
+          fi
+          
           echo "📦 复制 $FIRMWARE_COUNT 个固件文件..." | tee -a "$MAIN_LOG"
           COPIED_COUNT=0
-          while IFS= read -r firmware; do
-            if [ -f "$firmware" ]; then
-              cp "$firmware" /mnt/artifacts/firmware/ && COPIED_COUNT=$((COPIED_COUNT+1)) || echo "⚠️ 复制失败: $firmware" | tee -a "$MAIN_LOG"
-            fi
-          done < /mnt/artifacts/firmware-list.txt
+          if [ -f "/mnt/artifacts/firmware-list.txt" ]; then
+            while IFS= read -r firmware; do
+              if [ -f "$firmware" ]; then
+                cp "$firmware" /mnt/artifacts/firmware/ && COPIED_COUNT=$((COPIED_COUNT+1)) || echo "⚠️ 复制失败: $firmware" | tee -a "$MAIN_LOG"
+              fi
+            done < /mnt/artifacts/firmware-list.txt
+          fi
+          
           echo "FIRMWARE_COUNT=$COPIED_COUNT" >> $GITHUB_ENV
           echo "✅ 成功复制 $COPIED_COUNT 个固件文件" | tee -a "$MAIN_LOG"
+          
+          # 如果有工厂镜像，特别标记
+          if [ "${{ env.FACTORY_EXISTS }}" = "true" ] && [ -n "${{ env.FACTORY_FILES }}" ]; then
+            echo "🏭 工厂镜像文件:" | tee -a "$MAIN_LOG"
+            for factory_file in ${{ env.FACTORY_FILES }}; do
+              if [ -f "$factory_file" ]; then
+                echo "  - $(basename "$factory_file")" | tee -a "$MAIN_LOG"
+              fi
+            done
+          fi
 
       - name: "📋 智能日志分析与报告"
         if: always()
@@ -522,7 +720,9 @@ jobs:
           echo "🏁 构建结束时间: $(date)" | tee -a "$MAIN_LOG"
           echo "📊 最终状态: ${{ env.BUILD_STATUS || 'unknown' }}" | tee -a "$MAIN_LOG"
           echo "📦 固件数量: ${{ env.FIRMWARE_COUNT || 0 }}" | tee -a "$MAIN_LOG"
+          echo "📏 固件大小: ${{ env.FIRMWARE_SIZE_MB || 'unknown' }}MB" | tee -a "$MAIN_LOG"
           echo "🏭 工厂镜像: ${{ env.FACTORY_EXISTS || 'unknown' }}" | tee -a "$MAIN_LOG"
+          echo "🔧 高级功能: ${{ github.event.inputs.enable_advanced || 'false' }}" | tee -a "$MAIN_LOG"
           echo "==========================================" | tee -a "$MAIN_LOG"
           ERROR_REPORT_DIR="/mnt/artifacts/error-analysis"
           mkdir -p "$ERROR_REPORT_DIR"
@@ -530,6 +730,7 @@ jobs:
           echo "=== 🕒 时间线错误报告 ===" > "$TIMELINE_ERRORS"
           echo "生成时间: $(date)" >> "$TIMELINE_ERRORS"
           echo "构建状态: ${{ env.BUILD_STATUS || 'unknown' }}" >> "$TIMELINE_ERRORS"
+          echo "固件大小: ${{ env.FIRMWARE_SIZE_MB || 'unknown' }}MB" >> "$TIMELINE_ERRORS"
           echo "==========================================" >> "$TIMELINE_ERRORS"
           if [ -f "$MAIN_LOG" ]; then
             echo "🔍 关键错误:" >> "$TIMELINE_ERRORS"
@@ -569,18 +770,47 @@ jobs:
           echo "📈 构建结果:"
           echo "  - 状态: ${{ env.BUILD_STATUS || 'unknown' }}"
           echo "  - 固件数量: ${{ env.FIRMWARE_COUNT || 0 }}"
+          echo "  - 固件大小: ${{ env.FIRMWARE_SIZE_MB || 'unknown' }}MB"
           echo "  - 工厂镜像: ${{ env.FACTORY_EXISTS || 'unknown' }}"
           echo ""
           echo "🔧 高级功能:"
           echo "  - 启用状态: ${{ github.event.inputs.enable_advanced || 'false' }}"
           echo "  - 自定义补丁: ${{ github.event.inputs.custom_patches || '无' }}"
           echo "  - 额外软件包: ${{ github.event.inputs.extra_packages || '无' }}"
+          echo "  - 自定义IPK: $([ -d '${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/prebuilt-ipks' ] && echo '已配置' || echo '无')"
+          echo "  - 自定义脚本: $([ -f '${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/scripts/diy2.sh' ] && echo '已配置' || echo '无')"
           echo ""
           if [ "${{ env.BUILD_STATUS }}" = "success" ]; then
+            if [ "${{ env.FIRMWARE_SIZE_MB }}" -lt 15 ] 2>/dev/null; then
+              echo "⚠️ 警告: 固件大小异常小 (${{ env.FIRMWARE_SIZE_MB }}MB)"
+              echo ""
+              echo "🔍 可能原因:"
+              echo "  - LUCI界面未正确启用"
+              echo "  - 插件依赖关系问题"
+              echo "  - 配置文件中插件选项未设置"
+              echo ""
+              echo "💡 解决方案:"
+              echo "  - 检查配置文件中是否包含 CONFIG_PACKAGE_luci=y"
+              echo "  - 确保高级功能已启用"
+              echo "  - 验证额外软件包名称是否正确"
+            fi
+            
             if [ "${{ env.FACTORY_EXISTS }}" = "true" ]; then
               echo "🎉 构建成功！工厂镜像已生成"
+              if [ -n "${{ env.FACTORY_FILES }}" ]; then
+                echo ""
+                echo "🏭 工厂镜像文件:"
+                for file in ${{ env.FACTORY_FILES }}; do
+                  echo "  - $(basename "$file")"
+                done
+              fi
             else
               echo "⚠️ 构建成功但未生成工厂镜像"
+              echo ""
+              echo "💡 可能原因:"
+              echo "  - 设备配置可能不支持工厂镜像"
+              echo "  - 生成的可能是sysupgrade固件"
+              echo "  - 文件名不包含'factory'关键词"
             fi
           else
             echo "❌ 构建失败"
