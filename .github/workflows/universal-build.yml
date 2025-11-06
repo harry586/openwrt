@@ -1,4 +1,4 @@
-name: "Universal Firmware Builder - Fixed Logging Version"
+name: "Universal Firmware Builder - RootFS Fix Version"
 
 on:
   workflow_dispatch:
@@ -100,7 +100,7 @@ jobs:
           MAIN_LOG="/mnt/build-logs/build_timeline.log"
           mkdir -p /mnt/build-logs
           echo "🏁 构建开始时间: $(date)" > $MAIN_LOG
-          echo "🔧 工作流版本: Fixed Logging Version" >> $MAIN_LOG
+          echo "🔧 工作流版本: RootFS Fix Version" >> $MAIN_LOG
           echo "📋 输入参数:" >> $MAIN_LOG
           echo "  - 源码预设: ${{ github.event.inputs.source_preset }}" >> $MAIN_LOG
           echo "  - 源码分支: ${{ github.event.inputs.source_branch }}" >> $MAIN_LOG
@@ -153,17 +153,14 @@ jobs:
             MNT_AVAILABLE=$(df /mnt | awk 'NR==2 {gsub("G","",$4); print int($4)}')
             echo "  - /mnt 可用空间: ${MNT_AVAILABLE}GB"
             
-            if [ "$MNT_AVAILABLE" -lt 20 ]; then
-              echo "❌ 错误: /mnt 分区空间不足20GB"
+            if [ "$MNT_AVAILABLE" -lt 30 ]; then
+              echo "❌ 错误: /mnt 分区空间不足30GB"
               exit 1
             fi
             
-            # 创建交换文件
+            # 创建交换文件 - 增加大小以处理root.ext4
             echo "🔄 创建交换文件..."
-            SWAP_SIZE="16G"
-            if [ "$MNT_AVAILABLE" -gt 50 ]; then
-              SWAP_SIZE="20G"
-            fi
+            SWAP_SIZE="32G"
             
             # 清理现有交换文件
             sudo swapoff /mnt/swapfile 2>/dev/null || true
@@ -198,11 +195,12 @@ jobs:
               libssl-dev python3 python3-pip rsync unzip zlib1g-dev \
               file wget jq ccache libtool-bin automake autoconf \
               pkg-config subversion curl cmake ninja-build libelf-dev \
-              libxml2-dev liblzma-dev liblzo2-dev axel net-tools
+              libxml2-dev liblzma-dev liblzo2-dev axel net-tools \
+              e2fsprogs genext2fs # 添加ext4文件系统工具
             
             # 验证关键工具
             echo "🔍 验证工具安装..."
-            for tool in gcc g++ make git curl wget python3 cmake ninja ccache; do
+            for tool in gcc g++ make git curl wget python3 cmake ninja ccache genext2fs; do
               if command -v $tool >/dev/null 2>&1; then
                 version=$($tool --version 2>/dev/null | head -1 | cut -d' ' -f1-3 || echo "installed")
                 echo "✅ $tool: $version"
@@ -415,9 +413,11 @@ jobs:
               echo "✅ 找到配置文件: $CONFIG_FOUND"
               cp "$CONFIG_FOUND" .config
               
-              # 确保必要的配置
+              # 确保必要的配置 - 添加rootfs相关修复
               echo "CONFIG_TARGET_IMAGES_INCLUDE_FACTORY=y" >> .config
               echo "CONFIG_TARGET_IMAGES_INCLUDE_SYSUPGRADE=y" >> .config
+              echo "CONFIG_TARGET_ROOTFS_EXT4FS=y" >> .config
+              echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
               
               echo "🔄 运行defconfig..."
               if make defconfig 2>&1; then
@@ -430,6 +430,31 @@ jobs:
               echo "🔍 搜索路径: ${SEARCH_PATHS[*]}"
               exit 1
             fi
+          } | tee -a "$MAIN_LOG"
+
+      - name: "🔧 修复RootFS构建问题"
+        run: |
+          set -e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          {
+            echo "=== 🔧 修复RootFS构建问题 ==="
+            cd /mnt/source
+            
+            # 检查并修复可能的问题
+            echo "🔍 检查文件系统工具..."
+            which genext2fs || echo "genext2fs 未找到"
+            which mke2fs || echo "mke2fs 未找到"
+            
+            # 确保有足够的inodes
+            echo "📊 检查磁盘inodes..."
+            df -i /mnt
+            
+            # 创建必要的目录结构
+            echo "📁 创建目标目录结构..."
+            mkdir -p build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic/root-ipq40xx
+            mkdir -p build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/root-ipq40xx
+            
+            echo "✅ RootFS修复完成"
           } | tee -a "$MAIN_LOG"
 
       - name: "📥 预下载依赖"
@@ -539,6 +564,12 @@ jobs:
             export FORCE_UNSAFE_CONFIGURE=1
             export LC_ALL=C
             
+            # 检查磁盘空间
+            echo "💾 编译前磁盘空间检查:"
+            df -h /mnt
+            AVAILABLE_SPACE=$(df /mnt | awk 'NR==2 {print $4}')
+            echo "可用空间: $AVAILABLE_SPACE"
+            
             MAX_ATTEMPTS=2
             COMPILE_SUCCESS=false
             
@@ -555,7 +586,8 @@ jobs:
                 sleep 5
               fi
               
-              if make -j$JOBS V=s 2>&1; then
+              # 使用更详细的错误输出
+              if make -j$JOBS V=sc 2>&1; then
                 if [ -d "bin/targets" ] && find bin/targets -name "*.bin" 2>/dev/null | grep -q .; then
                   echo "✅ 编译成功"
                   COMPILE_SUCCESS=true
@@ -566,9 +598,20 @@ jobs:
                 fi
               else
                 echo "❌ 编译失败"
+                
+                # 尝试诊断RootFS问题
+                if find build_dir -name "root.ext4" -type f 2>/dev/null | grep -q .; then
+                  echo "🔍 RootFS文件存在但可能损坏"
+                  find build_dir -name "root.ext4" -exec ls -la {} \;
+                fi
+                
                 if [ $attempt -eq $MAX_ATTEMPTS ]; then
                   echo "❌ 所有编译尝试都失败"
                   echo "BUILD_STATUS=failed" >> $GITHUB_ENV
+                  
+                  # 尝试单独构建target/install来诊断问题
+                  echo "🔍 尝试诊断构建问题..."
+                  make target/install -j1 V=s 2>&1 || true
                   exit 1
                 fi
                 sleep 10
@@ -599,10 +642,6 @@ jobs:
             else
               echo "❌ 未找到工厂镜像"
               echo "FACTORY_EXISTS=false" >> $GITHUB_ENV
-              
-              # 尝试专门编译工厂镜像
-              echo "🔄 尝试专门编译工厂镜像..."
-              make target/install -j1 V=s 2>&1 || true
             fi
           } | tee -a "$MAIN_LOG"
 
@@ -671,6 +710,11 @@ jobs:
             echo "" >> "$TIMELINE_ERRORS"
             echo "⚠️ 警告信息:" >> "$TIMELINE_ERRORS"
             { grep -n -i "warning" "$MAIN_LOG" 2>/dev/null | head -10 || echo "无警告信息"; } >> "$TIMELINE_ERRORS"
+            
+            # 特别关注RootFS相关错误
+            echo "" >> "$TIMELINE_ERRORS"
+            echo "🔍 RootFS相关错误:" >> "$TIMELINE_ERRORS"
+            { grep -n -i "root\.ext4\|image\.mk\|ext4fs\|genext2fs" "$MAIN_LOG" 2>/dev/null || echo "无RootFS相关错误"; } >> "$TIMELINE_ERRORS"
           else
             echo "主日志文件不存在" >> "$TIMELINE_ERRORS"
           fi
@@ -739,6 +783,10 @@ jobs:
             echo "❌ 构建失败"
             echo ""
             echo "🔍 请查看 error-analysis 目录中的错误报告"
+            echo "💡 可能的问题:"
+            echo "  - RootFS文件系统创建失败"
+            echo "  - 磁盘空间不足"
+            echo "  - 内存/交换空间不足"
           fi
           echo ""
           echo "⏰ 完成时间: $(date)"
