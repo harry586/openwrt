@@ -224,12 +224,8 @@ jobs:
           MAIN_LOG="${{ env.MAIN_LOG }}"
           echo "=== 🔧 修复Feeds分支问题 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
-          
-          # 检查当前分支并设置合适的feeds分支
           CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "master")
           echo "🔧 当前源码分支: $CURRENT_BRANCH" | tee -a "$MAIN_LOG"
-          
-          # 根据分支选择合适的feeds分支
           if [[ "$CURRENT_BRANCH" == *"22.03"* ]] || [[ "$CURRENT_BRANCH" == *"22.03"* ]]; then
             FEEDS_BRANCH="openwrt-22.03"
           elif [[ "$CURRENT_BRANCH" == *"21.02"* ]]; then
@@ -239,7 +235,6 @@ jobs:
           else
             FEEDS_BRANCH="main"
           fi
-          
           echo "🎯 使用Feeds分支: $FEEDS_BRANCH" | tee -a "$MAIN_LOG"
           echo "FEEDS_BRANCH=$FEEDS_BRANCH" >> $GITHUB_ENV
 
@@ -249,10 +244,8 @@ jobs:
           MAIN_LOG="${{ env.MAIN_LOG }}"
           echo "=== 🔄 源码初始化与Feeds配置 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
-          
           echo "📋 配置Feeds..." | tee -a "$MAIN_LOG"
           FEEDS_BRANCH="${{ env.FEEDS_BRANCH || 'main' }}"
-          
           case "${{ env.SOURCE_PRESET }}" in
             "immortalwrt")
               echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf
@@ -269,10 +262,8 @@ jobs:
           esac
           echo "src-git routing https://github.com/openwrt/routing.git;$FEEDS_BRANCH" >> feeds.conf
           echo "src-git telephony https://github.com/openwrt/telephony.git;$FEEDS_BRANCH" >> feeds.conf
-          
           echo "🔧 Feeds配置内容:" | tee -a "$MAIN_LOG"
           cat feeds.conf | tee -a "$MAIN_LOG"
-          
           echo "🔄 更新Feeds..." | tee -a "$MAIN_LOG"
           MAX_FEED_ATTEMPTS=3
           FEED_SUCCESS=false
@@ -299,11 +290,9 @@ jobs:
               sleep 10
             fi
           done
-          
           if [ "$FEED_SUCCESS" = "false" ]; then
             echo "❌ Feeds更新失败，但继续执行编译..." | tee -a "$MAIN_LOG"
           fi
-          
           echo "📦 安装Feeds..." | tee -a "$MAIN_LOG"
           if ./scripts/feeds install -a 2>&1; then
             echo "✅ Feeds安装成功" | tee -a "$MAIN_LOG"
@@ -319,26 +308,17 @@ jobs:
           echo "=== 🔧 配置下载镜像源 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           echo "🌐 配置多镜像源..." | tee -a "$MAIN_LOG"
-          
-          # 创建下载镜像配置
-          cat > download-mirrors.conf << 'EOF'
-src/gz openwrt_base https://mirrors.ustc.edu.cn/lede/releases/22.03.5/packages/aarch64_cortex-a53/base
-src/gz openwrt_luci https://mirrors.ustc.edu.cn/lede/releases/22.03.5/packages/aarch64_cortex-a53/luci
-src/gz openwrt_packages https://mirrors.ustc.edu.cn/lede/releases/22.03.5/packages/aarch64_cortex-a53/packages
-src/gz openwrt_routing https://mirrors.ustc.edu.cn/lede/releases/22.03.5/packages/aarch64_cortex-a53/routing
-src/gz openwrt_telephony https://mirrors.ustc.edu.cn/lede/releases/22.03.5/packages/aarch64_cortex-a53/telephony
-EOF
-
+          echo "src/gz openwrt_base https://mirrors.ustc.edu.cn/lede/releases/22.03.5/packages/aarch64_cortex-a53/base" > download-mirrors.conf
+          echo "src/gz openwrt_luci https://mirrors.ustc.edu.cn/lede/releases/22.03.5/packages/aarch64_cortex-a53/luci" >> download-mirrors.conf
+          echo "src/gz openwrt_packages https://mirrors.ustc.edu.cn/lede/releases/22.03.5/packages/aarch64_cortex-a53/packages" >> download-mirrors.conf
+          echo "src/gz openwrt_routing https://mirrors.ustc.edu.cn/lede/releases/22.03.5/packages/aarch64_cortex-a53/routing" >> download-mirrors.conf
+          echo "src/gz openwrt_telephony https://mirrors.ustc.edu.cn/lede/releases/22.03.5/packages/aarch64_cortex-a53/telephony" >> download-mirrors.conf
           echo "🔧 修复下载脚本..." | tee -a "$MAIN_LOG"
-          # 备份原始脚本
           cp scripts/download.pl scripts/download.pl.backup
-          
-          # 添加镜像源
           sed -i 's|https://downloads.openwrt.org|https://mirrors.ustc.edu.cn/lede|g' scripts/download.pl
           sed -i 's|https://cdn.kernel.org|https://mirrors.ustc.edu.cn/kernel|g' scripts/download.pl
           sed -i 's|https://www.netfilter.org|https://mirrors.ustc.edu.cn/netfilter|g' scripts/download.pl
           sed -i 's|https://github.com|https://ghproxy.com/https://github.com|g' scripts/download.pl
-          
           echo "📥 设置下载重试..." | tee -a "$MAIN_LOG"
           echo "DOWNLOAD_MAX_CONNECTION=5" >> include/prereq.mk
           echo "WGET_OPTIONS='--timeout=30 --tries=5 --retry-connrefused'" >> include/prereq.mk
@@ -352,16 +332,8 @@ EOF
           cd /mnt/source
           CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
           echo "🔍 查找配置文件: $CONFIG_PROFILE" | tee -a "$MAIN_LOG"
-          
-          # 多种方式查找配置文件
           CONFIG_FOUND=""
-          SEARCH_PATHS=(
-            "${{ env.CONFIG_REPO_DIR }}/firmware-config/configs"
-            "${{ env.CONFIG_REPO_DIR }}/firmware-config" 
-            "${{ env.CONFIG_REPO_DIR }}"
-            "${{ env.CONFIG_REPO_DIR }}/firmware-config/configs/device-profiles"
-          )
-          
+          SEARCH_PATHS=("${{ env.CONFIG_REPO_DIR }}/firmware-config/configs" "${{ env.CONFIG_REPO_DIR }}/firmware-config" "${{ env.CONFIG_REPO_DIR }}" "${{ env.CONFIG_REPO_DIR }}/firmware-config/configs/device-profiles")
           for path in "${SEARCH_PATHS[@]}"; do
             if [ -f "$path/$CONFIG_PROFILE" ]; then
               CONFIG_FOUND="$path/$CONFIG_PROFILE"
@@ -369,8 +341,6 @@ EOF
               break
             fi
           done
-          
-          # 模糊搜索
           if [ -z "$CONFIG_FOUND" ]; then
             echo "🔍 精确匹配失败，开始模糊搜索..." | tee -a "$MAIN_LOG"
             for path in "${SEARCH_PATHS[@]}"; do
@@ -384,24 +354,17 @@ EOF
               fi
             done
           fi
-          
           if [ -n "$CONFIG_FOUND" ] && [ -f "$CONFIG_FOUND" ]; then
             echo "🎯 最终使用配置文件: $CONFIG_FOUND" | tee -a "$MAIN_LOG"
-            
-            # 显示配置文件内容前几行用于验证
             echo "📄 配置文件预览:" | tee -a "$MAIN_LOG"
             head -20 "$CONFIG_FOUND" | tee -a "$MAIN_LOG"
             echo "..." | tee -a "$MAIN_LOG"
-            
-            # 直接使用配置文件，不追加额外配置
             cp "$CONFIG_FOUND" .config
             echo "🔧 直接使用配置文件，不追加额外配置..." | tee -a "$MAIN_LOG"
-            
             echo "🔄 运行defconfig..." | tee -a "$MAIN_LOG"
             TEMP_LOG=$(mktemp)
             if { make defconfig 2>&1 | tee "$TEMP_LOG"; } then
               echo "✅ 配置应用完成" | tee -a "$MAIN_LOG"
-              # 检查defconfig警告
               if grep -i "WARNING" "$TEMP_LOG"; then
                 echo "⚠️ defconfig有警告" | tee -a "$MAIN_LOG"
               fi
@@ -433,13 +396,10 @@ EOF
           MAIN_LOG="${{ env.MAIN_LOG }}"
           echo "=== 🔧 应用高级功能 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
-          
           echo "🔧 高级功能状态: 已启用" | tee -a "$MAIN_LOG"
           echo "📋 高级功能配置:" | tee -a "$MAIN_LOG"
           echo "  - 自定义补丁: ${{ github.event.inputs.custom_patches || '无' }}" | tee -a "$MAIN_LOG"
           echo "  - 额外软件包: ${{ github.event.inputs.extra_packages || '无' }}" | tee -a "$MAIN_LOG"
-          
-          # 应用自定义补丁
           if [ -n "${{ github.event.inputs.custom_patches }}" ]; then
             echo "🔧 应用自定义补丁..." | tee -a "$MAIN_LOG"
             PATCH_URL="${{ github.event.inputs.custom_patches }}"
@@ -475,8 +435,6 @@ EOF
             echo "ℹ️ 未提供自定义补丁" | tee -a "$MAIN_LOG"
             echo "CUSTOM_PATCH_STATUS=not_provided" >> $GITHUB_ENV
           fi
-          
-          # 添加额外软件包 - 修复版
           if [ -n "${{ github.event.inputs.extra_packages }}" ]; then
             echo "📦 配置额外软件包..." | tee -a "$MAIN_LOG"
             IFS=',' read -ra PKGS <<< "${{ github.event.inputs.extra_packages }}"
@@ -484,7 +442,6 @@ EOF
             for pkg in "${PKGS[@]}"; do
               CLEAN_PKG=$(echo "$pkg" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
               if [ -n "$CLEAN_PKG" ]; then
-                # 检查包是否已经在配置中
                 if ! grep -q "CONFIG_PACKAGE_${CLEAN_PKG}=y" .config; then
                   echo "CONFIG_PACKAGE_${CLEAN_PKG}=y" >> .config
                   echo "✅ 添加包: $CLEAN_PKG" | tee -a "$MAIN_LOG"
@@ -500,8 +457,6 @@ EOF
             echo "ℹ️ 未提供额外软件包" | tee -a "$MAIN_LOG"
             echo "EXTRA_PACKAGES_ADDED=0" >> $GITHUB_ENV
           fi
-          
-          # 安装自定义IPK包
           echo "📦 安装自定义IPK包..." | tee -a "$MAIN_LOG"
           IPK_DIR="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/prebuilt-ipks"
           if [ -d "$IPK_DIR" ]; then
@@ -527,34 +482,23 @@ EOF
             echo "ℹ️ 自定义IPK目录不存在: $IPK_DIR" | tee -a "$MAIN_LOG"
             echo "CUSTOM_IPK_COUNT=0" >> $GITHUB_ENV
           fi
-          
-          # 执行自定义脚本 - 修复重复执行问题
           echo "🔧 执行自定义脚本..." | tee -a "$MAIN_LOG"
-          
-          SCRIPT_PATHS=(
-            "${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/scripts"
-            "${{ env.CONFIG_REPO_DIR }}/firmware-config/scripts" 
-          )
-          
+          SCRIPT_PATHS=("${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/scripts" "${{ env.CONFIG_REPO_DIR }}/firmware-config/scripts")
           SCRIPT_FOUND=false
           SCRIPT_COUNT=0
           EXECUTED_SCRIPTS=""
-          
           for script_path in "${SCRIPT_PATHS[@]}"; do
             if [ -d "$script_path" ]; then
               echo "🔍 在 $script_path 中查找脚本..." | tee -a "$MAIN_LOG"
-              # 只查找一级目录下的.sh文件，避免重复
               SCRIPTS=$(find "$script_path" -maxdepth 1 -name "*.sh" -type f 2>/dev/null | sort || true)
               if [ -n "$SCRIPTS" ]; then
                 echo "✅ 在 $script_path 中找到脚本:" | tee -a "$MAIN_LOG"
                 for script in $SCRIPTS; do
                   script_name=$(basename "$script")
-                  # 检查是否已经执行过
                   if echo "$EXECUTED_SCRIPTS" | grep -q "$script_name"; then
                     echo "⏩ 跳过已执行脚本: $script_name" | tee -a "$MAIN_LOG"
                     continue
                   fi
-                  
                   echo "📜 执行脚本: $script_name..." | tee -a "$MAIN_LOG"
                   chmod +x "$script"
                   cd /mnt/source
@@ -575,7 +519,6 @@ EOF
               fi
             fi
           done
-          
           if [ "$SCRIPT_FOUND" = "true" ]; then
             echo "CUSTOM_SCRIPT_STATUS=executed_${SCRIPT_COUNT}_scripts" >> $GITHUB_ENV
             echo "✅ 总共执行了 $SCRIPT_COUNT 个自定义脚本" | tee -a "$MAIN_LOG"
@@ -583,8 +526,6 @@ EOF
             echo "ℹ️ 未找到任何自定义脚本" | tee -a "$MAIN_LOG"
             echo "CUSTOM_SCRIPT_STATUS=not_found" >> $GITHUB_ENV
           fi
-          
-          # 重新运行defconfig确保配置正确
           echo "🔄 重新运行defconfig..." | tee -a "$MAIN_LOG"
           TEMP_LOG=$(mktemp)
           if { make defconfig 2>&1 | tee "$TEMP_LOG"; } then
@@ -597,7 +538,6 @@ EOF
           fi
           cat "$TEMP_LOG" >> "$MAIN_LOG"
           rm -f "$TEMP_LOG"
-          
           echo "✅ 高级功能应用完成" | tee -a "$MAIN_LOG"
 
       - name: "🔍 验证配置"
@@ -606,7 +546,6 @@ EOF
           MAIN_LOG="${{ env.MAIN_LOG }}"
           echo "=== 🔍 验证配置 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
-          
           echo "📋 当前配置摘要:" | tee -a "$MAIN_LOG"
           echo "🔧 已启用的LUCI应用:" | tee -a "$MAIN_LOG"
           LUCI_COUNT=0
@@ -619,20 +558,17 @@ EOF
               fi
             done <<< "$LUCI_APPS"
           fi
-          
           if [ $LUCI_COUNT -eq 0 ]; then
             echo "❌ 未找到LUCI应用配置" | tee -a "$MAIN_LOG"
           else
             echo "✅ 总共找到 $LUCI_COUNT 个LUCI相关配置" | tee -a "$MAIN_LOG"
           fi
-          
           echo "📦 自定义IPK包:" | tee -a "$MAIN_LOG"
           if [ -d "package/custom" ]; then
             ls -la package/custom/ | tee -a "$MAIN_LOG"
           else
             echo "ℹ️ 无自定义IPK包" | tee -a "$MAIN_LOG"
           fi
-          
           echo "🎯 关键配置状态:" | tee -a "$MAIN_LOG"
           for config in "CONFIG_TARGET_ROOTFS_SQUASHFS" "CONFIG_PACKAGE_luci" "CONFIG_PACKAGE_luci-theme-material" "CONFIG_TARGET_IMAGES_INCLUDE_FACTORY"; do
             if grep -q "^$config=y" .config; then
@@ -641,11 +577,8 @@ EOF
               echo "❌ $config 未设置" | tee -a "$MAIN_LOG"
             fi
           done
-          
-          # 检查目标设备配置
           echo "🎯 目标设备配置:" | tee -a "$MAIN_LOG"
           grep "^CONFIG_TARGET" .config | grep "=y" | head -10 | tee -a "$MAIN_LOG"
-          
           echo "✅ 配置验证完成" | tee -a "$MAIN_LOG"
 
       - name: "📥 预下载依赖"
@@ -665,7 +598,6 @@ EOF
             TEMP_LOG=$(mktemp)
             if { make download -j2 V=s 2>&1 | tee "$TEMP_LOG"; } then
               echo "✅ 下载成功" | tee -a "$MAIN_LOG"
-              # 检查下载警告
               if grep -i -E "error|failed|404|curl.*failed|download failed" "$TEMP_LOG"; then
                 echo "⚠️ 下载过程中发现一些问题" | tee -a "$MAIN_LOG"
               fi
@@ -674,11 +606,9 @@ EOF
               break
             else
               echo "⚠️ 下载失败，重试 $attempt/$MAX_ATTEMPTS..." | tee -a "$MAIN_LOG"
-              # 输出下载错误
               grep -i -E "error|failed|404|curl.*failed|download failed" "$TEMP_LOG" | head -5 | tee -a "$MAIN_LOG" || true
               cat "$TEMP_LOG" >> "$MAIN_LOG"
               rm -f "$TEMP_LOG"
-              
               if [ $attempt -eq $MAX_ATTEMPTS ]; then
                 echo "❌ 所有下载尝试都失败，跳过下载继续编译..." | tee -a "$MAIN_LOG"
                 break
@@ -689,7 +619,6 @@ EOF
           DOWNLOAD_COUNT=$(find dl/ -type f 2>/dev/null | wc -l)
           echo "✅ 下载完成，文件数量: $DOWNLOAD_COUNT" | tee -a "$MAIN_LOG"
 
-      # 后续步骤保持不变，与原始工作流相同
       - name: "🛠️ 编译工具链"
         timeout-minutes: 180
         run: |
@@ -699,7 +628,6 @@ EOF
           cd /mnt/source
           export FORCE_UNSAFE_CONFIGURE=1
           export LC_ALL=C
-          
           echo "🔧 编译基础工具..." | tee -a "$MAIN_LOG"
           TEMP_LOG=$(mktemp)
           if { make tools/install -j1 V=s 2>&1 | tee "$TEMP_LOG"; } then
@@ -713,19 +641,16 @@ EOF
           fi
           cat "$TEMP_LOG" >> "$MAIN_LOG"
           rm -f "$TEMP_LOG"
-          
           echo "🔄 编译工具链..." | tee -a "$MAIN_LOG"
           MAX_RETRIES=2
           for attempt in $(seq 1 $MAX_RETRIES); do
             echo "🔄 工具链编译尝试 $attempt/$MAX_RETRIES" | tee -a "$MAIN_LOG"
             TEMP_LOG=$(mktemp)
-            
             if [ $attempt -gt 1 ]; then
               echo "🧹 清理工具链..." | tee -a "$MAIN_LOG"
               make toolchain/clean 2>/dev/null || true
               sleep 5
             fi
-            
             if { make toolchain/compile -j1 V=s 2>&1 | tee "$TEMP_LOG"; } then
               echo "✅ 工具链编译成功" | tee -a "$MAIN_LOG"
               cat "$TEMP_LOG" >> "$MAIN_LOG"
@@ -737,7 +662,6 @@ EOF
               grep -i -E "error|failed|fatal|No such file or directory|undefined reference|collect2: error" "$TEMP_LOG" | head -20 | tee -a "$MAIN_LOG"
               cat "$TEMP_LOG" >> "$MAIN_LOG"
               rm -f "$TEMP_LOG"
-              
               if [ $attempt -eq $MAX_RETRIES ]; then
                 echo "❌ 所有工具链编译尝试都失败" | tee -a "$MAIN_LOG"
                 exit 1
@@ -756,13 +680,11 @@ EOF
           cd /mnt/source
           export FORCE_UNSAFE_CONFIGURE=1
           export LC_ALL=C
-          
           echo "🔧 开始编译..." | tee -a "$MAIN_LOG"
           MAX_ATTEMPTS=2
           for attempt in $(seq 1 $MAX_ATTEMPTS); do
             echo "🔄 编译尝试 $attempt/$MAX_ATTEMPTS" | tee -a "$MAIN_LOG"
             TEMP_LOG=$(mktemp)
-            
             if [ $attempt -eq 1 ]; then
               JOBS=2
             else
@@ -771,7 +693,6 @@ EOF
               make target/linux-clean 2>/dev/null || true
               sleep 5
             fi
-            
             if { make -j$JOBS V=s 2>&1 | tee "$TEMP_LOG"; } then
               if find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.itb" -o -name "*.gz" \) 2>/dev/null | grep -q .; then
                 echo "✅ 编译成功，找到固件文件" | tee -a "$MAIN_LOG"
@@ -796,7 +717,6 @@ EOF
               grep -i -E "error|failed|fatal|No such file or directory|collect2: error|recipe for target.*failed" "$TEMP_LOG" | tail -20 | tee -a "$MAIN_LOG"
               cat "$TEMP_LOG" >> "$MAIN_LOG"
               rm -f "$TEMP_LOG"
-              
               if [ $attempt -eq $MAX_ATTEMPTS ]; then
                 echo "❌ 所有编译尝试都失败" | tee -a "$MAIN_LOG"
                 echo "BUILD_STATUS=failed" >> $GITHUB_ENV
@@ -814,7 +734,6 @@ EOF
           MAIN_LOG="${{ env.MAIN_LOG }}"
           echo "=== 🔍 分析生成的固件 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
-          
           echo "📁 所有生成的文件:" | tee -a "$MAIN_LOG"
           find bin/targets -type f 2>/dev/null | while read file; do
             if [ -f "$file" ]; then
@@ -822,7 +741,6 @@ EOF
               echo "  - $file ($size)" | tee -a "$MAIN_LOG"
             fi
           done
-          
           echo "📊 固件详细信息:" | tee -a "$MAIN_LOG"
           if [ -d "bin/targets" ]; then
             FIRMWARE_FILES=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.itb" -o -name "*.gz" \) 2>/dev/null || true)
@@ -842,7 +760,6 @@ EOF
               TOTAL_SIZE_MB=$((TOTAL_SIZE / 1024 / 1024))
               echo "📏 固件总大小: ${TOTAL_SIZE_MB}MB" | tee -a "$MAIN_LOG"
               echo "📦 固件数量: ${FIRMWARE_COUNT}" | tee -a "$MAIN_LOG"
-              
               echo "FIRMWARE_SIZE_MB=$TOTAL_SIZE_MB" >> $GITHUB_ENV
               echo "FIRMWARE_COUNT=$FIRMWARE_COUNT" >> $GITHUB_ENV
             else
@@ -861,14 +778,11 @@ EOF
           MAIN_LOG="${{ env.MAIN_LOG }}"
           echo "=== 🎯 验证工厂镜像 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
-          
           echo "🔍 查找工厂镜像..." | tee -a "$MAIN_LOG"
           FACTORY_FILES=$(find bin/targets -type f -iname "*factory*" 2>/dev/null || true)
           AC42U_FILES=$(find bin/targets -type f -iname "*ac42u*" 2>/dev/null || true)
           ASUS_FILES=$(find bin/targets -type f -iname "*asus*" 2>/dev/null || true)
-          
           ALL_FACTORY_CANDIDATES=$(echo "$FACTORY_FILES" "$AC42U_FILES" "$ASUS_FILES" | tr ' ' '\n' | sort -u | grep -v '^$')
-          
           if [ -n "$ALL_FACTORY_CANDIDATES" ]; then
             echo "✅ 找到可能的工厂镜像:" | tee -a "$MAIN_LOG"
             for img in $ALL_FACTORY_CANDIDATES; do
@@ -893,16 +807,13 @@ EOF
           echo "=== 📦 收集构建产物 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           mkdir -p /mnt/artifacts/firmware
-          
           echo "📦 查找固件文件..." | tee -a "$MAIN_LOG"
           FIRMWARE_COUNT=0
           if [ -d "bin/targets" ]; then
             find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.itb" -o -name "*.gz" \) > /tmp/firmware-list.txt 2>/dev/null || true
-            
             if [ -f "/tmp/firmware-list.txt" ]; then
               FIRMWARE_COUNT=$(wc -l < /tmp/firmware-list.txt)
               echo "📦 找到 $FIRMWARE_COUNT 个固件文件..." | tee -a "$MAIN_LOG"
-              
               COPIED_COUNT=0
               while IFS= read -r firmware; do
                 if [ -f "$firmware" ]; then
@@ -914,7 +825,6 @@ EOF
                   } || echo "⚠️ 复制失败: $filename" | tee -a "$MAIN_LOG"
                 fi
               done < /tmp/firmware-list.txt
-              
               echo "FIRMWARE_COUNT=$COPIED_COUNT" >> $GITHUB_ENV
               echo "✅ 成功复制 $COPIED_COUNT 个固件文件" | tee -a "$MAIN_LOG"
             else
@@ -939,33 +849,26 @@ EOF
           echo "📦 固件数量: ${{ env.FIRMWARE_COUNT || 0 }}" | tee -a "$MAIN_LOG"
           echo "📏 固件大小: ${{ env.FIRMWARE_SIZE_MB || 'unknown' }}MB" | tee -a "$MAIN_LOG"
           echo "🏭 工厂镜像: ${{ env.FACTORY_EXISTS || 'unknown' }}" | tee -a "$MAIN_LOG"
-          
           echo "🔧 自定义功能状态:" | tee -a "$MAIN_LOG"
           echo "  - 自定义补丁: ${{ env.CUSTOM_PATCH_STATUS || '未执行' }}" | tee -a "$MAIN_LOG"
           echo "  - 额外软件包: ${{ env.EXTRA_PACKAGES_ADDED || 0 }} 个" | tee -a "$MAIN_LOG"
           echo "  - 自定义IPK: ${{ env.CUSTOM_IPK_COUNT || 0 }} 个" | tee -a "$MAIN_LOG"
           echo "  - 自定义脚本: ${{ env.CUSTOM_SCRIPT_STATUS || '未执行' }}" | tee -a "$MAIN_LOG"
-          
           echo "==========================================" | tee -a "$MAIN_LOG"
-          
           ERROR_REPORT_DIR="/mnt/artifacts/error-analysis"
           mkdir -p "$ERROR_REPORT_DIR"
           TIMELINE_ERRORS="$ERROR_REPORT_DIR/timeline_errors.txt"
-          
           echo "=== 🕒 时间线错误报告 ===" > "$TIMELINE_ERRORS"
           echo "生成时间: $(date)" >> "$TIMELINE_ERRORS"
           echo "构建状态: ${{ env.BUILD_STATUS || 'unknown' }}" >> "$TIMELINE_ERRORS"
           echo "固件数量: ${{ env.FIRMWARE_COUNT || 0 }}" >> "$TIMELINE_ERRORS"
           echo "固件大小: ${{ env.FIRMWARE_SIZE_MB || 'unknown' }}MB" >> "$TIMELINE_ERRORS"
-          
           echo "自定义功能状态:" >> "$TIMELINE_ERRORS"
           echo "  - 补丁: ${{ env.CUSTOM_PATCH_STATUS || 'N/A' }}" >> "$TIMELINE_ERRORS"
           echo "  - 额外包: ${{ env.EXTRA_PACKAGES_ADDED || 0 }}" >> "$TIMELINE_ERRORS"
           echo "  - 自定义IPK: ${{ env.CUSTOM_IPK_COUNT || 0 }}" >> "$TIMELINE_ERRORS"
           echo "  - 脚本: ${{ env.CUSTOM_SCRIPT_STATUS || 'N/A' }}" >> "$TIMELINE_ERRORS"
-          
           echo "==========================================" >> "$TIMELINE_ERRORS"
-          
           if [ -f "$MAIN_LOG" ]; then
             echo "🔍 关键错误:" >> "$TIMELINE_ERRORS"
             { grep -n -i -B2 -A2 "error\|failed\|fatal" "$MAIN_LOG" | head -30 || echo "无严重错误"; } >> "$TIMELINE_ERRORS"
