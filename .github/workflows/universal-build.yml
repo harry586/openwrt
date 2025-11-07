@@ -63,6 +63,7 @@ jobs:
         with:
           path: "config-repo"
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "🔧 初始化工作环境"
         run: |
@@ -306,6 +307,9 @@ jobs:
             echo "🔧 配置文件不存在，创建新配置: $CONFIG_FILE" | tee -a "$MAIN_LOG"
             mkdir -p "$CONFIG_DIR"
             
+            # 根据设备名称尝试猜测目标配置
+            echo "🔍 分析设备名称: $CONFIG_PROFILE" | tee -a "$MAIN_LOG"
+            
             # 创建通用配置文件模板
             echo "# =============================================" > "$CONFIG_FILE"
             echo "# 通用设备配置 - $CONFIG_PROFILE" >> "$CONFIG_FILE"
@@ -315,8 +319,76 @@ jobs:
             echo "# ======================" >> "$CONFIG_FILE"
             echo "# 基础目标配置" >> "$CONFIG_FILE"
             echo "# ======================" >> "$CONFIG_FILE"
-            echo "# 请根据实际设备修改以下目标配置" >> "$CONFIG_FILE"
-            echo "# CONFIG_TARGET_xxx=y" >> "$CONFIG_FILE"
+            
+            # 根据设备名称猜测目标配置
+            if [[ "$CONFIG_PROFILE" == *"ac42u"* ]] || [[ "$CONFIG_PROFILE" == *"asus"* ]]; then
+              echo "# ASUS RT-AC42U 设备" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ipq40xx=y" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ipq40xx_generic=y" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> "$CONFIG_FILE"
+            elif [[ "$CONFIG_PROFILE" == *"x86"* ]] || [[ "$CONFIG_PROFILE" == *"64"* ]]; then
+              echo "# x86/x64 设备" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_x86=y" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_x86_64=y" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_x86_64_DEVICE_generic=y" >> "$CONFIG_FILE"
+            elif [[ "$CONFIG_PROFILE" == *"mt7621"* ]] || [[ "$CONFIG_PROFILE" == *"newifi"* ]] || [[ "$CONFIG_PROFILE" == *"d2"* ]] || [[ "$CONFIG_PROFILE" == *"r6220"* ]]; then
+              echo "# MT7621 设备" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ramips_mt7621=y" >> "$CONFIG_FILE"
+              echo "# CONFIG_TARGET_ramips_mt7621_DEVICE_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
+            elif [[ "$CONFIG_PROFILE" == *"mt7620"* ]] || [[ "$CONFIG_PROFILE" == *"y1s"* ]] || [[ "$CONFIG_PROFILE" == *"newifi"* ]]; then
+              echo "# MT7620 设备" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ramips_mt7620=y" >> "$CONFIG_FILE"
+              echo "# CONFIG_TARGET_ramips_mt7620_DEVICE_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
+            elif [[ "$CONFIG_PROFILE" == *"r3000m"* ]] || [[ "$CONFIG_PROFILE" == *"cmcc"* ]]; then
+              echo "# CMCC R3000M 设备" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ramips_mt7621=y" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ramips_mt7621_DEVICE_cmcc_ra67=y" >> "$CONFIG_FILE"
+            elif [[ "$CONFIG_PROFILE" == *"nand"* ]]; then
+              echo "# NAND 闪存设备" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ramips_mt7621=y" >> "$CONFIG_FILE"
+              echo "# CONFIG_TARGET_ramips_mt7621_DEVICE_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ROOTFS_PARTSIZE=256" >> "$CONFIG_FILE"
+            elif [[ "$CONFIG_PROFILE" == *"mi"* ]] || [[ "$CONFIG_PROFILE" == *"xiaomi"* ]]; then
+              echo "# 小米设备" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ramips_mt7621=y" >> "$CONFIG_FILE"
+              echo "# CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
+            elif [[ "$CONFIG_PROFILE" == *"tp-link"* ]] || [[ "$CONFIG_PROFILE" == *"tl"* ]]; then
+              echo "# TP-Link 设备" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ath79=y" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ath79_generic=y" >> "$CONFIG_FILE"
+              echo "# CONFIG_TARGET_ath79_generic_DEVICE_tplink_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
+            elif [[ "$CONFIG_PROFILE" == *"ar71"* ]]; then
+              echo "# AR71xx 设备" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ath79=y" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ath79_generic=y" >> "$CONFIG_FILE"
+              echo "# CONFIG_TARGET_ath79_generic_DEVICE_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
+            elif [[ "$CONFIG_PROFILE" == *"bcm53"* ]] || [[ "$CONFIG_PROFILE" == *"broadcom"* ]]; then
+              echo "# Broadcom BCM53xx 设备" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_bcm53xx=y" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_bcm53xx_generic=y" >> "$CONFIG_FILE"
+              echo "# CONFIG_TARGET_bcm53xx_generic_DEVICE_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
+            elif [[ "$CONFIG_PROFILE" == *"ipq806x"* ]]; then
+              echo "# IPQ806x 设备" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ipq806x=y" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ipq806x_generic=y" >> "$CONFIG_FILE"
+              echo "# CONFIG_TARGET_ipq806x_generic_DEVICE_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
+            elif [[ "$CONFIG_PROFILE" == *"mediatek"* ]] || [[ "$CONFIG_PROFILE" == *"mtk"* ]]; then
+              echo "# MediaTek 设备" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_mediatek=y" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_mediatek_filogic=y" >> "$CONFIG_FILE"
+              echo "# CONFIG_TARGET_mediatek_filogic_DEVICE_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
+            else
+              echo "# 请根据实际设备修改以下目标配置" >> "$CONFIG_FILE"
+              echo "# CONFIG_TARGET_xxx=y" >> "$CONFIG_FILE"
+              echo "# CONFIG_TARGET_xxx_yyy=y" >> "$CONFIG_FILE"
+              echo "# CONFIG_TARGET_xxx_yyy_DEVICE_zzz=y" >> "$CONFIG_FILE"
+            fi
+            
             echo "" >> "$CONFIG_FILE"
             echo "# ======================" >> "$CONFIG_FILE"
             echo "# 镜像配置" >> "$CONFIG_FILE"
@@ -328,7 +400,12 @@ jobs:
             echo "" >> "$CONFIG_FILE"
             echo "# 分区大小" >> "$CONFIG_FILE"
             echo "CONFIG_TARGET_KERNEL_PARTSIZE=16" >> "$CONFIG_FILE"
-            echo "CONFIG_TARGET_ROOTFS_PARTSIZE=96" >> "$CONFIG_FILE"
+            # 根据设备类型调整根分区大小
+            if [[ "$CONFIG_PROFILE" == *"nand"* ]]; then
+              echo "CONFIG_TARGET_ROOTFS_PARTSIZE=256" >> "$CONFIG_FILE"
+            else
+              echo "CONFIG_TARGET_ROOTFS_PARTSIZE=96" >> "$CONFIG_FILE"
+            fi
             echo "" >> "$CONFIG_FILE"
             echo "# ======================" >> "$CONFIG_FILE"
             echo "# LUCI 核心配置" >> "$CONFIG_FILE"
@@ -409,7 +486,11 @@ jobs:
             echo "# CONFIG_DEVEL is not set" >> "$CONFIG_FILE"
             
             echo "✅ 已创建通用配置文件模板: $CONFIG_FILE" | tee -a "$MAIN_LOG"
-            echo "⚠️ 请根据实际设备修改目标配置后重新运行构建" | tee -a "$MAIN_LOG"
+            echo "⚠️ 请检查目标配置是否正确，如不正确请手动修改" | tee -a "$MAIN_LOG"
+            
+            # 显示创建的文件路径
+            echo "📁 配置文件保存位置: $CONFIG_FILE" | tee -a "$MAIN_LOG"
+            echo "📁 绝对路径: $(readlink -f "$CONFIG_FILE")" | tee -a "$MAIN_LOG"
           else
             echo "✅ 配置文件已存在: $CONFIG_FILE" | tee -a "$MAIN_LOG"
           fi
@@ -423,12 +504,14 @@ jobs:
           CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
           echo "🔍 查找配置文件: $CONFIG_PROFILE" | tee -a "$MAIN_LOG"
           
-          # 定义搜索路径
-          SEARCH_PATHS="${{ env.CONFIG_REPO_DIR }}/firmware-config/configs ${{ env.CONFIG_REPO_DIR }}/firmware-config ${{ env.CONFIG_REPO_DIR }} ${{ env.CONFIG_REPO_DIR }}/firmware-config/configs/device-profiles"
+          # 定义搜索路径 - 确保包含正确的configs目录
+          SEARCH_PATHS="${{ env.CONFIG_REPO_DIR }}/firmware-config/configs ${{ env.CONFIG_REPO_DIR }}/firmware-config ${{ env.CONFIG_REPO_DIR }}"
           
           CONFIG_FOUND=""
           for path in $SEARCH_PATHS; do
-            for name in "$CONFIG_PROFILE" ".config_$CONFIG_PROFILE" "config_$CONFIG_PROFILE" "$CONFIG_PROFILE.config"; do
+            echo "🔍 搜索路径: $path" | tee -a "$MAIN_LOG"
+            # 检查各种可能的文件名格式
+            for name in "config_$CONFIG_PROFILE" ".config_$CONFIG_PROFILE" "$CONFIG_PROFILE" "$CONFIG_PROFILE.config"; do
               if [ -f "$path/$name" ]; then
                 CONFIG_FOUND="$path/$name"
                 echo "✅ 找到配置文件: $CONFIG_FOUND" | tee -a "$MAIN_LOG"
@@ -574,10 +657,20 @@ jobs:
           
           # 禁用不需要的插件
           echo "🚫 禁用不需要的插件..." | tee -a "$MAIN_LOG"
-          disable_plugin "luci-app-ddns"
-          disable_plugin "luci-app-bandwidth"
-          disable_plugin "luci-app-wol"
-          disable_plugin "luci-theme-material"
+          DISABLED_PLUGINS=""
+          for plugin in luci-app-ddns luci-app-bandwidth luci-app-wol luci-theme-material; do
+            if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
+              sed -i "s/CONFIG_PACKAGE_${plugin}=y/# CONFIG_PACKAGE_${plugin} is not set/" .config
+              echo "❌ 已禁用: $plugin" | tee -a "$MAIN_LOG"
+              DISABLED_PLUGINS="$DISABLED_PLUGINS $plugin"
+            fi
+          done
+          
+          if [ -n "$DISABLED_PLUGINS" ]; then
+            echo "📋 已禁用的插件列表: $DISABLED_PLUGINS" | tee -a "$MAIN_LOG"
+          else
+            echo "ℹ️ 没有需要禁用的插件" | tee -a "$MAIN_LOG"
+          fi
           
           echo "✅ 插件配置完成" | tee -a "$MAIN_LOG"
 
@@ -671,6 +764,8 @@ jobs:
           rm -f "$TEMP_LOG"
           
           echo "📋 最终配置摘要:" | tee -a "$MAIN_LOG"
+          echo "🎯 目标配置:" | tee -a "$MAIN_LOG"
+          grep "^CONFIG_TARGET" .config | grep "=y" | head -10 | tee -a "$MAIN_LOG"
           echo "🔌 已启用的LUCI应用:" | tee -a "$MAIN_LOG"
           grep "^CONFIG_PACKAGE_luci-app" .config | grep "=y" | head -20 | tee -a "$MAIN_LOG"
           echo "🌐 语言包:" | tee -a "$MAIN_LOG"
@@ -902,6 +997,48 @@ jobs:
           else
             echo "❌ bin/targets 目录不存在" | tee -a "$MAIN_LOG"
             echo "FIRMWARE_COUNT=0" >> $GITHUB_ENV
+          fi
+
+      - name: "📤 提交新配置文件到仓库"
+        if: always()
+        run: |
+          set -e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 📤 提交新配置文件到仓库 ===" | tee -a "$MAIN_LOG"
+          
+          CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
+          CONFIG_DIR="${{ env.CONFIG_REPO_DIR }}/firmware-config/configs"
+          CONFIG_FILE="$CONFIG_DIR/config_$CONFIG_PROFILE"
+          
+          # 检查是否创建了新的配置文件
+          if [ -f "$CONFIG_FILE" ]; then
+            echo "📁 找到新创建的配置文件: $CONFIG_FILE" | tee -a "$MAIN_LOG"
+            
+            # 切换到配置仓库目录
+            cd "${{ env.CONFIG_REPO_DIR }}"
+            
+            # 配置Git用户
+            git config --local user.email "github-actions[bot]@users.noreply.github.com"
+            git config --local user.name "github-actions[bot]"
+            
+            # 添加配置文件
+            git add "firmware-config/configs/config_$CONFIG_PROFILE"
+            
+            # 检查是否有更改需要提交
+            if git diff --staged --quiet; then
+              echo "ℹ️ 没有新的配置文件需要提交" | tee -a "$MAIN_LOG"
+            else
+              # 提交更改
+              git commit -m "添加新的设备配置文件: $CONFIG_PROFILE"
+              echo "✅ 配置文件已提交到本地仓库" | tee -a "$MAIN_LOG"
+              
+              # 推送到远程仓库
+              echo "🔄 推送到远程仓库..." | tee -a "$MAIN_LOG"
+              git push
+              echo "✅ 配置文件已推送到远程仓库" | tee -a "$MAIN_LOG"
+            fi
+          else
+            echo "ℹ️ 没有创建新的配置文件" | tee -a "$MAIN_LOG"
           fi
 
       - name: "📋 智能日志分析与报告"
