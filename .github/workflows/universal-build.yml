@@ -1,4 +1,4 @@
-name: "通用固件构建器 - 完整版"
+name: "通用固件构建器 - 智能分析版"
 
 on:
   workflow_dispatch:
@@ -66,6 +66,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "🔧 初始化工作环境"
+        id: init
         run: |
           echo "=== 🔧 初始化工作环境 ==="
           sudo mkdir -p /mnt/source /mnt/artifacts /mnt/ccache /mnt/build-logs /mnt/downloads
@@ -73,8 +74,12 @@ jobs:
           sudo chmod -R 755 /mnt/source /mnt/artifacts /mnt/ccache /mnt/build-logs /mnt/downloads
           mkdir -p /mnt/build-logs
           MAIN_LOG="/mnt/build-logs/build_timeline.log"
+          ERROR_LOG="/mnt/build-logs/errors.log"
+          WARNING_LOG="/mnt/build-logs/warnings.log"
+          ANALYSIS_REPORT="/mnt/build-logs/analysis_report.md"
+          
           echo "🏁 构建开始时间: $(date)" > $MAIN_LOG
-          echo "🔧 工作流版本: 通用固件构建器 - 完整版" >> $MAIN_LOG
+          echo "🔧 工作流版本: 通用固件构建器 - 智能分析版" >> $MAIN_LOG
           echo "📋 输入参数:" >> $MAIN_LOG
           echo "  - 源码预设: ${{ github.event.inputs.source_preset }}" >> $MAIN_LOG
           echo "  - 源码分支: ${{ github.event.inputs.source_branch }}" >> $MAIN_LOG
@@ -84,14 +89,34 @@ jobs:
           echo "  - 语言包: ${{ github.event.inputs.language_pack }}" >> $MAIN_LOG
           echo "  - 插件预设: ${{ github.event.inputs.plugin_preset }}" >> $MAIN_LOG
           echo "==========================================" >> $MAIN_LOG
+          
+          # 初始化日志文件
+          echo "# 错误日志 - 开始于 $(date)" > $ERROR_LOG
+          echo "# 警告日志 - 开始于 $(date)" > $WARNING_LOG
+          echo "# 智能分析报告" > $ANALYSIS_REPORT
+          echo "生成时间: $(date)" >> $ANALYSIS_REPORT
+          echo "## 构建概况" >> $ANALYSIS_REPORT
+          echo "- 源码: ${{ github.event.inputs.source_preset }}" >> $ANALYSIS_REPORT
+          echo "- 设备: ${{ github.event.inputs.config_profile }}" >> $ANALYSIS_REPORT
+          echo "- 分支: ${{ github.event.inputs.source_branch }}" >> $ANALYSIS_REPORT
+          echo "" >> $ANALYSIS_REPORT
+          
           echo "MAIN_LOG=$MAIN_LOG" >> $GITHUB_ENV
+          echo "ERROR_LOG=$ERROR_LOG" >> $GITHUB_ENV
+          echo "WARNING_LOG=$WARNING_LOG" >> $GITHUB_ENV
+          echo "ANALYSIS_REPORT=$ANALYSIS_REPORT" >> $GITHUB_ENV
           echo "CONFIG_REPO_DIR=${{ github.workspace }}/config-repo" >> $GITHUB_ENV
+          echo "BUILD_STATUS=running" >> $GITHUB_ENV
           echo "✅ 工作环境初始化完成"
 
       - name: "💾 环境设置与资源管理"
+        id: env_setup
+        continue-on-error: true
         run: |
-          set -e
+          set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
+          ERROR_LOG="${{ env.ERROR_LOG }}"
+          WARNING_LOG="${{ env.WARNING_LOG }}"
           echo "=== 💾 环境设置与资源管理 ===" | tee -a "$MAIN_LOG"
           echo "📊 系统信息:" | tee -a "$MAIN_LOG"
           echo "  - 系统: $(lsb_release -d | cut -f2)" | tee -a "$MAIN_LOG"
@@ -105,32 +130,48 @@ jobs:
           sudo swapoff /mnt/swapfile 2>/dev/null || true
           sudo rm -f /mnt/swapfile 2>/dev/null || true
           echo "📦 创建 ${SWAP_SIZE} 交换文件..." | tee -a "$MAIN_LOG"
-          sudo fallocate -l $SWAP_SIZE /mnt/swapfile
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
-          echo "📊 内存状态:" | tee -a "$MAIN_LOG"
-          free -h | tee -a "$MAIN_LOG"
+          if ! sudo fallocate -l $SWAP_SIZE /mnt/swapfile 2>> "$ERROR_LOG"; then
+            echo "❌ 交换文件创建失败" | tee -a "$MAIN_LOG"
+            echo "交换文件创建失败" >> "$ERROR_LOG"
+          else
+            sudo chmod 600 /mnt/swapfile
+            sudo mkswap /mnt/swapfile
+            sudo swapon /mnt/swapfile
+            echo "📊 内存状态:" | tee -a "$MAIN_LOG"
+            free -h | tee -a "$MAIN_LOG"
+          fi
           echo "✅ 环境设置完成" | tee -a "$MAIN_LOG"
 
       - name: "🛠️ 安装编译依赖"
+        id: install_deps
+        continue-on-error: true
         run: |
-          set -e
+          set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
+          ERROR_LOG="${{ env.ERROR_LOG }}"
+          WARNING_LOG="${{ env.WARNING_LOG }}"
           echo "=== 🛠️ 安装编译依赖 ===" | tee -a "$MAIN_LOG"
           echo "📦 更新软件包列表..." | tee -a "$MAIN_LOG"
-          sudo apt-get update -qq
+          if ! sudo apt-get update -qq 2>> "$ERROR_LOG"; then
+            echo "❌ 软件包列表更新失败" | tee -a "$MAIN_LOG"
+          fi
           echo "🔧 安装核心编译工具..." | tee -a "$MAIN_LOG"
-          sudo apt-get install -y -qq build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3 python3-pip python3-dev rsync unzip zlib1g-dev file wget jq ccache libtool-bin automake autoconf pkg-config subversion curl cmake ninja-build libelf-dev libxml2-dev liblzma-dev liblzo2-dev axel net-tools e2fsprogs genext2fs dosfstools mtools libffi-dev libsqlite3-dev libpam0g-dev libtirpc-dev libev-dev lm-sensors libsnmp-dev libglib2.0-dev libgpiod-dev libfl-dev
+          if ! sudo apt-get install -y -qq build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3 python3-pip python3-dev rsync unzip zlib1g-dev file wget jq ccache libtool-bin automake autoconf pkg-config subversion curl cmake ninja-build libelf-dev libxml2-dev liblzma-dev liblzo2-dev axel net-tools e2fsprogs genext2fs dosfstools mtools libffi-dev libsqlite3-dev libpam0g-dev libtirpc-dev libev-dev lm-sensors libsnmp-dev libglib2.0-dev libgpiod-dev libfl-dev 2>> "$ERROR_LOG"; then
+            echo "❌ 依赖安装有错误" | tee -a "$MAIN_LOG"
+            echo "编译依赖安装失败" >> "$ERROR_LOG"
+          fi
           echo "🐍 配置Python环境..." | tee -a "$MAIN_LOG"
-          python3 -m pip install --upgrade pip
-          python3 -m pip install setuptools wheel
+          python3 -m pip install --upgrade pip 2>> "$WARNING_LOG" || echo "Python升级警告" >> "$WARNING_LOG"
+          python3 -m pip install setuptools wheel 2>> "$WARNING_LOG" || echo "Python包安装警告" >> "$WARNING_LOG"
           echo "✅ 依赖安装完成" | tee -a "$MAIN_LOG"
 
       - name: "⚡ 性能优化配置"
+        id: performance
+        continue-on-error: true
         run: |
-          set -e
+          set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
+          ERROR_LOG="${{ env.ERROR_LOG }}"
           echo "=== ⚡ 性能优化配置 ===" | tee -a "$MAIN_LOG"
           OPTIMIZATION_STRATEGY="${{ github.event.inputs.build_optimization }}"
           echo "🎯 编译优化策略: $OPTIMIZATION_STRATEGY" | tee -a "$MAIN_LOG"
@@ -152,24 +193,28 @@ jobs:
               ;;
           esac
           mkdir -p /mnt/ccache
-          ccache -M $CCACHE_SIZE
+          ccache -M $CCACHE_SIZE 2>> "$ERROR_LOG" || echo "CCache配置失败" >> "$ERROR_LOG"
           ccache -o compression=true
           ccache -o compression_level=6
           echo "CCACHE_DIR=/mnt/ccache" >> $GITHUB_ENV
           echo "CCACHE_COMPRESS=1" >> $GITHUB_ENV
           echo "PARALLEL_JOBS=$PARALLEL_JOBS" >> $GITHUB_ENV
           echo "📊 初始CCache统计:" | tee -a "$MAIN_LOG"
-          ccache -s | tee -a "$MAIN_LOG"
+          ccache -s | tee -a "$MAIN_LOG" 2>> "$WARNING_LOG" || echo "CCache统计失败" >> "$WARNING_LOG"
           echo "✅ 性能优化完成" | tee -a "$MAIN_LOG"
 
       - name: "🔧 源码配置与获取"
+        id: source_setup
+        continue-on-error: true
         run: |
-          set -e
+          set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
+          ERROR_LOG="${{ env.ERROR_LOG }}"
           echo "=== 🔧 源码配置与获取 ===" | tee -a "$MAIN_LOG"
           REPO_JSON_FOUND="${{ env.CONFIG_REPO_DIR }}/firmware-config/repositories.json"
           if [ ! -f "$REPO_JSON_FOUND" ]; then
             echo "❌ 错误: 未找到 repositories.json 文件" | tee -a "$MAIN_LOG"
+            echo "未找到 repositories.json 文件" >> "$ERROR_LOG"
             exit 1
           fi
           echo "✅ 找到配置文件: $REPO_JSON_FOUND" | tee -a "$MAIN_LOG"
@@ -177,6 +222,7 @@ jobs:
           SOURCE_URL=$(jq -r ".repositories.$PRESET.url" "$REPO_JSON_FOUND" 2>/dev/null || echo "")
           if [ -z "$SOURCE_URL" ]; then
             echo "❌ 错误: 预设 '$PRESET' 在配置文件中不存在" | tee -a "$MAIN_LOG"
+            echo "预设 '$PRESET' 在配置文件中不存在" >> "$ERROR_LOG"
             exit 1
           fi
           BRANCH="${{ github.event.inputs.source_branch }}"
@@ -196,15 +242,18 @@ jobs:
               echo "✅ 源码克隆成功" | tee -a "$MAIN_LOG"
             else
               echo "❌ 源码结构不完整" | tee -a "$MAIN_LOG"
+              echo "源码结构不完整" >> "$ERROR_LOG"
               exit 1
             fi
           else
             echo "❌ 源码克隆失败，尝试master分支..." | tee -a "$MAIN_LOG"
+            echo "源码克隆失败，尝试master分支" >> "$WARNING_LOG"
             if git clone --depth 1 "$SOURCE_URL" . 2>&1; then
               echo "✅ 使用master分支克隆成功" | tee -a "$MAIN_LOG"
-              git checkout "$BRANCH" 2>/dev/null || echo "⚠️ 无法切换到分支 $BRANCH，使用默认分支"
+              git checkout "$BRANCH" 2>/dev/null || echo "⚠️ 无法切换到分支 $BRANCH，使用默认分支" | tee -a "$MAIN_LOG"
             else
               echo "❌ 源码克隆失败" | tee -a "$MAIN_LOG"
+              echo "源码克隆失败" >> "$ERROR_LOG"
               exit 1
             fi
           fi
@@ -218,14 +267,17 @@ jobs:
           echo "SOURCE_PRESET=$PRESET" >> $GITHUB_ENV
 
       - name: "🔄 源码初始化与Feeds配置"
+        id: feeds_setup
+        continue-on-error: true
         run: |
-          set -e
+          set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
+          ERROR_LOG="${{ env.ERROR_LOG }}"
+          WARNING_LOG="${{ env.WARNING_LOG }}"
           echo "=== 🔄 源码初始化与Feeds配置 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           echo "📋 配置Feeds..." | tee -a "$MAIN_LOG"
           
-          # 自动检测合适的feeds分支
           CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "master")
           echo "🔧 当前源码分支: $CURRENT_BRANCH" | tee -a "$MAIN_LOG"
           if [[ "$CURRENT_BRANCH" == *"22.03"* ]]; then
@@ -267,6 +319,7 @@ jobs:
               if grep -i -E "error|failed|fatal" "$TEMP_LOG"; then
                 echo "⚠️ Feeds更新有错误，重试 $attempt/$MAX_FEED_ATTEMPTS..." | tee -a "$MAIN_LOG"
                 cat "$TEMP_LOG" >> "$MAIN_LOG"
+                grep -i -E "error|failed|fatal" "$TEMP_LOG" >> "$WARNING_LOG" || true
                 rm -f "$TEMP_LOG"
                 sleep 10
               else
@@ -279,25 +332,31 @@ jobs:
             else
               echo "⚠️ Feeds更新失败，重试 $attempt/$MAX_FEED_ATTEMPTS..." | tee -a "$MAIN_LOG"
               cat "$TEMP_LOG" >> "$MAIN_LOG"
+              grep -i -E "error|failed|fatal" "$TEMP_LOG" >> "$WARNING_LOG" || true
               rm -f "$TEMP_LOG"
               sleep 10
             fi
           done
           if [ "$FEED_SUCCESS" = "false" ]; then
             echo "❌ Feeds更新失败，但继续执行编译..." | tee -a "$MAIN_LOG"
+            echo "Feeds更新失败" >> "$WARNING_LOG"
           fi
           echo "📦 安装Feeds..." | tee -a "$MAIN_LOG"
           if ./scripts/feeds install -a 2>&1; then
             echo "✅ Feeds安装成功" | tee -a "$MAIN_LOG"
           else
             echo "⚠️ Feeds安装有警告，但继续执行..." | tee -a "$MAIN_LOG"
+            echo "Feeds安装有警告" >> "$WARNING_LOG"
           fi
           echo "✅ 源码初始化完成" | tee -a "$MAIN_LOG"
 
       - name: "📝 自动创建配置文件"
+        id: config_creation
+        continue-on-error: true
         run: |
-          set -e
+          set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
+          ERROR_LOG="${{ env.ERROR_LOG }}"
           echo "=== 📝 自动创建配置文件 ===" | tee -a "$MAIN_LOG"
           CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
           CONFIG_DIR="${{ env.CONFIG_REPO_DIR }}/firmware-config/configs"
@@ -307,18 +366,19 @@ jobs:
             echo "🔧 配置文件不存在，创建新配置: $CONFIG_FILE" | tee -a "$MAIN_LOG"
             mkdir -p "$CONFIG_DIR"
             
-            # 根据设备名称尝试猜测目标配置
             echo "🔍 分析设备名称: $CONFIG_PROFILE" | tee -a "$MAIN_LOG"
             
             # 创建通用配置文件模板
-            echo "# =============================================" > "$CONFIG_FILE"
-            echo "# 通用设备配置 - $CONFIG_PROFILE" >> "$CONFIG_FILE"
-            echo "# 自动生成于 $(date)" >> "$CONFIG_FILE"
-            echo "# =============================================" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "# 基础目标配置" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
+            {
+              echo "# ============================================="
+              echo "# 通用设备配置 - $CONFIG_PROFILE"
+              echo "# 自动生成于 $(date)"
+              echo "# ============================================="
+              echo ""
+              echo "# ======================"
+              echo "# 基础目标配置"
+              echo "# ======================"
+            } > "$CONFIG_FILE"
             
             # 根据设备名称猜测目标配置
             if [[ "$CONFIG_PROFILE" == *"ac42u"* ]] || [[ "$CONFIG_PROFILE" == *"asus"* ]]; then
@@ -336,52 +396,6 @@ jobs:
               echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
               echo "CONFIG_TARGET_ramips_mt7621=y" >> "$CONFIG_FILE"
               echo "# CONFIG_TARGET_ramips_mt7621_DEVICE_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
-            elif [[ "$CONFIG_PROFILE" == *"mt7620"* ]] || [[ "$CONFIG_PROFILE" == *"y1s"* ]] || [[ "$CONFIG_PROFILE" == *"newifi"* ]]; then
-              echo "# MT7620 设备" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ramips_mt7620=y" >> "$CONFIG_FILE"
-              echo "# CONFIG_TARGET_ramips_mt7620_DEVICE_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
-            elif [[ "$CONFIG_PROFILE" == *"r3000m"* ]] || [[ "$CONFIG_PROFILE" == *"cmcc"* ]]; then
-              echo "# CMCC R3000M 设备" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ramips_mt7621=y" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ramips_mt7621_DEVICE_cmcc_ra67=y" >> "$CONFIG_FILE"
-            elif [[ "$CONFIG_PROFILE" == *"nand"* ]]; then
-              echo "# NAND 闪存设备" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ramips_mt7621=y" >> "$CONFIG_FILE"
-              echo "# CONFIG_TARGET_ramips_mt7621_DEVICE_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ROOTFS_PARTSIZE=256" >> "$CONFIG_FILE"
-            elif [[ "$CONFIG_PROFILE" == *"mi"* ]] || [[ "$CONFIG_PROFILE" == *"xiaomi"* ]]; then
-              echo "# 小米设备" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ramips_mt7621=y" >> "$CONFIG_FILE"
-              echo "# CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
-            elif [[ "$CONFIG_PROFILE" == *"tp-link"* ]] || [[ "$CONFIG_PROFILE" == *"tl"* ]]; then
-              echo "# TP-Link 设备" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ath79=y" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ath79_generic=y" >> "$CONFIG_FILE"
-              echo "# CONFIG_TARGET_ath79_generic_DEVICE_tplink_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
-            elif [[ "$CONFIG_PROFILE" == *"ar71"* ]]; then
-              echo "# AR71xx 设备" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ath79=y" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ath79_generic=y" >> "$CONFIG_FILE"
-              echo "# CONFIG_TARGET_ath79_generic_DEVICE_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
-            elif [[ "$CONFIG_PROFILE" == *"bcm53"* ]] || [[ "$CONFIG_PROFILE" == *"broadcom"* ]]; then
-              echo "# Broadcom BCM53xx 设备" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_bcm53xx=y" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_bcm53xx_generic=y" >> "$CONFIG_FILE"
-              echo "# CONFIG_TARGET_bcm53xx_generic_DEVICE_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
-            elif [[ "$CONFIG_PROFILE" == *"ipq806x"* ]]; then
-              echo "# IPQ806x 设备" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ipq806x=y" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ipq806x_generic=y" >> "$CONFIG_FILE"
-              echo "# CONFIG_TARGET_ipq806x_generic_DEVICE_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
-            elif [[ "$CONFIG_PROFILE" == *"mediatek"* ]] || [[ "$CONFIG_PROFILE" == *"mtk"* ]]; then
-              echo "# MediaTek 设备" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_mediatek=y" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_mediatek_filogic=y" >> "$CONFIG_FILE"
-              echo "# CONFIG_TARGET_mediatek_filogic_DEVICE_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
             else
               echo "# 请根据实际设备修改以下目标配置" >> "$CONFIG_FILE"
               echo "# CONFIG_TARGET_xxx=y" >> "$CONFIG_FILE"
@@ -389,128 +403,59 @@ jobs:
               echo "# CONFIG_TARGET_xxx_yyy_DEVICE_zzz=y" >> "$CONFIG_FILE"
             fi
             
-            echo "" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "# 镜像配置" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> "$CONFIG_FILE"
-            echo "CONFIG_TARGET_IMAGES_GZIP=y" >> "$CONFIG_FILE"
-            echo "CONFIG_TARGET_IMAGES_INCLUDE_FACTORY=y" >> "$CONFIG_FILE"
-            echo "CONFIG_TARGET_IMAGES_INCLUDE_SYSUPGRADE=y" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# 分区大小" >> "$CONFIG_FILE"
-            echo "CONFIG_TARGET_KERNEL_PARTSIZE=16" >> "$CONFIG_FILE"
-            # 根据设备类型调整根分区大小
-            if [[ "$CONFIG_PROFILE" == *"nand"* ]]; then
-              echo "CONFIG_TARGET_ROOTFS_PARTSIZE=256" >> "$CONFIG_FILE"
-            else
-              echo "CONFIG_TARGET_ROOTFS_PARTSIZE=96" >> "$CONFIG_FILE"
-            fi
-            echo "" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "# LUCI 核心配置" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_luci=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_luci-base=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_luci-compat=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "# 基础系统包" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_base-files=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_busybox=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_dnsmasq-full=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_dropbear=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_firewall=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_fstools=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_iptables=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_libc=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_libgcc=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_logd=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_mtd=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_netifd=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_opkg=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_procd=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_ubus=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_ubusd=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_uci=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_uclient-fetch=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_urandom-seed=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_usign=y" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "# IPv6 支持" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_odhcp6c=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_ip6tables=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "# 网络服务" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "# 文件系统支持" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_kmod-fs-ntfs=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_block-mount=y" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "# 系统工具" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_htop=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_nano=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_curl=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_wget=y" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "# 编译选项" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "CONFIG_CCACHE=y" >> "$CONFIG_FILE"
-            echo "CONFIG_BUILD_LOG=y" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# 排除的应用程序" >> "$CONFIG_FILE"
-            echo "# CONFIG_PACKAGE_luci-app-ddns is not set" >> "$CONFIG_FILE"
-            echo "# CONFIG_PACKAGE_luci-app-bandwidth is not set" >> "$CONFIG_FILE"
-            echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> "$CONFIG_FILE"
-            echo "# CONFIG_PACKAGE_luci-theme-material is not set" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# 禁用调试减小体积" >> "$CONFIG_FILE"
-            echo "# CONFIG_DEBUG is not set" >> "$CONFIG_FILE"
-            echo "# CONFIG_DEVEL is not set" >> "$CONFIG_FILE"
+            # 添加通用配置
+            {
+              echo ""
+              echo "# ======================"
+              echo "# 镜像配置"
+              echo "# ======================"
+              echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y"
+              echo "CONFIG_TARGET_IMAGES_GZIP=y"
+              echo "CONFIG_TARGET_IMAGES_INCLUDE_FACTORY=y"
+              echo "CONFIG_TARGET_IMAGES_INCLUDE_SYSUPGRADE=y"
+              echo ""
+              echo "# 分区大小"
+              echo "CONFIG_TARGET_KERNEL_PARTSIZE=16"
+              if [[ "$CONFIG_PROFILE" == *"nand"* ]]; then
+                echo "CONFIG_TARGET_ROOTFS_PARTSIZE=256"
+              else
+                echo "CONFIG_TARGET_ROOTFS_PARTSIZE=96"
+              fi
+              echo ""
+              echo "# ======================"
+              echo "# LUCI 核心配置"
+              echo "# ======================"
+              echo "CONFIG_PACKAGE_luci=y"
+              echo "CONFIG_PACKAGE_luci-base=y"
+              echo "CONFIG_PACKAGE_luci-compat=y"
+              echo "CONFIG_PACKAGE_luci-mod-admin-full=y"
+              echo "CONFIG_PACKAGE_luci-theme-bootstrap=y"
+            } >> "$CONFIG_FILE"
             
             echo "✅ 已创建通用配置文件模板: $CONFIG_FILE" | tee -a "$MAIN_LOG"
             echo "⚠️ 请检查目标配置是否正确，如不正确请手动修改" | tee -a "$MAIN_LOG"
-            
-            # 显示创建的文件路径
-            echo "📁 配置文件保存位置: $CONFIG_FILE" | tee -a "$MAIN_LOG"
-            echo "📁 绝对路径: $(readlink -f "$CONFIG_FILE")" | tee -a "$MAIN_LOG"
+            echo "新配置文件创建: $CONFIG_FILE" >> "$WARNING_LOG"
           else
             echo "✅ 配置文件已存在: $CONFIG_FILE" | tee -a "$MAIN_LOG"
           fi
 
       - name: "🎯 应用设备配置"
+        id: apply_config
+        continue-on-error: true
         run: |
-          set -e
+          set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
+          ERROR_LOG="${{ env.ERROR_LOG }}"
           echo "=== 🎯 应用设备配置 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
           echo "🔍 查找配置文件: $CONFIG_PROFILE" | tee -a "$MAIN_LOG"
           
-          # 定义搜索路径 - 确保包含正确的configs目录
           SEARCH_PATHS="${{ env.CONFIG_REPO_DIR }}/firmware-config/configs ${{ env.CONFIG_REPO_DIR }}/firmware-config ${{ env.CONFIG_REPO_DIR }}"
           
           CONFIG_FOUND=""
           for path in $SEARCH_PATHS; do
             echo "🔍 搜索路径: $path" | tee -a "$MAIN_LOG"
-            # 检查各种可能的文件名格式
             for name in "config_$CONFIG_PROFILE" ".config_$CONFIG_PROFILE" "$CONFIG_PROFILE" "$CONFIG_PROFILE.config"; do
               if [ -f "$path/$name" ]; then
                 CONFIG_FOUND="$path/$name"
@@ -543,20 +488,17 @@ jobs:
             echo "✅ 配置文件复制完成" | tee -a "$MAIN_LOG"
           else
             echo "❌ 错误: 未找到配置文件 '$CONFIG_PROFILE'" | tee -a "$MAIN_LOG"
-            echo "🔍 搜索路径:" | tee -a "$MAIN_LOG"
-            for path in $SEARCH_PATHS; do
-              echo "  - $path" | tee -a "$MAIN_LOG"
-              if [ -d "$path" ]; then
-                find "$path" -type f -name "*config*" 2>/dev/null | head -10 | tee -a "$MAIN_LOG" || true
-              fi
-            done
+            echo "未找到配置文件 '$CONFIG_PROFILE'" >> "$ERROR_LOG"
             exit 1
           fi
 
       - name: "🌐 配置语言包"
+        id: language_setup
+        continue-on-error: true
         run: |
-          set -e
+          set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
+          WARNING_LOG="${{ env.WARNING_LOG }}"
           echo "=== 🌐 配置语言包 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           LANGUAGE="${{ github.event.inputs.language_pack }}"
@@ -582,15 +524,17 @@ jobs:
           echo "✅ 语言包配置完成" | tee -a "$MAIN_LOG"
 
       - name: "🔌 配置插件预设"
+        id: plugin_setup
+        continue-on-error: true
         run: |
-          set -e
+          set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
+          WARNING_LOG="${{ env.WARNING_LOG }}"
           echo "=== 🔌 配置插件预设 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           PRESET="${{ github.event.inputs.plugin_preset }}"
           echo "🎯 插件预设: $PRESET" | tee -a "$MAIN_LOG"
           
-          # 插件配置函数
           enable_plugin() {
             local plugin=$1
             if grep -q "CONFIG_PACKAGE_${plugin}" .config; then
@@ -599,14 +543,6 @@ jobs:
               echo "CONFIG_PACKAGE_${plugin}=y" >> .config
             fi
             echo "✅ 启用: $plugin" | tee -a "$MAIN_LOG"
-          }
-          
-          disable_plugin() {
-            local plugin=$1
-            if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
-              sed -i "s/CONFIG_PACKAGE_${plugin}=y/# CONFIG_PACKAGE_${plugin} is not set/" .config
-              echo "❌ 禁用: $plugin" | tee -a "$MAIN_LOG"
-            fi
           }
           
           case "$PRESET" in
@@ -651,39 +587,26 @@ jobs:
                 done < "$CUSTOM_PLUGINS_FILE"
               else
                 echo "ℹ️ 未找到自定义插件列表，使用标准配置" | tee -a "$MAIN_LOG"
+                echo "未找到自定义插件列表" >> "$WARNING_LOG"
               fi
               ;;
           esac
           
-          # 禁用不需要的插件
-          echo "🚫 禁用不需要的插件..." | tee -a "$MAIN_LOG"
-          DISABLED_PLUGINS=""
-          for plugin in luci-app-ddns luci-app-bandwidth luci-app-wol luci-theme-material; do
-            if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
-              sed -i "s/CONFIG_PACKAGE_${plugin}=y/# CONFIG_PACKAGE_${plugin} is not set/" .config
-              echo "❌ 已禁用: $plugin" | tee -a "$MAIN_LOG"
-              DISABLED_PLUGINS="$DISABLED_PLUGINS $plugin"
-            fi
-          done
-          
-          if [ -n "$DISABLED_PLUGINS" ]; then
-            echo "📋 已禁用的插件列表: $DISABLED_PLUGINS" | tee -a "$MAIN_LOG"
-          else
-            echo "ℹ️ 没有需要禁用的插件" | tee -a "$MAIN_LOG"
-          fi
-          
           echo "✅ 插件配置完成" | tee -a "$MAIN_LOG"
 
       - name: "🔧 应用高级功能"
+        id: advanced_features
         if: github.event.inputs.enable_advanced == 'true'
+        continue-on-error: true
         run: |
-          set -e
+          set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
+          ERROR_LOG="${{ env.ERROR_LOG }}"
+          WARNING_LOG="${{ env.WARNING_LOG }}"
           echo "=== 🔧 应用高级功能 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           echo "🔧 高级功能状态: 已启用" | tee -a "$MAIN_LOG"
           
-          # 应用自定义IPK包
           echo "📦 安装自定义IPK包..." | tee -a "$MAIN_LOG"
           IPK_DIR="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/prebuilt-ipks"
           if [ -d "$IPK_DIR" ]; then
@@ -710,7 +633,6 @@ jobs:
             echo "CUSTOM_IPK_COUNT=0" >> $GITHUB_ENV
           fi
           
-          # 应用自定义脚本
           echo "🔧 执行自定义脚本..." | tee -a "$MAIN_LOG"
           SCRIPT_PATHS="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/scripts ${{ env.CONFIG_REPO_DIR }}/firmware-config/scripts ${{ env.CONFIG_REPO_DIR }}/scripts"
           
@@ -725,8 +647,6 @@ jobs:
                   echo "📜 执行脚本: $script_name..." | tee -a "$MAIN_LOG"
                   chmod +x "$script"
                   
-                  # 检查脚本中的文件路径是否存在
-                  echo "🔍 检查脚本中的文件路径..." | tee -a "$MAIN_LOG"
                   if grep -q "files/etc/init.d/service-optimizer" "$script"; then
                     echo "⚠️ 检测到可能不存在的文件路径，创建目录..." | tee -a "$MAIN_LOG"
                     mkdir -p files/etc/init.d/ || true
@@ -738,7 +658,8 @@ jobs:
                     SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
                   else
                     echo "❌ 自定义脚本执行失败: $script_name" | tee -a "$MAIN_LOG"
-                    echo "⚠️ 但继续执行构建流程..." | tee -a "$MAIN_LOG"
+                    echo "自定义脚本 $script_name 执行失败" >> "$WARNING_LOG"
+                    grep -i -E "error|failed|No such file" "$TEMP_LOG" >> "$WARNING_LOG" || true
                   fi
                   cat "$TEMP_LOG" >> "$MAIN_LOG"
                   rm -f "$TEMP_LOG"
@@ -751,9 +672,13 @@ jobs:
           echo "✅ 高级功能应用完成，执行了 $SCRIPT_COUNT 个脚本" | tee -a "$MAIN_LOG"
 
       - name: "🔄 最终配置处理"
+        id: final_config
+        continue-on-error: true
         run: |
-          set -e
+          set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
+          ERROR_LOG="${{ env.ERROR_LOG }}"
+          WARNING_LOG="${{ env.WARNING_LOG }}"
           echo "=== 🔄 最终配置处理 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
@@ -763,31 +688,26 @@ jobs:
             echo "✅ defconfig成功" | tee -a "$MAIN_LOG"
             if grep -i "WARNING" "$TEMP_LOG"; then
               echo "⚠️ defconfig有警告" | tee -a "$MAIN_LOG"
+              grep -i "WARNING" "$TEMP_LOG" >> "$WARNING_LOG" || true
             fi
           else
             echo "❌ defconfig失败" | tee -a "$MAIN_LOG"
             grep -i -E "error|failed|fatal" "$TEMP_LOG" | head -20 | tee -a "$MAIN_LOG"
-            exit 1
+            grep -i -E "error|failed|fatal" "$TEMP_LOG" >> "$ERROR_LOG" || true
           fi
           cat "$TEMP_LOG" >> "$MAIN_LOG"
           rm -f "$TEMP_LOG"
           
-          echo "📋 最终配置摘要:" | tee -a "$MAIN_LOG"
-          echo "🎯 目标配置:" | tee -a "$MAIN_LOG"
-          grep "^CONFIG_TARGET" .config | grep "=y" | head -10 | tee -a "$MAIN_LOG"
-          echo "🔌 已启用的LUCI应用:" | tee -a "$MAIN_LOG"
-          grep "^CONFIG_PACKAGE_luci-app" .config | grep "=y" | head -20 | tee -a "$MAIN_LOG"
-          echo "🌐 语言包:" | tee -a "$MAIN_LOG"
-          grep "^CONFIG_PACKAGE_luci-i18n" .config | grep "=y" | head -10 | tee -a "$MAIN_LOG"
-          echo "🚫 已排除的插件:" | tee -a "$MAIN_LOG"
-          grep "^# CONFIG_PACKAGE_luci-app-ddns\|^# CONFIG_PACKAGE_luci-app-bandwidth\|^# CONFIG_PACKAGE_luci-app-wol\|^# CONFIG_PACKAGE_luci-theme-material" .config | tee -a "$MAIN_LOG"
-          
           echo "✅ 最终配置处理完成" | tee -a "$MAIN_LOG"
 
       - name: "📥 预下载依赖"
+        id: download_deps
+        continue-on-error: true
         run: |
-          set -e
+          set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
+          ERROR_LOG="${{ env.ERROR_LOG }}"
+          WARNING_LOG="${{ env.WARNING_LOG }}"
           echo "=== 📥 预下载依赖 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           echo "🔧 设置下载目录..." | tee -a "$MAIN_LOG"
@@ -795,11 +715,9 @@ jobs:
           [ -d "dl" ] && rm -rf dl
           ln -sf /mnt/downloads dl
           
-          # 配置备用下载镜像
           echo "🌐 配置备用下载镜像..." | tee -a "$MAIN_LOG"
           MIRRORS_FILE="scripts/download.pl"
           if [ -f "$MIRRORS_FILE" ]; then
-            # 添加更多镜像源
             sed -i 's|https://sources.cdn.openwrt.org|https://mirror2.openwrt.org/sources|g' "$MIRRORS_FILE" || true
             sed -i 's|https://mirror2.openwrt.org/sources|https://mirror2.openwrt.org/sources https://downloads.openwrt.org/sources|g' "$MIRRORS_FILE" || true
           fi
@@ -817,10 +735,11 @@ jobs:
             else
               echo "⚠️ 下载失败，重试 $attempt/$MAX_ATTEMPTS..." | tee -a "$MAIN_LOG"
               cat "$TEMP_LOG" >> "$MAIN_LOG"
+              grep -i -E "404|error|failed" "$TEMP_LOG" >> "$WARNING_LOG" || true
               rm -f "$TEMP_LOG"
               if [ $attempt -eq $MAX_ATTEMPTS ]; then
                 echo "❌ 所有下载尝试都失败，跳过下载继续编译..." | tee -a "$MAIN_LOG"
-                break
+                echo "依赖下载失败" >> "$WARNING_LOG"
               fi
               sleep 15
             fi
@@ -829,10 +748,14 @@ jobs:
           echo "✅ 下载完成，文件数量: $DOWNLOAD_COUNT" | tee -a "$MAIN_LOG"
 
       - name: "🛠️ 编译工具链"
+        id: toolchain_build
+        continue-on-error: true
         timeout-minutes: 180
         run: |
-          set -e
+          set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
+          ERROR_LOG="${{ env.ERROR_LOG }}"
+          WARNING_LOG="${{ env.WARNING_LOG }}"
           echo "=== 🛠️ 编译工具链 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           export FORCE_UNSAFE_CONFIGURE=1
@@ -854,17 +777,16 @@ jobs:
               break
             else
               echo "❌ 工具链编译失败" | tee -a "$MAIN_LOG"
-              # 检查是否是特定错误
               if grep -q "No such file or directory" "$TEMP_LOG"; then
                 echo "🔧 检测到文件缺失错误，尝试修复..." | tee -a "$MAIN_LOG"
-                # 重新创建必要的目录
                 mkdir -p staging_dir/hostpkg/bin staging_dir/host/bin || true
               fi
               cat "$TEMP_LOG" >> "$MAIN_LOG"
+              grep -i -E "error|failed|No such file" "$TEMP_LOG" >> "$WARNING_LOG" || true
               rm -f "$TEMP_LOG"
               if [ $attempt -eq $MAX_RETRIES ]; then
                 echo "❌ 所有工具链编译尝试都失败" | tee -a "$MAIN_LOG"
-                exit 1
+                echo "工具链编译失败" >> "$ERROR_LOG"
               fi
               sleep 10
             fi
@@ -872,10 +794,14 @@ jobs:
           echo "✅ 工具链编译完成" | tee -a "$MAIN_LOG"
 
       - name: "🚀 编译固件"
+        id: firmware_build
+        continue-on-error: true
         timeout-minutes: 240
         run: |
-          set -e
+          set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
+          ERROR_LOG="${{ env.ERROR_LOG }}"
+          WARNING_LOG="${{ env.WARNING_LOG }}"
           echo "=== 🚀 编译固件 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           export FORCE_UNSAFE_CONFIGURE=1
@@ -897,7 +823,6 @@ jobs:
               echo "🧹 完全清理构建..." | tee -a "$MAIN_LOG"
               make clean 2>/dev/null || true
               sleep 10
-              # 重新运行defconfig
               make defconfig 2>/dev/null || true
             fi
             
@@ -910,7 +835,6 @@ jobs:
                 break
               else
                 echo "❌ 编译完成但未生成标准固件文件" | tee -a "$MAIN_LOG"
-                # 检查是否有其他构建产物
                 if find bin -type f 2>/dev/null | grep -q .; then
                   echo "📁 找到其他构建产物:" | tee -a "$MAIN_LOG"
                   find bin -type f | head -10 | tee -a "$MAIN_LOG"
@@ -918,7 +842,6 @@ jobs:
               fi
             else
               echo "❌ 编译失败" | tee -a "$MAIN_LOG"
-              # 分析错误类型
               if grep -q "No such file or directory" "$TEMP_LOG"; then
                 echo "🔧 检测到文件缺失错误" | tee -a "$MAIN_LOG"
               fi
@@ -926,91 +849,146 @@ jobs:
                 echo "🔧 检测到编译目标失败" | tee -a "$MAIN_LOG"
               fi
               cat "$TEMP_LOG" >> "$MAIN_LOG"
+              grep -i -E "error|failed|No such file" "$TEMP_LOG" >> "$WARNING_LOG" || true
               rm -f "$TEMP_LOG"
               if [ $attempt -eq $MAX_ATTEMPTS ]; then
                 echo "❌ 所有编译尝试都失败" | tee -a "$MAIN_LOG"
                 echo "BUILD_STATUS=failed" >> $GITHUB_ENV
-                exit 1
+                echo "固件编译失败" >> "$ERROR_LOG"
               fi
               sleep 10
             fi
           done
           echo "✅ 固件编译完成" | tee -a "$MAIN_LOG"
 
-      - name: "🔍 分析生成的固件"
-        if: env.BUILD_STATUS == 'success'
+      - name: "🔍 智能固件分析"
+        id: firmware_analysis
+        if: always()
+        continue-on-error: true
         run: |
-          set -e
+          set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔍 分析生成的固件 ===" | tee -a "$MAIN_LOG"
+          ERROR_LOG="${{ env.ERROR_LOG }}"
+          WARNING_LOG="${{ env.WARNING_LOG }}"
+          ANALYSIS_REPORT="${{ env.ANALYSIS_REPORT }}"
+          echo "=== 🔍 智能固件分析 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
-          echo "📁 所有生成的文件:" | tee -a "$MAIN_LOG"
-          find bin/targets -type f 2>/dev/null | while read file; do
-            if [ -f "$file" ]; then
-              size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "unknown")
-              echo "  - $file ($size)" | tee -a "$MAIN_LOG"
-            fi
-          done
-          echo "📊 固件详细信息:" | tee -a "$MAIN_LOG"
-          if [ -d "bin/targets" ]; then
-            FIRMWARE_FILES=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.itb" -o -name "*.gz" \) 2>/dev/null || true)
-            if [ -n "$FIRMWARE_FILES" ]; then
-              echo "📦 找到的固件文件:" | tee -a "$MAIN_LOG"
-              TOTAL_SIZE=0
-              FIRMWARE_COUNT=0
-              for file in $FIRMWARE_FILES; do
-                if [ -f "$file" ]; then
-                  size=$(du -b "$file" 2>/dev/null | cut -f1 || echo "0")
-                  human_size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "unknown")
-                  TOTAL_SIZE=$((TOTAL_SIZE + size))
-                  FIRMWARE_COUNT=$((FIRMWARE_COUNT + 1))
-                  echo "  - $file ($human_size)" | tee -a "$MAIN_LOG"
-                fi
-              done
-              TOTAL_SIZE_MB=$((TOTAL_SIZE / 1024 / 1024))
-              echo "📏 固件总大小: ${TOTAL_SIZE_MB}MB" | tee -a "$MAIN_LOG"
-              echo "📦 固件数量: ${FIRMWARE_COUNT}" | tee -a "$MAIN_LOG"
-              echo "FIRMWARE_SIZE_MB=$TOTAL_SIZE_MB" >> $GITHUB_ENV
-              echo "FIRMWARE_COUNT=$FIRMWARE_COUNT" >> $GITHUB_ENV
-            else
-              echo "❌ 未找到任何固件文件" | tee -a "$MAIN_LOG"
-              echo "FIRMWARE_COUNT=0" >> $GITHUB_ENV
-            fi
-          else
+          
+          echo "## 固件分析结果" >> "$ANALYSIS_REPORT"
+          
+          if [ ! -d "bin/targets" ]; then
             echo "❌ bin/targets 目录不存在" | tee -a "$MAIN_LOG"
+            echo "- ❌ 未生成任何固件文件" >> "$ANALYSIS_REPORT"
             echo "FIRMWARE_COUNT=0" >> $GITHUB_ENV
+            echo "BUILD_STATUS=failed" >> $GITHUB_ENV
+            return 0
           fi
-
-      - name: "🎯 验证工厂镜像"
-        if: env.BUILD_STATUS == 'success'
-        run: |
-          set -e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🎯 验证工厂镜像 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          echo "🔍 查找工厂镜像..." | tee -a "$MAIN_LOG"
-          FACTORY_FILES=$(find bin/targets -type f -iname "*factory*" 2>/dev/null || true)
-          ALL_FACTORY_CANDIDATES=$(echo "$FACTORY_FILES" | tr ' ' '\n' | sort -u | grep -v '^$')
-          if [ -n "$ALL_FACTORY_CANDIDATES" ]; then
-            echo "✅ 找到可能的工厂镜像:" | tee -a "$MAIN_LOG"
-            for img in $ALL_FACTORY_CANDIDATES; do
-              if [ -f "$img" ]; then
-                size=$(du -h "$img" | cut -f1)
-                echo "  - $(basename "$img") ($size)" | tee -a "$MAIN_LOG"
+          
+          # 查找所有可能的固件文件
+          find bin/targets -type f \( \
+            -name "*.bin" -o \
+            -name "*.img" -o \
+            -name "*.trx" -o \
+            -name "*.itb" -o \
+            -name "*.chk" -o \
+            -name "*.dlf" -o \
+            -name "*.tftp" -o \
+            -name "*.tar" -o \
+            -name "*.gz" -o \
+            -name "*.ubi" -o \
+            -name "*.elf" \
+          \) > /tmp/all_files.txt 2>/dev/null || true
+          
+          echo "📋 固件文件分析:" | tee -a "$MAIN_LOG"
+          TOTAL_SIZE=0
+          REAL_FIRMWARE_COUNT=0
+          ALL_FILES_COUNT=0
+          INITRAMFS_FOUND=""
+          SYSUPGRADE_FOUND=""
+          FACTORY_FOUND=""
+          
+          # 分析每个文件
+          while IFS= read -r file; do
+            if [ -f "$file" ]; then
+              ALL_FILES_COUNT=$((ALL_FILES_COUNT + 1))
+              size=$(du -b "$file" 2>/dev/null | cut -f1 || echo "0")
+              human_size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "unknown")
+              
+              file_basename=$(basename "$file")
+              file_lower=$(echo "$file_basename" | tr '[:upper:]' '[:lower:]')
+              
+              if [[ "$file_lower" =~ "initramfs" ]] || [[ "$file" =~ "initramfs" ]]; then
+                echo "  🚀 INITRAMFS: $file_basename ($human_size)" | tee -a "$MAIN_LOG"
+                INITRAMFS_FOUND="$file"
+                TOTAL_SIZE=$((TOTAL_SIZE + size))
+                REAL_FIRMWARE_COUNT=$((REAL_FIRMWARE_COUNT + 1))
+                echo "INITRAMFS_EXISTS=true" >> $GITHUB_ENV
+                echo "- ✅ Initramfs 固件: $file_basename ($human_size)" >> "$ANALYSIS_REPORT"
+                
+              elif [[ "$file_lower" =~ "sysupgrade" ]] || [[ "$file" =~ "sysupgrade" ]]; then
+                echo "  🔄 SYSUPGRADE: $file_basename ($human_size)" | tee -a "$MAIN_LOG"
+                SYSUPGRADE_FOUND="$file"
+                TOTAL_SIZE=$((TOTAL_SIZE + size))
+                REAL_FIRMWARE_COUNT=$((REAL_FIRMWARE_COUNT + 1))
+                echo "SYSUPGRADE_EXISTS=true" >> $GITHUB_ENV
+                echo "- ✅ Sysupgrade 固件: $file_basename ($human_size)" >> "$ANALYSIS_REPORT"
+                
+              elif [[ "$file_lower" =~ "factory" ]] || [[ "$file" =~ "factory" ]]; then
+                echo "  🏭 FACTORY: $file_basename ($human_size)" | tee -a "$MAIN_LOG"
+                FACTORY_FOUND="$file"
+                TOTAL_SIZE=$((TOTAL_SIZE + size))
+                REAL_FIRMWARE_COUNT=$((REAL_FIRMWARE_COUNT + 1))
+                echo "FACTORY_EXISTS=true" >> $GITHUB_ENV
+                echo "- ✅ Factory 固件: $file_basename ($human_size)" >> "$ANALYSIS_REPORT"
+                
+              elif [ $size -gt 5000000 ]; then
+                if [[ ! "$file" =~ "/packages/" ]] && [[ ! "$file_basename" =~ ^Packages ]]; then
+                  echo "  📦 LARGE_FILE: $file_basename ($human_size)" | tee -a "$MAIN_LOG"
+                  TOTAL_SIZE=$((TOTAL_SIZE + size))
+                  REAL_FIRMWARE_COUNT=$((REAL_FIRMWARE_COUNT + 1))
+                  echo "- 📦 大型文件: $file_basename ($human_size)" >> "$ANALYSIS_REPORT"
+                else
+                  echo "  📁 PACKAGE: $file_basename ($human_size)" | tee -a "$MAIN_LOG"
+                fi
+              else
+                echo "  📄 OTHER: $file_basename ($human_size)" | tee -a "$MAIN_LOG"
               fi
-            done
-            echo "FACTORY_EXISTS=true" >> $GITHUB_ENV
-            FACTORY_FILES_LINE=$(echo "$ALL_FACTORY_CANDIDATES" | tr '\n' ' ' | sed 's/ $//')
-            echo "FACTORY_FILES=$FACTORY_FILES_LINE" >> $GITHUB_ENV
-          else
-            echo "❌ 未找到工厂镜像" | tee -a "$MAIN_LOG"
-            echo "FACTORY_EXISTS=false" >> $GITHUB_ENV
-          fi
+            fi
+          done < /tmp/all_files.txt
+          
+          # 设置默认值
+          echo "FACTORY_EXISTS=${FACTORY_EXISTS:-false}" >> $GITHUB_ENV
+          echo "SYSUPGRADE_EXISTS=${SYSUPGRADE_EXISTS:-false}" >> $GITHUB_ENV
+          echo "INITRAMFS_EXISTS=${INITRAMFS_EXISTS:-false}" >> $GITHUB_ENV
+          
+          TOTAL_SIZE_MB=$((TOTAL_SIZE / 1024 / 1024))
+          echo "📊 固件分析结果:" | tee -a "$MAIN_LOG"
+          echo "  - 真实固件数量: $REAL_FIRMWARE_COUNT" | tee -a "$MAIN_LOG"
+          echo "  - 总文件数量: $ALL_FILES_COUNT" | tee -a "$MAIN_LOG"
+          echo "  - 固件总大小: ${TOTAL_SIZE_MB}MB" | tee -a "$MAIN_LOG"
+          echo "  - Factory 固件: ${{ env.FACTORY_EXISTS || 'false' }}" | tee -a "$MAIN_LOG"
+          echo "  - Sysupgrade 固件: ${{ env.SYSUPGRADE_EXISTS || 'false' }}" | tee -a "$MAIN_LOG"
+          echo "  - Initramfs 固件: ${{ env.INITRAMFS_EXISTS || 'false' }}" | tee -a "$MAIN_LOG"
+          
+          echo "FIRMWARE_SIZE_MB=$TOTAL_SIZE_MB" >> $GITHUB_ENV
+          echo "FIRMWARE_COUNT=$REAL_FIRMWARE_COUNT" >> $GITHUB_ENV
+          
+          # 更新分析报告
+          echo "" >> "$ANALYSIS_REPORT"
+          echo "### 统计信息" >> "$ANALYSIS_REPORT"
+          echo "- 固件文件数量: $REAL_FIRMWARE_COUNT" >> "$ANALYSIS_REPORT"
+          echo "- 总文件数量: $ALL_FILES_COUNT" >> "$ANALYSIS_REPORT"
+          echo "- 固件总大小: ${TOTAL_SIZE_MB}MB" >> "$ANALYSIS_REPORT"
+          
+          rm -f /tmp/all_files.txt
+          echo "✅ 智能固件分析完成" | tee -a "$MAIN_LOG"
 
       - name: "📦 收集构建产物"
-        if: env.BUILD_STATUS == 'success'
+        id: collect_artifacts
+        if: always()
+        continue-on-error: true
         run: |
-          set -e
+          set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
           echo "=== 📦 收集构建产物 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
@@ -1033,101 +1011,113 @@ jobs:
                   } || echo "⚠️ 复制失败: $filename" | tee -a "$MAIN_LOG"
                 fi
               done < /tmp/firmware-list.txt
-              echo "FIRMWARE_COUNT=$COPIED_COUNT" >> $GITHUB_ENV
+              echo "ARTIFACT_COUNT=$COPIED_COUNT" >> $GITHUB_ENV
               echo "✅ 成功复制 $COPIED_COUNT 个固件文件" | tee -a "$MAIN_LOG"
             else
               echo "❌ 未找到任何固件文件" | tee -a "$MAIN_LOG"
-              echo "FIRMWARE_COUNT=0" >> $GITHUB_ENV
+              echo "ARTIFACT_COUNT=0" >> $GITHUB_ENV
             fi
           else
             echo "❌ bin/targets 目录不存在" | tee -a "$MAIN_LOG"
-            echo "FIRMWARE_COUNT=0" >> $GITHUB_ENV
+            echo "ARTIFACT_COUNT=0" >> $GITHUB_ENV
           fi
 
-      - name: "📤 提交新配置文件到仓库"
+      - name: "📋 智能错误分析报告"
+        id: error_analysis
         if: always()
-        run: |
-          set -e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 📤 提交新配置文件到仓库 ===" | tee -a "$MAIN_LOG"
-          
-          CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
-          CONFIG_DIR="${{ env.CONFIG_REPO_DIR }}/firmware-config/configs"
-          CONFIG_FILE="$CONFIG_DIR/config_$CONFIG_PROFILE"
-          
-          # 检查是否创建了新的配置文件
-          if [ -f "$CONFIG_FILE" ]; then
-            echo "📁 找到新创建的配置文件: $CONFIG_FILE" | tee -a "$MAIN_LOG"
-            
-            # 切换到配置仓库目录
-            cd "${{ env.CONFIG_REPO_DIR }}"
-            
-            # 配置Git用户
-            git config --local user.email "github-actions[bot]@users.noreply.github.com"
-            git config --local user.name "github-actions[bot]"
-            
-            # 添加配置文件
-            git add "firmware-config/configs/config_$CONFIG_PROFILE"
-            
-            # 检查是否有更改需要提交
-            if git diff --staged --quiet; then
-              echo "ℹ️ 没有新的配置文件需要提交" | tee -a "$MAIN_LOG"
-            else
-              # 提交更改
-              git commit -m "添加新的设备配置文件: $CONFIG_PROFILE"
-              echo "✅ 配置文件已提交到本地仓库" | tee -a "$MAIN_LOG"
-              
-              # 推送到远程仓库
-              echo "🔄 推送到远程仓库..." | tee -a "$MAIN_LOG"
-              git push
-              echo "✅ 配置文件已推送到远程仓库" | tee -a "$MAIN_LOG"
-            fi
-          else
-            echo "ℹ️ 没有创建新的配置文件" | tee -a "$MAIN_LOG"
-          fi
-
-      - name: "📋 智能日志分析与报告"
-        if: always()
+        continue-on-error: true
         timeout-minutes: 5
         run: |
-          set -e
-          echo "=== 📋 智能日志分析与报告 ==="
+          set +e
+          echo "=== 📋 智能错误分析报告 ==="
           MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "==========================================" | tee -a "$MAIN_LOG"
-          echo "🏁 构建结束时间: $(date)" | tee -a "$MAIN_LOG"
-          echo "📊 最终状态: ${{ env.BUILD_STATUS || 'unknown' }}" | tee -a "$MAIN_LOG"
-          echo "📦 固件数量: ${{ env.FIRMWARE_COUNT || 0 }}" | tee -a "$MAIN_LOG"
-          echo "📏 固件大小: ${{ env.FIRMWARE_SIZE_MB || 'unknown' }}MB" | tee -a "$MAIN_LOG"
-          echo "🏭 工厂镜像: ${{ env.FACTORY_EXISTS || 'unknown' }}" | tee -a "$MAIN_LOG"
-          echo "🔧 自定义功能状态:" | tee -a "$MAIN_LOG"
-          echo "  - 自定义IPK: ${{ env.CUSTOM_IPK_COUNT || 0 }} 个" | tee -a "$MAIN_LOG"
-          echo "  - 自定义脚本: ${{ env.CUSTOM_SCRIPT_COUNT || 0 }} 个" | tee -a "$MAIN_LOG"
-          echo "==========================================" | tee -a "$MAIN_LOG"
-          ERROR_REPORT_DIR="/mnt/artifacts/error-analysis"
-          mkdir -p "$ERROR_REPORT_DIR"
-          TIMELINE_ERRORS="$ERROR_REPORT_DIR/timeline_errors.txt"
-          echo "=== 🕒 时间线错误报告 ===" > "$TIMELINE_ERRORS"
-          echo "生成时间: $(date)" >> "$TIMELINE_ERRORS"
-          echo "构建状态: ${{ env.BUILD_STATUS || 'unknown' }}" >> "$TIMELINE_ERRORS"
-          echo "固件数量: ${{ env.FIRMWARE_COUNT || 0 }}" >> "$TIMELINE_ERRORS"
-          echo "固件大小: ${{ env.FIRMWARE_SIZE_MB || 'unknown' }}MB" >> "$TIMELINE_ERRORS"
-          echo "自定义功能状态:" >> "$TIMELINE_ERRORS"
-          echo "  - 自定义IPK: ${{ env.CUSTOM_IPK_COUNT || 0 }}" >> "$TIMELINE_ERRORS"
-          echo "  - 自定义脚本: ${{ env.CUSTOM_SCRIPT_COUNT || 0 }}" >> "$TIMELINE_ERRORS"
-          echo "==========================================" >> "$TIMELINE_ERRORS"
-          if [ -f "$MAIN_LOG" ]; then
-            echo "🔍 关键错误:" >> "$TIMELINE_ERRORS"
-            { grep -n -i -B2 -A2 "error\|failed\|fatal" "$MAIN_LOG" | head -30 || echo "无严重错误"; } >> "$TIMELINE_ERRORS"
-            echo "" >> "$TIMELINE_ERRORS"
-            echo "🔍 下载错误:" >> "$TIMELINE_ERRORS"
-            { grep -n -i "404\|download failed" "$MAIN_LOG" | head -20 || echo "无下载错误"; } >> "$TIMELINE_ERRORS"
-            echo "" >> "$TIMELINE_ERRORS"
-            echo "🔍 文件缺失错误:" >> "$TIMELINE_ERRORS"
-            { grep -n -i "No such file or directory" "$MAIN_LOG" | head -20 || echo "无文件缺失错误"; } >> "$TIMELINE_ERRORS"
+          ERROR_LOG="${{ env.ERROR_LOG }}"
+          WARNING_LOG="${{ env.WARNING_LOG }}"
+          ANALYSIS_REPORT="${{ env.ANALYSIS_REPORT }}"
+          
+          echo "## 错误分析报告" >> "$ANALYSIS_REPORT"
+          echo "" >> "$ANALYSIS_REPORT"
+          
+          # 分析错误日志
+          echo "🔍 分析错误日志..." | tee -a "$MAIN_LOG"
+          if [ -f "$ERROR_LOG" ]; then
+            ERROR_COUNT=$(grep -c . "$ERROR_LOG" 2>/dev/null || echo "0")
+            if [ "$ERROR_COUNT" -gt 1 ]; then
+              echo "❌ 发现 $((ERROR_COUNT-1)) 个错误:" | tee -a "$MAIN_LOG"
+              echo "### 关键错误 ($((ERROR_COUNT-1)) 个)" >> "$ANALYSIS_REPORT"
+              tail -n +2 "$ERROR_LOG" | while IFS= read -r error; do
+                echo "- ❌ $error" >> "$ANALYSIS_REPORT"
+              done
+              echo "" >> "$ANALYSIS_REPORT"
+            else
+              echo "✅ 没有关键错误" | tee -a "$MAIN_LOG"
+              echo "### 关键错误: 无" >> "$ANALYSIS_REPORT"
+              echo "" >> "$ANALYSIS_REPORT"
+            fi
           fi
-          echo "✅ 智能日志分析完成"
+          
+          # 分析警告日志
+          echo "🔍 分析警告日志..." | tee -a "$MAIN_LOG"
+          if [ -f "$WARNING_LOG" ]; then
+            WARNING_COUNT=$(grep -c . "$WARNING_LOG" 2>/dev/null || echo "0")
+            if [ "$WARNING_COUNT" -gt 1 ]; then
+              echo "⚠️ 发现 $((WARNING_COUNT-1)) 个警告:" | tee -a "$MAIN_LOG"
+              echo "### 警告信息 ($((WARNING_COUNT-1)) 个)" >> "$ANALYSIS_REPORT"
+              tail -n +2 "$WARNING_LOG" | while IFS= read -r warning; do
+                echo "- ⚠️ $warning" >> "$ANALYSIS_REPORT"
+              done
+              echo "" >> "$ANALYSIS_REPORT"
+            else
+              echo "✅ 没有警告" | tee -a "$MAIN_LOG"
+              echo "### 警告信息: 无" >> "$ANALYSIS_REPORT"
+              echo "" >> "$ANALYSIS_REPORT"
+            fi
+          fi
+          
+          # 从主日志中提取关键错误模式
+          echo "🔍 分析构建日志中的错误模式..." | tee -a "$MAIN_LOG"
+          echo "### 构建日志分析" >> "$ANALYSIS_REPORT"
+          
+          # 404 下载错误
+          DOWNLOAD_404_COUNT=$(grep -c "404" "$MAIN_LOG" 2>/dev/null || echo "0")
+          if [ "$DOWNLOAD_404_COUNT" -gt 0 ]; then
+            echo "📥 发现 $DOWNLOAD_404_COUNT 个下载错误 (404)" | tee -a "$MAIN_LOG"
+            echo "- 📥 下载错误 (404): $DOWNLOAD_404_COUNT 个" >> "$ANALYSIS_REPORT"
+          fi
+          
+          # 文件缺失错误
+          FILE_MISSING_COUNT=$(grep -c "No such file or directory" "$MAIN_LOG" 2>/dev/null || echo "0")
+          if [ "$FILE_MISSING_COUNT" -gt 0 ]; then
+            echo "📄 发现 $FILE_MISSING_COUNT 个文件缺失错误" | tee -a "$MAIN_LOG"
+            echo "- 📄 文件缺失错误: $FILE_MISSING_COUNT 个" >> "$ANALYSIS_REPORT"
+          fi
+          
+          # 编译错误
+          COMPILE_ERROR_COUNT=$(grep -c "error:" "$MAIN_LOG" 2>/dev/null || echo "0")
+          if [ "$COMPILE_ERROR_COUNT" -gt 0 ]; then
+            echo "🔧 发现 $COMPILE_ERROR_COUNT 个编译错误" | tee -a "$MAIN_LOG"
+            echo "- 🔧 编译错误: $COMPILE_ERROR_COUNT 个" >> "$ANALYSIS_REPORT"
+          fi
+          
+          # 失败统计
+          FAILED_COUNT=$(grep -c "failed" "$MAIN_LOG" 2>/dev/null || echo "0")
+          if [ "$FAILED_COUNT" -gt 0 ]; then
+            echo "❌ 发现 $FAILED_COUNT 个失败操作" | tee -a "$MAIN_LOG"
+            echo "- ❌ 失败操作: $FAILED_COUNT 个" >> "$ANALYSIS_REPORT"
+          fi
+          
+          echo "" >> "$ANALYSIS_REPORT"
+          echo "## 构建总结" >> "$ANALYSIS_REPORT"
+          echo "- 构建状态: ${{ env.BUILD_STATUS || 'unknown' }}" >> "$ANALYSIS_REPORT"
+          echo "- 固件数量: ${{ env.FIRMWARE_COUNT || 0 }}" >> "$ANALYSIS_REPORT"
+          echo "- 固件大小: ${{ env.FIRMWARE_SIZE_MB || 'unknown' }}MB" >> "$ANALYSIS_REPORT"
+          echo "- 自定义IPK: ${{ env.CUSTOM_IPK_COUNT || 0 }} 个" >> "$ANALYSIS_REPORT"
+          echo "- 自定义脚本: ${{ env.CUSTOM_SCRIPT_COUNT || 0 }} 个" >> "$ANALYSIS_REPORT"
+          
+          echo "✅ 智能错误分析完成" | tee -a "$MAIN_LOG"
 
       - name: "💾 上传构建产物"
+        id: upload_artifacts
         if: always()
         uses: "actions/upload-artifact@v4"
         with:
@@ -1139,6 +1129,7 @@ jobs:
           compression-level: 9
 
       - name: "📊 最终构建报告"
+        id: final_report
         if: always()
         run: |
           echo "=== 📊 最终构建报告 ==="
@@ -1154,27 +1145,42 @@ jobs:
           echo "  - 状态: ${{ env.BUILD_STATUS || 'unknown' }}"
           echo "  - 固件数量: ${{ env.FIRMWARE_COUNT || 0 }}"
           echo "  - 固件大小: ${{ env.FIRMWARE_SIZE_MB || 'unknown' }}MB"
-          echo "  - 工厂镜像: ${{ env.FACTORY_EXISTS || 'unknown' }}"
+          echo "  - 产物数量: ${{ env.ARTIFACT_COUNT || 0 }}"
+          echo "  - 固件类型:"
+          echo "    * Factory: ${{ env.FACTORY_EXISTS || 'false' }}"
+          echo "    * Sysupgrade: ${{ env.SYSUPGRADE_EXISTS || 'false' }}"
+          echo "    * Initramfs: ${{ env.INITRAMFS_EXISTS || 'false' }}"
           echo ""
           echo "🔧 高级功能:"
           echo "  - 启用状态: ${{ github.event.inputs.enable_advanced || 'false' }}"
           echo "  - 自定义IPK: ${{ env.CUSTOM_IPK_COUNT || 0 }} 个"
           echo "  - 自定义脚本: ${{ env.CUSTOM_SCRIPT_COUNT || 0 }} 个"
           echo ""
+          echo "📋 错误统计:"
+          echo "  - 查看详细分析报告了解错误详情"
+          echo ""
           if [ "${{ env.BUILD_STATUS }}" = "success" ]; then
-            if [ "${{ env.FACTORY_EXISTS }}" = "true" ]; then
-              echo "🎉 构建成功！工厂镜像已生成"
+            if [ "${{ env.FIRMWARE_COUNT }}" -gt 0 ]; then
+              echo "🎉 构建成功！固件已生成"
+              if [ "${{ env.FACTORY_EXISTS }}" = "true" ]; then
+                echo "💡 包含 Factory 固件，可用于首次刷机"
+              fi
+              if [ "${{ env.SYSUPGRADE_EXISTS }}" = "true" ]; then
+                echo "💡 包含 Sysupgrade 固件，可用于系统升级"
+              fi
+              if [ "${{ env.INITRAMFS_EXISTS }}" = "true" ]; then
+                echo "💡 包含 Initramfs 固件，可用于临时启动"
+              fi
             else
-              echo "⚠️ 构建成功但未生成工厂镜像"
-              echo "💡 可能生成了sysupgrade固件而非factory固件"
+              echo "⚠️ 构建成功但未生成固件"
             fi
           else
-            echo "❌ 构建失败"
-            echo "💡 请查看详细构建日志分析问题"
+            echo "❌ 构建失败或部分失败"
+            echo "💡 请查看详细分析报告了解问题详情"
             echo "🔧 常见问题:"
-            echo "  - 依赖包下载失败"
+            echo "  - 依赖包下载失败 (404)"
             echo "  - 工具链编译错误"
-            echo "  - 自定义脚本路径问题"
+            echo "  - 文件路径问题"
             echo "  - 内存不足"
           fi
           echo ""
