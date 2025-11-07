@@ -5,8 +5,8 @@
 ## 📁 项目结构
 
 仓库根目录/
-├── .github/workflows/
 
+├── .github/workflows/
 │   ├── universal-build.yml             # 主构建工作流
 │   └── update-configs-list.yml         # 自动更新配置文件列表
 ├── firmware-config/
