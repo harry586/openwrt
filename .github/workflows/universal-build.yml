@@ -224,7 +224,6 @@ jobs:
           cd /mnt/source
           echo "📋 配置Feeds..." | tee -a "$MAIN_LOG"
           
-          # 自动检测合适的feeds分支
           CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "master")
           echo "🔧 当前源码分支: $CURRENT_BRANCH" | tee -a "$MAIN_LOG"
           if [[ "$CURRENT_BRANCH" == *"22.03"* ]]; then
@@ -307,108 +306,107 @@ jobs:
             mkdir -p "$CONFIG_DIR"
             
             # 创建通用配置文件模板
-            cat > "$CONFIG_FILE" << 'EOF'
-# =============================================
-# 通用设备配置 - $CONFIG_PROFILE
-# 自动生成于 $(date)
-# =============================================
-
-# ======================
-# 基础目标配置
-# ======================
-# 请根据实际设备修改以下目标配置
-# CONFIG_TARGET_xxx=y
-
-# ======================
-# 镜像配置
-# ======================
-CONFIG_TARGET_ROOTFS_SQUASHFS=y
-CONFIG_TARGET_IMAGES_GZIP=y
-CONFIG_TARGET_IMAGES_INCLUDE_FACTORY=y
-CONFIG_TARGET_IMAGES_INCLUDE_SYSUPGRADE=y
-
-# 分区大小
-CONFIG_TARGET_KERNEL_PARTSIZE=16
-CONFIG_TARGET_ROOTFS_PARTSIZE=96
-
-# ======================
-# LUCI 核心配置
-# ======================
-CONFIG_PACKAGE_luci=y
-CONFIG_PACKAGE_luci-base=y
-CONFIG_PACKAGE_luci-compat=y
-CONFIG_PACKAGE_luci-mod-admin-full=y
-CONFIG_PACKAGE_luci-theme-bootstrap=y
-
-# ======================
-# 基础系统包
-# ======================
-CONFIG_PACKAGE_base-files=y
-CONFIG_PACKAGE_busybox=y
-CONFIG_PACKAGE_dnsmasq-full=y
-CONFIG_PACKAGE_dropbear=y
-CONFIG_PACKAGE_firewall=y
-CONFIG_PACKAGE_fstools=y
-CONFIG_PACKAGE_iptables=y
-CONFIG_PACKAGE_libc=y
-CONFIG_PACKAGE_libgcc=y
-CONFIG_PACKAGE_logd=y
-CONFIG_PACKAGE_mtd=y
-CONFIG_PACKAGE_netifd=y
-CONFIG_PACKAGE_opkg=y
-CONFIG_PACKAGE_procd=y
-CONFIG_PACKAGE_ubus=y
-CONFIG_PACKAGE_ubusd=y
-CONFIG_PACKAGE_uci=y
-CONFIG_PACKAGE_uclient-fetch=y
-CONFIG_PACKAGE_urandom-seed=y
-CONFIG_PACKAGE_usign=y
-
-# ======================
-# IPv6 支持
-# ======================
-CONFIG_PACKAGE_odhcp6c=y
-CONFIG_PACKAGE_odhcpd-ipv6only=y
-CONFIG_PACKAGE_ip6tables=y
-CONFIG_PACKAGE_kmod-ip6tables=y
-
-# ======================
-# 网络服务
-# ======================
-CONFIG_PACKAGE_wpad-basic-wolfssl=y
-
-# ======================
-# 文件系统支持
-# ======================
-CONFIG_PACKAGE_kmod-fs-ext4=y
-CONFIG_PACKAGE_kmod-fs-vfat=y
-CONFIG_PACKAGE_kmod-fs-ntfs=y
-CONFIG_PACKAGE_block-mount=y
-
-# ======================
-# 系统工具
-# ======================
-CONFIG_PACKAGE_htop=y
-CONFIG_PACKAGE_nano=y
-CONFIG_PACKAGE_curl=y
-CONFIG_PACKAGE_wget=y
-
-# ======================
-# 编译选项
-# ======================
-CONFIG_CCACHE=y
-CONFIG_BUILD_LOG=y
-
-# 排除的应用程序
-# CONFIG_PACKAGE_luci-app-ddns is not set
-# CONFIG_PACKAGE_luci-app-bandwidth is not set
-# CONFIG_PACKAGE_luci-app-wol is not set
-# CONFIG_PACKAGE_luci-theme-material is not set
-
-# 禁用调试减小体积
-# CONFIG_DEBUG is not set
-# CONFIG_DEVEL is not set
-EOF
+            echo "# =============================================" > "$CONFIG_FILE"
+            echo "# 通用设备配置 - $CONFIG_PROFILE" >> "$CONFIG_FILE"
+            echo "# 自动生成于 $(date)" >> "$CONFIG_FILE"
+            echo "# =============================================" >> "$CONFIG_FILE"
+            echo "" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
+            echo "# 基础目标配置" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
+            echo "# 请根据实际设备修改以下目标配置" >> "$CONFIG_FILE"
+            echo "# CONFIG_TARGET_xxx=y" >> "$CONFIG_FILE"
+            echo "" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
+            echo "# 镜像配置" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
+            echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> "$CONFIG_FILE"
+            echo "CONFIG_TARGET_IMAGES_GZIP=y" >> "$CONFIG_FILE"
+            echo "CONFIG_TARGET_IMAGES_INCLUDE_FACTORY=y" >> "$CONFIG_FILE"
+            echo "CONFIG_TARGET_IMAGES_INCLUDE_SYSUPGRADE=y" >> "$CONFIG_FILE"
+            echo "" >> "$CONFIG_FILE"
+            echo "# 分区大小" >> "$CONFIG_FILE"
+            echo "CONFIG_TARGET_KERNEL_PARTSIZE=16" >> "$CONFIG_FILE"
+            echo "CONFIG_TARGET_ROOTFS_PARTSIZE=96" >> "$CONFIG_FILE"
+            echo "" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
+            echo "# LUCI 核心配置" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_luci=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_luci-base=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_luci-compat=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> "$CONFIG_FILE"
+            echo "" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
+            echo "# 基础系统包" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_base-files=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_busybox=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_dnsmasq-full=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_dropbear=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_firewall=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_fstools=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_iptables=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_libc=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_libgcc=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_logd=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_mtd=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_netifd=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_opkg=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_procd=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_ubus=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_ubusd=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_uci=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_uclient-fetch=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_urandom-seed=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_usign=y" >> "$CONFIG_FILE"
+            echo "" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
+            echo "# IPv6 支持" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_odhcp6c=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_ip6tables=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> "$CONFIG_FILE"
+            echo "" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
+            echo "# 网络服务" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> "$CONFIG_FILE"
+            echo "" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
+            echo "# 文件系统支持" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_kmod-fs-ntfs=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_block-mount=y" >> "$CONFIG_FILE"
+            echo "" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
+            echo "# 系统工具" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_htop=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_nano=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_curl=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_wget=y" >> "$CONFIG_FILE"
+            echo "" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
+            echo "# 编译选项" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
+            echo "CONFIG_CCACHE=y" >> "$CONFIG_FILE"
+            echo "CONFIG_BUILD_LOG=y" >> "$CONFIG_FILE"
+            echo "" >> "$CONFIG_FILE"
+            echo "# 排除的应用程序" >> "$CONFIG_FILE"
+            echo "# CONFIG_PACKAGE_luci-app-ddns is not set" >> "$CONFIG_FILE"
+            echo "# CONFIG_PACKAGE_luci-app-bandwidth is not set" >> "$CONFIG_FILE"
+            echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> "$CONFIG_FILE"
+            echo "# CONFIG_PACKAGE_luci-theme-material is not set" >> "$CONFIG_FILE"
+            echo "" >> "$CONFIG_FILE"
+            echo "# 禁用调试减小体积" >> "$CONFIG_FILE"
+            echo "# CONFIG_DEBUG is not set" >> "$CONFIG_FILE"
+            echo "# CONFIG_DEVEL is not set" >> "$CONFIG_FILE"
+            
             echo "✅ 已创建通用配置文件模板: $CONFIG_FILE" | tee -a "$MAIN_LOG"
             echo "⚠️ 请根据实际设备修改目标配置后重新运行构建" | tee -a "$MAIN_LOG"
           else
@@ -426,20 +424,10 @@ EOF
           
           # 自动搜索配置文件
           CONFIG_FOUND=""
-          SEARCH_PATHS=(
-            "${{ env.CONFIG_REPO_DIR }}/firmware-config/configs"
-            "${{ env.CONFIG_REPO_DIR }}/firmware-config"
-            "${{ env.CONFIG_REPO_DIR }}"
-            "${{ env.CONFIG_REPO_DIR }}/firmware-config/configs/device-profiles"
-          )
+          SEARCH_PATHS=("${{ env.CONFIG_REPO_DIR }}/firmware-config/configs" "${{ env.CONFIG_REPO_DIR }}/firmware-config" "${{ env.CONFIG_REPO_DIR }}" "${{ env.CONFIG_REPO_DIR }}/firmware-config/configs/device-profiles")
           
           # 支持多种命名格式
-          POSSIBLE_NAMES=(
-            "$CONFIG_PROFILE"
-            ".config_$CONFIG_PROFILE"
-            "config_$CONFIG_PROFILE"
-            "$CONFIG_PROFILE.config"
-          )
+          POSSIBLE_NAMES=("$CONFIG_PROFILE" ".config_$CONFIG_PROFILE" "config_$CONFIG_PROFILE" "$CONFIG_PROFILE.config")
           
           for path in "${SEARCH_PATHS[@]}"; do
             for name in "${POSSIBLE_NAMES[@]}"; do
@@ -557,7 +545,6 @@ EOF
               echo "🔧 最小化配置..." | tee -a "$MAIN_LOG"
               # 仅保留基础功能
               ;;
-              
             "standard")
               echo "🔧 标准配置..." | tee -a "$MAIN_LOG"
               # 启用您需要的标准插件
@@ -579,25 +566,13 @@ EOF
               enable_plugin "luci-app-sqm-autorate"
               enable_plugin "automount"
               ;;
-              
             "full")
               echo "🔧 完整配置..." | tee -a "$MAIN_LOG"
               # 启用所有常用插件
-              for plugin in \
-                luci-app-upnp luci-app-wireguard luci-app-samba4 luci-app-turboacc \
-                luci-app-arpbind luci-app-cpulimit luci-app-diskman luci-app-eqosplus \
-                luci-app-hd-idle luci-app-parentcontrol luci-app-wechatpush \
-                luci-app-smartdns luci-app-vlmcsd luci-app-vsftpd luci-app-ttyd \
-                luci-app-sqm-autorate luci-app-adblock luci-app-wol luci-app-ddns \
-                luci-app-qos luci-app-statistics luci-app-vpn-policy-routing \
-                luci-app-nft-qos luci-app-uhttpd luci-app-firewall luci-app-olsr \
-                luci-app-olsr-services luci-app-olsr-viz luci-app-bcp38 \
-                luci-app-commands luci-app-diag-core luci-app-nlbwmon \
-                luci-app-splash luci-app-radicale2; do
+              for plugin in luci-app-upnp luci-app-wireguard luci-app-samba4 luci-app-turboacc luci-app-arpbind luci-app-cpulimit luci-app-diskman luci-app-eqosplus luci-app-hd-idle luci-app-parentcontrol luci-app-wechatpush luci-app-smartdns luci-app-vlmcsd luci-app-vsftpd luci-app-ttyd luci-app-sqm-autorate luci-app-adblock luci-app-wol luci-app-ddns luci-app-qos luci-app-statistics luci-app-vpn-policy-routing luci-app-nft-qos luci-app-uhttpd luci-app-firewall luci-app-olsr luci-app-olsr-services luci-app-olsr-viz luci-app-bcp38 luci-app-commands luci-app-diag-core luci-app-nlbwmon luci-app-splash luci-app-radicale2; do
                 enable_plugin "$plugin"
               done
               ;;
-              
             "custom")
               echo "🔧 自定义配置..." | tee -a "$MAIN_LOG"
               # 读取自定义插件列表
@@ -662,11 +637,7 @@ EOF
           
           # 应用自定义脚本
           echo "🔧 执行自定义脚本..." | tee -a "$MAIN_LOG"
-          SCRIPT_PATHS=(
-            "${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/scripts"
-            "${{ env.CONFIG_REPO_DIR }}/firmware-config/scripts"
-            "${{ env.CONFIG_REPO_DIR }}/scripts"
-          )
+          SCRIPT_PATHS=("${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/scripts" "${{ env.CONFIG_REPO_DIR }}/firmware-config/scripts" "${{ env.CONFIG_REPO_DIR }}/scripts")
           
           SCRIPT_COUNT=0
           for script_path in "${SCRIPT_PATHS[@]}"; do
