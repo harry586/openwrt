@@ -256,17 +256,38 @@ jobs:
           esac
           echo "src-git routing https://github.com/openwrt/routing.git;openwrt-22.03" >> feeds.conf
           echo "src-git telephony https://github.com/openwrt/telephony.git;openwrt-22.03" >> feeds.conf
+          
           echo "🔄 更新Feeds..." | tee -a "$MAIN_LOG"
-          for attempt in 1 2 3; do
-            echo "🔄 更新尝试 $attempt/3..." | tee -a "$MAIN_LOG"
-            if ./scripts/feeds update -a 2>&1; then
-              echo "✅ Feeds更新成功" | tee -a "$MAIN_LOG"
-              break
+          MAX_FEED_ATTEMPTS=5
+          FEED_SUCCESS=false
+          for attempt in $(seq 1 $MAX_FEED_ATTEMPTS); do
+            echo "🔄 Feeds更新尝试 $attempt/$MAX_FEED_ATTEMPTS..." | tee -a "$MAIN_LOG"
+            TEMP_LOG=$(mktemp)
+            if { ./scripts/feeds update -a 2>&1 | tee "$TEMP_LOG"; } then
+              if grep -i -E "error|failed|fatal" "$TEMP_LOG"; then
+                echo "⚠️ Feeds更新有错误，重试 $attempt/$MAX_FEED_ATTEMPTS..." | tee -a "$MAIN_LOG"
+                cat "$TEMP_LOG" >> "$MAIN_LOG"
+                rm -f "$TEMP_LOG"
+                sleep 10
+              else
+                echo "✅ Feeds更新成功" | tee -a "$MAIN_LOG"
+                cat "$TEMP_LOG" >> "$MAIN_LOG"
+                rm -f "$TEMP_LOG"
+                FEED_SUCCESS=true
+                break
+              fi
             else
-              echo "⚠️ Feeds更新失败，重试 $attempt/3..." | tee -a "$MAIN_LOG"
+              echo "⚠️ Feeds更新失败，重试 $attempt/$MAX_FEED_ATTEMPTS..." | tee -a "$MAIN_LOG"
+              cat "$TEMP_LOG" >> "$MAIN_LOG"
+              rm -f "$TEMP_LOG"
               sleep 10
             fi
           done
+          
+          if [ "$FEED_SUCCESS" = "false" ]; then
+            echo "❌ Feeds更新失败，但继续执行编译..." | tee -a "$MAIN_LOG"
+          fi
+          
           echo "📦 安装Feeds..." | tee -a "$MAIN_LOG"
           if ./scripts/feeds install -a 2>&1; then
             echo "✅ Feeds安装成功" | tee -a "$MAIN_LOG"
@@ -283,42 +304,137 @@ jobs:
           cd /mnt/source
           CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
           echo "🔍 查找配置文件: $CONFIG_PROFILE" | tee -a "$MAIN_LOG"
+          
+          # 多种方式查找配置文件
           CONFIG_FOUND=""
-          SEARCH_PATHS=("${{ env.CONFIG_REPO_DIR }}/firmware-config/configs" "${{ env.CONFIG_REPO_DIR }}/firmware-config" "${{ env.CONFIG_REPO_DIR }}")
+          
+          # 方法1: 精确匹配
+          SEARCH_PATHS=(
+            "${{ env.CONFIG_REPO_DIR }}/firmware-config/configs"
+            "${{ env.CONFIG_REPO_DIR }}/firmware-config" 
+            "${{ env.CONFIG_REPO_DIR }}"
+            "${{ env.CONFIG_REPO_DIR }}/firmware-config/configs/device-profiles"
+          )
+          
           for path in "${SEARCH_PATHS[@]}"; do
             if [ -f "$path/$CONFIG_PROFILE" ]; then
               CONFIG_FOUND="$path/$CONFIG_PROFILE"
+              echo "✅ 精确找到配置文件: $CONFIG_FOUND" | tee -a "$MAIN_LOG"
               break
             fi
           done
+          
+          # 方法2: 模糊搜索 - 查找包含配置名称的文件
           if [ -z "$CONFIG_FOUND" ]; then
-            CONFIG_FOUND=$(find "${{ env.CONFIG_REPO_DIR }}/firmware-config" -maxdepth 3 -name "$CONFIG_PROFILE" -type f 2>/dev/null | head -1)
+            echo "🔍 精确匹配失败，开始模糊搜索..." | tee -a "$MAIN_LOG"
+            for path in "${SEARCH_PATHS[@]}"; do
+              if [ -d "$path" ]; then
+                FOUND_FILE=$(find "$path" -type f -name "*$CONFIG_PROFILE*" 2>/dev/null | head -1)
+                if [ -n "$FOUND_FILE" ] && [ -f "$FOUND_FILE" ]; then
+                  CONFIG_FOUND="$FOUND_FILE"
+                  echo "✅ 模糊搜索找到配置文件: $CONFIG_FOUND" | tee -a "$MAIN_LOG"
+                  break
+                fi
+              fi
+            done
           fi
+          
+          # 方法3: 搜索所有.config文件
+          if [ -z "$CONFIG_FOUND" ]; then
+            echo "🔍 模糊搜索失败，搜索所有.config文件..." | tee -a "$MAIN_LOG"
+            for path in "${SEARCH_PATHS[@]}"; do
+              if [ -d "$path" ]; then
+                FOUND_FILE=$(find "$path" -type f -name "*.config*" 2>/dev/null | head -1)
+                if [ -n "$FOUND_FILE" ] && [ -f "$FOUND_FILE" ]; then
+                  CONFIG_FOUND="$FOUND_FILE"
+                  echo "✅ 找到.config文件: $CONFIG_FOUND" | tee -a "$MAIN_LOG"
+                  break
+                fi
+              fi
+            done
+          fi
+          
+          # 方法4: 搜索任何包含配置名称的文件
+          if [ -z "$CONFIG_FOUND" ]; then
+            echo "🔍 搜索任何包含配置名称的文件..." | tee -a "$MAIN_LOG"
+            for path in "${SEARCH_PATHS[@]}"; do
+              if [ -d "$path" ]; then
+                FOUND_FILE=$(find "$path" -type f -name "*config*" 2>/dev/null | head -1)
+                if [ -n "$FOUND_FILE" ] && [ -f "$FOUND_FILE" ]; then
+                  CONFIG_FOUND="$FOUND_FILE"
+                  echo "✅ 找到config文件: $CONFIG_FOUND" | tee -a "$MAIN_LOG"
+                  break
+                fi
+              fi
+            done
+          fi
+          
           if [ -n "$CONFIG_FOUND" ] && [ -f "$CONFIG_FOUND" ]; then
-            echo "✅ 找到配置文件: $CONFIG_FOUND" | tee -a "$MAIN_LOG"
+            echo "🎯 最终使用配置文件: $CONFIG_FOUND" | tee -a "$MAIN_LOG"
+            
+            # 显示配置文件内容前几行用于验证
+            echo "📄 配置文件预览:" | tee -a "$MAIN_LOG"
+            head -20 "$CONFIG_FOUND" | tee -a "$MAIN_LOG"
+            echo "..." | tee -a "$MAIN_LOG"
+            
             cp "$CONFIG_FOUND" .config
             echo "🔧 应用优化配置..." | tee -a "$MAIN_LOG"
-            echo "# CONFIG_TARGET_ROOTFS_EXT4FS is not set" >> .config
+            
+            # 强制启用关键包
             echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+            echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
             echo "CONFIG_TARGET_IMAGES_INCLUDE_FACTORY=y" >> .config
             echo "CONFIG_TARGET_IMAGES_INCLUDE_SYSUPGRADE=y" >> .config
             echo "CONFIG_SDK=y" >> .config
             echo "CONFIG_BUILD_LOG=y" >> .config
-            # 确保基础包被包含
+            
+            # 强制启用LUCI和基本包
             echo "CONFIG_PACKAGE_luci=y" >> .config
             echo "CONFIG_PACKAGE_luci-theme-material=y" >> .config
             echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
             echo "CONFIG_PACKAGE_luci-app-wireguard=y" >> .config
             echo "CONFIG_PACKAGE_luci-app-samba4=y" >> .config
             echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+            echo "CONFIG_PACKAGE_luci-base=y" >> .config
+            echo "CONFIG_PACKAGE_luci-compat=y" >> .config
+            echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> .config
+            echo "CONFIG_PACKAGE_luci-proto-ipv6=y" >> .config
+            echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
+            echo "CONFIG_PACKAGE_luci-ssl=y" >> .config
+            
+            # 确保基础包被包含
+            echo "CONFIG_PACKAGE_dropbear=y" >> .config
+            echo "CONFIG_PACKAGE_fstools=y" >> .config
+            echo "CONFIG_PACKAGE_block-mount=y" >> .config
+            echo "CONFIG_PACKAGE_uci=y" >> .config
+            echo "CONFIG_PACKAGE_base-files=y" >> .config
+            
             echo "🔄 运行defconfig..." | tee -a "$MAIN_LOG"
-            if make defconfig 2>&1; then
+            TEMP_LOG=$(mktemp)
+            if { make defconfig 2>&1 | tee "$TEMP_LOG"; } then
               echo "✅ 配置应用完成" | tee -a "$MAIN_LOG"
+              # 检查defconfig警告
+              if grep -i "WARNING" "$TEMP_LOG"; then
+                echo "⚠️ defconfig有警告" | tee -a "$MAIN_LOG"
+              fi
             else
-              echo "⚠️ defconfig有警告，但继续执行..." | tee -a "$MAIN_LOG"
+              echo "❌ defconfig失败" | tee -a "$MAIN_LOG"
+              grep -i -E "error|failed|fatal" "$TEMP_LOG" | head -20 | tee -a "$MAIN_LOG"
+              cat "$TEMP_LOG" >> "$MAIN_LOG"
+              rm -f "$TEMP_LOG"
+              exit 1
             fi
+            cat "$TEMP_LOG" >> "$MAIN_LOG"
+            rm -f "$TEMP_LOG"
           else
             echo "❌ 错误: 未找到配置文件 '$CONFIG_PROFILE'" | tee -a "$MAIN_LOG"
+            echo "🔍 搜索路径:" | tee -a "$MAIN_LOG"
+            for path in "${SEARCH_PATHS[@]}"; do
+              echo "  - $path" | tee -a "$MAIN_LOG"
+              if [ -d "$path" ]; then
+                find "$path" -type f -name "*config*" 2>/dev/null | head -10 | tee -a "$MAIN_LOG" || true
+              fi
+            done
             exit 1
           fi
 
@@ -335,7 +451,7 @@ jobs:
           echo "  - 自定义补丁: ${{ github.event.inputs.custom_patches || '无' }}" | tee -a "$MAIN_LOG"
           echo "  - 额外软件包: ${{ github.event.inputs.extra_packages || '无' }}" | tee -a "$MAIN_LOG"
           
-          # 应用自定义补丁 - 增强日志输出
+          # 应用自定义补丁
           if [ -n "${{ github.event.inputs.custom_patches }}" ]; then
             echo "🔧 应用自定义补丁..." | tee -a "$MAIN_LOG"
             PATCH_URL="${{ github.event.inputs.custom_patches }}"
@@ -372,7 +488,7 @@ jobs:
             echo "CUSTOM_PATCH_STATUS=not_provided" >> $GITHUB_ENV
           fi
           
-          # 添加额外软件包 - 增强日志输出
+          # 添加额外软件包
           if [ -n "${{ github.event.inputs.extra_packages }}" ]; then
             echo "📦 配置额外软件包..." | tee -a "$MAIN_LOG"
             IFS=',' read -ra PKGS <<< "${{ github.event.inputs.extra_packages }}"
@@ -392,7 +508,7 @@ jobs:
             echo "EXTRA_PACKAGES_ADDED=0" >> $GITHUB_ENV
           fi
           
-          # 安装自定义IPK包 - 增强日志输出
+          # 安装自定义IPK包
           echo "📦 安装自定义IPK包..." | tee -a "$MAIN_LOG"
           IPK_DIR="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/prebuilt-ipks"
           if [ -d "$IPK_DIR" ]; then
@@ -422,24 +538,62 @@ jobs:
             echo "CUSTOM_IPK_COUNT=0" >> $GITHUB_ENV
           fi
           
-          # 执行自定义脚本 - 增强日志输出
+          # 执行自定义脚本 - 增强模糊搜索
           echo "🔧 执行自定义脚本..." | tee -a "$MAIN_LOG"
-          CUSTOM_SCRIPT="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/scripts/diy2.sh"
-          if [ -f "$CUSTOM_SCRIPT" ]; then
-            echo "📜 找到 diy2.sh 脚本，开始执行..." | tee -a "$MAIN_LOG"
-            chmod +x "$CUSTOM_SCRIPT"
-            # 在源码目录中执行脚本
-            cd /mnt/source
-            if bash "$CUSTOM_SCRIPT" 2>&1 | tee -a "$MAIN_LOG"; then
-              echo "✅ 自定义脚本执行成功" | tee -a "$MAIN_LOG"
-              echo "CUSTOM_SCRIPT_STATUS=success" >> $GITHUB_ENV
-            else
-              SCRIPT_EXIT_CODE=$?
-              echo "❌ 自定义脚本执行失败，退出码: $SCRIPT_EXIT_CODE" | tee -a "$MAIN_LOG"
-              echo "CUSTOM_SCRIPT_STATUS=failed" >> $GITHUB_ENV
+          
+          # 定义多个可能的脚本搜索路径
+          SCRIPT_PATHS=(
+            "${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/scripts"
+            "${{ env.CONFIG_REPO_DIR }}/firmware-config/scripts" 
+            "${{ env.CONFIG_REPO_DIR }}/scripts"
+            "${{ env.CONFIG_REPO_DIR }}/firmware-config"
+            "${{ env.CONFIG_REPO_DIR }}"
+          )
+          
+          SCRIPT_FOUND=false
+          SCRIPT_COUNT=0
+          
+          for script_path in "${SCRIPT_PATHS[@]}"; do
+            if [ -d "$script_path" ]; then
+              echo "🔍 在 $script_path 中查找脚本..." | tee -a "$MAIN_LOG"
+              # 查找所有.sh脚本，按修改时间排序
+              SCRIPTS=$(find "$script_path" -name "*.sh" -type f 2>/dev/null | sort || true)
+              if [ -n "$SCRIPTS" ]; then
+                echo "✅ 在 $script_path 中找到脚本:" | tee -a "$MAIN_LOG"
+                for script in $SCRIPTS; do
+                  echo "  - $(basename "$script")" | tee -a "$MAIN_LOG"
+                done
+                
+                for script in $SCRIPTS; do
+                  echo "📜 执行脚本: $(basename "$script")..." | tee -a "$MAIN_LOG"
+                  chmod +x "$script"
+                  cd /mnt/source
+                  TEMP_LOG=$(mktemp)
+                  if { bash "$script" 2>&1 | tee "$TEMP_LOG"; } then
+                    echo "✅ 自定义脚本执行成功: $(basename "$script")" | tee -a "$MAIN_LOG"
+                    SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
+                  else
+                    SCRIPT_EXIT_CODE=$?
+                    echo "❌ 自定义脚本执行失败: $(basename "$script")，退出码: $SCRIPT_EXIT_CODE" | tee -a "$MAIN_LOG"
+                    grep -i -E "error|failed|fatal" "$TEMP_LOG" | head -10 | tee -a "$MAIN_LOG"
+                  fi
+                  cat "$TEMP_LOG" >> "$MAIN_LOG"
+                  rm -f "$TEMP_LOG"
+                done
+                SCRIPT_FOUND=true
+              fi
             fi
+          done
+          
+          if [ "$SCRIPT_FOUND" = "true" ]; then
+            echo "CUSTOM_SCRIPT_STATUS=executed_${SCRIPT_COUNT}_scripts" >> $GITHUB_ENV
+            echo "✅ 总共执行了 $SCRIPT_COUNT 个自定义脚本" | tee -a "$MAIN_LOG"
           else
-            echo "ℹ️ 未找到 diy2.sh 脚本: $CUSTOM_SCRIPT" | tee -a "$MAIN_LOG"
+            echo "ℹ️ 未找到任何自定义脚本" | tee -a "$MAIN_LOG"
+            echo "🔍 搜索的路径:" | tee -a "$MAIN_LOG"
+            for path in "${SCRIPT_PATHS[@]}"; do
+              echo "  - $path" | tee -a "$MAIN_LOG"
+            done
             echo "CUSTOM_SCRIPT_STATUS=not_found" >> $GITHUB_ENV
           fi
           
@@ -452,7 +606,18 @@ jobs:
           
           # 重新运行defconfig确保配置正确
           echo "🔄 重新运行defconfig..." | tee -a "$MAIN_LOG"
-          make defconfig 2>&1 | tee -a "$MAIN_LOG" || echo "⚠️ defconfig有警告" | tee -a "$MAIN_LOG"
+          TEMP_LOG=$(mktemp)
+          if { make defconfig 2>&1 | tee "$TEMP_LOG"; } then
+            # 只输出警告信息
+            if grep -i "WARNING" "$TEMP_LOG"; then
+              echo "⚠️ defconfig有警告" | tee -a "$MAIN_LOG"
+            fi
+          else
+            echo "❌ defconfig失败" | tee -a "$MAIN_LOG"
+            grep -i -E "error|failed|fatal" "$TEMP_LOG" | head -20 | tee -a "$MAIN_LOG"
+          fi
+          cat "$TEMP_LOG" >> "$MAIN_LOG"
+          rm -f "$TEMP_LOG"
           
           echo "✅ 高级功能应用完成" | tee -a "$MAIN_LOG"
 
@@ -465,7 +630,21 @@ jobs:
           
           echo "📋 当前配置摘要:" | tee -a "$MAIN_LOG"
           echo "🔧 已启用的LUCI应用:" | tee -a "$MAIN_LOG"
-          grep "CONFIG_PACKAGE_luci" .config | grep "=y" | tee -a "$MAIN_LOG" || echo "ℹ️ 未找到LUCI应用配置" | tee -a "$MAIN_LOG"
+          # 修复LUCI检测逻辑
+          LUCI_COUNT=0
+          LUCI_APPS=$(grep "CONFIG_PACKAGE_luci" .config | grep "=y" || true)
+          if [ -n "$LUCI_APPS" ]; then
+            echo "$LUCI_APPS" | while read app; do
+              echo "✅ $app" | tee -a "$MAIN_LOG"
+              LUCI_COUNT=$((LUCI_COUNT + 1))
+            done
+          fi
+          
+          if [ $LUCI_COUNT -eq 0 ]; then
+            echo "❌ 未找到LUCI应用配置" | tee -a "$MAIN_LOG"
+          else
+            echo "✅ 总共找到 $LUCI_COUNT 个LUCI相关配置" | tee -a "$MAIN_LOG"
+          fi
           
           echo "📦 自定义IPK包:" | tee -a "$MAIN_LOG"
           if [ -d "package/custom" ]; then
@@ -475,11 +654,23 @@ jobs:
           fi
           
           echo "📦 固件大小预估:" | tee -a "$MAIN_LOG"
-          if grep -q "CONFIG_PACKAGE_luci=y" .config; then
+          if [ $LUCI_COUNT -gt 3 ]; then
             echo "✅ LUCI已启用 - 固件大小应该 >20MB" | tee -a "$MAIN_LOG"
+          elif [ $LUCI_COUNT -gt 0 ]; then
+            echo "⚠️ LUCI部分启用 - 固件大小可能 15-20MB" | tee -a "$MAIN_LOG"
           else
             echo "❌ LUCI未启用 - 固件大小可能 <15MB" | tee -a "$MAIN_LOG"
           fi
+          
+          # 显示关键配置状态
+          echo "🎯 关键配置状态:" | tee -a "$MAIN_LOG"
+          for config in "CONFIG_TARGET_ROOTFS_SQUASHFS" "CONFIG_PACKAGE_luci" "CONFIG_PACKAGE_luci-theme-material"; do
+            if grep -q "$config=y" .config; then
+              echo "✅ $config=y" | tee -a "$MAIN_LOG"
+            else
+              echo "❌ $config 未设置" | tee -a "$MAIN_LOG"
+            fi
+          done
           
           echo "✅ 配置验证完成" | tee -a "$MAIN_LOG"
 
@@ -497,11 +688,23 @@ jobs:
           MAX_ATTEMPTS=5
           for attempt in $(seq 1 $MAX_ATTEMPTS); do
             echo "🔄 下载尝试 $attempt/$MAX_ATTEMPTS..." | tee -a "$MAIN_LOG"
-            if make download -j3 V=sc 2>&1; then
+            TEMP_LOG=$(mktemp)
+            if { make download -j3 V=sc 2>&1 | tee "$TEMP_LOG"; } then
               echo "✅ 下载成功" | tee -a "$MAIN_LOG"
+              # 检查下载警告
+              if grep -i -E "error|failed|404|curl.*failed|download failed" "$TEMP_LOG"; then
+                echo "⚠️ 下载过程中发现一些问题" | tee -a "$MAIN_LOG"
+              fi
+              cat "$TEMP_LOG" >> "$MAIN_LOG"
+              rm -f "$TEMP_LOG"
               break
             else
               echo "⚠️ 下载失败，重试 $attempt/$MAX_ATTEMPTS..." | tee -a "$MAIN_LOG"
+              # 输出下载错误
+              grep -i -E "error|failed|404|curl.*failed|download failed" "$TEMP_LOG" | tee -a "$MAIN_LOG" || true
+              cat "$TEMP_LOG" >> "$MAIN_LOG"
+              rm -f "$TEMP_LOG"
+              
               if [ $attempt -eq $MAX_ATTEMPTS ]; then
                 echo "❌ 所有下载尝试都失败，跳过下载继续编译..." | tee -a "$MAIN_LOG"
                 break
@@ -521,26 +724,53 @@ jobs:
           cd /mnt/source
           export FORCE_UNSAFE_CONFIGURE=1
           export LC_ALL=C
+          
           echo "🔧 编译基础工具..." | tee -a "$MAIN_LOG"
-          if make tools/install -j1 V=s 2>&1; then
+          TEMP_LOG=$(mktemp)
+          if { make tools/install -j1 V=s 2>&1 | tee "$TEMP_LOG"; } then
             echo "✅ 基础工具编译成功" | tee -a "$MAIN_LOG"
+            # 检查编译警告
+            if grep -i -E "error|warning|failed|No such file or directory" "$TEMP_LOG" | head -10; then
+              echo "⚠️ 基础工具编译发现警告" | tee -a "$MAIN_LOG"
+            fi
           else
-            echo "⚠️ 基础工具编译有警告，但继续执行..." | tee -a "$MAIN_LOG"
+            echo "❌ 基础工具编译失败" | tee -a "$MAIN_LOG"
+            grep -i -E "error|failed|fatal|No such file or directory" "$TEMP_LOG" | head -20 | tee -a "$MAIN_LOG"
+            cat "$TEMP_LOG" >> "$MAIN_LOG"
+            rm -f "$TEMP_LOG"
+            exit 1
           fi
+          cat "$TEMP_LOG" >> "$MAIN_LOG"
+          rm -f "$TEMP_LOG"
+          
           echo "🔄 编译工具链..." | tee -a "$MAIN_LOG"
           MAX_RETRIES=3
           for attempt in $(seq 1 $MAX_RETRIES); do
             echo "🔄 工具链编译尝试 $attempt/$MAX_RETRIES" | tee -a "$MAIN_LOG"
+            TEMP_LOG=$(mktemp)
+            
             if [ $attempt -gt 1 ]; then
               echo "🧹 清理工具链..." | tee -a "$MAIN_LOG"
               make toolchain/clean 2>/dev/null || true
               sleep 5
             fi
-            if make toolchain/compile -j1 V=s 2>&1; then
+            
+            if { make toolchain/compile -j1 V=s 2>&1 | tee "$TEMP_LOG"; } then
               echo "✅ 工具链编译成功" | tee -a "$MAIN_LOG"
+              # 检查编译警告
+              if grep -i -E "error|warning|failed|No such file or directory" "$TEMP_LOG" | head -10; then
+                echo "⚠️ 工具链编译发现警告" | tee -a "$MAIN_LOG"
+              fi
+              cat "$TEMP_LOG" >> "$MAIN_LOG"
+              rm -f "$TEMP_LOG"
               break
             else
               echo "❌ 工具链编译失败" | tee -a "$MAIN_LOG"
+              echo "🔍 关键错误信息:" | tee -a "$MAIN_LOG"
+              grep -i -E "error|failed|fatal|No such file or directory|undefined reference|collect2: error" "$TEMP_LOG" | head -30 | tee -a "$MAIN_LOG"
+              cat "$TEMP_LOG" >> "$MAIN_LOG"
+              rm -f "$TEMP_LOG"
+              
               if [ $attempt -eq $MAX_RETRIES ]; then
                 echo "❌ 所有工具链编译尝试都失败" | tee -a "$MAIN_LOG"
                 exit 1
@@ -559,10 +789,13 @@ jobs:
           cd /mnt/source
           export FORCE_UNSAFE_CONFIGURE=1
           export LC_ALL=C
+          
           echo "🔧 开始编译..." | tee -a "$MAIN_LOG"
           MAX_ATTEMPTS=2
           for attempt in $(seq 1 $MAX_ATTEMPTS); do
             echo "🔄 编译尝试 $attempt/$MAX_ATTEMPTS" | tee -a "$MAIN_LOG"
+            TEMP_LOG=$(mktemp)
+            
             if [ $attempt -eq 1 ]; then
               JOBS=2
             else
@@ -571,14 +804,25 @@ jobs:
               make target/linux-clean 2>/dev/null || true
               sleep 5
             fi
-            if make -j$JOBS V=s 2>&1; then
+            
+            if { make -j$JOBS V=s 2>&1 | tee "$TEMP_LOG"; } then
               # 检查是否生成了任何固件文件
               if find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.itb" -o -name "*.gz" \) 2>/dev/null | grep -q .; then
                 echo "✅ 编译成功，找到固件文件" | tee -a "$MAIN_LOG"
+                # 输出编译过程中的关键信息
+                echo "🔍 编译摘要:" | tee -a "$MAIN_LOG"
+                grep -i -E "error|warning|failed|No such file or directory|collect2|undefined reference" "$TEMP_LOG" | tail -20 | tee -a "$MAIN_LOG" || true
+                cat "$TEMP_LOG" >> "$MAIN_LOG"
+                rm -f "$TEMP_LOG"
                 echo "BUILD_STATUS=success" >> $GITHUB_ENV
                 break
               else
                 echo "⚠️ 编译完成但未生成标准固件文件，检查其他格式..." | tee -a "$MAIN_LOG"
+                # 输出关键错误信息
+                grep -i -E "error|failed|fatal|No such file or directory" "$TEMP_LOG" | tail -15 | tee -a "$MAIN_LOG"
+                cat "$TEMP_LOG" >> "$MAIN_LOG"
+                rm -f "$TEMP_LOG"
+                
                 # 检查其他可能的文件格式
                 if find bin/targets -type f 2>/dev/null | grep -q .; then
                   echo "✅ 找到其他格式的文件:" | tee -a "$MAIN_LOG"
@@ -591,6 +835,12 @@ jobs:
               fi
             else
               echo "❌ 编译失败" | tee -a "$MAIN_LOG"
+              # 输出关键错误信息
+              echo "🔍 关键错误信息:" | tee -a "$MAIN_LOG"
+              grep -i -E "error|failed|fatal|No such file or directory|collect2: error|recipe for target.*failed" "$TEMP_LOG" | tail -30 | tee -a "$MAIN_LOG"
+              cat "$TEMP_LOG" >> "$MAIN_LOG"
+              rm -f "$TEMP_LOG"
+              
               if [ $attempt -eq $MAX_ATTEMPTS ]; then
                 echo "❌ 所有编译尝试都失败" | tee -a "$MAIN_LOG"
                 echo "BUILD_STATUS=failed" >> $GITHUB_ENV
