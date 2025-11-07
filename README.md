@@ -4,11 +4,9 @@
   仓库根目录
   
    ├── .github/workflows/
-
-  
    │   ├── universal-build.yml             # 主构建工作流
-  │   └── update-configs-list.yml         # 自动更新配置文件列表
-  ├── firmware-config/
+    │   └── update-configs-list.yml         # 自动更新配置文件列表
+     ├── firmware-config/
 │   ├── repositories.json               # 源码库配置
 │   ├── configs-list.md                 # 配置文件列表文档
 │   ├── configs/                        # 设备配置文件目录
