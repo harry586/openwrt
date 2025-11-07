@@ -224,6 +224,7 @@ jobs:
           cd /mnt/source
           echo "📋 配置Feeds..." | tee -a "$MAIN_LOG"
           
+          # 自动检测合适的feeds分支
           CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "master")
           echo "🔧 当前源码分支: $CURRENT_BRANCH" | tee -a "$MAIN_LOG"
           if [[ "$CURRENT_BRANCH" == *"22.03"* ]]; then
@@ -292,7 +293,7 @@ jobs:
           fi
           echo "✅ 源码初始化完成" | tee -a "$MAIN_LOG"
 
-      - name: "📝 自动创建配置文件（如不存在）"
+      - name: "📝 自动创建配置文件"
         run: |
           set -e
           MAIN_LOG="${{ env.MAIN_LOG }}"
@@ -339,23 +340,15 @@ jobs:
             echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> "$CONFIG_FILE"
             echo "" >> "$CONFIG_FILE"
             echo "# ======================" >> "$CONFIG_FILE"
-            echo "# 防火墙核心配置（必须包含）" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_firewall=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_luci-app-firewall=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_iptables=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_iptables-mod-ipopt=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_iptables-mod-nat-extra=y" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
             echo "# 基础系统包" >> "$CONFIG_FILE"
             echo "# ======================" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_base-files=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_busybox=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_dnsmasq-full=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_dropbear=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_firewall=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_fstools=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_iptables=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_libc=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_libgcc=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_logd=y" >> "$CONFIG_FILE"
@@ -430,15 +423,12 @@ jobs:
           CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
           echo "🔍 查找配置文件: $CONFIG_PROFILE" | tee -a "$MAIN_LOG"
           
-          # 自动搜索配置文件
+          # 定义搜索路径
+          SEARCH_PATHS="${{ env.CONFIG_REPO_DIR }}/firmware-config/configs ${{ env.CONFIG_REPO_DIR }}/firmware-config ${{ env.CONFIG_REPO_DIR }} ${{ env.CONFIG_REPO_DIR }}/firmware-config/configs/device-profiles"
+          
           CONFIG_FOUND=""
-          SEARCH_PATHS=("${{ env.CONFIG_REPO_DIR }}/firmware-config/configs" "${{ env.CONFIG_REPO_DIR }}/firmware-config" "${{ env.CONFIG_REPO_DIR }}" "${{ env.CONFIG_REPO_DIR }}/firmware-config/configs/device-profiles")
-          
-          # 支持多种命名格式
-          POSSIBLE_NAMES=("$CONFIG_PROFILE" ".config_$CONFIG_PROFILE" "config_$CONFIG_PROFILE" "$CONFIG_PROFILE.config")
-          
-          for path in "${SEARCH_PATHS[@]}"; do
-            for name in "${POSSIBLE_NAMES[@]}"; do
+          for path in $SEARCH_PATHS; do
+            for name in "$CONFIG_PROFILE" ".config_$CONFIG_PROFILE" "config_$CONFIG_PROFILE" "$CONFIG_PROFILE.config"; do
               if [ -f "$path/$name" ]; then
                 CONFIG_FOUND="$path/$name"
                 echo "✅ 找到配置文件: $CONFIG_FOUND" | tee -a "$MAIN_LOG"
@@ -449,7 +439,7 @@ jobs:
           
           if [ -z "$CONFIG_FOUND" ]; then
             echo "🔍 精确匹配失败，开始模糊搜索..." | tee -a "$MAIN_LOG"
-            for path in "${SEARCH_PATHS[@]}"; do
+            for path in $SEARCH_PATHS; do
               if [ -d "$path" ]; then
                 FOUND_FILE=$(find "$path" -type f -name "*$CONFIG_PROFILE*" 2>/dev/null | head -1)
                 if [ -n "$FOUND_FILE" ] && [ -f "$FOUND_FILE" ]; then
@@ -471,7 +461,7 @@ jobs:
           else
             echo "❌ 错误: 未找到配置文件 '$CONFIG_PROFILE'" | tee -a "$MAIN_LOG"
             echo "🔍 搜索路径:" | tee -a "$MAIN_LOG"
-            for path in "${SEARCH_PATHS[@]}"; do
+            for path in $SEARCH_PATHS; do
               echo "  - $path" | tee -a "$MAIN_LOG"
               if [ -d "$path" ]; then
                 find "$path" -type f -name "*config*" 2>/dev/null | head -10 | tee -a "$MAIN_LOG" || true
@@ -492,27 +482,15 @@ jobs:
           case "$LANGUAGE" in
             "zh-cn")
               echo "🔧 启用中文语言包..." | tee -a "$MAIN_LOG"
-              # 启用中文语言包
               sed -i 's/# CONFIG_PACKAGE_luci-i18n-base-zh-cn is not set/CONFIG_PACKAGE_luci-i18n-base-zh-cn=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
               sed -i 's/# CONFIG_PACKAGE_luci-i18n-base-zh_Hans is not set/CONFIG_PACKAGE_luci-i18n-base-zh_Hans=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci-i18n-base-zh_Hans=y" >> .config
-              # 确保LUCI主题支持中文
-              if grep -q "CONFIG_PACKAGE_luci-theme" .config; then
-                for theme in $(grep "CONFIG_PACKAGE_luci-theme" .config | grep "=y" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//'); do
-                  i18n_pkg="${theme}-zh-cn"
-                  if grep -q "CONFIG_PACKAGE_${i18n_pkg}" .config; then
-                    sed -i "s/# CONFIG_PACKAGE_${i18n_pkg} is not set/CONFIG_PACKAGE_${i18n_pkg}=y/" .config
-                  fi
-                done
-              fi
               ;;
             "en-only")
               echo "🔧 仅保留英文..." | tee -a "$MAIN_LOG"
-              # 禁用所有非英文语言包
               sed -i 's/CONFIG_PACKAGE_luci-i18n-[^e][^n].*=y/# &/' .config
               ;;
             "all")
               echo "🔧 启用所有语言包..." | tee -a "$MAIN_LOG"
-              # 启用所有可用的语言包
               for lang in $(grep "CONFIG_PACKAGE_luci-i18n-" .config | grep "is not set" | cut -d' ' -f2); do
                 sed -i "s/# $lang is not set/$lang=y/" .config
               done
@@ -542,11 +520,6 @@ jobs:
           
           disable_plugin() {
             local plugin=$1
-            # 防火墙是核心功能，不能禁用
-            if [ "$plugin" = "luci-app-firewall" ]; then
-              echo "🛡️ 跳过禁用核心插件: $plugin" | tee -a "$MAIN_LOG"
-              return
-            fi
             if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
               sed -i "s/CONFIG_PACKAGE_${plugin}=y/# CONFIG_PACKAGE_${plugin} is not set/" .config
               echo "❌ 禁用: $plugin" | tee -a "$MAIN_LOG"
@@ -556,12 +529,9 @@ jobs:
           case "$PRESET" in
             "minimal")
               echo "🔧 最小化配置..." | tee -a "$MAIN_LOG"
-              # 仅保留基础功能，但确保防火墙存在
-              echo "🛡️ 确保防火墙核心功能存在" | tee -a "$MAIN_LOG"
               ;;
             "standard")
               echo "🔧 标准配置..." | tee -a "$MAIN_LOG"
-              # 启用您需要的标准插件
               enable_plugin "luci-app-upnp"
               enable_plugin "luci-app-wireguard"
               enable_plugin "luci-app-samba4"
@@ -582,14 +552,12 @@ jobs:
               ;;
             "full")
               echo "🔧 完整配置..." | tee -a "$MAIN_LOG"
-              # 启用所有常用插件
-              for plugin in luci-app-upnp luci-app-wireguard luci-app-samba4 luci-app-turboacc luci-app-arpbind luci-app-cpulimit luci-app-diskman luci-app-eqosplus luci-app-hd-idle luci-app-parentcontrol luci-app-wechatpush luci-app-smartdns luci-app-vlmcsd luci-app-vsftpd luci-app-ttyd luci-app-sqm-autorate luci-app-adblock luci-app-wol luci-app-ddns luci-app-qos luci-app-statistics luci-app-vpn-policy-routing luci-app-nft-qos luci-app-uhttpd luci-app-olsr luci-app-olsr-services luci-app-olsr-viz luci-app-bcp38 luci-app-commands luci-app-diag-core luci-app-nlbwmon luci-app-splash luci-app-radicale2; do
+              for plugin in luci-app-upnp luci-app-wireguard luci-app-samba4 luci-app-turboacc luci-app-arpbind luci-app-cpulimit luci-app-diskman luci-app-eqosplus luci-app-hd-idle luci-app-parentcontrol luci-app-wechatpush luci-app-smartdns luci-app-vlmcsd luci-app-vsftpd luci-app-ttyd luci-app-sqm-autorate luci-app-adblock luci-app-wol luci-app-ddns luci-app-qos luci-app-statistics luci-app-vpn-policy-routing luci-app-nft-qos luci-app-uhttpd luci-app-firewall luci-app-olsr luci-app-olsr-services luci-app-olsr-viz luci-app-bcp38 luci-app-commands luci-app-diag-core luci-app-nlbwmon luci-app-splash luci-app-radicale2; do
                 enable_plugin "$plugin"
               done
               ;;
             "custom")
               echo "🔧 自定义配置..." | tee -a "$MAIN_LOG"
-              # 读取自定义插件列表
               CUSTOM_PLUGINS_FILE="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-plugins.txt"
               if [ -f "$CUSTOM_PLUGINS_FILE" ]; then
                 echo "📋 读取自定义插件列表..." | tee -a "$MAIN_LOG"
@@ -604,7 +572,7 @@ jobs:
               ;;
           esac
           
-          # 禁用不需要的插件（防火墙除外）
+          # 禁用不需要的插件
           echo "🚫 禁用不需要的插件..." | tee -a "$MAIN_LOG"
           disable_plugin "luci-app-ddns"
           disable_plugin "luci-app-bandwidth"
@@ -651,10 +619,10 @@ jobs:
           
           # 应用自定义脚本
           echo "🔧 执行自定义脚本..." | tee -a "$MAIN_LOG"
-          SCRIPT_PATHS=("${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/scripts" "${{ env.CONFIG_REPO_DIR }}/firmware-config/scripts" "${{ env.CONFIG_REPO_DIR }}/scripts")
+          SCRIPT_PATHS="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/scripts ${{ env.CONFIG_REPO_DIR }}/firmware-config/scripts ${{ env.CONFIG_REPO_DIR }}/scripts"
           
           SCRIPT_COUNT=0
-          for script_path in "${SCRIPT_PATHS[@]}"; do
+          for script_path in $SCRIPT_PATHS; do
             if [ -d "$script_path" ]; then
               echo "🔍 在 $script_path 中查找脚本..." | tee -a "$MAIN_LOG"
               SCRIPTS=$(find "$script_path" -maxdepth 1 -name "*.sh" -type f 2>/dev/null | sort || true)
