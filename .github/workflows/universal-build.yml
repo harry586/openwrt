@@ -121,7 +121,7 @@ jobs:
           echo "📦 更新软件包列表..." | tee -a "$MAIN_LOG"
           sudo apt-get update -qq
           echo "🔧 安装核心编译工具..." | tee -a "$MAIN_LOG"
-          sudo apt-get install -y -qq build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3 python3-pip python3-dev rsync unzip zlib1g-dev file wget jq ccache libtool-bin automake autoconf pkg-config subversion curl cmake ninja-build libelf-dev libxml2-dev liblzma-dev liblzo2-dev axel net-tools e2fsprogs genext2fs dosfstools mtools libffi-dev libsqlite3-dev libpam0g-dev libtirpc-dev libev-dev lm-sensors libsnmp-dev libglib2.0-dev libgpiod-dev
+          sudo apt-get install -y -qq build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3 python3-pip python3-dev rsync unzip zlib1g-dev file wget jq ccache libtool-bin automake autoconf pkg-config subversion curl cmake ninja-build libelf-dev libxml2-dev liblzma-dev liblzo2-dev axel net-tools e2fsprogs genext2fs dosfstools mtools libffi-dev libsqlite3-dev libpam0g-dev libtirpc-dev libev-dev lm-sensors libsnmp-dev libglib2.0-dev libgpiod-dev libfl-dev
           echo "🐍 配置Python环境..." | tee -a "$MAIN_LOG"
           python3 -m pip install --upgrade pip
           python3 -m pip install setuptools wheel
@@ -724,12 +724,21 @@ jobs:
                   script_name=$(basename "$script")
                   echo "📜 执行脚本: $script_name..." | tee -a "$MAIN_LOG"
                   chmod +x "$script"
+                  
+                  # 检查脚本中的文件路径是否存在
+                  echo "🔍 检查脚本中的文件路径..." | tee -a "$MAIN_LOG"
+                  if grep -q "files/etc/init.d/service-optimizer" "$script"; then
+                    echo "⚠️ 检测到可能不存在的文件路径，创建目录..." | tee -a "$MAIN_LOG"
+                    mkdir -p files/etc/init.d/ || true
+                  fi
+                  
                   TEMP_LOG=$(mktemp)
                   if { bash "$script" 2>&1 | tee "$TEMP_LOG"; } then
                     echo "✅ 自定义脚本执行成功: $script_name" | tee -a "$MAIN_LOG"
                     SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
                   else
                     echo "❌ 自定义脚本执行失败: $script_name" | tee -a "$MAIN_LOG"
+                    echo "⚠️ 但继续执行构建流程..." | tee -a "$MAIN_LOG"
                   fi
                   cat "$TEMP_LOG" >> "$MAIN_LOG"
                   rm -f "$TEMP_LOG"
@@ -785,6 +794,16 @@ jobs:
           mkdir -p /mnt/downloads
           [ -d "dl" ] && rm -rf dl
           ln -sf /mnt/downloads dl
+          
+          # 配置备用下载镜像
+          echo "🌐 配置备用下载镜像..." | tee -a "$MAIN_LOG"
+          MIRRORS_FILE="scripts/download.pl"
+          if [ -f "$MIRRORS_FILE" ]; then
+            # 添加更多镜像源
+            sed -i 's|https://sources.cdn.openwrt.org|https://mirror2.openwrt.org/sources|g' "$MIRRORS_FILE" || true
+            sed -i 's|https://mirror2.openwrt.org/sources|https://mirror2.openwrt.org/sources https://downloads.openwrt.org/sources|g' "$MIRRORS_FILE" || true
+          fi
+          
           echo "📥 开始下载..." | tee -a "$MAIN_LOG"
           MAX_ATTEMPTS=3
           for attempt in $(seq 1 $MAX_ATTEMPTS); do
@@ -819,7 +838,7 @@ jobs:
           export FORCE_UNSAFE_CONFIGURE=1
           export LC_ALL=C
           echo "🔧 编译工具链..." | tee -a "$MAIN_LOG"
-          MAX_RETRIES=2
+          MAX_RETRIES=3
           for attempt in $(seq 1 $MAX_RETRIES); do
             echo "🔄 工具链编译尝试 $attempt/$MAX_RETRIES" | tee -a "$MAIN_LOG"
             TEMP_LOG=$(mktemp)
@@ -835,6 +854,12 @@ jobs:
               break
             else
               echo "❌ 工具链编译失败" | tee -a "$MAIN_LOG"
+              # 检查是否是特定错误
+              if grep -q "No such file or directory" "$TEMP_LOG"; then
+                echo "🔧 检测到文件缺失错误，尝试修复..." | tee -a "$MAIN_LOG"
+                # 重新创建必要的目录
+                mkdir -p staging_dir/hostpkg/bin staging_dir/host/bin || true
+              fi
               cat "$TEMP_LOG" >> "$MAIN_LOG"
               rm -f "$TEMP_LOG"
               if [ $attempt -eq $MAX_RETRIES ]; then
@@ -856,18 +881,26 @@ jobs:
           export FORCE_UNSAFE_CONFIGURE=1
           export LC_ALL=C
           echo "🔧 开始编译..." | tee -a "$MAIN_LOG"
-          MAX_ATTEMPTS=2
+          MAX_ATTEMPTS=3
           for attempt in $(seq 1 $MAX_ATTEMPTS); do
             echo "🔄 编译尝试 $attempt/$MAX_ATTEMPTS" | tee -a "$MAIN_LOG"
             TEMP_LOG=$(mktemp)
             if [ $attempt -eq 1 ]; then
               JOBS=2
-            else
+            elif [ $attempt -eq 2 ]; then
               JOBS=1
               echo "🧹 清理部分构建..." | tee -a "$MAIN_LOG"
               make target/linux-clean 2>/dev/null || true
               sleep 5
+            else
+              JOBS=1
+              echo "🧹 完全清理构建..." | tee -a "$MAIN_LOG"
+              make clean 2>/dev/null || true
+              sleep 10
+              # 重新运行defconfig
+              make defconfig 2>/dev/null || true
             fi
+            
             if { make -j$JOBS V=s 2>&1 | tee "$TEMP_LOG"; } then
               if find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.itb" -o -name "*.gz" \) 2>/dev/null | grep -q .; then
                 echo "✅ 编译成功，找到固件文件" | tee -a "$MAIN_LOG"
@@ -877,9 +910,21 @@ jobs:
                 break
               else
                 echo "❌ 编译完成但未生成标准固件文件" | tee -a "$MAIN_LOG"
+                # 检查是否有其他构建产物
+                if find bin -type f 2>/dev/null | grep -q .; then
+                  echo "📁 找到其他构建产物:" | tee -a "$MAIN_LOG"
+                  find bin -type f | head -10 | tee -a "$MAIN_LOG"
+                fi
               fi
             else
               echo "❌ 编译失败" | tee -a "$MAIN_LOG"
+              # 分析错误类型
+              if grep -q "No such file or directory" "$TEMP_LOG"; then
+                echo "🔧 检测到文件缺失错误" | tee -a "$MAIN_LOG"
+              fi
+              if grep -q "recipe for target" "$TEMP_LOG" && grep -q "failed" "$TEMP_LOG"; then
+                echo "🔧 检测到编译目标失败" | tee -a "$MAIN_LOG"
+              fi
               cat "$TEMP_LOG" >> "$MAIN_LOG"
               rm -f "$TEMP_LOG"
               if [ $attempt -eq $MAX_ATTEMPTS ]; then
@@ -1073,6 +1118,12 @@ jobs:
           if [ -f "$MAIN_LOG" ]; then
             echo "🔍 关键错误:" >> "$TIMELINE_ERRORS"
             { grep -n -i -B2 -A2 "error\|failed\|fatal" "$MAIN_LOG" | head -30 || echo "无严重错误"; } >> "$TIMELINE_ERRORS"
+            echo "" >> "$TIMELINE_ERRORS"
+            echo "🔍 下载错误:" >> "$TIMELINE_ERRORS"
+            { grep -n -i "404\|download failed" "$MAIN_LOG" | head -20 || echo "无下载错误"; } >> "$TIMELINE_ERRORS"
+            echo "" >> "$TIMELINE_ERRORS"
+            echo "🔍 文件缺失错误:" >> "$TIMELINE_ERRORS"
+            { grep -n -i "No such file or directory" "$MAIN_LOG" | head -20 || echo "无文件缺失错误"; } >> "$TIMELINE_ERRORS"
           fi
           echo "✅ 智能日志分析完成"
 
@@ -1120,6 +1171,11 @@ jobs:
           else
             echo "❌ 构建失败"
             echo "💡 请查看详细构建日志分析问题"
+            echo "🔧 常见问题:"
+            echo "  - 依赖包下载失败"
+            echo "  - 工具链编译错误"
+            echo "  - 自定义脚本路径问题"
+            echo "  - 内存不足"
           fi
           echo ""
           echo "⏰ 完成时间: $(date)"
