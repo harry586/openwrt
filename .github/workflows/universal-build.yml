@@ -339,15 +339,23 @@ jobs:
             echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> "$CONFIG_FILE"
             echo "" >> "$CONFIG_FILE"
             echo "# ======================" >> "$CONFIG_FILE"
+            echo "# 防火墙核心配置（必须包含）" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_firewall=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_luci-app-firewall=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_iptables=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_iptables-mod-ipopt=y" >> "$CONFIG_FILE"
+            echo "CONFIG_PACKAGE_iptables-mod-nat-extra=y" >> "$CONFIG_FILE"
+            echo "" >> "$CONFIG_FILE"
+            echo "# ======================" >> "$CONFIG_FILE"
             echo "# 基础系统包" >> "$CONFIG_FILE"
             echo "# ======================" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_base-files=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_busybox=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_dnsmasq-full=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_dropbear=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_firewall=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_fstools=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_iptables=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_libc=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_libgcc=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_logd=y" >> "$CONFIG_FILE"
@@ -534,6 +542,11 @@ jobs:
           
           disable_plugin() {
             local plugin=$1
+            # 防火墙是核心功能，不能禁用
+            if [ "$plugin" = "luci-app-firewall" ]; then
+              echo "🛡️ 跳过禁用核心插件: $plugin" | tee -a "$MAIN_LOG"
+              return
+            fi
             if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
               sed -i "s/CONFIG_PACKAGE_${plugin}=y/# CONFIG_PACKAGE_${plugin} is not set/" .config
               echo "❌ 禁用: $plugin" | tee -a "$MAIN_LOG"
@@ -543,7 +556,8 @@ jobs:
           case "$PRESET" in
             "minimal")
               echo "🔧 最小化配置..." | tee -a "$MAIN_LOG"
-              # 仅保留基础功能
+              # 仅保留基础功能，但确保防火墙存在
+              echo "🛡️ 确保防火墙核心功能存在" | tee -a "$MAIN_LOG"
               ;;
             "standard")
               echo "🔧 标准配置..." | tee -a "$MAIN_LOG"
@@ -569,7 +583,7 @@ jobs:
             "full")
               echo "🔧 完整配置..." | tee -a "$MAIN_LOG"
               # 启用所有常用插件
-              for plugin in luci-app-upnp luci-app-wireguard luci-app-samba4 luci-app-turboacc luci-app-arpbind luci-app-cpulimit luci-app-diskman luci-app-eqosplus luci-app-hd-idle luci-app-parentcontrol luci-app-wechatpush luci-app-smartdns luci-app-vlmcsd luci-app-vsftpd luci-app-ttyd luci-app-sqm-autorate luci-app-adblock luci-app-wol luci-app-ddns luci-app-qos luci-app-statistics luci-app-vpn-policy-routing luci-app-nft-qos luci-app-uhttpd luci-app-firewall luci-app-olsr luci-app-olsr-services luci-app-olsr-viz luci-app-bcp38 luci-app-commands luci-app-diag-core luci-app-nlbwmon luci-app-splash luci-app-radicale2; do
+              for plugin in luci-app-upnp luci-app-wireguard luci-app-samba4 luci-app-turboacc luci-app-arpbind luci-app-cpulimit luci-app-diskman luci-app-eqosplus luci-app-hd-idle luci-app-parentcontrol luci-app-wechatpush luci-app-smartdns luci-app-vlmcsd luci-app-vsftpd luci-app-ttyd luci-app-sqm-autorate luci-app-adblock luci-app-wol luci-app-ddns luci-app-qos luci-app-statistics luci-app-vpn-policy-routing luci-app-nft-qos luci-app-uhttpd luci-app-olsr luci-app-olsr-services luci-app-olsr-viz luci-app-bcp38 luci-app-commands luci-app-diag-core luci-app-nlbwmon luci-app-splash luci-app-radicale2; do
                 enable_plugin "$plugin"
               done
               ;;
@@ -590,7 +604,7 @@ jobs:
               ;;
           esac
           
-          # 禁用不需要的插件
+          # 禁用不需要的插件（防火墙除外）
           echo "🚫 禁用不需要的插件..." | tee -a "$MAIN_LOG"
           disable_plugin "luci-app-ddns"
           disable_plugin "luci-app-bandwidth"
