@@ -1,12 +1,12 @@
 # 设备配置文件列表
 
-> 最后更新: Fri Nov  7 06:05:34 UTC 2025
+> 最后更新: Fri Nov  7 12:45:19 UTC 2025
 > 配置文件数量: 1 个
 
 ## 可用配置文件
 
 ```
-configs/.config_rt-ac42u_immortalwrt
+
 ```
 
 ## 使用方法
