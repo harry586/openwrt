@@ -2,6 +2,7 @@
 一个基于 GitHub Actions 的通用 OpenWrt 固件自动化构建系统，支持多种设备和自定义配置。
 ## 📁 项目结构
   仓库根目录
+  
    ├── .github/workflows/
    │   ├── universal-build.yml             # 主构建工作流
 │   └── update-configs-list.yml         # 自动更新配置文件列表
