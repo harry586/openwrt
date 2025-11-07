@@ -1,7 +1,5 @@
 # =============================================
-# ASUS RT-AC42U 安全编译配置 - 完整修复版
-# 重点确保设备启动安全性和工厂镜像生成
-# 已修复版本兼容性和分区大小问题
+# ASUS RT-AC42U 修复版配置 - 确保LUCI启用
 # =============================================
 
 # ======================
@@ -12,51 +10,28 @@ CONFIG_TARGET_ipq40xx_generic=y
 CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y
 
 # ======================
-# 安全启动配置
+# 镜像配置
 # ======================
 CONFIG_TARGET_ROOTFS_SQUASHFS=y
-CONFIG_TARGET_ROOTFS_EXT4FS=y
+CONFIG_TARGET_IMAGES_GZIP=y
+CONFIG_TARGET_IMAGES_INCLUDE_FACTORY=y
+CONFIG_TARGET_IMAGES_INCLUDE_SYSUPGRADE=y
 
-# 安全分区大小 (避免变砖)
+# 分区大小
 CONFIG_TARGET_KERNEL_PARTSIZE=16
 CONFIG_TARGET_ROOTFS_PARTSIZE=64
 
-# 禁用过度优化，确保稳定性
-# CONFIG_DEBUG_INFO is not set
-CONFIG_STRIP_KERNEL_EXPORTS=y
-CONFIG_KERNEL_LZ4=y
+# ======================
+# LUCI 核心配置 (强制启用)
+# ======================
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-base=y
+CONFIG_PACKAGE_luci-compat=y
+CONFIG_PACKAGE_luci-mod-admin-full=y
+CONFIG_PACKAGE_luci-theme-bootstrap=y
 
 # ======================
-# 工厂镜像强制生成配置
-# ======================
-CONFIG_TARGET_IMAGES_PACKAGES=y
-CONFIG_IMAGEOPT=y
-CONFIG_COMBINED_IMAGES=y
-
-# 强制启用所有镜像类型
-CONFIG_TARGET_IMAGES_INCLUDE_FACTORY=y
-CONFIG_TARGET_IMAGES_INCLUDE_SYSUPGRADE=y
-CONFIG_TARGET_IMAGES_INCLUDE_IMAGES=y
-
-# 设备特定的工厂镜像配置
-CONFIG_TARGET_IMAGES_INCLUDE_FACTORY_ASUS_RT_AC42U=y
-
-# 添加设备特定的镜像格式支持
-CONFIG_TARGET_IMAGES_INCLUDE_TARGZ=y
-CONFIG_TARGET_IMAGES_INCLUDE_EXT4=y
-CONFIG_TARGET_IMAGES_INCLUDE_SQUASHFS=y
-
-# ======================
-# 版本兼容性配置 (关键修复)
-# ======================
-CONFIG_VERSION_CODE=1.0
-CONFIG_VERSION_NUMBER=1.0
-CONFIG_VERSION_DIST="ImmortalWrt"
-CONFIG_VERSION_COMPAT_SILENT=y
-CONFIG_VERSION_COMPAT_ALL=y
-
-# ======================
-# 必需的基础包
+# 基础系统包
 # ======================
 CONFIG_PACKAGE_base-files=y
 CONFIG_PACKAGE_busybox=y
@@ -67,7 +42,6 @@ CONFIG_PACKAGE_fstools=y
 CONFIG_PACKAGE_iptables=y
 CONFIG_PACKAGE_libc=y
 CONFIG_PACKAGE_libgcc=y
-CONFIG_PACKAGE_libustream-wolfssl=y
 CONFIG_PACKAGE_logd=y
 CONFIG_PACKAGE_mtd=y
 CONFIG_PACKAGE_netifd=y
@@ -79,209 +53,51 @@ CONFIG_PACKAGE_uci=y
 CONFIG_PACKAGE_uclient-fetch=y
 CONFIG_PACKAGE_urandom-seed=y
 CONFIG_PACKAGE_usign=y
-CONFIG_PACKAGE_wpad-basic-wolfssl=y
 
 # ======================
-# 硬件驱动 (必需)
+# 网络配置
+# ======================
+CONFIG_PACKAGE_wpad-basic-wolfssl=y
+CONFIG_PACKAGE_odhcp6c=y
+CONFIG_PACKAGE_odhcpd-ipv6only=y
+
+# ======================
+# 硬件驱动
 # ======================
 CONFIG_PACKAGE_kmod-usb-core=y
 CONFIG_PACKAGE_kmod-usb2=y
 CONFIG_PACKAGE_kmod-usb3=y
 CONFIG_PACKAGE_kmod-nand-ipq40xx=y
-CONFIG_PACKAGE_kmod-gpio-ipq40xx=y
-CONFIG_PACKAGE_kmod-pinctrl-ipq40xx=y
-
-# 无线驱动 - 使用稳定版本
 CONFIG_PACKAGE_kmod-ath10k-ct=y
 CONFIG_PACKAGE_ath10k-firmware-qca4019=y
 CONFIG_PACKAGE_kmod-cfg80211=y
 CONFIG_PACKAGE_kmod-mac80211=y
 
 # ======================
-# 网络驱动
-# ======================
-CONFIG_PACKAGE_kmod-ppp=y
-CONFIG_PACKAGE_kmod-pppoe=y
-CONFIG_PACKAGE_kmod-qca-essedma=y
-
-# ======================
-# 文件系统支持
+# 文件系统
 # ======================
 CONFIG_PACKAGE_kmod-fs-ext4=y
 CONFIG_PACKAGE_kmod-fs-vfat=y
-CONFIG_PACKAGE_kmod-fs-exfat=y
-CONFIG_PACKAGE_kmod-fs-ntfs=y
+CONFIG_PACKAGE_block-mount=y
+CONFIG_PACKAGE_automount=y
 
 # ======================
-# LuCI 基础界面
+# 请求的应用程序
 # ======================
-CONFIG_PACKAGE_luci=y
-CONFIG_PACKAGE_luci-base=y
-CONFIG_PACKAGE_luci-compat=y
-CONFIG_PACKAGE_luci-mod-admin-full=y
-CONFIG_PACKAGE_luci-mod-network=y
-CONFIG_PACKAGE_luci-mod-status=y
-CONFIG_PACKAGE_luci-mod-system=y
-CONFIG_PACKAGE_luci-theme-bootstrap=y
-
-# ======================
-# Samba4 (基础版本)
-# ======================
+CONFIG_PACKAGE_luci-app-upnp=y
+CONFIG_PACKAGE_miniupnpd=y
+CONFIG_PACKAGE_luci-app-wireguard=y
 CONFIG_PACKAGE_luci-app-samba4=y
 CONFIG_PACKAGE_samba4-server=y
-CONFIG_PACKAGE_samba4-libs=y
-CONFIG_PACKAGE_libtalloc=y
-CONFIG_PACKAGE_libtdb=y
-CONFIG_PACKAGE_libtevent=y
-CONFIG_PACKAGE_libldb=y
-
-# Samba编译优化
-CONFIG_SAMBA4_SMALL=y
-CONFIG_SAMBA4_EMBEDDED=y
-CONFIG_SAMBA4_OPTIMIZE_SIZE=y
-
-# 禁用不必要的Samba组件
-# CONFIG_SAMBA4_ENABLE_WINBIND is not set
-# CONFIG_SAMBA4_SERVER_AVAHI is not set
-# CONFIG_SAMBA4_SERVER_DC is not set
-
-# ======================
-# 请求的 LuCI 应用程序
-# ======================
-
-# ARP绑定
-CONFIG_PACKAGE_luci-app-arpbind=y
-
-# CPU限制
-CONFIG_PACKAGE_luci-app-cpulimit=y
-CONFIG_PACKAGE_cpulimit-ng=y
-
-# 磁盘管理
-CONFIG_PACKAGE_luci-app-diskman=y
-CONFIG_PACKAGE_blkid=y
-CONFIG_PACKAGE_lsblk=y
-
-# 流量均衡
-CONFIG_PACKAGE_luci-app-eqosplus=y
-
-# 硬盘休眠
-CONFIG_PACKAGE_luci-app-hd-idle=y
-CONFIG_PACKAGE_hd-idle=y
-
-# 家长控制
-CONFIG_PACKAGE_luci-app-parentcontrol=y
-
-# 微信推送
-CONFIG_PACKAGE_luci-app-wechatpush=y
-
-# SmartDNS
-CONFIG_PACKAGE_luci-app-smartdns=y
-CONFIG_PACKAGE_smartdns=y
-
-# TurboACC 网络加速
 CONFIG_PACKAGE_luci-app-turboacc=y
 
-# KMS 激活服务器
-CONFIG_PACKAGE_luci-app-vlmcsd=y
-CONFIG_PACKAGE_vlmcsd=y
-
-# FTP 服务器
-CONFIG_PACKAGE_luci-app-vsftpd=y
-CONFIG_PACKAGE_vsftpd-alt=y
-
-# 自动挂载
-CONFIG_PACKAGE_automount=y
-CONFIG_PACKAGE_block-mount=y
-
-# Web 终端
-CONFIG_PACKAGE_luci-app-ttyd=y
-CONFIG_PACKAGE_ttyd=y
-
-# SQM 智能队列管理
-CONFIG_PACKAGE_luci-app-sqm-autorate=y
-CONFIG_PACKAGE_sqm-scripts=y
-
-# UPnP 支持
-CONFIG_PACKAGE_miniupnpd=y
-CONFIG_PACKAGE_luci-app-upnp=y
-
 # ======================
-# 系统工具
-# ======================
-CONFIG_PACKAGE_htop=y
-CONFIG_PACKAGE_nano=y
-CONFIG_PACKAGE_curl=y
-CONFIG_PACKAGE_wget=y
-
-# ======================
-# 分区扩容支持
-# ======================
-CONFIG_PACKAGE_fdisk=y
-CONFIG_PACKAGE_e2fsprogs=y
-CONFIG_PACKAGE_resize2fs=y
-
-# ======================
-# IPv6 支持
-# ======================
-CONFIG_PACKAGE_ip6tables=y
-CONFIG_PACKAGE_odhcp6c=y
-CONFIG_PACKAGE_odhcpd-ipv6only=y
-CONFIG_PACKAGE_kmod-ip6tables=y
-
-# ======================
-# 编译优化
+# 编译选项
 # ======================
 CONFIG_CCACHE=y
+CONFIG_BUILD_LOG=y
+CONFIG_SDK=y
 
-# 禁用调试信息减小体积
+# 禁用调试减小体积
 # CONFIG_DEBUG is not set
 # CONFIG_DEVEL is not set
-
-# ======================
-# 安全禁用项目
-# ======================
-
-# 禁用所有旧版Samba
-# CONFIG_PACKAGE_autosamba is not set
-# CONFIG_PACKAGE_luci-app-samba is not set
-# CONFIG_PACKAGE_samba36-server is not set
-
-# 禁用可能不稳定的功能
-# CONFIG_PACKAGE_kmod-qca-nss-drv is not set
-# CONFIG_PACKAGE_kmod-qca-nss-ecm is not set
-
-# 禁用不必要的包
-# CONFIG_PACKAGE_iperf3 is not set
-
-# ======================
-# 固件特性总结
-# ======================
-
-# ✅ 已启用的重要功能:
-# - 安全分区大小 (16MB内核 + 64MB根文件系统)
-# - 工厂镜像生成 (已强制启用)
-# - 版本兼容性 1.0 (已修复)
-# - Samba4 文件共享
-# - 完整的 LuCI 应用套件
-# - 基础网络功能
-# - 系统工具
-
-# ❌ 已禁用的功能:
-# - 所有旧版Samba组件
-# - 可能不稳定的网络加速
-# - 调试信息 (减小体积)
-
-# 🔧 已修复的问题:
-# - 工厂镜像生成问题
-# - 版本兼容性问题  
-# - 分区大小安全问题
-# - Samba编译冲突
-
-# 🚀 性能优化:
-# - 安全编译优化
-# - 体积优化
-# - 稳定性优先
-
-# 📊 预估固件大小: 20-25MB
-# ⏱️ 预估编译时间: 2-3小时
-# 💾 预估所需空间: 20-25GB
