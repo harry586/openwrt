@@ -1,5 +1,6 @@
 # 通用 OpenWrt 固件构建器
 一个基于 GitHub Actions 的通用 OpenWrt 固件自动化构建系统，支持多种设备和自定义配置。
+默认密码：password
 ## 📁 项目结构
   仓库根目录
 ```
