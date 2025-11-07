@@ -1,4 +1,4 @@
-name: Update Configs List
+name: "更新配置文件列表"
 
 on:
   push:
@@ -7,44 +7,62 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
-  update-list:
+  update-configs-list:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: "📥 检出仓库"
+        uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          
-      - name: Generate config list
+          fetch-depth: 0
+
+      - name: "📋 生成配置文件列表"
         run: |
-          cd firmware-config
-          CONFIG_FILES=$(find configs -name ".config_*" -type f 2>/dev/null | sort || echo "")
-          CONFIG_COUNT=$(echo "$CONFIG_FILES" | grep -c '^' || echo "0")
+          echo "生成配置文件列表..."
+          CONFIGS_DIR="firmware-config/configs"
+          OUTPUT_FILE="firmware-config/configs-list.md"
           
-          echo "# 设备配置文件列表" > configs-list.md
-          echo "" >> configs-list.md
-          echo "> 最后更新: $(date)" >> configs-list.md
-          echo "> 配置文件数量: $CONFIG_COUNT 个" >> configs-list.md
-          echo "" >> configs-list.md
-          echo "## 可用配置文件" >> configs-list.md
-          echo "" >> configs-list.md
-          echo '```' >> configs-list.md
-          echo "$CONFIG_FILES" >> configs-list.md
-          echo '```' >> configs-list.md
-          echo "" >> configs-list.md
-          echo "## 使用方法" >> configs-list.md
-          echo "" >> configs-list.md
-          echo '复制上面的配置文件路径，在工作流的"设备配置文件"字段中粘贴使用。' >> configs-list.md
-          echo "" >> configs-list.md
-          echo '文件命名格式: `.config_设备名_源码库`' >> configs-list.md
+          echo "# 设备配置文件列表" > $OUTPUT_FILE
+          echo "" >> $OUTPUT_FILE
+          echo "> 最后更新: $(date)" >> $OUTPUT_FILE
+          echo "" >> $OUTPUT_FILE
+          echo "## 可用配置文件" >> $OUTPUT_FILE
+          echo "" >> $OUTPUT_FILE
+          echo "| 设备名称 | 配置文件 | 生成时间 | 大小 |" >> $OUTPUT_FILE
+          echo "|---------|----------|----------|------|" >> $OUTPUT_FILE
           
-      - name: Commit changes
+          if [ -d "$CONFIGS_DIR" ]; then
+            for config_file in $(find $CONFIGS_DIR -name "config_*" -type f | sort); do
+              filename=$(basename "$config_file")
+              device_name=$(echo "$filename" | sed 's/^config_//')
+              file_size=$(du -h "$config_file" | cut -f1)
+              mod_time=$(date -r "$config_file" "+%Y-%m-%d %H:%M:%S")
+              
+              # 获取设备目标信息（如果存在）
+              target_info=$(grep "^CONFIG_TARGET" "$config_file" | head -2 | tr '\n' ' ' | sed 's/  */ /g')
+              
+              echo "| \`$device_name\` | \`$filename\` | $mod_time | $file_size |" >> $OUTPUT_FILE
+            done
+          else
+            echo "| 无配置文件 | - | - | - |" >> $OUTPUT_FILE
+          fi
+          
+          echo "" >> $OUTPUT_FILE
+          echo "## 使用说明" >> $OUTPUT_FILE
+          echo "" >> $OUTPUT_FILE
+          echo "1. 在构建工作流中输入设备名称（如：rt-ac42u）" >> $OUTPUT_FILE
+          echo "2. 系统会自动查找对应的配置文件" >> $OUTPUT_FILE
+          echo "3. 如果配置文件不存在，会自动创建模板" >> $OUTPUT_FILE
+          echo "" >> $OUTPUT_FILE
+          echo "## 添加新设备" >> $OUTPUT_FILE
+          echo "" >> $OUTPUT_FILE
+          echo "要添加新设备支持，可以在 \`firmware-config/configs/\` 目录下创建 \`config_设备名称\` 文件。" >> $OUTPUT_FILE
+
+      - name: "📤 提交更新"
         run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
           git add firmware-config/configs-list.md
-          git diff --staged --quiet || git commit -m "更新配置文件列表"
+          git diff --staged --quiet || git commit -m "📋 更新配置文件列表 [skip ci]"
           git push
