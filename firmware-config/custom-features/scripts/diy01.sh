@@ -16,8 +16,12 @@ set -e
 echo "1. 检查构建环境..."
 if [ ! -d "files" ]; then
     echo "创建 files 目录结构..."
-    mkdir -p files/{etc/{config,sysctl.d,init.d,hotplug.d,rc.d},etc/crontabs,usr/{bin,share/libubox},lib/functions,www/cgi-bin}
+    mkdir -p files/{bin,etc/{config,sysctl.d,init.d,hotplug.d,rc.d},etc/crontabs,usr/{bin,share/libubox},lib/functions,www/cgi-bin}
     echo "✅ 目录结构创建完成"
+else
+    # 确保所有必要的子目录都存在
+    mkdir -p files/{bin,etc/{config,sysctl.d,init.d,hotplug.d,rc.d},etc/crontabs,usr/{bin,share/libubox},lib/functions,www/cgi-bin}
+    echo "✅ 目录结构检查完成"
 fi
 
 # ==================== 2. 内存优化配置 ====================
@@ -374,6 +378,9 @@ echo "✅ Overlay备份系统安装完成"
 # ==================== 5. 服务优化配置 ====================
 echo "5. 优化系统服务..."
 
+# 确保 bin 目录存在
+mkdir -p files/bin
+
 # 服务优化脚本
 cat > files/etc/init.d/service-optimizer << 'EOF'
 #!/bin/sh /etc/rc.common
@@ -530,7 +537,7 @@ show_help() {
 # 简洁模式
 short_info() {
     local hostname=$(cat /proc/sys/kernel/hostname 2>/dev/null || echo "unknown")
-    local uptime=$(uptime | sed 's/.*up //' | sed 's/,.*//')
+    local uptime=$(uptime | sed 's/./up //' | sed 's/,.*//')
     local load=$(cat /proc/loadavg | cut -d' ' -f1)
     
     echo "🏠 $hostname | ⏰ $uptime | 📊 Load: $load | 💾 $(free -m | awk 'NR==2{printf "%.1fG/%.1fG", $3/1024, $2/1024}')"
