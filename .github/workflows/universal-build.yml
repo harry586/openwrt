@@ -236,7 +236,7 @@ jobs:
             # 根据设备名称猜测目标配置
             echo "🎯 智能分析设备名称: $CONFIG_PROFILE" | tee -a "$MAIN_LOG"
             
-            # 创建通用配置文件模板 - 使用多个echo命令避免heredoc
+            # 创建通用配置文件模板
             echo "# =============================================" > "$CONFIG_FILE"
             echo "# 通用设备配置 - $CONFIG_PROFILE" >> "$CONFIG_FILE"
             echo "# 自动生成于 $(date)" >> "$CONFIG_FILE"
@@ -292,7 +292,7 @@ jobs:
               TARGET_CONFIG="generic"
             fi
             
-            # 添加通用配置 - 使用多个echo命令
+            # 添加通用配置
             echo "" >> "$CONFIG_FILE"
             echo "# ======================" >> "$CONFIG_FILE"
             echo "# 镜像配置" >> "$CONFIG_FILE"
@@ -702,12 +702,20 @@ jobs:
           
           echo "🔧 修复已知构建问题..." | tee -a "$MAIN_LOG"
           
-          # 确保禁用问题包
-          echo "🔧 禁用问题包..." | tee -a "$MAIN_LOG"
-          sed -i 's/CONFIG_PACKAGE_6in4=y/# CONFIG_PACKAGE_6in4 is not set/' .config 2>/dev/null || true
-          sed -i 's/CONFIG_PACKAGE_6in4-=y/# CONFIG_PACKAGE_6in4 is not set/' .config 2>/dev/null || true
+          # 强力禁用6in4及相关问题包
+          echo "🔧 强力禁用问题包..." | tee -a "$MAIN_LOG"
+          for pkg in 6in4 6rd 6to4; do
+            sed -i "s/CONFIG_PACKAGE_${pkg}=y/# CONFIG_PACKAGE_${pkg} is not set/" .config 2>/dev/null || true
+            sed -i "s/CONFIG_PACKAGE_${pkg}-=y/# CONFIG_PACKAGE_${pkg} is not set/" .config 2>/dev/null || true
+          done
           
-          # 确保基础系统包启用 - 使用多个echo命令避免heredoc
+          # 删除可能引起问题的6in4相关文件
+          echo "🔧 清理问题包文件..." | tee -a "$MAIN_LOG"
+          find . -name "*6in4*" -type f -path "*/package/*" -delete 2>/dev/null || true
+          find . -name "*6rd*" -type f -path "*/package/*" -delete 2>/dev/null || true
+          find . -name "*6to4*" -type f -path "*/package/*" -delete 2>/dev/null || true
+          
+          # 确保基础系统包启用
           echo "🔧 确保基础系统包..." | tee -a "$MAIN_LOG"
           echo "# 基础系统修复" >> .config
           echo "CONFIG_PACKAGE_base-files=y" >> .config
@@ -720,24 +728,121 @@ jobs:
           echo "CONFIG_PACKAGE_firewall=y" >> .config
           echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
           echo "CONFIG_PACKAGE_dropbear=y" >> .config
+          
+          # IPv6支持（不含问题包）
           echo "" >> .config
-          echo "# IPv6支持（不含6in4）" >> .config
+          echo "# IPv6支持（不含问题包）" >> .config
           echo "CONFIG_PACKAGE_odhcp6c=y" >> .config
           echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
           echo "CONFIG_PACKAGE_ip6tables=y" >> .config
           echo "CONFIG_PACKAGE_kmod-ipv6=y" >> .config
           echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> .config
+          
+          # 强力禁用所有问题包
           echo "" >> .config
-          echo "# 禁用问题包" >> .config
-          echo "# CONFIG_PACKAGE_6in4 is not set" >> .config
-          echo "# CONFIG_PACKAGE_luci-app-wireguard is not set" >> .config
-          echo "# CONFIG_PACKAGE_luci-app-ddns is not set" >> .config
-          echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> .config
-          echo "# CONFIG_PACKAGE_luci-app-eqosplus is not set" >> .config
-          echo "# CONFIG_PACKAGE_luci-app-parentcontrol is not set" >> .config
-          echo "# CONFIG_PACKAGE_luci-app-nlbwmon is not set" >> .config
+          echo "# 强力禁用问题包" >> .config
+          for pkg in 6in4 6rd 6to4 luci-app-wireguard luci-app-ddns luci-app-wol luci-app-eqosplus luci-app-parentcontrol luci-app-nlbwmon; do
+            echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
+          done
           
           echo "✅ 构建系统修复完成" | tee -a "$MAIN_LOG"
+
+      - name: "🔧 深度构建修复"
+        id: deep_build_fix
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔧 深度构建修复 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "🔧 修复内核配置..." | tee -a "$MAIN_LOG"
+          
+          # 强制设置正确的内核配置
+          echo "# 内核配置修复" >> .config
+          echo "CONFIG_KERNEL_BUILD_USER=\"OpenWrt\"" >> .config
+          echo "CONFIG_KERNEL_BUILD_HOST=\"openwrt\"" >> .config
+          echo "CONFIG_KERNEL_GIT_CLONE_URI=\"\"" >> .config
+          echo "CONFIG_KERNEL_GIT_BRANCH=\"\"" >> .config
+          echo "CONFIG_KERNEL_GIT_LOCAL_REPOSITORY=\"\"" >> .config
+          
+          # 修复模块构建
+          echo "" >> .config
+          echo "# 模块构建修复" >> .config
+          echo "CONFIG_PACKAGE_kmod-ipt-core=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-nf-conntrack=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-nf-conntrack6=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-nf-nat=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-ipt-ipset=y" >> .config
+          
+          # 修复工具链
+          echo "" >> .config
+          echo "# 工具链修复" >> .config
+          echo "CONFIG_TOOLCHAIN_KERNEL_HAS_SPE=y" >> .config
+          echo "CONFIG_TOOLCHAIN_KERNEL_HAS_NEON=y" >> .config
+          echo "CONFIG_TOOLCHAIN_KERNEL_HAS_VFPV4=y" >> .config
+          
+          echo "✅ 深度构建修复完成" | tee -a "$MAIN_LOG"
+
+      - name: "🔧 内核配置修复"
+        id: kernel_fix
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔧 内核配置修复 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          # 修复IPQ40xx特定配置
+          echo "🔧 修复IPQ40xx配置..." | tee -a "$MAIN_LOG"
+          
+          # 确保目标设备正确配置
+          sed -i 's/CONFIG_TARGET_ipq40xx=y/CONFIG_TARGET_ipq40xx=y\nCONFIG_TARGET_ipq40xx_generic=y\nCONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y/' .config
+          
+          # 修复内核版本配置
+          echo "# 内核版本修复" >> .config
+          echo "CONFIG_KERNEL_5_4=y" >> .config
+          echo "CONFIG_KERNEL_5_4_255=y" >> .config
+          echo "CONFIG_DEFAULT_5_4=y" >> .config
+          
+          # 修复编译选项
+          echo "" >> .config
+          echo "# 编译选项修复" >> .config
+          echo "CONFIG_USE_MKLIBS=y" >> .config
+          echo "CONFIG_STRIP_KERNEL_EXPORTS=y" >> .config
+          echo "CONFIG_USE_UCLIBCXX=y" >> .config
+          
+          echo "✅ 内核配置修复完成" | tee -a "$MAIN_LOG"
+
+      - name: "🔍 配置完整性检查"
+        id: config_check
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔍 配置完整性检查 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "🔍 检查问题包配置..." | tee -a "$MAIN_LOG"
+          
+          # 检查并修复6in4相关配置
+          PROBLEM_PKGS=("6in4" "6rd" "6to4")
+          for pkg in "${PROBLEM_PKGS[@]}"; do
+            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
+              echo "⚠️  发现问题包 $pkg 被启用，正在禁用..." | tee -a "$MAIN_LOG"
+              sed -i "s/CONFIG_PACKAGE_${pkg}=y/# CONFIG_PACKAGE_${pkg} is not set/" .config
+            fi
+          done
+          
+          # 验证配置
+          echo "🔍 验证最终配置..." | tee -a "$MAIN_LOG"
+          echo "问题包状态:" | tee -a "$MAIN_LOG"
+          for pkg in "${PROBLEM_PKGS[@]}"; do
+            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
+              echo "❌ $pkg: 仍然启用" | tee -a "$MAIN_LOG"
+            else
+              echo "✅ $pkg: 已禁用" | tee -a "$MAIN_LOG"
+            fi
+          done
+          
+          echo "✅ 配置检查完成" | tee -a "$MAIN_LOG"
 
       - name: "🔄 最终配置处理"
         id: final_config
@@ -822,11 +927,9 @@ jobs:
           
           echo "🔧 编译配置: 并行作业=$PARALLEL_JOBS, 跳过测试=$SKIP_TESTS" | tee -a "$MAIN_LOG"
           
-          echo "🔍 检查配置完整性..." | tee -a "$MAIN_LOG"
-          if ! make defconfig; then
-            echo "❌ 配置检查失败" | tee -a "$MAIN_LOG"
-            exit 1
-          fi
+          # 编译前最终检查
+          echo "🔍 编译前最终检查..." | tee -a "$MAIN_LOG"
+          make defconfig
           
           if [ "$SKIP_TESTS" = "true" ]; then
             EXTRA_FLAGS="IGNORE_ERRORS=m"
@@ -837,23 +940,27 @@ jobs:
           # 创建构建日志目录
           mkdir -p logs
           
-          echo "🛠️ 阶段1: 编译工具链..." | tee -a "$MAIN_LOG"
-          if make toolchain/compile -j$PARALLEL_JOBS $EXTRA_FLAGS 2>&1 | tee -a "$MAIN_LOG"; then
+          echo "🛠️ 阶段1: 清理和准备..." | tee -a "$MAIN_LOG"
+          make target/linux/clean
+          make toolchain/clean
+          
+          echo "🛠️ 阶段2: 编译工具链..." | tee -a "$MAIN_LOG"
+          if make toolchain/install -j$PARALLEL_JOBS $EXTRA_FLAGS 2>&1 | tee -a "$MAIN_LOG"; then
             echo "✅ 工具链编译完成" | tee -a "$MAIN_LOG"
           else
-            echo "❌ 工具链编译失败" | tee -a "$ERROR_LOG"
-            echo "🔄 尝试继续编译其他部分..." | tee -a "$MAIN_LOG"
+            echo "❌ 工具链编译失败，尝试单线程..." | tee -a "$MAIN_LOG"
+            make toolchain/install -j1 V=s 2>&1 | tee -a "$MAIN_LOG"
           fi
           
-          echo "🛠️ 阶段2: 编译内核..." | tee -a "$MAIN_LOG"
-          if make target/linux/compile -j$PARALLEL_JOBS $EXTRA_FLAGS 2>&1 | tee -a "$MAIN_LOG"; then
+          echo "🛠️ 阶段3: 编译内核..." | tee -a "$MAIN_LOG"
+          if make target/linux/install -j$PARALLEL_JOBS $EXTRA_FLAGS 2>&1 | tee -a "$MAIN_LOG"; then
             echo "✅ 内核编译完成" | tee -a "$MAIN_LOG"
           else
-            echo "❌ 内核编译失败" | tee -a "$ERROR_LOG"
-            echo "🔄 尝试继续编译其他部分..." | tee -a "$MAIN_LOG"
+            echo "❌ 内核编译失败，尝试单线程..." | tee -a "$MAIN_LOG"
+            make target/linux/install -j1 V=s 2>&1 | tee -a "$MAIN_LOG"
           fi
           
-          echo "🚀 阶段3: 完整编译..." | tee -a "$MAIN_LOG"
+          echo "🚀 阶段4: 完整编译..." | tee -a "$MAIN_LOG"
           # 使用临时文件捕获完整输出
           TEMP_LOG=$(mktemp)
           set +e
@@ -888,13 +995,6 @@ jobs:
             echo "BUILD_STATUS=failed" >> $GITHUB_ENV
             echo "🔍 检查构建目录..." | tee -a "$MAIN_LOG"
             find bin -type f -name "*" 2>/dev/null | head -20 | tee -a "$MAIN_LOG"
-            
-            # 诊断构建问题
-            echo "🔧 诊断构建问题..." | tee -a "$MAIN_LOG"
-            if [ -f "logs/package-feeds.txt" ]; then
-              echo "📋 包依赖问题检查:" | tee -a "$MAIN_LOG"
-              grep -i "error\|failed" logs/package-feeds.txt | head -10 | tee -a "$MAIN_LOG"
-            fi
           fi
           
           echo "FIRMWARE_FOUND=$FIRMWARE_FOUND" >> $GITHUB_ENV
@@ -906,6 +1006,31 @@ jobs:
           echo "=== 编译总结 ===" | tee -a "$MAIN_LOG"
           echo "构建状态: $BUILD_STATUS" | tee -a "$MAIN_LOG"
           echo "固件生成: $FIRMWARE_FOUND" | tee -a "$MAIN_LOG"
+
+      - name: "🔍 构建错误诊断"
+        id: build_diagnosis
+        if: env.BUILD_STATUS == 'failed'
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔍 构建错误诊断 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "🔧 诊断构建问题..." | tee -a "$MAIN_LOG"
+          
+          # 检查关键文件
+          echo "📋 关键文件检查:" | tee -a "$MAIN_LOG"
+          [ -f ".config" ] && echo "✅ .config 存在" || echo "❌ .config 缺失"
+          [ -d "bin" ] && echo "✅ bin 目录存在" || echo "❌ bin 目录缺失"
+          [ -d "build_dir" ] && echo "✅ build_dir 存在" || echo "❌ build_dir 缺失"
+          
+          # 检查内核构建状态
+          echo "🔍 内核构建状态:" | tee -a "$MAIN_LOG"
+          if [ -d "build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic" ]; then
+            find build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic -name "vmlinux" -o -name "*.ko" | head -5 | tee -a "$MAIN_LOG"
+          fi
+          
+          echo "✅ 错误诊断完成" | tee -a "$MAIN_LOG"
 
       - name: "🔍 快速固件分析"
         id: firmware_analysis
