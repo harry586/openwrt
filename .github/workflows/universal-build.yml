@@ -107,15 +107,7 @@ jobs:
           echo "📦 批量安装编译依赖..." | tee -a "$MAIN_LOG"
           sudo apt-get update -qq
           
-          sudo apt-get install -y -qq \
-            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-            gettext git libncurses5-dev libssl-dev python3 python3-pip python3-dev \
-            rsync unzip zlib1g-dev file wget jq ccache libtool-bin automake \
-            autoconf pkg-config subversion curl cmake ninja-build libelf-dev \
-            libxml2-dev liblzma-dev liblzo2-dev axel net-tools e2fsprogs \
-            genext2fs dosfstools mtools libffi-dev libsqlite3-dev libpam0g-dev \
-            libtirpc-dev libev-dev lm-sensors libsnmp-dev libglib2.0-dev \
-            libgpiod-dev libfl-dev upx-ucl
+          sudo apt-get install -y -qq build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3 python3-pip python3-dev rsync unzip zlib1g-dev file wget jq ccache libtool-bin automake autoconf pkg-config subversion curl cmake ninja-build libelf-dev libxml2-dev liblzma-dev liblzo2-dev axel net-tools e2fsprogs genext2fs dosfstools mtools libffi-dev libsqlite3-dev libpam0g-dev libtirpc-dev libev-dev lm-sensors libsnmp-dev libglib2.0-dev libgpiod-dev libfl-dev upx-ucl
           
           python3 -m pip install --upgrade pip setuptools wheel -q
           
@@ -160,7 +152,6 @@ jobs:
           echo "CCACHE_COMPRESS=1" >> $GITHUB_ENV
           echo "PARALLEL_JOBS=$PARALLEL_JOBS" >> $GITHUB_ENV
           
-          # 创建交换文件
           echo "💾 创建交换文件..." | tee -a "$MAIN_LOG"
           sudo swapoff /mnt/swapfile 2>/dev/null || true
           sudo rm -f /mnt/swapfile 2>/dev/null || true
@@ -212,7 +203,6 @@ jobs:
           echo "=== 🔧 智能配置预处理 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
-          # 应用设备配置
           CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
           CONFIG_DIR="${{ env.CONFIG_REPO_DIR }}/firmware-config/configs"
           CONFIG_FILE="$CONFIG_DIR/config_$CONFIG_PROFILE"
@@ -221,74 +211,59 @@ jobs:
             cp "$CONFIG_FILE" .config
             echo "✅ 应用配置文件: $CONFIG_PROFILE" | tee -a "$MAIN_LOG"
           else
-            # 根据源码分支自动生成兼容配置
             CURRENT_BRANCH="${{ env.ACTUAL_BRANCH }}"
             echo "🔧 自动生成兼容配置..." | tee -a "$MAIN_LOG"
             
             if [[ "$CURRENT_BRANCH" == *"21.02"* ]]; then
               echo "🔧 检测到 21.02 分支，生成兼容配置..." | tee -a "$MAIN_LOG"
-              {
-                echo "# 自动生成配置 - $CONFIG_PROFILE (21.02兼容)"
-                echo "CONFIG_TARGET_x86=y"
-                echo "CONFIG_TARGET_x86_64=y"
-                echo "CONFIG_TARGET_x86_64_DEVICE_generic=y"
-                echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y"
-                echo "CONFIG_TARGET_ROOTFS_EXT4FS=y"
-                echo "CONFIG_TARGET_ROOTFS_TARGZ=y"
-                echo "CONFIG_PACKAGE_luci=y"
-                echo "CONFIG_PACKAGE_luci-base=y"
-                echo "CONFIG_PACKAGE_luci-compat=y"
-                echo "CONFIG_LUCI_LANG_zh-cn=y"
-                echo "CONFIG_BUSYBOX_CUSTOM=y"
-                echo "CONFIG_PACKAGE_busybox=y"
-              } > .config
+              echo "# 自动生成配置 - $CONFIG_PROFILE (21.02兼容)" > .config
+              echo "CONFIG_TARGET_x86=y" >> .config
+              echo "CONFIG_TARGET_x86_64=y" >> .config
+              echo "CONFIG_TARGET_x86_64_DEVICE_generic=y" >> .config
+              echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+              echo "CONFIG_TARGET_ROOTFS_EXT4FS=y" >> .config
+              echo "CONFIG_TARGET_ROOTFS_TARGZ=y" >> .config
+              echo "CONFIG_PACKAGE_luci=y" >> .config
+              echo "CONFIG_PACKAGE_luci-base=y" >> .config
+              echo "CONFIG_PACKAGE_luci-compat=y" >> .config
+              echo "CONFIG_LUCI_LANG_zh-cn=y" >> .config
             elif [[ "$CURRENT_BRANCH" == *"22.03"* ]]; then
               echo "🔧 检测到 22.03 分支，生成兼容配置..." | tee -a "$MAIN_LOG"
-              {
-                echo "# 自动生成配置 - $CONFIG_PROFILE (22.03兼容)"
-                echo "CONFIG_TARGET_x86=y"
-                echo "CONFIG_TARGET_x86_64=y"
-                echo "CONFIG_TARGET_x86_64_DEVICE_generic=y"
-                echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y"
-                echo "CONFIG_TARGET_ROOTFS_EXT4FS=y"
-                echo "CONFIG_TARGET_ROOTFS_TARGZ=y"
-                echo "CONFIG_PACKAGE_luci=y"
-                echo "CONFIG_PACKAGE_luci-base=y"
-                echo "CONFIG_PACKAGE_luci-compat=y"
-                echo "CONFIG_LUCI_LANG_zh_Hans=y"
-                echo "CONFIG_BUSYBOX_CUSTOM=y"
-                echo "CONFIG_PACKAGE_busybox=y"
-              } > .config
+              echo "# 自动生成配置 - $CONFIG_PROFILE (22.03兼容)" > .config
+              echo "CONFIG_TARGET_x86=y" >> .config
+              echo "CONFIG_TARGET_x86_64=y" >> .config
+              echo "CONFIG_TARGET_x86_64_DEVICE_generic=y" >> .config
+              echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+              echo "CONFIG_TARGET_ROOTFS_EXT4FS=y" >> .config
+              echo "CONFIG_TARGET_ROOTFS_TARGZ=y" >> .config
+              echo "CONFIG_PACKAGE_luci=y" >> .config
+              echo "CONFIG_PACKAGE_luci-base=y" >> .config
+              echo "CONFIG_PACKAGE_luci-compat=y" >> .config
+              echo "CONFIG_LUCI_LANG_zh_Hans=y" >> .config
             else
               echo "🔧 生成通用配置..." | tee -a "$MAIN_LOG"
-              {
-                echo "# 自动生成配置 - $CONFIG_PROFILE"
-                echo "CONFIG_TARGET_x86=y"
-                echo "CONFIG_TARGET_x86_64=y"
-                echo "CONFIG_TARGET_x86_64_DEVICE_generic=y"
-                echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y"
-                echo "CONFIG_TARGET_ROOTFS_EXT4FS=y"
-                echo "CONFIG_TARGET_ROOTFS_TARGZ=y"
-                echo "CONFIG_PACKAGE_luci=y"
-                echo "CONFIG_PACKAGE_luci-base=y"
-                echo "CONFIG_PACKAGE_luci-compat=y"
-                echo "CONFIG_BUSYBOX_CUSTOM=y"
-                echo "CONFIG_PACKAGE_busybox=y"
-              } > .config
+              echo "# 自动生成配置 - $CONFIG_PROFILE" > .config
+              echo "CONFIG_TARGET_x86=y" >> .config
+              echo "CONFIG_TARGET_x86_64=y" >> .config
+              echo "CONFIG_TARGET_x86_64_DEVICE_generic=y" >> .config
+              echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+              echo "CONFIG_TARGET_ROOTFS_EXT4FS=y" >> .config
+              echo "CONFIG_TARGET_ROOTFS_TARGZ=y" >> .config
+              echo "CONFIG_PACKAGE_luci=y" >> .config
+              echo "CONFIG_PACKAGE_luci-base=y" >> .config
+              echo "CONFIG_PACKAGE_luci-compat=y" >> .config
             fi
+            echo "CONFIG_BUSYBOX_CUSTOM=y" >> .config
+            echo "CONFIG_PACKAGE_busybox=y" >> .config
           fi
           
-          # 预配置优化选项
           echo "⚡ 预配置优化选项..." | tee -a "$MAIN_LOG"
-          {
-            echo "# 编译优化"
-            echo "CONFIG_CCACHE=y"
-            echo "CONFIG_BUILD_LOG=y"
-            echo "CONFIG_SDK=y"
-            echo "# CONFIG_DEBUG=y is not set"
-          } >> .config
+          echo "# 编译优化" >> .config
+          echo "CONFIG_CCACHE=y" >> .config
+          echo "CONFIG_BUILD_LOG=y" >> .config
+          echo "CONFIG_SDK=y" >> .config
+          echo "# CONFIG_DEBUG=y is not set" >> .config
           
-          # 禁用已知问题包
           echo "🚫 禁用已知问题包..." | tee -a "$MAIN_LOG"
           for pkg in 6in4 6rd 6to4 luci-app-6in4 luci-app-6rd; do
             sed -i "s/CONFIG_PACKAGE_${pkg}=y/# CONFIG_PACKAGE_${pkg} is not set/" .config
@@ -350,7 +325,6 @@ jobs:
           PRESET="${{ github.event.inputs.plugin_preset }}"
           echo "🎯 插件预设: $PRESET" | tee -a "$MAIN_LOG"
           
-          # 确保配置目录存在
           mkdir -p package/custom feeds/luci/applications
           
           enable_plugin() {
@@ -378,24 +352,17 @@ jobs:
               ;;
             "standard")
               echo "🔧 标准配置..." | tee -a "$MAIN_LOG"
-              # 网络核心插件
               enable_plugin "luci-app-upnp"
               enable_plugin "luci-app-wireguard"
               enable_plugin "luci-app-samba4"
               enable_plugin "luci-app-turboacc"
-              
-              # 网络优化插件
               enable_plugin "luci-app-arpbind"
               enable_plugin "luci-app-cpulimit"
               enable_plugin "luci-app-eqosplus"
-              
-              # 系统工具插件
               enable_plugin "luci-app-diskman"
               enable_plugin "luci-app-hd-idle"
               enable_plugin "luci-app-parentcontrol"
               enable_plugin "luci-app-wechatpush"
-              
-              # DNS和网络服务
               enable_plugin "luci-app-smartdns"
               enable_plugin "luci-app-vlmcsd"
               enable_plugin "luci-app-vsftpd"
@@ -405,16 +372,7 @@ jobs:
               ;;
             "full")
               echo "🔧 完整配置..." | tee -a "$MAIN_LOG"
-              for plugin in luci-app-upnp luci-app-wireguard luci-app-samba4 luci-app-turboacc \
-                           luci-app-arpbind luci-app-cpulimit luci-app-diskman luci-app-eqosplus \
-                           luci-app-hd-idle luci-app-parentcontrol luci-app-wechatpush \
-                           luci-app-smartdns luci-app-vlmcsd luci-app-vsftpd luci-app-ttyd \
-                           luci-app-sqm-autorate luci-app-adblock luci-app-wol luci-app-ddns \
-                           luci-app-qos luci-app-statistics luci-app-vpn-policy-routing \
-                           luci-app-nft-qos luci-app-uhttpd luci-app-firewall luci-app-olsr \
-                           luci-app-olsr-services luci-app-olsr-viz luci-app-bcp38 \
-                           luci-app-commands luci-app-diag-core luci-app-nlbwmon \
-                           luci-app-splash luci-app-radicale2; do
+              for plugin in luci-app-upnp luci-app-wireguard luci-app-samba4 luci-app-turboacc luci-app-arpbind luci-app-cpulimit luci-app-diskman luci-app-eqosplus luci-app-hd-idle luci-app-parentcontrol luci-app-wechatpush luci-app-smartdns luci-app-vlmcsd luci-app-vsftpd luci-app-ttyd luci-app-sqm-autorate luci-app-adblock luci-app-wol luci-app-ddns luci-app-qos luci-app-statistics luci-app-vpn-policy-routing luci-app-nft-qos luci-app-uhttpd luci-app-firewall luci-app-olsr luci-app-olsr-services luci-app-olsr-viz luci-app-bcp38 luci-app-commands luci-app-diag-core luci-app-nlbwmon luci-app-splash luci-app-radicale2; do
                 enable_plugin "$plugin"
               done
               ;;
@@ -430,10 +388,10 @@ jobs:
                 done < "$CUSTOM_PLUGINS_FILE"
               else
                 echo "ℹ️ 未找到自定义插件列表，使用标准配置" | tee -a "$MAIN_LOG"
-                # 回退到标准配置
-                for plugin in luci-app-upnp luci-app-wireguard luci-app-samba4 luci-app-turboacc; do
-                  enable_plugin "$plugin"
-                done
+                enable_plugin "luci-app-upnp"
+                enable_plugin "luci-app-wireguard"
+                enable_plugin "luci-app-samba4"
+                enable_plugin "luci-app-turboacc"
               fi
               ;;
           esac
@@ -488,7 +446,6 @@ jobs:
           
           echo "🔧 高级功能状态: 已启用" | tee -a "$MAIN_LOG"
           
-          # 自定义IPK包处理
           echo "📦 安装自定义IPK包..." | tee -a "$MAIN_LOG"
           IPK_DIR="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/prebuilt-ipks"
           IPK_COUNT=0
@@ -504,8 +461,6 @@ jobs:
                 echo "  - 复制 $ipk_name" | tee -a "$MAIN_LOG"
                 cp "$ipk" package/custom/
                 IPK_COUNT=$((IPK_COUNT + 1))
-                
-                # 确保IPK包被包含在构建中
                 ipk_basename=$(basename "$ipk" .ipk)
                 echo "CONFIG_PACKAGE_${ipk_basename}=y" >> .config
               done
@@ -519,17 +474,11 @@ jobs:
           
           echo "CUSTOM_IPK_COUNT=$IPK_COUNT" >> $GITHUB_ENV
           
-          # 自定义脚本执行
           echo "🔧 执行自定义脚本..." | tee -a "$MAIN_LOG"
-          SCRIPT_PATHS=(
-            "${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/scripts"
-            "${{ env.CONFIG_REPO_DIR }}/firmware-config/scripts" 
-            "${{ env.CONFIG_REPO_DIR }}/scripts"
-            "${{ env.CONFIG_REPO_DIR }}/firmware-config"
-          )
+          SCRIPT_PATHS="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/scripts ${{ env.CONFIG_REPO_DIR }}/firmware-config/scripts ${{ env.CONFIG_REPO_DIR }}/scripts ${{ env.CONFIG_REPO_DIR }}/firmware-config"
           
           SCRIPT_COUNT=0
-          for script_path in "${SCRIPT_PATHS[@]}"; do
+          for script_path in $SCRIPT_PATHS; do
             if [ -d "$script_path" ]; then
               echo "🔍 在 $script_path 中查找脚本..." | tee -a "$MAIN_LOG"
               SCRIPTS=$(find "$script_path" -maxdepth 2 -name "*.sh" -type f 2>/dev/null | sort || true)
@@ -586,34 +535,27 @@ jobs:
           echo "=== 🔧 配置验证和修复 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
-          # 确保基础配置正确
           echo "🔧 验证基础配置..." | tee -a "$MAIN_LOG"
           
-          # 检查目标架构
           if ! grep -q "CONFIG_TARGET_x86_64=y" .config; then
             echo "⚠️ 缺少x86_64目标，添加基础配置..." | tee -a "$MAIN_LOG"
-            cat >> .config << 'EOF'
-CONFIG_TARGET_x86=y
-CONFIG_TARGET_x86_64=y
-CONFIG_TARGET_x86_64_DEVICE_generic=y
-CONFIG_TARGET_ROOTFS_SQUASHFS=y
-CONFIG_TARGET_ROOTFS_EXT4FS=y
-CONFIG_TARGET_ROOTFS_TARGZ=y
-CONFIG_PACKAGE_luci=y
-CONFIG_PACKAGE_luci-base=y
-CONFIG_PACKAGE_luci-compat=y
-CONFIG_BUSYBOX_CUSTOM=y
-CONFIG_PACKAGE_busybox=y
-EOF
+            echo "CONFIG_TARGET_x86=y" >> .config
+            echo "CONFIG_TARGET_x86_64=y" >> .config
+            echo "CONFIG_TARGET_x86_64_DEVICE_generic=y" >> .config
+            echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+            echo "CONFIG_TARGET_ROOTFS_EXT4FS=y" >> .config
+            echo "CONFIG_TARGET_ROOTFS_TARGZ=y" >> .config
+            echo "CONFIG_PACKAGE_luci=y" >> .config
+            echo "CONFIG_PACKAGE_luci-base=y" >> .config
+            echo "CONFIG_PACKAGE_luci-compat=y" >> .config
+            echo "CONFIG_BUSYBOX_CUSTOM=y" >> .config
+            echo "CONFIG_PACKAGE_busybox=y" >> .config
           fi
           
-          # 运行defconfig修复配置
           echo "🔄 运行defconfig修复配置..." | tee -a "$MAIN_LOG"
           if ! make defconfig; then
             echo "❌ defconfig失败，尝试手动修复..." | tee -a "$MAIN_LOG"
-            # 备份配置
             cp .config .config.backup
-            # 清理可能的问题配置
             sed -i '/^CONFIG_PACKAGE_kmod-/d' .config
             sed -i '/^CONFIG_PACKAGE_luci-app-/d' .config
             make defconfig
@@ -629,14 +571,12 @@ EOF
           echo "=== 🚀 并行下载优化 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
-          # 修复下载源
           sed -i 's|https://sources.cdn.openwrt.org|https://mirror2.openwrt.org/sources|g' scripts/download.pl
           sed -i 's|git.openwrt.org|github.com/openwrt|g' feeds.conf.* 2>/dev/null || true
           
           echo "📥 开始并行下载..." | tee -a "$MAIN_LOG"
           PARALLEL_JOBS="${{ env.PARALLEL_JOBS }}"
           
-          # 多次重试下载
           for i in 1 2 3; do
             echo "🔄 下载尝试 $i/3..." | tee -a "$MAIN_LOG"
             if make download -j$PARALLEL_JOBS; then
@@ -652,7 +592,6 @@ EOF
             fi
           done
           
-          # 检查下载文件
           DOWNLOAD_COUNT=$(find dl/ -type f 2>/dev/null | wc -l)
           echo "📦 下载文件数量: $DOWNLOAD_COUNT" | tee -a "$MAIN_LOG"
           
@@ -678,7 +617,6 @@ EOF
           
           echo "🔧 编译配置: 并行作业=$PARALLEL_JOBS, 跳过测试=$SKIP_TESTS" | tee -a "$MAIN_LOG"
           
-          # 首先检查配置
           echo "🔍 检查配置完整性..." | tee -a "$MAIN_LOG"
           if ! make defconfig; then
             echo "❌ 配置检查失败" | tee -a "$MAIN_LOG"
@@ -694,29 +632,24 @@ EOF
           echo "🛠️ 阶段1: 编译工具链..." | tee -a "$MAIN_LOG"
           if ! make toolchain/compile -j$PARALLEL_JOBS $EXTRA_FLAGS 2>&1 | tee -a "$MAIN_LOG"; then
             echo "❌ 工具链编译失败" | tee -a "$ERROR_LOG"
-            # 继续尝试，因为有些错误可能不影响整体构建
           fi
           
           echo "🛠️ 阶段2: 编译内核..." | tee -a "$MAIN_LOG"
           if ! make target/linux/compile -j$PARALLEL_JOBS $EXTRA_FLAGS 2>&1 | tee -a "$MAIN_LOG"; then
             echo "❌ 内核编译失败" | tee -a "$ERROR_LOG"
-            # 继续尝试，因为有些错误可能不影响整体构建
           fi
           
-          # 完整编译使用更严格的设置
           echo "🚀 阶段3: 完整编译..." | tee -a "$MAIN_LOG"
           if make -j$PARALLEL_JOBS $EXTRA_FLAGS 2>&1 | tee -a "$MAIN_LOG"; then
             echo "✅ 编译成功" | tee -a "$MAIN_LOG"
             echo "BUILD_STATUS=success" >> $GITHUB_ENV
           else
             echo "❌ 编译失败，查看详细错误..." | tee -a "$MAIN_LOG"
-            # 尝试单线程编译以获取准确错误
             echo "🔄 尝试单线程编译定位问题..." | tee -a "$MAIN_LOG"
             make -j1 V=s 2>&1 | tee -a "$ERROR_LOG" || true
             echo "BUILD_STATUS=failed" >> $GITHUB_ENV
           fi
           
-          # 检查产物
           if find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null | grep -q .; then
             echo "🎉 找到固件文件！" | tee -a "$MAIN_LOG"
             echo "BUILD_STATUS=success" >> $GITHUB_ENV
@@ -724,7 +657,6 @@ EOF
           else
             echo "❌ 未找到固件文件" | tee -a "$MAIN_LOG"
             echo "BUILD_STATUS=failed" >> $GITHUB_ENV
-            # 检查可能的构建目录
             echo "🔍 检查构建目录..." | tee -a "$MAIN_LOG"
             find bin -type f -name "*" 2>/dev/null | head -20 | tee -a "$MAIN_LOG"
           fi
