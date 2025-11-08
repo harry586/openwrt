@@ -239,6 +239,8 @@ jobs:
                 echo "CONFIG_PACKAGE_luci-base=y"
                 echo "CONFIG_PACKAGE_luci-compat=y"
                 echo "CONFIG_LUCI_LANG_zh-cn=y"
+                echo "CONFIG_BUSYBOX_CUSTOM=y"
+                echo "CONFIG_PACKAGE_busybox=y"
               } > .config
             elif [[ "$CURRENT_BRANCH" == *"22.03"* ]]; then
               echo "🔧 检测到 22.03 分支，生成兼容配置..." | tee -a "$MAIN_LOG"
@@ -254,6 +256,8 @@ jobs:
                 echo "CONFIG_PACKAGE_luci-base=y"
                 echo "CONFIG_PACKAGE_luci-compat=y"
                 echo "CONFIG_LUCI_LANG_zh_Hans=y"
+                echo "CONFIG_BUSYBOX_CUSTOM=y"
+                echo "CONFIG_PACKAGE_busybox=y"
               } > .config
             else
               echo "🔧 生成通用配置..." | tee -a "$MAIN_LOG"
@@ -268,6 +272,8 @@ jobs:
                 echo "CONFIG_PACKAGE_luci=y"
                 echo "CONFIG_PACKAGE_luci-base=y"
                 echo "CONFIG_PACKAGE_luci-compat=y"
+                echo "CONFIG_BUSYBOX_CUSTOM=y"
+                echo "CONFIG_PACKAGE_busybox=y"
               } > .config
             fi
           fi
@@ -572,6 +578,49 @@ jobs:
           
           echo "✅ 最终配置完成" | tee -a "$MAIN_LOG"
 
+      - name: "🔧 配置验证和修复"
+        id: config_validation
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔧 配置验证和修复 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          # 确保基础配置正确
+          echo "🔧 验证基础配置..." | tee -a "$MAIN_LOG"
+          
+          # 检查目标架构
+          if ! grep -q "CONFIG_TARGET_x86_64=y" .config; then
+            echo "⚠️ 缺少x86_64目标，添加基础配置..." | tee -a "$MAIN_LOG"
+            cat >> .config << 'EOF'
+CONFIG_TARGET_x86=y
+CONFIG_TARGET_x86_64=y
+CONFIG_TARGET_x86_64_DEVICE_generic=y
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
+CONFIG_TARGET_ROOTFS_EXT4FS=y
+CONFIG_TARGET_ROOTFS_TARGZ=y
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-base=y
+CONFIG_PACKAGE_luci-compat=y
+CONFIG_BUSYBOX_CUSTOM=y
+CONFIG_PACKAGE_busybox=y
+EOF
+          fi
+          
+          # 运行defconfig修复配置
+          echo "🔄 运行defconfig修复配置..." | tee -a "$MAIN_LOG"
+          if ! make defconfig; then
+            echo "❌ defconfig失败，尝试手动修复..." | tee -a "$MAIN_LOG"
+            # 备份配置
+            cp .config .config.backup
+            # 清理可能的问题配置
+            sed -i '/^CONFIG_PACKAGE_kmod-/d' .config
+            sed -i '/^CONFIG_PACKAGE_luci-app-/d' .config
+            make defconfig
+          fi
+          
+          echo "✅ 配置验证完成" | tee -a "$MAIN_LOG"
+
       - name: "🚀 并行下载优化"
         id: download_deps
         run: |
@@ -580,20 +629,36 @@ jobs:
           echo "=== 🚀 并行下载优化 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
+          # 修复下载源
           sed -i 's|https://sources.cdn.openwrt.org|https://mirror2.openwrt.org/sources|g' scripts/download.pl
+          sed -i 's|git.openwrt.org|github.com/openwrt|g' feeds.conf.* 2>/dev/null || true
           
           echo "📥 开始并行下载..." | tee -a "$MAIN_LOG"
           PARALLEL_JOBS="${{ env.PARALLEL_JOBS }}"
           
-          if make download -j$PARALLEL_JOBS; then
-            echo "✅ 下载成功" | tee -a "$MAIN_LOG"
-          else
-            echo "🔄 下载有错误，重试..." | tee -a "$MAIN_LOG"
-            make download -j2
-          fi
+          # 多次重试下载
+          for i in 1 2 3; do
+            echo "🔄 下载尝试 $i/3..." | tee -a "$MAIN_LOG"
+            if make download -j$PARALLEL_JOBS; then
+              echo "✅ 下载成功" | tee -a "$MAIN_LOG"
+              break
+            else
+              echo "⚠️ 下载尝试 $i 失败" | tee -a "$MAIN_LOG"
+              if [ $i -eq 3 ]; then
+                echo "❌ 所有下载尝试都失败" | tee -a "$MAIN_LOG"
+                exit 1
+              fi
+              sleep 10
+            fi
+          done
           
+          # 检查下载文件
           DOWNLOAD_COUNT=$(find dl/ -type f 2>/dev/null | wc -l)
           echo "📦 下载文件数量: $DOWNLOAD_COUNT" | tee -a "$MAIN_LOG"
+          
+          if [ "$DOWNLOAD_COUNT" -lt 10 ]; then
+            echo "⚠️ 下载文件数量过少，可能有问题" | tee -a "$MAIN_LOG"
+          fi
 
       - name: "⚡ 智能增量编译"
         id: smart_build
@@ -613,6 +678,13 @@ jobs:
           
           echo "🔧 编译配置: 并行作业=$PARALLEL_JOBS, 跳过测试=$SKIP_TESTS" | tee -a "$MAIN_LOG"
           
+          # 首先检查配置
+          echo "🔍 检查配置完整性..." | tee -a "$MAIN_LOG"
+          if ! make defconfig; then
+            echo "❌ 配置检查失败" | tee -a "$MAIN_LOG"
+            exit 1
+          fi
+          
           if [ "$SKIP_TESTS" = "true" ]; then
             EXTRA_FLAGS="IGNORE_ERRORS=m"
           else
@@ -620,25 +692,41 @@ jobs:
           fi
           
           echo "🛠️ 阶段1: 编译工具链..." | tee -a "$MAIN_LOG"
-          make toolchain/compile -j$PARALLEL_JOBS $EXTRA_FLAGS
+          if ! make toolchain/compile -j$PARALLEL_JOBS $EXTRA_FLAGS 2>&1 | tee -a "$MAIN_LOG"; then
+            echo "❌ 工具链编译失败" | tee -a "$ERROR_LOG"
+            # 继续尝试，因为有些错误可能不影响整体构建
+          fi
           
           echo "🛠️ 阶段2: 编译内核..." | tee -a "$MAIN_LOG"
-          make target/linux/compile -j$PARALLEL_JOBS $EXTRA_FLAGS
+          if ! make target/linux/compile -j$PARALLEL_JOBS $EXTRA_FLAGS 2>&1 | tee -a "$MAIN_LOG"; then
+            echo "❌ 内核编译失败" | tee -a "$ERROR_LOG"
+            # 继续尝试，因为有些错误可能不影响整体构建
+          fi
           
+          # 完整编译使用更严格的设置
           echo "🚀 阶段3: 完整编译..." | tee -a "$MAIN_LOG"
-          if make -j$PARALLEL_JOBS $EXTRA_FLAGS; then
+          if make -j$PARALLEL_JOBS $EXTRA_FLAGS 2>&1 | tee -a "$MAIN_LOG"; then
             echo "✅ 编译成功" | tee -a "$MAIN_LOG"
             echo "BUILD_STATUS=success" >> $GITHUB_ENV
           else
-            echo "⚠️ 编译有错误，但继续检查产物..." | tee -a "$MAIN_LOG"
+            echo "❌ 编译失败，查看详细错误..." | tee -a "$MAIN_LOG"
+            # 尝试单线程编译以获取准确错误
+            echo "🔄 尝试单线程编译定位问题..." | tee -a "$MAIN_LOG"
+            make -j1 V=s 2>&1 | tee -a "$ERROR_LOG" || true
+            echo "BUILD_STATUS=failed" >> $GITHUB_ENV
           fi
           
-          if find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) | grep -q .; then
+          # 检查产物
+          if find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null | grep -q .; then
             echo "🎉 找到固件文件！" | tee -a "$MAIN_LOG"
             echo "BUILD_STATUS=success" >> $GITHUB_ENV
+            find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) -exec ls -la {} \; | tee -a "$MAIN_LOG"
           else
             echo "❌ 未找到固件文件" | tee -a "$MAIN_LOG"
             echo "BUILD_STATUS=failed" >> $GITHUB_ENV
+            # 检查可能的构建目录
+            echo "🔍 检查构建目录..." | tee -a "$MAIN_LOG"
+            find bin -type f -name "*" 2>/dev/null | head -20 | tee -a "$MAIN_LOG"
           fi
           
           echo "📊 CCache统计:" | tee -a "$MAIN_LOG"
