@@ -1,4 +1,4 @@
-name: "🚀 超快速固件构建器 - 完整优化版"
+name: "🚀 超快速固件构建器 - 完整修复版"
 
 on:
   workflow_dispatch:
@@ -89,7 +89,7 @@ jobs:
           ANALYSIS_REPORT="/mnt/build-logs/analysis_report.md"
           
           echo "🏁 极速构建开始: $(date)" > $MAIN_LOG
-          echo "🚀 工作流版本: 超快速固件构建器 - 完整优化版" >> $MAIN_LOG
+          echo "🚀 工作流版本: 超快速固件构建器 - 完整修复版" >> $MAIN_LOG
           echo "📋 输入参数:" >> $MAIN_LOG
           echo "  - 源码预设: ${{ github.event.inputs.source_preset }}" >> $MAIN_LOG
           echo "  - 源码分支: ${{ github.event.inputs.source_branch }}" >> $MAIN_LOG
@@ -236,7 +236,7 @@ jobs:
             # 根据设备名称猜测目标配置
             echo "🎯 智能分析设备名称: $CONFIG_PROFILE" | tee -a "$MAIN_LOG"
             
-            # 创建通用配置文件模板
+            # 创建通用配置文件模板 - 使用多个echo命令避免heredoc
             echo "# =============================================" > "$CONFIG_FILE"
             echo "# 通用设备配置 - $CONFIG_PROFILE" >> "$CONFIG_FILE"
             echo "# 自动生成于 $(date)" >> "$CONFIG_FILE"
@@ -292,7 +292,7 @@ jobs:
               TARGET_CONFIG="generic"
             fi
             
-            # 添加通用配置
+            # 添加通用配置 - 使用多个echo命令
             echo "" >> "$CONFIG_FILE"
             echo "# ======================" >> "$CONFIG_FILE"
             echo "# 镜像配置" >> "$CONFIG_FILE"
@@ -346,6 +346,7 @@ jobs:
             echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_ip6tables=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> "$CONFIG_FILE"
+            echo "# CONFIG_PACKAGE_6in4 is not set" >> "$CONFIG_FILE"
             echo "" >> "$CONFIG_FILE"
             echo "# ======================" >> "$CONFIG_FILE"
             echo "# 网络服务" >> "$CONFIG_FILE"
@@ -375,9 +376,12 @@ jobs:
             echo "CONFIG_BUILD_LOG=y" >> "$CONFIG_FILE"
             echo "" >> "$CONFIG_FILE"
             echo "# 排除的应用程序" >> "$CONFIG_FILE"
+            echo "# CONFIG_PACKAGE_luci-app-wireguard is not set" >> "$CONFIG_FILE"
             echo "# CONFIG_PACKAGE_luci-app-ddns is not set" >> "$CONFIG_FILE"
-            echo "# CONFIG_PACKAGE_luci-app-bandwidth is not set" >> "$CONFIG_FILE"
             echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> "$CONFIG_FILE"
+            echo "# CONFIG_PACKAGE_luci-app-eqosplus is not set" >> "$CONFIG_FILE"
+            echo "# CONFIG_PACKAGE_luci-app-parentcontrol is not set" >> "$CONFIG_FILE"
+            echo "# CONFIG_PACKAGE_luci-app-nlbwmon is not set" >> "$CONFIG_FILE"
             echo "# CONFIG_PACKAGE_luci-theme-material is not set" >> "$CONFIG_FILE"
             echo "" >> "$CONFIG_FILE"
             echo "# 禁用调试减小体积" >> "$CONFIG_FILE"
@@ -485,6 +489,16 @@ jobs:
             fi
           }
           
+          # 确保禁用用户指定的插件
+          echo "🔧 禁用指定插件..." | tee -a "$MAIN_LOG"
+          disable_plugin "luci-app-wireguard"
+          disable_plugin "luci-app-ddns"
+          disable_plugin "luci-app-wol"
+          disable_plugin "luci-app-eqosplus"
+          disable_plugin "luci-app-parentcontrol"
+          disable_plugin "luci-app-nlbwmon"
+          disable_plugin "6in4"
+          
           case "$PRESET" in
             "minimal")
               echo "🔧 最小化配置..." | tee -a "$MAIN_LOG"
@@ -494,15 +508,12 @@ jobs:
             "standard")
               echo "🔧 标准配置..." | tee -a "$MAIN_LOG"
               enable_plugin "luci-app-upnp" "UPnP端口转发"
-              enable_plugin "luci-app-wireguard" "WireGuard VPN"
               enable_plugin "luci-app-samba4" "网络共享(Samba)"
               enable_plugin "luci-app-turboacc" "网络加速"
               enable_plugin "luci-app-arpbind" "IP/MAC绑定"
               enable_plugin "luci-app-cpulimit" "CPU限制"
               enable_plugin "luci-app-diskman" "磁盘管理"
-              enable_plugin "luci-app-eqosplus" "QoS流控"
               enable_plugin "luci-app-hd-idle" "硬盘休眠"
-              enable_plugin "luci-app-parentcontrol" "家长控制"
               enable_plugin "luci-app-wechatpush" "微信推送"
               enable_plugin "luci-app-smartdns" "智能DNS"
               enable_plugin "luci-app-vlmcsd" "KMS激活"
@@ -510,24 +521,19 @@ jobs:
               enable_plugin "luci-app-ttyd" "网页终端"
               enable_plugin "luci-app-sqm-autorate" "智能QoS"
               enable_plugin "automount" "自动挂载"
-              enable_plugin "luci-app-ddns" "动态DNS"
-              enable_plugin "luci-app-wol" "网络唤醒"
               ;;
             "full")
               echo "🔧 完整配置..." | tee -a "$MAIN_LOG"
               # 基础网络
               enable_plugin "luci-app-upnp" "UPnP端口转发"
-              enable_plugin "luci-app-wireguard" "WireGuard VPN"
               enable_plugin "luci-app-samba4" "网络共享(Samba)"
               enable_plugin "luci-app-turboacc" "网络加速"
               enable_plugin "luci-app-arpbind" "IP/MAC绑定"
               enable_plugin "luci-app-cpulimit" "CPU限制"
               enable_plugin "luci-app-diskman" "磁盘管理"
-              enable_plugin "luci-app-eqosplus" "QoS流控"
               enable_plugin "luci-app-hd-idle" "硬盘休眠"
               
               # 高级功能
-              enable_plugin "luci-app-parentcontrol" "家长控制"
               enable_plugin "luci-app-wechatpush" "微信推送"
               enable_plugin "luci-app-smartdns" "智能DNS"
               enable_plugin "luci-app-vlmcsd" "KMS激活"
@@ -538,8 +544,6 @@ jobs:
               
               # 扩展功能
               enable_plugin "luci-app-adblock" "广告过滤"
-              enable_plugin "luci-app-wol" "网络唤醒"
-              enable_plugin "luci-app-ddns" "动态DNS"
               enable_plugin "luci-app-qos" "流量控制"
               enable_plugin "luci-app-statistics" "流量统计"
               enable_plugin "luci-app-vpn-policy-routing" "VPN策略路由"
@@ -552,7 +556,6 @@ jobs:
               enable_plugin "luci-app-bcp38" "BCP38支持"
               enable_plugin "luci-app-commands" "自定义命令"
               enable_plugin "luci-app-diag-core" "诊断工具"
-              enable_plugin "luci-app-nlbwmon" "带宽监控"
               enable_plugin "luci-app-splash" "Captive Portal"
               enable_plugin "luci-app-radicale2" "CalDAV/CardDAV"
               ;;
@@ -569,7 +572,6 @@ jobs:
               else
                 echo "ℹ️ 未找到自定义插件列表，使用标准配置" | tee -a "$MAIN_LOG"
                 enable_plugin "luci-app-upnp" "UPnP端口转发"
-                enable_plugin "luci-app-wireguard" "WireGuard VPN"
                 enable_plugin "luci-app-samba4" "网络共享(Samba)"
                 enable_plugin "luci-app-turboacc" "网络加速"
               fi
@@ -690,6 +692,53 @@ jobs:
           echo "CUSTOM_SCRIPT_COUNT=$SCRIPT_COUNT" >> $GITHUB_ENV
           echo "✅ 高级功能应用完成，执行了 $SCRIPT_COUNT 个脚本" | tee -a "$MAIN_LOG"
 
+      - name: "🔧 构建系统修复"
+        id: build_fix
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔧 构建系统修复 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "🔧 修复已知构建问题..." | tee -a "$MAIN_LOG"
+          
+          # 确保禁用问题包
+          echo "🔧 禁用问题包..." | tee -a "$MAIN_LOG"
+          sed -i 's/CONFIG_PACKAGE_6in4=y/# CONFIG_PACKAGE_6in4 is not set/' .config 2>/dev/null || true
+          sed -i 's/CONFIG_PACKAGE_6in4-=y/# CONFIG_PACKAGE_6in4 is not set/' .config 2>/dev/null || true
+          
+          # 确保基础系统包启用 - 使用多个echo命令避免heredoc
+          echo "🔧 确保基础系统包..." | tee -a "$MAIN_LOG"
+          echo "# 基础系统修复" >> .config
+          echo "CONFIG_PACKAGE_base-files=y" >> .config
+          echo "CONFIG_PACKAGE_busybox=y" >> .config
+          echo "CONFIG_PACKAGE_opkg=y" >> .config
+          echo "CONFIG_PACKAGE_procd=y" >> .config
+          echo "CONFIG_PACKAGE_uci=y" >> .config
+          echo "CONFIG_PACKAGE_ubus=y" >> .config
+          echo "CONFIG_PACKAGE_netifd=y" >> .config
+          echo "CONFIG_PACKAGE_firewall=y" >> .config
+          echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+          echo "CONFIG_PACKAGE_dropbear=y" >> .config
+          echo "" >> .config
+          echo "# IPv6支持（不含6in4）" >> .config
+          echo "CONFIG_PACKAGE_odhcp6c=y" >> .config
+          echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
+          echo "CONFIG_PACKAGE_ip6tables=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-ipv6=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> .config
+          echo "" >> .config
+          echo "# 禁用问题包" >> .config
+          echo "# CONFIG_PACKAGE_6in4 is not set" >> .config
+          echo "# CONFIG_PACKAGE_luci-app-wireguard is not set" >> .config
+          echo "# CONFIG_PACKAGE_luci-app-ddns is not set" >> .config
+          echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> .config
+          echo "# CONFIG_PACKAGE_luci-app-eqosplus is not set" >> .config
+          echo "# CONFIG_PACKAGE_luci-app-parentcontrol is not set" >> .config
+          echo "# CONFIG_PACKAGE_luci-app-nlbwmon is not set" >> .config
+          
+          echo "✅ 构建系统修复完成" | tee -a "$MAIN_LOG"
+
       - name: "🔄 最终配置处理"
         id: final_config
         run: |
@@ -708,6 +757,14 @@ jobs:
           grep "^CONFIG_PACKAGE_luci-app" .config | grep "=y" | head -20 | tee -a "$MAIN_LOG"
           echo "🌐 语言包:" | tee -a "$MAIN_LOG"
           grep "^CONFIG_PACKAGE_luci-i18n" .config | grep "=y" | head -10 | tee -a "$MAIN_LOG"
+          echo "❌ 禁用的指定插件:" | tee -a "$MAIN_LOG"
+          grep "# CONFIG_PACKAGE_luci-app-wireguard is not set" .config && echo "  - WireGuard VPN"
+          grep "# CONFIG_PACKAGE_luci-app-ddns is not set" .config && echo "  - 动态DNS"
+          grep "# CONFIG_PACKAGE_luci-app-wol is not set" .config && echo "  - 网络唤醒"
+          grep "# CONFIG_PACKAGE_luci-app-eqosplus is not set" .config && echo "  - QoS流控"
+          grep "# CONFIG_PACKAGE_luci-app-parentcontrol is not set" .config && echo "  - 上网时间控制"
+          grep "# CONFIG_PACKAGE_luci-app-nlbwmon is not set" .config && echo "  - 带宽监控"
+          grep "# CONFIG_PACKAGE_6in4 is not set" .config && echo "  - 6in4隧道"
           
           echo "✅ 最终配置完成" | tee -a "$MAIN_LOG"
 
