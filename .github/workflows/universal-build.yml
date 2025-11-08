@@ -1,4 +1,4 @@
-name: "🚀 超快速固件构建器 - 智能优化版"
+name: "🚀 超快速固件构建器 - 修复兼容版"
 
 on:
   workflow_dispatch:
@@ -19,7 +19,7 @@ on:
         description: "设备配置文件名称"
         required: true
         type: string
-        default: "rt-ac42u"
+        default: "generic-x86-64"
       build_optimization:
         description: "编译优化策略"
         required: true
@@ -60,7 +60,7 @@ env:
 jobs:
   build:
     runs-on: "ubuntu-22.04"
-    timeout-minutes: 240  # 减少超时时间，优化后应该更快
+    timeout-minutes: 180
     
     steps:
       - name: "📥 检出配置仓库"
@@ -84,7 +84,7 @@ jobs:
           ANALYSIS_REPORT="/mnt/build-logs/analysis_report.md"
           
           echo "🏁 极速构建开始: $(date)" > $MAIN_LOG
-          echo "🚀 工作流版本: 超快速固件构建器" >> $MAIN_LOG
+          echo "🚀 工作流版本: 超快速固件构建器 - 修复兼容版" >> $MAIN_LOG
           echo "MAIN_LOG=$MAIN_LOG" >> $GITHUB_ENV
           echo "ERROR_LOG=$ERROR_LOG" >> $GITHUB_ENV
           echo "WARNING_LOG=$WARNING_LOG" >> $GITHUB_ENV
@@ -92,11 +92,34 @@ jobs:
           echo "CONFIG_REPO_DIR=${{ github.workspace }}/config-repo" >> $GITHUB_ENV
           echo "BUILD_STATUS=running" >> $GITHUB_ENV
           
-          # 极速日志初始化
           echo "# 错误日志" > $ERROR_LOG
           echo "# 警告日志" > $WARNING_LOG
           echo "# 智能分析报告" > $ANALYSIS_REPORT
           echo "✅ 极速环境初始化完成"
+
+      - name: "🚀 极速依赖安装"
+        id: install_deps
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🚀 极速依赖安装 ===" | tee -a "$MAIN_LOG"
+          
+          echo "📦 批量安装编译依赖..." | tee -a "$MAIN_LOG"
+          sudo apt-get update -qq
+          
+          sudo apt-get install -y -qq \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses5-dev libssl-dev python3 python3-pip python3-dev \
+            rsync unzip zlib1g-dev file wget jq ccache libtool-bin automake \
+            autoconf pkg-config subversion curl cmake ninja-build libelf-dev \
+            libxml2-dev liblzma-dev liblzo2-dev axel net-tools e2fsprogs \
+            genext2fs dosfstools mtools libffi-dev libsqlite3-dev libpam0g-dev \
+            libtirpc-dev libev-dev lm-sensors libsnmp-dev libglib2.0-dev \
+            libgpiod-dev libfl-dev upx-ucl
+          
+          python3 -m pip install --upgrade pip setuptools wheel -q
+          
+          echo "✅ 依赖安装完成" | tee -a "$MAIN_LOG"
 
       - name: "⚡ 性能极速优化"
         id: performance
@@ -105,7 +128,6 @@ jobs:
           MAIN_LOG="${{ env.MAIN_LOG }}"
           echo "=== ⚡ 性能极速优化 ===" | tee -a "$MAIN_LOG"
           
-          # 根据CPU核心数动态优化
           CPU_CORES=$(nproc)
           echo "🖥️ 检测到 CPU 核心: $CPU_CORES" | tee -a "$MAIN_LOG"
           
@@ -128,7 +150,6 @@ jobs:
               ;;
           esac
           
-          # 配置ccache
           mkdir -p /mnt/ccache
           ccache -M $CCACHE_SIZE
           ccache -o compression=true
@@ -139,7 +160,7 @@ jobs:
           echo "CCACHE_COMPRESS=1" >> $GITHUB_ENV
           echo "PARALLEL_JOBS=$PARALLEL_JOBS" >> $GITHUB_ENV
           
-          # 创建大容量交换文件（如果需要）
+          # 创建交换文件
           echo "💾 创建交换文件..." | tee -a "$MAIN_LOG"
           sudo swapoff /mnt/swapfile 2>/dev/null || true
           sudo rm -f /mnt/swapfile 2>/dev/null || true
@@ -148,32 +169,6 @@ jobs:
           echo "📊 系统资源状态:" | tee -a "$MAIN_LOG"
           free -h | tee -a "$MAIN_LOG"
           echo "✅ 性能优化完成" | tee -a "$MAIN_LOG"
-
-      - name: "🚀 极速依赖安装"
-        id: install_deps
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🚀 极速依赖安装 ===" | tee -a "$MAIN_LOG"
-          
-          echo "📦 批量安装编译依赖..." | tee -a "$MAIN_LOG"
-          sudo apt-get update -qq
-          
-          # 批量安装所有依赖，减少apt调用次数
-          sudo apt-get install -y -qq \
-            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-            gettext git libncurses5-dev libssl-dev python3 python3-pip python3-dev \
-            rsync unzip zlib1g-dev file wget jq ccache libtool-bin automake \
-            autoconf pkg-config subversion curl cmake ninja-build libelf-dev \
-            libxml2-dev liblzma-dev liblzo2-dev axel net-tools e2fsprogs \
-            genext2fs dosfstools mtools libffi-dev libsqlite3-dev libpam0g-dev \
-            libtirpc-dev libev-dev lm-sensors libsnmp-dev libglib2.0-dev \
-            libgpiod-dev libfl-dev upx-ucl
-          
-          # 配置Python环境
-          python3 -m pip install --upgrade pip setuptools wheel -q
-          
-          echo "✅ 依赖安装完成" | tee -a "$MAIN_LOG"
 
       - name: "⚡ 极速源码获取"
         id: source_setup
@@ -195,7 +190,6 @@ jobs:
           cd /mnt/source
           rm -rf .[!.]* *
           
-          # 使用深度克隆和并行下载
           git clone --depth 1 --branch "$BRANCH" --single-branch --progress "$SOURCE_URL" . || {
             echo "🔄 分支克隆失败，尝试master分支..." | tee -a "$MAIN_LOG"
             git clone --depth 1 --progress "$SOURCE_URL" .
@@ -227,17 +221,55 @@ jobs:
             cp "$CONFIG_FILE" .config
             echo "✅ 应用配置文件: $CONFIG_PROFILE" | tee -a "$MAIN_LOG"
           else
-            # 自动生成基础配置
-            echo "🔧 自动生成基础配置..." | tee -a "$MAIN_LOG"
-            {
-              echo "# 自动生成配置 - $CONFIG_PROFILE"
-              echo "CONFIG_TARGET_x86=y"
-              echo "CONFIG_TARGET_x86_64=y"
-              echo "CONFIG_TARGET_x86_64_DEVICE_generic=y"
-              echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y"
-              echo "CONFIG_PACKAGE_luci=y"
-              echo "CONFIG_PACKAGE_luci-base=y"
-            } > .config
+            # 根据源码分支自动生成兼容配置
+            CURRENT_BRANCH="${{ env.ACTUAL_BRANCH }}"
+            echo "🔧 自动生成兼容配置..." | tee -a "$MAIN_LOG"
+            
+            if [[ "$CURRENT_BRANCH" == *"21.02"* ]]; then
+              echo "🔧 检测到 21.02 分支，生成兼容配置..." | tee -a "$MAIN_LOG"
+              {
+                echo "# 自动生成配置 - $CONFIG_PROFILE (21.02兼容)"
+                echo "CONFIG_TARGET_x86=y"
+                echo "CONFIG_TARGET_x86_64=y"
+                echo "CONFIG_TARGET_x86_64_DEVICE_generic=y"
+                echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y"
+                echo "CONFIG_TARGET_ROOTFS_EXT4FS=y"
+                echo "CONFIG_TARGET_ROOTFS_TARGZ=y"
+                echo "CONFIG_PACKAGE_luci=y"
+                echo "CONFIG_PACKAGE_luci-base=y"
+                echo "CONFIG_PACKAGE_luci-compat=y"
+                echo "CONFIG_LUCI_LANG_zh-cn=y"
+              } > .config
+            elif [[ "$CURRENT_BRANCH" == *"22.03"* ]]; then
+              echo "🔧 检测到 22.03 分支，生成兼容配置..." | tee -a "$MAIN_LOG"
+              {
+                echo "# 自动生成配置 - $CONFIG_PROFILE (22.03兼容)"
+                echo "CONFIG_TARGET_x86=y"
+                echo "CONFIG_TARGET_x86_64=y"
+                echo "CONFIG_TARGET_x86_64_DEVICE_generic=y"
+                echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y"
+                echo "CONFIG_TARGET_ROOTFS_EXT4FS=y"
+                echo "CONFIG_TARGET_ROOTFS_TARGZ=y"
+                echo "CONFIG_PACKAGE_luci=y"
+                echo "CONFIG_PACKAGE_luci-base=y"
+                echo "CONFIG_PACKAGE_luci-compat=y"
+                echo "CONFIG_LUCI_LANG_zh_Hans=y"
+              } > .config
+            else
+              echo "🔧 生成通用配置..." | tee -a "$MAIN_LOG"
+              {
+                echo "# 自动生成配置 - $CONFIG_PROFILE"
+                echo "CONFIG_TARGET_x86=y"
+                echo "CONFIG_TARGET_x86_64=y"
+                echo "CONFIG_TARGET_x86_64_DEVICE_generic=y"
+                echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y"
+                echo "CONFIG_TARGET_ROOTFS_EXT4FS=y"
+                echo "CONFIG_TARGET_ROOTFS_TARGZ=y"
+                echo "CONFIG_PACKAGE_luci=y"
+                echo "CONFIG_PACKAGE_luci-base=y"
+                echo "CONFIG_PACKAGE_luci-compat=y"
+              } > .config
+            fi
           fi
           
           # 预配置优化选项
@@ -266,7 +298,6 @@ jobs:
           echo "=== 🔄 并行Feeds更新 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
-          # 配置feeds
           CURRENT_BRANCH=$(git branch --show-current)
           if [[ "$CURRENT_BRANCH" == *"22.03"* ]]; then FEEDS_BRANCH="openwrt-22.03"
           elif [[ "$CURRENT_BRANCH" == *"21.02"* ]]; then FEEDS_BRANCH="openwrt-21.02"
@@ -289,12 +320,10 @@ jobs:
           
           echo "src-git routing https://github.com/openwrt/routing.git;$FEEDS_BRANCH" >> feeds.conf
           
-          # 并行更新feeds
           echo "🔄 并行更新feeds..." | tee -a "$MAIN_LOG"
           ./scripts/feeds update -a &
           FEEDS_PID=$!
           
-          # 同时开始下载目录设置
           mkdir -p /mnt/downloads
           [ -d "dl" ] && rm -rf dl
           ln -sf /mnt/downloads dl
@@ -304,40 +333,244 @@ jobs:
           
           echo "✅ Feeds更新完成" | tee -a "$MAIN_LOG"
 
-      - name: "🎯 智能配置应用"
-        id: apply_config
+      - name: "🎯 完整插件配置"
+        id: plugin_setup
         run: |
           set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🎯 智能配置应用 ===" | tee -a "$MAIN_LOG"
+          echo "=== 🎯 完整插件配置 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
-          # 应用语言配置
-          LANGUAGE="${{ github.event.inputs.language_pack }}"
-          if [ "$LANGUAGE" = "zh-cn" ]; then
-            echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
-          elif [ "$LANGUAGE" = "en-only" ]; then
-            sed -i 's/CONFIG_PACKAGE_luci-i18n-[^e][^n].*=y/# &/' .config
-          fi
-          
-          # 应用插件预设
           PRESET="${{ github.event.inputs.plugin_preset }}"
+          echo "🎯 插件预设: $PRESET" | tee -a "$MAIN_LOG"
+          
+          # 确保配置目录存在
+          mkdir -p package/custom feeds/luci/applications
+          
+          enable_plugin() {
+            local plugin=$1
+            local config_name="CONFIG_PACKAGE_${plugin}"
+            
+            if grep -q "${config_name}=y" .config; then
+              echo "✅ 已启用: $plugin" | tee -a "$MAIN_LOG"
+              return 0
+            fi
+            
+            if grep -q "${config_name} is not set" .config; then
+              sed -i "s/# ${config_name} is not set/${config_name}=y/" .config
+              echo "✅ 启用: $plugin" | tee -a "$MAIN_LOG"
+            else
+              echo "${config_name}=y" >> .config
+              echo "✅ 新增: $plugin" | tee -a "$MAIN_LOG"
+            fi
+          }
+          
           case "$PRESET" in
+            "minimal")
+              echo "🔧 最小化配置..." | tee -a "$MAIN_LOG"
+              enable_plugin "luci-app-upnp"
+              ;;
             "standard")
-              for plugin in luci-app-upnp luci-app-wireguard luci-app-samba4 luci-app-turboacc; do
-                echo "CONFIG_PACKAGE_${plugin}=y" >> .config
-              done
+              echo "🔧 标准配置..." | tee -a "$MAIN_LOG"
+              # 网络核心插件
+              enable_plugin "luci-app-upnp"
+              enable_plugin "luci-app-wireguard"
+              enable_plugin "luci-app-samba4"
+              enable_plugin "luci-app-turboacc"
+              
+              # 网络优化插件
+              enable_plugin "luci-app-arpbind"
+              enable_plugin "luci-app-cpulimit"
+              enable_plugin "luci-app-eqosplus"
+              
+              # 系统工具插件
+              enable_plugin "luci-app-diskman"
+              enable_plugin "luci-app-hd-idle"
+              enable_plugin "luci-app-parentcontrol"
+              enable_plugin "luci-app-wechatpush"
+              
+              # DNS和网络服务
+              enable_plugin "luci-app-smartdns"
+              enable_plugin "luci-app-vlmcsd"
+              enable_plugin "luci-app-vsftpd"
+              enable_plugin "luci-app-ttyd"
+              enable_plugin "luci-app-sqm-autorate"
+              enable_plugin "automount"
               ;;
             "full")
-              for plugin in luci-app-upnp luci-app-wireguard luci-app-samba4 luci-app-turboacc luci-app-adblock luci-app-wol luci-app-ddns; do
-                echo "CONFIG_PACKAGE_${plugin}=y" >> .config
+              echo "🔧 完整配置..." | tee -a "$MAIN_LOG"
+              for plugin in luci-app-upnp luci-app-wireguard luci-app-samba4 luci-app-turboacc \
+                           luci-app-arpbind luci-app-cpulimit luci-app-diskman luci-app-eqosplus \
+                           luci-app-hd-idle luci-app-parentcontrol luci-app-wechatpush \
+                           luci-app-smartdns luci-app-vlmcsd luci-app-vsftpd luci-app-ttyd \
+                           luci-app-sqm-autorate luci-app-adblock luci-app-wol luci-app-ddns \
+                           luci-app-qos luci-app-statistics luci-app-vpn-policy-routing \
+                           luci-app-nft-qos luci-app-uhttpd luci-app-firewall luci-app-olsr \
+                           luci-app-olsr-services luci-app-olsr-viz luci-app-bcp38 \
+                           luci-app-commands luci-app-diag-core luci-app-nlbwmon \
+                           luci-app-splash luci-app-radicale2; do
+                enable_plugin "$plugin"
+              done
+              ;;
+            "custom")
+              echo "🔧 自定义配置..." | tee -a "$MAIN_LOG"
+              CUSTOM_PLUGINS_FILE="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-plugins.txt"
+              if [ -f "$CUSTOM_PLUGINS_FILE" ]; then
+                echo "📋 读取自定义插件列表..." | tee -a "$MAIN_LOG"
+                while IFS= read -r plugin; do
+                  if [ -n "$plugin" ] && [[ ! "$plugin" =~ ^# ]]; then
+                    enable_plugin "$plugin"
+                  fi
+                done < "$CUSTOM_PLUGINS_FILE"
+              else
+                echo "ℹ️ 未找到自定义插件列表，使用标准配置" | tee -a "$MAIN_LOG"
+                # 回退到标准配置
+                for plugin in luci-app-upnp luci-app-wireguard luci-app-samba4 luci-app-turboacc; do
+                  enable_plugin "$plugin"
+                done
+              fi
+              ;;
+          esac
+          
+          echo "✅ 插件配置完成" | tee -a "$MAIN_LOG"
+
+      - name: "🌐 语言包配置"
+        id: language_setup
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🌐 语言包配置 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          LANGUAGE="${{ github.event.inputs.language_pack }}"
+          echo "🎯 语言包选择: $LANGUAGE" | tee -a "$MAIN_LOG"
+          
+          CURRENT_BRANCH="${{ env.ACTUAL_BRANCH }}"
+          
+          case "$LANGUAGE" in
+            "zh-cn")
+              echo "🔧 启用中文语言包..." | tee -a "$MAIN_LOG"
+              if [[ "$CURRENT_BRANCH" == *"21.02"* ]]; then
+                sed -i 's/# CONFIG_PACKAGE_luci-i18n-base-zh-cn is not set/CONFIG_PACKAGE_luci-i18n-base-zh-cn=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
+              else
+                sed -i 's/# CONFIG_PACKAGE_luci-i18n-base-zh_Hans is not set/CONFIG_PACKAGE_luci-i18n-base-zh_Hans=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci-i18n-base-zh_Hans=y" >> .config
+              fi
+              ;;
+            "en-only")
+              echo "🔧 仅保留英文..." | tee -a "$MAIN_LOG"
+              sed -i 's/CONFIG_PACKAGE_luci-i18n-[^e][^n].*=y/# &/' .config
+              ;;
+            "all")
+              echo "🔧 启用所有语言包..." | tee -a "$MAIN_LOG"
+              for lang in $(grep "CONFIG_PACKAGE_luci-i18n-" .config | grep "is not set" | cut -d' ' -f2); do
+                sed -i "s/# $lang is not set/$lang=y/" .config
               done
               ;;
           esac
           
-          # 最终配置
+          echo "✅ 语言包配置完成" | tee -a "$MAIN_LOG"
+
+      - name: "🔧 高级功能增强"
+        id: advanced_features
+        if: github.event.inputs.enable_advanced == 'true'
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          WARNING_LOG="${{ env.WARNING_LOG }}"
+          echo "=== 🔧 高级功能增强 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "🔧 高级功能状态: 已启用" | tee -a "$MAIN_LOG"
+          
+          # 自定义IPK包处理
+          echo "📦 安装自定义IPK包..." | tee -a "$MAIN_LOG"
+          IPK_DIR="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/prebuilt-ipks"
+          IPK_COUNT=0
+          
+          if [ -d "$IPK_DIR" ]; then
+            echo "🔍 查找自定义IPK包..." | tee -a "$MAIN_LOG"
+            IPK_FILES=$(find "$IPK_DIR" -name "*.ipk" -type f 2>/dev/null || true)
+            if [ -n "$IPK_FILES" ]; then
+              echo "✅ 找到自定义IPK包:" | tee -a "$MAIN_LOG"
+              mkdir -p package/custom
+              for ipk in $IPK_FILES; do
+                ipk_name=$(basename "$ipk")
+                echo "  - 复制 $ipk_name" | tee -a "$MAIN_LOG"
+                cp "$ipk" package/custom/
+                IPK_COUNT=$((IPK_COUNT + 1))
+                
+                # 确保IPK包被包含在构建中
+                ipk_basename=$(basename "$ipk" .ipk)
+                echo "CONFIG_PACKAGE_${ipk_basename}=y" >> .config
+              done
+              echo "✅ 成功添加 $IPK_COUNT 个自定义IPK包" | tee -a "$MAIN_LOG"
+            else
+              echo "ℹ️ 未找到自定义IPK包" | tee -a "$MAIN_LOG"
+            fi
+          else
+            echo "ℹ️ 自定义IPK目录不存在: $IPK_DIR" | tee -a "$MAIN_LOG"
+          fi
+          
+          echo "CUSTOM_IPK_COUNT=$IPK_COUNT" >> $GITHUB_ENV
+          
+          # 自定义脚本执行
+          echo "🔧 执行自定义脚本..." | tee -a "$MAIN_LOG"
+          SCRIPT_PATHS=(
+            "${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/scripts"
+            "${{ env.CONFIG_REPO_DIR }}/firmware-config/scripts" 
+            "${{ env.CONFIG_REPO_DIR }}/scripts"
+            "${{ env.CONFIG_REPO_DIR }}/firmware-config"
+          )
+          
+          SCRIPT_COUNT=0
+          for script_path in "${SCRIPT_PATHS[@]}"; do
+            if [ -d "$script_path" ]; then
+              echo "🔍 在 $script_path 中查找脚本..." | tee -a "$MAIN_LOG"
+              SCRIPTS=$(find "$script_path" -maxdepth 2 -name "*.sh" -type f 2>/dev/null | sort || true)
+              if [ -n "$SCRIPTS" ]; then
+                for script in $SCRIPTS; do
+                  script_name=$(basename "$script")
+                  echo "📜 执行脚本: $script_name..." | tee -a "$MAIN_LOG"
+                  chmod +x "$script"
+                  
+                  TEMP_LOG=$(mktemp)
+                  if { bash "$script" 2>&1 | tee "$TEMP_LOG"; } then
+                    echo "✅ 自定义脚本执行成功: $script_name" | tee -a "$MAIN_LOG"
+                    SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
+                  else
+                    echo "⚠️ 自定义脚本执行有警告: $script_name" | tee -a "$MAIN_LOG"
+                    grep -i -E "error|failed|No such file" "$TEMP_LOG" >> "$WARNING_LOG" || true
+                  fi
+                  cat "$TEMP_LOG" >> "$MAIN_LOG"
+                  rm -f "$TEMP_LOG"
+                done
+              else
+                echo "ℹ️ 在 $script_path 中未找到脚本" | tee -a "$MAIN_LOG"
+              fi
+            else
+              echo "ℹ️ 脚本目录不存在: $script_path" | tee -a "$MAIN_LOG"
+            fi
+          done
+          
+          echo "CUSTOM_SCRIPT_COUNT=$SCRIPT_COUNT" >> $GITHUB_ENV
+          echo "✅ 高级功能应用完成，执行了 $SCRIPT_COUNT 个脚本" | tee -a "$MAIN_LOG"
+
+      - name: "🔄 最终配置处理"
+        id: final_config
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔄 最终配置处理 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "🔧 运行defconfig..." | tee -a "$MAIN_LOG"
           make defconfig
-          echo "✅ 智能配置完成" | tee -a "$MAIN_LOG"
+          
+          echo "📋 最终配置检查..." | tee -a "$MAIN_LOG"
+          echo "启用的LUCI应用:" | tee -a "$MAIN_LOG"
+          grep "CONFIG_PACKAGE_luci-app" .config | grep "=y" | tee -a "$MAIN_LOG"
+          
+          echo "✅ 最终配置完成" | tee -a "$MAIN_LOG"
 
       - name: "🚀 并行下载优化"
         id: download_deps
@@ -347,13 +580,11 @@ jobs:
           echo "=== 🚀 并行下载优化 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
-          # 配置下载镜像
           sed -i 's|https://sources.cdn.openwrt.org|https://mirror2.openwrt.org/sources|g' scripts/download.pl
           
           echo "📥 开始并行下载..." | tee -a "$MAIN_LOG"
           PARALLEL_JOBS="${{ env.PARALLEL_JOBS }}"
           
-          # 使用并行下载
           if make download -j$PARALLEL_JOBS; then
             echo "✅ 下载成功" | tee -a "$MAIN_LOG"
           else
@@ -366,7 +597,7 @@ jobs:
 
       - name: "⚡ 智能增量编译"
         id: smart_build
-        timeout-minutes: 180
+        timeout-minutes: 150
         run: |
           set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
@@ -382,14 +613,12 @@ jobs:
           
           echo "🔧 编译配置: 并行作业=$PARALLEL_JOBS, 跳过测试=$SKIP_TESTS" | tee -a "$MAIN_LOG"
           
-          # 编译策略
           if [ "$SKIP_TESTS" = "true" ]; then
             EXTRA_FLAGS="IGNORE_ERRORS=m"
           else
             EXTRA_FLAGS=""
           fi
           
-          # 智能编译：优先编译工具链和内核
           echo "🛠️ 阶段1: 编译工具链..." | tee -a "$MAIN_LOG"
           make toolchain/compile -j$PARALLEL_JOBS $EXTRA_FLAGS
           
@@ -402,10 +631,8 @@ jobs:
             echo "BUILD_STATUS=success" >> $GITHUB_ENV
           else
             echo "⚠️ 编译有错误，但继续检查产物..." | tee -a "$MAIN_LOG"
-            # 即使编译报错也检查是否有固件生成
           fi
           
-          # 检查构建产物
           if find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) | grep -q .; then
             echo "🎉 找到固件文件！" | tee -a "$MAIN_LOG"
             echo "BUILD_STATUS=success" >> $GITHUB_ENV
@@ -426,7 +653,6 @@ jobs:
           echo "=== 🔍 快速固件分析 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
-          # 快速分析固件
           FIRMWARE_COUNT=0
           TOTAL_SIZE=0
           
@@ -459,14 +685,14 @@ jobs:
           ARTIFACT_COUNT=0
           
           if [ -d "/mnt/source/bin/targets" ]; then
-            # 并行复制固件文件
             find /mnt/source/bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) -exec cp {} /mnt/artifacts/firmware/ \;
             ARTIFACT_COUNT=$(ls /mnt/artifacts/firmware/ | wc -l)
           fi
           
-          # 复制日志文件
           cp "$MAIN_LOG" /mnt/artifacts/ 2>/dev/null || true
           cp "$ERROR_LOG" /mnt/artifacts/ 2>/dev/null || true
+          cp "$WARNING_LOG" /mnt/artifacts/ 2>/dev/null || true
+          cp "$ANALYSIS_REPORT" /mnt/artifacts/ 2>/dev/null || true
           
           echo "ARTIFACT_COUNT=$ARTIFACT_COUNT" >> $GITHUB_ENV
           echo "✅ 收集了 $ARTIFACT_COUNT 个产物" | tee -a "$MAIN_LOG"
@@ -479,7 +705,7 @@ jobs:
           name: "Build-Artifacts-${{ github.run_number }}"
           path: |
             /mnt/artifacts
-          retention-days: 7  # 减少保留天数以节省存储
+          retention-days: 7
           compression-level: 6
 
       - name: "📊 极速构建报告"
@@ -499,6 +725,10 @@ jobs:
           echo "  - 固件数量: ${{ env.FIRMWARE_COUNT || 0 }}"
           echo "  - 固件大小: ${{ env.FIRMWARE_SIZE_MB || 'unknown' }}MB"
           echo "  - 产物数量: ${{ env.ARTIFACT_COUNT || 0 }}"
+          echo ""
+          echo "🔧 高级功能:"
+          echo "  - 自定义IPK: ${{ env.CUSTOM_IPK_COUNT || 0 }} 个"
+          echo "  - 自定义脚本: ${{ env.CUSTOM_SCRIPT_COUNT || 0 }} 个"
           echo ""
           echo "⏱️ 构建时间:"
           echo "  - 开始: 见构建日志"
