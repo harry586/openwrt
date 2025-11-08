@@ -1,4 +1,4 @@
-name: "🚀 超快速固件构建器 - 完整修复版"
+name: "🚀 超快速固件构建器 - 优化版"
 
 on:
   workflow_dispatch:
@@ -20,6 +20,12 @@ on:
         required: true
         type: string
         default: "ac42u"
+      build_mode:
+        description: "构建模式"
+        required: true
+        type: choice
+        options: ["minimal", "standard", "full", "custom"]
+        default: "standard"
       build_optimization:
         description: "编译优化策略"
         required: true
@@ -37,17 +43,6 @@ on:
         type: choice
         options: ["zh-cn", "en-only", "all"]
         default: "zh-cn"
-      plugin_preset:
-        description: "插件预设"
-        required: true
-        type: choice
-        options: ["minimal", "standard", "full", "custom"]
-        default: "standard"
-      skip_tests:
-        description: "跳过测试阶段"
-        required: false
-        default: true
-        type: boolean
       auto_commit_config:
         description: "自动提交新配置文件"
         required: false
@@ -89,15 +84,15 @@ jobs:
           ANALYSIS_REPORT="/mnt/build-logs/analysis_report.md"
           
           echo "🏁 极速构建开始: $(date)" > $MAIN_LOG
-          echo "🚀 工作流版本: 超快速固件构建器 - 完整修复版" >> $MAIN_LOG
+          echo "🚀 工作流版本: 超快速固件构建器 - 优化版" >> $MAIN_LOG
           echo "📋 输入参数:" >> $MAIN_LOG
           echo "  - 源码预设: ${{ github.event.inputs.source_preset }}" >> $MAIN_LOG
           echo "  - 源码分支: ${{ github.event.inputs.source_branch }}" >> $MAIN_LOG
           echo "  - 配置方案: ${{ github.event.inputs.config_profile }}" >> $MAIN_LOG
+          echo "  - 构建模式: ${{ github.event.inputs.build_mode }}" >> $MAIN_LOG
           echo "  - 优化策略: ${{ github.event.inputs.build_optimization }}" >> $MAIN_LOG
           echo "  - 高级功能: ${{ github.event.inputs.enable_advanced }}" >> $MAIN_LOG
           echo "  - 语言包: ${{ github.event.inputs.language_pack }}" >> $MAIN_LOG
-          echo "  - 插件预设: ${{ github.event.inputs.plugin_preset }}" >> $MAIN_LOG
           echo "  - 自动提交配置: ${{ github.event.inputs.auto_commit_config }}" >> $MAIN_LOG
           echo "==========================================" >> $MAIN_LOG
           
@@ -211,6 +206,201 @@ jobs:
           echo "SOURCE_PRESET=$PRESET" >> $GITHUB_ENV
           echo "✅ 源码获取完成: $ACTUAL_BRANCH@$COMMIT_HASH" | tee -a "$MAIN_LOG"
 
+      - name: "🎛️ 模式配置文件处理"
+        id: mode_config
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🎛️ 模式配置文件处理 ===" | tee -a "$MAIN_LOG"
+          
+          BUILD_MODE="${{ github.event.inputs.build_mode }}"
+          CONFIG_REPO="${{ env.CONFIG_REPO_DIR }}"
+          MODE_CONFIG_DIR="$CONFIG_REPO/firmware-config/modes"
+          
+          echo "🎯 构建模式: $BUILD_MODE" | tee -a "$MAIN_LOG"
+          
+          mkdir -p "$MODE_CONFIG_DIR"
+          
+          case "$BUILD_MODE" in
+            "minimal")
+              echo "🔧 创建最小化模式配置..." | tee -a "$MAIN_LOG"
+              echo "# ============================================" > "$MODE_CONFIG_DIR/minimal.conf"
+              echo "# 最小化构建模式配置" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "# ============================================" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "# 基础系统配置" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_base-files=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_busybox=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_dropbear=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_firewall=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_fstools=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_libc=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_libgcc=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_logd=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_mtd=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_netifd=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_opkg=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_procd=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_swconfig=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_ubox=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_ubus=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_ubusd=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_uci=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_uclient-fetch=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_urandom-seed=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              echo "CONFIG_PACKAGE_usign=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+              ;;
+            
+            "standard")
+              echo "🔧 创建标准模式配置..." | tee -a "$MAIN_LOG"
+              echo "# ============================================" > "$MODE_CONFIG_DIR/standard.conf"
+              echo "# 标准构建模式配置" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "# ============================================" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "# 基础系统配置" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_base-files=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_busybox=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_dropbear=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_firewall=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_fstools=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_libc=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_libgcc=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_logd=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_mtd=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_netifd=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_opkg=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_procd=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_swconfig=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_ubox=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_ubus=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_ubusd=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_uci=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_uclient-fetch=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_urandom-seed=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_usign=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "# 完整网络支持" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_dnsmasq-full=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_iptables=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_iptables-mod-ipopt=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_iptables-mod-nat-extra=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-ipt-core=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-ipt-ipset=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-ipt-nat=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-nf-conntrack=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-nf-conntrack6=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-nf-flow=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-nf-ipt=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-nf-nat=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-nf-reject=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-nf-reject6=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_odhcp6c=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "# 完整文件系统支持" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_block-mount=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-fs-autofs4=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-fs-btrfs=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-fs-exfat=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-fs-f2fs=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-fs-ntfs=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-fuse=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "# 完整无线支持" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-ath=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-ath10k=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-ath9k=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-ath9k-common=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-cfg80211=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-mac80211=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_hostapd-common=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "# USB支持" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-usb-core=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-usb-storage-extras=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-usb2=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_kmod-usb3=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "# LUCI应用" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_luci=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_luci-app-firewall=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_luci-app-opkg=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_luci-base=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_luci-compat=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_luci-proto-ipv6=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> "$MODE_CONFIG_DIR/standard.conf"
+              ;;
+            
+            "full")
+              echo "🔧 创建完整模式配置..." | tee -a "$MAIN_LOG"
+              echo "# ============================================" > "$MODE_CONFIG_DIR/full.conf"
+              echo "# 完整构建模式配置" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "# ============================================" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "# 基础系统配置" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_base-files=y" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_busybox=y" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_dropbear=y" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_firewall=y" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_fstools=y" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_libc=y" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_libgcc=y" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_logd=y" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_mtd=y" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_netifd=y" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_opkg=y" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_procd=y" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_swconfig=y" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_ubox=y" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_ubus=y" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_ubusd=y" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_uci=y" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_uclient-fetch=y" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_urandom-seed=y" >> "$MODE_CONFIG_DIR/full.conf"
+              echo "CONFIG_PACKAGE_usign=y" >> "$MODE_CONFIG_DIR/full.conf"
+              ;;
+            
+            "custom")
+              echo "🔧 创建自定义模式配置..." | tee -a "$MAIN_LOG"
+              echo "# ============================================" > "$MODE_CONFIG_DIR/custom.conf"
+              echo "# 自定义构建模式配置" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "# ============================================" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "# 基础系统（必选）" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "CONFIG_PACKAGE_base-files=y" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "CONFIG_PACKAGE_busybox=y" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "CONFIG_PACKAGE_dropbear=y" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "CONFIG_PACKAGE_firewall=y" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "CONFIG_PACKAGE_fstools=y" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "CONFIG_PACKAGE_libc=y" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "CONFIG_PACKAGE_libgcc=y" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "CONFIG_PACKAGE_logd=y" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "CONFIG_PACKAGE_netifd=y" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "CONFIG_PACKAGE_opkg=y" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "CONFIG_PACKAGE_procd=y" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "CONFIG_PACKAGE_ubox=y" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "CONFIG_PACKAGE_ubus=y" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "CONFIG_PACKAGE_ubusd=y" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "CONFIG_PACKAGE_uci=y" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "CONFIG_PACKAGE_uclient-fetch=y" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "CONFIG_PACKAGE_urandom-seed=y" >> "$MODE_CONFIG_DIR/custom.conf"
+              echo "CONFIG_PACKAGE_usign=y" >> "$MODE_CONFIG_DIR/custom.conf"
+              ;;
+          esac
+          
+          echo "BUILD_MODE=$BUILD_MODE" >> $GITHUB_ENV
+          echo "MODE_CONFIG_DIR=$MODE_CONFIG_DIR" >> $GITHUB_ENV
+          echo "✅ 模式配置文件创建完成: $BUILD_MODE" | tee -a "$MAIN_LOG"
+
       - name: "📝 智能配置创建与处理"
         id: config_creation
         run: |
@@ -222,8 +412,10 @@ jobs:
           CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
           CONFIG_DIR="${{ env.CONFIG_REPO_DIR }}/firmware-config/configs"
           CONFIG_FILE="$CONFIG_DIR/config_$CONFIG_PROFILE"
+          MODE_CONFIG="${{ env.MODE_CONFIG_DIR }}/${{ github.event.inputs.build_mode }}.conf"
           
           echo "🔍 查找配置文件: $CONFIG_FILE" | tee -a "$MAIN_LOG"
+          echo "🎛️ 应用模式配置: $MODE_CONFIG" | tee -a "$MAIN_LOG"
           
           if [ -f "$CONFIG_FILE" ]; then
             cp "$CONFIG_FILE" .config
@@ -233,10 +425,8 @@ jobs:
             echo "🔧 配置文件不存在，创建新配置..." | tee -a "$MAIN_LOG"
             mkdir -p "$CONFIG_DIR"
             
-            # 根据设备名称猜测目标配置
             echo "🎯 智能分析设备名称: $CONFIG_PROFILE" | tee -a "$MAIN_LOG"
             
-            # 创建通用配置文件模板
             echo "# =============================================" > "$CONFIG_FILE"
             echo "# 通用设备配置 - $CONFIG_PROFILE" >> "$CONFIG_FILE"
             echo "# 自动生成于 $(date)" >> "$CONFIG_FILE"
@@ -246,7 +436,6 @@ jobs:
             echo "# 基础目标配置" >> "$CONFIG_FILE"
             echo "# ======================" >> "$CONFIG_FILE"
 
-            # 根据设备名称猜测目标配置
             TARGET_CONFIG=""
             if [[ "$CONFIG_PROFILE" =~ ^rt-ac42u$|^ac42u$|^asus.*ac42u ]]; then
               echo "# ASUS RT-AC42U 设备 (IPQ40xx)" >> "$CONFIG_FILE"
@@ -292,7 +481,6 @@ jobs:
               TARGET_CONFIG="generic"
             fi
             
-            # 添加通用配置
             echo "" >> "$CONFIG_FILE"
             echo "# ======================" >> "$CONFIG_FILE"
             echo "# 镜像配置" >> "$CONFIG_FILE"
@@ -305,93 +493,20 @@ jobs:
             echo "# 分区大小" >> "$CONFIG_FILE"
             echo "CONFIG_TARGET_KERNEL_PARTSIZE=16" >> "$CONFIG_FILE"
             echo "CONFIG_TARGET_ROOTFS_PARTSIZE=96" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "# LUCI 核心配置" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_luci=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_luci-base=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_luci-compat=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "# 基础系统包" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_base-files=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_busybox=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_dnsmasq-full=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_dropbear=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_firewall=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_fstools=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_iptables=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_libc=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_libgcc=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_logd=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_mtd=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_netifd=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_opkg=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_ubus=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_ubusd=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_uci=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_uclient-fetch=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_urandom-seed=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_usign=y" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "# IPv6 支持" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_odhcp6c=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_ip6tables=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> "$CONFIG_FILE"
-            echo "# CONFIG_PACKAGE_6in4 is not set" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "# 网络服务" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "# 文件系统支持" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_kmod-fs-ntfs=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_block-mount=y" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "# 系统工具" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_htop=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_nano=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_curl=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_wget=y" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "# 编译选项" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "CONFIG_CCACHE=y" >> "$CONFIG_FILE"
-            echo "CONFIG_BUILD_LOG=y" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# 排除的应用程序" >> "$CONFIG_FILE"
-            echo "# CONFIG_PACKAGE_luci-app-wireguard is not set" >> "$CONFIG_FILE"
-            echo "# CONFIG_PACKAGE_luci-app-ddns is not set" >> "$CONFIG_FILE"
-            echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> "$CONFIG_FILE"
-            echo "# CONFIG_PACKAGE_luci-app-eqosplus is not set" >> "$CONFIG_FILE"
-            echo "# CONFIG_PACKAGE_luci-app-parentcontrol is not set" >> "$CONFIG_FILE"
-            echo "# CONFIG_PACKAGE_luci-app-nlbwmon is not set" >> "$CONFIG_FILE"
-            echo "# CONFIG_PACKAGE_luci-theme-material is not set" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# 禁用调试减小体积" >> "$CONFIG_FILE"
-            echo "# CONFIG_DEBUG is not set" >> "$CONFIG_FILE"
-            echo "# CONFIG_DEVEL is not set" >> "$CONFIG_FILE"
-
+            
             cp "$CONFIG_FILE" .config
             echo "CONFIG_SOURCE=new" >> $GITHUB_ENV
             echo "TARGET_CONFIG=$TARGET_CONFIG" >> $GITHUB_ENV
             echo "✅ 已创建智能配置文件: $CONFIG_FILE" | tee -a "$MAIN_LOG"
             echo "🎯 目标配置类型: $TARGET_CONFIG" | tee -a "$MAIN_LOG"
+          fi
+          
+          if [ -f "$MODE_CONFIG" ]; then
+            echo "🔧 应用模式配置文件..." | tee -a "$MAIN_LOG"
+            cat "$MODE_CONFIG" >> .config
+            echo "✅ 模式配置应用完成: ${{ github.event.inputs.build_mode }}" | tee -a "$MAIN_LOG"
+          else
+            echo "⚠️ 模式配置文件不存在: $MODE_CONFIG" | tee -a "$MAIN_LOG"
           fi
           
           echo "⚡ 预配置优化选项..." | tee -a "$MAIN_LOG"
@@ -403,567 +518,143 @@ jobs:
           
           echo "✅ 配置创建与处理完成" | tee -a "$MAIN_LOG"
 
-      - name: "🔄 并行Feeds更新"
-        id: feeds_setup
+      - name: "🔧 动态设备配置修复"
+        id: dynamic_device_fix
         run: |
           set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔄 并行Feeds更新 ===" | tee -a "$MAIN_LOG"
+          echo "=== 🔧 动态设备配置修复 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
-          CURRENT_BRANCH=$(git branch --show-current)
-          if [[ "$CURRENT_BRANCH" == *"22.03"* ]]; then FEEDS_BRANCH="openwrt-22.03"
-          elif [[ "$CURRENT_BRANCH" == *"21.02"* ]]; then FEEDS_BRANCH="openwrt-21.02"
-          else FEEDS_BRANCH="master"; fi
+          CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
+          echo "🎯 动态修复设备配置: $CONFIG_PROFILE" | tee -a "$MAIN_LOG"
           
-          case "${{ env.SOURCE_PRESET }}" in
-            "immortalwrt")
-              echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf
-              echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf
-              ;;
-            "openwrt")
-              echo "src-git packages https://git.openwrt.org/feed/packages.git;$FEEDS_BRANCH" > feeds.conf
-              echo "src-git luci https://git.openwrt.org/project/luci.git;$FEEDS_BRANCH" >> feeds.conf
-              ;;
-            "lede")
-              echo "src-git packages https://github.com/coolsnowwolf/packages.git;$FEEDS_BRANCH" > feeds.conf
-              echo "src-git luci https://github.com/coolsnowwolf/luci.git;$FEEDS_BRANCH" >> feeds.conf
-              ;;
-          esac
+          echo "# ======================" >> .config
+          echo "# 动态设备配置修复" >> .config
+          echo "# ======================" >> .config
           
-          echo "src-git routing https://github.com/openwrt/routing.git;$FEEDS_BRANCH" >> feeds.conf
-          
-          echo "🔄 并行更新feeds..." | tee -a "$MAIN_LOG"
-          ./scripts/feeds update -a &
-          FEEDS_PID=$!
-          
-          mkdir -p /mnt/downloads
-          [ -d "dl" ] && rm -rf dl
-          ln -sf /mnt/downloads dl
-          
-          wait $FEEDS_PID
-          ./scripts/feeds install -a
-          
-          echo "✅ Feeds更新完成" | tee -a "$MAIN_LOG"
-
-      - name: "🎯 完整插件配置"
-        id: plugin_setup
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🎯 完整插件配置 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          
-          PRESET="${{ github.event.inputs.plugin_preset }}"
-          echo "🎯 插件预设: $PRESET" | tee -a "$MAIN_LOG"
-          
-          mkdir -p package/custom feeds/luci/applications
-          
-          enable_plugin() {
-            local plugin=$1
-            local description=$2
-            local config_name="CONFIG_PACKAGE_${plugin}"
-            
-            if grep -q "${config_name}=y" .config; then
-              echo "✅ 已启用: $plugin ($description)" | tee -a "$MAIN_LOG"
-              return 0
-            fi
-            
-            if grep -q "${config_name} is not set" .config; then
-              sed -i "s/# ${config_name} is not set/${config_name}=y/" .config
-              echo "✅ 启用: $plugin ($description)" | tee -a "$MAIN_LOG"
-            else
-              echo "${config_name}=y" >> .config
-              echo "✅ 新增: $plugin ($description)" | tee -a "$MAIN_LOG"
-            fi
-          }
-          
-          disable_plugin() {
-            local plugin=$1
-            local config_name="CONFIG_PACKAGE_${plugin}"
-            
-            if grep -q "${config_name}=y" .config; then
-              sed -i "s/${config_name}=y/# ${config_name} is not set/" .config
-              echo "❌ 禁用: $plugin" | tee -a "$MAIN_LOG"
-            fi
-          }
-          
-          # 确保禁用用户指定的插件
-          echo "🔧 禁用指定插件..." | tee -a "$MAIN_LOG"
-          disable_plugin "luci-app-wireguard"
-          disable_plugin "luci-app-ddns"
-          disable_plugin "luci-app-wol"
-          disable_plugin "luci-app-eqosplus"
-          disable_plugin "luci-app-parentcontrol"
-          disable_plugin "luci-app-nlbwmon"
-          disable_plugin "6in4"
-          
-          case "$PRESET" in
-            "minimal")
-              echo "🔧 最小化配置..." | tee -a "$MAIN_LOG"
-              enable_plugin "luci-app-upnp" "UPnP端口转发"
-              enable_plugin "luci-app-firewall" "防火墙"
-              ;;
-            "standard")
-              echo "🔧 标准配置..." | tee -a "$MAIN_LOG"
-              enable_plugin "luci-app-upnp" "UPnP端口转发"
-              enable_plugin "luci-app-samba4" "网络共享(Samba)"
-              enable_plugin "luci-app-turboacc" "网络加速"
-              enable_plugin "luci-app-arpbind" "IP/MAC绑定"
-              enable_plugin "luci-app-cpulimit" "CPU限制"
-              enable_plugin "luci-app-diskman" "磁盘管理"
-              enable_plugin "luci-app-hd-idle" "硬盘休眠"
-              enable_plugin "luci-app-wechatpush" "微信推送"
-              enable_plugin "luci-app-smartdns" "智能DNS"
-              enable_plugin "luci-app-vlmcsd" "KMS激活"
-              enable_plugin "luci-app-vsftpd" "FTP服务器"
-              enable_plugin "luci-app-ttyd" "网页终端"
-              enable_plugin "luci-app-sqm-autorate" "智能QoS"
-              enable_plugin "automount" "自动挂载"
-              ;;
-            "full")
-              echo "🔧 完整配置..." | tee -a "$MAIN_LOG"
-              # 基础网络
-              enable_plugin "luci-app-upnp" "UPnP端口转发"
-              enable_plugin "luci-app-samba4" "网络共享(Samba)"
-              enable_plugin "luci-app-turboacc" "网络加速"
-              enable_plugin "luci-app-arpbind" "IP/MAC绑定"
-              enable_plugin "luci-app-cpulimit" "CPU限制"
-              enable_plugin "luci-app-diskman" "磁盘管理"
-              enable_plugin "luci-app-hd-idle" "硬盘休眠"
-              
-              # 高级功能
-              enable_plugin "luci-app-wechatpush" "微信推送"
-              enable_plugin "luci-app-smartdns" "智能DNS"
-              enable_plugin "luci-app-vlmcsd" "KMS激活"
-              enable_plugin "luci-app-vsftpd" "FTP服务器"
-              enable_plugin "luci-app-ttyd" "网页终端"
-              enable_plugin "luci-app-sqm-autorate" "智能QoS"
-              enable_plugin "automount" "自动挂载"
-              
-              # 扩展功能
-              enable_plugin "luci-app-adblock" "广告过滤"
-              enable_plugin "luci-app-qos" "流量控制"
-              enable_plugin "luci-app-statistics" "流量统计"
-              enable_plugin "luci-app-vpn-policy-routing" "VPN策略路由"
-              enable_plugin "luci-app-nft-qos" "Nftables QoS"
-              enable_plugin "luci-app-uhttpd" "Web服务器"
-              enable_plugin "luci-app-firewall" "防火墙"
-              enable_plugin "luci-app-olsr" "OLSR网格网络"
-              enable_plugin "luci-app-olsr-services" "OLSR服务"
-              enable_plugin "luci-app-olsr-viz" "OLSR可视化"
-              enable_plugin "luci-app-bcp38" "BCP38支持"
-              enable_plugin "luci-app-commands" "自定义命令"
-              enable_plugin "luci-app-diag-core" "诊断工具"
-              enable_plugin "luci-app-splash" "Captive Portal"
-              enable_plugin "luci-app-radicale2" "CalDAV/CardDAV"
-              ;;
-            "custom")
-              echo "🔧 自定义配置..." | tee -a "$MAIN_LOG"
-              CUSTOM_PLUGINS_FILE="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-plugins.txt"
-              if [ -f "$CUSTOM_PLUGINS_FILE" ]; then
-                echo "📋 读取自定义插件列表..." | tee -a "$MAIN_LOG"
-                while IFS= read -r plugin; do
-                  if [ -n "$plugin" ] && [[ ! "$plugin" =~ ^# ]]; then
-                    enable_plugin "$plugin" "自定义插件"
-                  fi
-                done < "$CUSTOM_PLUGINS_FILE"
-              else
-                echo "ℹ️ 未找到自定义插件列表，使用标准配置" | tee -a "$MAIN_LOG"
-                enable_plugin "luci-app-upnp" "UPnP端口转发"
-                enable_plugin "luci-app-samba4" "网络共享(Samba)"
-                enable_plugin "luci-app-turboacc" "网络加速"
-              fi
-              ;;
-          esac
-          
-          echo "✅ 插件配置完成" | tee -a "$MAIN_LOG"
-
-      - name: "🌐 语言包配置"
-        id: language_setup
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🌐 语言包配置 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          
-          LANGUAGE="${{ github.event.inputs.language_pack }}"
-          echo "🎯 语言包选择: $LANGUAGE" | tee -a "$MAIN_LOG"
-          
-          CURRENT_BRANCH="${{ env.ACTUAL_BRANCH }}"
-          
-          case "$LANGUAGE" in
-            "zh-cn")
-              echo "🔧 启用中文语言包..." | tee -a "$MAIN_LOG"
-              if [[ "$CURRENT_BRANCH" == *"21.02"* ]]; then
-                sed -i 's/# CONFIG_PACKAGE_luci-i18n-base-zh-cn is not set/CONFIG_PACKAGE_luci-i18n-base-zh-cn=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
-              else
-                sed -i 's/# CONFIG_PACKAGE_luci-i18n-base-zh_Hans is not set/CONFIG_PACKAGE_luci-i18n-base-zh_Hans=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci-i18n-base-zh_Hans=y" >> .config
-              fi
-              ;;
-            "en-only")
-              echo "🔧 仅保留英文..." | tee -a "$MAIN_LOG"
-              sed -i 's/CONFIG_PACKAGE_luci-i18n-[^e][^n].*=y/# &/' .config
-              ;;
-            "all")
-              echo "🔧 启用所有语言包..." | tee -a "$MAIN_LOG"
-              for lang in $(grep "CONFIG_PACKAGE_luci-i18n-" .config | grep "is not set" | cut -d' ' -f2); do
-                sed -i "s/# $lang is not set/$lang=y/" .config
-              done
-              ;;
-          esac
-          
-          echo "✅ 语言包配置完成" | tee -a "$MAIN_LOG"
-
-      - name: "🔧 高级功能增强"
-        id: advanced_features
-        if: github.event.inputs.enable_advanced == 'true'
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          WARNING_LOG="${{ env.WARNING_LOG }}"
-          echo "=== 🔧 高级功能增强 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          
-          echo "🔧 高级功能状态: 已启用" | tee -a "$MAIN_LOG"
-          
-          echo "📦 安装自定义IPK包..." | tee -a "$MAIN_LOG"
-          IPK_DIR="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/prebuilt-ipks"
-          IPK_COUNT=0
-          
-          if [ -d "$IPK_DIR" ]; then
-            echo "🔍 查找自定义IPK包..." | tee -a "$MAIN_LOG"
-            IPK_FILES=$(find "$IPK_DIR" -name "*.ipk" -type f 2>/dev/null || true)
-            if [ -n "$IPK_FILES" ]; then
-              echo "✅ 找到自定义IPK包:" | tee -a "$MAIN_LOG"
-              mkdir -p package/custom
-              for ipk in $IPK_FILES; do
-                ipk_name=$(basename "$ipk")
-                echo "  - 复制 $ipk_name" | tee -a "$MAIN_LOG"
-                cp "$ipk" package/custom/
-                IPK_COUNT=$((IPK_COUNT + 1))
-                ipk_basename=$(basename "$ipk" .ipk)
-                echo "CONFIG_PACKAGE_${ipk_basename}=y" >> .config
-              done
-              echo "✅ 成功添加 $IPK_COUNT 个自定义IPK包" | tee -a "$MAIN_LOG"
-            else
-              echo "ℹ️ 未找到自定义IPK包" | tee -a "$MAIN_LOG"
-            fi
+          if [[ "$CONFIG_PROFILE" =~ ^rt-ac42u$|^ac42u$|^asus.*ac42u ]]; then
+            echo "# IPQ40xx通用修复" >> .config
+            echo "CONFIG_TARGET_ipq40xx=y" >> .config
+            echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+            echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
+            echo "CONFIG_KERNEL_ARM=y" >> .config
+            echo "CONFIG_KERNEL_ARM_CPU_NEON=y" >> .config
+            echo "CONFIG_KERNEL_ARM_CPU_NEON_FP=y" >> .config
+          elif [[ "$CONFIG_PROFILE" =~ ^x86|^x64|^generic.*64 ]]; then
+            echo "# x86通用修复" >> .config
+            echo "CONFIG_TARGET_x86=y" >> .config
+            echo "CONFIG_TARGET_x86_64=y" >> .config
+            echo "CONFIG_KERNEL_X86=y" >> .config
+            echo "CONFIG_KERNEL_X86_64=y" >> .config
+          elif [[ "$CONFIG_PROFILE" =~ ^mt7621|^newifi.*d2|^r6220|^r3g|^r3p|^k2p ]]; then
+            echo "# MT7621通用修复" >> .config
+            echo "CONFIG_TARGET_ramips=y" >> .config
+            echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
+            echo "CONFIG_KERNEL_MIPS=y" >> .config
+            echo "CONFIG_KERNEL_MIPS_MT7621=y" >> .config
           else
-            echo "ℹ️ 自定义IPK目录不存在: $IPK_DIR" | tee -a "$MAIN_LOG"
+            echo "# 通用内核修复" >> .config
+            echo "CONFIG_KERNEL_DEVTMPFS=y" >> .config
+            echo "CONFIG_KERNEL_DEVTMPFS_MOUNT=y" >> .config
           fi
           
-          echo "CUSTOM_IPK_COUNT=$IPK_COUNT" >> $GITHUB_ENV
+          echo "# 通用内核特性" >> .config
+          echo "CONFIG_KERNEL_LZO=y" >> .config
+          echo "CONFIG_KERNEL_LZ4=y" >> .config
+          echo "CONFIG_KERNEL_ZSTD=y" >> .config
+          echo "CONFIG_KERNEL_EXT4_FS=y" >> .config
+          echo "CONFIG_KERNEL_VFAT_FS=y" >> .config
+          echo "CONFIG_KERNEL_TMPFS=y" >> .config
+          echo "CONFIG_KERNEL_NET=y" >> .config
+          echo "CONFIG_KERNEL_INET=y" >> .config
+          echo "CONFIG_KERNEL_IPV6=y" >> .config
           
-          echo "🔧 执行自定义脚本..." | tee -a "$MAIN_LOG"
-          SCRIPT_PATHS="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/scripts ${{ env.CONFIG_REPO_DIR }}/firmware-config/scripts ${{ env.CONFIG_REPO_DIR }}/scripts ${{ env.CONFIG_REPO_DIR }}/firmware-config"
-          
-          SCRIPT_COUNT=0
-          for script_path in $SCRIPT_PATHS; do
-            if [ -d "$script_path" ]; then
-              echo "🔍 在 $script_path 中查找脚本..." | tee -a "$MAIN_LOG"
-              SCRIPTS=$(find "$script_path" -maxdepth 2 -name "*.sh" -type f 2>/dev/null | sort || true)
-              if [ -n "$SCRIPTS" ]; then
-                for script in $SCRIPTS; do
-                  script_name=$(basename "$script")
-                  echo "📜 执行脚本: $script_name..." | tee -a "$MAIN_LOG"
-                  chmod +x "$script"
-                  
-                  TEMP_LOG=$(mktemp)
-                  if { bash "$script" 2>&1 | tee "$TEMP_LOG"; } then
-                    echo "✅ 自定义脚本执行成功: $script_name" | tee -a "$MAIN_LOG"
-                    SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
-                  else
-                    echo "⚠️ 自定义脚本执行有警告: $script_name" | tee -a "$MAIN_LOG"
-                    grep -i -E "error|failed|No such file" "$TEMP_LOG" >> "$WARNING_LOG" || true
-                  fi
-                  cat "$TEMP_LOG" >> "$MAIN_LOG"
-                  rm -f "$TEMP_LOG"
-                done
-              else
-                echo "ℹ️ 在 $script_path 中未找到脚本" | tee -a "$MAIN_LOG"
-              fi
-            else
-              echo "ℹ️ 脚本目录不存在: $script_path" | tee -a "$MAIN_LOG"
-            fi
-          done
-          
-          echo "CUSTOM_SCRIPT_COUNT=$SCRIPT_COUNT" >> $GITHUB_ENV
-          echo "✅ 高级功能应用完成，执行了 $SCRIPT_COUNT 个脚本" | tee -a "$MAIN_LOG"
+          echo "✅ 动态设备配置修复完成" | tee -a "$MAIN_LOG"
 
-      - name: "🔧 构建系统修复"
-        id: build_fix
+      - name: "🔧 构建问题修复"
+        id: build_problem_fix
         run: |
           set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔧 构建系统修复 ===" | tee -a "$MAIN_LOG"
+          echo "=== 🔧 构建问题修复 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
           echo "🔧 修复已知构建问题..." | tee -a "$MAIN_LOG"
           
-          # 强力禁用6in4及相关问题包
-          echo "🔧 强力禁用问题包..." | tee -a "$MAIN_LOG"
-          for pkg in 6in4 6rd 6to4; do
+          PROBLEM_PKGS=("6in4" "6rd" "6to4" "ds-lite" "map")
+          for pkg in "${PROBLEM_PKGS[@]}"; do
             sed -i "s/CONFIG_PACKAGE_${pkg}=y/# CONFIG_PACKAGE_${pkg} is not set/" .config 2>/dev/null || true
-            sed -i "s/CONFIG_PACKAGE_${pkg}-=y/# CONFIG_PACKAGE_${pkg} is not set/" .config 2>/dev/null || true
           done
           
-          # 删除可能引起问题的6in4相关文件
-          echo "🔧 清理问题包文件..." | tee -a "$MAIN_LOG"
-          find . -name "*6in4*" -type f -path "*/package/*" -delete 2>/dev/null || true
-          find . -name "*6rd*" -type f -path "*/package/*" -delete 2>/dev/null || true
-          find . -name "*6to4*" -type f -path "*/package/*" -delete 2>/dev/null || true
+          echo "# 构建问题修复" >> .config
+          echo "# CONFIG_PACKAGE_6in4 is not set" >> .config
+          echo "# CONFIG_PACKAGE_6rd is not set" >> .config
+          echo "# CONFIG_PACKAGE_6to4 is not set" >> .config
+          echo "# CONFIG_PACKAGE_ds-lite is not set" >> .config
+          echo "# CONFIG_PACKAGE_map is not set" >> .config
           
-          # 确保基础系统包启用
-          echo "🔧 确保基础系统包..." | tee -a "$MAIN_LOG"
-          echo "# 基础系统修复" >> .config
-          echo "CONFIG_PACKAGE_base-files=y" >> .config
-          echo "CONFIG_PACKAGE_busybox=y" >> .config
-          echo "CONFIG_PACKAGE_opkg=y" >> .config
-          echo "CONFIG_PACKAGE_procd=y" >> .config
-          echo "CONFIG_PACKAGE_uci=y" >> .config
-          echo "CONFIG_PACKAGE_ubus=y" >> .config
-          echo "CONFIG_PACKAGE_netifd=y" >> .config
-          echo "CONFIG_PACKAGE_firewall=y" >> .config
-          echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
-          echo "CONFIG_PACKAGE_dropbear=y" >> .config
-          
-          # IPv6支持（不含问题包）
-          echo "" >> .config
-          echo "# IPv6支持（不含问题包）" >> .config
-          echo "CONFIG_PACKAGE_odhcp6c=y" >> .config
-          echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
-          echo "CONFIG_PACKAGE_ip6tables=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-ipv6=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> .config
-          
-          # 强力禁用所有问题包
-          echo "" >> .config
-          echo "# 强力禁用问题包" >> .config
-          for pkg in 6in4 6rd 6to4 luci-app-wireguard luci-app-ddns luci-app-wol luci-app-eqosplus luci-app-parentcontrol luci-app-nlbwmon; do
-            echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
-          done
-          
-          echo "✅ 构建系统修复完成" | tee -a "$MAIN_LOG"
+          echo "✅ 构建问题修复完成" | tee -a "$MAIN_LOG"
 
-      - name: "🔧 深度构建修复"
-        id: deep_build_fix
+      - name: "🔧 编译环境准备"
+        id: build_env_prepare
         run: |
           set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔧 深度构建修复 ===" | tee -a "$MAIN_LOG"
+          echo "=== 🔧 编译环境准备 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
-          echo "🔧 修复内核配置..." | tee -a "$MAIN_LOG"
+          echo "🔧 准备编译环境..." | tee -a "$MAIN_LOG"
           
-          # 强制设置正确的内核配置
-          echo "# 内核配置修复" >> .config
-          echo "CONFIG_KERNEL_BUILD_USER=\"OpenWrt\"" >> .config
-          echo "CONFIG_KERNEL_BUILD_HOST=\"openwrt\"" >> .config
-          echo "CONFIG_KERNEL_GIT_CLONE_URI=\"\"" >> .config
-          echo "CONFIG_KERNEL_GIT_BRANCH=\"\"" >> .config
-          echo "CONFIG_KERNEL_GIT_LOCAL_REPOSITORY=\"\"" >> .config
+          mkdir -p build_dir/target-* staging_dir/target-* staging_dir/toolchain-*
+          find build_dir -type d -exec chmod 755 {} \;
+          find staging_dir -type d -exec chmod 755 {} \;
           
-          # 修复模块构建
-          echo "" >> .config
-          echo "# 模块构建修复" >> .config
-          echo "CONFIG_PACKAGE_kmod-ipt-core=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-nf-conntrack=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-nf-conntrack6=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-nf-nat=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-ipt-ipset=y" >> .config
+          chmod +x staging_dir/host/bin/* 2>/dev/null || true
+          chmod +x staging_dir/toolchain-*/bin/* 2>/dev/null || true
           
-          # 修复工具链
-          echo "" >> .config
-          echo "# 工具链修复" >> .config
-          echo "CONFIG_TOOLCHAIN_KERNEL_HAS_SPE=y" >> .config
-          echo "CONFIG_TOOLCHAIN_KERNEL_HAS_NEON=y" >> .config
-          echo "CONFIG_TOOLCHAIN_KERNEL_HAS_VFPV4=y" >> .config
+          export FORCE_UNSAFE_CONFIGURE=1
+          export LC_ALL=C
           
-          echo "✅ 深度构建修复完成" | tee -a "$MAIN_LOG"
+          echo "✅ 编译环境准备完成" | tee -a "$MAIN_LOG"
 
-      - name: "🔧 内核配置修复"
-        id: kernel_fix
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔧 内核配置修复 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          
-          # 修复IPQ40xx特定配置
-          echo "🔧 修复IPQ40xx配置..." | tee -a "$MAIN_LOG"
-          
-          # 确保目标设备正确配置
-          sed -i 's/CONFIG_TARGET_ipq40xx=y/CONFIG_TARGET_ipq40xx=y\nCONFIG_TARGET_ipq40xx_generic=y\nCONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y/' .config
-          
-          # 修复内核版本配置
-          echo "# 内核版本修复" >> .config
-          echo "CONFIG_KERNEL_5_4=y" >> .config
-          echo "CONFIG_KERNEL_5_4_255=y" >> .config
-          echo "CONFIG_DEFAULT_5_4=y" >> .config
-          
-          # 修复编译选项
-          echo "" >> .config
-          echo "# 编译选项修复" >> .config
-          echo "CONFIG_USE_MKLIBS=y" >> .config
-          echo "CONFIG_STRIP_KERNEL_EXPORTS=y" >> .config
-          echo "CONFIG_USE_UCLIBCXX=y" >> .config
-          
-          echo "✅ 内核配置修复完成" | tee -a "$MAIN_LOG"
-
-      - name: "🔍 配置完整性检查"
-        id: config_check
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔍 配置完整性检查 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          
-          echo "🔍 检查问题包配置..." | tee -a "$MAIN_LOG"
-          
-          # 检查并修复6in4相关配置
-          PROBLEM_PKGS=("6in4" "6rd" "6to4")
-          for pkg in "${PROBLEM_PKGS[@]}"; do
-            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
-              echo "⚠️  发现问题包 $pkg 被启用，正在禁用..." | tee -a "$MAIN_LOG"
-              sed -i "s/CONFIG_PACKAGE_${pkg}=y/# CONFIG_PACKAGE_${pkg} is not set/" .config
-            fi
-          done
-          
-          # 验证配置
-          echo "🔍 验证最终配置..." | tee -a "$MAIN_LOG"
-          echo "问题包状态:" | tee -a "$MAIN_LOG"
-          for pkg in "${PROBLEM_PKGS[@]}"; do
-            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
-              echo "❌ $pkg: 仍然启用" | tee -a "$MAIN_LOG"
-            else
-              echo "✅ $pkg: 已禁用" | tee -a "$MAIN_LOG"
-            fi
-          done
-          
-          echo "✅ 配置检查完成" | tee -a "$MAIN_LOG"
-
-      - name: "🔄 最终配置处理"
-        id: final_config
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔄 最终配置处理 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          
-          echo "🔧 运行defconfig..." | tee -a "$MAIN_LOG"
-          make defconfig
-          
-          echo "📋 最终配置检查..." | tee -a "$MAIN_LOG"
-          echo "🎯 目标配置:" | tee -a "$MAIN_LOG"
-          grep "^CONFIG_TARGET" .config | grep "=y" | head -10 | tee -a "$MAIN_LOG"
-          echo "🔌 启用的LUCI应用:" | tee -a "$MAIN_LOG"
-          grep "^CONFIG_PACKAGE_luci-app" .config | grep "=y" | head -20 | tee -a "$MAIN_LOG"
-          echo "🌐 语言包:" | tee -a "$MAIN_LOG"
-          grep "^CONFIG_PACKAGE_luci-i18n" .config | grep "=y" | head -10 | tee -a "$MAIN_LOG"
-          echo "❌ 禁用的指定插件:" | tee -a "$MAIN_LOG"
-          grep "# CONFIG_PACKAGE_luci-app-wireguard is not set" .config && echo "  - WireGuard VPN"
-          grep "# CONFIG_PACKAGE_luci-app-ddns is not set" .config && echo "  - 动态DNS"
-          grep "# CONFIG_PACKAGE_luci-app-wol is not set" .config && echo "  - 网络唤醒"
-          grep "# CONFIG_PACKAGE_luci-app-eqosplus is not set" .config && echo "  - QoS流控"
-          grep "# CONFIG_PACKAGE_luci-app-parentcontrol is not set" .config && echo "  - 上网时间控制"
-          grep "# CONFIG_PACKAGE_luci-app-nlbwmon is not set" .config && echo "  - 带宽监控"
-          grep "# CONFIG_PACKAGE_6in4 is not set" .config && echo "  - 6in4隧道"
-          
-          echo "✅ 最终配置完成" | tee -a "$MAIN_LOG"
-
-      - name: "🚀 并行下载优化"
-        id: download_deps
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🚀 并行下载优化 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          
-          sed -i 's|https://sources.cdn.openwrt.org|https://mirror2.openwrt.org/sources|g' scripts/download.pl
-          sed -i 's|git.openwrt.org|github.com/openwrt|g' feeds.conf.* 2>/dev/null || true
-          
-          echo "📥 开始并行下载..." | tee -a "$MAIN_LOG"
-          PARALLEL_JOBS="${{ env.PARALLEL_JOBS }}"
-          
-          for i in 1 2 3; do
-            echo "🔄 下载尝试 $i/3..." | tee -a "$MAIN_LOG"
-            if make download -j$PARALLEL_JOBS; then
-              echo "✅ 下载成功" | tee -a "$MAIN_LOG"
-              break
-            else
-              echo "⚠️ 下载尝试 $i 失败" | tee -a "$MAIN_LOG"
-              if [ $i -eq 3 ]; then
-                echo "❌ 所有下载尝试都失败" | tee -a "$MAIN_LOG"
-                exit 1
-              fi
-              sleep 10
-            fi
-          done
-          
-          DOWNLOAD_COUNT=$(find dl/ -type f 2>/dev/null | wc -l)
-          echo "📦 下载文件数量: $DOWNLOAD_COUNT" | tee -a "$MAIN_LOG"
-          
-          if [ "$DOWNLOAD_COUNT" -lt 10 ]; then
-            echo "⚠️ 下载文件数量过少，可能有问题" | tee -a "$MAIN_LOG"
-          fi
-
-      - name: "⚡ 智能增量编译"
-        id: smart_build
+      - name: "⚡ 稳健编译执行"
+        id: robust_build
         timeout-minutes: 150
         run: |
           set -e
           MAIN_LOG="${{ env.MAIN_LOG }}"
           ERROR_LOG="${{ env.ERROR_LOG }}"
-          WARNING_LOG="${{ env.WARNING_LOG }}"
-          echo "=== ⚡ 智能增量编译 ===" | tee -a "$MAIN_LOG"
+          echo "=== ⚡ 稳健编译执行 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
           export FORCE_UNSAFE_CONFIGURE=1
           export LC_ALL=C
           PARALLEL_JOBS="${{ env.PARALLEL_JOBS }}"
-          SKIP_TESTS="${{ github.event.inputs.skip_tests }}"
           
-          echo "🔧 编译配置: 并行作业=$PARALLEL_JOBS, 跳过测试=$SKIP_TESTS" | tee -a "$MAIN_LOG"
+          echo "🔧 编译配置: 并行作业=$PARALLEL_JOBS" | tee -a "$MAIN_LOG"
           
-          # 编译前最终检查
           echo "🔍 编译前最终检查..." | tee -a "$MAIN_LOG"
           make defconfig
           
-          if [ "$SKIP_TESTS" = "true" ]; then
-            EXTRA_FLAGS="IGNORE_ERRORS=m"
-          else
-            EXTRA_FLAGS=""
-          fi
-          
-          # 创建构建日志目录
           mkdir -p logs
           
-          echo "🛠️ 阶段1: 清理和准备..." | tee -a "$MAIN_LOG"
-          make target/linux/clean
-          make toolchain/clean
-          
-          echo "🛠️ 阶段2: 编译工具链..." | tee -a "$MAIN_LOG"
-          if make toolchain/install -j$PARALLEL_JOBS $EXTRA_FLAGS 2>&1 | tee -a "$MAIN_LOG"; then
-            echo "✅ 工具链编译完成" | tee -a "$MAIN_LOG"
-          else
+          echo "🛠️ 阶段1: 工具链编译..." | tee -a "$MAIN_LOG"
+          if ! make toolchain/install -j$PARALLEL_JOBS 2>&1 | tee -a "$MAIN_LOG"; then
             echo "❌ 工具链编译失败，尝试单线程..." | tee -a "$MAIN_LOG"
             make toolchain/install -j1 V=s 2>&1 | tee -a "$MAIN_LOG"
           fi
           
-          echo "🛠️ 阶段3: 编译内核..." | tee -a "$MAIN_LOG"
-          if make target/linux/install -j$PARALLEL_JOBS $EXTRA_FLAGS 2>&1 | tee -a "$MAIN_LOG"; then
-            echo "✅ 内核编译完成" | tee -a "$MAIN_LOG"
-          else
+          echo "🛠️ 阶段2: 内核编译..." | tee -a "$MAIN_LOG"
+          if ! make target/linux/install -j$PARALLEL_JOBS 2>&1 | tee -a "$MAIN_LOG"; then
             echo "❌ 内核编译失败，尝试单线程..." | tee -a "$MAIN_LOG"
             make target/linux/install -j1 V=s 2>&1 | tee -a "$MAIN_LOG"
           fi
           
-          echo "🚀 阶段4: 完整编译..." | tee -a "$MAIN_LOG"
-          # 使用临时文件捕获完整输出
+          echo "🚀 阶段3: 完整编译..." | tee -a "$MAIN_LOG"
           TEMP_LOG=$(mktemp)
           set +e
-          make -j$PARALLEL_JOBS $EXTRA_FLAGS 2>&1 | tee "$TEMP_LOG"
+          make -j$PARALLEL_JOBS 2>&1 | tee "$TEMP_LOG"
           BUILD_RESULT=${PIPESTATUS[0]}
           set -e
           
@@ -974,15 +665,14 @@ jobs:
             echo "BUILD_STATUS=success" >> $GITHUB_ENV
           else
             echo "❌ 编译失败 (退出码: $BUILD_RESULT)" | tee -a "$MAIN_LOG"
-            echo "🔄 尝试单线程编译定位问题..." | tee -a "$MAIN_LOG"
             echo "=== 详细错误日志开始 ===" >> "$ERROR_LOG"
             make -j1 V=s 2>&1 >> "$ERROR_LOG" || true
             echo "=== 详细错误日志结束 ===" >> "$ERROR_LOG"
             echo "BUILD_STATUS=failed" >> $GITHUB_ENV
+            exit $BUILD_RESULT
           fi
           rm -f "$TEMP_LOG"
           
-          # 检查是否生成了固件文件
           FIRMWARE_FOUND=false
           if find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null | grep -q .; then
             echo "🎉 找到固件文件！" | tee -a "$MAIN_LOG"
@@ -992,8 +682,8 @@ jobs:
           else
             echo "❌ 未找到固件文件" | tee -a "$MAIN_LOG"
             echo "BUILD_STATUS=failed" >> $GITHUB_ENV
-            echo "🔍 检查构建目录..." | tee -a "$MAIN_LOG"
             find bin -type f -name "*" 2>/dev/null | head -20 | tee -a "$MAIN_LOG"
+            exit 1
           fi
           
           echo "FIRMWARE_FOUND=$FIRMWARE_FOUND" >> $GITHUB_ENV
@@ -1001,126 +691,17 @@ jobs:
           echo "📊 CCache统计:" | tee -a "$MAIN_LOG"
           ccache -s | tee -a "$MAIN_LOG"
           
-          # 构建总结
           echo "=== 编译总结 ===" | tee -a "$MAIN_LOG"
           echo "构建状态: $BUILD_STATUS" | tee -a "$MAIN_LOG"
           echo "固件生成: $FIRMWARE_FOUND" | tee -a "$MAIN_LOG"
 
-      - name: "🔍 构建错误诊断"
-        id: build_diagnosis
-        if: env.BUILD_STATUS == 'failed'
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          ERROR_LOG="${{ env.ERROR_LOG }}"
-          echo "=== 🔍 构建错误诊断 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          
-          echo "🔧 诊断构建问题..." | tee -a "$MAIN_LOG"
-          
-          # 检查关键文件
-          echo "📋 关键文件检查:" | tee -a "$MAIN_LOG"
-          [ -f ".config" ] && echo "✅ .config 存在" || echo "❌ .config 缺失"
-          [ -d "bin" ] && echo "✅ bin 目录存在" || echo "❌ bin 目录缺失"
-          [ -d "build_dir" ] && echo "✅ build_dir 存在" || echo "❌ build_dir 缺失"
-          
-          # 检查内核构建状态
-          echo "🔍 内核构建状态:" | tee -a "$MAIN_LOG"
-          if [ -d "build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic" ]; then
-            # 修复管道错误，使用更稳定的方式
-            find build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic \( -name "vmlinux" -o -name "*.ko" \) -print 2>/dev/null | head -5 | while read -r file; do
-              echo "🔍 找到: $file" | tee -a "$MAIN_LOG"
-            done
-          fi
-          
-          # 检查固件生成状态
-          echo "🔍 固件生成状态:" | tee -a "$MAIN_LOG"
-          if [ -d "bin/targets" ]; then
-            find bin/targets -type f -name "*" 2>/dev/null | head -10 | while read -r file; do
-              echo "📦 产物: $file ($(du -h "$file" 2>/dev/null | cut -f1))" | tee -a "$MAIN_LOG"
-            done
-          else
-            echo "❌ bin/targets 目录不存在" | tee -a "$MAIN_LOG"
-          fi
-          
-          # 检查编译错误
-          echo "🔍 编译错误分析:" | tee -a "$MAIN_LOG"
-          if [ -f "$ERROR_LOG" ]; then
-            echo "📋 最近错误:" | tee -a "$MAIN_LOG"
-            tail -20 "$ERROR_LOG" | grep -E "(error|Error|ERROR|failed|Failed|FAILED)" | head -10 | tee -a "$MAIN_LOG"
-          fi
-          
-          # 检查磁盘空间
-          echo "🔍 系统资源状态:" | tee -a "$MAIN_LOG"
-          df -h /mnt | tee -a "$MAIN_LOG"
-          echo "内存使用:" | tee -a "$MAIN_LOG"
-          free -h | tee -a "$MAIN_LOG"
-          
-          echo "✅ 错误诊断完成" | tee -a "$MAIN_LOG"
-
-      - name: "🔧 构建失败恢复"
-        id: build_recovery
-        if: env.BUILD_STATUS == 'failed'
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔧 构建失败恢复 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          
-          echo "🔄 尝试构建恢复..." | tee -a "$MAIN_LOG"
-          
-          # 清理可能的构建问题
-          echo "🧹 清理构建缓存..." | tee -a "$MAIN_LOG"
-          make clean
-          rm -rf tmp staging_dir build_dir/target-*
-          
-          echo "🔧 重新配置..." | tee -a "$MAIN_LOG"
-          make defconfig
-          
-          echo "🔄 重新尝试编译核心组件..." | tee -a "$MAIN_LOG"
-          if make -j1 V=s 2>&1 | tail -100; then
-            echo "✅ 恢复编译成功" | tee -a "$MAIN_LOG"
-            echo "BUILD_STATUS=recovered" >> $GITHUB_ENV
-          else
-            echo "❌ 恢复编译失败" | tee -a "$MAIN_LOG"
-          fi
-
-      - name: "🔍 快速固件分析"
-        id: firmware_analysis
-        if: always()
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔍 快速固件分析 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          
-          FIRMWARE_COUNT=0
-          TOTAL_SIZE=0
-          
-          if [ -d "bin/targets" ]; then
-            while IFS= read -r file; do
-              if [ -f "$file" ]; then
-                FIRMWARE_COUNT=$((FIRMWARE_COUNT + 1))
-                size=$(du -b "$file" 2>/dev/null | cut -f1)
-                TOTAL_SIZE=$((TOTAL_SIZE + size))
-                echo "📦 固件: $(basename "$file") ($(du -h "$file" | cut -f1))" | tee -a "$MAIN_LOG"
-              fi
-            done < <(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" \) 2>/dev/null)
-          fi
-          
-          TOTAL_SIZE_MB=$((TOTAL_SIZE / 1024 / 1024))
-          echo "FIRMWARE_COUNT=$FIRMWARE_COUNT" >> $GITHUB_ENV
-          echo "FIRMWARE_SIZE_MB=$TOTAL_SIZE_MB" >> $GITHUB_ENV
-          
-          echo "📊 分析结果: $FIRMWARE_COUNT 个固件, ${TOTAL_SIZE_MB}MB" | tee -a "$MAIN_LOG"
-
-      - name: "📦 极速产物收集"
+      - name: "📦 产物收集"
         id: collect_artifacts
         if: always()
         run: |
           set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 📦 极速产物收集 ===" | tee -a "$MAIN_LOG"
+          echo "=== 📦 产物收集 ===" | tee -a "$MAIN_LOG"
           
           mkdir -p /mnt/artifacts/firmware
           ARTIFACT_COUNT=0
@@ -1132,60 +713,10 @@ jobs:
           
           cp "$MAIN_LOG" /mnt/artifacts/ 2>/dev/null || true
           cp "$ERROR_LOG" /mnt/artifacts/ 2>/dev/null || true
-          cp "$WARNING_LOG" /mnt/artifacts/ 2>/dev/null || true
-          cp "$ANALYSIS_REPORT" /mnt/artifacts/ 2>/dev/null || true
-          
-          # 收集配置文件和构建信息
           cp /mnt/source/.config /mnt/artifacts/ 2>/dev/null || true
           
           echo "ARTIFACT_COUNT=$ARTIFACT_COUNT" >> $GITHUB_ENV
           echo "✅ 收集了 $ARTIFACT_COUNT 个产物" | tee -a "$MAIN_LOG"
-
-      - name: "📤 提交新配置文件到仓库"
-        id: commit_config
-        if: env.CONFIG_SOURCE == 'new' && github.event.inputs.auto_commit_config == 'true'
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 📤 提交新配置文件到仓库 ===" | tee -a "$MAIN_LOG"
-          
-          CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
-          CONFIG_DIR="${{ env.CONFIG_REPO_DIR }}/firmware-config/configs"
-          CONFIG_FILE="$CONFIG_DIR/config_$CONFIG_PROFILE"
-          
-          if [ -f "$CONFIG_FILE" ]; then
-            echo "📁 找到新创建的配置文件: $CONFIG_FILE" | tee -a "$MAIN_LOG"
-            
-            # 切换到配置仓库目录
-            cd "${{ env.CONFIG_REPO_DIR }}"
-            
-            # 配置Git用户
-            git config --local user.email "github-actions[bot]@users.noreply.github.com"
-            git config --local user.name "github-actions[bot]"
-            
-            # 添加配置文件
-            git add "firmware-config/configs/config_$CONFIG_PROFILE"
-            
-            # 检查是否有更改需要提交
-            if git diff --staged --quiet; then
-              echo "ℹ️ 没有新的配置文件需要提交" | tee -a "$MAIN_LOG"
-            else
-              # 提交更改
-              COMMIT_MSG="添加新的设备配置文件: $CONFIG_PROFILE"
-              if [ -n "${{ env.TARGET_CONFIG }}" ]; then
-                COMMIT_MSG="$COMMIT_MSG (目标: ${{ env.TARGET_CONFIG }})"
-              fi
-              git commit -m "$COMMIT_MSG"
-              echo "✅ 配置文件已提交到本地仓库: $COMMIT_MSG" | tee -a "$MAIN_LOG"
-              
-              # 推送到远程仓库
-              echo "🔄 推送到远程仓库..." | tee -a "$MAIN_LOG"
-              git push
-              echo "✅ 配置文件已推送到远程仓库" | tee -a "$MAIN_LOG"
-            fi
-          else
-            echo "ℹ️ 没有创建新的配置文件" | tee -a "$MAIN_LOG"
-          fi
 
       - name: "💾 上传构建产物"
         id: upload_artifacts
@@ -1198,45 +729,27 @@ jobs:
           retention-days: 7
           compression-level: 6
 
-      - name: "📊 极速构建报告"
+      - name: "📊 构建报告"
         id: final_report
         if: always()
         run: |
-          echo "=== 📊 极速构建报告 ==="
+          echo "=== 📊 构建报告 ==="
           echo ""
           echo "🎯 构建摘要"
           echo "=========================================="
-          echo "⚡ 编译性能:"
-          echo "  - 并行作业: ${{ env.PARALLEL_JOBS || 'N/A' }}"
-          echo "  - CCache命中率: 查看详细日志"
-          echo ""
           echo "📦 构建结果:"
           echo "  - 状态: ${{ env.BUILD_STATUS || 'unknown' }}"
           echo "  - 固件数量: ${{ env.FIRMWARE_COUNT || 0 }}"
-          echo "  - 固件大小: ${{ env.FIRMWARE_SIZE_MB || 'unknown' }}MB"
           echo "  - 产物数量: ${{ env.ARTIFACT_COUNT || 0 }}"
           echo ""
           echo "🔧 配置信息:"
           echo "  - 配置来源: ${{ env.CONFIG_SOURCE || 'unknown' }}"
           echo "  - 目标配置: ${{ env.TARGET_CONFIG || 'unknown' }}"
-          echo "  - 自动提交: ${{ github.event.inputs.auto_commit_config || 'false' }}"
-          echo ""
-          echo "🔧 高级功能:"
-          echo "  - 自定义IPK: ${{ env.CUSTOM_IPK_COUNT || 0 }} 个"
-          echo "  - 自定义脚本: ${{ env.CUSTOM_SCRIPT_COUNT || 0 }} 个"
-          echo ""
-          echo "⏱️ 构建时间:"
-          echo "  - 开始: 见构建日志"
-          echo "  - 结束: $(date)"
+          echo "  - 构建模式: ${{ github.event.inputs.build_mode || 'unknown' }}"
           echo ""
           if [ "${{ env.BUILD_STATUS }}" = "success" ] && [ "${{ env.FIRMWARE_COUNT }}" -gt 0 ]; then
-            echo "🎉 极速构建成功！"
+            echo "🎉 构建成功！"
             echo "💡 固件已生成并上传到产物"
-            if [ "${{ env.CONFIG_SOURCE }}" = "new" ] && [ "${{ github.event.inputs.auto_commit_config }}" = "true" ]; then
-              echo "📝 新配置文件已自动提交到仓库"
-            fi
-          elif [ "${{ env.BUILD_STATUS }}" = "recovered" ]; then
-            echo "⚠️ 构建部分恢复，请检查产物完整性"
           else
             echo "❌ 构建失败或未生成固件"
             echo "🔧 请查看详细日志了解问题"
