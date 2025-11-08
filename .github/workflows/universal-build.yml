@@ -275,7 +275,7 @@ jobs:
             elif [[ "$CONFIG_PROFILE" =~ ^r3p|^mir3p|^xiaomi.*r3p ]]; then
               echo "# Xiaomi R3P 设备" >> "$CONFIG_FILE"
               echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ramips_mt7621=y" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ramips_mt7621=y" >> "$MAIN_LOG"
               echo "CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-3-pro=y" >> "$CONFIG_FILE"
               TARGET_CONFIG="ramips_mt7621_xiaomi_r3p"
             elif [[ "$CONFIG_PROFILE" =~ ^k2p|^phicomm.*k2p ]]; then
@@ -751,7 +751,7 @@ jobs:
         id: smart_build
         timeout-minutes: 150
         run: |
-          set +e
+          set -e
           MAIN_LOG="${{ env.MAIN_LOG }}"
           ERROR_LOG="${{ env.ERROR_LOG }}"
           WARNING_LOG="${{ env.WARNING_LOG }}"
@@ -777,40 +777,78 @@ jobs:
             EXTRA_FLAGS=""
           fi
           
+          # 创建构建日志目录
+          mkdir -p logs
+          
           echo "🛠️ 阶段1: 编译工具链..." | tee -a "$MAIN_LOG"
-          if ! make toolchain/compile -j$PARALLEL_JOBS $EXTRA_FLAGS 2>&1 | tee -a "$MAIN_LOG"; then
+          if make toolchain/compile -j$PARALLEL_JOBS $EXTRA_FLAGS 2>&1 | tee -a "$MAIN_LOG"; then
+            echo "✅ 工具链编译完成" | tee -a "$MAIN_LOG"
+          else
             echo "❌ 工具链编译失败" | tee -a "$ERROR_LOG"
+            echo "🔄 尝试继续编译其他部分..." | tee -a "$MAIN_LOG"
           fi
           
           echo "🛠️ 阶段2: 编译内核..." | tee -a "$MAIN_LOG"
-          if ! make target/linux/compile -j$PARALLEL_JOBS $EXTRA_FLAGS 2>&1 | tee -a "$MAIN_LOG"; then
+          if make target/linux/compile -j$PARALLEL_JOBS $EXTRA_FLAGS 2>&1 | tee -a "$MAIN_LOG"; then
+            echo "✅ 内核编译完成" | tee -a "$MAIN_LOG"
+          else
             echo "❌ 内核编译失败" | tee -a "$ERROR_LOG"
+            echo "🔄 尝试继续编译其他部分..." | tee -a "$MAIN_LOG"
           fi
           
           echo "🚀 阶段3: 完整编译..." | tee -a "$MAIN_LOG"
-          if make -j$PARALLEL_JOBS $EXTRA_FLAGS 2>&1 | tee -a "$MAIN_LOG"; then
+          # 使用临时文件捕获完整输出
+          TEMP_LOG=$(mktemp)
+          set +e
+          make -j$PARALLEL_JOBS $EXTRA_FLAGS 2>&1 | tee "$TEMP_LOG"
+          BUILD_RESULT=${PIPESTATUS[0]}
+          set -e
+          
+          cat "$TEMP_LOG" >> "$MAIN_LOG"
+          
+          if [ $BUILD_RESULT -eq 0 ]; then
             echo "✅ 编译成功" | tee -a "$MAIN_LOG"
             echo "BUILD_STATUS=success" >> $GITHUB_ENV
           else
-            echo "❌ 编译失败，查看详细错误..." | tee -a "$MAIN_LOG"
+            echo "❌ 编译失败 (退出码: $BUILD_RESULT)" | tee -a "$MAIN_LOG"
             echo "🔄 尝试单线程编译定位问题..." | tee -a "$MAIN_LOG"
-            make -j1 V=s 2>&1 | tee -a "$ERROR_LOG" || true
+            echo "=== 详细错误日志开始 ===" >> "$ERROR_LOG"
+            make -j1 V=s 2>&1 >> "$ERROR_LOG" || true
+            echo "=== 详细错误日志结束 ===" >> "$ERROR_LOG"
             echo "BUILD_STATUS=failed" >> $GITHUB_ENV
           fi
+          rm -f "$TEMP_LOG"
           
+          # 检查是否生成了固件文件
+          FIRMWARE_FOUND=false
           if find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null | grep -q .; then
             echo "🎉 找到固件文件！" | tee -a "$MAIN_LOG"
-            echo "BUILD_STATUS=success" >> $GITHUB_ENV
             find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) -exec ls -la {} \; | tee -a "$MAIN_LOG"
+            FIRMWARE_FOUND=true
+            echo "BUILD_STATUS=success" >> $GITHUB_ENV
           else
             echo "❌ 未找到固件文件" | tee -a "$MAIN_LOG"
             echo "BUILD_STATUS=failed" >> $GITHUB_ENV
             echo "🔍 检查构建目录..." | tee -a "$MAIN_LOG"
             find bin -type f -name "*" 2>/dev/null | head -20 | tee -a "$MAIN_LOG"
+            
+            # 诊断构建问题
+            echo "🔧 诊断构建问题..." | tee -a "$MAIN_LOG"
+            if [ -f "logs/package-feeds.txt" ]; then
+              echo "📋 包依赖问题检查:" | tee -a "$MAIN_LOG"
+              grep -i "error\|failed" logs/package-feeds.txt | head -10 | tee -a "$MAIN_LOG"
+            fi
           fi
+          
+          echo "FIRMWARE_FOUND=$FIRMWARE_FOUND" >> $GITHUB_ENV
           
           echo "📊 CCache统计:" | tee -a "$MAIN_LOG"
           ccache -s | tee -a "$MAIN_LOG"
+          
+          # 构建总结
+          echo "=== 编译总结 ===" | tee -a "$MAIN_LOG"
+          echo "构建状态: $BUILD_STATUS" | tee -a "$MAIN_LOG"
+          echo "固件生成: $FIRMWARE_FOUND" | tee -a "$MAIN_LOG"
 
       - name: "🔍 快速固件分析"
         id: firmware_analysis
