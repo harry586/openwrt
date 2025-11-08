@@ -331,7 +331,6 @@ jobs:
             echo "CONFIG_PACKAGE_mtd=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_netifd=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_opkg=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_procd=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_ubus=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_ubusd=y" >> "$CONFIG_FILE"
             echo "CONFIG_PACKAGE_uci=y" >> "$CONFIG_FILE"
@@ -1013,6 +1012,7 @@ jobs:
         run: |
           set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
+          ERROR_LOG="${{ env.ERROR_LOG }}"
           echo "=== 🔍 构建错误诊断 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
@@ -1027,10 +1027,63 @@ jobs:
           # 检查内核构建状态
           echo "🔍 内核构建状态:" | tee -a "$MAIN_LOG"
           if [ -d "build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic" ]; then
-            find build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic -name "vmlinux" -o -name "*.ko" | head -5 | tee -a "$MAIN_LOG"
+            # 修复管道错误，使用更稳定的方式
+            find build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic \( -name "vmlinux" -o -name "*.ko" \) -print 2>/dev/null | head -5 | while read -r file; do
+              echo "🔍 找到: $file" | tee -a "$MAIN_LOG"
+            done
           fi
           
+          # 检查固件生成状态
+          echo "🔍 固件生成状态:" | tee -a "$MAIN_LOG"
+          if [ -d "bin/targets" ]; then
+            find bin/targets -type f -name "*" 2>/dev/null | head -10 | while read -r file; do
+              echo "📦 产物: $file ($(du -h "$file" 2>/dev/null | cut -f1))" | tee -a "$MAIN_LOG"
+            done
+          else
+            echo "❌ bin/targets 目录不存在" | tee -a "$MAIN_LOG"
+          fi
+          
+          # 检查编译错误
+          echo "🔍 编译错误分析:" | tee -a "$MAIN_LOG"
+          if [ -f "$ERROR_LOG" ]; then
+            echo "📋 最近错误:" | tee -a "$MAIN_LOG"
+            tail -20 "$ERROR_LOG" | grep -E "(error|Error|ERROR|failed|Failed|FAILED)" | head -10 | tee -a "$MAIN_LOG"
+          fi
+          
+          # 检查磁盘空间
+          echo "🔍 系统资源状态:" | tee -a "$MAIN_LOG"
+          df -h /mnt | tee -a "$MAIN_LOG"
+          echo "内存使用:" | tee -a "$MAIN_LOG"
+          free -h | tee -a "$MAIN_LOG"
+          
           echo "✅ 错误诊断完成" | tee -a "$MAIN_LOG"
+
+      - name: "🔧 构建失败恢复"
+        id: build_recovery
+        if: env.BUILD_STATUS == 'failed'
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔧 构建失败恢复 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "🔄 尝试构建恢复..." | tee -a "$MAIN_LOG"
+          
+          # 清理可能的构建问题
+          echo "🧹 清理构建缓存..." | tee -a "$MAIN_LOG"
+          make clean
+          rm -rf tmp staging_dir build_dir/target-*
+          
+          echo "🔧 重新配置..." | tee -a "$MAIN_LOG"
+          make defconfig
+          
+          echo "🔄 重新尝试编译核心组件..." | tee -a "$MAIN_LOG"
+          if make -j1 V=s 2>&1 | tail -100; then
+            echo "✅ 恢复编译成功" | tee -a "$MAIN_LOG"
+            echo "BUILD_STATUS=recovered" >> $GITHUB_ENV
+          else
+            echo "❌ 恢复编译失败" | tee -a "$MAIN_LOG"
+          fi
 
       - name: "🔍 快速固件分析"
         id: firmware_analysis
@@ -1052,7 +1105,7 @@ jobs:
                 TOTAL_SIZE=$((TOTAL_SIZE + size))
                 echo "📦 固件: $(basename "$file") ($(du -h "$file" | cut -f1))" | tee -a "$MAIN_LOG"
               fi
-            done < <(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null)
+            done < <(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" \) 2>/dev/null)
           fi
           
           TOTAL_SIZE_MB=$((TOTAL_SIZE / 1024 / 1024))
@@ -1073,14 +1126,17 @@ jobs:
           ARTIFACT_COUNT=0
           
           if [ -d "/mnt/source/bin/targets" ]; then
-            find /mnt/source/bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) -exec cp {} /mnt/artifacts/firmware/ \;
-            ARTIFACT_COUNT=$(ls /mnt/artifacts/firmware/ | wc -l)
+            find /mnt/source/bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" \) -exec cp {} /mnt/artifacts/firmware/ \;
+            ARTIFACT_COUNT=$(ls /mnt/artifacts/firmware/ 2>/dev/null | wc -l || echo 0)
           fi
           
           cp "$MAIN_LOG" /mnt/artifacts/ 2>/dev/null || true
           cp "$ERROR_LOG" /mnt/artifacts/ 2>/dev/null || true
           cp "$WARNING_LOG" /mnt/artifacts/ 2>/dev/null || true
           cp "$ANALYSIS_REPORT" /mnt/artifacts/ 2>/dev/null || true
+          
+          # 收集配置文件和构建信息
+          cp /mnt/source/.config /mnt/artifacts/ 2>/dev/null || true
           
           echo "ARTIFACT_COUNT=$ARTIFACT_COUNT" >> $GITHUB_ENV
           echo "✅ 收集了 $ARTIFACT_COUNT 个产物" | tee -a "$MAIN_LOG"
@@ -1179,6 +1235,8 @@ jobs:
             if [ "${{ env.CONFIG_SOURCE }}" = "new" ] && [ "${{ github.event.inputs.auto_commit_config }}" = "true" ]; then
               echo "📝 新配置文件已自动提交到仓库"
             fi
+          elif [ "${{ env.BUILD_STATUS }}" = "recovered" ]; then
+            echo "⚠️ 构建部分恢复，请检查产物完整性"
           else
             echo "❌ 构建失败或未生成固件"
             echo "🔧 请查看详细日志了解问题"
