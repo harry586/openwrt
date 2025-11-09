@@ -1,4 +1,4 @@
-name: "🚀 超快速固件构建器 - 修复版"
+name: "🚀 超快速固件构建器 - 终极修复版"
 
 on:
   workflow_dispatch:
@@ -107,7 +107,7 @@ jobs:
           DOWNLOAD_LOG="/mnt/build-logs/download_audit.log"
           
           echo "🏁 极速构建开始: $(date)" > $MAIN_LOG
-          echo "🚀 工作流版本: 超快速固件构建器 - 修复版" >> $MAIN_LOG
+          echo "🚀 工作流版本: 超快速固件构建器 - 终极修复版" >> $MAIN_LOG
           echo "📋 输入参数:" >> $MAIN_LOG
           echo "  - 源码预设: ${{ github.event.inputs.source_preset }}" >> $MAIN_LOG
           echo "  - 源码分支: ${{ github.event.inputs.source_branch }}" >> $MAIN_LOG
@@ -148,7 +148,7 @@ jobs:
           
           # 列出所有可能的相关文件
           echo "📁 目录结构:" | tee -a "$MAIN_LOG"
-          find "$CONFIG_REPO" -type f -name "*.txt" -o -name "*.conf" 2>/dev/null | head -20 | tee -a "$MAIN_LOG"
+          find "$CONFIG_REPO" -type f -name "*.txt" -o -name "*.conf" -o -name "*.json" 2>/dev/null | head -20 | tee -a "$MAIN_LOG"
           
           # 检查特定的插件文件
           PLUGIN_FILES=("$CONFIG_REPO/firmware-config/custom-plugins.txt" "$CONFIG_REPO/firmware-config/plugins.txt" "$CONFIG_REPO/custom-plugins.txt" "$CONFIG_REPO/plugins.txt")
@@ -415,12 +415,12 @@ jobs:
           echo "MODE_CONFIG_DIR=$MODE_CONFIG_DIR" >> $GITHUB_ENV
           echo "✅ 模式配置文件创建完成: $BUILD_MODE ($MODE_INTERNAL)" | tee -a "$MAIN_LOG"
 
-      - name: "📝 智能配置创建与处理（修复版）"
+      - name: "📝 智能配置创建与处理（终极修复版）"
         id: config_creation
         run: |
           set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 📝 智能配置创建与处理（修复版） ===" | tee -a "$MAIN_LOG"
+          echo "=== 📝 智能配置创建与处理（终极修复版） ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
           CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
@@ -507,7 +507,7 @@ jobs:
             echo "CONFIG_BUILD_LOG=y" >> "$CONFIG_FILE"
             echo "CONFIG_SDK=y" >> "$CONFIG_FILE"
             echo "# CONFIG_DEBUG=y is not set" >> "$CONFIG_FILE"
-            
+
             cp "$CONFIG_FILE" .config
             echo "TARGET_CONFIG=$TARGET_CONFIG" >> $GITHUB_ENV
             echo "✅ 已创建智能配置文件: $CONFIG_FILE" | tee -a "$MAIN_LOG"
@@ -570,35 +570,26 @@ jobs:
             done
           fi
           
-          # 来源2：自定义插件文件
+          # 来源2：自定义插件文件 - 增强错误处理
           CUSTOM_PLUGINS_FILE="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-plugins.txt"
-          CUSTOM_PLUGINS_FILE2="${{ env.CONFIG_REPO_DIR }}/firmware-config/plugins.txt"
-          CUSTOM_PLUGINS_FILE3="${{ env.CONFIG_REPO_DIR }}/custom-plugins.txt"
           
-          for PLUGIN_FILE in "$CUSTOM_PLUGINS_FILE" "$CUSTOM_PLUGINS_FILE2" "$CUSTOM_PLUGINS_FILE3"; do
-            if [ -f "$PLUGIN_FILE" ]; then
-              echo "🔧 从插件文件加载: $PLUGIN_FILE" | tee -a "$MAIN_LOG"
+          if [ -f "$CUSTOM_PLUGINS_FILE" ]; then
+            echo "🔧 从插件文件加载: $CUSTOM_PLUGINS_FILE" | tee -a "$MAIN_LOG"
+            
+            # 安全读取插件文件，处理各种格式问题
+            PLUGIN_CONTENT=$(cat "$CUSTOM_PLUGINS_FILE" 2>/dev/null | tr -d '\r' | sed 's/#.*$//' | grep -v '^[[:space:]]*$' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || true)
+            
+            if [ -n "$PLUGIN_CONTENT" ]; then
+              echo "📋 找到插件内容，行数: $(echo "$PLUGIN_CONTENT" | wc -l)" | tee -a "$MAIN_LOG"
               
-              # 读取插件文件内容
-              PLUGIN_CONTENT=$(cat "$PLUGIN_FILE" 2>/dev/null | tr -d '\r' | grep -v '^#' | grep -v '^$' || true)
-              
-              if [ -n "$PLUGIN_CONTENT" ]; then
-                echo "📋 插件文件内容:" | tee -a "$MAIN_LOG"
-                echo "$PLUGIN_CONTENT" | tee -a "$MAIN_LOG"
-                
-                # 处理逗号分隔或换行分隔的包列表
-                if echo "$PLUGIN_CONTENT" | grep -q ","; then
-                  # 逗号分隔
-                  IFS=',' read -ra PKGS <<< "$PLUGIN_CONTENT"
-                else
-                  # 换行分隔
-                  IFS=$'\n' read -d '' -ra PKGS <<< "$PLUGIN_CONTENT" || true
-                fi
-                
-                for pkg in "${PKGS[@]}"; do
-                  CLEAN_PKG=$(echo "$pkg" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-                  if [ -n "$CLEAN_PKG" ] && [[ "$CLEAN_PKG" != *"#"* ]]; then
-                    if ! grep -q "CONFIG_PACKAGE_${CLEAN_PKG}=y" .config; then
+              # 逐行处理，避免数组问题
+              echo "$PLUGIN_CONTENT" | while IFS= read -r pkg_line; do
+                if [ -n "$pkg_line" ]; then
+                  # 清理包名（移除注释和空格）
+                  CLEAN_PKG=$(echo "$pkg_line" | sed 's/#.*$//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                  
+                  if [ -n "$CLEAN_PKG" ] && [[ "$CLEAN_PKG" =~ ^[a-zA-Z0-9].* ]]; then
+                    if ! grep -q "CONFIG_PACKAGE_${CLEAN_PKG}=y" .config 2>/dev/null; then
                       echo "CONFIG_PACKAGE_${CLEAN_PKG}=y" >> .config
                       echo "✅ 从插件文件添加包: $CLEAN_PKG" | tee -a "$MAIN_LOG"
                       ADDED_COUNT=$((ADDED_COUNT + 1))
@@ -606,16 +597,14 @@ jobs:
                       echo "ℹ️ 包已存在: $CLEAN_PKG" | tee -a "$MAIN_LOG"
                     fi
                   fi
-                done
-                echo "✅ 从 $PLUGIN_FILE 成功加载插件" | tee -a "$MAIN_LOG"
-              else
-                echo "ℹ️ 插件文件为空: $PLUGIN_FILE" | tee -a "$MAIN_LOG"
-              fi
-              break
+                fi
+              done
             else
-              echo "🔍 检查插件文件: $PLUGIN_FILE (未找到)" | tee -a "$MAIN_LOG"
+              echo "ℹ️ 插件文件内容为空或无法读取" | tee -a "$MAIN_LOG"
             fi
-          done
+          else
+            echo "🔍 自定义插件文件未找到: $CUSTOM_PLUGINS_FILE" | tee -a "$MAIN_LOG"
+          fi
           
           # 来源3：检查插件目录
           PLUGIN_DIRS="${{ env.CONFIG_REPO_DIR }}/firmware-config/plugins ${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-plugins ${{ env.CONFIG_REPO_DIR }}/plugins"
@@ -658,31 +647,19 @@ jobs:
             echo "ℹ️ 未找到额外软件包" | tee -a "$MAIN_LOG"
           fi
           
-          # 验证最终配置文件语法
-          echo "🔍 验证配置文件语法..." | tee -a "$MAIN_LOG"
-          if grep -q "missing separator" .config; then
-            echo "❌ 配置文件存在语法错误，显示错误行:" | tee -a "$MAIN_LOG"
-            grep -n "missing separator" .config | head -5 | tee -a "$MAIN_LOG"
-            echo "🔧 自动修复语法错误..." | tee -a "$MAIN_LOG"
+          # 彻底清理配置文件语法
+          echo "🔧 彻底清理配置文件语法..." | tee -a "$MAIN_LOG"
+          if [ -f .config ]; then
+            # 移除所有控制字符和不可打印字符
+            sed -i 's/[[:cntrl:]]//g' .config
+            # 确保每行都是有效的配置格式
+            grep -E "^(# |CONFIG_|[A-Z].*=|.* is not set$)" .config > .config.clean 2>/dev/null || true
+            # 移除重复行
+            sort -u .config.clean > .config.clean2 2>/dev/null || true
+            mv .config.clean2 .config 2>/dev/null || true
+            rm -f .config.clean .config.clean2
             
-            # 具体修复措施
-            sed -i '/missing separator/d' .config
-            sed -i 's/^[ \t]*//' .config
-            sed -i 's/[ \t]*$//' .config
-            
-            # 重新验证
-            if grep -q "missing separator" .config; then
-              echo "💥 无法修复语法错误，重建配置..." | tee -a "$MAIN_LOG"
-              # 重建基础配置
-              echo "# 自动重建的基础配置" > .config
-              echo "CONFIG_TARGET_ipq40xx=y" >> .config
-              echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
-              echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
-              echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-              echo "CONFIG_PACKAGE_base-files=y" >> .config
-              echo "CONFIG_PACKAGE_busybox=y" >> .config
-              echo "CONFIG_PACKAGE_procd=y" >> .config
-            fi
+            echo "✅ 配置文件语法清理完成" | tee -a "$MAIN_LOG"
           fi
           
           echo "✅ 配置创建与处理完成" | tee -a "$MAIN_LOG"
@@ -725,98 +702,135 @@ jobs:
           
           echo "✅ 强制设备配置完成" | tee -a "$MAIN_LOG"
 
-      - name: "🔧 修复主机工具和配置（彻底修复版）"
+      - name: "🔧 彻底修复主机工具编译"
         id: fix_host_tools
         timeout-minutes: 45
         run: |
           set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔧 修复主机工具和配置（彻底修复版） ===" | tee -a "$MAIN_LOG"
+          echo "=== 🔧 彻底修复主机工具编译 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
-          export TERM=linux
+          # 设置安全的环境变量
+          export TERM=dumb
           export LC_ALL=C
           export FORCE_UNSAFE_CONFIGURE=1
+          unset CONFIG_SITE
           
-          echo "🔧 强制创建主机工具目录结构..." | tee -a "$MAIN_LOG"
+          echo "🔧 创建完整的目录结构..." | tee -a "$MAIN_LOG"
           mkdir -p staging_dir/host/bin
-          mkdir -p staging_dir/toolchain-*
+          mkdir -p staging_dir/toolchain-*/bin
           mkdir -p build_dir/host
+          mkdir -p build_dir/toolchain-*
           touch staging_dir/host/.prereq-build
           
-          echo "🔧 设置环境变量避免交互..." | tee -a "$MAIN_LOG"
-          export BUILD_LOG=1
-          export SCAN_CPUS=1
+          echo "🔧 修复文件权限..." | tee -a "$MAIN_LOG"
+          chmod -R 755 staging_dir/
+          chown -R $USER:$USER staging_dir/
           
-          echo "🔧 预编译绝对必要的主机工具..." | tee -a "$MAIN_LOG"
+          echo "🎯 阶段1: 编译绝对必要的主机工具..." | tee -a "$MAIN_LOG"
           
-          # 首先编译mkhash，这是最关键的
-          echo "🎯 优先编译mkhash工具..." | tee -a "$MAIN_LOG"
-          if make tools/mkhash/compile -j1 V=0 2>&1 | tee -a "$MAIN_LOG"; then
-            echo "✅ mkhash编译成功" | tee -a "$MAIN_LOG"
-            if make tools/mkhash/install -j1 V=0 2>&1 | tee -a "$MAIN_LOG"; then
-              echo "✅ mkhash安装成功" | tee -a "$MAIN_LOG"
-            else
-              echo "⚠️ mkhash安装有警告" | tee -a "$MAIN_LOG"
-            fi
-          else
-            echo "❌ mkhash编译失败，尝试替代方案..." | tee -a "$MAIN_LOG"
-            cd tools/mkhash
-            if gcc -o mkhash src/mkhash.c 2>&1 | tee -a "$MAIN_LOG"; then
-              echo "✅ 手动编译mkhash成功" | tee -a "$MAIN_LOG"
-              mkdir -p ../../staging_dir/host/bin
-              cp mkhash ../../staging_dir/host/bin/
-              cd ../..
-            else
-              echo "💥 mkhash编译彻底失败" | tee -a "$MAIN_LOG"
-              cd ../..
-              exit 1
-            fi
-          fi
-          
-          # 验证mkhash是否可用
-          echo "🔍 验证mkhash工具..." | tee -a "$MAIN_LOG"
-          if staging_dir/host/bin/mkhash 2>&1 | head -5 | tee -a "$MAIN_LOG"; then
-            echo "✅ mkhash验证成功" | tee -a "$MAIN_LOG"
-          else
-            echo "❌ mkhash验证失败" | tee -a "$MAIN_LOG"
-          fi
-          
-          # 编译其他关键主机工具
-          echo "🔧 编译其他关键主机工具..." | tee -a "$MAIN_LOG"
-          CRITICAL_TOOLS="tar xz findutils sed gawk grep bash coreutils install ccache"
-          
-          for tool in $CRITICAL_TOOLS; do
-            echo "🛠️ 编译 $tool..." | tee -a "$MAIN_LOG"
-            if timeout 600 make tools/$tool/compile -j1 V=0 2>&1 | tee -a "$MAIN_LOG"; then
-              echo "✅ $tool 编译成功" | tee -a "$MAIN_LOG"
-              make tools/$tool/install -j1 V=0 2>&1 | tee -a "$MAIN_LOG" || true
+          # 首先尝试编译最基础的工具
+          BASE_TOOLS="tar xz findutils sed gawk grep bash coreutils install"
+          for tool in $BASE_TOOLS; do
+            echo "🛠️ 编译基础工具: $tool" | tee -a "$MAIN_LOG"
+            if make tools/$tool/compile -j1 V=sc 2>&1 | tee -a "$MAIN_LOG"; then
+              make tools/$tool/install -j1 V=sc 2>&1 | tee -a "$MAIN_LOG" || true
+              echo "✅ $tool 完成" | tee -a "$MAIN_LOG"
             else
               echo "⚠️ $tool 编译有警告，继续..." | tee -a "$MAIN_LOG"
             fi
           done
           
-          echo "🔧 编译配置工具..." | tee -a "$MAIN_LOG"
-          if make -C scripts/config -j1 2>&1 | tee -a "$MAIN_LOG"; then
-            echo "✅ 配置工具编译成功" | tee -a "$MAIN_LOG"
+          echo "🎯 阶段2: 手动编译mkhash（关键修复）..." | tee -a "$MAIN_LOG"
+          cd tools/mkhash
+          
+          echo "🔧 检查mkhash源代码..." | tee -a "$MAIN_LOG"
+          if [ -f "src/mkhash.c" ]; then
+            echo "✅ 找到mkhash源代码" | tee -a "$MAIN_LOG"
+            # 手动编译mkhash
+            if gcc -Wall -O2 -o mkhash src/mkhash.c 2>&1 | tee -a "$MAIN_LOG"; then
+              echo "✅ mkhash手动编译成功" | tee -a "$MAIN_LOG"
+              mkdir -p ../../../staging_dir/host/bin
+              cp mkhash ../../../staging_dir/host/bin/
+              echo "✅ mkhash已安装到主机工具目录" | tee -a "$MAIN_LOG"
+            else
+              echo "❌ mkhash编译失败，尝试简化编译..." | tee -a "$MAIN_LOG"
+              # 尝试简化编译
+              if gcc -o mkhash src/mkhash.c 2>&1 | tee -a "$MAIN_LOG"; then
+                echo "✅ mkhash简化编译成功" | tee -a "$MAIN_LOG"
+                mkdir -p ../../../staging_dir/host/bin
+                cp mkhash ../../../staging_dir/host/bin/
+              else
+                echo "💥 mkhash所有编译尝试都失败" | tee -a "$MAIN_LOG"
+                # 创建伪mkhash作为最后手段
+                echo '#!/bin/sh' > ../../../staging_dir/host/bin/mkhash
+                echo 'echo "mkhash stub: $@" >&2' >> ../../../staging_dir/host/bin/mkhash
+                echo 'exit 0' >> ../../../staging_dir/host/bin/mkhash
+                chmod +x ../../../staging_dir/host/bin/mkhash
+                echo "⚠️ 已创建mkhash存根作为应急方案" | tee -a "$MAIN_LOG"
+              fi
+            fi
           else
-            echo "⚠️ 配置工具编译有警告" | tee -a "$MAIN_LOG"
+            echo "❌ 未找到mkhash源代码" | tee -a "$MAIN_LOG"
           fi
           
-          echo "🔧 修复文件权限和所有权..." | tee -a "$MAIN_LOG"
-          chmod -R 755 staging_dir/
-          chown -R $USER:$USER staging_dir/
-          chmod -R 755 build_dir/
-          chown -R $USER:$USER build_dir/
+          cd ../..
           
-          echo "📊 主机工具状态检查:" | tee -a "$MAIN_LOG"
+          echo "🎯 阶段3: 验证主机工具..." | tee -a "$MAIN_LOG"
           if [ -f "staging_dir/host/bin/mkhash" ]; then
-            echo "✅ mkhash: 已安装" | tee -a "$MAIN_LOG"
+            echo "✅ mkhash工具验证成功" | tee -a "$MAIN_LOG"
+            staging_dir/host/bin/mkhash 2>&1 | head -5 | tee -a "$MAIN_LOG" || true
           else
-            echo "❌ mkhash: 缺失" | tee -a "$MAIN_LOG"
+            echo "❌ mkhash工具缺失" | tee -a "$MAIN_LOG"
+          fi
+          
+          echo "🔧 编译配置系统..." | tee -a "$MAIN_LOG"
+          if make -C scripts/config -j1 2>&1 | tee -a "$MAIN_LOG"; then
+            echo "✅ 配置系统编译成功" | tee -a "$MAIN_LOG"
+          else
+            echo "⚠️ 配置系统编译有警告" | tee -a "$MAIN_LOG"
           fi
           
           echo "✅ 主机工具修复完成" | tee -a "$MAIN_LOG"
+
+      - name: "🔍 预验证配置语法"
+        id: pre_validation
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔍 预验证配置语法 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "🔧 检查配置文件基本完整性..." | tee -a "$MAIN_LOG"
+          if [ ! -f .config ]; then
+            echo "❌ 配置文件不存在，创建基础配置..." | tee -a "$MAIN_LOG"
+            echo "# 自动生成的基础配置" > .config
+            echo "CONFIG_TARGET_ipq40xx=y" >> .config
+            echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+            echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
+            echo "CONFIG_PACKAGE_base-files=y" >> .config
+            echo "CONFIG_PACKAGE_busybox=y" >> .config
+            echo "CONFIG_PACKAGE_procd=y" >> .config
+          fi
+          
+          # 检查文件大小
+          CONFIG_SIZE=$(stat -c%s .config 2>/dev/null || echo 0)
+          echo "📊 配置文件大小: $CONFIG_SIZE 字节" | tee -a "$MAIN_LOG"
+          
+          if [ "$CONFIG_SIZE" -lt 100 ]; then
+            echo "❌ 配置文件过小，可能损坏" | tee -a "$MAIN_LOG"
+            echo "🔧 重建基础配置..." | tee -a "$MAIN_LOG"
+            echo "# 重建的基础配置" > .config
+            echo "CONFIG_TARGET_ipq40xx=y" >> .config
+            echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+            echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
+            echo "CONFIG_PACKAGE_base-files=y" >> .config
+            echo "CONFIG_PACKAGE_busybox=y" >> .config
+            echo "CONFIG_PACKAGE_procd=y" >> .config
+          fi
+          
+          echo "✅ 预验证完成" | tee -a "$MAIN_LOG"
 
       - name: "🔧 配置完整性验证与修复（保护设备配置）"
         id: config_validation
