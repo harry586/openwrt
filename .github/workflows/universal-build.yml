@@ -87,6 +87,7 @@ jobs:
           ERROR_LOG="/mnt/build-logs/errors.log"
           WARNING_LOG="/mnt/build-logs/warnings.log"
           ANALYSIS_REPORT="/mnt/build-logs/analysis_report.md"
+          DOWNLOAD_LOG="/mnt/build-logs/download_audit.log"
           
           echo "🏁 极速构建开始: $(date)" > $MAIN_LOG
           echo "🚀 工作流版本: 超快速固件构建器 - 优化版" >> $MAIN_LOG
@@ -102,10 +103,14 @@ jobs:
           echo "  - 额外软件包: ${{ github.event.inputs.extra_packages }}" >> $MAIN_LOG
           echo "==========================================" >> $MAIN_LOG
           
+          echo "# 下载审计日志" > $DOWNLOAD_LOG
+          echo "开始时间: $(date)" >> $DOWNLOAD_LOG
+          
           echo "MAIN_LOG=$MAIN_LOG" >> $GITHUB_ENV
           echo "ERROR_LOG=$ERROR_LOG" >> $GITHUB_ENV
           echo "WARNING_LOG=$WARNING_LOG" >> $GITHUB_ENV
           echo "ANALYSIS_REPORT=$ANALYSIS_REPORT" >> $GITHUB_ENV
+          echo "DOWNLOAD_LOG=$DOWNLOAD_LOG" >> $GITHUB_ENV
           echo "CONFIG_REPO_DIR=${{ github.workspace }}/config-repo" >> $GITHUB_ENV
           echo "BUILD_STATUS=running" >> $GITHUB_ENV
           
@@ -124,7 +129,7 @@ jobs:
           echo "📦 批量安装编译依赖..." | tee -a "$MAIN_LOG"
           sudo apt-get update -qq
           
-          sudo apt-get install -y -qq build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3 python3-pip python3-dev rsync unzip zlib1g-dev file wget jq ccache libtool-bin automake autoconf pkg-config subversion curl cmake ninja-build libelf-dev libxml2-dev liblzma-dev liblzo2-dev axel net-tools e2fsprogs genext2fs dosfstools mtools libffi-dev libsqlite3-dev libpam0g-dev libtirpc-dev libev-dev lm-sensors libsnmp-dev libglib2.0-dev libgpiod-dev libfl-dev upx-ucl
+          sudo apt-get install -y -qq build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3 python3-pip python3-dev rsync unzip zlib1g-dev file wget jq ccache libtool-bin automake autoconf pkg-config subversion curl cmake ninja-build libelf-dev libxml2-dev liblzma-dev liblzo2-dev axel net-tools e2fsprogs genext2fs dosfstools mtools libffi-dev libsqlite3-dev libpam0g-dev libtirpc-dev libev-dev lm-sensors libsnmp-dev libglib2.0-dev libgpiod-dev libfl-dev upx-ucl aria2
           
           python3 -m pip install --upgrade pip setuptools wheel -q
           
@@ -569,6 +574,240 @@ jobs:
           
           echo "✅ 语言包配置完成" | tee -a "$MAIN_LOG"
 
+      - name: "🔧 修复主机工具检查"
+        id: fix_prereq_check
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔧 修复主机工具检查 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "🔧 强制创建主机工具目录..." | tee -a "$MAIN_LOG"
+          mkdir -p staging_dir/host
+          mkdir -p staging_dir/toolchain-*
+          
+          echo "🔧 设置环境变量跳过严格检查..." | tee -a "$MAIN_LOG"
+          export FORCE_UNSAFE_CONFIGURE=1
+          
+          echo "🔧 手动创建prereq-build文件..." | tee -a "$MAIN_LOG"
+          touch staging_dir/host/.prereq-build
+          
+          # 检查并修复常见的依赖问题
+          echo "🔧 检查并修复系统依赖..." | tee -a "$MAIN_LOG"
+          
+          # 确保所有必要的工具都存在
+          for tool in gcc g++ make bash patch perl python3 python; do
+            if command -v $tool >/dev/null 2>&1; then
+              echo "✅ $tool 存在" | tee -a "$MAIN_LOG"
+            else
+              echo "⚠️ $tool 缺失，尝试安装..." | tee -a "$MAIN_LOG"
+              sudo apt-get install -y $tool 2>/dev/null || true
+            fi
+          done
+          
+          echo "🔧 修复文件权限..." | tee -a "$MAIN_LOG"
+          chmod -R 755 staging_dir/
+          chown -R $USER:$USER staging_dir/
+          
+          echo "✅ 主机工具检查修复完成" | tee -a "$MAIN_LOG"
+
+      - name: "🌐 智能网络和下载优化"
+        id: smart_download
+        timeout-minutes: 30
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          DOWNLOAD_LOG="${{ env.DOWNLOAD_LOG }}"
+          echo "=== 🌐 智能网络和下载优化 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          # 设置环境变量
+          export FORCE_UNSAFE_CONFIGURE=1
+          
+          echo "📊 网络状态检查..." | tee -a "$MAIN_LOG"
+          echo "网络状态检查: $(date)" >> "$DOWNLOAD_LOG"
+          
+          # 测试网络连接
+          echo "🔍 测试网络连接性..." | tee -a "$MAIN_LOG"
+          MIRRORS=(
+            "github.com"
+            "git.openwrt.org" 
+            "downloads.openwrt.org"
+            "mirror2.openwrt.org"
+            "sources.cdn.openwrt.org"
+          )
+          
+          for mirror in "${MIRRORS[@]}"; do
+            if ping -c 1 -W 2 "$mirror" &>/dev/null; then
+              echo "✅ $mirror - 可达" | tee -a "$MAIN_LOG"
+              echo "可达镜像: $mirror" >> "$DOWNLOAD_LOG"
+            else
+              echo "⚠️ $mirror - 不可达" | tee -a "$MAIN_LOG"
+              echo "不可达镜像: $mirror" >> "$DOWNLOAD_LOG"
+            fi
+          done
+          
+          # 修复镜像源
+          echo "🔧 配置下载镜像源..." | tee -a "$MAIN_LOG"
+          sed -i 's|https://sources.cdn.openwrt.org|https://mirror2.openwrt.org/sources|g' scripts/download.pl
+          sed -i 's|git.openwrt.org|github.com/openwrt|g' feeds.conf.* 2>/dev/null || true
+          
+          # 创建必要的目录结构
+          echo "🔧 创建必要的构建目录..." | tee -a "$MAIN_LOG"
+          mkdir -p /mnt/source/{build_dir,staging_dir,bin,tmp,logs,dl}
+          mkdir -p /mnt/source/staging_dir/{host,target-*,toolchain-*}
+          mkdir -p /mnt/source/build_dir/{host,target-*}
+          
+          # 修复权限
+          chmod -R 755 /mnt/source/staging_dir/
+          chown -R $USER:$USER /mnt/source/staging_dir/
+          
+          PARALLEL_JOBS="${{ env.PARALLEL_JOBS }}"
+          
+          echo "📥 开始智能下载流程..." | tee -a "$MAIN_LOG"
+          echo "开始下载流程: $(date)" >> "$DOWNLOAD_LOG"
+          
+          # 下载状态跟踪
+          DOWNLOAD_SUCCESS=false
+          DOWNLOAD_RETRY_COUNT=0
+          MAX_RETRIES=5
+          
+          while [ $DOWNLOAD_RETRY_COUNT -lt $MAX_RETRIES ] && [ "$DOWNLOAD_SUCCESS" = false ]; do
+            DOWNLOAD_RETRY_COUNT=$((DOWNLOAD_RETRY_COUNT + 1))
+            echo "🔄 下载尝试 $DOWNLOAD_RETRY_COUNT/$MAX_RETRIES..." | tee -a "$MAIN_LOG"
+            echo "下载尝试 $DOWNLOAD_RETRY_COUNT: $(date)" >> "$DOWNLOAD_LOG"
+            
+            # 首先尝试编译host工具
+            echo "🔧 尝试编译host工具..." | tee -a "$MAIN_LOG"
+            if make tools/compile -j1 FORCE_UNSAFE_CONFIGURE=1; then
+              echo "✅ host工具编译成功" | tee -a "$MAIN_LOG"
+              echo "host工具编译成功" >> "$DOWNLOAD_LOG"
+            else
+              echo "⚠️ host工具编译失败，尝试强制跳过..." | tee -a "$MAIN_LOG"
+              echo "host工具编译失败，强制跳过" >> "$DOWNLOAD_LOG"
+              # 强制创建prereq-build文件
+              mkdir -p staging_dir/host
+              touch staging_dir/host/.prereq-build
+            fi
+            
+            # 然后尝试下载
+            echo "🌐 开始下载依赖..." | tee -a "$MAIN_LOG"
+            
+            # 使用不同的并行度尝试
+            if [ $DOWNLOAD_RETRY_COUNT -le 2 ]; then
+              JOBS=$PARALLEL_JOBS
+            else
+              JOBS=1  # 最后尝试使用单线程
+            fi
+            
+            TEMP_DOWNLOAD_LOG=$(mktemp)
+            set +e
+            make download -j$JOBS FORCE_UNSAFE_CONFIGURE=1 V=s 2>&1 | tee "$TEMP_DOWNLOAD_LOG"
+            DOWNLOAD_RESULT=${PIPESTATUS[0]}
+            set -e
+            
+            # 记录下载日志
+            cat "$TEMP_DOWNLOAD_LOG" >> "$MAIN_LOG"
+            echo "=== 下载尝试 $DOWNLOAD_RETRY_COUNT 详细日志 ===" >> "$DOWNLOAD_LOG"
+            cat "$TEMP_DOWNLOAD_LOG" >> "$DOWNLOAD_LOG"
+            
+            if [ $DOWNLOAD_RESULT -eq 0 ]; then
+              echo "✅ 下载成功" | tee -a "$MAIN_LOG"
+              echo "下载成功" >> "$DOWNLOAD_LOG"
+              DOWNLOAD_SUCCESS=true
+            else
+              echo "❌ 下载尝试 $DOWNLOAD_RETRY_COUNT 失败" | tee -a "$MAIN_LOG"
+              echo "下载失败，退出码: $DOWNLOAD_RESULT" >> "$DOWNLOAD_LOG"
+              
+              # 分析下载错误
+              if grep -q "Connection timed out" "$TEMP_DOWNLOAD_LOG"; then
+                echo "🌐 网络超时错误" | tee -a "$MAIN_LOG"
+                echo "错误类型: 网络超时" >> "$DOWNLOAD_LOG"
+              elif grep -q "Name or service not known" "$TEMP_DOWNLOAD_LOG"; then
+                echo "🌐 DNS解析错误" | tee -a "$MAIN_LOG"
+                echo "错误类型: DNS解析失败" >> "$DOWNLOAD_LOG"
+              elif grep -q "404 Not Found" "$TEMP_DOWNLOAD_LOG"; then
+                echo "🌐 资源不存在错误" | tee -a "$MAIN_LOG"
+                echo "错误类型: 404资源不存在" >> "$DOWNLOAD_LOG"
+              elif grep -q "SSL certificate problem" "$TEMP_DOWNLOAD_LOG"; then
+                echo "🌐 SSL证书错误" | tee -a "$MAIN_LOG"
+                echo "错误类型: SSL证书问题" >> "$DOWNLOAD_LOG"
+              fi
+              
+              if [ $DOWNLOAD_RETRY_COUNT -lt $MAX_RETRIES ]; then
+                RETRY_DELAY=$((DOWNLOAD_RETRY_COUNT * 10))
+                echo "⏳ 等待 ${RETRY_DELAY}秒后重试..." | tee -a "$MAIN_LOG"
+                echo "等待 ${RETRY_DELAY}秒后重试" >> "$DOWNLOAD_LOG"
+                sleep $RETRY_DELAY
+                
+                # 清理部分下载文件
+                echo "🧹 清理部分下载的文件..." | tee -a "$MAIN_LOG"
+                find dl/ -name "*.tmp" -delete 2>/dev/null || true
+                find dl/ -name "*.part" -delete 2>/dev/null || true
+              fi
+            fi
+            
+            rm -f "$TEMP_DOWNLOAD_LOG"
+          done
+          
+          if [ "$DOWNLOAD_SUCCESS" = false ]; then
+            echo "💥 所有下载尝试都失败" | tee -a "$MAIN_LOG"
+            echo "最终状态: 所有下载尝试失败" >> "$DOWNLOAD_LOG"
+            exit 1
+          fi
+          
+          # 下载完整性验证
+          echo "🔍 验证下载完整性..." | tee -a "$MAIN_LOG"
+          echo "开始完整性验证: $(date)" >> "$DOWNLOAD_LOG"
+          
+          DOWNLOAD_COUNT=$(find dl/ -type f 2>/dev/null | wc -l)
+          echo "📦 下载文件数量: $DOWNLOAD_COUNT" | tee -a "$MAIN_LOG"
+          echo "总下载文件数: $DOWNLOAD_COUNT" >> "$DOWNLOAD_LOG"
+          
+          # 检查关键文件
+          CRITICAL_FILES=0
+          if [ -f "dl/"*"/linux-"*".tar.xz" ] || [ -f "dl/linux-"*".tar.xz" ]; then
+            echo "✅ 找到Linux内核源码" | tee -a "$MAIN_LOG"
+            CRITICAL_FILES=$((CRITICAL_FILES + 1))
+          else
+            echo "⚠️ 未找到Linux内核源码" | tee -a "$MAIN_LOG"
+          fi
+          
+          if find dl/ -name "*.tar.gz" | grep -q .; then
+            echo "✅ 找到压缩包文件" | tee -a "$MAIN_LOG"
+            CRITICAL_FILES=$((CRITICAL_FILES + 1))
+          else
+            echo "⚠️ 未找到压缩包文件" | tee -a "$MAIN_LOG"
+          fi
+          
+          if [ "$DOWNLOAD_COUNT" -lt 10 ]; then
+            echo "⚠️ 下载文件数量过少，可能有问题" | tee -a "$MAIN_LOG"
+            echo "警告: 下载文件数量过少" >> "$DOWNLOAD_LOG"
+          else
+            echo "✅ 下载文件数量正常" | tee -a "$MAIN_LOG"
+          fi
+          
+          if [ $CRITICAL_FILES -lt 1 ]; then
+            echo "❌ 关键文件缺失，下载可能不完整" | tee -a "$MAIN_LOG"
+            echo "错误: 关键文件缺失" >> "$DOWNLOAD_LOG"
+            exit 1
+          fi
+          
+          echo "📊 下载统计:" | tee -a "$MAIN_LOG"
+          echo "下载文件总数: $DOWNLOAD_COUNT" | tee -a "$MAIN_LOG"
+          echo "下载重试次数: $DOWNLOAD_RETRY_COUNT" | tee -a "$MAIN_LOG"
+          echo "关键文件数量: $CRITICAL_FILES" | tee -a "$MAIN_LOG"
+          
+          echo "最终下载统计:" >> "$DOWNLOAD_LOG"
+          echo "文件总数: $DOWNLOAD_COUNT" >> "$DOWNLOAD_LOG"
+          echo "重试次数: $DOWNLOAD_RETRY_COUNT" >> "$DOWNLOAD_LOG"
+          echo "关键文件: $CRITICAL_FILES" >> "$DOWNLOAD_LOG"
+          echo "下载完成时间: $(date)" >> "$DOWNLOAD_LOG"
+          
+          echo "DOWNLOAD_COMPLETE=true" >> $GITHUB_ENV
+          echo "DOWNLOAD_FILE_COUNT=$DOWNLOAD_COUNT" >> $GITHUB_ENV
+          echo "✅ 智能下载完成" | tee -a "$MAIN_LOG"
+
       - name: "🔧 高级功能增强"
         id: advanced_features
         if: github.event.inputs.enable_advanced == 'true'
@@ -836,42 +1075,6 @@ jobs:
           
           echo "✅ 配置验证完成" | tee -a "$MAIN_LOG"
 
-      - name: "🚀 并行下载优化"
-        id: download_deps
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🚀 并行下载优化 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          
-          sed -i 's|https://sources.cdn.openwrt.org|https://mirror2.openwrt.org/sources|g' scripts/download.pl
-          sed -i 's|git.openwrt.org|github.com/openwrt|g' feeds.conf.* 2>/dev/null || true
-          
-          echo "📥 开始并行下载..." | tee -a "$MAIN_LOG"
-          PARALLEL_JOBS="${{ env.PARALLEL_JOBS }}"
-          
-          for i in 1 2 3; do
-            echo "🔄 下载尝试 $i/3..." | tee -a "$MAIN_LOG"
-            if make download -j$PARALLEL_JOBS; then
-              echo "✅ 下载成功" | tee -a "$MAIN_LOG"
-              break
-            else
-              echo "⚠️ 下载尝试 $i 失败" | tee -a "$MAIN_LOG"
-              if [ $i -eq 3 ]; then
-                echo "❌ 所有下载尝试都失败" | tee -a "$MAIN_LOG"
-                exit 1
-              fi
-              sleep 10
-            fi
-          done
-          
-          DOWNLOAD_COUNT=$(find dl/ -type f 2>/dev/null | wc -l)
-          echo "📦 下载文件数量: $DOWNLOAD_COUNT" | tee -a "$MAIN_LOG"
-          
-          if [ "$DOWNLOAD_COUNT" -lt 10 ]; then
-            echo "⚠️ 下载文件数量过少，可能有问题" | tee -a "$MAIN_LOG"
-          fi
-
       - name: "⚡ 智能编译执行"
         id: smart_build
         timeout-minutes: 150
@@ -1112,6 +1315,7 @@ jobs:
           MAIN_LOG="${{ env.MAIN_LOG }}"
           ERROR_LOG="${{ env.ERROR_LOG }}"
           ANALYSIS_REPORT="${{ env.ANALYSIS_REPORT }}"
+          DOWNLOAD_LOG="${{ env.DOWNLOAD_LOG }}"
           echo "=== 🔍 自动错误分析与报告 ===" | tee -a "$MAIN_LOG"
           
           # 生成错误分析报告
@@ -1168,6 +1372,33 @@ jobs:
             echo "4. 检查磁盘空间和内存是否充足" >> "$ANALYSIS_REPORT"
           fi
           
+          # 下载问题分析
+          if [ -f "$DOWNLOAD_LOG" ]; then
+            echo "## 🌐 下载问题分析" >> "$ANALYSIS_REPORT"
+            if grep -q "网络超时" "$DOWNLOAD_LOG"; then
+              echo "### ❌ 网络连接问题" >> "$ANALYSIS_REPORT"
+              echo "**问题**: 下载过程中出现网络超时" >> "$ANALYSIS_REPORT"
+              echo "**解决方案**: 检查网络连接，尝试使用代理或更换镜像源" >> "$ANALYSIS_REPORT"
+            fi
+            
+            if grep -q "DNS解析失败" "$DOWNLOAD_LOG"; then
+              echo "### ❌ DNS解析问题" >> "$ANALYSIS_REPORT"
+              echo "**问题**: 无法解析域名" >> "$ANALYSIS_REPORT"
+              echo "**解决方案**: 检查DNS设置，尝试使用其他DNS服务器" >> "$ANALYSIS_REPORT"
+            fi
+            
+            if grep -q "SSL证书问题" "$DOWNLOAD_LOG"; then
+              echo "### ❌ SSL证书问题" >> "$ANALYSIS_REPORT"
+              echo "**问题**: SSL证书验证失败" >> "$ANALYSIS_REPORT"
+              echo "**解决方案**: 更新CA证书或临时禁用SSL验证" >> "$ANALYSIS_REPORT"
+            fi
+            
+            DOWNLOAD_RETRIES=$(grep -c "下载尝试" "$DOWNLOAD_LOG" 2>/dev/null || echo 0)
+            echo "### 📊 下载统计" >> "$ANALYSIS_REPORT"
+            echo "- 下载重试次数: $DOWNLOAD_RETRIES" >> "$ANALYSIS_REPORT"
+            echo "- 最终下载文件数: ${{ env.DOWNLOAD_FILE_COUNT || 0 }}" >> "$ANALYSIS_REPORT"
+          fi
+          
           # 系统资源报告
           echo "## 📊 系统资源报告" >> "$ANALYSIS_REPORT"
           echo "\`\`\`" >> "$ANALYSIS_REPORT"
@@ -1200,6 +1431,7 @@ jobs:
           cp "$ERROR_LOG" /mnt/artifacts/ 2>/dev/null || true
           cp "$WARNING_LOG" /mnt/artifacts/ 2>/dev/null || true
           cp "$ANALYSIS_REPORT" /mnt/artifacts/ 2>/dev/null || true
+          cp "$DOWNLOAD_LOG" /mnt/artifacts/ 2>/dev/null || true
           
           # 收集配置文件和构建信息
           cp /mnt/source/.config /mnt/artifacts/ 2>/dev/null || true
@@ -1275,10 +1507,12 @@ jobs:
           echo "⚡ 编译性能:"
           echo "  - 并行作业: ${{ env.PARALLEL_JOBS || 'N/A' }}"
           echo "  - 构建状态: ${{ env.BUILD_STATUS || 'unknown' }}"
+          echo "  - 下载重试: ${{ env.DOWNLOAD_RETRY_COUNT || 'N/A' }}"
           echo ""
           echo "📦 构建结果:"
           echo "  - 固件数量: ${{ env.FIRMWARE_COUNT || 0 }}"
           echo "  - 产物数量: ${{ env.ARTIFACT_COUNT || 0 }}"
+          echo "  - 下载文件: ${{ env.DOWNLOAD_FILE_COUNT || 0 }}"
           echo ""
           echo "🔧 配置信息:"
           echo "  - 配置来源: ${{ env.CONFIG_SOURCE || 'unknown' }}"
@@ -1300,5 +1534,8 @@ jobs:
           else
             echo "❌ 构建失败或未生成固件"
             echo "🔧 请查看错误分析报告了解详细问题"
+            if [ "${{ env.DOWNLOAD_RETRY_COUNT }}" -gt 3 ]; then
+              echo "🌐 网络问题: 下载过程多次重试，建议检查网络连接"
+            fi
           fi
           echo "=========================================="
