@@ -672,13 +672,119 @@ jobs:
           echo "CONFIG_KERNEL_INET=y" >> .config
           echo "CONFIG_KERNEL_IPV6=y" >> .config
           
-          # 4. 编译环境修复
-          echo "🔧 编译环境修复..." | tee -a "$MAIN_LOG"
-          mkdir -p build_dir/target-* staging_dir/target-* staging_dir/toolchain-*
-          find build_dir -type d -exec chmod 755 {} \;
-          find staging_dir -type d -exec chmod 755 {} \;
+          # 4. 通用目录结构修复
+          echo "🔧 修复通用构建目录结构..." | tee -a "$MAIN_LOG"
+          mkdir -p /mnt/source/{build_dir,staging_dir,bin,tmp,logs,dl}
+          mkdir -p /mnt/source/build_dir/{host,target-*}
+          mkdir -p /mnt/source/staging_dir/{host,target-*,toolchain-*}
+          
+          # 创建通用目标架构目录结构
+          for arch_dir in /mnt/source/build_dir/target-*; do
+            if [ -d "$arch_dir" ]; then
+              arch_name=$(basename "$arch_dir")
+              mkdir -p "$arch_dir/root-"{ipq40xx,ramips,x86,armvirt,ath79,mediatek,qualcomm,realtek,bcm53xx,generic}
+              
+              for root_dir in "$arch_dir"/root-*; do
+                if [ -d "$root_dir" ]; then
+                  mkdir -p "$root_dir"/{bin,dev,etc,lib,proc,sbin,sys,tmp,usr,var,www,overlay}
+                  mkdir -p "$root_dir"/usr/{bin,sbin,lib,share,include}
+                  mkdir -p "$root_dir"/etc/{init.d,config,uci-defaults,hotplug.d,rc.button}
+                  mkdir -p "$root_dir"/var/{lock,run,log,tmp}
+                  mkdir -p "$root_dir"/lib/{modules,firmware,netifd,upgrade}
+                fi
+              done
+              
+              mkdir -p "$arch_dir/linux-"{ipq40xx,ramips,x86,ath79}"_generic/linux-*/"
+            fi
+          done
+          
+          # 创建主机工具链目录
+          mkdir -p /mnt/source/staging_dir/host/{bin,lib,include,share,usr}
+          mkdir -p /mnt/source/build_dir/host/{cmake,pkg-config,automake,libtool}
+          
+          # 创建通用包构建目录
+          mkdir -p /mnt/source/build_dir/{host,target-*}/{alsa-lib,busybox,dropbear,firewall,json-c,libubox,libuci,luci,mtdev,openvpn,opkg,procd,ubus,uci,uhttpd,wpad}
+          
+          # 设置正确的目录权限
+          find /mnt/source/build_dir -type d -exec chmod 755 {} \; 2>/dev/null || true
+          find /mnt/source/staging_dir -type d -exec chmod 755 {} \; 2>/dev/null || true
+          find /mnt/source/bin -type d -exec chmod 755 {} \; 2>/dev/null || true
+          
+          # 创建符号链接
+          [ -L "/mnt/source/dl" ] || ln -sf /mnt/downloads /mnt/source/dl 2>/dev/null || true
+          [ -L "/mnt/source/logs" ] || ln -sf /mnt/build-logs /mnt/source/logs 2>/dev/null || true
+          
+          # 修复目录所有权
+          chown -R $USER:$USER /mnt/source/build_dir /mnt/source/staging_dir /mnt/source/bin 2>/dev/null || true
           
           echo "✅ 智能构建修复完成" | tee -a "$MAIN_LOG"
+
+      - name: "📁 构建目录预检查"
+        id: dir_precheck
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 📁 构建目录预检查 ===" | tee -a "$MAIN_LOG"
+          
+          cd /mnt/source
+          
+          echo "🔧 执行预编译目录检查..." | tee -a "$MAIN_LOG"
+          
+          # 创建通用构建目录函数
+          create_universal_build_dirs() {
+            echo "🏗️ 创建通用构建目录..." | tee -a "$MAIN_LOG"
+            
+            local target_arch=$(find /mnt/source/build_dir -maxdepth 1 -name "target-*" -type d | head -1 | xargs basename 2>/dev/null || echo "target-unknown")
+            local linux_arch=$(find /mnt/source/build_dir -maxdepth 1 -name "linux-*" -type d | head -1 | xargs basename 2>/dev/null || echo "linux-unknown")
+            
+            echo "  📊 检测到架构: $target_arch, $linux_arch" | tee -a "$MAIN_LOG"
+            
+            local root_patterns=("ipq40xx" "ramips" "x86" "armvirt" "ath79" "mediatek" "qualcomm" "realtek" "bcm53xx" "generic")
+            
+            for pattern in "${root_patterns[@]}"; do
+              local root_dir="/mnt/source/build_dir/$target_arch/root-$pattern"
+              if [ ! -d "$root_dir" ]; then
+                echo "  📂 创建根目录: root-$pattern" | tee -a "$MAIN_LOG"
+                mkdir -p "$root_dir"
+              fi
+              
+              local std_dirs=("bin" "dev" "etc" "lib" "proc" "sbin" "sys" "tmp" "usr" "var" "www" "overlay")
+              for dir in "${std_dirs[@]}"; do
+                mkdir -p "$root_dir/$dir"
+              done
+              
+              mkdir -p "$root_dir/usr/"{bin,sbin,lib,share,include}
+              mkdir -p "$root_dir/etc/"{init.d,config,uci-defaults,hotplug.d,rc.button}
+              mkdir -p "$root_dir/var/"{lock,run,log,tmp}
+              mkdir -p "$root_dir/lib/"{modules,firmware,netifd,upgrade}
+            done
+            
+            find "/mnt/source/build_dir/$target_arch" -type d -exec chmod 755 {} \; 2>/dev/null || true
+            
+            echo "✅ 通用目录创建完成" | tee -a "$MAIN_LOG"
+          }
+          
+          create_universal_build_dirs
+          
+          # 验证关键目录
+          echo "🔍 验证关键目录..." | tee -a "$MAIN_LOG"
+          critical_dirs=("build_dir" "staging_dir" "bin/targets" "dl" "tmp")
+          
+          all_ok=true
+          for dir in "${critical_dirs[@]}"; do
+            if [ -d "$dir" ] && [ -w "$dir" ]; then
+              echo "  ✅ $dir - 可写" | tee -a "$MAIN_LOG"
+            else
+              echo "  ❌ $dir - 问题" | tee -a "$MAIN_LOG"
+              all_ok=false
+            fi
+          done
+          
+          if [ "$all_ok" = true ]; then
+            echo "✅ 目录预检查通过" | tee -a "$MAIN_LOG"
+          else
+            echo "⚠️ 目录预检查发现问题，但将继续构建" | tee -a "$MAIN_LOG"
+          fi
 
       - name: "🔍 配置完整性验证"
         id: config_validation
@@ -770,6 +876,32 @@ jobs:
           make defconfig
           
           mkdir -p logs
+          
+          # 通用目录创建函数
+          create_universal_build_dirs() {
+            echo "🏗️ 创建通用构建目录..." | tee -a "$MAIN_LOG"
+            
+            local target_arch=$(find /mnt/source/build_dir -maxdepth 1 -name "target-*" -type d | head -1 | xargs basename 2>/dev/null || echo "target-unknown")
+            local root_patterns=("ipq40xx" "ramips" "x86" "armvirt" "ath79" "mediatek" "qualcomm" "realtek" "bcm53xx" "generic")
+            
+            for pattern in "${root_patterns[@]}"; do
+              local root_dir="/mnt/source/build_dir/$target_arch/root-$pattern"
+              mkdir -p "$root_dir"
+              
+              local std_dirs=("bin" "dev" "etc" "lib" "proc" "sbin" "sys" "tmp" "usr" "var" "www" "overlay")
+              for dir in "${std_dirs[@]}"; do
+                mkdir -p "$root_dir/$dir"
+              done
+              
+              mkdir -p "$root_dir/usr/"{bin,sbin,lib,share,include}
+              mkdir -p "$root_dir/etc/"{init.d,config,uci-defaults,hotplug.d,rc.button}
+              mkdir -p "$root_dir/var/"{lock,run,log,tmp}
+              mkdir -p "$root_dir/lib/"{modules,firmware,netifd,upgrade}
+            done
+            
+            find "/mnt/source/build_dir/$target_arch" -type d -exec chmod 755 {} \; 2>/dev/null || true
+            echo "✅ 通用目录创建完成" | tee -a "$MAIN_LOG"
+          }
           
           # 编译函数 - 带错误分析和恢复
           compile_with_recovery() {
@@ -878,8 +1010,17 @@ jobs:
               "内核编译")
                 echo "🔄 清理内核构建..." | tee -a "$MAIN_LOG"
                 make target/linux/clean
+                
+                # 专门修复构建目录问题
+                echo "🔧 修复内核构建目录..." | tee -a "$MAIN_LOG"
+                create_universal_build_dirs
                 ;;
               "完整编译")
+                if grep -q "No such file or directory" "$log_file"; then
+                  echo "🔧 修复缺失目录错误..." | tee -a "$MAIN_LOG"
+                  create_universal_build_dirs
+                fi
+                
                 if grep -q "6in4\|6rd\|6to4" "$log_file"; then
                   echo "🔄 修复IPv6隧道包问题..." | tee -a "$MAIN_LOG"
                   for pkg in 6in4 6rd 6to4; do
@@ -914,7 +1055,9 @@ jobs:
             echo "🎉 找到固件文件！" | tee -a "$MAIN_LOG"
             find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) -exec ls -la {} \; | tee -a "$MAIN_LOG"
             FIRMWARE_FOUND=true
+            FIRMWARE_COUNT=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null | wc -l)
             echo "BUILD_STATUS=success" >> $GITHUB_ENV
+            echo "FIRMWARE_COUNT=$FIRMWARE_COUNT" >> $GITHUB_ENV
           else
             echo "💥 未找到固件文件" | tee -a "$MAIN_LOG"
             echo "BUILD_STATUS=failed" >> $GITHUB_ENV
@@ -929,6 +1072,7 @@ jobs:
           echo "=== 编译总结 ===" | tee -a "$MAIN_LOG"
           echo "构建状态: 成功" | tee -a "$MAIN_LOG"
           echo "固件生成: 是" | tee -a "$MAIN_LOG"
+          echo "固件数量: $FIRMWARE_COUNT" | tee -a "$MAIN_LOG"
 
       - name: "🔍 自动错误分析与报告"
         id: error_analysis
