@@ -1014,6 +1014,18 @@ jobs:
                 # 专门修复构建目录问题
                 echo "🔧 修复内核构建目录..." | tee -a "$MAIN_LOG"
                 create_universal_build_dirs
+                
+                # 修复opkg缺失问题
+                echo "🔧 修复opkg工具缺失..." | tee -a "$MAIN_LOG"
+                if [ ! -f "/mnt/source/staging_dir/host/bin/opkg" ]; then
+                  echo "🔄 重新编译opkg工具..." | tee -a "$MAIN_LOG"
+                  make package/opkg/compile -j1 V=s
+                  if [ -f "/mnt/source/staging_dir/host/bin/opkg" ]; then
+                    echo "✅ opkg工具修复成功" | tee -a "$MAIN_LOG"
+                  else
+                    echo "❌ opkg工具修复失败" | tee -a "$MAIN_LOG"
+                  fi
+                fi
                 ;;
               "完整编译")
                 if grep -q "No such file or directory" "$log_file"; then
@@ -1030,6 +1042,15 @@ jobs:
                 ;;
             esac
           }
+          
+          # 检查宿主工具
+          echo "🔍 检查宿主工具状态..." | tee -a "$MAIN_LOG"
+          if [ ! -f "/mnt/source/staging_dir/host/bin/opkg" ]; then
+            echo "⚠️ opkg工具缺失，预编译opkg..." | tee -a "$MAIN_LOG"
+            make tools/install -j1 V=s || echo "❌ 工具编译失败，但继续构建" | tee -a "$MAIN_LOG"
+          else
+            echo "✅ 宿主工具状态正常" | tee -a "$MAIN_LOG"
+          fi
           
           # 阶段1: 工具链编译
           if ! compile_with_recovery "工具链编译" "toolchain/install"; then
@@ -1085,7 +1106,7 @@ jobs:
           echo "=== 🔍 自动错误分析与报告 ===" | tee -a "$MAIN_LOG"
           
           # 生成错误分析报告
-          echo "# 智能错误分析报告" >> "$ANALYSIS_REPORT"
+          echo "# 智能错误分析报告" > "$ANALYSIS_REPORT"
           echo "生成时间: $(date)" >> "$ANALYSIS_REPORT"
           echo "" >> "$ANALYSIS_REPORT"
           
@@ -1140,13 +1161,13 @@ jobs:
           
           # 系统资源报告
           echo "## 📊 系统资源报告" >> "$ANALYSIS_REPORT"
-          echo "```" >> "$ANALYSIS_REPORT"
+          echo "\`\`\`" >> "$ANALYSIS_REPORT"
           echo "磁盘使用情况:" >> "$ANALYSIS_REPORT"
-          df -h >> "$ANALYSIS_REPORT"
+          df -h >> "$ANALYSIS_REPORT" 2>/dev/null || echo "磁盘使用情况获取失败" >> "$ANALYSIS_REPORT"
           echo "" >> "$ANALYSIS_REPORT"
           echo "内存使用情况:" >> "$ANALYSIS_REPORT"
-          free -h >> "$ANALYSIS_REPORT"
-          echo "```" >> "$ANALYSIS_REPORT"
+          free -h >> "$ANALYSIS_REPORT" 2>/dev/null || echo "内存使用情况获取失败" >> "$ANALYSIS_REPORT"
+          echo "\`\`\`" >> "$ANALYSIS_REPORT"
           
           echo "✅ 错误分析报告生成完成" | tee -a "$MAIN_LOG"
 
