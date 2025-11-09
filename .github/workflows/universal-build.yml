@@ -1,4 +1,4 @@
-name: "🚀 超快速固件构建器 - 优化版"
+name: "🚀 超快速固件构建器 - 修复版"
 
 on:
   workflow_dispatch:
@@ -90,7 +90,7 @@ jobs:
           DOWNLOAD_LOG="/mnt/build-logs/download_audit.log"
           
           echo "🏁 极速构建开始: $(date)" > $MAIN_LOG
-          echo "🚀 工作流版本: 超快速固件构建器 - 优化版" >> $MAIN_LOG
+          echo "🚀 工作流版本: 超快速固件构建器 - 修复版" >> $MAIN_LOG
           echo "📋 输入参数:" >> $MAIN_LOG
           echo "  - 源码预设: ${{ github.event.inputs.source_preset }}" >> $MAIN_LOG
           echo "  - 源码分支: ${{ github.event.inputs.source_branch }}" >> $MAIN_LOG
@@ -129,7 +129,7 @@ jobs:
           echo "📦 批量安装编译依赖..." | tee -a "$MAIN_LOG"
           sudo apt-get update -qq
           
-          sudo apt-get install -y -qq build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3 python3-pip python3-dev rsync unzip zlib1g-dev file wget jq ccache libtool-bin automake autoconf pkg-config subversion curl cmake ninja-build libelf-dev libxml2-dev liblzma-dev liblzo2-dev axel net-tools e2fsprogs genext2fs dosfstools mtools libffi-dev libsqlite3-dev libpam0g-dev libtirpc-dev libev-dev lm-sensors libsnmp-dev libglib2.0-dev libgpiod-dev libfl-dev upx-ucl aria2
+          sudo apt-get install -y -qq build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3 python3-pip python3-dev rsync unzip zlib1g-dev file wget jq ccache libtool-bin automake autoconf pkg-config subversion curl cmake ninja-build libelf-dev libxml2-dev liblzma-dev liblzo2-dev axel net-tools e2fsprogs genext2fs dosfstools mtools libffi-dev libsqlite3-dev libpam0g-dev libtirpc-dev libev-dev lm-sensors libsnmp-dev libglib2.0-dev libgpiod-dev libfl-dev upx-ucl aria2 ncurses-term
           
           python3 -m pip install --upgrade pip setuptools wheel -q
           
@@ -217,6 +217,33 @@ jobs:
           echo "SOURCE_PRESET=$PRESET" >> $GITHUB_ENV
           echo "✅ 源码获取完成: $ACTUAL_BRANCH@$COMMIT_HASH" | tee -a "$MAIN_LOG"
 
+      - name: "🔧 修复终端环境和构建系统"
+        id: fix_terminal_env
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔧 修复终端环境和构建系统 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "🔧 设置终端环境变量..." | tee -a "$MAIN_LOG"
+          export TERM=xterm-256color
+          export LC_ALL=C
+          export FORCE_UNSAFE_CONFIGURE=1
+          
+          echo "🔧 修复构建目录结构..." | tee -a "$MAIN_LOG"
+          mkdir -p /mnt/source/{build_dir,staging_dir,bin,tmp,logs,dl}
+          mkdir -p /mnt/source/staging_dir/{host,target-*,toolchain-*}
+          mkdir -p /mnt/source/build_dir/{host,target-*}
+          
+          echo "🔧 创建必要的符号链接..." | tee -a "$MAIN_LOG"
+          [ -L "/mnt/source/dl" ] || ln -sf /mnt/downloads /mnt/source/dl
+          
+          echo "🔧 修复文件权限..." | tee -a "$MAIN_LOG"
+          chmod -R 755 /mnt/source/staging_dir/
+          chown -R $USER:$USER /mnt/source/staging_dir/
+          
+          echo "✅ 终端环境和构建系统修复完成" | tee -a "$MAIN_LOG"
+
       - name: "🎛️ 模式配置文件处理"
         id: mode_config
         run: |
@@ -232,92 +259,74 @@ jobs:
           
           mkdir -p "$MODE_CONFIG_DIR"
           
-          case "$BUILD_MODE" in
-            "minimal")
-              echo "🔧 创建最小化模式配置..." | tee -a "$MAIN_LOG"
-              echo "# ============================================" > "$MODE_CONFIG_DIR/minimal.conf"
-              echo "# 最小化构建模式配置" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "# ============================================" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "# 基础系统配置" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_base-files=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_busybox=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_dropbear=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_firewall=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_fstools=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_libc=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_libgcc=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_logd=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_mtd=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_netifd=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_opkg=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_procd=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_swconfig=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_ubox=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_ubus=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_ubusd=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_uci=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_uclient-fetch=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_urandom-seed=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              echo "CONFIG_PACKAGE_usign=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-              ;;
-            
-            "standard")
-              echo "🔧 创建标准模式配置..." | tee -a "$MAIN_LOG"
-              echo "# ============================================" > "$MODE_CONFIG_DIR/standard.conf"
-              echo "# 标准构建模式配置" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "# ============================================" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "# 基础系统配置" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_base-files=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_busybox=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_dropbear=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_firewall=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_fstools=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_libc=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_libgcc=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_logd=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_mtd=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_netifd=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_opkg=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_procd=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_swconfig=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_ubox=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_ubus=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_ubusd=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_uci=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_uclient-fetch=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_urandom-seed=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_usign=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              ;;
-            
-            "custom")
-              echo "🔧 创建自定义模式配置..." | tee -a "$MAIN_LOG"
-              echo "# ============================================" > "$MODE_CONFIG_DIR/custom.conf"
-              echo "# 自定义构建模式配置" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "# ============================================" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "# 基础系统（必选）" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "CONFIG_PACKAGE_base-files=y" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "CONFIG_PACKAGE_busybox=y" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "CONFIG_PACKAGE_dropbear=y" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "CONFIG_PACKAGE_firewall=y" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "CONFIG_PACKAGE_fstools=y" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "CONFIG_PACKAGE_libc=y" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "CONFIG_PACKAGE_libgcc=y" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "CONFIG_PACKAGE_logd=y" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "CONFIG_PACKAGE_netifd=y" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "CONFIG_PACKAGE_opkg=y" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "CONFIG_PACKAGE_procd=y" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "CONFIG_PACKAGE_ubox=y" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "CONFIG_PACKAGE_ubus=y" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "CONFIG_PACKAGE_ubusd=y" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "CONFIG_PACKAGE_uci=y" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "CONFIG_PACKAGE_uclient-fetch=y" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "CONFIG_PACKAGE_urandom-seed=y" >> "$MODE_CONFIG_DIR/custom.conf"
-              echo "CONFIG_PACKAGE_usign=y" >> "$MODE_CONFIG_DIR/custom.conf"
-              ;;
-          esac
+          if [ "$BUILD_MODE" = "minimal" ]; then
+            echo "🔧 创建最小化模式配置..." | tee -a "$MAIN_LOG"
+            echo "# 最小化构建模式配置" > "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_base-files=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_busybox=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_dropbear=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_firewall=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_fstools=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_libc=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_libgcc=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_logd=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_mtd=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_netifd=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_opkg=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_procd=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_swconfig=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_ubox=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_ubus=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_ubusd=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_uci=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_uclient-fetch=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_urandom-seed=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+            echo "CONFIG_PACKAGE_usign=y" >> "$MODE_CONFIG_DIR/minimal.conf"
+          elif [ "$BUILD_MODE" = "standard" ]; then
+            echo "🔧 创建标准模式配置..." | tee -a "$MAIN_LOG"
+            echo "# 标准构建模式配置" > "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_base-files=y" >> "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_busybox=y" >> "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_dropbear=y" >> "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_firewall=y" >> "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_fstools=y" >> "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_libc=y" >> "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_libgcc=y" >> "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_logd=y" >> "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_mtd=y" >> "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_netifd=y" >> "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_opkg=y" >> "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_procd=y" >> "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_swconfig=y" >> "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_ubox=y" >> "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_ubus=y" >> "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_ubusd=y" >> "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_uci=y" >> "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_uclient-fetch=y" >> "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_urandom-seed=y" >> "$MODE_CONFIG_DIR/standard.conf"
+            echo "CONFIG_PACKAGE_usign=y" >> "$MODE_CONFIG_DIR/standard.conf"
+          else
+            echo "🔧 创建自定义模式配置..." | tee -a "$MAIN_LOG"
+            echo "# 自定义构建模式配置" > "$MODE_CONFIG_DIR/custom.conf"
+            echo "CONFIG_PACKAGE_base-files=y" >> "$MODE_CONFIG_DIR/custom.conf"
+            echo "CONFIG_PACKAGE_busybox=y" >> "$MODE_CONFIG_DIR/custom.conf"
+            echo "CONFIG_PACKAGE_dropbear=y" >> "$MODE_CONFIG_DIR/custom.conf"
+            echo "CONFIG_PACKAGE_firewall=y" >> "$MODE_CONFIG_DIR/custom.conf"
+            echo "CONFIG_PACKAGE_fstools=y" >> "$MODE_CONFIG_DIR/custom.conf"
+            echo "CONFIG_PACKAGE_libc=y" >> "$MODE_CONFIG_DIR/custom.conf"
+            echo "CONFIG_PACKAGE_libgcc=y" >> "$MODE_CONFIG_DIR/custom.conf"
+            echo "CONFIG_PACKAGE_logd=y" >> "$MODE_CONFIG_DIR/custom.conf"
+            echo "CONFIG_PACKAGE_netifd=y" >> "$MODE_CONFIG_DIR/custom.conf"
+            echo "CONFIG_PACKAGE_opkg=y" >> "$MODE_CONFIG_DIR/custom.conf"
+            echo "CONFIG_PACKAGE_procd=y" >> "$MODE_CONFIG_DIR/custom.conf"
+            echo "CONFIG_PACKAGE_ubox=y" >> "$MODE_CONFIG_DIR/custom.conf"
+            echo "CONFIG_PACKAGE_ubus=y" >> "$MODE_CONFIG_DIR/custom.conf"
+            echo "CONFIG_PACKAGE_ubusd=y" >> "$MODE_CONFIG_DIR/custom.conf"
+            echo "CONFIG_PACKAGE_uci=y" >> "$MODE_CONFIG_DIR/custom.conf"
+            echo "CONFIG_PACKAGE_uclient-fetch=y" >> "$MODE_CONFIG_DIR/custom.conf"
+            echo "CONFIG_PACKAGE_urandom-seed=y" >> "$MODE_CONFIG_DIR/custom.conf"
+            echo "CONFIG_PACKAGE_usign=y" >> "$MODE_CONFIG_DIR/custom.conf"
+          fi
           
           echo "BUILD_MODE=$BUILD_MODE" >> $GITHUB_ENV
           echo "MODE_CONFIG_DIR=$MODE_CONFIG_DIR" >> $GITHUB_ENV
@@ -339,25 +348,34 @@ jobs:
           echo "🔍 查找配置文件: $CONFIG_FILE" | tee -a "$MAIN_LOG"
           echo "🎛️ 应用模式配置: $MODE_CONFIG" | tee -a "$MAIN_LOG"
           
+          # 清理可能存在的旧配置文件
+          rm -f .config .config.old
+          
           if [ -f "$CONFIG_FILE" ]; then
-            cp "$CONFIG_FILE" .config
             echo "✅ 应用现有配置文件: $CONFIG_PROFILE" | tee -a "$MAIN_LOG"
-            echo "CONFIG_SOURCE=existing" >> $GITHUB_ENV
+            # 验证配置文件语法
+            if grep -q "missing separator" "$CONFIG_FILE"; then
+              echo "❌ 配置文件存在语法错误，重新创建..." | tee -a "$MAIN_LOG"
+              rm -f "$CONFIG_FILE"
+              echo "CONFIG_SOURCE=new" >> $GITHUB_ENV
+            else
+              cp "$CONFIG_FILE" .config
+              echo "CONFIG_SOURCE=existing" >> $GITHUB_ENV
+            fi
           else
-            echo "🔧 配置文件不存在，创建新配置..." | tee -a "$MAIN_LOG"
+            echo "CONFIG_SOURCE=new" >> $GITHUB_ENV
+          fi
+          
+          if [ "${{ env.CONFIG_SOURCE }}" = "new" ]; then
+            echo "🔧 创建新配置..." | tee -a "$MAIN_LOG"
             mkdir -p "$CONFIG_DIR"
             
             echo "🎯 智能分析设备名称: $CONFIG_PROFILE" | tee -a "$MAIN_LOG"
             
-            echo "# =============================================" > "$CONFIG_FILE"
-            echo "# 通用设备配置 - $CONFIG_PROFILE" >> "$CONFIG_FILE"
+            # 创建基础配置文件
+            echo "# 通用设备配置 - $CONFIG_PROFILE" > "$CONFIG_FILE"
             echo "# 自动生成于 $(date)" >> "$CONFIG_FILE"
-            echo "# =============================================" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "# 基础目标配置" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-
+            
             TARGET_CONFIG=""
             if [[ "$CONFIG_PROFILE" =~ ^rt-ac42u$|^ac42u$|^asus.*ac42u ]]; then
               echo "# ASUS RT-AC42U 设备 (IPQ40xx)" >> "$CONFIG_FILE"
@@ -377,63 +395,41 @@ jobs:
               echo "# MT7621 设备" >> "$CONFIG_FILE"
               echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
               echo "CONFIG_TARGET_ramips_mt7621=y" >> "$CONFIG_FILE"
-              echo "# CONFIG_TARGET_ramips_mt7621_DEVICE_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
               TARGET_CONFIG="ramips_mt7621"
               echo "🎯 设备类型: MT7621" | tee -a "$MAIN_LOG"
-            elif [[ "$CONFIG_PROFILE" =~ ^r3g|^mir3g|^xiaomi.*r3g ]]; then
-              echo "# Xiaomi R3G 设备" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ramips_mt7621=y" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-3g=y" >> "$CONFIG_FILE"
-              TARGET_CONFIG="ramips_mt7621_xiaomi_r3g"
-              echo "🎯 设备类型: Xiaomi R3G" | tee -a "$MAIN_LOG"
-            elif [[ "$CONFIG_PROFILE" =~ ^r3p|^mir3p|^xiaomi.*r3p ]]; then
-              echo "# Xiaomi R3P 设备" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ramips_mt7621=y" >> "$MAIN_LOG"
-              echo "CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-3-pro=y" >> "$CONFIG_FILE"
-              TARGET_CONFIG="ramips_mt7621_xiaomi_r3p"
-              echo "🎯 设备类型: Xiaomi R3P" | tee -a "$MAIN_LOG"
-            elif [[ "$CONFIG_PROFILE" =~ ^k2p|^phicomm.*k2p ]]; then
-              echo "# Phicomm K2P 设备" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ramips_mt7621=y" >> "$CONFIG_FILE"
-              echo "CONFIG_TARGET_ramips_mt7621_DEVICE_phicomm_k2p=y" >> "$CONFIG_FILE"
-              TARGET_CONFIG="ramips_mt7621_phicomm_k2p"
-              echo "🎯 设备类型: Phicomm K2P" | tee -a "$MAIN_LOG"
             else
               echo "# 通用设备配置 - 请根据实际设备修改" >> "$CONFIG_FILE"
-              echo "# CONFIG_TARGET_xxx=y" >> "$CONFIG_FILE"
-              echo "# CONFIG_TARGET_xxx_yyy=y" >> "$CONFIG_FILE"
-              echo "# CONFIG_TARGET_xxx_yyy_DEVICE_zzz=y" >> "$CONFIG_FILE"
               TARGET_CONFIG="generic"
               echo "🎯 设备类型: 通用" | tee -a "$MAIN_LOG"
             fi
             
-            echo "" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
-            echo "# 镜像配置" >> "$CONFIG_FILE"
-            echo "# ======================" >> "$CONFIG_FILE"
+            # 添加通用配置
             echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> "$CONFIG_FILE"
             echo "CONFIG_TARGET_IMAGES_GZIP=y" >> "$CONFIG_FILE"
             echo "CONFIG_TARGET_IMAGES_INCLUDE_FACTORY=y" >> "$CONFIG_FILE"
             echo "CONFIG_TARGET_IMAGES_INCLUDE_SYSUPGRADE=y" >> "$CONFIG_FILE"
-            echo "" >> "$CONFIG_FILE"
-            echo "# 分区大小" >> "$CONFIG_FILE"
             echo "CONFIG_TARGET_KERNEL_PARTSIZE=16" >> "$CONFIG_FILE"
             echo "CONFIG_TARGET_ROOTFS_PARTSIZE=96" >> "$CONFIG_FILE"
+            echo "CONFIG_CCACHE=y" >> "$CONFIG_FILE"
+            echo "CONFIG_BUILD_LOG=y" >> "$CONFIG_FILE"
+            echo "CONFIG_SDK=y" >> "$CONFIG_FILE"
+            echo "# CONFIG_DEBUG=y is not set" >> "$CONFIG_FILE"
             
             cp "$CONFIG_FILE" .config
-            echo "CONFIG_SOURCE=new" >> $GITHUB_ENV
             echo "TARGET_CONFIG=$TARGET_CONFIG" >> $GITHUB_ENV
             echo "✅ 已创建智能配置文件: $CONFIG_FILE" | tee -a "$MAIN_LOG"
             echo "🎯 目标配置类型: $TARGET_CONFIG" | tee -a "$MAIN_LOG"
           fi
           
+          # 应用模式配置
           if [ -f "$MODE_CONFIG" ]; then
             echo "🔧 应用模式配置文件..." | tee -a "$MAIN_LOG"
-            cat "$MODE_CONFIG" >> .config
-            echo "✅ 模式配置应用完成: ${{ github.event.inputs.build_mode }}" | tee -a "$MAIN_LOG"
+            if ! grep -q "missing separator" "$MODE_CONFIG"; then
+              cat "$MODE_CONFIG" >> .config
+              echo "✅ 模式配置应用完成: ${{ github.event.inputs.build_mode }}" | tee -a "$MAIN_LOG"
+            else
+              echo "❌ 模式配置文件存在语法错误，跳过" | tee -a "$MAIN_LOG"
+            fi
           else
             echo "⚠️ 模式配置文件不存在: $MODE_CONFIG" | tee -a "$MAIN_LOG"
           fi
@@ -462,38 +458,45 @@ jobs:
             echo "EXTRA_PACKAGES_ADDED=0" >> $GITHUB_ENV
           fi
           
-          # 加载自定义插件文件
-          CUSTOM_PLUGINS_FILE="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-plugins.txt"
-          if [ -f "$CUSTOM_PLUGINS_FILE" ]; then
-            echo "🔌 加载自定义插件文件..." | tee -a "$MAIN_LOG"
-            PLUGIN_COUNT=0
-            while IFS= read -r plugin; do
-              plugin=$(echo "$plugin" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-              if [ -n "$plugin" ] && [[ ! "$plugin" =~ ^# ]]; then
-                if ! grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
-                  echo "CONFIG_PACKAGE_${plugin}=y" >> .config
-                  echo "✅ 添加插件: $plugin" | tee -a "$MAIN_LOG"
-                  PLUGIN_COUNT=$((PLUGIN_COUNT + 1))
-                else
-                  echo "ℹ️ 插件已存在: $plugin" | tee -a "$MAIN_LOG"
-                fi
-              fi
-            done < "$CUSTOM_PLUGINS_FILE"
-            echo "CUSTOM_PLUGINS_ADDED=$PLUGIN_COUNT" >> $GITHUB_ENV
-            echo "✅ 成功添加 $PLUGIN_COUNT 个自定义插件" | tee -a "$MAIN_LOG"
-          else
-            echo "ℹ️ 自定义插件文件不存在: $CUSTOM_PLUGINS_FILE" | tee -a "$MAIN_LOG"
-            echo "CUSTOM_PLUGINS_ADDED=0" >> $GITHUB_ENV
+          # 验证最终配置文件语法
+          echo "🔍 验证配置文件语法..." | tee -a "$MAIN_LOG"
+          if grep -q "missing separator" .config; then
+            echo "❌ 配置文件存在语法错误，显示错误行:" | tee -a "$MAIN_LOG"
+            grep -n "missing separator" .config | tee -a "$MAIN_LOG"
+            echo "🔧 尝试修复配置文件..." | tee -a "$MAIN_LOG"
+            sed -i '/missing separator/d' .config
+            sed -i 's/^[ \t]*//' .config
           fi
           
-          echo "⚡ 预配置优化选项..." | tee -a "$MAIN_LOG"
-          echo "# 编译优化" >> .config
-          echo "CONFIG_CCACHE=y" >> .config
-          echo "CONFIG_BUILD_LOG=y" >> .config
-          echo "CONFIG_SDK=y" >> .config
-          echo "# CONFIG_DEBUG=y is not set" >> .config
-          
           echo "✅ 配置创建与处理完成" | tee -a "$MAIN_LOG"
+
+      - name: "🔧 修复主机工具和配置"
+        id: fix_host_tools
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔧 修复主机工具和配置 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          export TERM=xterm-256color
+          export LC_ALL=C
+          export FORCE_UNSAFE_CONFIGURE=1
+          
+          echo "🔧 强制创建主机工具目录..." | tee -a "$MAIN_LOG"
+          mkdir -p staging_dir/host
+          mkdir -p staging_dir/toolchain-*
+          touch staging_dir/host/.prereq-build
+          
+          echo "🔧 编译必要的主机工具..." | tee -a "$MAIN_LOG"
+          make -C scripts/config clean || true
+          make -C scripts/config || true
+          make tools/install -j1 V=s || true
+          
+          echo "🔧 修复文件权限..." | tee -a "$MAIN_LOG"
+          chmod -R 755 staging_dir/
+          chown -R $USER:$USER staging_dir/
+          
+          echo "✅ 主机工具修复完成" | tee -a "$MAIN_LOG"
 
       - name: "🔄 并行Feeds更新"
         id: feeds_setup
@@ -574,139 +577,76 @@ jobs:
           
           echo "✅ 语言包配置完成" | tee -a "$MAIN_LOG"
 
-      - name: "🔧 修复主机工具检查"
-        id: fix_prereq_check
+      - name: "🔧 配置完整性验证"
+        id: config_validation
         run: |
           set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔧 修复主机工具检查 ===" | tee -a "$MAIN_LOG"
+          echo "=== 🔧 配置完整性验证 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
-          echo "🔧 强制创建主机工具目录..." | tee -a "$MAIN_LOG"
-          mkdir -p staging_dir/host
-          mkdir -p staging_dir/toolchain-*
+          echo "🔍 验证配置完整性..." | tee -a "$MAIN_LOG"
           
-          echo "🔧 设置环境变量跳过严格检查..." | tee -a "$MAIN_LOG"
-          export FORCE_UNSAFE_CONFIGURE=1
+          echo "🔧 运行defconfig..." | tee -a "$MAIN_LOG"
+          if make defconfig; then
+            echo "✅ defconfig成功" | tee -a "$MAIN_LOG"
+          else
+            echo "❌ defconfig失败，显示.config文件内容..." | tee -a "$MAIN_LOG"
+            head -100 .config >> "$MAIN_LOG"
+            exit 1
+          fi
           
-          echo "🔧 手动创建prereq-build文件..." | tee -a "$MAIN_LOG"
-          touch staging_dir/host/.prereq-build
+          echo "🔍 关键配置检查:" | tee -a "$MAIN_LOG"
+          [ "$(grep -c "CONFIG_TARGET.*=y" .config)" -gt 0 ] && echo "✅ 目标配置正常" || echo "❌ 目标配置异常"
+          [ "$(grep -c "CONFIG_PACKAGE_base-files=y" .config)" -gt 0 ] && echo "✅ 基础文件系统正常" || echo "❌ 基础文件系统异常"
+          [ "$(grep -c "CONFIG_PACKAGE_busybox=y" .config)" -gt 0 ] && echo "✅ BusyBox正常" || echo "❌ BusyBox异常"
           
-          # 检查并修复常见的依赖问题
-          echo "🔧 检查并修复系统依赖..." | tee -a "$MAIN_LOG"
-          
-          # 确保所有必要的工具都存在
-          for tool in gcc g++ make bash patch perl python3 python; do
-            if command -v $tool >/dev/null 2>&1; then
-              echo "✅ $tool 存在" | tee -a "$MAIN_LOG"
-            else
-              echo "⚠️ $tool 缺失，尝试安装..." | tee -a "$MAIN_LOG"
-              sudo apt-get install -y $tool 2>/dev/null || true
-            fi
-          done
-          
-          echo "🔧 修复文件权限..." | tee -a "$MAIN_LOG"
-          chmod -R 755 staging_dir/
-          chown -R $USER:$USER staging_dir/
-          
-          echo "✅ 主机工具检查修复完成" | tee -a "$MAIN_LOG"
+          echo "✅ 配置验证完成" | tee -a "$MAIN_LOG"
 
-      - name: "🌐 智能网络和下载优化"
+      - name: "🌐 智能下载优化"
         id: smart_download
         timeout-minutes: 30
         run: |
           set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
           DOWNLOAD_LOG="${{ env.DOWNLOAD_LOG }}"
-          echo "=== 🌐 智能网络和下载优化 ===" | tee -a "$MAIN_LOG"
+          echo "=== 🌐 智能下载优化 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
-          # 设置环境变量
+          export TERM=xterm-256color
+          export LC_ALL=C
           export FORCE_UNSAFE_CONFIGURE=1
           
-          echo "📊 网络状态检查..." | tee -a "$MAIN_LOG"
-          echo "网络状态检查: $(date)" >> "$DOWNLOAD_LOG"
-          
-          # 测试网络连接
-          echo "🔍 测试网络连接性..." | tee -a "$MAIN_LOG"
-          MIRRORS=(
-            "github.com"
-            "git.openwrt.org" 
-            "downloads.openwrt.org"
-            "mirror2.openwrt.org"
-            "sources.cdn.openwrt.org"
-          )
-          
-          for mirror in "${MIRRORS[@]}"; do
-            if ping -c 1 -W 2 "$mirror" &>/dev/null; then
-              echo "✅ $mirror - 可达" | tee -a "$MAIN_LOG"
-              echo "可达镜像: $mirror" >> "$DOWNLOAD_LOG"
-            else
-              echo "⚠️ $mirror - 不可达" | tee -a "$MAIN_LOG"
-              echo "不可达镜像: $mirror" >> "$DOWNLOAD_LOG"
-            fi
-          done
-          
-          # 修复镜像源
-          echo "🔧 配置下载镜像源..." | tee -a "$MAIN_LOG"
-          sed -i 's|https://sources.cdn.openwrt.org|https://mirror2.openwrt.org/sources|g' scripts/download.pl
+          echo "🔧 修复下载配置..." | tee -a "$MAIN_LOG"
+          sed -i 's|https://sources.cdn.openwrt.org|https://mirror2.openwrt.org/sources|g' scripts/download.pl 2>/dev/null || true
           sed -i 's|git.openwrt.org|github.com/openwrt|g' feeds.conf.* 2>/dev/null || true
-          
-          # 创建必要的目录结构
-          echo "🔧 创建必要的构建目录..." | tee -a "$MAIN_LOG"
-          mkdir -p /mnt/source/{build_dir,staging_dir,bin,tmp,logs,dl}
-          mkdir -p /mnt/source/staging_dir/{host,target-*,toolchain-*}
-          mkdir -p /mnt/source/build_dir/{host,target-*}
-          
-          # 修复权限
-          chmod -R 755 /mnt/source/staging_dir/
-          chown -R $USER:$USER /mnt/source/staging_dir/
           
           PARALLEL_JOBS="${{ env.PARALLEL_JOBS }}"
           
           echo "📥 开始智能下载流程..." | tee -a "$MAIN_LOG"
           echo "开始下载流程: $(date)" >> "$DOWNLOAD_LOG"
           
-          # 下载状态跟踪
           DOWNLOAD_SUCCESS=false
           DOWNLOAD_RETRY_COUNT=0
-          MAX_RETRIES=5
+          MAX_RETRIES=3
           
           while [ $DOWNLOAD_RETRY_COUNT -lt $MAX_RETRIES ] && [ "$DOWNLOAD_SUCCESS" = false ]; do
             DOWNLOAD_RETRY_COUNT=$((DOWNLOAD_RETRY_COUNT + 1))
             echo "🔄 下载尝试 $DOWNLOAD_RETRY_COUNT/$MAX_RETRIES..." | tee -a "$MAIN_LOG"
             echo "下载尝试 $DOWNLOAD_RETRY_COUNT: $(date)" >> "$DOWNLOAD_LOG"
             
-            # 首先尝试编译host工具
-            echo "🔧 尝试编译host工具..." | tee -a "$MAIN_LOG"
-            if make tools/compile -j1 FORCE_UNSAFE_CONFIGURE=1; then
-              echo "✅ host工具编译成功" | tee -a "$MAIN_LOG"
-              echo "host工具编译成功" >> "$DOWNLOAD_LOG"
-            else
-              echo "⚠️ host工具编译失败，尝试强制跳过..." | tee -a "$MAIN_LOG"
-              echo "host工具编译失败，强制跳过" >> "$DOWNLOAD_LOG"
-              # 强制创建prereq-build文件
-              mkdir -p staging_dir/host
-              touch staging_dir/host/.prereq-build
-            fi
-            
-            # 然后尝试下载
-            echo "🌐 开始下载依赖..." | tee -a "$MAIN_LOG"
-            
-            # 使用不同的并行度尝试
-            if [ $DOWNLOAD_RETRY_COUNT -le 2 ]; then
+            if [ $DOWNLOAD_RETRY_COUNT -eq 1 ]; then
               JOBS=$PARALLEL_JOBS
             else
-              JOBS=1  # 最后尝试使用单线程
+              JOBS=1
             fi
             
             TEMP_DOWNLOAD_LOG=$(mktemp)
             set +e
-            make download -j$JOBS FORCE_UNSAFE_CONFIGURE=1 V=s 2>&1 | tee "$TEMP_DOWNLOAD_LOG"
+            make download -j$JOBS FORCE_UNSAFE_CONFIGURE=1 2>&1 | tee "$TEMP_DOWNLOAD_LOG"
             DOWNLOAD_RESULT=${PIPESTATUS[0]}
             set -e
             
-            # 记录下载日志
             cat "$TEMP_DOWNLOAD_LOG" >> "$MAIN_LOG"
             echo "=== 下载尝试 $DOWNLOAD_RETRY_COUNT 详细日志 ===" >> "$DOWNLOAD_LOG"
             cat "$TEMP_DOWNLOAD_LOG" >> "$DOWNLOAD_LOG"
@@ -719,19 +659,14 @@ jobs:
               echo "❌ 下载尝试 $DOWNLOAD_RETRY_COUNT 失败" | tee -a "$MAIN_LOG"
               echo "下载失败，退出码: $DOWNLOAD_RESULT" >> "$DOWNLOAD_LOG"
               
-              # 分析下载错误
-              if grep -q "Connection timed out" "$TEMP_DOWNLOAD_LOG"; then
-                echo "🌐 网络超时错误" | tee -a "$MAIN_LOG"
-                echo "错误类型: 网络超时" >> "$DOWNLOAD_LOG"
-              elif grep -q "Name or service not known" "$TEMP_DOWNLOAD_LOG"; then
-                echo "🌐 DNS解析错误" | tee -a "$MAIN_LOG"
-                echo "错误类型: DNS解析失败" >> "$DOWNLOAD_LOG"
-              elif grep -q "404 Not Found" "$TEMP_DOWNLOAD_LOG"; then
-                echo "🌐 资源不存在错误" | tee -a "$MAIN_LOG"
-                echo "错误类型: 404资源不存在" >> "$DOWNLOAD_LOG"
-              elif grep -q "SSL certificate problem" "$TEMP_DOWNLOAD_LOG"; then
-                echo "🌐 SSL证书错误" | tee -a "$MAIN_LOG"
-                echo "错误类型: SSL证书问题" >> "$DOWNLOAD_LOG"
+              if grep -q "missing separator" "$TEMP_DOWNLOAD_LOG"; then
+                echo "❌ 配置文件语法错误" | tee -a "$MAIN_LOG"
+                echo "错误类型: 配置文件语法错误" >> "$DOWNLOAD_LOG"
+                grep -n "missing separator" "$TEMP_DOWNLOAD_LOG" | head -5 >> "$DOWNLOAD_LOG"
+                break
+              elif grep -q "mkhash" "$TEMP_DOWNLOAD_LOG"; then
+                echo "❌ 主机工具缺失" | tee -a "$MAIN_LOG"
+                echo "错误类型: 主机工具缺失" >> "$DOWNLOAD_LOG"
               fi
               
               if [ $DOWNLOAD_RETRY_COUNT -lt $MAX_RETRIES ]; then
@@ -739,11 +674,6 @@ jobs:
                 echo "⏳ 等待 ${RETRY_DELAY}秒后重试..." | tee -a "$MAIN_LOG"
                 echo "等待 ${RETRY_DELAY}秒后重试" >> "$DOWNLOAD_LOG"
                 sleep $RETRY_DELAY
-                
-                # 清理部分下载文件
-                echo "🧹 清理部分下载的文件..." | tee -a "$MAIN_LOG"
-                find dl/ -name "*.tmp" -delete 2>/dev/null || true
-                find dl/ -name "*.part" -delete 2>/dev/null || true
               fi
             fi
             
@@ -753,32 +683,16 @@ jobs:
           if [ "$DOWNLOAD_SUCCESS" = false ]; then
             echo "💥 所有下载尝试都失败" | tee -a "$MAIN_LOG"
             echo "最终状态: 所有下载尝试失败" >> "$DOWNLOAD_LOG"
+            head -100 .config >> "$DOWNLOAD_LOG"
             exit 1
           fi
           
-          # 下载完整性验证
           echo "🔍 验证下载完整性..." | tee -a "$MAIN_LOG"
           echo "开始完整性验证: $(date)" >> "$DOWNLOAD_LOG"
           
           DOWNLOAD_COUNT=$(find dl/ -type f 2>/dev/null | wc -l)
           echo "📦 下载文件数量: $DOWNLOAD_COUNT" | tee -a "$MAIN_LOG"
           echo "总下载文件数: $DOWNLOAD_COUNT" >> "$DOWNLOAD_LOG"
-          
-          # 检查关键文件
-          CRITICAL_FILES=0
-          if [ -f "dl/"*"/linux-"*".tar.xz" ] || [ -f "dl/linux-"*".tar.xz" ]; then
-            echo "✅ 找到Linux内核源码" | tee -a "$MAIN_LOG"
-            CRITICAL_FILES=$((CRITICAL_FILES + 1))
-          else
-            echo "⚠️ 未找到Linux内核源码" | tee -a "$MAIN_LOG"
-          fi
-          
-          if find dl/ -name "*.tar.gz" | grep -q .; then
-            echo "✅ 找到压缩包文件" | tee -a "$MAIN_LOG"
-            CRITICAL_FILES=$((CRITICAL_FILES + 1))
-          else
-            echo "⚠️ 未找到压缩包文件" | tee -a "$MAIN_LOG"
-          fi
           
           if [ "$DOWNLOAD_COUNT" -lt 10 ]; then
             echo "⚠️ 下载文件数量过少，可能有问题" | tee -a "$MAIN_LOG"
@@ -787,25 +701,9 @@ jobs:
             echo "✅ 下载文件数量正常" | tee -a "$MAIN_LOG"
           fi
           
-          if [ $CRITICAL_FILES -lt 1 ]; then
-            echo "❌ 关键文件缺失，下载可能不完整" | tee -a "$MAIN_LOG"
-            echo "错误: 关键文件缺失" >> "$DOWNLOAD_LOG"
-            exit 1
-          fi
-          
-          echo "📊 下载统计:" | tee -a "$MAIN_LOG"
-          echo "下载文件总数: $DOWNLOAD_COUNT" | tee -a "$MAIN_LOG"
-          echo "下载重试次数: $DOWNLOAD_RETRY_COUNT" | tee -a "$MAIN_LOG"
-          echo "关键文件数量: $CRITICAL_FILES" | tee -a "$MAIN_LOG"
-          
-          echo "最终下载统计:" >> "$DOWNLOAD_LOG"
-          echo "文件总数: $DOWNLOAD_COUNT" >> "$DOWNLOAD_LOG"
-          echo "重试次数: $DOWNLOAD_RETRY_COUNT" >> "$DOWNLOAD_LOG"
-          echo "关键文件: $CRITICAL_FILES" >> "$DOWNLOAD_LOG"
-          echo "下载完成时间: $(date)" >> "$DOWNLOAD_LOG"
-          
           echo "DOWNLOAD_COMPLETE=true" >> $GITHUB_ENV
           echo "DOWNLOAD_FILE_COUNT=$DOWNLOAD_COUNT" >> $GITHUB_ENV
+          echo "DOWNLOAD_RETRY_COUNT=$DOWNLOAD_RETRY_COUNT" >> $GITHUB_ENV
           echo "✅ 智能下载完成" | tee -a "$MAIN_LOG"
 
       - name: "🔧 高级功能增强"
@@ -825,7 +723,6 @@ jobs:
           IPK_COUNT=0
           
           if [ -d "$IPK_DIR" ]; then
-            echo "🔍 查找自定义IPK包..." | tee -a "$MAIN_LOG"
             IPK_FILES=$(find "$IPK_DIR" -name "*.ipk" -type f 2>/dev/null || true)
             if [ -n "$IPK_FILES" ]; then
               echo "✅ 找到自定义IPK包:" | tee -a "$MAIN_LOG"
@@ -854,7 +751,6 @@ jobs:
           SCRIPT_COUNT=0
           for script_path in $SCRIPT_PATHS; do
             if [ -d "$script_path" ]; then
-              echo "🔍 在 $script_path 中查找脚本..." | tee -a "$MAIN_LOG"
               SCRIPTS=$(find "$script_path" -maxdepth 2 -name "*.sh" -type f 2>/dev/null | sort || true)
               if [ -n "$SCRIPTS" ]; then
                 for script in $SCRIPTS; do
@@ -884,197 +780,6 @@ jobs:
           echo "CUSTOM_SCRIPT_COUNT=$SCRIPT_COUNT" >> $GITHUB_ENV
           echo "✅ 高级功能应用完成，执行了 $SCRIPT_COUNT 个脚本" | tee -a "$MAIN_LOG"
 
-      - name: "🔧 智能构建修复系统"
-        id: smart_build_fix
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔧 智能构建修复系统 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          
-          echo "🔧 应用智能构建修复..." | tee -a "$MAIN_LOG"
-          
-          # 1. 动态设备适配修复
-          echo "🔧 动态设备适配修复..." | tee -a "$MAIN_LOG"
-          CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
-          
-          echo "# ======================" >> .config
-          echo "# 智能设备修复" >> .config
-          echo "# ======================" >> .config
-          
-          if [[ "$CONFIG_PROFILE" =~ ^rt-ac42u$|^ac42u$|^asus.*ac42u ]]; then
-            echo "# IPQ40xx设备修复" >> .config
-            echo "CONFIG_TARGET_ipq40xx=y" >> .config
-            echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
-            echo "CONFIG_KERNEL_ARM=y" >> .config
-          elif [[ "$CONFIG_PROFILE" =~ ^x86|^x64|^generic.*64 ]]; then
-            echo "# x86设备修复" >> .config
-            echo "CONFIG_TARGET_x86=y" >> .config
-            echo "CONFIG_TARGET_x86_64=y" >> .config
-            echo "CONFIG_KERNEL_X86=y" >> .config
-          elif [[ "$CONFIG_PROFILE" =~ ^mt7621|^newifi.*d2|^r6220 ]]; then
-            echo "# MT7621设备修复" >> .config
-            echo "CONFIG_TARGET_ramips=y" >> .config
-            echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
-            echo "CONFIG_KERNEL_MIPS=y" >> .config
-          fi
-          
-          # 2. 通用内核修复
-          echo "# 通用内核修复" >> .config
-          echo "CONFIG_KERNEL_DEVTMPFS=y" >> .config
-          echo "CONFIG_KERNEL_DEVTMPFS_MOUNT=y" >> .config
-          echo "CONFIG_KERNEL_LZO=y" >> .config
-          echo "CONFIG_KERNEL_LZ4=y" >> .config
-          echo "CONFIG_KERNEL_ZSTD=y" >> .config
-          echo "CONFIG_KERNEL_EXT4_FS=y" >> .config
-          echo "CONFIG_KERNEL_VFAT_FS=y" >> .config
-          echo "CONFIG_KERNEL_TMPFS=y" >> .config
-          echo "CONFIG_KERNEL_NET=y" >> .config
-          echo "CONFIG_KERNEL_INET=y" >> .config
-          echo "CONFIG_KERNEL_IPV6=y" >> .config
-          
-          # 3. 通用目录结构修复
-          echo "🔧 修复通用构建目录结构..." | tee -a "$MAIN_LOG"
-          mkdir -p /mnt/source/{build_dir,staging_dir,bin,tmp,logs,dl}
-          mkdir -p /mnt/source/build_dir/{host,target-*}
-          mkdir -p /mnt/source/staging_dir/{host,target-*,toolchain-*}
-          
-          # 创建通用目标架构目录结构
-          for arch_dir in /mnt/source/build_dir/target-*; do
-            if [ -d "$arch_dir" ]; then
-              arch_name=$(basename "$arch_dir")
-              mkdir -p "$arch_dir/root-"{ipq40xx,ramips,x86,armvirt,ath79,mediatek,qualcomm,realtek,bcm53xx,generic}
-              
-              for root_dir in "$arch_dir"/root-*; do
-                if [ -d "$root_dir" ]; then
-                  mkdir -p "$root_dir"/{bin,dev,etc,lib,proc,sbin,sys,tmp,usr,var,www,overlay}
-                  mkdir -p "$root_dir"/usr/{bin,sbin,lib,share,include}
-                  mkdir -p "$root_dir"/etc/{init.d,config,uci-defaults,hotplug.d,rc.button}
-                  mkdir -p "$root_dir"/var/{lock,run,log,tmp}
-                  mkdir -p "$root_dir"/lib/{modules,firmware,netifd,upgrade}
-                fi
-              done
-              
-              mkdir -p "$arch_dir/linux-"{ipq40xx,ramips,x86,ath79}"_generic/linux-*/"
-            fi
-          done
-          
-          # 创建主机工具链目录
-          mkdir -p /mnt/source/staging_dir/host/{bin,lib,include,share,usr}
-          mkdir -p /mnt/source/build_dir/host/{cmake,pkg-config,automake,libtool}
-          
-          # 创建通用包构建目录
-          mkdir -p /mnt/source/build_dir/{host,target-*}/{alsa-lib,busybox,dropbear,firewall,json-c,libubox,libuci,luci,mtdev,openvpn,opkg,procd,ubus,uci,uhttpd,wpad}
-          
-          # 设置正确的目录权限
-          find /mnt/source/build_dir -type d -exec chmod 755 {} \; 2>/dev/null || true
-          find /mnt/source/staging_dir -type d -exec chmod 755 {} \; 2>/dev/null || true
-          find /mnt/source/bin -type d -exec chmod 755 {} \; 2>/dev/null || true
-          
-          # 创建符号链接
-          [ -L "/mnt/source/dl" ] || ln -sf /mnt/downloads /mnt/source/dl 2>/dev/null || true
-          [ -L "/mnt/source/logs" ] || ln -sf /mnt/build-logs /mnt/source/logs 2>/dev/null || true
-          
-          # 修复目录所有权
-          chown -R $USER:$USER /mnt/source/build_dir /mnt/source/staging_dir /mnt/source/bin 2>/dev/null || true
-          
-          echo "✅ 智能构建修复完成" | tee -a "$MAIN_LOG"
-
-      - name: "📁 构建目录预检查"
-        id: dir_precheck
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 📁 构建目录预检查 ===" | tee -a "$MAIN_LOG"
-          
-          cd /mnt/source
-          
-          echo "🔧 执行预编译目录检查..." | tee -a "$MAIN_LOG"
-          
-          # 创建通用构建目录函数
-          create_universal_build_dirs() {
-            echo "🏗️ 创建通用构建目录..." | tee -a "$MAIN_LOG"
-            
-            local target_arch=$(find /mnt/source/build_dir -maxdepth 1 -name "target-*" -type d | head -1 | xargs basename 2>/dev/null || echo "target-unknown")
-            local linux_arch=$(find /mnt/source/build_dir -maxdepth 1 -name "linux-*" -type d | head -1 | xargs basename 2>/dev/null || echo "linux-unknown")
-            
-            echo "  📊 检测到架构: $target_arch, $linux_arch" | tee -a "$MAIN_LOG"
-            
-            local root_patterns=("ipq40xx" "ramips" "x86" "armvirt" "ath79" "mediatek" "qualcomm" "realtek" "bcm53xx" "generic")
-            
-            for pattern in "${root_patterns[@]}"; do
-              local root_dir="/mnt/source/build_dir/$target_arch/root-$pattern"
-              if [ ! -d "$root_dir" ]; then
-                echo "  📂 创建根目录: root-$pattern" | tee -a "$MAIN_LOG"
-                mkdir -p "$root_dir"
-              fi
-              
-              local std_dirs=("bin" "dev" "etc" "lib" "proc" "sbin" "sys" "tmp" "usr" "var" "www" "overlay")
-              for dir in "${std_dirs[@]}"; do
-                mkdir -p "$root_dir/$dir"
-              done
-              
-              mkdir -p "$root_dir/usr/"{bin,sbin,lib,share,include}
-              mkdir -p "$root_dir/etc/"{init.d,config,uci-defaults,hotplug.d,rc.button}
-              mkdir -p "$root_dir/var/"{lock,run,log,tmp}
-              mkdir -p "$root_dir/lib/"{modules,firmware,netifd,upgrade}
-            done
-            
-            find "/mnt/source/build_dir/$target_arch" -type d -exec chmod 755 {} \; 2>/dev/null || true
-            
-            echo "✅ 通用目录创建完成" | tee -a "$MAIN_LOG"
-          }
-          
-          create_universal_build_dirs
-          
-          # 验证关键目录（bin/targets在编译前不存在是正常的）
-          echo "🔍 验证关键目录..." | tee -a "$MAIN_LOG"
-          critical_dirs=("build_dir" "staging_dir" "dl" "tmp")
-          
-          all_ok=true
-          for dir in "${critical_dirs[@]}"; do
-            if [ -d "$dir" ] && [ -w "$dir" ]; then
-              echo "  ✅ $dir - 可写" | tee -a "$MAIN_LOG"
-            else
-              echo "  ❌ $dir - 问题" | tee -a "$MAIN_LOG"
-              all_ok=false
-            fi
-          done
-          
-          # bin/targets目录在编译前不存在是正常的
-          if [ -d "bin/targets" ] && [ -w "bin/targets" ]; then
-            echo "  ✅ bin/targets - 可写" | tee -a "$MAIN_LOG"
-          else
-            echo "  ℹ️ bin/targets - 编译前不存在（正常）" | tee -a "$MAIN_LOG"
-          fi
-          
-          if [ "$all_ok" = true ]; then
-            echo "✅ 目录预检查通过" | tee -a "$MAIN_LOG"
-          else
-            echo "⚠️ 目录预检查发现问题，但将继续构建" | tee -a "$MAIN_LOG"
-          fi
-
-      - name: "🔍 配置完整性验证"
-        id: config_validation
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔍 配置完整性验证 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          
-          echo "🔍 验证配置完整性..." | tee -a "$MAIN_LOG"
-          
-          # 运行defconfig解决依赖
-          make defconfig
-          
-          # 检查关键配置
-          echo "🔍 关键配置检查:" | tee -a "$MAIN_LOG"
-          [ "$(grep -c "CONFIG_TARGET.*=y" .config)" -gt 0 ] && echo "✅ 目标配置正常" || echo "❌ 目标配置异常"
-          [ "$(grep -c "CONFIG_PACKAGE_base-files=y" .config)" -gt 0 ] && echo "✅ 基础文件系统正常" || echo "❌ 基础文件系统异常"
-          [ "$(grep -c "CONFIG_PACKAGE_busybox=y" .config)" -gt 0 ] && echo "✅ BusyBox正常" || echo "❌ BusyBox异常"
-          
-          echo "✅ 配置验证完成" | tee -a "$MAIN_LOG"
-
       - name: "⚡ 智能编译执行"
         id: smart_build
         timeout-minutes: 150
@@ -1086,45 +791,18 @@ jobs:
           echo "=== ⚡ 智能编译执行 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
-          export FORCE_UNSAFE_CONFIGURE=1
+          export TERM=xterm-256color
           export LC_ALL=C
+          export FORCE_UNSAFE_CONFIGURE=1
           PARALLEL_JOBS="${{ env.PARALLEL_JOBS }}"
           
           echo "🔧 编译配置: 并行作业=$PARALLEL_JOBS" | tee -a "$MAIN_LOG"
           
-          # 编译前最终检查
           echo "🔍 编译前最终检查..." | tee -a "$MAIN_LOG"
           make defconfig
           
           mkdir -p logs
           
-          # 通用目录创建函数
-          create_universal_build_dirs() {
-            echo "🏗️ 创建通用构建目录..." | tee -a "$MAIN_LOG"
-            
-            local target_arch=$(find /mnt/source/build_dir -maxdepth 1 -name "target-*" -type d | head -1 | xargs basename 2>/dev/null || echo "target-unknown")
-            local root_patterns=("ipq40xx" "ramips" "x86" "armvirt" "ath79" "mediatek" "qualcomm" "realtek" "bcm53xx" "generic")
-            
-            for pattern in "${root_patterns[@]}"; do
-              local root_dir="/mnt/source/build_dir/$target_arch/root-$pattern"
-              mkdir -p "$root_dir"
-              
-              local std_dirs=("bin" "dev" "etc" "lib" "proc" "sbin" "sys" "tmp" "usr" "var" "www" "overlay")
-              for dir in "${std_dirs[@]}"; do
-                mkdir -p "$root_dir/$dir"
-              done
-              
-              mkdir -p "$root_dir/usr/"{bin,sbin,lib,share,include}
-              mkdir -p "$root_dir/etc/"{init.d,config,uci-defaults,hotplug.d,rc.button}
-              mkdir -p "$root_dir/var/"{lock,run,log,tmp}
-              mkdir -p "$root_dir/lib/"{modules,firmware,netifd,upgrade}
-            done
-            
-            find "/mnt/source/build_dir/$target_arch" -type d -exec chmod 755 {} \; 2>/dev/null || true
-            echo "✅ 通用目录创建完成" | tee -a "$MAIN_LOG"
-          }
-          
-          # 编译函数 - 带错误分析和恢复
           compile_with_recovery() {
             local stage_name="$1"
             local make_target="$2"
@@ -1153,15 +831,20 @@ jobs:
               else
                 echo "❌ $stage_name 失败" | tee -a "$MAIN_LOG"
                 
-                # 错误分析
-                analyze_build_error "$stage_name" "$TEMP_LOG"
-                
                 if [ $retry_count -lt $max_retries ]; then
                   echo "🔄 准备重试..." | tee -a "$MAIN_LOG"
                   retry_count=$((retry_count + 1))
                   
-                  # 根据错误类型应用修复
-                  apply_error_fix "$stage_name" "$TEMP_LOG"
+                  case "$stage_name" in
+                    "工具链编译")
+                      echo "🔄 清理工具链缓存..." | tee -a "$MAIN_LOG"
+                      make toolchain/clean
+                      ;;
+                    "内核编译")
+                      echo "🔄 清理内核构建..." | tee -a "$MAIN_LOG"
+                      make target/linux/clean
+                      ;;
+                  esac
                 else
                   echo "💥 $stage_name 彻底失败" | tee -a "$MAIN_LOG"
                   cat "$TEMP_LOG" >> "$ERROR_LOG"
@@ -1173,116 +856,26 @@ jobs:
             done
           }
           
-          # 错误分析函数
-          analyze_build_error() {
-            local stage="$1"
-            local log_file="$2"
-            
-            echo "🔍 分析 $stage 错误..." | tee -a "$MAIN_LOG"
-            echo "=== $stage 错误分析 ===" >> "$ANALYSIS_REPORT"
-            
-            # 常见错误模式识别
-            if grep -q "No rule to make target" "$log_file"; then
-              echo "❌ 缺失构建目标" | tee -a "$MAIN_LOG"
-              echo "问题: 缺失构建目标" >> "$ANALYSIS_REPORT"
-              echo "解决方案: 检查依赖关系和配置" >> "$ANALYSIS_REPORT"
-            fi
-            
-            if grep -q "undefined reference" "$log_file"; then
-              echo "❌ 链接错误" | tee -a "$MAIN_LOG"
-              echo "问题: 链接错误 - 未定义引用" >> "$ANALYSIS_REPORT"
-              echo "解决方案: 检查库依赖和链接顺序" >> "$ANALYSIS_REPORT"
-            fi
-            
-            if grep -q "error:.*conflicting types" "$log_file"; then
-              echo "❌ 类型冲突" | tee -a "$MAIN_LOG"
-              echo "问题: 类型冲突错误" >> "$ANALYSIS_REPORT"
-              echo "解决方案: 检查头文件包含和类型定义" >> "$ANALYSIS_REPORT"
-            fi
-            
-            if grep -q "No such file or directory" "$log_file"; then
-              echo "❌ 文件缺失" | tee -a "$MAIN_LOG"
-              echo "问题: 文件或目录不存在" >> "$ANALYSIS_REPORT"
-              echo "解决方案: 检查文件路径和依赖" >> "$ANALYSIS_REPORT"
-            fi
-            
-            # 提取具体错误信息
-            local errors=$(grep -E "(error:|Error:|ERROR:)" "$log_file" | head -5)
-            if [ -n "$errors" ]; then
-              echo "📋 具体错误:" | tee -a "$MAIN_LOG"
-              echo "$errors" | tee -a "$MAIN_LOG"
-              echo "具体错误:" >> "$ANALYSIS_REPORT"
-              echo "$errors" >> "$ANALYSIS_REPORT"
-            fi
-          }
-          
-          # 错误修复函数
-          apply_error_fix() {
-            local stage="$1"
-            local log_file="$2"
-            
-            echo "🔧 应用错误修复..." | tee -a "$MAIN_LOG"
-            
-            case "$stage" in
-              "工具链编译")
-                echo "🔄 清理工具链缓存..." | tee -a "$MAIN_LOG"
-                make toolchain/clean
-                ;;
-              "内核编译")
-                echo "🔄 清理内核构建..." | tee -a "$MAIN_LOG"
-                make target/linux/clean
-                
-                # 专门修复构建目录问题
-                echo "🔧 修复内核构建目录..." | tee -a "$MAIN_LOG"
-                create_universal_build_dirs
-                
-                # 修复opkg缺失问题 - 更彻底的解决方案
-                echo "🔧 修复opkg工具缺失..." | tee -a "$MAIN_LOG"
-                if [ ! -f "/mnt/source/staging_dir/host/bin/opkg" ]; then
-                  echo "🔄 重新编译工具链和宿主工具..." | tee -a "$MAIN_LOG"
-                  make tools/install -j1 V=s
-                  make toolchain/install -j1 V=s
-                  if [ -f "/mnt/source/staging_dir/host/bin/opkg" ]; then
-                    echo "✅ opkg工具修复成功" | tee -a "$MAIN_LOG"
-                  else
-                    echo "❌ opkg工具修复失败" | tee -a "$MAIN_LOG"
-                  fi
-                fi
-                ;;
-              "完整编译")
-                if grep -q "No such file or directory" "$log_file"; then
-                  echo "🔧 修复缺失目录错误..." | tee -a "$MAIN_LOG"
-                  create_universal_build_dirs
-                fi
-                ;;
-            esac
-          }
-          
-          # 阶段0: 预编译宿主工具（解决opkg缺失问题）
           echo "🔧 预编译宿主工具..." | tee -a "$MAIN_LOG"
           if ! compile_with_recovery "宿主工具编译" "tools/install"; then
             echo "⚠️ 宿主工具编译有警告，但继续构建" | tee -a "$MAIN_LOG"
           fi
           
-          # 阶段1: 工具链编译
           if ! compile_with_recovery "工具链编译" "toolchain/install"; then
             echo "💥 工具链编译失败，构建终止" | tee -a "$MAIN_LOG"
             exit 1
           fi
           
-          # 阶段2: 内核编译
           if ! compile_with_recovery "内核编译" "target/linux/install"; then
             echo "💥 内核编译失败，构建终止" | tee -a "$MAIN_LOG"
             exit 1
           fi
           
-          # 阶段3: 完整编译
           if ! compile_with_recovery "完整编译" ""; then
             echo "💥 完整编译失败" | tee -a "$MAIN_LOG"
             exit 1
           fi
           
-          # 检查固件生成
           FIRMWARE_FOUND=false
           if find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null | grep -q .; then
             echo "🎉 找到固件文件！" | tee -a "$MAIN_LOG"
@@ -1318,12 +911,10 @@ jobs:
           DOWNLOAD_LOG="${{ env.DOWNLOAD_LOG }}"
           echo "=== 🔍 自动错误分析与报告 ===" | tee -a "$MAIN_LOG"
           
-          # 生成错误分析报告
           echo "# 智能错误分析报告" > "$ANALYSIS_REPORT"
           echo "生成时间: $(date)" >> "$ANALYSIS_REPORT"
           echo "" >> "$ANALYSIS_REPORT"
           
-          # 分析构建状态
           if [ "${{ env.BUILD_STATUS }}" = "success" ]; then
             echo "## 🎉 构建成功" >> "$ANALYSIS_REPORT"
             echo "- 状态: 成功完成" >> "$ANALYSIS_REPORT"
@@ -1332,33 +923,27 @@ jobs:
             echo "## ❌ 构建失败" >> "$ANALYSIS_REPORT"
             echo "- 状态: 构建失败" >> "$ANALYSIS_REPORT"
             
-            # 分析错误日志
             if [ -f "$ERROR_LOG" ]; then
               echo "## 🔍 错误分析" >> "$ANALYSIS_REPORT"
               
-              # 常见错误模式识别
-              if grep -q "No rule to make target" "$ERROR_LOG"; then
-                echo "### ❌ 缺失构建目标" >> "$ANALYSIS_REPORT"
-                echo "**问题**: 编译系统找不到指定的构建目标" >> "$ANALYSIS_REPORT"
-                echo "**可能原因**: 包名错误、依赖缺失或配置问题" >> "$ANALYSIS_REPORT"
-                echo "**解决方案**: 检查.config文件中的包配置，确保所有依赖包已正确启用" >> "$ANALYSIS_REPORT"
+              if grep -q "missing separator" "$ERROR_LOG"; then
+                echo "### ❌ 配置文件语法错误" >> "$ANALYSIS_REPORT"
+                echo "**问题**: .config文件存在语法错误" >> "$ANALYSIS_REPORT"
+                echo "**解决方案**: 检查配置文件格式，确保使用正确的Kconfig语法" >> "$ANALYSIS_REPORT"
               fi
               
-              if grep -q "undefined reference" "$ERROR_LOG"; then
-                echo "### ❌ 链接错误" >> "$ANALYSIS_REPORT"
-                echo "**问题**: 链接器找不到符号定义" >> "$ANALYSIS_REPORT"
-                echo "**可能原因**: 库文件缺失、链接顺序错误或ABI不兼容" >> "$ANALYSIS_REPORT"
-                echo "**解决方案**: 检查库依赖关系，确保所有必需的库都已编译并正确链接" >> "$ANALYSIS_REPORT"
+              if grep -q "mkhash" "$ERROR_LOG"; then
+                echo "### ❌ 主机工具缺失" >> "$ANALYSIS_REPORT"
+                echo "**问题**: 缺少mkhash等主机工具" >> "$ANALYSIS_REPORT"
+                echo "**解决方案**: 确保主机工具正确编译，检查依赖是否完整" >> "$ANALYSIS_REPORT"
               fi
               
-              if grep -q "error:.*conflicting types" "$ERROR_LOG"; then
-                echo "### ❌ 类型冲突" >> "$ANALYSIS_REPORT"
-                echo "**问题**: 数据类型定义冲突" >> "$ANALYSIS_REPORT"
-                echo "**可能原因**: 头文件重复包含、内核版本不匹配" >> "$ANALYSIS_REPORT"
-                echo "**解决方案**: 检查头文件包含顺序，清理构建缓存" >> "$ANALYSIS_REPORT"
+              if grep -q "Error opening terminal" "$ERROR_LOG"; then
+                echo "### ❌ 终端环境问题" >> "$ANALYSIS_REPORT"
+                echo "**问题**: 终端环境配置错误" >> "$ANALYSIS_REPORT"
+                echo "**解决方案**: 设置TERM=xterm-256color环境变量" >> "$ANALYSIS_REPORT"
               fi
               
-              # 提取前10个错误
               echo "### 📋 主要错误列表" >> "$ANALYSIS_REPORT"
               grep -E "(error:|Error:|ERROR:)" "$ERROR_LOG" | head -10 | while read -r error; do
                 echo "- $error" >> "$ANALYSIS_REPORT"
@@ -1366,40 +951,20 @@ jobs:
             fi
             
             echo "## 🛠️ 修复建议" >> "$ANALYSIS_REPORT"
-            echo "1. 检查配置文件是否正确" >> "$ANALYSIS_REPORT"
-            echo "2. 确保所有依赖包已正确下载" >> "$ANALYSIS_REPORT"
-            echo "3. 尝试清理构建缓存: make clean" >> "$ANALYSIS_REPORT"
-            echo "4. 检查磁盘空间和内存是否充足" >> "$ANALYSIS_REPORT"
+            echo "1. 检查.config文件语法是否正确" >> "$ANALYSIS_REPORT"
+            echo "2. 确保所有主机工具正确编译" >> "$ANALYSIS_REPORT"
+            echo "3. 设置正确的终端环境变量: TERM=xterm-256color" >> "$ANALYSIS_REPORT"
+            echo "4. 检查构建系统的依赖是否完整" >> "$ANALYSIS_REPORT"
           fi
           
-          # 下载问题分析
           if [ -f "$DOWNLOAD_LOG" ]; then
             echo "## 🌐 下载问题分析" >> "$ANALYSIS_REPORT"
-            if grep -q "网络超时" "$DOWNLOAD_LOG"; then
-              echo "### ❌ 网络连接问题" >> "$ANALYSIS_REPORT"
-              echo "**问题**: 下载过程中出现网络超时" >> "$ANALYSIS_REPORT"
-              echo "**解决方案**: 检查网络连接，尝试使用代理或更换镜像源" >> "$ANALYSIS_REPORT"
-            fi
-            
-            if grep -q "DNS解析失败" "$DOWNLOAD_LOG"; then
-              echo "### ❌ DNS解析问题" >> "$ANALYSIS_REPORT"
-              echo "**问题**: 无法解析域名" >> "$ANALYSIS_REPORT"
-              echo "**解决方案**: 检查DNS设置，尝试使用其他DNS服务器" >> "$ANALYSIS_REPORT"
-            fi
-            
-            if grep -q "SSL证书问题" "$DOWNLOAD_LOG"; then
-              echo "### ❌ SSL证书问题" >> "$ANALYSIS_REPORT"
-              echo "**问题**: SSL证书验证失败" >> "$ANALYSIS_REPORT"
-              echo "**解决方案**: 更新CA证书或临时禁用SSL验证" >> "$ANALYSIS_REPORT"
-            fi
-            
             DOWNLOAD_RETRIES=$(grep -c "下载尝试" "$DOWNLOAD_LOG" 2>/dev/null || echo 0)
             echo "### 📊 下载统计" >> "$ANALYSIS_REPORT"
             echo "- 下载重试次数: $DOWNLOAD_RETRIES" >> "$ANALYSIS_REPORT"
             echo "- 最终下载文件数: ${{ env.DOWNLOAD_FILE_COUNT || 0 }}" >> "$ANALYSIS_REPORT"
           fi
           
-          # 系统资源报告
           echo "## 📊 系统资源报告" >> "$ANALYSIS_REPORT"
           echo "\`\`\`" >> "$ANALYSIS_REPORT"
           echo "磁盘使用情况:" >> "$ANALYSIS_REPORT"
@@ -1432,8 +997,6 @@ jobs:
           cp "$WARNING_LOG" /mnt/artifacts/ 2>/dev/null || true
           cp "$ANALYSIS_REPORT" /mnt/artifacts/ 2>/dev/null || true
           cp "$DOWNLOAD_LOG" /mnt/artifacts/ 2>/dev/null || true
-          
-          # 收集配置文件和构建信息
           cp /mnt/source/.config /mnt/artifacts/ 2>/dev/null || true
           
           echo "ARTIFACT_COUNT=$ARTIFACT_COUNT" >> $GITHUB_ENV
@@ -1454,21 +1017,16 @@ jobs:
           if [ -f "$CONFIG_FILE" ]; then
             echo "📁 找到新创建的配置文件: $CONFIG_FILE" | tee -a "$MAIN_LOG"
             
-            # 切换到配置仓库目录
             cd "${{ env.CONFIG_REPO_DIR }}"
             
-            # 配置Git用户
             git config --local user.email "github-actions[bot]@users.noreply.github.com"
             git config --local user.name "github-actions[bot]"
             
-            # 添加配置文件
             git add "firmware-config/configs/config_$CONFIG_PROFILE"
             
-            # 检查是否有更改需要提交
             if git diff --staged --quiet; then
               echo "ℹ️ 没有新的配置文件需要提交" | tee -a "$MAIN_LOG"
             else
-              # 提交更改
               COMMIT_MSG="添加新的设备配置文件: $CONFIG_PROFILE"
               if [ -n "${{ env.TARGET_CONFIG }}" ]; then
                 COMMIT_MSG="$COMMIT_MSG (目标: ${{ env.TARGET_CONFIG }})"
@@ -1476,7 +1034,6 @@ jobs:
               git commit -m "$COMMIT_MSG"
               echo "✅ 配置文件已提交到本地仓库: $COMMIT_MSG" | tee -a "$MAIN_LOG"
               
-              # 推送到远程仓库
               echo "🔄 推送到远程仓库..." | tee -a "$MAIN_LOG"
               git push
               echo "✅ 配置文件已推送到远程仓库" | tee -a "$MAIN_LOG"
@@ -1491,8 +1048,7 @@ jobs:
         uses: "actions/upload-artifact@v4"
         with:
           name: "Build-Artifacts-${{ github.run_number }}"
-          path: |
-            /mnt/artifacts
+          path: "/mnt/artifacts"
           retention-days: 7
           compression-level: 6
 
@@ -1523,7 +1079,6 @@ jobs:
           echo "  - 自定义IPK: ${{ env.CUSTOM_IPK_COUNT || 0 }} 个"
           echo "  - 自定义脚本: ${{ env.CUSTOM_SCRIPT_COUNT || 0 }} 个"
           echo "  - 额外软件包: ${{ env.EXTRA_PACKAGES_ADDED || 0 }} 个"
-          echo "  - 自定义插件: ${{ env.CUSTOM_PLUGINS_ADDED || 0 }} 个"
           echo ""
           if [ "${{ env.BUILD_STATUS }}" = "success" ] && [ "${{ env.FIRMWARE_COUNT }}" -gt 0 ]; then
             echo "🎉 智能构建成功！"
@@ -1533,9 +1088,10 @@ jobs:
             fi
           else
             echo "❌ 构建失败或未生成固件"
-            echo "🔧 请查看错误分析报告了解详细问题"
-            if [ "${{ env.DOWNLOAD_RETRY_COUNT }}" -gt 3 ]; then
-              echo "🌐 网络问题: 下载过程多次重试，建议检查网络连接"
+            echo "🔧 主要问题: 配置文件语法错误和主机工具缺失"
+            echo "💡 解决方案: 检查.config文件格式，确保主机工具正确编译"
+            if [ "${{ env.DOWNLOAD_RETRY_COUNT }}" -gt 1 ]; then
+              echo "🌐 下载过程多次重试，建议检查网络连接"
             fi
           fi
           echo "=========================================="
