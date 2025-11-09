@@ -278,66 +278,6 @@ jobs:
               echo "CONFIG_PACKAGE_uclient-fetch=y" >> "$MODE_CONFIG_DIR/standard.conf"
               echo "CONFIG_PACKAGE_urandom-seed=y" >> "$MODE_CONFIG_DIR/standard.conf"
               echo "CONFIG_PACKAGE_usign=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "# 完整网络支持" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_dnsmasq-full=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_iptables=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_iptables-mod-ipopt=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_iptables-mod-nat-extra=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-ipt-core=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-ipt-ipset=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-ipt-nat=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-nf-conntrack=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-nf-conntrack6=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-nf-flow=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-nf-ipt=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-nf-nat=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-nf-reject=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-nf-reject6=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_odhcp6c=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "# 完整文件系统支持" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_block-mount=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-fs-autofs4=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-fs-btrfs=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-fs-exfat=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-fs-f2fs=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-fs-ntfs=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-fuse=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "# 完整无线支持" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-ath=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-ath10k=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-ath9k=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-ath9k-common=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-cfg80211=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-mac80211=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_hostapd-common=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "# USB支持" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-usb-core=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-usb-storage-extras=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-usb2=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_kmod-usb3=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "# LUCI应用" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_luci=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_luci-app-firewall=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_luci-app-opkg=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_luci-base=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_luci-compat=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_luci-proto-ipv6=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> "$MODE_CONFIG_DIR/standard.conf"
-              echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> "$MODE_CONFIG_DIR/standard.conf"
               ;;
             
             "full")
@@ -518,48 +458,210 @@ jobs:
           
           echo "✅ 配置创建与处理完成" | tee -a "$MAIN_LOG"
 
-      - name: "🔧 动态设备配置修复"
-        id: dynamic_device_fix
+      - name: "🔄 并行Feeds更新"
+        id: feeds_setup
         run: |
           set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔧 动态设备配置修复 ===" | tee -a "$MAIN_LOG"
+          echo "=== 🔄 并行Feeds更新 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
+          CURRENT_BRANCH=$(git branch --show-current)
+          if [[ "$CURRENT_BRANCH" == *"22.03"* ]]; then FEEDS_BRANCH="openwrt-22.03"
+          elif [[ "$CURRENT_BRANCH" == *"21.02"* ]]; then FEEDS_BRANCH="openwrt-21.02"
+          else FEEDS_BRANCH="master"; fi
+          
+          case "${{ env.SOURCE_PRESET }}" in
+            "immortalwrt")
+              echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf
+              echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf
+              ;;
+            "openwrt")
+              echo "src-git packages https://git.openwrt.org/feed/packages.git;$FEEDS_BRANCH" > feeds.conf
+              echo "src-git luci https://git.openwrt.org/project/luci.git;$FEEDS_BRANCH" >> feeds.conf
+              ;;
+            "lede")
+              echo "src-git packages https://github.com/coolsnowwolf/packages.git;$FEEDS_BRANCH" > feeds.conf
+              echo "src-git luci https://github.com/coolsnowwolf/luci.git;$FEEDS_BRANCH" >> feeds.conf
+              ;;
+          esac
+          
+          echo "src-git routing https://github.com/openwrt/routing.git;$FEEDS_BRANCH" >> feeds.conf
+          
+          echo "🔄 并行更新feeds..." | tee -a "$MAIN_LOG"
+          ./scripts/feeds update -a &
+          FEEDS_PID=$!
+          
+          mkdir -p /mnt/downloads
+          [ -d "dl" ] && rm -rf dl
+          ln -sf /mnt/downloads dl
+          
+          wait $FEEDS_PID
+          ./scripts/feeds install -a
+          
+          echo "✅ Feeds更新完成" | tee -a "$MAIN_LOG"
+
+      - name: "🌐 语言包配置"
+        id: language_setup
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🌐 语言包配置 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          LANGUAGE="${{ github.event.inputs.language_pack }}"
+          echo "🎯 语言包选择: $LANGUAGE" | tee -a "$MAIN_LOG"
+          
+          CURRENT_BRANCH="${{ env.ACTUAL_BRANCH }}"
+          
+          case "$LANGUAGE" in
+            "zh-cn")
+              echo "🔧 启用中文语言包..." | tee -a "$MAIN_LOG"
+              if [[ "$CURRENT_BRANCH" == *"21.02"* ]]; then
+                sed -i 's/# CONFIG_PACKAGE_luci-i18n-base-zh-cn is not set/CONFIG_PACKAGE_luci-i18n-base-zh-cn=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
+              else
+                sed -i 's/# CONFIG_PACKAGE_luci-i18n-base-zh_Hans is not set/CONFIG_PACKAGE_luci-i18n-base-zh_Hans=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci-i18n-base-zh_Hans=y" >> .config
+              fi
+              ;;
+            "en-only")
+              echo "🔧 仅保留英文..." | tee -a "$MAIN_LOG"
+              sed -i 's/CONFIG_PACKAGE_luci-i18n-[^e][^n].*=y/# &/' .config
+              ;;
+            "all")
+              echo "🔧 启用所有语言包..." | tee -a "$MAIN_LOG"
+              for lang in $(grep "CONFIG_PACKAGE_luci-i18n-" .config | grep "is not set" | cut -d' ' -f2); do
+                sed -i "s/# $lang is not set/$lang=y/" .config
+              done
+              ;;
+          esac
+          
+          echo "✅ 语言包配置完成" | tee -a "$MAIN_LOG"
+
+      - name: "🔧 高级功能增强"
+        id: advanced_features
+        if: github.event.inputs.enable_advanced == 'true'
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          WARNING_LOG="${{ env.WARNING_LOG }}"
+          echo "=== 🔧 高级功能增强 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "🔧 高级功能状态: 已启用" | tee -a "$MAIN_LOG"
+          
+          echo "📦 安装自定义IPK包..." | tee -a "$MAIN_LOG"
+          IPK_DIR="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/prebuilt-ipks"
+          IPK_COUNT=0
+          
+          if [ -d "$IPK_DIR" ]; then
+            echo "🔍 查找自定义IPK包..." | tee -a "$MAIN_LOG"
+            IPK_FILES=$(find "$IPK_DIR" -name "*.ipk" -type f 2>/dev/null || true)
+            if [ -n "$IPK_FILES" ]; then
+              echo "✅ 找到自定义IPK包:" | tee -a "$MAIN_LOG"
+              mkdir -p package/custom
+              for ipk in $IPK_FILES; do
+                ipk_name=$(basename "$ipk")
+                echo "  - 复制 $ipk_name" | tee -a "$MAIN_LOG"
+                cp "$ipk" package/custom/
+                IPK_COUNT=$((IPK_COUNT + 1))
+                ipk_basename=$(basename "$ipk" .ipk)
+                echo "CONFIG_PACKAGE_${ipk_basename}=y" >> .config
+              done
+              echo "✅ 成功添加 $IPK_COUNT 个自定义IPK包" | tee -a "$MAIN_LOG"
+            else
+              echo "ℹ️ 未找到自定义IPK包" | tee -a "$MAIN_LOG"
+            fi
+          else
+            echo "ℹ️ 自定义IPK目录不存在: $IPK_DIR" | tee -a "$MAIN_LOG"
+          fi
+          
+          echo "CUSTOM_IPK_COUNT=$IPK_COUNT" >> $GITHUB_ENV
+          
+          echo "🔧 执行自定义脚本..." | tee -a "$MAIN_LOG"
+          SCRIPT_PATHS="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-features/scripts ${{ env.CONFIG_REPO_DIR }}/firmware-config/scripts ${{ env.CONFIG_REPO_DIR }}/scripts ${{ env.CONFIG_REPO_DIR }}/firmware-config"
+          
+          SCRIPT_COUNT=0
+          for script_path in $SCRIPT_PATHS; do
+            if [ -d "$script_path" ]; then
+              echo "🔍 在 $script_path 中查找脚本..." | tee -a "$MAIN_LOG"
+              SCRIPTS=$(find "$script_path" -maxdepth 2 -name "*.sh" -type f 2>/dev/null | sort || true)
+              if [ -n "$SCRIPTS" ]; then
+                for script in $SCRIPTS; do
+                  script_name=$(basename "$script")
+                  echo "📜 执行脚本: $script_name..." | tee -a "$MAIN_LOG"
+                  chmod +x "$script"
+                  
+                  TEMP_LOG=$(mktemp)
+                  if { bash "$script" 2>&1 | tee "$TEMP_LOG"; } then
+                    echo "✅ 自定义脚本执行成功: $script_name" | tee -a "$MAIN_LOG"
+                    SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
+                  else
+                    echo "⚠️ 自定义脚本执行有警告: $script_name" | tee -a "$MAIN_LOG"
+                    grep -i -E "error|failed|No such file" "$TEMP_LOG" >> "$WARNING_LOG" || true
+                  fi
+                  cat "$TEMP_LOG" >> "$MAIN_LOG"
+                  rm -f "$TEMP_LOG"
+                done
+              else
+                echo "ℹ️ 在 $script_path 中未找到脚本" | tee -a "$MAIN_LOG"
+              fi
+            else
+              echo "ℹ️ 脚本目录不存在: $script_path" | tee -a "$MAIN_LOG"
+            fi
+          done
+          
+          echo "CUSTOM_SCRIPT_COUNT=$SCRIPT_COUNT" >> $GITHUB_ENV
+          echo "✅ 高级功能应用完成，执行了 $SCRIPT_COUNT 个脚本" | tee -a "$MAIN_LOG"
+
+      - name: "🔧 智能构建修复系统"
+        id: smart_build_fix
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔧 智能构建修复系统 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "🔧 应用智能构建修复..." | tee -a "$MAIN_LOG"
+          
+          # 1. 问题包统一处理
+          echo "🔧 统一处理问题包..." | tee -a "$MAIN_LOG"
+          PROBLEM_PKGS=("6in4" "6rd" "6to4" "ds-lite" "map")
+          for pkg in "${PROBLEM_PKGS[@]}"; do
+            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
+              echo "🔄 禁用问题包: $pkg" | tee -a "$MAIN_LOG"
+              sed -i "s/CONFIG_PACKAGE_${pkg}=y/# CONFIG_PACKAGE_${pkg} is not set/" .config
+            fi
+          done
+          
+          # 2. 动态设备适配修复
+          echo "🔧 动态设备适配修复..." | tee -a "$MAIN_LOG"
           CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
-          echo "🎯 动态修复设备配置: $CONFIG_PROFILE" | tee -a "$MAIN_LOG"
           
           echo "# ======================" >> .config
-          echo "# 动态设备配置修复" >> .config
+          echo "# 智能设备修复" >> .config
           echo "# ======================" >> .config
           
           if [[ "$CONFIG_PROFILE" =~ ^rt-ac42u$|^ac42u$|^asus.*ac42u ]]; then
-            echo "# IPQ40xx通用修复" >> .config
+            echo "# IPQ40xx设备修复" >> .config
             echo "CONFIG_TARGET_ipq40xx=y" >> .config
             echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
-            echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
             echo "CONFIG_KERNEL_ARM=y" >> .config
-            echo "CONFIG_KERNEL_ARM_CPU_NEON=y" >> .config
-            echo "CONFIG_KERNEL_ARM_CPU_NEON_FP=y" >> .config
           elif [[ "$CONFIG_PROFILE" =~ ^x86|^x64|^generic.*64 ]]; then
-            echo "# x86通用修复" >> .config
+            echo "# x86设备修复" >> .config
             echo "CONFIG_TARGET_x86=y" >> .config
             echo "CONFIG_TARGET_x86_64=y" >> .config
             echo "CONFIG_KERNEL_X86=y" >> .config
-            echo "CONFIG_KERNEL_X86_64=y" >> .config
-          elif [[ "$CONFIG_PROFILE" =~ ^mt7621|^newifi.*d2|^r6220|^r3g|^r3p|^k2p ]]; then
-            echo "# MT7621通用修复" >> .config
+          elif [[ "$CONFIG_PROFILE" =~ ^mt7621|^newifi.*d2|^r6220 ]]; then
+            echo "# MT7621设备修复" >> .config
             echo "CONFIG_TARGET_ramips=y" >> .config
             echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
             echo "CONFIG_KERNEL_MIPS=y" >> .config
-            echo "CONFIG_KERNEL_MIPS_MT7621=y" >> .config
-          else
-            echo "# 通用内核修复" >> .config
-            echo "CONFIG_KERNEL_DEVTMPFS=y" >> .config
-            echo "CONFIG_KERNEL_DEVTMPFS_MOUNT=y" >> .config
           fi
           
-          echo "# 通用内核特性" >> .config
+          # 3. 通用内核修复
+          echo "# 通用内核修复" >> .config
+          echo "CONFIG_KERNEL_DEVTMPFS=y" >> .config
+          echo "CONFIG_KERNEL_DEVTMPFS_MOUNT=y" >> .config
           echo "CONFIG_KERNEL_LZO=y" >> .config
           echo "CONFIG_KERNEL_LZ4=y" >> .config
           echo "CONFIG_KERNEL_ZSTD=y" >> .config
@@ -570,62 +672,91 @@ jobs:
           echo "CONFIG_KERNEL_INET=y" >> .config
           echo "CONFIG_KERNEL_IPV6=y" >> .config
           
-          echo "✅ 动态设备配置修复完成" | tee -a "$MAIN_LOG"
-
-      - name: "🔧 构建问题修复"
-        id: build_problem_fix
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔧 构建问题修复 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          
-          echo "🔧 修复已知构建问题..." | tee -a "$MAIN_LOG"
-          
-          PROBLEM_PKGS=("6in4" "6rd" "6to4" "ds-lite" "map")
-          for pkg in "${PROBLEM_PKGS[@]}"; do
-            sed -i "s/CONFIG_PACKAGE_${pkg}=y/# CONFIG_PACKAGE_${pkg} is not set/" .config 2>/dev/null || true
-          done
-          
-          echo "# 构建问题修复" >> .config
-          echo "# CONFIG_PACKAGE_6in4 is not set" >> .config
-          echo "# CONFIG_PACKAGE_6rd is not set" >> .config
-          echo "# CONFIG_PACKAGE_6to4 is not set" >> .config
-          echo "# CONFIG_PACKAGE_ds-lite is not set" >> .config
-          echo "# CONFIG_PACKAGE_map is not set" >> .config
-          
-          echo "✅ 构建问题修复完成" | tee -a "$MAIN_LOG"
-
-      - name: "🔧 编译环境准备"
-        id: build_env_prepare
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔧 编译环境准备 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          
-          echo "🔧 准备编译环境..." | tee -a "$MAIN_LOG"
-          
+          # 4. 编译环境修复
+          echo "🔧 编译环境修复..." | tee -a "$MAIN_LOG"
           mkdir -p build_dir/target-* staging_dir/target-* staging_dir/toolchain-*
           find build_dir -type d -exec chmod 755 {} \;
           find staging_dir -type d -exec chmod 755 {} \;
           
-          chmod +x staging_dir/host/bin/* 2>/dev/null || true
-          chmod +x staging_dir/toolchain-*/bin/* 2>/dev/null || true
-          
-          export FORCE_UNSAFE_CONFIGURE=1
-          export LC_ALL=C
-          
-          echo "✅ 编译环境准备完成" | tee -a "$MAIN_LOG"
+          echo "✅ 智能构建修复完成" | tee -a "$MAIN_LOG"
 
-      - name: "⚡ 稳健编译执行"
-        id: robust_build
+      - name: "🔍 配置完整性验证"
+        id: config_validation
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔍 配置完整性验证 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "🔍 验证配置完整性..." | tee -a "$MAIN_LOG"
+          
+          # 运行defconfig解决依赖
+          make defconfig
+          
+          # 检查关键配置
+          echo "🔍 关键配置检查:" | tee -a "$MAIN_LOG"
+          [ "$(grep -c "CONFIG_TARGET.*=y" .config)" -gt 0 ] && echo "✅ 目标配置正常" || echo "❌ 目标配置异常"
+          [ "$(grep -c "CONFIG_PACKAGE_base-files=y" .config)" -gt 0 ] && echo "✅ 基础文件系统正常" || echo "❌ 基础文件系统异常"
+          [ "$(grep -c "CONFIG_PACKAGE_busybox=y" .config)" -gt 0 ] && echo "✅ BusyBox正常" || echo "❌ BusyBox异常"
+          
+          # 验证问题包已禁用
+          echo "🔍 问题包验证:" | tee -a "$MAIN_LOG"
+          for pkg in 6in4 6rd 6to4; do
+            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
+              echo "❌ $pkg 仍然启用，强制禁用" | tee -a "$MAIN_LOG"
+              sed -i "s/CONFIG_PACKAGE_${pkg}=y/# CONFIG_PACKAGE_${pkg} is not set/" .config
+            else
+              echo "✅ $pkg 已禁用" | tee -a "$MAIN_LOG"
+            fi
+          done
+          
+          echo "✅ 配置验证完成" | tee -a "$MAIN_LOG"
+
+      - name: "🚀 并行下载优化"
+        id: download_deps
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🚀 并行下载优化 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          sed -i 's|https://sources.cdn.openwrt.org|https://mirror2.openwrt.org/sources|g' scripts/download.pl
+          sed -i 's|git.openwrt.org|github.com/openwrt|g' feeds.conf.* 2>/dev/null || true
+          
+          echo "📥 开始并行下载..." | tee -a "$MAIN_LOG"
+          PARALLEL_JOBS="${{ env.PARALLEL_JOBS }}"
+          
+          for i in 1 2 3; do
+            echo "🔄 下载尝试 $i/3..." | tee -a "$MAIN_LOG"
+            if make download -j$PARALLEL_JOBS; then
+              echo "✅ 下载成功" | tee -a "$MAIN_LOG"
+              break
+            else
+              echo "⚠️ 下载尝试 $i 失败" | tee -a "$MAIN_LOG"
+              if [ $i -eq 3 ]; then
+                echo "❌ 所有下载尝试都失败" | tee -a "$MAIN_LOG"
+                exit 1
+              fi
+              sleep 10
+            fi
+          done
+          
+          DOWNLOAD_COUNT=$(find dl/ -type f 2>/dev/null | wc -l)
+          echo "📦 下载文件数量: $DOWNLOAD_COUNT" | tee -a "$MAIN_LOG"
+          
+          if [ "$DOWNLOAD_COUNT" -lt 10 ]; then
+            echo "⚠️ 下载文件数量过少，可能有问题" | tee -a "$MAIN_LOG"
+          fi
+
+      - name: "⚡ 智能编译执行"
+        id: smart_build
         timeout-minutes: 150
         run: |
           set -e
           MAIN_LOG="${{ env.MAIN_LOG }}"
           ERROR_LOG="${{ env.ERROR_LOG }}"
-          echo "=== ⚡ 稳健编译执行 ===" | tee -a "$MAIN_LOG"
+          ANALYSIS_REPORT="${{ env.ANALYSIS_REPORT }}"
+          echo "=== ⚡ 智能编译执行 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
           export FORCE_UNSAFE_CONFIGURE=1
@@ -634,45 +765,150 @@ jobs:
           
           echo "🔧 编译配置: 并行作业=$PARALLEL_JOBS" | tee -a "$MAIN_LOG"
           
+          # 编译前最终检查
           echo "🔍 编译前最终检查..." | tee -a "$MAIN_LOG"
           make defconfig
           
           mkdir -p logs
           
-          echo "🛠️ 阶段1: 工具链编译..." | tee -a "$MAIN_LOG"
-          if ! make toolchain/install -j$PARALLEL_JOBS 2>&1 | tee -a "$MAIN_LOG"; then
-            echo "❌ 工具链编译失败，尝试单线程..." | tee -a "$MAIN_LOG"
-            make toolchain/install -j1 V=s 2>&1 | tee -a "$MAIN_LOG"
+          # 编译函数 - 带错误分析和恢复
+          compile_with_recovery() {
+            local stage_name="$1"
+            local make_target="$2"
+            local max_retries=2
+            local retry_count=0
+            
+            while [ $retry_count -le $max_retries ]; do
+              echo "🛠️ $stage_name (尝试 $((retry_count + 1))/$((max_retries + 1)))..." | tee -a "$MAIN_LOG"
+              
+              TEMP_LOG=$(mktemp)
+              set +e
+              if [ $retry_count -eq 0 ]; then
+                make $make_target -j$PARALLEL_JOBS 2>&1 | tee "$TEMP_LOG"
+              else
+                make $make_target -j1 V=s 2>&1 | tee "$TEMP_LOG"
+              fi
+              local result=${PIPESTATUS[0]}
+              set -e
+              
+              cat "$TEMP_LOG" >> "$MAIN_LOG"
+              
+              if [ $result -eq 0 ]; then
+                echo "✅ $stage_name 成功" | tee -a "$MAIN_LOG"
+                rm -f "$TEMP_LOG"
+                return 0
+              else
+                echo "❌ $stage_name 失败" | tee -a "$MAIN_LOG"
+                
+                # 错误分析
+                analyze_build_error "$stage_name" "$TEMP_LOG"
+                
+                if [ $retry_count -lt $max_retries ]; then
+                  echo "🔄 准备重试..." | tee -a "$MAIN_LOG"
+                  retry_count=$((retry_count + 1))
+                  
+                  # 根据错误类型应用修复
+                  apply_error_fix "$stage_name" "$TEMP_LOG"
+                else
+                  echo "💥 $stage_name 彻底失败" | tee -a "$MAIN_LOG"
+                  cat "$TEMP_LOG" >> "$ERROR_LOG"
+                  rm -f "$TEMP_LOG"
+                  return 1
+                fi
+              fi
+              rm -f "$TEMP_LOG"
+            done
+          }
+          
+          # 错误分析函数
+          analyze_build_error() {
+            local stage="$1"
+            local log_file="$2"
+            
+            echo "🔍 分析 $stage 错误..." | tee -a "$MAIN_LOG"
+            echo "=== $stage 错误分析 ===" >> "$ANALYSIS_REPORT"
+            
+            # 常见错误模式识别
+            if grep -q "No rule to make target" "$log_file"; then
+              echo "❌ 缺失构建目标" | tee -a "$MAIN_LOG"
+              echo "问题: 缺失构建目标" >> "$ANALYSIS_REPORT"
+              echo "解决方案: 检查依赖关系和配置" >> "$ANALYSIS_REPORT"
+            fi
+            
+            if grep -q "undefined reference" "$log_file"; then
+              echo "❌ 链接错误" | tee -a "$MAIN_LOG"
+              echo "问题: 链接错误 - 未定义引用" >> "$ANALYSIS_REPORT"
+              echo "解决方案: 检查库依赖和链接顺序" >> "$ANALYSIS_REPORT"
+            fi
+            
+            if grep -q "error:.*conflicting types" "$log_file"; then
+              echo "❌ 类型冲突" | tee -a "$MAIN_LOG"
+              echo "问题: 类型冲突错误" >> "$ANALYSIS_REPORT"
+              echo "解决方案: 检查头文件包含和类型定义" >> "$ANALYSIS_REPORT"
+            fi
+            
+            if grep -q "No such file or directory" "$log_file"; then
+              echo "❌ 文件缺失" | tee -a "$MAIN_LOG"
+              echo "问题: 文件或目录不存在" >> "$ANALYSIS_REPORT"
+              echo "解决方案: 检查文件路径和依赖" >> "$ANALYSIS_REPORT"
+            fi
+            
+            # 提取具体错误信息
+            local errors=$(grep -E "(error:|Error:|ERROR:)" "$log_file" | head -5)
+            if [ -n "$errors" ]; then
+              echo "📋 具体错误:" | tee -a "$MAIN_LOG"
+              echo "$errors" | tee -a "$MAIN_LOG"
+              echo "具体错误:" >> "$ANALYSIS_REPORT"
+              echo "$errors" >> "$ANALYSIS_REPORT"
+            fi
+          }
+          
+          # 错误修复函数
+          apply_error_fix() {
+            local stage="$1"
+            local log_file="$2"
+            
+            echo "🔧 应用错误修复..." | tee -a "$MAIN_LOG"
+            
+            case "$stage" in
+              "工具链编译")
+                echo "🔄 清理工具链缓存..." | tee -a "$MAIN_LOG"
+                make toolchain/clean
+                ;;
+              "内核编译")
+                echo "🔄 清理内核构建..." | tee -a "$MAIN_LOG"
+                make target/linux/clean
+                ;;
+              "完整编译")
+                if grep -q "6in4\|6rd\|6to4" "$log_file"; then
+                  echo "🔄 修复IPv6隧道包问题..." | tee -a "$MAIN_LOG"
+                  for pkg in 6in4 6rd 6to4; do
+                    find . -name "*$pkg*" -type f -path "*/package/*" -delete 2>/dev/null || true
+                  done
+                fi
+                ;;
+            esac
+          }
+          
+          # 阶段1: 工具链编译
+          if ! compile_with_recovery "工具链编译" "toolchain/install"; then
+            echo "💥 工具链编译失败，构建终止" | tee -a "$MAIN_LOG"
+            exit 1
           fi
           
-          echo "🛠️ 阶段2: 内核编译..." | tee -a "$MAIN_LOG"
-          if ! make target/linux/install -j$PARALLEL_JOBS 2>&1 | tee -a "$MAIN_LOG"; then
-            echo "❌ 内核编译失败，尝试单线程..." | tee -a "$MAIN_LOG"
-            make target/linux/install -j1 V=s 2>&1 | tee -a "$MAIN_LOG"
+          # 阶段2: 内核编译
+          if ! compile_with_recovery "内核编译" "target/linux/install"; then
+            echo "💥 内核编译失败，构建终止" | tee -a "$MAIN_LOG"
+            exit 1
           fi
           
-          echo "🚀 阶段3: 完整编译..." | tee -a "$MAIN_LOG"
-          TEMP_LOG=$(mktemp)
-          set +e
-          make -j$PARALLEL_JOBS 2>&1 | tee "$TEMP_LOG"
-          BUILD_RESULT=${PIPESTATUS[0]}
-          set -e
-          
-          cat "$TEMP_LOG" >> "$MAIN_LOG"
-          
-          if [ $BUILD_RESULT -eq 0 ]; then
-            echo "✅ 编译成功" | tee -a "$MAIN_LOG"
-            echo "BUILD_STATUS=success" >> $GITHUB_ENV
-          else
-            echo "❌ 编译失败 (退出码: $BUILD_RESULT)" | tee -a "$MAIN_LOG"
-            echo "=== 详细错误日志开始 ===" >> "$ERROR_LOG"
-            make -j1 V=s 2>&1 >> "$ERROR_LOG" || true
-            echo "=== 详细错误日志结束 ===" >> "$ERROR_LOG"
-            echo "BUILD_STATUS=failed" >> $GITHUB_ENV
-            exit $BUILD_RESULT
+          # 阶段3: 完整编译
+          if ! compile_with_recovery "完整编译" ""; then
+            echo "💥 完整编译失败" | tee -a "$MAIN_LOG"
+            exit 1
           fi
-          rm -f "$TEMP_LOG"
           
+          # 检查固件生成
           FIRMWARE_FOUND=false
           if find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null | grep -q .; then
             echo "🎉 找到固件文件！" | tee -a "$MAIN_LOG"
@@ -680,9 +916,8 @@ jobs:
             FIRMWARE_FOUND=true
             echo "BUILD_STATUS=success" >> $GITHUB_ENV
           else
-            echo "❌ 未找到固件文件" | tee -a "$MAIN_LOG"
+            echo "💥 未找到固件文件" | tee -a "$MAIN_LOG"
             echo "BUILD_STATUS=failed" >> $GITHUB_ENV
-            find bin -type f -name "*" 2>/dev/null | head -20 | tee -a "$MAIN_LOG"
             exit 1
           fi
           
@@ -692,16 +927,92 @@ jobs:
           ccache -s | tee -a "$MAIN_LOG"
           
           echo "=== 编译总结 ===" | tee -a "$MAIN_LOG"
-          echo "构建状态: $BUILD_STATUS" | tee -a "$MAIN_LOG"
-          echo "固件生成: $FIRMWARE_FOUND" | tee -a "$MAIN_LOG"
+          echo "构建状态: 成功" | tee -a "$MAIN_LOG"
+          echo "固件生成: 是" | tee -a "$MAIN_LOG"
 
-      - name: "📦 产物收集"
+      - name: "🔍 自动错误分析与报告"
+        id: error_analysis
+        if: always()
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          ERROR_LOG="${{ env.ERROR_LOG }}"
+          ANALYSIS_REPORT="${{ env.ANALYSIS_REPORT }}"
+          echo "=== 🔍 自动错误分析与报告 ===" | tee -a "$MAIN_LOG"
+          
+          # 生成错误分析报告
+          echo "# 智能错误分析报告" >> "$ANALYSIS_REPORT"
+          echo "生成时间: $(date)" >> "$ANALYSIS_REPORT"
+          echo "" >> "$ANALYSIS_REPORT"
+          
+          # 分析构建状态
+          if [ "${{ env.BUILD_STATUS }}" = "success" ]; then
+            echo "## 🎉 构建成功" >> "$ANALYSIS_REPORT"
+            echo "- 状态: 成功完成" >> "$ANALYSIS_REPORT"
+            echo "- 固件数量: ${{ env.FIRMWARE_COUNT || 0 }}" >> "$ANALYSIS_REPORT"
+          else
+            echo "## ❌ 构建失败" >> "$ANALYSIS_REPORT"
+            echo "- 状态: 构建失败" >> "$ANALYSIS_REPORT"
+            
+            # 分析错误日志
+            if [ -f "$ERROR_LOG" ]; then
+              echo "## 🔍 错误分析" >> "$ANALYSIS_REPORT"
+              
+              # 常见错误模式识别
+              if grep -q "No rule to make target" "$ERROR_LOG"; then
+                echo "### ❌ 缺失构建目标" >> "$ANALYSIS_REPORT"
+                echo "**问题**: 编译系统找不到指定的构建目标" >> "$ANALYSIS_REPORT"
+                echo "**可能原因**: 包名错误、依赖缺失或配置问题" >> "$ANALYSIS_REPORT"
+                echo "**解决方案**: 检查.config文件中的包配置，确保所有依赖包已正确启用" >> "$ANALYSIS_REPORT"
+              fi
+              
+              if grep -q "undefined reference" "$ERROR_LOG"; then
+                echo "### ❌ 链接错误" >> "$ANALYSIS_REPORT"
+                echo "**问题**: 链接器找不到符号定义" >> "$ANALYSIS_REPORT"
+                echo "**可能原因**: 库文件缺失、链接顺序错误或ABI不兼容" >> "$ANALYSIS_REPORT"
+                echo "**解决方案**: 检查库依赖关系，确保所有必需的库都已编译并正确链接" >> "$ANALYSIS_REPORT"
+              fi
+              
+              if grep -q "error:.*conflicting types" "$ERROR_LOG"; then
+                echo "### ❌ 类型冲突" >> "$ANALYSIS_REPORT"
+                echo "**问题**: 数据类型定义冲突" >> "$ANALYSIS_REPORT"
+                echo "**可能原因**: 头文件重复包含、内核版本不匹配" >> "$ANALYSIS_REPORT"
+                echo "**解决方案**: 检查头文件包含顺序，清理构建缓存" >> "$ANALYSIS_REPORT"
+              fi
+              
+              # 提取前10个错误
+              echo "### 📋 主要错误列表" >> "$ANALYSIS_REPORT"
+              grep -E "(error:|Error:|ERROR:)" "$ERROR_LOG" | head -10 | while read -r error; do
+                echo "- $error" >> "$ANALYSIS_REPORT"
+              done
+            fi
+            
+            echo "## 🛠️ 修复建议" >> "$ANALYSIS_REPORT"
+            echo "1. 检查配置文件是否正确" >> "$ANALYSIS_REPORT"
+            echo "2. 确保所有依赖包已正确下载" >> "$ANALYSIS_REPORT"
+            echo "3. 尝试清理构建缓存: make clean" >> "$ANALYSIS_REPORT"
+            echo "4. 检查磁盘空间和内存是否充足" >> "$ANALYSIS_REPORT"
+          fi
+          
+          # 系统资源报告
+          echo "## 📊 系统资源报告" >> "$ANALYSIS_REPORT"
+          echo "```" >> "$ANALYSIS_REPORT"
+          echo "磁盘使用情况:" >> "$ANALYSIS_REPORT"
+          df -h >> "$ANALYSIS_REPORT"
+          echo "" >> "$ANALYSIS_REPORT"
+          echo "内存使用情况:" >> "$ANALYSIS_REPORT"
+          free -h >> "$ANALYSIS_REPORT"
+          echo "```" >> "$ANALYSIS_REPORT"
+          
+          echo "✅ 错误分析报告生成完成" | tee -a "$MAIN_LOG"
+
+      - name: "📦 极速产物收集"
         id: collect_artifacts
         if: always()
         run: |
           set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 📦 产物收集 ===" | tee -a "$MAIN_LOG"
+          echo "=== 📦 极速产物收集 ===" | tee -a "$MAIN_LOG"
           
           mkdir -p /mnt/artifacts/firmware
           ARTIFACT_COUNT=0
@@ -713,10 +1024,60 @@ jobs:
           
           cp "$MAIN_LOG" /mnt/artifacts/ 2>/dev/null || true
           cp "$ERROR_LOG" /mnt/artifacts/ 2>/dev/null || true
+          cp "$WARNING_LOG" /mnt/artifacts/ 2>/dev/null || true
+          cp "$ANALYSIS_REPORT" /mnt/artifacts/ 2>/dev/null || true
+          
+          # 收集配置文件和构建信息
           cp /mnt/source/.config /mnt/artifacts/ 2>/dev/null || true
           
           echo "ARTIFACT_COUNT=$ARTIFACT_COUNT" >> $GITHUB_ENV
           echo "✅ 收集了 $ARTIFACT_COUNT 个产物" | tee -a "$MAIN_LOG"
+
+      - name: "📤 提交新配置文件到仓库"
+        id: commit_config
+        if: env.CONFIG_SOURCE == 'new' && github.event.inputs.auto_commit_config == 'true'
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 📤 提交新配置文件到仓库 ===" | tee -a "$MAIN_LOG"
+          
+          CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
+          CONFIG_DIR="${{ env.CONFIG_REPO_DIR }}/firmware-config/configs"
+          CONFIG_FILE="$CONFIG_DIR/config_$CONFIG_PROFILE"
+          
+          if [ -f "$CONFIG_FILE" ]; then
+            echo "📁 找到新创建的配置文件: $CONFIG_FILE" | tee -a "$MAIN_LOG"
+            
+            # 切换到配置仓库目录
+            cd "${{ env.CONFIG_REPO_DIR }}"
+            
+            # 配置Git用户
+            git config --local user.email "github-actions[bot]@users.noreply.github.com"
+            git config --local user.name "github-actions[bot]"
+            
+            # 添加配置文件
+            git add "firmware-config/configs/config_$CONFIG_PROFILE"
+            
+            # 检查是否有更改需要提交
+            if git diff --staged --quiet; then
+              echo "ℹ️ 没有新的配置文件需要提交" | tee -a "$MAIN_LOG"
+            else
+              # 提交更改
+              COMMIT_MSG="添加新的设备配置文件: $CONFIG_PROFILE"
+              if [ -n "${{ env.TARGET_CONFIG }}" ]; then
+                COMMIT_MSG="$COMMIT_MSG (目标: ${{ env.TARGET_CONFIG }})"
+              fi
+              git commit -m "$COMMIT_MSG"
+              echo "✅ 配置文件已提交到本地仓库: $COMMIT_MSG" | tee -a "$MAIN_LOG"
+              
+              # 推送到远程仓库
+              echo "🔄 推送到远程仓库..." | tee -a "$MAIN_LOG"
+              git push
+              echo "✅ 配置文件已推送到远程仓库" | tee -a "$MAIN_LOG"
+            fi
+          else
+            echo "ℹ️ 没有创建新的配置文件" | tee -a "$MAIN_LOG"
+          fi
 
       - name: "💾 上传构建产物"
         id: upload_artifacts
@@ -729,16 +1090,19 @@ jobs:
           retention-days: 7
           compression-level: 6
 
-      - name: "📊 构建报告"
+      - name: "📊 智能构建报告"
         id: final_report
         if: always()
         run: |
-          echo "=== 📊 构建报告 ==="
+          echo "=== 📊 智能构建报告 ==="
           echo ""
           echo "🎯 构建摘要"
           echo "=========================================="
+          echo "⚡ 编译性能:"
+          echo "  - 并行作业: ${{ env.PARALLEL_JOBS || 'N/A' }}"
+          echo "  - 构建状态: ${{ env.BUILD_STATUS || 'unknown' }}"
+          echo ""
           echo "📦 构建结果:"
-          echo "  - 状态: ${{ env.BUILD_STATUS || 'unknown' }}"
           echo "  - 固件数量: ${{ env.FIRMWARE_COUNT || 0 }}"
           echo "  - 产物数量: ${{ env.ARTIFACT_COUNT || 0 }}"
           echo ""
@@ -747,11 +1111,18 @@ jobs:
           echo "  - 目标配置: ${{ env.TARGET_CONFIG || 'unknown' }}"
           echo "  - 构建模式: ${{ github.event.inputs.build_mode || 'unknown' }}"
           echo ""
+          echo "🔧 高级功能:"
+          echo "  - 自定义IPK: ${{ env.CUSTOM_IPK_COUNT || 0 }} 个"
+          echo "  - 自定义脚本: ${{ env.CUSTOM_SCRIPT_COUNT || 0 }} 个"
+          echo ""
           if [ "${{ env.BUILD_STATUS }}" = "success" ] && [ "${{ env.FIRMWARE_COUNT }}" -gt 0 ]; then
-            echo "🎉 构建成功！"
+            echo "🎉 智能构建成功！"
             echo "💡 固件已生成并上传到产物"
+            if [ "${{ env.CONFIG_SOURCE }}" = "new" ] && [ "${{ github.event.inputs.auto_commit_config }}" = "true" ]; then
+              echo "📝 新配置文件已自动提交到仓库"
+            fi
           else
             echo "❌ 构建失败或未生成固件"
-            echo "🔧 请查看详细日志了解问题"
+            echo "🔧 请查看错误分析报告了解详细问题"
           fi
           echo "=========================================="
