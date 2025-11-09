@@ -7,22 +7,14 @@ on:
         description: "选择源码库"
         required: true
         type: choice
-        options: 
-          - "immortalwrt"
-          - "openwrt"
-          - "lede"
+        options: ["immortalwrt", "openwrt", "lede"]
         default: "immortalwrt"
       source_branch:
         description: "源码分支"
         required: true
         default: "auto"
         type: choice
-        options: 
-          - "auto"
-          - "openwrt-22.03"
-          - "openwrt-21.02"
-          - "master"
-          - "main"
+        options: ["auto", "openwrt-22.03", "openwrt-21.02", "master", "main"]
       config_profile:
         description: "设备配置文件名称"
         required: true
@@ -32,19 +24,13 @@ on:
         description: "构建模式"
         required: true
         type: choice
-        options: 
-          - "最小化"
-          - "标准"
-          - "自定义"
+        options: ["最小化", "标准", "自定义"]
         default: "标准"
       build_optimization:
         description: "编译优化策略"
         required: true
         type: choice
-        options: 
-          - "均衡"
-          - "速度优先"
-          - "稳定优先"
+        options: ["均衡", "速度优先", "稳定优先"]
         default: "均衡"
       enable_advanced:
         description: "启用高级功能"
@@ -55,10 +41,7 @@ on:
         description: "语言包选择"
         required: true
         type: choice
-        options: 
-          - "简体中文"
-          - "仅英文"
-          - "全部语言"
+        options: ["简体中文", "仅英文", "全部语言"]
         default: "简体中文"
       auto_commit_config:
         description: "自动提交新配置文件"
@@ -302,13 +285,13 @@ jobs:
           
           echo "✅ 终端环境和构建系统修复完成" | tee -a "$MAIN_LOG"
 
-      - name: "🔧 高效主机工具预编译"
+      - name: "🔧 智能主机工具预编译"
         id: precompile_tools_fast
         timeout-minutes: 30
         run: |
           set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔧 高效主机工具预编译 ===" | tee -a "$MAIN_LOG"
+          echo "=== 🔧 智能主机工具预编译 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
           export TERM=dumb
@@ -320,41 +303,61 @@ jobs:
           mkdir -p build_dir/host
           touch staging_dir/host/.prereq-build
           
-          # 创建应急mkhash存根
-          echo '#!/bin/bash
-          case "$1" in
-            "md5") echo "d41d8cd98f00b204e9800998ecf8427e" ;;
-            "sha256") echo "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" ;;
-            "sha1") echo "da39a3ee5e6b4b0d3255bfef95601890afd80709" ;;
-            *) echo "00000000000000000000000000000000" ;;
-          esac
-          exit 0' > staging_dir/host/bin/mkhash
+          echo "📝 创建应急mkhash存根..." | tee -a "$MAIN_LOG"
+          echo '#!/bin/bash' > staging_dir/host/bin/mkhash
+          echo 'case "$1" in' >> staging_dir/host/bin/mkhash
+          echo '  "md5") echo "d41d8cd98f00b204e9800998ecf8427e" ;;' >> staging_dir/host/bin/mkhash
+          echo '  "sha256") echo "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" ;;' >> staging_dir/host/bin/mkhash
+          echo '  "sha1") echo "da39a3ee5e6b4b0d3255bfef95601890afd80709" ;;' >> staging_dir/host/bin/mkhash
+          echo '  *) echo "00000000000000000000000000000000" ;;' >> staging_dir/host/bin/mkhash
+          echo 'esac' >> staging_dir/host/bin/mkhash
+          echo 'exit 0' >> staging_dir/host/bin/mkhash
           chmod +x staging_dir/host/bin/mkhash
           
           export PATH="/mnt/source/staging_dir/host/bin:$PATH"
           echo "PATH=/mnt/source/staging_dir/host/bin:$PATH" >> $GITHUB_ENV
           
-          echo "🎯 直接编译关键工具..." | tee -a "$MAIN_LOG"
+          echo "🎯 智能查找并编译mkhash..." | tee -a "$MAIN_LOG"
           
-          # 直接编译mkhash，避免依赖问题
-          echo "🛠️ 直接编译mkhash..." | tee -a "$MAIN_LOG"
-          cd tools/mkhash
-          if gcc -Wall -O2 -o mkhash src/mkhash.c 2>&1 | tee -a "$MAIN_LOG"; then
-            cp mkhash ../../staging_dir/host/bin/mkhash.real
-            mv ../../staging_dir/host/bin/mkhash.real ../../staging_dir/host/bin/mkhash
-            echo "✅ mkhash编译成功" | tee -a "$MAIN_LOG"
-          else
-            echo "⚠️ mkhash编译失败，继续使用存根" | tee -a "$MAIN_LOG"
-          fi
-          cd ../..
+          MKHASH_PATHS=("scripts/mkhash" "tools/mkhash" "include/mkhash" "mkhash")
+          MKHASH_FOUND=false
           
-          # 使用简化工具编译方法
-          echo "🛠️ 批量编译基础工具..." | tee -a "$MAIN_LOG"
-          for tool in m4 libtool pkg-config flex bison; do
-            echo "编译: $tool" | tee -a "$MAIN_LOG"
-            timeout 300 make tools/$tool/compile -j1 V=sc 2>&1 | tail -5 | tee -a "$MAIN_LOG" || echo "⚠️ $tool 编译超时，继续..." | tee -a "$MAIN_LOG"
-            make tools/$tool/install -j1 V=sc 2>&1 | tail -3 | tee -a "$MAIN_LOG" || true
+          for path in "${MKHASH_PATHS[@]}"; do
+            if [ -d "$path" ] && [ -f "$path/src/mkhash.c" ]; then
+              echo "✅ 找到mkhash在: $path" | tee -a "$MAIN_LOG"
+              cd "$path"
+              if gcc -Wall -O2 -o mkhash src/mkhash.c 2>&1 | tee -a "$MAIN_LOG"; then
+                cp mkhash ../../staging_dir/host/bin/mkhash.real
+                mv ../../staging_dir/host/bin/mkhash.real ../../staging_dir/host/bin/mkhash
+                echo "✅ mkhash编译成功" | tee -a "$MAIN_LOG"
+                MKHASH_FOUND=true
+                break
+              else
+                echo "⚠️ $path 编译失败，继续查找..." | tee -a "$MAIN_LOG"
+              fi
+              cd /mnt/source
+            fi
           done
+          
+          if [ "$MKHASH_FOUND" = false ]; then
+            echo "⚠️ 未找到可编译的mkhash，使用存根版本" | tee -a "$MAIN_LOG"
+          fi
+          
+          echo "🛠️ 使用正确目标编译基础工具..." | tee -a "$MAIN_LOG"
+          
+          if make tools/install -j1 V=sc 2>&1 | tail -10 | tee -a "$MAIN_LOG"; then
+            echo "✅ 主机工具编译成功" | tee -a "$MAIN_LOG"
+          else
+            echo "🔧 尝试替代编译方法..." | tee -a "$MAIN_LOG"
+            for tool_dir in tools/*/; do
+              if [ -f "${tool_dir}Makefile" ]; then
+                tool_name=$(basename "$tool_dir")
+                echo "编译工具: $tool_name" | tee -a "$MAIN_LOG"
+                make tools/${tool_name}/compile -j1 V=sc 2>&1 | tail -3 | tee -a "$MAIN_LOG" || true
+                make tools/${tool_name}/install -j1 V=sc 2>&1 | tail -3 | tee -a "$MAIN_LOG" || true
+              fi
+            done
+          fi
           
           echo "✅ 主机工具预编译完成" | tee -a "$MAIN_LOG"
 
@@ -466,7 +469,6 @@ jobs:
           echo "MODE_CONFIG_DIR=$MODE_CONFIG_DIR" >> $GITHUB_ENV
           echo "✅ 模式配置文件创建完成: $BUILD_MODE ($MODE_INTERNAL)" | tee -a "$MAIN_LOG"
 
-      # 后续步骤保持不变...
       - name: "📝 智能配置创建与处理"
         id: config_creation
         run: |
@@ -484,6 +486,16 @@ jobs:
           echo "🎛️ 应用模式配置: $MODE_CONFIG" | tee -a "$MAIN_LOG"
           
           rm -f .config .config.old
+          
+          # 加载设备数据库
+          DEVICE_DB="${{ env.CONFIG_REPO_DIR }}/firmware-config/device_profiles.json"
+          if [ -f "$DEVICE_DB" ]; then
+            echo "✅ 找到设备配置文件数据库" | tee -a "$MAIN_LOG"
+          else
+            echo "❌ 设备数据库不存在，创建基础版本..." | tee -a "$MAIN_LOG"
+            mkdir -p "$(dirname "$DEVICE_DB")"
+            echo '{"version":"1.0","devices":{},"default_device":"ac42u"}' > "$DEVICE_DB"
+          fi
           
           if [ -f "$CONFIG_FILE" ]; then
             echo "✅ 应用现有配置文件: $CONFIG_PROFILE" | tee -a "$MAIN_LOG"
@@ -508,41 +520,43 @@ jobs:
             echo "# 设备配置 - $CONFIG_PROFILE" > "$CONFIG_FILE"
             echo "# 自动生成于 $(date)" >> "$CONFIG_FILE"
             
+            # 使用设备数据库进行智能匹配
             TARGET_CONFIG=""
-            case "$CONFIG_PROFILE" in
-              ac42u|rt-ac42u|asus-ac42u|ASUS-RT-AC42U)
-                echo "# ASUS RT-AC42U 设备 (IPQ40xx)" >> "$CONFIG_FILE"
-                echo "CONFIG_TARGET_ipq40xx=y" >> "$CONFIG_FILE"
-                echo "CONFIG_TARGET_ipq40xx_generic=y" >> "$CONFIG_FILE"
-                echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> "$CONFIG_FILE"
-                echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> "$CONFIG_FILE"
-                TARGET_CONFIG="ipq40xx_asus_rt-ac42u"
-                echo "🎯 设备类型: IPQ40xx (ASUS RT-AC42U)" | tee -a "$MAIN_LOG"
-                ;;
-              x86|x64|generic-x64|amd64)
-                echo "# x86/x64 通用设备" >> "$CONFIG_FILE"
-                echo "CONFIG_TARGET_x86=y" >> "$CONFIG_FILE"
-                echo "CONFIG_TARGET_x86_64=y" >> "$CONFIG_FILE"
-                echo "CONFIG_TARGET_x86_64_DEVICE_generic=y" >> "$CONFIG_FILE"
-                TARGET_CONFIG="x86_64_generic"
-                echo "🎯 设备类型: x86_64 通用" | tee -a "$MAIN_LOG"
-                ;;
-              mt7621|newifi-d2|r6220)
-                echo "# MT7621 设备" >> "$CONFIG_FILE"
-                echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
-                echo "CONFIG_TARGET_ramips_mt7621=y" >> "$CONFIG_FILE"
-                TARGET_CONFIG="ramips_mt7621"
-                echo "🎯 设备类型: MT7621" | tee -a "$MAIN_LOG"
-                ;;
-              *)
-                echo "# 自动检测设备配置 - $CONFIG_PROFILE" >> "$CONFIG_FILE"
-                echo "CONFIG_TARGET_ipq40xx=y" >> "$CONFIG_FILE"
-                echo "CONFIG_TARGET_ipq40xx_generic=y" >> "$CONFIG_FILE"
-                TARGET_CONFIG="ipq40xx_generic"
-                echo "🎯 设备类型: 自动选择 IPQ40xx 通用" | tee -a "$MAIN_LOG"
-                ;;
-            esac
+            DEVICE_MATCHED=false
             
+            if [ -f "$DEVICE_DB" ]; then
+              for device_key in $(jq -r '.devices | keys[]' "$DEVICE_DB"); do
+                aliases=$(jq -r ".devices.\"$device_key\".aliases[]" "$DEVICE_DB" 2>/dev/null || echo "")
+                if echo "$aliases" | grep -q -w "$CONFIG_PROFILE"; then
+                  target=$(jq -r ".devices.\"$device_key\".target" "$DEVICE_DB")
+                  subtarget=$(jq -r ".devices.\"$device_key\".subtarget" "$DEVICE_DB")
+                  device=$(jq -r ".devices.\"$device_key\".device" "$DEVICE_DB")
+                  vendor=$(jq -r ".devices.\"$device_key\".vendor" "$DEVICE_DB")
+                  model=$(jq -r ".devices.\"$device_key\".model" "$DEVICE_DB")
+                  
+                  echo "# $vendor $model 设备 ($target)" >> "$CONFIG_FILE"
+                  echo "CONFIG_TARGET_${target}=y" >> "$CONFIG_FILE"
+                  echo "CONFIG_TARGET_${target}_${subtarget}=y" >> "$CONFIG_FILE"
+                  echo "CONFIG_TARGET_${target}_${subtarget}_DEVICE_${device}=y" >> "$CONFIG_FILE"
+                  
+                  TARGET_CONFIG="${target}_${device}"
+                  DEVICE_MATCHED=true
+                  echo "🎯 设备类型: $vendor $model ($target)" | tee -a "$MAIN_LOG"
+                  break
+                fi
+              done
+            fi
+            
+            # 如果没有匹配到，使用默认配置
+            if [ "$DEVICE_MATCHED" = false ]; then
+              echo "🔧 未在数据库中匹配到设备，使用默认IPQ40xx配置" | tee -a "$MAIN_LOG"
+              echo "# IPQ40xx 通用设备 (默认)" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ipq40xx=y" >> "$CONFIG_FILE"
+              echo "CONFIG_TARGET_ipq40xx_generic=y" >> "$CONFIG_FILE"
+              TARGET_CONFIG="ipq40xx_generic"
+            fi
+            
+            # 基础配置
             echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> "$CONFIG_FILE"
             echo "CONFIG_TARGET_IMAGES_GZIP=y" >> "$CONFIG_FILE"
             echo "CONFIG_TARGET_IMAGES_INCLUDE_FACTORY=y" >> "$CONFIG_FILE"
@@ -556,6 +570,7 @@ jobs:
 
             cp "$CONFIG_FILE" .config
             echo "TARGET_CONFIG=$TARGET_CONFIG" >> $GITHUB_ENV
+            echo "DEVICE_MATCHED=$DEVICE_MATCHED" >> $GITHUB_ENV
             echo "✅ 已创建智能配置文件: $CONFIG_FILE" | tee -a "$MAIN_LOG"
             echo "🎯 目标配置类型: $TARGET_CONFIG" | tee -a "$MAIN_LOG"
             
@@ -692,6 +707,39 @@ jobs:
           fi
           
           echo "✅ 配置创建与处理完成" | tee -a "$MAIN_LOG"
+
+      - name: "🔧 更新设备数据库"
+        id: update_device_db
+        if: env.CONFIG_SOURCE == 'new' && env.DEVICE_MATCHED == 'false'
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔧 更新设备数据库 ===" | tee -a "$MAIN_LOG"
+          
+          DEVICE_DB="${{ env.CONFIG_REPO_DIR }}/firmware-config/device_profiles.json"
+          CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
+          
+          if [ -f "$DEVICE_DB" ]; then
+            echo "🔧 添加新设备到数据库: $CONFIG_PROFILE" | tee -a "$MAIN_LOG"
+            
+            TEMP_DB=$(mktemp)
+            
+            jq --arg profile "$CONFIG_PROFILE" \
+              '.devices[$profile] = {
+                "aliases": [$profile],
+                "target": "ipq40xx",
+                "subtarget": "generic", 
+                "device": "generic",
+                "vendor": "Unknown",
+                "model": "Unknown Device",
+                "architecture": "ipq40xx",
+                "description": "自动添加的设备 - 需要手动完善信息"
+              }' "$DEVICE_DB" > "$TEMP_DB" && mv "$TEMP_DB" "$DEVICE_DB"
+            
+            echo "✅ 设备数据库已更新" | tee -a "$MAIN_LOG"
+          else
+            echo "❌ 设备数据库不存在，跳过更新" | tee -a "$MAIN_LOG"
+          fi
 
       - name: "🔧 强制设备配置应用"
         id: force_device_config
