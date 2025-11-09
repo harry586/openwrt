@@ -24,7 +24,7 @@ on:
         description: "构建模式"
         required: true
         type: choice
-        options: ["minimal", "standard", "full", "custom"]
+        options: ["minimal", "standard", "custom"]
         default: "standard"
       build_optimization:
         description: "编译优化策略"
@@ -48,6 +48,11 @@ on:
         required: false
         default: true
         type: boolean
+      extra_packages:
+        description: "额外软件包（逗号分隔）"
+        required: false
+        type: string
+        default: ""
 
 env:
   TZ: "Asia/Shanghai"
@@ -94,6 +99,7 @@ jobs:
           echo "  - 高级功能: ${{ github.event.inputs.enable_advanced }}" >> $MAIN_LOG
           echo "  - 语言包: ${{ github.event.inputs.language_pack }}" >> $MAIN_LOG
           echo "  - 自动提交配置: ${{ github.event.inputs.auto_commit_config }}" >> $MAIN_LOG
+          echo "  - 额外软件包: ${{ github.event.inputs.extra_packages }}" >> $MAIN_LOG
           echo "==========================================" >> $MAIN_LOG
           
           echo "MAIN_LOG=$MAIN_LOG" >> $GITHUB_ENV
@@ -280,35 +286,6 @@ jobs:
               echo "CONFIG_PACKAGE_usign=y" >> "$MODE_CONFIG_DIR/standard.conf"
               ;;
             
-            "full")
-              echo "🔧 创建完整模式配置..." | tee -a "$MAIN_LOG"
-              echo "# ============================================" > "$MODE_CONFIG_DIR/full.conf"
-              echo "# 完整构建模式配置" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "# ============================================" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "# 基础系统配置" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_base-files=y" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_busybox=y" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_dropbear=y" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_firewall=y" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_fstools=y" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_libc=y" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_libgcc=y" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_logd=y" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_mtd=y" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_netifd=y" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_opkg=y" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_procd=y" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_swconfig=y" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_ubox=y" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_ubus=y" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_ubusd=y" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_uci=y" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_uclient-fetch=y" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_urandom-seed=y" >> "$MODE_CONFIG_DIR/full.conf"
-              echo "CONFIG_PACKAGE_usign=y" >> "$MODE_CONFIG_DIR/full.conf"
-              ;;
-            
             "custom")
               echo "🔧 创建自定义模式配置..." | tee -a "$MAIN_LOG"
               echo "# ============================================" > "$MODE_CONFIG_DIR/custom.conf"
@@ -383,42 +360,49 @@ jobs:
               echo "CONFIG_TARGET_ipq40xx_generic=y" >> "$CONFIG_FILE"
               echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> "$CONFIG_FILE"
               TARGET_CONFIG="ipq40xx_asus_rt-ac42u"
+              echo "🎯 设备类型: IPQ40xx (ASUS RT-AC42U)" | tee -a "$MAIN_LOG"
             elif [[ "$CONFIG_PROFILE" =~ ^x86|^x64|^generic.*64 ]]; then
               echo "# x86/x64 通用设备" >> "$CONFIG_FILE"
               echo "CONFIG_TARGET_x86=y" >> "$CONFIG_FILE"
               echo "CONFIG_TARGET_x86_64=y" >> "$CONFIG_FILE"
               echo "CONFIG_TARGET_x86_64_DEVICE_generic=y" >> "$CONFIG_FILE"
               TARGET_CONFIG="x86_64_generic"
+              echo "🎯 设备类型: x86_64 通用" | tee -a "$MAIN_LOG"
             elif [[ "$CONFIG_PROFILE" =~ ^mt7621|^newifi.*d2|^r6220 ]]; then
               echo "# MT7621 设备" >> "$CONFIG_FILE"
               echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
               echo "CONFIG_TARGET_ramips_mt7621=y" >> "$CONFIG_FILE"
               echo "# CONFIG_TARGET_ramips_mt7621_DEVICE_xxx=y 请根据具体设备设置" >> "$CONFIG_FILE"
               TARGET_CONFIG="ramips_mt7621"
+              echo "🎯 设备类型: MT7621" | tee -a "$MAIN_LOG"
             elif [[ "$CONFIG_PROFILE" =~ ^r3g|^mir3g|^xiaomi.*r3g ]]; then
               echo "# Xiaomi R3G 设备" >> "$CONFIG_FILE"
               echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
               echo "CONFIG_TARGET_ramips_mt7621=y" >> "$CONFIG_FILE"
               echo "CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-3g=y" >> "$CONFIG_FILE"
               TARGET_CONFIG="ramips_mt7621_xiaomi_r3g"
+              echo "🎯 设备类型: Xiaomi R3G" | tee -a "$MAIN_LOG"
             elif [[ "$CONFIG_PROFILE" =~ ^r3p|^mir3p|^xiaomi.*r3p ]]; then
               echo "# Xiaomi R3P 设备" >> "$CONFIG_FILE"
               echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
               echo "CONFIG_TARGET_ramips_mt7621=y" >> "$MAIN_LOG"
               echo "CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_mi-router-3-pro=y" >> "$CONFIG_FILE"
               TARGET_CONFIG="ramips_mt7621_xiaomi_r3p"
+              echo "🎯 设备类型: Xiaomi R3P" | tee -a "$MAIN_LOG"
             elif [[ "$CONFIG_PROFILE" =~ ^k2p|^phicomm.*k2p ]]; then
               echo "# Phicomm K2P 设备" >> "$CONFIG_FILE"
               echo "CONFIG_TARGET_ramips=y" >> "$CONFIG_FILE"
               echo "CONFIG_TARGET_ramips_mt7621=y" >> "$CONFIG_FILE"
               echo "CONFIG_TARGET_ramips_mt7621_DEVICE_phicomm_k2p=y" >> "$CONFIG_FILE"
               TARGET_CONFIG="ramips_mt7621_phicomm_k2p"
+              echo "🎯 设备类型: Phicomm K2P" | tee -a "$MAIN_LOG"
             else
               echo "# 通用设备配置 - 请根据实际设备修改" >> "$CONFIG_FILE"
               echo "# CONFIG_TARGET_xxx=y" >> "$CONFIG_FILE"
               echo "# CONFIG_TARGET_xxx_yyy=y" >> "$CONFIG_FILE"
               echo "# CONFIG_TARGET_xxx_yyy_DEVICE_zzz=y" >> "$CONFIG_FILE"
               TARGET_CONFIG="generic"
+              echo "🎯 设备类型: 通用" | tee -a "$MAIN_LOG"
             fi
             
             echo "" >> "$CONFIG_FILE"
@@ -447,6 +431,54 @@ jobs:
             echo "✅ 模式配置应用完成: ${{ github.event.inputs.build_mode }}" | tee -a "$MAIN_LOG"
           else
             echo "⚠️ 模式配置文件不存在: $MODE_CONFIG" | tee -a "$MAIN_LOG"
+          fi
+          
+          # 配置额外软件包
+          if [ -n "${{ github.event.inputs.extra_packages }}" ]; then
+            echo "📦 配置额外软件包..." | tee -a "$MAIN_LOG"
+            IFS=',' read -ra PKGS <<< "${{ github.event.inputs.extra_packages }}"
+            ADDED_COUNT=0
+            for pkg in "${PKGS[@]}"; do
+              CLEAN_PKG=$(echo "$pkg" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+              if [ -n "$CLEAN_PKG" ]; then
+                if ! grep -q "CONFIG_PACKAGE_${CLEAN_PKG}=y" .config; then
+                  echo "CONFIG_PACKAGE_${CLEAN_PKG}=y" >> .config
+                  echo "✅ 添加包: $CLEAN_PKG" | tee -a "$MAIN_LOG"
+                  ADDED_COUNT=$((ADDED_COUNT + 1))
+                else
+                  echo "ℹ️ 包已存在: $CLEAN_PKG" | tee -a "$MAIN_LOG"
+                fi
+              fi
+            done
+            echo "EXTRA_PACKAGES_ADDED=$ADDED_COUNT" >> $GITHUB_ENV
+            echo "✅ 成功添加 $ADDED_COUNT 个额外软件包" | tee -a "$MAIN_LOG"
+          else
+            echo "ℹ️ 未提供额外软件包" | tee -a "$MAIN_LOG"
+            echo "EXTRA_PACKAGES_ADDED=0" >> $GITHUB_ENV
+          fi
+          
+          # 加载自定义插件文件
+          CUSTOM_PLUGINS_FILE="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-plugins.txt"
+          if [ -f "$CUSTOM_PLUGINS_FILE" ]; then
+            echo "🔌 加载自定义插件文件..." | tee -a "$MAIN_LOG"
+            PLUGIN_COUNT=0
+            while IFS= read -r plugin; do
+              plugin=$(echo "$plugin" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+              if [ -n "$plugin" ] && [[ ! "$plugin" =~ ^# ]]; then
+                if ! grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
+                  echo "CONFIG_PACKAGE_${plugin}=y" >> .config
+                  echo "✅ 添加插件: $plugin" | tee -a "$MAIN_LOG"
+                  PLUGIN_COUNT=$((PLUGIN_COUNT + 1))
+                else
+                  echo "ℹ️ 插件已存在: $plugin" | tee -a "$MAIN_LOG"
+                fi
+              fi
+            done < "$CUSTOM_PLUGINS_FILE"
+            echo "CUSTOM_PLUGINS_ADDED=$PLUGIN_COUNT" >> $GITHUB_ENV
+            echo "✅ 成功添加 $PLUGIN_COUNT 个自定义插件" | tee -a "$MAIN_LOG"
+          else
+            echo "ℹ️ 自定义插件文件不存在: $CUSTOM_PLUGINS_FILE" | tee -a "$MAIN_LOG"
+            echo "CUSTOM_PLUGINS_ADDED=0" >> $GITHUB_ENV
           fi
           
           echo "⚡ 预配置优化选项..." | tee -a "$MAIN_LOG"
@@ -623,17 +655,7 @@ jobs:
           
           echo "🔧 应用智能构建修复..." | tee -a "$MAIN_LOG"
           
-          # 1. 问题包统一处理
-          echo "🔧 统一处理问题包..." | tee -a "$MAIN_LOG"
-          PROBLEM_PKGS=("6in4" "6rd" "6to4" "ds-lite" "map")
-          for pkg in "${PROBLEM_PKGS[@]}"; do
-            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
-              echo "🔄 禁用问题包: $pkg" | tee -a "$MAIN_LOG"
-              sed -i "s/CONFIG_PACKAGE_${pkg}=y/# CONFIG_PACKAGE_${pkg} is not set/" .config
-            fi
-          done
-          
-          # 2. 动态设备适配修复
+          # 1. 动态设备适配修复
           echo "🔧 动态设备适配修复..." | tee -a "$MAIN_LOG"
           CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
           
@@ -658,7 +680,7 @@ jobs:
             echo "CONFIG_KERNEL_MIPS=y" >> .config
           fi
           
-          # 3. 通用内核修复
+          # 2. 通用内核修复
           echo "# 通用内核修复" >> .config
           echo "CONFIG_KERNEL_DEVTMPFS=y" >> .config
           echo "CONFIG_KERNEL_DEVTMPFS_MOUNT=y" >> .config
@@ -672,7 +694,7 @@ jobs:
           echo "CONFIG_KERNEL_INET=y" >> .config
           echo "CONFIG_KERNEL_IPV6=y" >> .config
           
-          # 4. 通用目录结构修复
+          # 3. 通用目录结构修复
           echo "🔧 修复通用构建目录结构..." | tee -a "$MAIN_LOG"
           mkdir -p /mnt/source/{build_dir,staging_dir,bin,tmp,logs,dl}
           mkdir -p /mnt/source/build_dir/{host,target-*}
@@ -766,9 +788,9 @@ jobs:
           
           create_universal_build_dirs
           
-          # 验证关键目录
+          # 验证关键目录（bin/targets在编译前不存在是正常的）
           echo "🔍 验证关键目录..." | tee -a "$MAIN_LOG"
-          critical_dirs=("build_dir" "staging_dir" "bin/targets" "dl" "tmp")
+          critical_dirs=("build_dir" "staging_dir" "dl" "tmp")
           
           all_ok=true
           for dir in "${critical_dirs[@]}"; do
@@ -779,6 +801,13 @@ jobs:
               all_ok=false
             fi
           done
+          
+          # bin/targets目录在编译前不存在是正常的
+          if [ -d "bin/targets" ] && [ -w "bin/targets" ]; then
+            echo "  ✅ bin/targets - 可写" | tee -a "$MAIN_LOG"
+          else
+            echo "  ℹ️ bin/targets - 编译前不存在（正常）" | tee -a "$MAIN_LOG"
+          fi
           
           if [ "$all_ok" = true ]; then
             echo "✅ 目录预检查通过" | tee -a "$MAIN_LOG"
@@ -804,17 +833,6 @@ jobs:
           [ "$(grep -c "CONFIG_TARGET.*=y" .config)" -gt 0 ] && echo "✅ 目标配置正常" || echo "❌ 目标配置异常"
           [ "$(grep -c "CONFIG_PACKAGE_base-files=y" .config)" -gt 0 ] && echo "✅ 基础文件系统正常" || echo "❌ 基础文件系统异常"
           [ "$(grep -c "CONFIG_PACKAGE_busybox=y" .config)" -gt 0 ] && echo "✅ BusyBox正常" || echo "❌ BusyBox异常"
-          
-          # 验证问题包已禁用
-          echo "🔍 问题包验证:" | tee -a "$MAIN_LOG"
-          for pkg in 6in4 6rd 6to4; do
-            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
-              echo "❌ $pkg 仍然启用，强制禁用" | tee -a "$MAIN_LOG"
-              sed -i "s/CONFIG_PACKAGE_${pkg}=y/# CONFIG_PACKAGE_${pkg} is not set/" .config
-            else
-              echo "✅ $pkg 已禁用" | tee -a "$MAIN_LOG"
-            fi
-          done
           
           echo "✅ 配置验证完成" | tee -a "$MAIN_LOG"
 
@@ -1015,11 +1033,12 @@ jobs:
                 echo "🔧 修复内核构建目录..." | tee -a "$MAIN_LOG"
                 create_universal_build_dirs
                 
-                # 修复opkg缺失问题
+                # 修复opkg缺失问题 - 更彻底的解决方案
                 echo "🔧 修复opkg工具缺失..." | tee -a "$MAIN_LOG"
                 if [ ! -f "/mnt/source/staging_dir/host/bin/opkg" ]; then
-                  echo "🔄 重新编译opkg工具..." | tee -a "$MAIN_LOG"
-                  make package/opkg/compile -j1 V=s
+                  echo "🔄 重新编译工具链和宿主工具..." | tee -a "$MAIN_LOG"
+                  make tools/install -j1 V=s
+                  make toolchain/install -j1 V=s
                   if [ -f "/mnt/source/staging_dir/host/bin/opkg" ]; then
                     echo "✅ opkg工具修复成功" | tee -a "$MAIN_LOG"
                   else
@@ -1032,24 +1051,14 @@ jobs:
                   echo "🔧 修复缺失目录错误..." | tee -a "$MAIN_LOG"
                   create_universal_build_dirs
                 fi
-                
-                if grep -q "6in4\|6rd\|6to4" "$log_file"; then
-                  echo "🔄 修复IPv6隧道包问题..." | tee -a "$MAIN_LOG"
-                  for pkg in 6in4 6rd 6to4; do
-                    find . -name "*$pkg*" -type f -path "*/package/*" -delete 2>/dev/null || true
-                  done
-                fi
                 ;;
             esac
           }
           
-          # 检查宿主工具
-          echo "🔍 检查宿主工具状态..." | tee -a "$MAIN_LOG"
-          if [ ! -f "/mnt/source/staging_dir/host/bin/opkg" ]; then
-            echo "⚠️ opkg工具缺失，预编译opkg..." | tee -a "$MAIN_LOG"
-            make tools/install -j1 V=s || echo "❌ 工具编译失败，但继续构建" | tee -a "$MAIN_LOG"
-          else
-            echo "✅ 宿主工具状态正常" | tee -a "$MAIN_LOG"
+          # 阶段0: 预编译宿主工具（解决opkg缺失问题）
+          echo "🔧 预编译宿主工具..." | tee -a "$MAIN_LOG"
+          if ! compile_with_recovery "宿主工具编译" "tools/install"; then
+            echo "⚠️ 宿主工具编译有警告，但继续构建" | tee -a "$MAIN_LOG"
           fi
           
           # 阶段1: 工具链编译
@@ -1279,6 +1288,8 @@ jobs:
           echo "🔧 高级功能:"
           echo "  - 自定义IPK: ${{ env.CUSTOM_IPK_COUNT || 0 }} 个"
           echo "  - 自定义脚本: ${{ env.CUSTOM_SCRIPT_COUNT || 0 }} 个"
+          echo "  - 额外软件包: ${{ env.EXTRA_PACKAGES_ADDED || 0 }} 个"
+          echo "  - 自定义插件: ${{ env.CUSTOM_PLUGINS_ADDED || 0 }} 个"
           echo ""
           if [ "${{ env.BUILD_STATUS }}" = "success" ] && [ "${{ env.FIRMWARE_COUNT }}" -gt 0 ]; then
             echo "🎉 智能构建成功！"
