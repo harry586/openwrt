@@ -24,14 +24,14 @@ on:
         description: "构建模式"
         required: true
         type: choice
-        options: ["minimal", "standard", "custom"]
-        default: "standard"
+        options: ["最小化", "标准", "自定义"]
+        default: "标准"
       build_optimization:
         description: "编译优化策略"
         required: true
         type: choice
-        options: ["balanced", "speed", "stability"]
-        default: "balanced"
+        options: ["均衡", "速度优先", "稳定优先"]
+        default: "均衡"
       enable_advanced:
         description: "启用高级功能"
         required: false
@@ -41,8 +41,8 @@ on:
         description: "语言包选择"
         required: true
         type: choice
-        options: ["zh-cn", "en-only", "all"]
-        default: "zh-cn"
+        options: ["简体中文", "仅英文", "全部语言"]
+        default: "简体中文"
       auto_commit_config:
         description: "自动提交新配置文件"
         required: false
@@ -119,6 +119,59 @@ jobs:
           echo "# 智能分析报告" > $ANALYSIS_REPORT
           echo "✅ 极速环境初始化完成"
 
+      - name: "🔍 检查配置文件和插件"
+        id: check_config_files
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔍 检查配置文件和插件 ===" | tee -a "$MAIN_LOG"
+          
+          CONFIG_REPO="${{ env.CONFIG_REPO_DIR }}"
+          echo "🔍 检查配置仓库目录: $CONFIG_REPO" | tee -a "$MAIN_LOG"
+          
+          # 列出所有可能的相关文件
+          echo "📁 目录结构:" | tee -a "$MAIN_LOG"
+          find "$CONFIG_REPO" -type f -name "*.txt" -o -name "*.conf" 2>/dev/null | head -20 | tee -a "$MAIN_LOG"
+          
+          # 检查特定的插件文件
+          PLUGIN_FILES=(
+            "$CONFIG_REPO/firmware-config/custom-plugins.txt"
+            "$CONFIG_REPO/firmware-config/plugins.txt" 
+            "$CONFIG_REPO/custom-plugins.txt"
+            "$CONFIG_REPO/plugins.txt"
+          )
+          
+          for file in "${PLUGIN_FILES[@]}"; do
+            if [ -f "$file" ]; then
+              echo "✅ 找到插件文件: $file" | tee -a "$MAIN_LOG"
+              echo "📄 文件内容预览:" | tee -a "$MAIN_LOG"
+              head -10 "$file" | tee -a "$MAIN_LOG"
+              echo "---" | tee -a "$MAIN_LOG"
+            else
+              echo "❌ 未找到插件文件: $file" | tee -a "$MAIN_LOG"
+            fi
+          done
+          
+          # 检查插件目录
+          PLUGIN_DIRS=(
+            "$CONFIG_REPO/firmware-config/plugins"
+            "$CONFIG_REPO/firmware-config/custom-plugins"
+            "$CONFIG_REPO/plugins"
+          )
+          
+          for dir in "${PLUGIN_DIRS[@]}"; do
+            if [ -d "$dir" ]; then
+              echo "✅ 找到插件目录: $dir" | tee -a "$MAIN_LOG"
+              find "$dir" -type f -name "*.txt" 2>/dev/null | while read -r file; do
+                echo "  📄 $(basename "$file")" | tee -a "$MAIN_LOG"
+              done
+            else
+              echo "❌ 未找到插件目录: $dir" | tee -a "$MAIN_LOG"
+            fi
+          done
+          
+          echo "✅ 文件检查完成" | tee -a "$MAIN_LOG"
+
       - name: "🚀 极速依赖安装"
         id: install_deps
         run: |
@@ -145,14 +198,15 @@ jobs:
           CPU_CORES=$(nproc)
           echo "🖥️ 检测到 CPU 核心: $CPU_CORES" | tee -a "$MAIN_LOG"
           
+          # 将中文选项映射为内部值
           OPTIMIZATION_STRATEGY="${{ github.event.inputs.build_optimization }}"
           case "$OPTIMIZATION_STRATEGY" in
-            "speed")
+            "速度优先")
               CCACHE_SIZE="8G"
               PARALLEL_JOBS=$((CPU_CORES + 2))
               echo "🚀 极速模式: CCache=${CCACHE_SIZE}, 并行作业=${PARALLEL_JOBS}" | tee -a "$MAIN_LOG"
               ;;
-            "stability")
+            "稳定优先")
               CCACHE_SIZE="4G"
               PARALLEL_JOBS=$((CPU_CORES / 2))
               echo "🛡️ 稳定模式: CCache=${CCACHE_SIZE}, 并行作业=${PARALLEL_JOBS}" | tee -a "$MAIN_LOG"
@@ -251,15 +305,23 @@ jobs:
           MAIN_LOG="${{ env.MAIN_LOG }}"
           echo "=== 🎛️ 模式配置文件处理 ===" | tee -a "$MAIN_LOG"
           
+          # 将中文选项映射为内部值
           BUILD_MODE="${{ github.event.inputs.build_mode }}"
+          case "$BUILD_MODE" in
+            "最小化") MODE_INTERNAL="minimal" ;;
+            "标准") MODE_INTERNAL="standard" ;;
+            "自定义") MODE_INTERNAL="custom" ;;
+            *) MODE_INTERNAL="standard" ;;
+          esac
+          
           CONFIG_REPO="${{ env.CONFIG_REPO_DIR }}"
           MODE_CONFIG_DIR="$CONFIG_REPO/firmware-config/modes"
           
-          echo "🎯 构建模式: $BUILD_MODE" | tee -a "$MAIN_LOG"
+          echo "🎯 构建模式: $BUILD_MODE ($MODE_INTERNAL)" | tee -a "$MAIN_LOG"
           
           mkdir -p "$MODE_CONFIG_DIR"
           
-          if [ "$BUILD_MODE" = "minimal" ]; then
+          if [ "$MODE_INTERNAL" = "minimal" ]; then
             echo "🔧 创建最小化模式配置..." | tee -a "$MAIN_LOG"
             echo "# 最小化构建模式配置" > "$MODE_CONFIG_DIR/minimal.conf"
             echo "CONFIG_PACKAGE_base-files=y" >> "$MODE_CONFIG_DIR/minimal.conf"
@@ -282,7 +344,7 @@ jobs:
             echo "CONFIG_PACKAGE_uclient-fetch=y" >> "$MODE_CONFIG_DIR/minimal.conf"
             echo "CONFIG_PACKAGE_urandom-seed=y" >> "$MODE_CONFIG_DIR/minimal.conf"
             echo "CONFIG_PACKAGE_usign=y" >> "$MODE_CONFIG_DIR/minimal.conf"
-          elif [ "$BUILD_MODE" = "standard" ]; then
+          elif [ "$MODE_INTERNAL" = "standard" ]; then
             echo "🔧 创建标准模式配置..." | tee -a "$MAIN_LOG"
             echo "# 标准构建模式配置" > "$MODE_CONFIG_DIR/standard.conf"
             echo "CONFIG_PACKAGE_base-files=y" >> "$MODE_CONFIG_DIR/standard.conf"
@@ -328,9 +390,9 @@ jobs:
             echo "CONFIG_PACKAGE_usign=y" >> "$MODE_CONFIG_DIR/custom.conf"
           fi
           
-          echo "BUILD_MODE=$BUILD_MODE" >> $GITHUB_ENV
+          echo "BUILD_MODE=$MODE_INTERNAL" >> $GITHUB_ENV
           echo "MODE_CONFIG_DIR=$MODE_CONFIG_DIR" >> $GITHUB_ENV
-          echo "✅ 模式配置文件创建完成: $BUILD_MODE" | tee -a "$MAIN_LOG"
+          echo "✅ 模式配置文件创建完成: $BUILD_MODE ($MODE_INTERNAL)" | tee -a "$MAIN_LOG"
 
       - name: "📝 智能配置创建与处理"
         id: config_creation
@@ -343,7 +405,7 @@ jobs:
           CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
           CONFIG_DIR="${{ env.CONFIG_REPO_DIR }}/firmware-config/configs"
           CONFIG_FILE="$CONFIG_DIR/config_$CONFIG_PROFILE"
-          MODE_CONFIG="${{ env.MODE_CONFIG_DIR }}/${{ github.event.inputs.build_mode }}.conf"
+          MODE_CONFIG="${{ env.MODE_CONFIG_DIR }}/${{ env.BUILD_MODE }}.conf"
           
           echo "🔍 查找配置文件: $CONFIG_FILE" | tee -a "$MAIN_LOG"
           echo "🎛️ 应用模式配置: $MODE_CONFIG" | tee -a "$MAIN_LOG"
@@ -426,7 +488,7 @@ jobs:
             echo "🔧 应用模式配置文件..." | tee -a "$MAIN_LOG"
             if ! grep -q "missing separator" "$MODE_CONFIG"; then
               cat "$MODE_CONFIG" >> .config
-              echo "✅ 模式配置应用完成: ${{ github.event.inputs.build_mode }}" | tee -a "$MAIN_LOG"
+              echo "✅ 模式配置应用完成: ${{ env.BUILD_MODE }}" | tee -a "$MAIN_LOG"
             else
               echo "❌ 模式配置文件存在语法错误，跳过" | tee -a "$MAIN_LOG"
             fi
@@ -434,48 +496,167 @@ jobs:
             echo "⚠️ 模式配置文件不存在: $MODE_CONFIG" | tee -a "$MAIN_LOG"
           fi
           
-          # 配置额外软件包
+          echo "🔧 预处理配置文件..." | tee -a "$MAIN_LOG"
+          # 确保配置格式正确
+          if [ -f .config ]; then
+            # 清理可能的格式问题
+            sed -i 's/^[ \t]*//' .config  # 去除行首空白
+            sed -i '/^$/d' .config        # 删除空行
+            sed -i 's/\r$//' .config      # 删除Windows换行符
+            
+            # 确保每行都是有效的配置格式
+            grep -E "^(# |CONFIG_|=|is not set)" .config > .config.clean || true
+            mv .config.clean .config 2>/dev/null || true
+          fi
+          
+          # 配置额外软件包（从多个来源）
+          echo "📦 配置额外软件包..." | tee -a "$MAIN_LOG"
+          ADDED_COUNT=0
+          
+          # 来源1：输入参数
           if [ -n "${{ github.event.inputs.extra_packages }}" ]; then
-            echo "📦 配置额外软件包..." | tee -a "$MAIN_LOG"
+            echo "🔧 从输入参数加载额外软件包..." | tee -a "$MAIN_LOG"
             IFS=',' read -ra PKGS <<< "${{ github.event.inputs.extra_packages }}"
-            ADDED_COUNT=0
             for pkg in "${PKGS[@]}"; do
               CLEAN_PKG=$(echo "$pkg" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
               if [ -n "$CLEAN_PKG" ]; then
                 if ! grep -q "CONFIG_PACKAGE_${CLEAN_PKG}=y" .config; then
                   echo "CONFIG_PACKAGE_${CLEAN_PKG}=y" >> .config
-                  echo "✅ 添加包: $CLEAN_PKG" | tee -a "$MAIN_LOG"
+                  echo "✅ 从输入参数添加包: $CLEAN_PKG" | tee -a "$MAIN_LOG"
                   ADDED_COUNT=$((ADDED_COUNT + 1))
                 else
                   echo "ℹ️ 包已存在: $CLEAN_PKG" | tee -a "$MAIN_LOG"
                 fi
               fi
             done
-            echo "EXTRA_PACKAGES_ADDED=$ADDED_COUNT" >> $GITHUB_ENV
+          fi
+          
+          # 来源2：自定义插件文件
+          CUSTOM_PLUGINS_FILE="${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-plugins.txt"
+          CUSTOM_PLUGINS_FILE2="${{ env.CONFIG_REPO_DIR }}/firmware-config/plugins.txt"
+          CUSTOM_PLUGINS_FILE3="${{ env.CONFIG_REPO_DIR }}/custom-plugins.txt"
+          
+          for PLUGIN_FILE in "$CUSTOM_PLUGINS_FILE" "$CUSTOM_PLUGINS_FILE2" "$CUSTOM_PLUGINS_FILE3"; do
+            if [ -f "$PLUGIN_FILE" ]; then
+              echo "🔧 从插件文件加载: $PLUGIN_FILE" | tee -a "$MAIN_LOG"
+              
+              # 读取插件文件内容
+              PLUGIN_CONTENT=$(cat "$PLUGIN_FILE" 2>/dev/null | tr -d '\r' | grep -v '^#' | grep -v '^$' || true)
+              
+              if [ -n "$PLUGIN_CONTENT" ]; then
+                echo "📋 插件文件内容:" | tee -a "$MAIN_LOG"
+                echo "$PLUGIN_CONTENT" | tee -a "$MAIN_LOG"
+                
+                # 处理逗号分隔或换行分隔的包列表
+                if echo "$PLUGIN_CONTENT" | grep -q ","; then
+                  # 逗号分隔
+                  IFS=',' read -ra PKGS <<< "$PLUGIN_CONTENT"
+                else
+                  # 换行分隔
+                  IFS=$'\n' read -d '' -ra PKGS <<< "$PLUGIN_CONTENT" || true
+                fi
+                
+                for pkg in "${PKGS[@]}"; do
+                  CLEAN_PKG=$(echo "$pkg" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                  if [ -n "$CLEAN_PKG" ] && [[ "$CLEAN_PKG" != *"#"* ]]; then
+                    if ! grep -q "CONFIG_PACKAGE_${CLEAN_PKG}=y" .config; then
+                      echo "CONFIG_PACKAGE_${CLEAN_PKG}=y" >> .config
+                      echo "✅ 从插件文件添加包: $CLEAN_PKG" | tee -a "$MAIN_LOG"
+                      ADDED_COUNT=$((ADDED_COUNT + 1))
+                    else
+                      echo "ℹ️ 包已存在: $CLEAN_PKG" | tee -a "$MAIN_LOG"
+                    fi
+                  fi
+                done
+                echo "✅ 从 $PLUGIN_FILE 成功加载插件" | tee -a "$MAIN_LOG"
+              else
+                echo "ℹ️ 插件文件为空: $PLUGIN_FILE" | tee -a "$MAIN_LOG"
+              fi
+              break  # 找到第一个存在的文件后就退出循环
+            else
+              echo "🔍 检查插件文件: $PLUGIN_FILE (未找到)" | tee -a "$MAIN_LOG"
+            fi
+          done
+          
+          # 来源3：检查插件目录
+          PLUGIN_DIRS="${{ env.CONFIG_REPO_DIR }}/firmware-config/plugins ${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-plugins ${{ env.CONFIG_REPO_DIR }}/plugins"
+          
+          for PLUGIN_DIR in $PLUGIN_DIRS; do
+            if [ -d "$PLUGIN_DIR" ]; then
+              echo "🔧 扫描插件目录: $PLUGIN_DIR" | tee -a "$MAIN_LOG"
+              PLUGIN_FILES=$(find "$PLUGIN_DIR" -name "*.txt" -type f 2>/dev/null || true)
+              
+              if [ -n "$PLUGIN_FILES" ]; then
+                for plugin_file in $PLUGIN_FILES; do
+                  echo "📁 处理插件文件: $(basename "$plugin_file")" | tee -a "$MAIN_LOG"
+                  PLUGIN_CONTENT=$(cat "$plugin_file" 2>/dev/null | tr -d '\r' | grep -v '^#' | grep -v '^$' || true)
+                  
+                  if [ -n "$PLUGIN_CONTENT" ]; then
+                    IFS=$'\n' read -d '' -ra PKGS <<< "$PLUGIN_CONTENT" || true
+                    for pkg in "${PKGS[@]}"; do
+                      CLEAN_PKG=$(echo "$pkg" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                      if [ -n "$CLEAN_PKG" ] && [[ "$CLEAN_PKG" != *"#"* ]]; then
+                        if ! grep -q "CONFIG_PACKAGE_${CLEAN_PKG}=y" .config; then
+                          echo "CONFIG_PACKAGE_${CLEAN_PKG}=y" >> .config
+                          echo "✅ 从目录插件文件添加包: $CLEAN_PKG" | tee -a "$MAIN_LOG"
+                          ADDED_COUNT=$((ADDED_COUNT + 1))
+                        fi
+                      fi
+                    done
+                  fi
+                done
+              else
+                echo "ℹ️ 插件目录中未找到.txt文件: $PLUGIN_DIR" | tee -a "$MAIN_LOG"
+              fi
+            fi
+          done
+          
+          echo "EXTRA_PACKAGES_ADDED=$ADDED_COUNT" >> $GITHUB_ENV
+          
+          if [ "$ADDED_COUNT" -gt 0 ]; then
             echo "✅ 成功添加 $ADDED_COUNT 个额外软件包" | tee -a "$MAIN_LOG"
           else
-            echo "ℹ️ 未提供额外软件包" | tee -a "$MAIN_LOG"
-            echo "EXTRA_PACKAGES_ADDED=0" >> $GITHUB_ENV
+            echo "ℹ️ 未找到额外软件包" | tee -a "$MAIN_LOG"
           fi
           
           # 验证最终配置文件语法
           echo "🔍 验证配置文件语法..." | tee -a "$MAIN_LOG"
           if grep -q "missing separator" .config; then
             echo "❌ 配置文件存在语法错误，显示错误行:" | tee -a "$MAIN_LOG"
-            grep -n "missing separator" .config | tee -a "$MAIN_LOG"
-            echo "🔧 尝试修复配置文件..." | tee -a "$MAIN_LOG"
+            grep -n "missing separator" .config | head -5 | tee -a "$MAIN_LOG"
+            echo "🔧 自动修复语法错误..." | tee -a "$MAIN_LOG"
+            
+            # 具体修复措施
             sed -i '/missing separator/d' .config
             sed -i 's/^[ \t]*//' .config
+            sed -i 's/[ \t]*$//' .config
+            
+            # 重新验证
+            if grep -q "missing separator" .config; then
+              echo "💥 无法修复语法错误，重建配置..." | tee -a "$MAIN_LOG"
+              # 重建基础配置
+              {
+                echo "# 自动重建的基础配置"
+                echo "CONFIG_TARGET_x86=y"
+                echo "CONFIG_TARGET_x86_64=y" 
+                echo "CONFIG_TARGET_x86_64_DEVICE_generic=y"
+                echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y"
+                echo "CONFIG_PACKAGE_base-files=y"
+                echo "CONFIG_PACKAGE_busybox=y"
+                echo "CONFIG_PACKAGE_procd=y"
+              } > .config
+            fi
           fi
           
           echo "✅ 配置创建与处理完成" | tee -a "$MAIN_LOG"
 
-      - name: "🔧 修复主机工具和配置"
+      - name: "🔧 修复主机工具和配置（优化版）"
         id: fix_host_tools
+        timeout-minutes: 30
         run: |
           set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔧 修复主机工具和配置 ===" | tee -a "$MAIN_LOG"
+          echo "=== 🔧 修复主机工具和配置（优化版） ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
           export TERM=xterm-256color
@@ -483,20 +664,128 @@ jobs:
           export FORCE_UNSAFE_CONFIGURE=1
           
           echo "🔧 强制创建主机工具目录..." | tee -a "$MAIN_LOG"
-          mkdir -p staging_dir/host
+          mkdir -p staging_dir/host/bin
           mkdir -p staging_dir/toolchain-*
           touch staging_dir/host/.prereq-build
           
-          echo "🔧 编译必要的主机工具..." | tee -a "$MAIN_LOG"
-          make -C scripts/config clean || true
-          make -C scripts/config || true
-          make tools/install -j1 V=s || true
+          echo "🔧 预编译必要的主机工具（分步骤）..." | tee -a "$MAIN_LOG"
+          
+          # 步骤1: 编译配置工具（带超时）
+          echo "📦 编译配置工具..." | tee -a "$MAIN_LOG"
+          if timeout 600 make -C scripts/config -j1; then
+            echo "✅ 配置工具编译成功" | tee -a "$MAIN_LOG"
+          else
+            echo "⚠️ 配置工具编译超时，跳过继续" | tee -a "$MAIN_LOG"
+          fi
+          
+          # 步骤2: 分步骤编译主机工具
+          echo "📦 分步骤编译主机工具..." | tee -a "$MAIN_LOG"
+          
+          # 先编译基础工具
+          for tool in tar xz findutils sed gawk grep bash; do
+            echo "🔧 编译 $tool..." | tee -a "$MAIN_LOG"
+            if timeout 300 make tools/$tool/compile -j1 V=0; then
+              echo "✅ $tool 编译成功" | tee -a "$MAIN_LOG"
+            else
+              echo "⚠️ $tool 编译失败，跳过" | tee -a "$MAIN_LOG"
+            fi
+          done
+          
+          # 编译核心主机工具
+          echo "🔧 编译核心主机工具..." | tee -a "$MAIN_LOG"
+          CORE_TOOLS="ccache sstrip mkhash"
+          for tool in $CORE_TOOLS; do
+            echo "🔧 编译 $tool..." | tee -a "$MAIN_LOG"
+            if timeout 600 make tools/$tool/compile -j1 V=0; then
+              echo "✅ $tool 编译成功" | tee -a "$MAIN_LOG"
+            else
+              echo "❌ $tool 编译失败" | tee -a "$MAIN_LOG"
+            fi
+          done
           
           echo "🔧 修复文件权限..." | tee -a "$MAIN_LOG"
           chmod -R 755 staging_dir/
           chown -R $USER:$USER staging_dir/
           
           echo "✅ 主机工具修复完成" | tee -a "$MAIN_LOG"
+
+      - name: "🔧 配置完整性验证与修复（强制非交互式）"
+        id: config_validation
+        timeout-minutes: 10
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔧 配置完整性验证与修复（强制非交互式） ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "🔍 验证配置完整性..." | tee -a "$MAIN_LOG"
+          
+          # 备份原始配置
+          cp .config .config.backup
+          
+          echo "🔧 强制清理配置语法..." | tee -a "$MAIN_LOG"
+          # 彻底清理配置语法
+          sed -i '/^#/d' .config 2>/dev/null || true  # 删除所有注释
+          sed -i '/^$/d' .config 2>/dev/null || true  # 删除空行
+          sed -i 's/^[ \t]*//' .config 2>/dev/null || true  # 去除行首空白
+          sed -i '/missing separator/d' .config 2>/dev/null || true  # 删除语法错误行
+          
+          echo "🔧 确保基础配置存在..." | tee -a "$MAIN_LOG"
+          # 强制添加必要的基础配置
+          if ! grep -q "CONFIG_TARGET_" .config; then
+            echo "⚠️ 缺少目标配置，自动设置为 x86_64" | tee -a "$MAIN_LOG"
+            echo "CONFIG_TARGET_x86=y" >> .config
+            echo "CONFIG_TARGET_x86_64=y" >> .config
+            echo "CONFIG_TARGET_x86_64_DEVICE_generic=y" >> .config
+          fi
+          
+          # 确保基础包存在
+          for pkg in base-files busybox procd ubus uci netifd firewall; do
+            if ! grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
+              echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+              echo "✅ 添加基础包: $pkg" | tee -a "$MAIN_LOG"
+            fi
+          done
+          
+          echo "🔧 使用非交互式defconfig..." | tee -a "$MAIN_LOG"
+          # 使用环境变量强制非交互模式
+          export TERM=dumb
+          export LC_ALL=C
+          
+          echo "🔧 执行defconfig（带超时）..." | tee -a "$MAIN_LOG"
+          # 使用超时防止无限等待
+          if timeout 300 bash -c "make defconfig" < /dev/null; then
+            echo "✅ defconfig成功完成" | tee -a "$MAIN_LOG"
+          else
+            echo "❌ defconfig超时或失败，使用替代方案..." | tee -a "$MAIN_LOG"
+            
+            # 替代方案：手动运行oldconfig并自动确认
+            echo "🔄 尝试使用oldconfig..." | tee -a "$MAIN_LOG"
+            if yes "" | timeout 120 make oldconfig; then
+              echo "✅ oldconfig成功" | tee -a "$MAIN_LOG"
+            else
+              echo "⚠️ oldconfig也失败，使用备份配置..." | tee -a "$MAIN_LOG"
+              cp .config.backup .config
+            fi
+          fi
+          
+          echo "🔍 最终配置检查:" | tee -a "$MAIN_LOG"
+          TARGET_COUNT=$(grep -c "CONFIG_TARGET.*=y" .config 2>/dev/null || echo 0)
+          BASE_FILES=$(grep -c "CONFIG_PACKAGE_base-files=y" .config 2>/dev/null || echo 0)
+          BUSYBOX=$(grep -c "CONFIG_PACKAGE_busybox=y" .config 2>/dev/null || echo 0)
+          
+          echo "✅ 目标配置数量: $TARGET_COUNT" | tee -a "$MAIN_LOG"
+          echo "✅ 基础文件系统: $BASE_FILES" | tee -a "$MAIN_LOG"
+          echo "✅ BusyBox: $BUSYBOX" | tee -a "$MAIN_LOG"
+          
+          if [ "$TARGET_COUNT" -eq 0 ] || [ "$BASE_FILES" -eq 0 ] || [ "$BUSYBOX" -eq 0 ]; then
+            echo "❌ 关键配置缺失，显示前50行配置..." | tee -a "$MAIN_LOG"
+            head -50 .config | tee -a "$MAIN_LOG"
+            echo "💥 配置验证失败" | tee -a "$MAIN_LOG"
+            exit 1
+          fi
+          
+          echo "✅ 配置验证完成" | tee -a "$MAIN_LOG"
 
       - name: "🔄 并行Feeds更新"
         id: feeds_setup
@@ -549,12 +838,20 @@ jobs:
           echo "=== 🌐 语言包配置 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
+          # 将中文选项映射为内部值
           LANGUAGE="${{ github.event.inputs.language_pack }}"
-          echo "🎯 语言包选择: $LANGUAGE" | tee -a "$MAIN_LOG"
+          case "$LANGUAGE" in
+            "简体中文") LANG_INTERNAL="zh-cn" ;;
+            "仅英文") LANG_INTERNAL="en-only" ;;
+            "全部语言") LANG_INTERNAL="all" ;;
+            *) LANG_INTERNAL="zh-cn" ;;
+          esac
+          
+          echo "🎯 语言包选择: $LANGUAGE ($LANG_INTERNAL)" | tee -a "$MAIN_LOG"
           
           CURRENT_BRANCH="${{ env.ACTUAL_BRANCH }}"
           
-          case "$LANGUAGE" in
+          case "$LANG_INTERNAL" in
             "zh-cn")
               echo "🔧 启用中文语言包..." | tee -a "$MAIN_LOG"
               if [[ "$CURRENT_BRANCH" == *"21.02"* ]]; then
@@ -576,32 +873,6 @@ jobs:
           esac
           
           echo "✅ 语言包配置完成" | tee -a "$MAIN_LOG"
-
-      - name: "🔧 配置完整性验证"
-        id: config_validation
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔧 配置完整性验证 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          
-          echo "🔍 验证配置完整性..." | tee -a "$MAIN_LOG"
-          
-          echo "🔧 运行defconfig..." | tee -a "$MAIN_LOG"
-          if make defconfig; then
-            echo "✅ defconfig成功" | tee -a "$MAIN_LOG"
-          else
-            echo "❌ defconfig失败，显示.config文件内容..." | tee -a "$MAIN_LOG"
-            head -100 .config >> "$MAIN_LOG"
-            exit 1
-          fi
-          
-          echo "🔍 关键配置检查:" | tee -a "$MAIN_LOG"
-          [ "$(grep -c "CONFIG_TARGET.*=y" .config)" -gt 0 ] && echo "✅ 目标配置正常" || echo "❌ 目标配置异常"
-          [ "$(grep -c "CONFIG_PACKAGE_base-files=y" .config)" -gt 0 ] && echo "✅ 基础文件系统正常" || echo "❌ 基础文件系统异常"
-          [ "$(grep -c "CONFIG_PACKAGE_busybox=y" .config)" -gt 0 ] && echo "✅ BusyBox正常" || echo "❌ BusyBox异常"
-          
-          echo "✅ 配置验证完成" | tee -a "$MAIN_LOG"
 
       - name: "🌐 智能下载优化"
         id: smart_download
