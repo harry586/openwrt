@@ -1,4 +1,4 @@
-name: "🚀 双设备智能构建器 - 完整修复版"
+name: "🚀 双设备智能构建器 - 修复版"
 
 on:
   workflow_dispatch:
@@ -91,7 +91,7 @@ jobs:
           DOWNLOAD_LOG="/mnt/build-logs/download_audit.log"
           
           echo "🏁 双设备智能构建开始: $(date)" > $MAIN_LOG
-          echo "🚀 工作流版本: 双设备智能构建器 - 完整修复版" >> $MAIN_LOG
+          echo "🚀 工作流版本: 双设备智能构建器 - 修复版" >> $MAIN_LOG
           echo "📋 输入参数:" >> $MAIN_LOG
           echo "  - 源码预设: ${{ github.event.inputs.source_preset }}" >> $MAIN_LOG
           echo "  - 源码分支: ${{ github.event.inputs.source_branch }}" >> $MAIN_LOG
