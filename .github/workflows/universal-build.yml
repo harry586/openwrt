@@ -384,6 +384,158 @@ jobs:
           free -h | tee -a "$MAIN_LOG"
           echo "✅ 性能优化完成" | tee -a "$MAIN_LOG"
 
+      - name: "🎯 修复配置生成"
+        id: fixed_config_generation
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🎯 修复配置生成 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          # 创建设备配置函数 - 修复版本
+          create_device_config() {
+            local device_name="$1"
+            local device_config="$2"
+            
+            echo "🎯 为 $device_name 生成配置..." | tee -a "$MAIN_LOG"
+            
+            # 完全清理之前的配置
+            rm -f .config .config.old .config.tmp
+            
+            # 方法1: 使用defconfig生成基础配置
+            echo "🔧 使用defconfig生成基础配置..." | tee -a "$MAIN_LOG"
+            
+            # 创建设备特定的基础配置 - 使用多个echo命令替代heredoc
+            case "$device_config" in
+              "ac42u")
+                echo "CONFIG_TARGET_ipq40xx=y" > .config
+                echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+                echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
+                echo "CONFIG_HAS_SUBTARGETS=y" >> .config
+                echo "CONFIG_HAS_DEVICES=y" >> .config
+                echo "CONFIG_DEVEL=y" >> .config
+                echo "CONFIG_BUILD_LOG=y" >> .config
+                echo "CONFIG_TOOLCHAINOPTS=y" >> .config
+                echo "CONFIG_BINARY_FOLDER=\"\"" >> .config
+                echo "CONFIG_DOWNLOAD_FOLDER=\"\"" >> .config
+                echo "CONFIG_LOCALMIRROR=\"\"" >> .config
+                ;;
+              "acrh17")
+                echo "CONFIG_TARGET_ipq40xx=y" > .config
+                echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+                echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-acrh17=y" >> .config
+                echo "CONFIG_HAS_SUBTARGETS=y" >> .config
+                echo "CONFIG_HAS_DEVICES=y" >> .config
+                echo "CONFIG_DEVEL=y" >> .config
+                echo "CONFIG_BUILD_LOG=y" >> .config
+                echo "CONFIG_TOOLCHAINOPTS=y" >> .config
+                echo "CONFIG_BINARY_FOLDER=\"\"" >> .config
+                echo "CONFIG_DOWNLOAD_FOLDER=\"\"" >> .config
+                echo "CONFIG_LOCALMIRROR=\"\"" >> .config
+                ;;
+            esac
+            
+            # 运行defconfig来完善配置
+            echo "🔧 运行defconfig..." | tee -a "$MAIN_LOG"
+            if ! make defconfig 2>&1 | tee -a "$MAIN_LOG"; then
+              echo "⚠️ defconfig有警告，继续..." | tee -a "$MAIN_LOG"
+            fi
+            
+            # 验证配置
+            echo "🔧 验证配置..." | tee -a "$MAIN_LOG"
+            if [ ! -f .config ]; then
+              echo "❌ .config文件未生成" | tee -a "$MAIN_LOG"
+              return 1
+            fi
+            
+            # 检查文件内容是否为纯文本配置格式
+            if grep -q "OpenWrt Configuration" .config; then
+              echo "❌ 配置文件中包含菜单界面，重新生成..." | tee -a "$MAIN_LOG"
+              # 重新生成纯配置
+              case "$device_config" in
+                "ac42u")
+                  make target/linux/ipq40xx/config
+                  echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
+                  ;;
+                "acrh17")
+                  make target/linux/ipq40xx/config
+                  echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-acrh17=y" >> .config
+                  ;;
+              esac
+            fi
+            
+            # 确保是纯文本配置格式
+            sed -i '/^#/d' .config  # 删除注释
+            sed -i '/^$/d' .config  # 删除空行
+            sed -i '/^[[:space:]]*$/d' .config  # 删除空白行
+            
+            echo "✅ $device_name 配置生成完成" | tee -a "$MAIN_LOG"
+            return 0
+          }
+          
+          # 应用自定义插件
+          apply_custom_plugins() {
+            echo "🔌 应用自定义插件..." | tee -a "$MAIN_LOG"
+            
+            # 查找自定义插件文件 - 数组在一行内定义
+            PLUGIN_FILES=("${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-plugins.txt" "${{ env.CONFIG_REPO_DIR }}/firmware-config/plugins.txt" "${{ env.CONFIG_REPO_DIR }}/custom-plugins.txt" "${{ env.CONFIG_REPO_DIR }}/plugins.txt")
+            
+            PLUGIN_FILE=""
+            for file in "${PLUGIN_FILES[@]}"; do
+              if [ -f "$file" ]; then
+                PLUGIN_FILE="$file"
+                echo "✅ 找到插件文件: $file" | tee -a "$MAIN_LOG"
+                break
+              fi
+            done
+            
+            if [ -n "$PLUGIN_FILE" ]; then
+              PLUGIN_COUNT=0
+              while IFS= read -r line; do
+                # 跳过注释行和空行
+                if [[ "$line" =~ ^# ]] || [[ -z "$line" ]]; then
+                  continue
+                fi
+                
+                # 清理行并添加到配置
+                plugin=$(echo "$line" | awk '{print $1}' | tr -d ' ')
+                if [ -n "$plugin" ]; then
+                  echo "CONFIG_PACKAGE_${plugin}=y" >> .config
+                  PLUGIN_COUNT=$((PLUGIN_COUNT + 1))
+                fi
+              done < "$PLUGIN_FILE"
+              
+              echo "✅ 添加了 $PLUGIN_COUNT 个自定义插件" | tee -a "$MAIN_LOG"
+            else
+              echo "ℹ️ 未找到自定义插件文件" | tee -a "$MAIN_LOG"
+            fi
+          }
+          
+          # 为每个设备生成配置
+          if [ "${{ env.BUILD_AC42U }}" = "true" ]; then
+            echo "🎯 为华硕RT-AC42U生成配置..." | tee -a "$MAIN_LOG"
+            if create_device_config "华硕RT-AC42U" "ac42u"; then
+              apply_custom_plugins
+              cp .config "/mnt/artifacts/config-ac42u"
+              echo "✅ 华硕RT-AC42U配置已保存" | tee -a "$MAIN_LOG"
+            else
+              echo "❌ 华硕RT-AC42U配置生成失败" | tee -a "$MAIN_LOG"
+            fi
+          fi
+          
+          if [ "${{ env.BUILD_ACRH17 }}" = "true" ]; then
+            echo "🎯 为华硕RT-ACRH17生成配置..." | tee -a "$MAIN_LOG"
+            if create_device_config "华硕RT-ACRH17" "acrh17"; then
+              apply_custom_plugins
+              cp .config "/mnt/artifacts/config-acrh17"
+              echo "✅ 华硕RT-ACRH17配置已保存" | tee -a "$MAIN_LOG"
+            else
+              echo "❌ 华硕RT-ACRH17配置生成失败" | tee -a "$MAIN_LOG"
+            fi
+          fi
+          
+          echo "✅ 修复配置生成完成" | tee -a "$MAIN_LOG"
+
       - name: "🔧 编译主机工具"
         id: build_host_tools
         timeout-minutes: 25
@@ -622,158 +774,6 @@ jobs:
           
           echo "CUSTOM_SCRIPT_COUNT=$SCRIPT_COUNT" >> $GITHUB_ENV
           echo "✅ 高级功能应用完成，执行了 $SCRIPT_COUNT 个脚本" | tee -a "$MAIN_LOG"
-
-      - name: "🎯 修复配置生成"
-        id: fixed_config_generation
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🎯 修复配置生成 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          
-          # 创建设备配置函数 - 修复版本
-          create_device_config() {
-            local device_name="$1"
-            local device_config="$2"
-            
-            echo "🎯 为 $device_name 生成配置..." | tee -a "$MAIN_LOG"
-            
-            # 完全清理之前的配置
-            rm -f .config .config.old .config.tmp
-            
-            # 方法1: 使用defconfig生成基础配置
-            echo "🔧 使用defconfig生成基础配置..." | tee -a "$MAIN_LOG"
-            
-            # 创建设备特定的基础配置 - 使用多个echo命令替代heredoc
-            case "$device_config" in
-              "ac42u")
-                echo "CONFIG_TARGET_ipq40xx=y" > .config
-                echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
-                echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
-                echo "CONFIG_HAS_SUBTARGETS=y" >> .config
-                echo "CONFIG_HAS_DEVICES=y" >> .config
-                echo "CONFIG_DEVEL=y" >> .config
-                echo "CONFIG_BUILD_LOG=y" >> .config
-                echo "CONFIG_TOOLCHAINOPTS=y" >> .config
-                echo "CONFIG_BINARY_FOLDER=\"\"" >> .config
-                echo "CONFIG_DOWNLOAD_FOLDER=\"\"" >> .config
-                echo "CONFIG_LOCALMIRROR=\"\"" >> .config
-                ;;
-              "acrh17")
-                echo "CONFIG_TARGET_ipq40xx=y" > .config
-                echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
-                echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-acrh17=y" >> .config
-                echo "CONFIG_HAS_SUBTARGETS=y" >> .config
-                echo "CONFIG_HAS_DEVICES=y" >> .config
-                echo "CONFIG_DEVEL=y" >> .config
-                echo "CONFIG_BUILD_LOG=y" >> .config
-                echo "CONFIG_TOOLCHAINOPTS=y" >> .config
-                echo "CONFIG_BINARY_FOLDER=\"\"" >> .config
-                echo "CONFIG_DOWNLOAD_FOLDER=\"\"" >> .config
-                echo "CONFIG_LOCALMIRROR=\"\"" >> .config
-                ;;
-            esac
-            
-            # 运行defconfig来完善配置
-            echo "🔧 运行defconfig..." | tee -a "$MAIN_LOG"
-            if ! make defconfig 2>&1 | tee -a "$MAIN_LOG"; then
-              echo "⚠️ defconfig有警告，继续..." | tee -a "$MAIN_LOG"
-            fi
-            
-            # 验证配置
-            echo "🔧 验证配置..." | tee -a "$MAIN_LOG"
-            if [ ! -f .config ]; then
-              echo "❌ .config文件未生成" | tee -a "$MAIN_LOG"
-              return 1
-            fi
-            
-            # 检查文件内容是否为纯文本配置格式
-            if grep -q "OpenWrt Configuration" .config; then
-              echo "❌ 配置文件中包含菜单界面，重新生成..." | tee -a "$MAIN_LOG"
-              # 重新生成纯配置
-              case "$device_config" in
-                "ac42u")
-                  make target/linux/ipq40xx/config
-                  echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
-                  ;;
-                "acrh17")
-                  make target/linux/ipq40xx/config
-                  echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-acrh17=y" >> .config
-                  ;;
-              esac
-            fi
-            
-            # 确保是纯文本配置格式
-            sed -i '/^#/d' .config  # 删除注释
-            sed -i '/^$/d' .config  # 删除空行
-            sed -i '/^[[:space:]]*$/d' .config  # 删除空白行
-            
-            echo "✅ $device_name 配置生成完成" | tee -a "$MAIN_LOG"
-            return 0
-          }
-          
-          # 应用自定义插件
-          apply_custom_plugins() {
-            echo "🔌 应用自定义插件..." | tee -a "$MAIN_LOG"
-            
-            # 查找自定义插件文件 - 数组在一行内定义
-            PLUGIN_FILES=("${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-plugins.txt" "${{ env.CONFIG_REPO_DIR }}/firmware-config/plugins.txt" "${{ env.CONFIG_REPO_DIR }}/custom-plugins.txt" "${{ env.CONFIG_REPO_DIR }}/plugins.txt")
-            
-            PLUGIN_FILE=""
-            for file in "${PLUGIN_FILES[@]}"; do
-              if [ -f "$file" ]; then
-                PLUGIN_FILE="$file"
-                echo "✅ 找到插件文件: $file" | tee -a "$MAIN_LOG"
-                break
-              fi
-            done
-            
-            if [ -n "$PLUGIN_FILE" ]; then
-              PLUGIN_COUNT=0
-              while IFS= read -r line; do
-                # 跳过注释行和空行
-                if [[ "$line" =~ ^# ]] || [[ -z "$line" ]]; then
-                  continue
-                fi
-                
-                # 清理行并添加到配置
-                plugin=$(echo "$line" | awk '{print $1}' | tr -d ' ')
-                if [ -n "$plugin" ]; then
-                  echo "CONFIG_PACKAGE_${plugin}=y" >> .config
-                  PLUGIN_COUNT=$((PLUGIN_COUNT + 1))
-                fi
-              done < "$PLUGIN_FILE"
-              
-              echo "✅ 添加了 $PLUGIN_COUNT 个自定义插件" | tee -a "$MAIN_LOG"
-            else
-              echo "ℹ️ 未找到自定义插件文件" | tee -a "$MAIN_LOG"
-            fi
-          }
-          
-          # 为每个设备生成配置
-          if [ "${{ env.BUILD_AC42U }}" = "true" ]; then
-            echo "🎯 为华硕RT-AC42U生成配置..." | tee -a "$MAIN_LOG"
-            if create_device_config "华硕RT-AC42U" "ac42u"; then
-              apply_custom_plugins
-              cp .config "/mnt/artifacts/config-ac42u"
-              echo "✅ 华硕RT-AC42U配置已保存" | tee -a "$MAIN_LOG"
-            else
-              echo "❌ 华硕RT-AC42U配置生成失败" | tee -a "$MAIN_LOG"
-            fi
-          fi
-          
-          if [ "${{ env.BUILD_ACRH17 }}" = "true" ]; then
-            echo "🎯 为华硕RT-ACRH17生成配置..." | tee -a "$MAIN_LOG"
-            if create_device_config "华硕RT-ACRH17" "acrh17"; then
-              apply_custom_plugins
-              cp .config "/mnt/artifacts/config-acrh17"
-              echo "✅ 华硕RT-ACRH17配置已保存" | tee -a "$MAIN_LOG"
-            else
-              echo "❌ 华硕RT-ACRH17配置生成失败" | tee -a "$MAIN_LOG"
-            fi
-          fi
-          
-          echo "✅ 修复配置生成完成" | tee -a "$MAIN_LOG"
 
       - name: "🔧 修复设备编译"
         id: fixed_device_build
