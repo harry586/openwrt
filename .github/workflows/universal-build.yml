@@ -644,35 +644,50 @@ jobs:
             
             echo "🔧 创建基础配置..." | tee -a "$MAIN_LOG"
             
+            # 首先创建一个最小的配置来设置目标系统
+            echo "CONFIG_TARGET_ipq40xx=y" > .config
+            echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+            
             # 创建设备特定配置
             case "$device_config" in
               "ac42u")
-                echo "CONFIG_TARGET_ipq40xx=y" > .config
-                echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
                 echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
-                echo "CONFIG_TARGET_BOARD=\"ipq40xx\"" >> .config
-                echo "CONFIG_TARGET_SUBTARGET=\"generic\"" >> .config
-                echo "CONFIG_TARGET_PROFILE=\"DEVICE_asus_rt-ac42u\"" >> .config
-                echo "CONFIG_TARGET_ARCH_PACKAGES=\"arm_cortex-a7_neon-vfpv4\"" >> .config
-                echo "CONFIG_DEFAULT_TARGET_OPTIMIZATION=\"-Os -pipe\"" >> .config
-                echo "CONFIG_CPU_TYPE=\"cortex-a7+neon-vfpv4\"" >> .config
-                echo "CONFIG_LINUX_5_4=y" >> .config
                 ;;
               "acrh17")
-                echo "CONFIG_TARGET_ipq40xx=y" > .config
-                echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
                 echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-acrh17=y" >> .config
-                echo "CONFIG_TARGET_BOARD=\"ipq40xx\"" >> .config
-                echo "CONFIG_TARGET_SUBTARGET=\"generic\"" >> .config
-                echo "CONFIG_TARGET_PROFILE=\"DEVICE_asus_rt-acrh17\"" >> .config
-                echo "CONFIG_TARGET_ARCH_PACKAGES=\"arm_cortex-a7_neon-vfpv4\"" >> .config
-                echo "CONFIG_DEFAULT_TARGET_OPTIMIZATION=\"-Os -pipe\"" >> .config
-                echo "CONFIG_CPU_TYPE=\"cortex-a7+neon-vfpv4\"" >> .config
-                echo "CONFIG_LINUX_5_4=y" >> .config
                 ;;
             esac
             
-            # 基础配置
+            echo "🔧 初始配置验证:" | tee -a "$MAIN_LOG"
+            grep "CONFIG_TARGET" .config | tee -a "$MAIN_LOG"
+            
+            # 使用defconfig完善配置
+            echo "🔧 完善配置..." | tee -a "$MAIN_LOG"
+            if ! make defconfig; then
+              echo "⚠️ defconfig失败，尝试继续构建..." | tee -a "$MAIN_LOG"
+            fi
+            
+            # 验证defconfig后的配置
+            echo "🔧 defconfig后配置验证:" | tee -a "$MAIN_LOG"
+            grep "CONFIG_TARGET" .config | tee -a "$MAIN_LOG"
+            
+            # 如果目标系统被重置，强制重新设置
+            if ! grep -q "CONFIG_TARGET_ipq40xx=y" .config; then
+              echo "⚠️ 目标系统被重置，重新设置为ipq40xx" | tee -a "$MAIN_LOG"
+              sed -i '/CONFIG_TARGET_/d' .config
+              echo "CONFIG_TARGET_ipq40xx=y" >> .config
+              echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+              case "$device_config" in
+                "ac42u")
+                  echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
+                  ;;
+                "acrh17")
+                  echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-acrh17=y" >> .config
+                  ;;
+              esac
+            fi
+            
+            # 添加其他配置选项
             echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
             echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
             echo "CONFIG_TARGET_IMAGES_INCLUDE_FACTORY=y" >> .config
@@ -785,18 +800,8 @@ jobs:
               done
             fi
             
-            echo "🔧 验证配置..." | tee -a "$MAIN_LOG"
-            echo "当前配置摘要:" | tee -a "$MAIN_LOG"
-            grep -E "CONFIG_TARGET|CONFIG_BOARD|CONFIG_PROFILE" .config | tee -a "$MAIN_LOG"
-            
-            # 使用defconfig完善配置
-            echo "🔧 完善配置..." | tee -a "$MAIN_LOG"
-            if ! make defconfig; then
-              echo "⚠️ defconfig失败，尝试继续构建..." | tee -a "$MAIN_LOG"
-            fi
-            
-            # 再次验证配置
-            echo "最终配置验证:" | tee -a "$MAIN_LOG"
+            # 最终配置验证
+            echo "🔧 最终配置验证:" | tee -a "$MAIN_LOG"
             grep -E "CONFIG_TARGET|CONFIG_BOARD|CONFIG_PROFILE" .config | tee -a "$MAIN_LOG"
             
             # 检查目标系统是否正确设置
