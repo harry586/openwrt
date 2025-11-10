@@ -232,31 +232,40 @@ jobs:
           
           echo "🔍 扫描目标设备配置..." | tee -a "$MAIN_LOG"
           
+          # 初始化设备支持状态
+          AC42U_SUPPORTED=false
+          ACRH17_SUPPORTED=false
+          
           # 检查AC42U支持
           if [ -d "target/linux/ipq40xx" ]; then
             echo "✅ 找到IPQ40xx目标支持" | tee -a "$MAIN_LOG"
-            AC42U_SUPPORT=$(find target/linux/ipq40xx -name "*ac42u*" -o -name "*ac42*" 2>/dev/null | head -1)
+            AC42U_SUPPORT=$(find target/linux/ipq40xx -name "*ac42u*" -o -name "*ac42*" -o -name "*asus*rt-ac42u*" 2>/dev/null | head -1)
             if [ -n "$AC42U_SUPPORT" ]; then
               echo "✅ 源码支持 华硕RT-AC42U 设备" | tee -a "$MAIN_LOG"
-              echo "AC42U_SUPPORTED=true" >> $GITHUB_ENV
+              AC42U_SUPPORTED=true
             else
               echo "⚠️ 源码未明确支持 华硕RT-AC42U，但支持IPQ40xx平台" | tee -a "$MAIN_LOG"
-              echo "AC42U_SUPPORTED=true" >> $GITHUB_ENV
+              # 即使没有明确的设备文件，如果支持IPQ40xx，我们也认为支持AC42U
+              AC42U_SUPPORTED=true
             fi
           else
             echo "❌ 源码不支持IPQ40xx目标平台" | tee -a "$MAIN_LOG"
-            echo "AC42U_SUPPORTED=false" >> $GITHUB_ENV
+            AC42U_SUPPORTED=false
           fi
           
           # 检查ACRH17支持
-          ACRH17_SUPPORT=$(find target/linux -name "*acrh17*" -o -name "*acrh*" 2>/dev/null | head -1)
+          ACRH17_SUPPORT=$(find target/linux -name "*acrh17*" -o -name "*acrh*" -o -name "*asus*rt-acrh17*" 2>/dev/null | head -1)
           if [ -n "$ACRH17_SUPPORT" ]; then
             echo "✅ 源码支持 华硕RT-ACRH17 设备" | tee -a "$MAIN_LOG"
-            echo "ACRH17_SUPPORTED=true" >> $GITHUB_ENV
+            ACRH17_SUPPORTED=true
           else
             echo "❌ 源码不支持 华硕RT-ACRH17 设备" | tee -a "$MAIN_LOG"
-            echo "ACRH17_SUPPORTED=false" >> $GITHUB_ENV
+            ACRH17_SUPPORTED=false
           fi
+          
+          # 设置环境变量
+          echo "AC42U_SUPPORTED=$AC42U_SUPPORTED" >> $GITHUB_ENV
+          echo "ACRH17_SUPPORTED=$ACRH17_SUPPORTED" >> $GITHUB_ENV
           
           # 根据用户选择确定最终构建设备
           BUILD_CHOICE="${{ github.event.inputs.build_devices }}"
@@ -294,7 +303,7 @@ jobs:
           echo "  - 构建华硕RT-AC42U: ${{ env.BUILD_AC42U }}" | tee -a "$MAIN_LOG"
           echo "  - 构建华硕RT-ACRH17: ${{ env.BUILD_ACRH17 }}" | tee -a "$MAIN_LOG"
           
-          if [ "${{ env.BUILD_AC42U }}" = "false" ] && [ "${{ env.BUILD_ACRH17 }}" = "false" ]; then
+          if [ "$BUILD_AC42U" = "false" ] && [ "$BUILD_ACRH17" = "false" ]; then
             echo "💥 没有可构建的设备，退出" | tee -a "$MAIN_LOG"
             exit 1
           fi
