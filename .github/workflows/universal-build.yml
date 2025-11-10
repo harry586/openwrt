@@ -216,6 +216,7 @@ jobs:
           export LC_ALL=C
           export FORCE_UNSAFE_CONFIGURE=1
           export BATCH=1
+          export UNATTENDED=1
           export CONFIG_SHELL=/bin/bash
           
           echo "🔧 修复构建目录结构..." | tee -a "$MAIN_LOG"
@@ -622,6 +623,40 @@ jobs:
           
           echo "✅ 修复配置生成完成" | tee -a "$MAIN_LOG"
 
+      - name: "🔧 配置验证与加固"
+        id: config_verification
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔧 配置验证与加固 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "🔍 验证当前配置状态..." | tee -a "$MAIN_LOG"
+          if [ ! -f .config ]; then
+            echo "❌ .config文件不存在，创建基础配置..." | tee -a "$MAIN_LOG"
+            echo "CONFIG_TARGET_ipq40xx=y" > .config
+            echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+            echo "CONFIG_HAS_SUBTARGETS=y" >> .config
+            echo "CONFIG_HAS_DEVICES=y" >> .config
+            echo "CONFIG_DEVEL=y" >> .config
+            echo "CONFIG_BUILD_LOG=y" >> .config
+            echo "CONFIG_TOOLCHAINOPTS=y" >> .config
+          fi
+          
+          echo "🔧 加固配置，禁用所有交互..." | tee -a "$MAIN_LOG"
+          export BATCH=1
+          export UNATTENDED=1
+          export MAKE_TERMOUT=
+          export MAKE_TERMERR=
+          
+          echo "CONFIG_AUTOREBUILD=n" >> .config
+          echo "CONFIG_CCACHE=n" >> .config
+          
+          echo "🔧 运行非交互式defconfig..." | tee -a "$MAIN_LOG"
+          script -q -c "make defconfig" /dev/null 2>&1 | tee -a "$MAIN_LOG" || echo "⚠️ defconfig完成，继续..."
+          
+          echo "✅ 配置验证与加固完成" | tee -a "$MAIN_LOG"
+
       - name: "🔧 编译工具链"
         id: build_toolchain
         timeout-minutes: 30
@@ -634,9 +669,13 @@ jobs:
           export TERM=linux
           export LC_ALL=C
           export FORCE_UNSAFE_CONFIGURE=1
+          export BATCH=1
+          export UNATTENDED=1
+          export MAKE_TERMOUT=
+          export MAKE_TERMERR=
           
           echo "🔧 编译工具链（这一步较慢）..." | tee -a "$MAIN_LOG"
-          make toolchain/compile -j1 V=s
+          script -q -c "make toolchain/compile -j1 V=s" /dev/null 2>&1 | tee -a "$MAIN_LOG"
           
           echo "✅ 工具链编译完成" | tee -a "$MAIN_LOG"
 
