@@ -245,7 +245,6 @@ jobs:
               AC42U_SUPPORTED=true
             else
               echo "⚠️ 源码未明确支持 华硕RT-AC42U，但支持IPQ40xx平台" | tee -a "$MAIN_LOG"
-              # 即使没有明确的设备文件，如果支持IPQ40xx，我们也认为支持AC42U
               AC42U_SUPPORTED=true
             fi
           else
@@ -300,8 +299,8 @@ jobs:
           esac
           
           echo "📊 最终构建决策:" | tee -a "$MAIN_LOG"
-          echo "  - 构建华硕RT-AC42U: ${{ env.BUILD_AC42U }}" | tee -a "$MAIN_LOG"
-          echo "  - 构建华硕RT-ACRH17: ${{ env.BUILD_ACRH17 }}" | tee -a "$MAIN_LOG"
+          echo "  - 构建华硕RT-AC42U: $BUILD_AC42U" | tee -a "$MAIN_LOG"
+          echo "  - 构建华硕RT-ACRH17: $BUILD_ACRH17" | tee -a "$MAIN_LOG"
           
           if [ "$BUILD_AC42U" = "false" ] && [ "$BUILD_ACRH17" = "false" ]; then
             echo "💥 没有可构建的设备，退出" | tee -a "$MAIN_LOG"
@@ -636,16 +635,14 @@ jobs:
             
             # 显示设备配置信息
             case "$device_config" in
-              "ac42u")
-                echo "🔧 设备配置: 华硕RT-AC42U" | tee -a "$MAIN_LOG"
-                ;;
-              "acrh17")
-                echo "🔧 设备配置: 华硕RT-ACRH17" | tee -a "$MAIN_LOG"
-                ;;
+              "ac42u") echo "🔧 设备配置: 华硕RT-AC42U" | tee -a "$MAIN_LOG" ;;
+              "acrh17") echo "🔧 设备配置: 华硕RT-ACRH17" | tee -a "$MAIN_LOG" ;;
             esac
             
             # 清理之前的配置
             rm -f .config .config.old
+            
+            echo "🔧 创建基础配置..." | tee -a "$MAIN_LOG"
             
             # 创建设备特定配置
             case "$device_config" in
@@ -770,11 +767,7 @@ jobs:
                   echo "CONFIG_PACKAGE_luci-i18n-base-zh_Hans=y" >> .config
                 fi
                 ;;
-              "仅英文")
-                # 默认就是英文，不需要额外配置
-                ;;
               "全部语言")
-                # 启用所有语言包
                 echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
                 echo "CONFIG_PACKAGE_luci-i18n-base-zh_Hans=y" >> .config
                 echo "CONFIG_PACKAGE_luci-i18n-base-en=y" >> .config
@@ -792,9 +785,27 @@ jobs:
               done
             fi
             
+            echo "🔧 验证配置..." | tee -a "$MAIN_LOG"
+            echo "当前配置摘要:" | tee -a "$MAIN_LOG"
+            grep -E "CONFIG_TARGET|CONFIG_BOARD|CONFIG_PROFILE" .config | tee -a "$MAIN_LOG"
+            
             # 使用defconfig完善配置
             echo "🔧 完善配置..." | tee -a "$MAIN_LOG"
-            make defconfig
+            if ! make defconfig; then
+              echo "⚠️ defconfig失败，尝试继续构建..." | tee -a "$MAIN_LOG"
+            fi
+            
+            # 再次验证配置
+            echo "最终配置验证:" | tee -a "$MAIN_LOG"
+            grep -E "CONFIG_TARGET|CONFIG_BOARD|CONFIG_PROFILE" .config | tee -a "$MAIN_LOG"
+            
+            # 检查目标系统是否正确设置
+            if ! grep -q "CONFIG_TARGET_ipq40xx=y" .config; then
+              echo "❌ 目标系统未正确设置为ipq40xx" | tee -a "$MAIN_LOG"
+              echo "当前目标系统:" | tee -a "$MAIN_LOG"
+              grep "CONFIG_TARGET_" .config | tee -a "$MAIN_LOG"
+              return 1
+            fi
             
             # 编译
             echo "🔧 开始编译 $device_name ..." | tee -a "$MAIN_LOG"
@@ -810,6 +821,8 @@ jobs:
                 return 0
               else
                 echo "❌ $device_name 未找到固件文件" | tee -a "$MAIN_LOG"
+                echo "搜索路径: bin/targets/" | tee -a "$MAIN_LOG"
+                find bin/targets -type f 2>/dev/null | head -10 | tee -a "$MAIN_LOG"
                 return 1
               fi
             else
