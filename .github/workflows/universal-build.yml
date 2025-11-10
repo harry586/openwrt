@@ -133,13 +133,23 @@ jobs:
           echo "📁 目录结构:" | tee -a "$MAIN_LOG"
           find "$CONFIG_REPO" -type f -name "*.txt" -o -name "*.conf" -o -name "*.json" 2>/dev/null | head -20 | tee -a "$MAIN_LOG"
           
+          # 检查设备配置文件
+          if [ -f "$CONFIG_REPO/firmware-config/device_profiles.json" ]; then
+            echo "✅ 找到设备配置文件: device_profiles.json" | tee -a "$MAIN_LOG"
+            echo "📄 设备配置文件内容:" | tee -a "$MAIN_LOG"
+            cat "$CONFIG_REPO/firmware-config/device_profiles.json" | jq '.' | tee -a "$MAIN_LOG"
+          else
+            echo "❌ 未找到设备配置文件: device_profiles.json" | tee -a "$MAIN_LOG"
+          fi
+          
+          # 检查自定义插件文件
           PLUGIN_FILES=("$CONFIG_REPO/firmware-config/custom-plugins.txt" "$CONFIG_REPO/firmware-config/plugins.txt" "$CONFIG_REPO/custom-plugins.txt" "$CONFIG_REPO/plugins.txt")
           
           for file in "${PLUGIN_FILES[@]}"; do
             if [ -f "$file" ]; then
               echo "✅ 找到插件文件: $file" | tee -a "$MAIN_LOG"
               echo "📄 文件内容预览:" | tee -a "$MAIN_LOG"
-              head -10 "$file" | tee -a "$MAIN_LOG"
+              head -20 "$file" | tee -a "$MAIN_LOG"
               echo "---" | tee -a "$MAIN_LOG"
             else
               echo "❌ 未找到插件文件: $file" | tee -a "$MAIN_LOG"
@@ -231,6 +241,9 @@ jobs:
           cd /mnt/source
           
           echo "🔍 扫描目标设备配置..." | tee -a "$MAIN_LOG"
+          
+          # 从设备配置文件读取设备信息
+          DEVICE_PROFILES="${{ env.CONFIG_REPO_DIR }}/firmware-config/device_profiles.json"
           
           # 初始化设备支持状态
           AC42U_SUPPORTED=false
@@ -610,6 +623,176 @@ jobs:
           echo "CUSTOM_SCRIPT_COUNT=$SCRIPT_COUNT" >> $GITHUB_ENV
           echo "✅ 高级功能应用完成，执行了 $SCRIPT_COUNT 个脚本" | tee -a "$MAIN_LOG"
 
+      - name: "🎯 智能配置生成"
+        id: config_generation
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🎯 智能配置生成 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          # 查找配置文件模板
+          CONFIG_TEMPLATES=(
+            "${{ env.CONFIG_REPO_DIR }}/firmware-config/configs/config.default"
+            "${{ env.CONFIG_REPO_DIR }}/firmware-config/config.default"
+            "${{ env.CONFIG_REPO_DIR }}/config.default"
+          )
+          
+          CONFIG_TEMPLATE=""
+          for template in "${CONFIG_TEMPLATES[@]}"; do
+            if [ -f "$template" ]; then
+              CONFIG_TEMPLATE="$template"
+              echo "✅ 找到配置模板: $template" | tee -a "$MAIN_LOG"
+              break
+            fi
+          done
+          
+          if [ -z "$CONFIG_TEMPLATE" ]; then
+            echo "ℹ️ 未找到配置模板，将使用默认配置生成" | tee -a "$MAIN_LOG"
+          fi
+          
+          # 创建设备配置函数
+          create_device_config() {
+            local device_name="$1"
+            local device_config="$2"
+            
+            echo "🎯 为 $device_name 生成配置..." | tee -a "$MAIN_LOG"
+            
+            # 清理之前的配置
+            rm -f .config .config.old
+            
+            # 方法1: 如果存在配置模板，复制并使用
+            if [ -n "$CONFIG_TEMPLATE" ]; then
+              echo "📋 使用配置模板: $CONFIG_TEMPLATE" | tee -a "$MAIN_LOG"
+              cp "$CONFIG_TEMPLATE" .config
+              
+              # 更新设备特定配置
+              case "$device_config" in
+                "ac42u")
+                  sed -i 's/CONFIG_TARGET_x86=y/# CONFIG_TARGET_x86 is not set/g' .config
+                  sed -i 's/# CONFIG_TARGET_ipq40xx is not set/CONFIG_TARGET_ipq40xx=y/g' .config
+                  echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+                  echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
+                  ;;
+                "acrh17")
+                  sed -i 's/CONFIG_TARGET_x86=y/# CONFIG_TARGET_x86 is not set/g' .config
+                  sed -i 's/# CONFIG_TARGET_ipq40xx is not set/CONFIG_TARGET_ipq40xx=y/g' .config
+                  echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+                  echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-acrh17=y" >> .config
+                  ;;
+              esac
+              
+              echo "✅ 基于模板的配置生成完成" | tee -a "$MAIN_LOG"
+              return 0
+            fi
+            
+            # 方法2: 使用defconfig生成基础配置
+            echo "🔧 使用defconfig生成基础配置..." | tee -a "$MAIN_LOG"
+            
+            case "$device_config" in
+              "ac42u")
+                echo "CONFIG_TARGET_ipq40xx=y" > .config
+                echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+                echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
+                ;;
+              "acrh17")
+                echo "CONFIG_TARGET_ipq40xx=y" > .config
+                echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+                echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-acrh17=y" >> .config
+                ;;
+            esac
+            
+            # 运行defconfig来完善配置
+            if ! make defconfig; then
+              echo "⚠️ defconfig失败，尝试手动配置..." | tee -a "$MAIN_LOG"
+            fi
+            
+            # 验证defconfig后的配置
+            echo "🔧 defconfig后配置验证:" | tee -a "$MAIN_LOG"
+            grep -E "CONFIG_TARGET|CONFIG_BOARD|CONFIG_PROFILE" .config | head -5 | tee -a "$MAIN_LOG"
+            
+            # 如果目标系统被重置，强制重新设置
+            if ! grep -q "CONFIG_TARGET_ipq40xx=y" .config; then
+              echo "⚠️ 目标系统被重置，重新设置为ipq40xx" | tee -a "$MAIN_LOG"
+              sed -i '/CONFIG_TARGET_/d' .config
+              echo "CONFIG_TARGET_ipq40xx=y" >> .config
+              echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+              case "$device_config" in
+                "ac42u")
+                  echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
+                  ;;
+                "acrh17")
+                  echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-acrh17=y" >> .config
+                  ;;
+              esac
+            fi
+            
+            echo "✅ 基础配置生成完成" | tee -a "$MAIN_LOG"
+            return 0
+          }
+          
+          # 应用自定义插件
+          apply_custom_plugins() {
+            echo "🔌 应用自定义插件..." | tee -a "$MAIN_LOG"
+            
+            # 查找自定义插件文件
+            PLUGIN_FILES=(
+              "${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-plugins.txt"
+              "${{ env.CONFIG_REPO_DIR }}/firmware-config/plugins.txt"
+              "${{ env.CONFIG_REPO_DIR }}/custom-plugins.txt"
+              "${{ env.CONFIG_REPO_DIR }}/plugins.txt"
+            )
+            
+            PLUGIN_FILE=""
+            for file in "${PLUGIN_FILES[@]}"; do
+              if [ -f "$file" ]; then
+                PLUGIN_FILE="$file"
+                echo "✅ 找到插件文件: $file" | tee -a "$MAIN_LOG"
+                break
+              fi
+            done
+            
+            if [ -n "$PLUGIN_FILE" ]; then
+              PLUGIN_COUNT=0
+              while IFS= read -r line; do
+                # 跳过注释行和空行
+                if [[ "$line" =~ ^# ]] || [[ -z "$line" ]]; then
+                  continue
+                fi
+                
+                # 清理行并添加到配置
+                plugin=$(echo "$line" | awk '{print $1}' | tr -d ' ')
+                if [ -n "$plugin" ]; then
+                  echo "CONFIG_PACKAGE_${plugin}=y" >> .config
+                  PLUGIN_COUNT=$((PLUGIN_COUNT + 1))
+                fi
+              done < "$PLUGIN_FILE"
+              
+              echo "✅ 添加了 $PLUGIN_COUNT 个自定义插件" | tee -a "$MAIN_LOG"
+            else
+              echo "ℹ️ 未找到自定义插件文件" | tee -a "$MAIN_LOG"
+            fi
+          }
+          
+          # 为每个设备生成配置
+          if [ "${{ env.BUILD_AC42U }}" = "true" ]; then
+            echo "🎯 为华硕RT-AC42U生成配置..." | tee -a "$MAIN_LOG"
+            create_device_config "华硕RT-AC42U" "ac42u"
+            apply_custom_plugins
+            cp .config "/mnt/artifacts/config-ac42u"
+            echo "✅ 华硕RT-AC42U配置已保存" | tee -a "$MAIN_LOG"
+          fi
+          
+          if [ "${{ env.BUILD_ACRH17 }}" = "true" ]; then
+            echo "🎯 为华硕RT-ACRH17生成配置..." | tee -a "$MAIN_LOG"
+            create_device_config "华硕RT-ACRH17" "acrh17"
+            apply_custom_plugins
+            cp .config "/mnt/artifacts/config-acrh17"
+            echo "✅ 华硕RT-ACRH17配置已保存" | tee -a "$MAIN_LOG"
+          fi
+          
+          echo "✅ 智能配置生成完成" | tee -a "$MAIN_LOG"
+
       - name: "🎯 智能双设备编译"
         id: dual_device_build
         timeout-minutes: 180
@@ -642,133 +825,52 @@ jobs:
             # 清理之前的配置
             rm -f .config .config.old
             
-            echo "🔧 创建基础配置..." | tee -a "$MAIN_LOG"
-            
-            # 首先创建一个最小的配置来设置目标系统
-            echo "CONFIG_TARGET_ipq40xx=y" > .config
-            echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
-            
-            # 创建设备特定配置
-            case "$device_config" in
-              "ac42u")
-                echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
-                ;;
-              "acrh17")
-                echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-acrh17=y" >> .config
-                ;;
-            esac
-            
-            echo "🔧 初始配置验证:" | tee -a "$MAIN_LOG"
-            grep "CONFIG_TARGET" .config | tee -a "$MAIN_LOG"
-            
-            # 使用defconfig完善配置
-            echo "🔧 完善配置..." | tee -a "$MAIN_LOG"
-            if ! make defconfig; then
-              echo "⚠️ defconfig失败，尝试继续构建..." | tee -a "$MAIN_LOG"
-            fi
-            
-            # 验证defconfig后的配置
-            echo "🔧 defconfig后配置验证:" | tee -a "$MAIN_LOG"
-            grep "CONFIG_TARGET" .config | tee -a "$MAIN_LOG"
-            
-            # 如果目标系统被重置，强制重新设置
-            if ! grep -q "CONFIG_TARGET_ipq40xx=y" .config; then
-              echo "⚠️ 目标系统被重置，重新设置为ipq40xx" | tee -a "$MAIN_LOG"
-              sed -i '/CONFIG_TARGET_/d' .config
-              echo "CONFIG_TARGET_ipq40xx=y" >> .config
-              echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+            # 加载预生成的配置
+            PRECONFIG="/mnt/artifacts/config-$device_config"
+            if [ -f "$PRECONFIG" ]; then
+              echo "📋 使用预生成的配置: $PRECONFIG" | tee -a "$MAIN_LOG"
+              cp "$PRECONFIG" .config
+            else
+              echo "❌ 预生成的配置不存在: $PRECONFIG" | tee -a "$MAIN_LOG"
+              echo "🔧 重新生成配置..." | tee -a "$MAIN_LOG"
+              
+              # 重新生成配置
               case "$device_config" in
                 "ac42u")
+                  echo "CONFIG_TARGET_ipq40xx=y" > .config
+                  echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
                   echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
                   ;;
                 "acrh17")
+                  echo "CONFIG_TARGET_ipq40xx=y" > .config
+                  echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
                   echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-acrh17=y" >> .config
                   ;;
               esac
+              
+              # 运行defconfig
+              if ! make defconfig; then
+                echo "⚠️ defconfig失败，继续构建..." | tee -a "$MAIN_LOG"
+              fi
             fi
             
-            # 添加其他配置选项
-            echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-            echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
-            echo "CONFIG_TARGET_IMAGES_INCLUDE_FACTORY=y" >> .config
-            echo "CONFIG_TARGET_IMAGES_INCLUDE_SYSUPGRADE=y" >> .config
-            echo "CONFIG_TARGET_KERNEL_PARTSIZE=16" >> .config
-            echo "CONFIG_TARGET_ROOTFS_PARTSIZE=96" >> .config
-            echo "CONFIG_CCACHE=y" >> .config
-            echo "CONFIG_BUILD_LOG=y" >> .config
-            echo "CONFIG_SDK=y" >> .config
-            echo "# CONFIG_DEBUG=y is not set" >> .config
-            
-            # 模式配置
+            # 应用构建模式配置
             BUILD_MODE="${{ github.event.inputs.build_mode }}"
             case "$BUILD_MODE" in
               "最小化")
-                echo "CONFIG_PACKAGE_base-files=y" >> .config
-                echo "CONFIG_PACKAGE_busybox=y" >> .config
-                echo "CONFIG_PACKAGE_dropbear=y" >> .config
-                echo "CONFIG_PACKAGE_firewall=y" >> .config
-                echo "CONFIG_PACKAGE_fstools=y" >> .config
-                echo "CONFIG_PACKAGE_libc=y" >> .config
-                echo "CONFIG_PACKAGE_libgcc=y" >> .config
-                echo "CONFIG_PACKAGE_logd=y" >> .config
-                echo "CONFIG_PACKAGE_mtd=y" >> .config
-                echo "CONFIG_PACKAGE_netifd=y" >> .config
-                echo "CONFIG_PACKAGE_opkg=y" >> .config
-                echo "CONFIG_PACKAGE_procd=y" >> .config
-                echo "CONFIG_PACKAGE_swconfig=y" >> .config
-                echo "CONFIG_PACKAGE_ubox=y" >> .config
-                echo "CONFIG_PACKAGE_ubus=y" >> .config
-                echo "CONFIG_PACKAGE_ubusd=y" >> .config
-                echo "CONFIG_PACKAGE_uci=y" >> .config
-                echo "CONFIG_PACKAGE_uclient-fetch=y" >> .config
-                echo "CONFIG_PACKAGE_urandom-seed=y" >> .config
-                echo "CONFIG_PACKAGE_usign=y" >> .config
+                echo "🔧 应用最小化模式配置..." | tee -a "$MAIN_LOG"
+                # 基础包已在defconfig中设置
                 ;;
               "标准")
-                echo "CONFIG_PACKAGE_base-files=y" >> .config
-                echo "CONFIG_PACKAGE_busybox=y" >> .config
-                echo "CONFIG_PACKAGE_dropbear=y" >> .config
-                echo "CONFIG_PACKAGE_firewall=y" >> .config
-                echo "CONFIG_PACKAGE_fstools=y" >> .config
-                echo "CONFIG_PACKAGE_libc=y" >> .config
-                echo "CONFIG_PACKAGE_libgcc=y" >> .config
-                echo "CONFIG_PACKAGE_logd=y" >> .config
-                echo "CONFIG_PACKAGE_mtd=y" >> .config
-                echo "CONFIG_PACKAGE_netifd=y" >> .config
-                echo "CONFIG_PACKAGE_opkg=y" >> .config
-                echo "CONFIG_PACKAGE_procd=y" >> .config
-                echo "CONFIG_PACKAGE_swconfig=y" >> .config
-                echo "CONFIG_PACKAGE_ubox=y" >> .config
-                echo "CONFIG_PACKAGE_ubus=y" >> .config
-                echo "CONFIG_PACKAGE_ubusd=y" >> .config
-                echo "CONFIG_PACKAGE_uci=y" >> .config
-                echo "CONFIG_PACKAGE_uclient-fetch=y" >> .config
-                echo "CONFIG_PACKAGE_urandom-seed=y" >> .config
-                echo "CONFIG_PACKAGE_usign=y" >> .config
+                echo "🔧 应用标准模式配置..." | tee -a "$MAIN_LOG"
                 echo "CONFIG_PACKAGE_luci=y" >> .config
                 echo "CONFIG_PACKAGE_luci-base=y" >> .config
                 echo "CONFIG_PACKAGE_luci-compat=y" >> .config
                 echo "CONFIG_PACKAGE_luci-i18n-base-en=y" >> .config
                 ;;
               "自定义")
-                echo "CONFIG_PACKAGE_base-files=y" >> .config
-                echo "CONFIG_PACKAGE_busybox=y" >> .config
-                echo "CONFIG_PACKAGE_dropbear=y" >> .config
-                echo "CONFIG_PACKAGE_firewall=y" >> .config
-                echo "CONFIG_PACKAGE_fstools=y" >> .config
-                echo "CONFIG_PACKAGE_libc=y" >> .config
-                echo "CONFIG_PACKAGE_libgcc=y" >> .config
-                echo "CONFIG_PACKAGE_logd=y" >> .config
-                echo "CONFIG_PACKAGE_netifd=y" >> .config
-                echo "CONFIG_PACKAGE_opkg=y" >> .config
-                echo "CONFIG_PACKAGE_procd=y" >> .config
-                echo "CONFIG_PACKAGE_ubox=y" >> .config
-                echo "CONFIG_PACKAGE_ubus=y" >> .config
-                echo "CONFIG_PACKAGE_ubusd=y" >> .config
-                echo "CONFIG_PACKAGE_uci=y" >> .config
-                echo "CONFIG_PACKAGE_uclient-fetch=y" >> .config
-                echo "CONFIG_PACKAGE_urandom-seed=y" >> .config
-                echo "CONFIG_PACKAGE_usign=y" >> .config
+                echo "🔧 应用自定义模式配置..." | tee -a "$MAIN_LOG"
+                # 用户自定义配置，保留defconfig设置
                 ;;
             esac
             
@@ -802,7 +904,7 @@ jobs:
             
             # 最终配置验证
             echo "🔧 最终配置验证:" | tee -a "$MAIN_LOG"
-            grep -E "CONFIG_TARGET|CONFIG_BOARD|CONFIG_PROFILE" .config | tee -a "$MAIN_LOG"
+            grep -E "CONFIG_TARGET|CONFIG_BOARD|CONFIG_PROFILE" .config | head -5 | tee -a "$MAIN_LOG"
             
             # 检查目标系统是否正确设置
             if ! grep -q "CONFIG_TARGET_ipq40xx=y" .config; then
@@ -866,6 +968,7 @@ jobs:
             fi
           fi
           
+          echo "SUCCESS_COUNT=$SUCCESS_COUNT" >> $GITHUB_ENV
           echo "📊 构建总结:" | tee -a "$MAIN_LOG"
           echo "  - 总设备数: $BUILD_COUNT" | tee -a "$MAIN_LOG"
           echo "  - 成功数: $SUCCESS_COUNT" | tee -a "$MAIN_LOG"
@@ -996,32 +1099,44 @@ jobs:
 
       - name: "📤 提交新配置文件到仓库"
         id: commit_config
-        if: env.CONFIG_SOURCE == 'new' && github.event.inputs.auto_commit_config == 'true'
+        if: github.event.inputs.auto_commit_config == 'true'
         run: |
           set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
           echo "=== 📤 提交新配置文件到仓库 ===" | tee -a "$MAIN_LOG"
           
-          CONFIG_PROFILE="${{ github.event.inputs.config_profile }}"
-          CONFIG_DIR="${{ env.CONFIG_REPO_DIR }}/firmware-config/configs"
-          CONFIG_FILE="$CONFIG_DIR/config_$CONFIG_PROFILE"
+          cd "${{ env.CONFIG_REPO_DIR }}"
           
-          if [ -f "$CONFIG_FILE" ]; then
-            echo "📁 找到新创建的配置文件: $CONFIG_FILE" | tee -a "$MAIN_LOG"
-            
-            cd "${{ env.CONFIG_REPO_DIR }}"
+          # 检查是否有新的配置文件需要提交
+          if [ -f "/mnt/artifacts/config-ac42u" ] || [ -f "/mnt/artifacts/config-acrh17" ]; then
+            echo "📁 找到新创建的配置文件" | tee -a "$MAIN_LOG"
             
             git config --local user.email "github-actions[bot]@users.noreply.github.com"
             git config --local user.name "github-actions[bot]"
             
-            git add "firmware-config/configs/config_$CONFIG_PROFILE"
+            # 创建配置目录
+            mkdir -p firmware-config/configs
+            
+            # 复制配置文件
+            if [ -f "/mnt/artifacts/config-ac42u" ]; then
+              cp "/mnt/artifacts/config-ac42u" firmware-config/configs/config_ac42u
+              git add firmware-config/configs/config_ac42u
+            fi
+            
+            if [ -f "/mnt/artifacts/config-acrh17" ]; then
+              cp "/mnt/artifacts/config-acrh17" firmware-config/configs/config_acrh17
+              git add firmware-config/configs/config_acrh17
+            fi
             
             if git diff --staged --quiet; then
               echo "ℹ️ 没有新的配置文件需要提交" | tee -a "$MAIN_LOG"
             else
-              COMMIT_MSG="添加新的设备配置文件: $CONFIG_PROFILE"
-              if [ -n "${{ env.TARGET_CONFIG }}" ]; then
-                COMMIT_MSG="$COMMIT_MSG (目标: ${{ env.TARGET_CONFIG }})"
+              COMMIT_MSG="添加新的设备配置文件: ${{ github.run_number }}"
+              if [ "${{ env.BUILD_AC42U }}" = "true" ]; then
+                COMMIT_MSG="$COMMIT_MSG [AC42U]"
+              fi
+              if [ "${{ env.BUILD_ACRH17 }}" = "true" ]; then
+                COMMIT_MSG="$COMMIT_MSG [ACRH17]"
               fi
               git commit -m "$COMMIT_MSG"
               echo "✅ 配置文件已提交到本地仓库: $COMMIT_MSG" | tee -a "$MAIN_LOG"
