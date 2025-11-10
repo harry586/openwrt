@@ -19,8 +19,8 @@ on:
         description: "构建设备"
         required: true
         type: choice
-        options: ["ac42u_only", "acrh17_only", "both_devices"]
-        default: "both_devices"
+        options: ["仅构建AC42U", "仅构建ACRH17", "构建两个设备"]
+        default: "构建两个设备"
       build_mode:
         description: "构建模式"
         required: true
@@ -237,53 +237,53 @@ jobs:
             echo "✅ 找到IPQ40xx目标支持" | tee -a "$MAIN_LOG"
             AC42U_SUPPORT=$(find target/linux/ipq40xx -name "*ac42u*" -o -name "*ac42*" 2>/dev/null | head -1)
             if [ -n "$AC42U_SUPPORT" ]; then
-              echo "✅ 源码支持 AC42U 设备" | tee -a "$MAIN_LOG"
+              echo "✅ 源码支持 华硕RT-AC42U 设备" | tee -a "$MAIN_LOG"
               echo "AC42U_SUPPORTED=true" >> $GITHUB_ENV
             else
-              echo "⚠️ 源码未明确支持 AC42U，但支持IPQ40xx" | tee -a "$MAIN_LOG"
+              echo "⚠️ 源码未明确支持 华硕RT-AC42U，但支持IPQ40xx平台" | tee -a "$MAIN_LOG"
               echo "AC42U_SUPPORTED=true" >> $GITHUB_ENV
             fi
           else
-            echo "❌ 源码不支持IPQ40xx目标" | tee -a "$MAIN_LOG"
+            echo "❌ 源码不支持IPQ40xx目标平台" | tee -a "$MAIN_LOG"
             echo "AC42U_SUPPORTED=false" >> $GITHUB_ENV
           fi
           
           # 检查ACRH17支持
           ACRH17_SUPPORT=$(find target/linux -name "*acrh17*" -o -name "*acrh*" 2>/dev/null | head -1)
           if [ -n "$ACRH17_SUPPORT" ]; then
-            echo "✅ 源码支持 ACRH17 设备" | tee -a "$MAIN_LOG"
+            echo "✅ 源码支持 华硕RT-ACRH17 设备" | tee -a "$MAIN_LOG"
             echo "ACRH17_SUPPORTED=true" >> $GITHUB_ENV
           else
-            echo "❌ 源码不支持 ACRH17 设备" | tee -a "$MAIN_LOG"
+            echo "❌ 源码不支持 华硕RT-ACRH17 设备" | tee -a "$MAIN_LOG"
             echo "ACRH17_SUPPORTED=false" >> $GITHUB_ENV
           fi
           
           # 根据用户选择确定最终构建设备
           BUILD_CHOICE="${{ github.event.inputs.build_devices }}"
           case "$BUILD_CHOICE" in
-            "ac42u_only")
+            "仅构建AC42U")
               if [ "$AC42U_SUPPORTED" = "true" ]; then
-                echo "🎯 用户选择: 仅构建AC42U" | tee -a "$MAIN_LOG"
+                echo "🎯 用户选择: 仅构建华硕RT-AC42U" | tee -a "$MAIN_LOG"
                 echo "BUILD_AC42U=true" >> $GITHUB_ENV
                 echo "BUILD_ACRH17=false" >> $GITHUB_ENV
               else
-                echo "❌ 用户选择AC42U但源码不支持" | tee -a "$MAIN_LOG"
+                echo "❌ 用户选择华硕RT-AC42U但源码不支持" | tee -a "$MAIN_LOG"
                 echo "BUILD_AC42U=false" >> $GITHUB_ENV
                 echo "BUILD_ACRH17=false" >> $GITHUB_ENV
               fi
               ;;
-            "acrh17_only")
+            "仅构建ACRH17")
               if [ "$ACRH17_SUPPORTED" = "true" ]; then
-                echo "🎯 用户选择: 仅构建ACRH17" | tee -a "$MAIN_LOG"
+                echo "🎯 用户选择: 仅构建华硕RT-ACRH17" | tee -a "$MAIN_LOG"
                 echo "BUILD_AC42U=false" >> $GITHUB_ENV
                 echo "BUILD_ACRH17=true" >> $GITHUB_ENV
               else
-                echo "❌ 用户选择ACRH17但源码不支持" | tee -a "$MAIN_LOG"
+                echo "❌ 用户选择华硕RT-ACRH17但源码不支持" | tee -a "$MAIN_LOG"
                 echo "BUILD_AC42U=false" >> $GITHUB_ENV
                 echo "BUILD_ACRH17=false" >> $GITHUB_ENV
               fi
               ;;
-            "both_devices")
+            "构建两个设备")
               echo "🎯 用户选择: 构建两个设备" | tee -a "$MAIN_LOG"
               echo "BUILD_AC42U=$AC42U_SUPPORTED" >> $GITHUB_ENV
               echo "BUILD_ACRH17=$ACRH17_SUPPORTED" >> $GITHUB_ENV
@@ -291,8 +291,8 @@ jobs:
           esac
           
           echo "📊 最终构建决策:" | tee -a "$MAIN_LOG"
-          echo "  - 构建AC42U: ${{ env.BUILD_AC42U }}" | tee -a "$MAIN_LOG"
-          echo "  - 构建ACRH17: ${{ env.BUILD_ACRH17 }}" | tee -a "$MAIN_LOG"
+          echo "  - 构建华硕RT-AC42U: ${{ env.BUILD_AC42U }}" | tee -a "$MAIN_LOG"
+          echo "  - 构建华硕RT-ACRH17: ${{ env.BUILD_ACRH17 }}" | tee -a "$MAIN_LOG"
           
           if [ "${{ env.BUILD_AC42U }}" = "false" ] && [ "${{ env.BUILD_ACRH17 }}" = "false" ]; then
             echo "💥 没有可构建的设备，退出" | tee -a "$MAIN_LOG"
@@ -624,7 +624,16 @@ jobs:
             local build_id="$3"
             
             echo "🎯 开始构建设备: $device_name" | tee -a "$MAIN_LOG"
-            echo "🔧 设备配置: $device_config" | tee -a "$MAIN_LOG"
+            
+            # 显示设备配置信息
+            case "$device_config" in
+              "ac42u")
+                echo "🔧 设备配置: 华硕RT-AC42U" | tee -a "$MAIN_LOG"
+                ;;
+              "acrh17")
+                echo "🔧 设备配置: 华硕RT-ACRH17" | tee -a "$MAIN_LOG"
+                ;;
+            esac
             
             # 清理之前的配置
             rm -f .config .config.old
@@ -806,7 +815,7 @@ jobs:
           
           if [ "${{ env.BUILD_AC42U }}" = "true" ]; then
             BUILD_COUNT=$((BUILD_COUNT + 1))
-            if build_device "ASUS RT-AC42U" "ac42u" "ac42u"; then
+            if build_device "华硕RT-AC42U" "ac42u" "ac42u"; then
               SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
               echo "AC42U_BUILD_SUCCESS=true" >> $GITHUB_ENV
             else
@@ -822,7 +831,7 @@ jobs:
           
           if [ "${{ env.BUILD_ACRH17 }}" = "true" ]; then
             BUILD_COUNT=$((BUILD_COUNT + 1))
-            if build_device "ASUS RT-ACRH17" "acrh17" "acrh17"; then
+            if build_device "华硕RT-ACRH17" "acrh17" "acrh17"; then
               SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
               echo "ACRH17_BUILD_SUCCESS=true" >> $GITHUB_ENV
             else
@@ -932,20 +941,20 @@ jobs:
           
           # 收集AC42U固件
           if [ -d "/mnt/artifacts/firmware-ac42u" ]; then
-            echo "📦 收集AC42U固件..." | tee -a "$MAIN_LOG"
+            echo "📦 收集华硕RT-AC42U固件..." | tee -a "$MAIN_LOG"
             cp -r /mnt/artifacts/firmware-ac42u/* /mnt/artifacts/final/ 2>/dev/null || true
             AC42U_COUNT=$(ls /mnt/artifacts/firmware-ac42u/ 2>/dev/null | wc -l || echo 0)
             ARTIFACT_COUNT=$((ARTIFACT_COUNT + AC42U_COUNT))
-            echo "  - AC42U固件数量: $AC42U_COUNT" | tee -a "$MAIN_LOG"
+            echo "  - 华硕RT-AC42U固件数量: $AC42U_COUNT" | tee -a "$MAIN_LOG"
           fi
           
           # 收集ACRH17固件
           if [ -d "/mnt/artifacts/firmware-acrh17" ]; then
-            echo "📦 收集ACRH17固件..." | tee -a "$MAIN_LOG"
+            echo "📦 收集华硕RT-ACRH17固件..." | tee -a "$MAIN_LOG"
             cp -r /mnt/artifacts/firmware-acrh17/* /mnt/artifacts/final/ 2>/dev/null || true
             ACRH17_COUNT=$(ls /mnt/artifacts/firmware-acrh17/ 2>/dev/null | wc -l || echo 0)
             ARTIFACT_COUNT=$((ARTIFACT_COUNT + ACRH17_COUNT))
-            echo "  - ACRH17固件数量: $ACRH17_COUNT" | tee -a "$MAIN_LOG"
+            echo "  - 华硕RT-ACRH17固件数量: $ACRH17_COUNT" | tee -a "$MAIN_LOG"
           fi
           
           # 收集日志文件
@@ -1003,7 +1012,7 @@ jobs:
         if: always()
         uses: "actions/upload-artifact@v4"
         with:
-          name: "Dual-Build-Artifacts-${{ github.run_number }}"
+          name: "双设备构建产物-${{ github.run_number }}"
           path: "/mnt/artifacts/final"
           retention-days: 7
           compression-level: 6
@@ -1023,8 +1032,8 @@ jobs:
           echo ""
           echo "📦 构建结果:"
           echo "  - 总固件数量: ${{ env.ARTIFACT_COUNT || 0 }}"
-          echo "  - AC42U构建: ${{ env.AC42U_BUILD_SUCCESS || 'N/A' }}"
-          echo "  - ACRH17构建: ${{ env.ACRH17_BUILD_SUCCESS || 'N/A' }}"
+          echo "  - 华硕RT-AC42U构建: ${{ env.AC42U_BUILD_SUCCESS || 'N/A' }}"
+          echo "  - 华硕RT-ACRH17构建: ${{ env.ACRH17_BUILD_SUCCESS || 'N/A' }}"
           echo "  - 自定义IPK: ${{ env.CUSTOM_IPK_COUNT || 0 }} 个"
           echo "  - 自定义脚本: ${{ env.CUSTOM_SCRIPT_COUNT || 0 }} 个"
           echo ""
@@ -1039,10 +1048,10 @@ jobs:
             echo "🎉 双设备智能构建成功！"
             echo "💡 固件已生成并上传到产物"
             if [ "${{ env.AC42U_BUILD_SUCCESS }}" = "true" ]; then
-              echo "✅ ASUS RT-AC42U 固件已生成"
+              echo "✅ 华硕RT-AC42U 固件已生成"
             fi
             if [ "${{ env.ACRH17_BUILD_SUCCESS }}" = "true" ]; then
-              echo "✅ ASUS RT-ACRH17 固件已生成"
+              echo "✅ 华硕RT-ACRH17 固件已生成"
             fi
             if [ "${{ env.CUSTOM_IPK_COUNT }}" -gt 0 ]; then
               echo "📦 包含 ${{ env.CUSTOM_IPK_COUNT }} 个自定义IPK包"
