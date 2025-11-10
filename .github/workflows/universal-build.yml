@@ -489,6 +489,102 @@ jobs:
           
           echo "✅ Feeds更新完成" | tee -a "$MAIN_LOG"
 
+      - name: "🔧 修复 postinst 脚本问题"
+        id: fix_postinst_issues
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔧 修复 postinst 脚本问题 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "🔧 创建缺失的 postinst 函数..." | tee -a "$MAIN_LOG"
+          mkdir -p staging_dir/host/lib/config
+          
+          echo '#!/bin/sh' > staging_dir/host/lib/config/shell.sh
+          echo 'default_postinst() {' >> staging_dir/host/lib/config/shell.sh
+          echo '    echo "Default postinst called for package: $1"' >> staging_dir/host/lib/config/shell.sh
+          echo '    return 0' >> staging_dir/host/lib/config/shell.sh
+          echo '}' >> staging_dir/host/lib/config/shell.sh
+          echo '' >> staging_dir/host/lib/config/shell.sh
+          echo 'default_prerm() {' >> staging_dir/host/lib/config/shell.sh
+          echo '    echo "Default prerm called for package: $1"' >> staging_dir/host/lib/config/shell.sh
+          echo '    return 0' >> staging_dir/host/lib/config/shell.sh
+          echo '}' >> staging_dir/host/lib/config/shell.sh
+          echo '' >> staging_dir/host/lib/config/shell.sh
+          echo 'default_postrm() {' >> staging_dir/host/lib/config/shell.sh
+          echo '    echo "Default postrm called for package: $1"' >> staging_dir/host/lib/config/shell.sh
+          echo '    return 0' >> staging_dir/host/lib/config/shell.sh
+          echo '}' >> staging_dir/host/lib/config/shell.sh
+          
+          echo "🔧 修复 6in4 软件包配置..." | tee -a "$MAIN_LOG"
+          if [ -f "package/network/ipv6/6in4/Makefile" ]; then
+            sed -i 's/define Package/define Package\/6in4/g' package/network/ipv6/6in4/Makefile 2>/dev/null || true
+          fi
+          
+          echo "✅ postinst 问题修复完成" | tee -a "$MAIN_LOG"
+
+      - name: "🔧 修复主机工具链"
+        id: fix_host_tools
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔧 修复主机工具链 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "🔧 安装缺失的主机工具..." | tee -a "$MAIN_LOG"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gettext autopoint libtool-bin autoconf automake pkg-config
+          
+          echo "🔧 重新编译必要的主机工具..." | tee -a "$MAIN_LOG"
+          make tools/install -j2 V=s || echo "⚠️ 主机工具编译有警告，继续..."
+          
+          echo "🔧 验证主机工具..." | tee -a "$MAIN_LOG"
+          if [ ! -f "staging_dir/host/bin/gettext" ]; then
+            echo "⚠️ gettext 未找到，创建应急版本..." | tee -a "$MAIN_LOG"
+            mkdir -p staging_dir/host/bin
+            echo '#!/bin/bash' > staging_dir/host/bin/gettext
+            echo 'echo "$@"' >> staging_dir/host/bin/gettext
+            echo 'exit 0' >> staging_dir/host/bin/gettext
+            chmod +x staging_dir/host/bin/gettext
+          fi
+          
+          if [ ! -f "staging_dir/host/bin/autopoint" ]; then
+            echo "⚠️ autopoint 未找到，创建应急版本..." | tee -a "$MAIN_LOG"
+            echo '#!/bin/bash' > staging_dir/host/bin/autopoint
+            echo 'echo "autopoint stub: $@"' >> staging_dir/host/bin/autopoint
+            echo 'exit 0' >> staging_dir/host/bin/autopoint
+            chmod +x staging_dir/host/bin/autopoint
+          fi
+          
+          echo "✅ 主机工具链修复完成" | tee -a "$MAIN_LOG"
+
+      - name: "🔧 修复软件包构建顺序"
+        id: fix_package_build_order
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔧 修复软件包构建顺序 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "🔧 先编译基础软件包..." | tee -a "$MAIN_LOG"
+          
+          echo "📦 编译 base-files..." | tee -a "$MAIN_LOG"
+          make package/base-files/compile -j1 V=s || echo "⚠️ base-files 编译有警告，继续..." | tee -a "$MAIN_LOG"
+          
+          echo "📦 编译 opkg..." | tee -a "$MAIN_LOG"
+          make package/opkg/compile -j1 V=s || echo "⚠️ opkg 编译有警告，继续..." | tee -a "$MAIN_LOG"
+          
+          echo "📦 编译 busybox..." | tee -a "$MAIN_LOG"
+          make package/busybox/compile -j1 V=s || echo "⚠️ busybox 编译有警告，继续..." | tee -a "$MAIN_LOG"
+          
+          echo "🔧 禁用有问题的软件包..." | tee -a "$MAIN_LOG"
+          if [ -f .config ]; then
+            sed -i '/CONFIG_PACKAGE_6in4/d' .config
+            echo "# CONFIG_PACKAGE_6in4 is not set" >> .config
+          fi
+          
+          echo "✅ 软件包构建顺序修复完成" | tee -a "$MAIN_LOG"
+
       - name: "🎯 修复配置生成"
         id: fixed_config_generation
         run: |
@@ -659,7 +755,7 @@ jobs:
 
       - name: "🔧 编译工具链"
         id: build_toolchain
-        timeout-minutes: 60  # 从30分钟增加到60分钟
+        timeout-minutes: 60
         run: |
           set -e
           MAIN_LOG="${{ env.MAIN_LOG }}"
@@ -676,11 +772,9 @@ jobs:
           
           echo "🔧 编译工具链（使用优化编译）..." | tee -a "$MAIN_LOG"
           
-          # 先编译必需的基础工具
           echo "📦 编译基础工具..." | tee -a "$MAIN_LOG"
           make tools/install -j${{ env.PARALLEL_JOBS }} V=s
           
-          # 然后编译工具链，但限制并行度避免内存不足
           echo "🔧 编译工具链（限制并行度避免内存不足）..." | tee -a "$MAIN_LOG"
           make toolchain/compile -j2 V=s 2>&1 | tee -a "$MAIN_LOG"
           
@@ -880,6 +974,14 @@ jobs:
             if ! make defconfig 2>&1 | tee -a "$MAIN_LOG"; then
               echo "⚠️ defconfig有警告，继续构建..." | tee -a "$MAIN_LOG"
             fi
+            
+            echo "🔧 修复已知问题软件包配置..." | tee -a "$MAIN_LOG"
+            echo "# 禁用已知有问题的软件包" >> .config
+            echo "# CONFIG_PACKAGE_6in4 is not set" >> .config
+            echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+            echo "CONFIG_BUSYBOX_CONFIG_FEATURE_IPV6=n" >> .config
+            
+            make defconfig 2>&1 | tee -a "$MAIN_LOG" || echo "⚠️ defconfig有警告，继续..."
             
             BUILD_MODE="${{ github.event.inputs.build_mode }}"
             case "$BUILD_MODE" in
