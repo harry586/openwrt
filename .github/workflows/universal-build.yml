@@ -410,7 +410,7 @@ jobs:
           echo "💾 创建交换文件..." | tee -a "$MAIN_LOG"
           sudo swapoff /mnt/swapfile 2>/dev/null || true
           sudo rm -f /mnt/swapfile 2>/dev/null || true
-          sudo fallocate -l 8G /mnt/swapfile && sudo chmod 600 /mnt/swapfile && sudo mkswap /mnt/swapfile && sudo swapon /mnt/swapfile
+          sudo fallocate -l 16G /mnt/swapfile && sudo chmod 600 /mnt/swapfile && sudo mkswap /mnt/swapfile && sudo swapon /mnt/swapfile
           echo "📊 系统资源状态:" | tee -a "$MAIN_LOG"
           free -h | tee -a "$MAIN_LOG"
           echo "✅ 性能优化完成" | tee -a "$MAIN_LOG"
@@ -1100,64 +1100,65 @@ jobs:
             exit 1
           fi
 
-      - name: "🔍 过滤构建错误和警告"
-        id: filter_logs
+      - name: "🔍 快速日志分析"
+        id: quick_log_analysis
         if: always()
+        timeout-minutes: 5
         run: |
           set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔍 过滤构建错误和警告 ===" | tee -a "$MAIN_LOG"
+          echo "=== 🔍 快速日志分析 ===" | tee -a "$MAIN_LOG"
           
-          # 定义要过滤的关键词（英文）
-          ERROR_KEYWORDS="missing|error|failed|No such file or directory|Unable|Broken pipe|undefined reference|collect2: error|recipe for target.*failed|command not found|cannot find|not found|unrecognized|syntax error|segmentation fault|core dumped|timeout|killed"
-          WARNING_KEYWORDS="warning|deprecated|discards|unused|ignoring|overridden|redefined"
+          echo "🔍 快速扫描关键错误..." | tee -a "$MAIN_LOG"
           
-          echo "🔍 搜索构建日志中的错误和警告..." | tee -a "$MAIN_LOG"
+          # 使用高效的关键词搜索，避免长时间运行
+          ERROR_PATTERNS="ERROR:|error:|failed|No such file or directory|Unable|Broken pipe|undefined reference|collect2: error|recipe for target.*failed"
+          WARNING_PATTERNS="WARNING:|warning:|deprecated"
           
-          # 搜索所有构建日志文件
-          find /mnt/build-logs -name "*.log" -type f | while read logfile; do
-            echo "📄 分析日志文件: $(basename "$logfile")" | tee -a "$MAIN_LOG"
+          echo "📄 分析构建日志文件..." | tee -a "$MAIN_LOG"
+          
+          # 快速扫描主要日志文件
+          LOG_FILES=$(find /mnt/build-logs -name "*.log" -type f -size -10M 2>/dev/null | head -10)
+          
+          for logfile in $LOG_FILES; do
+            echo "🔍 扫描: $(basename "$logfile")" | tee -a "$MAIN_LOG"
             
-            # 提取错误信息（不包含日期）
-            if grep -E -i "$ERROR_KEYWORDS" "$logfile" 2>/dev/null; then
-              grep -E -i "$ERROR_KEYWORDS" "$logfile" | sed 's/^[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}T[0-9]\{2\}:[0-9]\{2\}:[0-9]\{2\}\.[0-9]*Z //' | \
-              while read -r error_line; do
-                if [ -n "$error_line" ]; then
-                  echo "[$(basename "$logfile")] $error_line" >> "${{ env.ERROR_LOG }}"
-                fi
-              done
+            # 提取错误（限制数量避免卡住）
+            if grep -E -i "$ERROR_PATTERNS" "$logfile" 2>/dev/null | head -50 > /tmp/errors.tmp; then
+              if [ -s /tmp/errors.tmp ]; then
+                echo "=== 错误来自 $(basename "$logfile") ===" >> "${{ env.ERROR_LOG }}"
+                cat /tmp/errors.tmp >> "${{ env.ERROR_LOG }}"
+                echo "" >> "${{ env.ERROR_LOG }}"
+              fi
             fi
             
-            # 提取警告信息（不包含日期）
-            if grep -E -i "$WARNING_KEYWORDS" "$logfile" 2>/dev/null; then
-              grep -E -i "$WARNING_KEYWORDS" "$logfile" | sed 's/^[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}T[0-9]\{2\}:[0-9]\{2\}:[0-9]\{2\}\.[0-9]*Z //' | \
-              while read -r warning_line; do
-                if [ -n "$warning_line" ]; then
-                  echo "[$(basename "$logfile")] $warning_line" >> "${{ env.WARNING_LOG }}"
-                fi
-              done
+            # 提取警告（限制数量避免卡住）
+            if grep -E -i "$WARNING_PATTERNS" "$logfile" 2>/dev/null | head -50 > /tmp/warnings.tmp; then
+              if [ -s /tmp/warnings.tmp ]; then
+                echo "=== 警告来自 $(basename "$logfile") ===" >> "${{ env.WARNING_LOG }}"
+                cat /tmp/warnings.tmp >> "${{ env.WARNING_LOG }}"
+                echo "" >> "${{ env.WARNING_LOG }}"
+              fi
             fi
           done
           
-          # 统计结果
-          ERROR_COUNT=$(wc -l < "${{ env.ERROR_LOG }}" 2>/dev/null || echo 0)
-          WARNING_COUNT=$(wc -l < "${{ env.WARNING_LOG }}" 2>/dev/null || echo 0)
+          # 清理临时文件
+          rm -f /tmp/errors.tmp /tmp/warnings.tmp
           
-          echo "📊 日志过滤结果:" | tee -a "$MAIN_LOG"
+          # 统计结果
+          ERROR_COUNT=$(grep -c . "${{ env.ERROR_LOG }}" 2>/dev/null || echo 0)
+          WARNING_COUNT=$(grep -c . "${{ env.WARNING_LOG }}" 2>/dev/null || echo 0)
+          
+          echo "📊 快速分析结果:" | tee -a "$MAIN_LOG"
           echo "  - 错误数量: $ERROR_COUNT" | tee -a "$MAIN_LOG"
           echo "  - 警告数量: $WARNING_COUNT" | tee -a "$MAIN_LOG"
           
           if [ $ERROR_COUNT -gt 0 ]; then
-            echo "🔴 发现错误，前10个错误:" | tee -a "$MAIN_LOG"
-            head -10 "${{ env.ERROR_LOG }}" | tee -a "$MAIN_LOG"
+            echo "🔴 发现的关键错误:" | tee -a "$MAIN_LOG"
+            head -20 "${{ env.ERROR_LOG }}" | tee -a "$MAIN_LOG"
           fi
           
-          if [ $WARNING_COUNT -gt 0 ]; then
-            echo "🟡 发现警告，前10个警告:" | tee -a "$MAIN_LOG"
-            head -10 "${{ env.WARNING_LOG }}" | tee -a "$MAIN_LOG"
-          fi
-          
-          echo "✅ 日志过滤完成" | tee -a "$MAIN_LOG"
+          echo "✅ 快速日志分析完成" | tee -a "$MAIN_LOG"
 
       - name: "🔍 详细错误分析与报告"
         id: detailed_error_analysis
@@ -1192,8 +1193,8 @@ jobs:
           echo "" >> "$ANALYSIS_REPORT"
           if [ -f "$ERROR_LOG" ]; then
             echo "## 🔍 详细错误分析" >> "$ANALYSIS_REPORT"
-            ERROR_COUNT=$(grep -c -E "(ERROR|error:|failed)" "$ERROR_LOG" 2>/dev/null || echo 0)
-            WARNING_COUNT=$(grep -c -E "(WARNING|warning:)" "$ERROR_LOG" 2>/dev/null || echo 0)
+            ERROR_COUNT=$(grep -c . "$ERROR_LOG" 2>/dev/null || echo 0)
+            WARNING_COUNT=$(grep -c . "$WARNING_LOG" 2>/dev/null || echo 0)
             echo "- 错误数量: $ERROR_COUNT" >> "$ANALYSIS_REPORT"
             echo "- 警告数量: $WARNING_COUNT" >> "$ANALYSIS_REPORT"
             echo "" >> "$ANALYSIS_REPORT"
@@ -1228,7 +1229,7 @@ jobs:
               echo "" >> "$ANALYSIS_REPORT"
             fi
             echo "### 📋 主要错误列表" >> "$ANALYSIS_REPORT"
-            grep -E "(error:|Error:|ERROR:|failed)" "$ERROR_LOG" | head -20 | while read -r error; do
+            head -30 "$ERROR_LOG" | while read -r error; do
               echo "- $error" >> "$ANALYSIS_REPORT"
             done
             echo "" >> "$ANALYSIS_REPORT"
