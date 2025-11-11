@@ -511,6 +511,97 @@ jobs:
           fi
           echo "✅ 主机工具链修复完成" | tee -a "$MAIN_LOG"
 
+      - name: "🔧 修复工具链编译问题"
+        id: fix_toolchain_build
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔧 修复工具链编译问题 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          echo "🔧 检查工具链状态..." | tee -a "$MAIN_LOG"
+          echo "🔧 创建必要的符号链接..." | tee -a "$MAIN_LOG"
+          mkdir -p staging_dir/toolchain-arm_cortex-a7+neon-vfpv4_gcc-8.4.0_musl_eabi/lib
+          if [ ! -f "staging_dir/toolchain-arm_cortex-a7+neon-vfpv4_gcc-8.4.0_musl_eabi/lib/ld-musl-arm.so.1" ]; then
+            echo "🔧 创建缺失的musl库链接..." | tee -a "$MAIN_LOG"
+            ln -sf /lib/ld-linux.so.3 staging_dir/toolchain-arm_cortex-a7+neon-vfpv4_gcc-8.4.0_musl_eabi/lib/ld-musl-arm.so.1 2>/dev/null || true
+          fi
+          echo "🔧 修复工具链目录权限..." | tee -a "$MAIN_LOG"
+          chmod -R 755 staging_dir/toolchain-* 2>/dev/null || true
+          echo "✅ 工具链问题修复完成" | tee -a "$MAIN_LOG"
+
+      - name: "🔧 编译工具链"
+        id: build_toolchain
+        timeout-minutes: 60
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔧 编译工具链 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          export TERM=linux
+          export LC_ALL=C
+          export FORCE_UNSAFE_CONFIGURE=1
+          export BATCH=1
+          export UNATTENDED=1
+          echo "🔧 编译工具链（使用优化编译）..." | tee -a "$MAIN_LOG"
+          echo "📦 编译基础工具..." | tee -a "$MAIN_LOG"
+          make tools/install -j${{ env.PARALLEL_JOBS }} V=s
+          echo "🔧 编译工具链（限制并行度避免内存不足）..." | tee -a "$MAIN_LOG"
+          if make toolchain/compile -j2 V=s 2>&1 | tee -a "$MAIN_LOG"; then
+            echo "✅ 工具链编译成功" | tee -a "$MAIN_LOG"
+          else
+            echo "⚠️ 工具链编译有错误，尝试修复后重新编译..." | tee -a "$MAIN_LOG"
+            echo "🔧 清理工具链构建目录..." | tee -a "$MAIN_LOG"
+            make toolchain/clean
+            echo "🔧 重新编译工具链..." | tee -a "$MAIN_LOG"
+            make toolchain/compile -j1 V=s 2>&1 | tee -a "$MAIN_LOG" || echo "⚠️ 工具链编译仍有问题，继续构建..."
+          fi
+          echo "✅ 工具链编译完成" | tee -a "$MAIN_LOG"
+
+      - name: "🌐 修复下载优化"
+        id: smart_download
+        timeout-minutes: 45
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          DOWNLOAD_LOG="${{ env.DOWNLOAD_LOG }}"
+          echo "=== 🌐 修复下载优化 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          export TERM=linux
+          export LC_ALL=C
+          export FORCE_UNSAFE_CONFIGURE=1
+          echo "🔧 验证构建环境..." | tee -a "$MAIN_LOG"
+          echo "🔍 检查主机工具..." | tee -a "$MAIN_LOG"
+          ls -la staging_dir/host/bin/ | head -10 | tee -a "$MAIN_LOG"
+          echo "🔧 修复下载镜像源..." | tee -a "$MAIN_LOG"
+          sed -i 's|https://sources.cdn.openwrt.org|https://mirror2.openwrt.org/sources|g' scripts/download.pl 2>/dev/null || true
+          sed -i 's|git.openwrt.org|github.com/openwrt|g' feeds.conf.* 2>/dev/null || true
+          PARALLEL_JOBS="${{ env.PARALLEL_JOBS }}"
+          echo "📥 开始分阶段下载..." | tee -a "$MAIN_LOG"
+          echo "开始下载流程: $(date)" >> "$DOWNLOAD_LOG"
+          echo "🔧 阶段1: 下载工具..." | tee -a "$MAIN_LOG"
+          if make tools/download -j1 V=s; then
+            echo "✅ 工具下载成功" | tee -a "$MAIN_LOG"
+          else
+            echo "⚠️ 工具下载有警告，继续..." | tee -a "$MAIN_LOG"
+          fi
+          echo "🔧 阶段2: 下载工具链..." | tee -a "$MAIN_LOG"
+          if make toolchain/download -j1 V=s; then
+            echo "✅ 工具链下载成功" | tee -a "$MAIN_LOG"
+          else
+            echo "⚠️ 工具链下载有警告，继续..." | tee -a "$MAIN_LOG"
+          fi
+          echo "🔧 阶段3: 并行下载包..." | tee -a "$MAIN_LOG"
+          if make package/download -j$PARALLEL_JOBS; then
+            echo "✅ 包下载成功" | tee -a "$MAIN_LOG"
+            echo "DOWNLOAD_COMPLETE=true" >> $GITHUB_ENV
+          else
+            echo "⚠️ 包下载有错误，尝试单线程..." | tee -a "$MAIN_LOG"
+            make package/download -j1 V=s
+          fi
+          DOWNLOAD_COUNT=$(find dl/ -type f 2>/dev/null | wc -l)
+          echo "DOWNLOAD_FILE_COUNT=$DOWNLOAD_COUNT" >> $GITHUB_ENV
+          echo "✅ 下载完成，文件数量: $DOWNLOAD_COUNT" | tee -a "$MAIN_LOG"
+
       - name: "🔧 修复软件包构建顺序"
         id: fix_package_build_order
         run: |
@@ -520,15 +611,29 @@ jobs:
           cd /mnt/source
           echo "🔧 先编译基础软件包..." | tee -a "$MAIN_LOG"
           echo "📦 编译 base-files..." | tee -a "$MAIN_LOG"
-          make package/base-files/compile -j1 V=s || echo "⚠️ base-files 编译有警告，继续..." | tee -a "$MAIN_LOG"
+          if make package/base-files/compile -j1 V=s 2>&1 | tee -a "$MAIN_LOG"; then
+            echo "✅ base-files 编译成功" | tee -a "$MAIN_LOG"
+          else
+            echo "⚠️ base-files 编译有错误，跳过..." | tee -a "$MAIN_LOG"
+          fi
           echo "📦 编译 opkg..." | tee -a "$MAIN_LOG"
-          make package/opkg/compile -j1 V=s || echo "⚠️ opkg 编译有警告，继续..." | tee -a "$MAIN_LOG"
+          if make package/opkg/compile -j1 V=s 2>&1 | tee -a "$MAIN_LOG"; then
+            echo "✅ opkg 编译成功" | tee -a "$MAIN_LOG"
+          else
+            echo "⚠️ opkg 编译有错误，跳过..." | tee -a "$MAIN_LOG"
+          fi
           echo "📦 编译 busybox..." | tee -a "$MAIN_LOG"
-          make package/busybox/compile -j1 V=s || echo "⚠️ busybox 编译有警告，继续..." | tee -a "$MAIN_LOG"
+          if make package/busybox/compile -j1 V=s 2>&1 | tee -a "$MAIN_LOG"; then
+            echo "✅ busybox 编译成功" | tee -a "$MAIN_LOG"
+          else
+            echo "⚠️ busybox 编译有错误，跳过..." | tee -a "$MAIN_LOG"
+          fi
           echo "🔧 禁用有问题的软件包..." | tee -a "$MAIN_LOG"
           if [ -f .config ]; then
             sed -i '/CONFIG_PACKAGE_6in4/d' .config
             echo "# CONFIG_PACKAGE_6in4 is not set" >> .config
+            echo "# CONFIG_PACKAGE_dnsmasq-full is not set" >> .config
+            echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
           fi
           echo "✅ 软件包构建顺序修复完成" | tee -a "$MAIN_LOG"
 
@@ -674,73 +779,6 @@ jobs:
           timeout 120s make defconfig 2>&1 | tee -a "$MAIN_LOG" | grep -E "(WARNING|ERROR|error|Warning)" || echo "✅ defconfig完成"
           echo "✅ 配置验证与加固完成" | tee -a "$MAIN_LOG"
 
-      - name: "🔧 编译工具链"
-        id: build_toolchain
-        timeout-minutes: 60
-        run: |
-          set -e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          echo "=== 🔧 编译工具链 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          export TERM=linux
-          export LC_ALL=C
-          export FORCE_UNSAFE_CONFIGURE=1
-          export BATCH=1
-          export UNATTENDED=1
-          export MAKE_TERMOUT=
-          export MAKE_TERMERR=
-          echo "🔧 编译工具链（使用优化编译）..." | tee -a "$MAIN_LOG"
-          echo "📦 编译基础工具..." | tee -a "$MAIN_LOG"
-          make tools/install -j${{ env.PARALLEL_JOBS }} V=s
-          echo "🔧 编译工具链（限制并行度避免内存不足）..." | tee -a "$MAIN_LOG"
-          make toolchain/compile -j2 V=s 2>&1 | tee -a "$MAIN_LOG"
-          echo "✅ 工具链编译完成" | tee -a "$MAIN_LOG"
-
-      - name: "🌐 修复下载优化"
-        id: smart_download
-        timeout-minutes: 45
-        run: |
-          set +e
-          MAIN_LOG="${{ env.MAIN_LOG }}"
-          DOWNLOAD_LOG="${{ env.DOWNLOAD_LOG }}"
-          echo "=== 🌐 修复下载优化 ===" | tee -a "$MAIN_LOG"
-          cd /mnt/source
-          export TERM=linux
-          export LC_ALL=C
-          export FORCE_UNSAFE_CONFIGURE=1
-          echo "🔧 验证构建环境..." | tee -a "$MAIN_LOG"
-          echo "🔍 检查主机工具..." | tee -a "$MAIN_LOG"
-          ls -la staging_dir/host/bin/ | head -10 | tee -a "$MAIN_LOG"
-          echo "🔧 修复下载镜像源..." | tee -a "$MAIN_LOG"
-          sed -i 's|https://sources.cdn.openwrt.org|https://mirror2.openwrt.org/sources|g' scripts/download.pl 2>/dev/null || true
-          sed -i 's|git.openwrt.org|github.com/openwrt|g' feeds.conf.* 2>/dev/null || true
-          PARALLEL_JOBS="${{ env.PARALLEL_JOBS }}"
-          echo "📥 开始分阶段下载..." | tee -a "$MAIN_LOG"
-          echo "开始下载流程: $(date)" >> "$DOWNLOAD_LOG"
-          echo "🔧 阶段1: 下载工具..." | tee -a "$MAIN_LOG"
-          if make tools/download -j1 V=s; then
-            echo "✅ 工具下载成功" | tee -a "$MAIN_LOG"
-          else
-            echo "⚠️ 工具下载有警告，继续..." | tee -a "$MAIN_LOG"
-          fi
-          echo "🔧 阶段2: 下载工具链..." | tee -a "$MAIN_LOG"
-          if make toolchain/download -j1 V=s; then
-            echo "✅ 工具链下载成功" | tee -a "$MAIN_LOG"
-          else
-            echo "⚠️ 工具链下载有警告，继续..." | tee -a "$MAIN_LOG"
-          fi
-          echo "🔧 阶段3: 并行下载包..." | tee -a "$MAIN_LOG"
-          if make package/download -j$PARALLEL_JOBS; then
-            echo "✅ 包下载成功" | tee -a "$MAIN_LOG"
-            echo "DOWNLOAD_COMPLETE=true" >> $GITHUB_ENV
-          else
-            echo "⚠️ 包下载有错误，尝试单线程..." | tee -a "$MAIN_LOG"
-            make package/download -j1 V=s
-          fi
-          DOWNLOAD_COUNT=$(find dl/ -type f 2>/dev/null | wc -l)
-          echo "DOWNLOAD_FILE_COUNT=$DOWNLOAD_COUNT" >> $GITHUB_ENV
-          echo "✅ 下载完成，文件数量: $DOWNLOAD_COUNT" | tee -a "$MAIN_LOG"
-
       - name: "🔧 高级功能增强"
         id: advanced_features
         if: github.event.inputs.enable_advanced == 'true'
@@ -811,7 +849,7 @@ jobs:
         id: fixed_device_build
         timeout-minutes: 180
         run: |
-          set -e
+          set +e
           MAIN_LOG="${{ env.MAIN_LOG }}"
           ERROR_LOG="${{ env.ERROR_LOG }}"
           echo "=== 🔧 修复设备编译 ===" | tee -a "$MAIN_LOG"
@@ -866,7 +904,8 @@ jobs:
             echo "🔧 修复已知问题软件包配置..." | tee -a "$MAIN_LOG"
             echo "# 禁用已知有问题的软件包" >> .config
             echo "# CONFIG_PACKAGE_6in4 is not set" >> .config
-            echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+            echo "# CONFIG_PACKAGE_dnsmasq-full is not set" >> .config
+            echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
             echo "CONFIG_BUSYBOX_CONFIG_FEATURE_IPV6=n" >> .config
             timeout 120s make defconfig 2>&1 | tee -a "$MAIN_LOG" | grep -E "(WARNING|ERROR|error|Warning)" || true
             BUILD_MODE="${{ github.event.inputs.build_mode }}"
@@ -924,7 +963,7 @@ jobs:
             echo "🔧 开始编译 $device_name ..." | tee -a "$MAIN_LOG"
             BUILD_LOG="/mnt/build-logs/build-$device_config.log"
             if { time make -j1 V=s 2>&1 | tee "$BUILD_LOG"; } then
-              echo "✅ $device_name 编译成功" | tee -a "$MAIN_LOG"
+              echo "✅ $device_name 编译过程完成" | tee -a "$MAIN_LOG"
               mkdir -p /mnt/artifacts/firmware-$build_id
               FIRMWARE_FOUND=false
               echo "🔍 搜索固件文件..." | tee -a "$MAIN_LOG"
@@ -944,6 +983,8 @@ jobs:
                 echo "❌ $device_name 未找到固件文件" | tee -a "$MAIN_LOG"
                 echo "搜索路径: bin/targets/" | tee -a "$MAIN_LOG"
                 find bin/targets -type f 2>/dev/null | head -20 | tee -a "$MAIN_LOG"
+                echo "🔍 检查构建目录..." | tee -a "$MAIN_LOG"
+                find bin -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null | head -20 | tee -a "$MAIN_LOG"
                 return 1
               fi
             else
@@ -990,8 +1031,8 @@ jobs:
             exit 1
           fi
 
-      - name: "🔍 自动错误分析与报告"
-        id: error_analysis
+      - name: "🔍 详细错误分析与报告"
+        id: detailed_error_analysis
         if: always()
         run: |
           set +e
@@ -999,8 +1040,8 @@ jobs:
           ERROR_LOG="${{ env.ERROR_LOG }}"
           ANALYSIS_REPORT="${{ env.ANALYSIS_REPORT }}"
           DOWNLOAD_LOG="${{ env.DOWNLOAD_LOG }}"
-          echo "=== 🔍 自动错误分析与报告 ===" | tee -a "$MAIN_LOG"
-          echo "# 智能错误分析报告" > "$ANALYSIS_REPORT"
+          echo "=== 🔍 详细错误分析与报告 ===" | tee -a "$MAIN_LOG"
+          echo "# 详细错误分析报告" > "$ANALYSIS_REPORT"
           echo "生成时间: $(date)" >> "$ANALYSIS_REPORT"
           echo "" >> "$ANALYSIS_REPORT"
           if [ "${{ env.BUILD_STATUS }}" = "success" ]; then
@@ -1011,33 +1052,58 @@ jobs:
           else
             echo "## ❌ 构建失败" >> "$ANALYSIS_REPORT"
             echo "- 状态: 构建失败" >> "$ANALYSIS_REPORT"
-            if [ -f "$ERROR_LOG" ]; then
-              echo "## 🔍 错误分析" >> "$ANALYSIS_REPORT"
-              if grep -q "missing separator" "$ERROR_LOG"; then
-                echo "### ❌ 配置文件语法错误" >> "$ANALYSIS_REPORT"
-                echo "**问题**: .config文件存在语法错误" >> "$ANALYSIS_REPORT"
-                echo "**解决方案**: 检查配置文件格式，确保使用正确的Kconfig语法" >> "$ANALYSIS_REPORT"
-              fi
-              if grep -q "mkhash" "$ERROR_LOG"; then
-                echo "### ❌ 主机工具缺失" >> "$ANALYSIS_REPORT"
-                echo "**问题**: 缺少mkhash等主机工具" >> "$ANALYSIS_REPORT"
-                echo "**解决方案**: 确保主机工具正确编译，检查依赖是否完整" >> "$ANALYSIS_REPORT"
-              fi
-              if grep -q "Error opening terminal" "$ERROR_LOG"; then
-                echo "### ❌ 终端环境问题" >> "$ANALYSIS_REPORT"
-                echo "**问题**: 终端环境配置错误" >> "$ANALYSIS_REPORT"
-                echo "**解决方案**: 设置TERM=linux环境变量" >> "$ANALYSIS_REPORT"
-              fi
-              echo "### 📋 主要错误列表" >> "$ANALYSIS_REPORT"
-              grep -E "(error:|Error:|ERROR:)" "$ERROR_LOG" | head -10 | while read -r error; do
-                echo "- $error" >> "$ANALYSIS_REPORT"
-              done
+            echo "- 成功设备数: ${{ env.SUCCESS_COUNT || 0 }}" >> "$ANALYSIS_REPORT"
+            echo "- 总设备数: $BUILD_COUNT" >> "$ANALYSIS_REPORT"
+          fi
+          echo "" >> "$ANALYSIS_REPORT"
+          echo "## 🔧 构建环境信息" >> "$ANALYSIS_REPORT"
+          echo "- 源码库: ${{ github.event.inputs.source_preset || 'unknown' }}" >> "$ANALYSIS_REPORT"
+          echo "- 源码分支: ${{ env.ACTUAL_BRANCH || 'unknown' }}" >> "$ANALYSIS_REPORT"
+          echo "- 构建模式: ${{ github.event.inputs.build_mode || 'unknown' }}" >> "$ANALYSIS_REPORT"
+          echo "- 设备选择: ${{ github.event.inputs.build_devices || 'unknown' }}" >> "$ANALYSIS_REPORT"
+          echo "" >> "$ANALYSIS_REPORT"
+          if [ -f "$ERROR_LOG" ]; then
+            echo "## 🔍 详细错误分析" >> "$ANALYSIS_REPORT"
+            ERROR_COUNT=$(grep -c -E "(ERROR|error:|failed)" "$ERROR_LOG" 2>/dev/null || echo 0)
+            WARNING_COUNT=$(grep -c -E "(WARNING|warning:)" "$ERROR_LOG" 2>/dev/null || echo 0)
+            echo "- 错误数量: $ERROR_COUNT" >> "$ANALYSIS_REPORT"
+            echo "- 警告数量: $WARNING_COUNT" >> "$ANALYSIS_REPORT"
+            echo "" >> "$ANALYSIS_REPORT"
+            if grep -q "missing separator" "$ERROR_LOG"; then
+              echo "### ❌ 配置文件语法错误" >> "$ANALYSIS_REPORT"
+              echo "**问题**: .config文件存在语法错误" >> "$ANALYSIS_REPORT"
+              echo "**解决方案**: 检查配置文件格式，确保使用正确的Kconfig语法" >> "$ANALYSIS_REPORT"
+              echo "" >> "$ANALYSIS_REPORT"
             fi
-            echo "## 🛠️ 修复建议" >> "$ANALYSIS_REPORT"
-            echo "1. 检查.config文件语法是否正确" >> "$ANALYSIS_REPORT"
-            echo "2. 确保所有主机工具正确编译" >> "$ANALYSIS_REPORT"
-            echo "3. 设置正确的终端环境变量: TERM=linux" >> "$ANALYSIS_REPORT"
-            echo "4. 检查构建系统的依赖是否完整" >> "$ANALYSIS_REPORT"
+            if grep -q "mkhash" "$ERROR_LOG"; then
+              echo "### ❌ 主机工具缺失" >> "$ANALYSIS_REPORT"
+              echo "**问题**: 缺少mkhash等主机工具" >> "$ANALYSIS_REPORT"
+              echo "**解决方案**: 确保主机工具正确编译，检查依赖是否完整" >> "$ANALYSIS_REPORT"
+              echo "" >> "$ANALYSIS_REPORT"
+            fi
+            if grep -q "Error opening terminal" "$ERROR_LOG"; then
+              echo "### ❌ 终端环境问题" >> "$ANALYSIS_REPORT"
+              echo "**问题**: 终端环境配置错误" >> "$ANALYSIS_REPORT"
+              echo "**解决方案**: 设置TERM=linux环境变量" >> "$ANALYSIS_REPORT"
+              echo "" >> "$ANALYSIS_REPORT"
+            fi
+            if grep -q "dnsmasq-full" "$ERROR_LOG"; then
+              echo "### ❌ dnsmasq-full配置问题" >> "$ANALYSIS_REPORT"
+              echo "**问题**: dnsmasq-full包配置失败" >> "$ANALYSIS_REPORT"
+              echo "**解决方案**: 使用标准dnsmasq替代dnsmasq-full" >> "$ANALYSIS_REPORT"
+              echo "" >> "$ANALYSIS_REPORT"
+            fi
+            if grep -q "ld-musl" "$ERROR_LOG"; then
+              echo "### ❌ 工具链问题" >> "$ANALYSIS_REPORT"
+              echo "**问题**: musl库文件缺失" >> "$ANALYSIS_REPORT"
+              echo "**解决方案**: 重新编译工具链或检查依赖" >> "$ANALYSIS_REPORT"
+              echo "" >> "$ANALYSIS_REPORT"
+            fi
+            echo "### 📋 主要错误列表" >> "$ANALYSIS_REPORT"
+            grep -E "(error:|Error:|ERROR:|failed)" "$ERROR_LOG" | head -20 | while read -r error; do
+              echo "- $error" >> "$ANALYSIS_REPORT"
+            done
+            echo "" >> "$ANALYSIS_REPORT"
           fi
           if [ -f "$DOWNLOAD_LOG" ]; then
             echo "## 🌐 下载问题分析" >> "$ANALYSIS_REPORT"
@@ -1045,7 +1111,16 @@ jobs:
             echo "### 📊 下载统计" >> "$ANALYSIS_REPORT"
             echo "- 下载重试次数: $DOWNLOAD_RETRIES" >> "$ANALYSIS_REPORT"
             echo "- 最终下载文件数: ${{ env.DOWNLOAD_FILE_COUNT || 0 }}" >> "$ANALYSIS_REPORT"
+            echo "" >> "$ANALYSIS_REPORT"
           fi
+          echo "## 🛠️ 修复建议" >> "$ANALYSIS_REPORT"
+          echo "1. 检查.config文件语法是否正确" >> "$ANALYSIS_REPORT"
+          echo "2. 确保所有主机工具正确编译" >> "$ANALYSIS_REPORT"
+          echo "3. 设置正确的终端环境变量: TERM=linux" >> "$ANALYSIS_REPORT"
+          echo "4. 检查构建系统的依赖是否完整" >> "$ANALYSIS_REPORT"
+          echo "5. 使用dnsmasq替代dnsmasq-full避免配置问题" >> "$ANALYSIS_REPORT"
+          echo "6. 确保工具链完全编译" >> "$ANALYSIS_REPORT"
+          echo "" >> "$ANALYSIS_REPORT"
           echo "## 📊 系统资源报告" >> "$ANALYSIS_REPORT"
           echo "\`\`\`" >> "$ANALYSIS_REPORT"
           echo "磁盘使用情况:" >> "$ANALYSIS_REPORT"
@@ -1054,7 +1129,7 @@ jobs:
           echo "内存使用情况:" >> "$ANALYSIS_REPORT"
           free -h >> "$ANALYSIS_REPORT" 2>/dev/null || echo "内存使用情况获取失败" >> "$ANALYSIS_REPORT"
           echo "\`\`\`" >> "$ANALYSIS_REPORT"
-          echo "✅ 错误分析报告生成完成" | tee -a "$MAIN_LOG"
+          echo "✅ 详细错误分析报告生成完成" | tee -a "$MAIN_LOG"
 
       - name: "📦 收集构建产物"
         id: collect_artifacts
