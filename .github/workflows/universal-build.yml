@@ -637,6 +637,45 @@ jobs:
           fi
           echo "✅ 软件包构建顺序修复完成" | tee -a "$MAIN_LOG"
 
+      - name: "🔧 修复软件包安装问题"
+        id: fix_package_installation
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔧 修复软件包安装问题 ===" | tee -a "$MAIN_LOG"
+          cd /mnt/source
+          
+          echo "🔧 修复软件包依赖关系..." | tee -a "$MAIN_LOG"
+          rm -rf tmp/.packages* 2>/dev/null || true
+          rm -rf staging_dir/target-*/root-* 2>/dev/null || true
+          
+          echo "🔧 创建必要的包目录结构..." | tee -a "$MAIN_LOG"
+          mkdir -p staging_dir/target-*/root-dev/usr/lib/opkg
+          mkdir -p staging_dir/target-*/root-dev/etc/opkg
+          mkdir -p staging_dir/target-*/root-dev/usr/bin
+          mkdir -p staging_dir/target-*/root-dev/bin
+          mkdir -p staging_dir/target-*/root-dev/sbin
+          mkdir -p staging_dir/target-*/root-dev/lib
+          mkdir -p staging_dir/target-*/root-dev/usr/sbin
+          
+          echo "🔧 修复opkg配置..." | tee -a "$MAIN_LOG"
+          OPKG_CONF="staging_dir/target-*/root-dev/etc/opkg.conf"
+          echo "dest root /" > $OPKG_CONF
+          echo "dest ram /tmp" >> $OPKG_CONF
+          echo "lists_dir ext /var/opkg-lists" >> $OPKG_CONF
+          echo "option overlay_root /overlay" >> $OPKG_CONF
+          echo "arch all 100" >> $OPKG_CONF
+          echo "arch noarch 200" >> $OPKG_CONF
+          echo "arch \$(ARCH) 300" >> $OPKG_CONF
+          
+          echo "🔧 预编译核心包..." | tee -a "$MAIN_LOG"
+          for pkg in base-files busybox libc opkg; do
+            echo "📦 预编译 $pkg..." | tee -a "$MAIN_LOG"
+            make package/$pkg/compile -j1 V=s 2>&1 | grep -E "(ERROR|error:|failed)" || true
+          done
+          
+          echo "✅ 软件包安装问题修复完成" | tee -a "$MAIN_LOG"
+
       - name: "🎯 修复配置生成"
         id: fixed_config_generation
         run: |
@@ -644,6 +683,7 @@ jobs:
           MAIN_LOG="${{ env.MAIN_LOG }}"
           echo "=== 🎯 修复配置生成 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
+          
           create_device_config() {
             local device_name="$1"
             local device_config="$2"
@@ -700,6 +740,7 @@ jobs:
             echo "✅ $device_name 配置生成完成" | tee -a "$MAIN_LOG"
             return 0
           }
+          
           apply_custom_plugins() {
             echo "🔌 应用自定义插件..." | tee -a "$MAIN_LOG"
             PLUGIN_FILES=("${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-plugins.txt" "${{ env.CONFIG_REPO_DIR }}/firmware-config/plugins.txt" "${{ env.CONFIG_REPO_DIR }}/custom-plugins.txt" "${{ env.CONFIG_REPO_DIR }}/plugins.txt")
@@ -728,6 +769,7 @@ jobs:
               echo "ℹ️ 未找到自定义插件文件" | tee -a "$MAIN_LOG"
             fi
           }
+          
           if [ "${{ env.BUILD_AC42U }}" = "true" ]; then
             echo "🎯 为华硕RT-AC42U生成配置..." | tee -a "$MAIN_LOG"
             if create_device_config "华硕RT-AC42U" "ac42u"; then
@@ -738,6 +780,7 @@ jobs:
               echo "❌ 华硕RT-AC42U配置生成失败" | tee -a "$MAIN_LOG"
             fi
           fi
+          
           if [ "${{ env.BUILD_ACRH17 }}" = "true" ]; then
             echo "🎯 为华硕RT-ACRH17生成配置..." | tee -a "$MAIN_LOG"
             if create_device_config "华硕RT-ACRH17" "acrh17"; then
@@ -858,6 +901,7 @@ jobs:
           export LC_ALL=C
           export FORCE_UNSAFE_CONFIGURE=1
           PARALLEL_JOBS="${{ env.PARALLEL_JOBS }}"
+          
           build_device() {
             local device_name="$1"
             local device_config="$2"
@@ -908,6 +952,7 @@ jobs:
             echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
             echo "CONFIG_BUSYBOX_CONFIG_FEATURE_IPV6=n" >> .config
             timeout 120s make defconfig 2>&1 | tee -a "$MAIN_LOG" | grep -E "(WARNING|ERROR|error|Warning)" || true
+            
             BUILD_MODE="${{ github.event.inputs.build_mode }}"
             case "$BUILD_MODE" in
               "最小化")
@@ -924,6 +969,7 @@ jobs:
                 echo "🔧 应用自定义模式配置..." | tee -a "$MAIN_LOG"
                 ;;
             esac
+            
             LANGUAGE="${{ github.event.inputs.language_pack }}"
             case "$LANGUAGE" in
               "简体中文")
@@ -942,6 +988,7 @@ jobs:
                 echo "CONFIG_PACKAGE_luci-i18n-base-en=y" >> .config
                 ;;
             esac
+            
             if [ -n "${{ github.event.inputs.extra_packages }}" ]; then
               IFS=',' read -ra PKGS <<< "${{ github.event.inputs.extra_packages }}"
               for pkg in "${PKGS[@]}"; do
@@ -951,6 +998,7 @@ jobs:
                 fi
               done
             fi
+            
             echo "🔧 最终配置验证:" | tee -a "$MAIN_LOG"
             if grep -q "CONFIG_TARGET_ipq40xx=y" .config; then
               echo "✅ 目标系统正确设置为ipq40xx" | tee -a "$MAIN_LOG"
@@ -960,9 +1008,27 @@ jobs:
               grep "CONFIG_TARGET_" .config | tee -a "$MAIN_LOG"
               return 1
             fi
-            echo "🔧 开始编译 $device_name ..." | tee -a "$MAIN_LOG"
-            BUILD_LOG="/mnt/build-logs/build-$device_config.log"
-            if { time make -j1 V=s 2>&1 | tee "$BUILD_LOG"; } then
+            
+            echo "🔧 准备包安装环境..." | tee -a "$MAIN_LOG"
+            mkdir -p bin/targets/ipq40xx/generic/packages
+            make package/index 2>/dev/null || true
+            
+            echo "🔧 使用分阶段构建..." | tee -a "$MAIN_LOG"
+            echo "📦 阶段1: 编译工具链和内核..." | tee -a "$MAIN_LOG"
+            make toolchain/install -j1 V=s || echo "⚠️ 工具链安装有警告，继续..."
+            make target/compile -j1 V=s || echo "⚠️ 目标编译有警告，继续..."
+            
+            echo "📦 阶段2: 编译基础包..." | tee -a "$MAIN_LOG"
+            make package/compile -j1 V=s || echo "⚠️ 包编译有警告，继续..."
+            
+            echo "📦 阶段3: 安装包到目标系统..." | tee -a "$MAIN_LOG"
+            make package/install -j1 V=s || echo "⚠️ 包安装有警告，继续..."
+            
+            echo "📦 阶段4: 构建文件系统..." | tee -a "$MAIN_LOG"
+            make target/install -j1 V=s || echo "⚠️ 目标安装有警告，继续..."
+            
+            echo "📦 阶段5: 生成镜像..." | tee -a "$MAIN_LOG"
+            if make -j1 V=s 2>&1 | tee "/mnt/build-logs/build-$device_config.log"; then
               echo "✅ $device_name 编译过程完成" | tee -a "$MAIN_LOG"
               mkdir -p /mnt/artifacts/firmware-$build_id
               FIRMWARE_FOUND=false
@@ -990,10 +1056,11 @@ jobs:
             else
               echo "❌ $device_name 编译失败" | tee -a "$MAIN_LOG"
               echo "📋 最后50行构建日志:" | tee -a "$MAIN_LOG"
-              tail -50 "$BUILD_LOG" | tee -a "$MAIN_LOG"
+              tail -50 "/mnt/build-logs/build-$device_config.log" | tee -a "$MAIN_LOG"
               return 1
             fi
           }
+          
           BUILD_COUNT=0
           SUCCESS_COUNT=0
           if [ "${{ env.BUILD_AC42U }}" = "true" ]; then
@@ -1010,6 +1077,7 @@ jobs:
               make package/clean 2>/dev/null || true
             fi
           fi
+          
           if [ "${{ env.BUILD_ACRH17 }}" = "true" ]; then
             BUILD_COUNT=$((BUILD_COUNT + 1))
             if build_device "华硕RT-ACRH17" "acrh17" "acrh17"; then
@@ -1019,6 +1087,7 @@ jobs:
               echo "ACRH17_BUILD_SUCCESS=false" >> $GITHUB_ENV
             fi
           fi
+          
           echo "SUCCESS_COUNT=$SUCCESS_COUNT" >> $GITHUB_ENV
           echo "📊 构建总结:" | tee -a "$MAIN_LOG"
           echo "  - 总设备数: $BUILD_COUNT" | tee -a "$MAIN_LOG"
@@ -1030,6 +1099,65 @@ jobs:
             echo "BUILD_STATUS=failed" >> $GITHUB_ENV
             exit 1
           fi
+
+      - name: "🔍 过滤构建错误和警告"
+        id: filter_logs
+        if: always()
+        run: |
+          set +e
+          MAIN_LOG="${{ env.MAIN_LOG }}"
+          echo "=== 🔍 过滤构建错误和警告 ===" | tee -a "$MAIN_LOG"
+          
+          # 定义要过滤的关键词（英文）
+          ERROR_KEYWORDS="missing|error|failed|No such file or directory|Unable|Broken pipe|undefined reference|collect2: error|recipe for target.*failed|command not found|cannot find|not found|unrecognized|syntax error|segmentation fault|core dumped|timeout|killed"
+          WARNING_KEYWORDS="warning|deprecated|discards|unused|ignoring|overridden|redefined"
+          
+          echo "🔍 搜索构建日志中的错误和警告..." | tee -a "$MAIN_LOG"
+          
+          # 搜索所有构建日志文件
+          find /mnt/build-logs -name "*.log" -type f | while read logfile; do
+            echo "📄 分析日志文件: $(basename "$logfile")" | tee -a "$MAIN_LOG"
+            
+            # 提取错误信息（不包含日期）
+            if grep -E -i "$ERROR_KEYWORDS" "$logfile" 2>/dev/null; then
+              grep -E -i "$ERROR_KEYWORDS" "$logfile" | sed 's/^[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}T[0-9]\{2\}:[0-9]\{2\}:[0-9]\{2\}\.[0-9]*Z //' | \
+              while read -r error_line; do
+                if [ -n "$error_line" ]; then
+                  echo "[$(basename "$logfile")] $error_line" >> "${{ env.ERROR_LOG }}"
+                fi
+              done
+            fi
+            
+            # 提取警告信息（不包含日期）
+            if grep -E -i "$WARNING_KEYWORDS" "$logfile" 2>/dev/null; then
+              grep -E -i "$WARNING_KEYWORDS" "$logfile" | sed 's/^[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}T[0-9]\{2\}:[0-9]\{2\}:[0-9]\{2\}\.[0-9]*Z //' | \
+              while read -r warning_line; do
+                if [ -n "$warning_line" ]; then
+                  echo "[$(basename "$logfile")] $warning_line" >> "${{ env.WARNING_LOG }}"
+                fi
+              done
+            fi
+          done
+          
+          # 统计结果
+          ERROR_COUNT=$(wc -l < "${{ env.ERROR_LOG }}" 2>/dev/null || echo 0)
+          WARNING_COUNT=$(wc -l < "${{ env.WARNING_LOG }}" 2>/dev/null || echo 0)
+          
+          echo "📊 日志过滤结果:" | tee -a "$MAIN_LOG"
+          echo "  - 错误数量: $ERROR_COUNT" | tee -a "$MAIN_LOG"
+          echo "  - 警告数量: $WARNING_COUNT" | tee -a "$MAIN_LOG"
+          
+          if [ $ERROR_COUNT -gt 0 ]; then
+            echo "🔴 发现错误，前10个错误:" | tee -a "$MAIN_LOG"
+            head -10 "${{ env.ERROR_LOG }}" | tee -a "$MAIN_LOG"
+          fi
+          
+          if [ $WARNING_COUNT -gt 0 ]; then
+            echo "🟡 发现警告，前10个警告:" | tee -a "$MAIN_LOG"
+            head -10 "${{ env.WARNING_LOG }}" | tee -a "$MAIN_LOG"
+          fi
+          
+          echo "✅ 日志过滤完成" | tee -a "$MAIN_LOG"
 
       - name: "🔍 详细错误分析与报告"
         id: detailed_error_analysis
