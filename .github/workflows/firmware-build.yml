@@ -8,6 +8,19 @@ on:
         required: true
         default: 'ac42u'
         type: string
+      config_type:
+        description: '配置类型'
+        required: true
+        default: 'minimal'
+        type: choice
+        options:
+          - minimal
+          - normal
+          - custom
+      extra_packages:
+        description: '额外插件名 (用空格分隔，例如: adblock wireguard)'
+        required: false
+        type: string
 
 env:
   WORKSPACE: ${{ github.workspace }}
@@ -26,13 +39,11 @@ jobs:
         echo "工作空间: ${{ github.workspace }}"
         echo "构建目录: $BUILD_DIR"
         
-        # 检查 /mnt 目录是否存在
         if [ ! -d "/mnt" ]; then
           echo "错误: /mnt 目录不存在!"
           exit 1
         fi
         
-        # 检查 /mnt 空间大小
         AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
         AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
         echo "/mnt 可用空间: ${AVAILABLE_GB}G"
@@ -56,6 +67,8 @@ jobs:
         sudo apt-get -y install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib curl lib32gcc-s1 libc6-dev-x32 linux-libc-dev
         echo "安装终端支持..."
         sudo apt-get install -y ncurses-term
+        echo "安装缺失的工具..."
+        sudo apt-get install -y help2man
 
     - name: 4_创建构建目录并设置权限
       run: |
@@ -63,7 +76,6 @@ jobs:
         sudo mkdir -p $BUILD_DIR
         sudo chown -R $USER:$USER $BUILD_DIR
         echo "目录权限设置完成"
-        ls -la /mnt/
 
     - name: 5_克隆源码
       run: |
@@ -83,7 +95,7 @@ jobs:
         echo "feeds 安装完成，当前目录大小:"
         du -sh .
 
-    - name: 7_生成设备配置
+    - name: 7_动态生成设备配置
       run: |
         cd $BUILD_DIR
         
@@ -98,25 +110,19 @@ jobs:
             ;;
         esac
         
-        echo "生成 ${{ github.event.inputs.device_name }} 配置..."
+        echo "选择的配置类型: ${{ github.event.inputs.config_type }}"
+        echo "额外插件: ${{ github.event.inputs.extra_packages }}"
         
-        # 生成基础配置
-        echo "CONFIG_TARGET_${PLATFORM}=y" > .config
-        echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
-        echo "CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_FULL_NAME}=y" >> .config
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        echo "CONFIG_PACKAGE_luci=y" >> .config
-        echo "CONFIG_PACKAGE_luci-base=y" >> .config
-        echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
-        echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-accesscontrol is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-ddns is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-bandwidthd is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> .config
+        chmod +x $CONFIG_DIR/scripts/generate_config.sh
+        $CONFIG_DIR/scripts/generate_config.sh \
+          "${{ github.event.inputs.config_type }}" \
+          "$PLATFORM" \
+          "$DEVICE_FULL_NAME" \
+          "${{ github.event.inputs.extra_packages }}" \
+          "$BUILD_DIR"
         
-        # 复制配置到配置目录
         mkdir -p $CONFIG_DIR/configs/
-        cp .config $CONFIG_DIR/configs/${{ github.event.inputs.device_name }}_config
+        cp .config $CONFIG_DIR/configs/${{ github.event.inputs.device_name }}_final_config
 
     - name: 8_使用defconfig避免menuconfig
       run: |
@@ -135,114 +141,49 @@ jobs:
 
     - name: 10_编译前空间检查
       run: |
-        echo "=== 编译前空间检查 ==="
-        df -h /mnt
-        cd $BUILD_DIR
-        echo "构建目录当前大小:"
-        du -sh .
+        echo "=== 编译前磁盘空间检查 ==="
+        df -h
         
-        # 再次确认有足够空间进行编译
+        if [ ! -d "/mnt" ]; then
+          echo "错误: /mnt 目录不存在!"
+          exit 1
+        fi
+        
         AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
         AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-        echo "编译前 /mnt 剩余空间: ${AVAILABLE_GB}G"
+        echo "/mnt 可用空间: ${AVAILABLE_GB}G"
         
         if [ $AVAILABLE_GB -lt 30 ]; then
-          echo "警告: /mnt 剩余空间不足30G，当前只有 ${AVAILABLE_GB}G"
+          echo "警告: /mnt 空间不足30G，当前只有 ${AVAILABLE_GB}G"
           echo "编译可能会因空间不足而失败"
         else
           echo "空间充足，可以开始编译"
         fi
+        
+        cd $BUILD_DIR
+        echo "构建目录当前大小:"
+        du -sh .
 
     - name: 11_编译固件
       run: |
         cd $BUILD_DIR
         echo "开始编译固件..."
         export TERM=linux
-        make -j$(nproc) V=s 2>&1 | tee build.log || echo "编译过程完成"
+        make -j$(nproc) V=s 2>&1 | tee build.log || echo "编译过程完成（可能有非关键错误）"
         echo "编译完成，最终目录大小:"
         du -sh .
 
-    - name: 12_详细错误分析和过滤
+    - name: 12_运行错误分析脚本
       run: |
         cd $BUILD_DIR
-        echo "=== 详细错误分析 ===" > error_analysis.log
-        echo "开始收集和分析错误日志..." >> error_analysis.log
-        
-        # 创建错误摘要文件
-        touch error_summary.log
-        
-        # 详细错误过滤和分析
-        echo "1. 严重错误 (Failed):" >> error_analysis.log
-        grep -E -i "failed" build.log | head -20 >> error_analysis.log
-        echo "" >> error_analysis.log
-        
-        echo "2. 编译错误 (error:):" >> error_analysis.log
-        grep -E "error:" build.log | head -20 >> error_analysis.log
-        echo "" >> error_analysis.log
-        
-        echo "3. 退出错误 (error 1/error 2):" >> error_analysis.log
-        grep -E "error 1|error 2" build.log | head -10 >> error_analysis.log
-        echo "" >> error_analysis.log
-        
-        echo "4. 冒号错误 (:error):" >> error_analysis.log
-        grep -E ":error" build.log | head -10 >> error_analysis.log
-        echo "" >> error_analysis.log
-        
-        echo "5. 文件缺失错误:" >> error_analysis.log
-        grep -E "No such file or directory" build.log | head -15 >> error_analysis.log
-        echo "" >> error_analysis.log
-        
-        echo "6. 管道错误:" >> error_analysis.log
-        grep -E "Broken pipe" build.log >> error_analysis.log
-        echo "" >> error_analysis.log
-        
-        echo "7. 缺失依赖错误:" >> error_analysis.log
-        grep -E -i "missing" build.log | head -15 >> error_analysis.log
-        echo "" >> error_analysis.log
-        
-        echo "8. 目标构建失败:" >> error_analysis.log
-        grep -E "recipe for target.*failed" build.log | head -10 >> error_analysis.log
-        echo "" >> error_analysis.log
-        
-        echo "9. 未定义引用错误:" >> error_analysis.log
-        grep -E "undefined reference" build.log | head -10 >> error_analysis.log
-        echo "" >> error_analysis.log
-        
-        echo "10. 找不到命令错误:" >> error_analysis.log
-        grep -E "command not found" build.log | head -10 >> error_analysis.log
-        echo "" >> error_analysis.log
-        
-        # 错误原因分析
-        echo "=== 错误原因初步分析 ===" >> error_analysis.log
-        if grep -q "No such file or directory" build.log; then
-          echo "- 文件缺失: 可能缺少依赖包或源码文件不完整" >> error_analysis.log
-        fi
-        
-        if grep -q "undefined reference" build.log; then
-          echo "- 链接错误: 库文件缺失或链接顺序问题" >> error_analysis.log
-        fi
-        
-        if grep -q "command not found" build.log; then
-          echo "- 命令缺失: 编译工具链不完整" >> error_analysis.log
-        fi
-        
-        if grep -q "recipe for target.*failed" build.log; then
-          echo "- 目标构建失败: 具体软件包编译失败" >> error_analysis.log
-        fi
-        
-        # 合并所有错误到摘要文件
-        grep -E -i "failed|error|No such file or directory|Broken pipe|missing|undefined reference|command not found|recipe for target.*failed" build.log > error_summary.log
-        
-        echo "错误分析完成"
-        echo "=== 错误摘要 ==="
-        cat error_summary.log | head -30
+        chmod +x $CONFIG_DIR/scripts/error_analysis.sh
+        $CONFIG_DIR/scripts/error_analysis.sh $BUILD_DIR
 
     - name: 13_固件汇总分析报告
       run: |
         cd $BUILD_DIR
         echo "=== 固件汇总分析报告 ===" > firmware_report.log
         
-        # 检查bin目录是否存在
         if [ ! -d "bin" ]; then
           echo "错误: bin目录不存在，构建可能失败" >> firmware_report.log
           echo "构建状态: 失败" >> firmware_report.log
@@ -250,52 +191,76 @@ jobs:
         fi
         
         echo "构建状态: 成功" >> firmware_report.log
+        echo "设备: ${{ github.event.inputs.device_name }}" >> firmware_report.log
+        echo "平台: ipq40xx" >> firmware_report.log
+        echo "配置类型: ${{ github.event.inputs.config_type }}" >> firmware_report.log
+        echo "额外插件: ${{ github.event.inputs.extra_packages }}" >> firmware_report.log
         echo "" >> firmware_report.log
         
-        # 查找所有固件文件
         echo "=== 所有固件文件 ===" >> firmware_report.log
         find bin -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" \) 2>/dev/null | sort >> firmware_report.log
         echo "" >> firmware_report.log
         
-        # 分析升级镜像 (sysupgrade)
         echo "=== 升级镜像 (sysupgrade) ===" >> firmware_report.log
+        UPGRADE_COUNT=0
         find bin -type f -name "*sysupgrade*" 2>/dev/null | while read file; do
+          UPGRADE_COUNT=$((UPGRADE_COUNT+1))
           echo "文件: $file" >> firmware_report.log
           echo "大小: $(du -h "$file" | cut -f1)" >> firmware_report.log
           echo "MD5: $(md5sum "$file" | cut -d' ' -f1)" >> firmware_report.log
           echo "" >> firmware_report.log
         done
         
-        # 分析工厂镜像 (factory)
-        echo "=== 工厂镜像 (factory) ===" >> firmware_report.log
-        find bin -type f -name "*factory*" 2>/dev/null | while read file; do
-          echo "文件: $file" >> firmware_report.log
-          echo "大小: $(du -h "$file" | cut -f1)" >> firmware_report.log
-          echo "MD5: $(md5sum "$file" | cut -d' ' -f1)" >> firmware_report.log
-          echo "" >> firmware_report.log
-        done
-        
-        # 统计信息
-        echo "=== 构建统计 ===" >> firmware_report.log
-        TOTAL_FILES=$(find bin -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" \) 2>/dev/null | wc -l)
-        UPGRADE_FILES=$(find bin -type f -name "*sysupgrade*" 2>/dev/null | wc -l)
-        FACTORY_FILES=$(find bin -type f -name "*factory*" 2>/dev/null | wc -l)
-        
-        echo "总固件文件数: $TOTAL_FILES" >> firmware_report.log
-        echo "升级镜像数: $UPGRADE_FILES" >> firmware_report.log
-        echo "工厂镜像数: $FACTORY_FILES" >> firmware_report.log
+        if [ $UPGRADE_COUNT -eq 0 ]; then
+          echo "未找到升级镜像" >> firmware_report.log
+        fi
         echo "" >> firmware_report.log
         
-        # 目录结构
-        echo "=== 目标目录结构 ===" >> firmware_report.log
-        find bin/targets -type d 2>/dev/null | head -20 >> firmware_report.log
+        echo "=== 工厂镜像 (factory) ===" >> firmware_report.log
+        FACTORY_COUNT=0
+        find bin -type f -name "*factory*" 2>/dev/null | while read file; do
+          FACTORY_COUNT=$((FACTORY_COUNT+1))
+          echo "文件: $file" >> firmware_report.log
+          echo "大小: $(du -h "$file" | cut -f1)" >> firmware_report.log
+          echo "MD5: $(md5sum "$file" | cut -d' ' -f1)" >> firmware_report.log
+          echo "" >> firmware_report.log
+        done
+        
+        if [ $FACTORY_COUNT -eq 0 ]; then
+          echo "未找到工厂镜像" >> firmware_report.log
+        fi
+        echo "" >> firmware_report.log
+        
+        TOTAL_FILES=$(find bin -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" \) 2>/dev/null | wc -l)
+        
+        echo "=== 构建统计 ===" >> firmware_report.log
+        echo "总固件文件数: $TOTAL_FILES" >> firmware_report.log
+        echo "升级镜像数: $UPGRADE_COUNT" >> firmware_report.log
+        echo "工厂镜像数: $FACTORY_COUNT" >> firmware_report.log
+        echo "" >> firmware_report.log
+        
+        echo "=== 固件质量评估 ===" >> firmware_report.log
+        if [ $TOTAL_FILES -gt 0 ]; then
+          echo "✓ 固件生成成功" >> firmware_report.log
+          if [ $UPGRADE_COUNT -gt 0 ]; then
+            echo "✓ 包含升级镜像" >> firmware_report.log
+          else
+            echo "✗ 缺少升级镜像" >> firmware_report.log
+          fi
+          if [ $FACTORY_COUNT -gt 0 ]; then
+            echo "✓ 包含工厂镜像" >> firmware_report.log
+          else
+            echo "⚠ 缺少工厂镜像（可能不需要）" >> firmware_report.log
+          fi
+        else
+          echo "✗ 固件生成失败" >> firmware_report.log
+        fi
         
         echo "固件分析报告生成完成"
-        cat firmware_report.log
 
-    - name: 14_最终空间使用报告
+    - name: 14_最终空间检查
       run: |
-        echo "=== 最终空间使用报告 ==="
+        echo "=== 最终空间使用情况 ==="
         df -h /mnt
         cd $BUILD_DIR
         echo "构建目录最终大小:"
@@ -306,7 +271,7 @@ jobs:
     - name: 15_上传编译产物
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-${{ github.event.inputs.device_name }}
+        name: firmware-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
         path: |
           ${{ env.BUILD_DIR }}/bin/
           ${{ env.BUILD_DIR }}/error_analysis.log
@@ -318,6 +283,6 @@ jobs:
     - name: 16_上传配置文件
       uses: actions/upload-artifact@v4
       with:
-        name: config-${{ github.event.inputs.device_name }}
-        path: ${{ env.CONFIG_DIR }}/configs/${{ github.event.inputs.device_name }}_config
+        name: config-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
+        path: ${{ env.CONFIG_DIR }}/configs/${{ github.event.inputs.device_name }}_final_config
         retention-days: 30
