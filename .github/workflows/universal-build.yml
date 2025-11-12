@@ -774,6 +774,23 @@ jobs:
           echo "=== 🎯 修复配置生成 ===" | tee -a "$MAIN_LOG"
           cd /mnt/source
           
+          apply_custom_plugins() {
+            echo "🔧 应用自定义插件配置..." | tee -a "$MAIN_LOG"
+            PLUGIN_FILES=("${{ env.CONFIG_REPO_DIR }}/firmware-config/custom-plugins.txt" "${{ env.CONFIG_REPO_DIR }}/firmware-config/plugins.txt")
+            for plugin_file in "${PLUGIN_FILES[@]}"; do
+              if [ -f "$plugin_file" ]; then
+                echo "📦 应用插件文件: $plugin_file" | tee -a "$MAIN_LOG"
+                while IFS= read -r line || [ -n "$line" ]; do
+                  line=$(echo "$line" | sed 's/#.*//' | tr -d '[:space:]')
+                  if [ -n "$line" ]; then
+                    echo "CONFIG_PACKAGE_${line}=y" >> .config
+                    echo "  - 启用: $line" | tee -a "$MAIN_LOG"
+                  fi
+                done < "$plugin_file"
+              fi
+            done
+          }
+          
           if [ "${{ env.BUILD_AC42U }}" = "true" ]; then
             echo "🎯 为华硕RT-AC42U生成配置..." | tee -a "$MAIN_LOG"
             rm -f .config .config.old
@@ -1188,13 +1205,13 @@ jobs:
           if [ "${{ env.BUILD_STATUS }}" = "success" ]; then
             echo "## 🎉 构建成功" >> "$ANALYSIS_REPORT"
             echo "- 状态: 成功完成" >> "$ANALYSIS_REPORT"
-            echo "- 固件数量: ${{ env.FIRMWARE_COUNT || 0 }}" >> "$ANALYSIS_REPORT"
+            echo "- 固件数量: ${{ env.ARTIFACT_COUNT || 0 }}" >> "$ANALYSIS_REPORT"
             echo "- 成功设备数: ${{ env.SUCCESS_COUNT || 0 }}" >> "$ANALYSIS_REPORT"
           else
             echo "## ❌ 构建失败" >> "$ANALYSIS_REPORT"
             echo "- 状态: 构建失败" >> "$ANALYSIS_REPORT"
             echo "- 成功设备数: ${{ env.SUCCESS_COUNT || 0 }}" >> "$ANALYSIS_REPORT"
-            echo "- 总设备数: $BUILD_COUNT" >> "$ANALYSIS_REPORT"
+            echo "- 总设备数: ${{ env.BUILD_COUNT || 0 }}" >> "$ANALYSIS_REPORT"
           fi
           echo "" >> "$ANALYSIS_REPORT"
           echo "## 🔧 构建环境信息" >> "$ANALYSIS_REPORT"
