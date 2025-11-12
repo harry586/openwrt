@@ -1,4 +1,4 @@
-name: Build Firmware
+name: 固件编译工作流
 
 on:
   workflow_dispatch:
@@ -10,41 +10,44 @@ on:
         type: string
 
 env:
-  BUILD_DIR: /mnt/openwrt-build
-  CONFIG_DIR: firmware-config
+  WORKSPACE: ${{ github.workspace }}
+  BUILD_DIR: ${{ github.workspace }}/openwrt-build
+  CONFIG_DIR: ${{ github.workspace }}/firmware-config
 
 jobs:
-  build:
+  构建固件:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Check disk space
+    - name: 1_检查磁盘空间
       run: |
         echo "=== 磁盘空间检查 ==="
         df -h
-        echo "构建目录: ${{ env.BUILD_DIR }}"
-        if [ -d "${{ env.BUILD_DIR }}" ]; then
+        echo "工作空间: ${{ github.workspace }}"
+        echo "构建目录: $BUILD_DIR"
+        if [ -d "$BUILD_DIR" ]; then
           echo "构建目录已存在，检查其大小:"
-          du -sh ${{ env.BUILD_DIR }} || true
+          du -sh $BUILD_DIR || true
         fi
 
-    - name: Checkout repository
+    - name: 2_检出代码仓库
       uses: actions/checkout@v4
 
-    - name: Setup build environment
+    - name: 3_设置编译环境
       run: |
         echo "开始安装编译环境..."
-        apt-get update
-        apt-get -y install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev lib32gcc1 libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib linux-libc-dev:i386 curl
+        sudo apt-get update
+        sudo apt-get -y install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev lib32gcc1 libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib linux-libc-dev:i386 curl
+        echo "编译环境安装完成"
 
-    - name: Create build directory
+    - name: 4_创建构建目录
       run: |
         echo "创建构建目录..."
         mkdir -p $BUILD_DIR
         echo "构建目录创建完成: $BUILD_DIR"
         df -h $BUILD_DIR
 
-    - name: Clone ImmortalWrt source
+    - name: 5_克隆源码
       run: |
         cd $BUILD_DIR
         echo "开始克隆 ImmortalWrt 源码..."
@@ -53,7 +56,7 @@ jobs:
         echo "源码克隆完成，当前目录大小:"
         du -sh .
 
-    - name: Update and install feeds
+    - name: 6_更新安装feeds
       run: |
         cd $BUILD_DIR
         echo "开始更新和安装 feeds..."
@@ -62,7 +65,7 @@ jobs:
         echo "feeds 安装完成，当前目录大小:"
         du -sh .
 
-    - name: Generate device configuration
+    - name: 7_生成设备配置
       run: |
         cd $BUILD_DIR
         
@@ -98,11 +101,11 @@ jobs:
         echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> .config
         
         # 复制配置到配置目录
-        mkdir -p ../$CONFIG_DIR/configs/
-        cp .config ../$CONFIG_DIR/configs/${{ github.event.inputs.device_name }}_config
+        mkdir -p $CONFIG_DIR/configs/
+        cp .config $CONFIG_DIR/configs/${{ github.event.inputs.device_name }}_config
         echo "配置生成完成"
 
-    - name: Download packages
+    - name: 8_下载软件包
       run: |
         cd $BUILD_DIR
         echo "开始下载软件包..."
@@ -110,14 +113,14 @@ jobs:
         echo "下载完成，当前目录大小:"
         du -sh .
 
-    - name: Check space before build
+    - name: 9_构建前空间检查
       run: |
         echo "=== 构建前空间检查 ==="
         df -h
         cd $BUILD_DIR
         du -sh .
 
-    - name: Build firmware
+    - name: 10_编译固件
       run: |
         cd $BUILD_DIR
         echo "开始编译固件..."
@@ -125,7 +128,18 @@ jobs:
         echo "编译完成，最终目录大小:"
         du -sh .
 
-    - name: Collect and filter logs
+    - name: 11_查找编译输出目录
+      run: |
+        cd $BUILD_DIR
+        echo "=== 查找编译输出文件 ==="
+        # 查找所有可能的固件文件
+        find . -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null | head -20
+        echo "=== bin 目录结构 ==="
+        find bin -type d 2>/dev/null | head -20
+        echo "=== 目标平台目录 ==="
+        find bin/targets -type d 2>/dev/null | head -20
+
+    - name: 12_收集过滤日志
       run: |
         cd $BUILD_DIR
         
@@ -144,27 +158,27 @@ jobs:
         echo "=== 错误摘要 ==="
         cat error_summary.log
 
-    - name: Final space check
+    - name: 13_最终空间检查
       run: |
         echo "=== 最终空间使用情况 ==="
         df -h
         cd $BUILD_DIR
         echo "构建目录总大小:"
         du -sh .
-        echo "bin/targets/ 目录大小:"
-        du -sh bin/targets/ || echo "bin/targets/ 目录不存在"
+        echo "bin 目录大小:"
+        du -sh bin/ || echo "bin 目录不存在"
 
-    - name: Upload build artifacts
+    - name: 14_上传编译产物
       uses: actions/upload-artifact@v4
       with:
         name: firmware-${{ github.event.inputs.device_name }}
         path: |
-          ${{ env.BUILD_DIR }}/bin/targets/
+          ${{ env.BUILD_DIR }}/bin/
           ${{ env.BUILD_DIR }}/error_summary.log
           ${{ env.BUILD_DIR }}/build.log
         retention-days: 7
 
-    - name: Upload configuration
+    - name: 15_上传配置文件
       uses: actions/upload-artifact@v4
       with:
         name: config-${{ github.event.inputs.device_name }}
