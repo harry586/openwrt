@@ -23,23 +23,19 @@ jobs:
       run: |
         echo "=== 检查磁盘空间 ==="
         df -h
-        
         echo "检查 /mnt 目录..."
         if [ ! -d "/mnt" ]; then
           echo "错误: /mnt 目录不存在!"
           exit 1
         fi
-        
         echo "检查 /mnt 空间大小..."
         AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
         AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
         echo "/mnt 可用空间: ${AVAILABLE_GB}G"
-        
         if [ $AVAILABLE_GB -lt 50 ]; then
           echo "错误: /mnt 空间不足50G，当前只有 ${AVAILABLE_GB}G"
           exit 1
         fi
-        
         echo "空间检查通过: /mnt 有 ${AVAILABLE_GB}G 可用空间"
 
     - name: 2_检出代码仓库
@@ -52,6 +48,8 @@ jobs:
         sudo dpkg --add-architecture i386
         sudo apt-get update
         sudo apt-get -y install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib curl lib32gcc-s1 libc6-dev-x32 linux-libc-dev
+        echo "安装终端支持包..."
+        sudo apt-get install -y ncurses-term
 
     - name: 4_创建构建目录
       run: |
@@ -73,7 +71,7 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 7_生成设备配置
+    - name: 7_生成完整设备配置
       run: |
         cd $BUILD_DIR
         
@@ -88,50 +86,120 @@ jobs:
             ;;
         esac
         
-        echo "生成 ${{ github.event.inputs.device_name }} 配置..."
+        echo "生成完整的 ${{ github.event.inputs.device_name }} 配置..."
+        
+        # 使用多个echo命令创建配置文件
         echo "CONFIG_TARGET_${PLATFORM}=y" > .config
         echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
         echo "CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_FULL_NAME}=y" >> .config
+        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
         echo "CONFIG_PACKAGE_luci=y" >> .config
         echo "CONFIG_PACKAGE_luci-base=y" >> .config
         echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
         echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
+        echo "CONFIG_PACKAGE_base-files=y" >> .config
+        echo "CONFIG_PACKAGE_busybox=y" >> .config
+        echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
+        echo "CONFIG_PACKAGE_dropbear=y" >> .config
+        echo "CONFIG_PACKAGE_firewall=y" >> .config
+        echo "CONFIG_PACKAGE_fstools=y" >> .config
+        echo "CONFIG_PACKAGE_ip6tables=y" >> .config
+        echo "CONFIG_PACKAGE_iptables=y" >> .config
+        echo "CONFIG_PACKAGE_iw=y" >> .config
+        echo "CONFIG_PACKAGE_jshn=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-cfg80211=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-gpio-button-hotplug=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-conntrack=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-core=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-nat=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-leds-gpio=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-lib-crc-ccitt=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-mac80211=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-conntrack=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-conntrack6=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-flow=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-ipt=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-nat=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-reject6=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nfnetlink=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ppp=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-pppoe=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-pppox=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-slhc=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-core=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+        echo "CONFIG_PACKAGE_libblobmsg-json=y" >> .config
+        echo "CONFIG_PACKAGE_libc=y" >> .config
+        echo "CONFIG_PACKAGE_libgcc=y" >> .config
+        echo "CONFIG_PACKAGE_libiwinfo=y" >> .config
+        echo "CONFIG_PACKAGE_libiwinfo-lua=y" >> .config
+        echo "CONFIG_PACKAGE_libjson-c=y" >> .config
+        echo "CONFIG_PACKAGE_liblua=y" >> .config
+        echo "CONFIG_PACKAGE_libubox=y" >> .config
+        echo "CONFIG_PACKAGE_libubus=y" >> .config
+        echo "CONFIG_PACKAGE_libubus-lua=y" >> .config
+        echo "CONFIG_PACKAGE_libuci=y" >> .config
+        echo "CONFIG_PACKAGE_libuci-lua=y" >> .config
+        echo "CONFIG_PACKAGE_libuclient=y" >> .config
+        echo "CONFIG_PACKAGE_libxtables=y" >> .config
+        echo "CONFIG_PACKAGE_logd=y" >> .config
+        echo "CONFIG_PACKAGE_lua=y" >> .config
+        echo "CONFIG_PACKAGE_mtd=y" >> .config
+        echo "CONFIG_PACKAGE_netifd=y" >> .config
+        echo "CONFIG_PACKAGE_odhcp6c=y" >> .config
+        echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
+        echo "CONFIG_PACKAGE_opkg=y" >> .config
+        echo "CONFIG_PACKAGE_ppp=y" >> .config
+        echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config
+        echo "CONFIG_PACKAGE_procd=y" >> .config
+        echo "CONFIG_PACKAGE_rpcd=y" >> .config
+        echo "CONFIG_PACKAGE_rpcd-mod-file=y" >> .config
+        echo "CONFIG_PACKAGE_rpcd-mod-iwinfo=y" >> .config
+        echo "CONFIG_PACKAGE_rpcd-mod-luci=y" >> .config
+        echo "CONFIG_PACKAGE_rpcd-mod-rrdns=y" >> .config
+        echo "CONFIG_PACKAGE_swconfig=y" >> .config
+        echo "CONFIG_PACKAGE_ubox=y" >> .config
+        echo "CONFIG_PACKAGE_ubus=y" >> .config
+        echo "CONFIG_PACKAGE_ubusd=y" >> .config
+        echo "CONFIG_PACKAGE_uci=y" >> .config
+        echo "CONFIG_PACKAGE_uclient-fetch=y" >> .config
+        echo "CONFIG_PACKAGE_urandom-seed=y" >> .config
+        echo "CONFIG_PACKAGE_urngd=y" >> .config
+        echo "CONFIG_PACKAGE_wpad-basic=y" >> .config
         echo "# CONFIG_PACKAGE_luci-app-accesscontrol is not set" >> .config
         echo "# CONFIG_PACKAGE_luci-app-ddns is not set" >> .config
         echo "# CONFIG_PACKAGE_luci-app-bandwidthd is not set" >> .config
         echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> .config
+        echo "CONFIG_BUSYBOX_CUSTOM=y" >> .config
+        echo "CONFIG_DEVEL=y" >> .config
+        echo "CONFIG_SDK=y" >> .config
+        echo "CONFIG_BUILD_LOG=y" >> .config
         
         mkdir -p $CONFIG_DIR/configs/
         cp .config $CONFIG_DIR/configs/${{ github.event.inputs.device_name }}_config
 
-    - name: 8_更新配置避免menuconfig
-      run: |
-        cd $BUILD_DIR
-        echo "更新配置以避免menuconfig调用..."
-        # 使用 olddefconfig 来更新配置，接受所有默认值
-        make olddefconfig
-
-    - name: 9_下载软件包
+    - name: 8_下载软件包
       run: |
         cd $BUILD_DIR
         echo "下载软件包..."
         make -j8 download V=s
 
-    - name: 10_构建前空间检查
+    - name: 9_构建前空间检查
       run: |
         echo "构建前空间检查:"
         df -h /mnt
 
-    - name: 11_编译固件
+    - name: 10_编译固件
       run: |
         cd $BUILD_DIR
         echo "开始编译固件..."
-        # 设置终端环境变量
         export TERM=linux
-        # 直接编译，跳过任何交互式配置步骤
         make -j$(nproc) V=s 2>&1 | tee build.log
 
-    - name: 12_收集过滤日志
+    - name: 11_收集过滤日志
       run: |
         cd $BUILD_DIR
         echo "收集错误日志..."
@@ -144,7 +212,7 @@ jobs:
         echo "错误摘要:"
         cat error_summary.log
 
-    - name: 13_上传编译产物
+    - name: 12_上传编译产物
       uses: actions/upload-artifact@v4
       with:
         name: firmware-${{ github.event.inputs.device_name }}
@@ -154,7 +222,7 @@ jobs:
           ${{ env.BUILD_DIR }}/build.log
         retention-days: 7
 
-    - name: 14_上传配置文件
+    - name: 13_上传配置文件
       uses: actions/upload-artifact@v4
       with:
         name: config-${{ github.event.inputs.device_name }}
