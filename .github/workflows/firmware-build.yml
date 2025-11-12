@@ -192,17 +192,27 @@ jobs:
         echo "构建前空间检查:"
         df -h /mnt
 
-    - name: 10_编译固件
+    - name: 10_直接编译跳过配置检查
       run: |
         cd $BUILD_DIR
-        echo "开始编译固件..."
-        # 设置环境变量以避免交互式配置
+        echo "直接开始编译，跳过配置检查..."
+        # 设置环境变量
         export FORCE_UNSAFE_CONFIGURE=1
         export TERM=linux
-        # 直接编译，跳过配置检查
-        make -j$(nproc) V=s 2>&1 | tee build.log || echo "编译过程完成（可能有错误）"
+        # 直接调用编译目标，跳过任何配置检查
+        make target/linux/compile -j$(nproc) V=s 2>&1 | tee build_stage1.log
+        make package/compile -j$(nproc) V=s 2>&1 | tee build_stage2.log
+        make target/install -j$(nproc) V=s 2>&1 | tee build_stage3.log
+        echo "编译过程完成"
 
-    - name: 11_收集过滤日志
+    - name: 11_合并日志文件
+      run: |
+        cd $BUILD_DIR
+        echo "合并日志文件..."
+        cat build_stage1.log build_stage2.log build_stage3.log > build.log
+        rm -f build_stage1.log build_stage2.log build_stage3.log
+
+    - name: 12_收集过滤日志
       run: |
         cd $BUILD_DIR
         echo "收集错误日志..."
@@ -215,7 +225,7 @@ jobs:
         echo "错误摘要:"
         cat error_summary.log
 
-    - name: 12_上传编译产物
+    - name: 13_上传编译产物
       uses: actions/upload-artifact@v4
       with:
         name: firmware-${{ github.event.inputs.device_name }}
@@ -225,7 +235,7 @@ jobs:
           ${{ env.BUILD_DIR }}/build.log
         retention-days: 7
 
-    - name: 13_上传配置文件
+    - name: 14_上传配置文件
       uses: actions/upload-artifact@v4
       with:
         name: config-${{ github.event.inputs.device_name }}
