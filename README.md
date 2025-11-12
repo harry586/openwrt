@@ -21,4 +21,21 @@
 │           ├── 01-system-optimization.sh  # 系统优化脚本
 │           └── xx.sh                   # ✅ 您的自定义脚本放这里
 └── README.md                           # 项目说明文档
+
+仓库根目录/
+├── .github/workflows/
+│   └── firmware-build.yml
+├── firmware-config/
+│   ├── configs/
+│   │   └── base_universal.config
+│   ├── modules/
+│   │   ├── storage.config
+│   │   ├── network_extra.config
+│   │   ├── services.config
+│   │   └── management.config
+│   └── scripts/
+│       ├── generate_config.sh
+│       └── error_analysis.sh
+└── README.md
+
 ```
