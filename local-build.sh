@@ -6,11 +6,19 @@ set -e
 DEVICE_NAME=${1:-ac42u}
 BUILD_DIR="/mnt/openwrt-build"
 CONFIG_DIR="./firmware-config"
+CONFIG_FILE="$CONFIG_DIR/configs/${DEVICE_NAME}_config"
 
 echo "=== 开始构建固件 ==="
 echo "设备: $DEVICE_NAME"
 echo "构建目录: $BUILD_DIR"
 echo "配置目录: $CONFIG_DIR"
+
+# 检查配置文件是否存在
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "错误: 配置文件 $CONFIG_FILE 不存在!"
+    echo "请先运行GitHub工作流生成配置，或检查设备名称是否正确。"
+    exit 1
+fi
 
 # 检查磁盘空间
 echo "=== 检查磁盘空间 ==="
@@ -31,13 +39,6 @@ fi
 
 echo "空间检查通过"
 
-# 安装编译环境
-echo "=== 安装编译环境 ==="
-sudo apt-get update
-sudo dpkg --add-architecture i386
-sudo apt-get update
-sudo apt-get -y install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib curl lib32gcc-s1 libc6-dev-x32 linux-libc-dev
-
 # 创建构建目录
 echo "=== 创建构建目录 ==="
 sudo mkdir -p $BUILD_DIR
@@ -51,6 +52,8 @@ if [ ! -d ".git" ]; then
     git checkout openwrt-21.02
 else
     echo "源码已存在，跳过克隆"
+    # 确保源码是最新的
+    git pull
 fi
 
 # 更新安装feeds
@@ -58,38 +61,9 @@ echo "=== 更新安装feeds ==="
 ./scripts/feeds update -a
 ./scripts/feeds install -a
 
-# 生成设备配置
-echo "=== 生成设备配置 ==="
-case "$DEVICE_NAME" in
-    "ac42u")
-        PLATFORM="ipq40xx"
-        DEVICE_FULL_NAME="asus_rt-ac42u"
-        ;;
-    *)
-        echo "未知设备: $DEVICE_NAME"
-        exit 1
-        ;;
-esac
-
-echo "为设备 $DEVICE_NAME 生成配置，平台: $PLATFORM"
-
-# 生成基础配置
-echo "CONFIG_TARGET_${PLATFORM}=y" > .config
-echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
-echo "CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_FULL_NAME}=y" >> .config
-echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-echo "CONFIG_PACKAGE_luci=y" >> .config
-echo "CONFIG_PACKAGE_luci-base=y" >> .config
-echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
-echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
-echo "# CONFIG_PACKAGE_luci-app-accesscontrol is not set" >> .config
-echo "# CONFIG_PACKAGE_luci-app-ddns is not set" >> .config
-echo "# CONFIG_PACKAGE_luci-app-bandwidthd is not set" >> .config
-echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> .config
-
-# 复制配置到配置目录
-mkdir -p $CONFIG_DIR/configs/
-cp .config $CONFIG_DIR/configs/${DEVICE_NAME}_config
+# 使用已有的配置文件
+echo "=== 使用已有的配置文件 ==="
+cp $CONFIG_FILE .config
 
 # 下载软件包
 echo "=== 下载软件包 ==="
@@ -100,3 +74,4 @@ echo "=== 开始编译固件 ==="
 make -j$(nproc) V=s 2>&1 | tee build.log
 
 echo "=== 构建完成 ==="
+echo "固件文件位置: $BUILD_DIR/bin/targets/"
