@@ -11,7 +11,7 @@ on:
 
 env:
   WORKSPACE: ${{ github.workspace }}
-  BUILD_DIR: ${{ github.workspace }}/openwrt-build
+  BUILD_DIR: /mnt/openwrt-build
   CONFIG_DIR: ${{ github.workspace }}/firmware-config
 
 jobs:
@@ -21,66 +21,62 @@ jobs:
     steps:
     - name: 1_检查磁盘空间
       run: |
-        echo "=== 磁盘空间检查 ==="
+        echo "=== 检查磁盘空间 ==="
         df -h
-        echo "工作空间: ${{ github.workspace }}"
-        echo "构建目录: $BUILD_DIR"
-        if [ -d "$BUILD_DIR" ]; then
-          echo "构建目录已存在，检查其大小:"
-          du -sh $BUILD_DIR || true
+        
+        echo "检查 /mnt 目录..."
+        if [ ! -d "/mnt" ]; then
+          echo "错误: /mnt 目录不存在!"
+          exit 1
         fi
+        
+        echo "检查 /mnt 空间大小..."
+        AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
+        AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+        echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+        
+        if [ $AVAILABLE_GB -lt 50 ]; then
+          echo "错误: /mnt 空间不足50G，当前只有 ${AVAILABLE_GB}G"
+          exit 1
+        fi
+        
+        echo "空间检查通过: /mnt 有 ${AVAILABLE_GB}G 可用空间"
 
     - name: 2_检出代码仓库
       uses: actions/checkout@v4
 
     - name: 3_设置编译环境
       run: |
-        echo "开始安装编译环境..."
+        echo "安装编译环境..."
         sudo apt-get update
-        
-        # 添加 i386 架构支持
         sudo dpkg --add-architecture i386
         sudo apt-get update
-        
-        # 使用更新的包名
-        sudo apt-get -y install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib curl
-        
-        # 安装替代的包
-        sudo apt-get -y install lib32gcc-s1 libc6-dev-x32
-        sudo apt-get -y install linux-libc-dev
-        
-        echo "编译环境安装完成"
+        sudo apt-get -y install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib curl lib32gcc-s1 libc6-dev-x32 linux-libc-dev
 
     - name: 4_创建构建目录
       run: |
-        echo "创建构建目录..."
-        mkdir -p $BUILD_DIR
-        echo "构建目录创建完成: $BUILD_DIR"
-        df -h $BUILD_DIR
+        echo "创建构建目录: $BUILD_DIR"
+        sudo mkdir -p $BUILD_DIR
+        sudo chown -R $USER:$USER $BUILD_DIR
 
     - name: 5_克隆源码
       run: |
         cd $BUILD_DIR
-        echo "开始克隆 ImmortalWrt 源码..."
+        echo "克隆 ImmortalWrt 源码..."
         git clone https://github.com/immortalwrt/immortalwrt.git .
         git checkout openwrt-21.02
-        echo "源码克隆完成，当前目录大小:"
-        du -sh .
 
     - name: 6_更新安装feeds
       run: |
         cd $BUILD_DIR
-        echo "开始更新和安装 feeds..."
+        echo "更新安装 feeds..."
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-        echo "feeds 安装完成，当前目录大小:"
-        du -sh .
 
     - name: 7_生成设备配置
       run: |
         cd $BUILD_DIR
         
-        # 根据设备名确定芯片平台
         case "${{ github.event.inputs.device_name }}" in
           "ac42u")
             PLATFORM="ipq40xx"
@@ -92,94 +88,54 @@ jobs:
             ;;
         esac
         
-        echo "为设备 ${{ github.event.inputs.device_name }} 生成配置，平台: $PLATFORM"
-        
-        # 生成基础配置
+        echo "生成 ${{ github.event.inputs.device_name }} 配置..."
         echo "CONFIG_TARGET_${PLATFORM}=y" > .config
         echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
         echo "CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_FULL_NAME}=y" >> .config
-        
-        # 基础包配置
         echo "CONFIG_PACKAGE_luci=y" >> .config
         echo "CONFIG_PACKAGE_luci-base=y" >> .config
         echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
         echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
-        
-        # 禁用不需要的功能
         echo "# CONFIG_PACKAGE_luci-app-accesscontrol is not set" >> .config
         echo "# CONFIG_PACKAGE_luci-app-ddns is not set" >> .config
         echo "# CONFIG_PACKAGE_luci-app-bandwidthd is not set" >> .config
         echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> .config
         
-        # 复制配置到配置目录
         mkdir -p $CONFIG_DIR/configs/
         cp .config $CONFIG_DIR/configs/${{ github.event.inputs.device_name }}_config
-        echo "配置生成完成"
 
     - name: 8_下载软件包
       run: |
         cd $BUILD_DIR
-        echo "开始下载软件包..."
+        echo "下载软件包..."
         make -j8 download V=s
-        echo "下载完成，当前目录大小:"
-        du -sh .
 
     - name: 9_构建前空间检查
       run: |
-        echo "=== 构建前空间检查 ==="
-        df -h
-        cd $BUILD_DIR
-        du -sh .
+        echo "构建前空间检查:"
+        df -h /mnt
 
     - name: 10_编译固件
       run: |
         cd $BUILD_DIR
         echo "开始编译固件..."
+        export TERM=xterm
         make -j$(nproc) V=s 2>&1 | tee build.log
-        echo "编译完成，最终目录大小:"
-        du -sh .
 
-    - name: 11_查找编译输出目录
+    - name: 11_收集过滤日志
       run: |
         cd $BUILD_DIR
-        echo "=== 查找编译输出文件 ==="
-        # 查找所有可能的固件文件
-        find . -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null | head -20
-        echo "=== bin 目录结构 ==="
-        find bin -type d 2>/dev/null | head -20
-        echo "=== 目标平台目录 ==="
-        find bin/targets -type d 2>/dev/null | head -20
-
-    - name: 12_收集过滤日志
-      run: |
-        cd $BUILD_DIR
-        
-        echo "开始收集和过滤日志..."
-        # 创建日志汇总文件
+        echo "收集错误日志..."
         touch error_summary.log
-        
-        # 过滤各种错误和警告信息
         grep -E -i "failed|error" build.log >> error_summary.log || true
         grep -E "No such file or directory" build.log >> error_summary.log || true
         grep -E "Broken pipe" build.log >> error_summary.log || true
         grep -E -i "missing" build.log >> error_summary.log || true
         grep -E "recipe for target.*failed" build.log >> error_summary.log || true
-        
-        # 显示错误摘要
-        echo "=== 错误摘要 ==="
+        echo "错误摘要:"
         cat error_summary.log
 
-    - name: 13_最终空间检查
-      run: |
-        echo "=== 最终空间使用情况 ==="
-        df -h
-        cd $BUILD_DIR
-        echo "构建目录总大小:"
-        du -sh .
-        echo "bin 目录大小:"
-        du -sh bin/ || echo "bin 目录不存在"
-
-    - name: 14_上传编译产物
+    - name: 12_上传编译产物
       uses: actions/upload-artifact@v4
       with:
         name: firmware-${{ github.event.inputs.device_name }}
@@ -189,7 +145,7 @@ jobs:
           ${{ env.BUILD_DIR }}/build.log
         retention-days: 7
 
-    - name: 15_上传配置文件
+    - name: 13_上传配置文件
       uses: actions/upload-artifact@v4
       with:
         name: config-${{ github.event.inputs.device_name }}
