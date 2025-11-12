@@ -104,29 +104,34 @@ jobs:
         mkdir -p $CONFIG_DIR/configs/
         cp .config $CONFIG_DIR/configs/${{ github.event.inputs.device_name }}_config
 
-    - name: 8_下载软件包
+    - name: 8_更新配置避免menuconfig
+      run: |
+        cd $BUILD_DIR
+        echo "更新配置以避免menuconfig调用..."
+        # 使用 olddefconfig 来更新配置，接受所有默认值
+        make olddefconfig
+
+    - name: 9_下载软件包
       run: |
         cd $BUILD_DIR
         echo "下载软件包..."
         make -j8 download V=s
 
-    - name: 9_构建前空间检查
+    - name: 10_构建前空间检查
       run: |
         echo "构建前空间检查:"
         df -h /mnt
 
-    - name: 10_编译固件
+    - name: 11_编译固件
       run: |
         cd $BUILD_DIR
         echo "开始编译固件..."
-        # 设置终端环境变量以避免 "Error opening terminal: unknown" 错误
+        # 设置终端环境变量
         export TERM=linux
-        export TERMINFO=/etc/terminfo
-        # 使用 defconfig 而不是 menuconfig
-        make defconfig
+        # 直接编译，跳过任何交互式配置步骤
         make -j$(nproc) V=s 2>&1 | tee build.log
 
-    - name: 11_收集过滤日志
+    - name: 12_收集过滤日志
       run: |
         cd $BUILD_DIR
         echo "收集错误日志..."
@@ -139,7 +144,7 @@ jobs:
         echo "错误摘要:"
         cat error_summary.log
 
-    - name: 12_上传编译产物
+    - name: 13_上传编译产物
       uses: actions/upload-artifact@v4
       with:
         name: firmware-${{ github.event.inputs.device_name }}
@@ -149,7 +154,7 @@ jobs:
           ${{ env.BUILD_DIR }}/build.log
         retention-days: 7
 
-    - name: 13_上传配置文件
+    - name: 14_上传配置文件
       uses: actions/upload-artifact@v4
       with:
         name: config-${{ github.event.inputs.device_name }}
