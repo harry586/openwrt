@@ -37,7 +37,18 @@ jobs:
       run: |
         echo "开始安装编译环境..."
         sudo apt-get update
-        sudo apt-get -y install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev lib32gcc1 libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib linux-libc-dev:i386 curl
+        
+        # 添加 i386 架构支持
+        sudo dpkg --add-architecture i386
+        sudo apt-get update
+        
+        # 使用更新的包名
+        sudo apt-get -y install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib curl
+        
+        # 安装替代的包
+        sudo apt-get -y install lib32gcc-s1 libc6-dev-x32
+        sudo apt-get -y install linux-libc-dev
+        
         echo "编译环境安装完成"
 
     - name: 4_创建构建目录
