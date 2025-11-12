@@ -119,7 +119,11 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "开始编译固件..."
-        export TERM=xterm
+        # 设置终端环境变量以避免 "Error opening terminal: unknown" 错误
+        export TERM=linux
+        export TERMINFO=/etc/terminfo
+        # 使用 defconfig 而不是 menuconfig
+        make defconfig
         make -j$(nproc) V=s 2>&1 | tee build.log
 
     - name: 11_收集过滤日志
