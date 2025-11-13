@@ -64,27 +64,27 @@ echo "=== 详细错误分类 ===" >> error_analysis.log
 echo "开始收集和分析错误日志..." >> error_analysis.log
 
 echo "1. 严重错误 (Failed):" >> error_analysis.log
-grep -i "failed" build.log | head -10 >> error_analysis.log 2>/dev/null || echo "无严重错误" >> error_analysis.log
+grep -i "failed" build.log | head -10 2>/dev/null || echo "无严重错误" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "2. 编译错误 (error:):" >> error_analysis.log
-grep "error:" build.log | head -10 >> error_analysis.log 2>/dev/null || echo "无编译错误" >> error_analysis.log
+grep "error:" build.log | head -10 2>/dev/null || echo "无编译错误" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "3. 退出错误 (error 1/error 2):" >> error_analysis.log
-grep -E "error [12]" build.log | head -5 >> error_analysis.log 2>/dev/null || echo "无退出错误" >> error_analysis.log
+grep -E "error [12]" build.log | head -5 2>/dev/null || echo "无退出错误" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "4. 文件缺失错误:" >> error_analysis.log
-grep -i "no such file or directory" build.log | head -5 >> error_analysis.log 2>/dev/null || echo "无文件缺失错误" >> error_analysis.log
+grep -i "no such file or directory" build.log | head -5 2>/dev/null || echo "无文件缺失错误" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "5. 管道错误:" >> error_analysis.log
-grep -i "broken pipe" build.log | head -5 >> error_analysis.log 2>/dev/null || echo "无管道错误" >> error_analysis.log
+grep -i "broken pipe" build.log | head -5 2>/dev/null || echo "无管道错误" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "6. 缺失依赖错误:" >> error_analysis.log
-grep -i "missing" build.log | head -5 >> error_analysis.log 2>/dev/null || echo "无缺失依赖错误" >> error_analysis.log
+grep -i "missing" build.log | head -5 2>/dev/null || echo "无缺失依赖错误" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "错误分析完成" >> error_analysis.log
