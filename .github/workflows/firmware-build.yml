@@ -95,7 +95,44 @@ jobs:
         echo "feeds 安装完成，当前目录大小:"
         du -sh .
 
-    - name: 7_动态生成设备配置
+    - name: 7_验证设备支持
+      run: |
+        cd $BUILD_DIR
+        echo "=== 验证设备支持 ==="
+        
+        case "${{ github.event.inputs.device_name }}" in
+          "ac42u")
+            PLATFORM="ipq40xx"
+            DEVICE_FULL_NAME="asus_rt-ac42u"
+            TARGET_PROFILE="asus_rt-ac42u"
+            ;;
+          *)
+            echo "未知设备: ${{ github.event.inputs.device_name }}"
+            exit 1
+            ;;
+        esac
+        
+        echo "目标平台: $PLATFORM"
+        echo "目标设备: $TARGET_PROFILE"
+        
+        # 验证设备是否在支持列表中
+        echo "检查设备配置文件..."
+        if [ -f "target/linux/$PLATFORM/image/generic.mk" ]; then
+          echo "找到平台配置文件"
+          if grep -q "$TARGET_PROFILE" "target/linux/$PLATFORM/image/generic.mk"; then
+            echo "✅ 设备 $TARGET_PROFILE 在支持列表中"
+          else
+            echo "❌ 设备 $TARGET_PROFILE 不在支持列表中"
+            echo "可用设备列表:"
+            grep "define Device" "target/linux/$PLATFORM/image/generic.mk" | head -20
+            exit 1
+          fi
+        else
+          echo "❌ 找不到平台配置文件"
+          exit 1
+        fi
+
+    - name: 8_动态生成设备配置
       run: |
         cd $BUILD_DIR
         
@@ -132,7 +169,7 @@ jobs:
         $CONFIG_DIR/scripts/generate_config.sh \
           "${{ github.event.inputs.config_type }}" \
           "$PLATFORM" \
-          "$DEVICE_FULL_NAME" \
+          "$TARGET_PROFILE" \
           "${{ github.event.inputs.extra_packages }}" \
           "${{ github.event.inputs.disable_packages }}" \
           "$BUILD_DIR"
@@ -140,14 +177,36 @@ jobs:
         mkdir -p $CONFIG_DIR/configs/
         cp .config $CONFIG_DIR/configs/${{ github.event.inputs.device_name }}_final_config
 
-    - name: 8_使用defconfig避免menuconfig
+    - name: 9_使用defconfig避免menuconfig
       run: |
         cd $BUILD_DIR
         echo "使用defconfig避免menuconfig调用..."
         export TERM=linux
         make defconfig
 
-    - name: 9_下载软件包
+    - name: 10_验证配置文件
+      run: |
+        cd $BUILD_DIR
+        echo "=== 验证配置文件 ==="
+        
+        case "${{ github.event.inputs.device_name }}" in
+          "ac42u")
+            TARGET_PROFILE="asus_rt-ac42u"
+            ;;
+        esac
+        
+        echo "检查配置文件中的设备设置..."
+        if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_$TARGET_PROFILE=y" .config; then
+          echo "✅ 设备配置正确: $TARGET_PROFILE"
+        else
+          echo "❌ 设备配置错误，当前配置:"
+          grep "CONFIG_TARGET" .config | grep -E "(ipq40xx|$TARGET_PROFILE)" || echo "未找到相关配置"
+          echo "重新设置设备..."
+          echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_$TARGET_PROFILE=y" >> .config
+          make defconfig
+        fi
+
+    - name: 11_下载软件包
       run: |
         cd $BUILD_DIR
         echo "下载软件包..."
@@ -155,7 +214,7 @@ jobs:
         echo "下载完成，当前目录大小:"
         du -sh .
 
-    - name: 10_编译前空间检查
+    - name: 12_编译前空间检查
       run: |
         echo "=== 编译前磁盘空间检查 ==="
         df -h
@@ -180,7 +239,7 @@ jobs:
         echo "构建目录当前大小:"
         du -sh .
 
-    - name: 11_编译固件
+    - name: 13_编译固件
       run: |
         cd $BUILD_DIR
         echo "开始编译固件..."
@@ -189,6 +248,12 @@ jobs:
         echo "清理编译环境..."
         make clean 2>/dev/null || true
         
+        # 预先创建可能缺失的目录
+        echo "创建必要的构建目录..."
+        mkdir -p build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/root-ipq40xx/
+        mkdir -p build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic/
+        mkdir -p build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic/linux-5.4.255/
+        
         echo "=== 步骤1: 编译工具链 ==="
         make tools/install -j$(nproc) V=s 2>&1 | tee -a build_detailed.log
         
@@ -196,17 +261,15 @@ jobs:
         make toolchain/install -j$(nproc) V=s 2>&1 | tee -a build_detailed.log
         
         echo "=== 步骤3: 编译内核和目标 ==="
-        # 先尝试正常编译
+        # 先清理内核构建
+        make target/linux/clean 2>&1 | tee -a build_detailed.log
+        
+        # 然后编译内核
         if ! make target/linux/install -j1 V=sc 2>&1 | tee -a build_detailed.log; then
           echo "内核编译失败，尝试修复..."
-          echo "=== 修复步骤1: 清理内核构建 ==="
+          echo "=== 修复步骤: 重新编译内核 ==="
           make target/linux/clean 2>&1 | tee -a build_fix.log
-          echo "=== 修复步骤2: 创建缺失目录 ==="
-          mkdir -p build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/root-ipq40xx/ || true
-          mkdir -p build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic/ || true
-          echo "=== 修复步骤3: 重新编译内核 ==="
           make target/linux/compile -j1 V=sc 2>&1 | tee -a build_fix.log
-          echo "=== 修复步骤4: 重新安装内核 ==="
           make target/linux/install -j1 V=sc 2>&1 | tee -a build_fix.log
         fi
         
@@ -219,7 +282,7 @@ jobs:
         echo "=== 步骤6: 生成镜像 ==="
         make target/install -j1 V=sc 2>&1 | tee -a build_detailed.log
 
-    - name: 12_验证固件生成
+    - name: 14_验证固件生成
       if: always()
       run: |
         cd $BUILD_DIR
@@ -234,18 +297,28 @@ jobs:
           done
           
           # 检查是否有正确的设备固件
-          EXPECTED_PATTERN="*ac42u*"
+          case "${{ github.event.inputs.device_name }}" in
+            "ac42u")
+              EXPECTED_PATTERN="*ac42u*"
+              ;;
+          esac
+          
           if find bin/targets -name "*ac42u*" 2>/dev/null | grep -q .; then
             echo "✅ 找到正确的 ac42u 固件"
           else
             echo "⚠️ 未找到 ac42u 固件，但有以下固件:"
             find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null
+            echo ""
+            echo "可能的原因:"
+            echo "1. 设备配置不正确"
+            echo "2. 设备在源码中不存在或名称不同"
+            echo "3. 编译过程中设备选择被覆盖"
           fi
         else
           echo "❌ 未找到目标目录，编译可能失败"
         fi
 
-    - name: 13_运行错误分析脚本
+    - name: 15_运行错误分析脚本
       if: always()
       run: |
         cd $BUILD_DIR
@@ -254,7 +327,7 @@ jobs:
         $CONFIG_DIR/scripts/error_analysis.sh $BUILD_DIR
         echo "错误分析完成"
 
-    - name: 14_固件汇总分析报告
+    - name: 16_固件汇总分析报告
       if: always()
       run: |
         cd $BUILD_DIR
@@ -281,12 +354,17 @@ jobs:
           echo "" >> firmware_report.log
           
           # 检查是否有正确的设备固件
-          if find bin/targets -name "*ac42u*" 2>/dev/null | grep -q .; then
-            echo "✅ 找到正确的 ac42u 固件" >> firmware_report.log
-          else
-            echo "⚠️ 警告: 未找到 ac42u 固件，但有以下固件:" >> firmware_report.log
-            find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null >> firmware_report.log
-          fi
+          case "${{ github.event.inputs.device_name }}" in
+            "ac42u")
+              if find bin/targets -name "*ac42u*" 2>/dev/null | grep -q .; then
+                echo "✅ 找到正确的 ac42u 固件" >> firmware_report.log
+              else
+                echo "❌ 错误: 未找到 ac42u 固件" >> firmware_report.log
+                echo "生成的固件:" >> firmware_report.log
+                find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null >> firmware_report.log
+              fi
+              ;;
+          esac
           echo "" >> firmware_report.log
           
           echo "=== 升级镜像 (sysupgrade) ===" >> firmware_report.log
@@ -330,7 +408,7 @@ jobs:
         echo "固件分析报告生成完成"
         cat firmware_report.log
 
-    - name: 15_最终空间检查
+    - name: 17_最终空间检查
       if: always()
       run: |
         echo "=== 最终空间使用情况 ==="
@@ -341,7 +419,7 @@ jobs:
         echo "bin目录大小:"
         du -sh bin/ 2>/dev/null || echo "bin目录不存在"
 
-    - name: 16_上传编译产物
+    - name: 18_上传编译产物
       if: always()
       uses: actions/upload-artifact@v4
       with:
@@ -352,7 +430,7 @@ jobs:
           ${{ env.BUILD_DIR }}/build_fix.log
         retention-days: 7
 
-    - name: 17_上传日志文件
+    - name: 19_上传日志文件
       if: always()
       uses: actions/upload-artifact@v4
       with:
@@ -364,7 +442,7 @@ jobs:
           ${{ env.BUILD_DIR }}/config_summary.log
         retention-days: 7
 
-    - name: 18_上传配置文件
+    - name: 20_上传配置文件
       if: always()
       uses: actions/upload-artifact@v4
       with:
