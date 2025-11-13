@@ -214,8 +214,31 @@ jobs:
         if make defconfig; then
           echo "✅ defconfig 成功"
         else
-          echo "❌ defconfig 失败，尝试手动修复..."
-          echo "直接使用配置，跳过defconfig"
+          echo "❌ defconfig 失败，尝试方法2..."
+          echo "方法2: 使用基础配置方法..."
+          rm -f .config
+          echo "CONFIG_TARGET_ipq40xx=y" > .config
+          echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+          if make defconfig; then
+            echo "✅ 基础配置成功"
+            echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" >> .config
+            echo "CONFIG_TARGET_PER_DEVICE_ROOTFS=y" >> .config
+            if make defconfig; then
+              echo "✅ 设备配置添加成功"
+              echo "CONFIG_PACKAGE_luci=y" >> .config
+              echo "CONFIG_PACKAGE_luci-base=y" >> .config
+              echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+              echo "CONFIG_PACKAGE_firewall=y" >> .config
+              echo "CONFIG_PACKAGE_iptables=y" >> .config
+              make defconfig || echo "⚠️ 最终配置有警告但继续"
+            else
+              echo "❌ 设备配置失败"
+              exit 1
+            fi
+          else
+            echo "❌ 基础配置也失败"
+            exit 1
+          fi
         fi
         echo ""
         echo "=== 验证设备配置 ==="
@@ -226,15 +249,14 @@ jobs:
           echo "当前配置中的设备设置:"
           grep "CONFIG_TARGET_DEVICE" .config || echo "未找到设备配置"
           echo ""
-          echo "尝试方法2: 使用menuconfig方式..."
-          echo "CONFIG_TARGET_ipq40xx=y" > .config
-          echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
-          make defconfig
-          echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" >> .config
-          echo "CONFIG_TARGET_PER_DEVICE_ROOTFS=y" >> .config
-          make defconfig
+          echo "尝试方法3: 直接修改配置..."
+          if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic" .config; then
+            sed -i "s/CONFIG_TARGET_DEVICE_ipq40xx_generic.*/CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y/" .config
+          else
+            echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" >> .config
+          fi
           if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" .config; then
-            echo "✅ 方法2修复成功"
+            echo "✅ 直接修改成功"
           else
             echo "❌ 所有方法都失败"
             echo "最终配置状态:"
@@ -484,4 +506,79 @@ jobs:
         else
           echo "构建状态: 失败" >> firmware_report.log
           echo "" >> firmware_report.log
-          echo
+          echo "错误详情:" >> firmware_report.log
+          echo "- bin/targets 目录不存在" >> firmware_report.log
+          echo "- 编译可能在中途失败" >> firmware_report.log
+          echo "" >> firmware_report.log
+          echo "建议检查:" >> firmware_report.log
+          echo "1. 查看 build_detailed.log 中的编译错误" >> firmware_report.log
+          echo "2. 检查磁盘空间是否充足" >> firmware_report.log
+          echo "3. 验证设备配置是否正确" >> firmware_report.log
+        fi
+        echo "=== 构建统计 ===" >> firmware_report.log
+        TOTAL_FILES=$(find bin -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" \) 2>/dev/null | wc -l)
+        UPGRADE_COUNT=$(find bin -type f -name "*sysupgrade*" 2>/dev/null | wc -l)
+        FACTORY_COUNT=$(find bin -type f -name "*factory*" 2>/dev/null | wc -l)
+        echo "总固件文件数: $TOTAL_FILES" >> firmware_report.log
+        echo "升级镜像数: $UPGRADE_COUNT" >> firmware_report.log
+        echo "工厂镜像数: $FACTORY_COUNT" >> firmware_report.log
+        echo "" >> firmware_report.log
+        echo "固件分析报告生成完成"
+        cat firmware_report.log
+
+    - name: 17_最终空间检查
+      if: always()
+      run: |
+        echo "=== 最终空间使用情况 ==="
+        df -h /mnt
+        cd $BUILD_DIR
+        echo "构建目录最终大小:"
+        du -sh . || echo "无法获取目录大小"
+        echo "bin目录大小:"
+        du -sh bin/ 2>/dev/null || echo "bin目录不存在"
+
+    - name: 18_上传编译产物
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: firmware-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
+        path: |
+          ${{ env.BUILD_DIR }}/bin/
+          ${{ env.BUILD_DIR }}/build_detailed.log
+          ${{ env.BUILD_DIR }}/build_fix.log
+        retention-days: 7
+
+    - name: 19_上传日志文件
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: logs-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
+        path: |
+          ${{ env.BUILD_DIR }}/firmware_report.log
+          ${{ env.BUILD_DIR }}/error_analysis.log
+          ${{ env.BUILD_DIR }}/error_summary.log
+          ${{ env.BUILD_DIR }}/config_summary.log
+        retention-days: 7
+
+    - name: 20_上传配置文件
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: config-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
+        path: ${{ env.CONFIG_DIR }}/configs/${{ github.event.inputs.device_name }}_final_config
+        retention-days: 30
+
+    - name: 21_调试信息收集
+      if: failure()
+      run: |
+        cd $BUILD_DIR
+        echo "=== 调试信息收集 (仅在失败时运行) ==="
+        echo "环境变量:"
+        echo "DEVICE_FULL_NAME: ${{ env.DEVICE_FULL_NAME }}"
+        echo "当前目录: $(pwd)"
+        echo "配置文件内容:"
+        cat .config | grep "CONFIG_TARGET" || echo "无TARGET配置"
+        echo "所有文件:"
+        ls -la
+        echo "构建日志前100行:"
+        head -100 build_detailed.log 2>/dev/null || echo "无构建日志"
