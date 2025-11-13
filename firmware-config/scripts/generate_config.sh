@@ -1,53 +1,139 @@
 #!/bin/bash
 
+# 生成 OpenWrt 配置脚本
+# 参数: config_type platform device_name extra_packages disable_packages build_dir
+
 CONFIG_TYPE=$1
 PLATFORM=$2
-DEVICE_FULL_NAME=$3
+DEVICE_NAME=$3
 EXTRA_PACKAGES=$4
-BUILD_DIR=$5
-CONFIG_DIR=$(dirname $(dirname $0))
+DISABLE_PACKAGES=$5
+BUILD_DIR=$6
 
-echo "生成配置: 类型=$CONFIG_TYPE, 平台=$PLATFORM, 设备=$DEVICE_FULL_NAME"
-echo "额外插件: $EXTRA_PACKAGES"
+cd $BUILD_DIR
 
-# 复制通用基础配置
-cp $CONFIG_DIR/configs/base_universal.config $BUILD_DIR/.config
+echo "Generating configuration for:"
+echo "  Type: $CONFIG_TYPE"
+echo "  Platform: $PLATFORM"
+echo "  Device: $DEVICE_NAME"
+echo "  Extra packages: $EXTRA_PACKAGES"
+echo "  Disable packages: $DISABLE_PACKAGES"
 
-# 根据配置类型添加模块
-case "$CONFIG_TYPE" in
+# 清理现有配置
+rm -f .config
+
+# 根据配置类型设置基础配置
+case $CONFIG_TYPE in
     "minimal")
-        echo "使用最小配置"
+        # 最小化配置
+        echo "Creating minimal configuration..."
+        cat > .config.minimal << EOF
+CONFIG_TARGET_${PLATFORM}=y
+CONFIG_TARGET_${PLATFORM}_DEVICE_${DEVICE_NAME}=y
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-base=y
+CONFIG_BUSYBOX_CONFIG_FEATURE_MOUNT_NFS=n
+CONFIG_PACKAGE_dnsmasq-full=y
+CONFIG_PACKAGE_firewall=y
+CONFIG_PACKAGE_iptables=y
+EOF
+        cat .config.minimal > .config
         ;;
+        
     "normal")
-        echo "使用正常配置，添加所有功能模块"
-        cat $CONFIG_DIR/modules/storage.config >> $BUILD_DIR/.config
-        cat $CONFIG_DIR/modules/network_extra.config >> $BUILD_DIR/.config
-        cat $CONFIG_DIR/modules/services.config >> $BUILD_DIR/.config
-        cat $CONFIG_DIR/modules/management.config >> $BUILD_DIR/.config
+        # 正常配置
+        echo "Creating normal configuration..."
+        cat > .config.normal << EOF
+CONFIG_TARGET_${PLATFORM}=y
+CONFIG_TARGET_${PLATFORM}_DEVICE_${DEVICE_NAME}=y
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-base=y
+CONFIG_PACKAGE_luci-proto-ppp=y
+CONFIG_PACKAGE_luci-proto-ipv6=y
+CONFIG_PACKAGE_dnsmasq-full=y
+CONFIG_PACKAGE_firewall=y
+CONFIG_PACKAGE_iptables=y
+CONFIG_PACKAGE_ip6tables=y
+CONFIG_PACKAGE_ppp=y
+CONFIG_PACKAGE_ppp-mod-pppoe=y
+CONFIG_PACKAGE_kmod-ipt-offload=y
+EOF
+        cat .config.normal > .config
         ;;
+        
     "custom")
-        echo "使用自定义配置，只添加存储和网络模块"
-        cat $CONFIG_DIR/modules/storage.config >> $BUILD_DIR/.config
-        cat $CONFIG_DIR/modules/network_extra.config >> $BUILD_DIR/.config
-        ;;
-    *)
-        echo "未知配置类型: $CONFIG_TYPE"
-        exit 1
+        # 自定义配置 - 基于normal配置
+        echo "Creating custom configuration based on normal template..."
+        cat > .config.normal << EOF
+CONFIG_TARGET_${PLATFORM}=y
+CONFIG_TARGET_${PLATFORM}_DEVICE_${DEVICE_NAME}=y
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-base=y
+CONFIG_PACKAGE_luci-proto-ppp=y
+CONFIG_PACKAGE_luci-proto-ipv6=y
+CONFIG_PACKAGE_dnsmasq-full=y
+CONFIG_PACKAGE_firewall=y
+CONFIG_PACKAGE_iptables=y
+CONFIG_PACKAGE_ip6tables=y
+CONFIG_PACKAGE_ppp=y
+CONFIG_PACKAGE_ppp-mod-pppoe=y
+CONFIG_PACKAGE_kmod-ipt-offload=y
+EOF
+        cat .config.normal > .config
+        
+        # 显示可用包列表（示例）
+        echo "=== 常用可用插件列表 ==="
+        echo "网络服务: adblock wireguard openvpn-openssl ddns-scripts"
+        echo "文件共享: vsftpd samba4-server"
+        echo "系统工具: htop tmux screen"
+        echo "网络工具: iperf3 tcpdump nmap"
+        echo "其他: unattended-upgrades usbutils"
+        echo ""
         ;;
 esac
 
-# 替换平台和设备变量
-sed -i "s/\\\${PLATFORM}/${PLATFORM}/g" $BUILD_DIR/.config
-sed -i "s/\\\${DEVICE_FULL_NAME}/${DEVICE_FULL_NAME}/g" $BUILD_DIR/.config
+# 只有在custom类型时才处理插件
+if [ "$CONFIG_TYPE" = "custom" ]; then
+    # 添加额外包
+    if [ ! -z "$EXTRA_PACKAGES" ]; then
+        echo "Enabling extra packages: $EXTRA_PACKAGES"
+        for pkg in $EXTRA_PACKAGES; do
+            echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+        done
+    fi
 
-# 添加额外插件
-if [ -n "$EXTRA_PACKAGES" ]; then
-    echo "" >> $BUILD_DIR/.config
-    echo "# ===== 用户自定义额外插件 =====" >> $BUILD_DIR/.config
-    for pkg in $EXTRA_PACKAGES; do
-        echo "添加插件: $pkg"
-        echo "CONFIG_PACKAGE_${pkg}=y" >> $BUILD_DIR/.config
-    done
+    # 禁用包
+    if [ ! -z "$DISABLE_PACKAGES" ]; then
+        echo "Disabling packages: $DISABLE_PACKAGES"
+        for pkg in $DISABLE_PACKAGES; do
+            echo "CONFIG_PACKAGE_${pkg}=n" >> .config
+            # 同时从配置中删除已启用的设置
+            sed -i "/CONFIG_PACKAGE_${pkg}=y/d" .config 2>/dev/null || true
+        done
+    fi
+else
+    if [ ! -z "$EXTRA_PACKAGES" ] || [ ! -z "$DISABLE_PACKAGES" ]; then
+        echo "Warning: Package management is only available for custom configuration type"
+        echo "Ignoring package settings for $CONFIG_TYPE type"
+    fi
 fi
 
-echo "配置生成完成"
+echo "Final configuration generated"
+echo "=== Configuration summary ==="
+echo "Enabled packages:"
+grep "^CONFIG_PACKAGE.*=y" .config | head -20
+echo ""
+echo "Disabled packages:"
+grep "^CONFIG_PACKAGE.*=n" .config | head -10
+
+# 保存配置摘要
+echo "=== 配置摘要 ===" > config_summary.log
+echo "设备: $DEVICE_NAME" >> config_summary.log
+echo "平台: $PLATFORM" >> config_summary.log
+echo "配置类型: $CONFIG_TYPE" >> config_summary.log
+echo "" >> config_summary.log
+echo "启用的包:" >> config_summary.log
+grep "^CONFIG_PACKAGE.*=y" .config >> config_summary.log
+echo "" >> config_summary.log
+echo "禁用的包:" >> config_summary.log
+grep "^CONFIG_PACKAGE.*=n" .config >> config_summary.log
