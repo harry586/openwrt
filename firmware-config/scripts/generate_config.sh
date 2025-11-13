@@ -1,7 +1,13 @@
 #!/bin/bash
+# generate_config.sh - 动态生成 OpenWrt 配置
 
-# 生成 OpenWrt 配置脚本
-# 参数: config_type platform device_short_name device_full_name extra_packages disable_packages build_dir
+set -e
+
+# 参数检查
+if [ $# -lt 6 ]; then
+    echo "用法: $0 <config_type> <platform> <device_short_name> <device_full_name> <extra_packages> <disable_packages> [build_dir]"
+    exit 1
+fi
 
 CONFIG_TYPE=$1
 PLATFORM=$2
@@ -9,117 +15,163 @@ DEVICE_SHORT_NAME=$3
 DEVICE_FULL_NAME=$4
 EXTRA_PACKAGES=$5
 DISABLE_PACKAGES=$6
-BUILD_DIR=$7
+BUILD_DIR=${7:-/mnt/openwrt-build}
 
-cd $BUILD_DIR
+echo "=== 生成配置 ==="
+echo "配置类型: $CONFIG_TYPE"
+echo "平台: $PLATFORM"
+echo "设备简称: $DEVICE_SHORT_NAME"
+echo "完整设备名称: $DEVICE_FULL_NAME"
+echo "额外包: $EXTRA_PACKAGES"
+echo "禁用包: $DISABLE_PACKAGES"
+echo "构建目录: $BUILD_DIR"
 
-echo "生成配置信息:"
-echo "  类型: $CONFIG_TYPE"
-echo "  平台: $PLATFORM"
-echo "  设备简称: $DEVICE_SHORT_NAME"
-echo "  完整设备名称: $DEVICE_FULL_NAME"
-echo "  额外安装插件: $EXTRA_PACKAGES"
-echo "  禁用插件: $DISABLE_PACKAGES"
+cd "$BUILD_DIR"
 
-# 完全清理配置
-rm -f .config
+# 清理现有配置
+if [ -f ".config" ]; then
+    echo "备份现有配置..."
+    cp .config .config.backup
+fi
 
-# 创建基础配置
 echo "创建基础配置..."
-cat > .config << EOF
-CONFIG_TARGET_ipq40xx=y
-CONFIG_TARGET_ipq40xx_generic=y
-CONFIG_TARGET_DEVICE_ipq40xx_generic_${DEVICE_FULL_NAME}=y
-CONFIG_TARGET_PER_DEVICE_ROOTFS=y
-CONFIG_TARGET_ROOTFS_SQUASHFS=y
-CONFIG_VMLINUX_INITRD=y
-CONFIG_VMLINUX_KERNEL_IMAGE=y
-EOF
 
-# 根据配置类型添加包
-case $CONFIG_TYPE in
+# 生成基础配置
+echo "# 基础系统配置" > .config.base
+echo "CONFIG_TARGET_${PLATFORM}=y" >> .config.base
+echo "CONFIG_TARGET_${PLATFORM}_GENERIC=y" >> .config.base
+echo "CONFIG_TARGET_DEVICE_${PLATFORM}_GENERIC_${DEVICE_FULL_NAME}=y" >> .config.base
+echo "CONFIG_TARGET_PER_DEVICE_ROOTFS=y" >> .config.base
+echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config.base
+
+# 基础包
+echo "" >> .config.base
+echo "# 基础包" >> .config.base
+echo "CONFIG_BUSYBOX_CUSTOM=y" >> .config.base
+echo "CONFIG_PACKAGE_busybox=y" >> .config.base
+echo "CONFIG_PACKAGE_base-files=y" >> .config.base
+echo "CONFIG_PACKAGE_block-mount=y" >> .config.base
+echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config.base
+echo "CONFIG_PACKAGE_dropbear=y" >> .config.base
+echo "CONFIG_PACKAGE_firewall=y" >> .config.base
+echo "CONFIG_PACKAGE_fstools=y" >> .config.base
+echo "CONFIG_PACKAGE_iptables=y" >> .config.base
+echo "CONFIG_PACKAGE_iptables-mod-extra=y" >> .config.base
+echo "CONFIG_PACKAGE_iptables-mod-filter=y" >> .config.base
+echo "CONFIG_PACKAGE_iptables-mod-ipopt=y" >> .config.base
+echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> .config.base
+echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> .config.base
+echo "CONFIG_PACKAGE_kmod-nf-conntrack=y" >> .config.base
+echo "CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y" >> .config.base
+echo "CONFIG_PACKAGE_kmod-nf-ipt=y" >> .config.base
+echo "CONFIG_PACKAGE_kmod-nf-nat=y" >> .config.base
+echo "CONFIG_PACKAGE_kmod-nf-reject=y" >> .config.base
+echo "CONFIG_PACKAGE_kmod-nfnetlink=y" >> .config.base
+echo "CONFIG_PACKAGE_libc=y" >> .config.base
+echo "CONFIG_PACKAGE_libgcc=y" >> .config.base
+echo "CONFIG_PACKAGE_logd=y" >> .config.base
+echo "CONFIG_PACKAGE_mtd=y" >> .config.base
+echo "CONFIG_PACKAGE_netifd=y" >> .config.base
+echo "CONFIG_PACKAGE_opkg=y" >> .config.base
+echo "CONFIG_PACKAGE_procd=y" >> .config.base
+echo "CONFIG_PACKAGE_swconfig=y" >> .config.base
+echo "CONFIG_PACKAGE_uci=y" >> .config.base
+echo "CONFIG_PACKAGE_urandom-seed=y" >> .config.base
+echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config.base
+
+# 根据配置类型添加特定包
+case "$CONFIG_TYPE" in
     "minimal")
-        echo "添加最小化配置包..."
-        cat >> .config << 'EOF'
-CONFIG_PACKAGE_luci=y
-CONFIG_PACKAGE_luci-base=y
-CONFIG_PACKAGE_dnsmasq-full=y
-CONFIG_PACKAGE_firewall=y
-CONFIG_PACKAGE_iptables=y
-CONFIG_PACKAGE_kmod-ipt-offload=y
-EOF
+        echo "# 最小配置 - 仅基础系统" >> .config.base
         ;;
-        
-    "normal"|"custom")
-        echo "添加标准配置包..."
-        cat >> .config << 'EOF'
-CONFIG_PACKAGE_luci=y
-CONFIG_PACKAGE_luci-base=y
-CONFIG_PACKAGE_luci-proto-ppp=y
-CONFIG_PACKAGE_luci-proto-ipv6=y
-CONFIG_PACKAGE_dnsmasq-full=y
-CONFIG_PACKAGE_firewall=y
-CONFIG_PACKAGE_iptables=y
-CONFIG_PACKAGE_ip6tables=y
-CONFIG_PACKAGE_ppp=y
-CONFIG_PACKAGE_ppp-mod-pppoe=y
-CONFIG_PACKAGE_kmod-ipt-offload=y
-EOF
+    "normal")
+        echo "" >> .config.base
+        echo "# 正常配置 - 添加Web界面和常用功能" >> .config.base
+        echo "CONFIG_PACKAGE_luci=y" >> .config.base
+        echo "CONFIG_PACKAGE_luci-base=y" >> .config.base
+        echo "CONFIG_PACKAGE_luci-compat=y" >> .config.base
+        echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> .config.base
+        echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config.base
+        echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config.base
+        echo "CONFIG_PACKAGE_luci-proto-ipv6=y" >> .config.base
+        echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config.base
+        echo "CONFIG_PACKAGE_ip6tables=y" >> .config.base
+        echo "CONFIG_PACKAGE_ip6tables-extra=y" >> .config.base
+        echo "CONFIG_PACKAGE_ip6tables-mod-nat=y" >> .config.base
+        echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> .config.base
+        echo "CONFIG_PACKAGE_kmod-ip6tables-extra=y" >> .config.base
+        echo "CONFIG_PACKAGE_kmod-ipt-nat6=y" >> .config.base
+        echo "CONFIG_PACKAGE_ppp=y" >> .config.base
+        echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config.base
+        echo "CONFIG_PACKAGE_6in4=y" >> .config.base
+        echo "CONFIG_PACKAGE_6rd=y" >> .config.base
+        echo "CONFIG_PACKAGE_6to4=y" >> .config.base
+        ;;
+    "custom")
+        echo "" >> .config.base
+        echo "# 自定义配置 - 基础Web界面" >> .config.base
+        echo "CONFIG_PACKAGE_luci=y" >> .config.base
+        echo "CONFIG_PACKAGE_luci-base=y" >> .config.base
+        echo "CONFIG_PACKAGE_luci-compat=y" >> .config.base
+        echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> .config.base
+        echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config.base
+        echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config.base
+        echo "CONFIG_PACKAGE_luci-proto-ipv6=y" >> .config.base
+        echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config.base
+        echo "CONFIG_PACKAGE_ip6tables=y" >> .config.base
+        echo "CONFIG_PACKAGE_ip6tables-extra=y" >> .config.base
+        echo "CONFIG_PACKAGE_ip6tables-mod-nat=y" >> .config.base
+        echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> .config.base
+        echo "CONFIG_PACKAGE_kmod-ip6tables-extra=y" >> .config.base
+        echo "CONFIG_PACKAGE_kmod-ipt-nat6=y" >> .config.base
+        echo "CONFIG_PACKAGE_ppp=y" >> .config.base
+        echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config.base
+        ;;
+    *)
+        echo "未知配置类型: $CONFIG_TYPE"
+        exit 1
         ;;
 esac
 
-# 只有在custom类型时才处理额外插件
+# 对于自定义配置，处理额外的包管理
 if [ "$CONFIG_TYPE" = "custom" ]; then
-    if [ ! -z "$EXTRA_PACKAGES" ]; then
-        echo "启用额外插件: $EXTRA_PACKAGES"
+    echo "" >> .config.base
+    echo "# 自定义包配置" >> .config.base
+    echo "处理自定义包配置..."
+    
+    # 启用额外包
+    if [ -n "$EXTRA_PACKAGES" ]; then
+        echo "启用额外包: $EXTRA_PACKAGES"
         for pkg in $EXTRA_PACKAGES; do
-            echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+            # 清理包名，移除可能的空格
+            clean_pkg=$(echo "$pkg" | tr -d '[:space:]')
+            if [ -n "$clean_pkg" ]; then
+                echo "CONFIG_PACKAGE_${clean_pkg}=y" >> .config.base
+            fi
         done
     fi
-
-    if [ ! -z "$DISABLE_PACKAGES" ]; then
-        echo "禁用插件: $DISABLE_PACKAGES"
+    
+    # 禁用包
+    if [ -n "$DISABLE_PACKAGES" ]; then
+        echo "禁用包: $DISABLE_PACKAGES"
         for pkg in $DISABLE_PACKAGES; do
-            echo "CONFIG_PACKAGE_${pkg}=n" >> .config
-            sed -i "/CONFIG_PACKAGE_${pkg}=y/d" .config 2>/dev/null || true
+            # 清理包名，移除可能的空格
+            clean_pkg=$(echo "$pkg" | tr -d '[:space:]')
+            if [ -n "$clean_pkg" ]; then
+                echo "# CONFIG_PACKAGE_${clean_pkg} is not set" >> .config.base
+            fi
         done
     fi
-else
-    if [ ! -z "$EXTRA_PACKAGES" ] || [ ! -z "$DISABLE_PACKAGES" ]; then
-        echo "警告: 插件管理仅在 custom 配置类型下可用"
-    fi
 fi
 
-echo "配置生成完成"
-echo "=== 配置验证 ==="
+# 应用基础配置
+mv .config.base .config
 
-# 验证关键配置
-echo "关键配置检查:"
-if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_${DEVICE_FULL_NAME}=y" .config; then
-    echo "✅ 设备配置正确"
-else
-    echo "❌ 设备配置错误"
-    exit 1
-fi
+echo "=== 生成的配置摘要 ==="
+echo "目标平台和设备:"
+grep "CONFIG_TARGET" .config | head -10
+echo ""
+echo "启用的主要包:"
+grep "^CONFIG_PACKAGE.*=y" .config | head -20
 
-if grep -q "CONFIG_TARGET_ipq40xx=y" .config; then
-    echo "✅ 平台配置正确"
-else
-    echo "❌ 平台配置错误"
-    exit 1
-fi
-
-# 保存配置摘要
-echo "=== 配置摘要 ===" > config_summary.log
-echo "设备简称: $DEVICE_SHORT_NAME" >> config_summary.log
-echo "完整设备名称: $DEVICE_FULL_NAME" >> config_summary.log
-echo "平台: $PLATFORM" >> config_summary.log
-echo "配置类型: $CONFIG_TYPE" >> config_summary.log
-echo "" >> config_summary.log
-echo "目标配置:" >> config_summary.log
-grep "CONFIG_TARGET" .config >> config_summary.log
-echo "" >> config_summary.log
-echo "启用的包:" >> config_summary.log
-grep "^CONFIG_PACKAGE.*=y" .config 2>/dev/null >> config_summary.log || echo "无启用的包" >> config_summary.log
-
-echo "配置脚本执行完成"
+echo "✅ 配置生成完成"
