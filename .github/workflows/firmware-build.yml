@@ -103,6 +103,7 @@ jobs:
         case "${{ github.event.inputs.device_name }}" in
           "ac42u")
             PLATFORM="ipq40xx"
+            DEVICE_SHORT_NAME="ac42u"
             DEVICE_FULL_NAME="asus_rt-ac42u"
             TARGET_PROFILE="asus_rt-ac42u"
             ;;
@@ -113,7 +114,13 @@ jobs:
         esac
         
         echo "目标平台: $PLATFORM"
+        echo "设备简称: $DEVICE_SHORT_NAME"
+        echo "完整设备名称: $DEVICE_FULL_NAME"
         echo "目标设备: $TARGET_PROFILE"
+        
+        # 设置环境变量供后续步骤使用
+        echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
+        echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
         
         # 验证设备是否在支持列表中
         echo "检查设备配置文件..."
@@ -136,25 +143,14 @@ jobs:
       run: |
         cd $BUILD_DIR
         
-        case "${{ github.event.inputs.device_name }}" in
-          "ac42u")
-            PLATFORM="ipq40xx"
-            DEVICE_FULL_NAME="asus_rt-ac42u"
-            TARGET_PROFILE="asus_rt-ac42u"
-            ;;
-          *)
-            echo "未知设备: ${{ github.event.inputs.device_name }}"
-            exit 1
-            ;;
-        esac
-        
         echo "=== 配置类型说明 ==="
         echo "minimal - 最小配置: 基础系统 + 必要驱动 + 基本网络功能"
         echo "normal  - 正常配置: 最小配置 + Web管理界面 + 常用功能"  
         echo "custom  - 自定义配置: 以normal为模板 + 用户自定义插件管理"
         echo ""
         echo "选择的配置类型: ${{ github.event.inputs.config_type }}"
-        echo "目标设备: $TARGET_PROFILE"
+        echo "设备简称: ${{ env.DEVICE_SHORT_NAME }}"
+        echo "完整设备名称: ${{ env.DEVICE_FULL_NAME }}"
         
         if [ "${{ github.event.inputs.config_type }}" != "custom" ]; then
           if [ -n "${{ github.event.inputs.extra_packages }}" ] || [ -n "${{ github.event.inputs.disable_packages }}" ]; then
@@ -168,8 +164,9 @@ jobs:
         chmod +x $CONFIG_DIR/scripts/generate_config.sh
         $CONFIG_DIR/scripts/generate_config.sh \
           "${{ github.event.inputs.config_type }}" \
-          "$PLATFORM" \
-          "$TARGET_PROFILE" \
+          "ipq40xx" \
+          "${{ env.DEVICE_SHORT_NAME }}" \
+          "${{ env.DEVICE_FULL_NAME }}" \
           "${{ github.event.inputs.extra_packages }}" \
           "${{ github.event.inputs.disable_packages }}" \
           "$BUILD_DIR"
@@ -189,22 +186,31 @@ jobs:
         cd $BUILD_DIR
         echo "=== 验证配置文件 ==="
         
-        case "${{ github.event.inputs.device_name }}" in
-          "ac42u")
-            TARGET_PROFILE="asus_rt-ac42u"
-            ;;
-        esac
-        
         echo "检查配置文件中的设备设置..."
-        if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_$TARGET_PROFILE=y" .config; then
-          echo "✅ 设备配置正确: $TARGET_PROFILE"
+        if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" .config; then
+          echo "✅ 设备配置正确: ${{ env.DEVICE_FULL_NAME }}"
         else
           echo "❌ 设备配置错误，当前配置:"
-          grep "CONFIG_TARGET" .config | grep -E "(ipq40xx|$TARGET_PROFILE)" || echo "未找到相关配置"
+          grep "CONFIG_TARGET" .config | grep -E "(ipq40xx|${{ env.DEVICE_FULL_NAME }})" || echo "未找到相关配置"
           echo "重新设置设备..."
-          echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_$TARGET_PROFILE=y" >> .config
+          echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" >> .config
           make defconfig
+          echo "重新验证配置..."
+          if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" .config; then
+            echo "✅ 设备配置修复成功"
+          else
+            echo "❌ 设备配置修复失败"
+            exit 1
+          fi
         fi
+        
+        echo ""
+        echo "=== 配置摘要 ==="
+        echo "目标配置:"
+        grep "CONFIG_TARGET" .config
+        echo ""
+        echo "启用的主要包:"
+        grep "^CONFIG_PACKAGE.*=y" .config | head -15 2>/dev/null || echo "无启用的包"
 
     - name: 11_下载软件包
       run: |
@@ -297,22 +303,23 @@ jobs:
           done
           
           # 检查是否有正确的设备固件
-          case "${{ github.event.inputs.device_name }}" in
-            "ac42u")
-              EXPECTED_PATTERN="*ac42u*"
-              ;;
-          esac
-          
-          if find bin/targets -name "*ac42u*" 2>/dev/null | grep -q .; then
-            echo "✅ 找到正确的 ac42u 固件"
+          echo ""
+          echo "=== 检查目标设备固件 ==="
+          if find bin/targets -name "*${{ env.DEVICE_FULL_NAME }}*" 2>/dev/null | grep -q .; then
+            echo "✅ 找到正确的 ${{ env.DEVICE_FULL_NAME }} 固件"
+            find bin/targets -name "*${{ env.DEVICE_FULL_NAME }}*" 2>/dev/null
+          elif find bin/targets -name "*${{ env.DEVICE_SHORT_NAME }}*" 2>/dev/null | grep -q .; then
+            echo "✅ 找到 ${{ env.DEVICE_SHORT_NAME }} 固件 (使用简称匹配)"
+            find bin/targets -name "*${{ env.DEVICE_SHORT_NAME }}*" 2>/dev/null
           else
-            echo "⚠️ 未找到 ac42u 固件，但有以下固件:"
+            echo "⚠️ 未找到 ${{ env.DEVICE_FULL_NAME }} 固件，但有以下固件:"
             find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null
             echo ""
             echo "可能的原因:"
             echo "1. 设备配置不正确"
             echo "2. 设备在源码中不存在或名称不同"
             echo "3. 编译过程中设备选择被覆盖"
+            echo "4. 固件命名规则可能不同"
           fi
         else
           echo "❌ 未找到目标目录，编译可能失败"
@@ -337,7 +344,8 @@ jobs:
         echo "生成时间: $(date)" >> firmware_report.log
         echo "" >> firmware_report.log
         
-        echo "设备: ${{ github.event.inputs.device_name }}" >> firmware_report.log
+        echo "设备简称: ${{ env.DEVICE_SHORT_NAME }}" >> firmware_report.log
+        echo "完整设备名称: ${{ env.DEVICE_FULL_NAME }}" >> firmware_report.log
         echo "平台: ipq40xx" >> firmware_report.log
         echo "配置类型: ${{ github.event.inputs.config_type }}" >> firmware_report.log
         echo "额外安装插件: ${{ github.event.inputs.extra_packages }}" >> firmware_report.log
@@ -354,17 +362,15 @@ jobs:
           echo "" >> firmware_report.log
           
           # 检查是否有正确的设备固件
-          case "${{ github.event.inputs.device_name }}" in
-            "ac42u")
-              if find bin/targets -name "*ac42u*" 2>/dev/null | grep -q .; then
-                echo "✅ 找到正确的 ac42u 固件" >> firmware_report.log
-              else
-                echo "❌ 错误: 未找到 ac42u 固件" >> firmware_report.log
-                echo "生成的固件:" >> firmware_report.log
-                find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null >> firmware_report.log
-              fi
-              ;;
-          esac
+          if find bin/targets -name "*${{ env.DEVICE_FULL_NAME }}*" 2>/dev/null | grep -q .; then
+            echo "✅ 找到正确的 ${{ env.DEVICE_FULL_NAME }} 固件" >> firmware_report.log
+          elif find bin/targets -name "*${{ env.DEVICE_SHORT_NAME }}*" 2>/dev/null | grep -q .; then
+            echo "✅ 找到 ${{ env.DEVICE_SHORT_NAME }} 固件 (使用简称匹配)" >> firmware_report.log
+          else
+            echo "❌ 错误: 未找到 ${{ env.DEVICE_FULL_NAME }} 固件" >> firmware_report.log
+            echo "生成的固件:" >> firmware_report.log
+            find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null >> firmware_report.log
+          fi
           echo "" >> firmware_report.log
           
           echo "=== 升级镜像 (sysupgrade) ===" >> firmware_report.log
