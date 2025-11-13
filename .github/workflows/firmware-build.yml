@@ -96,9 +96,9 @@ jobs:
           "ac42u")
             PLATFORM="ipq40xx"
             DEVICE_SHORT_NAME="ac42u"
-            # 根据设备树文件，正确的设备标识符是 asus,rt-ac42u
-            DEVICE_FULL_NAME="asus,rt-ac42u"
-            TARGET_PROFILE="asus,rt-ac42u"
+            # 根据 generic.mk，正确的设备标识符是 asus_rt-ac42u
+            DEVICE_FULL_NAME="asus_rt-ac42u"
+            TARGET_PROFILE="asus_rt-ac42u"
             ;;
           *)
             echo "未知设备: ${{ github.event.inputs.device_name }}"
@@ -116,24 +116,18 @@ jobs:
         echo "检查设备配置文件..."
         if [ -f "target/linux/$PLATFORM/image/generic.mk" ]; then
           echo "找到平台配置文件"
-          # 使用更宽松的匹配，因为设备树中的名称可能不同
-          if grep -q "$DEVICE_SHORT_NAME" "target/linux/$PLATFORM/image/generic.mk" || \
-             grep -q "$DEVICE_FULL_NAME" "target/linux/$PLATFORM/image/generic.mk"; then
-            echo "✅ 设备在支持列表中"
-            # 提取实际的设备配置名称
-            DEVICE_CONFIG_NAME=$(grep "define Device" "target/linux/$PLATFORM/image/generic.mk" | \
-                                grep -E "(asus.*ac42u|$DEVICE_SHORT_NAME)" | \
-                                sed 's/.*define Device\///' | sed 's/).*//' | head -1)
+          if grep -q "$TARGET_PROFILE" "target/linux/$PLATFORM/image/generic.mk"; then
+            echo "✅ 设备 $TARGET_PROFILE 在支持列表中"
+            DEVICE_CONFIG_NAME=$(grep "define Device" "target/linux/$PLATFORM/image/generic.mk" | grep "$TARGET_PROFILE" | sed 's/.*define Device\///' | sed 's/).*//' | head -1)
             if [ ! -z "$DEVICE_CONFIG_NAME" ]; then
               echo "设备配置名称: $DEVICE_CONFIG_NAME"
               echo "DEVICE_CONFIG_NAME=$DEVICE_CONFIG_NAME" >> $GITHUB_ENV
             else
-              # 如果没有找到精确匹配，使用通用名称
-              echo "使用通用设备配置名称"
+              echo "使用完整设备名称作为配置名称"
               echo "DEVICE_CONFIG_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
             fi
           else
-            echo "❌ 设备不在支持列表中"
+            echo "❌ 设备 $TARGET_PROFILE 不在支持列表中"
             echo "可用设备列表:"
             grep "define Device" "target/linux/$PLATFORM/image/generic.mk" | head -20
             exit 1
@@ -294,7 +288,7 @@ jobs:
         echo "1. 检查设备在源码中的定义..."
         if [ -f "target/linux/ipq40xx/image/generic.mk" ]; then
           echo "在 generic.mk 中查找设备定义:"
-          grep -A 10 -i "asus.*ac42u" target/linux/ipq40xx/image/generic.mk || echo "未找到设备定义"
+          grep -A 10 "define Device.*asus_rt-ac42u" target/linux/ipq40xx/image/generic.mk || echo "未找到设备定义"
         fi
         echo ""
         echo "2. 检查设备树文件..."
@@ -438,8 +432,10 @@ jobs:
           done
           echo ""
           echo "=== 检查目标设备固件 ==="
-          # 使用多种可能的名称模式进行匹配
-          if find bin/targets -name "*ac42u*" 2>/dev/null | grep -q .; then
+          if find bin/targets -name "*${{ env.DEVICE_FULL_NAME }}*" 2>/dev/null | grep -q .; then
+            echo "✅ 找到正确的 ${{ env.DEVICE_FULL_NAME }} 固件"
+            find bin/targets -name "*${{ env.DEVICE_FULL_NAME }}*" 2>/dev/null
+          elif find bin/targets -name "*ac42u*" 2>/dev/null | grep -q .; then
             echo "✅ 找到 ac42u 相关固件"
             find bin/targets -name "*ac42u*" 2>/dev/null
           elif find bin/targets -name "*asus*" 2>/dev/null | grep -q .; then
@@ -484,11 +480,14 @@ jobs:
           echo "=== 所有固件文件 ===" >> firmware_report.log
           find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" \) 2>/dev/null | sort >> firmware_report.log
           echo "" >> firmware_report.log
-          if find bin/targets -name "*ac42u*" 2>/dev/null | grep -q .; then
+          if find bin/targets -name "*${{ env.DEVICE_FULL_NAME }}*" 2>/dev/null | grep -q .; then
+            echo "✅ 找到正确的 ${{ env.DEVICE_FULL_NAME }} 固件" >> firmware_report.log
+            find bin/targets -name "*${{ env.DEVICE_FULL_NAME }}*" 2>/dev/null >> firmware_report.log
+          elif find bin/targets -name "*ac42u*" 2>/dev/null | grep -q .; then
             echo "✅ 找到 ac42u 相关固件" >> firmware_report.log
             find bin/targets -name "*ac42u*" 2>/dev/null >> firmware_report.log
           else
-            echo "⚠️ 未找到 ac42u 固件，生成的固件:" >> firmware_report.log
+            echo "⚠️ 未找到目标设备固件，生成的固件:" >> firmware_report.log
             find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null >> firmware_report.log
           fi
         else
@@ -513,10 +512,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: firmware-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
-        path: [
-          "${{ env.BUILD_DIR }}/bin/",
-          "${{ env.BUILD_DIR }}/build_detailed.log"
-        ]
+        path: ${{ env.BUILD_DIR }}/bin/
         retention-days: 7
 
     - name: 21_上传日志文件
@@ -524,10 +520,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: logs-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
-        path: [
-          "${{ env.BUILD_DIR }}/firmware_report.log",
-          "${{ env.BUILD_DIR }}/error_analysis.log"
-        ]
+        path: ${{ env.BUILD_DIR }}/firmware_report.log
         retention-days: 7
 
     - name: 22_上传配置文件
