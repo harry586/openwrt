@@ -27,59 +27,50 @@ case $CONFIG_TYPE in
     "minimal")
         # 最小化配置
         echo "创建最小化配置..."
-        cat > .config.minimal << EOF
-CONFIG_TARGET_${PLATFORM}=y
-CONFIG_TARGET_${PLATFORM}_DEVICE_${DEVICE_NAME}=y
-CONFIG_PACKAGE_luci=y
-CONFIG_PACKAGE_luci-base=y
-CONFIG_BUSYBOX_CONFIG_FEATURE_MOUNT_NFS=n
-CONFIG_PACKAGE_dnsmasq-full=y
-CONFIG_PACKAGE_firewall=y
-CONFIG_PACKAGE_iptables=y
-EOF
-        cat .config.minimal > .config
+        echo "CONFIG_TARGET_ipq40xx=y" > .config
+        echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+        echo "CONFIG_PACKAGE_luci=y" >> .config
+        echo "CONFIG_PACKAGE_luci-base=y" >> .config
+        echo "CONFIG_BUSYBOX_CONFIG_FEATURE_MOUNT_NFS=n" >> .config
+        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+        echo "CONFIG_PACKAGE_firewall=y" >> .config
+        echo "CONFIG_PACKAGE_iptables=y" >> .config
         ;;
         
     "normal")
         # 正常配置
         echo "创建正常配置..."
-        cat > .config.normal << EOF
-CONFIG_TARGET_${PLATFORM}=y
-CONFIG_TARGET_${PLATFORM}_DEVICE_${DEVICE_NAME}=y
-CONFIG_PACKAGE_luci=y
-CONFIG_PACKAGE_luci-base=y
-CONFIG_PACKAGE_luci-proto-ppp=y
-CONFIG_PACKAGE_luci-proto-ipv6=y
-CONFIG_PACKAGE_dnsmasq-full=y
-CONFIG_PACKAGE_firewall=y
-CONFIG_PACKAGE_iptables=y
-CONFIG_PACKAGE_ip6tables=y
-CONFIG_PACKAGE_ppp=y
-CONFIG_PACKAGE_ppp-mod-pppoe=y
-CONFIG_PACKAGE_kmod-ipt-offload=y
-EOF
-        cat .config.normal > .config
+        echo "CONFIG_TARGET_ipq40xx=y" > .config
+        echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+        echo "CONFIG_PACKAGE_luci=y" >> .config
+        echo "CONFIG_PACKAGE_luci-base=y" >> .config
+        echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
+        echo "CONFIG_PACKAGE_luci-proto-ipv6=y" >> .config
+        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+        echo "CONFIG_PACKAGE_firewall=y" >> .config
+        echo "CONFIG_PACKAGE_iptables=y" >> .config
+        echo "CONFIG_PACKAGE_ip6tables=y" >> .config
+        echo "CONFIG_PACKAGE_ppp=y" >> .config
+        echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> .config
         ;;
         
     "custom")
         # 自定义配置 - 基于normal配置
         echo "基于正常模板创建自定义配置..."
-        cat > .config.normal << EOF
-CONFIG_TARGET_${PLATFORM}=y
-CONFIG_TARGET_${PLATFORM}_DEVICE_${DEVICE_NAME}=y
-CONFIG_PACKAGE_luci=y
-CONFIG_PACKAGE_luci-base=y
-CONFIG_PACKAGE_luci-proto-ppp=y
-CONFIG_PACKAGE_luci-proto-ipv6=y
-CONFIG_PACKAGE_dnsmasq-full=y
-CONFIG_PACKAGE_firewall=y
-CONFIG_PACKAGE_iptables=y
-CONFIG_PACKAGE_ip6tables=y
-CONFIG_PACKAGE_ppp=y
-CONFIG_PACKAGE_ppp-mod-pppoe=y
-CONFIG_PACKAGE_kmod-ipt-offload=y
-EOF
-        cat .config.normal > .config
+        echo "CONFIG_TARGET_ipq40xx=y" > .config
+        echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+        echo "CONFIG_PACKAGE_luci=y" >> .config
+        echo "CONFIG_PACKAGE_luci-base=y" >> .config
+        echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
+        echo "CONFIG_PACKAGE_luci-proto-ipv6=y" >> .config
+        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+        echo "CONFIG_PACKAGE_firewall=y" >> .config
+        echo "CONFIG_PACKAGE_iptables=y" >> .config
+        echo "CONFIG_PACKAGE_ip6tables=y" >> .config
+        echo "CONFIG_PACKAGE_ppp=y" >> .config
+        echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> .config
         
         # 显示可用包列表（示例）
         echo "=== 常用可用插件列表 ==="
@@ -91,6 +82,9 @@ EOF
         echo ""
         ;;
 esac
+
+# 添加设备特定配置
+echo "CONFIG_TARGET_DEVICE_${PLATFORM}_generic_${DEVICE_NAME}=y" >> .config
 
 # 只有在custom类型时才处理插件
 if [ "$CONFIG_TYPE" = "custom" ]; then
@@ -120,17 +114,23 @@ fi
 
 echo "最终配置生成完成"
 echo "=== 配置摘要 ==="
-echo "已启用的插件:"
-grep "^CONFIG_PACKAGE.*=y" .config | head -20 2>/dev/null || echo "无启用的插件"
+echo "目标平台和设备:"
+grep "CONFIG_TARGET" .config | head -10
 echo ""
-echo "已禁用的插件:"
-grep "^CONFIG_PACKAGE.*=n" .config | head -10 2>/dev/null || echo "无禁用的插件"
+echo "启用的包:"
+grep "^CONFIG_PACKAGE.*=y" .config | head -20 2>/dev/null || echo "无启用的包"
+echo ""
+echo "禁用的包:"
+grep "^CONFIG_PACKAGE.*=n" .config | head -10 2>/dev/null || echo "无禁用的包"
 
 # 保存配置摘要
 echo "=== 配置摘要 ===" > config_summary.log
 echo "设备: $DEVICE_NAME" >> config_summary.log
 echo "平台: $PLATFORM" >> config_summary.log
 echo "配置类型: $CONFIG_TYPE" >> config_summary.log
+echo "" >> config_summary.log
+echo "目标配置:" >> config_summary.log
+grep "CONFIG_TARGET" .config >> config_summary.log
 echo "" >> config_summary.log
 echo "启用的包:" >> config_summary.log
 grep "^CONFIG_PACKAGE.*=y" .config 2>/dev/null >> config_summary.log || echo "无启用的包" >> config_summary.log
