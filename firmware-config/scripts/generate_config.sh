@@ -1,21 +1,23 @@
 #!/bin/bash
 
 # 生成 OpenWrt 配置脚本
-# 参数: config_type platform device_name extra_packages disable_packages build_dir
+# 参数: config_type platform device_short_name device_full_name extra_packages disable_packages build_dir
 
 CONFIG_TYPE=$1
 PLATFORM=$2
-DEVICE_NAME=$3
-EXTRA_PACKAGES=$4
-DISABLE_PACKAGES=$5
-BUILD_DIR=$6
+DEVICE_SHORT_NAME=$3
+DEVICE_FULL_NAME=$4
+EXTRA_PACKAGES=$5
+DISABLE_PACKAGES=$6
+BUILD_DIR=$7
 
 cd $BUILD_DIR
 
 echo "生成配置信息:"
 echo "  类型: $CONFIG_TYPE"
 echo "  平台: $PLATFORM"
-echo "  设备: $DEVICE_NAME"
+echo "  设备简称: $DEVICE_SHORT_NAME"
+echo "  完整设备名称: $DEVICE_FULL_NAME"
 echo "  额外安装插件: $EXTRA_PACKAGES"
 echo "  禁用插件: $DISABLE_PACKAGES"
 
@@ -29,6 +31,7 @@ case $CONFIG_TYPE in
         echo "创建最小化配置..."
         echo "CONFIG_TARGET_ipq40xx=y" > .config
         echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+        echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${DEVICE_FULL_NAME}=y" >> .config
         echo "CONFIG_PACKAGE_luci=y" >> .config
         echo "CONFIG_PACKAGE_luci-base=y" >> .config
         echo "CONFIG_BUSYBOX_CONFIG_FEATURE_MOUNT_NFS=n" >> .config
@@ -42,6 +45,7 @@ case $CONFIG_TYPE in
         echo "创建正常配置..."
         echo "CONFIG_TARGET_ipq40xx=y" > .config
         echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+        echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${DEVICE_FULL_NAME}=y" >> .config
         echo "CONFIG_PACKAGE_luci=y" >> .config
         echo "CONFIG_PACKAGE_luci-base=y" >> .config
         echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
@@ -60,6 +64,7 @@ case $CONFIG_TYPE in
         echo "基于正常模板创建自定义配置..."
         echo "CONFIG_TARGET_ipq40xx=y" > .config
         echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+        echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${DEVICE_FULL_NAME}=y" >> .config
         echo "CONFIG_PACKAGE_luci=y" >> .config
         echo "CONFIG_PACKAGE_luci-base=y" >> .config
         echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
@@ -81,10 +86,11 @@ case $CONFIG_TYPE in
         echo "其他: unattended-upgrades usbutils"
         echo ""
         ;;
+    *)
+        echo "错误: 未知的配置类型: $CONFIG_TYPE"
+        exit 1
+        ;;
 esac
-
-# 添加设备特定配置
-echo "CONFIG_TARGET_DEVICE_${PLATFORM}_generic_${DEVICE_NAME}=y" >> .config
 
 # 只有在custom类型时才处理插件
 if [ "$CONFIG_TYPE" = "custom" ]; then
@@ -93,6 +99,7 @@ if [ "$CONFIG_TYPE" = "custom" ]; then
         echo "启用额外插件: $EXTRA_PACKAGES"
         for pkg in $EXTRA_PACKAGES; do
             echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+            echo "已启用: $pkg"
         done
     fi
 
@@ -103,6 +110,7 @@ if [ "$CONFIG_TYPE" = "custom" ]; then
             echo "CONFIG_PACKAGE_${pkg}=n" >> .config
             # 同时从配置中删除已启用的设置
             sed -i "/CONFIG_PACKAGE_${pkg}=y/d" .config 2>/dev/null || true
+            echo "已禁用: $pkg"
         done
     fi
 else
@@ -113,9 +121,20 @@ else
 fi
 
 echo "最终配置生成完成"
-echo "=== 配置摘要 ==="
+echo "=== 配置验证 ==="
 echo "目标平台和设备:"
 grep "CONFIG_TARGET" .config | head -10
+
+# 验证设备配置是否正确设置
+if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_${DEVICE_FULL_NAME}=y" .config; then
+    echo "✅ 设备配置正确: $DEVICE_FULL_NAME"
+else
+    echo "❌ 设备配置错误: 未找到 $DEVICE_FULL_NAME 的配置"
+    echo "尝试修复..."
+    echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${DEVICE_FULL_NAME}=y" >> .config
+    echo "设备配置已修复"
+fi
+
 echo ""
 echo "启用的包:"
 grep "^CONFIG_PACKAGE.*=y" .config | head -20 2>/dev/null || echo "无启用的包"
@@ -125,7 +144,8 @@ grep "^CONFIG_PACKAGE.*=n" .config | head -10 2>/dev/null || echo "无禁用的�
 
 # 保存配置摘要
 echo "=== 配置摘要 ===" > config_summary.log
-echo "设备: $DEVICE_NAME" >> config_summary.log
+echo "设备简称: $DEVICE_SHORT_NAME" >> config_summary.log
+echo "完整设备名称: $DEVICE_FULL_NAME" >> config_summary.log
 echo "平台: $PLATFORM" >> config_summary.log
 echo "配置类型: $CONFIG_TYPE" >> config_summary.log
 echo "" >> config_summary.log
