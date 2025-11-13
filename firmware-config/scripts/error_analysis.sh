@@ -37,7 +37,7 @@ echo "" >> error_analysis.log
 echo "=== 关键错误检查 ===" >> error_analysis.log
 
 # 检查所有可能的日志文件
-LOG_FILES="build.log build_detailed.log"
+LOG_FILES="build.log build_detailed.log build_fix.log"
 FOUND_ERRORS=0
 
 for LOG_FILE in $LOG_FILES; do
@@ -83,7 +83,7 @@ echo "" >> error_analysis.log
 echo "=== 错误原因分析和建议 ===" >> error_analysis.log
 
 # 检查文件创建错误
-if grep -q "cp: cannot create.*No such file or directory" build_detailed.log 2>/dev/null; then
+if grep -q "cp: cannot create.*No such file or directory" build_detailed.log 2>/dev/null || grep -q "cp: cannot create.*No such file or directory" build_fix.log 2>/dev/null; then
     echo "❌ 关键错误: 文件系统权限或空间问题" >> error_analysis.log
     echo "💡 可能原因:" >> error_analysis.log
     echo "  1. 磁盘空间不足" >> error_analysis.log
@@ -98,7 +98,7 @@ if grep -q "cp: cannot create.*No such file or directory" build_detailed.log 2>/
 fi
 
 # 检查内核构建错误
-if grep -q "target/linux failed to build" build_detailed.log 2>/dev/null; then
+if grep -q "target/linux failed to build" build_detailed.log 2>/dev/null || grep -q "target/linux failed to build" build_fix.log 2>/dev/null; then
     echo "❌ 关键错误: Linux内核编译失败" >> error_analysis.log
     echo "💡 可能原因:" >> error_analysis.log
     echo "  1. 内核配置冲突" >> error_analysis.log
@@ -119,7 +119,7 @@ if grep -q "No such file or directory" build_detailed.log 2>/dev/null; then
 fi
 
 if grep -q "Broken pipe" build_detailed.log 2>/dev/null; then
-    echo "⚠️  管道错误 (正常现象)" >> error_analysis.log
+    echo "⚠️  管道错误" >> error_analysis.log
     echo "💡 这是并行编译的正常现象，不影响最终结果" >> error_analysis.log
     echo "" >> error_analysis.log
 fi
