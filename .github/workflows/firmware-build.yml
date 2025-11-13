@@ -606,7 +606,10 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: firmware-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
-        path: [${{ env.BUILD_DIR }}/bin/, ${{ env.BUILD_DIR }}/build_detailed.log, ${{ env.BUILD_DIR }}/build_fix.log]
+        path: |
+          ${{ env.BUILD_DIR }}/bin/
+          ${{ env.BUILD_DIR }}/build_detailed.log
+          ${{ env.BUILD_DIR }}/build_fix.log
         retention-days: 7
 
     - name: 19_上传日志文件
@@ -614,7 +617,11 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: logs-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
-        path: [${{ env.BUILD_DIR }}/firmware_report.log, ${{ env.BUILD_DIR }}/error_analysis.log, ${{ env.BUILD_DIR }}/error_summary.log, ${{ env.BUILD_DIR }}/config_summary.log]
+        path: |
+          ${{ env.BUILD_DIR }}/firmware_report.log
+          ${{ env.BUILD_DIR }}/error_analysis.log
+          ${{ env.BUILD_DIR }}/error_summary.log
+          ${{ env.BUILD_DIR }}/config_summary.log
         retention-days: 7
 
     - name: 20_上传配置文件
