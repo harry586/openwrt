@@ -12,12 +12,12 @@ BUILD_DIR=$6
 
 cd $BUILD_DIR
 
-echo "Generating configuration for:"
-echo "  Type: $CONFIG_TYPE"
-echo "  Platform: $PLATFORM"
-echo "  Device: $DEVICE_NAME"
-echo "  Extra packages: $EXTRA_PACKAGES"
-echo "  Disable packages: $DISABLE_PACKAGES"
+echo "生成配置信息:"
+echo "  类型: $CONFIG_TYPE"
+echo "  平台: $PLATFORM"
+echo "  设备: $DEVICE_NAME"
+echo "  额外安装插件: $EXTRA_PACKAGES"
+echo "  禁用插件: $DISABLE_PACKAGES"
 
 # 清理现有配置
 rm -f .config
@@ -26,7 +26,7 @@ rm -f .config
 case $CONFIG_TYPE in
     "minimal")
         # 最小化配置
-        echo "Creating minimal configuration..."
+        echo "创建最小化配置..."
         cat > .config.minimal << EOF
 CONFIG_TARGET_${PLATFORM}=y
 CONFIG_TARGET_${PLATFORM}_DEVICE_${DEVICE_NAME}=y
@@ -42,7 +42,7 @@ EOF
         
     "normal")
         # 正常配置
-        echo "Creating normal configuration..."
+        echo "创建正常配置..."
         cat > .config.normal << EOF
 CONFIG_TARGET_${PLATFORM}=y
 CONFIG_TARGET_${PLATFORM}_DEVICE_${DEVICE_NAME}=y
@@ -63,7 +63,7 @@ EOF
         
     "custom")
         # 自定义配置 - 基于normal配置
-        echo "Creating custom configuration based on normal template..."
+        echo "基于正常模板创建自定义配置..."
         cat > .config.normal << EOF
 CONFIG_TARGET_${PLATFORM}=y
 CONFIG_TARGET_${PLATFORM}_DEVICE_${DEVICE_NAME}=y
@@ -96,7 +96,7 @@ esac
 if [ "$CONFIG_TYPE" = "custom" ]; then
     # 添加额外包
     if [ ! -z "$EXTRA_PACKAGES" ]; then
-        echo "Enabling extra packages: $EXTRA_PACKAGES"
+        echo "启用额外插件: $EXTRA_PACKAGES"
         for pkg in $EXTRA_PACKAGES; do
             echo "CONFIG_PACKAGE_${pkg}=y" >> .config
         done
@@ -104,7 +104,7 @@ if [ "$CONFIG_TYPE" = "custom" ]; then
 
     # 禁用包
     if [ ! -z "$DISABLE_PACKAGES" ]; then
-        echo "Disabling packages: $DISABLE_PACKAGES"
+        echo "禁用插件: $DISABLE_PACKAGES"
         for pkg in $DISABLE_PACKAGES; do
             echo "CONFIG_PACKAGE_${pkg}=n" >> .config
             # 同时从配置中删除已启用的设置
@@ -113,18 +113,18 @@ if [ "$CONFIG_TYPE" = "custom" ]; then
     fi
 else
     if [ ! -z "$EXTRA_PACKAGES" ] || [ ! -z "$DISABLE_PACKAGES" ]; then
-        echo "Warning: Package management is only available for custom configuration type"
-        echo "Ignoring package settings for $CONFIG_TYPE type"
+        echo "警告: 插件管理仅在 custom 配置类型下可用"
+        echo "忽略 $CONFIG_TYPE 类型的插件设置"
     fi
 fi
 
-echo "Final configuration generated"
-echo "=== Configuration summary ==="
-echo "Enabled packages:"
-grep "^CONFIG_PACKAGE.*=y" .config | head -20
+echo "最终配置生成完成"
+echo "=== 配置摘要 ==="
+echo "已启用的插件:"
+grep "^CONFIG_PACKAGE.*=y" .config | head -20 2>/dev/null || echo "无启用的插件"
 echo ""
-echo "Disabled packages:"
-grep "^CONFIG_PACKAGE.*=n" .config | head -10
+echo "已禁用的插件:"
+grep "^CONFIG_PACKAGE.*=n" .config | head -10 2>/dev/null || echo "无禁用的插件"
 
 # 保存配置摘要
 echo "=== 配置摘要 ===" > config_summary.log
@@ -133,7 +133,9 @@ echo "平台: $PLATFORM" >> config_summary.log
 echo "配置类型: $CONFIG_TYPE" >> config_summary.log
 echo "" >> config_summary.log
 echo "启用的包:" >> config_summary.log
-grep "^CONFIG_PACKAGE.*=y" .config >> config_summary.log
+grep "^CONFIG_PACKAGE.*=y" .config 2>/dev/null >> config_summary.log || echo "无启用的包" >> config_summary.log
 echo "" >> config_summary.log
 echo "禁用的包:" >> config_summary.log
-grep "^CONFIG_PACKAGE.*=n" .config >> config_summary.log
+grep "^CONFIG_PACKAGE.*=n" .config 2>/dev/null >> config_summary.log || echo "无禁用的包" >> config_summary.log
+
+echo "配置脚本执行完成"
