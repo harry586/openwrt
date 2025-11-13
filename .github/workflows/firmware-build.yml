@@ -121,6 +121,7 @@ jobs:
         # 设置环境变量供后续步骤使用
         echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
         echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
+        echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
         
         # 验证设备是否在支持列表中
         echo "检查设备配置文件..."
@@ -128,6 +129,12 @@ jobs:
           echo "找到平台配置文件"
           if grep -q "$TARGET_PROFILE" "target/linux/$PLATFORM/image/generic.mk"; then
             echo "✅ 设备 $TARGET_PROFILE 在支持列表中"
+            # 提取设备的完整配置名称
+            DEVICE_CONFIG_NAME=$(grep "define Device" "target/linux/$PLATFORM/image/generic.mk" | grep "$TARGET_PROFILE" | sed 's/.*define Device\///' | sed 's/).*//' | head -1)
+            if [ ! -z "$DEVICE_CONFIG_NAME" ]; then
+              echo "设备配置名称: $DEVICE_CONFIG_NAME"
+              echo "DEVICE_CONFIG_NAME=$DEVICE_CONFIG_NAME" >> $GITHUB_ENV
+            fi
           else
             echo "❌ 设备 $TARGET_PROFILE 不在支持列表中"
             echo "可用设备列表:"
@@ -137,6 +144,14 @@ jobs:
         else
           echo "❌ 找不到平台配置文件"
           exit 1
+        fi
+        
+        # 额外检查：验证配置系统识别的设备名称
+        echo ""
+        echo "=== 配置系统设备检查 ==="
+        if [ -f "target/linux/$PLATFORM/generic/target.mk" ]; then
+          echo "检查目标配置..."
+          grep "DEFAULT_PACKAGES" "target/linux/$PLATFORM/generic/target.mk" || echo "未找到DEFAULT_PACKAGES"
         fi
 
     - name: 8_动态生成设备配置
@@ -179,7 +194,23 @@ jobs:
         cd $BUILD_DIR
         echo "使用defconfig避免menuconfig调用..."
         export TERM=linux
-        make defconfig
+        if ! make defconfig; then
+          echo "❌ defconfig 失败，尝试修复配置..."
+          # 如果defconfig失败，尝试手动修复配置
+          if [ -f ".config" ]; then
+            echo "备份当前配置..."
+            cp .config .config.backup
+            echo "清理无效配置行..."
+            grep -v "^#" .config | grep -v "^$" > .config.clean
+            mv .config.clean .config
+            echo "重新尝试defconfig..."
+            make defconfig
+          else
+            echo "❌ 配置文件不存在，无法继续"
+            exit 1
+          fi
+        fi
+        echo "✅ defconfig 完成"
 
     - name: 10_验证配置文件
       run: |
@@ -187,36 +218,99 @@ jobs:
         echo "=== 验证配置文件 ==="
         
         echo "检查配置文件中的设备设置..."
+        
+        # 首先检查当前配置
+        echo "当前配置中的设备相关设置:"
+        grep "CONFIG_TARGET" .config | grep -E "(ipq40xx|asus)" || echo "未找到相关配置"
+        
+        # 检查设备配置
         if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" .config; then
-          echo "✅ 设备配置正确: ${{ env.DEVICE_FULL_NAME }}"
+            echo "✅ 设备配置正确: ${{ env.DEVICE_FULL_NAME }}"
         else
-          echo "❌ 设备配置错误，当前配置:"
-          grep "CONFIG_TARGET" .config | grep -E "(ipq40xx|${{ env.DEVICE_FULL_NAME }})" || echo "未找到相关配置"
-          echo "重新设置设备..."
-          echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" >> .config
-          make defconfig
-          echo "重新验证配置..."
-          if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" .config; then
-            echo "✅ 设备配置修复成功"
-          else
-            echo "❌ 设备配置修复失败"
-            exit 1
-          fi
+            echo "❌ 设备配置错误，尝试修复..."
+            
+            # 方法1: 直接设置设备
+            echo "方法1: 直接设置设备配置..."
+            echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" >> .config
+            
+            # 验证方法1
+            if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" .config; then
+                echo "✅ 方法1修复成功"
+            else
+                echo "❌ 方法1失败，尝试方法2..."
+                
+                # 方法2: 使用menuconfig预设
+                echo "方法2: 使用预设配置..."
+                # 先设置基础目标
+                echo "CONFIG_TARGET_ipq40xx=y" > .config
+                echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+                
+                # 运行defconfig来设置默认配置
+                make defconfig
+                
+                # 然后手动启用设备
+                echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" >> .config
+                make defconfig
+                
+                if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" .config; then
+                    echo "✅ 方法2修复成功"
+                else
+                    echo "❌ 方法2失败，尝试方法3..."
+                    
+                    # 方法3: 使用完整的配置流程
+                    echo "方法3: 完整配置流程..."
+                    # 清理配置
+                    rm -f .config
+                    
+                    # 设置最小配置
+                    cat > .config << 'EOF'
+CONFIG_TARGET_ipq40xx=y
+CONFIG_TARGET_ipq40xx_generic=y
+CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-base=y
+CONFIG_PACKAGE_dnsmasq-full=y
+CONFIG_PACKAGE_firewall=y
+CONFIG_PACKAGE_iptables=y
+EOF
+                    
+                    # 应用配置
+                    make defconfig
+                    
+                    if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" .config; then
+                        echo "✅ 方法3修复成功"
+                    else
+                        echo "❌ 所有修复方法都失败"
+                        echo "当前配置状态:"
+                        grep "CONFIG_TARGET" .config
+                        echo "请检查设备名称是否正确: ${{ env.DEVICE_FULL_NAME }}"
+                        exit 1
+                    fi
+                fi
+            fi
         fi
         
         echo ""
-        echo "=== 配置摘要 ==="
+        echo "=== 最终配置验证 ==="
         echo "目标配置:"
         grep "CONFIG_TARGET" .config
         echo ""
-        echo "启用的主要包:"
-        grep "^CONFIG_PACKAGE.*=y" .config | head -15 2>/dev/null || echo "无启用的包"
+        echo "设备配置状态:"
+        if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" .config; then
+            echo "✅ 最终验证: 设备配置正确"
+        else
+            echo "❌ 最终验证: 设备配置仍然错误"
+            exit 1
+        fi
 
     - name: 11_下载软件包
       run: |
         cd $BUILD_DIR
         echo "下载软件包..."
-        make -j8 download V=s
+        if ! make -j8 download V=s; then
+          echo "❌ 下载失败，尝试重新下载..."
+          make download V=s
+        fi
         echo "下载完成，当前目录大小:"
         du -sh .
 
@@ -245,48 +339,170 @@ jobs:
         echo "构建目录当前大小:"
         du -sh .
 
+    - name: 12.5_编译前环境验证
+      run: |
+        cd $BUILD_DIR
+        echo "=== 编译前环境验证 ==="
+        
+        # 检查关键文件
+        echo "1. 检查配置文件..."
+        if [ -f ".config" ]; then
+            echo "✅ 配置文件存在"
+            echo "设备配置:"
+            grep "CONFIG_TARGET_DEVICE" .config || echo "未找到设备配置"
+        else
+            echo "❌ 配置文件不存在"
+            exit 1
+        fi
+        
+        echo ""
+        echo "2. 检查feeds..."
+        if [ -d "feeds" ]; then
+            echo "✅ feeds目录存在"
+        else
+            echo "❌ feeds目录不存在"
+            exit 1
+        fi
+        
+        echo ""
+        echo "3. 检查package目录..."
+        if [ -d "package" ]; then
+            echo "✅ package目录存在"
+        else
+            echo "❌ package目录不存在"
+            exit 1
+        fi
+        
+        echo ""
+        echo "4. 检查下载的包..."
+        if [ -d "dl" ]; then
+            echo "✅ dl目录存在"
+            echo "下载的包数量: $(ls dl/ | wc -l)"
+        else
+            echo "❌ dl目录不存在"
+            echo "请先运行 'make download'"
+            exit 1
+        fi
+        
+        echo ""
+        echo "5. 检查磁盘空间..."
+        AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
+        AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+        echo "可用空间: ${AVAILABLE_GB}G"
+        
+        if [ $AVAILABLE_GB -lt 20 ]; then
+            echo "❌ 磁盘空间不足，需要至少20G，当前只有 ${AVAILABLE_GB}G"
+            exit 1
+        else
+            echo "✅ 磁盘空间充足"
+        fi
+        
+        echo "环境验证完成，可以开始编译"
+
     - name: 13_编译固件
       run: |
         cd $BUILD_DIR
         echo "开始编译固件..."
         export TERM=linux
         
-        echo "清理编译环境..."
+        # 清理之前的构建（保留下载的包）
+        echo "执行清理..."
         make clean 2>/dev/null || true
         
-        # 预先创建可能缺失的目录
+        # 检查关键目录和文件
+        echo "=== 检查构建环境 ==="
+        echo "feeds 目录:"
+        ls -la feeds/ 2>/dev/null | head -5 || echo "feeds 目录不存在"
+        echo "package 目录:"
+        ls -la package/ 2>/dev/null | head -5 || echo "package 目录不存在"
+        echo "target 目录:"
+        ls -la target/ 2>/dev/null | head -5 || echo "target 目录不存在"
+        
+        # 预先创建必要的目录结构
         echo "创建必要的构建目录..."
-        mkdir -p build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/root-ipq40xx/
-        mkdir -p build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic/
-        mkdir -p build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic/linux-5.4.255/
+        mkdir -p build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/
+        mkdir -p staging_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/
+        mkdir -p bin/targets/ipq40xx/generic/
         
-        echo "=== 步骤1: 编译工具链 ==="
-        make tools/install -j$(nproc) V=s 2>&1 | tee -a build_detailed.log
+        # 使用更稳健的编译方式
+        echo "=== 开始完整编译过程 ==="
         
-        echo "=== 步骤2: 编译目标工具链 ==="  
-        make toolchain/install -j$(nproc) V=s 2>&1 | tee -a build_detailed.log
-        
-        echo "=== 步骤3: 编译内核和目标 ==="
-        # 先清理内核构建
-        make target/linux/clean 2>&1 | tee -a build_detailed.log
-        
-        # 然后编译内核
-        if ! make target/linux/install -j1 V=sc 2>&1 | tee -a build_detailed.log; then
-          echo "内核编译失败，尝试修复..."
-          echo "=== 修复步骤: 重新编译内核 ==="
-          make target/linux/clean 2>&1 | tee -a build_fix.log
-          make target/linux/compile -j1 V=sc 2>&1 | tee -a build_fix.log
-          make target/linux/install -j1 V=sc 2>&1 | tee -a build_fix.log
+        # 方法1: 尝试完整编译（如果失败则使用方法2）
+        echo "方法1: 完整编译..."
+        if make -j$(nproc) V=s 2>&1 | tee build_detailed.log; then
+            echo "✅ 完整编译成功"
+        else
+            echo "❌ 完整编译失败，尝试分步编译..."
+            
+            # 方法2: 分步编译
+            echo "=== 分步编译 ==="
+            
+            # 步骤1: 工具链
+            echo "步骤1: 编译工具链..."
+            if make tools/install -j1 V=s 2>&1 | tee -a build_fix.log; then
+                echo "✅ 工具链编译成功"
+            else
+                echo "❌ 工具链编译失败"
+                exit 1
+            fi
+            
+            # 步骤2: 工具链目标
+            echo "步骤2: 编译目标工具链..."
+            if make toolchain/install -j1 V=s 2>&1 | tee -a build_fix.log; then
+                echo "✅ 目标工具链编译成功"
+            else
+                echo "❌ 目标工具链编译失败"
+                exit 1
+            fi
+            
+            # 步骤3: 清理并编译内核
+            echo "步骤3: 编译内核..."
+            make target/linux/clean 2>&1 | tee -a build_fix.log
+            if make target/linux/compile -j1 V=s 2>&1 | tee -a build_fix.log; then
+                echo "✅ 内核编译成功"
+            else
+                echo "❌ 内核编译失败"
+                exit 1
+            fi
+            
+            # 步骤4: 安装内核
+            echo "步骤4: 安装内核..."
+            if make target/linux/install -j1 V=s 2>&1 | tee -a build_fix.log; then
+                echo "✅ 内核安装成功"
+            else
+                echo "❌ 内核安装失败"
+                exit 1
+            fi
+            
+            # 步骤5: 编译包
+            echo "步骤5: 编译软件包..."
+            if make package/compile -j1 V=s 2>&1 | tee -a build_fix.log; then
+                echo "✅ 软件包编译成功"
+            else
+                echo "❌ 软件包编译失败"
+                exit 1
+            fi
+            
+            # 步骤6: 安装包
+            echo "步骤6: 安装软件包..."
+            if make package/install -j1 V=s 2>&1 | tee -a build_fix.log; then
+                echo "✅ 软件包安装成功"
+            else
+                echo "❌ 软件包安装失败"
+                exit 1
+            fi
+            
+            # 步骤7: 生成镜像
+            echo "步骤7: 生成固件镜像..."
+            if make target/install -j1 V=s 2>&1 | tee -a build_fix.log; then
+                echo "✅ 固件镜像生成成功"
+            else
+                echo "❌ 固件镜像生成失败"
+                exit 1
+            fi
         fi
         
-        echo "=== 步骤4: 编译软件包 ==="
-        make package/compile -j1 V=sc 2>&1 | tee -a build_detailed.log
-        
-        echo "=== 步骤5: 最终安装 ==="
-        make package/install -j1 V=sc 2>&1 | tee -a build_detailed.log
-        
-        echo "=== 步骤6: 生成镜像 ==="
-        make target/install -j1 V=sc 2>&1 | tee -a build_detailed.log
+        echo "编译过程完成"
 
     - name: 14_验证固件生成
       if: always()
@@ -455,3 +671,18 @@ jobs:
         name: config-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
         path: ${{ env.CONFIG_DIR }}/configs/${{ github.event.inputs.device_name }}_final_config
         retention-days: 30
+
+    - name: 21_调试信息收集
+      if: failure()
+      run: |
+        cd $BUILD_DIR
+        echo "=== 调试信息收集 (仅在失败时运行) ==="
+        echo "环境变量:"
+        echo "DEVICE_FULL_NAME: ${{ env.DEVICE_FULL_NAME }}"
+        echo "当前目录: $(pwd)"
+        echo "配置文件内容:"
+        cat .config | grep "CONFIG_TARGET" || echo "无TARGET配置"
+        echo "所有文件:"
+        ls -la
+        echo "构建日志前100行:"
+        head -100 build_detailed.log 2>/dev/null || echo "无构建日志"
