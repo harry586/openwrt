@@ -1,181 +1,146 @@
 #!/bin/bash
 # error_analysis.sh - 错误分析脚本
 
-BUILD_DIR=$1
-cd $BUILD_DIR
+set -e
 
-echo "=== 固件构建错误分析报告 ===" > error_analysis.log
+BUILD_DIR=${1:-/mnt/openwrt-build}
 
-# 首先检查构建结果
-echo "=== 构建结果摘要 ===" >> error_analysis.log
+echo "=== 错误分析开始 ===" > error_analysis.log
+echo "分析时间: $(date)" >> error_analysis.log
+echo "构建目录: $BUILD_DIR" >> error_analysis.log
+echo "" >> error_analysis.log
 
-# 检查多个可能的固件位置
+cd "$BUILD_DIR"
+
+if [ ! -f "build_detailed.log" ]; then
+    echo "❌ 错误: 找不到构建日志文件 build_detailed.log" >> error_analysis.log
+    exit 1
+fi
+
+# 1. 检查严重错误
+echo "1. 严重错误检查..." >> error_analysis.log
+if grep -q "Error [0-9]" build_detailed.log; then
+    echo "❌ 发现编译错误:" >> error_analysis.log
+    grep "Error [0-9]" build_detailed.log | head -10 >> error_analysis.log
+else
+    echo "✅ 未发现严重编译错误" >> error_analysis.log
+fi
+echo "" >> error_analysis.log
+
+# 2. 检查make错误
+echo "2. Makefile错误检查..." >> error_analysis.log
+if grep -q "make.*Error" build_detailed.log; then
+    echo "⚠️ 发现Makefile执行错误:" >> error_analysis.log
+    grep "make.*Error" build_detailed.log | head -10 >> error_analysis.log
+else
+    echo "✅ 未发现Makefile执行错误" >> error_analysis.log
+fi
+echo "" >> error_analysis.log
+
+# 3. 检查文件缺失错误
+echo "3. 文件缺失错误检查..." >> error_analysis.log
+if grep -q "No such file" build_detailed.log || grep -q "file not found" build_detailed.log; then
+    echo "❌ 发现文件缺失错误:" >> error_analysis.log
+    grep -E "No such file|file not found" build_detailed.log | head -10 >> error_analysis.log
+else
+    echo "✅ 未发现文件缺失错误" >> error_analysis.log
+fi
+echo "" >> error_analysis.log
+
+# 4. 检查依赖错误
+echo "4. 依赖关系错误检查..." >> error_analysis.log
+if grep -q "depends on" build_detailed.log; then
+    echo "❌ 发现依赖关系错误:" >> error_analysis.log
+    grep "depends on" build_detailed.log | head -10 >> error_analysis.log
+else
+    echo "✅ 未发现依赖关系错误" >> error_analysis.log
+fi
+echo "" >> error_analysis.log
+
+# 5. 检查空间错误
+echo "5. 磁盘空间检查..." >> error_analysis.log
+if grep -q "No space left" build_detailed.log; then
+    echo "❌ 发现磁盘空间不足错误" >> error_analysis.log
+    grep "No space left" build_detailed.log >> error_analysis.log
+else
+    echo "✅ 未发现磁盘空间错误" >> error_analysis.log
+fi
+echo "" >> error_analysis.log
+
+# 6. 检查设备配置错误
+echo "6. 设备配置检查..." >> error_analysis.log
+if grep -q "Device.*not found" build_detailed.log || grep -q "unknown device" build_detailed.log; then
+    echo "❌ 发现设备配置错误:" >> error_analysis.log
+    grep -E "Device.*not found|unknown device" build_detailed.log >> error_analysis.log
+else
+    echo "✅ 未发现设备配置错误" >> error_analysis.log
+fi
+echo "" >> error_analysis.log
+
+# 7. 检查被忽略的错误
+echo "7. 被忽略的错误检查..." >> error_analysis.log
+if grep -q "Error.*ignored" build_detailed.log; then
+    echo "⚠️ 发现被忽略的错误:" >> error_analysis.log
+    grep "Error.*ignored" build_detailed.log >> error_analysis.log
+else
+    echo "✅ 未发现被忽略的错误" >> error_analysis.log
+fi
+echo "" >> error_analysis.log
+
+# 8. 检查警告
+echo "8. 警告信息统计..." >> error_analysis.log
+WARNING_COUNT=$(grep -c "warning:" build_detailed.log || true)
+if [ "$WARNING_COUNT" -gt 0 ]; then
+    echo "⚠️ 发现 $WARNING_COUNT 个警告" >> error_analysis.log
+    echo "前10个警告:" >> error_analysis.log
+    grep "warning:" build_detailed.log | head -10 >> error_analysis.log
+else
+    echo "✅ 未发现警告" >> error_analysis.log
+fi
+echo "" >> error_analysis.log
+
+# 9. 构建结果总结
+echo "=== 构建结果总结 ===" >> error_analysis.log
 if [ -d "bin/targets" ]; then
-    FIRMWARE_COUNT=$(find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null | wc -l)
-    if [ $FIRMWARE_COUNT -gt 0 ]; then
-        echo "✅ 构建状态: 成功" >> error_analysis.log
-        echo "✅ 生成的固件文件: $FIRMWARE_COUNT" >> error_analysis.log
-        find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null | head -10 >> error_analysis.log
+    echo "✅ 构建状态: 成功" >> error_analysis.log
+    echo "生成的固件文件:" >> error_analysis.log
+    find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null | sort >> error_analysis.log
+    
+    # 检查目标设备固件
+    if find bin/targets -name "*asus_rt-ac42u*" 2>/dev/null | grep -q .; then
+        echo "✅ 找到正确的 ASUS RT-AC42U 固件" >> error_analysis.log
+    elif find bin/targets -name "*ac42u*" 2>/dev/null | grep -q .; then
+        echo "✅ 找到 AC42U 相关固件" >> error_analysis.log
     else
-        echo "❌ 构建状态: 部分成功 - 编译完成但无固件生成" >> error_analysis.log
-    fi
-elif [ -d "bin" ]; then
-    FIRMWARE_COUNT=$(find bin -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null | wc -l)
-    if [ $FIRMWARE_COUNT -gt 0 ]; then
-        echo "✅ 构建状态: 成功" >> error_analysis.log
-        echo "✅ 生成的固件文件: $FIRMWARE_COUNT" >> error_analysis.log
-        find bin -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null | head -10 >> error_analysis.log
-    else
-        echo "❌ 构建状态: 失败 - 编译完成但无固件生成" >> error_analysis.log
+        echo "⚠️ 未找到目标设备固件" >> error_analysis.log
     fi
 else
-    echo "❌ 构建状态: 失败 - 编译未完成" >> error_analysis.log
+    echo "❌ 构建状态: 失败" >> error_analysis.log
+    echo "bin/targets 目录不存在" >> error_analysis.log
 fi
 echo "" >> error_analysis.log
 
-# 关键错误检查放在前面
-echo "=== 关键错误检查 ===" >> error_analysis.log
-
-# 检查所有可能的日志文件
-LOG_FILES="build.log build_detailed.log build_fix.log"
-FOUND_ERRORS=0
-
-for LOG_FILE in $LOG_FILES; do
-    if [ -f "$LOG_FILE" ]; then
-        echo "检查日志文件: $LOG_FILE" >> error_analysis.log
-        
-        # 检查编译错误
-        if grep -q "Error [0-9]" "$LOG_FILE" 2>/dev/null; then
-            echo "❌ 发现编译错误:" >> error_analysis.log
-            grep "Error [0-9]" "$LOG_FILE" | head -10 >> error_analysis.log
-            FOUND_ERRORS=1
-        fi
-        
-        # 检查特定错误模式
-        if grep -q "cp: cannot create.*No such file or directory" "$LOG_FILE" 2>/dev/null; then
-            echo "❌ 关键错误: 文件创建失败" >> error_analysis.log
-            grep "cp: cannot create.*No such file or directory" "$LOG_FILE" | head -5 >> error_analysis.log
-            FOUND_ERRORS=1
-        fi
-        
-        # 检查内核构建错误
-        if grep -q "target/linux failed to build" "$LOG_FILE" 2>/dev/null; then
-            echo "❌ 关键错误: Linux内核构建失败" >> error_analysis.log
-            grep -A 5 -B 5 "target/linux failed to build" "$LOG_FILE" >> error_analysis.log
-            FOUND_ERRORS=1
-        fi
-        
-        # 检查makefile错误
-        if grep -q "Makefile.*Error" "$LOG_FILE" 2>/dev/null; then
-            echo "❌ Makefile执行错误:" >> error_analysis.log
-            grep "Makefile.*Error" "$LOG_FILE" | head -5 >> error_analysis.log
-            FOUND_ERRORS=1
-        fi
-    fi
-done
-
-if [ $FOUND_ERRORS -eq 0 ]; then
-    echo "✅ 未发现关键编译错误" >> error_analysis.log
-fi
-echo "" >> error_analysis.log
-
-# 错误原因分析和建议
-echo "=== 错误原因分析和建议 ===" >> error_analysis.log
-
-# 检查文件创建错误
-if grep -q "cp: cannot create.*No such file or directory" build_detailed.log 2>/dev/null || grep -q "cp: cannot create.*No such file or directory" build_fix.log 2>/dev/null; then
-    echo "❌ 关键错误: 文件系统权限或空间问题" >> error_analysis.log
-    echo "💡 可能原因:" >> error_analysis.log
-    echo "  1. 磁盘空间不足" >> error_analysis.log
-    echo "  2. 文件系统权限问题" >> error_analysis.log  
-    echo "  3. 内核配置错误导致init文件无法创建" >> error_analysis.log
-    echo "💡 解决方案:" >> error_analysis.log
-    echo "  1. 检查磁盘空间: df -h" >> error_analysis.log
-    echo "  2. 清理构建目录: make clean" >> error_analysis.log
-    echo "  3. 检查目标设备配置是否正确" >> error_analysis.log
-    echo "  4. 尝试使用不同的内核版本" >> error_analysis.log
-    echo "" >> error_analysis.log
+# 10. 建议和修复措施
+echo "=== 建议和修复措施 ===" >> error_analysis.log
+if grep -q "No such file" error_analysis.log; then
+    echo "💡 文件缺失建议: 检查源码完整性或重新下载依赖" >> error_analysis.log
 fi
 
-# 检查内核构建错误
-if grep -q "target/linux failed to build" build_detailed.log 2>/dev/null || grep -q "target/linux failed to build" build_fix.log 2>/dev/null; then
-    echo "❌ 关键错误: Linux内核编译失败" >> error_analysis.log
-    echo "💡 可能原因:" >> error_analysis.log
-    echo "  1. 内核配置冲突" >> error_analysis.log
-    echo "  2. 工具链问题" >> error_analysis.log
-    echo "  3. 设备树配置错误" >> error_analysis.log
-    echo "💡 解决方案:" >> error_analysis.log
-    echo "  1. 清理内核构建: make target/linux/clean" >> error_analysis.log
-    echo "  2. 检查内核配置: make kernel_menuconfig" >> error_analysis.log
-    echo "  3. 验证设备支持" >> error_analysis.log
-    echo "" >> error_analysis.log
+if grep -q "depends on" error_analysis.log; then
+    echo "💡 依赖错误建议: 检查包依赖关系，确保所有依赖包已正确安装" >> error_analysis.log
 fi
 
-# 检查其他常见错误
-if grep -q "No such file or directory" build_detailed.log 2>/dev/null; then
-    echo "⚠️  文件缺失错误" >> error_analysis.log
-    echo "💡 可能原因: 源码不完整或下载失败" >> error_analysis.log
-    echo "" >> error_analysis.log
+if grep -q "No space left" error_analysis.log; then
+    echo "💡 空间不足建议: 清理磁盘空间或增加构建目录的空间" >> error_analysis.log
 fi
 
-if grep -q "Broken pipe" build_detailed.log 2>/dev/null; then
-    echo "⚠️  管道错误" >> error_analysis.log
-    echo "💡 这是并行编译的正常现象，不影响最终结果" >> error_analysis.log
-    echo "" >> error_analysis.log
+if grep -q "Device.*not found" error_analysis.log; then
+    echo "💡 设备配置建议: 检查设备名称是否正确，验证设备在源码中的支持" >> error_analysis.log
 fi
 
-# 下面是详细的错误分类（放在后面）
-echo "=== 详细错误分类 ===" >> error_analysis.log
-echo "开始收集和分析错误日志..." >> error_analysis.log
-
-if [ -f "build_detailed.log" ]; then
-    LOG_FILE="build_detailed.log"
-else
-    LOG_FILE="build.log"
-fi
-
-echo "使用日志文件: $LOG_FILE" >> error_analysis.log
 echo "" >> error_analysis.log
-
-echo "1. 严重错误 (Failed):" >> error_analysis.log
-grep -i "failed" "$LOG_FILE" | head -10 2>/dev/null || echo "无严重错误" >> error_analysis.log
-echo "" >> error_analysis.log
-
-echo "2. 编译错误 (error:):" >> error_analysis.log
-grep "error:" "$LOG_FILE" | head -10 2>/dev/null || echo "无编译错误" >> error_analysis.log
-echo "" >> error_analysis.log
-
-echo "3. 退出错误 (error 1/error 2):" >> error_analysis.log
-grep -E "error [12]" "$LOG_FILE" | head -5 2>/dev/null || echo "无退出错误" >> error_analysis.log
-echo "" >> error_analysis.log
-
-echo "4. 文件缺失错误:" >> error_analysis.log
-grep -i "no such file or directory" "$LOG_FILE" | head -5 2>/dev/null || echo "无文件缺失错误" >> error_analysis.log
-echo "" >> error_analysis.log
-
-echo "5. 管道错误:" >> error_analysis.log
-grep -i "broken pipe" "$LOG_FILE" | head -5 2>/dev/null || echo "无管道错误" >> error_analysis.log
-echo "" >> error_analysis.log
-
-echo "6. 缺失依赖错误:" >> error_analysis.log
-grep -i "missing" "$LOG_FILE" | head -5 2>/dev/null || echo "无缺失依赖错误" >> error_analysis.log
-echo "" >> error_analysis.log
-
 echo "错误分析完成" >> error_analysis.log
 
-# 创建错误摘要
-echo "=== 错误摘要 ===" > error_summary.log
-echo "构建状态: $(grep "构建状态" error_analysis.log | head -1)" >> error_summary.log
-echo "关键错误: $(grep "关键错误:" error_analysis.log | head -1)" >> error_summary.log
-echo "" >> error_summary.log
-echo "详细报告请查看 error_analysis.log" >> error_summary.log
-
-# 在终端显示关键信息
-echo "=== 构建结果 ==="
-grep -A 5 "构建结果摘要" error_analysis.log
-echo ""
-echo "=== 关键错误 ==="
-grep -A 3 "关键错误检查" error_analysis.log
-echo ""
-echo "=== 解决方案 ==="
-grep -A 5 "错误原因分析和建议" error_analysis.log
+# 在控制台输出摘要
+echo "=== 错误分析摘要 ==="
+grep -E "✅|❌|⚠️" error_analysis.log | head -20
