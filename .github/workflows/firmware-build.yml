@@ -103,6 +103,7 @@ jobs:
           "ac42u")
             PLATFORM="ipq40xx"
             DEVICE_FULL_NAME="asus_rt-ac42u"
+            TARGET_PROFILE="asus_rt-ac42u"
             ;;
           *)
             echo "未知设备: ${{ github.event.inputs.device_name }}"
@@ -116,6 +117,7 @@ jobs:
         echo "custom  - 自定义配置: 以normal为模板 + 用户自定义插件管理"
         echo ""
         echo "选择的配置类型: ${{ github.event.inputs.config_type }}"
+        echo "目标设备: $TARGET_PROFILE"
         
         if [ "${{ github.event.inputs.config_type }}" != "custom" ]; then
           if [ -n "${{ github.event.inputs.extra_packages }}" ] || [ -n "${{ github.event.inputs.disable_packages }}" ]; then
@@ -194,7 +196,19 @@ jobs:
         make toolchain/install -j$(nproc) V=s 2>&1 | tee -a build_detailed.log
         
         echo "=== 步骤3: 编译内核和目标 ==="
-        make target/linux/install -j1 V=sc 2>&1 | tee -a build_detailed.log
+        # 先尝试正常编译
+        if ! make target/linux/install -j1 V=sc 2>&1 | tee -a build_detailed.log; then
+          echo "内核编译失败，尝试修复..."
+          echo "=== 修复步骤1: 清理内核构建 ==="
+          make target/linux/clean 2>&1 | tee -a build_fix.log
+          echo "=== 修复步骤2: 创建缺失目录 ==="
+          mkdir -p build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/root-ipq40xx/ || true
+          mkdir -p build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic/ || true
+          echo "=== 修复步骤3: 重新编译内核 ==="
+          make target/linux/compile -j1 V=sc 2>&1 | tee -a build_fix.log
+          echo "=== 修复步骤4: 重新安装内核 ==="
+          make target/linux/install -j1 V=sc 2>&1 | tee -a build_fix.log
+        fi
         
         echo "=== 步骤4: 编译软件包 ==="
         make package/compile -j1 V=sc 2>&1 | tee -a build_detailed.log
@@ -205,30 +219,33 @@ jobs:
         echo "=== 步骤6: 生成镜像 ==="
         make target/install -j1 V=sc 2>&1 | tee -a build_detailed.log
 
-    - name: 11.2_内核编译修复
+    - name: 12_验证固件生成
       if: always()
       run: |
         cd $BUILD_DIR
-        echo "检查内核编译问题..."
+        echo "=== 验证固件生成 ==="
         
-        if grep -q "target/linux failed to build" build_detailed.log 2>/dev/null || grep -q "cp: cannot create.*init" build_detailed.log 2>/dev/null; then
-          echo "发现内核编译错误，尝试修复..."
-          echo "=== 修复步骤1: 清理内核构建 ==="
-          make target/linux/clean 2>&1 | tee -a build_fix.log
-          echo "=== 修复步骤2: 重新编译内核 ==="
-          make target/linux/compile -j1 V=sc 2>&1 | tee -a build_fix.log
-          echo "=== 修复步骤3: 重新安装内核 ==="
-          make target/linux/install -j1 V=sc 2>&1 | tee -a build_fix.log
+        echo "检查固件文件..."
+        if [ -d "bin/targets" ]; then
+          echo "找到目标目录，固件文件列表:"
+          find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null | while read file; do
+            echo "固件: $file"
+            ls -la "$file"
+          done
           
-          echo "创建缺失的目录..."
-          mkdir -p build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/root-ipq40xx/ || true
-          mkdir -p build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic/ || true
-          
-          echo "重新尝试目标安装..."
-          make target/install -j1 V=sc 2>&1 | tee -a build_fix.log
+          # 检查是否有正确的设备固件
+          EXPECTED_PATTERN="*ac42u*"
+          if find bin/targets -name "*ac42u*" 2>/dev/null | grep -q .; then
+            echo "✅ 找到正确的 ac42u 固件"
+          else
+            echo "⚠️ 未找到 ac42u 固件，但有以下固件:"
+            find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null
+          fi
+        else
+          echo "❌ 未找到目标目录，编译可能失败"
         fi
 
-    - name: 12_运行错误分析脚本
+    - name: 13_运行错误分析脚本
       if: always()
       run: |
         cd $BUILD_DIR
@@ -237,7 +254,7 @@ jobs:
         $CONFIG_DIR/scripts/error_analysis.sh $BUILD_DIR
         echo "错误分析完成"
 
-    - name: 13_固件汇总分析报告
+    - name: 14_固件汇总分析报告
       if: always()
       run: |
         cd $BUILD_DIR
@@ -261,6 +278,15 @@ jobs:
           
           echo "=== 所有固件文件 ===" >> firmware_report.log
           find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" \) 2>/dev/null | sort >> firmware_report.log
+          echo "" >> firmware_report.log
+          
+          # 检查是否有正确的设备固件
+          if find bin/targets -name "*ac42u*" 2>/dev/null | grep -q .; then
+            echo "✅ 找到正确的 ac42u 固件" >> firmware_report.log
+          else
+            echo "⚠️ 警告: 未找到 ac42u 固件，但有以下固件:" >> firmware_report.log
+            find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null >> firmware_report.log
+          fi
           echo "" >> firmware_report.log
           
           echo "=== 升级镜像 (sysupgrade) ===" >> firmware_report.log
@@ -304,7 +330,7 @@ jobs:
         echo "固件分析报告生成完成"
         cat firmware_report.log
 
-    - name: 14_最终空间检查
+    - name: 15_最终空间检查
       if: always()
       run: |
         echo "=== 最终空间使用情况 ==="
@@ -315,7 +341,7 @@ jobs:
         echo "bin目录大小:"
         du -sh bin/ 2>/dev/null || echo "bin目录不存在"
 
-    - name: 15_上传编译产物
+    - name: 16_上传编译产物
       if: always()
       uses: actions/upload-artifact@v4
       with:
@@ -326,7 +352,7 @@ jobs:
           ${{ env.BUILD_DIR }}/build_fix.log
         retention-days: 7
 
-    - name: 16_上传日志文件
+    - name: 17_上传日志文件
       if: always()
       uses: actions/upload-artifact@v4
       with:
@@ -338,7 +364,7 @@ jobs:
           ${{ env.BUILD_DIR }}/config_summary.log
         retention-days: 7
 
-    - name: 17_上传配置文件
+    - name: 18_上传配置文件
       if: always()
       uses: actions/upload-artifact@v4
       with:
