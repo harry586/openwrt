@@ -1,15 +1,15 @@
-name: Firmware Build Workflow
+name: OpenWrt Firmware Build Workflow
 
 on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: '设备名称 (例如: ac42u)'
+        description: 'Device name (e.g., ac42u)'
         required: true
         default: 'ac42u'
         type: string
       config_type:
-        description: '配置类型'
+        description: 'Configuration type (选择 custom 才能使用插件管理)'
         required: true
         default: 'minimal'
         type: choice
@@ -18,7 +18,11 @@ on:
           - normal
           - custom
       extra_packages:
-        description: '额外插件名 (用空格分隔，例如: adblock wireguard)'
+        description: 'Additional packages to install (space separated) - 仅 custom 类型可用'
+        required: false
+        type: string
+      disable_packages:
+        description: 'Packages to disable (space separated) - 仅 custom 类型可用'
         required: false
         type: string
 
@@ -32,70 +36,70 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - name: 1_初始空间检查
+    - name: 1_Check initial disk space
       run: |
-        echo "=== 初始磁盘空间检查 ==="
+        echo "=== Initial disk space check ==="
         df -h
-        echo "工作空间: ${{ github.workspace }}"
-        echo "构建目录: $BUILD_DIR"
+        echo "Workspace: ${{ github.workspace }}"
+        echo "Build directory: $BUILD_DIR"
         
         if [ ! -d "/mnt" ]; then
-          echo "错误: /mnt 目录不存在!"
+          echo "Error: /mnt directory does not exist!"
           exit 1
         fi
         
         AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
         AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-        echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+        echo "/mnt available space: ${AVAILABLE_GB}G"
         
         if [ $AVAILABLE_GB -lt 50 ]; then
-          echo "错误: /mnt 空间不足50G，当前只有 ${AVAILABLE_GB}G"
+          echo "Error: /mnt has less than 50G space, currently only ${AVAILABLE_GB}G"
           exit 1
         fi
         
-        echo "空间检查通过: /mnt 有 ${AVAILABLE_GB}G 可用空间"
+        echo "Space check passed: /mnt has ${AVAILABLE_GB}G available space"
 
-    - name: 2_检出代码仓库
+    - name: 2_Checkout code repository
       uses: actions/checkout@v4
 
-    - name: 3_设置编译环境
+    - name: 3_Setup build environment
       run: |
-        echo "安装编译环境..."
+        echo "Installing build environment..."
         sudo apt-get update
         sudo dpkg --add-architecture i386
         sudo apt-get update
         sudo apt-get -y install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib curl lib32gcc-s1 libc6-dev-x32 linux-libc-dev
-        echo "安装终端支持..."
+        echo "Installing terminal support..."
         sudo apt-get install -y ncurses-term
-        echo "安装缺失的工具..."
+        echo "Installing missing tools..."
         sudo apt-get install -y help2man
 
-    - name: 4_创建构建目录并设置权限
+    - name: 4_Create build directory and set permissions
       run: |
-        echo "创建构建目录: $BUILD_DIR"
+        echo "Creating build directory: $BUILD_DIR"
         sudo mkdir -p $BUILD_DIR
         sudo chown -R $USER:$USER $BUILD_DIR
-        echo "目录权限设置完成"
+        echo "Directory permissions set"
 
-    - name: 5_克隆源码
+    - name: 5_Clone source code
       run: |
         cd $BUILD_DIR
-        echo "克隆 ImmortalWrt 源码..."
+        echo "Cloning ImmortalWrt source code..."
         git clone https://github.com/immortalwrt/immortalwrt.git .
         git checkout openwrt-21.02
-        echo "源码克隆完成，当前目录大小:"
+        echo "Source code cloned, current directory size:"
         du -sh .
 
-    - name: 6_更新安装feeds
+    - name: 6_Update and install feeds
       run: |
         cd $BUILD_DIR
-        echo "更新安装 feeds..."
+        echo "Updating and installing feeds..."
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-        echo "feeds 安装完成，当前目录大小:"
+        echo "Feeds installed, current directory size:"
         du -sh .
 
-    - name: 7_动态生成设备配置
+    - name: 7_Dynamically generate device configuration
       run: |
         cd $BUILD_DIR
         
@@ -105,13 +109,27 @@ jobs:
             DEVICE_FULL_NAME="asus_rt-ac42u"
             ;;
           *)
-            echo "未知设备: ${{ github.event.inputs.device_name }}"
+            echo "Unknown device: ${{ github.event.inputs.device_name }}"
             exit 1
             ;;
         esac
         
+        echo "=== 配置类型说明 ==="
+        echo "minimal - 最小配置: 基础系统 + 必要驱动 + 基本网络功能"
+        echo "normal  - 正常配置: 最小配置 + Web管理界面 + 常用功能"
+        echo "custom  - 自定义配置: 以normal为模板 + 用户自定义插件管理"
+        echo ""
         echo "选择的配置类型: ${{ github.event.inputs.config_type }}"
-        echo "额外插件: ${{ github.event.inputs.extra_packages }}"
+        
+        # 检查插件输入是否在非custom类型下使用
+        if [ "${{ github.event.inputs.config_type }}" != "custom" ]; then
+          if [ -n "${{ github.event.inputs.extra_packages }}" ] || [ -n "${{ github.event.inputs.disable_packages }}" ]; then
+            echo "警告: 插件管理仅在 custom 类型下可用，将忽略插件设置"
+          fi
+        else
+          echo "额外安装插件: ${{ github.event.inputs.extra_packages }}"
+          echo "禁用插件: ${{ github.event.inputs.disable_packages }}"
+        fi
         
         chmod +x $CONFIG_DIR/scripts/generate_config.sh
         $CONFIG_DIR/scripts/generate_config.sh \
@@ -119,157 +137,249 @@ jobs:
           "$PLATFORM" \
           "$DEVICE_FULL_NAME" \
           "${{ github.event.inputs.extra_packages }}" \
+          "${{ github.event.inputs.disable_packages }}" \
           "$BUILD_DIR"
         
         mkdir -p $CONFIG_DIR/configs/
         cp .config $CONFIG_DIR/configs/${{ github.event.inputs.device_name }}_final_config
 
-    - name: 8_使用defconfig避免menuconfig
+    - name: 8_Use defconfig to avoid menuconfig
       run: |
         cd $BUILD_DIR
-        echo "使用defconfig避免menuconfig调用..."
+        echo "Using defconfig to avoid menuconfig calls..."
         export TERM=linux
         make defconfig
 
-    - name: 9_下载软件包
+    - name: 9_Download packages
       run: |
         cd $BUILD_DIR
-        echo "下载软件包..."
+        echo "Downloading packages..."
         make -j8 download V=s
-        echo "下载完成，当前目录大小:"
+        echo "Download completed, current directory size:"
         du -sh .
 
-    - name: 10_编译前空间检查
+    - name: 10_Pre-compilation space check
       run: |
-        echo "=== 编译前磁盘空间检查 ==="
+        echo "=== Pre-compilation disk space check ==="
         df -h
         
         if [ ! -d "/mnt" ]; then
-          echo "错误: /mnt 目录不存在!"
+          echo "Error: /mnt directory does not exist!"
           exit 1
         fi
         
         AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
         AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-        echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+        echo "/mnt available space: ${AVAILABLE_GB}G"
         
         if [ $AVAILABLE_GB -lt 30 ]; then
-          echo "警告: /mnt 空间不足30G，当前只有 ${AVAILABLE_GB}G"
-          echo "编译可能会因空间不足而失败"
+          echo "Warning: /mnt has less than 30G space, currently only ${AVAILABLE_GB}G"
+          echo "Compilation may fail due to insufficient space"
         else
-          echo "空间充足，可以开始编译"
+          echo "Sufficient space available, starting compilation"
         fi
         
         cd $BUILD_DIR
-        echo "构建目录当前大小:"
+        echo "Current build directory size:"
         du -sh .
 
-    - name: 11_编译固件
+    - name: 11_Compile firmware
       run: |
         cd $BUILD_DIR
-        echo "开始编译固件..."
+        echo "Starting firmware compilation..."
         export TERM=linux
-        make -j$(nproc) V=s 2>&1 | tee build.log || echo "编译过程完成（可能有非关键错误）"
-        echo "编译完成，最终目录大小:"
-        du -sh .
+        
+        # 清理可能的问题
+        echo "Cleaning build environment..."
+        make clean 2>/dev/null || true
+        
+        # 分步编译，避免package/install错误
+        {
+          echo "=== Step 1: Compiling toolchain ==="
+          make tools/install -j$(nproc) V=s
+          
+          echo "=== Step 2: Compiling target toolchain ==="  
+          make toolchain/install -j$(nproc) V=s
+          
+          echo "=== Step 3: Compiling target ==="
+          make target/install -j$(nproc) V=s
+          
+          echo "=== Step 4: Compiling packages ==="
+          # 单线程编译包，避免并发问题
+          make package/compile -j1 V=sc
+          
+          echo "=== Step 5: Final installation ==="
+          make package/install -j1 V=sc
+          
+          echo "=== Step 6: Generating images ==="
+          make target/install -j$(nproc) V=s
+          
+        } 2>&1 | tee build_detailed.log
+        
+        # 检查编译结果
+        echo "=== Compilation result check ==="
+        if [ -f "build.log" ]; then
+            echo "Build log exists"
+            # 检查特定错误
+            if grep -q "package/install.*Error 255" build.log; then
+                echo "Found package/install Error 255, attempting to fix..."
+                # 尝试重新编译失败的包
+                make package/install -j1 V=sc 2>&1 | tee -a build_fix.log
+            fi
+        fi
+        
+        # 最终检查固件
+        FIRMWARE_COUNT=$(find bin -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null | wc -l)
+        echo "Generated firmware count: $FIRMWARE_COUNT"
 
-    - name: 12_运行错误分析脚本
+    - name: 11.5_Fix package errors if any
+      if: always()
+      run: |
+        cd $BUILD_DIR
+        echo "Checking and fixing package compilation errors..."
+        
+        # 检查是否有package/install错误
+        if grep -q "package/install.*Error 255" build.log 2>/dev/null; then
+            echo "Found package installation error, attempting to fix..."
+            
+            # 方法1: 清理并重新编译包
+            echo "Method 1: Recompiling packages..."
+            make package/cleanup 2>/dev/null || true
+            make package/compile -j1 V=sc 2>&1 | tee build_fix1.log
+            
+            # 方法2: 如果还失败，尝试逐个编译
+            if [ $? -ne 0 ]; then
+                echo "Method 2: Identifying failed packages..."
+                # 找出编译失败的包
+                FAILED_PACKAGES=$(grep "Building package" build.log | tail -5)
+                echo "Recently compiled packages: $FAILED_PACKAGES"
+                
+                # 尝试单独编译
+                make package/install -j1 V=sc 2>&1 | tee build_fix2.log
+            fi
+        fi
+
+    - name: 12_Run error analysis script
       run: |
         cd $BUILD_DIR
         chmod +x $CONFIG_DIR/scripts/error_analysis.sh
         $CONFIG_DIR/scripts/error_analysis.sh $BUILD_DIR
 
-    - name: 13_固件汇总分析报告
+    - name: 13_Firmware summary analysis report
       run: |
         cd $BUILD_DIR
-        echo "=== 固件汇总分析报告 ===" > firmware_report.log
+        echo "=== Firmware Summary Analysis Report ===" > firmware_report.log
         
-        if [ ! -d "bin" ]; then
-          echo "错误: bin目录不存在，构建可能失败" >> firmware_report.log
-          echo "构建状态: 失败" >> firmware_report.log
-          exit 0
-        fi
-        
-        echo "构建状态: 成功" >> firmware_report.log
-        echo "设备: ${{ github.event.inputs.device_name }}" >> firmware_report.log
-        echo "平台: ipq40xx" >> firmware_report.log
-        echo "配置类型: ${{ github.event.inputs.config_type }}" >> firmware_report.log
-        echo "额外插件: ${{ github.event.inputs.extra_packages }}" >> firmware_report.log
+        # 详细检查bin目录
+        echo "=== Detailed bin directory structure ===" >> firmware_report.log
+        find bin -type f 2>/dev/null | sort >> firmware_report.log
         echo "" >> firmware_report.log
         
-        echo "=== 所有固件文件 ===" >> firmware_report.log
+        if [ ! -d "bin" ]; then
+          echo "ERROR: bin directory does not exist, build may have failed" >> firmware_report.log
+          echo "Build status: Failed" >> firmware_report.log
+        else
+          # 检查目标平台目录
+          echo "=== Checking target directories ===" >> firmware_report.log
+          find bin/targets -type f 2>/dev/null | head -20 >> firmware_report.log
+          echo "" >> firmware_report.log
+          
+          FIRMWARE_FILES=$(find bin -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" \) 2>/dev/null | wc -l)
+          
+          if [ $FIRMWARE_FILES -gt 0 ]; then
+            echo "Build status: Success" >> firmware_report.log
+          else
+            echo "Build status: Partial (no firmware files)" >> firmware_report.log
+          fi
+        fi
+        
+        echo "Device: ${{ github.event.inputs.device_name }}" >> firmware_report.log
+        echo "Platform: ipq40xx" >> firmware_report.log
+        echo "Configuration type: ${{ github.event.inputs.config_type }}" >> firmware_report.log
+        echo "Additional packages: ${{ github.event.inputs.extra_packages }}" >> firmware_report.log
+        echo "Disabled packages: ${{ github.event.inputs.disable_packages }}" >> firmware_report.log
+        echo "" >> firmware_report.log
+        
+        echo "=== All firmware files ===" >> firmware_report.log
         find bin -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" \) 2>/dev/null | sort >> firmware_report.log
         echo "" >> firmware_report.log
         
-        echo "=== 升级镜像 (sysupgrade) ===" >> firmware_report.log
+        echo "=== Upgrade images (sysupgrade) ===" >> firmware_report.log
         UPGRADE_COUNT=0
         find bin -type f -name "*sysupgrade*" 2>/dev/null | while read file; do
           UPGRADE_COUNT=$((UPGRADE_COUNT+1))
-          echo "文件: $file" >> firmware_report.log
-          echo "大小: $(du -h "$file" | cut -f1)" >> firmware_report.log
+          echo "File: $file" >> firmware_report.log
+          echo "Size: $(du -h "$file" | cut -f1)" >> firmware_report.log
           echo "MD5: $(md5sum "$file" | cut -d' ' -f1)" >> firmware_report.log
           echo "" >> firmware_report.log
         done
         
         if [ $UPGRADE_COUNT -eq 0 ]; then
-          echo "未找到升级镜像" >> firmware_report.log
+          echo "No upgrade images found" >> firmware_report.log
         fi
         echo "" >> firmware_report.log
         
-        echo "=== 工厂镜像 (factory) ===" >> firmware_report.log
+        echo "=== Factory images (factory) ===" >> firmware_report.log
         FACTORY_COUNT=0
         find bin -type f -name "*factory*" 2>/dev/null | while read file; do
           FACTORY_COUNT=$((FACTORY_COUNT+1))
-          echo "文件: $file" >> firmware_report.log
-          echo "大小: $(du -h "$file" | cut -f1)" >> firmware_report.log
+          echo "File: $file" >> firmware_report.log
+          echo "Size: $(du -h "$file" | cut -f1)" >> firmware_report.log
           echo "MD5: $(md5sum "$file" | cut -d' ' -f1)" >> firmware_report.log
           echo "" >> firmware_report.log
         done
         
         if [ $FACTORY_COUNT -eq 0 ]; then
-          echo "未找到工厂镜像" >> firmware_report.log
+          echo "No factory images found" >> firmware_report.log
         fi
         echo "" >> firmware_report.log
         
         TOTAL_FILES=$(find bin -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" \) 2>/dev/null | wc -l)
         
-        echo "=== 构建统计 ===" >> firmware_report.log
-        echo "总固件文件数: $TOTAL_FILES" >> firmware_report.log
-        echo "升级镜像数: $UPGRADE_COUNT" >> firmware_report.log
-        echo "工厂镜像数: $FACTORY_COUNT" >> firmware_report.log
+        echo "=== Build statistics ===" >> firmware_report.log
+        echo "Total firmware files: $TOTAL_FILES" >> firmware_report.log
+        echo "Upgrade images: $UPGRADE_COUNT" >> firmware_report.log
+        echo "Factory images: $FACTORY_COUNT" >> firmware_report.log
         echo "" >> firmware_report.log
         
-        echo "=== 固件质量评估 ===" >> firmware_report.log
+        echo "=== Firmware quality assessment ===" >> firmware_report.log
         if [ $TOTAL_FILES -gt 0 ]; then
-          echo "✓ 固件生成成功" >> firmware_report.log
+          echo "✓ Firmware generation successful" >> firmware_report.log
           if [ $UPGRADE_COUNT -gt 0 ]; then
-            echo "✓ 包含升级镜像" >> firmware_report.log
+            echo "✓ Includes upgrade images" >> firmware_report.log
           else
-            echo "✗ 缺少升级镜像" >> firmware_report.log
+            echo "✗ Missing upgrade images" >> firmware_report.log
           fi
           if [ $FACTORY_COUNT -gt 0 ]; then
-            echo "✓ 包含工厂镜像" >> firmware_report.log
+            echo "✓ Includes factory images" >> firmware_report.log
           else
-            echo "⚠ 缺少工厂镜像（可能不需要）" >> firmware_report.log
+            echo "⚠ Missing factory images (may not be needed)" >> firmware_report.log
           fi
         else
-          echo "✗ 固件生成失败" >> firmware_report.log
+          echo "✗ Firmware generation failed" >> firmware_report.log
+          echo "Checking for common issues..." >> firmware_report.log
+          echo "1. Check if device configuration is correct" >> firmware_report.log
+          echo "2. Check build.log for compilation errors" >> firmware_report.log
+          echo "3. Verify sufficient disk space" >> firmware_report.log
+          echo "4. Check target platform support" >> firmware_report.log
         fi
         
-        echo "固件分析报告生成完成"
+        echo "Firmware analysis report completed"
+        cat firmware_report.log
 
-    - name: 14_最终空间检查
+    - name: 14_Final space check
       run: |
-        echo "=== 最终空间使用情况 ==="
+        echo "=== Final space usage ==="
         df -h /mnt
         cd $BUILD_DIR
-        echo "构建目录最终大小:"
+        echo "Final build directory size:"
         du -sh .
-        echo "bin目录大小:"
-        du -sh bin/ || echo "bin目录不存在"
+        echo "bin directory size:"
+        du -sh bin/ || echo "bin directory does not exist"
 
-    - name: 15_上传编译产物
+    - name: 15_Upload build artifacts
       uses: actions/upload-artifact@v4
+      if: always()
       with:
         name: firmware-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
         path: |
@@ -278,10 +388,12 @@ jobs:
           ${{ env.BUILD_DIR }}/error_summary.log
           ${{ env.BUILD_DIR }}/firmware_report.log
           ${{ env.BUILD_DIR }}/build.log
+          ${{ env.BUILD_DIR }}/build_detailed.log
         retention-days: 7
 
-    - name: 16_上传配置文件
+    - name: 16_Upload configuration files
       uses: actions/upload-artifact@v4
+      if: always()
       with:
         name: config-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
         path: ${{ env.CONFIG_DIR }}/configs/${{ github.event.inputs.device_name }}_final_config
