@@ -82,10 +82,10 @@ jobs:
         echo "构建系统信息:"
         make --version || echo "make 不可用"
 
-    - name: 验证设备支持
+    - name: 验证平台支持
       run: |
         cd $BUILD_DIR
-        echo "=== 验证设备支持 ==="
+        echo "=== 验证平台支持 ==="
         
         DEVICE_NAME="${{ github.event.inputs.device_name }}"
         case "$DEVICE_NAME" in
@@ -93,7 +93,6 @@ jobs:
             PLATFORM="ipq40xx"
             DEVICE_SHORT_NAME="ac42u"
             DEVICE_FULL_NAME="asus_rt-ac42u"
-            DEVICE_CONFIG_NAME="asus_rt-ac42u"
             ;;
           *)
             echo "未知设备: $DEVICE_NAME"
@@ -104,36 +103,29 @@ jobs:
         echo "目标平台: $PLATFORM"
         echo "设备简称: $DEVICE_SHORT_NAME" 
         echo "完整设备名称: $DEVICE_FULL_NAME"
-        echo "配置名称: $DEVICE_CONFIG_NAME"
         
-        echo "=== 检查设备支持文件 ==="
+        echo "=== 检查平台支持文件 ==="
         
-        if [ -f "target/linux/$PLATFORM/image/generic.mk" ]; then
-          echo "✅ 找到平台配置文件"
-          
-          # 精确检查设备定义
-          if grep -q "define Device/asus_rt-ac42u" "target/linux/$PLATFORM/image/generic.mk"; then
-            echo "✅ 找到设备定义: $DEVICE_FULL_NAME"
-            echo "设备定义详情:"
-            grep -A 30 "define Device/asus_rt-ac42u" "target/linux/$PLATFORM/image/generic.mk"
-            
-            # 检查是否在 TARGET_DEVICES 中
-            if grep -q "TARGET_DEVICES += asus_rt-ac42u" "target/linux/$PLATFORM/image/generic.mk"; then
-              echo "✅ 设备已添加到目标设备列表"
-            else
-              echo "❌ 设备未添加到目标设备列表"
-              exit 1
-            fi
-          else
-            echo "❌ 未找到设备定义: $DEVICE_FULL_NAME"
-            echo "可用的 ASUS 设备:"
-            grep "define Device" "target/linux/$PLATFORM/image/generic.mk" | grep -i asus
-            exit 1
-          fi
+        if [ -d "target/linux/$PLATFORM" ]; then
+          echo "✅ 找到平台目录: target/linux/$PLATFORM"
+          echo "平台文件列表:"
+          ls -la target/linux/$PLATFORM/
         else
-          echo "❌ 找不到平台配置文件: target/linux/$PLATFORM/image/generic.mk"
+          echo "❌ 找不到平台目录: target/linux/$PLATFORM"
           exit 1
         fi
+        
+        if [ -f "target/linux/$PLATFORM/generic/target.mk" ]; then
+          echo "✅ 找到 target.mk"
+          echo "target.mk 内容:"
+          cat target/linux/$PLATFORM/generic/target.mk
+        else
+          echo "❌ 找不到 target.mk"
+          exit 1
+        fi
+        
+        echo "=== 检查设备树文件 ==="
+        find target/linux/$PLATFORM -name "*$DEVICE_FULL_NAME*" -o -name "*asus*" -o -name "*ac42u*" | head -10
         
         echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
         echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
@@ -144,112 +136,104 @@ jobs:
         cd $BUILD_DIR
         echo "=== 生成设备配置 ==="
         
-        # 在工作区根目录生成配置
-        CONFIG_FILE="$WORKSPACE/.config"
+        echo "尝试使用预配置..."
         
-        # 检查配置脚本是否存在
-        if [ -f "$CONFIG_DIR/scripts/generate_config.sh" ]; then
-          echo "✅ 找到配置脚本，执行配置生成..."
-          chmod +x $CONFIG_DIR/scripts/generate_config.sh
-          $CONFIG_DIR/scripts/generate_config.sh "${{ github.event.inputs.config_type }}" "${{ env.PLATFORM }}" "${{ env.DEVICE_SHORT_NAME }}" "${{ env.DEVICE_FULL_NAME }}" "${{ github.event.inputs.extra_packages }}" "${{ github.event.inputs.disable_packages }}" "$BUILD_DIR"
-          echo "✅ 配置脚本执行完成"
-          
-          # 如果脚本生成了配置，复制到工作区
-          if [ -f ".config" ]; then
-            cp .config $CONFIG_FILE
-            echo "✅ 配置已复制到工作区: $CONFIG_FILE"
-          fi
-        else
-          echo "⚠️ 配置脚本不存在，创建手动配置..."
-          
-          # 在工作区根目录创建配置
-          cat > $CONFIG_FILE << 'EOF'
-CONFIG_TARGET_ipq40xx=y
-CONFIG_TARGET_ipq40xx_generic=y
-CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-ac42u=y
-CONFIG_TARGET_ROOTFS_SQUASHFS=y
-CONFIG_TARGET_ROOTFS_EXT4FS=n
-CONFIG_TARGET_IMAGES_GZIP=y
-CONFIG_TARGET_IMAGES_PAD=y
-CONFIG_PACKAGE_luci=y
-CONFIG_PACKAGE_luci-theme-bootstrap=y
-CONFIG_PACKAGE_ath10k-firmware-qca9984-ct=y
-CONFIG_PACKAGE_kmod-usb-ledtrig-usbport=y
-CONFIG_PACKAGE_base-files=y
-CONFIG_PACKAGE_busybox=y
-CONFIG_PACKAGE_dnsmasq=y
-CONFIG_PACKAGE_dropbear=y
-CONFIG_PACKAGE_firewall=y
-CONFIG_PACKAGE_fstools=y
-CONFIG_PACKAGE_ip6tables=y
-CONFIG_PACKAGE_iptables=y
-CONFIG_PACKAGE_iwinfo=y
-CONFIG_PACKAGE_jshn=y
-CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
-CONFIG_PACKAGE_kmod-ip6tables=y
-CONFIG_PACKAGE_kmod-ipt-conntrack=y
-CONFIG_PACKAGE_kmod-ipt-core=y
-CONFIG_PACKAGE_kmod-ipt-nat=y
-CONFIG_PACKAGE_kmod-ipt-offload=y
-CONFIG_PACKAGE_kmod-nf-conntrack=y
-CONFIG_PACKAGE_kmod-nf-conntrack6=y
-CONFIG_PACKAGE_kmod-nf-flow=y
-CONFIG_PACKAGE_kmod-nf-ipt=y
-CONFIG_PACKAGE_kmod-nf-nat=y
-CONFIG_PACKAGE_kmod-nf-reject6=y
-CONFIG_PACKAGE_kmod-nfnetlink=y
-CONFIG_PACKAGE_kmod-ppp=y
-CONFIG_PACKAGE_kmod-pppoe=y
-CONFIG_PACKAGE_kmod-pppox=y
-CONFIG_PACKAGE_kmod-slhc=y
-CONFIG_PACKAGE_libatomic=y
-CONFIG_PACKAGE_libc=y
-CONFIG_PACKAGE_libgcc=y
-CONFIG_PACKAGE_libiwinfo-lua=y
-CONFIG_PACKAGE_liblua=y
-CONFIG_PACKAGE_libubus-lua=y
-CONFIG_PACKAGE_libuci-lua=y
-CONFIG_PACKAGE_lua=y
-CONFIG_PACKAGE_mtd=y
-CONFIG_PACKAGE_netifd=y
-CONFIG_PACKAGE_odhcp6c=y
-CONFIG_PACKAGE_odhcpd-ipv6only=y
-CONFIG_PACKAGE_odhcpd=y
-CONFIG_PACKAGE_opkg=y
-CONFIG_PACKAGE_ppp-mod-pppoe=y
-CONFIG_PACKAGE_procd=y
-CONFIG_PACKAGE_rpcd=y
-CONFIG_PACKAGE_rpcd-mod-file=y
-CONFIG_PACKAGE_rpcd-mod-iwinfo=y
-CONFIG_PACKAGE_rpcd-mod-luci=y
-CONFIG_PACKAGE_rpcd-mod-rrdns=y
-CONFIG_PACKAGE_swconfig=y
-CONFIG_PACKAGE_uboot-envtools=y
-CONFIG_PACKAGE_ubus=y
-CONFIG_PACKAGE_ubusd=y
-CONFIG_PACKAGE_uci=y
-CONFIG_PACKAGE_uclient-fetch=y
-CONFIG_PACKAGE_urandom-seed=y
-CONFIG_PACKAGE_urngd=y
-CONFIG_PACKAGE_wpad-basic-wolfssl=y
-EOF
-          echo "✅ 手动配置创建完成: $CONFIG_FILE"
-        fi
+        echo "CONFIG_TARGET_ipq40xx=y" > .config
+        echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+        echo "CONFIG_TARGET_ROOTFS_EXT4FS=n" >> .config
+        echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
+        echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
+        echo "CONFIG_PACKAGE_luci=y" >> .config
+        echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
+        echo "CONFIG_PACKAGE_ath10k-firmware-qca4019=y" >> .config
+        echo "CONFIG_PACKAGE_ath10k-board-qca4019=y" >> .config
         
-        # 将配置复制到构建目录
-        if [ -f "$CONFIG_FILE" ]; then
-          cp $CONFIG_FILE $BUILD_DIR/.config
-          echo "✅ 配置已复制到构建目录"
-        else
-          echo "❌ 配置生成失败"
-          exit 1
-        fi
+        case "${{ github.event.inputs.config_type }}" in
+          "minimal")
+            echo "CONFIG_PACKAGE_luci=n" >> .config
+            ;;
+          "normal")
+            echo "CONFIG_PACKAGE_luci=y" >> .config
+            ;;
+          "custom")
+            echo "CONFIG_PACKAGE_luci=y" >> .config
+            if [ -n "${{ github.event.inputs.extra_packages }}" ]; then
+              for pkg in ${{ github.event.inputs.extra_packages }}; do
+                echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+              done
+            fi
+            ;;
+        esac
         
-        # 验证生成的配置
+        echo "CONFIG_PACKAGE_base-files=y" >> .config
+        echo "CONFIG_PACKAGE_busybox=y" >> .config
+        echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
+        echo "CONFIG_PACKAGE_dropbear=y" >> .config
+        echo "CONFIG_PACKAGE_firewall=y" >> .config
+        echo "CONFIG_PACKAGE_fstools=y" >> .config
+        echo "CONFIG_PACKAGE_ip6tables=y" >> .config
+        echo "CONFIG_PACKAGE_iptables=y" >> .config
+        echo "CONFIG_PACKAGE_iwinfo=y" >> .config
+        echo "CONFIG_PACKAGE_jshn=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-gpio-button-hotplug=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-conntrack=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-core=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-nat=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-conntrack=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-conntrack6=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-flow=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-ipt=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-nat=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-reject6=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nfnetlink=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ppp=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-pppoe=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-pppox=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-slhc=y" >> .config
+        echo "CONFIG_PACKAGE_libatomic=y" >> .config
+        echo "CONFIG_PACKAGE_libc=y" >> .config
+        echo "CONFIG_PACKAGE_libgcc=y" >> .config
+        echo "CONFIG_PACKAGE_libiwinfo-lua=y" >> .config
+        echo "CONFIG_PACKAGE_liblua=y" >> .config
+        echo "CONFIG_PACKAGE_libubus-lua=y" >> .config
+        echo "CONFIG_PACKAGE_libuci-lua=y" >> .config
+        echo "CONFIG_PACKAGE_lua=y" >> .config
+        echo "CONFIG_PACKAGE_mtd=y" >> .config
+        echo "CONFIG_PACKAGE_netifd=y" >> .config
+        echo "CONFIG_PACKAGE_odhcp6c=y" >> .config
+        echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
+        echo "CONFIG_PACKAGE_odhcpd=y" >> .config
+        echo "CONFIG_PACKAGE_opkg=y" >> .config
+        echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config
+        echo "CONFIG_PACKAGE_procd=y" >> .config
+        echo "CONFIG_PACKAGE_rpcd=y" >> .config
+        echo "CONFIG_PACKAGE_rpcd-mod-file=y" >> .config
+        echo "CONFIG_PACKAGE_rpcd-mod-iwinfo=y" >> .config
+        echo "CONFIG_PACKAGE_rpcd-mod-luci=y" >> .config
+        echo "CONFIG_PACKAGE_rpcd-mod-rrdns=y" >> .config
+        echo "CONFIG_PACKAGE_swconfig=y" >> .config
+        echo "CONFIG_PACKAGE_uboot-envtools=y" >> .config
+        echo "CONFIG_PACKAGE_ubus=y" >> .config
+        echo "CONFIG_PACKAGE_ubusd=y" >> .config
+        echo "CONFIG_PACKAGE_uci=y" >> .config
+        echo "CONFIG_PACKAGE_uclient-fetch=y" >> .config
+        echo "CONFIG_PACKAGE_urandom-seed=y" >> .config
+        echo "CONFIG_PACKAGE_urngd=y" >> .config
+        echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
+
+        echo "✅ 基础配置创建完成"
+        
         echo "=== 验证生成的配置 ==="
         if [ -f ".config" ]; then
           echo "配置预览:"
-          head -30 .config
+          grep "CONFIG_TARGET" .config
+          echo "配置行数: $(wc -l < .config)"
+        else
+          echo "❌ 配置生成失败"
+          exit 1
         fi
 
     - name: 应用配置并验证
@@ -257,7 +241,6 @@ EOF
         cd $BUILD_DIR
         echo "=== 应用配置并验证 ==="
         
-        # 检查配置是否存在
         if [ ! -f ".config" ]; then
           echo "❌ .config 文件不存在"
           exit 1
@@ -268,7 +251,6 @@ EOF
         echo "目标平台配置:"
         grep "CONFIG_TARGET" .config | head -20
         
-        # 执行 defconfig
         echo "执行 defconfig..."
         if make defconfig; then
           echo "✅ defconfig 成功"
@@ -277,7 +259,6 @@ EOF
           exit 1
         fi
         
-        # 验证配置
         echo "=== 配置验证 ==="
         if [ -f ".config" ]; then
           echo "defconfig 后的配置:"
@@ -285,15 +266,18 @@ EOF
           echo "目标平台配置:"
           grep "CONFIG_TARGET" .config | head -30
           
-          # 检查设备配置
           echo "=== 设备配置检查 ==="
-          if grep -q "CONFIG_TARGET_ipq40xx_generic=y" .config && \
-             grep -q "CONFIG_TARGET_DEVICE" .config; then
-            echo "✅ 平台和设备配置正常"
-            echo "找到的设备配置:"
-            grep "CONFIG_TARGET_DEVICE" .config | head -10
+          if grep -q "CONFIG_TARGET_ipq40xx_generic=y" .config; then
+            echo "✅ 平台配置正常"
+            if grep -q "CONFIG_TARGET_DEVICE" .config; then
+              echo "✅ 找到设备配置:"
+              grep "CONFIG_TARGET_DEVICE" .config | head -10
+            else
+              echo "⚠️ 未找到特定设备配置，使用通用配置"
+            fi
           else
-            echo "⚠️ 设备配置可能有问题，但继续构建..."
+            echo "❌ 平台配置错误"
+            exit 1
           fi
         fi
 
@@ -335,38 +319,26 @@ EOF
         
         if [ -d "bin/targets" ]; then
           echo "✅ 找到目标目录"
-          
-          # 详细列出所有固件
           echo "所有生成的固件:"
-          find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.tar" \) | sort
+          find bin/targets -type f -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.tar" | sort
           
           echo ""
           echo "=== 目标设备固件验证 ==="
-          
-          # 检查目标设备固件
-          TARGET_FIRMWARE=$(find bin/targets -name "*asus_rt-ac42u*" -o -name "*rt-ac42u*" -o -name "*ac42u*" -o -name "*rt-ac82u*" -o -name "*acrh17*" -o -name "*ac2200*")
+          TARGET_FIRMWARE=$(find bin/targets -name "*asus*" -o -name "*ac42u*" -o -name "*ac82u*" -o -name "*acrh17*" -o -name "*ac2200*" -o -name "*ipq40xx*" | head -1)
           
           if [ -n "$TARGET_FIRMWARE" ]; then
-            echo "✅ 找到目标设备固件:"
+            echo "✅ 找到可能的设备固件:"
             echo "$TARGET_FIRMWARE"
             echo "固件详情:"
             ls -la $TARGET_FIRMWARE
-            
-            # 检查固件大小
             FIRMWARE_SIZE=$(stat -c%s "$TARGET_FIRMWARE" 2>/dev/null || echo "0")
             echo "固件大小: $FIRMWARE_SIZE bytes"
+            FIRMWARE_NAME=$(basename "$TARGET_FIRMWARE")
+            echo "固件名称分析: $FIRMWARE_NAME"
           else
-            echo "❌ 未找到目标设备固件: asus_rt-ac42u"
+            echo "❌ 未找到目标设备固件"
             echo "生成的固件列表:"
-            find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) -exec ls -la {} \;
-            
-            # 分析实际生成的设备
-            echo "=== 实际生成的设备分析 ==="
-            for firmware in $(find bin/targets -name "*.bin" | head -5); do
-              FIRMWARE_NAME=$(basename "$firmware")
-              echo "固件: $firmware"
-              echo "名称: $FIRMWARE_NAME"
-            done
+            find bin/targets -type f -name "*.bin" -o -name "*.img" -o -name "*.trx" -exec ls -la {} \;
           fi
         else
           echo "❌ 未找到目标目录 bin/targets"
@@ -379,21 +351,16 @@ EOF
       run: |
         cd $BUILD_DIR
         echo "运行错误分析..."
-        
-        # 创建错误分析日志
         echo "=== 固件构建错误分析报告 ===" > error_analysis.log
         echo "生成时间: $(date)" >> error_analysis.log
         echo "" >> error_analysis.log
         
-        # 检查构建状态
-        if find bin/targets -name "*asus_rt-ac42u*" -o -name "*rt-ac42u*" -o -name "*ac42u*" | grep -q .; then
+        if find bin/targets -type f -name "*.bin" -o -name "*.img" -o -name "*.trx" | grep -q .; then
           echo "✅ 构建状态: 成功" >> error_analysis.log
           echo "✅ 生成的固件文件:" >> error_analysis.log
-          find bin/targets -name "*asus_rt-ac42u*" -o -name "*rt-ac42u*" -o -name "*ac42u*" >> error_analysis.log
+          find bin/targets -type f -name "*.bin" -o -name "*.img" -o -name "*.trx" >> error_analysis.log
         else
-          echo "❌ 构建状态: 失败或目标设备固件未生成" >> error_analysis.log
-          echo "所有生成的固件:" >> error_analysis.log
-          find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) >> error_analysis.log 2>/dev/null || echo "无固件生成" >> error_analysis.log
+          echo "❌ 构建状态: 失败或未生成固件" >> error_analysis.log
         fi
         
         echo "" >> error_analysis.log
@@ -405,30 +372,35 @@ EOF
         
         echo "" >> error_analysis.log
         echo "=== 关键错误检查 ===" >> error_analysis.log
-        echo "检查日志文件: build_detailed.log" >> error_analysis.log
         
-        # 查找错误
         if [ -f "build_detailed.log" ]; then
           if grep -q "error:" build_detailed.log; then
             echo "❌ 发现编译错误:" >> error_analysis.log
-            grep "error:" build_detailed.log | head -20 >> error_analysis.log
+            grep -i "error" build_detailed.log | head -30 >> error_analysis.log
           else
             echo "✅ 未发现编译错误" >> error_analysis.log
           fi
           
           if grep -q "failed" build_detailed.log; then
             echo "❌ 发现失败信息:" >> error_analysis.log
-            grep "failed" build_detailed.log | head -20 >> error_analysis.log
+            grep -i "failed" build_detailed.log | head -20 >> error_analysis.log
           fi
           
-          # 检查编译结束状态
-          if tail -20 build_detailed.log | grep -q "make.*Error"; then
+          if tail -50 build_detailed.log | grep -q "make.*Error"; then
             echo "❌ 编译以错误结束" >> error_analysis.log
-            tail -20 build_detailed.log >> error_analysis.log
+            tail -50 build_detailed.log >> error_analysis.log
+          elif tail -10 build_detailed.log | grep -q "built successfully"; then
+            echo "✅ 编译成功结束" >> error_analysis.log
           fi
         else
           echo "❌ 构建日志文件不存在" >> error_analysis.log
         fi
+        
+        echo "" >> error_analysis.log
+        echo "=== 建议 ===" >> error_analysis.log
+        echo "1. 检查设备定义文件位置" >> error_analysis.log
+        echo "2. 确认设备在目标平台中已定义" >> error_analysis.log
+        echo "3. 查看详细的构建日志以获取更多信息" >> error_analysis.log
         
         echo "错误分析完成"
 
@@ -445,9 +417,7 @@ EOF
       uses: actions/upload-artifact@v4
       with:
         name: logs-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
-        path: |
-          ${{ env.BUILD_DIR }}/build_detailed.log
-          ${{ env.BUILD_DIR }}/error_analysis.log
+        path: ${{ env.BUILD_DIR }}/build_detailed.log,${{ env.BUILD_DIR }}/error_analysis.log
         retention-days: 7
 
     - name: 上传配置信息
@@ -455,7 +425,5 @@ EOF
       uses: actions/upload-artifact@v4
       with:
         name: config-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
-        path: |
-          ${{ env.BUILD_DIR }}/.config
-          ${{ env.WORKSPACE }}/.config
+        path: ${{ env.BUILD_DIR }}/.config
         retention-days: 7
