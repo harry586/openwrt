@@ -62,7 +62,7 @@ jobs:
       run: |
         cd $BUILD_DIR
         git clone https://github.com/immortalwrt/immortalwrt.git .
-        git checkout openwrt-21.02
+        git checkout openwrt-23.05
 
     - name: 更新安装feeds
       run: |
@@ -110,57 +110,89 @@ jobs:
         
         if [ -f "target/linux/$PLATFORM/image/generic.mk" ]; then
           echo "✅ 找到平台配置文件"
-          if grep -q "define Device.*$DEVICE_FULL_NAME" "target/linux/$PLATFORM/image/generic.mk"; then
-            echo "✅ 设备 $DEVICE_FULL_NAME 在支持列表中"
-            echo "设备定义:"
-            grep -A 10 "define Device.*$DEVICE_FULL_NAME" "target/linux/$PLATFORM/image/generic.mk" | head -15
+          
+          # 精确检查设备定义
+          if grep -q "define Device/asus_rt-ac42u" "target/linux/$PLATFORM/image/generic.mk"; then
+            echo "✅ 找到设备定义: $DEVICE_FULL_NAME"
+            echo "设备定义详情:"
+            grep -A 30 "define Device/asus_rt-ac42u" "target/linux/$PLATFORM/image/generic.mk"
+            
+            # 检查是否在 TARGET_DEVICES 中
+            if grep -q "TARGET_DEVICES += asus_rt-ac42u" "target/linux/$PLATFORM/image/generic.mk"; then
+              echo "✅ 设备已添加到目标设备列表"
+            else
+              echo "❌ 设备未添加到目标设备列表"
+              exit 1
+            fi
           else
-            echo "❌ 设备 $DEVICE_FULL_NAME 不在支持列表中"
-            echo "可用设备:"
-            grep "define Device" "target/linux/$PLATFORM/image/generic.mk" | head -20
+            echo "❌ 未找到设备定义: $DEVICE_FULL_NAME"
+            echo "可用的 ASUS 设备:"
+            grep "define Device" "target/linux/$PLATFORM/image/generic.mk" | grep -i asus
             exit 1
           fi
         else
           echo "❌ 找不到平台配置文件: target/linux/$PLATFORM/image/generic.mk"
-          find target/linux -name "*.mk" | grep image | head -10
           exit 1
-        fi
-        
-        if [ -d "target/linux/$PLATFORM" ]; then
-          echo "✅ 找到平台目录"
-          echo "平台文件列表:"
-          ls -la target/linux/$PLATFORM/ | head -10
         fi
         
         echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
         echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
-        echo "DEVICE_CONFIG_NAME=$DEVICE_CONFIG_NAME" >> $GITHUB_ENV
         echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
 
     - name: 生成设备配置
       run: |
         cd $BUILD_DIR
         echo "=== 生成设备配置 ==="
-        echo "脚本路径: $CONFIG_DIR/scripts/generate_config.sh"
-        echo "参数: ${{ github.event.inputs.config_type }} ${{ env.PLATFORM }} ${{ env.DEVICE_SHORT_NAME }} ${{ env.DEVICE_FULL_NAME }}"
         
+        # 检查配置脚本是否存在
         if [ -f "$CONFIG_DIR/scripts/generate_config.sh" ]; then
-          echo "✅ 找到配置脚本"
+          echo "✅ 找到配置脚本，执行配置生成..."
           chmod +x $CONFIG_DIR/scripts/generate_config.sh
           $CONFIG_DIR/scripts/generate_config.sh "${{ github.event.inputs.config_type }}" "${{ env.PLATFORM }}" "${{ env.DEVICE_SHORT_NAME }}" "${{ env.DEVICE_FULL_NAME }}" "${{ github.event.inputs.extra_packages }}" "${{ github.event.inputs.disable_packages }}" "$BUILD_DIR"
           echo "✅ 配置脚本执行完成"
         else
-          echo "❌ 配置脚本不存在: $CONFIG_DIR/scripts/generate_config.sh"
-          echo "创建基础配置..."
+          echo "⚠️ 配置脚本不存在，创建手动配置..."
+          
+          # 创建针对 asus_rt-ac42u 的配置
           echo "CONFIG_TARGET_ipq40xx=y" > .config
           echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
-          echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_${{ env.DEVICE_FULL_NAME }}=y" >> .config
-          echo "✅ 基础配置创建完成"
+          echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
+          
+          # 基础配置
+          echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+          echo "CONFIG_TARGET_ROOTFS_EXT4FS=n" >> .config
+          echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
+          echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
+          
+          # 根据配置类型设置
+          case "${{ github.event.inputs.config_type }}" in
+            "minimal")
+              echo "CONFIG_PACKAGE_luci=n" >> .config
+              ;;
+            "normal")
+              echo "CONFIG_PACKAGE_luci=y" >> .config
+              echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
+              ;;
+            "custom")
+              echo "CONFIG_PACKAGE_luci=y" >> .config
+              ;;
+          esac
+          
+          # 设备特定包
+          echo "CONFIG_PACKAGE_ath10k-firmware-qca9984-ct=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-usb-ledtrig-usbport=y" >> .config
+          
+          echo "✅ 手动配置创建完成"
         fi
         
+        # 验证生成的配置
+        echo "=== 验证生成的配置 ==="
         if [ -f ".config" ]; then
-          echo "生成的配置预览:"
-          head -20 .config
+          echo "配置预览:"
+          grep "CONFIG_TARGET" .config
+        else
+          echo "❌ 配置生成失败"
+          exit 1
         fi
 
     - name: 应用配置并验证
@@ -168,17 +200,17 @@ jobs:
         cd $BUILD_DIR
         echo "=== 应用配置并验证 ==="
         
-        echo "=== 检查配置文件 ==="
-        if [ -f ".config" ]; then
-          echo "✅ .config 文件存在"
-          echo "配置文件大小: $(wc -l < .config) 行"
-          echo "配置文件前50行:"
-          head -50 .config
-        else
+        # 检查初始配置
+        if [ ! -f ".config" ]; then
           echo "❌ .config 文件不存在"
           exit 1
         fi
         
+        echo "=== 初始配置检查 ==="
+        echo "目标平台配置:"
+        grep "CONFIG_TARGET" .config || echo "无目标配置"
+        
+        # 执行 defconfig
         echo "执行 defconfig..."
         if make defconfig; then
           echo "✅ defconfig 成功"
@@ -187,61 +219,33 @@ jobs:
           exit 1
         fi
         
-        echo "=== 增强的设备配置验证 ==="
+        # 详细验证设备配置
+        echo "=== 详细设备配置验证 ==="
         
+        # 检查最终配置
         if [ -f ".config" ]; then
-          echo "=== defconfig 后的 .config 文件分析 ==="
-          echo "配置文件大小: $(wc -l < .config) 行"
+          echo "最终配置中的目标设备:"
+          grep "CONFIG_TARGET_DEVICE" .config || echo "无设备配置"
           
-          echo "=== 所有目标平台配置 ==="
-          grep "CONFIG_TARGET_" .config | head -20 || echo "无目标平台配置"
-          
-          echo "=== 设备配置搜索 ==="
-          # 在bash中执行字符串替换
-          DEVICE_FULL_NAME="${{ env.DEVICE_FULL_NAME }}"
-          DEVICE_DASH_NAME="${DEVICE_FULL_NAME//_/-}"
-          DEVICE_NO_DASH_NAME="${DEVICE_FULL_NAME//-/}"
-          
-          CONFIG_PATTERNS=(
-            "CONFIG_TARGET_DEVICE_ipq40xx_generic_${DEVICE_FULL_NAME}"
-            "CONFIG_TARGET_DEVICE_${DEVICE_FULL_NAME}"
-            "CONFIG_TARGET_DEVICE_${DEVICE_DASH_NAME}"
-            "CONFIG_TARGET_DEVICE_${DEVICE_NO_DASH_NAME}"
-            "CONFIG_TARGET_DEVICE.*asus"
-            "CONFIG_TARGET_DEVICE.*ac42u"
-          )
-          
-          FOUND_DEVICE=false
-          for pattern in "${CONFIG_PATTERNS[@]}"; do
-            if grep -q "$pattern" .config; then
-              echo "✅ 找到设备配置: $pattern"
-              grep "$pattern" .config
-              FOUND_DEVICE=true
-            fi
-          done
-          
-          if [ "$FOUND_DEVICE" = "false" ]; then
-            echo "⚠️ 未找到精确设备配置，检查所有相关配置"
-            echo "所有 CONFIG_TARGET_DEVICE 配置:"
-            grep "CONFIG_TARGET_DEVICE" .config || echo "无设备配置"
-            echo "所有 CONFIG_TARGET 配置:"
-            grep "CONFIG_TARGET" .config | head -30
-            
-            echo "尝试手动设置设备配置..."
-            echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${DEVICE_FULL_NAME}=y" >> .config
-            echo "✅ 手动添加设备配置"
+          # 检查具体设备配置
+          echo "=== 检查 asus_rt-ac42u 配置 ==="
+          if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" .config; then
+            echo "✅ 设备配置正确: asus_rt-ac42u"
           else
-            echo "✅ 设备配置验证成功"
+            echo "❌ 设备配置错误: 未找到 asus_rt-ac42u"
+            echo "当前配置的设备:"
+            grep "CONFIG_TARGET_DEVICE" .config
+            echo "尝试修复配置..."
+            echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
+            make defconfig
+            echo "修复后配置:"
+            grep "CONFIG_TARGET_DEVICE" .config
           fi
-        else
-          echo "❌ defconfig 后 .config 文件丢失"
-          exit 1
         fi
         
-        echo "=== 最终配置验证 ==="
-        make defconfig
-        echo "最终配置文件预览:"
-        grep "CONFIG_TARGET" .config | head -20
+        # 显示完整的目标配置
+        echo "=== 完整目标配置 ==="
+        grep "CONFIG_TARGET" .config | head -30
 
     - name: 下载软件包
       run: |
@@ -265,6 +269,11 @@ jobs:
           exit 1
         fi
         
+        if ! grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" .config; then
+          echo "❌ 错误: 设备配置丢失!"
+          exit 1
+        fi
+        
         echo "执行编译..."
         if make -j$(nproc) V=s 2>&1 | tee build_detailed.log; then
           echo "✅ 编译成功"
@@ -277,29 +286,52 @@ jobs:
       if: always()
       run: |
         cd $BUILD_DIR
-        echo "=== 验证固件生成 ==="
+        echo "=== 固件生成验证 ==="
         
         if [ -d "bin/targets" ]; then
-          echo "找到目标目录"
+          echo "✅ 找到目标目录"
           
-          echo "所有固件文件:"
-          find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" | sort
+          # 详细列出所有固件
+          echo "所有生成的固件:"
+          find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.tar" \) | sort
           
           echo ""
-          echo "=== 目标设备固件检查 ==="
-          if find bin/targets -name "*${{ env.DEVICE_FULL_NAME }}*" | grep -q .; then
-            echo "✅ 找到正确的 ${{ env.DEVICE_FULL_NAME }} 固件:"
-            find bin/targets -name "*${{ env.DEVICE_FULL_NAME }}*"
-          elif find bin/targets -name "*asus*" | grep -q .; then
-            echo "⚠️ 找到 ASUS 相关固件:"
-            find bin/targets -name "*asus*"
+          echo "=== 目标设备固件验证 ==="
+          
+          # 检查目标设备固件 - 根据设备定义中的信息
+          TARGET_FIRMWARE=$(find bin/targets -name "*asus_rt-ac42u*" -o -name "*rt-ac42u*" -o -name "*ac42u*" -o -name "*rt-ac82u*")
+          
+          if [ -n "$TARGET_FIRMWARE" ]; then
+            echo "✅ 找到目标设备固件:"
+            echo "$TARGET_FIRMWARE"
+            echo "固件详情:"
+            ls -la $TARGET_FIRMWARE
+            
+            # 检查固件大小是否符合设备定义中的 IMAGE_SIZE (20439364 bytes ≈ 20MB)
+            FIRMWARE_SIZE=$(stat -c%s "$TARGET_FIRMWARE" 2>/dev/null || echo "0")
+            echo "固件大小: $FIRMWARE_SIZE bytes"
+            if [ $FIRMWARE_SIZE -gt 19000000 ] && [ $FIRMWARE_SIZE -lt 21000000 ]; then
+              echo "✅ 固件大小符合预期 (~20MB)"
+            else
+              echo "⚠️ 固件大小异常，预期约20MB"
+            fi
           else
-            echo "❌ 未找到目标设备固件"
-            echo "生成的固件:"
-            find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx"
+            echo "❌ 未找到目标设备固件: asus_rt-ac42u"
+            echo "生成的固件列表:"
+            find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) -exec ls -la {} \;
+            
+            # 分析实际生成的设备
+            echo "=== 实际生成的设备分析 ==="
+            for firmware in $(find bin/targets -name "*.bin"); do
+              FIRMWARE_NAME=$(basename "$firmware")
+              echo "固件: $firmware"
+              echo "名称分析: $FIRMWARE_NAME"
+            done
           fi
         else
-          echo "❌ 未找到目标目录"
+          echo "❌ 未找到目标目录 bin/targets"
+          echo "当前目录内容:"
+          ls -la
         fi
 
     - name: 错误分析
@@ -311,10 +343,34 @@ jobs:
           chmod +x $CONFIG_DIR/scripts/error_analysis.sh
           $CONFIG_DIR/scripts/error_analysis.sh $BUILD_DIR
         else
-          echo "错误分析脚本不存在，跳过..."
+          echo "错误分析脚本不存在，创建基础分析..."
+          # 基础错误分析
           if [ -f "build_detailed.log" ]; then
             echo "=== 基础错误分析 ===" > error_analysis.log
-            grep -i "error\|failed" build_detailed.log | head -20 >> error_analysis.log
+            echo "生成时间: $(date)" >> error_analysis.log
+            echo "" >> error_analysis.log
+            
+            # 检查构建状态
+            if [ -f "bin/targets/ipq40xx/generic/"*asus_rt-ac42u* ]; then
+              echo "✅ 构建状态: 成功" >> error_analysis.log
+              echo "✅ 生成的固件文件:" >> error_analysis.log
+              find bin/targets -name "*asus_rt-ac42u*" >> error_analysis.log
+            else
+              echo "❌ 构建状态: 失败或目标设备固件未生成" >> error_analysis.log
+            fi
+            
+            echo "" >> error_analysis.log
+            echo "=== 关键错误检查 ===" >> error_analysis.log
+            echo "检查日志文件: build_detailed.log" >> error_analysis.log
+            
+            # 查找错误
+            if grep -q "error:" build_detailed.log; then
+              echo "❌ 发现编译错误:" >> error_analysis.log
+              grep "error:" build_detailed.log | head -10 >> error_analysis.log
+            else
+              echo "✅ 未发现编译错误" >> error_analysis.log
+            fi
+            
             echo "基础错误分析完成"
           fi
         fi
