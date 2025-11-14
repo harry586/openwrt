@@ -197,7 +197,19 @@ jobs:
           grep "CONFIG_TARGET_" .config | head -20 || echo "无目标平台配置"
           
           echo "=== 设备配置搜索 ==="
-          CONFIG_PATTERNS=("CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}" "CONFIG_TARGET_DEVICE_${{ env.DEVICE_FULL_NAME }}" "CONFIG_TARGET_DEVICE_${{ env.DEVICE_FULL_NAME//_/- }}" "CONFIG_TARGET_DEVICE_${{ env.DEVICE_FULL_NAME//-/ }}" "CONFIG_TARGET_DEVICE.*asus" "CONFIG_TARGET_DEVICE.*ac42u")
+          # 在bash中执行字符串替换
+          DEVICE_FULL_NAME="${{ env.DEVICE_FULL_NAME }}"
+          DEVICE_DASH_NAME="${DEVICE_FULL_NAME//_/-}"
+          DEVICE_NO_DASH_NAME="${DEVICE_FULL_NAME//-/}"
+          
+          CONFIG_PATTERNS=(
+            "CONFIG_TARGET_DEVICE_ipq40xx_generic_${DEVICE_FULL_NAME}"
+            "CONFIG_TARGET_DEVICE_${DEVICE_FULL_NAME}"
+            "CONFIG_TARGET_DEVICE_${DEVICE_DASH_NAME}"
+            "CONFIG_TARGET_DEVICE_${DEVICE_NO_DASH_NAME}"
+            "CONFIG_TARGET_DEVICE.*asus"
+            "CONFIG_TARGET_DEVICE.*ac42u"
+          )
           
           FOUND_DEVICE=false
           for pattern in "${CONFIG_PATTERNS[@]}"; do
@@ -216,7 +228,7 @@ jobs:
             grep "CONFIG_TARGET" .config | head -30
             
             echo "尝试手动设置设备配置..."
-            echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" >> .config
+            echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${DEVICE_FULL_NAME}=y" >> .config
             echo "✅ 手动添加设备配置"
           else
             echo "✅ 设备配置验证成功"
