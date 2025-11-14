@@ -87,16 +87,16 @@ jobs:
         cd $BUILD_DIR
         echo "=== 验证设备支持 ==="
         
-        # 设置设备信息
-        case "${{ github.event.inputs.device_name }}" in
+        DEVICE_NAME="${{ github.event.inputs.device_name }}"
+        case "$DEVICE_NAME" in
           "ac42u")
             PLATFORM="ipq40xx"
             DEVICE_SHORT_NAME="ac42u"
             DEVICE_FULL_NAME="asus_rt-ac42u"
-            DEVICE_CONFIG_NAME="asus_rt-ac42u"  # 配置系统中的名称
+            DEVICE_CONFIG_NAME="asus_rt-ac42u"
             ;;
           *)
-            echo "未知设备: ${{ github.event.inputs.device_name }}"
+            echo "未知设备: $DEVICE_NAME"
             exit 1
             ;;
         esac
@@ -106,16 +106,12 @@ jobs:
         echo "完整设备名称: $DEVICE_FULL_NAME"
         echo "配置名称: $DEVICE_CONFIG_NAME"
         
-        # 更全面的设备验证
         echo "=== 检查设备支持文件 ==="
         
-        # 检查平台配置文件
         if [ -f "target/linux/$PLATFORM/image/generic.mk" ]; then
           echo "✅ 找到平台配置文件"
-          # 检查设备定义
           if grep -q "define Device.*$DEVICE_FULL_NAME" "target/linux/$PLATFORM/image/generic.mk"; then
             echo "✅ 设备 $DEVICE_FULL_NAME 在支持列表中"
-            # 提取设备的具体定义
             echo "设备定义:"
             grep -A 10 "define Device.*$DEVICE_FULL_NAME" "target/linux/$PLATFORM/image/generic.mk" | head -15
           else
@@ -126,12 +122,10 @@ jobs:
           fi
         else
           echo "❌ 找不到平台配置文件: target/linux/$PLATFORM/image/generic.mk"
-          # 列出所有可能的平台文件
           find target/linux -name "*.mk" | grep image | head -10
           exit 1
         fi
         
-        # 检查配置目录
         if [ -d "target/linux/$PLATFORM" ]; then
           echo "✅ 找到平台目录"
           echo "平台文件列表:"
@@ -150,7 +144,6 @@ jobs:
         echo "脚本路径: $CONFIG_DIR/scripts/generate_config.sh"
         echo "参数: ${{ github.event.inputs.config_type }} ${{ env.PLATFORM }} ${{ env.DEVICE_SHORT_NAME }} ${{ env.DEVICE_FULL_NAME }}"
         
-        # 检查脚本是否存在
         if [ -f "$CONFIG_DIR/scripts/generate_config.sh" ]; then
           echo "✅ 找到配置脚本"
           chmod +x $CONFIG_DIR/scripts/generate_config.sh
@@ -159,16 +152,12 @@ jobs:
         else
           echo "❌ 配置脚本不存在: $CONFIG_DIR/scripts/generate_config.sh"
           echo "创建基础配置..."
-          # 创建基础配置
-          cat > .config << 'EOF'
-CONFIG_TARGET_ipq40xx=y
-CONFIG_TARGET_ipq40xx_generic=y
-CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_${{ env.DEVICE_FULL_NAME }}=y
-EOF
+          echo "CONFIG_TARGET_ipq40xx=y" > .config
+          echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+          echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_${{ env.DEVICE_FULL_NAME }}=y" >> .config
           echo "✅ 基础配置创建完成"
         fi
         
-        # 检查生成的配置
         if [ -f ".config" ]; then
           echo "生成的配置预览:"
           head -20 .config
@@ -179,7 +168,6 @@ EOF
         cd $BUILD_DIR
         echo "=== 应用配置并验证 ==="
         
-        # 首先检查配置是否存在
         echo "=== 检查配置文件 ==="
         if [ -f ".config" ]; then
           echo "✅ .config 文件存在"
@@ -191,7 +179,6 @@ EOF
           exit 1
         fi
         
-        # 应用配置
         echo "执行 defconfig..."
         if make defconfig; then
           echo "✅ defconfig 成功"
@@ -200,29 +187,17 @@ EOF
           exit 1
         fi
         
-        # 增强的设备配置验证
         echo "=== 增强的设备配置验证 ==="
         
-        # 检查配置后的文件
         if [ -f ".config" ]; then
           echo "=== defconfig 后的 .config 文件分析 ==="
           echo "配置文件大小: $(wc -l < .config) 行"
           
-          # 查找所有目标相关配置
           echo "=== 所有目标平台配置 ==="
           grep "CONFIG_TARGET_" .config | head -20 || echo "无目标平台配置"
           
-          # 查找设备配置
           echo "=== 设备配置搜索 ==="
-          # 尝试多种可能的设备配置格式
-          CONFIG_PATTERNS=(
-            "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}"
-            "CONFIG_TARGET_DEVICE_${{ env.DEVICE_FULL_NAME }}"
-            "CONFIG_TARGET_DEVICE_${DEVICE_FULL_NAME//_/-}"
-            "CONFIG_TARGET_DEVICE_${DEVICE_FULL_NAME//-/}"
-            "CONFIG_TARGET_DEVICE.*asus"
-            "CONFIG_TARGET_DEVICE.*ac42u"
-          )
+          CONFIG_PATTERNS=("CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}" "CONFIG_TARGET_DEVICE_${{ env.DEVICE_FULL_NAME }}" "CONFIG_TARGET_DEVICE_${{ env.DEVICE_FULL_NAME//_/- }}" "CONFIG_TARGET_DEVICE_${{ env.DEVICE_FULL_NAME//-/ }}" "CONFIG_TARGET_DEVICE.*asus" "CONFIG_TARGET_DEVICE.*ac42u")
           
           FOUND_DEVICE=false
           for pattern in "${CONFIG_PATTERNS[@]}"; do
@@ -240,7 +215,6 @@ EOF
             echo "所有 CONFIG_TARGET 配置:"
             grep "CONFIG_TARGET" .config | head -30
             
-            # 尝试手动设置设备配置
             echo "尝试手动设置设备配置..."
             echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" >> .config
             echo "✅ 手动添加设备配置"
@@ -252,7 +226,6 @@ EOF
           exit 1
         fi
         
-        # 最终配置验证
         echo "=== 最终配置验证 ==="
         make defconfig
         echo "最终配置文件预览:"
@@ -274,7 +247,6 @@ EOF
         cd $BUILD_DIR
         echo "开始编译固件..."
         
-        # 最终配置验证
         echo "=== 最终配置验证 ==="
         if ! grep -q "CONFIG_TARGET_ipq40xx_generic=y" .config; then
           echo "❌ 错误: 目标平台配置丢失!"
@@ -298,7 +270,6 @@ EOF
         if [ -d "bin/targets" ]; then
           echo "找到目标目录"
           
-          # 查找所有固件
           echo "所有固件文件:"
           find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" | sort
           
@@ -329,7 +300,6 @@ EOF
           $CONFIG_DIR/scripts/error_analysis.sh $BUILD_DIR
         else
           echo "错误分析脚本不存在，跳过..."
-          # 基础错误分析
           if [ -f "build_detailed.log" ]; then
             echo "=== 基础错误分析 ===" > error_analysis.log
             grep -i "error\|failed" build_detailed.log | head -20 >> error_analysis.log
@@ -360,6 +330,5 @@ EOF
       uses: actions/upload-artifact@v4
       with:
         name: config-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
-        path: |
-          ${{ env.BUILD_DIR }}/.config
+        path: ${{ env.BUILD_DIR }}/.config
         retention-days: 7
