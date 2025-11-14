@@ -73,6 +73,9 @@ jobs:
     - name: 验证设备支持
       run: |
         cd $BUILD_DIR
+        echo "=== 验证设备支持 ==="
+        
+        # 设置设备信息
         case "${{ github.event.inputs.device_name }}" in
           "ac42u")
             PLATFORM="ipq40xx"
@@ -80,10 +83,30 @@ jobs:
             DEVICE_FULL_NAME="asus_rt-ac42u"
             ;;
           *)
-            echo "未知设备"
+            echo "未知设备: ${{ github.event.inputs.device_name }}"
             exit 1
             ;;
         esac
+        
+        echo "目标平台: $PLATFORM"
+        echo "设备简称: $DEVICE_SHORT_NAME" 
+        echo "完整设备名称: $DEVICE_FULL_NAME"
+        
+        # 验证设备在配置系统中存在
+        if [ -f "target/linux/$PLATFORM/image/generic.mk" ]; then
+          if grep -q "define Device.*$DEVICE_FULL_NAME" "target/linux/$PLATFORM/image/generic.mk"; then
+            echo "✅ 设备 $DEVICE_FULL_NAME 在支持列表中"
+          else
+            echo "❌ 设备 $DEVICE_FULL_NAME 不在支持列表中"
+            echo "可用设备:"
+            grep "define Device" "target/linux/$PLATFORM/image/generic.mk" | head -10
+            exit 1
+          fi
+        else
+          echo "❌ 找不到平台配置文件"
+          exit 1
+        fi
+        
         echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
         echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
         echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
@@ -91,38 +114,62 @@ jobs:
     - name: 生成设备配置
       run: |
         cd $BUILD_DIR
+        echo "=== 生成设备配置 ==="
         chmod +x $CONFIG_DIR/scripts/generate_config.sh
-        $CONFIG_DIR/scripts/generate_config.sh "${{ github.event.inputs.config_type }}" "ipq40xx" "${{ env.DEVICE_SHORT_NAME }}" "${{ env.DEVICE_FULL_NAME }}" "${{ github.event.inputs.extra_packages }}" "${{ github.event.inputs.disable_packages }}" "$BUILD_DIR"
+        $CONFIG_DIR/scripts/generate_config.sh "${{ github.event.inputs.config_type }}" "${{ env.PLATFORM }}" "${{ env.DEVICE_SHORT_NAME }}" "${{ env.DEVICE_FULL_NAME }}" "${{ github.event.inputs.extra_packages }}" "${{ github.event.inputs.disable_packages }}" "$BUILD_DIR"
 
-    - name: 应用配置
+    - name: 应用配置并验证
       run: |
         cd $BUILD_DIR
-        make defconfig
-
-    - name: 强制设置设备配置
-      run: |
-        cd $BUILD_DIR
-        echo "CONFIG_TARGET_ipq40xx=y" > .config
-        echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
-        echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" >> .config
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        echo "CONFIG_PACKAGE_luci=y" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
-        echo "CONFIG_PACKAGE_firewall=y" >> .config
-        make defconfig
+        echo "=== 应用配置并验证 ==="
+        
+        # 应用配置
+        if make defconfig; then
+          echo "✅ defconfig 成功"
+        else
+          echo "❌ defconfig 失败"
+          exit 1
+        fi
+        
+        # 验证设备配置
+        echo "=== 验证设备配置 ==="
+        if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" .config; then
+          echo "✅ 设备配置正确: ${{ env.DEVICE_FULL_NAME }}"
+        else
+          echo "❌ 设备配置错误: 未找到 ${{ env.DEVICE_FULL_NAME }}"
+          echo "当前配置中的设备:"
+          grep "CONFIG_TARGET_DEVICE" .config || echo "无设备配置"
+          exit 1
+        fi
 
     - name: 下载软件包
       run: |
         cd $BUILD_DIR
-        make download
+        echo "下载软件包..."
+        if make -j4 download V=s; then
+          echo "✅ 下载成功"
+        else
+          echo "❌ 下载失败，尝试重新下载..."
+          make download V=s
+        fi
 
     - name: 编译固件
       run: |
         cd $BUILD_DIR
-        if make -j$(nproc) V=s; then
-          echo "编译成功"
+        echo "开始编译固件..."
+        
+        # 最终配置验证
+        echo "=== 最终配置验证 ==="
+        if ! grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" .config; then
+          echo "❌ 错误: 设备配置丢失!"
+          exit 1
+        fi
+        
+        echo "执行编译..."
+        if make -j$(nproc) V=s 2>&1 | tee build_detailed.log; then
+          echo "✅ 编译成功"
         else
-          echo "编译失败"
+          echo "❌ 编译失败"
           exit 1
         fi
 
@@ -130,15 +177,54 @@ jobs:
       if: always()
       run: |
         cd $BUILD_DIR
+        echo "=== 验证固件生成 ==="
+        
         if [ -d "bin/targets" ]; then
-          echo "生成的固件:"
-          find bin/targets -name "*.bin" -o -name "*.img"
+          echo "找到目标目录"
+          
+          # 查找所有固件
+          echo "所有固件文件:"
+          find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" | sort
+          
+          echo ""
+          echo "=== 目标设备固件检查 ==="
+          if find bin/targets -name "*${{ env.DEVICE_FULL_NAME }}*" | grep -q .; then
+            echo "✅ 找到正确的 ${{ env.DEVICE_FULL_NAME }} 固件:"
+            find bin/targets -name "*${{ env.DEVICE_FULL_NAME }}*"
+          elif find bin/targets -name "*asus*" | grep -q .; then
+            echo "⚠️ 找到 ASUS 相关固件:"
+            find bin/targets -name "*asus*"
+          else
+            echo "❌ 未找到目标设备固件"
+            echo "生成的固件:"
+            find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx"
+          fi
+        else
+          echo "❌ 未找到目标目录"
         fi
+
+    - name: 错误分析
+      if: always()
+      run: |
+        cd $BUILD_DIR
+        echo "运行错误分析..."
+        chmod +x $CONFIG_DIR/scripts/error_analysis.sh
+        $CONFIG_DIR/scripts/error_analysis.sh $BUILD_DIR
 
     - name: 上传编译产物
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-${{ github.event.inputs.device_name }}
+        name: firmware-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
         path: ${{ env.BUILD_DIR }}/bin/
+        retention-days: 7
+
+    - name: 上传日志
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: logs-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
+        path: |
+          ${{ env.BUILD_DIR }}/build_detailed.log
+          ${{ env.BUILD_DIR }}/error_analysis.log
         retention-days: 7
