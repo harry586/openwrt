@@ -86,26 +86,22 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 验证平台支持 ==="
-        
         DEVICE_NAME="${{ github.event.inputs.device_name }}"
         case "$DEVICE_NAME" in
           "ac42u")
             PLATFORM="ipq40xx"
-            DEVICE_SHORT_NAME="ac42u"
-            DEVICE_FULL_NAME="asus_rt-ac42u"
+            DEVICE_SHORT_NAME="asus_rt-ac42u"
+            DEVICE_FULL_NAME="asus,rt-ac42u"
             ;;
           *)
             echo "未知设备: $DEVICE_NAME"
             exit 1
             ;;
         esac
-        
         echo "目标平台: $PLATFORM"
         echo "设备简称: $DEVICE_SHORT_NAME" 
         echo "完整设备名称: $DEVICE_FULL_NAME"
-        
         echo "=== 检查平台支持文件 ==="
-        
         if [ -d "target/linux/$PLATFORM" ]; then
           echo "✅ 找到平台目录: target/linux/$PLATFORM"
           echo "平台文件列表:"
@@ -114,41 +110,49 @@ jobs:
           echo "❌ 找不到平台目录: target/linux/$PLATFORM"
           exit 1
         fi
-        
         if [ -f "target/linux/$PLATFORM/generic/target.mk" ]; then
           echo "✅ 找到 target.mk"
           echo "target.mk 内容:"
-          cat target/linux/$PLATFORM/generic/target.mk
+          cat target/linux/$PLATFORM/generic/target.mk | head -20
         else
           echo "❌ 找不到 target.mk"
           exit 1
         fi
-        
         echo "=== 检查设备树文件 ==="
-        find target/linux/$PLATFORM -name "*$DEVICE_FULL_NAME*" -o -name "*asus*" -o -name "*ac42u*" | head -10
-        
+        find target/linux/$PLATFORM -name "*$DEVICE_SHORT_NAME*" -o -name "*asus*" -o -name "*ac42u*" | head -10
+        echo "=== 检查配置文件 ==="
+        if [ -f "target/linux/$PLATFORM/generic/config-4.14" ]; then
+          echo "✅ 找到内核配置"
+        else
+          echo "❌ 找不到内核配置"
+        fi
         echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
         echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
         echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
 
-    - name: 生成设备配置
+    - name: 生成正确的设备配置
       run: |
         cd $BUILD_DIR
-        echo "=== 生成设备配置 ==="
-        
-        echo "尝试使用预配置..."
-        
+        echo "=== 生成正确的设备配置 ==="
+        # 首先使用 menuconfig 生成基础配置
+        echo "生成基础配置..."
+        printf "\n\n" | make menuconfig
+        echo "=== 手动设置设备配置 ==="
+        # 清除现有配置并设置正确的设备
         echo "CONFIG_TARGET_ipq40xx=y" > .config
         echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+        echo "CONFIG_TARGET_MULTI_PROFILE=y" >> .config
+        echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_$DEVICE_SHORT_NAME=y" >> .config
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
         echo "CONFIG_TARGET_ROOTFS_EXT4FS=n" >> .config
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
         echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
+        # 基础包配置
         echo "CONFIG_PACKAGE_luci=y" >> .config
         echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
         echo "CONFIG_PACKAGE_ath10k-firmware-qca4019=y" >> .config
         echo "CONFIG_PACKAGE_ath10k-board-qca4019=y" >> .config
-        
+        # 根据配置类型设置
         case "${{ github.event.inputs.config_type }}" in
           "minimal")
             echo "CONFIG_PACKAGE_luci=n" >> .config
@@ -165,7 +169,7 @@ jobs:
             fi
             ;;
         esac
-        
+        # 必要的系统包 - 使用多个echo命令避免heredoc
         echo "CONFIG_PACKAGE_base-files=y" >> .config
         echo "CONFIG_PACKAGE_busybox=y" >> .config
         echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
@@ -223,13 +227,13 @@ jobs:
         echo "CONFIG_PACKAGE_urandom-seed=y" >> .config
         echo "CONFIG_PACKAGE_urngd=y" >> .config
         echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
-
         echo "✅ 基础配置创建完成"
-        
         echo "=== 验证生成的配置 ==="
         if [ -f ".config" ]; then
           echo "配置预览:"
           grep "CONFIG_TARGET" .config
+          echo "设备配置:"
+          grep "CONFIG_TARGET_DEVICE" .config
           echo "配置行数: $(wc -l < .config)"
         else
           echo "❌ 配置生成失败"
@@ -240,17 +244,14 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 应用配置并验证 ==="
-        
         if [ ! -f ".config" ]; then
           echo "❌ .config 文件不存在"
           exit 1
         fi
-        
         echo "=== 初始配置检查 ==="
         echo "配置大小: $(wc -l < .config) 行"
         echo "目标平台配置:"
         grep "CONFIG_TARGET" .config | head -20
-        
         echo "执行 defconfig..."
         if make defconfig; then
           echo "✅ defconfig 成功"
@@ -258,22 +259,20 @@ jobs:
           echo "❌ defconfig 失败"
           exit 1
         fi
-        
         echo "=== 配置验证 ==="
         if [ -f ".config" ]; then
           echo "defconfig 后的配置:"
           echo "配置大小: $(wc -l < .config) 行"
           echo "目标平台配置:"
           grep "CONFIG_TARGET" .config | head -30
-          
           echo "=== 设备配置检查 ==="
           if grep -q "CONFIG_TARGET_ipq40xx_generic=y" .config; then
             echo "✅ 平台配置正常"
-            if grep -q "CONFIG_TARGET_DEVICE" .config; then
-              echo "✅ 找到设备配置:"
-              grep "CONFIG_TARGET_DEVICE" .config | head -10
+            if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_$DEVICE_SHORT_NAME=y" .config; then
+              echo "✅ 找到正确的设备配置: $DEVICE_SHORT_NAME"
             else
-              echo "⚠️ 未找到特定设备配置，使用通用配置"
+              echo "⚠️ 未找到特定设备配置，检查可用设备..."
+              make target/linux/ipq40xx/generic/profiles || echo "无法列出设备"
             fi
           else
             echo "❌ 平台配置错误"
@@ -296,13 +295,11 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "开始编译固件..."
-        
         echo "=== 最终配置验证 ==="
         if ! grep -q "CONFIG_TARGET_ipq40xx_generic=y" .config; then
           echo "❌ 错误: 目标平台配置丢失!"
           exit 1
         fi
-        
         echo "执行编译..."
         if make -j$(nproc) V=s 2>&1 | tee build_detailed.log; then
           echo "✅ 编译成功"
@@ -316,29 +313,30 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 固件生成验证 ==="
-        
         if [ -d "bin/targets" ]; then
           echo "✅ 找到目标目录"
           echo "所有生成的固件:"
-          find bin/targets -type f -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.tar" | sort
-          
+          find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.tar" \) | sort
           echo ""
           echo "=== 目标设备固件验证 ==="
-          TARGET_FIRMWARE=$(find bin/targets -name "*asus*" -o -name "*ac42u*" -o -name "*ac82u*" -o -name "*acrh17*" -o -name "*ac2200*" -o -name "*ipq40xx*" | head -1)
-          
+          TARGET_FIRMWARE=$(find bin/targets -type f \( -name "*asus*" -o -name "*ac42u*" -o -name "*rt-ac42u*" -o -name "*ipq40xx*" \) | head -1)
           if [ -n "$TARGET_FIRMWARE" ]; then
             echo "✅ 找到可能的设备固件:"
             echo "$TARGET_FIRMWARE"
             echo "固件详情:"
-            ls -la $TARGET_FIRMWARE
+            ls -la "$TARGET_FIRMWARE"
             FIRMWARE_SIZE=$(stat -c%s "$TARGET_FIRMWARE" 2>/dev/null || echo "0")
             echo "固件大小: $FIRMWARE_SIZE bytes"
             FIRMWARE_NAME=$(basename "$TARGET_FIRMWARE")
             echo "固件名称分析: $FIRMWARE_NAME"
+            # 保存固件路径供后续步骤使用
+            echo "FIRMWARE_PATH=$TARGET_FIRMWARE" >> $GITHUB_ENV
           else
             echo "❌ 未找到目标设备固件"
             echo "生成的固件列表:"
-            find bin/targets -type f -name "*.bin" -o -name "*.img" -o -name "*.trx" -exec ls -la {} \;
+            find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) -exec ls -la {} \;
+            echo "bin/targets 目录结构:"
+            find bin/targets -type d | sort
           fi
         else
           echo "❌ 未找到目标目录 bin/targets"
@@ -351,28 +349,31 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "运行错误分析..."
+        # 创建错误分析日志文件
         echo "=== 固件构建错误分析报告 ===" > error_analysis.log
         echo "生成时间: $(date)" >> error_analysis.log
+        echo "设备: ${{ github.event.inputs.device_name }}" >> error_analysis.log
+        echo "配置类型: ${{ github.event.inputs.config_type }}" >> error_analysis.log
         echo "" >> error_analysis.log
-        
+        # 检查固件生成状态
         if find bin/targets -type f -name "*.bin" -o -name "*.img" -o -name "*.trx" | grep -q .; then
           echo "✅ 构建状态: 成功" >> error_analysis.log
           echo "✅ 生成的固件文件:" >> error_analysis.log
-          find bin/targets -type f -name "*.bin" -o -name "*.img" -o -name "*.trx" >> error_analysis.log
+          find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.tar" \) >> error_analysis.log
         else
           echo "❌ 构建状态: 失败或未生成固件" >> error_analysis.log
         fi
-        
         echo "" >> error_analysis.log
         echo "=== 配置分析 ===" >> error_analysis.log
         if [ -f ".config" ]; then
           echo "目标平台配置:" >> error_analysis.log
           grep "CONFIG_TARGET" .config | head -20 >> error_analysis.log
+          echo "" >> error_analysis.log
+          echo "设备配置:" >> error_analysis.log
+          grep "CONFIG_TARGET_DEVICE" .config >> error_analysis.log
         fi
-        
         echo "" >> error_analysis.log
         echo "=== 关键错误检查 ===" >> error_analysis.log
-        
         if [ -f "build_detailed.log" ]; then
           if grep -q "error:" build_detailed.log; then
             echo "❌ 发现编译错误:" >> error_analysis.log
@@ -380,12 +381,10 @@ jobs:
           else
             echo "✅ 未发现编译错误" >> error_analysis.log
           fi
-          
           if grep -q "failed" build_detailed.log; then
             echo "❌ 发现失败信息:" >> error_analysis.log
             grep -i "failed" build_detailed.log | head -20 >> error_analysis.log
           fi
-          
           if tail -50 build_detailed.log | grep -q "make.*Error"; then
             echo "❌ 编译以错误结束" >> error_analysis.log
             tail -50 build_detailed.log >> error_analysis.log
@@ -395,13 +394,11 @@ jobs:
         else
           echo "❌ 构建日志文件不存在" >> error_analysis.log
         fi
-        
         echo "" >> error_analysis.log
         echo "=== 建议 ===" >> error_analysis.log
         echo "1. 检查设备定义文件位置" >> error_analysis.log
         echo "2. 确认设备在目标平台中已定义" >> error_analysis.log
         echo "3. 查看详细的构建日志以获取更多信息" >> error_analysis.log
-        
         echo "错误分析完成"
 
     - name: 上传编译产物
