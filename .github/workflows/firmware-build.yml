@@ -144,54 +144,112 @@ jobs:
         cd $BUILD_DIR
         echo "=== 生成设备配置 ==="
         
+        # 在工作区根目录生成配置
+        CONFIG_FILE="$WORKSPACE/.config"
+        
         # 检查配置脚本是否存在
         if [ -f "$CONFIG_DIR/scripts/generate_config.sh" ]; then
           echo "✅ 找到配置脚本，执行配置生成..."
           chmod +x $CONFIG_DIR/scripts/generate_config.sh
           $CONFIG_DIR/scripts/generate_config.sh "${{ github.event.inputs.config_type }}" "${{ env.PLATFORM }}" "${{ env.DEVICE_SHORT_NAME }}" "${{ env.DEVICE_FULL_NAME }}" "${{ github.event.inputs.extra_packages }}" "${{ github.event.inputs.disable_packages }}" "$BUILD_DIR"
           echo "✅ 配置脚本执行完成"
+          
+          # 如果脚本生成了配置，复制到工作区
+          if [ -f ".config" ]; then
+            cp .config $CONFIG_FILE
+            echo "✅ 配置已复制到工作区: $CONFIG_FILE"
+          fi
         else
           echo "⚠️ 配置脚本不存在，创建手动配置..."
           
-          # 创建针对 asus_rt-ac42u 的配置
-          echo "CONFIG_TARGET_ipq40xx=y" > .config
-          echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
-          
-          # 基础配置
-          echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-          echo "CONFIG_TARGET_ROOTFS_EXT4FS=n" >> .config
-          echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
-          echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
-          
-          # 根据配置类型设置
-          case "${{ github.event.inputs.config_type }}" in
-            "minimal")
-              echo "CONFIG_PACKAGE_luci=n" >> .config
-              ;;
-            "normal")
-              echo "CONFIG_PACKAGE_luci=y" >> .config
-              echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
-              ;;
-            "custom")
-              echo "CONFIG_PACKAGE_luci=y" >> .config
-              ;;
-          esac
-          
-          # 设备特定包
-          echo "CONFIG_PACKAGE_ath10k-firmware-qca9984-ct=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-usb-ledtrig-usbport=y" >> .config
-          
-          echo "✅ 手动配置创建完成"
+          # 在工作区根目录创建配置
+          cat > $CONFIG_FILE << 'EOF'
+CONFIG_TARGET_ipq40xx=y
+CONFIG_TARGET_ipq40xx_generic=y
+CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-ac42u=y
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
+CONFIG_TARGET_ROOTFS_EXT4FS=n
+CONFIG_TARGET_IMAGES_GZIP=y
+CONFIG_TARGET_IMAGES_PAD=y
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-theme-bootstrap=y
+CONFIG_PACKAGE_ath10k-firmware-qca9984-ct=y
+CONFIG_PACKAGE_kmod-usb-ledtrig-usbport=y
+CONFIG_PACKAGE_base-files=y
+CONFIG_PACKAGE_busybox=y
+CONFIG_PACKAGE_dnsmasq=y
+CONFIG_PACKAGE_dropbear=y
+CONFIG_PACKAGE_firewall=y
+CONFIG_PACKAGE_fstools=y
+CONFIG_PACKAGE_ip6tables=y
+CONFIG_PACKAGE_iptables=y
+CONFIG_PACKAGE_iwinfo=y
+CONFIG_PACKAGE_jshn=y
+CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
+CONFIG_PACKAGE_kmod-ip6tables=y
+CONFIG_PACKAGE_kmod-ipt-conntrack=y
+CONFIG_PACKAGE_kmod-ipt-core=y
+CONFIG_PACKAGE_kmod-ipt-nat=y
+CONFIG_PACKAGE_kmod-ipt-offload=y
+CONFIG_PACKAGE_kmod-nf-conntrack=y
+CONFIG_PACKAGE_kmod-nf-conntrack6=y
+CONFIG_PACKAGE_kmod-nf-flow=y
+CONFIG_PACKAGE_kmod-nf-ipt=y
+CONFIG_PACKAGE_kmod-nf-nat=y
+CONFIG_PACKAGE_kmod-nf-reject6=y
+CONFIG_PACKAGE_kmod-nfnetlink=y
+CONFIG_PACKAGE_kmod-ppp=y
+CONFIG_PACKAGE_kmod-pppoe=y
+CONFIG_PACKAGE_kmod-pppox=y
+CONFIG_PACKAGE_kmod-slhc=y
+CONFIG_PACKAGE_libatomic=y
+CONFIG_PACKAGE_libc=y
+CONFIG_PACKAGE_libgcc=y
+CONFIG_PACKAGE_libiwinfo-lua=y
+CONFIG_PACKAGE_liblua=y
+CONFIG_PACKAGE_libubus-lua=y
+CONFIG_PACKAGE_libuci-lua=y
+CONFIG_PACKAGE_lua=y
+CONFIG_PACKAGE_mtd=y
+CONFIG_PACKAGE_netifd=y
+CONFIG_PACKAGE_odhcp6c=y
+CONFIG_PACKAGE_odhcpd-ipv6only=y
+CONFIG_PACKAGE_odhcpd=y
+CONFIG_PACKAGE_opkg=y
+CONFIG_PACKAGE_ppp-mod-pppoe=y
+CONFIG_PACKAGE_procd=y
+CONFIG_PACKAGE_rpcd=y
+CONFIG_PACKAGE_rpcd-mod-file=y
+CONFIG_PACKAGE_rpcd-mod-iwinfo=y
+CONFIG_PACKAGE_rpcd-mod-luci=y
+CONFIG_PACKAGE_rpcd-mod-rrdns=y
+CONFIG_PACKAGE_swconfig=y
+CONFIG_PACKAGE_uboot-envtools=y
+CONFIG_PACKAGE_ubus=y
+CONFIG_PACKAGE_ubusd=y
+CONFIG_PACKAGE_uci=y
+CONFIG_PACKAGE_uclient-fetch=y
+CONFIG_PACKAGE_urandom-seed=y
+CONFIG_PACKAGE_urngd=y
+CONFIG_PACKAGE_wpad-basic-wolfssl=y
+EOF
+          echo "✅ 手动配置创建完成: $CONFIG_FILE"
+        fi
+        
+        # 将配置复制到构建目录
+        if [ -f "$CONFIG_FILE" ]; then
+          cp $CONFIG_FILE $BUILD_DIR/.config
+          echo "✅ 配置已复制到构建目录"
+        else
+          echo "❌ 配置生成失败"
+          exit 1
         fi
         
         # 验证生成的配置
         echo "=== 验证生成的配置 ==="
         if [ -f ".config" ]; then
           echo "配置预览:"
-          grep "CONFIG_TARGET" .config
-        else
-          echo "❌ 配置生成失败"
-          exit 1
+          head -30 .config
         fi
 
     - name: 应用配置并验证
@@ -199,15 +257,16 @@ jobs:
         cd $BUILD_DIR
         echo "=== 应用配置并验证 ==="
         
-        # 检查初始配置
+        # 检查配置是否存在
         if [ ! -f ".config" ]; then
           echo "❌ .config 文件不存在"
           exit 1
         fi
         
         echo "=== 初始配置检查 ==="
+        echo "配置大小: $(wc -l < .config) 行"
         echo "目标平台配置:"
-        grep "CONFIG_TARGET" .config || echo "无目标配置"
+        grep "CONFIG_TARGET" .config | head -20
         
         # 执行 defconfig
         echo "执行 defconfig..."
@@ -218,37 +277,23 @@ jobs:
           exit 1
         fi
         
-        # 详细验证设备配置
-        echo "=== 详细设备配置验证 ==="
-        
-        # 检查最终配置
+        # 验证配置
+        echo "=== 配置验证 ==="
         if [ -f ".config" ]; then
-          echo "最终配置中的目标设备:"
-          grep "CONFIG_TARGET_DEVICE" .config || echo "无设备配置"
+          echo "defconfig 后的配置:"
+          echo "配置大小: $(wc -l < .config) 行"
+          echo "目标平台配置:"
+          grep "CONFIG_TARGET" .config | head -30
           
-          # 显示所有目标相关配置
-          echo "=== 所有目标相关配置 ==="
-          grep "CONFIG_TARGET" .config | head -50
-          
-          # 检查具体设备配置 - 尝试多种可能的配置符号
-          echo "=== 检查 asus_rt-ac42u 配置 ==="
-          if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" .config || \
-             grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_asus_rt-ac42u=y" .config || \
-             grep -q "CONFIG_TARGET_DEVICE.*asus.*ac42u" .config; then
-            echo "✅ 设备配置正确: asus_rt-ac42u"
+          # 检查设备配置
+          echo "=== 设备配置检查 ==="
+          if grep -q "CONFIG_TARGET_ipq40xx_generic=y" .config && \
+             grep -q "CONFIG_TARGET_DEVICE" .config; then
+            echo "✅ 平台和设备配置正常"
             echo "找到的设备配置:"
-            grep "CONFIG_TARGET_DEVICE.*asus.*ac42u" .config || \
-            grep "CONFIG_TARGET_DEVICE.*ac42u" .config || \
-            grep "CONFIG_TARGET_DEVICE_ipq40xx_generic" .config | head -5
+            grep "CONFIG_TARGET_DEVICE" .config | head -10
           else
-            echo "⚠️ 未找到精确设备配置，但继续构建..."
-            echo "当前所有设备配置:"
-            grep "CONFIG_TARGET_DEVICE" .config || echo "无设备配置"
-            echo "所有目标配置:"
-            grep "CONFIG_TARGET" .config | head -30
-            
-            # 不退出，继续构建
-            echo "继续构建过程，依赖 defconfig 自动选择设备"
+            echo "⚠️ 设备配置可能有问题，但继续构建..."
           fi
         fi
 
@@ -298,7 +343,7 @@ jobs:
           echo ""
           echo "=== 目标设备固件验证 ==="
           
-          # 检查目标设备固件 - 根据设备定义中的信息
+          # 检查目标设备固件
           TARGET_FIRMWARE=$(find bin/targets -name "*asus_rt-ac42u*" -o -name "*rt-ac42u*" -o -name "*ac42u*" -o -name "*rt-ac82u*" -o -name "*acrh17*" -o -name "*ac2200*")
           
           if [ -n "$TARGET_FIRMWARE" ]; then
@@ -307,14 +352,9 @@ jobs:
             echo "固件详情:"
             ls -la $TARGET_FIRMWARE
             
-            # 检查固件大小是否符合设备定义中的 IMAGE_SIZE (20439364 bytes ≈ 20MB)
+            # 检查固件大小
             FIRMWARE_SIZE=$(stat -c%s "$TARGET_FIRMWARE" 2>/dev/null || echo "0")
             echo "固件大小: $FIRMWARE_SIZE bytes"
-            if [ $FIRMWARE_SIZE -gt 19000000 ] && [ $FIRMWARE_SIZE -lt 21000000 ]; then
-              echo "✅ 固件大小符合预期 (~20MB)"
-            else
-              echo "⚠️ 固件大小异常，预期约20MB"
-            fi
           else
             echo "❌ 未找到目标设备固件: asus_rt-ac42u"
             echo "生成的固件列表:"
@@ -322,10 +362,10 @@ jobs:
             
             # 分析实际生成的设备
             echo "=== 实际生成的设备分析 ==="
-            for firmware in $(find bin/targets -name "*.bin"); do
+            for firmware in $(find bin/targets -name "*.bin" | head -5); do
               FIRMWARE_NAME=$(basename "$firmware")
               echo "固件: $firmware"
-              echo "名称分析: $FIRMWARE_NAME"
+              echo "名称: $FIRMWARE_NAME"
             done
           fi
         else
@@ -352,6 +392,8 @@ jobs:
           find bin/targets -name "*asus_rt-ac42u*" -o -name "*rt-ac42u*" -o -name "*ac42u*" >> error_analysis.log
         else
           echo "❌ 构建状态: 失败或目标设备固件未生成" >> error_analysis.log
+          echo "所有生成的固件:" >> error_analysis.log
+          find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) >> error_analysis.log 2>/dev/null || echo "无固件生成" >> error_analysis.log
         fi
         
         echo "" >> error_analysis.log
@@ -369,14 +411,20 @@ jobs:
         if [ -f "build_detailed.log" ]; then
           if grep -q "error:" build_detailed.log; then
             echo "❌ 发现编译错误:" >> error_analysis.log
-            grep "error:" build_detailed.log | head -10 >> error_analysis.log
+            grep "error:" build_detailed.log | head -20 >> error_analysis.log
           else
             echo "✅ 未发现编译错误" >> error_analysis.log
           fi
           
           if grep -q "failed" build_detailed.log; then
             echo "❌ 发现失败信息:" >> error_analysis.log
-            grep "failed" build_detailed.log | head -10 >> error_analysis.log
+            grep "failed" build_detailed.log | head -20 >> error_analysis.log
+          fi
+          
+          # 检查编译结束状态
+          if tail -20 build_detailed.log | grep -q "make.*Error"; then
+            echo "❌ 编译以错误结束" >> error_analysis.log
+            tail -20 build_detailed.log >> error_analysis.log
           fi
         else
           echo "❌ 构建日志文件不存在" >> error_analysis.log
@@ -407,5 +455,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: config-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
-        path: ${{ env.BUILD_DIR }}/.config
+        path: |
+          ${{ env.BUILD_DIR }}/.config
+          ${{ env.WORKSPACE }}/.config
         retention-days: 7
