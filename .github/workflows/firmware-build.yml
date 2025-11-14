@@ -134,11 +134,7 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 生成正确的设备配置 ==="
-        # 首先使用 menuconfig 生成基础配置
-        echo "生成基础配置..."
-        printf "\n\n" | make menuconfig
         echo "=== 手动设置设备配置 ==="
-        # 清除现有配置并设置正确的设备
         echo "CONFIG_TARGET_ipq40xx=y" > .config
         echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
         echo "CONFIG_TARGET_MULTI_PROFILE=y" >> .config
@@ -147,12 +143,10 @@ jobs:
         echo "CONFIG_TARGET_ROOTFS_EXT4FS=n" >> .config
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
         echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
-        # 基础包配置
         echo "CONFIG_PACKAGE_luci=y" >> .config
         echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
         echo "CONFIG_PACKAGE_ath10k-firmware-qca4019=y" >> .config
         echo "CONFIG_PACKAGE_ath10k-board-qca4019=y" >> .config
-        # 根据配置类型设置
         case "${{ github.event.inputs.config_type }}" in
           "minimal")
             echo "CONFIG_PACKAGE_luci=n" >> .config
@@ -169,7 +163,6 @@ jobs:
             fi
             ;;
         esac
-        # 必要的系统包 - 使用多个echo命令避免heredoc
         echo "CONFIG_PACKAGE_base-files=y" >> .config
         echo "CONFIG_PACKAGE_busybox=y" >> .config
         echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
@@ -329,7 +322,6 @@ jobs:
             echo "固件大小: $FIRMWARE_SIZE bytes"
             FIRMWARE_NAME=$(basename "$TARGET_FIRMWARE")
             echo "固件名称分析: $FIRMWARE_NAME"
-            # 保存固件路径供后续步骤使用
             echo "FIRMWARE_PATH=$TARGET_FIRMWARE" >> $GITHUB_ENV
           else
             echo "❌ 未找到目标设备固件"
@@ -349,13 +341,11 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "运行错误分析..."
-        # 创建错误分析日志文件
         echo "=== 固件构建错误分析报告 ===" > error_analysis.log
         echo "生成时间: $(date)" >> error_analysis.log
         echo "设备: ${{ github.event.inputs.device_name }}" >> error_analysis.log
         echo "配置类型: ${{ github.event.inputs.config_type }}" >> error_analysis.log
         echo "" >> error_analysis.log
-        # 检查固件生成状态
         if find bin/targets -type f -name "*.bin" -o -name "*.img" -o -name "*.trx" | grep -q .; then
           echo "✅ 构建状态: 成功" >> error_analysis.log
           echo "✅ 生成的固件文件:" >> error_analysis.log
