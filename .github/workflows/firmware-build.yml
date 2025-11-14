@@ -4,22 +4,22 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: '设备名称 (例如: ac42u)'
+        description: '设备名称'
         required: true
         default: 'ac42u'
         type: string
       config_type:
-        description: '配置类型 (选择 custom 才能使用插件管理)'
+        description: '配置类型'
         required: true
         default: 'minimal'
         type: choice
         options: ['minimal', 'normal', 'custom']
       extra_packages:
-        description: '额外安装插件 (空格分隔) - 仅 custom 类型可用'
+        description: '额外安装插件 (空格分隔)'
         required: false
         type: string
       disable_packages:
-        description: '禁用插件 (空格分隔) - 仅 custom 类型可用'
+        description: '禁用插件 (空格分隔)'
         required: false
         type: string
 
@@ -33,514 +33,112 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - name: 1_初始空间检查
+    - name: 初始空间检查
       run: |
         echo "=== 初始磁盘空间检查 ==="
         df -h
-        echo "工作空间: ${{ github.workspace }}"
-        echo "构建目录: $BUILD_DIR"
-        if [ ! -d "/mnt" ]; then
-          echo "错误: /mnt 目录不存在!"
-          exit 1
-        fi
         AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
         AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
         echo "/mnt 可用空间: ${AVAILABLE_GB}G"
         if [ $AVAILABLE_GB -lt 50 ]; then
-          echo "错误: /mnt 空间不足50G，当前只有 ${AVAILABLE_GB}G"
+          echo "错误: /mnt 空间不足50G"
           exit 1
         fi
-        echo "空间检查通过: /mnt 有 ${AVAILABLE_GB}G 可用空间"
 
-    - name: 2_检出代码仓库
+    - name: 检出代码仓库
       uses: actions/checkout@v4
 
-    - name: 3_设置编译环境
+    - name: 设置编译环境
       run: |
-        echo "安装编译环境..."
-        sudo apt-get update
-        sudo dpkg --add-architecture i386
         sudo apt-get update
         sudo apt-get install -y build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib curl lib32gcc-s1 libc6-dev-x32 linux-libc-dev ncurses-term help2man
 
-    - name: 4_创建构建目录并设置权限
+    - name: 创建构建目录
       run: |
-        echo "创建构建目录: $BUILD_DIR"
         sudo mkdir -p $BUILD_DIR
         sudo chown -R $USER:$USER $BUILD_DIR
-        echo "目录权限设置完成"
 
-    - name: 5_克隆源码
+    - name: 克隆源码
       run: |
         cd $BUILD_DIR
-        echo "克隆 ImmortalWrt 源码..."
         git clone https://github.com/immortalwrt/immortalwrt.git .
         git checkout openwrt-21.02
-        echo "源码克隆完成，当前目录大小:"
-        du -sh .
 
-    - name: 6_更新安装feeds
+    - name: 更新安装feeds
       run: |
         cd $BUILD_DIR
-        echo "更新安装 feeds..."
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-        echo "feeds 安装完成，当前目录大小:"
-        du -sh .
 
-    - name: 7_验证设备支持
+    - name: 验证设备支持
       run: |
         cd $BUILD_DIR
-        echo "=== 验证设备支持 ==="
         case "${{ github.event.inputs.device_name }}" in
           "ac42u")
             PLATFORM="ipq40xx"
             DEVICE_SHORT_NAME="ac42u"
-            # 根据 generic.mk，正确的设备标识符是 asus_rt-ac42u
             DEVICE_FULL_NAME="asus_rt-ac42u"
-            TARGET_PROFILE="asus_rt-ac42u"
             ;;
           *)
-            echo "未知设备: ${{ github.event.inputs.device_name }}"
+            echo "未知设备"
             exit 1
             ;;
         esac
-        echo "目标平台: $PLATFORM"
-        echo "设备简称: $DEVICE_SHORT_NAME"
-        echo "完整设备名称: $DEVICE_FULL_NAME"
-        echo "目标设备: $TARGET_PROFILE"
         echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
         echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
         echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
-        
-        echo "检查设备配置文件..."
-        if [ -f "target/linux/$PLATFORM/image/generic.mk" ]; then
-          echo "找到平台配置文件"
-          if grep -q "$TARGET_PROFILE" "target/linux/$PLATFORM/image/generic.mk"; then
-            echo "✅ 设备 $TARGET_PROFILE 在支持列表中"
-            DEVICE_CONFIG_NAME=$(grep "define Device" "target/linux/$PLATFORM/image/generic.mk" | grep "$TARGET_PROFILE" | sed 's/.*define Device\///' | sed 's/).*//' | head -1)
-            if [ ! -z "$DEVICE_CONFIG_NAME" ]; then
-              echo "设备配置名称: $DEVICE_CONFIG_NAME"
-              echo "DEVICE_CONFIG_NAME=$DEVICE_CONFIG_NAME" >> $GITHUB_ENV
-            else
-              echo "使用完整设备名称作为配置名称"
-              echo "DEVICE_CONFIG_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
-            fi
-          else
-            echo "❌ 设备 $TARGET_PROFILE 不在支持列表中"
-            echo "可用设备列表:"
-            grep "define Device" "target/linux/$PLATFORM/image/generic.mk" | head -20
-            exit 1
-          fi
-        else
-          echo "❌ 找不到平台配置文件"
-          exit 1
-        fi
 
-    - name: 8_动态生成设备配置
+    - name: 生成设备配置
       run: |
         cd $BUILD_DIR
-        echo "=== 配置类型说明 ==="
-        echo "minimal - 最小配置: 基础系统 + 必要驱动 + 基本网络功能"
-        echo "normal  - 正常配置: 最小配置 + Web管理界面 + 常用功能"  
-        echo "custom  - 自定义配置: 以normal为模板 + 用户自定义插件管理"
-        echo ""
-        echo "选择的配置类型: ${{ github.event.inputs.config_type }}"
-        echo "设备简称: ${{ env.DEVICE_SHORT_NAME }}"
-        echo "完整设备名称: ${{ env.DEVICE_FULL_NAME }}"
-        echo "设备配置名称: ${{ env.DEVICE_CONFIG_NAME }}"
-        if [ "${{ github.event.inputs.config_type }}" != "custom" ]; then
-          if [ -n "${{ github.event.inputs.extra_packages }}" ] || [ -n "${{ github.event.inputs.disable_packages }}" ]; then
-            echo "警告: 插件管理仅在 custom 类型下可用，将忽略插件设置"
-          fi
-        else
-          echo "额外安装插件: ${{ github.event.inputs.extra_packages }}"
-          echo "禁用插件: ${{ github.event.inputs.disable_packages }}"
-        fi
         chmod +x $CONFIG_DIR/scripts/generate_config.sh
         $CONFIG_DIR/scripts/generate_config.sh "${{ github.event.inputs.config_type }}" "ipq40xx" "${{ env.DEVICE_SHORT_NAME }}" "${{ env.DEVICE_FULL_NAME }}" "${{ github.event.inputs.extra_packages }}" "${{ github.event.inputs.disable_packages }}" "$BUILD_DIR"
-        mkdir -p $CONFIG_DIR/configs/
-        cp .config $CONFIG_DIR/configs/${{ github.event.inputs.device_name }}_final_config
 
-    - name: 9_使用defconfig避免menuconfig
+    - name: 应用配置
       run: |
         cd $BUILD_DIR
-        echo "使用defconfig避免menuconfig调用..."
-        export TERM=linux
-        if ! make defconfig; then
-          echo "❌ defconfig 失败，尝试修复配置..."
-          if [ -f ".config" ]; then
-            echo "备份当前配置..."
-            cp .config .config.backup
-            echo "清理无效配置行..."
-            grep -v "^#" .config | grep -v "^$" > .config.clean
-            mv .config.clean .config
-            echo "重新尝试defconfig..."
-            make defconfig
-          else
-            echo "❌ 配置文件不存在，无法继续"
-            exit 1
-          fi
-        fi
-        echo "✅ defconfig 完成"
+        make defconfig
 
-    - name: 10_强制设置设备配置
+    - name: 强制设置设备配置
       run: |
         cd $BUILD_DIR
-        echo "=== 强制设置设备配置 ==="
-        cp .config .config.backup
-        echo "当前设备配置状态:"
-        grep "CONFIG_TARGET" .config | grep -E "(ipq40xx|asus|device)" || echo "未找到设备配置"
-        
-        echo "方法1: 使用完整配置覆盖..."
-        rm -f .config.temp
-        echo "CONFIG_TARGET_ipq40xx=y" > .config.temp
-        echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config.temp
-        
-        # 使用正确的设备配置名称
-        if [ -n "${{ env.DEVICE_CONFIG_NAME }}" ]; then
-          echo "使用设备配置名称: ${{ env.DEVICE_CONFIG_NAME }}"
-          echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_CONFIG_NAME }}=y" >> .config.temp
-        else
-          echo "使用完整设备名称: ${{ env.DEVICE_FULL_NAME }}"
-          echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" >> .config.temp
-        fi
-        
-        echo "CONFIG_TARGET_PER_DEVICE_ROOTFS=y" >> .config.temp
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config.temp
-        echo "CONFIG_PACKAGE_luci=y" >> .config.temp
-        echo "CONFIG_PACKAGE_luci-base=y" >> .config.temp
-        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config.temp
-        echo "CONFIG_PACKAGE_firewall=y" >> .config.temp
-        echo "CONFIG_PACKAGE_iptables=y" >> .config.temp
-        echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> .config.temp
-        
-        if [ "${{ github.event.inputs.config_type }}" != "minimal" ]; then
-          echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config.temp
-          echo "CONFIG_PACKAGE_luci-proto-ipv6=y" >> .config.temp
-          echo "CONFIG_PACKAGE_ip6tables=y" >> .config.temp
-          echo "CONFIG_PACKAGE_ppp=y" >> .config.temp
-          echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config.temp
-        fi
-        
-        mv .config.temp .config
-        echo "应用新配置..."
-        
-        if make defconfig; then
-          echo "✅ defconfig 成功"
-        else
-          echo "❌ defconfig 失败，尝试方法2..."
-          echo "方法2: 使用基础配置方法..."
-          rm -f .config
-          echo "CONFIG_TARGET_ipq40xx=y" > .config
-          echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
-          
-          if make defconfig; then
-            echo "✅ 基础配置成功"
-            if [ -n "${{ env.DEVICE_CONFIG_NAME }}" ]; then
-              echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_CONFIG_NAME }}=y" >> .config
-            else
-              echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" >> .config
-            fi
-            echo "CONFIG_TARGET_PER_DEVICE_ROOTFS=y" >> .config
-            
-            if make defconfig; then
-              echo "✅ 设备配置添加成功"
-              echo "CONFIG_PACKAGE_luci=y" >> .config
-              echo "CONFIG_PACKAGE_luci-base=y" >> .config
-              echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
-              echo "CONFIG_PACKAGE_firewall=y" >> .config
-              echo "CONFIG_PACKAGE_iptables=y" >> .config
-              make defconfig || echo "⚠️ 最终配置有警告但继续"
-            else
-              echo "❌ 设备配置失败"
-              exit 1
-            fi
-          else
-            echo "❌ 基础配置也失败"
-            exit 1
-          fi
-        fi
-        
-        echo ""
-        echo "=== 验证设备配置 ==="
-        if [ -n "${{ env.DEVICE_CONFIG_NAME }}" ]; then
-          if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_CONFIG_NAME }}=y" .config; then
-            echo "✅ 设备配置正确: ${{ env.DEVICE_CONFIG_NAME }}"
-          else
-            echo "❌ 设备配置错误"
-          fi
-        else
-          if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" .config; then
-            echo "✅ 设备配置正确: ${{ env.DEVICE_FULL_NAME }}"
-          else
-            echo "❌ 设备配置错误"
-          fi
-        fi
-        
-        echo "当前配置中的设备设置:"
-        grep "CONFIG_TARGET_DEVICE" .config || echo "未找到设备配置"
+        echo "CONFIG_TARGET_ipq40xx=y" > .config
+        echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+        echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" >> .config
+        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+        echo "CONFIG_PACKAGE_luci=y" >> .config
+        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+        echo "CONFIG_PACKAGE_firewall=y" >> .config
+        make defconfig
 
-    - name: 11_设备配置深度调试
+    - name: 下载软件包
       run: |
         cd $BUILD_DIR
-        echo "=== 设备配置深度调试 ==="
-        echo "1. 检查设备在源码中的定义..."
-        if [ -f "target/linux/ipq40xx/image/generic.mk" ]; then
-          echo "在 generic.mk 中查找设备定义:"
-          grep -A 10 "define Device.*asus_rt-ac42u" target/linux/ipq40xx/image/generic.mk || echo "未找到设备定义"
-        fi
-        echo ""
-        echo "2. 检查设备树文件..."
-        find target/linux/ipq40xx/files* -name "*ac42u*" 2>/dev/null | head -5 || echo "未找到设备树文件"
-        echo ""
-        echo "3. 当前配置详细状态:"
-        echo "所有目标相关配置:"
-        grep "CONFIG_TARGET" .config
-        echo ""
-        echo "所有设备相关配置:"
-        grep "CONFIG_TARGET_DEVICE" .config || echo "无设备配置"
+        make download
 
-    - name: 12_下载软件包
+    - name: 编译固件
       run: |
         cd $BUILD_DIR
-        echo "下载软件包..."
-        if ! make -j8 download V=s; then
-          echo "❌ 下载失败，尝试重新下载..."
-          make download V=s
-        fi
-        echo "下载完成，当前目录大小:"
-        du -sh .
-
-    - name: 13_编译前空间检查
-      run: |
-        echo "=== 编译前磁盘空间检查 ==="
-        df -h
-        if [ ! -d "/mnt" ]; then
-          echo "错误: /mnt 目录不存在!"
-          exit 1
-        fi
-        AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
-        AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-        echo "/mnt 可用空间: ${AVAILABLE_GB}G"
-        if [ $AVAILABLE_GB -lt 30 ]; then
-          echo "警告: /mnt 空间不足30G，当前只有 ${AVAILABLE_GB}G"
-          echo "编译可能会因空间不足而失败"
+        if make -j$(nproc) V=s; then
+          echo "编译成功"
         else
-          echo "空间充足，可以开始编译"
-        fi
-        cd $BUILD_DIR
-        echo "构建目录当前大小:"
-        du -sh .
-
-    - name: 14_编译前环境验证
-      run: |
-        cd $BUILD_DIR
-        echo "=== 编译前环境验证 ==="
-        echo "1. 检查配置文件..."
-        if [ -f ".config" ]; then
-          echo "✅ 配置文件存在"
-          echo "设备配置:"
-          grep "CONFIG_TARGET_DEVICE" .config || echo "未找到设备配置"
-        else
-          echo "❌ 配置文件不存在"
-          exit 1
-        fi
-        echo ""
-        echo "2. 检查feeds..."
-        if [ -d "feeds" ]; then
-          echo "✅ feeds目录存在"
-        else
-          echo "❌ feeds目录不存在"
-          exit 1
-        fi
-        echo ""
-        echo "3. 检查package目录..."
-        if [ -d "package" ]; then
-          echo "✅ package目录存在"
-        else
-          echo "❌ package目录不存在"
-          exit 1
-        fi
-        echo ""
-        echo "4. 检查下载的包..."
-        if [ -d "dl" ]; then
-          echo "✅ dl目录存在"
-          echo "下载的包数量: $(ls dl/ | wc -l)"
-        else
-          echo "❌ dl目录不存在"
-          echo "请先运行 'make download'"
-          exit 1
-        fi
-        echo ""
-        echo "5. 检查磁盘空间..."
-        AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
-        AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-        echo "可用空间: ${AVAILABLE_GB}G"
-        if [ $AVAILABLE_GB -lt 20 ]; then
-          echo "❌ 磁盘空间不足，需要至少20G，当前只有 ${AVAILABLE_GB}G"
-          exit 1
-        else
-          echo "✅ 磁盘空间充足"
-        fi
-        echo "环境验证完成，可以开始编译"
-
-    - name: 15_编译固件
-      run: |
-        cd $BUILD_DIR
-        echo "开始编译固件..."
-        export TERM=linux
-        echo "=== 编译前最终设备验证 ==="
-        if [ -n "${{ env.DEVICE_CONFIG_NAME }}" ]; then
-          if ! grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_CONFIG_NAME }}=y" .config; then
-            echo "❌ 错误: 设备配置在编译前被更改!"
-            echo "当前设备配置:"
-            grep "CONFIG_TARGET_DEVICE" .config || echo "无设备配置"
-            exit 1
-          fi
-        else
-          if ! grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" .config; then
-            echo "❌ 错误: 设备配置在编译前被更改!"
-            echo "当前设备配置:"
-            grep "CONFIG_TARGET_DEVICE" .config || echo "无设备配置"
-            exit 1
-          fi
-        fi
-        echo "✅ 设备配置验证通过"
-        echo "执行清理..."
-        make clean 2>/dev/null || true
-        echo "=== 开始编译过程 ==="
-        echo "执行完整编译..."
-        if make -j$(nproc) V=s 2>&1 | tee build_detailed.log; then
-          echo "✅ 编译成功"
-        else
-          echo "❌ 编译失败，查看日志了解详情"
+          echo "编译失败"
           exit 1
         fi
 
-    - name: 16_验证固件生成
+    - name: 验证固件生成
       if: always()
       run: |
         cd $BUILD_DIR
-        echo "=== 验证固件生成 ==="
-        echo "检查固件文件..."
         if [ -d "bin/targets" ]; then
-          echo "找到目标目录，固件文件列表:"
-          find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null | while read file; do
-            echo "固件: $file"
-            ls -la "$file"
-          done
-          echo ""
-          echo "=== 检查目标设备固件 ==="
-          if find bin/targets -name "*${{ env.DEVICE_FULL_NAME }}*" 2>/dev/null | grep -q .; then
-            echo "✅ 找到正确的 ${{ env.DEVICE_FULL_NAME }} 固件"
-            find bin/targets -name "*${{ env.DEVICE_FULL_NAME }}*" 2>/dev/null
-          elif find bin/targets -name "*ac42u*" 2>/dev/null | grep -q .; then
-            echo "✅ 找到 ac42u 相关固件"
-            find bin/targets -name "*ac42u*" 2>/dev/null
-          elif find bin/targets -name "*asus*" 2>/dev/null | grep -q .; then
-            echo "✅ 找到 ASUS 相关固件"
-            find bin/targets -name "*asus*" 2>/dev/null
-          else
-            echo "⚠️ 未找到目标设备固件，但有以下固件:"
-            find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null
-          fi
-        else
-          echo "❌ 未找到目标目录，编译可能失败"
+          echo "生成的固件:"
+          find bin/targets -name "*.bin" -o -name "*.img"
         fi
 
-    - name: 17_运行错误分析脚本
-      if: always()
-      run: |
-        cd $BUILD_DIR
-        echo "运行错误分析脚本..."
-        chmod +x $CONFIG_DIR/scripts/error_analysis.sh
-        $CONFIG_DIR/scripts/error_analysis.sh $BUILD_DIR
-        echo "错误分析完成"
-
-    - name: 18_固件汇总分析报告
-      if: always()
-      run: |
-        cd $BUILD_DIR
-        echo "生成固件汇总分析报告..."
-        echo "=== 固件汇总分析报告 ===" > firmware_report.log
-        echo "生成时间: $(date)" >> firmware_report.log
-        echo "" >> firmware_report.log
-        echo "设备简称: ${{ env.DEVICE_SHORT_NAME }}" >> firmware_report.log
-        echo "完整设备名称: ${{ env.DEVICE_FULL_NAME }}" >> firmware_report.log
-        echo "设备配置名称: ${{ env.DEVICE_CONFIG_NAME }}" >> firmware_report.log
-        echo "平台: ipq40xx" >> firmware_report.log
-        echo "配置类型: ${{ github.event.inputs.config_type }}" >> firmware_report.log
-        echo "额外安装插件: ${{ github.event.inputs.extra_packages }}" >> firmware_report.log
-        echo "禁用插件: ${{ github.event.inputs.disable_packages }}" >> firmware_report.log
-        echo "" >> firmware_report.log
-        if [ -d "bin/targets" ]; then
-          echo "构建状态: 成功" >> firmware_report.log
-          echo "" >> firmware_report.log
-          echo "=== 所有固件文件 ===" >> firmware_report.log
-          find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.gz" \) 2>/dev/null | sort >> firmware_report.log
-          echo "" >> firmware_report.log
-          if find bin/targets -name "*${{ env.DEVICE_FULL_NAME }}*" 2>/dev/null | grep -q .; then
-            echo "✅ 找到正确的 ${{ env.DEVICE_FULL_NAME }} 固件" >> firmware_report.log
-            find bin/targets -name "*${{ env.DEVICE_FULL_NAME }}*" 2>/dev/null >> firmware_report.log
-          elif find bin/targets -name "*ac42u*" 2>/dev/null | grep -q .; then
-            echo "✅ 找到 ac42u 相关固件" >> firmware_report.log
-            find bin/targets -name "*ac42u*" 2>/dev/null >> firmware_report.log
-          else
-            echo "⚠️ 未找到目标设备固件，生成的固件:" >> firmware_report.log
-            find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.trx" 2>/dev/null >> firmware_report.log
-          fi
-        else
-          echo "构建状态: 失败" >> firmware_report.log
-        fi
-        echo "固件分析报告生成完成"
-        cat firmware_report.log
-
-    - name: 19_最终空间检查
-      if: always()
-      run: |
-        echo "=== 最终空间使用情况 ==="
-        df -h /mnt
-        cd $BUILD_DIR
-        echo "构建目录最终大小:"
-        du -sh . || echo "无法获取目录大小"
-        echo "bin目录大小:"
-        du -sh bin/ 2>/dev/null || echo "bin目录不存在"
-
-    - name: 20_上传编译产物
+    - name: 上传编译产物
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
+        name: firmware-${{ github.event.inputs.device_name }}
         path: ${{ env.BUILD_DIR }}/bin/
         retention-days: 7
-
-    - name: 21_上传日志文件
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: logs-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
-        path: ${{ env.BUILD_DIR }}/firmware_report.log
-        retention-days: 7
-
-    - name: 22_上传配置文件
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: config-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
-        path: ${{ env.CONFIG_DIR }}/configs/${{ github.event.inputs.device_name }}_final_config
-        retention-days: 30
-
-    - name: 23_调试信息收集
-      if: failure()
-      run: |
-        cd $BUILD_DIR
-        echo "=== 调试信息收集 (仅在失败时运行) ==="
-        echo "环境变量:"
-        echo "DEVICE_FULL_NAME: ${{ env.DEVICE_FULL_NAME }}"
-        echo "DEVICE_CONFIG_NAME: ${{ env.DEVICE_CONFIG_NAME }}"
-        echo "当前目录: $(pwd)"
-        echo "配置文件内容:"
-        cat .config | grep "CONFIG_TARGET" || echo "无TARGET配置"
-        echo "构建日志前100行:"
-        head -100 build_detailed.log 2>/dev/null || echo "无构建日志"
