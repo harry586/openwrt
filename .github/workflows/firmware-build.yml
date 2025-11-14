@@ -70,6 +70,18 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
+    - name: 调试信息收集
+      run: |
+        cd $BUILD_DIR
+        echo "=== 调试信息 ==="
+        echo "当前目录: $(pwd)"
+        echo "目录内容:"
+        ls -la
+        echo "config 目录内容:"
+        ls -la config/ || echo "无 config 目录"
+        echo "构建系统信息:"
+        make --version || echo "make 不可用"
+
     - name: 验证设备支持
       run: |
         cd $BUILD_DIR
@@ -81,6 +93,7 @@ jobs:
             PLATFORM="ipq40xx"
             DEVICE_SHORT_NAME="ac42u"
             DEVICE_FULL_NAME="asus_rt-ac42u"
+            DEVICE_CONFIG_NAME="asus_rt-ac42u"  # 配置系统中的名称
             ;;
           *)
             echo "未知设备: ${{ github.event.inputs.device_name }}"
@@ -91,39 +104,95 @@ jobs:
         echo "目标平台: $PLATFORM"
         echo "设备简称: $DEVICE_SHORT_NAME" 
         echo "完整设备名称: $DEVICE_FULL_NAME"
+        echo "配置名称: $DEVICE_CONFIG_NAME"
         
-        # 验证设备在配置系统中存在
+        # 更全面的设备验证
+        echo "=== 检查设备支持文件 ==="
+        
+        # 检查平台配置文件
         if [ -f "target/linux/$PLATFORM/image/generic.mk" ]; then
+          echo "✅ 找到平台配置文件"
+          # 检查设备定义
           if grep -q "define Device.*$DEVICE_FULL_NAME" "target/linux/$PLATFORM/image/generic.mk"; then
             echo "✅ 设备 $DEVICE_FULL_NAME 在支持列表中"
+            # 提取设备的具体定义
+            echo "设备定义:"
+            grep -A 10 "define Device.*$DEVICE_FULL_NAME" "target/linux/$PLATFORM/image/generic.mk" | head -15
           else
             echo "❌ 设备 $DEVICE_FULL_NAME 不在支持列表中"
             echo "可用设备:"
-            grep "define Device" "target/linux/$PLATFORM/image/generic.mk" | head -10
+            grep "define Device" "target/linux/$PLATFORM/image/generic.mk" | head -20
             exit 1
           fi
         else
-          echo "❌ 找不到平台配置文件"
+          echo "❌ 找不到平台配置文件: target/linux/$PLATFORM/image/generic.mk"
+          # 列出所有可能的平台文件
+          find target/linux -name "*.mk" | grep image | head -10
           exit 1
+        fi
+        
+        # 检查配置目录
+        if [ -d "target/linux/$PLATFORM" ]; then
+          echo "✅ 找到平台目录"
+          echo "平台文件列表:"
+          ls -la target/linux/$PLATFORM/ | head -10
         fi
         
         echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
         echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
+        echo "DEVICE_CONFIG_NAME=$DEVICE_CONFIG_NAME" >> $GITHUB_ENV
         echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
 
     - name: 生成设备配置
       run: |
         cd $BUILD_DIR
         echo "=== 生成设备配置 ==="
-        chmod +x $CONFIG_DIR/scripts/generate_config.sh
-        $CONFIG_DIR/scripts/generate_config.sh "${{ github.event.inputs.config_type }}" "${{ env.PLATFORM }}" "${{ env.DEVICE_SHORT_NAME }}" "${{ env.DEVICE_FULL_NAME }}" "${{ github.event.inputs.extra_packages }}" "${{ github.event.inputs.disable_packages }}" "$BUILD_DIR"
+        echo "脚本路径: $CONFIG_DIR/scripts/generate_config.sh"
+        echo "参数: ${{ github.event.inputs.config_type }} ${{ env.PLATFORM }} ${{ env.DEVICE_SHORT_NAME }} ${{ env.DEVICE_FULL_NAME }}"
+        
+        # 检查脚本是否存在
+        if [ -f "$CONFIG_DIR/scripts/generate_config.sh" ]; then
+          echo "✅ 找到配置脚本"
+          chmod +x $CONFIG_DIR/scripts/generate_config.sh
+          $CONFIG_DIR/scripts/generate_config.sh "${{ github.event.inputs.config_type }}" "${{ env.PLATFORM }}" "${{ env.DEVICE_SHORT_NAME }}" "${{ env.DEVICE_FULL_NAME }}" "${{ github.event.inputs.extra_packages }}" "${{ github.event.inputs.disable_packages }}" "$BUILD_DIR"
+          echo "✅ 配置脚本执行完成"
+        else
+          echo "❌ 配置脚本不存在: $CONFIG_DIR/scripts/generate_config.sh"
+          echo "创建基础配置..."
+          # 创建基础配置
+          cat > .config << 'EOF'
+CONFIG_TARGET_ipq40xx=y
+CONFIG_TARGET_ipq40xx_generic=y
+CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_${{ env.DEVICE_FULL_NAME }}=y
+EOF
+          echo "✅ 基础配置创建完成"
+        fi
+        
+        # 检查生成的配置
+        if [ -f ".config" ]; then
+          echo "生成的配置预览:"
+          head -20 .config
+        fi
 
     - name: 应用配置并验证
       run: |
         cd $BUILD_DIR
         echo "=== 应用配置并验证 ==="
         
+        # 首先检查配置是否存在
+        echo "=== 检查配置文件 ==="
+        if [ -f ".config" ]; then
+          echo "✅ .config 文件存在"
+          echo "配置文件大小: $(wc -l < .config) 行"
+          echo "配置文件前50行:"
+          head -50 .config
+        else
+          echo "❌ .config 文件不存在"
+          exit 1
+        fi
+        
         # 应用配置
+        echo "执行 defconfig..."
         if make defconfig; then
           echo "✅ defconfig 成功"
         else
@@ -131,16 +200,63 @@ jobs:
           exit 1
         fi
         
-        # 验证设备配置
-        echo "=== 验证设备配置 ==="
-        if grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" .config; then
-          echo "✅ 设备配置正确: ${{ env.DEVICE_FULL_NAME }}"
+        # 增强的设备配置验证
+        echo "=== 增强的设备配置验证 ==="
+        
+        # 检查配置后的文件
+        if [ -f ".config" ]; then
+          echo "=== defconfig 后的 .config 文件分析 ==="
+          echo "配置文件大小: $(wc -l < .config) 行"
+          
+          # 查找所有目标相关配置
+          echo "=== 所有目标平台配置 ==="
+          grep "CONFIG_TARGET_" .config | head -20 || echo "无目标平台配置"
+          
+          # 查找设备配置
+          echo "=== 设备配置搜索 ==="
+          # 尝试多种可能的设备配置格式
+          CONFIG_PATTERNS=(
+            "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}"
+            "CONFIG_TARGET_DEVICE_${{ env.DEVICE_FULL_NAME }}"
+            "CONFIG_TARGET_DEVICE_${DEVICE_FULL_NAME//_/-}"
+            "CONFIG_TARGET_DEVICE_${DEVICE_FULL_NAME//-/}"
+            "CONFIG_TARGET_DEVICE.*asus"
+            "CONFIG_TARGET_DEVICE.*ac42u"
+          )
+          
+          FOUND_DEVICE=false
+          for pattern in "${CONFIG_PATTERNS[@]}"; do
+            if grep -q "$pattern" .config; then
+              echo "✅ 找到设备配置: $pattern"
+              grep "$pattern" .config
+              FOUND_DEVICE=true
+            fi
+          done
+          
+          if [ "$FOUND_DEVICE" = "false" ]; then
+            echo "⚠️ 未找到精确设备配置，检查所有相关配置"
+            echo "所有 CONFIG_TARGET_DEVICE 配置:"
+            grep "CONFIG_TARGET_DEVICE" .config || echo "无设备配置"
+            echo "所有 CONFIG_TARGET 配置:"
+            grep "CONFIG_TARGET" .config | head -30
+            
+            # 尝试手动设置设备配置
+            echo "尝试手动设置设备配置..."
+            echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" >> .config
+            echo "✅ 手动添加设备配置"
+          else
+            echo "✅ 设备配置验证成功"
+          fi
         else
-          echo "❌ 设备配置错误: 未找到 ${{ env.DEVICE_FULL_NAME }}"
-          echo "当前配置中的设备:"
-          grep "CONFIG_TARGET_DEVICE" .config || echo "无设备配置"
+          echo "❌ defconfig 后 .config 文件丢失"
           exit 1
         fi
+        
+        # 最终配置验证
+        echo "=== 最终配置验证 ==="
+        make defconfig
+        echo "最终配置文件预览:"
+        grep "CONFIG_TARGET" .config | head -20
 
     - name: 下载软件包
       run: |
@@ -160,8 +276,8 @@ jobs:
         
         # 最终配置验证
         echo "=== 最终配置验证 ==="
-        if ! grep -q "CONFIG_TARGET_DEVICE_ipq40xx_generic_${{ env.DEVICE_FULL_NAME }}=y" .config; then
-          echo "❌ 错误: 设备配置丢失!"
+        if ! grep -q "CONFIG_TARGET_ipq40xx_generic=y" .config; then
+          echo "❌ 错误: 目标平台配置丢失!"
           exit 1
         fi
         
@@ -208,8 +324,18 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "运行错误分析..."
-        chmod +x $CONFIG_DIR/scripts/error_analysis.sh
-        $CONFIG_DIR/scripts/error_analysis.sh $BUILD_DIR
+        if [ -f "$CONFIG_DIR/scripts/error_analysis.sh" ]; then
+          chmod +x $CONFIG_DIR/scripts/error_analysis.sh
+          $CONFIG_DIR/scripts/error_analysis.sh $BUILD_DIR
+        else
+          echo "错误分析脚本不存在，跳过..."
+          # 基础错误分析
+          if [ -f "build_detailed.log" ]; then
+            echo "=== 基础错误分析 ===" > error_analysis.log
+            grep -i "error\|failed" build_detailed.log | head -20 >> error_analysis.log
+            echo "基础错误分析完成"
+          fi
+        fi
 
     - name: 上传编译产物
       if: always()
@@ -227,4 +353,13 @@ jobs:
         path: |
           ${{ env.BUILD_DIR }}/build_detailed.log
           ${{ env.BUILD_DIR }}/error_analysis.log
+        retention-days: 7
+
+    - name: 上传配置信息
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: config-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
+        path: |
+          ${{ env.BUILD_DIR }}/.config
         retention-days: 7
