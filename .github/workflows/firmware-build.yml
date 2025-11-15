@@ -62,13 +62,20 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential libncurses5-dev libssl-dev python3 unzip zlib1g-dev subversion gcc-multilib git curl
 
-    - name: 创建构建目录
+    - name: 创建构建目录并设置权限
       run: |
         echo "=== 创建构建目录 ==="
         sudo mkdir -p $BUILD_DIR
         sudo chown -R $USER:$USER $BUILD_DIR
         sudo chmod -R 755 $BUILD_DIR
+        # 添加写权限
+        sudo chmod u+w $BUILD_DIR
         echo "✅ 构建目录创建完成"
+        
+        # 验证权限
+        echo "=== 验证目录权限 ==="
+        ls -ld $BUILD_DIR
+        touch $BUILD_DIR/test_write.txt && echo "✅ 写入测试成功" && rm $BUILD_DIR/test_write.txt
 
     - name: 复制检测脚本到构建目录
       run: |
@@ -103,8 +110,42 @@ jobs:
         cd $BUILD_DIR
         echo "=== 智能版本检测 ==="
         
+        # 确保当前目录可写
+        echo "=== 检查并修复目录权限 ==="
+        sudo chown -R $USER:$USER . 2>/dev/null || true
+        chmod u+w . 2>/dev/null || true
+        
+        # 测试写入权限
+        if touch test_write.txt; then
+            echo "✅ 当前目录可写"
+            rm -f test_write.txt
+        else
+            echo "❌ 当前目录不可写，尝试修复权限"
+            sudo chown -R $USER:$USER .
+            chmod u+w .
+            # 再次测试
+            if touch test_write.txt; then
+                echo "✅ 权限修复成功"
+                rm -f test_write.txt
+            else
+                echo "❌ 权限修复失败，使用备用方案"
+                # 使用临时目录
+                TEMP_DIR=$(mktemp -d)
+                cd $TEMP_DIR
+                cp $BUILD_DIR/complete_version_detector.sh .
+                chmod +x complete_version_detector.sh
+            fi
+        fi
+        
+        echo "=== 开始版本检测 ==="
         if ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}"; then
           echo "✅ 版本检测脚本执行成功"
+          
+          # 如果在临时目录运行，复制结果回构建目录
+          if [ "$(pwd)" != "$BUILD_DIR" ] && [ -f "version_info.txt" ]; then
+              cp version_info.txt $BUILD_DIR/
+              cd $BUILD_DIR
+          fi
           
           if [ -f "version_info.txt" ]; then
             echo "✅ 找到版本信息文件"
@@ -209,6 +250,9 @@ jobs:
           echo "❌ 错误: 设备检测脚本不存在"
           exit 1
         fi
+        
+        # 确保权限正确
+        chmod +x device_detection.sh
         
         if ./device_detection.sh "${{ github.event.inputs.device_name }}"; then
           echo "✅ 设备检测脚本执行成功"
