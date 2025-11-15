@@ -34,7 +34,6 @@ on:
 
 env:
   BUILD_DIR: /mnt/openwrt-build
-  TEMP_DEVICE_DIR: /tmp/device-detection
 
 jobs:
   build-firmware:
@@ -98,90 +97,6 @@ jobs:
         chmod +x complete_version_detector.sh device_detection.sh
         echo "✅ 脚本复制完成"
 
-    - name: 创建临时设备检测目录
-      run: |
-        echo "=== 创建临时设备检测目录 ==="
-        # 删除旧的临时目录（如果存在）
-        sudo rm -rf $TEMP_DEVICE_DIR
-        # 创建新的临时目录
-        sudo mkdir -p $TEMP_DEVICE_DIR
-        sudo chown -R $USER:$USER $TEMP_DEVICE_DIR
-        sudo chmod -R 755 $TEMP_DEVICE_DIR
-        echo "✅ 临时设备检测目录创建完成"
-
-    - name: 克隆临时源码用于设备检测
-      run: |
-        cd $TEMP_DEVICE_DIR
-        echo "=== 克隆临时源码用于设备检测 ==="
-        
-        # 确保目录为空
-        if [ "$(ls -A .)" ]; then
-          echo "❌ 错误: 临时目录非空"
-          exit 1
-        fi
-        
-        # 使用默认源码进行设备检测
-        git clone --depth 1 https://github.com/immortalwrt/immortalwrt.git .
-        
-        if [ $? -eq 0 ]; then
-          echo "✅ 临时源码克隆完成"
-        else
-          echo "❌ 临时源码克隆失败"
-          exit 1
-        fi
-
-    - name: 复制设备检测脚本到临时目录
-      run: |
-        echo "=== 复制设备检测脚本到临时目录 ==="
-        cp $BUILD_DIR/device_detection.sh $TEMP_DEVICE_DIR/
-        chmod +x $TEMP_DEVICE_DIR/device_detection.sh
-        echo "✅ 设备检测脚本复制完成"
-
-    - name: 智能设备检测
-      id: device-detection
-      run: |
-        cd $TEMP_DEVICE_DIR
-        echo "=== 智能设备检测 ==="
-        
-        if ./device_detection.sh "${{ github.event.inputs.device_name }}"; then
-          echo "✅ 设备检测脚本执行成功"
-          
-          if [ -f "device_info.txt" ]; then
-            echo "✅ 找到设备信息文件"
-            echo "=== device_info.txt 内容 ==="
-            cat device_info.txt
-            
-            PLATFORM=$(grep '^PLATFORM=' device_info.txt | cut -d'=' -f2)
-            DEVICE_SHORT_NAME=$(grep '^DEVICE_SHORT_NAME=' device_info.txt | cut -d'=' -f2)
-            DEVICE_FULL_NAME=$(grep '^DEVICE_FULL_NAME=' device_info.txt | cut -d'=' -f2)
-            
-            echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
-            echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
-            echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
-            
-            echo "✅ 设备环境变量已设置:"
-            echo "PLATFORM: $PLATFORM"
-            echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
-            echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
-            
-            # 复制设备信息到构建目录
-            cp device_info.txt $BUILD_DIR/
-            echo "✅ 设备信息已保存到构建目录"
-          else
-            echo "❌ 未找到设备信息文件"
-            exit 1
-          fi
-        else
-          echo "❌ 设备检测失败"
-          exit 1
-        fi
-
-    - name: 清理临时设备检测目录
-      run: |
-        echo "=== 清理临时设备检测目录 ==="
-        sudo rm -rf $TEMP_DEVICE_DIR
-        echo "✅ 临时设备检测目录已清理"
-
     - name: 智能版本检测
       id: version-detection
       run: |
@@ -224,8 +139,8 @@ jobs:
         echo "当前目录内容:"
         ls -la
         
-        # 只保留设备信息和版本信息文件
-        find . -mindepth 1 -maxdepth 1 ! -name 'device_info.txt' ! -name 'version_info.txt' -exec rm -rf {} + 2>/dev/null || true
+        # 只保留版本信息文件
+        find . -mindepth 1 -maxdepth 1 ! -name 'version_info.txt' -exec rm -rf {} + 2>/dev/null || true
         
         echo "清理后目录内容:"
         ls -la
@@ -247,8 +162,8 @@ jobs:
         echo "当前目录内容:"
         ls -la
         
-        # 确保目录为空（除了信息文件）
-        FILE_COUNT=$(ls -A | grep -v 'device_info.txt' | grep -v 'version_info.txt' | wc -l)
+        # 确保目录为空（除了版本信息文件）
+        FILE_COUNT=$(ls -A | grep -v 'version_info.txt' | wc -l)
         if [ $FILE_COUNT -ne 0 ]; then
           echo "❌ 错误: 目录非空，无法克隆"
           echo "当前文件列表:"
@@ -266,23 +181,61 @@ jobs:
           exit 1
         fi
 
-    - name: 恢复检测信息
+    - name: 重新复制设备检测脚本
       run: |
         cd $BUILD_DIR
-        echo "=== 恢复检测信息 ==="
+        echo "=== 重新复制设备检测脚本 ==="
         
-        # 确保设备信息和版本信息文件存在
-        if [ -f "device_info.txt" ]; then
-          echo "✅ 设备信息文件已存在"
-        else
-          echo "❌ 设备信息文件丢失"
+        # 重新从工作空间复制设备检测脚本
+        cd $GITHUB_WORKSPACE
+        DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f | head -1)
+        if [ -z "$DEVICE_SCRIPT" ]; then
+          echo "❌ 错误: 找不到 device_detection.sh"
           exit 1
         fi
         
-        if [ -f "version_info.txt" ]; then
-          echo "✅ 版本信息文件已存在"
+        cp "$DEVICE_SCRIPT" $BUILD_DIR/device_detection.sh
+        cd $BUILD_DIR
+        chmod +x device_detection.sh
+        echo "✅ 设备检测脚本重新复制完成"
+
+    - name: 智能设备检测
+      id: device-detection
+      run: |
+        cd $BUILD_DIR
+        echo "=== 智能设备检测 ==="
+        
+        if [ ! -f "device_detection.sh" ]; then
+          echo "❌ 错误: 设备检测脚本不存在"
+          exit 1
+        fi
+        
+        if ./device_detection.sh "${{ github.event.inputs.device_name }}"; then
+          echo "✅ 设备检测脚本执行成功"
+          
+          if [ -f "device_info.txt" ]; then
+            echo "✅ 找到设备信息文件"
+            echo "=== device_info.txt 内容 ==="
+            cat device_info.txt
+            
+            PLATFORM=$(grep '^PLATFORM=' device_info.txt | cut -d'=' -f2)
+            DEVICE_SHORT_NAME=$(grep '^DEVICE_SHORT_NAME=' device_info.txt | cut -d'=' -f2)
+            DEVICE_FULL_NAME=$(grep '^DEVICE_FULL_NAME=' device_info.txt | cut -d'=' -f2)
+            
+            echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
+            echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
+            echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
+            
+            echo "✅ 设备环境变量已设置:"
+            echo "PLATFORM: $PLATFORM"
+            echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
+            echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
+          else
+            echo "❌ 未找到设备信息文件"
+            exit 1
+          fi
         else
-          echo "❌ 版本信息文件丢失"
+          echo "❌ 设备检测失败"
           exit 1
         fi
 
