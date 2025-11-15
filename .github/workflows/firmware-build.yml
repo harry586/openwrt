@@ -114,11 +114,16 @@ jobs:
         echo "=== 智能版本检测 ==="
         
         # 创建临时目录用于版本检测
-        mkdir -p temp_version_check
-        cd temp_version_check
+        TEMP_DIR="$BUILD_DIR/temp_version_check"
+        mkdir -p "$TEMP_DIR"
+        
+        # 复制脚本到临时目录
+        cp complete_version_detector.sh device_detection.sh "$TEMP_DIR"/
+        cd "$TEMP_DIR"
+        chmod +x complete_version_detector.sh device_detection.sh
         
         # 运行完整版本检测器
-        if ../complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}"; then
+        if ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}"; then
           echo "✅ 版本检测脚本执行成功"
           
           # 检查版本信息文件
@@ -144,7 +149,7 @@ jobs:
             echo "⚠️ 未找到版本信息文件，从脚本输出解析"
             # 重新运行脚本并捕获输出
             OUTPUT_FILE="version_output.txt"
-            ../complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}" > "$OUTPUT_FILE" 2>&1 || true
+            ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}" > "$OUTPUT_FILE" 2>&1 || true
             
             # 从输出中解析版本信息
             SELECTED_REPO=$(grep "推荐仓库:" "$OUTPUT_FILE" | awk '{print $2}')
@@ -173,8 +178,8 @@ jobs:
         fi
         
         # 清理临时目录
-        cd ..
-        rm -rf temp_version_check
+        cd "$BUILD_DIR"
+        rm -rf "$TEMP_DIR"
 
     - name: 克隆选定版本的源码
       run: |
