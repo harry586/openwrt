@@ -138,52 +138,60 @@ jobs:
         echo "✅ 脚本复制完成"
         ls -la *.sh
 
+    - name: 修复版本检测脚本
+      run: |
+        cd $BUILD_DIR
+        echo "=== 修复版本检测脚本 ==="
+        
+        # 检查脚本是否包含文件输出功能
+        if ! grep -q "version_info.txt" complete_version_detector.sh; then
+          echo "检测到脚本缺少文件输出功能，正在修复..."
+          
+          # 备份原脚本
+          cp complete_version_detector.sh complete_version_detector.sh.backup
+          
+          # 在脚本末尾添加文件输出功能
+          cat >> complete_version_detector.sh << 'EOF'
+
+# 输出版本信息到文件
+echo "SELECTED_REPO=$SELECTED_REPO" > version_info.txt
+echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> version_info.txt
+echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> version_info.txt
+
+echo "版本信息已保存到 version_info.txt"
+cat version_info.txt
+EOF
+          echo "✅ 脚本修复完成"
+        else
+          echo "✅ 脚本已包含文件输出功能"
+        fi
+
     - name: 智能版本检测
       id: version-detection
       run: |
         cd $BUILD_DIR
         echo "=== 智能版本检测 ==="
         
-        # 清理构建目录（确保是空的）
+        # 确保构建目录是干净的
         echo "清理构建目录..."
         find . -mindepth 1 -maxdepth 1 ! -name '*.sh' -exec rm -rf {} + 2>/dev/null || true
         
         # 运行完整版本检测器
+        echo "运行版本检测脚本..."
         if ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}"; then
           echo "✅ 版本检测脚本执行成功"
           
-          # 智能查找版本信息文件
-          smart_find_generated_file() {
-              local filename="$1"
-              local search_dirs=(
-                  "$BUILD_DIR"
-                  "$GITHUB_WORKSPACE"
-                  "/tmp"
-                  "."
-              )
-              
-              for dir in "${search_dirs[@]}"; do
-                  if [ -f "$dir/$filename" ]; then
-                      echo "$dir/$filename"
-                      return 0
-                  fi
-              done
-              
-              # 如果没找到，使用 find 命令
-              local found_file=$(find $BUILD_DIR $GITHUB_WORKSPACE /tmp . -name "$filename" -type f 2>/dev/null | head -1)
-              echo "$found_file"
-          }
-          
-          VERSION_INFO_FILE=$(smart_find_generated_file "version_info.txt")
-          if [ -n "$VERSION_INFO_FILE" ] && [ -f "$VERSION_INFO_FILE" ]; then
-            echo "✅ 找到版本信息文件: $VERSION_INFO_FILE"
-            echo "=== 版本信息文件内容 ==="
-            cat "$VERSION_INFO_FILE"
+          # 检查当前目录是否有版本信息文件
+          echo "检查版本信息文件..."
+          if [ -f "version_info.txt" ]; then
+            echo "✅ 找到版本信息文件"
+            echo "=== version_info.txt 内容 ==="
+            cat version_info.txt
             
             # 读取变量并设置到环境变量
-            SELECTED_REPO=$(grep '^SELECTED_REPO=' "$VERSION_INFO_FILE" | cut -d'=' -f2)
-            SELECTED_BRANCH=$(grep '^SELECTED_BRANCH=' "$VERSION_INFO_FILE" | cut -d'=' -f2)
-            SELECTED_REPO_URL=$(grep '^SELECTED_REPO_URL=' "$VERSION_INFO_FILE" | cut -d'=' -f2)
+            SELECTED_REPO=$(grep '^SELECTED_REPO=' version_info.txt | cut -d'=' -f2)
+            SELECTED_BRANCH=$(grep '^SELECTED_BRANCH=' version_info.txt | cut -d'=' -f2)
+            SELECTED_REPO_URL=$(grep '^SELECTED_REPO_URL=' version_info.txt | cut -d'=' -f2)
             
             echo "SELECTED_REPO=$SELECTED_REPO" >> $GITHUB_ENV
             echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
@@ -194,10 +202,13 @@ jobs:
             echo "SELECTED_BRANCH: $SELECTED_BRANCH"
             echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
           else
-            echo "⚠️ 未找到版本信息文件，从脚本输出解析"
-            # 直接从脚本输出解析版本信息
+            echo "❌ 版本信息文件未生成，从脚本输出解析"
+            # 重新运行脚本并捕获输出
             OUTPUT_FILE="version_output.txt"
             ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}" > "$OUTPUT_FILE" 2>&1 || true
+            
+            echo "=== 脚本输出 ==="
+            cat "$OUTPUT_FILE"
             
             # 从输出中解析版本信息
             SELECTED_REPO=$(grep "推荐仓库:" "$OUTPUT_FILE" | awk '{print $2}')
@@ -213,27 +224,16 @@ jobs:
               echo "SELECTED_REPO: $SELECTED_REPO"
               echo "SELECTED_BRANCH: $SELECTED_BRANCH"
               echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
+              
+              # 保存到文件供后续使用
+              echo "SELECTED_REPO=$SELECTED_REPO" > version_info.txt
+              echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> version_info.txt
+              echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> version_info.txt
             else
-              echo "⚠️ 从输出解析失败，使用默认值"
-              # 根据设备设置默认值
-              case "${{ github.event.inputs.device_name }}" in
-                ac42u|ax42u|redmi_ax6s)
-                  echo "SELECTED_REPO=immortalwrt" >> $GITHUB_ENV
-                  echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
-                  echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_ENV
-                  ;;
-                wr841n|tl-wr841n)
-                  echo "SELECTED_REPO=openwrt" >> $GITHUB_ENV
-                  echo "SELECTED_BRANCH=openwrt-22.03" >> $GITHUB_ENV
-                  echo "SELECTED_REPO_URL=https://git.openwrt.org/openwrt/openwrt.git" >> $GITHUB_ENV
-                  ;;
-                *)
-                  echo "SELECTED_REPO=openwrt" >> $GITHUB_ENV
-                  echo "SELECTED_BRANCH=main" >> $GITHUB_ENV
-                  echo "SELECTED_REPO_URL=https://git.openwrt.org/openwrt/openwrt.git" >> $GITHUB_ENV
-                  ;;
-              esac
-              echo "✅ 使用默认环境变量"
+              echo "❌ 从输出解析失败，使用默认值"
+              echo "SELECTED_REPO=immortalwrt" >> $GITHUB_ENV
+              echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
+              echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_ENV
             fi
           fi
         else
@@ -255,9 +255,9 @@ jobs:
           exit 1
         fi
         
-        # 清理构建目录（保留脚本文件）
-        echo "清理构建目录..."
-        find . -mindepth 1 -maxdepth 1 ! -name '*.sh' -exec rm -rf {} + 2>/dev/null || true
+        # 完全清空构建目录（保留版本信息文件）
+        echo "完全清空构建目录..."
+        rm -rf ./* ./.git* 2>/dev/null || true
         
         echo "开始克隆仓库..."
         git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .
@@ -276,6 +276,34 @@ jobs:
           exit 1
         fi
 
+    - name: 修复设备检测脚本
+      run: |
+        cd $BUILD_DIR
+        echo "=== 修复设备检测脚本 ==="
+        
+        # 检查脚本是否包含文件输出功能
+        if ! grep -q "device_info.txt" device_detection.sh; then
+          echo "检测到脚本缺少文件输出功能，正在修复..."
+          
+          # 备份原脚本
+          cp device_detection.sh device_detection.sh.backup
+          
+          # 在脚本末尾添加文件输出功能
+          cat >> device_detection.sh << 'EOF'
+
+# 输出设备信息到文件
+echo "PLATFORM=$PLATFORM" > device_info.txt
+echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> device_info.txt
+echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> device_info.txt
+
+echo "设备信息已保存到 device_info.txt"
+cat device_info.txt
+EOF
+          echo "✅ 设备检测脚本修复完成"
+        else
+          echo "✅ 设备检测脚本已包含文件输出功能"
+        fi
+
     - name: 智能设备检测
       id: device-detection
       run: |
@@ -283,40 +311,20 @@ jobs:
         echo "=== 智能设备检测 ==="
         
         # 运行设备检测脚本
+        echo "运行设备检测脚本..."
         if ./device_detection.sh "${{ github.event.inputs.device_name }}"; then
           echo "✅ 设备检测脚本执行成功"
           
-          # 智能查找设备信息文件
-          smart_find_generated_file() {
-              local filename="$1"
-              local search_dirs=(
-                  "$BUILD_DIR"
-                  "$GITHUB_WORKSPACE"
-                  "/tmp"
-                  "."
-              )
-              
-              for dir in "${search_dirs[@]}"; do
-                  if [ -f "$dir/$filename" ]; then
-                      echo "$dir/$filename"
-                      return 0
-                  fi
-              done
-              
-              # 如果没找到，使用 find 命令
-              local found_file=$(find $BUILD_DIR $GITHUB_WORKSPACE /tmp . -name "$filename" -type f 2>/dev/null | head -1)
-              echo "$found_file"
-          }
-          
-          DEVICE_INFO_FILE=$(smart_find_generated_file "device_info.txt")
-          if [ -n "$DEVICE_INFO_FILE" ] && [ -f "$DEVICE_INFO_FILE" ]; then
-            echo "✅ 找到设备信息文件: $DEVICE_INFO_FILE"
-            echo "=== 设备信息文件内容 ==="
-            cat "$DEVICE_INFO_FILE"
+          # 检查当前目录是否有设备信息文件
+          echo "检查设备信息文件..."
+          if [ -f "device_info.txt" ]; then
+            echo "✅ 找到设备信息文件"
+            echo "=== device_info.txt 内容 ==="
+            cat device_info.txt
             
-            PLATFORM=$(grep '^PLATFORM=' "$DEVICE_INFO_FILE" | cut -d'=' -f2)
-            DEVICE_SHORT_NAME=$(grep '^DEVICE_SHORT_NAME=' "$DEVICE_INFO_FILE" | cut -d'=' -f2)
-            DEVICE_FULL_NAME=$(grep '^DEVICE_FULL_NAME=' "$DEVICE_INFO_FILE" | cut -d'=' -f2)
+            PLATFORM=$(grep '^PLATFORM=' device_info.txt | cut -d'=' -f2)
+            DEVICE_SHORT_NAME=$(grep '^DEVICE_SHORT_NAME=' device_info.txt | cut -d'=' -f2)
+            DEVICE_FULL_NAME=$(grep '^DEVICE_FULL_NAME=' device_info.txt | cut -d'=' -f2)
             
             echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
             echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
@@ -327,10 +335,13 @@ jobs:
             echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
             echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
           else
-            echo "⚠️ 未找到设备信息文件，从脚本输出解析"
-            # 直接从脚本输出解析设备信息
+            echo "❌ 设备信息文件未生成，从脚本输出解析"
+            # 重新运行脚本并捕获输出
             OUTPUT_FILE="device_output.txt"
             ./device_detection.sh "${{ github.event.inputs.device_name }}" > "$OUTPUT_FILE" 2>&1 || true
+            
+            echo "=== 脚本输出 ==="
+            cat "$OUTPUT_FILE"
             
             # 从输出中解析设备信息
             PLATFORM=$(grep "平台:" "$OUTPUT_FILE" | awk '{print $2}')
@@ -346,32 +357,16 @@ jobs:
               echo "PLATFORM: $PLATFORM"
               echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
               echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
+              
+              # 保存到文件供后续使用
+              echo "PLATFORM=$PLATFORM" > device_info.txt
+              echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> device_info.txt
+              echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> device_info.txt
             else
-              echo "⚠️ 从输出解析失败，使用默认值"
-              # 根据设备设置默认值
-              case "${{ github.event.inputs.device_name }}" in
-                ac42u|ax42u|redmi_ax6s)
-                  echo "PLATFORM=mediatek" >> $GITHUB_ENV
-                  echo "DEVICE_SHORT_NAME=xiaomi_redmi-ax6s" >> $GITHUB_ENV
-                  echo "DEVICE_FULL_NAME=Xiaomi Redmi AX6S" >> $GITHUB_ENV
-                  ;;
-                wr841n|tl-wr841n)
-                  echo "PLATFORM=ar71xx" >> $GITHUB_ENV
-                  echo "DEVICE_SHORT_NAME=tl-wr841n-v9" >> $GITHUB_ENV
-                  echo "DEVICE_FULL_NAME=TP-Link TL-WR841N" >> $GITHUB_ENV
-                  ;;
-                mi3g|xiaomi_mi3g)
-                  echo "PLATFORM=ramips" >> $GITHUB_ENV
-                  echo "DEVICE_SHORT_NAME=xiaomi_mi-router-3g" >> $GITHUB_ENV
-                  echo "DEVICE_FULL_NAME=Xiaomi Mi Router 3G" >> $GITHUB_ENV
-                  ;;
-                *)
-                  echo "PLATFORM=ramips" >> $GITHUB_ENV
-                  echo "DEVICE_SHORT_NAME=generic" >> $GITHUB_ENV
-                  echo "DEVICE_FULL_NAME=Generic Device" >> $GITHUB_ENV
-                  ;;
-              esac
-              echo "✅ 使用默认设备环境变量"
+              echo "❌ 从输出解析失败，使用默认值"
+              echo "PLATFORM=mediatek" >> $GITHUB_ENV
+              echo "DEVICE_SHORT_NAME=xiaomi_redmi-ax6s" >> $GITHUB_ENV
+              echo "DEVICE_FULL_NAME=Xiaomi Redmi AX6S" >> $GITHUB_ENV
             fi
           fi
         else
