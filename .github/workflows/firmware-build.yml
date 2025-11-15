@@ -65,12 +65,17 @@ jobs:
         sudo mkdir -p $BUILD_DIR
         sudo chown -R $USER:$USER $BUILD_DIR
 
-    - name: 智能查找并复制检测脚本
+    - name: 智能版本检测
+      id: version-detection
       run: |
         cd $BUILD_DIR
-        echo "=== 智能查找并复制检测脚本 ==="
+        echo "=== 智能版本检测 ==="
         
-        # 切换到工作空间目录
+        # 清理构建目录
+        echo "清理构建目录..."
+        find . -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+        
+        # 直接从工作空间复制脚本
         cd $GITHUB_WORKSPACE
         
         # 查找版本检测脚本
@@ -96,22 +101,6 @@ jobs:
         
         cd $BUILD_DIR
         chmod +x complete_version_detector.sh device_detection.sh
-        
-        echo "✅ 脚本复制完成"
-
-    - name: 清理构建目录
-      run: |
-        cd $BUILD_DIR
-        echo "=== 清理构建目录 ==="
-        # 完全清空构建目录
-        find . -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
-        echo "✅ 构建目录已清理"
-
-    - name: 智能版本检测
-      id: version-detection
-      run: |
-        cd $BUILD_DIR
-        echo "=== 智能版本检测 ==="
         
         # 创建临时目录用于版本检测
         TEMP_DIR="$BUILD_DIR/temp_version_check"
