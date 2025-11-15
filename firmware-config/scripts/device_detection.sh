@@ -95,8 +95,9 @@ extract_device_name() {
     local dts_basename="$1"
     local device_input="$2"
     
-    echo "设备树文件名: $dts_basename"
-    echo "输入设备名: $device_input"
+    # 调试信息输出到stderr，不影响函数返回值
+    echo "设备树文件名: $dts_basename" >&2
+    echo "输入设备名: $device_input" >&2
     
     # 特殊处理已知的设备名称映射
     case "$device_input" in
@@ -128,12 +129,16 @@ verify_device() {
             echo "PLATFORM=$platform" > device_info.txt
             echo "DEVICE_SHORT_NAME=$device_name" >> device_info.txt
             echo "DEVICE_FULL_NAME=$device_input" >> device_info.txt
+            
             echo "设备信息已保存到 device_info.txt"
+            echo "=== device_info.txt 内容 ==="
             cat device_info.txt
             
             return 0
         else
             echo "❌ 设备 $device_name 在目标配置中未定义"
+            echo "=== 目标配置文件中定义的设备 ==="
+            grep "define Device" "$target_mk" | head -10
             return 1
         fi
     else
