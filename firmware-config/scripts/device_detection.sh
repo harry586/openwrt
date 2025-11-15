@@ -307,15 +307,53 @@ output_device_info() {
     local device_short_name="$2"
     local device_full_name="$3"
     
+    # 确保设备名称符合 OpenWrt 配置格式
+    local clean_device=$(echo "$device_short_name" | tr '-' '_')
+    
     # 直接输出设备信息到 stdout（供工作流捕获）
     echo "PLATFORM=$platform"
-    echo "DEVICE_SHORT_NAME=$device_short_name"
+    echo "DEVICE_SHORT_NAME=$clean_device"
     echo "DEVICE_FULL_NAME=$device_full_name"
     
     log_success "设备检测完成:"
     log_success "  平台: $platform"
-    log_success "  设备: $device_short_name"
+    log_success "  设备: $clean_device"
     log_success "  全名: $device_full_name"
+}
+
+# 手动设备设置函数
+manual_device_setup() {
+    cd $BUILD_DIR
+    echo "=== 手动设备设置 ==="
+    
+    # 使用替代配置方法
+    case "$PLATFORM" in
+        "ipq40xx")
+            echo "CONFIG_TARGET_ipq40xx=y" > .config
+            echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+            if [ "$DEVICE_SHORT_NAME" = "asus_rt_ac42u" ] || [ "$DEVICE_SHORT_NAME" = "asus_rt-ac42u" ]; then
+                echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
+            elif [ "$DEVICE_SHORT_NAME" = "asus_rt_ac58u" ] || [ "$DEVICE_SHORT_NAME" = "asus_rt-ac58u" ]; then
+                echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-ac58u=y" >> .config
+            fi
+            ;;
+        *)
+            echo "使用通用配置"
+            ;;
+    esac
+    
+    # 基础配置
+    echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+    echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
+    
+    echo "=== 替代配置内容 ==="
+    cat .config
+    
+    # 运行 defconfig
+    make defconfig
+    
+    echo "=== 手动设置后的配置 ==="
+    grep "CONFIG_TARGET" .config
 }
 
 # 主函数
