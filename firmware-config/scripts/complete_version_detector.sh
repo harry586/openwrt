@@ -1,7 +1,6 @@
 #!/bin/bash
 
-# OpenWrt 版本检测脚本 - 简化版
-# 主要确保能够找到支持设备的版本
+# OpenWrt 版本检测脚本 - 无文件写入版本
 
 set -e
 
@@ -46,16 +45,8 @@ detect_best_version() {
         return 0
     fi
     
-    if try_branch "immortalwrt" "https://github.com/immortalwrt/immortalwrt.git" "openwrt-22.03" "$device_name"; then
-        return 0
-    fi
-    
     # 尝试 openwrt 的常用分支
     if try_branch "openwrt" "https://git.openwrt.org/openwrt/openwrt.git" "main" "$device_name"; then
-        return 0
-    fi
-    
-    if try_branch "openwrt" "https://git.openwrt.org/openwrt/openwrt.git" "openwrt-23.05" "$device_name"; then
         return 0
     fi
     
@@ -152,32 +143,6 @@ parse_version_spec() {
     return 0
 }
 
-# 安全写入版本信息
-safe_write_version_info() {
-    local output_file="version_info.txt"
-    
-    echo "=== 安全写入版本信息 ==="
-    
-    # 直接写入当前目录
-    {
-        echo "SELECTED_REPO=$SELECTED_REPO"
-        echo "SELECTED_BRANCH=$SELECTED_BRANCH"
-        echo "SELECTED_REPO_URL=$SELECTED_REPO_URL"
-        echo "DEVICE_NAME=$device_name"
-        echo "DETECTION_TIME=$(date)"
-    } > "$output_file"
-    
-    if [ -f "$output_file" ]; then
-        echo "✅ 版本信息成功写入"
-        echo "文件内容:"
-        cat "$output_file"
-        return 0
-    else
-        echo "❌ 无法写入版本信息文件"
-        return 1
-    fi
-}
-
 # 主函数
 main() {
     if [ $# -lt 1 ]; then
@@ -210,14 +175,12 @@ main() {
         echo "# 智能选择的版本"
         echo "# $SELECTED_REPO - $SELECTED_BRANCH"
         
-        log_success "版本检测完成"
+        # 直接输出环境变量，供工作流捕获
+        echo "SELECTED_REPO=$SELECTED_REPO"
+        echo "SELECTED_BRANCH=$SELECTED_BRANCH"
+        echo "SELECTED_REPO_URL=$SELECTED_REPO_URL"
         
-        # 使用安全的文件写入方法
-        if safe_write_version_info; then
-            log_success "版本信息文件保存成功"
-        else
-            log_error "无法保存版本信息文件，但检测结果有效"
-        fi
+        log_success "版本检测完成"
     else
         log_error "版本检测失败"
         exit 1
