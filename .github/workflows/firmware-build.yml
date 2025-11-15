@@ -341,39 +341,63 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 使用预配置方法
+    - name: 使用智能预配置方法
       run: |
         cd $BUILD_DIR
-        echo "=== 使用预配置方法 ==="
+        echo "=== 使用智能预配置方法 ==="
         
         # 完全清空配置
         > .config
         
-        # 根据设备设置特定的配置
-        case "$DEVICE_SHORT_NAME" in
-            "asus_rt-ac42u"|"asus_rt-ac58u")
-                echo "=== 设置 ASUS 设备配置 ==="
-                # IPQ40xx 平台的通用配置
-                echo "CONFIG_TARGET_ipq40xx=y" >> .config
-                echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
-                
-                # 具体设备配置
-                if [ "$DEVICE_SHORT_NAME" = "asus_rt-ac42u" ]; then
-                    echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
-                    echo "CONFIG_TARGET_PROFILE=\"DEVICE_asus_rt-ac42u\"" >> .config
-                else
-                    echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-ac58u=y" >> .config
-                    echo "CONFIG_TARGET_PROFILE=\"DEVICE_asus_rt-ac58u\"" >> .config
-                fi
-                ;;
-            *)
-                echo "=== 设置通用配置 ==="
-                echo "CONFIG_TARGET_${PLATFORM}=y" >> .config
-                echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
-                echo "CONFIG_TARGET_DEVICE_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" >> .config
-                echo "CONFIG_TARGET_PROFILE=\"DEVICE_${DEVICE_SHORT_NAME}\"" >> .config
-                ;;
-        esac
+        # 第一阶段：只设置平台和子平台，不设置具体设备
+        echo "=== 第一阶段：设置基础平台配置 ==="
+        echo "CONFIG_TARGET_${PLATFORM}=y" >> .config
+        echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
+        
+        # 基础文件系统配置
+        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+        echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
+        
+        echo "=== 初始配置内容 ==="
+        cat .config
+        
+        # 运行 defconfig 来生成默认配置
+        echo "运行 make defconfig 生成默认配置..."
+        make defconfig
+        
+        # 分析生成的配置，查看启用了哪些设备
+        echo "=== defconfig 生成的设备配置 ==="
+        grep "CONFIG_TARGET_DEVICE" .config | head -20
+        
+        # 特别查看我们目标设备的配置项名称
+        echo "=== 查找目标设备 $DEVICE_SHORT_NAME 的配置项 ==="
+        TARGET_DEVICE_CONFIG=$(grep "CONFIG_TARGET_DEVICE.*${DEVICE_SHORT_NAME}" .config | head -1)
+        echo "找到的设备配置项: $TARGET_DEVICE_CONFIG"
+        
+        # 提取完整的配置项名称
+        if [ -n "$TARGET_DEVICE_CONFIG" ]; then
+            ACTUAL_DEVICE_CONFIG_NAME=$(echo "$TARGET_DEVICE_CONFIG" | cut -d'=' -f1)
+            echo "实际设备配置项名称: $ACTUAL_DEVICE_CONFIG_NAME"
+            echo "ACTUAL_DEVICE_CONFIG_NAME=$ACTUAL_DEVICE_CONFIG_NAME" >> $GITHUB_ENV
+        else
+            echo "❌ 未找到设备 $DEVICE_SHORT_NAME 的配置项"
+            echo "=== 所有可用的设备配置项 ==="
+            grep "CONFIG_TARGET_DEVICE" .config
+            exit 1
+        fi
+        
+        # 第二阶段：基于分析结果重新配置
+        echo "=== 第二阶段：基于分析结果重新配置 ==="
+        
+        # 完全清空配置，重新开始
+        > .config
+        
+        # 设置平台和子平台
+        echo "CONFIG_TARGET_${PLATFORM}=y" >> .config
+        echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
+        
+        # 使用正确的设备配置项名称
+        echo "$ACTUAL_DEVICE_CONFIG_NAME=y" >> .config
         
         # 基础文件系统配置
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
@@ -407,26 +431,39 @@ jobs:
             done
         fi
         
-        echo "=== 预配置内容 ==="
+        echo "=== 最终预配置内容 ==="
         cat .config
         
-        # 运行 defconfig 来完善配置
-        echo "运行 make defconfig..."
+        # 再次运行 defconfig 来完善配置
+        echo "运行最终 make defconfig..."
         make defconfig
         
         echo "=== 最终配置验证 ==="
-        if grep -q "CONFIG_TARGET_DEVICE_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" .config; then
+        if grep -q "$ACTUAL_DEVICE_CONFIG_NAME=y" .config; then
             echo "✅ 设备 $DEVICE_SHORT_NAME 已成功启用"
-            echo "=== 当前配置摘要 ==="
-            echo "目标板: $(grep 'CONFIG_TARGET_BOARD' .config)"
-            echo "子目标: $(grep 'CONFIG_TARGET_SUBTARGET' .config)"
-            echo "配置文件: $(grep 'CONFIG_TARGET_PROFILE' .config)"
+            echo "使用的配置项: $ACTUAL_DEVICE_CONFIG_NAME"
         else
             echo "❌ 设备 $DEVICE_SHORT_NAME 启用失败"
             echo "=== 调试信息 ==="
+            echo "期望的配置项: $ACTUAL_DEVICE_CONFIG_NAME"
+            echo "当前设备相关配置:"
             grep "CONFIG_TARGET_DEVICE" .config
             exit 1
         fi
+
+    - name: 保存配置信息
+      run: |
+        cd $BUILD_DIR
+        echo "=== 保存配置信息 ==="
+        # 保存设备信息
+        echo "设备: $DEVICE_SHORT_NAME" > device_info.txt
+        echo "平台: $PLATFORM" >> device_info.txt
+        echo "实际配置项: $ACTUAL_DEVICE_CONFIG_NAME" >> device_info.txt
+        echo "=== 完整设备配置 ===" >> device_info.txt
+        grep "CONFIG_TARGET_DEVICE" .config >> device_info.txt
+        echo "=== 配置摘要 ===" >> device_info.txt
+        echo "目标板: $(grep 'CONFIG_TARGET_BOARD' .config)" >> device_info.txt
+        echo "子目标: $(grep 'CONFIG_TARGET_SUBTARGET' .config)" >> device_info.txt
 
     - name: 应用配置并编译
       run: |
