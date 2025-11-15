@@ -310,4 +310,161 @@ jobs:
         else
           echo "❌ 设备配置错误"
           echo "当前配置:"
-          grep "CONFIG_TARGET
+          grep "CONFIG_TARGET" .config
+          exit 1
+        fi
+
+    - name: 下载软件包
+      run: |
+        cd $BUILD_DIR
+        echo "下载软件包..."
+        if make -j4 download V=s; then
+          echo "✅ 下载成功"
+        else
+          echo "❌ 下载失败，尝试重新下载..."
+          make download V=s
+        fi
+
+    - name: 编译固件
+      run: |
+        cd $BUILD_DIR
+        echo "开始编译固件..."
+        echo "执行编译..."
+        if make -j$(nproc) V=s 2>&1 | tee build_detailed.log; then
+          echo "✅ 编译成功"
+        else
+          echo "❌ 编译失败"
+          exit 1
+        fi
+
+    - name: 验证固件生成
+      if: always()
+      run: |
+        cd $BUILD_DIR
+        echo "=== 固件生成验证 ==="
+        
+        if [ -d "bin/targets" ]; then
+          echo "✅ 找到目标目录"
+          
+          # 根据平台和设备名称查找固件
+          case "$PLATFORM" in
+            "ipq40xx")
+              FIRMWARE_PATTERNS="*asus* *ac42u* *acrh17* *ipq40xx*"
+              ;;
+            "ramips")
+              FIRMWARE_PATTERNS="*xiaomi* *phicomm* *mi3g* *k2p* *ramips*"
+              ;;
+            *)
+              FIRMWARE_PATTERNS="*$DEVICE_SHORT_NAME* *$PLATFORM*"
+              ;;
+          esac
+          
+          echo "搜索固件模式: $FIRMWARE_PATTERNS"
+          TARGET_FIRMWARE=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) | grep -E "$(echo $FIRMWARE_PATTERNS | sed 's/ /*/g' | sed 's/ /|/g')" | head -1)
+          
+          if [ -n "$TARGET_FIRMWARE" ]; then
+            echo "✅ 找到目标设备固件:"
+            echo "$TARGET_FIRMWARE"
+            echo "固件详情:"
+            ls -la "$TARGET_FIRMWARE"
+            FIRMWARE_SIZE=$(stat -c%s "$TARGET_FIRMWARE" 2>/dev/null || echo "0")
+            echo "固件大小: $((FIRMWARE_SIZE / 1024 / 1024)) MB"
+            echo "FIRMWARE_PATH=$TARGET_FIRMWARE" >> $GITHUB_ENV
+          else
+            echo "❌ 未找到目标设备固件"
+            echo "所有生成的固件:"
+            find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.tar" \) | sort
+          fi
+        else
+          echo "❌ 未找到目标目录 bin/targets"
+        fi
+
+    - name: 智能错误分析
+      if: always()
+      run: |
+        cd $BUILD_DIR
+        echo "=== 智能错误分析 ===" > error_analysis.log
+        echo "设备: ${{ github.event.inputs.device_name }}" >> error_analysis.log
+        echo "平台: $PLATFORM" >> error_analysis.log
+        echo "配置类型: ${{ github.event.inputs.config_type }}" >> error_analysis.log
+        echo "" >> error_analysis.log
+        
+        # 检查固件生成状态
+        if find bin/targets -type f -name "*.bin" -o -name "*.img" -o -name "*.trx" | grep -q .; then
+          echo "✅ 构建状态: 成功" >> error_analysis.log
+          echo "生成的固件:" >> error_analysis.log
+          find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) >> error_analysis.log
+        else
+          echo "❌ 构建状态: 失败" >> error_analysis.log
+          
+          # 分析常见错误
+          if [ -f "build_detailed.log" ]; then
+            echo "" >> error_analysis.log
+            echo "=== 错误分析 ===" >> error_analysis.log
+            
+            # 检查下载错误
+            if grep -q "Download failed" build_detailed.log; then
+              echo "❌ 下载失败，网络问题或源不可用" >> error_analysis.log
+              grep "Download failed" build_detailed.log | head -5 >> error_analysis.log
+            fi
+            
+            # 检查编译错误
+            if grep -q "Error [0-9]" build_detailed.log; then
+              echo "❌ 编译错误:" >> error_analysis.log
+              grep "Error [0-9]" build_detailed.log | tail -10 >> error_analysis.log
+            fi
+            
+            # 检查依赖错误
+            if grep -q "missing dependencies" build_detailed.log || grep -q "satisfy_dependencies" build_detailed.log; then
+              echo "❌ 依赖关系错误" >> error_analysis.log
+              grep -A2 -B2 "missing dependencies\|satisfy_dependencies" build_detailed.log | head -20 >> error_analysis.log
+            fi
+            
+            # 检查配置错误
+            if grep -q "configuration invalid" build_detailed.log || grep -q "config.*inconsistent" build_detailed.log; then
+              echo "❌ 配置错误" >> error_analysis.log
+              grep -A2 -B2 "configuration invalid\|config.*inconsistent" build_detailed.log | head -20 >> error_analysis.log
+            fi
+          fi
+        fi
+        
+        echo "" >> error_analysis.log
+        echo "=== 建议 ===" >> error_analysis.log
+        case "$PLATFORM" in
+          "ipq40xx")
+            echo "1. 检查 ath10k 无线驱动配置" >> error_analysis.log
+            echo "2. 验证设备树文件完整性" >> error_analysis.log
+            ;;
+          "ramips")
+            echo "1. 检查 MT76 无线驱动配置" >> error_analysis.log
+            echo "2. 验证闪存布局设置" >> error_analysis.log
+            ;;
+        esac
+        echo "3. 检查网络连接和软件源" >> error_analysis.log
+        echo "4. 查看完整构建日志获取详细信息" >> error_analysis.log
+        
+        echo "错误分析完成"
+
+    - name: 上传编译产物
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: firmware-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
+        path: ${{ env.BUILD_DIR }}/bin/
+        retention-days: 7
+
+    - name: 上传日志
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: logs-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
+        path: ${{ env.BUILD_DIR }}/build_detailed.log,${{ env.BUILD_DIR }}/error_analysis.log
+        retention-days: 7
+
+    - name: 上传配置信息
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: config-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
+        path: ${{ env.BUILD_DIR }}/.config
+        retention-days: 7
