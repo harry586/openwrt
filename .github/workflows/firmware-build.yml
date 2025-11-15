@@ -135,19 +135,24 @@ jobs:
         
         # 使用defconfig生成基础配置
         make defconfig
+
+    - name: 配置目标设备
+      run: |
+        cd $BUILD_DIR
+        echo "=== 配置目标设备 ==="
         
-        # 应用设备特定配置
+        # 根据设备名称配置目标平台
         case "${{ github.event.inputs.device_name }}" in
-          "ac42u")
-            echo "应用 RT-ACRH17 配置"
-            ./scripts/feeds install -a
-            make menuconfig <<EOF
-
-
-EOF
+          "ac42u"|"rt-acrh17")
+            echo "配置 RT-ACRH17 设备"
+            # 设置目标平台为 ipq40xx
+            sed -i 's/CONFIG_TARGET_[a-zA-Z0-9]*=y/# &/' .config
+            echo "CONFIG_TARGET_ipq40xx=y" >> .config
+            echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+            echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-acrh17=y" >> .config
             ;;
           *)
-            echo "使用默认配置"
+            echo "使用默认设备配置"
             ;;
         esac
 
@@ -171,6 +176,7 @@ EOF
             # 确保选择LUCI
             sed -i 's/# CONFIG_PACKAGE_luci is not set/CONFIG_PACKAGE_luci=y/' .config
             echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
             ;;
           "full")
             echo "应用完整配置"
@@ -179,6 +185,7 @@ EOF
             echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
             echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
             echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-ddns=y" >> .config
             ;;
         esac
         
