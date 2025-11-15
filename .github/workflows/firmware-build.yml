@@ -41,6 +41,8 @@ jobs:
 
     - name: 检出代码仓库
       uses: actions/checkout@v4
+      with:
+        path: firmware-config
 
     - name: 设置编译环境
       run: |
@@ -58,20 +60,52 @@ jobs:
         git clone https://github.com/immortalwrt/immortalwrt.git .
         git checkout openwrt-23.05
 
+    - name: 检查脚本目录
+      run: |
+        echo "=== 检查脚本目录 ==="
+        echo "当前工作目录: $(pwd)"
+        echo "firmware-config 目录内容:"
+        ls -la firmware-config/ || echo "firmware-config 目录不存在"
+        echo "scripts 目录内容:"
+        ls -la firmware-config/scripts/ || echo "scripts 目录不存在"
+
     - name: 复制设备检测脚本
       run: |
         cd $BUILD_DIR
-        # 从仓库复制设备检测脚本
-        cp $GITHUB_WORKSPACE/device_detection.sh .
-        chmod +x device_detection.sh
+        echo "=== 复制设备检测脚本 ==="
+        echo "源路径: firmware-config/scripts/device_detection.sh"
+        echo "目标路径: $(pwd)/device_detection.sh"
+        
+        # 检查源文件是否存在
+        if [ -f "firmware-config/scripts/device_detection.sh" ]; then
+          echo "✅ 找到设备检测脚本"
+          cp firmware-config/scripts/device_detection.sh .
+          chmod +x device_detection.sh
+          echo "✅ 脚本复制完成"
+        else
+          echo "❌ 错误: 设备检测脚本不存在"
+          echo "尝试查找其他位置..."
+          find . -name "device_detection.sh" 2>/dev/null || echo "未找到 device_detection.sh"
+          exit 1
+        fi
 
     - name: 智能设备检测
       id: device-detection
       run: |
         cd $BUILD_DIR
+        echo "=== 智能设备检测 ==="
+        
+        # 检查脚本是否存在
+        if [ ! -f "device_detection.sh" ]; then
+          echo "❌ 错误: device_detection.sh 不存在"
+          exit 1
+        fi
+        
         # 使用独立脚本进行设备检测
+        echo "执行设备检测: ${{ github.event.inputs.device_name }}"
         if ./device_detection.sh "${{ github.event.inputs.device_name }}"; then
           echo "✅ 设备检测成功"
+          echo "检测结果:"
           echo "PLATFORM: $PLATFORM"
           echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
           echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
@@ -171,4 +205,14 @@ jobs:
       with:
         name: firmware-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
         path: ${{ env.BUILD_DIR }}/bin/targets/
+        retention-days: 7
+
+    - name: 上传配置和日志
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: config-and-logs-${{ github.event.inputs.device_name }}
+        path: |
+          ${{ env.BUILD_DIR }}/.config
+          ${{ env.BUILD_DIR }}/device_detection.sh
         retention-days: 7
