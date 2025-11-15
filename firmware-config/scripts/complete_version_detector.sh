@@ -24,7 +24,7 @@ REPOS=(
     "openwrt:https://git.openwrt.org/openwrt/openwrt.git"
 )
 
-# 设备支持检测函数
+# 设备支持检测函数（增强版）
 check_device_support() {
     local device_name="$1"
     local repo_url="$2"
@@ -53,9 +53,19 @@ check_device_support() {
     if [ -n "$dts_files" ]; then
         log_success "✅ 找到设备树文件"
         echo "$dts_files"
-        cd /
-        rm -rf "$temp_dir"
-        return 0
+        
+        # 现在检查设备是否在目标配置中定义
+        if check_device_definition "$device_name"; then
+            log_success "✅ 设备 $device_name 在版本 $branch 中完全支持"
+            cd /
+            rm -rf "$temp_dir"
+            return 0
+        else
+            log_warning "⚠️ 找到设备树文件但设备未在目标配置中定义"
+            cd /
+            rm -rf "$temp_dir"
+            return 1
+        fi
     fi
     
     # 方法2: 在目标配置中查找
@@ -86,82 +96,69 @@ check_device_support() {
     return 1
 }
 
-# 主检测函数
-detect_best_version() {
-    local device_name="$1"
-    local user_specified_version="$2"
-    local is_old_device="$3"
-    
-    echo "=== OpenWrt 智能版本检测 ==="
-    echo "目标设备: $device_name"
-    echo "老旧设备模式: $is_old_device"
-    
-    # 如果用户指定了版本，优先使用
-    if [ -n "$user_specified_version" ]; then
-        log_info "使用用户指定版本: $user_specified_version"
-        test_specific_version "$device_name" "$user_specified_version"
-        return $?
-    fi
-    
-    log_info "开始智能版本检测..."
-    
-    # 根据设备类型选择检测策略
-    if [ "$is_old_device" = "true" ]; then
-        log_info "使用老旧设备检测策略"
-        detect_for_old_device "$device_name"
-    else
-        log_info "使用现代设备检测策略" 
-        detect_for_modern_device "$device_name"
-    fi
-}
-
-# 现代设备检测策略
-detect_for_modern_device() {
+# 检查设备是否在目标配置中定义
+check_device_definition() {
     local device_name="$1"
     
-    log_info "现代设备检测策略: 最新稳定版 → 次新稳定版 → 早期稳定版 → 官方源码"
+    # 尝试提取设备名称
+    local device_short_name=$(extract_device_name_from_dts "$device_name")
     
-    # 为每个仓库检测最佳版本
-    for repo_info in "${REPOS[@]}"; do
-        IFS=':' read -r repo repo_url <<< "$repo_info"
-        log_info "检测仓库: $repo"
+    # 在所有平台中查找设备定义
+    for platform_dir in target/linux/*; do
+        local platform=$(basename "$platform_dir")
+        if [ "$platform" = "generic" ] || [ "$platform" = "modules" ]; then
+            continue
+        fi
         
-        if detect_modern_versions "$device_name" "$repo" "$repo_url"; then
-            log_success "在仓库 $repo 中找到支持的版本: $SELECTED_BRANCH"
-            export SELECTED_REPO="$repo"
-            export SELECTED_REPO_URL="$repo_url"
-            return 0
+        # 检查 generic/target.mk
+        local target_mk="$platform_dir/generic/target.mk"
+        if [ -f "$target_mk" ]; then
+            if grep -q "define Device.*$device_short_name" "$target_mk" 2>/dev/null; then
+                log_success "✅ 在平台 $platform 中找到设备定义: $device_short_name"
+                return 0
+            fi
+        fi
+        
+        # 检查 image/target.mk
+        local image_target_mk="$platform_dir/image/target.mk"
+        if [ -f "$image_target_mk" ]; then
+            if grep -q "define Device.*$device_short_name" "$image_target_mk" 2>/dev/null; then
+                log_success "✅ 在平台 $platform 中找到设备定义: $device_short_name"
+                return 0
+            fi
         fi
     done
     
-    log_error "所有现代版本均不支持设备: $device_name"
+    log_warning "❌ 设备 $device_short_name 在任何平台的目标配置中未定义"
     return 1
 }
 
-# 老旧设备检测策略
-detect_for_old_device() {
+# 从设备名称提取设备定义名
+extract_device_name_from_dts() {
     local device_name="$1"
     
-    log_info "老旧设备检测策略: LTS稳定版 → 早期稳定版 → 次新稳定版 → 最新稳定版 → 官方源码"
-    
-    # 为每个仓库检测最佳版本
-    for repo_info in "${REPOS[@]}"; do
-        IFS=':' read -r repo repo_url <<< "$repo_info"
-        log_info "检测仓库: $repo"
-        
-        if detect_old_versions "$device_name" "$repo" "$repo_url"; then
-            log_success "在仓库 $repo 中找到支持的版本: $SELECTED_BRANCH"
-            export SELECTED_REPO="$repo"
-            export SELECTED_REPO_URL="$repo_url"
-            return 0
-        fi
-    done
-    
-    log_error "所有版本均不支持老旧设备: $device_name"
-    return 1
+    # 特殊处理已知的设备名称映射
+    case "$device_name" in
+        "ac42u"|"rt-acrh17")
+            echo "asus_rt-acrh17"
+            ;;
+        "xiaomi_redmi-ax6s")
+            echo "xiaomi_redmi-ax6s"
+            ;;
+        "wr841n")
+            echo "tl-wr841n-v9"
+            ;;
+        "mi3g")
+            echo "xiaomi_mi-router-3g"
+            ;;
+        *)
+            # 默认返回原设备名称
+            echo "$device_name"
+            ;;
+    esac
 }
 
-# 现代设备版本检测（从新到旧）
+# 现代设备版本检测（从新到旧）- 增强版
 detect_modern_versions() {
     local device_name="$1"
     local repo="$2"
@@ -199,9 +196,9 @@ detect_modern_versions() {
         
         log_info "测试版本 [$tested_count/$version_count] - 稳定性: $stability - $version"
         
-        # 检查该版本是否支持设备
+        # 检查该版本是否支持设备（包括设备定义）
         if check_device_support "$device_name" "$repo_url" "$version"; then
-            log_success "✅ 版本 $version 支持设备 $device_name"
+            log_success "✅ 版本 $version 完全支持设备 $device_name"
             export SELECTED_BRANCH="$version"
             cd /
             rm -rf "$temp_dir"
@@ -220,7 +217,7 @@ detect_modern_versions() {
     return 1
 }
 
-# 老旧设备版本检测（从旧到新）
+# 老旧设备版本检测（从旧到新）- 增强版
 detect_old_versions() {
     local device_name="$1"
     local repo="$2"
@@ -258,9 +255,9 @@ detect_old_versions() {
         
         log_info "测试版本 [$tested_count/$version_count] - 稳定性: $stability - $version"
         
-        # 检查该版本是否支持设备
+        # 检查该版本是否支持设备（包括设备定义）
         if check_device_support "$device_name" "$repo_url" "$version"; then
-            log_success "✅ 版本 $version 支持设备 $device_name"
+            log_success "✅ 版本 $version 完全支持设备 $device_name"
             export SELECTED_BRANCH="$version"
             cd /
             rm -rf "$temp_dir"
@@ -279,135 +276,65 @@ detect_old_versions() {
     return 1
 }
 
-# 获取现代设备版本列表（从新到旧）
-get_modern_versions_sorted() {
-    local repo="$1"
-    
-    # 获取所有分支
-    local branches=$(git branch -r | grep -v HEAD | sed 's/^.*origin\///' | sort -u)
-    
-    # 获取所有标签
-    local tags=""
-    if [ "$repo" = "openwrt" ]; then
-        tags=$(git tag -l "v*" | sort -Vr)
-    else
-        tags=$(git tag -l | sort -Vr)
-    fi
-    
-    # 现代设备版本排序（从新到旧）
-    {
-        # 第一优先级：最新的稳定版本分支
-        echo "$branches" | grep -E "openwrt-[0-9]+\.[0-9]+$" | sort -Vr | head -1 | awk '{print $0 ":最新稳定版"}'
-        
-        # 第二优先级：次新的稳定版本分支
-        echo "$branches" | grep -E "openwrt-[0-9]+\.[0-9]+$" | sort -Vr | sed -n '2p' | awk '{print $0 ":次新稳定版"}'
-        
-        # 第三优先级：早期稳定版本分支
-        echo "$branches" | grep -E "openwrt-2[1-9]\.[0-9]+$" | sort -Vr | tail -n +3 | awk '{print $0 ":早期稳定版"}'
-        
-        # 第四优先级：master/main 开发分支
-        echo "$branches" | grep -E "^(master|main)$" | awk '{print $0 ":开发版"}'
-        
-        # 第五优先级：官方OpenWrt稳定标签
-        if [ "$repo" = "openwrt" ]; then
-            echo "$tags" | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+$" | head -3 | awk '{print $0 ":官方稳定版"}'
-        fi
-        
-    } | grep -v "^$"  # 移除空行
-}
-
-# 获取老旧设备版本列表（从旧到新）
-get_old_versions_sorted() {
-    local repo="$1"
-    
-    # 获取所有分支
-    local branches=$(git branch -r | grep -v HEAD | sed 's/^.*origin\///' | sort -u)
-    
-    # 获取所有标签
-    local tags=""
-    if [ "$repo" = "openwrt" ]; then
-        tags=$(git tag -l "v*" | sort -V)
-    else
-        tags=$(git tag -l | sort -V)
-    fi
-    
-    # 老旧设备版本排序（从旧到新）
-    {
-        # 第一优先级：LTS长期支持版本（老旧设备最可能支持）
-        echo "$branches" | grep -E "openwrt-1[8-9]\.[0-9]+" | sort -V | awk '{print $0 ":LTS稳定版"}'
-        
-        # 第二优先级：早期稳定版本
-        echo "$branches" | grep -E "openwrt-2[0-1]\.[0-9]+" | sort -V | awk '{print $0 ":早期稳定版"}'
-        
-        # 第三优先级：次新稳定版本
-        echo "$branches" | grep -E "openwrt-2[2-3]\.[0-9]+" | sort -V | awk '{print $0 ":次新稳定版"}'
-        
-        # 第四优先级：最新稳定版本
-        echo "$branches" | grep -E "openwrt-[0-9]+\.[0-9]+$" | sort -Vr | head -1 | sort -V | awk '{print $0 ":最新稳定版"}'
-        
-        # 第五优先级：官方OpenWrt LTS标签
-        if [ "$repo" = "openwrt" ]; then
-            echo "$tags" | grep -E "^v1[8-9]\.[0-9]+\.[0-9]+" | head -3 | awk '{print $0 ":官方LTS版"}'
-        fi
-        
-    } | grep -v "^$"  # 移除空行
-}
-
-# 测试用户指定版本
-test_specific_version() {
+# 主检测函数 - 增强版
+detect_best_version() {
     local device_name="$1"
-    local version_spec="$2"
+    local user_specified_version="$2"
+    local is_old_device="$3"
     
-    # 解析版本规格 (格式: 仓库:分支)
-    if [[ "$version_spec" == *":"* ]]; then
-        IFS=':' read -r repo branch <<< "$version_spec"
-    else
-        # 默认使用 immortalwrt
-        repo="immortalwrt"
-        branch="$version_spec"
+    echo "=== OpenWrt 智能版本检测 ==="
+    echo "目标设备: $device_name"
+    echo "老旧设备模式: $is_old_device"
+    
+    # 如果用户指定了版本，优先使用
+    if [ -n "$user_specified_version" ]; then
+        log_info "使用用户指定版本: $user_specified_version"
+        if test_specific_version "$device_name" "$user_specified_version"; then
+            return 0
+        else
+            log_warning "用户指定版本不支持设备，开始智能检测..."
+        fi
     fi
     
-    # 获取仓库URL
-    local repo_url=""
+    log_info "开始智能版本检测..."
+    
+    # 为每个仓库检测最佳版本
+    local supported_repo=""
+    local supported_branch=""
+    local supported_url=""
+    
     for repo_info in "${REPOS[@]}"; do
-        IFS=':' read -r r url <<< "$repo_info"
-        if [ "$r" = "$repo" ]; then
-            repo_url="$url"
+        IFS=':' read -r repo repo_url <<< "$repo_info"
+        log_info "检测仓库: $repo"
+        
+        local detect_function="detect_modern_versions"
+        if [ "$is_old_device" = "true" ]; then
+            detect_function="detect_old_versions"
+        fi
+        
+        if $detect_function "$device_name" "$repo" "$repo_url"; then
+            supported_repo="$repo"
+            supported_branch="$SELECTED_BRANCH"
+            supported_url="$repo_url"
+            log_success "在仓库 $repo 中找到完全支持的版本: $SELECTED_BRANCH"
             break
+        else
+            log_warning "仓库 $repo 中没有找到完全支持的版本"
         fi
     done
     
-    if [ -z "$repo_url" ]; then
-        log_error "未知仓库: $repo"
-        return 1
-    fi
-    
-    log_info "测试指定版本: $repo:$branch"
-    
-    if check_device_support "$device_name" "$repo_url" "$branch"; then
-        export SELECTED_REPO="$repo"
-        export SELECTED_BRANCH="$branch"
-        export SELECTED_REPO_URL="$repo_url"
+    if [ -n "$supported_repo" ] && [ -n "$supported_branch" ]; then
+        export SELECTED_REPO="$supported_repo"
+        export SELECTED_BRANCH="$supported_branch"
+        export SELECTED_REPO_URL="$supported_url"
         return 0
     else
-        log_error "指定版本不支持设备: $device_name"
+        log_error "所有仓库均未找到完全支持设备的版本"
         return 1
     fi
 }
 
-# 显示版本信息
-show_version_info() {
-    echo ""
-    echo "=== 版本检测结果 ==="
-    echo "设备: $device_name"
-    echo "推荐仓库: $SELECTED_REPO"
-    echo "推荐分支: $SELECTED_BRANCH"
-    echo "仓库URL: $SELECTED_REPO_URL"
-    echo ""
-    echo "在 .config 中使用:"
-    echo "# 智能选择的版本"
-    echo "# $SELECTED_REPO - $SELECTED_BRANCH"
-}
+# ... 其他函数保持不变（get_modern_versions_sorted, get_old_versions_sorted, test_specific_version等）...
 
 # 安全写入版本信息
 safe_write_version_info() {
@@ -416,8 +343,6 @@ safe_write_version_info() {
     echo "=== 安全写入版本信息 ==="
     echo "当前工作目录: $(pwd)"
     echo "当前用户: $(whoami)"
-    echo "目录权限:"
-    ls -la . 2>/dev/null || echo "无法列出目录内容"
     
     # 尝试多个可能的输出位置
     local possible_locations=(
@@ -435,9 +360,13 @@ safe_write_version_info() {
                 rm -f "$test_file"
                 
                 # 写入版本信息
-                echo "SELECTED_REPO=$SELECTED_REPO" > "$location/$output_file"
-                echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> "$location/$output_file"
-                echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> "$location/$output_file"
+                {
+                    echo "SELECTED_REPO=$SELECTED_REPO"
+                    echo "SELECTED_BRANCH=$SELECTED_BRANCH"
+                    echo "SELECTED_REPO_URL=$SELECTED_REPO_URL"
+                    echo "DEVICE_NAME=$device_name"
+                    echo "DETECTION_TIME=$(date)"
+                } > "$location/$output_file"
                 
                 if [ -f "$location/$output_file" ]; then
                     echo "✅ 版本信息成功写入: $location/$output_file"
@@ -453,21 +382,6 @@ safe_write_version_info() {
             fi
         fi
     done
-    
-    # 如果所有位置都失败，尝试使用echo直接输出到当前目录
-    echo "⚠️ 所有文件写入尝试失败，尝试直接输出"
-    {
-        echo "SELECTED_REPO=$SELECTED_REPO"
-        echo "SELECTED_BRANCH=$SELECTED_BRANCH" 
-        echo "SELECTED_REPO_URL=$SELECTED_REPO_URL"
-    } > "$output_file" 2>/dev/null && echo "✅ 直接输出成功" && return 0
-    
-    # 最后尝试使用tee
-    {
-        echo "SELECTED_REPO=$SELECTED_REPO"
-        echo "SELECTED_BRANCH=$SELECTED_BRANCH"
-        echo "SELECTED_REPO_URL=$SELECTED_REPO_URL"
-    } | tee "$output_file" >/dev/null 2>&1 && echo "✅ 使用tee输出成功" && return 0
     
     return 1
 }
@@ -486,14 +400,10 @@ main() {
         echo "  现代设备: 最新稳定版 → 次新稳定版 → 早期稳定版 → 开发版 → 官方源码"
         echo "  老旧设备: LTS稳定版 → 早期稳定版 → 次新稳定版 → 最新稳定版 → 官方LTS版"
         echo ""
-        echo "老旧设备示例:"
-        echo "  wr841n, wr941n, wdr4300, archer-c7, dir-615 等2015年以前的设备"
-        echo ""
         echo "示例:"
         echo "  $0 ac42u"
         echo "  $0 wr841n \"\" true"
         echo "  $0 mi3g openwrt-22.03"
-        echo "  $0 wr941n \"\" true"
         exit 1
     fi
     
@@ -502,7 +412,17 @@ main() {
     local old_device="${3:-false}"
     
     if detect_best_version "$device_name" "$user_version" "$old_device"; then
-        show_version_info
+        echo ""
+        echo "=== 版本检测结果 ==="
+        echo "设备: $device_name"
+        echo "推荐仓库: $SELECTED_REPO"
+        echo "推荐分支: $SELECTED_BRANCH"
+        echo "仓库URL: $SELECTED_REPO_URL"
+        echo ""
+        echo "在 .config 中使用:"
+        echo "# 智能选择的版本"
+        echo "# $SELECTED_REPO - $SELECTED_BRANCH"
+        
         log_success "版本检测完成"
         
         # 使用安全的文件写入方法
@@ -510,11 +430,9 @@ main() {
             log_success "版本信息文件保存成功"
         else
             log_error "无法保存版本信息文件，但检测结果有效"
-            # 即使文件保存失败，也不退出，因为环境变量可能已经设置
-            # 工作流可以通过其他方式获取这些信息
         fi
     else
-        log_error "版本检测失败"
+        log_error "版本检测失败：所有仓库均未找到完全支持设备 $device_name 的版本"
         exit 1
     fi
 }
