@@ -144,6 +144,10 @@ jobs:
         cd $BUILD_DIR
         echo "=== 智能版本检测 ==="
         
+        # 清理构建目录（确保是空的）
+        echo "清理构建目录..."
+        find . -mindepth 1 -maxdepth 1 ! -name '*.sh' -exec rm -rf {} + 2>/dev/null || true
+        
         # 运行完整版本检测器
         if ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}"; then
           echo "✅ 版本检测脚本执行成功"
@@ -190,26 +194,47 @@ jobs:
             echo "SELECTED_BRANCH: $SELECTED_BRANCH"
             echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
           else
-            echo "⚠️ 未找到版本信息文件，使用默认值"
-            # 根据设备设置默认值
-            case "${{ github.event.inputs.device_name }}" in
-              ac42u|ax42u|redmi_ax6s)
-                echo "SELECTED_REPO=immortalwrt" >> $GITHUB_ENV
-                echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
-                echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_ENV
-                ;;
-              wr841n|tl-wr841n)
-                echo "SELECTED_REPO=openwrt" >> $GITHUB_ENV
-                echo "SELECTED_BRANCH=openwrt-22.03" >> $GITHUB_ENV
-                echo "SELECTED_REPO_URL=https://git.openwrt.org/openwrt/openwrt.git" >> $GITHUB_ENV
-                ;;
-              *)
-                echo "SELECTED_REPO=openwrt" >> $GITHUB_ENV
-                echo "SELECTED_BRANCH=main" >> $GITHUB_ENV
-                echo "SELECTED_REPO_URL=https://git.openwrt.org/openwrt/openwrt.git" >> $GITHUB_ENV
-                ;;
-            esac
-            echo "✅ 使用默认环境变量"
+            echo "⚠️ 未找到版本信息文件，从脚本输出解析"
+            # 直接从脚本输出解析版本信息
+            OUTPUT_FILE="version_output.txt"
+            ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}" > "$OUTPUT_FILE" 2>&1 || true
+            
+            # 从输出中解析版本信息
+            SELECTED_REPO=$(grep "推荐仓库:" "$OUTPUT_FILE" | awk '{print $2}')
+            SELECTED_BRANCH=$(grep "推荐分支:" "$OUTPUT_FILE" | awk '{print $2}')
+            SELECTED_REPO_URL=$(grep "仓库URL:" "$OUTPUT_FILE" | awk '{print $2}')
+            
+            if [ -n "$SELECTED_REPO" ] && [ -n "$SELECTED_BRANCH" ] && [ -n "$SELECTED_REPO_URL" ]; then
+              echo "SELECTED_REPO=$SELECTED_REPO" >> $GITHUB_ENV
+              echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
+              echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
+              
+              echo "✅ 从输出解析环境变量成功:"
+              echo "SELECTED_REPO: $SELECTED_REPO"
+              echo "SELECTED_BRANCH: $SELECTED_BRANCH"
+              echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
+            else
+              echo "⚠️ 从输出解析失败，使用默认值"
+              # 根据设备设置默认值
+              case "${{ github.event.inputs.device_name }}" in
+                ac42u|ax42u|redmi_ax6s)
+                  echo "SELECTED_REPO=immortalwrt" >> $GITHUB_ENV
+                  echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
+                  echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_ENV
+                  ;;
+                wr841n|tl-wr841n)
+                  echo "SELECTED_REPO=openwrt" >> $GITHUB_ENV
+                  echo "SELECTED_BRANCH=openwrt-22.03" >> $GITHUB_ENV
+                  echo "SELECTED_REPO_URL=https://git.openwrt.org/openwrt/openwrt.git" >> $GITHUB_ENV
+                  ;;
+                *)
+                  echo "SELECTED_REPO=openwrt" >> $GITHUB_ENV
+                  echo "SELECTED_BRANCH=main" >> $GITHUB_ENV
+                  echo "SELECTED_REPO_URL=https://git.openwrt.org/openwrt/openwrt.git" >> $GITHUB_ENV
+                  ;;
+              esac
+              echo "✅ 使用默认环境变量"
+            fi
           fi
         else
           echo "❌ 版本检测失败"
@@ -230,18 +255,22 @@ jobs:
           exit 1
         fi
         
-        # 如果目录已存在，先清理
-        if [ -d ".git" ]; then
-          echo "清理现有源码..."
-          rm -rf ./*
-          rm -rf ./.git
-        fi
+        # 清理构建目录（保留脚本文件）
+        echo "清理构建目录..."
+        find . -mindepth 1 -maxdepth 1 ! -name '*.sh' -exec rm -rf {} + 2>/dev/null || true
         
         echo "开始克隆仓库..."
         git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .
         
         if [ $? -eq 0 ]; then
           echo "✅ 源码克隆完成"
+          # 验证克隆是否成功
+          if [ -d ".git" ]; then
+            echo "✅ Git 仓库验证成功"
+          else
+            echo "❌ Git 仓库验证失败"
+            exit 1
+          fi
         else
           echo "❌ 源码克隆失败"
           exit 1
@@ -298,31 +327,52 @@ jobs:
             echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
             echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
           else
-            echo "⚠️ 未找到设备信息文件，使用默认值"
-            # 根据设备设置默认值
-            case "${{ github.event.inputs.device_name }}" in
-              ac42u|ax42u|redmi_ax6s)
-                echo "PLATFORM=mediatek" >> $GITHUB_ENV
-                echo "DEVICE_SHORT_NAME=xiaomi_redmi-ax6s" >> $GITHUB_ENV
-                echo "DEVICE_FULL_NAME=Xiaomi Redmi AX6S" >> $GITHUB_ENV
-                ;;
-              wr841n|tl-wr841n)
-                echo "PLATFORM=ar71xx" >> $GITHUB_ENV
-                echo "DEVICE_SHORT_NAME=tl-wr841n-v9" >> $GITHUB_ENV
-                echo "DEVICE_FULL_NAME=TP-Link TL-WR841N" >> $GITHUB_ENV
-                ;;
-              mi3g|xiaomi_mi3g)
-                echo "PLATFORM=ramips" >> $GITHUB_ENV
-                echo "DEVICE_SHORT_NAME=xiaomi_mi-router-3g" >> $GITHUB_ENV
-                echo "DEVICE_FULL_NAME=Xiaomi Mi Router 3G" >> $GITHUB_ENV
-                ;;
-              *)
-                echo "PLATFORM=ramips" >> $GITHUB_ENV
-                echo "DEVICE_SHORT_NAME=generic" >> $GITHUB_ENV
-                echo "DEVICE_FULL_NAME=Generic Device" >> $GITHUB_ENV
-                ;;
-            esac
-            echo "✅ 使用默认设备环境变量"
+            echo "⚠️ 未找到设备信息文件，从脚本输出解析"
+            # 直接从脚本输出解析设备信息
+            OUTPUT_FILE="device_output.txt"
+            ./device_detection.sh "${{ github.event.inputs.device_name }}" > "$OUTPUT_FILE" 2>&1 || true
+            
+            # 从输出中解析设备信息
+            PLATFORM=$(grep "平台:" "$OUTPUT_FILE" | awk '{print $2}')
+            DEVICE_SHORT_NAME=$(grep "设备短名:" "$OUTPUT_FILE" | awk '{print $2}')
+            DEVICE_FULL_NAME=$(grep "设备全名:" "$OUTPUT_FILE" | cut -d':' -f2- | sed 's/^ *//')
+            
+            if [ -n "$PLATFORM" ] && [ -n "$DEVICE_SHORT_NAME" ]; then
+              echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
+              echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
+              echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
+              
+              echo "✅ 从输出解析设备信息成功:"
+              echo "PLATFORM: $PLATFORM"
+              echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
+              echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
+            else
+              echo "⚠️ 从输出解析失败，使用默认值"
+              # 根据设备设置默认值
+              case "${{ github.event.inputs.device_name }}" in
+                ac42u|ax42u|redmi_ax6s)
+                  echo "PLATFORM=mediatek" >> $GITHUB_ENV
+                  echo "DEVICE_SHORT_NAME=xiaomi_redmi-ax6s" >> $GITHUB_ENV
+                  echo "DEVICE_FULL_NAME=Xiaomi Redmi AX6S" >> $GITHUB_ENV
+                  ;;
+                wr841n|tl-wr841n)
+                  echo "PLATFORM=ar71xx" >> $GITHUB_ENV
+                  echo "DEVICE_SHORT_NAME=tl-wr841n-v9" >> $GITHUB_ENV
+                  echo "DEVICE_FULL_NAME=TP-Link TL-WR841N" >> $GITHUB_ENV
+                  ;;
+                mi3g|xiaomi_mi3g)
+                  echo "PLATFORM=ramips" >> $GITHUB_ENV
+                  echo "DEVICE_SHORT_NAME=xiaomi_mi-router-3g" >> $GITHUB_ENV
+                  echo "DEVICE_FULL_NAME=Xiaomi Mi Router 3G" >> $GITHUB_ENV
+                  ;;
+                *)
+                  echo "PLATFORM=ramips" >> $GITHUB_ENV
+                  echo "DEVICE_SHORT_NAME=generic" >> $GITHUB_ENV
+                  echo "DEVICE_FULL_NAME=Generic Device" >> $GITHUB_ENV
+                  ;;
+              esac
+              echo "✅ 使用默认设备环境变量"
+            fi
           fi
         else
           echo "❌ 设备检测失败"
