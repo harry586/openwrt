@@ -50,7 +50,6 @@ jobs:
     - name: 检出配置仓库
       uses: actions/checkout@v4
       with:
-        path: openwrt-config
         fetch-depth: 0
 
     - name: 设置编译环境
@@ -60,9 +59,13 @@ jobs:
 
     - name: 创建构建目录
       run: |
-        mkdir -p $BUILD_DIR
-        chown -R $USER:$USER $BUILD_DIR
-        chmod -R 755 $BUILD_DIR
+        sudo mkdir -p $BUILD_DIR
+        sudo chown -R $USER:$USER $BUILD_DIR
+        sudo chmod -R 755 $BUILD_DIR
+        if [ $? -ne 0 ]; then
+          echo "错误: 无法创建构建目录"
+          exit 1
+        fi
 
     - name: 复制配置脚本
       run: |
@@ -71,47 +74,86 @@ jobs:
         
         cd $GITHUB_WORKSPACE
         
-        # 复制版本检测脚本
         VERSION_SCRIPT=$(find . -name "complete_version_detector.sh" -type f | head -1)
-        if [ -n "$VERSION_SCRIPT" ]; then
-          cp "$VERSION_SCRIPT" $BUILD_DIR/complete_version_detector.sh
-          chmod +x $BUILD_DIR/complete_version_detector.sh
-          echo "✅ 版本检测脚本复制完成"
-        else
-          echo "⚠️ 未找到版本检测脚本，使用默认配置"
+        if [ -z "$VERSION_SCRIPT" ]; then
+          echo "❌ 错误: 找不到 complete_version_detector.sh"
+          exit 1
         fi
+        
+        echo "✅ 找到版本检测脚本: $VERSION_SCRIPT"
+        cp "$VERSION_SCRIPT" $BUILD_DIR/complete_version_detector.sh
+        
+        cd $BUILD_DIR
+        chmod +x complete_version_detector.sh
+        echo "✅ 脚本复制完成"
 
-    - name: 选择源码版本
-      id: select-version
+    - name: 智能版本检测
+      id: version-detection
       run: |
         cd $BUILD_DIR
-        echo "=== 选择源码版本 ==="
+        echo "=== 智能版本检测 ==="
         
-        if [ -f "complete_version_detector.sh" ]; then
-          echo "使用版本检测脚本选择版本..."
-          if ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}"; then
-            echo "✅ 版本检测完成"
+        chmod -R 755 $BUILD_DIR
+        
+        if ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "false"; then
+          echo "✅ 版本检测脚本执行成功"
+          
+          if [ -f "version_info.txt" ]; then
+            echo "✅ 找到版本信息文件"
+            echo "=== version_info.txt 内容 ==="
+            cat version_info.txt
+            
+            SELECTED_REPO_URL=$(grep '^SELECTED_REPO_URL=' version_info.txt | cut -d'=' -f2)
+            SELECTED_BRANCH=$(grep '^SELECTED_BRANCH=' version_info.txt | cut -d'=' -f2)
+            
+            echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
+            echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
+            
+            echo "✅ 环境变量已设置:"
+            echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
+            echo "SELECTED_BRANCH: $SELECTED_BRANCH"
           else
-            echo "❌ 版本检测失败，使用默认版本"
-            echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_ENV
-            echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
+            echo "❌ 未找到版本信息文件"
+            exit 1
           fi
         else
-          echo "使用默认源码版本"
-          echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_ENV
-          echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
+          echo "❌ 版本检测失败"
+          exit 1
         fi
 
-    - name: 克隆源码
+    - name: 清理构建目录
       run: |
         cd $BUILD_DIR
-        echo "=== 克隆源码 ==="
+        echo "=== 清理构建目录 ==="
+        echo "当前目录内容:"
+        ls -la
+        
+        echo "清理除脚本和配置文件外的所有内容..."
+        find . -mindepth 1 -maxdepth 1 ! -name '*.sh' ! -name 'version_info.txt' ! -name 'device_info.txt' -exec rm -rf {} + 2>/dev/null || true
+        
+        echo "清理后目录内容:"
+        ls -la
+        echo "✅ 目录清理完成"
+
+    - name: 克隆选定版本的源码
+      run: |
+        cd $BUILD_DIR
+        echo "=== 克隆选定版本的源码 ==="
         echo "仓库: $SELECTED_REPO_URL"
         echo "分支: $SELECTED_BRANCH"
         
-        # 清理目录（保留脚本）
-        find . -mindepth 1 -maxdepth 1 ! -name '*.sh' -exec rm -rf {} + 2>/dev/null || true
+        if [ -z "$SELECTED_REPO_URL" ] || [ -z "$SELECTED_BRANCH" ]; then
+          echo "❌ 错误: 环境变量未正确设置"
+          exit 1
+        fi
         
+        echo "检查目录状态..."
+        if [ "$(ls -A . | grep -v '\.sh$' | grep -v 'version_info.txt' | grep -v 'device_info.txt')" ]; then
+          echo "警告: 目录非空，强制清理..."
+          find . -mindepth 1 -maxdepth 1 ! -name '*.sh' ! -name 'version_info.txt' ! -name 'device_info.txt' -exec rm -rf {} + 2>/dev/null || true
+        fi
+        
+        echo "开始克隆仓库..."
         git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .
         
         if [ $? -eq 0 ]; then
@@ -127,6 +169,10 @@ jobs:
         echo "=== 更新和安装feeds ==="
         ./scripts/feeds update -a
         ./scripts/feeds install -a
+        if [ $? -ne 0 ]; then
+          echo "❌ Feeds 更新失败"
+          exit 1
+        fi
 
     - name: 生成基础配置
       run: |
@@ -135,6 +181,10 @@ jobs:
         
         # 使用defconfig生成基础配置
         make defconfig
+        if [ $? -ne 0 ]; then
+          echo "❌ 生成基础配置失败"
+          exit 1
+        fi
 
     - name: 配置目标设备
       run: |
@@ -152,7 +202,8 @@ jobs:
             echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-acrh17=y" >> .config
             ;;
           *)
-            echo "使用默认设备配置"
+            echo "❌ 不支持的设备: ${{ github.event.inputs.device_name }}"
+            exit 1
             ;;
         esac
 
@@ -217,12 +268,20 @@ jobs:
         cd $BUILD_DIR
         echo "=== 下载依赖 ==="
         make -j4 download
+        if [ $? -ne 0 ]; then
+          echo "❌ 下载依赖失败"
+          exit 1
+        fi
 
     - name: 编译固件
       run: |
         cd $BUILD_DIR
         echo "=== 开始编译固件 ==="
         make -j$(nproc) V=s
+        if [ $? -ne 0 ]; then
+          echo "❌ 编译失败"
+          exit 1
+        fi
 
     - name: 验证构建结果
       if: always()
@@ -238,8 +297,7 @@ jobs:
           find bin/targets -name "*.bin" -o -name "*.img" -exec ls -lh {} \;
         else
           echo "❌ 构建失败，未找到目标文件"
-          echo "=== 构建目录内容 ==="
-          ls -la bin/ 2>/dev/null || echo "bin目录不存在"
+          exit 1
         fi
 
     - name: 上传固件产物
