@@ -392,6 +392,15 @@ jobs:
             echo "ACTUAL_DEVICE_CONFIG_NAME=$CONFIG_CANDIDATE" >> $GITHUB_ENV
         fi
         
+        # 重新加载环境变量以确保当前步骤可用
+        if [ -f "$GITHUB_ENV" ]; then
+            set -a
+            source "$GITHUB_ENV"
+            set +a
+        fi
+        
+        echo "当前 ACTUAL_DEVICE_CONFIG_NAME: $ACTUAL_DEVICE_CONFIG_NAME"
+        
         # 第二阶段：基于分析结果重新配置
         echo "=== 第二阶段：基于分析结果重新配置 ==="
         
@@ -402,8 +411,13 @@ jobs:
         echo "CONFIG_TARGET_${PLATFORM}=y" >> .config
         echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
         
-        # 使用设备配置项名称
-        echo "$ACTUAL_DEVICE_CONFIG_NAME=y" >> .config
+        # 使用设备配置项名称（确保不为空）
+        if [ -n "$ACTUAL_DEVICE_CONFIG_NAME" ]; then
+            echo "$ACTUAL_DEVICE_CONFIG_NAME=y" >> .config
+            echo "已添加设备配置: $ACTUAL_DEVICE_CONFIG_NAME=y"
+        else
+            echo "⚠️ 设备配置项名称为空，跳过设备配置"
+        fi
         
         # 基础文件系统配置
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
@@ -445,7 +459,7 @@ jobs:
         make defconfig
         
         echo "=== 最终配置验证 ==="
-        if grep -q "$ACTUAL_DEVICE_CONFIG_NAME=y" .config; then
+        if [ -n "$ACTUAL_DEVICE_CONFIG_NAME" ] && grep -q "$ACTUAL_DEVICE_CONFIG_NAME=y" .config; then
             echo "✅ 设备 $DEVICE_SHORT_NAME 已成功启用"
             echo "使用的配置项: $ACTUAL_DEVICE_CONFIG_NAME"
         else
