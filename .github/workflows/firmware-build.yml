@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: '设备名称 (ac42u/RT-ACRH17)'
+        description: '设备名称 (ac42u/acrh17/ac58u/acrh13 等)'
         required: true
         default: 'ac42u'
         type: string
@@ -60,7 +60,7 @@ jobs:
     - name: 设置编译环境
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential libncurses5-dev libssl-dev python3 unzip zlib1g-dev subversion gcc-multilib git curl
+        sudo apt-get install -y build-essential libncurses5-dev libssl-dev python3 unzip zlib1g-dev subversion gcc-multilib git curl file
 
     - name: 创建构建目录并设置权限
       run: |
@@ -119,14 +119,6 @@ jobs:
             echo "SELECTED_REPO: $SELECTED_REPO"
             echo "SELECTED_BRANCH: $SELECTED_BRANCH"
             echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
-            if touch version_info.txt 2>/dev/null; then
-                echo "SELECTED_REPO=$SELECTED_REPO" > version_info.txt
-                echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> version_info.txt
-                echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> version_info.txt
-                echo "✅ 版本信息文件创建成功"
-            else
-                echo "⚠️ 无法创建版本信息文件，但环境变量已设置"
-            fi
         else
             echo "❌ 无法从脚本输出中提取版本信息"
             if [ $SCRIPT_EXIT_CODE -ne 0 ]; then
@@ -208,62 +200,60 @@ jobs:
           exit 1
         fi
         chmod +x device_detection.sh
+        
+        # 运行脚本并捕获输出
+        echo "=== 开始设备检测 ==="
         set +e
         OUTPUT=$(./device_detection.sh "${{ github.event.inputs.device_name }}" 2>&1)
         SCRIPT_EXIT_CODE=$?
         set -e
-        echo "脚本输出:"
+        
+        echo "=== 脚本原始输出 ==="
         echo "$OUTPUT"
-        echo "脚本退出代码: $SCRIPT_EXIT_CODE"
-        PLATFORM=$(echo "$OUTPUT" | grep "^PLATFORM=" | head -1 | cut -d'=' -f2)
-        DEVICE_SHORT_NAME=$(echo "$OUTPUT" | grep "^DEVICE_SHORT_NAME=" | head -1 | cut -d'=' -f2)
-        DEVICE_FULL_NAME=$(echo "$OUTPUT" | grep "^DEVICE_FULL_NAME=" | head -1 | cut -d'=' -f2)
+        echo "=== 脚本退出代码: $SCRIPT_EXIT_CODE ==="
+        
+        # 提取环境变量（只从以大写字母开头的行中提取）
+        PLATFORM=$(echo "$OUTPUT" | grep "^PLATFORM=" | tail -1 | cut -d'=' -f2)
+        DEVICE_SHORT_NAME=$(echo "$OUTPUT" | grep "^DEVICE_SHORT_NAME=" | tail -1 | cut -d'=' -f2)
+        DEVICE_FULL_NAME=$(echo "$OUTPUT" | grep "^DEVICE_FULL_NAME=" | tail -1 | cut -d'=' -f2)
+        
+        echo "=== 提取的设备信息 ==="
+        echo "PLATFORM: '$PLATFORM'"
+        echo "DEVICE_SHORT_NAME: '$DEVICE_SHORT_NAME'"
+        echo "DEVICE_FULL_NAME: '$DEVICE_FULL_NAME'"
+        
         if [ -n "$PLATFORM" ] && [ -n "$DEVICE_SHORT_NAME" ] && [ -n "$DEVICE_FULL_NAME" ]; then
             echo "✅ 从脚本输出中成功提取设备信息"
             echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
             echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
             echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
-            echo "✅ 设备环境变量已设置:"
-            echo "PLATFORM: $PLATFORM"
-            echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
-            echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
-            if touch device_info.txt 2>/dev/null; then
-                echo "PLATFORM=$PLATFORM" > device_info.txt
-                echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> device_info.txt
-                echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> device_info.txt
-                echo "✅ 设备信息文件创建成功"
-            else
-                echo "⚠️ 无法创建设备信息文件，但环境变量已设置"
-            fi
+            echo "✅ 设备环境变量已设置"
         else
             echo "❌ 无法从脚本输出中提取设备信息"
             if [ $SCRIPT_EXIT_CODE -ne 0 ]; then
                 echo "❌ 设备检测失败"
                 exit 1
             else
-                echo "⚠️ 脚本成功但无法提取设备信息，使用默认值"
+                echo "⚠️ 脚本成功但无法提取设备信息，使用备用设备映射"
+                # 设置默认值
                 DEVICE_NAME="${{ github.event.inputs.device_name }}"
-                if [ "$DEVICE_NAME" = "ac42u" ] || [ "$DEVICE_NAME" = "acrh17" ] || [ "$DEVICE_NAME" = "rt-acrh17" ]; then
-                    echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
-                    echo "DEVICE_SHORT_NAME=asus_rt-ac42u" >> $GITHUB_ENV
-                    echo "DEVICE_FULL_NAME=$DEVICE_NAME" >> $GITHUB_ENV
-                elif [ "$DEVICE_NAME" = "xiaomi_redmi-ax6s" ]; then
-                    echo "PLATFORM=mediatek" >> $GITHUB_ENV
-                    echo "DEVICE_SHORT_NAME=xiaomi_redmi-ax6s" >> $GITHUB_ENV
-                    echo "DEVICE_FULL_NAME=$DEVICE_NAME" >> $GITHUB_ENV
-                elif [ "$DEVICE_NAME" = "wr841n" ]; then
-                    echo "PLATFORM=ar71xx" >> $GITHUB_ENV
-                    echo "DEVICE_SHORT_NAME=tl-wr841n-v9" >> $GITHUB_ENV
-                    echo "DEVICE_FULL_NAME=$DEVICE_NAME" >> $GITHUB_ENV
-                elif [ "$DEVICE_NAME" = "mi3g" ]; then
-                    echo "PLATFORM=ramips" >> $GITHUB_ENV
-                    echo "DEVICE_SHORT_NAME=xiaomi_mi-router-3g" >> $GITHUB_ENV
-                    echo "DEVICE_FULL_NAME=$DEVICE_NAME" >> $GITHUB_ENV
-                else
-                    echo "❌ 未知设备，无法设置默认值"
-                    exit 1
-                fi
-                echo "✅ 已使用默认设备信息"
+                case "$DEVICE_NAME" in
+                    "ac42u"|"acrh17"|"rt-acrh17")
+                        echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
+                        echo "DEVICE_SHORT_NAME=asus_rt-ac42u" >> $GITHUB_ENV
+                        echo "DEVICE_FULL_NAME=$DEVICE_NAME" >> $GITHUB_ENV
+                        ;;
+                    "ac58u"|"rt-ac58u"|"acrh13"|"rt-acrh13")
+                        echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
+                        echo "DEVICE_SHORT_NAME=asus_rt-ac58u" >> $GITHUB_ENV
+                        echo "DEVICE_FULL_NAME=$DEVICE_NAME" >> $GITHUB_ENV
+                        ;;
+                    *)
+                        echo "❌ 未知设备，无法设置默认值"
+                        exit 1
+                        ;;
+                esac
+                echo "✅ 已使用备用设备信息"
             fi
         fi
 
@@ -274,88 +264,44 @@ jobs:
         echo "平台: $PLATFORM"
         echo "设备: $DEVICE_SHORT_NAME"
         
-        # 检查设备是否在目标配置中定义
-        echo "=== 检查设备定义 ==="
+        # 完整列出所有设备定义
+        echo "=== 完整的设备定义列表 ==="
+        find "target/linux/$PLATFORM" -name "*.mk" -type f -exec grep -h "define Device/" {} \; | \
+            sed 's/.*define Device\///' | sed 's/^[ \t]*//' | sed 's/).*//' | sort -u | while read device; do
+            echo "设备: $device"
+        done
         
-        # 方法1: 检查目标配置文件
-        if [ -f "target/linux/$PLATFORM/generic/target.mk" ]; then
-            echo "✅ 找到目标配置文件"
-            if grep -q "CONFIG_TARGET_DEVICE_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}" "target/linux/$PLATFORM/generic/target.mk"; then
-                echo "✅ 设备 $DEVICE_SHORT_NAME 在目标配置中定义"
-            else
-                echo "❌ 设备 $DEVICE_SHORT_NAME 不在目标配置中定义"
-                echo "=== 目标配置中的设备 ==="
-                grep "CONFIG_TARGET_DEVICE" "target/linux/$PLATFORM/generic/target.mk" | head -10
+        echo "=== 设备总数 ==="
+        find "target/linux/$PLATFORM" -name "*.mk" -type f -exec grep -h "define Device/" {} \; | wc -l
+        
+        # 检查具体设备
+        echo "=== 检查设备 $DEVICE_SHORT_NAME 的详细定义 ==="
+        FOUND=0
+        for mk_file in $(find "target/linux/$PLATFORM" -name "*.mk" -type f); do
+            if grep -q "define Device/$DEVICE_SHORT_NAME" "$mk_file"; then
+                echo "✅ 在文件 $mk_file 中找到设备定义:"
+                # 显示完整的设备定义块
+                awk "/define Device\/$DEVICE_SHORT_NAME/{flag=1} flag; /endef/{flag=0}" "$mk_file"
+                FOUND=1
+                break
             fi
-        else
-            echo "❌ 目标配置文件不存在: target/linux/$PLATFORM/generic/target.mk"
-        fi
+        done
         
-        # 方法2: 检查镜像配置文件
-        if [ -f "target/linux/$PLATFORM/image/generic.mk" ]; then
-            echo "✅ 找到镜像配置文件"
-            if grep -q "define Device/$DEVICE_SHORT_NAME" "target/linux/$PLATFORM/image/generic.mk"; then
-                echo "✅ 设备 $DEVICE_SHORT_NAME 在镜像配置中定义"
-                echo "=== 设备定义详情 ==="
-                grep -A 15 "define Device/$DEVICE_SHORT_NAME" "target/linux/$PLATFORM/image/generic.mk"
-            else
-                echo "❌ 设备 $DEVICE_SHORT_NAME 不在镜像配置中定义"
-                echo "=== 镜像配置中的设备 ==="
-                grep "define Device/" "target/linux/$PLATFORM/image/generic.mk" | head -10
-            fi
-        else
-            echo "❌ 镜像配置文件不存在: target/linux/$PLATFORM/image/generic.mk"
-        fi
-        
-        # 方法3: 检查设备树文件
-        echo "=== 检查设备树文件 ==="
-        DTS_FILES=$(find target/linux -name "*$DEVICE_SHORT_NAME*.dts" -o -name "*${{ github.event.inputs.device_name }}*.dts" 2>/dev/null | head -5)
-        if [ -n "$DTS_FILES" ]; then
-            echo "✅ 找到设备树文件:"
-            echo "$DTS_FILES"
-        else
-            echo "❌ 未找到设备树文件"
-        fi
-        
-        # 方法4: 快速编译测试
-        echo "=== 执行快速配置测试 ==="
-        if make defconfig 2>/dev/null; then
-            echo "✅ 配置测试通过"
-            
-            # 检查生成的配置中是否包含我们的设备
-            if grep -q "CONFIG_TARGET_DEVICE_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" .config; then
-                echo "✅ 设备 $DEVICE_SHORT_NAME 在最终配置中启用"
-            else
-                echo "❌ 设备 $DEVICE_SHORT_NAME 未在最终配置中启用"
-                echo "=== 相关配置项 ==="
-                grep "CONFIG_TARGET_DEVICE_${PLATFORM}" .config | head -10
-            fi
-        else
-            echo "❌ 配置测试失败"
-        fi
-
-    - name: 强制指定设备（如果验证失败）
-      if: failure() && (github.event.inputs.device_name == 'ac42u' || github.event.inputs.device_name == 'acrh17' || github.event.inputs.device_name == 'rt-acrh17')
-      run: |
-        cd $BUILD_DIR
-        echo "⚠️ 设备验证失败，强制指定为 asus_rt-ac42u"
-        echo "DEVICE_SHORT_NAME=asus_rt-ac42u" >> $GITHUB_ENV
-        echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
-        echo "✅ 已强制指定设备: asus_rt-ac42u"
-        
-        # 重新验证
-        echo "=== 重新验证设备定义 ==="
-        if [ -f "target/linux/ipq40xx/image/generic.mk" ]; then
-            if grep -q "define Device/asus_rt-ac42u" "target/linux/ipq40xx/image/generic.mk"; then
-                echo "✅ 强制指定的设备 asus_rt-ac42u 在配置中定义"
-            else
-                echo "❌ 强制指定的设备 asus_rt-ac42u 不在配置中定义"
-                exit 1
-            fi
-        else
-            echo "❌ 配置文件不存在"
+        if [ "$FOUND" -eq 0 ]; then
+            echo "❌ 未找到设备 $DEVICE_SHORT_NAME"
+            echo "=== 搜索相似设备 ==="
+            find "target/linux/$PLATFORM" -name "*.mk" -type f -exec grep -l "${{ github.event.inputs.device_name }}" {} \; | head -5
             exit 1
         fi
+        
+        # 检查设备是否在 TARGET_DEVICES 中
+        echo "=== 检查设备是否在 TARGET_DEVICES 中 ==="
+        for mk_file in $(find "target/linux/$PLATFORM" -name "*.mk" -type f); do
+            if grep -q "TARGET_DEVICES.*+=.*$DEVICE_SHORT_NAME" "$mk_file"; then
+                echo "✅ 设备 $DEVICE_SHORT_NAME 在 TARGET_DEVICES 中"
+                break
+            fi
+        done
 
     - name: 更新安装feeds
       run: |
@@ -373,7 +319,7 @@ jobs:
         echo "清理后的平台: $CLEAN_PLATFORM"
         echo "清理后的设备: $CLEAN_DEVICE"
         
-        # 使用多个echo命令而不是heredoc
+        # 生成配置
         echo "# OpenWrt 自动生成配置" > .config
         echo "# 请不要手动编辑此文件" >> .config
         echo "" >> .config
