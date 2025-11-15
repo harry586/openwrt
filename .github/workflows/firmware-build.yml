@@ -334,31 +334,6 @@ jobs:
             fi
         done
 
-    - name: 查看源码配置示例
-      run: |
-        cd $BUILD_DIR
-        echo "=== 查看源码配置示例 ==="
-        
-        # 查看配置文件的设备定义
-        echo "=== 查看配置定义文件 ==="
-        find . -name "Config-images.in" -o -name "config-*" | head -10 | while read file; do
-            echo "文件: $file"
-            grep -i "device.*asus" "$file" 2>/dev/null | head -3
-        done
-        
-        # 查看目标配置
-        echo "=== 查看目标配置 ==="
-        if [ -f "target/linux/generic/config-4.14" ]; then
-            grep -i "target_device" target/linux/generic/config-4.14 | head -10
-        fi
-        
-        # 查看配置模板
-        echo "=== 查看配置模板 ==="
-        find . -name "config.buildinfo" -o -name ".config" | head -5 | while read file; do
-            echo "文件: $file"
-            grep -i "target_device" "$file" 2>/dev/null | head -5
-        done
-
     - name: 更新安装feeds
       run: |
         cd $BUILD_DIR
@@ -366,37 +341,41 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 生成设备配置
+    - name: 使用预配置方法
       run: |
         cd $BUILD_DIR
-        echo "=== 生成设备配置 ==="
+        echo "=== 使用预配置方法 ==="
         
-        # 清理平台名称，确保符合 OpenWrt 配置格式
-        CLEAN_PLATFORM=$(echo "$PLATFORM" | tr '[:lower:]' '[:upper:]' | tr -cd '[:alnum:]_')
+        # 完全清空配置
+        > .config
         
-        # 设备名称保持原始格式（包含连字符）
-        CONFIG_DEVICE="$DEVICE_SHORT_NAME"  # 保持连字符格式
+        # 根据设备设置特定的配置
+        case "$DEVICE_SHORT_NAME" in
+            "asus_rt-ac42u"|"asus_rt-ac58u")
+                echo "=== 设置 ASUS 设备配置 ==="
+                # IPQ40xx 平台的通用配置
+                echo "CONFIG_TARGET_ipq40xx=y" >> .config
+                echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+                
+                # 具体设备配置
+                if [ "$DEVICE_SHORT_NAME" = "asus_rt-ac42u" ]; then
+                    echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
+                    echo "CONFIG_TARGET_PROFILE=\"DEVICE_asus_rt-ac42u\"" >> .config
+                else
+                    echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-ac58u=y" >> .config
+                    echo "CONFIG_TARGET_PROFILE=\"DEVICE_asus_rt-ac58u\"" >> .config
+                fi
+                ;;
+            *)
+                echo "=== 设置通用配置 ==="
+                echo "CONFIG_TARGET_${PLATFORM}=y" >> .config
+                echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
+                echo "CONFIG_TARGET_DEVICE_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" >> .config
+                echo "CONFIG_TARGET_PROFILE=\"DEVICE_${DEVICE_SHORT_NAME}\"" >> .config
+                ;;
+        esac
         
-        echo "平台: $PLATFORM -> $CLEAN_PLATFORM"
-        echo "设备: $DEVICE_SHORT_NAME -> 配置中使用: $CONFIG_DEVICE"
-        
-        # 生成配置
-        echo "# OpenWrt 自动生成配置" > .config
-        echo "# 请不要手动编辑此文件" >> .config
-        echo "" >> .config
-        echo "# 版本: $SELECTED_REPO - $SELECTED_BRANCH" >> .config
-        echo "# 设备: ${{ github.event.inputs.device_name }}" >> .config
-        echo "# 平台: $PLATFORM" >> .config
-        echo "# 设备标识: $DEVICE_SHORT_NAME" >> .config
-        echo "# 生成时间: $(date)" >> .config
-        echo "" >> .config
-        
-        # 基础目标配置 - 使用连字符格式
-        echo "CONFIG_TARGET_${CLEAN_PLATFORM}=y" >> .config
-        echo "CONFIG_TARGET_${CLEAN_PLATFORM}_GENERIC=y" >> .config
-        echo "CONFIG_TARGET_DEVICE_${PLATFORM}_generic_DEVICE_${CONFIG_DEVICE}=y" >> .config
-        
-        # 文件系统配置
+        # 基础文件系统配置
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
         echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
@@ -408,8 +387,6 @@ jobs:
         echo "CONFIG_PACKAGE_dropbear=y" >> .config
         echo "CONFIG_PACKAGE_firewall=y" >> .config
         echo "CONFIG_PACKAGE_opkg=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ipv6=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ipt-core=y" >> .config
         
         # 根据配置类型添加包
         CONFIG_TYPE="${{ github.event.inputs.config_type }}"
@@ -419,8 +396,6 @@ jobs:
             echo "CONFIG_PACKAGE_luci=y" >> .config
             echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
             echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
-            echo "CONFIG_PACKAGE_luci-proto-ipv6=y" >> .config
-            echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
         fi
         
         # 自定义包
@@ -432,141 +407,23 @@ jobs:
             done
         fi
         
-        echo "✅ 配置生成完成"
-        echo "=== 验证 .config 文件 ==="
-        echo "文件行数: $(wc -l < .config)"
-        echo "文件大小: $(wc -c < .config) 字节"
-        echo "=== 设备相关配置项 ==="
-        grep "CONFIG_TARGET" .config
-
-    - name: 快速配置验证
-      run: |
-        cd $BUILD_DIR
-        echo "=== 快速配置验证 ==="
-        
-        # 显示当前配置中的设备相关项
-        echo "=== 当前 .config 中的设备配置 ==="
-        grep "CONFIG_TARGET" .config | head -20
-        
-        # 执行快速配置检查
-        echo "执行 make defconfig..."
-        if make defconfig; then
-            echo "✅ 配置验证通过"
-            
-            # 检查最终配置
-            echo "=== 最终 .config 中的设备配置 ==="
-            grep "CONFIG_TARGET" .config | head -30
-            
-            # 检查设备是否启用 - 使用连字符格式
-            echo "=== 检查设备 $DEVICE_SHORT_NAME 是否启用 ==="
-            if grep -q "CONFIG_TARGET_DEVICE_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" .config; then
-                echo "✅ 设备 $DEVICE_SHORT_NAME 在最终配置中正确启用"
-            else
-                echo "❌ 设备 $DEVICE_SHORT_NAME 未在最终配置中启用"
-                echo "=== 所有设备配置项 ==="
-                grep "CONFIG_TARGET_DEVICE" .config
-                
-                # 显示具体的设备配置项格式
-                echo "=== 设备配置项格式分析 ==="
-                grep "CONFIG_TARGET_DEVICE_${PLATFORM}" .config
-                
-                # 尝试查看配置系统如何定义设备
-                echo "=== 查看配置定义 ==="
-                if [ -f "tmp/.config-target.in" ]; then
-                    grep -i "$DEVICE_SHORT_NAME" tmp/.config-target.in | head -10
-                fi
-                
-                exit 1
-            fi
-        else
-            echo "❌ 配置验证失败"
-            exit 1
-        fi
-
-    - name: 配置调试
-      if: failure()
-      run: |
-        cd $BUILD_DIR
-        echo "=== 配置调试 ==="
-        
-        # 查看配置系统的设备定义
-        echo "=== 查看配置系统的设备定义 ==="
-        find . -name ".config-target.in" -type f | head -5 | while read file; do
-            echo "文件: $file"
-            grep -i "asus_rt-ac42u" "$file" 2>/dev/null | head -5
-        done
-        
-        # 查看 Kconfig 文件
-        echo "=== 查看 Kconfig 文件 ==="
-        find . -name "Kconfig" -type f | grep -E "(target|config)" | head -5 | while read file; do
-            echo "文件: $file"
-            grep -i "asus_rt-ac42u" "$file" 2>/dev/null | head -3
-        done
-        
-        # 查看生成的配置
-        echo "=== 查看生成的配置 ==="
-        if [ -f ".config" ]; then
-            echo "=== .config 文件内容（前50行）==="
-            head -50 .config
-        fi
-
-    - name: 使用内置配置方法
-      if: failure()
-      run: |
-        cd $BUILD_DIR
-        echo "=== 使用内置配置方法 ==="
-        
-        # 完全清空配置
-        > .config
-        
-        # 使用 OpenWrt 的配置系统
-        echo "应用平台配置..."
-        case "$PLATFORM" in
-            "ipq40xx")
-                echo "CONFIG_TARGET_ipq40xx=y" >> .config
-                echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
-                ;;
-            *)
-                echo "CONFIG_TARGET_${PLATFORM}=y" >> .config
-                echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
-                ;;
-        esac
-        
-        # 基础配置
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
-        
-        echo "=== 初始配置内容 ==="
+        echo "=== 预配置内容 ==="
         cat .config
         
-        # 运行 defconfig 来生成基础配置
+        # 运行 defconfig 来完善配置
         echo "运行 make defconfig..."
         make defconfig
         
-        # 现在手动启用设备
-        echo "=== 手动启用设备 $DEVICE_SHORT_NAME ==="
-        
-        # 方法1: 使用 sed 启用设备
-        if grep -q "CONFIG_TARGET_DEVICE_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}" .config; then
-            sed -i "s/^# CONFIG_TARGET_DEVICE_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME} is not set/CONFIG_TARGET_DEVICE_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y/" .config
-            echo "✅ 通过 sed 启用设备"
-        fi
-        
-        # 方法2: 直接追加配置
-        echo "CONFIG_TARGET_DEVICE_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" >> .config
-        
-        echo "=== 最终配置内容 ==="
-        grep "CONFIG_TARGET" .config
-        
-        # 再次运行 defconfig 确保配置一致
-        make defconfig
-        
-        echo "=== 验证设备是否启用 ==="
+        echo "=== 最终配置验证 ==="
         if grep -q "CONFIG_TARGET_DEVICE_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" .config; then
             echo "✅ 设备 $DEVICE_SHORT_NAME 已成功启用"
+            echo "=== 当前配置摘要 ==="
+            echo "目标板: $(grep 'CONFIG_TARGET_BOARD' .config)"
+            echo "子目标: $(grep 'CONFIG_TARGET_SUBTARGET' .config)"
+            echo "配置文件: $(grep 'CONFIG_TARGET_PROFILE' .config)"
         else
-            echo "❌ 设备 $DEVICE_SHORT_NAME 仍未启用"
-            echo "=== 当前配置中的设备 ==="
+            echo "❌ 设备 $DEVICE_SHORT_NAME 启用失败"
+            echo "=== 调试信息 ==="
             grep "CONFIG_TARGET_DEVICE" .config
             exit 1
         fi
