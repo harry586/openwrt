@@ -17,13 +17,6 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# 仓库配置
-REPOS=(
-    "immortalwrt:https://github.com/immortalwrt/immortalwrt.git"
-    "openwrt:https://git.openwrt.org/openwrt/openwrt.git"
-    "lede:https://github.com/coolsnowwolf/lede.git"
-)
-
 # 主检测函数
 detect_best_version() {
     local device_name="$1"
