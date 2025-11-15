@@ -152,20 +152,18 @@ jobs:
             if [ -f "$location/version_info.txt" ]; then
                 VERSION_INFO_FILE="$location/version_info.txt"
                 echo "✅ 找到版本信息文件: $VERSION_INFO_FILE"
-                # 复制到当前目录
-                cp "$VERSION_INFO_FILE" ./version_info.txt 2>/dev/null && echo "✅ 已复制到当前目录" || echo "⚠️ 无法复制到当前目录"
                 break
             fi
         done
         
-        if [ -f "version_info.txt" ]; then
+        if [ -n "$VERSION_INFO_FILE" ]; then
             echo "✅ 版本信息文件可用"
             echo "=== version_info.txt 内容 ==="
-            cat version_info.txt
+            cat "$VERSION_INFO_FILE"
             
-            SELECTED_REPO=$(grep '^SELECTED_REPO=' version_info.txt | cut -d'=' -f2)
-            SELECTED_BRANCH=$(grep '^SELECTED_BRANCH=' version_info.txt | cut -d'=' -f2)
-            SELECTED_REPO_URL=$(grep '^SELECTED_REPO_URL=' version_info.txt | cut -d'=' -f2)
+            SELECTED_REPO=$(grep '^SELECTED_REPO=' "$VERSION_INFO_FILE" | cut -d'=' -f2)
+            SELECTED_BRANCH=$(grep '^SELECTED_BRANCH=' "$VERSION_INFO_FILE" | cut -d'=' -f2)
+            SELECTED_REPO_URL=$(grep '^SELECTED_REPO_URL=' "$VERSION_INFO_FILE" | cut -d'=' -f2)
             
             echo "SELECTED_REPO=$SELECTED_REPO" >> $GITHUB_ENV
             echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
@@ -189,7 +187,6 @@ jobs:
                 exit 1
             else
                 echo "⚠️ 脚本成功但未生成版本信息文件，尝试从输出中提取"
-                # 这里可以添加从标准输出提取版本信息的逻辑
                 exit 1
             fi
         fi
@@ -201,8 +198,10 @@ jobs:
         echo "当前目录内容:"
         ls -la
         
-        # 只保留版本信息文件
-        find . -mindepth 1 -maxdepth 1 ! -name 'version_info.txt' -exec rm -rf {} + 2>/dev/null || true
+        # 完全清空构建目录，不需要保留任何文件
+        # 因为版本信息已经保存在环境变量中
+        sudo rm -rf ./* ./.git* 2>/dev/null || true
+        sudo rm -rf .[!.]* 2>/dev/null || true
         
         echo "清理后目录内容:"
         ls -la
@@ -224,8 +223,8 @@ jobs:
         echo "当前目录内容:"
         ls -la
         
-        # 确保目录为空（除了版本信息文件）
-        FILE_COUNT=$(ls -A | grep -v 'version_info.txt' | wc -l)
+        # 确保目录为空
+        FILE_COUNT=$(ls -A | wc -l)
         if [ $FILE_COUNT -ne 0 ]; then
           echo "❌ 错误: 目录非空，无法克隆"
           echo "当前文件列表:"
@@ -243,23 +242,30 @@ jobs:
           exit 1
         fi
 
-    - name: 重新复制设备检测脚本
+    - name: 重新复制检测脚本
       run: |
         cd $BUILD_DIR
-        echo "=== 重新复制设备检测脚本 ==="
+        echo "=== 重新复制检测脚本 ==="
         
-        # 重新从工作空间复制设备检测脚本
+        # 重新从工作空间复制所有需要的脚本
         cd $GITHUB_WORKSPACE
+        
+        # 查找脚本文件
+        VERSION_SCRIPT=$(find . -name "complete_version_detector.sh" -type f | head -1)
         DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f | head -1)
-        if [ -z "$DEVICE_SCRIPT" ]; then
-          echo "❌ 错误: 找不到 device_detection.sh"
+        
+        if [ -z "$VERSION_SCRIPT" ] || [ -z "$DEVICE_SCRIPT" ]; then
+          echo "❌ 错误: 找不到检测脚本"
           exit 1
         fi
         
+        # 复制到构建目录
+        cp "$VERSION_SCRIPT" $BUILD_DIR/complete_version_detector.sh
         cp "$DEVICE_SCRIPT" $BUILD_DIR/device_detection.sh
+        
         cd $BUILD_DIR
-        chmod +x device_detection.sh
-        echo "✅ 设备检测脚本重新复制完成"
+        chmod +x complete_version_detector.sh device_detection.sh
+        echo "✅ 检测脚本重新复制完成"
 
     - name: 智能设备检测
       id: device-detection
