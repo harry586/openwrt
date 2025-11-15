@@ -24,6 +24,142 @@ REPOS=(
     "openwrt:https://git.openwrt.org/openwrt/openwrt.git"
 )
 
+# 从设备名称提取设备定义名
+extract_device_name_from_dts() {
+    local device_name="$1"
+    
+    # 特殊处理已知的设备名称映射
+    case "$device_name" in
+        "ac42u"|"rt-acrh17")
+            echo "asus_rt-acrh17"
+            ;;
+        "xiaomi_redmi-ax6s")
+            echo "xiaomi_redmi-ax6s"
+            ;;
+        "wr841n")
+            echo "tl-wr841n-v9"
+            ;;
+        "mi3g")
+            echo "xiaomi_mi-router-3g"
+            ;;
+        *)
+            # 默认返回原设备名称
+            echo "$device_name"
+            ;;
+    esac
+}
+
+# 获取现代设备版本列表（从新到旧）
+get_modern_versions_sorted() {
+    local repo="$1"
+    
+    # 获取所有分支
+    local branches=$(git branch -r | grep -v HEAD | sed 's/^.*origin\///' | sort -u)
+    
+    # 获取所有标签
+    local tags=""
+    if [ "$repo" = "openwrt" ]; then
+        tags=$(git tag -l "v*" | sort -Vr)
+    else
+        tags=$(git tag -l | sort -Vr)
+    fi
+    
+    # 现代设备版本排序（从新到旧）
+    {
+        # 第一优先级：最新的稳定版本分支
+        echo "$branches" | grep -E "openwrt-[0-9]+\.[0-9]+$" | sort -Vr | head -1 | awk '{print $0 ":最新稳定版"}'
+        
+        # 第二优先级：次新的稳定版本分支
+        echo "$branches" | grep -E "openwrt-[0-9]+\.[0-9]+$" | sort -Vr | sed -n '2p' | awk '{print $0 ":次新稳定版"}'
+        
+        # 第三优先级：早期稳定版本分支
+        echo "$branches" | grep -E "openwrt-2[1-9]\.[0-9]+$" | sort -Vr | tail -n +3 | awk '{print $0 ":早期稳定版"}'
+        
+        # 第四优先级：master/main 开发分支
+        echo "$branches" | grep -E "^(master|main)$" | awk '{print $0 ":开发版"}'
+        
+        # 第五优先级：官方OpenWrt稳定标签
+        if [ "$repo" = "openwrt" ]; then
+            echo "$tags" | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+$" | head -3 | awk '{print $0 ":官方稳定版"}'
+        fi
+        
+    } | grep -v "^$"  # 移除空行
+}
+
+# 获取老旧设备版本列表（从旧到新）
+get_old_versions_sorted() {
+    local repo="$1"
+    
+    # 获取所有分支
+    local branches=$(git branch -r | grep -v HEAD | sed 's/^.*origin\///' | sort -u)
+    
+    # 获取所有标签
+    local tags=""
+    if [ "$repo" = "openwrt" ]; then
+        tags=$(git tag -l "v*" | sort -V)
+    else
+        tags=$(git tag -l | sort -V)
+    fi
+    
+    # 老旧设备版本排序（从旧到新）
+    {
+        # 第一优先级：LTS长期支持版本（老旧设备最可能支持）
+        echo "$branches" | grep -E "openwrt-1[8-9]\.[0-9]+" | sort -V | awk '{print $0 ":LTS稳定版"}'
+        
+        # 第二优先级：早期稳定版本
+        echo "$branches" | grep -E "openwrt-2[0-1]\.[0-9]+" | sort -V | awk '{print $0 ":早期稳定版"}'
+        
+        # 第三优先级：次新稳定版本
+        echo "$branches" | grep -E "openwrt-2[2-3]\.[0-9]+" | sort -V | awk '{print $0 ":次新稳定版"}'
+        
+        # 第四优先级：最新稳定版本
+        echo "$branches" | grep -E "openwrt-[0-9]+\.[0-9]+$" | sort -Vr | head -1 | sort -V | awk '{print $0 ":最新稳定版"}'
+        
+        # 第五优先级：官方OpenWrt LTS标签
+        if [ "$repo" = "openwrt" ]; then
+            echo "$tags" | grep -E "^v1[8-9]\.[0-9]+\.[0-9]+" | head -3 | awk '{print $0 ":官方LTS版"}'
+        fi
+        
+    } | grep -v "^$"  # 移除空行
+}
+
+# 检查设备是否在目标配置中定义
+check_device_definition() {
+    local device_name="$1"
+    
+    # 尝试提取设备名称
+    local device_short_name=$(extract_device_name_from_dts "$device_name")
+    
+    # 在所有平台中查找设备定义
+    for platform_dir in target/linux/*; do
+        local platform=$(basename "$platform_dir")
+        if [ "$platform" = "generic" ] || [ "$platform" = "modules" ]; then
+            continue
+        fi
+        
+        # 检查 generic/target.mk
+        local target_mk="$platform_dir/generic/target.mk"
+        if [ -f "$target_mk" ]; then
+            if grep -q "define Device.*$device_short_name" "$target_mk" 2>/dev/null; then
+                log_success "✅ 在平台 $platform 中找到设备定义: $device_short_name"
+                return 0
+            fi
+        fi
+        
+        # 检查 image/target.mk
+        local image_target_mk="$platform_dir/image/target.mk"
+        if [ -f "$image_target_mk" ]; then
+            if grep -q "define Device.*$device_short_name" "$image_target_mk" 2>/dev/null; then
+                log_success "✅ 在平台 $platform 中找到设备定义: $device_short_name"
+                return 0
+            fi
+        fi
+    done
+    
+    log_warning "❌ 设备 $device_short_name 在任何平台的目标配置中未定义"
+    return 1
+}
+
 # 设备支持检测函数（增强版）
 check_device_support() {
     local device_name="$1"
@@ -94,68 +230,6 @@ check_device_support() {
     cd /
     rm -rf "$temp_dir"
     return 1
-}
-
-# 检查设备是否在目标配置中定义
-check_device_definition() {
-    local device_name="$1"
-    
-    # 尝试提取设备名称
-    local device_short_name=$(extract_device_name_from_dts "$device_name")
-    
-    # 在所有平台中查找设备定义
-    for platform_dir in target/linux/*; do
-        local platform=$(basename "$platform_dir")
-        if [ "$platform" = "generic" ] || [ "$platform" = "modules" ]; then
-            continue
-        fi
-        
-        # 检查 generic/target.mk
-        local target_mk="$platform_dir/generic/target.mk"
-        if [ -f "$target_mk" ]; then
-            if grep -q "define Device.*$device_short_name" "$target_mk" 2>/dev/null; then
-                log_success "✅ 在平台 $platform 中找到设备定义: $device_short_name"
-                return 0
-            fi
-        fi
-        
-        # 检查 image/target.mk
-        local image_target_mk="$platform_dir/image/target.mk"
-        if [ -f "$image_target_mk" ]; then
-            if grep -q "define Device.*$device_short_name" "$image_target_mk" 2>/dev/null; then
-                log_success "✅ 在平台 $platform 中找到设备定义: $device_short_name"
-                return 0
-            fi
-        fi
-    done
-    
-    log_warning "❌ 设备 $device_short_name 在任何平台的目标配置中未定义"
-    return 1
-}
-
-# 从设备名称提取设备定义名
-extract_device_name_from_dts() {
-    local device_name="$1"
-    
-    # 特殊处理已知的设备名称映射
-    case "$device_name" in
-        "ac42u"|"rt-acrh17")
-            echo "asus_rt-acrh17"
-            ;;
-        "xiaomi_redmi-ax6s")
-            echo "xiaomi_redmi-ax6s"
-            ;;
-        "wr841n")
-            echo "tl-wr841n-v9"
-            ;;
-        "mi3g")
-            echo "xiaomi_mi-router-3g"
-            ;;
-        *)
-            # 默认返回原设备名称
-            echo "$device_name"
-            ;;
-    esac
 }
 
 # 现代设备版本检测（从新到旧）- 增强版
@@ -276,6 +350,48 @@ detect_old_versions() {
     return 1
 }
 
+# 测试用户指定版本
+test_specific_version() {
+    local device_name="$1"
+    local version_spec="$2"
+    
+    # 解析版本规格 (格式: 仓库:分支)
+    if [[ "$version_spec" == *":"* ]]; then
+        IFS=':' read -r repo branch <<< "$version_spec"
+    else
+        # 默认使用 immortalwrt
+        repo="immortalwrt"
+        branch="$version_spec"
+    fi
+    
+    # 获取仓库URL
+    local repo_url=""
+    for repo_info in "${REPOS[@]}"; do
+        IFS=':' read -r r url <<< "$repo_info"
+        if [ "$r" = "$repo" ]; then
+            repo_url="$url"
+            break
+        fi
+    done
+    
+    if [ -z "$repo_url" ]; then
+        log_error "未知仓库: $repo"
+        return 1
+    fi
+    
+    log_info "测试指定版本: $repo:$branch"
+    
+    if check_device_support "$device_name" "$repo_url" "$branch"; then
+        export SELECTED_REPO="$repo"
+        export SELECTED_BRANCH="$branch"
+        export SELECTED_REPO_URL="$repo_url"
+        return 0
+    else
+        log_error "指定版本不支持设备: $device_name"
+        return 1
+    fi
+}
+
 # 主检测函数 - 增强版
 detect_best_version() {
     local device_name="$1"
@@ -297,6 +413,13 @@ detect_best_version() {
     fi
     
     log_info "开始智能版本检测..."
+    
+    # 根据设备类型选择检测策略
+    if [ "$is_old_device" = "true" ]; then
+        log_info "使用老旧设备检测策略"
+    else
+        log_info "使用现代设备检测策略" 
+    fi
     
     # 为每个仓库检测最佳版本
     local supported_repo=""
@@ -333,8 +456,6 @@ detect_best_version() {
         return 1
     fi
 }
-
-# ... 其他函数保持不变（get_modern_versions_sorted, get_old_versions_sorted, test_specific_version等）...
 
 # 安全写入版本信息
 safe_write_version_info() {
