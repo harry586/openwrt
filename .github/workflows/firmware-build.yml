@@ -340,58 +340,117 @@ jobs:
         cd $BUILD_DIR
         echo "=== 生成设备配置 ==="
         
-        echo "# 智能选择的版本: $SELECTED_REPO - $SELECTED_BRANCH" > .config
-        echo "# 设备: ${{ github.event.inputs.device_name }}" >> .config
-        echo "# 平台: $PLATFORM" >> .config
-        echo "# 设备简称: $DEVICE_SHORT_NAME" >> .config
-        echo "# 老旧设备模式: ${{ github.event.inputs.old_device }}" >> .config
-        echo "# 生成时间: $(date)" >> .config
-        echo "" >> .config
+        # 清理变量中的潜在问题字符
+        CLEAN_PLATFORM=$(echo "$PLATFORM" | tr -cd '[:alnum:]_')
+        CLEAN_DEVICE=$(echo "$DEVICE_SHORT_NAME" | tr -cd '[:alnum:]_')
         
-        # 使用检测到的平台和设备信息
-        echo "CONFIG_TARGET_${PLATFORM}=y" >> .config
-        echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
-        echo "CONFIG_TARGET_DEVICE_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" >> .config
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
+        echo "清理后的平台: $CLEAN_PLATFORM"
+        echo "清理后的设备: $CLEAN_DEVICE"
         
-        # 根据配置类型设置
+        # 使用 heredoc 安全生成配置
+        cat > .config << 'EOF'
+# OpenWrt 自动生成配置
+# 请不要手动编辑此文件
+EOF
+
+        # 添加动态信息
+        cat >> .config << EOF
+# 版本: $SELECTED_REPO - $SELECTED_BRANCH
+# 设备: ${{ github.event.inputs.device_name }}
+# 平台: $CLEAN_PLATFORM
+# 设备标识: $CLEAN_DEVICE
+# 生成时间: $(date)
+
+CONFIG_TARGET_${CLEAN_PLATFORM}=y
+CONFIG_TARGET_${CLEAN_PLATFORM}_generic=y
+CONFIG_TARGET_DEVICE_${CLEAN_PLATFORM}_generic_DEVICE_${CLEAN_DEVICE}=y
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
+CONFIG_TARGET_IMAGES_GZIP=y
+EOF
+
+        # 基础包配置
+        cat >> .config << 'EOF'
+CONFIG_PACKAGE_base-files=y
+CONFIG_PACKAGE_busybox=y
+CONFIG_PACKAGE_dnsmasq=y
+CONFIG_PACKAGE_dropbear=y
+CONFIG_PACKAGE_firewall=y
+CONFIG_PACKAGE_opkg=y
+EOF
+
+        # 根据配置类型添加包
         case "${{ github.event.inputs.config_type }}" in
           "minimal")
             echo "CONFIG_PACKAGE_luci=n" >> .config
             ;;
-          "normal"|"custom")
-            echo "CONFIG_PACKAGE_luci=y" >> .config
-            echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
+          "normal")
+            cat >> .config << 'EOF'
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-theme-bootstrap=y
+CONFIG_PACKAGE_luci-app-firewall=y
+EOF
+            ;;
+          "custom")
+            cat >> .config << 'EOF'
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-theme-bootstrap=y
+CONFIG_PACKAGE_luci-app-firewall=y
+EOF
+            # 自定义包
+            if [ -n "${{ github.event.inputs.extra_packages }}" ]; then
+              echo "# 额外包配置" >> .config
+              for pkg in ${{ github.event.inputs.extra_packages }}; do
+                pkg_clean=$(echo "$pkg" | tr -cd '[:alnum:]_')
+                echo "CONFIG_PACKAGE_${pkg_clean}=y" >> .config
+              done
+            fi
             ;;
         esac
-        
-        # 自定义包
-        if [ "${{ github.event.inputs.config_type }}" = "custom" ] && [ -n "${{ github.event.inputs.extra_packages }}" ]; then
-          echo "添加额外包: ${{ github.event.inputs.extra_packages }}"
-          for pkg in ${{ github.event.inputs.extra_packages }}; do
-            echo "CONFIG_PACKAGE_${pkg}=y" >> .config
-          done
-        fi
-        
-        # 基础系统包
-        echo "CONFIG_PACKAGE_base-files=y" >> .config
-        echo "CONFIG_PACKAGE_busybox=y" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
-        echo "CONFIG_PACKAGE_dropbear=y" >> .config
-        echo "CONFIG_PACKAGE_firewall=y" >> .config
-        echo "CONFIG_PACKAGE_opkg=y" >> .config
-        
+
         echo "✅ 配置生成完成"
+        echo "=== 验证 .config 文件 ==="
+        echo "文件行数: $(wc -l < .config)"
+        echo "文件大小: $(wc -c < .config) 字节"
+        echo "=== 前20行内容 ==="
+        head -20 .config
+
+    - name: 调试配置生成
+      run: |
+        cd $BUILD_DIR
+        echo "=== 调试配置生成 ==="
+        echo "PLATFORM: $PLATFORM"
+        echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
+        echo "SELECTED_REPO: $SELECTED_REPO"
+        echo "SELECTED_BRANCH: $SELECTED_BRANCH"
+        
+        # 检查变量是否包含特殊字符
+        echo "=== 检查变量内容 ==="
+        echo "PLATFORM 长度: ${#PLATFORM}"
+        echo "DEVICE_SHORT_NAME 长度: ${#DEVICE_SHORT_NAME}"
+        
+        # 显示 .config 文件的详细内容
+        if [ -f ".config" ]; then
+            echo "=== .config 文件存在 ==="
+            echo "文件大小: $(wc -l < .config) 行"
+            echo "=== .config 文件内容（带行号）==="
+            cat -n .config
+            echo "=== 文件结束 ==="
+        else
+            echo "❌ .config 文件不存在"
+        fi
 
     - name: 应用配置并编译
       run: |
         cd $BUILD_DIR
         echo "=== 应用配置并编译 ==="
         
+        echo "开始 make defconfig..."
         make defconfig
+        
+        echo "开始下载依赖..."
         make -j4 download
+        
+        echo "开始编译..."
         make -j$(nproc) V=s
 
     - name: 验证固件生成
@@ -403,8 +462,20 @@ jobs:
         if [ -d "bin/targets" ]; then
           echo "✅ 构建成功！生成的固件:"
           find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) | sort
+          
+          # 显示固件详细信息
+          echo "=== 固件详细信息 ==="
+          for firmware in $(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null); do
+            echo "固件: $firmware"
+            echo "大小: $(du -h "$firmware" | cut -f1)"
+            echo ""
+          done
         else
           echo "❌ 构建失败，未找到目标文件"
+          echo "=== 检查构建目录结构 ==="
+          find . -name "bin" -type d | head -5
+          echo "=== 检查日志文件 ==="
+          find . -name "*.log" -type f | head -5
         fi
 
     - name: 上传编译产物
@@ -424,6 +495,16 @@ jobs:
           ${{ env.BUILD_DIR }}/.config
           ${{ env.BUILD_DIR }}/version_info.txt
           ${{ env.BUILD_DIR }}/device_info.txt
+        retention-days: 7
+
+    - name: 上传构建日志
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-logs-${{ github.event.inputs.device_name }}
+        path: |
+          ${{ env.BUILD_DIR }}/logs/
+          ${{ env.BUILD_DIR }}/tmp/
         retention-days: 7
 
     - name: 清理构建目录
