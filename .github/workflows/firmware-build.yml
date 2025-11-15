@@ -367,7 +367,7 @@ jobs:
         
         # 分析生成的配置，查看启用了哪些设备
         echo "=== defconfig 生成的设备配置 ==="
-        grep "CONFIG_TARGET_DEVICE" .config | head -20
+        grep "CONFIG_TARGET_DEVICE" .config | head -20 || echo "没有找到设备配置项"
         
         # 特别查看我们目标设备的配置项名称
         echo "=== 查找目标设备 $DEVICE_SHORT_NAME 的配置项 ==="
@@ -382,7 +382,7 @@ jobs:
         else
             echo "❌ 未找到设备 $DEVICE_SHORT_NAME 的配置项"
             echo "=== 所有可用的设备配置项 ==="
-            grep "CONFIG_TARGET_DEVICE" .config
+            grep "CONFIG_TARGET_DEVICE" .config || echo "没有可用的设备配置项"
             
             # 尝试构建配置项名称
             echo "=== 尝试构建配置项名称 ==="
@@ -452,7 +452,7 @@ jobs:
             echo "⚠️ 设备 $DEVICE_SHORT_NAME 未在最终配置中启用，但继续构建过程"
             echo "期望的配置项: $ACTUAL_DEVICE_CONFIG_NAME"
             echo "当前设备相关配置:"
-            grep "CONFIG_TARGET_DEVICE" .config
+            grep "CONFIG_TARGET_DEVICE" .config || echo "没有设备相关配置"
             # 这里不退出，让构建继续，看看会发生什么
         fi
 
@@ -465,10 +465,10 @@ jobs:
         echo "平台: $PLATFORM" >> device_info.txt
         echo "实际配置项: $ACTUAL_DEVICE_CONFIG_NAME" >> device_info.txt
         echo "=== 完整设备配置 ===" >> device_info.txt
-        grep "CONFIG_TARGET_DEVICE" .config >> device_info.txt
+        grep "CONFIG_TARGET_DEVICE" .config >> device_info.txt || echo "没有设备配置" >> device_info.txt
         echo "=== 配置摘要 ===" >> device_info.txt
-        echo "目标板: $(grep 'CONFIG_TARGET_BOARD' .config)" >> device_info.txt
-        echo "子目标: $(grep 'CONFIG_TARGET_SUBTARGET' .config)" >> device_info.txt
+        echo "目标板: $(grep 'CONFIG_TARGET_BOARD' .config || echo '未设置')" >> device_info.txt
+        echo "子目标: $(grep 'CONFIG_TARGET_SUBTARGET' .config || echo '未设置')" >> device_info.txt
 
     - name: 应用配置并编译
       run: |
