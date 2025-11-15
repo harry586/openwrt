@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # OpenWrt 智能设备检测脚本
-# 使用方法: ./device_dection.sh <设备名称>
+# 使用方法: ./device_detection.sh <设备名称>
 
 set -e
 
@@ -24,9 +24,6 @@ declare -A DEVICE_MAP=(
     ["mi3g"]="ramips:xiaomi_mi-router-3g:xiaomi,mi-router-3g"
     ["r3g"]="ramips:xiaomi_mi-router-3g:xiaomi,mi-router-3g"
     ["xiaomi_mi3g"]="ramips:xiaomi_mi-router-3g:xiaomi,mi-router-3g"
-    
-    ["r3p"]="ramips:xiaomi_mi-router-3-pro:xiaomi,mi-router-3-pro"
-    ["xiaomi_r3p"]="ramips:xiaomi_mi-router-3-pro:xiaomi,mi-router-3-pro"
     
     # 斐讯设备
     ["k2p"]="ramips:phicomm_k2p:phicomm,k2p"
@@ -74,7 +71,11 @@ detect_device() {
     find_config_files "$platform"
     
     # 查找设备定义
-    find_device_definitions "$platform" "$device_short_name"
+    if ! find_device_definitions "$platform" "$device_short_name"; then
+        echo "⚠️ 设备 $device_short_name 在目标配置中未找到，尝试查找替代设备..."
+        find_alternative_device "$platform" "$device_input"
+        return $?
+    fi
     
     # 输出结果
     export PLATFORM="$platform"
@@ -165,18 +166,72 @@ find_device_definitions() {
     if [ -f "$target_mk" ]; then
         if grep -q "$short_name" "$target_mk"; then
             echo "✅ 在目标配置中找到设备: $short_name"
+            return 0
         else
             echo "❌ 在目标配置中未找到设备: $short_name"
             return 1
         fi
+    else
+        echo "❌ 目标配置文件不存在: $target_mk"
+        return 1
+    fi
+}
+
+# 查找替代设备
+find_alternative_device() {
+    local platform="$1"
+    local device_input="$2"
+    
+    echo "=== 查找替代设备 ==="
+    
+    local target_mk="target/linux/$platform/generic/target.mk"
+    if [ ! -f "$target_mk" ]; then
+        echo "❌ 目标配置文件不存在"
+        return 1
     fi
     
-    # 查找设备树文件
-    local dts_file=$(find "target/linux/$platform" -name "*$short_name*.dts" 2>/dev/null | head -1)
-    if [ -n "$dts_file" ]; then
-        echo "✅ 找到设备树文件: $(basename $dts_file)"
+    # 显示该平台所有可用设备
+    echo "平台 $platform 支持的设备列表:"
+    grep -E "define Device" "$target_mk" | sed 's/.*define Device\///' | head -20
+    
+    # 尝试查找类似的设备
+    echo "尝试查找类似设备..."
+    
+    # 根据设备类型查找替代
+    case "$device_input" in
+        *ac*)
+            echo "查找华硕设备..."
+            ALTERNATIVE_DEVICE=$(grep "define Device" "$target_mk" | grep -i "asus" | head -1 | sed 's/.*define Device\///')
+            ;;
+        *mi*|*xiaomi*)
+            echo "查找小米设备..."
+            ALTERNATIVE_DEVICE=$(grep "define Device" "$target_mk" | grep -i "xiaomi" | head -1 | sed 's/.*define Device\///')
+            ;;
+        *phicomm*|*k2p*|*k3*)
+            echo "查找斐讯设备..."
+            ALTERNATIVE_DEVICE=$(grep "define Device" "$target_mk" | grep -i "phicomm" | head -1 | sed 's/.*define Device\///')
+            ;;
+        *)
+            echo "查找通用设备..."
+            ALTERNATIVE_DEVICE=$(grep "define Device" "$target_mk" | head -1 | sed 's/.*define Device\///')
+            ;;
+    esac
+    
+    if [ -n "$ALTERNATIVE_DEVICE" ]; then
+        echo "✅ 找到替代设备: $ALTERNATIVE_DEVICE"
+        export PLATFORM="$platform"
+        export DEVICE_SHORT_NAME="$ALTERNATIVE_DEVICE"
+        export DEVICE_FULL_NAME="$ALTERNATIVE_DEVICE"
+        
+        echo "=== 使用替代设备 ==="
+        echo "PLATFORM=$platform"
+        echo "DEVICE_SHORT_NAME=$ALTERNATIVE_DEVICE"
+        echo "DEVICE_FULL_NAME=$ALTERNATIVE_DEVICE"
+        
+        return 0
     else
-        echo "⚠️ 未找到设备树文件: *$short_name*.dts"
+        echo "❌ 未找到合适的替代设备"
+        return 1
     fi
 }
 
@@ -185,7 +240,8 @@ main() {
     if [ $# -eq 0 ]; then
         echo "用法: $0 <设备名称>"
         echo "示例: $0 ac42u"
-        echo "示例: $0 rt-acrh17"
+        echo "示例: $0 acrh17"
+        echo "支持的设备: ac42u, acrh17, ac58u, mi3g, k2p, newifi-d2"
         exit 1
     fi
     
