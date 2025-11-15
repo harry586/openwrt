@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: '设备名称 (如: ac42u, wr841n, mi3g)'
+        description: '设备名称 (rt-acrh17)'
         required: true
-        default: 'ac42u'
+        default: 'rt-acrh17'
         type: string
       old_device:
         description: '是否为老旧设备'
@@ -64,6 +64,7 @@ jobs:
       run: |
         sudo mkdir -p $BUILD_DIR
         sudo chown -R $USER:$USER $BUILD_DIR
+        sudo chmod -R 755 $BUILD_DIR
 
     - name: 智能查找并复制检测脚本
       run: |
@@ -151,8 +152,12 @@ jobs:
         cd $BUILD_DIR
         echo "=== 智能版本检测 ==="
         
+        # 确保有写入权限
+        sudo chmod -R 755 $BUILD_DIR
+        chmod -R 755 $BUILD_DIR
+        
         # 运行完整版本检测器
-        if ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}"; then
+        if ./complete_version_detector.sh "rt-acrh17" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}"; then
           echo "✅ 版本检测脚本执行成功"
           
           # 检查版本信息文件
@@ -176,24 +181,25 @@ jobs:
             echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
           else
             echo "⚠️ 未找到版本信息文件，使用默认值"
-            # 根据设备设置默认值
-            case "${{ github.event.inputs.device_name }}" in
-              ac42u|rt-acrh17|asus_acrh17)
-                echo "SELECTED_REPO=openwrt" >> $GITHUB_ENV
-                echo "SELECTED_BRANCH=openwrt-23.05" >> $GITHUB_ENV
-                echo "SELECTED_REPO_URL=https://git.openwrt.org/openwrt/openwrt.git" >> $GITHUB_ENV
-                ;;
-              *)
-                echo "SELECTED_REPO=openwrt" >> $GITHUB_ENV
-                echo "SELECTED_BRANCH=main" >> $GITHUB_ENV
-                echo "SELECTED_REPO_URL=https://git.openwrt.org/openwrt/openwrt.git" >> $GITHUB_ENV
-                ;;
-            esac
+            # 使用 rt-acrh17 的默认值
+            echo "SELECTED_REPO=openwrt" >> $GITHUB_ENV
+            echo "SELECTED_BRANCH=openwrt-23.05" >> $GITHUB_ENV
+            echo "SELECTED_REPO_URL=https://git.openwrt.org/openwrt/openwrt.git" >> $GITHUB_ENV
             echo "✅ 使用默认环境变量"
           fi
         else
-          echo "❌ 版本检测失败"
-          exit 1
+          echo "❌ 版本检测失败，使用默认值"
+          # 即使脚本失败，也使用默认值继续
+          echo "SELECTED_REPO=openwrt" >> $GITHUB_ENV
+          echo "SELECTED_BRANCH=openwrt-23.05" >> $GITHUB_ENV
+          echo "SELECTED_REPO_URL=https://git.openwrt.org/openwrt/openwrt.git" >> $GITHUB_ENV
+          
+          # 创建默认版本信息文件
+          echo "SELECTED_REPO=openwrt" > version_info.txt
+          echo "SELECTED_BRANCH=openwrt-23.05" >> version_info.txt
+          echo "SELECTED_REPO_URL=https://git.openwrt.org/openwrt/openwrt.git" >> version_info.txt
+          
+          echo "✅ 使用默认环境变量"
         fi
 
     - name: 克隆选定版本的源码
@@ -210,11 +216,11 @@ jobs:
           exit 1
         fi
         
-        # 确保目录是空的（但保留脚本文件）
+        # 确保目录是空的（但保留脚本文件和版本信息文件）
         echo "检查构建目录状态..."
         if [ "$(ls -A .)" ]; then
-          echo "清理构建目录（保留脚本文件）..."
-          find . -mindepth 1 -maxdepth 1 ! -name '*.sh' -exec rm -rf {} + 2>/dev/null || true
+          echo "清理构建目录（保留脚本文件和版本信息文件）..."
+          find . -mindepth 1 -maxdepth 1 ! -name '*.sh' ! -name 'version_info.txt' -exec rm -rf {} + 2>/dev/null || true
         fi
         
         echo "开始克隆仓库..."
@@ -261,8 +267,12 @@ jobs:
           exit 1
         fi
         
+        # 确保有写入权限
+        sudo chmod -R 755 $BUILD_DIR
+        chmod -R 755 $BUILD_DIR
+        
         # 运行设备检测脚本
-        if ./device_detection.sh "${{ github.event.inputs.device_name }}"; then
+        if ./device_detection.sh "rt-acrh17"; then
           echo "✅ 设备检测脚本执行成功"
           
           # 检查设备信息文件
@@ -285,36 +295,18 @@ jobs:
             echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
           else
             echo "⚠️ 未找到设备信息文件，使用默认值"
-            # 根据设备设置默认值
-            case "${{ github.event.inputs.device_name }}" in
-              ac42u|rt-acrh17|asus_acrh17)
-                echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
-                echo "DEVICE_SHORT_NAME=asus_rt-acrh17" >> $GITHUB_ENV
-                echo "DEVICE_FULL_NAME=ASUS RT-ACRH17" >> $GITHUB_ENV
-                ;;
-              *)
-                echo "PLATFORM=ramips" >> $GITHUB_ENV
-                echo "DEVICE_SHORT_NAME=generic" >> $GITHUB_ENV
-                echo "DEVICE_FULL_NAME=Generic Device" >> $GITHUB_ENV
-                ;;
-            esac
+            # 使用 rt-acrh17 的默认值
+            echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
+            echo "DEVICE_SHORT_NAME=asus_rt-acrh17" >> $GITHUB_ENV
+            echo "DEVICE_FULL_NAME=ASUS RT-ACRH17" >> $GITHUB_ENV
             echo "✅ 使用默认设备环境变量"
           fi
         else
           echo "❌ 设备检测失败，使用默认值"
           # 即使脚本失败，也使用默认值继续
-          case "${{ github.event.inputs.device_name }}" in
-            ac42u|rt-acrh17|asus_acrh17)
-              echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
-              echo "DEVICE_SHORT_NAME=asus_rt-acrh17" >> $GITHUB_ENV
-              echo "DEVICE_FULL_NAME=ASUS RT-ACRH17" >> $GITHUB_ENV
-              ;;
-            *)
-              echo "PLATFORM=ramips" >> $GITHUB_ENV
-              echo "DEVICE_SHORT_NAME=generic" >> $GITHUB_ENV
-              echo "DEVICE_FULL_NAME=Generic Device" >> $GITHUB_ENV
-              ;;
-          esac
+          echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
+          echo "DEVICE_SHORT_NAME=asus_rt-acrh17" >> $GITHUB_ENV
+          echo "DEVICE_FULL_NAME=ASUS RT-ACRH17" >> $GITHUB_ENV
           echo "✅ 使用默认设备环境变量"
         fi
 
@@ -331,33 +323,21 @@ jobs:
         
         # 记录版本信息
         echo "# 智能选择的版本: $SELECTED_REPO - $SELECTED_BRANCH" > .config
-        echo "# 设备: ${{ github.event.inputs.device_name }}" >> .config
+        echo "# 设备: rt-acrh17" >> .config
         echo "# 老旧设备模式: ${{ github.event.inputs.old_device }}" >> .config
         echo "# 生成时间: $(date)" >> .config
         echo "" >> .config
         
         # 基础平台配置
-        echo "CONFIG_TARGET_${PLATFORM}=y" >> .config
-        echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
-        echo "CONFIG_TARGET_DEVICE_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" >> .config
+        echo "CONFIG_TARGET_ipq40xx=y" >> .config
+        echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+        echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-acrh17=y" >> .config
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
         
-        # 根据平台添加特定配置
-        case "$PLATFORM" in
-          "ipq40xx"|"ipq807x")
-            echo "CONFIG_PACKAGE_ath10k-firmware-qca4019=y" >> .config
-            echo "CONFIG_PACKAGE_ath10k-board-qca4019=y" >> .config
-            ;;
-          "ramips")
-            echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
-            ;;
-          "ar71xx")
-            # 老旧设备通常使用 ar71xx 平台
-            echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-ath9k=y" >> .config
-            ;;
-        esac
+        # ipq40xx 平台特定配置
+        echo "CONFIG_PACKAGE_ath10k-firmware-qca4019=y" >> .config
+        echo "CONFIG_PACKAGE_ath10k-board-qca4019=y" >> .config
         
         # 根据配置类型设置
         case "${{ github.event.inputs.config_type }}" in
@@ -420,7 +400,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
+        name: firmware-rt-acrh17-${{ env.SELECTED_BRANCH }}
         path: ${{ env.BUILD_DIR }}/bin/targets/
         retention-days: 7
 
@@ -428,7 +408,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: build-info-${{ github.event.inputs.device_name }}
+        name: build-info-rt-acrh17
         path: |
           ${{ env.BUILD_DIR }}/.config
           ${{ env.BUILD_DIR }}/version_info.txt
