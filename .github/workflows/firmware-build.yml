@@ -121,6 +121,9 @@ jobs:
             echo "=== version_info.txt 内容 ==="
             cat version_info.txt
             
+            # 复制版本信息文件到构建目录
+            cp version_info.txt "$BUILD_DIR"/
+            
             # 读取变量并设置到环境变量
             SELECTED_REPO=$(grep '^SELECTED_REPO=' version_info.txt | cut -d'=' -f2)
             SELECTED_BRANCH=$(grep '^SELECTED_BRANCH=' version_info.txt | cut -d'=' -f2)
@@ -150,6 +153,12 @@ jobs:
               echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
               echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
               
+              # 手动创建版本信息文件
+              cd "$BUILD_DIR"
+              echo "SELECTED_REPO=$SELECTED_REPO" > version_info.txt
+              echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> version_info.txt
+              echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> version_info.txt
+              
               echo "✅ 从输出解析环境变量成功:"
               echo "SELECTED_REPO: $SELECTED_REPO"
               echo "SELECTED_BRANCH: $SELECTED_BRANCH"
@@ -159,6 +168,12 @@ jobs:
               echo "SELECTED_REPO=immortalwrt" >> $GITHUB_ENV
               echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
               echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_ENV
+              
+              # 创建默认版本信息文件
+              cd "$BUILD_DIR"
+              echo "SELECTED_REPO=immortalwrt" > version_info.txt
+              echo "SELECTED_BRANCH=master" >> version_info.txt
+              echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> version_info.txt
             fi
           fi
         else
@@ -184,43 +199,25 @@ jobs:
           exit 1
         fi
         
-        # 确保目录是空的（但保留脚本文件）
-        echo "检查构建目录状态..."
-        if [ "$(ls -A .)" ]; then
-          echo "清理构建目录（保留脚本文件）..."
-          find . -mindepth 1 -maxdepth 1 ! -name '*.sh' -exec rm -rf {} + 2>/dev/null || true
-        fi
+        # 创建新的空目录用于克隆
+        CLONE_DIR="$BUILD_DIR/source"
+        mkdir -p "$CLONE_DIR"
         
-        echo "开始克隆仓库..."
-        git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .
+        echo "开始克隆仓库到 $CLONE_DIR..."
+        git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" "$CLONE_DIR"
         
         if [ $? -eq 0 ]; then
           echo "✅ 源码克隆完成"
+          
+          # 将克隆的内容移动到构建目录
+          echo "移动源码到构建目录..."
+          mv "$CLONE_DIR"/* "$CLONE_DIR"/.[!.]* "$BUILD_DIR"/ 2>/dev/null || true
+          rm -rf "$CLONE_DIR"
+          
+          echo "✅ 源码准备完成"
         else
           echo "❌ 源码克隆失败"
           exit 1
-        fi
-
-    - name: 重新复制设备检测脚本
-      run: |
-        cd $BUILD_DIR
-        echo "=== 重新复制设备检测脚本 ==="
-        
-        # 如果脚本文件不存在，重新从工作空间复制
-        if [ ! -f "device_detection.sh" ]; then
-          echo "设备检测脚本不存在，重新复制..."
-          cd $GITHUB_WORKSPACE
-          DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f | head -1)
-          if [ -z "$DEVICE_SCRIPT" ]; then
-            echo "❌ 错误: 找不到 device_detection.sh"
-            exit 1
-          fi
-          cp "$DEVICE_SCRIPT" $BUILD_DIR/device_detection.sh
-          cd $BUILD_DIR
-          chmod +x device_detection.sh
-          echo "✅ 设备检测脚本重新复制完成"
-        else
-          echo "✅ 设备检测脚本已存在"
         fi
 
     - name: 智能设备检测
@@ -229,9 +226,16 @@ jobs:
         cd $BUILD_DIR
         echo "=== 智能设备检测 ==="
         
-        # 确保脚本文件存在
-        if [ ! -f "device_detection.sh" ]; then
-          echo "❌ 错误: 设备检测脚本不存在"
+        # 重新从工作空间复制设备检测脚本（确保存在）
+        cd $GITHUB_WORKSPACE
+        DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f | head -1)
+        if [ -n "$DEVICE_SCRIPT" ]; then
+          cp "$DEVICE_SCRIPT" $BUILD_DIR/device_detection.sh
+          cd $BUILD_DIR
+          chmod +x device_detection.sh
+          echo "✅ 设备检测脚本已更新"
+        else
+          echo "❌ 错误: 找不到 device_detection.sh"
           exit 1
         fi
         
@@ -273,6 +277,11 @@ jobs:
               echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
               echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
               
+              # 手动创建设备信息文件
+              echo "PLATFORM=$PLATFORM" > device_info.txt
+              echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> device_info.txt
+              echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> device_info.txt
+              
               echo "✅ 从输出解析设备信息成功:"
               echo "PLATFORM: $PLATFORM"
               echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
@@ -282,6 +291,11 @@ jobs:
               echo "PLATFORM=mediatek" >> $GITHUB_ENV
               echo "DEVICE_SHORT_NAME=xiaomi_redmi-ax6s" >> $GITHUB_ENV
               echo "DEVICE_FULL_NAME=Xiaomi Redmi AX6S" >> $GITHUB_ENV
+              
+              # 创建默认设备信息文件
+              echo "PLATFORM=mediatek" > device_info.txt
+              echo "DEVICE_SHORT_NAME=xiaomi_redmi-ax6s" >> device_info.txt
+              echo "DEVICE_FULL_NAME=Xiaomi Redmi AX6S" >> device_info.txt
             fi
           fi
         else
