@@ -108,17 +108,15 @@ jobs:
         if ! grep -q "version_info.txt" complete_version_detector.sh; then
           echo "检测到脚本缺少文件输出功能，正在修复..."
           
-          # 在脚本末尾添加文件输出功能
-          cat >> complete_version_detector.sh << 'EOF'
-
-# 输出版本信息到文件
-echo "SELECTED_REPO=$SELECTED_REPO" > version_info.txt
-echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> version_info.txt
-echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> version_info.txt
-
-echo "版本信息已保存到 version_info.txt"
-cat version_info.txt
-EOF
+          # 使用 echo 命令添加文件输出功能
+          echo "" >> complete_version_detector.sh
+          echo "# 输出版本信息到文件" >> complete_version_detector.sh
+          echo 'echo "SELECTED_REPO=$SELECTED_REPO" > version_info.txt' >> complete_version_detector.sh
+          echo 'echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> version_info.txt' >> complete_version_detector.sh
+          echo 'echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> version_info.txt' >> complete_version_detector.sh
+          echo 'echo "版本信息已保存到 version_info.txt"' >> complete_version_detector.sh
+          echo 'cat version_info.txt' >> complete_version_detector.sh
+          
           echo "✅ 版本检测脚本修复完成"
         else
           echo "✅ 版本检测脚本已包含文件输出功能"
@@ -133,17 +131,15 @@ EOF
         if ! grep -q "device_info.txt" device_detection.sh; then
           echo "检测到脚本缺少文件输出功能，正在修复..."
           
-          # 在脚本末尾添加文件输出功能
-          cat >> device_detection.sh << 'EOF'
-
-# 输出设备信息到文件
-echo "PLATFORM=$PLATFORM" > device_info.txt
-echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> device_info.txt
-echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> device_info.txt
-
-echo "设备信息已保存到 device_info.txt"
-cat device_info.txt
-EOF
+          # 使用 echo 命令添加文件输出功能
+          echo "" >> device_detection.sh
+          echo "# 输出设备信息到文件" >> device_detection.sh
+          echo 'echo "PLATFORM=$PLATFORM" > device_info.txt' >> device_detection.sh
+          echo 'echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> device_info.txt' >> device_detection.sh
+          echo 'echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> device_info.txt' >> device_detection.sh
+          echo 'echo "设备信息已保存到 device_info.txt"' >> device_detection.sh
+          echo 'cat device_info.txt' >> device_detection.sh
+          
           echo "✅ 设备检测脚本修复完成"
         else
           echo "✅ 设备检测脚本已包含文件输出功能"
