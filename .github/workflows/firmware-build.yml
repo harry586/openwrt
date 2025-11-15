@@ -4,26 +4,24 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: '设备名称 (ac42u)'
+        description: '设备名称 (ac42u/RT-ACRH17)'
         required: true
         default: 'ac42u'
         type: string
-      old_device:
-        description: '是否为老旧设备'
-        required: true
-        default: false
-        type: boolean
       version_spec:
         description: '版本规格 (可选，如: openwrt-23.05 或 immortalwrt:master)'
         required: false
         type: string
         default: ''
-      config_type:
-        description: '配置类型'
+      config_profile:
+        description: '配置模板'
         required: true
         default: 'minimal'
         type: choice
-        options: ['minimal', 'normal', 'custom']
+        options:
+          - minimal
+          - normal
+          - full
       extra_packages:
         description: '额外安装插件 (空格分隔)'
         required: false
@@ -62,168 +60,58 @@ jobs:
 
     - name: 创建构建目录
       run: |
-        sudo mkdir -p $BUILD_DIR
-        sudo chown -R $USER:$USER $BUILD_DIR
-        sudo chmod -R 755 $BUILD_DIR
+        mkdir -p $BUILD_DIR
+        chown -R $USER:$USER $BUILD_DIR
+        chmod -R 755 $BUILD_DIR
 
-    - name: 智能查找并复制检测脚本
+    - name: 复制配置脚本
       run: |
         cd $BUILD_DIR
-        echo "=== 智能查找并复制检测脚本 ==="
+        echo "=== 复制配置脚本 ==="
         
-        # 切换到工作空间目录
         cd $GITHUB_WORKSPACE
         
-        # 查找版本检测脚本
+        # 复制版本检测脚本
         VERSION_SCRIPT=$(find . -name "complete_version_detector.sh" -type f | head -1)
-        if [ -z "$VERSION_SCRIPT" ]; then
-          echo "❌ 错误: 找不到 complete_version_detector.sh"
-          exit 1
-        fi
-        
-        # 查找设备检测脚本
-        DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f | head -1)
-        if [ -z "$DEVICE_SCRIPT" ]; then
-          echo "❌ 错误: 找不到 device_detection.sh"
-          exit 1
-        fi
-        
-        echo "✅ 找到版本检测脚本: $VERSION_SCRIPT"
-        echo "✅ 找到设备检测脚本: $DEVICE_SCRIPT"
-        
-        # 复制到构建目录
-        cp "$VERSION_SCRIPT" $BUILD_DIR/complete_version_detector.sh
-        cp "$DEVICE_SCRIPT" $BUILD_DIR/device_detection.sh
-        
-        cd $BUILD_DIR
-        chmod +x complete_version_detector.sh device_detection.sh
-        
-        echo "✅ 脚本复制完成"
-
-    - name: 修复版本检测脚本
-      run: |
-        cd $BUILD_DIR
-        echo "=== 修复版本检测脚本 ==="
-        
-        # 检查脚本是否包含文件输出功能
-        if ! grep -q "version_info.txt" complete_version_detector.sh; then
-          echo "检测到脚本缺少文件输出功能，正在修复..."
-          
-          # 使用 echo 命令添加文件输出功能
-          echo "" >> complete_version_detector.sh
-          echo "# 输出版本信息到文件" >> complete_version_detector.sh
-          echo 'echo "SELECTED_REPO=$SELECTED_REPO" > version_info.txt' >> complete_version_detector.sh
-          echo 'echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> version_info.txt' >> complete_version_detector.sh
-          echo 'echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> version_info.txt' >> complete_version_detector.sh
-          echo 'echo "版本信息已保存到 version_info.txt"' >> complete_version_detector.sh
-          echo 'cat version_info.txt' >> complete_version_detector.sh
-          
-          echo "✅ 版本检测脚本修复完成"
+        if [ -n "$VERSION_SCRIPT" ]; then
+          cp "$VERSION_SCRIPT" $BUILD_DIR/complete_version_detector.sh
+          chmod +x $BUILD_DIR/complete_version_detector.sh
+          echo "✅ 版本检测脚本复制完成"
         else
-          echo "✅ 版本检测脚本已包含文件输出功能"
+          echo "⚠️ 未找到版本检测脚本，使用默认配置"
         fi
 
-    - name: 修复设备检测脚本
+    - name: 选择源码版本
+      id: select-version
       run: |
         cd $BUILD_DIR
-        echo "=== 修复设备检测脚本 ==="
+        echo "=== 选择源码版本 ==="
         
-        # 检查脚本是否包含文件输出功能
-        if ! grep -q "device_info.txt" device_detection.sh; then
-          echo "检测到脚本缺少文件输出功能，正在修复..."
-          
-          # 使用 echo 命令添加文件输出功能
-          echo "" >> device_detection.sh
-          echo "# 输出设备信息到文件" >> device_detection.sh
-          echo 'echo "PLATFORM=$PLATFORM" > device_info.txt' >> device_detection.sh
-          echo 'echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> device_info.txt' >> device_detection.sh
-          echo 'echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> device_info.txt' >> device_detection.sh
-          echo 'echo "设备信息已保存到 device_info.txt"' >> device_detection.sh
-          echo 'cat device_info.txt' >> device_detection.sh
-          
-          echo "✅ 设备检测脚本修复完成"
-        else
-          echo "✅ 设备检测脚本已包含文件输出功能"
-        fi
-
-    - name: 智能版本检测
-      id: version-detection
-      run: |
-        cd $BUILD_DIR
-        echo "=== 智能版本检测 ==="
-        
-        # 确保有写入权限
-        sudo chmod -R 755 $BUILD_DIR
-        chmod -R 755 $BUILD_DIR
-        
-        # 运行完整版本检测器
-        if ./complete_version_detector.sh "ac42u" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}"; then
-          echo "✅ 版本检测脚本执行成功"
-          
-          # 检查版本信息文件
-          if [ -f "version_info.txt" ]; then
-            echo "✅ 找到版本信息文件"
-            echo "=== version_info.txt 内容 ==="
-            cat version_info.txt
-            
-            # 读取变量并设置到环境变量
-            SELECTED_REPO=$(grep '^SELECTED_REPO=' version_info.txt | cut -d'=' -f2)
-            SELECTED_BRANCH=$(grep '^SELECTED_BRANCH=' version_info.txt | cut -d'=' -f2)
-            SELECTED_REPO_URL=$(grep '^SELECTED_REPO_URL=' version_info.txt | cut -d'=' -f2)
-            
-            echo "SELECTED_REPO=$SELECTED_REPO" >> $GITHUB_ENV
-            echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
-            echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
-            
-            echo "✅ 环境变量已设置:"
-            echo "SELECTED_REPO: $SELECTED_REPO"
-            echo "SELECTED_BRANCH: $SELECTED_BRANCH"
-            echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
+        if [ -f "complete_version_detector.sh" ]; then
+          echo "使用版本检测脚本选择版本..."
+          if ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}"; then
+            echo "✅ 版本检测完成"
           else
-            echo "⚠️ 未找到版本信息文件，使用默认值"
-            # 使用 ac42u 的默认值
-            echo "SELECTED_REPO=immortalwrt" >> $GITHUB_ENV
-            echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
+            echo "❌ 版本检测失败，使用默认版本"
             echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_ENV
-            echo "✅ 使用默认环境变量"
+            echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
           fi
         else
-          echo "❌ 版本检测失败，使用默认值"
-          # 即使脚本失败，也使用默认值继续
-          echo "SELECTED_REPO=immortalwrt" >> $GITHUB_ENV
-          echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
+          echo "使用默认源码版本"
           echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_ENV
-          
-          # 创建默认版本信息文件
-          echo "SELECTED_REPO=immortalwrt" > version_info.txt
-          echo "SELECTED_BRANCH=master" >> version_info.txt
-          echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> version_info.txt
-          
-          echo "✅ 使用默认环境变量"
+          echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
         fi
 
-    - name: 克隆选定版本的源码
+    - name: 克隆源码
       run: |
         cd $BUILD_DIR
-        echo "=== 克隆选定版本的源码 ==="
-        echo "仓库: $SELECTED_REPO"
+        echo "=== 克隆源码 ==="
+        echo "仓库: $SELECTED_REPO_URL"
         echo "分支: $SELECTED_BRANCH"
-        echo "URL: $SELECTED_REPO_URL"
         
-        # 验证环境变量
-        if [ -z "$SELECTED_REPO" ] || [ -z "$SELECTED_BRANCH" ] || [ -z "$SELECTED_REPO_URL" ]; then
-          echo "❌ 错误: 环境变量未正确设置"
-          exit 1
-        fi
+        # 清理目录（保留脚本）
+        find . -mindepth 1 -maxdepth 1 ! -name '*.sh' -exec rm -rf {} + 2>/dev/null || true
         
-        # 确保目录是空的（但保留脚本文件和版本信息文件）
-        echo "检查构建目录状态..."
-        if [ "$(ls -A .)" ]; then
-          echo "清理构建目录（保留脚本文件和版本信息文件）..."
-          find . -mindepth 1 -maxdepth 1 ! -name '*.sh' ! -name 'version_info.txt' -exec rm -rf {} + 2>/dev/null || true
-        fi
-        
-        echo "开始克隆仓库..."
         git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .
         
         if [ $? -eq 0 ]; then
@@ -233,184 +121,135 @@ jobs:
           exit 1
         fi
 
-    - name: 重新复制设备检测脚本
+    - name: 更新和安装feeds
       run: |
         cd $BUILD_DIR
-        echo "=== 重新复制设备检测脚本 ==="
-        
-        # 如果脚本文件不存在，重新从工作空间复制
-        if [ ! -f "device_detection.sh" ]; then
-          echo "设备检测脚本不存在，重新复制..."
-          cd $GITHUB_WORKSPACE
-          DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f | head -1)
-          if [ -z "$DEVICE_SCRIPT" ]; then
-            echo "❌ 错误: 找不到 device_detection.sh"
-            exit 1
-          fi
-          cp "$DEVICE_SCRIPT" $BUILD_DIR/device_detection.sh
-          cd $BUILD_DIR
-          chmod +x device_detection.sh
-          echo "✅ 设备检测脚本重新复制完成"
-        else
-          echo "✅ 设备检测脚本已存在"
-        fi
-
-    - name: 智能设备检测
-      id: device-detection
-      run: |
-        cd $BUILD_DIR
-        echo "=== 智能设备检测 ==="
-        
-        # 确保脚本文件存在
-        if [ ! -f "device_detection.sh" ]; then
-          echo "❌ 错误: 设备检测脚本不存在"
-          exit 1
-        fi
-        
-        # 确保有写入权限
-        sudo chmod -R 755 $BUILD_DIR
-        chmod -R 755 $BUILD_DIR
-        
-        # 运行设备检测脚本
-        if ./device_detection.sh "ac42u"; then
-          echo "✅ 设备检测脚本执行成功"
-          
-          # 检查设备信息文件
-          if [ -f "device_info.txt" ]; then
-            echo "✅ 找到设备信息文件"
-            echo "=== device_info.txt 内容 ==="
-            cat device_info.txt
-            
-            PLATFORM=$(grep '^PLATFORM=' device_info.txt | cut -d'=' -f2)
-            DEVICE_SHORT_NAME=$(grep '^DEVICE_SHORT_NAME=' device_info.txt | cut -d'=' -f2)
-            DEVICE_FULL_NAME=$(grep '^DEVICE_FULL_NAME=' device_info.txt | cut -d'=' -f2)
-            
-            echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
-            echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
-            echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
-            
-            echo "✅ 设备环境变量已设置:"
-            echo "PLATFORM: $PLATFORM"
-            echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
-            echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
-          else
-            echo "⚠️ 未找到设备信息文件，使用默认值"
-            # 使用 ac42u 的默认值
-            echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
-            echo "DEVICE_SHORT_NAME=xiaomi_redmi-ax6s" >> $GITHUB_ENV
-            echo "DEVICE_FULL_NAME=Xiaomi Redmi AX6S" >> $GITHUB_ENV
-            echo "✅ 使用默认设备环境变量"
-          fi
-        else
-          echo "❌ 设备检测失败，使用默认值"
-          # 即使脚本失败，也使用默认值继续
-          echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
-          echo "DEVICE_SHORT_NAME=xiaomi_redmi-ax6s" >> $GITHUB_ENV
-          echo "DEVICE_FULL_NAME=Xiaomi Redmi AX6S" >> $GITHUB_ENV
-          echo "✅ 使用默认设备环境变量"
-        fi
-
-    - name: 更新安装feeds
-      run: |
-        cd $BUILD_DIR
+        echo "=== 更新和安装feeds ==="
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 生成设备配置
+    - name: 生成基础配置
       run: |
         cd $BUILD_DIR
-        echo "=== 生成设备配置 ==="
+        echo "=== 生成基础配置 ==="
         
-        # 记录版本信息
-        echo "# 智能选择的版本: $SELECTED_REPO - $SELECTED_BRANCH" > .config
-        echo "# 设备: ac42u" >> .config
-        echo "# 老旧设备模式: ${{ github.event.inputs.old_device }}" >> .config
-        echo "# 生成时间: $(date)" >> .config
-        echo "" >> .config
+        # 使用defconfig生成基础配置
+        make defconfig
         
-        # 基础平台配置
-        echo "CONFIG_TARGET_ipq40xx=y" >> .config
-        echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
-        echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_xiaomi_redmi-ax6s=y" >> .config
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
-        
-        # ipq40xx 平台特定配置
-        echo "CONFIG_PACKAGE_ath10k-firmware-qca4019=y" >> .config
-        echo "CONFIG_PACKAGE_ath10k-board-qca4019=y" >> .config
-        
-        # 根据配置类型设置
-        case "${{ github.event.inputs.config_type }}" in
-          "minimal")
-            echo "CONFIG_PACKAGE_luci=n" >> .config
+        # 应用设备特定配置
+        case "${{ github.event.inputs.device_name }}" in
+          "ac42u")
+            echo "应用 RT-ACRH17 配置"
+            ./scripts/feeds install -a
+            make menuconfig <<EOF
+
+
+EOF
             ;;
-          "normal"|"custom")
-            echo "CONFIG_PACKAGE_luci=y" >> .config
+          *)
+            echo "使用默认配置"
+            ;;
+        esac
+
+    - name: 应用配置模板
+      run: |
+        cd $BUILD_DIR
+        echo "=== 应用配置模板 ==="
+        
+        # 备份原始配置
+        cp .config .config.original
+        
+        # 根据模板修改配置
+        case "${{ github.event.inputs.config_profile }}" in
+          "minimal")
+            echo "应用最小化配置"
+            # 取消选择LUCI
+            sed -i 's/CONFIG_PACKAGE_luci=y/# CONFIG_PACKAGE_luci is not set/' .config
+            ;;
+          "normal")
+            echo "应用标准配置"
+            # 确保选择LUCI
+            sed -i 's/# CONFIG_PACKAGE_luci is not set/CONFIG_PACKAGE_luci=y/' .config
+            echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
+            ;;
+          "full")
+            echo "应用完整配置"
+            # 选择更多包
+            sed -i 's/# CONFIG_PACKAGE_luci is not set/CONFIG_PACKAGE_luci=y/' .config
             echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
             echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
             ;;
         esac
         
-        # 自定义包
-        if [ "${{ github.event.inputs.config_type }}" = "custom" ] && [ -n "${{ github.event.inputs.extra_packages }}" ]; then
+        # 添加额外包
+        if [ -n "${{ github.event.inputs.extra_packages }}" ]; then
+          echo "添加额外包: ${{ github.event.inputs.extra_packages }}"
           for pkg in ${{ github.event.inputs.extra_packages }}; do
             echo "CONFIG_PACKAGE_${pkg}=y" >> .config
           done
         fi
-        
-        # 基础系统包
-        echo "CONFIG_PACKAGE_base-files=y" >> .config
-        echo "CONFIG_PACKAGE_busybox=y" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
-        echo "CONFIG_PACKAGE_dropbear=y" >> .config
-        echo "CONFIG_PACKAGE_firewall=y" >> .config
-        echo "CONFIG_PACKAGE_opkg=y" >> .config
-        
-        echo "✅ 配置生成完成"
 
-    - name: 应用配置并编译
+    - name: 最终配置确认
       run: |
         cd $BUILD_DIR
-        echo "=== 应用配置并编译 ==="
+        echo "=== 最终配置确认 ==="
         
-        # 应用配置
-        make defconfig
+        # 检查目标平台配置
+        echo "目标平台配置:"
+        grep "CONFIG_TARGET" .config | head -10
         
-        # 下载软件包
+        echo "设备配置:"
+        grep "CONFIG_TARGET_DEVICE" .config
+        
+        echo "主要包配置:"
+        grep "CONFIG_PACKAGE_luci" .config
+
+    - name: 下载依赖
+      run: |
+        cd $BUILD_DIR
+        echo "=== 下载依赖 ==="
         make -j4 download
-        
-        # 编译固件
+
+    - name: 编译固件
+      run: |
+        cd $BUILD_DIR
+        echo "=== 开始编译固件 ==="
         make -j$(nproc) V=s
 
-    - name: 验证固件生成
+    - name: 验证构建结果
       if: always()
       run: |
         cd $BUILD_DIR
-        echo "=== 固件生成验证 ==="
+        echo "=== 构建结果验证 ==="
         
         if [ -d "bin/targets" ]; then
-          echo "✅ 找到目标目录"
-          echo "生成的固件:"
-          find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) | sort
+          echo "✅ 构建成功！生成的固件:"
+          find bin/targets -name "*.bin" -o -name "*.img" | head -10
+          
+          echo "=== 固件大小 ==="
+          find bin/targets -name "*.bin" -o -name "*.img" -exec ls -lh {} \;
         else
-          echo "❌ 未找到目标目录 bin/targets"
+          echo "❌ 构建失败，未找到目标文件"
+          echo "=== 构建目录内容 ==="
+          ls -la bin/ 2>/dev/null || echo "bin目录不存在"
         fi
 
-    - name: 上传编译产物
-      if: always()
+    - name: 上传固件产物
+      if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-ac42u-${{ env.SELECTED_BRANCH }}
+        name: firmware-${{ github.event.inputs.device_name }}
         path: ${{ env.BUILD_DIR }}/bin/targets/
         retention-days: 7
 
-    - name: 上传版本信息
+    - name: 上传配置和日志
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: build-info-ac42u
+        name: build-info-${{ github.event.inputs.device_name }}
         path: |
           ${{ env.BUILD_DIR }}/.config
+          ${{ env.BUILD_DIR }}/.config.original
           ${{ env.BUILD_DIR }}/version_info.txt
-          ${{ env.BUILD_DIR }}/device_info.txt
         retention-days: 7
