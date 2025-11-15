@@ -22,7 +22,6 @@ declare -A DEVICE_MAPPING=(
     ["ac42u"]="asus_rt-ac42u"
     ["acrh17"]="asus_rt-ac42u" 
     ["rt-acrh17"]="asus_rt-ac42u"
-    ["ac2200"]="asus_rt-ac42u"
     ["ac58u"]="asus_rt-ac58u"
     ["acrh13"]="asus_rt-ac58u"
     ["rt-ac58u"]="asus_rt-ac58u"
@@ -162,13 +161,13 @@ find_device_definition() {
         log_info "检查变体: $variant"
         
         for mk_file in $mk_files; do
-            # 查找 define Device 行
+            # 查找 define Device 行 - 使用更宽松的匹配
             local device_line=$(grep -h "define Device.*$variant" "$mk_file" 2>/dev/null | head -1)
             if [ -n "$device_line" ]; then
                 log_success "在文件 $mk_file 中找到设备定义"
                 log_info "设备定义行: $device_line"
                 
-                # 提取设备名称 (define Device/后面的部分)
+                # 提取设备名称 (define Device/后面的部分) - 使用更精确的提取
                 local device_name=$(echo "$device_line" | sed -n 's/.*define Device\/\([^ )]*\).*/\1/p')
                 if [ -n "$device_name" ]; then
                     log_success "提取的设备名称: $device_name"
@@ -206,6 +205,21 @@ find_device_definition() {
             if [ -n "$device_line" ]; then
                 local device_name=$(echo "$device_line" | sed -n 's/.*define Device\/\([^ )]*\).*/\1/p')
                 log_success "通过别名推断设备名称: $device_name"
+                echo "$device_name"
+                return 0
+            fi
+        fi
+    done
+    
+    # 最后尝试直接搜索设备名称
+    log_info "尝试直接搜索设备名称..."
+    for mk_file in $mk_files; do
+        # 直接搜索设备定义块
+        if awk "/define Device\/.*$device_input/,/endef/" "$mk_file" | grep -q "define Device"; then
+            local device_line=$(awk "/define Device\/.*$device_input/,/endef/" "$mk_file" | grep "define Device" | head -1)
+            local device_name=$(echo "$device_line" | sed -n 's/.*define Device\/\([^ )]*\).*/\1/p')
+            if [ -n "$device_name" ]; then
+                log_success "通过直接搜索找到设备: $device_name"
                 echo "$device_name"
                 return 0
             fi
@@ -307,53 +321,15 @@ output_device_info() {
     local device_short_name="$2"
     local device_full_name="$3"
     
-    # 确保设备名称符合 OpenWrt 配置格式
-    local clean_device=$(echo "$device_short_name" | tr '-' '_')
-    
     # 直接输出设备信息到 stdout（供工作流捕获）
     echo "PLATFORM=$platform"
-    echo "DEVICE_SHORT_NAME=$clean_device"
+    echo "DEVICE_SHORT_NAME=$device_short_name"
     echo "DEVICE_FULL_NAME=$device_full_name"
     
     log_success "设备检测完成:"
     log_success "  平台: $platform"
-    log_success "  设备: $clean_device"
+    log_success "  设备: $device_short_name"
     log_success "  全名: $device_full_name"
-}
-
-# 手动设备设置函数
-manual_device_setup() {
-    cd $BUILD_DIR
-    echo "=== 手动设备设置 ==="
-    
-    # 使用替代配置方法
-    case "$PLATFORM" in
-        "ipq40xx")
-            echo "CONFIG_TARGET_ipq40xx=y" > .config
-            echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
-            if [ "$DEVICE_SHORT_NAME" = "asus_rt_ac42u" ] || [ "$DEVICE_SHORT_NAME" = "asus_rt-ac42u" ]; then
-                echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
-            elif [ "$DEVICE_SHORT_NAME" = "asus_rt_ac58u" ] || [ "$DEVICE_SHORT_NAME" = "asus_rt-ac58u" ]; then
-                echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-ac58u=y" >> .config
-            fi
-            ;;
-        *)
-            echo "使用通用配置"
-            ;;
-    esac
-    
-    # 基础配置
-    echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-    echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
-    
-    echo "=== 替代配置内容 ==="
-    cat .config
-    
-    # 运行 defconfig
-    make defconfig
-    
-    echo "=== 手动设置后的配置 ==="
-    grep "CONFIG_TARGET" .config
 }
 
 # 主函数
