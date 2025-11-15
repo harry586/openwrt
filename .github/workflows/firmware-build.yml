@@ -42,7 +42,7 @@ jobs:
     - name: 检出代码仓库
       uses: actions/checkout@v4
       with:
-        path: firmware-config
+        fetch-depth: 0  # 获取所有历史记录，以便查找所有分支
 
     - name: 设置编译环境
       run: |
@@ -60,32 +60,100 @@ jobs:
         git clone https://github.com/immortalwrt/immortalwrt.git .
         git checkout openwrt-23.05
 
-    - name: 检查脚本目录
+    - name: 查找设备检测脚本
       run: |
-        echo "=== 检查脚本目录 ==="
+        echo "=== 查找设备检测脚本 ==="
         echo "当前工作目录: $(pwd)"
-        echo "firmware-config 目录内容:"
-        ls -la firmware-config/ || echo "firmware-config 目录不存在"
-        echo "scripts 目录内容:"
-        ls -la firmware-config/scripts/ || echo "scripts 目录不存在"
+        echo "所有分支:"
+        git branch -a
+        
+        # 在所有分支中查找脚本文件
+        echo "在所有分支中查找 device_detection.sh..."
+        SCRIPT_FOUND=false
+        
+        # 方法1: 在当前检出内容中查找
+        if [ -f "firmware-config/scripts/device_detection.sh" ]; then
+          echo "✅ 在当前分支找到脚本: firmware-config/scripts/device_detection.sh"
+          SCRIPT_PATH="firmware-config/scripts/device_detection.sh"
+          SCRIPT_FOUND=true
+        fi
+        
+        # 方法2: 使用 git ls-tree 在所有分支中查找
+        if [ "$SCRIPT_FOUND" = "false" ]; then
+          echo "尝试在所有分支中查找..."
+          BRANCHES=$(git branch -a | grep -v HEAD | sed 's/^* //' | sed 's/^.* //')
+          for branch in $BRANCHES; do
+            SCRIPT_IN_BRANCH=$(git ls-tree -r "$branch" --name-only | grep "device_detection.sh" | head -1)
+            if [ -n "$SCRIPT_IN_BRANCH" ]; then
+              echo "✅ 在分支 $branch 中找到脚本: $SCRIPT_IN_BRANCH"
+              # 从该分支检出脚本
+              git checkout "$branch" -- "$SCRIPT_IN_BRANCH"
+              SCRIPT_PATH="$SCRIPT_IN_BRANCH"
+              SCRIPT_FOUND=true
+              break
+            fi
+          done
+        fi
+        
+        # 方法3: 使用 git grep 在所有分支中搜索
+        if [ "$SCRIPT_FOUND" = "false" ]; then
+          echo "使用 git grep 搜索..."
+          SCRIPT_SEARCH=$(git grep -l "device_detection.sh" --all 2>/dev/null | head -1)
+          if [ -n "$SCRIPT_SEARCH" ]; then
+            echo "✅ 找到包含 device_detection.sh 的文件: $SCRIPT_SEARCH"
+            # 提取脚本路径
+            SCRIPT_DIR=$(dirname "$SCRIPT_SEARCH")
+            if [ -f "$SCRIPT_SEARCH" ]; then
+              SCRIPT_PATH="$SCRIPT_SEARCH"
+              SCRIPT_FOUND=true
+            fi
+          fi
+        fi
+        
+        # 方法4: 查找所有 .sh 文件
+        if [ "$SCRIPT_FOUND" = "false" ]; then
+          echo "查找所有脚本文件..."
+          ALL_SCRIPTS=$(find . -name "*.sh" -type f 2>/dev/null | head -10)
+          if [ -n "$ALL_SCRIPTS" ]; then
+            echo "找到的脚本文件:"
+            echo "$ALL_SCRIPTS"
+            # 尝试查找包含设备检测功能的脚本
+            for script in $ALL_SCRIPTS; do
+              if grep -q "detect_device" "$script" 2>/dev/null; then
+                echo "✅ 找到设备检测脚本: $script"
+                SCRIPT_PATH="$script"
+                SCRIPT_FOUND=true
+                break
+              fi
+            done
+          fi
+        fi
+        
+        if [ "$SCRIPT_FOUND" = "true" ]; then
+          echo "SCRIPT_PATH=$SCRIPT_PATH" >> $GITHUB_ENV
+          echo "✅ 脚本查找成功: $SCRIPT_PATH"
+        else
+          echo "❌ 在所有分支中均未找到设备检测脚本"
+          echo "当前目录结构:"
+          find . -type f -name "*.sh" 2>/dev/null | head -20
+          exit 1
+        fi
 
     - name: 复制设备检测脚本
       run: |
         cd $BUILD_DIR
         echo "=== 复制设备检测脚本 ==="
-        echo "源路径: firmware-config/scripts/device_detection.sh"
+        echo "源路径: $GITHUB_WORKSPACE/$SCRIPT_PATH"
         echo "目标路径: $(pwd)/device_detection.sh"
         
         # 检查源文件是否存在
-        if [ -f "firmware-config/scripts/device_detection.sh" ]; then
+        if [ -f "$GITHUB_WORKSPACE/$SCRIPT_PATH" ]; then
           echo "✅ 找到设备检测脚本"
-          cp firmware-config/scripts/device_detection.sh .
+          cp "$GITHUB_WORKSPACE/$SCRIPT_PATH" .
           chmod +x device_detection.sh
           echo "✅ 脚本复制完成"
         else
-          echo "❌ 错误: 设备检测脚本不存在"
-          echo "尝试查找其他位置..."
-          find . -name "device_detection.sh" 2>/dev/null || echo "未找到 device_detection.sh"
+          echo "❌ 错误: 设备检测脚本不存在于 $GITHUB_WORKSPACE/$SCRIPT_PATH"
           exit 1
         fi
 
