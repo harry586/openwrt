@@ -57,13 +57,23 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential libncurses5-dev libssl-dev python3 unzip zlib1g-dev subversion gcc-multilib git curl
 
-    - name: 创建构建目录
+    - name: 创建和准备构建目录
       run: |
+        echo "=== 创建和准备构建目录 ==="
+        # 彻底删除旧目录（如果存在）
+        sudo rm -rf $BUILD_DIR
+        # 创建新目录并设置权限
         sudo mkdir -p $BUILD_DIR
         sudo chown -R $USER:$USER $BUILD_DIR
         sudo chmod -R 755 $BUILD_DIR
+        
+        # 验证目录权限
+        cd $BUILD_DIR
+        echo "当前目录: $(pwd)"
+        echo "目录权限:"
+        ls -la
         if [ $? -ne 0 ]; then
-          echo "错误: 无法创建构建目录"
+          echo "错误: 无法访问构建目录"
           exit 1
         fi
 
@@ -93,6 +103,8 @@ jobs:
         cd $BUILD_DIR
         echo "=== 智能版本检测 ==="
         
+        # 确保有写入权限
+        sudo chown -R $USER:$USER $BUILD_DIR
         chmod -R 755 $BUILD_DIR
         
         if ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "false"; then
@@ -121,15 +133,29 @@ jobs:
           exit 1
         fi
 
-    - name: 清理构建目录
+    - name: 彻底清理构建目录
       run: |
         cd $BUILD_DIR
-        echo "=== 清理构建目录 ==="
+        echo "=== 彻底清理构建目录 ==="
         echo "当前目录内容:"
         ls -la
         
-        echo "清理除脚本和配置文件外的所有内容..."
-        find . -mindepth 1 -maxdepth 1 ! -name '*.sh' ! -name 'version_info.txt' ! -name 'device_info.txt' -exec rm -rf {} + 2>/dev/null || true
+        # 检查当前目录是否是git仓库
+        if [ -d ".git" ]; then
+          echo "检测到.git目录，当前目录已经是git仓库"
+          # 如果是git仓库，回到上级目录删除整个构建目录
+          cd /
+          sudo rm -rf $BUILD_DIR
+          sudo mkdir -p $BUILD_DIR
+          sudo chown -R $USER:$USER $BUILD_DIR
+          sudo chmod -R 755 $BUILD_DIR
+          cd $BUILD_DIR
+          echo "✅ 已彻底清理并重新创建构建目录"
+        else
+          echo "目录不是git仓库，正常清理..."
+          # 清理除脚本和配置文件外的所有内容
+          find . -mindepth 1 -maxdepth 1 ! -name '*.sh' ! -name 'version_info.txt' ! -name 'device_info.txt' -exec rm -rf {} + 2>/dev/null || true
+        fi
         
         echo "清理后目录内容:"
         ls -la
@@ -148,9 +174,15 @@ jobs:
         fi
         
         echo "检查目录状态..."
+        echo "当前目录内容:"
+        ls -la
+        
+        # 确保目录为空（除了我们保留的文件）
         if [ "$(ls -A . | grep -v '\.sh$' | grep -v 'version_info.txt' | grep -v 'device_info.txt')" ]; then
-          echo "警告: 目录非空，强制清理..."
-          find . -mindepth 1 -maxdepth 1 ! -name '*.sh' ! -name 'version_info.txt' ! -name 'device_info.txt' -exec rm -rf {} + 2>/dev/null || true
+          echo "❌ 错误: 目录非空，无法克隆"
+          echo "当前文件列表:"
+          ls -la
+          exit 1
         fi
         
         echo "开始克隆仓库..."
