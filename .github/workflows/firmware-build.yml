@@ -75,15 +75,28 @@ jobs:
         echo "=== 复制配置脚本 ==="
         cd $GITHUB_WORKSPACE
         
+        # 复制版本检测脚本
         VERSION_SCRIPT=$(find . -name "complete_version_detector.sh" -type f | head -1)
         if [ -z "$VERSION_SCRIPT" ]; then
           echo "❌ 错误: 找不到 complete_version_detector.sh"
           exit 1
         fi
         
+        # 复制设备检测脚本
+        DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f | head -1)
+        if [ -z "$DEVICE_SCRIPT" ]; then
+          echo "❌ 错误: 找不到 device_detection.sh"
+          exit 1
+        fi
+        
         echo "✅ 找到版本检测脚本: $VERSION_SCRIPT"
+        echo "✅ 找到设备检测脚本: $DEVICE_SCRIPT"
+        
         cp "$VERSION_SCRIPT" $BUILD_DIR/complete_version_detector.sh
-        chmod +x $BUILD_DIR/complete_version_detector.sh
+        cp "$DEVICE_SCRIPT" $BUILD_DIR/device_detection.sh
+        
+        cd $BUILD_DIR
+        chmod +x complete_version_detector.sh device_detection.sh
         echo "✅ 脚本复制完成"
 
     - name: 智能版本检测
@@ -109,6 +122,10 @@ jobs:
             echo "✅ 环境变量已设置:"
             echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
             echo "SELECTED_BRANCH: $SELECTED_BRANCH"
+            
+            # 保存版本信息到临时变量
+            echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
+            echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
           else
             echo "❌ 未找到版本信息文件"
             exit 1
@@ -118,29 +135,16 @@ jobs:
           exit 1
         fi
 
-    - name: 保存版本信息并清理目录
+    - name: 彻底清理构建目录
       run: |
-        echo "=== 保存版本信息并清理目录 ==="
+        echo "=== 彻底清理构建目录 ==="
         
-        # 保存版本信息到临时位置
-        if [ -f "$BUILD_DIR/version_info.txt" ]; then
-          cp $BUILD_DIR/version_info.txt /tmp/version_info.txt
-          echo "✅ 版本信息已保存到临时位置"
-        fi
-        
-        # 彻底清理构建目录
-        echo "彻底清理构建目录..."
+        # 彻底清理构建目录（不保留任何文件）
         cd /
         sudo rm -rf $BUILD_DIR
         sudo mkdir -p $BUILD_DIR
         sudo chown -R $USER:$USER $BUILD_DIR
         sudo chmod -R 755 $BUILD_DIR
-        
-        # 恢复版本信息
-        if [ -f "/tmp/version_info.txt" ]; then
-          cp /tmp/version_info.txt $BUILD_DIR/version_info.txt
-          echo "✅ 版本信息已恢复"
-        fi
         
         cd $BUILD_DIR
         echo "清理后目录内容:"
@@ -163,9 +167,8 @@ jobs:
         echo "当前目录内容:"
         ls -la
         
-        # 确保目录为空（除了我们保留的version_info.txt）
-        FILE_COUNT=$(ls -A | grep -v 'version_info.txt' | wc -l)
-        if [ $FILE_COUNT -ne 0 ]; then
+        # 确保目录完全为空
+        if [ "$(ls -A .)" ]; then
           echo "❌ 错误: 目录非空，无法克隆"
           echo "当前文件列表:"
           ls -la
@@ -184,20 +187,75 @@ jobs:
           exit 1
         fi
 
-    - name: 恢复版本信息
+    - name: 重新复制设备检测脚本
       run: |
         cd $BUILD_DIR
-        echo "=== 恢复版本信息 ==="
+        echo "=== 重新复制设备检测脚本 ==="
         
-        # 如果临时文件存在，复制回来
-        if [ -f "/tmp/version_info.txt" ]; then
-          cp /tmp/version_info.txt .
-          echo "✅ 版本信息已恢复"
-          echo "版本信息文件内容:"
-          cat version_info.txt
-        else
-          echo "⚠️ 未找到临时版本信息文件"
+        # 从工作空间重新复制设备检测脚本
+        cd $GITHUB_WORKSPACE
+        DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f | head -1)
+        if [ -z "$DEVICE_SCRIPT" ]; then
+          echo "❌ 错误: 找不到 device_detection.sh"
+          exit 1
         fi
+        
+        cp "$DEVICE_SCRIPT" $BUILD_DIR/device_detection.sh
+        cd $BUILD_DIR
+        chmod +x device_detection.sh
+        echo "✅ 设备检测脚本重新复制完成"
+
+    - name: 智能设备检测
+      id: device-detection
+      run: |
+        cd $BUILD_DIR
+        echo "=== 智能设备检测 ==="
+        
+        if [ ! -f "device_detection.sh" ]; then
+          echo "❌ 错误: 设备检测脚本不存在"
+          exit 1
+        fi
+        
+        if ./device_detection.sh "${{ github.event.inputs.device_name }}"; then
+          echo "✅ 设备检测脚本执行成功"
+          
+          if [ -f "device_info.txt" ]; then
+            echo "✅ 找到设备信息文件"
+            echo "=== device_info.txt 内容 ==="
+            cat device_info.txt
+            
+            PLATFORM=$(grep '^PLATFORM=' device_info.txt | cut -d'=' -f2)
+            DEVICE_SHORT_NAME=$(grep '^DEVICE_SHORT_NAME=' device_info.txt | cut -d'=' -f2)
+            DEVICE_FULL_NAME=$(grep '^DEVICE_FULL_NAME=' device_info.txt | cut -d'=' -f2)
+            
+            echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
+            echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
+            echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
+            
+            echo "✅ 设备环境变量已设置:"
+            echo "PLATFORM: $PLATFORM"
+            echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
+            echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
+          else
+            echo "❌ 未找到设备信息文件"
+            exit 1
+          fi
+        else
+          echo "❌ 设备检测失败"
+          exit 1
+        fi
+
+    - name: 重新生成版本信息文件
+      run: |
+        cd $BUILD_DIR
+        echo "=== 重新生成版本信息文件 ==="
+        
+        # 从环境变量重新生成版本信息文件
+        echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" > version_info.txt
+        echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> version_info.txt
+        echo "✅ 版本信息文件重新生成"
+        echo "版本信息文件内容:"
+        cat version_info.txt
 
     - name: 更新和安装feeds
       run: |
@@ -227,21 +285,34 @@ jobs:
         cd $BUILD_DIR
         echo "=== 配置目标设备 ==="
         
-        # 根据设备名称配置目标平台
-        case "${{ github.event.inputs.device_name }}" in
-          "ac42u"|"rt-acrh17")
-            echo "配置 RT-ACRH17 设备"
-            # 设置目标平台为 ipq40xx
-            sed -i 's/CONFIG_TARGET_[a-zA-Z0-9]*=y/# &/' .config
-            echo "CONFIG_TARGET_ipq40xx=y" >> .config
-            echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
-            echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-acrh17=y" >> .config
-            ;;
-          *)
-            echo "❌ 不支持的设备: ${{ github.event.inputs.device_name }}"
-            exit 1
-            ;;
-        esac
+        # 根据设备检测结果配置目标平台
+        if [ -n "$PLATFORM" ] && [ -n "$DEVICE_SHORT_NAME" ]; then
+          echo "使用设备检测结果配置"
+          echo "平台: $PLATFORM"
+          echo "设备: $DEVICE_SHORT_NAME"
+          
+          # 设置目标平台
+          sed -i 's/CONFIG_TARGET_[a-zA-Z0-9]*=y/# &/' .config
+          echo "CONFIG_TARGET_${PLATFORM}=y" >> .config
+          echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
+          echo "CONFIG_TARGET_DEVICE_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" >> .config
+        else
+          echo "使用默认设备配置"
+          case "${{ github.event.inputs.device_name }}" in
+            "ac42u"|"rt-acrh17")
+              echo "配置 RT-ACRH17 设备"
+              # 设置目标平台为 ipq40xx
+              sed -i 's/CONFIG_TARGET_[a-zA-Z0-9]*=y/# &/' .config
+              echo "CONFIG_TARGET_ipq40xx=y" >> .config
+              echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+              echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-acrh17=y" >> .config
+              ;;
+            *)
+              echo "❌ 不支持的设备: ${{ github.event.inputs.device_name }}"
+              exit 1
+              ;;
+          esac
+        fi
 
     - name: 应用配置模板
       run: |
@@ -353,4 +424,5 @@ jobs:
           ${{ env.BUILD_DIR }}/.config
           ${{ env.BUILD_DIR }}/.config.original
           ${{ env.BUILD_DIR }}/version_info.txt
+          ${{ env.BUILD_DIR }}/device_info.txt
         retention-days: 7
