@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# OpenWrt 智能版本检测脚本 - 宽松版
-# 如果无法自动检测，提供合理的默认值
+# OpenWrt 版本检测脚本 - 简化版
+# 主要确保能够找到支持设备的版本
 
 set -e
 
@@ -18,23 +18,13 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# 设备到版本的映射
-declare -A DEVICE_MAPPING=(
-    ["ac42u"]="immortalwrt:master"
-    ["acrh17"]="immortalwrt:master" 
-    ["rt-acrh17"]="immortalwrt:master"
-    ["xiaomi_redmi-ax6s"]="immortalwrt:master"
-    ["wr841n"]="openwrt:22.03"
-    ["mi3g"]="immortalwrt:openwrt-21.02"
-)
-
-# 主检测函数 - 宽松版
+# 主检测函数
 detect_best_version() {
     local device_name="$1"
     local user_specified_version="$2"
     local is_old_device="$3"
     
-    echo "=== OpenWrt 智能版本检测 ==="
+    echo "=== OpenWrt 版本检测 ==="
     echo "目标设备: $device_name"
     echo "老旧设备模式: $is_old_device"
     
@@ -45,39 +35,91 @@ detect_best_version() {
         return 0
     fi
     
-    # 检查设备映射
-    if [ -n "${DEVICE_MAPPING[$device_name]}" ]; then
-        log_info "使用预定义的设备映射"
-        parse_version_spec "${DEVICE_MAPPING[$device_name]}"
+    log_info "开始版本检测..."
+    
+    # 尝试 immortalwrt 的常用分支
+    if try_branch "immortalwrt" "https://github.com/immortalwrt/immortalwrt.git" "master" "$device_name"; then
         return 0
     fi
     
-    # 尝试自动检测
-    log_info "开始自动版本检测..."
-    
-    # 首先尝试 immortalwrt
-    if try_repository "immortalwrt" "https://github.com/immortalwrt/immortalwrt.git" "$device_name" "$is_old_device"; then
+    if try_branch "immortalwrt" "https://github.com/immortalwrt/immortalwrt.git" "openwrt-23.05" "$device_name"; then
         return 0
     fi
     
-    # 然后尝试 openwrt
-    if try_repository "openwrt" "https://git.openwrt.org/openwrt/openwrt.git" "$device_name" "$is_old_device"; then
+    if try_branch "immortalwrt" "https://github.com/immortalwrt/immortalwrt.git" "openwrt-22.03" "$device_name"; then
         return 0
     fi
     
-    # 如果自动检测失败，使用合理的默认值
-    log_warning "自动检测失败，使用默认版本"
-    if [ "$is_old_device" = "true" ]; then
-        export SELECTED_REPO="openwrt"
-        export SELECTED_BRANCH="22.03"
-        export SELECTED_REPO_URL="https://git.openwrt.org/openwrt/openwrt.git"
-    else
-        export SELECTED_REPO="immortalwrt"
-        export SELECTED_BRANCH="master"
-        export SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+    # 尝试 openwrt 的常用分支
+    if try_branch "openwrt" "https://git.openwrt.org/openwrt/openwrt.git" "main" "$device_name"; then
+        return 0
     fi
     
+    if try_branch "openwrt" "https://git.openwrt.org/openwrt/openwrt.git" "openwrt-23.05" "$device_name"; then
+        return 0
+    fi
+    
+    # 如果所有检测都失败，使用默认值
+    log_warning "所有版本检测失败，使用默认版本: immortalwrt master"
+    export SELECTED_REPO="immortalwrt"
+    export SELECTED_BRANCH="master"
+    export SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
     return 0
+}
+
+# 尝试特定分支
+try_branch() {
+    local repo="$1"
+    local repo_url="$2"
+    local branch="$3"
+    local device_name="$4"
+    
+    log_info "测试 $repo:$branch"
+    
+    if check_branch_support "$repo_url" "$branch" "$device_name"; then
+        export SELECTED_REPO="$repo"
+        export SELECTED_BRANCH="$branch"
+        export SELECTED_REPO_URL="$repo_url"
+        log_success "✅ 版本 $branch 支持设备 $device_name"
+        return 0
+    else
+        log_warning "❌ 版本 $branch 不支持设备 $device_name"
+        return 1
+    fi
+}
+
+# 检查分支支持 - 简化版
+check_branch_support() {
+    local repo_url="$1"
+    local branch="$2"
+    local device_name="$3"
+    
+    local temp_dir=$(mktemp -d)
+    cd "$temp_dir"
+    
+    # 尝试克隆
+    if ! git clone --depth 1 --branch "$branch" "$repo_url" . 2>/dev/null; then
+        log_warning "无法克隆 $repo_url $branch"
+        cd /
+        rm -rf "$temp_dir"
+        return 1
+    fi
+    
+    log_info "✅ 成功克隆 $branch"
+    
+    # 简化的设备支持检查：只要找到设备相关文件就认为支持
+    local device_files=$(find target/linux -name "*$device_name*" -type f 2>/dev/null | head -3)
+    if [ -n "$device_files" ]; then
+        log_success "✅ 找到设备相关文件"
+        cd /
+        rm -rf "$temp_dir"
+        return 0
+    fi
+    
+    log_warning "❌ 未找到设备相关文件"
+    cd /
+    rm -rf "$temp_dir"
+    return 1
 }
 
 # 解析版本规格
@@ -110,120 +152,13 @@ parse_version_spec() {
     return 0
 }
 
-# 尝试检测仓库支持
-try_repository() {
-    local repo="$1"
-    local repo_url="$2"
-    local device_name="$3"
-    local is_old_device="$4"
-    
-    log_info "尝试仓库: $repo"
-    
-    # 测试常用分支
-    local branches=()
-    if [ "$is_old_device" = "true" ]; then
-        branches=("openwrt-22.03" "openwrt-21.02" "openwrt-19.07" "master")
-    else
-        branches=("master" "openwrt-23.05" "openwrt-22.03" "main")
-    fi
-    
-    # 根据仓库调整分支名称
-    if [ "$repo" = "openwrt" ]; then
-        # 将 immortalwrt 分支名映射到 openwrt
-        for i in "${!branches[@]}"; do
-            if [ "${branches[i]}" = "master" ]; then
-                branches[i]="main"
-            fi
-        done
-    fi
-    
-    for branch in "${branches[@]}"; do
-        log_info "测试分支: $branch"
-        if check_branch_support "$repo_url" "$branch" "$device_name"; then
-            export SELECTED_REPO="$repo"
-            export SELECTED_BRANCH="$branch"
-            export SELECTED_REPO_URL="$repo_url"
-            log_success "✅ 找到支持的版本: $repo:$branch"
-            return 0
-        fi
-    done
-    
-    log_warning "❌ 仓库 $repo 中没有找到支持的版本"
-    return 1
-}
-
-# 检查分支支持 - 简化版
-check_branch_support() {
-    local repo_url="$1"
-    local branch="$2"
-    local device_name="$3"
-    
-    local temp_dir=$(mktemp -d)
-    cd "$temp_dir"
-    
-    # 尝试克隆
-    if ! git clone --depth 1 --branch "$branch" "$repo_url" . 2>/dev/null; then
-        log_warning "无法克隆 $repo_url $branch"
-        cd /
-        rm -rf "$temp_dir"
-        return 1
-    fi
-    
-    log_info "✅ 成功克隆 $branch"
-    
-    # 简化的设备支持检查
-    # 1. 检查设备树文件
-    local dts_files=$(find target/linux -name "*$device_name*" -type f 2>/dev/null | head -3)
-    if [ -n "$dts_files" ]; then
-        log_success "✅ 找到设备相关文件"
-        cd /
-        rm -rf "$temp_dir"
-        return 0
-    fi
-    
-    # 2. 检查目标配置文件
-    local target_files=$(find target/linux -name "target.mk" -o -name "*.mk" 2>/dev/null | head -5)
-    for target_file in $target_files; do
-        if grep -q -i "$device_name" "$target_file" 2>/dev/null; then
-            log_success "✅ 在配置文件中找到设备"
-            cd /
-            rm -rf "$temp_dir"
-            return 0
-        fi
-    done
-    
-    # 3. 检查设备定义
-    local device_variants=(
-        "$device_name"
-        "rt-$device_name"
-        "asus_$device_name"
-        "asus_rt-$device_name"
-        $(echo "$device_name" | sed 's/acrh17/acrh17/')
-        $(echo "$device_name" | sed 's/ac42u/ac42u/')
-    )
-    
-    for variant in "${device_variants[@]}"; do
-        if find target/linux -type f -name "*.mk" -exec grep -l "define Device.*$variant" {} \; 2>/dev/null | head -1; then
-            log_success "✅ 找到设备定义: $variant"
-            cd /
-            rm -rf "$temp_dir"
-            return 0
-        fi
-    done
-    
-    log_warning "❌ 分支 $branch 不支持设备 $device_name"
-    cd /
-    rm -rf "$temp_dir"
-    return 1
-}
-
 # 安全写入版本信息
 safe_write_version_info() {
     local output_file="version_info.txt"
     
     echo "=== 安全写入版本信息 ==="
     
-    # 直接写入当前目录，依赖工作流中的权限修复
+    # 直接写入当前目录
     {
         echo "SELECTED_REPO=$SELECTED_REPO"
         echo "SELECTED_BRANCH=$SELECTED_BRANCH"
@@ -249,15 +184,13 @@ main() {
         echo "用法: $0 <设备名称> [版本规格] [是否老旧设备]"
         echo ""
         echo "参数说明:"
-        echo "  设备名称: 如 ac42u, acrh17, rt-acrh17, wr841n, mi3g"
+        echo "  设备名称: 如 ac42u, acrh17, rt-acrh17"
         echo "  版本规格: (可选) 如 openwrt-23.05 或 immortalwrt:master"
         echo "  是否老旧设备: (可选) true 或 false，默认为 false"
         echo ""
         echo "示例:"
         echo "  $0 ac42u"
         echo "  $0 acrh17"
-        echo "  $0 rt-acrh17"
-        echo "  $0 wr841n \"\" true"
         exit 1
     fi
     
