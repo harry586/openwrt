@@ -103,8 +103,8 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 清理构建目录 ==="
-        # 完全清空构建目录，确保可以克隆
-        find . -mindepth 1 -maxdepth 1 ! -name '*.sh' -exec rm -rf {} + 2>/dev/null || true
+        # 完全清空构建目录
+        find . -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
         echo "✅ 构建目录已清理"
 
     - name: 智能版本检测
@@ -113,8 +113,12 @@ jobs:
         cd $BUILD_DIR
         echo "=== 智能版本检测 ==="
         
+        # 创建临时目录用于版本检测
+        mkdir -p temp_version_check
+        cd temp_version_check
+        
         # 运行完整版本检测器
-        if ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}"; then
+        if ../complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}"; then
           echo "✅ 版本检测脚本执行成功"
           
           # 检查版本信息文件
@@ -140,7 +144,7 @@ jobs:
             echo "⚠️ 未找到版本信息文件，从脚本输出解析"
             # 重新运行脚本并捕获输出
             OUTPUT_FILE="version_output.txt"
-            ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}" > "$OUTPUT_FILE" 2>&1 || true
+            ../complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}" > "$OUTPUT_FILE" 2>&1 || true
             
             # 从输出中解析版本信息
             SELECTED_REPO=$(grep "推荐仓库:" "$OUTPUT_FILE" | awk '{print $2}')
@@ -167,6 +171,10 @@ jobs:
           echo "❌ 版本检测失败"
           exit 1
         fi
+        
+        # 清理临时目录
+        cd ..
+        rm -rf temp_version_check
 
     - name: 克隆选定版本的源码
       run: |
@@ -182,9 +190,12 @@ jobs:
           exit 1
         fi
         
-        # 再次确保目录是空的
-        echo "确保构建目录为空..."
-        find . -mindepth 1 -maxdepth 1 ! -name '*.sh' -exec rm -rf {} + 2>/dev/null || true
+        # 确保目录是空的
+        echo "检查构建目录状态..."
+        if [ "$(ls -A .)" ]; then
+          echo "⚠️ 构建目录不为空，正在清理..."
+          find . -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+        fi
         
         echo "开始克隆仓库..."
         git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .
