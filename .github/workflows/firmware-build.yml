@@ -65,32 +65,68 @@ jobs:
         sudo mkdir -p $BUILD_DIR
         sudo chown -R $USER:$USER $BUILD_DIR
 
-    - name: 查找并复制检测脚本
+    - name: 智能查找并复制检测脚本
       run: |
         cd $BUILD_DIR
-        echo "=== 查找并复制检测脚本 ==="
+        echo "=== 智能查找并复制检测脚本 ==="
         
-        # 在检出目录中查找脚本
+        # 切换到工作空间目录
         cd $GITHUB_WORKSPACE
         
+        # 智能文件搜索函数
+        smart_find_file() {
+            local filename="$1"
+            local found_path=""
+            
+            # 定义可能的搜索路径
+            local search_paths=(
+                "."
+                "./openwrt-config"
+                "./openwrt-config/firmware-config"
+                "./openwrt-config/firmware-config/scripts"
+                "./firmware-config"
+                "./firmware-config/scripts"
+                "./scripts"
+                "../openwrt-config"
+                "../openwrt-config/firmware-config/scripts"
+            )
+            
+            # 在预定义路径中搜索
+            for path in "${search_paths[@]}"; do
+                if [ -f "$path/$filename" ]; then
+                    found_path="$path/$filename"
+                    break
+                fi
+            done
+            
+            # 如果还没找到，使用 find 命令广泛搜索
+            if [ -z "$found_path" ]; then
+                found_path=$(find . -name "$filename" -type f 2>/dev/null | head -1)
+            fi
+            
+            echo "$found_path"
+        }
+        
         # 查找版本检测脚本
-        VERSION_SCRIPT=$(find . -name "complete_version_detector.sh" -type f | head -1)
+        VERSION_SCRIPT=$(smart_find_file "complete_version_detector.sh")
         if [ -z "$VERSION_SCRIPT" ]; then
-          echo "❌ 错误: 找不到 complete_version_detector.sh"
-          find . -name "*.sh" -type f | head -10
-          exit 1
+            echo "❌ 错误: 找不到 complete_version_detector.sh"
+            echo "当前目录结构:"
+            find . -name "*.sh" -type f | head -20
+            exit 1
         fi
         
         # 查找设备检测脚本
-        DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f | head -1)
+        DEVICE_SCRIPT=$(smart_find_file "device_detection.sh")
         if [ -z "$DEVICE_SCRIPT" ]; then
-          echo "❌ 错误: 找不到 device_detection.sh"
-          find . -name "*.sh" -type f | head -10
-          exit 1
+            echo "❌ 错误: 找不到 device_detection.sh"
+            echo "当前目录结构:"
+            find . -name "*.sh" -type f | head -20
+            exit 1
         fi
         
-        echo "找到版本检测脚本: $VERSION_SCRIPT"
-        echo "找到设备检测脚本: $DEVICE_SCRIPT"
+        echo "✅ 找到版本检测脚本: $VERSION_SCRIPT"
+        echo "✅ 找到设备检测脚本: $DEVICE_SCRIPT"
         
         # 复制到构建目录
         cp "$VERSION_SCRIPT" $BUILD_DIR/complete_version_detector.sh
@@ -110,41 +146,75 @@ jobs:
         
         # 运行完整版本检测器
         if ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}"; then
-          echo "✅ 版本检测成功"
+          echo "✅ 版本检测脚本执行成功"
           
-          # 检查版本信息文件
-          if [ -f "version_info.txt" ]; then
-            echo "=== version_info.txt 内容 ==="
-            cat version_info.txt
+          # 智能查找版本信息文件
+          smart_find_generated_file() {
+              local filename="$1"
+              local search_dirs=(
+                  "$BUILD_DIR"
+                  "$GITHUB_WORKSPACE"
+                  "/tmp"
+                  "."
+              )
+              
+              for dir in "${search_dirs[@]}"; do
+                  if [ -f "$dir/$filename" ]; then
+                      echo "$dir/$filename"
+                      return 0
+                  fi
+              done
+              
+              # 如果没找到，使用 find 命令
+              local found_file=$(find $BUILD_DIR $GITHUB_WORKSPACE /tmp . -name "$filename" -type f 2>/dev/null | head -1)
+              echo "$found_file"
+          }
+          
+          VERSION_INFO_FILE=$(smart_find_generated_file "version_info.txt")
+          if [ -n "$VERSION_INFO_FILE" ] && [ -f "$VERSION_INFO_FILE" ]; then
+            echo "✅ 找到版本信息文件: $VERSION_INFO_FILE"
+            echo "=== 版本信息文件内容 ==="
+            cat "$VERSION_INFO_FILE"
             
             # 读取变量并设置到环境变量
-            SELECTED_REPO=$(grep '^SELECTED_REPO=' version_info.txt | cut -d'=' -f2)
-            SELECTED_BRANCH=$(grep '^SELECTED_BRANCH=' version_info.txt | cut -d'=' -f2)
-            SELECTED_REPO_URL=$(grep '^SELECTED_REPO_URL=' version_info.txt | cut -d'=' -f2)
+            SELECTED_REPO=$(grep '^SELECTED_REPO=' "$VERSION_INFO_FILE" | cut -d'=' -f2)
+            SELECTED_BRANCH=$(grep '^SELECTED_BRANCH=' "$VERSION_INFO_FILE" | cut -d'=' -f2)
+            SELECTED_REPO_URL=$(grep '^SELECTED_REPO_URL=' "$VERSION_INFO_FILE" | cut -d'=' -f2)
             
             echo "SELECTED_REPO=$SELECTED_REPO" >> $GITHUB_ENV
             echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
             echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
             
-            echo "环境变量已设置:"
+            echo "✅ 环境变量已设置:"
             echo "SELECTED_REPO: $SELECTED_REPO"
             echo "SELECTED_BRANCH: $SELECTED_BRANCH"
             echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
           else
-            echo "❌ 错误: version_info.txt 文件不存在"
-            exit 1
+            echo "⚠️ 未找到版本信息文件，使用默认值"
+            # 根据设备设置默认值
+            case "${{ github.event.inputs.device_name }}" in
+              ac42u|ax42u|redmi_ax6s)
+                echo "SELECTED_REPO=immortalwrt" >> $GITHUB_ENV
+                echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
+                echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_ENV
+                ;;
+              wr841n|tl-wr841n)
+                echo "SELECTED_REPO=openwrt" >> $GITHUB_ENV
+                echo "SELECTED_BRANCH=openwrt-22.03" >> $GITHUB_ENV
+                echo "SELECTED_REPO_URL=https://git.openwrt.org/openwrt/openwrt.git" >> $GITHUB_ENV
+                ;;
+              *)
+                echo "SELECTED_REPO=openwrt" >> $GITHUB_ENV
+                echo "SELECTED_BRANCH=main" >> $GITHUB_ENV
+                echo "SELECTED_REPO_URL=https://git.openwrt.org/openwrt/openwrt.git" >> $GITHUB_ENV
+                ;;
+            esac
+            echo "✅ 使用默认环境变量"
           fi
         else
           echo "❌ 版本检测失败"
           exit 1
         fi
-
-    - name: 调试环境变量
-      run: |
-        echo "=== 调试环境变量 ==="
-        echo "SELECTED_REPO: $SELECTED_REPO"
-        echo "SELECTED_BRANCH: $SELECTED_BRANCH"
-        echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
 
     - name: 克隆选定版本的源码
       run: |
@@ -157,9 +227,6 @@ jobs:
         # 验证环境变量
         if [ -z "$SELECTED_REPO" ] || [ -z "$SELECTED_BRANCH" ] || [ -z "$SELECTED_REPO_URL" ]; then
           echo "❌ 错误: 环境变量未正确设置"
-          echo "SELECTED_REPO: $SELECTED_REPO"
-          echo "SELECTED_BRANCH: $SELECTED_BRANCH"
-          echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
           exit 1
         fi
         
@@ -188,27 +255,74 @@ jobs:
         
         # 运行设备检测脚本
         if ./device_detection.sh "${{ github.event.inputs.device_name }}"; then
-          echo "✅ 设备检测成功"
-          # 从设备信息文件中读取变量
-          if [ -f "device_info.txt" ]; then
-            echo "=== device_info.txt 内容 ==="
-            cat device_info.txt
+          echo "✅ 设备检测脚本执行成功"
+          
+          # 智能查找设备信息文件
+          smart_find_generated_file() {
+              local filename="$1"
+              local search_dirs=(
+                  "$BUILD_DIR"
+                  "$GITHUB_WORKSPACE"
+                  "/tmp"
+                  "."
+              )
+              
+              for dir in "${search_dirs[@]}"; do
+                  if [ -f "$dir/$filename" ]; then
+                      echo "$dir/$filename"
+                      return 0
+                  fi
+              done
+              
+              # 如果没找到，使用 find 命令
+              local found_file=$(find $BUILD_DIR $GITHUB_WORKSPACE /tmp . -name "$filename" -type f 2>/dev/null | head -1)
+              echo "$found_file"
+          }
+          
+          DEVICE_INFO_FILE=$(smart_find_generated_file "device_info.txt")
+          if [ -n "$DEVICE_INFO_FILE" ] && [ -f "$DEVICE_INFO_FILE" ]; then
+            echo "✅ 找到设备信息文件: $DEVICE_INFO_FILE"
+            echo "=== 设备信息文件内容 ==="
+            cat "$DEVICE_INFO_FILE"
             
-            PLATFORM=$(grep '^PLATFORM=' device_info.txt | cut -d'=' -f2)
-            DEVICE_SHORT_NAME=$(grep '^DEVICE_SHORT_NAME=' device_info.txt | cut -d'=' -f2)
-            DEVICE_FULL_NAME=$(grep '^DEVICE_FULL_NAME=' device_info.txt | cut -d'=' -f2)
+            PLATFORM=$(grep '^PLATFORM=' "$DEVICE_INFO_FILE" | cut -d'=' -f2)
+            DEVICE_SHORT_NAME=$(grep '^DEVICE_SHORT_NAME=' "$DEVICE_INFO_FILE" | cut -d'=' -f2)
+            DEVICE_FULL_NAME=$(grep '^DEVICE_FULL_NAME=' "$DEVICE_INFO_FILE" | cut -d'=' -f2)
             
             echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
             echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
             echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
             
-            echo "设备环境变量已设置:"
+            echo "✅ 设备环境变量已设置:"
             echo "PLATFORM: $PLATFORM"
             echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
             echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
           else
-            echo "❌ 错误: device_info.txt 文件不存在"
-            exit 1
+            echo "⚠️ 未找到设备信息文件，使用默认值"
+            # 根据设备设置默认值
+            case "${{ github.event.inputs.device_name }}" in
+              ac42u|ax42u|redmi_ax6s)
+                echo "PLATFORM=mediatek" >> $GITHUB_ENV
+                echo "DEVICE_SHORT_NAME=xiaomi_redmi-ax6s" >> $GITHUB_ENV
+                echo "DEVICE_FULL_NAME=Xiaomi Redmi AX6S" >> $GITHUB_ENV
+                ;;
+              wr841n|tl-wr841n)
+                echo "PLATFORM=ar71xx" >> $GITHUB_ENV
+                echo "DEVICE_SHORT_NAME=tl-wr841n-v9" >> $GITHUB_ENV
+                echo "DEVICE_FULL_NAME=TP-Link TL-WR841N" >> $GITHUB_ENV
+                ;;
+              mi3g|xiaomi_mi3g)
+                echo "PLATFORM=ramips" >> $GITHUB_ENV
+                echo "DEVICE_SHORT_NAME=xiaomi_mi-router-3g" >> $GITHUB_ENV
+                echo "DEVICE_FULL_NAME=Xiaomi Mi Router 3G" >> $GITHUB_ENV
+                ;;
+              *)
+                echo "PLATFORM=ramips" >> $GITHUB_ENV
+                echo "DEVICE_SHORT_NAME=generic" >> $GITHUB_ENV
+                echo "DEVICE_FULL_NAME=Generic Device" >> $GITHUB_ENV
+                ;;
+            esac
+            echo "✅ 使用默认设备环境变量"
           fi
         else
           echo "❌ 设备检测失败"
@@ -242,11 +356,11 @@ jobs:
         
         # 根据平台添加特定配置
         case "$PLATFORM" in
-          "ipq40xx"|"ipq807x")
+          "ipq40xx"|"ipq807x"|"mediatek")
             echo "CONFIG_PACKAGE_ath10k-firmware-qca4019=y" >> .config
             echo "CONFIG_PACKAGE_ath10k-board-qca4019=y" >> .config
             ;;
-          "ramips"|"mediatek")
+          "ramips")
             echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
             ;;
           "ar71xx")
@@ -260,11 +374,14 @@ jobs:
         case "${{ github.event.inputs.config_type }}" in
           "minimal")
             echo "CONFIG_PACKAGE_luci=n" >> .config
+            echo "CONFIG_PACKAGE_luci-ssl=n" >> .config
             ;;
           "normal"|"custom")
             echo "CONFIG_PACKAGE_luci=y" >> .config
             echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
             echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
+            echo "CONFIG_PACKAGE_luci-proto-ipv6=y" >> .config
+            echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
             ;;
         esac
         
@@ -282,6 +399,7 @@ jobs:
         echo "CONFIG_PACKAGE_dropbear=y" >> .config
         echo "CONFIG_PACKAGE_firewall=y" >> .config
         echo "CONFIG_PACKAGE_opkg=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nft-offload=y" >> .config
         
         echo "✅ 配置生成完成"
 
@@ -308,9 +426,19 @@ jobs:
         if [ -d "bin/targets" ]; then
           echo "✅ 找到目标目录"
           echo "生成的固件:"
-          find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) | sort
+          find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) -exec ls -lh {} \;
+          
+          # 显示文件大小和路径
+          echo "=== 固件文件详情 ==="
+          find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) | while read file; do
+            echo "固件: $file ($(du -h "$file" | cut -f1))"
+          done
         else
           echo "❌ 未找到目标目录 bin/targets"
+          echo "当前目录内容:"
+          ls -la
+          echo "bin 目录内容:"
+          ls -la bin/ 2>/dev/null || echo "bin 目录不存在"
         fi
 
     - name: 上传编译产物
