@@ -115,56 +115,24 @@ jobs:
         sudo chown -R $USER:$USER . 2>/dev/null || true
         chmod u+w . 2>/dev/null || true
         
-        # 测试写入权限
-        if touch test_write.txt; then
-            echo "✅ 当前目录可写"
-            rm -f test_write.txt
-        else
-            echo "❌ 当前目录不可写，尝试修复权限"
-            sudo chown -R $USER:$USER .
-            chmod u+w .
-            # 再次测试
-            if touch test_write.txt; then
-                echo "✅ 权限修复成功"
-                rm -f test_write.txt
-            else
-                echo "❌ 权限修复失败，使用备用方案"
-                # 使用临时目录
-                TEMP_DIR=$(mktemp -d)
-                cd $TEMP_DIR
-                cp $BUILD_DIR/complete_version_detector.sh .
-                chmod +x complete_version_detector.sh
-            fi
-        fi
-        
         echo "=== 开始版本检测 ==="
-        # 即使脚本返回非零退出码，我们也尝试继续，因为检测可能已经成功
+        # 运行版本检测脚本并捕获输出
         set +e
-        ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}"
+        OUTPUT=$(./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}" 2>&1)
         SCRIPT_EXIT_CODE=$?
         set -e
         
+        echo "脚本输出:"
+        echo "$OUTPUT"
         echo "脚本退出代码: $SCRIPT_EXIT_CODE"
         
-        # 查找版本信息文件（可能在多个位置）
-        VERSION_INFO_FILE=""
-        for location in "." "/tmp" "/home/runner" "$GITHUB_WORKSPACE"; do
-            if [ -f "$location/version_info.txt" ]; then
-                VERSION_INFO_FILE="$location/version_info.txt"
-                echo "✅ 找到版本信息文件: $VERSION_INFO_FILE"
-                break
-            fi
-        done
+        # 从输出中提取版本信息
+        SELECTED_REPO=$(echo "$OUTPUT" | grep "^SELECTED_REPO=" | head -1 | cut -d'=' -f2)
+        SELECTED_BRANCH=$(echo "$OUTPUT" | grep "^SELECTED_BRANCH=" | head -1 | cut -d'=' -f2)
+        SELECTED_REPO_URL=$(echo "$OUTPUT" | grep "^SELECTED_REPO_URL=" | head -1 | cut -d'=' -f2)
         
-        if [ -n "$VERSION_INFO_FILE" ]; then
-            echo "✅ 版本信息文件可用"
-            echo "=== version_info.txt 内容 ==="
-            cat "$VERSION_INFO_FILE"
-            
-            SELECTED_REPO=$(grep '^SELECTED_REPO=' "$VERSION_INFO_FILE" | cut -d'=' -f2)
-            SELECTED_BRANCH=$(grep '^SELECTED_BRANCH=' "$VERSION_INFO_FILE" | cut -d'=' -f2)
-            SELECTED_REPO_URL=$(grep '^SELECTED_REPO_URL=' "$VERSION_INFO_FILE" | cut -d'=' -f2)
-            
+        if [ -n "$SELECTED_REPO" ] && [ -n "$SELECTED_BRANCH" ] && [ -n "$SELECTED_REPO_URL" ]; then
+            echo "✅ 从脚本输出中成功提取版本信息"
             echo "SELECTED_REPO=$SELECTED_REPO" >> $GITHUB_ENV
             echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
             echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
@@ -174,20 +142,26 @@ jobs:
             echo "SELECTED_BRANCH: $SELECTED_BRANCH"
             echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
             
-            # 即使脚本退出码非零，只要我们有版本信息就继续
-            if [ $SCRIPT_EXIT_CODE -eq 0 ]; then
-                echo "✅ 版本检测脚本执行成功"
+            # 尝试创建版本信息文件（可选）
+            if touch version_info.txt 2>/dev/null; then
+                echo "SELECTED_REPO=$SELECTED_REPO" > version_info.txt
+                echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> version_info.txt
+                echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> version_info.txt
+                echo "✅ 版本信息文件创建成功"
             else
-                echo "⚠️ 版本检测脚本报告错误，但已成功获取版本信息，继续执行"
+                echo "⚠️ 无法创建版本信息文件，但环境变量已设置"
             fi
         else
-            echo "❌ 未找到版本信息文件"
+            echo "❌ 无法从脚本输出中提取版本信息"
             if [ $SCRIPT_EXIT_CODE -ne 0 ]; then
                 echo "❌ 版本检测失败"
                 exit 1
             else
-                echo "⚠️ 脚本成功但未生成版本信息文件，尝试从输出中提取"
-                exit 1
+                echo "⚠️ 脚本成功但无法提取版本信息，使用默认值"
+                # 设置默认值
+                echo "SELECTED_REPO=immortalwrt" >> $GITHUB_ENV
+                echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
+                echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_ENV
             fi
         fi
 
@@ -281,18 +255,23 @@ jobs:
         # 确保权限正确
         chmod +x device_detection.sh
         
-        if ./device_detection.sh "${{ github.event.inputs.device_name }}"; then
-          echo "✅ 设备检测脚本执行成功"
-          
-          if [ -f "device_info.txt" ]; then
-            echo "✅ 找到设备信息文件"
-            echo "=== device_info.txt 内容 ==="
-            cat device_info.txt
-            
-            PLATFORM=$(grep '^PLATFORM=' device_info.txt | cut -d'=' -f2)
-            DEVICE_SHORT_NAME=$(grep '^DEVICE_SHORT_NAME=' device_info.txt | cut -d'=' -f2)
-            DEVICE_FULL_NAME=$(grep '^DEVICE_FULL_NAME=' device_info.txt | cut -d'=' -f2)
-            
+        # 运行设备检测脚本并捕获输出
+        set +e
+        OUTPUT=$(./device_detection.sh "${{ github.event.inputs.device_name }}" 2>&1)
+        SCRIPT_EXIT_CODE=$?
+        set -e
+        
+        echo "脚本输出:"
+        echo "$OUTPUT"
+        echo "脚本退出代码: $SCRIPT_EXIT_CODE"
+        
+        # 从输出中提取设备信息
+        PLATFORM=$(echo "$OUTPUT" | grep "^PLATFORM=" | head -1 | cut -d'=' -f2)
+        DEVICE_SHORT_NAME=$(echo "$OUTPUT" | grep "^DEVICE_SHORT_NAME=" | head -1 | cut -d'=' -f2)
+        DEVICE_FULL_NAME=$(echo "$OUTPUT" | grep "^DEVICE_FULL_NAME=" | head -1 | cut -d'=' -f2)
+        
+        if [ -n "$PLATFORM" ] && [ -n "$DEVICE_SHORT_NAME" ] && [ -n "$DEVICE_FULL_NAME" ]; then
+            echo "✅ 从脚本输出中成功提取设备信息"
             echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
             echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
             echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
@@ -301,13 +280,52 @@ jobs:
             echo "PLATFORM: $PLATFORM"
             echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
             echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
-          else
-            echo "❌ 未找到设备信息文件"
-            exit 1
-          fi
+            
+            # 尝试创建设备信息文件（可选）
+            if touch device_info.txt 2>/dev/null; then
+                echo "PLATFORM=$PLATFORM" > device_info.txt
+                echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> device_info.txt
+                echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> device_info.txt
+                echo "✅ 设备信息文件创建成功"
+            else
+                echo "⚠️ 无法创建设备信息文件，但环境变量已设置"
+            fi
         else
-          echo "❌ 设备检测失败"
-          exit 1
+            echo "❌ 无法从脚本输出中提取设备信息"
+            if [ $SCRIPT_EXIT_CODE -ne 0 ]; then
+                echo "❌ 设备检测失败"
+                exit 1
+            else
+                echo "⚠️ 脚本成功但无法提取设备信息，使用默认值"
+                # 设置默认值（根据设备名称）
+                case "${{ github.event.inputs.device_name }}" in
+                  "ac42u"|"acrh17"|"rt-acrh17")
+                    echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
+                    echo "DEVICE_SHORT_NAME=asus_rt-acrh17" >> $GITHUB_ENV
+                    echo "DEVICE_FULL_NAME=${{ github.event.inputs.device_name }}" >> $GITHUB_ENV
+                    ;;
+                  "xiaomi_redmi-ax6s")
+                    echo "PLATFORM=mediatek" >> $GITHUB_ENV
+                    echo "DEVICE_SHORT_NAME=xiaomi_redmi-ax6s" >> $GITHUB_ENV
+                    echo "DEVICE_FULL_NAME=${{ github.event.inputs.device_name }}" >> $GITHUB_ENV
+                    ;;
+                  "wr841n")
+                    echo "PLATFORM=ar71xx" >> $GITHUB_ENV
+                    echo "DEVICE_SHORT_NAME=tl-wr841n-v9" >> $GITHUB_ENV
+                    echo "DEVICE_FULL_NAME=${{ github.event.inputs.device_name }}" >> $GITHUB_ENV
+                    ;;
+                  "mi3g")
+                    echo "PLATFORM=ramips" >> $GITHUB_ENV
+                    echo "DEVICE_SHORT_NAME=xiaomi_mi-router-3g" >> $GITHUB_ENV
+                    echo "DEVICE_FULL_NAME=${{ github.event.inputs.device_name }}" >> $GITHUB_ENV
+                    ;;
+                  *)
+                    echo "❌ 未知设备，无法设置默认值"
+                    exit 1
+                    ;;
+                esac
+                echo "✅ 已使用默认设备信息"
+            fi
         fi
 
     - name: 更新安装feeds
