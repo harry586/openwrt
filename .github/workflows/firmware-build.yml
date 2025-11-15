@@ -327,6 +327,7 @@ jobs:
         
         # 自定义包
         if [ "${{ github.event.inputs.config_type }}" = "custom" ] && [ -n "${{ github.event.inputs.extra_packages }}" ]; then
+          echo "添加额外包: ${{ github.event.inputs.extra_packages }}"
           for pkg in ${{ github.event.inputs.extra_packages }}; do
             echo "CONFIG_PACKAGE_${pkg}=y" >> .config
           done
