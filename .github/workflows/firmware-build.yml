@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: '设备名称 (rt-acrh17)'
+        description: '设备名称 (ac42u)'
         required: true
-        default: 'rt-acrh17'
+        default: 'ac42u'
         type: string
       old_device:
         description: '是否为老旧设备'
@@ -157,7 +157,7 @@ jobs:
         chmod -R 755 $BUILD_DIR
         
         # 运行完整版本检测器
-        if ./complete_version_detector.sh "rt-acrh17" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}"; then
+        if ./complete_version_detector.sh "ac42u" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}"; then
           echo "✅ 版本检测脚本执行成功"
           
           # 检查版本信息文件
@@ -181,23 +181,23 @@ jobs:
             echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
           else
             echo "⚠️ 未找到版本信息文件，使用默认值"
-            # 使用 rt-acrh17 的默认值
-            echo "SELECTED_REPO=openwrt" >> $GITHUB_ENV
-            echo "SELECTED_BRANCH=openwrt-23.05" >> $GITHUB_ENV
-            echo "SELECTED_REPO_URL=https://git.openwrt.org/openwrt/openwrt.git" >> $GITHUB_ENV
+            # 使用 ac42u 的默认值
+            echo "SELECTED_REPO=immortalwrt" >> $GITHUB_ENV
+            echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
+            echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_ENV
             echo "✅ 使用默认环境变量"
           fi
         else
           echo "❌ 版本检测失败，使用默认值"
           # 即使脚本失败，也使用默认值继续
-          echo "SELECTED_REPO=openwrt" >> $GITHUB_ENV
-          echo "SELECTED_BRANCH=openwrt-23.05" >> $GITHUB_ENV
-          echo "SELECTED_REPO_URL=https://git.openwrt.org/openwrt/openwrt.git" >> $GITHUB_ENV
+          echo "SELECTED_REPO=immortalwrt" >> $GITHUB_ENV
+          echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
+          echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_ENV
           
           # 创建默认版本信息文件
-          echo "SELECTED_REPO=openwrt" > version_info.txt
-          echo "SELECTED_BRANCH=openwrt-23.05" >> version_info.txt
-          echo "SELECTED_REPO_URL=https://git.openwrt.org/openwrt/openwrt.git" >> version_info.txt
+          echo "SELECTED_REPO=immortalwrt" > version_info.txt
+          echo "SELECTED_BRANCH=master" >> version_info.txt
+          echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> version_info.txt
           
           echo "✅ 使用默认环境变量"
         fi
@@ -272,7 +272,7 @@ jobs:
         chmod -R 755 $BUILD_DIR
         
         # 运行设备检测脚本
-        if ./device_detection.sh "rt-acrh17"; then
+        if ./device_detection.sh "ac42u"; then
           echo "✅ 设备检测脚本执行成功"
           
           # 检查设备信息文件
@@ -295,18 +295,18 @@ jobs:
             echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
           else
             echo "⚠️ 未找到设备信息文件，使用默认值"
-            # 使用 rt-acrh17 的默认值
+            # 使用 ac42u 的默认值
             echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
-            echo "DEVICE_SHORT_NAME=asus_rt-acrh17" >> $GITHUB_ENV
-            echo "DEVICE_FULL_NAME=ASUS RT-ACRH17" >> $GITHUB_ENV
+            echo "DEVICE_SHORT_NAME=xiaomi_redmi-ax6s" >> $GITHUB_ENV
+            echo "DEVICE_FULL_NAME=Xiaomi Redmi AX6S" >> $GITHUB_ENV
             echo "✅ 使用默认设备环境变量"
           fi
         else
           echo "❌ 设备检测失败，使用默认值"
           # 即使脚本失败，也使用默认值继续
           echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
-          echo "DEVICE_SHORT_NAME=asus_rt-acrh17" >> $GITHUB_ENV
-          echo "DEVICE_FULL_NAME=ASUS RT-ACRH17" >> $GITHUB_ENV
+          echo "DEVICE_SHORT_NAME=xiaomi_redmi-ax6s" >> $GITHUB_ENV
+          echo "DEVICE_FULL_NAME=Xiaomi Redmi AX6S" >> $GITHUB_ENV
           echo "✅ 使用默认设备环境变量"
         fi
 
@@ -323,7 +323,7 @@ jobs:
         
         # 记录版本信息
         echo "# 智能选择的版本: $SELECTED_REPO - $SELECTED_BRANCH" > .config
-        echo "# 设备: rt-acrh17" >> .config
+        echo "# 设备: ac42u" >> .config
         echo "# 老旧设备模式: ${{ github.event.inputs.old_device }}" >> .config
         echo "# 生成时间: $(date)" >> .config
         echo "" >> .config
@@ -331,7 +331,7 @@ jobs:
         # 基础平台配置
         echo "CONFIG_TARGET_ipq40xx=y" >> .config
         echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
-        echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-acrh17=y" >> .config
+        echo "CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_xiaomi_redmi-ax6s=y" >> .config
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
         
@@ -400,7 +400,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-rt-acrh17-${{ env.SELECTED_BRANCH }}
+        name: firmware-ac42u-${{ env.SELECTED_BRANCH }}
         path: ${{ env.BUILD_DIR }}/bin/targets/
         retention-days: 7
 
@@ -408,7 +408,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: build-info-rt-acrh17
+        name: build-info-ac42u
         path: |
           ${{ env.BUILD_DIR }}/.config
           ${{ env.BUILD_DIR }}/version_info.txt
