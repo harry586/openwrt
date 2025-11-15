@@ -1,7 +1,6 @@
 #!/bin/bash
 
-# OpenWrt 设备检测脚本
-# 使用方法: ./device_detection.sh <设备名称>
+# OpenWrt 设备检测脚本 - 增强版
 
 set -e
 
@@ -13,7 +12,12 @@ detect_device() {
     echo "输入设备: $device_input"
     
     # 尝试自动检测设备
-    auto_detect_device "$device_input"
+    if auto_detect_device "$device_input"; then
+        return 0
+    else
+        echo "❌ 设备检测失败"
+        return 1
+    fi
 }
 
 # 自动检测设备
@@ -46,25 +50,25 @@ auto_detect_device() {
         
         if [ -n "$device_short_name" ]; then
             echo "✅ 找到设备定义: $device_short_name"
-            
-            export PLATFORM="$platform"
-            export DEVICE_SHORT_NAME="$device_short_name"
-            export DEVICE_FULL_NAME="$device_full_name"
-            
-            # 保存设备信息
-            save_device_info "$platform" "$device_short_name" "$device_input"
-            return 0
         else
             echo "⚠️ 未找到精确的设备定义，使用设备树文件名"
-            # 即使没有找到设备定义，也继续构建
             local dts_basename=$(basename "$dts_files" | head -1 | sed 's/\.dts.*//')
-            export PLATFORM="$platform"
-            export DEVICE_SHORT_NAME="$dts_basename"
-            export DEVICE_FULL_NAME="$device_full_name"
-            
-            save_device_info "$platform" "$dts_basename" "$device_input"
-            return 0
+            device_short_name="$dts_basename"
         fi
+        
+        # 直接输出设备信息，供工作流捕获
+        echo "PLATFORM=$platform"
+        echo "DEVICE_SHORT_NAME=$device_short_name"
+        echo "DEVICE_FULL_NAME=$device_full_name"
+        
+        # 尝试保存设备信息到文件（可选）
+        if save_device_info "$platform" "$device_short_name" "$device_input"; then
+            echo "✅ 设备信息保存成功"
+        else
+            echo "⚠️ 无法保存设备信息文件，但检测结果有效"
+        fi
+        
+        return 0
     else
         echo "❌ 未找到设备树文件: *$device_input*.dts"
         return 1
@@ -152,13 +156,17 @@ save_device_info() {
     local device_short_name="$2"
     local device_input="$3"
     
-    echo "PLATFORM=$platform" > device_info.txt
-    echo "DEVICE_SHORT_NAME=$device_short_name" >> device_info.txt
-    echo "DEVICE_FULL_NAME=$device_input" >> device_info.txt
-    
-    echo "设备信息已保存到 device_info.txt"
-    echo "=== device_info.txt 内容 ==="
-    cat device_info.txt
+    # 尝试写入设备信息文件
+    if echo "PLATFORM=$platform" > device_info.txt 2>/dev/null; then
+        echo "DEVICE_SHORT_NAME=$device_short_name" >> device_info.txt
+        echo "DEVICE_FULL_NAME=$device_input" >> device_info.txt
+        echo "设备信息已保存到 device_info.txt"
+        echo "=== device_info.txt 内容 ==="
+        cat device_info.txt
+        return 0
+    else
+        return 1
+    fi
 }
 
 # 主函数
