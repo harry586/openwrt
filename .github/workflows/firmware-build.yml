@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: '设备名称 (ac42u/acrh17/ac58u/acrh13 等)'
+        description: '设备名称 (ac42u/acrh17/ac58u/acrh13)'
         required: true
         default: 'ac42u'
         type: string
@@ -274,7 +274,7 @@ jobs:
         echo "=== 设备总数 ==="
         find "target/linux/$PLATFORM" -name "*.mk" -type f -exec grep -h "define Device/" {} \; | wc -l
         
-        # 检查具体设备
+        # 检查具体设备 - 使用原始设备名称（包含连字符）
         echo "=== 检查设备 $DEVICE_SHORT_NAME 的详细定义 ==="
         FOUND=0
         for mk_file in $(find "target/linux/$PLATFORM" -name "*.mk" -type f); do
@@ -291,7 +291,38 @@ jobs:
             echo "❌ 未找到设备 $DEVICE_SHORT_NAME"
             echo "=== 搜索相似设备 ==="
             find "target/linux/$PLATFORM" -name "*.mk" -type f -exec grep -l "${{ github.event.inputs.device_name }}" {} \; | head -5
-            exit 1
+            
+            # 尝试使用已知的设备名称
+            echo "=== 尝试使用已知设备名称 ==="
+            case "${{ github.event.inputs.device_name }}" in
+                "ac42u"|"acrh17"|"rt-acrh17")
+                    KNOWN_DEVICE="asus_rt-ac42u"
+                    ;;
+                "ac58u"|"rt-ac58u"|"acrh13"|"rt-acrh13")
+                    KNOWN_DEVICE="asus_rt-ac58u"
+                    ;;
+                *)
+                    KNOWN_DEVICE=""
+                    ;;
+            esac
+            
+            if [ -n "$KNOWN_DEVICE" ]; then
+                echo "尝试使用已知设备: $KNOWN_DEVICE"
+                for mk_file in $(find "target/linux/$PLATFORM" -name "*.mk" -type f); do
+                    if grep -q "define Device/$KNOWN_DEVICE" "$mk_file"; then
+                        echo "✅ 在文件 $mk_file 中找到已知设备定义: $KNOWN_DEVICE"
+                        awk "/define Device\/$KNOWN_DEVICE/{flag=1} flag; /endef/{flag=0}" "$mk_file"
+                        # 更新环境变量
+                        echo "DEVICE_SHORT_NAME=$KNOWN_DEVICE" >> $GITHUB_ENV
+                        FOUND=1
+                        break
+                    fi
+                done
+            fi
+            
+            if [ "$FOUND" -eq 0 ]; then
+                exit 1
+            fi
         fi
         
         # 检查设备是否在 TARGET_DEVICES 中
@@ -315,12 +346,14 @@ jobs:
         cd $BUILD_DIR
         echo "=== 生成设备配置 ==="
         
-        # 清理平台和设备名称，确保符合 OpenWrt 配置格式
+        # 清理平台名称，确保符合 OpenWrt 配置格式
         CLEAN_PLATFORM=$(echo "$PLATFORM" | tr '[:lower:]' '[:upper:]' | tr -cd '[:alnum:]_')
-        CLEAN_DEVICE=$(echo "$DEVICE_SHORT_NAME" | tr '-' '_' | tr -cd '[:alnum:]_')
+        
+        # 设备名称保持不变（包含连字符），但在配置项中需要转换为下划线
+        CONFIG_DEVICE=$(echo "$DEVICE_SHORT_NAME" | tr '-' '_')
         
         echo "平台: $PLATFORM -> $CLEAN_PLATFORM"
-        echo "设备: $DEVICE_SHORT_NAME -> $CLEAN_DEVICE"
+        echo "设备: $DEVICE_SHORT_NAME -> 配置中使用: $CONFIG_DEVICE"
         
         # 生成配置
         echo "# OpenWrt 自动生成配置" > .config
@@ -330,13 +363,14 @@ jobs:
         echo "# 设备: ${{ github.event.inputs.device_name }}" >> .config
         echo "# 平台: $PLATFORM" >> .config
         echo "# 设备标识: $DEVICE_SHORT_NAME" >> .config
+        echo "# 配置设备: $CONFIG_DEVICE" >> .config
         echo "# 生成时间: $(date)" >> .config
         echo "" >> .config
         
         # 基础目标配置
         echo "CONFIG_TARGET_${CLEAN_PLATFORM}=y" >> .config
         echo "CONFIG_TARGET_${CLEAN_PLATFORM}_GENERIC=y" >> .config
-        echo "CONFIG_TARGET_${CLEAN_PLATFORM}_GENERIC_DEVICE_${CLEAN_DEVICE}=y" >> .config
+        echo "CONFIG_TARGET_${CLEAN_PLATFORM}_GENERIC_DEVICE_${CONFIG_DEVICE}=y" >> .config
         
         # 文件系统配置
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
@@ -388,10 +422,10 @@ jobs:
         
         # 清理名称用于检查
         CLEAN_PLATFORM=$(echo "$PLATFORM" | tr '[:lower:]' '[:upper:]' | tr -cd '[:alnum:]_')
-        CLEAN_DEVICE=$(echo "$DEVICE_SHORT_NAME" | tr '-' '_' | tr -cd '[:alnum:]_')
+        CONFIG_DEVICE=$(echo "$DEVICE_SHORT_NAME" | tr '-' '_')
         
         echo "清理后的平台: $CLEAN_PLATFORM"
-        echo "清理后的设备: $CLEAN_DEVICE"
+        echo "配置设备: $CONFIG_DEVICE"
         
         # 显示当前配置中的设备相关项
         echo "=== 当前 .config 中的设备配置 ==="
@@ -410,7 +444,7 @@ jobs:
             DEVICE_ENABLED=0
             
             # 格式1: CONFIG_TARGET_IPQ40XX_GENERIC_DEVICE_ASUS_RT_AC42U
-            if grep -q "CONFIG_TARGET_${CLEAN_PLATFORM}_GENERIC_DEVICE_${CLEAN_DEVICE}=y" .config; then
+            if grep -q "CONFIG_TARGET_${CLEAN_PLATFORM}_GENERIC_DEVICE_${CONFIG_DEVICE}=y" .config; then
                 echo "✅ 设备 $DEVICE_SHORT_NAME 在最终配置中正确启用 (格式1)"
                 DEVICE_ENABLED=1
             fi
@@ -423,8 +457,7 @@ jobs:
             
             # 格式3: 小写格式
             CLEAN_PLATFORM_LOWER=$(echo "$PLATFORM" | tr '[:upper:]' '[:lower:]')
-            CLEAN_DEVICE_LOWER=$(echo "$DEVICE_SHORT_NAME" | tr '[:upper:]' '[:lower:]')
-            if grep -q "CONFIG_TARGET_DEVICE_${CLEAN_PLATFORM_LOWER}_generic_DEVICE_${CLEAN_DEVICE_LOWER}=y" .config; then
+            if grep -q "CONFIG_TARGET_DEVICE_${CLEAN_PLATFORM_LOWER}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" .config; then
                 echo "✅ 设备 $DEVICE_SHORT_NAME 在最终配置中正确启用 (格式3)"
                 DEVICE_ENABLED=1
             fi
@@ -433,9 +466,7 @@ jobs:
                 echo "❌ 设备 $DEVICE_SHORT_NAME 未在最终配置中启用"
                 echo "=== 所有设备配置项 ==="
                 grep "CONFIG_TARGET_DEVICE" .config
-                echo "=== 尝试手动设置设备 ==="
-                # 使用替代配置方法
-                manual_device_setup
+                exit 1
             else
                 echo "✅ 设备验证成功"
             fi
@@ -443,45 +474,6 @@ jobs:
             echo "❌ 配置验证失败"
             exit 1
         fi
-
-    - name: 手动设备设置（备用）
-      if: failure()
-      run: |
-        cd $BUILD_DIR
-        echo "=== 手动设备设置 ==="
-        
-        # 使用 OpenWrt 的 menuconfig 来选择合适的设备
-        echo "尝试使用预设配置..."
-        
-        # 根据平台选择不同的预设
-        case "$PLATFORM" in
-            "ipq40xx")
-                echo "应用 ipq40xx 通用配置..."
-                # 使用 ipq40xx 的通用配置
-                make target/linux/ipq40xx/config
-                ;;
-            "ar71xx")
-                echo "应用 ar71xx 通用配置..."
-                make target/linux/ar71xx/config
-                ;;
-            "ramips")
-                echo "应用 ramips 通用配置..."
-                make target/linux/ramips/config
-                ;;
-            "mediatek")
-                echo "应用 mediatek 通用配置..."
-                make target/linux/mediatek/config
-                ;;
-            *)
-                echo "未知平台，使用默认配置"
-                ;;
-        esac
-        
-        # 重新运行 defconfig
-        make defconfig
-        
-        echo "=== 手动设置后的设备配置 ==="
-        grep "CONFIG_TARGET_DEVICE" .config | head -10
 
     - name: 应用配置并编译
       run: |
