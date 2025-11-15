@@ -145,14 +145,6 @@ jobs:
           echo "✅ 设备检测脚本已包含文件输出功能"
         fi
 
-    - name: 清理构建目录
-      run: |
-        cd $BUILD_DIR
-        echo "=== 清理构建目录 ==="
-        # 完全清空构建目录
-        find . -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
-        echo "✅ 构建目录已清理"
-
     - name: 智能版本检测
       id: version-detection
       run: |
@@ -218,11 +210,11 @@ jobs:
           exit 1
         fi
         
-        # 确保目录是空的
+        # 确保目录是空的（但保留脚本文件）
         echo "检查构建目录状态..."
         if [ "$(ls -A .)" ]; then
-          echo "⚠️ 构建目录不为空，正在清理..."
-          find . -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+          echo "清理构建目录（保留脚本文件）..."
+          find . -mindepth 1 -maxdepth 1 ! -name '*.sh' -exec rm -rf {} + 2>/dev/null || true
         fi
         
         echo "开始克隆仓库..."
@@ -235,11 +227,39 @@ jobs:
           exit 1
         fi
 
+    - name: 重新复制设备检测脚本
+      run: |
+        cd $BUILD_DIR
+        echo "=== 重新复制设备检测脚本 ==="
+        
+        # 如果脚本文件不存在，重新从工作空间复制
+        if [ ! -f "device_detection.sh" ]; then
+          echo "设备检测脚本不存在，重新复制..."
+          cd $GITHUB_WORKSPACE
+          DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f | head -1)
+          if [ -z "$DEVICE_SCRIPT" ]; then
+            echo "❌ 错误: 找不到 device_detection.sh"
+            exit 1
+          fi
+          cp "$DEVICE_SCRIPT" $BUILD_DIR/device_detection.sh
+          cd $BUILD_DIR
+          chmod +x device_detection.sh
+          echo "✅ 设备检测脚本重新复制完成"
+        else
+          echo "✅ 设备检测脚本已存在"
+        fi
+
     - name: 智能设备检测
       id: device-detection
       run: |
         cd $BUILD_DIR
         echo "=== 智能设备检测 ==="
+        
+        # 确保脚本文件存在
+        if [ ! -f "device_detection.sh" ]; then
+          echo "❌ 错误: 设备检测脚本不存在"
+          exit 1
+        fi
         
         # 运行设备检测脚本
         if ./device_detection.sh "${{ github.event.inputs.device_name }}"; then
