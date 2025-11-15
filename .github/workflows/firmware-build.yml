@@ -18,15 +18,9 @@ on:
         description: '额外安装插件 (空格分隔)'
         required: false
         type: string
-      disable_packages:
-        description: '禁用插件 (空格分隔)'
-        required: false
-        type: string
 
 env:
-  WORKSPACE: ${{ github.workspace }}
   BUILD_DIR: /mnt/openwrt-build
-  CONFIG_DIR: ${{ github.workspace }}/firmware-config
 
 jobs:
   build-firmware:
@@ -51,7 +45,7 @@ jobs:
     - name: 设置编译环境
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler g++-multilib curl lib32gcc-s1 libc6-dev-x32 linux-libc-dev ncurses-term help2man
+        sudo apt-get install -y build-essential libncurses5-dev libssl-dev python3 unzip zlib1g-dev subversion gcc-multilib git curl
 
     - name: 创建构建目录
       run: |
@@ -64,113 +58,33 @@ jobs:
         git clone https://github.com/immortalwrt/immortalwrt.git .
         git checkout openwrt-23.05
 
-    - name: 更新安装feeds
+    - name: 复制设备检测脚本
       run: |
         cd $BUILD_DIR
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
+        # 从仓库复制设备检测脚本
+        cp $GITHUB_WORKSPACE/device_detection.sh .
+        chmod +x device_detection.sh
 
     - name: 智能设备检测
       id: device-detection
       run: |
         cd $BUILD_DIR
-        
-        # 智能设备检测函数
-        detect_device() {
-          local device_input="$1"
-          local platform=""
-          local device_short_name=""
-          local device_full_name=""
-          
-          echo "=== 智能设备检测 ==="
-          echo "输入设备: $device_input"
-          
-          # 设备映射表
-          case "$device_input" in
-            "ac42u"|"rt-ac42u"|"asus_ac42u")
-              platform="ipq40xx"
-              device_short_name="asus_rt-ac42u"
-              device_full_name="asus,rt-ac42u"
-              ;;
-            "acrh17"|"rt-acrh17"|"asus_acrh17")
-              platform="ipq40xx"
-              device_short_name="asus_rt-acrh17"
-              device_full_name="asus,rt-acrh17"
-              ;;
-            "mi3g"|"r3g"|"xiaomi_mi3g")
-              platform="ramips"
-              device_short_name="xiaomi_mi-router-3g"
-              device_full_name="xiaomi,mi-router-3g"
-              ;;
-            "k2p"|"phicomm_k2p")
-              platform="ramips"
-              device_short_name="phicomm_k2p"
-              device_full_name="phicomm,k2p"
-              ;;
-            *)
-              echo "❌ 未知设备: $device_input"
-              echo "尝试自动检测..."
-              # 搜索设备树文件
-              local dts_files=$(find target/linux -name "*$device_input*.dts" -o -name "*$device_input*.dtsi" 2>/dev/null | head -3)
-              if [ -n "$dts_files" ]; then
-                platform=$(echo "$dts_files" | head -1 | cut -d'/' -f3)
-                device_short_name=$(basename "$dts_files" | sed 's/\.dts//')
-                device_full_name="$device_input"
-                echo "✅ 自动检测到设备树文件"
-              else
-                echo "❌ 自动检测失败"
-                exit 1
-              fi
-              ;;
-          esac
-          
-          echo "✅ 检测到设备:"
-          echo "平台: $platform"
-          echo "设备简称: $device_short_name"
-          echo "完整名称: $device_full_name"
-          
-          # 验证平台存在性
-          if [ ! -d "target/linux/$platform" ]; then
-            echo "❌ 错误: 平台目录不存在: target/linux/$platform"
-            exit 1
-          fi
-          
-          # 查找内核配置
-          local kernel_configs=$(find "target/linux/$platform" -name "config-*" 2>/dev/null | sort -V | tail -1)
-          if [ -n "$kernel_configs" ]; then
-            echo "✅ 使用内核配置: $(basename $kernel_configs)"
-          else
-            echo "❌ 未找到内核配置文件"
-            exit 1
-          fi
-          
-          # 查找设备树文件
-          local dts_file=$(find "target/linux/$platform" -name "*$device_short_name*.dts" 2>/dev/null | head -1)
-          if [ -n "$dts_file" ]; then
-            echo "✅ 找到设备树文件: $(basename $dts_file)"
-          else
-            echo "⚠️ 未找到设备树文件: *$device_short_name*.dts"
-          fi
-          
-          # 验证设备在配置中定义
-          if [ -f "target/linux/$platform/generic/target.mk" ]; then
-            if grep -q "$device_short_name" "target/linux/$platform/generic/target.mk"; then
-              echo "✅ 设备在目标配置中已定义"
-            else
-              echo "❌ 设备在目标配置中未定义"
-              exit 1
-            fi
-          fi
-          
-          # 返回结果
-          echo "PLATFORM=$platform" >> $GITHUB_ENV
-          echo "DEVICE_SHORT_NAME=$device_short_name" >> $GITHUB_ENV
-          echo "DEVICE_FULL_NAME=$device_full_name" >> $GITHUB_ENV
-          echo "KERNEL_CONFIG=$kernel_configs" >> $GITHUB_ENV
-        }
-        
-        # 执行设备检测
-        detect_device "${{ github.event.inputs.device_name }}"
+        # 使用独立脚本进行设备检测
+        if ./device_detection.sh "${{ github.event.inputs.device_name }}"; then
+          echo "✅ 设备检测成功"
+          echo "PLATFORM: $PLATFORM"
+          echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
+          echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
+        else
+          echo "❌ 设备检测失败"
+          exit 1
+        fi
+
+    - name: 更新安装feeds
+      run: |
+        cd $BUILD_DIR
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
 
     - name: 生成设备配置
       run: |
@@ -180,12 +94,9 @@ jobs:
         # 基础平台配置
         echo "CONFIG_TARGET_${PLATFORM}=y" > .config
         echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
-        echo "CONFIG_TARGET_MULTI_PROFILE=y" >> .config
         echo "CONFIG_TARGET_DEVICE_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" >> .config
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        echo "CONFIG_TARGET_ROOTFS_EXT4FS=n" >> .config
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
-        echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
         
         # 根据平台添加特定配置
         case "$PLATFORM" in
@@ -203,25 +114,18 @@ jobs:
           "minimal")
             echo "CONFIG_PACKAGE_luci=n" >> .config
             ;;
-          "normal")
+          "normal"|"custom")
             echo "CONFIG_PACKAGE_luci=y" >> .config
             echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
-            ;;
-          "custom")
-            echo "CONFIG_PACKAGE_luci=y" >> .config
-            echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
-            if [ -n "${{ github.event.inputs.extra_packages }}" ]; then
-              for pkg in ${{ github.event.inputs.extra_packages }}; do
-                echo "CONFIG_PACKAGE_${pkg}=y" >> .config
-              done
-            fi
-            if [ -n "${{ github.event.inputs.disable_packages }}" ]; then
-              for pkg in ${{ github.event.inputs.disable_packages }}; do
-                echo "CONFIG_PACKAGE_${pkg}=n" >> .config
-              done
-            fi
             ;;
         esac
+        
+        # 自定义包
+        if [ "${{ github.event.inputs.config_type }}" = "custom" ] && [ -n "${{ github.event.inputs.extra_packages }}" ]; then
+          for pkg in ${{ github.event.inputs.extra_packages }}; do
+            echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+          done
+        fi
         
         # 基础系统包
         echo "CONFIG_PACKAGE_base-files=y" >> .config
@@ -229,113 +133,23 @@ jobs:
         echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
         echo "CONFIG_PACKAGE_dropbear=y" >> .config
         echo "CONFIG_PACKAGE_firewall=y" >> .config
-        echo "CONFIG_PACKAGE_fstools=y" >> .config
-        echo "CONFIG_PACKAGE_ip6tables=y" >> .config
-        echo "CONFIG_PACKAGE_iptables=y" >> .config
-        echo "CONFIG_PACKAGE_iwinfo=y" >> .config
-        echo "CONFIG_PACKAGE_jshn=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-gpio-button-hotplug=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ipt-conntrack=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ipt-core=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ipt-nat=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-nf-conntrack=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-nf-conntrack6=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-nf-flow=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-nf-ipt=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-nf-nat=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-nf-reject6=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-nfnetlink=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ppp=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-pppoe=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-pppox=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-slhc=y" >> .config
-        echo "CONFIG_PACKAGE_libatomic=y" >> .config
-        echo "CONFIG_PACKAGE_libc=y" >> .config
-        echo "CONFIG_PACKAGE_libgcc=y" >> .config
-        echo "CONFIG_PACKAGE_libiwinfo-lua=y" >> .config
-        echo "CONFIG_PACKAGE_liblua=y" >> .config
-        echo "CONFIG_PACKAGE_libubus-lua=y" >> .config
-        echo "CONFIG_PACKAGE_libuci-lua=y" >> .config
-        echo "CONFIG_PACKAGE_lua=y" >> .config
-        echo "CONFIG_PACKAGE_mtd=y" >> .config
-        echo "CONFIG_PACKAGE_netifd=y" >> .config
-        echo "CONFIG_PACKAGE_odhcp6c=y" >> .config
-        echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
-        echo "CONFIG_PACKAGE_odhcpd=y" >> .config
         echo "CONFIG_PACKAGE_opkg=y" >> .config
-        echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config
-        echo "CONFIG_PACKAGE_procd=y" >> .config
-        echo "CONFIG_PACKAGE_rpcd=y" >> .config
-        echo "CONFIG_PACKAGE_rpcd-mod-file=y" >> .config
-        echo "CONFIG_PACKAGE_rpcd-mod-iwinfo=y" >> .config
-        echo "CONFIG_PACKAGE_rpcd-mod-luci=y" >> .config
-        echo "CONFIG_PACKAGE_rpcd-mod-rrdns=y" >> .config
-        echo "CONFIG_PACKAGE_swconfig=y" >> .config
-        echo "CONFIG_PACKAGE_uboot-envtools=y" >> .config
-        echo "CONFIG_PACKAGE_ubus=y" >> .config
-        echo "CONFIG_PACKAGE_ubusd=y" >> .config
-        echo "CONFIG_PACKAGE_uci=y" >> .config
-        echo "CONFIG_PACKAGE_uclient-fetch=y" >> .config
-        echo "CONFIG_PACKAGE_urandom-seed=y" >> .config
-        echo "CONFIG_PACKAGE_urngd=y" >> .config
         
         echo "✅ 配置生成完成"
-        echo "配置预览:"
-        grep "CONFIG_TARGET" .config | head -10
 
-    - name: 应用配置并验证
+    - name: 应用配置并编译
       run: |
         cd $BUILD_DIR
-        echo "=== 应用配置并验证 ==="
+        echo "=== 应用配置并编译 ==="
         
-        if [ ! -f ".config" ]; then
-          echo "❌ .config 文件不存在"
-          exit 1
-        fi
+        # 应用配置
+        make defconfig
         
-        echo "执行 defconfig..."
-        if make defconfig; then
-          echo "✅ defconfig 成功"
-        else
-          echo "❌ defconfig 失败"
-          exit 1
-        fi
+        # 下载软件包
+        make -j4 download
         
-        echo "=== 最终配置验证 ==="
-        if grep -q "CONFIG_TARGET_${PLATFORM}_generic=y" .config && \
-           grep -q "CONFIG_TARGET_DEVICE_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" .config; then
-          echo "✅ 设备配置正确"
-        else
-          echo "❌ 设备配置错误"
-          echo "当前配置:"
-          grep "CONFIG_TARGET" .config
-          exit 1
-        fi
-
-    - name: 下载软件包
-      run: |
-        cd $BUILD_DIR
-        echo "下载软件包..."
-        if make -j4 download V=s; then
-          echo "✅ 下载成功"
-        else
-          echo "❌ 下载失败，尝试重新下载..."
-          make download V=s
-        fi
-
-    - name: 编译固件
-      run: |
-        cd $BUILD_DIR
-        echo "开始编译固件..."
-        echo "执行编译..."
-        if make -j$(nproc) V=s 2>&1 | tee build_detailed.log; then
-          echo "✅ 编译成功"
-        else
-          echo "❌ 编译失败"
-          exit 1
-        fi
+        # 编译固件
+        make -j$(nproc) V=s
 
     - name: 验证固件生成
       if: always()
@@ -345,126 +159,16 @@ jobs:
         
         if [ -d "bin/targets" ]; then
           echo "✅ 找到目标目录"
-          
-          # 根据平台和设备名称查找固件
-          case "$PLATFORM" in
-            "ipq40xx")
-              FIRMWARE_PATTERNS="*asus* *ac42u* *acrh17* *ipq40xx*"
-              ;;
-            "ramips")
-              FIRMWARE_PATTERNS="*xiaomi* *phicomm* *mi3g* *k2p* *ramips*"
-              ;;
-            *)
-              FIRMWARE_PATTERNS="*$DEVICE_SHORT_NAME* *$PLATFORM*"
-              ;;
-          esac
-          
-          echo "搜索固件模式: $FIRMWARE_PATTERNS"
-          TARGET_FIRMWARE=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) | grep -E "$(echo $FIRMWARE_PATTERNS | sed 's/ /*/g' | sed 's/ /|/g')" | head -1)
-          
-          if [ -n "$TARGET_FIRMWARE" ]; then
-            echo "✅ 找到目标设备固件:"
-            echo "$TARGET_FIRMWARE"
-            echo "固件详情:"
-            ls -la "$TARGET_FIRMWARE"
-            FIRMWARE_SIZE=$(stat -c%s "$TARGET_FIRMWARE" 2>/dev/null || echo "0")
-            echo "固件大小: $((FIRMWARE_SIZE / 1024 / 1024)) MB"
-            echo "FIRMWARE_PATH=$TARGET_FIRMWARE" >> $GITHUB_ENV
-          else
-            echo "❌ 未找到目标设备固件"
-            echo "所有生成的固件:"
-            find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" -o -name "*.tar" \) | sort
-          fi
+          echo "生成的固件:"
+          find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) | sort
         else
           echo "❌ 未找到目标目录 bin/targets"
         fi
-
-    - name: 智能错误分析
-      if: always()
-      run: |
-        cd $BUILD_DIR
-        echo "=== 智能错误分析 ===" > error_analysis.log
-        echo "设备: ${{ github.event.inputs.device_name }}" >> error_analysis.log
-        echo "平台: $PLATFORM" >> error_analysis.log
-        echo "配置类型: ${{ github.event.inputs.config_type }}" >> error_analysis.log
-        echo "" >> error_analysis.log
-        
-        # 检查固件生成状态
-        if find bin/targets -type f -name "*.bin" -o -name "*.img" -o -name "*.trx" | grep -q .; then
-          echo "✅ 构建状态: 成功" >> error_analysis.log
-          echo "生成的固件:" >> error_analysis.log
-          find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) >> error_analysis.log
-        else
-          echo "❌ 构建状态: 失败" >> error_analysis.log
-          
-          # 分析常见错误
-          if [ -f "build_detailed.log" ]; then
-            echo "" >> error_analysis.log
-            echo "=== 错误分析 ===" >> error_analysis.log
-            
-            # 检查下载错误
-            if grep -q "Download failed" build_detailed.log; then
-              echo "❌ 下载失败，网络问题或源不可用" >> error_analysis.log
-              grep "Download failed" build_detailed.log | head -5 >> error_analysis.log
-            fi
-            
-            # 检查编译错误
-            if grep -q "Error [0-9]" build_detailed.log; then
-              echo "❌ 编译错误:" >> error_analysis.log
-              grep "Error [0-9]" build_detailed.log | tail -10 >> error_analysis.log
-            fi
-            
-            # 检查依赖错误
-            if grep -q "missing dependencies" build_detailed.log || grep -q "satisfy_dependencies" build_detailed.log; then
-              echo "❌ 依赖关系错误" >> error_analysis.log
-              grep -A2 -B2 "missing dependencies\|satisfy_dependencies" build_detailed.log | head -20 >> error_analysis.log
-            fi
-            
-            # 检查配置错误
-            if grep -q "configuration invalid" build_detailed.log || grep -q "config.*inconsistent" build_detailed.log; then
-              echo "❌ 配置错误" >> error_analysis.log
-              grep -A2 -B2 "configuration invalid\|config.*inconsistent" build_detailed.log | head -20 >> error_analysis.log
-            fi
-          fi
-        fi
-        
-        echo "" >> error_analysis.log
-        echo "=== 建议 ===" >> error_analysis.log
-        case "$PLATFORM" in
-          "ipq40xx")
-            echo "1. 检查 ath10k 无线驱动配置" >> error_analysis.log
-            echo "2. 验证设备树文件完整性" >> error_analysis.log
-            ;;
-          "ramips")
-            echo "1. 检查 MT76 无线驱动配置" >> error_analysis.log
-            echo "2. 验证闪存布局设置" >> error_analysis.log
-            ;;
-        esac
-        echo "3. 检查网络连接和软件源" >> error_analysis.log
-        echo "4. 查看完整构建日志获取详细信息" >> error_analysis.log
-        
-        echo "错误分析完成"
 
     - name: 上传编译产物
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: firmware-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
-        path: ${{ env.BUILD_DIR }}/bin/
-        retention-days: 7
-
-    - name: 上传日志
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: logs-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
-        path: ${{ env.BUILD_DIR }}/build_detailed.log,${{ env.BUILD_DIR }}/error_analysis.log
-        retention-days: 7
-
-    - name: 上传配置信息
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: config-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
-        path: ${{ env.BUILD_DIR }}/.config
+        path: ${{ env.BUILD_DIR }}/bin/targets/
         retention-days: 7
