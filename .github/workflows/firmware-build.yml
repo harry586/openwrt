@@ -34,6 +34,7 @@ on:
 
 env:
   BUILD_DIR: /mnt/openwrt-build
+  TEMP_DEVICE_DIR: /tmp/device-detection
 
 jobs:
   build-firmware:
@@ -64,63 +65,25 @@ jobs:
 
     - name: 创建构建目录
       run: |
+        echo "=== 创建构建目录 ==="
         sudo mkdir -p $BUILD_DIR
         sudo chown -R $USER:$USER $BUILD_DIR
         sudo chmod -R 755 $BUILD_DIR
+        echo "✅ 构建目录创建完成"
 
-    - name: 智能查找并复制检测脚本
+    - name: 复制检测脚本到构建目录
       run: |
         cd $BUILD_DIR
-        echo "=== 智能查找并复制检测脚本 ==="
+        echo "=== 复制检测脚本到构建目录 ==="
         
-        # 切换到工作空间目录
         cd $GITHUB_WORKSPACE
         
-        # 加强搜索功能：先尝试常见路径
-        VERSION_SCRIPT=""
-        DEVICE_SCRIPT=""
+        # 查找脚本文件
+        VERSION_SCRIPT=$(find . -name "complete_version_detector.sh" -type f | head -1)
+        DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f | head -1)
         
-        # 常见可能路径
-        possible_paths=(
-          "scripts/complete_version_detector.sh"
-          "firmware-config/scripts/complete_version_detector.sh"
-          "config/scripts/complete_version_detector.sh"
-          "complete_version_detector.sh"
-        )
-        
-        for path in "${possible_paths[@]}"; do
-          if [ -f "$path" ]; then
-            VERSION_SCRIPT="$path"
-            echo "✅ 在路径找到版本检测脚本: $path"
-            break
-          fi
-        done
-        
-        # 如果还没找到，使用 find 命令广泛搜索
-        if [ -z "$VERSION_SCRIPT" ]; then
-          VERSION_SCRIPT=$(find . -name "complete_version_detector.sh" -type f 2>/dev/null | head -1)
-        fi
-        
-        # 同样方法查找设备检测脚本
-        for path in "${possible_paths[@]/complete_version_detector.sh/device_detection.sh}"; do
-          if [ -f "$path" ]; then
-            DEVICE_SCRIPT="$path"
-            echo "✅ 在路径找到设备检测脚本: $path"
-            break
-          fi
-        done
-        
-        if [ -z "$DEVICE_SCRIPT" ]; then
-          DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f 2>/dev/null | head -1)
-        fi
-        
-        if [ -z "$VERSION_SCRIPT" ]; then
-          echo "❌ 错误: 找不到 complete_version_detector.sh"
-          exit 1
-        fi
-        
-        if [ -z "$DEVICE_SCRIPT" ]; then
-          echo "❌ 错误: 找不到 device_detection.sh"
+        if [ -z "$VERSION_SCRIPT" ] || [ -z "$DEVICE_SCRIPT" ]; then
+          echo "❌ 错误: 找不到检测脚本"
           exit 1
         fi
         
@@ -133,16 +96,29 @@ jobs:
         
         cd $BUILD_DIR
         chmod +x complete_version_detector.sh device_detection.sh
-        
         echo "✅ 脚本复制完成"
+
+    - name: 创建临时设备检测目录
+      run: |
+        echo "=== 创建临时设备检测目录 ==="
+        # 删除旧的临时目录（如果存在）
+        sudo rm -rf $TEMP_DEVICE_DIR
+        # 创建新的临时目录
+        sudo mkdir -p $TEMP_DEVICE_DIR
+        sudo chown -R $USER:$USER $TEMP_DEVICE_DIR
+        sudo chmod -R 755 $TEMP_DEVICE_DIR
+        echo "✅ 临时设备检测目录创建完成"
 
     - name: 克隆临时源码用于设备检测
       run: |
-        cd $BUILD_DIR
+        cd $TEMP_DEVICE_DIR
         echo "=== 克隆临时源码用于设备检测 ==="
         
-        # 确保目录为空（但保留脚本文件）
-        find . -mindepth 1 -maxdepth 1 ! -name '*.sh' -exec rm -rf {} + 2>/dev/null || true
+        # 确保目录为空
+        if [ "$(ls -A .)" ]; then
+          echo "❌ 错误: 临时目录非空"
+          exit 1
+        fi
         
         # 使用默认源码进行设备检测
         git clone --depth 1 https://github.com/immortalwrt/immortalwrt.git .
@@ -154,18 +130,18 @@ jobs:
           exit 1
         fi
 
+    - name: 复制设备检测脚本到临时目录
+      run: |
+        echo "=== 复制设备检测脚本到临时目录 ==="
+        cp $BUILD_DIR/device_detection.sh $TEMP_DEVICE_DIR/
+        chmod +x $TEMP_DEVICE_DIR/device_detection.sh
+        echo "✅ 设备检测脚本复制完成"
+
     - name: 智能设备检测
       id: device-detection
       run: |
-        cd $BUILD_DIR
+        cd $TEMP_DEVICE_DIR
         echo "=== 智能设备检测 ==="
-        
-        if [ ! -f "device_detection.sh" ]; then
-          echo "❌ 错误: 设备检测脚本不存在"
-          exit 1
-        fi
-        
-        chmod -R 755 $BUILD_DIR
         
         if ./device_detection.sh "${{ github.event.inputs.device_name }}"; then
           echo "✅ 设备检测脚本执行成功"
@@ -187,89 +163,30 @@ jobs:
             echo "PLATFORM: $PLATFORM"
             echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
             echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
+            
+            # 复制设备信息到构建目录
+            cp device_info.txt $BUILD_DIR/
+            echo "✅ 设备信息已保存到构建目录"
           else
-            echo "⚠️ 未找到设备信息文件，使用默认值"
-            echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
-            echo "DEVICE_SHORT_NAME=asus_rt-acrh17" >> $GITHUB_ENV
-            echo "DEVICE_FULL_NAME=Asus RT-ACRH17" >> $GITHUB_ENV
+            echo "❌ 未找到设备信息文件"
+            exit 1
           fi
         else
-          echo "❌ 设备检测失败，使用默认值"
-          echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
-          echo "DEVICE_SHORT_NAME=asus_rt-acrh17" >> $GITHUB_ENV
-          echo "DEVICE_FULL_NAME=Asus RT-ACRH17" >> $GITHUB_ENV
+          echo "❌ 设备检测失败"
+          exit 1
         fi
 
-    - name: 保存设备信息并清理目录
+    - name: 清理临时设备检测目录
       run: |
-        cd $BUILD_DIR
-        echo "=== 保存设备信息并清理目录 ==="
-        
-        # 保存设备信息到临时位置
-        if [ -f "device_info.txt" ]; then
-          cp device_info.txt /tmp/device_info.txt
-          echo "✅ 设备信息已保存到临时位置"
-        fi
-        
-        # 彻底清理构建目录
-        echo "彻底清理构建目录..."
-        cd /
-        sudo rm -rf $BUILD_DIR
-        sudo mkdir -p $BUILD_DIR
-        sudo chown -R $USER:$USER $BUILD_DIR
-        sudo chmod -R 755 $BUILD_DIR
-        
-        cd $BUILD_DIR
-        echo "清理后目录内容:"
-        ls -la
-        echo "✅ 目录清理完成"
-
-    - name: 重新复制检测脚本
-      run: |
-        cd $BUILD_DIR
-        echo "=== 重新复制检测脚本 ==="
-        
-        # 重新从工作空间复制脚本
-        cd $GITHUB_WORKSPACE
-        
-        # 使用相同的查找逻辑
-        VERSION_SCRIPT=$(find . -name "complete_version_detector.sh" -type f 2>/dev/null | head -1)
-        DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f 2>/dev/null | head -1)
-        
-        if [ -n "$VERSION_SCRIPT" ]; then
-          cp "$VERSION_SCRIPT" $BUILD_DIR/complete_version_detector.sh
-          chmod +x $BUILD_DIR/complete_version_detector.sh
-          echo "✅ 版本检测脚本重新复制完成"
-        fi
-        
-        if [ -n "$DEVICE_SCRIPT" ]; then
-          cp "$DEVICE_SCRIPT" $BUILD_DIR/device_detection.sh
-          chmod +x $BUILD_DIR/device_detection.sh
-          echo "✅ 设备检测脚本重新复制完成"
-        fi
-
-    - name: 恢复设备信息
-      run: |
-        cd $BUILD_DIR
-        echo "=== 恢复设备信息 ==="
-        
-        # 恢复设备信息
-        if [ -f "/tmp/device_info.txt" ]; then
-          cp /tmp/device_info.txt .
-          echo "✅ 设备信息已恢复"
-          echo "设备信息文件内容:"
-          cat device_info.txt
-        else
-          echo "⚠️ 未找到临时设备信息文件"
-        fi
+        echo "=== 清理临时设备检测目录 ==="
+        sudo rm -rf $TEMP_DEVICE_DIR
+        echo "✅ 临时设备检测目录已清理"
 
     - name: 智能版本检测
       id: version-detection
       run: |
         cd $BUILD_DIR
         echo "=== 智能版本检测 ==="
-        
-        chmod -R 755 $BUILD_DIR
         
         if ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}"; then
           echo "✅ 版本检测脚本执行成功"
@@ -292,42 +209,24 @@ jobs:
             echo "SELECTED_BRANCH: $SELECTED_BRANCH"
             echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
           else
-            echo "⚠️ 未找到版本信息文件，使用默认值"
-            echo "SELECTED_REPO=immortalwrt" >> $GITHUB_ENV
-            echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
-            echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_ENV
+            echo "❌ 未找到版本信息文件"
+            exit 1
           fi
         else
-          echo "❌ 版本检测失败，使用默认值"
-          echo "SELECTED_REPO=immortalwrt" >> $GITHUB_ENV
-          echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
-          echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_ENV
+          echo "❌ 版本检测失败"
+          exit 1
         fi
 
-    - name: 保存版本信息并再次清理目录
+    - name: 清理构建目录准备克隆
       run: |
         cd $BUILD_DIR
-        echo "=== 保存版本信息并再次清理目录 ==="
+        echo "=== 清理构建目录准备克隆 ==="
+        echo "当前目录内容:"
+        ls -la
         
-        # 保存检测信息
-        if [ -f "device_info.txt" ]; then
-          cp device_info.txt /tmp/device_info.txt
-          echo "✅ 设备信息已保存到临时位置"
-        fi
-        if [ -f "version_info.txt" ]; then
-          cp version_info.txt /tmp/version_info.txt
-          echo "✅ 版本信息已保存到临时位置"
-        fi
+        # 只保留设备信息和版本信息文件
+        find . -mindepth 1 -maxdepth 1 ! -name 'device_info.txt' ! -name 'version_info.txt' -exec rm -rf {} + 2>/dev/null || true
         
-        # 彻底清理构建目录
-        echo "彻底清理构建目录..."
-        cd /
-        sudo rm -rf $BUILD_DIR
-        sudo mkdir -p $BUILD_DIR
-        sudo chown -R $USER:$USER $BUILD_DIR
-        sudo chmod -R 755 $BUILD_DIR
-        
-        cd $BUILD_DIR
         echo "清理后目录内容:"
         ls -la
         echo "✅ 目录清理完成"
@@ -348,8 +247,9 @@ jobs:
         echo "当前目录内容:"
         ls -la
         
-        # 确保目录完全为空
-        if [ "$(ls -A .)" ]; then
+        # 确保目录为空（除了信息文件）
+        FILE_COUNT=$(ls -A | grep -v 'device_info.txt' | grep -v 'version_info.txt' | wc -l)
+        if [ $FILE_COUNT -ne 0 ]; then
           echo "❌ 错误: 目录非空，无法克隆"
           echo "当前文件列表:"
           ls -la
@@ -371,21 +271,25 @@ jobs:
         cd $BUILD_DIR
         echo "=== 恢复检测信息 ==="
         
-        # 恢复设备信息
-        if [ -f "/tmp/device_info.txt" ]; then
-          cp /tmp/device_info.txt .
-          echo "✅ 设备信息已恢复"
+        # 确保设备信息和版本信息文件存在
+        if [ -f "device_info.txt" ]; then
+          echo "✅ 设备信息文件已存在"
+        else
+          echo "❌ 设备信息文件丢失"
+          exit 1
         fi
         
-        # 恢复版本信息
-        if [ -f "/tmp/version_info.txt" ]; then
-          cp /tmp/version_info.txt .
-          echo "✅ 版本信息已恢复"
+        if [ -f "version_info.txt" ]; then
+          echo "✅ 版本信息文件已存在"
+        else
+          echo "❌ 版本信息文件丢失"
+          exit 1
         fi
 
     - name: 更新安装feeds
       run: |
         cd $BUILD_DIR
+        echo "=== 更新和安装feeds ==="
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
@@ -454,22 +358,21 @@ jobs:
         echo "=== 固件生成验证 ==="
         
         if [ -d "bin/targets" ]; then
-          echo "✅ 找到目标目录"
-          echo "生成的固件:"
+          echo "✅ 构建成功！生成的固件:"
           find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) | sort
         else
-          echo "❌ 未找到目标目录 bin/targets"
+          echo "❌ 构建失败，未找到目标文件"
         fi
 
     - name: 上传编译产物
-      if: always()
+      if: success()
       uses: actions/upload-artifact@v4
       with:
         name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
         path: ${{ env.BUILD_DIR }}/bin/targets/
         retention-days: 7
 
-    - name: 上传版本信息
+    - name: 上传配置和日志
       if: always()
       uses: actions/upload-artifact@v4
       with:
