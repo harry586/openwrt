@@ -55,19 +55,6 @@ jobs:
         path: openwrt-config
         fetch-depth: 0
 
-    - name: 调试：检查仓库结构
-      run: |
-        echo "=== 当前工作目录 ==="
-        pwd
-        echo "=== 完整目录结构 ==="
-        find . -type f -name "*.sh" | head -20
-        echo "=== 检查 firmware-config 目录 ==="
-        find . -type d -name "firmware-config" | head -5
-        echo "=== 检查 scripts 目录 ==="
-        find . -type d -name "scripts" | head -10
-        echo "=== 列出所有可能的脚本路径 ==="
-        find . -path "*/firmware-config/scripts/*.sh" -type f | head -10
-
     - name: 设置编译环境
       run: |
         sudo apt-get update
@@ -124,19 +111,40 @@ jobs:
         # 运行完整版本检测器
         if ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}"; then
           echo "✅ 版本检测成功"
-          # 从版本信息文件中读取变量
+          
+          # 检查版本信息文件
           if [ -f "version_info.txt" ]; then
-            echo "SELECTED_REPO=$(grep '^SELECTED_REPO=' version_info.txt | cut -d'=' -f2)" >> $GITHUB_ENV
-            echo "SELECTED_BRANCH=$(grep '^SELECTED_BRANCH=' version_info.txt | cut -d'=' -f2)" >> $GITHUB_ENV
-            echo "SELECTED_REPO_URL=$(grep '^SELECTED_REPO_URL=' version_info.txt | cut -d'=' -f2)" >> $GITHUB_ENV
+            echo "=== version_info.txt 内容 ==="
+            cat version_info.txt
+            
+            # 读取变量并设置到环境变量
+            SELECTED_REPO=$(grep '^SELECTED_REPO=' version_info.txt | cut -d'=' -f2)
+            SELECTED_BRANCH=$(grep '^SELECTED_BRANCH=' version_info.txt | cut -d'=' -f2)
+            SELECTED_REPO_URL=$(grep '^SELECTED_REPO_URL=' version_info.txt | cut -d'=' -f2)
+            
+            echo "SELECTED_REPO=$SELECTED_REPO" >> $GITHUB_ENV
+            echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
+            echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
+            
+            echo "环境变量已设置:"
+            echo "SELECTED_REPO: $SELECTED_REPO"
+            echo "SELECTED_BRANCH: $SELECTED_BRANCH"
+            echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
+          else
+            echo "❌ 错误: version_info.txt 文件不存在"
+            exit 1
           fi
-          echo "SELECTED_REPO: $SELECTED_REPO"
-          echo "SELECTED_BRANCH: $SELECTED_BRANCH"
-          echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
         else
           echo "❌ 版本检测失败"
           exit 1
         fi
+
+    - name: 调试环境变量
+      run: |
+        echo "=== 调试环境变量 ==="
+        echo "SELECTED_REPO: $SELECTED_REPO"
+        echo "SELECTED_BRANCH: $SELECTED_BRANCH"
+        echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
 
     - name: 克隆选定版本的源码
       run: |
@@ -146,6 +154,15 @@ jobs:
         echo "分支: $SELECTED_BRANCH"
         echo "URL: $SELECTED_REPO_URL"
         
+        # 验证环境变量
+        if [ -z "$SELECTED_REPO" ] || [ -z "$SELECTED_BRANCH" ] || [ -z "$SELECTED_REPO_URL" ]; then
+          echo "❌ 错误: 环境变量未正确设置"
+          echo "SELECTED_REPO: $SELECTED_REPO"
+          echo "SELECTED_BRANCH: $SELECTED_BRANCH"
+          echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
+          exit 1
+        fi
+        
         # 如果目录已存在，先清理
         if [ -d ".git" ]; then
           echo "清理现有源码..."
@@ -153,9 +170,15 @@ jobs:
           rm -rf ./.git
         fi
         
+        echo "开始克隆仓库..."
         git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .
         
-        echo "✅ 源码克隆完成"
+        if [ $? -eq 0 ]; then
+          echo "✅ 源码克隆完成"
+        else
+          echo "❌ 源码克隆失败"
+          exit 1
+        fi
 
     - name: 智能设备检测
       id: device-detection
@@ -168,13 +191,25 @@ jobs:
           echo "✅ 设备检测成功"
           # 从设备信息文件中读取变量
           if [ -f "device_info.txt" ]; then
-            echo "PLATFORM=$(grep '^PLATFORM=' device_info.txt | cut -d'=' -f2)" >> $GITHUB_ENV
-            echo "DEVICE_SHORT_NAME=$(grep '^DEVICE_SHORT_NAME=' device_info.txt | cut -d'=' -f2)" >> $GITHUB_ENV
-            echo "DEVICE_FULL_NAME=$(grep '^DEVICE_FULL_NAME=' device_info.txt | cut -d'=' -f2)" >> $GITHUB_ENV
+            echo "=== device_info.txt 内容 ==="
+            cat device_info.txt
+            
+            PLATFORM=$(grep '^PLATFORM=' device_info.txt | cut -d'=' -f2)
+            DEVICE_SHORT_NAME=$(grep '^DEVICE_SHORT_NAME=' device_info.txt | cut -d'=' -f2)
+            DEVICE_FULL_NAME=$(grep '^DEVICE_FULL_NAME=' device_info.txt | cut -d'=' -f2)
+            
+            echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
+            echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
+            echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
+            
+            echo "设备环境变量已设置:"
+            echo "PLATFORM: $PLATFORM"
+            echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
+            echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
+          else
+            echo "❌ 错误: device_info.txt 文件不存在"
+            exit 1
           fi
-          echo "PLATFORM: $PLATFORM"
-          echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
-          echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
         else
           echo "❌ 设备检测失败"
           exit 1
