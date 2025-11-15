@@ -73,56 +73,18 @@ jobs:
         # 切换到工作空间目录
         cd $GITHUB_WORKSPACE
         
-        # 智能文件搜索函数
-        smart_find_file() {
-            local filename="$1"
-            local found_path=""
-            
-            # 定义可能的搜索路径
-            local search_paths=(
-                "."
-                "./openwrt-config"
-                "./openwrt-config/firmware-config"
-                "./openwrt-config/firmware-config/scripts"
-                "./firmware-config"
-                "./firmware-config/scripts"
-                "./scripts"
-                "../openwrt-config"
-                "../openwrt-config/firmware-config/scripts"
-            )
-            
-            # 在预定义路径中搜索
-            for path in "${search_paths[@]}"; do
-                if [ -f "$path/$filename" ]; then
-                    found_path="$path/$filename"
-                    break
-                fi
-            done
-            
-            # 如果还没找到，使用 find 命令广泛搜索
-            if [ -z "$found_path" ]; then
-                found_path=$(find . -name "$filename" -type f 2>/dev/null | head -1)
-            fi
-            
-            echo "$found_path"
-        }
-        
         # 查找版本检测脚本
-        VERSION_SCRIPT=$(smart_find_file "complete_version_detector.sh")
+        VERSION_SCRIPT=$(find . -name "complete_version_detector.sh" -type f | head -1)
         if [ -z "$VERSION_SCRIPT" ]; then
-            echo "❌ 错误: 找不到 complete_version_detector.sh"
-            echo "当前目录结构:"
-            find . -name "*.sh" -type f | head -20
-            exit 1
+          echo "❌ 错误: 找不到 complete_version_detector.sh"
+          exit 1
         fi
         
         # 查找设备检测脚本
-        DEVICE_SCRIPT=$(smart_find_file "device_detection.sh")
+        DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f | head -1)
         if [ -z "$DEVICE_SCRIPT" ]; then
-            echo "❌ 错误: 找不到 device_detection.sh"
-            echo "当前目录结构:"
-            find . -name "*.sh" -type f | head -20
-            exit 1
+          echo "❌ 错误: 找不到 device_detection.sh"
+          exit 1
         fi
         
         echo "✅ 找到版本检测脚本: $VERSION_SCRIPT"
@@ -136,35 +98,14 @@ jobs:
         chmod +x complete_version_detector.sh device_detection.sh
         
         echo "✅ 脚本复制完成"
-        ls -la *.sh
 
-    - name: 修复版本检测脚本
+    - name: 清理构建目录
       run: |
         cd $BUILD_DIR
-        echo "=== 修复版本检测脚本 ==="
-        
-        # 检查脚本是否包含文件输出功能
-        if ! grep -q "version_info.txt" complete_version_detector.sh; then
-          echo "检测到脚本缺少文件输出功能，正在修复..."
-          
-          # 备份原脚本
-          cp complete_version_detector.sh complete_version_detector.sh.backup
-          
-          # 在脚本末尾添加文件输出功能
-          cat >> complete_version_detector.sh << 'EOF'
-
-# 输出版本信息到文件
-echo "SELECTED_REPO=$SELECTED_REPO" > version_info.txt
-echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> version_info.txt
-echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> version_info.txt
-
-echo "版本信息已保存到 version_info.txt"
-cat version_info.txt
-EOF
-          echo "✅ 脚本修复完成"
-        else
-          echo "✅ 脚本已包含文件输出功能"
-        fi
+        echo "=== 清理构建目录 ==="
+        # 完全清空构建目录，确保可以克隆
+        find . -mindepth 1 -maxdepth 1 ! -name '*.sh' -exec rm -rf {} + 2>/dev/null || true
+        echo "✅ 构建目录已清理"
 
     - name: 智能版本检测
       id: version-detection
@@ -172,17 +113,11 @@ EOF
         cd $BUILD_DIR
         echo "=== 智能版本检测 ==="
         
-        # 确保构建目录是干净的
-        echo "清理构建目录..."
-        find . -mindepth 1 -maxdepth 1 ! -name '*.sh' -exec rm -rf {} + 2>/dev/null || true
-        
         # 运行完整版本检测器
-        echo "运行版本检测脚本..."
         if ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}"; then
           echo "✅ 版本检测脚本执行成功"
           
-          # 检查当前目录是否有版本信息文件
-          echo "检查版本信息文件..."
+          # 检查版本信息文件
           if [ -f "version_info.txt" ]; then
             echo "✅ 找到版本信息文件"
             echo "=== version_info.txt 内容 ==="
@@ -202,13 +137,10 @@ EOF
             echo "SELECTED_BRANCH: $SELECTED_BRANCH"
             echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
           else
-            echo "❌ 版本信息文件未生成，从脚本输出解析"
+            echo "⚠️ 未找到版本信息文件，从脚本输出解析"
             # 重新运行脚本并捕获输出
             OUTPUT_FILE="version_output.txt"
             ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}" > "$OUTPUT_FILE" 2>&1 || true
-            
-            echo "=== 脚本输出 ==="
-            cat "$OUTPUT_FILE"
             
             # 从输出中解析版本信息
             SELECTED_REPO=$(grep "推荐仓库:" "$OUTPUT_FILE" | awk '{print $2}')
@@ -224,11 +156,6 @@ EOF
               echo "SELECTED_REPO: $SELECTED_REPO"
               echo "SELECTED_BRANCH: $SELECTED_BRANCH"
               echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
-              
-              # 保存到文件供后续使用
-              echo "SELECTED_REPO=$SELECTED_REPO" > version_info.txt
-              echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> version_info.txt
-              echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> version_info.txt
             else
               echo "❌ 从输出解析失败，使用默认值"
               echo "SELECTED_REPO=immortalwrt" >> $GITHUB_ENV
@@ -255,53 +182,18 @@ EOF
           exit 1
         fi
         
-        # 完全清空构建目录（保留版本信息文件）
-        echo "完全清空构建目录..."
-        rm -rf ./* ./.git* 2>/dev/null || true
+        # 再次确保目录是空的
+        echo "确保构建目录为空..."
+        find . -mindepth 1 -maxdepth 1 ! -name '*.sh' -exec rm -rf {} + 2>/dev/null || true
         
         echo "开始克隆仓库..."
         git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .
         
         if [ $? -eq 0 ]; then
           echo "✅ 源码克隆完成"
-          # 验证克隆是否成功
-          if [ -d ".git" ]; then
-            echo "✅ Git 仓库验证成功"
-          else
-            echo "❌ Git 仓库验证失败"
-            exit 1
-          fi
         else
           echo "❌ 源码克隆失败"
           exit 1
-        fi
-
-    - name: 修复设备检测脚本
-      run: |
-        cd $BUILD_DIR
-        echo "=== 修复设备检测脚本 ==="
-        
-        # 检查脚本是否包含文件输出功能
-        if ! grep -q "device_info.txt" device_detection.sh; then
-          echo "检测到脚本缺少文件输出功能，正在修复..."
-          
-          # 备份原脚本
-          cp device_detection.sh device_detection.sh.backup
-          
-          # 在脚本末尾添加文件输出功能
-          cat >> device_detection.sh << 'EOF'
-
-# 输出设备信息到文件
-echo "PLATFORM=$PLATFORM" > device_info.txt
-echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> device_info.txt
-echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> device_info.txt
-
-echo "设备信息已保存到 device_info.txt"
-cat device_info.txt
-EOF
-          echo "✅ 设备检测脚本修复完成"
-        else
-          echo "✅ 设备检测脚本已包含文件输出功能"
         fi
 
     - name: 智能设备检测
@@ -311,12 +203,10 @@ EOF
         echo "=== 智能设备检测 ==="
         
         # 运行设备检测脚本
-        echo "运行设备检测脚本..."
         if ./device_detection.sh "${{ github.event.inputs.device_name }}"; then
           echo "✅ 设备检测脚本执行成功"
           
-          # 检查当前目录是否有设备信息文件
-          echo "检查设备信息文件..."
+          # 检查设备信息文件
           if [ -f "device_info.txt" ]; then
             echo "✅ 找到设备信息文件"
             echo "=== device_info.txt 内容 ==="
@@ -335,13 +225,10 @@ EOF
             echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
             echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
           else
-            echo "❌ 设备信息文件未生成，从脚本输出解析"
+            echo "⚠️ 未找到设备信息文件，从脚本输出解析"
             # 重新运行脚本并捕获输出
             OUTPUT_FILE="device_output.txt"
             ./device_detection.sh "${{ github.event.inputs.device_name }}" > "$OUTPUT_FILE" 2>&1 || true
-            
-            echo "=== 脚本输出 ==="
-            cat "$OUTPUT_FILE"
             
             # 从输出中解析设备信息
             PLATFORM=$(grep "平台:" "$OUTPUT_FILE" | awk '{print $2}')
@@ -357,11 +244,6 @@ EOF
               echo "PLATFORM: $PLATFORM"
               echo "DEVICE_SHORT_NAME: $DEVICE_SHORT_NAME"
               echo "DEVICE_FULL_NAME: $DEVICE_FULL_NAME"
-              
-              # 保存到文件供后续使用
-              echo "PLATFORM=$PLATFORM" > device_info.txt
-              echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> device_info.txt
-              echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> device_info.txt
             else
               echo "❌ 从输出解析失败，使用默认值"
               echo "PLATFORM=mediatek" >> $GITHUB_ENV
@@ -409,7 +291,6 @@ EOF
             echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
             ;;
           "ar71xx")
-            # 老旧设备通常使用 ar71xx 平台
             echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
             echo "CONFIG_PACKAGE_kmod-ath9k=y" >> .config
             ;;
@@ -472,12 +353,6 @@ EOF
           echo "✅ 找到目标目录"
           echo "生成的固件:"
           find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) -exec ls -lh {} \;
-          
-          # 显示文件大小和路径
-          echo "=== 固件文件详情 ==="
-          find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) | while read file; do
-            echo "固件: $file ($(du -h "$file" | cut -f1))"
-          done
         else
           echo "❌ 未找到目标目录 bin/targets"
           echo "当前目录内容:"
