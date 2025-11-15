@@ -24,24 +24,67 @@ REPOS=(
     "openwrt:https://git.openwrt.org/openwrt/openwrt.git"
 )
 
-# 老旧设备列表
-OLD_DEVICES=(
-    "wr841n" "wr841nd" "tl-wr841n"
-    "wr842n" "wr842nd" "tl-wr842n"
-    "wr941n" "wr941nd" "tl-wr941n"
-    "mw150r" "fw150r"
-    "wr740n" "wr740nd" "tl-wr740n"
-    "wr743n" "wr743nd" "tl-wr743n"
-    "wr843n" "wr843nd" "tl-wr843n"
-    "wr845n" "wr845nd" "tl-wr845n"
-    "wr846n" "wr846nd" "tl-wr846n"
-    "wr1043n" "wr1043nd" "tl-wr1043n"
-    "wr2543n" "wr2543nd" "tl-wr2543n"
-    "wdr4300" "wdr4310" "wdr4900"
-    "archer-c7" "archer-c5" "archer-c20"
-    "dir-615" "dir-620" "dir-825"
-    "wnr2000" "wnr2200" "wnr3500"
-)
+# 设备支持检测函数
+check_device_support() {
+    local device_name="$1"
+    local repo_url="$2"
+    local branch="$3"
+    
+    local temp_dir="/tmp/device_check_$$"
+    
+    # 创建临时目录
+    mkdir -p "$temp_dir"
+    cd "$temp_dir"
+    
+    log_info "检查设备 $device_name 在 $repo_url $branch 中的支持情况..."
+    
+    # 尝试克隆特定版本
+    if git clone --depth 1 --branch "$branch" "$repo_url" . 2>/dev/null; then
+        log_info "✅ 版本 $branch 克隆成功"
+    else
+        log_warning "❌ 无法克隆版本 $branch"
+        cd /
+        rm -rf "$temp_dir"
+        return 1
+    fi
+    
+    # 方法1: 查找设备树文件
+    local dts_files=$(find target/linux -name "*$device_name*.dts" -o -name "*$device_name*.dtsi" 2>/dev/null | head -3)
+    if [ -n "$dts_files" ]; then
+        log_success "✅ 找到设备树文件"
+        echo "$dts_files"
+        cd /
+        rm -rf "$temp_dir"
+        return 0
+    fi
+    
+    # 方法2: 在目标配置中查找
+    local target_files=$(find target/linux -name "target.mk" -o -name "Makefile" 2>/dev/null)
+    for target_file in $target_files; do
+        if grep -q "$device_name" "$target_file" 2>/dev/null; then
+            log_success "✅ 在配置文件中找到设备: $(basename $target_file)"
+            cd /
+            rm -rf "$temp_dir"
+            return 0
+        fi
+    done
+    
+    # 方法3: 查找内核配置中的设备
+    local config_files=$(find target/linux -name "config-*" 2>/dev/null | head -3)
+    for config_file in $config_files; do
+        if grep -q "$device_name" "$config_file" 2>/dev/null; then
+            log_success "✅ 在内核配置中找到设备: $(basename $config_file)"
+            cd /
+            rm -rf "$temp_dir"
+            return 0
+        fi
+    done
+    
+    log_warning "❌ 版本 $branch 不支持设备 $device_name"
+    cd /
+    rm -rf "$temp_dir"
+    return 1
+}
 
 # 主检测函数
 detect_best_version() {
@@ -52,14 +95,6 @@ detect_best_version() {
     echo "=== OpenWrt 智能版本检测 ==="
     echo "目标设备: $device_name"
     echo "老旧设备模式: $is_old_device"
-    
-    # 检测是否为老旧设备
-    if [ "$is_old_device" = "false" ]; then
-        local detected_old_device=$(check_old_device "$device_name")
-        if [ "$detected_old_device" = "true" ]; then
-            log_warning "检测到设备 $device_name 可能是老旧设备，建议启用老旧设备模式"
-        fi
-    fi
     
     # 如果用户指定了版本，优先使用
     if [ -n "$user_specified_version" ]; then
@@ -78,27 +113,6 @@ detect_best_version() {
         log_info "使用现代设备检测策略" 
         detect_for_modern_device "$device_name"
     fi
-}
-
-# 检测是否为老旧设备
-check_old_device() {
-    local device_name="$1"
-    local lower_device=$(echo "$device_name" | tr '[:upper:]' '[:lower:]')
-    
-    for old_device in "${OLD_DEVICES[@]}"; do
-        if [[ "$lower_device" == *"$old_device"* ]]; then
-            echo "true"
-            return 0
-        fi
-    done
-    
-    # 额外检查：包含特定年份或旧型号标识
-    if [[ "$lower_device" =~ (200[0-9]|201[0-5]|wr[0-9]+[a-z]?|tl-wr[0-9]+|dir-[0-9]+) ]]; then
-        echo "true"
-        return 0
-    fi
-    
-    echo "false"
 }
 
 # 现代设备检测策略
@@ -185,8 +199,10 @@ detect_modern_versions() {
         
         log_info "测试版本 [$tested_count/$version_count] - 稳定性: $stability - $version"
         
-        # 测试该版本
-        if test_version "$device_name" "$repo" "$repo_url" "$version"; then
+        # 检查该版本是否支持设备
+        if check_device_support "$device_name" "$repo_url" "$version"; then
+            log_success "✅ 版本 $version 支持设备 $device_name"
+            export SELECTED_BRANCH="$version"
             cd /
             rm -rf "$temp_dir"
             return 0
@@ -242,8 +258,10 @@ detect_old_versions() {
         
         log_info "测试版本 [$tested_count/$version_count] - 稳定性: $stability - $version"
         
-        # 测试该版本
-        if test_version "$device_name" "$repo" "$repo_url" "$version"; then
+        # 检查该版本是否支持设备
+        if check_device_support "$device_name" "$repo_url" "$version"; then
+            log_success "✅ 版本 $version 支持设备 $device_name"
+            export SELECTED_BRANCH="$version"
             cd /
             rm -rf "$temp_dir"
             return 0
@@ -335,138 +353,6 @@ get_old_versions_sorted() {
     } | grep -v "^$"  # 移除空行
 }
 
-# 测试特定版本
-test_version() {
-    local device_name="$1"
-    local repo="$2"
-    local repo_url="$3"
-    local version="$4"
-    
-    local temp_dir="/tmp/version_test_$$"
-    
-    # 创建临时目录
-    mkdir -p "$temp_dir"
-    cd "$temp_dir"
-    
-    log_info "克隆 $repo - $version ..."
-    
-    # 尝试克隆特定版本
-    if git clone --depth 1 --branch "$version" "$repo_url" . 2>/dev/null; then
-        log_info "✅ 版本 $version 克隆成功"
-    else
-        log_warning "❌ 无法克隆版本 $version，尝试查找替代..."
-        
-        # 如果是分支不存在，尝试查找类似分支
-        if [[ "$version" == *"openwrt"* ]]; then
-            local alt_version=$(find_alternative_branch "$repo" "$repo_url" "$version")
-            if [ -n "$alt_version" ] && git clone --depth 1 --branch "$alt_version" "$repo_url" . 2>/dev/null; then
-                log_info "✅ 使用替代版本: $alt_version"
-                version="$alt_version"
-            else
-                cd /
-                rm -rf "$temp_dir"
-                return 1
-            fi
-        else
-            cd /
-            rm -rf "$temp_dir"
-            return 1
-        fi
-    fi
-    
-    # 更新 feeds（基础操作）
-    if [ -f "feeds.conf.default" ]; then
-        ./scripts/feeds update -a >/dev/null 2>&1
-        ./scripts/feeds install -a >/dev/null 2>&1
-    fi
-    
-    # 运行设备检测
-    if check_device_support "$device_name"; then
-        log_success "✅ 版本 $version 支持设备 $device_name"
-        export SELECTED_BRANCH="$version"
-        cd /
-        rm -rf "$temp_dir"
-        return 0
-    else
-        log_warning "❌ 版本 $version 不支持设备 $device_name"
-        cd /
-        rm -rf "$temp_dir"
-        return 1
-    fi
-}
-
-# 查找替代分支
-find_alternative_branch() {
-    local repo="$1"
-    local repo_url="$2"
-    local original_version="$3"
-    
-    local temp_dir="/tmp/alt_branch_$$"
-    mkdir -p "$temp_dir"
-    cd "$temp_dir"
-    
-    log_info "在 $repo 中查找 $original_version 的替代分支..."
-    
-    # 克隆仓库并列出所有分支
-    git clone --depth 1 "$repo_url" . 2>/dev/null
-    
-    # 提取版本号
-    local version_num=$(echo "$original_version" | grep -oE '[0-9]+\.[0-9]+' | head -1)
-    
-    if [ -n "$version_num" ]; then
-        # 查找相同主版本号的其他分支
-        local alternative_branches=$(git branch -a | grep -E "($version_num|[0-9]+\.[0-9]+)" | sed 's/^.*\///' | sort -V | head -5)
-        
-        if [ -n "$alternative_branches" ]; then
-            log_info "找到的替代分支:"
-            echo "$alternative_branches"
-            
-            # 返回第一个替代分支
-            echo "$alternative_branches" | head -1
-            cd /
-            rm -rf "$temp_dir"
-            return 0
-        fi
-    fi
-    
-    cd /
-    rm -rf "$temp_dir"
-    return 1
-}
-
-# 检查设备支持
-check_device_support() {
-    local device_name="$1"
-    
-    # 方法1: 查找设备树文件
-    local dts_files=$(find target/linux -name "*$device_name*.dts" -o -name "*$device_name*.dtsi" 2>/dev/null | head -3)
-    if [ -n "$dts_files" ]; then
-        log_success "✅ 找到设备树文件"
-        echo "$dts_files"
-        return 0
-    fi
-    
-    # 方法2: 在目标配置中查找
-    local target_files=$(find target/linux -name "target.mk" -o -name "Makefile" 2>/dev/null)
-    for target_file in $target_files; do
-        if grep -q "$device_name" "$target_file" 2>/dev/null; then
-            log_success "✅ 在配置文件中找到设备: $(basename $target_file)"
-            return 0
-        fi
-    done
-    
-    # 方法3: 查找内核配置中的设备
-    local config_files=$(find target/linux -name "config-*" 2>/dev/null | head -3)
-    for config_file in $config_files; do
-        if grep -q "$device_name" "$config_file" 2>/dev/null; then
-            log_success "✅ 在内核配置中找到设备: $(basename $config_file)"
-            return 0
-        fi
-    done
-    
-    return 1
-}
-
 # 测试用户指定版本
 test_specific_version() {
     local device_name="$1"
@@ -498,8 +384,9 @@ test_specific_version() {
     
     log_info "测试指定版本: $repo:$branch"
     
-    if test_version "$device_name" "$repo" "$repo_url" "$branch"; then
+    if check_device_support "$device_name" "$repo_url" "$branch"; then
         export SELECTED_REPO="$repo"
+        export SELECTED_BRANCH="$branch"
         export SELECTED_REPO_URL="$repo_url"
         return 0
     else
