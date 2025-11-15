@@ -314,10 +314,13 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 生成设备配置 ==="
-        CLEAN_PLATFORM=$(echo "$PLATFORM" | tr -cd '[:alnum:]_')
-        CLEAN_DEVICE=$(echo "$DEVICE_SHORT_NAME" | tr -cd '[:alnum:]_')
-        echo "清理后的平台: $CLEAN_PLATFORM"
-        echo "清理后的设备: $CLEAN_DEVICE"
+        
+        # 清理平台和设备名称，确保符合 OpenWrt 配置格式
+        CLEAN_PLATFORM=$(echo "$PLATFORM" | tr '[:lower:]' '[:upper:]' | tr -cd '[:alnum:]_')
+        CLEAN_DEVICE=$(echo "$DEVICE_SHORT_NAME" | tr '-' '_' | tr -cd '[:alnum:]_')
+        
+        echo "平台: $PLATFORM -> $CLEAN_PLATFORM"
+        echo "设备: $DEVICE_SHORT_NAME -> $CLEAN_DEVICE"
         
         # 生成配置
         echo "# OpenWrt 自动生成配置" > .config
@@ -325,17 +328,20 @@ jobs:
         echo "" >> .config
         echo "# 版本: $SELECTED_REPO - $SELECTED_BRANCH" >> .config
         echo "# 设备: ${{ github.event.inputs.device_name }}" >> .config
-        echo "# 平台: $CLEAN_PLATFORM" >> .config
-        echo "# 设备标识: $CLEAN_DEVICE" >> .config
+        echo "# 平台: $PLATFORM" >> .config
+        echo "# 设备标识: $DEVICE_SHORT_NAME" >> .config
         echo "# 生成时间: $(date)" >> .config
         echo "" >> .config
         
-        # 添加配置项
+        # 基础目标配置
         echo "CONFIG_TARGET_${CLEAN_PLATFORM}=y" >> .config
-        echo "CONFIG_TARGET_${CLEAN_PLATFORM}_generic=y" >> .config
-        echo "CONFIG_TARGET_DEVICE_${CLEAN_PLATFORM}_generic_DEVICE_${CLEAN_DEVICE}=y" >> .config
+        echo "CONFIG_TARGET_${CLEAN_PLATFORM}_GENERIC=y" >> .config
+        echo "CONFIG_TARGET_${CLEAN_PLATFORM}_GENERIC_DEVICE_${CLEAN_DEVICE}=y" >> .config
+        
+        # 文件系统配置
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
+        echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
         
         # 基础包配置
         echo "CONFIG_PACKAGE_base-files=y" >> .config
@@ -344,6 +350,8 @@ jobs:
         echo "CONFIG_PACKAGE_dropbear=y" >> .config
         echo "CONFIG_PACKAGE_firewall=y" >> .config
         echo "CONFIG_PACKAGE_opkg=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipv6=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-core=y" >> .config
         
         # 根据配置类型添加包
         CONFIG_TYPE="${{ github.event.inputs.config_type }}"
@@ -353,13 +361,15 @@ jobs:
             echo "CONFIG_PACKAGE_luci=y" >> .config
             echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
             echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
+            echo "CONFIG_PACKAGE_luci-proto-ipv6=y" >> .config
+            echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
         fi
         
         # 自定义包
         if [ "$CONFIG_TYPE" = "custom" ] && [ -n "${{ github.event.inputs.extra_packages }}" ]; then
             echo "# 额外包配置" >> .config
             for pkg in ${{ github.event.inputs.extra_packages }}; do
-                pkg_clean=$(echo "$pkg" | tr -cd '[:alnum:]_')
+                pkg_clean=$(echo "$pkg" | tr '-' '_' | tr -cd '[:alnum:]_')
                 echo "CONFIG_PACKAGE_${pkg_clean}=y" >> .config
             done
         fi
@@ -368,37 +378,110 @@ jobs:
         echo "=== 验证 .config 文件 ==="
         echo "文件行数: $(wc -l < .config)"
         echo "文件大小: $(wc -c < .config) 字节"
-        echo "=== 前20行内容 ==="
-        head -20 .config
+        echo "=== 设备相关配置项 ==="
+        grep "CONFIG_TARGET" .config
 
     - name: 快速配置验证
       run: |
         cd $BUILD_DIR
         echo "=== 快速配置验证 ==="
         
+        # 清理名称用于检查
+        CLEAN_PLATFORM=$(echo "$PLATFORM" | tr '[:lower:]' '[:upper:]' | tr -cd '[:alnum:]_')
+        CLEAN_DEVICE=$(echo "$DEVICE_SHORT_NAME" | tr '-' '_' | tr -cd '[:alnum:]_')
+        
+        echo "清理后的平台: $CLEAN_PLATFORM"
+        echo "清理后的设备: $CLEAN_DEVICE"
+        
+        # 显示当前配置中的设备相关项
+        echo "=== 当前 .config 中的设备配置 ==="
+        grep "CONFIG_TARGET" .config | head -20
+        
         # 执行快速配置检查
         echo "执行 make defconfig..."
         if make defconfig; then
             echo "✅ 配置验证通过"
             
-            # 检查最终配置中是否包含我们的设备
-            echo "=== 检查最终配置 ==="
+            # 检查最终配置
+            echo "=== 最终 .config 中的设备配置 ==="
+            grep "CONFIG_TARGET" .config | head -20
+            
+            # 检查设备是否启用 - 尝试多种可能的配置项格式
+            DEVICE_ENABLED=0
+            
+            # 格式1: CONFIG_TARGET_IPQ40XX_GENERIC_DEVICE_ASUS_RT_AC42U
+            if grep -q "CONFIG_TARGET_${CLEAN_PLATFORM}_GENERIC_DEVICE_${CLEAN_DEVICE}=y" .config; then
+                echo "✅ 设备 $DEVICE_SHORT_NAME 在最终配置中正确启用 (格式1)"
+                DEVICE_ENABLED=1
+            fi
+            
+            # 格式2: CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-ac42u
             if grep -q "CONFIG_TARGET_DEVICE_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" .config; then
-                echo "✅ 设备 $DEVICE_SHORT_NAME 在最终配置中正确启用"
-                
-                # 显示相关的配置项
-                echo "=== 相关配置项 ==="
-                grep "CONFIG_TARGET_DEVICE_${PLATFORM}" .config
-            else
+                echo "✅ 设备 $DEVICE_SHORT_NAME 在最终配置中正确启用 (格式2)"
+                DEVICE_ENABLED=1
+            fi
+            
+            # 格式3: 小写格式
+            CLEAN_PLATFORM_LOWER=$(echo "$PLATFORM" | tr '[:upper:]' '[:lower:]')
+            CLEAN_DEVICE_LOWER=$(echo "$DEVICE_SHORT_NAME" | tr '[:upper:]' '[:lower:]')
+            if grep -q "CONFIG_TARGET_DEVICE_${CLEAN_PLATFORM_LOWER}_generic_DEVICE_${CLEAN_DEVICE_LOWER}=y" .config; then
+                echo "✅ 设备 $DEVICE_SHORT_NAME 在最终配置中正确启用 (格式3)"
+                DEVICE_ENABLED=1
+            fi
+            
+            if [ $DEVICE_ENABLED -eq 0 ]; then
                 echo "❌ 设备 $DEVICE_SHORT_NAME 未在最终配置中启用"
-                echo "=== 当前配置中的设备 ==="
-                grep "CONFIG_TARGET_DEVICE" .config | head -10
-                exit 1
+                echo "=== 所有设备配置项 ==="
+                grep "CONFIG_TARGET_DEVICE" .config
+                echo "=== 尝试手动设置设备 ==="
+                # 使用替代配置方法
+                manual_device_setup
+            else
+                echo "✅ 设备验证成功"
             fi
         else
             echo "❌ 配置验证失败"
             exit 1
         fi
+
+    - name: 手动设备设置（备用）
+      if: failure()
+      run: |
+        cd $BUILD_DIR
+        echo "=== 手动设备设置 ==="
+        
+        # 使用 OpenWrt 的 menuconfig 来选择合适的设备
+        echo "尝试使用预设配置..."
+        
+        # 根据平台选择不同的预设
+        case "$PLATFORM" in
+            "ipq40xx")
+                echo "应用 ipq40xx 通用配置..."
+                # 使用 ipq40xx 的通用配置
+                make target/linux/ipq40xx/config
+                ;;
+            "ar71xx")
+                echo "应用 ar71xx 通用配置..."
+                make target/linux/ar71xx/config
+                ;;
+            "ramips")
+                echo "应用 ramips 通用配置..."
+                make target/linux/ramips/config
+                ;;
+            "mediatek")
+                echo "应用 mediatek 通用配置..."
+                make target/linux/mediatek/config
+                ;;
+            *)
+                echo "未知平台，使用默认配置"
+                ;;
+        esac
+        
+        # 重新运行 defconfig
+        make defconfig
+        
+        echo "=== 手动设置后的设备配置 ==="
+        grep "CONFIG_TARGET_DEVICE" .config | head -10
 
     - name: 应用配置并编译
       run: |
