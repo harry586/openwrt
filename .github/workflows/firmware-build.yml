@@ -74,82 +74,103 @@ jobs:
       id: device-detection
       run: |
         cd $BUILD_DIR
-        echo "=== 智能设备检测 ==="
         
-        # 设备映射表
-        DEVICE_NAME="${{ github.event.inputs.device_name }}"
-        case "$DEVICE_NAME" in
-          "ac42u"|"rt-ac42u"|"asus_ac42u")
-            PLATFORM="ipq40xx"
-            DEVICE_SHORT_NAME="asus_rt-ac42u"
-            DEVICE_FULL_NAME="asus,rt-ac42u"
-            ;;
-          "acrh17"|"rt-acrh17"|"asus_acrh17")
-            PLATFORM="ipq40xx"
-            DEVICE_SHORT_NAME="asus_rt-acrh17" 
-            DEVICE_FULL_NAME="asus,rt-acrh17"
-            ;;
-          "mi3g"|"r3g"|"xiaomi_mi3g")
-            PLATFORM="ramips"
-            DEVICE_SHORT_NAME="xiaomi_mi-router-3g"
-            DEVICE_FULL_NAME="xiaomi,mi-router-3g"
-            ;;
-          "k2p"|"phicomm_k2p")
-            PLATFORM="ramips"
-            DEVICE_SHORT_NAME="phicomm_k2p"
-            DEVICE_FULL_NAME="phicomm,k2p"
-            ;;
-          *)
-            echo "❌ 未知设备: $DEVICE_NAME"
-            echo "尝试自动检测..."
-            # 这里可以调用上面的自动检测脚本
-            exit 1
-            ;;
-        esac
-        
-        echo "✅ 检测到设备:"
-        echo "平台: $PLATFORM"
-        echo "设备简称: $DEVICE_SHORT_NAME"
-        echo "完整名称: $DEVICE_FULL_NAME"
-        
-        # 验证平台存在性
-        if [ ! -d "target/linux/$PLATFORM" ]; then
-          echo "❌ 错误: 平台目录不存在: target/linux/$PLATFORM"
-          exit 1
-        fi
-        
-        # 查找内核配置
-        KERNEL_CONFIG=$(find "target/linux/$PLATFORM" -name "config-*" | sort -V | tail -1)
-        if [ -n "$KERNEL_CONFIG" ]; then
-          echo "✅ 使用内核配置: $(basename $KERNEL_CONFIG)"
-        else
-          echo "❌ 未找到内核配置文件"
-          exit 1
-        fi
-        
-        # 查找设备树文件
-        DTS_FILE=$(find "target/linux/$PLATFORM" -name "*$DEVICE_SHORT_NAME*.dts" | head -1)
-        if [ -n "$DTS_FILE" ]; then
-          echo "✅ 找到设备树文件: $(basename $DTS_FILE)"
-        else
-          echo "⚠️ 未找到设备树文件: *$DEVICE_SHORT_NAME*.dts"
-        fi
-        
-        # 验证设备在配置中定义
-        if [ -f "target/linux/$PLATFORM/generic/target.mk" ]; then
-          if grep -q "$DEVICE_SHORT_NAME" "target/linux/$PLATFORM/generic/target.mk"; then
-            echo "✅ 设备在目标配置中已定义"
-          else
-            echo "❌ 设备在目标配置中未定义"
+        # 智能设备检测函数
+        detect_device() {
+          local device_input="$1"
+          local platform=""
+          local device_short_name=""
+          local device_full_name=""
+          
+          echo "=== 智能设备检测 ==="
+          echo "输入设备: $device_input"
+          
+          # 设备映射表
+          case "$device_input" in
+            "ac42u"|"rt-ac42u"|"asus_ac42u")
+              platform="ipq40xx"
+              device_short_name="asus_rt-ac42u"
+              device_full_name="asus,rt-ac42u"
+              ;;
+            "acrh17"|"rt-acrh17"|"asus_acrh17")
+              platform="ipq40xx"
+              device_short_name="asus_rt-acrh17"
+              device_full_name="asus,rt-acrh17"
+              ;;
+            "mi3g"|"r3g"|"xiaomi_mi3g")
+              platform="ramips"
+              device_short_name="xiaomi_mi-router-3g"
+              device_full_name="xiaomi,mi-router-3g"
+              ;;
+            "k2p"|"phicomm_k2p")
+              platform="ramips"
+              device_short_name="phicomm_k2p"
+              device_full_name="phicomm,k2p"
+              ;;
+            *)
+              echo "❌ 未知设备: $device_input"
+              echo "尝试自动检测..."
+              # 搜索设备树文件
+              local dts_files=$(find target/linux -name "*$device_input*.dts" -o -name "*$device_input*.dtsi" 2>/dev/null | head -3)
+              if [ -n "$dts_files" ]; then
+                platform=$(echo "$dts_files" | head -1 | cut -d'/' -f3)
+                device_short_name=$(basename "$dts_files" | sed 's/\.dts//')
+                device_full_name="$device_input"
+                echo "✅ 自动检测到设备树文件"
+              else
+                echo "❌ 自动检测失败"
+                exit 1
+              fi
+              ;;
+          esac
+          
+          echo "✅ 检测到设备:"
+          echo "平台: $platform"
+          echo "设备简称: $device_short_name"
+          echo "完整名称: $device_full_name"
+          
+          # 验证平台存在性
+          if [ ! -d "target/linux/$platform" ]; then
+            echo "❌ 错误: 平台目录不存在: target/linux/$platform"
             exit 1
           fi
-        fi
+          
+          # 查找内核配置
+          local kernel_configs=$(find "target/linux/$platform" -name "config-*" 2>/dev/null | sort -V | tail -1)
+          if [ -n "$kernel_configs" ]; then
+            echo "✅ 使用内核配置: $(basename $kernel_configs)"
+          else
+            echo "❌ 未找到内核配置文件"
+            exit 1
+          fi
+          
+          # 查找设备树文件
+          local dts_file=$(find "target/linux/$platform" -name "*$device_short_name*.dts" 2>/dev/null | head -1)
+          if [ -n "$dts_file" ]; then
+            echo "✅ 找到设备树文件: $(basename $dts_file)"
+          else
+            echo "⚠️ 未找到设备树文件: *$device_short_name*.dts"
+          fi
+          
+          # 验证设备在配置中定义
+          if [ -f "target/linux/$platform/generic/target.mk" ]; then
+            if grep -q "$device_short_name" "target/linux/$platform/generic/target.mk"; then
+              echo "✅ 设备在目标配置中已定义"
+            else
+              echo "❌ 设备在目标配置中未定义"
+              exit 1
+            fi
+          fi
+          
+          # 返回结果
+          echo "PLATFORM=$platform" >> $GITHUB_ENV
+          echo "DEVICE_SHORT_NAME=$device_short_name" >> $GITHUB_ENV
+          echo "DEVICE_FULL_NAME=$device_full_name" >> $GITHUB_ENV
+          echo "KERNEL_CONFIG=$kernel_configs" >> $GITHUB_ENV
+        }
         
-        # 设置输出变量
-        echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
-        echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
-        echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
-        echo "KERNEL_CONFIG=$KERNEL_CONFIG" >> $GITHUB_ENV
+        # 执行设备检测
+        detect_device "${{ github.event.inputs.device_name }}"
 
     - name: 生成设备配置
       run: |
@@ -245,4 +266,48 @@ jobs:
         echo "CONFIG_PACKAGE_odhcpd=y" >> .config
         echo "CONFIG_PACKAGE_opkg=y" >> .config
         echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config
-        echo "CONFIG_PACKAGE_procd=y" >> .
+        echo "CONFIG_PACKAGE_procd=y" >> .config
+        echo "CONFIG_PACKAGE_rpcd=y" >> .config
+        echo "CONFIG_PACKAGE_rpcd-mod-file=y" >> .config
+        echo "CONFIG_PACKAGE_rpcd-mod-iwinfo=y" >> .config
+        echo "CONFIG_PACKAGE_rpcd-mod-luci=y" >> .config
+        echo "CONFIG_PACKAGE_rpcd-mod-rrdns=y" >> .config
+        echo "CONFIG_PACKAGE_swconfig=y" >> .config
+        echo "CONFIG_PACKAGE_uboot-envtools=y" >> .config
+        echo "CONFIG_PACKAGE_ubus=y" >> .config
+        echo "CONFIG_PACKAGE_ubusd=y" >> .config
+        echo "CONFIG_PACKAGE_uci=y" >> .config
+        echo "CONFIG_PACKAGE_uclient-fetch=y" >> .config
+        echo "CONFIG_PACKAGE_urandom-seed=y" >> .config
+        echo "CONFIG_PACKAGE_urngd=y" >> .config
+        
+        echo "✅ 配置生成完成"
+        echo "配置预览:"
+        grep "CONFIG_TARGET" .config | head -10
+
+    - name: 应用配置并验证
+      run: |
+        cd $BUILD_DIR
+        echo "=== 应用配置并验证 ==="
+        
+        if [ ! -f ".config" ]; then
+          echo "❌ .config 文件不存在"
+          exit 1
+        fi
+        
+        echo "执行 defconfig..."
+        if make defconfig; then
+          echo "✅ defconfig 成功"
+        else
+          echo "❌ defconfig 失败"
+          exit 1
+        fi
+        
+        echo "=== 最终配置验证 ==="
+        if grep -q "CONFIG_TARGET_${PLATFORM}_generic=y" .config && \
+           grep -q "CONFIG_TARGET_DEVICE_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" .config; then
+          echo "✅ 设备配置正确"
+        else
+          echo "❌ 设备配置错误"
+          echo "当前配置:"
+          grep "CONFIG_TARGET
