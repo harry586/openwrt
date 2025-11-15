@@ -57,31 +57,22 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential libncurses5-dev libssl-dev python3 unzip zlib1g-dev subversion gcc-multilib git curl
 
-    - name: 创建和准备构建目录
+    - name: 创建构建目录
       run: |
-        echo "=== 创建和准备构建目录 ==="
-        # 彻底删除旧目录（如果存在）
+        echo "=== 创建构建目录 ==="
+        # 彻底删除旧目录
         sudo rm -rf $BUILD_DIR
-        # 创建新目录并设置权限
+        # 创建新目录
         sudo mkdir -p $BUILD_DIR
         sudo chown -R $USER:$USER $BUILD_DIR
         sudo chmod -R 755 $BUILD_DIR
-        
-        # 验证目录权限
         cd $BUILD_DIR
         echo "当前目录: $(pwd)"
-        echo "目录权限:"
         ls -la
-        if [ $? -ne 0 ]; then
-          echo "错误: 无法访问构建目录"
-          exit 1
-        fi
 
     - name: 复制配置脚本
       run: |
-        cd $BUILD_DIR
         echo "=== 复制配置脚本 ==="
-        
         cd $GITHUB_WORKSPACE
         
         VERSION_SCRIPT=$(find . -name "complete_version_detector.sh" -type f | head -1)
@@ -92,9 +83,7 @@ jobs:
         
         echo "✅ 找到版本检测脚本: $VERSION_SCRIPT"
         cp "$VERSION_SCRIPT" $BUILD_DIR/complete_version_detector.sh
-        
-        cd $BUILD_DIR
-        chmod +x complete_version_detector.sh
+        chmod +x $BUILD_DIR/complete_version_detector.sh
         echo "✅ 脚本复制完成"
 
     - name: 智能版本检测
@@ -102,10 +91,6 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 智能版本检测 ==="
-        
-        # 确保有写入权限
-        sudo chown -R $USER:$USER $BUILD_DIR
-        chmod -R 755 $BUILD_DIR
         
         if ./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "false"; then
           echo "✅ 版本检测脚本执行成功"
@@ -133,30 +118,31 @@ jobs:
           exit 1
         fi
 
-    - name: 彻底清理构建目录
+    - name: 保存版本信息并清理目录
       run: |
-        cd $BUILD_DIR
-        echo "=== 彻底清理构建目录 ==="
-        echo "当前目录内容:"
-        ls -la
+        echo "=== 保存版本信息并清理目录 ==="
         
-        # 检查当前目录是否是git仓库
-        if [ -d ".git" ]; then
-          echo "检测到.git目录，当前目录已经是git仓库"
-          # 如果是git仓库，回到上级目录删除整个构建目录
-          cd /
-          sudo rm -rf $BUILD_DIR
-          sudo mkdir -p $BUILD_DIR
-          sudo chown -R $USER:$USER $BUILD_DIR
-          sudo chmod -R 755 $BUILD_DIR
-          cd $BUILD_DIR
-          echo "✅ 已彻底清理并重新创建构建目录"
-        else
-          echo "目录不是git仓库，正常清理..."
-          # 清理除脚本和配置文件外的所有内容
-          find . -mindepth 1 -maxdepth 1 ! -name '*.sh' ! -name 'version_info.txt' ! -name 'device_info.txt' -exec rm -rf {} + 2>/dev/null || true
+        # 保存版本信息到临时位置
+        if [ -f "$BUILD_DIR/version_info.txt" ]; then
+          cp $BUILD_DIR/version_info.txt /tmp/version_info.txt
+          echo "✅ 版本信息已保存到临时位置"
         fi
         
+        # 彻底清理构建目录
+        echo "彻底清理构建目录..."
+        cd /
+        sudo rm -rf $BUILD_DIR
+        sudo mkdir -p $BUILD_DIR
+        sudo chown -R $USER:$USER $BUILD_DIR
+        sudo chmod -R 755 $BUILD_DIR
+        
+        # 恢复版本信息
+        if [ -f "/tmp/version_info.txt" ]; then
+          cp /tmp/version_info.txt $BUILD_DIR/version_info.txt
+          echo "✅ 版本信息已恢复"
+        fi
+        
+        cd $BUILD_DIR
         echo "清理后目录内容:"
         ls -la
         echo "✅ 目录清理完成"
@@ -177,8 +163,9 @@ jobs:
         echo "当前目录内容:"
         ls -la
         
-        # 确保目录为空（除了我们保留的文件）
-        if [ "$(ls -A . | grep -v '\.sh$' | grep -v 'version_info.txt' | grep -v 'device_info.txt')" ]; then
+        # 确保目录为空（除了我们保留的version_info.txt）
+        FILE_COUNT=$(ls -A | grep -v 'version_info.txt' | wc -l)
+        if [ $FILE_COUNT -ne 0 ]; then
           echo "❌ 错误: 目录非空，无法克隆"
           echo "当前文件列表:"
           ls -la
@@ -190,9 +177,26 @@ jobs:
         
         if [ $? -eq 0 ]; then
           echo "✅ 源码克隆完成"
+          echo "克隆后目录内容:"
+          ls -la
         else
           echo "❌ 源码克隆失败"
           exit 1
+        fi
+
+    - name: 恢复版本信息
+      run: |
+        cd $BUILD_DIR
+        echo "=== 恢复版本信息 ==="
+        
+        # 如果临时文件存在，复制回来
+        if [ -f "/tmp/version_info.txt" ]; then
+          cp /tmp/version_info.txt .
+          echo "✅ 版本信息已恢复"
+          echo "版本信息文件内容:"
+          cat version_info.txt
+        else
+          echo "⚠️ 未找到临时版本信息文件"
         fi
 
     - name: 更新和安装feeds
