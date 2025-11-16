@@ -1,5 +1,5 @@
 # OpenWrt 智能固件构建工作流（优化版）
-# 针对下载失败和编译错误进行了优化
+# 针对下载失败和编译错误进行了优化，保持50GB空间阈值
 
 name: OpenWrt 智能固件构建工作流（优化版）
 
@@ -53,7 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    # 初始检查步骤
+    # 初始检查步骤 - 改回50GB阈值
     - name: 初始空间检查
       run: |
         echo "=== 初始磁盘空间检查 ==="
@@ -61,9 +61,9 @@ jobs:
         AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
         AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
         echo "/mnt 可用空间: ${AVAILABLE_GB}G"
-        # 检查空间是否足够（至少80GB，因为下载问题可能需要更多空间）
-        if [ $AVAILABLE_GB -lt 80 ]; then
-          echo "错误: /mnt 空间不足80G"
+        # 检查空间是否足够（改回50GB）
+        if [ $AVAILABLE_GB -lt 50 ]; then
+          echo "错误: /mnt 空间不足50G"
           exit 1
         fi
 
