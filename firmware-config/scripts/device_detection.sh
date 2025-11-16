@@ -72,7 +72,6 @@ auto_detect_device() {
         log_success "找到设备树文件:"
         echo "$dts_files" >&2
         
-        # 从设备树文件路径推断平台
         local platform=$(echo "$dts_files" | head -1 | cut -d'/' -f3)
         local device_full_name="$device_input"
         
@@ -89,7 +88,7 @@ auto_detect_device() {
         
         if [ -n "$device_short_name" ]; then
             log_success "找到设备定义: $device_short_name"
-            output_device_info "$platform" "$device_short_name" "$device_input"
+            output_device_info "$platform" "$device_short_name" "$device_input" "$dts_files"
             return 0
         else
             log_warning "未找到精确的设备定义，尝试从设备树文件名推断"
@@ -97,10 +96,10 @@ auto_detect_device() {
             # 从设备树文件名提取可能的设备名称
             local inferred_device=$(infer_device_from_dts "$dts_basename")
             if [ -n "$inferred_device" ]; then
-                output_device_info "$platform" "$inferred_device" "$device_input"
+                output_device_info "$platform" "$inferred_device" "$device_input" "$dts_files"
                 return 0
             else
-                output_device_info "$platform" "$dts_basename" "$device_input"
+                output_device_info "$platform" "$dts_basename" "$device_input" "$dts_files"
                 return 0
             fi
         fi
@@ -428,16 +427,28 @@ output_device_info() {
     local platform="$1"
     local device_short_name="$2"
     local device_full_name="$3"
+    local dts_files="$4"
     
     # 直接输出设备信息到 stdout（供工作流捕获）
     echo "PLATFORM=$platform"
     echo "DEVICE_SHORT_NAME=$device_short_name"
     echo "DEVICE_FULL_NAME=$device_full_name"
     
+    # 额外输出找到的设备树文件
+    if [ -n "$dts_files" ]; then
+        echo "DTS_FILES=$dts_files"
+    fi
+    
     log_success "设备检测完成:"
     log_success "  平台: $platform"
     log_success "  设备: $device_short_name"
     log_success "  全名: $device_full_name"
+    if [ -n "$dts_files" ]; then
+        log_success "  设备树文件:"
+        echo "$dts_files" | while read file; do
+            log_success "    - $file"
+        done
+    fi
 }
 
 # 主函数
