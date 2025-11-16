@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: '设备名称 (ac42u/acrh17/ac58u/acrh13)'
+        description: '设备名称'
         required: true
         default: 'ac42u'
         type: string
@@ -190,11 +190,34 @@ jobs:
         chmod +x complete_version_detector.sh device_detection.sh
         echo "✅ 检测脚本重新复制完成"
 
-    - name: 智能设备检测
+    - name: 智能设备检测与别名转换
       id: device-detection
       run: |
         cd $BUILD_DIR
-        echo "=== 智能设备检测 ==="
+        echo "=== 智能设备检测与别名转换 ==="
+        
+        # 设备别名映射表
+        declare -A DEVICE_ALIAS_MAP=(
+          ["ac42u"]="asus_rt-ac42u"
+          ["acrh17"]="asus_rt-ac42u"
+          ["rt-acrh17"]="asus_rt-ac42u"
+          ["ac58u"]="asus_rt-ac58u"
+          ["acrh13"]="asus_rt-ac58u"
+          ["rt-acrh13"]="asus_rt-ac58u"
+        )
+        
+        INPUT_DEVICE="${{ github.event.inputs.device_name }}"
+        echo "输入设备名称: $INPUT_DEVICE"
+        
+        # 检查是否为别名并进行转换
+        if [ -n "${DEVICE_ALIAS_MAP[$INPUT_DEVICE]}" ]; then
+          ACTUAL_DEVICE="${DEVICE_ALIAS_MAP[$INPUT_DEVICE]}"
+          echo "✅ 检测到设备别名 '$INPUT_DEVICE'，转换为 '$ACTUAL_DEVICE'"
+        else
+          ACTUAL_DEVICE="$INPUT_DEVICE"
+          echo "使用原始设备名称: $ACTUAL_DEVICE"
+        fi
+        
         if [ ! -f "device_detection.sh" ]; then
           echo "❌ 错误: 设备检测脚本不存在"
           exit 1
@@ -204,7 +227,7 @@ jobs:
         # 运行脚本并捕获输出
         echo "=== 开始设备检测 ==="
         set +e
-        OUTPUT=$(./device_detection.sh "${{ github.event.inputs.device_name }}" 2>&1)
+        OUTPUT=$(./device_detection.sh "$ACTUAL_DEVICE" 2>&1)
         SCRIPT_EXIT_CODE=$?
         set -e
         
@@ -236,17 +259,16 @@ jobs:
             else
                 echo "⚠️ 脚本成功但无法提取设备信息，使用备用设备映射"
                 # 设置默认值
-                DEVICE_NAME="${{ github.event.inputs.device_name }}"
-                case "$DEVICE_NAME" in
-                    "ac42u"|"acrh17"|"rt-acrh17")
+                case "$ACTUAL_DEVICE" in
+                    "asus_rt-ac42u"|"ac42u"|"acrh17"|"rt-acrh17")
                         echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
                         echo "DEVICE_SHORT_NAME=asus_rt-ac42u" >> $GITHUB_ENV
-                        echo "DEVICE_FULL_NAME=$DEVICE_NAME" >> $GITHUB_ENV
+                        echo "DEVICE_FULL_NAME=$ACTUAL_DEVICE" >> $GITHUB_ENV
                         ;;
-                    "ac58u"|"rt-ac58u"|"acrh13"|"rt-acrh13")
+                    "asus_rt-ac58u"|"ac58u"|"acrh13"|"rt-acrh13")
                         echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
                         echo "DEVICE_SHORT_NAME=asus_rt-ac58u" >> $GITHUB_ENV
-                        echo "DEVICE_FULL_NAME=$DEVICE_NAME" >> $GITHUB_ENV
+                        echo "DEVICE_FULL_NAME=$ACTUAL_DEVICE" >> $GITHUB_ENV
                         ;;
                     *)
                         echo "❌ 未知设备，无法设置默认值"
@@ -264,17 +286,14 @@ jobs:
         echo "平台: $PLATFORM"
         echo "设备: $DEVICE_SHORT_NAME"
         
-        # 完整列出所有设备定义
-        echo "=== 完整的设备定义列表 ==="
-        find "target/linux/$PLATFORM" -name "*.mk" -type f -exec grep -h "define Device/" {} \; | \
-            sed 's/.*define Device\///' | sed 's/^[ \t]*//' | sed 's/).*//' | sort -u | while read device; do
-            echo "设备: $device"
+        # 过滤显示包含的设备定义
+        echo "=== 过滤后的设备定义列表（包含 $DEVICE_SHORT_NAME）==="
+        find "target/linux/$PLATFORM" -name "*.mk" -type f -exec grep -l "define Device/$DEVICE_SHORT_NAME" {} \; | while read file; do
+            echo "文件: $file"
+            awk "/define Device\/$DEVICE_SHORT_NAME/{flag=1} flag; /endef/{if(flag) exit}" "$file"
         done
         
-        echo "=== 设备总数 ==="
-        find "target/linux/$PLATFORM" -name "*.mk" -type f -exec grep -h "define Device/" {} \; | wc -l
-        
-        # 检查具体设备 - 使用原始设备名称（包含连字符）
+        # 检查具体设备
         echo "=== 检查设备 $DEVICE_SHORT_NAME 的详细定义 ==="
         FOUND=0
         for mk_file in $(find "target/linux/$PLATFORM" -name "*.mk" -type f); do
@@ -290,15 +309,15 @@ jobs:
         if [ "$FOUND" -eq 0 ]; then
             echo "❌ 未找到设备 $DEVICE_SHORT_NAME"
             echo "=== 搜索相似设备 ==="
-            find "target/linux/$PLATFORM" -name "*.mk" -type f -exec grep -l "${{ github.event.inputs.device_name }}" {} \; | head -5
+            find "target/linux/$PLATFORM" -name "*.mk" -type f -exec grep -l "$DEVICE_SHORT_NAME" {} \; | head -5
             
             # 尝试使用已知的设备名称
             echo "=== 尝试使用已知设备名称 ==="
-            case "${{ github.event.inputs.device_name }}" in
-                "ac42u"|"acrh17"|"rt-acrh17")
+            case "$DEVICE_SHORT_NAME" in
+                "asus_rt-ac42u"|"ac42u"|"acrh17"|"rt-acrh17")
                     KNOWN_DEVICE="asus_rt-ac42u"
                     ;;
-                "ac58u"|"rt-ac58u"|"acrh13"|"rt-acrh13")
+                "asus_rt-ac58u"|"ac58u"|"acrh13"|"rt-acrh13")
                     KNOWN_DEVICE="asus_rt-ac58u"
                     ;;
                 *)
@@ -341,85 +360,22 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 使用改进的两阶段配置方法
+    - name: 使用改进的一段式配置方法
       run: |
         cd $BUILD_DIR
-        echo "=== 使用改进的两阶段配置方法 ==="
+        echo "=== 使用改进的一段式配置方法 ==="
         
         # 完全清空配置
-        > .config
-        
-        # 第一阶段：只设置平台和子平台，不设置具体设备
-        echo "=== 第一阶段：设置基础平台配置 ==="
-        echo "CONFIG_TARGET_${PLATFORM}=y" >> .config
-        echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
-        
-        # 基础文件系统配置
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
-        
-        echo "=== 初始配置内容 ==="
-        cat .config
-        
-        # 运行 defconfig 来生成默认配置
-        echo "运行 make defconfig 生成默认配置..."
-        make defconfig
-        
-        # 分析生成的配置，查看启用了哪些设备
-        echo "=== defconfig 生成的设备配置 ==="
-        grep "CONFIG_TARGET.*DEVICE" .config | head -20 || echo "没有找到设备配置项"
-        
-        # 特别查看我们目标设备的配置项名称
-        echo "=== 查找目标设备 $DEVICE_SHORT_NAME 的配置项 ==="
-        # 使用正确的配置项格式查找
-        TARGET_DEVICE_CONFIG=$(grep "CONFIG_TARGET_${PLATFORM}_generic_DEVICE.*${DEVICE_SHORT_NAME}" .config | head -1)
-        echo "找到的设备配置项: $TARGET_DEVICE_CONFIG"
-        
-        # 提取完整的配置项名称
-        if [ -n "$TARGET_DEVICE_CONFIG" ]; then
-            ACTUAL_DEVICE_CONFIG_NAME=$(echo "$TARGET_DEVICE_CONFIG" | cut -d'=' -f1)
-            echo "实际设备配置项名称: $ACTUAL_DEVICE_CONFIG_NAME"
-            echo "ACTUAL_DEVICE_CONFIG_NAME=$ACTUAL_DEVICE_CONFIG_NAME" >> $GITHUB_ENV
-        else
-            echo "❌ 未找到设备 $DEVICE_SHORT_NAME 的配置项"
-            echo "=== 所有可用的设备配置项 ==="
-            grep "CONFIG_TARGET.*DEVICE" .config || echo "没有可用的设备配置项"
-            
-            # 尝试构建配置项名称 - 使用正确的格式
-            echo "=== 尝试构建配置项名称 ==="
-            # 使用正确的配置项格式
-            CONFIG_CANDIDATE="CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}"
-            echo "尝试配置项: $CONFIG_CANDIDATE"
-            echo "ACTUAL_DEVICE_CONFIG_NAME=$CONFIG_CANDIDATE" >> $GITHUB_ENV
-        fi
-        
-        # 重新加载环境变量以确保当前步骤可用
-        if [ -f "$GITHUB_ENV" ]; then
-            set -a
-            source "$GITHUB_ENV"
-            set +a
-        fi
-        
-        echo "当前 ACTUAL_DEVICE_CONFIG_NAME: $ACTUAL_DEVICE_CONFIG_NAME"
-        
-        # 第二阶段：基于分析结果重新配置
-        echo "=== 第二阶段：基于分析结果重新配置 ==="
-        
-        # 完全清空配置，重新开始
         > .config
         
         # 设置平台和子平台
         echo "CONFIG_TARGET_${PLATFORM}=y" >> .config
         echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
         
-        # 使用设备配置项名称（确保不为空）
-        if [ -n "$ACTUAL_DEVICE_CONFIG_NAME" ]; then
-            echo "$ACTUAL_DEVICE_CONFIG_NAME=y" >> .config
-            echo "已添加设备配置: $ACTUAL_DEVICE_CONFIG_NAME=y"
-        else
-            echo "❌ 设备配置项名称为空，无法继续配置"
-            exit 1
-        fi
+        # 使用正确的设备配置项格式
+        CORRECT_DEVICE_CONFIG="CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}"
+        echo "${CORRECT_DEVICE_CONFIG}=y" >> .config
+        echo "使用的设备配置项: ${CORRECT_DEVICE_CONFIG}=y"
         
         # 基础文件系统配置
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
@@ -453,43 +409,27 @@ jobs:
             done
         fi
         
-        echo "=== 最终预配置内容 ==="
+        echo "=== 预配置内容 ==="
         cat .config
         
-        # 再次运行 defconfig 来完善配置
-        echo "运行最终 make defconfig..."
+        # 运行 defconfig 来完善配置
+        echo "运行 make defconfig..."
         make defconfig
         
         echo "=== 最终配置验证 ==="
-        # 改进的验证逻辑：检查具体的设备配置项
-        if [ -n "$ACTUAL_DEVICE_CONFIG_NAME" ]; then
-            if grep -q "$ACTUAL_DEVICE_CONFIG_NAME=y" .config; then
-                echo "✅ 设备 $DEVICE_SHORT_NAME 已成功启用"
-                echo "使用的配置项: $ACTUAL_DEVICE_CONFIG_NAME"
-            else
-                echo "❌ 设备 $DEVICE_SHORT_NAME 未在最终配置中启用，构建失败"
-                echo "期望的配置项: $ACTUAL_DEVICE_CONFIG_NAME"
-                echo "当前设备相关配置:"
-                # 显示所有相关的设备配置
-                grep "CONFIG_TARGET.*${DEVICE_SHORT_NAME}" .config || echo "没有找到与设备 $DEVICE_SHORT_NAME 相关的配置"
-                # 显示所有设备配置
-                echo "所有设备配置项:"
-                grep "CONFIG_TARGET.*DEVICE" .config || echo "没有设备相关配置"
-                exit 1
-            fi
+        # 检查设备配置项是否启用（过滤掉注释行）
+        if grep -q "^${CORRECT_DEVICE_CONFIG}=y" .config; then
+            echo "✅ 设备 $DEVICE_SHORT_NAME 已成功启用"
+            echo "使用的配置项: ${CORRECT_DEVICE_CONFIG}"
         else
-            echo "❌ 设备配置项名称为空，无法验证设备配置"
+            echo "❌ 设备 $DEVICE_SHORT_NAME 启用失败，构建终止"
+            echo "期望的配置项: ${CORRECT_DEVICE_CONFIG}"
+            echo "当前设备相关配置:"
+            grep "CONFIG_TARGET.*${DEVICE_SHORT_NAME}" .config || echo "没有找到相关配置"
+            echo "所有目标相关配置:"
+            grep "^CONFIG_TARGET" .config | head -20
             exit 1
         fi
-        
-        # 额外验证：检查目标配置文件
-        echo "=== 目标配置验证 ==="
-        TARGET_PROFILE=$(grep "CONFIG_TARGET_PROFILE" .config || echo "未设置 TARGET_PROFILE")
-        echo "目标配置文件: $TARGET_PROFILE"
-        
-        # 检查是否选择了正确的目标
-        echo "目标平台: $(grep "CONFIG_TARGET_BOARD" .config || echo "未设置")"
-        echo "子目标: $(grep "CONFIG_TARGET_SUBTARGET" .config || echo "未设置")"
 
     - name: 保存配置信息
       run: |
@@ -498,9 +438,9 @@ jobs:
         # 保存设备信息
         echo "设备: $DEVICE_SHORT_NAME" > device_info.txt
         echo "平台: $PLATFORM" >> device_info.txt
-        echo "实际配置项: $ACTUAL_DEVICE_CONFIG_NAME" >> device_info.txt
-        echo "=== 完整设备配置 ===" >> device_info.txt
-        grep "CONFIG_TARGET.*DEVICE" .config >> device_info.txt || echo "没有设备配置" >> device_info.txt
+        echo "配置项: CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}" >> device_info.txt
+        echo "=== 完整目标配置 ===" >> device_info.txt
+        grep "^CONFIG_TARGET" .config >> device_info.txt
         echo "=== 配置摘要 ===" >> device_info.txt
         echo "目标板: $(grep 'CONFIG_TARGET_BOARD' .config || echo '未设置')" >> device_info.txt
         echo "子目标: $(grep 'CONFIG_TARGET_SUBTARGET' .config || echo '未设置')" >> device_info.txt
