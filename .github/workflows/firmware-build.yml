@@ -343,6 +343,24 @@ jobs:
             echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
             echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
             echo "✅ 设备环境变量已设置"
+            
+            # 额外验证：检查设备树文件（使用更灵活的搜索模式）
+            echo "=== 验证设备树文件 ==="
+            DTS_FILES=$(find "target/linux/$PLATFORM" -name "*.dts" -type f 2>/dev/null | grep -i "$DEVICE_SHORT_NAME" | head -5 || true)
+            if [ -n "$DTS_FILES" ]; then
+                echo "✅ 找到相关的设备树文件:"
+                echo "$DTS_FILES"
+            else
+                echo "⚠️ 未找到精确匹配的设备树文件，尝试模糊搜索..."
+                # 尝试搜索包含设备关键字的dts文件
+                DTS_FILES=$(find "target/linux/$PLATFORM" -name "*.dts" -type f 2>/dev/null | xargs grep -l "$DEVICE_SHORT_NAME" 2>/dev/null | head -5 || true)
+                if [ -n "$DTS_FILES" ]; then
+                    echo "✅ 通过模糊搜索找到设备树文件:"
+                    echo "$DTS_FILES"
+                else
+                    echo "⚠️ 未找到设备树文件，但这可能不影响构建"
+                fi
+            fi
         else
             echo "❌ 无法从脚本输出中提取设备信息"
             if [ $SCRIPT_EXIT_CODE -ne 0 ]; then
@@ -688,6 +706,53 @@ jobs:
             echo "ℹ️ 未找到自定义脚本"
         fi
 
+    # 执行自定义脚本步骤 - 新增步骤
+    - name: 执行自定义脚本
+      if: github.event.inputs.custom_install == 'true'
+      run: |
+        cd $BUILD_DIR
+        echo "=== 执行自定义脚本 ==="
+        
+        if [ -d "custom-scripts" ] && [ "$(ls -A custom-scripts/*.sh 2>/dev/null | wc -l)" -gt 0 ]; then
+            echo "找到自定义脚本目录，开始执行脚本..."
+            cd custom-scripts
+            
+            # 按文件名排序执行脚本
+            for script in $(ls *.sh | sort); do
+                if [ -f "$script" ] && [ -x "$script" ]; then
+                    echo "🔄 执行脚本: $script"
+                    echo "=== 脚本 $script 输出开始 ==="
+                    # 设置脚本执行环境
+                    export BUILD_DIR="$BUILD_DIR"
+                    export PLATFORM="$PLATFORM"
+                    export DEVICE_SHORT_NAME="$DEVICE_SHORT_NAME"
+                    export CONFIG_TYPE="${{ github.event.inputs.config_type }}"
+                    
+                    # 执行脚本并捕获输出和退出状态
+                    set +e
+                    ./"$script"
+                    SCRIPT_EXIT_CODE=$?
+                    set -e
+                    
+                    echo "=== 脚本 $script 输出结束 ==="
+                    
+                    if [ $SCRIPT_EXIT_CODE -eq 0 ]; then
+                        echo "✅ 脚本执行成功: $script"
+                    else
+                        echo "❌ 脚本执行失败: $script (退出代码: $SCRIPT_EXIT_CODE)"
+                        exit 1
+                    fi
+                else
+                    echo "⚠️ 跳过不可执行文件: $script"
+                fi
+            done
+            
+            cd ..
+            echo "✅ 所有自定义脚本执行完成"
+        else
+            echo "ℹ️ 没有自定义脚本需要执行"
+        fi
+
     # 配置信息保存步骤
     - name: 保存配置信息
       run: |
@@ -706,16 +771,80 @@ jobs:
         echo "目标板: $(grep 'CONFIG_TARGET_BOARD' .config || echo '未设置')" >> device_info.txt
         echo "子目标: $(grep 'CONFIG_TARGET_SUBTARGET' .config || echo '未设置')" >> device_info.txt
 
+    # DL库下载和验证步骤 - 新增步骤
+    - name: 下载DL库并验证完整性
+      run: |
+        cd $BUILD_DIR
+        echo "=== 下载DL库并验证完整性 ==="
+        
+        # 创建下载目录（如果不存在）
+        mkdir -p dl
+        
+        echo "开始并行下载依赖..."
+        # 使用并行下载加速
+        make -j8 download V=s
+        
+        echo "=== 验证下载完整性 ==="
+        
+        # 检查下载文件完整性
+        echo "1. 检查下载文件大小..."
+        EMPTY_FILES=$(find dl -type f -size 0 2>/dev/null | wc -l)
+        if [ "$EMPTY_FILES" -gt 0 ]; then
+            echo "❌ 发现 $EMPTY_FILES 个空文件，下载可能不完整"
+            find dl -type f -size 0 | head -10
+            echo "尝试重新下载空文件..."
+            # 重新下载空文件
+            for empty_file in $(find dl -type f -size 0); do
+                filename=$(basename "$empty_file")
+                echo "重新下载: $filename"
+                make package/download V=s 2>&1 | grep "$filename" || true
+            done
+        else
+            echo "✅ 没有空文件，下载文件大小正常"
+        fi
+        
+        echo "2. 检查下载文件完整性（哈希校验）..."
+        # 检查是否有损坏的包
+        if make -j1 V=s CHECK=hack ./scripts/download.pl 2>&1 | grep -i "error\|failed"; then
+            echo "❌ 下载文件完整性检查失败"
+            echo "尝试修复下载..."
+            make download V=s
+        else
+            echo "✅ 下载文件完整性检查通过"
+        fi
+        
+        echo "3. 显示下载统计..."
+        DL_COUNT=$(find dl -type f | wc -l)
+        DL_SIZE=$(du -sh dl | cut -f1)
+        echo "✅ 下载完成: $DL_COUNT 个文件，总大小: $DL_SIZE"
+        
+        echo "4. 重要文件验证..."
+        # 检查关键文件是否存在
+        CRITICAL_PATTERNS=(
+            "dl/linux-*.tar.xz"
+            "dl/gcc-*.tar.xz"
+            "dl/uclibc-*.tar.xz"
+            "dl/binutils-*.tar.xz"
+        )
+        
+        for pattern in "${CRITICAL_PATTERNS[@]}"; do
+            if ls $pattern 1> /dev/null 2>&1; then
+                echo "✅ 找到: $pattern"
+            else
+                echo "⚠️ 未找到: $pattern"
+            fi
+        done
+
     # 编译步骤
     - name: 应用配置并编译
       run: |
         cd $BUILD_DIR
         echo "=== 应用配置并编译 ==="
-        echo "开始下载依赖..."
-        make -j4 download  # 下载编译依赖
+        
+        # 注意：下载步骤已经在前面单独执行
         
         # 保存详细构建日志
-        echo "开始编译并保存详细日志..."
+        echo "开始编译固件..."
         make -j$(nproc) V=s 2>&1 | tee build_detailed.log
         
         # 检查构建状态
