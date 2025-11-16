@@ -1,6 +1,6 @@
 # 更新支持的设备列表工作流
 # 功能：自动从多个OpenWrt源码仓库提取设备信息并生成支持列表
-# 支持：immortalwrt、LEDE、OpenWrt官方源码
+# 支持：immortalwrt、LEDE、OpenWrt官方源码（使用镜像源）
 
 name: 更新支持的设备列表
 
@@ -37,26 +37,139 @@ jobs:
         sudo mkdir -p $BUILD_DIR
         sudo chown -R $USER:$USER $BUILD_DIR
 
-    # 源码克隆步骤 - immortalwrt
+    # 源码克隆步骤 - immortalwrt (使用GitHub镜像，通常比较稳定)
     - name: 克隆immortalwrt源码
       run: |
         cd $BUILD_DIR
         echo "=== 克隆immortalwrt源码 ==="
-        git clone --depth 1 https://github.com/immortalwrt/immortalwrt.git immortalwrt
+        # 设置重试机制
+        max_attempts=3
+        attempt=1
+        while [ $attempt -le $max_attempts ]; do
+          echo "尝试克隆immortalwrt (第 $attempt 次)..."
+          if git clone --depth 1 https://github.com/immortalwrt/immortalwrt.git immortalwrt; then
+            echo "✅ immortalwrt源码克隆成功"
+            break
+          else
+            echo "❌ 第 $attempt 次克隆失败"
+            if [ $attempt -eq $max_attempts ]; then
+              echo "❌ 达到最大重试次数，immortalwrt克隆失败"
+              exit 1
+            fi
+            attempt=$((attempt + 1))
+            sleep 5  # 等待5秒后重试
+          fi
+        done
 
-    # 源码克隆步骤 - LEDE
+    # 源码克隆步骤 - LEDE (使用GitHub镜像)
     - name: 克隆LEDE源码
       run: |
         cd $BUILD_DIR
         echo "=== 克隆LEDE源码 ==="
-        git clone --depth 1 https://github.com/coolsnowwolf/lede.git lede
+        # 设置重试机制
+        max_attempts=3
+        attempt=1
+        while [ $attempt -le $max_attempts ]; do
+          echo "尝试克隆LEDE (第 $attempt 次)..."
+          if git clone --depth 1 https://github.com/coolsnowwolf/lede.git lede; then
+            echo "✅ LEDE源码克隆成功"
+            break
+          else
+            echo "❌ 第 $attempt 次克隆失败"
+            if [ $attempt -eq $max_attempts ]; then
+              echo "❌ 达到最大重试次数，LEDE克隆失败"
+              exit 1
+            fi
+            attempt=$((attempt + 1))
+            sleep 5  # 等待5秒后重试
+          fi
+        done
 
-    # 源码克隆步骤 - OpenWrt
+    # 源码克隆步骤 - OpenWrt (使用GitHub镜像替代不稳定的官方源)
     - name: 克隆OpenWrt源码
       run: |
         cd $BUILD_DIR
         echo "=== 克隆OpenWrt源码 ==="
-        git clone --depth 1 https://git.openwrt.org/openwrt/openwrt.git openwrt
+        
+        # 定义多个镜像源，按优先级尝试
+        OPENWRT_MIRRORS=(
+          "https://github.com/openwrt/openwrt.git"  # GitHub镜像 (推荐)
+          "https://git.openwrt.org/openwrt/openwrt.git"  # 官方源 (备用)
+          "https://gitee.com/mirrors/openwrt.git"  # Gitee镜像 (国内用户)
+        )
+        
+        max_attempts=3
+        attempt=1
+        mirror_index=0
+        
+        while [ $attempt -le $max_attempts ] && [ $mirror_index -lt ${#OPENWRT_MIRRORS[@]} ]; do
+          current_mirror=${OPENWRT_MIRRORS[$mirror_index]}
+          echo "尝试从镜像源克隆OpenWrt (第 $attempt 次，镜像 $((mirror_index + 1))/${#OPENWRT_MIRRORS[@]})..."
+          echo "镜像地址: $current_mirror"
+          
+          if git clone --depth 1 "$current_mirror" openwrt; then
+            echo "✅ OpenWrt源码克隆成功 (使用镜像: $current_mirror)"
+            break
+          else
+            echo "❌ 第 $attempt 次克隆失败 (镜像: $current_mirror)"
+            
+            # 清理失败的克隆目录
+            rm -rf openwrt
+            
+            if [ $attempt -eq $max_attempts ]; then
+              # 当前镜像尝试次数用完，切换到下一个镜像
+              mirror_index=$((mirror_index + 1))
+              attempt=1
+              if [ $mirror_index -ge ${#OPENWRT_MIRRORS[@]} ]; then
+                echo "❌ 所有镜像源都尝试失败，无法克隆OpenWrt源码"
+                echo "=== 错误诊断信息 ==="
+                echo "1. 检查网络连接..."
+                curl -I https://github.com --connect-timeout 10 || echo "GitHub连接失败"
+                echo "2. 检查DNS解析..."
+                nslookup github.com || echo "DNS解析失败"
+                echo "3. 尝试使用wget测试..."
+                wget --spider https://github.com -T 10 || echo "wget测试失败"
+                exit 1
+              fi
+            else
+              attempt=$((attempt + 1))
+            fi
+            sleep 5  # 等待5秒后重试
+          fi
+        done
+
+    # 源码验证步骤 - 确保所有必要的源码都已成功克隆
+    - name: 验证源码克隆结果
+      run: |
+        cd $BUILD_DIR
+        echo "=== 验证源码克隆结果 ==="
+        
+        REPOS=("immortalwrt" "lede" "openwrt")
+        all_success=true
+        
+        for repo in "${REPOS[@]}"; do
+          if [ -d "$repo" ] && [ -f "$repo/.git/config" ]; then
+            echo "✅ $repo: 源码目录存在且包含git配置"
+            # 显示仓库信息
+            cd "$repo"
+            echo "   - 远程URL: $(git config --get remote.origin.url)"
+            echo "   - 最新提交: $(git log -1 --oneline --no-color 2>/dev/null || echo '无法获取提交信息')"
+            cd ..
+          else
+            echo "❌ $repo: 源码目录不存在或损坏"
+            all_success=false
+          fi
+          echo ""
+        done
+        
+        if [ "$all_success" = false ]; then
+          echo "❌ 部分源码仓库克隆失败，无法生成完整的设备列表"
+          echo "当前目录内容:"
+          ls -la
+          exit 1
+        else
+          echo "✅ 所有源码仓库克隆成功"
+        fi
 
     # 设备列表生成步骤
     - name: 生成设备列表
@@ -77,6 +190,7 @@ jobs:
         import glob
         import re
         from pathlib import Path
+        import datetime
 
         # 设备别名映射表
         # 将通用设备名称映射到具体的设备标识符
@@ -146,7 +260,7 @@ jobs:
         def generate_markdown_table(repo_name, devices):
             """生成Markdown格式的设备表格"""
             if not devices:
-                return ""
+                return f"### {repo_name}\n\n暂无支持的设备数据\n\n"
             
             table = f"### {repo_name}\n\n"
             table += "| 序号 | 平台 | 设备名称 | 通用别名 | 备注 |\n"
@@ -173,26 +287,30 @@ jobs:
             }
             
             all_devices = []
+            repo_stats = {}
             
             # 处理每个仓库
             for repo_name, repo_dir in repos.items():
                 repo_path = Path(repo_dir)
                 if not repo_path.exists():
-                    print(f"仓库 {repo_name} 不存在，跳过")
+                    print(f"⚠️ 仓库 {repo_name} 不存在，跳过")
+                    repo_stats[repo_name] = 0
                     continue
                 
-                print(f"处理 {repo_name}...")
+                print(f"🔍 处理 {repo_name}...")
                 repo_devices = []
                 
                 # 查找所有平台目录
                 target_linux = repo_path / "target" / "linux"
                 if target_linux.exists():
                     for platform_dir in target_linux.iterdir():
-                        if platform_dir.is_dir():
+                        if platform_dir.is_dir() and not platform_dir.name.startswith('.'):
                             platform = platform_dir.name
                             
                             # 查找所有的 .mk 文件
                             mk_files = list(platform_dir.glob("**/*.mk"))
+                            
+                            print(f"  平台 {platform}: 找到 {len(mk_files)} 个mk文件")
                             
                             for mk_file in mk_files:
                                 devices = parse_device_info(mk_file)
@@ -200,7 +318,10 @@ jobs:
                                     device['platform'] = platform
                                     device['repo'] = repo_name
                                     repo_devices.append(device)
+                else:
+                    print(f"⚠️  {repo_name} 没有 target/linux 目录")
                 
+                repo_stats[repo_name] = len(repo_devices)
                 all_devices.extend(repo_devices)
                 
                 # 为当前仓库生成表格
@@ -211,12 +332,26 @@ jobs:
                 with open(output_file, 'w', encoding='utf-8') as f:
                     f.write(table_content)
                 
-                print(f"生成 {output_file}，包含 {len(repo_devices)} 个设备")
+                print(f"✅ 生成 {output_file}，包含 {len(repo_devices)} 个设备")
             
             # 生成汇总文件
             with open("supports.md", 'w', encoding='utf-8') as f:
+                # 文件头部信息
                 f.write("# 源码支持设备列表\n\n")
-                f.write("本文件自动生成，列出各源码仓库支持的设备。\n\n")
+                f.write("> 本文件自动生成，列出各源码仓库支持的设备信息\n\n")
+                
+                # 生成时间
+                current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                f.write(f"**最后更新时间**: {current_time}\n\n")
+                
+                # 统计信息
+                f.write("## 统计概览\n\n")
+                total_devices = sum(repo_stats.values())
+                f.write(f"**总设备数量**: {total_devices}\n\n")
+                
+                for repo_name, count in repo_stats.items():
+                    f.write(f"- **{repo_name}**: {count} 个设备\n")
+                f.write("\n")
                 
                 # 添加仓库信息
                 f.write("## 仓库目录\n\n")
@@ -230,27 +365,65 @@ jobs:
                         with open(f"device_list_{repo_name.lower()}.md", 'r', encoding='utf-8') as repo_file:
                             f.write(repo_file.read())
                     except FileNotFoundError:
-                        f.write(f"### {repo_name}\n\n暂无数据\n\n")
+                        f.write(f"### {repo_name}\n\n> 该仓库暂无设备数据或数据获取失败\n\n")
+                
+                # 使用说明
+                f.write("## 使用说明\n\n")
+                f.write("1. **设备名称**: 在编译配置中使用的设备标识符\n")
+                f.write("2. **通用别名**: 常用的设备别名，可在工作流中输入使用\n")
+                f.write("3. **平台**: 设备所属的硬件平台\n")
+                f.write("4. **备注**: 设备的完整名称或描述信息\n\n")
+                
+                f.write("## 注意事项\n\n")
+                f.write("- 设备列表每周自动更新\n")
+                f.write("- 如果某个仓库显示无数据，可能是克隆失败或该仓库暂无设备定义\n")
+                f.write("- 设备别名可用于简化输入，如输入 'ac42u' 会自动转换为 'asus_rt-ac42u'\n")
             
-            print("设备列表生成完成")
+            print("🎉 设备列表生成完成")
+            print("📊 生成统计:")
+            for repo_name, count in repo_stats.items():
+                print(f"   - {repo_name}: {count} 个设备")
+            print(f"   - 总计: {total_devices} 个设备")
 
         if __name__ == "__main__":
             main()
         EOF
 
         # 运行设备列表生成脚本
+        echo "开始运行设备列表生成脚本..."
         python3 generate_device_list.py
+        echo "✅ 设备列表生成脚本执行完成"
 
     # 文件复制步骤
     - name: 复制设备列表到工作目录
       run: |
         cd $BUILD_DIR
         echo "=== 复制设备列表到工作目录 ==="
+        
+        # 检查生成的文件
+        echo "生成的文件列表:"
+        ls -la *.md 2>/dev/null || echo "未找到Markdown文件"
+        
         # 复制汇总文件到根目录
-        cp supports.md $GITHUB_WORKSPACE/
+        if [ -f "supports.md" ]; then
+          cp supports.md $GITHUB_WORKSPACE/
+          echo "✅ 已复制 supports.md 到仓库根目录"
+        else
+          echo "❌ 错误: 未找到 supports.md 文件"
+          exit 1
+        fi
+        
         # 复制详细文件到 custom-files/others/
         mkdir -p $GITHUB_WORKSPACE/custom-files/others
-        cp device_list_*.md $GITHUB_WORKSPACE/custom-files/others/ 2>/dev/null || true
+        DEVICE_LIST_FILES=$(ls device_list_*.md 2>/dev/null || true)
+        if [ -n "$DEVICE_LIST_FILES" ]; then
+          cp device_list_*.md $GITHUB_WORKSPACE/custom-files/others/
+          echo "✅ 已复制详细设备列表到 custom-files/others/"
+          echo "复制的文件: $DEVICE_LIST_FILES"
+        else
+          echo "⚠️ 警告: 未找到详细设备列表文件"
+        fi
+        
         echo "✅ 设备列表文件复制完成"
 
     # 提交更新步骤
@@ -258,12 +431,19 @@ jobs:
       run: |
         cd $GITHUB_WORKSPACE
         echo "=== 提交设备列表更新 ==="
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git add supports.md custom-files/others/device_list_*.md
-        git diff --staged --quiet || git commit -m "自动更新设备列表 $(date +'%Y-%m-%d')"
-        git push
-        echo "✅ 设备列表更新已提交"
+        
+        # 检查是否有文件需要提交
+        if git diff --quiet -- supports.md custom-files/others/device_list_*.md 2>/dev/null; then
+          echo "ℹ️ 没有检测到设备列表变化，无需提交"
+        else
+          echo "检测到设备列表变化，准备提交..."
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add supports.md custom-files/others/device_list_*.md
+          git diff --staged --quiet || git commit -m "自动更新设备列表 $(date +'%Y-%m-%d %H:%M')"
+          git push
+          echo "✅ 设备列表更新已提交"
+        fi
 
     # 清理步骤
     - name: 清理构建目录
