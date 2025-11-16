@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # 高级设备检测脚本 - 自动分析所有平台和设备定义
+# 支持多种设备树文件命名模式和设备定义搜索
 
 set -e
 
@@ -63,14 +64,15 @@ auto_detect_device() {
     
     log_info "=== 自动设备检测流程 ==="
     
-    # 步骤1: 搜索设备树文件
+    # 步骤1: 搜索设备树文件 - 使用更智能的搜索模式
     log_info "步骤1: 搜索设备树文件..."
-    local dts_files=$(find target/linux -name "*$device_input*.dts" -o -name "*$device_input*.dtsi" 2>/dev/null)
+    local dts_files=$(find_device_tree_files "$device_input")
     
     if [ -n "$dts_files" ]; then
         log_success "找到设备树文件:"
         echo "$dts_files" >&2
         
+        # 从设备树文件路径推断平台
         local platform=$(echo "$dts_files" | head -1 | cut -d'/' -f3)
         local device_full_name="$device_input"
         
@@ -90,13 +92,20 @@ auto_detect_device() {
             output_device_info "$platform" "$device_short_name" "$device_input"
             return 0
         else
-            log_warning "未找到精确的设备定义，使用设备树文件名"
+            log_warning "未找到精确的设备定义，尝试从设备树文件名推断"
             local dts_basename=$(basename "$dts_files" | head -1 | sed 's/\.dts.*//')
-            output_device_info "$platform" "$dts_basename" "$device_input"
-            return 0
+            # 从设备树文件名提取可能的设备名称
+            local inferred_device=$(infer_device_from_dts "$dts_basename")
+            if [ -n "$inferred_device" ]; then
+                output_device_info "$platform" "$inferred_device" "$device_input"
+                return 0
+            else
+                output_device_info "$platform" "$dts_basename" "$device_input"
+                return 0
+            fi
         fi
     else
-        log_warning "未找到设备树文件: *$device_input*.dts"
+        log_warning "未找到设备树文件，跳过设备树搜索"
     fi
     
     # 步骤3: 如果没有找到设备树，直接搜索设备定义
@@ -112,6 +121,105 @@ auto_detect_device() {
     fi
     
     return 1
+}
+
+# 智能搜索设备树文件
+find_device_tree_files() {
+    local device_input="$1"
+    
+    log_info "智能搜索设备树文件..."
+    
+    # 生成多种可能的设备树文件名模式
+    local patterns=($(generate_dts_patterns "$device_input"))
+    
+    # 搜索所有平台
+    local platforms=$(find target/linux -maxdepth 1 -type d | grep -v "^target/linux$" | xargs -n1 basename)
+    
+    local found_files=""
+    
+    for platform in $platforms; do
+        log_info "搜索平台: $platform 的设备树文件"
+        
+        for pattern in "${patterns[@]}"; do
+            log_info "尝试模式: $pattern"
+            
+            # 使用find搜索，不限制文件名模式
+            local files=$(find "target/linux/$platform" -name "*.dts" -type f 2>/dev/null | \
+                         grep -i "$pattern" | head -5)
+            
+            if [ -n "$files" ]; then
+                log_success "在平台 $platform 中找到匹配的设备树文件"
+                found_files="$found_files"$'\n'"$files"
+            fi
+        done
+        
+        # 额外搜索：通过文件内容搜索
+        log_info "通过文件内容搜索设备: $device_input"
+        local content_files=$(find "target/linux/$platform" -name "*.dts" -type f 2>/dev/null | \
+                             xargs grep -l "$device_input" 2>/dev/null | head -3 || true)
+        
+        if [ -n "$content_files" ]; then
+            log_success "通过文件内容找到设备树文件"
+            found_files="$found_files"$'\n'"$content_files"
+        fi
+    done
+    
+    # 去重并返回
+    echo "$found_files" | grep -v '^$' | sort -u
+}
+
+# 生成设备树文件搜索模式
+generate_dts_patterns() {
+    local device_input="$1"
+    
+    local patterns=()
+    
+    # 原始输入
+    patterns+=("$device_input")
+    
+    # 常见转换模式
+    # asus_rt-ac42u -> ac42u, rt-ac42u, asus-ac42u, qcom-ipq4019-rt-ac42u
+    if [[ "$device_input" =~ asus_rt-(.+) ]]; then
+        patterns+=("${BASH_REMATCH[1]}")  # ac42u
+        patterns+=("rt-${BASH_REMATCH[1]}")  # rt-ac42u
+        patterns+=("asus-${BASH_REMATCH[1]}")  # asus-ac42u
+        patterns+=("asus-rt-${BASH_REMATCH[1]}")  # asus-rt-ac42u
+        patterns+=("qcom-.*${BASH_REMATCH[1]}")  # qcom-*-ac42u
+    fi
+    
+    # rt-ac42u -> ac42u, asus-rt-ac42u
+    if [[ "$device_input" =~ rt-(.+) ]]; then
+        patterns+=("${BASH_REMATCH[1]}")  # ac42u
+        patterns+=("asus-rt-${BASH_REMATCH[1]}")  # asus-rt-ac42u
+    fi
+    
+    # 通用模式
+    patterns+=("$(echo "$device_input" | sed 's/_/-/g')")  # 下划线转连字符
+    patterns+=("$(echo "$device_input" | sed 's/rt-//')")   # 移除rt-前缀
+    
+    # 输出所有模式（去重）
+    printf "%s\n" "${patterns[@]}" | sort -u
+}
+
+# 从设备树文件名推断设备名称
+infer_device_from_dts() {
+    local dts_filename="$1"
+    
+    log_info "从设备树文件名推断设备名称: $dts_filename"
+    
+    # 移除常见的平台前缀和文件扩展名
+    local device_name=$(echo "$dts_filename" | sed -E '
+        s/^(qcom-|mtk-|mediatek-|rockchip-|bcm-|brcm-|ar71xx-|ipq40xx-|ramips-)//g
+        s/^(ipq4019-|ipq8064-|mt7621-|mt7620-|ar71xx-)//g
+        s/\.dts.*$//g
+    ')
+    
+    # 如果推断结果为空或太短，返回原始文件名
+    if [ -z "$device_name" ] || [ ${#device_name} -lt 3 ]; then
+        echo "$dts_filename"
+    else
+        echo "$device_name"
+    fi
 }
 
 # 搜索所有设备定义
