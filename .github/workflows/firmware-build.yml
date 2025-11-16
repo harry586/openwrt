@@ -329,11 +329,13 @@ jobs:
         PLATFORM=$(echo "$OUTPUT" | grep "^PLATFORM=" | tail -1 | cut -d'=' -f2)
         DEVICE_SHORT_NAME=$(echo "$OUTPUT" | grep "^DEVICE_SHORT_NAME=" | tail -1 | cut -d'=' -f2)
         DEVICE_FULL_NAME=$(echo "$OUTPUT" | grep "^DEVICE_FULL_NAME=" | tail -1 | cut -d'=' -f2)
+        DTS_FILES=$(echo "$OUTPUT" | grep "^DTS_FILES=" | tail -1 | cut -d'=' -f2)
         
         echo "=== 提取的设备信息 ==="
         echo "PLATFORM: '$PLATFORM'"
         echo "DEVICE_SHORT_NAME: '$DEVICE_SHORT_NAME'"
         echo "DEVICE_FULL_NAME: '$DEVICE_FULL_NAME'"
+        echo "DTS_FILES: '$DTS_FILES'"
         
         # 验证设备信息提取结果
         if [ -n "$PLATFORM" ] && [ -n "$DEVICE_SHORT_NAME" ] && [ -n "$DEVICE_FULL_NAME" ]; then
@@ -344,21 +346,85 @@ jobs:
             echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
             echo "✅ 设备环境变量已设置"
             
-            # 额外验证：检查设备树文件（使用更灵活的搜索模式）
+            # 额外验证：检查设备树文件（使用设备检测脚本找到的文件）
             echo "=== 验证设备树文件 ==="
-            DTS_FILES=$(find "target/linux/$PLATFORM" -name "*.dts" -type f 2>/dev/null | grep -i "$DEVICE_SHORT_NAME" | head -5 || true)
             if [ -n "$DTS_FILES" ]; then
-                echo "✅ 找到相关的设备树文件:"
+                echo "✅ 设备检测脚本找到的设备树文件:"
                 echo "$DTS_FILES"
+                
+                # 验证这些文件确实存在
+                echo "=== 验证设备树文件存在性 ==="
+                IFS=$'\n'
+                for dts_file in $DTS_FILES; do
+                    if [ -f "$dts_file" ]; then
+                        echo "✅ 文件存在: $dts_file"
+                        # 显示文件基本信息
+                        echo "  大小: $(du -h "$dts_file" | cut -f1), 修改时间: $(stat -c %y "$dts_file" 2>/dev/null | cut -d'.' -f1 || echo '未知')"
+                    else
+                        echo "❌ 文件不存在: $dts_file"
+                    fi
+                done
+                unset IFS
             else
-                echo "⚠️ 未找到精确匹配的设备树文件，尝试模糊搜索..."
-                # 尝试搜索包含设备关键字的dts文件
-                DTS_FILES=$(find "target/linux/$PLATFORM" -name "*.dts" -type f 2>/dev/null | xargs grep -l "$DEVICE_SHORT_NAME" 2>/dev/null | head -5 || true)
-                if [ -n "$DTS_FILES" ]; then
-                    echo "✅ 通过模糊搜索找到设备树文件:"
-                    echo "$DTS_FILES"
+                echo "⚠️ 设备检测脚本未返回设备树文件信息"
+                
+                # 尝试使用与设备检测脚本相同的逻辑搜索设备树文件
+                echo "=== 使用设备检测脚本逻辑搜索设备树文件 ==="
+                
+                # 生成搜索模式（模仿设备检测脚本的逻辑）
+                DEVICE_SEARCH_PATTERNS=(
+                    "$DEVICE_SHORT_NAME"
+                    "rt-$DEVICE_SHORT_NAME"
+                    "asus_$DEVICE_SHORT_NAME"
+                    "asus_rt-$DEVICE_SHORT_NAME"
+                    "$(echo "$DEVICE_SHORT_NAME" | sed 's/_/-/g')"
+                    "$(echo "$DEVICE_SHORT_NAME" | sed 's/rt-//')"
+                )
+                
+                # 去重
+                DEVICE_SEARCH_PATTERNS=($(printf "%s\n" "${DEVICE_SEARCH_PATTERNS[@]}" | sort -u))
+                
+                echo "搜索模式: ${DEVICE_SEARCH_PATTERNS[*]}"
+                
+                FOUND_DTS_FILES=""
+                for pattern in "${DEVICE_SEARCH_PATTERNS[@]}"; do
+                    echo "尝试模式: $pattern"
+                    FILES=$(find "target/linux/$PLATFORM" -name "*.dts" -type f 2>/dev/null | grep -i "$pattern" | head -3)
+                    if [ -n "$FILES" ]; then
+                        echo "✅ 找到匹配的文件:"
+                        echo "$FILES"
+                        FOUND_DTS_FILES="$FOUND_DTS_FILES"$'\n'"$FILES"
+                    fi
+                done
+                
+                # 去重
+                FOUND_DTS_FILES=$(echo "$FOUND_DTS_FILES" | grep -v '^$' | sort -u)
+                
+                if [ -n "$FOUND_DTS_FILES" ]; then
+                    echo "✅ 最终找到的设备树文件:"
+                    echo "$FOUND_DTS_FILES"
+                    
+                    # 验证文件存在性
+                    echo "=== 验证找到的设备树文件 ==="
+                    IFS=$'\n'
+                    for dts_file in $FOUND_DTS_FILES; do
+                        if [ -f "$dts_file" ]; then
+                            echo "✅ 文件存在: $dts_file"
+                        else
+                            echo "❌ 文件不存在: $dts_file"
+                        fi
+                    done
+                    unset IFS
                 else
                     echo "⚠️ 未找到设备树文件，但这可能不影响构建"
+                    echo "尝试通过文件内容搜索..."
+                    CONTENT_FILES=$(find "target/linux/$PLATFORM" -name "*.dts" -type f 2>/dev/null | xargs grep -l "$DEVICE_SHORT_NAME" 2>/dev/null | head -3 || true)
+                    if [ -n "$CONTENT_FILES" ]; then
+                        echo "✅ 通过文件内容找到设备树文件:"
+                        echo "$CONTENT_FILES"
+                    else
+                        echo "ℹ️ 确实未找到设备树文件，继续构建"
+                    fi
                 fi
             fi
         else
@@ -706,7 +772,7 @@ jobs:
             echo "ℹ️ 未找到自定义脚本"
         fi
 
-    # 执行自定义脚本步骤 - 新增步骤
+    # 执行自定义脚本步骤
     - name: 执行自定义脚本
       if: github.event.inputs.custom_install == 'true'
       run: |
@@ -771,7 +837,7 @@ jobs:
         echo "目标板: $(grep 'CONFIG_TARGET_BOARD' .config || echo '未设置')" >> device_info.txt
         echo "子目标: $(grep 'CONFIG_TARGET_SUBTARGET' .config || echo '未设置')" >> device_info.txt
 
-    # DL库下载和验证步骤 - 新增步骤
+    # DL库下载和验证步骤
     - name: 下载DL库并验证完整性
       run: |
         cd $BUILD_DIR
@@ -797,7 +863,8 @@ jobs:
             for empty_file in $(find dl -type f -size 0); do
                 filename=$(basename "$empty_file")
                 echo "重新下载: $filename"
-                make package/download V=s 2>&1 | grep "$filename" || true
+                rm -f "$empty_file"
+                make package/download V=s 2>&1 | grep -A5 -B5 "$filename" || true
             done
         else
             echo "✅ 没有空文件，下载文件大小正常"
