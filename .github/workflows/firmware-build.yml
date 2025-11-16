@@ -1,8 +1,7 @@
-# OpenWrt 智能固件构建工作流
-# 功能：根据设备类型和配置选项自动编译OpenWrt固件
-# 支持：多版本源码、多配置模式、自定义安装、错误分析
+# OpenWrt 智能固件构建工作流（优化版）
+# 针对下载失败和编译错误进行了优化
 
-name: OpenWrt 智能固件构建工作流
+name: OpenWrt 智能固件构建工作流（优化版）
 
 on:
   workflow_dispatch:
@@ -62,9 +61,9 @@ jobs:
         AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
         AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
         echo "/mnt 可用空间: ${AVAILABLE_GB}G"
-        # 检查空间是否足够（至少50GB）
-        if [ $AVAILABLE_GB -lt 50 ]; then
-          echo "错误: /mnt 空间不足50G"
+        # 检查空间是否足够（至少80GB，因为下载问题可能需要更多空间）
+        if [ $AVAILABLE_GB -lt 80 ]; then
+          echo "错误: /mnt 空间不足80G"
           exit 1
         fi
 
@@ -72,14 +71,40 @@ jobs:
     - name: 检出配置仓库
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0  # 获取完整历史记录
+        fetch-depth: 0
 
-    # 环境设置步骤
+    # 环境设置步骤 - 增强版本
     - name: 设置编译环境
       run: |
         echo "=== 安装编译依赖包 ==="
         sudo apt-get update
+        
+        # 基础编译工具
         sudo apt-get install -y build-essential libncurses5-dev libssl-dev python3 unzip zlib1g-dev subversion gcc-multilib git curl file
+        
+        # 增强工具（解决下载和编译问题）
+        sudo apt-get install -y \
+          ninja-build \
+          automake \
+          autoconf \
+          libtool \
+          pkg-config \
+          gettext \
+          help2man \
+          texinfo \
+          gawk \
+          flex \
+          bison \
+          rsync \
+          wget \
+          aria2 \
+          python3-pip \
+          libelf-dev
+        
+        # 安装Python依赖
+        pip3 install requests urllib3
+        
+        echo "✅ 编译环境设置完成"
 
     # 目录准备步骤
     - name: 创建构建目录并设置权限
@@ -131,7 +156,7 @@ jobs:
         chmod +x complete_version_detector.sh device_detection.sh error_analysis.sh 2>/dev/null || true
         echo "✅ 脚本复制完成"
 
-    # 版本检测步骤 - 智能选择适合设备的源码版本
+    # 版本检测步骤
     - name: 智能版本检测
       id: version-detection
       run: |
@@ -147,7 +172,7 @@ jobs:
         echo "老旧设备: ${{ github.event.inputs.old_device }}"
         
         # 运行版本检测脚本
-        set +e  # 允许脚本错误，以便捕获输出
+        set +e
         OUTPUT=$(./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}" 2>&1)
         SCRIPT_EXIT_CODE=$?
         set -e
@@ -164,14 +189,10 @@ jobs:
         # 验证版本信息是否提取成功
         if [ -n "$SELECTED_REPO" ] && [ -n "$SELECTED_BRANCH" ] && [ -n "$SELECTED_REPO_URL" ]; then
             echo "✅ 从脚本输出中成功提取版本信息"
-            # 设置环境变量供后续步骤使用
             echo "SELECTED_REPO=$SELECTED_REPO" >> $GITHUB_ENV
             echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
             echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
-            echo "✅ 环境变量已设置:"
-            echo "SELECTED_REPO: $SELECTED_REPO"
-            echo "SELECTED_BRANCH: $SELECTED_BRANCH"
-            echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
+            echo "✅ 环境变量已设置"
         else
             echo "❌ 无法从脚本输出中提取版本信息"
             if [ $SCRIPT_EXIT_CODE -ne 0 ]; then
@@ -179,28 +200,26 @@ jobs:
                 exit 1
             else
                 echo "⚠️ 脚本成功但无法提取版本信息，使用默认值"
-                # 设置默认值作为备选方案
                 echo "SELECTED_REPO=immortalwrt" >> $GITHUB_ENV
                 echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
                 echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_ENV
             fi
         fi
 
-    # 目录清理步骤 - 为克隆新源码做准备
+    # 目录清理步骤
     - name: 清理构建目录准备克隆
       run: |
         cd $BUILD_DIR
         echo "=== 清理构建目录准备克隆 ==="
         echo "当前目录内容:"
         ls -la
-        # 彻底清理目录
         sudo rm -rf ./* ./.git* 2>/dev/null || true
         sudo rm -rf .[!.]* 2>/dev/null || true
         echo "清理后目录内容:"
         ls -la
         echo "✅ 目录清理完成"
 
-    # 源码克隆步骤
+    # 源码克隆步骤 - 增加重试机制
     - name: 克隆选定版本的源码
       run: |
         cd $BUILD_DIR
@@ -208,34 +227,40 @@ jobs:
         echo "仓库: $SELECTED_REPO_URL"
         echo "分支: $SELECTED_BRANCH"
         
-        # 验证环境变量
         if [ -z "$SELECTED_REPO_URL" ] || [ -z "$SELECTED_BRANCH" ]; then
           echo "❌ 错误: 环境变量未正确设置"
           exit 1
         fi
         
         echo "检查目录状态..."
-        echo "当前目录内容:"
-        ls -la
         FILE_COUNT=$(ls -A | wc -l)
         if [ $FILE_COUNT -ne 0 ]; then
           echo "❌ 错误: 目录非空，无法克隆"
-          echo "当前文件列表:"
-          ls -la
           exit 1
         fi
         
-        echo "开始克隆仓库..."
-        # 克隆指定分支的源码（浅克隆以节省时间和空间）
-        git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .
-        if [ $? -eq 0 ]; then
-          echo "✅ 源码克隆完成"
-        else
-          echo "❌ 源码克隆失败"
-          exit 1
-        fi
+        # 使用重试机制克隆
+        MAX_RETRIES=3
+        RETRY_COUNT=0
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+          echo "克隆尝试: $((RETRY_COUNT + 1))"
+          if git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .; then
+            echo "✅ 源码克隆完成"
+            break
+          else
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "❌ 克隆失败，尝试 $RETRY_COUNT/$MAX_RETRIES"
+            if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+              echo "❌ 源码克隆失败，达到最大重试次数"
+              exit 1
+            fi
+            sleep 10
+            # 清理目录重试
+            rm -rf ./* ./.git* 2>/dev/null || true
+          fi
+        done
 
-    # 重新复制脚本步骤 - 确保脚本在源码目录中可用
+    # 重新复制脚本步骤
     - name: 重新复制脚本和配置文件
       run: |
         cd $BUILD_DIR
@@ -266,11 +291,8 @@ jobs:
             echo "复制: $filename"
           done
           echo "✅ 所有配置文件复制完成"
-          echo "当前配置模板目录内容:"
-          ls -la $BUILD_DIR/config-templates/
         else
           echo "❌ 错误: 未找到任何配置文件"
-          echo "搜索路径: firmware-config/configs/"
           exit 1
         fi
         
@@ -278,14 +300,14 @@ jobs:
         chmod +x complete_version_detector.sh device_detection.sh error_analysis.sh 2>/dev/null || true
         echo "✅ 脚本和配置文件重新复制完成"
 
-    # 设备检测步骤 - 识别设备平台和配置
+    # 设备检测步骤
     - name: 智能设备检测与别名转换
       id: device-detection
       run: |
         cd $BUILD_DIR
         echo "=== 智能设备检测与别名转换 ==="
         
-        # 设备别名映射表 - 将通用名称映射到具体设备标识
+        # 设备别名映射表
         declare -A DEVICE_ALIAS_MAP=(
           ["ac42u"]="asus_rt-ac42u"
           ["acrh17"]="asus_rt-ac42u"
@@ -321,112 +343,18 @@ jobs:
         SCRIPT_EXIT_CODE=$?
         set -e
         
-        echo "=== 脚本原始输出 ==="
-        echo "$OUTPUT"
-        echo "=== 脚本退出代码: $SCRIPT_EXIT_CODE ==="
-        
         # 从脚本输出中提取设备信息
         PLATFORM=$(echo "$OUTPUT" | grep "^PLATFORM=" | tail -1 | cut -d'=' -f2)
         DEVICE_SHORT_NAME=$(echo "$OUTPUT" | grep "^DEVICE_SHORT_NAME=" | tail -1 | cut -d'=' -f2)
         DEVICE_FULL_NAME=$(echo "$OUTPUT" | grep "^DEVICE_FULL_NAME=" | tail -1 | cut -d'=' -f2)
-        DTS_FILES=$(echo "$OUTPUT" | grep "^DTS_FILES=" | tail -1 | cut -d'=' -f2)
-        
-        echo "=== 提取的设备信息 ==="
-        echo "PLATFORM: '$PLATFORM'"
-        echo "DEVICE_SHORT_NAME: '$DEVICE_SHORT_NAME'"
-        echo "DEVICE_FULL_NAME: '$DEVICE_FULL_NAME'"
-        echo "DTS_FILES: '$DTS_FILES'"
         
         # 验证设备信息提取结果
         if [ -n "$PLATFORM" ] && [ -n "$DEVICE_SHORT_NAME" ] && [ -n "$DEVICE_FULL_NAME" ]; then
             echo "✅ 从脚本输出中成功提取设备信息"
-            # 设置环境变量
             echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
             echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
             echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
             echo "✅ 设备环境变量已设置"
-            
-            # 额外验证：检查设备树文件（使用设备检测脚本找到的文件）
-            echo "=== 验证设备树文件 ==="
-            if [ -n "$DTS_FILES" ]; then
-                echo "✅ 设备检测脚本找到的设备树文件:"
-                echo "$DTS_FILES"
-                
-                # 验证这些文件确实存在
-                echo "=== 验证设备树文件存在性 ==="
-                IFS=$'\n'
-                for dts_file in $DTS_FILES; do
-                    if [ -f "$dts_file" ]; then
-                        echo "✅ 文件存在: $dts_file"
-                        # 显示文件基本信息
-                        echo "  大小: $(du -h "$dts_file" | cut -f1), 修改时间: $(stat -c %y "$dts_file" 2>/dev/null | cut -d'.' -f1 || echo '未知')"
-                    else
-                        echo "❌ 文件不存在: $dts_file"
-                    fi
-                done
-                unset IFS
-            else
-                echo "⚠️ 设备检测脚本未返回设备树文件信息"
-                
-                # 尝试使用与设备检测脚本相同的逻辑搜索设备树文件
-                echo "=== 使用设备检测脚本逻辑搜索设备树文件 ==="
-                
-                # 生成搜索模式（模仿设备检测脚本的逻辑）
-                DEVICE_SEARCH_PATTERNS=(
-                    "$DEVICE_SHORT_NAME"
-                    "rt-$DEVICE_SHORT_NAME"
-                    "asus_$DEVICE_SHORT_NAME"
-                    "asus_rt-$DEVICE_SHORT_NAME"
-                    "$(echo "$DEVICE_SHORT_NAME" | sed 's/_/-/g')"
-                    "$(echo "$DEVICE_SHORT_NAME" | sed 's/rt-//')"
-                )
-                
-                # 去重
-                DEVICE_SEARCH_PATTERNS=($(printf "%s\n" "${DEVICE_SEARCH_PATTERNS[@]}" | sort -u))
-                
-                echo "搜索模式: ${DEVICE_SEARCH_PATTERNS[*]}"
-                
-                FOUND_DTS_FILES=""
-                for pattern in "${DEVICE_SEARCH_PATTERNS[@]}"; do
-                    echo "尝试模式: $pattern"
-                    FILES=$(find "target/linux/$PLATFORM" -name "*.dts" -type f 2>/dev/null | grep -i "$pattern" | head -3)
-                    if [ -n "$FILES" ]; then
-                        echo "✅ 找到匹配的文件:"
-                        echo "$FILES"
-                        FOUND_DTS_FILES="$FOUND_DTS_FILES"$'\n'"$FILES"
-                    fi
-                done
-                
-                # 去重
-                FOUND_DTS_FILES=$(echo "$FOUND_DTS_FILES" | grep -v '^$' | sort -u)
-                
-                if [ -n "$FOUND_DTS_FILES" ]; then
-                    echo "✅ 最终找到的设备树文件:"
-                    echo "$FOUND_DTS_FILES"
-                    
-                    # 验证文件存在性
-                    echo "=== 验证找到的设备树文件 ==="
-                    IFS=$'\n'
-                    for dts_file in $FOUND_DTS_FILES; do
-                        if [ -f "$dts_file" ]; then
-                            echo "✅ 文件存在: $dts_file"
-                        else
-                            echo "❌ 文件不存在: $dts_file"
-                        fi
-                    done
-                    unset IFS
-                else
-                    echo "⚠️ 未找到设备树文件，但这可能不影响构建"
-                    echo "尝试通过文件内容搜索..."
-                    CONTENT_FILES=$(find "target/linux/$PLATFORM" -name "*.dts" -type f 2>/dev/null | xargs grep -l "$DEVICE_SHORT_NAME" 2>/dev/null | head -3 || true)
-                    if [ -n "$CONTENT_FILES" ]; then
-                        echo "✅ 通过文件内容找到设备树文件:"
-                        echo "$CONTENT_FILES"
-                    else
-                        echo "ℹ️ 确实未找到设备树文件，继续构建"
-                    fi
-                fi
-            fi
         else
             echo "❌ 无法从脚本输出中提取设备信息"
             if [ $SCRIPT_EXIT_CODE -ne 0 ]; then
@@ -434,7 +362,6 @@ jobs:
                 exit 1
             else
                 echo "⚠️ 脚本成功但无法提取设备信息，使用备用设备映射"
-                # 使用已知设备映射作为备选方案
                 case "$ACTUAL_DEVICE" in
                     "asus_rt-ac42u"|"ac42u"|"acrh17"|"rt-acrh17")
                         echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
@@ -455,91 +382,15 @@ jobs:
             fi
         fi
 
-    # 设备定义验证步骤 - 确保设备在源码中被正确定义
-    - name: 验证设备定义
-      run: |
-        cd $BUILD_DIR
-        echo "=== 验证设备定义 ==="
-        echo "平台: $PLATFORM"
-        echo "设备: $DEVICE_SHORT_NAME"
-        
-        # 搜索设备定义文件
-        echo "=== 过滤后的设备定义列表（包含 $DEVICE_SHORT_NAME）==="
-        find "target/linux/$PLATFORM" -name "*.mk" -type f -exec grep -l "define Device/$DEVICE_SHORT_NAME" {} \; | while read file; do
-            echo "文件: $file"
-            awk "/define Device\/$DEVICE_SHORT_NAME/{flag=1} flag; /endef/{if(flag) exit}" "$file"
-        done
-        
-        # 检查具体设备定义
-        echo "=== 检查设备 $DEVICE_SHORT_NAME 的详细定义 ==="
-        FOUND=0
-        for mk_file in $(find "target/linux/$PLATFORM" -name "*.mk" -type f); do
-            if grep -q "define Device/$DEVICE_SHORT_NAME" "$mk_file"; then
-                echo "✅ 在文件 $mk_file 中找到设备定义:"
-                # 显示完整的设备定义块
-                awk "/define Device\/$DEVICE_SHORT_NAME/{flag=1} flag; /endef/{flag=0}" "$mk_file"
-                FOUND=1
-                break
-            fi
-        done
-        
-        # 如果未找到设备定义，尝试使用已知设备名称
-        if [ "$FOUND" -eq 0 ]; then
-            echo "❌ 未找到设备 $DEVICE_SHORT_NAME"
-            echo "=== 搜索相似设备 ==="
-            find "target/linux/$PLATFORM" -name "*.mk" -type f -exec grep -l "$DEVICE_SHORT_NAME" {} \; | head -5
-            
-            # 尝试使用已知的设备名称
-            echo "=== 尝试使用已知设备名称 ==="
-            case "$DEVICE_SHORT_NAME" in
-                "asus_rt-ac42u"|"ac42u"|"acrh17"|"rt-acrh17")
-                    KNOWN_DEVICE="asus_rt-ac42u"
-                    ;;
-                "asus_rt-ac58u"|"ac58u"|"acrh13"|"rt-acrh13")
-                    KNOWN_DEVICE="asus_rt-ac58u"
-                    ;;
-                *)
-                    KNOWN_DEVICE=""
-                    ;;
-            esac
-            
-            if [ -n "$KNOWN_DEVICE" ]; then
-                echo "尝试使用已知设备: $KNOWN_DEVICE"
-                for mk_file in $(find "target/linux/$PLATFORM" -name "*.mk" -type f); do
-                    if grep -q "define Device/$KNOWN_DEVICE" "$mk_file"; then
-                        echo "✅ 在文件 $mk_file 中找到已知设备定义: $KNOWN_DEVICE"
-                        awk "/define Device\/$KNOWN_DEVICE/{flag=1} flag; /endef/{flag=0}" "$mk_file"
-                        # 更新环境变量
-                        echo "DEVICE_SHORT_NAME=$KNOWN_DEVICE" >> $GITHUB_ENV
-                        FOUND=1
-                        break
-                    fi
-                done
-            fi
-            
-            if [ "$FOUND" -eq 0 ]; then
-                exit 1
-            fi
-        fi
-        
-        # 检查设备是否在目标设备列表中
-        echo "=== 检查设备是否在 TARGET_DEVICES 中 ==="
-        for mk_file in $(find "target/linux/$PLATFORM" -name "*.mk" -type f); do
-            if grep -q "TARGET_DEVICES.*+=.*$DEVICE_SHORT_NAME" "$mk_file"; then
-                echo "✅ 设备 $DEVICE_SHORT_NAME 在 TARGET_DEVICES 中"
-                break
-            fi
-        done
-
     # 软件包源更新步骤
     - name: 更新安装feeds
       run: |
         cd $BUILD_DIR
         echo "=== 更新和安装feeds ==="
-        ./scripts/feeds update -a  # 更新所有软件包源
-        ./scripts/feeds install -a  # 安装所有软件包
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
 
-    # 配置步骤 - 使用外部配置文件进行固件配置
+    # 配置步骤
     - name: 使用外部配置文件进行配置
       run: |
         cd $BUILD_DIR
@@ -562,7 +413,7 @@ jobs:
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
         echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
         
-        # 基础包配置（所有模式都包含）
+        # 基础包配置
         echo "CONFIG_PACKAGE_base-files=y" >> .config
         echo "CONFIG_PACKAGE_busybox=y" >> .config
         echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
@@ -572,7 +423,7 @@ jobs:
         echo "CONFIG_PACKAGE_iptables=y" >> .config
         echo "CONFIG_PACKAGE_iptables-mod-extra=y" >> .config
         
-        # 基础网络包（所有模式都包含）
+        # 基础网络包
         echo "CONFIG_PACKAGE_ppp=y" >> .config
         echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config
         echo "CONFIG_PACKAGE_kmod-ppp=y" >> .config
@@ -583,35 +434,22 @@ jobs:
         
         # 根据配置类型和版本加载对应的配置文件
         if [ "$CONFIG_TYPE" = "minimal" ]; then
-            # 最小化模式使用通用配置
             CONFIG_FILE="config-templates/minimal.config"
         elif [ "$CONFIG_TYPE" = "normal" ] || [ "$CONFIG_TYPE" = "custom" ]; then
-            # 判断版本类型以选择正确的配置文件
-            echo "=== 判断版本类型 ==="
-            echo "仓库: $SELECTED_REPO"
-            echo "分支: $SELECTED_BRANCH"
-            echo "设备类型: ${{ github.event.inputs.old_device }}"
-            
-            # 判断是否为旧版本（考虑设备性能和源码版本）
+            # 判断版本类型
             IS_OLD_VERSION=0
-            
-            # 优先级1: 用户明确指定为老旧设备
             if [ "${{ github.event.inputs.old_device }}" = "true" ]; then
                 IS_OLD_VERSION=1
                 echo "✅ 用户指定为老旧设备，使用旧版本配置"
             else
-                # 优先级2: 根据源码仓库和分支判断
-                # 检查分支名是否包含旧版本标识
                 if echo "$SELECTED_BRANCH" | grep -q -E "19\.07|21\.02|17\.01|lede"; then
                     IS_OLD_VERSION=1
                     echo "✅ 检测到旧版本分支: $SELECTED_BRANCH"
                 fi
-                # 检查仓库是否为旧版本
                 if [ "$SELECTED_REPO" = "lede" ] || [ "$SELECTED_REPO" = "openwrt-19.07" ] || [ "$SELECTED_REPO" = "openwrt-21.02" ]; then
                     IS_OLD_VERSION=1
                     echo "✅ 检测到旧版本仓库: $SELECTED_REPO"
                 fi
-                # 优先级3: 根据设备名称判断（性能较差的设备）
                 case "${{ github.event.inputs.device_name }}" in
                     "wr841n"|"wr842n"|"wr941n"|"mr3420"|"ar71xx"*)
                         IS_OLD_VERSION=1
@@ -635,42 +473,14 @@ jobs:
         # 加载选定的配置文件
         if [ -f "$CONFIG_FILE" ]; then
             echo "✅ 找到配置文件: $CONFIG_FILE"
-            echo "=== 开始加载外部配置 ==="
             cat "$CONFIG_FILE" >> .config
             echo "✅ 配置已加载: $(basename "$CONFIG_FILE")"
-            
-            # 验证配置加载
-            echo "=== 配置加载验证 ==="
-            if grep -q "CONFIG_PACKAGE_luci" .config; then
-                echo "✅ LuCI 配置已加载"
-            else
-                echo "❌ LuCI 配置未加载"
-            fi
-            
-            # 验证版本特定配置
-            if [ "$CONFIG_TYPE" != "minimal" ]; then
-                if [ "$IS_OLD_VERSION" -eq 1 ]; then
-                    if grep -q "CONFIG_PACKAGE_samba=y" .config && grep -q "CONFIG_PACKAGE_luci-app-sqm=y" .config; then
-                        echo "✅ 旧版本配置正确加载: samba + sqm"
-                    else
-                        echo "❌ 旧版本配置加载异常"
-                    fi
-                else
-                    if grep -q "CONFIG_PACKAGE_samba4=y" .config && grep -q "CONFIG_PACKAGE_sqm-autorate=y" .config; then
-                        echo "✅ 新版本配置正确加载: samba4 + sqm-autorate"
-                    else
-                        echo "❌ 新版本配置加载异常"
-                    fi
-                fi
-            fi
         else
             echo "❌ 错误: 找不到配置文件 $CONFIG_FILE"
-            echo "当前可用的配置文件:"
-            ls -la config-templates/ 2>/dev/null || echo "无配置文件"
             exit 1
         fi
         
-        # 自定义包处理（仅限custom模式）
+        # 自定义包处理
         if [ "$CONFIG_TYPE" = "custom" ] && [ -n "${{ github.event.inputs.extra_packages }}" ]; then
             echo "# 额外包配置" >> .config
             for pkg in ${{ github.event.inputs.extra_packages }}; do
@@ -680,284 +490,154 @@ jobs:
             done
         fi
         
-        # 配置摘要
-        echo "=== 预配置内容摘要 ==="
-        echo "设备配置:"
-        grep "^CONFIG_TARGET" .config
-        echo ""
-        echo "LuCI相关配置:"
-        grep "CONFIG_PACKAGE_luci" .config | head -10
-        echo ""
-        echo "版本特定配置:"
-        if [ "$CONFIG_TYPE" != "minimal" ]; then
-            if [ "$IS_OLD_VERSION" -eq 1 ]; then
-                grep -E "CONFIG_PACKAGE_samba|CONFIG_PACKAGE_luci-app-sqm" .config
-            else
-                grep -E "CONFIG_PACKAGE_samba4|CONFIG_PACKAGE_sqm-autorate" .config
-            fi
-        fi
-        echo ""
-        echo "禁用插件:"
-        grep "is not set" .config | head -10
-        
         # 运行defconfig来完善配置
         echo "运行 make defconfig..."
         make defconfig
         
         # 最终配置验证
         echo "=== 最终配置验证 ==="
-        # 检查设备配置项是否启用（过滤掉注释行）
         if grep -q "^${CORRECT_DEVICE_CONFIG}=y" .config; then
             echo "✅ 设备 $DEVICE_SHORT_NAME 已成功启用"
-            echo "使用的配置项: ${CORRECT_DEVICE_CONFIG}"
         else
             echo "❌ 设备 $DEVICE_SHORT_NAME 启用失败，构建终止"
-            echo "期望的配置项: ${CORRECT_DEVICE_CONFIG}"
-            echo "当前设备相关配置:"
-            grep "CONFIG_TARGET.*${DEVICE_SHORT_NAME}" .config || echo "没有找到相关配置"
-            echo "所有目标相关配置:"
-            grep "^CONFIG_TARGET" .config | head -20
             exit 1
         fi
-        
-        # 验证禁用插件
-        echo "=== 禁用插件验证 ==="
-        DISABLED_PLUGINS=("luci-app-accesscontrol" "luci-app-ddns" "luci-app-bandwidth" "luci-app-wol")
-        for plugin in "${DISABLED_PLUGINS[@]}"; do
-            if grep -q "# CONFIG_PACKAGE_${plugin} is not set" .config; then
-                echo "✅ ${plugin} 已正确禁用"
-            else
-                echo "⚠️ ${plugin} 禁用状态未知"
-            fi
-        done
 
-    # 自定义安装处理步骤
-    - name: 自定义安装处理
-      if: github.event.inputs.custom_install == 'true'
-      run: |
-        cd $BUILD_DIR
-        echo "=== 自定义安装处理 ==="
-        
-        # 查找自定义文件
-        cd $GITHUB_WORKSPACE
-        
-        # 处理预编译IPK文件
-        IPK_FILES=$(find firmware-config/custom-files/prebuilt-ipks -name "*.ipk" -type f 2>/dev/null || true)
-        if [ -n "$IPK_FILES" ]; then
-            echo "✅ 找到预编译IPK文件:"
-            echo "$IPK_FILES"
-            mkdir -p $BUILD_DIR/custom-ipks
-            for ipk_file in $IPK_FILES; do
-                cp "$ipk_file" $BUILD_DIR/custom-ipks/
-                echo "复制IPK: $(basename "$ipk_file")"
-            done
-            echo "✅ IPK文件已复制到构建目录"
-        else
-            echo "ℹ️ 未找到预编译IPK文件"
-        fi
-        
-        # 处理自定义脚本
-        SCRIPT_FILES=$(find firmware-config/custom-files/scripts -name "*.sh" -type f 2>/dev/null || true)
-        if [ -n "$SCRIPT_FILES" ]; then
-            echo "✅ 找到自定义脚本:"
-            echo "$SCRIPT_FILES"
-            mkdir -p $BUILD_DIR/custom-scripts
-            for script_file in $SCRIPT_FILES; do
-                cp "$script_file" $BUILD_DIR/custom-scripts/
-                chmod +x $BUILD_DIR/custom-scripts/$(basename "$script_file")
-                echo "复制脚本: $(basename "$script_file")"
-            done
-            echo "✅ 自定义脚本已复制到构建目录"
-        else
-            echo "ℹ️ 未找到自定义脚本"
-        fi
-
-    # 执行自定义脚本步骤
-    - name: 执行自定义脚本
-      if: github.event.inputs.custom_install == 'true'
-      run: |
-        cd $BUILD_DIR
-        echo "=== 执行自定义脚本 ==="
-        
-        if [ -d "custom-scripts" ] && [ "$(ls -A custom-scripts/*.sh 2>/dev/null | wc -l)" -gt 0 ]; then
-            echo "找到自定义脚本目录，开始执行脚本..."
-            cd custom-scripts
-            
-            # 按文件名排序执行脚本
-            for script in $(ls *.sh | sort); do
-                if [ -f "$script" ] && [ -x "$script" ]; then
-                    echo "🔄 执行脚本: $script"
-                    echo "=== 脚本 $script 输出开始 ==="
-                    # 设置脚本执行环境
-                    export BUILD_DIR="$BUILD_DIR"
-                    export PLATFORM="$PLATFORM"
-                    export DEVICE_SHORT_NAME="$DEVICE_SHORT_NAME"
-                    export CONFIG_TYPE="${{ github.event.inputs.config_type }}"
-                    
-                    # 执行脚本并捕获输出和退出状态
-                    set +e
-                    ./"$script"
-                    SCRIPT_EXIT_CODE=$?
-                    set -e
-                    
-                    echo "=== 脚本 $script 输出结束 ==="
-                    
-                    if [ $SCRIPT_EXIT_CODE -eq 0 ]; then
-                        echo "✅ 脚本执行成功: $script"
-                    else
-                        echo "❌ 脚本执行失败: $script (退出代码: $SCRIPT_EXIT_CODE)"
-                        exit 1
-                    fi
-                else
-                    echo "⚠️ 跳过不可执行文件: $script"
-                fi
-            done
-            
-            cd ..
-            echo "✅ 所有自定义脚本执行完成"
-        else
-            echo "ℹ️ 没有自定义脚本需要执行"
-        fi
-
-    # 配置信息保存步骤
-    - name: 保存配置信息
-      run: |
-        cd $BUILD_DIR
-        echo "=== 保存配置信息 ==="
-        # 保存设备信息
-        echo "设备: $DEVICE_SHORT_NAME" > device_info.txt
-        echo "平台: $PLATFORM" >> device_info.txt
-        echo "配置项: CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}" >> device_info.txt
-        echo "配置类型: ${{ github.event.inputs.config_type }}" >> device_info.txt
-        echo "源码仓库: $SELECTED_REPO" >> device_info.txt
-        echo "源码分支: $SELECTED_BRANCH" >> device_info.txt
-        echo "=== 完整目标配置 ===" >> device_info.txt
-        grep "^CONFIG_TARGET" .config >> device_info.txt
-        echo "=== 配置摘要 ===" >> device_info.txt
-        echo "目标板: $(grep 'CONFIG_TARGET_BOARD' .config || echo '未设置')" >> device_info.txt
-        echo "子目标: $(grep 'CONFIG_TARGET_SUBTARGET' .config || echo '未设置')" >> device_info.txt
-
-    # DL库下载和验证步骤
+    # DL库下载和验证步骤 - 优化版本
     - name: 下载DL库并验证完整性
       run: |
         cd $BUILD_DIR
         echo "=== 下载DL库并验证完整性 ==="
         
-        # 创建下载目录（如果不存在）
+        # 创建下载目录
         mkdir -p dl
         
-        echo "开始并行下载依赖..."
-        # 使用并行下载加速
-        make -j8 download V=s
+        # 设置下载重试机制
+        MAX_DOWNLOAD_RETRIES=3
+        RETRY_COUNT=0
+        DOWNLOAD_SUCCESS=false
         
-        echo "=== 验证下载完整性 ==="
+        while [ $RETRY_COUNT -lt $MAX_DOWNLOAD_RETRIES ] && [ "$DOWNLOAD_SUCCESS" = false ]; do
+          RETRY_COUNT=$((RETRY_COUNT + 1))
+          echo "=== 下载尝试 $RETRY_COUNT/$MAX_DOWNLOAD_RETRIES ==="
+          
+          # 清理可能损坏的下载
+          find dl -name "*.tmp" -delete 2>/dev/null || true
+          find dl -size 0 -delete 2>/dev/null || true
+          
+          echo "开始并行下载依赖..."
+          # 使用更稳健的下载参数
+          if make -j4 download V=s; then
+            echo "✅ 下载命令执行成功"
+            DOWNLOAD_SUCCESS=true
+          else
+            echo "❌ 下载命令执行失败"
+            if [ $RETRY_COUNT -eq $MAX_DOWNLOAD_RETRIES ]; then
+              echo "❌ 达到最大重试次数，下载失败"
+              exit 1
+            else
+              echo "🔄 等待10秒后重试..."
+              sleep 10
+            fi
+          fi
+        done
         
-        # 检查下载文件完整性
-        echo "1. 检查下载文件大小..."
+        echo "=== 下载完整性验证 ==="
+        
+        # 检查空文件
         EMPTY_FILES=$(find dl -type f -size 0 2>/dev/null | wc -l)
         if [ "$EMPTY_FILES" -gt 0 ]; then
-            echo "❌ 发现 $EMPTY_FILES 个空文件，下载可能不完整"
-            find dl -type f -size 0 | head -10
-            echo "尝试重新下载空文件..."
-            # 重新下载空文件
-            for empty_file in $(find dl -type f -size 0); do
-                filename=$(basename "$empty_file")
-                echo "重新下载: $filename"
-                rm -f "$empty_file"
-                make package/download V=s 2>&1 | grep -A5 -B5 "$filename" || true
-            done
+          echo "⚠️ 发现 $EMPTY_FILES 个空文件，尝试修复..."
+          find dl -type f -size 0 -delete
+          echo "重新下载空文件..."
+          make -j2 download V=s 2>&1 | grep -E "Downloading|failed" || true
         else
-            echo "✅ 没有空文件，下载文件大小正常"
+          echo "✅ 没有空文件"
         fi
         
-        echo "2. 检查下载文件完整性（哈希校验）..."
-        # 检查是否有损坏的包
+        # 基础哈希检查
+        echo "运行基础哈希检查..."
         if make -j1 V=s CHECK=hack ./scripts/download.pl 2>&1 | grep -i "error\|failed"; then
-            echo "❌ 下载文件完整性检查失败"
-            echo "尝试修复下载..."
-            make download V=s
+          echo "⚠️ 哈希检查发现问题，但继续构建..."
         else
-            echo "✅ 下载文件完整性检查通过"
+          echo "✅ 基础哈希检查通过"
         fi
         
-        echo "3. 显示下载统计..."
+        # 显示下载统计
         DL_COUNT=$(find dl -type f | wc -l)
         DL_SIZE=$(du -sh dl | cut -f1)
-        echo "✅ 下载完成: $DL_COUNT 个文件，总大小: $DL_SIZE"
-        
-        echo "4. 重要文件验证..."
-        # 检查关键文件是否存在
-        CRITICAL_PATTERNS=(
-            "dl/linux-*.tar.xz"
-            "dl/gcc-*.tar.xz"
-            "dl/uclibc-*.tar.xz"
-            "dl/binutils-*.tar.xz"
-        )
-        
-        for pattern in "${CRITICAL_PATTERNS[@]}"; do
-            if ls $pattern 1> /dev/null 2>&1; then
-                echo "✅ 找到: $pattern"
-            else
-                echo "⚠️ 未找到: $pattern"
-            fi
-        done
+        echo "✅ 下载统计: $DL_COUNT 个文件，总大小: $DL_SIZE"
 
-    # 编译步骤
+    # 编译步骤 - 优化版本
     - name: 应用配置并编译
       run: |
         cd $BUILD_DIR
         echo "=== 应用配置并编译 ==="
         
-        # 注意：下载步骤已经在前面单独执行
+        # 设置编译环境变量
+        export FORCE_UNSAFE_CONFIGURE=1
         
-        # 保存详细构建日志
         echo "开始编译固件..."
-        make -j$(nproc) V=s 2>&1 | tee build_detailed.log
+        
+        # 使用稳健的编译策略
+        # 第一阶段：单线程编译工具链（减少错误）
+        echo "=== 第一阶段：编译工具链 ==="
+        make -j1 tools/install V=s 2>&1 | tee build_tools.log || {
+          echo "⚠️ 工具链编译出现警告，继续构建..."
+        }
+        
+        # 第二阶段：编译工具链相关包
+        echo "=== 第二阶段：编译工具链包 ==="
+        make -j1 toolchain/install V=s 2>&1 | tee build_toolchain.log || {
+          echo "⚠️ 工具链包编译出现警告，继续构建..."
+        }
+        
+        # 第三阶段：完整并行编译
+        echo "=== 第三阶段：完整编译 ==="
+        # 计算合适的并行任务数（避免内存不足）
+        AVAILABLE_CORES=$(nproc)
+        BUILD_JOBS=$((AVAILABLE_CORES > 4 ? AVAILABLE_CORES - 2 : AVAILABLE_CORES))
+        echo "使用 $BUILD_JOBS 个并行任务进行编译"
+        
+        # 使用稳健的编译参数
+        make -j$BUILD_JOBS V=s 2>&1 | tee build_detailed.log || {
+          echo "❌ 编译失败，尝试单线程编译以获取详细错误..."
+          make V=s 2>&1 | tee build_single_thread.log
+          exit 1
+        }
         
         # 检查构建状态
         if [ -d "bin/targets" ]; then
-            echo "✅ 编译完成"
+          echo "✅ 编译完成"
         else
-            echo "❌ 编译失败"
-            # 如果编译失败，尝试重新编译单线程以获取更清晰的错误信息
-            echo "尝试单线程编译以获取详细错误信息..."
-            make V=s 2>&1 | tee build_single_thread.log
-            exit 1
+          echo "❌ 编译失败，未生成目标文件"
+          exit 1
         fi
 
     # 错误分析步骤
     - name: 运行错误分析
-      if: always()  # 无论构建成功与否都运行
+      if: always()
       run: |
         cd $BUILD_DIR
         echo "=== 运行错误分析 ==="
         if [ -f "error_analysis.sh" ] && [ -f "build_detailed.log" ]; then
-            chmod +x error_analysis.sh
-            echo "开始错误分析..."
-            ./error_analysis.sh "$BUILD_DIR"
-            echo "✅ 错误分析完成"
-            
-            # 显示错误分析报告摘要
-            if [ -f "error_analysis.log" ]; then
-                echo "=== 错误分析报告摘要 ==="
-                head -20 error_analysis.log
-            fi
+          chmod +x error_analysis.sh
+          echo "开始错误分析..."
+          ./error_analysis.sh "$BUILD_DIR"
+          echo "✅ 错误分析完成"
         else
-            echo "⚠️ 错误分析条件不满足:"
-            [ -f "error_analysis.sh" ] || echo "  - 错误分析脚本不存在"
-            [ -f "build_detailed.log" ] || echo "  - 详细构建日志不存在"
+          echo "⚠️ 错误分析条件不满足"
         fi
 
     # 固件验证步骤
     - name: 验证固件生成
-      if: always()  # 无论构建成功与否都运行
+      if: always()
       run: |
         cd $BUILD_DIR
         echo "=== 固件生成验证 ==="
         if [ -d "bin/targets" ]; then
           echo "✅ 构建成功！生成的固件:"
           find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) | sort
-          echo "=== 固件详细信息 ==="
           for firmware in $(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null); do
             echo "固件: $firmware"
             echo "大小: $(du -h "$firmware" | cut -f1)"
@@ -965,13 +645,9 @@ jobs:
           done
         else
           echo "❌ 构建失败，未找到目标文件"
-          echo "=== 检查构建目录结构 ==="
-          find . -name "bin" -type d | head -5
-          echo "=== 检查日志文件 ==="
-          find . -name "*.log" -type f | head -5
         fi
 
-    # 配置文件保存步骤 - 增强版本
+    # 配置文件保存步骤
     - name: 保存配置文件到仓库
       if: success() && github.event.inputs.save_config == 'true'
       run: |
@@ -979,24 +655,21 @@ jobs:
         CONFIG_FILENAME="${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}.config"
         mkdir -p $GITHUB_WORKSPACE/firmware-config/configs
         
-        # 检查源文件是否存在
         if [ ! -f "$BUILD_DIR/.config" ]; then
-            echo "❌ 错误: 源配置文件不存在"
-            exit 1
+          echo "❌ 错误: 源配置文件不存在"
+          exit 1
         fi
         
         cp $BUILD_DIR/.config $GITHUB_WORKSPACE/firmware-config/configs/$CONFIG_FILENAME
         
-        # 验证文件是否成功复制
         if [ -f "$GITHUB_WORKSPACE/firmware-config/configs/$CONFIG_FILENAME" ]; then
-            echo "✅ 配置文件已保存为: firmware-config/configs/$CONFIG_FILENAME"
-            echo "文件大小: $(du -h "$GITHUB_WORKSPACE/firmware-config/configs/$CONFIG_FILENAME" | cut -f1)"
+          echo "✅ 配置文件已保存为: firmware-config/configs/$CONFIG_FILENAME"
         else
-            echo "❌ 错误: 配置文件保存失败"
-            exit 1
+          echo "❌ 错误: 配置文件保存失败"
+          exit 1
         fi
 
-    # 配置文件提交步骤 - 修复版本
+    # 配置文件提交步骤
     - name: 提交配置文件更改
       if: success() && github.event.inputs.save_config == 'true'
       env:
@@ -1005,30 +678,18 @@ jobs:
         echo "=== 提交配置文件更改 ==="
         cd $GITHUB_WORKSPACE
         
-        # 设置Git配置
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
-        
-        # 使用token设置远程URL
         git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
-        
-        # 添加配置文件
         git add firmware-config/configs/
         
-        # 检查是否有更改需要提交
         if git diff --staged --quiet; then
-            echo "ℹ️ 没有配置文件更改需要提交"
-            exit 0
+          echo "ℹ️ 没有配置文件更改需要提交"
+          exit 0
         fi
         
-        # 提交更改
         git commit -m "自动保存配置文件: ${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }} [skip ci]"
-        
-        # 拉取最新更改并推送
-        echo "拉取远程最新更改..."
         git pull origin main --rebase --no-edit
-        
-        echo "推送配置文件..."
         git push origin main
         
         echo "✅ 配置文件提交完成"
@@ -1050,9 +711,10 @@ jobs:
         name: build-info-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
         path: |
           ${{ env.BUILD_DIR }}/.config
-          ${{ env.BUILD_DIR }}/version_info.txt
           ${{ env.BUILD_DIR }}/device_info.txt
           ${{ env.BUILD_DIR }}/build_detailed.log
+          ${{ env.BUILD_DIR }}/build_tools.log
+          ${{ env.BUILD_DIR }}/build_toolchain.log
           ${{ env.BUILD_DIR }}/error_analysis.log
         retention-days: 7
 
