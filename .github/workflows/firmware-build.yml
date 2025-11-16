@@ -31,6 +31,16 @@ on:
         description: '额外安装插件 (空格分隔)'
         required: false
         type: string
+      save_config:
+        description: '保存配置文件到仓库'
+        required: false
+        default: true
+        type: boolean
+      custom_install:
+        description: '启用自定义安装 (IPK和脚本)'
+        required: false
+        default: false
+        type: boolean
 
 env:
   BUILD_DIR: /mnt/openwrt-build
@@ -73,23 +83,39 @@ jobs:
         ls -ld $BUILD_DIR
         touch $BUILD_DIR/test_write.txt && echo "✅ 写入测试成功" && rm $BUILD_DIR/test_write.txt
 
-    - name: 复制检测脚本到构建目录
+    - name: 复制脚本到构建目录
       run: |
         cd $BUILD_DIR
-        echo "=== 复制检测脚本到构建目录 ==="
+        echo "=== 复制脚本到构建目录 ==="
         cd $GITHUB_WORKSPACE
+        
+        # 查找所有必要的脚本
         VERSION_SCRIPT=$(find . -name "complete_version_detector.sh" -type f | head -1)
         DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f | head -1)
+        ERROR_SCRIPT=$(find . -name "error_analysis.sh" -type f | head -1)
+        
         if [ -z "$VERSION_SCRIPT" ] || [ -z "$DEVICE_SCRIPT" ]; then
-          echo "❌ 错误: 找不到检测脚本"
+          echo "❌ 错误: 找不到必要的检测脚本"
           exit 1
         fi
+        
         echo "✅ 找到版本检测脚本: $VERSION_SCRIPT"
         echo "✅ 找到设备检测脚本: $DEVICE_SCRIPT"
+        
+        # 复制脚本
         cp "$VERSION_SCRIPT" $BUILD_DIR/complete_version_detector.sh
         cp "$DEVICE_SCRIPT" $BUILD_DIR/device_detection.sh
+        
+        # 复制错误分析脚本（如果存在）
+        if [ -n "$ERROR_SCRIPT" ]; then
+          echo "✅ 找到错误分析脚本: $ERROR_SCRIPT"
+          cp "$ERROR_SCRIPT" $BUILD_DIR/error_analysis.sh
+        else
+          echo "⚠️ 警告: 未找到错误分析脚本"
+        fi
+        
         cd $BUILD_DIR
-        chmod +x complete_version_detector.sh device_detection.sh
+        chmod +x complete_version_detector.sh device_detection.sh error_analysis.sh 2>/dev/null || true
         echo "✅ 脚本复制完成"
 
     - name: 智能版本检测
@@ -173,22 +199,40 @@ jobs:
           exit 1
         fi
 
-    - name: 重新复制检测脚本
+    - name: 重新复制脚本和配置文件
       run: |
         cd $BUILD_DIR
-        echo "=== 重新复制检测脚本 ==="
+        echo "=== 重新复制脚本和配置文件 ==="
         cd $GITHUB_WORKSPACE
+        
+        # 复制脚本
         VERSION_SCRIPT=$(find . -name "complete_version_detector.sh" -type f | head -1)
         DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f | head -1)
-        if [ -z "$VERSION_SCRIPT" ] || [ -z "$DEVICE_SCRIPT" ]; then
-          echo "❌ 错误: 找不到检测脚本"
-          exit 1
-        fi
+        ERROR_SCRIPT=$(find . -name "error_analysis.sh" -type f | head -1)
+        
         cp "$VERSION_SCRIPT" $BUILD_DIR/complete_version_detector.sh
         cp "$DEVICE_SCRIPT" $BUILD_DIR/device_detection.sh
+        if [ -n "$ERROR_SCRIPT" ]; then
+          cp "$ERROR_SCRIPT" $BUILD_DIR/error_analysis.sh
+        fi
+        
+        # 查找并复制配置文件
+        CONFIG_FILES=$(find firmware-config/configs -name "*.config" -type f)
+        if [ -n "$CONFIG_FILES" ]; then
+          echo "找到配置文件:"
+          echo "$CONFIG_FILES"
+          mkdir -p $BUILD_DIR/config-templates
+          for config_file in $CONFIG_FILES; do
+            cp "$config_file" $BUILD_DIR/config-templates/
+          done
+          echo "✅ 配置文件复制完成"
+        else
+          echo "⚠️ 警告: 未找到配置文件"
+        fi
+        
         cd $BUILD_DIR
-        chmod +x complete_version_detector.sh device_detection.sh
-        echo "✅ 检测脚本重新复制完成"
+        chmod +x complete_version_detector.sh device_detection.sh error_analysis.sh 2>/dev/null || true
+        echo "✅ 脚本和配置文件重新复制完成"
 
     - name: 智能设备检测与别名转换
       id: device-detection
@@ -360,10 +404,10 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 使用改进的一段式配置方法
+    - name: 使用外部配置文件进行配置
       run: |
         cd $BUILD_DIR
-        echo "=== 使用改进的一段式配置方法 ==="
+        echo "=== 使用外部配置文件进行配置 ==="
         
         # 完全清空配置
         > .config
@@ -389,15 +433,28 @@ jobs:
         echo "CONFIG_PACKAGE_dropbear=y" >> .config
         echo "CONFIG_PACKAGE_firewall=y" >> .config
         echo "CONFIG_PACKAGE_opkg=y" >> .config
+        echo "CONFIG_PACKAGE_iptables=y" >> .config
+        echo "CONFIG_PACKAGE_iptables-mod-extra=y" >> .config
         
-        # 根据配置类型添加包
+        # 基础网络包（所有模式都包含）
+        echo "CONFIG_PACKAGE_ppp=y" >> .config
+        echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ppp=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-pppoe=y" >> .config
+        
         CONFIG_TYPE="${{ github.event.inputs.config_type }}"
-        if [ "$CONFIG_TYPE" = "minimal" ]; then
-            echo "CONFIG_PACKAGE_luci=n" >> .config
-        elif [ "$CONFIG_TYPE" = "normal" ] || [ "$CONFIG_TYPE" = "custom" ]; then
-            echo "CONFIG_PACKAGE_luci=y" >> .config
-            echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
+        echo "配置类型: $CONFIG_TYPE"
+        
+        # 根据配置类型加载对应的配置文件
+        if [ -f "config-templates/${CONFIG_TYPE}.config" ]; then
+            echo "✅ 找到配置文件: config-templates/${CONFIG_TYPE}.config"
+            cat "config-templates/${CONFIG_TYPE}.config" >> .config
+            echo "✅ ${CONFIG_TYPE} 配置已加载"
+        else
+            echo "❌ 错误: 找不到配置文件 config-templates/${CONFIG_TYPE}.config"
+            echo "当前可用的配置文件:"
+            ls -la config-templates/ 2>/dev/null || echo "无配置文件"
+            exit 1
         fi
         
         # 自定义包
@@ -406,11 +463,12 @@ jobs:
             for pkg in ${{ github.event.inputs.extra_packages }}; do
                 pkg_clean=$(echo "$pkg" | tr '-' '_' | tr -cd '[:alnum:]_')
                 echo "CONFIG_PACKAGE_${pkg_clean}=y" >> .config
+                echo "添加额外包: CONFIG_PACKAGE_${pkg_clean}=y"
             done
         fi
         
-        echo "=== 预配置内容 ==="
-        cat .config
+        echo "=== 预配置内容摘要 ==="
+        grep -E "(CONFIG_TARGET|CONFIG_PACKAGE_luci|CONFIG_PACKAGE_.*zh-cn)" .config | head -20
         
         # 运行 defconfig 来完善配置
         echo "运行 make defconfig..."
@@ -431,6 +489,46 @@ jobs:
             exit 1
         fi
 
+    - name: 自定义安装处理
+      if: github.event.inputs.custom_install == 'true'
+      run: |
+        cd $BUILD_DIR
+        echo "=== 自定义安装处理 ==="
+        
+        # 查找自定义文件
+        cd $GITHUB_WORKSPACE
+        
+        # 处理预编译IPK
+        IPK_FILES=$(find firmware-config/custom-files/prebuilt-ipks -name "*.ipk" -type f 2>/dev/null || true)
+        if [ -n "$IPK_FILES" ]; then
+            echo "✅ 找到预编译IPK文件:"
+            echo "$IPK_FILES"
+            mkdir -p $BUILD_DIR/custom-ipks
+            for ipk_file in $IPK_FILES; do
+                cp "$ipk_file" $BUILD_DIR/custom-ipks/
+                echo "复制IPK: $(basename "$ipk_file")"
+            done
+            echo "✅ IPK文件已复制到构建目录"
+        else
+            echo "ℹ️ 未找到预编译IPK文件"
+        fi
+        
+        # 处理自定义脚本
+        SCRIPT_FILES=$(find firmware-config/custom-files/scripts -name "*.sh" -type f 2>/dev/null || true)
+        if [ -n "$SCRIPT_FILES" ]; then
+            echo "✅ 找到自定义脚本:"
+            echo "$SCRIPT_FILES"
+            mkdir -p $BUILD_DIR/custom-scripts
+            for script_file in $SCRIPT_FILES; do
+                cp "$script_file" $BUILD_DIR/custom-scripts/
+                chmod +x $BUILD_DIR/custom-scripts/$(basename "$script_file")
+                echo "复制脚本: $(basename "$script_file")"
+            done
+            echo "✅ 自定义脚本已复制到构建目录"
+        else
+            echo "ℹ️ 未找到自定义脚本"
+        fi
+
     - name: 保存配置信息
       run: |
         cd $BUILD_DIR
@@ -439,6 +537,7 @@ jobs:
         echo "设备: $DEVICE_SHORT_NAME" > device_info.txt
         echo "平台: $PLATFORM" >> device_info.txt
         echo "配置项: CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}" >> device_info.txt
+        echo "配置类型: ${{ github.event.inputs.config_type }}" >> device_info.txt
         echo "=== 完整目标配置 ===" >> device_info.txt
         grep "^CONFIG_TARGET" .config >> device_info.txt
         echo "=== 配置摘要 ===" >> device_info.txt
@@ -451,8 +550,37 @@ jobs:
         echo "=== 应用配置并编译 ==="
         echo "开始下载依赖..."
         make -j4 download
-        echo "开始编译..."
-        make -j$(nproc) V=s
+        
+        # 保存详细构建日志
+        echo "开始编译并保存详细日志..."
+        make -j$(nproc) V=s 2>&1 | tee build_detailed.log
+        
+        # 检查构建状态
+        if [ -d "bin/targets" ]; then
+            echo "✅ 编译完成"
+        else
+            echo "❌ 编译失败"
+            exit 1
+        fi
+
+    - name: 运行错误分析
+      if: always()
+      run: |
+        cd $BUILD_DIR
+        echo "=== 运行错误分析 ==="
+        if [ -f "error_analysis.sh" ]; then
+            chmod +x error_analysis.sh
+            ./error_analysis.sh "$BUILD_DIR"
+            echo "✅ 错误分析完成"
+            
+            # 上传错误分析报告
+            if [ -f "error_analysis.log" ]; then
+                echo "=== 错误分析报告 ==="
+                cat error_analysis.log
+            fi
+        else
+            echo "⚠️ 错误分析脚本不存在，跳过错误分析"
+        fi
 
     - name: 验证固件生成
       if: always()
@@ -476,11 +604,31 @@ jobs:
           find . -name "*.log" -type f | head -5
         fi
 
+    - name: 保存配置文件到仓库
+      if: success() && github.event.inputs.save_config == 'true'
+      run: |
+        echo "=== 保存配置文件到仓库 ==="
+        CONFIG_FILENAME="${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}.config"
+        mkdir -p $GITHUB_WORKSPACE/firmware-config/configs
+        cp $BUILD_DIR/.config $GITHUB_WORKSPACE/firmware-config/configs/$CONFIG_FILENAME
+        echo "✅ 配置文件已保存为: firmware-config/configs/$CONFIG_FILENAME"
+
+    - name: 提交配置文件更改
+      if: success() && github.event.inputs.save_config == 'true'
+      run: |
+        echo "=== 提交配置文件更改 ==="
+        cd $GITHUB_WORKSPACE
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add firmware-config/configs/
+        git diff --staged --quiet || git commit -m "自动保存配置文件: ${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}"
+        git push
+
     - name: 上传编译产物
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
+        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_type }}
         path: ${{ env.BUILD_DIR }}/bin/targets/
         retention-days: 7
 
@@ -488,11 +636,13 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: build-info-${{ github.event.inputs.device_name }}
+        name: build-info-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
         path: |
           ${{ env.BUILD_DIR }}/.config
           ${{ env.BUILD_DIR }}/version_info.txt
           ${{ env.BUILD_DIR }}/device_info.txt
+          ${{ env.BUILD_DIR }}/build_detailed.log
+          ${{ env.BUILD_DIR }}/error_analysis.log
         retention-days: 7
 
     - name: 清理构建目录
