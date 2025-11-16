@@ -971,27 +971,67 @@ jobs:
           find . -name "*.log" -type f | head -5
         fi
 
-    # 配置文件保存步骤
+    # 配置文件保存步骤 - 增强版本
     - name: 保存配置文件到仓库
       if: success() && github.event.inputs.save_config == 'true'
       run: |
         echo "=== 保存配置文件到仓库 ==="
         CONFIG_FILENAME="${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}.config"
         mkdir -p $GITHUB_WORKSPACE/firmware-config/configs
+        
+        # 检查源文件是否存在
+        if [ ! -f "$BUILD_DIR/.config" ]; then
+            echo "❌ 错误: 源配置文件不存在"
+            exit 1
+        fi
+        
         cp $BUILD_DIR/.config $GITHUB_WORKSPACE/firmware-config/configs/$CONFIG_FILENAME
-        echo "✅ 配置文件已保存为: firmware-config/configs/$CONFIG_FILENAME"
+        
+        # 验证文件是否成功复制
+        if [ -f "$GITHUB_WORKSPACE/firmware-config/configs/$CONFIG_FILENAME" ]; then
+            echo "✅ 配置文件已保存为: firmware-config/configs/$CONFIG_FILENAME"
+            echo "文件大小: $(du -h "$GITHUB_WORKSPACE/firmware-config/configs/$CONFIG_FILENAME" | cut -f1)"
+        else
+            echo "❌ 错误: 配置文件保存失败"
+            exit 1
+        fi
 
-    # 配置文件提交步骤
+    # 配置文件提交步骤 - 修复版本
     - name: 提交配置文件更改
       if: success() && github.event.inputs.save_config == 'true'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         echo "=== 提交配置文件更改 ==="
         cd $GITHUB_WORKSPACE
+        
+        # 设置Git配置
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
+        
+        # 使用token设置远程URL
+        git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
+        
+        # 添加配置文件
         git add firmware-config/configs/
-        git diff --staged --quiet || git commit -m "自动保存配置文件: ${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}"
-        git push
+        
+        # 检查是否有更改需要提交
+        if git diff --staged --quiet; then
+            echo "ℹ️ 没有配置文件更改需要提交"
+            exit 0
+        fi
+        
+        # 提交更改
+        git commit -m "自动保存配置文件: ${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }} [skip ci]"
+        
+        # 拉取最新更改并推送
+        echo "拉取远程最新更改..."
+        git pull origin main --rebase --no-edit
+        
+        echo "推送配置文件..."
+        git push origin main
+        
+        echo "✅ 配置文件提交完成"
 
     # 产物上传步骤
     - name: 上传编译产物
