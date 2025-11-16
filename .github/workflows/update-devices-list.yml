@@ -21,7 +21,7 @@ jobs:
     - name: 设置编译环境
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential libncurses5-dev git curl jq
+        sudo apt-get install -y build-essential libncurses5-dev git curl jq python3
 
     - name: 创建构建目录
       run: |
@@ -182,7 +182,7 @@ jobs:
                 print(f"生成 {output_file}，包含 {len(repo_devices)} 个设备")
             
             # 生成汇总文件
-            with open("supported_devices.md", 'w', encoding='utf-8') as f:
+            with open("supports.md", 'w', encoding='utf-8') as f:
                 f.write("# 源码支持设备列表\n\n")
                 f.write("本文件自动生成，列出各源码仓库支持的设备。\n\n")
                 
@@ -211,14 +211,18 @@ jobs:
     - name: 复制设备列表到工作目录
       run: |
         cd $BUILD_DIR
-        cp supported_devices.md $GITHUB_WORKSPACE/
-        cp device_list_*.md $GITHUB_WORKSPACE/ 2>/dev/null || true
+        # 复制汇总文件到根目录
+        cp supports.md $GITHUB_WORKSPACE/
+        # 复制详细文件到 custom-files/others/
+        mkdir -p $GITHUB_WORKSPACE/custom-files/others
+        cp device_list_*.md $GITHUB_WORKSPACE/custom-files/others/ 2>/dev/null || true
 
     - name: 提交更新
       run: |
+        cd $GITHUB_WORKSPACE
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
-        git add supported_devices.md device_list_*.md
+        git add supports.md custom-files/others/device_list_*.md
         git diff --staged --quiet || git commit -m "自动更新设备列表 $(date +'%Y-%m-%d')"
         git push
 
