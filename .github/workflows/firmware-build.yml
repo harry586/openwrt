@@ -34,6 +34,11 @@ on:
         description: '额外安装插件 (空格分隔的包名)'
         required: false
         type: string
+      disabled_plugins:
+        description: '禁用插件 (空格分隔的包名，如: luci-app-accesscontrol luci-app-ddns)'
+        required: false
+        type: string
+        default: ''
       save_config:
         description: '保存配置文件到仓库'
         required: false
@@ -53,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    # 初始检查步骤 - 改回50GB阈值
+    # 初始检查步骤
     - name: 初始空间检查
       run: |
         echo "=== 初始磁盘空间检查 ==="
@@ -61,19 +66,19 @@ jobs:
         AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
         AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
         echo "/mnt 可用空间: ${AVAILABLE_GB}G"
-        # 检查空间是否足够（改回50GB）
+        # 检查空间是否足够（50GB）
         if [ $AVAILABLE_GB -lt 50 ]; then
           echo "错误: /mnt 空间不足50G"
           exit 1
         fi
 
-    # 检出代码步骤
+    # 检出代码步骤 - 改为中文
     - name: 检出配置仓库
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
 
-    # 环境设置步骤 - 增强版本
+    # 环境设置步骤
     - name: 设置编译环境
       run: |
         echo "=== 安装编译依赖包 ==="
@@ -192,7 +197,10 @@ jobs:
             echo "SELECTED_REPO=$SELECTED_REPO" >> $GITHUB_ENV
             echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
             echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
-            echo "✅ 环境变量已设置"
+            echo "✅ 环境变量已设置:"
+            echo "  仓库: $SELECTED_REPO"
+            echo "  分支: $SELECTED_BRANCH"
+            echo "  URL: $SELECTED_REPO_URL"
         else
             echo "❌ 无法从脚本输出中提取版本信息"
             if [ $SCRIPT_EXIT_CODE -ne 0 ]; then
@@ -203,6 +211,7 @@ jobs:
                 echo "SELECTED_REPO=immortalwrt" >> $GITHUB_ENV
                 echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
                 echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_ENV
+                echo "✅ 使用默认版本信息"
             fi
         fi
 
@@ -246,6 +255,7 @@ jobs:
           echo "克隆尝试: $((RETRY_COUNT + 1))"
           if git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .; then
             echo "✅ 源码克隆完成"
+            echo "✅ 成功克隆仓库: $SELECTED_REPO, 分支: $SELECTED_BRANCH"
             break
           else
             RETRY_COUNT=$((RETRY_COUNT + 1))
@@ -282,15 +292,17 @@ jobs:
         echo "=== 查找配置文件 ==="
         CONFIG_FILES=$(find firmware-config/configs -name "*.config" -type f 2>/dev/null || true)
         if [ -n "$CONFIG_FILES" ]; then
-          echo "找到配置文件:"
+          echo "✅ 找到配置文件:"
           echo "$CONFIG_FILES"
           mkdir -p $BUILD_DIR/config-templates
           for config_file in $CONFIG_FILES; do
             filename=$(basename "$config_file")
             cp "$config_file" $BUILD_DIR/config-templates/
-            echo "复制: $filename"
+            echo "✅ 复制: $filename"
           done
           echo "✅ 所有配置文件复制完成"
+          echo "当前配置模板目录内容:"
+          ls -la $BUILD_DIR/config-templates/
         else
           echo "❌ 错误: 未找到任何配置文件"
           exit 1
@@ -300,14 +312,14 @@ jobs:
         chmod +x complete_version_detector.sh device_detection.sh error_analysis.sh 2>/dev/null || true
         echo "✅ 脚本和配置文件重新复制完成"
 
-    # 设备检测步骤
+    # 设备检测步骤 - 改进显示信息
     - name: 智能设备检测与别名转换
       id: device-detection
       run: |
         cd $BUILD_DIR
         echo "=== 智能设备检测与别名转换 ==="
         
-        # 设备别名映射表
+        # 设备别名映射表 - 将通用名称映射到具体设备标识
         declare -A DEVICE_ALIAS_MAP=(
           ["ac42u"]="asus_rt-ac42u"
           ["acrh17"]="asus_rt-ac42u"
@@ -323,10 +335,10 @@ jobs:
         # 检查是否为别名并进行转换
         if [ -n "${DEVICE_ALIAS_MAP[$INPUT_DEVICE]}" ]; then
           ACTUAL_DEVICE="${DEVICE_ALIAS_MAP[$INPUT_DEVICE]}"
-          echo "✅ 检测到设备别名 '$INPUT_DEVICE'，转换为 '$ACTUAL_DEVICE'"
+          echo "✅ 检测到设备通用名称 '$INPUT_DEVICE'，转换为实际设备标识 '$ACTUAL_DEVICE'"
         else
           ACTUAL_DEVICE="$INPUT_DEVICE"
-          echo "使用原始设备名称: $ACTUAL_DEVICE"
+          echo "ℹ️ 使用原始设备名称: $ACTUAL_DEVICE (未找到别名映射)"
         fi
         
         # 验证设备检测脚本
@@ -343,18 +355,49 @@ jobs:
         SCRIPT_EXIT_CODE=$?
         set -e
         
+        echo "=== 设备检测脚本输出 ==="
+        echo "$OUTPUT"
+        echo "=== 脚本退出代码: $SCRIPT_EXIT_CODE ==="
+        
         # 从脚本输出中提取设备信息
         PLATFORM=$(echo "$OUTPUT" | grep "^PLATFORM=" | tail -1 | cut -d'=' -f2)
         DEVICE_SHORT_NAME=$(echo "$OUTPUT" | grep "^DEVICE_SHORT_NAME=" | tail -1 | cut -d'=' -f2)
         DEVICE_FULL_NAME=$(echo "$OUTPUT" | grep "^DEVICE_FULL_NAME=" | tail -1 | cut -d'=' -f2)
+        DTS_FILES=$(echo "$OUTPUT" | grep "^DTS_FILES=" | tail -1 | cut -d'=' -f2)
+        
+        echo "=== 提取的设备信息 ==="
+        echo "平台(PLATFORM): '$PLATFORM'"
+        echo "设备短名称(DEVICE_SHORT_NAME): '$DEVICE_SHORT_NAME'"
+        echo "设备全名称(DEVICE_FULL_NAME): '$DEVICE_FULL_NAME'"
+        echo "设备树文件(DTS_FILES): '$DTS_FILES'"
         
         # 验证设备信息提取结果
         if [ -n "$PLATFORM" ] && [ -n "$DEVICE_SHORT_NAME" ] && [ -n "$DEVICE_FULL_NAME" ]; then
             echo "✅ 从脚本输出中成功提取设备信息"
+            # 设置环境变量
             echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
             echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
             echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
-            echo "✅ 设备环境变量已设置"
+            echo "✅ 设备环境变量已设置:"
+            echo "  平台: $PLATFORM"
+            echo "  设备短名称: $DEVICE_SHORT_NAME"
+            echo "  设备全名称: $DEVICE_FULL_NAME"
+            
+            # 验证设备树文件
+            if [ -n "$DTS_FILES" ]; then
+                echo "✅ 设备检测脚本找到的设备树文件:"
+                IFS=$'\n'
+                for dts_file in $DTS_FILES; do
+                    if [ -f "$dts_file" ]; then
+                        echo "  ✅ 文件存在: $dts_file"
+                    else
+                        echo "  ⚠️ 文件不存在: $dts_file"
+                    fi
+                done
+                unset IFS
+            else
+                echo "⚠️ 设备检测脚本未返回设备树文件信息"
+            fi
         else
             echo "❌ 无法从脚本输出中提取设备信息"
             if [ $SCRIPT_EXIT_CODE -ne 0 ]; then
@@ -362,6 +405,7 @@ jobs:
                 exit 1
             else
                 echo "⚠️ 脚本成功但无法提取设备信息，使用备用设备映射"
+                # 使用已知设备映射作为备选方案
                 case "$ACTUAL_DEVICE" in
                     "asus_rt-ac42u"|"ac42u"|"acrh17"|"rt-acrh17")
                         echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
@@ -382,6 +426,41 @@ jobs:
             fi
         fi
 
+    # 设备定义验证步骤 - 确保设备在源码中被正确定义
+    - name: 验证设备定义
+      run: |
+        cd $BUILD_DIR
+        echo "=== 验证设备定义 ==="
+        echo "平台: $PLATFORM"
+        echo "设备: $DEVICE_SHORT_NAME"
+        
+        # 搜索设备定义文件
+        echo "=== 搜索设备定义文件 ==="
+        DEVICE_MK_FILES=$(find "target/linux/$PLATFORM" -name "*.mk" -type f -exec grep -l "define Device/$DEVICE_SHORT_NAME" {} \; 2>/dev/null || true)
+        
+        if [ -n "$DEVICE_MK_FILES" ]; then
+            echo "✅ 找到设备定义文件:"
+            echo "$DEVICE_MK_FILES"
+            for mk_file in $DEVICE_MK_FILES; do
+                echo "=== 文件 $mk_file 中的设备定义 ==="
+                awk "/define Device\/$DEVICE_SHORT_NAME/{flag=1} flag; /endef/{if(flag) exit}" "$mk_file"
+            done
+        else
+            echo "❌ 未找到设备 $DEVICE_SHORT_NAME 的定义文件"
+            echo "=== 搜索相似设备 ==="
+            find "target/linux/$PLATFORM" -name "*.mk" -type f -exec grep -l "$DEVICE_SHORT_NAME" {} \; | head -5
+            exit 1
+        fi
+        
+        # 检查设备是否在目标设备列表中
+        echo "=== 检查设备是否在 TARGET_DEVICES 中 ==="
+        for mk_file in $(find "target/linux/$PLATFORM" -name "*.mk" -type f); do
+            if grep -q "TARGET_DEVICES.*+=.*$DEVICE_SHORT_NAME" "$mk_file"; then
+                echo "✅ 设备 $DEVICE_SHORT_NAME 在 TARGET_DEVICES 中"
+                break
+            fi
+        done
+
     # 软件包源更新步骤
     - name: 更新安装feeds
       run: |
@@ -390,7 +469,7 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    # 配置步骤
+    # 配置步骤 - 添加禁用插件功能
     - name: 使用外部配置文件进行配置
       run: |
         cd $BUILD_DIR
@@ -413,7 +492,7 @@ jobs:
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
         echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
         
-        # 基础包配置
+        # 基础包配置（所有模式都包含）
         echo "CONFIG_PACKAGE_base-files=y" >> .config
         echo "CONFIG_PACKAGE_busybox=y" >> .config
         echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
@@ -423,7 +502,7 @@ jobs:
         echo "CONFIG_PACKAGE_iptables=y" >> .config
         echo "CONFIG_PACKAGE_iptables-mod-extra=y" >> .config
         
-        # 基础网络包
+        # 基础网络包（所有模式都包含）
         echo "CONFIG_PACKAGE_ppp=y" >> .config
         echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config
         echo "CONFIG_PACKAGE_kmod-ppp=y" >> .config
@@ -434,22 +513,35 @@ jobs:
         
         # 根据配置类型和版本加载对应的配置文件
         if [ "$CONFIG_TYPE" = "minimal" ]; then
+            # 最小化模式使用通用配置
             CONFIG_FILE="config-templates/minimal.config"
         elif [ "$CONFIG_TYPE" = "normal" ] || [ "$CONFIG_TYPE" = "custom" ]; then
-            # 判断版本类型
+            # 判断版本类型以选择正确的配置文件
+            echo "=== 判断版本类型 ==="
+            echo "仓库: $SELECTED_REPO"
+            echo "分支: $SELECTED_BRANCH"
+            echo "设备类型: ${{ github.event.inputs.old_device }}"
+            
+            # 判断是否为旧版本（考虑设备性能和源码版本）
             IS_OLD_VERSION=0
+            
+            # 优先级1: 用户明确指定为老旧设备
             if [ "${{ github.event.inputs.old_device }}" = "true" ]; then
                 IS_OLD_VERSION=1
                 echo "✅ 用户指定为老旧设备，使用旧版本配置"
             else
+                # 优先级2: 根据源码仓库和分支判断
+                # 检查分支名是否包含旧版本标识
                 if echo "$SELECTED_BRANCH" | grep -q -E "19\.07|21\.02|17\.01|lede"; then
                     IS_OLD_VERSION=1
                     echo "✅ 检测到旧版本分支: $SELECTED_BRANCH"
                 fi
+                # 检查仓库是否为旧版本
                 if [ "$SELECTED_REPO" = "lede" ] || [ "$SELECTED_REPO" = "openwrt-19.07" ] || [ "$SELECTED_REPO" = "openwrt-21.02" ]; then
                     IS_OLD_VERSION=1
                     echo "✅ 检测到旧版本仓库: $SELECTED_REPO"
                 fi
+                # 优先级3: 根据设备名称判断（性能较差的设备）
                 case "${{ github.event.inputs.device_name }}" in
                     "wr841n"|"wr842n"|"wr941n"|"mr3420"|"ar71xx"*)
                         IS_OLD_VERSION=1
@@ -473,20 +565,33 @@ jobs:
         # 加载选定的配置文件
         if [ -f "$CONFIG_FILE" ]; then
             echo "✅ 找到配置文件: $CONFIG_FILE"
+            echo "=== 开始加载外部配置 ==="
             cat "$CONFIG_FILE" >> .config
             echo "✅ 配置已加载: $(basename "$CONFIG_FILE")"
         else
             echo "❌ 错误: 找不到配置文件 $CONFIG_FILE"
+            echo "当前可用的配置文件:"
+            ls -la config-templates/ 2>/dev/null || echo "无配置文件"
             exit 1
         fi
         
-        # 自定义包处理
+        # 自定义包处理（仅限custom模式）
         if [ "$CONFIG_TYPE" = "custom" ] && [ -n "${{ github.event.inputs.extra_packages }}" ]; then
             echo "# 额外包配置" >> .config
             for pkg in ${{ github.event.inputs.extra_packages }}; do
                 pkg_clean=$(echo "$pkg" | tr '-' '_' | tr -cd '[:alnum:]_')
                 echo "CONFIG_PACKAGE_${pkg_clean}=y" >> .config
-                echo "添加额外包: CONFIG_PACKAGE_${pkg_clean}=y"
+                echo "✅ 添加额外包: CONFIG_PACKAGE_${pkg_clean}=y"
+            done
+        fi
+        
+        # 禁用插件处理
+        if [ -n "${{ github.event.inputs.disabled_plugins }}" ]; then
+            echo "# 禁用插件配置" >> .config
+            for plugin in ${{ github.event.inputs.disabled_plugins }}; do
+                plugin_clean=$(echo "$plugin" | tr '-' '_' | tr -cd '[:alnum:]_')
+                echo "# CONFIG_PACKAGE_${plugin_clean} is not set" >> .config
+                echo "✅ 禁用插件: $plugin (CONFIG_PACKAGE_${plugin_clean})"
             done
         fi
         
@@ -496,11 +601,29 @@ jobs:
         
         # 最终配置验证
         echo "=== 最终配置验证 ==="
+        # 检查设备配置项是否启用（过滤掉注释行）
         if grep -q "^${CORRECT_DEVICE_CONFIG}=y" .config; then
             echo "✅ 设备 $DEVICE_SHORT_NAME 已成功启用"
+            echo "使用的配置项: ${CORRECT_DEVICE_CONFIG}"
         else
             echo "❌ 设备 $DEVICE_SHORT_NAME 启用失败，构建终止"
+            echo "期望的配置项: ${CORRECT_DEVICE_CONFIG}"
+            echo "当前设备相关配置:"
+            grep "CONFIG_TARGET.*${DEVICE_SHORT_NAME}" .config || echo "没有找到相关配置"
             exit 1
+        fi
+        
+        # 验证禁用插件
+        if [ -n "${{ github.event.inputs.disabled_plugins }}" ]; then
+            echo "=== 禁用插件验证 ==="
+            for plugin in ${{ github.event.inputs.disabled_plugins }}; do
+                plugin_clean=$(echo "$plugin" | tr '-' '_' | tr -cd '[:alnum:]_')
+                if grep -q "# CONFIG_PACKAGE_${plugin_clean} is not set" .config; then
+                    echo "✅ ${plugin} 已正确禁用"
+                else
+                    echo "⚠️ ${plugin} 禁用状态未知"
+                fi
+            done
         fi
 
     # DL库下载和验证步骤 - 优化版本
@@ -694,7 +817,7 @@ jobs:
         
         echo "✅ 配置文件提交完成"
 
-    # 产物上传步骤
+    # 产物上传步骤 - 改为中文
     - name: 上传编译产物
       if: success()
       uses: actions/upload-artifact@v4
@@ -703,7 +826,7 @@ jobs:
         path: ${{ env.BUILD_DIR }}/bin/targets/
         retention-days: 7
 
-    # 日志和配置上传步骤
+    # 日志和配置上传步骤 - 改为中文
     - name: 上传配置和日志
       if: always()
       uses: actions/upload-artifact@v4
@@ -718,7 +841,7 @@ jobs:
           ${{ env.BUILD_DIR }}/error_analysis.log
         retention-days: 7
 
-    # 清理步骤
+    # 清理步骤 - 改为中文
     - name: 清理构建目录
       if: always()
       run: |
