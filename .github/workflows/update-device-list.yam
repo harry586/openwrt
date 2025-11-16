@@ -1,0 +1,227 @@
+name: 更新支持的设备列表
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 1'  # 每周一凌晨运行
+
+env:
+  BUILD_DIR: /mnt/device-list
+
+jobs:
+  update-device-list:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 检出当前仓库
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: 设置编译环境
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential libncurses5-dev git curl jq
+
+    - name: 创建构建目录
+      run: |
+        sudo mkdir -p $BUILD_DIR
+        sudo chown -R $USER:$USER $BUILD_DIR
+
+    - name: 克隆immortalwrt源码
+      run: |
+        cd $BUILD_DIR
+        git clone --depth 1 https://github.com/immortalwrt/immortalwrt.git immortalwrt
+
+    - name: 克隆LEDE源码
+      run: |
+        cd $BUILD_DIR
+        git clone --depth 1 https://github.com/coolsnowwolf/lede.git lede
+
+    - name: 克隆OpenWrt源码
+      run: |
+        cd $BUILD_DIR
+        git clone --depth 1 https://git.openwrt.org/openwrt/openwrt.git openwrt
+
+    - name: 生成设备列表
+      run: |
+        cd $BUILD_DIR
+        cat > generate_device_list.py << 'EOF'
+        #!/usr/bin/env python3
+        import os
+        import glob
+        import re
+        from pathlib import Path
+
+        # 设备别名映射
+        device_aliases = {
+            # ASUS 设备
+            "asus_rt-ac42u": ["ac42u", "acrh17", "rt-acrh17"],
+            "asus_rt-ac58u": ["ac58u", "acrh13", "rt-acrh13"],
+            "asus_rt-acrh17": ["acrh17", "rt-acrh17"],
+            "asus_rt-acrh13": ["acrh13", "rt-acrh13"],
+            # 其他常见设备别名可以在这里添加
+        }
+
+        def reverse_alias_map(aliases):
+            """生成反向别名映射"""
+            reverse_map = {}
+            for main_device, alias_list in aliases.items():
+                for alias in alias_list:
+                    reverse_map[alias] = main_device
+            return reverse_map
+
+        def parse_device_info(mk_file):
+            """解析设备定义文件"""
+            devices = []
+            try:
+                with open(mk_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                
+                # 查找所有设备定义
+                device_blocks = re.findall(r'define\s+Device/(.+?)\n(.*?)\nendef', content, re.DOTALL)
+                
+                for device_name, device_content in device_blocks:
+                    device_info = {
+                        'name': device_name.strip(),
+                        'vendor': '',
+                        'model': '',
+                        'title': '',
+                        'aliases': []
+                    }
+                    
+                    # 提取设备信息
+                    vendor_match = re.search(r'DEVICE_VENDOR\s*:?=\s*(.+)', device_content)
+                    model_match = re.search(r'DEVICE_MODEL\s*:?=\s*(.+)', device_content)
+                    title_match = re.search(r'DEVICE_TITLE\s*:?=\s*(.+)', device_content)
+                    alt_match = re.search(r'DEVICE_ALT\w*_VENDOR\s*:?=\s*(.+)', device_content)
+                    
+                    if vendor_match:
+                        device_info['vendor'] = vendor_match.group(1).strip()
+                    if model_match:
+                        device_info['model'] = model_match.group(1).strip()
+                    if title_match:
+                        device_info['title'] = title_match.group(1).strip()
+                    
+                    # 查找别名
+                    if device_info['name'] in device_aliases:
+                        device_info['aliases'] = device_aliases[device_info['name']]
+                    
+                    devices.append(device_info)
+                    
+            except Exception as e:
+                print(f"解析文件 {mk_file} 时出错: {e}")
+            
+            return devices
+
+        def generate_markdown_table(repo_name, devices):
+            """生成Markdown表格"""
+            if not devices:
+                return ""
+            
+            table = f"### {repo_name}\n\n"
+            table += "| 序号 | 平台 | 设备名称 | 通用别名 | 备注 |\n"
+            table += "|------|------|----------|----------|------|\n"
+            
+            for idx, device in enumerate(devices, 1):
+                platform = device.get('platform', 'unknown')
+                name = device['name']
+                aliases = ', '.join(device['aliases']) if device['aliases'] else '-'
+                title = device.get('title', '') or f"{device.get('vendor', '')} {device.get('model', '')}".strip()
+                note = title if title else '-'
+                
+                table += f"| {idx} | {platform} | `{name}` | {aliases} | {note} |\n"
+            
+            return table + "\n"
+
+        def main():
+            repos = {
+                'immortalwrt': 'immortalwrt',
+                'LEDE': 'lede', 
+                'OpenWrt': 'openwrt'
+            }
+            
+            all_devices = []
+            
+            for repo_name, repo_dir in repos.items():
+                repo_path = Path(repo_dir)
+                if not repo_path.exists():
+                    print(f"仓库 {repo_name} 不存在，跳过")
+                    continue
+                
+                print(f"处理 {repo_name}...")
+                repo_devices = []
+                
+                # 查找所有平台
+                target_linux = repo_path / "target" / "linux"
+                if target_linux.exists():
+                    for platform_dir in target_linux.iterdir():
+                        if platform_dir.is_dir():
+                            platform = platform_dir.name
+                            
+                            # 查找所有的 .mk 文件
+                            mk_files = list(platform_dir.glob("**/*.mk"))
+                            
+                            for mk_file in mk_files:
+                                devices = parse_device_info(mk_file)
+                                for device in devices:
+                                    device['platform'] = platform
+                                    device['repo'] = repo_name
+                                    repo_devices.append(device)
+                
+                all_devices.extend(repo_devices)
+                
+                # 为当前仓库生成表格
+                table_content = generate_markdown_table(repo_name, repo_devices)
+                
+                # 保存到文件
+                output_file = f"device_list_{repo_name.lower()}.md"
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    f.write(table_content)
+                
+                print(f"生成 {output_file}，包含 {len(repo_devices)} 个设备")
+            
+            # 生成汇总文件
+            with open("supported_devices.md", 'w', encoding='utf-8') as f:
+                f.write("# 源码支持设备列表\n\n")
+                f.write("本文件自动生成，列出各源码仓库支持的设备。\n\n")
+                
+                # 添加仓库信息
+                f.write("## 仓库目录\n\n")
+                for repo_name in repos.keys():
+                    f.write(f"- [{repo_name}](#{repo_name.lower()})\n")
+                f.write("\n")
+                
+                # 添加各仓库设备列表
+                for repo_name in repos.keys():
+                    try:
+                        with open(f"device_list_{repo_name.lower()}.md", 'r', encoding='utf-8') as repo_file:
+                            f.write(repo_file.read())
+                    except FileNotFoundError:
+                        f.write(f"### {repo_name}\n\n暂无数据\n\n")
+            
+            print("设备列表生成完成")
+
+        if __name__ == "__main__":
+            main()
+        EOF
+
+        python3 generate_device_list.py
+
+    - name: 复制设备列表到工作目录
+      run: |
+        cd $BUILD_DIR
+        cp supported_devices.md $GITHUB_WORKSPACE/
+        cp device_list_*.md $GITHUB_WORKSPACE/ 2>/dev/null || true
+
+    - name: 提交更新
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add supported_devices.md device_list_*.md
+        git diff --staged --quiet || git commit -m "自动更新设备列表 $(date +'%Y-%m-%d')"
+        git push
+
+    - name: 清理构建目录
+      run: |
+        sudo rm -rf $BUILD_DIR
