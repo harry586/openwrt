@@ -1,61 +1,87 @@
+# 更新支持的设备列表工作流
+# 功能：自动从多个OpenWrt源码仓库提取设备信息并生成支持列表
+# 支持：immortalwrt、LEDE、OpenWrt官方源码
+
 name: 更新支持的设备列表
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # 手动触发
   schedule:
     - cron: '0 0 * * 1'  # 每周一凌晨运行
 
 env:
-  BUILD_DIR: /mnt/device-list
+  BUILD_DIR: /mnt/device-list  # 临时构建目录
 
 jobs:
   update-device-list:
     runs-on: ubuntu-latest
     
     steps:
+    # 代码检出步骤
     - name: 检出当前仓库
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0
+        fetch-depth: 0  # 获取完整历史记录
 
+    # 环境设置步骤
     - name: 设置编译环境
       run: |
+        echo "=== 安装必要的依赖包 ==="
         sudo apt-get update
         sudo apt-get install -y build-essential libncurses5-dev git curl jq python3
 
+    # 目录准备步骤
     - name: 创建构建目录
       run: |
+        echo "=== 创建临时构建目录 ==="
         sudo mkdir -p $BUILD_DIR
         sudo chown -R $USER:$USER $BUILD_DIR
 
+    # 源码克隆步骤 - immortalwrt
     - name: 克隆immortalwrt源码
       run: |
         cd $BUILD_DIR
+        echo "=== 克隆immortalwrt源码 ==="
         git clone --depth 1 https://github.com/immortalwrt/immortalwrt.git immortalwrt
 
+    # 源码克隆步骤 - LEDE
     - name: 克隆LEDE源码
       run: |
         cd $BUILD_DIR
+        echo "=== 克隆LEDE源码 ==="
         git clone --depth 1 https://github.com/coolsnowwolf/lede.git lede
 
+    # 源码克隆步骤 - OpenWrt
     - name: 克隆OpenWrt源码
       run: |
         cd $BUILD_DIR
+        echo "=== 克隆OpenWrt源码 ==="
         git clone --depth 1 https://git.openwrt.org/openwrt/openwrt.git openwrt
 
+    # 设备列表生成步骤
     - name: 生成设备列表
       run: |
         cd $BUILD_DIR
+        echo "=== 生成设备列表 ==="
+        
+        # 创建Python脚本用于解析设备信息
         cat > generate_device_list.py << 'EOF'
         #!/usr/bin/env python3
+        """
+        设备列表生成脚本
+        功能：从OpenWrt源码中提取设备定义信息并生成Markdown格式的支持列表
+        支持：immortalwrt、LEDE、OpenWrt官方源码
+        """
+        
         import os
         import glob
         import re
         from pathlib import Path
 
-        # 设备别名映射
+        # 设备别名映射表
+        # 将通用设备名称映射到具体的设备标识符
         device_aliases = {
-            # ASUS 设备
+            # ASUS 设备别名映射
             "asus_rt-ac42u": ["ac42u", "acrh17", "rt-acrh17"],
             "asus_rt-ac58u": ["ac58u", "acrh13", "rt-acrh13"],
             "asus_rt-acrh17": ["acrh17", "rt-acrh17"],
@@ -72,13 +98,16 @@ jobs:
             return reverse_map
 
         def parse_device_info(mk_file):
-            """解析设备定义文件"""
+            """
+            解析设备定义文件
+            从Makefile中提取设备名称、厂商、型号等信息
+            """
             devices = []
             try:
                 with open(mk_file, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
                 
-                # 查找所有设备定义
+                # 查找所有设备定义块
                 device_blocks = re.findall(r'define\s+Device/(.+?)\n(.*?)\nendef', content, re.DOTALL)
                 
                 for device_name, device_content in device_blocks:
@@ -115,7 +144,7 @@ jobs:
             return devices
 
         def generate_markdown_table(repo_name, devices):
-            """生成Markdown表格"""
+            """生成Markdown格式的设备表格"""
             if not devices:
                 return ""
             
@@ -135,6 +164,8 @@ jobs:
             return table + "\n"
 
         def main():
+            """主函数"""
+            # 定义要处理的源码仓库
             repos = {
                 'immortalwrt': 'immortalwrt',
                 'LEDE': 'lede', 
@@ -143,6 +174,7 @@ jobs:
             
             all_devices = []
             
+            # 处理每个仓库
             for repo_name, repo_dir in repos.items():
                 repo_path = Path(repo_dir)
                 if not repo_path.exists():
@@ -152,7 +184,7 @@ jobs:
                 print(f"处理 {repo_name}...")
                 repo_devices = []
                 
-                # 查找所有平台
+                # 查找所有平台目录
                 target_linux = repo_path / "target" / "linux"
                 if target_linux.exists():
                     for platform_dir in target_linux.iterdir():
@@ -206,26 +238,36 @@ jobs:
             main()
         EOF
 
+        # 运行设备列表生成脚本
         python3 generate_device_list.py
 
+    # 文件复制步骤
     - name: 复制设备列表到工作目录
       run: |
         cd $BUILD_DIR
+        echo "=== 复制设备列表到工作目录 ==="
         # 复制汇总文件到根目录
         cp supports.md $GITHUB_WORKSPACE/
         # 复制详细文件到 custom-files/others/
         mkdir -p $GITHUB_WORKSPACE/custom-files/others
         cp device_list_*.md $GITHUB_WORKSPACE/custom-files/others/ 2>/dev/null || true
+        echo "✅ 设备列表文件复制完成"
 
+    # 提交更新步骤
     - name: 提交更新
       run: |
         cd $GITHUB_WORKSPACE
+        echo "=== 提交设备列表更新 ==="
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add supports.md custom-files/others/device_list_*.md
         git diff --staged --quiet || git commit -m "自动更新设备列表 $(date +'%Y-%m-%d')"
         git push
+        echo "✅ 设备列表更新已提交"
 
+    # 清理步骤
     - name: 清理构建目录
       run: |
+        echo "=== 清理临时构建目录 ==="
         sudo rm -rf $BUILD_DIR
+        echo "✅ 构建目录已清理"
