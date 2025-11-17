@@ -1,7 +1,7 @@
-# OpenWrt 智能固件构建工作流（中文界面修复版）
-# 修复中文界面、缺失插件和自定义安装问题
+# OpenWrt 智能固件构建工作流（优化版）
+# 修复中文界面、改进自定义安装、简化配置
 
-name: OpenWrt 智能固件构建工作流（中文界面修复版）
+name: OpenWrt 智能固件构建工作流（优化版）
 
 on:
   workflow_dispatch:
@@ -47,7 +47,7 @@ on:
       custom_install:
         description: '启用自定义安装 (IPK和脚本)'
         required: false
-        default: true
+        default: false
         type: boolean
 
 env:
@@ -455,7 +455,7 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    # 配置步骤 - 修复中文界面和缺失插件
+    # 配置步骤 - 简化为只调用外部配置文件
     - name: 使用外部配置文件进行配置
       run: |
         cd $BUILD_DIR
@@ -477,22 +477,6 @@ jobs:
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
         echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
-        
-        # 基础包配置
-        echo "CONFIG_PACKAGE_base-files=y" >> .config
-        echo "CONFIG_PACKAGE_busybox=y" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
-        echo "CONFIG_PACKAGE_dropbear=y" >> .config
-        echo "CONFIG_PACKAGE_firewall=y" >> .config
-        echo "CONFIG_PACKAGE_opkg=y" >> .config
-        echo "CONFIG_PACKAGE_iptables=y" >> .config
-        echo "CONFIG_PACKAGE_iptables-mod-extra=y" >> .config
-        
-        # 基础网络包
-        echo "CONFIG_PACKAGE_ppp=y" >> .config
-        echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ppp=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-pppoe=y" >> .config
         
         CONFIG_TYPE="${{ github.event.inputs.config_type }}"
         echo "配置类型: $CONFIG_TYPE"
@@ -545,52 +529,6 @@ jobs:
             exit 1
         fi
         
-        # ==================== 修复中文界面问题 ====================
-        echo "# 中文界面配置" >> .config
-        echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
-        echo "CONFIG_PACKAGE_luci-i18n-base-en=y" >> .config
-        echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
-        echo "CONFIG_PACKAGE_luci-theme-material=y" >> .config
-        echo "CONFIG_PACKAGE_luci-theme-openwrt-2020=y" >> .config
-        echo "✅ 添加中文语言包和主题"
-        
-        # ==================== 修复缺失插件问题 ====================
-        if [ "$CONFIG_TYPE" = "normal" ] || [ "$CONFIG_TYPE" = "custom" ]; then
-            echo "# 缺失插件修复" >> .config
-            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-turboacc_INCLUDE_flow-offload=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-turboacc_INCLUDE_shortcut-fe=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-turboacc_INCLUDE_dnsforwarder=y" >> .config
-            
-            # 根据版本选择 SQM
-            if [ "$IS_OLD_VERSION" -eq 1 ]; then
-                echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
-                echo "CONFIG_PACKAGE_sqm-scripts=y" >> .config
-                echo "✅ 添加 SQM QoS (旧版本)"
-            else
-                echo "CONFIG_PACKAGE_luci-app-sqm-autorate=y" >> .config
-                echo "CONFIG_PACKAGE_sqm-scripts-extra=y" >> .config
-                echo "✅ 添加 SQM Autorate (新版本)"
-            fi
-            
-            # IPv6 支持
-            echo "CONFIG_PACKAGE_ip6tables=y" >> .config
-            echo "CONFIG_PACKAGE_ip6tables-mod-nat=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-ipt-nat6=y" >> .config
-            echo "CONFIG_PACKAGE_odhcp6c=y" >> .config
-            echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
-            echo "CONFIG_PACKAGE_6in4=y" >> .config
-            echo "✅ 添加 IPv6 支持"
-            
-            # 其他常用插件
-            echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-wol=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-ddns=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-aria2=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-vlmcsd=y" >> .config
-        fi
-        
         # 自定义包处理
         if [ "$CONFIG_TYPE" = "custom" ] && [ -n "${{ github.event.inputs.extra_packages }}" ]; then
             echo "# 额外包配置" >> .config
@@ -623,24 +561,16 @@ jobs:
             echo "❌ 设备 $DEVICE_SHORT_NAME 启用失败，构建终止"
             exit 1
         fi
-        
-        # 显示关键配置项
-        echo "=== 关键配置检查 ==="
-        echo "中文支持: $(grep -c "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" .config || true)"
-        echo "TurboACC: $(grep -c "CONFIG_PACKAGE_luci-app-turboacc=y" .config || true)"
-        echo "SQM: $(grep -c "CONFIG_PACKAGE_luci-app-sqm" .config || true)"
-        echo "IPv6支持: $(grep -c "CONFIG_PACKAGE_ip6tables=y" .config || true)"
 
-    # 自定义安装处理步骤
+    # 改进的自定义安装处理步骤 - 在构建时安装
     - name: 处理自定义安装
       if: github.event.inputs.custom_install == 'true'
       run: |
         cd $BUILD_DIR
-        echo "=== 处理自定义安装 ==="
+        echo "=== 处理自定义安装 - 构建时安装 ==="
         
         # 创建自定义安装目录
-        mkdir -p custom-files/ipks
-        mkdir -p custom-files/scripts
+        mkdir -p files/root/custom-install
         
         # 从仓库复制自定义文件
         cd $GITHUB_WORKSPACE
@@ -651,7 +581,7 @@ jobs:
             echo "✅ 找到IPK文件:"
             echo "$IPK_FILES"
             for ipk in $IPK_FILES; do
-                cp "$ipk" $BUILD_DIR/custom-files/ipks/
+                cp "$ipk" $BUILD_DIR/files/root/custom-install/
                 echo "✅ 复制IPK: $(basename "$ipk")"
             done
         else
@@ -664,38 +594,60 @@ jobs:
             echo "✅ 找到脚本文件:"
             echo "$SCRIPT_FILES"
             for script in $SCRIPT_FILES; do
-                cp "$script" $BUILD_DIR/custom-files/scripts/
-                chmod +x $BUILD_DIR/custom-files/scripts/$(basename "$script")
+                cp "$script" $BUILD_DIR/files/root/custom-install/
+                chmod +x $BUILD_DIR/files/root/custom-install/$(basename "$script")
                 echo "✅ 复制脚本: $(basename "$script")"
             done
         else
             echo "ℹ️ 未找到自定义脚本文件"
         fi
         
-        # 创建自定义安装说明
-        cat > $BUILD_DIR/custom-files/README.md << 'EOF'
-        # 自定义安装文件
+        # 创建自动安装脚本
+        cat > $BUILD_DIR/files/root/custom-install/auto-install.sh << 'EOF'
+        #!/bin/sh
+        echo "=== 开始自动安装自定义文件 ==="
         
-        这些文件将在固件构建完成后被包含：
+        # 安装IPK文件
+        if ls /root/custom-install/*.ipk >/dev/null 2>&1; then
+            echo "安装IPK文件..."
+            for ipk in /root/custom-install/*.ipk; do
+                echo "安装: $(basename $ipk)"
+                opkg install "$ipk"
+            done
+        else
+            echo "未找到IPK文件"
+        fi
         
-        - **ipks/** - OpenWrt IPK软件包
-        - **scripts/** - 安装脚本
+        # 执行脚本文件
+        if ls /root/custom-install/*.sh >/dev/null 2>&1; then
+            echo "执行脚本文件..."
+            for script in /root/custom-install/*.sh; do
+                if [ "$(basename $script)" != "auto-install.sh" ]; then
+                    echo "执行: $(basename $script)"
+                    sh "$script"
+                fi
+            done
+        else
+            echo "未找到脚本文件"
+        fi
         
-        ## 使用方法
-        1. 刷入固件后，将ipk文件上传到路由器
-        2. 运行: `opkg install /path/to/*.ipk`
-        3. 执行需要的脚本
-        
-        ## 当前包含的文件
+        # 清理安装文件
+        rm -rf /root/custom-install
+        echo "=== 自动安装完成 ==="
         EOF
         
-        echo "## IPK文件" >> $BUILD_DIR/custom-files/README.md
-        ls -1 custom-files/ipks/ 2>/dev/null >> $BUILD_DIR/custom-files/README.md || echo "无" >> $BUILD_DIR/custom-files/README.md
+        chmod +x $BUILD_DIR/files/root/custom-install/auto-install.sh
         
-        echo "## 脚本文件" >> $BUILD_DIR/custom-files/README.md
-        ls -1 custom-files/scripts/ 2>/dev/null >> $BUILD_DIR/custom-files/README.md || echo "无" >> $BUILD_DIR/custom-files/README.md
+        # 创建启动脚本来自动运行安装
+        cat > $BUILD_DIR/files/etc/rc.local << 'EOF'
+        # 在系统启动时运行自定义安装
+        /root/custom-install/auto-install.sh >/tmp/custom-install.log 2>&1 &
         
-        echo "✅ 自定义安装文件处理完成"
+        # 原有的rc.local内容
+        exit 0
+        EOF
+        
+        echo "✅ 自定义安装配置完成 - 将在系统启动时自动安装"
 
     # DL库下载和验证步骤
     - name: 下载DL库并验证完整性
@@ -776,89 +728,15 @@ jobs:
         DL_SIZE=$(du -sh dl | cut -f1)
         echo "✅ 下载统计: $DL_COUNT 个文件，总大小: $DL_SIZE"
 
-    # 编译步骤 - 带实时进度监控的版本
+    # 编译步骤 - 简化版本，移除实时监控
     - name: 应用配置并编译
       run: |
         cd $BUILD_DIR
-        echo "::group::📱 实时编译进度监控"
-        echo "展开此分组查看实时编译进度和详细状态"
+        echo "::group::📱 编译日志"
         echo "编译开始时间: $(date)"
-        echo "::endgroup::"
         
         # 设置编译环境变量
         export FORCE_UNSAFE_CONFIGURE=1
-        
-        # 进度监控函数
-        monitor_progress() {
-            local build_dir="$1"
-            local total_phases=6
-            local current_phase=0
-            
-            echo "🚀 开始实时编译进度监控..."
-            
-            while [ $current_phase -lt $total_phases ]; do
-                sleep 60  # 每分钟检查一次进度
-                
-                # 检测当前编译阶段
-                case $current_phase in
-                    0)  # 阶段 0 -> 1: 环境准备 -> 工具链编译
-                        if [ -d "$build_dir/staging_dir/toolchain" ]; then
-                            current_phase=1
-                            echo "::notice::🟡 阶段 1/6: 环境准备完成 (约 5%)"
-                            echo "::notice::🔧 阶段 2/6: 工具链编译中 (约 20%)"
-                        fi
-                        ;;
-                    1)  # 阶段 1 -> 2: 工具链编译 -> 内核编译
-                        if find "$build_dir/build_dir" -name "vmlinux" -o -name "zImage" 2>/dev/null | grep -q .; then
-                            current_phase=2
-                            echo "::notice::✅ 阶段 2/6: 工具链编译完成 (约 20%)"
-                            echo "::notice::🐧 阶段 3/6: 内核编译中 (约 40%)"
-                        fi
-                        ;;
-                    2)  # 阶段 2 -> 3: 内核编译 -> 基础包编译
-                        IPK_COUNT=$(find "$build_dir/bin" -name "*.ipk" 2>/dev/null | wc -l)
-                        if [ $IPK_COUNT -gt 20 ]; then
-                            current_phase=3
-                            echo "::notice::✅ 阶段 3/6: 内核编译完成 (约 40%)"
-                            echo "::notice::📦 阶段 4/6: 软件包编译中 (约 60%) - 已编译 $IPK_COUNT 个包"
-                        fi
-                        ;;
-                    3)  # 阶段 3 -> 4: 基础包编译 -> 扩展包编译
-                        IPK_COUNT=$(find "$build_dir/bin" -name "*.ipk" 2>/dev/null | wc -l)
-                        if [ $IPK_COUNT -gt 100 ]; then
-                            current_phase=4
-                            echo "::notice::📦 阶段 4/6: 基础包编译完成 (约 60%) - 已编译 $IPK_COUNT 个包"
-                            echo "::notice::📚 阶段 5/6: 扩展包编译中 (约 80%)"
-                        fi
-                        ;;
-                    4)  # 阶段 4 -> 5: 扩展包编译 -> 固件生成
-                        if find "$build_dir/build_dir" -name "*.bin" -o -name "*.img" 2>/dev/null | grep -q .; then
-                            current_phase=5
-                            echo "::notice::✅ 阶段 5/6: 软件包编译完成 (约 80%)"
-                            echo "::notice::🎯 阶段 6/6: 固件生成中 (约 95%)"
-                        fi
-                        ;;
-                    5)  # 阶段 5 -> 6: 固件生成 -> 完成
-                        if [ -d "$build_dir/bin/targets" ] && [ $(find "$build_dir/bin/targets" -name "*.bin" -o -name "*.img" 2>/dev/null | wc -l) -gt 0 ]; then
-                            current_phase=6
-                            FIRMWARE_COUNT=$(find "$build_dir/bin/targets" -name "*.bin" -o -name "*.img" 2>/dev/null | wc -l)
-                            echo "::notice::🎉 编译完成! 生成 $FIRMWARE_COUNT 个固件文件 (100%)"
-                            break
-                        fi
-                        ;;
-                esac
-                
-                # 显示当前活动（从日志中提取）
-                if [ -f "$build_dir/build_detailed.log" ]; then
-                    CURRENT_TASK=$(tail -10 "$build_dir/build_detailed.log" | grep -E "Compiling|Building|Creating" | tail -1 | sed 's/^.*\] //' | cut -c1-50)
-                    if [ -n "$CURRENT_TASK" ] && [ $(( $(date +%s) % 120 )) -eq 0 ]; then  # 每2分钟显示一次
-                        echo "::notice::🔄 当前任务: $CURRENT_TASK..."
-                    fi
-                fi
-            done
-            
-            echo "✅ 进度监控完成"
-        }
         
         # 智能编译策略
         AVAILABLE_CORES=$(nproc)
@@ -875,14 +753,8 @@ jobs:
             echo "✅ 基础模式: 使用 $BUILD_JOBS 个并行任务"
         fi
         
-        # 在后台启动进度监控
-        monitor_progress "$BUILD_DIR" &
-        MONITOR_PID=$!
-        
         # 主要编译命令
         echo "🚀 开始并行编译..."
-        echo "::notice::🚀 编译开始 - 阶段 1/6: 环境准备 (0%)"
-        
         START_TIME=$(date +%s)
         set +e
         time make -j$BUILD_JOBS V=s 2>&1 | tee build_detailed.log
@@ -890,22 +762,14 @@ jobs:
         set -e
         END_TIME=$(date +%s)
         
-        # 停止进度监控
-        kill $MONITOR_PID 2>/dev/null || true
-        wait $MONITOR_PID 2>/dev/null || true
-        
         # 计算编译时间
         COMPILE_TIME=$((END_TIME - START_TIME))
         echo "=== 编译时间统计 ==="
         echo "总编译时间: $((COMPILE_TIME / 60))分钟$((COMPILE_TIME % 60))秒"
         
-        # 显示时间统计
-        if command -v grep >/dev/null 2>&1; then
-            grep -E "real|user|sys" build_detailed.log | tail -3 || echo "详细时间统计不可用"
-        fi
-        
         # 检查构建状态
         if [ -d "bin/targets" ]; then
+            echo "::endgroup::"
             echo "::notice::🎉 编译成功完成！"
             echo "✅ 编译完成，找到目标文件"
             FIRMWARE_LIST=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null | sort)
@@ -917,6 +781,7 @@ jobs:
                 echo "⚠️ 编译过程有警告，但生成了固件文件"
             fi
         else
+            echo "::endgroup::"
             echo "::notice::❌ 编译失败"
             echo "❌ 编译失败，未生成目标文件"
             if [ $COMPILE_EXIT_CODE -eq 0 ]; then
@@ -1018,28 +883,15 @@ jobs:
             echo "" >> "$GITHUB_WORKSPACE/构建报告.md"
             echo "## 包含的功能" >> "$GITHUB_WORKSPACE/构建报告.md"
             echo "- ✅ 中文界面支持" >> "$GITHUB_WORKSPACE/构建报告.md"
-            if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config 2>/dev/null; then
-                echo "- ✅ TurboACC 网络加速" >> "$GITHUB_WORKSPACE/构建报告.md"
-            fi
-            if grep -q "CONFIG_PACKAGE_luci-app-sqm" .config 2>/dev/null; then
-                echo "- ✅ SQM 流量整形" >> "$GITHUB_WORKSPACE/构建报告.md"
-            fi
-            if grep -q "CONFIG_PACKAGE_ip6tables=y" .config 2>/dev/null; then
-                echo "- ✅ IPv6 完整支持" >> "$GITHUB_WORKSPACE/构建报告.md"
-            fi
+            echo "- ✅ Bootstrap主题" >> "$GITHUB_WORKSPACE/构建报告.md"
             
             # 自定义文件信息
-            if [ "${{ github.event.inputs.custom_install }}" = "true" ] && [ -d "custom-files" ]; then
+            if [ "${{ github.event.inputs.custom_install }}" = "true" ]; then
                 echo "" >> "$GITHUB_WORKSPACE/构建报告.md"
-                echo "## 自定义文件" >> "$GITHUB_WORKSPACE/构建报告.md"
-                if [ -d "custom-files/ipks" ]; then
-                    IPK_COUNT=$(ls -1 custom-files/ipks/ 2>/dev/null | wc -l)
-                    echo "- 包含 $IPK_COUNT 个自定义软件包" >> "$GITHUB_WORKSPACE/构建报告.md"
-                fi
-                if [ -d "custom-files/scripts" ]; then
-                    SCRIPT_COUNT=$(ls -1 custom-files/scripts/ 2>/dev/null | wc -l)
-                    echo "- 包含 $SCRIPT_COUNT 个自定义脚本" >> "$GITHUB_WORKSPACE/构建报告.md"
-                fi
+                echo "## 自定义安装" >> "$GITHUB_WORKSPACE/构建报告.md"
+                echo "- ✅ 自动安装自定义IPK包" >> "$GITHUB_WORKSPACE/构建报告.md"
+                echo "- ✅ 自动执行自定义脚本" >> "$GITHUB_WORKSPACE/构建报告.md"
+                echo "- ⚠️ 注意: 自定义安装将在首次启动时自动执行" >> "$GITHUB_WORKSPACE/构建报告.md"
             fi
         else
             echo "❌ **构建状态**: 失败" >> "$GITHUB_WORKSPACE/构建报告.md"
@@ -1059,7 +911,7 @@ jobs:
         
         echo "✅ 构建报告已生成"
 
-    # 配置文件保存步骤
+    # 配置文件保存步骤 - 优化：只有变化才推送
     - name: 保存配置文件到仓库
       if: success() && github.event.inputs.save_config == 'true'
       run: |
@@ -1072,18 +924,32 @@ jobs:
           exit 1
         fi
         
+        # 检查配置文件是否发生变化
+        if [ -f "$GITHUB_WORKSPACE/firmware-config/configs/$CONFIG_FILENAME" ]; then
+          if diff -q "$BUILD_DIR/.config" "$GITHUB_WORKSPACE/firmware-config/configs/$CONFIG_FILENAME" >/dev/null; then
+            echo "ℹ️ 配置文件无变化，跳过保存"
+            echo "CONFIG_UNCHANGED=true" >> $GITHUB_ENV
+            exit 0
+          else
+            echo "✅ 检测到配置文件变化，将保存新配置"
+          fi
+        else
+          echo "✅ 配置文件不存在，将创建新配置"
+        fi
+        
         cp $BUILD_DIR/.config $GITHUB_WORKSPACE/firmware-config/configs/$CONFIG_FILENAME
         
         if [ -f "$GITHUB_WORKSPACE/firmware-config/configs/$CONFIG_FILENAME" ]; then
           echo "✅ 配置文件已保存为: firmware-config/configs/$CONFIG_FILENAME"
+          echo "CONFIG_UNCHANGED=false" >> $GITHUB_ENV
         else
           echo "❌ 错误: 配置文件保存失败"
           exit 1
         fi
 
-    # 配置文件提交步骤
+    # 配置文件提交步骤 - 只有变化才提交
     - name: 提交配置文件更改
-      if: success() && github.event.inputs.save_config == 'true'
+      if: success() && github.event.inputs.save_config == 'true' && env.CONFIG_UNCHANGED == 'false'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
@@ -1115,7 +981,6 @@ jobs:
         name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_type }}
         path: |
           ${{ env.BUILD_DIR }}/bin/targets/
-          ${{ env.BUILD_DIR }}/custom-files/
         retention-days: 7
 
     # 日志和配置上传步骤
