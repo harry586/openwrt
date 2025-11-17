@@ -1,7 +1,7 @@
-# OpenWrt 智能固件构建工作流（优化版）
-# 修复中文界面、改进自定义安装、简化配置
+# OpenWrt 智能固件构建工作流（完整修复版）
+# 修复中文界面、自定义安装、错误分析等问题
 
-name: OpenWrt 智能固件构建工作流（优化版）
+name: OpenWrt 智能固件构建工作流（完整修复版）
 
 on:
   workflow_dispatch:
@@ -47,7 +47,7 @@ on:
       custom_install:
         description: '启用自定义安装 (IPK和脚本)'
         required: false
-        default: true
+        default: false
         type: boolean
 
 env:
@@ -158,7 +158,7 @@ jobs:
           echo "✅ 找到错误分析脚本: $ERROR_SCRIPT"
           cp "$ERROR_SCRIPT" $BUILD_DIR/error_analysis.sh
         else
-          echo "⚠️ 警告: 未找到错误分析脚本"
+          echo "⚠️ 警告: 未找到错误分析脚本，将使用内置版本"
         fi
         
         cd $BUILD_DIR
@@ -290,7 +290,7 @@ jobs:
           fi
         done
 
-    # 重新复制脚本步骤
+    # 重新复制脚本步骤 - 修复版本
     - name: 重新复制脚本和配置文件
       run: |
         cd $BUILD_DIR
@@ -306,6 +306,9 @@ jobs:
         cp "$DEVICE_SCRIPT" $BUILD_DIR/device_detection.sh
         if [ -n "$ERROR_SCRIPT" ]; then
           cp "$ERROR_SCRIPT" $BUILD_DIR/error_analysis.sh
+          echo "✅ 找到并复制错误分析脚本: $ERROR_SCRIPT"
+        else
+          echo "⚠️ 警告: 未找到错误分析脚本，将使用内置基础版本"
         fi
         
         # 查找并复制配置文件
@@ -332,7 +335,7 @@ jobs:
         chmod +x complete_version_detector.sh device_detection.sh error_analysis.sh 2>/dev/null || true
         echo "✅ 脚本和配置文件重新复制完成"
 
-    # 设备检测步骤 - 优化显示版本
+    # 设备检测步骤
     - name: 智能设备检测与别名转换
       id: device-detection
       run: |
@@ -373,7 +376,7 @@ jobs:
         fi
         chmod +x device_detection.sh
         
-        # 运行设备检测脚本 - 优化输出显示
+        # 运行设备检测脚本
         echo "=== 开始设备检测 ==="
         
         # 创建临时文件来捕获脚本输出
@@ -386,10 +389,6 @@ jobs:
         set -e
         
         echo "=== 脚本退出代码: $SCRIPT_EXIT_CODE ==="
-        
-        # 只显示关键的成功信息
-        echo "=== 关键设备信息 ==="
-        grep -E "\[SUCCESS\]|PLATFORM=|DEVICE_SHORT_NAME=|DEVICE_FULL_NAME=" "$TEMP_LOG" | head -20
         
         # 从脚本输出中提取设备信息
         PLATFORM=$(grep "^PLATFORM=" "$TEMP_LOG" | tail -1 | cut -d'=' -f2)
@@ -562,7 +561,7 @@ jobs:
             exit 1
         fi
 
-    # 改进的自定义安装处理步骤 - 在构建时安装
+    # 修复的自定义安装处理步骤
     - name: 处理自定义安装
       if: github.event.inputs.custom_install == 'true'
       run: |
@@ -575,8 +574,8 @@ jobs:
         # 从仓库复制自定义文件
         cd $GITHUB_WORKSPACE
         
-        # 查找IPK文件
-        IPK_FILES=$(find . -name "*.ipk" -type f 2>/dev/null || true)
+        # 查找IPK文件 - 只从custom-files目录查找
+        IPK_FILES=$(find firmware-config/custom-files -name "*.ipk" -type f 2>/dev/null || true)
         if [ -n "$IPK_FILES" ]; then
             echo "✅ 找到IPK文件:"
             echo "$IPK_FILES"
@@ -588,8 +587,8 @@ jobs:
             echo "ℹ️ 未找到IPK文件"
         fi
         
-        # 查找脚本文件
-        SCRIPT_FILES=$(find . -name "*.sh" -type f 2>/dev/null | grep -v "detector\|analysis" || true)
+        # 查找脚本文件 - 只从custom-files目录查找，排除检测脚本
+        SCRIPT_FILES=$(find firmware-config/custom-files -name "*.sh" -type f 2>/dev/null | grep -v "detector\|analysis" || true)
         if [ -n "$SCRIPT_FILES" ]; then
             echo "✅ 找到脚本文件:"
             echo "$SCRIPT_FILES"
@@ -604,49 +603,63 @@ jobs:
         
         # 创建自动安装脚本
         cat > $BUILD_DIR/files/root/custom-install/auto-install.sh << 'EOF'
-        #!/bin/sh
-        echo "=== 开始自动安装自定义文件 ==="
-        
-        # 安装IPK文件
-        if ls /root/custom-install/*.ipk >/dev/null 2>&1; then
-            echo "安装IPK文件..."
-            for ipk in /root/custom-install/*.ipk; do
-                echo "安装: $(basename $ipk)"
-                opkg install "$ipk"
-            done
-        else
-            echo "未找到IPK文件"
+#!/bin/sh
+echo "=== 开始自动安装自定义文件 ==="
+
+# 等待网络就绪
+while ! ping -c1 -W1 8.8.8.8 >/dev/null 2>&1; do
+    echo "等待网络连接..."
+    sleep 5
+done
+
+# 安装IPK文件
+if ls /root/custom-install/*.ipk >/dev/null 2>&1; then
+    echo "安装IPK文件..."
+    for ipk in /root/custom-install/*.ipk; do
+        echo "安装: $(basename $ipk)"
+        opkg install "$ipk" || echo "安装失败: $(basename $ipk)"
+    done
+else
+    echo "未找到IPK文件"
+fi
+
+# 执行脚本文件
+if ls /root/custom-install/*.sh >/dev/null 2>&1; then
+    echo "执行脚本文件..."
+    for script in /root/custom-install/*.sh; do
+        if [ "$(basename $script)" != "auto-install.sh" ]; then
+            echo "执行: $(basename $script)"
+            sh "$script" || echo "执行失败: $(basename $script)"
         fi
-        
-        # 执行脚本文件
-        if ls /root/custom-install/*.sh >/dev/null 2>&1; then
-            echo "执行脚本文件..."
-            for script in /root/custom-install/*.sh; do
-                if [ "$(basename $script)" != "auto-install.sh" ]; then
-                    echo "执行: $(basename $script)"
-                    sh "$script"
-                fi
-            done
-        else
-            echo "未找到脚本文件"
-        fi
-        
-        # 清理安装文件
-        rm -rf /root/custom-install
-        echo "=== 自动安装完成 ==="
-        EOF
+    done
+else
+    echo "未找到脚本文件"
+fi
+
+# 清理安装文件
+rm -rf /root/custom-install
+echo "=== 自动安装完成 ==="
+EOF
         
         chmod +x $BUILD_DIR/files/root/custom-install/auto-install.sh
         
+        # 确保目录存在
+        mkdir -p $BUILD_DIR/files/etc
+        
         # 创建启动脚本来自动运行安装
         cat > $BUILD_DIR/files/etc/rc.local << 'EOF'
-        # 在系统启动时运行自定义安装
-        /root/custom-install/auto-install.sh >/tmp/custom-install.log 2>&1 &
+#!/bin/sh
+
+# 在系统启动时运行自定义安装
+[ -f /root/custom-install/auto-install.sh ] && {
+    /root/custom-install/auto-install.sh >/tmp/custom-install.log 2>&1 &
+}
+
+# 原有的rc.local内容
+exit 0
+EOF
         
-        # 原有的rc.local内容
-        exit 0
-        EOF
-        
+        chmod +x $BUILD_DIR/files/etc/rc.local
         echo "✅ 自定义安装配置完成 - 将在系统启动时自动安装"
 
     # DL库下载和验证步骤
@@ -728,7 +741,7 @@ jobs:
         DL_SIZE=$(du -sh dl | cut -f1)
         echo "✅ 下载统计: $DL_COUNT 个文件，总大小: $DL_SIZE"
 
-    # 编译步骤 - 简化版本，移除实时监控
+    # 编译步骤 - 简化版本
     - name: 应用配置并编译
       run: |
         cd $BUILD_DIR
@@ -793,40 +806,131 @@ jobs:
             exit 1
         fi
 
-    # 错误分析步骤
+    # 修复的错误分析步骤
     - name: 运行错误分析
       if: always()
       run: |
         cd $BUILD_DIR
         echo "=== 运行错误分析 ==="
+        
+        # 创建基础错误分析脚本（如果不存在）
+        if [ ! -f "error_analysis.sh" ]; then
+            echo "创建基础错误分析脚本..."
+            cat > error_analysis.sh << 'EOF'
+#!/bin/bash
+# 基础错误分析脚本
+
+BUILD_DIR="${1:-.}"
+LOG_FILE="$BUILD_DIR/build_detailed.log"
+OUTPUT_FILE="$BUILD_DIR/error_analysis.log"
+
+echo "=== 固件构建错误分析报告 ===" > "$OUTPUT_FILE"
+echo "生成时间: $(date)" >> "$OUTPUT_FILE"
+echo "" >> "$OUTPUT_FILE"
+
+echo "=== 构建结果摘要 ===" >> "$OUTPUT_FILE"
+if [ -d "$BUILD_DIR/bin/targets" ]; then
+    echo "✅ 构建状态: 成功" >> "$OUTPUT_FILE"
+    FIRMWARE_COUNT=$(find "$BUILD_DIR/bin/targets" -name "*.bin" -o -name "*.img" 2>/dev/null | wc -l)
+    echo "✅ 生成的固件文件: $FIRMWARE_COUNT" >> "$OUTPUT_FILE"
+    find "$BUILD_DIR/bin/targets" -name "*.bin" -o -name "*.img" 2>/dev/null >> "$OUTPUT_FILE"
+else
+    echo "❌ 构建状态: 失败" >> "$OUTPUT_FILE"
+fi
+
+echo "" >> "$OUTPUT_FILE"
+echo "=== 关键错误检查 ===" >> "$OUTPUT_FILE"
+
+if [ -f "$LOG_FILE" ]; then
+    # 统计错误类型
+    ERROR_COUNT=$(grep -c "error:" "$LOG_FILE" 2>/dev/null || echo "0")
+    WARNING_COUNT=$(grep -c "warning:" "$LOG_FILE" 2>/dev/null || echo "0")
+    FAILED_COUNT=$(grep -c "failed" "$LOG_FILE" 2>/dev/null || echo "0")
+    
+    echo "错误数量: $ERROR_COUNT" >> "$OUTPUT_FILE"
+    echo "警告数量: $WARNING_COUNT" >> "$OUTPUT_FILE"
+    echo "失败数量: $FAILED_COUNT" >> "$OUTPUT_FILE"
+    echo "" >> "$OUTPUT_FILE"
+    
+    # 显示前10个错误
+    if [ "$ERROR_COUNT" -gt 0 ]; then
+        echo "❌ 发现编译错误:" >> "$OUTPUT_FILE"
+        grep "error:" "$LOG_FILE" | head -10 >> "$OUTPUT_FILE"
+        echo "" >> "$OUTPUT_FILE"
+    fi
+    
+    # 显示下载错误
+    DOWNLOAD_ERRORS=$(grep -E "404|Failed to download" "$LOG_FILE" 2>/dev/null | head -5)
+    if [ -n "$DOWNLOAD_ERRORS" ]; then
+        echo "❌ 下载错误:" >> "$OUTPUT_FILE"
+        echo "$DOWNLOAD_ERRORS" >> "$OUTPUT_FILE"
+        echo "" >> "$OUTPUT_FILE"
+    fi
+    
+    # 显示文件缺失错误
+    MISSING_FILES=$(grep -E "No such file or directory" "$LOG_FILE" 2>/dev/null | head -5)
+    if [ -n "$MISSING_FILES" ]; then
+        echo "❌ 文件缺失错误:" >> "$OUTPUT_FILE"
+        echo "$MISSING_FILES" >> "$OUTPUT_FILE"
+        echo "" >> "$OUTPUT_FILE"
+    fi
+else
+    echo "❌ 日志文件不存在: $LOG_FILE" >> "$OUTPUT_FILE"
+fi
+
+echo "=== 错误原因分析和建议 ===" >> "$OUTPUT_FILE"
+if [ "$ERROR_COUNT" -gt 0 ]; then
+    echo "⚠️  编译错误" >> "$OUTPUT_FILE"
+    echo "💡 可能原因: 依赖包缺失、配置冲突、源码问题" >> "$OUTPUT_FILE"
+    echo "" >> "$OUTPUT_FILE"
+fi
+
+if [ -n "$DOWNLOAD_ERRORS" ]; then
+    echo "⚠️  下载错误" >> "$OUTPUT_FILE"
+    echo "💡 可能原因: 网络问题、镜像源失效、包被移除" >> "$OUTPUT_FILE"
+    echo "" >> "$OUTPUT_FILE"
+fi
+
+if [ -n "$MISSING_FILES" ]; then
+    echo "⚠️  文件缺失错误" >> "$OUTPUT_FILE"
+    echo "💡 可能原因: 源码不完整或下载失败" >> "$OUTPUT_FILE"
+    echo "" >> "$OUTPUT_FILE"
+fi
+
+echo "错误分析完成" >> "$OUTPUT_FILE"
+EOF
+            chmod +x error_analysis.sh
+            echo "✅ 已创建基础错误分析脚本"
+        fi
+        
         if [ -f "error_analysis.sh" ] && [ -f "build_detailed.log" ]; then
-          chmod +x error_analysis.sh
-          echo "开始错误分析..."
-          ./error_analysis.sh "$BUILD_DIR"
-          echo "✅ 错误分析完成"
-          
-          # 显示关键错误摘要
-          if [ -f "error_analysis.log" ]; then
-            echo "=== 关键错误摘要 ==="
-            grep -E "❌|⚠️|✅" error_analysis.log | head -10
-          fi
-        else
-          echo "⚠️ 错误分析条件不满足"
-          # 基础错误分析
-          if [ -f "build_detailed.log" ]; then
-            echo "=== 基础错误检查 ==="
-            ERROR_COUNT=$(grep -c "error:" build_detailed.log || true)
-            WARNING_COUNT=$(grep -c "warning:" build_detailed.log || true)
-            echo "错误数量: $ERROR_COUNT"
-            echo "警告数量: $WARNING_COUNT"
+            chmod +x error_analysis.sh
+            echo "开始错误分析..."
+            ./error_analysis.sh "$BUILD_DIR"
+            echo "✅ 错误分析完成"
             
-            if [ $ERROR_COUNT -gt 0 ]; then
-              echo "❌ 发现编译错误"
-              grep "error:" build_detailed.log | head -5
-            else
-              echo "✅ 未发现严重编译错误"
+            # 显示关键错误摘要
+            if [ -f "error_analysis.log" ]; then
+                echo "=== 关键错误摘要 ==="
+                grep -E "❌|⚠️|✅" error_analysis.log | head -10
             fi
-          fi
+        else
+            echo "⚠️ 错误分析条件不满足"
+            # 基础错误分析
+            if [ -f "build_detailed.log" ]; then
+                echo "=== 基础错误检查 ==="
+                ERROR_COUNT=$(grep -c "error:" build_detailed.log || true)
+                WARNING_COUNT=$(grep -c "warning:" build_detailed.log || true)
+                echo "错误数量: $ERROR_COUNT"
+                echo "警告数量: $WARNING_COUNT"
+                
+                if [ $ERROR_COUNT -gt 0 ]; then
+                    echo "❌ 发现编译错误"
+                    grep "error:" build_detailed.log | head -5
+                else
+                    echo "✅ 未发现严重编译错误"
+                fi
+            fi
         fi
 
     # 固件验证步骤
