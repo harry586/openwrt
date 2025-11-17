@@ -27,6 +27,15 @@ declare -A DEVICE_MAPPING=(
     ["acrh13"]="asus_rt-ac58u"
     ["rt-ac58u"]="asus_rt-ac58u"
     ["rt-acrh13"]="asus_rt-ac58u"
+    ["mi4a"]="xiaomi_mi-router-4a-gigabit"
+    ["r4a"]="xiaomi_mi-router-4a-gigabit"
+    ["mi3g"]="xiaomi_mi-router-3g"
+    ["r3g"]="xiaomi_mi-router-3g"
+    ["mi4"]="xiaomi_mi-router-4"
+    ["r4"]="xiaomi_mi-router-4"
+    ["wr841n"]="tl-wr841n-v11"
+    ["wr842n"]="tl-wr842n-v4"
+    ["wr941n"]="tl-wr941nd-v6"
 )
 
 # 主检测函数
@@ -140,8 +149,6 @@ find_device_tree_files() {
         log_info "搜索平台: $platform 的设备树文件"
         
         for pattern in "${patterns[@]}"; do
-            log_info "尝试模式: $pattern"
-            
             # 使用find搜索，不限制文件名模式
             local files=$(find "target/linux/$platform" -name "*.dts" -type f 2>/dev/null | \
                          grep -i "$pattern" | head -5)
@@ -265,8 +272,6 @@ find_device_definition() {
     log_info "尝试的设备名称变体: ${device_variants[*]}"
     
     for variant in "${device_variants[@]}"; do
-        log_info "检查变体: $variant"
-        
         for mk_file in $mk_files; do
             # 查找 define Device 行 - 使用更宽松的匹配
             local device_line=$(grep -h "define Device.*$variant" "$mk_file" 2>/dev/null | head -1)
