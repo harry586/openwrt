@@ -47,7 +47,7 @@ on:
       custom_install:
         description: '启用自定义安装 (IPK和脚本)'
         required: false
-        default: false
+        default: true
         type: boolean
 
 env:
