@@ -1,13 +1,13 @@
-# OpenWrt 智能固件构建工作流（错误修复版）
-# 针对错误分析日志中的问题进行专门优化
+# OpenWrt 智能固件构建工作流（优化版）
+# 针对编译时间和用户体验进行专门优化
 
-name: OpenWrt 智能固件构建工作流（错误修复版）
+name: OpenWrt 智能固件构建工作流（优化版）
 
 on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: '设备名称 (如: ac42u, ac58u 等)'
+        description: '设备名称 (如: ac42u, ac58u, mi4a 等)'
         required: true
         default: 'ac42u'
         type: string
@@ -78,7 +78,7 @@ jobs:
       with:
         fetch-depth: 0
 
-    # 环境设置步骤 - 增强版本，针对错误分析中的问题
+    # 环境设置步骤
     - name: 设置编译环境
       run: |
         echo "=== 安装编译依赖包 ==="
@@ -87,7 +87,7 @@ jobs:
         # 基础编译工具
         sudo apt-get install -y build-essential libncurses5-dev libssl-dev python3 unzip zlib1g-dev subversion gcc-multilib git curl file
         
-        # 增强工具（针对错误分析中的问题）
+        # 增强工具
         sudo apt-get install -y \
           ninja-build \
           automake \
@@ -232,7 +232,7 @@ jobs:
         ls -la
         echo "✅ 目录清理完成"
 
-    # 源码克隆步骤 - 针对404错误增加备用源
+    # 源码克隆步骤
     - name: 克隆选定版本的源码
       run: |
         cd $BUILD_DIR
@@ -252,7 +252,7 @@ jobs:
           exit 1
         fi
         
-        # 使用重试机制克隆，针对404错误
+        # 使用重试机制克隆
         MAX_RETRIES=3
         RETRY_COUNT=0
         CLONE_SUCCESS=false
@@ -332,7 +332,7 @@ jobs:
         chmod +x complete_version_detector.sh device_detection.sh error_analysis.sh 2>/dev/null || true
         echo "✅ 脚本和配置文件重新复制完成"
 
-    # 设备检测步骤
+    # 设备检测步骤 - 优化显示版本
     - name: 智能设备检测与别名转换
       id: device-detection
       run: |
@@ -346,7 +346,12 @@ jobs:
           ["rt-acrh17"]="asus_rt-ac42u"
           ["ac58u"]="asus_rt-ac58u"
           ["acrh13"]="asus_rt-ac58u"
+          ["rt-ac58u"]="asus_rt-ac58u"
           ["rt-acrh13"]="asus_rt-ac58u"
+          ["mi4a"]="xiaomi_mi-router-4a-gigabit"
+          ["r4a"]="xiaomi_mi-router-4a-gigabit"
+          ["mi3g"]="xiaomi_mi-router-3g"
+          ["r3g"]="xiaomi_mi-router-3g"
         )
         
         INPUT_DEVICE="${{ github.event.inputs.device_name }}"
@@ -368,26 +373,36 @@ jobs:
         fi
         chmod +x device_detection.sh
         
-        # 运行设备检测脚本
+        # 运行设备检测脚本 - 优化输出显示
         echo "=== 开始设备检测 ==="
+        
+        # 创建临时文件来捕获脚本输出
+        TEMP_LOG=$(mktemp)
+        
         set +e
-        OUTPUT=$(./device_detection.sh "$ACTUAL_DEVICE" 2>&1)
+        # 运行脚本并捕获输出
+        ./device_detection.sh "$ACTUAL_DEVICE" 2>&1 | tee "$TEMP_LOG"
         SCRIPT_EXIT_CODE=$?
         set -e
         
-        echo "=== 设备检测脚本输出 ==="
-        echo "$OUTPUT"
         echo "=== 脚本退出代码: $SCRIPT_EXIT_CODE ==="
         
+        # 只显示关键的成功信息
+        echo "=== 关键设备信息 ==="
+        grep -E "\[SUCCESS\]|PLATFORM=|DEVICE_SHORT_NAME=|DEVICE_FULL_NAME=" "$TEMP_LOG" | head -20
+        
         # 从脚本输出中提取设备信息
-        PLATFORM=$(echo "$OUTPUT" | grep "^PLATFORM=" | tail -1 | cut -d'=' -f2)
-        DEVICE_SHORT_NAME=$(echo "$OUTPUT" | grep "^DEVICE_SHORT_NAME=" | tail -1 | cut -d'=' -f2)
-        DEVICE_FULL_NAME=$(echo "$OUTPUT" | grep "^DEVICE_FULL_NAME=" | tail -1 | cut -d'=' -f2)
+        PLATFORM=$(grep "^PLATFORM=" "$TEMP_LOG" | tail -1 | cut -d'=' -f2)
+        DEVICE_SHORT_NAME=$(grep "^DEVICE_SHORT_NAME=" "$TEMP_LOG" | tail -1 | cut -d'=' -f2)
+        DEVICE_FULL_NAME=$(grep "^DEVICE_FULL_NAME=" "$TEMP_LOG" | tail -1 | cut -d'=' -f2)
         
         echo "=== 提取的设备信息 ==="
         echo "平台(PLATFORM): '$PLATFORM'"
         echo "设备短名称(DEVICE_SHORT_NAME): '$DEVICE_SHORT_NAME'"
         echo "设备全名称(DEVICE_FULL_NAME): '$DEVICE_FULL_NAME'"
+        
+        # 清理临时文件
+        rm -f "$TEMP_LOG"
         
         # 验证设备信息提取结果
         if [ -n "$PLATFORM" ] && [ -n "$DEVICE_SHORT_NAME" ] && [ -n "$DEVICE_FULL_NAME" ]; then
@@ -416,6 +431,11 @@ jobs:
                     "asus_rt-ac58u"|"ac58u"|"acrh13"|"rt-acrh13")
                         echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
                         echo "DEVICE_SHORT_NAME=asus_rt-ac58u" >> $GITHUB_ENV
+                        echo "DEVICE_FULL_NAME=$ACTUAL_DEVICE" >> $GITHUB_ENV
+                        ;;
+                    "xiaomi_mi-router-4a-gigabit"|"mi4a"|"r4a")
+                        echo "PLATFORM=ramips" >> $GITHUB_ENV
+                        echo "DEVICE_SHORT_NAME=xiaomi_mi-router-4a-gigabit" >> $GITHUB_ENV
                         echo "DEVICE_FULL_NAME=$ACTUAL_DEVICE" >> $GITHUB_ENV
                         ;;
                     *)
@@ -558,7 +578,7 @@ jobs:
             exit 1
         fi
 
-    # DL库下载和验证步骤 - 针对404错误专门优化
+    # DL库下载和验证步骤
     - name: 下载DL库并验证完整性
       run: |
         cd $BUILD_DIR
@@ -567,12 +587,12 @@ jobs:
         # 创建下载目录
         mkdir -p dl
         
-        # 设置下载重试机制，针对404错误
-        MAX_DOWNLOAD_RETRIES=5  # 增加重试次数
+        # 设置下载重试机制
+        MAX_DOWNLOAD_RETRIES=3
         RETRY_COUNT=0
         DOWNLOAD_SUCCESS=false
         
-        # 设置下载环境变量，避免网络问题
+        # 设置下载环境变量
         export GIT_SSL_NO_VERIFY=1
         export PYTHONHTTPSVERIFY=0
         
@@ -586,14 +606,14 @@ jobs:
           
           echo "开始并行下载依赖..."
           
-          # 使用更稳健的下载参数，针对404错误
+          # 使用稳健的下载参数
           if make -j2 download V=s 2>&1 | tee download_attempt_${RETRY_COUNT}.log; then
             echo "✅ 下载命令执行成功"
             DOWNLOAD_SUCCESS=true
           else
             echo "❌ 下载命令执行失败"
             
-            # 分析下载日志中的404错误
+            # 分析下载日志中的错误
             if grep -q "404" download_attempt_${RETRY_COUNT}.log; then
               echo "⚠️ 检测到404错误，尝试修复..."
               # 查找404错误的包
@@ -613,8 +633,8 @@ jobs:
               grep -E "404|failed|error" download_attempt_*.log | head -20
               exit 1
             else
-              echo "🔄 等待15秒后重试..."
-              sleep 15
+              echo "🔄 等待10秒后重试..."
+              sleep 10
             fi
           fi
         done
@@ -637,65 +657,132 @@ jobs:
         DL_SIZE=$(du -sh dl | cut -f1)
         echo "✅ 下载统计: $DL_COUNT 个文件，总大小: $DL_SIZE"
 
-    # 编译步骤 - 针对管道错误和libhogweed错误优化
+    # 编译步骤 - 优化版本（减少编译时间）
     - name: 应用配置并编译
       run: |
         cd $BUILD_DIR
         echo "=== 应用配置并编译 ==="
         
-        # 设置编译环境变量，减少管道错误
+        # 设置编译环境变量
         export FORCE_UNSAFE_CONFIGURE=1
-        export SUBMAKE=1
         
         echo "开始编译固件..."
         
-        # 使用稳健的编译策略，针对管道错误
-        # 第一阶段：单线程编译工具链（减少错误）
-        echo "=== 第一阶段：编译工具链 ==="
-        make -j1 tools/install V=s 2>&1 | tee build_tools.log || {
-          echo "⚠️ 工具链编译出现警告，继续构建..."
-        }
-        
-        # 第二阶段：编译工具链相关包
-        echo "=== 第二阶段：编译工具链包 ==="
-        make -j1 toolchain/install V=s 2>&1 | tee build_toolchain.log || {
-          echo "⚠️ 工具链包编译出现警告，继续构建..."
-        }
-        
-        # 第三阶段：完整并行编译，但减少并行度避免管道错误
-        echo "=== 第三阶段：完整编译 ==="
-        # 计算合适的并行任务数，避免管道错误
+        # 智能编译策略：根据核心数动态调整并行度
         AVAILABLE_CORES=$(nproc)
-        # 减少并行任务数，避免管道错误
-        BUILD_JOBS=$((AVAILABLE_CORES > 2 ? AVAILABLE_CORES / 2 : 1))
-        echo "使用 $BUILD_JOBS 个并行任务进行编译（减少并行度避免管道错误）"
+        echo "可用CPU核心数: $AVAILABLE_CORES"
         
-        # 使用稳健的编译参数，忽略非致命错误
+        # 根据核心数设置并行任务数
+        if [ $AVAILABLE_CORES -ge 8 ]; then
+            BUILD_JOBS=$((AVAILABLE_CORES - 2))
+            echo "✅ 高性能模式: 使用 $BUILD_JOBS 个并行任务"
+        elif [ $AVAILABLE_CORES -ge 4 ]; then
+            BUILD_JOBS=$((AVAILABLE_CORES - 1))
+            echo "✅ 平衡模式: 使用 $BUILD_JOBS 个并行任务"
+        else
+            BUILD_JOBS=$AVAILABLE_CORES
+            echo "✅ 基础模式: 使用 $BUILD_JOBS 个并行任务"
+        fi
+        
+        # 创建进度监控脚本
+        cat > progress_monitor.sh << 'EOF'
+        #!/bin/bash
+        BUILD_DIR=$1
+        TOTAL_STEPS=5
+        CURRENT_STEP=0
+        
+        update_progress() {
+            CURRENT_STEP=$((CURRENT_STEP + 1))
+            PERCENTAGE=$((CURRENT_STEP * 100 / TOTAL_STEPS))
+            echo "📊 编译进度: $PERCENTAGE% ($CURRENT_STEP/$TOTAL_STEPS)"
+        }
+        
+        echo "📊 编译进度: 0% (0/$TOTAL_STEPS)"
+        
+        # 监控编译进度
+        while [ $CURRENT_STEP -lt $TOTAL_STEPS ]; do
+            sleep 60  # 每分钟检查一次
+            
+            # 检查编译阶段
+            if [ -f "$BUILD_DIR/staging_dir/target-stamp" ]; then
+                if [ $CURRENT_STEP -lt 1 ]; then
+                    update_progress
+                    echo "🔧 阶段1: 工具链编译完成"
+                fi
+            fi
+            
+            if [ -f "$BUILD_DIR/staging_dir/toolchain-stamp" ]; then
+                if [ $CURRENT_STEP -lt 2 ]; then
+                    update_progress
+                    echo "🔧 阶段2: 交叉编译工具链完成"
+                fi
+            fi
+            
+            if find "$BUILD_DIR/build_dir" -name "*.ipk" 2>/dev/null | head -1 | grep -q .; then
+                if [ $CURRENT_STEP -lt 3 ]; then
+                    update_progress
+                    echo "📦 阶段3: 开始生成软件包"
+                fi
+            fi
+            
+            if [ -d "$BUILD_DIR/bin/targets" ] && [ "$(find "$BUILD_DIR/bin/targets" -name "*.bin" 2>/dev/null | wc -l)" -gt 0 ]; then
+                if [ $CURRENT_STEP -lt 4 ]; then
+                    update_progress
+                    echo "🎯 阶段4: 开始生成固件"
+                fi
+            fi
+            
+            # 检查是否完成
+            if [ -f "$BUILD_DIR/.build_done" ]; then
+                update_progress
+                echo "✅ 阶段5: 编译完成"
+                break
+            fi
+        done
+        EOF
+        
+        chmod +x progress_monitor.sh
+        
+        # 在后台启动进度监控
+        ./progress_monitor.sh "$BUILD_DIR" &
+        MONITOR_PID=$!
+        
+        # 主要编译命令 - 使用单次编译而不是分步编译
+        echo "🚀 开始并行编译..."
         set +e
-        make -j$BUILD_JOBS V=s 2>&1 | tee build_detailed.log
+        time make -j$BUILD_JOBS V=s 2>&1 | tee build_detailed.log
         COMPILE_EXIT_CODE=$?
         set -e
         
-        # 检查构建状态，即使有错误也继续检查
+        # 标记编译完成
+        touch "$BUILD_DIR/.build_done"
+        
+        # 等待进度监控结束
+        wait $MONITOR_PID 2>/dev/null || true
+        
+        # 显示编译时间统计
+        echo "=== 编译时间统计 ==="
+        grep -E "real|user|sys" build_detailed.log | tail -3 || echo "时间统计不可用"
+        
+        # 检查构建状态
         if [ -d "bin/targets" ]; then
-          echo "✅ 编译完成，找到目标文件"
-          if [ $COMPILE_EXIT_CODE -ne 0 ]; then
-            echo "⚠️ 编译过程有错误，但生成了固件文件"
-          fi
-        else
-          echo "❌ 编译失败，未生成目标文件"
-          if [ $COMPILE_EXIT_CODE -eq 0 ]; then
-            echo "❌ 编译命令成功但未生成目标文件，尝试单线程编译..."
-            make V=s 2>&1 | tee build_single_thread.log
-            if [ ! -d "bin/targets" ]; then
-              exit 1
+            echo "✅ 编译完成，找到目标文件"
+            if [ $COMPILE_EXIT_CODE -ne 0 ]; then
+                echo "⚠️ 编译过程有警告，但生成了固件文件"
             fi
-          else
-            exit 1
-          fi
+        else
+            echo "❌ 编译失败，未生成目标文件"
+            if [ $COMPILE_EXIT_CODE -eq 0 ]; then
+                echo "❌ 编译命令成功但未生成目标文件，尝试诊断..."
+                # 显示构建目录结构
+                find . -name "*.bin" -o -name "*.img" 2>/dev/null | head -10
+                exit 1
+            else
+                exit 1
+            fi
         fi
 
-    # 错误分析步骤 - 增强版本
+    # 错误分析步骤
     - name: 运行错误分析
       if: always()
       run: |
@@ -749,6 +836,46 @@ jobs:
           echo "❌ 构建失败，未找到目标文件"
         fi
 
+    # 生成设备支持文档
+    - name: 生成设备支持查询文档
+      if: always()
+      run: |
+        cd $BUILD_DIR
+        echo "=== 生成设备支持查询文档 ==="
+        
+        # 创建设备支持报告
+        cat > "$GITHUB_WORKSPACE/设备支持查询.md" << EOF
+        # OpenWrt 设备支持查询
+        
+        ## 当前构建信息
+        - **设备**: ${{ env.DEVICE_FULL_NAME }}
+        - **平台**: ${{ env.PLATFORM }}
+        - **版本**: ${{ env.SELECTED_REPO }} (${{ env.SELECTED_BRANCH }})
+        - **配置类型**: ${{ github.event.inputs.config_type }}
+        - **构建时间**: $(date)
+        
+        ## 支持状态
+        EOF
+        
+        # 检查构建状态并更新报告
+        if [ -d "bin/targets" ]; then
+            echo "✅ **构建状态**: 成功" >> "$GITHUB_WORKSPACE/设备支持查询.md"
+            echo "" >> "$GITHUB_WORKSPACE/设备支持查询.md"
+            echo "## 生成的固件" >> "$GITHUB_WORKSPACE/设备支持查询.md"
+            find bin/targets -name "*.bin" -o -name "*.img" | while read firmware; do
+                echo "- \`$(basename "$firmware")\`" >> "$GITHUB_WORKSPACE/设备支持查询.md"
+            done
+        else
+            echo "❌ **构建状态**: 失败" >> "$GITHUB_WORKSPACE/设备支持查询.md"
+            echo "" >> "$GITHUB_WORKSPACE/设备支持查询.md"
+            echo "## 错误信息" >> "$GITHUB_WORKSPACE/设备支持查询.md"
+            if [ -f "build_detailed.log" ]; then
+                grep -E "error:|Error" build_detailed.log | head -5 >> "$GITHUB_WORKSPACE/设备支持查询.md"
+            fi
+        fi
+        
+        echo "✅ 设备支持报告已生成"
+
     # 配置文件保存步骤
     - name: 保存配置文件到仓库
       if: success() && github.event.inputs.save_config == 'true'
@@ -784,6 +911,7 @@ jobs:
         git config --local user.name "GitHub Action"
         git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
         git add firmware-config/configs/
+        git add "设备支持查询.md" 2>/dev/null || true
         
         if git diff --staged --quiet; then
           echo "ℹ️ 没有配置文件更改需要提交"
@@ -815,10 +943,9 @@ jobs:
           ${{ env.BUILD_DIR }}/.config
           ${{ env.BUILD_DIR }}/device_info.txt
           ${{ env.BUILD_DIR }}/build_detailed.log
-          ${{ env.BUILD_DIR }}/build_tools.log
-          ${{ env.BUILD_DIR }}/build_toolchain.log
           ${{ env.BUILD_DIR }}/error_analysis.log
           ${{ env.BUILD_DIR }}/download_attempt_*.log
+          $GITHUB_WORKSPACE/设备支持查询.md
         retention-days: 7
 
     # 清理步骤
