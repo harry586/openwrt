@@ -122,8 +122,6 @@ jobs:
         if [ -n "$ERROR_SCRIPT" ]; then
           echo "✅ 找到错误分析脚本: $ERROR_SCRIPT"
           cp "$ERROR_SCRIPT" $BUILD_DIR/error_analysis.sh
-        else
-          echo "⚠️ 警告: 未找到错误分析脚本，将使用内置版本"
         fi
 
         if [ -n "$PRE_DOWNLOAD_SCRIPT" ]; then
@@ -310,8 +308,6 @@ jobs:
           echo "✅ 找到错误分析脚本: $ERROR_SCRIPT"
           cp "$ERROR_SCRIPT" $BUILD_DIR/error_analysis.sh
           chmod +x $BUILD_DIR/error_analysis.sh
-        else
-          echo "⚠️ 警告: 未找到错误分析脚本，将使用备份版本"
         fi
 
         # 重新复制预下载脚本
@@ -544,8 +540,6 @@ jobs:
                 cp "$ipk" $BUILD_DIR/files/root/custom-install/
                 echo "✅ 复制IPK: $(basename "$ipk")"
             done
-        else
-            echo "ℹ️ 未找到IPK文件"
         fi
         
         # 复制脚本文件
@@ -558,55 +552,56 @@ jobs:
                 chmod +x $BUILD_DIR/files/root/custom-install/$(basename "$script")
                 echo "✅ 复制脚本: $(basename "$script")"
             done
-        else
-            echo "ℹ️ 未找到脚本文件"
         fi
         
-        # 创建构建时安装脚本 - 使用本地opkg安装
-        echo '#!/bin/sh' > $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo 'echo "=== 开始构建时自定义安装 ==="' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '# 构建时安装IPK文件 - 使用本地opkg安装' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo 'if ls /root/custom-install/*.ipk >/dev/null 2>&1; then' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '    echo "构建时安装IPK文件..."' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '    for ipk in /root/custom-install/*.ipk; do' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '        echo "安装: $(basename $ipk)"' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '        # 使用opkg本地安装，不依赖网络' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '        opkg install "$ipk" --force-depends || echo "安装失败: $(basename $ipk)"' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '    done' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo 'else' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '    echo "未找到IPK文件"' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo 'fi' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '# 执行构建时脚本' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo 'if ls /root/custom-install/*.sh >/dev/null 2>&1; then' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '    echo "执行构建时脚本..."' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '    for script in /root/custom-install/*.sh; do' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '        if [ "$(basename $script)" != "build-time-install.sh" ]; then' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '            echo "执行: $(basename $script)"' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '            sh "$script" || echo "执行失败: $(basename $script)"' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '        fi' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '    done' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo 'else' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '    echo "未找到脚本文件"' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo 'fi' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo '# 清理安装文件' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo 'rm -rf /root/custom-install' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
-        echo 'echo "=== 构建时自定义安装完成 ==="' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        # 创建构建时安装脚本
+        cat > $BUILD_DIR/files/root/custom-install/build-time-install.sh << 'EOF'
+#!/bin/sh
+echo "=== 开始构建时自定义安装 ==="
+
+# 构建时安装IPK文件 - 使用本地opkg安装
+if ls /root/custom-install/*.ipk >/dev/null 2>&1; then
+    echo "构建时安装IPK文件..."
+    for ipk in /root/custom-install/*.ipk; do
+        echo "安装: $(basename $ipk)"
+        opkg install "$ipk" --force-depends || echo "安装失败: $(basename $ipk)"
+    done
+else
+    echo "未找到IPK文件"
+fi
+
+# 执行构建时脚本
+if ls /root/custom-install/*.sh >/dev/null 2>&1; then
+    echo "执行构建时脚本..."
+    for script in /root/custom-install/*.sh; do
+        if [ "$(basename $script)" != "build-time-install.sh" ]; then
+            echo "执行: $(basename $script)"
+            sh "$script" || echo "执行失败: $(basename $script)"
+        fi
+    done
+else
+    echo "未找到脚本文件"
+fi
+
+# 清理安装文件
+rm -rf /root/custom-install
+echo "=== 构建时自定义安装完成 ==="
+EOF
         
         chmod +x $BUILD_DIR/files/root/custom-install/build-time-install.sh
         
-        # 创建开机执行脚本，在系统启动时运行构建时安装
+        # 创建开机执行脚本
         mkdir -p $BUILD_DIR/files/etc
-        echo '#!/bin/sh' > $BUILD_DIR/files/etc/rc.local
-        echo '' >> $BUILD_DIR/files/etc/rc.local
-        echo '# 在后台执行构建时自定义安装' >> $BUILD_DIR/files/etc/rc.local
-        echo '[ -f /root/custom-install/build-time-install.sh ] && {' >> $BUILD_DIR/files/etc/rc.local
-        echo '    /root/custom-install/build-time-install.sh >/tmp/build-time-install.log 2>&1 &' >> $BUILD_DIR/files/etc/rc.local
-        echo '}' >> $BUILD_DIR/files/etc/rc.local
-        echo '' >> $BUILD_DIR/files/etc/rc.local
-        echo 'exit 0' >> $BUILD_DIR/files/etc/rc.local
+        cat > $BUILD_DIR/files/etc/rc.local << 'EOF'
+#!/bin/sh
+
+# 在后台执行构建时自定义安装
+[ -f /root/custom-install/build-time-install.sh ] && {
+    /root/custom-install/build-time-install.sh >/tmp/build-time-install.log 2>&1 &
+}
+
+exit 0
+EOF
         
         chmod +x $BUILD_DIR/files/etc/rc.local
         echo "✅ 构建时自定义安装配置完成"
@@ -659,21 +654,11 @@ jobs:
         # 设置国内镜像源
         echo "=== 设置国内镜像源: $MIRROR_SOURCE ==="
         case "$MIRROR_SOURCE" in
-            "tuna")
-                MIRROR_URL="https://mirrors.tuna.tsinghua.edu.cn/openwrt"
-                ;;
-            "ustc")
-                MIRROR_URL="https://mirrors.ustc.edu.cn/openwrt"
-                ;;
-            "tencent")
-                MIRROR_URL="https://mirrors.cloud.tencent.com/openwrt"
-                ;;
-            "huawei")
-                MIRROR_URL="https://mirrors.huaweicloud.com/openwrt"
-                ;;
-            *)
-                MIRROR_URL="https://mirrors.tuna.tsinghua.edu.cn/openwrt"
-                ;;
+            "tuna") MIRROR_URL="https://mirrors.tuna.tsinghua.edu.cn/openwrt" ;;
+            "ustc") MIRROR_URL="https://mirrors.ustc.edu.cn/openwrt" ;;
+            "tencent") MIRROR_URL="https://mirrors.cloud.tencent.com/openwrt" ;;
+            "huawei") MIRROR_URL="https://mirrors.huaweicloud.com/openwrt" ;;
+            *) MIRROR_URL="https://mirrors.tuna.tsinghua.edu.cn/openwrt" ;;
         esac
         
         # 设置feeds.conf.default使用镜像
@@ -909,7 +894,9 @@ if [ -d "$BUILD_DIR/bin/targets" ]; then
     echo "✅ 构建状态: 成功" >> "$REPORT_FILE"
     FIRMWARE_FILES=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null | wc -l)
     echo "✅ 生成的固件文件: $FIRMWARE_FILES" >> "$REPORT_FILE"
-    find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null >> "$REPORT_FILE"
+    if [ $FIRMWARE_FILES -gt 0 ]; then
+        find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null >> "$REPORT_FILE"
+    fi
 else
     echo "❌ 构建状态: 失败" >> "$REPORT_FILE"
 fi
@@ -923,75 +910,136 @@ WARNING_COUNT=$(grep -c "warning:" "$LOG_FILE" 2>/dev/null || true)
 CURL_404_COUNT=$(grep -c "curl.*404" "$LOG_FILE" 2>/dev/null || true)
 BROKEN_PIPE_COUNT=$(grep -c "Broken pipe" "$LOG_FILE" 2>/dev/null || true)
 DOWNLOAD_FAIL_COUNT=$(grep -c "Download failed" "$LOG_FILE" 2>/dev/null || true)
+MAKE_ERROR_COUNT=$(grep -c "make.*Error" "$LOG_FILE" 2>/dev/null || true)
 
 echo "📊 错误统计:" >> "$REPORT_FILE"
 echo "- 编译错误: $ERROR_COUNT" >> "$REPORT_FILE"
 echo "- 警告: $WARNING_COUNT" >> "$REPORT_FILE"
-echo "- 网络错误: $CURL_404_COUNT" >> "$REPORT_FILE"
+echo "- 网络404错误: $CURL_404_COUNT" >> "$REPORT_FILE"
 echo "- 管道错误: $BROKEN_PIPE_COUNT" >> "$REPORT_FILE"
 echo "- 下载失败: $DOWNLOAD_FAIL_COUNT" >> "$REPORT_FILE"
+echo "- Make错误: $MAKE_ERROR_COUNT" >> "$REPORT_FILE"
 echo "" >> "$REPORT_FILE"
 
+# 严重错误详情
 if [ "$ERROR_COUNT" -gt 0 ]; then
     echo "❌ 发现编译错误:" >> "$REPORT_FILE"
-    grep "error:" "$LOG_FILE" | head -10 | sed 's/^/  /' >> "$REPORT_FILE"
+    grep "error:" "$LOG_FILE" | head -15 | sed 's/^/  /' >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 else
     echo "✅ 未发现严重编译错误" >> "$REPORT_FILE"
 fi
 
+# 网络错误详情
 if [ "$CURL_404_COUNT" -gt 0 ]; then
     echo "❌ 发现网络下载错误:" >> "$REPORT_FILE"
-    grep "curl.*404" "$LOG_FILE" | head -5 | sed 's/^/  /' >> "$REPORT_FILE"
+    grep "curl.*404" "$LOG_FILE" | head -10 | sed 's/^/  /' >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
+    
+    # 提取具体的失败包
+    echo "🔍 失败包分析:" >> "$REPORT_FILE"
+    grep "curl.*404" "$LOG_FILE" | grep -oE '[a-zA-Z0-9_.-]+\.(tar\.|zip|gz|bz2|xz|zst)' | sort -u | head -5 | sed 's/^/  - /' >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 fi
 
-echo "" >> "$REPORT_FILE"
+# Make错误详情
+if [ "$MAKE_ERROR_COUNT" -gt 0 ]; then
+    echo "❌ 发现Make执行错误:" >> "$REPORT_FILE"
+    grep "make.*Error" "$LOG_FILE" | head -10 | sed 's/^/  /' >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
+fi
+
 echo "=== 错误原因分析和建议 ===" >> "$REPORT_FILE"
 
 if [ "$CURL_404_COUNT" -gt 0 ]; then
     echo "⚠️  网络下载错误" >> "$REPORT_FILE"
     echo "💡 可能原因: 依赖包URL失效或网络问题" >> "$REPORT_FILE"
-    echo "💡 建议: " >> "$REPORT_FILE"
+    echo "💡 建议解决方案:" >> "$REPORT_FILE"
     echo "  1. 使用国内镜像源加速下载" >> "$REPORT_FILE"
     echo "  2. 手动预下载常见失败包" >> "$REPORT_FILE"
     echo "  3. 检查网络连接稳定性" >> "$REPORT_FILE"
+    echo "  4. 使用预下载脚本提前下载" >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 fi
 
 if [ "$BROKEN_PIPE_COUNT" -gt 0 ]; then
     echo "⚠️  管道错误" >> "$REPORT_FILE"
     echo "💡 这是并行编译的正常现象，不影响最终结果" >> "$REPORT_FILE"
+    echo "💡 建议: 可以忽略这些错误" >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 fi
 
 if [ "$DOWNLOAD_FAIL_COUNT" -gt 0 ]; then
     echo "⚠️  下载失败" >> "$REPORT_FILE"
-    echo "💡 建议检查以下常见包:" >> "$REPORT_FILE"
-    echo "  - csstidy" >> "$REPORT_FILE"
-    echo "  - lua-rsa" >> "$REPORT_FILE"
-    echo "  - 其他依赖包" >> "$REPORT_FILE"
+    echo "💡 常见失败包和解决方案:" >> "$REPORT_FILE"
+    echo "  - csstidy: 使用Gitee镜像或预下载版本" >> "$REPORT_FILE"
+    echo "  - lua-rsa: 检查版本兼容性" >> "$REPORT_FILE"
+    echo "  - 其他依赖包: 使用完整预下载脚本" >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 fi
 
-# 检查关键包是否编译成功
-echo "" >> "$REPORT_FILE"
+if [ "$MAKE_ERROR_COUNT" -gt 0 ]; then
+    echo "⚠️  Make执行错误" >> "$REPORT_FILE"
+    echo "💡 可能原因:" >> "$REPORT_FILE"
+    echo "  - 依赖关系问题" >> "$REPORT_FILE"
+    echo "  - 编译环境不完整" >> "$REPORT_FILE"
+    echo "  - 资源不足（内存/磁盘）" >> "$REPORT_FILE"
+    echo "💡 建议: 检查系统资源，清理后重新编译" >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
+fi
+
+# 检查关键包编译状态
 echo "=== 关键包编译状态 ===" >> "$REPORT_FILE"
-for pkg in "luci" "luci-base" "luci-theme-bootstrap" "luci-i18n-base-zh-cn"; do
-    if grep -q "Collecting package info: $pkg" "$LOG_FILE" && grep -q "Building $pkg" "$LOG_FILE"; then
-        echo "✅ $pkg: 编译成功" >> "$REPORT_FILE"
+KEY_PACKAGES=("luci" "luci-base" "luci-theme-bootstrap" "luci-i18n-base-zh-cn" "firewall" "dnsmasq")
+
+for pkg in "${KEY_PACKAGES[@]}"; do
+    if grep -q "Building package $pkg" "$LOG_FILE" || grep -q "collect2.*$pkg" "$LOG_FILE"; then
+        if grep -q "error.*$pkg" "$LOG_FILE"; then
+            echo "❌ $pkg: 编译失败" >> "$REPORT_FILE"
+        else
+            echo "✅ $pkg: 编译成功" >> "$REPORT_FILE"
+        fi
     else
-        echo "❌ $pkg: 编译状态未知" >> "$REPORT_FILE"
+        echo "⚪ $pkg: 未找到编译记录" >> "$REPORT_FILE"
     fi
 done
 
 echo "" >> "$REPORT_FILE"
-echo "=== 性能优化建议 ===" >> "$REPORT_FILE"
+
+# 性能统计
+echo "=== 性能统计 ===" >> "$REPORT_FILE"
+START_TIME=$(grep "编译开始时间" "$LOG_FILE" | head -1 | cut -d':' -f2- || echo "未知")
+END_TIME=$(date)
+echo "- 开始时间: $START_TIME" >> "$REPORT_FILE"
+echo "- 结束时间: $END_TIME" >> "$REPORT_FILE"
+
+if grep -q "总编译时间" "$LOG_FILE"; then
+    COMPILE_TIME=$(grep "总编译时间" "$LOG_FILE" | head -1)
+    echo "- $COMPILE_TIME" >> "$REPORT_FILE"
+fi
+
+echo "" >> "$REPORT_FILE"
+
+# 优化建议
+echo "=== 优化建议 ===" >> "$REPORT_FILE"
 if [ "$ERROR_COUNT" -eq 0 ] && [ -d "$BUILD_DIR/bin/targets" ]; then
-    echo "✅ 构建成功，建议:" >> "$REPORT_FILE"
+    echo "✅ 构建成功，优化建议:" >> "$REPORT_FILE"
     echo "  - 启用编译缓存减少下次构建时间" >> "$REPORT_FILE"
-    echo "  - 使用预下载的依赖包" >> "$REPORT_FILE"
+    echo "  - 使用预下载的依赖包加速下载" >> "$REPORT_FILE"
+    echo "  - 考虑使用增量编译" >> "$REPORT_FILE"
 else
-    echo "⚠️ 构建存在问题，建议:" >> "$REPORT_FILE"
-    echo "  - 检查网络连接" >> "$REPORT_FILE"
+    echo "⚠️ 构建存在问题，解决建议:" >> "$REPORT_FILE"
+    echo "  - 检查网络连接和代理设置" >> "$REPORT_FILE"
     echo "  - 减少并行编译任务数" >> "$REPORT_FILE"
     echo "  - 使用更稳定的版本分支" >> "$REPORT_FILE"
+    echo "  - 清理构建目录重新开始" >> "$REPORT_FILE"
+    echo "  - 增加系统资源（内存/磁盘）" >> "$REPORT_FILE"
 fi
+
+echo "" >> "$REPORT_FILE"
+echo "=== 详细日志位置 ===" >> "$REPORT_FILE"
+echo "完整构建日志: $LOG_FILE" >> "$REPORT_FILE"
+echo "错误分析报告: $REPORT_FILE" >> "$REPORT_FILE"
 
 echo "✅ 错误分析完成" >> "$REPORT_FILE"
 
@@ -1000,7 +1048,10 @@ echo "=== 错误分析完成 ==="
 echo "详细报告请查看: $REPORT_FILE"
 echo ""
 echo "📋 关键摘要:"
-grep -E "❌|⚠️|✅|错误统计" "$REPORT_FILE" | head -15
+grep -E "❌|⚠️|✅|错误统计|构建状态" "$REPORT_FILE" | head -10
+echo ""
+echo "💡 建议:"
+grep -A2 "优化建议" "$REPORT_FILE" | tail -3
 EOF
             chmod +x error_analysis.sh
             echo "✅ 已创建基础错误分析脚本"
@@ -1057,17 +1108,19 @@ EOF
         cd $BUILD_DIR
         echo "=== 生成构建报告文档 ==="
         
-        echo "# OpenWrt 固件构建报告" > "$GITHUB_WORKSPACE/构建报告.md"
-        echo "" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "## 构建信息" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "- **设备**: ${{ env.DEVICE_FULL_NAME }}" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "- **平台**: ${{ env.PLATFORM }}" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "- **版本**: ${{ env.SELECTED_REPO }} (${{ env.SELECTED_BRANCH }})" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "- **配置类型**: ${{ github.event.inputs.config_type }}" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "- **构建时间**: $(date)" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "- **编译时长**: $((COMPILE_TIME / 60))分钟$((COMPILE_TIME % 60))秒" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "## 构建状态" >> "$GITHUB_WORKSPACE/构建报告.md"
+        cat > "$GITHUB_WORKSPACE/构建报告.md" << 'EOF'
+# OpenWrt 固件构建报告
+
+## 构建信息
+- **设备**: ${{ env.DEVICE_FULL_NAME }}
+- **平台**: ${{ env.PLATFORM }}
+- **版本**: ${{ env.SELECTED_REPO }} (${{ env.SELECTED_BRANCH }})
+- **配置类型**: ${{ github.event.inputs.config_type }}
+- **构建时间**: $(date)
+- **编译时长**: $((COMPILE_TIME / 60))分钟$((COMPILE_TIME % 60))秒
+
+## 构建状态
+EOF
         
         if [ -d "bin/targets" ]; then
             echo "✅ **构建状态**: 成功" >> "$GITHUB_WORKSPACE/构建报告.md"
@@ -1121,12 +1174,14 @@ EOF
             fi
         fi
         
-        echo "" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "## 刷机说明" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "1. 下载对应的固件文件" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "2. 进入路由器管理界面 → 系统 → 备份/升级" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "3. 选择固件文件进行刷机" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "4. 等待路由器重启完成" >> "$GITHUB_WORKSPACE/构建报告.md"
+        cat >> "$GITHUB_WORKSPACE/构建报告.md" << 'EOF'
+
+## 刷机说明
+1. 下载对应的固件文件
+2. 进入路由器管理界面 → 系统 → 备份/升级
+3. 选择固件文件进行刷机
+4. 等待路由器重启完成
+EOF
         
         echo "✅ 构建报告已生成"
 
