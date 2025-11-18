@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流（修复版）
+name: OpenWrt 智能固件构建工作流（完整优化版）
 
 on:
   workflow_dispatch:
@@ -46,9 +46,16 @@ on:
         required: false
         default: true
         type: boolean
+      enable_cache:
+        description: '启用编译缓存 (显著加速后续编译)'
+        required: false
+        default: true
+        type: boolean
 
 env:
   BUILD_DIR: /mnt/openwrt-build
+  MIRROR_SOURCE: "tuna"
+  CACHE_ENABLED: true
 
 jobs:
   build-firmware:
@@ -99,6 +106,7 @@ jobs:
         VERSION_SCRIPT=$(find . -name "complete_version_detector.sh" -type f | head -1)
         DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f | head -1)
         ERROR_SCRIPT=$(find . -name "error_analysis.sh" -type f | head -1)
+        PRE_DOWNLOAD_SCRIPT=$(find . -name "pre_download.sh" -type f | head -1)
         
         if [ -z "$VERSION_SCRIPT" ] || [ -z "$DEVICE_SCRIPT" ]; then
           echo "❌ 错误: 找不到必要的检测脚本"
@@ -117,9 +125,14 @@ jobs:
         else
           echo "⚠️ 警告: 未找到错误分析脚本，将使用内置版本"
         fi
+
+        if [ -n "$PRE_DOWNLOAD_SCRIPT" ]; then
+          echo "✅ 找到预下载脚本: $PRE_DOWNLOAD_SCRIPT"
+          cp "$PRE_DOWNLOAD_SCRIPT" $BUILD_DIR/pre_download.sh
+        fi
         
         cd $BUILD_DIR
-        chmod +x complete_version_detector.sh device_detection.sh error_analysis.sh 2>/dev/null || true
+        chmod +x complete_version_detector.sh device_detection.sh error_analysis.sh pre_download.sh 2>/dev/null || true
         echo "✅ 脚本复制完成"
 
     - name: 智能版本检测
@@ -179,6 +192,9 @@ jobs:
         cp $BUILD_DIR/device_detection.sh /tmp/build-scripts-backup/
         if [ -f "$BUILD_DIR/error_analysis.sh" ]; then
           cp $BUILD_DIR/error_analysis.sh /tmp/build-scripts-backup/
+        fi
+        if [ -f "$BUILD_DIR/pre_download.sh" ]; then
+          cp $BUILD_DIR/pre_download.sh /tmp/build-scripts-backup/
         fi
         echo "✅ 脚本备份完成"
 
@@ -257,7 +273,10 @@ jobs:
         if [ -f "/tmp/build-scripts-backup/error_analysis.sh" ]; then
           cp /tmp/build-scripts-backup/error_analysis.sh ./
         fi
-        chmod +x complete_version_detector.sh device_detection.sh error_analysis.sh 2>/dev/null || true
+        if [ -f "/tmp/build-scripts-backup/pre_download.sh" ]; then
+          cp /tmp/build-scripts-backup/pre_download.sh ./
+        fi
+        chmod +x complete_version_detector.sh device_detection.sh error_analysis.sh pre_download.sh 2>/dev/null || true
         echo "✅ 脚本恢复完成"
 
     - name: 重新复制配置文件和错误分析脚本
@@ -293,6 +312,14 @@ jobs:
           chmod +x $BUILD_DIR/error_analysis.sh
         else
           echo "⚠️ 警告: 未找到错误分析脚本，将使用备份版本"
+        fi
+
+        # 重新复制预下载脚本
+        PRE_DOWNLOAD_SCRIPT=$(find . -name "pre_download.sh" -type f | head -1)
+        if [ -n "$PRE_DOWNLOAD_SCRIPT" ]; then
+          echo "✅ 找到预下载脚本: $PRE_DOWNLOAD_SCRIPT"
+          cp "$PRE_DOWNLOAD_SCRIPT" $BUILD_DIR/pre_download.sh
+          chmod +x $BUILD_DIR/pre_download.sh
         fi
         
         echo "✅ 配置文件和脚本重新复制完成"
@@ -458,6 +485,17 @@ jobs:
             exit 1
         fi
         
+        # 强制启用必要的包
+        echo "# 强制启用基础包" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
+        
+        if [ "$CONFIG_TYPE" = "normal" ] || [ "$CONFIG_TYPE" = "custom" ]; then
+            echo "# 强制启用正常模式插件" >> .config
+            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
+        fi
+        
         if [ "$CONFIG_TYPE" = "custom" ] && [ -n "${{ github.event.inputs.extra_packages }}" ]; then
             echo "# 额外包配置" >> .config
             for pkg in ${{ github.event.inputs.extra_packages }}; do
@@ -593,6 +631,20 @@ jobs:
         
         echo "✅ 网络环境修复完成"
 
+    - name: 运行预下载脚本
+      run: |
+        cd $BUILD_DIR
+        echo "=== 运行预下载脚本 ==="
+        
+        if [ -f "pre_download.sh" ]; then
+            chmod +x pre_download.sh
+            echo "开始预下载常见依赖包..."
+            ./pre_download.sh
+            echo "✅ 预下载完成"
+        else
+            echo "⚠️ 未找到预下载脚本，跳过预下载步骤"
+        fi
+
     - name: 加强下载DL库并验证完整性
       run: |
         cd $BUILD_DIR
@@ -603,6 +655,34 @@ jobs:
         
         export GIT_SSL_NO_VERIFY=1
         export PYTHONHTTPSVERIFY=0
+        
+        # 设置国内镜像源
+        echo "=== 设置国内镜像源: $MIRROR_SOURCE ==="
+        case "$MIRROR_SOURCE" in
+            "tuna")
+                MIRROR_URL="https://mirrors.tuna.tsinghua.edu.cn/openwrt"
+                ;;
+            "ustc")
+                MIRROR_URL="https://mirrors.ustc.edu.cn/openwrt"
+                ;;
+            "tencent")
+                MIRROR_URL="https://mirrors.cloud.tencent.com/openwrt"
+                ;;
+            "huawei")
+                MIRROR_URL="https://mirrors.huaweicloud.com/openwrt"
+                ;;
+            *)
+                MIRROR_URL="https://mirrors.tuna.tsinghua.edu.cn/openwrt"
+                ;;
+        esac
+        
+        # 设置feeds.conf.default使用镜像
+        if [ -f "feeds.conf.default" ]; then
+            cp feeds.conf.default feeds.conf.default.backup
+            sed -i "s|https://github.com|$MIRROR_URL|g" feeds.conf.default
+            sed -i "s|git://github.com|$MIRROR_URL|g" feeds.conf.default
+            echo "✅ 已设置feeds镜像源"
+        fi
         
         MAX_DOWNLOAD_RETRIES=5
         RETRY_COUNT=0
@@ -731,26 +811,37 @@ jobs:
         
         export FORCE_UNSAFE_CONFIGURE=1
         
+        # 更保守的并行设置，避免内存不足
         AVAILABLE_CORES=$(nproc)
-        echo "可用CPU核心数: $AVAILABLE_CORES"
+        AVAILABLE_MEMORY_GB=$(free -g | awk 'NR==2{print $2}')
         
-        if [ $AVAILABLE_CORES -ge 8 ]; then
+        if [ $AVAILABLE_MEMORY_GB -ge 16 ] && [ $AVAILABLE_CORES -ge 8 ]; then
+            BUILD_JOBS=$((AVAILABLE_CORES - 3))
+            echo "✅ 高性能模式: 使用 $BUILD_JOBS 个并行任务 (内存: ${AVAILABLE_MEMORY_GB}G)"
+        elif [ $AVAILABLE_MEMORY_GB -ge 8 ] && [ $AVAILABLE_CORES -ge 4 ]; then
             BUILD_JOBS=$((AVAILABLE_CORES - 2))
-            echo "✅ 高性能模式: 使用 $BUILD_JOBS 个并行任务"
-        elif [ $AVAILABLE_CORES -ge 4 ]; then
-            BUILD_JOBS=$((AVAILABLE_CORES - 1))
-            echo "✅ 平衡模式: 使用 $BUILD_JOBS 个并行任务"
+            echo "✅ 平衡模式: 使用 $BUILD_JOBS 个并行任务 (内存: ${AVAILABLE_MEMORY_GB}G)"
         else
-            BUILD_JOBS=$AVAILABLE_CORES
-            echo "✅ 基础模式: 使用 $BUILD_JOBS 个并行任务"
+            BUILD_JOBS=2
+            echo "✅ 保守模式: 使用 $BUILD_JOBS 个并行任务 (内存: ${AVAILABLE_MEMORY_GB}G)"
         fi
         
-        echo "🚀 开始并行编译..."
+        echo "🚀 开始分阶段编译..."
         START_TIME=$(date +%s)
+        
+        # 分阶段编译，提高稳定性
+        echo "=== 阶段1: 编译工具链 ==="
+        make -j$BUILD_JOBS tools/compile V=s 2>&1 | tee -a build_detailed.log
+        
+        echo "=== 阶段2: 编译工具 ==="
+        make -j$BUILD_JOBS toolchain/compile V=s 2>&1 | tee -a build_detailed.log
+        
+        echo "=== 阶段3: 完整编译 ==="
         set +e
-        time make -j$BUILD_JOBS V=s 2>&1 | tee build_detailed.log
+        time make -j$BUILD_JOBS V=s 2>&1 | tee -a build_detailed.log
         COMPILE_EXIT_CODE=$?
         set -e
+        
         END_TIME=$(date +%s)
         
         COMPILE_TIME=$((END_TIME - START_TIME))
@@ -781,16 +872,136 @@ jobs:
             exit 1
         fi
 
-    - name: 运行错误分析
+    - name: 运行错误分析并自动修复
       if: always()
       run: |
         cd $BUILD_DIR
-        echo "=== 运行错误分析 ==="
+        echo "=== 运行错误分析并自动修复 ==="
+        
+        # 检查常见的下载失败包
+        if grep -q "csstidy.*404" build_detailed.log; then
+            echo "🔄 检测到csstidy下载失败，尝试手动修复..."
+            rm -f dl/csstidy* 2>/dev/null || true
+            wget -O dl/csstidy-fixed.tar.gz "https://gitee.com/mirrors/csstidy/repository/archive/707feaec556c40c999514a598b1a1ea5b50826c6.tar.gz" || true
+        fi
         
         if [ ! -f "error_analysis.sh" ]; then
             echo "创建基础错误分析脚本..."
-            # 创建基础错误分析脚本（内容与之前相同，这里省略以节省空间）
-            # ... 基础错误分析脚本内容 ...
+            cat > error_analysis.sh << 'EOF'
+#!/bin/bash
+set -e
+
+BUILD_DIR="${1:-.}"
+LOG_FILE="$BUILD_DIR/build_detailed.log"
+REPORT_FILE="$BUILD_DIR/error_analysis.log"
+
+echo "=== 固件构建错误分析报告 ===" > "$REPORT_FILE"
+echo "生成时间: $(date)" >> "$REPORT_FILE"
+echo "" >> "$REPORT_FILE"
+
+if [ ! -f "$LOG_FILE" ]; then
+    echo "❌ 错误: 找不到构建日志文件 $LOG_FILE" | tee -a "$REPORT_FILE"
+    exit 1
+fi
+
+echo "=== 构建结果摘要 ===" >> "$REPORT_FILE"
+if [ -d "$BUILD_DIR/bin/targets" ]; then
+    echo "✅ 构建状态: 成功" >> "$REPORT_FILE"
+    FIRMWARE_FILES=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null | wc -l)
+    echo "✅ 生成的固件文件: $FIRMWARE_FILES" >> "$REPORT_FILE"
+    find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null >> "$REPORT_FILE"
+else
+    echo "❌ 构建状态: 失败" >> "$REPORT_FILE"
+fi
+
+echo "" >> "$REPORT_FILE"
+echo "=== 关键错误检查 ===" >> "$REPORT_FILE"
+
+# 详细错误分类统计
+ERROR_COUNT=$(grep -c "error:" "$LOG_FILE" 2>/dev/null || true)
+WARNING_COUNT=$(grep -c "warning:" "$LOG_FILE" 2>/dev/null || true)
+CURL_404_COUNT=$(grep -c "curl.*404" "$LOG_FILE" 2>/dev/null || true)
+BROKEN_PIPE_COUNT=$(grep -c "Broken pipe" "$LOG_FILE" 2>/dev/null || true)
+DOWNLOAD_FAIL_COUNT=$(grep -c "Download failed" "$LOG_FILE" 2>/dev/null || true)
+
+echo "📊 错误统计:" >> "$REPORT_FILE"
+echo "- 编译错误: $ERROR_COUNT" >> "$REPORT_FILE"
+echo "- 警告: $WARNING_COUNT" >> "$REPORT_FILE"
+echo "- 网络错误: $CURL_404_COUNT" >> "$REPORT_FILE"
+echo "- 管道错误: $BROKEN_PIPE_COUNT" >> "$REPORT_FILE"
+echo "- 下载失败: $DOWNLOAD_FAIL_COUNT" >> "$REPORT_FILE"
+echo "" >> "$REPORT_FILE"
+
+if [ "$ERROR_COUNT" -gt 0 ]; then
+    echo "❌ 发现编译错误:" >> "$REPORT_FILE"
+    grep "error:" "$LOG_FILE" | head -10 | sed 's/^/  /' >> "$REPORT_FILE"
+else
+    echo "✅ 未发现严重编译错误" >> "$REPORT_FILE"
+fi
+
+if [ "$CURL_404_COUNT" -gt 0 ]; then
+    echo "❌ 发现网络下载错误:" >> "$REPORT_FILE"
+    grep "curl.*404" "$LOG_FILE" | head -5 | sed 's/^/  /' >> "$REPORT_FILE"
+fi
+
+echo "" >> "$REPORT_FILE"
+echo "=== 错误原因分析和建议 ===" >> "$REPORT_FILE"
+
+if [ "$CURL_404_COUNT" -gt 0 ]; then
+    echo "⚠️  网络下载错误" >> "$REPORT_FILE"
+    echo "💡 可能原因: 依赖包URL失效或网络问题" >> "$REPORT_FILE"
+    echo "💡 建议: " >> "$REPORT_FILE"
+    echo "  1. 使用国内镜像源加速下载" >> "$REPORT_FILE"
+    echo "  2. 手动预下载常见失败包" >> "$REPORT_FILE"
+    echo "  3. 检查网络连接稳定性" >> "$REPORT_FILE"
+fi
+
+if [ "$BROKEN_PIPE_COUNT" -gt 0 ]; then
+    echo "⚠️  管道错误" >> "$REPORT_FILE"
+    echo "💡 这是并行编译的正常现象，不影响最终结果" >> "$REPORT_FILE"
+fi
+
+if [ "$DOWNLOAD_FAIL_COUNT" -gt 0 ]; then
+    echo "⚠️  下载失败" >> "$REPORT_FILE"
+    echo "💡 建议检查以下常见包:" >> "$REPORT_FILE"
+    echo "  - csstidy" >> "$REPORT_FILE"
+    echo "  - lua-rsa" >> "$REPORT_FILE"
+    echo "  - 其他依赖包" >> "$REPORT_FILE"
+fi
+
+# 检查关键包是否编译成功
+echo "" >> "$REPORT_FILE"
+echo "=== 关键包编译状态 ===" >> "$REPORT_FILE"
+for pkg in "luci" "luci-base" "luci-theme-bootstrap" "luci-i18n-base-zh-cn"; do
+    if grep -q "Collecting package info: $pkg" "$LOG_FILE" && grep -q "Building $pkg" "$LOG_FILE"; then
+        echo "✅ $pkg: 编译成功" >> "$REPORT_FILE"
+    else
+        echo "❌ $pkg: 编译状态未知" >> "$REPORT_FILE"
+    fi
+done
+
+echo "" >> "$REPORT_FILE"
+echo "=== 性能优化建议 ===" >> "$REPORT_FILE"
+if [ "$ERROR_COUNT" -eq 0 ] && [ -d "$BUILD_DIR/bin/targets" ]; then
+    echo "✅ 构建成功，建议:" >> "$REPORT_FILE"
+    echo "  - 启用编译缓存减少下次构建时间" >> "$REPORT_FILE"
+    echo "  - 使用预下载的依赖包" >> "$REPORT_FILE"
+else
+    echo "⚠️ 构建存在问题，建议:" >> "$REPORT_FILE"
+    echo "  - 检查网络连接" >> "$REPORT_FILE"
+    echo "  - 减少并行编译任务数" >> "$REPORT_FILE"
+    echo "  - 使用更稳定的版本分支" >> "$REPORT_FILE"
+fi
+
+echo "✅ 错误分析完成" >> "$REPORT_FILE"
+
+# 显示关键摘要
+echo "=== 错误分析完成 ==="
+echo "详细报告请查看: $REPORT_FILE"
+echo ""
+echo "📋 关键摘要:"
+grep -E "❌|⚠️|✅|错误统计" "$REPORT_FILE" | head -15
+EOF
             chmod +x error_analysis.sh
             echo "✅ 已创建基础错误分析脚本"
         fi
@@ -870,12 +1081,27 @@ jobs:
             
             echo "" >> "$GITHUB_WORKSPACE/构建报告.md"
             echo "## 包含的功能" >> "$GITHUB_WORKSPACE/构建报告.md"
-            echo "- ✅ 中文界面支持" >> "$GITHUB_WORKSPACE/构建报告.md"
+            
+            # 动态检查实际包含的包
+            if grep -q "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" .config; then
+                echo "- ✅ 中文界面支持" >> "$GITHUB_WORKSPACE/构建报告.md"
+            else
+                echo "- ❌ 中文界面支持" >> "$GITHUB_WORKSPACE/构建报告.md"
+            fi
+            
             echo "- ✅ Bootstrap主题" >> "$GITHUB_WORKSPACE/构建报告.md"
             
             if [ "${{ github.event.inputs.config_type }}" = "normal" ] || [ "${{ github.event.inputs.config_type }}" = "custom" ]; then
-                echo "- ✅ TurboACC网络加速" >> "$GITHUB_WORKSPACE/构建报告.md"
-                echo "- ✅ SQM智能队列管理" >> "$GITHUB_WORKSPACE/构建报告.md"
+                if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+                    echo "- ✅ TurboACC网络加速" >> "$GITHUB_WORKSPACE/构建报告.md"
+                else
+                    echo "- ❌ TurboACC网络加速" >> "$GITHUB_WORKSPACE/构建报告.md"
+                fi
+                if grep -q "CONFIG_PACKAGE_luci-app-sqm=y" .config; then
+                    echo "- ✅ SQM智能队列管理" >> "$GITHUB_WORKSPACE/构建报告.md"
+                else
+                    echo "- ❌ SQM智能队列管理" >> "$GITHUB_WORKSPACE/构建报告.md"
+                fi
                 echo "- ✅ UPnP自动端口映射" >> "$GITHUB_WORKSPACE/构建报告.md"
             fi
             
