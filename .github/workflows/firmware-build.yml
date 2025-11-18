@@ -83,8 +83,7 @@ jobs:
       run: |
         echo "=== 安装编译依赖包 ==="
         sudo apt-get update
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential libncurses5-dev libssl-dev python3 unzip zlib1g-dev subversion gcc-multilib git curl file
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ninja-build automake autoconf libtool pkg-config gettext help2man texinfo gawk flex bison rsync wget aria2 python3-pip libelf-dev liblz4-dev zstd libssl-dev libcurl4-openssl-dev
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential libncurses5-dev libssl-dev python3 unzip zlib1g-dev subversion gcc-multilib git curl file ninja-build automake autoconf libtool pkg-config gettext help2man texinfo gawk flex bison rsync wget aria2 python3-pip libelf-dev liblz4-dev zstd libssl-dev libcurl4-openssl-dev groff texlive texinfo
         pip3 install requests urllib3
         echo "✅ 编译环境设置完成"
 
@@ -330,17 +329,21 @@ jobs:
         cd $BUILD_DIR
         echo "=== 智能设备检测与别名转换 ==="
         
-        declare -A DEVICE_ALIAS_MAP
-        DEVICE_ALIAS_MAP=(["ac42u"]="asus_rt-ac42u" ["acrh17"]="asus_rt-ac42u" ["rt-acrh17"]="asus_rt-ac42u" ["ac58u"]="asus_rt-ac58u" ["acrh13"]="asus_rt-ac58u" ["rt-ac58u"]="asus_rt-ac58u" ["rt-acrh13"]="asus_rt-ac58u" ["mi4a"]="xiaomi_mi-router-4a-gigabit" ["r4a"]="xiaomi_mi-router-4a-gigabit" ["mi3g"]="xiaomi_mi-router-3g" ["r3g"]="xiaomi_mi-router-3g")
-        
         INPUT_DEVICE="${{ github.event.inputs.device_name }}"
         echo "输入设备名称: $INPUT_DEVICE"
         
-        if [ -n "${DEVICE_ALIAS_MAP[$INPUT_DEVICE]}" ]; then
-          ACTUAL_DEVICE="${DEVICE_ALIAS_MAP[$INPUT_DEVICE]}"
+        # 设备别名映射
+        case "$INPUT_DEVICE" in
+            "ac42u"|"acrh17"|"rt-acrh17") ACTUAL_DEVICE="asus_rt-ac42u" ;;
+            "ac58u"|"acrh13"|"rt-ac58u"|"rt-acrh13") ACTUAL_DEVICE="asus_rt-ac58u" ;;
+            "mi4a"|"r4a") ACTUAL_DEVICE="xiaomi_mi-router-4a-gigabit" ;;
+            "mi3g"|"r3g") ACTUAL_DEVICE="xiaomi_mi-router-3g" ;;
+            *) ACTUAL_DEVICE="$INPUT_DEVICE" ;;
+        esac
+        
+        if [ "$ACTUAL_DEVICE" != "$INPUT_DEVICE" ]; then
           echo "✅ 检测到设备通用名称 '$INPUT_DEVICE'，转换为实际设备标识 '$ACTUAL_DEVICE'"
         else
-          ACTUAL_DEVICE="$INPUT_DEVICE"
           echo "ℹ️ 使用原始设备名称: $ACTUAL_DEVICE (未找到别名映射)"
         fi
         
@@ -516,6 +519,23 @@ jobs:
         
         echo "运行 make defconfig..."
         make defconfig
+        
+        echo "=== 强制启用关键软件包 ==="
+        # 基础Luci组件
+        sed -i 's/# CONFIG_PACKAGE_luci is not set/CONFIG_PACKAGE_luci=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci=y" >> .config
+        sed -i 's/# CONFIG_PACKAGE_luci-base is not set/CONFIG_PACKAGE_luci-base=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci-base=y" >> .config
+
+        # 中文语言包
+        sed -i 's/# CONFIG_PACKAGE_luci-i18n-base-zh-cn is not set/CONFIG_PACKAGE_luci-i18n-base-zh-cn=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
+        sed -i 's/# CONFIG_PACKAGE_luci-i18n-firewall-zh-cn is not set/CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
+
+        # 正常模式插件
+        if [ "$CONFIG_TYPE" = "normal" ] || [ "$CONFIG_TYPE" = "custom" ]; then
+            sed -i 's/# CONFIG_PACKAGE_luci-app-turboacc is not set/CONFIG_PACKAGE_luci-app-turboacc=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+            sed -i 's/# CONFIG_PACKAGE_luci-app-sqm is not set/CONFIG_PACKAGE_luci-app-sqm=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
+        fi
+
+        echo "✅ 关键软件包强制启用完成"
         
         echo "=== 最终配置验证 ==="
         if grep -q "^${CORRECT_DEVICE_CONFIG}=y" .config; then
@@ -694,6 +714,26 @@ jobs:
             # 检查是否有关键错误
             if grep -q "404" download_attempt_${RETRY_COUNT}.log; then
               echo "⚠️ 检测到404错误，尝试修复..."
+              
+              # 修复常见下载失败包
+              FAILED_PACKAGES=("csstidy" "groff" "lua-rsa")
+              for pkg in "${FAILED_PACKAGES[@]}"; do
+                  if grep -q "$pkg.*404" download_attempt_${RETRY_COUNT}.log 2>/dev/null; then
+                      echo "🔄 修复 $pkg 下载问题..."
+                      find dl -name "*${pkg}*" -delete 2>/dev/null || true
+                      
+                      # 尝试使用备用源
+                      case "$pkg" in
+                          "csstidy")
+                              wget -O dl/csstidy-fixed.tar.xz "https://gitee.com/mirrors/csstidy/repository/archive/707feaec556c40c999514a598b1a1ea5b50826c6.tar.gz" || true
+                              ;;
+                          "groff")
+                              wget -O dl/groff-fixed.tar.gz "https://ftp.gnu.org/gnu/groff/groff-1.22.4.tar.gz" || true
+                              ;;
+                      esac
+                  fi
+              done
+              
               # 记录失败的包
               FAILED_PACKAGES=$(grep "404" download_attempt_${RETRY_COUNT}.log | grep -oE '[a-zA-Z0-9_.-]+\.(tar\.|zip|gz|bz2)' | sort -u)
               if [ -n "$FAILED_PACKAGES" ]; then
@@ -736,7 +776,7 @@ jobs:
         
         # 验证关键文件
         echo "=== 验证关键文件 ==="
-        CRITICAL_FILES=("lz4", "zlib", "openssl", "libtool", "automake")
+        CRITICAL_FILES=("lz4" "zlib" "openssl" "libtool" "automake")
         for file in "${CRITICAL_FILES[@]}"; do
           if find dl -name "*${file}*" | grep -q .; then
             echo "✅ 找到关键文件: $file"
@@ -758,7 +798,7 @@ jobs:
         echo "=== 关键软件包配置状态 ==="
         
         # 基础软件包
-        for pkg in "luci", "luci-base", "luci-theme-bootstrap"; do
+        for pkg in "luci" "luci-base" "luci-theme-bootstrap"; do
           if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
             echo "✅ $pkg: 已启用"
           else
@@ -767,7 +807,7 @@ jobs:
         done
         
         # 中文语言包
-        for pkg in "luci-i18n-base-zh-cn", "luci-i18n-firewall-zh-cn"; do
+        for pkg in "luci-i18n-base-zh-cn" "luci-i18n-firewall-zh-cn"; do
           if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
             echo "✅ $pkg: 已启用"
           else
@@ -778,7 +818,7 @@ jobs:
         # 根据配置类型检查插件
         if [ "${{ github.event.inputs.config_type }}" = "normal" ] || [ "${{ github.event.inputs.config_type }}" = "custom" ]; then
           echo "=== 正常模式插件检查 ==="
-          for pkg in "luci-app-turboacc", "luci-app-sqm", "luci-app-upnp"; do
+          for pkg in "luci-app-turboacc" "luci-app-sqm" "luci-app-upnp"; do
             if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
               echo "✅ $pkg: 已启用"
             else
@@ -858,227 +898,104 @@ jobs:
             exit 1
         fi
 
-    - name: 运行错误分析并自动修复
+    - name: 运行错误分析
       if: always()
       run: |
         cd $BUILD_DIR
-        echo "=== 运行错误分析并自动修复 ==="
+        echo "=== 运行错误分析 ==="
         
-        # 检查常见的下载失败包
-        if grep -q "csstidy.*404" build_detailed.log; then
-            echo "🔄 检测到csstidy下载失败，尝试手动修复..."
-            rm -f dl/csstidy* 2>/dev/null || true
-            wget -O dl/csstidy-fixed.tar.gz "https://gitee.com/mirrors/csstidy/repository/archive/707feaec556c40c999514a598b1a1ea5b50826c6.tar.gz" || true
-        fi
+        # 使用多个echo命令创建增强版错误分析脚本
+        echo '#!/bin/bash' > enhanced_error_analysis.sh
+        echo 'set -e' >> enhanced_error_analysis.sh
+        echo '' >> enhanced_error_analysis.sh
+        echo 'BUILD_DIR="${1:-.}"' >> enhanced_error_analysis.sh
+        echo 'LOG_FILE="$BUILD_DIR/build_detailed.log"' >> enhanced_error_analysis.sh
+        echo 'REPORT_FILE="$BUILD_DIR/enhanced_error_analysis.log"' >> enhanced_error_analysis.sh
+        echo '' >> enhanced_error_analysis.sh
+        echo 'echo "=== 增强版固件构建错误分析报告 ===" > "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'echo "生成时间: $(date)" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'echo "" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '' >> enhanced_error_analysis.sh
+        echo '# 配置验证' >> enhanced_error_analysis.sh
+        echo 'echo "=== 配置验证结果 ===" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'if [ -f "$BUILD_DIR/.config" ]; then' >> enhanced_error_analysis.sh
+        echo '    for pkg in "luci" "luci-base" "luci-theme-bootstrap" "luci-i18n-base-zh-cn" "luci-i18n-firewall-zh-cn" "luci-app-turboacc" "luci-app-sqm" "luci-app-upnp"; do' >> enhanced_error_analysis.sh
+        echo '        if grep -q "CONFIG_PACKAGE_${pkg}=y" "$BUILD_DIR/.config"; then' >> enhanced_error_analysis.sh
+        echo '            echo "✅ $pkg: 已启用" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '        else' >> enhanced_error_analysis.sh
+        echo '            echo "❌ $pkg: 未启用" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '        fi' >> enhanced_error_analysis.sh
+        echo '    done' >> enhanced_error_analysis.sh
+        echo 'else' >> enhanced_error_analysis.sh
+        echo '    echo "❌ 配置文件不存在" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'fi' >> enhanced_error_analysis.sh
+        echo '' >> enhanced_error_analysis.sh
+        echo '# 错误分类统计' >> enhanced_error_analysis.sh
+        echo 'echo "" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'echo "=== 错误分类统计 ===" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '' >> enhanced_error_analysis.sh
+        echo 'ERROR_TYPES=("编译错误:error:" "警告:warning:" "网络错误:curl.*404" "Make错误:make.*Error" "文件缺失:No such file" "管道错误:Broken pipe" "依赖缺失:requires")' >> enhanced_error_analysis.sh
+        echo '' >> enhanced_error_analysis.sh
+        echo 'for error_type in "${ERROR_TYPES[@]}"; do' >> enhanced_error_analysis.sh
+        echo '    name="${error_type%:*}"' >> enhanced_error_analysis.sh
+        echo '    pattern="${error_type#*:}"' >> enhanced_error_analysis.sh
+        echo '    count=$(grep -c "$pattern" "$LOG_FILE" 2>/dev/null || echo "0")' >> enhanced_error_analysis.sh
+        echo '    echo "- $name: $count" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'done' >> enhanced_error_analysis.sh
+        echo '' >> enhanced_error_analysis.sh
+        echo '# 关键错误详情' >> enhanced_error_analysis.sh
+        echo 'echo "" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'echo "=== 关键错误详情 ===" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '' >> enhanced_error_analysis.sh
+        echo 'if grep -q "curl.*404" "$LOG_FILE" 2>/dev/null; then' >> enhanced_error_analysis.sh
+        echo '    echo "❌ 网络下载错误:" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '    grep "curl.*404" "$LOG_FILE" | head -5 | sed "s/^/  /" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'fi' >> enhanced_error_analysis.sh
+        echo '' >> enhanced_error_analysis.sh
+        echo 'if grep -q "groff.*fatal error" "$LOG_FILE" 2>/dev/null; then' >> enhanced_error_analysis.sh
+        echo '    echo "❌ 编译环境错误:" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '    grep "groff.*fatal error" "$LOG_FILE" | head -3 >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '    echo "💡 解决方案: 安装 groff 包: sudo apt-get install groff" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'fi' >> enhanced_error_analysis.sh
+        echo '' >> enhanced_error_analysis.sh
+        echo '# 构建结果总结' >> enhanced_error_analysis.sh
+        echo 'echo "" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'echo "=== 构建结果总结 ===" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'if [ -d "$BUILD_DIR/bin/targets" ]; then' >> enhanced_error_analysis.sh
+        echo '    echo "✅ 构建状态: 成功" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '    echo "✅ 生成的固件:" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '    find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'else' >> enhanced_error_analysis.sh
+        echo '    echo "❌ 构建状态: 失败" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'fi' >> enhanced_error_analysis.sh
+        echo '' >> enhanced_error_analysis.sh
+        echo '# 修复建议' >> enhanced_error_analysis.sh
+        echo 'echo "" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'echo "=== 修复建议 ===" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '' >> enhanced_error_analysis.sh
+        echo 'if grep -q "luci.*未启用" "$REPORT_FILE"; then' >> enhanced_error_analysis.sh
+        echo '    echo "🔧 Luci组件未启用修复:" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '    echo "  1. 检查配置文件中 Luci 相关选项" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '    echo "  2. 确保在 make defconfig 后手动启用" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '    echo "  3. 使用 sed 命令强制启用: sed -i '"'"'s/# CONFIG_PACKAGE_luci is not set/CONFIG_PACKAGE_luci=y/'"'"' .config" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'fi' >> enhanced_error_analysis.sh
+        echo '' >> enhanced_error_analysis.sh
+        echo 'if grep -q "curl.*404" "$LOG_FILE" 2>/dev/null; then' >> enhanced_error_analysis.sh
+        echo '    echo "🔧 网络下载问题修复:" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '    echo "  1. 使用国内镜像源" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '    echo "  2. 手动预下载失败包" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '    echo "  3. 增加下载重试次数" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'fi' >> enhanced_error_analysis.sh
+        echo '' >> enhanced_error_analysis.sh
+        echo 'echo "✅ 错误分析完成" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
         
-        if [ ! -f "error_analysis.sh" ]; then
-            echo "创建基础错误分析脚本..."
-            # 使用多个echo命令创建错误分析脚本
-            echo '#!/bin/bash' > error_analysis.sh
-            echo 'set -e' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo 'BUILD_DIR="${1:-.}"' >> error_analysis.sh
-            echo 'LOG_FILE="$BUILD_DIR/build_detailed.log"' >> error_analysis.sh
-            echo 'REPORT_FILE="$BUILD_DIR/error_analysis.log"' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo 'echo "=== 固件构建错误分析报告 ===" > "$REPORT_FILE"' >> error_analysis.sh
-            echo 'echo "生成时间: $(date)" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'echo "" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo 'if [ ! -f "$LOG_FILE" ]; then' >> error_analysis.sh
-            echo '    echo "❌ 错误: 找不到构建日志文件 $LOG_FILE" | tee -a "$REPORT_FILE"' >> error_analysis.sh
-            echo '    exit 1' >> error_analysis.sh
-            echo 'fi' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo 'echo "=== 构建结果摘要 ===" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'if [ -d "$BUILD_DIR/bin/targets" ]; then' >> error_analysis.sh
-            echo '    echo "✅ 构建状态: 成功" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    FIRMWARE_FILES=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null | wc -l)' >> error_analysis.sh
-            echo '    echo "✅ 生成的固件文件: $FIRMWARE_FILES" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    if [ $FIRMWARE_FILES -gt 0 ]; then' >> error_analysis.sh
-            echo '        find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    fi' >> error_analysis.sh
-            echo 'else' >> error_analysis.sh
-            echo '    echo "❌ 构建状态: 失败" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'fi' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo 'echo "" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'echo "=== 关键错误检查 ===" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo '# 详细错误分类统计' >> error_analysis.sh
-            echo 'ERROR_COUNT=$(grep -c "error:" "$LOG_FILE" 2>/dev/null || true)' >> error_analysis.sh
-            echo 'WARNING_COUNT=$(grep -c "warning:" "$LOG_FILE" 2>/dev/null || true)' >> error_analysis.sh
-            echo 'CURL_404_COUNT=$(grep -c "curl.*404" "$LOG_FILE" 2>/dev/null || true)' >> error_analysis.sh
-            echo 'BROKEN_PIPE_COUNT=$(grep -c "Broken pipe" "$LOG_FILE" 2>/dev/null || true)' >> error_analysis.sh
-            echo 'DOWNLOAD_FAIL_COUNT=$(grep -c "Download failed" "$LOG_FILE" 2>/dev/null || true)' >> error_analysis.sh
-            echo 'MAKE_ERROR_COUNT=$(grep -c "make.*Error" "$LOG_FILE" 2>/dev/null || true)' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo 'echo "📊 错误统计:" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'echo "- 编译错误: $ERROR_COUNT" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'echo "- 警告: $WARNING_COUNT" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'echo "- 网络404错误: $CURL_404_COUNT" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'echo "- 管道错误: $BROKEN_PIPE_COUNT" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'echo "- 下载失败: $DOWNLOAD_FAIL_COUNT" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'echo "- Make错误: $MAKE_ERROR_COUNT" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'echo "" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo '# 严重错误详情' >> error_analysis.sh
-            echo 'if [ "$ERROR_COUNT" -gt 0 ]; then' >> error_analysis.sh
-            echo '    echo "❌ 发现编译错误:" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    grep "error:" "$LOG_FILE" | head -15 | sed "s/^/  /" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'else' >> error_analysis.sh
-            echo '    echo "✅ 未发现严重编译错误" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'fi' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo '# 网络错误详情' >> error_analysis.sh
-            echo 'if [ "$CURL_404_COUNT" -gt 0 ]; then' >> error_analysis.sh
-            echo '    echo "❌ 发现网络下载错误:" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    grep "curl.*404" "$LOG_FILE" | head -10 | sed "s/^/  /" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'fi' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo '# Make错误详情' >> error_analysis.sh
-            echo 'if [ "$MAKE_ERROR_COUNT" -gt 0 ]; then' >> error_analysis.sh
-            echo '    echo "❌ 发现Make执行错误:" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    grep "make.*Error" "$LOG_FILE" | head -10 | sed "s/^/  /" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'fi' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo 'echo "=== 错误原因分析和建议 ===" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo 'if [ "$CURL_404_COUNT" -gt 0 ]; then' >> error_analysis.sh
-            echo '    echo "⚠️  网络下载错误" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "💡 可能原因: 依赖包URL失效或网络问题" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "💡 建议解决方案:" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "  1. 使用国内镜像源加速下载" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "  2. 手动预下载常见失败包" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "  3. 检查网络连接稳定性" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "  4. 使用预下载脚本提前下载" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'fi' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo 'if [ "$BROKEN_PIPE_COUNT" -gt 0 ]; then' >> error_analysis.sh
-            echo '    echo "⚠️  管道错误" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "💡 这是并行编译的正常现象，不影响最终结果" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "💡 建议: 可以忽略这些错误" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'fi' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo 'if [ "$DOWNLOAD_FAIL_COUNT" -gt 0 ]; then' >> error_analysis.sh
-            echo '    echo "⚠️  下载失败" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "💡 常见失败包和解决方案:" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "  - csstidy: 使用Gitee镜像或预下载版本" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "  - lua-rsa: 检查版本兼容性" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "  - 其他依赖包: 使用完整预下载脚本" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'fi' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo 'if [ "$MAKE_ERROR_COUNT" -gt 0 ]; then' >> error_analysis.sh
-            echo '    echo "⚠️  Make执行错误" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "💡 可能原因:" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "  - 依赖关系问题" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "  - 编译环境不完整" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "  - 资源不足（内存/磁盘）" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "💡 建议: 检查系统资源，清理后重新编译" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'fi' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo '# 检查关键包编译状态' >> error_analysis.sh
-            echo 'echo "=== 关键包编译状态 ===" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'KEY_PACKAGES=("luci", "luci-base", "luci-theme-bootstrap", "luci-i18n-base-zh-cn", "firewall", "dnsmasq")' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo 'for pkg in "${KEY_PACKAGES[@]}"; do' >> error_analysis.sh
-            echo '    if grep -q "Building package $pkg" "$LOG_FILE" || grep -q "collect2.*$pkg" "$LOG_FILE"; then' >> error_analysis.sh
-            echo '        if grep -q "error.*$pkg" "$LOG_FILE"; then' >> error_analysis.sh
-            echo '            echo "❌ $pkg: 编译失败" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '        else' >> error_analysis.sh
-            echo '            echo "✅ $pkg: 编译成功" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '        fi' >> error_analysis.sh
-            echo '    else' >> error_analysis.sh
-            echo '        echo "⚪ $pkg: 未找到编译记录" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    fi' >> error_analysis.sh
-            echo 'done' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo 'echo "" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo '# 性能统计' >> error_analysis.sh
-            echo 'echo "=== 性能统计 ===" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'START_TIME=$(grep "编译开始时间" "$LOG_FILE" | head -1 | cut -d":" -f2- || echo "未知")' >> error_analysis.sh
-            echo 'END_TIME=$(date)' >> error_analysis.sh
-            echo 'echo "- 开始时间: $START_TIME" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'echo "- 结束时间: $END_TIME" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo 'if grep -q "总编译时间" "$LOG_FILE"; then' >> error_analysis.sh
-            echo '    COMPILE_TIME=$(grep "总编译时间" "$LOG_FILE" | head -1)' >> error_analysis.sh
-            echo '    echo "- $COMPILE_TIME" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'fi' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo 'echo "" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo '# 优化建议' >> error_analysis.sh
-            echo 'echo "=== 优化建议 ===" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'if [ "$ERROR_COUNT" -eq 0 ] && [ -d "$BUILD_DIR/bin/targets" ]; then' >> error_analysis.sh
-            echo '    echo "✅ 构建成功，优化建议:" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "  - 启用编译缓存减少下次构建时间" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "  - 使用预下载的依赖包加速下载" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "  - 考虑使用增量编译" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'else' >> error_analysis.sh
-            echo '    echo "⚠️ 构建存在问题，解决建议:" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "  - 检查网络连接和代理设置" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "  - 减少并行编译任务数" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "  - 使用更稳定的版本分支" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "  - 清理构建目录重新开始" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '    echo "  - 增加系统资源（内存/磁盘）" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'fi' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo 'echo "" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'echo "=== 详细日志位置 ===" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'echo "完整构建日志: $LOG_FILE" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo 'echo "错误分析报告: $REPORT_FILE" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo 'echo "✅ 错误分析完成" >> "$REPORT_FILE"' >> error_analysis.sh
-            echo '' >> error_analysis.sh
-            echo '# 显示关键摘要' >> error_analysis.sh
-            echo 'echo "=== 错误分析完成 ==="' >> error_analysis.sh
-            echo 'echo "详细报告请查看: $REPORT_FILE"' >> error_analysis.sh
-            echo 'echo ""' >> error_analysis.sh
-            echo 'echo "📋 关键摘要:"' >> error_analysis.sh
-            echo 'grep -E "❌|⚠️|✅|错误统计|构建状态" "$REPORT_FILE" | head -10' >> error_analysis.sh
-            echo 'echo ""' >> error_analysis.sh
-            echo 'echo "💡 建议:"' >> error_analysis.sh
-            echo 'grep -A2 "优化建议" "$REPORT_FILE" | tail -3' >> error_analysis.sh
-            
-            chmod +x error_analysis.sh
-            echo "✅ 已创建基础错误分析脚本"
-        fi
+        chmod +x enhanced_error_analysis.sh
+        ./enhanced_error_analysis.sh "$BUILD_DIR"
         
-        if [ -f "error_analysis.sh" ] && [ -f "build_detailed.log" ]; then
-            chmod +x error_analysis.sh
-            echo "开始错误分析..."
-            ./error_analysis.sh "$BUILD_DIR"
-            echo "✅ 错误分析完成"
-            
-            if [ -f "error_analysis.log" ]; then
-                echo "=== 关键错误摘要 ==="
-                grep -E "❌|⚠️|✅" error_analysis.log | head -10
-            fi
-        else
-            echo "⚠️ 错误分析条件不满足"
-            if [ -f "build_detailed.log" ]; then
-                echo "=== 基础错误检查 ==="
-                ERROR_COUNT=$(grep -c "error:" build_detailed.log || true)
-                WARNING_COUNT=$(grep -c "warning:" build_detailed.log || true)
-                echo "错误数量: $ERROR_COUNT"
-                echo "警告数量: $WARNING_COUNT"
-                
-                if [ $ERROR_COUNT -gt 0 ]; then
-                    echo "❌ 发现编译错误"
-                    grep "error:" build_detailed.log | head -5
-                else
-                    echo "✅ 未发现严重编译错误"
-                fi
-            fi
+        # 显示关键信息
+        if [ -f "enhanced_error_analysis.log" ]; then
+            echo "=== 关键错误摘要 ==="
+            grep -E "❌|✅|💡|🔧" enhanced_error_analysis.log | head -20
         fi
 
     - name: 验证固件生成
@@ -1253,7 +1170,7 @@ jobs:
         path: |
           ${{ env.BUILD_DIR }}/.config
           ${{ env.BUILD_DIR }}/build_detailed.log
-          ${{ env.BUILD_DIR }}/error_analysis.log
+          ${{ env.BUILD_DIR }}/enhanced_error_analysis.log
           ${{ env.BUILD_DIR }}/download_attempt_*.log
           $GITHUB_WORKSPACE/构建报告.md
         retention-days: 7
