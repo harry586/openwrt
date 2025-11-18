@@ -1,5 +1,5 @@
 #!/bin/bash
-# check-plugins.sh - 智能检查插件可用性，支持包名映射
+# check-plugins.sh - 智能检查插件可用性，支持包名映射（修复版）
 
 set -e
 
@@ -24,57 +24,63 @@ PACKAGES=$(grep "^CONFIG_PACKAGE_" "$CONFIG_FILE" | grep "=y$" | sed 's/CONFIG_P
 
 echo "在 $CONFIG_FILE 中启用的包数量: $(echo "$PACKAGES" | wc -l)"
 
-# 包名映射表（功能相同但名称不同的包）
-declare -A PKG_MAPPING=(
-    # 内核模块映射
-    ["kmod-usb-storage"]="kmod-usb-storage"
-    ["kmod-usb-storage-uas"]="kmod-usb-storage-uas"
-    ["kmod-usb2"]="kmod-usb2"
-    ["kmod-usb3"]="kmod-usb3"
-    ["kmod-fs-ext4"]="kmod-fs-ext4"
-    ["kmod-fs-vfat"]="kmod-fs-vfat"
-    ["kmod-fs-ntfs"]="kmod-fs-ntfs"
-    ["kmod-fs-exfat"]="kmod-fs-exfat"
-    ["kmod-ip6tables"]="kmod-ipt6"
-    ["kmod-nf-ipt6"]="kmod-ipt6"
-    ["kmod-ipt-extra"]="kmod-ipt-extra"
-    ["kmod-ipt-offload"]="kmod-ipt-offload"
-    ["kmod-nf-nathelper"]="kmod-nf-nathelper"
-    ["kmod-nf-nathelper-extra"]="kmod-nf-nathelper-extra"
-    
-    # 基础工具映射
-    ["fdisk"]="fdisk"
-    ["lsblk"]="lsblk"
-    ["blkid"]="blkid"
-    ["block-mount"]="block-mount"
-    ["e2fsprogs"]="e2fsprogs"
-    
-    # 核心服务映射
-    ["firewall"]="firewall"
-    ["dnsmasq"]="dnsmasq"
-    ["dnsmasq-dhcpv6"]="dnsmasq-full"
-    ["odhcpd"]="odhcpd"
-    ["odhcp6c"]="odhcp6c"
-    ["ipv6helper"]="ipv6helper"
-    
-    # 网络相关映射
-    ["wpad-openssl"]="wpad-basic"
-    ["hostapd-common"]="hostapd"
-    ["hostapd-utils"]="hostapd-utils"
-    
-    # 库文件映射
-    ["libstdcpp"]="libstdcpp"
-    ["libpthread"]="libpthread"
-    ["librt"]="librt"
-    ["libatomic"]="libatomic"
-    ["libopenssl"]="libopenssl"
-    
-    # Luci应用映射
-    ["luci-app-turboacc"]="luci-app-turboacc"
-    ["luci-i18n-turboacc-zh-cn"]="luci-i18n-turboacc-zh-cn"
-    ["luci-app-accesscontrol"]="luci-app-accesscontrol"
-    ["luci-i18n-accesscontrol-zh-cn"]="luci-i18n-accesscontrol-zh-cn"
-)
+# 包名映射函数
+map_package() {
+    local pkg="$1"
+    case "$pkg" in
+        # 内核模块映射
+        kmod-usb-storage) echo "kmod-usb-storage" ;;
+        kmod-usb-storage-uas) echo "kmod-usb-storage-uas" ;;
+        kmod-usb2) echo "kmod-usb2" ;;
+        kmod-usb3) echo "kmod-usb3" ;;
+        kmod-fs-ext4) echo "kmod-fs-ext4" ;;
+        kmod-fs-vfat) echo "kmod-fs-vfat" ;;
+        kmod-fs-ntfs) echo "kmod-fs-ntfs" ;;
+        kmod-fs-exfat) echo "kmod-fs-exfat" ;;
+        kmod-ip6tables) echo "kmod-ipt6" ;;
+        kmod-nf-ipt6) echo "kmod-ipt6" ;;
+        kmod-ipt-extra) echo "kmod-ipt-extra" ;;
+        kmod-ipt-offload) echo "kmod-ipt-offload" ;;
+        kmod-nf-nathelper) echo "kmod-nf-nathelper" ;;
+        kmod-nf-nathelper-extra) echo "kmod-nf-nathelper-extra" ;;
+        
+        # 基础工具映射
+        fdisk) echo "fdisk" ;;
+        lsblk) echo "lsblk" ;;
+        blkid) echo "blkid" ;;
+        block-mount) echo "block-mount" ;;
+        e2fsprogs) echo "e2fsprogs" ;;
+        
+        # 核心服务映射
+        firewall) echo "firewall" ;;
+        dnsmasq) echo "dnsmasq" ;;
+        dnsmasq-dhcpv6) echo "dnsmasq-full" ;;
+        odhcpd) echo "odhcpd" ;;
+        odhcp6c) echo "odhcp6c" ;;
+        ipv6helper) echo "ipv6helper" ;;
+        
+        # 网络相关映射
+        wpad-openssl) echo "wpad-basic" ;;
+        hostapd-common) echo "hostapd" ;;
+        hostapd-utils) echo "hostapd-utils" ;;
+        
+        # 库文件映射
+        libstdcpp) echo "libstdcpp" ;;
+        libpthread) echo "libpthread" ;;
+        librt) echo "librt" ;;
+        libatomic) echo "libatomic" ;;
+        libopenssl) echo "libopenssl" ;;
+        
+        # Luci应用映射
+        luci-app-turboacc) echo "luci-app-turboacc" ;;
+        luci-i18n-turboacc-zh-cn) echo "luci-i18n-turboacc-zh-cn" ;;
+        luci-app-accesscontrol) echo "luci-app-accesscontrol" ;;
+        luci-i18n-accesscontrol-zh-cn) echo "luci-i18n-accesscontrol-zh-cn" ;;
+        
+        # 默认情况
+        *) echo "$pkg" ;;
+    esac
+}
 
 # 检查每个包是否在feeds中
 MISSING_PACKAGES=()
@@ -108,7 +114,7 @@ check_package_availability() {
         for variant in "${variants[@]}"; do
             if ./scripts/feeds list | grep -q "^$variant"; then
                 ALTERNATIVE_PACKAGES+=("$original_pkg→$variant")
-                echo "🔄 $original_pkg → $variant (替代包)")
+                echo "🔄 $original_pkg → $variant (替代包)"
                 return 0
             fi
         done
@@ -122,12 +128,9 @@ check_package_availability() {
 
 echo "=== 开始检查包可用性 ==="
 for pkg in $PACKAGES; do
-    # 使用映射表查找对应的包名
-    if [ -n "${PKG_MAPPING[$pkg]}" ]; then
-        check_package_availability "$pkg" "${PKG_MAPPING[$pkg]}"
-    else
-        check_package_availability "$pkg" "$pkg"
-    fi
+    # 使用映射函数查找对应的包名
+    mapped_pkg=$(map_package "$pkg")
+    check_package_availability "$pkg" "$mapped_pkg"
 done
 
 echo ""
