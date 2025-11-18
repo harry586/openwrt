@@ -107,6 +107,7 @@ jobs:
         ERROR_SCRIPT=$(find . -name "error_analysis.sh" -type f | head -1)
         PRE_DOWNLOAD_SCRIPT=$(find . -name "pre_download.sh" -type f | head -1)
         CHECK_PLUGINS_SCRIPT=$(find . -name "check-plugins.sh" -type f | head -1)
+        DIAGNOSE_SCRIPT=$(find . -name "diagnose-packages.sh" -type f | head -1)
         
         if [ -z "$VERSION_SCRIPT" ] || [ -z "$DEVICE_SCRIPT" ]; then
           echo "❌ 错误: 找不到必要的检测脚本"
@@ -133,12 +134,18 @@ jobs:
           echo "✅ 找到插件检查脚本: $CHECK_PLUGINS_SCRIPT"
           cp "$CHECK_PLUGINS_SCRIPT" $BUILD_DIR/check-plugins.sh
         fi
+
+        if [ -n "$DIAGNOSE_SCRIPT" ]; then
+          echo "✅ 找到包诊断脚本: $DIAGNOSE_SCRIPT"
+          cp "$DIAGNOSE_SCRIPT" $BUILD_DIR/diagnose-packages.sh
+        fi
         
         cd $BUILD_DIR
         chmod +x complete_version_detector.sh device_detection.sh
         if [ -f "error_analysis.sh" ]; then chmod +x error_analysis.sh; fi
         if [ -f "pre_download.sh" ]; then chmod +x pre_download.sh; fi
         if [ -f "check-plugins.sh" ]; then chmod +x check-plugins.sh; fi
+        if [ -f "diagnose-packages.sh" ]; then chmod +x diagnose-packages.sh; fi
         echo "✅ 脚本复制完成"
 
     - name: 智能版本检测
@@ -204,6 +211,9 @@ jobs:
         fi
         if [ -f "$BUILD_DIR/check-plugins.sh" ]; then
           cp $BUILD_DIR/check-plugins.sh /tmp/build-scripts-backup/
+        fi
+        if [ -f "$BUILD_DIR/diagnose-packages.sh" ]; then
+          cp $BUILD_DIR/diagnose-packages.sh /tmp/build-scripts-backup/
         fi
         echo "✅ 脚本备份完成"
 
@@ -288,10 +298,14 @@ jobs:
         if [ -f "/tmp/build-scripts-backup/check-plugins.sh" ]; then
           cp /tmp/build-scripts-backup/check-plugins.sh ./
         fi
+        if [ -f "/tmp/build-scripts-backup/diagnose-packages.sh" ]; then
+          cp /tmp/build-scripts-backup/diagnose-packages.sh ./
+        fi
         chmod +x complete_version_detector.sh device_detection.sh
         if [ -f "error_analysis.sh" ]; then chmod +x error_analysis.sh; fi
         if [ -f "pre_download.sh" ]; then chmod +x pre_download.sh; fi
         if [ -f "check-plugins.sh" ]; then chmod +x check-plugins.sh; fi
+        if [ -f "diagnose-packages.sh" ]; then chmod +x diagnose-packages.sh; fi
         echo "✅ 脚本恢复完成"
 
     - name: 重新复制配置文件和错误分析脚本
@@ -341,6 +355,14 @@ jobs:
           echo "✅ 找到插件检查脚本: $CHECK_PLUGINS_SCRIPT"
           cp "$CHECK_PLUGINS_SCRIPT" $BUILD_DIR/check-plugins.sh
           chmod +x $BUILD_DIR/check-plugins.sh
+        fi
+
+        # 重新复制包诊断脚本
+        DIAGNOSE_SCRIPT=$(find . -name "diagnose-packages.sh" -type f | head -1)
+        if [ -n "$DIAGNOSE_SCRIPT" ]; then
+          echo "✅ 找到包诊断脚本: $DIAGNOSE_SCRIPT"
+          cp "$DIAGNOSE_SCRIPT" $BUILD_DIR/diagnose-packages.sh
+          chmod +x $BUILD_DIR/diagnose-packages.sh
         fi
         
         echo "✅ 配置文件和脚本重新复制完成"
@@ -444,18 +466,41 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 检查插件可用性
+    - name: 智能检查插件可用性
       run: |
         cd $BUILD_DIR
-        echo "=== 检查插件可用性 ==="
+        echo "=== 智能检查插件可用性 ==="
         
         if [ -f "check-plugins.sh" ]; then
             chmod +x check-plugins.sh
-            echo "开始检查插件在feeds中的可用性..."
-            ./check-plugins.sh "$BUILD_DIR"
-            echo "✅ 插件检查完成"
+            echo "开始智能检查插件在feeds中的可用性..."
+            if ./check-plugins.sh "$BUILD_DIR"; then
+                echo "✅ 插件检查完成 - 所有包都可用"
+            else
+                CHECK_EXIT_CODE=$?
+                if [ $CHECK_EXIT_CODE -eq 1 ]; then
+                    echo "❌ 插件检查失败 - 有关键包缺失"
+                    exit 1
+                else
+                    echo "⚠️ 插件检查完成 - 有非关键包缺失，但继续构建..."
+                fi
+            fi
         else
             echo "⚠️ 未找到插件检查脚本，跳过插件检查"
+        fi
+
+    - name: 包可用性诊断
+      run: |
+        cd $BUILD_DIR
+        echo "=== 包可用性诊断 ==="
+        
+        if [ -f "diagnose-packages.sh" ]; then
+            chmod +x diagnose-packages.sh
+            echo "开始诊断包可用性..."
+            ./diagnose-packages.sh "$BUILD_DIR"
+            echo "✅ 包诊断完成"
+        else
+            echo "⚠️ 未找到包诊断脚本，跳过诊断"
         fi
 
     - name: 使用外部配置文件进行配置
