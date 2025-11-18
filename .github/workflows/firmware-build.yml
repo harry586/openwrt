@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流（完整修复版）
+name: OpenWrt 智能固件构建工作流（YAML修复版）
 
 on:
   workflow_dispatch:
@@ -99,15 +99,8 @@ jobs:
         echo "=== 复制脚本到构建目录 ==="
         cd $GITHUB_WORKSPACE
         
-        # 修复数组定义 - 使用正确的YAML数组格式
-        SCRIPTS=(
-          "complete_version_detector.sh"
-          "device_detection.sh" 
-          "error_analysis.sh"
-          "pre_download.sh"
-          "check-plugins.sh"
-          "diagnose-packages.sh"
-        )
+        # 修复数组定义 - 一行内完成
+        SCRIPTS=("complete_version_detector.sh" "device_detection.sh" "error_analysis.sh" "pre_download.sh" "check-plugins.sh" "diagnose-packages.sh")
         
         echo "要复制的脚本列表: ${SCRIPTS[@]}"
         echo "当前工作目录: $(pwd)"
@@ -117,7 +110,6 @@ jobs:
         COPIED_COUNT=0
         for script in "${SCRIPTS[@]}"; do
           echo "正在查找: $script"
-          # 使用find命令在整个仓库中查找脚本
           FOUND_SCRIPT=$(find . -name "$script" -type f | head -1)
           if [ -n "$FOUND_SCRIPT" ]; then
             cp "$FOUND_SCRIPT" $BUILD_DIR/
@@ -163,26 +155,21 @@ jobs:
           exit 1
         fi
 
-    - name: 智能版本检测（稳定版优先）
+    - name: 智能版本检测
       id: version-detection
       run: |
         cd $BUILD_DIR
-        echo "=== 智能版本检测（稳定版优先） ==="
-        
-        # 确保权限正确
+        echo "=== 智能版本检测 ==="
         sudo chown -R $USER:$USER . 2>/dev/null || true
         chmod u+w . 2>/dev/null || true
         chmod +x *.sh 2>/dev/null || true
         
-        echo "=== 开始版本检测 ==="
         echo "设备名称: ${{ github.event.inputs.device_name }}"
         echo "版本规格: ${{ github.event.inputs.version_spec }}"
         echo "老旧设备: ${{ github.event.inputs.old_device }}"
         
-        # 验证脚本存在且可执行
         if [ ! -f "complete_version_detector.sh" ]; then
           echo "❌ 错误: complete_version_detector.sh 不存在"
-          echo "当前目录文件:"
           ls -la
           exit 1
         fi
@@ -198,7 +185,6 @@ jobs:
         echo "$OUTPUT"
         echo "脚本退出代码: $SCRIPT_EXIT_CODE"
         
-        # 提取版本信息
         SELECTED_REPO=$(echo "$OUTPUT" | grep "^SELECTED_REPO=" | head -1 | cut -d'=' -f2)
         SELECTED_BRANCH=$(echo "$OUTPUT" | grep "^SELECTED_BRANCH=" | head -1 | cut -d'=' -f2)
         SELECTED_REPO_URL=$(echo "$OUTPUT" | grep "^SELECTED_REPO_URL=" | head -1 | cut -d'=' -f2)
@@ -226,26 +212,24 @@ jobs:
             fi
         fi
 
-    - name: 备份检测脚本到临时目录
+    - name: 备份检测脚本
       run: |
-        echo "=== 备份检测脚本到临时目录 ==="
+        echo "=== 备份检测脚本 ==="
         mkdir -p /tmp/build-scripts-backup
         cp $BUILD_DIR/*.sh /tmp/build-scripts-backup/ 2>/dev/null || true
         echo "✅ 脚本备份完成"
 
-    - name: 清理构建目录准备克隆
+    - name: 清理构建目录
       run: |
         cd $BUILD_DIR
         echo "=== 清理构建目录准备克隆 ==="
-        echo "当前目录内容:"
         ls -la
         sudo rm -rf ./* ./.git* 2>/dev/null || true
         sudo rm -rf .[!.]* 2>/dev/null || true
-        echo "清理后目录内容:"
         ls -la
         echo "✅ 目录清理完成"
 
-    - name: 克隆选定版本的源码
+    - name: 克隆源码
       run: |
         cd $BUILD_DIR
         echo "=== 克隆选定版本的源码 ==="
@@ -274,7 +258,6 @@ jobs:
           
           if git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .; then
             echo "✅ 源码克隆完成"
-            echo "✅ 成功克隆仓库: $SELECTED_REPO, 分支: $SELECTED_BRANCH"
             CLONE_SUCCESS=true
           else
             echo "❌ 克隆失败，尝试 $RETRY_COUNT/$MAX_RETRIES"
@@ -307,7 +290,7 @@ jobs:
         chmod +x *.sh
         echo "✅ 脚本恢复完成"
 
-    - name: 重新复制配置文件和脚本
+    - name: 复制配置文件和脚本
       run: |
         cd $BUILD_DIR
         echo "=== 重新复制配置文件和脚本 ==="
@@ -329,7 +312,6 @@ jobs:
         
         echo "✅ 配置文件复制完成"
         
-        # 重新复制所有脚本（如果仓库中有更新）
         SCRIPTS=("error_analysis.sh" "pre_download.sh" "check-plugins.sh" "diagnose-packages.sh")
         for script in "${SCRIPTS[@]}"; do
           FOUND_SCRIPT=$(find . -name "$script" -type f | head -1)
@@ -342,7 +324,7 @@ jobs:
         
         echo "✅ 配置文件和脚本重新复制完成"
 
-    - name: 智能设备检测与别名转换
+    - name: 设备检测
       id: device-detection
       run: |
         cd $BUILD_DIR
@@ -351,7 +333,6 @@ jobs:
         INPUT_DEVICE="${{ github.event.inputs.device_name }}"
         echo "输入设备名称: $INPUT_DEVICE"
         
-        # 设备别名映射
         case "$INPUT_DEVICE" in
             "ac42u"|"acrh17"|"rt-acrh17") ACTUAL_DEVICE="asus_rt-ac42u" ;;
             "ac58u"|"acrh13"|"rt-ac58u"|"rt-acrh13") ACTUAL_DEVICE="asus_rt-ac58u" ;;
@@ -363,7 +344,7 @@ jobs:
         if [ "$ACTUAL_DEVICE" != "$INPUT_DEVICE" ]; then
           echo "✅ 检测到设备通用名称 '$INPUT_DEVICE'，转换为实际设备标识 '$ACTUAL_DEVICE'"
         else
-          echo "ℹ️ 使用原始设备名称: $ACTUAL_DEVICE (未找到别名映射)"
+          echo "ℹ️ 使用原始设备名称: $ACTUAL_DEVICE"
         fi
         
         if [ ! -f "device_detection.sh" ]; then
@@ -398,10 +379,6 @@ jobs:
             echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
             echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
             echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
-            echo "✅ 设备环境变量已设置:"
-            echo "  平台: $PLATFORM"
-            echo "  设备短名称: $DEVICE_SHORT_NAME"
-            echo "  设备全名称: $DEVICE_FULL_NAME"
         else
             echo "❌ 无法从脚本输出中提取设备信息"
             if [ $SCRIPT_EXIT_CODE -ne 0 ]; then
@@ -441,7 +418,7 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 智能检查插件可用性
+    - name: 检查插件可用性
       run: |
         cd $BUILD_DIR
         echo "=== 智能检查插件可用性 ==="
@@ -479,7 +456,7 @@ jobs:
             echo "⚠️ 未找到包诊断脚本，跳过诊断"
         fi
 
-    - name: 使用外部配置文件进行配置
+    - name: 配置构建
       run: |
         cd $BUILD_DIR
         echo "=== 使用外部配置文件进行配置 ==="
@@ -500,7 +477,6 @@ jobs:
         CONFIG_TYPE="${{ github.event.inputs.config_type }}"
         echo "配置类型: $CONFIG_TYPE"
         
-        # 选择配置文件
         if [ "$CONFIG_TYPE" = "minimal" ]; then
             CONFIG_FILE="config-templates/minimal.config"
         elif [ "$CONFIG_TYPE" = "normal" ] || [ "$CONFIG_TYPE" = "custom" ]; then
@@ -537,7 +513,6 @@ jobs:
             exit 1
         fi
         
-        # 应用配置文件
         echo "=== 选择的配置文件: $CONFIG_FILE ==="
         if [ -f "$CONFIG_FILE" ]; then
             echo "✅ 配置文件存在，大小: $(wc -l < "$CONFIG_FILE") 行"
@@ -548,24 +523,18 @@ jobs:
             exit 1
         fi
         
-        # 运行 make defconfig 来规范化配置
         echo "运行 make defconfig..."
         make defconfig
         
         echo "=== 关键包强制启用 ==="
-        # 使用 scripts/config 工具强制启用关键包（避免被defconfig覆盖）
         if [ -f "scripts/config" ]; then
-            # 基础Luci组件
             ./scripts/config --enable PACKAGE_luci
             ./scripts/config --enable PACKAGE_luci-base
             ./scripts/config --enable PACKAGE_luci-theme-bootstrap
-            
-            # 中文语言包（关键）
             ./scripts/config --enable PACKAGE_luci-i18n-base-zh-cn
             ./scripts/config --enable PACKAGE_luci-i18n-firewall-zh-cn
             
             if [ "$CONFIG_TYPE" = "normal" ] || [ "$CONFIG_TYPE" = "custom" ]; then
-                # 正常模式插件
                 ./scripts/config --enable PACKAGE_luci-app-turboacc
                 ./scripts/config --enable PACKAGE_luci-app-sqm
                 ./scripts/config --enable PACKAGE_luci-app-upnp
@@ -574,8 +543,6 @@ jobs:
                 ./scripts/config --enable PACKAGE_luci-app-arpbind
                 ./scripts/config --enable PACKAGE_luci-app-cpulimit
                 ./scripts/config --enable PACKAGE_luci-app-diskman
-                
-                # 中文语言包
                 ./scripts/config --enable PACKAGE_luci-i18n-sqm-zh-cn
                 ./scripts/config --enable PACKAGE_luci-i18n-upnp-zh-cn
                 ./scripts/config --enable PACKAGE_luci-i18n-turboacc-zh-cn
@@ -583,7 +550,6 @@ jobs:
             echo "✅ 使用 scripts/config 强制启用关键包"
         else
             echo "⚠️ scripts/config 不存在，使用sed方式强制启用"
-            # 备用方案：使用sed
             sed -i 's/# CONFIG_PACKAGE_luci is not set/CONFIG_PACKAGE_luci=y/' .config
             sed -i 's/# CONFIG_PACKAGE_luci-base is not set/CONFIG_PACKAGE_luci-base=y/' .config
             sed -i 's/# CONFIG_PACKAGE_luci-theme-bootstrap is not set/CONFIG_PACKAGE_luci-theme-bootstrap=y/' .config
@@ -596,7 +562,6 @@ jobs:
             echo "✅ 使用sed强制启用关键包"
         fi
         
-        # 最终验证
         echo "=== 最终配置验证 ==="
         if grep -q "^${CORRECT_DEVICE_CONFIG}=y" .config; then
             echo "✅ 设备 $DEVICE_SHORT_NAME 已成功启用"
@@ -614,16 +579,14 @@ jobs:
             fi
         done
 
-    - name: 构建时集成自定义文件
+    - name: 自定义文件集成
       if: github.event.inputs.custom_install == 'true'
       run: |
         cd $BUILD_DIR
         echo "=== 构建时集成自定义文件 ==="
         
-        # 创建自定义目录
         mkdir -p files/root/custom-install
         
-        # 复制IPK文件
         cd $GITHUB_WORKSPACE
         IPK_FILES=$(find firmware-config/custom-files -name "*.ipk" -type f 2>/dev/null || true)
         if [ -n "$IPK_FILES" ]; then
@@ -634,7 +597,6 @@ jobs:
             done
         fi
         
-        # 复制脚本文件
         SCRIPT_FILES=$(find firmware-config/custom-files -name "*.sh" -type f 2>/dev/null | grep -v "detector\|analysis" || true)
         if [ -n "$SCRIPT_FILES" ]; then
             echo "✅ 找到脚本文件:"
@@ -645,80 +607,67 @@ jobs:
             done
         fi
         
-        # 创建构建时安装脚本
-        cat > $BUILD_DIR/files/root/custom-install/build-time-install.sh << 'EOF'
-#!/bin/sh
-echo "=== 开始构建时自定义安装 ==="
-
-# 构建时安装IPK文件 - 使用本地opkg安装
-if ls /root/custom-install/*.ipk >/dev/null 2>&1; then
-    echo "构建时安装IPK文件..."
-    for ipk in /root/custom-install/*.ipk; do
-        echo "安装: $(basename $ipk)"
-        # 使用opkg本地安装，不依赖网络
-        opkg install "$ipk" --force-depends || echo "安装失败: $(basename $ipk)"
-    done
-else
-    echo "未找到IPK文件"
-fi
-
-# 执行构建时脚本
-if ls /root/custom-install/*.sh >/dev/null 2>&1; then
-    echo "执行构建时脚本..."
-    for script in /root/custom-install/*.sh; do
-        if [ "$(basename $script)" != "build-time-install.sh" ]; then
-            echo "执行: $(basename $script)"
-            sh "$script" || echo "执行失败: $(basename $script)"
-        fi
-    done
-else
-    echo "未找到脚本文件"
-fi
-
-# 清理安装文件
-rm -rf /root/custom-install
-echo "=== 构建时自定义安装完成 ==="
-EOF
+        # 使用多个echo命令创建脚本
+        echo '#!/bin/sh' > $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo 'echo "=== 开始构建时自定义安装 ==="' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo 'if ls /root/custom-install/*.ipk >/dev/null 2>&1; then' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '    echo "构建时安装IPK文件..."' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '    for ipk in /root/custom-install/*.ipk; do' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '        echo "安装: $(basename $ipk)"' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '        opkg install "$ipk" --force-depends || echo "安装失败: $(basename $ipk)"' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '    done' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo 'else' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '    echo "未找到IPK文件"' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo 'fi' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo 'if ls /root/custom-install/*.sh >/dev/null 2>&1; then' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '    echo "执行构建时脚本..."' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '    for script in /root/custom-install/*.sh; do' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '        if [ "$(basename $script)" != "build-time-install.sh" ]; then' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '            echo "执行: $(basename $script)"' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '            sh "$script" || echo "执行失败: $(basename $script)"' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '        fi' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '    done' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo 'else' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '    echo "未找到脚本文件"' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo 'fi' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo 'rm -rf /root/custom-install' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo 'echo "=== 构建时自定义安装完成 ==="' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
         
         chmod +x $BUILD_DIR/files/root/custom-install/build-time-install.sh
         
-        # 创建开机执行脚本
         mkdir -p $BUILD_DIR/files/etc
-        cat > $BUILD_DIR/files/etc/rc.local << 'EOF'
-#!/bin/sh
-
-# 在后台执行构建时自定义安装
-[ -f /root/custom-install/build-time-install.sh ] && {
-    /root/custom-install/build-time-install.sh >/tmp/build-time-install.log 2>&1 &
-}
-
-exit 0
-EOF
+        echo '#!/bin/sh' > $BUILD_DIR/files/etc/rc.local
+        echo '' >> $BUILD_DIR/files/etc/rc.local
+        echo '[ -f /root/custom-install/build-time-install.sh ] && {' >> $BUILD_DIR/files/etc/rc.local
+        echo '    /root/custom-install/build-time-install.sh >/tmp/build-time-install.log 2>&1 &' >> $BUILD_DIR/files/etc/rc.local
+        echo '}' >> $BUILD_DIR/files/etc/rc.local
+        echo '' >> $BUILD_DIR/files/etc/rc.local
+        echo 'exit 0' >> $BUILD_DIR/files/etc/rc.local
         
         chmod +x $BUILD_DIR/files/etc/rc.local
         echo "✅ 构建时自定义安装配置完成"
 
-    - name: 修复网络和下载环境
+    - name: 修复网络环境
       run: |
         cd $BUILD_DIR
         echo "=== 修复网络和下载环境 ==="
         
-        # 设置Git和curl重试
         git config --global http.postBuffer 524288000
         git config --global http.lowSpeedLimit 0
         git config --global http.lowSpeedTime 999999
         
-        # 设置环境变量
         export GIT_SSL_NO_VERIFY=1
         export PYTHONHTTPSVERIFY=0
         
-        # 创建下载目录并设置权限
         mkdir -p dl
         chmod 755 dl
         
         echo "✅ 网络环境修复完成"
 
-    - name: 运行预下载脚本
+    - name: 运行预下载
       run: |
         cd $BUILD_DIR
         echo "=== 运行预下载脚本 ==="
@@ -732,7 +681,7 @@ EOF
             echo "⚠️ 未找到预下载脚本，跳过预下载步骤"
         fi
 
-    - name: 加强下载DL库并验证完整性
+    - name: 下载依赖
       run: |
         cd $BUILD_DIR
         echo "=== 加强下载DL库并验证完整性 ==="
@@ -743,7 +692,6 @@ EOF
         export GIT_SSL_NO_VERIFY=1
         export PYTHONHTTPSVERIFY=0
         
-        # 设置国内镜像源
         echo "=== 设置国内镜像源: $MIRROR_SOURCE ==="
         case "$MIRROR_SOURCE" in
             "tuna") MIRROR_URL="https://mirrors.tuna.tsinghua.edu.cn/openwrt" ;;
@@ -753,7 +701,6 @@ EOF
             *) MIRROR_URL="https://mirrors.tuna.tsinghua.edu.cn/openwrt" ;;
         esac
         
-        # 设置feeds.conf.default使用镜像
         if [ -f "feeds.conf.default" ]; then
             cp feeds.conf.default feeds.conf.default.backup
             sed -i "s|https://github.com|$MIRROR_URL|g" feeds.conf.default
@@ -765,12 +712,10 @@ EOF
         RETRY_COUNT=0
         DOWNLOAD_SUCCESS=false
         
-        # 预先下载关键依赖
         echo "=== 预先下载关键依赖 ==="
         make -j1 tools/install V=s 2>&1 | grep -E "Downloading|error" || true
         make -j1 toolchain/install V=s 2>&1 | grep -E "Downloading|error" || true
         
-        # 清理可能损坏的文件
         find dl -name "*.tmp" -delete 2>/dev/null || true
         find dl -size 0 -delete 2>/dev/null || true
         
@@ -778,22 +723,18 @@ EOF
           RETRY_COUNT=$((RETRY_COUNT + 1))
           echo "=== 下载尝试 $RETRY_COUNT/$MAX_DOWNLOAD_RETRIES ==="
           
-          # 使用单线程下载确保稳定性
           if make -j1 download V=s 2>&1 | tee download_attempt_${RETRY_COUNT}.log; then
             echo "✅ 下载命令执行成功"
             
-            # 检查是否有关键错误
             if grep -q "404" download_attempt_${RETRY_COUNT}.log; then
               echo "⚠️ 检测到404错误，尝试修复..."
               
-              # 修复常见下载失败包
               FAILED_PACKAGES=("csstidy" "groff" "lua-rsa")
               for pkg in "${FAILED_PACKAGES[@]}"; do
                   if grep -q "$pkg.*404" download_attempt_${RETRY_COUNT}.log 2>/dev/null; then
                       echo "🔄 修复 $pkg 下载问题..."
                       find dl -name "*${pkg}*" -delete 2>/dev/null || true
                       
-                      # 尝试使用备用源
                       case "$pkg" in
                           "csstidy")
                               wget -O dl/csstidy-fixed.tar.xz "https://gitee.com/mirrors/csstidy/repository/archive/707feaec556c40c999514a598b1a1ea5b50826c6.tar.gz" || true
@@ -805,14 +746,12 @@ EOF
                   fi
               done
               
-              # 记录失败的包
               FAILED_PACKAGES=$(grep "404" download_attempt_${RETRY_COUNT}.log | grep -oE '[a-zA-Z0-9_.-]+\.(tar\.|zip|gz|bz2)' | sort -u)
               if [ -n "$FAILED_PACKAGES" ]; then
                 echo "有问题的包: $FAILED_PACKAGES"
                 for pkg in $FAILED_PACKAGES; do
                   find dl -name "*$pkg*" -delete 2>/dev/null || true
                 done
-                # 继续重试
                 continue
               fi
             else
@@ -829,7 +768,6 @@ EOF
             else
               echo "🔄 等待15秒后重试..."
               sleep 15
-              # 清理可能的损坏文件
               find dl -name "*.tmp" -delete 2>/dev/null || true
               find dl -size 0 -delete 2>/dev/null || true
             fi
@@ -845,7 +783,6 @@ EOF
           make -j1 download V=s
         fi
         
-        # 验证关键文件
         echo "=== 验证关键文件 ==="
         CRITICAL_FILES=("lz4" "zlib" "openssl" "libtool" "automake")
         for file in "${CRITICAL_FILES[@]}"; do
@@ -860,15 +797,13 @@ EOF
         DL_SIZE=$(du -sh dl | cut -f1)
         echo "✅ 下载统计: $DL_COUNT 个文件，总大小: $DL_SIZE"
 
-    - name: 验证软件包配置
+    - name: 验证配置
       run: |
         cd $BUILD_DIR
         echo "=== 最终软件包配置验证 ==="
         
-        # 检查关键软件包是否被正确配置
         echo "=== 关键软件包配置状态 ==="
         
-        # 基础软件包
         for pkg in "luci" "luci-base" "luci-theme-bootstrap"; do
           if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
             echo "✅ $pkg: 已启用"
@@ -878,7 +813,6 @@ EOF
           fi
         done
         
-        # 中文语言包
         for pkg in "luci-i18n-base-zh-cn" "luci-i18n-firewall-zh-cn" "luci-i18n-sqm-zh-cn" "luci-i18n-upnp-zh-cn" "luci-i18n-turboacc-zh-cn"; do
           if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
             echo "✅ $pkg: 已启用"
@@ -887,7 +821,6 @@ EOF
           fi
         done
         
-        # 根据配置类型检查插件
         if [ "${{ github.event.inputs.config_type }}" = "normal" ] || [ "${{ github.event.inputs.config_type }}" = "custom" ]; then
           echo "=== 正常模式插件检查 ==="
           for pkg in "luci-app-turboacc" "luci-app-sqm" "luci-app-upnp" "luci-app-samba4" "luci-app-smartdns"; do
@@ -900,10 +833,9 @@ EOF
         fi
         
         echo "=== 配置验证完成 ==="
-        # 重新运行defconfig确保配置一致
         make defconfig
 
-    - name: 应用配置并编译
+    - name: 编译固件
       run: |
         cd $BUILD_DIR
         echo "::group::📱 编译日志"
@@ -911,7 +843,6 @@ EOF
         
         export FORCE_UNSAFE_CONFIGURE=1
         
-        # 更保守的并行设置，避免内存不足
         AVAILABLE_CORES=$(nproc)
         AVAILABLE_MEMORY_GB=$(free -g | awk 'NR==2{print $2}')
         
@@ -929,7 +860,6 @@ EOF
         echo "🚀 开始分阶段编译..."
         START_TIME=$(date +%s)
         
-        # 分阶段编译，提高稳定性
         echo "=== 阶段1: 编译工具链 ==="
         make -j$BUILD_JOBS tools/compile V=s 2>&1 | tee -a build_detailed.log
         
@@ -966,62 +896,58 @@ EOF
             echo "❌ 编译失败，未生成目标文件"
             if [ $COMPILE_EXIT_CODE -eq 0 ]; then
                 echo "❌ 编译命令成功但未生成目标文件"
-                echo "=== 构建目录结构 ==="
                 find . -maxdepth 3 -type d | sort | head -20
             fi
             exit 1
         fi
 
-    - name: 运行错误分析
+    - name: 错误分析
       if: always()
       run: |
         cd $BUILD_DIR
         echo "=== 运行错误分析 ==="
         
-        # 创建增强版错误分析脚本
-        cat > enhanced_error_analysis.sh << 'EOF'
-#!/bin/bash
-set -e
-BUILD_DIR="${1:-.}"
-LOG_FILE="$BUILD_DIR/build_detailed.log"
-REPORT_FILE="$BUILD_DIR/enhanced_error_analysis.log"
-echo "=== 增强版固件构建错误分析报告 ===" > "$REPORT_FILE"
-echo "生成时间: $(date)" >> "$REPORT_FILE"
-echo "" >> "$REPORT_FILE"
-echo "=== 配置验证结果 ===" >> "$REPORT_FILE"
-if [ -f "$BUILD_DIR/.config" ]; then
-    for pkg in "luci" "luci-base" "luci-theme-bootstrap" "luci-i18n-base-zh-cn" "luci-i18n-firewall-zh-cn" "luci-app-turboacc" "luci-app-sqm" "luci-app-upnp"; do
-        if grep -q "CONFIG_PACKAGE_${pkg}=y" "$BUILD_DIR/.config"; then
-            echo "✅ $pkg: 已启用" >> "$REPORT_FILE"
-        else
-            echo "❌ $pkg: 未启用" >> "$REPORT_FILE"
-        fi
-    done
-else
-    echo "❌ 配置文件不存在" >> "$REPORT_FILE"
-fi
-echo "" >> "$REPORT_FILE"
-echo "=== 构建结果总结 ===" >> "$REPORT_FILE"
-if [ -d "$BUILD_DIR/bin/targets" ]; then
-    echo "✅ 构建状态: 成功" >> "$REPORT_FILE"
-    echo "✅ 生成的固件:" >> "$REPORT_FILE"
-    find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null >> "$REPORT_FILE"
-else
-    echo "❌ 构建状态: 失败" >> "$REPORT_FILE"
-fi
-echo "✅ 错误分析完成" >> "$REPORT_FILE"
-EOF
+        # 使用多个echo命令创建错误分析脚本
+        echo '#!/bin/bash' > enhanced_error_analysis.sh
+        echo 'set -e' >> enhanced_error_analysis.sh
+        echo 'BUILD_DIR="${1:-.}"' >> enhanced_error_analysis.sh
+        echo 'LOG_FILE="$BUILD_DIR/build_detailed.log"' >> enhanced_error_analysis.sh
+        echo 'REPORT_FILE="$BUILD_DIR/enhanced_error_analysis.log"' >> enhanced_error_analysis.sh
+        echo 'echo "=== 增强版固件构建错误分析报告 ===" > "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'echo "生成时间: $(date)" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'echo "" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'echo "=== 配置验证结果 ===" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'if [ -f "$BUILD_DIR/.config" ]; then' >> enhanced_error_analysis.sh
+        echo '    for pkg in "luci" "luci-base" "luci-theme-bootstrap" "luci-i18n-base-zh-cn" "luci-i18n-firewall-zh-cn" "luci-app-turboacc" "luci-app-sqm" "luci-app-upnp"; do' >> enhanced_error_analysis.sh
+        echo '        if grep -q "CONFIG_PACKAGE_${pkg}=y" "$BUILD_DIR/.config"; then' >> enhanced_error_analysis.sh
+        echo '            echo "✅ $pkg: 已启用" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '        else' >> enhanced_error_analysis.sh
+        echo '            echo "❌ $pkg: 未启用" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '        fi' >> enhanced_error_analysis.sh
+        echo '    done' >> enhanced_error_analysis.sh
+        echo 'else' >> enhanced_error_analysis.sh
+        echo '    echo "❌ 配置文件不存在" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'fi' >> enhanced_error_analysis.sh
+        echo 'echo "" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'echo "=== 构建结果总结 ===" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'if [ -d "$BUILD_DIR/bin/targets" ]; then' >> enhanced_error_analysis.sh
+        echo '    echo "✅ 构建状态: 成功" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '    echo "✅ 生成的固件:" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo '    find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'else' >> enhanced_error_analysis.sh
+        echo '    echo "❌ 构建状态: 失败" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
+        echo 'fi' >> enhanced_error_analysis.sh
+        echo 'echo "✅ 错误分析完成" >> "$REPORT_FILE"' >> enhanced_error_analysis.sh
         
         chmod +x enhanced_error_analysis.sh
         ./enhanced_error_analysis.sh "$BUILD_DIR"
         
-        # 显示关键信息
         if [ -f "enhanced_error_analysis.log" ]; then
             echo "=== 关键错误摘要 ==="
             grep -E "❌|✅|💡|🔧" enhanced_error_analysis.log | head -20
         fi
 
-    - name: 验证固件生成
+    - name: 验证固件
       if: always()
       run: |
         cd $BUILD_DIR
@@ -1038,26 +964,23 @@ EOF
           echo "❌ 构建失败，未找到目标文件"
         fi
 
-    - name: 生成构建报告文档
+    - name: 生成报告
       if: always()
       run: |
         cd $BUILD_DIR
         echo "=== 生成构建报告文档 ==="
         
-        # 创建构建报告
-        cat > "$GITHUB_WORKSPACE/构建报告.md" << EOF
-# OpenWrt 固件构建报告
-
-## 构建信息
-- **设备**: ${{ env.DEVICE_FULL_NAME }}
-- **平台**: ${{ env.PLATFORM }}
-- **版本**: ${{ env.SELECTED_REPO }} (${{ env.SELECTED_BRANCH }})
-- **配置类型**: ${{ github.event.inputs.config_type }}
-- **构建时间**: $(date)
-- **编译时长**: $((COMPILE_TIME / 60))分钟$((COMPILE_TIME % 60))秒
-
-## 构建状态
-EOF
+        echo "# OpenWrt 固件构建报告" > "$GITHUB_WORKSPACE/构建报告.md"
+        echo "" >> "$GITHUB_WORKSPACE/构建报告.md"
+        echo "## 构建信息" >> "$GITHUB_WORKSPACE/构建报告.md"
+        echo "- **设备**: ${{ env.DEVICE_FULL_NAME }}" >> "$GITHUB_WORKSPACE/构建报告.md"
+        echo "- **平台**: ${{ env.PLATFORM }}" >> "$GITHUB_WORKSPACE/构建报告.md"
+        echo "- **版本**: ${{ env.SELECTED_REPO }} (${{ env.SELECTED_BRANCH }})" >> "$GITHUB_WORKSPACE/构建报告.md"
+        echo "- **配置类型**: ${{ github.event.inputs.config_type }}" >> "$GITHUB_WORKSPACE/构建报告.md"
+        echo "- **构建时间**: $(date)" >> "$GITHUB_WORKSPACE/构建报告.md"
+        echo "- **编译时长**: $((COMPILE_TIME / 60))分钟$((COMPILE_TIME % 60))秒" >> "$GITHUB_WORKSPACE/构建报告.md"
+        echo "" >> "$GITHUB_WORKSPACE/构建报告.md"
+        echo "## 构建状态" >> "$GITHUB_WORKSPACE/构建报告.md"
         
         if [ -d "bin/targets" ]; then
             echo "✅ **构建状态**: 成功" >> "$GITHUB_WORKSPACE/构建报告.md"
@@ -1074,7 +997,7 @@ EOF
         
         echo "✅ 构建报告已生成"
 
-    - name: 保存配置文件到仓库
+    - name: 保存配置
       if: success() && github.event.inputs.save_config == 'true'
       run: |
         echo "=== 保存配置文件到仓库 ==="
@@ -1108,7 +1031,7 @@ EOF
           exit 1
         fi
 
-    - name: 提交配置文件更改
+    - name: 提交配置
       if: success() && github.event.inputs.save_config == 'true' && env.CONFIG_UNCHANGED == 'false'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1133,7 +1056,7 @@ EOF
         
         echo "✅ 配置文件提交完成"
 
-    - name: 上传编译产物
+    - name: 上传固件
       if: success()
       uses: actions/upload-artifact@v4
       with:
@@ -1141,7 +1064,7 @@ EOF
         path: ${{ env.BUILD_DIR }}/bin/targets/
         retention-days: 7
 
-    - name: 上传配置和日志
+    - name: 上传日志
       if: always()
       uses: actions/upload-artifact@v4
       with:
@@ -1154,7 +1077,7 @@ EOF
           $GITHUB_WORKSPACE/构建报告.md
         retention-days: 7
 
-    - name: 清理构建目录
+    - name: 清理目录
       if: always()
       run: |
         echo "=== 清理构建目录 ==="
