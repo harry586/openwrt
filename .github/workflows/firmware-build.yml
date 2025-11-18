@@ -23,10 +23,7 @@ on:
         required: true
         default: 'normal'
         type: choice
-        options: 
-          - minimal
-          - normal
-          - custom
+        options: ['minimal', 'normal', 'custom']
       extra_packages:
         description: '额外安装插件 (空格分隔的包名)'
         required: false
@@ -102,7 +99,7 @@ jobs:
         cd $BUILD_DIR
         echo "=== 复制脚本到构建目录 ==="
         cd $GITHUB_WORKSPACE
-        SCRIPTS=("complete_version_detector.sh" "device_detection.sh" "error_analysis.sh" "pre_download.sh" "check-plugins.sh" "diagnose-packages.sh")
+        SCRIPTS=("complete_version_detector.sh", "device_detection.sh", "error_analysis.sh", "pre_download.sh", "check-plugins.sh", "diagnose-packages.sh")
         for script in "${SCRIPTS[@]}"; do
           FOUND_SCRIPT=$(find . -name "$script" -type f | head -1)
           if [ -n "$FOUND_SCRIPT" ]; then
@@ -255,7 +252,7 @@ jobs:
         
         echo "=== 查找配置文件 ==="
         mkdir -p $BUILD_DIR/config-templates
-        CONFIG_FILES=("minimal.config" "normal-new.config" "normal-old.config")
+        CONFIG_FILES=("minimal.config", "normal-new.config", "normal-old.config")
         for config_file in "${CONFIG_FILES[@]}"; do
           FOUND_CONFIG=$(find . -name "$config_file" -type f | head -1)
           if [ -n "$FOUND_CONFIG" ]; then
@@ -269,7 +266,7 @@ jobs:
         echo "✅ 配置文件复制完成"
         
         # 重新复制所有脚本（如果仓库中有更新）
-        SCRIPTS=("error_analysis.sh" "pre_download.sh" "check-plugins.sh" "diagnose-packages.sh")
+        SCRIPTS=("error_analysis.sh", "pre_download.sh", "check-plugins.sh", "diagnose-packages.sh")
         for script in "${SCRIPTS[@]}"; do
           FOUND_SCRIPT=$(find . -name "$script" -type f | head -1)
           if [ -n "$FOUND_SCRIPT" ]; then
@@ -584,55 +581,51 @@ jobs:
             done
         fi
         
-        # 创建构建时安装脚本
-        cat > $BUILD_DIR/files/root/custom-install/build-time-install.sh << 'EOF'
-#!/bin/sh
-echo "=== 开始构建时自定义安装 ==="
-
-# 构建时安装IPK文件 - 使用本地opkg安装
-if ls /root/custom-install/*.ipk >/dev/null 2>&1; then
-    echo "构建时安装IPK文件..."
-    for ipk in /root/custom-install/*.ipk; do
-        echo "安装: $(basename $ipk)"
-        # 使用opkg本地安装，不依赖网络
-        opkg install "$ipk" --force-depends || echo "安装失败: $(basename $ipk)"
-    done
-else
-    echo "未找到IPK文件"
-fi
-
-# 执行构建时脚本
-if ls /root/custom-install/*.sh >/dev/null 2>&1; then
-    echo "执行构建时脚本..."
-    for script in /root/custom-install/*.sh; do
-        if [ "$(basename $script)" != "build-time-install.sh" ]; then
-            echo "执行: $(basename $script)"
-            sh "$script" || echo "执行失败: $(basename $script)"
-        fi
-    done
-else
-    echo "未找到脚本文件"
-fi
-
-# 清理安装文件
-rm -rf /root/custom-install
-echo "=== 构建时自定义安装完成 ==="
-EOF
+        # 创建构建时安装脚本 - 使用多个echo命令
+        echo '#!/bin/sh' > $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo 'echo "=== 开始构建时自定义安装 ==="' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '# 构建时安装IPK文件 - 使用本地opkg安装' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo 'if ls /root/custom-install/*.ipk >/dev/null 2>&1; then' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '    echo "构建时安装IPK文件..."' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '    for ipk in /root/custom-install/*.ipk; do' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '        echo "安装: $(basename $ipk)"' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '        # 使用opkg本地安装，不依赖网络' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '        opkg install "$ipk" --force-depends || echo "安装失败: $(basename $ipk)"' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '    done' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo 'else' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '    echo "未找到IPK文件"' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo 'fi' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '# 执行构建时脚本' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo 'if ls /root/custom-install/*.sh >/dev/null 2>&1; then' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '    echo "执行构建时脚本..."' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '    for script in /root/custom-install/*.sh; do' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '        if [ "$(basename $script)" != "build-time-install.sh" ]; then' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '            echo "执行: $(basename $script)"' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '            sh "$script" || echo "执行失败: $(basename $script)"' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '        fi' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '    done' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo 'else' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '    echo "未找到脚本文件"' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo 'fi' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo '# 清理安装文件' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo 'rm -rf /root/custom-install' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        echo 'echo "=== 构建时自定义安装完成 ==="' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
         
         chmod +x $BUILD_DIR/files/root/custom-install/build-time-install.sh
         
-        # 创建开机执行脚本
+        # 创建开机执行脚本 - 使用多个echo命令
         mkdir -p $BUILD_DIR/files/etc
-        cat > $BUILD_DIR/files/etc/rc.local << 'EOF'
-#!/bin/sh
-
-# 在后台执行构建时自定义安装
-[ -f /root/custom-install/build-time-install.sh ] && {
-    /root/custom-install/build-time-install.sh >/tmp/build-time-install.log 2>&1 &
-}
-
-exit 0
-EOF
+        echo '#!/bin/sh' > $BUILD_DIR/files/etc/rc.local
+        echo '' >> $BUILD_DIR/files/etc/rc.local
+        echo '# 在后台执行构建时自定义安装' >> $BUILD_DIR/files/etc/rc.local
+        echo '[ -f /root/custom-install/build-time-install.sh ] && {' >> $BUILD_DIR/files/etc/rc.local
+        echo '    /root/custom-install/build-time-install.sh >/tmp/build-time-install.log 2>&1 &' >> $BUILD_DIR/files/etc/rc.local
+        echo '}' >> $BUILD_DIR/files/etc/rc.local
+        echo '' >> $BUILD_DIR/files/etc/rc.local
+        echo 'exit 0' >> $BUILD_DIR/files/etc/rc.local
         
         chmod +x $BUILD_DIR/files/etc/rc.local
         echo "✅ 构建时自定义安装配置完成"
@@ -726,7 +719,7 @@ EOF
               echo "⚠️ 检测到404错误，尝试修复..."
               
               # 修复常见下载失败包
-              FAILED_PACKAGES=("csstidy" "groff" "lua-rsa")
+              FAILED_PACKAGES=("csstidy", "groff", "lua-rsa")
               for pkg in "${FAILED_PACKAGES[@]}"; do
                   if grep -q "$pkg.*404" download_attempt_${RETRY_COUNT}.log 2>/dev/null; then
                       echo "🔄 修复 $pkg 下载问题..."
@@ -786,7 +779,7 @@ EOF
         
         # 验证关键文件
         echo "=== 验证关键文件 ==="
-        CRITICAL_FILES=("lz4" "zlib" "openssl" "libtool" "automake")
+        CRITICAL_FILES=("lz4", "zlib", "openssl", "libtool", "automake")
         for file in "${CRITICAL_FILES[@]}"; do
           if find dl -name "*${file}*" | grep -q .; then
             echo "✅ 找到关键文件: $file"
@@ -917,7 +910,7 @@ EOF
         cd $BUILD_DIR
         echo "=== 运行错误分析 ==="
         
-        # 创建增强版错误分析脚本
+        # 创建增强版错误分析脚本 - 使用多个echo命令
         echo '#!/bin/bash' > enhanced_error_analysis.sh
         echo 'set -e' >> enhanced_error_analysis.sh
         echo 'BUILD_DIR="${1:-.}"' >> enhanced_error_analysis.sh
