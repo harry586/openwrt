@@ -378,8 +378,9 @@ echo "✅ Overlay备份系统安装完成"
 # ==================== 5. 服务优化配置 ====================
 echo "5. 优化系统服务..."
 
-# 确保 bin 目录存在
+# 确保 bin 和 init.d 目录存在
 mkdir -p files/bin
+mkdir -p files/etc/init.d
 
 # 服务优化脚本
 cat > files/etc/init.d/service-optimizer << 'EOF'
@@ -654,8 +655,79 @@ json_select() {
 EOF
 chmod +x files/usr/share/libubox/jshn.sh
 
-# ==================== 8. 完成提示 ====================
-echo "8. 创建完成提示..."
+# ==================== 8. 修复自定义安装支持 ====================
+echo "8. 配置自定义安装支持..."
+
+# 创建自定义安装目录结构
+mkdir -p files/root/custom-install
+
+# 创建构建时安装脚本
+cat > files/root/custom-install/build-time-install.sh << 'EOF'
+#!/bin/sh
+echo "=== 开始构建时自定义安装 ==="
+
+# 创建必要的目录结构
+mkdir -p /etc/rc.d /etc/hotplug.d /lib/functions /usr/share/libubox
+
+# 安装IPK文件 - 使用本地安装方法
+if ls /root/custom-install/*.ipk >/dev/null 2>&1; then
+    echo "构建时安装IPK文件..."
+    for ipk in /root/custom-install/*.ipk; do
+        echo "安装: $(basename $ipk)"
+        # 使用opkg本地安装
+        if command -v opkg >/dev/null 2>&1; then
+            opkg install "$ipk" --force-depends || echo "安装失败: $(basename $ipk)"
+        else
+            echo "opkg不可用，跳过IPK安装"
+            break
+        fi
+    done
+else
+    echo "未找到IPK文件"
+fi
+
+# 执行构建时脚本
+if ls /root/custom-install/*.sh >/dev/null 2>&1; then
+    echo "执行构建时脚本..."
+    for script in /root/custom-install/*.sh; do
+        if [ "$(basename $script)" != "build-time-install.sh" ]; then
+            echo "执行: $(basename $script)"
+            # 确保脚本有执行权限
+            chmod +x "$script"
+            # 在子shell中执行，避免影响主进程
+            (sh "$script" || echo "执行失败: $(basename $script)") &
+        fi
+    done
+else
+    echo "未找到脚本文件"
+fi
+
+# 等待后台任务完成
+wait
+
+echo "=== 构建时自定义安装完成 ==="
+
+# 清理安装文件（可选）
+# rm -rf /root/custom-install
+EOF
+chmod +x files/root/custom-install/build-time-install.sh
+
+# 创建开机执行脚本
+mkdir -p files/etc
+cat > files/etc/rc.local << 'EOF'
+#!/bin/sh
+
+# 在后台执行构建时自定义安装
+[ -f /root/custom-install/build-time-install.sh ] && {
+    /root/custom-install/build-time-install.sh >/tmp/build-time-install.log 2>&1 &
+}
+
+exit 0
+EOF
+chmod +x files/etc/rc.local
+
+# ==================== 9. 完成提示 ====================
+echo "9. 创建完成提示..."
 
 cat > files/etc/banner.diy2 << 'EOF'
 ╔═══════════════════════════════════════════╗
@@ -696,6 +768,7 @@ echo "✅ 定时内存清理"
 echo "✅ 系统信息工具 (v3.0)"
 echo "✅ 服务优化配置"
 echo "✅ 必要的库文件"
+echo "✅ 自定义安装支持"
 echo ""
 echo "📋 刷机后可用命令:"
 echo "  system-info                 # 显示完整系统信息"
@@ -709,4 +782,5 @@ echo "⏰ 自动功能:"
 echo "  • 每天凌晨3点自动清理内存"
 echo "  • 开机自动优化服务"
 echo "  • 网络参数自动优化"
+echo "  • 自定义安装自动执行"
 echo "=========================================="
