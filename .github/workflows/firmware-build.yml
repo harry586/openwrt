@@ -106,6 +106,7 @@ jobs:
         DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f | head -1)
         ERROR_SCRIPT=$(find . -name "error_analysis.sh" -type f | head -1)
         PRE_DOWNLOAD_SCRIPT=$(find . -name "pre_download.sh" -type f | head -1)
+        CHECK_PLUGINS_SCRIPT=$(find . -name "check-plugins.sh" -type f | head -1)
         
         if [ -z "$VERSION_SCRIPT" ] || [ -z "$DEVICE_SCRIPT" ]; then
           echo "❌ 错误: 找不到必要的检测脚本"
@@ -127,11 +128,17 @@ jobs:
           echo "✅ 找到预下载脚本: $PRE_DOWNLOAD_SCRIPT"
           cp "$PRE_DOWNLOAD_SCRIPT" $BUILD_DIR/pre_download.sh
         fi
+
+        if [ -n "$CHECK_PLUGINS_SCRIPT" ]; then
+          echo "✅ 找到插件检查脚本: $CHECK_PLUGINS_SCRIPT"
+          cp "$CHECK_PLUGINS_SCRIPT" $BUILD_DIR/check-plugins.sh
+        fi
         
         cd $BUILD_DIR
         chmod +x complete_version_detector.sh device_detection.sh
         if [ -f "error_analysis.sh" ]; then chmod +x error_analysis.sh; fi
         if [ -f "pre_download.sh" ]; then chmod +x pre_download.sh; fi
+        if [ -f "check-plugins.sh" ]; then chmod +x check-plugins.sh; fi
         echo "✅ 脚本复制完成"
 
     - name: 智能版本检测
@@ -194,6 +201,9 @@ jobs:
         fi
         if [ -f "$BUILD_DIR/pre_download.sh" ]; then
           cp $BUILD_DIR/pre_download.sh /tmp/build-scripts-backup/
+        fi
+        if [ -f "$BUILD_DIR/check-plugins.sh" ]; then
+          cp $BUILD_DIR/check-plugins.sh /tmp/build-scripts-backup/
         fi
         echo "✅ 脚本备份完成"
 
@@ -275,9 +285,13 @@ jobs:
         if [ -f "/tmp/build-scripts-backup/pre_download.sh" ]; then
           cp /tmp/build-scripts-backup/pre_download.sh ./
         fi
+        if [ -f "/tmp/build-scripts-backup/check-plugins.sh" ]; then
+          cp /tmp/build-scripts-backup/check-plugins.sh ./
+        fi
         chmod +x complete_version_detector.sh device_detection.sh
         if [ -f "error_analysis.sh" ]; then chmod +x error_analysis.sh; fi
         if [ -f "pre_download.sh" ]; then chmod +x pre_download.sh; fi
+        if [ -f "check-plugins.sh" ]; then chmod +x check-plugins.sh; fi
         echo "✅ 脚本恢复完成"
 
     - name: 重新复制配置文件和错误分析脚本
@@ -319,6 +333,14 @@ jobs:
           echo "✅ 找到预下载脚本: $PRE_DOWNLOAD_SCRIPT"
           cp "$PRE_DOWNLOAD_SCRIPT" $BUILD_DIR/pre_download.sh
           chmod +x $BUILD_DIR/pre_download.sh
+        fi
+
+        # 重新复制插件检查脚本
+        CHECK_PLUGINS_SCRIPT=$(find . -name "check-plugins.sh" -type f | head -1)
+        if [ -n "$CHECK_PLUGINS_SCRIPT" ]; then
+          echo "✅ 找到插件检查脚本: $CHECK_PLUGINS_SCRIPT"
+          cp "$CHECK_PLUGINS_SCRIPT" $BUILD_DIR/check-plugins.sh
+          chmod +x $BUILD_DIR/check-plugins.sh
         fi
         
         echo "✅ 配置文件和脚本重新复制完成"
@@ -422,6 +444,20 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
+    - name: 检查插件可用性
+      run: |
+        cd $BUILD_DIR
+        echo "=== 检查插件可用性 ==="
+        
+        if [ -f "check-plugins.sh" ]; then
+            chmod +x check-plugins.sh
+            echo "开始检查插件在feeds中的可用性..."
+            ./check-plugins.sh "$BUILD_DIR"
+            echo "✅ 插件检查完成"
+        else
+            echo "⚠️ 未找到插件检查脚本，跳过插件检查"
+        fi
+
     - name: 使用外部配置文件进行配置
       run: |
         cd $BUILD_DIR
@@ -442,6 +478,10 @@ jobs:
         
         CONFIG_TYPE="${{ github.event.inputs.config_type }}"
         echo "配置类型: $CONFIG_TYPE"
+        
+        # 调试信息：显示可用的配置文件
+        echo "=== 可用的配置文件 ==="
+        ls -la config-templates/
         
         if [ "$CONFIG_TYPE" = "minimal" ]; then
             CONFIG_FILE="config-templates/minimal.config"
@@ -479,63 +519,84 @@ jobs:
             exit 1
         fi
         
+        # 调试：显示选择的配置文件
+        echo "=== 选择的配置文件: $CONFIG_FILE ==="
         if [ -f "$CONFIG_FILE" ]; then
-            echo "✅ 找到配置文件: $CONFIG_FILE"
-            cat "$CONFIG_FILE" >> .config
-            echo "✅ 配置已加载: $(basename "$CONFIG_FILE")"
+            echo "✅ 配置文件存在，大小: $(wc -l < "$CONFIG_FILE") 行"
+            echo "前10行内容:"
+            head -10 "$CONFIG_FILE"
         else
             echo "❌ 错误: 找不到配置文件 $CONFIG_FILE"
+            echo "当前目录内容:"
+            ls -la
+            echo "config-templates 目录内容:"
+            ls -la config-templates/
             exit 1
         fi
         
-        # 强制启用必要的包
-        echo "# 强制启用基础包" >> .config
-        echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
-        echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
+        # 应用配置文件
+        echo "应用配置文件..."
+        cat "$CONFIG_FILE" >> .config
+        echo "✅ 配置已加载: $(basename "$CONFIG_FILE")"
         
-        if [ "$CONFIG_TYPE" = "normal" ] || [ "$CONFIG_TYPE" = "custom" ]; then
-            echo "# 强制启用正常模式插件" >> .config
-            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
-        fi
-        
-        if [ "$CONFIG_TYPE" = "custom" ] && [ -n "${{ github.event.inputs.extra_packages }}" ]; then
-            echo "# 额外包配置" >> .config
-            for pkg in ${{ github.event.inputs.extra_packages }}; do
-                pkg_clean=$(echo "$pkg" | tr '-' '_' | tr -cd '[:alnum:]_')
-                echo "CONFIG_PACKAGE_${pkg_clean}=y" >> .config
-                echo "✅ 添加额外包: CONFIG_PACKAGE_${pkg_clean}=y"
-            done
-        fi
-        
-        if [ -n "${{ github.event.inputs.disabled_plugins }}" ]; then
-            echo "# 禁用插件配置" >> .config
-            for plugin in ${{ github.event.inputs.disabled_plugins }}; do
-                plugin_clean=$(echo "$plugin" | tr '-' '_' | tr -cd '[:alnum:]_')
-                echo "# CONFIG_PACKAGE_${plugin_clean} is not set" >> .config
-                echo "✅ 禁用插件: $plugin (CONFIG_PACKAGE_${plugin_clean})"
-            done
-        fi
-        
+        # 运行 make defconfig 来规范化配置
         echo "运行 make defconfig..."
         make defconfig
         
+        # 调试：显示应用后的配置状态
+        echo "=== 配置文件应用后的状态 ==="
+        for pkg in "luci-app-turboacc" "luci-app-sqm" "luci-app-upnp" "luci-app-samba4" "luci-app-smartdns"; do
+            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
+                echo "✅ $pkg: 已启用"
+            else
+                echo "❌ $pkg: 未启用"
+            fi
+        done
+        
+        # 现在进行强制启用（确保关键包被启用）
         echo "=== 强制启用关键软件包 ==="
-        # 基础Luci组件
-        sed -i 's/# CONFIG_PACKAGE_luci is not set/CONFIG_PACKAGE_luci=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci=y" >> .config
-        sed -i 's/# CONFIG_PACKAGE_luci-base is not set/CONFIG_PACKAGE_luci-base=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci-base=y" >> .config
-
-        # 中文语言包
-        sed -i 's/# CONFIG_PACKAGE_luci-i18n-base-zh-cn is not set/CONFIG_PACKAGE_luci-i18n-base-zh-cn=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
-        sed -i 's/# CONFIG_PACKAGE_luci-i18n-firewall-zh-cn is not set/CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
-
-        # 正常模式插件
+        
+        # 创建临时配置文件来强制启用
+        TEMP_CONFIG=$(mktemp)
+        
+        # 基础Luci组件（必须启用）
+        echo "CONFIG_PACKAGE_luci=y" >> "$TEMP_CONFIG"
+        echo "CONFIG_PACKAGE_luci-base=y" >> "$TEMP_CONFIG"
+        echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> "$TEMP_CONFIG"
+        
+        # 中文语言包（必须启用）
+        echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> "$TEMP_CONFIG"
+        echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> "$TEMP_CONFIG"
+        
+        # 根据配置类型启用插件
         if [ "$CONFIG_TYPE" = "normal" ] || [ "$CONFIG_TYPE" = "custom" ]; then
-            sed -i 's/# CONFIG_PACKAGE_luci-app-turboacc is not set/CONFIG_PACKAGE_luci-app-turboacc=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-            sed -i 's/# CONFIG_PACKAGE_luci-app-sqm is not set/CONFIG_PACKAGE_luci-app-sqm=y/' .config 2>/dev/null || echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
+            echo "# 正常模式插件" >> "$TEMP_CONFIG"
+            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> "$TEMP_CONFIG"
+            echo "CONFIG_PACKAGE_luci-app-sqm=y" >> "$TEMP_CONFIG"
+            echo "CONFIG_PACKAGE_luci-app-upnp=y" >> "$TEMP_CONFIG"
+            
+            # 尝试启用其他常用插件
+            echo "CONFIG_PACKAGE_luci-app-samba4=y" >> "$TEMP_CONFIG"
+            echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> "$TEMP_CONFIG"
+            echo "CONFIG_PACKAGE_luci-app-arpbind=y" >> "$TEMP_CONFIG"
+            echo "CONFIG_PACKAGE_luci-app-cpulimit=y" >> "$TEMP_CONFIG"
+            echo "CONFIG_PACKAGE_luci-app-diskman=y" >> "$TEMP_CONFIG"
+            
+            # 中文语言包
+            echo "CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y" >> "$TEMP_CONFIG"
+            echo "CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y" >> "$TEMP_CONFIG"
+            echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> "$TEMP_CONFIG"
         fi
-
+        
+        # 应用强制启用配置
+        cat "$TEMP_CONFIG" >> .config
+        rm -f "$TEMP_CONFIG"
+        
         echo "✅ 关键软件包强制启用完成"
+        
+        # 再次运行 defconfig 来解析依赖关系
+        echo "运行最终 make defconfig..."
+        make defconfig
         
         echo "=== 最终配置验证 ==="
         if grep -q "^${CORRECT_DEVICE_CONFIG}=y" .config; then
@@ -792,7 +853,7 @@ jobs:
     - name: 验证软件包配置
       run: |
         cd $BUILD_DIR
-        echo "=== 验证软件包配置 ==="
+        echo "=== 最终软件包配置验证 ==="
         
         # 检查关键软件包是否被正确配置
         echo "=== 关键软件包配置状态 ==="
@@ -802,23 +863,24 @@ jobs:
           if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
             echo "✅ $pkg: 已启用"
           else
-            echo "❌ $pkg: 未启用"
+            echo "❌ $pkg: 未启用 - 尝试修复"
+            echo "CONFIG_PACKAGE_${pkg}=y" >> .config
           fi
         done
         
         # 中文语言包
-        for pkg in "luci-i18n-base-zh-cn" "luci-i18n-firewall-zh-cn"; do
+        for pkg in "luci-i18n-base-zh-cn" "luci-i18n-firewall-zh-cn" "luci-i18n-sqm-zh-cn" "luci-i18n-upnp-zh-cn" "luci-i18n-turboacc-zh-cn"; do
           if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
             echo "✅ $pkg: 已启用"
           else
-            echo "❌ $pkg: 未启用"
+            echo "⚠️ $pkg: 未启用"
           fi
         done
         
         # 根据配置类型检查插件
         if [ "${{ github.event.inputs.config_type }}" = "normal" ] || [ "${{ github.event.inputs.config_type }}" = "custom" ]; then
           echo "=== 正常模式插件检查 ==="
-          for pkg in "luci-app-turboacc" "luci-app-sqm" "luci-app-upnp"; do
+          for pkg in "luci-app-turboacc" "luci-app-sqm" "luci-app-upnp" "luci-app-samba4" "luci-app-smartdns"; do
             if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
               echo "✅ $pkg: 已启用"
             else
@@ -828,6 +890,8 @@ jobs:
         fi
         
         echo "=== 配置验证完成 ==="
+        # 重新运行defconfig确保配置一致
+        make defconfig
 
     - name: 应用配置并编译
       run: |
