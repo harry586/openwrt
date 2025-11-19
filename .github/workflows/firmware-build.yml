@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流（YAML修复版）
+name: OpenWrt 智能固件构建工作流（完整版）
 
 on:
   workflow_dispatch:
@@ -99,7 +99,7 @@ jobs:
         echo "=== 复制脚本到构建目录 ==="
         cd $GITHUB_WORKSPACE
         
-        # 修复数组定义 - 一行内完成
+        # 复制所有脚本文件
         SCRIPTS=("complete_version_detector.sh" "device_detection.sh" "error_analysis.sh" "pre_download.sh" "check-plugins.sh" "diagnose-packages.sh")
         
         echo "要复制的脚本列表: ${SCRIPTS[@]}"
@@ -290,6 +290,48 @@ jobs:
         chmod +x *.sh
         echo "✅ 脚本恢复完成"
 
+    - name: 配置多源feeds
+      run: |
+        cd $BUILD_DIR
+        echo "=== 配置多源feeds ==="
+        
+        # 备份原始feeds配置
+        cp feeds.conf.default feeds.conf.default.backup
+        
+        # 创建多源feeds配置
+        cat > feeds.conf.default << 'EOF'
+src-git immortalwrt_packages https://github.com/immortalwrt/packages;main
+src-git immortalwrt_luci https://github.com/immortalwrt/luci;main
+src-git immortalwrt_routing https://github.com/immortalwrt/routing;main
+src-git immortalwrt_telephony https://github.com/immortalwrt/telephony;main
+
+# OpenWrt 官方源
+src-git openwrt_packages https://git.openwrt.org/feed/packages.git;main
+src-git openwrt_luci https://git.openwrt.org/project/luci.git;main
+src-git openwrt_routing https://git.openwrt.org/feed/routing.git;main
+src-git openwrt_telephony https://git.openwrt.org/feed/telephony.git;main
+
+# 第三方插件源
+src-git lienol_packages https://github.com/Lienol/openwrt-packages;main
+src-git kenzo_packages https://github.com/kenzok8/openwrt-packages;main
+src-git small_packages https://github.com/kenzok8/small;main
+
+# 特定功能插件源
+src-git smartdns https://github.com/pymumu/openwrt-smartdns;master
+src-git openclash https://github.com/vernesong/OpenClash;master
+EOF
+        
+        echo "✅ 多源feeds配置完成"
+        echo "Feeds配置内容:"
+        cat feeds.conf.default
+
+    - name: 更新安装feeds
+      run: |
+        cd $BUILD_DIR
+        echo "=== 更新和安装feeds ==="
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
     - name: 复制配置文件和脚本
       run: |
         cd $BUILD_DIR
@@ -411,14 +453,225 @@ jobs:
             fi
         fi
 
-    - name: 更新安装feeds
+    - name: 创建智能插件检查脚本
       run: |
         cd $BUILD_DIR
-        echo "=== 更新和安装feeds ==="
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
+        echo "=== 创建智能插件检查脚本 ==="
+        
+        # 创建完整的智能插件检查脚本
+        cat > check-plugins.sh << 'EOF'
+#!/bin/bash
+set -e
 
-    - name: 检查插件可用性
+BUILD_DIR="${1:-.}"
+cd "$BUILD_DIR"
+
+echo "=== 智能插件可用性检查与映射系统 ==="
+
+# 更新feeds确保最新
+echo "更新feeds..."
+./scripts/feeds update -a > /dev/null 2>&1
+
+# 完整的插件映射表（功能相同但名称不同的插件）
+declare -A PLUGIN_MAPPING=(
+    # 网络加速类
+    ["luci-app-turboacc"]="luci-app-flowoffload luci-app-sfe luci-app-offloading luci-app-shortcut-fe"
+    ["luci-app-flowoffload"]="luci-app-turboacc luci-app-sfe luci-app-offloading"
+    ["luci-app-sfe"]="luci-app-turboacc luci-app-flowoffload luci-app-offloading"
+    
+    # Samba文件共享
+    ["luci-app-samba4"]="luci-app-samba"
+    ["luci-app-samba"]="luci-app-samba4"
+    
+    # DNS相关
+    ["luci-app-smartdns"]="luci-app-mosdns luci-app-adguardhome"
+    ["luci-app-adguardhome"]="luci-app-smartdns luci-app-mosdns"
+    
+    # 广告屏蔽
+    ["luci-app-adbyby"]="luci-app-adblock luci-app-koolproxy"
+    ["luci-app-adblock"]="luci-app-adbyby luci-app-koolproxy"
+    
+    # 网络存储
+    ["luci-app-usb-printer"]="luci-app-p910nd"
+    ["luci-app-aria2"]="luci-app-ariang"
+    
+    # VPN相关
+    ["luci-app-openvpn"]="luci-app-openconnect luci-app-wireguard"
+    ["luci-app-wireguard"]="luci-app-openvpn luci-app-openconnect"
+    
+    # 网络工具
+    ["luci-app-nlbwmon"]="luci-app-bandwidthd"
+    ["luci-app-wol"]="luci-app-wolplus"
+    
+    # 系统工具
+    ["luci-app-filetransfer"]="luci-app-filebrowser"
+    ["luci-app-diskman"]="luci-app-hd-idle luci-app-disk-usage"
+    
+    # 网络监控
+    ["luci-app-watchcat"]="luci-app-autoreboot"
+    ["luci-app-nft-qos"]="luci-app-qos"
+)
+
+# 关键插件列表（必须存在）
+CRITICAL_PLUGINS=(
+    "luci"
+    "luci-base" 
+    "luci-theme-bootstrap"
+    "luci-i18n-base-zh-cn"
+    "luci-i18n-firewall-zh-cn"
+)
+
+# 重要插件列表（建议存在）
+IMPORTANT_PLUGINS=(
+    "luci-app-upnp"
+    "luci-app-sqm"
+    "luci-app-firewall"
+    "luci-app-ddns"
+)
+
+# 功能插件列表（按需启用）
+FEATURE_PLUGINS=(
+    "luci-app-turboacc"
+    "luci-app-samba4"
+    "luci-app-smartdns"
+    "luci-app-arpbind"
+    "luci-app-cpulimit"
+    "luci-app-diskman"
+    "luci-app-wireguard"
+    "luci-app-adblock"
+    "luci-app-aria2"
+    "luci-app-usb-printer"
+)
+
+echo "=== 开始检查插件可用性 ==="
+
+# 创建报告文件
+REPORT_FILE="plugin_availability_report.txt"
+echo "插件可用性检查报告" > $REPORT_FILE
+echo "生成时间: $(date)" >> $REPORT_FILE
+echo "==========================================" >> $REPORT_FILE
+
+# 检查关键插件
+echo "" >> $REPORT_FILE
+echo "=== 关键插件检查 ===" >> $REPORT_FILE
+CRITICAL_MISSING=()
+for plugin in "${CRITICAL_PLUGINS[@]}"; do
+    if ./scripts/feeds install "$plugin" > /dev/null 2>&1; then
+        echo "✅ $plugin" | tee -a $REPORT_FILE
+    else
+        echo "❌ $plugin" | tee -a $REPORT_FILE
+        CRITICAL_MISSING+=("$plugin")
+    fi
+done
+
+# 检查重要插件
+echo "" >> $REPORT_FILE
+echo "=== 重要插件检查 ===" >> $REPORT_FILE
+IMPORTANT_MISSING=()
+IMPORTANT_ALTERNATIVES=()
+for plugin in "${IMPORTANT_PLUGINS[@]}"; do
+    if ./scripts/feeds install "$plugin" > /dev/null 2>&1; then
+        echo "✅ $plugin" | tee -a $REPORT_FILE
+    else
+        ALTERNATIVES=${PLUGIN_MAPPING[$plugin]}
+        FOUND_ALTERNATIVE=""
+        
+        for alt in $ALTERNATIVES; do
+            if ./scripts/feeds install "$alt" > /dev/null 2>&1; then
+                echo "🔄 $plugin → $alt (替代)" | tee -a $REPORT_FILE
+                FOUND_ALTERNATIVE="$alt"
+                IMPORTANT_ALTERNATIVES+=("$plugin->$alt")
+                break
+            fi
+        done
+        
+        if [ -z "$FOUND_ALTERNATIVE" ]; then
+            echo "⚠️ $plugin (无替代)" | tee -a $REPORT_FILE
+            IMPORTANT_MISSING+=("$plugin")
+        fi
+    fi
+done
+
+# 检查功能插件
+echo "" >> $REPORT_FILE
+echo "=== 功能插件检查 ===" >> $REPORT_FILE
+FEATURE_MISSING=()
+FEATURE_ALTERNATIVES=()
+for plugin in "${FEATURE_PLUGINS[@]}"; do
+    if ./scripts/feeds install "$plugin" > /dev/null 2>&1; then
+        echo "✅ $plugin" | tee -a $REPORT_FILE
+    else
+        ALTERNATIVES=${PLUGIN_MAPPING[$plugin]}
+        FOUND_ALTERNATIVE=""
+        
+        for alt in $ALTERNATIVES; do
+            if ./scripts/feeds install "$alt" > /dev/null 2>&1; then
+                echo "🔄 $plugin → $alt (替代)" | tee -a $REPORT_FILE
+                FOUND_ALTERNATIVE="$alt"
+                FEATURE_ALTERNATIVES+=("$plugin->$alt")
+                break
+            fi
+        done
+        
+        if [ -z "$FOUND_ALTERNATIVE" ]; then
+            echo "⚠️ $plugin (无替代)" | tee -a $REPORT_FILE
+            FEATURE_MISSING+=("$plugin")
+        fi
+    fi
+done
+
+# 生成总结报告
+echo "" >> $REPORT_FILE
+echo "=== 检查总结 ===" >> $REPORT_FILE
+
+if [ ${#CRITICAL_MISSING[@]} -gt 0 ]; then
+    echo "❌ 关键插件缺失: ${CRITICAL_MISSING[*]}" >> $REPORT_FILE
+else
+    echo "✅ 所有关键插件都可用" >> $REPORT_FILE
+fi
+
+if [ ${#IMPORTANT_MISSING[@]} -gt 0 ]; then
+    echo "⚠️ 重要插件缺失: ${IMPORTANT_MISSING[*]}" >> $REPORT_FILE
+else
+    echo "✅ 所有重要插件都可用或有替代" >> $REPORT_FILE
+fi
+
+if [ ${#IMPORTANT_ALTERNATIVES[@]} -gt 0 ]; then
+    echo "🔄 重要插件替代: ${IMPORTANT_ALTERNATIVES[*]}" >> $REPORT_FILE
+fi
+
+if [ ${#FEATURE_MISSING[@]} -gt 0 ]; then
+    echo "ℹ️ 功能插件缺失: ${FEATURE_MISSING[*]}" >> $REPORT_FILE
+else
+    echo "✅ 所有功能插件都可用或有替代" >> $REPORT_FILE
+fi
+
+if [ ${#FEATURE_ALTERNATIVES[@]} -gt 0 ]; then
+    echo "🔄 功能插件替代: ${FEATURE_ALTERNATIVES[*]}" >> $REPORT_FILE
+fi
+
+# 输出到控制台
+echo ""
+echo "=== 插件检查完成 ==="
+cat $REPORT_FILE
+
+# 返回状态码
+if [ ${#CRITICAL_MISSING[@]} -gt 0 ]; then
+    echo "❌ 关键插件缺失，构建终止"
+    exit 1
+elif [ ${#IMPORTANT_MISSING[@]} -gt 0 ]; then
+    echo "⚠️ 重要插件缺失，但继续构建"
+    exit 2
+else
+    echo "✅ 插件检查通过"
+    exit 0
+fi
+EOF
+
+        chmod +x check-plugins.sh
+        echo "✅ 智能插件检查脚本创建完成"
+
+    - name: 智能检查插件可用性
       run: |
         cd $BUILD_DIR
         echo "=== 智能检查插件可用性 ==="
@@ -430,14 +683,22 @@ jobs:
             ./check-plugins.sh "$BUILD_DIR"
             CHECK_RESULT=$?
             set -e
-            if [ $CHECK_RESULT -eq 0 ]; then
-                echo "✅ 插件检查完成 - 所有包都可用"
-            elif [ $CHECK_RESULT -eq 1 ]; then
-                echo "❌ 插件检查失败 - 有关键包缺失"
-                exit 1
-            else
-                echo "⚠️ 插件检查完成 - 有非关键包缺失，但继续构建..."
-            fi
+            
+            case $CHECK_RESULT in
+                0)
+                    echo "✅ 插件检查完成 - 所有包都可用"
+                    ;;
+                1)
+                    echo "❌ 插件检查失败 - 有关键包缺失"
+                    exit 1
+                    ;;
+                2)
+                    echo "⚠️ 插件检查完成 - 有重要插件缺失但继续构建"
+                    ;;
+                *)
+                    echo "ℹ️ 插件检查完成"
+                    ;;
+            esac
         else
             echo "⚠️ 未找到插件检查脚本，跳过插件检查"
         fi
@@ -456,20 +717,17 @@ jobs:
             echo "⚠️ 未找到包诊断脚本，跳过诊断"
         fi
 
-    - name: 配置构建
+    - name: 智能插件替换配置
       run: |
         cd $BUILD_DIR
-        echo "=== 使用外部配置文件进行配置 ==="
+        echo "=== 智能插件替换配置 ==="
         
         > .config
         
+        # 基础配置
         echo "CONFIG_TARGET_${PLATFORM}=y" >> .config
         echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
-        
-        CORRECT_DEVICE_CONFIG="CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}"
-        echo "${CORRECT_DEVICE_CONFIG}=y" >> .config
-        echo "使用的设备配置项: ${CORRECT_DEVICE_CONFIG}=y"
-        
+        echo "CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" >> .config
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
         echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
@@ -477,35 +735,30 @@ jobs:
         CONFIG_TYPE="${{ github.event.inputs.config_type }}"
         echo "配置类型: $CONFIG_TYPE"
         
+        # 选择配置文件
         if [ "$CONFIG_TYPE" = "minimal" ]; then
             CONFIG_FILE="config-templates/minimal.config"
         elif [ "$CONFIG_TYPE" = "normal" ] || [ "$CONFIG_TYPE" = "custom" ]; then
             IS_OLD_VERSION=0
             if [ "${{ github.event.inputs.old_device }}" = "true" ]; then
                 IS_OLD_VERSION=1
-                echo "✅ 用户指定为老旧设备，使用旧版本配置"
             else
                 if echo "$SELECTED_BRANCH" | grep -q -E "19\.07|21\.02|17\.01|lede"; then
                     IS_OLD_VERSION=1
-                    echo "✅ 检测到旧版本分支: $SELECTED_BRANCH"
                 fi
                 if [ "$SELECTED_REPO" = "lede" ] || [ "$SELECTED_REPO" = "openwrt-19.07" ] || [ "$SELECTED_REPO" = "openwrt-21.02" ]; then
                     IS_OLD_VERSION=1
-                    echo "✅ 检测到旧版本仓库: $SELECTED_REPO"
                 fi
                 case "${{ github.event.inputs.device_name }}" in
                     "wr841n"|"wr842n"|"wr941n"|"mr3420"|"ar71xx"*)
                         IS_OLD_VERSION=1
-                        echo "✅ 检测到老旧设备型号: ${{ github.event.inputs.device_name }}"
                         ;;
                 esac
             fi
             
             if [ "$IS_OLD_VERSION" -eq 1 ]; then
-                echo "✅ 最终决定: 使用旧版本配置"
                 CONFIG_FILE="config-templates/normal-old.config"
             else
-                echo "✅ 最终决定: 使用新版本配置"
                 CONFIG_FILE="config-templates/normal-new.config"
             fi
         else
@@ -514,72 +767,91 @@ jobs:
         fi
         
         echo "=== 选择的配置文件: $CONFIG_FILE ==="
-        if [ -f "$CONFIG_FILE" ]; then
-            echo "✅ 配置文件存在，大小: $(wc -l < "$CONFIG_FILE") 行"
-            cat "$CONFIG_FILE" >> .config
-            echo "✅ 配置已加载: $(basename "$CONFIG_FILE")"
-        else
+        if [ ! -f "$CONFIG_FILE" ]; then
             echo "❌ 错误: 找不到配置文件 $CONFIG_FILE"
             exit 1
         fi
         
+        # 创建临时配置文件并进行智能替换
+        cp "$CONFIG_FILE" temp_config
+        
+        echo "=== 执行智能插件替换 ==="
+        
+        # 读取插件检查报告
+        if [ -f "plugin_availability_report.txt" ]; then
+            echo "使用插件检查报告进行智能替换..."
+            
+            # TurboACC 相关替换
+            if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" temp_config; then
+                if ! grep -q "✅ luci-app-turboacc" plugin_availability_report.txt && \
+                   grep -q "🔄 luci-app-turboacc →" plugin_availability_report.txt; then
+                    ALTERNATIVE=$(grep "🔄 luci-app-turboacc →" plugin_availability_report.txt | sed 's/.*→ \([^ ]*\).*/\1/')
+                    echo "🔄 替换: luci-app-turboacc → $ALTERNATIVE"
+                    sed -i "s/CONFIG_PACKAGE_luci-app-turboacc=y/CONFIG_PACKAGE_${ALTERNATIVE}=y/" temp_config
+                elif grep -q "⚠️ luci-app-turboacc" plugin_availability_report.txt; then
+                    echo "⚠️ 禁用不可用的插件: luci-app-turboacc"
+                    sed -i 's/CONFIG_PACKAGE_luci-app-turboacc=y/# CONFIG_PACKAGE_luci-app-turboacc is not set/' temp_config
+                fi
+            fi
+            
+            # Samba 相关替换
+            if grep -q "CONFIG_PACKAGE_luci-app-samba4=y" temp_config; then
+                if ! grep -q "✅ luci-app-samba4" plugin_availability_report.txt && \
+                   grep -q "🔄 luci-app-samba4 →" plugin_availability_report.txt; then
+                    ALTERNATIVE=$(grep "🔄 luci-app-samba4 →" plugin_availability_report.txt | sed 's/.*→ \([^ ]*\).*/\1/')
+                    echo "🔄 替换: luci-app-samba4 → $ALTERNATIVE"
+                    sed -i "s/CONFIG_PACKAGE_luci-app-samba4=y/CONFIG_PACKAGE_${ALTERNATIVE}=y/" temp_config
+                elif grep -q "⚠️ luci-app-samba4" plugin_availability_report.txt; then
+                    echo "⚠️ 禁用不可用的插件: luci-app-samba4"
+                    sed -i 's/CONFIG_PACKAGE_luci-app-samba4=y/# CONFIG_PACKAGE_luci-app-samba4 is not set/' temp_config
+                fi
+            fi
+            
+            # 其他插件替换（可根据需要扩展）
+            for plugin in "luci-app-smartdns" "luci-app-adblock" "luci-app-wireguard" "luci-app-aria2"; do
+                if grep -q "CONFIG_PACKAGE_${plugin}=y" temp_config; then
+                    if ! grep -q "✅ ${plugin}" plugin_availability_report.txt && \
+                       grep -q "🔄 ${plugin} →" plugin_availability_report.txt; then
+                        ALTERNATIVE=$(grep "🔄 ${plugin} →" plugin_availability_report.txt | sed 's/.*→ \([^ ]*\).*/\1/')
+                        echo "🔄 替换: ${plugin} → $ALTERNATIVE"
+                        sed -i "s/CONFIG_PACKAGE_${plugin}=y/CONFIG_PACKAGE_${ALTERNATIVE}=y/" temp_config
+                    elif grep -q "⚠️ ${plugin}" plugin_availability_report.txt; then
+                        echo "⚠️ 禁用不可用的插件: ${plugin}"
+                        sed -i "s/CONFIG_PACKAGE_${plugin}=y/# CONFIG_PACKAGE_${plugin} is not set/" temp_config
+                    fi
+                fi
+            done
+        else
+            echo "⚠️ 未找到插件检查报告，使用基础替换逻辑"
+            # 基础替换逻辑（作为备用）
+            if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" temp_config && \
+               ! ./scripts/feeds install luci-app-turboacc >/dev/null 2>&1; then
+                if ./scripts/feeds install luci-app-flowoffload >/dev/null 2>&1; then
+                    echo "🔄 替换: luci-app-turboacc → luci-app-flowoffload"
+                    sed -i 's/CONFIG_PACKAGE_luci-app-turboacc=y/CONFIG_PACKAGE_luci-app-flowoffload=y/' temp_config
+                fi
+            fi
+        fi
+        
+        # 应用配置
+        cat temp_config >> .config
+        rm -f temp_config
+        
+        echo "✅ 配置加载完成"
+        
+        # 运行 make defconfig
         echo "运行 make defconfig..."
         make defconfig
         
-        echo "=== 关键包强制启用 ==="
-        if [ -f "scripts/config" ]; then
-            ./scripts/config --enable PACKAGE_luci
-            ./scripts/config --enable PACKAGE_luci-base
-            ./scripts/config --enable PACKAGE_luci-theme-bootstrap
-            ./scripts/config --enable PACKAGE_luci-i18n-base-zh-cn
-            ./scripts/config --enable PACKAGE_luci-i18n-firewall-zh-cn
-            
-            if [ "$CONFIG_TYPE" = "normal" ] || [ "$CONFIG_TYPE" = "custom" ]; then
-                ./scripts/config --enable PACKAGE_luci-app-turboacc
-                ./scripts/config --enable PACKAGE_luci-app-sqm
-                ./scripts/config --enable PACKAGE_luci-app-upnp
-                ./scripts/config --enable PACKAGE_luci-app-samba4
-                ./scripts/config --enable PACKAGE_luci-app-smartdns
-                ./scripts/config --enable PACKAGE_luci-app-arpbind
-                ./scripts/config --enable PACKAGE_luci-app-cpulimit
-                ./scripts/config --enable PACKAGE_luci-app-diskman
-                ./scripts/config --enable PACKAGE_luci-i18n-sqm-zh-cn
-                ./scripts/config --enable PACKAGE_luci-i18n-upnp-zh-cn
-                ./scripts/config --enable PACKAGE_luci-i18n-turboacc-zh-cn
-            fi
-            echo "✅ 使用 scripts/config 强制启用关键包"
-        else
-            echo "⚠️ scripts/config 不存在，使用sed方式强制启用"
-            sed -i 's/# CONFIG_PACKAGE_luci is not set/CONFIG_PACKAGE_luci=y/' .config
-            sed -i 's/# CONFIG_PACKAGE_luci-base is not set/CONFIG_PACKAGE_luci-base=y/' .config
-            sed -i 's/# CONFIG_PACKAGE_luci-theme-bootstrap is not set/CONFIG_PACKAGE_luci-theme-bootstrap=y/' .config
-            sed -i 's/# CONFIG_PACKAGE_luci-i18n-base-zh-cn is not set/CONFIG_PACKAGE_luci-i18n-base-zh-cn=y/' .config
-            sed -i 's/# CONFIG_PACKAGE_luci-i18n-firewall-zh-cn is not set/CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y/' .config
-            
-            if [ "$CONFIG_TYPE" = "normal" ] || [ "$CONFIG_TYPE" = "custom" ]; then
-                sed -i 's/# CONFIG_PACKAGE_luci-app-turboacc is not set/CONFIG_PACKAGE_luci-app-turboacc=y/' .config
-            fi
-            echo "✅ 使用sed强制启用关键包"
-        fi
-        
         echo "=== 最终配置验证 ==="
-        if grep -q "^${CORRECT_DEVICE_CONFIG}=y" .config; then
-            echo "✅ 设备 $DEVICE_SHORT_NAME 已成功启用"
+        if grep -q "^CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" .config; then
+            echo "✅ 设备配置正确"
         else
-            echo "❌ 设备 $DEVICE_SHORT_NAME 启用失败，构建终止"
+            echo "❌ 设备配置错误"
             exit 1
         fi
-        
-        echo "=== 关键包状态验证 ==="
-        for pkg in "luci" "luci-base" "luci-theme-bootstrap" "luci-i18n-base-zh-cn" "luci-i18n-firewall-zh-cn" "luci-app-turboacc"; do
-            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
-                echo "✅ $pkg: 已启用"
-            else
-                echo "❌ $pkg: 未启用"
-            fi
-        done
 
-    - name: 自定义文件集成
+    - name: 构建时集成自定义文件
       if: github.event.inputs.custom_install == 'true'
       run: |
         cd $BUILD_DIR
@@ -947,6 +1219,30 @@ jobs:
             grep -E "❌|✅|💡|🔧" enhanced_error_analysis.log | head -20
         fi
 
+    - name: 生成插件映射报告
+      if: always()
+      run: |
+        cd $BUILD_DIR
+        echo "=== 生成插件映射分析报告 ==="
+        
+        if [ -f "plugin_availability_report.txt" ]; then
+            echo "📊 插件可用性分析报告:"
+            cat plugin_availability_report.txt
+            
+            # 提取关键信息用于后续分析
+            echo ""
+            echo "🔍 关键信息提取:"
+            grep -E "❌|⚠️|🔄" plugin_availability_report.txt | while read line; do
+                echo "   $line"
+            done
+            
+            # 保存插件映射报告到工作区
+            cp plugin_availability_report.txt "$GITHUB_WORKSPACE/插件映射报告.txt"
+            echo "✅ 插件映射报告已保存到仓库"
+        else
+            echo "ℹ️ 未找到插件检查报告"
+        fi
+
     - name: 验证固件
       if: always()
       run: |
@@ -1044,6 +1340,7 @@ jobs:
         git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
         git add firmware-config/configs/
         git add "构建报告.md" 2>/dev/null || true
+        git add "插件映射报告.txt" 2>/dev/null || true
         
         if git diff --staged --quiet; then
           echo "ℹ️ 没有配置文件更改需要提交"
@@ -1074,7 +1371,9 @@ jobs:
           ${{ env.BUILD_DIR }}/build_detailed.log
           ${{ env.BUILD_DIR }}/enhanced_error_analysis.log
           ${{ env.BUILD_DIR }}/download_attempt_*.log
+          ${{ env.BUILD_DIR }}/plugin_availability_report.txt
           $GITHUB_WORKSPACE/构建报告.md
+          $GITHUB_WORKSPACE/插件映射报告.txt
         retention-days: 7
 
     - name: 清理目录
