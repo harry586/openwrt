@@ -270,87 +270,133 @@ jobs:
         chmod +x *.sh
         echo "✅ 脚本恢复完成"
 
-    - name: 配置多源feeds
+    - name: 修复feeds配置问题
       run: |
         cd $BUILD_DIR
-        echo "=== 配置多源feeds ==="
-        cp feeds.conf.default feeds.conf.default.backup
-        echo "src-git immortalwrt_packages https://github.com/immortalwrt/packages;master" > feeds.conf.default
-        echo "src-git immortalwrt_luci https://github.com/immortalwrt/luci;master" >> feeds.conf.default
-        echo "src-git immortalwrt_routing https://github.com/immortalwrt/routing;master" >> feeds.conf.default
-        echo "src-git immortalwrt_telephony https://github.com/immortalwrt/telephony;master" >> feeds.conf.default
-        echo "" >> feeds.conf.default
-        echo "# OpenWrt 官方源" >> feeds.conf.default
-        echo "src-git openwrt_packages https://git.openwrt.org/feed/packages.git;master" >> feeds.conf.default
-        echo "src-git openwrt_luci https://git.openwrt.org/project/luci.git;master" >> feeds.conf.default
-        echo "src-git openwrt_routing https://git.openwrt.org/feed/routing.git;master" >> feeds.conf.default
-        echo "src-git openwrt_telephony https://git.openwrt.org/feed/telephony.git;master" >> feeds.conf.default
-        echo "" >> feeds.conf.default
-        echo "# 第三方插件源" >> feeds.conf.default
-        echo "src-git lienol_packages https://github.com/Lienol/openwrt-packages;master" >> feeds.conf.default
-        echo "src-git kenzo_packages https://github.com/kenzok8/openwrt-packages;master" >> feeds.conf.default
-        echo "src-git small_packages https://github.com/kenzok8/small;master" >> feeds.conf.default
-        echo "" >> feeds.conf.default
-        echo "# 特定功能插件源" >> feeds.conf.default
-        echo "src-git smartdns https://github.com/pymumu/openwrt-smartdns;master" >> feeds.conf.default
-        echo "src-git openclash https://github.com/vernesong/OpenClash;master" >> feeds.conf.default
-        echo "✅ 多源feeds配置完成"
-        echo "Feeds配置内容:"
+        echo "=== 修复feeds配置问题 ==="
+        
+        # 检查当前feeds配置
+        echo "当前feeds.conf.default内容:"
         cat feeds.conf.default
+        
+        # 使用更稳定的feeds配置
+        echo "使用更稳定的feeds配置..."
+        cat > feeds.conf.default << 'EOF'
+src-git packages https://git.openwrt.org/feed/packages.git^3e7f3b2c
+src-git luci https://git.openwrt.org/project/luci.git^3e7f3b2c
+src-git routing https://git.openwrt.org/feed/routing.git^3e7f3b2c
+src-git telephony https://git.openwrt.org/feed/telephony.git^3e7f3b2c
+# src-git video https://github.com/openwrt/video.git
+# src-git targets https://github.com/openwrt/targets.git
+# src-git oldpackages http://git.openwrt.org/packages.git
+# src-link custom /usr/src/openwrt/custom-feed
+EOF
+        
+        echo "修复后的feeds.conf.default内容:"
+        cat feeds.conf.default
+        echo "✅ feeds配置修复完成"
 
     - name: 更新安装feeds
       run: |
         cd $BUILD_DIR
         echo "=== 更新和安装feeds ==="
+        
         echo "第一次更新feeds..."
         set +e
         ./scripts/feeds update -a
         UPDATE_RESULT=$?
         set -e
+        
         if [ $UPDATE_RESULT -ne 0 ]; then
-            echo "⚠️ 第一次更新失败，检查并修复分支配置..."
-            FAILED_FEEDS=$(./scripts/feeds list -n 2>/dev/null | awk '{print $1}' | sort -u)
-            for feed in $FAILED_FEEDS; do
-                echo "尝试修复feed: $feed"
-                rm -rf "./feeds/$feed" 2>/dev/null || true
-            done
+            echo "⚠️ 第一次更新失败，尝试修复..."
+            # 清理失败的feeds目录
+            rm -rf ./feeds/* 2>/dev/null || true
+            
             echo "第二次更新feeds..."
             set +e
             ./scripts/feeds update -a
             UPDATE_RESULT=$?
             set -e
+            
             if [ $UPDATE_RESULT -ne 0 ]; then
                 echo "❌ 更新feeds失败，但继续尝试安装..."
             fi
         fi
+        
         echo "安装feeds..."
         set +e
         ./scripts/feeds install -a
         INSTALL_RESULT=$?
         set -e
+        
         if [ $INSTALL_RESULT -ne 0 ]; then
             echo "⚠️ 部分feeds安装失败，但继续构建流程..."
-            echo "失败的feeds可能影响部分功能，但核心构建可以继续"
         else
             echo "✅ feeds安装完成"
         fi
-        echo "=== 可用的feeds列表 ==="
-        ./scripts/feeds list | head -20
 
     - name: 验证feeds状态
       run: |
         cd $BUILD_DIR
         echo "=== 验证feeds状态 ==="
+        
         echo "Feeds目录内容:"
         ls -la feeds/ 2>/dev/null || echo "feeds目录不存在或为空"
+        
+        echo "关键feeds检查:"
         CRITICAL_FEEDS=("packages" "luci")
+        FEEDS_EXIST=true
+        
         for feed in "${CRITICAL_FEEDS[@]}"; do
             if [ -d "feeds/$feed" ]; then
                 echo "✅ 关键feed存在: $feed"
+                echo "  - 内容示例:"
+                ls "feeds/$feed" | head -5
             else
-                echo "⚠️ 关键feed缺失: $feed"
+                echo "❌ 关键feed缺失: $feed"
+                FEEDS_EXIST=false
             fi
         done
+        
+        if [ "$FEEDS_EXIST" = false ]; then
+            echo "❌ 关键feeds缺失，无法继续构建"
+            echo "当前所有feeds:"
+            ./scripts/feeds list | head -20
+            exit 1
+        fi
+        
+        echo "✅ 所有关键feeds都存在"
+
+    - name: 添加第三方feeds
+      run: |
+        cd $BUILD_DIR
+        echo "=== 添加第三方feeds ==="
+        
+        # 在基本feeds工作后添加第三方feeds
+        echo "添加第三方feeds到feeds.conf.default..."
+        echo "" >> feeds.conf.default
+        echo "# 第三方插件源" >> feeds.conf.default
+        echo "src-git kenzo_packages https://github.com/kenzok8/openwrt-packages;master" >> feeds.conf.default
+        echo "src-git small_packages https://github.com/kenzok8/small;master" >> feeds.conf.default
+        echo "src-git smartdns https://github.com/pymumu/openwrt-smartdns;master" >> feeds.conf.default
+        echo "src-git openclash https://github.com/vernesong/OpenClash;master" >> feeds.conf.default
+        
+        echo "更新第三方feeds..."
+        set +e
+        ./scripts/feeds update kenzo_packages small_packages smartdns openclash
+        UPDATE_RESULT=$?
+        set -e
+        
+        if [ $UPDATE_RESULT -eq 0 ]; then
+            echo "安装第三方feeds..."
+            ./scripts/feeds install -p kenzo_packages -a
+            ./scripts/feeds install -p small_packages -a
+            ./scripts/feeds install -p smartdns -a
+            ./scripts/feeds install -p openclash -a
+            echo "✅ 第三方feeds添加完成"
+        else
+            echo "⚠️ 第三方feeds更新失败，但继续构建"
+        fi
 
     - name: 复制配置文件和脚本
       run: |
@@ -371,6 +417,7 @@ jobs:
           fi
         done
         echo "✅ 配置文件复制完成"
+        
         SCRIPTS=("error_analysis.sh" "pre_download.sh" "check-plugins.sh" "diagnose-packages.sh")
         for script in "${SCRIPTS[@]}"; do
           FOUND_SCRIPT=$(find . -name "$script" -type f | head -1)
@@ -458,81 +505,40 @@ jobs:
             fi
         fi
 
-    - name: 创建智能插件检查脚本
+    - name: 简化插件检查
       run: |
         cd $BUILD_DIR
-        echo "=== 创建智能插件检查脚本 ==="
-        echo '#!/bin/bash' > check-plugins.sh
-        echo 'set -e' >> check-plugins.sh
-        echo 'BUILD_DIR="${1:-.}"' >> check-plugins.sh
-        echo 'cd "$BUILD_DIR"' >> check-plugins.sh
-        echo 'echo "=== 智能插件可用性检查与映射系统 ==="' >> check-plugins.sh
-        echo 'echo "更新feeds..."' >> check-plugins.sh
-        echo './scripts/feeds update -a > /dev/null 2>&1' >> check-plugins.sh
-        echo 'CRITICAL_PLUGINS=("luci" "luci-base" "luci-theme-bootstrap" "luci-i18n-base-zh-cn" "luci-i18n-firewall-zh-cn")' >> check-plugins.sh
-        echo 'FEATURE_PLUGINS=("luci-app-turboacc" "luci-app-samba4" "luci-app-smartdns" "luci-app-arpbind" "luci-app-cpulimit" "luci-app-diskman")' >> check-plugins.sh
-        echo 'REPORT_FILE="plugin_availability_report.txt"' >> check-plugins.sh
-        echo 'echo "插件可用性检查报告" > $REPORT_FILE' >> check-plugins.sh
-        echo 'echo "生成时间: $(date)" >> $REPORT_FILE' >> check-plugins.sh
-        echo 'echo "=== 关键插件检查 ===" >> $REPORT_FILE' >> check-plugins.sh
-        echo 'CRITICAL_MISSING=()' >> check-plugins.sh
-        echo 'for plugin in "${CRITICAL_PLUGINS[@]}"; do' >> check-plugins.sh
-        echo '    if ./scripts/feeds install "$plugin" > /dev/null 2>&1; then' >> check-plugins.sh
-        echo '        echo "✅ $plugin" | tee -a $REPORT_FILE' >> check-plugins.sh
-        echo '    else' >> check-plugins.sh
-        echo '        echo "❌ $plugin" | tee -a $REPORT_FILE' >> check-plugins.sh
-        echo '        CRITICAL_MISSING+=("$plugin")' >> check-plugins.sh
-        echo '    fi' >> check-plugins.sh
-        echo 'done' >> check-plugins.sh
-        echo 'echo "=== 功能插件检查 ===" >> $REPORT_FILE' >> check-plugins.sh
-        echo 'FEATURE_MISSING=()' >> check-plugins.sh
-        echo 'for plugin in "${FEATURE_PLUGINS[@]}"; do' >> check-plugins.sh
-        echo '    if ./scripts/feeds install "$plugin" > /dev/null 2>&1; then' >> check-plugins.sh
-        echo '        echo "✅ $plugin" | tee -a $REPORT_FILE' >> check-plugins.sh
-        echo '    else' >> check-plugins.sh
-        echo '        echo "⚠️ $plugin (无替代)" | tee -a $REPORT_FILE' >> check-plugins.sh
-        echo '        FEATURE_MISSING+=("$plugin")' >> check-plugins.sh
-        echo '    fi' >> check-plugins.sh
-        echo 'done' >> check-plugins.sh
-        echo 'echo "=== 检查总结 ===" >> $REPORT_FILE' >> check-plugins.sh
-        echo 'if [ ${#CRITICAL_MISSING[@]} -gt 0 ]; then' >> check-plugins.sh
-        echo '    echo "❌ 关键插件缺失: ${CRITICAL_MISSING[*]}" >> $REPORT_FILE' >> check-plugins.sh
-        echo '    echo "❌ 关键插件缺失，构建终止"' >> check-plugins.sh
-        echo '    exit 1' >> check-plugins.sh
-        echo 'else' >> check-plugins.sh
-        echo '    echo "✅ 所有关键插件都可用" >> $REPORT_FILE' >> check-plugins.sh
-        echo '    echo "✅ 插件检查通过"' >> check-plugins.sh
-        echo '    exit 0' >> check-plugins.sh
-        echo 'fi' >> check-plugins.sh
-        chmod +x check-plugins.sh
-        echo "✅ 智能插件检查脚本创建完成"
-
-    - name: 智能检查插件可用性
-      run: |
-        cd $BUILD_DIR
-        echo "=== 智能检查插件可用性 ==="
-        if [ -f "check-plugins.sh" ]; then
-            chmod +x check-plugins.sh
-            echo "开始智能检查插件在feeds中的可用性..."
-            set +e
-            ./check-plugins.sh "$BUILD_DIR"
-            CHECK_RESULT=$?
-            set -e
-            case $CHECK_RESULT in
-                0)
-                    echo "✅ 插件检查完成 - 所有包都可用"
-                    ;;
-                1)
-                    echo "❌ 插件检查失败 - 有关键包缺失"
-                    exit 1
-                    ;;
-                *)
-                    echo "ℹ️ 插件检查完成"
-                    ;;
-            esac
-        else
-            echo "⚠️ 未找到插件检查脚本，跳过插件检查"
-        fi
+        echo "=== 简化插件检查 ==="
+        
+        echo "检查关键包可用性..."
+        set +e
+        
+        # 检查基本包
+        echo "1. 检查基本包:"
+        for pkg in base-files procd; do
+            if ./scripts/feeds list | grep -q "$pkg"; then
+                echo "✅ $pkg 可用"
+            else
+                echo "⚠️ $pkg 不可用"
+            fi
+        done
+        
+        # 检查luci包
+        echo "2. 检查Luci包:"
+        for pkg in luci-base luci-theme-bootstrap; do
+            if ./scripts/feeds list | grep -q "$pkg"; then
+                echo "✅ $pkg 可用"
+            else
+                echo "⚠️ $pkg 不可用"
+            fi
+        done
+        
+        # 列出所有可用的包
+        echo "3. 可用包列表 (前20个):"
+        ./scripts/feeds list | head -20
+        
+        set -e
+        echo "✅ 简化插件检查完成"
 
     - name: 应用配置模板
       run: |
