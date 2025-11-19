@@ -274,24 +274,17 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 修复feeds配置问题 ==="
-        
-        # 检查当前feeds配置
         echo "当前feeds.conf.default内容:"
         cat feeds.conf.default
-        
-        # 使用更稳定的feeds配置
         echo "使用更稳定的feeds配置..."
-        cat > feeds.conf.default << 'EOF'
-src-git packages https://git.openwrt.org/feed/packages.git^3e7f3b2c
-src-git luci https://git.openwrt.org/project/luci.git^3e7f3b2c
-src-git routing https://git.openwrt.org/feed/routing.git^3e7f3b2c
-src-git telephony https://git.openwrt.org/feed/telephony.git^3e7f3b2c
-# src-git video https://github.com/openwrt/video.git
-# src-git targets https://github.com/openwrt/targets.git
-# src-git oldpackages http://git.openwrt.org/packages.git
-# src-link custom /usr/src/openwrt/custom-feed
-EOF
-        
+        echo "src-git packages https://git.openwrt.org/feed/packages.git^3e7f3b2c" > feeds.conf.default
+        echo "src-git luci https://git.openwrt.org/project/luci.git^3e7f3b2c" >> feeds.conf.default
+        echo "src-git routing https://git.openwrt.org/feed/routing.git^3e7f3b2c" >> feeds.conf.default
+        echo "src-git telephony https://git.openwrt.org/feed/telephony.git^3e7f3b2c" >> feeds.conf.default
+        echo "# src-git video https://github.com/openwrt/video.git" >> feeds.conf.default
+        echo "# src-git targets https://github.com/openwrt/targets.git" >> feeds.conf.default
+        echo "# src-git oldpackages http://git.openwrt.org/packages.git" >> feeds.conf.default
+        echo "# src-link custom /usr/src/openwrt/custom-feed" >> feeds.conf.default
         echo "修复后的feeds.conf.default内容:"
         cat feeds.conf.default
         echo "✅ feeds配置修复完成"
@@ -300,35 +293,28 @@ EOF
       run: |
         cd $BUILD_DIR
         echo "=== 更新和安装feeds ==="
-        
         echo "第一次更新feeds..."
         set +e
         ./scripts/feeds update -a
         UPDATE_RESULT=$?
         set -e
-        
         if [ $UPDATE_RESULT -ne 0 ]; then
             echo "⚠️ 第一次更新失败，尝试修复..."
-            # 清理失败的feeds目录
             rm -rf ./feeds/* 2>/dev/null || true
-            
             echo "第二次更新feeds..."
             set +e
             ./scripts/feeds update -a
             UPDATE_RESULT=$?
             set -e
-            
             if [ $UPDATE_RESULT -ne 0 ]; then
                 echo "❌ 更新feeds失败，但继续尝试安装..."
             fi
         fi
-        
         echo "安装feeds..."
         set +e
         ./scripts/feeds install -a
         INSTALL_RESULT=$?
         set -e
-        
         if [ $INSTALL_RESULT -ne 0 ]; then
             echo "⚠️ 部分feeds安装失败，但继续构建流程..."
         else
@@ -339,14 +325,11 @@ EOF
       run: |
         cd $BUILD_DIR
         echo "=== 验证feeds状态 ==="
-        
         echo "Feeds目录内容:"
         ls -la feeds/ 2>/dev/null || echo "feeds目录不存在或为空"
-        
         echo "关键feeds检查:"
         CRITICAL_FEEDS=("packages" "luci")
         FEEDS_EXIST=true
-        
         for feed in "${CRITICAL_FEEDS[@]}"; do
             if [ -d "feeds/$feed" ]; then
                 echo "✅ 关键feed存在: $feed"
@@ -357,22 +340,18 @@ EOF
                 FEEDS_EXIST=false
             fi
         done
-        
         if [ "$FEEDS_EXIST" = false ]; then
             echo "❌ 关键feeds缺失，无法继续构建"
             echo "当前所有feeds:"
             ./scripts/feeds list | head -20
             exit 1
         fi
-        
         echo "✅ 所有关键feeds都存在"
 
     - name: 添加第三方feeds
       run: |
         cd $BUILD_DIR
         echo "=== 添加第三方feeds ==="
-        
-        # 在基本feeds工作后添加第三方feeds
         echo "添加第三方feeds到feeds.conf.default..."
         echo "" >> feeds.conf.default
         echo "# 第三方插件源" >> feeds.conf.default
@@ -380,13 +359,11 @@ EOF
         echo "src-git small_packages https://github.com/kenzok8/small;master" >> feeds.conf.default
         echo "src-git smartdns https://github.com/pymumu/openwrt-smartdns;master" >> feeds.conf.default
         echo "src-git openclash https://github.com/vernesong/OpenClash;master" >> feeds.conf.default
-        
         echo "更新第三方feeds..."
         set +e
         ./scripts/feeds update kenzo_packages small_packages smartdns openclash
         UPDATE_RESULT=$?
         set -e
-        
         if [ $UPDATE_RESULT -eq 0 ]; then
             echo "安装第三方feeds..."
             ./scripts/feeds install -p kenzo_packages -a
@@ -417,7 +394,6 @@ EOF
           fi
         done
         echo "✅ 配置文件复制完成"
-        
         SCRIPTS=("error_analysis.sh" "pre_download.sh" "check-plugins.sh" "diagnose-packages.sh")
         for script in "${SCRIPTS[@]}"; do
           FOUND_SCRIPT=$(find . -name "$script" -type f | head -1)
@@ -509,11 +485,8 @@ EOF
       run: |
         cd $BUILD_DIR
         echo "=== 简化插件检查 ==="
-        
         echo "检查关键包可用性..."
         set +e
-        
-        # 检查基本包
         echo "1. 检查基本包:"
         for pkg in base-files procd; do
             if ./scripts/feeds list | grep -q "$pkg"; then
@@ -522,8 +495,6 @@ EOF
                 echo "⚠️ $pkg 不可用"
             fi
         done
-        
-        # 检查luci包
         echo "2. 检查Luci包:"
         for pkg in luci-base luci-theme-bootstrap; do
             if ./scripts/feeds list | grep -q "$pkg"; then
@@ -532,11 +503,8 @@ EOF
                 echo "⚠️ $pkg 不可用"
             fi
         done
-        
-        # 列出所有可用的包
         echo "3. 可用包列表 (前20个):"
         ./scripts/feeds list | head -20
-        
         set -e
         echo "✅ 简化插件检查完成"
 
