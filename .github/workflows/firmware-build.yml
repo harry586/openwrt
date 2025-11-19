@@ -23,7 +23,10 @@ on:
         required: true
         default: 'normal'
         type: choice
-        options: ['minimal', 'normal', 'custom']
+        options:
+          - minimal
+          - normal
+          - custom
       extra_packages:
         description: '额外安装插件 (空格分隔的包名)'
         required: false
@@ -98,15 +101,11 @@ jobs:
       run: |
         echo "=== 复制脚本到构建目录 ==="
         cd $GITHUB_WORKSPACE
-        
-        # 复制所有脚本文件
         SCRIPTS=("complete_version_detector.sh" "device_detection.sh" "error_analysis.sh" "pre_download.sh" "check-plugins.sh" "diagnose-packages.sh")
-        
-        echo "要复制的脚本列表: ${SCRIPTS[@]}"
+        echo "要复制的脚本列表: ${SCRIPTS[*]}"
         echo "当前工作目录: $(pwd)"
         echo "目录内容:"
         find . -name "*.sh" -type f | head -20
-        
         COPIED_COUNT=0
         for script in "${SCRIPTS[@]}"; do
           echo "正在查找: $script"
@@ -119,9 +118,7 @@ jobs:
             echo "⚠️ 未找到: $script"
           fi
         done
-        
         echo "总共复制了 $COPIED_COUNT 个脚本文件"
-        
         cd $BUILD_DIR
         echo "构建目录中的脚本:"
         ls -la *.sh 2>/dev/null || echo "没有找到.sh文件"
@@ -134,10 +131,8 @@ jobs:
         echo "=== 验证脚本存在性 ==="
         echo "构建目录内容:"
         ls -la
-        
         REQUIRED_SCRIPTS=("complete_version_detector.sh" "device_detection.sh")
         ALL_SCRIPTS_EXIST=true
-        
         for script in "${REQUIRED_SCRIPTS[@]}"; do
           if [ -f "$script" ]; then
             echo "✅ $script 存在"
@@ -147,7 +142,6 @@ jobs:
             ALL_SCRIPTS_EXIST=false
           fi
         done
-        
         if [ "$ALL_SCRIPTS_EXIST" = false ]; then
           echo "当前目录中的文件:"
           ls -la
@@ -163,32 +157,25 @@ jobs:
         sudo chown -R $USER:$USER . 2>/dev/null || true
         chmod u+w . 2>/dev/null || true
         chmod +x *.sh 2>/dev/null || true
-        
         echo "设备名称: ${{ github.event.inputs.device_name }}"
         echo "版本规格: ${{ github.event.inputs.version_spec }}"
         echo "老旧设备: ${{ github.event.inputs.old_device }}"
-        
         if [ ! -f "complete_version_detector.sh" ]; then
           echo "❌ 错误: complete_version_detector.sh 不存在"
           ls -la
           exit 1
         fi
-        
         chmod +x complete_version_detector.sh
-        
         set +e
         OUTPUT=$(./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}" 2>&1)
         SCRIPT_EXIT_CODE=$?
         set -e
-        
         echo "脚本输出:"
         echo "$OUTPUT"
         echo "脚本退出代码: $SCRIPT_EXIT_CODE"
-        
         SELECTED_REPO=$(echo "$OUTPUT" | grep "^SELECTED_REPO=" | head -1 | cut -d'=' -f2)
         SELECTED_BRANCH=$(echo "$OUTPUT" | grep "^SELECTED_BRANCH=" | head -1 | cut -d'=' -f2)
         SELECTED_REPO_URL=$(echo "$OUTPUT" | grep "^SELECTED_REPO_URL=" | head -1 | cut -d'=' -f2)
-        
         if [ -n "$SELECTED_REPO" ] && [ -n "$SELECTED_BRANCH" ] && [ -n "$SELECTED_REPO_URL" ]; then
             echo "✅ 从脚本输出中成功提取版本信息"
             echo "SELECTED_REPO=$SELECTED_REPO" >> $GITHUB_ENV
@@ -235,33 +222,27 @@ jobs:
         echo "=== 克隆选定版本的源码 ==="
         echo "仓库: $SELECTED_REPO_URL"
         echo "分支: $SELECTED_BRANCH"
-        
         if [ -z "$SELECTED_REPO_URL" ] || [ -z "$SELECTED_BRANCH" ]; then
           echo "❌ 错误: 环境变量未正确设置"
           exit 1
         fi
-        
         echo "检查目录状态..."
         FILE_COUNT=$(ls -A | wc -l)
         if [ $FILE_COUNT -ne 0 ]; then
           echo "❌ 错误: 目录非空，无法克隆"
           exit 1
         fi
-        
         MAX_RETRIES=3
         RETRY_COUNT=0
         CLONE_SUCCESS=false
-        
         while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$CLONE_SUCCESS" = false ]; do
           RETRY_COUNT=$((RETRY_COUNT + 1))
           echo "克隆尝试: $RETRY_COUNT/$MAX_RETRIES"
-          
           if git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .; then
             echo "✅ 源码克隆完成"
             CLONE_SUCCESS=true
           else
             echo "❌ 克隆失败，尝试 $RETRY_COUNT/$MAX_RETRIES"
-            
             if echo "$SELECTED_REPO_URL" | grep -q "github.com" && [ $RETRY_COUNT -eq 2 ]; then
               echo "🔄 尝试使用镜像源..."
               MIRROR_URL=$(echo "$SELECTED_REPO_URL" | sed 's/github.com/github.com.cnpmjs.org/')
@@ -272,7 +253,6 @@ jobs:
                 break
               fi
             fi
-            
             if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
               echo "❌ 源码克隆失败，达到最大重试次数"
               exit 1
@@ -294,11 +274,7 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 配置多源feeds ==="
-        
-        # 备份原始feeds配置
         cp feeds.conf.default feeds.conf.default.backup
-        
-        # 创建多源feeds配置 - 修复分支名称
         echo "src-git immortalwrt_packages https://github.com/immortalwrt/packages;master" > feeds.conf.default
         echo "src-git immortalwrt_luci https://github.com/immortalwrt/luci;master" >> feeds.conf.default
         echo "src-git immortalwrt_routing https://github.com/immortalwrt/routing;master" >> feeds.conf.default
@@ -318,7 +294,6 @@ jobs:
         echo "# 特定功能插件源" >> feeds.conf.default
         echo "src-git smartdns https://github.com/pymumu/openwrt-smartdns;master" >> feeds.conf.default
         echo "src-git openclash https://github.com/vernesong/OpenClash;master" >> feeds.conf.default
-        
         echo "✅ 多源feeds配置完成"
         echo "Feeds配置内容:"
         cat feeds.conf.default
@@ -327,54 +302,38 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 更新和安装feeds ==="
-        
-        # 第一次尝试更新
         echo "第一次更新feeds..."
         set +e
         ./scripts/feeds update -a
         UPDATE_RESULT=$?
         set -e
-        
-        # 如果更新失败，尝试修复分支问题
         if [ $UPDATE_RESULT -ne 0 ]; then
             echo "⚠️ 第一次更新失败，检查并修复分支配置..."
-            
-            # 检查哪些feed失败并尝试修复
             FAILED_FEEDS=$(./scripts/feeds list -n 2>/dev/null | awk '{print $1}' | sort -u)
-            
             for feed in $FAILED_FEEDS; do
                 echo "尝试修复feed: $feed"
-                # 删除失败的feed目录
                 rm -rf "./feeds/$feed" 2>/dev/null || true
             done
-            
-            # 第二次尝试更新
             echo "第二次更新feeds..."
             set +e
             ./scripts/feeds update -a
             UPDATE_RESULT=$?
             set -e
-            
             if [ $UPDATE_RESULT -ne 0 ]; then
                 echo "❌ 更新feeds失败，但继续尝试安装..."
             fi
         fi
-        
-        # 安装feeds
         echo "安装feeds..."
         set +e
         ./scripts/feeds install -a
         INSTALL_RESULT=$?
         set -e
-        
         if [ $INSTALL_RESULT -ne 0 ]; then
             echo "⚠️ 部分feeds安装失败，但继续构建流程..."
             echo "失败的feeds可能影响部分功能，但核心构建可以继续"
         else
             echo "✅ feeds安装完成"
         fi
-        
-        # 列出可用的feeds
         echo "=== 可用的feeds列表 ==="
         ./scripts/feeds list | head -20
 
@@ -382,12 +341,8 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 验证feeds状态 ==="
-        
-        # 检查feeds目录结构
         echo "Feeds目录内容:"
         ls -la feeds/ 2>/dev/null || echo "feeds目录不存在或为空"
-        
-        # 检查关键feeds是否存在
         CRITICAL_FEEDS=("packages" "luci")
         for feed in "${CRITICAL_FEEDS[@]}"; do
             if [ -d "feeds/$feed" ]; then
@@ -402,7 +357,6 @@ jobs:
         cd $BUILD_DIR
         echo "=== 重新复制配置文件和脚本 ==="
         cd $GITHUB_WORKSPACE
-        
         echo "=== 查找配置文件 ==="
         mkdir -p $BUILD_DIR/config-templates
         CONFIG_FILES=("minimal.config" "normal-new.config" "normal-old.config")
@@ -416,9 +370,7 @@ jobs:
             echo "⚠️ 未找到: $config_file"
           fi
         done
-        
         echo "✅ 配置文件复制完成"
-        
         SCRIPTS=("error_analysis.sh" "pre_download.sh" "check-plugins.sh" "diagnose-packages.sh")
         for script in "${SCRIPTS[@]}"; do
           FOUND_SCRIPT=$(find . -name "$script" -type f | head -1)
@@ -428,7 +380,6 @@ jobs:
             echo "✅ 更新脚本: $script"
           fi
         done
-        
         echo "✅ 配置文件和脚本重新复制完成"
 
     - name: 设备检测
@@ -436,10 +387,8 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 智能设备检测与别名转换 ==="
-        
         INPUT_DEVICE="${{ github.event.inputs.device_name }}"
         echo "输入设备名称: $INPUT_DEVICE"
-        
         case "$INPUT_DEVICE" in
             "ac42u"|"acrh17"|"rt-acrh17") ACTUAL_DEVICE="asus_rt-ac42u" ;;
             "ac58u"|"acrh13"|"rt-ac58u"|"rt-acrh13") ACTUAL_DEVICE="asus_rt-ac58u" ;;
@@ -447,40 +396,31 @@ jobs:
             "mi3g"|"r3g") ACTUAL_DEVICE="xiaomi_mi-router-3g" ;;
             *) ACTUAL_DEVICE="$INPUT_DEVICE" ;;
         esac
-        
         if [ "$ACTUAL_DEVICE" != "$INPUT_DEVICE" ]; then
           echo "✅ 检测到设备通用名称 '$INPUT_DEVICE'，转换为实际设备标识 '$ACTUAL_DEVICE'"
         else
           echo "ℹ️ 使用原始设备名称: $ACTUAL_DEVICE"
         fi
-        
         if [ ! -f "device_detection.sh" ]; then
           echo "❌ 错误: 设备检测脚本不存在"
           exit 1
         fi
         chmod +x device_detection.sh
-        
         echo "=== 开始设备检测 ==="
         TEMP_LOG=$(mktemp)
-        
         set +e
         ./device_detection.sh "$ACTUAL_DEVICE" 2>&1 | tee "$TEMP_LOG"
         SCRIPT_EXIT_CODE=$?
         set -e
-        
         echo "=== 脚本退出代码: $SCRIPT_EXIT_CODE ==="
-        
         PLATFORM=$(grep "^PLATFORM=" "$TEMP_LOG" | tail -1 | cut -d'=' -f2)
         DEVICE_SHORT_NAME=$(grep "^DEVICE_SHORT_NAME=" "$TEMP_LOG" | tail -1 | cut -d'=' -f2)
         DEVICE_FULL_NAME=$(grep "^DEVICE_FULL_NAME=" "$TEMP_LOG" | tail -1 | cut -d'=' -f2)
-        
         echo "=== 提取的设备信息 ==="
         echo "平台(PLATFORM): '$PLATFORM'"
         echo "设备短名称(DEVICE_SHORT_NAME): '$DEVICE_SHORT_NAME'"
         echo "设备全名称(DEVICE_FULL_NAME): '$DEVICE_FULL_NAME'"
-        
         rm -f "$TEMP_LOG"
-        
         if [ -n "$PLATFORM" ] && [ -n "$DEVICE_SHORT_NAME" ] && [ -n "$DEVICE_FULL_NAME" ]; then
             echo "✅ 从脚本输出中成功提取设备信息"
             echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
@@ -522,8 +462,6 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 创建智能插件检查脚本 ==="
-        
-        # 使用多个echo命令创建完整的智能插件检查脚本
         echo '#!/bin/bash' > check-plugins.sh
         echo 'set -e' >> check-plugins.sh
         echo 'BUILD_DIR="${1:-.}"' >> check-plugins.sh
@@ -531,16 +469,12 @@ jobs:
         echo 'echo "=== 智能插件可用性检查与映射系统 ==="' >> check-plugins.sh
         echo 'echo "更新feeds..."' >> check-plugins.sh
         echo './scripts/feeds update -a > /dev/null 2>&1' >> check-plugins.sh
-        
-        # 这里简化了插件映射内容，您可以根据需要扩展
         echo 'CRITICAL_PLUGINS=("luci" "luci-base" "luci-theme-bootstrap" "luci-i18n-base-zh-cn" "luci-i18n-firewall-zh-cn")' >> check-plugins.sh
         echo 'FEATURE_PLUGINS=("luci-app-turboacc" "luci-app-samba4" "luci-app-smartdns" "luci-app-arpbind" "luci-app-cpulimit" "luci-app-diskman")' >> check-plugins.sh
         echo 'REPORT_FILE="plugin_availability_report.txt"' >> check-plugins.sh
         echo 'echo "插件可用性检查报告" > $REPORT_FILE' >> check-plugins.sh
         echo 'echo "生成时间: $(date)" >> $REPORT_FILE' >> check-plugins.sh
         echo 'echo "=== 关键插件检查 ===" >> $REPORT_FILE' >> check-plugins.sh
-        
-        # 关键插件检查
         echo 'CRITICAL_MISSING=()' >> check-plugins.sh
         echo 'for plugin in "${CRITICAL_PLUGINS[@]}"; do' >> check-plugins.sh
         echo '    if ./scripts/feeds install "$plugin" > /dev/null 2>&1; then' >> check-plugins.sh
@@ -550,8 +484,6 @@ jobs:
         echo '        CRITICAL_MISSING+=("$plugin")' >> check-plugins.sh
         echo '    fi' >> check-plugins.sh
         echo 'done' >> check-plugins.sh
-        
-        # 功能插件检查
         echo 'echo "=== 功能插件检查 ===" >> $REPORT_FILE' >> check-plugins.sh
         echo 'FEATURE_MISSING=()' >> check-plugins.sh
         echo 'for plugin in "${FEATURE_PLUGINS[@]}"; do' >> check-plugins.sh
@@ -562,8 +494,6 @@ jobs:
         echo '        FEATURE_MISSING+=("$plugin")' >> check-plugins.sh
         echo '    fi' >> check-plugins.sh
         echo 'done' >> check-plugins.sh
-        
-        # 总结报告
         echo 'echo "=== 检查总结 ===" >> $REPORT_FILE' >> check-plugins.sh
         echo 'if [ ${#CRITICAL_MISSING[@]} -gt 0 ]; then' >> check-plugins.sh
         echo '    echo "❌ 关键插件缺失: ${CRITICAL_MISSING[*]}" >> $REPORT_FILE' >> check-plugins.sh
@@ -574,7 +504,6 @@ jobs:
         echo '    echo "✅ 插件检查通过"' >> check-plugins.sh
         echo '    exit 0' >> check-plugins.sh
         echo 'fi' >> check-plugins.sh
-
         chmod +x check-plugins.sh
         echo "✅ 智能插件检查脚本创建完成"
 
@@ -582,7 +511,6 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 智能检查插件可用性 ==="
-        
         if [ -f "check-plugins.sh" ]; then
             chmod +x check-plugins.sh
             echo "开始智能检查插件在feeds中的可用性..."
@@ -590,7 +518,6 @@ jobs:
             ./check-plugins.sh "$BUILD_DIR"
             CHECK_RESULT=$?
             set -e
-            
             case $CHECK_RESULT in
                 0)
                     echo "✅ 插件检查完成 - 所有包都可用"
@@ -611,14 +538,10 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 应用配置模板 ==="
-        
         CONFIG_TYPE="${{ github.event.inputs.config_type }}"
         IS_OLD_DEVICE="${{ github.event.inputs.old_device }}"
-        
         echo "配置类型: $CONFIG_TYPE"
         echo "是否为老旧设备: $IS_OLD_DEVICE"
-        
-        # 根据配置类型和老旧设备选择配置文件
         case "$CONFIG_TYPE" in
             "minimal")
                 CONFIG_FILE="config-templates/minimal.config"
@@ -631,7 +554,6 @@ jobs:
                 fi
                 ;;
             "custom")
-                # 自定义配置，使用用户提供的额外包和禁用包
                 if [ "$IS_OLD_DEVICE" = "true" ]; then
                     CONFIG_FILE="config-templates/normal-old.config"
                 else
@@ -643,7 +565,6 @@ jobs:
                 exit 1
                 ;;
         esac
-        
         if [ -f "$CONFIG_FILE" ]; then
             echo "✅ 使用配置文件: $CONFIG_FILE"
             cp "$CONFIG_FILE" .config
@@ -653,8 +574,6 @@ jobs:
             ls -la config-templates/ 2>/dev/null || echo "config-templates目录不存在"
             exit 1
         fi
-        
-        # 应用配置
         echo "应用配置..."
         make defconfig
         echo "✅ 配置应用完成"
@@ -664,14 +583,10 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 自定义配置调整 ==="
-        
         EXTRA_PACKAGES="${{ github.event.inputs.extra_packages }}"
         DISABLED_PLUGINS="${{ github.event.inputs.disabled_plugins }}"
-        
         echo "额外包: $EXTRA_PACKAGES"
         echo "禁用插件: $DISABLED_PLUGINS"
-        
-        # 启用额外包
         if [ -n "$EXTRA_PACKAGES" ]; then
             for package in $EXTRA_PACKAGES; do
                 echo "启用包: $package"
@@ -683,8 +598,6 @@ jobs:
                 fi
             done
         fi
-        
-        # 禁用插件
         if [ -n "$DISABLED_PLUGINS" ]; then
             for plugin in $DISABLED_PLUGINS; do
                 echo "禁用插件: $plugin"
@@ -693,8 +606,6 @@ jobs:
                 echo "✅ 禁用插件 $plugin"
             done
         fi
-        
-        # 重新应用配置
         make defconfig
         echo "✅ 自定义配置调整完成"
 
@@ -702,40 +613,29 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 预下载源文件 ==="
-        
-        # 创建预下载脚本
-        cat > pre-download-sources.sh << 'EOF'
-#!/bin/bash
-set -e
-echo "=== 开始预下载源文件 ==="
-
-# 创建下载目录
-mkdir -p dl
-cd dl
-
-# 预下载常用源文件（根据历史构建经验）
-COMMON_SOURCES=(
-    "https://github.com/protocolbuffers/protobuf/releases/download/v3.20.1/protobuf-cpp-3.20.1.tar.gz"
-    "https://www.openssl.org/source/openssl-1.1.1q.tar.gz"
-    "https://www.zlib.net/zlib-1.2.12.tar.gz"
-    "https://sqlite.org/2022/sqlite-autoconf-3390400.tar.gz"
-    "https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz"
-    "https://github.com/curl/curl/releases/download/curl-7_86_0/curl-7.86.0.tar.xz"
-)
-
-for source in "${COMMON_SOURCES[@]}"; do
-    filename=$(basename "$source")
-    if [ ! -f "$filename" ]; then
-        echo "下载: $filename"
-        wget --timeout=60 --tries=3 "$source" || echo "下载失败: $filename"
-    else
-        echo "已存在: $filename"
-    fi
-done
-
-echo "✅ 预下载完成"
-EOF
-        
+        echo '#!/bin/bash' > pre-download-sources.sh
+        echo 'set -e' >> pre-download-sources.sh
+        echo 'echo "=== 开始预下载源文件 ==="' >> pre-download-sources.sh
+        echo 'mkdir -p dl' >> pre-download-sources.sh
+        echo 'cd dl' >> pre-download-sources.sh
+        echo 'COMMON_SOURCES=(' >> pre-download-sources.sh
+        echo '  "https://github.com/protocolbuffers/protobuf/releases/download/v3.20.1/protobuf-cpp-3.20.1.tar.gz"' >> pre-download-sources.sh
+        echo '  "https://www.openssl.org/source/openssl-1.1.1q.tar.gz"' >> pre-download-sources.sh
+        echo '  "https://www.zlib.net/zlib-1.2.12.tar.gz"' >> pre-download-sources.sh
+        echo '  "https://sqlite.org/2022/sqlite-autoconf-3390400.tar.gz"' >> pre-download-sources.sh
+        echo '  "https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz"' >> pre-download-sources.sh
+        echo '  "https://github.com/curl/curl/releases/download/curl-7_86_0/curl-7.86.0.tar.xz"' >> pre-download-sources.sh
+        echo ')' >> pre-download-sources.sh
+        echo 'for source in "${COMMON_SOURCES[@]}"; do' >> pre-download-sources.sh
+        echo '    filename=$(basename "$source")' >> pre-download-sources.sh
+        echo '    if [ ! -f "$filename" ]; then' >> pre-download-sources.sh
+        echo '        echo "下载: $filename"' >> pre-download-sources.sh
+        echo '        wget --timeout=60 --tries=3 "$source" || echo "下载失败: $filename"' >> pre-download-sources.sh
+        echo '    else' >> pre-download-sources.sh
+        echo '        echo "已存在: $filename"' >> pre-download-sources.sh
+        echo '    fi' >> pre-download-sources.sh
+        echo 'done' >> pre-download-sources.sh
+        echo 'echo "✅ 预下载完成"' >> pre-download-sources.sh
         chmod +x pre-download-sources.sh
         ./pre-download-sources.sh
 
@@ -744,34 +644,25 @@ EOF
       run: |
         cd $BUILD_DIR
         echo "=== 开始编译固件 ==="
-        
-        # 设置编译线程数
         CPU_CORES=$(nproc)
         if [ $CPU_CORES -gt 8 ]; then
             JOBS=$((CPU_CORES - 2))
         else
             JOBS=$CPU_CORES
         fi
-        
         echo "使用编译线程数: $JOBS"
-        
-        # 开始编译
         set +e
         make -j$JOBS V=s
         BUILD_RESULT=$?
         set -e
-        
         if [ $BUILD_RESULT -eq 0 ]; then
             echo "✅ 固件编译成功"
         else
             echo "❌ 固件编译失败"
-            
-            # 错误分析
             if [ -f "error_analysis.sh" ]; then
                 chmod +x error_analysis.sh
                 ./error_analysis.sh
             fi
-            
             exit 1
         fi
 
@@ -780,18 +671,11 @@ EOF
       run: |
         cd $BUILD_DIR
         echo "=== 收集构建产物 ==="
-        
-        # 创建产物目录
         mkdir -p $GITHUB_WORKSPACE/firmware-output
-        
-        # 查找固件文件
         FIRMWARE_FILES=$(find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.gz" 2>/dev/null | head -10)
-        
         if [ -n "$FIRMWARE_FILES" ]; then
             echo "找到固件文件:"
             echo "$FIRMWARE_FILES"
-            
-            # 复制固件文件
             for firmware in $FIRMWARE_FILES; do
                 if [ -f "$firmware" ]; then
                     cp "$firmware" $GITHUB_WORKSPACE/firmware-output/
@@ -800,14 +684,10 @@ EOF
             done
         else
             echo "⚠️ 未找到固件文件"
-            # 列出构建目录内容以便调试
             echo "构建目录内容:"
             find bin/targets -type f 2>/dev/null | head -20
         fi
-        
-        # 复制配置文件
         cp .config $GITHUB_WORKSPACE/firmware-output/build-config.txt 2>/dev/null || true
-        
         echo "✅ 构建产物收集完成"
 
     - name: 上传构建产物
@@ -823,25 +703,17 @@ EOF
       run: |
         cd $BUILD_DIR
         echo "=== 保存配置文件到仓库 ==="
-        
         cd $GITHUB_WORKSPACE
-        
-        # 创建配置备份目录
         mkdir -p config-backups
-        
-        # 备份配置文件
         TIMESTAMP=$(date +%Y%m%d_%H%M%S)
         DEVICE_NAME="${{ github.event.inputs.device_name }}"
         CONFIG_BACKUP_FILE="config-backups/${DEVICE_NAME}_${TIMESTAMP}.config"
-        
         if [ -f "$BUILD_DIR/.config" ]; then
             cp "$BUILD_DIR/.config" "$CONFIG_BACKUP_FILE"
             echo "✅ 配置文件已保存: $CONFIG_BACKUP_FILE"
         else
             echo "⚠️ 未找到配置文件"
         fi
-        
-        # 提交到仓库
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add config-backups/
