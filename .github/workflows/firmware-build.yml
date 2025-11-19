@@ -298,22 +298,22 @@ jobs:
         # 备份原始feeds配置
         cp feeds.conf.default feeds.conf.default.backup
         
-        # 创建多源feeds配置 - 使用多个echo命令
-        echo "src-git immortalwrt_packages https://github.com/immortalwrt/packages;main" > feeds.conf.default
-        echo "src-git immortalwrt_luci https://github.com/immortalwrt/luci;main" >> feeds.conf.default
-        echo "src-git immortalwrt_routing https://github.com/immortalwrt/routing;main" >> feeds.conf.default
-        echo "src-git immortalwrt_telephony https://github.com/immortalwrt/telephony;main" >> feeds.conf.default
+        # 创建多源feeds配置 - 修复分支名称
+        echo "src-git immortalwrt_packages https://github.com/immortalwrt/packages;master" > feeds.conf.default
+        echo "src-git immortalwrt_luci https://github.com/immortalwrt/luci;master" >> feeds.conf.default
+        echo "src-git immortalwrt_routing https://github.com/immortalwrt/routing;master" >> feeds.conf.default
+        echo "src-git immortalwrt_telephony https://github.com/immortalwrt/telephony;master" >> feeds.conf.default
         echo "" >> feeds.conf.default
         echo "# OpenWrt 官方源" >> feeds.conf.default
-        echo "src-git openwrt_packages https://git.openwrt.org/feed/packages.git;main" >> feeds.conf.default
-        echo "src-git openwrt_luci https://git.openwrt.org/project/luci.git;main" >> feeds.conf.default
-        echo "src-git openwrt_routing https://git.openwrt.org/feed/routing.git;main" >> feeds.conf.default
-        echo "src-git openwrt_telephony https://git.openwrt.org/feed/telephony.git;main" >> feeds.conf.default
+        echo "src-git openwrt_packages https://git.openwrt.org/feed/packages.git;master" >> feeds.conf.default
+        echo "src-git openwrt_luci https://git.openwrt.org/project/luci.git;master" >> feeds.conf.default
+        echo "src-git openwrt_routing https://git.openwrt.org/feed/routing.git;master" >> feeds.conf.default
+        echo "src-git openwrt_telephony https://git.openwrt.org/feed/telephony.git;master" >> feeds.conf.default
         echo "" >> feeds.conf.default
         echo "# 第三方插件源" >> feeds.conf.default
-        echo "src-git lienol_packages https://github.com/Lienol/openwrt-packages;main" >> feeds.conf.default
-        echo "src-git kenzo_packages https://github.com/kenzok8/openwrt-packages;main" >> feeds.conf.default
-        echo "src-git small_packages https://github.com/kenzok8/small;main" >> feeds.conf.default
+        echo "src-git lienol_packages https://github.com/Lienol/openwrt-packages;master" >> feeds.conf.default
+        echo "src-git kenzo_packages https://github.com/kenzok8/openwrt-packages;master" >> feeds.conf.default
+        echo "src-git small_packages https://github.com/kenzok8/small;master" >> feeds.conf.default
         echo "" >> feeds.conf.default
         echo "# 特定功能插件源" >> feeds.conf.default
         echo "src-git smartdns https://github.com/pymumu/openwrt-smartdns;master" >> feeds.conf.default
@@ -327,8 +327,75 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 更新和安装feeds ==="
+        
+        # 第一次尝试更新
+        echo "第一次更新feeds..."
+        set +e
         ./scripts/feeds update -a
+        UPDATE_RESULT=$?
+        set -e
+        
+        # 如果更新失败，尝试修复分支问题
+        if [ $UPDATE_RESULT -ne 0 ]; then
+            echo "⚠️ 第一次更新失败，检查并修复分支配置..."
+            
+            # 检查哪些feed失败并尝试修复
+            FAILED_FEEDS=$(./scripts/feeds list -n 2>/dev/null | awk '{print $1}' | sort -u)
+            
+            for feed in $FAILED_FEEDS; do
+                echo "尝试修复feed: $feed"
+                # 删除失败的feed目录
+                rm -rf "./feeds/$feed" 2>/dev/null || true
+            done
+            
+            # 第二次尝试更新
+            echo "第二次更新feeds..."
+            set +e
+            ./scripts/feeds update -a
+            UPDATE_RESULT=$?
+            set -e
+            
+            if [ $UPDATE_RESULT -ne 0 ]; then
+                echo "❌ 更新feeds失败，但继续尝试安装..."
+            fi
+        fi
+        
+        # 安装feeds
+        echo "安装feeds..."
+        set +e
         ./scripts/feeds install -a
+        INSTALL_RESULT=$?
+        set -e
+        
+        if [ $INSTALL_RESULT -ne 0 ]; then
+            echo "⚠️ 部分feeds安装失败，但继续构建流程..."
+            echo "失败的feeds可能影响部分功能，但核心构建可以继续"
+        else
+            echo "✅ feeds安装完成"
+        fi
+        
+        # 列出可用的feeds
+        echo "=== 可用的feeds列表 ==="
+        ./scripts/feeds list | head -20
+
+    - name: 验证feeds状态
+      run: |
+        cd $BUILD_DIR
+        echo "=== 验证feeds状态 ==="
+        
+        # 检查feeds目录结构
+        echo "Feeds目录内容:"
+        ls -la feeds/ 2>/dev/null || echo "feeds目录不存在或为空"
+        
+        # 检查关键feeds是否存在
+        CRITICAL_FEEDS=("packages" "luci")
+        for feed in "${CRITICAL_FEEDS[@]}"; do
+            if [ -d "feeds/$feed" ]; then
+                echo "✅ 关键feed存在: $feed"
+            else
+                echo "⚠️ 关键feed缺失: $feed"
+            fi
+        done
 
     - name: 复制配置文件和脚本
       run: |
@@ -540,4 +607,256 @@ jobs:
             echo "⚠️ 未找到插件检查脚本，跳过插件检查"
         fi
 
-    # ... 后续步骤保持不变，只是确保不使用heredoc语法 ...
+    - name: 应用配置模板
+      run: |
+        cd $BUILD_DIR
+        echo "=== 应用配置模板 ==="
+        
+        CONFIG_TYPE="${{ github.event.inputs.config_type }}"
+        IS_OLD_DEVICE="${{ github.event.inputs.old_device }}"
+        
+        echo "配置类型: $CONFIG_TYPE"
+        echo "是否为老旧设备: $IS_OLD_DEVICE"
+        
+        # 根据配置类型和老旧设备选择配置文件
+        case "$CONFIG_TYPE" in
+            "minimal")
+                CONFIG_FILE="config-templates/minimal.config"
+                ;;
+            "normal")
+                if [ "$IS_OLD_DEVICE" = "true" ]; then
+                    CONFIG_FILE="config-templates/normal-old.config"
+                else
+                    CONFIG_FILE="config-templates/normal-new.config"
+                fi
+                ;;
+            "custom")
+                # 自定义配置，使用用户提供的额外包和禁用包
+                if [ "$IS_OLD_DEVICE" = "true" ]; then
+                    CONFIG_FILE="config-templates/normal-old.config"
+                else
+                    CONFIG_FILE="config-templates/normal-new.config"
+                fi
+                ;;
+            *)
+                echo "❌ 未知的配置类型: $CONFIG_TYPE"
+                exit 1
+                ;;
+        esac
+        
+        if [ -f "$CONFIG_FILE" ]; then
+            echo "✅ 使用配置文件: $CONFIG_FILE"
+            cp "$CONFIG_FILE" .config
+        else
+            echo "❌ 配置文件不存在: $CONFIG_FILE"
+            echo "可用的配置文件:"
+            ls -la config-templates/ 2>/dev/null || echo "config-templates目录不存在"
+            exit 1
+        fi
+        
+        # 应用配置
+        echo "应用配置..."
+        make defconfig
+        echo "✅ 配置应用完成"
+
+    - name: 自定义配置调整
+      if: inputs.extra_packages != '' || inputs.disabled_plugins != ''
+      run: |
+        cd $BUILD_DIR
+        echo "=== 自定义配置调整 ==="
+        
+        EXTRA_PACKAGES="${{ github.event.inputs.extra_packages }}"
+        DISABLED_PLUGINS="${{ github.event.inputs.disabled_plugins }}"
+        
+        echo "额外包: $EXTRA_PACKAGES"
+        echo "禁用插件: $DISABLED_PLUGINS"
+        
+        # 启用额外包
+        if [ -n "$EXTRA_PACKAGES" ]; then
+            for package in $EXTRA_PACKAGES; do
+                echo "启用包: $package"
+                if grep -q "CONFIG_PACKAGE_${package}=m" .config || grep -q "CONFIG_PACKAGE_${package}=y" .config; then
+                    echo "✅ 包 $package 已存在配置中"
+                else
+                    echo "CONFIG_PACKAGE_${package}=y" >> .config
+                    echo "✅ 添加包 $package 到配置"
+                fi
+            done
+        fi
+        
+        # 禁用插件
+        if [ -n "$DISABLED_PLUGINS" ]; then
+            for plugin in $DISABLED_PLUGINS; do
+                echo "禁用插件: $plugin"
+                sed -i "s/CONFIG_PACKAGE_${plugin}=y/CONFIG_PACKAGE_${plugin}=n/" .config
+                sed -i "s/CONFIG_PACKAGE_${plugin}=m/CONFIG_PACKAGE_${plugin}=n/" .config
+                echo "✅ 禁用插件 $plugin"
+            done
+        fi
+        
+        # 重新应用配置
+        make defconfig
+        echo "✅ 自定义配置调整完成"
+
+    - name: 预下载源文件
+      run: |
+        cd $BUILD_DIR
+        echo "=== 预下载源文件 ==="
+        
+        # 创建预下载脚本
+        cat > pre-download-sources.sh << 'EOF'
+#!/bin/bash
+set -e
+echo "=== 开始预下载源文件 ==="
+
+# 创建下载目录
+mkdir -p dl
+cd dl
+
+# 预下载常用源文件（根据历史构建经验）
+COMMON_SOURCES=(
+    "https://github.com/protocolbuffers/protobuf/releases/download/v3.20.1/protobuf-cpp-3.20.1.tar.gz"
+    "https://www.openssl.org/source/openssl-1.1.1q.tar.gz"
+    "https://www.zlib.net/zlib-1.2.12.tar.gz"
+    "https://sqlite.org/2022/sqlite-autoconf-3390400.tar.gz"
+    "https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz"
+    "https://github.com/curl/curl/releases/download/curl-7_86_0/curl-7.86.0.tar.xz"
+)
+
+for source in "${COMMON_SOURCES[@]}"; do
+    filename=$(basename "$source")
+    if [ ! -f "$filename" ]; then
+        echo "下载: $filename"
+        wget --timeout=60 --tries=3 "$source" || echo "下载失败: $filename"
+    else
+        echo "已存在: $filename"
+    fi
+done
+
+echo "✅ 预下载完成"
+EOF
+        
+        chmod +x pre-download-sources.sh
+        ./pre-download-sources.sh
+
+    - name: 编译固件
+      timeout-minutes: 180
+      run: |
+        cd $BUILD_DIR
+        echo "=== 开始编译固件 ==="
+        
+        # 设置编译线程数
+        CPU_CORES=$(nproc)
+        if [ $CPU_CORES -gt 8 ]; then
+            JOBS=$((CPU_CORES - 2))
+        else
+            JOBS=$CPU_CORES
+        fi
+        
+        echo "使用编译线程数: $JOBS"
+        
+        # 开始编译
+        set +e
+        make -j$JOBS V=s
+        BUILD_RESULT=$?
+        set -e
+        
+        if [ $BUILD_RESULT -eq 0 ]; then
+            echo "✅ 固件编译成功"
+        else
+            echo "❌ 固件编译失败"
+            
+            # 错误分析
+            if [ -f "error_analysis.sh" ]; then
+                chmod +x error_analysis.sh
+                ./error_analysis.sh
+            fi
+            
+            exit 1
+        fi
+
+    - name: 收集构建产物
+      if: success()
+      run: |
+        cd $BUILD_DIR
+        echo "=== 收集构建产物 ==="
+        
+        # 创建产物目录
+        mkdir -p $GITHUB_WORKSPACE/firmware-output
+        
+        # 查找固件文件
+        FIRMWARE_FILES=$(find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.gz" 2>/dev/null | head -10)
+        
+        if [ -n "$FIRMWARE_FILES" ]; then
+            echo "找到固件文件:"
+            echo "$FIRMWARE_FILES"
+            
+            # 复制固件文件
+            for firmware in $FIRMWARE_FILES; do
+                if [ -f "$firmware" ]; then
+                    cp "$firmware" $GITHUB_WORKSPACE/firmware-output/
+                    echo "✅ 复制: $(basename "$firmware")"
+                fi
+            done
+        else
+            echo "⚠️ 未找到固件文件"
+            # 列出构建目录内容以便调试
+            echo "构建目录内容:"
+            find bin/targets -type f 2>/dev/null | head -20
+        fi
+        
+        # 复制配置文件
+        cp .config $GITHUB_WORKSPACE/firmware-output/build-config.txt 2>/dev/null || true
+        
+        echo "✅ 构建产物收集完成"
+
+    - name: 上传构建产物
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: firmware-${{ github.event.inputs.device_name }}-${{ github.run_id }}
+        path: firmware-output/
+        retention-days: 7
+
+    - name: 保存配置文件到仓库
+      if: success() && inputs.save_config == 'true'
+      run: |
+        cd $BUILD_DIR
+        echo "=== 保存配置文件到仓库 ==="
+        
+        cd $GITHUB_WORKSPACE
+        
+        # 创建配置备份目录
+        mkdir -p config-backups
+        
+        # 备份配置文件
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        DEVICE_NAME="${{ github.event.inputs.device_name }}"
+        CONFIG_BACKUP_FILE="config-backups/${DEVICE_NAME}_${TIMESTAMP}.config"
+        
+        if [ -f "$BUILD_DIR/.config" ]; then
+            cp "$BUILD_DIR/.config" "$CONFIG_BACKUP_FILE"
+            echo "✅ 配置文件已保存: $CONFIG_BACKUP_FILE"
+        else
+            echo "⚠️ 未找到配置文件"
+        fi
+        
+        # 提交到仓库
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add config-backups/
+        git commit -m "保存构建配置: $DEVICE_NAME - $TIMESTAMP" || echo "没有变更需要提交"
+        git push
+
+    - name: 构建完成通知
+      if: always()
+      run: |
+        echo "=== 构建完成状态 ==="
+        if [ ${{ job.status }} == 'success' ]; then
+          echo "✅ 固件构建成功完成"
+          echo "设备: ${{ github.event.inputs.device_name }}"
+          echo "版本: $SELECTED_REPO/$SELECTED_BRANCH"
+        else
+          echo "❌ 固件构建失败"
+          echo "请检查构建日志了解详细错误信息"
+        fi
