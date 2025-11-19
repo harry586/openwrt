@@ -294,16 +294,17 @@ jobs:
         
         cp feeds.conf.default feeds.conf.default.backup
         
-        echo "src-git immortalwrt_packages https://github.com/immortalwrt/packages;main" > feeds.conf.default
-        echo "src-git immortalwrt_luci https://github.com/immortalwrt/luci;main" >> feeds.conf.default
-        echo "src-git immortalwrt_routing https://github.com/immortalwrt/routing;main" >> feeds.conf.default
-        echo "src-git immortalwrt_telephony https://github.com/immortalwrt/telephony;main" >> feeds.conf.default
+        # 使用正确的分支名称（方案1）
+        echo "src-git immortalwrt_packages https://github.com/immortalwrt/packages;master" > feeds.conf.default
+        echo "src-git immortalwrt_luci https://github.com/immortalwrt/luci;master" >> feeds.conf.default
+        echo "src-git immortalwrt_routing https://github.com/immortalwrt/routing;master" >> feeds.conf.default
+        echo "src-git immortalwrt_telephony https://github.com/immortalwrt/telephony;master" >> feeds.conf.default
         echo "" >> feeds.conf.default
         echo "# OpenWrt 官方源" >> feeds.conf.default
-        echo "src-git openwrt_packages https://git.openwrt.org/feed/packages.git;main" >> feeds.conf.default
-        echo "src-git openwrt_luci https://git.openwrt.org/project/luci.git;main" >> feeds.conf.default
-        echo "src-git openwrt_routing https://git.openwrt.org/feed/routing.git;main" >> feeds.conf.default
-        echo "src-git openwrt_telephony https://git.openwrt.org/feed/telephony.git;main" >> feeds.conf.default
+        echo "src-git openwrt_packages https://git.openwrt.org/feed/packages.git;master" >> feeds.conf.default
+        echo "src-git openwrt_luci https://git.openwrt.org/project/luci.git;master" >> feeds.conf.default
+        echo "src-git openwrt_routing https://git.openwrt.org/feed/routing.git;master" >> feeds.conf.default
+        echo "src-git openwrt_telephony https://git.openwrt.org/feed/telephony.git;master" >> feeds.conf.default
         echo "" >> feeds.conf.default
         echo "# 第三方插件源" >> feeds.conf.default
         echo "src-git lienol_packages https://github.com/Lienol/openwrt-packages;main" >> feeds.conf.default
@@ -314,12 +315,118 @@ jobs:
         echo "Feeds配置内容:"
         cat feeds.conf.default
 
-    - name: 更新安装feeds
+    - name: 智能更新安装feeds
       run: |
         cd $BUILD_DIR
-        echo "=== 更新和安装feeds ==="
-        ./scripts/feeds update -a
+        echo "=== 智能更新安装feeds ==="
+        
+        # 创建智能feeds更新脚本（方案3）
+        cat > smart_feeds_update.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        MAX_RETRIES=3
+        FEEDS_CONF="feeds.conf.default"
+        
+        echo "=== 开始智能feeds更新 ==="
+        
+        # 备份原始配置
+        cp "$FEEDS_CONF" "${FEEDS_CONF}.backup"
+        
+        # 第一次尝试更新
+        for attempt in $(seq 1 $MAX_RETRIES); do
+          echo "更新尝试 $attempt/$MAX_RETRIES"
+          
+          if ./scripts/feeds update -a; then
+            echo "✅ Feeds更新成功"
+            exit 0
+          else
+            echo "❌ Feeds更新失败"
+            
+            if [ $attempt -eq $MAX_RETRIES ]; then
+              echo "⚠️ 达到最大重试次数，尝试逐个更新feeds"
+              
+              # 获取所有feed名称
+              FEED_NAMES=$(grep "^src-" "$FEEDS_CONF" | cut -d' ' -f1 | sed 's/src-//')
+              
+              for feed in $FEED_NAMES; do
+                echo "单独更新feed: $feed"
+                set +e
+                ./scripts/feeds update "$feed"
+                UPDATE_RESULT=$?
+                set -e
+                
+                if [ $UPDATE_RESULT -ne 0 ]; then
+                  echo "⚠️ Feed $feed 更新失败，跳过"
+                  # 从配置中临时移除有问题的feed
+                  sed -i "/src-.*$feed/d" "$FEEDS_CONF"
+                fi
+              done
+              
+              break
+            fi
+            
+            # 修复常见问题
+            echo "🔄 尝试修复分支配置..."
+            sed -i 's/;main/;master/g' "$FEEDS_CONF"
+            sed -i 's/git.openwrt.org/github.com\/openwrt/g' "$FEEDS_CONF"
+            
+            echo "等待15秒后重试..."
+            sleep 15
+          fi
+        done
+        
+        echo "✅ Feeds更新完成"
+        EOF
+        
+        chmod +x smart_feeds_update.sh
+        
+        # 使用智能更新（方案2 + 方案3）
+        MAX_RETRIES=3
+        RETRY_COUNT=0
+        UPDATE_SUCCESS=false
+        
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$UPDATE_SUCCESS" = false ]; do
+          RETRY_COUNT=$((RETRY_COUNT + 1))
+          echo "Feeds更新尝试: $RETRY_COUNT/$MAX_RETRIES"
+          
+          set +e
+          ./smart_feeds_update.sh
+          UPDATE_EXIT_CODE=$?
+          set -e
+          
+          if [ $UPDATE_EXIT_CODE -eq 0 ]; then
+            echo "✅ Feeds更新成功"
+            UPDATE_SUCCESS=true
+          else
+            echo "❌ Feeds更新失败"
+            
+            if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+              echo "❌ 达到最大重试次数，尝试简化feeds配置"
+              
+              # 简化feeds配置作为最后手段
+              echo "src-git packages https://github.com/immortalwrt/packages;master" > feeds.conf.default
+              echo "src-git luci https://github.com/immortalwrt/luci;master" >> feeds.conf.default
+              echo "src-git routing https://github.com/immortalwrt/routing;master" >> feeds.conf.default
+              echo "src-git telephony https://github.com/immortalwrt/telephony;master" >> feeds.conf.default
+              
+              echo "🔄 使用简化配置重新更新..."
+              ./scripts/feeds update -a
+              break
+            else
+              echo "🔄 等待10秒后重试..."
+              sleep 10
+            fi
+          fi
+        done
+        
+        echo "=== 安装feeds ==="
         ./scripts/feeds install -a
+        
+        # 清理临时脚本
+        rm -f smart_feeds_update.sh
+        
+        echo "✅ Feeds更新安装完成"
 
     - name: 复制配置文件和脚本
       run: |
