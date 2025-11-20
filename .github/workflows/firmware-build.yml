@@ -446,83 +446,71 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 创建增强版插件检查脚本 ==="
-        cat > check-plugins.sh << 'EOF'
-#!/bin/bash
-set -e
-BUILD_DIR="${1:-.}"
-cd "$BUILD_DIR"
-echo "=== 增强版插件可用性检查 ==="
-
-if [ ! -d "feeds" ] || [ -z "$(ls -A feeds 2>/dev/null)" ]; then
-    echo "❌ Feeds目录为空，跳过插件检查"
-    echo "Feeds目录为空" > plugin_availability_report.txt
-    exit 0
-fi
-
-echo "更新feeds..."
-./scripts/feeds update -a > /dev/null 2>&1 || echo "⚠️ Feeds更新有警告"
-
-# 扩展核心插件列表
-CORE_PLUGINS=(
-    "luci" "luci-base" "luci-theme-bootstrap"
-    "luci-i18n-base-zh-cn" "luci-i18n-firewall-zh-cn"
-)
-
-# 扩展常用插件列表
-COMMON_PLUGINS=(
-    "luci-app-turboacc" "luci-app-flowoffload" "luci-app-sfe"
-    "luci-app-sqm" "luci-app-upnp" "luci-app-samba4" "luci-app-samba"
-    "luci-app-smartdns" "luci-app-wireguard" "luci-app-ddns"
-    "luci-app-adblock" "luci-app-acl" "luci-app-commands"
-    "luci-app-dockerman" "luci-app-frpc" "luci-app-frps"
-    "luci-app-mwan3" "luci-app-openvpn" "luci-app-wol"
-)
-
-REPORT_FILE="plugin_availability_report.txt"
-echo "插件可用性检查报告" > $REPORT_FILE
-echo "生成时间: $(date)" >> $REPORT_FILE
-echo "==========================================" >> $REPORT_FILE
-
-echo "检查核心插件..." | tee -a $REPORT_FILE
-CORE_MISSING=()
-for plugin in "${CORE_PLUGINS[@]}"; do
-    if ./scripts/feeds install "$plugin" > /dev/null 2>&1; then
-        echo "✅ $plugin - 可用" >> $REPORT_FILE
-    else
-        echo "❌ $plugin - 缺失" >> $REPORT_FILE
-        CORE_MISSING+=("$plugin")
-    fi
-done
-
-echo "" >> $REPORT_FILE
-echo "检查常用插件..." >> $REPORT_FILE
-COMMON_MISSING=()
-for plugin in "${COMMON_PLUGINS[@]}"; do
-    if ./scripts/feeds install "$plugin" > /dev/null 2>&1; then
-        echo "✅ $plugin - 可用" >> $REPORT_FILE
-    else
-        echo "❌ $plugin - 缺失" >> $REPORT_FILE
-        COMMON_MISSING+=("$plugin")
-    fi
-done
-
-echo "" >> $REPORT_FILE
-echo "=== 检查总结 ===" >> $REPORT_FILE
-if [ ${#CORE_MISSING[@]} -eq 0 ]; then
-    echo "✅ 所有核心插件都可用" >> $REPORT_FILE
-else
-    echo "❌ 核心插件缺失: ${CORE_MISSING[*]}" >> $REPORT_FILE
-fi
-
-if [ ${#COMMON_MISSING[@]} -eq 0 ]; then
-    echo "✅ 所有常用插件都可用" >> $REPORT_FILE
-else
-    echo "⚠️ 常用插件缺失: ${COMMON_MISSING[*]}" >> $REPORT_FILE
-fi
-
-echo "✅ 插件检查完成"
-exit 0
-EOF
+        echo '#!/bin/bash' > check-plugins.sh
+        echo 'set -e' >> check-plugins.sh
+        echo 'BUILD_DIR="${1:-.}"' >> check-plugins.sh
+        echo 'cd "$BUILD_DIR"' >> check-plugins.sh
+        echo 'echo "=== 增强版插件可用性检查 ==="' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo 'if [ ! -d "feeds" ] || [ -z "$(ls -A feeds 2>/dev/null)" ]; then' >> check-plugins.sh
+        echo '    echo "❌ Feeds目录为空，跳过插件检查"' >> check-plugins.sh
+        echo '    echo "Feeds目录为空" > plugin_availability_report.txt' >> check-plugins.sh
+        echo '    exit 0' >> check-plugins.sh
+        echo 'fi' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo 'echo "更新feeds..."' >> check-plugins.sh
+        echo './scripts/feeds update -a > /dev/null 2>&1 || echo "⚠️ Feeds更新有警告"' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo '# 扩展核心插件列表' >> check-plugins.sh
+        echo 'CORE_PLUGINS="luci luci-base luci-theme-bootstrap luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn"' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo '# 扩展常用插件列表' >> check-plugins.sh
+        echo 'COMMON_PLUGINS="luci-app-turboacc luci-app-flowoffload luci-app-sfe luci-app-sqm luci-app-upnp luci-app-samba4 luci-app-samba luci-app-smartdns luci-app-wireguard luci-app-ddns luci-app-adblock luci-app-acl luci-app-commands luci-app-dockerman luci-app-frpc luci-app-frps luci-app-mwan3 luci-app-openvpn luci-app-wol"' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo 'REPORT_FILE="plugin_availability_report.txt"' >> check-plugins.sh
+        echo 'echo "插件可用性检查报告" > $REPORT_FILE' >> check-plugins.sh
+        echo 'echo "生成时间: $(date)" >> $REPORT_FILE' >> check-plugins.sh
+        echo 'echo "==========================================" >> $REPORT_FILE' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo 'echo "检查核心插件..." | tee -a $REPORT_FILE' >> check-plugins.sh
+        echo 'CORE_MISSING=""' >> check-plugins.sh
+        echo 'for plugin in $CORE_PLUGINS; do' >> check-plugins.sh
+        echo '    if ./scripts/feeds install "$plugin" > /dev/null 2>&1; then' >> check-plugins.sh
+        echo '        echo "✅ $plugin - 可用" >> $REPORT_FILE' >> check-plugins.sh
+        echo '    else' >> check-plugins.sh
+        echo '        echo "❌ $plugin - 缺失" >> $REPORT_FILE' >> check-plugins.sh
+        echo '        CORE_MISSING="$CORE_MISSING $plugin"' >> check-plugins.sh
+        echo '    fi' >> check-plugins.sh
+        echo 'done' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo 'echo "" >> $REPORT_FILE' >> check-plugins.sh
+        echo 'echo "检查常用插件..." >> $REPORT_FILE' >> check-plugins.sh
+        echo 'COMMON_MISSING=""' >> check-plugins.sh
+        echo 'for plugin in $COMMON_PLUGINS; do' >> check-plugins.sh
+        echo '    if ./scripts/feeds install "$plugin" > /dev/null 2>&1; then' >> check-plugins.sh
+        echo '        echo "✅ $plugin - 可用" >> $REPORT_FILE' >> check-plugins.sh
+        echo '    else' >> check-plugins.sh
+        echo '        echo "❌ $plugin - 缺失" >> $REPORT_FILE' >> check-plugins.sh
+        echo '        COMMON_MISSING="$COMMON_MISSING $plugin"' >> check-plugins.sh
+        echo '    fi' >> check-plugins.sh
+        echo 'done' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo 'echo "" >> $REPORT_FILE' >> check-plugins.sh
+        echo 'echo "=== 检查总结 ===" >> $REPORT_FILE' >> check-plugins.sh
+        echo 'if [ -z "$CORE_MISSING" ]; then' >> check-plugins.sh
+        echo '    echo "✅ 所有核心插件都可用" >> $REPORT_FILE' >> check-plugins.sh
+        echo 'else' >> check-plugins.sh
+        echo '    echo "❌ 核心插件缺失:$CORE_MISSING" >> $REPORT_FILE' >> check-plugins.sh
+        echo 'fi' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo 'if [ -z "$COMMON_MISSING" ]; then' >> check-plugins.sh
+        echo '    echo "✅ 所有常用插件都可用" >> $REPORT_FILE' >> check-plugins.sh
+        echo 'else' >> check-plugins.sh
+        echo '    echo "⚠️ 常用插件缺失:$COMMON_MISSING" >> $REPORT_FILE' >> check-plugins.sh
+        echo 'fi' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo 'echo "✅ 插件检查完成"' >> check-plugins.sh
+        echo 'exit 0' >> check-plugins.sh
         chmod +x check-plugins.sh
         echo "✅ 增强版插件检查脚本创建完成"
 
