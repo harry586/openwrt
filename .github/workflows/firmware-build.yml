@@ -513,6 +513,137 @@ jobs:
         chmod +x check-plugins.sh
         echo "✅ 基于配置文件的插件检查脚本创建完成"
 
+    - name: 修复配置加载问题
+      run: |
+        cd $BUILD_DIR
+        echo "=== 修复配置加载问题 ==="
+        
+        # 显示选择的配置文件内容
+        CONFIG_TYPE="${{ inputs.config_type }}"
+        echo "配置类型: $CONFIG_TYPE"
+        
+        if [ "$CONFIG_TYPE" = "minimal" ]; then
+            CONFIG_FILE="config-templates/minimal.config"
+        elif [ "$CONFIG_TYPE" = "normal" ] || [ "$CONFIG_TYPE" = "custom" ]; then
+            # 自动判断是否为老旧设备
+            IS_OLD_VERSION=0
+            case "${{ github.event.inputs.device_name }}" in
+                "wr841n"|"wr842n"|"wr941n"|"mr3420"|"ar71xx"*)
+                    IS_OLD_VERSION=1
+                    echo "✅ 自动判断为老旧设备: ${{ github.event.inputs.device_name }}"
+                    ;;
+            esac
+            
+            # 根据版本分支自动判断
+            if echo "$SELECTED_BRANCH" | grep -q -E "19\.07|21\.02|17\.01|lede"; then
+                IS_OLD_VERSION=1
+                echo "✅ 自动判断为老旧版本: $SELECTED_BRANCH"
+            fi
+            
+            if [ "$SELECTED_REPO" = "lede" ] || [ "$SELECTED_REPO" = "openwrt-19.07" ] || [ "$SELECTED_REPO" = "openwrt-21.02" ]; then
+                IS_OLD_VERSION=1
+                echo "✅ 自动判断为老旧仓库: $SELECTED_REPO"
+            fi
+            
+            if [ "$IS_OLD_VERSION" -eq 1 ]; then
+                CONFIG_FILE="config-templates/normal-old.config"
+            else
+                CONFIG_FILE="config-templates/normal-new.config"
+            fi
+        else
+            echo "❌ 未知的配置类型: $CONFIG_TYPE"
+            exit 1
+        fi
+        
+        echo "=== 选择的配置文件: $CONFIG_FILE ==="
+        if [ ! -f "$CONFIG_FILE" ]; then
+            echo "❌ 错误: 找不到配置文件 $CONFIG_FILE"
+            ls -la config-templates/
+            exit 1
+        fi
+        
+        # 显示原始配置文件内容
+        echo "=== 原始配置文件内容 ==="
+        cat "$CONFIG_FILE" | grep -E "^CONFIG_PACKAGE|^CONFIG_TARGET" | head -30
+        echo "..."
+        
+        # 初始化基础配置 - 使用更可靠的方法
+        echo "=== 创建基础配置 ==="
+        
+        # 首先创建设备基础配置
+        {
+            echo "# 设备基础配置"
+            echo "CONFIG_TARGET_${PLATFORM}=y"
+            echo "CONFIG_TARGET_${PLATFORM}_generic=y" 
+            echo "CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y"
+            echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y"
+            echo "CONFIG_TARGET_IMAGES_GZIP=y"
+            echo "CONFIG_TARGET_IMAGES_PAD=y"
+        } > .config
+
+        # 显示基础配置
+        echo "=== 基础配置内容 ==="
+        cat .config
+
+        # 然后追加模板配置
+        echo "=== 追加模板配置 ==="
+        cat "$CONFIG_FILE" >> .config
+
+        # 处理额外插件和禁用插件
+        EXTRA_PACKAGES="${{ inputs.extra_packages }}"
+        DISABLED_PLUGINS="${{ inputs.disabled_plugins }}"
+
+        if [ -n "$EXTRA_PACKAGES" ]; then
+            echo "=== 添加额外插件 ==="
+            for pkg in $EXTRA_PACKAGES; do
+                echo "添加插件: $pkg"
+                # 先删除可能存在的禁用设置，然后添加启用设置
+                sed -i "/# CONFIG_PACKAGE_${pkg} is not set/d" .config
+                echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+            done
+        fi
+
+        if [ -n "$DISABLED_PLUGINS" ]; then
+            echo "=== 禁用指定插件 ==="
+            for pkg in $DISABLED_PLUGINS; do
+                echo "禁用插件: $pkg"
+                # 删除启用设置，添加禁用设置
+                sed -i "/CONFIG_PACKAGE_${pkg}=y/d" .config
+                echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
+            done
+        fi
+        
+        # 显示最终的.config文件内容
+        echo "=== 最终 .config 文件内容（前50行）==="
+        head -50 .config
+        
+        echo "=== 关键插件配置状态 ==="
+        for pkg in luci-app-turboacc luci-app-flowoffload luci-app-sfe luci-app-sqm luci-app-upnp luci-app-samba4 luci-app-samba luci-app-smartdns luci-app-wireguard luci-app-ddns luci-app-adblock; do
+            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
+                echo "✅ $pkg: 在.config中已启用"
+            else
+                echo "❌ $pkg: 在.config中未启用"
+            fi
+        done
+        
+        # 验证.config文件存在且非空
+        if [ ! -f ".config" ] || [ ! -s ".config" ]; then
+            echo "❌ 错误: .config 文件不存在或为空"
+            exit 1
+        fi
+        
+        echo "✅ 配置加载完成"
+        
+        echo "运行 make defconfig..."
+        make defconfig
+        
+        # 验证defconfig后的配置
+        echo "=== defconfig后的配置验证 ==="
+        if [ ! -f ".config" ] || [ ! -s ".config" ]; then
+            echo "❌ 错误: defconfig后 .config 文件不存在或为空"
+            exit 1
+        fi
+
     - name: 配置完整性检查
       run: |
         cd $BUILD_DIR
@@ -521,8 +652,13 @@ jobs:
         # 检查配置文件是否存在且非空
         if [ ! -f ".config" ] || [ ! -s ".config" ]; then
             echo "❌ 错误: .config 文件不存在或为空"
+            echo "当前目录内容:"
+            ls -la
             exit 1
         fi
+        
+        echo "✅ .config 文件存在且非空"
+        echo "文件大小: $(wc -l < .config) 行"
         
         # 检查关键配置项
         echo "=== 关键配置项检查 ==="
@@ -589,160 +725,6 @@ jobs:
         else
             echo "⚠️ 未找到包诊断脚本，跳过诊断"
         fi
-
-    - name: 智能插件替换配置
-      run: |
-        cd $BUILD_DIR
-        echo "=== 智能插件替换配置 ==="
-        
-        # 显示选择的配置文件内容
-        CONFIG_TYPE="${{ inputs.config_type }}"
-        echo "配置类型: $CONFIG_TYPE"
-        
-        if [ "$CONFIG_TYPE" = "minimal" ]; then
-            CONFIG_FILE="config-templates/minimal.config"
-        elif [ "$CONFIG_TYPE" = "normal" ] || [ "$CONFIG_TYPE" = "custom" ]; then
-            # 自动判断是否为老旧设备
-            IS_OLD_VERSION=0
-            case "${{ github.event.inputs.device_name }}" in
-                "wr841n"|"wr842n"|"wr941n"|"mr3420"|"ar71xx"*)
-                    IS_OLD_VERSION=1
-                    echo "✅ 自动判断为老旧设备: ${{ github.event.inputs.device_name }}"
-                    ;;
-            esac
-            
-            # 根据版本分支自动判断
-            if echo "$SELECTED_BRANCH" | grep -q -E "19\.07|21\.02|17\.01|lede"; then
-                IS_OLD_VERSION=1
-                echo "✅ 自动判断为老旧版本: $SELECTED_BRANCH"
-            fi
-            
-            if [ "$SELECTED_REPO" = "lede" ] || [ "$SELECTED_REPO" = "openwrt-19.07" ] || [ "$SELECTED_REPO" = "openwrt-21.02" ]; then
-                IS_OLD_VERSION=1
-                echo "✅ 自动判断为老旧仓库: $SELECTED_REPO"
-            fi
-            
-            if [ "$IS_OLD_VERSION" -eq 1 ]; then
-                CONFIG_FILE="config-templates/normal-old.config"
-            else
-                CONFIG_FILE="config-templates/normal-new.config"
-            fi
-        else
-            echo "❌ 未知的配置类型: $CONFIG_TYPE"
-            exit 1
-        fi
-        
-        echo "=== 选择的配置文件: $CONFIG_FILE ==="
-        if [ ! -f "$CONFIG_FILE" ]; then
-            echo "❌ 错误: 找不到配置文件 $CONFIG_FILE"
-            ls -la config-templates/
-            exit 1
-        fi
-        
-        # 显示原始配置文件内容
-        echo "=== 原始配置文件内容 ==="
-        cat "$CONFIG_FILE" | grep -E "^CONFIG_PACKAGE|^CONFIG_TARGET" | head -30
-        echo "..."
-        
-        # 初始化基础配置
-        > .config
-
-        # 首先加载模板配置（这会包含所有插件设置）
-        cat "$CONFIG_FILE" >> .config
-
-        # 然后添加设备特定配置（这会覆盖模板中的设备设置）
-        {
-            echo "CONFIG_TARGET_${PLATFORM}=y"
-            echo "CONFIG_TARGET_${PLATFORM}_generic=y" 
-            echo "CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y"
-            echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y"
-            echo "CONFIG_TARGET_IMAGES_GZIP=y"
-            echo "CONFIG_TARGET_IMAGES_PAD=y"
-        } >> .config
-
-        # 处理额外插件和禁用插件
-        EXTRA_PACKAGES="${{ inputs.extra_packages }}"
-        DISABLED_PLUGINS="${{ inputs.disabled_plugins }}"
-
-        if [ -n "$EXTRA_PACKAGES" ]; then
-            echo "=== 添加额外插件 ==="
-            for pkg in $EXTRA_PACKAGES; do
-                echo "添加插件: $pkg"
-                # 先删除可能存在的禁用设置，然后添加启用设置
-                sed -i "/# CONFIG_PACKAGE_${pkg} is not set/d" .config
-                echo "CONFIG_PACKAGE_${pkg}=y" >> .config
-            done
-        fi
-
-        if [ -n "$DISABLED_PLUGINS" ]; then
-            echo "=== 禁用指定插件 ==="
-            for pkg in $DISABLED_PLUGINS; do
-                echo "禁用插件: $pkg"
-                # 删除启用设置，添加禁用设置
-                sed -i "/CONFIG_PACKAGE_${pkg}=y/d" .config
-                echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
-            done
-        fi
-        
-        # 显示最终的.config文件内容
-        echo "=== 最终 .config 文件内容（前50行）==="
-        head -50 .config
-        
-        echo "=== 关键插件配置状态 ==="
-        for pkg in luci-app-turboacc luci-app-flowoffload luci-app-sfe luci-app-sqm luci-app-upnp luci-app-samba4 luci-app-samba luci-app-smartdns luci-app-wireguard luci-app-ddns luci-app-adblock; do
-            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
-                echo "✅ $pkg: 在.config中已启用"
-            else
-                echo "❌ $pkg: 在.config中未启用"
-            fi
-        done
-        
-        echo "✅ 配置加载完成"
-        
-        echo "运行 make defconfig..."
-        make defconfig
-        
-        # 立即验证配置
-        echo "=== 配置验证（defconfig后） ==="
-        echo "=== 关键软件包配置状态 ==="
-        for pkg in luci luci-base luci-theme-bootstrap; do
-          if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
-            echo "✅ $pkg: 已启用"
-          else
-            echo "❌ $pkg: 未启用 - 尝试修复"
-            echo "CONFIG_PACKAGE_${pkg}=y" >> .config
-          fi
-        done
-        
-        for pkg in luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn; do
-          if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
-            echo "✅ $pkg: 已启用"
-          else
-            echo "⚠️ $pkg: 未启用"
-          fi
-        done
-        
-        if [ "${{ inputs.config_type }}" = "normal" ] || [ "${{ inputs.config_type }}" = "custom" ]; then
-          echo "=== 正常模式插件检查 ==="
-          for pkg in luci-app-turboacc luci-app-flowoffload luci-app-sfe luci-app-sqm luci-app-upnp luci-app-samba4 luci-app-samba luci-app-smartdns luci-app-wireguard luci-app-ddns luci-app-adblock; do
-            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
-              echo "✅ $pkg: 已启用"
-            else
-              echo "❌ $pkg: 未启用"
-            fi
-          done
-        fi
-        
-        echo "=== 设备配置验证 ==="
-        if grep -q "^CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" .config; then
-            echo "✅ 设备配置正确"
-        else
-            echo "❌ 设备配置错误"
-            exit 1
-        fi
-        
-        echo "=== 配置验证完成 ==="
-        make defconfig
 
     - name: 构建时集成自定义文件
       run: |
