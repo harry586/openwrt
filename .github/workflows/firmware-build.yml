@@ -329,11 +329,31 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 配置稳定feeds源 ==="
-        echo "src-git packages https://github.com/immortalwrt/packages.git;openwrt-24.10" > feeds.conf.default
-        echo "src-git luci https://github.com/immortalwrt/luci.git;openwrt-24.10" >> feeds.conf.default
-        echo "src-git routing https://github.com/openwrt/routing.git;openwrt-24.10" >> feeds.conf.default
-        echo "src-git telephony https://github.com/openwrt/telephony.git;openwrt-24.10" >> feeds.conf.default
+        echo "检测到的版本分支: $SELECTED_BRANCH"
+        
+        # 根据版本分支设置feeds分支
+        FEEDS_BRANCH="$SELECTED_BRANCH"
+        if echo "$SELECTED_BRANCH" | grep -q "openwrt-24.10"; then
+            FEEDS_BRANCH="openwrt-24.10"
+        elif echo "$SELECTED_BRANCH" | grep -q "openwrt-23.05"; then
+            FEEDS_BRANCH="openwrt-23.05"
+        elif echo "$SELECTED_BRANCH" | grep -q "openwrt-22.03"; then
+            FEEDS_BRANCH="openwrt-22.03"
+        elif echo "$SELECTED_BRANCH" | grep -q "openwrt-21.02"; then
+            FEEDS_BRANCH="openwrt-21.02"
+        else
+            echo "⚠️ 未知版本分支，使用默认分支: master"
+            FEEDS_BRANCH="master"
+        fi
+        
+        echo "使用的feeds分支: $FEEDS_BRANCH"
+        
+        echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf.default
+        echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
+        echo "src-git routing https://github.com/openwrt/routing.git;$FEEDS_BRANCH" >> feeds.conf.default
+        echo "src-git telephony https://github.com/openwrt/telephony.git;$FEEDS_BRANCH" >> feeds.conf.default
         echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main" >> feeds.conf.default
+        
         echo "✅ 稳定feeds配置完成"
         echo "Feeds配置内容:"
         cat feeds.conf.default
@@ -422,51 +442,89 @@ jobs:
             fi
         fi
 
-    - name: 创建智能插件检查脚本
+    - name: 创建增强版插件检查脚本
       run: |
         cd $BUILD_DIR
-        echo "=== 创建智能插件检查脚本 ==="
-        echo '#!/bin/bash' > check-plugins.sh
-        echo 'set -e' >> check-plugins.sh
-        echo 'BUILD_DIR="${1:-.}"' >> check-plugins.sh
-        echo 'cd "$BUILD_DIR"' >> check-plugins.sh
-        echo 'echo "=== 智能插件可用性检查 ==="' >> check-plugins.sh
-        echo 'if [ ! -d "feeds" ] || [ -z "$(ls -A feeds 2>/dev/null)" ]; then' >> check-plugins.sh
-        echo '    echo "❌ Feeds目录为空，跳过插件检查"' >> check-plugins.sh
-        echo '    echo "Feeds目录为空" > plugin_availability_report.txt' >> check-plugins.sh
-        echo '    exit 0' >> check-plugins.sh
-        echo 'fi' >> check-plugins.sh
-        echo 'echo "更新feeds..."' >> check-plugins.sh
-        echo './scripts/feeds update -a > /dev/null 2>&1 || echo "⚠️ Feeds更新有警告"' >> check-plugins.sh
-        echo 'CORE_PLUGINS=("luci" "luci-base" "luci-theme-bootstrap")' >> check-plugins.sh
-        echo 'REPORT_FILE="plugin_availability_report.txt"' >> check-plugins.sh
-        echo 'echo "插件可用性检查报告" > $REPORT_FILE' >> check-plugins.sh
-        echo 'echo "生成时间: $(date)" >> $REPORT_FILE' >> check-plugins.sh
-        echo 'echo "==========================================" >> $REPORT_FILE' >> check-plugins.sh
-        echo 'echo "检查核心插件..." | tee -a $REPORT_FILE' >> check-plugins.sh
-        echo 'CORE_MISSING=()' >> check-plugins.sh
-        echo 'for plugin in "${CORE_PLUGINS[@]}"; do' >> check-plugins.sh
-        echo '    if ./scripts/feeds install "$plugin" > /dev/null 2>&1; then' >> check-plugins.sh
-        echo '        echo "✅ $plugin - 可用" >> $REPORT_FILE' >> check-plugins.sh
-        echo '    else' >> check-plugins.sh
-        echo '        echo "❌ $plugin - 缺失" >> $REPORT_FILE' >> check-plugins.sh
-        echo '        CORE_MISSING+=("$plugin")' >> check-plugins.sh
-        echo '    fi' >> check-plugins.sh
-        echo 'done' >> check-plugins.sh
-        echo 'echo "" >> $REPORT_FILE' >> check-plugins.sh
-        echo 'echo "=== 检查总结 ===" >> $REPORT_FILE' >> check-plugins.sh
-        echo 'if [ ${#CORE_MISSING[@]} -eq 0 ]; then' >> check-plugins.sh
-        echo '    echo "✅ 所有核心插件都可用" >> $REPORT_FILE' >> check-plugins.sh
-        echo '    echo "✅ 插件检查通过"' >> check-plugins.sh
-        echo '    exit 0' >> check-plugins.sh
-        echo 'else' >> check-plugins.sh
-        echo '    echo "❌ 核心插件缺失: ${CORE_MISSING[*]}" >> $REPORT_FILE' >> check-plugins.sh
-        echo '    echo "⚠️ 核心插件缺失，但继续构建过程"' >> check-plugins.sh
-        echo '    echo "缺失的插件将不会包含在固件中"' >> check-plugins.sh
-        echo '    exit 0' >> check-plugins.sh
-        echo 'fi' >> check-plugins.sh
+        echo "=== 创建增强版插件检查脚本 ==="
+        cat > check-plugins.sh << 'EOF'
+#!/bin/bash
+set -e
+BUILD_DIR="${1:-.}"
+cd "$BUILD_DIR"
+echo "=== 增强版插件可用性检查 ==="
+
+if [ ! -d "feeds" ] || [ -z "$(ls -A feeds 2>/dev/null)" ]; then
+    echo "❌ Feeds目录为空，跳过插件检查"
+    echo "Feeds目录为空" > plugin_availability_report.txt
+    exit 0
+fi
+
+echo "更新feeds..."
+./scripts/feeds update -a > /dev/null 2>&1 || echo "⚠️ Feeds更新有警告"
+
+# 扩展核心插件列表
+CORE_PLUGINS=(
+    "luci" "luci-base" "luci-theme-bootstrap"
+    "luci-i18n-base-zh-cn" "luci-i18n-firewall-zh-cn"
+)
+
+# 扩展常用插件列表
+COMMON_PLUGINS=(
+    "luci-app-turboacc" "luci-app-flowoffload" "luci-app-sfe"
+    "luci-app-sqm" "luci-app-upnp" "luci-app-samba4" "luci-app-samba"
+    "luci-app-smartdns" "luci-app-wireguard" "luci-app-ddns"
+    "luci-app-adblock" "luci-app-acl" "luci-app-commands"
+    "luci-app-dockerman" "luci-app-frpc" "luci-app-frps"
+    "luci-app-mwan3" "luci-app-openvpn" "luci-app-wol"
+)
+
+REPORT_FILE="plugin_availability_report.txt"
+echo "插件可用性检查报告" > $REPORT_FILE
+echo "生成时间: $(date)" >> $REPORT_FILE
+echo "==========================================" >> $REPORT_FILE
+
+echo "检查核心插件..." | tee -a $REPORT_FILE
+CORE_MISSING=()
+for plugin in "${CORE_PLUGINS[@]}"; do
+    if ./scripts/feeds install "$plugin" > /dev/null 2>&1; then
+        echo "✅ $plugin - 可用" >> $REPORT_FILE
+    else
+        echo "❌ $plugin - 缺失" >> $REPORT_FILE
+        CORE_MISSING+=("$plugin")
+    fi
+done
+
+echo "" >> $REPORT_FILE
+echo "检查常用插件..." >> $REPORT_FILE
+COMMON_MISSING=()
+for plugin in "${COMMON_PLUGINS[@]}"; do
+    if ./scripts/feeds install "$plugin" > /dev/null 2>&1; then
+        echo "✅ $plugin - 可用" >> $REPORT_FILE
+    else
+        echo "❌ $plugin - 缺失" >> $REPORT_FILE
+        COMMON_MISSING+=("$plugin")
+    fi
+done
+
+echo "" >> $REPORT_FILE
+echo "=== 检查总结 ===" >> $REPORT_FILE
+if [ ${#CORE_MISSING[@]} -eq 0 ]; then
+    echo "✅ 所有核心插件都可用" >> $REPORT_FILE
+else
+    echo "❌ 核心插件缺失: ${CORE_MISSING[*]}" >> $REPORT_FILE
+fi
+
+if [ ${#COMMON_MISSING[@]} -eq 0 ]; then
+    echo "✅ 所有常用插件都可用" >> $REPORT_FILE
+else
+    echo "⚠️ 常用插件缺失: ${COMMON_MISSING[*]}" >> $REPORT_FILE
+fi
+
+echo "✅ 插件检查完成"
+exit 0
+EOF
         chmod +x check-plugins.sh
-        echo "✅ 智能插件检查脚本创建完成"
+        echo "✅ 增强版插件检查脚本创建完成"
 
     - name: 智能检查插件可用性
       run: |
@@ -509,14 +567,8 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 智能插件替换配置 ==="
-        > .config
-        echo "CONFIG_TARGET_${PLATFORM}=y" >> .config
-        echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
-        echo "CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" >> .config
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
-        echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
         
+        # 显示选择的配置文件内容
         CONFIG_TYPE="${{ inputs.config_type }}"
         echo "配置类型: $CONFIG_TYPE"
         
@@ -525,7 +577,6 @@ jobs:
         elif [ "$CONFIG_TYPE" = "normal" ] || [ "$CONFIG_TYPE" = "custom" ]; then
             # 自动判断是否为老旧设备
             IS_OLD_VERSION=0
-            # 根据设备名称自动判断
             case "${{ github.event.inputs.device_name }}" in
                 "wr841n"|"wr842n"|"wr941n"|"mr3420"|"ar71xx"*)
                     IS_OLD_VERSION=1
@@ -557,12 +608,23 @@ jobs:
         echo "=== 选择的配置文件: $CONFIG_FILE ==="
         if [ ! -f "$CONFIG_FILE" ]; then
             echo "❌ 错误: 找不到配置文件 $CONFIG_FILE"
-            echo "当前目录内容:"
-            ls -la
-            echo "config-templates 目录内容:"
             ls -la config-templates/
             exit 1
         fi
+        
+        # 显示原始配置文件内容
+        echo "=== 原始配置文件内容 ==="
+        grep "^CONFIG_PACKAGE" "$CONFIG_FILE" | head -20
+        echo "..."
+        
+        # 初始化基础配置
+        > .config
+        echo "CONFIG_TARGET_${PLATFORM}=y" >> .config
+        echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
+        echo "CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" >> .config
+        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+        echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
+        echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
         
         cp "$CONFIG_FILE" temp_config
         
@@ -588,29 +650,61 @@ jobs:
         
         echo "=== 执行智能插件替换 ==="
         
+        # 增强的插件替换逻辑
         if [ -f "plugin_availability_report.txt" ]; then
             echo "使用插件检查报告进行智能替换..."
             
+            # 网络加速插件替换
             if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" temp_config; then
                 if ! grep -q "✅ luci-app-turboacc" plugin_availability_report.txt && grep -q "❌ luci-app-turboacc" plugin_availability_report.txt; then
                     echo "⚠️ 禁用不可用的插件: luci-app-turboacc"
                     sed -i 's/CONFIG_PACKAGE_luci-app-turboacc=y/# CONFIG_PACKAGE_luci-app-turboacc is not set/' temp_config
+                    # 尝试启用替代插件
+                    if ./scripts/feeds install luci-app-flowoffload >/dev/null 2>&1; then
+                        echo "🔄 启用替代插件: luci-app-flowoffload"
+                        echo "CONFIG_PACKAGE_luci-app-flowoffload=y" >> temp_config
+                    elif ./scripts/feeds install luci-app-sfe >/dev/null 2>&1; then
+                        echo "🔄 启用替代插件: luci-app-sfe"
+                        echo "CONFIG_PACKAGE_luci-app-sfe=y" >> temp_config
+                    fi
                 fi
             fi
             
+            # Samba插件替换
             if grep -q "CONFIG_PACKAGE_luci-app-samba4=y" temp_config; then
                 if ! grep -q "✅ luci-app-samba4" plugin_availability_report.txt && grep -q "❌ luci-app-samba4" plugin_availability_report.txt; then
                     echo "⚠️ 禁用不可用的插件: luci-app-samba4"
                     sed -i 's/CONFIG_PACKAGE_luci-app-samba4=y/# CONFIG_PACKAGE_luci-app-samba4 is not set/' temp_config
+                    # 尝试启用旧版Samba
+                    if ./scripts/feeds install luci-app-samba >/dev/null 2>&1; then
+                        echo "🔄 启用替代插件: luci-app-samba"
+                        echo "CONFIG_PACKAGE_luci-app-samba=y" >> temp_config
+                    fi
                 fi
             fi
+            
+            # 检查其他常用插件
+            for plugin in luci-app-wireguard luci-app-ddns luci-app-adblock luci-app-upnp luci-app-sqm; do
+                if grep -q "CONFIG_PACKAGE_${plugin}=y" temp_config; then
+                    if ! grep -q "✅ ${plugin}" plugin_availability_report.txt && grep -q "❌ ${plugin}" plugin_availability_report.txt; then
+                        echo "⚠️ 禁用不可用的插件: ${plugin}"
+                        sed -i "s/CONFIG_PACKAGE_${plugin}=y/# CONFIG_PACKAGE_${plugin} is not set/" temp_config
+                    fi
+                fi
+            done
         else
             echo "⚠️ 未找到插件检查报告，使用基础替换逻辑"
+            # 基础替换逻辑
             if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" temp_config && ! ./scripts/feeds install luci-app-turboacc >/dev/null 2>&1; then
                 echo "🔄 替换: luci-app-turboacc → luci-app-flowoffload"
                 sed -i 's/CONFIG_PACKAGE_luci-app-turboacc=y/CONFIG_PACKAGE_luci-app-flowoffload=y/' temp_config
             fi
         fi
+        
+        # 显示替换后的配置
+        echo "=== 替换后的配置文件内容 ==="
+        grep "^CONFIG_PACKAGE" temp_config | head -30
+        echo "..."
         
         cat temp_config >> .config
         rm -f temp_config
@@ -620,13 +714,47 @@ jobs:
         echo "运行 make defconfig..."
         make defconfig
         
-        echo "=== 最终配置验证 ==="
+        # 立即验证配置
+        echo "=== 配置验证 ==="
+        echo "=== 关键软件包配置状态 ==="
+        for pkg in luci luci-base luci-theme-bootstrap; do
+          if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
+            echo "✅ $pkg: 已启用"
+          else
+            echo "❌ $pkg: 未启用 - 尝试修复"
+            echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+          fi
+        done
+        
+        for pkg in luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn; do
+          if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
+            echo "✅ $pkg: 已启用"
+          else
+            echo "⚠️ $pkg: 未启用"
+          fi
+        done
+        
+        if [ "${{ inputs.config_type }}" = "normal" ] || [ "${{ inputs.config_type }}" = "custom" ]; then
+          echo "=== 正常模式插件检查 ==="
+          for pkg in luci-app-turboacc luci-app-flowoffload luci-app-sfe luci-app-sqm luci-app-upnp luci-app-samba4 luci-app-samba luci-app-smartdns luci-app-wireguard luci-app-ddns luci-app-adblock; do
+            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
+              echo "✅ $pkg: 已启用"
+            else
+              echo "❌ $pkg: 未启用"
+            fi
+          done
+        fi
+        
+        echo "=== 设备配置验证 ==="
         if grep -q "^CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" .config; then
             echo "✅ 设备配置正确"
         else
             echo "❌ 设备配置错误"
             exit 1
         fi
+        
+        echo "=== 配置验证完成 ==="
+        make defconfig
 
     - name: 构建时集成自定义文件
       run: |
@@ -722,6 +850,22 @@ jobs:
             echo "⚠️ 未找到预下载脚本，跳过预下载步骤"
         fi
 
+    - name: 修复编译环境
+      run: |
+        cd $BUILD_DIR
+        echo "=== 修复编译环境 ==="
+        # 清理可能的问题
+        find . -name "*.rej" -delete 2>/dev/null || true
+        find . -name "*.orig" -delete 2>/dev/null || true
+        
+        # 确保关键目录存在
+        mkdir -p staging_dir/host/bin
+        mkdir -p staging_dir/target-*/host/bin
+        
+        # 重新生成配置
+        make defconfig
+        echo "✅ 编译环境修复完成"
+
     - name: 下载依赖
       run: |
         cd $BUILD_DIR
@@ -801,7 +945,7 @@ jobs:
         done
         if [ "${{ inputs.config_type }}" = "normal" ] || [ "${{ inputs.config_type }}" = "custom" ]; then
           echo "=== 正常模式插件检查 ==="
-          for pkg in luci-app-turboacc luci-app-sqm luci-app-upnp luci-app-samba4 luci-app-smartdns; do
+          for pkg in luci-app-turboacc luci-app-flowoffload luci-app-sfe luci-app-sqm luci-app-upnp luci-app-samba4 luci-app-samba luci-app-smartdns luci-app-wireguard luci-app-ddns luci-app-adblock; do
             if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
               echo "✅ $pkg: 已启用"
             else
