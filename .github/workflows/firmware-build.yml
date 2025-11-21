@@ -659,6 +659,7 @@ jobs:
             echo "CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" >> .config
         fi
         
+        # 修复核心组件
         for pkg in luci luci-base luci-theme-bootstrap; do
             if ! grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
                 echo "⚠️ 警告: 核心组件 $pkg 未启用，尝试修复"
@@ -666,20 +667,46 @@ jobs:
             fi
         done
 
-        echo "=== 验证turboacc相关配置 ==="
-        if ! grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
-            echo "⚠️ 警告: luci-app-turboacc 未启用，尝试修复"
-            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+        # 加强修复：重新启用所有在normal配置中应该存在的插件
+        if [ "${{ inputs.config_type }}" = "normal" ] || [ "${{ inputs.config_type }}" = "custom" ]; then
+            echo "=== 修复正常模式的关键插件 ==="
+            NORMAL_PLUGINS="luci-app-turboacc luci-app-flowoffload luci-app-sfe luci-app-sqm luci-app-upnp luci-app-samba4 luci-app-smartdns luci-app-wireguard luci-app-ddns luci-app-adblock"
+            
+            for plugin in $NORMAL_PLUGINS; do
+                if ! grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
+                    echo "🔄 强制启用: $plugin"
+                    sed -i "/# CONFIG_PACKAGE_${plugin} is not set/d" .config
+                    echo "CONFIG_PACKAGE_${plugin}=y" >> .config
+                fi
+            done
+            
+            # 确保turboacc依赖
+            echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
+            
+            # 确保其他关键依赖
+            echo "CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y" >> .config
         fi
         
         echo "✅ 配置完整性检查完成"
         
-        echo "=== 最终配置状态 ==="
-        echo "设备: $DEVICE_FULL_NAME"
-        echo "平台: $PLATFORM"
-        echo "启用的插件数量: $(grep "^CONFIG_PACKAGE_luci-app" .config | grep "=y" | wc -l)"
-        echo "启用的核心组件: $(grep "^CONFIG_PACKAGE_luci" .config | grep "=y" | grep -v "luci-app" | wc -l)"
+        # 再次运行defconfig来验证配置稳定性
+        echo "=== 最终配置验证 ==="
+        make defconfig
+        
+        echo "=== 最终插件状态 ==="
+        for pkg in luci-app-turboacc luci-app-sqm luci-app-upnp luci-app-smartdns; do
+            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
+                echo "✅ $pkg: 最终启用"
+            else
+                echo "❌ $pkg: 最终未启用"
+                # 最后一次尝试修复
+                echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+            fi
+        done
 
     - name: 智能检查插件可用性
       run: |
@@ -812,6 +839,42 @@ jobs:
             echo "⚠️ 未找到预下载脚本，跳过预下载步骤"
         fi
 
+    - name: 下载前配置验证和依赖分析
+      run: |
+        cd $BUILD_DIR
+        echo "=== 下载前配置验证和依赖分析 ==="
+        
+        echo "=== 分析配置文件中启用的所有包 ==="
+        ENABLED_PACKAGES=$(grep "^CONFIG_PACKAGE_.*=y" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort)
+        echo "启用的包数量: $(echo "$ENABLED_PACKAGES" | wc -l)"
+        
+        # 创建依赖分析报告
+        echo "# 依赖分析报告" > dependency_analysis.txt
+        echo "生成时间: $(date)" >> dependency_analysis.txt
+        echo "===================================" >> dependency_analysis.txt
+        
+        # 分析关键插件的依赖
+        echo "=== 分析关键插件依赖 ==="
+        CRITICAL_PLUGINS="luci-app-turboacc luci-app-sqm luci-app-upnp luci-app-smartdns luci-app-wireguard luci-app-ddns"
+        
+        for plugin in $CRITICAL_PLUGINS; do
+            if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
+                echo "分析 $plugin 的依赖..." >> dependency_analysis.txt
+                echo "$plugin 已启用，检查依赖..." | tee -a dependency_analysis.txt
+                
+                # 尝试获取插件依赖信息
+                if [ -f "feeds/luci/applications/$plugin/Makefile" ]; then
+                    echo "找到 $plugin 的 Makefile" >> dependency_analysis.txt
+                    grep -E "DEPENDS|PKG_CONFIG_DEPENDS" feeds/luci/applications/$plugin/Makefile >> dependency_analysis.txt 2>/dev/null || echo "无法提取依赖信息" >> dependency_analysis.txt
+                fi
+                echo "---" >> dependency_analysis.txt
+            fi
+        done
+        
+        echo "✅ 依赖分析完成"
+        echo "=== 依赖分析报告摘要 ==="
+        cat dependency_analysis.txt
+
     - name: 修复编译环境
       run: |
         cd $BUILD_DIR
@@ -825,14 +888,15 @@ jobs:
         make defconfig
         echo "✅ 编译环境修复完成"
 
-    - name: 下载依赖
+    - name: 智能下载依赖
       run: |
         cd $BUILD_DIR
-        echo "=== 下载DL库并验证完整性 ==="
+        echo "=== 智能下载依赖 ==="
         mkdir -p dl
         chmod 755 dl
         export GIT_SSL_NO_VERIFY=1
         export PYTHONHTTPSVERIFY=0
+        
         echo "=== 设置国内镜像源: $MIRROR_SOURCE ==="
         case "$MIRROR_SOURCE" in
             "tuna") MIRROR_URL="https://mirrors.tuna.tsinghua.edu.cn/openwrt" ;;
@@ -841,46 +905,149 @@ jobs:
             "huawei") MIRROR_URL="https://mirrors.huaweicloud.com/openwrt" ;;
             *) MIRROR_URL="https://mirrors.tuna.tsinghua.edu.cn/openwrt" ;;
         esac
+        
         MAX_DOWNLOAD_RETRIES=3
         RETRY_COUNT=0
         DOWNLOAD_SUCCESS=false
+        
         echo "=== 预先下载关键依赖 ==="
         make -j1 tools/install V=s 2>&1 | grep -E "Downloading|error" || true
         make -j1 toolchain/install V=s 2>&1 | grep -E "Downloading|error" || true
+        
+        # 清理可能的损坏文件
         find dl -name "*.tmp" -delete 2>/dev/null || true
         find dl -size 0 -delete 2>/dev/null || true
-        while [ $RETRY_COUNT -lt $MAX_DOWNLOAD_RETRIES ] && [ "$DOWNLOAD_SUCCESS" = false ]; do
-          RETRY_COUNT=$((RETRY_COUNT + 1))
-          echo "=== 下载尝试 $RETRY_COUNT/$MAX_DOWNLOAD_RETRIES ==="
-          if make -j1 download V=s; then
-            echo "✅ 下载命令执行成功"
-            DOWNLOAD_SUCCESS=true
-          else
-            echo "❌ 下载命令执行失败"
-            if [ $RETRY_COUNT -eq $MAX_DOWNLOAD_RETRIES ]; then
-              echo "❌ 达到最大重试次数，下载失败"
-              echo "=== 最后尝试单线程下载 ==="
+        
+        # 多轮下载验证循环
+        for ROUND in 1 2; do
+            echo "=== 第 $ROUND 轮下载验证循环 ==="
+            
+            while [ $RETRY_COUNT -lt $MAX_DOWNLOAD_RETRIES ] && [ "$DOWNLOAD_SUCCESS" = false ]; do
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              echo "=== 下载尝试 $RETRY_COUNT/$MAX_DOWNLOAD_RETRIES ==="
+              if make -j1 download V=s; then
+                echo "✅ 下载命令执行成功"
+                DOWNLOAD_SUCCESS=true
+              else
+                echo "❌ 下载命令执行失败"
+                if [ $RETRY_COUNT -eq $MAX_DOWNLOAD_RETRIES ]; then
+                  echo "❌ 达到最大重试次数，下载失败"
+                  echo "=== 最后尝试单线程下载 ==="
+                  make -j1 download V=s
+                  break
+                else
+                  echo "🔄 等待15秒后重试..."
+                  sleep 15
+                  find dl -name "*.tmp" -delete 2>/dev/null || true
+                  find dl -size 0 -delete 2>/dev/null || true
+                fi
+              fi
+            done
+            
+            # 验证下载完整性
+            echo "=== 下载完整性检查 ==="
+            EMPTY_FILES=$(find dl -type f -size 0 2>/dev/null | wc -l)
+            if [ "$EMPTY_FILES" -gt 0 ]; then
+              echo "❌ 发现 $EMPTY_FILES 个空文件，删除后重新下载..."
+              find dl -type f -size 0 -delete
+              echo "重新下载空文件..."
               make -j1 download V=s
-              break
-            else
-              echo "🔄 等待15秒后重试..."
-              sleep 15
-              find dl -name "*.tmp" -delete 2>/dev/null || true
-              find dl -size 0 -delete 2>/dev/null || true
             fi
-          fi
+            
+            # 检查未完成的下载
+            if find dl -name "*.tmp" | grep -q ".tmp"; then
+              echo "❌ 发现未完成的下载文件，删除后重新下载..."
+              find dl -name "*.tmp" -delete
+              echo "重新下载未完成的文件..."
+              make -j1 download V=s
+            fi
+            
+            DL_COUNT=$(find dl -type f | wc -l)
+            DL_SIZE=$(du -sh dl | cut -f1)
+            echo "✅ 下载统计: $DL_COUNT 个文件，总大小: $DL_SIZE"
+            
+            # 如果第二轮，检查特定关键包
+            if [ $ROUND -eq 2 ]; then
+                echo "=== 第二轮：验证关键依赖包 ==="
+                MISSING_CRITICAL=0
+                CRITICAL_PACKAGES="kmod-shortcut-fe kmod-fast-classifier kmod-sched-core kmod-nft-offload"
+                
+                for pkg in $CRITICAL_PACKAGES; do
+                    if ! find dl -name "*${pkg}*" | grep -q "."; then
+                        echo "❌ 关键依赖包缺失: $pkg"
+                        MISSING_CRITICAL=$((MISSING_CRITICAL + 1))
+                    else
+                        echo "✅ 关键依赖包存在: $pkg"
+                    fi
+                done
+                
+                if [ $MISSING_CRITICAL -gt 0 ]; then
+                    echo "❌ 缺失 $MISSING_CRITICAL 个关键依赖包，尝试单独下载..."
+                    for pkg in $CRITICAL_PACKAGES; do
+                        if ! find dl -name "*${pkg}*" | grep -q "."; then
+                            echo "🔄 单独下载: $pkg"
+                            make package/$pkg/download V=s
+                        fi
+                    done
+                fi
+            fi
+            
+            # 重置重试计数进行下一轮
+            RETRY_COUNT=0
+            DOWNLOAD_SUCCESS=false
         done
-        echo "=== 下载完整性检查 ==="
-        EMPTY_FILES=$(find dl -type f -size 0 2>/dev/null | wc -l)
-        if [ "$EMPTY_FILES" -gt 0 ]; then
-          echo "❌ 发现 $EMPTY_FILES 个空文件，删除后重新下载..."
-          find dl -type f -size 0 -delete
-          echo "重新下载空文件..."
-          make -j1 download V=s
-        fi
+        
+        echo "✅ 所有依赖下载完成"
+
+    - name: 最终依赖验证
+      run: |
+        cd $BUILD_DIR
+        echo "=== 最终依赖验证 ==="
+        
+        echo "=== 检查下载目录状态 ==="
         DL_COUNT=$(find dl -type f | wc -l)
         DL_SIZE=$(du -sh dl | cut -f1)
-        echo "✅ 下载统计: $DL_COUNT 个文件，总大小: $DL_SIZE"
+        echo "下载文件总数: $DL_COUNT"
+        echo "下载总大小: $DL_SIZE"
+        
+        echo "=== 检查空文件和损坏文件 ==="
+        EMPTY_FILES=$(find dl -type f -size 0 2>/dev/null | wc -l)
+        TEMP_FILES=$(find dl -name "*.tmp" 2>/dev/null | wc -l)
+        
+        if [ "$EMPTY_FILES" -gt 0 ]; then
+            echo "❌ 发现 $EMPTY_FILES 个空文件"
+            find dl -type f -size 0 -delete
+            echo "已删除空文件"
+        else
+            echo "✅ 没有空文件"
+        fi
+        
+        if [ "$TEMP_FILES" -gt 0 ]; then
+            echo "❌ 发现 $TEMP_FILES 个临时文件"
+            find dl -name "*.tmp" -delete
+            echo "已删除临时文件"
+        else
+            echo "✅ 没有临时文件"
+        fi
+        
+        echo "=== 验证关键依赖包 ==="
+        CRITICAL_PACKAGES="kmod-shortcut-fe kmod-fast-classifier kmod-sched-core kmod-nft-offload"
+        ALL_CRITICAL_EXIST=true
+        
+        for pkg in $CRITICAL_PACKAGES; do
+            if find dl -name "*${pkg}*" | grep -q "."; then
+                echo "✅ 关键依赖包存在: $pkg"
+            else
+                echo "❌ 关键依赖包缺失: $pkg"
+                ALL_CRITICAL_EXIST=false
+            fi
+        done
+        
+        if [ "$ALL_CRITICAL_EXIST" = false ]; then
+            echo "⚠️ 部分关键依赖包缺失，但继续构建"
+        else
+            echo "✅ 所有关键依赖包都存在"
+        fi
 
     - name: 验证配置
       run: |
@@ -1121,6 +1288,7 @@ jobs:
           ${{ env.BUILD_DIR }}/enhanced_error_analysis.log
           ${{ env.BUILD_DIR }}/download_attempt_*.log
           ${{ env.BUILD_DIR }}/plugin_availability_report.txt
+          ${{ env.BUILD_DIR }}/dependency_analysis.txt
           $GITHUB_WORKSPACE/构建报告.md
           $GITHUB_WORKSPACE/插件映射报告.txt
         retention-days: 7
