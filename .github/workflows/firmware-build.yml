@@ -446,70 +446,68 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 创建基于配置文件的插件检查脚本 ==="
-        cat > check-plugins.sh << 'EOF'
-        #!/bin/bash
-        set -e
-        BUILD_DIR="${1:-.}"
-        cd "$BUILD_DIR"
-        echo "=== 基于配置文件的插件可用性检查 ==="
-        
-        if [ ! -f ".config" ]; then
-            echo "❌ 错误: 找不到配置文件 .config"
-            exit 1
-        fi
-        
-        if [ ! -d "feeds" ] || [ -z "$(ls -A feeds 2>/dev/null)" ]; then
-            echo "❌ Feeds目录为空，跳过插件检查"
-            echo "Feeds目录为空" > plugin_availability_report.txt
-            exit 0
-        fi
-        
-        echo "更新feeds..."
-        ./scripts/feeds update -a > /dev/null 2>&1 || echo "⚠️ Feeds更新有警告"
-        
-        # 从配置文件中提取实际启用的插件
-        echo "=== 从配置文件中提取启用的插件 ==="
-        ENABLED_PLUGINS=$(grep "^CONFIG_PACKAGE_luci" .config | grep "=y$" | sed 's/CONFIG_PACKAGE_//;s/=y//' | sort)
-        
-        echo "启用的插件列表:"
-        echo "$ENABLED_PLUGINS"
-        
-        REPORT_FILE="plugin_availability_report.txt"
-        echo "插件可用性检查报告（基于配置文件）" > $REPORT_FILE
-        echo "生成时间: $(date)" >> $REPORT_FILE
-        echo "==========================================" >> $REPORT_FILE
-        echo "配置文件: .config" >> $REPORT_FILE
-        echo "" >> $REPORT_FILE
-        
-        echo "检查配置文件中启用的插件..." | tee -a $REPORT_FILE
-        MISSING_PLUGINS=""
-        AVAILABLE_COUNT=0
-        MISSING_COUNT=0
-        
-        for plugin in $ENABLED_PLUGINS; do
-            if ./scripts/feeds install "$plugin" > /dev/null 2>&1; then
-                echo "✅ $plugin - 可用" >> $REPORT_FILE
-                AVAILABLE_COUNT=$((AVAILABLE_COUNT + 1))
-            else
-                echo "❌ $plugin - 缺失" >> $REPORT_FILE
-                MISSING_PLUGINS="$MISSING_PLUGINS $plugin"
-                MISSING_COUNT=$((MISSING_COUNT + 1))
-            fi
-        done
-        
-        echo "" >> $REPORT_FILE
-        echo "=== 检查总结 ===" >> $REPORT_FILE
-        echo "总共检查插件: $((AVAILABLE_COUNT + MISSING_COUNT))" >> $REPORT_FILE
-        echo "可用插件: $AVAILABLE_COUNT" >> $REPORT_FILE
-        echo "缺失插件: $MISSING_COUNT" >> $REPORT_FILE
-        
-        if [ -n "$MISSING_PLUGINS" ]; then
-            echo "缺失的插件列表:$MISSING_PLUGINS" >> $REPORT_FILE
-        fi
-        
-        echo "✅ 插件检查完成"
-        exit 0
-        EOF
+        echo '#!/bin/bash' > check-plugins.sh
+        echo 'set -e' >> check-plugins.sh
+        echo 'BUILD_DIR="${1:-.}"' >> check-plugins.sh
+        echo 'cd "$BUILD_DIR"' >> check-plugins.sh
+        echo 'echo "=== 基于配置文件的插件可用性检查 ==="' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo 'if [ ! -f ".config" ]; then' >> check-plugins.sh
+        echo '    echo "❌ 错误: 找不到配置文件 .config"' >> check-plugins.sh
+        echo '    exit 1' >> check-plugins.sh
+        echo 'fi' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo 'if [ ! -d "feeds" ] || [ -z "$(ls -A feeds 2>/dev/null)" ]; then' >> check-plugins.sh
+        echo '    echo "❌ Feeds目录为空，跳过插件检查"' >> check-plugins.sh
+        echo '    echo "Feeds目录为空" > plugin_availability_report.txt' >> check-plugins.sh
+        echo '    exit 0' >> check-plugins.sh
+        echo 'fi' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo 'echo "更新feeds..."' >> check-plugins.sh
+        echo './scripts/feeds update -a > /dev/null 2>&1 || echo "⚠️ Feeds更新有警告"' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo '# 从配置文件中提取实际启用的插件' >> check-plugins.sh
+        echo 'echo "=== 从配置文件中提取启用的插件 ==="' >> check-plugins.sh
+        echo 'ENABLED_PLUGINS=$(grep "^CONFIG_PACKAGE_luci" .config | grep "=y$" | sed 's/CONFIG_PACKAGE_//;s/=y//' | sort)' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo 'echo "启用的插件列表:"' >> check-plugins.sh
+        echo 'echo "$ENABLED_PLUGINS"' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo 'REPORT_FILE="plugin_availability_report.txt"' >> check-plugins.sh
+        echo 'echo "插件可用性检查报告（基于配置文件）" > $REPORT_FILE' >> check-plugins.sh
+        echo 'echo "生成时间: $(date)" >> $REPORT_FILE' >> check-plugins.sh
+        echo 'echo "==========================================" >> $REPORT_FILE' >> check-plugins.sh
+        echo 'echo "配置文件: .config" >> $REPORT_FILE' >> check-plugins.sh
+        echo 'echo "" >> $REPORT_FILE' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo 'echo "检查配置文件中启用的插件..." | tee -a $REPORT_FILE' >> check-plugins.sh
+        echo 'MISSING_PLUGINS=""' >> check-plugins.sh
+        echo 'AVAILABLE_COUNT=0' >> check-plugins.sh
+        echo 'MISSING_COUNT=0' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo 'for plugin in $ENABLED_PLUGINS; do' >> check-plugins.sh
+        echo '    if ./scripts/feeds install "$plugin" > /dev/null 2>&1; then' >> check-plugins.sh
+        echo '        echo "✅ $plugin - 可用" >> $REPORT_FILE' >> check-plugins.sh
+        echo '        AVAILABLE_COUNT=$((AVAILABLE_COUNT + 1))' >> check-plugins.sh
+        echo '    else' >> check-plugins.sh
+        echo '        echo "❌ $plugin - 缺失" >> $REPORT_FILE' >> check-plugins.sh
+        echo '        MISSING_PLUGINS="$MISSING_PLUGINS $plugin"' >> check-plugins.sh
+        echo '        MISSING_COUNT=$((MISSING_COUNT + 1))' >> check-plugins.sh
+        echo '    fi' >> check-plugins.sh
+        echo 'done' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo 'echo "" >> $REPORT_FILE' >> check-plugins.sh
+        echo 'echo "=== 检查总结 ===" >> $REPORT_FILE' >> check-plugins.sh
+        echo 'echo "总共检查插件: $((AVAILABLE_COUNT + MISSING_COUNT))" >> $REPORT_FILE' >> check-plugins.sh
+        echo 'echo "可用插件: $AVAILABLE_COUNT" >> $REPORT_FILE' >> check-plugins.sh
+        echo 'echo "缺失插件: $MISSING_COUNT" >> $REPORT_FILE' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo 'if [ -n "$MISSING_PLUGINS" ]; then' >> check-plugins.sh
+        echo '    echo "缺失的插件列表:$MISSING_PLUGINS" >> $REPORT_FILE' >> check-plugins.sh
+        echo 'fi' >> check-plugins.sh
+        echo '' >> check-plugins.sh
+        echo 'echo "✅ 插件检查完成"' >> check-plugins.sh
+        echo 'exit 0' >> check-plugins.sh
         chmod +x check-plugins.sh
         echo "✅ 基于配置文件的插件检查脚本创建完成"
 
@@ -571,23 +569,24 @@ jobs:
         echo "=== 创建基础配置 ==="
         
         # 首先创建设备基础配置
-        {
-            echo "# 设备基础配置"
-            echo "CONFIG_TARGET_${PLATFORM}=y"
-            echo "CONFIG_TARGET_${PLATFORM}_generic=y" 
-            echo "CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y"
-            echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y"
-            echo "CONFIG_TARGET_IMAGES_GZIP=y"
-            echo "CONFIG_TARGET_IMAGES_PAD=y"
-        } > .config
+        echo "# 设备基础配置" > .config
+        echo "CONFIG_TARGET_${PLATFORM}=y" >> .config
+        echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
+        echo "CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" >> .config
+        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+        echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
+        echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
 
         # 显示基础配置
         echo "=== 基础配置内容 ==="
         cat .config
 
-        # 然后追加模板配置
-        echo "=== 追加模板配置 ==="
-        cat "$CONFIG_FILE" >> .config
+        # 改进的模板配置追加：避免重复配置项
+        echo "=== 智能追加模板配置 ==="
+        # 创建临时文件来存储过滤后的配置
+        grep -v -E "^CONFIG_TARGET_(ROOTFS_SQUASHFS|IMAGES_GZIP|IMAGES_PAD)=" "$CONFIG_FILE" > /tmp/filtered_config
+        cat /tmp/filtered_config >> .config
+        rm -f /tmp/filtered_config
 
         # 处理额外插件和禁用插件
         EXTRA_PACKAGES="${{ inputs.extra_packages }}"
@@ -613,16 +612,15 @@ jobs:
             done
         fi
         
-        # 显示最终的.config文件内容
-        echo "=== 最终 .config 文件内容（前50行）==="
-        head -50 .config
-        
-        echo "=== 关键插件配置状态 ==="
+        # 验证关键插件是否在配置中
+        echo "=== 关键插件配置状态验证 ==="
         for pkg in luci-app-turboacc luci-app-flowoffload luci-app-sfe luci-app-sqm luci-app-upnp luci-app-samba4 luci-app-samba luci-app-smartdns luci-app-wireguard luci-app-ddns luci-app-adblock; do
             if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
                 echo "✅ $pkg: 在.config中已启用"
             else
                 echo "❌ $pkg: 在.config中未启用"
+                # 显示实际配置行
+                grep "CONFIG_PACKAGE_${pkg}" .config || echo "未找到相关配置"
             fi
         done
         
@@ -643,6 +641,16 @@ jobs:
             echo "❌ 错误: defconfig后 .config 文件不存在或为空"
             exit 1
         fi
+        
+        # 再次验证关键插件状态
+        echo "=== defconfig后关键插件状态 ==="
+        for pkg in luci-app-turboacc; do
+            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
+                echo "✅ $pkg: 在defconfig后仍启用"
+            else
+                echo "❌ $pkg: 在defconfig后被禁用"
+            fi
+        done
 
     - name: 配置完整性检查
       run: |
@@ -679,6 +687,14 @@ jobs:
                 echo "CONFIG_PACKAGE_${pkg}=y" >> .config
             fi
         done
+
+        # 验证turboacc相关配置
+        echo "=== 验证turboacc相关配置 ==="
+        if ! grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+            echo "⚠️ 警告: luci-app-turboacc 未启用，尝试修复"
+            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
+        fi
         
         echo "✅ 配置完整性检查完成"
         
