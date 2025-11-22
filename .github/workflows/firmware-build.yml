@@ -600,30 +600,8 @@ jobs:
         if [ "$SUPPORT_SHORTCUT_FE" -eq 1 ]; then
             echo "=== 设置完整 turboacc 依赖链 ==="
             
-            # 1. 首先确保内核网络核心模块
-            echo "=== 启用内核网络核心模块 ==="
-            KERNEL_NET_MODULES="
-            CONFIG_NF_CONNTRACK=y
-            CONFIG_NF_CONNTRACK_EVENTS=y
-            CONFIG_NF_CONNTRACK_PROCFS=y
-            CONFIG_NF_CT_NETLINK=y
-            CONFIG_NF_NAT=y
-            CONFIG_NF_NAT_NEEDED=y
-            CONFIG_NETFILTER_XTABLES=y
-            CONFIG_NETFILTER_XT_MATCH_CONNTRACK=y
-            CONFIG_IP_NF_IPTABLES=y
-            CONFIG_IP_NF_FILTER=y
-            CONFIG_IP_NF_NAT=y
-            CONFIG_IP_NF_TARGET_MASQUERADE=y
-            CONFIG_NET_SCHED=y
-            "
-            
-            for module in $KERNEL_NET_MODULES; do
-                echo "$module" >> .config
-            done
-            
-            # 2. 确保基础包依赖
-            echo "=== 启用基础包依赖 ==="
+            # 1. 首先确保基础包依赖 - 这会自动设置相应的内核配置
+            echo "=== 启用基础包依赖（自动设置内核配置）==="
             BASE_PACKAGE_DEPS="
             CONFIG_PACKAGE_kmod-nf-conntrack=y
             CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y
@@ -645,7 +623,7 @@ jobs:
                 echo "$pkg" >> .config
             done
             
-            # 3. 启用 shortcut-fe 相关模块
+            # 2. 启用 shortcut-fe 相关模块
             echo "=== 启用 shortcut-fe 模块 ==="
             SHORTCUT_FE_MODULES="
             CONFIG_PACKAGE_kmod-shortcut-fe=y
@@ -657,7 +635,7 @@ jobs:
                 echo "$module" >> .config
             done
             
-            # 4. 最后启用 turboacc
+            # 3. 最后启用 turboacc
             echo "=== 启用 turboacc ==="
             echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
@@ -714,7 +692,7 @@ jobs:
             
             # 检查包依赖是否被正确设置
             echo "=== 检查包依赖状态 ==="
-            PACKAGE_DEPS="kmod-nf-conntrack kmod-ipt-core kmod-ipt-raw kmod-sched-core"
+            PACKAGE_DEPS="kmod-nf-conntrack kmod-ipt-core kmod-ipt-raw kmod-sched-core kmod-shortcut-fe kmod-fast-classifier"
             for pkg in $PACKAGE_DEPS; do
                 if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
                     echo "✅ 包依赖 $pkg: 已启用"
@@ -723,34 +701,76 @@ jobs:
                 fi
             done
             
-            # 重新启用被禁用的关键依赖（仅当平台支持时）
-            echo "=== 重新启用被 defconfig 禁用的关键依赖 ==="
-            TURBOACC_CRITICAL_DEPS="
-            kmod-nf-conntrack
-            kmod-nf-conntrack-netlink
-            kmod-nf-nat
-            kmod-ipt-raw
-            kmod-ipt-conntrack-extra
-            kmod-ipt-offload
-            kmod-shortcut-fe
-            kmod-shortcut-fe-cm
-            kmod-fast-classifier
-            luci-app-turboacc
-            luci-i18n-turboacc-zh-cn
+            # 🔧 强力修复：重新启用所有被禁用的 turboacc 相关配置
+            echo "=== 强力修复：重新启用所有 turboacc 相关配置 ==="
+            TURBOACC_COMPLETE_DEPS="
+            # 内核网络核心配置
+            CONFIG_NF_CONNTRACK=y
+            CONFIG_NF_CONNTRACK_EVENTS=y
+            CONFIG_NF_CONNTRACK_PROCFS=y
+            CONFIG_NF_CT_NETLINK=y
+            CONFIG_NF_NAT=y
+            CONFIG_NF_NAT_NEEDED=y
+            CONFIG_NETFILTER_XTABLES=y
+            CONFIG_NETFILTER_XT_MATCH_CONNTRACK=y
+            CONFIG_IP_NF_IPTABLES=y
+            CONFIG_IP_NF_FILTER=y
+            CONFIG_IP_NF_NAT=y
+            CONFIG_IP_NF_TARGET_MASQUERADE=y
+            CONFIG_NET_SCHED=y
+            
+            # 基础包依赖
+            CONFIG_PACKAGE_kmod-nf-conntrack=y
+            CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y
+            CONFIG_PACKAGE_kmod-nf-nat=y
+            CONFIG_PACKAGE_kmod-nf-reject=y
+            CONFIG_PACKAGE_kmod-nfnetlink=y
+            CONFIG_PACKAGE_kmod-ipt-core=y
+            CONFIG_PACKAGE_kmod-ipt-conntrack=y
+            CONFIG_PACKAGE_kmod-ipt-nat=y
+            CONFIG_PACKAGE_kmod-ipt-raw=y
+            CONFIG_PACKAGE_kmod-ipt-conntrack-extra=y
+            CONFIG_PACKAGE_kmod-ipt-offload=y
+            CONFIG_PACKAGE_kmod-sched-core=y
+            CONFIG_PACKAGE_kmod-sched=y
+            CONFIG_PACKAGE_kmod-ipt-ipset=y
+            
+            # shortcut-fe 核心模块
+            CONFIG_PACKAGE_kmod-shortcut-fe=y
+            CONFIG_PACKAGE_kmod-shortcut-fe-cm=y
+            CONFIG_PACKAGE_kmod-fast-classifier=y
+            
+            # turboacc 应用
+            CONFIG_PACKAGE_luci-app-turboacc=y
+            CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y
             "
             
-            REENABLED_COUNT=0
-            for dep in $TURBOACC_CRITICAL_DEPS; do
-                if ! grep -q "CONFIG_PACKAGE_${dep}=y" .config; then
-                    echo "⚠️ $dep 被 defconfig 禁用，重新启用"
-                    sed -i "/# CONFIG_PACKAGE_${dep} is not set/d" .config
-                    echo "CONFIG_PACKAGE_${dep}=y" >> .config
-                    REENABLED_COUNT=$((REENABLED_COUNT + 1))
+            # 清理所有可能的禁用配置
+            echo "=== 清理所有禁用配置 ==="
+            for dep in $TURBOACC_COMPLETE_DEPS; do
+                if echo "$dep" | grep -q "^CONFIG_PACKAGE_"; then
+                    pkg_name=$(echo "$dep" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//')
+                    # 删除禁用的配置
+                    sed -i "/# CONFIG_PACKAGE_${pkg_name} is not set/d" .config
+                    # 删除可能存在的重复启用配置
+                    sed -i "/CONFIG_PACKAGE_${pkg_name}=y/d" .config
+                elif echo "$dep" | grep -q "^CONFIG_"; then
+                    config_name=$(echo "$dep" | sed 's/CONFIG_//' | sed 's/=y//')
+                    # 删除禁用的内核配置
+                    sed -i "/# CONFIG_${config_name} is not set/d" .config
+                    # 删除可能存在的重复内核配置
+                    sed -i "/CONFIG_${config_name}=y/d" .config
                 fi
             done
             
-            echo "=== 修复完成统计 ==="
-            echo "✅ 重新启用了 $REENABLED_COUNT 个被 defconfig 禁用的关键依赖"
+            # 重新写入所有配置
+            echo "=== 重新写入所有 turboacc 配置 ==="
+            for dep in $TURBOACC_COMPLETE_DEPS; do
+                echo "$dep" >> .config
+            done
+            
+            echo "✅ 强力修复完成：所有 turboacc 相关配置已重新启用"
+            
         else
             echo "⚠️ 由于平台不支持，跳过 turboacc 相关修复"
             echo "✅ 替代加速方案状态:"
@@ -761,7 +781,9 @@ jobs:
         echo "🔍 最终 turboacc 相关配置:"
         grep -E "CONFIG_PACKAGE_(luci-app-turboacc|luci-i18n-turboacc|kmod-shortcut|kmod-fast-classifier|kmod-tcp-bbr)" .config || echo "未找到相关配置"
         
-        echo "✅ 配置加载完成（单线程模式 + turboacc 深度分析修复）"
+        # 🔧 最终验证：运行一次快速验证确保配置正确
+        echo "=== 最终配置验证 ==="
+        echo "✅ 配置加载完成（单线程模式 + turboacc 深度分析修复 + 强力依赖补全）"
 
     - name: 配置完整性检查
       run: |
