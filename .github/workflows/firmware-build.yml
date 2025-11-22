@@ -531,30 +531,52 @@ jobs:
         fi
         
         # 🔧 关键修复：确保 turboacc 依赖在 defconfig 前就设置好
-        if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
-            echo "=== 修复 turboacc 依赖 ==="
-            echo "检测到 luci-app-turboacc 已启用，确保依赖包可用"
-            
-            # 启用 turboacc 的核心依赖
-            echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-shortcut-fe-cm=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-            
-            # 启用相关的网络加速模块
-            echo "CONFIG_PACKAGE_kmod-ipt-raw=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-ipt-conntrack-extra=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> .config
-            
-            # 确保基础网络模块
-            echo "CONFIG_PACKAGE_kmod-nf-conntrack=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-nf-flow=y" >> .config
-            
-            echo "✅ turboacc 依赖修复完成"
-        fi
+        echo "=== 强制启用 turboacc 及其依赖 ==="
+        # 删除可能的禁用设置
+        sed -i '/# CONFIG_PACKAGE_luci-app-turboacc is not set/d' .config
+        sed -i '/# CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn is not set/d' .config
+        # 启用 turboacc
+        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
+        # 启用 turboacc 的核心依赖
+        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-shortcut-fe-cm=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+        # 启用相关的网络加速模块
+        echo "CONFIG_PACKAGE_kmod-ipt-raw=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-conntrack-extra=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> .config
+        # 确保基础网络模块
+        echo "CONFIG_PACKAGE_kmod-nf-conntrack=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-flow=y" >> .config
+        
+        # 🚫 清理不需要的插件（已移除用户需要的三个插件）
+        echo "=== 清理不需要的插件 ==="
+        UNWANTED_PLUGINS="
+        luci-app-rclone_INCLUDE_rclone-ng
+        luci-app-rclone_INCLUDE_rclone-webui
+        luci-app-timewol
+        luci-app-passwall_INCLUDE_Haproxy
+        luci-app-passwall_INCLUDE_Shadowsocks_Rust_Client
+        luci-app-passwall_INCLUDE_Shadowsocks_Rust_Server
+        luci-app-passwall_INCLUDE_Simple_Obfs
+        luci-app-passwall_INCLUDE_SingBox
+        luci-app-passwall_INCLUDE_V2ray_Geoview
+        luci-app-passwall_INCLUDE_V2ray_Plugin
+        luci-app-passwall_INCLUDE_Xray
+        "
+        
+        for plugin in $UNWANTED_PLUGINS; do
+            if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
+                echo "🚫 删除不需要的插件: $plugin"
+                sed -i "/CONFIG_PACKAGE_${plugin}=y/d" .config
+                echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+            fi
+        done
         
         echo "=== 关键插件配置状态验证 ==="
-        for pkg in luci luci-base luci-theme-bootstrap; do
+        for pkg in luci luci-base luci-theme-bootstrap luci-app-turboacc; do
             if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
                 echo "✅ $pkg: 在.config中已启用"
             else
@@ -562,13 +584,6 @@ jobs:
                 grep "CONFIG_PACKAGE_${pkg}" .config || echo "未找到相关配置"
             fi
         done
-        
-        # 特别检查 turboacc 状态
-        if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
-            echo "✅ luci-app-turboacc: 在加载后已启用"
-        else
-            echo "❌ luci-app-turboacc: 在加载后未启用"
-        fi
         
         if [ ! -f ".config" ] || [ ! -s ".config" ]; then
             echo "❌ 错误: .config 文件不存在或为空"
@@ -591,6 +606,7 @@ jobs:
             echo "⚠️ luci-app-turboacc 被 defconfig 禁用，尝试重新启用"
             # 删除可能的禁用设置
             sed -i '/# CONFIG_PACKAGE_luci-app-turboacc is not set/d' .config
+            sed -i '/# CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn is not set/d' .config
             # 重新启用
             echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
@@ -646,15 +662,49 @@ jobs:
             fi
         done
         
+        # 强制检查 turboacc
+        if ! grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+            echo "❌ 错误: turboacc 未启用，强制启用"
+            sed -i '/# CONFIG_PACKAGE_luci-app-turboacc is not set/d' .config
+            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-shortcut-fe-cm=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+        fi
+        
         echo "✅ 配置完整性检查完成"
         
         # 运行defconfig但不强制启用插件
         echo "=== 配置验证 ==="
         make defconfig
         
+        # 再次检查 turboacc
+        if ! grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+            echo "❌ defconfig 后 turboacc 被禁用，再次启用"
+            sed -i '/# CONFIG_PACKAGE_luci-app-turboacc is not set/d' .config
+            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-shortcut-fe-cm=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+        fi
+        
         echo "=== 当前插件状态 ==="
         echo "以下是你配置文件中实际启用的插件:"
         grep "^CONFIG_PACKAGE_luci-app" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
+        
+        echo "=== turboacc 最终状态 ==="
+        if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+            echo "✅ luci-app-turboacc: 最终已启用"
+            for dep in kmod-shortcut-fe kmod-fast-classifier; do
+                if grep -q "CONFIG_PACKAGE_${dep}=y" .config; then
+                    echo "✅ $dep: 已启用"
+                else
+                    echo "❌ $dep: 未启用"
+                fi
+            done
+        else
+            echo "❌ luci-app-turboacc: 最终未启用"
+        fi
 
     - name: 包可用性诊断
       run: |
@@ -936,7 +986,7 @@ jobs:
         echo "下载文件总数: $DL_COUNT"
         echo "下载总大小: $DL_SIZE"
         
-        echo "=== 检查空文件和损坏文件 ==="
+        echo "=== 检查空文件和损坏文件 ===""
         EMPTY_FILES=$(find dl -type f -size 0 2>/dev/null | wc -l)
         TEMP_FILES=$(find dl -name "*.tmp" 2>/dev/null | wc -l)
         
