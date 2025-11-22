@@ -428,14 +428,15 @@ jobs:
             fi
         fi
 
-    - name: 修复配置加载问题 - 深度 turboacc 支持分析
+    - name: 修复配置加载问题 - 预添加所有必要配置
       run: |
         cd $BUILD_DIR
-        echo "=== 修复配置加载问题 - 深度 turboacc 支持分析 ==="
+        echo "=== 修复配置加载问题 - 预添加所有必要配置 ==="
         export MAKE_JOBS=1
         echo "🔒 配置阶段使用单线程模式"
         CONFIG_TYPE="${{ inputs.config_type }}"
         echo "配置类型: $CONFIG_TYPE"
+        
         if [ "$CONFIG_TYPE" = "minimal" ]; then
             CONFIG_FILE="config-templates/minimal.config"
         elif [ "$CONFIG_TYPE" = "normal" ] || [ "$CONFIG_TYPE" = "custom" ]; then
@@ -446,14 +447,17 @@ jobs:
                     echo "✅ 自动判断为老旧设备: ${{ github.event.inputs.device_name }}"
                     ;;
             esac
+            
             if echo "$SELECTED_BRANCH" | grep -q -E "19\.07|21\.02|17\.01|lede"; then
                 IS_OLD_VERSION=1
                 echo "✅ 自动判断为老旧版本: $SELECTED_BRANCH"
             fi
+            
             if [ "$SELECTED_REPO" = "lede" ] || [ "$SELECTED_REPO" = "openwrt-19.07" ] || [ "$SELECTED_REPO" = "openwrt-21.02" ]; then
                 IS_OLD_VERSION=1
                 echo "✅ 自动判断为老旧仓库: $SELECTED_REPO"
             fi
+            
             if [ "$IS_OLD_VERSION" -eq 1 ]; then
                 CONFIG_FILE="config-templates/normal-old.config"
             else
@@ -463,12 +467,15 @@ jobs:
             echo "❌ 未知的配置类型: $CONFIG_TYPE"
             exit 1
         fi
+        
         echo "=== 选择的配置文件: $CONFIG_FILE ==="
         if [ ! -f "$CONFIG_FILE" ]; then
             echo "❌ 错误: 找不到配置文件 $CONFIG_FILE"
             ls -la config-templates/
             exit 1
         fi
+        
+        # 第一步：创建基础配置
         echo "=== 创建基础配置 ==="
         echo "# 设备基础配置" > .config
         echo "CONFIG_TARGET_${PLATFORM}=y" >> .config
@@ -477,12 +484,35 @@ jobs:
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
         echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
+        
+        echo "=== 基础配置后的插件状态 ==="
+        echo "当前启用的luci插件:"
+        grep "^CONFIG_PACKAGE_luci-app" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort || echo "无luci插件"
+        
+        # 第二步：智能追加模板配置
         echo "=== 智能追加模板配置 ==="
         grep -v -E "^CONFIG_TARGET_(ROOTFS_SQUASHFS|IMAGES_GZIP|IMAGES_PAD)=" "$CONFIG_FILE" > /tmp/filtered_config
         cat /tmp/filtered_config >> .config
         rm -f /tmp/filtered_config
+        
+        echo "=== 追加模板配置后的插件状态 ==="
+        echo "当前启用的luci插件:"
+        grep "^CONFIG_PACKAGE_luci-app" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort || echo "无luci插件"
+        
+        # 第三步：预添加所有必要的内核配置（避免后续检查缺失）
+        echo "=== 预添加所有必要的内核配置 ==="
+        echo "# 预添加必要的内核配置以确保turboacc正常工作" >> .config
+        ESSENTIAL_KERNEL_CONFIGS="CONFIG_NF_CONNTRACK=y CONFIG_NF_CONNTRACK_EVENTS=y CONFIG_NF_CONNTRACK_PROCFS=y CONFIG_NF_CT_NETLINK=y CONFIG_NF_NAT=y CONFIG_NF_NAT_NEEDED=y CONFIG_NETFILTER_XTABLES=y CONFIG_NETFILTER_XT_MATCH_CONNTRACK=y CONFIG_IP_NF_IPTABLES=y CONFIG_IP_NF_FILTER=y CONFIG_IP_NF_NAT=y CONFIG_IP_NF_TARGET_MASQUERADE=y CONFIG_NET_SCHED=y"
+        
+        for config in $ESSENTIAL_KERNEL_CONFIGS; do
+            echo "$config" >> .config
+        done
+        echo "✅ 所有必要的内核配置已预添加"
+        
+        # 第四步：处理用户自定义包
         EXTRA_PACKAGES="${{ inputs.extra_packages }}"
         DISABLED_PLUGINS="${{ inputs.disabled_plugins }}"
+        
         if [ -n "$EXTRA_PACKAGES" ]; then
             echo "=== 添加额外插件 ==="
             for pkg in $EXTRA_PACKAGES; do
@@ -491,6 +521,7 @@ jobs:
                 echo "CONFIG_PACKAGE_${pkg}=y" >> .config
             done
         fi
+        
         if [ -n "$DISABLED_PLUGINS" ]; then
             echo "=== 禁用指定插件 ==="
             for pkg in $DISABLED_PLUGINS; do
@@ -499,8 +530,11 @@ jobs:
                 echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
             done
         fi
+        
+        # 第五步：清理不需要的插件
         echo "=== 清理不需要的插件 ==="
         UNWANTED_PLUGINS="luci-app-rclone_INCLUDE_rclone-ng luci-app-rclone_INCLUDE_rclone-webui luci-app-timewol luci-app-passwall_INCLUDE_Haproxy luci-app-passwall_INCLUDE_Shadowsocks_Rust_Client luci-app-passwall_INCLUDE_Shadowsocks_Rust_Server luci-app-passwall_INCLUDE_Simple_Obfs luci-app-passwall_INCLUDE_SingBox luci-app-passwall_INCLUDE_V2ray_Geoview luci-app-passwall_INCLUDE_V2ray_Plugin luci-app-passwall_INCLUDE_Xray"
+        
         for plugin in $UNWANTED_PLUGINS; do
             if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
                 echo "🚫 删除插件: $plugin"
@@ -508,13 +542,20 @@ jobs:
                 echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
             fi
         done
+        
+        echo "=== 清理不需要的插件后的插件状态 ==="
+        echo "当前启用的luci插件:"
+        grep "^CONFIG_PACKAGE_luci-app" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort || echo "无luci插件"
+        
+        # 第六步：根据平台智能启用网络加速方案
         echo "=== 深度分析 turboacc 支持性 ==="
-        echo "=== 平台兼容性分析 ==="
         echo "平台: $PLATFORM"
         echo "设备: $DEVICE_SHORT_NAME"
         echo "版本分支: $SELECTED_BRANCH"
+        
         SUPPORT_SHORTCUT_FE=1
         TURBOACC_SUPPORT_REASON=""
+        
         case "$PLATFORM" in
             "ipq40xx"|"ipq806x"|"mediatek"|"ramips"|"ath79"|"rockchip")
                 TURBOACC_SUPPORT_REASON="平台 $PLATFORM 通常支持 shortcut-fe"
@@ -530,163 +571,77 @@ jobs:
                 TURBOACC_SUPPORT_REASON="未知平台 $PLATFORM，尝试支持 shortcut-fe"
                 ;;
         esac
+        
         if echo "$SELECTED_BRANCH" | grep -q -E "19\.07|21\.02"; then
             echo "⚠️ 版本 $SELECTED_BRANCH 可能对 shortcut-fe 支持有限"
             TURBOACC_SUPPORT_REASON="$TURBOACC_SUPPORT_REASON (版本限制)"
         fi
+        
         echo "=== turboacc 支持性结论 ==="
         if [ "$SUPPORT_SHORTCUT_FE" -eq 1 ]; then
             echo "✅ 结论: 平台支持 turboacc，将启用完整配置"
             echo "支持原因: $TURBOACC_SUPPORT_REASON"
+            
+            # 直接启用所有必要的包依赖（避免后续检查缺失）
+            echo "=== 直接启用所有必要的包依赖 ==="
+            TURBOACC_PACKAGE_DEPS="CONFIG_PACKAGE_kmod-nf-conntrack=y CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y CONFIG_PACKAGE_kmod-nf-nat=y CONFIG_PACKAGE_kmod-nf-reject=y CONFIG_PACKAGE_kmod-nfnetlink=y CONFIG_PACKAGE_kmod-ipt-core=y CONFIG_PACKAGE_kmod-ipt-conntrack=y CONFIG_PACKAGE_kmod-ipt-nat=y CONFIG_PACKAGE_kmod-ipt-raw=y CONFIG_PACKAGE_kmod-ipt-conntrack-extra=y CONFIG_PACKAGE_kmod-ipt-offload=y CONFIG_PACKAGE_kmod-sched-core=y CONFIG_PACKAGE_kmod-sched=y CONFIG_PACKAGE_kmod-ipt-ipset=y CONFIG_PACKAGE_kmod-shortcut-fe=y CONFIG_PACKAGE_kmod-shortcut-fe-cm=y CONFIG_PACKAGE_kmod-fast-classifier=y CONFIG_PACKAGE_luci-app-turboacc=y CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y"
+            
+            for pkg in $TURBOACC_PACKAGE_DEPS; do
+                echo "$pkg" >> .config
+            done
+            echo "✅ 所有必要的包依赖已直接启用"
+            
         else
             echo "❌ 结论: 平台不支持 turboacc，将使用替代方案"
             echo "不支持原因: $TURBOACC_SUPPORT_REASON"
-        fi
-        echo "=== 记录初始 turboacc 状态 ==="
-        echo "🔍 初始 turboacc 相关配置:"
-        grep -E "CONFIG_PACKAGE_(luci-app-turboacc|luci-i18n-turboacc|kmod-shortcut|kmod-fast-classifier)" .config || echo "未找到相关配置"
-        if [ "$SUPPORT_SHORTCUT_FE" -eq 1 ]; then
-            echo "=== 设置完整 turboacc 依赖链 ==="
-            echo "=== 启用基础包依赖（自动设置内核配置）==="
-            BASE_PACKAGE_DEPS="CONFIG_PACKAGE_kmod-nf-conntrack=y CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y CONFIG_PACKAGE_kmod-nf-nat=y CONFIG_PACKAGE_kmod-nf-reject=y CONFIG_PACKAGE_kmod-nfnetlink=y CONFIG_PACKAGE_kmod-ipt-core=y CONFIG_PACKAGE_kmod-ipt-conntrack=y CONFIG_PACKAGE_kmod-ipt-nat=y CONFIG_PACKAGE_kmod-ipt-raw=y CONFIG_PACKAGE_kmod-ipt-conntrack-extra=y CONFIG_PACKAGE_kmod-ipt-offload=y CONFIG_PACKAGE_kmod-sched-core=y CONFIG_PACKAGE_kmod-sched=y CONFIG_PACKAGE_kmod-ipt-ipset=y"
-            for pkg in $BASE_PACKAGE_DEPS; do
-                echo "$pkg" >> .config
-            done
-            echo "=== 启用 shortcut-fe 模块 ==="
-            SHORTCUT_FE_MODULES="CONFIG_PACKAGE_kmod-shortcut-fe=y CONFIG_PACKAGE_kmod-shortcut-fe-cm=y CONFIG_PACKAGE_kmod-fast-classifier=y"
-            for module in $SHORTCUT_FE_MODULES; do
-                echo "$module" >> .config
-            done
-            echo "=== 启用 turboacc ==="
-            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
-        else
+            
             echo "=== 设置替代网络加速方案 ==="
-            echo "🔧 由于平台不支持 turboacc，启用替代加速方案"
             ALTERNATIVE_ACCELERATION="CONFIG_PACKAGE_kmod-tcp-bbr=y CONFIG_PACKAGE_kmod-nft-offload=y CONFIG_PACKAGE_kmod-nft-fastnet=y CONFIG_PACKAGE_kmod-nft-core=y CONFIG_PACKAGE_kmod-nft-nat=y CONFIG_PACKAGE_kmod-ipt-filter=y CONFIG_PACKAGE_iptables-mod-conntrack-extra=y CONFIG_PACKAGE_iptables-mod-ipopt=y"
+            
             for config in $ALTERNATIVE_ACCELERATION; do
                 echo "$config" >> .config
             done
             echo "✅ 替代网络加速方案已启用"
         fi
-        echo "=== 记录添加依赖后的 turboacc 状态 ==="
-        echo "🔍 添加依赖后 turboacc 相关配置:"
-        grep -E "CONFIG_PACKAGE_(luci-app-turboacc|luci-i18n-turboacc|kmod-shortcut|kmod-fast-classifier|kmod-tcp-bbr)" .config || echo "未找到相关配置"
-        echo "=== 运行单线程 defconfig ==="
-        echo "⚠️ 注意: defconfig 可能会根据依赖关系自动禁用某些配置"
-        make -j1 defconfig
-        echo "=== 检查 defconfig 后的依赖状态 ==="
-        echo "🔍 defconfig 后 turboacc 相关配置:"
-        grep -E "CONFIG_PACKAGE_(luci-app-turboacc|luci-i18n-turboacc|kmod-shortcut|kmod-fast-classifier|kmod-tcp-bbr)" .config || echo "未找到相关配置"
-        echo "=== 分析 defconfig 禁用原因 ==="
-        if [ "$SUPPORT_SHORTCUT_FE" -eq 1 ]; then
-            echo "=== 检查内核配置状态 ==="
-            KERNEL_CONFIGS="NF_CONNTRACK NF_NAT NETFILTER_XTABLES IP_NF_IPTABLES NET_SCHED"
-            for config in $KERNEL_CONFIGS; do
-                if grep -q "CONFIG_${config}=y" .config; then
-                    echo "✅ 内核配置 $config: 已启用"
-                else
-                    echo "❌ 内核配置 $config: 未启用 - 这可能导致 shortcut-fe 被禁用"
-                fi
-            done
-            echo "=== 检查包依赖状态 ==="
-            PACKAGE_DEPS="kmod-nf-conntrack kmod-ipt-core kmod-ipt-raw kmod-sched-core kmod-shortcut-fe kmod-fast-classifier"
-            for pkg in $PACKAGE_DEPS; do
-                if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
-                    echo "✅ 包依赖 $pkg: 已启用"
-                else
-                    echo "❌ 包依赖 $pkg: 未启用 - 这可能导致 shortcut-fe 被禁用"
-                fi
-            done
-            echo "=== 强力修复：重新启用所有 turboacc 相关配置 ==="
-            TURBOACC_COMPLETE_DEPS="CONFIG_NF_CONNTRACK=y CONFIG_NF_CONNTRACK_EVENTS=y CONFIG_NF_CONNTRACK_PROCFS=y CONFIG_NF_CT_NETLINK=y CONFIG_NF_NAT=y CONFIG_NF_NAT_NEEDED=y CONFIG_NETFILTER_XTABLES=y CONFIG_NETFILTER_XT_MATCH_CONNTRACK=y CONFIG_IP_NF_IPTABLES=y CONFIG_IP_NF_FILTER=y CONFIG_IP_NF_NAT=y CONFIG_IP_NF_TARGET_MASQUERADE=y CONFIG_NET_SCHED=y CONFIG_PACKAGE_kmod-nf-conntrack=y CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y CONFIG_PACKAGE_kmod-nf-nat=y CONFIG_PACKAGE_kmod-nf-reject=y CONFIG_PACKAGE_kmod-nfnetlink=y CONFIG_PACKAGE_kmod-ipt-core=y CONFIG_PACKAGE_kmod-ipt-conntrack=y CONFIG_PACKAGE_kmod-ipt-nat=y CONFIG_PACKAGE_kmod-ipt-raw=y CONFIG_PACKAGE_kmod-ipt-conntrack-extra=y CONFIG_PACKAGE_kmod-ipt-offload=y CONFIG_PACKAGE_kmod-sched-core=y CONFIG_PACKAGE_kmod-sched=y CONFIG_PACKAGE_kmod-ipt-ipset=y CONFIG_PACKAGE_kmod-shortcut-fe=y CONFIG_PACKAGE_kmod-shortcut-fe-cm=y CONFIG_PACKAGE_kmod-fast-classifier=y CONFIG_PACKAGE_luci-app-turboacc=y CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y"
-            echo "=== 清理所有禁用配置 ==="
-            for dep in $TURBOACC_COMPLETE_DEPS; do
-                if echo "$dep" | grep -q "^CONFIG_PACKAGE_"; then
-                    pkg_name=$(echo "$dep" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//')
-                    sed -i "/# CONFIG_PACKAGE_${pkg_name} is not set/d" .config
-                    sed -i "/CONFIG_PACKAGE_${pkg_name}=y/d" .config
-                elif echo "$dep" | grep -q "^CONFIG_"; then
-                    config_name=$(echo "$dep" | sed 's/CONFIG_//' | sed 's/=y//')
-                    sed -i "/# CONFIG_${config_name} is not set/d" .config
-                    sed -i "/CONFIG_${config_name}=y/d" .config
-                fi
-            done
-            echo "=== 重新写入所有 turboacc 配置 ==="
-            for dep in $TURBOACC_COMPLETE_DEPS; do
-                echo "$dep" >> .config
-            done
-            echo "✅ 强力修复完成：所有 turboacc 相关配置已重新启用"
+        
+        echo "=== 最终配置状态 ==="
+        echo "当前启用的luci插件:"
+        grep "^CONFIG_PACKAGE_luci-app" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort || echo "无luci插件"
+        
+        echo "=== 网络加速方案状态 ==="
+        if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+            echo "✅ turboacc 方案: 已启用"
+        elif grep -q "CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
+            echo "✅ 替代加速方案 (BBR): 已启用"
         else
-            echo "⚠️ 由于平台不支持，跳过 turboacc 相关修复"
-            echo "✅ 替代加速方案状态:"
-            grep -E "CONFIG_PACKAGE_(kmod-tcp-bbr|kmod-nft-offload)" .config || echo "未找到替代加速方案配置"
+            echo "❌ 未启用任何网络加速方案"
         fi
-        echo "=== 最终 turboacc 状态报告 ==="
-        echo "🔍 最终 turboacc 相关配置:"
-        grep -E "CONFIG_PACKAGE_(luci-app-turboacc|luci-i18n-turboacc|kmod-shortcut|kmod-fast-classifier|kmod-tcp-bbr)" .config || echo "未找到相关配置"
-        echo "=== 最终强力锁定 turboacc 配置 ==="
-        echo "# =============================================" > /tmp/turboacc_lock.config
-        echo "# TurboACC 配置锁定" >> /tmp/turboacc_lock.config
-        echo "# 此部分配置由构建系统自动维护，请勿手动修改" >> /tmp/turboacc_lock.config
-        echo "# =============================================" >> /tmp/turboacc_lock.config
-        echo "" >> /tmp/turboacc_lock.config
-        echo "# 内核网络核心配置" >> /tmp/turboacc_lock.config
-        echo "CONFIG_NF_CONNTRACK=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_NF_CONNTRACK_EVENTS=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_NF_CONNTRACK_PROCFS=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_NF_CT_NETLINK=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_NF_NAT=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_NF_NAT_NEEDED=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_NETFILTER_XTABLES=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_NETFILTER_XT_MATCH_CONNTRACK=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_IP_NF_IPTABLES=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_IP_NF_FILTER=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_IP_NF_NAT=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_IP_NF_TARGET_MASQUERADE=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_NET_SCHED=y" >> /tmp/turboacc_lock.config
-        echo "" >> /tmp/turboacc_lock.config
-        echo "# 基础包依赖" >> /tmp/turboacc_lock.config
-        echo "CONFIG_PACKAGE_kmod-nf-conntrack=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_PACKAGE_kmod-nf-nat=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_PACKAGE_kmod-nf-reject=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_PACKAGE_kmod-nfnetlink=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_PACKAGE_kmod-ipt-core=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_PACKAGE_kmod-ipt-conntrack=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_PACKAGE_kmod-ipt-nat=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_PACKAGE_kmod-ipt-raw=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_PACKAGE_kmod-ipt-conntrack-extra=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_PACKAGE_kmod-sched-core=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_PACKAGE_kmod-sched=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_PACKAGE_kmod-ipt-ipset=y" >> /tmp/turboacc_lock.config
-        echo "" >> /tmp/turboacc_lock.config
-        echo "# shortcut-fe 核心模块" >> /tmp/turboacc_lock.config
-        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_PACKAGE_kmod-shortcut-fe-cm=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> /tmp/turboacc_lock.config
-        echo "" >> /tmp/turboacc_lock.config
-        echo "# turboacc 应用" >> /tmp/turboacc_lock.config
-        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> /tmp/turboacc_lock.config
-        echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> /tmp/turboacc_lock.config
-        echo "" >> /tmp/turboacc_lock.config
-        echo "# =============================================" >> /tmp/turboacc_lock.config
-        echo "# TurboACC 配置锁定结束" >> /tmp/turboacc_lock.config
-        echo "# =============================================" >> /tmp/turboacc_lock.config
-        echo "应用配置锁定..."
-        while IFS= read -r line; do
-            if [ -n "$line" ] && [[ ! "$line" =~ ^# ]]; then
-                config_name=$(echo "$line" | cut -d'=' -f1)
-                sed -i "/${config_name}=/d" .config
-                sed -i "/# ${config_name} is not set/d" .config
-                echo "$line" >> .config
+        
+        # 运行 defconfig 来验证和调整配置
+        echo "=== 运行单线程 defconfig ==="
+        make -j1 defconfig
+        
+        # 最终验证（现在应该不会再有缺失的内核配置）
+        echo "=== 最终验证内核配置状态 ==="
+        KERNEL_CONFIGS="NF_CONNTRACK NF_NAT NETFILTER_XTABLES IP_NF_IPTABLES NET_SCHED"
+        ALL_KERNEL_CONFIGS_ENABLED=true
+        
+        for config in $KERNEL_CONFIGS; do
+            if grep -q "CONFIG_${config}=y" .config; then
+                echo "✅ 内核配置 $config: 已启用"
+            else
+                echo "❌ 内核配置 $config: 未启用"
+                ALL_KERNEL_CONFIGS_ENABLED=false
             fi
-        done < /tmp/turboacc_lock.config
-        rm -f /tmp/turboacc_lock.config
-        echo "✅ TurboACC 配置已强力锁定，防止被后续步骤清除"
-        echo "=== 最终配置验证（详细版）==="
-        echo "✅ 配置加载完成（单线程模式 + turboacc 深度分析修复 + 强力依赖补全 + 配置锁定）"
+        done
+        
+        if [ "$ALL_KERNEL_CONFIGS_ENABLED" = true ]; then
+            echo "🎉 所有必要的内核配置都已正确启用！"
+        else
+            echo "⚠️ 部分内核配置未启用，但这可能是正常的（某些平台可能不支持）"
+        fi
+        
+        echo "✅ 配置加载完成（预添加所有必要配置 + 智能平台检测）"
 
     - name: 配置完整性检查
       run: |
@@ -733,43 +688,6 @@ jobs:
             echo "⚠️ 未启用任何网络加速方案"
         fi
         echo "✅ 配置完整性检查完成（单线程模式）"
-
-    - name: 最终清理不需要的插件（带验证）
-      run: |
-        cd $BUILD_DIR
-        echo "=== 最终清理不需要的插件（带验证）==="
-        echo "=== 清理前状态 ==="
-        UNWANTED_PLUGINS="luci-app-rclone_INCLUDE_rclone-ng luci-app-rclone_INCLUDE_rclone-webui luci-app-timewol luci-app-passwall_INCLUDE_Haproxy luci-app-passwall_INCLUDE_Shadowsocks_Rust_Client luci-app-passwall_INCLUDE_Shadowsocks_Rust_Server luci-app-passwall_INCLUDE_Simple_Obfs luci-app-passwall_INCLUDE_SingBox luci-app-passwall_INCLUDE_V2ray_Geoview luci-app-passwall_INCLUDE_V2ray_Plugin luci-app-passwall_INCLUDE_Xray"
-        echo "清理前不需要的插件状态:"
-        for plugin in $UNWANTED_PLUGINS; do
-            if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
-                echo "❌ $plugin: 启用（需要清理）"
-            else
-                echo "✅ $plugin: 已禁用"
-            fi
-        done
-        CLEANED_COUNT=0
-        for plugin in $UNWANTED_PLUGINS; do
-            if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
-                echo "🚫 删除插件: $plugin"
-                sed -i "/CONFIG_PACKAGE_${plugin}=y/d" .config
-                echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-                CLEANED_COUNT=$((CLEANED_COUNT + 1))
-            fi
-        done
-        echo "=== 清理后状态 ==="
-        for plugin in $UNWANTED_PLUGINS; do
-            if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
-                echo "❌ $plugin: 仍然启用（清理失败）"
-            else
-                echo "✅ $plugin: 已正确禁用"
-            fi
-        done
-        if [ $CLEANED_COUNT -gt 0 ]; then
-            echo "✅ 最终清理完成：删除了 $CLEANED_COUNT 个不需要的插件"
-        else
-            echo "✅ 没有需要清理的插件"
-        fi
 
     - name: 包可用性诊断
       run: |
@@ -924,20 +842,6 @@ jobs:
             done
             echo "✅ 紧急网络加速方案恢复完成"
         fi
-        echo "=== 最终检查不需要的插件 ==="
-        UNWANTED_PLUGINS_FINAL_CHECK="luci-app-rclone_INCLUDE_rclone-ng luci-app-rclone_INCLUDE_rclone-webui luci-app-timewol luci-app-passwall_INCLUDE_Haproxy luci-app-passwall_INCLUDE_Shadowsocks_Rust_Client luci-app-passwall_INCLUDE_Shadowsocks_Rust_Server luci-app-passwall_INCLUDE_Simple_Obfs luci-app-passwall_INCLUDE_SingBox luci-app-passwall_INCLUDE_V2ray_Geoview luci-app-passwall_INCLUDE_V2ray_Plugin luci-app-passwall_INCLUDE_Xray"
-        FOUND_UNWANTED=0
-        for plugin in $UNWANTED_PLUGINS_FINAL_CHECK; do
-            if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
-                echo "❌ 不需要的插件仍然存在: $plugin"
-                FOUND_UNWANTED=$((FOUND_UNWANTED + 1))
-            fi
-        done
-        if [ $FOUND_UNWANTED -gt 0 ]; then
-            echo "⚠️ 发现 $FOUND_UNWANTED 个不需要的插件仍然启用"
-        else
-            echo "✅ 所有不需要的插件都已正确禁用"
-        fi
         echo "=== 配置验证完成 ==="
 
     - name: 修复编译环境
@@ -951,17 +855,6 @@ jobs:
         mkdir -p staging_dir/target-*/host/bin
         echo "=== 运行 defconfig 以确保配置正确 ==="
         make -j1 defconfig
-        echo "=== 检查并修复 turboacc 配置 ==="
-        if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
-            echo "✅ turboacc 配置在 defconfig 后仍然存在"
-        else
-            echo "❌ turboacc 配置在 defconfig 后被清除，紧急修复..."
-            EMERGENCY_TURBOACC="CONFIG_PACKAGE_kmod-nf-conntrack=y CONFIG_PACKAGE_kmod-ipt-core=y CONFIG_PACKAGE_kmod-ipt-raw=y CONFIG_PACKAGE_kmod-sched-core=y CONFIG_PACKAGE_kmod-shortcut-fe=y CONFIG_PACKAGE_kmod-fast-classifier=y CONFIG_PACKAGE_luci-app-turboacc=y CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y"
-            for config in $EMERGENCY_TURBOACC; do
-                echo "$config" >> .config
-            done
-            echo "✅ turboacc 配置紧急修复完成"
-        fi
         echo "✅ 编译环境修复完成"
 
     - name: 智能下载依赖
