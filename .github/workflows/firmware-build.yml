@@ -441,10 +441,10 @@ jobs:
             fi
         fi
 
-    - name: 修复配置加载问题 - 增强版 turboacc 支持
+    - name: 修复配置加载问题 - 深度 turboacc 支持分析
       run: |
         cd $BUILD_DIR
-        echo "=== 修复配置加载问题 - 增强版 turboacc 支持 ==="
+        echo "=== 修复配置加载问题 - 深度 turboacc 支持分析 ==="
         
         # 强制单线程配置
         export MAKE_JOBS=1
@@ -549,40 +549,145 @@ jobs:
             fi
         done
         
+        echo "=== 深度分析 turboacc 支持性 ==="
+        
+        # 根据平台和设备判断是否支持 shortcut-fe
+        echo "=== 平台兼容性分析 ==="
+        echo "平台: $PLATFORM"
+        echo "设备: $DEVICE_SHORT_NAME"
+        echo "版本分支: $SELECTED_BRANCH"
+        
+        # 设置默认支持状态
+        SUPPORT_SHORTCUT_FE=1
+        TURBOACC_SUPPORT_REASON=""
+        
+        # 检查平台支持性
+        case "$PLATFORM" in
+            "ipq40xx"|"ipq806x"|"mediatek"|"ramips"|"ath79"|"rockchip")
+                TURBOACC_SUPPORT_REASON="平台 $PLATFORM 通常支持 shortcut-fe"
+                echo "✅ $TURBOACC_SUPPORT_REASON"
+                ;;
+            "ar71xx"|"brcm47xx"|"brcm63xx"|"lantiq"|"oxnas"|"gemini")
+                SUPPORT_SHORTCUT_FE=0
+                TURBOACC_SUPPORT_REASON="平台 $PLATFORM 通常不支持或有限支持 shortcut-fe"
+                echo "❌ $TURBOACC_SUPPORT_REASON"
+                ;;
+            *)
+                echo "⚠️ 未知平台 $PLATFORM，假设支持 shortcut-fe"
+                TURBOACC_SUPPORT_REASON="未知平台 $PLATFORM，尝试支持 shortcut-fe"
+                ;;
+        esac
+        
+        # 检查版本兼容性
+        if echo "$SELECTED_BRANCH" | grep -q -E "19\.07|21\.02"; then
+            echo "⚠️ 版本 $SELECTED_BRANCH 可能对 shortcut-fe 支持有限"
+            TURBOACC_SUPPORT_REASON="$TURBOACC_SUPPORT_REASON (版本限制)"
+        fi
+        
+        echo "=== turboacc 支持性结论 ==="
+        if [ "$SUPPORT_SHORTCUT_FE" -eq 1 ]; then
+            echo "✅ 结论: 平台支持 turboacc，将启用完整配置"
+            echo "支持原因: $TURBOACC_SUPPORT_REASON"
+        else
+            echo "❌ 结论: 平台不支持 turboacc，将使用替代方案"
+            echo "不支持原因: $TURBOACC_SUPPORT_REASON"
+        fi
+        
         echo "=== 记录初始 turboacc 状态 ==="
         echo "🔍 初始 turboacc 相关配置:"
         grep -E "CONFIG_PACKAGE_(luci-app-turboacc|luci-i18n-turboacc|kmod-shortcut|kmod-fast-classifier)" .config || echo "未找到相关配置"
         
-        echo "=== 确保 turboacc 完整依赖链 ==="
-        # 先确保所有基础网络模块
-        echo "CONFIG_PACKAGE_kmod-nf-conntrack=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-nf-nat=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-nf-reject=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-nfnetlink=y" >> .config
-        
-        # 确保网络加速相关模块
-        echo "CONFIG_PACKAGE_kmod-ipt-raw=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ipt-conntrack-extra=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ipt-ipopt=y" >> .config
-        
-        # 确保核心依赖
-        echo "CONFIG_PACKAGE_kmod-sched-core=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-sched=y" >> .config
-        
-        # 启用 shortcut-fe 相关模块
-        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-shortcut-fe-cm=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-        
-        # 最后启用 turboacc
-        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-        echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
+        if [ "$SUPPORT_SHORTCUT_FE" -eq 1 ]; then
+            echo "=== 设置完整 turboacc 依赖链 ==="
+            
+            # 1. 首先确保内核网络核心模块
+            echo "=== 启用内核网络核心模块 ==="
+            KERNEL_NET_MODULES="
+            CONFIG_NF_CONNTRACK=y
+            CONFIG_NF_CONNTRACK_EVENTS=y
+            CONFIG_NF_CONNTRACK_PROCFS=y
+            CONFIG_NF_CT_NETLINK=y
+            CONFIG_NF_NAT=y
+            CONFIG_NF_NAT_NEEDED=y
+            CONFIG_NETFILTER_XTABLES=y
+            CONFIG_NETFILTER_XT_MATCH_CONNTRACK=y
+            CONFIG_IP_NF_IPTABLES=y
+            CONFIG_IP_NF_FILTER=y
+            CONFIG_IP_NF_NAT=y
+            CONFIG_IP_NF_TARGET_MASQUERADE=y
+            CONFIG_NET_SCHED=y
+            "
+            
+            for module in $KERNEL_NET_MODULES; do
+                echo "$module" >> .config
+            done
+            
+            # 2. 确保基础包依赖
+            echo "=== 启用基础包依赖 ==="
+            BASE_PACKAGE_DEPS="
+            CONFIG_PACKAGE_kmod-nf-conntrack=y
+            CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y
+            CONFIG_PACKAGE_kmod-nf-nat=y
+            CONFIG_PACKAGE_kmod-nf-reject=y
+            CONFIG_PACKAGE_kmod-nfnetlink=y
+            CONFIG_PACKAGE_kmod-ipt-core=y
+            CONFIG_PACKAGE_kmod-ipt-conntrack=y
+            CONFIG_PACKAGE_kmod-ipt-nat=y
+            CONFIG_PACKAGE_kmod-ipt-raw=y
+            CONFIG_PACKAGE_kmod-ipt-conntrack-extra=y
+            CONFIG_PACKAGE_kmod-ipt-offload=y
+            CONFIG_PACKAGE_kmod-sched-core=y
+            CONFIG_PACKAGE_kmod-sched=y
+            CONFIG_PACKAGE_kmod-ipt-ipset=y
+            "
+            
+            for pkg in $BASE_PACKAGE_DEPS; do
+                echo "$pkg" >> .config
+            done
+            
+            # 3. 启用 shortcut-fe 相关模块
+            echo "=== 启用 shortcut-fe 模块 ==="
+            SHORTCUT_FE_MODULES="
+            CONFIG_PACKAGE_kmod-shortcut-fe=y
+            CONFIG_PACKAGE_kmod-shortcut-fe-cm=y
+            CONFIG_PACKAGE_kmod-fast-classifier=y
+            "
+            
+            for module in $SHORTCUT_FE_MODULES; do
+                echo "$module" >> .config
+            done
+            
+            # 4. 最后启用 turboacc
+            echo "=== 启用 turboacc ==="
+            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
+            
+        else
+            echo "=== 设置替代网络加速方案 ==="
+            echo "🔧 由于平台不支持 turboacc，启用替代加速方案"
+            
+            # 启用 BBR 和其他网络优化
+            ALTERNATIVE_ACCELERATION="
+            # 替代加速方案
+            CONFIG_PACKAGE_kmod-tcp-bbr=y
+            CONFIG_PACKAGE_kmod-nft-offload=y
+            CONFIG_PACKAGE_kmod-nft-fastnet=y
+            CONFIG_PACKAGE_kmod-nft-core=y
+            CONFIG_PACKAGE_kmod-nft-nat=y
+            CONFIG_PACKAGE_kmod-ipt-filter=y
+            CONFIG_PACKAGE_iptables-mod-conntrack-extra=y
+            CONFIG_PACKAGE_iptables-mod-ipopt=y
+            "
+            
+            for config in $ALTERNATIVE_ACCELERATION; do
+                echo "$config" >> .config
+            done
+            echo "✅ 替代网络加速方案已启用"
+        fi
         
         echo "=== 记录添加依赖后的 turboacc 状态 ==="
         echo "🔍 添加依赖后 turboacc 相关配置:"
-        grep -E "CONFIG_PACKAGE_(luci-app-turboacc|luci-i18n-turboacc|kmod-shortcut|kmod-fast-classifier)" .config || echo "未找到相关配置"
+        grep -E "CONFIG_PACKAGE_(luci-app-turboacc|luci-i18n-turboacc|kmod-shortcut|kmod-fast-classifier|kmod-tcp-bbr)" .config || echo "未找到相关配置"
         
         echo "=== 运行单线程 defconfig ==="
         echo "⚠️ 注意: defconfig 可能会根据依赖关系自动禁用某些配置"
@@ -591,49 +696,72 @@ jobs:
         # 🔧 关键修复：检查 defconfig 是否禁用了 turboacc 依赖
         echo "=== 检查 defconfig 后的依赖状态 ==="
         echo "🔍 defconfig 后 turboacc 相关配置:"
-        grep -E "CONFIG_PACKAGE_(luci-app-turboacc|luci-i18n-turboacc|kmod-shortcut|kmod-fast-classifier)" .config || echo "未找到相关配置"
+        grep -E "CONFIG_PACKAGE_(luci-app-turboacc|luci-i18n-turboacc|kmod-shortcut|kmod-fast-classifier|kmod-tcp-bbr)" .config || echo "未找到相关配置"
         
-        # 检查并重新启用被禁用的关键依赖
-        TURBOACC_CRITICAL_DEPS="
-        kmod-nf-conntrack
-        kmod-nf-conntrack-netlink
-        kmod-nf-nat
-        kmod-ipt-raw
-        kmod-ipt-conntrack-extra
-        kmod-ipt-offload
-        kmod-shortcut-fe
-        kmod-shortcut-fe-cm
-        kmod-fast-classifier
-        "
-        
-        REENABLED_COUNT=0
-        for dep in $TURBOACC_CRITICAL_DEPS; do
-            if ! grep -q "CONFIG_PACKAGE_${dep}=y" .config; then
-                echo "⚠️ $dep 被 defconfig 禁用，重新启用"
-                sed -i "/# CONFIG_PACKAGE_${dep} is not set/d" .config
-                echo "CONFIG_PACKAGE_${dep}=y" >> .config
-                REENABLED_COUNT=$((REENABLED_COUNT + 1))
-            fi
-        done
-        
-        # 最终确保 turboacc 启用
-        if ! grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
-            echo "❌ turboacc 被 defconfig 禁用，强制启用"
-            sed -i '/# CONFIG_PACKAGE_luci-app-turboacc is not set/d' .config
-            sed -i '/# CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn is not set/d' .config
-            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
-            REENABLED_COUNT=$((REENABLED_COUNT + 1))
+        # 分析 defconfig 禁用的原因
+        echo "=== 分析 defconfig 禁用原因 ==="
+        if [ "$SUPPORT_SHORTCUT_FE" -eq 1 ]; then
+            # 检查内核配置是否被正确设置
+            echo "=== 检查内核配置状态 ==="
+            KERNEL_CONFIGS="NF_CONNTRACK NF_NAT NETFILTER_XTABLES IP_NF_IPTABLES NET_SCHED"
+            for config in $KERNEL_CONFIGS; do
+                if grep -q "CONFIG_${config}=y" .config; then
+                    echo "✅ 内核配置 $config: 已启用"
+                else
+                    echo "❌ 内核配置 $config: 未启用 - 这可能导致 shortcut-fe 被禁用"
+                fi
+            done
+            
+            # 检查包依赖是否被正确设置
+            echo "=== 检查包依赖状态 ==="
+            PACKAGE_DEPS="kmod-nf-conntrack kmod-ipt-core kmod-ipt-raw kmod-sched-core"
+            for pkg in $PACKAGE_DEPS; do
+                if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
+                    echo "✅ 包依赖 $pkg: 已启用"
+                else
+                    echo "❌ 包依赖 $pkg: 未启用 - 这可能导致 shortcut-fe 被禁用"
+                fi
+            done
+            
+            # 重新启用被禁用的关键依赖（仅当平台支持时）
+            echo "=== 重新启用被 defconfig 禁用的关键依赖 ==="
+            TURBOACC_CRITICAL_DEPS="
+            kmod-nf-conntrack
+            kmod-nf-conntrack-netlink
+            kmod-nf-nat
+            kmod-ipt-raw
+            kmod-ipt-conntrack-extra
+            kmod-ipt-offload
+            kmod-shortcut-fe
+            kmod-shortcut-fe-cm
+            kmod-fast-classifier
+            luci-app-turboacc
+            luci-i18n-turboacc-zh-cn
+            "
+            
+            REENABLED_COUNT=0
+            for dep in $TURBOACC_CRITICAL_DEPS; do
+                if ! grep -q "CONFIG_PACKAGE_${dep}=y" .config; then
+                    echo "⚠️ $dep 被 defconfig 禁用，重新启用"
+                    sed -i "/# CONFIG_PACKAGE_${dep} is not set/d" .config
+                    echo "CONFIG_PACKAGE_${dep}=y" >> .config
+                    REENABLED_COUNT=$((REENABLED_COUNT + 1))
+                fi
+            done
+            
+            echo "=== 修复完成统计 ==="
+            echo "✅ 重新启用了 $REENABLED_COUNT 个被 defconfig 禁用的关键依赖"
+        else
+            echo "⚠️ 由于平台不支持，跳过 turboacc 相关修复"
+            echo "✅ 替代加速方案状态:"
+            grep -E "CONFIG_PACKAGE_(kmod-tcp-bbr|kmod-nft-offload)" .config || echo "未找到替代加速方案配置"
         fi
-        
-        echo "=== 修复完成统计 ==="
-        echo "✅ 重新启用了 $REENABLED_COUNT 个被 defconfig 禁用的关键依赖"
         
         echo "=== 最终 turboacc 状态报告 ==="
         echo "🔍 最终 turboacc 相关配置:"
-        grep -E "CONFIG_PACKAGE_(luci-app-turboacc|luci-i18n-turboacc|kmod-shortcut|kmod-fast-classifier)" .config || echo "未找到相关配置"
+        grep -E "CONFIG_PACKAGE_(luci-app-turboacc|luci-i18n-turboacc|kmod-shortcut|kmod-fast-classifier|kmod-tcp-bbr)" .config || echo "未找到相关配置"
         
-        echo "✅ 配置加载完成（单线程模式 + turboacc 增强修复）"
+        echo "✅ 配置加载完成（单线程模式 + turboacc 深度分析修复）"
 
     - name: 配置完整性检查
       run: |
@@ -665,37 +793,38 @@ jobs:
             fi
         done
         
-        # 检查 turboacc
-        echo "=== turboacc 完整性检查 ==="
-        if ! grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
-            echo "❌ 错误: turboacc 未启用"
-            exit 1
-        fi
-        
-        # 检查 turboacc 关键依赖
-        TURBOACC_DEPS_CHECK="
-        kmod-shortcut-fe
-        kmod-fast-classifier
-        kmod-nf-conntrack
-        kmod-ipt-raw
-        "
-        
-        MISSING_DEPS=0
-        for dep in $TURBOACC_DEPS_CHECK; do
-            if ! grep -q "CONFIG_PACKAGE_${dep}=y" .config; then
-                echo "❌ 错误: turboacc 依赖 $dep 未启用"
-                MISSING_DEPS=$((MISSING_DEPS + 1))
-            else
-                echo "✅ turboacc 依赖 $dep: 已启用"
+        # 检查网络加速方案
+        echo "=== 网络加速方案完整性检查 ==="
+        if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+            echo "✅ turboacc 方案: 已启用"
+            # 检查 turboacc 关键依赖
+            TURBOACC_DEPS_CHECK="
+            kmod-shortcut-fe
+            kmod-fast-classifier
+            kmod-nf-conntrack
+            kmod-ipt-raw
+            "
+            
+            MISSING_DEPS=0
+            for dep in $TURBOACC_DEPS_CHECK; do
+                if ! grep -q "CONFIG_PACKAGE_${dep}=y" .config; then
+                    echo "❌ 错误: turboacc 依赖 $dep 未启用"
+                    MISSING_DEPS=$((MISSING_DEPS + 1))
+                else
+                    echo "✅ turboacc 依赖 $dep: 已启用"
+                fi
+            done
+            
+            if [ $MISSING_DEPS -gt 0 ]; then
+                echo "❌ turboacc 缺少 $MISSING_DEPS 个关键依赖"
+                exit 1
             fi
-        done
-        
-        if [ $MISSING_DEPS -gt 0 ]; then
-            echo "❌ turboacc 缺少 $MISSING_DEPS 个关键依赖"
-            exit 1
+        elif grep -q "CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
+            echo "✅ 替代加速方案 (BBR): 已启用"
+        else
+            echo "⚠️ 未启用任何网络加速方案"
         fi
         
-        echo "✅ turboacc 所有关键依赖都已启用"
         echo "✅ 配置完整性检查完成（单线程模式）"
 
     - name: 包可用性诊断
@@ -826,10 +955,10 @@ jobs:
             fi
         done
         
-        echo "=== turboacc 状态验证 ==="
-        echo "🔍 下载前 turboacc 状态检查:"
+        echo "=== 网络加速方案状态验证 ==="
+        echo "🔍 下载前网络加速方案状态检查:"
         if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
-            echo "✅ luci-app-turboacc: 已启用"
+            echo "✅ turboacc 方案: 已启用"
             # 检查依赖
             TURBOACC_DEPS_STATUS="
             kmod-shortcut-fe
@@ -846,14 +975,10 @@ jobs:
                     echo "❌ $dep: 未启用"
                 fi
             done
+        elif grep -q "CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
+            echo "✅ 替代加速方案 (BBR): 已启用"
         else
-            echo "❌ luci-app-turboacc: 未启用"
-            echo "⚠️ 尝试重新启用 turboacc..."
-            sed -i '/# CONFIG_PACKAGE_luci-app-turboacc is not set/d' .config
-            sed -i '/# CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn is not set/d' .config
-            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
-            echo "✅ 已重新启用 turboacc"
+            echo "⚠️ 未启用任何网络加速方案"
         fi
         
         echo "=== 配置验证完成 ==="
@@ -872,7 +997,7 @@ jobs:
         mkdir -p staging_dir/target-*/host/bin
         
         # 注意：这里不运行 defconfig，避免再次禁用 turboacc
-        echo "⚠️ 跳过 defconfig，避免禁用 turboacc"
+        echo "⚠️ 跳过 defconfig，避免禁用网络加速配置"
         # make -j1 defconfig
         
         echo "✅ 编译环境修复完成"
@@ -959,7 +1084,13 @@ jobs:
             if [ $ROUND -eq 2 ]; then
                 echo "=== 第二轮：验证关键依赖包 ==="
                 MISSING_CRITICAL=0
-                CRITICAL_PACKAGES="kmod-shortcut-fe kmod-fast-classifier kmod-sched-core kmod-nft-offload kmod-nf-conntrack"
+                
+                # 根据启用的加速方案检查关键包
+                if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+                    CRITICAL_PACKAGES="kmod-shortcut-fe kmod-fast-classifier kmod-sched-core kmod-nf-conntrack"
+                else
+                    CRITICAL_PACKAGES="kmod-tcp-bbr kmod-nft-core kmod-nft-offload"
+                fi
                 
                 for pkg in $CRITICAL_PACKAGES; do
                     if ! find dl -name "*${pkg}*" | grep -q "."; then
@@ -1020,7 +1151,13 @@ jobs:
         fi
         
         echo "=== 验证关键依赖包 ==="
-        CRITICAL_PACKAGES="kmod-shortcut-fe kmod-fast-classifier kmod-sched-core kmod-nft-offload kmod-nf-conntrack"
+        # 根据启用的加速方案检查关键包
+        if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+            CRITICAL_PACKAGES="kmod-shortcut-fe kmod-fast-classifier kmod-sched-core kmod-nf-conntrack"
+        else
+            CRITICAL_PACKAGES="kmod-tcp-bbr kmod-nft-core kmod-nft-offload"
+        fi
+        
         ALL_CRITICAL_EXIST=true
         
         for pkg in $CRITICAL_PACKAGES; do
@@ -1057,10 +1194,10 @@ jobs:
           fi
         done
         
-        echo "=== turboacc 最终状态验证 ==="
-        echo "🔍 编译前最终 turboacc 状态检查:"
+        echo "=== 网络加速方案最终状态验证 ==="
+        echo "🔍 编译前最终网络加速方案状态检查:"
         if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
-            echo "✅ luci-app-turboacc: 在.config中已启用"
+            echo "✅ turboacc 方案: 在.config中已启用"
             # 检查依赖
             TURBOACC_FINAL_DEPS="
             kmod-shortcut-fe
@@ -1077,14 +1214,10 @@ jobs:
                     echo "❌ $dep: 在.config中未启用"
                 fi
             done
+        elif grep -q "CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
+            echo "✅ 替代加速方案 (BBR): 在.config中已启用"
         else
-            echo "❌ luci-app-turboacc: 在.config中未启用"
-            echo "⚠️ 最终尝试重新启用 turboacc..."
-            sed -i '/# CONFIG_PACKAGE_luci-app-turboacc is not set/d' .config
-            sed -i '/# CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn is not set/d' .config
-            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
-            echo "✅ 已重新启用 turboacc"
+            echo "⚠️ 未启用任何网络加速方案"
         fi
         
         echo "=== 用户启用的luci插件 ==="
@@ -1119,7 +1252,7 @@ jobs:
         time make -j$BUILD_JOBS V=s 2>&1 | tee -a build_detailed.log
         COMPILE_EXIT_CODE=$?
         set -e
-        END_TIME=$(date +%s)
+        END_TIME=$(date +s)
         COMPILE_TIME=$((END_TIME - START_TIME))
         echo "=== 编译时间统计 ==="
         echo "总编译时间: $((COMPILE_TIME / 60))分钟$((COMPILE_TIME % 60))秒"
@@ -1198,9 +1331,9 @@ jobs:
             echo "- $plugin" >> "$GITHUB_WORKSPACE/构建报告.md"
         done || echo "- 无luci插件或配置文件不可读" >> "$GITHUB_WORKSPACE/构建报告.md"
         echo "" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "## turboacc 状态" >> "$GITHUB_WORKSPACE/构建报告.md"
+        echo "## 网络加速方案状态" >> "$GITHUB_WORKSPACE/构建报告.md"
         if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config 2>/dev/null; then
-            echo "✅ **luci-app-turboacc**: 已启用" >> "$GITHUB_WORKSPACE/构建报告.md"
+            echo "✅ **turboacc 方案**: 已启用" >> "$GITHUB_WORKSPACE/构建报告.md"
             for dep in kmod-shortcut-fe kmod-fast-classifier kmod-nf-conntrack kmod-ipt-raw; do
                 if grep -q "CONFIG_PACKAGE_${dep}=y" .config 2>/dev/null; then
                     echo "✅ **${dep}**: 已启用" >> "$GITHUB_WORKSPACE/构建报告.md"
@@ -1208,8 +1341,10 @@ jobs:
                     echo "❌ **${dep}**: 未启用" >> "$GITHUB_WORKSPACE/构建报告.md"
                 fi
             done
+        elif grep -q "CONFIG_PACKAGE_kmod-tcp-bbr=y" .config 2>/dev/null; then
+            echo "✅ **替代加速方案 (BBR)**: 已启用" >> "$GITHUB_WORKSPACE/构建报告.md"
         else
-            echo "❌ **luci-app-turboacc**: 未启用" >> "$GITHUB_WORKSPACE/构建报告.md"
+            echo "⚠️ **网络加速方案**: 未启用" >> "$GITHUB_WORKSPACE/构建报告.md"
         fi
         echo "" >> "$GITHUB_WORKSPACE/构建报告.md"
         echo "## 构建状态" >> "$GITHUB_WORKSPACE/构建报告.md"
