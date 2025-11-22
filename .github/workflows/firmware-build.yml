@@ -525,10 +525,7 @@ jobs:
                 echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
             done
         fi
-        
-        echo "=== 第一次单线程 defconfig ==="
-        make -j1 defconfig
-        
+
         echo "=== 清理不需要的插件 ==="
         UNWANTED_PLUGINS="
         luci-app-rclone_INCLUDE_rclone-ng
@@ -567,7 +564,7 @@ jobs:
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
         
-        echo "=== 第二次单线程 defconfig ==="
+        echo "=== 运行单线程 defconfig ==="
         make -j1 defconfig
         
         # 最终修复：检查并重新启用被禁用的关键组件
@@ -579,15 +576,6 @@ jobs:
             echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
         fi
-        
-        # 最终清理：再次确保不需要的插件被禁用
-        for plugin in $UNWANTED_PLUGINS; do
-            if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
-                echo "🚫 最终清理: $plugin"
-                sed -i "/CONFIG_PACKAGE_${plugin}=y/d" .config
-                echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-            fi
-        done
         
         echo "=== 配置状态报告 ==="
         echo "配置文件行数: $(wc -l < .config)"
