@@ -444,7 +444,11 @@ jobs:
     - name: 修复配置加载问题
       run: |
         cd $BUILD_DIR
-        echo "=== 修复配置加载问题 ==="
+        echo "=== 修复配置加载问题（单线程模式）==="
+        
+        # 强制单线程配置
+        export MAKE_JOBS=1
+        echo "🔒 配置阶段使用单线程模式"
         
         CONFIG_TYPE="${{ inputs.config_type }}"
         echo "配置类型: $CONFIG_TYPE"
@@ -487,12 +491,7 @@ jobs:
             exit 1
         fi
         
-        echo "=== 原始配置文件内容预览 ==="
-        cat "$CONFIG_FILE" | grep -E "^CONFIG_PACKAGE|^CONFIG_TARGET" | head -20
-        echo "..."
-        
         echo "=== 创建基础配置 ==="
-        
         echo "# 设备基础配置" > .config
         echo "CONFIG_TARGET_${PLATFORM}=y" >> .config
         echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
@@ -500,9 +499,6 @@ jobs:
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
         echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
-
-        echo "=== 基础配置内容 ==="
-        cat .config
 
         echo "=== 智能追加模板配置 ==="
         grep -v -E "^CONFIG_TARGET_(ROOTFS_SQUASHFS|IMAGES_GZIP|IMAGES_PAD)=" "$CONFIG_FILE" > /tmp/filtered_config
@@ -530,28 +526,9 @@ jobs:
             done
         fi
         
-        # 🔧 关键修复：确保 turboacc 依赖在 defconfig 前就设置好
-        echo "=== 强制启用 turboacc 及其依赖 ==="
-        # 删除可能的禁用设置
-        sed -i '/# CONFIG_PACKAGE_luci-app-turboacc is not set/d' .config
-        sed -i '/# CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn is not set/d' .config
-        # 启用 turboacc
-        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-        echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
-        # 启用 turboacc 的核心依赖
-        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-shortcut-fe-cm=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-        # 启用相关的网络加速模块
-        echo "CONFIG_PACKAGE_kmod-ipt-raw=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ipt-conntrack-extra=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> .config
-        # 确保基础网络模块
-        echo "CONFIG_PACKAGE_kmod-nf-conntrack=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-nf-flow=y" >> .config
+        echo "=== 第一次单线程 defconfig ==="
+        make -j1 defconfig
         
-        # 🚫 清理不需要的插件（已移除用户需要的三个插件）
         echo "=== 清理不需要的插件 ==="
         UNWANTED_PLUGINS="
         luci-app-rclone_INCLUDE_rclone-ng
@@ -569,142 +546,94 @@ jobs:
         
         for plugin in $UNWANTED_PLUGINS; do
             if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
-                echo "🚫 删除不需要的插件: $plugin"
+                echo "🚫 删除插件: $plugin"
                 sed -i "/CONFIG_PACKAGE_${plugin}=y/d" .config
                 echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
             fi
         done
         
-        echo "=== 关键插件配置状态验证 ==="
-        for pkg in luci luci-base luci-theme-bootstrap luci-app-turboacc; do
-            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
-                echo "✅ $pkg: 在.config中已启用"
-            else
-                echo "❌ $pkg: 在.config中未启用"
-                grep "CONFIG_PACKAGE_${pkg}" .config || echo "未找到相关配置"
+        echo "=== 启用 turboacc 及其依赖 ==="
+        # 先确保依赖模块
+        echo "CONFIG_PACKAGE_kmod-nf-conntrack=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-nat=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-raw=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-conntrack-extra=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-shortcut-fe-cm=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+        # 最后启用 turboacc
+        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
+        
+        echo "=== 第二次单线程 defconfig ==="
+        make -j1 defconfig
+        
+        # 最终修复：检查并重新启用被禁用的关键组件
+        echo "=== 最终修复检查 ==="
+        if ! grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+            echo "⚠️ turboacc 被禁用，重新启用"
+            sed -i '/# CONFIG_PACKAGE_luci-app-turboacc is not set/d' .config
+            sed -i '/# CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn is not set/d' .config
+            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
+        fi
+        
+        # 最终清理：再次确保不需要的插件被禁用
+        for plugin in $UNWANTED_PLUGINS; do
+            if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
+                echo "🚫 最终清理: $plugin"
+                sed -i "/CONFIG_PACKAGE_${plugin}=y/d" .config
+                echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
             fi
         done
         
-        if [ ! -f ".config" ] || [ ! -s ".config" ]; then
-            echo "❌ 错误: .config 文件不存在或为空"
-            exit 1
-        fi
-        
-        echo "✅ 配置加载完成"
-        
-        echo "运行 make defconfig..."
-        make defconfig
-        
-        echo "=== defconfig后的配置验证 ==="
-        if [ ! -f ".config" ] || [ ! -s ".config" ]; then
-            echo "❌ 错误: defconfig后 .config 文件不存在或为空"
-            exit 1
-        fi
-        
-        # 🔧 关键修复：检查 turboacc 是否被 defconfig 禁用，如果是则重新启用
-        if ! grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
-            echo "⚠️ luci-app-turboacc 被 defconfig 禁用，尝试重新启用"
-            # 删除可能的禁用设置
-            sed -i '/# CONFIG_PACKAGE_luci-app-turboacc is not set/d' .config
-            sed -i '/# CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn is not set/d' .config
-            # 重新启用
-            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
-            # 再次添加依赖
-            echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-shortcut-fe-cm=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-            echo "✅ 已重新启用 luci-app-turboacc 及其依赖"
-        fi
-        
-        echo "=== 最终配置状态报告 ==="
+        echo "=== 配置状态报告 ==="
         echo "配置文件行数: $(wc -l < .config)"
         echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y" .config | wc -l)"
+        echo "实际启用的luci插件:"
+        grep "^CONFIG_PACKAGE_luci-app" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
         
-        echo "=== 实际启用的luci插件 ==="
-        grep "^CONFIG_PACKAGE_luci" .config | grep "=y$" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
-        
-        # 特别显示 turboacc 相关配置
-        echo "=== turboacc 相关配置状态 ==="
-        grep -E "CONFIG_PACKAGE_(luci-app-turboacc|luci-i18n-turboacc|kmod-shortcut|kmod-fast-classifier)" .config || echo "未找到相关配置"
+        echo "✅ 配置加载完成（单线程模式）"
 
     - name: 配置完整性检查
       run: |
         cd $BUILD_DIR
-        echo "=== 配置完整性检查 ==="
+        echo "=== 配置完整性检查（单线程模式）==="
+        export MAKE_JOBS=1
         
         if [ ! -f ".config" ] || [ ! -s ".config" ]; then
             echo "❌ 错误: .config 文件不存在或为空"
-            echo "当前目录内容:"
-            ls -la
             exit 1
         fi
         
         echo "✅ .config 文件存在且非空"
         echo "文件大小: $(wc -l < .config) 行"
         
-        echo "=== 关键配置项检查 ==="
+        echo "=== 关键配置验证 ==="
         
-        # 只检查设备配置，不强制启用任何插件
+        # 只做检查，不运行 defconfig
         if ! grep -q "^CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" .config; then
             echo "❌ 错误: 设备配置缺失"
-            echo "尝试修复设备配置..."
-            echo "CONFIG_TARGET_${PLATFORM}=y" >> .config
-            echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
-            echo "CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}=y" >> .config
+            exit 1
         fi
         
-        # 只修复核心组件，不添加额外插件
+        # 检查核心组件
         for pkg in luci luci-base luci-theme-bootstrap; do
             if ! grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
-                echo "⚠️ 警告: 核心组件 $pkg 未启用，尝试修复"
-                echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+                echo "❌ 错误: 核心组件 $pkg 未启用"
+                exit 1
             fi
         done
         
-        # 强制检查 turboacc
+        # 检查 turboacc
         if ! grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
-            echo "❌ 错误: turboacc 未启用，强制启用"
-            sed -i '/# CONFIG_PACKAGE_luci-app-turboacc is not set/d' .config
-            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-shortcut-fe-cm=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+            echo "❌ 错误: turboacc 未启用"
+            exit 1
         fi
         
-        echo "✅ 配置完整性检查完成"
-        
-        # 运行defconfig但不强制启用插件
-        echo "=== 配置验证 ==="
-        make defconfig
-        
-        # 再次检查 turboacc
-        if ! grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
-            echo "❌ defconfig 后 turboacc 被禁用，再次启用"
-            sed -i '/# CONFIG_PACKAGE_luci-app-turboacc is not set/d' .config
-            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-shortcut-fe-cm=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-        fi
-        
-        echo "=== 当前插件状态 ==="
-        echo "以下是你配置文件中实际启用的插件:"
-        grep "^CONFIG_PACKAGE_luci-app" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
-        
-        echo "=== turboacc 最终状态 ==="
-        if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
-            echo "✅ luci-app-turboacc: 最终已启用"
-            for dep in kmod-shortcut-fe kmod-fast-classifier; do
-                if grep -q "CONFIG_PACKAGE_${dep}=y" .config; then
-                    echo "✅ $dep: 已启用"
-                else
-                    echo "❌ $dep: 未启用"
-                fi
-            done
-        else
-            echo "❌ luci-app-turboacc: 最终未启用"
-        fi
+        echo "✅ 配置完整性检查完成（单线程模式）"
 
     - name: 包可用性诊断
       run: |
@@ -816,7 +745,8 @@ jobs:
     - name: 下载前配置验证
       run: |
         cd $BUILD_DIR
-        echo "=== 下载前配置验证 ==="
+        echo "=== 下载前配置验证（单线程模式）==="
+        export MAKE_JOBS=1
         
         echo "=== 验证实际配置文件 ==="
         echo "当前启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y" .config | wc -l)"
@@ -854,14 +784,16 @@ jobs:
     - name: 修复编译环境
       run: |
         cd $BUILD_DIR
-        echo "=== 修复编译环境 ==="
+        echo "=== 修复编译环境（单线程模式）==="
+        export MAKE_JOBS=1
+        
         find . -name "*.rej" -delete 2>/dev/null || true
         find . -name "*.orig" -delete 2>/dev/null || true
         
         mkdir -p staging_dir/host/bin
         mkdir -p staging_dir/target-*/host/bin
         
-        make defconfig
+        make -j1 defconfig
         echo "✅ 编译环境修复完成"
 
     - name: 智能下载依赖
@@ -962,7 +894,7 @@ jobs:
                     for pkg in $CRITICAL_PACKAGES; do
                         if ! find dl -name "*${pkg}*" | grep -q "."; then
                             echo "🔄 单独下载: $pkg"
-                            make package/$pkg/download V=s
+                            make -j1 package/$pkg/download V=s
                         fi
                     done
                 fi
@@ -986,7 +918,7 @@ jobs:
         echo "下载文件总数: $DL_COUNT"
         echo "下载总大小: $DL_SIZE"
         
-        echo "=== 检查空文件和损坏文件 ===""
+        echo "=== 检查空文件和损坏文件 ==="
         EMPTY_FILES=$(find dl -type f -size 0 2>/dev/null | wc -l)
         TEMP_FILES=$(find dl -name "*.tmp" 2>/dev/null | wc -l)
         
@@ -1028,7 +960,8 @@ jobs:
     - name: 验证配置
       run: |
         cd $BUILD_DIR
-        echo "=== 最终软件包配置验证 ==="
+        echo "=== 最终软件包配置验证（单线程模式）==="
+        export MAKE_JOBS=1
         
         echo "=== .config 文件状态 ==="
         ls -la .config
@@ -1069,6 +1002,8 @@ jobs:
         echo "::group::📱 编译日志"
         echo "编译开始时间: $(date)"
         export FORCE_UNSAFE_CONFIGURE=1
+        
+        # 根据用户设置决定是否使用多线程编译
         if ${{ inputs.multithreading }}; then
           BUILD_JOBS=$(nproc)
           echo "✅ 多线程编译: 使用 $BUILD_JOBS 个并行任务"
@@ -1076,6 +1011,7 @@ jobs:
           BUILD_JOBS=1
           echo "✅ 单线程编译"
         fi
+        
         echo "🚀 开始分阶段编译..."
         START_TIME=$(date +%s)
         echo "=== 阶段1: 编译工具链 ==="
