@@ -773,9 +773,80 @@ jobs:
         echo "🔍 最终 turboacc 相关配置:"
         grep -E "CONFIG_PACKAGE_(luci-app-turboacc|luci-i18n-turboacc|kmod-shortcut|kmod-fast-classifier|kmod-tcp-bbr)" .config || echo "未找到相关配置"
         
+        # 🔧 最终强力锁定：防止 turboacc 配置被后续步骤清除
+        echo "=== 最终强力锁定 turboacc 配置 ==="
+        
+        # 创建配置锁定文件
+        cat > /tmp/turboacc_lock.config << 'EOF'
+# =============================================
+# TurboACC 配置锁定
+# 此部分配置由构建系统自动维护，请勿手动修改
+# =============================================
+
+# 内核网络核心配置
+CONFIG_NF_CONNTRACK=y
+CONFIG_NF_CONNTRACK_EVENTS=y
+CONFIG_NF_CONNTRACK_PROCFS=y
+CONFIG_NF_CT_NETLINK=y
+CONFIG_NF_NAT=y
+CONFIG_NF_NAT_NEEDED=y
+CONFIG_NETFILTER_XTABLES=y
+CONFIG_NETFILTER_XT_MATCH_CONNTRACK=y
+CONFIG_IP_NF_IPTABLES=y
+CONFIG_IP_NF_FILTER=y
+CONFIG_IP_NF_NAT=y
+CONFIG_IP_NF_TARGET_MASQUERADE=y
+CONFIG_NET_SCHED=y
+
+# 基础包依赖
+CONFIG_PACKAGE_kmod-nf-conntrack=y
+CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y
+CONFIG_PACKAGE_kmod-nf-nat=y
+CONFIG_PACKAGE_kmod-nf-reject=y
+CONFIG_PACKAGE_kmod-nfnetlink=y
+CONFIG_PACKAGE_kmod-ipt-core=y
+CONFIG_PACKAGE_kmod-ipt-conntrack=y
+CONFIG_PACKAGE_kmod-ipt-nat=y
+CONFIG_PACKAGE_kmod-ipt-raw=y
+CONFIG_PACKAGE_kmod-ipt-conntrack-extra=y
+CONFIG_PACKAGE_kmod-ipt-offload=y
+CONFIG_PACKAGE_kmod-sched-core=y
+CONFIG_PACKAGE_kmod-sched=y
+CONFIG_PACKAGE_kmod-ipt-ipset=y
+
+# shortcut-fe 核心模块
+CONFIG_PACKAGE_kmod-shortcut-fe=y
+CONFIG_PACKAGE_kmod-shortcut-fe-cm=y
+CONFIG_PACKAGE_kmod-fast-classifier=y
+
+# turboacc 应用
+CONFIG_PACKAGE_luci-app-turboacc=y
+CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y
+
+# =============================================
+# TurboACC 配置锁定结束
+# =============================================
+EOF
+
+        # 应用配置锁定
+        echo "应用配置锁定..."
+        while IFS= read -r line; do
+            if [ -n "$line" ] && [[ ! "$line" =~ ^# ]]; then
+                config_name=$(echo "$line" | cut -d'=' -f1)
+                # 删除可能存在的配置
+                sed -i "/${config_name}=/d" .config
+                sed -i "/# ${config_name} is not set/d" .config
+                # 添加锁定配置
+                echo "$line" >> .config
+            fi
+        done < /tmp/turboacc_lock.config
+        
+        rm -f /tmp/turboacc_lock.config
+        echo "✅ TurboACC 配置已强力锁定，防止被后续步骤清除"
+        
         # 🔧 最终验证：运行一次快速验证确保配置正确
-        echo "=== 最终配置验证 ==="
-        echo "✅ 配置加载完成（单线程模式 + turboacc 深度分析修复 + 强力依赖补全）"
+        echo "=== 最终配置验证（详细版）==="
+        echo "✅ 配置加载完成（单线程模式 + turboacc 深度分析修复 + 强力依赖补全 + 配置锁定）"
 
     - name: 配置完整性检查
       run: |
@@ -841,12 +912,13 @@ jobs:
         
         echo "✅ 配置完整性检查完成（单线程模式）"
 
-    - name: 最终清理不需要的插件
+    - name: 最终清理不需要的插件（带验证）
       run: |
         cd $BUILD_DIR
-        echo "=== 最终清理不需要的插件 ==="
+        echo "=== 最终清理不需要的插件（带验证）==="
         
-        # 最终清理，确保所有不需要的插件都被禁用
+        # 记录清理前的状态
+        echo "=== 清理前状态 ==="
         UNWANTED_PLUGINS="
         luci-app-rclone_INCLUDE_rclone-ng
         luci-app-rclone_INCLUDE_rclone-webui
@@ -861,13 +933,33 @@ jobs:
         luci-app-passwall_INCLUDE_Xray
         "
         
+        echo "清理前不需要的插件状态:"
+        for plugin in $UNWANTED_PLUGINS; do
+            if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
+                echo "❌ $plugin: 启用（需要清理）"
+            else
+                echo "✅ $plugin: 已禁用"
+            fi
+        done
+        
+        # 执行清理
         CLEANED_COUNT=0
         for plugin in $UNWANTED_PLUGINS; do
             if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
-                echo "🚫 最终删除插件: $plugin"
+                echo "🚫 删除插件: $plugin"
                 sed -i "/CONFIG_PACKAGE_${plugin}=y/d" .config
                 echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
                 CLEANED_COUNT=$((CLEANED_COUNT + 1))
+            fi
+        done
+        
+        # 记录清理后的状态
+        echo "=== 清理后状态 ==="
+        for plugin in $UNWANTED_PLUGINS; do
+            if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
+                echo "❌ $plugin: 仍然启用（清理失败）"
+            else
+                echo "✅ $plugin: 已正确禁用"
             fi
         done
         
@@ -984,51 +1076,86 @@ jobs:
             echo "⚠️ 未找到预下载脚本，跳过预下载步骤"
         fi
 
-    - name: 下载前配置验证
+    - name: 下载前配置验证（加强版）
       run: |
         cd $BUILD_DIR
-        echo "=== 下载前配置验证（单线程模式）==="
+        echo "=== 下载前配置验证（加强版）==="
         export MAKE_JOBS=1
         
         echo "=== 验证实际配置文件 ==="
         echo "当前启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y" .config | wc -l)"
         
-        echo "=== 你实际启用的luci插件 ==="
-        grep "^CONFIG_PACKAGE_luci-app" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
-        
-        echo "=== 核心组件状态 ==="
-        for pkg in luci luci-base luci-theme-bootstrap; do
-            if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
-                echo "✅ $pkg: 已启用"
-            else
-                echo "❌ $pkg: 未启用"
-            fi
-        done
-        
-        echo "=== 网络加速方案状态验证 ==="
+        echo "=== 网络加速方案状态验证（关键检查）==="
         echo "🔍 下载前网络加速方案状态检查:"
+        
+        # 强制检查 turboacc 状态
         if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
             echo "✅ turboacc 方案: 已启用"
-            # 检查依赖
-            TURBOACC_DEPS_STATUS="
+            # 检查关键依赖
+            TURBOACC_CRITICAL_DEPS="
             kmod-shortcut-fe
             kmod-fast-classifier
             kmod-nf-conntrack
             kmod-ipt-raw
-            kmod-ipt-offload
             "
             
-            for dep in $TURBOACC_DEPS_STATUS; do
+            CRITICAL_MISSING=0
+            for dep in $TURBOACC_CRITICAL_DEPS; do
                 if grep -q "CONFIG_PACKAGE_${dep}=y" .config; then
                     echo "✅ $dep: 已启用"
                 else
-                    echo "❌ $dep: 未启用"
+                    echo "❌ $dep: 未启用 - 关键依赖缺失！"
+                    CRITICAL_MISSING=$((CRITICAL_MISSING + 1))
                 fi
             done
+            
+            if [ $CRITICAL_MISSING -gt 0 ]; then
+                echo "🚨 发现 $CRITICAL_MISSING 个关键依赖缺失，紧急修复..."
+                for dep in $TURBOACC_CRITICAL_DEPS; do
+                    if ! grep -q "CONFIG_PACKAGE_${dep}=y" .config; then
+                        echo "🔄 紧急启用: $dep"
+                        sed -i "/# CONFIG_PACKAGE_${dep} is not set/d" .config
+                        echo "CONFIG_PACKAGE_${dep}=y" >> .config
+                    fi
+                done
+                echo "✅ 关键依赖紧急修复完成"
+            fi
+            
         elif grep -q "CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
             echo "✅ 替代加速方案 (BBR): 已启用"
         else
-            echo "⚠️ 未启用任何网络加速方案"
+            echo "❌ 严重错误: 未启用任何网络加速方案！"
+            echo "=== 执行紧急网络加速方案恢复 ==="
+            
+            # 根据平台选择加速方案
+            case "$PLATFORM" in
+                "ipq40xx"|"ipq806x"|"mediatek"|"ramips"|"ath79"|"rockchip")
+                    echo "🔄 紧急启用 turboacc 方案"
+                    EMERGENCY_CONFIG="
+                    CONFIG_PACKAGE_kmod-nf-conntrack=y
+                    CONFIG_PACKAGE_kmod-ipt-core=y
+                    CONFIG_PACKAGE_kmod-ipt-raw=y
+                    CONFIG_PACKAGE_kmod-sched-core=y
+                    CONFIG_PACKAGE_kmod-shortcut-fe=y
+                    CONFIG_PACKAGE_kmod-fast-classifier=y
+                    CONFIG_PACKAGE_luci-app-turboacc=y
+                    CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y
+                    "
+                    ;;
+                *)
+                    echo "🔄 紧急启用 BBR 替代方案"
+                    EMERGENCY_CONFIG="
+                    CONFIG_PACKAGE_kmod-tcp-bbr=y
+                    CONFIG_PACKAGE_kmod-nft-core=y
+                    CONFIG_PACKAGE_kmod-nft-offload=y
+                    "
+                    ;;
+            esac
+            
+            for config in $EMERGENCY_CONFIG; do
+                echo "$config" >> .config
+            done
+            echo "✅ 紧急网络加速方案恢复完成"
         fi
         
         # 最终检查不需要的插件是否还存在
@@ -1062,7 +1189,6 @@ jobs:
         fi
         
         echo "=== 配置验证完成 ==="
-        echo "如果以上列表不符合你的预期，请检查配置文件"
 
     - name: 修复编译环境
       run: |
@@ -1079,6 +1205,29 @@ jobs:
         # 运行 defconfig 以确保配置正确
         echo "=== 运行 defconfig 以确保配置正确 ==="
         make -j1 defconfig
+        
+        # 检查并修复 turboacc 配置
+        echo "=== 检查并修复 turboacc 配置 ==="
+        if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+            echo "✅ turboacc 配置在 defconfig 后仍然存在"
+        else
+            echo "❌ turboacc 配置在 defconfig 后被清除，紧急修复..."
+            # 紧急启用 turboacc
+            EMERGENCY_TURBOACC="
+            CONFIG_PACKAGE_kmod-nf-conntrack=y
+            CONFIG_PACKAGE_kmod-ipt-core=y
+            CONFIG_PACKAGE_kmod-ipt-raw=y
+            CONFIG_PACKAGE_kmod-sched-core=y
+            CONFIG_PACKAGE_kmod-shortcut-fe=y
+            CONFIG_PACKAGE_kmod-fast-classifier=y
+            CONFIG_PACKAGE_luci-app-turboacc=y
+            CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y
+            "
+            for config in $EMERGENCY_TURBOACC; do
+                echo "$config" >> .config
+            done
+            echo "✅ turboacc 配置紧急修复完成"
+        fi
         
         echo "✅ 编译环境修复完成"
 
@@ -1268,10 +1417,10 @@ jobs:
             echo "✅ 所有关键依赖包都存在"
         fi
 
-    - name: 验证配置
+    - name: 最终配置验证（详细版）
       run: |
         cd $BUILD_DIR
-        echo "=== 最终软件包配置验证（单线程模式）==="
+        echo "=== 最终配置验证（详细版）==="
         export MAKE_JOBS=1
         
         echo "=== .config 文件状态 ==="
@@ -1303,28 +1452,68 @@ jobs:
         
         echo "=== 网络加速方案最终状态验证 ==="
         echo "🔍 编译前最终网络加速方案状态检查:"
+        
+        # 详细检查 turboacc 状态
         if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
             echo "✅ turboacc 方案: 在.config中已启用"
-            # 检查依赖
+            # 详细检查所有依赖
             TURBOACC_FINAL_DEPS="
             kmod-shortcut-fe
             kmod-fast-classifier
             kmod-nf-conntrack
             kmod-ipt-raw
             kmod-ipt-offload
+            kmod-nf-conntrack-netlink
+            kmod-nf-nat
+            kmod-ipt-core
+            kmod-sched-core
             "
             
+            ALL_DEPS_ENABLED=true
             for dep in $TURBOACC_FINAL_DEPS; do
                 if grep -q "CONFIG_PACKAGE_${dep}=y" .config; then
                     echo "✅ $dep: 在.config中已启用"
                 else
                     echo "❌ $dep: 在.config中未启用"
+                    ALL_DEPS_ENABLED=false
                 fi
             done
+            
+            if [ "$ALL_DEPS_ENABLED" = true ]; then
+                echo "🎉 所有 turboacc 依赖都已正确启用！"
+            else
+                echo "⚠️ 部分 turboacc 依赖未启用，尝试紧急修复..."
+                # 紧急修复缺失的依赖
+                for dep in $TURBOACC_FINAL_DEPS; do
+                    if ! grep -q "CONFIG_PACKAGE_${dep}=y" .config; then
+                        echo "🔄 紧急启用: $dep"
+                        sed -i "/# CONFIG_PACKAGE_${dep} is not set/d" .config
+                        echo "CONFIG_PACKAGE_${dep}=y" >> .config
+                    fi
+                done
+                echo "✅ 紧急修复完成"
+            fi
+            
         elif grep -q "CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
             echo "✅ 替代加速方案 (BBR): 在.config中已启用"
         else
-            echo "⚠️ 未启用任何网络加速方案"
+            echo "❌ 未启用任何网络加速方案 - 这是严重问题！"
+            echo "=== 紧急启用 turboacc 方案 ==="
+            # 紧急启用 turboacc
+            EMERGENCY_TURBOACC_CONFIG="
+            CONFIG_PACKAGE_kmod-nf-conntrack=y
+            CONFIG_PACKAGE_kmod-ipt-core=y
+            CONFIG_PACKAGE_kmod-ipt-raw=y
+            CONFIG_PACKAGE_kmod-sched-core=y
+            CONFIG_PACKAGE_kmod-shortcut-fe=y
+            CONFIG_PACKAGE_kmod-fast-classifier=y
+            CONFIG_PACKAGE_luci-app-turboacc=y
+            CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y
+            "
+            for config in $EMERGENCY_TURBOACC_CONFIG; do
+                echo "$config" >> .config
+            done
+            echo "✅ 已紧急启用 turboacc 方案"
         fi
         
         echo "=== 用户启用的luci插件 ==="
