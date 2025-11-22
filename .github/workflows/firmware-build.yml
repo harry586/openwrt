@@ -646,7 +646,6 @@ jobs:
             
             # 启用 BBR 和其他网络优化
             ALTERNATIVE_ACCELERATION="
-            # 替代加速方案
             CONFIG_PACKAGE_kmod-tcp-bbr=y
             CONFIG_PACKAGE_kmod-nft-offload=y
             CONFIG_PACKAGE_kmod-nft-fastnet=y
@@ -704,7 +703,6 @@ jobs:
             # 🔧 强力修复：重新启用所有被禁用的 turboacc 相关配置
             echo "=== 强力修复：重新启用所有 turboacc 相关配置 ==="
             TURBOACC_COMPLETE_DEPS="
-            # 内核网络核心配置
             CONFIG_NF_CONNTRACK=y
             CONFIG_NF_CONNTRACK_EVENTS=y
             CONFIG_NF_CONNTRACK_PROCFS=y
@@ -718,8 +716,6 @@ jobs:
             CONFIG_IP_NF_NAT=y
             CONFIG_IP_NF_TARGET_MASQUERADE=y
             CONFIG_NET_SCHED=y
-            
-            # 基础包依赖
             CONFIG_PACKAGE_kmod-nf-conntrack=y
             CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y
             CONFIG_PACKAGE_kmod-nf-nat=y
@@ -734,13 +730,9 @@ jobs:
             CONFIG_PACKAGE_kmod-sched-core=y
             CONFIG_PACKAGE_kmod-sched=y
             CONFIG_PACKAGE_kmod-ipt-ipset=y
-            
-            # shortcut-fe 核心模块
             CONFIG_PACKAGE_kmod-shortcut-fe=y
             CONFIG_PACKAGE_kmod-shortcut-fe-cm=y
             CONFIG_PACKAGE_kmod-fast-classifier=y
-            
-            # turboacc 应用
             CONFIG_PACKAGE_luci-app-turboacc=y
             CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y
             "
@@ -848,6 +840,42 @@ jobs:
         fi
         
         echo "✅ 配置完整性检查完成（单线程模式）"
+
+    - name: 最终清理不需要的插件
+      run: |
+        cd $BUILD_DIR
+        echo "=== 最终清理不需要的插件 ==="
+        
+        # 最终清理，确保所有不需要的插件都被禁用
+        UNWANTED_PLUGINS="
+        luci-app-rclone_INCLUDE_rclone-ng
+        luci-app-rclone_INCLUDE_rclone-webui
+        luci-app-timewol
+        luci-app-passwall_INCLUDE_Haproxy
+        luci-app-passwall_INCLUDE_Shadowsocks_Rust_Client
+        luci-app-passwall_INCLUDE_Shadowsocks_Rust_Server
+        luci-app-passwall_INCLUDE_Simple_Obfs
+        luci-app-passwall_INCLUDE_SingBox
+        luci-app-passwall_INCLUDE_V2ray_Geoview
+        luci-app-passwall_INCLUDE_V2ray_Plugin
+        luci-app-passwall_INCLUDE_Xray
+        "
+        
+        CLEANED_COUNT=0
+        for plugin in $UNWANTED_PLUGINS; do
+            if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
+                echo "🚫 最终删除插件: $plugin"
+                sed -i "/CONFIG_PACKAGE_${plugin}=y/d" .config
+                echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+                CLEANED_COUNT=$((CLEANED_COUNT + 1))
+            fi
+        done
+        
+        if [ $CLEANED_COUNT -gt 0 ]; then
+            echo "✅ 最终清理完成：删除了 $CLEANED_COUNT 个不需要的插件"
+        else
+            echo "✅ 没有需要清理的插件"
+        fi
 
     - name: 包可用性诊断
       run: |
@@ -1003,6 +1031,36 @@ jobs:
             echo "⚠️ 未启用任何网络加速方案"
         fi
         
+        # 最终检查不需要的插件是否还存在
+        echo "=== 最终检查不需要的插件 ==="
+        UNWANTED_PLUGINS_FINAL_CHECK="
+        luci-app-rclone_INCLUDE_rclone-ng
+        luci-app-rclone_INCLUDE_rclone-webui
+        luci-app-timewol
+        luci-app-passwall_INCLUDE_Haproxy
+        luci-app-passwall_INCLUDE_Shadowsocks_Rust_Client
+        luci-app-passwall_INCLUDE_Shadowsocks_Rust_Server
+        luci-app-passwall_INCLUDE_Simple_Obfs
+        luci-app-passwall_INCLUDE_SingBox
+        luci-app-passwall_INCLUDE_V2ray_Geoview
+        luci-app-passwall_INCLUDE_V2ray_Plugin
+        luci-app-passwall_INCLUDE_Xray
+        "
+        
+        FOUND_UNWANTED=0
+        for plugin in $UNWANTED_PLUGINS_FINAL_CHECK; do
+            if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
+                echo "❌ 不需要的插件仍然存在: $plugin"
+                FOUND_UNWANTED=$((FOUND_UNWANTED + 1))
+            fi
+        done
+        
+        if [ $FOUND_UNWANTED -gt 0 ]; then
+            echo "⚠️ 发现 $FOUND_UNWANTED 个不需要的插件仍然启用"
+        else
+            echo "✅ 所有不需要的插件都已正确禁用"
+        fi
+        
         echo "=== 配置验证完成 ==="
         echo "如果以上列表不符合你的预期，请检查配置文件"
 
@@ -1018,9 +1076,9 @@ jobs:
         mkdir -p staging_dir/host/bin
         mkdir -p staging_dir/target-*/host/bin
         
-        # 注意：这里不运行 defconfig，避免再次禁用 turboacc
-        echo "⚠️ 跳过 defconfig，避免禁用网络加速配置"
-        # make -j1 defconfig
+        # 运行 defconfig 以确保配置正确
+        echo "=== 运行 defconfig 以确保配置正确 ==="
+        make -j1 defconfig
         
         echo "✅ 编译环境修复完成"
 
@@ -1061,15 +1119,28 @@ jobs:
             while [ $RETRY_COUNT -lt $MAX_DOWNLOAD_RETRIES ] && [ "$DOWNLOAD_SUCCESS" = false ]; do
               RETRY_COUNT=$((RETRY_COUNT + 1))
               echo "=== 下载尝试 $RETRY_COUNT/$MAX_DOWNLOAD_RETRIES ==="
-              if make -j1 download V=s; then
+              set +e
+              make -j1 download V=s
+              DOWNLOAD_EXIT_CODE=$?
+              set -e
+              if [ $DOWNLOAD_EXIT_CODE -eq 0 ]; then
                 echo "✅ 下载命令执行成功"
                 DOWNLOAD_SUCCESS=true
               else
-                echo "❌ 下载命令执行失败"
+                echo "❌ 下载命令执行失败，退出代码: $DOWNLOAD_EXIT_CODE"
                 if [ $RETRY_COUNT -eq $MAX_DOWNLOAD_RETRIES ]; then
                   echo "❌ 达到最大重试次数，下载失败"
                   echo "=== 最后尝试单线程下载 ==="
+                  set +e
                   make -j1 download V=s
+                  FINAL_DOWNLOAD_EXIT_CODE=$?
+                  set -e
+                  if [ $FINAL_DOWNLOAD_EXIT_CODE -eq 0 ]; then
+                    echo "✅ 最后尝试下载成功"
+                    DOWNLOAD_SUCCESS=true
+                  else
+                    echo "❌ 最后尝试下载失败"
+                  fi
                   break
                 else
                   echo "🔄 等待15秒后重试..."
@@ -1207,6 +1278,20 @@ jobs:
         ls -la .config
         echo "文件大小: $(wc -l < .config) 行"
         
+        # 检查配置文件语法错误
+        echo "=== 检查配置文件语法 ==="
+        if grep -q "missing separator" .config 2>/dev/null; then
+            echo "❌ 发现配置文件语法错误: missing separator"
+            echo "有问题的行:"
+            grep -n "missing separator" .config 2>/dev/null || true
+            exit 1
+        fi
+        
+        # 检查制表符和空格问题
+        if grep -q $'\t' .config; then
+            echo "⚠️ 发现制表符，可能会影响配置解析"
+        fi
+        
         echo "=== 关键软件包配置状态 ==="
         for pkg in luci luci-base luci-theme-bootstrap; do
           if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
@@ -1274,7 +1359,7 @@ jobs:
         time make -j$BUILD_JOBS V=s 2>&1 | tee -a build_detailed.log
         COMPILE_EXIT_CODE=$?
         set -e
-        END_TIME=$(date +s)
+        END_TIME=$(date +%s)
         COMPILE_TIME=$((END_TIME - START_TIME))
         echo "=== 编译时间统计 ==="
         echo "总编译时间: $((COMPILE_TIME / 60))分钟$((COMPILE_TIME % 60))秒"
