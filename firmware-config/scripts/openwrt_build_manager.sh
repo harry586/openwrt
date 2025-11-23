@@ -607,12 +607,15 @@ package_check() {
     AVAILABLE_PACKAGES=()
     ALTERNATIVE_PACKAGES=()
     
+    # 预加载feeds列表到内存，避免重复调用
+    local feeds_list=$(./scripts/feeds list 2>/dev/null)
+    
     check_package_availability() {
         local original_pkg="$1"
         local pkg_to_check="$2"
         
-        # 首先检查原始包名
-        if ./scripts/feeds list | grep -q "^$pkg_to_check"; then
+        # 使用缓存的feeds列表进行检查
+        if echo "$feeds_list" | grep -q "^$pkg_to_check"; then
             AVAILABLE_PACKAGES+=("$original_pkg→$pkg_to_check")
             echo "✅ $original_pkg → $pkg_to_check"
             return 0
@@ -632,7 +635,7 @@ package_check() {
             
             # 检查所有变体
             for variant in "${variants[@]}"; do
-                if ./scripts/feeds list | grep -q "^$variant"; then
+                if echo "$feeds_list" | grep -q "^$variant"; then
                     ALTERNATIVE_PACKAGES+=("$original_pkg→$variant")
                     echo "🔄 $original_pkg → $variant (替代包)"
                     return 0
@@ -647,11 +650,18 @@ package_check() {
     }
     
     echo "=== 开始检查包可用性 ==="
+    
+    # 使用临时文件来避免管道问题
+    local temp_file=$(mktemp)
     for pkg in $PACKAGES; do
         # 使用映射函数查找对应的包名
         mapped_pkg=$(map_package "$pkg")
-        check_package_availability "$pkg" "$mapped_pkg"
+        check_package_availability "$pkg" "$mapped_pkg" >> "$temp_file" 2>&1
     done
+    
+    # 输出结果，使用cat避免管道问题
+    cat "$temp_file"
+    rm -f "$temp_file"
     
     echo ""
     echo "=== 检查结果 ==="
@@ -703,6 +713,7 @@ package_check() {
             return 1
         else
             echo "⚠️ 有非关键包缺失，但构建可以继续"
+            # 即使有非关键包缺失，也返回成功，让构建继续
             return 0
         fi
     else
