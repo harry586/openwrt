@@ -113,7 +113,7 @@ jobs:
         mkdir -p $BUILD_DIR/scripts
         mkdir -p $BUILD_DIR/config-templates
         
-        # 复制主构建管理器
+        # 复制所有必要的脚本
         cp firmware-config/scripts/openwrt_build_manager.sh $BUILD_DIR/
         cp firmware-config/scripts/build_helpers.sh $BUILD_DIR/
         cp firmware-config/scripts/smart_package_matcher.sh $BUILD_DIR/
@@ -200,7 +200,7 @@ jobs:
         
         cd $GITHUB_WORKSPACE
         
-        # 复制主构建管理器
+        # 复制所有必要的脚本
         cp firmware-config/scripts/openwrt_build_manager.sh $BUILD_DIR/
         cp firmware-config/scripts/build_helpers.sh $BUILD_DIR/
         cp firmware-config/scripts/smart_package_matcher.sh $BUILD_DIR/
