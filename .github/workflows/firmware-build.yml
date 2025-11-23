@@ -159,9 +159,19 @@ jobs:
           ls -la
           exit 1
         fi
-        chmod +x complete_version_detector.sh
+        
+        # 设置老旧设备标志
+        OLD_DEVICE_FLAG="false"
+        case "${{ github.event.inputs.device_name }}" in
+            "wr841n"|"wr842n"|"wr941n"|"mr3420"|"ar71xx"*)
+                OLD_DEVICE_FLAG="true"
+                echo "✅ 自动判断为老旧设备: ${{ github.event.inputs.device_name }}"
+                ;;
+        esac
+        
+        echo "=== 使用修复版版本检测 ==="
         set +e
-        OUTPUT=$(./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ inputs.version_spec }}" "" 2>&1)
+        OUTPUT=$(./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ inputs.version_spec }}" "$OLD_DEVICE_FLAG" 2>&1)
         SCRIPT_EXIT_CODE=$?
         set -e
         echo "脚本输出:"
@@ -264,101 +274,31 @@ jobs:
         chmod +x *.sh
         echo "✅ 脚本恢复完成"
 
-    - name: 加强搜索并复制配置文件
-      run: |
-        cd $BUILD_DIR
-        echo "=== 加强搜索并复制配置文件 ==="
-        cd $GITHUB_WORKSPACE
-        echo "=== 加强搜索配置文件 ==="
-        mkdir -p $BUILD_DIR/config-templates
-        SEARCH_PATHS=". firmware-config configs firmware-config/configs firmware-config/config-templates"
-        CONFIG_FILES="minimal.config normal-new.config normal-old.config"
-        for config_file in $CONFIG_FILES; do
-          echo "正在加强搜索配置文件: $config_file"
-          FOUND_CONFIG=""
-          for path in $SEARCH_PATHS; do
-            if [ -f "$path/$config_file" ]; then
-              FOUND_CONFIG="$path/$config_file"
-              echo "✅ 在 $path 找到: $config_file"
-              break
-            fi
-          done
-          if [ -z "$FOUND_CONFIG" ]; then
-            FOUND_CONFIG=$(find . -name "$config_file" -type f | head -1)
-            if [ -n "$FOUND_CONFIG" ]; then
-              echo "✅ 使用find找到: $config_file (在 $FOUND_CONFIG)"
-            fi
-          fi
-          if [ -n "$FOUND_CONFIG" ]; then
-            cp "$FOUND_CONFIG" $BUILD_DIR/config-templates/
-            echo "✅ 复制: $config_file (从 $FOUND_CONFIG)"
-          else
-            echo "❌ 错误: 未找到配置文件 $config_file"
-            echo "当前目录结构:"
-            find . -type f -name "*.config" | head -20
-            exit 1
-          fi
-        done
-        echo "=== 配置文件复制完成，检查结果 ==="
-        echo "config-templates 目录内容:"
-        ls -la $BUILD_DIR/config-templates/
-        echo "=== 复制脚本文件 ==="
-        SCRIPTS="error_analysis.sh pre_download.sh check-plugins.sh diagnose-packages.sh"
-        for script in $SCRIPTS; do
-          FOUND_SCRIPT=$(find . -name "$script" -type f | head -1)
-          if [ -n "$FOUND_SCRIPT" ]; then
-            cp "$FOUND_SCRIPT" $BUILD_DIR/
-            chmod +x $BUILD_DIR/"$script"
-            echo "✅ 复制脚本: $script"
-          else
-            echo "⚠️ 未找到: $script"
-          fi
-        done
-        echo "✅ 配置文件和脚本复制完成"
-
     - name: 智能安装网络加速方案 (在 feeds 前)
       run: |
         cd $BUILD_DIR
         echo "=== 智能安装网络加速方案 (在 feeds 更新前) ==="
-        echo "平台: $PLATFORM"
-        echo "设备: $DEVICE_SHORT_NAME" 
         echo "版本: $SELECTED_BRANCH"
         
-        # 检测环境兼容性
+        # TurboAcc 版本兼容性检测
         CAN_USE_TURBOACC=false
         CAN_USE_SFE=false
         CAN_USE_BBR=false
         
-        # 检查版本
-        if echo "$SELECTED_BRANCH" | grep -q -E "master|main|openwrt-23.05|openwrt-22.03"; then
+        # 检查版本 - 特别支持 22.03/23.05
+        if echo "$SELECTED_BRANCH" | grep -q -E "23\.05|22\.03"; then
             CAN_USE_TURBOACC=true
             CAN_USE_SFE=true
             CAN_USE_BBR=true
-            echo "✅ 版本 $SELECTED_BRANCH 支持完整加速方案"
-        elif echo "$SELECTED_BRANCH" | grep -q -E "21.02|19.07"; then
+            echo "✅ 版本 $SELECTED_BRANCH 完全支持 TurboAcc (含 SFE)"
+        elif echo "$SELECTED_BRANCH" | grep -q -E "master|main|21\.02"; then
             CAN_USE_TURBOACC=true
             CAN_USE_BBR=true
-            echo "⚠️ 版本 $SELECTED_BRANCH 支持基础 turboacc (无 SFE)"
+            echo "⚠️ 版本 $SELECTED_BRANCH 支持基础 turboacc (可能无 SFE)"
         else
             CAN_USE_BBR=true
             echo "❌ 版本 $SELECTED_BRANCH 只支持基础网络优化"
         fi
-        
-        # 检查平台支持
-        case "$PLATFORM" in
-            "ipq40xx"|"ipq806x"|"mediatek")
-                echo "✅ 平台 $PLATFORM 支持完整加速"
-                ;;
-            "ramips"|"ath79"|"rockchip")
-                CAN_USE_SFE=false
-                echo "⚠️ 平台 $PLATFORM 支持有限加速"
-                ;;
-            *)
-                CAN_USE_TURBOACC=false
-                CAN_USE_SFE=false
-                echo "❌ 平台 $PLATFORM 只支持基础网络优化"
-                ;;
-        esac
         
         # 根据检测结果启用相应方案
         if [ "$CAN_USE_TURBOACC" = true ] && [ -f "add_turboacc.sh" ]; then
@@ -394,14 +334,14 @@ jobs:
         echo "=== 配置稳定feeds源 ==="
         echo "检测到的版本分支: $SELECTED_BRANCH"
         FEEDS_BRANCH="$SELECTED_BRANCH"
-        if echo "$SELECTED_BRANCH" | grep -q "openwrt-24.10"; then
-            FEEDS_BRANCH="openwrt-24.10"
-        elif echo "$SELECTED_BRANCH" | grep -q "openwrt-23.05"; then
+        if echo "$SELECTED_BRANCH" | grep -q "openwrt-23.05"; then
             FEEDS_BRANCH="openwrt-23.05"
         elif echo "$SELECTED_BRANCH" | grep -q "openwrt-22.03"; then
             FEEDS_BRANCH="openwrt-22.03"
         elif echo "$SELECTED_BRANCH" | grep -q "openwrt-21.02"; then
             FEEDS_BRANCH="openwrt-21.02"
+        elif echo "$SELECTED_BRANCH" | grep -q "openwrt-19.07"; then
+            FEEDS_BRANCH="openwrt-19.07"
         else
             echo "⚠️ 未知版本分支，使用默认分支: master"
             FEEDS_BRANCH="master"
@@ -499,6 +439,58 @@ jobs:
                 echo "✅ 已使用备用设备信息"
             fi
         fi
+
+    - name: 加强搜索并复制配置文件
+      run: |
+        cd $BUILD_DIR
+        echo "=== 加强搜索并复制配置文件 ==="
+        cd $GITHUB_WORKSPACE
+        echo "=== 加强搜索配置文件 ==="
+        mkdir -p $BUILD_DIR/config-templates
+        SEARCH_PATHS=". firmware-config configs firmware-config/configs firmware-config/config-templates"
+        CONFIG_FILES="minimal.config normal-new.config normal-old.config"
+        for config_file in $CONFIG_FILES; do
+          echo "正在加强搜索配置文件: $config_file"
+          FOUND_CONFIG=""
+          for path in $SEARCH_PATHS; do
+            if [ -f "$path/$config_file" ]; then
+              FOUND_CONFIG="$path/$config_file"
+              echo "✅ 在 $path 找到: $config_file"
+              break
+            fi
+          done
+          if [ -z "$FOUND_CONFIG" ]; then
+            FOUND_CONFIG=$(find . -name "$config_file" -type f | head -1)
+            if [ -n "$FOUND_CONFIG" ]; then
+              echo "✅ 使用find找到: $config_file (在 $FOUND_CONFIG)"
+            fi
+          fi
+          if [ -n "$FOUND_CONFIG" ]; then
+            cp "$FOUND_CONFIG" $BUILD_DIR/config-templates/
+            echo "✅ 复制: $config_file (从 $FOUND_CONFIG)"
+          else
+            echo "❌ 错误: 未找到配置文件 $config_file"
+            echo "当前目录结构:"
+            find . -type f -name "*.config" | head -20
+            exit 1
+          fi
+        done
+        echo "=== 配置文件复制完成，检查结果 ==="
+        echo "config-templates 目录内容:"
+        ls -la $BUILD_DIR/config-templates/
+        echo "=== 复制脚本文件 ==="
+        SCRIPTS="error_analysis.sh pre_download.sh check-plugins.sh diagnose-packages.sh"
+        for script in $SCRIPTS; do
+          FOUND_SCRIPT=$(find . -name "$script" -type f | head -1)
+          if [ -n "$FOUND_SCRIPT" ]; then
+            cp "$FOUND_SCRIPT" $BUILD_DIR/
+            chmod +x $BUILD_DIR/"$script"
+            echo "✅ 复制脚本: $script"
+          else
+            echo "⚠️ 未找到: $script"
+          fi
+        done
+        echo "✅ 配置文件和脚本复制完成"
 
     - name: 修复配置加载问题 - 预添加所有必要配置
       run: |
@@ -812,424 +804,110 @@ jobs:
             echo "⚠️ 未找到预下载脚本，跳过预下载步骤"
         fi
 
-    - name: 下载前配置验证（加强版）
+    - name: 下载依赖包
       run: |
         cd $BUILD_DIR
-        echo "=== 下载前配置验证（加强版）==="
-        export MAKE_JOBS=1
-        echo "=== 验证实际配置文件 ==="
-        echo "当前启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y" .config | wc -l)"
-        echo "=== 网络加速方案状态验证（关键检查）==="
-        echo "🔍 下载前网络加速方案状态检查:"
-        if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
-            echo "✅ turboacc 方案: 已启用"
-            echo "⚠️ 注意: turboacc 已启用，但可能存在依赖限制"
-        elif grep -q "CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
-            echo "✅ 替代加速方案 (BBR): 已启用"
+        echo "=== 下载依赖包 ==="
+        export MAKE_JOBS=${{ inputs.multithreading && '$(nproc)' || '1' }}
+        if [ "${{ inputs.enable_cache }}" = "true" ]; then
+            echo "🔄 启用编译缓存模式下载"
+            make -j$MAKE_JOBS download
         else
-            echo "❌ 严重错误: 未启用任何网络加速方案！"
-            echo "=== 执行紧急网络加速方案恢复 ==="
-            echo "🔄 紧急启用 BBR 替代方案"
-            EMERGENCY_CONFIG="CONFIG_PACKAGE_kmod-tcp-bbr=y CONFIG_PACKAGE_kmod-nft-offload=y CONFIG_PACKAGE_kmod-nft-fastnet=y CONFIG_PACKAGE_kmod-nft-core=y CONFIG_PACKAGE_kmod-nft-nat=y"
-            for config in $EMERGENCY_CONFIG; do
-                echo "$config" >> .config
-            done
-            echo "✅ 紧急网络加速方案恢复完成"
+            echo "🔄 普通模式下载"
+            make -j$MAKE_JOBS download
         fi
-        echo "=== 配置验证完成 ==="
-
-    - name: 修复编译环境
-      run: |
-        cd $BUILD_DIR
-        echo "=== 修复编译环境（单线程模式）==="
-        export MAKE_JOBS=1
-        find . -name "*.rej" -delete 2>/dev/null || true
-        find . -name "*.orig" -delete 2>/dev/null || true
-        mkdir -p staging_dir/host/bin
-        mkdir -p staging_dir/target-*/host/bin
-        echo "=== 运行 defconfig 以确保配置正确 ==="
-        set +e
-        make -j1 defconfig
-        DEFCONFIG_EXIT_CODE=$?
-        set -e
-        if [ $DEFCONFIG_EXIT_CODE -ne 0 ]; then
-            echo "❌ defconfig 执行失败，但继续构建流程"
-        fi
-        echo "✅ 编译环境修复完成"
-
-    - name: 智能下载依赖
-      run: |
-        cd $BUILD_DIR
-        echo "=== 智能下载依赖 ==="
-        mkdir -p dl
-        chmod 755 dl
-        export GIT_SSL_NO_VERIFY=1
-        export PYTHONHTTPSVERIFY=0
-        echo "=== 设置国内镜像源: $MIRROR_SOURCE ==="
-        case "$MIRROR_SOURCE" in
-            "tuna") MIRROR_URL="https://mirrors.tuna.tsinghua.edu.cn/openwrt" ;;
-            "ustc") MIRROR_URL="https://mirrors.ustc.edu.cn/openwrt" ;;
-            "tencent") MIRROR_URL="https://mirrors.cloud.tencent.com/openwrt" ;;
-            "huawei") MIRROR_URL="https://mirrors.huaweicloud.com/openwrt" ;;
-            *) MIRROR_URL="https://mirrors.tuna.tsinghua.edu.cn/openwrt" ;;
-        esac
-        MAX_DOWNLOAD_RETRIES=3
-        RETRY_COUNT=0
-        DOWNLOAD_SUCCESS=false
-        echo "=== 预先下载关键依赖 ==="
-        make -j1 tools/install V=s 2>&1 | grep -E "Downloading|error" || true
-        make -j1 toolchain/install V=s 2>&1 | grep -E "Downloading|error" || true
-        find dl -name "*.tmp" -delete 2>/dev/null || true
-        find dl -size 0 -delete 2>/dev/null || true
-        for ROUND in 1 2; do
-            echo "=== 第 $ROUND 轮下载验证循环 ==="
-            while [ $RETRY_COUNT -lt $MAX_DOWNLOAD_RETRIES ] && [ "$DOWNLOAD_SUCCESS" = false ]; do
-              RETRY_COUNT=$((RETRY_COUNT + 1))
-              echo "=== 下载尝试 $RETRY_COUNT/$MAX_DOWNLOAD_RETRIES ==="
-              set +e
-              make -j1 download V=s
-              DOWNLOAD_EXIT_CODE=$?
-              set -e
-              if [ $DOWNLOAD_EXIT_CODE -eq 0 ]; then
-                echo "✅ 下载命令执行成功"
-                DOWNLOAD_SUCCESS=true
-              else
-                echo "❌ 下载命令执行失败，退出代码: $DOWNLOAD_EXIT_CODE"
-                if [ $RETRY_COUNT -eq $MAX_DOWNLOAD_RETRIES ]; then
-                  echo "❌ 达到最大重试次数，下载失败"
-                  echo "=== 最后尝试单线程下载 ==="
-                  set +e
-                  make -j1 download V=s
-                  FINAL_DOWNLOAD_EXIT_CODE=$?
-                  set -e
-                  if [ $FINAL_DOWNLOAD_EXIT_CODE -eq 0 ]; then
-                    echo "✅ 最后尝试下载成功"
-                    DOWNLOAD_SUCCESS=true
-                  else
-                    echo "❌ 最后尝试下载失败"
-                  fi
-                  break
-                else
-                  echo "🔄 等待15秒后重试..."
-                  sleep 15
-                  find dl -name "*.tmp" -delete 2>/dev/null || true
-                  find dl -size 0 -delete 2>/dev/null || true
-                fi
-              fi
-            done
-            echo "=== 下载完整性检查 ==="
-            EMPTY_FILES=$(find dl -type f -size 0 2>/dev/null | wc -l)
-            if [ "$EMPTY_FILES" -gt 0 ]; then
-              echo "❌ 发现 $EMPTY_FILES 个空文件，删除后重新下载..."
-              find dl -type f -size 0 -delete
-              echo "重新下载空文件..."
-              make -j1 download V=s
-            fi
-            if find dl -name "*.tmp" | grep -q ".tmp"; then
-              echo "❌ 发现未完成的下载文件，删除后重新下载..."
-              find dl -name "*.tmp" -delete
-              echo "重新下载未完成的文件..."
-              make -j1 download V=s
-            fi
-            DL_COUNT=$(find dl -type f | wc -l)
-            DL_SIZE=$(du -sh dl | cut -f1)
-            echo "✅ 下载统计: $DL_COUNT 个文件，总大小: $DL_SIZE"
-            if [ $ROUND -eq 2 ]; then
-                echo "=== 第二轮：验证关键依赖包 ==="
-                MISSING_CRITICAL=0
-                # 只检查 BBR 相关的包，因为 turboacc 可能由于递归依赖被禁用
-                CRITICAL_PACKAGES="kmod-tcp-bbr kmod-nft-core kmod-nft-offload"
-                for pkg in $CRITICAL_PACKAGES; do
-                    if ! find dl -name "*${pkg}*" | grep -q "."; then
-                        echo "❌ 关键依赖包缺失: $pkg"
-                        MISSING_CRITICAL=$((MISSING_CRITICAL + 1))
-                    else
-                        echo "✅ 关键依赖包存在: $pkg"
-                    fi
-                done
-                if [ $MISSING_CRITICAL -gt 0 ]; then
-                    echo "❌ 缺失 $MISSING_CRITICAL 个关键依赖包，尝试单独下载..."
-                    for pkg in $CRITICAL_PACKAGES; do
-                        if ! find dl -name "*${pkg}*" | grep -q "."; then
-                            echo "🔄 单独下载: $pkg"
-                            make -j1 package/$pkg/download V=s
-                        fi
-                    done
-                fi
-            fi
-            RETRY_COUNT=0
-            DOWNLOAD_SUCCESS=false
-        done
-        echo "✅ 所有依赖下载完成"
-
-    - name: 最终依赖验证
-      run: |
-        cd $BUILD_DIR
-        echo "=== 最终依赖验证 ==="
-        echo "=== 检查下载目录状态 ==="
-        DL_COUNT=$(find dl -type f | wc -l)
-        DL_SIZE=$(du -sh dl | cut -f1)
-        echo "下载文件总数: $DL_COUNT"
-        echo "下载总大小: $DL_SIZE"
-        echo "=== 检查空文件和损坏文件 ==="
-        EMPTY_FILES=$(find dl -type f -size 0 2>/dev/null | wc -l)
-        TEMP_FILES=$(find dl -name "*.tmp" 2>/dev/null | wc -l)
-        if [ "$EMPTY_FILES" -gt 0 ]; then
-            echo "❌ 发现 $EMPTY_FILES 个空文件"
-            find dl -type f -size 0 -delete
-            echo "已删除空文件"
-        else
-            echo "✅ 没有空文件"
-        fi
-        if [ "$TEMP_FILES" -gt 0 ]; then
-            echo "❌ 发现 $TEMP_FILES 个临时文件"
-            find dl -name "*.tmp" -delete
-            echo "已删除临时文件"
-        else
-            echo "✅ 没有临时文件"
-        fi
-        echo "=== 验证关键依赖包 ==="
-        # 只检查 BBR 相关的包，因为 turboacc 可能由于递归依赖被禁用
-        CRITICAL_PACKAGES="kmod-tcp-bbr kmod-nft-core kmod-nft-offload"
-        ALL_CRITICAL_EXIST=true
-        for pkg in $CRITICAL_PACKAGES; do
-            if find dl -name "*${pkg}*" | grep -q "."; then
-                echo "✅ 关键依赖包存在: $pkg"
-            else
-                echo "❌ 关键依赖包缺失: $pkg"
-                ALL_CRITICAL_EXIST=false
-            fi
-        done
-        if [ "$ALL_CRITICAL_EXIST" = false ]; then
-            echo "⚠️ 部分关键依赖包缺失，但继续构建"
-        else
-            echo "✅ 所有关键依赖包都存在"
-        fi
-
-    - name: 最终配置验证（详细版）
-      run: |
-        cd $BUILD_DIR
-        echo "=== 最终配置验证（详细版）==="
-        export MAKE_JOBS=1
-        echo "=== .config 文件状态 ==="
-        ls -la .config
-        echo "文件大小: $(wc -l < .config) 行"
-        echo "=== 检查配置文件语法 ==="
-        if grep -q "missing separator" .config 2>/dev/null; then
-            echo "❌ 发现配置文件语法错误: missing separator"
-            echo "有问题的行:"
-            grep -n "missing separator" .config 2>/dev/null || true
-            exit 1
-        fi
-        if grep -q $'\t' .config; then
-            echo "⚠️ 发现制表符，可能会影响配置解析"
-        fi
-        echo "=== 关键软件包配置状态 ==="
-        for pkg in luci luci-base luci-theme-bootstrap; do
-          if grep -q "CONFIG_PACKAGE_${pkg}=y" .config; then
-            echo "✅ $pkg: 在.config中已启用"
-          else
-            echo "❌ $pkg: 在.config中未启用"
-          fi
-        done
-        echo "=== 网络加速方案最终状态验证 ==="
-        echo "🔍 编译前最终网络加速方案状态检查:"
-        if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
-            echo "✅ turboacc 方案: 在.config中已启用"
-            echo "⚠️ 注意: turboacc 已启用，但可能存在依赖限制"
-        elif grep -q "CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
-            echo "✅ 替代加速方案 (BBR): 在.config中已启用"
-        else
-            echo "❌ 未启用任何网络加速方案 - 这是严重问题！"
-            echo "=== 紧急启用 BBR 替代方案 ==="
-            EMERGENCY_TURBOACC_CONFIG="CONFIG_PACKAGE_kmod-tcp-bbr=y CONFIG_PACKAGE_kmod-nft-offload=y CONFIG_PACKAGE_kmod-nft-fastnet=y CONFIG_PACKAGE_kmod-nft-core=y CONFIG_PACKAGE_kmod-nft-nat=y"
-            for config in $EMERGENCY_TURBOACC_CONFIG; do
-                echo "$config" >> .config
-            done
-            echo "✅ 已紧急启用 BBR 替代方案"
-        fi
-        echo "=== 用户启用的luci插件 ==="
-        grep "^CONFIG_PACKAGE_luci-app" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
-        echo "=== 配置验证完成 ==="
+        echo "✅ 依赖包下载完成"
 
     - name: 编译固件
       run: |
         cd $BUILD_DIR
-        echo "::group::📱 编译日志"
-        echo "编译开始时间: $(date)"
-        export FORCE_UNSAFE_CONFIGURE=1
-        if ${{ inputs.multithreading }}; then
-          BUILD_JOBS=$(nproc)
-          echo "✅ 多线程编译: 使用 $BUILD_JOBS 个并行任务"
+        echo "=== 开始编译固件 ==="
+        export MAKE_JOBS=${{ inputs.multithreading && '$(nproc)' || '1' }}
+        echo "使用线程数: $MAKE_JOBS"
+        
+        # 创建详细编译日志
+        echo "开始编译，详细日志将保存到 build_detailed.log"
+        if [ "${{ inputs.enable_cache }}" = "true" ]; then
+            echo "🔄 启用编译缓存"
+            make -j$MAKE_JOBS V=s 2>&1 | tee build_detailed.log
         else
-          BUILD_JOBS=1
-          echo "✅ 单线程编译"
+            echo "🔄 普通编译模式"
+            make -j$MAKE_JOBS V=s 2>&1 | tee build_detailed.log
         fi
-        echo "🚀 开始分阶段编译..."
-        START_TIME=$(date +%s)
-        echo "=== 阶段1: 编译工具链 ==="
-        make -j$BUILD_JOBS tools/compile V=s 2>&1 | tee -a build_detailed.log
-        echo "=== 阶段2: 编译工具 ==="
-        make -j$BUILD_JOBS toolchain/compile V=s 2>&1 | tee -a build_detailed.log
-        echo "=== 阶段3: 完整编译 ==="
-        set +e
-        time make -j$BUILD_JOBS V=s 2>&1 | tee -a build_detailed.log
-        COMPILE_EXIT_CODE=$?
-        set -e
-        END_TIME=$(date +%s)
-        COMPILE_TIME=$((END_TIME - START_TIME))
-        echo "=== 编译时间统计 ==="
-        echo "总编译时间: $((COMPILE_TIME / 60))分钟$((COMPILE_TIME % 60))秒"
-        if [ -d "bin/targets" ]; then
-            echo "::endgroup::"
-            echo "::notice::🎉 编译成功完成！"
-            echo "✅ 编译完成，找到目标文件"
-            FIRMWARE_LIST=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null | sort)
-            if [ -n "$FIRMWARE_LIST" ]; then
-                echo "🎉 生成的固件:"
-                echo "$FIRMWARE_LIST"
-            fi
-            if [ $COMPILE_EXIT_CODE -ne 0 ]; then
-                echo "⚠️ 编译过程有警告，但生成了固件文件"
-            fi
+        
+        COMPILE_EXIT_CODE=${PIPESTATUS[0]}
+        if [ $COMPILE_EXIT_CODE -eq 0 ]; then
+            echo "✅ 固件编译成功"
         else
-            echo "::endgroup::"
-            echo "::notice::❌ 编译失败"
-            echo "❌ 编译失败，未生成目标文件"
-            if [ $COMPILE_EXIT_CODE -eq 0 ]; then
-                echo "❌ 编译命令成功但未生成目标文件"
-                find . -maxdepth 3 -type d | sort | head -20
+            echo "❌ 固件编译失败，退出代码: $COMPILE_EXIT_CODE"
+            if [ -f "error_analysis.sh" ]; then
+                echo "=== 运行错误分析 ==="
+                chmod +x error_analysis.sh
+                ./error_analysis.sh
             fi
+            exit $COMPILE_EXIT_CODE
+        fi
+
+    - name: 固件文件检查
+      if: success()
+      run: |
+        cd $BUILD_DIR
+        echo "=== 固件文件检查 ==="
+        if [ -d "bin/targets" ]; then
+            echo "✅ 固件目录存在"
+            find bin/targets -name "*.bin" -o -name "*.img" | while read file; do
+                echo "📦 固件文件: $file ($(du -h "$file" | cut -f1))"
+            done
+            echo "固件文件列表:"
+            find bin/targets -type f | sort
+        else
+            echo "❌ 错误: 固件目录不存在"
             exit 1
         fi
 
-    - name: 错误分析
-      if: always()
+    - name: 插件检查
+      if: success()
       run: |
         cd $BUILD_DIR
-        echo "=== 运行错误分析 ==="
-        if [ -f "error_analysis.sh" ]; then
-            chmod +x error_analysis.sh
-            echo "开始错误分析..."
-            ./error_analysis.sh "$BUILD_DIR"
-            echo "✅ 错误分析完成"
+        echo "=== 插件完整性检查 ==="
+        if [ -f "check-plugins.sh" ]; then
+            chmod +x check-plugins.sh
+            echo "开始检查插件完整性..."
+            ./check-plugins.sh
+            echo "✅ 插件检查完成"
         else
-            echo "⚠️ 未找到错误分析脚本，跳过错误分析"
+            echo "⚠️ 未找到插件检查脚本，跳过检查"
         fi
-
-    - name: 验证固件
-      if: always()
-      run: |
-        cd $BUILD_DIR
-        echo "=== 固件生成验证 ==="
-        if [ -d "bin/targets" ]; then
-          echo "✅ 构建成功！生成的固件:"
-          find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) | sort
-          for firmware in $(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null); do
-            echo "固件: $firmware"
-            echo "大小: $(du -h "$firmware" | cut -f1)"
-            echo ""
-          done
-        else
-          echo "❌ 构建失败，未找到目标文件"
-        fi
-
-    - name: 生成报告
-      if: always()
-      run: |
-        cd $BUILD_DIR
-        echo "=== 生成构建报告文档 ==="
-        echo "# OpenWrt 固件构建报告" > "$GITHUB_WORKSPACE/构建报告.md"
-        echo "" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "## 构建信息" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "- **设备**: ${{ env.DEVICE_FULL_NAME }}" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "- **平台**: ${{ env.PLATFORM }}" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "- **版本**: ${{ env.SELECTED_REPO }} (${{ env.SELECTED_BRANCH }})" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "- **配置类型**: ${{ inputs.config_type }}" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "- **构建时间**: $(date)" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "- **编译时长**: $((COMPILE_TIME / 60))分钟$((COMPILE_TIME % 60))秒" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "## 配置状态" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "### 启用的luci插件" >> "$GITHUB_WORKSPACE/构建报告.md"
-        grep "^CONFIG_PACKAGE_luci-app" .config 2>/dev/null | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort | while read plugin; do
-            echo "- $plugin" >> "$GITHUB_WORKSPACE/构建报告.md"
-        done || echo "- 无luci插件或配置文件不可读" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "## 网络加速方案状态" >> "$GITHUB_WORKSPACE/构建报告.md"
-        if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config 2>/dev/null; then
-            echo "✅ **turboacc 方案**: 已启用" >> "$GITHUB_WORKSPACE/构建报告.md"
-            echo "⚠️ **注意**: turboacc 已启用，但可能存在依赖限制" >> "$GITHUB_WORKSPACE/构建报告.md"
-        elif grep -q "CONFIG_PACKAGE_kmod-tcp-bbr=y" .config 2>/dev/null; then
-            echo "✅ **替代加速方案 (BBR)**: 已启用" >> "$GITHUB_WORKSPACE/构建报告.md"
-        else
-            echo "⚠️ **网络加速方案**: 未启用" >> "$GITHUB_WORKSPACE/构建报告.md"
-        fi
-        echo "" >> "$GITHUB_WORKSPACE/构建报告.md"
-        echo "## 构建状态" >> "$GITHUB_WORKSPACE/构建报告.md"
-        if [ -d "bin/targets" ]; then
-            echo "✅ **构建状态**: 成功" >> "$GITHUB_WORKSPACE/构建报告.md"
-            echo "" >> "$GITHUB_WORKSPACE/构建报告.md"
-            echo "## 生成的固件" >> "$GITHUB_WORKSPACE/构建报告.md"
-            find bin/targets -name "*.bin" -o -name "*.img" | while read firmware; do
-                FIRMWARE_NAME=$(basename "$firmware")
-                FIRMWARE_SIZE=$(du -h "$firmware" | cut -f1)
-                echo "- **$FIRMWARE_NAME** ($FIRMWARE_SIZE)" >> "$GITHUB_WORKSPACE/构建报告.md"
-            done
-        else
-            echo "❌ **构建状态**: 失败" >> "$GITHUB_WORKSPACE/构建报告.md"
-        fi
-        echo "✅ 构建报告已生成"
 
     - name: 保存配置
       if: success() && ${{ inputs.save_config }}
       run: |
+        cd $BUILD_DIR
         echo "=== 保存配置文件到仓库 ==="
-        CONFIG_FILENAME="${{ github.event.inputs.device_name }}-${{ inputs.config_type }}.config"
-        mkdir -p $GITHUB_WORKSPACE/firmware-config/configs
-        if [ ! -f "$BUILD_DIR/.config" ]; then
-          echo "❌ 错误: 源配置文件不存在"
-          exit 1
-        fi
-        if [ -f "$GITHUB_WORKSPACE/firmware-config/configs/$CONFIG_FILENAME" ]; then
-          if diff -q "$BUILD_DIR/.config" "$GITHUB_WORKSPACE/firmware-config/configs/$CONFIG_FILENAME" >/dev/null; then
-            echo "ℹ️ 配置文件无变化，跳过保存"
-            echo "CONFIG_UNCHANGED=true" >> $GITHUB_ENV
-            exit 0
-          else
-            echo "✅ 检测到配置文件变化，将保存新配置"
-          fi
-        else
-          echo "✅ 配置文件不存在，将创建新配置"
-        fi
-        cp $BUILD_DIR/.config $GITHUB_WORKSPACE/firmware-config/configs/$CONFIG_FILENAME
-        if [ -f "$GITHUB_WORKSPACE/firmware-config/configs/$CONFIG_FILENAME" ]; then
-          echo "✅ 配置文件已保存为: firmware-config/configs/$CONFIG_FILENAME"
-          echo "CONFIG_UNCHANGED=false" >> $GITHUB_ENV
-        else
-          echo "❌ 错误: 配置文件保存失败"
-          exit 1
-        fi
-
-    - name: 提交配置
-      if: success() && ${{ inputs.save_config }} && env.CONFIG_UNCHANGED == 'false'
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        echo "=== 提交配置文件更改 ==="
         cd $GITHUB_WORKSPACE
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
-        git add firmware-config/configs/
-        git add "构建报告.md" 2>/dev/null || true
-        if git diff --staged --quiet; then
-          echo "ℹ️ 没有配置文件更改需要提交"
-          exit 0
-        fi
-        git commit -m "自动保存配置文件: ${{ github.event.inputs.device_name }}-${{ inputs.config_type }} [skip ci]"
-        git pull origin main --rebase --no-edit
-        git push origin main
-        echo "✅ 配置文件提交完成"
+        mkdir -p saved-configs
+        CONFIG_NAME="config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ inputs.config_type }}-$(date +%Y%m%d-%H%M%S).config"
+        cp $BUILD_DIR/.config saved-configs/$CONFIG_NAME
+        echo "✅ 配置文件已保存: saved-configs/$CONFIG_NAME"
+        
+        # 生成构建报告
+        echo "生成构建报告..."
+        cat > 构建报告.md << EOF
+        # OpenWrt 固件构建报告
+        - **构建时间**: $(date)
+        - **设备**: ${{ github.event.inputs.device_name }}
+        - **版本**: ${{ env.SELECTED_REPO }}:${{ env.SELECTED_BRANCH }}
+        - **配置类型**: ${{ inputs.config_type }}
+        - **固件文件**: 
+        $(cd $BUILD_DIR && find bin/targets -name "*.bin" -o -name "*.img" | sed 's/^/          - /')
+        
+        ## 启用的主要插件
+        $(cd $BUILD_DIR && grep "^CONFIG_PACKAGE_luci-app" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort | sed 's/^/        - /')
+        
+        ## 网络加速方案
+        $(cd $BUILD_DIR && if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then echo "        - ✅ TurboAcc 加速"; elif grep -q "CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then echo "        - ✅ BBR 加速"; else echo "        - ⚠️ 基础网络优化"; fi)
+        EOF
+        echo "✅ 构建报告生成完成"
 
     - name: 上传固件
       if: success()
