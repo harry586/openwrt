@@ -191,13 +191,27 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 恢复构建脚本 ==="
+        
+        # 确保必要的目录存在
+        mkdir -p config-templates
+        mkdir -p scripts
+        
         cd $GITHUB_WORKSPACE
+        
+        # 复制主构建管理器
         cp firmware-config/scripts/openwrt_build_manager.sh $BUILD_DIR/
         cp firmware-config/scripts/build_helpers.sh $BUILD_DIR/
+        
+        # 复制配置文件
         cp firmware-config/configs/*.config $BUILD_DIR/config-templates/
+        
         cd $BUILD_DIR
         chmod +x *.sh
         echo "✅ 脚本恢复完成"
+        echo "当前目录结构:"
+        ls -la
+        echo "config-templates 目录内容:"
+        ls -la config-templates/
 
     - name: 插件兼容性检查
       run: |
