@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# OpenWrt 版本检测脚本 - 动态版本选择（按指定顺序检测）
+# OpenWrt 版本检测脚本 - 支持用户友好版本选择
 
 set -e
 
@@ -31,11 +31,25 @@ declare -A DEVICE_PLATFORM_MAP=(
     ["mi3g"]="ramips"
 )
 
-# 版本检测顺序定义
-# ImmortalWrt: 次稳定版 -> 次次稳定版 -> ... -> 较新古老版本 -> 最古老版本
-IMMORTALWRT_VERSIONS=("23.05" "22.03" "21.02" "19.07" "18.06" "master")
+# 版本检测顺序定义 - 使用实际的分支名称
+IMMORTALWRT_VERSIONS=("openwrt-23.05" "openwrt-22.03" "openwrt-21.02" "openwrt-19.07" "openwrt-18.06" "master")
 LEDE_VERSIONS=("17.01" "reborn" "master")
-OPENWRT_VERSIONS=("23.05" "22.03" "21.02" "19.07" "18.06" "master")
+OPENWRT_VERSIONS=("openwrt-23.05" "openwrt-22.03" "openwrt-21.02" "openwrt-19.07" "openwrt-18.06" "master")
+
+# 显示版本选择帮助
+show_version_help() {
+    echo ""
+    echo "=== 可用版本说明 ==="
+    echo "🔹 23.05    - 最新稳定版 (推荐)"
+    echo "🔹 22.03    - 稳定版"
+    echo "🔹 21.02    - 旧稳定版"
+    echo "🔹 19.07    - 老旧版本"
+    echo "🔹 18.06    - 很老版本"
+    echo "🔹 master   - 开发版 (最新功能，可能不稳定)"
+    echo "🔹 auto     - 自动检测 (默认)"
+    echo ""
+    echo "对于大多数用户，推荐选择 'auto' 或 '23.05'"
+}
 
 # 主检测函数
 detect_best_version() {
@@ -45,16 +59,19 @@ detect_best_version() {
     
     echo "=== OpenWrt 智能版本检测 ==="
     echo "目标设备: $device_name"
-    echo "用户指定版本: ${user_specified_version:-未指定}"
+    echo "用户选择版本: ${user_specified_version:-自动检测}"
     echo "老旧设备模式: $is_old_device"
+    
+    # 显示版本帮助信息
+    show_version_help
     
     # 如果用户指定了版本，优先使用
     if [ -n "$user_specified_version" ]; then
-        log_info "使用用户指定版本: $user_specified_version"
+        log_info "使用用户选择版本: $user_specified_version"
         if parse_version_spec "$user_specified_version"; then
             return 0
         else
-            log_error "用户指定版本解析失败"
+            log_error "用户选择版本解析失败"
             return 1
         fi
     fi
@@ -197,6 +214,12 @@ parse_version_spec() {
         branch="$version_spec"
     fi
     
+    # 如果用户输入的版本号没有前缀，自动添加 openwrt- 前缀
+    if [[ "$branch" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        branch="openwrt-$branch"
+        log_info "自动添加分支前缀: $branch"
+    fi
+    
     case "$repo" in
         "immortalwrt")
             export SELECTED_REPO="immortalwrt"
@@ -244,16 +267,17 @@ check_branch_exists() {
 # 主函数
 main() {
     if [ $# -lt 1 ]; then
-        echo "用法: $0 <设备名称> [版本规格] [是否老旧设备]"
+        echo "用法: $0 <设备名称> [版本选择] [是否老旧设备]"
         echo ""
         echo "参数说明:"
         echo "  设备名称: 如 ac42u, acrh17, rt-acrh17, ac58u, acrh13"
-        echo "  版本规格: (可选) 如 openwrt-23.05 或 immortalwrt:master"
+        echo "  版本选择: (可选) 如 23.05, 22.03, auto 或 immortalwrt:openwrt-23.05"
         echo "  是否老旧设备: (可选) true 或 false，默认为 false"
         echo ""
+        show_version_help
         echo "示例:"
         echo "  $0 ac42u"
-        echo "  $0 acrh17 immortalwrt:openwrt-23.05"
+        echo "  $0 acrh17 23.05"
         echo "  $0 wr841n '' true"
         exit 1
     fi
