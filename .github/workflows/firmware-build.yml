@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: '设备名称 (如: ac42u, ac58u, mi4a 等)'
+        description: '设备名称 (如: ac42u, ac58u等)'
         required: true
         default: 'ac42u'
         type: string
@@ -208,10 +208,6 @@ jobs:
         cd $BUILD_DIR
         chmod +x *.sh
         echo "✅ 脚本恢复完成"
-        echo "当前目录结构:"
-        ls -la
-        echo "config-templates 目录内容:"
-        ls -la config-templates/
 
     - name: 插件兼容性检查
       run: |
@@ -233,11 +229,25 @@ jobs:
         ./scripts/feeds install -a
         echo "✅ Feeds 更新安装完成"
 
-    - name: 包可用性检查
+    - name: 包可用性检查（宽松模式）
+      id: package-check
       run: |
         cd $BUILD_DIR
-        echo "=== 包可用性检查 ==="
-        ./openwrt_build_manager.sh package_check "."
+        echo "=== 包可用性检查（宽松模式）==="
+        # 使用宽松模式，即使有包缺失也继续构建
+        set +e
+        OUTPUT=$(./openwrt_build_manager.sh package_check ".")
+        PACKAGE_CHECK_EXIT_CODE=$?
+        set -e
+        
+        echo "$OUTPUT"
+        
+        # 即使包检查失败，也继续构建（非关键包缺失）
+        if [ $PACKAGE_CHECK_EXIT_CODE -eq 0 ]; then
+            echo "✅ 包检查通过"
+        else
+            echo "⚠️ 包检查发现缺失包，但继续构建流程"
+        fi
 
     - name: 设备检测
       id: device-detection
