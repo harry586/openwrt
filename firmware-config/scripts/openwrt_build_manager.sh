@@ -32,7 +32,6 @@ show_usage() {
     echo "  custom_integrate  - 自定义文件集成 <工作空间目录>"
     echo "  package_check     - 包可用性检查 [构建目录]"
     echo "  error_analyze     - 错误分析 [构建目录]"
-    echo "  pre_download      - 预下载依赖包"
     echo "  all               - 执行完整构建流程"
     echo ""
     echo "示例:"
@@ -240,12 +239,37 @@ plugin_check() {
     log_info "=== 插件兼容性检查 ==="
     echo "目标版本: $branch"
     
-    # 插件兼容性数据库
+    # 插件兼容性数据库 - 扩展更多插件
     declare -A PLUGIN_COMPATIBILITY=(
+        # 网络加速插件
         ["turboacc"]="22.03 23.05"
         ["luci-app-turboacc"]="22.03 23.05"
         ["kmod-nft-fullcone"]="22.03 23.05"
         ["kmod-shortcut-fe"]="22.03 23.05"
+        
+        # 网络工具
+        ["luci-app-sqm"]="21.02 22.03 23.05"
+        ["luci-app-upnp"]="19.07 21.02 22.03 23.05"
+        ["luci-app-wol"]="19.07 21.02 22.03 23.05"
+        
+        # 存储和文件共享
+        ["luci-app-samba4"]="21.02 22.03 23.05"
+        ["luci-app-vsftpd"]="19.07 21.02 22.03 23.05"
+        
+        # 网络服务
+        ["luci-app-smartdns"]="21.02 22.03 23.05"
+        ["luci-app-arpbind"]="19.07 21.02 22.03 23.05"
+        
+        # 系统工具
+        ["luci-app-cpulimit"]="21.02 22.03 23.05"
+        ["luci-app-diskman"]="21.02 22.03 23.05"
+        ["luci-app-accesscontrol"]="19.07 21.02 22.03 23.05"
+        ["luci-app-vlmcsd"]="19.07 21.02 22.03 23.05"
+        
+        # 基础插件
+        ["luci-theme-bootstrap"]="18.06 19.07 21.02 22.03 23.05"
+        ["luci-theme-material"]="19.07 21.02 22.03 23.05"
+        ["luci-app-firewall"]="18.06 19.07 21.02 22.03 23.05"
     )
     
     check_plugin() {
@@ -287,10 +311,40 @@ plugin_check() {
     check_plugin "$branch" "kmod-shortcut-fe"
     
     echo ""
+    echo "=== 网络工具插件兼容性 ==="
+    check_plugin "$branch" "luci-app-sqm"
+    check_plugin "$branch" "luci-app-upnp"
+    check_plugin "$branch" "luci-app-wol"
+    
+    echo ""
+    echo "=== 存储和文件共享插件兼容性 ==="
+    check_plugin "$branch" "luci-app-samba4"
+    check_plugin "$branch" "luci-app-vsftpd"
+    
+    echo ""
+    echo "=== 网络服务插件兼容性 ==="
+    check_plugin "$branch" "luci-app-smartdns"
+    check_plugin "$branch" "luci-app-arpbind"
+    
+    echo ""
+    echo "=== 系统工具插件兼容性 ==="
+    check_plugin "$branch" "luci-app-cpulimit"
+    check_plugin "$branch" "luci-app-diskman"
+    check_plugin "$branch" "luci-app-accesscontrol"
+    check_plugin "$branch" "luci-app-vlmcsd"
+    
+    echo ""
+    echo "=== 基础插件兼容性 ==="
+    check_plugin "$branch" "luci-theme-bootstrap"
+    check_plugin "$branch" "luci-theme-material"
+    check_plugin "$branch" "luci-app-firewall"
+    
+    echo ""
     echo "=== 兼容性说明 ==="
-    echo "🔹 22.03/23.05 - 完全支持 TurboAcc 加速"
-    echo "🔹 21.02       - 基础网络优化支持"
-    echo "🔹 19.07及以下 - 仅基础网络功能"
+    echo "🔹 22.03/23.05 - 完全支持所有插件"
+    echo "🔹 21.02       - 支持大部分插件"
+    echo "🔹 19.07       - 支持基础插件"
+    echo "🔹 18.06       - 仅支持核心功能"
     echo "🔹 master      - 开发版，兼容性不确定"
 }
 
@@ -409,6 +463,14 @@ config_load() {
     else
         echo "ℹ️ 版本 $selected_branch 使用最小网络配置"
     fi
+    
+    # 解决包冲突问题
+    echo "=== 解决包冲突 ==="
+    echo "# 解决包冲突" >> .config
+    echo "# CONFIG_PACKAGE_odhcpd-ipv6only is not set" >> .config
+    echo "# CONFIG_PACKAGE_vsftpd-tls is not set" >> .config
+    echo "CONFIG_PACKAGE_odhcpd=y" >> .config
+    echo "CONFIG_PACKAGE_vsftpd=y" >> .config
     
     # 处理用户自定义包
     if [ -n "$extra_packages" ]; then
@@ -644,7 +706,7 @@ package_check() {
             
             # 如果都没有找到，标记为缺失
             MISSING_PACKAGES+=("$original_pkg")
-            echo "❌ $original_pkg"
+            echo "❌ $original_pkg (在feeds中未找到)"
             return 1
         fi
     }
@@ -681,7 +743,7 @@ package_check() {
         echo ""
         echo "=== 缺失的包 ==="
         for pkg in "${MISSING_PACKAGES[@]}"; do
-            echo "  $pkg"
+            echo "  ❌ $pkg"
         done
         
         echo ""
@@ -729,8 +791,21 @@ error_analyze() {
     
     log_info "=== 错误分析 ==="
     
+    # 查找最新的构建日志
+    local build_log=""
+    if [ -f "build_detailed.log" ]; then
+        build_log="build_detailed.log"
+    else
+        # 查找其他可能的日志文件
+        build_log=$(find . -name "*.log" -type f | grep -E "(build|error|compile)" | head -1)
+        if [ -z "$build_log" ]; then
+            build_log=$(ls -t *.log 2>/dev/null | head -1)
+        fi
+    fi
+    
     echo "=== 固件构建错误分析报告 ===" > error_analysis.log
     echo "生成时间: $(date)" >> error_analysis.log
+    echo "使用的日志文件: ${build_log:-未找到}" >> error_analysis.log
     echo "" >> error_analysis.log
     
     echo "=== 构建结果摘要 ===" >> error_analysis.log
@@ -743,34 +818,37 @@ error_analyze() {
     fi
     echo "" >> error_analysis.log
     
-    echo "=== 关键错误检查 ===" >> error_analysis.log
-    if [ -f "build_detailed.log" ]; then
-        echo "检查日志文件: build_detailed.log" >> error_analysis.log
+    if [ -n "$build_log" ] && [ -f "$build_log" ]; then
+        echo "=== 关键错误检查 ===" >> error_analysis.log
         
         # 编译错误
         echo "❌ 发现编译错误:" >> error_analysis.log
-        grep -E "Error [0-9]|error:" build_detailed.log | head -10 >> error_analysis.log || echo "无关键编译错误" >> error_analysis.log
+        grep -E "Error [0-9]|error:" "$build_log" | head -10 >> error_analysis.log || echo "无关键编译错误" >> error_analysis.log
         
         # Makefile错误
         echo "" >> error_analysis.log
         echo "❌ Makefile执行错误:" >> error_analysis.log
-        grep "make.*Error" build_detailed.log | head -10 >> error_analysis.log || echo "无Makefile错误" >> error_analysis.log
+        grep "make.*Error" "$build_log" | head -10 >> error_analysis.log || echo "无Makefile错误" >> error_analysis.log
         
-        # 被忽略的错误
+        # 文件冲突错误
         echo "" >> error_analysis.log
-        echo "⚠️ 被忽略的错误:" >> error_analysis.log
-        grep "Error.*ignored" build_detailed.log >> error_analysis.log || echo "无被忽略错误" >> error_analysis.log
+        echo "❌ 文件冲突错误:" >> error_analysis.log
+        grep -E "file.*already provided|check_data_file_clashes" "$build_log" | head -10 >> error_analysis.log || echo "无文件冲突错误" >> error_analysis.log
         
         # 文件缺失错误
         echo "" >> error_analysis.log
         echo "❌ 文件缺失错误:" >> error_analysis.log
-        grep -E "No such file|file not found" build_detailed.log | head -5 >> error_analysis.log || echo "无文件缺失错误" >> error_analysis.log
+        grep -E "No such file|file not found" "$build_log" | head -5 >> error_analysis.log || echo "无文件缺失错误" >> error_analysis.log
     else
         echo "未找到构建日志文件" >> error_analysis.log
     fi
     echo "" >> error_analysis.log
     
     echo "=== 错误原因分析和建议 ===" >> error_analysis.log
+    echo "⚠️  文件冲突错误" >> error_analysis.log
+    echo "💡 可能原因: 同时安装了冲突的包（如 odhcpd 和 odhcpd-ipv6only）" >> error_analysis.log
+    echo "💡 解决方案: 在配置文件中只启用其中一个包" >> error_analysis.log
+    echo "" >> error_analysis.log
     echo "⚠️  文件缺失错误" >> error_analysis.log
     echo "💡 可能原因: 源码不完整或下载失败" >> error_analysis.log
     echo "" >> error_analysis.log
@@ -778,66 +856,8 @@ error_analyze() {
     echo "💡 这是并行编译的正常现象，不影响最终结果" >> error_analysis.log
     echo "" >> error_analysis.log
     
-    echo "=== 详细错误分类 ===" >> error_analysis.log
-    echo "开始收集和分析错误日志..." >> error_analysis.log
-    echo "使用日志文件: build_detailed.log" >> error_analysis.log
-    echo "" >> error_analysis.log
-    
-    echo "1. 严重错误 (Failed):" >> error_analysis.log
-    grep -i "failed" build_detailed.log | head -5 >> error_analysis.log || echo "无" >> error_analysis.log
-    echo "" >> error_analysis.log
-    
-    echo "2. 编译错误 (error:):" >> error_analysis.log
-    grep "error:" build_detailed.log | head -5 >> error_analysis.log || echo "无" >> error_analysis.log
-    echo "" >> error_analysis.log
-    
-    echo "3. 退出错误 (error 1/error 2):" >> error_analysis.log
-    grep -E "error 1|error 2" build_detailed.log | head -5 >> error_analysis.log || echo "无" >> error_analysis.log
-    echo "" >> error_analysis.log
-    
-    echo "4. 文件缺失错误:" >> error_analysis.log
-    grep -E "No such file|file not found" build_detailed.log | head -5 >> error_analysis.log || echo "无" >> error_analysis.log
-    echo "" >> error_analysis.log
-    
-    echo "5. 管道错误:" >> error_analysis.log
-    grep "Broken pipe" build_detailed.log | head -5 >> error_analysis.log || echo "无" >> error_analysis.log
-    echo "" >> error_analysis.log
-    
-    echo "6. 缺失依赖错误:" >> error_analysis.log
-    grep "depends on" build_detailed.log | head -5 >> error_analysis.log || echo "无" >> error_analysis.log
-    echo "" >> error_analysis.log
-    
-    echo "错误分析完成" >> error_analysis.log
-    
     # 输出到控制台
     cat error_analysis.log
-}
-
-# 预下载依赖包
-pre_download() {
-    log_info "=== 预下载依赖包 ==="
-    
-    DOWNLOAD_DIR="dl"
-    mkdir -p "$DOWNLOAD_DIR"
-    
-    # 常见依赖包URL
-    COMMON_PACKAGES=(
-        "https://github.com/jow-/csstidy-cpp/archive/707feaec556c40c999514a598b1a1ea5b50826c6.tar.gz"
-        "https://downloads.openwrt.org/releases/21.02.7/packages/x86_64/base/Packages.gz"
-    )
-    
-    echo "下载基础依赖包..."
-    for url in "${COMMON_PACKAGES[@]}"; do
-        filename=$(basename "$url")
-        echo "下载: $filename"
-        wget --tries=3 --timeout=30 --no-check-certificate -O "$DOWNLOAD_DIR/$filename.tmp" "$url" && \
-            mv "$DOWNLOAD_DIR/$filename.tmp" "$DOWNLOAD_DIR/$filename" && \
-            echo "✅ 下载成功: $filename" || \
-            echo "⚠️ 下载失败: $filename (可能不影响构建)"
-    done
-    
-    echo "=== 预下载完成 ==="
-    ls -la "$DOWNLOAD_DIR" | head -10
 }
 
 # 完整构建流程
@@ -877,9 +897,6 @@ main() {
             ;;
         "error_analyze")
             error_analyze "$@"
-            ;;
-        "pre_download")
-            pre_download "$@"
             ;;
         "all")
             build_all "$@"
