@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# OpenWrt 构建辅助功能脚本
+# OpenWrt 构建辅助功能脚本 - 完整版
 # 包含诊断、包检查等辅助功能
 
 set -e
@@ -18,7 +18,7 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# 包诊断功能 - 修复版
+# 包诊断功能 - 完整版
 diagnose_packages() {
     local build_dir="${1:-.}"
     cd "$build_dir"
@@ -44,10 +44,15 @@ diagnose_packages() {
     # 检查每个包是否在feeds中
     MISSING_COUNT=0
     MISSING_PACKAGES=()
+    AVAILABLE_COUNT=0
+    
+    # 预加载feeds列表
+    local feeds_list=$(./scripts/feeds list 2>/dev/null)
     
     for pkg in $CONFIG_PACKAGES; do
-        if ./scripts/feeds list | grep -q "^$pkg"; then
+        if echo "$feeds_list" | grep -q "^$pkg"; then
             echo "✅ $pkg"
+            AVAILABLE_COUNT=$((AVAILABLE_COUNT + 1))
         else
             echo "❌ $pkg"
             MISSING_COUNT=$((MISSING_COUNT + 1))
@@ -57,7 +62,8 @@ diagnose_packages() {
     
     echo ""
     echo "=== 检查结果 ==="
-    echo "缺失包数量: $MISSING_COUNT"
+    echo "可用的包数量: $AVAILABLE_COUNT"
+    echo "缺失的包数量: $MISSING_COUNT"
     
     if [ $MISSING_COUNT -gt 0 ]; then
         log_error "发现 $MISSING_COUNT 个缺失包，构建可能失败！"
@@ -68,11 +74,14 @@ diagnose_packages() {
         for pkg in "${MISSING_PACKAGES[@]}"; do
             echo "❌ $pkg"
             # 尝试查找相似的包
-            SIMILAR=$(./scripts/feeds list | grep -i "$pkg" | head -3 | tr '\n' ' ')
+            SIMILAR=$(echo "$feeds_list" | grep -i "$pkg" | head -3 | tr '\n' ' ')
             if [ -n "$SIMILAR" ]; then
                 echo "   相似包: $SIMILAR"
             fi
         done
+        
+        # 检查关键包是否缺失
+        check_critical_missing "${MISSING_PACKAGES[@]}"
         return 1
     else
         log_success "所有包都在feeds中可用"
@@ -81,19 +90,19 @@ diagnose_packages() {
     echo ""
     echo "=== 按类别检查包 ==="
     echo "内核模块 (前10个):"
-    ./scripts/feeds list | grep -E "^(kmod-|usb|fs-)" | sort | head -10
+    echo "$feeds_list" | grep -E "^(kmod-|usb|fs-)" | sort | head -10
     
     echo ""
     echo "Luci应用 (前10个):"
-    ./scripts/feeds list | grep -E "^(luci-)" | sort | head -10
+    echo "$feeds_list" | grep -E "^(luci-)" | sort | head -10
     
     echo ""
     echo "网络工具 (前10个):"
-    ./scripts/feeds list | grep -E "^(firewall|dnsmasq|hostapd|wpad)" | sort | head -10
+    echo "$feeds_list" | grep -E "^(firewall|dnsmasq|hostapd|wpad)" | sort | head -10
     
     echo ""
     echo "系统工具 (前10个):"
-    ./scripts/feeds list | grep -E "^(fdisk|blkid|lsblk|block-mount|e2fsprogs)" | sort | head -10
+    echo "$feeds_list" | grep -E "^(fdisk|blkid|lsblk|block-mount|e2fsprogs)" | sort | head -10
     
     echo ""
     echo "=== 建议 ==="
@@ -104,6 +113,33 @@ diagnose_packages() {
     echo "4. 查看 OpenWrt 官方文档获取正确的包名"
     
     return 0
+}
+
+# 检查关键缺失包
+check_critical_missing() {
+    local missing_packages=("$@")
+    local critical_packages=("firewall" "dnsmasq" "luci-base" "kmod-usb-storage" "block-mount")
+    local critical_missing=0
+    
+    echo ""
+    echo "=== 关键包检查 ==="
+    
+    for critical in "${critical_packages[@]}"; do
+        for missing in "${missing_packages[@]}"; do
+            if [ "$missing" = "$critical" ]; then
+                echo "❌ 关键包缺失: $critical"
+                critical_missing=1
+            fi
+        done
+    done
+    
+    if [ $critical_missing -eq 1 ]; then
+        log_error "有关键包缺失，构建将失败"
+        return 1
+    else
+        log_warning "有非关键包缺失，但关键包都存在，构建可以继续"
+        return 0
+    fi
 }
 
 # 包依赖检查
