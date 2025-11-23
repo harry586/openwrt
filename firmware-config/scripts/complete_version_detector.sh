@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# OpenWrt 版本检测脚本 - 动态版本选择（稳定版优先）
+# OpenWrt 版本检测脚本 - 动态版本选择（按指定顺序检测）
 
 set -e
 
@@ -31,50 +31,11 @@ declare -A DEVICE_PLATFORM_MAP=(
     ["mi3g"]="ramips"
 )
 
-# 动态获取稳定版本列表
-get_stable_versions() {
-    local repo_url="$1"
-    
-    log_info "获取 $repo_url 的稳定版本..."
-    
-    # 获取远程分支列表，过滤出稳定版本
-    local stable_versions=$(git ls-remote --heads "$repo_url" 2>/dev/null | \
-        grep -E 'openwrt-[0-9]+\.[0-9]+$' | \
-        sed 's|.*refs/heads/||' | \
-        sort -Vr | head -5)  # 按版本号逆序排列，取前5个
-    
-    if [ -z "$stable_versions" ]; then
-        # 如果无法获取，使用默认的稳定版本列表
-        log_warning "无法动态获取稳定版本，使用默认列表"
-        echo "openwrt-23.05 openwrt-22.03 openwrt-21.02"
-        return 1
-    fi
-    
-    echo "$stable_versions"
-    return 0
-}
-
-# 动态获取所有可用版本
-get_all_versions() {
-    local repo_url="$1"
-    
-    log_info "获取 $repo_url 的所有版本..."
-    
-    # 获取所有分支，排除master/main开发版
-    local all_versions=$(git ls-remote --heads "$repo_url" 2>/dev/null | \
-        grep -v -E 'master|main' | \
-        sed 's|.*refs/heads/||' | \
-        sort -Vr | head -10)
-    
-    if [ -z "$all_versions" ]; then
-        log_warning "无法获取版本列表，使用默认值"
-        echo "openwrt-23.05 openwrt-22.03 openwrt-21.02"
-        return 1
-    fi
-    
-    echo "$all_versions"
-    return 0
-}
+# 版本检测顺序定义
+# ImmortalWrt: 次稳定版 -> 次次稳定版 -> ... -> 较新古老版本 -> 最古老版本
+IMMORTALWRT_VERSIONS=("23.05" "22.03" "21.02" "19.07" "18.06" "master")
+LEDE_VERSIONS=("17.01" "reborn" "master")
+OPENWRT_VERSIONS=("23.05" "22.03" "21.02" "19.07" "18.06" "master")
 
 # 主检测函数
 detect_best_version() {
@@ -100,128 +61,43 @@ detect_best_version() {
     
     log_info "开始智能版本检测..."
     
-    # 获取设备平台
-    local device_platform="${DEVICE_PLATFORM_MAP[$device_name]}"
-    if [ -z "$device_platform" ]; then
-        log_warning "未知设备平台，使用默认检测"
-        device_platform="generic"
-    else
-        log_info "设备平台: $device_platform"
-    fi
-    
-    # 根据设备和平台选择合适的版本
-    if [ "$is_old_device" = "true" ]; then
-        log_info "检测到老旧设备，选择兼容性最好的稳定版本"
-        select_compatible_version "$device_name" "$device_platform"
-    else
-        log_info "检测到现代设备，选择最新稳定版本"
-        select_stable_version "$device_name" "$device_platform"
-    fi
-}
-
-# 选择稳定版本（现代设备）
-select_stable_version() {
-    local device_name="$1"
-    local device_platform="$2"
-    
-    log_info "选择最新稳定版本..."
-    
-    # 动态获取 immortalwrt 的稳定版本
-    local immortalwrt_versions=$(get_stable_versions "https://github.com/immortalwrt/immortalwrt.git")
-    local openwrt_versions=$(get_stable_versions "https://git.openwrt.org/openwrt/openwrt.git")
-    
-    log_info "ImmortalWrt 可用版本: $immortalwrt_versions"
-    log_info "OpenWrt 可用版本: $openwrt_versions"
-    
-    # 合并版本列表并去重，按版本号排序
-    local all_versions=$(echo "$immortalwrt_versions $openwrt_versions" | tr ' ' '\n' | sort -Vr | uniq)
-    log_info "所有可用稳定版本: $all_versions"
-    
-    # 按照版本号从高到低尝试
-    for version in $all_versions; do
-        # 优先尝试 immortalwrt
+    # 按照指定顺序检测版本
+    # 1. 首先检测 ImmortalWrt
+    log_info "=== 检测 ImmortalWrt 版本 ==="
+    for version in "${IMMORTALWRT_VERSIONS[@]}"; do
+        log_info "尝试 ImmortalWrt $version"
         if try_branch "immortalwrt" "https://github.com/immortalwrt/immortalwrt.git" "$version" "$device_name"; then
-            return 0
-        fi
-        
-        # 然后尝试 openwrt
-        if try_branch "openwrt" "https://git.openwrt.org/openwrt/openwrt.git" "$version" "$device_name"; then
+            log_success "✅ 选择 ImmortalWrt $version"
             return 0
         fi
     done
     
-    # 如果所有稳定版本都失败，尝试获取所有可用版本
-    log_warning "所有稳定版本检测失败，尝试所有可用版本..."
-    select_fallback_version "$device_name" "$device_platform"
-}
-
-# 选择兼容版本（老旧设备）
-select_compatible_version() {
-    local device_name="$1"
-    local device_platform="$2"
-    
-    log_info "选择兼容性最好的稳定版本..."
-    
-    # 动态获取所有版本（按版本号正序，从旧到新）
-    local immortalwrt_versions=$(get_all_versions "https://github.com/immortalwrt/immortalwrt.git")
-    local openwrt_versions=$(get_all_versions "https://git.openwrt.org/openwrt/openwrt.git")
-    
-    # 合并版本列表并去重，按版本号正序排列（从旧到新）
-    local all_versions=$(echo "$immortalwrt_versions $openwrt_versions" | tr ' ' '\n' | sort -V | uniq)
-    log_info "所有可用版本(从旧到新): $all_versions"
-    
-    # 按照版本号从低到高尝试（优先旧版本）
-    for version in $all_versions; do
-        # 优先尝试 immortalwrt
-        if try_branch "immortalwrt" "https://github.com/immortalwrt/immortalwrt.git" "$version" "$device_name"; then
-            return 0
-        fi
-        
-        # 然后尝试 openwrt
-        if try_branch "openwrt" "https://git.openwrt.org/openwrt/openwrt.git" "$version" "$device_name"; then
+    # 2. 然后检测 LEDE
+    log_info "=== ImmortalWrt 无匹配，检测 LEDE 版本 ==="
+    for version in "${LEDE_VERSIONS[@]}"; do
+        log_info "尝试 LEDE $version"
+        if try_branch "lede" "https://github.com/coolsnowwolf/lede.git" "$version" "$device_name"; then
+            log_success "✅ 选择 LEDE $version"
             return 0
         fi
     done
     
-    # 如果所有版本都失败，使用回退方案
-    log_warning "所有版本检测失败，使用回退方案..."
-    select_fallback_version "$device_name" "$device_platform"
-}
-
-# 回退版本选择
-select_fallback_version() {
-    local device_name="$1"
-    local device_platform="$2"
-    
-    log_warning "使用回退版本选择方案..."
-    
-    # 回退方案：尝试一些已知的稳定版本
-    local fallback_versions="openwrt-23.05 openwrt-22.03 openwrt-21.02"
-    
-    for version in $fallback_versions; do
-        # 优先尝试 immortalwrt
-        if try_branch "immortalwrt" "https://github.com/immortalwrt/immortalwrt.git" "$version" "$device_name"; then
-            return 0
-        fi
-        
-        # 然后尝试 openwrt
-        if try_branch "openwrt" "https://git.openwrt.org/openwrt/openwrt.git" "$version" "$device_name"; then
+    # 3. 最后检测 OpenWrt
+    log_info "=== LEDE 无匹配，检测 OpenWrt 版本 ==="
+    for version in "${OPENWRT_VERSIONS[@]}"; do
+        log_info "尝试 OpenWrt $version"
+        if try_branch "openwrt" "https://github.com/openwrt/openwrt.git" "$version" "$device_name"; then
+            log_success "✅ 选择 OpenWrt $version"
             return 0
         fi
     done
     
-    # 最终回退到 immortalwrt master
-    log_warning "所有版本检测失败，使用最终回退版本: immortalwrt master"
-    if try_branch "immortalwrt" "https://github.com/immortalwrt/immortalwrt.git" "master" "$device_name"; then
-        return 0
-    fi
-    
-    # 如果连master都失败，设置默认值
-    log_error "所有版本选择都失败了！"
+    # 如果都没有匹配，使用默认值
+    log_warning "⚠️ 无匹配版本，使用默认值"
     export SELECTED_REPO="immortalwrt"
     export SELECTED_BRANCH="master"
     export SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-    return 1
+    return 0
 }
 
 # 尝试特定分支
@@ -251,7 +127,7 @@ try_branch() {
     fi
 }
 
-# 检查分支支持 - 改进版
+# 检查分支支持
 check_branch_support() {
     local repo_url="$1"
     local branch="$2"
@@ -299,15 +175,6 @@ check_branch_support() {
         fi
     fi
     
-    # 方法4: 检查 profiles 目录
-    if [ $device_supported -eq 0 ]; then
-        local profile_matches=$(find . -path "*/profiles/*" -name "*.mk" -type f -exec grep -l "$device_name" {} \; 2>/dev/null | head -3)
-        if [ -n "$profile_matches" ]; then
-            log_success "✅ 在profiles中找到设备: $(echo $profile_matches | tr '\n' ' ')"
-            device_supported=1
-        fi
-    fi
-    
     cd /
     rm -rf "$temp_dir"
     
@@ -337,11 +204,11 @@ parse_version_spec() {
             ;;
         "openwrt")
             export SELECTED_REPO="openwrt"
-            export SELECTED_REPO_URL="https://git.openwrt.org/openwrt/openwrt.git"
+            export SELECTED_REPO_URL="https://github.com/openwrt/openwrt.git"
             ;;
         "lede")
             export SELECTED_REPO="lede"
-            export SELECTED_REPO_URL="https://git.lede-project.org/source.git"
+            export SELECTED_REPO_URL="https://github.com/coolsnowwolf/lede.git"
             ;;
         *)
             log_error "未知仓库: $repo"
