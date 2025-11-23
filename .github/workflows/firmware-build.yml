@@ -577,23 +577,13 @@ jobs:
         # 检查 turboacc 是否已安装
         if [ -d "./package/turboacc" ]; then
             echo "✅ turboacc 包已存在，启用相关配置"
-            TURBOACC_CONFIG="
-CONFIG_PACKAGE_luci-app-turboacc=y
-CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y
-CONFIG_PACKAGE_kmod-nft-fullcone=y
-"
+            TURBOACC_CONFIG="CONFIG_PACKAGE_luci-app-turboacc=y CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y CONFIG_PACKAGE_kmod-nft-fullcone=y"
             for config in $TURBOACC_CONFIG; do
                 echo "$config" >> .config
             done
         else
             echo "⚠️ turboacc 未安装，启用基础网络优化"
-            BASIC_NETWORK_OPT="
-CONFIG_PACKAGE_kmod-nft-core=y
-CONFIG_PACKAGE_kmod-nft-nat=y
-CONFIG_PACKAGE_kmod-ipt-filter=y
-CONFIG_PACKAGE_iptables-mod-conntrack-extra=y
-CONFIG_PACKAGE_iptables-mod-ipopt=y
-"
+            BASIC_NETWORK_OPT="CONFIG_PACKAGE_kmod-nft-core=y CONFIG_PACKAGE_kmod-nft-nat=y CONFIG_PACKAGE_kmod-ipt-filter=y CONFIG_PACKAGE_iptables-mod-conntrack-extra=y CONFIG_PACKAGE_iptables-mod-ipopt=y"
             for config in $BASIC_NETWORK_OPT; do
                 echo "$config" >> .config
             done
@@ -608,7 +598,6 @@ CONFIG_PACKAGE_iptables-mod-ipopt=y
         echo "=== 预添加基础内核配置 ==="
         echo "# 基础内核配置" >> .config
         ESSENTIAL_KERNEL_CONFIGS="CONFIG_NF_CONNTRACK=y CONFIG_NF_NAT=y CONFIG_NETFILTER_XTABLES=y CONFIG_IP_NF_IPTABLES=y CONFIG_NET_SCHED=y"
-        
         for config in $ESSENTIAL_KERNEL_CONFIGS; do
             echo "$config" >> .config
         done
@@ -639,7 +628,6 @@ CONFIG_PACKAGE_iptables-mod-ipopt=y
         # 第六步：清理不需要的插件
         echo "=== 清理不需要的插件 ==="
         UNWANTED_PLUGINS="luci-app-rclone_INCLUDE_rclone-ng luci-app-rclone_INCLUDE_rclone-webui luci-app-timewol luci-app-passwall_INCLUDE_Haproxy luci-app-passwall_INCLUDE_Shadowsocks_Rust_Client luci-app-passwall_INCLUDE_Shadowsocks_Rust_Server luci-app-passwall_INCLUDE_Simple_Obfs luci-app-passwall_INCLUDE_SingBox luci-app-passwall_INCLUDE_V2ray_Geoview luci-app-passwall_INCLUDE_V2ray_Plugin luci-app-passwall_INCLUDE_Xray"
-        
         for plugin in $UNWANTED_PLUGINS; do
             if grep -q "CONFIG_PACKAGE_${plugin}=y" .config; then
                 echo "🚫 删除插件: $plugin"
@@ -670,23 +658,15 @@ CONFIG_PACKAGE_iptables-mod-ipopt=y
         
         if [ $DEFCONFIG_EXIT_CODE -ne 0 ]; then
             echo "❌ defconfig 执行失败，检查并修复配置问题"
-            
             # 检查是否是递归依赖问题
             if make -j1 defconfig 2>&1 | grep -q "recursive dependency"; then
                 echo "🔄 检测到递归依赖，清除有问题的配置"
-                
                 # 清除所有可能引起递归依赖的配置
-                PROBLEMATIC_CONFIGS="
-                CONFIG_PACKAGE_luci-app-turboacc
-                CONFIG_PACKAGE_kmod-nft-fullcone
-                CONFIG_PACKAGE_kmod-shortcut-fe
-                "
-                
+                PROBLEMATIC_CONFIGS="CONFIG_PACKAGE_luci-app-turboacc CONFIG_PACKAGE_kmod-nft-fullcone CONFIG_PACKAGE_kmod-shortcut-fe"
                 for config in $PROBLEMATIC_CONFIGS; do
                     sed -i "/${config}=y/d" .config
                     sed -i "/# ${config} is not set/d" .config
                 done
-                
                 # 重新运行 defconfig
                 make -j1 defconfig
             else
@@ -720,13 +700,11 @@ CONFIG_PACKAGE_iptables-mod-ipopt=y
         echo "=== 网络加速方案完整性检查 ==="
         if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
             echo "✅ turboacc 方案: 已启用"
-            # 由于可能存在递归依赖，我们只做基本检查，不强制要求所有依赖
             echo "⚠️ 注意: turboacc 已启用，但可能存在依赖限制"
         elif grep -q "CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
             echo "✅ 替代加速方案 (BBR): 已启用"
         else
             echo "⚠️ 未启用任何网络加速方案"
-            # 这里不再强制启用，因为可能在前面步骤已经尝试过但失败了
         fi
         echo "✅ 配置完整性检查完成（单线程模式）"
 
@@ -766,6 +744,8 @@ CONFIG_PACKAGE_iptables-mod-ipopt=y
                 echo "✅ 复制脚本: $(basename "$script")"
             done
         fi
+        
+        # 使用多个echo命令而不是heredoc
         echo '#!/bin/sh' > $BUILD_DIR/files/root/custom-install/build-time-install.sh
         echo 'echo "=== 开始构建时自定义安装 ==="' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
         echo '' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
@@ -794,6 +774,7 @@ CONFIG_PACKAGE_iptables-mod-ipopt=y
         echo 'rm -rf /root/custom-install' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
         echo 'echo "=== 构建时自定义安装完成 ==="' >> $BUILD_DIR/files/root/custom-install/build-time-install.sh
         chmod +x $BUILD_DIR/files/root/custom-install/build-time-install.sh
+        
         mkdir -p $BUILD_DIR/files/etc
         echo '#!/bin/sh' > $BUILD_DIR/files/etc/rc.local
         echo '' >> $BUILD_DIR/files/etc/rc.local
@@ -842,7 +823,6 @@ CONFIG_PACKAGE_iptables-mod-ipopt=y
         echo "🔍 下载前网络加速方案状态检查:"
         if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
             echo "✅ turboacc 方案: 已启用"
-            # 由于可能存在递归依赖问题，我们不再强制检查所有依赖
             echo "⚠️ 注意: turboacc 已启用，但可能存在依赖限制"
         elif grep -q "CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
             echo "✅ 替代加速方案 (BBR): 已启用"
@@ -872,7 +852,6 @@ CONFIG_PACKAGE_iptables-mod-ipopt=y
         make -j1 defconfig
         DEFCONFIG_EXIT_CODE=$?
         set -e
-        
         if [ $DEFCONFIG_EXIT_CODE -ne 0 ]; then
             echo "❌ defconfig 执行失败，但继续构建流程"
         fi
