@@ -116,10 +116,10 @@ jobs:
         # 复制主构建管理器
         cp firmware-config/scripts/openwrt_build_manager.sh $BUILD_DIR/
         cp firmware-config/scripts/build_helpers.sh $BUILD_DIR/
-        cp firmware-config/scripts/package_fix.sh $BUILD_DIR/
+        cp firmware-config/scripts/smart_package_matcher.sh $BUILD_DIR/
         
         # 复制配置文件
-        cp firmware-config/configs/*.config $BUILD_DIR/config-templates/
+        cp firmware-config/configs/base-template.config $BUILD_DIR/config-templates/
         
         cd $BUILD_DIR
         chmod +x *.sh
@@ -203,10 +203,10 @@ jobs:
         # 复制主构建管理器
         cp firmware-config/scripts/openwrt_build_manager.sh $BUILD_DIR/
         cp firmware-config/scripts/build_helpers.sh $BUILD_DIR/
-        cp firmware-config/scripts/package_fix.sh $BUILD_DIR/
+        cp firmware-config/scripts/smart_package_matcher.sh $BUILD_DIR/
         
         # 复制配置文件
-        cp firmware-config/configs/*.config $BUILD_DIR/config-templates/
+        cp firmware-config/configs/base-template.config $BUILD_DIR/config-templates/
         
         cd $BUILD_DIR
         chmod +x *.sh
@@ -256,10 +256,10 @@ jobs:
             exit 1
         fi
 
-    - name: 配置加载和冲突解决
+    - name: 配置加载和智能包匹配
       run: |
         cd $BUILD_DIR
-        echo "=== 配置加载和冲突解决 ==="
+        echo "=== 配置加载和智能包匹配 ==="
         
         # 显示插件信息
         echo "额外安装插件: ${{ inputs.extra_packages }}"
@@ -283,22 +283,21 @@ jobs:
             echo "✅ .config 文件已生成"
             echo "配置文件大小: $(wc -l < .config) 行"
             echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
+            
+            # 检查是否有缺失包报告
+            if [ -f "missing_packages.txt" ]; then
+                echo "⚠️  发现缺失包报告:"
+                cat missing_packages.txt
+            fi
+            
+            if [ -f "package_fix_report.txt" ]; then
+                echo "📋 包修复报告:"
+                cat package_fix_report.txt
+            fi
         else
             echo "❌ .config 文件未生成"
             exit 1
         fi
-
-    - name: 包名修复和映射
-      run: |
-        cd $BUILD_DIR
-        echo "=== 包名修复和映射 ==="
-        
-        # 运行包名修复
-        ./package_fix.sh fix_package_names "."
-        echo "✅ 包名修复完成"
-        
-        # 显示包状态报告
-        ./package_fix.sh package_status_report "."
 
     - name: 包可用性检查 (智能模式)
       id: package-check
@@ -306,18 +305,7 @@ jobs:
         cd $BUILD_DIR
         echo "=== 包可用性检查 ==="
         
-        # 首先运行包诊断
-        echo "=== 运行包诊断 ==="
-        ./build_helpers.sh diagnose_packages "."
-        DIAGNOSE_EXIT_CODE=$?
-        
-        if [ $DIAGNOSE_EXIT_CODE -ne 0 ]; then
-            echo "❌ 包诊断发现缺失包，停止构建"
-            exit 1
-        fi
-        
-        # 然后运行包检查
-        echo "=== 运行包检查 ==="
+        # 运行包检查
         OUTPUT=$(./openwrt_build_manager.sh package_check ".")
         PACKAGE_CHECK_EXIT_CODE=$?
         
@@ -367,11 +355,11 @@ jobs:
         if [ "${{ inputs.enable_cache }}" = "true" ]; then
             echo "🔄 启用编译缓存"
             # 保存详细日志
-            make -j$MAKE_JOBS V=s 2>&1 | tee logs/build.log
+            make -j$MAKE_JOBS V=s 2>&1 | tee -a build.log
             BUILD_EXIT_CODE=${PIPESTATUS[0]}
         else
             echo "🔄 普通编译模式"
-            make -j$MAKE_JOBS V=s 2>&1 | tee logs/build.log
+            make -j$MAKE_JOBS V=s 2>&1 | tee -a build.log
             BUILD_EXIT_CODE=${PIPESTATUS[0]}
         fi
         
@@ -388,6 +376,23 @@ jobs:
         cd $BUILD_DIR
         echo "=== 错误分析 ==="
         ./openwrt_build_manager.sh error_analyze "."
+
+    - name: 收集构建日志和报告
+      if: always()
+      run: |
+        cd $BUILD_DIR
+        echo "=== 收集构建日志和报告 ==="
+        
+        # 创建报告目录
+        mkdir -p build-reports
+        
+        # 收集重要文件
+        [ -f "build.log" ] && cp build.log build-reports/ || echo "构建日志不存在"
+        [ -f "missing_packages.txt" ] && cp missing_packages.txt build-reports/ || echo "缺失包报告不存在"
+        [ -f "package_fix_report.txt" ] && cp package_fix_report.txt build-reports/ || echo "包修复报告不存在"
+        [ -f ".config" ] && cp .config build-reports/final-config.txt || echo "最终配置不存在"
+        
+        echo "✅ 构建报告收集完成"
 
     - name: 固件文件检查
       if: success()
@@ -410,6 +415,14 @@ jobs:
       with:
         name: 固件-${{ github.event.inputs.device_name }}-$SELECTED_BRANCH-${{ inputs.config_type }}
         path: ${{ env.BUILD_DIR }}/bin/targets/
+        retention-days: 7
+
+    - name: 上传构建报告
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: 构建报告-${{ github.event.inputs.device_name }}-$SELECTED_BRANCH
+        path: ${{ env.BUILD_DIR }}/build-reports/
         retention-days: 7
 
     - name: 清理目录
