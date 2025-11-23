@@ -8,13 +8,26 @@ on:
         required: true
         default: 'ac42u'
         type: string
-      version_spec:
-        description: '版本规格 (可选，如: openwrt-23.05 或 immortalwrt:master)'
+      version_selection:
+        description: '版本选择 (推荐使用自动检测，或手动选择特定版本)'
+        required: true
+        type: choice
+        default: 'auto'
+        options:
+        - auto
+        - 23.05 (最新稳定版)
+        - 22.03 (稳定版)
+        - 21.02 (旧稳定版)
+        - 19.07 (老旧版本)
+        - 18.06 (很老版本)
+        - master (开发版)
+      custom_version:
+        description: '自定义版本 (仅在需要特定版本时填写，如: immortalwrt:openwrt-23.05)'
         required: false
         type: string
         default: ''
       config_type:
-        description: '配置类型 (minimal:基础功能, normal:完整功能, custom:自定义)'
+        description: '配置类型'
         required: true
         default: 'normal'
         type: choice
@@ -27,7 +40,7 @@ on:
         required: false
         type: string
       disabled_plugins:
-        description: '禁用插件 (空格分隔的包名，如: luci-app-accesscontrol luci-app-ddns)'
+        description: '禁用插件 (空格分隔的包名)'
         required: false
         type: string
         default: ''
@@ -37,7 +50,7 @@ on:
         default: true
         type: boolean
       enable_cache:
-        description: '启用编译缓存 (显著加速后续编译)'
+        description: '启用编译缓存'
         required: false
         default: true
         type: boolean
@@ -144,16 +157,18 @@ jobs:
           exit 1
         fi
 
-    - name: 智能版本检测
+    - name: 智能版本检测（优化版）
       id: version-detection
       run: |
         cd $BUILD_DIR
-        echo "=== 智能版本检测 ==="
+        echo "=== 智能版本检测（优化版）==="
         sudo chown -R $USER:$USER . 2>/dev/null || true
         chmod u+w . 2>/dev/null || true
         chmod +x *.sh 2>/dev/null || true
         echo "设备名称: ${{ github.event.inputs.device_name }}"
-        echo "版本规格: ${{ inputs.version_spec }}"
+        echo "版本选择: ${{ inputs.version_selection }}"
+        echo "自定义版本: ${{ inputs.custom_version }}"
+        
         if [ ! -f "complete_version_detector.sh" ]; then
           echo "❌ 错误: complete_version_detector.sh 不存在"
           ls -la
@@ -169,9 +184,50 @@ jobs:
                 ;;
         esac
         
+        # 根据用户选择确定版本规格
+        USER_VERSION=""
+        case "${{ inputs.version_selection }}" in
+            "auto")
+                echo "🎯 使用自动版本检测"
+                USER_VERSION=""
+                ;;
+            "23.05 (最新稳定版)")
+                echo "🎯 选择最新稳定版 23.05"
+                USER_VERSION="23.05"
+                ;;
+            "22.03 (稳定版)")
+                echo "🎯 选择稳定版 22.03"
+                USER_VERSION="22.03"
+                ;;
+            "21.02 (旧稳定版)")
+                echo "🎯 选择旧稳定版 21.02"
+                USER_VERSION="21.02"
+                ;;
+            "19.07 (老旧版本)")
+                echo "🎯 选择老旧版本 19.07"
+                USER_VERSION="19.07"
+                ;;
+            "18.06 (很老版本)")
+                echo "🎯 选择很老版本 18.06"
+                USER_VERSION="18.06"
+                ;;
+            "master (开发版)")
+                echo "🎯 选择开发版 master"
+                USER_VERSION="master"
+                ;;
+        esac
+        
+        # 如果用户填写了自定义版本，优先使用自定义版本
+        if [ -n "${{ inputs.custom_version }}" ]; then
+            echo "🎯 使用自定义版本: ${{ inputs.custom_version }}"
+            USER_VERSION="${{ inputs.custom_version }}"
+        fi
+        
+        echo "=== 最终使用的版本参数: $USER_VERSION ==="
+        
         echo "=== 使用修复版版本检测 ==="
         set +e
-        OUTPUT=$(./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ inputs.version_spec }}" "$OLD_DEVICE_FLAG" 2>&1)
+        OUTPUT=$(./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "$USER_VERSION" "$OLD_DEVICE_FLAG" 2>&1)
         SCRIPT_EXIT_CODE=$?
         set -e
         echo "脚本输出:"
