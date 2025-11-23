@@ -36,11 +36,12 @@ on:
           - normal
           - custom
       extra_packages:
-        description: '额外安装插件'
+        description: '额外安装插件 (多个插件用空格分隔，如: "luci-app-ddns luci-app-wol")'
         required: false
         type: string
+        default: ''
       disabled_plugins:
-        description: '禁用插件'
+        description: '禁用插件 (多个插件用空格分隔，如: "luci-app-upnp luci-app-sqm")'
         required: false
         type: string
         default: ''
@@ -229,6 +230,62 @@ jobs:
         ./scripts/feeds install -a
         echo "✅ Feeds 更新安装完成"
 
+    - name: 设备检测
+      id: device-detection
+      run: |
+        cd $BUILD_DIR
+        echo "=== 设备检测 ==="
+        
+        OUTPUT=$(./openwrt_build_manager.sh device_detect "${{ github.event.inputs.device_name }}")
+        echo "$OUTPUT"
+        
+        # 提取设备信息
+        PLATFORM=$(echo "$OUTPUT" | grep "^PLATFORM=" | head -1 | cut -d'=' -f2)
+        DEVICE_SHORT_NAME=$(echo "$OUTPUT" | grep "^DEVICE_SHORT_NAME=" | head -1 | cut -d'=' -f2)
+        DEVICE_FULL_NAME=$(echo "$OUTPUT" | grep "^DEVICE_FULL_NAME=" | head -1 | cut -d'=' -f2)
+        
+        if [ -n "$PLATFORM" ] && [ -n "$DEVICE_SHORT_NAME" ] && [ -n "$DEVICE_FULL_NAME" ]; then
+            echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
+            echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
+            echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
+            echo "✅ 设备检测完成"
+        else
+            echo "❌ 设备检测失败"
+            exit 1
+        fi
+
+    - name: 配置加载和冲突解决
+      run: |
+        cd $BUILD_DIR
+        echo "=== 配置加载和冲突解决 ==="
+        
+        # 显示插件信息
+        echo "额外安装插件: ${{ inputs.extra_packages }}"
+        echo "禁用插件: ${{ inputs.disabled_plugins }}"
+        
+        ./openwrt_build_manager.sh config_load \
+            "${{ inputs.config_type }}" \
+            "$PLATFORM" \
+            "$DEVICE_SHORT_NAME" \
+            "$SELECTED_BRANCH" \
+            "${{ github.event.inputs.device_name }}" \
+            "${{ inputs.extra_packages }}" \
+            "${{ inputs.disabled_plugins }}"
+
+    - name: 验证配置文件
+      run: |
+        cd $BUILD_DIR
+        echo "=== 验证配置文件 ==="
+        
+        if [ -f ".config" ]; then
+            echo "✅ .config 文件已生成"
+            echo "配置文件大小: $(wc -l < .config) 行"
+            echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
+        else
+            echo "❌ .config 文件未生成"
+            exit 1
+        fi
+
     - name: 包可用性检查 (严格模式)
       id: package-check
       run: |
@@ -258,43 +315,6 @@ jobs:
             echo "❌ 包检查发现缺失包，停止构建"
             exit $PACKAGE_CHECK_EXIT_CODE
         fi
-
-    - name: 设备检测
-      id: device-detection
-      run: |
-        cd $BUILD_DIR
-        echo "=== 设备检测 ==="
-        
-        OUTPUT=$(./openwrt_build_manager.sh device_detect "${{ github.event.inputs.device_name }}")
-        echo "$OUTPUT"
-        
-        # 提取设备信息
-        PLATFORM=$(echo "$OUTPUT" | grep "^PLATFORM=" | head -1 | cut -d'=' -f2)
-        DEVICE_SHORT_NAME=$(echo "$OUTPUT" | grep "^DEVICE_SHORT_NAME=" | head -1 | cut -d'=' -f2)
-        DEVICE_FULL_NAME=$(echo "$OUTPUT" | grep "^DEVICE_FULL_NAME=" | head -1 | cut -d'=' -f2)
-        
-        if [ -n "$PLATFORM" ] && [ -n "$DEVICE_SHORT_NAME" ] && [ -n "$DEVICE_FULL_NAME" ]; then
-            echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
-            echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
-            echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
-            echo "✅ 设备检测完成"
-        else
-            echo "❌ 设备检测失败"
-            exit 1
-        fi
-
-    - name: 配置加载和冲突解决
-      run: |
-        cd $BUILD_DIR
-        echo "=== 配置加载和冲突解决 ==="
-        ./openwrt_build_manager.sh config_load \
-            "${{ inputs.config_type }}" \
-            "$PLATFORM" \
-            "$DEVICE_SHORT_NAME" \
-            "$SELECTED_BRANCH" \
-            "${{ github.event.inputs.device_name }}" \
-            "${{ inputs.extra_packages }}" \
-            "${{ inputs.disabled_plugins }}"
 
     - name: 自定义文件集成
       run: |
