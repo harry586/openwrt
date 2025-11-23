@@ -58,7 +58,6 @@ version_detect() {
         ["rt-acrh17"]="ipq40xx"
         ["ac58u"]="ipq40xx"
         ["acrh13"]="ipq40xx"
-        ["rt-ac58u"]="ipq40xx"
         ["rt-acrh13"]="ipq40xx"
         ["xiaomi_redmi-ax6s"]="mediatek"
         ["wr841n"]="ar71xx"
@@ -583,7 +582,7 @@ EOF
     log_success "自定义文件集成完成"
 }
 
-# 包可用性检查
+# 包可用性检查 - 修复版
 package_check() {
     local build_dir="${1:-.}"
     cd "$build_dir"
@@ -595,7 +594,7 @@ package_check() {
     ./scripts/feeds update -a > /dev/null 2>&1
     
     # 读取配置文件
-    CONFIG_FILE="config-templates/normal-new.config"
+    CONFIG_FILE=".config"
     if [ ! -f "$CONFIG_FILE" ]; then
         log_error "错误: 配置文件 $CONFIG_FILE 不存在"
         return 1
@@ -669,7 +668,7 @@ package_check() {
     AVAILABLE_PACKAGES=()
     ALTERNATIVE_PACKAGES=()
     
-    # 预加载feeds列表到内存，避免重复调用
+    # 预加载feeds列表到内存
     local feeds_list=$(./scripts/feeds list 2>/dev/null)
     
     check_package_availability() {
@@ -713,17 +712,12 @@ package_check() {
     
     echo "=== 开始检查包可用性 ==="
     
-    # 使用临时文件来避免管道问题
-    local temp_file=$(mktemp)
+    # 检查每个包
     for pkg in $PACKAGES; do
         # 使用映射函数查找对应的包名
         mapped_pkg=$(map_package "$pkg")
-        check_package_availability "$pkg" "$mapped_pkg" >> "$temp_file" 2>&1
+        check_package_availability "$pkg" "$mapped_pkg"
     done
-    
-    # 输出结果，使用cat避免管道问题
-    cat "$temp_file"
-    rm -f "$temp_file"
     
     echo ""
     echo "=== 检查结果 ==="
@@ -757,8 +751,8 @@ package_check() {
         echo ""
         echo "3. 使用 make menuconfig 查看可用的包"
         
-        # 非关键性包缺失，只警告不退出
-        CRITICAL_PACKAGES=("firewall" "dnsmasq" "kmod-usb-storage" "block-mount")
+        # 检查关键包是否缺失
+        CRITICAL_PACKAGES=("firewall" "dnsmasq" "kmod-usb-storage" "block-mount" "luci-base")
         critical_missing=0
         
         for critical in "${CRITICAL_PACKAGES[@]}"; do
@@ -771,90 +765,115 @@ package_check() {
         done
         
         if [ $critical_missing -eq 1 ]; then
-            echo "❌ 有关键包缺失，构建可能失败"
+            log_error "有关键包缺失，构建将停止"
             return 1
         else
-            echo "⚠️ 有非关键包缺失，但构建可以继续"
+            log_warning "有非关键包缺失，但构建可以继续"
             # 即使有非关键包缺失，也返回成功，让构建继续
             return 0
         fi
     else
-        echo "✅ 所有包都在feeds中可用或有替代包。"
+        log_success "所有包都在feeds中可用或有替代包。"
         return 0
     fi
 }
 
-# 错误分析
+# 错误分析 - 修复版
 error_analyze() {
     local build_dir="${1:-/mnt/openwrt-build}"
     cd "$build_dir"
     
     log_info "=== 错误分析 ==="
     
-    # 查找最新的构建日志
+    # 查找真正的构建日志
     local build_log=""
-    if [ -f "build_detailed.log" ]; then
-        build_log="build_detailed.log"
-    else
-        # 查找其他可能的日志文件
-        build_log=$(find . -name "*.log" -type f | grep -E "(build|error|compile)" | head -1)
-        if [ -z "$build_log" ]; then
-            build_log=$(ls -t *.log 2>/dev/null | head -1)
+    
+    # 优先查找主要的构建日志
+    local possible_logs=(
+        "logs/build.log"
+        "build.log" 
+        "build_output.log"
+        "openwrt-build.log"
+    )
+    
+    # 查找最近修改的日志文件
+    for log in "${possible_logs[@]}"; do
+        if [ -f "$log" ]; then
+            build_log="$log"
+            break
         fi
+    done
+    
+    # 如果没找到，搜索整个目录
+    if [ -z "$build_log" ]; then
+        build_log=$(find . -name "*.log" -type f -size +1k 2>/dev/null | \
+                   grep -v "ctresalloc\|CMakeTest\|Test" | \
+                   head -1)
+    fi
+    
+    # 最后尝试查找make的错误输出
+    if [ -z "$build_log" ]; then
+        build_log=$(find . -name "staging_dir" -prune -o -name "*.log" -type f -print 2>/dev/null | \
+                   head -1)
     fi
     
     echo "=== 固件构建错误分析报告 ===" > error_analysis.log
     echo "生成时间: $(date)" >> error_analysis.log
-    echo "使用的日志文件: ${build_log:-未找到}" >> error_analysis.log
+    echo "使用的日志文件: ${build_log:-未找到主要构建日志}" >> error_analysis.log
     echo "" >> error_analysis.log
     
-    echo "=== 构建结果摘要 ===" >> error_analysis.log
-    if [ -d "bin/targets" ]; then
+    echo "=== 构建结果检查 ===" >> error_analysis.log
+    if [ -d "bin/targets" ] && find bin/targets -name "*.bin" -o -name "*.img" | grep -q .; then
         echo "✅ 构建状态: 成功" >> error_analysis.log
-        echo "✅ 生成的固件文件: $(find bin/targets -name '*.bin' -o -name '*.img' | wc -l)" >> error_analysis.log
-        find bin/targets -name "*.bin" -o -name "*.img" | head -5 >> error_analysis.log
+        echo "生成的固件文件:" >> error_analysis.log
+        find bin/targets -name "*.bin" -o -name "*.img" | head -10 >> error_analysis.log
     else
-        echo "❌ 构建状态: 失败" >> error_analysis.log
+        echo "❌ 构建状态: 失败 - 未生成固件文件" >> error_analysis.log
     fi
+    echo "" >> error_analysis.log
+    
+    # 检查关键目录状态
+    echo "=== 关键目录状态 ===" >> error_analysis.log
+    for dir in "build_dir" "staging_dir" "tmp" "bin"; do
+        if [ -d "$dir" ]; then
+            echo "✅ $dir: 存在" >> error_analysis.log
+        else
+            echo "❌ $dir: 缺失" >> error_analysis.log
+        fi
+    done
     echo "" >> error_analysis.log
     
     if [ -n "$build_log" ] && [ -f "$build_log" ]; then
-        echo "=== 关键错误检查 ===" >> error_analysis.log
+        echo "=== 关键错误分析 ===" >> error_analysis.log
         
         # 编译错误
-        echo "❌ 发现编译错误:" >> error_analysis.log
-        grep -E "Error [0-9]|error:" "$build_log" | head -10 >> error_analysis.log || echo "无关键编译错误" >> error_analysis.log
+        echo "1. 编译错误:" >> error_analysis.log
+        grep -E "Error [0-9]|error: |undefined reference" "$build_log" | head -20 >> error_analysis.log || echo "无编译错误" >> error_analysis.log
         
-        # Makefile错误
         echo "" >> error_analysis.log
-        echo "❌ Makefile执行错误:" >> error_analysis.log
+        echo "2. Makefile错误:" >> error_analysis.log
         grep "make.*Error" "$build_log" | head -10 >> error_analysis.log || echo "无Makefile错误" >> error_analysis.log
         
-        # 文件冲突错误
         echo "" >> error_analysis.log
-        echo "❌ 文件冲突错误:" >> error_analysis.log
-        grep -E "file.*already provided|check_data_file_clashes" "$build_log" | head -10 >> error_analysis.log || echo "无文件冲突错误" >> error_analysis.log
+        echo "3. 包依赖错误:" >> error_analysis.log
+        grep -E "depends on|missing|not found" "$build_log" | head -10 >> error_analysis.log || echo "无依赖错误" >> error_analysis.log
         
-        # 文件缺失错误
         echo "" >> error_analysis.log
-        echo "❌ 文件缺失错误:" >> error_analysis.log
-        grep -E "No such file|file not found" "$build_log" | head -5 >> error_analysis.log || echo "无文件缺失错误" >> error_analysis.log
+        echo "4. 最后100行日志:" >> error_analysis.log
+        tail -100 "$build_log" >> error_analysis.log
     else
-        echo "未找到构建日志文件" >> error_analysis.log
+        echo "=== 未找到构建日志，检查构建目录 ===" >> error_analysis.log
+        echo "当前目录: $(pwd)" >> error_analysis.log
+        echo "目录内容:" >> error_analysis.log
+        ls -la >> error_analysis.log
     fi
-    echo "" >> error_analysis.log
     
-    echo "=== 错误原因分析和建议 ===" >> error_analysis.log
-    echo "⚠️  文件冲突错误" >> error_analysis.log
-    echo "💡 可能原因: 同时安装了冲突的包（如 odhcpd 和 odhcpd-ipv6only）" >> error_analysis.log
-    echo "💡 解决方案: 在配置文件中只启用其中一个包" >> error_analysis.log
     echo "" >> error_analysis.log
-    echo "⚠️  文件缺失错误" >> error_analysis.log
-    echo "💡 可能原因: 源码不完整或下载失败" >> error_analysis.log
-    echo "" >> error_analysis.log
-    echo "⚠️  管道错误" >> error_analysis.log
-    echo "💡 这是并行编译的正常现象，不影响最终结果" >> error_analysis.log
-    echo "" >> error_analysis.log
+    echo "=== 常见解决方案 ===" >> error_analysis.log
+    echo "1. 包缺失: 运行 './scripts/feeds update -a && ./scripts/feeds install -a'" >> error_analysis.log
+    echo "2. 依赖问题: 检查.config文件中的包冲突" >> error_analysis.log
+    echo "3. 空间不足: 检查磁盘空间 'df -h'" >> error_analysis.log
+    echo "4. 网络问题: 重新下载依赖 'make download V=s'" >> error_analysis.log
     
     # 输出到控制台
     cat error_analysis.log
