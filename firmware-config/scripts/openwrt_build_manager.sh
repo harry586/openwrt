@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# OpenWrt 智能构建管理器 - 整合所有核心功能
+# OpenWrt 智能构建管理器 - 完整版
 # 功能：版本检测、设备检测、插件检查、配置管理、自定义文件集成
 
 set -e
@@ -38,6 +38,347 @@ show_usage() {
     echo "  $0 version_detect ac42u auto false"
     echo "  $0 device_detect ac42u"
     echo "  $0 plugin_check openwrt-23.05"
+}
+
+# 版本检测功能
+version_detect() {
+    local device_name="$1"
+    local user_version="$2"
+    local old_device="${3:-false}"
+    
+    log_info "=== 版本检测 ==="
+    echo "设备: $device_name"
+    echo "用户版本: ${user_version:-自动}"
+    echo "老旧设备: $old_device"
+    
+    # 设备平台映射
+    declare -A DEVICE_PLATFORM_MAP=(
+        ["ac42u"]="ipq40xx"
+        ["acrh17"]="ipq40xx"
+        ["rt-acrh17"]="ipq40xx"
+        ["ac58u"]="ipq40xx"
+        ["acrh13"]="ipq40xx"
+        ["rt-acrh13"]="ipq40xx"
+        ["xiaomi_redmi-ax6s"]="mediatek"
+        ["wr841n"]="ar71xx"
+        ["mi3g"]="ramips"
+    )
+    
+    # 版本检测顺序
+    local immortalwrt_versions=("openwrt-23.05" "openwrt-22.03" "openwrt-21.02" "openwrt-19.07" "openwrt-18.06" "master")
+    local lede_versions=("17.01" "reborn" "master")
+    local openwrt_versions=("openwrt-23.05" "openwrt-22.03" "openwrt-21.02" "openwrt-19.07" "openwrt-18.06" "master")
+    
+    # 如果用户指定了版本，直接使用
+    if [ -n "$user_version" ] && [ "$user_version" != "auto" ]; then
+        log_info "使用用户指定版本: $user_version"
+        
+        # 解析版本规格
+        if [[ "$user_version" == *":"* ]]; then
+            IFS=':' read -r repo branch <<< "$user_version"
+        else
+            repo="immortalwrt"
+            branch="$user_version"
+        fi
+        
+        # 自动添加前缀
+        if [[ "$branch" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            branch="openwrt-$branch"
+            log_info "自动添加分支前缀: $branch"
+        fi
+        
+        # 设置仓库URL
+        case "$repo" in
+            "immortalwrt")
+                SELECTED_REPO="immortalwrt"
+                SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+                ;;
+            "openwrt")
+                SELECTED_REPO="openwrt"
+                SELECTED_REPO_URL="https://github.com/openwrt/openwrt.git"
+                ;;
+            "lede")
+                SELECTED_REPO="lede"
+                SELECTED_REPO_URL="https://github.com/coolsnowwolf/lede.git"
+                ;;
+            *)
+                log_error "未知仓库: $repo"
+                return 1
+                ;;
+        esac
+        
+        # 检查分支是否存在
+        if git ls-remote --heads "$SELECTED_REPO_URL" "$branch" 2>/dev/null | grep -q "$branch"; then
+            SELECTED_BRANCH="$branch"
+            log_success "使用版本: $SELECTED_REPO:$SELECTED_BRANCH"
+        else
+            log_error "分支 $branch 不存在"
+            return 1
+        fi
+    else
+        # 自动版本检测逻辑
+        log_info "开始自动版本检测..."
+        
+        # 根据设备类型选择默认版本
+        case "$device_name" in
+            "wr841n"|"wr842n"|"wr941n"|"mr3420"|"ar71xx"*)
+                SELECTED_REPO="openwrt"
+                SELECTED_BRANCH="openwrt-19.07"
+                SELECTED_REPO_URL="https://github.com/openwrt/openwrt.git"
+                log_success "老旧设备，选择 OpenWrt 19.07"
+                ;;
+            *)
+                SELECTED_REPO="immortalwrt"
+                SELECTED_BRANCH="openwrt-23.05"
+                SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+                log_success "现代设备，选择 ImmortalWrt 23.05"
+                ;;
+        esac
+    fi
+    
+    # 输出环境变量
+    echo "SELECTED_REPO=$SELECTED_REPO"
+    echo "SELECTED_BRANCH=$SELECTED_BRANCH"
+    echo "SELECTED_REPO_URL=$SELECTED_REPO_URL"
+    
+    log_success "版本检测完成"
+}
+
+# 设备检测功能
+device_detect() {
+    local device_input="$1"
+    
+    log_info "=== 设备检测 ==="
+    echo "输入设备: $device_input"
+    
+    # 检查是否在 OpenWrt 源码目录
+    if [ ! -d "target/linux" ]; then
+        log_error "错误: 请在 OpenWrt 源码根目录中运行设备检测"
+        return 1
+    fi
+    
+    # 设备映射
+    declare -A DEVICE_MAPPING=(
+        ["ac42u"]="asus_rt-ac42u"
+        ["acrh17"]="asus_rt-ac42u" 
+        ["rt-acrh17"]="asus_rt-ac42u"
+        ["ac58u"]="asus_rt-ac58u"
+        ["acrh13"]="asus_rt-ac58u"
+        ["rt-ac58u"]="asus_rt-ac58u"
+        ["rt-acrh13"]="asus_rt-ac58u"
+        ["mi4a"]="xiaomi_mi-router-4a-gigabit"
+        ["r4a"]="xiaomi_mi-router-4a-gigabit"
+        ["mi3g"]="xiaomi_mi-router-3g"
+        ["r3g"]="xiaomi_mi-router-3g"
+        ["mi4"]="xiaomi_mi-router-4"
+        ["r4"]="xiaomi_mi-router-4"
+        ["wr841n"]="tl-wr841n-v11"
+        ["wr842n"]="tl-wr842n-v4"
+        ["wr941n"]="tl-wr941nd-v6"
+    )
+    
+    # 首先尝试已知映射
+    if [ -n "${DEVICE_MAPPING[$device_input]}" ]; then
+        local device_short_name="${DEVICE_MAPPING[$device_input]}"
+        local platform=""
+        
+        # 推断平台
+        case "$device_short_name" in
+            *ipq40xx*|*asus_rt-ac*)
+                platform="ipq40xx"
+                ;;
+            *ar71xx*|*tl-wr*)
+                platform="ar71xx"
+                ;;
+            *ramips*|*xiaomi_mi*)
+                platform="ramips"
+                ;;
+            *mediatek*|*redmi-ax6s*)
+                platform="mediatek"
+                ;;
+            *)
+                platform="ipq40xx"
+                ;;
+        esac
+        
+        log_success "使用已知映射: $device_input -> $device_short_name"
+        echo "PLATFORM=$platform"
+        echo "DEVICE_SHORT_NAME=$device_short_name"
+        echo "DEVICE_FULL_NAME=$device_input"
+        return 0
+    fi
+    
+    # 搜索设备树文件
+    log_info "搜索设备树文件..."
+    local dts_files=$(find target/linux -name "*.dts" -type f 2>/dev/null | grep -i "$device_input" | head -3)
+    
+    if [ -n "$dts_files" ]; then
+        log_success "找到设备树文件"
+        local platform=$(echo "$dts_files" | head -1 | cut -d'/' -f3)
+        local device_name=$(basename "$dts_files" | head -1 | sed 's/\.dts.*//')
+        
+        echo "PLATFORM=$platform"
+        echo "DEVICE_SHORT_NAME=$device_name"
+        echo "DEVICE_FULL_NAME=$device_input"
+        echo "DTS_FILES=$dts_files"
+    else
+        log_warning "未找到设备树文件，使用输入名称"
+        echo "PLATFORM=generic"
+        echo "DEVICE_SHORT_NAME=$device_input"
+        echo "DEVICE_FULL_NAME=$device_input"
+    fi
+    
+    log_success "设备检测完成"
+}
+
+# 插件兼容性检查
+plugin_check() {
+    local branch="$1"
+    
+    log_info "=== 插件兼容性检查 ==="
+    echo "目标版本: $branch"
+    
+    # 插件兼容性数据库
+    declare -A PLUGIN_COMPATIBILITY=(
+        # 网络加速插件
+        ["turboacc"]="22.03 23.05"
+        ["luci-app-turboacc"]="22.03 23.05"
+        ["kmod-nft-fullcone"]="22.03 23.05"
+        ["kmod-shortcut-fe"]="22.03 23.05"
+        
+        # 网络工具
+        ["luci-app-sqm"]="21.02 22.03 23.05"
+        ["luci-app-upnp"]="19.07 21.02 22.03 23.05"
+        ["luci-app-wol"]="19.07 21.02 22.03 23.05"
+        
+        # 存储和文件共享
+        ["luci-app-samba4"]="21.02 22.03 23.05"
+        ["luci-app-vsftpd"]="19.07 21.02 22.03 23.05"
+        
+        # 网络服务
+        ["luci-app-smartdns"]="21.02 22.03 23.05"
+        ["luci-app-arpbind"]="19.07 21.02 22.03 23.05"
+        
+        # 系统工具
+        ["luci-app-cpulimit"]="21.02 22.03 23.05"
+        ["luci-app-diskman"]="21.02 22.03 23.05"
+        ["luci-app-accesscontrol"]="19.07 21.02 22.03 23.05"
+        ["luci-app-vlmcsd"]="19.07 21.02 22.03 23.05"
+        
+        # 基础插件
+        ["luci-theme-bootstrap"]="18.06 19.07 21.02 22.03 23.05"
+        ["luci-theme-material"]="19.07 21.02 22.03 23.05"
+        ["luci-app-firewall"]="18.06 19.07 21.02 22.03 23.05"
+    )
+    
+    check_plugin() {
+        local branch="$1"
+        local plugin="$2"
+        
+        local version=$(echo "$branch" | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        
+        if [ -z "$version" ]; then
+            if [[ "$branch" =~ master|main ]]; then
+                log_warning "⚠️  $plugin: 开发版分支，兼容性未知"
+                return 1
+            else
+                log_warning "⚠️  $plugin: 无法识别版本号"
+                return 1
+            fi
+        fi
+        
+        local compatible_versions="${PLUGIN_COMPATIBILITY[$plugin]}"
+        
+        if [ -z "$compatible_versions" ]; then
+            log_info "ℹ️  $plugin: 兼容性信息未知"
+            return 0
+        fi
+        
+        if echo "$compatible_versions" | grep -q "$version"; then
+            log_success "✅ $plugin: 兼容版本 $version"
+            return 0
+        else
+            log_error "❌ $plugin: 不兼容版本 $version (仅支持: $compatible_versions)"
+            return 1
+        fi
+    }
+    
+    echo "=== 网络加速插件兼容性 ==="
+    check_plugin "$branch" "turboacc"
+    check_plugin "$branch" "luci-app-turboacc"
+    check_plugin "$branch" "kmod-nft-fullcone"
+    check_plugin "$branch" "kmod-shortcut-fe"
+    
+    echo ""
+    echo "=== 网络工具插件兼容性 ==="
+    check_plugin "$branch" "luci-app-sqm"
+    check_plugin "$branch" "luci-app-upnp"
+    check_plugin "$branch" "luci-app-wol"
+    
+    echo ""
+    echo "=== 存储和文件共享插件兼容性 ==="
+    check_plugin "$branch" "luci-app-samba4"
+    check_plugin "$branch" "luci-app-vsftpd"
+    
+    echo ""
+    echo "=== 网络服务插件兼容性 ==="
+    check_plugin "$branch" "luci-app-smartdns"
+    check_plugin "$branch" "luci-app-arpbind"
+    
+    echo ""
+    echo "=== 系统工具插件兼容性 ==="
+    check_plugin "$branch" "luci-app-cpulimit"
+    check_plugin "$branch" "luci-app-diskman"
+    check_plugin "$branch" "luci-app-accesscontrol"
+    check_plugin "$branch" "luci-app-vlmcsd"
+    
+    echo ""
+    echo "=== 基础插件兼容性 ==="
+    check_plugin "$branch" "luci-theme-bootstrap"
+    check_plugin "$branch" "luci-theme-material"
+    check_plugin "$branch" "luci-app-firewall"
+    
+    echo ""
+    echo "=== 兼容性说明 ==="
+    echo "🔹 22.03/23.05 - 完全支持所有插件"
+    echo "🔹 21.02       - 支持大部分插件"
+    echo "🔹 19.07       - 支持基础插件"
+    echo "🔹 18.06       - 仅支持核心功能"
+    echo "🔹 master      - 开发版，兼容性不确定"
+}
+
+# Feeds配置
+feeds_config() {
+    local branch="$1"
+    
+    log_info "=== Feeds 配置 ==="
+    echo "分支: $branch"
+    
+    local feeds_branch="$branch"
+    if echo "$branch" | grep -q "openwrt-23.05"; then
+        feeds_branch="openwrt-23.05"
+    elif echo "$branch" | grep -q "openwrt-22.03"; then
+        feeds_branch="openwrt-22.03"
+    elif echo "$branch" | grep -q "openwrt-21.02"; then
+        feeds_branch="openwrt-21.02"
+    elif echo "$branch" | grep -q "openwrt-19.07"; then
+        feeds_branch="openwrt-19.07"
+    else
+        log_warning "未知版本分支，使用默认分支: master"
+        feeds_branch="master"
+    fi
+    
+    echo "使用的feeds分支: $feeds_branch"
+    
+    # 配置feeds
+    echo "src-git packages https://github.com/immortalwrt/packages.git;$feeds_branch" > feeds.conf.default
+    echo "src-git luci https://github.com/immortalwrt/luci.git;$feeds_branch" >> feeds.conf.default
+    echo "src-git routing https://github.com/openwrt/routing.git;$feeds_branch" >> feeds.conf.default
+    echo "src-git telephony https://github.com/openwrt/telephony.git;$feeds_branch" >> feeds.conf.default
+    
+    log_success "Feeds 配置完成"
+    echo "Feeds配置内容:"
+    cat feeds.conf.default
 }
 
 # 配置加载 - 更新版
@@ -81,15 +422,20 @@ config_load() {
     echo "=== 追加模板配置 ==="
     cat "$config_file" >> .config
     
-    # 初始化日志
-    echo "=== 初始化构建日志 ==="
-    ./smart_package_matcher.sh init_log "."
-    
-    # 运行智能包匹配
-    echo "=== 运行智能包匹配 ==="
-    if ! ./smart_package_matcher.sh smart_fix_config "." ".config"; then
-        log_error "智能包匹配失败"
-        return 1
+    # 检查智能包匹配器是否存在
+    if [ -f "smart_package_matcher.sh" ]; then
+        # 初始化日志
+        echo "=== 初始化构建日志 ==="
+        ./smart_package_matcher.sh init_log "."
+        
+        # 运行智能包匹配
+        echo "=== 运行智能包匹配 ==="
+        if ! ./smart_package_matcher.sh smart_fix_config "." ".config"; then
+            log_error "智能包匹配失败"
+            return 1
+        fi
+    else
+        log_warning "智能包匹配器不存在，跳过包匹配"
     fi
     
     # 处理用户自定义包
@@ -97,17 +443,24 @@ config_load() {
         echo "=== 添加额外插件 ==="
         for pkg in $extra_packages; do
             echo "添加插件: $pkg"
-            # 使用智能匹配找到正确的包名
-            local available_packages=$(./smart_package_matcher.sh get_available ".")
-            local matched_pkg=$(./smart_package_matcher.sh smart_package_match "$pkg" "$available_packages")
-            if [ -n "$matched_pkg" ]; then
-                # 移除可能的旧配置
-                sed -i "/# CONFIG_PACKAGE_${matched_pkg} is not set/d" .config
-                echo "CONFIG_PACKAGE_${matched_pkg}=y" >> .config
-                echo "✅ 添加: $pkg → $matched_pkg"
+            # 如果智能匹配器存在，使用它找到正确的包名
+            if [ -f "smart_package_matcher.sh" ]; then
+                local available_packages=$(./smart_package_matcher.sh get_available ".")
+                local matched_pkg=$(./smart_package_matcher.sh smart_package_match "$pkg" "$available_packages")
+                if [ -n "$matched_pkg" ]; then
+                    # 移除可能的旧配置
+                    sed -i "/# CONFIG_PACKAGE_${matched_pkg} is not set/d" .config
+                    echo "CONFIG_PACKAGE_${matched_pkg}=y" >> .config
+                    echo "✅ 添加: $pkg → $matched_pkg"
+                else
+                    echo "❌ 无法找到包: $pkg"
+                    log_warning "无法找到用户请求的包: $pkg"
+                fi
             else
-                echo "❌ 无法找到包: $pkg"
-                log_warning "无法找到用户请求的包: $pkg"
+                # 直接添加包
+                sed -i "/# CONFIG_PACKAGE_${pkg} is not set/d" .config
+                echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+                echo "✅ 添加: $pkg"
             fi
         done
     fi
@@ -131,6 +484,83 @@ config_load() {
     grep "^CONFIG_PACKAGE_luci-app" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort | uniq || echo "无luci插件"
     
     log_success "配置加载完成"
+}
+
+# 自定义文件集成
+custom_integrate() {
+    local workspace_dir="$1"
+    
+    log_info "=== 自定义文件集成 ==="
+    
+    # 创建自定义文件目录
+    mkdir -p files/root/custom-install
+    
+    # 复制IPK文件
+    local ipk_files=$(find "$workspace_dir/firmware-config/custom-files" -name "*.ipk" -type f 2>/dev/null || true)
+    if [ -n "$ipk_files" ]; then
+        echo "✅ 找到IPK文件:"
+        for ipk in $ipk_files; do
+            cp "$ipk" files/root/custom-install/
+            echo "✅ 复制IPK: $(basename "$ipk")"
+        done
+    fi
+    
+    # 复制脚本文件
+    local script_files=$(find "$workspace_dir/firmware-config/custom-files" -name "*.sh" -type f 2>/dev/null | grep -v "detector\|analysis" || true)
+    if [ -n "$script_files" ]; then
+        echo "✅ 找到脚本文件:"
+        for script in $script_files; do
+            cp "$script" files/root/custom-install/
+            chmod +x files/root/custom-install/$(basename "$script")
+            echo "✅ 复制脚本: $(basename "$script")"
+        done
+    fi
+    
+    # 创建构建时安装脚本
+    cat > files/root/custom-install/build-time-install.sh << 'EOF'
+#!/bin/sh
+echo "=== 开始构建时自定义安装 ==="
+
+if ls /root/custom-install/*.ipk >/dev/null 2>&1; then
+    echo "构建时安装IPK文件..."
+    for ipk in /root/custom-install/*.ipk; do
+        echo "安装: $(basename $ipk)"
+        opkg install "$ipk" --force-depends || echo "安装失败: $(basename $ipk)"
+    done
+else
+    echo "未找到IPK文件"
+fi
+
+if ls /root/custom-install/*.sh >/dev/null 2>&1; then
+    echo "执行构建时脚本..."
+    for script in /root/custom-install/*.sh; do
+        if [ "$(basename $script)" != "build-time-install.sh" ]; then
+            echo "执行: $(basename $script)"
+            sh "$script" || echo "执行失败: $(basename $script)"
+        fi
+    done
+else
+    echo "未找到脚本文件"
+fi
+
+rm -rf /root/custom-install
+echo "=== 构建时自定义安装完成 ==="
+EOF
+
+    chmod +x files/root/custom-install/build-time-install.sh
+    
+    # 创建rc.local启动脚本
+    mkdir -p files/etc
+    cat > files/etc/rc.local << 'EOF'
+#!/bin/sh
+[ -f /root/custom-install/build-time-install.sh ] && {
+    /root/custom-install/build-time-install.sh >/tmp/build-time-install.log 2>&1 &
+}
+exit 0
+EOF
+
+    chmod +x files/etc/rc.local
+    log_success "自定义文件集成完成"
 }
 
 # 包可用性检查 - 更新版
@@ -222,8 +652,114 @@ package_check() {
     fi
 }
 
-# 其他函数保持不变...
-# [这里包含原来的 version_detect, device_detect, plugin_check, feeds_config, custom_integrate, error_analyze 等函数]
+# 错误分析 - 修复版
+error_analyze() {
+    local build_dir="${1:-/mnt/openwrt-build}"
+    cd "$build_dir"
+    
+    log_info "=== 错误分析 ==="
+    
+    # 查找真正的构建日志
+    local build_log=""
+    
+    # 优先查找主要的构建日志
+    local possible_logs=(
+        "logs/build.log"
+        "build.log" 
+        "build_output.log"
+        "openwrt-build.log"
+    )
+    
+    # 查找最近修改的日志文件
+    for log in "${possible_logs[@]}"; do
+        if [ -f "$log" ]; then
+            build_log="$log"
+            break
+        fi
+    done
+    
+    # 如果没找到，搜索整个目录
+    if [ -z "$build_log" ]; then
+        build_log=$(find . -name "*.log" -type f -size +1k 2>/dev/null | \
+                   grep -v "ctresalloc\|CMakeTest\|Test" | \
+                   head -1)
+    fi
+    
+    # 最后尝试查找make的错误输出
+    if [ -z "$build_log" ]; then
+        build_log=$(find . -name "staging_dir" -prune -o -name "*.log" -type f -print 2>/dev/null | \
+                   head -1)
+    fi
+    
+    echo "=== 固件构建错误分析报告 ===" > error_analysis.log
+    echo "生成时间: $(date)" >> error_analysis.log
+    echo "使用的日志文件: ${build_log:-未找到主要构建日志}" >> error_analysis.log
+    echo "" >> error_analysis.log
+    
+    echo "=== 构建结果检查 ===" >> error_analysis.log
+    if [ -d "bin/targets" ] && find bin/targets -name "*.bin" -o -name "*.img" | grep -q .; then
+        echo "✅ 构建状态: 成功" >> error_analysis.log
+        echo "生成的固件文件:" >> error_analysis.log
+        find bin/targets -name "*.bin" -o -name "*.img" | head -10 >> error_analysis.log
+    else
+        echo "❌ 构建状态: 失败 - 未生成固件文件" >> error_analysis.log
+    fi
+    echo "" >> error_analysis.log
+    
+    # 检查关键目录状态
+    echo "=== 关键目录状态 ===" >> error_analysis.log
+    for dir in "build_dir" "staging_dir" "tmp" "bin"; do
+        if [ -d "$dir" ]; then
+            echo "✅ $dir: 存在" >> error_analysis.log
+        else
+            echo "❌ $dir: 缺失" >> error_analysis.log
+        fi
+    done
+    echo "" >> error_analysis.log
+    
+    if [ -n "$build_log" ] && [ -f "$build_log" ]; then
+        echo "=== 关键错误分析 ===" >> error_analysis.log
+        
+        # 编译错误
+        echo "1. 编译错误:" >> error_analysis.log
+        grep -E "Error [0-9]|error: |undefined reference" "$build_log" | head -20 >> error_analysis.log || echo "无编译错误" >> error_analysis.log
+        
+        echo "" >> error_analysis.log
+        echo "2. Makefile错误:" >> error_analysis.log
+        grep "make.*Error" "$build_log" | head -10 >> error_analysis.log || echo "无Makefile错误" >> error_analysis.log
+        
+        echo "" >> error_analysis.log
+        echo "3. 包依赖错误:" >> error_analysis.log
+        grep -E "depends on|missing|not found" "$build_log" | head -10 >> error_analysis.log || echo "无依赖错误" >> error_analysis.log
+        
+        echo "" >> error_analysis.log
+        echo "4. 最后100行日志:" >> error_analysis.log
+        tail -100 "$build_log" >> error_analysis.log
+    else
+        echo "=== 未找到构建日志，检查构建目录 ===" >> error_analysis.log
+        echo "当前目录: $(pwd)" >> error_analysis.log
+        echo "目录内容:" >> error_analysis.log
+        ls -la >> error_analysis.log
+    fi
+    
+    echo "" >> error_analysis.log
+    echo "=== 常见解决方案 ===" >> error_analysis.log
+    echo "1. 包缺失: 运行 './scripts/feeds update -a && ./scripts/feeds install -a'" >> error_analysis.log
+    echo "2. 依赖问题: 检查.config文件中的包冲突" >> error_analysis.log
+    echo "3. 空间不足: 检查磁盘空间 'df -h'" >> error_analysis.log
+    echo "4. 网络问题: 重新下载依赖 'make download V=s'" >> error_analysis.log
+    
+    # 输出到控制台
+    cat error_analysis.log
+}
+
+# 完整构建流程
+build_all() {
+    log_info "=== 执行完整构建流程 ==="
+    # 这里可以按顺序调用所有功能
+    # 实际工作流中会在不同步骤调用具体功能
+    echo "请在 GitHub Actions 工作流中查看完整构建流程"
+}
 
 # 主函数
 main() {
