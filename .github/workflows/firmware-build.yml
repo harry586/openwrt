@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: '设备名称 (如: ac42u, ac58u等)'
+        description: '设备名称 (如: ac42u等)'
         required: true
         default: 'ac42u'
         type: string
@@ -229,11 +229,11 @@ jobs:
         ./scripts/feeds install -a
         echo "✅ Feeds 更新安装完成"
 
-    - name: 包可用性检查（宽松模式）
+    - name: 包可用性检查
       id: package-check
       run: |
         cd $BUILD_DIR
-        echo "=== 包可用性检查（宽松模式）==="
+        echo "=== 包可用性检查 ==="
         # 使用宽松模式，即使有包缺失也继续构建
         set +e
         OUTPUT=$(./openwrt_build_manager.sh package_check ".")
@@ -273,10 +273,10 @@ jobs:
             exit 1
         fi
 
-    - name: 配置加载
+    - name: 配置加载和冲突解决
       run: |
         cd $BUILD_DIR
-        echo "=== 配置加载 ==="
+        echo "=== 配置加载和冲突解决 ==="
         ./openwrt_build_manager.sh config_load \
             "${{ inputs.config_type }}" \
             "$PLATFORM" \
@@ -302,12 +302,6 @@ jobs:
         export GIT_SSL_NO_VERIFY=1
         export PYTHONHTTPSVERIFY=0
         echo "✅ 网络环境修复完成"
-
-    - name: 预下载依赖包
-      run: |
-        cd $BUILD_DIR
-        echo "=== 预下载依赖包 ==="
-        ./openwrt_build_manager.sh pre_download
 
     - name: 下载依赖包
       run: |
