@@ -18,12 +18,18 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# 包诊断功能 - 增强版
+# 包诊断功能 - 修复版
 diagnose_packages() {
     local build_dir="${1:-.}"
     cd "$build_dir"
     
     log_info "=== 包可用性诊断 ==="
+    
+    # 首先检查.config文件是否存在
+    if [ ! -f ".config" ]; then
+        log_error "错误: .config 文件不存在，请先运行配置加载"
+        return 1
+    fi
     
     # 更新feeds
     echo "更新feeds..."
@@ -32,59 +38,61 @@ diagnose_packages() {
     # 检查配置文件中的包
     echo ""
     echo "=== 检查配置文件中的包 ==="
-    if [ -f ".config" ]; then
-        CONFIG_PACKAGES=$(grep "^CONFIG_PACKAGE_" .config | grep "=y$" | sed 's/CONFIG_PACKAGE_//;s/=y//' | sort)
-        echo "配置中启用的包数量: $(echo "$CONFIG_PACKAGES" | wc -l)"
+    CONFIG_PACKAGES=$(grep "^CONFIG_PACKAGE_" .config | grep "=y$" | sed 's/CONFIG_PACKAGE_//;s/=y//' | sort)
+    echo "配置中启用的包数量: $(echo "$CONFIG_PACKAGES" | wc -l)"
+    
+    # 检查每个包是否在feeds中
+    MISSING_COUNT=0
+    MISSING_PACKAGES=()
+    
+    for pkg in $CONFIG_PACKAGES; do
+        if ./scripts/feeds list | grep -q "^$pkg"; then
+            echo "✅ $pkg"
+        else
+            echo "❌ $pkg"
+            MISSING_COUNT=$((MISSING_COUNT + 1))
+            MISSING_PACKAGES+=("$pkg")
+        fi
+    done
+    
+    echo ""
+    echo "=== 检查结果 ==="
+    echo "缺失包数量: $MISSING_COUNT"
+    
+    if [ $MISSING_COUNT -gt 0 ]; then
+        log_error "发现 $MISSING_COUNT 个缺失包，构建可能失败！"
         
-        # 检查每个包是否在feeds中
-        MISSING_COUNT=0
-        for pkg in $CONFIG_PACKAGES; do
-            if ./scripts/feeds list | grep -q "^$pkg"; then
-                echo "✅ $pkg"
-            else
-                echo "❌ $pkg"
-                MISSING_COUNT=$((MISSING_COUNT + 1))
+        # 显示缺失包的详细信息
+        echo ""
+        echo "=== 缺失包详细信息 ==="
+        for pkg in "${MISSING_PACKAGES[@]}"; do
+            echo "❌ $pkg"
+            # 尝试查找相似的包
+            SIMILAR=$(./scripts/feeds list | grep -i "$pkg" | head -3 | tr '\n' ' ')
+            if [ -n "$SIMILAR" ]; then
+                echo "   相似包: $SIMILAR"
             fi
         done
-        
-        echo ""
-        echo "=== 检查结果 ==="
-        echo "缺失包数量: $MISSING_COUNT"
-        
-        if [ $MISSING_COUNT -gt 0 ]; then
-            log_error "发现 $MISSING_COUNT 个缺失包，构建可能失败！"
-            
-            # 显示缺失包的详细信息
-            echo ""
-            echo "=== 缺失包详细信息 ==="
-            for pkg in $CONFIG_PACKAGES; do
-                if ! ./scripts/feeds list | grep -q "^$pkg"; then
-                    echo "❌ $pkg"
-                    # 尝试查找相似的包
-                    echo "   相似包: $(./scripts/feeds list | grep -i "$pkg" | head -3 | tr '\n' ' ')"
-                fi
-            done
-            return 1
-        fi
+        return 1
     else
-        log_warning "未找到.config文件"
+        log_success "所有包都在feeds中可用"
     fi
     
     echo ""
     echo "=== 按类别检查包 ==="
-    echo "内核模块:"
+    echo "内核模块 (前10个):"
     ./scripts/feeds list | grep -E "^(kmod-|usb|fs-)" | sort | head -10
     
     echo ""
-    echo "Luci应用:"
+    echo "Luci应用 (前10个):"
     ./scripts/feeds list | grep -E "^(luci-)" | sort | head -10
     
     echo ""
-    echo "网络工具:"
+    echo "网络工具 (前10个):"
     ./scripts/feeds list | grep -E "^(firewall|dnsmasq|hostapd|wpad)" | sort | head -10
     
     echo ""
-    echo "系统工具:"
+    echo "系统工具 (前10个):"
     ./scripts/feeds list | grep -E "^(fdisk|blkid|lsblk|block-mount|e2fsprogs)" | sort | head -10
     
     echo ""
@@ -94,6 +102,8 @@ diagnose_packages() {
     echo "2. 使用 make menuconfig 查看所有可用包"
     echo "3. 检查不同feed中的包名"
     echo "4. 查看 OpenWrt 官方文档获取正确的包名"
+    
+    return 0
 }
 
 # 包依赖检查
