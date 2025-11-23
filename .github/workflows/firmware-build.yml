@@ -229,24 +229,34 @@ jobs:
         ./scripts/feeds install -a
         echo "✅ Feeds 更新安装完成"
 
-    - name: 包可用性检查
+    - name: 包可用性检查 (严格模式)
       id: package-check
       run: |
         cd $BUILD_DIR
         echo "=== 包可用性检查 ==="
-        # 使用宽松模式，即使有包缺失也继续构建
-        set +e
+        
+        # 首先运行包诊断
+        echo "=== 运行包诊断 ==="
+        ./build_helpers.sh diagnose_packages "."
+        DIAGNOSE_EXIT_CODE=$?
+        
+        if [ $DIAGNOSE_EXIT_CODE -ne 0 ]; then
+            echo "❌ 包诊断发现缺失包，停止构建"
+            exit 1
+        fi
+        
+        # 然后运行包检查
+        echo "=== 运行包检查 ==="
         OUTPUT=$(./openwrt_build_manager.sh package_check ".")
         PACKAGE_CHECK_EXIT_CODE=$?
-        set -e
         
         echo "$OUTPUT"
         
-        # 即使包检查失败，也继续构建（非关键包缺失）
         if [ $PACKAGE_CHECK_EXIT_CODE -eq 0 ]; then
             echo "✅ 包检查通过"
         else
-            echo "⚠️ 包检查发现缺失包，但继续构建流程"
+            echo "❌ 包检查发现缺失包，停止构建"
+            exit $PACKAGE_CHECK_EXIT_CODE
         fi
 
     - name: 设备检测
@@ -311,18 +321,30 @@ jobs:
         make -j$MAKE_JOBS download
         echo "✅ 依赖包下载完成"
 
-    - name: 编译固件
+    - name: 编译固件 (带详细日志)
       run: |
         cd $BUILD_DIR
         echo "=== 编译固件 ==="
         export MAKE_JOBS=${{ inputs.multithreading && '$(nproc)' || '1' }}
         
+        # 创建日志目录
+        mkdir -p logs
+        
         if [ "${{ inputs.enable_cache }}" = "true" ]; then
             echo "🔄 启用编译缓存"
-            make -j$MAKE_JOBS V=s
+            # 保存详细日志
+            make -j$MAKE_JOBS V=s 2>&1 | tee logs/build.log
+            BUILD_EXIT_CODE=${PIPESTATUS[0]}
         else
             echo "🔄 普通编译模式"
-            make -j$MAKE_JOBS V=s
+            make -j$MAKE_JOBS V=s 2>&1 | tee logs/build.log
+            BUILD_EXIT_CODE=${PIPESTATUS[0]}
+        fi
+        
+        echo "编译退出代码: $BUILD_EXIT_CODE"
+        if [ $BUILD_EXIT_CODE -ne 0 ]; then
+            echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
+            exit $BUILD_EXIT_CODE
         fi
         echo "✅ 固件编译完成"
 
