@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流
+name: OpenWrt 智能固件构建工作流 - 修复版
 
 on:
   workflow_dispatch:
@@ -224,12 +224,12 @@ jobs:
         echo "=== Feeds 配置 ==="
         ./openwrt_build_manager.sh feeds_config "$SELECTED_BRANCH"
 
-    - name: 更新安装 Feeds
+    - name: 更新安装 Feeds - 修复版：强制更新
       run: |
         cd $BUILD_DIR
         echo "=== 更新安装 Feeds ==="
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
+        ./scripts/feeds update -a -f
+        ./scripts/feeds install -a -f
         echo "✅ Feeds 更新安装完成"
 
     - name: 设备检测
@@ -256,7 +256,7 @@ jobs:
             exit 1
         fi
 
-    - name: 配置加载和智能包匹配
+    - name: 配置加载和智能包匹配 - 修复版
       run: |
         cd $BUILD_DIR
         echo "=== 配置加载和智能包匹配 ==="
@@ -264,6 +264,11 @@ jobs:
         # 显示插件信息
         echo "额外安装插件: ${{ inputs.extra_packages }}"
         echo "禁用插件: ${{ inputs.disabled_plugins }}"
+        
+        # 确保feeds就绪
+        echo "=== 确保feeds就绪 ==="
+        ./scripts/feeds update -a > /dev/null 2>&1
+        ./scripts/feeds install -a > /dev/null 2>&1
         
         ./openwrt_build_manager.sh config_load \
             "${{ inputs.config_type }}" \
@@ -287,12 +292,12 @@ jobs:
             # 检查是否有缺失包报告
             if [ -f "missing_packages.txt" ]; then
                 echo "⚠️  发现缺失包报告:"
-                cat missing_packages.txt
+                cat missing_packages.txt | head -20
             fi
             
             if [ -f "package_fix_report.txt" ]; then
                 echo "📋 包修复报告:"
-                cat package_fix_report.txt
+                cat package_fix_report.txt | head -30
             fi
         else
             echo "❌ .config 文件未生成"
@@ -440,7 +445,7 @@ jobs:
     - name: 开启 SSH 服务
       uses: lhotari/action-upterm@v1
       with:
-        wait-timeout-minutes: 30
+        wait-timeout-minutes: 120
     - name: 编译前提示
       run: |
         echo "🚀 SSH调试模式已启动"
