@@ -264,115 +264,107 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 创建修复包匹配器 ==="
-        cat > create_fixed_matcher.sh << 'EOF'
-#!/bin/bash
-echo '创建修复版智能包匹配器...'
-cat > smart_package_matcher_fixed.sh << 'SCRIPT_EOF'
-#!/bin/bash
-set -e
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-get_available_packages_fixed() {
-    local build_dir="$1"
-    cd "$build_dir"
-    log_info "=== 获取可用包列表 ==="
-    local packages_from_feeds=""
-    if [ -f "scripts/feeds" ]; then
-        packages_from_feeds=$(./scripts/feeds list -r 2>/dev/null | cut -d' ' -f1 | sort | uniq)
-        echo "从feeds获取包数量: $(echo "$packages_from_feeds" | wc -l)"
-    fi
-    local packages_from_makefiles=""
-    if [ -d "package" ]; then
-        packages_from_makefiles=$(find package -name Makefile -type f 2>/dev/null | xargs grep -l "^PKG_NAME" 2>/dev/null | xargs -I {} grep "^PKG_NAME:=" {} 2>/dev/null | cut -d':' -f2 | sed 's/.*=//g' | sort | uniq)
-        echo "从Makefile获取包数量: $(echo "$packages_from_makefiles" | wc -l)"
-    fi
-    local all_packages=$(echo -e "$packages_from_feeds\n$packages_from_makefiles" | sort | uniq | grep -v "^$")
-    echo "总可用包数量: $(echo "$all_packages" | wc -l)"
-    echo "验证基础包:"
-    local critical_packages="base-files busybox dnsmasq dropbear firewall fstools libc libgcc"
-    for pkg in $critical_packages; do
-        if echo "$all_packages" | grep -q "^$pkg$"; then
-            echo "✅ $pkg - 存在"
-        else
-            echo "❌ $pkg - 缺失"
-        fi
-    done
-    echo "$all_packages"
-}
-smart_fix_config_fixed() {
-    local build_dir="$1"
-    local config_file="$2"
-    cd "$build_dir"
-    log_info "=== 开始智能包匹配修复 ==="
-    echo "构建目录: $build_dir"
-    echo "配置文件: $config_file"
-    local available_packages=$(get_available_packages_fixed "$build_dir")
-    local available_count=$(echo "$available_packages" | wc -l)
-    echo "可用包数量: $available_count"
-    local configured_packages=$(grep "^CONFIG_PACKAGE_" "$config_file" | grep "=y$" | sed 's/CONFIG_PACKAGE_//;s/=y//' | sort | uniq)
-    local configured_count=$(echo "$configured_packages" | wc -l)
-    echo "配置中启用的包数量: $configured_count"
-    local report_file="package_fix_report_fixed.txt"
-    local missing_file="missing_packages_fixed.txt"
-    echo "=== 包匹配修复报告 ===" > "$report_file"
-    echo "生成时间: $(date)" >> "$report_file"
-    echo "可用包数量: $available_count" >> "$report_file"
-    echo "配置包数量: $configured_count" >> "$report_file"
-    echo "" >> "$report_file"
-    echo "=== 缺失包列表 ===" > "$missing_file"
-    local fixed_count=0
-    local missing_count=0
-    for pkg in $configured_packages; do
-        echo "智能匹配包: $pkg"
-        if echo "$available_packages" | grep -q "^$pkg$"; then
-            echo "[PACKAGE] $pkg - AVAILABLE - 包可用" >> "$report_file"
-            echo "✅ $pkg - 可用"
-        else
-            echo "[PACKAGE] $pkg - MISSING - 包不可用，已禁用" >> "$report_file"
-            echo "❌ $pkg - 不可用" >> "$missing_file"
-            log_warning "包 '$pkg' 在当前版本中不可用，已自动禁用"
-            sed -i "/CONFIG_PACKAGE_${pkg}=y/d" "$config_file"
-            echo "# CONFIG_PACKAGE_${pkg} is not set" >> "$config_file"
-            missing_count=$((missing_count + 1))
-        fi
-    done
-    echo "" >> "$report_file"
-    echo "修复的包数量: $fixed_count" >> "$report_file"
-    echo "缺失的包数量: $missing_count" >> "$report_file"
-    echo "修复完成: 修复 $fixed_count, 缺失 $missing_count"
-    echo "详细报告: $report_file"
-    echo "缺失包列表: $missing_file"
-    if [ $missing_count -gt 10 ]; then
-        log_warning "大量包缺失，请检查feeds配置和分支兼容性"
-    fi
-    return 0
-}
-case "$1" in
-    "smart_fix_config")
-        smart_fix_config_fixed "$2" "$3"
-        ;;
-    "get_available")
-        get_available_packages_fixed "$2"
-        ;;
-    *)
-        echo "用法: $0 <功能> [参数]"
-        echo "功能: smart_fix_config <构建目录> <配置文件>"
-        echo "      get_available <构建目录>"
-        ;;
-esac
-SCRIPT_EOF
-chmod +x smart_package_matcher_fixed.sh
-echo "✅ 修复版包匹配器创建完成"
-EOF
-        chmod +x create_fixed_matcher.sh
-        ./create_fixed_matcher.sh
+        echo "#!/bin/bash" > smart_package_matcher_fixed.sh
+        echo "set -e" >> smart_package_matcher_fixed.sh
+        echo "RED='\033[0;31m'" >> smart_package_matcher_fixed.sh
+        echo "GREEN='\033[0;32m'" >> smart_package_matcher_fixed.sh
+        echo "YELLOW='\033[1;33m'" >> smart_package_matcher_fixed.sh
+        echo "BLUE='\033[0;34m'" >> smart_package_matcher_fixed.sh
+        echo "NC='\033[0m'" >> smart_package_matcher_fixed.sh
+        echo "log_info() { echo -e \"\${BLUE}[INFO]\${NC} \$1\"; }" >> smart_package_matcher_fixed.sh
+        echo "log_success() { echo -e \"\${GREEN}[SUCCESS]\${NC} \$1\"; }" >> smart_package_matcher_fixed.sh
+        echo "log_warning() { echo -e \"\${YELLOW}[WARNING]\${NC} \$1\"; }" >> smart_package_matcher_fixed.sh
+        echo "log_error() { echo -e \"\${RED}[ERROR]\${NC} \$1\"; }" >> smart_package_matcher_fixed.sh
+        echo "get_available_packages_fixed() {" >> smart_package_matcher_fixed.sh
+        echo "    local build_dir=\"\$1\"" >> smart_package_matcher_fixed.sh
+        echo "    cd \"\$build_dir\"" >> smart_package_matcher_fixed.sh
+        echo "    log_info \"=== 获取可用包列表 ===\"" >> smart_package_matcher_fixed.sh
+        echo "    local packages_from_feeds=\"\"" >> smart_package_matcher_fixed.sh
+        echo "    if [ -f \"scripts/feeds\" ]; then" >> smart_package_matcher_fixed.sh
+        echo "        packages_from_feeds=\$(./scripts/feeds list -r 2>/dev/null | cut -d' ' -f1 | sort | uniq)" >> smart_package_matcher_fixed.sh
+        echo "        echo \"从feeds获取包数量: \$(echo \"\$packages_from_feeds\" | wc -l)\"" >> smart_package_matcher_fixed.sh
+        echo "    fi" >> smart_package_matcher_fixed.sh
+        echo "    local packages_from_makefiles=\"\"" >> smart_package_matcher_fixed.sh
+        echo "    if [ -d \"package\" ]; then" >> smart_package_matcher_fixed.sh
+        echo "        packages_from_makefiles=\$(find package -name Makefile -type f 2>/dev/null | xargs grep -l \"^PKG_NAME\" 2>/dev/null | xargs -I {} grep \"^PKG_NAME:=\" {} 2>/dev/null | cut -d':' -f2 | sed 's/.*=//g' | sort | uniq)" >> smart_package_matcher_fixed.sh
+        echo "        echo \"从Makefile获取包数量: \$(echo \"\$packages_from_makefiles\" | wc -l)\"" >> smart_package_matcher_fixed.sh
+        echo "    fi" >> smart_package_matcher_fixed.sh
+        echo "    local all_packages=\$(echo -e \"\$packages_from_feeds\\n\$packages_from_makefiles\" | sort | uniq | grep -v \"^$\")" >> smart_package_matcher_fixed.sh
+        echo "    echo \"总可用包数量: \$(echo \"\$all_packages\" | wc -l)\"" >> smart_package_matcher_fixed.sh
+        echo "    echo \"验证基础包:\"" >> smart_package_matcher_fixed.sh
+        echo "    local critical_packages=\"base-files busybox dnsmasq dropbear firewall fstools libc libgcc\"" >> smart_package_matcher_fixed.sh
+        echo "    for pkg in \$critical_packages; do" >> smart_package_matcher_fixed.sh
+        echo "        if echo \"\$all_packages\" | grep -q \"^\$pkg\$\"; then" >> smart_package_matcher_fixed.sh
+        echo "            echo \"✅ \$pkg - 存在\"" >> smart_package_matcher_fixed.sh
+        echo "        else" >> smart_package_matcher_fixed.sh
+        echo "            echo \"❌ \$pkg - 缺失\"" >> smart_package_matcher_fixed.sh
+        echo "        fi" >> smart_package_matcher_fixed.sh
+        echo "    done" >> smart_package_matcher_fixed.sh
+        echo "    echo \"\$all_packages\"" >> smart_package_matcher_fixed.sh
+        echo "}" >> smart_package_matcher_fixed.sh
+        echo "smart_fix_config_fixed() {" >> smart_package_matcher_fixed.sh
+        echo "    local build_dir=\"\$1\"" >> smart_package_matcher_fixed.sh
+        echo "    local config_file=\"\$2\"" >> smart_package_matcher_fixed.sh
+        echo "    cd \"\$build_dir\"" >> smart_package_matcher_fixed.sh
+        echo "    log_info \"=== 开始智能包匹配修复 ===\"" >> smart_package_matcher_fixed.sh
+        echo "    echo \"构建目录: \$build_dir\"" >> smart_package_matcher_fixed.sh
+        echo "    echo \"配置文件: \$config_file\"" >> smart_package_matcher_fixed.sh
+        echo "    local available_packages=\$(get_available_packages_fixed \"\$build_dir\")" >> smart_package_matcher_fixed.sh
+        echo "    local available_count=\$(echo \"\$available_packages\" | wc -l)" >> smart_package_matcher_fixed.sh
+        echo "    echo \"可用包数量: \$available_count\"" >> smart_package_matcher_fixed.sh
+        echo "    local configured_packages=\$(grep \"^CONFIG_PACKAGE_\" \"\$config_file\" | grep \"=y\$\" | sed 's/CONFIG_PACKAGE_//;s/=y//' | sort | uniq)" >> smart_package_matcher_fixed.sh
+        echo "    local configured_count=\$(echo \"\$configured_packages\" | wc -l)" >> smart_package_matcher_fixed.sh
+        echo "    echo \"配置中启用的包数量: \$configured_count\"" >> smart_package_matcher_fixed.sh
+        echo "    local report_file=\"package_fix_report_fixed.txt\"" >> smart_package_matcher_fixed.sh
+        echo "    local missing_file=\"missing_packages_fixed.txt\"" >> smart_package_matcher_fixed.sh
+        echo "    echo \"=== 包匹配修复报告 ===\" > \"\$report_file\"" >> smart_package_matcher_fixed.sh
+        echo "    echo \"生成时间: \$(date)\" >> \"\$report_file\"" >> smart_package_matcher_fixed.sh
+        echo "    echo \"可用包数量: \$available_count\" >> \"\$report_file\"" >> smart_package_matcher_fixed.sh
+        echo "    echo \"配置包数量: \$configured_count\" >> \"\$report_file\"" >> smart_package_matcher_fixed.sh
+        echo "    echo \"\" >> \"\$report_file\"" >> smart_package_matcher_fixed.sh
+        echo "    echo \"=== 缺失包列表 ===\" > \"\$missing_file\"" >> smart_package_matcher_fixed.sh
+        echo "    local fixed_count=0" >> smart_package_matcher_fixed.sh
+        echo "    local missing_count=0" >> smart_package_matcher_fixed.sh
+        echo "    for pkg in \$configured_packages; do" >> smart_package_matcher_fixed.sh
+        echo "        echo \"智能匹配包: \$pkg\"" >> smart_package_matcher_fixed.sh
+        echo "        if echo \"\$available_packages\" | grep -q \"^\$pkg\$\"; then" >> smart_package_matcher_fixed.sh
+        echo "            echo \"[PACKAGE] \$pkg - AVAILABLE - 包可用\" >> \"\$report_file\"" >> smart_package_matcher_fixed.sh
+        echo "            echo \"✅ \$pkg - 可用\"" >> smart_package_matcher_fixed.sh
+        echo "        else" >> smart_package_matcher_fixed.sh
+        echo "            echo \"[PACKAGE] \$pkg - MISSING - 包不可用，已禁用\" >> \"\$report_file\"" >> smart_package_matcher_fixed.sh
+        echo "            echo \"❌ \$pkg - 不可用\" >> \"\$missing_file\"" >> smart_package_matcher_fixed.sh
+        echo "            log_warning \"包 '\$pkg' 在当前版本中不可用，已自动禁用\"" >> smart_package_matcher_fixed.sh
+        echo "            sed -i \"/CONFIG_PACKAGE_\${pkg}=y/d\" \"\$config_file\"" >> smart_package_matcher_fixed.sh
+        echo "            echo \"# CONFIG_PACKAGE_\${pkg} is not set\" >> \"\$config_file\"" >> smart_package_matcher_fixed.sh
+        echo "            missing_count=\$((missing_count + 1))" >> smart_package_matcher_fixed.sh
+        echo "        fi" >> smart_package_matcher_fixed.sh
+        echo "    done" >> smart_package_matcher_fixed.sh
+        echo "    echo \"\" >> \"\$report_file\"" >> smart_package_matcher_fixed.sh
+        echo "    echo \"修复的包数量: \$fixed_count\" >> \"\$report_file\"" >> smart_package_matcher_fixed.sh
+        echo "    echo \"缺失的包数量: \$missing_count\" >> \"\$report_file\"" >> smart_package_matcher_fixed.sh
+        echo "    echo \"修复完成: 修复 \$fixed_count, 缺失 \$missing_count\"" >> smart_package_matcher_fixed.sh
+        echo "    echo \"详细报告: \$report_file\"" >> smart_package_matcher_fixed.sh
+        echo "    echo \"缺失包列表: \$missing_file\"" >> smart_package_matcher_fixed.sh
+        echo "    if [ \$missing_count -gt 10 ]; then" >> smart_package_matcher_fixed.sh
+        echo "        log_warning \"大量包缺失，请检查feeds配置和分支兼容性\"" >> smart_package_matcher_fixed.sh
+        echo "    fi" >> smart_package_matcher_fixed.sh
+        echo "    return 0" >> smart_package_matcher_fixed.sh
+        echo "}" >> smart_package_matcher_fixed.sh
+        echo "case \"\$1\" in" >> smart_package_matcher_fixed.sh
+        echo "    \"smart_fix_config\")" >> smart_package_matcher_fixed.sh
+        echo "        smart_fix_config_fixed \"\$2\" \"\$3\"" >> smart_package_matcher_fixed.sh
+        echo "        ;;" >> smart_package_matcher_fixed.sh
+        echo "    \"get_available\")" >> smart_package_matcher_fixed.sh
+        echo "        get_available_packages_fixed \"\$2\"" >> smart_package_matcher_fixed.sh
+        echo "        ;;" >> smart_package_matcher_fixed.sh
+        echo "    *)" >> smart_package_matcher_fixed.sh
+        echo "        echo \"用法: \$0 <功能> [参数]\"" >> smart_package_matcher_fixed.sh
+        echo "        echo \"功能: smart_fix_config <构建目录> <配置文件>\"" >> smart_package_matcher_fixed.sh
+        echo "        echo \"      get_available <构建目录>\"" >> smart_package_matcher_fixed.sh
+        echo "        ;;" >> smart_package_matcher_fixed.sh
+        echo "esac" >> smart_package_matcher_fixed.sh
+        chmod +x smart_package_matcher_fixed.sh
+        echo "✅ 修复版包匹配器创建完成"
 
     - name: 插件兼容性检查
       run: |
