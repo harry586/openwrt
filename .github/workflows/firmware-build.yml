@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流 - 带分支验证
+name: OpenWrt 智能固件构建工作流 - 修复版
 
 on:
   workflow_dispatch:
@@ -264,7 +264,7 @@ jobs:
       if: env.BRANCH_VALIDATED == 'true'
       uses: actions/upload-artifact@v4
       with:
-        name: 插件列表-${{ github.event.inputs.device_name }}-$SELECTED_BRANCH
+        name: 插件列表-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
         path: ${{ env.BUILD_DIR }}/verified_plugins.txt
         retention-days: 7
 
@@ -325,11 +325,39 @@ jobs:
         # 修复：插件检查不会终止构建，只输出警告
         ./openwrt_build_manager.sh plugin_check "$SELECTED_BRANCH" || echo "⚠️ 插件兼容性检查发现警告，但构建将继续"
 
-    - name: Feeds 配置
+    - name: Feeds 配置 - 修复版
       run: |
         cd $BUILD_DIR
-        echo "=== Feeds 配置 ==="
-        ./openwrt_build_manager.sh feeds_config "$SELECTED_BRANCH"
+        echo "=== Feeds 配置 - 修复版 ==="
+        # 直接执行 feeds_config 函数内容，避免函数调用问题
+        local branch="$SELECTED_BRANCH"
+        echo "分支: $branch"
+        
+        local feeds_branch="$branch"
+        if echo "$branch" | grep -q "openwrt-23.05"; then
+            feeds_branch="openwrt-23.05"
+        elif echo "$branch" | grep -q "openwrt-22.03"; then
+            feeds_branch="openwrt-22.03"
+        elif echo "$branch" | grep -q "openwrt-21.02"; then
+            feeds_branch="openwrt-21.02"
+        elif echo "$branch" | grep -q "openwrt-19.07"; then
+            feeds_branch="openwrt-19.07"
+        else
+            echo "⚠️ 未知版本分支，使用默认分支: master"
+            feeds_branch="master"
+        fi
+        
+        echo "使用的feeds分支: $feeds_branch"
+        
+        # 配置feeds - 修复版：使用正确的分支格式
+        echo "src-git packages https://github.com/immortalwrt/packages.git;$feeds_branch" > feeds.conf.default
+        echo "src-git luci https://github.com/immortalwrt/luci.git;$feeds_branch" >> feeds.conf.default
+        echo "src-git routing https://github.com/openwrt/routing.git;$feeds_branch" >> feeds.conf.default
+        echo "src-git telephony https://github.com/openwrt/telephony.git;$feeds_branch" >> feeds.conf.default
+        
+        echo "✅ Feeds 配置完成"
+        echo "Feeds配置内容:"
+        cat feeds.conf.default
 
     - name: 更新安装 Feeds - 修复版：强制更新
       run: |
@@ -391,6 +419,7 @@ jobs:
             fi
         fi
         
+        # 直接调用配置加载函数
         ./openwrt_build_manager.sh config_load \
             "${{ inputs.config_type }}" \
             "$PLATFORM" \
@@ -540,35 +569,17 @@ jobs:
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: 固件-${{ github.event.inputs.device_name }}-$SELECTED_BRANCH-${{ inputs.config_type }}
+        name: 固件-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ inputs.config_type }}
         path: ${{ env.BUILD_DIR }}/bin/targets/
         retention-days: 7
 
-    # 只修改有问题的上传步骤，其他部分保持不变
-
-- name: 上传插件列表
-  if: env.BRANCH_VALIDATED == 'true'
-  uses: actions/upload-artifact@v4
-  with:
-    name: 插件列表-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
-    path: ${{ env.BUILD_DIR }}/verified_plugins.txt
-    retention-days: 7
-
-- name: 上传构建报告
-  if: always()
-  uses: actions/upload-artifact@v4
-  with:
-    name: 构建报告-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
-    path: ${{ env.BUILD_DIR }}/build-reports/
-    retention-days: 7
-
-- name: 上传固件
-  if: success()
-  uses: actions/upload-artifact@v4
-  with:
-    name: 固件-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ inputs.config_type }}
-    path: ${{ env.BUILD_DIR }}/bin/targets/
-    retention-days: 7
+    - name: 上传构建报告
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: 构建报告-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
+        path: ${{ env.BUILD_DIR }}/build-reports/
+        retention-days: 7
 
     - name: 清理目录
       if: always()
