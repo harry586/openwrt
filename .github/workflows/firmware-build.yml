@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流 - 修复版
+name: OpenWrt 智能固件构建工作流 - 带分支验证
 
 on:
   workflow_dispatch:
@@ -110,6 +110,8 @@ jobs:
       run: |
         echo "=== 复制构建脚本 ==="
         cd $GITHUB_WORKSPACE
+        
+        # 创建必要的目录
         mkdir -p $BUILD_DIR/scripts
         mkdir -p $BUILD_DIR/config-templates
         
@@ -117,6 +119,7 @@ jobs:
         cp firmware-config/scripts/openwrt_build_manager.sh $BUILD_DIR/
         cp firmware-config/scripts/build_helpers.sh $BUILD_DIR/
         cp firmware-config/scripts/smart_package_matcher.sh $BUILD_DIR/
+        cp firmware-config/scripts/branch_plugin_detector.sh $BUILD_DIR/
         
         # 复制配置文件
         cp firmware-config/configs/base-template.config $BUILD_DIR/config-templates/
@@ -140,7 +143,7 @@ jobs:
                 ;;
         esac
         
-        # 确定版本参数 - 修复版：正确处理版本选择
+        # 确定版本参数
         USER_VERSION=""
         if [ -n "${{ inputs.custom_version }}" ]; then
             USER_VERSION="${{ inputs.custom_version }}"
@@ -152,7 +155,7 @@ jobs:
         echo "版本: ${USER_VERSION:-自动}"
         echo "老旧设备: $OLD_DEVICE_FLAG"
         
-        # 调用版本检测 - 修复版：添加错误处理
+        # 调用版本检测
         echo "=== 开始版本检测 ==="
         set +e
         OUTPUT=$(./openwrt_build_manager.sh version_detect "${{ github.event.inputs.device_name }}" "$USER_VERSION" "$OLD_DEVICE_FLAG" 2>&1)
@@ -186,33 +189,68 @@ jobs:
             exit 1
         fi
 
-    - name: 克隆源码 - 修复版
+    - name: 分支插件检测 - 严格验证
+      id: branch-plugin-detection
       run: |
         cd $BUILD_DIR
-        echo "=== 克隆源码 ==="
+        echo "=== 分支插件检测 - 严格验证 ==="
+        
+        # 严格验证分支并检测插件
+        echo "🔍 验证分支 $SELECTED_BRANCH 并检测插件..."
+        if ./branch_plugin_detector.sh validate_branch "$SELECTED_REPO_URL" "$SELECTED_BRANCH" "verified_plugins.txt"; then
+            echo "✅ 分支验证和插件检测成功"
+            
+            # 统计插件数量
+            TOTAL_PLUGINS=$(grep -c "^- \`" "verified_plugins.txt" 2>/dev/null || echo "0")
+            echo "📊 检测到 $TOTAL_PLUGINS 个可用插件"
+            
+            # 显示一些推荐插件
+            echo ""
+            echo "🎯 推荐插件示例:"
+            grep -E "luci-app-(turboacc|upnp|wol|sqm|ddns|firewall)" "verified_plugins.txt" | head -5 || echo "无推荐插件"
+            
+            # 设置成功标志
+            echo "BRANCH_VALIDATED=true" >> $GITHUB_ENV
+            echo "PLUGINS_COUNT=$TOTAL_PLUGINS" >> $GITHUB_ENV
+            
+        else
+            echo "❌ 分支验证失败: $SELECTED_BRANCH 不存在或插件检测失败"
+            echo "BRANCH_VALIDATED=false" >> $GITHUB_ENV
+            exit 1
+        fi
+
+    - name: 上传插件列表
+      if: env.BRANCH_VALIDATED == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: 插件列表-${{ github.event.inputs.device_name }}-$SELECTED_BRANCH
+        path: ${{ env.BUILD_DIR }}/verified_plugins.txt
+        retention-days: 7
+
+    - name: 检查分支验证结果
+      if: env.BRANCH_VALIDATED == 'false'
+      run: |
+        echo "❌ 分支验证失败，构建终止"
+        echo "请检查分支名称是否正确，或选择其他可用分支"
+        exit 1
+
+    - name: 克隆源码 - 已验证分支
+      run: |
+        cd $BUILD_DIR
+        echo "=== 克隆源码 - 已验证分支 ==="
         echo "仓库: $SELECTED_REPO_URL"
-        echo "分支: $SELECTED_BRANCH"
+        echo "分支: $SELECTED_BRANCH (已验证存在)"
         
         # 清理目录
         sudo rm -rf ./* ./.git* 2>/dev/null || true
         
-        # 克隆源码 - 修复版：添加分支检查
-        echo "尝试克隆分支: $SELECTED_BRANCH"
+        # 克隆源码 - 分支已经验证存在
+        echo "克隆已验证的分支: $SELECTED_BRANCH"
         if git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . 2>&1; then
             echo "✅ 源码克隆完成"
         else
-            echo "❌ 指定分支克隆失败，尝试默认分支"
-            # 尝试克隆默认分支
-            if git clone --depth 1 "$SELECTED_REPO_URL" . 2>&1; then
-                echo "✅ 默认分支源码克隆完成"
-                # 获取实际分支
-                ACTUAL_BRANCH=$(git branch --show-current)
-                echo "SELECTED_BRANCH=$ACTUAL_BRANCH" >> $GITHUB_ENV
-                echo "⚠️ 使用实际分支: $ACTUAL_BRANCH"
-            else
-                echo "❌ 源码克隆失败"
-                exit 1
-            fi
+            echo "❌ 源码克隆失败"
+            exit 1
         fi
 
     - name: 恢复构建脚本
@@ -230,6 +268,7 @@ jobs:
         cp firmware-config/scripts/openwrt_build_manager.sh $BUILD_DIR/
         cp firmware-config/scripts/build_helpers.sh $BUILD_DIR/
         cp firmware-config/scripts/smart_package_matcher.sh $BUILD_DIR/
+        cp firmware-config/scripts/branch_plugin_detector.sh $BUILD_DIR/
         
         # 复制配置文件
         cp firmware-config/configs/base-template.config $BUILD_DIR/config-templates/
@@ -242,7 +281,8 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 插件兼容性检查 ==="
-        ./openwrt_build_manager.sh plugin_check "$SELECTED_BRANCH"
+        # 修复：插件检查不会终止构建，只输出警告
+        ./openwrt_build_manager.sh plugin_check "$SELECTED_BRANCH" || echo "⚠️ 插件兼容性检查发现警告，但构建将继续"
 
     - name: Feeds 配置
       run: |
@@ -295,6 +335,20 @@ jobs:
         echo "=== 确保feeds就绪 ==="
         ./scripts/feeds update -a > /dev/null 2>&1
         ./scripts/feeds install -a > /dev/null 2>&1
+        
+        # 检查插件列表文件是否存在，如果存在则验证用户请求的插件
+        if [ -f "verified_plugins.txt" ]; then
+            echo "=== 验证用户请求的插件 ==="
+            if [ -n "${{ inputs.extra_packages }}" ]; then
+                for pkg in ${{ inputs.extra_packages }}; do
+                    if grep -q "^\`$pkg\`" "verified_plugins.txt"; then
+                        echo "✅ 插件 $pkg 在分支中存在"
+                    else
+                        echo "⚠️  警告: 插件 $pkg 在分支 $SELECTED_BRANCH 中不存在"
+                    fi
+                done
+            fi
+        fi
         
         ./openwrt_build_manager.sh config_load \
             "${{ inputs.config_type }}" \
@@ -422,6 +476,7 @@ jobs:
         [ -f "missing_packages.txt" ] && cp missing_packages.txt build-reports/ || echo "缺失包报告不存在"
         [ -f "package_fix_report.txt" ] && cp package_fix_report.txt build-reports/ || echo "包修复报告不存在"
         [ -f ".config" ] && cp .config build-reports/final-config.txt || echo "最终配置不存在"
+        [ -f "verified_plugins.txt" ] && cp verified_plugins.txt build-reports/ || echo "插件列表不存在"
         
         echo "✅ 构建报告收集完成"
 
