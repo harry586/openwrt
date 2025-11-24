@@ -138,6 +138,93 @@ version_detect() {
     return 0
 }
 
+# 设备检测功能
+device_detect() {
+    local device_input="$1"
+    
+    log_info "=== 设备检测 ==="
+    echo "输入设备: $device_input"
+    
+    # 检查是否在 OpenWrt 源码目录
+    if [ ! -d "target/linux" ]; then
+        log_error "错误: 请在 OpenWrt 源码根目录中运行设备检测"
+        return 1
+    fi
+    
+    # 设备映射
+    declare -A DEVICE_MAPPING=(
+        ["ac42u"]="asus_rt-ac42u"
+        ["acrh17"]="asus_rt-ac42u" 
+        ["rt-acrh17"]="asus_rt-ac42u"
+        ["ac58u"]="asus_rt-ac58u"
+        ["acrh13"]="asus_rt-ac58u"
+        ["rt-ac58u"]="asus_rt-ac58u"
+        ["rt-acrh13"]="asus_rt-ac58u"
+        ["mi4a"]="xiaomi_mi-router-4a-gigabit"
+        ["r4a"]="xiaomi_mi-router-4a-gigabit"
+        ["mi3g"]="xiaomi_mi-router-3g"
+        ["r3g"]="xiaomi_mi-router-3g"
+        ["mi4"]="xiaomi_mi-router-4"
+        ["r4"]="xiaomi_mi-router-4"
+        ["wr841n"]="tl-wr841n-v11"
+        ["wr842n"]="tl-wr842n-v4"
+        ["wr941n"]="tl-wr941nd-v6"
+    )
+    
+    # 首先尝试已知映射
+    if [ -n "${DEVICE_MAPPING[$device_input]}" ]; then
+        local device_short_name="${DEVICE_MAPPING[$device_input]}"
+        local platform=""
+        
+        # 推断平台
+        case "$device_short_name" in
+            *ipq40xx*|*asus_rt-ac*)
+                platform="ipq40xx"
+                ;;
+            *ar71xx*|*tl-wr*)
+                platform="ar71xx"
+                ;;
+            *ramips*|*xiaomi_mi*)
+                platform="ramips"
+                ;;
+            *mediatek*|*redmi-ax6s*)
+                platform="mediatek"
+                ;;
+            *)
+                platform="ipq40xx"
+                ;;
+        esac
+        
+        log_success "使用已知映射: $device_input -> $device_short_name"
+        echo "PLATFORM=$platform"
+        echo "DEVICE_SHORT_NAME=$device_short_name"
+        echo "DEVICE_FULL_NAME=$device_input"
+        return 0
+    fi
+    
+    # 搜索设备树文件
+    log_info "搜索设备树文件..."
+    local dts_files=$(find target/linux -name "*.dts" -type f 2>/dev/null | grep -i "$device_input" | head -3)
+    
+    if [ -n "$dts_files" ]; then
+        log_success "找到设备树文件"
+        local platform=$(echo "$dts_files" | head -1 | cut -d'/' -f3)
+        local device_name=$(basename "$dts_files" | head -1 | sed 's/\.dts.*//')
+        
+        echo "PLATFORM=$platform"
+        echo "DEVICE_SHORT_NAME=$device_name"
+        echo "DEVICE_FULL_NAME=$device_input"
+        echo "DTS_FILES=$dts_files"
+    else
+        log_warning "未找到设备树文件，使用输入名称"
+        echo "PLATFORM=generic"
+        echo "DEVICE_SHORT_NAME=$device_input"
+        echo "DEVICE_FULL_NAME=$device_input"
+    fi
+    
+    log_success "设备检测完成"
+}
+
 # 插件兼容性检查 - 修复版：不因警告而终止构建
 plugin_check() {
     local branch="$1"
@@ -260,8 +347,436 @@ plugin_check() {
     return 0
 }
 
-# ... 其余函数保持不变（feeds_config, config_load, custom_integrate, package_check, error_analyze 等）
-# 这些函数的内容与之前相同，这里省略以节省空间
+# Feeds配置函数 - 新增
+feeds_config() {
+    local branch="$1"
+    
+    log_info "=== Feeds 配置 ==="
+    echo "分支: $branch"
+    
+    local feeds_branch="$branch"
+    if echo "$branch" | grep -q "openwrt-23.05"; then
+        feeds_branch="openwrt-23.05"
+    elif echo "$branch" | grep -q "openwrt-22.03"; then
+        feeds_branch="openwrt-22.03"
+    elif echo "$branch" | grep -q "openwrt-21.02"; then
+        feeds_branch="openwrt-21.02"
+    elif echo "$branch" | grep -q "openwrt-19.07"; then
+        feeds_branch="openwrt-19.07"
+    else
+        log_warning "未知版本分支，使用默认分支: master"
+        feeds_branch="master"
+    fi
+    
+    echo "使用的feeds分支: $feeds_branch"
+    
+    # 配置feeds - 修复版：使用正确的分支格式
+    echo "src-git packages https://github.com/immortalwrt/packages.git;$feeds_branch" > feeds.conf.default
+    echo "src-git luci https://github.com/immortalwrt/luci.git;$feeds_branch" >> feeds.conf.default
+    echo "src-git routing https://github.com/openwrt/routing.git;$feeds_branch" >> feeds.conf.default
+    echo "src-git telephony https://github.com/openwrt/telephony.git;$feeds_branch" >> feeds.conf.default
+    
+    log_success "Feeds 配置完成"
+    echo "Feeds配置内容:"
+    cat feeds.conf.default
+}
+
+# 配置加载 - 修复版：确保feeds就绪后再运行包匹配
+config_load() {
+    local config_type="$1"
+    local platform="$2"
+    local device_short_name="$3"
+    local selected_branch="$4"
+    local device_name="$5"
+    local extra_packages="$6"
+    local disabled_plugins="$7"
+    
+    log_info "=== 配置加载 ==="
+    echo "配置类型: $config_type"
+    echo "平台: $platform"
+    echo "设备: $device_short_name"
+    echo "分支: $selected_branch"
+    
+    export MAKE_JOBS=1
+    
+    # 修复：首先确保feeds就绪
+    echo "=== 确保feeds就绪 ==="
+    if [ -f "feeds.conf.default" ]; then
+        echo "更新feeds..."
+        ./scripts/feeds update -a > /dev/null 2>&1
+        ./scripts/feeds install -a > /dev/null 2>&1
+    else
+        log_warning "feeds.conf.default 不存在，跳过feeds更新"
+    fi
+    
+    # 选择基础配置文件
+    local config_file="config-templates/base-template.config"
+    
+    echo "=== 使用基础模板配置 ==="
+    if [ ! -f "$config_file" ]; then
+        log_error "错误: 找不到基础配置文件 $config_file"
+        return 1
+    fi
+    
+    # 创建基础配置
+    echo "=== 创建基础配置 ==="
+    echo "# 设备基础配置" > .config
+    echo "CONFIG_TARGET_${platform}=y" >> .config
+    echo "CONFIG_TARGET_${platform}_generic=y" >> .config
+    echo "CONFIG_TARGET_${platform}_generic_DEVICE_${device_short_name}=y" >> .config
+    echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+    echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
+    echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
+    
+    # 追加模板配置
+    echo "=== 追加模板配置 ==="
+    cat "$config_file" >> .config
+    
+    # 检查智能包匹配器是否存在 - 修复版：添加feeds就绪检查
+    if [ -f "smart_package_matcher.sh" ]; then
+        # 初始化日志
+        echo "=== 初始化构建日志 ==="
+        ./smart_package_matcher.sh init_log "."
+        
+        # 运行智能包匹配 - 修复版：确保feeds已更新
+        echo "=== 运行智能包匹配 ==="
+        echo "确保feeds已更新..."
+        ./scripts/feeds update -a > /dev/null 2>&1
+        
+        if ! ./smart_package_matcher.sh smart_fix_config "." ".config"; then
+            log_error "智能包匹配失败"
+            # 不立即返回，继续尝试构建
+            log_warning "继续构建，但包匹配可能不完整"
+        fi
+    else
+        log_warning "智能包匹配器不存在，跳过包匹配"
+    fi
+    
+    # 处理用户自定义包
+    if [ -n "$extra_packages" ]; then
+        echo "=== 添加额外插件 ==="
+        for pkg in $extra_packages; do
+            echo "添加插件: $pkg"
+            # 如果智能匹配器存在，使用它找到正确的包名
+            if [ -f "smart_package_matcher.sh" ]; then
+                # 确保feeds已更新
+                ./scripts/feeds update -a > /dev/null 2>&1
+                local available_packages=$(./smart_package_matcher.sh get_available ".")
+                local matched_pkg=$(./smart_package_matcher.sh smart_package_match "$pkg" "$available_packages")
+                if [ -n "$matched_pkg" ]; then
+                    # 移除可能的旧配置
+                    sed -i "/# CONFIG_PACKAGE_${matched_pkg} is not set/d" .config
+                    echo "CONFIG_PACKAGE_${matched_pkg}=y" >> .config
+                    echo "✅ 添加: $pkg → $matched_pkg"
+                else
+                    echo "❌ 无法找到包: $pkg"
+                    log_warning "无法找到用户请求的包: $pkg"
+                fi
+            else
+                # 直接添加包
+                sed -i "/# CONFIG_PACKAGE_${pkg} is not set/d" .config
+                echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+                echo "✅ 添加: $pkg"
+            fi
+        done
+    fi
+    
+    if [ -n "$disabled_plugins" ]; then
+        echo "=== 禁用指定插件 ==="
+        for pkg in $disabled_plugins; do
+            echo "禁用插件: $pkg"
+            sed -i "/CONFIG_PACKAGE_${pkg}=y/d" .config
+            echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
+            echo "✅ 已禁用: $pkg"
+        done
+    fi
+    
+    # 运行 defconfig
+    echo "=== 运行 defconfig ==="
+    make -j1 defconfig
+    
+    # 显示最终配置状态
+    echo "=== 最终启用的luci插件 ==="
+    grep "^CONFIG_PACKAGE_luci-app" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort | uniq || echo "无luci插件"
+    
+    log_success "配置加载完成"
+}
+
+# 自定义文件集成
+custom_integrate() {
+    local workspace_dir="$1"
+    
+    log_info "=== 自定义文件集成 ==="
+    
+    # 创建自定义文件目录
+    mkdir -p files/root/custom-install
+    
+    # 复制IPK文件
+    local ipk_files=$(find "$workspace_dir/firmware-config/custom-files" -name "*.ipk" -type f 2>/dev/null || true)
+    if [ -n "$ipk_files" ]; then
+        echo "✅ 找到IPK文件:"
+        for ipk in $ipk_files; do
+            cp "$ipk" files/root/custom-install/
+            echo "✅ 复制IPK: $(basename "$ipk")"
+        done
+    fi
+    
+    # 复制脚本文件
+    local script_files=$(find "$workspace_dir/firmware-config/custom-files" -name "*.sh" -type f 2>/dev/null | grep -v "detector\|analysis" || true)
+    if [ -n "$script_files" ]; then
+        echo "✅ 找到脚本文件:"
+        for script in $script_files; do
+            cp "$script" files/root/custom-install/
+            chmod +x files/root/custom-install/$(basename "$script")
+            echo "✅ 复制脚本: $(basename "$script")"
+        done
+    fi
+    
+    # 创建构建时安装脚本
+    cat > files/root/custom-install/build-time-install.sh << 'EOF'
+#!/bin/sh
+echo "=== 开始构建时自定义安装 ==="
+
+if ls /root/custom-install/*.ipk >/dev/null 2>&1; then
+    echo "构建时安装IPK文件..."
+    for ipk in /root/custom-install/*.ipk; do
+        echo "安装: $(basename $ipk)"
+        opkg install "$ipk" --force-depends || echo "安装失败: $(basename $ipk)"
+    done
+else
+    echo "未找到IPK文件"
+fi
+
+if ls /root/custom-install/*.sh >/dev/null 2>&1; then
+    echo "执行构建时脚本..."
+    for script in /root/custom-install/*.sh; do
+        if [ "$(basename $script)" != "build-time-install.sh" ]; then
+            echo "执行: $(basename $script)"
+            sh "$script" || echo "执行失败: $(basename $script)"
+        fi
+    done
+else
+    echo "未找到脚本文件"
+fi
+
+rm -rf /root/custom-install
+echo "=== 构建时自定义安装完成 ==="
+EOF
+
+    chmod +x files/root/custom-install/build-time-install.sh
+    
+    # 创建rc.local启动脚本
+    mkdir -p files/etc
+    cat > files/etc/rc.local << 'EOF'
+#!/bin/sh
+[ -f /root/custom-install/build-time-install.sh ] && {
+    /root/custom-install/build-time-install.sh >/tmp/build-time-install.log 2>&1 &
+}
+exit 0
+EOF
+
+    chmod +x files/etc/rc.local
+    log_success "自定义文件集成完成"
+}
+
+# 包可用性检查 - 修复版
+package_check() {
+    local build_dir="${1:-.}"
+    cd "$build_dir"
+    
+    log_info "=== 包可用性检查 ==="
+    
+    # 更新feeds - 修复版：确保feeds就绪
+    echo "更新feeds..."
+    ./scripts/feeds update -a > /dev/null 2>&1
+    ./scripts/feeds install -a > /dev/null 2>&1
+    
+    # 读取配置文件
+    CONFIG_FILE=".config"
+    if [ ! -f "$CONFIG_FILE" ]; then
+        log_error "错误: 配置文件 $CONFIG_FILE 不存在"
+        return 1
+    fi
+    
+    # 提取所有启用的包
+    PACKAGES=$(grep "^CONFIG_PACKAGE_" "$CONFIG_FILE" | grep "=y$" | sed 's/CONFIG_PACKAGE_//;s/=y//')
+    
+    echo "在 $CONFIG_FILE 中启用的包数量: $(echo "$PACKAGES" | wc -l)"
+    
+    # 检查每个包是否在feeds中
+    MISSING_PACKAGES=()
+    AVAILABLE_PACKAGES=()
+    
+    # 预加载feeds列表到内存 - 修复版：确保获取完整列表
+    local feeds_list=$(./scripts/feeds list -r packages -r luci -r routing -r telephony 2>/dev/null | cut -d' ' -f1)
+    
+    echo "=== 开始检查包可用性 ==="
+    
+    # 检查每个包
+    for pkg in $PACKAGES; do
+        if echo "$feeds_list" | grep -q "^$pkg$"; then
+            AVAILABLE_PACKAGES+=("$pkg")
+            echo "✅ $pkg"
+        else
+            MISSING_PACKAGES+=("$pkg")
+            echo "❌ $pkg (在feeds中未找到)"
+            log_warning "包 '$pkg' 在feeds中不可用"
+        fi
+    done
+    
+    echo ""
+    echo "=== 检查结果 ==="
+    echo "可用的包数量: ${#AVAILABLE_PACKAGES[@]}"
+    echo "缺失的包数量: ${#MISSING_PACKAGES[@]}"
+    
+    if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
+        echo ""
+        echo "=== 缺失的包 ==="
+        for pkg in "${MISSING_PACKAGES[@]}"; do
+            echo "  ❌ $pkg"
+        done
+        
+        echo ""
+        echo "=== 建议的解决方案 ==="
+        echo "1. 运行智能包匹配: ./smart_package_matcher.sh smart_fix_config . .config"
+        echo "2. 手动更新 feeds: ./scripts/feeds update -a && ./scripts/feeds install -a"
+        echo "3. 使用 make menuconfig 查看可用的包"
+        
+        # 检查关键包是否缺失
+        CRITICAL_PACKAGES=("firewall" "dnsmasq" "kmod-usb-storage" "block-mount" "luci-base")
+        critical_missing=0
+        
+        for critical in "${CRITICAL_PACKAGES[@]}"; do
+            for missing in "${MISSING_PACKAGES[@]}"; do
+                if [ "$missing" = "$critical" ]; then
+                    echo "❌ 关键包缺失: $critical"
+                    critical_missing=1
+                    log_error "关键包 '$critical' 缺失"
+                fi
+            done
+        done
+        
+        if [ $critical_missing -eq 1 ]; then
+            log_error "有关键包缺失，构建将停止"
+            return 1
+        else
+            log_warning "有非关键包缺失，但构建可以继续"
+            return 0
+        fi
+    else
+        log_success "所有包都在feeds中可用"
+        return 0
+    fi
+}
+
+# 错误分析 - 修复版
+error_analyze() {
+    local build_dir="${1:-/mnt/openwrt-build}"
+    cd "$build_dir"
+    
+    log_info "=== 错误分析 ==="
+    
+    # 查找真正的构建日志
+    local build_log=""
+    
+    # 优先查找主要的构建日志
+    local possible_logs=(
+        "logs/build.log"
+        "build.log" 
+        "build_output.log"
+        "openwrt-build.log"
+    )
+    
+    # 查找最近修改的日志文件
+    for log in "${possible_logs[@]}"; do
+        if [ -f "$log" ]; then
+            build_log="$log"
+            break
+        fi
+    done
+    
+    # 如果没找到，搜索整个目录
+    if [ -z "$build_log" ]; then
+        build_log=$(find . -name "*.log" -type f -size +1k 2>/dev/null | \
+                   grep -v "ctresalloc\|CMakeTest\|Test" | \
+                   head -1)
+    fi
+    
+    # 最后尝试查找make的错误输出
+    if [ -z "$build_log" ]; then
+        build_log=$(find . -name "staging_dir" -prune -o -name "*.log" -type f -print 2>/dev/null | \
+                   head -1)
+    fi
+    
+    echo "=== 固件构建错误分析报告 ===" > error_analysis.log
+    echo "生成时间: $(date)" >> error_analysis.log
+    echo "使用的日志文件: ${build_log:-未找到主要构建日志}" >> error_analysis.log
+    echo "" >> error_analysis.log
+    
+    echo "=== 构建结果检查 ===" >> error_analysis.log
+    if [ -d "bin/targets" ] && find bin/targets -name "*.bin" -o -name "*.img" | grep -q .; then
+        echo "✅ 构建状态: 成功" >> error_analysis.log
+        echo "生成的固件文件:" >> error_analysis.log
+        find bin/targets -name "*.bin" -o -name "*.img" | head -10 >> error_analysis.log
+    else
+        echo "❌ 构建状态: 失败 - 未生成固件文件" >> error_analysis.log
+    fi
+    echo "" >> error_analysis.log
+    
+    # 检查关键目录状态
+    echo "=== 关键目录状态 ===" >> error_analysis.log
+    for dir in "build_dir" "staging_dir" "tmp" "bin"; do
+        if [ -d "$dir" ]; then
+            echo "✅ $dir: 存在" >> error_analysis.log
+        else
+            echo "❌ $dir: 缺失" >> error_analysis.log
+        fi
+    done
+    echo "" >> error_analysis.log
+    
+    if [ -n "$build_log" ] && [ -f "$build_log" ]; then
+        echo "=== 关键错误分析 ===" >> error_analysis.log
+        
+        # 编译错误
+        echo "1. 编译错误:" >> error_analysis.log
+        grep -E "Error [0-9]|error: |undefined reference" "$build_log" | head -20 >> error_analysis.log || echo "无编译错误" >> error_analysis.log
+        
+        echo "" >> error_analysis.log
+        echo "2. Makefile错误:" >> error_analysis.log
+        grep "make.*Error" "$build_log" | head -10 >> error_analysis.log || echo "无Makefile错误" >> error_analysis.log
+        
+        echo "" >> error_analysis.log
+        echo "3. 包依赖错误:" >> error_analysis.log
+        grep -E "depends on|missing|not found" "$build_log" | head -10 >> error_analysis.log || echo "无依赖错误" >> error_analysis.log
+        
+        echo "" >> error_analysis.log
+        echo "4. 最后100行日志:" >> error_analysis.log
+        tail -100 "$build_log" >> error_analysis.log
+    else
+        echo "=== 未找到构建日志，检查构建目录 ===" >> error_analysis.log
+        echo "当前目录: $(pwd)" >> error_analysis.log
+        echo "目录内容:" >> error_analysis.log
+        ls -la >> error_analysis.log
+    fi
+    
+    echo "" >> error_analysis.log
+    echo "=== 常见解决方案 ===" >> error_analysis.log
+    echo "1. 包缺失: 运行 './scripts/feeds update -a && ./scripts/feeds install -a'" >> error_analysis.log
+    echo "2. 依赖问题: 检查.config文件中的包冲突" >> error_analysis.log
+    echo "3. 空间不足: 检查磁盘空间 'df -h'" >> error_analysis.log
+    echo "4. 网络问题: 重新下载依赖 'make download V=s'" >> error_analysis.log
+    
+    # 输出到控制台
+    cat error_analysis.log
+}
+
+# 完整构建流程
+build_all() {
+    log_info "=== 执行完整构建流程 ==="
+    # 这里可以按顺序调用所有功能
+    # 实际工作流中会在不同步骤调用具体功能
+    echo "请在 GitHub Actions 工作流中查看完整构建流程"
+}
 
 # 主函数
 main() {
