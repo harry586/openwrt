@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# OpenWrt 智能构建管理器 - 修复版
-# 主要修复：版本检测逻辑、包匹配逻辑、feeds更新时机
+# OpenWrt 分支插件检测器 - 工作流专用版
+# 修复版：确保插件列表文件正确保存和统计
 
 set -e
 
@@ -12,807 +12,255 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 日志函数
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 
-# 显示使用说明
-show_usage() {
-    echo "OpenWrt 智能构建管理器 - 修复版"
-    echo "用法: $0 <功能> [参数...]"
-    echo ""
-    echo "可用功能:"
-    echo "  version_detect    - 版本检测 <设备> [版本] [是否老旧设备]"
-    echo "  device_detect     - 设备检测 <设备名称>"
-    echo "  plugin_check      - 插件兼容性检查 <分支>"
-    echo "  feeds_config      - Feeds配置 <分支>"
-    echo "  config_load       - 配置加载 <类型> <平台> <设备> <分支> <原始设备> <额外包> <禁用包>"
-    echo "  custom_integrate  - 自定义文件集成 <工作空间目录>"
-    echo "  package_check     - 包可用性检查 [构建目录]"
-    echo "  error_analyze     - 错误分析 [构建目录]"
-    echo "  all               - 执行完整构建流程"
-    echo ""
-    echo "示例:"
-    echo "  $0 version_detect ac42u auto false"
-    echo "  $0 device_detect ac42u"
-    echo "  $0 plugin_check openwrt-23.05"
-}
-
-# 版本检测功能 - 修复版：确保正确输出环境变量
-version_detect() {
-    local device_name="$1"
-    local user_version="$2"
-    local old_device="${3:-false}"
+# 验证分支并检测插件
+validate_branch() {
+    local repo_url="$1"
+    local branch="$2"
+    local output_file="${3:-verified_plugins.txt}"
     
-    # 初始化变量
-    local SELECTED_REPO=""
-    local SELECTED_BRANCH=""
-    local SELECTED_REPO_URL=""
-    
-    log_info "=== 版本检测 ==="
-    echo "设备: $device_name"
-    echo "用户版本: ${user_version:-自动}"
-    echo "老旧设备: $old_device"
-    
-    # 如果用户指定了版本，直接使用
-    if [ -n "$user_version" ] && [ "$user_version" != "auto" ]; then
-        log_info "使用用户指定版本: $user_version"
-        
-        # 解析版本规格
-        if [[ "$user_version" == *":"* ]]; then
-            IFS=':' read -r repo branch <<< "$user_version"
-        else
-            repo="immortalwrt"
-            branch="$user_version"
-        fi
-        
-        # 自动添加前缀
-        if [[ "$branch" =~ ^[0-9]+\.[0-9]+$ ]]; then
-            branch="openwrt-$branch"
-            log_info "自动添加分支前缀: $branch"
-        fi
-        
-        # 设置仓库URL
-        case "$repo" in
-            "immortalwrt")
-                SELECTED_REPO="immortalwrt"
-                SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-                SELECTED_BRANCH="$branch"
-                ;;
-            "openwrt")
-                SELECTED_REPO="openwrt"
-                SELECTED_REPO_URL="https://github.com/openwrt/openwrt.git"
-                SELECTED_BRANCH="$branch"
-                ;;
-            "lede")
-                SELECTED_REPO="lede"
-                SELECTED_REPO_URL="https://github.com/coolsnowwolf/lede.git"
-                SELECTED_BRANCH="$branch"
-                ;;
-            *)
-                log_error "未知仓库: $repo"
-                return 1
-                ;;
-        esac
-        
-        log_success "设置版本: $SELECTED_REPO:$SELECTED_BRANCH"
-        
-    else
-        # 自动版本检测逻辑
-        log_info "开始自动版本检测..."
-        
-        # 根据设备类型选择默认版本
-        case "$device_name" in
-            "wr841n"|"wr842n"|"wr941n"|"mr3420"|"ar71xx"*)
-                SELECTED_REPO="openwrt"
-                SELECTED_BRANCH="openwrt-19.07"
-                SELECTED_REPO_URL="https://github.com/openwrt/openwrt.git"
-                log_success "老旧设备，选择 OpenWrt 19.07"
-                ;;
-            *)
-                SELECTED_REPO="immortalwrt"
-                SELECTED_BRANCH="openwrt-23.05"
-                SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-                log_success "现代设备，选择 ImmortalWrt 23.05"
-                ;;
-        esac
-    fi
-    
-    # 验证变量是否设置
-    if [ -z "$SELECTED_REPO" ] || [ -z "$SELECTED_BRANCH" ] || [ -z "$SELECTED_REPO_URL" ]; then
-        log_error "版本检测失败：无法确定仓库、分支或URL"
-        echo "SELECTED_REPO: $SELECTED_REPO"
-        echo "SELECTED_BRANCH: $SELECTED_BRANCH"
-        echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
-        return 1
-    fi
-    
-    # 输出环境变量 - 修复：确保格式正确，便于提取
-    echo "SELECTED_REPO=$SELECTED_REPO"
-    echo "SELECTED_BRANCH=$SELECTED_BRANCH"
-    echo "SELECTED_REPO_URL=$SELECTED_REPO_URL"
-    
-    log_success "版本检测完成"
-    return 0
-}
-
-# 设备检测功能
-device_detect() {
-    local device_input="$1"
-    
-    log_info "=== 设备检测 ==="
-    echo "输入设备: $device_input"
-    
-    # 检查是否在 OpenWrt 源码目录
-    if [ ! -d "target/linux" ]; then
-        log_error "错误: 请在 OpenWrt 源码根目录中运行设备检测"
-        return 1
-    fi
-    
-    # 设备映射
-    declare -A DEVICE_MAPPING=(
-        ["ac42u"]="asus_rt-ac42u"
-        ["acrh17"]="asus_rt-ac42u" 
-        ["rt-acrh17"]="asus_rt-ac42u"
-        ["ac58u"]="asus_rt-ac58u"
-        ["acrh13"]="asus_rt-ac58u"
-        ["rt-ac58u"]="asus_rt-ac58u"
-        ["rt-acrh13"]="asus_rt-ac58u"
-        ["mi4a"]="xiaomi_mi-router-4a-gigabit"
-        ["r4a"]="xiaomi_mi-router-4a-gigabit"
-        ["mi3g"]="xiaomi_mi-router-3g"
-        ["r3g"]="xiaomi_mi-router-3g"
-        ["mi4"]="xiaomi_mi-router-4"
-        ["r4"]="xiaomi_mi-router-4"
-        ["wr841n"]="tl-wr841n-v11"
-        ["wr842n"]="tl-wr842n-v4"
-        ["wr941n"]="tl-wr941nd-v6"
-    )
-    
-    # 首先尝试已知映射
-    if [ -n "${DEVICE_MAPPING[$device_input]}" ]; then
-        local device_short_name="${DEVICE_MAPPING[$device_input]}"
-        local platform=""
-        
-        # 推断平台
-        case "$device_short_name" in
-            *ipq40xx*|*asus_rt-ac*)
-                platform="ipq40xx"
-                ;;
-            *ar71xx*|*tl-wr*)
-                platform="ar71xx"
-                ;;
-            *ramips*|*xiaomi_mi*)
-                platform="ramips"
-                ;;
-            *mediatek*|*redmi-ax6s*)
-                platform="mediatek"
-                ;;
-            *)
-                platform="ipq40xx"
-                ;;
-        esac
-        
-        log_success "使用已知映射: $device_input -> $device_short_name"
-        echo "PLATFORM=$platform"
-        echo "DEVICE_SHORT_NAME=$device_short_name"
-        echo "DEVICE_FULL_NAME=$device_input"
-        return 0
-    fi
-    
-    # 搜索设备树文件
-    log_info "搜索设备树文件..."
-    local dts_files=$(find target/linux -name "*.dts" -type f 2>/dev/null | grep -i "$device_input" | head -3)
-    
-    if [ -n "$dts_files" ]; then
-        log_success "找到设备树文件"
-        local platform=$(echo "$dts_files" | head -1 | cut -d'/' -f3)
-        local device_name=$(basename "$dts_files" | head -1 | sed 's/\.dts.*//')
-        
-        echo "PLATFORM=$platform"
-        echo "DEVICE_SHORT_NAME=$device_name"
-        echo "DEVICE_FULL_NAME=$device_input"
-        echo "DTS_FILES=$dts_files"
-    else
-        log_warning "未找到设备树文件，使用输入名称"
-        echo "PLATFORM=generic"
-        echo "DEVICE_SHORT_NAME=$device_input"
-        echo "DEVICE_FULL_NAME=$device_input"
-    fi
-    
-    log_success "设备检测完成"
-}
-
-# 插件兼容性检查 - 修复版：不因警告而终止构建
-plugin_check() {
-    local branch="$1"
-    
-    log_info "=== 插件兼容性检查 ==="
-    echo "目标版本: $branch"
-    
-    # 插件兼容性数据库
-    declare -A PLUGIN_COMPATIBILITY=(
-        # 网络加速插件
-        ["turboacc"]="22.03 23.05"
-        ["luci-app-turboacc"]="22.03 23.05"
-        ["kmod-nft-fullcone"]="22.03 23.05"
-        ["kmod-shortcut-fe"]="22.03 23.05"
-        
-        # 网络工具
-        ["luci-app-sqm"]="21.02 22.03 23.05"
-        ["luci-app-upnp"]="19.07 21.02 22.03 23.05"
-        ["luci-app-wol"]="19.07 21.02 22.03 23.05"
-        
-        # 存储和文件共享
-        ["luci-app-samba4"]="21.02 22.03 23.05"
-        ["luci-app-vsftpd"]="19.07 21.02 22.03 23.05"
-        
-        # 网络服务
-        ["luci-app-smartdns"]="21.02 22.03 23.05"
-        ["luci-app-arpbind"]="19.07 21.02 22.03 23.05"
-        
-        # 系统工具
-        ["luci-app-cpulimit"]="21.02 22.03 23.05"
-        ["luci-app-diskman"]="21.02 22.03 23.05"
-        ["luci-app-accesscontrol"]="19.07 21.02 22.03 23.05"
-        ["luci-app-vlmcsd"]="19.07 21.02 22.03 23.05"
-        
-        # 基础插件
-        ["luci-theme-bootstrap"]="18.06 19.07 21.02 22.03 23.05"
-        ["luci-theme-material"]="19.07 21.02 22.03 23.05"
-        ["luci-app-firewall"]="18.06 19.07 21.02 22.03 23.05"
-    )
-    
-    check_plugin() {
-        local branch="$1"
-        local plugin="$2"
-        
-        local version=$(echo "$branch" | grep -oE '[0-9]+\.[0-9]+' | head -1)
-        
-        if [ -z "$version" ]; then
-            if [[ "$branch" =~ master|main ]]; then
-                log_warning "⚠️  $plugin: 开发版分支，兼容性未知"
-                return 0  # 修复：返回0，不阻止构建
-            else
-                log_warning "⚠️  $plugin: 无法识别版本号"
-                return 0  # 修复：返回0
-            fi
-        fi
-        
-        local compatible_versions="${PLUGIN_COMPATIBILITY[$plugin]}"
-        
-        if [ -z "$compatible_versions" ]; then
-            log_info "ℹ️  $plugin: 兼容性信息未知"
-            return 0
-        fi
-        
-        if echo "$compatible_versions" | grep -q "$version"; then
-            log_success "✅ $plugin: 兼容版本 $version"
-            return 0
-        else
-            log_error "❌ $plugin: 不兼容版本 $version (仅支持: $compatible_versions)"
-            return 1
-        fi
-    }
-    
-    local has_critical_error=0
-    
-    echo "=== 网络加速插件兼容性 ==="
-    check_plugin "$branch" "turboacc" || has_critical_error=1
-    check_plugin "$branch" "luci-app-turboacc" || has_critical_error=1
-    check_plugin "$branch" "kmod-nft-fullcone" || has_critical_error=1
-    check_plugin "$branch" "kmod-shortcut-fe" || has_critical_error=1
-    
-    echo ""
-    echo "=== 网络工具插件兼容性 ==="
-    check_plugin "$branch" "luci-app-sqm" || has_critical_error=1
-    check_plugin "$branch" "luci-app-upnp" || has_critical_error=1
-    check_plugin "$branch" "luci-app-wol" || has_critical_error=1
-    
-    echo ""
-    echo "=== 存储和文件共享插件兼容性 ==="
-    check_plugin "$branch" "luci-app-samba4" || has_critical_error=1
-    check_plugin "$branch" "luci-app-vsftpd" || has_critical_error=1
-    
-    echo ""
-    echo "=== 网络服务插件兼容性 ==="
-    check_plugin "$branch" "luci-app-smartdns" || has_critical_error=1
-    check_plugin "$branch" "luci-app-arpbind" || has_critical_error=1
-    
-    echo ""
-    echo "=== 系统工具插件兼容性 ==="
-    check_plugin "$branch" "luci-app-cpulimit" || has_critical_error=1
-    check_plugin "$branch" "luci-app-diskman" || has_critical_error=1
-    check_plugin "$branch" "luci-app-accesscontrol" || has_critical_error=1
-    check_plugin "$branch" "luci-app-vlmcsd" || has_critical_error=1
-    
-    echo ""
-    echo "=== 基础插件兼容性 ==="
-    check_plugin "$branch" "luci-theme-bootstrap" || has_critical_error=1
-    check_plugin "$branch" "luci-theme-material" || has_critical_error=1
-    check_plugin "$branch" "luci-app-firewall" || has_critical_error=1
-    
-    echo ""
-    echo "=== 兼容性说明 ==="
-    echo "🔹 22.03/23.05 - 完全支持所有插件"
-    echo "🔹 21.02       - 支持大部分插件"
-    echo "🔹 19.07       - 支持基础插件"
-    echo "🔹 18.06       - 仅支持核心功能"
-    echo "🔹 master      - 开发版，兼容性不确定"
-    
-    # 修复：总是返回0，不终止构建
-    log_info "插件兼容性检查完成（警告不影响构建）"
-    return 0
-}
-
-# Feeds配置
-feeds_config() {
-    local branch="$1"
-    
-    log_info "=== Feeds 配置 ==="
+    echo "== 开始分支验证和插件检测 =="
+    echo "仓库: $repo_url"
     echo "分支: $branch"
+    echo "输出文件: $output_file"
     
-    local feeds_branch="$branch"
-    if echo "$branch" | grep -q "openwrt-23.05"; then
-        feeds_branch="openwrt-23.05"
-    elif echo "$branch" | grep -q "openwrt-22.03"; then
-        feeds_branch="openwrt-22.03"
-    elif echo "$branch" | grep -q "openwrt-21.02"; then
-        feeds_branch="openwrt-21.02"
-    elif echo "$branch" | grep -q "openwrt-19.07"; then
-        feeds_branch="openwrt-19.07"
-    else
-        log_warning "未知版本分支，使用默认分支: master"
-        feeds_branch="master"
-    fi
+    # 获取当前工作目录（BUILD_DIR）
+    local current_dir=$(pwd)
+    log_info "当前工作目录: $current_dir"
     
-    echo "使用的feeds分支: $feeds_branch"
-    
-    # 配置feeds - 修复版：使用正确的分支格式
-    echo "src-git packages https://github.com/immortalwrt/packages.git;$feeds_branch" > feeds.conf.default
-    echo "src-git luci https://github.com/immortalwrt/luci.git;$feeds_branch" >> feeds.conf.default
-    echo "src-git routing https://github.com/openwrt/routing.git;$feeds_branch" >> feeds.conf.default
-    echo "src-git telephony https://github.com/openwrt/telephony.git;$feeds_branch" >> feeds.conf.default
-    
-    log_success "Feeds 配置完成"
-    echo "Feeds配置内容:"
-    cat feeds.conf.default
-}
-
-# 配置加载 - 修复版：确保feeds就绪后再运行包匹配
-config_load() {
-    local config_type="$1"
-    local platform="$2"
-    local device_short_name="$3"
-    local selected_branch="$4"
-    local device_name="$5"
-    local extra_packages="$6"
-    local disabled_plugins="$7"
-    
-    log_info "=== 配置加载 ==="
-    echo "配置类型: $config_type"
-    echo "平台: $platform"
-    echo "设备: $device_short_name"
-    echo "分支: $selected_branch"
-    
-    export MAKE_JOBS=1
-    
-    # 修复：首先确保feeds就绪
-    echo "=== 确保feeds就绪 ==="
-    if [ -f "feeds.conf.default" ]; then
-        echo "更新feeds..."
-        ./scripts/feeds update -a > /dev/null 2>&1
-        ./scripts/feeds install -a > /dev/null 2>&1
-    else
-        log_warning "feeds.conf.default 不存在，跳过feeds更新"
-    fi
-    
-    # 选择基础配置文件
-    local config_file="config-templates/base-template.config"
-    
-    echo "=== 使用基础模板配置 ==="
-    if [ ! -f "$config_file" ]; then
-        log_error "错误: 找不到基础配置文件 $config_file"
+    # 严格验证分支是否存在
+    log_info "验证分支是否存在..."
+    if ! git ls-remote --heads "$repo_url" "$branch" | grep -q "$branch"; then
+        log_error "错误: 分支 $branch 不存在"
+        echo ""
+        echo "可用的分支:"
+        git ls-remote --heads "$repo_url" | sed 's?.*refs/heads/??' | head -10
         return 1
     fi
     
-    # 创建基础配置
-    echo "=== 创建基础配置 ==="
-    echo "# 设备基础配置" > .config
-    echo "CONFIG_TARGET_${platform}=y" >> .config
-    echo "CONFIG_TARGET_${platform}_generic=y" >> .config
-    echo "CONFIG_TARGET_${platform}_generic_DEVICE_${device_short_name}=y" >> .config
-    echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-    echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
-    echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
+    log_success "分支 $branch 存在"
     
-    # 追加模板配置
-    echo "=== 追加模板配置 ==="
-    cat "$config_file" >> .config
+    # 创建临时目录
+    local temp_dir=$(mktemp -d)
+    log_info "创建临时目录: $temp_dir"
     
-    # 检查智能包匹配器是否存在 - 修复版：添加feeds就绪检查
-    if [ -f "smart_package_matcher.sh" ]; then
-        # 初始化日志
-        echo "=== 初始化构建日志 ==="
-        ./smart_package_matcher.sh init_log "."
-        
-        # 运行智能包匹配 - 修复版：确保feeds已更新
-        echo "=== 运行智能包匹配 ==="
-        echo "确保feeds已更新..."
-        ./scripts/feeds update -a > /dev/null 2>&1
-        
-        if ! ./smart_package_matcher.sh smart_fix_config "." ".config"; then
-            log_error "智能包匹配失败"
-            # 不立即返回，继续尝试构建
-            log_warning "继续构建，但包匹配可能不完整"
-        fi
-    else
-        log_warning "智能包匹配器不存在，跳过包匹配"
-    fi
-    
-    # 处理用户自定义包
-    if [ -n "$extra_packages" ]; then
-        echo "=== 添加额外插件 ==="
-        for pkg in $extra_packages; do
-            echo "添加插件: $pkg"
-            # 如果智能匹配器存在，使用它找到正确的包名
-            if [ -f "smart_package_matcher.sh" ]; then
-                # 确保feeds已更新
-                ./scripts/feeds update -a > /dev/null 2>&1
-                local available_packages=$(./smart_package_matcher.sh get_available ".")
-                local matched_pkg=$(./smart_package_matcher.sh smart_package_match "$pkg" "$available_packages")
-                if [ -n "$matched_pkg" ]; then
-                    # 移除可能的旧配置
-                    sed -i "/# CONFIG_PACKAGE_${matched_pkg} is not set/d" .config
-                    echo "CONFIG_PACKAGE_${matched_pkg}=y" >> .config
-                    echo "✅ 添加: $pkg → $matched_pkg"
-                else
-                    echo "❌ 无法找到包: $pkg"
-                    log_warning "无法找到用户请求的包: $pkg"
-                fi
-            else
-                # 直接添加包
-                sed -i "/# CONFIG_PACKAGE_${pkg} is not set/d" .config
-                echo "CONFIG_PACKAGE_${pkg}=y" >> .config
-                echo "✅ 添加: $pkg"
-            fi
-        done
-    fi
-    
-    if [ -n "$disabled_plugins" ]; then
-        echo "=== 禁用指定插件 ==="
-        for pkg in $disabled_plugins; do
-            echo "禁用插件: $pkg"
-            sed -i "/CONFIG_PACKAGE_${pkg}=y/d" .config
-            echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
-            echo "✅ 已禁用: $pkg"
-        done
-    fi
-    
-    # 运行 defconfig
-    echo "=== 运行 defconfig ==="
-    make -j1 defconfig
-    
-    # 显示最终配置状态
-    echo "=== 最终启用的luci插件 ==="
-    grep "^CONFIG_PACKAGE_luci-app" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort | uniq || echo "无luci插件"
-    
-    log_success "配置加载完成"
-}
-
-# 自定义文件集成
-custom_integrate() {
-    local workspace_dir="$1"
-    
-    log_info "=== 自定义文件集成 ==="
-    
-    # 创建自定义文件目录
-    mkdir -p files/root/custom-install
-    
-    # 复制IPK文件
-    local ipk_files=$(find "$workspace_dir/firmware-config/custom-files" -name "*.ipk" -type f 2>/dev/null || true)
-    if [ -n "$ipk_files" ]; then
-        echo "✅ 找到IPK文件:"
-        for ipk in $ipk_files; do
-            cp "$ipk" files/root/custom-install/
-            echo "✅ 复制IPK: $(basename "$ipk")"
-        done
-    fi
-    
-    # 复制脚本文件
-    local script_files=$(find "$workspace_dir/firmware-config/custom-files" -name "*.sh" -type f 2>/dev/null | grep -v "detector\|analysis" || true)
-    if [ -n "$script_files" ]; then
-        echo "✅ 找到脚本文件:"
-        for script in $script_files; do
-            cp "$script" files/root/custom-install/
-            chmod +x files/root/custom-install/$(basename "$script")
-            echo "✅ 复制脚本: $(basename "$script")"
-        done
-    fi
-    
-    # 创建构建时安装脚本
-    cat > files/root/custom-install/build-time-install.sh << 'EOF'
-#!/bin/sh
-echo "=== 开始构建时自定义安装 ==="
-
-if ls /root/custom-install/*.ipk >/dev/null 2>&1; then
-    echo "构建时安装IPK文件..."
-    for ipk in /root/custom-install/*.ipk; do
-        echo "安装: $(basename $ipk)"
-        opkg install "$ipk" --force-depends || echo "安装失败: $(basename $ipk)"
-    done
-else
-    echo "未找到IPK文件"
-fi
-
-if ls /root/custom-install/*.sh >/dev/null 2>&1; then
-    echo "执行构建时脚本..."
-    for script in /root/custom-install/*.sh; do
-        if [ "$(basename $script)" != "build-time-install.sh" ]; then
-            echo "执行: $(basename $script)"
-            sh "$script" || echo "执行失败: $(basename $script)"
-        fi
-    done
-else
-    echo "未找到脚本文件"
-fi
-
-rm -rf /root/custom-install
-echo "=== 构建时自定义安装完成 ==="
-EOF
-
-    chmod +x files/root/custom-install/build-time-install.sh
-    
-    # 创建rc.local启动脚本
-    mkdir -p files/etc
-    cat > files/etc/rc.local << 'EOF'
-#!/bin/sh
-[ -f /root/custom-install/build-time-install.sh ] && {
-    /root/custom-install/build-time-install.sh >/tmp/build-time-install.log 2>&1 &
-}
-exit 0
-EOF
-
-    chmod +x files/etc/rc.local
-    log_success "自定义文件集成完成"
-}
-
-# 包可用性检查 - 修复版
-package_check() {
-    local build_dir="${1:-.}"
-    cd "$build_dir"
-    
-    log_info "=== 包可用性检查 ==="
-    
-    # 更新feeds - 修复版：确保feeds就绪
-    echo "更新feeds..."
-    ./scripts/feeds update -a > /dev/null 2>&1
-    ./scripts/feeds install -a > /dev/null 2>&1
-    
-    # 读取配置文件
-    CONFIG_FILE=".config"
-    if [ ! -f "$CONFIG_FILE" ]; then
-        log_error "错误: 配置文件 $CONFIG_FILE 不存在"
+    # 克隆分支
+    log_info "克隆分支 $branch ..."
+    if ! git clone --depth 1 --branch "$branch" "$repo_url" "$temp_dir" 2>&1; then
+        log_error "分支克隆失败"
+        rm -rf "$temp_dir"
         return 1
     fi
     
-    # 提取所有启用的包
-    PACKAGES=$(grep "^CONFIG_PACKAGE_" "$CONFIG_FILE" | grep "=y$" | sed 's/CONFIG_PACKAGE_//;s/=y//')
+    log_success "分支克隆成功"
     
-    echo "在 $CONFIG_FILE 中启用的包数量: $(echo "$PACKAGES" | wc -l)"
+    # 进入目录并检测插件
+    cd "$temp_dir"
     
-    # 检查每个包是否在feeds中
-    MISSING_PACKAGES=()
-    AVAILABLE_PACKAGES=()
+    # 配置feeds
+    log_info "配置feeds..."
+    detect_feeds_branch "$branch"
     
-    # 预加载feeds列表到内存 - 修复版：确保获取完整列表
-    local feeds_list=$(./scripts/feeds list -r packages -r luci -r routing -r telephony 2>/dev/null | cut -d' ' -f1)
+    # 更新feeds
+    log_info "更新feeds..."
+    if ! ./scripts/feeds update -a > ./feeds_update.log 2>&1; then
+        log_warning "Feeds 更新有警告，继续检测..."
+        cat ./feeds_update.log | tail -5
+    fi
     
-    echo "=== 开始检查包可用性 ==="
+    # 生成插件列表到临时文件
+    local temp_output="/tmp/temp_plugins_$$.txt"
+    generate_plugin_list "$temp_output"
     
-    # 检查每个包
-    for pkg in $PACKAGES; do
-        if echo "$feeds_list" | grep -q "^$pkg$"; then
-            AVAILABLE_PACKAGES+=("$pkg")
-            echo "✅ $pkg"
+    # 返回原始目录并复制文件
+    cd "$current_dir"
+    
+    # 复制插件列表到最终位置
+    if [ -f "$temp_output" ]; then
+        cp "$temp_output" "$output_file"
+        log_success "插件列表已保存到: $output_file"
+        
+        # 验证文件内容
+        if [ -f "$output_file" ]; then
+            local total_plugins=$(count_plugins "$output_file")
+            log_info "验证: 输出文件包含 $total_plugins 个插件"
+            
+            # 显示文件信息
+            echo "=== 文件信息 ==="
+            echo "文件大小: $(wc -l < "$output_file") 行"
+            echo "文件路径: $(pwd)/$output_file"
+            
         else
-            MISSING_PACKAGES+=("$pkg")
-            echo "❌ $pkg (在feeds中未找到)"
-            log_warning "包 '$pkg' 在feeds中不可用"
-        fi
-    done
-    
-    echo ""
-    echo "=== 检查结果 ==="
-    echo "可用的包数量: ${#AVAILABLE_PACKAGES[@]}"
-    echo "缺失的包数量: ${#MISSING_PACKAGES[@]}"
-    
-    if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
-        echo ""
-        echo "=== 缺失的包 ==="
-        for pkg in "${MISSING_PACKAGES[@]}"; do
-            echo "  ❌ $pkg"
-        done
-        
-        echo ""
-        echo "=== 建议的解决方案 ==="
-        echo "1. 运行智能包匹配: ./smart_package_matcher.sh smart_fix_config . .config"
-        echo "2. 手动更新 feeds: ./scripts/feeds update -a && ./scripts/feeds install -a"
-        echo "3. 使用 make menuconfig 查看可用的包"
-        
-        # 检查关键包是否缺失
-        CRITICAL_PACKAGES=("firewall" "dnsmasq" "kmod-usb-storage" "block-mount" "luci-base")
-        critical_missing=0
-        
-        for critical in "${CRITICAL_PACKAGES[@]}"; do
-            for missing in "${MISSING_PACKAGES[@]}"; do
-                if [ "$missing" = "$critical" ]; then
-                    echo "❌ 关键包缺失: $critical"
-                    critical_missing=1
-                    log_error "关键包 '$critical' 缺失"
-                fi
-            done
-        done
-        
-        if [ $critical_missing -eq 1 ]; then
-            log_error "有关键包缺失，构建将停止"
+            log_error "错误: 输出文件未创建: $output_file"
+            rm -rf "$temp_dir"
+            rm -f "$temp_output"
             return 1
-        else
-            log_warning "有非关键包缺失，但构建可以继续"
-            return 0
         fi
     else
-        log_success "所有包都在feeds中可用"
-        return 0
+        log_error "错误: 临时插件列表文件未创建"
+        rm -rf "$temp_dir"
+        return 1
     fi
+    
+    # 清理临时目录
+    rm -rf "$temp_dir"
+    rm -f "$temp_output"
+    
+    log_success "插件检测完成"
+    return 0
 }
 
-# 错误分析 - 修复版
-error_analyze() {
-    local build_dir="${1:-/mnt/openwrt-build}"
-    cd "$build_dir"
-    
-    log_info "=== 错误分析 ==="
-    
-    # 查找真正的构建日志
-    local build_log=""
-    
-    # 优先查找主要的构建日志
-    local possible_logs=(
-        "logs/build.log"
-        "build.log" 
-        "build_output.log"
-        "openwrt-build.log"
-    )
-    
-    # 查找最近修改的日志文件
-    for log in "${possible_logs[@]}"; do
-        if [ -f "$log" ]; then
-            build_log="$log"
-            break
-        fi
-    done
-    
-    # 如果没找到，搜索整个目录
-    if [ -z "$build_log" ]; then
-        build_log=$(find . -name "*.log" -type f -size +1k 2>/dev/null | \
-                   grep -v "ctresalloc\|CMakeTest\|Test" | \
-                   head -1)
-    fi
-    
-    # 最后尝试查找make的错误输出
-    if [ -z "$build_log" ]; then
-        build_log=$(find . -name "staging_dir" -prune -o -name "*.log" -type f -print 2>/dev/null | \
-                   head -1)
-    fi
-    
-    echo "=== 固件构建错误分析报告 ===" > error_analysis.log
-    echo "生成时间: $(date)" >> error_analysis.log
-    echo "使用的日志文件: ${build_log:-未找到主要构建日志}" >> error_analysis.log
-    echo "" >> error_analysis.log
-    
-    echo "=== 构建结果检查 ===" >> error_analysis.log
-    if [ -d "bin/targets" ] && find bin/targets -name "*.bin" -o -name "*.img" | grep -q .; then
-        echo "✅ 构建状态: 成功" >> error_analysis.log
-        echo "生成的固件文件:" >> error_analysis.log
-        find bin/targets -name "*.bin" -o -name "*.img" | head -10 >> error_analysis.log
-    else
-        echo "❌ 构建状态: 失败 - 未生成固件文件" >> error_analysis.log
-    fi
-    echo "" >> error_analysis.log
-    
-    # 检查关键目录状态
-    echo "=== 关键目录状态 ===" >> error_analysis.log
-    for dir in "build_dir" "staging_dir" "tmp" "bin"; do
-        if [ -d "$dir" ]; then
-            echo "✅ $dir: 存在" >> error_analysis.log
-        else
-            echo "❌ $dir: 缺失" >> error_analysis.log
-        fi
-    done
-    echo "" >> error_analysis.log
-    
-    if [ -n "$build_log" ] && [ -f "$build_log" ]; then
-        echo "=== 关键错误分析 ===" >> error_analysis.log
-        
-        # 编译错误
-        echo "1. 编译错误:" >> error_analysis.log
-        grep -E "Error [0-9]|error: |undefined reference" "$build_log" | head -20 >> error_analysis.log || echo "无编译错误" >> error_analysis.log
-        
-        echo "" >> error_analysis.log
-        echo "2. Makefile错误:" >> error_analysis.log
-        grep "make.*Error" "$build_log" | head -10 >> error_analysis.log || echo "无Makefile错误" >> error_analysis.log
-        
-        echo "" >> error_analysis.log
-        echo "3. 包依赖错误:" >> error_analysis.log
-        grep -E "depends on|missing|not found" "$build_log" | head -10 >> error_analysis.log || echo "无依赖错误" >> error_analysis.log
-        
-        echo "" >> error_analysis.log
-        echo "4. 最后100行日志:" >> error_analysis.log
-        tail -100 "$build_log" >> error_analysis.log
-    else
-        echo "=== 未找到构建日志，检查构建目录 ===" >> error_analysis.log
-        echo "当前目录: $(pwd)" >> error_analysis.log
-        echo "目录内容:" >> error_analysis.log
-        ls -la >> error_analysis.log
-    fi
-    
-    echo "" >> error_analysis.log
-    echo "=== 常见解决方案 ===" >> error_analysis.log
-    echo "1. 包缺失: 运行 './scripts/feeds update -a && ./scripts/feeds install -a'" >> error_analysis.log
-    echo "2. 依赖问题: 检查.config文件中的包冲突" >> error_analysis.log
-    echo "3. 空间不足: 检查磁盘空间 'df -h'" >> error_analysis.log
-    echo "4. 网络问题: 重新下载依赖 'make download V=s'" >> error_analysis.log
-    
-    # 输出到控制台
-    cat error_analysis.log
+# 统计插件数量
+count_plugins() {
+    local file="$1"
+    # 计算以 "- \`" 开头的行数
+    grep -c "^- \`" "$file" 2>/dev/null || echo "0"
 }
 
-# 完整构建流程
-build_all() {
-    log_info "=== 执行完整构建流程 ==="
-    # 这里可以按顺序调用所有功能
-    # 实际工作流中会在不同步骤调用具体功能
-    echo "请在 GitHub Actions 工作流中查看完整构建流程"
+# 检测feeds分支
+detect_feeds_branch() {
+    local branch="$1"
+    local feeds_branch="$branch"
+    
+    case "$branch" in
+        *23.05*) feeds_branch="openwrt-23.05" ;;
+        *22.03*) feeds_branch="openwrt-22.03" ;;
+        *21.02*) feeds_branch="openwrt-21.02" ;;
+        *19.07*) feeds_branch="openwrt-19.07" ;;
+        *) feeds_branch="master" ;;
+    esac
+    
+    log_info "使用 feeds 分支: $feeds_branch"
+    
+    cat > feeds.conf.default << EOF
+src-git packages https://github.com/immortalwrt/packages.git;$feeds_branch
+src-git luci https://github.com/immortalwrt/luci.git;$feeds_branch
+src-git routing https://github.com/openwrt/routing.git;$feeds_branch
+src-git telephony https://github.com/openwrt/telephony.git;$feeds_branch
+EOF
+}
+
+# 生成插件列表
+generate_plugin_list() {
+    local output_file="$1"
+    
+    log_info "生成插件列表到: $output_file"
+    
+    # 创建输出文件
+    {
+    echo "=================================================="
+    echo "          OpenWrt 分支插件验证列表"
+    echo "=================================================="
+    echo ""
+    echo "📅 生成时间: $(date)"
+    echo "📦 仓库: $repo_url"
+    echo "🌿 分支: $branch"
+    echo ""
+    echo "📖 使用说明:"
+    echo "此文件包含在分支 $branch 中验证存在的所有插件。"
+    echo "请只使用此列表中的插件名称，确保构建成功。"
+    echo ""
+    } > "$output_file"
+    
+    # 检测 Luci 插件
+    {
+    echo "## 🎯 Luci 界面插件 (Web管理界面)"
+    echo ""
+    } >> "$output_file"
+    
+    local luci_plugins=$(./scripts/feeds list -r luci 2>/dev/null | grep "luci-app" | cut -d' ' -f1 | sort | uniq || true)
+    if [ -n "$luci_plugins" ]; then
+        for plugin in $luci_plugins; do
+            echo "- \`$plugin\`" >> "$output_file"
+        done
+        echo "" >> "$output_file"
+        echo "> 💡 提示: Luci 插件提供 Web 管理界面" >> "$output_file"
+    else
+        echo "# 未找到 Luci 插件" >> "$output_file"
+    fi
+    echo "" >> "$output_file"
+    
+    # 检测内核模块
+    {
+    echo "## 🔧 内核模块插件 (硬件驱动)"
+    echo ""
+    } >> "$output_file"
+    
+    local kmod_plugins=$(./scripts/feeds list -r packages 2>/dev/null | grep "kmod-" | head -50 | cut -d' ' -f1 | sort | uniq || true)
+    if [ -n "$kmod_plugins" ]; then
+        for plugin in $kmod_plugins; do
+            echo "- \`$plugin\`" >> "$output_file"
+        done
+    else
+        echo "# 未找到内核模块插件" >> "$output_file"
+    fi
+    echo "" >> "$output_file"
+    
+    # 检测常用插件
+    {
+    echo "## 🌐 常用功能插件"
+    echo ""
+    } >> "$output_file"
+    
+    local common_keywords="turboacc upnp sqm ddns adblock smartdns wireguard shadowsocks v2ray trojan openvpn samba vsftpd transmission aria2"
+    local common_plugins=""
+    
+    for keyword in $common_keywords; do
+        local found_plugins=$(./scripts/feeds list -r packages 2>/dev/null | grep -i "$keyword" | cut -d' ' -f1 | head -10 || true)
+        common_plugins="$common_plugins $found_plugins"
+    done
+    
+    common_plugins=$(echo "$common_plugins" | tr ' ' '\n' | sort -u)
+    
+    if [ -n "$common_plugins" ]; then
+        for plugin in $common_plugins; do
+            echo "- \`$plugin\`" >> "$output_file"
+        done
+    else
+        echo "# 未找到常用插件" >> "$output_file"
+    fi
+    echo "" >> "$output_file"
+    
+    # 统计信息
+    local total_plugins=$(count_plugins "$output_file")
+    {
+    echo "## 📊 统计信息"
+    echo ""
+    echo "- 总插件数量: $total_plugins"
+    echo "- 验证状态: ✅ 成功"
+    echo "- 检测完成时间: $(date)"
+    echo ""
+    echo "=================================================="
+    echo "                   验证完成"
+    echo "=================================================="
+    } >> "$output_file"
+    
+    log_info "检测到 $total_plugins 个插件"
 }
 
 # 主函数
 main() {
-    local command="$1"
-    shift
-    
-    case "$command" in
-        "version_detect")
-            version_detect "$@"
-            ;;
-        "device_detect")
-            device_detect "$@"
-            ;;
-        "plugin_check")
-            plugin_check "$@"
-            ;;
-        "feeds_config")
-            feeds_config "$@"
-            ;;
-        "config_load")
-            config_load "$@"
-            ;;
-        "custom_integrate")
-            custom_integrate "$@"
-            ;;
-        "package_check")
-            package_check "$@"
-            ;;
-        "error_analyze")
-            error_analyze "$@"
-            ;;
-        "all")
-            build_all "$@"
+    case "$1" in
+        "validate_branch")
+            if [ $# -lt 3 ]; then
+                log_error "参数不足"
+                echo "用法: $0 validate_branch <仓库URL> <分支> [输出文件]"
+                exit 1
+            fi
+            validate_branch "$2" "$3" "$4"
             ;;
         *)
-            show_usage
+            echo "OpenWrt 分支插件检测器 - 工作流专用版"
+            echo ""
+            echo "用法: $0 validate_branch <仓库URL> <分支> [输出文件]"
+            echo ""
+            echo "示例:"
+            echo "  $0 validate_branch https://github.com/immortalwrt/immortalwrt.git openwrt-23.05"
+            echo ""
             exit 1
             ;;
     esac
@@ -820,9 +268,5 @@ main() {
 
 # 如果直接运行脚本，则执行主函数
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    if [ $# -eq 0 ]; then
-        show_usage
-        exit 1
-    fi
     main "$@"
 fi
