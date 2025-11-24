@@ -195,27 +195,68 @@ jobs:
         cd $BUILD_DIR
         echo "=== 分支插件检测 - 严格验证 ==="
         
+        # 显示当前目录
+        echo "当前工作目录: $(pwd)"
+        
         # 严格验证分支并检测插件
         echo "🔍 验证分支 $SELECTED_BRANCH 并检测插件..."
         if ./branch_plugin_detector.sh validate_branch "$SELECTED_REPO_URL" "$SELECTED_BRANCH" "verified_plugins.txt"; then
             echo "✅ 分支验证和插件检测成功"
             
-            # 统计插件数量
-            TOTAL_PLUGINS=$(grep -c "^- \`" "verified_plugins.txt" 2>/dev/null || echo "0")
-            echo "📊 检测到 $TOTAL_PLUGINS 个可用插件"
-            
-            # 显示一些推荐插件
-            echo ""
-            echo "🎯 推荐插件示例:"
-            grep -E "luci-app-(turboacc|upnp|wol|sqm|ddns|firewall)" "verified_plugins.txt" | head -5 || echo "无推荐插件"
-            
-            # 设置成功标志
-            echo "BRANCH_VALIDATED=true" >> $GITHUB_ENV
-            echo "PLUGINS_COUNT=$TOTAL_PLUGINS" >> $GITHUB_ENV
+            # 验证文件是否存在
+            if [ -f "verified_plugins.txt" ]; then
+                echo "📄 插件列表文件已创建"
+                
+                # 统计插件数量 - 使用可靠的方法
+                TOTAL_PLUGINS=$(grep -c "^- \`" "verified_plugins.txt" 2>/dev/null || echo "0")
+                echo "📊 检测到 $TOTAL_PLUGINS 个可用插件"
+                
+                # 显示文件信息
+                echo "📏 文件大小: $(wc -l < verified_plugins.txt) 行"
+                
+                # 显示一些推荐插件
+                echo ""
+                echo "🎯 推荐插件示例:"
+                if grep -q "luci-app-" "verified_plugins.txt"; then
+                    grep -E "luci-app-(turboacc|upnp|wol|sqm|ddns|firewall)" "verified_plugins.txt" | head -5
+                else
+                    echo "未找到推荐插件"
+                fi
+                
+                # 设置成功标志
+                echo "BRANCH_VALIDATED=true" >> $GITHUB_ENV
+                echo "PLUGINS_COUNT=$TOTAL_PLUGINS" >> $GITHUB_ENV
+                
+            else
+                echo "❌ 错误: 插件列表文件未创建"
+                echo "BRANCH_VALIDATED=false" >> $GITHUB_ENV
+                exit 1
+            fi
             
         else
             echo "❌ 分支验证失败: $SELECTED_BRANCH 不存在或插件检测失败"
             echo "BRANCH_VALIDATED=false" >> $GITHUB_ENV
+            exit 1
+        fi
+
+    - name: 验证插件列表文件
+      if: env.BRANCH_VALIDATED == 'true'
+      run: |
+        cd $BUILD_DIR
+        echo "=== 验证插件列表文件 ==="
+        
+        if [ -f "verified_plugins.txt" ]; then
+            echo "✅ 插件列表文件存在"
+            echo "文件路径: $(pwd)/verified_plugins.txt"
+            echo "文件大小: $(wc -l < verified_plugins.txt) 行"
+            echo "插件数量: $PLUGINS_COUNT"
+            echo ""
+            echo "文件内容预览:"
+            echo "========================"
+            head -20 verified_plugins.txt
+            echo "========================"
+        else
+            echo "❌ 错误: 插件列表文件不存在"
             exit 1
         fi
 
