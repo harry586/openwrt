@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# OpenWrt 构建辅助功能脚本 - 完整版
+# OpenWrt 构建辅助功能脚本 - 修复版
 # 包含诊断、包检查等辅助功能
 
 set -e
@@ -18,7 +18,7 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# 包诊断功能 - 完整版
+# 包诊断功能 - 修复版
 diagnose_packages() {
     local build_dir="${1:-.}"
     cd "$build_dir"
@@ -31,9 +31,10 @@ diagnose_packages() {
         return 1
     fi
     
-    # 更新feeds
+    # 更新feeds - 修复版：确保feeds就绪
     echo "更新feeds..."
     ./scripts/feeds update -a > /dev/null 2>&1
+    ./scripts/feeds install -a > /dev/null 2>&1
     
     # 检查配置文件中的包
     echo ""
@@ -46,11 +47,11 @@ diagnose_packages() {
     MISSING_PACKAGES=()
     AVAILABLE_COUNT=0
     
-    # 预加载feeds列表
-    local feeds_list=$(./scripts/feeds list 2>/dev/null)
+    # 预加载feeds列表 - 修复版：搜索所有feeds
+    local feeds_list=$(./scripts/feeds list -r packages -r luci -r routing -r telephony 2>/dev/null | cut -d' ' -f1)
     
     for pkg in $CONFIG_PACKAGES; do
-        if echo "$feeds_list" | grep -q "^$pkg"; then
+        if echo "$feeds_list" | grep -q "^$pkg$"; then
             echo "✅ $pkg"
             AVAILABLE_COUNT=$((AVAILABLE_COUNT + 1))
         else
@@ -149,8 +150,9 @@ check_dependencies() {
     
     log_info "=== 包依赖检查 ==="
     
-    # 更新feeds
+    # 更新feeds - 修复版：确保feeds就绪
     ./scripts/feeds update -a > /dev/null 2>&1
+    ./scripts/feeds install -a > /dev/null 2>&1
     
     # 检查配置文件中的包依赖
     if [ -f ".config" ]; then
@@ -178,7 +180,7 @@ check_dependencies() {
 
 # 显示使用说明
 show_usage() {
-    echo "OpenWrt 构建辅助工具"
+    echo "OpenWrt 构建辅助工具 - 修复版"
     echo "用法: $0 <功能> [参数...]"
     echo ""
     echo "可用功能:"
