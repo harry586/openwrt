@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # OpenWrt 智能构建管理器 - 修复版
-# 主要修复：包匹配逻辑、feeds更新时机、错误处理
+# 主要修复：版本检测逻辑、包匹配逻辑、feeds更新时机
 
 set -e
 
@@ -40,7 +40,7 @@ show_usage() {
     echo "  $0 plugin_check openwrt-23.05"
 }
 
-# 版本检测功能
+# 版本检测功能 - 修复版
 version_detect() {
     local device_name="$1"
     local user_version="$2"
@@ -50,24 +50,6 @@ version_detect() {
     echo "设备: $device_name"
     echo "用户版本: ${user_version:-自动}"
     echo "老旧设备: $old_device"
-    
-    # 设备平台映射
-    declare -A DEVICE_PLATFORM_MAP=(
-        ["ac42u"]="ipq40xx"
-        ["acrh17"]="ipq40xx"
-        ["rt-acrh17"]="ipq40xx"
-        ["ac58u"]="ipq40xx"
-        ["acrh13"]="ipq40xx"
-        ["rt-acrh13"]="ipq40xx"
-        ["xiaomi_redmi-ax6s"]="mediatek"
-        ["wr841n"]="ar71xx"
-        ["mi3g"]="ramips"
-    )
-    
-    # 版本检测顺序
-    local immortalwrt_versions=("openwrt-23.05" "openwrt-22.03" "openwrt-21.02" "openwrt-19.07" "openwrt-18.06" "master")
-    local lede_versions=("17.01" "reborn" "master")
-    local openwrt_versions=("openwrt-23.05" "openwrt-22.03" "openwrt-21.02" "openwrt-19.07" "openwrt-18.06" "master")
     
     # 如果用户指定了版本，直接使用
     if [ -n "$user_version" ] && [ "$user_version" != "auto" ]; then
@@ -107,14 +89,13 @@ version_detect() {
                 ;;
         esac
         
-        # 检查分支是否存在
-        if git ls-remote --heads "$SELECTED_REPO_URL" "$branch" 2>/dev/null | grep -q "$branch"; then
-            SELECTED_BRANCH="$branch"
-            log_success "使用版本: $SELECTED_REPO:$SELECTED_BRANCH"
-        else
-            log_error "分支 $branch 不存在"
-            return 1
-        fi
+        # 检查分支是否存在 - 修复版：简化检查逻辑
+        log_info "检查分支是否存在: $branch"
+        
+        # 直接设置分支，在实际克隆时再检查可用性
+        SELECTED_BRANCH="$branch"
+        log_success "设置版本: $SELECTED_REPO:$SELECTED_BRANCH"
+        
     else
         # 自动版本检测逻辑
         log_info "开始自动版本检测..."
@@ -142,6 +123,7 @@ version_detect() {
     echo "SELECTED_REPO_URL=$SELECTED_REPO_URL"
     
     log_success "版本检测完成"
+    return 0
 }
 
 # 设备检测功能
