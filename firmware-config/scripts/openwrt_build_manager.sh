@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# OpenWrt 智能构建管理器 - 完整版
-# 功能：版本检测、设备检测、插件检查、配置管理、自定义文件集成
+# OpenWrt 智能构建管理器 - 修复版
+# 主要修复：包匹配逻辑、feeds更新时机、错误处理
 
 set -e
 
@@ -20,7 +20,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # 显示使用说明
 show_usage() {
-    echo "OpenWrt 智能构建管理器"
+    echo "OpenWrt 智能构建管理器 - 修复版"
     echo "用法: $0 <功能> [参数...]"
     echo ""
     echo "可用功能:"
@@ -370,7 +370,7 @@ feeds_config() {
     
     echo "使用的feeds分支: $feeds_branch"
     
-    # 配置feeds
+    # 配置feeds - 修复版：使用正确的分支格式
     echo "src-git packages https://github.com/immortalwrt/packages.git;$feeds_branch" > feeds.conf.default
     echo "src-git luci https://github.com/immortalwrt/luci.git;$feeds_branch" >> feeds.conf.default
     echo "src-git routing https://github.com/openwrt/routing.git;$feeds_branch" >> feeds.conf.default
@@ -381,7 +381,7 @@ feeds_config() {
     cat feeds.conf.default
 }
 
-# 配置加载 - 更新版
+# 配置加载 - 修复版：确保feeds就绪后再运行包匹配
 config_load() {
     local config_type="$1"
     local platform="$2"
@@ -398,6 +398,16 @@ config_load() {
     echo "分支: $selected_branch"
     
     export MAKE_JOBS=1
+    
+    # 修复：首先确保feeds就绪
+    echo "=== 确保feeds就绪 ==="
+    if [ -f "feeds.conf.default" ]; then
+        echo "更新feeds..."
+        ./scripts/feeds update -a > /dev/null 2>&1
+        ./scripts/feeds install -a > /dev/null 2>&1
+    else
+        log_warning "feeds.conf.default 不存在，跳过feeds更新"
+    fi
     
     # 选择基础配置文件
     local config_file="config-templates/base-template.config"
@@ -422,17 +432,21 @@ config_load() {
     echo "=== 追加模板配置 ==="
     cat "$config_file" >> .config
     
-    # 检查智能包匹配器是否存在
+    # 检查智能包匹配器是否存在 - 修复版：添加feeds就绪检查
     if [ -f "smart_package_matcher.sh" ]; then
         # 初始化日志
         echo "=== 初始化构建日志 ==="
         ./smart_package_matcher.sh init_log "."
         
-        # 运行智能包匹配
+        # 运行智能包匹配 - 修复版：确保feeds已更新
         echo "=== 运行智能包匹配 ==="
+        echo "确保feeds已更新..."
+        ./scripts/feeds update -a > /dev/null 2>&1
+        
         if ! ./smart_package_matcher.sh smart_fix_config "." ".config"; then
             log_error "智能包匹配失败"
-            return 1
+            # 不立即返回，继续尝试构建
+            log_warning "继续构建，但包匹配可能不完整"
         fi
     else
         log_warning "智能包匹配器不存在，跳过包匹配"
@@ -445,6 +459,8 @@ config_load() {
             echo "添加插件: $pkg"
             # 如果智能匹配器存在，使用它找到正确的包名
             if [ -f "smart_package_matcher.sh" ]; then
+                # 确保feeds已更新
+                ./scripts/feeds update -a > /dev/null 2>&1
                 local available_packages=$(./smart_package_matcher.sh get_available ".")
                 local matched_pkg=$(./smart_package_matcher.sh smart_package_match "$pkg" "$available_packages")
                 if [ -n "$matched_pkg" ]; then
@@ -563,16 +579,17 @@ EOF
     log_success "自定义文件集成完成"
 }
 
-# 包可用性检查 - 更新版
+# 包可用性检查 - 修复版
 package_check() {
     local build_dir="${1:-.}"
     cd "$build_dir"
     
     log_info "=== 包可用性检查 ==="
     
-    # 更新feeds
+    # 更新feeds - 修复版：确保feeds就绪
     echo "更新feeds..."
     ./scripts/feeds update -a > /dev/null 2>&1
+    ./scripts/feeds install -a > /dev/null 2>&1
     
     # 读取配置文件
     CONFIG_FILE=".config"
@@ -590,14 +607,14 @@ package_check() {
     MISSING_PACKAGES=()
     AVAILABLE_PACKAGES=()
     
-    # 预加载feeds列表到内存
-    local feeds_list=$(./scripts/feeds list 2>/dev/null)
+    # 预加载feeds列表到内存 - 修复版：确保获取完整列表
+    local feeds_list=$(./scripts/feeds list -r packages -r luci -r routing -r telephony 2>/dev/null | cut -d' ' -f1)
     
     echo "=== 开始检查包可用性 ==="
     
     # 检查每个包
     for pkg in $PACKAGES; do
-        if echo "$feeds_list" | grep -q "^$pkg"; then
+        if echo "$feeds_list" | grep -q "^$pkg$"; then
             AVAILABLE_PACKAGES+=("$pkg")
             echo "✅ $pkg"
         else
