@@ -125,7 +125,7 @@ jobs:
         chmod +x *.sh
         echo "✅ 脚本复制完成"
 
-    - name: 智能版本检测
+    - name: 智能版本检测 - 修复版
       id: version-detection
       run: |
         cd $BUILD_DIR
@@ -140,7 +140,7 @@ jobs:
                 ;;
         esac
         
-        # 确定版本参数
+        # 确定版本参数 - 修复版：正确处理版本选择
         USER_VERSION=""
         if [ -n "${{ inputs.custom_version }}" ]; then
             USER_VERSION="${{ inputs.custom_version }}"
@@ -152,26 +152,41 @@ jobs:
         echo "版本: ${USER_VERSION:-自动}"
         echo "老旧设备: $OLD_DEVICE_FLAG"
         
-        # 调用版本检测
-        OUTPUT=$(./openwrt_build_manager.sh version_detect "${{ github.event.inputs.device_name }}" "$USER_VERSION" "$OLD_DEVICE_FLAG")
-        echo "$OUTPUT"
+        # 调用版本检测 - 修复版：添加错误处理
+        echo "=== 开始版本检测 ==="
+        set +e
+        OUTPUT=$(./openwrt_build_manager.sh version_detect "${{ github.event.inputs.device_name }}" "$USER_VERSION" "$OLD_DEVICE_FLAG" 2>&1)
+        EXIT_CODE=$?
+        set -e
         
-        # 提取环境变量
-        SELECTED_REPO=$(echo "$OUTPUT" | grep "^SELECTED_REPO=" | head -1 | cut -d'=' -f2)
-        SELECTED_BRANCH=$(echo "$OUTPUT" | grep "^SELECTED_BRANCH=" | head -1 | cut -d'=' -f2)
-        SELECTED_REPO_URL=$(echo "$OUTPUT" | grep "^SELECTED_REPO_URL=" | head -1 | cut -d'=' -f2)
-        
-        if [ -n "$SELECTED_REPO" ] && [ -n "$SELECTED_BRANCH" ] && [ -n "$SELECTED_REPO_URL" ]; then
-            echo "SELECTED_REPO=$SELECTED_REPO" >> $GITHUB_ENV
-            echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
-            echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
-            echo "✅ 版本检测完成"
+        if [ $EXIT_CODE -eq 0 ]; then
+            echo "$OUTPUT"
+            
+            # 提取环境变量
+            SELECTED_REPO=$(echo "$OUTPUT" | grep "^SELECTED_REPO=" | head -1 | cut -d'=' -f2)
+            SELECTED_BRANCH=$(echo "$OUTPUT" | grep "^SELECTED_BRANCH=" | head -1 | cut -d'=' -f2)
+            SELECTED_REPO_URL=$(echo "$OUTPUT" | grep "^SELECTED_REPO_URL=" | head -1 | cut -d'=' -f2)
+            
+            if [ -n "$SELECTED_REPO" ] && [ -n "$SELECTED_BRANCH" ] && [ -n "$SELECTED_REPO_URL" ]; then
+                echo "SELECTED_REPO=$SELECTED_REPO" >> $GITHUB_ENV
+                echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
+                echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
+                echo "✅ 版本检测完成"
+            else
+                echo "❌ 版本检测失败：无法提取环境变量"
+                echo "SELECTED_REPO: $SELECTED_REPO"
+                echo "SELECTED_BRANCH: $SELECTED_BRANCH" 
+                echo "SELECTED_REPO_URL: $SELECTED_REPO_URL"
+                exit 1
+            fi
         else
-            echo "❌ 版本检测失败"
+            echo "❌ 版本检测失败，退出代码: $EXIT_CODE"
+            echo "输出内容:"
+            echo "$OUTPUT"
             exit 1
         fi
 
-    - name: 克隆源码
+    - name: 克隆源码 - 修复版
       run: |
         cd $BUILD_DIR
         echo "=== 克隆源码 ==="
@@ -181,12 +196,23 @@ jobs:
         # 清理目录
         sudo rm -rf ./* ./.git* 2>/dev/null || true
         
-        # 克隆源码
-        if git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .; then
+        # 克隆源码 - 修复版：添加分支检查
+        echo "尝试克隆分支: $SELECTED_BRANCH"
+        if git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . 2>&1; then
             echo "✅ 源码克隆完成"
         else
-            echo "❌ 源码克隆失败"
-            exit 1
+            echo "❌ 指定分支克隆失败，尝试默认分支"
+            # 尝试克隆默认分支
+            if git clone --depth 1 "$SELECTED_REPO_URL" . 2>&1; then
+                echo "✅ 默认分支源码克隆完成"
+                # 获取实际分支
+                ACTUAL_BRANCH=$(git branch --show-current)
+                echo "SELECTED_BRANCH=$ACTUAL_BRANCH" >> $GITHUB_ENV
+                echo "⚠️ 使用实际分支: $ACTUAL_BRANCH"
+            else
+                echo "❌ 源码克隆失败"
+                exit 1
+            fi
         fi
 
     - name: 恢复构建脚本
@@ -445,7 +471,7 @@ jobs:
     - name: 开启 SSH 服务
       uses: lhotari/action-upterm@v1
       with:
-        wait-timeout-minutes: 120
+        wait-timeout-minutes: 30
     - name: 编译前提示
       run: |
         echo "🚀 SSH调试模式已启动"
