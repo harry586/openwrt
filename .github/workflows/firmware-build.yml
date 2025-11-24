@@ -544,13 +544,31 @@ jobs:
         path: ${{ env.BUILD_DIR }}/bin/targets/
         retention-days: 7
 
-    - name: 上传构建报告
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: 构建报告-${{ github.event.inputs.device_name }}-$SELECTED_BRANCH
-        path: ${{ env.BUILD_DIR }}/build-reports/
-        retention-days: 7
+    # 只修改有问题的上传步骤，其他部分保持不变
+
+- name: 上传插件列表
+  if: env.BRANCH_VALIDATED == 'true'
+  uses: actions/upload-artifact@v4
+  with:
+    name: 插件列表-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
+    path: ${{ env.BUILD_DIR }}/verified_plugins.txt
+    retention-days: 7
+
+- name: 上传构建报告
+  if: always()
+  uses: actions/upload-artifact@v4
+  with:
+    name: 构建报告-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
+    path: ${{ env.BUILD_DIR }}/build-reports/
+    retention-days: 7
+
+- name: 上传固件
+  if: success()
+  uses: actions/upload-artifact@v4
+  with:
+    name: 固件-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ inputs.config_type }}
+    path: ${{ env.BUILD_DIR }}/bin/targets/
+    retention-days: 7
 
     - name: 清理目录
       if: always()
