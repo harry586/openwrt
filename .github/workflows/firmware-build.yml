@@ -329,11 +329,12 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== Feeds 配置 - 修复版 ==="
-        # 直接执行 feeds_config 函数内容，避免函数调用问题
-        local branch="$SELECTED_BRANCH"
+        
+        # 修复：不使用 local 关键字，直接使用变量
+        branch="$SELECTED_BRANCH"
         echo "分支: $branch"
         
-        local feeds_branch="$branch"
+        feeds_branch="$branch"
         if echo "$branch" | grep -q "openwrt-23.05"; then
             feeds_branch="openwrt-23.05"
         elif echo "$branch" | grep -q "openwrt-22.03"; then
