@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流 - 修复usign版
+name: OpenWrt 智能固件构建工作流 - 使用dnsmasq-full版
 
 on:
   workflow_dispatch:
@@ -12,35 +12,20 @@ on:
         description: '版本选择'
         required: true
         type: choice
-        default: 'auto'
+        default: '21.02'
         options:
-          - auto
           - 23.05
-          - 22.03
           - 21.02
-      config_type:
-        description: '配置类型'
-        required: true
-        default: 'normal'
-        type: choice
-        options:
-          - minimal
-          - normal
-          - full
       extra_packages:
         description: '额外安装插件 (多个插件用空格分隔)'
         required: false
         type: string
-        default: ''
+        default: 'luci-app-upnp'
       enable_cache:
         description: '启用编译缓存'
         required: false
         default: true
         type: boolean
-      multithreading:
-        description: '开启多线程编译'
-        type: boolean
-        default: true
 
 env:
   BUILD_DIR: /mnt/openwrt-build
@@ -71,7 +56,7 @@ jobs:
       run: |
         echo "=== 安装编译依赖包 ==="
         sudo apt-get update
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpath libpython3-dev python3 python3-dev python3-pip python3-setuptools python3-yaml xsltproc zip subversion ninja-build automake autoconf libtool pkg-config help2man texinfo aria2 liblz4-dev zstd libcurl4-openssl-dev groff texlive texinfo
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpath libpython3-dev python3 python3-dev python3-pip python3-setuptools python3-yaml xsltproc zip subversion ninja-build automake autoconf libtool pkg-config help2man texinfo aria2 liblz4-dev zstd libcurl4-openssl-dev groff texlive texinfo cmake
         echo "✅ 编译环境设置完成"
 
     - name: 创建构建目录
@@ -82,31 +67,18 @@ jobs:
         sudo chmod -R 755 $BUILD_DIR
         echo "✅ 构建目录创建完成"
 
-    - name: 智能版本检测
-      id: version-detection
+    - name: 版本选择
+      id: version-selection
       run: |
         cd $BUILD_DIR
-        echo "=== 智能版本检测 ==="
+        echo "=== 版本选择 ==="
         
-        # 简单版本选择逻辑
-        case "${{ github.event.inputs.device_name }}" in
-            "wr841n"|"wr842n"|"wr941n"|"mr3420")
-                SELECTED_REPO_URL="https://github.com/openwrt/openwrt.git"
-                SELECTED_BRANCH="openwrt-19.07"
-                ;;
-            *)
-                SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-                SELECTED_BRANCH="openwrt-21.02"
-                ;;
-        esac
-        
-        # 如果用户指定了版本
-        if [ "${{ inputs.version_selection }}" != "auto" ]; then
-            case "${{ inputs.version_selection }}" in
-                "23.05") SELECTED_BRANCH="openwrt-23.05" ;;
-                "22.03") SELECTED_BRANCH="openwrt-22.03" ;;
-                "21.02") SELECTED_BRANCH="openwrt-21.02" ;;
-            esac
+        if [ "${{ inputs.version_selection }}" = "23.05" ]; then
+            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+            SELECTED_BRANCH="openwrt-23.05"
+        else
+            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+            SELECTED_BRANCH="openwrt-21.02"
         fi
         
         echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
@@ -127,10 +99,10 @@ jobs:
         git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .
         echo "✅ 源码克隆完成"
 
-    - name: 基础配置设置
+    - name: 设备配置
       run: |
         cd $BUILD_DIR
-        echo "=== 基础配置设置 ==="
+        echo "=== 设备配置 ==="
         
         # 设备映射
         case "${{ github.event.inputs.device_name }}" in
@@ -138,16 +110,6 @@ jobs:
                 TARGET="ipq40xx"
                 SUBTARGET="generic"
                 DEVICE="asus_rt-ac42u"
-                ;;
-            "mi4a"|"r4a")
-                TARGET="ramips"
-                SUBTARGET="mt76x8"
-                DEVICE="xiaomi_mi-router-4a-gigabit"
-                ;;
-            "wr841n")
-                TARGET="ar71xx"
-                SUBTARGET="generic"
-                DEVICE="tl-wr841n-v11"
                 ;;
             *)
                 TARGET="ipq40xx"
@@ -170,35 +132,24 @@ jobs:
         echo "=== 配置Feeds ==="
         
         # 根据分支选择feeds版本
-        case "$SELECTED_BRANCH" in
-            "openwrt-23.05")
-                FEEDS_BRANCH="openwrt-23.05"
-                ;;
-            "openwrt-22.03")
-                FEEDS_BRANCH="openwrt-22.03"
-                ;;
-            "openwrt-21.02")
-                FEEDS_BRANCH="openwrt-21.02"
-                ;;
-            *)
-                FEEDS_BRANCH="master"
-                ;;
-        esac
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            FEEDS_BRANCH="openwrt-23.05"
+        else
+            FEEDS_BRANCH="openwrt-21.02"
+        fi
         
         echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf.default
         echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
-        echo "src-git routing https://github.com/openwrt/routing.git;$FEEDS_BRANCH" >> feeds.conf.default
-        echo "src-git telephony https://github.com/openwrt/telephony.git;$FEEDS_BRANCH" >> feeds.conf.default
         
         # 更新feeds
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         echo "✅ Feeds配置完成"
 
-    - name: 生成配置并禁用指定插件
+    - name: 生成配置 - 使用dnsmasq-full
       run: |
         cd $BUILD_DIR
-        echo "=== 生成配置并禁用指定插件 ==="
+        echo "=== 生成配置 - 使用dnsmasq-full ==="
         
         # 创建基础配置
         echo "CONFIG_TARGET_${TARGET}=y" > .config
@@ -207,13 +158,20 @@ jobs:
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
         
-        # 核心系统包 - 避免冲突
+        # 核心系统包 - 使用dnsmasq-full而不是dnsmasq
         echo "CONFIG_PACKAGE_busybox=y" >> .config
         echo "CONFIG_PACKAGE_base-files=y" >> .config
-        echo "CONFIG_PACKAGE_block-mount=y" >> .config
         
-        # 只使用 dnsmasq，避免与 dnsmasq-full 冲突
-        echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
+        # 关键修改：使用dnsmasq-full并禁用dnsmasq
+        echo "# CONFIG_PACKAGE_dnsmasq is not set" >> .config
+        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+        
+        # 可以选择启用dnsmasq-full的一些有用功能
+        echo "CONFIG_PACKAGE_dnsmasq_full_dhcp=y" >> .config
+        echo "CONFIG_PACKAGE_dnsmasq_full_dhcpv6=y" >> .config
+        echo "CONFIG_PACKAGE_dnsmasq_full_dnssec=y" >> .config
+        echo "CONFIG_PACKAGE_dnsmasq_full_ipset=y" >> .config
+        echo "CONFIG_PACKAGE_dnsmasq_full_conntrack=y" >> .config
         
         echo "CONFIG_PACKAGE_dropbear=y" >> .config
         echo "CONFIG_PACKAGE_firewall=y" >> .config
@@ -224,7 +182,6 @@ jobs:
         echo "CONFIG_PACKAGE_netifd=y" >> .config
         echo "CONFIG_PACKAGE_opkg=y" >> .config
         echo "CONFIG_PACKAGE_procd=y" >> .config
-        echo "CONFIG_PACKAGE_swconfig=y" >> .config
         echo "CONFIG_PACKAGE_ubox=y" >> .config
         echo "CONFIG_PACKAGE_ubus=y" >> .config
         echo "CONFIG_PACKAGE_ubusd=y" >> .config
@@ -232,84 +189,29 @@ jobs:
         echo "CONFIG_PACKAGE_uclient-fetch=y" >> .config
         echo "CONFIG_PACKAGE_usign=y" >> .config
         
-        # 网络工具 - 简化避免冲突
+        # 无线驱动
+        echo "CONFIG_PACKAGE_kmod-ath10k=y" >> .config
+        echo "CONFIG_PACKAGE_ath10k-firmware-qca988x=y" >> .config
+        echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
+        
+        # 网络工具（这些可能与dnsmasq-full配合更好）
         echo "CONFIG_PACKAGE_iptables=y" >> .config
-        echo "CONFIG_PACKAGE_ip-full=y" >> .config
-        echo "CONFIG_PACKAGE_tc=y" >> .config
+        echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> .config
+        echo "CONFIG_PACKAGE_iptables-mod-ipopt=y" >> .config
         
-        # 根据配置类型添加包
-        if [ "${{ inputs.config_type }}" = "normal" ] || [ "${{ inputs.config_type }}" = "full" ]; then
-            # LUCI基础
-            echo "CONFIG_PACKAGE_luci=y" >> .config
-            echo "CONFIG_PACKAGE_luci-base=y" >> .config
-            echo "CONFIG_PACKAGE_luci-compat=y" >> .config
-            echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> .config
-            echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
-            echo "CONFIG_PACKAGE_luci-proto-ipv6=y" >> .config
-            echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
-            
-            # 常用LUCI应用 - 选择稳定的，但禁用指定插件
-            echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
-            # 禁用上网时间控制、动态DNS、带宽监控、网络唤醒
-            echo "# CONFIG_PACKAGE_luci-app-accesscontrol is not set" >> .config
-            echo "# CONFIG_PACKAGE_luci-app-ddns is not set" >> .config
-            echo "# CONFIG_PACKAGE_luci-app-statistics is not set" >> .config
-            echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> .config
-        fi
-        
-        # 完整配置包含更多插件
-        if [ "${{ inputs.config_type }}" = "full" ]; then
-            # 网络加速插件 (主要针对21.02)
-            if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-                echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-            fi
-            
-            # 更多实用插件
-            echo "CONFIG_PACKAGE_luci-app-samba4=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-watchcat=y" >> .config
-            
-            # 23.05特定的DSA支持
-            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-                echo "CONFIG_PACKAGE_luci-app-opkg=y" >> .config
-                echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
-            fi
-        fi
-        
-        # 添加用户请求的额外包
+        # 仅添加用户明确请求的包
         if [ -n "${{ inputs.extra_packages }}" ]; then
             for pkg in ${{ inputs.extra_packages }}; do
                 echo "CONFIG_PACKAGE_${pkg}=y" >> .config
             done
         fi
         
-        # 无线驱动
-        echo "CONFIG_PACKAGE_kmod-ath10k=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ath9k=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ath9k-common=y" >> .config
-        echo "CONFIG_PACKAGE_ath10k-firmware-qca988x=y" >> .config
-        echo "CONFIG_PACKAGE_ath10k-firmware-qca9888=y" >> .config
-        echo "CONFIG_PACKAGE_ath10k-firmware-qca9984=y" >> .config
+        # 21.02版本添加网络加速插件
+        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+        fi
         
-        # WPA支持
-        echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
-        echo "CONFIG_PACKAGE_wpa-cli=y" >> .config
-        
-        echo "✅ 配置生成完成，已禁用指定插件"
-
-    - name: 显示配置内容
-      run: |
-        cd $BUILD_DIR
-        echo "=== 显示配置内容 ==="
-        echo "配置文件大小: $(wc -l < .config) 行"
-        echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
-        echo "禁用的包数量: $(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)"
-        echo ""
-        echo "=== 禁用的插件列表 ==="
-        grep "^# CONFIG_PACKAGE_luci-app-.* is not set$" .config | sed 's/# CONFIG_PACKAGE_//' | sed 's/ is not set//' | sort
-        echo ""
-        echo "=== 启用的LUCI插件列表 ==="
-        grep "^CONFIG_PACKAGE_luci-app-.*=y$" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
+        echo "✅ 配置生成完成 - 使用dnsmasq-full"
 
     - name: 应用配置
       run: |
@@ -320,38 +222,12 @@ jobs:
         make defconfig
         echo "✅ 配置应用完成"
         
-        # 显示最终启用的包数量
-        ENABLED_PACKAGES=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
-        echo "最终启用的包数量: $ENABLED_PACKAGES"
-
-    - name: 修复usign编译问题
-      run: |
-        cd $BUILD_DIR
-        echo "=== 修复usign编译问题 ==="
-        
-        # 检查usign源码是否存在
-        if [ -d "tools/usign" ]; then
-            echo "usign目录存在，尝试修复编译"
-            
-            # 清理可能的构建缓存
-            rm -rf tools/usign/build_dir
-            rm -rf tools/usign/.built
-            rm -rf tools/usign/.configured
-            
-            # 手动编译usign
-            echo "手动编译usign..."
-            cd tools/usign
-            mkdir -p build
-            cd build
-            cmake .. -DCMAKE_INSTALL_PREFIX=/usr
-            make -j1
-            sudo make install
-            cd ../../..
-            
-            echo "✅ usign手动编译完成"
-        else
-            echo "❌ usign目录不存在"
-        fi
+        # 显示配置信息
+        echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
+        echo "DNSMASQ配置状态:"
+        grep -E "dnsmasq" .config
+        echo "启用的LUCI插件:"
+        grep "^CONFIG_PACKAGE_luci" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
 
     - name: 修复网络环境
       run: |
@@ -368,105 +244,30 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 下载依赖包 ==="
-        export MAKE_JOBS=${{ inputs.multithreading && '$(nproc)' || '1' }}
-        make -j$MAKE_JOBS download
+        make -j1 download
         echo "✅ 依赖包下载完成"
 
-    - name: 编译host工具 - 跳过usign
+    - name: 编译固件
       run: |
         cd $BUILD_DIR
-        echo "=== 编译host工具 - 跳过usign ==="
+        echo "=== 编译固件 ==="
         
-        # 先编译其他工具，跳过usign
-        echo "编译其他host工具..."
-        make -j1 tools/install IGNORE_ERRORS=m
-        make -j1 toolchain/install IGNORE_ERRORS=m
-        
-        # 检查是否还有其他签名工具可用
-        if [ -f "staging_dir/host/bin/usign" ] || [ -f "staging_dir/host/bin/signify" ]; then
-            echo "✅ 签名工具可用"
-        else
-            echo "⚠️ 没有找到签名工具，但继续编译"
-        fi
-        
-        echo "✅ host工具编译完成（跳过usign错误）"
-
-    - name: 编译固件 - 使用忽略错误
-      run: |
-        cd $BUILD_DIR
-        echo "=== 编译固件 - 使用忽略错误 ==="
-        export MAKE_JOBS=${{ inputs.multithreading && '$(nproc)' || '1' }}
-        
-        # 创建日志目录
-        mkdir -p logs
-        
-        # 使用IGNORE_ERRORS来跳过usign等工具的错误
         if [ "${{ inputs.enable_cache }}" = "true" ]; then
-            echo "启用编译缓存（忽略错误）"
-            make -j$MAKE_JOBS IGNORE_ERRORS=m V=s 2>&1 | tee build.log
+            echo "启用编译缓存"
+            make -j$(nproc) V=s 2>&1 | tee build.log
             BUILD_EXIT_CODE=${PIPESTATUS[0]}
         else
-            echo "普通编译模式（忽略错误）"
-            make -j$MAKE_JOBS IGNORE_ERRORS=m V=s 2>&1 | tee build.log
+            echo "普通编译模式"
+            make -j$(nproc) V=s 2>&1 | tee build.log
             BUILD_EXIT_CODE=${PIPESTATUS[0]}
         fi
         
         echo "编译退出代码: $BUILD_EXIT_CODE"
-        
-        # 即使有错误，如果生成了固件文件就算成功
-        if [ -d "bin/targets" ] && find bin/targets -name "*.bin" -o -name "*.img" | grep -q .; then
-            echo "✅ 固件编译完成（生成了固件文件）"
-            exit 0
-        elif [ $BUILD_EXIT_CODE -eq 0 ]; then
-            echo "✅ 编译完成"
-        else
+        if [ $BUILD_EXIT_CODE -ne 0 ]; then
             echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
             exit $BUILD_EXIT_CODE
         fi
-
-    - name: 错误分析和诊断
-      if: failure()
-      run: |
-        cd $BUILD_DIR
-        echo "=== 错误分析和诊断 ==="
-        
-        # 检查磁盘空间
-        echo "磁盘空间使用:"
-        df -h
-        
-        # 检查构建目录状态
-        echo "构建目录状态:"
-        ls -la bin/targets/ 2>/dev/null || echo "bin/targets 目录不存在"
-        
-        # 检查构建日志中的错误
-        if [ -f "build.log" ]; then
-            echo "构建日志中的关键错误:"
-            grep -i "error" build.log | grep -v "usign" | tail -20
-            echo "usign相关错误:"
-            grep -i "usign" build.log | tail -10
-        fi
-
-    - name: 收集配置和报告
-      if: always()
-      run: |
-        cd $BUILD_DIR
-        echo "=== 收集配置和报告 ==="
-        
-        # 创建报告目录
-        mkdir -p build-reports
-        
-        # 收集重要文件
-        [ -f ".config" ] && cp .config build-reports/final-config.txt || echo "最终配置不存在"
-        [ -f "build.log" ] && tail -500 build.log > build-reports/build-log-tail.txt || echo "构建日志不存在"
-        
-        # 生成包列表报告
-        echo "=== 启用的包列表 ===" > build-reports/package-list.txt
-        grep "^CONFIG_PACKAGE_.*=y$" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort >> build-reports/package-list.txt
-        
-        echo "=== 禁用的包列表 ===" >> build-reports/package-list.txt
-        grep "^# CONFIG_PACKAGE_.* is not set$" .config | sed 's/# CONFIG_PACKAGE_//' | sed 's/ is not set//' | sort >> build-reports/package-list.txt
-        
-        echo "✅ 配置和报告收集完成"
+        echo "✅ 固件编译完成"
 
     - name: 固件文件检查
       if: success()
@@ -487,7 +288,7 @@ jobs:
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ inputs.config_type }}
+        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-full
         path: ${{ env.BUILD_DIR }}/bin/targets/
         retention-days: 7
 
@@ -495,16 +296,8 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
-        path: ${{ env.BUILD_DIR }}/build-reports/
-        retention-days: 7
-
-    - name: 上传构建日志
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-log-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
-        path: ${{ env.BUILD_DIR }}/build.log
+        name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-full
+        path: ${{ env.BUILD_DIR }}/.config
         retention-days: 7
 
     - name: 清理目录
