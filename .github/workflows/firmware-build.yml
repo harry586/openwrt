@@ -73,7 +73,7 @@ jobs:
         cd $BUILD_DIR
         echo "=== 版本选择 ==="
         
-        if [ "${{ inputs.version_selection }}" = "23.05" ]; then
+        if [ "${{ github.event.inputs.version_selection }}" = "23.05" ]; then
             SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
             SELECTED_BRANCH="openwrt-23.05"
         else
@@ -146,10 +146,13 @@ jobs:
         ./scripts/feeds install -a
         echo "✅ Feeds配置完成"
 
-    - name: 生成配置 - 使用dnsmasq-full
+    - name: 生成配置 - 使用dnsmasq-full和ath10k-ct
       run: |
         cd $BUILD_DIR
-        echo "=== 生成配置 - 使用dnsmasq-full ==="
+        echo "=== 生成配置 - 使用dnsmasq-full和ath10k-ct ==="
+        
+        # 清理可能存在的旧配置
+        rm -f .config .config.old
         
         # 创建基础配置
         echo "CONFIG_TARGET_${TARGET}=y" > .config
@@ -158,7 +161,7 @@ jobs:
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
         
-        # 核心系统包 - 使用dnsmasq-full而不是dnsmasq
+        # 核心系统包
         echo "CONFIG_PACKAGE_busybox=y" >> .config
         echo "CONFIG_PACKAGE_base-files=y" >> .config
         
@@ -166,13 +169,14 @@ jobs:
         echo "# CONFIG_PACKAGE_dnsmasq is not set" >> .config
         echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
         
-        # 可以选择启用dnsmasq-full的一些有用功能
+        # 启用dnsmasq-full的有用功能
         echo "CONFIG_PACKAGE_dnsmasq_full_dhcp=y" >> .config
         echo "CONFIG_PACKAGE_dnsmasq_full_dhcpv6=y" >> .config
         echo "CONFIG_PACKAGE_dnsmasq_full_dnssec=y" >> .config
         echo "CONFIG_PACKAGE_dnsmasq_full_ipset=y" >> .config
         echo "CONFIG_PACKAGE_dnsmasq_full_conntrack=y" >> .config
         
+        # 基本系统组件
         echo "CONFIG_PACKAGE_dropbear=y" >> .config
         echo "CONFIG_PACKAGE_firewall=y" >> .config
         echo "CONFIG_PACKAGE_fstools=y" >> .config
@@ -189,19 +193,20 @@ jobs:
         echo "CONFIG_PACKAGE_uclient-fetch=y" >> .config
         echo "CONFIG_PACKAGE_usign=y" >> .config
         
-        # 无线驱动
-        echo "CONFIG_PACKAGE_kmod-ath10k=y" >> .config
+        # 无线驱动 - 使用社区优化版本 (ath10k-ct) 替代标准版本
+        echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
+        echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
         echo "CONFIG_PACKAGE_ath10k-firmware-qca988x=y" >> .config
         echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
         
-        # 网络工具（这些可能与dnsmasq-full配合更好）
+        # 网络工具
         echo "CONFIG_PACKAGE_iptables=y" >> .config
         echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> .config
         echo "CONFIG_PACKAGE_iptables-mod-ipopt=y" >> .config
         
         # 仅添加用户明确请求的包
-        if [ -n "${{ inputs.extra_packages }}" ]; then
-            for pkg in ${{ inputs.extra_packages }}; do
+        if [ -n "${{ github.event.inputs.extra_packages }}" ]; then
+            for pkg in ${{ github.event.inputs.extra_packages }}; do
                 echo "CONFIG_PACKAGE_${pkg}=y" >> .config
             done
         fi
@@ -211,7 +216,7 @@ jobs:
             echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         fi
         
-        echo "✅ 配置生成完成 - 使用dnsmasq-full"
+        echo "✅ 配置生成完成 - 使用dnsmasq-full和ath10k-ct"
 
     - name: 应用配置
       run: |
@@ -226,6 +231,8 @@ jobs:
         echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
         echo "DNSMASQ配置状态:"
         grep -E "dnsmasq" .config
+        echo "无线驱动配置状态:"
+        grep -E "ath10k" .config
         echo "启用的LUCI插件:"
         grep "^CONFIG_PACKAGE_luci" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
 
@@ -252,7 +259,7 @@ jobs:
         cd $BUILD_DIR
         echo "=== 编译固件 ==="
         
-        if [ "${{ inputs.enable_cache }}" = "true" ]; then
+        if [ "${{ github.event.inputs.enable_cache }}" = "true" ]; then
             echo "启用编译缓存"
             make -j$(nproc) V=s 2>&1 | tee build.log
             BUILD_EXIT_CODE=${PIPESTATUS[0]}
@@ -265,6 +272,11 @@ jobs:
         echo "编译退出代码: $BUILD_EXIT_CODE"
         if [ $BUILD_EXIT_CODE -ne 0 ]; then
             echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
+            # 显示编译日志中的错误信息
+            if [ -f "build.log" ]; then
+                echo "=== 编译错误摘要 ==="
+                grep -i "error:\|failed\|undefined" build.log | head -20
+            fi
             exit $BUILD_EXIT_CODE
         fi
         echo "✅ 固件编译完成"
@@ -279,6 +291,10 @@ jobs:
             find bin/targets -name "*.bin" -o -name "*.img" | while read file; do
                 echo "固件文件: $file ($(du -h "$file" | cut -f1))"
             done
+            
+            # 显示固件详细信息
+            echo "=== 生成的固件列表 ==="
+            find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) -exec ls -la {} \;
         else
             echo "❌ 固件目录不存在"
             exit 1
@@ -288,15 +304,23 @@ jobs:
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-full
+        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-ct-full
         path: ${{ env.BUILD_DIR }}/bin/targets/
+        retention-days: 7
+
+    - name: 上传编译日志
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-log-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-ct-full
+        path: ${{ env.BUILD_DIR }}/build.log
         retention-days: 7
 
     - name: 上传配置文件
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-full
+        name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-ct-full
         path: ${{ env.BUILD_DIR }}/.config
         retention-days: 7
 
