@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流 - 最终修复版
+name: OpenWrt 智能固件构建工作流 - 简化修复版
 
 on:
   workflow_dispatch:
@@ -19,13 +19,6 @@ on:
           - 22.03
           - 21.02
           - 19.07
-          - 18.06
-          - master
-      custom_version:
-        description: '自定义版本'
-        required: false
-        type: string
-        default: ''
       config_type:
         description: '配置类型'
         required: true
@@ -36,20 +29,10 @@ on:
           - normal
           - custom
       extra_packages:
-        description: '额外安装插件 (多个插件用空格分隔，如: "luci-app-ddns luci-app-wol")'
+        description: '额外安装插件 (多个插件用空格分隔)'
         required: false
         type: string
         default: ''
-      disabled_plugins:
-        description: '禁用插件 (多个插件用空格分隔，如: "luci-app-upnp luci-app-sqm")'
-        required: false
-        type: string
-        default: ''
-      save_config:
-        description: '保存配置文件'
-        required: false
-        default: true
-        type: boolean
       enable_cache:
         description: '启用编译缓存'
         required: false
@@ -59,17 +42,12 @@ on:
         description: '开启多线程编译'
         type: boolean
         default: true
-      ssh_connection:
-        description: '使用 SSH 调试'
-        type: boolean
-        default: false
 
 env:
   BUILD_DIR: /mnt/openwrt-build
 
 jobs:
   build-firmware:
-    if: ${{ inputs.ssh_connection == false }}
     runs-on: ubuntu-22.04
     
     steps:
@@ -94,8 +72,14 @@ jobs:
       run: |
         echo "=== 安装编译依赖包 ==="
         sudo apt-get update
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpath libpython3-dev python3 python3-dev python3-pip python3-setuptools python3-yaml xsltproc zip subversion ninja-build automake autoconf libtool pkg-config help2man texinfo aria2 liblz4-dev zstd libcurl4-openssl-dev groff texlive texinfo
-        pip3 install requests urllib3
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+          gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip \
+          zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpath \
+          libpython3-dev python3 python3-dev python3-pip python3-setuptools \
+          python3-yaml xsltproc zip subversion ninja-build automake autoconf \
+          libtool pkg-config help2man texinfo aria2 liblz4-dev zstd \
+          libcurl4-openssl-dev groff texlive texinfo
         echo "✅ 编译环境设置完成"
 
     - name: 创建构建目录
@@ -106,129 +90,37 @@ jobs:
         sudo chmod -R 755 $BUILD_DIR
         echo "✅ 构建目录创建完成"
 
-    - name: 复制构建脚本
-      run: |
-        echo "=== 复制构建脚本 ==="
-        cd $GITHUB_WORKSPACE
-        mkdir -p $BUILD_DIR/scripts
-        mkdir -p $BUILD_DIR/config-templates
-        cp firmware-config/scripts/openwrt_build_manager.sh $BUILD_DIR/
-        cp firmware-config/scripts/build_helpers.sh $BUILD_DIR/
-        cp firmware-config/scripts/smart_package_matcher.sh $BUILD_DIR/
-        cp firmware-config/scripts/branch_plugin_detector.sh $BUILD_DIR/
-        cp firmware-config/configs/base-template.config $BUILD_DIR/config-templates/
-        cd $BUILD_DIR
-        chmod +x *.sh
-        echo "✅ 脚本复制完成"
-
     - name: 智能版本检测
       id: version-detection
       run: |
         cd $BUILD_DIR
         echo "=== 智能版本检测 ==="
-        OLD_DEVICE_FLAG="false"
+        
+        # 简单版本选择逻辑
         case "${{ github.event.inputs.device_name }}" in
-            "wr841n"|"wr842n"|"wr941n"|"mr3420"|"ar71xx"*) OLD_DEVICE_FLAG="true" ;;
+            "wr841n"|"wr842n"|"wr941n"|"mr3420")
+                SELECTED_REPO_URL="https://github.com/openwrt/openwrt.git"
+                SELECTED_BRANCH="openwrt-19.07"
+                ;;
+            *)
+                SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+                SELECTED_BRANCH="openwrt-23.05"
+                ;;
         esac
-        USER_VERSION=""
-        if [ -n "${{ inputs.custom_version }}" ]; then
-            USER_VERSION="${{ inputs.custom_version }}"
-        elif [ "${{ inputs.version_selection }}" != "auto" ]; then
-            USER_VERSION="${{ inputs.version_selection }}"
+        
+        # 如果用户指定了版本
+        if [ "${{ inputs.version_selection }}" != "auto" ]; then
+            case "${{ inputs.version_selection }}" in
+                "23.05") SELECTED_BRANCH="openwrt-23.05" ;;
+                "22.03") SELECTED_BRANCH="openwrt-22.03" ;;
+                "21.02") SELECTED_BRANCH="openwrt-21.02" ;;
+                "19.07") SELECTED_BRANCH="openwrt-19.07" ;;
+            esac
         fi
-        echo "设备: ${{ github.event.inputs.device_name }}"
-        echo "版本: ${USER_VERSION:-自动}"
-        echo "老旧设备: $OLD_DEVICE_FLAG"
-        set +e
-        OUTPUT=$(./openwrt_build_manager.sh version_detect "${{ github.event.inputs.device_name }}" "$USER_VERSION" "$OLD_DEVICE_FLAG" 2>&1)
-        EXIT_CODE=$?
-        set -e
-        if [ $EXIT_CODE -eq 0 ]; then
-            echo "$OUTPUT"
-            SELECTED_REPO=$(echo "$OUTPUT" | grep "^SELECTED_REPO=" | head -1 | cut -d'=' -f2)
-            SELECTED_BRANCH=$(echo "$OUTPUT" | grep "^SELECTED_BRANCH=" | head -1 | cut -d'=' -f2)
-            SELECTED_REPO_URL=$(echo "$OUTPUT" | grep "^SELECTED_REPO_URL=" | head -1 | cut -d'=' -f2)
-            if [ -n "$SELECTED_REPO" ] && [ -n "$SELECTED_BRANCH" ] && [ -n "$SELECTED_REPO_URL" ]; then
-                echo "SELECTED_REPO=$SELECTED_REPO" >> $GITHUB_ENV
-                echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
-                echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
-                echo "✅ 版本检测完成"
-            else
-                echo "❌ 版本检测失败：无法提取环境变量"
-                exit 1
-            fi
-        else
-            echo "❌ 版本检测失败，退出代码: $EXIT_CODE"
-            echo "输出内容:"
-            echo "$OUTPUT"
-            exit 1
-        fi
-
-    - name: 分支插件检测
-      id: branch-plugin-detection
-      run: |
-        cd $BUILD_DIR
-        echo "=== 分支插件检测 ==="
-        echo "当前工作目录: $(pwd)"
-        echo "验证分支 $SELECTED_BRANCH 并检测插件..."
-        if ./branch_plugin_detector.sh validate_branch "$SELECTED_REPO_URL" "$SELECTED_BRANCH" "verified_plugins.txt"; then
-            echo "✅ 分支验证和插件检测成功"
-            if [ -f "verified_plugins.txt" ]; then
-                TOTAL_PLUGINS=$(grep -c "^- \`" "verified_plugins.txt" 2>/dev/null || echo "0")
-                echo "检测到 $TOTAL_PLUGINS 个可用插件"
-                echo "文件大小: $(wc -l < verified_plugins.txt) 行"
-                echo "推荐插件示例:"
-                if grep -q "luci-app-" "verified_plugins.txt"; then
-                    grep -E "luci-app-(turboacc|upnp|wol|sqm|ddns|firewall)" "verified_plugins.txt" | head -5
-                else
-                    echo "未找到推荐插件"
-                fi
-                echo "BRANCH_VALIDATED=true" >> $GITHUB_ENV
-                echo "PLUGINS_COUNT=$TOTAL_PLUGINS" >> $GITHUB_ENV
-            else
-                echo "❌ 错误: 插件列表文件未创建"
-                echo "BRANCH_VALIDATED=false" >> $GITHUB_ENV
-                exit 1
-            fi
-        else
-            echo "❌ 分支验证失败: $SELECTED_BRANCH 不存在或插件检测失败"
-            echo "BRANCH_VALIDATED=false" >> $GITHUB_ENV
-            exit 1
-        fi
-
-    - name: 验证插件列表文件
-      if: env.BRANCH_VALIDATED == 'true'
-      run: |
-        cd $BUILD_DIR
-        echo "=== 验证插件列表文件 ==="
-        if [ -f "verified_plugins.txt" ]; then
-            echo "✅ 插件列表文件存在"
-            echo "文件路径: $(pwd)/verified_plugins.txt"
-            echo "文件大小: $(wc -l < verified_plugins.txt) 行"
-            echo "插件数量: $PLUGINS_COUNT"
-            echo "文件内容预览:"
-            echo "========================"
-            head -20 verified_plugins.txt
-            echo "========================"
-        else
-            echo "❌ 错误: 插件列表文件不存在"
-            exit 1
-        fi
-
-    - name: 上传插件列表
-      if: env.BRANCH_VALIDATED == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: plugins-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
-        path: ${{ env.BUILD_DIR }}/verified_plugins.txt
-        retention-days: 7
-
-    - name: 检查分支验证结果
-      if: env.BRANCH_VALIDATED == 'false'
-      run: |
-        echo "❌ 分支验证失败，构建终止"
-        echo "请检查分支名称是否正确，或选择其他可用分支"
-        exit 1
+        
+        echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
+        echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
+        echo "✅ 版本选择完成: $SELECTED_BRANCH"
 
     - name: 克隆源码
       run: |
@@ -236,273 +128,142 @@ jobs:
         echo "=== 克隆源码 ==="
         echo "仓库: $SELECTED_REPO_URL"
         echo "分支: $SELECTED_BRANCH"
+        
+        # 清理目录
         sudo rm -rf ./* ./.git* 2>/dev/null || true
-        if git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . 2>&1; then
-            echo "✅ 源码克隆完成"
-        else
-            echo "❌ 源码克隆失败"
-            exit 1
+        
+        # 克隆源码
+        git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .
+        echo "✅ 源码克隆完成"
+
+    - name: 基础配置设置
+      run: |
+        cd $BUILD_DIR
+        echo "=== 基础配置设置 ==="
+        
+        # 设备映射
+        case "${{ github.event.inputs.device_name }}" in
+            "ac42u"|"acrh17")
+                TARGET="ipq40xx"
+                SUBTARGET="generic"
+                DEVICE="asus_rt-ac42u"
+                ;;
+            "mi4a"|"r4a")
+                TARGET="ramips"
+                SUBTARGET="mt76x8"
+                DEVICE="xiaomi_mi-router-4a-gigabit"
+                ;;
+            "wr841n")
+                TARGET="ar71xx"
+                SUBTARGET="generic"
+                DEVICE="tl-wr841n-v11"
+                ;;
+            *)
+                TARGET="ipq40xx"
+                SUBTARGET="generic"
+                DEVICE="${{ github.event.inputs.device_name }}"
+                ;;
+        esac
+        
+        echo "TARGET=$TARGET" >> $GITHUB_ENV
+        echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
+        echo "DEVICE=$DEVICE" >> $GITHUB_ENV
+        
+        echo "目标: $TARGET"
+        echo "子目标: $SUBTARGET"
+        echo "设备: $DEVICE"
+
+    - name: 配置Feeds
+      run: |
+        cd $BUILD_DIR
+        echo "=== 配置Feeds ==="
+        
+        # 基础feeds配置
+        cat > feeds.conf.default << 'EOF'
+src-git packages https://github.com/immortalwrt/packages.git;openwrt-23.05
+src-git luci https://github.com/immortalwrt/luci.git;openwrt-23.05
+src-git routing https://github.com/openwrt/routing.git;openwrt-23.05
+src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
+EOF
+        
+        # 更新feeds
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        echo "✅ Feeds配置完成"
+
+    - name: 生成基础配置
+      run: |
+        cd $BUILD_DIR
+        echo "=== 生成基础配置 ==="
+        
+        # 创建基础配置
+        cat > .config << 'EOF'
+CONFIG_TARGET_${TARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
+CONFIG_TARGET_IMAGES_GZIP=y
+CONFIG_BUSYBOX_CUSTOM=y
+CONFIG_PACKAGE_busybox=y
+CONFIG_PACKAGE_base-files=y
+CONFIG_PACKAGE_block-mount=y
+CONFIG_PACKAGE_dnsmasq=y
+CONFIG_PACKAGE_dropbear=y
+CONFIG_PACKAGE_firewall=y
+CONFIG_PACKAGE_fstools=y
+CONFIG_PACKAGE_libc=y
+CONFIG_PACKAGE_libgcc=y
+CONFIG_PACKAGE_libustream-openssl=y
+CONFIG_PACKAGE_logd=y
+CONFIG_PACKAGE_mtd=y
+CONFIG_PACKAGE_netifd=y
+CONFIG_PACKAGE_opkg=y
+CONFIG_PACKAGE_procd=y
+CONFIG_PACKAGE_swconfig=y
+CONFIG_PACKAGE_ubox=y
+CONFIG_PACKAGE_ubus=y
+CONFIG_PACKAGE_ubusd=y
+CONFIG_PACKAGE_uci=y
+CONFIG_PACKAGE_uclient-fetch=y
+CONFIG_PACKAGE_usign=y
+EOF
+        
+        # 根据配置类型添加包
+        if [ "${{ inputs.config_type }}" = "normal" ] || [ "${{ inputs.config_type }}" = "custom" ]; then
+            cat >> .config << 'EOF'
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-base=y
+CONFIG_PACKAGE_luci-compat=y
+CONFIG_PACKAGE_luci-mod-admin-full=y
+CONFIG_PACKAGE_luci-theme-bootstrap=y
+CONFIG_PACKAGE_luci-app-firewall=y
+CONFIG_PACKAGE_luci-proto-ipv6=y
+CONFIG_PACKAGE_luci-proto-ppp=y
+CONFIG_PACKAGE_wpad-basic-wolfssl=y
+EOF
         fi
-
-    - name: 恢复构建脚本
-      run: |
-        cd $BUILD_DIR
-        echo "=== 恢复构建脚本 ==="
-        mkdir -p config-templates
-        mkdir -p scripts
-        cd $GITHUB_WORKSPACE
-        cp firmware-config/scripts/openwrt_build_manager.sh $BUILD_DIR/
-        cp firmware-config/scripts/build_helpers.sh $BUILD_DIR/
-        cp firmware-config/scripts/smart_package_matcher.sh $BUILD_DIR/
-        cp firmware-config/scripts/branch_plugin_detector.sh $BUILD_DIR/
-        cp firmware-config/configs/base-template.config $BUILD_DIR/config-templates/
-        cd $BUILD_DIR
-        chmod +x *.sh
-        echo "✅ 脚本恢复完成"
-
-    - name: 创建修复包匹配器
-      run: |
-        cd $BUILD_DIR
-        echo "=== 创建修复包匹配器 ==="
-        echo "#!/bin/bash" > smart_package_matcher_fixed.sh
-        echo "set -e" >> smart_package_matcher_fixed.sh
-        echo "RED='\033[0;31m'" >> smart_package_matcher_fixed.sh
-        echo "GREEN='\033[0;32m'" >> smart_package_matcher_fixed.sh
-        echo "YELLOW='\033[1;33m'" >> smart_package_matcher_fixed.sh
-        echo "BLUE='\033[0;34m'" >> smart_package_matcher_fixed.sh
-        echo "NC='\033[0m'" >> smart_package_matcher_fixed.sh
-        echo "log_info() { echo -e \"\${BLUE}[INFO]\${NC} \$1\"; }" >> smart_package_matcher_fixed.sh
-        echo "log_success() { echo -e \"\${GREEN}[SUCCESS]\${NC} \$1\"; }" >> smart_package_matcher_fixed.sh
-        echo "log_warning() { echo -e \"\${YELLOW}[WARNING]\${NC} \$1\"; }" >> smart_package_matcher_fixed.sh
-        echo "log_error() { echo -e \"\${RED}[ERROR]\${NC} \$1\"; }" >> smart_package_matcher_fixed.sh
-        echo "get_available_packages_fixed() {" >> smart_package_matcher_fixed.sh
-        echo "    local build_dir=\"\$1\"" >> smart_package_matcher_fixed.sh
-        echo "    cd \"\$build_dir\"" >> smart_package_matcher_fixed.sh
-        echo "    log_info \"=== 获取可用包列表 ===\"" >> smart_package_matcher_fixed.sh
-        echo "    local packages_from_feeds=\"\"" >> smart_package_matcher_fixed.sh
-        echo "    if [ -f \"scripts/feeds\" ]; then" >> smart_package_matcher_fixed.sh
-        echo "        packages_from_feeds=\$(./scripts/feeds list -r 2>/dev/null | cut -d' ' -f1 | sort | uniq)" >> smart_package_matcher_fixed.sh
-        echo "        echo \"从feeds获取包数量: \$(echo \"\$packages_from_feeds\" | wc -l)\"" >> smart_package_matcher_fixed.sh
-        echo "    fi" >> smart_package_matcher_fixed.sh
-        echo "    local packages_from_makefiles=\"\"" >> smart_package_matcher_fixed.sh
-        echo "    if [ -d \"package\" ]; then" >> smart_package_matcher_fixed.sh
-        echo "        packages_from_makefiles=\$(find package -name Makefile -type f 2>/dev/null | xargs grep -l \"^PKG_NAME\" 2>/dev/null | xargs -I {} grep \"^PKG_NAME:=\" {} 2>/dev/null | cut -d':' -f2 | sed 's/.*=//g' | sort | uniq)" >> smart_package_matcher_fixed.sh
-        echo "        echo \"从Makefile获取包数量: \$(echo \"\$packages_from_makefiles\" | wc -l)\"" >> smart_package_matcher_fixed.sh
-        echo "    fi" >> smart_package_matcher_fixed.sh
-        echo "    local all_packages=\$(echo -e \"\$packages_from_feeds\\n\$packages_from_makefiles\" | sort | uniq | grep -v \"^$\")" >> smart_package_matcher_fixed.sh
-        echo "    echo \"总可用包数量: \$(echo \"\$all_packages\" | wc -l)\"" >> smart_package_matcher_fixed.sh
-        echo "    echo \"验证基础包:\"" >> smart_package_matcher_fixed.sh
-        echo "    local critical_packages=\"base-files busybox dnsmasq dropbear firewall fstools libc libgcc\"" >> smart_package_matcher_fixed.sh
-        echo "    for pkg in \$critical_packages; do" >> smart_package_matcher_fixed.sh
-        echo "        if echo \"\$all_packages\" | grep -q \"^\$pkg\$\"; then" >> smart_package_matcher_fixed.sh
-        echo "            echo \"✅ \$pkg - 存在\"" >> smart_package_matcher_fixed.sh
-        echo "        else" >> smart_package_matcher_fixed.sh
-        echo "            echo \"❌ \$pkg - 缺失\"" >> smart_package_matcher_fixed.sh
-        echo "        fi" >> smart_package_matcher_fixed.sh
-        echo "    done" >> smart_package_matcher_fixed.sh
-        echo "    echo \"\$all_packages\"" >> smart_package_matcher_fixed.sh
-        echo "}" >> smart_package_matcher_fixed.sh
-        echo "smart_fix_config_fixed() {" >> smart_package_matcher_fixed.sh
-        echo "    local build_dir=\"\$1\"" >> smart_package_matcher_fixed.sh
-        echo "    local config_file=\"\$2\"" >> smart_package_matcher_fixed.sh
-        echo "    cd \"\$build_dir\"" >> smart_package_matcher_fixed.sh
-        echo "    log_info \"=== 开始智能包匹配修复 ===\"" >> smart_package_matcher_fixed.sh
-        echo "    echo \"构建目录: \$build_dir\"" >> smart_package_matcher_fixed.sh
-        echo "    echo \"配置文件: \$config_file\"" >> smart_package_matcher_fixed.sh
-        echo "    local available_packages=\$(get_available_packages_fixed \"\$build_dir\")" >> smart_package_matcher_fixed.sh
-        echo "    local available_count=\$(echo \"\$available_packages\" | wc -l)" >> smart_package_matcher_fixed.sh
-        echo "    echo \"可用包数量: \$available_count\"" >> smart_package_matcher_fixed.sh
-        echo "    local configured_packages=\$(grep \"^CONFIG_PACKAGE_\" \"\$config_file\" | grep \"=y\$\" | sed 's/CONFIG_PACKAGE_//;s/=y//' | sort | uniq)" >> smart_package_matcher_fixed.sh
-        echo "    local configured_count=\$(echo \"\$configured_packages\" | wc -l)" >> smart_package_matcher_fixed.sh
-        echo "    echo \"配置中启用的包数量: \$configured_count\"" >> smart_package_matcher_fixed.sh
-        echo "    local report_file=\"package_fix_report_fixed.txt\"" >> smart_package_matcher_fixed.sh
-        echo "    local missing_file=\"missing_packages_fixed.txt\"" >> smart_package_matcher_fixed.sh
-        echo "    echo \"=== 包匹配修复报告 ===\" > \"\$report_file\"" >> smart_package_matcher_fixed.sh
-        echo "    echo \"生成时间: \$(date)\" >> \"\$report_file\"" >> smart_package_matcher_fixed.sh
-        echo "    echo \"可用包数量: \$available_count\" >> \"\$report_file\"" >> smart_package_matcher_fixed.sh
-        echo "    echo \"配置包数量: \$configured_count\" >> \"\$report_file\"" >> smart_package_matcher_fixed.sh
-        echo "    echo \"\" >> \"\$report_file\"" >> smart_package_matcher_fixed.sh
-        echo "    echo \"=== 缺失包列表 ===\" > \"\$missing_file\"" >> smart_package_matcher_fixed.sh
-        echo "    local fixed_count=0" >> smart_package_matcher_fixed.sh
-        echo "    local missing_count=0" >> smart_package_matcher_fixed.sh
-        echo "    for pkg in \$configured_packages; do" >> smart_package_matcher_fixed.sh
-        echo "        echo \"智能匹配包: \$pkg\"" >> smart_package_matcher_fixed.sh
-        echo "        if echo \"\$available_packages\" | grep -q \"^\$pkg\$\"; then" >> smart_package_matcher_fixed.sh
-        echo "            echo \"[PACKAGE] \$pkg - AVAILABLE - 包可用\" >> \"\$report_file\"" >> smart_package_matcher_fixed.sh
-        echo "            echo \"✅ \$pkg - 可用\"" >> smart_package_matcher_fixed.sh
-        echo "        else" >> smart_package_matcher_fixed.sh
-        echo "            echo \"[PACKAGE] \$pkg - MISSING - 包不可用，已禁用\" >> \"\$report_file\"" >> smart_package_matcher_fixed.sh
-        echo "            echo \"❌ \$pkg - 不可用\" >> \"\$missing_file\"" >> smart_package_matcher_fixed.sh
-        echo "            log_warning \"包 '\$pkg' 在当前版本中不可用，已自动禁用\"" >> smart_package_matcher_fixed.sh
-        echo "            sed -i \"/CONFIG_PACKAGE_\${pkg}=y/d\" \"\$config_file\"" >> smart_package_matcher_fixed.sh
-        echo "            echo \"# CONFIG_PACKAGE_\${pkg} is not set\" >> \"\$config_file\"" >> smart_package_matcher_fixed.sh
-        echo "            missing_count=\$((missing_count + 1))" >> smart_package_matcher_fixed.sh
-        echo "        fi" >> smart_package_matcher_fixed.sh
-        echo "    done" >> smart_package_matcher_fixed.sh
-        echo "    echo \"\" >> \"\$report_file\"" >> smart_package_matcher_fixed.sh
-        echo "    echo \"修复的包数量: \$fixed_count\" >> \"\$report_file\"" >> smart_package_matcher_fixed.sh
-        echo "    echo \"缺失的包数量: \$missing_count\" >> \"\$report_file\"" >> smart_package_matcher_fixed.sh
-        echo "    echo \"修复完成: 修复 \$fixed_count, 缺失 \$missing_count\"" >> smart_package_matcher_fixed.sh
-        echo "    echo \"详细报告: \$report_file\"" >> smart_package_matcher_fixed.sh
-        echo "    echo \"缺失包列表: \$missing_file\"" >> smart_package_matcher_fixed.sh
-        echo "    if [ \$missing_count -gt 10 ]; then" >> smart_package_matcher_fixed.sh
-        echo "        log_warning \"大量包缺失，请检查feeds配置和分支兼容性\"" >> smart_package_matcher_fixed.sh
-        echo "    fi" >> smart_package_matcher_fixed.sh
-        echo "    return 0" >> smart_package_matcher_fixed.sh
-        echo "}" >> smart_package_matcher_fixed.sh
-        echo "case \"\$1\" in" >> smart_package_matcher_fixed.sh
-        echo "    \"smart_fix_config\")" >> smart_package_matcher_fixed.sh
-        echo "        smart_fix_config_fixed \"\$2\" \"\$3\"" >> smart_package_matcher_fixed.sh
-        echo "        ;;" >> smart_package_matcher_fixed.sh
-        echo "    \"get_available\")" >> smart_package_matcher_fixed.sh
-        echo "        get_available_packages_fixed \"\$2\"" >> smart_package_matcher_fixed.sh
-        echo "        ;;" >> smart_package_matcher_fixed.sh
-        echo "    *)" >> smart_package_matcher_fixed.sh
-        echo "        echo \"用法: \$0 <功能> [参数]\"" >> smart_package_matcher_fixed.sh
-        echo "        echo \"功能: smart_fix_config <构建目录> <配置文件>\"" >> smart_package_matcher_fixed.sh
-        echo "        echo \"      get_available <构建目录>\"" >> smart_package_matcher_fixed.sh
-        echo "        ;;" >> smart_package_matcher_fixed.sh
-        echo "esac" >> smart_package_matcher_fixed.sh
-        chmod +x smart_package_matcher_fixed.sh
-        echo "✅ 修复版包匹配器创建完成"
-
-    - name: 插件兼容性检查
-      run: |
-        cd $BUILD_DIR
-        echo "=== 插件兼容性检查 ==="
-        ./openwrt_build_manager.sh plugin_check "$SELECTED_BRANCH" || echo "⚠️ 插件兼容性检查发现警告，但构建将继续"
-
-    - name: Feeds 配置
-      run: |
-        cd $BUILD_DIR
-        echo "=== Feeds 配置 ==="
-        branch="$SELECTED_BRANCH"
-        echo "分支: $branch"
-        feeds_branch="$branch"
-        if echo "$branch" | grep -q "openwrt-23.05"; then
-            feeds_branch="openwrt-23.05"
-        elif echo "$branch" | grep -q "openwrt-22.03"; then
-            feeds_branch="openwrt-22.03"
-        elif echo "$branch" | grep -q "openwrt-21.02"; then
-            feeds_branch="openwrt-21.02"
-        elif echo "$branch" | grep -q "openwrt-19.07"; then
-            feeds_branch="openwrt-19.07"
-        else
-            echo "使用默认分支: master"
-            feeds_branch="master"
+        
+        # 添加用户请求的额外包
+        if [ -n "${{ inputs.extra_packages }}" ]; then
+            for pkg in ${{ inputs.extra_packages }}; do
+                echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+            done
         fi
-        echo "使用的feeds分支: $feeds_branch"
-        echo "src-git packages https://github.com/immortalwrt/packages.git;$feeds_branch" > feeds.conf.default
-        echo "src-git luci https://github.com/immortalwrt/luci.git;$feeds_branch" >> feeds.conf.default
-        echo "src-git routing https://github.com/openwrt/routing.git;$feeds_branch" >> feeds.conf.default
-        echo "src-git telephony https://github.com/openwrt/telephony.git;$feeds_branch" >> feeds.conf.default
-        echo "✅ Feeds 配置完成"
-        cat feeds.conf.default
+        
+        echo "✅ 基础配置生成完成"
 
-    - name: 更新安装 Feeds
+    - name: 应用配置
       run: |
         cd $BUILD_DIR
-        echo "=== 更新安装 Feeds ==="
-        ./scripts/feeds update -a -f
-        ./scripts/feeds install -a -f
-        echo "✅ Feeds 更新安装完成"
-
-    - name: 设备检测
-      id: device-detection
-      run: |
-        cd $BUILD_DIR
-        echo "=== 设备检测 ==="
-        OUTPUT=$(./openwrt_build_manager.sh device_detect "${{ github.event.inputs.device_name }}")
-        echo "$OUTPUT"
-        PLATFORM=$(echo "$OUTPUT" | grep "^PLATFORM=" | head -1 | cut -d'=' -f2)
-        DEVICE_SHORT_NAME=$(echo "$OUTPUT" | grep "^DEVICE_SHORT_NAME=" | head -1 | cut -d'=' -f2)
-        DEVICE_FULL_NAME=$(echo "$OUTPUT" | grep "^DEVICE_FULL_NAME=" | head -1 | cut -d'=' -f2)
-        if [ -n "$PLATFORM" ] && [ -n "$DEVICE_SHORT_NAME" ] && [ -n "$DEVICE_FULL_NAME" ]; then
-            echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
-            echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
-            echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
-            echo "✅ 设备检测完成"
-        else
-            echo "❌ 设备检测失败"
-            exit 1
-        fi
-
-    - name: 配置加载和智能包匹配
-      run: |
-        cd $BUILD_DIR
-        echo "=== 配置加载和智能包匹配 ==="
-        echo "额外安装插件: ${{ inputs.extra_packages }}"
-        echo "禁用插件: ${{ inputs.disabled_plugins }}"
-        echo "确保feeds就绪"
-        ./scripts/feeds update -a > /dev/null 2>&1
-        ./scripts/feeds install -a > /dev/null 2>&1
-        if [ -f "verified_plugins.txt" ]; then
-            echo "验证用户请求的插件"
-            if [ -n "${{ inputs.extra_packages }}" ]; then
-                for pkg in ${{ inputs.extra_packages }}; do
-                    if grep -q "^\`$pkg\`" "verified_plugins.txt"; then
-                        echo "✅ 插件 $pkg 在分支中存在"
-                    else
-                        echo "⚠️ 警告: 插件 $pkg 在分支 $SELECTED_BRANCH 中不存在"
-                    fi
-                done
-            fi
-        fi
-        echo "使用修复版包匹配器"
-        if [ -f "smart_package_matcher_fixed.sh" ]; then
-            ./smart_package_matcher_fixed.sh smart_fix_config "." ".config"
-        else
-            ./smart_package_matcher.sh smart_fix_config "." ".config"
-        fi
-        ./openwrt_build_manager.sh config_load "${{ inputs.config_type }}" "$PLATFORM" "$DEVICE_SHORT_NAME" "$SELECTED_BRANCH" "${{ github.event.inputs.device_name }}" "${{ inputs.extra_packages }}" "${{ inputs.disabled_plugins }}"
-
-    - name: 验证配置文件
-      run: |
-        cd $BUILD_DIR
-        echo "=== 验证配置文件 ==="
-        if [ -f ".config" ]; then
-            echo "✅ .config 文件已生成"
-            echo "配置文件大小: $(wc -l < .config) 行"
-            echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
-            if [ -f "missing_packages_fixed.txt" ]; then
-                echo "发现缺失包报告:"
-                head -20 missing_packages_fixed.txt
-            elif [ -f "missing_packages.txt" ]; then
-                echo "发现缺失包报告:"
-                head -20 missing_packages.txt
-            fi
-            if [ -f "package_fix_report_fixed.txt" ]; then
-                echo "包修复报告:"
-                head -30 package_fix_report_fixed.txt
-            elif [ -f "package_fix_report.txt" ]; then
-                echo "包修复报告:"
-                head -30 package_fix_report.txt
-            fi
-        else
-            echo "❌ .config 文件未生成"
-            exit 1
-        fi
-
-    - name: 包可用性检查
-      id: package-check
-      run: |
-        cd $BUILD_DIR
-        echo "=== 包可用性检查 ==="
-        OUTPUT=$(./openwrt_build_manager.sh package_check ".")
-        PACKAGE_CHECK_EXIT_CODE=$?
-        echo "$OUTPUT"
-        if [ $PACKAGE_CHECK_EXIT_CODE -eq 0 ]; then
-            echo "✅ 包检查通过"
-        else
-            echo "❌ 包检查发现缺失包，停止构建"
-            exit $PACKAGE_CHECK_EXIT_CODE
-        fi
-
-    - name: 自定义文件集成
-      run: |
-        cd $BUILD_DIR
-        echo "=== 自定义文件集成 ==="
-        ./openwrt_build_manager.sh custom_integrate "$GITHUB_WORKSPACE"
+        echo "=== 应用配置 ==="
+        
+        # 运行defconfig来完善配置
+        make defconfig
+        echo "✅ 配置应用完成"
+        
+        # 显示启用的包数量
+        ENABLED_PACKAGES=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
+        echo "启用的包数量: $ENABLED_PACKAGES"
 
     - name: 修复网络环境
       run: |
@@ -523,49 +284,40 @@ jobs:
         make -j$MAKE_JOBS download
         echo "✅ 依赖包下载完成"
 
+    - name: 编译host工具
+      run: |
+        cd $BUILD_DIR
+        echo "=== 编译host工具 ==="
+        # 先编译host工具，确保usign等工具可用
+        make -j1 tools/compile
+        make -j1 toolchain/compile
+        echo "✅ host工具编译完成"
+
     - name: 编译固件
       run: |
         cd $BUILD_DIR
         echo "=== 编译固件 ==="
         export MAKE_JOBS=${{ inputs.multithreading && '$(nproc)' || '1' }}
+        
+        # 创建日志目录
         mkdir -p logs
+        
         if [ "${{ inputs.enable_cache }}" = "true" ]; then
             echo "启用编译缓存"
-            make -j$MAKE_JOBS V=s 2>&1 | tee -a build.log
+            make -j$MAKE_JOBS V=s 2>&1 | tee build.log
             BUILD_EXIT_CODE=${PIPESTATUS[0]}
         else
             echo "普通编译模式"
-            make -j$MAKE_JOBS V=s 2>&1 | tee -a build.log
+            make -j$MAKE_JOBS V=s 2>&1 | tee build.log
             BUILD_EXIT_CODE=${PIPESTATUS[0]}
         fi
+        
         echo "编译退出代码: $BUILD_EXIT_CODE"
         if [ $BUILD_EXIT_CODE -ne 0 ]; then
             echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
             exit $BUILD_EXIT_CODE
         fi
         echo "✅ 固件编译完成"
-
-    - name: 错误分析
-      if: failure()
-      run: |
-        cd $BUILD_DIR
-        echo "=== 错误分析 ==="
-        ./openwrt_build_manager.sh error_analyze "."
-
-    - name: 收集构建日志和报告
-      if: always()
-      run: |
-        cd $BUILD_DIR
-        echo "=== 收集构建日志和报告 ==="
-        mkdir -p build-reports
-        [ -f "build.log" ] && cp build.log build-reports/ || echo "构建日志不存在"
-        [ -f "missing_packages_fixed.txt" ] && cp missing_packages_fixed.txt build-reports/ || echo "缺失包报告不存在"
-        [ -f "missing_packages.txt" ] && cp missing_packages.txt build-reports/ || echo "缺失包报告不存在"
-        [ -f "package_fix_report_fixed.txt" ] && cp package_fix_report_fixed.txt build-reports/ || echo "包修复报告不存在"
-        [ -f "package_fix_report.txt" ] && cp package_fix_report.txt build-reports/ || echo "包修复报告不存在"
-        [ -f ".config" ] && cp .config build-reports/final-config.txt || echo "最终配置不存在"
-        [ -f "verified_plugins.txt" ] && cp verified_plugins.txt build-reports/ || echo "插件列表不存在"
-        echo "✅ 构建报告收集完成"
 
     - name: 固件文件检查
       if: success()
@@ -586,16 +338,16 @@ jobs:
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ inputs.config_type }}
+        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
         path: ${{ env.BUILD_DIR }}/bin/targets/
         retention-days: 7
 
-    - name: 上传构建报告
+    - name: 上传构建日志
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: build-report-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
-        path: ${{ env.BUILD_DIR }}/build-reports/
+        name: build-log-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
+        path: ${{ env.BUILD_DIR }}/build.log
         retention-days: 7
 
     - name: 清理目录
@@ -604,15 +356,3 @@ jobs:
         echo "=== 清理构建目录 ==="
         sudo rm -rf $BUILD_DIR
         echo "✅ 构建目录已清理"
-
-  build-firmware-ssh:
-    if: ${{ inputs.ssh_connection == true }}
-    name: 编译 - SSH调试版
-    runs-on: ubuntu-22.04
-    steps:
-    - name: 开启 SSH 服务
-      uses: lhotari/action-upterm@v1
-      with:
-        wait-timeout-minutes: 30
-    - name: 编译前提示
-      run: echo "SSH调试模式已启动"
