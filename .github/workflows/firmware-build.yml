@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流 - 修复编译错误版
+name: OpenWrt 智能固件构建工作流 - 完整插件版
 
 on:
   workflow_dispatch:
@@ -18,7 +18,6 @@ on:
           - 23.05
           - 22.03
           - 21.02
-          - 19.07
       config_type:
         description: '配置类型'
         required: true
@@ -27,7 +26,7 @@ on:
         options:
           - minimal
           - normal
-          - custom
+          - full
       extra_packages:
         description: '额外安装插件 (多个插件用空格分隔)'
         required: false
@@ -107,7 +106,6 @@ jobs:
                 "23.05") SELECTED_BRANCH="openwrt-23.05" ;;
                 "22.03") SELECTED_BRANCH="openwrt-22.03" ;;
                 "21.02") SELECTED_BRANCH="openwrt-21.02" ;;
-                "19.07") SELECTED_BRANCH="openwrt-19.07" ;;
             esac
         fi
         
@@ -182,9 +180,6 @@ jobs:
             "openwrt-21.02")
                 FEEDS_BRANCH="openwrt-21.02"
                 ;;
-            "openwrt-19.07")
-                FEEDS_BRANCH="openwrt-19.07"
-                ;;
             *)
                 FEEDS_BRANCH="master"
                 ;;
@@ -200,21 +195,23 @@ jobs:
         ./scripts/feeds install -a
         echo "✅ Feeds配置完成"
 
-    - name: 生成最小化配置
+    - name: 生成完整配置
       run: |
         cd $BUILD_DIR
-        echo "=== 生成最小化配置 ==="
+        echo "=== 生成完整配置 ==="
         
-        # 创建最小化配置，避免包冲突
+        # 创建基础配置
         echo "CONFIG_TARGET_${TARGET}=y" > .config
         echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
         echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" >> .config
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
         
-        # 仅包含绝对必要的包
+        # 核心系统包
         echo "CONFIG_PACKAGE_busybox=y" >> .config
         echo "CONFIG_PACKAGE_base-files=y" >> .config
+        echo "CONFIG_PACKAGE_block-mount=y" >> .config
+        echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
         echo "CONFIG_PACKAGE_dropbear=y" >> .config
         echo "CONFIG_PACKAGE_firewall=y" >> .config
         echo "CONFIG_PACKAGE_fstools=y" >> .config
@@ -224,6 +221,7 @@ jobs:
         echo "CONFIG_PACKAGE_netifd=y" >> .config
         echo "CONFIG_PACKAGE_opkg=y" >> .config
         echo "CONFIG_PACKAGE_procd=y" >> .config
+        echo "CONFIG_PACKAGE_swconfig=y" >> .config
         echo "CONFIG_PACKAGE_ubox=y" >> .config
         echo "CONFIG_PACKAGE_ubus=y" >> .config
         echo "CONFIG_PACKAGE_ubusd=y" >> .config
@@ -231,7 +229,100 @@ jobs:
         echo "CONFIG_PACKAGE_uclient-fetch=y" >> .config
         echo "CONFIG_PACKAGE_usign=y" >> .config
         
-        echo "✅ 最小化配置生成完成"
+        # 网络工具
+        echo "CONFIG_PACKAGE_iptables=y" >> .config
+        echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> .config
+        echo "CONFIG_PACKAGE_iptables-mod-ipopt=y" >> .config
+        echo "CONFIG_PACKAGE_iptables-mod-nat-extra=y" >> .config
+        echo "CONFIG_PACKAGE_iptables-mod-ulog=y" >> .config
+        echo "CONFIG_PACKAGE_ip-full=y" >> .config
+        echo "CONFIG_PACKAGE_tc=y" >> .config
+        echo "CONFIG_PACKAGE_ppp=y" >> .config
+        echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config
+        
+        # 根据配置类型添加包
+        if [ "${{ inputs.config_type }}" = "normal" ] || [ "${{ inputs.config_type }}" = "full" ]; then
+            # LUCI基础
+            echo "CONFIG_PACKAGE_luci=y" >> .config
+            echo "CONFIG_PACKAGE_luci-base=y" >> .config
+            echo "CONFIG_PACKAGE_luci-compat=y" >> .config
+            echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> .config
+            echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
+            echo "CONFIG_PACKAGE_luci-proto-ipv6=y" >> .config
+            echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
+            
+            # 常用LUCI应用
+            echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-wol=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-ddns=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-commands=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-statistics=y" >> .config
+        fi
+        
+        # 完整配置包含更多插件
+        if [ "${{ inputs.config_type }}" = "full" ]; then
+            # 网络加速插件 (主要针对21.02)
+            if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+                echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+                echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+                echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+                echo "CONFIG_PACKAGE_kmod-shortcut-fe-cm=y" >> .config
+            fi
+            
+            # 更多实用插件
+            echo "CONFIG_PACKAGE_luci-app-aria2=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-samba4=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-watchcat=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-acme=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-adblock=y" >> .config
+            
+            # 23.05特定的DSA支持
+            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+                echo "CONFIG_PACKAGE_luci-app-opkg=y" >> .config
+                echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
+            fi
+        fi
+        
+        # 添加用户请求的额外包
+        if [ -n "${{ inputs.extra_packages }}" ]; then
+            for pkg in ${{ inputs.extra_packages }}; do
+                echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+            done
+        fi
+        
+        # 无线驱动
+        echo "CONFIG_PACKAGE_kmod-ath10k=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ath9k=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ath9k-common=y" >> .config
+        echo "CONFIG_PACKAGE_ath10k-firmware-qca988x=y" >> .config
+        echo "CONFIG_PACKAGE_ath10k-firmware-qca9888=y" >> .config
+        echo "CONFIG_PACKAGE_ath10k-firmware-qca9984=y" >> .config
+        
+        # WPA支持
+        echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
+        echo "CONFIG_PACKAGE_wpa-cli=y" >> .config
+        echo "CONFIG_PACKAGE_hostapd-common=y" >> .config
+        
+        echo "✅ 完整配置生成完成"
+
+    - name: 显示配置内容
+      run: |
+        cd $BUILD_DIR
+        echo "=== 显示配置内容 ==="
+        echo "配置文件大小: $(wc -l < .config) 行"
+        echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
+        echo ""
+        echo "=== 配置预览 (前50行) ==="
+        head -50 .config
+        echo ""
+        echo "=== LUCI插件列表 ==="
+        grep "^CONFIG_PACKAGE_luci" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
+        echo ""
+        echo "=== 网络相关包 ==="
+        grep "^CONFIG_PACKAGE_.*turboacc\|shortcut\|ath\|wireless" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
 
     - name: 应用配置
       run: |
@@ -242,9 +333,9 @@ jobs:
         make defconfig
         echo "✅ 配置应用完成"
         
-        # 显示启用的包数量
+        # 显示最终启用的包数量
         ENABLED_PACKAGES=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
-        echo "启用的包数量: $ENABLED_PACKAGES"
+        echo "最终启用的包数量: $ENABLED_PACKAGES"
 
     - name: 修复权限和文件系统
       run: |
@@ -258,11 +349,6 @@ jobs:
         # 清理可能的锁定文件
         find . -name "*.lock" -delete 2>/dev/null || true
         find . -name "*.tmp" -delete 2>/dev/null || true
-        
-        # 确保必要的目录存在
-        mkdir -p staging_dir/host/bin
-        mkdir -p staging_dir/target-*/bin
-        mkdir -p build_dir/target-*/
         
         echo "✅ 权限和文件系统修复完成"
 
@@ -294,28 +380,15 @@ jobs:
         make -j1 toolchain/install
         echo "✅ host工具编译完成"
 
-    - name: 编译固件 - 分步进行
+    - name: 编译固件
       run: |
         cd $BUILD_DIR
-        echo "=== 编译固件 - 分步进行 ==="
+        echo "=== 编译固件 ==="
         export MAKE_JOBS=${{ inputs.multithreading && '$(nproc)' || '1' }}
         
         # 创建日志目录
         mkdir -p logs
         
-        echo "步骤1: 编译工具链"
-        make -j$MAKE_JOBS toolchain/install || echo "工具链编译可能有警告"
-        
-        echo "步骤2: 编译目标工具"
-        make -j$MAKE_JOBS target/compile || echo "目标工具编译可能有警告"
-        
-        echo "步骤3: 编译包"
-        make -j$MAKE_JOBS package/compile || echo "包编译可能有警告"
-        
-        echo "步骤4: 编译固件镜像"
-        make -j$MAKE_JOBS target/install || echo "目标安装可能有警告"
-        
-        echo "步骤5: 最终编译"
         if [ "${{ inputs.enable_cache }}" = "true" ]; then
             echo "启用编译缓存"
             make -j$MAKE_JOBS V=s 2>&1 | tee build.log
@@ -333,39 +406,27 @@ jobs:
         fi
         echo "✅ 固件编译完成"
 
-    - name: 错误分析和诊断
-      if: failure()
+    - name: 收集配置和报告
+      if: always()
       run: |
         cd $BUILD_DIR
-        echo "=== 错误分析和诊断 ==="
+        echo "=== 收集配置和报告 ==="
         
-        # 检查磁盘空间
-        echo "磁盘空间使用:"
-        df -h
+        # 创建报告目录
+        mkdir -p build-reports
         
-        # 检查内存使用
-        echo "内存使用:"
-        free -h
+        # 收集重要文件
+        [ -f ".config" ] && cp .config build-reports/final-config.txt || echo "最终配置不存在"
+        [ -f "build.log" ] && cp build.log build-reports/ || echo "构建日志不存在"
         
-        # 检查构建目录状态
-        echo "构建目录状态:"
-        ls -la bin/targets/ 2>/dev/null || echo "bin/targets 目录不存在"
-        ls -la staging_dir/ 2>/dev/null || echo "staging_dir 目录不存在"
-        ls -la build_dir/ 2>/dev/null || echo "build_dir 目录不存在"
+        # 生成包列表报告
+        echo "=== 启用的包列表 ===" > build-reports/package-list.txt
+        grep "^CONFIG_PACKAGE_.*=y$" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort >> build-reports/package-list.txt
         
-        # 检查构建日志中的错误
-        if [ -f "build.log" ]; then
-            echo "构建日志中的错误:"
-            grep -i "error" build.log | tail -20
-            echo "构建日志中的警告:"
-            grep -i "warning" build.log | tail -10
-        fi
+        echo "=== LUCI插件列表 ===" >> build-reports/package-list.txt
+        grep "^CONFIG_PACKAGE_luci.*=y$" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort >> build-reports/package-list.txt
         
-        # 检查包编译状态
-        echo "包编译状态:"
-        find build_dir -name ".configured" | wc -l
-        find build_dir -name ".built" | wc -l
-        find build_dir -name ".failed" | wc -l
+        echo "✅ 配置和报告收集完成"
 
     - name: 固件文件检查
       if: success()
@@ -386,8 +447,16 @@ jobs:
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
+        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ inputs.config_type }}
         path: ${{ env.BUILD_DIR }}/bin/targets/
+        retention-days: 7
+
+    - name: 上传配置文件
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
+        path: ${{ env.BUILD_DIR }}/build-reports/
         retention-days: 7
 
     - name: 上传构建日志
