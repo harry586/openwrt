@@ -20,7 +20,7 @@ on:
         description: '额外安装插件 (多个插件用空格分隔)'
         required: false
         type: string
-        default: 'luci-app-upnp'
+        default: ''
       enable_cache:
         description: '启用编译缓存'
         required: false
@@ -111,6 +111,16 @@ jobs:
                 SUBTARGET="generic"
                 DEVICE="asus_rt-ac42u"
                 ;;
+            "mi_router_4a_gigabit"|"r4ag")
+                TARGET="ramips"
+                SUBTARGET="mt76x8"
+                DEVICE="xiaomi_mi-router-4a-gigabit"
+                ;;
+            "mi_router_3g"|"r3g")
+                TARGET="ramips"
+                SUBTARGET="mt7621"
+                DEVICE="xiaomi_mi-router-3g"
+                ;;
             *)
                 TARGET="ipq40xx"
                 SUBTARGET="generic"
@@ -145,6 +155,44 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         echo "✅ Feeds配置完成"
+
+    - name: 集成 TurboACC (23.05)
+      if: env.SELECTED_BRANCH == 'openwrt-23.05'
+      run: |
+        cd $BUILD_DIR
+        echo "=== 集成 TurboACC 加速插件 (23.05) ==="
+        
+        # 创建临时目录
+        mkdir -p turboacc_tmp
+        cd turboacc_tmp
+        
+        # 克隆 turboacc 源码
+        git clone https://github.com/chenmozhijin/turboacc.git
+        
+        # 复制必要文件到 OpenWrt 源码
+        cp -f turboacc/hack-5.15/952-add-net-conntrack-events-support-multiple-registrant.patch ../
+        cp -f turboacc/hack-5.15/953-net-patch-linux-kernel-to-support-shortcut-fe.patch ../
+        cp -f turboacc/pending-5.15/613-netfilter_optional_tcp_window_check.patch ../
+        
+        # 复制软件包
+        cp -r turboacc/shortcut-fe ../package/network/config/
+        cp -RT turboacc/firewall ../package/network/config/firewall
+        cp -RT turboacc/libnftnl ../package/libs/libnftnl
+        cp -RT turboacc/nftables ../package/network/utils/nftables
+        
+        # 复制 LUCI 应用
+        cp -r turboacc/luci-app-turboacc ../package/
+        
+        cd ..
+        
+        # 清理临时目录
+        rm -rf turboacc_tmp
+        
+        # 更新 feeds 以包含新的软件包
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        
+        echo "✅ TurboACC 集成完成"
 
     - name: 编译前空间检查
       run: |
@@ -241,8 +289,9 @@ jobs:
         elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             echo "🔧 检测到 23.05 版本，应用相应配置..."
             
-            # 23.05 特定的配置
+            # 23.05 特定的配置 - 同时启用两种加速
             echo "CONFIG_PACKAGE_luci-app-software-offloading=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
             
             # 23.05 文件系统驱动
             echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
@@ -271,7 +320,7 @@ jobs:
         echo "CONFIG_PACKAGE_smartdns=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> .config
         
-        # 新增的完整插件列表（所有版本）- 禁用网络唤醒
+        # 完整的插件列表（所有版本）- 包含 upnp 但不在界面显示
         echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
         echo "CONFIG_PACKAGE_miniupnpd=y" >> .config
         echo "CONFIG_PACKAGE_vsftpd=y" >> .config
@@ -286,7 +335,7 @@ jobs:
         echo "CONFIG_PACKAGE_luci-app-hd-idle=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-filetransfer=y" >> .config
         
-        # 磁盘管理和家长控制 - 禁用网络唤醒相关功能
+        # 磁盘管理和家长控制
         echo "CONFIG_PACKAGE_luci-app-diskman=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-accesscontrol=y" >> .config
         
@@ -316,12 +365,18 @@ jobs:
         echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Trojan is not set" >> .config
         echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray is not set" >> .config
         
-        # 用户自定义包
+        # 用户自定义包处理
         if [ -n "${{ github.event.inputs.extra_packages }}" ]; then
             echo "🔧 添加用户自定义包: ${{ github.event.inputs.extra_packages }}"
-            for pkg in ${{ github.event.inputs.extra_packages }}; do
-                echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+            IFS=' ' read -ra PKG_ARRAY <<< "${{ github.event.inputs.extra_packages }}"
+            for pkg in "${PKG_ARRAY[@]}"; do
+                if [ -n "$pkg" ]; then
+                    echo "添加包: $pkg"
+                    echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+                fi
             done
+        else
+            echo "ℹ️  无用户自定义包"
         fi
         
         echo "✅ 智能配置生成完成"
