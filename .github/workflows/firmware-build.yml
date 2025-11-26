@@ -99,6 +99,38 @@ jobs:
         git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .
         echo "✅ 源码克隆完成"
 
+    - name: 集成 TurboACC (23.05)
+      if: env.SELECTED_BRANCH == 'openwrt-23.05'
+      run: |
+        cd $BUILD_DIR
+        echo "=== 集成 TurboACC 加速插件 (23.05) ==="
+        
+        # 使用正确的 turboacc 集成方法
+        echo "🔧 使用官方 turboacc 集成方法..."
+        
+        # 创建临时目录
+        mkdir -p turboacc_tmp
+        cd turboacc_tmp
+        
+        # 克隆 turboacc 源码
+        git clone https://github.com/chenmozhijin/turboacc.git
+        
+        # 复制 LUCI 应用到 package 目录
+        cp -r turboacc/luci-app-turboacc ../package/
+        
+        # 复制必要的组件
+        cp -r turboacc/shortcut-fe ../package/network/config/
+        cp -r turboacc/firewall ../package/network/config/
+        cp -r turboacc/libnftnl ../package/libs/
+        cp -r turboacc/nftables ../package/network/utils/
+        
+        cd ..
+        
+        # 清理临时目录
+        rm -rf turboacc_tmp
+        
+        echo "✅ TurboACC 集成完成"
+
     - name: 设备配置
       run: |
         cd $BUILD_DIR
@@ -155,40 +187,6 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         echo "✅ Feeds配置完成"
-
-    - name: 集成 TurboACC (23.05)
-      if: env.SELECTED_BRANCH == 'openwrt-23.05'
-      run: |
-        cd $BUILD_DIR
-        echo "=== 集成 TurboACC 加速插件 (23.05) ==="
-        
-        # 使用更稳定的 turboacc 集成方法
-        echo "🔧 使用简化版 TurboACC 集成..."
-        
-        # 直接添加 luci-app-turboacc 包到 packages 目录
-        mkdir -p package/turboacc
-        
-        cat > package/turboacc/Makefile << 'EOF'
-        include $(TOPDIR)/rules.mk
-        
-        LUCI_TITLE:=TurboACC - 网络加速
-        LUCI_DEPENDS:=+kmod-shortcut-fe +kmod-fast-classifier
-        
-        include ../../luci.mk
-        
-        # call BuildPackage - OpenWrt buildroot signature
-        EOF
-        
-        # 创建简化版的 luci-app-turboacc
-        mkdir -p package/network/config/firewall4/patches
-        mkdir -p package/libs/libnftnl/patches
-        mkdir -p package/network/utils/nftables/patches
-        
-        echo "✅ TurboACC 基础集成完成"
-        
-        # 更新 feeds 以包含新的软件包
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
 
     - name: 编译前空间检查
       run: |
@@ -287,17 +285,15 @@ jobs:
         elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             echo "🔧 检测到 23.05 版本，应用相应配置..."
             
-            # 23.05 特定的配置 - 使用软件流量分载
-            echo "CONFIG_PACKAGE_luci-app-software-offloading=y" >> .config
+            # 23.05 特定的配置 - 启用 turboacc
+            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
             
             # 23.05 文件系统驱动
             echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
             echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
             echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
-            
-            # 23.05 使用 Flow Offloading 替代 turboacc
-            echo "CONFIG_PACKAGE_firewall4=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-nft-offload=y" >> .config
             
             # 23.05 特定的禁用组件
             echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox is not set" >> .config
@@ -344,6 +340,9 @@ jobs:
         echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> .config
         echo "# CONFIG_PACKAGE_wol is not set" >> .config
         echo "# CONFIG_PACKAGE_etherwake is not set" >> .config
+        
+        # 禁用 offloading 插件
+        echo "# CONFIG_PACKAGE_luci-app-software-offloading is not set" >> .config
         
         # 通用禁用组件（所有版本）
         echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy is not set" >> .config
