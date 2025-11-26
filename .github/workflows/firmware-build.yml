@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流 - 智能配置系统
+name: OpenWrt 智能固件构建工作流 - 完整插件版
 
 on:
   workflow_dispatch:
@@ -146,6 +146,14 @@ jobs:
         ./scripts/feeds install -a
         echo "✅ Feeds配置完成"
 
+    - name: 编译前空间检查
+      run: |
+        echo "=== 编译前空间检查 ==="
+        df -h
+        AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
+        AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+        echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+
     - name: 智能配置生成
       run: |
         cd $BUILD_DIR
@@ -221,7 +229,10 @@ jobs:
             echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
             echo "CONFIG_PACKAGE_automount=y" >> .config
             
-            # 21.02 特定的禁用组件
+            # 21.02 特定的禁用组件 - 确保完全禁用
+            echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Client is not set" >> .config
+            echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Server is not set" >> .config
+            echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray is not set" >> .config
             echo "# CONFIG_PACKAGE_luci-app-vssr_INCLUDE_ShadowsocksR_Libev_Server is not set" >> .config
             echo "# CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Trojan is not set" >> .config
             echo "# CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Xray is not set" >> .config
@@ -231,7 +242,7 @@ jobs:
             echo "🔧 检测到 23.05 版本，应用相应配置..."
             
             # 23.05 特定的配置
-            echo "CONFIG_PACKAGE_luci-app-offloading=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-software-offloading=y" >> .config
             
             # 23.05 文件系统驱动
             echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
@@ -254,11 +265,35 @@ jobs:
         echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
         
-        # 通用插件（所有版本）
+        # 基础通用插件（所有版本）
         echo "CONFIG_PACKAGE_vlmcsd=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-vlmcsd=y" >> .config
         echo "CONFIG_PACKAGE_smartdns=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> .config
+        
+        # 新增的完整插件列表（所有版本）- 禁用网络唤醒
+        echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
+        echo "CONFIG_PACKAGE_miniupnpd=y" >> .config
+        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-arpbind=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-cpulimit=y" >> .config
+        echo "CONFIG_PACKAGE_samba4-server=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-samba4=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-wechatpush=y" >> .config
+        echo "CONFIG_PACKAGE_sqm-scripts=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-hd-idle=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-filetransfer=y" >> .config
+        
+        # 磁盘管理和家长控制 - 禁用网络唤醒相关功能
+        echo "CONFIG_PACKAGE_luci-app-diskman=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-accesscontrol=y" >> .config
+        
+        # 禁用网络唤醒相关功能
+        echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> .config
+        echo "# CONFIG_PACKAGE_wol is not set" >> .config
+        echo "# CONFIG_PACKAGE_etherwake is not set" >> .config
         
         # 通用禁用组件（所有版本）
         echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy is not set" >> .config
@@ -314,6 +349,7 @@ jobs:
         echo "DNSMASQ配置: $(grep "dnsmasq" .config | grep "=y" | head -1 | sed 's/CONFIG_PACKAGE_//')"
         echo "无线驱动: $(grep "ath10k" .config | grep "=y" | head -1 | sed 's/CONFIG_PACKAGE_//')"
         echo "文件系统驱动: $(grep "kmod-fs-" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | tr '\n' ' ')"
+        echo "网络加速插件: $(grep "turboacc\\|offloading" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//')"
         echo "启用的LUCI插件:"
         grep "^CONFIG_PACKAGE_luci" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
         
@@ -364,6 +400,16 @@ jobs:
         fi
         echo "✅ 固件编译完成"
 
+    - name: 编译后空间检查
+      run: |
+        echo "=== 编译后空间检查 ==="
+        df -h
+        AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
+        AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+        echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+        USED_SPACE=$((100 - AVAILABLE_GB * 100 / 50))
+        echo "编译过程使用了约 ${USED_SPACE}% 的可用空间"
+
     - name: 固件文件检查
       if: success()
       run: |
@@ -387,7 +433,7 @@ jobs:
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-smart
+        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-full
         path: ${{ env.BUILD_DIR }}/bin/targets/
         retention-days: 7
 
@@ -395,7 +441,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: build-log-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-smart
+        name: build-log-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-full
         path: ${{ env.BUILD_DIR }}/build.log
         retention-days: 7
 
@@ -403,7 +449,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-smart
+        name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-full
         path: ${{ env.BUILD_DIR }}/config_backup
         retention-days: 7
 
