@@ -93,77 +93,19 @@ jobs:
         git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .
         echo "✅ 源码克隆完成"
 
-    - name: 集成 TurboACC (23.05)
-      if: env.SELECTED_BRANCH == 'openwrt-23.05'
+    - name: 添加 TurboACC 支持
       run: |
         cd $BUILD_DIR
-        echo "=== 集成 TurboACC 加速插件 (23.05) ==="
-        echo "🔧 使用简化版 TurboACC 集成..."
-        mkdir -p package/turboacc
-        echo "include \$(TOPDIR)/rules.mk" > package/turboacc/Makefile
-        echo "" >> package/turboacc/Makefile
-        echo "LUCI_TITLE:=TurboACC Network Acceleration" >> package/turboacc/Makefile
-        echo "LUCI_DEPENDS:=+kmod-shortcut-fe +kmod-fast-classifier +firewall4" >> package/turboacc/Makefile
-        echo "" >> package/turboacc/Makefile
-        echo "include \$(TOPDIR)/feeds/luci/luci.mk" >> package/turboacc/Makefile
-        echo "" >> package/turboacc/Makefile
-        echo "# call BuildPackage - OpenWrt buildroot signature" >> package/turboacc/Makefile
-        mkdir -p package/network/config/shortcut-fe
-        echo "include \$(TOPDIR)/rules.mk" > package/network/config/shortcut-fe/Makefile
-        echo "" >> package/network/config/shortcut-fe/Makefile
-        echo "PKG_NAME:=shortcut-fe" >> package/network/config/shortcut-fe/Makefile
-        echo "PKG_VERSION:=1.0" >> package/network/config/shortcut-fe/Makefile
-        echo "PKG_RELEASE:=1" >> package/network/config/shortcut-fe/Makefile
-        echo "" >> package/network/config/shortcut-fe/Makefile
-        echo "include \$(INCLUDE_DIR)/package.mk" >> package/network/config/shortcut-fe/Makefile
-        echo "" >> package/network/config/shortcut-fe/Makefile
-        echo "define KernelPackage/shortcut-fe" >> package/network/config/shortcut-fe/Makefile
-        echo "  SUBMENU:=Network Support" >> package/network/config/shortcut-fe/Makefile
-        echo "  TITLE:=Shortcut Forwarding Engine" >> package/network/config/shortcut-fe/Makefile
-        echo "  DEPENDS:=@!TARGET_uml" >> package/network/config/shortcut-fe/Makefile
-        echo "  KCONFIG:=CONFIG_NET_CLS_ACT=y \\" >> package/network/config/shortcut-fe/Makefile
-        echo "           CONFIG_NET_SCH_SFQ=y \\" >> package/network/config/shortcut-fe/Makefile
-        echo "           CONFIG_NET_EMATCH=y \\" >> package/network/config/shortcut-fe/Makefile
-        echo "           CONFIG_NET_EMATCH_CMP=y" >> package/network/config/shortcut-fe/Makefile
-        echo "  FILES:=\$(LINUX_DIR)/net/shortcut-fe/shortcut-fe.ko" >> package/network/config/shortcut-fe/Makefile
-        echo "  AUTOLOAD:=\$(call AutoLoad,49,shortcut-fe)" >> package/network/config/shortcut-fe/Makefile
-        echo "endef" >> package/network/config/shortcut-fe/Makefile
-        echo "" >> package/network/config/shortcut-fe/Makefile
-        echo "define KernelPackage/shortcut-fe/description" >> package/network/config/shortcut-fe/Makefile
-        echo " Kernel module for Shortcut Forwarding Engine" >> package/network/config/shortcut-fe/Makefile
-        echo "endef" >> package/network/config/shortcut-fe/Makefile
-        echo "" >> package/network/config/shortcut-fe/Makefile
-        echo "define Build/Compile" >> package/network/config/shortcut-fe/Makefile
-        echo "endef" >> package/network/config/shortcut-fe/Makefile
-        echo "" >> package/network/config/shortcut-fe/Makefile
-        echo "\$(eval \$(call KernelPackage,shortcut-fe))" >> package/network/config/shortcut-fe/Makefile
-        mkdir -p package/network/config/fast-classifier
-        echo "include \$(TOPDIR)/rules.mk" > package/network/config/fast-classifier/Makefile
-        echo "" >> package/network/config/fast-classifier/Makefile
-        echo "PKG_NAME:=fast-classifier" >> package/network/config/fast-classifier/Makefile
-        echo "PKG_VERSION:=1.0" >> package/network/config/fast-classifier/Makefile
-        echo "PKG_RELEASE:=1" >> package/network/config/fast-classifier/Makefile
-        echo "" >> package/network/config/fast-classifier/Makefile
-        echo "include \$(INCLUDE_DIR)/package.mk" >> package/network/config/fast-classifier/Makefile
-        echo "" >> package/network/config/fast-classifier/Makefile
-        echo "define KernelPackage/fast-classifier" >> package/network/config/fast-classifier/Makefile
-        echo "  SUBMENU:=Network Support" >> package/network/config/fast-classifier/Makefile
-        echo "  TITLE:=Fast Classifier" >> package/network/config/fast-classifier/Makefile
-        echo "  DEPENDS:=+kmod-shortcut-fe" >> package/network/config/fast-classifier/Makefile
-        echo "  KCONFIG:=CONFIG_FAST_CLASSIFIER=y" >> package/network/config/fast-classifier/Makefile
-        echo "  FILES:=\$(LINUX_DIR)/net/fast-classifier/fast-classifier.ko" >> package/network/config/fast-classifier/Makefile
-        echo "  AUTOLOAD:=\$(call AutoLoad,50,fast-classifier)" >> package/network/config/fast-classifier/Makefile
-        echo "endef" >> package/network/config/fast-classifier/Makefile
-        echo "" >> package/network/config/fast-classifier/Makefile
-        echo "define KernelPackage/fast-classifier/description" >> package/network/config/fast-classifier/Makefile
-        echo " Kernel module for Fast Classifier" >> package/network/config/fast-classifier/Makefile
-        echo "endef" >> package/network/config/fast-classifier/Makefile
-        echo "" >> package/network/config/fast-classifier/Makefile
-        echo "define Build/Compile" >> package/network/config/fast-classifier/Makefile
-        echo "endef" >> package/network/config/fast-classifier/Makefile
-        echo "" >> package/network/config/fast-classifier/Makefile
-        echo "\$(eval \$(call KernelPackage,fast-classifier))" >> package/network/config/fast-classifier/Makefile
-        echo "✅ TurboACC 基础集成完成"
+        echo "=== 添加 TurboACC 支持 ==="
+        
+        # 对于 23.05 版本，添加 turboacc 相关的 feeds
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            echo "🔧 为 23.05 添加 TurboACC 支持"
+            # 添加包含 turboacc 的 feeds
+            echo "src-git turboacc https://github.com/chenmozhijin/turboacc.git" >> feeds.conf.default
+        fi
+        
+        echo "✅ TurboACC 支持添加完成"
 
     - name: 设备配置
       run: |
@@ -212,6 +154,15 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         echo "✅ Feeds配置完成"
+
+    - name: 安装 TurboACC 包
+      if: env.SELECTED_BRANCH == 'openwrt-23.05'
+      run: |
+        cd $BUILD_DIR
+        echo "=== 安装 TurboACC 包 ==="
+        ./scripts/feeds update turboacc
+        ./scripts/feeds install -a -p turboacc
+        echo "✅ TurboACC 包安装完成"
 
     - name: 编译前空间检查
       run: |
