@@ -14,8 +14,8 @@ on:
         type: choice
         default: '21.02'
         options:
-          - 23.05
-          - 21.02
+        - '23.05'
+        - '21.02'
       extra_packages:
         description: '额外安装插件 (多个插件用空格分隔)'
         required: false
@@ -72,7 +72,6 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 版本选择 ==="
-        
         if [ "${{ github.event.inputs.version_selection }}" = "23.05" ]; then
             SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
             SELECTED_BRANCH="openwrt-23.05"
@@ -80,7 +79,6 @@ jobs:
             SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
             SELECTED_BRANCH="openwrt-21.02"
         fi
-        
         echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
         echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
         echo "✅ 版本选择完成: $SELECTED_BRANCH"
@@ -91,11 +89,7 @@ jobs:
         echo "=== 克隆源码 ==="
         echo "仓库: $SELECTED_REPO_URL"
         echo "分支: $SELECTED_BRANCH"
-        
-        # 清理目录
         sudo rm -rf ./* ./.git* 2>/dev/null || true
-        
-        # 克隆源码
         git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .
         echo "✅ 源码克隆完成"
 
@@ -104,96 +98,77 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 集成 TurboACC 加速插件 (23.05) ==="
-        
-        # 使用更稳定的 turboacc 集成方法
         echo "🔧 使用简化版 TurboACC 集成..."
-        
-        # 创建必要的目录结构
         mkdir -p package/turboacc
-        
-        # 创建简化版的 luci-app-turboacc
-        cat > package/turboacc/Makefile << 'EOF'
-include $(TOPDIR)/rules.mk
-
-LUCI_TITLE:=TurboACC Network Acceleration
-LUCI_DEPENDS:=+kmod-shortcut-fe +kmod-fast-classifier +firewall4
-
-include $(TOPDIR)/feeds/luci/luci.mk
-
-# call BuildPackage - OpenWrt buildroot signature
-EOF
-
-        # 创建简化版的 shortcut-fe
+        echo "include \$(TOPDIR)/rules.mk" > package/turboacc/Makefile
+        echo "" >> package/turboacc/Makefile
+        echo "LUCI_TITLE:=TurboACC Network Acceleration" >> package/turboacc/Makefile
+        echo "LUCI_DEPENDS:=+kmod-shortcut-fe +kmod-fast-classifier +firewall4" >> package/turboacc/Makefile
+        echo "" >> package/turboacc/Makefile
+        echo "include \$(TOPDIR)/feeds/luci/luci.mk" >> package/turboacc/Makefile
+        echo "" >> package/turboacc/Makefile
+        echo "# call BuildPackage - OpenWrt buildroot signature" >> package/turboacc/Makefile
         mkdir -p package/network/config/shortcut-fe
-        cat > package/network/config/shortcut-fe/Makefile << 'EOF'
-include $(TOPDIR)/rules.mk
-
-PKG_NAME:=shortcut-fe
-PKG_VERSION:=1.0
-PKG_RELEASE:=1
-
-include $(INCLUDE_DIR)/package.mk
-
-define KernelPackage/shortcut-fe
-  SUBMENU:=Network Support
-  TITLE:=Shortcut Forwarding Engine
-  DEPENDS:=@!TARGET_uml
-  KCONFIG:=CONFIG_NET_CLS_ACT=y \
-           CONFIG_NET_SCH_SFQ=y \
-           CONFIG_NET_EMATCH=y \
-           CONFIG_NET_EMATCH_CMP=y
-  FILES:=$(LINUX_DIR)/net/shortcut-fe/shortcut-fe.ko
-  AUTOLOAD:=$(call AutoLoad,49,shortcut-fe)
-endef
-
-define KernelPackage/shortcut-fe/description
- Kernel module for Shortcut Forwarding Engine
-endef
-
-define Build/Compile
-endef
-
-$(eval $(call KernelPackage,shortcut-fe))
-EOF
-
-        # 创建简化版的 fast-classifier
+        echo "include \$(TOPDIR)/rules.mk" > package/network/config/shortcut-fe/Makefile
+        echo "" >> package/network/config/shortcut-fe/Makefile
+        echo "PKG_NAME:=shortcut-fe" >> package/network/config/shortcut-fe/Makefile
+        echo "PKG_VERSION:=1.0" >> package/network/config/shortcut-fe/Makefile
+        echo "PKG_RELEASE:=1" >> package/network/config/shortcut-fe/Makefile
+        echo "" >> package/network/config/shortcut-fe/Makefile
+        echo "include \$(INCLUDE_DIR)/package.mk" >> package/network/config/shortcut-fe/Makefile
+        echo "" >> package/network/config/shortcut-fe/Makefile
+        echo "define KernelPackage/shortcut-fe" >> package/network/config/shortcut-fe/Makefile
+        echo "  SUBMENU:=Network Support" >> package/network/config/shortcut-fe/Makefile
+        echo "  TITLE:=Shortcut Forwarding Engine" >> package/network/config/shortcut-fe/Makefile
+        echo "  DEPENDS:=@!TARGET_uml" >> package/network/config/shortcut-fe/Makefile
+        echo "  KCONFIG:=CONFIG_NET_CLS_ACT=y \\" >> package/network/config/shortcut-fe/Makefile
+        echo "           CONFIG_NET_SCH_SFQ=y \\" >> package/network/config/shortcut-fe/Makefile
+        echo "           CONFIG_NET_EMATCH=y \\" >> package/network/config/shortcut-fe/Makefile
+        echo "           CONFIG_NET_EMATCH_CMP=y" >> package/network/config/shortcut-fe/Makefile
+        echo "  FILES:=\$(LINUX_DIR)/net/shortcut-fe/shortcut-fe.ko" >> package/network/config/shortcut-fe/Makefile
+        echo "  AUTOLOAD:=\$(call AutoLoad,49,shortcut-fe)" >> package/network/config/shortcut-fe/Makefile
+        echo "endef" >> package/network/config/shortcut-fe/Makefile
+        echo "" >> package/network/config/shortcut-fe/Makefile
+        echo "define KernelPackage/shortcut-fe/description" >> package/network/config/shortcut-fe/Makefile
+        echo " Kernel module for Shortcut Forwarding Engine" >> package/network/config/shortcut-fe/Makefile
+        echo "endef" >> package/network/config/shortcut-fe/Makefile
+        echo "" >> package/network/config/shortcut-fe/Makefile
+        echo "define Build/Compile" >> package/network/config/shortcut-fe/Makefile
+        echo "endef" >> package/network/config/shortcut-fe/Makefile
+        echo "" >> package/network/config/shortcut-fe/Makefile
+        echo "\$(eval \$(call KernelPackage,shortcut-fe))" >> package/network/config/shortcut-fe/Makefile
         mkdir -p package/network/config/fast-classifier
-        cat > package/network/config/fast-classifier/Makefile << 'EOF'
-include $(TOPDIR)/rules.mk
-
-PKG_NAME:=fast-classifier
-PKG_VERSION:=1.0
-PKG_RELEASE:=1
-
-include $(INCLUDE_DIR)/package.mk
-
-define KernelPackage/fast-classifier
-  SUBMENU:=Network Support
-  TITLE:=Fast Classifier
-  DEPENDS:=+kmod-shortcut-fe
-  KCONFIG:=CONFIG_FAST_CLASSIFIER=y
-  FILES:=$(LINUX_DIR)/net/fast-classifier/fast-classifier.ko
-  AUTOLOAD:=$(call AutoLoad,50,fast-classifier)
-endef
-
-define KernelPackage/fast-classifier/description
- Kernel module for Fast Classifier
-endef
-
-define Build/Compile
-endef
-
-$(eval $(call KernelPackage,fast-classifier))
-EOF
-
+        echo "include \$(TOPDIR)/rules.mk" > package/network/config/fast-classifier/Makefile
+        echo "" >> package/network/config/fast-classifier/Makefile
+        echo "PKG_NAME:=fast-classifier" >> package/network/config/fast-classifier/Makefile
+        echo "PKG_VERSION:=1.0" >> package/network/config/fast-classifier/Makefile
+        echo "PKG_RELEASE:=1" >> package/network/config/fast-classifier/Makefile
+        echo "" >> package/network/config/fast-classifier/Makefile
+        echo "include \$(INCLUDE_DIR)/package.mk" >> package/network/config/fast-classifier/Makefile
+        echo "" >> package/network/config/fast-classifier/Makefile
+        echo "define KernelPackage/fast-classifier" >> package/network/config/fast-classifier/Makefile
+        echo "  SUBMENU:=Network Support" >> package/network/config/fast-classifier/Makefile
+        echo "  TITLE:=Fast Classifier" >> package/network/config/fast-classifier/Makefile
+        echo "  DEPENDS:=+kmod-shortcut-fe" >> package/network/config/fast-classifier/Makefile
+        echo "  KCONFIG:=CONFIG_FAST_CLASSIFIER=y" >> package/network/config/fast-classifier/Makefile
+        echo "  FILES:=\$(LINUX_DIR)/net/fast-classifier/fast-classifier.ko" >> package/network/config/fast-classifier/Makefile
+        echo "  AUTOLOAD:=\$(call AutoLoad,50,fast-classifier)" >> package/network/config/fast-classifier/Makefile
+        echo "endef" >> package/network/config/fast-classifier/Makefile
+        echo "" >> package/network/config/fast-classifier/Makefile
+        echo "define KernelPackage/fast-classifier/description" >> package/network/config/fast-classifier/Makefile
+        echo " Kernel module for Fast Classifier" >> package/network/config/fast-classifier/Makefile
+        echo "endef" >> package/network/config/fast-classifier/Makefile
+        echo "" >> package/network/config/fast-classifier/Makefile
+        echo "define Build/Compile" >> package/network/config/fast-classifier/Makefile
+        echo "endef" >> package/network/config/fast-classifier/Makefile
+        echo "" >> package/network/config/fast-classifier/Makefile
+        echo "\$(eval \$(call KernelPackage,fast-classifier))" >> package/network/config/fast-classifier/Makefile
         echo "✅ TurboACC 基础集成完成"
 
     - name: 设备配置
       run: |
         cd $BUILD_DIR
         echo "=== 设备配置 ==="
-        
-        # 设备映射
         case "${{ github.event.inputs.device_name }}" in
             "ac42u"|"acrh17")
                 TARGET="ipq40xx"
@@ -216,11 +191,9 @@ EOF
                 DEVICE="${{ github.event.inputs.device_name }}"
                 ;;
         esac
-        
         echo "TARGET=$TARGET" >> $GITHUB_ENV
         echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
         echo "DEVICE=$DEVICE" >> $GITHUB_ENV
-        
         echo "目标: $TARGET"
         echo "子目标: $SUBTARGET"
         echo "设备: $DEVICE"
@@ -229,18 +202,13 @@ EOF
       run: |
         cd $BUILD_DIR
         echo "=== 配置Feeds ==="
-        
-        # 根据分支选择feeds版本
         if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             FEEDS_BRANCH="openwrt-23.05"
         else
             FEEDS_BRANCH="openwrt-21.02"
         fi
-        
         echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf.default
         echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
-        
-        # 更新feeds
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         echo "✅ Feeds配置完成"
@@ -257,18 +225,12 @@ EOF
       run: |
         cd $BUILD_DIR
         echo "=== 智能配置生成系统 ==="
-        
-        # 清理可能存在的旧配置
         rm -f .config .config.old
-        
-        # 创建基础配置
         echo "CONFIG_TARGET_${TARGET}=y" > .config
         echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
         echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" >> .config
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
-        
-        # 基础系统组件（所有版本通用）
         echo "CONFIG_PACKAGE_busybox=y" >> .config
         echo "CONFIG_PACKAGE_base-files=y" >> .config
         echo "CONFIG_PACKAGE_dropbear=y" >> .config
@@ -286,8 +248,6 @@ EOF
         echo "CONFIG_PACKAGE_uci=y" >> .config
         echo "CONFIG_PACKAGE_uclient-fetch=y" >> .config
         echo "CONFIG_PACKAGE_usign=y" >> .config
-        
-        # DNS配置 - 使用dnsmasq-full（所有版本通用）
         echo "# CONFIG_PACKAGE_dnsmasq is not set" >> .config
         echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
         echo "CONFIG_PACKAGE_dnsmasq_full_dhcp=y" >> .config
@@ -295,42 +255,26 @@ EOF
         echo "CONFIG_PACKAGE_dnsmasq_full_dnssec=y" >> .config
         echo "CONFIG_PACKAGE_dnsmasq_full_ipset=y" >> .config
         echo "CONFIG_PACKAGE_dnsmasq_full_conntrack=y" >> .config
-        
-        # 无线驱动 - 使用社区优化版本（所有版本通用）
         echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
         echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
         echo "CONFIG_PACKAGE_ath10k-firmware-qca988x=y" >> .config
         echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
-        
-        # 网络工具（所有版本通用）
         echo "CONFIG_PACKAGE_iptables=y" >> .config
         echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> .config
         echo "CONFIG_PACKAGE_iptables-mod-ipopt=y" >> .config
-        
-        # IPv6支持（所有版本通用）
         echo "CONFIG_PACKAGE_ip6tables=y" >> .config
         echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> .config
         echo "CONFIG_PACKAGE_kmod-ipt-nat6=y" >> .config
-        
-        # 版本智能检测和配置
         echo "=== 版本智能检测: $SELECTED_BRANCH ==="
-        
-        # 检测版本并设置相应的配置
         if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
             echo "🔧 检测到 21.02 版本，应用相应配置..."
-            
-            # 21.02 特定的配置
             echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
             echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
             echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-            
-            # 21.02 文件系统驱动 - 使用NTFS3驱动
             echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
             echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
             echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
             echo "CONFIG_PACKAGE_automount=y" >> .config
-            
-            # 21.02 特定的禁用组件 - 确保完全禁用
             echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Client is not set" >> .config
             echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Server is not set" >> .config
             echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray is not set" >> .config
@@ -338,43 +282,28 @@ EOF
             echo "# CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Trojan is not set" >> .config
             echo "# CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Xray is not set" >> .config
             echo "# CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Xray_plugin is not set" >> .config
-            
         elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             echo "🔧 检测到 23.05 版本，应用相应配置..."
-            
-            # 23.05 特定的配置 - 启用 turboacc
             echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
             echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
             echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-            
-            # 23.05 文件系统驱动
             echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
             echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
             echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
-            
-            # 23.05 特定的禁用组件
             echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox is not set" >> .config
             echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Geoview is not set" >> .config
-            
         else
             echo "⚠️  未知版本，使用通用配置..."
-            # 对于未知版本，使用最兼容的配置
             echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
             echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
         fi
-        
-        # 通用文件系统支持（所有版本）
         echo "CONFIG_PACKAGE_block-mount=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
-        
-        # 基础通用插件（所有版本）
         echo "CONFIG_PACKAGE_vlmcsd=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-vlmcsd=y" >> .config
         echo "CONFIG_PACKAGE_smartdns=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> .config
-        
-        # 完整的插件列表（所有版本）- 包含 upnp 但不在界面显示
         echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
         echo "CONFIG_PACKAGE_miniupnpd=y" >> .config
         echo "CONFIG_PACKAGE_vsftpd=y" >> .config
@@ -388,20 +317,12 @@ EOF
         echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-hd-idle=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-filetransfer=y" >> .config
-        
-        # 磁盘管理和家长控制
         echo "CONFIG_PACKAGE_luci-app-diskman=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-accesscontrol=y" >> .config
-        
-        # 禁用网络唤醒相关功能
         echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> .config
         echo "# CONFIG_PACKAGE_wol is not set" >> .config
         echo "# CONFIG_PACKAGE_etherwake is not set" >> .config
-        
-        # 禁用 offloading 插件
         echo "# CONFIG_PACKAGE_luci-app-software-offloading is not set" >> .config
-        
-        # 通用禁用组件（所有版本）
         echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy is not set" >> .config
         echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_ShadowsocksR_Libev_Client is not set" >> .config
         echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Libev_Client is not set" >> .config
@@ -421,8 +342,6 @@ EOF
         echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Simple_Obfs is not set" >> .config
         echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Trojan is not set" >> .config
         echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray is not set" >> .config
-        
-        # 用户自定义包处理
         if [ -n "${{ github.event.inputs.extra_packages }}" ]; then
             echo "🔧 添加用户自定义包: ${{ github.event.inputs.extra_packages }}"
             IFS=' ' read -ra PKG_ARRAY <<< "${{ github.event.inputs.extra_packages }}"
@@ -435,10 +354,7 @@ EOF
         else
             echo "ℹ️  无用户自定义包"
         fi
-        
         echo "✅ 智能配置生成完成"
-        
-        # 显示配置摘要
         echo "=== 配置摘要 ==="
         echo "版本: $SELECTED_BRANCH"
         echo "目标设备: $DEVICE"
@@ -450,12 +366,8 @@ EOF
       run: |
         cd $BUILD_DIR
         echo "=== 应用配置 ==="
-        
-        # 运行defconfig来完善配置
         make defconfig
         echo "✅ 配置应用完成"
-        
-        # 显示最终配置信息
         echo "=== 最终配置状态 ==="
         echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
         echo "DNSMASQ配置: $(grep "dnsmasq" .config | grep "=y" | head -1 | sed 's/CONFIG_PACKAGE_//')"
@@ -464,8 +376,6 @@ EOF
         echo "网络加速插件: $(grep "turboacc\\|offloading" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//')"
         echo "启用的LUCI插件:"
         grep "^CONFIG_PACKAGE_luci" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
-        
-        # 备份配置文件用于后续上传
         cp .config config_backup
 
     - name: 修复网络环境
@@ -490,7 +400,6 @@ EOF
       run: |
         cd $BUILD_DIR
         echo "=== 编译固件 ==="
-        
         if [ "${{ github.event.inputs.enable_cache }}" = "true" ]; then
             echo "启用编译缓存"
             make -j$(nproc) V=s 2>&1 | tee build.log
@@ -500,7 +409,6 @@ EOF
             make -j$(nproc) V=s 2>&1 | tee build.log
             BUILD_EXIT_CODE=${PIPESTATUS[0]}
         fi
-        
         echo "编译退出代码: $BUILD_EXIT_CODE"
         if [ $BUILD_EXIT_CODE -ne 0 ]; then
             echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
@@ -532,8 +440,6 @@ EOF
             find bin/targets -name "*.bin" -o -name "*.img" | while read file; do
                 echo "固件文件: $file ($(du -h "$file" | cut -f1))"
             done
-            
-            # 显示固件详细信息
             echo "=== 生成的固件列表 ==="
             find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) -exec ls -la {} \;
         else
