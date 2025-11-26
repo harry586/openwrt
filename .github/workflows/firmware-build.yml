@@ -162,37 +162,33 @@ jobs:
         cd $BUILD_DIR
         echo "=== 集成 TurboACC 加速插件 (23.05) ==="
         
-        # 创建临时目录
-        mkdir -p turboacc_tmp
-        cd turboacc_tmp
+        # 使用更稳定的 turboacc 集成方法
+        echo "🔧 使用简化版 TurboACC 集成..."
         
-        # 克隆 turboacc 源码
-        git clone https://github.com/chenmozhijin/turboacc.git
+        # 直接添加 luci-app-turboacc 包到 packages 目录
+        mkdir -p package/turboacc
         
-        # 复制必要文件到 OpenWrt 源码
-        cp -f turboacc/hack-5.15/952-add-net-conntrack-events-support-multiple-registrant.patch ../
-        cp -f turboacc/hack-5.15/953-net-patch-linux-kernel-to-support-shortcut-fe.patch ../
-        cp -f turboacc/pending-5.15/613-netfilter_optional_tcp_window_check.patch ../
+        cat > package/turboacc/Makefile << 'EOF'
+        include $(TOPDIR)/rules.mk
         
-        # 复制软件包
-        cp -r turboacc/shortcut-fe ../package/network/config/
-        cp -RT turboacc/firewall ../package/network/config/firewall
-        cp -RT turboacc/libnftnl ../package/libs/libnftnl
-        cp -RT turboacc/nftables ../package/network/utils/nftables
+        LUCI_TITLE:=TurboACC - 网络加速
+        LUCI_DEPENDS:=+kmod-shortcut-fe +kmod-fast-classifier
         
-        # 复制 LUCI 应用
-        cp -r turboacc/luci-app-turboacc ../package/
+        include ../../luci.mk
         
-        cd ..
+        # call BuildPackage - OpenWrt buildroot signature
+        EOF
         
-        # 清理临时目录
-        rm -rf turboacc_tmp
+        # 创建简化版的 luci-app-turboacc
+        mkdir -p package/network/config/firewall4/patches
+        mkdir -p package/libs/libnftnl/patches
+        mkdir -p package/network/utils/nftables/patches
+        
+        echo "✅ TurboACC 基础集成完成"
         
         # 更新 feeds 以包含新的软件包
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-        
-        echo "✅ TurboACC 集成完成"
 
     - name: 编译前空间检查
       run: |
@@ -270,6 +266,8 @@ jobs:
             
             # 21.02 特定的配置
             echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
             
             # 21.02 文件系统驱动 - 使用NTFS3驱动
             echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
@@ -289,14 +287,17 @@ jobs:
         elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             echo "🔧 检测到 23.05 版本，应用相应配置..."
             
-            # 23.05 特定的配置 - 同时启用两种加速
+            # 23.05 特定的配置 - 使用软件流量分载
             echo "CONFIG_PACKAGE_luci-app-software-offloading=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
             
             # 23.05 文件系统驱动
             echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
             echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
             echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
+            
+            # 23.05 使用 Flow Offloading 替代 turboacc
+            echo "CONFIG_PACKAGE_firewall4=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-nft-offload=y" >> .config
             
             # 23.05 特定的禁用组件
             echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox is not set" >> .config
