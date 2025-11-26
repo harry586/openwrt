@@ -3,10 +3,10 @@ name: YAML 格式自动修复
 on:
   workflow_dispatch:
     inputs:
-      target_file:
-        description: '要修复的 YAML 文件路径'
+      workflow_name:
+        description: '工作流文件名称 (如: firmware-build)'
         required: true
-        default: '.github/workflows/firmware-build.yml'
+        default: 'firmware-build'
         type: string
       auto_commit:
         description: '自动提交修复后的文件'
@@ -15,7 +15,7 @@ on:
         type: boolean
 
 env:
-  TARGET_FILE: ${{ github.event.inputs.target_file }}
+  TARGET_FILE: .github/workflows/${{ github.event.inputs.workflow_name }}.yml
 
 jobs:
   yaml-fix:
@@ -28,6 +28,13 @@ jobs:
         fetch-depth: 0
         token: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: 显示目标文件路径
+      run: |
+        echo "=== 目标文件信息 ==="
+        echo "输入的工作流名称: ${{ github.event.inputs.workflow_name }}"
+        echo "完整文件路径: $TARGET_FILE"
+        echo "当前目录: $(pwd)"
+
     - name: 检查目标文件是否存在
       id: check-file
       run: |
@@ -35,23 +42,59 @@ jobs:
         if [ -f "$TARGET_FILE" ]; then
           echo "✅ 找到目标文件: $TARGET_FILE"
           echo "file_exists=true" >> $GITHUB_OUTPUT
+          echo "文件大小: $(wc -l < "$TARGET_FILE") 行"
         else
           echo "❌ 目标文件不存在: $TARGET_FILE"
           echo "file_exists=false" >> $GITHUB_OUTPUT
+          echo "=== 当前工作流目录内容 ==="
+          ls -la .github/workflows/ || echo "工作流目录不存在"
           exit 1
         fi
 
-    - name: 验证当前 YAML 格式
-      id: validate-yaml
+    - name: 安装必要工具
       run: |
-        echo "=== 验证 YAML 格式 ==="
-        if python3 -c "import yaml; yaml.safe_load(open('$TARGET_FILE'))"; then
-          echo "✅ YAML 格式验证通过"
-          echo "yaml_valid=true" >> $GITHUB_OUTPUT
-        else
-          echo "❌ YAML 格式验证失败"
-          echo "yaml_valid=false" >> $GITHUB_OUTPUT
-        fi
+        echo "=== 安装必要工具 ==="
+        sudo apt-get update
+        sudo apt-get install -y python3-pip
+        pip3 install PyYAML
+        echo "✅ 工具安装完成"
+
+    - name: 创建简单修复脚本
+      run: |
+        echo "=== 创建简单修复脚本 ==="
+        
+        echo "import sys" > simple_fix.py
+        echo "import re" >> simple_fix.py
+        echo "" >> simple_fix.py
+        echo "def fix_yaml_file(file_path):" >> simple_fix.py
+        echo "    with open(file_path, 'r', encoding='utf-8') as f:" >> simple_fix.py
+        echo "        content = f.read()" >> simple_fix.py
+        echo "" >> simple_fix.py
+        echo "    fixes = [" >> simple_fix.py
+        echo "        (r'(\\w+):(\\S)', r'\\1: \\2')," >> simple_fix.py
+        echo "        (r'\\[([^\\]]+)\\]', lambda m: '[' + ' '.join(m.group(1).split(',')) + ']')," >> simple_fix.py
+        echo "        (r'^    ', '  ')," >> simple_fix.py
+        echo "        (r'\\t', '  ')," >> simple_fix.py
+        echo "        (r'\\n\\n\\n+', '\\n\\n')," >> simple_fix.py
+        echo "    ]" >> simple_fix.py
+        echo "" >> simple_fix.py
+        echo "    for pattern, replacement in fixes:" >> simple_fix.py
+        echo "        content = re.sub(pattern, replacement, content, flags=re.MULTILINE)" >> simple_fix.py
+        echo "" >> simple_fix.py
+        echo "    with open(file_path, 'w', encoding='utf-8') as f:" >> simple_fix.py
+        echo "        f.write(content)" >> simple_fix.py
+        echo "" >> simple_fix.py
+        echo "    return content" >> simple_fix.py
+        echo "" >> simple_fix.py
+        echo "if __name__ == '__main__':" >> simple_fix.py
+        echo "    if len(sys.argv) != 2:" >> simple_fix.py
+        echo "        print('用法: python3 simple_fix.py <文件路径>')" >> simple_fix.py
+        echo "        sys.exit(1)" >> simple_fix.py
+        echo "    " >> simple_fix.py
+        echo "    file_path = sys.argv[1]" >> simple_fix.py
+        echo "    print(f'修复文件: {file_path}')" >> simple_fix.py
+        echo "    fix_yaml_file(file_path)" >> simple_fix.py
+        echo "    print('✅ 基础修复完成')" >> simple_fix.py
 
     - name: 备份原文件
       run: |
@@ -59,102 +102,37 @@ jobs:
         cp "$TARGET_FILE" "$TARGET_FILE.backup"
         echo "✅ 文件已备份到: $TARGET_FILE.backup"
 
-    - name: 安装 YAML 处理工具
+    - name: 基础修复
       run: |
-        echo "=== 安装 YAML 处理工具 ==="
-        sudo apt-get update
-        sudo apt-get install -y python3-pip
-        pip3 install PyYAML
-        echo "✅ YAML 工具安装完成"
+        echo "=== 执行基础修复 ==="
+        python3 simple_fix.py "$TARGET_FILE"
+        echo "✅ 基础修复完成"
 
-    - name: 创建修复脚本
+    - name: 手动修复常见错误
       run: |
-        echo "=== 创建修复脚本 ==="
+        echo "=== 手动修复常见错误 ==="
         
-        # 使用多个 echo 命令创建 Python 脚本，避免 heredoc
-        echo "import yaml" > fix_yaml.py
-        echo "import sys" >> fix_yaml.py
-        echo "import re" >> fix_yaml.py
-        echo "" >> fix_yaml.py
-        echo "def fix_yaml_structure(data):" >> fix_yaml.py
-        echo "    if isinstance(data, dict):" >> fix_yaml.py
-        echo "        fixed = {}" >> fix_yaml.py
-        echo "        for key, value in data.items():" >> fix_yaml.py
-        echo "            if '.' in str(key):" >> fix_yaml.py
-        echo "                new_key = str(key).replace('.', '_')" >> fix_yaml.py
-        echo "                print('警告: 键名包含点号，已替换: ' + str(key) + ' -> ' + new_key)" >> fix_yaml.py
-        echo "                key = new_key" >> fix_yaml.py
-        echo "            fixed[key] = fix_yaml_structure(value)" >> fix_yaml.py
-        echo "        return fixed" >> fix_yaml.py
-        echo "    elif isinstance(data, list):" >> fix_yaml.py
-        echo "        return [fix_yaml_structure(item) for item in data]" >> fix_yaml.py
-        echo "    else:" >> fix_yaml.py
-        echo "        return data" >> fix_yaml.py
-        echo "" >> fix_yaml.py
-        echo "def load_and_fix_yaml(file_path):" >> fix_yaml.py
-        echo "    try:" >> fix_yaml.py
-        echo "        with open(file_path, 'r', encoding='utf-8') as file:" >> fix_yaml.py
-        echo "            content = file.read()" >> fix_yaml.py
-        echo "        fixes = [" >> fix_yaml.py
-        echo "            (r'\\[([^\\]]+)\\]', lambda m: '[' + m.group(1).replace(',', ' ') + ']')," >> fix_yaml.py
-        echo "            (r'<<\\s*[\\'\\\"]?([^\\'\\\"]+)[\\'\\\"]?', '<<')," >> fix_yaml.py
-        echo "            (r'^\\s+', lambda m: '  ' * (len(m.group(0)) // 2))," >> fix_yaml.py
-        echo "        ]" >> fix_yaml.py
-        echo "        for pattern, replacement in fixes:" >> fix_yaml.py
-        echo "            content = re.sub(pattern, replacement, content, flags=re.MULTILINE)" >> fix_yaml.py
-        echo "        data = yaml.safe_load(content)" >> fix_yaml.py
-        echo "        data = fix_yaml_structure(data)" >> fix_yaml.py
-        echo "        return data" >> fix_yaml.py
-        echo "    except Exception as e:" >> fix_yaml.py
-        echo "        print('YAML 解析错误: ' + str(e))" >> fix_yaml.py
-        echo "        return None" >> fix_yaml.py
-        echo "" >> fix_yaml.py
-        echo "def save_yaml(data, file_path):" >> fix_yaml.py
-        echo "    try:" >> fix_yaml.py
-        echo "        with open(file_path, 'w', encoding='utf-8') as file:" >> fix_yaml.py
-        echo "            yaml.dump(data, file, default_flow_style=False, allow_unicode=True, indent=2, sort_keys=False)" >> fix_yaml.py
-        echo "        return True" >> fix_yaml.py
-        echo "    except Exception as e:" >> fix_yaml.py
-        echo "        print('YAML 保存错误: ' + str(e))" >> fix_yaml.py
-        echo "        return False" >> fix_yaml.py
-        echo "" >> fix_yaml.py
-        echo "if __name__ == '__main__':" >> fix_yaml.py
-        echo "    file_path = sys.argv[1]" >> fix_yaml.py
-        echo "    print('处理文件: ' + file_path)" >> fix_yaml.py
-        echo "    data = load_and_fix_yaml(file_path)" >> fix_yaml.py
-        echo "    if data:" >> fix_yaml.py
-        echo "        if save_yaml(data, file_path):" >> fix_yaml.py
-        echo "            print('✅ YAML 文件修复成功')" >> fix_yaml.py
-        echo "            sys.exit(0)" >> fix_yaml.py
-        echo "        else:" >> fix_yaml.py
-        echo "            print('❌ YAML 文件保存失败')" >> fix_yaml.py
-        echo "            sys.exit(1)" >> fix_yaml.py
-        echo "    else:" >> fix_yaml.py
-        echo "        print('❌ YAML 文件解析失败')" >> fix_yaml.py
-        echo "        sys.exit(1)" >> fix_yaml.py
+        # 修复常见的 YAML 结构问题
+        sed -i 's/^      - /    - /g' "$TARGET_FILE" || echo "缩进修复可能失败"
+        sed -i 's/^        - /      - /g' "$TARGET_FILE" || echo "缩进修复可能失败"
+        sed -i 's/:[^ ]/& /g' "$TARGET_FILE" || echo "冒号后空格修复可能失败"
+        
+        echo "✅ 手动修复完成"
 
-    - name: 自动修复 YAML 格式
-      id: fix-yaml
+    - name: 验证修复结果
+      id: validate-fix
       run: |
-        echo "=== 开始自动修复 YAML 格式 ==="
-        python3 fix_yaml.py "$TARGET_FILE"
-        FIX_EXIT_CODE=$?
-        if [ $FIX_EXIT_CODE -eq 0 ]; then
+        echo "=== 验证修复结果 ==="
+        if python3 -c "import yaml; yaml.safe_load(open('$TARGET_FILE'))"; then
+          echo "✅ YAML 格式验证通过"
           echo "fix_success=true" >> $GITHUB_OUTPUT
         else
+          echo "❌ YAML 格式验证失败"
           echo "fix_success=false" >> $GITHUB_OUTPUT
-        fi
-
-    - name: 验证修复后的 YAML
-      id: validate-fixed
-      run: |
-        echo "=== 验证修复后的 YAML ==="
-        if python3 -c "import yaml; yaml.safe_load(open('$TARGET_FILE'))"; then
-          echo "✅ 修复后的 YAML 格式验证通过"
-          echo "fixed_valid=true" >> $GITHUB_OUTPUT
-        else
-          echo "❌ 修复后的 YAML 格式验证失败"
-          echo "fixed_valid=false" >> $GITHUB_OUTPUT
+          echo "=== 尝试诊断问题 ==="
+          # 显示前几行以帮助诊断
+          echo "文件前10行:"
+          head -10 "$TARGET_FILE" || echo "无法读取文件"
         fi
 
     - name: 显示修复差异
@@ -166,14 +144,14 @@ jobs:
             echo "⚠️  文件内容没有变化"
           else
             echo "📝 检测到以下变更:"
-            diff -u "$TARGET_FILE.backup" "$TARGET_FILE" || true
+            diff -u "$TARGET_FILE.backup" "$TARGET_FILE" | head -30 || true
           fi
         else
-          echo "⚠️  diff 命令不可用，无法显示差异"
+          echo "⚠️  diff 命令不可用"
         fi
 
     - name: 自动提交修复
-      if: github.event.inputs.auto_commit == 'true' && steps.validate-fixed.outputs.fixed_valid == 'true'
+      if: github.event.inputs.auto_commit == 'true' && steps.validate-fix.outputs.fix_success == 'true'
       run: |
         echo "=== 自动提交修复 ==="
         git config --local user.email "action@github.com"
@@ -182,47 +160,67 @@ jobs:
         if git diff --staged --quiet; then
           echo "⚠️  没有需要提交的更改"
         else
-          git commit -m "🔧 自动修复 YAML 格式 [$TARGET_FILE]"
+          git commit -m "🔧 自动修复 YAML 格式: ${{ github.event.inputs.workflow_name }}.yml"
           git push
           echo "✅ 修复已提交到仓库"
         fi
 
-    - name: 生成修复报告
+    - name: 创建详细报告
       if: always()
       run: |
-        echo "=== YAML 修复报告 ==="
+        echo "=== YAML 修复详细报告 ==="
+        echo "工作流名称: ${{ github.event.inputs.workflow_name }}"
         echo "目标文件: $TARGET_FILE"
-        echo "修复前验证: ${{ steps.validate-yaml.outputs.yaml_valid }}"
-        echo "修复操作: ${{ steps.fix-yaml.outputs.fix_success }}"
-        echo "修复后验证: ${{ steps.validate-fixed.outputs.fixed_valid }}"
+        echo "修复状态: ${{ steps.validate-fix.outputs.fix_success }}"
         echo "自动提交: ${{ github.event.inputs.auto_commit }}"
-        if [ "${{ steps.validate-fixed.outputs.fixed_valid }}" = "true" ]; then
+        
+        if [ "${{ steps.validate-fix.outputs.fix_success }}" = "true" ]; then
           echo "🎉 YAML 格式修复成功！"
         else
-          echo "❌ YAML 格式修复失败，请手动检查"
+          echo "❌ YAML 格式修复失败"
+          echo ""
+          echo "建议手动检查以下内容:"
+          echo "1. 检查缩进是否一致（使用2个空格）"
+          echo "2. 确保所有键值对的冒号后有空格"
+          echo "3. 检查数组格式是否正确"
+          echo "4. 验证没有使用制表符"
         fi
 
-    - name: 清理备份文件
+    - name: 清理临时文件
       if: always()
       run: |
-        echo "=== 清理备份文件 ==="
+        echo "=== 清理临时文件 ==="
+        rm -f simple_fix.py
         if [ -f "$TARGET_FILE.backup" ]; then
           rm "$TARGET_FILE.backup"
           echo "✅ 备份文件已清理"
         fi
 
-  manual-review:
+  manual-fallback:
     runs-on: ubuntu-latest
     needs: yaml-fix
     if: failure()
     
     steps:
-    - name: 通知需要手动检查
+    - name: 检出仓库
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: 手动修复指导
       run: |
-        echo "❌ 自动修复失败，需要手动检查 YAML 文件"
-        echo "文件路径: ${{ env.TARGET_FILE }}"
-        echo "请检查以下常见问题:"
-        echo "1. 缩进不一致"
-        echo "2. 数组格式错误"
-        echo "3. 特殊字符问题"
-        echo "4. 键名包含非法字符"
+        echo "=== 手动修复指导 ==="
+        echo "工作流文件: $TARGET_FILE"
+        echo ""
+        echo "常见 YAML 错误和修复方法:"
+        echo "1. 缩进问题 - 确保使用2个空格，不要使用制表符"
+        echo "2. 冒号后缺少空格 - 确保所有键值对的冒号后有空格"
+        echo "3. 数组格式错误 - 确保数组使用正确的格式"
+        echo ""
+        echo "可以使用以下命令验证 YAML:"
+        echo "python3 -c \"import yaml; yaml.safe_load(open('$TARGET_FILE'))\""
+        echo ""
+        echo "文件内容预览:"
+        echo "================"
+        head -20 "$TARGET_FILE" || echo "无法读取文件"
+        echo "================"
