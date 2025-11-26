@@ -204,6 +204,32 @@ jobs:
         echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> .config
         echo "CONFIG_PACKAGE_iptables-mod-ipopt=y" >> .config
         
+        # IPv6支持
+        echo "CONFIG_PACKAGE_ip6tables=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-nat6=y" >> .config
+        
+        # 禁用所有指定的passwall和ssr-plus组件
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_ShadowsocksR_Libev_Client is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Libev_Client is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Libev_Server is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Simple_Obfs is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Trojan_Plus is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Plugin is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-ng is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-webui is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ChinaDNS_NG is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_IPT2Socks is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ShadowsocksR_Libev_Client is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Client is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Server is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Simple_Obfs is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Trojan is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray is not set" >> .config
+        
         # 仅添加用户明确请求的包
         if [ -n "${{ github.event.inputs.extra_packages }}" ]; then
             for pkg in ${{ github.event.inputs.extra_packages }}; do
@@ -211,9 +237,12 @@ jobs:
             done
         fi
         
-        # 21.02版本添加网络加速插件
+        # 版本特定的网络加速插件
         if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
             echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+        else
+            # 23.05版本使用软件流量分载
+            echo "CONFIG_PACKAGE_luci-app-software-offloading=y" >> .config
         fi
         
         echo "✅ 配置生成完成 - 使用dnsmasq-full和ath10k-ct"
@@ -235,6 +264,9 @@ jobs:
         grep -E "ath10k" .config
         echo "启用的LUCI插件:"
         grep "^CONFIG_PACKAGE_luci" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
+        
+        # 备份配置文件用于后续上传
+        cp .config config_backup
 
     - name: 修复网络环境
       run: |
@@ -321,7 +353,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-ct-full
-        path: ${{ env.BUILD_DIR }}/.config
+        path: ${{ env.BUILD_DIR }}/config_backup
         retention-days: 7
 
     - name: 清理目录
