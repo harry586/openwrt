@@ -1,0 +1,248 @@
+name: YAML 格式自动修复
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_file:
+        description: '要修复的 YAML 文件路径'
+        required: true
+        default: '.github/workflows/build-openwrt.yml'
+        type: string
+      auto_commit:
+        description: '自动提交修复后的文件'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  TARGET_FILE: ${{ github.event.inputs.target_file }}
+
+jobs:
+  yaml-fix:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 检出仓库
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 检查目标文件是否存在
+      id: check-file
+      run: |
+        echo "=== 检查目标文件 ==="
+        if [ -f "$TARGET_FILE" ]; then
+          echo "✅ 找到目标文件: $TARGET_FILE"
+          echo "file_exists=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ 目标文件不存在: $TARGET_FILE"
+          echo "file_exists=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+    - name: 验证当前 YAML 格式
+      id: validate-yaml
+      run: |
+        echo "=== 验证 YAML 格式 ==="
+        if python3 -c "import yaml; yaml.safe_load(open('$TARGET_FILE'))"; then
+          echo "✅ YAML 格式验证通过"
+          echo "yaml_valid=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ YAML 格式验证失败"
+          echo "yaml_valid=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: 备份原文件
+      run: |
+        echo "=== 备份原文件 ==="
+        cp "$TARGET_FILE" "$TARGET_FILE.backup"
+        echo "✅ 文件已备份到: $TARGET_FILE.backup"
+
+    - name: 安装 YAML 处理工具
+      run: |
+        echo "=== 安装 YAML 处理工具 ==="
+        sudo apt-get update
+        sudo apt-get install -y python3-pip
+        pip3 install PyYAML
+        echo "✅ YAML 工具安装完成"
+
+    - name: 自动修复 YAML 格式
+      id: fix-yaml
+      run: |
+        echo "=== 开始自动修复 YAML 格式 ==="
+        
+        # 创建 Python 脚本来修复 YAML
+        cat > fix_yaml.py << 'SCRIPT_EOF'
+import yaml
+import sys
+import re
+
+def fix_yaml_structure(data):
+    """修复 YAML 结构问题"""
+    if isinstance(data, dict):
+        fixed = {}
+        for key, value in data.items():
+            # 修复键名中的点号问题
+            if '.' in str(key):
+                new_key = str(key).replace('.', '_')
+                print(f"警告: 键名包含点号，已替换: {key} -> {new_key}")
+                key = new_key
+            fixed[key] = fix_yaml_structure(value)
+        return fixed
+    elif isinstance(data, list):
+        return [fix_yaml_structure(item) for item in data]
+    else:
+        return data
+
+def load_and_fix_yaml(file_path):
+    """加载并修复 YAML 文件"""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            content = file.read()
+        
+        # 修复常见的 YAML 格式问题
+        fixes = [
+            # 修复数组格式（确保使用空格分隔）
+            (r'\[([^\]]+)\]', lambda m: '[' + m.group(1).replace(',', ' ') + ']'),
+            # 修复 heredoc 样式的多行字符串
+            (r'<<\s*[\'"]?([^\'"]+)[\'"]?', '<<'),
+            # 修复不正确的缩进
+            (r'^\s+', lambda m: '  ' * (len(m.group(0)) // 2)),
+        ]
+        
+        for pattern, replacement in fixes:
+            content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
+        
+        # 解析 YAML
+        data = yaml.safe_load(content)
+        
+        # 修复结构问题
+        data = fix_yaml_structure(data)
+        
+        return data
+        
+    except Exception as e:
+        print(f"YAML 解析错误: {e}")
+        return None
+
+def save_yaml(data, file_path):
+    """保存修复后的 YAML"""
+    try:
+        with open(file_path, 'w', encoding='utf-8') as file:
+            yaml.dump(data, file, default_flow_style=False, allow_unicode=True, indent=2, sort_keys=False)
+        return True
+    except Exception as e:
+        print(f"YAML 保存错误: {e}")
+        return False
+
+# 主程序
+if __name__ == "__main__":
+    file_path = sys.argv[1]
+    print(f"处理文件: {file_path}")
+    
+    data = load_and_fix_yaml(file_path)
+    if data:
+        if save_yaml(data, file_path):
+            print("✅ YAML 文件修复成功")
+            sys.exit(0)
+        else:
+            print("❌ YAML 文件保存失败")
+            sys.exit(1)
+    else:
+        print("❌ YAML 文件解析失败")
+        sys.exit(1)
+SCRIPT_EOF
+
+        # 运行修复脚本
+        python3 fix_yaml.py "$TARGET_FILE"
+        FIX_EXIT_CODE=$?
+        
+        if [ $FIX_EXIT_CODE -eq 0 ]; then
+          echo "fix_success=true" >> $GITHUB_OUTPUT
+        else
+          echo "fix_success=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: 验证修复后的 YAML
+      id: validate-fixed
+      run: |
+        echo "=== 验证修复后的 YAML ==="
+        if python3 -c "import yaml; yaml.safe_load(open('$TARGET_FILE'))"; then
+          echo "✅ 修复后的 YAML 格式验证通过"
+          echo "fixed_valid=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ 修复后的 YAML 格式验证失败"
+          echo "fixed_valid=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: 显示修复差异
+      if: always()
+      run: |
+        echo "=== 修复前后差异 ==="
+        if command -v diff &> /dev/null; then
+          if diff -u "$TARGET_FILE.backup" "$TARGET_FILE"; then
+            echo "⚠️  文件内容没有变化"
+          else
+            echo "📝 检测到以下变更:"
+            diff -u "$TARGET_FILE.backup" "$TARGET_FILE" || true
+          fi
+        else
+          echo "⚠️  diff 命令不可用，无法显示差异"
+        fi
+
+    - name: 自动提交修复
+      if: github.event.inputs.auto_commit == 'true' && steps.validate-fixed.outputs.fixed_valid == 'true'
+      run: |
+        echo "=== 自动提交修复 ==="
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add "$TARGET_FILE"
+        if git diff --staged --quiet; then
+          echo "⚠️  没有需要提交的更改"
+        else
+          git commit -m "🔧 自动修复 YAML 格式 [$TARGET_FILE]"
+          git push
+          echo "✅ 修复已提交到仓库"
+        fi
+
+    - name: 生成修复报告
+      if: always()
+      run: |
+        echo "=== YAML 修复报告 ==="
+        echo "目标文件: $TARGET_FILE"
+        echo "修复前验证: ${{ steps.validate-yaml.outputs.yaml_valid }}"
+        echo "修复操作: ${{ steps.fix-yaml.outputs.fix_success }}"
+        echo "修复后验证: ${{ steps.validate-fixed.outputs.fixed_valid }}"
+        echo "自动提交: ${{ github.event.inputs.auto_commit }}"
+        
+        if [ "${{ steps.validate-fixed.outputs.fixed_valid }}" = "true" ]; then
+          echo "🎉 YAML 格式修复成功！"
+        else
+          echo "❌ YAML 格式修复失败，请手动检查"
+        fi
+
+    - name: 清理备份文件
+      if: always()
+      run: |
+        echo "=== 清理备份文件 ==="
+        if [ -f "$TARGET_FILE.backup" ]; then
+          rm "$TARGET_FILE.backup"
+          echo "✅ 备份文件已清理"
+        fi
+
+  manual-review:
+    runs-on: ubuntu-latest
+    needs: yaml-fix
+    if: failure()
+    
+    steps:
+    - name: 通知需要手动检查
+      run: |
+        echo "❌ 自动修复失败，需要手动检查 YAML 文件"
+        echo "文件路径: ${{ env.TARGET_FILE }}"
+        echo "请检查以下常见问题:"
+        echo "1. 缩进不一致"
+        echo "2. 数组格式错误"
+        echo "3. 特殊字符问题"
+        echo "4. 键名包含非法字符"
