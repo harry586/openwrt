@@ -6,7 +6,7 @@ on:
       target_file:
         description: '要修复的 YAML 文件路径'
         required: true
-        default: '.github/workflows/build-openwrt.yml'
+        default: '.github/workflows/firmware-build.yml'
         type: string
       auto_commit:
         description: '自动提交修复后的文件'
