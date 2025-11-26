@@ -215,11 +215,11 @@ jobs:
             # 21.02 特定的配置
             echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
             
-            # 21.02 文件系统驱动
-            echo "CONFIG_PACKAGE_kmod-fs-ntfs=y" >> .config
-            echo "CONFIG_PACKAGE_ntfs-3g=y" >> .config
-            echo "# CONFIG_PACKAGE_kmod-fs-ntfs3 is not set" >> .config
-            echo "# CONFIG_PACKAGE_ntfs3-mount is not set" >> .config
+            # 21.02 文件系统驱动 - 使用NTFS3驱动
+            echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
+            echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
+            echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
+            echo "CONFIG_PACKAGE_automount=y" >> .config
             
             # 21.02 特定的禁用组件
             echo "# CONFIG_PACKAGE_luci-app-vssr_INCLUDE_ShadowsocksR_Libev_Server is not set" >> .config
@@ -245,8 +245,8 @@ jobs:
         else
             echo "⚠️  未知版本，使用通用配置..."
             # 对于未知版本，使用最兼容的配置
-            echo "CONFIG_PACKAGE_kmod-fs-ntfs=y" >> .config
-            echo "CONFIG_PACKAGE_ntfs-3g=y" >> .config
+            echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
+            echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
         fi
         
         # 通用文件系统支持（所有版本）
