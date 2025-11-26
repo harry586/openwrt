@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流 - 完整插件版
+name: OpenWrt 智能固件构建工作流
 
 on:
   workflow_dispatch:
@@ -98,14 +98,17 @@ jobs:
         cd $BUILD_DIR
         echo "=== 添加 TurboACC 支持 ==="
         
-        # 对于 23.05 版本，添加 turboacc 相关的 feeds
+        # 为 23.05 版本添加 turboacc 支持
         if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             echo "🔧 为 23.05 添加 TurboACC 支持"
-            # 添加包含 turboacc 的 feeds
-            echo "src-git turboacc https://github.com/chenmozhijin/turboacc.git" >> feeds.conf.default
+            
+            # 添加 turboacc 的 feeds
+            echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+            
+            echo "✅ TurboACC feed 添加完成"
+        else
+            echo "ℹ️  21.02 版本已内置 TurboACC，无需额外添加"
         fi
-        
-        echo "✅ TurboACC 支持添加完成"
 
     - name: 设备配置
       run: |
@@ -149,10 +152,20 @@ jobs:
         else
             FEEDS_BRANCH="openwrt-21.02"
         fi
+        
+        # 确保 feeds.conf.default 包含基本 feeds
         echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf.default
         echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
+        
+        # 如果是 23.05，添加 turboacc feed
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+        fi
+        
+        # 更新和安装所有 feeds
         ./scripts/feeds update -a
         ./scripts/feeds install -a
+        
         echo "✅ Feeds配置完成"
 
     - name: 安装 TurboACC 包
@@ -160,8 +173,15 @@ jobs:
       run: |
         cd $BUILD_DIR
         echo "=== 安装 TurboACC 包 ==="
+        
+        # 更新 turboacc feed
         ./scripts/feeds update turboacc
-        ./scripts/feeds install -a -p turboacc
+        
+        # 安装 turboacc 相关包
+        ./scripts/feeds install -p turboacc luci-app-turboacc
+        ./scripts/feeds install -p turboacc kmod-shortcut-fe
+        ./scripts/feeds install -p turboacc kmod-fast-classifier
+        
         echo "✅ TurboACC 包安装完成"
 
     - name: 编译前空间检查
@@ -177,11 +197,15 @@ jobs:
         cd $BUILD_DIR
         echo "=== 智能配置生成系统 ==="
         rm -f .config .config.old
+        
+        # 创建基础配置
         echo "CONFIG_TARGET_${TARGET}=y" > .config
         echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
         echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" >> .config
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
+        
+        # 基础系统组件
         echo "CONFIG_PACKAGE_busybox=y" >> .config
         echo "CONFIG_PACKAGE_base-files=y" >> .config
         echo "CONFIG_PACKAGE_dropbear=y" >> .config
@@ -199,6 +223,8 @@ jobs:
         echo "CONFIG_PACKAGE_uci=y" >> .config
         echo "CONFIG_PACKAGE_uclient-fetch=y" >> .config
         echo "CONFIG_PACKAGE_usign=y" >> .config
+        
+        # DNS配置
         echo "# CONFIG_PACKAGE_dnsmasq is not set" >> .config
         echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
         echo "CONFIG_PACKAGE_dnsmasq_full_dhcp=y" >> .config
@@ -206,17 +232,24 @@ jobs:
         echo "CONFIG_PACKAGE_dnsmasq_full_dnssec=y" >> .config
         echo "CONFIG_PACKAGE_dnsmasq_full_ipset=y" >> .config
         echo "CONFIG_PACKAGE_dnsmasq_full_conntrack=y" >> .config
+        
+        # 无线驱动
         echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
         echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
         echo "CONFIG_PACKAGE_ath10k-firmware-qca988x=y" >> .config
         echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
+        
+        # 网络工具
         echo "CONFIG_PACKAGE_iptables=y" >> .config
         echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> .config
         echo "CONFIG_PACKAGE_iptables-mod-ipopt=y" >> .config
         echo "CONFIG_PACKAGE_ip6tables=y" >> .config
         echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> .config
         echo "CONFIG_PACKAGE_kmod-ipt-nat6=y" >> .config
+        
+        # 版本智能检测和配置
         echo "=== 版本智能检测: $SELECTED_BRANCH ==="
+        
         if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
             echo "🔧 检测到 21.02 版本，应用相应配置..."
             echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
@@ -226,35 +259,34 @@ jobs:
             echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
             echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
             echo "CONFIG_PACKAGE_automount=y" >> .config
-            echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Client is not set" >> .config
-            echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Server is not set" >> .config
-            echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray is not set" >> .config
-            echo "# CONFIG_PACKAGE_luci-app-vssr_INCLUDE_ShadowsocksR_Libev_Server is not set" >> .config
-            echo "# CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Trojan is not set" >> .config
-            echo "# CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Xray is not set" >> .config
-            echo "# CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Xray_plugin is not set" >> .config
+            
         elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             echo "🔧 检测到 23.05 版本，应用相应配置..."
+            # 23.05 版本启用 turboacc
             echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
             echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
             echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
             echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
             echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
             echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
-            echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox is not set" >> .config
-            echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Geoview is not set" >> .config
         else
             echo "⚠️  未知版本，使用通用配置..."
             echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
             echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
         fi
+        
+        # 通用文件系统支持
         echo "CONFIG_PACKAGE_block-mount=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
+        
+        # 基础通用插件
         echo "CONFIG_PACKAGE_vlmcsd=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-vlmcsd=y" >> .config
         echo "CONFIG_PACKAGE_smartdns=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> .config
+        
+        # 完整的插件列表
         echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
         echo "CONFIG_PACKAGE_miniupnpd=y" >> .config
         echo "CONFIG_PACKAGE_vsftpd=y" >> .config
@@ -270,29 +302,16 @@ jobs:
         echo "CONFIG_PACKAGE_luci-app-filetransfer=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-diskman=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-accesscontrol=y" >> .config
+        
+        # 禁用网络唤醒
         echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> .config
         echo "# CONFIG_PACKAGE_wol is not set" >> .config
         echo "# CONFIG_PACKAGE_etherwake is not set" >> .config
+        
+        # 禁用 offloading 插件
         echo "# CONFIG_PACKAGE_luci-app-software-offloading is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_ShadowsocksR_Libev_Client is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Libev_Client is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Libev_Server is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Simple_Obfs is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Trojan_Plus is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Plugin is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-ng is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-webui is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ChinaDNS_NG is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_IPT2Socks is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ShadowsocksR_Libev_Client is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Client is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Server is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Simple_Obfs is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Trojan is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray is not set" >> .config
+        
+        # 用户自定义包处理
         if [ -n "${{ github.event.inputs.extra_packages }}" ]; then
             echo "🔧 添加用户自定义包: ${{ github.event.inputs.extra_packages }}"
             IFS=' ' read -ra PKG_ARRAY <<< "${{ github.event.inputs.extra_packages }}"
@@ -305,13 +324,16 @@ jobs:
         else
             echo "ℹ️  无用户自定义包"
         fi
+        
         echo "✅ 智能配置生成完成"
+        
+        # 显示配置摘要
         echo "=== 配置摘要 ==="
         echo "版本: $SELECTED_BRANCH"
         echo "目标设备: $DEVICE"
         echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
-        echo "网络加速: $(grep "turboacc\\|offloading" .config | grep "=y" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')"
-        echo "文件系统驱动: $(grep "kmod-fs-" .config | grep "=y" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//' | tr '\n' ' ')"
+        echo "TurboACC 相关包:"
+        grep "turboacc\\|shortcut\\|fast-classifier" .config | grep "=y" || echo "未找到 TurboACC 相关包"
 
     - name: 应用配置
       run: |
@@ -319,14 +341,16 @@ jobs:
         echo "=== 应用配置 ==="
         make defconfig
         echo "✅ 配置应用完成"
+        
+        # 显示最终配置信息
         echo "=== 最终配置状态 ==="
         echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
-        echo "DNSMASQ配置: $(grep "dnsmasq" .config | grep "=y" | head -1 | sed 's/CONFIG_PACKAGE_//')"
-        echo "无线驱动: $(grep "ath10k" .config | grep "=y" | head -1 | sed 's/CONFIG_PACKAGE_//')"
-        echo "文件系统驱动: $(grep "kmod-fs-" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | tr '\n' ' ')"
-        echo "网络加速插件: $(grep "turboacc\\|offloading" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//')"
+        echo "TurboACC 状态:"
+        grep "turboacc\\|shortcut\\|fast-classifier" .config | grep "=y" || echo "TurboACC 未启用"
         echo "启用的LUCI插件:"
         grep "^CONFIG_PACKAGE_luci" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
+        
+        # 备份配置文件
         cp .config config_backup
 
     - name: 修复网络环境
@@ -378,8 +402,6 @@ jobs:
         AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
         AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
         echo "/mnt 可用空间: ${AVAILABLE_GB}G"
-        USED_SPACE=$((100 - AVAILABLE_GB * 100 / 50))
-        echo "编译过程使用了约 ${USED_SPACE}% 的可用空间"
 
     - name: 固件文件检查
       if: success()
@@ -402,7 +424,7 @@ jobs:
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-full
+        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
         path: ${{ env.BUILD_DIR }}/bin/targets/
         retention-days: 7
 
@@ -410,7 +432,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: build-log-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-full
+        name: build-log-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
         path: ${{ env.BUILD_DIR }}/build.log
         retention-days: 7
 
@@ -418,7 +440,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-full
+        name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
         path: ${{ env.BUILD_DIR }}/config_backup
         retention-days: 7
 
