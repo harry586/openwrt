@@ -33,7 +33,6 @@ jobs:
         echo "=== 目标文件信息 ==="
         echo "输入的工作流名称: ${{ github.event.inputs.workflow_name }}"
         echo "完整文件路径: $TARGET_FILE"
-        echo "当前目录: $(pwd)"
 
     - name: 检查目标文件是否存在
       id: check-file
@@ -51,15 +50,38 @@ jobs:
           exit 1
         fi
 
-    - name: 安装必要工具
+    - name: 初始 YAML 格式检查
+      id: initial-check
       run: |
-        echo "=== 安装必要工具 ==="
+        echo "=== 初始 YAML 格式检查 ==="
         sudo apt-get update
         sudo apt-get install -y python3-pip
         pip3 install PyYAML
+        
+        if python3 -c "import yaml; yaml.safe_load(open('$TARGET_FILE'))"; then
+          echo "✅ YAML 格式已经正确，无需修复"
+          echo "yaml_valid=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ YAML 格式存在问题，需要修复"
+          echo "yaml_valid=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: 跳过修复（格式已正确）
+      if: steps.initial-check.outputs.yaml_valid == 'true'
+      run: |
+        echo "🎉 YAML 格式已经正确，无需修复"
+        echo "工作流文件: $TARGET_FILE"
+        echo "可以直接使用该工作流"
+
+    - name: 安装必要工具（如需修复）
+      if: steps.initial-check.outputs.yaml_valid == 'false'
+      run: |
+        echo "=== 安装必要工具 ==="
+        pip3 install PyYAML
         echo "✅ 工具安装完成"
 
-    - name: 创建简单修复脚本
+    - name: 创建简单修复脚本（如需修复）
+      if: steps.initial-check.outputs.yaml_valid == 'false'
       run: |
         echo "=== 创建简单修复脚本 ==="
         
@@ -96,19 +118,22 @@ jobs:
         echo "    fix_yaml_file(file_path)" >> simple_fix.py
         echo "    print('✅ 基础修复完成')" >> simple_fix.py
 
-    - name: 备份原文件
+    - name: 备份原文件（如需修复）
+      if: steps.initial-check.outputs.yaml_valid == 'false'
       run: |
         echo "=== 备份原文件 ==="
         cp "$TARGET_FILE" "$TARGET_FILE.backup"
         echo "✅ 文件已备份到: $TARGET_FILE.backup"
 
-    - name: 基础修复
+    - name: 基础修复（如需修复）
+      if: steps.initial-check.outputs.yaml_valid == 'false'
       run: |
         echo "=== 执行基础修复 ==="
         python3 simple_fix.py "$TARGET_FILE"
         echo "✅ 基础修复完成"
 
-    - name: 手动修复常见错误
+    - name: 手动修复常见错误（如需修复）
+      if: steps.initial-check.outputs.yaml_valid == 'false'
       run: |
         echo "=== 手动修复常见错误 ==="
         
@@ -119,8 +144,9 @@ jobs:
         
         echo "✅ 手动修复完成"
 
-    - name: 验证修复结果
+    - name: 验证修复结果（如需修复）
       id: validate-fix
+      if: steps.initial-check.outputs.yaml_valid == 'false'
       run: |
         echo "=== 验证修复结果 ==="
         if python3 -c "import yaml; yaml.safe_load(open('$TARGET_FILE'))"; then
@@ -135,8 +161,8 @@ jobs:
           head -10 "$TARGET_FILE" || echo "无法读取文件"
         fi
 
-    - name: 显示修复差异
-      if: always()
+    - name: 显示修复差异（如需修复）
+      if: steps.initial-check.outputs.yaml_valid == 'false' && always()
       run: |
         echo "=== 修复前后差异 ==="
         if command -v diff &> /dev/null; then
@@ -150,8 +176,8 @@ jobs:
           echo "⚠️  diff 命令不可用"
         fi
 
-    - name: 自动提交修复
-      if: github.event.inputs.auto_commit == 'true' && steps.validate-fix.outputs.fix_success == 'true'
+    - name: 自动提交修复（如需修复）
+      if: steps.initial-check.outputs.yaml_valid == 'false' && github.event.inputs.auto_commit == 'true' && steps.validate-fix.outputs.fix_success == 'true'
       run: |
         echo "=== 自动提交修复 ==="
         git config --local user.email "action@github.com"
@@ -171,10 +197,13 @@ jobs:
         echo "=== YAML 修复详细报告 ==="
         echo "工作流名称: ${{ github.event.inputs.workflow_name }}"
         echo "目标文件: $TARGET_FILE"
+        echo "初始检查: ${{ steps.initial-check.outputs.yaml_valid }}"
         echo "修复状态: ${{ steps.validate-fix.outputs.fix_success }}"
         echo "自动提交: ${{ github.event.inputs.auto_commit }}"
         
-        if [ "${{ steps.validate-fix.outputs.fix_success }}" = "true" ]; then
+        if [ "${{ steps.initial-check.outputs.yaml_valid }}" = "true" ]; then
+          echo "🎉 YAML 格式已经正确，无需修复！"
+        elif [ "${{ steps.validate-fix.outputs.fix_success }}" = "true" ]; then
           echo "🎉 YAML 格式修复成功！"
         else
           echo "❌ YAML 格式修复失败"
@@ -199,7 +228,7 @@ jobs:
   manual-fallback:
     runs-on: ubuntu-latest
     needs: yaml-fix
-    if: failure()
+    if: failure() && needs.yaml-fix.result == 'failure'
     
     steps:
     - name: 检出仓库
