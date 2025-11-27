@@ -17,7 +17,26 @@ on:
         - '23.05'
         - '21.02'
       config_mode:
-        description: '配置模式选择：基础模式(最小化，用于测试编译)-文件传输；正常模式(完整功能)-TurboACC网络加速、UPnP自动端口转发、Samba文件共享、磁盘管理、KMS激活服务、SmartDNS智能DNS、家长控制、微信推送、流量控制(SQM)、FTP服务器、ARP绑定、CPU限制、硬盘休眠'
+        description: |
+          🛠️ 配置模式选择:
+          
+          🔹 [基础模式] - 最小化配置，用于测试编译
+          • 文件传输
+          
+          🔸 [正常模式] - 完整功能配置
+          • TurboACC 网络加速
+          • UPnP 自动端口转发  
+          • Samba 文件共享
+          • 磁盘管理
+          • KMS 激活服务
+          • SmartDNS 智能DNS
+          • 家长控制
+          • 微信推送
+          • 流量控制 (SQM)
+          • FTP 服务器
+          • ARP 绑定
+          • CPU 限制
+          • 硬盘休眠
         required: true
         type: choice
         default: 'normal'
@@ -25,369 +44,21 @@ on:
         - 'base'
         - 'normal'
       extra_packages:
-        description: '额外安装插件(用分号;分隔)。启用插件：+插件名，禁用插件：-插件名。示例：+luci-app-wol;+luci-app-ddns;-luci-app-upnp'
+        description: |
+          📦 额外安装插件 (用分号;分隔)
+          
+          ✅ 启用插件：+插件名
+          ❌ 禁用插件：-插件名
+          
+          📝 示例：
+          +luci-app-wol;+luci-app-ddns;-luci-app-upnp
         required: false
         type: string
         default: ''
       enable_cache:
-        description: '启用编译缓存'
+        description: '🚀 启用编译缓存'
         required: false
         default: true
         type: boolean
 
-env:
-  BUILD_DIR: /mnt/openwrt-build
-
-jobs:
-  build-firmware:
-    runs-on: ubuntu-22.04
-    
-    steps:
-    - name: 初始空间检查
-      run: |
-        echo "=== 初始磁盘空间检查 ==="
-        df -h
-        AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
-        AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-        echo "/mnt 可用空间: ${AVAILABLE_GB}G"
-        if [ $AVAILABLE_GB -lt 50 ]; then
-          echo "错误: /mnt 空间不足50G"
-          exit 1
-        fi
-
-    - name: 检出配置仓库
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-
-    - name: 设置编译环境
-      run: |
-        echo "=== 安装编译依赖包 ==="
-        sudo apt-get update
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpath libpython3-dev python3 python3-dev python3-pip python3-setuptools python3-yaml xsltproc zip subversion ninja-build automake autoconf libtool pkg-config help2man texinfo aria2 liblz4-dev zstd libcurl4-openssl-dev groff texlive texinfo cmake
-        echo "✅ 编译环境设置完成"
-
-    - name: 创建构建目录
-      run: |
-        echo "=== 创建构建目录 ==="
-        sudo mkdir -p $BUILD_DIR
-        sudo chown -R $USER:$USER $BUILD_DIR
-        sudo chmod -R 755 $BUILD_DIR
-        echo "✅ 构建目录创建完成"
-
-    - name: 版本选择
-      id: version-selection
-      run: |
-        cd $BUILD_DIR
-        echo "=== 版本选择 ==="
-        if [ "${{ github.event.inputs.version_selection }}" = "23.05" ]; then
-            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-            SELECTED_BRANCH="openwrt-23.05"
-        else
-            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-            SELECTED_BRANCH="openwrt-21.02"
-        fi
-        echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
-        echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
-        echo "✅ 版本选择完成: $SELECTED_BRANCH"
-
-    - name: 克隆源码
-      run: |
-        cd $BUILD_DIR
-        echo "=== 克隆源码 ==="
-        echo "仓库: $SELECTED_REPO_URL"
-        echo "分支: $SELECTED_BRANCH"
-        sudo rm -rf ./* ./.git* 2>/dev/null || true
-        git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .
-        echo "✅ 源码克隆完成"
-
-    - name: 添加 TurboACC 支持
-      run: |
-        cd $BUILD_DIR
-        echo "=== 添加 TurboACC 支持 ==="
-        
-        # 为 23.05 版本添加 turboacc 支持
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            echo "🔧 为 23.05 添加 TurboACC 支持"
-            
-            # 添加 turboacc 的 feeds
-            echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
-            
-            echo "✅ TurboACC feed 添加完成"
-        else
-            echo "ℹ️  21.02 版本已内置 TurboACC，无需额外添加"
-        fi
-
-    - name: 设备配置
-      run: |
-        cd $BUILD_DIR
-        echo "=== 设备配置 ==="
-        case "${{ github.event.inputs.device_name }}" in
-            "ac42u"|"acrh17")
-                TARGET="ipq40xx"
-                SUBTARGET="generic"
-                DEVICE="asus_rt-ac42u"
-                ;;
-            "mi_router_4a_gigabit"|"r4ag")
-                TARGET="ramips"
-                SUBTARGET="mt76x8"
-                DEVICE="xiaomi_mi-router-4a-gigabit"
-                ;;
-            "mi_router_3g"|"r3g")
-                TARGET="ramips"
-                SUBTARGET="mt7621"
-                DEVICE="xiaomi_mi-router-3g"
-                ;;
-            *)
-                TARGET="ipq40xx"
-                SUBTARGET="generic"
-                DEVICE="${{ github.event.inputs.device_name }}"
-                ;;
-        esac
-        echo "TARGET=$TARGET" >> $GITHUB_ENV
-        echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
-        echo "DEVICE=$DEVICE" >> $GITHUB_ENV
-        echo "目标: $TARGET"
-        echo "子目标: $SUBTARGET"
-        echo "设备: $DEVICE"
-
-    - name: 配置Feeds
-      run: |
-        cd $BUILD_DIR
-        echo "=== 配置Feeds ==="
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            FEEDS_BRANCH="openwrt-23.05"
-        else
-            FEEDS_BRANCH="openwrt-21.02"
-        fi
-        
-        # 确保 feeds.conf.default 包含基本 feeds
-        echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf.default
-        echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
-        
-        # 如果是 23.05，添加 turboacc feed
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
-        fi
-        
-        # 更新和安装所有 feeds
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-        
-        echo "✅ Feeds配置完成"
-
-    - name: 安装 TurboACC 包
-      if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
-      run: |
-        cd $BUILD_DIR
-        echo "=== 安装 TurboACC 包 ==="
-        
-        # 更新 turboacc feed
-        ./scripts/feeds update turboacc
-        
-        # 安装 turboacc 相关包
-        ./scripts/feeds install -p turboacc luci-app-turboacc
-        ./scripts/feeds install -p turboacc kmod-shortcut-fe
-        ./scripts/feeds install -p turboacc kmod-fast-classifier
-        
-        echo "✅ TurboACC 包安装完成"
-
-    - name: 编译前空间检查
-      run: |
-        echo "=== 编译前空间检查 ==="
-        df -h
-        AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
-        AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-        echo "/mnt 可用空间: ${AVAILABLE_GB}G"
-
-    - name: 智能配置生成
-      run: |
-        cd $BUILD_DIR
-        echo "=== 智能配置生成系统 ==="
-        rm -f .config .config.old
-        
-        # 创建基础配置
-        echo "CONFIG_TARGET_${TARGET}=y" > .config
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" >> .config
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
-        
-        # 基础系统组件
-        echo "CONFIG_PACKAGE_busybox=y" >> .config
-        echo "CONFIG_PACKAGE_base-files=y" >> .config
-        echo "CONFIG_PACKAGE_dropbear=y" >> .config
-        echo "CONFIG_PACKAGE_firewall=y" >> .config
-        echo "CONFIG_PACKAGE_fstools=y" >> .config
-        echo "CONFIG_PACKAGE_libc=y" >> .config
-        echo "CONFIG_PACKAGE_libgcc=y" >> .config
-        echo "CONFIG_PACKAGE_mtd=y" >> .config
-        echo "CONFIG_PACKAGE_netifd=y" >> .config
-        echo "CONFIG_PACKAGE_opkg=y" >> .config
-        echo "CONFIG_PACKAGE_procd=y" >> .config
-        echo "CONFIG_PACKAGE_ubox=y" >> .config
-        echo "CONFIG_PACKAGE_ubus=y" >> .config
-        echo "CONFIG_PACKAGE_ubusd=y" >> .config
-        echo "CONFIG_PACKAGE_uci=y" >> .config
-        echo "CONFIG_PACKAGE_uclient-fetch=y" >> .config
-        echo "CONFIG_PACKAGE_usign=y" >> .config
-        
-        # DNS配置
-        echo "# CONFIG_PACKAGE_dnsmasq is not set" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq_full_dhcp=y" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq_full_dhcpv6=y" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq_full_dnssec=y" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq_full_ipset=y" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq_full_conntrack=y" >> .config
-        
-        # 无线驱动
-        echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
-        echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
-        echo "CONFIG_PACKAGE_ath10k-firmware-qca988x=y" >> .config
-        echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
-        
-        # 网络工具
-        echo "CONFIG_PACKAGE_iptables=y" >> .config
-        echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> .config
-        echo "CONFIG_PACKAGE_iptables-mod-ipopt=y" >> .config
-        echo "CONFIG_PACKAGE_ip6tables=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ipt-nat6=y" >> .config
-        
-        # 版本智能检测和配置
-        echo "=== 版本智能检测: $SELECTED_BRANCH ==="
-        
-        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-            echo "🔧 检测到 21.02 版本，应用相应配置..."
-            echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
-            echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
-            echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
-            echo "CONFIG_PACKAGE_automount=y" >> .config
-            
-        elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            echo "🔧 检测到 23.05 版本，应用相应配置..."
-            echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
-            echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
-            echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
-        else
-            echo "⚠️  未知版本，使用通用配置..."
-            echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
-            echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
-        fi
-        
-        # 通用文件系统支持
-        echo "CONFIG_PACKAGE_block-mount=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
-        
-        # 根据配置模式选择插件
-        echo "=== 配置模式: ${{ github.event.inputs.config_mode }} ==="
-        
-        if [ "${{ github.event.inputs.config_mode }}" = "base" ]; then
-            echo "🔧 使用基础模式 (最小化，用于测试编译)"
-            # 基础配置插件 - 仅文件传输
-            BASE_PLUGINS=(
-              "CONFIG_PACKAGE_luci-app-filetransfer=y"
-            )
-            
-            for plugin in "${BASE_PLUGINS[@]}"; do
-                echo "$plugin" >> .config
-            done
-            
-            echo "✅ 基础模式插件已启用"
-            
-        else
-            echo "🔧 使用正常模式 (完整功能)"
-            # 正常配置插件 - 包含所有功能
-            NORMAL_PLUGINS=(
-              "CONFIG_PACKAGE_luci-app-turboacc=y"
-              "CONFIG_PACKAGE_kmod-shortcut-fe=y"
-              "CONFIG_PACKAGE_kmod-fast-classifier=y"
-              "CONFIG_PACKAGE_luci-app-upnp=y"
-              "CONFIG_PACKAGE_miniupnpd=y"
-              "CONFIG_PACKAGE_vsftpd=y"
-              "CONFIG_PACKAGE_luci-app-vsftpd=y"
-              "CONFIG_PACKAGE_luci-app-arpbind=y"
-              "CONFIG_PACKAGE_luci-app-cpulimit=y"
-              "CONFIG_PACKAGE_samba4-server=y"
-              "CONFIG_PACKAGE_luci-app-samba4=y"
-              "CONFIG_PACKAGE_luci-app-wechatpush=y"
-              "CONFIG_PACKAGE_sqm-scripts=y"
-              "CONFIG_PACKAGE_luci-app-sqm=y"
-              "CONFIG_PACKAGE_luci-app-hd-idle=y"
-              "CONFIG_PACKAGE_luci-app-filetransfer=y"
-              "CONFIG_PACKAGE_luci-app-diskman=y"
-              "CONFIG_PACKAGE_luci-app-accesscontrol=y"
-              "CONFIG_PACKAGE_vlmcsd=y"
-              "CONFIG_PACKAGE_luci-app-vlmcsd=y"
-              "CONFIG_PACKAGE_smartdns=y"
-              "CONFIG_PACKAGE_luci-app-smartdns=y"
-            )
-            
-            for plugin in "${NORMAL_PLUGINS[@]}"; do
-                echo "$plugin" >> .config
-            done
-            
-            echo "✅ 正常模式插件已启用"
-        fi
-        
-        # 禁用网络唤醒
-        echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> .config
-        echo "# CONFIG_PACKAGE_wol is not set" >> .config
-        echo "# CONFIG_PACKAGE_etherwake is not set" >> .config
-        
-        # 禁用 offloading 插件
-        echo "# CONFIG_PACKAGE_luci-app-software-offloading is not set" >> .config
-        
-        # 明确禁用不需要的插件
-        echo "# 明确禁用网络相关插件" >> .config
-        UNWANTED_PLUGINS=(
-          "CONFIG_PACKAGE_luci-app-passwall"
-          "CONFIG_PACKAGE_luci-app-ssr-plus"
-          "CONFIG_PACKAGE_luci-app-vssr"
-          "CONFIG_PACKAGE_luci-app-rclone"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_ShadowsocksR_Libev_Client"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Libev_Client"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Libev_Server"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Simple_Obfs"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Trojan_Plus"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Geoview"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Plugin"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray"
-          "CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-ng"
-          "CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-webui"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ChinaDNS_NG"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_IPT2Socks"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ShadowsocksR_Libev_Client"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Client"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Server"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Simple_Obfs"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Trojan"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray"
-          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_ShadowsocksR_Libev_Server"
-          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Trojan"
-          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Xray"
-          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Xray_plugin"
-        )
-        
-        for plugin in "${UNWANTED_PLUGINS[@]}"; do
-            echo "# ${plugin} is not set" >> .config
-        done
-        
-        # 处理额外安装插件
-        if [ -n "${{ github.event.inputs.extra_packages }}" ]; then
-            echo "🔧 处理额外安装插件: ${{ github.event.inputs.extra_packages }}"
-            
-            # 使用分号分隔输入
-            IFS=';' read -ra EXTRA_PKGS <<< "${{ github.event.inputs.extra_packages }}"
-            
-            for pkg_cmd in "${EXTRA_PKGS[@]}"; do
-                if [ -n "$pkg_cmd" ]; then
-                    # 去除前后空格
-                    pkg_cmd_clean=$(echo "$pkg_cmd" | xargs)
-                    
-                    #
+# ... 其余部分保持不变 ...
