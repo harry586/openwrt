@@ -1,15 +1,15 @@
-name: OpenWrt 智能固件构建工作流
+name: OpenWrt 固件构建 - 版本1
 
 on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: '设备名称 (如: ac42u等)'
+        description: '📱 设备名称 (如: ac42u, r3g, r4ag 等)'
         required: true
         default: 'ac42u'
         type: string
       version_selection:
-        description: '版本选择'
+        description: '🔄 版本选择'
         required: true
         type: choice
         default: '21.02'
@@ -56,9 +56,20 @@ on:
         type: string
         default: ''
       enable_cache:
-        description: '🚀 启用编译缓存'
+        description: '🚀 启用编译缓存 (加速编译过程)'
         required: false
         default: true
         type: boolean
 
-# ... 其余部分保持不变 ...
+# 这里可以只保留jobs部分的基本结构用于测试
+jobs:
+  test-build:
+    runs-on: ubuntu-22.04
+    steps:
+    - name: 显示输入参数
+      run: |
+        echo "设备: ${{ github.event.inputs.device_name }}"
+        echo "版本: ${{ github.event.inputs.version_selection }}"
+        echo "模式: ${{ github.event.inputs.config_mode }}"
+        echo "额外包: ${{ github.event.inputs.extra_packages }}"
+        echo "缓存: ${{ github.event.inputs.enable_cache }}"
