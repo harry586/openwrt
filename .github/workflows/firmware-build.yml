@@ -16,8 +16,19 @@ on:
         options:
         - '23.05'
         - '21.02'
+      config_mode:
+        description: '配置模式
+基础配置: TurboACC, UPnP, 文件共享, 磁盘管理, 网络工具
+正常配置: 基础配置 + 家长控制, 微信推送, 流量控制, FTP, 内网穿透等完整插件'
+        required: true
+        type: choice
+        default: 'normal'
+        options:
+        - 'base'
+        - 'normal'
       extra_packages:
-        description: '额外安装插件 (多个插件用空格分隔)'
+        description: '额外安装插件 (用分号;分隔，+插件名表示启用，-插件名表示禁用)
+示例: +luci-app-wol;+luci-app-ddns;-luci-app-upnp'
         required: false
         type: string
         default: ''
@@ -280,28 +291,63 @@ jobs:
         echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
         
-        # 基础通用插件
-        echo "CONFIG_PACKAGE_vlmcsd=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-vlmcsd=y" >> .config
-        echo "CONFIG_PACKAGE_smartdns=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> .config
+        # 根据配置模式选择插件
+        echo "=== 配置模式: ${{ github.event.inputs.config_mode }} ==="
         
-        # 完整的插件列表
-        echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
-        echo "CONFIG_PACKAGE_miniupnpd=y" >> .config
-        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-arpbind=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-cpulimit=y" >> .config
-        echo "CONFIG_PACKAGE_samba4-server=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-samba4=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-wechatpush=y" >> .config
-        echo "CONFIG_PACKAGE_sqm-scripts=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-hd-idle=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-filetransfer=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-diskman=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-accesscontrol=y" >> .config
+        if [ "${{ github.event.inputs.config_mode }}" = "base" ]; then
+            echo "🔧 使用基础配置 (最小化插件)"
+            # 基础配置插件
+            BASE_PLUGINS=(
+              "CONFIG_PACKAGE_luci-app-turboacc=y"
+              "CONFIG_PACKAGE_luci-app-upnp=y"
+              "CONFIG_PACKAGE_miniupnpd=y"
+              "CONFIG_PACKAGE_samba4-server=y"
+              "CONFIG_PACKAGE_luci-app-samba4=y"
+              "CONFIG_PACKAGE_luci-app-diskman=y"
+              "CONFIG_PACKAGE_vlmcsd=y"
+              "CONFIG_PACKAGE_luci-app-vlmcsd=y"
+              "CONFIG_PACKAGE_smartdns=y"
+              "CONFIG_PACKAGE_luci-app-smartdns=y"
+            )
+            
+            for plugin in "${BASE_PLUGINS[@]}"; do
+                echo "$plugin" >> .config
+            done
+            
+            echo "✅ 基础配置插件已启用"
+            
+        else
+            echo "🔧 使用正常配置 (完整插件)"
+            # 正常配置插件
+            NORMAL_PLUGINS=(
+              "CONFIG_PACKAGE_luci-app-turboacc=y"
+              "CONFIG_PACKAGE_luci-app-upnp=y"
+              "CONFIG_PACKAGE_miniupnpd=y"
+              "CONFIG_PACKAGE_vsftpd=y"
+              "CONFIG_PACKAGE_luci-app-vsftpd=y"
+              "CONFIG_PACKAGE_luci-app-arpbind=y"
+              "CONFIG_PACKAGE_luci-app-cpulimit=y"
+              "CONFIG_PACKAGE_samba4-server=y"
+              "CONFIG_PACKAGE_luci-app-samba4=y"
+              "CONFIG_PACKAGE_luci-app-wechatpush=y"
+              "CONFIG_PACKAGE_sqm-scripts=y"
+              "CONFIG_PACKAGE_luci-app-sqm=y"
+              "CONFIG_PACKAGE_luci-app-hd-idle=y"
+              "CONFIG_PACKAGE_luci-app-filetransfer=y"
+              "CONFIG_PACKAGE_luci-app-diskman=y"
+              "CONFIG_PACKAGE_luci-app-accesscontrol=y"
+              "CONFIG_PACKAGE_vlmcsd=y"
+              "CONFIG_PACKAGE_luci-app-vlmcsd=y"
+              "CONFIG_PACKAGE_smartdns=y"
+              "CONFIG_PACKAGE_luci-app-smartdns=y"
+            )
+            
+            for plugin in "${NORMAL_PLUGINS[@]}"; do
+                echo "$plugin" >> .config
+            done
+            
+            echo "✅ 正常配置插件已启用"
+        fi
         
         # 禁用网络唤醒
         echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> .config
@@ -311,52 +357,78 @@ jobs:
         # 禁用 offloading 插件
         echo "# CONFIG_PACKAGE_luci-app-software-offloading is not set" >> .config
         
-        # 明确禁用不需要的插件（在 defconfig 之前）
+        # 明确禁用不需要的插件
         echo "# 明确禁用网络相关插件" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-ssr-plus is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-vssr is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-rclone is not set" >> .config
+        UNWANTED_PLUGINS=(
+          "CONFIG_PACKAGE_luci-app-passwall"
+          "CONFIG_PACKAGE_luci-app-ssr-plus"
+          "CONFIG_PACKAGE_luci-app-vssr"
+          "CONFIG_PACKAGE_luci-app-rclone"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_ShadowsocksR_Libev_Client"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Libev_Client"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Libev_Server"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Simple_Obfs"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Trojan_Plus"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Geoview"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Plugin"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray"
+          "CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-ng"
+          "CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-webui"
+          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ChinaDNS_NG"
+          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_IPT2Socks"
+          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ShadowsocksR_Libev_Client"
+          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Client"
+          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Server"
+          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Simple_Obfs"
+          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Trojan"
+          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray"
+          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_ShadowsocksR_Libev_Server"
+          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Trojan"
+          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Xray"
+          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Xray_plugin"
+        )
         
-        # 明确禁用所有相关子组件
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_ShadowsocksR_Libev_Client is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Libev_Client is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Libev_Server is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Simple_Obfs is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Trojan_Plus is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Geoview is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Plugin is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-ng is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-webui is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ChinaDNS_NG is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_IPT2Socks is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ShadowsocksR_Libev_Client is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Client is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Server is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Simple_Obfs is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Trojan is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-vssr_INCLUDE_ShadowsocksR_Libev_Server is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Trojan is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Xray is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Xray_plugin is not set" >> .config
+        for plugin in "${UNWANTED_PLUGINS[@]}"; do
+            echo "# ${plugin} is not set" >> .config
+        done
         
-        # 用户自定义包处理
+        # 处理额外安装插件
         if [ -n "${{ github.event.inputs.extra_packages }}" ]; then
-            echo "🔧 添加用户自定义包: ${{ github.event.inputs.extra_packages }}"
-            IFS=' ' read -ra PKG_ARRAY <<< "${{ github.event.inputs.extra_packages }}"
-            for pkg in "${PKG_ARRAY[@]}"; do
-                if [ -n "$pkg" ]; then
-                    echo "添加包: $pkg"
-                    echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+            echo "🔧 处理额外安装插件: ${{ github.event.inputs.extra_packages }}"
+            
+            # 使用分号分隔输入
+            IFS=';' read -ra EXTRA_PKGS <<< "${{ github.event.inputs.extra_packages }}"
+            
+            for pkg_cmd in "${EXTRA_PKGS[@]}"; do
+                if [ -n "$pkg_cmd" ]; then
+                    # 去除前后空格
+                    pkg_cmd_clean=$(echo "$pkg_cmd" | xargs)
+                    
+                    # 检查是启用还是禁用
+                    if [[ "$pkg_cmd_clean" == +* ]]; then
+                        # 启用插件
+                        pkg_name="${pkg_cmd_clean:1}"
+                        echo "启用插件: $pkg_name"
+                        echo "CONFIG_PACKAGE_${pkg_name}=y" >> .config
+                    elif [[ "$pkg_cmd_clean" == -* ]]; then
+                        # 禁用插件
+                        pkg_name="${pkg_cmd_clean:1}"
+                        echo "禁用插件: $pkg_name"
+                        echo "# CONFIG_PACKAGE_${pkg_name} is not set" >> .config
+                    else
+                        # 默认启用
+                        echo "启用插件: $pkg_cmd_clean"
+                        echo "CONFIG_PACKAGE_${pkg_cmd_clean}=y" >> .config
+                    fi
                 fi
             done
+            
+            echo "✅ 额外插件处理完成"
         else
-            echo "ℹ️  无用户自定义包"
+            echo "ℹ️  无额外安装插件"
         fi
         
         echo "✅ 智能配置生成完成"
@@ -364,10 +436,11 @@ jobs:
         # 显示配置摘要
         echo "=== 配置摘要 ==="
         echo "版本: $SELECTED_BRANCH"
+        echo "配置模式: ${{ github.event.inputs.config_mode }}"
         echo "目标设备: $DEVICE"
         echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
-        echo "TurboACC 相关包:"
-        grep "turboacc\\|shortcut\\|fast-classifier" .config | grep "=y" || echo "未找到 TurboACC 相关包"
+        echo "启用的LUCI插件:"
+        grep "^CONFIG_PACKAGE_luci" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
 
     - name: 应用配置
       run: |
@@ -375,6 +448,54 @@ jobs:
         echo "=== 应用配置 ==="
         make defconfig
         echo "✅ 配置应用完成"
+        
+        # 在 defconfig 之后强制禁用不需要的插件
+        echo "=== 强制禁用不需要的插件 ==="
+        
+        # 定义要禁用的配置项列表
+        UNWANTED_CONFIGS=(
+          "CONFIG_PACKAGE_luci-app-passwall"
+          "CONFIG_PACKAGE_luci-app-ssr-plus"
+          "CONFIG_PACKAGE_luci-app-vssr"
+          "CONFIG_PACKAGE_luci-app-rclone"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_ShadowsocksR_Libev_Client"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Libev_Client"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Libev_Server"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Simple_Obfs"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Trojan_Plus"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Geoview"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Plugin"
+          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray"
+          "CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-ng"
+          "CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-webui"
+          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ChinaDNS_NG"
+          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_IPT2Socks"
+          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ShadowsocksR_Libev_Client"
+          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Client"
+          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Server"
+          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Simple_Obfs"
+          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Trojan"
+          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray"
+          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_ShadowsocksR_Libev_Server"
+          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Trojan"
+          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Xray"
+          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Xray_plugin"
+        )
+        
+        # 强制禁用每个配置项
+        for config in "${UNWANTED_CONFIGS[@]}"; do
+          # 如果配置项存在且被启用，则禁用它
+          if grep -q "^${config}=y$" .config || grep -q "^${config}=m$" .config; then
+            echo "禁用: $config"
+            sed -i "s/^${config}=y$/# ${config} is not set/" .config
+            sed -i "s/^${config}=m$/# ${config} is not set/" .config
+          fi
+        done
+        
+        echo "✅ 强制禁用完成"
         
         # 显示最终配置信息
         echo "=== 最终配置状态 ==="
@@ -388,7 +509,7 @@ jobs:
         echo "=== 检查不需要的插件状态 ==="
         UNWANTED_PLUGINS=$(grep -E "passwall|ssr-plus|vssr|rclone" .config | grep "=y" || true)
         if [ -n "$UNWANTED_PLUGINS" ]; then
-            echo "⚠️  发现不需要的插件被启用:"
+            echo "❌ 发现不需要的插件被启用:"
             echo "$UNWANTED_PLUGINS"
         else
             echo "✅ 不需要的插件已正确禁用"
@@ -468,7 +589,7 @@ jobs:
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
+        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
         path: ${{ env.BUILD_DIR }}/bin/targets/
         retention-days: 7
 
@@ -476,7 +597,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: build-log-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
+        name: build-log-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
         path: ${{ env.BUILD_DIR }}/build.log
         retention-days: 7
 
@@ -484,7 +605,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
+        name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
         path: ${{ env.BUILD_DIR }}/config_backup
         retention-days: 7
 
