@@ -311,6 +311,40 @@ jobs:
         # 禁用 offloading 插件
         echo "# CONFIG_PACKAGE_luci-app-software-offloading is not set" >> .config
         
+        # 明确禁用不需要的插件（在 defconfig 之前）
+        echo "# 明确禁用网络相关插件" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-passwall is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-ssr-plus is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-vssr is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-rclone is not set" >> .config
+        
+        # 明确禁用所有相关子组件
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_ShadowsocksR_Libev_Client is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Libev_Client is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Libev_Server is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Simple_Obfs is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Trojan_Plus is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Geoview is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Plugin is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-ng is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-webui is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ChinaDNS_NG is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_IPT2Socks is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ShadowsocksR_Libev_Client is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Client is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Server is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Simple_Obfs is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Trojan is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-vssr_INCLUDE_ShadowsocksR_Libev_Server is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Trojan is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Xray is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Xray_plugin is not set" >> .config
+        
         # 用户自定义包处理
         if [ -n "${{ github.event.inputs.extra_packages }}" ]; then
             echo "🔧 添加用户自定义包: ${{ github.event.inputs.extra_packages }}"
@@ -349,6 +383,16 @@ jobs:
         grep "turboacc\\|shortcut\\|fast-classifier" .config | grep "=y" || echo "TurboACC 未启用"
         echo "启用的LUCI插件:"
         grep "^CONFIG_PACKAGE_luci" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
+        
+        # 检查是否还有不需要的插件
+        echo "=== 检查不需要的插件状态 ==="
+        UNWANTED_PLUGINS=$(grep -E "passwall|ssr-plus|vssr|rclone" .config | grep "=y" || true)
+        if [ -n "$UNWANTED_PLUGINS" ]; then
+            echo "⚠️  发现不需要的插件被启用:"
+            echo "$UNWANTED_PLUGINS"
+        else
+            echo "✅ 不需要的插件已正确禁用"
+        fi
         
         # 备份配置文件
         cp .config config_backup
