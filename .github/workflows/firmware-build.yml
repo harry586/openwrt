@@ -113,16 +113,23 @@ jobs:
         cd $BUILD_DIR
         echo "=== 添加 TurboACC 支持 ==="
         
-        # 为 23.05 版本添加 turboacc 支持
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            echo "🔧 为 23.05 添加 TurboACC 支持"
+        # 只有正常模式才添加 TurboACC 支持
+        if [ "${{ github.event.inputs.config_mode }}" = "normal" ]; then
+            echo "🔧 为正常模式添加 TurboACC 支持"
             
-            # 添加 turboacc 的 feeds
-            echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
-            
-            echo "✅ TurboACC feed 添加完成"
+            # 为 23.05 版本添加 turboacc 支持
+            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+                echo "🔧 为 23.05 添加 TurboACC 支持"
+                
+                # 添加 turboacc 的 feeds
+                echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+                
+                echo "✅ TurboACC feed 添加完成"
+            else
+                echo "ℹ️  21.02 版本已内置 TurboACC，无需额外添加"
+            fi
         else
-            echo "ℹ️  21.02 版本已内置 TurboACC，无需额外添加"
+            echo "ℹ️  基础模式不添加 TurboACC 支持"
         fi
 
     - name: 设备配置
@@ -172,8 +179,8 @@ jobs:
         echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf.default
         echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
         
-        # 如果是 23.05，添加 turboacc feed
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+        # 如果是 23.05 且正常模式，添加 turboacc feed
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] && [ "${{ github.event.inputs.config_mode }}" = "normal" ]; then
             echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
         fi
         
@@ -272,6 +279,10 @@ jobs:
             echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
             echo "CONFIG_PACKAGE_automount=y" >> .config
             
+            # 21.02 版本添加中文语言支持
+            echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
+            
         elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             echo "🔧 检测到 23.05 版本，应用相应配置..."
             echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
@@ -293,10 +304,15 @@ jobs:
         
         if [ "${{ github.event.inputs.config_mode }}" = "base" ]; then
             echo "🔧 使用基础模式 (最小化，用于测试编译)"
-            # 基础配置插件 - 仅文件传输
+            # 基础配置插件 - 包含文件传输
             BASE_PLUGINS=(
               "CONFIG_PACKAGE_luci-app-filetransfer=y"
             )
+            
+            # 21.02 版本基础模式添加文件传输中文语言包
+            if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+                BASE_PLUGINS+=("CONFIG_PACKAGE_luci-i18n-filetransfer-zh-cn=y")
+            fi
             
             for plugin in "${BASE_PLUGINS[@]}"; do
                 echo "$plugin" >> .config
@@ -308,9 +324,6 @@ jobs:
             echo "🔧 使用正常模式 (完整功能)"
             # 正常配置插件 - 包含所有功能
             NORMAL_PLUGINS=(
-              "CONFIG_PACKAGE_luci-app-turboacc=y"
-              "CONFIG_PACKAGE_kmod-shortcut-fe=y"
-              "CONFIG_PACKAGE_kmod-fast-classifier=y"
               "CONFIG_PACKAGE_luci-app-upnp=y"
               "CONFIG_PACKAGE_miniupnpd=y"
               "CONFIG_PACKAGE_vsftpd=y"
@@ -323,14 +336,47 @@ jobs:
               "CONFIG_PACKAGE_sqm-scripts=y"
               "CONFIG_PACKAGE_luci-app-sqm=y"
               "CONFIG_PACKAGE_luci-app-hd-idle=y"
-              "CONFIG_PACKAGE_luci-app-filetransfer=y"
               "CONFIG_PACKAGE_luci-app-diskman=y"
               "CONFIG_PACKAGE_luci-app-accesscontrol=y"
               "CONFIG_PACKAGE_vlmcsd=y"
               "CONFIG_PACKAGE_luci-app-vlmcsd=y"
               "CONFIG_PACKAGE_smartdns=y"
               "CONFIG_PACKAGE_luci-app-smartdns=y"
+              "CONFIG_PACKAGE_luci-app-filetransfer=y"  # 所有版本所有模式都包含文件传输
             )
+            
+            # 添加 TurboACC 相关配置（仅正常模式）
+            if [ "${{ github.event.inputs.config_mode }}" = "normal" ]; then
+                NORMAL_PLUGINS+=(
+                  "CONFIG_PACKAGE_luci-app-turboacc=y"
+                  "CONFIG_PACKAGE_kmod-shortcut-fe=y"
+                  "CONFIG_PACKAGE_kmod-fast-classifier=y"
+                )
+            fi
+            
+            # 21.02 版本添加中文语言包
+            if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+                NORMAL_PLUGINS+=(
+                  "CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-arpbind-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-cpulimit-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-hd-idle-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-accesscontrol-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-vlmcsd-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-filetransfer-zh-cn=y"
+                )
+                
+                # 21.02 版本添加 TurboACC 中文语言包（如果启用）
+                if [ "${{ github.event.inputs.config_mode }}" = "normal" ]; then
+                    NORMAL_PLUGINS+=("CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y")
+                fi
+            fi
             
             for plugin in "${NORMAL_PLUGINS[@]}"; do
                 echo "$plugin" >> .config
@@ -346,6 +392,14 @@ jobs:
         
         # 禁用 offloading 插件
         echo "# CONFIG_PACKAGE_luci-app-software-offloading is not set" >> .config
+        
+        # 修复 USB3 相关错误（针对 IPQ40xx 设备）
+        if [ "$TARGET" = "ipq40xx" ]; then
+            echo "# CONFIG_PACKAGE_kmod-usb-dwc3-qcom is not set" >> .config
+        fi
+        
+        # 修复 dropbear 监听错误
+        echo "CONFIG_PACKAGE_dropbear=y" >> .config
         
         # 明确禁用不需要的插件
         echo "# 明确禁用网络相关插件" >> .config
