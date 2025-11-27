@@ -1,4 +1,4 @@
-name: OpenWrt 固件构建 - 版本8
+name: OpenWrt 固件构建 - 版本9
 
 on:
   workflow_dispatch:
@@ -20,23 +20,23 @@ on:
         description: |
           ⚙️ 配置模式选择
           
-          🟦 基础模式 - 最小化配置，用于测试编译
-          🟢 文件传输
+          🟣 基础模式 - 最小化配置，用于测试编译
+          ✅ 文件传输
           
-          🟧 正常模式 - 完整功能配置
-          🟢 TurboACC 网络加速
-          🟢 UPnP 自动端口转发  
-          🟢 Samba 文件共享
-          🟢 磁盘管理
-          🟢 KMS 激活服务
-          🟢 SmartDNS 智能DNS
-          🟢 家长控制
-          🟢 微信推送
-          🟢 流量控制 (SQM)
-          🟢 FTP 服务器
-          🟢 ARP 绑定
-          🟢 CPU 限制
-          🟢 硬盘休眠
+          🟠 正常模式 - 完整功能配置
+          ✅ TurboACC 网络加速
+          ✅ UPnP 自动端口转发  
+          ✅ Samba 文件共享
+          ✅ 磁盘管理
+          ✅ KMS 激活服务
+          ✅ SmartDNS 智能DNS
+          ✅ 家长控制
+          ✅ 微信推送
+          ✅ 流量控制 (SQM)
+          ✅ FTP 服务器
+          ✅ ARP 绑定
+          ✅ CPU 限制
+          ✅ 硬盘休眠
         required: true
         type: choice
         default: 'normal'
@@ -48,8 +48,8 @@ on:
           📦 额外安装插件
           
           格式：用分号;分隔
-          🟩 启用插件：+插件名
-          🟥 禁用插件：-插件名
+          🔵 启用插件：+插件名
+          🔴 禁用插件：-插件名
           
           示例：
           +luci-app-wol;+luci-app-ddns;-luci-app-upnp
