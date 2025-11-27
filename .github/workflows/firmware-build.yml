@@ -294,21 +294,10 @@ jobs:
             echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
         fi
         
-        # 自动挂载配置 - 所有版本所有模式都需要
-        echo "=== 配置自动挂载功能 ==="
+        # 通用文件系统支持 - 保持原来的自动挂载配置
         echo "CONFIG_PACKAGE_block-mount=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
-        echo "CONFIG_PACKAGE_blkid=y" >> .config
-        echo "CONFIG_PACKAGE_libblkid=y" >> .config
-        echo "CONFIG_PACKAGE_libmount=y" >> .config
-        echo "CONFIG_PACKAGE_libuuid=y" >> .config
-        echo "CONFIG_PACKAGE_mount-utils=y" >> .config
-        echo "CONFIG_PACKAGE_fdisk=y" >> .config
         
         # 根据配置模式选择插件
         echo "=== 配置模式: ${{ github.event.inputs.config_mode }} ==="
@@ -329,17 +318,15 @@ jobs:
                 echo "$plugin" >> .config
             done
             
-            # 基础模式明确禁用 TurboACC
-            echo "# CONFIG_PACKAGE_luci-app-turboacc is not set" >> .config
-            echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
-            echo "# CONFIG_PACKAGE_kmod-fast-classifier is not set" >> .config
-            
             echo "✅ 基础模式插件已启用"
             
         else
             echo "🔧 使用正常模式 (完整功能)"
             # 正常配置插件 - 包含所有功能
             NORMAL_PLUGINS=(
+              "CONFIG_PACKAGE_luci-app-turboacc=y"
+              "CONFIG_PACKAGE_kmod-shortcut-fe=y"
+              "CONFIG_PACKAGE_kmod-fast-classifier=y"
               "CONFIG_PACKAGE_luci-app-upnp=y"
               "CONFIG_PACKAGE_miniupnpd=y"
               "CONFIG_PACKAGE_vsftpd=y"
@@ -352,23 +339,14 @@ jobs:
               "CONFIG_PACKAGE_sqm-scripts=y"
               "CONFIG_PACKAGE_luci-app-sqm=y"
               "CONFIG_PACKAGE_luci-app-hd-idle=y"
+              "CONFIG_PACKAGE_luci-app-filetransfer=y"
               "CONFIG_PACKAGE_luci-app-diskman=y"
               "CONFIG_PACKAGE_luci-app-accesscontrol=y"
               "CONFIG_PACKAGE_vlmcsd=y"
               "CONFIG_PACKAGE_luci-app-vlmcsd=y"
               "CONFIG_PACKAGE_smartdns=y"
               "CONFIG_PACKAGE_luci-app-smartdns=y"
-              "CONFIG_PACKAGE_luci-app-filetransfer=y"  # 所有版本所有模式都包含文件传输
             )
-            
-            # 添加 TurboACC 相关配置（仅正常模式）
-            if [ "${{ github.event.inputs.config_mode }}" = "normal" ]; then
-                NORMAL_PLUGINS+=(
-                  "CONFIG_PACKAGE_luci-app-turboacc=y"
-                  "CONFIG_PACKAGE_kmod-shortcut-fe=y"
-                  "CONFIG_PACKAGE_kmod-fast-classifier=y"
-                )
-            fi
             
             # 21.02 版本添加中文语言包
             if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
@@ -386,12 +364,8 @@ jobs:
                   "CONFIG_PACKAGE_luci-i18n-vlmcsd-zh-cn=y"
                   "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y"
                   "CONFIG_PACKAGE_luci-i18n-filetransfer-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y"
                 )
-                
-                # 21.02 版本添加 TurboACC 中文语言包（如果启用）
-                if [ "${{ github.event.inputs.config_mode }}" = "normal" ]; then
-                    NORMAL_PLUGINS+=("CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y")
-                fi
             fi
             
             for plugin in "${NORMAL_PLUGINS[@]}"; do
@@ -501,8 +475,6 @@ jobs:
         echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
         echo "启用的LUCI插件:"
         grep "^CONFIG_PACKAGE_luci" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
-        echo "自动挂载相关包:"
-        grep -E "block-mount|kmod-fs-|kmod-usb-|blkid|automount" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
 
     - name: 应用配置
       run: |
@@ -584,8 +556,6 @@ jobs:
         grep "turboacc\\|shortcut\\|fast-classifier" .config | grep "=y" || echo "TurboACC 未启用"
         echo "启用的LUCI插件:"
         grep "^CONFIG_PACKAGE_luci" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
-        echo "自动挂载相关包状态:"
-        grep -E "block-mount|kmod-fs-|kmod-usb-|blkid|automount" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✅/' | sed 's/ is not set/ ❌/' | sort
         
         # 检查是否还有不需要的插件
         echo "=== 检查不需要的插件状态 ==="
