@@ -17,9 +17,26 @@ on:
         - '23.05'
         - '21.02'
       config_mode:
-        description: '配置模式
-基础配置: TurboACC, UPnP, 文件共享, 磁盘管理, 网络工具
-正常配置: 基础配置 + 家长控制, 微信推送, 流量控制, FTP, 内网穿透等完整插件'
+        description: |
+          配置模式选择：
+          
+          基础模式 (最小化，用于测试编译)
+          - 文件传输
+          
+          正常模式 (完整功能)
+          - TurboACC 网络加速
+          - UPnP 自动端口转发
+          - Samba 文件共享
+          - 磁盘管理
+          - KMS 激活服务
+          - SmartDNS 智能DNS
+          - 家长控制
+          - 微信推送
+          - 流量控制 (SQM)
+          - FTP 服务器
+          - ARP 绑定
+          - CPU 限制
+          - 硬盘休眠
         required: true
         type: choice
         default: 'normal'
@@ -27,8 +44,14 @@ on:
         - 'base'
         - 'normal'
       extra_packages:
-        description: '额外安装插件 (用分号;分隔，+插件名表示启用，-插件名表示禁用)
-示例: +luci-app-wol;+luci-app-ddns;-luci-app-upnp'
+        description: |
+          额外安装插件 (用分号;分隔)
+          
+          启用插件：+插件名
+          禁用插件：-插件名
+          
+          示例：
+          +luci-app-wol;+luci-app-ddns;-luci-app-upnp
         required: false
         type: string
         default: ''
@@ -180,7 +203,7 @@ jobs:
         echo "✅ Feeds配置完成"
 
     - name: 安装 TurboACC 包
-      if: env.SELECTED_BRANCH == 'openwrt-23.05'
+      if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
       run: |
         cd $BUILD_DIR
         echo "=== 安装 TurboACC 包 ==="
@@ -263,9 +286,6 @@ jobs:
         
         if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
             echo "🔧 检测到 21.02 版本，应用相应配置..."
-            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
             echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
             echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
             echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
@@ -273,10 +293,6 @@ jobs:
             
         elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             echo "🔧 检测到 23.05 版本，应用相应配置..."
-            # 23.05 版本启用 turboacc
-            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
             echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
             echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
             echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
@@ -295,32 +311,25 @@ jobs:
         echo "=== 配置模式: ${{ github.event.inputs.config_mode }} ==="
         
         if [ "${{ github.event.inputs.config_mode }}" = "base" ]; then
-            echo "🔧 使用基础配置 (最小化插件)"
-            # 基础配置插件
+            echo "🔧 使用基础模式 (最小化，用于测试编译)"
+            # 基础配置插件 - 仅文件传输
             BASE_PLUGINS=(
-              "CONFIG_PACKAGE_luci-app-turboacc=y"
-              "CONFIG_PACKAGE_luci-app-upnp=y"
-              "CONFIG_PACKAGE_miniupnpd=y"
-              "CONFIG_PACKAGE_samba4-server=y"
-              "CONFIG_PACKAGE_luci-app-samba4=y"
-              "CONFIG_PACKAGE_luci-app-diskman=y"
-              "CONFIG_PACKAGE_vlmcsd=y"
-              "CONFIG_PACKAGE_luci-app-vlmcsd=y"
-              "CONFIG_PACKAGE_smartdns=y"
-              "CONFIG_PACKAGE_luci-app-smartdns=y"
+              "CONFIG_PACKAGE_luci-app-filetransfer=y"
             )
             
             for plugin in "${BASE_PLUGINS[@]}"; do
                 echo "$plugin" >> .config
             done
             
-            echo "✅ 基础配置插件已启用"
+            echo "✅ 基础模式插件已启用"
             
         else
-            echo "🔧 使用正常配置 (完整插件)"
-            # 正常配置插件
+            echo "🔧 使用正常模式 (完整功能)"
+            # 正常配置插件 - 包含所有功能
             NORMAL_PLUGINS=(
               "CONFIG_PACKAGE_luci-app-turboacc=y"
+              "CONFIG_PACKAGE_kmod-shortcut-fe=y"
+              "CONFIG_PACKAGE_kmod-fast-classifier=y"
               "CONFIG_PACKAGE_luci-app-upnp=y"
               "CONFIG_PACKAGE_miniupnpd=y"
               "CONFIG_PACKAGE_vsftpd=y"
@@ -346,7 +355,7 @@ jobs:
                 echo "$plugin" >> .config
             done
             
-            echo "✅ 正常配置插件已启用"
+            echo "✅ 正常模式插件已启用"
         fi
         
         # 禁用网络唤醒
