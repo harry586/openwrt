@@ -294,10 +294,21 @@ jobs:
             echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
         fi
         
-        # 通用文件系统支持
+        # 自动挂载配置 - 所有版本所有模式都需要
+        echo "=== 配置自动挂载功能 ==="
         echo "CONFIG_PACKAGE_block-mount=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+        echo "CONFIG_PACKAGE_blkid=y" >> .config
+        echo "CONFIG_PACKAGE_libblkid=y" >> .config
+        echo "CONFIG_PACKAGE_libmount=y" >> .config
+        echo "CONFIG_PACKAGE_libuuid=y" >> .config
+        echo "CONFIG_PACKAGE_mount-utils=y" >> .config
+        echo "CONFIG_PACKAGE_fdisk=y" >> .config
         
         # 根据配置模式选择插件
         echo "=== 配置模式: ${{ github.event.inputs.config_mode }} ==="
@@ -317,6 +328,11 @@ jobs:
             for plugin in "${BASE_PLUGINS[@]}"; do
                 echo "$plugin" >> .config
             done
+            
+            # 基础模式明确禁用 TurboACC
+            echo "# CONFIG_PACKAGE_luci-app-turboacc is not set" >> .config
+            echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
+            echo "# CONFIG_PACKAGE_kmod-fast-classifier is not set" >> .config
             
             echo "✅ 基础模式插件已启用"
             
@@ -485,6 +501,8 @@ jobs:
         echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
         echo "启用的LUCI插件:"
         grep "^CONFIG_PACKAGE_luci" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
+        echo "自动挂载相关包:"
+        grep -E "block-mount|kmod-fs-|kmod-usb-|blkid|automount" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
 
     - name: 应用配置
       run: |
@@ -539,6 +557,24 @@ jobs:
           fi
         done
         
+        # 基础模式强制禁用 TurboACC
+        if [ "${{ github.event.inputs.config_mode }}" = "base" ]; then
+            echo "=== 基础模式强制禁用 TurboACC ==="
+            TURBOACC_CONFIGS=(
+              "CONFIG_PACKAGE_luci-app-turboacc"
+              "CONFIG_PACKAGE_kmod-shortcut-fe"
+              "CONFIG_PACKAGE_kmod-fast-classifier"
+            )
+            
+            for config in "${TURBOACC_CONFIGS[@]}"; do
+                if grep -q "^${config}=y$" .config || grep -q "^${config}=m$" .config; then
+                    echo "禁用: $config"
+                    sed -i "s/^${config}=y$/# ${config} is not set/" .config
+                    sed -i "s/^${config}=m$/# ${config} is not set/" .config
+                fi
+            done
+        fi
+        
         echo "✅ 强制禁用完成"
         
         # 显示最终配置信息
@@ -548,6 +584,8 @@ jobs:
         grep "turboacc\\|shortcut\\|fast-classifier" .config | grep "=y" || echo "TurboACC 未启用"
         echo "启用的LUCI插件:"
         grep "^CONFIG_PACKAGE_luci" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
+        echo "自动挂载相关包状态:"
+        grep -E "block-mount|kmod-fs-|kmod-usb-|blkid|automount" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✅/' | sed 's/ is not set/ ❌/' | sort
         
         # 检查是否还有不需要的插件
         echo "=== 检查不需要的插件状态 ==="
@@ -557,6 +595,18 @@ jobs:
             echo "$UNWANTED_PLUGINS"
         else
             echo "✅ 不需要的插件已正确禁用"
+        fi
+        
+        # 检查基础模式 TurboACC 状态
+        if [ "${{ github.event.inputs.config_mode }}" = "base" ]; then
+            echo "=== 检查基础模式 TurboACC 状态 ==="
+            TURBOACC_CHECK=$(grep -E "turboacc|shortcut|fast-classifier" .config | grep "=y" || true)
+            if [ -n "$TURBOACC_CHECK" ]; then
+                echo "❌ 基础模式发现 TurboACC 被启用:"
+                echo "$TURBOACC_CHECK"
+            else
+                echo "✅ 基础模式 TurboACC 已正确禁用"
+            fi
         fi
         
         # 备份配置文件
