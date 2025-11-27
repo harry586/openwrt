@@ -1,15 +1,15 @@
-name: OpenWrt 固件构建 - 版本2
+name: OpenWrt 固件构建 - 版本3
 
 on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: '设备名称 (如: ac42u, r3g, r4ag 等)'
+        description: '设备名称 (如: ac42u, r3g, r4ag)'
         required: true
         default: 'ac42u'
         type: string
       version_selection:
-        description: '版本选择'
+        description: '版本选择: 23.05(最新) 或 21.02(稳定)'
         required: true
         type: choice
         default: '21.02'
@@ -17,26 +17,7 @@ on:
         - '23.05'
         - '21.02'
       config_mode:
-        description: |
-          配置模式选择:
-          
-          [基础模式] - 最小化配置，用于测试编译
-          - 文件传输
-          
-          [正常模式] - 完整功能配置
-          - TurboACC 网络加速
-          - UPnP 自动端口转发
-          - Samba 文件共享
-          - 磁盘管理
-          - KMS 激活服务
-          - SmartDNS 智能DNS
-          - 家长控制
-          - 微信推送
-          - 流量控制 (SQM)
-          - FTP 服务器
-          - ARP 绑定
-          - CPU 限制
-          - 硬盘休眠
+        description: '配置模式: 基础模式(文件传输) | 正常模式(完整功能:TurboACC,UPnP,Samba,磁盘管理,KMS,SmartDNS,家长控制,微信推送,SQM,FTP,ARP绑定,CPU限制,硬盘休眠)'
         required: true
         type: choice
         default: 'normal'
@@ -44,19 +25,12 @@ on:
         - 'base'
         - 'normal'
       extra_packages:
-        description: |
-          额外安装插件 (用分号;分隔)
-          
-          启用插件：+插件名
-          禁用插件：-插件名
-          
-          示例：
-          +luci-app-wol;+luci-app-ddns;-luci-app-upnp
+        description: '额外插件: +启用插件名; -禁用插件名 (例: +luci-app-wol;+luci-app-ddns)'
         required: false
         type: string
         default: ''
       enable_cache:
-        description: '启用编译缓存 (加速编译过程)'
+        description: '启用编译缓存'
         required: false
         default: true
         type: boolean
