@@ -140,8 +140,8 @@ jobs:
         # 为所有版本添加文件传输插件支持
         if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             echo "🔧 为23.05添加文件传输插件支持"
-            # 23.05版本使用small-package源
-            echo "src-git small https://github.com/kenzok8/small-package" >> feeds.conf.default
+            # 23.05版本使用 immortalwrt 官方源
+            echo "ℹ️  23.05 版本使用 immortalwrt 官方源，无需额外添加文件传输插件"
         else
             echo "🔧 为21.02添加文件传输插件支持"
             # 21.02版本使用kenzok8的openwrt-packages
@@ -202,15 +202,15 @@ jobs:
             echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
         fi
         
-        # 添加文件传输插件源
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            echo "src-git small https://github.com/kenzok8/small-package" >> feeds.conf.default
-        else
+        # 为21.02版本添加文件传输插件源
+        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
             echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default
         fi
         
         # 更新和安装所有 feeds
+        echo "=== 更新Feeds ==="
         ./scripts/feeds update -a
+        echo "=== 安装Feeds ==="
         ./scripts/feeds install -a
         
         echo "✅ Feeds配置完成"
@@ -232,21 +232,15 @@ jobs:
         echo "✅ TurboACC 包安装完成"
 
     - name: 安装文件传输插件包
+      if: env.SELECTED_BRANCH == 'openwrt-21.02'
       run: |
         cd $BUILD_DIR
-        echo "=== 安装文件传输插件包 ==="
+        echo "=== 安装文件传输插件包 (仅21.02) ==="
         
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            # 更新 small feed
-            ./scripts/feeds update small
-            # 安装文件传输插件
-            ./scripts/feeds install -p small luci-app-filetransfer
-        else
-            # 更新 kenzo feed
-            ./scripts/feeds update kenzo
-            # 安装文件传输插件
-            ./scripts/feeds install -p kenzo luci-app-filetransfer
-        fi
+        # 更新 kenzo feed
+        ./scripts/feeds update kenzo
+        # 安装文件传输插件
+        ./scripts/feeds install -p kenzo luci-app-filetransfer
         
         echo "✅ 文件传输插件包安装完成"
 
@@ -333,7 +327,7 @@ jobs:
             echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
         fi
         
-        # 改进的自动挂载配置
+        # 改进的自动挂载配置 - 修复包冲突
         echo "=== 配置自动挂载功能 ==="
         echo "CONFIG_PACKAGE_block-mount=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
@@ -355,9 +349,13 @@ jobs:
         echo "CONFIG_PACKAGE_lsblk=y" >> .config
         echo "CONFIG_PACKAGE_e2fsprogs=y" >> .config
         echo "CONFIG_PACKAGE_dosfstools=y" >> .config
-        echo "CONFIG_PACKAGE_ntfs-3g-utils=y" >> .config
         
-        # 21.02版本需要额外的automount
+        # 明确禁用冲突的包
+        echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
+        echo "# CONFIG_PACKAGE_ntfs-3g-utils is not set" >> .config
+        echo "# CONFIG_PACKAGE_ntfs3-mount is not set" >> .config
+        
+        # 21.02版本需要额外的automount，但要避免冲突
         if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
             echo "CONFIG_PACKAGE_automount=y" >> .config
             echo "CONFIG_PACKAGE_kmod-fs-autofs4=y" >> .config
@@ -571,6 +569,29 @@ jobs:
         make defconfig
         echo "✅ 配置应用完成"
         
+        # 修复包冲突问题
+        echo "=== 修复包冲突 ==="
+        
+        # 强制禁用冲突的包
+        CONFLICT_PACKAGES=(
+          "ntfs-3g"
+          "ntfs-3g-utils" 
+          "ntfs3-mount"
+        )
+        
+        for pkg in "${CONFLICT_PACKAGES[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${pkg}=y$" .config || grep -q "^CONFIG_PACKAGE_${pkg}=m$" .config; then
+                echo "修复冲突: 禁用 $pkg"
+                sed -i "s/^CONFIG_PACKAGE_${pkg}=y$/# CONFIG_PACKAGE_${pkg} is not set/" .config
+                sed -i "s/^CONFIG_PACKAGE_${pkg}=m$/# CONFIG_PACKAGE_${pkg} is not set/" .config
+            fi
+        done
+        
+        # 确保 ntfs3 相关配置正确
+        echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
+        echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
+        echo "# CONFIG_PACKAGE_ntfs3-mount is not set" >> .config
+        
         # 在 defconfig 之后强制禁用不需要的插件
         echo "=== 强制禁用不需要的插件 ==="
         
@@ -670,6 +691,16 @@ jobs:
             else
                 echo "✅ 基础模式 TurboACC 已正确禁用"
             fi
+        fi
+        
+        # 检查包冲突状态
+        echo "=== 检查包冲突状态 ==="
+        CONFLICT_CHECK=$(grep -E "ntfs-3g|ntfs3-mount" .config | grep "=y" || true)
+        if [ -n "$CONFLICT_CHECK" ]; then
+            echo "❌ 发现包冲突:"
+            echo "$CONFLICT_CHECK"
+        else
+            echo "✅ 包冲突已解决"
         fi
         
         # 备份配置文件
