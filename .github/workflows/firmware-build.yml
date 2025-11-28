@@ -132,16 +132,23 @@ jobs:
             echo "ℹ️  基础模式不添加 TurboACC 支持"
         fi
 
-    - name: 添加文件传输插件支持 (仅23.05)
-      if: env.SELECTED_BRANCH == 'openwrt-23.05'
+    - name: 添加文件传输插件支持
       run: |
         cd $BUILD_DIR
-        echo "=== 为23.05添加文件传输插件支持 ==="
+        echo "=== 添加文件传输插件支持 ==="
         
-        # 添加文件传输插件的feed（如果23.05官方源没有）
-        echo "src-git filetransfer https://github.com/kenzok8/small-package" >> feeds.conf.default
+        # 为所有版本添加文件传输插件支持
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            echo "🔧 为23.05添加文件传输插件支持"
+            # 23.05版本使用small-package源
+            echo "src-git small https://github.com/kenzok8/small-package" >> feeds.conf.default
+        else
+            echo "🔧 为21.02添加文件传输插件支持"
+            # 21.02版本使用kenzok8的openwrt-packages
+            echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default
+        fi
         
-        echo "✅ 文件传输插件feed添加完成"
+        echo "✅ 文件传输插件支持添加完成"
 
     - name: 设备配置
       run: |
@@ -195,6 +202,13 @@ jobs:
             echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
         fi
         
+        # 添加文件传输插件源
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            echo "src-git small https://github.com/kenzok8/small-package" >> feeds.conf.default
+        else
+            echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default
+        fi
+        
         # 更新和安装所有 feeds
         ./scripts/feeds update -a
         ./scripts/feeds install -a
@@ -217,17 +231,22 @@ jobs:
         
         echo "✅ TurboACC 包安装完成"
 
-    - name: 安装文件传输插件包 (仅23.05)
-      if: env.SELECTED_BRANCH == 'openwrt-23.05'
+    - name: 安装文件传输插件包
       run: |
         cd $BUILD_DIR
         echo "=== 安装文件传输插件包 ==="
         
-        # 更新文件传输插件 feed
-        ./scripts/feeds update filetransfer
-        
-        # 安装文件传输插件
-        ./scripts/feeds install -p filetransfer luci-app-filetransfer
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            # 更新 small feed
+            ./scripts/feeds update small
+            # 安装文件传输插件
+            ./scripts/feeds install -p small luci-app-filetransfer
+        else
+            # 更新 kenzo feed
+            ./scripts/feeds update kenzo
+            # 安装文件传输插件
+            ./scripts/feeds install -p kenzo luci-app-filetransfer
+        fi
         
         echo "✅ 文件传输插件包安装完成"
 
@@ -303,10 +322,6 @@ jobs:
             echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
             echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
             
-            # 21.02 版本添加基础中文语言支持
-            echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
-            
         elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             echo "🔧 检测到 23.05 版本，应用相应配置..."
             echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
@@ -318,11 +333,13 @@ jobs:
             echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
         fi
         
-        # 自动挂载配置 - 改进版本
+        # 改进的自动挂载配置
         echo "=== 配置自动挂载功能 ==="
         echo "CONFIG_PACKAGE_block-mount=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-fs-exfat=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
@@ -336,8 +353,11 @@ jobs:
         echo "CONFIG_PACKAGE_cfdisk=y" >> .config
         echo "CONFIG_PACKAGE_sfdisk=y" >> .config
         echo "CONFIG_PACKAGE_lsblk=y" >> .config
+        echo "CONFIG_PACKAGE_e2fsprogs=y" >> .config
+        echo "CONFIG_PACKAGE_dosfstools=y" >> .config
+        echo "CONFIG_PACKAGE_ntfs-3g-utils=y" >> .config
         
-        # 21.02版本使用automount，23.05使用block-mount的自动挂载
+        # 21.02版本需要额外的automount
         if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
             echo "CONFIG_PACKAGE_automount=y" >> .config
             echo "CONFIG_PACKAGE_kmod-fs-autofs4=y" >> .config
@@ -345,6 +365,10 @@ jobs:
         
         # 根据配置模式选择插件
         echo "=== 配置模式: ${{ github.event.inputs.config_mode }} ==="
+        
+        # 基础中文语言包 - 两个版本都需要
+        echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
         
         if [ "${{ github.event.inputs.config_mode }}" = "base" ]; then
             echo "🔧 使用基础模式 (最小化，用于测试编译)"
@@ -398,7 +422,7 @@ jobs:
               "CONFIG_PACKAGE_luci-app-smartdns=y"
             )
             
-            # 版本特定的中文语言包配置
+            # 为21.02版本添加完整中文语言包
             if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
                 echo "🔧 为21.02版本添加完整中文语言包"
                 NORMAL_PLUGINS+=(
@@ -419,10 +443,14 @@ jobs:
                 )
             elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
                 echo "🔧 为23.05版本添加中文语言包"
-                # 23.05的中文包名称可能不同，使用通用中文包
+                # 23.05的中文包名称可能不同，添加通用中文包
                 NORMAL_PLUGINS+=(
-                  "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-opkg-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y"
                 )
             fi
             
