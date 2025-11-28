@@ -132,6 +132,17 @@ jobs:
             echo "ℹ️  基础模式不添加 TurboACC 支持"
         fi
 
+    - name: 添加文件传输插件支持 (仅23.05)
+      if: env.SELECTED_BRANCH == 'openwrt-23.05'
+      run: |
+        cd $BUILD_DIR
+        echo "=== 为23.05添加文件传输插件支持 ==="
+        
+        # 添加文件传输插件的feed（如果23.05官方源没有）
+        echo "src-git filetransfer https://github.com/kenzok8/small-package" >> feeds.conf.default
+        
+        echo "✅ 文件传输插件feed添加完成"
+
     - name: 设备配置
       run: |
         cd $BUILD_DIR
@@ -206,6 +217,20 @@ jobs:
         
         echo "✅ TurboACC 包安装完成"
 
+    - name: 安装文件传输插件包 (仅23.05)
+      if: env.SELECTED_BRANCH == 'openwrt-23.05'
+      run: |
+        cd $BUILD_DIR
+        echo "=== 安装文件传输插件包 ==="
+        
+        # 更新文件传输插件 feed
+        ./scripts/feeds update filetransfer
+        
+        # 安装文件传输插件
+        ./scripts/feeds install -p filetransfer luci-app-filetransfer
+        
+        echo "✅ 文件传输插件包安装完成"
+
     - name: 编译前空间检查
       run: |
         echo "=== 编译前空间检查 ==="
@@ -277,7 +302,6 @@ jobs:
             echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
             echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
             echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
-            echo "CONFIG_PACKAGE_automount=y" >> .config
             
             # 21.02 版本添加基础中文语言支持
             echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
@@ -294,10 +318,30 @@ jobs:
             echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
         fi
         
-        # 通用文件系统支持 - 保持原来的自动挂载配置
+        # 自动挂载配置 - 改进版本
+        echo "=== 配置自动挂载功能 ==="
         echo "CONFIG_PACKAGE_block-mount=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+        echo "CONFIG_PACKAGE_blkid=y" >> .config
+        echo "CONFIG_PACKAGE_libblkid=y" >> .config
+        echo "CONFIG_PACKAGE_libmount=y" >> .config
+        echo "CONFIG_PACKAGE_libuuid=y" >> .config
+        echo "CONFIG_PACKAGE_mount-utils=y" >> .config
+        echo "CONFIG_PACKAGE_fdisk=y" >> .config
+        echo "CONFIG_PACKAGE_cfdisk=y" >> .config
+        echo "CONFIG_PACKAGE_sfdisk=y" >> .config
+        echo "CONFIG_PACKAGE_lsblk=y" >> .config
+        
+        # 21.02版本使用automount，23.05使用block-mount的自动挂载
+        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+            echo "CONFIG_PACKAGE_automount=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-fs-autofs4=y" >> .config
+        fi
         
         # 根据配置模式选择插件
         echo "=== 配置模式: ${{ github.event.inputs.config_mode }} ==="
@@ -354,8 +398,9 @@ jobs:
               "CONFIG_PACKAGE_luci-app-smartdns=y"
             )
             
-            # 21.02 版本添加中文语言包
+            # 版本特定的中文语言包配置
             if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+                echo "🔧 为21.02版本添加完整中文语言包"
                 NORMAL_PLUGINS+=(
                   "CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y"
                   "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y"
@@ -371,6 +416,13 @@ jobs:
                   "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y"
                   "CONFIG_PACKAGE_luci-i18n-filetransfer-zh-cn=y"
                   "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y"
+                )
+            elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+                echo "🔧 为23.05版本添加中文语言包"
+                # 23.05的中文包名称可能不同，使用通用中文包
+                NORMAL_PLUGINS+=(
+                  "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y"
+                  "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y"
                 )
             fi
             
@@ -481,6 +533,8 @@ jobs:
         echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
         echo "启用的LUCI插件:"
         grep "^CONFIG_PACKAGE_luci" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
+        echo "自动挂载相关包:"
+        grep -E "block-mount|kmod-fs-|kmod-usb-|blkid|automount" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
 
     - name: 应用配置
       run: |
@@ -565,6 +619,8 @@ jobs:
         grep "luci-i18n-turboacc-zh-cn" .config | grep "=y" && echo "TurboACC 中文语言包已启用" || echo "TurboACC 中文语言包未启用"
         echo "启用的LUCI插件:"
         grep "^CONFIG_PACKAGE_luci" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
+        echo "自动挂载相关包状态:"
+        grep -E "block-mount|kmod-fs-|kmod-usb-|blkid|automount" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✅/' | sed 's/ is not set/ ❌/' | sort
         
         # 检查是否还有不需要的插件
         echo "=== 检查不需要的插件状态 ==="
