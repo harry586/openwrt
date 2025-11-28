@@ -353,12 +353,16 @@ jobs:
         # 明确禁用冲突的包
         echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
         echo "# CONFIG_PACKAGE_ntfs-3g-utils is not set" >> .config
-        echo "# CONFIG_PACKAGE_ntfs3-mount is not set" >> .config
         
-        # 21.02版本需要额外的automount，但要避免冲突
+        # 21.02版本需要额外的automount，但要避免依赖问题
         if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
             echo "CONFIG_PACKAGE_automount=y" >> .config
             echo "CONFIG_PACKAGE_kmod-fs-autofs4=y" >> .config
+            # 21.02版本需要启用ntfs3-mount来解决automount依赖
+            echo "CONFIG_PACKAGE_ntfs3-mount=y" >> .config
+        else
+            # 23.05版本不需要ntfs3-mount
+            echo "# CONFIG_PACKAGE_ntfs3-mount is not set" >> .config
         fi
         
         # 根据配置模式选择插件
@@ -560,7 +564,7 @@ jobs:
         echo "启用的LUCI插件:"
         grep "^CONFIG_PACKAGE_luci" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
         echo "自动挂载相关包:"
-        grep -E "block-mount|kmod-fs-|kmod-usb-|blkid|automount" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
+        grep -E "block-mount|kmod-fs-|kmod-usb-|blkid|automount|ntfs3-mount" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
 
     - name: 应用配置
       run: |
@@ -576,7 +580,6 @@ jobs:
         CONFLICT_PACKAGES=(
           "ntfs-3g"
           "ntfs-3g-utils" 
-          "ntfs3-mount"
         )
         
         for pkg in "${CONFLICT_PACKAGES[@]}"; do
@@ -590,7 +593,13 @@ jobs:
         # 确保 ntfs3 相关配置正确
         echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
         echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
-        echo "# CONFIG_PACKAGE_ntfs3-mount is not set" >> .config
+        
+        # 21.02版本需要ntfs3-mount来满足automount依赖
+        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+            echo "CONFIG_PACKAGE_ntfs3-mount=y" >> .config
+        else
+            echo "# CONFIG_PACKAGE_ntfs3-mount is not set" >> .config
+        fi
         
         # 在 defconfig 之后强制禁用不需要的插件
         echo "=== 强制禁用不需要的插件 ==="
@@ -669,7 +678,7 @@ jobs:
         echo "启用的LUCI插件:"
         grep "^CONFIG_PACKAGE_luci" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
         echo "自动挂载相关包状态:"
-        grep -E "block-mount|kmod-fs-|kmod-usb-|blkid|automount" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✅/' | sed 's/ is not set/ ❌/' | sort
+        grep -E "block-mount|kmod-fs-|kmod-usb-|blkid|automount|ntfs3-mount" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✅/' | sed 's/ is not set/ ❌/' | sort
         
         # 检查是否还有不需要的插件
         echo "=== 检查不需要的插件状态 ==="
@@ -695,12 +704,24 @@ jobs:
         
         # 检查包冲突状态
         echo "=== 检查包冲突状态 ==="
-        CONFLICT_CHECK=$(grep -E "ntfs-3g|ntfs3-mount" .config | grep "=y" || true)
+        CONFLICT_CHECK=$(grep -E "ntfs-3g" .config | grep "=y" || true)
         if [ -n "$CONFLICT_CHECK" ]; then
             echo "❌ 发现包冲突:"
             echo "$CONFLICT_CHECK"
         else
             echo "✅ 包冲突已解决"
+        fi
+        
+        # 检查automount依赖状态
+        echo "=== 检查automount依赖状态 ==="
+        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+            AUTOMOUNT_CHECK=$(grep -E "automount|ntfs3-mount" .config | grep "=y" || true)
+            if [ -n "$AUTOMOUNT_CHECK" ]; then
+                echo "✅ automount依赖已满足:"
+                echo "$AUTOMOUNT_CHECK"
+            else
+                echo "❌ automount依赖未满足"
+            fi
         fi
         
         # 备份配置文件
