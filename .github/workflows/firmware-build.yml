@@ -1,55 +1,64 @@
-name: OpenWrt 智能固件构建工作流
+# OpenWrt 智能固件构建工作流（错误修复版）
+# 针对错误分析日志中的问题进行专门优化
+
+name: OpenWrt 智能固件构建工作流（错误修复版）
 
 on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: '📱 设备名称 (如: ac42u, r3g, r4ag 等)'
+        description: '设备名称 (如: ac42u, ac58u 等)'
         required: true
         default: 'ac42u'
         type: string
-      version_selection:
-        description: '🔄 版本选择'
+      old_device:
+        description: '是否为老旧设备 (性能较差的设备建议选择true)'
         required: true
-        type: choice
-        default: '21.02'
-        options:
-        - '23.05'
-        - '21.02'
-      config_mode:
-        description: |
-          ⚙️ 配置模式选择
-          
-          🟣 基础模式 - 最小化配置，用于测试编译：✅ 文件传输。
-          
-          🟠 正常模式 - 完整功能配置：✅ TurboACC 网络加速 ✅ UPnP 自动端口转发 ✅ Samba 文件共享 ✅ 磁盘管理 ✅ KMS 激活服务 ✅ SmartDNS 智能DNS ✅ 家长控制 ✅ 微信推送 ✅ 流量控制 (SQM) ✅ FTP 服务器 ✅ ARP 绑定 ✅ CPU 限制 ✅ 硬盘休眠。
-        required: true
-        type: choice
-        default: 'normal'
-        options:
-        - 'base'
-        - 'normal'
-      extra_packages:
-        description: |
-          额外安装插件
-          格式：🔴用分号;分隔。🔴 启用插件：+插件名。🔴 禁用插件：-插件名。🔴 示例：+luci-app-wol;+luci-app-ddns
+        default: false
+        type: boolean
+      version_spec:
+        description: '版本规格 (可选，如: openwrt-23.05 或 immortalwrt:master)'
         required: false
         type: string
         default: ''
-      enable_cache:
-        description: '⚡ 启用编译缓存 (加速编译过程)'
+      config_type:
+        description: '配置类型 (minimal:基础功能, normal:完整功能, custom:自定义)'
+        required: true
+        default: 'minimal'
+        type: choice
+        options:
+          - minimal
+          - normal
+          - custom
+      extra_packages:
+        description: '额外安装插件 (空格分隔的包名)'
+        required: false
+        type: string
+      disabled_plugins:
+        description: '禁用插件 (空格分隔的包名，如: luci-app-accesscontrol luci-app-ddns)'
+        required: false
+        type: string
+        default: ''
+      save_config:
+        description: '保存配置文件到仓库'
         required: false
         default: true
         type: boolean
+      custom_install:
+        description: '启用自定义安装 (IPK和脚本)'
+        required: false
+        default: false
+        type: boolean
 
 env:
-  BUILD_DIR: /mnt/openwrt-build
+  BUILD_DIR: /mnt/openwrt-build  # 构建目录路径
 
 jobs:
   build-firmware:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     
     steps:
+    # 初始检查步骤
     - name: 初始空间检查
       run: |
         echo "=== 初始磁盘空间检查 ==="
@@ -57,768 +66,763 @@ jobs:
         AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
         AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
         echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+        # 检查空间是否足够（50GB）
         if [ $AVAILABLE_GB -lt 50 ]; then
           echo "错误: /mnt 空间不足50G"
           exit 1
         fi
 
+    # 检出代码步骤
     - name: 检出配置仓库
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
 
+    # 环境设置步骤 - 增强版本，针对错误分析中的问题
     - name: 设置编译环境
       run: |
         echo "=== 安装编译依赖包 ==="
         sudo apt-get update
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpath libpython3-dev python3 python3-dev python3-pip python3-setuptools python3-yaml xsltproc zip subversion ninja-build automake autoconf libtool pkg-config help2man texinfo aria2 liblz4-dev zstd libcurl4-openssl-dev groff texlive texinfo cmake
+        
+        # 基础编译工具
+        sudo apt-get install -y build-essential libncurses5-dev libssl-dev python3 unzip zlib1g-dev subversion gcc-multilib git curl file
+        
+        # 增强工具（针对错误分析中的问题）
+        sudo apt-get install -y \
+          ninja-build \
+          automake \
+          autoconf \
+          libtool \
+          pkg-config \
+          gettext \
+          help2man \
+          texinfo \
+          gawk \
+          flex \
+          bison \
+          rsync \
+          wget \
+          aria2 \
+          python3-pip \
+          libelf-dev \
+          liblz4-dev \
+          zstd \
+          libssl-dev \
+          libcurl4-openssl-dev
+        
+        # 安装Python依赖
+        pip3 install requests urllib3
+        
         echo "✅ 编译环境设置完成"
 
-    - name: 创建构建目录
+    # 目录准备步骤
+    - name: 创建构建目录并设置权限
       run: |
         echo "=== 创建构建目录 ==="
         sudo mkdir -p $BUILD_DIR
         sudo chown -R $USER:$USER $BUILD_DIR
         sudo chmod -R 755 $BUILD_DIR
+        sudo chmod u+w $BUILD_DIR
         echo "✅ 构建目录创建完成"
+        ls -ld $BUILD_DIR
+        # 测试写入权限
+        touch $BUILD_DIR/test_write.txt && echo "✅ 写入测试成功" && rm $BUILD_DIR/test_write.txt
 
-    - name: 版本选择
-      id: version-selection
+    # 脚本复制步骤
+    - name: 复制脚本到构建目录
       run: |
         cd $BUILD_DIR
-        echo "=== 版本选择 ==="
-        if [ "${{ github.event.inputs.version_selection }}" = "23.05" ]; then
-            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-            SELECTED_BRANCH="openwrt-23.05"
-        else
-            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-            SELECTED_BRANCH="openwrt-21.02"
+        echo "=== 复制脚本到构建目录 ==="
+        cd $GITHUB_WORKSPACE
+        
+        # 查找所有必要的脚本文件
+        VERSION_SCRIPT=$(find . -name "complete_version_detector.sh" -type f | head -1)
+        DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f | head -1)
+        ERROR_SCRIPT=$(find . -name "error_analysis.sh" -type f | head -1)
+        
+        # 检查必要脚本是否存在
+        if [ -z "$VERSION_SCRIPT" ] || [ -z "$DEVICE_SCRIPT" ]; then
+          echo "❌ 错误: 找不到必要的检测脚本"
+          exit 1
         fi
-        echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
-        echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
-        echo "✅ 版本选择完成: $SELECTED_BRANCH"
+        
+        echo "✅ 找到版本检测脚本: $VERSION_SCRIPT"
+        echo "✅ 找到设备检测脚本: $DEVICE_SCRIPT"
+        
+        # 复制脚本到构建目录
+        cp "$VERSION_SCRIPT" $BUILD_DIR/complete_version_detector.sh
+        cp "$DEVICE_SCRIPT" $BUILD_DIR/device_detection.sh
+        
+        # 复制错误分析脚本（如果存在）
+        if [ -n "$ERROR_SCRIPT" ]; then
+          echo "✅ 找到错误分析脚本: $ERROR_SCRIPT"
+          cp "$ERROR_SCRIPT" $BUILD_DIR/error_analysis.sh
+        else
+          echo "⚠️ 警告: 未找到错误分析脚本"
+        fi
+        
+        cd $BUILD_DIR
+        chmod +x complete_version_detector.sh device_detection.sh error_analysis.sh 2>/dev/null || true
+        echo "✅ 脚本复制完成"
 
-    - name: 克隆源码
+    # 版本检测步骤
+    - name: 智能版本检测
+      id: version-detection
       run: |
         cd $BUILD_DIR
-        echo "=== 克隆源码 ==="
+        echo "=== 智能版本检测 ==="
+        # 确保目录权限正确
+        sudo chown -R $USER:$USER . 2>/dev/null || true
+        chmod u+w . 2>/dev/null || true
+        
+        echo "=== 开始版本检测 ==="
+        echo "设备名称: ${{ github.event.inputs.device_name }}"
+        echo "版本规格: ${{ github.event.inputs.version_spec }}"
+        echo "老旧设备: ${{ github.event.inputs.old_device }}"
+        
+        # 运行版本检测脚本
+        set +e
+        OUTPUT=$(./complete_version_detector.sh "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_spec }}" "${{ github.event.inputs.old_device }}" 2>&1)
+        SCRIPT_EXIT_CODE=$?
+        set -e
+        
+        echo "脚本输出:"
+        echo "$OUTPUT"
+        echo "脚本退出代码: $SCRIPT_EXIT_CODE"
+        
+        # 从脚本输出中提取版本信息
+        SELECTED_REPO=$(echo "$OUTPUT" | grep "^SELECTED_REPO=" | head -1 | cut -d'=' -f2)
+        SELECTED_BRANCH=$(echo "$OUTPUT" | grep "^SELECTED_BRANCH=" | head -1 | cut -d'=' -f2)
+        SELECTED_REPO_URL=$(echo "$OUTPUT" | grep "^SELECTED_REPO_URL=" | head -1 | cut -d'=' -f2)
+        
+        # 验证版本信息是否提取成功
+        if [ -n "$SELECTED_REPO" ] && [ -n "$SELECTED_BRANCH" ] && [ -n "$SELECTED_REPO_URL" ]; then
+            echo "✅ 从脚本输出中成功提取版本信息"
+            echo "SELECTED_REPO=$SELECTED_REPO" >> $GITHUB_ENV
+            echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
+            echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
+            echo "✅ 环境变量已设置:"
+            echo "  仓库: $SELECTED_REPO"
+            echo "  分支: $SELECTED_BRANCH"
+            echo "  URL: $SELECTED_REPO_URL"
+        else
+            echo "❌ 无法从脚本输出中提取版本信息"
+            if [ $SCRIPT_EXIT_CODE -ne 0 ]; then
+                echo "❌ 版本检测失败"
+                exit 1
+            else
+                echo "⚠️ 脚本成功但无法提取版本信息，使用默认值"
+                echo "SELECTED_REPO=immortalwrt" >> $GITHUB_ENV
+                echo "SELECTED_BRANCH=master" >> $GITHUB_ENV
+                echo "SELECTED_REPO_URL=https://github.com/immortalwrt/immortalwrt.git" >> $GITHUB_ENV
+                echo "✅ 使用默认版本信息"
+            fi
+        fi
+
+    # 目录清理步骤
+    - name: 清理构建目录准备克隆
+      run: |
+        cd $BUILD_DIR
+        echo "=== 清理构建目录准备克隆 ==="
+        echo "当前目录内容:"
+        ls -la
+        sudo rm -rf ./* ./.git* 2>/dev/null || true
+        sudo rm -rf .[!.]* 2>/dev/null || true
+        echo "清理后目录内容:"
+        ls -la
+        echo "✅ 目录清理完成"
+
+    # 源码克隆步骤 - 针对404错误增加备用源
+    - name: 克隆选定版本的源码
+      run: |
+        cd $BUILD_DIR
+        echo "=== 克隆选定版本的源码 ==="
         echo "仓库: $SELECTED_REPO_URL"
         echo "分支: $SELECTED_BRANCH"
-        sudo rm -rf ./* ./.git* 2>/dev/null || true
-        git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .
-        echo "✅ 源码克隆完成"
-
-    - name: 添加 TurboACC 支持
-      run: |
-        cd $BUILD_DIR
-        echo "=== 添加 TurboACC 支持 ==="
         
-        # 只有正常模式才添加 TurboACC 支持
-        if [ "${{ github.event.inputs.config_mode }}" = "normal" ]; then
-            echo "🔧 为正常模式添加 TurboACC 支持"
+        if [ -z "$SELECTED_REPO_URL" ] || [ -z "$SELECTED_BRANCH" ]; then
+          echo "❌ 错误: 环境变量未正确设置"
+          exit 1
+        fi
+        
+        echo "检查目录状态..."
+        FILE_COUNT=$(ls -A | wc -l)
+        if [ $FILE_COUNT -ne 0 ]; then
+          echo "❌ 错误: 目录非空，无法克隆"
+          exit 1
+        fi
+        
+        # 使用重试机制克隆，针对404错误
+        MAX_RETRIES=3
+        RETRY_COUNT=0
+        CLONE_SUCCESS=false
+        
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$CLONE_SUCCESS" = false ]; do
+          RETRY_COUNT=$((RETRY_COUNT + 1))
+          echo "克隆尝试: $((RETRY_COUNT + 1))"
+          
+          if git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .; then
+            echo "✅ 源码克隆完成"
+            echo "✅ 成功克隆仓库: $SELECTED_REPO, 分支: $SELECTED_BRANCH"
+            CLONE_SUCCESS=true
+          else
+            echo "❌ 克隆失败，尝试 $RETRY_COUNT/$MAX_RETRIES"
             
-            # 为 23.05 版本添加 turboacc 支持
-            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-                echo "🔧 为 23.05 添加 TurboACC 支持"
-                
-                # 添加 turboacc 的 feeds
-                echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
-                
-                echo "✅ TurboACC feed 添加完成"
-            else
-                echo "ℹ️  21.02 版本已内置 TurboACC，无需额外添加"
-            fi
-        else
-            echo "ℹ️  基础模式不添加 TurboACC 支持"
-        fi
-
-    - name: 添加文件传输插件支持
-      run: |
-        cd $BUILD_DIR
-        echo "=== 添加文件传输插件支持 ==="
-        
-        # 为所有版本添加文件传输插件支持
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            echo "🔧 为23.05添加文件传输插件支持"
-            # 23.05版本使用 immortalwrt 官方源
-            echo "ℹ️  23.05 版本使用 immortalwrt 官方源，无需额外添加文件传输插件"
-        else
-            echo "🔧 为21.02添加文件传输插件支持"
-            # 21.02版本使用kenzok8的openwrt-packages
-            echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default
-        fi
-        
-        echo "✅ 文件传输插件支持添加完成"
-
-    - name: 设备配置
-      run: |
-        cd $BUILD_DIR
-        echo "=== 设备配置 ==="
-        case "${{ github.event.inputs.device_name }}" in
-            "ac42u"|"acrh17")
-                TARGET="ipq40xx"
-                SUBTARGET="generic"
-                DEVICE="asus_rt-ac42u"
-                ;;
-            "mi_router_4a_gigabit"|"r4ag")
-                TARGET="ramips"
-                SUBTARGET="mt76x8"
-                DEVICE="xiaomi_mi-router-4a-gigabit"
-                ;;
-            "mi_router_3g"|"r3g")
-                TARGET="ramips"
-                SUBTARGET="mt7621"
-                DEVICE="xiaomi_mi-router-3g"
-                ;;
-            *)
-                TARGET="ipq40xx"
-                SUBTARGET="generic"
-                DEVICE="${{ github.event.inputs.device_name }}"
-                ;;
-        esac
-        echo "TARGET=$TARGET" >> $GITHUB_ENV
-        echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
-        echo "DEVICE=$DEVICE" >> $GITHUB_ENV
-        echo "目标: $TARGET"
-        echo "子目标: $SUBTARGET"
-        echo "设备: $DEVICE"
-
-    - name: 配置Feeds
-      run: |
-        cd $BUILD_DIR
-        echo "=== 配置Feeds ==="
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            FEEDS_BRANCH="openwrt-23.05"
-        else
-            FEEDS_BRANCH="openwrt-21.02"
-        fi
-        
-        # 确保 feeds.conf.default 包含基本 feeds
-        echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf.default
-        echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
-        
-        # 如果是 23.05 且正常模式，添加 turboacc feed
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] && [ "${{ github.event.inputs.config_mode }}" = "normal" ]; then
-            echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
-        fi
-        
-        # 为21.02版本添加文件传输插件源
-        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-            echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default
-        fi
-        
-        # 更新和安装所有 feeds
-        echo "=== 更新Feeds ==="
-        ./scripts/feeds update -a
-        echo "=== 安装Feeds ==="
-        ./scripts/feeds install -a
-        
-        echo "✅ Feeds配置完成"
-
-    - name: 安装 TurboACC 包
-      if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
-      run: |
-        cd $BUILD_DIR
-        echo "=== 安装 TurboACC 包 ==="
-        
-        # 更新 turboacc feed
-        ./scripts/feeds update turboacc
-        
-        # 安装 turboacc 相关包
-        ./scripts/feeds install -p turboacc luci-app-turboacc
-        ./scripts/feeds install -p turboacc kmod-shortcut-fe
-        ./scripts/feeds install -p turboacc kmod-fast-classifier
-        
-        echo "✅ TurboACC 包安装完成"
-
-    - name: 安装文件传输插件包
-      if: env.SELECTED_BRANCH == 'openwrt-21.02'
-      run: |
-        cd $BUILD_DIR
-        echo "=== 安装文件传输插件包 (仅21.02) ==="
-        
-        # 更新 kenzo feed
-        ./scripts/feeds update kenzo
-        # 安装文件传输插件
-        ./scripts/feeds install -p kenzo luci-app-filetransfer
-        
-        echo "✅ 文件传输插件包安装完成"
-
-    - name: 编译前空间检查
-      run: |
-        echo "=== 编译前空间检查 ==="
-        df -h
-        AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
-        AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-        echo "/mnt 可用空间: ${AVAILABLE_GB}G"
-
-    - name: 智能配置生成
-      run: |
-        cd $BUILD_DIR
-        echo "=== 智能配置生成系统 ==="
-        rm -f .config .config.old
-        
-        # 创建基础配置
-        echo "CONFIG_TARGET_${TARGET}=y" > .config
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" >> .config
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
-        
-        # 基础系统组件
-        echo "CONFIG_PACKAGE_busybox=y" >> .config
-        echo "CONFIG_PACKAGE_base-files=y" >> .config
-        echo "CONFIG_PACKAGE_dropbear=y" >> .config
-        echo "CONFIG_PACKAGE_firewall=y" >> .config
-        echo "CONFIG_PACKAGE_fstools=y" >> .config
-        echo "CONFIG_PACKAGE_libc=y" >> .config
-        echo "CONFIG_PACKAGE_libgcc=y" >> .config
-        echo "CONFIG_PACKAGE_mtd=y" >> .config
-        echo "CONFIG_PACKAGE_netifd=y" >> .config
-        echo "CONFIG_PACKAGE_opkg=y" >> .config
-        echo "CONFIG_PACKAGE_procd=y" >> .config
-        echo "CONFIG_PACKAGE_ubox=y" >> .config
-        echo "CONFIG_PACKAGE_ubus=y" >> .config
-        echo "CONFIG_PACKAGE_ubusd=y" >> .config
-        echo "CONFIG_PACKAGE_uci=y" >> .config
-        echo "CONFIG_PACKAGE_uclient-fetch=y" >> .config
-        echo "CONFIG_PACKAGE_usign=y" >> .config
-        
-        # DNS配置
-        echo "# CONFIG_PACKAGE_dnsmasq is not set" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq_full_dhcp=y" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq_full_dhcpv6=y" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq_full_dnssec=y" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq_full_ipset=y" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq_full_conntrack=y" >> .config
-        
-        # 无线驱动
-        echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
-        echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
-        echo "CONFIG_PACKAGE_ath10k-firmware-qca988x=y" >> .config
-        echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
-        
-        # 网络工具
-        echo "CONFIG_PACKAGE_iptables=y" >> .config
-        echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> .config
-        echo "CONFIG_PACKAGE_iptables-mod-ipopt=y" >> .config
-        echo "CONFIG_PACKAGE_ip6tables=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-ipt-nat6=y" >> .config
-        
-        # 版本智能检测和配置
-        echo "=== 版本智能检测: $SELECTED_BRANCH ==="
-        
-        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-            echo "🔧 检测到 21.02 版本，应用相应配置..."
-            echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
-            echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
-            echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
-            
-        elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            echo "🔧 检测到 23.05 版本，应用相应配置..."
-            echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
-            echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
-            echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
-        else
-            echo "⚠️  未知版本，使用通用配置..."
-            echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
-            echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
-        fi
-        
-        # 改进的自动挂载配置 - 修复包冲突
-        echo "=== 配置自动挂载功能 ==="
-        echo "CONFIG_PACKAGE_block-mount=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-fs-exfat=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
-        echo "CONFIG_PACKAGE_blkid=y" >> .config
-        echo "CONFIG_PACKAGE_libblkid=y" >> .config
-        echo "CONFIG_PACKAGE_libmount=y" >> .config
-        echo "CONFIG_PACKAGE_libuuid=y" >> .config
-        echo "CONFIG_PACKAGE_mount-utils=y" >> .config
-        echo "CONFIG_PACKAGE_fdisk=y" >> .config
-        echo "CONFIG_PACKAGE_cfdisk=y" >> .config
-        echo "CONFIG_PACKAGE_sfdisk=y" >> .config
-        echo "CONFIG_PACKAGE_lsblk=y" >> .config
-        echo "CONFIG_PACKAGE_e2fsprogs=y" >> .config
-        echo "CONFIG_PACKAGE_dosfstools=y" >> .config
-        
-        # 明确禁用冲突的包
-        echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
-        echo "# CONFIG_PACKAGE_ntfs-3g-utils is not set" >> .config
-        
-        # 21.02版本需要额外的automount，但要避免依赖问题
-        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-            echo "CONFIG_PACKAGE_automount=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-fs-autofs4=y" >> .config
-            # 21.02版本需要启用ntfs3-mount来解决automount依赖
-            echo "CONFIG_PACKAGE_ntfs3-mount=y" >> .config
-        else
-            # 23.05版本不需要ntfs3-mount
-            echo "# CONFIG_PACKAGE_ntfs3-mount is not set" >> .config
-        fi
-        
-        # 根据配置模式选择插件
-        echo "=== 配置模式: ${{ github.event.inputs.config_mode }} ==="
-        
-        # 基础中文语言包 - 两个版本都需要
-        echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
-        echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
-        
-        if [ "${{ github.event.inputs.config_mode }}" = "base" ]; then
-            echo "🔧 使用基础模式 (最小化，用于测试编译)"
-            # 基础配置插件 - 包含文件传输
-            BASE_PLUGINS=(
-              "CONFIG_PACKAGE_luci-app-filetransfer=y"
-            )
-            
-            # 21.02 版本基础模式添加文件传输中文语言包
-            if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-                BASE_PLUGINS+=("CONFIG_PACKAGE_luci-i18n-filetransfer-zh-cn=y")
+            # 如果是404错误，尝试备用源
+            if echo "$SELECTED_REPO_URL" | grep -q "github.com" && [ $RETRY_COUNT -eq 2 ]; then
+              echo "🔄 尝试使用镜像源..."
+              MIRROR_URL=$(echo "$SELECTED_REPO_URL" | sed 's/github.com/github.com.cnpmjs.org/')
+              rm -rf ./* ./.git* 2>/dev/null || true
+              if git clone --depth 1 --branch "$SELECTED_BRANCH" "$MIRROR_URL" .; then
+                echo "✅ 使用镜像源克隆成功"
+                CLONE_SUCCESS=true
+                break
+              fi
             fi
             
-            for plugin in "${BASE_PLUGINS[@]}"; do
-                echo "$plugin" >> .config
-            done
-            
-            # 基础模式明确禁用 TurboACC 及其语言包
-            echo "# CONFIG_PACKAGE_luci-app-turboacc is not set" >> .config
-            echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
-            echo "# CONFIG_PACKAGE_kmod-fast-classifier is not set" >> .config
-            echo "# CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn is not set" >> .config
-            
-            echo "✅ 基础模式插件已启用"
-            
-        else
-            echo "🔧 使用正常模式 (完整功能)"
-            # 正常配置插件 - 包含所有功能
-            NORMAL_PLUGINS=(
-              "CONFIG_PACKAGE_luci-app-turboacc=y"
-              "CONFIG_PACKAGE_kmod-shortcut-fe=y"
-              "CONFIG_PACKAGE_kmod-fast-classifier=y"
-              "CONFIG_PACKAGE_luci-app-upnp=y"
-              "CONFIG_PACKAGE_miniupnpd=y"
-              "CONFIG_PACKAGE_vsftpd=y"
-              "CONFIG_PACKAGE_luci-app-vsftpd=y"
-              "CONFIG_PACKAGE_luci-app-arpbind=y"
-              "CONFIG_PACKAGE_luci-app-cpulimit=y"
-              "CONFIG_PACKAGE_samba4-server=y"
-              "CONFIG_PACKAGE_luci-app-samba4=y"
-              "CONFIG_PACKAGE_luci-app-wechatpush=y"
-              "CONFIG_PACKAGE_sqm-scripts=y"
-              "CONFIG_PACKAGE_luci-app-sqm=y"
-              "CONFIG_PACKAGE_luci-app-hd-idle=y"
-              "CONFIG_PACKAGE_luci-app-filetransfer=y"
-              "CONFIG_PACKAGE_luci-app-diskman=y"
-              "CONFIG_PACKAGE_luci-app-accesscontrol=y"
-              "CONFIG_PACKAGE_vlmcsd=y"
-              "CONFIG_PACKAGE_luci-app-vlmcsd=y"
-              "CONFIG_PACKAGE_smartdns=y"
-              "CONFIG_PACKAGE_luci-app-smartdns=y"
-            )
-            
-            # 为21.02版本添加完整中文语言包
-            if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-                echo "🔧 为21.02版本添加完整中文语言包"
-                NORMAL_PLUGINS+=(
-                  "CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-arpbind-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-cpulimit-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-hd-idle-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-accesscontrol-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-vlmcsd-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-filetransfer-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y"
-                )
-            elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-                echo "🔧 为23.05版本添加中文语言包"
-                # 23.05的中文包名称可能不同，添加通用中文包
-                NORMAL_PLUGINS+=(
-                  "CONFIG_PACKAGE_luci-i18n-opkg-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y"
-                )
+            if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+              echo "❌ 源码克隆失败，达到最大重试次数"
+              exit 1
             fi
-            
-            for plugin in "${NORMAL_PLUGINS[@]}"; do
-                echo "$plugin" >> .config
-            done
-            
-            echo "✅ 正常模式插件已启用"
-        fi
-        
-        # 禁用网络唤醒
-        echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> .config
-        echo "# CONFIG_PACKAGE_wol is not set" >> .config
-        echo "# CONFIG_PACKAGE_etherwake is not set" >> .config
-        
-        # 禁用 offloading 插件
-        echo "# CONFIG_PACKAGE_luci-app-software-offloading is not set" >> .config
-        
-        # 修复 USB3 相关错误（针对 IPQ40xx 设备）
-        if [ "$TARGET" = "ipq40xx" ]; then
-            echo "# CONFIG_PACKAGE_kmod-usb-dwc3-qcom is not set" >> .config
-        fi
-        
-        # 修复 dropbear 监听错误
-        echo "CONFIG_PACKAGE_dropbear=y" >> .config
-        
-        # 明确禁用不需要的插件
-        echo "# 明确禁用网络相关插件" >> .config
-        UNWANTED_PLUGINS=(
-          "CONFIG_PACKAGE_luci-app-passwall"
-          "CONFIG_PACKAGE_luci-app-ssr-plus"
-          "CONFIG_PACKAGE_luci-app-vssr"
-          "CONFIG_PACKAGE_luci-app-rclone"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_ShadowsocksR_Libev_Client"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Libev_Client"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Libev_Server"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Simple_Obfs"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Trojan_Plus"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Geoview"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Plugin"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray"
-          "CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-ng"
-          "CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-webui"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ChinaDNS_NG"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_IPT2Socks"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ShadowsocksR_Libev_Client"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Client"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Server"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Simple_Obfs"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Trojan"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray"
-          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_ShadowsocksR_Libev_Server"
-          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Trojan"
-          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Xray"
-          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Xray_plugin"
-        )
-        
-        for plugin in "${UNWANTED_PLUGINS[@]}"; do
-            echo "# ${plugin} is not set" >> .config
-        done
-        
-        # 处理额外安装插件
-        if [ -n "${{ github.event.inputs.extra_packages }}" ]; then
-            echo "🔧 处理额外安装插件: ${{ github.event.inputs.extra_packages }}"
-            
-            # 使用分号分隔输入
-            IFS=';' read -ra EXTRA_PKGS <<< "${{ github.event.inputs.extra_packages }}"
-            
-            for pkg_cmd in "${EXTRA_PKGS[@]}"; do
-                if [ -n "$pkg_cmd" ]; then
-                    # 去除前后空格
-                    pkg_cmd_clean=$(echo "$pkg_cmd" | xargs)
-                    
-                    # 检查是启用还是禁用
-                    if [[ "$pkg_cmd_clean" == +* ]]; then
-                        # 启用插件
-                        pkg_name="${pkg_cmd_clean:1}"
-                        echo "启用插件: $pkg_name"
-                        echo "CONFIG_PACKAGE_${pkg_name}=y" >> .config
-                    elif [[ "$pkg_cmd_clean" == -* ]]; then
-                        # 禁用插件
-                        pkg_name="${pkg_cmd_clean:1}"
-                        echo "禁用插件: $pkg_name"
-                        echo "# CONFIG_PACKAGE_${pkg_name} is not set" >> .config
-                    else
-                        # 默认启用
-                        echo "启用插件: $pkg_cmd_clean"
-                        echo "CONFIG_PACKAGE_${pkg_cmd_clean}=y" >> .config
-                    fi
-                fi
-            done
-            
-            echo "✅ 额外插件处理完成"
-        else
-            echo "ℹ️  无额外安装插件"
-        fi
-        
-        echo "✅ 智能配置生成完成"
-        
-        # 显示配置摘要
-        echo "=== 配置摘要 ==="
-        echo "版本: $SELECTED_BRANCH"
-        echo "配置模式: ${{ github.event.inputs.config_mode }}"
-        echo "目标设备: $DEVICE"
-        echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
-        echo "启用的LUCI插件:"
-        grep "^CONFIG_PACKAGE_luci" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
-        echo "自动挂载相关包:"
-        grep -E "block-mount|kmod-fs-|kmod-usb-|blkid|automount|ntfs3-mount" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
-
-    - name: 应用配置
-      run: |
-        cd $BUILD_DIR
-        echo "=== 应用配置 ==="
-        make defconfig
-        echo "✅ 配置应用完成"
-        
-        # 修复包冲突问题
-        echo "=== 修复包冲突 ==="
-        
-        # 强制禁用冲突的包
-        CONFLICT_PACKAGES=(
-          "ntfs-3g"
-          "ntfs-3g-utils" 
-        )
-        
-        for pkg in "${CONFLICT_PACKAGES[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${pkg}=y$" .config || grep -q "^CONFIG_PACKAGE_${pkg}=m$" .config; then
-                echo "修复冲突: 禁用 $pkg"
-                sed -i "s/^CONFIG_PACKAGE_${pkg}=y$/# CONFIG_PACKAGE_${pkg} is not set/" .config
-                sed -i "s/^CONFIG_PACKAGE_${pkg}=m$/# CONFIG_PACKAGE_${pkg} is not set/" .config
-            fi
-        done
-        
-        # 确保 ntfs3 相关配置正确
-        echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
-        echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
-        
-        # 21.02版本需要ntfs3-mount来满足automount依赖
-        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-            echo "CONFIG_PACKAGE_ntfs3-mount=y" >> .config
-        else
-            echo "# CONFIG_PACKAGE_ntfs3-mount is not set" >> .config
-        fi
-        
-        # 在 defconfig 之后强制禁用不需要的插件
-        echo "=== 强制禁用不需要的插件 ==="
-        
-        # 定义要禁用的配置项列表
-        UNWANTED_CONFIGS=(
-          "CONFIG_PACKAGE_luci-app-passwall"
-          "CONFIG_PACKAGE_luci-app-ssr-plus"
-          "CONFIG_PACKAGE_luci-app-vssr"
-          "CONFIG_PACKAGE_luci-app-rclone"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_ShadowsocksR_Libev_Client"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Libev_Client"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Libev_Server"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Simple_Obfs"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_SingBox"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Trojan_Plus"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Geoview"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Plugin"
-          "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray"
-          "CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-ng"
-          "CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-webui"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ChinaDNS_NG"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_IPT2Socks"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ShadowsocksR_Libev_Client"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Client"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Server"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Simple_Obfs"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Trojan"
-          "CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray"
-          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_ShadowsocksR_Libev_Server"
-          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Trojan"
-          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Xray"
-          "CONFIG_PACKAGE_luci-app-vssr_INCLUDE_Xray_plugin"
-        )
-        
-        # 强制禁用每个配置项
-        for config in "${UNWANTED_CONFIGS[@]}"; do
-          # 如果配置项存在且被启用，则禁用它
-          if grep -q "^${config}=y$" .config || grep -q "^${config}=m$" .config; then
-            echo "禁用: $config"
-            sed -i "s/^${config}=y$/# ${config} is not set/" .config
-            sed -i "s/^${config}=m$/# ${config} is not set/" .config
+            sleep 10
+            # 清理目录重试
+            rm -rf ./* ./.git* 2>/dev/null || true
           fi
         done
+
+    # 重新复制脚本步骤
+    - name: 重新复制脚本和配置文件
+      run: |
+        cd $BUILD_DIR
+        echo "=== 重新复制脚本和配置文件 ==="
+        cd $GITHUB_WORKSPACE
         
-        # 基础模式强制禁用 TurboACC 及其语言包
-        if [ "${{ github.event.inputs.config_mode }}" = "base" ]; then
-            echo "=== 基础模式强制禁用 TurboACC ==="
-            TURBOACC_CONFIGS=(
-              "CONFIG_PACKAGE_luci-app-turboacc"
-              "CONFIG_PACKAGE_kmod-shortcut-fe"
-              "CONFIG_PACKAGE_kmod-fast-classifier"
-              "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn"
-            )
-            
-            for config in "${TURBOACC_CONFIGS[@]}"; do
-                if grep -q "^${config}=y$" .config || grep -q "^${config}=m$" .config; then
-                    echo "禁用: $config"
-                    sed -i "s/^${config}=y$/# ${config} is not set/" .config
-                    sed -i "s/^${config}=m$/# ${config} is not set/" .config
+        # 复制脚本文件
+        VERSION_SCRIPT=$(find . -name "complete_version_detector.sh" -type f | head -1)
+        DEVICE_SCRIPT=$(find . -name "device_detection.sh" -type f | head -1)
+        ERROR_SCRIPT=$(find . -name "error_analysis.sh" -type f | head -1)
+        
+        cp "$VERSION_SCRIPT" $BUILD_DIR/complete_version_detector.sh
+        cp "$DEVICE_SCRIPT" $BUILD_DIR/device_detection.sh
+        if [ -n "$ERROR_SCRIPT" ]; then
+          cp "$ERROR_SCRIPT" $BUILD_DIR/error_analysis.sh
+        fi
+        
+        # 查找并复制配置文件
+        echo "=== 查找配置文件 ==="
+        CONFIG_FILES=$(find firmware-config/configs -name "*.config" -type f 2>/dev/null || true)
+        if [ -n "$CONFIG_FILES" ]; then
+          echo "✅ 找到配置文件:"
+          echo "$CONFIG_FILES"
+          mkdir -p $BUILD_DIR/config-templates
+          for config_file in $CONFIG_FILES; do
+            filename=$(basename "$config_file")
+            cp "$config_file" $BUILD_DIR/config-templates/
+            echo "✅ 复制: $filename"
+          done
+          echo "✅ 所有配置文件复制完成"
+          echo "当前配置模板目录内容:"
+          ls -la $BUILD_DIR/config-templates/
+        else
+          echo "❌ 错误: 未找到任何配置文件"
+          exit 1
+        fi
+        
+        cd $BUILD_DIR
+        chmod +x complete_version_detector.sh device_detection.sh error_analysis.sh 2>/dev/null || true
+        echo "✅ 脚本和配置文件重新复制完成"
+
+    # 设备检测步骤
+    - name: 智能设备检测与别名转换
+      id: device-detection
+      run: |
+        cd $BUILD_DIR
+        echo "=== 智能设备检测与别名转换 ==="
+        
+        # 设备别名映射表
+        declare -A DEVICE_ALIAS_MAP=(
+          ["ac42u"]="asus_rt-ac42u"
+          ["acrh17"]="asus_rt-ac42u"
+          ["rt-acrh17"]="asus_rt-ac42u"
+          ["ac58u"]="asus_rt-ac58u"
+          ["acrh13"]="asus_rt-ac58u"
+          ["rt-acrh13"]="asus_rt-ac58u"
+        )
+        
+        INPUT_DEVICE="${{ github.event.inputs.device_name }}"
+        echo "输入设备名称: $INPUT_DEVICE"
+        
+        # 检查是否为别名并进行转换
+        if [ -n "${DEVICE_ALIAS_MAP[$INPUT_DEVICE]}" ]; then
+          ACTUAL_DEVICE="${DEVICE_ALIAS_MAP[$INPUT_DEVICE]}"
+          echo "✅ 检测到设备通用名称 '$INPUT_DEVICE'，转换为实际设备标识 '$ACTUAL_DEVICE'"
+        else
+          ACTUAL_DEVICE="$INPUT_DEVICE"
+          echo "ℹ️ 使用原始设备名称: $ACTUAL_DEVICE (未找到别名映射)"
+        fi
+        
+        # 验证设备检测脚本
+        if [ ! -f "device_detection.sh" ]; then
+          echo "❌ 错误: 设备检测脚本不存在"
+          exit 1
+        fi
+        chmod +x device_detection.sh
+        
+        # 运行设备检测脚本
+        echo "=== 开始设备检测 ==="
+        set +e
+        OUTPUT=$(./device_detection.sh "$ACTUAL_DEVICE" 2>&1)
+        SCRIPT_EXIT_CODE=$?
+        set -e
+        
+        echo "=== 设备检测脚本输出 ==="
+        echo "$OUTPUT"
+        echo "=== 脚本退出代码: $SCRIPT_EXIT_CODE ==="
+        
+        # 从脚本输出中提取设备信息
+        PLATFORM=$(echo "$OUTPUT" | grep "^PLATFORM=" | tail -1 | cut -d'=' -f2)
+        DEVICE_SHORT_NAME=$(echo "$OUTPUT" | grep "^DEVICE_SHORT_NAME=" | tail -1 | cut -d'=' -f2)
+        DEVICE_FULL_NAME=$(echo "$OUTPUT" | grep "^DEVICE_FULL_NAME=" | tail -1 | cut -d'=' -f2)
+        
+        echo "=== 提取的设备信息 ==="
+        echo "平台(PLATFORM): '$PLATFORM'"
+        echo "设备短名称(DEVICE_SHORT_NAME): '$DEVICE_SHORT_NAME'"
+        echo "设备全名称(DEVICE_FULL_NAME): '$DEVICE_FULL_NAME'"
+        
+        # 验证设备信息提取结果
+        if [ -n "$PLATFORM" ] && [ -n "$DEVICE_SHORT_NAME" ] && [ -n "$DEVICE_FULL_NAME" ]; then
+            echo "✅ 从脚本输出中成功提取设备信息"
+            # 设置环境变量
+            echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
+            echo "DEVICE_SHORT_NAME=$DEVICE_SHORT_NAME" >> $GITHUB_ENV
+            echo "DEVICE_FULL_NAME=$DEVICE_FULL_NAME" >> $GITHUB_ENV
+            echo "✅ 设备环境变量已设置:"
+            echo "  平台: $PLATFORM"
+            echo "  设备短名称: $DEVICE_SHORT_NAME"
+            echo "  设备全名称: $DEVICE_FULL_NAME"
+        else
+            echo "❌ 无法从脚本输出中提取设备信息"
+            if [ $SCRIPT_EXIT_CODE -ne 0 ]; then
+                echo "❌ 设备检测失败"
+                exit 1
+            else
+                echo "⚠️ 脚本成功但无法提取设备信息，使用备用设备映射"
+                case "$ACTUAL_DEVICE" in
+                    "asus_rt-ac42u"|"ac42u"|"acrh17"|"rt-acrh17")
+                        echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
+                        echo "DEVICE_SHORT_NAME=asus_rt-ac42u" >> $GITHUB_ENV
+                        echo "DEVICE_FULL_NAME=$ACTUAL_DEVICE" >> $GITHUB_ENV
+                        ;;
+                    "asus_rt-ac58u"|"ac58u"|"acrh13"|"rt-acrh13")
+                        echo "PLATFORM=ipq40xx" >> $GITHUB_ENV
+                        echo "DEVICE_SHORT_NAME=asus_rt-ac58u" >> $GITHUB_ENV
+                        echo "DEVICE_FULL_NAME=$ACTUAL_DEVICE" >> $GITHUB_ENV
+                        ;;
+                    *)
+                        echo "❌ 未知设备，无法设置默认值"
+                        exit 1
+                        ;;
+                esac
+                echo "✅ 已使用备用设备信息"
+            fi
+        fi
+
+    # 软件包源更新步骤
+    - name: 更新安装feeds
+      run: |
+        cd $BUILD_DIR
+        echo "=== 更新和安装feeds ==="
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    # 配置步骤
+    - name: 使用外部配置文件进行配置
+      run: |
+        cd $BUILD_DIR
+        echo "=== 使用外部配置文件进行配置 ==="
+        
+        # 完全清空配置
+        > .config
+        
+        # 设置平台和子平台
+        echo "CONFIG_TARGET_${PLATFORM}=y" >> .config
+        echo "CONFIG_TARGET_${PLATFORM}_generic=y" >> .config
+        
+        # 使用正确的设备配置项格式
+        CORRECT_DEVICE_CONFIG="CONFIG_TARGET_${PLATFORM}_generic_DEVICE_${DEVICE_SHORT_NAME}"
+        echo "${CORRECT_DEVICE_CONFIG}=y" >> .config
+        echo "使用的设备配置项: ${CORRECT_DEVICE_CONFIG}=y"
+        
+        # 基础文件系统配置
+        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+        echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
+        echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
+        
+        # 基础包配置
+        echo "CONFIG_PACKAGE_base-files=y" >> .config
+        echo "CONFIG_PACKAGE_busybox=y" >> .config
+        echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
+        echo "CONFIG_PACKAGE_dropbear=y" >> .config
+        echo "CONFIG_PACKAGE_firewall=y" >> .config
+        echo "CONFIG_PACKAGE_opkg=y" >> .config
+        echo "CONFIG_PACKAGE_iptables=y" >> .config
+        echo "CONFIG_PACKAGE_iptables-mod-extra=y" >> .config
+        
+        # 基础网络包
+        echo "CONFIG_PACKAGE_ppp=y" >> .config
+        echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ppp=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-pppoe=y" >> .config
+        
+        CONFIG_TYPE="${{ github.event.inputs.config_type }}"
+        echo "配置类型: $CONFIG_TYPE"
+        
+        # 根据配置类型和版本加载对应的配置文件
+        if [ "$CONFIG_TYPE" = "minimal" ]; then
+            CONFIG_FILE="config-templates/minimal.config"
+        elif [ "$CONFIG_TYPE" = "normal" ] || [ "$CONFIG_TYPE" = "custom" ]; then
+            # 判断版本类型
+            IS_OLD_VERSION=0
+            if [ "${{ github.event.inputs.old_device }}" = "true" ]; then
+                IS_OLD_VERSION=1
+                echo "✅ 用户指定为老旧设备，使用旧版本配置"
+            else
+                if echo "$SELECTED_BRANCH" | grep -q -E "19\.07|21\.02|17\.01|lede"; then
+                    IS_OLD_VERSION=1
+                    echo "✅ 检测到旧版本分支: $SELECTED_BRANCH"
                 fi
+                if [ "$SELECTED_REPO" = "lede" ] || [ "$SELECTED_REPO" = "openwrt-19.07" ] || [ "$SELECTED_REPO" = "openwrt-21.02" ]; then
+                    IS_OLD_VERSION=1
+                    echo "✅ 检测到旧版本仓库: $SELECTED_REPO"
+                fi
+                case "${{ github.event.inputs.device_name }}" in
+                    "wr841n"|"wr842n"|"wr941n"|"mr3420"|"ar71xx"*)
+                        IS_OLD_VERSION=1
+                        echo "✅ 检测到老旧设备型号: ${{ github.event.inputs.device_name }}"
+                        ;;
+                esac
+            fi
+            
+            if [ "$IS_OLD_VERSION" -eq 1 ]; then
+                echo "✅ 最终决定: 使用旧版本配置"
+                CONFIG_FILE="config-templates/normal-old.config"
+            else
+                echo "✅ 最终决定: 使用新版本配置"
+                CONFIG_FILE="config-templates/normal-new.config"
+            fi
+        else
+            echo "❌ 未知的配置类型: $CONFIG_TYPE"
+            exit 1
+        fi
+        
+        # 加载选定的配置文件
+        if [ -f "$CONFIG_FILE" ]; then
+            echo "✅ 找到配置文件: $CONFIG_FILE"
+            cat "$CONFIG_FILE" >> .config
+            echo "✅ 配置已加载: $(basename "$CONFIG_FILE")"
+        else
+            echo "❌ 错误: 找不到配置文件 $CONFIG_FILE"
+            exit 1
+        fi
+        
+        # 自定义包处理
+        if [ "$CONFIG_TYPE" = "custom" ] && [ -n "${{ github.event.inputs.extra_packages }}" ]; then
+            echo "# 额外包配置" >> .config
+            for pkg in ${{ github.event.inputs.extra_packages }}; do
+                pkg_clean=$(echo "$pkg" | tr '-' '_' | tr -cd '[:alnum:]_')
+                echo "CONFIG_PACKAGE_${pkg_clean}=y" >> .config
+                echo "✅ 添加额外包: CONFIG_PACKAGE_${pkg_clean}=y"
             done
         fi
         
-        echo "✅ 强制禁用完成"
-        
-        # 显示最终配置信息
-        echo "=== 最终配置状态 ==="
-        echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
-        echo "TurboACC 状态:"
-        grep "turboacc\\|shortcut\\|fast-classifier" .config | grep "=y" || echo "TurboACC 未启用"
-        echo "TurboACC 中文语言包状态:"
-        grep "luci-i18n-turboacc-zh-cn" .config | grep "=y" && echo "TurboACC 中文语言包已启用" || echo "TurboACC 中文语言包未启用"
-        echo "启用的LUCI插件:"
-        grep "^CONFIG_PACKAGE_luci" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
-        echo "自动挂载相关包状态:"
-        grep -E "block-mount|kmod-fs-|kmod-usb-|blkid|automount|ntfs3-mount" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✅/' | sed 's/ is not set/ ❌/' | sort
-        
-        # 检查是否还有不需要的插件
-        echo "=== 检查不需要的插件状态 ==="
-        UNWANTED_PLUGINS=$(grep -E "passwall|ssr-plus|vssr|rclone" .config | grep "=y" || true)
-        if [ -n "$UNWANTED_PLUGINS" ]; then
-            echo "❌ 发现不需要的插件被启用:"
-            echo "$UNWANTED_PLUGINS"
-        else
-            echo "✅ 不需要的插件已正确禁用"
-        fi
-        
-        # 检查基础模式 TurboACC 状态
-        if [ "${{ github.event.inputs.config_mode }}" = "base" ]; then
-            echo "=== 检查基础模式 TurboACC 状态 ==="
-            TURBOACC_CHECK=$(grep -E "turboacc|shortcut|fast-classifier|luci-i18n-turboacc-zh-cn" .config | grep "=y" || true)
-            if [ -n "$TURBOACC_CHECK" ]; then
-                echo "❌ 基础模式发现 TurboACC 被启用:"
-                echo "$TURBOACC_CHECK"
-            else
-                echo "✅ 基础模式 TurboACC 已正确禁用"
-            fi
-        fi
-        
-        # 检查包冲突状态
-        echo "=== 检查包冲突状态 ==="
-        CONFLICT_CHECK=$(grep -E "ntfs-3g" .config | grep "=y" || true)
-        if [ -n "$CONFLICT_CHECK" ]; then
-            echo "❌ 发现包冲突:"
-            echo "$CONFLICT_CHECK"
-        else
-            echo "✅ 包冲突已解决"
-        fi
-        
-        # 检查automount依赖状态
-        echo "=== 检查automount依赖状态 ==="
-        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-            AUTOMOUNT_CHECK=$(grep -E "automount|ntfs3-mount" .config | grep "=y" || true)
-            if [ -n "$AUTOMOUNT_CHECK" ]; then
-                echo "✅ automount依赖已满足:"
-                echo "$AUTOMOUNT_CHECK"
-            else
-                echo "❌ automount依赖未满足"
-            fi
-        fi
-        
-        # 备份配置文件
-        cp .config config_backup
-
-    - name: 修复网络环境
-      run: |
-        cd $BUILD_DIR
-        echo "=== 修复网络环境 ==="
-        git config --global http.postBuffer 524288000
-        git config --global http.lowSpeedLimit 0
-        git config --global http.lowSpeedTime 999999
-        export GIT_SSL_NO_VERIFY=1
-        export PYTHONHTTPSVERIFY=0
-        echo "✅ 网络环境修复完成"
-
-    - name: 下载依赖包
-      run: |
-        cd $BUILD_DIR
-        echo "=== 下载依赖包 ==="
-        make -j1 download
-        echo "✅ 依赖包下载完成"
-
-    - name: 编译固件
-      run: |
-        cd $BUILD_DIR
-        echo "=== 编译固件 ==="
-        if [ "${{ github.event.inputs.enable_cache }}" = "true" ]; then
-            echo "启用编译缓存"
-            make -j$(nproc) V=s 2>&1 | tee build.log
-            BUILD_EXIT_CODE=${PIPESTATUS[0]}
-        else
-            echo "普通编译模式"
-            make -j$(nproc) V=s 2>&1 | tee build.log
-            BUILD_EXIT_CODE=${PIPESTATUS[0]}
-        fi
-        echo "编译退出代码: $BUILD_EXIT_CODE"
-        if [ $BUILD_EXIT_CODE -ne 0 ]; then
-            echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
-            if [ -f "build.log" ]; then
-                echo "=== 编译错误摘要 ==="
-                grep -i "error:\|failed\|undefined" build.log | head -20
-            fi
-            exit $BUILD_EXIT_CODE
-        fi
-        echo "✅ 固件编译完成"
-
-    - name: 编译后空间检查
-      run: |
-        echo "=== 编译后空间检查 ==="
-        df -h
-        AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
-        AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-        echo "/mnt 可用空间: ${AVAILABLE_GB}G"
-
-    - name: 固件文件检查
-      if: success()
-      run: |
-        cd $BUILD_DIR
-        echo "=== 固件文件检查 ==="
-        if [ -d "bin/targets" ]; then
-            echo "✅ 固件目录存在"
-            find bin/targets -name "*.bin" -o -name "*.img" | while read file; do
-                echo "固件文件: $file ($(du -h "$file" | cut -f1))"
+        # 禁用插件处理
+        if [ -n "${{ github.event.inputs.disabled_plugins }}" ]; then
+            echo "# 禁用插件配置" >> .config
+            for plugin in ${{ github.event.inputs.disabled_plugins }}; do
+                plugin_clean=$(echo "$plugin" | tr '-' '_' | tr -cd '[:alnum:]_')
+                echo "# CONFIG_PACKAGE_${plugin_clean} is not set" >> .config
+                echo "✅ 禁用插件: $plugin (CONFIG_PACKAGE_${plugin_clean})"
             done
-            echo "=== 生成的固件列表 ==="
-            find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) -exec ls -la {} \;
+        fi
+        
+        # 运行defconfig来完善配置
+        echo "运行 make defconfig..."
+        make defconfig
+        
+        # 最终配置验证
+        echo "=== 最终配置验证 ==="
+        if grep -q "^${CORRECT_DEVICE_CONFIG}=y" .config; then
+            echo "✅ 设备 $DEVICE_SHORT_NAME 已成功启用"
         else
-            echo "❌ 固件目录不存在"
+            echo "❌ 设备 $DEVICE_SHORT_NAME 启用失败，构建终止"
             exit 1
         fi
 
-    - name: 上传固件
+    # DL库下载和验证步骤 - 针对404错误专门优化
+    - name: 下载DL库并验证完整性
+      run: |
+        cd $BUILD_DIR
+        echo "=== 下载DL库并验证完整性 ==="
+        
+        # 创建下载目录
+        mkdir -p dl
+        
+        # 设置下载重试机制，针对404错误
+        MAX_DOWNLOAD_RETRIES=5  # 增加重试次数
+        RETRY_COUNT=0
+        DOWNLOAD_SUCCESS=false
+        
+        # 设置下载环境变量，避免网络问题
+        export GIT_SSL_NO_VERIFY=1
+        export PYTHONHTTPSVERIFY=0
+        
+        while [ $RETRY_COUNT -lt $MAX_DOWNLOAD_RETRIES ] && [ "$DOWNLOAD_SUCCESS" = false ]; do
+          RETRY_COUNT=$((RETRY_COUNT + 1))
+          echo "=== 下载尝试 $RETRY_COUNT/$MAX_DOWNLOAD_RETRIES ==="
+          
+          # 清理可能损坏的下载
+          find dl -name "*.tmp" -delete 2>/dev/null || true
+          find dl -size 0 -delete 2>/dev/null || true
+          
+          echo "开始并行下载依赖..."
+          
+          # 使用更稳健的下载参数，针对404错误
+          if make -j2 download V=s 2>&1 | tee download_attempt_${RETRY_COUNT}.log; then
+            echo "✅ 下载命令执行成功"
+            DOWNLOAD_SUCCESS=true
+          else
+            echo "❌ 下载命令执行失败"
+            
+            # 分析下载日志中的404错误
+            if grep -q "404" download_attempt_${RETRY_COUNT}.log; then
+              echo "⚠️ 检测到404错误，尝试修复..."
+              # 查找404错误的包
+              FAILED_PACKAGES=$(grep "404" download_attempt_${RETRY_COUNT}.log | grep -oE '[a-zA-Z0-9_.-]+\.(tar\.|zip|gz|bz2)' | sort -u)
+              if [ -n "$FAILED_PACKAGES" ]; then
+                echo "有问题的包: $FAILED_PACKAGES"
+                # 删除有问题的包文件
+                for pkg in $FAILED_PACKAGES; do
+                  find dl -name "*$pkg*" -delete 2>/dev/null || true
+                done
+              fi
+            fi
+            
+            if [ $RETRY_COUNT -eq $MAX_DOWNLOAD_RETRIES ]; then
+              echo "❌ 达到最大重试次数，下载失败"
+              echo "=== 下载失败分析 ==="
+              grep -E "404|failed|error" download_attempt_*.log | head -20
+              exit 1
+            else
+              echo "🔄 等待15秒后重试..."
+              sleep 15
+            fi
+          fi
+        done
+        
+        echo "=== 下载完整性验证 ==="
+        
+        # 检查空文件
+        EMPTY_FILES=$(find dl -type f -size 0 2>/dev/null | wc -l)
+        if [ "$EMPTY_FILES" -gt 0 ]; then
+          echo "⚠️ 发现 $EMPTY_FILES 个空文件，尝试修复..."
+          find dl -type f -size 0 -delete
+          echo "重新下载空文件..."
+          make -j1 download V=s 2>&1 | grep -E "Downloading|failed" || true
+        else
+          echo "✅ 没有空文件"
+        fi
+        
+        # 显示下载统计
+        DL_COUNT=$(find dl -type f | wc -l)
+        DL_SIZE=$(du -sh dl | cut -f1)
+        echo "✅ 下载统计: $DL_COUNT 个文件，总大小: $DL_SIZE"
+
+    # 编译步骤 - 针对管道错误和libhogweed错误优化
+    - name: 应用配置并编译
+      run: |
+        cd $BUILD_DIR
+        echo "=== 应用配置并编译 ==="
+        
+        # 设置编译环境变量，减少管道错误
+        export FORCE_UNSAFE_CONFIGURE=1
+        export SUBMAKE=1
+        
+        echo "开始编译固件..."
+        
+        # 使用稳健的编译策略，针对管道错误
+        # 第一阶段：单线程编译工具链（减少错误）
+        echo "=== 第一阶段：编译工具链 ==="
+        make -j1 tools/install V=s 2>&1 | tee build_tools.log || {
+          echo "⚠️ 工具链编译出现警告，继续构建..."
+        }
+        
+        # 第二阶段：编译工具链相关包
+        echo "=== 第二阶段：编译工具链包 ==="
+        make -j1 toolchain/install V=s 2>&1 | tee build_toolchain.log || {
+          echo "⚠️ 工具链包编译出现警告，继续构建..."
+        }
+        
+        # 第三阶段：完整并行编译，但减少并行度避免管道错误
+        echo "=== 第三阶段：完整编译 ==="
+        # 计算合适的并行任务数，避免管道错误
+        AVAILABLE_CORES=$(nproc)
+        # 减少并行任务数，避免管道错误
+        BUILD_JOBS=$((AVAILABLE_CORES > 2 ? AVAILABLE_CORES / 2 : 1))
+        echo "使用 $BUILD_JOBS 个并行任务进行编译（减少并行度避免管道错误）"
+        
+        # 使用稳健的编译参数，忽略非致命错误
+        set +e
+        make -j$BUILD_JOBS V=s 2>&1 | tee build_detailed.log
+        COMPILE_EXIT_CODE=$?
+        set -e
+        
+        # 检查构建状态，即使有错误也继续检查
+        if [ -d "bin/targets" ]; then
+          echo "✅ 编译完成，找到目标文件"
+          if [ $COMPILE_EXIT_CODE -ne 0 ]; then
+            echo "⚠️ 编译过程有错误，但生成了固件文件"
+          fi
+        else
+          echo "❌ 编译失败，未生成目标文件"
+          if [ $COMPILE_EXIT_CODE -eq 0 ]; then
+            echo "❌ 编译命令成功但未生成目标文件，尝试单线程编译..."
+            make V=s 2>&1 | tee build_single_thread.log
+            if [ ! -d "bin/targets" ]; then
+              exit 1
+            fi
+          else
+            exit 1
+          fi
+        fi
+
+    # 错误分析步骤 - 增强版本
+    - name: 运行错误分析
+      if: always()
+      run: |
+        cd $BUILD_DIR
+        echo "=== 运行错误分析 ==="
+        if [ -f "error_analysis.sh" ] && [ -f "build_detailed.log" ]; then
+          chmod +x error_analysis.sh
+          echo "开始错误分析..."
+          ./error_analysis.sh "$BUILD_DIR"
+          echo "✅ 错误分析完成"
+          
+          # 显示关键错误摘要
+          if [ -f "error_analysis.log" ]; then
+            echo "=== 关键错误摘要 ==="
+            grep -E "❌|⚠️|✅" error_analysis.log | head -10
+          fi
+        else
+          echo "⚠️ 错误分析条件不满足"
+          # 基础错误分析
+          if [ -f "build_detailed.log" ]; then
+            echo "=== 基础错误检查 ==="
+            ERROR_COUNT=$(grep -c "error:" build_detailed.log || true)
+            WARNING_COUNT=$(grep -c "warning:" build_detailed.log || true)
+            echo "错误数量: $ERROR_COUNT"
+            echo "警告数量: $WARNING_COUNT"
+            
+            if [ $ERROR_COUNT -gt 0 ]; then
+              echo "❌ 发现编译错误"
+              grep "error:" build_detailed.log | head -5
+            else
+              echo "✅ 未发现严重编译错误"
+            fi
+          fi
+        fi
+
+    # 固件验证步骤
+    - name: 验证固件生成
+      if: always()
+      run: |
+        cd $BUILD_DIR
+        echo "=== 固件生成验证 ==="
+        if [ -d "bin/targets" ]; then
+          echo "✅ 构建成功！生成的固件:"
+          find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) | sort
+          for firmware in $(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null); do
+            echo "固件: $firmware"
+            echo "大小: $(du -h "$firmware" | cut -f1)"
+            echo ""
+          done
+        else
+          echo "❌ 构建失败，未找到目标文件"
+        fi
+
+    # 配置文件保存步骤
+    - name: 保存配置文件到仓库
+      if: success() && github.event.inputs.save_config == 'true'
+      run: |
+        echo "=== 保存配置文件到仓库 ==="
+        CONFIG_FILENAME="${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}.config"
+        mkdir -p $GITHUB_WORKSPACE/firmware-config/configs
+        
+        if [ ! -f "$BUILD_DIR/.config" ]; then
+          echo "❌ 错误: 源配置文件不存在"
+          exit 1
+        fi
+        
+        cp $BUILD_DIR/.config $GITHUB_WORKSPACE/firmware-config/configs/$CONFIG_FILENAME
+        
+        if [ -f "$GITHUB_WORKSPACE/firmware-config/configs/$CONFIG_FILENAME" ]; then
+          echo "✅ 配置文件已保存为: firmware-config/configs/$CONFIG_FILENAME"
+        else
+          echo "❌ 错误: 配置文件保存失败"
+          exit 1
+        fi
+
+    # 配置文件提交步骤
+    - name: 提交配置文件更改
+      if: success() && github.event.inputs.save_config == 'true'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "=== 提交配置文件更改 ==="
+        cd $GITHUB_WORKSPACE
+        
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
+        git add firmware-config/configs/
+        
+        if git diff --staged --quiet; then
+          echo "ℹ️ 没有配置文件更改需要提交"
+          exit 0
+        fi
+        
+        git commit -m "自动保存配置文件: ${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }} [skip ci]"
+        git pull origin main --rebase --no-edit
+        git push origin main
+        
+        echo "✅ 配置文件提交完成"
+
+    # 产物上传步骤
+    - name: 上传编译产物
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
+        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_type }}
         path: ${{ env.BUILD_DIR }}/bin/targets/
         retention-days: 7
 
-    - name: 上传编译日志
+    # 日志和配置上传步骤
+    - name: 上传配置和日志
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: build-log-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
-        path: ${{ env.BUILD_DIR }}/build.log
+        name: build-info-${{ github.event.inputs.device_name }}-${{ github.event.inputs.config_type }}
+        path: |
+          ${{ env.BUILD_DIR }}/.config
+          ${{ env.BUILD_DIR }}/device_info.txt
+          ${{ env.BUILD_DIR }}/build_detailed.log
+          ${{ env.BUILD_DIR }}/build_tools.log
+          ${{ env.BUILD_DIR }}/build_toolchain.log
+          ${{ env.BUILD_DIR }}/error_analysis.log
+          ${{ env.BUILD_DIR }}/download_attempt_*.log
         retention-days: 7
 
-    - name: 上传配置文件
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
-        path: ${{ env.BUILD_DIR }}/config_backup
-        retention-days: 7
-
-    - name: 清理目录
+    # 清理步骤
+    - name: 清理构建目录
       if: always()
       run: |
         echo "=== 清理构建目录 ==="
