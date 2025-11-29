@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流（USB修复版）
+name: OpenWrt 智能固件构建工作流（USB完全修复版）
 
 on:
   workflow_dispatch:
@@ -140,8 +140,8 @@ jobs:
         # 为所有版本添加文件传输插件支持
         if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             echo "🔧 为23.05添加文件传输插件支持"
-            # 23.05版本使用 immortalwrt 官方源
-            echo "ℹ️  23.05 版本使用 immortalwrt 官方源，无需额外添加文件传输插件"
+            # 23.05版本使用 immortalwrt 官方源 + 额外源
+            echo "src-git small https://github.com/kenzok8/small" >> feeds.conf.default
         else
             echo "🔧 为21.02添加文件传输插件支持"
             # 21.02版本使用kenzok8的openwrt-packages
@@ -202,8 +202,10 @@ jobs:
             echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
         fi
         
-        # 为21.02版本添加文件传输插件源
-        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+        # 为所有版本添加文件传输插件源
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            echo "src-git small https://github.com/kenzok8/small" >> feeds.conf.default
+        else
             echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default
         fi
         
@@ -232,15 +234,27 @@ jobs:
         echo "✅ TurboACC 包安装完成"
 
     - name: 安装文件传输插件包
-      if: env.SELECTED_BRANCH == 'openwrt-21.02'
       run: |
         cd $BUILD_DIR
-        echo "=== 安装文件传输插件包 (仅21.02) ==="
+        echo "=== 安装文件传输插件包 ==="
         
-        # 更新 kenzo feed
-        ./scripts/feeds update kenzo
-        # 安装文件传输插件
-        ./scripts/feeds install -p kenzo luci-app-filetransfer
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            echo "🔧 为23.05安装文件传输插件"
+            # 更新 small feed
+            ./scripts/feeds update small
+            # 安装文件传输插件
+            ./scripts/feeds install -p small luci-app-filetransfer
+            # 安装中文语言包
+            ./scripts/feeds install -p small luci-i18n-filetransfer-zh-cn
+        else
+            echo "🔧 为21.02安装文件传输插件"
+            # 更新 kenzo feed
+            ./scripts/feeds update kenzo
+            # 安装文件传输插件
+            ./scripts/feeds install -p kenzo luci-app-filetransfer
+            # 安装中文语言包
+            ./scripts/feeds install -p kenzo luci-i18n-filetransfer-zh-cn
+        fi
         
         echo "✅ 文件传输插件包安装完成"
 
@@ -252,10 +266,10 @@ jobs:
         AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
         echo "/mnt 可用空间: ${AVAILABLE_GB}G"
 
-    - name: 智能配置生成（USB修复版）
+    - name: 智能配置生成（USB完全修复版）
       run: |
         cd $BUILD_DIR
-        echo "=== 智能配置生成系统（USB修复版）==="
+        echo "=== 智能配置生成系统（USB完全修复版）==="
         rm -f .config .config.old
         
         # 创建基础配置
@@ -307,23 +321,32 @@ jobs:
         echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> .config
         echo "CONFIG_PACKAGE_kmod-ipt-nat6=y" >> .config
         
-        # === USB 和存储配置修复 ===
-        echo "=== 配置USB和存储功能（修复版）==="
-        
-        # USB 控制器驱动 - 关键修复
+        # === 完全修复的USB和存储配置 ===
+        echo "=== 配置USB和存储功能（完全修复版）==="
+
+        # USB 核心驱动 - 确保基本功能
         echo "CONFIG_PACKAGE_kmod-usb-core=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+        
+        # USB 主机控制器驱动 - 关键修复
         echo "CONFIG_PACKAGE_kmod-usb-ehci=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config
+        
+        # IPQ40xx 特定USB驱动
+        if [ "$TARGET" = "ipq40xx" ]; then
+            echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+        fi
         
         # USB 存储驱动
         echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-storage-extras=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config
         
-        # SCSI 和磁盘驱动
+        # SCSI 支持
         echo "CONFIG_PACKAGE_kmod-scsi-core=y" >> .config
         echo "CONFIG_PACKAGE_kmod-scsi-generic=y" >> .config
         
@@ -334,18 +357,22 @@ jobs:
         echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fs-autofs4=y" >> .config
         
-        # 编码支持 - 用于中文文件名
+        # 编码支持
         echo "CONFIG_PACKAGE_kmod-nls-utf8=y" >> .config
         echo "CONFIG_PACKAGE_kmod-nls-cp437=y" >> .config
         echo "CONFIG_PACKAGE_kmod-nls-iso8859-1=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nls-cp936=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nls-iso8859-15=y" >> .config
         
         # 自动挂载工具
         echo "CONFIG_PACKAGE_block-mount=y" >> .config
         echo "CONFIG_PACKAGE_automount=y" >> .config
         
-        # USB 工具
+        # USB 工具和热插拔支持
         echo "CONFIG_PACKAGE_usbutils=y" >> .config
         echo "CONFIG_PACKAGE_lsusb=y" >> .config
+        echo "CONFIG_PACKAGE_udev=y" >> .config
+        echo "CONFIG_PACKAGE_udev-extra=y" >> .config
         
         # 磁盘工具
         echo "CONFIG_PACKAGE_blkid=y" >> .config
@@ -359,6 +386,8 @@ jobs:
         echo "CONFIG_PACKAGE_lsblk=y" >> .config
         echo "CONFIG_PACKAGE_e2fsprogs=y" >> .config
         echo "CONFIG_PACKAGE_dosfstools=y" >> .config
+        echo "CONFIG_PACKAGE_exfat-fsck=y" >> .config
+        echo "CONFIG_PACKAGE_exfat-mkfs=y" >> .config
         
         # 明确禁用冲突的包
         echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
@@ -400,21 +429,15 @@ jobs:
         echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
         echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
         
+        # 文件传输插件 - 所有模式都需要
+        echo "CONFIG_PACKAGE_luci-app-filetransfer=y" >> .config
+        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+            echo "CONFIG_PACKAGE_luci-i18n-filetransfer-zh-cn=y" >> .config
+        fi
+        
         if [ "${{ github.event.inputs.config_mode }}" = "base" ]; then
             echo "🔧 使用基础模式 (最小化，用于测试编译)"
-            # 基础配置插件 - 包含文件传输
-            BASE_PLUGINS=(
-              "CONFIG_PACKAGE_luci-app-filetransfer=y"
-            )
-            
-            # 21.02 版本基础模式添加文件传输中文语言包
-            if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-                BASE_PLUGINS+=("CONFIG_PACKAGE_luci-i18n-filetransfer-zh-cn=y")
-            fi
-            
-            for plugin in "${BASE_PLUGINS[@]}"; do
-                echo "$plugin" >> .config
-            done
+            # 基础模式只包含文件传输，其他都禁用
             
             # 基础模式明确禁用 TurboACC 及其语言包
             echo "# CONFIG_PACKAGE_luci-app-turboacc is not set" >> .config
@@ -443,7 +466,6 @@ jobs:
               "CONFIG_PACKAGE_sqm-scripts=y"
               "CONFIG_PACKAGE_luci-app-sqm=y"
               "CONFIG_PACKAGE_luci-app-hd-idle=y"
-              "CONFIG_PACKAGE_luci-app-filetransfer=y"
               "CONFIG_PACKAGE_luci-app-diskman=y"
               "CONFIG_PACKAGE_luci-app-accesscontrol=y"
               "CONFIG_PACKAGE_vlmcsd=y"
@@ -468,7 +490,6 @@ jobs:
                   "CONFIG_PACKAGE_luci-i18n-accesscontrol-zh-cn=y"
                   "CONFIG_PACKAGE_luci-i18n-vlmcsd-zh-cn=y"
                   "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y"
-                  "CONFIG_PACKAGE_luci-i18n-filetransfer-zh-cn=y"
                   "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y"
                 )
             elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
@@ -498,11 +519,6 @@ jobs:
         
         # 禁用 offloading 插件
         echo "# CONFIG_PACKAGE_luci-app-software-offloading is not set" >> .config
-        
-        # 修复 USB3 相关错误（针对 IPQ40xx 设备）
-        if [ "$TARGET" = "ipq40xx" ]; then
-            echo "# CONFIG_PACKAGE_kmod-usb-dwc3-qcom is not set" >> .config
-        fi
         
         # 修复 dropbear 监听错误
         echo "CONFIG_PACKAGE_dropbear=y" >> .config
@@ -605,7 +621,7 @@ jobs:
         grep "CONFIG_PACKAGE_kmod-usb-core" .config | grep "=y" && echo "✅ USB核心" || echo "❌ 缺少USB核心"
         
         echo "2. USB控制器:"
-        grep -E "CONFIG_PACKAGE_kmod-usb2|CONFIG_PACKAGE_kmod-usb3|CONFIG_PACKAGE_kmod-usb-ehci|CONFIG_PACKAGE_kmod-usb-ohci" .config | grep "=y" || echo "❌ 缺少USB控制器"
+        grep -E "CONFIG_PACKAGE_kmod-usb2|CONFIG_PACKAGE_kmod-usb3|CONFIG_PACKAGE_kmod-usb-ehci|CONFIG_PACKAGE_kmod-usb-ohci|CONFIG_PACKAGE_kmod-usb-dwc3" .config | grep "=y" || echo "❌ 缺少USB控制器"
         
         echo "3. USB存储:"
         grep "CONFIG_PACKAGE_kmod-usb-storage" .config | grep "=y" || echo "❌ 缺少USB存储"
@@ -618,6 +634,12 @@ jobs:
         
         echo "6. 自动挂载:"
         grep -E "block-mount|automount" .config | grep "=y" || echo "❌ 缺少自动挂载"
+        
+        echo "7. 热插拔支持:"
+        grep "CONFIG_PACKAGE_udev" .config | grep "=y" && echo "✅ udev支持" || echo "❌ 缺少udev支持"
+        
+        echo "8. 文件传输插件:"
+        grep "CONFIG_PACKAGE_luci-app-filetransfer" .config | grep "=y" && echo "✅ 文件传输插件已启用" || echo "❌ 文件传输插件未启用"
         
         echo "✅ USB和存储配置验证完成"
 
@@ -727,13 +749,17 @@ jobs:
         echo "=== 最终配置状态 ==="
         echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
         echo "USB控制器状态:"
-        grep -E "usb-ehci|usb-ohci|usb2-pci" .config | grep "=y" || echo "USB控制器未启用"
+        grep -E "usb-ehci|usb-ohci|usb2-pci|usb-dwc3" .config | grep "=y" || echo "USB控制器未启用"
         echo "USB存储状态:"
         grep "usb-storage" .config | grep "=y" || echo "USB存储未启用"
+        echo "热插拔支持:"
+        grep "udev" .config | grep "=y" || echo "热插拔支持未启用"
         echo "文件系统支持:"
         grep "kmod-fs-" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✅/' | sort
         echo "自动挂载相关包状态:"
         grep -E "block-mount|automount|ntfs3-mount" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✅/' | sed 's/ is not set/ ❌/' | sort
+        echo "文件传输插件状态:"
+        grep "luci-app-filetransfer" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✅/' | sed 's/ is not set/ ❌/' | sort
 
     - name: 修复网络环境
       run: |
