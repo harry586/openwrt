@@ -316,4 +316,61 @@ create_install_script() {
     echo 'ssh root@192.168.1.1' >> $BUILD_DIR/ipk_output/README.md
     echo 'cd /tmp/ipk_output' >> $BUILD_DIR/ipk_output/README.md
     echo './install_package.sh <包名>' >> $BUILD_DIR/ipk_output/README.md
-    echo '```' >> $BUILD_DIR/ipk_output
+    echo '```' >> $BUILD_DIR/ipk_output/README.md
+    echo '' >> $BUILD_DIR/ipk_output/README.md
+    echo '### 方法二：手动安装' >> $BUILD_DIR/ipk_output/README.md
+    echo '```bash' >> $BUILD_DIR/ipk_output/README.md
+    echo '# 上传IPK文件到路由器' >> $BUILD_DIR/ipk_output/README.md
+    echo 'scp *.ipk root@192.168.1.1:/tmp/' >> $BUILD_DIR/ipk_output/README.md
+    echo '' >> $BUILD_DIR/ipk_output/README.md
+    echo '# 在路由器上安装' >> $BUILD_DIR/ipk_output/README.md
+    echo 'ssh root@192.168.1.1' >> $BUILD_DIR/ipk_output/README.md
+    echo 'cd /tmp' >> $BUILD_DIR/ipk_output/README.md
+    echo 'opkg update' >> $BUILD_DIR/ipk_output/README.md
+    echo 'opkg install *.ipk' >> $BUILD_DIR/ipk_output/README.md
+    echo '```' >> $BUILD_DIR/ipk_output/README.md
+    echo '' >> $BUILD_DIR/ipk_output/README.md
+    echo '## 支持的平台' >> $BUILD_DIR/ipk_output/README.md
+    echo '- 所有OpenWrt平台（全平台通用）' >> $BUILD_DIR/ipk_output/README.md
+    echo '- OpenWrt 21.02 / 23.05' >> $BUILD_DIR/ipk_output/README.md
+    echo '- ImmortalWrt' >> $BUILD_DIR/ipk_output/README.md
+    echo '' >> $BUILD_DIR/ipk_output/README.md
+    echo '## 注意事项' >> $BUILD_DIR/ipk_output/README.md
+    echo '1. 确保路由器有足够的空间' >> $BUILD_DIR/ipk_output/README.md
+    echo '2. 安装前建议备份配置' >> $BUILD_DIR/ipk_output/README.md
+    echo '3. 某些包可能需要特定依赖' >> $BUILD_DIR/ipk_output/README.md
+
+    log "✅ 安装脚本和说明文档创建完成"
+}
+
+# 主函数
+main() {
+    log "=========================================="
+    log "🛠️ 开始编译IPK包"
+    log "📦 包名: $PACKAGE_NAME"
+    log "🔄 版本: $VERSION"
+    log "🔧 额外依赖: $EXTRA_DEPS"
+    log "🧹 全新编译: $CLEAN_BUILD"
+    log "=========================================="
+    
+    # 执行编译步骤
+    init_build_env
+    clone_source
+    create_minimal_config
+    build_package
+    create_install_script
+    
+    log "=========================================="
+    log "🎉 IPK包编译完成！"
+    log "📁 IPK文件位置: $BUILD_DIR/ipk_output/"
+    log "🔄 安装脚本: $BUILD_DIR/ipk_output/install_package.sh"
+    log "📋 文件列表: $BUILD_DIR/ipk_output/file_list.txt"
+    log "=========================================="
+    
+    # 显示文件列表
+    echo "生成的文件:"
+    find $BUILD_DIR/ipk_output -type f -exec ls -la {} \;
+}
+
+# 执行主函数
+main
