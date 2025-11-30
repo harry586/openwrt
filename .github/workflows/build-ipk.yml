@@ -38,341 +38,50 @@ jobs:
     - name: 检出仓库
       uses: actions/checkout@v4
 
-    - name: 创建IPK编译脚本
+    - name: 设置脚本执行权限
       run: |
-        echo "=== 创建通用IPK编译脚本 ==="
-        mkdir -p scripts
-        cat > scripts/build_ipk.sh << 'EOF'
-        #!/bin/bash
-        set -e
-        
-        # 通用IPK编译脚本 - 支持全平台
-        PACKAGE_NAME="$1"
-        VERSION="$2"
-        EXTRA_DEPS="$3"
-        CLEAN_BUILD="$4"
-        
-        BUILD_DIR="/mnt/openwrt-build-ipk"
-        LOG_FILE="$BUILD_DIR/build_ipk.log"
-        
-        # 日志函数
-        log() {
-            echo "【$(date '+%Y-%m-%d %H:%M:%S')】$1" | tee -a $LOG_FILE
-        }
-        
-        # 错误处理函数
-        handle_error() {
-            log "❌ 错误发生在: $1"
-            exit 1
-        }
-        
-        # 初始化构建环境
-        init_build_env() {
-            log "=== 初始化IPK编译环境 ==="
-            
-            # 清理旧目录（如果需要）
-            if [ "$CLEAN_BUILD" = "true" ]; then
-                log "🧹 清理旧构建目录..."
-                sudo rm -rf $BUILD_DIR 2>/dev/null || true
-            fi
-            
-            # 创建构建目录
-            sudo mkdir -p $BUILD_DIR || handle_error "创建构建目录失败"
-            sudo chown -R $USER:$USER $BUILD_DIR || handle_error "修改目录所有者失败"
-            cd $BUILD_DIR || handle_error "进入构建目录失败"
-            
-            # 安装依赖
-            log "安装编译依赖..."
-            sudo apt-get update || handle_error "apt-get update失败"
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-                build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-                gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip \
-                zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpath \
-                libpython3-dev python3 python3-pip python3-setuptools \
-                xsltproc zip subversion ninja-build automake autoconf \
-                libtool pkg-config help2man texinfo aria2 liblz4-dev zstd \
-                libcurl4-openssl-dev groff texlive texinfo cmake || handle_error "安装依赖包失败"
-        }
-        
-        # 克隆源码
-        clone_source() {
-            cd $BUILD_DIR || handle_error "进入构建目录失败"
-            
-            log "=== 克隆 $VERSION 源码 ==="
-            
-            if [ "$VERSION" = "23.05" ]; then
-                REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-                BRANCH="openwrt-23.05"
-                FEEDS_BRANCH="openwrt-23.05"
-            else
-                REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-                BRANCH="openwrt-21.02"
-                FEEDS_BRANCH="openwrt-21.02"
-            fi
-            
-            # 如果目录已存在且不是全新编译，则跳过克隆
-            if [ ! -d ".git" ] || [ "$CLEAN_BUILD" = "true" ]; then
-                git clone --depth 1 --branch "$BRANCH" "$REPO_URL" . || handle_error "克隆源码失败"
-            else
-                log "ℹ️ 使用现有源码目录"
-            fi
-            
-            # 配置 feeds
-            echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf.default
-            echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
-            
-            ./scripts/feeds update -a || handle_error "更新feeds失败"
-            ./scripts/feeds install -a || handle_error "安装feeds失败"
-            
-            log "✅ 源码准备完成: $VERSION"
-        }
-        
-        # 创建最小化配置
-        create_minimal_config() {
-            cd $BUILD_DIR || handle_error "进入构建目录失败"
-            
-            log "=== 创建最小化配置 ==="
-            
-            rm -f .config .config.old
-            
-            # 基础配置 - 使用通用的ramips/mt76x8平台
-            cat > .config << 'EOCONFIG'
-CONFIG_TARGET_ramips=y
-CONFIG_TARGET_ramips_mt76x8=y
-CONFIG_TARGET_ramips_mt76x8_DEVICE_xiaomi_mi-router-4a-gigabit=y
-CONFIG_TARGET_ROOTFS_SQUASHFS=y
-CONFIG_TARGET_IMAGES_GZIP=y
+        echo "=== 设置脚本执行权限 ==="
+        chmod +x scripts/build_ipk.sh
+        echo "✅ 脚本执行权限设置完成"
 
-# 基础系统
-CONFIG_PACKAGE_busybox=y
-CONFIG_PACKAGE_base-files=y
-CONFIG_PACKAGE_dropbear=y
-CONFIG_PACKAGE_firewall=y
-CONFIG_PACKAGE_fstools=y
-CONFIG_PACKAGE_libc=y
-CONFIG_PACKAGE_libgcc=y
-CONFIG_PACKAGE_mtd=y
-CONFIG_PACKAGE_netifd=y
-CONFIG_PACKAGE_opkg=y
-CONFIG_PACKAGE_procd=y
-CONFIG_PACKAGE_ubox=y
-CONFIG_PACKAGE_ubus=y
-CONFIG_PACKAGE_ubusd=y
-CONFIG_PACKAGE_uci=y
-CONFIG_PACKAGE_uclient-fetch=y
-
-# Luci基础
-CONFIG_PACKAGE_luci=y
-CONFIG_PACKAGE_luci-base=y
-CONFIG_PACKAGE_luci-lib-base=y
-CONFIG_PACKAGE_luci-lib-ip=y
-CONFIG_PACKAGE_luci-lib-jsonc=y
-CONFIG_PACKAGE_luci-lib-nixio=y
-CONFIG_PACKAGE_luci-mod-admin-full=y
-CONFIG_PACKAGE_luci-theme-bootstrap=y
-CONFIG_PACKAGE_luci-compat=y
-
-# 中文支持
-CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
-EOCONFIG
-
-            # 添加要编译的包
-            echo "CONFIG_PACKAGE_${PACKAGE_NAME}=y" >> .config
-            
-            # 添加额外依赖
-            if [ -n "$EXTRA_DEPS" ]; then
-                IFS=',' read -ra DEPS <<< "$EXTRA_DEPS"
-                for dep in "${DEPS[@]}"; do
-                    dep_clean=$(echo "$dep" | xargs)
-                    if [ -n "$dep_clean" ]; then
-                        echo "CONFIG_PACKAGE_${dep_clean}=y" >> .config
-                        log "✅ 添加依赖: $dep_clean"
-                    fi
-                done
-            fi
-            
-            make defconfig || handle_error "应用配置失败"
-            log "✅ 最小化配置创建完成"
-        }
-        
-        # 编译指定包
-        build_package() {
-            cd $BUILD_DIR || handle_error "进入构建目录失败"
-            
-            log "=== 开始编译包: $PACKAGE_NAME ($VERSION) ==="
-            
-            # 下载依赖
-            log "下载编译依赖..."
-            make -j1 download || handle_error "下载依赖失败"
-            
-            # 编译指定包
-            log "编译包: $PACKAGE_NAME"
-            make -j$(nproc) package/${PACKAGE_NAME}/compile V=s 2>&1 | tee -a $LOG_FILE
-            local build_exit_code=${PIPESTATUS[0]}
-            
-            if [ $build_exit_code -ne 0 ]; then
-                log "⚠️ 编译过程有错误，但继续尝试提取IPK"
-            fi
-            
-            # 查找生成的IPK文件
-            log "=== 查找生成的IPK文件 ==="
-            IPK_FOUND=0
-            
-            # 搜索所有可能的IPK文件路径
-            SEARCH_PATHS=(
-                "bin/packages/*/*/${PACKAGE_NAME}*.ipk"
-                "bin/targets/*/*/packages/${PACKAGE_NAME}*.ipk"
-                "build_dir/target-*/*/ipkg-*/${PACKAGE_NAME}*.ipk"
-            )
-            
-            for search_path in "${SEARCH_PATHS[@]}"; do
-                for ipk_file in $search_path; do
-                    if [ -f "$ipk_file" ]; then
-                        log "✅ 找到IPK文件: $ipk_file"
-                        mkdir -p $BUILD_DIR/ipk_output
-                        cp "$ipk_file" $BUILD_DIR/ipk_output/
-                        IPK_FOUND=1
-                    fi
-                done
-            done
-            
-            # 如果没找到，尝试深度搜索
-            if [ $IPK_FOUND -eq 0 ]; then
-                log "🔍 深度搜索IPK文件..."
-                find $BUILD_DIR -name "*${PACKAGE_NAME}*.ipk" -type f | while read ipk_file; do
-                    log "✅ 找到IPK文件: $ipk_file"
-                    mkdir -p $BUILD_DIR/ipk_output
-                    cp "$ipk_file" $BUILD_DIR/ipk_output/
-                    IPK_FOUND=1
-                done
-            fi
-            
-            # 检查结果
-            if [ $IPK_FOUND -eq 1 ]; then
-                log "🎉 包 $PACKAGE_NAME 编译成功！"
-                log "📦 生成的IPK文件:"
-                ls -la $BUILD_DIR/ipk_output/
-                
-                # 创建文件列表
-                find $BUILD_DIR/ipk_output -name "*.ipk" -type f > $BUILD_DIR/ipk_output/file_list.txt
-            else
-                log "❌ 未找到生成的IPK文件"
-                log "💡 尝试编译整个包目录..."
-                
-                # 尝试编译整个包目录
-                make -j$(nproc) package/compile V=s 2>&1 | tee -a $LOG_FILE
-                
-                # 再次搜索
-                find $BUILD_DIR -name "*${PACKAGE_NAME}*.ipk" -type f | while read ipk_file; do
-                    log "✅ 找到IPK文件: $ipk_file"
-                    mkdir -p $BUILD_DIR/ipk_output
-                    cp "$ipk_file" $BUILD_DIR/ipk_output/
-                    IPK_FOUND=1
-                done
-                
-                if [ $IPK_FOUND -eq 0 ]; then
-                    handle_error "IPK文件生成失败 - 请检查包名是否正确"
-                fi
-            fi
-        }
-        
-        # 创建通用安装脚本
-        create_install_script() {
-            cd $BUILD_DIR || handle_error "进入构建目录失败"
-            
-            log "=== 创建通用安装脚本 ==="
-            
-            cat > $BUILD_DIR/ipk_output/install_package.sh << 'EOINSTALL'
-#!/bin/bash
-# 通用IPK包安装脚本
-# 适用于全平台OpenWrt
-
-set -e
-
-PACKAGE_NAME="$1"
-
-if [ -z "$PACKAGE_NAME" ]; then
-    echo "用法: $0 <包名>"
-    echo "示例: $0 luci-app-filetransfer"
-    exit 1
-fi
-
-echo "=== OpenWrt IPK包安装脚本 ==="
-echo "要安装的包: $PACKAGE_NAME"
-
-# 检查系统
-if [ ! -f "/etc/openwrt_release" ]; then
-    echo "❌ 这不是OpenWrt系统"
-    exit 1
-fi
-
-# 获取架构
-ARCH=$(opkg print-architecture | awk '{print $2}')
-echo "系统架构: $ARCH"
-
-# 查找匹配的IPK文件
-IPK_FILE=$(find . -name "*${PACKAGE_NAME}*.ipk" | head -1)
-
-if [ -z "$IPK_FILE" ]; then
-    echo "❌ 未找到包 $PACKAGE_NAME 的IPK文件"
-    echo "当前目录下的IPK文件:"
-    find . -name "*.ipk" | while read file; do
-        echo "  - $(basename "$file")"
-    done
-    exit 1
-fi
-
-echo "找到IPK文件: $(basename "$IPK_FILE")"
-
-# 安装依赖（尝试自动解决）
-echo "检查依赖..."
-opkg update
-
-# 尝试安装IPK（会自动解决依赖）
-echo "安装包: $PACKAGE_NAME"
-if opkg install "$IPK_FILE"; then
-    echo "✅ $PACKAGE_NAME 安装成功！"
-    
-    # 检查是否真的安装成功
-    if opkg list-installed | grep -q "$PACKAGE_NAME"; then
-        echo "🎉 包已成功安装到系统"
-        
-        # 如果是Luci应用，提示重启服务
-        if [[ "$PACKAGE_NAME" == luci-app-* ]]; then
-            echo ""
-            echo "💡 如果是Luci应用，请:"
-            echo "1. 刷新浏览器缓存"
-            echo "2. 在Luci界面中查看新功能"
+    - name: 初始空间检查
+      run: |
+        echo "=== 初始磁盘空间检查 ==="
+        df -h
+        AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
+        AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+        echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+        if [ $AVAILABLE_GB -lt 20 ]; then
+          echo "错误: /mnt 空间不足20G"
+          exit 1
         fi
-    else
-        echo "⚠️ 包可能未正确安装，请检查以上输出"
-    fi
-else
-    echo "❌ 安装失败，请检查依赖关系"
-    echo "💡 可以尝试手动安装依赖后重试"
-    exit 1
-fi
-EOINSTALL
 
-            chmod +x $BUILD_DIR/ipk_output/install_package.sh
-            
-            # 创建使用说明
-            cat > $BUILD_DIR/ipk_output/README.md << 'EOREADME'
-# IPK包使用说明
+    - name: 编译IPK包
+      run: |
+        scripts/build_ipk.sh \
+          "${{ github.event.inputs.package_name }}" \
+          "${{ github.event.inputs.version_selection }}" \
+          "${{ github.event.inputs.extra_deps }}" \
+          "${{ github.event.inputs.clean_build }}"
 
-## 文件说明
-- `*.ipk`: OpenWrt软件包文件
-- `install_package.sh`: 自动安装脚本
-- `file_list.txt`: 文件列表
+    - name: 上传IPK文件
+      uses: actions/upload-artifact@v4
+      with:
+        name: ipk-${{ github.event.inputs.package_name }}-${{ github.event.inputs.version_selection }}
+        path: ${{ env.BUILD_DIR }}/ipk_output/
+        retention-days: 30
 
-## 安装方法
+    - name: 上传编译日志
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ipk-build-log-${{ github.event.inputs.package_name }}-${{ github.event.inputs.version_selection }}
+        path: ${{ env.BUILD_DIR }}/build_ipk.log
+        retention-days: 30
 
-### 方法一：使用安装脚本（推荐）
-```bash
-# 上传整个ipk_output目录到路由器
-scp -r ipk_output root@192.168.1.1:/tmp/
-
-# 在路由器上执行
-ssh root@192.168.1.1
-cd /tmp/ipk_output
-./install_package.sh <包名>
+    - name: 清理目录
+      if: always()
+      run: |
+        echo "=== 清理IPK构建目录 ==="
+        sudo rm -rf $BUILD_DIR || echo "⚠️ 清理构建目录失败"
+        echo "✅ 构建目录已清理"
