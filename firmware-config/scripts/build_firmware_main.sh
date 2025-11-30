@@ -277,6 +277,29 @@ generate_config() {
     
     rm -f .config .config.old
     
+    # 🚨 关键修复：明确禁用 passwall 和 rclone 系列插件
+    log "🔧 明确禁用 passwall 和 rclone 系列插件"
+    DISABLED_PLUGINS=(
+        "luci-app-passwall"
+        "luci-app-passwall_INCLUDE_Haproxy"
+        "luci-app-passwall_INCLUDE_Shadowsocks_Libev_Client"
+        "luci-app-passwall_INCLUDE_Shadowsocks_Libev_Server"
+        "luci-app-passwall_INCLUDE_ShadowsocksR_Libev_Client"
+        "luci-app-passwall_INCLUDE_Simple_Obfs"
+        "luci-app-passwall_INCLUDE_SingBox"
+        "luci-app-passwall_INCLUDE_Trojan_Plus"
+        "luci-app-passwall_INCLUDE_V2ray_Geoview"
+        "luci-app-passwall_INCLUDE_V2ray_Plugin"
+        "luci-app-passwall_INCLUDE_Xray"
+        "luci-app-rclone"
+        "luci-app-rclone_INCLUDE_rclone-webui"
+        "luci-app-rclone_INCLUDE_rclone-ng"
+    )
+
+    for disabled_plugin in "${DISABLED_PLUGINS[@]}"; do
+        echo "# CONFIG_PACKAGE_${disabled_plugin} is not set" >> .config
+    done
+
     # 创建基础配置
     echo "CONFIG_TARGET_${TARGET}=y" > .config
     echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
@@ -493,6 +516,8 @@ generate_config() {
     # 处理额外安装插件
     if [ -n "$extra_packages" ]; then
         log "🔧 处理额外安装插件: $extra_packages"
+        # 将顿号替换为分号，以便后续处理
+        extra_packages=$(echo "$extra_packages" | sed 's/、/;/g')
         IFS=';' read -ra EXTRA_PKGS <<< "$extra_packages"
         for pkg_cmd in "${EXTRA_PKGS[@]}"; do
             if [ -n "$pkg_cmd" ]; then
@@ -602,7 +627,7 @@ download_dependencies() {
     log "✅ 依赖包下载完成"
 }
 
-# 步骤15: 处理自定义文件（增强搜索功能）
+# 步骤15: 处理自定义文件（修复搜索逻辑）
 process_custom_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -616,18 +641,15 @@ process_custom_files() {
     echo "自定义文件处理报告 - $(date)" > $CUSTOM_LOG
     echo "==========================================" >> $CUSTOM_LOG
     
-    # 🚨 增强搜索：使用模糊搜索查找自定义文件目录
+    # 🚨 修复搜索逻辑：只搜索特定的自定义文件目录，排除日志目录
     log "🔍 开始搜索自定义文件目录..."
     
-    # 定义可能的目录名称模式
+    # 定义可能的目录名称模式（排除日志目录）
     SEARCH_PATTERNS=(
-        "*custom*file*"
-        "*firmware*config*"
-        "*custom*"
-        "*file*"
         "custom-files"
         "custom_files"
         "files"
+        "custom"
     )
     
     CUSTOM_FILES_DIR_FOUND=""
@@ -637,9 +659,9 @@ process_custom_files() {
         CUSTOM_FILES_DIR_FOUND="./firmware-config/custom-files"
         log "✅ 找到默认自定义文件目录: $CUSTOM_FILES_DIR_FOUND"
     else
-        # 使用模糊搜索查找目录
+        # 使用模糊搜索查找目录，但排除包含"log"的目录
         for pattern in "${SEARCH_PATTERNS[@]}"; do
-            found_dir=$(find . -type d -iname "$pattern" 2>/dev/null | head -1)
+            found_dir=$(find . -type d -iname "$pattern" 2>/dev/null | grep -v "log" | head -1)
             if [ -n "$found_dir" ] && [ -d "$found_dir" ]; then
                 # 检查目录是否包含文件（不是空目录）
                 if [ "$(find "$found_dir" -type f | head -1)" ]; then
@@ -674,35 +696,6 @@ process_custom_files() {
                 cp "$ipk_file" "$IPK_DEST_DIR/"
                 echo "✅ 复制IPK: $ipk_name 到 $IPK_DEST_DIR/" >> $CUSTOM_LOG
             done
-            
-            # 为23.05版本特别处理文件传输插件
-            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-                log "🔧 为23.05版本处理文件传输插件"
-                FILE_TRANSFER_IPK=$(find "$CUSTOM_FILES_DIR" -name "*filetransfer*.ipk" -type f | head -1)
-                if [ -n "$FILE_TRANSFER_IPK" ]; then
-                    log "🚨 为23.05版本安装文件传输插件IPK"
-                    echo "为23.05版本安装文件传输插件: $(basename "$FILE_TRANSFER_IPK")" >> $CUSTOM_LOG
-                    
-                    # 创建安装脚本
-                    INSTALL_SCRIPT="$BUILD_DIR/install_filetransfer.sh"
-                    cat > "$INSTALL_SCRIPT" << 'EOF'
-#!/bin/sh
-# 文件传输插件安装脚本
-echo "安装文件传输插件..."
-opkg install /tmp/upload/*filetransfer*.ipk
-if [ -f "/usr/lib/lua/luci/controller/filetransfer.lua" ]; then
-    echo "✅ 文件传输插件安装成功"
-else
-    echo "❌ 文件传输插件安装失败"
-fi
-EOF
-                    chmod +x "$INSTALL_SCRIPT"
-                    echo "✅ 创建文件传输插件安装脚本" >> $CUSTOM_LOG
-                else
-                    log "⚠️ 未找到文件传输插件IPK"
-                    echo "⚠️ 未找到文件传输插件IPK" >> $CUSTOM_LOG
-                fi
-            fi
         else
             log "ℹ️ 未找到IPK文件"
             echo "未找到IPK文件" >> $CUSTOM_LOG
@@ -741,9 +734,9 @@ EOF
         echo "详细搜索报告:" >> $CUSTOM_LOG
         echo "搜索模式: ${SEARCH_PATTERNS[*]}" >> $CUSTOM_LOG
         
-        # 显示所有可能的目录
+        # 显示所有可能的目录（排除日志目录）
         log "所有可能的目录:"
-        find . -type d \( -iname "*custom*" -o -iname "*file*" -o -iname "*firmware*" \) 2>/dev/null | head -10 >> $CUSTOM_LOG
+        find . -type d \( -iname "*custom*" -o -iname "*file*" -o -iname "*firmware*" \) 2>/dev/null | grep -v "log" | head -10 >> $CUSTOM_LOG
         
         log "ℹ️ 未找到有效的自定义文件目录"
         echo "未找到有效的自定义文件目录" >> $CUSTOM_LOG
