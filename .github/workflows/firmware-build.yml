@@ -69,14 +69,13 @@ jobs:
       run: |
         echo "=== 验证仓库结构 ==="
         echo "当前目录: $(pwd)"
+        echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
         echo "--- 完整目录结构 ---"
         find . -type f -name "*.sh" | head -20
         echo "--- 检查 firmware-config 目录 ---"
         ls -la firmware-config/ || echo "firmware-config 目录不存在"
         echo "--- 检查 scripts 目录 ---"
         ls -la firmware-config/scripts/ || echo "firmware-config/scripts 目录不存在"
-        echo "--- 检查脚本文件 ---"
-        find firmware-config -name "build_setup.sh" -type f
 
     - name: 创建构建目录
       run: |
@@ -145,26 +144,62 @@ jobs:
         echo "子目标: $SUBTARGET"
         echo "设备: $DEVICE"
 
-    - name: 执行编译配置脚本
+    - name: 执行编译配置脚本（模糊查找版）
       run: |
         cd $BUILD_DIR
-        echo "=== 执行编译配置脚本 ==="
+        echo "=== 执行编译配置脚本（模糊查找版）==="
         
-        # 使用 firmware-config/scripts 下的脚本
-        if [ -f "firmware-config/scripts/build_setup.sh" ]; then
-            echo "使用 firmware-config/scripts/build_setup.sh"
-            chmod +x firmware-config/scripts/build_setup.sh
-            firmware-config/scripts/build_setup.sh \
-              "$SELECTED_BRANCH" \
-              "$TARGET" \
-              "$SUBTARGET" \
-              "$DEVICE" \
-              "${{ github.event.inputs.config_mode }}" \
-              "${{ github.event.inputs.extra_packages }}"
-        elif [ -f "../firmware-config/scripts/build_setup.sh" ]; then
-            echo "使用 ../firmware-config/scripts/build_setup.sh"
-            chmod +x ../firmware-config/scripts/build_setup.sh
-            ../firmware-config/scripts/build_setup.sh \
+        # 强大的模糊查找
+        echo "=== 强大的模糊查找 scripts 目录 ==="
+        
+        # 方法1: 查找所有 scripts 目录
+        echo "方法1: 查找所有 scripts 目录"
+        ALL_SCRIPTS_DIRS=$(find $GITHUB_WORKSPACE -type d -name "scripts" 2>/dev/null)
+        echo "找到的 scripts 目录:"
+        echo "$ALL_SCRIPTS_DIRS"
+        
+        # 方法2: 查找 build_setup.sh 文件
+        echo "方法2: 直接查找 build_setup.sh 文件"
+        ALL_BUILD_SCRIPTS=$(find $GITHUB_WORKSPACE -name "build_setup.sh" -type f 2>/dev/null)
+        echo "找到的 build_setup.sh 文件:"
+        echo "$ALL_BUILD_SCRIPTS"
+        
+        # 方法3: 在常见位置查找
+        COMMON_PATHS=(
+          "$GITHUB_WORKSPACE/firmware-config/scripts/build_setup.sh"
+          "$GITHUB_WORKSPACE/scripts/build_setup.sh"
+          "firmware-config/scripts/build_setup.sh"
+          "scripts/build_setup.sh"
+          "../firmware-config/scripts/build_setup.sh"
+          "../scripts/build_setup.sh"
+        )
+        
+        SCRIPT_PATH=""
+        for path in "${COMMON_PATHS[@]}"; do
+            if [ -f "$path" ]; then
+                SCRIPT_PATH="$path"
+                echo "✅ 在常见位置找到脚本: $SCRIPT_PATH"
+                break
+            fi
+        done
+        
+        # 如果还没找到，使用第一个找到的 build_setup.sh
+        if [ -z "$SCRIPT_PATH" ] && [ -n "$ALL_BUILD_SCRIPTS" ]; then
+            SCRIPT_PATH=$(echo "$ALL_BUILD_SCRIPTS" | head -1)
+            echo "✅ 使用第一个找到的脚本: $SCRIPT_PATH"
+        fi
+        
+        # 执行脚本
+        if [ -n "$SCRIPT_PATH" ] && [ -f "$SCRIPT_PATH" ]; then
+            echo "🎯 执行脚本: $SCRIPT_PATH"
+            chmod +x "$SCRIPT_PATH"
+            
+            # 显示脚本信息
+            echo "脚本详细信息:"
+            ls -la "$SCRIPT_PATH"
+            
+            # 执行脚本
+            "$SCRIPT_PATH" \
               "$SELECTED_BRANCH" \
               "$TARGET" \
               "$SUBTARGET" \
@@ -172,10 +207,19 @@ jobs:
               "${{ github.event.inputs.config_mode }}" \
               "${{ github.event.inputs.extra_packages }}"
         else
-            echo "❌ 脚本文件未找到，搜索所有位置..."
-            find . -name "build_setup.sh" -type f 2>/dev/null
-            find ../ -name "build_setup.sh" -type f 2>/dev/null
-            echo "错误: 未找到 build_setup.sh 脚本文件"
+            echo "❌ 错误: 未找到任何 build_setup.sh 脚本文件"
+            echo "=== 调试信息 ==="
+            echo "当前目录: $(pwd)"
+            echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+            echo "=== 完整文件列表 ==="
+            find $GITHUB_WORKSPACE -type f -name "*.sh" | head -30
+            echo "=== 重要提示 ==="
+            echo "请确保以下文件已提交到仓库:"
+            echo "  firmware-config/scripts/build_setup.sh"
+            echo "执行以下命令提交文件:"
+            echo "  git add firmware-config/scripts/build_setup.sh"
+            echo "  git commit -m '添加编译配置脚本'"
+            echo "  git push"
             exit 1
         fi
 
