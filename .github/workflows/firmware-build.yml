@@ -65,6 +65,19 @@ jobs:
       with:
         fetch-depth: 0
 
+    - name: 验证仓库结构
+      run: |
+        echo "=== 验证仓库结构 ==="
+        echo "当前目录: $(pwd)"
+        echo "--- 完整目录结构 ---"
+        find . -type f -name "*.sh" | head -20
+        echo "--- 检查 firmware-config 目录 ---"
+        ls -la firmware-config/ || echo "firmware-config 目录不存在"
+        echo "--- 检查 scripts 目录 ---"
+        ls -la firmware-config/scripts/ || echo "firmware-config/scripts 目录不存在"
+        echo "--- 检查脚本文件 ---"
+        find firmware-config -name "build_setup.sh" -type f
+
     - name: 创建构建目录
       run: |
         echo "=== 创建构建目录 ==="
@@ -135,14 +148,36 @@ jobs:
     - name: 执行编译配置脚本
       run: |
         cd $BUILD_DIR
-        chmod +x $GITHUB_WORKSPACE/scripts/build_setup.sh
-        $GITHUB_WORKSPACE/scripts/build_setup.sh \
-          "$SELECTED_BRANCH" \
-          "$TARGET" \
-          "$SUBTARGET" \
-          "$DEVICE" \
-          "${{ github.event.inputs.config_mode }}" \
-          "${{ github.event.inputs.extra_packages }}"
+        echo "=== 执行编译配置脚本 ==="
+        
+        # 使用 firmware-config/scripts 下的脚本
+        if [ -f "firmware-config/scripts/build_setup.sh" ]; then
+            echo "使用 firmware-config/scripts/build_setup.sh"
+            chmod +x firmware-config/scripts/build_setup.sh
+            firmware-config/scripts/build_setup.sh \
+              "$SELECTED_BRANCH" \
+              "$TARGET" \
+              "$SUBTARGET" \
+              "$DEVICE" \
+              "${{ github.event.inputs.config_mode }}" \
+              "${{ github.event.inputs.extra_packages }}"
+        elif [ -f "../firmware-config/scripts/build_setup.sh" ]; then
+            echo "使用 ../firmware-config/scripts/build_setup.sh"
+            chmod +x ../firmware-config/scripts/build_setup.sh
+            ../firmware-config/scripts/build_setup.sh \
+              "$SELECTED_BRANCH" \
+              "$TARGET" \
+              "$SUBTARGET" \
+              "$DEVICE" \
+              "${{ github.event.inputs.config_mode }}" \
+              "${{ github.event.inputs.extra_packages }}"
+        else
+            echo "❌ 脚本文件未找到，搜索所有位置..."
+            find . -name "build_setup.sh" -type f 2>/dev/null
+            find ../ -name "build_setup.sh" -type f 2>/dev/null
+            echo "错误: 未找到 build_setup.sh 脚本文件"
+            exit 1
+        fi
 
     - name: 修复网络环境
       run: |
