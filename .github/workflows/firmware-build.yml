@@ -19,7 +19,9 @@ on:
       config_mode:
         description: |
           ⚙️ 配置模式选择
+          
           🟣 基础模式 - 最小化配置，用于测试编译：✅ 文件传输。
+          
           🟠 正常模式 - 完整功能配置：✅ TurboACC 网络加速 ✅ UPnP 自动端口转发 ✅ Samba 文件共享 ✅ 磁盘管理 ✅ KMS 激活服务 ✅ SmartDNS 智能DNS ✅ 家长控制 ✅ 微信推送 ✅ 流量控制 (SQM) ✅ FTP 服务器 ✅ ARP 绑定 ✅ CPU 限制 ✅ 硬盘休眠。
         required: true
         type: choice
@@ -39,6 +41,11 @@ on:
         required: false
         default: true
         type: boolean
+      search_scripts:
+        description: '🔍 搜索脚本文件 (支持模糊查找)'
+        required: false
+        type: string
+        default: ''
 
 env:
   BUILD_DIR: /mnt/openwrt-build
@@ -48,6 +55,24 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
+    - name: 搜索脚本文件
+      if: github.event.inputs.search_scripts != ''
+      run: |
+        echo "=== 搜索脚本文件: ${{ github.event.inputs.search_scripts }} ==="
+        find . -name "*.sh" -type f | grep -i "${{ github.event.inputs.search_scripts }}" || echo "未找到匹配的脚本文件"
+        find . -name "*.yml" -o -name "*.yaml" | grep -i "${{ github.event.inputs.search_scripts }}" || echo "未找到匹配的工作流文件"
+
+    - name: 检出配置仓库
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: 设置脚本执行权限
+      run: |
+        echo "=== 设置脚本执行权限 ==="
+        find firmware-config/scripts -name "*.sh" -exec chmod +x {} \;
+        echo "✅ 脚本执行权限设置完成"
+
     - name: 初始空间检查
       run: |
         echo "=== 初始磁盘空间检查 ==="
@@ -60,243 +85,91 @@ jobs:
           exit 1
         fi
 
-    - name: 检出配置仓库
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-
-    - name: 验证仓库结构
+    - name: 设置编译环境
       run: |
-        echo "=== 验证仓库结构 ==="
-        echo "当前目录: $(pwd)"
-        echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
-        echo "--- 完整目录结构 ---"
-        find . -type f -name "*.sh" | head -20
-        echo "--- 检查 firmware-config 目录 ---"
-        ls -la firmware-config/ || echo "firmware-config 目录不存在"
-        echo "--- 检查 scripts 目录 ---"
-        ls -la firmware-config/scripts/ || echo "firmware-config/scripts 目录不存在"
+        firmware-config/scripts/build_firmware_main.sh setup_environment
 
     - name: 创建构建目录
       run: |
-        echo "=== 创建构建目录 ==="
-        sudo mkdir -p $BUILD_DIR
-        sudo chown -R $USER:$USER $BUILD_DIR
-        sudo chmod -R 755 $BUILD_DIR
-        echo "✅ 构建目录创建完成"
+        firmware-config/scripts/build_firmware_main.sh create_build_dir
 
     - name: 版本选择
       id: version-selection
       run: |
-        cd $BUILD_DIR
-        echo "=== 版本选择 ==="
-        if [ "${{ github.event.inputs.version_selection }}" = "23.05" ]; then
-            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-            SELECTED_BRANCH="openwrt-23.05"
-        else
-            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-            SELECTED_BRANCH="openwrt-21.02"
-        fi
-        echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
-        echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
-        echo "✅ 版本选择完成: $SELECTED_BRANCH"
+        firmware-config/scripts/build_firmware_main.sh version_selection "${{ github.event.inputs.version_selection }}"
 
     - name: 克隆源码
       run: |
-        cd $BUILD_DIR
-        echo "=== 克隆源码 ==="
-        echo "仓库: $SELECTED_REPO_URL"
-        echo "分支: $SELECTED_BRANCH"
-        sudo rm -rf ./* ./.git* 2>/dev/null || true
-        git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .
-        echo "✅ 源码克隆完成"
+        firmware-config/scripts/build_firmware_main.sh clone_source
+
+    - name: 添加 TurboACC 支持
+      run: |
+        firmware-config/scripts/build_firmware_main.sh add_turboacc_support "${{ github.event.inputs.config_mode }}"
+
+    - name: 添加文件传输插件支持
+      run: |
+        firmware-config/scripts/build_firmware_main.sh add_filetransfer_support
 
     - name: 设备配置
       run: |
-        cd $BUILD_DIR
-        echo "=== 设备配置 ==="
-        case "${{ github.event.inputs.device_name }}" in
-            "ac42u"|"acrh17")
-                TARGET="ipq40xx"
-                SUBTARGET="generic"
-                DEVICE="asus_rt-ac42u"
-                ;;
-            "mi_router_4a_gigabit"|"r4ag")
-                TARGET="ramips"
-                SUBTARGET="mt76x8"
-                DEVICE="xiaomi_mi-router-4a-gigabit"
-                ;;
-            "mi_router_3g"|"r3g")
-                TARGET="ramips"
-                SUBTARGET="mt7621"
-                DEVICE="xiaomi_mi-router-3g"
-                ;;
-            *)
-                TARGET="ipq40xx"
-                SUBTARGET="generic"
-                DEVICE="${{ github.event.inputs.device_name }}"
-                ;;
-        esac
-        echo "TARGET=$TARGET" >> $GITHUB_ENV
-        echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
-        echo "DEVICE=$DEVICE" >> $GITHUB_ENV
-        echo "目标: $TARGET"
-        echo "子目标: $SUBTARGET"
-        echo "设备: $DEVICE"
+        firmware-config/scripts/build_firmware_main.sh device_config "${{ github.event.inputs.device_name }}"
 
-    - name: 执行编译配置脚本（模糊查找版）
+    - name: 配置Feeds
       run: |
-        cd $BUILD_DIR
-        echo "=== 执行编译配置脚本（模糊查找版）==="
-        
-        # 强大的模糊查找
-        echo "=== 强大的模糊查找 scripts 目录 ==="
-        
-        # 方法1: 查找所有 scripts 目录
-        echo "方法1: 查找所有 scripts 目录"
-        ALL_SCRIPTS_DIRS=$(find $GITHUB_WORKSPACE -type d -name "scripts" 2>/dev/null)
-        echo "找到的 scripts 目录:"
-        echo "$ALL_SCRIPTS_DIRS"
-        
-        # 方法2: 查找 build_setup.sh 文件
-        echo "方法2: 直接查找 build_setup.sh 文件"
-        ALL_BUILD_SCRIPTS=$(find $GITHUB_WORKSPACE -name "build_setup.sh" -type f 2>/dev/null)
-        echo "找到的 build_setup.sh 文件:"
-        echo "$ALL_BUILD_SCRIPTS"
-        
-        # 方法3: 在常见位置查找
-        COMMON_PATHS=(
-          "$GITHUB_WORKSPACE/firmware-config/scripts/build_setup.sh"
-          "$GITHUB_WORKSPACE/scripts/build_setup.sh"
-          "firmware-config/scripts/build_setup.sh"
-          "scripts/build_setup.sh"
-          "../firmware-config/scripts/build_setup.sh"
-          "../scripts/build_setup.sh"
-        )
-        
-        SCRIPT_PATH=""
-        for path in "${COMMON_PATHS[@]}"; do
-            if [ -f "$path" ]; then
-                SCRIPT_PATH="$path"
-                echo "✅ 在常见位置找到脚本: $SCRIPT_PATH"
-                break
-            fi
-        done
-        
-        # 如果还没找到，使用第一个找到的 build_setup.sh
-        if [ -z "$SCRIPT_PATH" ] && [ -n "$ALL_BUILD_SCRIPTS" ]; then
-            SCRIPT_PATH=$(echo "$ALL_BUILD_SCRIPTS" | head -1)
-            echo "✅ 使用第一个找到的脚本: $SCRIPT_PATH"
-        fi
-        
-        # 执行脚本
-        if [ -n "$SCRIPT_PATH" ] && [ -f "$SCRIPT_PATH" ]; then
-            echo "🎯 执行脚本: $SCRIPT_PATH"
-            chmod +x "$SCRIPT_PATH"
-            
-            # 显示脚本信息
-            echo "脚本详细信息:"
-            ls -la "$SCRIPT_PATH"
-            
-            # 执行脚本
-            "$SCRIPT_PATH" \
-              "$SELECTED_BRANCH" \
-              "$TARGET" \
-              "$SUBTARGET" \
-              "$DEVICE" \
-              "${{ github.event.inputs.config_mode }}" \
-              "${{ github.event.inputs.extra_packages }}"
-        else
-            echo "❌ 错误: 未找到任何 build_setup.sh 脚本文件"
-            echo "=== 调试信息 ==="
-            echo "当前目录: $(pwd)"
-            echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
-            echo "=== 完整文件列表 ==="
-            find $GITHUB_WORKSPACE -type f -name "*.sh" | head -30
-            echo "=== 重要提示 ==="
-            echo "请确保以下文件已提交到仓库:"
-            echo "  firmware-config/scripts/build_setup.sh"
-            echo "执行以下命令提交文件:"
-            echo "  git add firmware-config/scripts/build_setup.sh"
-            echo "  git commit -m '添加编译配置脚本'"
-            echo "  git push"
-            exit 1
-        fi
+        firmware-config/scripts/build_firmware_main.sh configure_feeds "${{ github.event.inputs.config_mode }}"
 
-    - name: 修复网络环境
+    - name: 安装 TurboACC 包
+      if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
       run: |
-        cd $BUILD_DIR
-        echo "=== 修复网络环境 ==="
-        git config --global http.postBuffer 524288000
-        git config --global http.lowSpeedLimit 0
-        git config --global http.lowSpeedTime 999999
-        export GIT_SSL_NO_VERIFY=1
-        export PYTHONHTTPSVERIFY=0
-        echo "✅ 网络环境修复完成"
+        firmware-config/scripts/build_firmware_main.sh install_turboacc_packages
 
-    - name: 下载依赖包
+    - name: 安装文件传输插件包
       run: |
-        cd $BUILD_DIR
-        echo "=== 下载依赖包 ==="
-        make -j1 download
-        echo "✅ 依赖包下载完成"
+        firmware-config/scripts/build_firmware_main.sh install_filetransfer_packages
 
     - name: 编译前空间检查
       run: |
-        echo "=== 编译前空间检查 ==="
-        df -h
-        AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
-        AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-        echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+        firmware-config/scripts/build_firmware_main.sh pre_build_space_check
+
+    - name: 智能配置生成（USB完全修复通用版）
+      run: |
+        firmware-config/scripts/build_firmware_main.sh generate_config \
+          "${{ github.event.inputs.config_mode }}" \
+          "${{ github.event.inputs.extra_packages }}"
+
+    - name: 验证USB配置
+      run: |
+        firmware-config/scripts/build_firmware_main.sh verify_usb_config
+
+    - name: 应用配置
+      run: |
+        firmware-config/scripts/build_firmware_main.sh apply_config "${{ github.event.inputs.config_mode }}"
+
+    - name: 修复网络环境
+      run: |
+        firmware-config/scripts/build_firmware_main.sh fix_network
+
+    - name: 下载依赖包
+      run: |
+        firmware-config/scripts/build_firmware_main.sh download_dependencies
 
     - name: 编译固件
       run: |
-        cd $BUILD_DIR
-        echo "=== 编译固件 ==="
-        if [ "${{ github.event.inputs.enable_cache }}" = "true" ]; then
-            echo "启用编译缓存"
-            make -j$(nproc) V=s 2>&1 | tee build.log
-            BUILD_EXIT_CODE=${PIPESTATUS[0]}
-        else
-            echo "普通编译模式"
-            make -j$(nproc) V=s 2>&1 | tee build.log
-            BUILD_EXIT_CODE=${PIPESTATUS[0]}
-        fi
-        echo "编译退出代码: $BUILD_EXIT_CODE"
-        if [ $BUILD_EXIT_CODE -ne 0 ]; then
-            echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
-            if [ -f "build.log" ]; then
-                echo "=== 编译错误摘要 ==="
-                grep -i "error:\|failed\|undefined" build.log | head -20
-            fi
-            exit $BUILD_EXIT_CODE
-        fi
-        echo "✅ 固件编译完成"
+        firmware-config/scripts/build_firmware_main.sh build_firmware "${{ github.event.inputs.enable_cache }}"
+
+    - name: 错误分析
+      if: failure()
+      run: |
+        firmware-config/scripts/error_analysis.sh
 
     - name: 编译后空间检查
       run: |
-        echo "=== 编译后空间检查 ==="
-        df -h
-        AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
-        AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-        echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+        firmware-config/scripts/build_firmware_main.sh post_build_space_check
 
     - name: 固件文件检查
       if: success()
       run: |
-        cd $BUILD_DIR
-        echo "=== 固件文件检查 ==="
-        if [ -d "bin/targets" ]; then
-            echo "✅ 固件目录存在"
-            find bin/targets -name "*.bin" -o -name "*.img" | while read file; do
-                echo "固件文件: $file ($(du -h "$file" | cut -f1))"
-            done
-            echo "=== 生成的固件列表 ==="
-            find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) -exec ls -la {} \;
-        else
-            echo "❌ 固件目录不存在"
-            exit 1
-        fi
+        firmware-config/scripts/build_firmware_main.sh check_firmware_files
 
     - name: 上传固件
       if: success()
@@ -314,9 +187,15 @@ jobs:
         path: ${{ env.BUILD_DIR }}/build.log
         retention-days: 7
 
+    - name: 上传配置文件
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
+        path: ${{ env.BUILD_DIR }}/.config
+        retention-days: 7
+
     - name: 清理目录
       if: always()
       run: |
-        echo "=== 清理构建目录 ==="
-        sudo rm -rf $BUILD_DIR
-        echo "✅ 构建目录已清理"
+        firmware-config/scripts/build_firmware_main.sh cleanup
