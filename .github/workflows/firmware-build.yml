@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: '📱 设备名称 (如: ac42u, r3g等)'
+        description: '📱 设备名称 (如: ac42u, r3g, r4ag 等)'
         required: true
         default: 'ac42u'
         type: string
@@ -146,12 +146,16 @@ jobs:
       run: |
         firmware-config/scripts/build_firmware_main.sh download_dependencies
 
+    - name: 处理自定义文件
+      run: |
+        firmware-config/scripts/build_firmware_main.sh process_custom_files
+
     - name: 编译固件
       run: |
         firmware-config/scripts/build_firmware_main.sh build_firmware "${{ github.event.inputs.enable_cache }}"
 
     - name: 错误分析
-      if: failure()
+      if: always()
       run: |
         firmware-config/scripts/error_analysis.sh
 
@@ -163,6 +167,11 @@ jobs:
       if: success()
       run: |
         firmware-config/scripts/build_firmware_main.sh check_firmware_files
+
+    - name: 备份配置文件
+      if: always()
+      run: |
+        firmware-config/scripts/build_firmware_main.sh backup_config
 
     - name: 上传固件
       if: success()
@@ -177,7 +186,9 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: build-log-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
-        path: ${{ env.BUILD_DIR }}/build.log
+        path: |
+          ${{ env.BUILD_DIR }}/build.log
+          ${{ env.BUILD_DIR }}/error_analysis.log
         retention-days: 7
 
     - name: 上传配置文件
@@ -185,7 +196,15 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
-        path: ${{ env.BUILD_DIR }}/.config
+        path: ${{ env.BUILD_DIR }}/config_backup/
+        retention-days: 7
+
+    - name: 上传自定义文件
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: custom-files-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
+        path: ${{ env.BUILD_DIR }}/custom_files_log/
         retention-days: 7
 
     - name: 清理目录
