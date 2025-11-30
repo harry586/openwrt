@@ -4,6 +4,7 @@ set -e
 # 全局变量
 BUILD_DIR="/mnt/openwrt-build"
 ENV_FILE="$BUILD_DIR/build_env.sh"
+CUSTOM_FILES_DIR="./firmware-config/custom-files"
 
 # 日志函数
 log() {
@@ -242,11 +243,11 @@ install_filetransfer_packages() {
     if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
         log "🔧 为23.05安装文件传输插件"
         # 更新 small feed
-        ./scripts/feeds update small || handle_error "更新small feed失败"
+        ./scripts/feeds update small || log "⚠️ 更新small feed失败，尝试继续"
         # 安装文件传输插件
-        ./scripts/feeds install -p small luci-app-filetransfer || handle_error "安装luci-app-filetransfer失败"
+        ./scripts/feeds install -p small luci-app-filetransfer || log "⚠️ 安装luci-app-filetransfer失败，将使用备用方案"
         # 安装中文语言包
-        ./scripts/feeds install -p small luci-i18n-filetransfer-zh-cn || handle_error "安装luci-i18n-filetransfer-zh-cn失败"
+        ./scripts/feeds install -p small luci-i18n-filetransfer-zh-cn || log "⚠️ 安装luci-i18n-filetransfer-zh-cn失败"
     else
         log "🔧 为21.02安装文件传输插件"
         # 更新 kenzo feed
@@ -429,8 +430,9 @@ generate_config() {
     # 基础中文语言包
     echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
     echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
-    echo "CONFIG_PACKAGE_luci-app-filetransfer=y" >> .config
     
+    # 🚨 关键修复：文件传输插件配置
+    echo "CONFIG_PACKAGE_luci-app-filetransfer=y" >> .config
     if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
         echo "CONFIG_PACKAGE_luci-i18n-filetransfer-zh-cn=y" >> .config
     fi
@@ -547,6 +549,13 @@ apply_config() {
     
     log "=== 应用配置 ==="
     
+    # 显示当前配置摘要
+    log "=== 配置摘要 ==="
+    log "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
+    log "文件传输插件状态: $(grep "CONFIG_PACKAGE_luci-app-filetransfer" .config)"
+    log "USB核心驱动状态: $(grep "CONFIG_PACKAGE_kmod-usb-core" .config)"
+    log "USB存储状态: $(grep "CONFIG_PACKAGE_kmod-usb-storage" .config)"
+    
     # 🚨 关键修复：23.05版本需要先清理可能的配置冲突
     if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
         log "🔧 23.05版本配置预处理"
@@ -557,6 +566,13 @@ apply_config() {
     fi
     
     make defconfig || handle_error "应用配置失败"
+    
+    # 显示应用后的配置
+    log "=== 应用配置后状态 ==="
+    log "最终启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
+    log "关键插件状态:"
+    grep -E "CONFIG_PACKAGE_luci-app-filetransfer|CONFIG_PACKAGE_luci-app-turboacc|CONFIG_PACKAGE_luci-app-samba4" .config | head -10
+    
     log "✅ 配置应用完成"
 }
 
@@ -582,7 +598,116 @@ download_dependencies() {
     log "✅ 依赖包下载完成"
 }
 
-# 步骤15: 编译固件
+# 步骤15: 处理自定义文件
+process_custom_files() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 处理自定义文件 ==="
+    
+    # 创建自定义文件目录
+    mkdir -p $BUILD_DIR/custom_files_log
+    CUSTOM_LOG="$BUILD_DIR/custom_files_log/custom_files.log"
+    
+    echo "自定义文件处理报告 - $(date)" > $CUSTOM_LOG
+    echo "==========================================" >> $CUSTOM_LOG
+    
+    if [ -d "$CUSTOM_FILES_DIR" ]; then
+        log "🔧 发现自定义文件目录"
+        echo "发现自定义文件目录: $CUSTOM_FILES_DIR" >> $CUSTOM_LOG
+        
+        # 处理IPK文件
+        IPK_FILES=$(find "$CUSTOM_FILES_DIR" -name "*.ipk" -type f)
+        if [ -n "$IPK_FILES" ]; then
+            log "📦 发现IPK文件:"
+            echo "发现的IPK文件:" >> $CUSTOM_LOG
+            echo "$IPK_FILES" >> $CUSTOM_LOG
+            
+            # 创建IPK存放目录
+            IPK_DEST_DIR="$BUILD_DIR/packages/custom"
+            mkdir -p "$IPK_DEST_DIR"
+            
+            # 复制IPK文件
+            for ipk_file in $IPK_FILES; do
+                ipk_name=$(basename "$ipk_file")
+                log "复制IPK: $ipk_name"
+                cp "$ipk_file" "$IPK_DEST_DIR/"
+                echo "✅ 复制IPK: $ipk_name 到 $IPK_DEST_DIR/" >> $CUSTOM_LOG
+            done
+            
+            # 为23.05版本特别处理文件传输插件
+            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+                log "🔧 为23.05版本处理文件传输插件"
+                FILE_TRANSFER_IPK=$(find "$CUSTOM_FILES_DIR" -name "*filetransfer*.ipk" -type f | head -1)
+                if [ -n "$FILE_TRANSFER_IPK" ]; then
+                    log "🚨 为23.05版本安装文件传输插件IPK"
+                    echo "为23.05版本安装文件传输插件: $(basename "$FILE_TRANSFER_IPK")" >> $CUSTOM_LOG
+                    
+                    # 创建安装脚本
+                    INSTALL_SCRIPT="$BUILD_DIR/install_filetransfer.sh"
+                    cat > "$INSTALL_SCRIPT" << 'EOF'
+#!/bin/sh
+# 文件传输插件安装脚本
+echo "安装文件传输插件..."
+opkg install /tmp/upload/*filetransfer*.ipk
+if [ -f "/usr/lib/lua/luci/controller/filetransfer.lua" ]; then
+    echo "✅ 文件传输插件安装成功"
+else
+    echo "❌ 文件传输插件安装失败"
+fi
+EOF
+                    chmod +x "$INSTALL_SCRIPT"
+                    echo "✅ 创建文件传输插件安装脚本" >> $CUSTOM_LOG
+                else
+                    log "⚠️ 未找到文件传输插件IPK"
+                    echo "⚠️ 未找到文件传输插件IPK" >> $CUSTOM_LOG
+                fi
+            fi
+        else
+            log "ℹ️ 未找到IPK文件"
+            echo "未找到IPK文件" >> $CUSTOM_LOG
+        fi
+        
+        # 处理Shell脚本
+        SH_FILES=$(find "$CUSTOM_FILES_DIR" -name "*.sh" -type f)
+        if [ -n "$SH_FILES" ]; then
+            log "📜 发现Shell脚本:"
+            echo "发现的Shell脚本:" >> $CUSTOM_LOG
+            echo "$SH_FILES" >> $CUSTOM_LOG
+            
+            # 创建脚本存放目录
+            SCRIPT_DEST_DIR="$BUILD_DIR/files/etc/uci-defaults"
+            mkdir -p "$SCRIPT_DEST_DIR"
+            
+            # 复制并设置执行权限
+            for sh_file in $SH_FILES; do
+                sh_name=$(basename "$sh_file")
+                log "处理脚本: $sh_name"
+                cp "$sh_file" "$SCRIPT_DEST_DIR/"
+                chmod +x "$SCRIPT_DEST_DIR/$sh_name"
+                echo "✅ 复制脚本: $sh_name 到 $SCRIPT_DEST_DIR/" >> $CUSTOM_LOG
+            done
+        else
+            log "ℹ️ 未找到Shell脚本"
+            echo "未找到Shell脚本" >> $CUSTOM_LOG
+        fi
+        
+        # 列出所有自定义文件
+        log "📁 自定义文件列表:"
+        find "$CUSTOM_FILES_DIR" -type f >> $CUSTOM_LOG
+        
+    else
+        log "ℹ️ 自定义文件目录不存在: $CUSTOM_FILES_DIR"
+        echo "自定义文件目录不存在: $CUSTOM_FILES_DIR" >> $CUSTOM_LOG
+    fi
+    
+    echo "==========================================" >> $CUSTOM_LOG
+    echo "自定义文件处理完成" >> $CUSTOM_LOG
+    
+    log "✅ 自定义文件处理完成"
+}
+
+# 步骤16: 编译固件
 build_firmware() {
     local enable_cache=$1
     load_env
@@ -611,7 +736,7 @@ build_firmware() {
     log "✅ 固件编译完成"
 }
 
-# 步骤16: 编译后空间检查
+# 步骤17: 编译后空间检查
 post_build_space_check() {
     log "=== 编译后空间检查 ==="
     df -h
@@ -620,7 +745,7 @@ post_build_space_check() {
     log "/mnt 可用空间: ${AVAILABLE_GB}G"
 }
 
-# 步骤17: 固件文件检查
+# 步骤18: 固件文件检查
 check_firmware_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -639,7 +764,51 @@ check_firmware_files() {
     fi
 }
 
-# 步骤18: 清理目录
+# 步骤19: 备份配置文件
+backup_config() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 备份配置文件 ==="
+    
+    # 创建配置备份目录
+    mkdir -p config_backup
+    
+    # 备份主要配置文件
+    if [ -f ".config" ]; then
+        cp .config config_backup/
+        log "✅ 备份 .config 文件"
+    else
+        log "⚠️ .config 文件不存在"
+    fi
+    
+    # 备份环境变量
+    if [ -f "$ENV_FILE" ]; then
+        cp $ENV_FILE config_backup/
+        log "✅ 备份环境变量文件"
+    fi
+    
+    # 创建配置摘要
+    CONFIG_SUMMARY="config_backup/config_summary.txt"
+    echo "OpenWrt 构建配置摘要" > $CONFIG_SUMMARY
+    echo "生成时间: $(date)" >> $CONFIG_SUMMARY
+    echo "==========================================" >> $CONFIG_SUMMARY
+    echo "版本: $SELECTED_BRANCH" >> $CONFIG_SUMMARY
+    echo "设备: $DEVICE" >> $CONFIG_SUMMARY
+    echo "目标平台: $TARGET" >> $CONFIG_SUMMARY
+    echo "配置模式: $CONFIG_MODE" >> $CONFIG_SUMMARY
+    echo "==========================================" >> $CONFIG_SUMMARY
+    
+    if [ -f ".config" ]; then
+        echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)" >> $CONFIG_SUMMARY
+        echo "关键插件状态:" >> $CONFIG_SUMMARY
+        grep -E "CONFIG_PACKAGE_luci-app-" .config | grep "=y" >> $CONFIG_SUMMARY
+    fi
+    
+    log "✅ 配置文件备份完成"
+}
+
+# 步骤20: 清理目录
 cleanup() {
     log "=== 清理构建目录 ==="
     sudo rm -rf $BUILD_DIR || log "⚠️ 清理构建目录失败"
@@ -691,6 +860,9 @@ main() {
         "download_dependencies")
             download_dependencies
             ;;
+        "process_custom_files")
+            process_custom_files
+            ;;
         "build_firmware")
             build_firmware "$2"
             ;;
@@ -699,6 +871,9 @@ main() {
             ;;
         "check_firmware_files")
             check_firmware_files
+            ;;
+        "backup_config")
+            backup_config
             ;;
         "cleanup")
             cleanup
@@ -710,8 +885,8 @@ main() {
             echo "  add_turboacc_support, add_filetransfer_support, configure_feeds"
             echo "  install_turboacc_packages, install_filetransfer_packages"
             echo "  pre_build_space_check, generate_config, verify_usb_config, apply_config"
-            echo "  fix_network, download_dependencies, build_firmware, post_build_space_check"
-            echo "  check_firmware_files, cleanup"
+            echo "  fix_network, download_dependencies, process_custom_files, build_firmware"
+            echo "  post_build_space_check, check_firmware_files, backup_config, cleanup"
             exit 1
             ;;
     esac
