@@ -41,11 +41,13 @@ handle_error() {
 # 保存环境变量到文件
 save_env() {
     mkdir -p "$BUILD_DIR"
-    echo "#!/bin/bash" > "$ENV_FILE"
-    echo "export SELECTED_REPO_URL=\"$SELECTED_REPO_URL\"" >> "$ENV_FILE"
-    echo "export SELECTED_BRANCH=\"$SELECTED_BRANCH\"" >> "$ENV_FILE"
-    echo "export PACKAGE_NAMES=\"$PACKAGE_NAMES\"" >> "$ENV_FILE"
-    echo "export EXTRA_DEPS=\"$EXTRA_DEPS\"" >> "$ENV_FILE"
+    cat > "$ENV_FILE" << EOF
+#!/bin/bash
+export SELECTED_REPO_URL="$SELECTED_REPO_URL"
+export SELECTED_BRANCH="$SELECTED_BRANCH"
+export PACKAGE_NAMES="$PACKAGE_NAMES"
+export EXTRA_DEPS="$EXTRA_DEPS"
+EOF
     chmod +x "$ENV_FILE"
 }
 
@@ -56,11 +58,36 @@ load_env() {
     fi
 }
 
-# 字符串分割函数
+# 修复的字符串分割函数
 split_string() {
     local input="$1"
     local delimiter="$2"
-    echo "$input" | sed "s/$delimiter/\n/g" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$'
+    
+    # 如果输入为空，返回空数组
+    if [ -z "$input" ]; then
+        return
+    fi
+    
+    # 临时修改IFS进行分割
+    local old_ifs="$IFS"
+    IFS="$delimiter"
+    
+    if [ -n "$BASH_VERSION" ]; then
+        # Bash数组
+        local array=()
+        for item in $input; do
+            local trimmed=$(echo "$item" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            if [ -n "$trimmed" ]; then
+                array+=("$trimmed")
+            fi
+        done
+        printf '%s\n' "${array[@]}"
+    else
+        # 通用方法
+        echo "$input" | tr "$delimiter" '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$'
+    fi
+    
+    IFS="$old_ifs"
 }
 
 # 步骤1: 设置编译环境
@@ -239,7 +266,17 @@ generate_config() {
 
     # 添加要编译的包 - 支持多个包
     log "=== 添加目标包 ==="
-    IFS=$'\n' read -d '' -ra PACKAGE_ARRAY <<< "$(split_string "$package_names" "、")"
+    
+    # 修复：使用更安全的方法分割字符串
+    PACKAGE_ARRAY=()
+    while IFS= read -r line; do
+        PACKAGE_ARRAY+=("$line")
+    done < <(split_string "$package_names" "、")
+    
+    if [ ${#PACKAGE_ARRAY[@]} -eq 0 ]; then
+        handle_error "未找到有效的包名"
+    fi
+    
     for package in "${PACKAGE_ARRAY[@]}"; do
         local pkg_clean=$(echo "$package" | xargs)
         if [ -n "$pkg_clean" ]; then
@@ -251,7 +288,11 @@ generate_config() {
     # 添加额外依赖
     if [ -n "$EXTRA_DEPS" ]; then
         log "=== 添加额外依赖 ==="
-        IFS=$'\n' read -d '' -ra DEPS_ARRAY <<< "$(split_string "$EXTRA_DEPS" "、")"
+        DEPS_ARRAY=()
+        while IFS= read -r line; do
+            DEPS_ARRAY+=("$line")
+        done < <(split_string "$EXTRA_DEPS" "、")
+        
         for dep in "${DEPS_ARRAY[@]}"; do
             local dep_clean=$(echo "$dep" | xargs)
             if [ -n "$dep_clean" ]; then
@@ -279,7 +320,11 @@ apply_config() {
     done
     
     # 显示目标包状态
-    IFS=$'\n' read -d '' -ra PACKAGE_ARRAY <<< "$(split_string "$PACKAGE_NAMES" "、")"
+    PACKAGE_ARRAY=()
+    while IFS= read -r line; do
+        PACKAGE_ARRAY+=("$line")
+    done < <(split_string "$PACKAGE_NAMES" "、")
+    
     for package in "${PACKAGE_ARRAY[@]}"; do
         local pkg_clean=$(echo "$package" | xargs)
         if grep -q "CONFIG_PACKAGE_${pkg_clean}=y" .config; then
@@ -307,8 +352,10 @@ fix_network() {
     export PYTHONHTTPSVERIFY=0
     
     # 修复：设置下载重试
-    echo "RETRIES=5" >> $BUILD_DIR/include/download.mk
-    echo "DOWNLOAD_RETRIES=5" >> $BUILD_DIR/include/download.mk
+    if [ -f "$BUILD_DIR/include/download.mk" ]; then
+        echo "RETRIES=5" >> $BUILD_DIR/include/download.mk
+        echo "DOWNLOAD_RETRIES=5" >> $BUILD_DIR/include/download.mk
+    fi
     
     log "✅ 网络环境修复完成"
 }
@@ -345,20 +392,31 @@ build_ipk() {
     log "清理编译: $clean_build"
     
     # 解析包名数组
-    IFS=$'\n' read -d '' -ra PACKAGE_ARRAY <<< "$(split_string "$package_names" "、")"
+    PACKAGE_ARRAY=()
+    while IFS= read -r line; do
+        PACKAGE_ARRAY+=("$line")
+    done < <(split_string "$package_names" "、")
+    
+    if [ ${#PACKAGE_ARRAY[@]} -eq 0 ]; then
+        handle_error "未找到有效的包名"
+    fi
     
     # 如果要求清理编译，先清理相关包
     if [ "$clean_build" = "true" ]; then
         log "🧹 清理包构建..."
         for package in "${PACKAGE_ARRAY[@]}"; do
             local pkg_clean=$(echo "$package" | xargs)
-            make package/${pkg_clean}/clean 2>/dev/null || log "⚠️ 清理包 $pkg_clean 失败，继续编译"
+            if [ -d "package/$pkg_clean" ] || [ -d "feeds/packages/$pkg_clean" ] || [ -d "feeds/luci/$pkg_clean" ]; then
+                make package/${pkg_clean}/clean 2>/dev/null || log "⚠️ 清理包 $pkg_clean 失败，继续编译"
+            else
+                log "⚠️ 包目录 $pkg_clean 不存在，跳过清理"
+            fi
         done
     fi
     
     # 修复：先编译工具链和必要组件
     log "🔧 编译工具链和基础组件..."
-    if ! make -j$(nproc) tools/compile toolchain/compile V=s 2>&1 | tee -a "$LOG_FILE"; then
+    if ! make -j$(nproc) tools/install toolchain/install V=s 2>&1 | tee -a "$LOG_FILE"; then
         log "⚠️ 工具链编译有错误，但继续尝试编译目标包"
     fi
     
@@ -375,6 +433,13 @@ build_ipk() {
         local pkg_clean=$(echo "$package" | xargs)
         
         log "📦 编译包 [$((i+1))/$total_packages]: $pkg_clean"
+        
+        # 检查包是否存在
+        if [ ! -d "package/$pkg_clean" ] && [ ! -d "feeds/packages/$pkg_clean" ] && [ ! -d "feeds/luci/$pkg_clean" ]; then
+            log "❌ 包 $pkg_clean 不存在，跳过"
+            ((fail_count++))
+            continue
+        fi
         
         local build_exit_code=0
         if ! make -j$(nproc) package/${pkg_clean}/compile V=s 2>&1 | tee -a "$LOG_FILE"; then
