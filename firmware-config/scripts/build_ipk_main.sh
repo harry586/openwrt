@@ -334,98 +334,182 @@ create_install_script() {
     
     log "=== 创建安装脚本 ==="
     
-    # 创建安装脚本
-    cat > "$BUILD_DIR/ipk_output/install_package.sh" << 'EOF'
-#!/bin/bash
-# 通用IPK包安装脚本
-# 适用于全平台OpenWrt
-
-set -e
-
-PACKAGE_NAME="$1"
-
-if [ -z "$PACKAGE_NAME" ]; then
-    echo "用法: $0 <包名>"
-    echo "示例: $0 luci-app-filetransfer"
-    exit 1
-fi
-
-echo "=== OpenWrt IPK包安装脚本 ==="
-echo "要安装的包: $PACKAGE_NAME"
-
-# 检查系统
-if [ ! -f "/etc/openwrt_release" ]; then
-    echo "❌ 这不是OpenWrt系统"
-    exit 1
-fi
-
-# 获取架构
-ARCH=$(opkg print-architecture | awk '{print $2}')
-echo "系统架构: $ARCH"
-
-# 查找匹配的IPK文件
-IPK_FILE=$(find . -name "*${PACKAGE_NAME}*.ipk" | head -1)
-
-if [ -z "$IPK_FILE" ]; then
-    echo "❌ 未找到包 $PACKAGE_NAME 的IPK文件"
-    echo "当前目录下的IPK文件:"
-    find . -name "*.ipk" | while read file; do
-        echo "  - $(basename "$file")"
-    done
-    exit 1
-fi
-
-echo "找到IPK文件: $(basename "$IPK_FILE")"
-
-# 安装依赖（尝试自动解决）
-echo "检查依赖..."
-opkg update
-
-# 尝试安装IPK（会自动解决依赖）
-echo "安装包: $PACKAGE_NAME"
-if opkg install "$IPK_FILE"; then
-    echo "✅ $PACKAGE_NAME 安装成功！"
-    
-    # 检查是否真的安装成功
-    if opkg list-installed | grep -q "$PACKAGE_NAME"; then
-        echo "🎉 包已成功安装到系统"
-        
-        # 如果是Luci应用，提示重启服务
-        if [[ "$PACKAGE_NAME" == luci-app-* ]]; then
-            echo ""
-            echo "💡 如果是Luci应用，请:"
-            echo "1. 刷新浏览器缓存"
-            echo "2. 在Luci界面中查看新功能"
-        fi
-    else
-        echo "⚠️ 包可能未正确安装，请检查以上输出"
-    fi
-else
-    echo "❌ 安装失败，请检查依赖关系"
-    echo "💡 可以尝试手动安装依赖后重试"
-    exit 1
-fi
-EOF
+    # 创建安装脚本 - 使用多个echo命令避免heredoc问题
+    echo '#!/bin/bash' > "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '# 通用IPK包安装脚本' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '# 适用于全平台OpenWrt' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'set -e' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'PACKAGE_NAME="$1"' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'if [ -z "$PACKAGE_NAME" ]; then' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '    echo "用法: $0 <包名>"' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '    echo "示例: $0 luci-app-filetransfer"' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '    exit 1' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'fi' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'echo "=== OpenWrt IPK包安装脚本 ==="' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'echo "要安装的包: $PACKAGE_NAME"' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '# 检查系统' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'if [ ! -f "/etc/openwrt_release" ]; then' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '    echo "❌ 这不是OpenWrt系统"' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '    exit 1' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'fi' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '# 获取架构' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'ARCH=$(opkg print-architecture | awk '\''{print $2}'\'')' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'echo "系统架构: $ARCH"' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '# 查找匹配的IPK文件' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'IPK_FILE=$(find . -name "*${PACKAGE_NAME}*.ipk" | head -1)' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'if [ -z "$IPK_FILE" ]; then' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '    echo "❌ 未找到包 $PACKAGE_NAME 的IPK文件"' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '    echo "当前目录下的IPK文件:"' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '    find . -name "*.ipk" | while read file; do' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '        echo "  - $(basename "$file")"' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '    done' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '    exit 1' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'fi' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'echo "找到IPK文件: $(basename "$IPK_FILE")"' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '# 安装依赖（尝试自动解决）' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'echo "检查依赖..."' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'opkg update' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '# 尝试安装IPK（会自动解决依赖）' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'echo "安装包: $PACKAGE_NAME"' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'if opkg install "$IPK_FILE"; then' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '    echo "✅ $PACKAGE_NAME 安装成功！"' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '    # 检查是否真的安装成功' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '    if opkg list-installed | grep -q "$PACKAGE_NAME"; then' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '        echo "🎉 包已成功安装到系统"' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '        # 如果是Luci应用，提示重启服务' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '        if [[ "$PACKAGE_NAME" == luci-app-* ]]; then' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '            echo ""' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '            echo "💡 如果是Luci应用，请:"' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '            echo "1. 刷新浏览器缓存"' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '            echo "2. 在Luci界面中查看新功能"' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '        fi' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '    else' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '        echo "⚠️ 包可能未正确安装，请检查以上输出"' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '    fi' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'else' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '    echo "❌ 安装失败，请检查依赖关系"' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '    echo "💡 可以尝试手动安装依赖后重试"' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo '    exit 1' >> "$BUILD_DIR/ipk_output/install_package.sh"
+    echo 'fi' >> "$BUILD_DIR/ipk_output/install_package.sh"
 
     chmod +x "$BUILD_DIR/ipk_output/install_package.sh"
     
-    # 创建使用说明
-    cat > "$BUILD_DIR/ipk_output/README.md" << 'EOF'
-# IPK包使用说明
+    # 创建使用说明 - 同样使用echo避免heredoc
+    echo '# IPK包使用说明' > "$BUILD_DIR/ipk_output/README.md"
+    echo '' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '## 文件说明' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '- `*.ipk`: OpenWrt软件包文件' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '- `install_package.sh`: 自动安装脚本' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '- `file_list.txt`: 文件列表' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '## 安装方法' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '### 方法一：使用安装脚本（推荐）' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '```bash' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '# 上传整个ipk_output目录到路由器' >> "$BUILD_DIR/ipk_output/README.md"
+    echo 'scp -r ipk_output root@192.168.1.1:/tmp/' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '# 在路由器上执行' >> "$BUILD_DIR/ipk_output/README.md"
+    echo 'ssh root@192.168.1.1' >> "$BUILD_DIR/ipk_output/README.md"
+    echo 'cd /tmp/ipk_output' >> "$BUILD_DIR/ipk_output/README.md"
+    echo './install_package.sh <包名>' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '```' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '### 方法二：手动安装' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '```bash' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '# 上传IPK文件到路由器' >> "$BUILD_DIR/ipk_output/README.md"
+    echo 'scp *.ipk root@192.168.1.1:/tmp/' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '# 在路由器上安装' >> "$BUILD_DIR/ipk_output/README.md"
+    echo 'ssh root@192.168.1.1' >> "$BUILD_DIR/ipk_output/README.md"
+    echo 'cd /tmp' >> "$BUILD_DIR/ipk_output/README.md"
+    echo 'opkg update' >> "$BUILD_DIR/ipk_output/README.md"
+    echo 'opkg install *.ipk' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '```' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '## 支持的平台' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '- 所有OpenWrt平台（全平台通用）' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '- OpenWrt 21.02 / 23.05' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '- ImmortalWrt' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '## 注意事项' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '1. 确保路由器有足够的空间' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '2. 安装前建议备份配置' >> "$BUILD_DIR/ipk_output/README.md"
+    echo '3. 某些包可能需要特定依赖' >> "$BUILD_DIR/ipk_output/README.md"
 
-## 文件说明
-- `*.ipk`: OpenWrt软件包文件
-- `install_package.sh`: 自动安装脚本
-- `file_list.txt`: 文件列表
+    log "✅ 安装脚本和说明文档创建完成"
+}
 
-## 安装方法
+# 步骤12: 清理目录
+cleanup() {
+    log "=== 清理构建目录 ==="
+    sudo rm -rf "$BUILD_DIR" || log "⚠️ 清理构建目录失败"
+    log "✅ 构建目录已清理"
+}
 
-### 方法一：使用安装脚本（推荐）
-```bash
-# 上传整个ipk_output目录到路由器
-scp -r ipk_output root@192.168.1.1:/tmp/
+# 主函数
+main() {
+    case $1 in
+        "setup_environment")
+            setup_environment
+            ;;
+        "create_build_dir")
+            create_build_dir
+            ;;
+        "initialize_build_env")
+            initialize_build_env "$2"
+            ;;
+        "configure_feeds")
+            configure_feeds
+            ;;
+        "pre_build_space_check")
+            pre_build_space_check
+            ;;
+        "generate_config")
+            generate_config "$2" "$3"
+            ;;
+        "apply_config")
+            apply_config
+            ;;
+        "fix_network")
+            fix_network
+            ;;
+        "download_dependencies")
+            download_dependencies
+            ;;
+        "build_ipk")
+            build_ipk "$2" "$3"
+            ;;
+        "create_install_script")
+            create_install_script
+            ;;
+        "cleanup")
+            cleanup
+            ;;
+        *)
+            log "❌ 未知命令: $1"
+            echo "可用命令:"
+            echo "  setup_environment, create_build_dir, initialize_build_env"
+            echo "  configure_feeds, pre_build_space_check, generate_config"
+            echo "  apply_config, fix_network, download_dependencies, build_ipk"
+            echo "  create_install_script, cleanup"
+            exit 1
+            ;;
+    esac
+}
 
-# 在路由器上执行
-ssh root@192.168.1.1
-cd /tmp/ipk_output
-./install_package.sh <包名>
+# 执行主函数
+main "$@"
