@@ -63,11 +63,28 @@ else
 fi
 echo "" >> error_analysis.log
 
-echo "=== 自定义文件处理状态 ===" >> error_analysis.log
+echo "=== 自定义文件处理详细状态 ===" >> error_analysis.log
 if [ -f "custom_files_log/custom_files.log" ]; then
     cat custom_files_log/custom_files.log >> error_analysis.log
 else
-    echo "ℹ️ 未找到自定义文件处理日志" >> error_analysis.log
+    echo "❌ 自定义文件处理日志不存在" >> error_analysis.log
+    echo "💡 可能原因:" >> error_analysis.log
+    echo "   - 自定义文件目录未找到" >> error_analysis.log
+    echo "   - 目录搜索逻辑失败" >> error_analysis.log
+    echo "   - 目录中不包含 ipk 或 sh 文件" >> error_analysis.log
+fi
+echo "" >> error_analysis.log
+
+echo "=== 文件传输插件详细状态 ===" >> error_analysis.log
+if [ -f ".config" ]; then
+    if grep -q "CONFIG_PACKAGE_luci-app-filetransfer=y" .config; then
+        echo "✅ luci-app-filetransfer: 已在配置中启用" >> error_analysis.log
+    else
+        echo "❌ luci-app-filetransfer: 未在配置中启用" >> error_analysis.log
+        echo "💡 解决方案:" >> error_analysis.log
+        echo "   - 检查 feeds 中是否存在 luci-app-filetransfer" >> error_analysis.log
+        echo "   - 尝试手动启用: echo 'CONFIG_PACKAGE_luci-app-filetransfer=y' >> .config" >> error_analysis.log
+    fi
 fi
 echo "" >> error_analysis.log
 
