@@ -59,8 +59,11 @@ jobs:
       if: github.event.inputs.search_scripts != ''
       run: |
         echo "=== 搜索脚本文件: ${{ github.event.inputs.search_scripts }} ==="
+        echo "🔍 使用模糊搜索模式..."
         find . -name "*.sh" -type f | grep -i "${{ github.event.inputs.search_scripts }}" || echo "未找到匹配的脚本文件"
         find . -name "*.yml" -o -name "*.yaml" | grep -i "${{ github.event.inputs.search_scripts }}" || echo "未找到匹配的工作流文件"
+        echo "=== 详细搜索报告 ==="
+        find . -type f \( -name "*.sh" -o -name "*.yml" -o -name "*.yaml" \) -exec echo {} \; | head -20
 
     - name: 检出配置仓库
       uses: actions/checkout@v4
@@ -70,7 +73,7 @@ jobs:
     - name: 设置脚本执行权限
       run: |
         echo "=== 设置脚本执行权限 ==="
-        find firmware-config/scripts -name "*.sh" -exec chmod +x {} \;
+        find . -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
         echo "✅ 脚本执行权限设置完成"
 
     - name: 初始空间检查
