@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流（USB完全修复版）
+name: OpenWrt 智能固件构建工作流（USB完全修复通用版）
 
 on:
   workflow_dispatch:
@@ -140,8 +140,8 @@ jobs:
         # 为所有版本添加文件传输插件支持
         if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             echo "🔧 为23.05添加文件传输插件支持"
-            # 23.05版本使用 immortalwrt 官方源 + 额外源
-            echo "src-git small https://github.com/kenzok8/small" >> feeds.conf.default
+            # 🚨 关键修复：使用正确的small-package源（不是small）
+            echo "src-git small https://github.com/kenzok8/small-package" >> feeds.conf.default
         else
             echo "🔧 为21.02添加文件传输插件支持"
             # 21.02版本使用kenzok8的openwrt-packages
@@ -204,7 +204,8 @@ jobs:
         
         # 为所有版本添加文件传输插件源
         if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            echo "src-git small https://github.com/kenzok8/small" >> feeds.conf.default
+            # 🚨 关键修复：使用正确的small-package源
+            echo "src-git small https://github.com/kenzok8/small-package" >> feeds.conf.default
         else
             echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default
         fi
@@ -266,10 +267,10 @@ jobs:
         AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
         echo "/mnt 可用空间: ${AVAILABLE_GB}G"
 
-    - name: 智能配置生成（USB完全修复版）
+    - name: 智能配置生成（USB完全修复通用版）
       run: |
         cd $BUILD_DIR
-        echo "=== 智能配置生成系统（USB完全修复版）==="
+        echo "=== 智能配置生成系统（USB完全修复通用版）==="
         rm -f .config .config.old
         
         # 创建基础配置
@@ -321,86 +322,195 @@ jobs:
         echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> .config
         echo "CONFIG_PACKAGE_kmod-ipt-nat6=y" >> .config
         
-        # === 完全修复的USB和存储配置 ===
-        echo "=== 配置USB和存储功能（完全修复版）==="
-
-        # USB 核心驱动 - 确保基本功能
+        # ============================================================================
+        # 🚨 USB 完全修复通用配置 - 适用于所有平台和设备
+        # ============================================================================
+        echo "=== 🚨 USB 完全修复通用配置 - 开始 ==="
+        
+        # ==================== USB 核心驱动 ====================
+        echo "# 🟢 USB 核心驱动 - 基础必须" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-core=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
         
-        # USB 主机控制器驱动 - 关键修复
-        echo "CONFIG_PACKAGE_kmod-usb-ehci=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config
+        # ==================== USB 主机控制器驱动 ====================
+        echo "# 🟢 USB 主机控制器驱动 - 通用支持" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config      # USB 2.0 通用支持
+        echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config      # USB 3.0 通用支持
+        echo "CONFIG_PACKAGE_kmod-usb-ehci=y" >> .config  # USB 2.0 高速控制器
+        echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config  # USB 1.1 全速控制器
+        echo "CONFIG_PACKAGE_kmod-usb-uhci=y" >> .config  # USB 1.1 通用主机控制器
+        echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config  # PCI USB 2.0 支持
         
-        # IPQ40xx 特定USB驱动
+        # ==================== 平台专用USB控制器驱动 ====================
+        echo "# 🟡 平台专用USB控制器驱动 - 按平台启用" >> .config
+        
+        # 🚨 关键修复：IPQ40xx 专用USB驱动（如RT-AC42U、RT-AC58U等设备）
         if [ "$TARGET" = "ipq40xx" ]; then
-            echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+            echo "# 🚨 关键修复：IPQ40xx 专用USB控制器驱动（高通方案）" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config          # DWC3 USB控制器核心
+            echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config # 简单DWC3设备树支持
+            echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config     # 高通DWC3 USB控制器
+            echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config     # 高通USB物理层驱动（最关键！）
         fi
         
-        # USB 存储驱动
-        echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-storage-extras=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config
+        # 🚨 关键修复：ARM64/ARM 平台USB驱动
+        if [ "$TARGET" = "rockchip" ] || [ "$TARGET" = "sunxi" ] || [ "$TARGET" = "bcm27xx" ] || [ "$TARGET" = "mvebu" ] || [ "$TARGET" = "mediatek" ]; then
+            echo "# 🚨 关键修复：ARM/ARM64 平台USB控制器驱动" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb-dwc2=y" >> .config          # DWC2 USB控制器（树莓派等）
+            echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config          # DWC3 USB控制器
+            echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config # 简单DWC3设备树支持
+        fi
         
-        # SCSI 支持
-        echo "CONFIG_PACKAGE_kmod-scsi-core=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-scsi-generic=y" >> .config
+        # 🚨 关键修复：x86/PC 平台USB驱动
+        if [ "$TARGET" = "x86" ] || [ "$TARGET" = "x86_64" ]; then
+            echo "# 🚨 关键修复：x86/x64 平台USB控制器驱动" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config      # xHCI USB 3.0控制器
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config      # PCI xHCI控制器
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config      # 联发科xHCI控制器
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config # 平台xHCI控制器
+        fi
         
-        # 文件系统支持
-        echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-fs-exfat=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-fs-autofs4=y" >> .config
+        # 🚨 关键修复：MT76xx/雷凌 平台USB驱动
+        if [ "$TARGET" = "ramips" ] || [ "$SUBTARGET" = "mt76x8" ] || [ "$SUBTARGET" = "mt7621" ]; then
+            echo "# 🚨 关键修复：MT76xx/雷凌 平台USB控制器驱动" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config          # USB 1.1 OHCI控制器
+            echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config      # PCI OHCI控制器
+            echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config              # USB 2.0 EHCI控制器
+            echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config          # PCI EHCI控制器
+        fi
         
-        # 编码支持
-        echo "CONFIG_PACKAGE_kmod-nls-utf8=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-nls-cp437=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-nls-iso8859-1=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-nls-cp936=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-nls-iso8859-15=y" >> .config
+        # 🚨 关键修复：高通Atheros 平台USB驱动
+        if [ "$TARGET" = "ath79" ] || [ "$TARGET" = "ar71xx" ]; then
+            echo "# 🚨 关键修复：Atheros 平台USB控制器驱动" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config          # USB 1.1 OHCI控制器
+            echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config              # USB 2.0 EHCI控制器
+            echo "CONFIG_PACKAGE_kmod-usb-core=y" >> .config          # USB核心驱动
+        fi
         
-        # 自动挂载工具
-        echo "CONFIG_PACKAGE_block-mount=y" >> .config
-        echo "CONFIG_PACKAGE_automount=y" >> .config
+        # 🚨 关键修复：博通BCM 平台USB驱动
+        if [ "$TARGET" = "bcm53xx" ] || [ "$TARGET" = "brcm47xx" ] || [ "$TARGET" = "brcm63xx" ]; then
+            echo "# 🚨 关键修复：博通BCM 平台USB控制器驱动" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config          # USB 1.1 OHCI控制器
+            echo "CONFIG_PACKAGE_kmod-usb-ohci-hcd=y" >> .config      # OHCI主机控制器
+            echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config              # USB 2.0 EHCI控制器
+        fi
         
-        # USB 工具和热插拔支持
-        echo "CONFIG_PACKAGE_usbutils=y" >> .config
-        echo "CONFIG_PACKAGE_lsusb=y" >> .config
-        echo "CONFIG_PACKAGE_udev=y" >> .config
-        echo "CONFIG_PACKAGE_udev-extra=y" >> .config
+        # 🚨 关键修复：全志Sunxi 平台USB驱动
+        if [ "$TARGET" = "sunxi" ]; then
+            echo "# 🚨 关键修复：全志Sunxi 平台USB控制器驱动" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb-sunxi=y" >> .config         # 全志USB控制器
+            echo "CONFIG_PACKAGE_kmod-phy-sun4i-usb=y" >> .config     # 全志USB物理层
+        fi
         
-        # 磁盘工具
-        echo "CONFIG_PACKAGE_blkid=y" >> .config
-        echo "CONFIG_PACKAGE_libblkid=y" >> .config
-        echo "CONFIG_PACKAGE_libmount=y" >> .config
-        echo "CONFIG_PACKAGE_libuuid=y" >> .config
-        echo "CONFIG_PACKAGE_mount-utils=y" >> .config
-        echo "CONFIG_PACKAGE_fdisk=y" >> .config
-        echo "CONFIG_PACKAGE_cfdisk=y" >> .config
-        echo "CONFIG_PACKAGE_sfdisk=y" >> .config
-        echo "CONFIG_PACKAGE_lsblk=y" >> .config
-        echo "CONFIG_PACKAGE_e2fsprogs=y" >> .config
-        echo "CONFIG_PACKAGE_dosfstools=y" >> .config
-        echo "CONFIG_PACKAGE_exfat-fsck=y" >> .config
-        echo "CONFIG_PACKAGE_exfat-mkfs=y" >> .config
+        # 🚨 关键修复：Marvell 平台USB驱动
+        if [ "$TARGET" = "mvebu" ]; then
+            echo "# 🚨 关键修复：Marvell 平台USB控制器驱动" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb-ehci=y" >> .config          # EHCI USB 2.0控制器
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config      # xHCI USB 3.0控制器
+        fi
         
-        # 明确禁用冲突的包
-        echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
-        echo "# CONFIG_PACKAGE_ntfs-3g-utils is not set" >> .config
+        # 🚨 关键修复：联发科MTK 平台USB驱动
+        if [ "$TARGET" = "mediatek" ] || [ "$TARGET" = "mt7623" ] || [ "$TARGET" = "mt7629" ]; then
+            echo "# 🚨 关键修复：联发科MTK 平台USB控制器驱动" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb-mtk-phy=y" >> .config       # MTK USB物理层
+            echo "CONFIG_PACKAGE_kmod-usb-mtk-phy-7621=y" >> .config  # MT7621 USB物理层
+            echo "CONFIG_PACKAGE_kmod-usb-mtk-phy-7623=y" >> .config  # MT7623 USB物理层
+        fi
         
-        # 版本特定的automount配置
+        # 🚨 关键修复：树莓派 平台USB驱动
+        if [ "$TARGET" = "bcm27xx" ]; then
+            echo "# 🚨 关键修复：树莓派 平台USB控制器驱动" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb-dwc2=y" >> .config          # DWC2 USB控制器
+            echo "CONFIG_PACKAGE_kmod-usb-dwc2-platform=y" >> .config # DWC2平台支持
+        fi
+        
+        # 🚨 关键修复：龙芯Loongson 平台USB驱动
+        if [ "$TARGET" = "loongson" ]; then
+            echo "# 🚨 关键修复：龙芯Loongson 平台USB控制器驱动" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config          # USB 1.1 OHCI控制器
+            echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config              # USB 2.0 EHCI控制器
+        fi
+        
+        # 🚨 关键修复：其他通用平台USB驱动
+        echo "# 🚨 关键修复：其他通用平台USB控制器驱动" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-acm=y" >> .config               # USB ACM设备（调制解调器）
+        echo "CONFIG_PACKAGE_kmod-usb-serial=y" >> .config            # USB串口设备
+        echo "CONFIG_PACKAGE_kmod-usb-serial-ftdi=y" >> .config       # FTDI USB串口
+        echo "CONFIG_PACKAGE_kmod-usb-serial-pl2303=y" >> .config     # PL2303 USB串口
+        echo "CONFIG_PACKAGE_kmod-usb-net=y" >> .config               # USB网络设备
+        echo "CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y" >> .config     # CDC Ethernet网络
+        echo "CONFIG_PACKAGE_kmod-usb-net-rndis=y" >> .config         # RNDIS网络
+        
+        # ==================== USB 存储驱动 ====================
+        echo "# 🟢 USB 存储驱动 - 核心功能" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config           # USB存储基础驱动
+        echo "CONFIG_PACKAGE_kmod-usb-storage-extras=y" >> .config    # USB存储扩展功能
+        echo "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config       # UAS（USB Attached SCSI）支持
+        
+        # ==================== SCSI 支持 ====================
+        echo "# 🟢 SCSI 支持 - 硬盘和U盘必需" >> .config
+        echo "CONFIG_PACKAGE_kmod-scsi-core=y" >> .config             # SCSI核心驱动
+        echo "CONFIG_PACKAGE_kmod-scsi-generic=y" >> .config          # SCSI通用设备支持
+        
+        # ==================== 文件系统支持 ====================
+        echo "# 🟢 文件系统支持 - 完整文件系统兼容" >> .config
+        echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config               # EXT4文件系统
+        echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config               # FAT/FAT32文件系统
+        echo "CONFIG_PACKAGE_kmod-fs-exfat=y" >> .config              # exFAT文件系统
+        echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config              # NTFS文件系统（新版）
+        echo "CONFIG_PACKAGE_kmod-fs-autofs4=y" >> .config            # 自动挂载支持
+        echo "CONFIG_PACKAGE_kmod-fs-f2fs=y" >> .config               # F2FS闪存文件系统
+        echo "CONFIG_PACKAGE_kmod-fs-hfsplus=y" >> .config            # HFS+文件系统（苹果）
+        
+        # ==================== 编码支持 ====================
+        echo "# 🟢 编码支持 - 多语言文件名兼容" >> .config
+        echo "CONFIG_PACKAGE_kmod-nls-utf8=y" >> .config              # UTF-8编码（中文必需）
+        echo "CONFIG_PACKAGE_kmod-nls-cp437=y" >> .config             # CP437编码
+        echo "CONFIG_PACKAGE_kmod-nls-iso8859-1=y" >> .config         # ISO8859-1编码
+        echo "CONFIG_PACKAGE_kmod-nls-cp936=y" >> .config             # CP936编码（简体中文）
+        echo "CONFIG_PACKAGE_kmod-nls-iso8859-15=y" >> .config        # ISO8859-15编码
+        
+        # ==================== 自动挂载工具 ====================
+        echo "# 🟢 自动挂载工具 - 即插即用支持" >> .config
+        echo "CONFIG_PACKAGE_block-mount=y" >> .config                # 块设备挂载
+        echo "CONFIG_PACKAGE_automount=y" >> .config                  # 自动挂载服务
+        
+        # ==================== USB 工具和热插拔支持 ====================
+        echo "# 🟢 USB 工具和热插拔支持 - 设备管理" >> .config
+        echo "CONFIG_PACKAGE_usbutils=y" >> .config                   # USB工具集
+        echo "CONFIG_PACKAGE_lsusb=y" >> .config                      # USB设备列表
+        echo "CONFIG_PACKAGE_udev=y" >> .config                       # 设备管理器（关键！）
+        echo "CONFIG_PACKAGE_udev-extra=y" >> .config                 # 扩展设备规则
+        
+        # ==================== 磁盘工具 ====================
+        echo "# 🟢 磁盘工具 - 完整磁盘管理" >> .config
+        echo "CONFIG_PACKAGE_blkid=y" >> .config                      # 块设备信息
+        echo "CONFIG_PACKAGE_libblkid=y" >> .config                   # 块设备信息库
+        echo "CONFIG_PACKAGE_libmount=y" >> .config                   # 挂载功能库
+        echo "CONFIG_PACKAGE_libuuid=y" >> .config                    # UUID库
+        echo "CONFIG_PACKAGE_mount-utils=y" >> .config                # 挂载工具
+        echo "CONFIG_PACKAGE_fdisk=y" >> .config                      # 磁盘分区工具
+        echo "CONFIG_PACKAGE_cfdisk=y" >> .config                     # 交互式分区工具
+        echo "CONFIG_PACKAGE_sfdisk=y" >> .config                     # 脚本分区工具
+        echo "CONFIG_PACKAGE_lsblk=y" >> .config                      # 列出块设备
+        echo "CONFIG_PACKAGE_e2fsprogs=y" >> .config                  # EXT文件系统工具
+        echo "CONFIG_PACKAGE_dosfstools=y" >> .config                 # FAT文件系统工具
+        echo "CONFIG_PACKAGE_exfat-fsck=y" >> .config                 # exFAT文件系统检查
+        echo "CONFIG_PACKAGE_exfat-mkfs=y" >> .config                 # exFAT文件系统创建
+        echo "CONFIG_PACKAGE_ntfs-3g=y" >> .config                    # NTFS读写支持（备用）
+        
+        # ==================== 明确禁用冲突的包 ====================
+        echo "# 🔴 明确禁用冲突的包" >> .config
+        echo "# CONFIG_PACKAGE_ntfs-3g-utils is not set" >> .config   # 避免与kmod-fs-ntfs3冲突
+        
+        # ==================== 版本特定的automount配置 ====================
         if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-            echo "CONFIG_PACKAGE_ntfs3-mount=y" >> .config
+            echo "CONFIG_PACKAGE_ntfs3-mount=y" >> .config            # 21.02需要ntfs3-mount
         else
-            echo "# CONFIG_PACKAGE_ntfs3-mount is not set" >> .config
+            echo "# CONFIG_PACKAGE_ntfs3-mount is not set" >> .config # 23.05不需要ntfs3-mount
         fi
         
-        echo "✅ USB和存储配置完成"
+        echo "=== 🚨 USB 完全修复通用配置 - 完成 ==="
+        # ============================================================================
         
         # 版本智能检测和配置
         echo "=== 版本智能检测: $SELECTED_BRANCH ==="
@@ -408,18 +518,15 @@ jobs:
         if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
             echo "🔧 检测到 21.02 版本，应用相应配置..."
             echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
-            echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
             echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
             
         elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             echo "🔧 检测到 23.05 版本，应用相应配置..."
             echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
             echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
-            echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
         else
             echo "⚠️  未知版本，使用通用配置..."
             echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
-            echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
         fi
         
         # 根据配置模式选择插件
@@ -600,48 +707,55 @@ jobs:
         echo "✅ 智能配置生成完成"
         
         # 显示配置摘要
-        echo "=== 配置摘要 ==="
+        echo "=== 🚨 USB 修复配置摘要 ==="
         echo "版本: $SELECTED_BRANCH"
         echo "配置模式: ${{ github.event.inputs.config_mode }}"
         echo "目标设备: $DEVICE"
         echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
-        echo "USB相关模块:"
-        grep -E "kmod-usb|usb-storage|usbutils" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
-        echo "文件系统模块:"
-        grep "kmod-fs-" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
-        echo "自动挂载相关包:"
-        grep -E "block-mount|automount|ntfs3-mount" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | sort
+        echo "🚨 关键USB修复模块:"
+        grep -E "usb-dwc3|usb-dwc3-qcom|phy-qcom-dwc3|usb-xhci|usb-sunxi|usb-mtk-phy" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✅/' | sort
+        echo "🟢 通用USB模块:"
+        grep -E "kmod-usb2|kmod-usb3|kmod-usb-ehci|kmod-usb-ohci" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✅/' | sort
+        echo "🔵 USB存储模块:"
+        grep -E "usb-storage|scsi-core" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✅/' | sort
+        echo "🟣 文件系统模块:"
+        grep "kmod-fs-" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✅/' | sort
+        echo "🟡 自动挂载相关包:"
+        grep -E "block-mount|automount|ntfs3-mount" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✅/' | sort
 
     - name: 验证USB配置
       run: |
         cd $BUILD_DIR
-        echo "=== 详细验证USB和存储配置 ==="
+        echo "=== 🚨 详细验证USB和存储配置 ==="
         
-        echo "1. USB核心模块:"
+        echo "1. 🟢 USB核心模块:"
         grep "CONFIG_PACKAGE_kmod-usb-core" .config | grep "=y" && echo "✅ USB核心" || echo "❌ 缺少USB核心"
         
-        echo "2. USB控制器:"
-        grep -E "CONFIG_PACKAGE_kmod-usb2|CONFIG_PACKAGE_kmod-usb3|CONFIG_PACKAGE_kmod-usb-ehci|CONFIG_PACKAGE_kmod-usb-ohci|CONFIG_PACKAGE_kmod-usb-dwc3" .config | grep "=y" || echo "❌ 缺少USB控制器"
+        echo "2. 🟢 USB控制器:"
+        grep -E "CONFIG_PACKAGE_kmod-usb2|CONFIG_PACKAGE_kmod-usb3|CONFIG_PACKAGE_kmod-usb-ehci|CONFIG_PACKAGE_kmod-usb-ohci" .config | grep "=y" || echo "❌ 缺少USB控制器"
         
-        echo "3. USB存储:"
+        echo "3. 🚨 平台专用USB控制器:"
+        grep -E "CONFIG_PACKAGE_kmod-usb-dwc3|CONFIG_PACKAGE_kmod-usb-dwc3-qcom|CONFIG_PACKAGE_kmod-phy-qcom-dwc3|CONFIG_PACKAGE_kmod-usb-xhci|CONFIG_PACKAGE_kmod-usb-sunxi|CONFIG_PACKAGE_kmod-usb-mtk-phy" .config | grep "=y" || echo "ℹ️  无平台专用USB控制器"
+        
+        echo "4. 🟢 USB存储:"
         grep "CONFIG_PACKAGE_kmod-usb-storage" .config | grep "=y" || echo "❌ 缺少USB存储"
         
-        echo "4. 文件系统:"
+        echo "5. 🟢 文件系统:"
         grep "CONFIG_PACKAGE_kmod-fs-" .config | grep "=y" | head -10
         
-        echo "5. 编码支持:"
+        echo "6. 🟢 编码支持:"
         grep "CONFIG_PACKAGE_kmod-nls-" .config | grep "=y" || echo "❌ 缺少编码支持"
         
-        echo "6. 自动挂载:"
+        echo "7. 🟢 自动挂载:"
         grep -E "block-mount|automount" .config | grep "=y" || echo "❌ 缺少自动挂载"
         
-        echo "7. 热插拔支持:"
+        echo "8. 🟢 热插拔支持:"
         grep "CONFIG_PACKAGE_udev" .config | grep "=y" && echo "✅ udev支持" || echo "❌ 缺少udev支持"
         
-        echo "8. 文件传输插件:"
+        echo "9. 🟢 文件传输插件:"
         grep "CONFIG_PACKAGE_luci-app-filetransfer" .config | grep "=y" && echo "✅ 文件传输插件已启用" || echo "❌ 文件传输插件未启用"
         
-        echo "✅ USB和存储配置验证完成"
+        echo "=== 🚨 USB配置验证完成 ==="
 
     - name: 应用配置
       run: |
@@ -655,7 +769,6 @@ jobs:
         
         # 强制禁用冲突的包
         CONFLICT_PACKAGES=(
-          "ntfs-3g"
           "ntfs-3g-utils" 
         )
         
@@ -669,7 +782,6 @@ jobs:
         
         # 确保 ntfs3 相关配置正确
         echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
-        echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
         
         # 21.02版本需要ntfs3-mount来满足automount依赖
         if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
@@ -746,19 +858,21 @@ jobs:
         echo "✅ 强制禁用完成"
         
         # 显示最终配置信息
-        echo "=== 最终配置状态 ==="
+        echo "=== 🚨 最终USB配置状态 ==="
         echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
-        echo "USB控制器状态:"
+        echo "🚨 关键USB修复模块状态:"
+        grep -E "usb-dwc3|usb-dwc3-qcom|phy-qcom-dwc3|usb-xhci|usb-sunxi|usb-mtk-phy" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✅/' | sed 's/ is not set/ ❌/' | sort
+        echo "🟢 通用USB控制器状态:"
         grep -E "usb-ehci|usb-ohci|usb2-pci|usb-dwc3" .config | grep "=y" || echo "USB控制器未启用"
-        echo "USB存储状态:"
+        echo "🔵 USB存储状态:"
         grep "usb-storage" .config | grep "=y" || echo "USB存储未启用"
-        echo "热插拔支持:"
+        echo "🟢 热插拔支持:"
         grep "udev" .config | grep "=y" || echo "热插拔支持未启用"
-        echo "文件系统支持:"
+        echo "🟣 文件系统支持:"
         grep "kmod-fs-" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✅/' | sort
-        echo "自动挂载相关包状态:"
+        echo "🟡 自动挂载相关包状态:"
         grep -E "block-mount|automount|ntfs3-mount" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✅/' | sed 's/ is not set/ ❌/' | sort
-        echo "文件传输插件状态:"
+        echo "🟢 文件传输插件状态:"
         grep "luci-app-filetransfer" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y/ ✅/' | sed 's/ is not set/ ❌/' | sort
 
     - name: 修复网络环境
