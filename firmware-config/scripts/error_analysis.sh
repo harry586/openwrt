@@ -170,6 +170,23 @@ for check in "${CHECK_FILES[@]}"; do
 done
 echo "" >> error_analysis.log
 
+echo "=== 插件启用状态 ===" >> error_analysis.log
+if [ -f ".config" ]; then
+    echo "✅ 已启用的插件列表:" >> error_analysis.log
+    grep "^CONFIG_PACKAGE_luci-app-.*=y$" .config | sed 's/CONFIG_PACKAGE_//;s/=y//' | while read plugin; do
+        echo "  ✅ $plugin" >> error_analysis.log
+    done
+    
+    echo "" >> error_analysis.log
+    echo "❌ 已禁用的插件列表:" >> error_analysis.log
+    grep "^# CONFIG_PACKAGE_luci-app-.* is not set$" .config | sed 's/# CONFIG_PACKAGE_//;s/ is not set//' | while read plugin; do
+        echo "  ❌ $plugin" >> error_analysis.log
+    done
+else
+    echo "❌ 配置文件不存在，无法检查插件状态" >> error_analysis.log
+fi
+echo "" >> error_analysis.log
+
 echo "=== 错误原因分析和建议 ===" >> error_analysis.log
 
 # 文件缺失错误
