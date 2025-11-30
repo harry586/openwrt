@@ -10,9 +10,13 @@ echo "" >> error_analysis.log
 
 echo "=== 构建环境信息 ===" >> error_analysis.log
 echo "构建目录: $BUILD_DIR" >> error_analysis.log
-echo "设备: $DEVICE" >> error_analysis.log
-echo "目标平台: $TARGET" >> error_analysis.log
-echo "版本分支: $SELECTED_BRANCH" >> error_analysis.log
+if [ -f "build_env.sh" ]; then
+    source build_env.sh
+    echo "设备: $DEVICE" >> error_analysis.log
+    echo "目标平台: $TARGET" >> error_analysis.log
+    echo "版本分支: $SELECTED_BRANCH" >> error_analysis.log
+    echo "配置模式: $CONFIG_MODE" >> error_analysis.log
+fi
 echo "" >> error_analysis.log
 
 echo "=== 系统资源状态 ===" >> error_analysis.log
@@ -39,16 +43,15 @@ if [ -f ".config" ]; then
     echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)" >> error_analysis.log
     echo "禁用的包数量: $(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)" >> error_analysis.log
     
-    # 检查关键USB配置
+    # 检查关键配置
     echo "" >> error_analysis.log
-    echo "=== 关键USB配置状态 ===" >> error_analysis.log
-    USB_CONFIGS=(
-        "kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-storage"
-        "kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3"
-        "kmod-usb-xhci-hcd" "kmod-usb-ehci" "kmod-usb-ohci"
+    echo "=== 关键配置状态 ===" >> error_analysis.log
+    KEY_CONFIGS=(
+        "luci-app-filetransfer" "luci-app-turboacc" "kmod-usb-core"
+        "kmod-usb-storage" "kmod-usb2" "kmod-usb3" "block-mount"
     )
     
-    for config in "${USB_CONFIGS[@]}"; do
+    for config in "${KEY_CONFIGS[@]}"; do
         if grep -q "CONFIG_PACKAGE_${config}=y" .config; then
             echo "✅ $config: 已启用" >> error_analysis.log
         else
@@ -57,6 +60,14 @@ if [ -f ".config" ]; then
     done
 else
     echo "❌ 配置文件不存在" >> error_analysis.log
+fi
+echo "" >> error_analysis.log
+
+echo "=== 自定义文件处理状态 ===" >> error_analysis.log
+if [ -f "custom_files_log/custom_files.log" ]; then
+    cat custom_files_log/custom_files.log >> error_analysis.log
+else
+    echo "ℹ️ 未找到自定义文件处理日志" >> error_analysis.log
 fi
 echo "" >> error_analysis.log
 
@@ -138,6 +149,27 @@ for category in "${ERROR_CATEGORIES[@]}"; do
     echo "" >> error_analysis.log
 done
 
+echo "=== 构建流程检查 ===" >> error_analysis.log
+echo "检查各步骤完成情况:" >> error_analysis.log
+
+# 检查关键文件是否存在
+CHECK_FILES=(
+    "feeds.conf.default:Feeds配置"
+    ".config:主配置文件" 
+    "build.log:构建日志"
+    "bin/targets/:固件输出目录"
+)
+
+for check in "${CHECK_FILES[@]}"; do
+    IFS=':' read -r file desc <<< "$check"
+    if [ -e "$file" ]; then
+        echo "✅ $desc: 存在" >> error_analysis.log
+    else
+        echo "❌ $desc: 缺失" >> error_analysis.log
+    fi
+done
+echo "" >> error_analysis.log
+
 echo "=== 错误原因分析和建议 ===" >> error_analysis.log
 
 # 文件缺失错误
@@ -164,17 +196,6 @@ echo "   - 更新 feeds" >> error_analysis.log
 echo "   - 手动安装缺失依赖" >> error_analysis.log
 echo "" >> error_analysis.log
 
-# 内存错误
-echo "❌ 内存错误" >> error_analysis.log
-echo "💡 可能原因:" >> error_analysis.log
-echo "   - 系统内存不足" >> error_analysis.log
-echo "   - 并行编译任务过多" >> error_analysis.log
-echo "🛠️ 解决方案:" >> error_analysis.log
-echo "   - 减少并行编译任务数 (make -j2)" >> error_analysis.log
-echo "   - 增加交换空间" >> error_analysis.log
-echo "   - 使用更高内存的构建环境" >> error_analysis.log
-echo "" >> error_analysis.log
-
 # 配置错误
 echo "❌ 配置错误" >> error_analysis.log
 echo "💡 可能原因:" >> error_analysis.log
@@ -198,13 +219,6 @@ echo "   - 安装缺失的开发包" >> error_analysis.log
 echo "   - 使用兼容的编译器版本" >> error_analysis.log
 echo "" >> error_analysis.log
 
-# 管道错误（正常现象）
-echo "ℹ️ 管道错误" >> error_analysis.log
-echo "💡 说明:" >> error_analysis.log
-echo "   - 这是并行编译的正常现象，通常不影响最终结果" >> error_analysis.log
-echo "   - 由于编译进程间通信导致，可以忽略" >> error_analysis.log
-echo "" >> error_analysis.log
-
 echo "=== 快速修复建议 ===" >> error_analysis.log
 echo "1. 🔄 重新运行工作流" >> error_analysis.log
 echo "2. 🧹 清理构建目录重新开始" >> error_analysis.log
@@ -212,6 +226,15 @@ echo "3. 📦 更新所有 feeds: ./scripts/feeds update -a && ./scripts/feeds i
 echo "4. ⚙️ 检查配置冲突: make defconfig" >> error_analysis.log
 echo "5. 🐛 减少并行任务: make -j2 V=s" >> error_analysis.log
 echo "6. 🌐 检查网络连接和代理设置" >> error_analysis.log
+echo "" >> error_analysis.log
+
+echo "=== 下一步操作 ===" >> error_analysis.log
+if [ -d "bin/targets" ]; then
+    echo "🎉 构建成功！可以下载固件文件进行刷机。" >> error_analysis.log
+    echo "固件位置: bin/targets/" >> error_analysis.log
+else
+    echo "🔧 构建失败，请根据上面的错误分析进行修复。" >> error_analysis.log
+fi
 echo "" >> error_analysis.log
 
 echo "错误分析完成 - 查看 error_analysis.log 获取详细信息" >> error_analysis.log
