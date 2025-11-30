@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: '📱 设备名称 (如: ac42u, r3g, r4ag 等)'
+        description: '📱 设备名称 (如: ac42u, r3g等)'
         required: true
         default: 'ac42u'
         type: string
@@ -93,25 +93,24 @@ jobs:
       run: |
         firmware-config/scripts/build_firmware_main.sh create_build_dir
 
-    - name: 版本选择和克隆源码
+    - name: 初始化构建环境
       run: |
-        firmware-config/scripts/build_firmware_main.sh version_and_clone "${{ github.event.inputs.version_selection }}"
+        firmware-config/scripts/build_firmware_main.sh initialize_build_env \
+          "${{ github.event.inputs.device_name }}" \
+          "${{ github.event.inputs.version_selection }}" \
+          "${{ github.event.inputs.config_mode }}"
 
     - name: 添加 TurboACC 支持
       run: |
-        firmware-config/scripts/build_firmware_main.sh add_turboacc_support "${{ github.event.inputs.config_mode }}"
+        firmware-config/scripts/build_firmware_main.sh add_turboacc_support
 
     - name: 添加文件传输插件支持
       run: |
         firmware-config/scripts/build_firmware_main.sh add_filetransfer_support
 
-    - name: 设备配置
-      run: |
-        firmware-config/scripts/build_firmware_main.sh device_config "${{ github.event.inputs.device_name }}"
-
     - name: 配置Feeds
       run: |
-        firmware-config/scripts/build_firmware_main.sh configure_feeds "${{ github.event.inputs.config_mode }}"
+        firmware-config/scripts/build_firmware_main.sh configure_feeds
 
     - name: 安装 TurboACC 包
       if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
@@ -129,7 +128,6 @@ jobs:
     - name: 智能配置生成（USB完全修复通用版）
       run: |
         firmware-config/scripts/build_firmware_main.sh generate_config \
-          "${{ github.event.inputs.config_mode }}" \
           "${{ github.event.inputs.extra_packages }}"
 
     - name: 验证USB配置
@@ -138,7 +136,7 @@ jobs:
 
     - name: 应用配置
       run: |
-        firmware-config/scripts/build_firmware_main.sh apply_config "${{ github.event.inputs.config_mode }}"
+        firmware-config/scripts/build_firmware_main.sh apply_config
 
     - name: 修复网络环境
       run: |
