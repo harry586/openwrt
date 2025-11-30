@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: '📱 设备名称 (如: ac42u, r3g, r4ag 等)'
+        description: '📱 设备名称 (如: ac42u)'
         required: true
         default: 'ac42u'
         type: string
@@ -32,7 +32,7 @@ on:
       extra_packages:
         description: |
           额外安装插件
-          格式：🔴用分号;分隔。🔴 启用插件：+插件名。🔴 禁用插件：-插件名。🔴 示例：+luci-app-wol;+luci-app-ddns
+          格式：🔴用顿号、分隔。🔴 启用插件：+插件名。🔴 禁用插件：-插件名。🔴 示例：+luci-app-wol、+luci-app-ddns
         required: false
         type: string
         default: ''
@@ -41,11 +41,6 @@ on:
         required: false
         default: true
         type: boolean
-      search_scripts:
-        description: '🔍 搜索脚本文件 (支持模糊查找)'
-        required: false
-        type: string
-        default: ''
 
 env:
   BUILD_DIR: /mnt/openwrt-build
@@ -55,16 +50,6 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-    - name: 搜索脚本文件
-      if: github.event.inputs.search_scripts != ''
-      run: |
-        echo "=== 搜索脚本文件: ${{ github.event.inputs.search_scripts }} ==="
-        echo "🔍 使用模糊搜索模式..."
-        find . -name "*.sh" -type f | grep -i "${{ github.event.inputs.search_scripts }}" || echo "未找到匹配的脚本文件"
-        find . -name "*.yml" -o -name "*.yaml" | grep -i "${{ github.event.inputs.search_scripts }}" || echo "未找到匹配的工作流文件"
-        echo "=== 详细搜索报告 ==="
-        find . -type f \( -name "*.sh" -o -name "*.yml" -o -name "*.yaml" \) -exec echo {} \; | head -20
-
     - name: 检出配置仓库
       uses: actions/checkout@v4
       with:
