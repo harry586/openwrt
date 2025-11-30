@@ -71,6 +71,45 @@ else
 fi
 echo "" >> error_analysis.log
 
+echo "=== 插件状态详细检查 ===" >> error_analysis.log
+if [ -f ".config" ]; then
+    echo "🔍 文件传输插件状态检查:" >> error_analysis.log
+    if grep -q "CONFIG_PACKAGE_luci-app-filetransfer=y" .config; then
+        echo "✅ luci-app-filetransfer: 已启用" >> error_analysis.log
+    else
+        echo "❌ luci-app-filetransfer: 未启用" >> error_analysis.log
+    fi
+    
+    echo "" >> error_analysis.log
+    echo "🔍 Passwall 系列插件状态检查:" >> error_analysis.log
+    PASSWALL_PLUGINS=($(grep -E "CONFIG_PACKAGE_luci-app-passwall" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//;s/=y//'))
+    if [ ${#PASSWALL_PLUGINS[@]} -eq 0 ]; then
+        echo "✅ 所有 Passwall 插件: 已正确禁用" >> error_analysis.log
+    else
+        echo "❌ 发现启用的 Passwall 插件:" >> error_analysis.log
+        printf '%s\n' "${PASSWALL_PLUGINS[@]}" >> error_analysis.log
+    fi
+    
+    echo "" >> error_analysis.log
+    echo "🔍 Rclone 系列插件状态检查:" >> error_analysis.log
+    RCLONE_PLUGINS=($(grep -E "CONFIG_PACKAGE_luci-app-rclone" .config | grep "=y" | sed 's/CONFIG_PACKAGE_//;s/=y//'))
+    if [ ${#RCLONE_PLUGINS[@]} -eq 0 ]; then
+        echo "✅ 所有 Rclone 插件: 已正确禁用" >> error_analysis.log
+    else
+        echo "❌ 发现启用的 Rclone 插件:" >> error_analysis.log
+        printf '%s\n' "${RCLONE_PLUGINS[@]}" >> error_analysis.log
+    fi
+    
+    echo "" >> error_analysis.log
+    echo "🔍 所有启用的插件列表:" >> error_analysis.log
+    grep "^CONFIG_PACKAGE_luci-app-.*=y$" .config | sed 's/CONFIG_PACKAGE_//;s/=y//' | while read plugin; do
+        echo "  ✅ $plugin" >> error_analysis.log
+    done
+else
+    echo "❌ 配置文件不存在，无法检查插件状态" >> error_analysis.log
+fi
+echo "" >> error_analysis.log
+
 echo "=== 关键错误检查 ===" >> error_analysis.log
 if [ -f "build.log" ]; then
     echo "检查日志文件: build.log" >> error_analysis.log
@@ -168,23 +207,6 @@ for check in "${CHECK_FILES[@]}"; do
         echo "❌ $desc: 缺失" >> error_analysis.log
     fi
 done
-echo "" >> error_analysis.log
-
-echo "=== 插件启用状态 ===" >> error_analysis.log
-if [ -f ".config" ]; then
-    echo "✅ 已启用的插件列表:" >> error_analysis.log
-    grep "^CONFIG_PACKAGE_luci-app-.*=y$" .config | sed 's/CONFIG_PACKAGE_//;s/=y//' | while read plugin; do
-        echo "  ✅ $plugin" >> error_analysis.log
-    done
-    
-    echo "" >> error_analysis.log
-    echo "❌ 已禁用的插件列表:" >> error_analysis.log
-    grep "^# CONFIG_PACKAGE_luci-app-.* is not set$" .config | sed 's/# CONFIG_PACKAGE_//;s/ is not set//' | while read plugin; do
-        echo "  ❌ $plugin" >> error_analysis.log
-    done
-else
-    echo "❌ 配置文件不存在，无法检查插件状态" >> error_analysis.log
-fi
 echo "" >> error_analysis.log
 
 echo "=== 错误原因分析和建议 ===" >> error_analysis.log
