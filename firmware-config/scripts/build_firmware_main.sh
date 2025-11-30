@@ -44,8 +44,8 @@ create_build_dir() {
     log "✅ 构建目录创建完成"
 }
 
-# 步骤3: 版本选择
-version_selection() {
+# 步骤3: 版本选择和克隆源码（合并到一个步骤解决环境变量问题）
+version_and_clone() {
     local version=$1
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
@@ -63,12 +63,8 @@ version_selection() {
     echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
     
     log "✅ 版本选择完成: $SELECTED_BRANCH"
-}
-
-# 步骤4: 克隆源码
-clone_source() {
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
     
+    # 立即克隆源码，避免环境变量传递问题
     log "=== 克隆源码 ==="
     log "仓库: $SELECTED_REPO_URL"
     log "分支: $SELECTED_BRANCH"
@@ -81,10 +77,20 @@ clone_source() {
     log "✅ 源码克隆完成"
 }
 
-# 步骤5: 添加 TurboACC 支持
+# 步骤4: 添加 TurboACC 支持
 add_turboacc_support() {
     local config_mode=$1
     cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    # 重新加载环境变量
+    if [ -n "$SELECTED_BRANCH" ]; then
+        log "使用已有的 SELECTED_BRANCH: $SELECTED_BRANCH"
+    else
+        # 从GITHUB_ENV重新加载
+        if [ -f "$GITHUB_ENV" ]; then
+            source $GITHUB_ENV
+        fi
+    fi
     
     log "=== 添加 TurboACC 支持 ==="
     
@@ -103,9 +109,16 @@ add_turboacc_support() {
     fi
 }
 
-# 步骤6: 添加文件传输插件支持
+# 步骤5: 添加文件传输插件支持
 add_filetransfer_support() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    # 重新加载环境变量
+    if [ -z "$SELECTED_BRANCH" ]; then
+        if [ -f "$GITHUB_ENV" ]; then
+            source $GITHUB_ENV
+        fi
+    fi
     
     log "=== 添加文件传输插件支持 ==="
     
@@ -120,7 +133,7 @@ add_filetransfer_support() {
     log "✅ 文件传输插件支持添加完成"
 }
 
-# 步骤7: 设备配置
+# 步骤6: 设备配置
 device_config() {
     local device_name=$1
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -159,10 +172,17 @@ device_config() {
     log "设备: $DEVICE"
 }
 
-# 步骤8: 配置Feeds
+# 步骤7: 配置Feeds
 configure_feeds() {
     local config_mode=$1
     cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    # 重新加载环境变量
+    if [ -z "$SELECTED_BRANCH" ]; then
+        if [ -f "$GITHUB_ENV" ]; then
+            source $GITHUB_ENV
+        fi
+    fi
     
     log "=== 配置Feeds ==="
     
@@ -198,7 +218,7 @@ configure_feeds() {
     log "✅ Feeds配置完成"
 }
 
-# 步骤9: 安装 TurboACC 包
+# 步骤8: 安装 TurboACC 包
 install_turboacc_packages() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
@@ -215,9 +235,16 @@ install_turboacc_packages() {
     log "✅ TurboACC 包安装完成"
 }
 
-# 步骤10: 安装文件传输插件包
+# 步骤9: 安装文件传输插件包
 install_filetransfer_packages() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    # 重新加载环境变量
+    if [ -z "$SELECTED_BRANCH" ]; then
+        if [ -f "$GITHUB_ENV" ]; then
+            source $GITHUB_ENV
+        fi
+    fi
     
     log "=== 安装文件传输插件包 ==="
     
@@ -242,7 +269,7 @@ install_filetransfer_packages() {
     log "✅ 文件传输插件包安装完成"
 }
 
-# 步骤11: 编译前空间检查
+# 步骤10: 编译前空间检查
 pre_build_space_check() {
     log "=== 编译前空间检查 ==="
     df -h
@@ -251,13 +278,26 @@ pre_build_space_check() {
     log "/mnt 可用空间: ${AVAILABLE_GB}G"
 }
 
-# 步骤12: 智能配置生成（USB完全修复通用版）
+# 步骤11: 智能配置生成（USB完全修复通用版）
 generate_config() {
     local config_mode=$1
     local extra_packages=$2
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
+    # 重新加载环境变量
+    if [ -z "$SELECTED_BRANCH" ] || [ -z "$TARGET" ] || [ -z "$SUBTARGET" ] || [ -z "$DEVICE" ]; then
+        if [ -f "$GITHUB_ENV" ]; then
+            source $GITHUB_ENV
+        fi
+    fi
+    
     log "=== 智能配置生成系统（USB完全修复通用版）==="
+    log "版本: $SELECTED_BRANCH"
+    log "目标: $TARGET"
+    log "子目标: $SUBTARGET"
+    log "设备: $DEVICE"
+    log "配置模式: $config_mode"
+    
     rm -f .config .config.old
     
     # 创建基础配置
@@ -451,7 +491,7 @@ generate_config() {
     log "✅ 智能配置生成完成"
 }
 
-# 步骤13: 验证USB配置
+# 步骤12: 验证USB配置
 verify_usb_config() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
@@ -472,7 +512,7 @@ verify_usb_config() {
     log "=== 🚨 USB配置验证完成 ==="
 }
 
-# 步骤14: 应用配置
+# 步骤13: 应用配置
 apply_config() {
     local config_mode=$1
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -482,7 +522,7 @@ apply_config() {
     log "✅ 配置应用完成"
 }
 
-# 步骤15: 修复网络环境
+# 步骤14: 修复网络环境
 fix_network() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
@@ -495,7 +535,7 @@ fix_network() {
     log "✅ 网络环境修复完成"
 }
 
-# 步骤16: 下载依赖包
+# 步骤15: 下载依赖包
 download_dependencies() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
@@ -504,7 +544,7 @@ download_dependencies() {
     log "✅ 依赖包下载完成"
 }
 
-# 步骤17: 编译固件
+# 步骤16: 编译固件
 build_firmware() {
     local enable_cache=$1
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -532,7 +572,7 @@ build_firmware() {
     log "✅ 固件编译完成"
 }
 
-# 步骤18: 编译后空间检查
+# 步骤17: 编译后空间检查
 post_build_space_check() {
     log "=== 编译后空间检查 ==="
     df -h
@@ -541,7 +581,7 @@ post_build_space_check() {
     log "/mnt 可用空间: ${AVAILABLE_GB}G"
 }
 
-# 步骤19: 固件文件检查
+# 步骤18: 固件文件检查
 check_firmware_files() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
@@ -559,7 +599,7 @@ check_firmware_files() {
     fi
 }
 
-# 步骤20: 清理目录
+# 步骤19: 清理目录
 cleanup() {
     log "=== 清理构建目录 ==="
     sudo rm -rf $BUILD_DIR || log "⚠️ 清理构建目录失败"
@@ -575,11 +615,8 @@ main() {
         "create_build_dir")
             create_build_dir
             ;;
-        "version_selection")
-            version_selection "$2"
-            ;;
-        "clone_source")
-            clone_source
+        "version_and_clone")
+            version_and_clone "$2"
             ;;
         "add_turboacc_support")
             add_turboacc_support "$2"
@@ -632,7 +669,7 @@ main() {
         *)
             log "❌ 未知命令: $1"
             echo "可用命令:"
-            echo "  setup_environment, create_build_dir, version_selection, clone_source"
+            echo "  setup_environment, create_build_dir, version_and_clone"
             echo "  add_turboacc_support, add_filetransfer_support, device_config"
             echo "  configure_feeds, install_turboacc_packages, install_filetransfer_packages"
             echo "  pre_build_space_check, generate_config, verify_usb_config, apply_config"
