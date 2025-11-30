@@ -1,0 +1,48 @@
+# OpenWrt固件构建项目Git忽略文件
+
+# 编译输出目录
+bin/
+build/
+tmp/
+staging_dir/
+build_dir/
+
+# 下载的源码包（可以重新下载）
+dl/
+
+# Feeds目录（可以重新生成）
+feeds/
+
+# 日志文件
+*.log
+logs/
+
+# 编译产物
+*.bin
+*.img
+*.gz
+*.ipk
+*.trx
+*.elf
+
+# 配置文件
+.config
+.config.old
+config_backup
+
+# 系统文件
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# 备份文件
+*.bak
+*.backup
+*.old
+
+# 个人开发环境文件
+.vscode/
+.idea/
+*.local
