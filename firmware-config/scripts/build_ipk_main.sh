@@ -19,6 +19,10 @@ color_yellow() {
     echo -e "\033[33m$1\033[0m"
 }
 
+color_blue() {
+    echo -e "\033[34m$1\033[0m"
+}
+
 # 日志函数
 log() {
     local message="【$(date '+%Y-%m-%d %H:%M:%S')】$1"
@@ -40,7 +44,7 @@ save_env() {
     echo "#!/bin/bash" > "$ENV_FILE"
     echo "export SELECTED_REPO_URL=\"$SELECTED_REPO_URL\"" >> "$ENV_FILE"
     echo "export SELECTED_BRANCH=\"$SELECTED_BRANCH\"" >> "$ENV_FILE"
-    echo "export PACKAGE_NAME=\"$PACKAGE_NAME\"" >> "$ENV_FILE"
+    echo "export PACKAGE_NAMES=\"$PACKAGE_NAMES\"" >> "$ENV_FILE"
     echo "export EXTRA_DEPS=\"$EXTRA_DEPS\"" >> "$ENV_FILE"
     chmod +x "$ENV_FILE"
 }
@@ -50,6 +54,13 @@ load_env() {
     if [ -f "$ENV_FILE" ]; then
         source "$ENV_FILE"
     fi
+}
+
+# 字符串分割函数
+split_string() {
+    local input="$1"
+    local delimiter="$2"
+    echo "$input" | sed "s/$delimiter/\n/g" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$'
 }
 
 # 步骤1: 设置编译环境
@@ -76,7 +87,8 @@ setup_environment() {
         libtool pkg-config help2man texinfo aria2 liblz4-dev zstd \
         libcurl4-openssl-dev groff texlive texinfo cmake \
         gperf libxml2-utils libtool-bin libglib2.0-dev libgmp3-dev \
-        libmpc-dev libmpfr-dev qemu-utils upx-ucl libltdl-dev || handle_error "安装依赖包失败"
+        libmpc-dev libmpfr-dev qemu-utils upx-ucl libltdl-dev \
+        ccache python3-pip python3-venv || handle_error "安装依赖包失败"
         
     log "✅ 编译环境设置完成"
 }
@@ -95,14 +107,14 @@ initialize_build_env() {
     
     cd "$BUILD_DIR" || handle_error "进入构建目录失败"
     
-    # 版本选择
+    # 版本选择 - 修复：使用更稳定的分支
     log "=== 版本选择 ==="
     if [ "$version_selection" = "23.05" ]; then
-        SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-        SELECTED_BRANCH="openwrt-23.05"
+        SELECTED_REPO_URL="https://github.com/openwrt/openwrt.git"
+        SELECTED_BRANCH="v23.05.2"
     else
-        SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-        SELECTED_BRANCH="openwrt-21.02"
+        SELECTED_REPO_URL="https://github.com/openwrt/openwrt.git"
+        SELECTED_BRANCH="v21.02.7"
     fi
     log "✅ 版本选择完成: $SELECTED_BRANCH"
     
@@ -144,16 +156,6 @@ configure_feeds() {
     
     log "=== 配置Feeds ==="
     
-    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-        FEEDS_BRANCH="openwrt-23.05"
-    else
-        FEEDS_BRANCH="openwrt-21.02"
-    fi
-    
-    # 确保 feeds.conf.default 包含基本 feeds
-    echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf.default
-    echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
-    
     # 更新和安装所有 feeds
     log "=== 更新Feeds ==="
     ./scripts/feeds update -a || handle_error "更新feeds失败"
@@ -178,26 +180,26 @@ pre_build_space_check() {
 
 # 步骤6: 生成IPK配置
 generate_config() {
-    local package_name="$1"
+    local package_names="$1"
     local extra_deps="$2"
     load_env
     cd "$BUILD_DIR" || handle_error "进入构建目录失败"
     
     log "=== 生成IPK配置 ==="
-    log "包名: $package_name"
+    log "包名: $package_names"
     log "版本: $SELECTED_BRANCH"
     log "额外依赖: $extra_deps"
     
-    PACKAGE_NAME="$package_name"
+    PACKAGE_NAMES="$package_names"
     EXTRA_DEPS="$extra_deps"
     save_env
     
     rm -f .config .config.old
     
     # 创建基础配置 - 修复：简化配置，只包含必要内容
-    echo "CONFIG_TARGET_ramips=y" > .config
-    echo "CONFIG_TARGET_ramips_mt76x8=y" >> .config
-    echo "CONFIG_TARGET_ramips_mt76x8_DEVICE_xiaomi_mi-router-4a-gigabit=y" >> .config
+    echo "CONFIG_TARGET_x86=y" > .config
+    echo "CONFIG_TARGET_x86_64=y" >> .config
+    echo "CONFIG_TARGET_x86_64_DEVICE_generic=y" >> .config
     
     # 基础工具链
     echo "CONFIG_TOOLCHAIN=y" >> .config
@@ -235,19 +237,26 @@ generate_config() {
     # 中文支持
     echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
 
-    # 添加要编译的包
-    echo "CONFIG_PACKAGE_${PACKAGE_NAME}=y" >> .config
+    # 添加要编译的包 - 支持多个包
+    log "=== 添加目标包 ==="
+    IFS=$'\n' read -d '' -ra PACKAGE_ARRAY <<< "$(split_string "$package_names" "、")"
+    for package in "${PACKAGE_ARRAY[@]}"; do
+        local pkg_clean=$(echo "$package" | xargs)
+        if [ -n "$pkg_clean" ]; then
+            echo "CONFIG_PACKAGE_${pkg_clean}=y" >> .config
+            color_green "  ✅ 添加包: $pkg_clean"
+        fi
+    done
     
     # 添加额外依赖
     if [ -n "$EXTRA_DEPS" ]; then
-        # 将顿号替换为分号
-        EXTRA_DEPS=$(echo "$EXTRA_DEPS" | sed 's/、/;/g')
-        IFS=';' read -ra DEPS <<< "$EXTRA_DEPS"
-        for dep in "${DEPS[@]}"; do
-            dep_clean=$(echo "$dep" | xargs)
+        log "=== 添加额外依赖 ==="
+        IFS=$'\n' read -d '' -ra DEPS_ARRAY <<< "$(split_string "$EXTRA_DEPS" "、")"
+        for dep in "${DEPS_ARRAY[@]}"; do
+            local dep_clean=$(echo "$dep" | xargs)
             if [ -n "$dep_clean" ]; then
                 echo "CONFIG_PACKAGE_${dep_clean}=y" >> .config
-                log "✅ 添加依赖: $dep_clean"
+                color_blue "  🔧 添加依赖: $dep_clean"
             fi
         done
     fi
@@ -270,12 +279,16 @@ apply_config() {
     done
     
     # 显示目标包状态
-    if grep -q "CONFIG_PACKAGE_${PACKAGE_NAME}=y" .config; then
-        color_green "✅ 目标包已启用: $PACKAGE_NAME"
-    else
-        color_red "❌ 目标包未启用: $PACKAGE_NAME"
-        handle_error "目标包配置失败"
-    fi
+    IFS=$'\n' read -d '' -ra PACKAGE_ARRAY <<< "$(split_string "$PACKAGE_NAMES" "、")"
+    for package in "${PACKAGE_ARRAY[@]}"; do
+        local pkg_clean=$(echo "$package" | xargs)
+        if grep -q "CONFIG_PACKAGE_${pkg_clean}=y" .config; then
+            color_green "✅ 目标包已启用: $pkg_clean"
+        else
+            color_red "❌ 目标包未启用: $pkg_clean"
+            handle_error "目标包配置失败"
+        fi
+    done
     
     make defconfig || handle_error "应用配置失败"
     
@@ -322,85 +335,117 @@ download_dependencies() {
 
 # 步骤10: 编译IPK包
 build_ipk() {
-    local package_name="$1"
+    local package_names="$1"
     local clean_build="$2"
     load_env
     cd "$BUILD_DIR" || handle_error "进入构建目录失败"
     
     log "=== 编译IPK包 ==="
-    log "包名: $package_name"
+    log "包名: $package_names"
     log "清理编译: $clean_build"
+    
+    # 解析包名数组
+    IFS=$'\n' read -d '' -ra PACKAGE_ARRAY <<< "$(split_string "$package_names" "、")"
     
     # 如果要求清理编译，先清理相关包
     if [ "$clean_build" = "true" ]; then
         log "🧹 清理包构建..."
-        make package/${package_name}/clean 2>/dev/null || log "⚠️ 清理包失败，继续编译"
+        for package in "${PACKAGE_ARRAY[@]}"; do
+            local pkg_clean=$(echo "$package" | xargs)
+            make package/${pkg_clean}/clean 2>/dev/null || log "⚠️ 清理包 $pkg_clean 失败，继续编译"
+        done
     fi
     
-    # 修复：先编译工具链
-    log "🔧 编译工具链..."
-    if ! make -j$(nproc) tools/toolchain/compile V=s 2>&1 | tee -a "$LOG_FILE"; then
+    # 修复：先编译工具链和必要组件
+    log "🔧 编译工具链和基础组件..."
+    if ! make -j$(nproc) tools/compile toolchain/compile V=s 2>&1 | tee -a "$LOG_FILE"; then
         log "⚠️ 工具链编译有错误，但继续尝试编译目标包"
     fi
-    
-    # 编译指定包
-    log "📦 编译包: $package_name"
-    local build_exit_code=0
-    if ! make -j$(nproc) package/${package_name}/compile V=s 2>&1 | tee -a "$LOG_FILE"; then
-        build_exit_code=${PIPESTATUS[0]}
-        log "⚠️ 编译过程有错误，但继续尝试提取IPK"
-    fi
-    
-    # 查找生成的IPK文件
-    log "=== 查找生成的IPK文件 ==="
-    IPK_FOUND=0
     
     # 创建输出目录
     mkdir -p "$BUILD_DIR/ipk_output"
     
-    # 搜索所有可能的IPK文件路径
-    SEARCH_PATHS=(
-        "bin/packages/*/*/${package_name}*.ipk"
-        "bin/targets/*/*/packages/${package_name}*.ipk"
-        "build_dir/*/ipkg-*/${package_name}*.ipk"
-    )
+    # 编译每个包
+    local total_packages=${#PACKAGE_ARRAY[@]}
+    local success_count=0
+    local fail_count=0
     
-    for search_path in "${SEARCH_PATHS[@]}"; do
-        for ipk_file in $search_path; do
-            if [ -f "$ipk_file" ]; then
+    for ((i=0; i<${#PACKAGE_ARRAY[@]}; i++)); do
+        local package="${PACKAGE_ARRAY[$i]}"
+        local pkg_clean=$(echo "$package" | xargs)
+        
+        log "📦 编译包 [$((i+1))/$total_packages]: $pkg_clean"
+        
+        local build_exit_code=0
+        if ! make -j$(nproc) package/${pkg_clean}/compile V=s 2>&1 | tee -a "$LOG_FILE"; then
+            build_exit_code=${PIPESTATUS[0]}
+            log "⚠️ 包 $pkg_clean 编译过程有错误"
+            ((fail_count++))
+        else
+            ((success_count++))
+        fi
+        
+        # 查找生成的IPK文件
+        log "=== 查找包 $pkg_clean 的IPK文件 ==="
+        local ipk_found=0
+        
+        # 搜索所有可能的IPK文件路径
+        local search_paths=(
+            "bin/packages/*/*/${pkg_clean}*.ipk"
+            "bin/targets/*/*/packages/${pkg_clean}*.ipk"
+            "build_dir/*/ipkg-*/${pkg_clean}*.ipk"
+        )
+        
+        for search_path in "${search_paths[@]}"; do
+            for ipk_file in $search_path; do
+                if [ -f "$ipk_file" ]; then
+                    log "✅ 找到IPK文件: $ipk_file"
+                    cp "$ipk_file" "$BUILD_DIR/ipk_output/"
+                    ipk_found=1
+                fi
+            done
+        done
+        
+        # 如果没找到，尝试深度搜索
+        if [ $ipk_found -eq 0 ]; then
+            log "🔍 深度搜索 $pkg_clean 的IPK文件..."
+            find "$BUILD_DIR" -name "*${pkg_clean}*.ipk" -type f 2>/dev/null | while read ipk_file; do
                 log "✅ 找到IPK文件: $ipk_file"
                 cp "$ipk_file" "$BUILD_DIR/ipk_output/"
-                IPK_FOUND=1
-            fi
-        done
+                ipk_found=1
+            done
+        fi
+        
+        if [ $ipk_found -eq 1 ]; then
+            color_green "✅ 包 $pkg_clean 编译成功！"
+        else
+            color_red "❌ 未找到包 $pkg_clean 的IPK文件"
+        fi
+        
+        log "---"
     done
     
-    # 如果没找到，尝试深度搜索
-    if [ $IPK_FOUND -eq 0 ]; then
-        log "🔍 深度搜索IPK文件..."
-        find "$BUILD_DIR" -name "*${package_name}*.ipk" -type f 2>/dev/null | while read ipk_file; do
-            log "✅ 找到IPK文件: $ipk_file"
-            cp "$ipk_file" "$BUILD_DIR/ipk_output/"
-            IPK_FOUND=1
-        done
+    # 总结编译结果
+    log "=== 编译总结 ==="
+    color_green "✅ 成功编译: $success_count/$total_packages 个包"
+    if [ $fail_count -gt 0 ]; then
+        color_red "❌ 编译失败: $fail_count/$total_packages 个包"
     fi
     
-    # 检查结果
-    if [ $IPK_FOUND -eq 1 ]; then
-        color_green "🎉 包 $package_name 编译成功！"
+    # 检查最终输出
+    if [ $success_count -gt 0 ]; then
+        color_green "🎉 编译完成！成功生成 $success_count 个IPK包"
         log "📦 生成的IPK文件:"
-        ls -la "$BUILD_DIR/ipk_output/"
+        ls -la "$BUILD_DIR/ipk_output/" 2>/dev/null || log "输出目录为空"
         
         # 创建文件列表
-        find "$BUILD_DIR/ipk_output" -name "*.ipk" -type f > "$BUILD_DIR/ipk_output/file_list.txt"
+        find "$BUILD_DIR/ipk_output" -name "*.ipk" -type f > "$BUILD_DIR/ipk_output/file_list.txt" 2>/dev/null || true
     else
-        color_red "❌ 未找到生成的IPK文件"
+        color_red "❌ 所有包编译失败"
         log "💡 调试信息:"
         log "构建目录内容:"
         ls -la "$BUILD_DIR/bin/" 2>/dev/null || log "bin目录不存在"
-        log "包目录检查:"
-        find "$BUILD_DIR/package" -name "*${package_name}*" -type d 2>/dev/null || log "未找到包目录"
-        handle_error "IPK文件生成失败 - 请检查包名是否正确或查看完整日志"
+        handle_error "所有IPK文件生成失败 - 请检查包名是否正确或查看完整日志"
     fi
     
     log "✅ IPK包编译完成"
@@ -421,69 +466,135 @@ create_install_script() {
 
 set -e
 
-PACKAGE_NAME="$1"
+show_help() {
+    echo "用法: $0 [选项] [包名...]"
+    echo ""
+    echo "选项:"
+    echo "  -a, --all     安装所有IPK包"
+    echo "  -h, --help    显示此帮助信息"
+    echo ""
+    echo "示例:"
+    echo "  $0 -a                         # 安装所有IPK包"
+    echo "  $0 luci-app-filetransfer      # 安装指定包"
+    echo "  $0 pkg1 pkg2 pkg3             # 安装多个包"
+}
 
-if [ -z "$PACKAGE_NAME" ]; then
-    echo "用法: $0 <包名>"
-    echo "示例: $0 luci-app-filetransfer"
-    exit 1
-fi
-
-echo "=== OpenWrt IPK包安装脚本 ==="
-echo "要安装的包: $PACKAGE_NAME"
-
-# 检查系统
-if [ ! -f "/etc/openwrt_release" ]; then
-    echo "❌ 这不是OpenWrt系统"
-    exit 1
-fi
-
-# 获取架构
-ARCH=$(opkg print-architecture | awk '{print $2}')
-echo "系统架构: $ARCH"
-
-# 查找匹配的IPK文件
-IPK_FILE=$(find . -name "*${PACKAGE_NAME}*.ipk" | head -1)
-
-if [ -z "$IPK_FILE" ]; then
-    echo "❌ 未找到包 $PACKAGE_NAME 的IPK文件"
-    echo "当前目录下的IPK文件:"
-    find . -name "*.ipk" | while read file; do
+install_all_packages() {
+    echo "=== 安装所有IPK包 ==="
+    
+    # 查找所有IPK文件
+    local ipk_files=$(find . -name "*.ipk" -type f)
+    
+    if [ -z "$ipk_files" ]; then
+        echo "❌ 未找到任何IPK文件"
+        exit 1
+    fi
+    
+    echo "找到以下IPK文件:"
+    echo "$ipk_files" | while read file; do
         echo "  - $(basename "$file")"
     done
-    exit 1
-fi
-
-echo "找到IPK文件: $(basename "$IPK_FILE")"
-
-# 安装依赖（尝试自动解决）
-echo "检查依赖..."
-opkg update
-
-# 尝试安装IPK（会自动解决依赖）
-echo "安装包: $PACKAGE_NAME"
-if opkg install "$IPK_FILE"; then
-    echo "✅ $PACKAGE_NAME 安装成功！"
-
-    # 检查是否真的安装成功
-    if opkg list-installed | grep -q "$PACKAGE_NAME"; then
-        echo "🎉 包已成功安装到系统"
-
-        # 如果是Luci应用，提示重启服务
-        if [[ "$PACKAGE_NAME" == luci-app-* ]]; then
-            echo ""
-            echo "💡 如果是Luci应用，请:"
-            echo "1. 刷新浏览器缓存"
-            echo "2. 在Luci界面中查看新功能"
+    
+    # 安装依赖
+    echo "检查依赖..."
+    opkg update
+    
+    # 安装所有包
+    for ipk_file in $ipk_files; do
+        echo "安装: $(basename "$ipk_file")"
+        if opkg install "$ipk_file"; then
+            echo "✅ $(basename "$ipk_file") 安装成功"
+        else
+            echo "❌ $(basename "$ipk_file") 安装失败"
         fi
-    else
-        echo "⚠️ 包可能未正确安装，请检查以上输出"
+        echo ""
+    done
+    
+    echo "🎉 所有包安装完成！"
+}
+
+install_specific_packages() {
+    local packages=("$@")
+    
+    echo "=== 安装指定包 ==="
+    echo "要安装的包: ${packages[*]}"
+    
+    # 检查系统
+    if [ ! -f "/etc/openwrt_release" ]; then
+        echo "❌ 这不是OpenWrt系统"
+        exit 1
     fi
-else
-    echo "❌ 安装失败，请检查依赖关系"
-    echo "💡 可以尝试手动安装依赖后重试"
-    exit 1
-fi
+    
+    # 获取架构
+    ARCH=$(opkg print-architecture | awk '{print $2}')
+    echo "系统架构: $ARCH"
+    
+    # 安装依赖
+    echo "检查依赖..."
+    opkg update
+    
+    # 安装每个包
+    for package_name in "${packages[@]}"; do
+        echo "=== 安装包: $package_name ==="
+        
+        # 查找匹配的IPK文件
+        IPK_FILE=$(find . -name "*${package_name}*.ipk" | head -1)
+        
+        if [ -z "$IPK_FILE" ]; then
+            echo "❌ 未找到包 $package_name 的IPK文件"
+            echo "当前目录下的IPK文件:"
+            find . -name "*.ipk" | while read file; do
+                echo "  - $(basename "$file")"
+            done
+            continue
+        fi
+        
+        echo "找到IPK文件: $(basename "$IPK_FILE")"
+        
+        # 尝试安装IPK
+        if opkg install "$IPK_FILE"; then
+            echo "✅ $package_name 安装成功！"
+            
+            # 检查是否真的安装成功
+            if opkg list-installed | grep -q "$package_name"; then
+                echo "🎉 包已成功安装到系统"
+                
+                # 如果是Luci应用，提示重启服务
+                if [[ "$package_name" == luci-app-* ]]; then
+                    echo ""
+                    echo "💡 如果是Luci应用，请:"
+                    echo "1. 刷新浏览器缓存"
+                    echo "2. 在Luci界面中查看新功能"
+                fi
+            else
+                echo "⚠️ 包可能未正确安装，请检查以上输出"
+            fi
+        else
+            echo "❌ $package_name 安装失败，请检查依赖关系"
+            echo "💡 可以尝试手动安装依赖后重试"
+        fi
+        echo ""
+    done
+}
+
+# 主逻辑
+case "${1:-}" in
+    -h|--help)
+        show_help
+        exit 0
+        ;;
+    -a|--all)
+        install_all_packages
+        ;;
+    *)
+        if [ $# -eq 0 ]; then
+            show_help
+            exit 1
+        else
+            install_specific_packages "$@"
+        fi
+        ;;
+esac
 EOF
 
     chmod +x "$BUILD_DIR/ipk_output/install_package.sh"
@@ -507,7 +618,13 @@ scp -r ipk_output root@192.168.1.1:/tmp/
 # 在路由器上执行
 ssh root@192.168.1.1
 cd /tmp/ipk_output
-./install_package.sh <包名>
+
+# 安装所有包
+./install_package.sh -a
+
+# 或安装指定包
+./install_package.sh luci-app-filetransfer
+./install_package.sh pkg1 pkg2 pkg3
 \`\`\`
 
 ### 方法二：手动安装
@@ -525,12 +642,18 @@ opkg install *.ipk
 ## 支持的平台
 - 所有OpenWrt平台（全平台通用）
 - OpenWrt 21.02 / 23.05
-- ImmortalWrt
 
 ## 注意事项
 1. 确保路由器有足够的空间
 2. 安装前建议备份配置
 3. 某些包可能需要特定依赖
+
+## 多包编译说明
+支持同时编译多个IPK包，包名之间用顿号分隔。
+
+示例：
+- \`luci-app-filetransfer\`
+- \`luci-app-filetransfer、luci-app-turboacc、luci-app-upnp\`
 
 ## 额外依赖包说明
 额外依赖包用于在编译时确保相关的依赖包也被编译。这在你编译的包依赖其他包时特别有用。
