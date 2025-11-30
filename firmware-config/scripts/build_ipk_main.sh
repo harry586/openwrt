@@ -6,9 +6,14 @@ BUILD_DIR="/mnt/openwrt-build-ipk"
 ENV_FILE="$BUILD_DIR/build_env.sh"
 LOG_FILE="$BUILD_DIR/build_ipk.log"
 
-# 日志函数
+# 日志函数 - 修复文件路径问题
 log() {
-    echo "【$(date '+%Y-%m-%d %H:%M:%S')】$1" | tee -a "$LOG_FILE"
+    local message="【$(date '+%Y-%m-%d %H:%M:%S')】$1"
+    echo "$message"
+    # 只有在日志文件存在时才写入
+    if [ -f "$LOG_FILE" ]; then
+        echo "$message" >> "$LOG_FILE"
+    fi
 }
 
 # 错误处理函数
@@ -37,6 +42,15 @@ load_env() {
 
 # 步骤1: 设置编译环境
 setup_environment() {
+    # 在设置环境前先创建构建目录
+    sudo mkdir -p "$BUILD_DIR" || handle_error "创建构建目录失败"
+    sudo chown -R $USER:$USER "$BUILD_DIR" || handle_error "修改目录所有者失败"
+    sudo chmod -R 755 "$BUILD_DIR" || handle_error "修改目录权限失败"
+    
+    # 创建日志文件
+    touch "$LOG_FILE"
+    sudo chown $USER:$USER "$LOG_FILE"
+    
     log "=== 安装编译依赖包 ==="
     sudo apt-get update || handle_error "apt-get update失败"
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -53,14 +67,10 @@ setup_environment() {
 # 步骤2: 创建构建目录
 create_build_dir() {
     log "=== 创建构建目录 ==="
-    sudo mkdir -p "$BUILD_DIR" || handle_error "创建构建目录失败"
+    # 目录已经在 setup_environment 中创建，这里确保权限正确
     sudo chown -R $USER:$USER "$BUILD_DIR" || handle_error "修改目录所有者失败"
     sudo chmod -R 755 "$BUILD_DIR" || handle_error "修改目录权限失败"
-    
-    # 创建日志文件
-    touch "$LOG_FILE"
-    sudo chown $USER:$USER "$LOG_FILE"
-    log "✅ 构建目录创建完成"
+    log "✅ 构建目录准备完成"
 }
 
 # 步骤3: 初始化构建环境
