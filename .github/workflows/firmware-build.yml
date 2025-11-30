@@ -93,14 +93,9 @@ jobs:
       run: |
         firmware-config/scripts/build_firmware_main.sh create_build_dir
 
-    - name: 版本选择
-      id: version-selection
+    - name: 版本选择和克隆源码
       run: |
-        firmware-config/scripts/build_firmware_main.sh version_selection "${{ github.event.inputs.version_selection }}"
-
-    - name: 克隆源码
-      run: |
-        firmware-config/scripts/build_firmware_main.sh clone_source
+        firmware-config/scripts/build_firmware_main.sh version_and_clone "${{ github.event.inputs.version_selection }}"
 
     - name: 添加 TurboACC 支持
       run: |
