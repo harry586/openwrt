@@ -158,22 +158,27 @@ add_turboacc_support() {
     fi
 }
 
-# 步骤5: 添加文件传输插件支持
+# 步骤5: 添加文件传输插件支持（修改为使用官方源）
 add_filetransfer_support() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
     log "=== 添加文件传输插件支持 ==="
     
-    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-        log "🔧 为23.05添加文件传输插件支持"
-        echo "src-git small https://github.com/kenzok8/small-package" >> feeds.conf.default
-    else
-        log "🔧 为21.02添加文件传输插件支持"
-        echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default
+    # 所有版本都使用官方源的 luci-app-filetransfer
+    log "🔧 所有版本使用官方源的 luci-app-filetransfer"
+    
+    # 确保 feeds.conf.default 包含基本 feeds
+    if ! grep -q "src-git luci" feeds.conf.default; then
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            FEEDS_BRANCH="openwrt-23.05"
+        else
+            FEEDS_BRANCH="openwrt-21.02"
+        fi
+        echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
     fi
     
-    log "✅ 文件传输插件支持添加完成"
+    log "✅ 文件传输插件支持添加完成（使用官方源）"
 }
 
 # 步骤6: 配置Feeds
@@ -196,13 +201,6 @@ configure_feeds() {
     # 如果是 23.05 且正常模式，添加 turboacc feed
     if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] && [ "$CONFIG_MODE" = "normal" ]; then
         echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
-    fi
-    
-    # 为所有版本添加文件传输插件源
-    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-        echo "src-git small https://github.com/kenzok8/small-package" >> feeds.conf.default
-    else
-        echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> feeds.conf.default
     fi
     
     # 更新和安装所有 feeds
@@ -233,32 +231,26 @@ install_turboacc_packages() {
     log "✅ TurboACC 包安装完成"
 }
 
-# 步骤8: 安装文件传输插件包
+# 步骤8: 安装文件传输插件包（修改为使用官方源）
 install_filetransfer_packages() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
     log "=== 安装文件传输插件包 ==="
     
-    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-        log "🔧 为23.05安装文件传输插件"
-        # 更新 small feed
-        ./scripts/feeds update small || log "⚠️ 更新small feed失败，尝试继续"
-        # 安装文件传输插件
-        ./scripts/feeds install -p small luci-app-filetransfer || log "⚠️ 安装luci-app-filetransfer失败，将使用备用方案"
-        # 安装中文语言包
-        ./scripts/feeds install -p small luci-i18n-filetransfer-zh-cn || log "⚠️ 安装luci-i18n-filetransfer-zh-cn失败"
-    else
-        log "🔧 为21.02安装文件传输插件"
-        # 更新 kenzo feed
-        ./scripts/feeds update kenzo || handle_error "更新kenzo feed失败"
-        # 安装文件传输插件
-        ./scripts/feeds install -p kenzo luci-app-filetransfer || handle_error "安装luci-app-filetransfer失败"
-        # 安装中文语言包
-        ./scripts/feeds install -p kenzo luci-i18n-filetransfer-zh-cn || handle_error "安装luci-i18n-filetransfer-zh-cn失败"
-    fi
+    # 所有版本都使用官方源的 luci-app-filetransfer
+    log "🔧 安装官方源的 luci-app-filetransfer"
     
-    log "✅ 文件传输插件包安装完成"
+    # 确保 luci feed 已更新
+    ./scripts/feeds update luci || handle_error "更新luci feed失败"
+    
+    # 安装文件传输插件
+    ./scripts/feeds install -p luci luci-app-filetransfer || log "⚠️ 安装luci-app-filetransfer失败，将使用备用方案"
+    
+    # 尝试安装中文语言包
+    ./scripts/feeds install -p luci luci-i18n-filetransfer-zh-cn || log "⚠️ 安装luci-i18n-filetransfer-zh-cn失败"
+    
+    log "✅ 文件传输插件包安装完成（官方源）"
 }
 
 # 步骤9: 编译前空间检查
@@ -431,11 +423,9 @@ generate_config() {
     echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
     echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
     
-    # 🚨 关键修复：文件传输插件配置
+    # 🚨 关键修复：文件传输插件配置（所有版本都启用）
     echo "CONFIG_PACKAGE_luci-app-filetransfer=y" >> .config
-    if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-        echo "CONFIG_PACKAGE_luci-i18n-filetransfer-zh-cn=y" >> .config
-    fi
+    echo "CONFIG_PACKAGE_luci-i18n-filetransfer-zh-cn=y" >> .config
     
     # 配置模式选择
     if [ "$CONFIG_MODE" = "base" ]; then
@@ -478,19 +468,25 @@ generate_config() {
         
         # 添加中文语言包
         if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-            echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-arpbind-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-cpulimit-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-hd-idle-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-accesscontrol-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-vlmcsd-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y" >> .config
+            NORMAL_I18N_PLUGINS=(
+                "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y"
+                "CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y"
+                "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y"
+                "CONFIG_PACKAGE_luci-i18n-arpbind-zh-cn=y"
+                "CONFIG_PACKAGE_luci-i18n-cpulimit-zh-cn=y"
+                "CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y"
+                "CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y"
+                "CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y"
+                "CONFIG_PACKAGE_luci-i18n-hd-idle-zh-cn=y"
+                "CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y"
+                "CONFIG_PACKAGE_luci-i18n-accesscontrol-zh-cn=y"
+                "CONFIG_PACKAGE_luci-i18n-vlmcsd-zh-cn=y"
+                "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y"
+            )
+            
+            for i18n_plugin in "${NORMAL_I18N_PLUGINS[@]}"; do
+                echo "$i18n_plugin" >> .config
+            done
         fi
     fi
     
@@ -542,7 +538,7 @@ verify_usb_config() {
     log "=== 🚨 USB配置验证完成 ==="
 }
 
-# 步骤12: 应用配置
+# 步骤12: 应用配置（增强插件状态显示）
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -570,7 +566,15 @@ apply_config() {
     # 显示应用后的配置
     log "=== 应用配置后状态 ==="
     log "最终启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
-    log "关键插件状态:"
+    
+    # 🚨 增强：显示所有启用的插件状态
+    log "=== ✅ 所有启用的插件列表 ==="
+    grep "^CONFIG_PACKAGE_luci-app-.*=y$" .config | sed 's/CONFIG_PACKAGE_//;s/=y//' | while read plugin; do
+        log "  ✅ $plugin"
+    done
+    
+    # 显示关键插件状态
+    log "=== 关键插件状态 ==="
     grep -E "CONFIG_PACKAGE_luci-app-filetransfer|CONFIG_PACKAGE_luci-app-turboacc|CONFIG_PACKAGE_luci-app-samba4" .config | head -10
     
     log "✅ 配置应用完成"
@@ -598,7 +602,7 @@ download_dependencies() {
     log "✅ 依赖包下载完成"
 }
 
-# 步骤15: 处理自定义文件
+# 步骤15: 处理自定义文件（增强搜索功能）
 process_custom_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -612,8 +616,44 @@ process_custom_files() {
     echo "自定义文件处理报告 - $(date)" > $CUSTOM_LOG
     echo "==========================================" >> $CUSTOM_LOG
     
-    if [ -d "$CUSTOM_FILES_DIR" ]; then
-        log "🔧 发现自定义文件目录"
+    # 🚨 增强搜索：使用模糊搜索查找自定义文件目录
+    log "🔍 开始搜索自定义文件目录..."
+    
+    # 定义可能的目录名称模式
+    SEARCH_PATTERNS=(
+        "*custom*file*"
+        "*firmware*config*"
+        "*custom*"
+        "*file*"
+        "custom-files"
+        "custom_files"
+        "files"
+    )
+    
+    CUSTOM_FILES_DIR_FOUND=""
+    
+    # 首先检查默认路径
+    if [ -d "./firmware-config/custom-files" ]; then
+        CUSTOM_FILES_DIR_FOUND="./firmware-config/custom-files"
+        log "✅ 找到默认自定义文件目录: $CUSTOM_FILES_DIR_FOUND"
+    else
+        # 使用模糊搜索查找目录
+        for pattern in "${SEARCH_PATTERNS[@]}"; do
+            found_dir=$(find . -type d -iname "$pattern" 2>/dev/null | head -1)
+            if [ -n "$found_dir" ] && [ -d "$found_dir" ]; then
+                # 检查目录是否包含文件（不是空目录）
+                if [ "$(find "$found_dir" -type f | head -1)" ]; then
+                    CUSTOM_FILES_DIR_FOUND="$found_dir"
+                    log "✅ 通过模糊搜索找到自定义文件目录: $CUSTOM_FILES_DIR_FOUND"
+                    break
+                fi
+            fi
+        done
+    fi
+    
+    if [ -n "$CUSTOM_FILES_DIR_FOUND" ]; then
+        CUSTOM_FILES_DIR="$CUSTOM_FILES_DIR_FOUND"
+        log "🔧 使用自定义文件目录: $CUSTOM_FILES_DIR"
         echo "发现自定义文件目录: $CUSTOM_FILES_DIR" >> $CUSTOM_LOG
         
         # 处理IPK文件
@@ -697,8 +737,17 @@ EOF
         find "$CUSTOM_FILES_DIR" -type f >> $CUSTOM_LOG
         
     else
-        log "ℹ️ 自定义文件目录不存在: $CUSTOM_FILES_DIR"
-        echo "自定义文件目录不存在: $CUSTOM_FILES_DIR" >> $CUSTOM_LOG
+        log "🔍 详细搜索报告:"
+        echo "详细搜索报告:" >> $CUSTOM_LOG
+        echo "搜索模式: ${SEARCH_PATTERNS[*]}" >> $CUSTOM_LOG
+        
+        # 显示所有可能的目录
+        log "所有可能的目录:"
+        find . -type d \( -iname "*custom*" -o -iname "*file*" -o -iname "*firmware*" \) 2>/dev/null | head -10 >> $CUSTOM_LOG
+        
+        log "ℹ️ 未找到有效的自定义文件目录"
+        echo "未找到有效的自定义文件目录" >> $CUSTOM_LOG
+        echo "请确保存在包含文件的 custom-files 目录" >> $CUSTOM_LOG
     fi
     
     echo "==========================================" >> $CUSTOM_LOG
@@ -801,8 +850,10 @@ backup_config() {
     
     if [ -f ".config" ]; then
         echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)" >> $CONFIG_SUMMARY
-        echo "关键插件状态:" >> $CONFIG_SUMMARY
-        grep -E "CONFIG_PACKAGE_luci-app-" .config | grep "=y" >> $CONFIG_SUMMARY
+        echo "✅ 启用的插件列表:" >> $CONFIG_SUMMARY
+        grep "^CONFIG_PACKAGE_luci-app-.*=y$" .config | sed 's/CONFIG_PACKAGE_//;s/=y//' | while read plugin; do
+            echo "  ✅ $plugin" >> $CONFIG_SUMMARY
+        done
     fi
     
     log "✅ 配置文件备份完成"
