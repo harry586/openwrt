@@ -1,10 +1,10 @@
-name: 🛠️ 通用IPK包编译工作流（全平台支持）
+name: 🛠️ 通用IPK包编译工作流（多包支持）
 
 on:
   workflow_dispatch:
     inputs:
-      package_name:
-        description: '📦 要编译的IPK包名 (如: luci-app-filetransfer)'
+      package_names:
+        description: '📦 要编译的IPK包名 (用顿号、分隔，如: luci-app-filetransfer、luci-app-turboacc)'
         required: true
         default: 'luci-app-filetransfer'
         type: string
@@ -84,7 +84,7 @@ jobs:
     - name: 生成IPK配置
       run: |
         echo "=== 生成IPK配置 ==="
-        firmware-config/scripts/build_ipk_main.sh generate_config "${{ github.event.inputs.package_name }}" "${{ github.event.inputs.extra_deps }}"
+        firmware-config/scripts/build_ipk_main.sh generate_config "${{ github.event.inputs.package_names }}" "${{ github.event.inputs.extra_deps }}"
 
     - name: 应用配置
       run: |
@@ -104,7 +104,7 @@ jobs:
     - name: 编译IPK包
       run: |
         echo "=== 编译IPK包 ==="
-        firmware-config/scripts/build_ipk_main.sh build_ipk "${{ github.event.inputs.package_name }}" "${{ github.event.inputs.clean_build }}"
+        firmware-config/scripts/build_ipk_main.sh build_ipk "${{ github.event.inputs.package_names }}" "${{ github.event.inputs.clean_build }}"
 
     - name: 创建安装脚本
       run: |
@@ -114,7 +114,7 @@ jobs:
     - name: 上传IPK文件
       uses: actions/upload-artifact@v4
       with:
-        name: ipk-${{ github.event.inputs.package_name }}-${{ github.event.inputs.version_selection }}
+        name: ipk-packages-${{ github.event.inputs.version_selection }}
         path: ${{ env.BUILD_DIR }}/ipk_output/
         retention-days: 30
 
@@ -122,7 +122,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: ipk-build-log-${{ github.event.inputs.package_name }}-${{ github.event.inputs.version_selection }}
+        name: ipk-build-log-${{ github.event.inputs.version_selection }}
         path: ${{ env.BUILD_DIR }}/build_ipk.log
         retention-days: 30
 
