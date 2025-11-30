@@ -23,7 +23,14 @@ echo "  额外包: $EXTRA_PACKAGES"
 # 设置编译环境
 echo "=== 设置编译环境 ==="
 sudo apt-get update
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpath libpython3-dev python3 python3-dev python3-pip python3-setuptools python3-yaml xsltproc zip subversion ninja-build automake autoconf libtool pkg-config help2man texinfo aria2 liblz4-dev zstd libcurl4-openssl-dev groff texlive texinfo cmake
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+    gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip \
+    zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpath \
+    libpython3-dev python3 python3-dev python3-pip python3-setuptools \
+    python3-yaml xsltproc zip subversion ninja-build automake autoconf \
+    libtool pkg-config help2man texinfo aria2 liblz4-dev zstd \
+    libcurl4-openssl-dev groff texlive texinfo cmake
 echo "✅ 编译环境设置完成"
 
 # 添加 TurboACC 支持
@@ -166,11 +173,7 @@ echo "CONFIG_PACKAGE_kmod-ipt-nat6=y" >> .config
 echo "=== 🚨 USB 完全修复通用配置 - 开始 ==="
 
 # USB 核心驱动
-echo "# 🟢 USB 核心驱动 - 基础必须" >> .config
 echo "CONFIG_PACKAGE_kmod-usb-core=y" >> .config
-
-# USB 主机控制器驱动
-echo "# 🟢 USB 主机控制器驱动 - 通用支持" >> .config
 echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
 echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
 echo "CONFIG_PACKAGE_kmod-usb-ehci=y" >> .config
@@ -179,8 +182,6 @@ echo "CONFIG_PACKAGE_kmod-usb-uhci=y" >> .config
 echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config
 
 # 平台专用USB控制器驱动
-echo "# 🟡 平台专用USB控制器驱动 - 按平台启用" >> .config
-
 if [ "$TARGET" = "ipq40xx" ]; then
     echo "# 🚨 关键修复：IPQ40xx 专用USB控制器驱动（高通方案）" >> .config
     echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
@@ -197,22 +198,16 @@ if [ "$TARGET" = "ramips" ] || [ "$SUBTARGET" = "mt76x8" ] || [ "$SUBTARGET" = "
     echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config
 fi
 
-# 其他平台驱动配置...
-# [这里保留原有的其他平台USB驱动配置，但为了简洁省略了部分]
-
 # USB 存储驱动
-echo "# 🟢 USB 存储驱动 - 核心功能" >> .config
 echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
 echo "CONFIG_PACKAGE_kmod-usb-storage-extras=y" >> .config
 echo "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config
 
 # SCSI 支持
-echo "# 🟢 SCSI 支持 - 硬盘和U盘必需" >> .config
 echo "CONFIG_PACKAGE_kmod-scsi-core=y" >> .config
 echo "CONFIG_PACKAGE_kmod-scsi-generic=y" >> .config
 
 # 文件系统支持
-echo "# 🟢 文件系统支持 - 完整文件系统兼容" >> .config
 echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
 echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
 echo "CONFIG_PACKAGE_kmod-fs-exfat=y" >> .config
@@ -220,26 +215,22 @@ echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
 echo "CONFIG_PACKAGE_kmod-fs-autofs4=y" >> .config
 
 # 编码支持
-echo "# 🟢 编码支持 - 多语言文件名兼容" >> .config
 echo "CONFIG_PACKAGE_kmod-nls-utf8=y" >> .config
 echo "CONFIG_PACKAGE_kmod-nls-cp437=y" >> .config
 echo "CONFIG_PACKAGE_kmod-nls-iso8859-1=y" >> .config
 echo "CONFIG_PACKAGE_kmod-nls-cp936=y" >> .config
 
 # 自动挂载工具
-echo "# 🟢 自动挂载工具 - 即插即用支持" >> .config
 echo "CONFIG_PACKAGE_block-mount=y" >> .config
 echo "CONFIG_PACKAGE_automount=y" >> .config
 
 # USB 工具和热插拔支持
-echo "# 🟢 USB 工具和热插拔支持 - 设备管理" >> .config
 echo "CONFIG_PACKAGE_usbutils=y" >> .config
 echo "CONFIG_PACKAGE_lsusb=y" >> .config
 echo "CONFIG_PACKAGE_udev=y" >> .config
 echo "CONFIG_PACKAGE_udev-extra=y" >> .config
 
 # 磁盘工具
-echo "# 🟢 磁盘工具 - 完整磁盘管理" >> .config
 echo "CONFIG_PACKAGE_blkid=y" >> .config
 echo "CONFIG_PACKAGE_fdisk=y" >> .config
 echo "CONFIG_PACKAGE_e2fsprogs=y" >> .config
@@ -259,7 +250,6 @@ fi
 echo "=== 🚨 USB 完全修复通用配置 - 完成 ==="
 
 # 版本智能检测和配置
-echo "=== 版本智能检测: $SELECTED_BRANCH ==="
 if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
     echo "🔧 检测到 21.02 版本，应用相应配置..."
     echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
