@@ -5,6 +5,8 @@ set -e
 BUILD_DIR="/mnt/openwrt-build-ipk"
 ENV_FILE="$BUILD_DIR/build_env.sh"
 LOG_FILE="$BUILD_DIR/build_ipk.log"
+SOURCE_PKG_DIR="$BUILD_DIR/source_packages"
+PACKAGES_BASE_DIR="firmware-config/packages"
 
 # 颜色输出函数
 color_green() {
@@ -47,6 +49,7 @@ export SELECTED_REPO_URL="$SELECTED_REPO_URL"
 export SELECTED_BRANCH="$SELECTED_BRANCH"
 export PACKAGE_NAMES="$PACKAGE_NAMES"
 export EXTRA_DEPS="$EXTRA_DEPS"
+export SOURCE_PACKAGES="$SOURCE_PACKAGES"
 EOF
     chmod +x "$ENV_FILE"
 }
@@ -58,36 +61,252 @@ load_env() {
     fi
 }
 
-# 修复的字符串分割函数
+# 字符串分割函数
 split_string() {
     local input="$1"
     local delimiter="$2"
     
-    # 如果输入为空，返回空数组
     if [ -z "$input" ]; then
         return
     fi
     
-    # 临时修改IFS进行分割
-    local old_ifs="$IFS"
-    IFS="$delimiter"
+    # 使用 sed 和 tr 进行分割
+    echo "$input" | tr "$delimiter" '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$'
+}
+
+# 检查包是否存在
+check_package_exists() {
+    local package="$1"
+    local found=0
     
-    if [ -n "$BASH_VERSION" ]; then
-        # Bash数组
-        local array=()
-        for item in $input; do
-            local trimmed=$(echo "$item" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-            if [ -n "$trimmed" ]; then
-                array+=("$trimmed")
-            fi
-        done
-        printf '%s\n' "${array[@]}"
-    else
-        # 通用方法
-        echo "$input" | tr "$delimiter" '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$'
+    # 检查可能的包路径
+    local possible_paths=(
+        "package/$package"
+        "feeds/luci/$package" 
+        "feeds/packages/$package"
+        "feeds/routing/$package"
+        "feeds/telephony/$package"
+    )
+    
+    for path in "${possible_paths[@]}"; do
+        if [ -d "$path" ]; then
+            log "✅ 找到包: $path"
+            found=1
+            break
+        fi
+    done
+    
+    # 如果没找到，搜索所有feeds
+    if [ $found -eq 0 ]; then
+        local search_result=$(find feeds -name "$package" -type d 2>/dev/null | head -1)
+        if [ -n "$search_result" ]; then
+            log "✅ 找到包: $search_result"
+            found=1
+        fi
     fi
     
-    IFS="$old_ifs"
+    return $found
+}
+
+# 从GitHub仓库下载自定义包
+download_custom_package() {
+    local package_name="$1"
+    local repo_url="$2"
+    
+    log "=== 下载自定义包 ==="
+    log "包名: $package_name"
+    log "仓库: $repo_url"
+    
+    cd "$BUILD_DIR" || handle_error "进入构建目录失败"
+    
+    # 提取仓库名
+    local repo_name=$(basename "$repo_url" .git)
+    local target_dir="package/$package_name"
+    
+    # 清理旧目录
+    rm -rf "$target_dir"
+    
+    # 克隆仓库
+    git clone --depth 1 "$repo_url" "$target_dir" || handle_error "克隆自定义包失败"
+    
+    # 检查是否有Makefile
+    if [ ! -f "$target_dir/Makefile" ]; then
+        log "⚠️ 自定义包没有Makefile，尝试查找..."
+        find "$target_dir" -name "Makefile" | head -1 | while read makefile; do
+            local subdir=$(dirname "$makefile")
+            if [ "$subdir" != "$target_dir" ]; then
+                log "📁 移动包文件从 $subdir 到 $target_dir"
+                mv "$subfile"/* "$target_dir"/ 2>/dev/null || true
+            fi
+        done
+    fi
+    
+    if [ -f "$target_dir/Makefile" ]; then
+        color_green "✅ 自定义包下载完成: $package_name"
+        return 0
+    else
+        color_red "❌ 自定义包没有有效的Makefile"
+        return 1
+    fi
+}
+
+# 处理源码压缩包
+process_source_packages() {
+    local source_packages_list="$1"
+    
+    if [ -z "$source_packages_list" ]; then
+        log "=== 没有源码压缩包需要处理 ==="
+        return 0
+    fi
+    
+    log "=== 处理源码压缩包 ==="
+    
+    # 准备源码包目录
+    mkdir -p "$SOURCE_PKG_DIR"
+    mkdir -p "$SOURCE_PKG_DIR/luci"
+    mkdir -p "$SOURCE_PKG_DIR/temp"
+    
+    # 保存环境变量
+    SOURCE_PACKAGES="$source_packages_list"
+    save_env
+    
+    # 处理每个源码压缩包
+    while IFS= read -r source_file; do
+        local source_file_clean=$(echo "$source_file" | xargs)
+        if [ -z "$source_file_clean" ]; then
+            continue
+        fi
+        
+        # 构建完整路径
+        local source_path="$PACKAGES_BASE_DIR/$source_file_clean"
+        
+        if [ ! -f "$source_path" ]; then
+            color_red "❌ 源码压缩包不存在: $source_path"
+            continue
+        fi
+        
+        log "处理源码包: $source_file_clean"
+        
+        # 从文件名提取包名（去掉扩展名）
+        local package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\)$//')
+        
+        # 创建目标目录
+        local target_dir="$SOURCE_PKG_DIR/luci/$package_name"
+        rm -rf "$target_dir"
+        mkdir -p "$target_dir"
+        
+        # 解压文件
+        log "解压源码文件..."
+        if [[ "$source_file_clean" == *.zip ]]; then
+            unzip -q "$source_path" -d "$target_dir" || handle_error "解压ZIP文件失败"
+        elif [[ "$source_file_clean" == *.tar.gz ]] || [[ "$source_file_clean" == *.tgz ]]; then
+            tar -xzf "$source_path" -C "$target_dir" || handle_error "解压TAR.GZ文件失败"
+        elif [[ "$source_file_clean" == *.tar.bz2 ]]; then
+            tar -xjf "$source_path" -C "$target_dir" || handle_error "解压TAR.BZ2文件失败"
+        else
+            color_red "❌ 不支持的压缩格式: $source_file_clean"
+            continue
+        fi
+        
+        # 修复包目录结构
+        fix_package_structure "$target_dir" "$package_name"
+        
+        # 集成到构建系统
+        integrate_source_package "$target_dir" "$package_name"
+        
+        color_green "✅ 源码包处理完成: $package_name"
+        
+    done <<< "$(split_string "$source_packages_list" "、")"
+    
+    log "✅ 源码压缩包处理完成"
+}
+
+# 修复包目录结构
+fix_package_structure() {
+    local target_dir="$1"
+    local package_name="$2"
+    
+    log "修复包目录结构: $package_name"
+    
+    # 检查是否解压到了子目录
+    local subdirs=($(find "$target_dir" -maxdepth 1 -type d | grep -v "^$target_dir$"))
+    
+    if [ ${#subdirs[@]} -eq 1 ] && [ -d "${subdirs[0]}" ]; then
+        log "检测到子目录结构，移动文件..."
+        local subdir="${subdirs[0]}"
+        mv "$subdir"/* "$target_dir"/ 2>/dev/null || true
+        rm -rf "$subdir"
+    fi
+    
+    # 检查特殊的目录结构（如luci_opkg）
+    if [ -d "$target_dir/luci_opkg" ]; then
+        log "调整luci_opkg目录结构..."
+        mv "$target_dir/luci_opkg"/* "$target_dir"/ 2>/dev/null || true
+        rm -rf "$target_dir/luci_opkg"
+    fi
+    
+    # 验证最终结构
+    validate_package_structure "$target_dir" "$package_name"
+}
+
+# 验证包结构
+validate_package_structure() {
+    local target_dir="$1"
+    local package_name="$2"
+    
+    log "验证包结构: $package_name"
+    
+    # 检查必要文件
+    local required_files=("Makefile")
+    for file in "${required_files[@]}"; do
+        if [ ! -f "$target_dir/$file" ]; then
+            color_yellow "⚠️ 缺少文件: $file"
+        else
+            color_green "✅ 找到文件: $file"
+        fi
+    done
+    
+    # 检查目录内容
+    local file_count=$(find "$target_dir" -type f | wc -l)
+    log "包包含 $file_count 个文件"
+    
+    # 显示关键文件
+    find "$target_dir" -type f \( -name "*.mk" -o -name "*.lua" -o -name "*.htm" -o -name "*.js" -o -name "*.css" \) | head -10 | while read file; do
+        color_blue "  📄 $(basename "$file")"
+    done
+    
+    # 显示Makefile信息
+    if [ -f "$target_dir/Makefile" ]; then
+        log "Makefile信息:"
+        grep -E "^(PKG_NAME|PKG_VERSION|PKG_RELEASE|PKG_LICENSE|Package|Build)" "$target_dir/Makefile" | head -5 | while read line; do
+            color_yellow "  📝 $line"
+        done
+    fi
+}
+
+# 集成源码包到构建系统
+integrate_source_package() {
+    local source_dir="$1"
+    local package_name="$2"
+    
+    log "集成源码包到构建系统: $package_name"
+    
+    cd "$BUILD_DIR" || handle_error "进入构建目录失败"
+    
+    # 复制包到package目录
+    local build_pkg_dir="package/$package_name"
+    rm -rf "$build_pkg_dir"
+    mkdir -p "$build_pkg_dir"
+    
+    log "复制包文件到构建系统..."
+    cp -r "$source_dir"/* "$build_pkg_dir"/ || handle_error "复制包文件失败"
+    
+    # 验证是否成功复制
+    if [ -f "$build_pkg_dir/Makefile" ]; then
+        color_green "✅ 源码包集成完成: $package_name"
+    else
+        handle_error "源码包集成失败: Makefile未找到"
+    fi
 }
 
 # 步骤1: 设置编译环境
@@ -115,7 +334,8 @@ setup_environment() {
         libcurl4-openssl-dev groff texlive texinfo cmake \
         gperf libxml2-utils libtool-bin libglib2.0-dev libgmp3-dev \
         libmpc-dev libmpfr-dev qemu-utils upx-ucl libltdl-dev \
-        ccache python3-pip python3-venv || handle_error "安装依赖包失败"
+        ccache python3-pip python3-venv libsqlite3-dev libffi-dev \
+        libreadline-dev libbz2-dev liblzma-dev tk-dev || handle_error "安装依赖包失败"
         
     log "✅ 编译环境设置完成"
 }
@@ -134,14 +354,14 @@ initialize_build_env() {
     
     cd "$BUILD_DIR" || handle_error "进入构建目录失败"
     
-    # 版本选择 - 修复：使用更稳定的分支
+    # 版本选择 - 修复：使用 ImmortalWrt，包含更多包
     log "=== 版本选择 ==="
     if [ "$version_selection" = "23.05" ]; then
-        SELECTED_REPO_URL="https://github.com/openwrt/openwrt.git"
-        SELECTED_BRANCH="v23.05.2"
+        SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+        SELECTED_BRANCH="openwrt-23.05"
     else
-        SELECTED_REPO_URL="https://github.com/openwrt/openwrt.git"
-        SELECTED_BRANCH="v21.02.7"
+        SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+        SELECTED_BRANCH="openwrt-21.02"
     fi
     log "✅ 版本选择完成: $SELECTED_BRANCH"
     
@@ -185,15 +405,77 @@ configure_feeds() {
     
     # 更新和安装所有 feeds
     log "=== 更新Feeds ==="
-    ./scripts/feeds update -a || handle_error "更新feeds失败"
+    for i in {1..3}; do
+        if ./scripts/feeds update -a; then
+            log "✅ Feeds 更新成功"
+            break
+        elif [ $i -eq 3 ]; then
+            log "⚠️ Feeds 更新有错误，但继续执行"
+            break
+        else
+            log "第 $i 次Feeds更新失败，重试..."
+            sleep 10
+        fi
+    done
     
     log "=== 安装Feeds ==="
-    ./scripts/feeds install -a || handle_error "安装feeds失败"
+    ./scripts/feeds install -a || log "⚠️ 安装feeds有错误，但继续执行"
     
     log "✅ Feeds配置完成"
 }
 
-# 步骤5: 编译前空间检查
+# 步骤5: 下载自定义包
+download_custom_packages() {
+    local package_names="$1"
+    
+    if [ -z "$package_names" ]; then
+        log "=== 没有自定义包需要下载 ==="
+        return 0
+    fi
+    
+    log "=== 下载自定义包 ==="
+    
+    # 定义已知的自定义包仓库
+    declare -A custom_repos=(
+        ["luci-app-filetransfer"]="https://github.com/f8q8/luci-app-filetransfer.git"
+        ["luci-app-koolproxy"]="https://github.com/immortalwrt/luci-app-koolproxy.git"
+        ["luci-app-unblockneteasemusic"]="https://github.com/immortalwrt/luci-app-unblockneteasemusic.git"
+    )
+    
+    while IFS= read -r package; do
+        local pkg_clean=$(echo "$package" | xargs)
+        if [ -z "$pkg_clean" ]; then
+            continue
+        fi
+        
+        # 检查是否是自定义包
+        if [ -n "${custom_repos[$pkg_clean]}" ]; then
+            local repo_url="${custom_repos[$pkg_clean]}"
+            log "🔗 发现自定义包: $pkg_clean -> $repo_url"
+            
+            if download_custom_package "$pkg_clean" "$repo_url"; then
+                color_green "✅ 自定义包下载成功: $pkg_clean"
+            else
+                log "⚠️ 自定义包下载失败，继续尝试从feeds编译"
+            fi
+        else
+            # 检查包是否存在，如果不存在，提示用户
+            if ! check_package_exists "$pkg_clean"; then
+                color_yellow "🔍 包 $pkg_clean 不存在，您可能需要提供自定义仓库或源码包"
+            fi
+        fi
+    done <<< "$(split_string "$package_names" "、")"
+    
+    log "✅ 自定义包下载完成"
+}
+
+# 步骤6: 处理源码压缩包
+process_source_packages() {
+    local source_packages_list="$1"
+    process_source_packages "$source_packages_list"
+}
+
+# 步骤7: 编译前空间检查
 pre_build_space_check() {
     log "=== 编译前空间检查 ==="
     df -h
@@ -205,7 +487,7 @@ pre_build_space_check() {
     fi
 }
 
-# 步骤6: 生成IPK配置
+# 步骤8: 生成IPK配置
 generate_config() {
     local package_names="$1"
     local extra_deps="$2"
@@ -213,7 +495,8 @@ generate_config() {
     cd "$BUILD_DIR" || handle_error "进入构建目录失败"
     
     log "=== 生成IPK配置 ==="
-    log "包名: $package_names"
+    log "输入框包名: $package_names"
+    log "源码压缩包: $SOURCE_PACKAGES"
     log "版本: $SELECTED_BRANCH"
     log "额外依赖: $extra_deps"
     
@@ -223,7 +506,7 @@ generate_config() {
     
     rm -f .config .config.old
     
-    # 创建基础配置 - 修复：简化配置，只包含必要内容
+    # 创建基础配置 - 修复：使用更通用的配置
     echo "CONFIG_TARGET_x86=y" > .config
     echo "CONFIG_TARGET_x86_64=y" >> .config
     echo "CONFIG_TARGET_x86_64_DEVICE_generic=y" >> .config
@@ -264,48 +547,62 @@ generate_config() {
     # 中文支持
     echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
 
+    # 合并所有要编译的包
+    local all_packages=""
+    
+    # 添加输入框包名
+    if [ -n "$package_names" ]; then
+        all_packages="$package_names"
+    fi
+    
+    # 添加源码压缩包包名
+    if [ -n "$SOURCE_PACKAGES" ]; then
+        while IFS= read -r source_file; do
+            local source_file_clean=$(echo "$source_file" | xargs)
+            if [ -n "$source_file_clean" ]; then
+                local package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\)$//')
+                if [ -n "$all_packages" ]; then
+                    all_packages="$all_packages、$package_name"
+                else
+                    all_packages="$package_name"
+                fi
+            fi
+        done <<< "$(split_string "$SOURCE_PACKAGES" "、")"
+    fi
+    
     # 添加要编译的包 - 支持多个包
     log "=== 添加目标包 ==="
     
-    # 修复：使用更安全的方法分割字符串
-    PACKAGE_ARRAY=()
-    while IFS= read -r line; do
-        PACKAGE_ARRAY+=("$line")
-    done < <(split_string "$package_names" "、")
-    
-    if [ ${#PACKAGE_ARRAY[@]} -eq 0 ]; then
-        handle_error "未找到有效的包名"
+    if [ -z "$all_packages" ]; then
+        handle_error "没有指定要编译的包（输入框和源码压缩包都为空）"
     fi
     
-    for package in "${PACKAGE_ARRAY[@]}"; do
+    # 使用更安全的方法分割字符串
+    while IFS= read -r package; do
         local pkg_clean=$(echo "$package" | xargs)
         if [ -n "$pkg_clean" ]; then
             echo "CONFIG_PACKAGE_${pkg_clean}=y" >> .config
             color_green "  ✅ 添加包: $pkg_clean"
         fi
-    done
+    done <<< "$(split_string "$all_packages" "、")"
     
     # 添加额外依赖
     if [ -n "$EXTRA_DEPS" ]; then
         log "=== 添加额外依赖 ==="
-        DEPS_ARRAY=()
-        while IFS= read -r line; do
-            DEPS_ARRAY+=("$line")
-        done < <(split_string "$EXTRA_DEPS" "、")
-        
-        for dep in "${DEPS_ARRAY[@]}"; do
+        while IFS= read -r dep; do
             local dep_clean=$(echo "$dep" | xargs)
             if [ -n "$dep_clean" ]; then
                 echo "CONFIG_PACKAGE_${dep_clean}=y" >> .config
                 color_blue "  🔧 添加依赖: $dep_clean"
             fi
-        done
+        done <<< "$(split_string "$EXTRA_DEPS" "、")"
     fi
     
     log "✅ IPK配置生成完成"
+    log "最终要编译的包: $all_packages"
 }
 
-# 步骤7: 应用配置
+# 步骤9: 应用配置
 apply_config() {
     load_env
     cd "$BUILD_DIR" || handle_error "进入构建目录失败"
@@ -319,28 +616,44 @@ apply_config() {
         color_green "  ✅ $pkg_name"
     done
     
-    # 显示目标包状态
-    PACKAGE_ARRAY=()
-    while IFS= read -r line; do
-        PACKAGE_ARRAY+=("$line")
-    done < <(split_string "$PACKAGE_NAMES" "、")
+    # 合并所有包名用于验证
+    local all_packages=""
+    if [ -n "$PACKAGE_NAMES" ]; then
+        all_packages="$PACKAGE_NAMES"
+    fi
+    if [ -n "$SOURCE_PACKAGES" ]; then
+        while IFS= read -r source_file; do
+            local source_file_clean=$(echo "$source_file" | xargs)
+            if [ -n "$source_file_clean" ]; then
+                local package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\)$//')
+                if [ -n "$all_packages" ]; then
+                    all_packages="$all_packages、$package_name"
+                else
+                    all_packages="$package_name"
+                fi
+            fi
+        done <<< "$(split_string "$SOURCE_PACKAGES" "、")"
+    fi
     
-    for package in "${PACKAGE_ARRAY[@]}"; do
+    # 显示目标包状态
+    while IFS= read -r package; do
         local pkg_clean=$(echo "$package" | xargs)
-        if grep -q "CONFIG_PACKAGE_${pkg_clean}=y" .config; then
-            color_green "✅ 目标包已启用: $pkg_clean"
-        else
-            color_red "❌ 目标包未启用: $pkg_clean"
-            handle_error "目标包配置失败"
+        if [ -n "$pkg_clean" ]; then
+            if grep -q "CONFIG_PACKAGE_${pkg_clean}=y" .config; then
+                color_green "✅ 目标包已启用: $pkg_clean"
+            else
+                color_red "❌ 目标包未启用: $pkg_clean"
+                handle_error "目标包配置失败"
+            fi
         fi
-    done
+    done <<< "$(split_string "$all_packages" "、")"
     
     make defconfig || handle_error "应用配置失败"
     
     log "✅ 配置应用完成"
 }
 
-# 步骤8: 修复网络环境
+# 步骤10: 修复网络环境
 fix_network() {
     cd "$BUILD_DIR" || handle_error "进入构建目录失败"
     
@@ -351,16 +664,10 @@ fix_network() {
     export GIT_SSL_NO_VERIFY=1
     export PYTHONHTTPSVERIFY=0
     
-    # 修复：设置下载重试
-    if [ -f "$BUILD_DIR/include/download.mk" ]; then
-        echo "RETRIES=5" >> $BUILD_DIR/include/download.mk
-        echo "DOWNLOAD_RETRIES=5" >> $BUILD_DIR/include/download.mk
-    fi
-    
     log "✅ 网络环境修复完成"
 }
 
-# 步骤9: 下载依赖包
+# 步骤11: 下载依赖包
 download_dependencies() {
     cd "$BUILD_DIR" || handle_error "进入构建目录失败"
     
@@ -380,7 +687,7 @@ download_dependencies() {
     done
 }
 
-# 步骤10: 编译IPK包
+# 步骤12: 编译IPK包
 build_ipk() {
     local package_names="$1"
     local clean_build="$2"
@@ -388,64 +695,79 @@ build_ipk() {
     cd "$BUILD_DIR" || handle_error "进入构建目录失败"
     
     log "=== 编译IPK包 ==="
-    log "包名: $package_names"
+    log "输入框包名: $package_names"
+    log "源码压缩包: $SOURCE_PACKAGES"
     log "清理编译: $clean_build"
     
-    # 解析包名数组
-    PACKAGE_ARRAY=()
-    while IFS= read -r line; do
-        PACKAGE_ARRAY+=("$line")
-    done < <(split_string "$package_names" "、")
-    
-    if [ ${#PACKAGE_ARRAY[@]} -eq 0 ]; then
-        handle_error "未找到有效的包名"
+    # 合并所有包名
+    local all_packages=""
+    if [ -n "$package_names" ]; then
+        all_packages="$package_names"
     fi
-    
-    # 如果要求清理编译，先清理相关包
-    if [ "$clean_build" = "true" ]; then
-        log "🧹 清理包构建..."
-        for package in "${PACKAGE_ARRAY[@]}"; do
-            local pkg_clean=$(echo "$package" | xargs)
-            if [ -d "package/$pkg_clean" ] || [ -d "feeds/packages/$pkg_clean" ] || [ -d "feeds/luci/$pkg_clean" ]; then
-                make package/${pkg_clean}/clean 2>/dev/null || log "⚠️ 清理包 $pkg_clean 失败，继续编译"
-            else
-                log "⚠️ 包目录 $pkg_clean 不存在，跳过清理"
+    if [ -n "$SOURCE_PACKAGES" ]; then
+        while IFS= read -r source_file; do
+            local source_file_clean=$(echo "$source_file" | xargs)
+            if [ -n "$source_file_clean" ]; then
+                local package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\)$//')
+                if [ -n "$all_packages" ]; then
+                    all_packages="$all_packages、$package_name"
+                else
+                    all_packages="$package_name"
+                fi
             fi
-        done
+        done <<< "$(split_string "$SOURCE_PACKAGES" "、")"
     fi
     
-    # 修复：先编译工具链和必要组件
-    log "🔧 编译工具链和基础组件..."
-    if ! make -j$(nproc) tools/install toolchain/install V=s 2>&1 | tee -a "$LOG_FILE"; then
-        log "⚠️ 工具链编译有错误，但继续尝试编译目标包"
+    if [ -z "$all_packages" ]; then
+        handle_error "没有指定要编译的包"
     fi
     
     # 创建输出目录
     mkdir -p "$BUILD_DIR/ipk_output"
     
     # 编译每个包
-    local total_packages=${#PACKAGE_ARRAY[@]}
+    local package_count=0
     local success_count=0
-    local fail_count=0
     
-    for ((i=0; i<${#PACKAGE_ARRAY[@]}; i++)); do
-        local package="${PACKAGE_ARRAY[$i]}"
+    while IFS= read -r package; do
         local pkg_clean=$(echo "$package" | xargs)
-        
-        log "📦 编译包 [$((i+1))/$total_packages]: $pkg_clean"
-        
-        # 检查包是否存在
-        if [ ! -d "package/$pkg_clean" ] && [ ! -d "feeds/packages/$pkg_clean" ] && [ ! -d "feeds/luci/$pkg_clean" ]; then
-            log "❌ 包 $pkg_clean 不存在，跳过"
-            ((fail_count++))
+        if [ -z "$pkg_clean" ]; then
             continue
         fi
         
+        ((package_count++))
+        
+        log "📦 编译包 [$package_count]: $pkg_clean"
+        
+        # 检查包是否存在（包括自定义包和源码包）
+        local package_exists=0
+        if [ -d "package/$pkg_clean" ] || check_package_exists "$pkg_clean"; then
+            package_exists=1
+        fi
+        
+        if [ $package_exists -eq 0 ]; then
+            color_red "❌ 包 $pkg_clean 不存在，跳过"
+            
+            # 搜索类似的包
+            log "🔍 搜索类似包..."
+            find . -name "*${pkg_clean##*-}*" -type d 2>/dev/null | head -5 | while read similar; do
+                color_yellow "  💡 类似包: $(basename "$similar")"
+            done
+            continue
+        fi
+        
+        # 如果要求清理编译，先清理相关包
+        if [ "$clean_build" = "true" ]; then
+            log "🧹 清理包构建..."
+            make package/${pkg_clean}/clean 2>/dev/null || log "⚠️ 清理包 $pkg_clean 失败，继续编译"
+        fi
+        
+        # 编译指定包
         local build_exit_code=0
+        log "开始编译包: $pkg_clean"
         if ! make -j$(nproc) package/${pkg_clean}/compile V=s 2>&1 | tee -a "$LOG_FILE"; then
             build_exit_code=${PIPESTATUS[0]}
             log "⚠️ 包 $pkg_clean 编译过程有错误"
-            ((fail_count++))
         else
             ((success_count++))
         fi
@@ -458,7 +780,6 @@ build_ipk() {
         local search_paths=(
             "bin/packages/*/*/${pkg_clean}*.ipk"
             "bin/targets/*/*/packages/${pkg_clean}*.ipk"
-            "build_dir/*/ipkg-*/${pkg_clean}*.ipk"
         )
         
         for search_path in "${search_paths[@]}"; do
@@ -488,18 +809,12 @@ build_ipk() {
         fi
         
         log "---"
-    done
+    done <<< "$(split_string "$all_packages" "、")"
     
     # 总结编译结果
     log "=== 编译总结 ==="
-    color_green "✅ 成功编译: $success_count/$total_packages 个包"
-    if [ $fail_count -gt 0 ]; then
-        color_red "❌ 编译失败: $fail_count/$total_packages 个包"
-    fi
-    
-    # 检查最终输出
     if [ $success_count -gt 0 ]; then
-        color_green "🎉 编译完成！成功生成 $success_count 个IPK包"
+        color_green "🎉 编译完成！成功生成 $success_count/$package_count 个IPK包"
         log "📦 生成的IPK文件:"
         ls -la "$BUILD_DIR/ipk_output/" 2>/dev/null || log "输出目录为空"
         
@@ -507,16 +822,25 @@ build_ipk() {
         find "$BUILD_DIR/ipk_output" -name "*.ipk" -type f > "$BUILD_DIR/ipk_output/file_list.txt" 2>/dev/null || true
     else
         color_red "❌ 所有包编译失败"
-        log "💡 调试信息:"
-        log "构建目录内容:"
-        ls -la "$BUILD_DIR/bin/" 2>/dev/null || log "bin目录不存在"
-        handle_error "所有IPK文件生成失败 - 请检查包名是否正确或查看完整日志"
+        log "💡 可能的原因:"
+        log "1. 包名不正确"
+        log "2. 包在选择的版本中不存在"
+        log "3. 编译依赖缺失"
+        log "4. 网络问题导致下载失败"
+        
+        # 显示可用的包
+        log "🔍 可用的Luci应用包:"
+        find feeds/luci -name "luci-app-*" -type d 2>/dev/null | head -10 | while read app; do
+            color_yellow "  📦 $(basename "$app")"
+        done
+        
+        handle_error "IPK文件生成失败 - 请检查包名和编译日志"
     fi
     
     log "✅ IPK包编译完成"
 }
 
-# 步骤11: 创建安装脚本
+# 步骤13: 创建安装脚本
 create_install_script() {
     load_env
     cd "$BUILD_DIR" || handle_error "进入构建目录失败"
@@ -707,6 +1031,12 @@ opkg install *.ipk
 ## 支持的平台
 - 所有OpenWrt平台（全平台通用）
 - OpenWrt 21.02 / 23.05
+- ImmortalWrt
+
+## 编译方式
+本次编译使用了以下方式：
+- 输入框包名: $PACKAGE_NAMES
+- 源码压缩包: $SOURCE_PACKAGES
 
 ## 注意事项
 1. 确保路由器有足够的空间
@@ -719,6 +1049,31 @@ opkg install *.ipk
 示例：
 - \`luci-app-filetransfer\`
 - \`luci-app-filetransfer、luci-app-turboacc、luci-app-upnp\`
+
+## 源码压缩包编译
+支持从源码压缩包编译，文件需放在 \`firmware-config/packages/\` 目录下。
+
+支持的格式：
+- ZIP (.zip)
+- TAR.GZ (.tar.gz, .tgz)  
+- TAR.BZ2 (.tar.bz2)
+
+## 常见问题
+
+### 1. 包不存在
+如果提示包不存在，请检查：
+- 包名是否正确
+- 包在选择的版本中是否存在
+- 源码压缩包文件名是否正确
+
+### 2. 常用包名参考
+- \`luci-app-adblock\` - 广告过滤
+- \`luci-app-aria2\` - 下载工具
+- \`luci-app-ddns\` - 动态DNS
+- \`luci-app-firewall\` - 防火墙
+- \`luci-app-samba\` - 文件共享
+- \`luci-app-upnp\` - UPnP服务
+- \`luci-app-wireguard\` - WireGuard VPN
 
 ## 额外依赖包说明
 额外依赖包用于在编译时确保相关的依赖包也被编译。这在你编译的包依赖其他包时特别有用。
@@ -734,7 +1089,7 @@ EOF
     log "✅ 安装脚本和说明文档创建完成"
 }
 
-# 步骤12: 清理目录
+# 步骤14: 清理目录
 cleanup() {
     log "=== 清理构建目录 ==="
     # 只清理构建文件，保留输出
@@ -756,6 +1111,12 @@ main() {
             ;;
         "configure_feeds")
             configure_feeds
+            ;;
+        "download_custom_packages")
+            download_custom_packages "$2"
+            ;;
+        "process_source_packages")
+            process_source_packages "$2"
             ;;
         "pre_build_space_check")
             pre_build_space_check
@@ -785,9 +1146,9 @@ main() {
             log "❌ 未知命令: $1"
             echo "可用命令:"
             echo "  setup_environment, create_build_dir, initialize_build_env"
-            echo "  configure_feeds, pre_build_space_check, generate_config"
-            echo "  apply_config, fix_network, download_dependencies, build_ipk"
-            echo "  create_install_script, cleanup"
+            echo "  configure_feeds, download_custom_packages, process_source_packages"
+            echo "  pre_build_space_check, generate_config, apply_config, fix_network"
+            echo "  download_dependencies, build_ipk, create_install_script, cleanup"
             exit 1
             ;;
     esac
