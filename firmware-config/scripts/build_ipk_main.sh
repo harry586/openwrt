@@ -876,6 +876,7 @@ build_ipk() {
     # 编译每个包
     local package_count=0
     local success_count=0
+    local ipk_found_total=0
     
     while IFS= read -r package; do
         local pkg_clean=$(echo "$package" | xargs)
@@ -910,22 +911,34 @@ build_ipk() {
             make package/${pkg_clean}/clean 2>/dev/null || log_warning "清理包 $pkg_clean 失败，继续编译"
         fi
         
-        # 编译指定包
+        # 编译指定包 - 使用管道捕获错误
         log "开始编译包: $pkg_clean"
+        # 使用set -o pipefail来确保管道中的错误能被捕获
+        local pipe_status=0
+        set -o pipefail 2>/dev/null || true
+        
+        # 编译命令
         if make -j$(nproc) package/${pkg_clean}/compile V=s 2>&1 | tee -a "$LOG_FILE"; then
             ((success_count++)) || true
+            log "✅ 编译命令执行完成"
         else
-            log_warning "包 $pkg_clean 编译过程有错误"
+            pipe_status=$?
+            log_warning "包 $pkg_clean 编译过程有错误，退出码: $pipe_status"
         fi
         
-        # 查找生成的IPK文件
+        # 恢复pipefail设置
+        set +o pipefail 2>/dev/null || true
+        
+        # 查找生成的IPK文件 - 更全面的搜索
         log "=== 查找包 $pkg_clean 的IPK文件 ==="
         local ipk_found=0
         
         # 搜索所有可能的IPK文件路径
         local search_paths=(
             "bin/packages/*/*/${pkg_clean}*.ipk"
+            "bin/packages/*/*/${pkg_clean/-/_}*.ipk"
             "bin/targets/*/*/packages/${pkg_clean}*.ipk"
+            "bin/targets/*/*/packages/${pkg_clean/-/_}*.ipk"
         )
         
         for search_path in "${search_paths[@]}"; do
@@ -934,6 +947,7 @@ build_ipk() {
                     log "✅ 找到IPK文件: $ipk_file"
                     cp "$ipk_file" "$BUILD_DIR/ipk_output/" 2>/dev/null || true
                     ipk_found=1
+                    ((ipk_found_total++)) || true
                 fi
             done
         done
@@ -945,6 +959,21 @@ build_ipk() {
                 log "✅ 找到IPK文件: $ipk_file"
                 cp "$ipk_file" "$BUILD_DIR/ipk_output/" 2>/dev/null || true
                 ipk_found=1
+                ((ipk_found_total++)) || true
+            done
+        fi
+        
+        # 如果仍然没找到，尝试搜索相关文件
+        if [ $ipk_found -eq 0 ]; then
+            log "🔍 搜索所有IPK文件..."
+            find "$BUILD_DIR" -name "*.ipk" -type f 2>/dev/null | head -10 | while read ipk_file; do
+                local filename=$(basename "$ipk_file")
+                if [[ "$filename" == *"$pkg_clean"* ]] || [[ "$filename" == *"${pkg_clean//-/_}"* ]]; then
+                    log "✅ 找到可能相关的IPK文件: $ipk_file"
+                    cp "$ipk_file" "$BUILD_DIR/ipk_output/" 2>/dev/null || true
+                    ipk_found=1
+                    ((ipk_found_total++)) || true
+                fi
             done
         fi
         
@@ -952,6 +981,10 @@ build_ipk() {
             color_green "✅ 包 $pkg_clean 编译成功！"
         else
             color_red "❌ 未找到包 $pkg_clean 的IPK文件"
+            log "⚠️ 可能的IPK文件位置:"
+            find "$BUILD_DIR/bin" -name "*.ipk" -type f 2>/dev/null | head -5 | while read ipk_file; do
+                log "  📦 $(basename "$ipk_file")"
+            done
         fi
         
         log "---"
@@ -959,20 +992,34 @@ build_ipk() {
     
     # 总结编译结果
     log "=== 编译总结 ==="
-    if [ $success_count -gt 0 ]; then
-        color_green "🎉 编译完成！成功生成 $success_count/$package_count 个IPK包"
+    if [ $ipk_found_total -gt 0 ]; then
+        color_green "🎉 编译完成！成功生成 $ipk_found_total 个IPK包"
         log "📦 生成的IPK文件:"
         ls -la "$BUILD_DIR/ipk_output/" 2>/dev/null || log "输出目录为空"
+        
+        # 显示找到的IPK文件
+        find "$BUILD_DIR/ipk_output" -name "*.ipk" -type f 2>/dev/null | while read ipk_file; do
+            color_green "  📦 $(basename "$ipk_file")"
+        done
         
         # 创建文件列表
         find "$BUILD_DIR/ipk_output" -name "*.ipk" -type f 2>/dev/null > "$BUILD_DIR/ipk_output/file_list.txt" 2>/dev/null || true
     else
-        color_red "❌ 所有包编译失败"
-        log "💡 可能的原因:"
-        log "1. 包名不正确"
-        log "2. 包在选择的版本中不存在"
-        log "3. 编译依赖缺失"
-        log "4. 网络问题导致下载失败"
+        if [ $success_count -gt 0 ]; then
+            color_yellow "⚠️ 编译过程完成但未找到IPK文件"
+            log "💡 可能的原因:"
+            log "1. IPK文件生成在不同的目录"
+            log "2. 包名不匹配"
+            log "3. 编译成功但打包失败"
+        else
+            color_red "❌ 所有包编译失败"
+        fi
+        
+        log "💡 调试建议:"
+        log "1. 检查日志文件: $LOG_FILE"
+        log "2. 检查包名是否正确"
+        log "3. 尝试清理构建: make package/clean"
+        log "4. 检查包的依赖是否满足"
         
         # 显示可用的包
         log "🔍 可用的Luci应用包:"
@@ -980,7 +1027,12 @@ build_ipk() {
             color_yellow "  📦 $(basename "$app")"
         done
         
-        log_error "IPK文件生成失败 - 请检查包名和编译日志"
+        # 如果失败但有编译尝试，显示实际生成的IPK文件位置
+        log "🔍 实际生成的IPK文件位置:"
+        find "$BUILD_DIR" -name "*.ipk" -type f 2>/dev/null | while read ipk_file; do
+            log "  📦 $ipk_file"
+        done || log "  未找到任何IPK文件"
+        
         return 1
     fi
     
