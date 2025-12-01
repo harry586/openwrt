@@ -622,12 +622,12 @@ integrate_source_package() {
     return 0
 }
 
-# 步骤7: 编译前空间检查
+# 步骤7: 编译前空间检查 (已修复)
 pre_build_space_check() {
     log "=== 编译前空间检查 ==="
     df -h 2>/dev/null || true
     AVAILABLE_SPACE=$(df /mnt --output=avail 2>/dev/null | tail -1)
-    AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024 2>/dev/null)) || AVAILABLE_GB=0
+    AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024)) 2>/dev/null || AVAILABLE_GB=0
     log "/mnt 可用空间: ${AVAILABLE_GB}G"
     if [ $AVAILABLE_GB -lt 10 ]; then
         log "⚠️ 警告: 可用空间不足10G，编译可能失败"
