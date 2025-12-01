@@ -1,13 +1,18 @@
-name: 🛠️ 通用IPK包编译工作流（多包支持）
+name: 🛠️ 通用IPK包编译工作流（多包支持+源码压缩包）
 
 on:
   workflow_dispatch:
     inputs:
       package_names:
-        description: '📦 要编译的IPK包名 (用顿号、分隔，如: luci-app-filetransfer、luci-app-turboacc)'
-        required: true
-        default: 'luci-app-filetransfer'
+        description: '📦 要编译的IPK包名 (用顿号、分隔，如: luci-app-filetransfer、luci-app-turboacc)。留空则只编译源码压缩包'
+        required: false
         type: string
+        default: ''
+      source_packages:
+        description: '📁 源码压缩包文件名 (用顿号、分隔，如: luci-app-filetransfer.zip、my-package.tar.gz)。文件需放在firmware-config/packages/目录'
+        required: false
+        type: string
+        default: ''
       version_selection:
         description: '🔄 OpenWrt版本选择'
         required: true
@@ -75,6 +80,16 @@ jobs:
       run: |
         echo "=== 配置Feeds ==="
         firmware-config/scripts/build_ipk_main.sh configure_feeds
+
+    - name: 下载自定义包
+      run: |
+        echo "=== 下载自定义包 ==="
+        firmware-config/scripts/build_ipk_main.sh download_custom_packages "${{ github.event.inputs.package_names }}"
+
+    - name: 处理源码压缩包
+      run: |
+        echo "=== 处理源码压缩包 ==="
+        firmware-config/scripts/build_ipk_main.sh process_source_packages "${{ github.event.inputs.source_packages }}"
 
     - name: 编译前空间检查
       run: |
