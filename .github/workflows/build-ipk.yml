@@ -13,6 +13,11 @@ on:
         required: false
         type: string
         default: ''
+      build_all_packages:
+        description: '📦 编译packages目录内的所有压缩包 (优先级高于指定压缩包)'
+        required: false
+        default: false
+        type: boolean
       version_selection:
         description: '🔄 OpenWrt版本选择'
         required: true
@@ -61,6 +66,18 @@ jobs:
           exit 1
         fi
 
+    - name: 检查源码压缩包
+      run: |
+        echo "=== 检查源码压缩包 ==="
+        if [ -d "firmware-config/packages" ]; then
+          echo "📦 可用的源码压缩包:"
+          find firmware-config/packages -name "*.zip" -o -name "*.tar.gz" -o -name "*.tgz" -o -name "*.tar.bz2" 2>/dev/null | while read file; do
+            echo "  - $(basename "$file")"
+          done
+        else
+          echo "📁 firmware-config/packages 目录不存在"
+        fi
+
     - name: 设置编译环境
       run: |
         echo "=== 设置编译环境 ==="
@@ -89,7 +106,7 @@ jobs:
     - name: 处理源码压缩包
       run: |
         echo "=== 处理源码压缩包 ==="
-        firmware-config/scripts/build_ipk_main.sh process_source_packages "${{ github.event.inputs.source_packages }}"
+        firmware-config/scripts/build_ipk_main.sh process_source_packages "${{ github.event.inputs.source_packages }}" "${{ github.event.inputs.build_all_packages }}"
 
     - name: 编译前空间检查
       run: |
