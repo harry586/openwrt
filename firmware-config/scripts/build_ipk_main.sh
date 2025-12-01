@@ -136,7 +136,7 @@ download_custom_package() {
             local subdir=$(dirname "$makefile")
             if [ "$subdir" != "$target_dir" ]; then
                 log "📁 移动包文件从 $subdir 到 $target_dir"
-                mv "$subfile"/* "$target_dir"/ 2>/dev/null || true
+                mv "$subdir"/* "$target_dir"/ 2>/dev/null || true
             fi
         done
     fi
@@ -147,165 +147,6 @@ download_custom_package() {
     else
         color_red "❌ 自定义包没有有效的Makefile"
         return 1
-    fi
-}
-
-# 处理源码压缩包
-process_source_packages() {
-    local source_packages_list="$1"
-    
-    if [ -z "$source_packages_list" ]; then
-        log "=== 没有源码压缩包需要处理 ==="
-        return 0
-    fi
-    
-    log "=== 处理源码压缩包 ==="
-    
-    # 准备源码包目录
-    mkdir -p "$SOURCE_PKG_DIR"
-    mkdir -p "$SOURCE_PKG_DIR/luci"
-    mkdir -p "$SOURCE_PKG_DIR/temp"
-    
-    # 保存环境变量
-    SOURCE_PACKAGES="$source_packages_list"
-    save_env
-    
-    # 处理每个源码压缩包
-    while IFS= read -r source_file; do
-        local source_file_clean=$(echo "$source_file" | xargs)
-        if [ -z "$source_file_clean" ]; then
-            continue
-        fi
-        
-        # 构建完整路径
-        local source_path="$PACKAGES_BASE_DIR/$source_file_clean"
-        
-        if [ ! -f "$source_path" ]; then
-            color_red "❌ 源码压缩包不存在: $source_path"
-            continue
-        fi
-        
-        log "处理源码包: $source_file_clean"
-        
-        # 从文件名提取包名（去掉扩展名）
-        local package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\)$//')
-        
-        # 创建目标目录
-        local target_dir="$SOURCE_PKG_DIR/luci/$package_name"
-        rm -rf "$target_dir"
-        mkdir -p "$target_dir"
-        
-        # 解压文件
-        log "解压源码文件..."
-        if [[ "$source_file_clean" == *.zip ]]; then
-            unzip -q "$source_path" -d "$target_dir" || handle_error "解压ZIP文件失败"
-        elif [[ "$source_file_clean" == *.tar.gz ]] || [[ "$source_file_clean" == *.tgz ]]; then
-            tar -xzf "$source_path" -C "$target_dir" || handle_error "解压TAR.GZ文件失败"
-        elif [[ "$source_file_clean" == *.tar.bz2 ]]; then
-            tar -xjf "$source_path" -C "$target_dir" || handle_error "解压TAR.BZ2文件失败"
-        else
-            color_red "❌ 不支持的压缩格式: $source_file_clean"
-            continue
-        fi
-        
-        # 修复包目录结构
-        fix_package_structure "$target_dir" "$package_name"
-        
-        # 集成到构建系统
-        integrate_source_package "$target_dir" "$package_name"
-        
-        color_green "✅ 源码包处理完成: $package_name"
-        
-    done <<< "$(split_string "$source_packages_list" "、")"
-    
-    log "✅ 源码压缩包处理完成"
-}
-
-# 修复包目录结构
-fix_package_structure() {
-    local target_dir="$1"
-    local package_name="$2"
-    
-    log "修复包目录结构: $package_name"
-    
-    # 检查是否解压到了子目录
-    local subdirs=($(find "$target_dir" -maxdepth 1 -type d | grep -v "^$target_dir$"))
-    
-    if [ ${#subdirs[@]} -eq 1 ] && [ -d "${subdirs[0]}" ]; then
-        log "检测到子目录结构，移动文件..."
-        local subdir="${subdirs[0]}"
-        mv "$subdir"/* "$target_dir"/ 2>/dev/null || true
-        rm -rf "$subdir"
-    fi
-    
-    # 检查特殊的目录结构（如luci_opkg）
-    if [ -d "$target_dir/luci_opkg" ]; then
-        log "调整luci_opkg目录结构..."
-        mv "$target_dir/luci_opkg"/* "$target_dir"/ 2>/dev/null || true
-        rm -rf "$target_dir/luci_opkg"
-    fi
-    
-    # 验证最终结构
-    validate_package_structure "$target_dir" "$package_name"
-}
-
-# 验证包结构
-validate_package_structure() {
-    local target_dir="$1"
-    local package_name="$2"
-    
-    log "验证包结构: $package_name"
-    
-    # 检查必要文件
-    local required_files=("Makefile")
-    for file in "${required_files[@]}"; do
-        if [ ! -f "$target_dir/$file" ]; then
-            color_yellow "⚠️ 缺少文件: $file"
-        else
-            color_green "✅ 找到文件: $file"
-        fi
-    done
-    
-    # 检查目录内容
-    local file_count=$(find "$target_dir" -type f | wc -l)
-    log "包包含 $file_count 个文件"
-    
-    # 显示关键文件
-    find "$target_dir" -type f \( -name "*.mk" -o -name "*.lua" -o -name "*.htm" -o -name "*.js" -o -name "*.css" \) | head -10 | while read file; do
-        color_blue "  📄 $(basename "$file")"
-    done
-    
-    # 显示Makefile信息
-    if [ -f "$target_dir/Makefile" ]; then
-        log "Makefile信息:"
-        grep -E "^(PKG_NAME|PKG_VERSION|PKG_RELEASE|PKG_LICENSE|Package|Build)" "$target_dir/Makefile" | head -5 | while read line; do
-            color_yellow "  📝 $line"
-        done
-    fi
-}
-
-# 集成源码包到构建系统
-integrate_source_package() {
-    local source_dir="$1"
-    local package_name="$2"
-    
-    log "集成源码包到构建系统: $package_name"
-    
-    cd "$BUILD_DIR" || handle_error "进入构建目录失败"
-    
-    # 复制包到package目录
-    local build_pkg_dir="package/$package_name"
-    rm -rf "$build_pkg_dir"
-    mkdir -p "$build_pkg_dir"
-    
-    log "复制包文件到构建系统..."
-    cp -r "$source_dir"/* "$build_pkg_dir"/ || handle_error "复制包文件失败"
-    
-    # 验证是否成功复制
-    if [ -f "$build_pkg_dir/Makefile" ]; then
-        color_green "✅ 源码包集成完成: $package_name"
-    else
-        handle_error "源码包集成失败: Makefile未找到"
     fi
 }
 
@@ -472,7 +313,297 @@ download_custom_packages() {
 # 步骤6: 处理源码压缩包
 process_source_packages() {
     local source_packages_list="$1"
-    process_source_packages "$source_packages_list"
+    local build_all_packages="$2"
+    
+    # 修复：处理空字符串的情况
+    if [ -z "$source_packages_list" ] || [ "$source_packages_list" = '""' ] || [ "$source_packages_list" = "''" ]; then
+        source_packages_list=""
+    fi
+    
+    log "=== 处理源码压缩包 ==="
+    log "指定压缩包: $source_packages_list"
+    log "编译所有包: $build_all_packages"
+    
+    # 准备源码包目录
+    mkdir -p "$SOURCE_PKG_DIR"
+    mkdir -p "$SOURCE_PKG_DIR/luci"
+    mkdir -p "$SOURCE_PKG_DIR/temp"
+    
+    # 检查packages目录是否存在
+    if [ ! -d "$PACKAGES_BASE_DIR" ]; then
+        log "⚠️ 源码包目录不存在: $PACKAGES_BASE_DIR"
+        SOURCE_PACKAGES=""
+        save_env
+        return 0
+    fi
+    
+    # 获取所有支持的压缩包
+    local all_compressed_files=$(find "$PACKAGES_BASE_DIR" -name "*.zip" -o -name "*.tar.gz" -o -name "*.tgz" -o -name "*.tar.bz2" 2>/dev/null)
+    
+    if [ -z "$all_compressed_files" ]; then
+        log "⚠️ 目录中没有找到任何支持的压缩包文件"
+        SOURCE_PACKAGES=""
+        save_env
+        return 0
+    fi
+    
+    # 显示所有可用压缩包
+    log "📦 可用源码压缩包:"
+    echo "$all_compressed_files" | while read file; do
+        color_blue "  📦 $(basename "$file")"
+    done
+    
+    # 决定要处理的文件列表
+    local files_to_process=""
+    
+    if [ "$build_all_packages" = "true" ]; then
+        log "🔧 选择编译所有压缩包"
+        # 使用所有压缩包
+        files_to_process=$(echo "$all_compressed_files" | xargs -I {} basename {})
+    elif [ -n "$source_packages_list" ]; then
+        log "🔧 选择编译指定压缩包"
+        # 使用指定的压缩包
+        files_to_process="$source_packages_list"
+    else
+        log "🔧 没有选择任何压缩包"
+        SOURCE_PACKAGES=""
+        save_env
+        return 0
+    fi
+    
+    # 将文件列表转换为换行分隔
+    local file_array=()
+    while IFS= read -r file; do
+        file_array+=("$file")
+    done <<< "$(echo "$files_to_process" | tr '、' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$')"
+    
+    # 如果选择了编译所有包，但用户也指定了文件，则优先使用指定的
+    if [ "$build_all_packages" = "false" ] && [ ${#file_array[@]} -eq 0 ]; then
+        log "🔧 没有指定要编译的压缩包"
+        SOURCE_PACKAGES=""
+        save_env
+        return 0
+    fi
+    
+    # 处理每个指定的源码压缩包
+    local processed_count=0
+    local error_count=0
+    local processed_files=""
+    
+    log "开始处理 ${#file_array[@]} 个源码压缩包"
+    
+    for source_file in "${file_array[@]}"; do
+        local source_file_clean=$(echo "$source_file" | xargs)
+        if [ -z "$source_file_clean" ]; then
+            continue
+        fi
+        
+        # 检查文件是否存在
+        local source_path="$PACKAGES_BASE_DIR/$source_file_clean"
+        
+        if [ ! -f "$source_path" ]; then
+            color_red "❌ 源码压缩包不存在: $source_file_clean"
+            ((error_count++))
+            continue
+        fi
+        
+        log "处理源码包 [$((processed_count + error_count + 1))/${#file_array[@]}]: $source_file_clean"
+        
+        # 从文件名提取包名（去掉扩展名）
+        local package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\)$//')
+        
+        # 创建目标目录
+        local target_dir="$SOURCE_PKG_DIR/luci/$package_name"
+        rm -rf "$target_dir"
+        mkdir -p "$target_dir"
+        
+        # 解压文件
+        log "解压源码文件..."
+        local extract_success=0
+        if [[ "$source_file_clean" == *.zip ]]; then
+            if unzip -q "$source_path" -d "$target_dir" 2>/dev/null; then
+                extract_success=1
+            else
+                color_red "❌ 解压ZIP文件失败: $source_file_clean"
+            fi
+        elif [[ "$source_file_clean" == *.tar.gz ]] || [[ "$source_file_clean" == *.tgz ]]; then
+            if tar -xzf "$source_path" -C "$target_dir" 2>/dev/null; then
+                extract_success=1
+            else
+                color_red "❌ 解压TAR.GZ文件失败: $source_file_clean"
+            fi
+        elif [[ "$source_file_clean" == *.tar.bz2 ]]; then
+            if tar -xjf "$source_path" -C "$target_dir" 2>/dev/null; then
+                extract_success=1
+            else
+                color_red "❌ 解压TAR.BZ2文件失败: $source_file_clean"
+            fi
+        else
+            color_red "❌ 不支持的压缩格式: $source_file_clean"
+        fi
+        
+        if [ $extract_success -eq 0 ]; then
+            ((error_count++))
+            continue
+        fi
+        
+        # 修复包目录结构
+        if ! fix_package_structure "$target_dir" "$package_name"; then
+            color_red "❌ 修复包结构失败: $package_name"
+            ((error_count++))
+            continue
+        fi
+        
+        # 集成到构建系统
+        if ! integrate_source_package "$target_dir" "$package_name"; then
+            color_red "❌ 集成到构建系统失败: $package_name"
+            ((error_count++))
+            continue
+        fi
+        
+        color_green "✅ 源码包处理完成: $package_name"
+        ((processed_count++))
+        
+        # 添加到已处理文件列表
+        if [ -n "$processed_files" ]; then
+            processed_files="$processed_files、$source_file_clean"
+        else
+            processed_files="$source_file_clean"
+        fi
+        
+    done
+    
+    # 保存处理后的文件列表到环境变量
+    SOURCE_PACKAGES="$processed_files"
+    save_env
+    
+    log "=== 处理结果 ==="
+    if [ $processed_count -gt 0 ]; then
+        color_green "✅ 源码压缩包处理完成: 成功 $processed_count/${#file_array[@]} 个包"
+        log "✅ 处理的压缩包: $SOURCE_PACKAGES"
+    else
+        if [ $error_count -gt 0 ]; then
+            color_red "❌ 所有源码压缩包处理失败"
+        else
+            log "ℹ️ 没有处理任何源码压缩包"
+        fi
+    fi
+}
+
+# 修复包目录结构
+fix_package_structure() {
+    local target_dir="$1"
+    local package_name="$2"
+    
+    log "修复包目录结构: $package_name"
+    
+    # 检查是否解压到了子目录
+    local subdirs=($(find "$target_dir" -maxdepth 1 -type d | grep -v "^$target_dir$"))
+    
+    if [ ${#subdirs[@]} -eq 1 ] && [ -d "${subdirs[0]}" ]; then
+        log "检测到子目录结构，移动文件..."
+        local subdir="${subdirs[0]}"
+        mv "$subdir"/* "$target_dir"/ 2>/dev/null || true
+        rm -rf "$subdir"
+    fi
+    
+    # 检查特殊的目录结构（如luci_opkg）
+    if [ -d "$target_dir/luci_opkg" ]; then
+        log "调整luci_opkg目录结构..."
+        mv "$target_dir/luci_opkg"/* "$target_dir"/ 2>/dev/null || true
+        rm -rf "$target_dir/luci_opkg"
+    fi
+    
+    # 验证最终结构
+    if ! validate_package_structure "$target_dir" "$package_name"; then
+        return 1
+    fi
+    
+    return 0
+}
+
+# 验证包结构
+validate_package_structure() {
+    local target_dir="$1"
+    local package_name="$2"
+    
+    log "验证包结构: $package_name"
+    
+    # 检查必要文件
+    if [ ! -f "$target_dir/Makefile" ]; then
+        color_red "❌ 缺少关键文件: Makefile"
+        
+        # 尝试查找可能的Makefile
+        local found_makefile=$(find "$target_dir" -name "Makefile" -type f 2>/dev/null | head -1)
+        if [ -n "$found_makefile" ]; then
+            color_yellow "💡 在其他位置找到Makefile: $found_makefile"
+            local makefile_dir=$(dirname "$found_makefile")
+            if [ "$makefile_dir" != "$target_dir" ]; then
+                log "移动Makefile和相关文件..."
+                mv "$makefile_dir"/* "$target_dir"/ 2>/dev/null || true
+                rm -rf "$makefile_dir"
+            fi
+        else
+            color_red "❌ 无法找到Makefile，包结构无效"
+            return 1
+        fi
+    fi
+    
+    if [ ! -f "$target_dir/Makefile" ]; then
+        color_red "❌ 最终检查：仍然缺少Makefile"
+        return 1
+    fi
+    
+    color_green "✅ 找到关键文件: Makefile"
+    
+    # 检查目录内容
+    local file_count=$(find "$target_dir" -type f | wc -l)
+    log "包包含 $file_count 个文件"
+    
+    # 显示关键文件
+    find "$target_dir" -type f \( -name "*.mk" -o -name "*.lua" -o -name "*.htm" -o -name "*.js" -o -name "*.css" \) | head -10 | while read file; do
+        color_blue "  📄 $(basename "$file")"
+    done
+    
+    # 显示Makefile信息
+    if [ -f "$target_dir/Makefile" ]; then
+        log "Makefile信息:"
+        grep -E "^(PKG_NAME|PKG_VERSION|PKG_RELEASE|PKG_LICENSE|Package|Build)" "$target_dir/Makefile" | head -5 | while read line; do
+            color_yellow "  📝 $line"
+        done
+    fi
+    
+    return 0
+}
+
+# 集成源码包到构建系统
+integrate_source_package() {
+    local source_dir="$1"
+    local package_name="$2"
+    
+    log "集成源码包到构建系统: $package_name"
+    
+    cd "$BUILD_DIR" || handle_error "进入构建目录失败"
+    
+    # 复制包到package目录
+    local build_pkg_dir="package/$package_name"
+    rm -rf "$build_pkg_dir"
+    mkdir -p "$build_pkg_dir"
+    
+    log "复制包文件到构建系统..."
+    if ! cp -r "$source_dir"/* "$build_pkg_dir"/ 2>/dev/null; then
+        color_red "❌ 复制包文件失败"
+        return 1
+    fi
+    
+    # 验证是否成功复制
+    if [ ! -f "$build_pkg_dir/Makefile" ]; then
+        color_red "❌ 复制后缺少Makefile"
+        return 1
+    fi
+    
+    color_green "✅ 源码包集成完成: $package_name"
+    return 0
 }
 
 # 步骤7: 编译前空间检查
@@ -570,12 +701,12 @@ generate_config() {
         done <<< "$(split_string "$SOURCE_PACKAGES" "、")"
     fi
     
-    # 添加要编译的包 - 支持多个包
-    log "=== 添加目标包 ==="
-    
     if [ -z "$all_packages" ]; then
         handle_error "没有指定要编译的包（输入框和源码压缩包都为空）"
     fi
+    
+    # 添加要编译的包 - 支持多个包
+    log "=== 添加目标包 ==="
     
     # 使用更安全的方法分割字符串
     while IFS= read -r package; do
@@ -1116,7 +1247,7 @@ main() {
             download_custom_packages "$2"
             ;;
         "process_source_packages")
-            process_source_packages "$2"
+            process_source_packages "$2" "$3"
             ;;
         "pre_build_space_check")
             pre_build_space_check
