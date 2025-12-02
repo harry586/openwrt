@@ -1,5 +1,5 @@
 #!/bin/bash
-# 注意：移除了 set -e，使用更健壮的错误处理
+# OpenWrt IPK包编译主脚本
 
 # 全局变量
 BUILD_DIR="/mnt/openwrt-build-ipk"
@@ -25,6 +25,10 @@ color_blue() {
     echo -e "\033[34m$1\033[0m"
 }
 
+color_magenta() {
+    echo -e "\033[35m$1\033[0m"
+}
+
 # 日志函数
 log() {
     local message="【$(date '+%Y-%m-%d %H:%M:%S')】$1"
@@ -34,7 +38,7 @@ log() {
     fi
 }
 
-# 错误处理函数（不退出）
+# 错误处理函数
 log_error() {
     log "❌ 错误: $1"
     return 1
@@ -81,7 +85,7 @@ split_string() {
         return
     fi
     
-    # 使用 sed 和 tr 进行分割
+    # 使用 tr 进行分割
     echo "$input" | tr "$delimiter" '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$'
 }
 
@@ -89,6 +93,8 @@ split_string() {
 check_package_exists() {
     local package="$1"
     local found=0
+    
+    log "🔍 搜索包: $package"
     
     # 检查可能的包路径
     local possible_paths=(
@@ -195,7 +201,7 @@ setup_environment() {
     log "=== 安装编译依赖包 ==="
     sudo apt-get update 2>/dev/null || { log_warning "apt-get update失败"; }
     
-    # 修复：添加更多基础编译工具
+    # 安装必要的编译工具和依赖
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
         build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
         gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip \
@@ -207,7 +213,8 @@ setup_environment() {
         gperf libxml2-utils libtool-bin libglib2.0-dev libgmp3-dev \
         libmpc-dev libmpfr-dev qemu-utils upx-ucl libltdl-dev \
         ccache python3-pip python3-venv libsqlite3-dev libffi-dev \
-        libreadline-dev libbz2-dev liblzma-dev tk-dev 2>/dev/null || { log_warning "安装依赖包失败"; }
+        libreadline-dev libbz2-dev liblzma-dev tk-dev \
+        curl libxml2-dev libncursesw5-dev swig time 2>/dev/null || { log_warning "安装依赖包失败"; }
         
     log "✅ 编译环境设置完成"
 }
@@ -226,7 +233,7 @@ initialize_build_env() {
     
     cd "$BUILD_DIR" 2>/dev/null || { log_error "进入构建目录失败"; return 1; }
     
-    # 版本选择 - 修复：使用 ImmortalWrt，包含更多包
+    # 版本选择 - 使用 ImmortalWrt
     log "=== 版本选择 ==="
     if [ "$version_selection" = "23.05" ]; then
         SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
@@ -244,7 +251,7 @@ initialize_build_env() {
     echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> "$GITHUB_ENV" 2>/dev/null || true
     echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> "$GITHUB_ENV" 2>/dev/null || true
     
-    # 克隆源码 - 修复：增加重试和深度
+    # 克隆源码
     log "=== 克隆源码 ==="
     log "仓库: $SELECTED_REPO_URL"
     log "分支: $SELECTED_BRANCH"
@@ -342,6 +349,84 @@ download_custom_packages() {
     log "✅ 自定义包下载完成"
 }
 
+# 创建标准Makefile
+create_standard_makefile() {
+    local pkg_dir="$1"
+    local package_name="$2"
+    
+    log "创建标准Makefile: $package_name"
+    
+    # 确保是luci-app格式
+    if [[ ! "$package_name" =~ ^luci-app- ]]; then
+        local original_name="$package_name"
+        package_name="luci-app-$package_name"
+        log "重命名包为: $package_name"
+    fi
+    
+    local pkg_title=$(echo "$package_name" | sed 's/luci-app-//' | sed 's/-/ /g' | sed 's/\b\(.\)/\u\1/g')
+    
+    cat > "$pkg_dir/Makefile" << EOF
+include \$(TOPDIR)/rules.mk
+
+PKG_NAME:=$package_name
+PKG_VERSION:=1.0
+PKG_RELEASE:=1
+PKG_MAINTAINER:=Auto Generated
+PKG_LICENSE:=GPL-2.0
+
+include \$(INCLUDE_DIR)/package.mk
+
+define Package/\$(PKG_NAME)
+  SECTION:=luci
+  CATEGORY:=LuCI
+  SUBMENU:=3. Applications
+  TITLE:=$pkg_title
+  DEPENDS:=+luci-base
+  PKGARCH:=all
+endef
+
+define Package/\$(PKG_NAME)/description
+  $pkg_title for LuCI
+endef
+
+define Build/Compile
+endef
+
+define Package/\$(PKG_NAME)/install
+	\$(INSTALL_DIR) \$(1)/usr/lib/lua/luci
+	cp -pR ./luasrc/* \$(1)/usr/lib/lua/luci/ 2>/dev/null || true
+	\$(INSTALL_DIR) \$(1)/www/luci-static/resources
+	cp -pR ./htdocs/* \$(1)/www/luci-static/resources/ 2>/dev/null || true
+endef
+
+\$(eval \$(call BuildPackage,\$(PKG_NAME)))
+EOF
+    
+    if [ $? -eq 0 ]; then
+        color_green "✅ 标准Makefile创建成功: $package_name"
+        
+        # 创建必要的目录结构
+        mkdir -p "$pkg_dir/luasrc" 2>/dev/null || true
+        mkdir -p "$pkg_dir/htdocs" 2>/dev/null || true
+        
+        # 创建示例Lua文件
+        if [ ! -f "$pkg_dir/luasrc/controller.lua" ]; then
+            cat > "$pkg_dir/luasrc/controller.lua" << 'LUAEOF'
+module("luci.controller.$(echo "$package_name" | sed 's/luci-app-//')", package.seeall)
+
+function index()
+    entry({"admin", "services", "$(echo "$package_name" | sed 's/luci-app-//')"}, cbi("$(echo "$package_name" | sed 's/luci-app-//')"), _("$(echo "$pkg_title")"), 60)
+end
+LUAEOF
+        fi
+        
+        return 0
+    else
+        color_red "❌ 标准Makefile创建失败"
+        return 1
+    fi
+}
+
 # 步骤6: 处理源码压缩包
 process_source_packages() {
     local source_packages_list="$1"
@@ -370,7 +455,7 @@ process_source_packages() {
     fi
     
     # 获取所有支持的压缩包
-    local all_compressed_files=$(find "$PACKAGES_BASE_DIR" -name "*.zip" -o -name "*.tar.gz" -o -name "*.tgz" -o -name "*.tar.bz2" 2>/dev/null)
+    local all_compressed_files=$(find "$PACKAGES_BASE_DIR" -name "*.zip" -o -name "*.tar.gz" -o -name "*.tgz" -o -name "*.tar.bz2" -o -name "*.tar.xz" 2>/dev/null)
     
     if [ -z "$all_compressed_files" ]; then
         log_warning "目录中没有找到任何支持的压缩包文件"
@@ -442,7 +527,7 @@ process_source_packages() {
         log "处理源码包 [$((processed_count + error_count + 1))/${#file_array[@]}]: $source_file_clean"
         
         # 从文件名提取包名（去掉扩展名）
-        local package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\)$//')
+        local package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\|tar\.xz\)$//')
         
         # 创建目标目录
         local target_dir="$SOURCE_PKG_DIR/luci/$package_name"
@@ -470,6 +555,12 @@ process_source_packages() {
             else
                 color_red "❌ 解压TAR.BZ2文件失败: $source_file_clean"
             fi
+        elif [[ "$source_file_clean" == *.tar.xz ]]; then
+            if tar -xJf "$source_path" -C "$target_dir" 2>/dev/null; then
+                extract_success=1
+            else
+                color_red "❌ 解压TAR.XZ文件失败: $source_file_clean"
+            fi
         else
             color_red "❌ 不支持的压缩格式: $source_file_clean"
         fi
@@ -492,14 +583,35 @@ process_source_packages() {
         # 验证包结构
         log "验证包结构: $package_name"
         
+        # 检查文件类型
+        log "解压后的文件结构:"
+        find "$target_dir" -type f -name "*.lua" -o -name "*.js" -o -name "*.html" -o -name "*.css" 2>/dev/null | head -5 | while read file; do
+            log "  📄 $(basename "$file") ($(dirname "$file" | xargs basename))"
+        done
+        
+        # 检查是否可能是Luci应用
+        local has_lua_files=$(find "$target_dir" -name "*.lua" -type f 2>/dev/null | head -1)
+        if [ -n "$has_lua_files" ]; then
+            log "💡 检测到Lua文件，这可能是Luci应用"
+            # 如果是luci-app-xxx但没有正确的目录结构，重新组织
+            if [[ ! "$package_name" =~ ^luci-app- ]] && [ -f "$target_dir/controller.lua" ] || [ -f "$target_dir/model.lua" ]; then
+                local new_package_name="luci-app-${package_name}"
+                log "重命名包为: $new_package_name"
+                package_name="$new_package_name"
+                local new_target_dir="$SOURCE_PKG_DIR/luci/$package_name"
+                mv "$target_dir" "$new_target_dir" 2>/dev/null
+                target_dir="$new_target_dir"
+            fi
+        fi
+        
         # 检查必要文件
         if [ ! -f "$target_dir/Makefile" ]; then
-            color_red "❌ 缺少关键文件: Makefile"
+            log_warning "缺少关键文件: Makefile"
             
             # 尝试查找可能的Makefile
             local found_makefile=$(find "$target_dir" -name "Makefile" -type f 2>/dev/null | head -1)
             if [ -n "$found_makefile" ]; then
-                color_yellow "💡 在其他位置找到Makefile: $found_makefile"
+                log "在其他位置找到Makefile: $found_makefile"
                 local makefile_dir=$(dirname "$found_makefile")
                 if [ "$makefile_dir" != "$target_dir" ]; then
                     log "移动Makefile和相关文件..."
@@ -507,9 +619,12 @@ process_source_packages() {
                     rm -rf "$makefile_dir" 2>/dev/null
                 fi
             else
-                color_red "❌ 无法找到Makefile，包结构无效"
-                ((error_count++)) || true
-                continue
+                log "尝试创建标准Makefile..."
+                if ! create_standard_makefile "$target_dir" "$package_name"; then
+                    color_red "❌ 无法创建标准Makefile，包结构无效"
+                    ((error_count++)) || true
+                    continue
+                fi
             fi
         fi
         
@@ -573,102 +688,6 @@ process_source_packages() {
     fi
 }
 
-# 验证包Makefile结构
-validate_package_makefile() {
-    local package="$1"
-    local makefile_path="$2"
-    
-    log "验证包Makefile结构: $package"
-    
-    if [ ! -f "$makefile_path" ]; then
-        color_red "❌ Makefile不存在: $makefile_path"
-        return 1
-    fi
-    
-    # 检查关键变量
-    local required_vars=("PKG_NAME" "PKG_VERSION" "PKG_RELEASE")
-    local missing_vars=""
-    
-    for var in "${required_vars[@]}"; do
-        if ! grep -q "^${var} :=" "$makefile_path" && ! grep -q "^${var}=" "$makefile_path"; then
-            missing_vars="$missing_vars $var"
-        fi
-    done
-    
-    if [ -n "$missing_vars" ]; then
-        color_red "❌ Makefile缺少必要变量:$missing_vars"
-        return 1
-    fi
-    
-    # 检查是否有Package定义
-    if ! grep -q "^define Package/" "$makefile_path" && ! grep -q "^Package/" "$makefile_path"; then
-        color_red "❌ Makefile缺少Package定义"
-        return 1
-    fi
-    
-    color_green "✅ Makefile验证通过"
-    return 0
-}
-
-# 创建标准Makefile
-create_standard_makefile() {
-    local pkg_dir="$1"
-    local package_name="$2"
-    
-    log "创建标准Makefile: $package_name"
-    
-    cat > "$pkg_dir/Makefile" << 'EOF'
-include $(TOPDIR)/rules.mk
-
-PKG_NAME:=__PKG_NAME__
-PKG_VERSION:=1.0
-PKG_RELEASE:=1
-PKG_MAINTAINER:=Unknown
-PKG_LICENSE:=GPL-2.0
-
-include $(INCLUDE_DIR)/package.mk
-
-define Package/__PKG_NAME__
-  SECTION:=luci
-  CATEGORY:=LuCI
-  SUBMENU:=3. Applications
-  TITLE:=__PKG_TITLE__
-  DEPENDS:=+luci-base
-  PKGARCH:=all
-endef
-
-define Package/__PKG_NAME__/description
-  __PKG_TITLE__ for LuCI
-endef
-
-define Build/Compile
-endef
-
-define Package/__PKG_NAME__/install
-	$(INSTALL_DIR) $(1)/usr/lib/lua/luci
-	cp -pR ./luasrc/* $(1)/usr/lib/lua/luci/
-	$(INSTALL_DIR) $(1)/www/luci-static/resources
-	cp -pR ./htdocs/* $(1)/www/luci-static/resources/
-endef
-
-$(eval $(call BuildPackage,__PKG_NAME__))
-EOF
-    
-    # 替换变量
-    local pkg_title=$(echo "$package_name" | sed 's/luci-app-//' | sed 's/-/ /g' | sed 's/\b\(.\)/\u\1/g')
-    
-    sed -i "s/__PKG_NAME__/$package_name/g" "$pkg_dir/Makefile"
-    sed -i "s/__PKG_TITLE__/$pkg_title/g" "$pkg_dir/Makefile"
-    
-    if [ $? -eq 0 ]; then
-        color_green "✅ 标准Makefile创建成功"
-        return 0
-    else
-        color_red "❌ 标准Makefile创建失败"
-        return 1
-    fi
-}
-
 # 步骤7: 编译前空间检查
 pre_build_space_check() {
     log "=== 编译前空间检查 ==="
@@ -705,9 +724,16 @@ generate_config() {
 CONFIG_TARGET_x86=y
 CONFIG_TARGET_x86_64=y
 CONFIG_TARGET_x86_64_DEVICE_generic=y
+CONFIG_TARGET_IMAGES_GZIP=y
+CONFIG_TARGET_ROOTFS_INITRAMFS=n
+CONFIG_TARGET_ROOTFS_EXT4FS=n
+CONFIG_TARGET_ROOTFS_SQUASHFS=n
+CONFIG_TARGET_ROOTFS_PARTSIZE=512
 CONFIG_TOOLCHAIN=y
 CONFIG_TOOLCHAIN_BUILD=y
 CONFIG_PACKAGE_busybox=y
+CONFIG_BUSYBOX_CUSTOM=y
+CONFIG_BUSYBOX_CONFIG_DEFAULT_FEATURE_SYSTEMD=n
 CONFIG_PACKAGE_base-files=y
 CONFIG_PACKAGE_dropbear=y
 CONFIG_PACKAGE_firewall=y
@@ -738,6 +764,7 @@ CONFIG_PACKAGE_libstdcpp=y
 CONFIG_PACKAGE_libpthread=y
 CONFIG_PACKAGE_zlib=y
 CONFIG_PACKAGE_libuuid=y
+CONFIG_PACKAGE_libjson-c=y
 EOF
     
     if [ $? -ne 0 ]; then
@@ -758,7 +785,11 @@ EOF
         while IFS= read -r source_file; do
             local source_file_clean=$(echo "$source_file" | xargs)
             if [ -n "$source_file_clean" ]; then
-                local package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\)$//')
+                local package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\|tar\.xz\)$//')
+                # 如果包名不是luci-app-开头，尝试添加
+                if [[ ! "$package_name" =~ ^luci-app- ]] && [[ ! "$package_name" =~ ^luci-theme- ]] && [[ ! "$package_name" =~ ^luci-i18n- ]]; then
+                    package_name="luci-app-$package_name"
+                fi
                 if [ -n "$all_packages" ]; then
                     all_packages="$all_packages、$package_name"
                 else
@@ -779,7 +810,9 @@ EOF
     while IFS= read -r package; do
         local pkg_clean=$(echo "$package" | xargs)
         if [ -n "$pkg_clean" ]; then
-            echo "CONFIG_PACKAGE_${pkg_clean}=y" >> .config
+            # 确保包名在.config中正确
+            local config_name="${pkg_clean//-/_}"
+            echo "CONFIG_PACKAGE_${config_name}=y" >> .config
             color_green "  ✅ 添加包: $pkg_clean"
         fi
     done <<< "$(split_string "$all_packages" "、")"
@@ -790,7 +823,8 @@ EOF
         while IFS= read -r dep; do
             local dep_clean=$(echo "$dep" | xargs)
             if [ -n "$dep_clean" ]; then
-                echo "CONFIG_PACKAGE_${dep_clean}=y" >> .config
+                local config_name="${dep_clean//-/_}"
+                echo "CONFIG_PACKAGE_${config_name}=y" >> .config
                 color_blue "  🔧 添加依赖: $dep_clean"
             fi
         done <<< "$(split_string "$EXTRA_DEPS" "、")"
@@ -810,7 +844,7 @@ apply_config() {
     # 显示启用的包
     log "=== 已启用的包列表 ==="
     grep "^CONFIG_PACKAGE_.*=y$" .config 2>/dev/null | while read line; do
-        local pkg_name=$(echo "$line" | sed 's/CONFIG_PACKAGE_\(.*\)=y/\1/')
+        local pkg_name=$(echo "$line" | sed 's/CONFIG_PACKAGE_\(.*\)=y/\1/' | sed 's/_/-/g')
         color_green "  ✅ $pkg_name"
     done
     
@@ -823,7 +857,11 @@ apply_config() {
         while IFS= read -r source_file; do
             local source_file_clean=$(echo "$source_file" | xargs)
             if [ -n "$source_file_clean" ]; then
-                local package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\)$//')
+                local package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\|tar\.xz\)$//')
+                # 如果包名不是luci-app-开头，尝试添加
+                if [[ ! "$package_name" =~ ^luci-app- ]] && [[ ! "$package_name" =~ ^luci-theme- ]] && [[ ! "$package_name" =~ ^luci-i18n- ]]; then
+                    package_name="luci-app-$package_name"
+                fi
                 if [ -n "$all_packages" ]; then
                     all_packages="$all_packages、$package_name"
                 else
@@ -837,7 +875,8 @@ apply_config() {
     while IFS= read -r package; do
         local pkg_clean=$(echo "$package" | xargs)
         if [ -n "$pkg_clean" ]; then
-            if grep -q "CONFIG_PACKAGE_${pkg_clean}=y" .config 2>/dev/null; then
+            local config_name="${pkg_clean//-/_}"
+            if grep -q "CONFIG_PACKAGE_${config_name}=y" .config 2>/dev/null; then
                 color_green "✅ 目标包已启用: $pkg_clean"
             else
                 color_red "❌ 目标包未启用: $pkg_clean"
@@ -865,6 +904,10 @@ fix_network() {
     export GIT_SSL_NO_VERIFY=1
     export PYTHONHTTPSVERIFY=0
     
+    # 添加代理设置（如果需要）
+    # export http_proxy=http://proxy.example.com:8080
+    # export https_proxy=http://proxy.example.com:8080
+    
     log "✅ 网络环境修复完成"
 }
 
@@ -888,7 +931,7 @@ download_dependencies() {
     done
 }
 
-# 步骤12: 编译IPK包 - 简化版，只编译单个包
+# 步骤12: 编译IPK包
 build_ipk() {
     local package_names="$1"
     local clean_build="$2"
@@ -909,7 +952,11 @@ build_ipk() {
         while IFS= read -r source_file; do
             local source_file_clean=$(echo "$source_file" | xargs)
             if [ -n "$source_file_clean" ]; then
-                local package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\)$//')
+                local package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\|tar\.xz\)$//')
+                # 如果包名不是luci-app-开头，尝试添加
+                if [[ ! "$package_name" =~ ^luci-app- ]] && [[ ! "$package_name" =~ ^luci-theme- ]] && [[ ! "$package_name" =~ ^luci-i18n- ]]; then
+                    package_name="luci-app-$package_name"
+                fi
                 if [ -n "$all_packages" ]; then
                     all_packages="$all_packages、$package_name"
                 else
@@ -927,32 +974,61 @@ build_ipk() {
     # 创建输出目录
     mkdir -p "$BUILD_DIR/ipk_output" 2>/dev/null
     
-    # 只尝试编译luci-app-filetransfer或简单的测试包
-    # 因为工具链编译有问题，我们先尝试编译一个简单的包测试
-    log "💡 检测到工具链问题，尝试编译简单的测试包..."
+    # 创建编译日志目录
+    local log_dir="$BUILD_DIR/compile_logs"
+    mkdir -p "$log_dir" 2>/dev/null
     
-    # 检查是否有简单的包可以编译
-    local simple_packages=("luci-app-upnp" "luci-app-ddns" "luci-app-firewall")
-    local found_simple=0
+    log "📦 要编译的包: $all_packages"
+    
+    # 检查简单的包用于测试
+    local simple_packages=("luci-app-upnp" "luci-app-ddns" "luci-app-firewall" "luci-base" "luci-compat")
+    local simple_packages_found=""
     
     for simple_pkg in "${simple_packages[@]}"; do
         if check_package_exists "$simple_pkg"; then
-            log "找到简单包: $simple_pkg，尝试编译..."
-            found_simple=1
+            simple_packages_found="$simple_pkg"
+            log "✅ 找到简单包可用于测试: $simple_pkg"
             break
         fi
     done
-    
-    if [ $found_simple -eq 0 ]; then
-        color_red "❌ 找不到任何简单的测试包"
-        return 1
-    fi
     
     # 编译每个包
     local package_count=0
     local success_count=0
     local ipk_found_total=0
     
+    # 首先尝试编译一个简单包来测试环境
+    if [ -n "$simple_packages_found" ]; then
+        log "💡 先编译简单包测试环境: $simple_packages_found"
+        
+        # 如果要求清理编译，先清理相关包
+        if [ "$clean_build" = "true" ]; then
+            log "🧹 清理包构建..."
+            make package/${simple_packages_found}/clean 2>/dev/null || log_warning "清理包 $simple_packages_found 失败，继续编译"
+        fi
+        
+        # 编译简单包测试
+        local test_log="$log_dir/test_compile.log"
+        log "测试编译包: $simple_packages_found"
+        
+        if make -j1 package/${simple_packages_found}/compile V=s 2>&1 | tee "$test_log"; then
+            log "✅ 简单包编译测试成功"
+            
+            # 查找测试包的IPK
+            find "$BUILD_DIR/bin" -name "*${simple_packages_found}*.ipk" -type f 2>/dev/null | head -1 | while read ipk_file; do
+                log "✅ 找到测试IPK文件: $ipk_file"
+                cp "$ipk_file" "$BUILD_DIR/ipk_output/" 2>/dev/null || true
+            done
+        else
+            log_warning "简单包编译测试有错误，但继续编译目标包"
+            log "🔍 测试编译错误摘要:"
+            tail -50 "$test_log" 2>/dev/null | while read line; do
+                color_red "  $line"
+            done
+        fi
+    fi
+    
+    # 编译用户指定的包
     while IFS= read -r package; do
         local pkg_clean=$(echo "$package" | xargs)
         if [ -z "$pkg_clean" ]; then
@@ -967,15 +1043,20 @@ build_ipk() {
         if ! check_package_exists "$pkg_clean"; then
             color_red "❌ 包 $pkg_clean 不存在，跳过"
             
-            # 尝试编译简单的测试包
-            log "💡 尝试编译简单测试包..."
-            for simple_pkg in "${simple_packages[@]}"; do
-                if check_package_exists "$simple_pkg"; then
-                    pkg_clean="$simple_pkg"
-                    log "使用测试包: $pkg_clean"
-                    break
+            # 检查是否可能是luci-app-xxx格式但找不到
+            if [[ ! "$pkg_clean" =~ ^luci-app- ]] && [[ ! "$pkg_clean" =~ ^luci-theme- ]] && [[ ! "$pkg_clean" =~ ^luci-i18n- ]]; then
+                local possible_name="luci-app-$pkg_clean"
+                if check_package_exists "$possible_name"; then
+                    log "💡 找到包: $possible_name，使用此名称"
+                    pkg_clean="$possible_name"
                 fi
-            done
+            fi
+        fi
+        
+        # 如果仍然不存在，跳过此包
+        if ! check_package_exists "$pkg_clean"; then
+            color_red "❌ 包 $pkg_clean 不存在，跳过编译"
+            continue
         fi
         
         # 如果要求清理编译，先清理相关包
@@ -984,14 +1065,15 @@ build_ipk() {
             make package/${pkg_clean}/clean 2>/dev/null || log_warning "清理包 $pkg_clean 失败，继续编译"
         fi
         
-        # 编译指定包 - 使用单线程避免工具链问题
+        # 编译指定包 - 使用详细输出
         log "开始编译包: $pkg_clean"
         
         # 创建临时日志文件
-        local temp_log="$BUILD_DIR/compile_${pkg_clean}.log"
+        local compile_log="$log_dir/compile_${pkg_clean//\//_}.log"
         
-        # 尝试编译 - 使用单线程
-        if make -j1 package/${pkg_clean}/compile 2>&1 | tee "$temp_log" | tee -a "$LOG_FILE"; then
+        # 尝试编译 - 使用详细模式
+        log "编译日志: $compile_log"
+        if make -j1 package/${pkg_clean}/compile V=s 2>&1 | tee "$compile_log" | tee -a "$LOG_FILE"; then
             ((success_count++)) || true
             log "✅ 编译命令执行完成"
         else
@@ -1000,28 +1082,28 @@ build_ipk() {
             
             # 显示编译错误的最后部分
             log "🔍 编译错误摘要:"
-            tail -50 "$temp_log" 2>/dev/null | while read line; do
+            tail -100 "$compile_log" 2>/dev/null | while read line; do
                 color_red "  $line"
             done
             
             # 检查工具链错误
-            if grep -q "lib/ld-musl-.*\.so" "$temp_log" 2>/dev/null; then
+            if grep -q "ld-musl-" "$compile_log" 2>/dev/null; then
                 log "💡 检测到工具链错误，尝试修复..."
                 
-                # 尝试手动复制musl库文件
+                # 尝试查找musl库文件
                 local musl_libs=$(find "$BUILD_DIR/staging_dir" -name "ld-musl-*.so*" 2>/dev/null | head -1)
                 if [ -n "$musl_libs" ]; then
                     log "找到musl库文件: $musl_libs"
                     local target_dir="$BUILD_DIR/staging_dir/toolchain-x86_64_gcc-*_musl/lib"
                     mkdir -p "$target_dir" 2>/dev/null
                     cp "$musl_libs" "$target_dir"/ 2>/dev/null || true
-                    log "已复制musl库文件"
+                    log "已复制musl库文件，重新尝试编译..."
+                    
+                    # 重新尝试编译
+                    make -j1 package/${pkg_clean}/compile 2>&1 | tee -a "$compile_log" | tee -a "$LOG_FILE" || true
                 fi
             fi
         fi
-        
-        # 清理临时日志
-        rm -f "$temp_log" 2>/dev/null || true
         
         # 查找生成的IPK文件
         log "=== 查找包 $pkg_clean 的IPK文件 ==="
@@ -1031,6 +1113,7 @@ build_ipk() {
         local search_paths=(
             "bin/packages/*/*/${pkg_clean}*.ipk"
             "bin/packages/*/*/${pkg_clean/-/_}*.ipk"
+            "bin/packages/*/*/*${pkg_clean}*.ipk"
             "bin/targets/*/*/packages/${pkg_clean}*.ipk"
             "bin/targets/*/*/packages/${pkg_clean/-/_}*.ipk"
         )
@@ -1039,7 +1122,8 @@ build_ipk() {
             for ipk_file in $search_path; do
                 if [ -f "$ipk_file" ]; then
                     log "✅ 找到IPK文件: $ipk_file"
-                    cp "$ipk_file" "$BUILD_DIR/ipk_output/" 2>/dev/null || true
+                    local dest_file="$BUILD_DIR/ipk_output/$(basename "$ipk_file")"
+                    cp "$ipk_file" "$dest_file" 2>/dev/null || true
                     ipk_found=1
                     ((ipk_found_total++)) || true
                 fi
@@ -1060,14 +1144,24 @@ build_ipk() {
         if [ $ipk_found -eq 1 ]; then
             color_green "✅ 包 $pkg_clean 编译成功！"
         else
-            color_red "❌ 未找到包 $pkg_clean 的IPK文件"
-            log "⚠️ 可能的IPK文件位置:"
+            color_yellow "⚠️ 未找到包 $pkg_clean 的IPK文件"
+            log "💡 建议:"
+            log "1. 检查编译日志: $compile_log"
+            log "2. 检查包的依赖是否满足"
+            log "3. 尝试编译更简单的包"
+            
+            # 显示可能的IPK文件位置
+            log "当前已生成的IPK文件:"
             find "$BUILD_DIR/bin" -name "*.ipk" -type f 2>/dev/null | head -5 | while read ipk_file; do
                 log "  📦 $ipk_file"
             done || log "  未找到任何IPK文件"
         fi
         
         log "---"
+        
+        # 清理编译日志（保留最近几个）
+        find "$log_dir" -name "*.log" -type f -mtime +0 -delete 2>/dev/null || true
+        
     done <<< "$(split_string "$all_packages" "、")"
     
     # 总结编译结果
@@ -1094,7 +1188,7 @@ build_ipk() {
         log "💡 调试建议:"
         log "1. 检查日志文件: $LOG_FILE"
         log "2. 检查包名是否正确"
-        log "3. 尝试编译更简单的包测试环境"
+        log "3. 尝试编译更简单的包测试环境: luci-app-upnp"
         log "4. 检查包的依赖是否满足"
         log "5. 尝试使用不同的OpenWrt版本"
         
@@ -1128,24 +1222,54 @@ create_install_script() {
 # 通用IPK包安装脚本
 # 适用于全平台OpenWrt
 
+set -e
+
 show_help() {
     echo "用法: $0 [选项] [包名...]"
     echo ""
     echo "选项:"
     echo "  -a, --all     安装所有IPK包"
+    echo "  -l, --list    列出所有可用的IPK包"
     echo "  -h, --help    显示此帮助信息"
     echo ""
     echo "示例:"
     echo "  $0 -a                         # 安装所有IPK包"
+    echo "  $0 -l                         # 列出所有IPK包"
     echo "  $0 luci-app-filetransfer      # 安装指定包"
     echo "  $0 pkg1 pkg2 pkg3             # 安装多个包"
+}
+
+list_packages() {
+    echo "=== 可用的IPK包 ==="
+    echo ""
+    
+    if [ ! -d "." ] || [ -z "$(ls *.ipk 2>/dev/null)" ]; then
+        echo "❌ 当前目录没有IPK包文件"
+        return 1
+    fi
+    
+    echo "📦 IPK包列表:"
+    echo ""
+    for ipk_file in *.ipk; do
+        if [ -f "$ipk_file" ]; then
+            local package_name=$(echo "$ipk_file" | sed 's/_.*$//')
+            local version=$(echo "$ipk_file" | grep -o '[0-9]\+\.[0-9]\+-[0-9]\+' | head -1)
+            local arch=$(echo "$ipk_file" | grep -o '\(aarch64\|arm\|mipsel\|x86_64\|i386\|mips\)' | head -1)
+            
+            echo "✅ $package_name"
+            echo "   📁 文件: $ipk_file"
+            [ -n "$version" ] && echo "   📅 版本: $version"
+            [ -n "$arch" ] && echo "   🏗️  架构: $arch"
+            echo ""
+        fi
+    done
 }
 
 install_all_packages() {
     echo "=== 安装所有IPK包 ==="
     
     # 查找所有IPK文件
-    local ipk_files=$(find . -name "*.ipk" -type f 2>/dev/null)
+    local ipk_files=$(ls *.ipk 2>/dev/null)
     
     if [ -z "$ipk_files" ]; then
         echo "❌ 未找到任何IPK文件"
@@ -1157,22 +1281,44 @@ install_all_packages() {
         echo "  - $(basename "$file")"
     done
     
+    echo ""
+    echo "警告: 这将安装所有IPK包，可能会覆盖现有包"
+    read -p "是否继续? (y/N): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo "安装取消"
+        return 0
+    fi
+    
     # 安装依赖
-    echo "检查依赖..."
+    echo "检查系统依赖..."
+    if ! command -v opkg >/dev/null 2>&1; then
+        echo "❌ 这不是OpenWrt系统或opkg未安装"
+        return 1
+    fi
+    
+    echo "更新包列表..."
     opkg update 2>/dev/null || echo "⚠️ 更新包列表失败"
     
     # 安装所有包
     for ipk_file in $ipk_files; do
-        echo "安装: $(basename "$ipk_file")"
-        if opkg install "$ipk_file" 2>/dev/null; then
+        echo ""
+        echo "=== 安装: $(basename "$ipk_file") ==="
+        if opkg install "$ipk_file" --force-overwrite; then
             echo "✅ $(basename "$ipk_file") 安装成功"
         else
             echo "❌ $(basename "$ipk_file") 安装失败"
+            echo "💡 尝试强制安装..."
+            opkg install "$ipk_file" --force-depends --force-overwrite || echo "❌ 强制安装也失败"
         fi
-        echo ""
     done
     
+    echo ""
     echo "🎉 所有包安装完成！"
+    echo ""
+    echo "💡 后续操作:"
+    echo "1. 如果是Luci应用，请刷新浏览器缓存"
+    echo "2. 重启相关服务: /etc/init.d/<服务名> restart"
+    echo "3. 在Luci界面中查看新功能"
 }
 
 install_specific_packages() {
@@ -1182,13 +1328,16 @@ install_specific_packages() {
     echo "要安装的包: ${packages[*]}"
     
     # 检查系统
-    if [ ! -f "/etc/openwrt_release" ]; then
-        echo "❌ 这不是OpenWrt系统"
+    if ! command -v opkg >/dev/null 2>&1; then
+        echo "❌ 这不是OpenWrt系统或opkg未安装"
         return 1
     fi
     
     # 获取架构
-    ARCH=$(opkg print-architecture 2>/dev/null | awk '{print $2}')
+    ARCH=$(opkg print-architecture 2>/dev/null | awk '{print $2}' | head -1)
+    if [ -z "$ARCH" ]; then
+        ARCH=$(uname -m)
+    fi
     echo "系统架构: $ARCH"
     
     # 安装依赖
@@ -1197,45 +1346,53 @@ install_specific_packages() {
     
     # 安装每个包
     for package_name in "${packages[@]}"; do
+        echo ""
         echo "=== 安装包: $package_name ==="
         
         # 查找匹配的IPK文件
-        IPK_FILE=$(find . -name "*${package_name}*.ipk" 2>/dev/null | head -1)
+        IPK_FILE=$(ls *${package_name}*.ipk 2>/dev/null | head -1)
         
         if [ -z "$IPK_FILE" ]; then
             echo "❌ 未找到包 $package_name 的IPK文件"
             echo "当前目录下的IPK文件:"
-            find . -name "*.ipk" 2>/dev/null | while read file; do
+            ls *.ipk 2>/dev/null | while read file; do
                 echo "  - $(basename "$file")"
-            done
+            done || echo "  没有IPK文件"
             continue
         fi
         
         echo "找到IPK文件: $(basename "$IPK_FILE")"
         
+        # 检查架构是否匹配
+        local ipk_arch=$(echo "$IPK_FILE" | grep -o '\(aarch64\|arm\|mipsel\|x86_64\|i386\|mips\)' | head -1)
+        if [ -n "$ipk_arch" ] && [ "$ipk_arch" != "$ARCH" ]; then
+            echo "⚠️ 架构不匹配: IPK为 $ipk_arch, 系统为 $ARCH"
+            echo "💡 尝试强制安装..."
+        fi
+        
         # 尝试安装IPK
-        if opkg install "$IPK_FILE" 2>/dev/null; then
+        if opkg install "$IPK_FILE" --force-overwrite; then
             echo "✅ $package_name 安装成功！"
             
             # 检查是否真的安装成功
-            if opkg list-installed 2>/dev/null | grep -q "$package_name"; then
+            if opkg list-installed 2>/dev/null | grep -q "^${package_name} "; then
                 echo "🎉 包已成功安装到系统"
                 
                 # 如果是Luci应用，提示重启服务
                 if [[ "$package_name" == luci-app-* ]]; then
                     echo ""
                     echo "💡 如果是Luci应用，请:"
-                    echo "1. 刷新浏览器缓存"
+                    echo "1. 刷新浏览器缓存 (Ctrl+F5)"
                     echo "2. 在Luci界面中查看新功能"
+                    echo "3. 如果看不到新菜单，尝试重启uhttpd: /etc/init.d/uhttpd restart"
                 fi
             else
                 echo "⚠️ 包可能未正确安装，请检查以上输出"
             fi
         else
             echo "❌ $package_name 安装失败，请检查依赖关系"
-            echo "💡 可以尝试手动安装依赖后重试"
+            echo "💡 可以尝试手动安装: opkg install $IPK_FILE --force-depends --force-overwrite"
         fi
-        echo ""
     done
 }
 
@@ -1243,6 +1400,10 @@ install_specific_packages() {
 case "${1:-}" in
     -h|--help)
         show_help
+        exit 0
+        ;;
+    -l|--list)
+        list_packages
         exit 0
         ;;
     -a|--all)
@@ -1269,6 +1430,7 @@ EOF
 - \`*.ipk\`: OpenWrt软件包文件
 - \`install_package.sh\`: 自动安装脚本
 - \`file_list.txt\`: 文件列表
+- \`README.md\`: 使用说明
 
 ## 安装方法
 
@@ -1280,6 +1442,9 @@ scp -r ipk_output root@192.168.1.1:/tmp/
 # 在路由器上执行
 ssh root@192.168.1.1
 cd /tmp/ipk_output
+
+# 列出所有包
+./install_package.sh -l
 
 # 安装所有包
 ./install_package.sh -a
@@ -1298,23 +1463,30 @@ scp *.ipk root@192.168.1.1:/tmp/
 ssh root@192.168.1.1
 cd /tmp
 opkg update
-opkg install *.ipk
+opkg install *.ipk --force-overwrite
+
+# 如果安装失败，尝试强制安装
+opkg install *.ipk --force-depends --force-overwrite
 \`\`\`
 
 ## 支持的平台
 - 所有OpenWrt平台（全平台通用）
 - OpenWrt 21.02 / 23.05
 - ImmortalWrt
+- 支持架构: x86_64, arm, aarch64, mipsel, i386, mips
 
 ## 编译方式
 本次编译使用了以下方式：
+- OpenWrt版本: ${SELECTED_BRANCH:-未知}
 - 输入框包名: ${PACKAGE_NAMES:-无}
 - 源码压缩包: ${SOURCE_PACKAGES:-无}
+- 额外依赖: ${EXTRA_DEPS:-无}
 
 ## 注意事项
 1. 确保路由器有足够的空间
 2. 安装前建议备份配置
 3. 某些包可能需要特定依赖
+4. 如果安装失败，尝试使用 \`--force-depends\` 和 \`--force-overwrite\` 参数
 
 ## 多包编译说明
 支持同时编译多个IPK包，包名之间用顿号分隔。
@@ -1330,6 +1502,7 @@ opkg install *.ipk
 - ZIP (.zip)
 - TAR.GZ (.tar.gz, .tgz)  
 - TAR.BZ2 (.tar.bz2)
+- TAR.XZ (.tar.xz)
 
 ## 常见问题
 
@@ -1339,7 +1512,23 @@ opkg install *.ipk
 - 包在选择的版本中是否存在
 - 源码压缩包文件名是否正确
 
-### 2. 常用包名参考
+### 2. 安装失败
+如果安装失败，尝试：
+\`\`\`bash
+opkg install 包名.ipk --force-depends --force-overwrite
+\`\`\`
+
+### 3. Luci应用不显示
+如果安装了Luci应用但在界面中看不到：
+\`\`\`bash
+# 重启uhttpd服务
+/etc/init.d/uhttpd restart
+
+# 清理浏览器缓存
+# 或使用Ctrl+F5强制刷新
+\`\`\`
+
+### 4. 常用包名参考
 - \`luci-app-adblock\` - 广告过滤
 - \`luci-app-aria2\` - 下载工具
 - \`luci-app-ddns\` - 动态DNS
@@ -1357,6 +1546,12 @@ opkg install *.ipk
 - 其他包特定的依赖
 
 如果没有特殊需求，通常可以留空。
+
+## 联系我们
+如有问题，请提交GitHub Issue或联系维护者。
+
+---
+*自动生成于 $(date)*
 EOF
 
     log "✅ 安装脚本和说明文档创建完成"
@@ -1366,7 +1561,12 @@ EOF
 cleanup() {
     log "=== 清理构建目录 ==="
     # 只清理构建文件，保留输出
-    cd "$BUILD_DIR" 2>/dev/null && sudo rm -rf build_dir staging_dir tmp .config* 2>/dev/null || true
+    cd "$BUILD_DIR" 2>/dev/null && {
+        # 清理中间文件，保留源码和输出
+        sudo rm -rf build_dir staging_dir tmp .config* feeds 2>/dev/null || true
+        # 保留ipk_output和日志
+        find . -name "*.log" -type f -mtime +1 -delete 2>/dev/null || true
+    }
     log "✅ 构建中间文件已清理"
 }
 
@@ -1375,6 +1575,10 @@ main() {
     local command="$1"
     local arg1="$2"
     local arg2="$3"
+    
+    # 初始化日志
+    mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null
+    touch "$LOG_FILE" 2>/dev/null
     
     case "$command" in
         "setup_environment")
