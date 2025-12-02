@@ -7,7 +7,6 @@ ENV_FILE="$BUILD_DIR/build_env.sh"
 LOG_FILE="$BUILD_DIR/build_ipk.log"
 SOURCE_PKG_DIR="$BUILD_DIR/source_packages"
 PACKAGES_BASE_DIR="firmware-config/packages"
-DEBUG_LOG="$BUILD_DIR/debug.log"
 
 # 颜色输出函数
 color_green() {
@@ -26,12 +25,6 @@ color_blue() {
     echo -e "\033[34m$1\033[0m"
 }
 
-# 调试日志函数
-debug_log() {
-    local message="[DEBUG $(date '+%Y-%m-%d %H:%M:%S')] $1"
-    echo "$message" >> "$DEBUG_LOG"
-}
-
 # 日志函数
 log() {
     local message="【$(date '+%Y-%m-%d %H:%M:%S')】$1"
@@ -39,7 +32,6 @@ log() {
     if [ -f "$LOG_FILE" ]; then
         echo "$message" >> "$LOG_FILE"
     fi
-    debug_log "$1"
 }
 
 # 错误处理函数（不退出）
@@ -98,8 +90,6 @@ check_package_exists() {
     local package="$1"
     local found=0
     
-    debug_log "检查包是否存在: $package"
-    
     # 检查可能的包路径
     local possible_paths=(
         "package/$package"
@@ -129,49 +119,220 @@ check_package_exists() {
     return $found
 }
 
-# 从GitHub仓库下载自定义包
-download_custom_package() {
-    local package_name="$1"
-    local repo_url="$2"
+# 验证包Makefile结构
+validate_package_makefile() {
+    local package="$1"
+    local makefile_path="$2"
     
-    log "=== 下载自定义包 ==="
-    log "包名: $package_name"
-    log "仓库: $repo_url"
+    log "验证包Makefile结构: $package"
     
-    cd "$BUILD_DIR" 2>/dev/null || { log_error "进入构建目录失败"; return 1; }
-    
-    # 提取仓库名
-    local repo_name=$(basename "$repo_url" .git)
-    local target_dir="package/$package_name"
-    
-    # 清理旧目录
-    rm -rf "$target_dir" 2>/dev/null
-    
-    # 克隆仓库
-    git clone --depth 1 "$repo_url" "$target_dir" 2>/dev/null
-    if [ $? -ne 0 ]; then
-        log_warning "克隆自定义包失败"
+    if [ ! -f "$makefile_path" ]; then
+        color_red "❌ Makefile不存在: $makefile_path"
         return 1
     fi
     
-    # 检查是否有Makefile
-    if [ ! -f "$target_dir/Makefile" ]; then
-        log_warning "自定义包没有Makefile，尝试查找..."
-        find "$target_dir" -name "Makefile" 2>/dev/null | head -1 | while read makefile; do
-            local subdir=$(dirname "$makefile")
-            if [ "$subdir" != "$target_dir" ]; then
-                log "📁 移动包文件从 $subdir 到 $target_dir"
-                mv "$subdir"/* "$target_dir"/ 2>/dev/null || true
+    # 检查关键变量
+    local required_vars=("PKG_NAME" "PKG_VERSION" "PKG_RELEASE")
+    local missing_vars=""
+    
+    for var in "${required_vars[@]}"; do
+        if ! grep -q "^${var} :=" "$makefile_path" && ! grep -q "^${var}=" "$makefile_path"; then
+            missing_vars="$missing_vars $var"
+        fi
+    done
+    
+    if [ -n "$missing_vars" ]; then
+        color_red "❌ Makefile缺少必要变量:$missing_vars"
+        
+        # 尝试修复常见的Makefile问题
+        log "💡 尝试修复Makefile..."
+        local package_name=$(basename "$(dirname "$makefile_path")")
+        
+        # 创建备份
+        cp "$makefile_path" "${makefile_path}.bak" 2>/dev/null
+        
+        # 检查是否是简单的源码包结构
+        if grep -q "Build/Compile" "$makefile_path" || grep -q "define Build/Compile" "$makefile_path"; then
+            log "检测到Build/Compile规则"
+        else
+            color_yellow "⚠️ Makefile可能不符合OpenWrt规范"
+            
+            # 尝试添加基本结构
+            if [ -d "$(dirname "$makefile_path")/src" ] || [ -d "$(dirname "$makefile_path")/files" ]; then
+                log "检测到src或files目录，尝试创建标准Makefile"
+                create_standard_makefile "$(dirname "$makefile_path")" "$package_name"
+                return $?
             fi
-        done
+        fi
+        
+        return 1
     fi
     
-    if [ -f "$target_dir/Makefile" ]; then
-        color_green "✅ 自定义包下载完成: $package_name"
+    # 检查是否有Package定义
+    if ! grep -q "^define Package/" "$makefile_path" && ! grep -q "^Package/" "$makefile_path"; then
+        color_red "❌ Makefile缺少Package定义"
+        
+        # 尝试创建基本Package定义
+        local pkg_name_clean=$(echo "$package" | sed 's/^luci-app-//')
+        if create_package_definition "$makefile_path" "$package" "$pkg_name_clean"; then
+            color_green "✅ 已添加Package定义"
+        else
+            return 1
+        fi
+    fi
+    
+    color_green "✅ Makefile验证通过"
+    return 0
+}
+
+# 创建标准Makefile
+create_standard_makefile() {
+    local pkg_dir="$1"
+    local package_name="$2"
+    
+    log "创建标准Makefile: $package_name"
+    
+    cat > "$pkg_dir/Makefile" << 'EOF'
+include $(TOPDIR)/rules.mk
+
+PKG_NAME:=__PKG_NAME__
+PKG_VERSION:=1.0
+PKG_RELEASE:=1
+PKG_MAINTAINER:=Unknown
+PKG_LICENSE:=GPL-2.0
+
+include $(INCLUDE_DIR)/package.mk
+
+define Package/__PKG_NAME__
+  SECTION:=luci
+  CATEGORY:=LuCI
+  SUBMENU:=3. Applications
+  TITLE:=__PKG_TITLE__
+  DEPENDS:=+luci-base
+  PKGARCH:=all
+endef
+
+define Package/__PKG_NAME__/description
+  __PKG_TITLE__ for LuCI
+endef
+
+define Build/Compile
+endef
+
+define Package/__PKG_NAME__/install
+	$(INSTALL_DIR) $(1)/usr/lib/lua/luci
+	cp -pR ./luasrc/* $(1)/usr/lib/lua/luci/
+	$(INSTALL_DIR) $(1)/www/luci-static/resources
+	cp -pR ./htdocs/* $(1)/www/luci-static/resources/
+endef
+
+$(eval $(call BuildPackage,__PKG_NAME__))
+EOF
+    
+    # 替换变量
+    local pkg_title=$(echo "$package_name" | sed 's/luci-app-//' | sed 's/-/ /g' | sed 's/\b\(.\)/\u\1/g')
+    
+    sed -i "s/__PKG_NAME__/$package_name/g" "$pkg_dir/Makefile"
+    sed -i "s/__PKG_TITLE__/$pkg_title/g" "$pkg_dir/Makefile"
+    
+    if [ $? -eq 0 ]; then
+        color_green "✅ 标准Makefile创建成功"
         return 0
     else
-        log_warning "自定义包没有有效的Makefile"
+        color_red "❌ 标准Makefile创建失败"
         return 1
+    fi
+}
+
+# 创建Package定义
+create_package_definition() {
+    local makefile_path="$1"
+    local package_name="$2"
+    local pkg_name_clean="$3"
+    
+    log "创建Package定义: $package_name"
+    
+    # 在文件末尾添加Package定义
+    cat >> "$makefile_path" << EOF
+
+define Package/$package_name
+  SECTION:=luci
+  CATEGORY:=LuCI
+  SUBMENU:=3. Applications
+  TITLE:=$pkg_name_clean
+  DEPENDS:=+luci-base
+  PKGARCH:=all
+endef
+
+define Package/$package_name/description
+  $pkg_name_clean for LuCI
+endef
+
+define Build/Compile
+	true
+endef
+
+define Package/$package_name/install
+	\$(INSTALL_DIR) \$(1)/usr/lib/lua/luci
+	cp -pR ./luasrc/* \$(1)/usr/lib/lua/luci/
+	\$(INSTALL_DIR) \$(1)/www/luci-static/resources
+	cp -pR ./htdocs/* \$(1)/www/luci-static/resources/
+endef
+
+\$(eval \$(call BuildPackage,$package_name))
+EOF
+    
+    if [ $? -eq 0 ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# 修复包结构
+fix_package_structure() {
+    local pkg_dir="$1"
+    local package_name="$2"
+    
+    log "修复包结构: $package_name"
+    
+    # 检查目录结构
+    if [ ! -d "$pkg_dir/luasrc" ] && [ ! -d "$pkg_dir/src" ]; then
+        log "检测到非标准目录结构，重新组织..."
+        
+        # 查找Lua文件
+        local lua_files=$(find "$pkg_dir" -name "*.lua" -type f 2>/dev/null)
+        if [ -n "$lua_files" ]; then
+            mkdir -p "$pkg_dir/luasrc"
+            find "$pkg_dir" -name "*.lua" -type f 2>/dev/null -exec cp --parents {} "$pkg_dir/luasrc/" \; 2>/dev/null || true
+        fi
+        
+        # 查找HTML/JS/CSS文件
+        local web_files=$(find "$pkg_dir" \( -name "*.htm" -o -name "*.html" -o -name "*.js" -o -name "*.css" \) -type f 2>/dev/null)
+        if [ -n "$web_files" ]; then
+            mkdir -p "$pkg_dir/htdocs"
+            find "$pkg_dir" \( -name "*.htm" -o -name "*.html" -o -name "*.js" -o -name "*.css" \) -type f 2>/dev/null -exec cp --parents {} "$pkg_dir/htdocs/" \; 2>/dev/null || true
+        fi
+    fi
+    
+    # 检查并修复Makefile
+    local makefile_path="$pkg_dir/Makefile"
+    if [ -f "$makefile_path" ]; then
+        if validate_package_makefile "$package_name" "$makefile_path"; then
+            return 0
+        else
+            # 如果验证失败但Makefile存在，尝试修复
+            color_yellow "⚠️ 尝试修复现有Makefile"
+            return 1
+        fi
+    else
+        # 创建新的标准Makefile
+        color_yellow "⚠️ Makefile不存在，创建标准Makefile"
+        if create_standard_makefile "$pkg_dir" "$package_name"; then
+            return 0
+        else
+            return 1
+        fi
     fi
 }
 
@@ -184,9 +345,7 @@ setup_environment() {
     
     # 创建日志文件
     touch "$LOG_FILE" 2>/dev/null
-    touch "$DEBUG_LOG" 2>/dev/null
     sudo chown $USER:$USER "$LOG_FILE" 2>/dev/null || true
-    sudo chown $USER:$USER "$DEBUG_LOG" 2>/dev/null || true
     
     log "=== 安装编译依赖包 ==="
     sudo apt-get update 2>/dev/null || { log_warning "apt-get update失败"; }
@@ -293,52 +452,7 @@ configure_feeds() {
     log "✅ Feeds配置完成"
 }
 
-# 步骤5: 下载自定义包
-download_custom_packages() {
-    local package_names="$1"
-    
-    if [ -z "$package_names" ]; then
-        log "=== 没有自定义包需要下载 ==="
-        return 0
-    fi
-    
-    log "=== 下载自定义包 ==="
-    
-    # 定义已知的自定义包仓库
-    declare -A custom_repos=(
-        ["luci-app-filetransfer"]="https://github.com/immortalwrt/luci-app-filetransfer.git"
-        ["luci-app-koolproxy"]="https://github.com/immortalwrt/luci-app-koolproxy.git"
-        ["luci-app-unblockneteasemusic"]="https://github.com/immortalwrt/luci-app-unblockneteasemusic.git"
-    )
-    
-    while IFS= read -r package; do
-        local pkg_clean=$(echo "$package" | xargs)
-        if [ -z "$pkg_clean" ]; then
-            continue
-        fi
-        
-        # 检查是否是自定义包
-        if [ -n "${custom_repos[$pkg_clean]}" ]; then
-            local repo_url="${custom_repos[$pkg_clean]}"
-            log "🔗 发现自定义包: $pkg_clean -> $repo_url"
-            
-            if download_custom_package "$pkg_clean" "$repo_url"; then
-                color_green "✅ 自定义包下载成功: $pkg_clean"
-            else
-                log_warning "自定义包下载失败，继续尝试从feeds编译"
-            fi
-        else
-            # 检查包是否存在，如果不存在，提示用户
-            if ! check_package_exists "$pkg_clean"; then
-                color_yellow "🔍 包 $pkg_clean 不存在，您可能需要提供自定义仓库或源码包"
-            fi
-        fi
-    done <<< "$(split_string "$package_names" "、")"
-    
-    log "✅ 自定义包下载完成"
-}
-
-# 步骤6: 处理源码压缩包
+# 步骤5: 处理源码压缩包
 process_source_packages() {
     local source_packages_list="$1"
     local build_all_packages="$2"
@@ -475,7 +589,17 @@ process_source_packages() {
             continue
         fi
         
-        # 修复包目录结构
+        # 检查是否解压到了子目录
+        local subdirs=($(find "$target_dir" -maxdepth 1 -type d 2>/dev/null | grep -v "^$target_dir$"))
+        
+        if [ ${#subdirs[@]} -eq 1 ] && [ -d "${subdirs[0]}" ]; then
+            log "检测到子目录结构，移动文件..."
+            local subdir="${subdirs[0]}"
+            mv "$subdir"/* "$target_dir"/ 2>/dev/null || true
+            rm -rf "$subdir" 2>/dev/null
+        fi
+        
+        # 修复包结构
         if ! fix_package_structure "$target_dir" "$package_name"; then
             color_red "❌ 修复包结构失败: $package_name"
             ((error_count++)) || true
@@ -483,8 +607,24 @@ process_source_packages() {
         fi
         
         # 集成到构建系统
-        if ! integrate_source_package "$target_dir" "$package_name"; then
-            color_red "❌ 集成到构建系统失败: $package_name"
+        log "集成源码包到构建系统: $package_name"
+        cd "$BUILD_DIR" 2>/dev/null || { log_error "进入构建目录失败"; continue; }
+        
+        # 复制包到package目录
+        local build_pkg_dir="package/$package_name"
+        rm -rf "$build_pkg_dir" 2>/dev/null
+        mkdir -p "$build_pkg_dir" 2>/dev/null
+        
+        log "复制包文件到构建系统..."
+        if ! cp -r "$target_dir"/* "$build_pkg_dir"/ 2>/dev/null; then
+            color_red "❌ 复制包文件失败"
+            ((error_count++)) || true
+            continue
+        fi
+        
+        # 验证是否成功复制
+        if [ ! -f "$build_pkg_dir/Makefile" ]; then
+            color_red "❌ 复制后缺少Makefile"
             ((error_count++)) || true
             continue
         fi
@@ -516,122 +656,6 @@ process_source_packages() {
             log "ℹ️ 没有处理任何源码压缩包"
         fi
     fi
-}
-
-# 修复包目录结构
-fix_package_structure() {
-    local target_dir="$1"
-    local package_name="$2"
-    
-    log "修复包目录结构: $package_name"
-    
-    # 检查是否解压到了子目录
-    local subdirs=($(find "$target_dir" -maxdepth 1 -type d 2>/dev/null | grep -v "^$target_dir$"))
-    
-    if [ ${#subdirs[@]} -eq 1 ] && [ -d "${subdirs[0]}" ]; then
-        log "检测到子目录结构，移动文件..."
-        local subdir="${subdirs[0]}"
-        mv "$subdir"/* "$target_dir"/ 2>/dev/null || true
-        rm -rf "$subdir" 2>/dev/null
-    fi
-    
-    # 检查特殊的目录结构（如luci_opkg）
-    if [ -d "$target_dir/luci_opkg" ]; then
-        log "调整luci_opkg目录结构..."
-        mv "$target_dir/luci_opkg"/* "$target_dir"/ 2>/dev/null || true
-        rm -rf "$target_dir/luci_opkg" 2>/dev/null
-    fi
-    
-    # 验证最终结构
-    if ! validate_package_structure "$target_dir" "$package_name"; then
-        return 1
-    fi
-    
-    return 0
-}
-
-# 验证包结构
-validate_package_structure() {
-    local target_dir="$1"
-    local package_name="$2"
-    
-    log "验证包结构: $package_name"
-    
-    # 检查必要文件
-    if [ ! -f "$target_dir/Makefile" ]; then
-        color_red "❌ 缺少关键文件: Makefile"
-        
-        # 尝试查找可能的Makefile
-        local found_makefile=$(find "$target_dir" -name "Makefile" -type f 2>/dev/null | head -1)
-        if [ -n "$found_makefile" ]; then
-            color_yellow "💡 在其他位置找到Makefile: $found_makefile"
-            local makefile_dir=$(dirname "$found_makefile")
-            if [ "$makefile_dir" != "$target_dir" ]; then
-                log "移动Makefile和相关文件..."
-                mv "$makefile_dir"/* "$target_dir"/ 2>/dev/null || true
-                rm -rf "$makefile_dir" 2>/dev/null
-            fi
-        else
-            color_red "❌ 无法找到Makefile，包结构无效"
-            return 1
-        fi
-    fi
-    
-    if [ ! -f "$target_dir/Makefile" ]; then
-        color_red "❌ 最终检查：仍然缺少Makefile"
-        return 1
-    fi
-    
-    color_green "✅ 找到关键文件: Makefile"
-    
-    # 检查目录内容
-    local file_count=$(find "$target_dir" -type f 2>/dev/null | wc -l)
-    log "包包含 $file_count 个文件"
-    
-    # 显示关键文件
-    find "$target_dir" -type f \( -name "*.mk" -o -name "*.lua" -o -name "*.htm" -o -name "*.js" -o -name "*.css" \) 2>/dev/null | head -10 | while read file; do
-        color_blue "  📄 $(basename "$file")"
-    done
-    
-    # 显示Makefile信息
-    if [ -f "$target_dir/Makefile" ]; then
-        log "Makefile信息:"
-        grep -E "^(PKG_NAME|PKG_VERSION|PKG_RELEASE|PKG_LICENSE|Package|Build)" "$target_dir/Makefile" 2>/dev/null | head -5 | while read line; do
-            color_yellow "  📝 $line"
-        done
-    fi
-    
-    return 0
-}
-
-# 集成源码包到构建系统
-integrate_source_package() {
-    local source_dir="$1"
-    local package_name="$2"
-    
-    log "集成源码包到构建系统: $package_name"
-    
-    cd "$BUILD_DIR" 2>/dev/null || { log_error "进入构建目录失败"; return 1; }
-    
-    # 复制包到package目录
-    local build_pkg_dir="package/$package_name"
-    rm -rf "$build_pkg_dir" 2>/dev/null
-    mkdir -p "$build_pkg_dir" 2>/dev/null
-    
-    log "复制包文件到构建系统..."
-    if ! cp -r "$source_dir"/* "$build_pkg_dir"/ 2>/dev/null; then
-        color_red "❌ 复制包文件失败"
-        return 1
-    fi
-    
-    # 验证是否成功复制
-    if [ ! -f "$build_pkg_dir/Makefile" ]; then
-        color_red "❌ 复制后缺少Makefile"
-        return 1
-    fi
-    
-    color_green "✅ 源码包集成完成: $package_name"
-    return 0
 }
 
 # 步骤7: 编译前空间检查 (已修复)
@@ -812,9 +836,12 @@ apply_config() {
         fi
     done <<< "$(split_string "$all_packages" "、")"
     
-    make defconfig 2>/dev/null || { log_warning "应用配置失败"; }
-    
-    log "✅ 配置应用完成"
+    if make defconfig 2>/dev/null; then
+        log "✅ 配置应用完成"
+    else
+        log_warning "应用配置有警告"
+        # 继续执行，有些警告不影响编译
+    fi
 }
 
 # 步骤10: 修复网络环境
@@ -849,42 +876,6 @@ download_dependencies() {
             sleep 10
         fi
     done
-}
-
-# 检查包的依赖
-check_package_dependencies() {
-    local package="$1"
-    
-    log "检查包依赖: $package"
-    
-    cd "$BUILD_DIR" 2>/dev/null || { log_error "进入构建目录失败"; return 1; }
-    
-    # 查看包的Makefile以获取依赖信息
-    local makefile_path=""
-    
-    # 查找Makefile
-    if [ -f "package/$package/Makefile" ]; then
-        makefile_path="package/$package/Makefile"
-    elif [ -f "feeds/luci/$package/Makefile" ]; then
-        makefile_path="feeds/luci/$package/Makefile"
-    fi
-    
-    if [ -n "$makefile_path" ]; then
-        log "📄 Makefile路径: $makefile_path"
-        
-        # 提取依赖信息
-        local deps=$(grep -E "^(DEPENDS|PKG_BUILD_DEPENDS)" "$makefile_path" 2>/dev/null || true)
-        if [ -n "$deps" ]; then
-            log "📦 包依赖:"
-            echo "$deps" | while read dep; do
-                color_yellow "  🔗 $dep"
-            done
-        else
-            log "ℹ️ 未找到显式依赖信息"
-        fi
-    else
-        log_warning "未找到包的Makefile"
-    fi
 }
 
 # 步骤12: 编译IPK包
@@ -941,43 +932,62 @@ build_ipk() {
         
         log "📦 编译包 [$package_count]: $pkg_clean"
         
-        # 检查包是否存在（包括自定义包和源码包）
-        local package_exists=0
-        if [ -d "package/$pkg_clean" ] || check_package_exists "$pkg_clean"; then
-            package_exists=1
-        fi
-        
-        if [ $package_exists -eq 0 ]; then
-            color_red "❌ 包 $pkg_clean 不存在，跳过"
+        # 检查包是否存在
+        if [ ! -d "package/$pkg_clean" ]; then
+            color_red "❌ 包目录不存在: package/$pkg_clean"
             
             # 搜索类似的包
             log "🔍 搜索类似包..."
-            find . -name "*${pkg_clean##*-}*" -type d 2>/dev/null | head -5 | while read similar; do
+            find package feeds -name "*${pkg_clean##*-}*" -type d 2>/dev/null | head -5 | while read similar; do
                 color_yellow "  💡 类似包: $(basename "$similar")"
             done
             continue
         fi
         
-        # 检查包依赖
-        check_package_dependencies "$pkg_clean"
+        # 检查Makefile
+        local makefile_path="package/$pkg_clean/Makefile"
+        if [ ! -f "$makefile_path" ]; then
+            color_red "❌ Makefile不存在: $makefile_path"
+            
+            # 尝试修复包结构
+            log "💡 尝试修复包结构..."
+            if fix_package_structure "package/$pkg_clean" "$pkg_clean"; then
+                color_green "✅ 包结构修复成功"
+            else
+                color_red "❌ 包结构修复失败，跳过"
+                continue
+            fi
+        else
+            # 验证Makefile结构
+            if ! validate_package_makefile "$pkg_clean" "$makefile_path"; then
+                color_yellow "⚠️ Makefile验证失败，尝试修复..."
+                if fix_package_structure "package/$pkg_clean" "$pkg_clean"; then
+                    color_green "✅ Makefile修复成功"
+                else
+                    color_red "❌ Makefile修复失败，跳过"
+                    continue
+                fi
+            fi
+        fi
         
         # 如果要求清理编译，先清理相关包
         if [ "$clean_build" = "true" ]; then
             log "🧹 清理包构建..."
-            make package/${pkg_clean}/clean 2>/dev/null || log_warning "清理包 $pkg_clean 失败，继续编译"
+            if make package/${pkg_clean}/clean 2>/dev/null; then
+                log "✅ 清理完成"
+            else
+                log_warning "清理包 $pkg_clean 失败，继续编译"
+            fi
         fi
         
-        # 编译指定包 - 使用管道捕获错误
+        # 编译指定包
         log "开始编译包: $pkg_clean"
         
-        # 创建临时日志文件用于调试
+        # 创建临时日志文件
         local temp_log="$BUILD_DIR/compile_${pkg_clean}.log"
         
-        # 编译命令，捕获详细输出
-        debug_log "开始编译包: $pkg_clean"
-        
-        # 使用更详细的编译命令
-        if make -j$(nproc) package/${pkg_clean}/compile V=sc 2>&1 | tee "$temp_log" | tee -a "$LOG_FILE"; then
+        # 尝试编译
+        if make package/${pkg_clean}/compile V=s 2>&1 | tee "$temp_log" | tee -a "$LOG_FILE"; then
             ((success_count++)) || true
             log "✅ 编译命令执行完成"
         else
@@ -991,18 +1001,27 @@ build_ipk() {
             done
             
             # 检查常见错误
-            if grep -q "recipe for target" "$temp_log" 2>/dev/null; then
-                log "💡 可能缺少依赖，尝试查找缺失文件..."
-                grep -i "error\|failed\|not found\|missing\|undefined" "$temp_log" 2>/dev/null | head -20 | while read error_line; do
-                    color_yellow "  🔍 $error_line"
-                done
+            if grep -q "No rule to make target" "$temp_log" 2>/dev/null; then
+                log "💡 错误: 找不到编译规则，可能是Makefile格式不正确"
+                # 重新验证并修复Makefile
+                log "🔄 重新验证Makefile..."
+                if fix_package_structure "package/$pkg_clean" "$pkg_clean"; then
+                    color_green "✅ Makefile修复完成，重新尝试编译"
+                    # 重新尝试编译
+                    if make package/${pkg_clean}/compile V=s 2>&1 | tee "$temp_log" | tee -a "$LOG_FILE"; then
+                        ((success_count++)) || true
+                        log "✅ 重新编译成功"
+                    else
+                        log_warning "重新编译仍然失败"
+                    fi
+                fi
             fi
         fi
         
         # 清理临时日志
         rm -f "$temp_log" 2>/dev/null || true
         
-        # 查找生成的IPK文件 - 更全面的搜索
+        # 查找生成的IPK文件
         log "=== 查找包 $pkg_clean 的IPK文件 ==="
         local ipk_found=0
         
@@ -1010,7 +1029,6 @@ build_ipk() {
         local search_paths=(
             "bin/packages/*/*/${pkg_clean}*.ipk"
             "bin/packages/*/*/${pkg_clean/-/_}*.ipk"
-            "bin/packages/*/*/*${pkg_clean}*.ipk"
             "bin/targets/*/*/packages/${pkg_clean}*.ipk"
             "bin/targets/*/*/packages/${pkg_clean/-/_}*.ipk"
         )
@@ -1034,20 +1052,6 @@ build_ipk() {
                 cp "$ipk_file" "$BUILD_DIR/ipk_output/" 2>/dev/null || true
                 ipk_found=1
                 ((ipk_found_total++)) || true
-            done
-        fi
-        
-        # 如果仍然没找到，尝试搜索相关文件
-        if [ $ipk_found -eq 0 ]; then
-            log "🔍 搜索所有IPK文件..."
-            find "$BUILD_DIR/bin" -name "*.ipk" -type f 2>/dev/null | while read ipk_file; do
-                local filename=$(basename "$ipk_file")
-                if [[ "$filename" == *"$pkg_clean"* ]] || [[ "$filename" == *"${pkg_clean//-/_}"* ]]; then
-                    log "✅ 找到可能相关的IPK文件: $ipk_file"
-                    cp "$ipk_file" "$BUILD_DIR/ipk_output/" 2>/dev/null || true
-                    ipk_found=1
-                    ((ipk_found_total++)) || true
-                fi
             done
         fi
         
@@ -1382,9 +1386,6 @@ main() {
             ;;
         "configure_feeds")
             configure_feeds
-            ;;
-        "download_custom_packages")
-            download_custom_packages "$arg1"
             ;;
         "process_source_packages")
             process_source_packages "$arg1" "$arg2"
