@@ -1,5 +1,5 @@
 #!/bin/bash
-# OpenWrt IPK包编译主脚本
+# OpenWrt IPK包编译主脚本（修复版）
 
 # 全局变量
 BUILD_DIR="/mnt/openwrt-build-ipk"
@@ -23,10 +23,6 @@ color_yellow() {
 
 color_blue() {
     echo -e "\033[34m$1\033[0m"
-}
-
-color_magenta() {
-    echo -e "\033[35m$1\033[0m"
 }
 
 # 日志函数
@@ -89,7 +85,7 @@ split_string() {
     echo "$input" | tr "$delimiter" '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$'
 }
 
-# 检查包是否存在
+# 检查包是否存在 - 修复返回值逻辑
 check_package_exists() {
     local package="$1"
     local found=0
@@ -107,7 +103,7 @@ check_package_exists() {
     
     for path in "${possible_paths[@]}"; do
         if [ -d "$path" ]; then
-            log "✅ 找到包: $path"
+            log "✅ 找到包目录: $path"
             found=1
             break
         fi
@@ -122,7 +118,31 @@ check_package_exists() {
         fi
     fi
     
-    return $found
+    # 如果找到包，确保有Makefile
+    if [ $found -eq 1 ]; then
+        # 尝试找到Makefile位置
+        local package_dir=""
+        for path in "${possible_paths[@]}"; do
+            if [ -d "$path" ]; then
+                package_dir="$path"
+                break
+            fi
+        done
+        
+        if [ -z "$package_dir" ] && [ -n "$search_result" ]; then
+            package_dir="$search_result"
+        fi
+        
+        if [ -n "$package_dir" ] && [ -f "$package_dir/Makefile" ]; then
+            log "✅ 确认包 $package 存在且有效"
+            return 0  # 成功找到
+        else
+            log_warning "包 $package 目录存在但缺少Makefile"
+        fi
+    fi
+    
+    log "❌ 包 $package 不存在"
+    return 1  # 未找到
 }
 
 # 从GitHub仓库下载自定义包
@@ -150,15 +170,6 @@ download_custom_package() {
             break
         elif [ $i -eq 3 ]; then
             log_warning "克隆自定义包失败，已尝试3次"
-            
-            # 尝试使用镜像
-            if [[ "$repo_url" == *"github.com"* ]]; then
-                local mirror_url="${repo_url/github.com/hub.fastgit.xyz}"
-                log "尝试使用镜像: $mirror_url"
-                if git clone --depth 1 "$mirror_url" "$target_dir" 2>/dev/null; then
-                    break
-                fi
-            fi
             return 1
         else
             log "第 $i 次克隆失败，10秒后重试..."
@@ -411,11 +422,12 @@ EOF
         
         # 创建示例Lua文件
         if [ ! -f "$pkg_dir/luasrc/controller.lua" ]; then
-            cat > "$pkg_dir/luasrc/controller.lua" << 'LUAEOF'
-module("luci.controller.$(echo "$package_name" | sed 's/luci-app-//')", package.seeall)
+            local controller_name=$(echo "$package_name" | sed 's/luci-app-//')
+            cat > "$pkg_dir/luasrc/controller.lua" << LUAEOF
+module("luci.controller.${controller_name}", package.seeall)
 
 function index()
-    entry({"admin", "services", "$(echo "$package_name" | sed 's/luci-app-//')"}, cbi("$(echo "$package_name" | sed 's/luci-app-//')"), _("$(echo "$pkg_title")"), 60)
+    entry({"admin", "services", "${controller_name}"}, cbi("${controller_name}"), _("${pkg_title}"), 60)
 end
 LUAEOF
         fi
@@ -427,7 +439,7 @@ LUAEOF
     fi
 }
 
-# 步骤6: 处理源码压缩包
+# 步骤6: 处理源码压缩包 - 修复包名提取逻辑
 process_source_packages() {
     local source_packages_list="$1"
     local build_all_packages="$2"
@@ -528,6 +540,7 @@ process_source_packages() {
         
         # 从文件名提取包名（去掉扩展名）
         local package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\|tar\.xz\)$//')
+        local original_package_name="$package_name"
         
         # 创建目标目录
         local target_dir="$SOURCE_PKG_DIR/luci/$package_name"
@@ -585,20 +598,40 @@ process_source_packages() {
         
         # 检查文件类型
         log "解压后的文件结构:"
-        find "$target_dir" -type f -name "*.lua" -o -name "*.js" -o -name "*.html" -o -name "*.css" 2>/dev/null | head -5 | while read file; do
+        find "$target_dir" -type f \( -name "*.lua" -o -name "*.js" -o -name "*.html" -o -name "*.css" -o -name "Makefile" \) 2>/dev/null | head -5 | while read file; do
             log "  📄 $(basename "$file") ($(dirname "$file" | xargs basename))"
         done
         
+        # 检查Makefile，从中读取真实的包名
+        if [ -f "$target_dir/Makefile" ]; then
+            # 尝试从Makefile中读取PKG_NAME
+            local pkg_name_from_makefile=$(grep -E '^PKG_NAME\s*[:?+]=' "$target_dir/Makefile" 2>/dev/null | head -1 | sed 's/^PKG_NAME\s*[:?+]=\s*//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            
+            if [ -n "$pkg_name_from_makefile" ]; then
+                log "💡 从Makefile中读取包名: $pkg_name_from_makefile"
+                package_name="$pkg_name_from_makefile"
+                
+                # 如果包名发生变化，更新目标目录
+                if [ "$package_name" != "$original_package_name" ]; then
+                    local new_target_dir="$SOURCE_PKG_DIR/luci/$package_name"
+                    if [ "$target_dir" != "$new_target_dir" ]; then
+                        mv "$target_dir" "$new_target_dir" 2>/dev/null
+                        target_dir="$new_target_dir"
+                    fi
+                fi
+            fi
+        fi
+        
         # 检查是否可能是Luci应用
         local has_lua_files=$(find "$target_dir" -name "*.lua" -type f 2>/dev/null | head -1)
-        if [ -n "$has_lua_files" ]; then
-            log "💡 检测到Lua文件，这可能是Luci应用"
-            # 如果是luci-app-xxx但没有正确的目录结构，重新组织
-            if [[ ! "$package_name" =~ ^luci-app- ]] && [ -f "$target_dir/controller.lua" ] || [ -f "$target_dir/model.lua" ]; then
-                local new_package_name="luci-app-${package_name}"
-                log "重命名包为: $new_package_name"
-                package_name="$new_package_name"
-                local new_target_dir="$SOURCE_PKG_DIR/luci/$package_name"
+        if [ -n "$has_lua_files" ] && [[ ! "$package_name" =~ ^luci-app- ]] && [[ ! "$package_name" =~ ^luci-theme- ]] && [[ ! "$package_name" =~ ^luci-i18n- ]]; then
+            local new_package_name="luci-app-$package_name"
+            log "💡 检测到Lua文件，重命名为: $new_package_name"
+            package_name="$new_package_name"
+            
+            # 更新目标目录
+            local new_target_dir="$SOURCE_PKG_DIR/luci/$package_name"
+            if [ "$target_dir" != "$new_target_dir" ]; then
                 mv "$target_dir" "$new_target_dir" 2>/dev/null
                 target_dir="$new_target_dir"
             fi
@@ -785,11 +818,15 @@ EOF
         while IFS= read -r source_file; do
             local source_file_clean=$(echo "$source_file" | xargs)
             if [ -n "$source_file_clean" ]; then
+                # 从压缩包文件名获取包名
                 local package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\|tar\.xz\)$//')
-                # 如果包名不是luci-app-开头，尝试添加
+                
+                # 如果是源码压缩包，需要从处理过程中获取正确的包名
+                # 这里我们暂时使用文件名，在build_ipk中会使用实际的包名
                 if [[ ! "$package_name" =~ ^luci-app- ]] && [[ ! "$package_name" =~ ^luci-theme- ]] && [[ ! "$package_name" =~ ^luci-i18n- ]]; then
                     package_name="luci-app-$package_name"
                 fi
+                
                 if [ -n "$all_packages" ]; then
                     all_packages="$all_packages、$package_name"
                 else
@@ -904,10 +941,6 @@ fix_network() {
     export GIT_SSL_NO_VERIFY=1
     export PYTHONHTTPSVERIFY=0
     
-    # 添加代理设置（如果需要）
-    # export http_proxy=http://proxy.example.com:8080
-    # export https_proxy=http://proxy.example.com:8080
-    
     log "✅ 网络环境修复完成"
 }
 
@@ -931,7 +964,7 @@ download_dependencies() {
     done
 }
 
-# 步骤12: 编译IPK包
+# 步骤12: 编译IPK包 - 修复包存在性检查逻辑
 build_ipk() {
     local package_names="$1"
     local clean_build="$2"
@@ -948,20 +981,56 @@ build_ipk() {
     if [ -n "$package_names" ]; then
         all_packages="$package_names"
     fi
+    
+    # 对于源码压缩包，我们使用处理过程中确定的包名
+    # 这里我们需要从package目录获取实际处理的包名
     if [ -n "$SOURCE_PACKAGES" ]; then
+        # 查找package目录下所有目录，获取包名
+        local source_package_names=""
         while IFS= read -r source_file; do
             local source_file_clean=$(echo "$source_file" | xargs)
-            if [ -n "$source_file_clean" ]; then
-                local package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\|tar\.xz\)$//')
-                # 如果包名不是luci-app-开头，尝试添加
-                if [[ ! "$package_name" =~ ^luci-app- ]] && [[ ! "$package_name" =~ ^luci-theme- ]] && [[ ! "$package_name" =~ ^luci-i18n- ]]; then
-                    package_name="luci-app-$package_name"
-                fi
-                if [ -n "$all_packages" ]; then
-                    all_packages="$all_packages、$package_name"
+            if [ -z "$source_file_clean" ]; then
+                continue
+            fi
+            
+            # 从压缩包文件名猜测包名
+            local guessed_package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\|tar\.xz\)$//')
+            
+            # 先尝试从package目录查找实际包名
+            local found_package=""
+            
+            # 查找以 guessed_package_name 开头的目录
+            local found_dirs=$(find package -name "*${guessed_package_name}*" -type d 2>/dev/null)
+            if [ -n "$found_dirs" ]; then
+                for dir in $found_dirs; do
+                    local dir_name=$(basename "$dir")
+                    if [ -f "$dir/Makefile" ]; then
+                        # 尝试从Makefile读取PKG_NAME
+                        local pkg_name_from_makefile=$(grep -E '^PKG_NAME\s*[:?+]=' "$dir/Makefile" 2>/dev/null | head -1 | sed 's/^PKG_NAME\s*[:?+]=\s*//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                        if [ -n "$pkg_name_from_makefile" ]; then
+                            found_package="$pkg_name_from_makefile"
+                            break
+                        else
+                            found_package="$dir_name"
+                            break
+                        fi
+                    fi
+                done
+            fi
+            
+            # 如果没找到，使用猜测的包名并添加luci-app-前缀
+            if [ -z "$found_package" ]; then
+                if [[ ! "$guessed_package_name" =~ ^luci-app- ]] && [[ ! "$guessed_package_name" =~ ^luci-theme- ]] && [[ ! "$guessed_package_name" =~ ^luci-i18n- ]]; then
+                    found_package="luci-app-$guessed_package_name"
                 else
-                    all_packages="$package_name"
+                    found_package="$guessed_package_name"
                 fi
+            fi
+            
+            if [ -n "$all_packages" ]; then
+                all_packages="$all_packages、$found_package"
+            else
+                all_packages="$found_package"
             fi
         done <<< "$(split_string "$SOURCE_PACKAGES" "、")"
     fi
@@ -971,14 +1040,14 @@ build_ipk() {
         return 1
     fi
     
+    log "📦 要编译的包: $all_packages"
+    
     # 创建输出目录
     mkdir -p "$BUILD_DIR/ipk_output" 2>/dev/null
     
     # 创建编译日志目录
     local log_dir="$BUILD_DIR/compile_logs"
     mkdir -p "$log_dir" 2>/dev/null
-    
-    log "📦 要编译的包: $all_packages"
     
     # 检查简单的包用于测试
     local simple_packages=("luci-app-upnp" "luci-app-ddns" "luci-app-firewall" "luci-base" "luci-compat")
@@ -991,11 +1060,6 @@ build_ipk() {
             break
         fi
     done
-    
-    # 编译每个包
-    local package_count=0
-    local success_count=0
-    local ipk_found_total=0
     
     # 首先尝试编译一个简单包来测试环境
     if [ -n "$simple_packages_found" ]; then
@@ -1029,6 +1093,10 @@ build_ipk() {
     fi
     
     # 编译用户指定的包
+    local package_count=0
+    local success_count=0
+    local ipk_found_total=0
+    
     while IFS= read -r package; do
         local pkg_clean=$(echo "$package" | xargs)
         if [ -z "$pkg_clean" ]; then
@@ -1039,9 +1107,11 @@ build_ipk() {
         
         log "📦 编译包 [$package_count]: $pkg_clean"
         
-        # 检查包是否存在
-        if ! check_package_exists "$pkg_clean"; then
-            color_red "❌ 包 $pkg_clean 不存在，跳过"
+        # 检查包是否存在 - 修复逻辑
+        if check_package_exists "$pkg_clean"; then
+            log "✅ 包存在: $pkg_clean"
+        else
+            color_red "❌ 包 $pkg_clean 不存在，尝试查找替代名称..."
             
             # 检查是否可能是luci-app-xxx格式但找不到
             if [[ ! "$pkg_clean" =~ ^luci-app- ]] && [[ ! "$pkg_clean" =~ ^luci-theme- ]] && [[ ! "$pkg_clean" =~ ^luci-i18n- ]]; then
@@ -1051,12 +1121,23 @@ build_ipk() {
                     pkg_clean="$possible_name"
                 fi
             fi
-        fi
-        
-        # 如果仍然不存在，跳过此包
-        if ! check_package_exists "$pkg_clean"; then
-            color_red "❌ 包 $pkg_clean 不存在，跳过编译"
-            continue
+            
+            # 再次检查
+            if ! check_package_exists "$pkg_clean"; then
+                color_red "❌ 包 $pkg_clean 不存在，跳过编译"
+                
+                # 尝试查找类似的包名
+                log "🔍 尝试查找类似包名..."
+                local similar_packages=$(find feeds -name "*${pkg_clean}*" -type d 2>/dev/null | head -5)
+                if [ -n "$similar_packages" ]; then
+                    log "💡 找到类似包:"
+                    echo "$similar_packages" | while read similar; do
+                        local similar_name=$(basename "$similar")
+                        log "  📦 $similar_name"
+                    done
+                fi
+                continue
+            fi
         fi
         
         # 如果要求清理编译，先清理相关包
