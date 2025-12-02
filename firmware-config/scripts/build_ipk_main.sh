@@ -7,6 +7,7 @@ ENV_FILE="$BUILD_DIR/build_env.sh"
 LOG_FILE="$BUILD_DIR/build_ipk.log"
 SOURCE_PKG_DIR="$BUILD_DIR/source_packages"
 PACKAGES_BASE_DIR="firmware-config/packages"
+DEBUG_LOG="$BUILD_DIR/debug.log"
 
 # 颜色输出函数
 color_green() {
@@ -25,6 +26,12 @@ color_blue() {
     echo -e "\033[34m$1\033[0m"
 }
 
+# 调试日志函数
+debug_log() {
+    local message="[DEBUG $(date '+%Y-%m-%d %H:%M:%S')] $1"
+    echo "$message" >> "$DEBUG_LOG"
+}
+
 # 日志函数
 log() {
     local message="【$(date '+%Y-%m-%d %H:%M:%S')】$1"
@@ -32,6 +39,7 @@ log() {
     if [ -f "$LOG_FILE" ]; then
         echo "$message" >> "$LOG_FILE"
     fi
+    debug_log "$1"
 }
 
 # 错误处理函数（不退出）
@@ -89,6 +97,8 @@ split_string() {
 check_package_exists() {
     local package="$1"
     local found=0
+    
+    debug_log "检查包是否存在: $package"
     
     # 检查可能的包路径
     local possible_paths=(
@@ -174,7 +184,9 @@ setup_environment() {
     
     # 创建日志文件
     touch "$LOG_FILE" 2>/dev/null
+    touch "$DEBUG_LOG" 2>/dev/null
     sudo chown $USER:$USER "$LOG_FILE" 2>/dev/null || true
+    sudo chown $USER:$USER "$DEBUG_LOG" 2>/dev/null || true
     
     log "=== 安装编译依赖包 ==="
     sudo apt-get update 2>/dev/null || { log_warning "apt-get update失败"; }
@@ -294,7 +306,7 @@ download_custom_packages() {
     
     # 定义已知的自定义包仓库
     declare -A custom_repos=(
-        ["luci-app-filetransfer"]="https://github.com/f8q8/luci-app-filetransfer.git"
+        ["luci-app-filetransfer"]="https://github.com/immortalwrt/luci-app-filetransfer.git"
         ["luci-app-koolproxy"]="https://github.com/immortalwrt/luci-app-koolproxy.git"
         ["luci-app-unblockneteasemusic"]="https://github.com/immortalwrt/luci-app-unblockneteasemusic.git"
     )
@@ -653,7 +665,7 @@ generate_config() {
     
     rm -f .config .config.old 2>/dev/null
     
-    # 创建基础配置 - 修复：使用更通用的配置
+    # 创建基础配置 - 修复：添加更多基础依赖
     cat > .config << 'EOF'
 CONFIG_TARGET_x86=y
 CONFIG_TARGET_x86_64=y
@@ -686,6 +698,11 @@ CONFIG_PACKAGE_luci-mod-admin-full=y
 CONFIG_PACKAGE_luci-theme-bootstrap=y
 CONFIG_PACKAGE_luci-compat=y
 CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+CONFIG_PACKAGE_libopenssl=y
+CONFIG_PACKAGE_libstdcpp=y
+CONFIG_PACKAGE_libpthread=y
+CONFIG_PACKAGE_zlib=y
+CONFIG_PACKAGE_libuuid=y
 EOF
     
     if [ $? -ne 0 ]; then
@@ -834,6 +851,42 @@ download_dependencies() {
     done
 }
 
+# 检查包的依赖
+check_package_dependencies() {
+    local package="$1"
+    
+    log "检查包依赖: $package"
+    
+    cd "$BUILD_DIR" 2>/dev/null || { log_error "进入构建目录失败"; return 1; }
+    
+    # 查看包的Makefile以获取依赖信息
+    local makefile_path=""
+    
+    # 查找Makefile
+    if [ -f "package/$package/Makefile" ]; then
+        makefile_path="package/$package/Makefile"
+    elif [ -f "feeds/luci/$package/Makefile" ]; then
+        makefile_path="feeds/luci/$package/Makefile"
+    fi
+    
+    if [ -n "$makefile_path" ]; then
+        log "📄 Makefile路径: $makefile_path"
+        
+        # 提取依赖信息
+        local deps=$(grep -E "^(DEPENDS|PKG_BUILD_DEPENDS)" "$makefile_path" 2>/dev/null || true)
+        if [ -n "$deps" ]; then
+            log "📦 包依赖:"
+            echo "$deps" | while read dep; do
+                color_yellow "  🔗 $dep"
+            done
+        else
+            log "ℹ️ 未找到显式依赖信息"
+        fi
+    else
+        log_warning "未找到包的Makefile"
+    fi
+}
+
 # 步骤12: 编译IPK包
 build_ipk() {
     local package_names="$1"
@@ -905,6 +958,9 @@ build_ipk() {
             continue
         fi
         
+        # 检查包依赖
+        check_package_dependencies "$pkg_clean"
+        
         # 如果要求清理编译，先清理相关包
         if [ "$clean_build" = "true" ]; then
             log "🧹 清理包构建..."
@@ -913,21 +969,38 @@ build_ipk() {
         
         # 编译指定包 - 使用管道捕获错误
         log "开始编译包: $pkg_clean"
-        # 使用set -o pipefail来确保管道中的错误能被捕获
-        local pipe_status=0
-        set -o pipefail 2>/dev/null || true
         
-        # 编译命令
-        if make -j$(nproc) package/${pkg_clean}/compile V=s 2>&1 | tee -a "$LOG_FILE"; then
+        # 创建临时日志文件用于调试
+        local temp_log="$BUILD_DIR/compile_${pkg_clean}.log"
+        
+        # 编译命令，捕获详细输出
+        debug_log "开始编译包: $pkg_clean"
+        
+        # 使用更详细的编译命令
+        if make -j$(nproc) package/${pkg_clean}/compile V=sc 2>&1 | tee "$temp_log" | tee -a "$LOG_FILE"; then
             ((success_count++)) || true
             log "✅ 编译命令执行完成"
         else
-            pipe_status=$?
-            log_warning "包 $pkg_clean 编译过程有错误，退出码: $pipe_status"
+            local compile_status=$?
+            log_warning "包 $pkg_clean 编译过程有错误，退出码: $compile_status"
+            
+            # 显示编译错误的最后部分
+            log "🔍 编译错误摘要:"
+            tail -50 "$temp_log" 2>/dev/null | while read line; do
+                color_red "  $line"
+            done
+            
+            # 检查常见错误
+            if grep -q "recipe for target" "$temp_log" 2>/dev/null; then
+                log "💡 可能缺少依赖，尝试查找缺失文件..."
+                grep -i "error\|failed\|not found\|missing\|undefined" "$temp_log" 2>/dev/null | head -20 | while read error_line; do
+                    color_yellow "  🔍 $error_line"
+                done
+            fi
         fi
         
-        # 恢复pipefail设置
-        set +o pipefail 2>/dev/null || true
+        # 清理临时日志
+        rm -f "$temp_log" 2>/dev/null || true
         
         # 查找生成的IPK文件 - 更全面的搜索
         log "=== 查找包 $pkg_clean 的IPK文件 ==="
@@ -937,6 +1010,7 @@ build_ipk() {
         local search_paths=(
             "bin/packages/*/*/${pkg_clean}*.ipk"
             "bin/packages/*/*/${pkg_clean/-/_}*.ipk"
+            "bin/packages/*/*/*${pkg_clean}*.ipk"
             "bin/targets/*/*/packages/${pkg_clean}*.ipk"
             "bin/targets/*/*/packages/${pkg_clean/-/_}*.ipk"
         )
@@ -955,7 +1029,7 @@ build_ipk() {
         # 如果没找到，尝试深度搜索
         if [ $ipk_found -eq 0 ]; then
             log "🔍 深度搜索 $pkg_clean 的IPK文件..."
-            find "$BUILD_DIR" -name "*${pkg_clean}*.ipk" -type f 2>/dev/null | while read ipk_file; do
+            find "$BUILD_DIR/bin" -name "*${pkg_clean}*.ipk" -type f 2>/dev/null | while read ipk_file; do
                 log "✅ 找到IPK文件: $ipk_file"
                 cp "$ipk_file" "$BUILD_DIR/ipk_output/" 2>/dev/null || true
                 ipk_found=1
@@ -966,7 +1040,7 @@ build_ipk() {
         # 如果仍然没找到，尝试搜索相关文件
         if [ $ipk_found -eq 0 ]; then
             log "🔍 搜索所有IPK文件..."
-            find "$BUILD_DIR" -name "*.ipk" -type f 2>/dev/null | head -10 | while read ipk_file; do
+            find "$BUILD_DIR/bin" -name "*.ipk" -type f 2>/dev/null | while read ipk_file; do
                 local filename=$(basename "$ipk_file")
                 if [[ "$filename" == *"$pkg_clean"* ]] || [[ "$filename" == *"${pkg_clean//-/_}"* ]]; then
                     log "✅ 找到可能相关的IPK文件: $ipk_file"
@@ -983,8 +1057,8 @@ build_ipk() {
             color_red "❌ 未找到包 $pkg_clean 的IPK文件"
             log "⚠️ 可能的IPK文件位置:"
             find "$BUILD_DIR/bin" -name "*.ipk" -type f 2>/dev/null | head -5 | while read ipk_file; do
-                log "  📦 $(basename "$ipk_file")"
-            done
+                log "  📦 $ipk_file"
+            done || log "  未找到任何IPK文件"
         fi
         
         log "---"
@@ -1007,10 +1081,6 @@ build_ipk() {
     else
         if [ $success_count -gt 0 ]; then
             color_yellow "⚠️ 编译过程完成但未找到IPK文件"
-            log "💡 可能的原因:"
-            log "1. IPK文件生成在不同的目录"
-            log "2. 包名不匹配"
-            log "3. 编译成功但打包失败"
         else
             color_red "❌ 所有包编译失败"
         fi
@@ -1018,8 +1088,9 @@ build_ipk() {
         log "💡 调试建议:"
         log "1. 检查日志文件: $LOG_FILE"
         log "2. 检查包名是否正确"
-        log "3. 尝试清理构建: make package/clean"
+        log "3. 尝试编译更简单的包测试环境"
         log "4. 检查包的依赖是否满足"
+        log "5. 尝试使用不同的OpenWrt版本"
         
         # 显示可用的包
         log "🔍 可用的Luci应用包:"
@@ -1027,11 +1098,10 @@ build_ipk() {
             color_yellow "  📦 $(basename "$app")"
         done
         
-        # 如果失败但有编译尝试，显示实际生成的IPK文件位置
-        log "🔍 实际生成的IPK文件位置:"
-        find "$BUILD_DIR" -name "*.ipk" -type f 2>/dev/null | while read ipk_file; do
-            log "  📦 $ipk_file"
-        done || log "  未找到任何IPK文件"
+        # 建议尝试编译的简单包
+        log "💡 建议尝试编译以下简单包测试环境:"
+        color_green "  ✅ luci-app-upnp (简单，依赖少)"
+        color_green "  ✅ luci-app-ddns (常用，依赖明确)"
         
         return 1
     fi
