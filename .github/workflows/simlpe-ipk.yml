@@ -1,0 +1,152 @@
+name: 🛠️ 简化IPK包编译工作流
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_names:
+        description: '📦 要编译的IPK包名 (单个包，如: luci-app-upnp)'
+        required: true
+        type: string
+        default: 'luci-app-upnp'
+      version_selection:
+        description: '🔄 OpenWrt版本选择'
+        required: true
+        type: choice
+        default: '21.02'
+        options:
+        - '21.02'
+        - '23.05'
+      clean_build:
+        description: '🧹 全新编译'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  BUILD_DIR: /mnt/openwrt-build-simple
+
+jobs:
+  build-ipk-simple:
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: 检出仓库
+      uses: actions/checkout@v4
+
+    - name: 设置编译环境
+      run: |
+        echo "=== 设置编译环境 ==="
+        sudo apt-get update
+        sudo apt-get install -y build-essential git wget unzip \
+          libncurses5-dev libssl-dev python3 python3-distutils \
+          gcc g++ flex bison gawk make curl
+
+    - name: 创建构建目录
+      run: |
+        echo "=== 创建构建目录 ==="
+        sudo mkdir -p $BUILD_DIR
+        sudo chown -R $USER:$USER $BUILD_DIR
+
+    - name: 克隆源码
+      run: |
+        echo "=== 克隆源码 ==="
+        cd $BUILD_DIR
+        
+        if [ "${{ github.event.inputs.version_selection }}" = "23.05" ]; then
+          echo "使用 OpenWrt 23.05"
+          git clone --depth 1 --branch openwrt-23.05 https://github.com/openwrt/openwrt.git .
+        else
+          echo "使用 OpenWrt 21.02"
+          git clone --depth 1 --branch openwrt-21.02 https://github.com/openwrt/openwrt.git .
+        fi
+
+    - name: 更新 feeds
+      run: |
+        echo "=== 更新 feeds ==="
+        cd $BUILD_DIR
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: 配置编译
+      run: |
+        echo "=== 配置编译 ==="
+        cd $BUILD_DIR
+        
+        # 创建最小配置
+        cat > .config << EOF
+CONFIG_TARGET_x86_64=y
+CONFIG_TARGET_x86_64_DEVICE_generic=y
+CONFIG_PACKAGE_luci-base=y
+CONFIG_PACKAGE_luci-compat=y
+EOF
+        
+        # 添加要编译的包
+        echo "要编译的包: ${{ github.event.inputs.package_names }}"
+        
+        # 将包名分割并添加到配置
+        echo "${{ github.event.inputs.package_names }}" | tr '、' '\n' | while read package; do
+          if [ -n "$package" ]; then
+            echo "CONFIG_PACKAGE_${package}=y" >> .config
+            echo "✅ 添加包: $package"
+          fi
+        done
+        
+        make defconfig
+
+    - name: 下载依赖
+      run: |
+        echo "=== 下载依赖 ==="
+        cd $BUILD_DIR
+        make download -j$(nproc)
+
+    - name: 编译指定包
+      run: |
+        echo "=== 编译指定包 ==="
+        cd $BUILD_DIR
+        
+        # 编译每个包
+        echo "${{ github.event.inputs.package_names }}" | tr '、' '\n' | while read package; do
+          if [ -n "$package" ]; then
+            echo "=== 编译包: $package ==="
+            
+            # 清理（如果需要）
+            if [ "${{ github.event.inputs.clean_build }}" = "true" ]; then
+              make package/$package/clean 2>/dev/null || echo "清理失败，继续"
+            fi
+            
+            # 编译
+            make package/$package/compile -j$(nproc) V=s 2>&1 | tail -200
+            
+            # 查找生成的IPK
+            echo "=== 查找 $package 的IPK文件 ==="
+            find bin -name "*${package}*.ipk" -type f 2>/dev/null | head -5
+          fi
+        done
+
+    - name: 收集IPK文件
+      run: |
+        echo "=== 收集IPK文件 ==="
+        cd $BUILD_DIR
+        mkdir -p ipk_output
+        
+        # 查找所有IPK文件
+        find bin -name "*.ipk" -type f 2>/dev/null | while read ipk_file; do
+          echo "📦 找到: $ipk_file"
+          cp "$ipk_file" ipk_output/ 2>/dev/null || true
+        done
+        
+        # 显示结果
+        echo "=== 编译结果 ==="
+        ls -la ipk_output/ 2>/dev/null || echo "未找到IPK文件"
+
+    - name: 上传IPK文件
+      uses: actions/upload-artifact@v4
+      with:
+        name: ipk-packages-${{ github.event.inputs.version_selection }}
+        path: ${{ env.BUILD_DIR }}/ipk_output/
+        retention-days: 30
+
+    - name: 清理
+      if: always()
+      run: |
+        sudo rm -rf $BUILD_DIR
