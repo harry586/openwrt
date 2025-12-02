@@ -71,7 +71,7 @@ jobs:
         echo "=== 检查源码压缩包 ==="
         if [ -d "firmware-config/packages" ]; then
           echo "📦 可用的源码压缩包:"
-          find firmware-config/packages -name "*.zip" -o -name "*.tar.gz" -o -name "*.tgz" -o -name "*.tar.bz2" 2>/dev/null | while read file; do
+          find firmware-config/packages -name "*.zip" -o -name "*.tar.gz" -o -name "*.tgz" -o -name "*.tar.bz2" -o -name "*.tar.xz" 2>/dev/null | while read file; do
             echo "  - $(basename "$file")"
           done
         else
