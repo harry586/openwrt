@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package_names:
-        description: '📦 要编译的IPK包名 (单个包，如: luci-app-upnp)'
+        description: '📦 要编译的IPK包名 (用顿号、分隔，如: luci-app-upnp、luci-app-ddns)'
         required: true
         type: string
         default: 'luci-app-upnp'
@@ -37,9 +37,10 @@ jobs:
       run: |
         echo "=== 设置编译环境 ==="
         sudo apt-get update
-        sudo apt-get install -y build-essential git wget unzip \
-          libncurses5-dev libssl-dev python3 python3-distutils \
-          gcc g++ flex bison gawk make curl
+        sudo apt-get install -y build-essential git wget unzip
+        sudo apt-get install -y libncurses5-dev libssl-dev python3 python3-distutils
+        sudo apt-get install -y gcc g++ flex bison gawk make curl
+        sudo apt-get install -y rsync subversion tar gzip zstd
 
     - name: 创建构建目录
       run: |
@@ -53,11 +54,11 @@ jobs:
         cd $BUILD_DIR
         
         if [ "${{ github.event.inputs.version_selection }}" = "23.05" ]; then
-          echo "使用 OpenWrt 23.05"
-          git clone --depth 1 --branch openwrt-23.05 https://github.com/openwrt/openwrt.git .
+          echo "使用 ImmortalWrt 23.05"
+          git clone --depth 1 --branch openwrt-23.05 https://github.com/immortalwrt/immortalwrt.git .
         else
-          echo "使用 OpenWrt 21.02"
-          git clone --depth 1 --branch openwrt-21.02 https://github.com/openwrt/openwrt.git .
+          echo "使用 ImmortalWrt 21.02"
+          git clone --depth 1 --branch openwrt-21.02 https://github.com/immortalwrt/immortalwrt.git .
         fi
 
     - name: 更新 feeds
@@ -67,59 +68,81 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: 配置编译
+    - name: 创建基础配置
       run: |
-        echo "=== 配置编译 ==="
+        echo "=== 创建基础配置 ==="
         cd $BUILD_DIR
         
-        # 创建最小配置
-        cat > .config << EOF
-CONFIG_TARGET_x86_64=y
-CONFIG_TARGET_x86_64_DEVICE_generic=y
-CONFIG_PACKAGE_luci-base=y
-CONFIG_PACKAGE_luci-compat=y
-EOF
+        # 创建基础配置
+        rm -f .config
+        echo "CONFIG_TARGET_x86_64=y" >> .config
+        echo "CONFIG_TARGET_x86_64_DEVICE_generic=y" >> .config
+        echo "CONFIG_PACKAGE_luci-base=y" >> .config
+        echo "CONFIG_PACKAGE_luci-compat=y" >> .config
+
+    - name: 添加包配置
+      run: |
+        echo "=== 添加包配置 ==="
+        cd $BUILD_DIR
         
-        # 添加要编译的包
-        echo "要编译的包: ${{ github.event.inputs.package_names }}"
+        # 获取要编译的包名
+        PACKAGE_NAMES="${{ github.event.inputs.package_names }}"
+        echo "要编译的包: $PACKAGE_NAMES"
         
-        # 将包名分割并添加到配置
-        echo "${{ github.event.inputs.package_names }}" | tr '、' '\n' | while read package; do
+        # 分割包名并添加到配置
+        IFS='、' read -ra PKG_ARRAY <<< "$PACKAGE_NAMES"
+        for package in "${PKG_ARRAY[@]}"; do
           if [ -n "$package" ]; then
             echo "CONFIG_PACKAGE_${package}=y" >> .config
             echo "✅ 添加包: $package"
           fi
         done
-        
+
+    - name: 应用配置
+      run: |
+        echo "=== 应用配置 ==="
+        cd $BUILD_DIR
         make defconfig
+        echo "配置完成"
 
     - name: 下载依赖
       run: |
         echo "=== 下载依赖 ==="
         cd $BUILD_DIR
-        make download -j$(nproc)
+        make download -j$(nproc) DOWNLOAD_RETRIES=3
 
     - name: 编译指定包
       run: |
         echo "=== 编译指定包 ==="
         cd $BUILD_DIR
         
+        # 获取要编译的包名
+        PACKAGE_NAMES="${{ github.event.inputs.package_names }}"
+        CLEAN_BUILD="${{ github.event.inputs.clean_build }}"
+        
+        # 分割包名
+        IFS='、' read -ra PKG_ARRAY <<< "$PACKAGE_NAMES"
+        
         # 编译每个包
-        echo "${{ github.event.inputs.package_names }}" | tr '、' '\n' | while read package; do
+        for package in "${PKG_ARRAY[@]}"; do
           if [ -n "$package" ]; then
             echo "=== 编译包: $package ==="
             
             # 清理（如果需要）
-            if [ "${{ github.event.inputs.clean_build }}" = "true" ]; then
-              make package/$package/clean 2>/dev/null || echo "清理失败，继续"
+            if [ "$CLEAN_BUILD" = "true" ]; then
+              echo "🧹 清理包..."
+              make package/$package/clean 2>/dev/null || echo "清理失败，继续编译"
             fi
             
             # 编译
-            make package/$package/compile -j$(nproc) V=s 2>&1 | tail -200
-            
-            # 查找生成的IPK
-            echo "=== 查找 $package 的IPK文件 ==="
-            find bin -name "*${package}*.ipk" -type f 2>/dev/null | head -5
+            echo "开始编译..."
+            if make -j$(nproc) package/$package/compile; then
+              echo "✅ 编译成功: $package"
+            else
+              echo "❌ 编译失败: $package"
+              echo "尝试单线程编译..."
+              make -j1 package/$package/compile || echo "单线程编译也失败"
+            fi
           fi
         done
 
@@ -129,15 +152,117 @@ EOF
         cd $BUILD_DIR
         mkdir -p ipk_output
         
-        # 查找所有IPK文件
-        find bin -name "*.ipk" -type f 2>/dev/null | while read ipk_file; do
-          echo "📦 找到: $ipk_file"
-          cp "$ipk_file" ipk_output/ 2>/dev/null || true
+        # 获取要编译的包名
+        PACKAGE_NAMES="${{ github.event.inputs.package_names }}"
+        
+        # 分割包名并查找对应的IPK文件
+        IFS='、' read -ra PKG_ARRAY <<< "$PACKAGE_NAMES"
+        
+        IPK_COUNT=0
+        for package in "${PKG_ARRAY[@]}"; do
+          if [ -n "$package" ]; then
+            echo "=== 查找 $package 的IPK文件 ==="
+            
+            # 在多个位置查找IPK文件
+            SEARCH_PATHS=(
+              "bin/packages/*/*/${package}*.ipk"
+              "bin/packages/*/*/${package/-/_}*.ipk"
+              "bin/targets/*/*/packages/${package}*.ipk"
+            )
+            
+            for search_path in "${SEARCH_PATHS[@]}"; do
+              for ipk_file in $search_path; do
+                if [ -f "$ipk_file" ]; then
+                  echo "✅ 找到: $ipk_file"
+                  cp "$ipk_file" ipk_output/ 2>/dev/null || true
+                  ((IPK_COUNT++))
+                fi
+              done
+            done
+          fi
         done
+        
+        # 如果没有找到，尝试深度搜索
+        if [ $IPK_COUNT -eq 0 ]; then
+          echo "🔍 深度搜索所有IPK文件..."
+          find bin -name "*.ipk" -type f 2>/dev/null | head -10 | while read ipk_file; do
+            echo "📦 找到: $ipk_file"
+            cp "$ipk_file" ipk_output/ 2>/dev/null || true
+            ((IPK_COUNT++))
+          done
+        fi
         
         # 显示结果
         echo "=== 编译结果 ==="
-        ls -la ipk_output/ 2>/dev/null || echo "未找到IPK文件"
+        if [ $IPK_COUNT -gt 0 ]; then
+          echo "🎉 成功生成 $IPK_COUNT 个IPK文件"
+          ls -la ipk_output/
+          
+          # 创建文件列表
+          find ipk_output -name "*.ipk" -type f 2>/dev/null > ipk_output/file_list.txt 2>/dev/null || true
+        else
+          echo "❌ 未找到IPK文件"
+          
+          # 显示可能的问题
+          echo "💡 调试建议:"
+          echo "1. 检查包名是否正确"
+          echo "2. 尝试编译单个简单包: luci-app-upnp"
+          echo "3. 检查编译日志"
+        fi
+
+    - name: 创建安装脚本
+      run: |
+        echo "=== 创建安装脚本 ==="
+        cd $BUILD_DIR/ipk_output 2>/dev/null || mkdir -p $BUILD_DIR/ipk_output && cd $BUILD_DIR/ipk_output
+        
+        cat > install.sh << 'EOF'
+#!/bin/bash
+# IPK包安装脚本
+
+echo "=== IPK包安装脚本 ==="
+
+# 检查是否在OpenWrt系统
+if ! command -v opkg >/dev/null 2>&1; then
+  echo "❌ 这不是OpenWrt系统"
+  exit 1
+fi
+
+# 列出所有IPK文件
+IPK_FILES=$(ls *.ipk 2>/dev/null)
+if [ -z "$IPK_FILES" ]; then
+  echo "❌ 未找到IPK文件"
+  exit 1
+fi
+
+echo "找到以下IPK文件:"
+for file in *.ipk; do
+  echo "📦 $file"
+done
+
+echo ""
+read -p "是否安装所有包? (y/N): " CONFIRM
+if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+  echo "安装取消"
+  exit 0
+fi
+
+# 更新包列表
+echo "更新包列表..."
+opkg update
+
+# 安装所有包
+for file in *.ipk; do
+  echo ""
+  echo "安装: $file"
+  opkg install "$file" --force-overwrite
+done
+
+echo ""
+echo "✅ 安装完成"
+EOF
+        
+        chmod +x install.sh
+        echo "✅ 安装脚本创建完成"
 
     - name: 上传IPK文件
       uses: actions/upload-artifact@v4
@@ -146,7 +271,18 @@ EOF
         path: ${{ env.BUILD_DIR }}/ipk_output/
         retention-days: 30
 
-    - name: 清理
+    - name: 上传编译日志
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-logs-${{ github.event.inputs.version_selection }}
+        path: |
+          ${{ env.BUILD_DIR }}/logs/
+          ${{ env.BUILD_DIR }}/.config
+        retention-days: 7
+
+    - name: 清理构建目录
       if: always()
       run: |
+        echo "=== 清理构建目录 ==="
         sudo rm -rf $BUILD_DIR
