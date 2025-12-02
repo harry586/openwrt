@@ -119,6 +119,444 @@ check_package_exists() {
     return $found
 }
 
+# 从GitHub仓库下载自定义包
+download_custom_package() {
+    local package_name="$1"
+    local repo_url="$2"
+    
+    log "=== 下载自定义包 ==="
+    log "包名: $package_name"
+    log "仓库: $repo_url"
+    
+    cd "$BUILD_DIR" 2>/dev/null || { log_error "进入构建目录失败"; return 1; }
+    
+    # 提取仓库名
+    local repo_name=$(basename "$repo_url" .git)
+    local target_dir="package/$package_name"
+    
+    # 清理旧目录
+    rm -rf "$target_dir" 2>/dev/null
+    
+    # 克隆仓库
+    git clone --depth 1 "$repo_url" "$target_dir" 2>/dev/null
+    if [ $? -ne 0 ]; then
+        log_warning "克隆自定义包失败"
+        return 1
+    fi
+    
+    # 检查是否有Makefile
+    if [ ! -f "$target_dir/Makefile" ]; then
+        log_warning "自定义包没有Makefile，尝试查找..."
+        find "$target_dir" -name "Makefile" 2>/dev/null | head -1 | while read makefile; do
+            local subdir=$(dirname "$makefile")
+            if [ "$subdir" != "$target_dir" ]; then
+                log "📁 移动包文件从 $subdir 到 $target_dir"
+                mv "$subdir"/* "$target_dir"/ 2>/dev/null || true
+            fi
+        done
+    fi
+    
+    if [ -f "$target_dir/Makefile" ]; then
+        color_green "✅ 自定义包下载完成: $package_name"
+        return 0
+    else
+        log_warning "自定义包没有有效的Makefile"
+        return 1
+    fi
+}
+
+# 步骤1: 设置编译环境
+setup_environment() {
+    # 在设置环境前先创建构建目录
+    sudo mkdir -p "$BUILD_DIR" 2>/dev/null || { log_error "创建构建目录失败"; return 1; }
+    sudo chown -R $USER:$USER "$BUILD_DIR" 2>/dev/null || { log_warning "修改目录所有者失败"; }
+    sudo chmod -R 755 "$BUILD_DIR" 2>/dev/null || { log_warning "修改目录权限失败"; }
+    
+    # 创建日志文件
+    touch "$LOG_FILE" 2>/dev/null
+    sudo chown $USER:$USER "$LOG_FILE" 2>/dev/null || true
+    
+    log "=== 安装编译依赖包 ==="
+    sudo apt-get update 2>/dev/null || { log_warning "apt-get update失败"; }
+    
+    # 修复：添加更多基础编译工具
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+        gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip \
+        zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpath \
+        libpython3-dev python3 python3-dev python3-pip python3-setuptools \
+        python3-yaml xsltproc zip subversion ninja-build automake autoconf \
+        libtool pkg-config help2man texinfo aria2 liblz4-dev zstd \
+        libcurl4-openssl-dev groff texlive texinfo cmake \
+        gperf libxml2-utils libtool-bin libglib2.0-dev libgmp3-dev \
+        libmpc-dev libmpfr-dev qemu-utils upx-ucl libltdl-dev \
+        ccache python3-pip python3-venv libsqlite3-dev libffi-dev \
+        libreadline-dev libbz2-dev liblzma-dev tk-dev 2>/dev/null || { log_warning "安装依赖包失败"; }
+        
+    log "✅ 编译环境设置完成"
+}
+
+# 步骤2: 创建构建目录
+create_build_dir() {
+    log "=== 创建构建目录 ==="
+    sudo chown -R $USER:$USER "$BUILD_DIR" 2>/dev/null || { log_warning "修改目录所有者失败"; }
+    sudo chmod -R 755 "$BUILD_DIR" 2>/dev/null || { log_warning "修改目录权限失败"; }
+    log "✅ 构建目录准备完成"
+}
+
+# 步骤3: 初始化构建环境
+initialize_build_env() {
+    local version_selection="$1"
+    
+    cd "$BUILD_DIR" 2>/dev/null || { log_error "进入构建目录失败"; return 1; }
+    
+    # 版本选择 - 修复：使用 ImmortalWrt，包含更多包
+    log "=== 版本选择 ==="
+    if [ "$version_selection" = "23.05" ]; then
+        SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+        SELECTED_BRANCH="openwrt-23.05"
+    else
+        SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+        SELECTED_BRANCH="openwrt-21.02"
+    fi
+    log "✅ 版本选择完成: $SELECTED_BRANCH"
+    
+    # 保存环境变量
+    save_env || log_warning "保存环境变量失败"
+    
+    # 设置GitHub环境变量
+    echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> "$GITHUB_ENV" 2>/dev/null || true
+    echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> "$GITHUB_ENV" 2>/dev/null || true
+    
+    # 克隆源码 - 修复：增加重试和深度
+    log "=== 克隆源码 ==="
+    log "仓库: $SELECTED_REPO_URL"
+    log "分支: $SELECTED_BRANCH"
+    
+    # 清理目录
+    sudo rm -rf ./* ./.git* 2>/dev/null || true
+    
+    # 克隆源码，增加重试机制
+    for i in {1..3}; do
+        log "尝试第 $i 次克隆..."
+        if git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . 2>/dev/null; then
+            log "✅ 源码克隆完成"
+            break
+        elif [ $i -eq 3 ]; then
+            log_error "克隆源码失败，已尝试3次"
+            return 1
+        else
+            sleep 10
+        fi
+    done
+    
+    log "✅ 源码克隆完成"
+}
+
+# 步骤4: 配置Feeds
+configure_feeds() {
+    load_env
+    cd "$BUILD_DIR" 2>/dev/null || { log_error "进入构建目录失败"; return 1; }
+    
+    log "=== 配置Feeds ==="
+    
+    # 更新和安装所有 feeds
+    log "=== 更新Feeds ==="
+    for i in {1..3}; do
+        if ./scripts/feeds update -a 2>/dev/null; then
+            log "✅ Feeds 更新成功"
+            break
+        elif [ $i -eq 3 ]; then
+            log_warning "Feeds 更新有错误，但继续执行"
+            break
+        else
+            log "第 $i 次Feeds更新失败，重试..."
+            sleep 10
+        fi
+    done
+    
+    log "=== 安装Feeds ==="
+    ./scripts/feeds install -a 2>/dev/null || log_warning "安装feeds有错误，但继续执行"
+    
+    log "✅ Feeds配置完成"
+}
+
+# 步骤5: 下载自定义包
+download_custom_packages() {
+    local package_names="$1"
+    
+    if [ -z "$package_names" ]; then
+        log "=== 没有自定义包需要下载 ==="
+        return 0
+    fi
+    
+    log "=== 下载自定义包 ==="
+    
+    # 定义已知的自定义包仓库
+    declare -A custom_repos=(
+        ["luci-app-filetransfer"]="https://github.com/immortalwrt/luci-app-filetransfer.git"
+        ["luci-app-koolproxy"]="https://github.com/immortalwrt/luci-app-koolproxy.git"
+        ["luci-app-unblockneteasemusic"]="https://github.com/immortalwrt/luci-app-unblockneteasemusic.git"
+    )
+    
+    while IFS= read -r package; do
+        local pkg_clean=$(echo "$package" | xargs)
+        if [ -z "$pkg_clean" ]; then
+            continue
+        fi
+        
+        # 检查是否是自定义包
+        if [ -n "${custom_repos[$pkg_clean]}" ]; then
+            local repo_url="${custom_repos[$pkg_clean]}"
+            log "🔗 发现自定义包: $pkg_clean -> $repo_url"
+            
+            if download_custom_package "$pkg_clean" "$repo_url"; then
+                color_green "✅ 自定义包下载成功: $pkg_clean"
+            else
+                log_warning "自定义包下载失败，继续尝试从feeds编译"
+            fi
+        else
+            # 检查包是否存在，如果不存在，提示用户
+            if ! check_package_exists "$pkg_clean"; then
+                color_yellow "🔍 包 $pkg_clean 不存在，您可能需要提供自定义仓库或源码包"
+            fi
+        fi
+    done <<< "$(split_string "$package_names" "、")"
+    
+    log "✅ 自定义包下载完成"
+}
+
+# 步骤6: 处理源码压缩包
+process_source_packages() {
+    local source_packages_list="$1"
+    local build_all_packages="$2"
+    
+    # 修复：处理空字符串的情况
+    if [ -z "$source_packages_list" ] || [ "$source_packages_list" = '""' ] || [ "$source_packages_list" = "''" ]; then
+        source_packages_list=""
+    fi
+    
+    log "=== 处理源码压缩包 ==="
+    log "指定压缩包: $source_packages_list"
+    log "编译所有包: $build_all_packages"
+    
+    # 准备源码包目录
+    mkdir -p "$SOURCE_PKG_DIR" 2>/dev/null
+    mkdir -p "$SOURCE_PKG_DIR/luci" 2>/dev/null
+    mkdir -p "$SOURCE_PKG_DIR/temp" 2>/dev/null
+    
+    # 检查packages目录是否存在
+    if [ ! -d "$PACKAGES_BASE_DIR" ]; then
+        log_warning "源码包目录不存在: $PACKAGES_BASE_DIR"
+        SOURCE_PACKAGES=""
+        save_env 2>/dev/null || true
+        return 0
+    fi
+    
+    # 获取所有支持的压缩包
+    local all_compressed_files=$(find "$PACKAGES_BASE_DIR" -name "*.zip" -o -name "*.tar.gz" -o -name "*.tgz" -o -name "*.tar.bz2" 2>/dev/null)
+    
+    if [ -z "$all_compressed_files" ]; then
+        log_warning "目录中没有找到任何支持的压缩包文件"
+        SOURCE_PACKAGES=""
+        save_env 2>/dev/null || true
+        return 0
+    fi
+    
+    # 显示所有可用压缩包
+    log "📦 可用源码压缩包:"
+    echo "$all_compressed_files" | while read file; do
+        color_blue "  📦 $(basename "$file")"
+    done
+    
+    # 决定要处理的文件列表
+    local files_to_process=""
+    
+    if [ "$build_all_packages" = "true" ]; then
+        log "🔧 选择编译所有压缩包"
+        # 使用所有压缩包
+        files_to_process=$(echo "$all_compressed_files" | xargs -I {} basename {} 2>/dev/null)
+    elif [ -n "$source_packages_list" ]; then
+        log "🔧 选择编译指定压缩包"
+        # 使用指定的压缩包
+        files_to_process="$source_packages_list"
+    else
+        log "🔧 没有选择任何压缩包"
+        SOURCE_PACKAGES=""
+        save_env 2>/dev/null || true
+        return 0
+    fi
+    
+    # 将文件列表转换为换行分隔
+    local file_array=()
+    while IFS= read -r file; do
+        file_array+=("$file")
+    done <<< "$(echo "$files_to_process" | tr '、' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$')"
+    
+    # 如果选择了编译所有包，但用户也指定了文件，则优先使用指定的
+    if [ "$build_all_packages" = "false" ] && [ ${#file_array[@]} -eq 0 ]; then
+        log "🔧 没有指定要编译的压缩包"
+        SOURCE_PACKAGES=""
+        save_env 2>/dev/null || true
+        return 0
+    fi
+    
+    # 处理每个指定的源码压缩包
+    local processed_count=0
+    local error_count=0
+    local processed_files=""
+    
+    log "开始处理 ${#file_array[@]} 个源码压缩包"
+    
+    for source_file in "${file_array[@]}"; do
+        local source_file_clean=$(echo "$source_file" | xargs)
+        if [ -z "$source_file_clean" ]; then
+            continue
+        fi
+        
+        # 检查文件是否存在
+        local source_path="$PACKAGES_BASE_DIR/$source_file_clean"
+        
+        if [ ! -f "$source_path" ]; then
+            color_red "❌ 源码压缩包不存在: $source_file_clean"
+            ((error_count++)) || true
+            continue
+        fi
+        
+        log "处理源码包 [$((processed_count + error_count + 1))/${#file_array[@]}]: $source_file_clean"
+        
+        # 从文件名提取包名（去掉扩展名）
+        local package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\)$//')
+        
+        # 创建目标目录
+        local target_dir="$SOURCE_PKG_DIR/luci/$package_name"
+        rm -rf "$target_dir" 2>/dev/null
+        mkdir -p "$target_dir" 2>/dev/null
+        
+        # 解压文件
+        log "解压源码文件..."
+        local extract_success=0
+        if [[ "$source_file_clean" == *.zip ]]; then
+            if unzip -q "$source_path" -d "$target_dir" 2>/dev/null; then
+                extract_success=1
+            else
+                color_red "❌ 解压ZIP文件失败: $source_file_clean"
+            fi
+        elif [[ "$source_file_clean" == *.tar.gz ]] || [[ "$source_file_clean" == *.tgz ]]; then
+            if tar -xzf "$source_path" -C "$target_dir" 2>/dev/null; then
+                extract_success=1
+            else
+                color_red "❌ 解压TAR.GZ文件失败: $source_file_clean"
+            fi
+        elif [[ "$source_file_clean" == *.tar.bz2 ]]; then
+            if tar -xjf "$source_path" -C "$target_dir" 2>/dev/null; then
+                extract_success=1
+            else
+                color_red "❌ 解压TAR.BZ2文件失败: $source_file_clean"
+            fi
+        else
+            color_red "❌ 不支持的压缩格式: $source_file_clean"
+        fi
+        
+        if [ $extract_success -eq 0 ]; then
+            ((error_count++)) || true
+            continue
+        fi
+        
+        # 检查是否解压到了子目录
+        local subdirs=($(find "$target_dir" -maxdepth 1 -type d 2>/dev/null | grep -v "^$target_dir$"))
+        
+        if [ ${#subdirs[@]} -eq 1 ] && [ -d "${subdirs[0]}" ]; then
+            log "检测到子目录结构，移动文件..."
+            local subdir="${subdirs[0]}"
+            mv "$subdir"/* "$target_dir"/ 2>/dev/null || true
+            rm -rf "$subdir" 2>/dev/null
+        fi
+        
+        # 验证包结构
+        log "验证包结构: $package_name"
+        
+        # 检查必要文件
+        if [ ! -f "$target_dir/Makefile" ]; then
+            color_red "❌ 缺少关键文件: Makefile"
+            
+            # 尝试查找可能的Makefile
+            local found_makefile=$(find "$target_dir" -name "Makefile" -type f 2>/dev/null | head -1)
+            if [ -n "$found_makefile" ]; then
+                color_yellow "💡 在其他位置找到Makefile: $found_makefile"
+                local makefile_dir=$(dirname "$found_makefile")
+                if [ "$makefile_dir" != "$target_dir" ]; then
+                    log "移动Makefile和相关文件..."
+                    mv "$makefile_dir"/* "$target_dir"/ 2>/dev/null || true
+                    rm -rf "$makefile_dir" 2>/dev/null
+                fi
+            else
+                color_red "❌ 无法找到Makefile，包结构无效"
+                ((error_count++)) || true
+                continue
+            fi
+        fi
+        
+        if [ ! -f "$target_dir/Makefile" ]; then
+            color_red "❌ 最终检查：仍然缺少Makefile"
+            ((error_count++)) || true
+            continue
+        fi
+        
+        color_green "✅ 找到关键文件: Makefile"
+        
+        # 集成到构建系统
+        log "集成源码包到构建系统: $package_name"
+        cd "$BUILD_DIR" 2>/dev/null || { log_error "进入构建目录失败"; continue; }
+        
+        # 复制包到package目录
+        local build_pkg_dir="package/$package_name"
+        rm -rf "$build_pkg_dir" 2>/dev/null
+        mkdir -p "$build_pkg_dir" 2>/dev/null
+        
+        log "复制包文件到构建系统..."
+        if ! cp -r "$target_dir"/* "$build_pkg_dir"/ 2>/dev/null; then
+            color_red "❌ 复制包文件失败"
+            ((error_count++)) || true
+            continue
+        fi
+        
+        # 验证是否成功复制
+        if [ ! -f "$build_pkg_dir/Makefile" ]; then
+            color_red "❌ 复制后缺少Makefile"
+            ((error_count++)) || true
+            continue
+        fi
+        
+        color_green "✅ 源码包处理完成: $package_name"
+        ((processed_count++)) || true
+        
+        # 添加到已处理文件列表
+        if [ -n "$processed_files" ]; then
+            processed_files="$processed_files、$source_file_clean"
+        else
+            processed_files="$source_file_clean"
+        fi
+        
+    done
+    
+    # 保存处理后的文件列表到环境变量
+    SOURCE_PACKAGES="$processed_files"
+    save_env 2>/dev/null || log_warning "保存环境变量失败"
+    
+    log "=== 处理结果 ==="
+    if [ $processed_count -gt 0 ]; then
+        color_green "✅ 源码压缩包处理完成: 成功 $processed_count/${#file_array[@]} 个包"
+        log "✅ 处理的压缩包: $SOURCE_PACKAGES"
+    else
+        if [ $error_count -gt 0 ]; then
+            color_red "❌ 所有源码压缩包处理失败"
+        else
+            log "ℹ️ 没有处理任何源码压缩包"
+        fi
+    fi
+}
+
 # 验证包Makefile结构
 validate_package_makefile() {
     local package="$1"
@@ -289,376 +727,7 @@ EOF
     fi
 }
 
-# 修复包结构
-fix_package_structure() {
-    local pkg_dir="$1"
-    local package_name="$2"
-    
-    log "修复包结构: $package_name"
-    
-    # 检查目录结构
-    if [ ! -d "$pkg_dir/luasrc" ] && [ ! -d "$pkg_dir/src" ]; then
-        log "检测到非标准目录结构，重新组织..."
-        
-        # 查找Lua文件
-        local lua_files=$(find "$pkg_dir" -name "*.lua" -type f 2>/dev/null)
-        if [ -n "$lua_files" ]; then
-            mkdir -p "$pkg_dir/luasrc"
-            find "$pkg_dir" -name "*.lua" -type f 2>/dev/null -exec cp --parents {} "$pkg_dir/luasrc/" \; 2>/dev/null || true
-        fi
-        
-        # 查找HTML/JS/CSS文件
-        local web_files=$(find "$pkg_dir" \( -name "*.htm" -o -name "*.html" -o -name "*.js" -o -name "*.css" \) -type f 2>/dev/null)
-        if [ -n "$web_files" ]; then
-            mkdir -p "$pkg_dir/htdocs"
-            find "$pkg_dir" \( -name "*.htm" -o -name "*.html" -o -name "*.js" -o -name "*.css" \) -type f 2>/dev/null -exec cp --parents {} "$pkg_dir/htdocs/" \; 2>/dev/null || true
-        fi
-    fi
-    
-    # 检查并修复Makefile
-    local makefile_path="$pkg_dir/Makefile"
-    if [ -f "$makefile_path" ]; then
-        if validate_package_makefile "$package_name" "$makefile_path"; then
-            return 0
-        else
-            # 如果验证失败但Makefile存在，尝试修复
-            color_yellow "⚠️ 尝试修复现有Makefile"
-            return 1
-        fi
-    else
-        # 创建新的标准Makefile
-        color_yellow "⚠️ Makefile不存在，创建标准Makefile"
-        if create_standard_makefile "$pkg_dir" "$package_name"; then
-            return 0
-        else
-            return 1
-        fi
-    fi
-}
-
-# 步骤1: 设置编译环境
-setup_environment() {
-    # 在设置环境前先创建构建目录
-    sudo mkdir -p "$BUILD_DIR" 2>/dev/null || { log_error "创建构建目录失败"; return 1; }
-    sudo chown -R $USER:$USER "$BUILD_DIR" 2>/dev/null || { log_warning "修改目录所有者失败"; }
-    sudo chmod -R 755 "$BUILD_DIR" 2>/dev/null || { log_warning "修改目录权限失败"; }
-    
-    # 创建日志文件
-    touch "$LOG_FILE" 2>/dev/null
-    sudo chown $USER:$USER "$LOG_FILE" 2>/dev/null || true
-    
-    log "=== 安装编译依赖包 ==="
-    sudo apt-get update 2>/dev/null || { log_warning "apt-get update失败"; }
-    
-    # 修复：添加更多基础编译工具
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-        gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip \
-        zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpath \
-        libpython3-dev python3 python3-dev python3-pip python3-setuptools \
-        python3-yaml xsltproc zip subversion ninja-build automake autoconf \
-        libtool pkg-config help2man texinfo aria2 liblz4-dev zstd \
-        libcurl4-openssl-dev groff texlive texinfo cmake \
-        gperf libxml2-utils libtool-bin libglib2.0-dev libgmp3-dev \
-        libmpc-dev libmpfr-dev qemu-utils upx-ucl libltdl-dev \
-        ccache python3-pip python3-venv libsqlite3-dev libffi-dev \
-        libreadline-dev libbz2-dev liblzma-dev tk-dev 2>/dev/null || { log_warning "安装依赖包失败"; }
-        
-    log "✅ 编译环境设置完成"
-}
-
-# 步骤2: 创建构建目录
-create_build_dir() {
-    log "=== 创建构建目录 ==="
-    sudo chown -R $USER:$USER "$BUILD_DIR" 2>/dev/null || { log_warning "修改目录所有者失败"; }
-    sudo chmod -R 755 "$BUILD_DIR" 2>/dev/null || { log_warning "修改目录权限失败"; }
-    log "✅ 构建目录准备完成"
-}
-
-# 步骤3: 初始化构建环境
-initialize_build_env() {
-    local version_selection="$1"
-    
-    cd "$BUILD_DIR" 2>/dev/null || { log_error "进入构建目录失败"; return 1; }
-    
-    # 版本选择 - 修复：使用 ImmortalWrt，包含更多包
-    log "=== 版本选择 ==="
-    if [ "$version_selection" = "23.05" ]; then
-        SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-        SELECTED_BRANCH="openwrt-23.05"
-    else
-        SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-        SELECTED_BRANCH="openwrt-21.02"
-    fi
-    log "✅ 版本选择完成: $SELECTED_BRANCH"
-    
-    # 保存环境变量
-    save_env || log_warning "保存环境变量失败"
-    
-    # 设置GitHub环境变量
-    echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> "$GITHUB_ENV" 2>/dev/null || true
-    echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> "$GITHUB_ENV" 2>/dev/null || true
-    
-    # 克隆源码 - 修复：增加重试和深度
-    log "=== 克隆源码 ==="
-    log "仓库: $SELECTED_REPO_URL"
-    log "分支: $SELECTED_BRANCH"
-    
-    # 清理目录
-    sudo rm -rf ./* ./.git* 2>/dev/null || true
-    
-    # 克隆源码，增加重试机制
-    for i in {1..3}; do
-        log "尝试第 $i 次克隆..."
-        if git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . 2>/dev/null; then
-            log "✅ 源码克隆完成"
-            break
-        elif [ $i -eq 3 ]; then
-            log_error "克隆源码失败，已尝试3次"
-            return 1
-        else
-            sleep 10
-        fi
-    done
-    
-    log "✅ 源码克隆完成"
-}
-
-# 步骤4: 配置Feeds
-configure_feeds() {
-    load_env
-    cd "$BUILD_DIR" 2>/dev/null || { log_error "进入构建目录失败"; return 1; }
-    
-    log "=== 配置Feeds ==="
-    
-    # 更新和安装所有 feeds
-    log "=== 更新Feeds ==="
-    for i in {1..3}; do
-        if ./scripts/feeds update -a 2>/dev/null; then
-            log "✅ Feeds 更新成功"
-            break
-        elif [ $i -eq 3 ]; then
-            log_warning "Feeds 更新有错误，但继续执行"
-            break
-        else
-            log "第 $i 次Feeds更新失败，重试..."
-            sleep 10
-        fi
-    done
-    
-    log "=== 安装Feeds ==="
-    ./scripts/feeds install -a 2>/dev/null || log_warning "安装feeds有错误，但继续执行"
-    
-    log "✅ Feeds配置完成"
-}
-
-# 步骤5: 处理源码压缩包
-process_source_packages() {
-    local source_packages_list="$1"
-    local build_all_packages="$2"
-    
-    # 修复：处理空字符串的情况
-    if [ -z "$source_packages_list" ] || [ "$source_packages_list" = '""' ] || [ "$source_packages_list" = "''" ]; then
-        source_packages_list=""
-    fi
-    
-    log "=== 处理源码压缩包 ==="
-    log "指定压缩包: $source_packages_list"
-    log "编译所有包: $build_all_packages"
-    
-    # 准备源码包目录
-    mkdir -p "$SOURCE_PKG_DIR" 2>/dev/null
-    mkdir -p "$SOURCE_PKG_DIR/luci" 2>/dev/null
-    mkdir -p "$SOURCE_PKG_DIR/temp" 2>/dev/null
-    
-    # 检查packages目录是否存在
-    if [ ! -d "$PACKAGES_BASE_DIR" ]; then
-        log_warning "源码包目录不存在: $PACKAGES_BASE_DIR"
-        SOURCE_PACKAGES=""
-        save_env 2>/dev/null || true
-        return 0
-    fi
-    
-    # 获取所有支持的压缩包
-    local all_compressed_files=$(find "$PACKAGES_BASE_DIR" -name "*.zip" -o -name "*.tar.gz" -o -name "*.tgz" -o -name "*.tar.bz2" 2>/dev/null)
-    
-    if [ -z "$all_compressed_files" ]; then
-        log_warning "目录中没有找到任何支持的压缩包文件"
-        SOURCE_PACKAGES=""
-        save_env 2>/dev/null || true
-        return 0
-    fi
-    
-    # 显示所有可用压缩包
-    log "📦 可用源码压缩包:"
-    echo "$all_compressed_files" | while read file; do
-        color_blue "  📦 $(basename "$file")"
-    done
-    
-    # 决定要处理的文件列表
-    local files_to_process=""
-    
-    if [ "$build_all_packages" = "true" ]; then
-        log "🔧 选择编译所有压缩包"
-        # 使用所有压缩包
-        files_to_process=$(echo "$all_compressed_files" | xargs -I {} basename {} 2>/dev/null)
-    elif [ -n "$source_packages_list" ]; then
-        log "🔧 选择编译指定压缩包"
-        # 使用指定的压缩包
-        files_to_process="$source_packages_list"
-    else
-        log "🔧 没有选择任何压缩包"
-        SOURCE_PACKAGES=""
-        save_env 2>/dev/null || true
-        return 0
-    fi
-    
-    # 将文件列表转换为换行分隔
-    local file_array=()
-    while IFS= read -r file; do
-        file_array+=("$file")
-    done <<< "$(echo "$files_to_process" | tr '、' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$')"
-    
-    # 如果选择了编译所有包，但用户也指定了文件，则优先使用指定的
-    if [ "$build_all_packages" = "false" ] && [ ${#file_array[@]} -eq 0 ]; then
-        log "🔧 没有指定要编译的压缩包"
-        SOURCE_PACKAGES=""
-        save_env 2>/dev/null || true
-        return 0
-    fi
-    
-    # 处理每个指定的源码压缩包
-    local processed_count=0
-    local error_count=0
-    local processed_files=""
-    
-    log "开始处理 ${#file_array[@]} 个源码压缩包"
-    
-    for source_file in "${file_array[@]}"; do
-        local source_file_clean=$(echo "$source_file" | xargs)
-        if [ -z "$source_file_clean" ]; then
-            continue
-        fi
-        
-        # 检查文件是否存在
-        local source_path="$PACKAGES_BASE_DIR/$source_file_clean"
-        
-        if [ ! -f "$source_path" ]; then
-            color_red "❌ 源码压缩包不存在: $source_file_clean"
-            ((error_count++)) || true
-            continue
-        fi
-        
-        log "处理源码包 [$((processed_count + error_count + 1))/${#file_array[@]}]: $source_file_clean"
-        
-        # 从文件名提取包名（去掉扩展名）
-        local package_name=$(basename "$source_file_clean" | sed 's/\.\(zip\|tar\.gz\|tgz\|tar\.bz2\)$//')
-        
-        # 创建目标目录
-        local target_dir="$SOURCE_PKG_DIR/luci/$package_name"
-        rm -rf "$target_dir" 2>/dev/null
-        mkdir -p "$target_dir" 2>/dev/null
-        
-        # 解压文件
-        log "解压源码文件..."
-        local extract_success=0
-        if [[ "$source_file_clean" == *.zip ]]; then
-            if unzip -q "$source_path" -d "$target_dir" 2>/dev/null; then
-                extract_success=1
-            else
-                color_red "❌ 解压ZIP文件失败: $source_file_clean"
-            fi
-        elif [[ "$source_file_clean" == *.tar.gz ]] || [[ "$source_file_clean" == *.tgz ]]; then
-            if tar -xzf "$source_path" -C "$target_dir" 2>/dev/null; then
-                extract_success=1
-            else
-                color_red "❌ 解压TAR.GZ文件失败: $source_file_clean"
-            fi
-        elif [[ "$source_file_clean" == *.tar.bz2 ]]; then
-            if tar -xjf "$source_path" -C "$target_dir" 2>/dev/null; then
-                extract_success=1
-            else
-                color_red "❌ 解压TAR.BZ2文件失败: $source_file_clean"
-            fi
-        else
-            color_red "❌ 不支持的压缩格式: $source_file_clean"
-        fi
-        
-        if [ $extract_success -eq 0 ]; then
-            ((error_count++)) || true
-            continue
-        fi
-        
-        # 检查是否解压到了子目录
-        local subdirs=($(find "$target_dir" -maxdepth 1 -type d 2>/dev/null | grep -v "^$target_dir$"))
-        
-        if [ ${#subdirs[@]} -eq 1 ] && [ -d "${subdirs[0]}" ]; then
-            log "检测到子目录结构，移动文件..."
-            local subdir="${subdirs[0]}"
-            mv "$subdir"/* "$target_dir"/ 2>/dev/null || true
-            rm -rf "$subdir" 2>/dev/null
-        fi
-        
-        # 修复包结构
-        if ! fix_package_structure "$target_dir" "$package_name"; then
-            color_red "❌ 修复包结构失败: $package_name"
-            ((error_count++)) || true
-            continue
-        fi
-        
-        # 集成到构建系统
-        log "集成源码包到构建系统: $package_name"
-        cd "$BUILD_DIR" 2>/dev/null || { log_error "进入构建目录失败"; continue; }
-        
-        # 复制包到package目录
-        local build_pkg_dir="package/$package_name"
-        rm -rf "$build_pkg_dir" 2>/dev/null
-        mkdir -p "$build_pkg_dir" 2>/dev/null
-        
-        log "复制包文件到构建系统..."
-        if ! cp -r "$target_dir"/* "$build_pkg_dir"/ 2>/dev/null; then
-            color_red "❌ 复制包文件失败"
-            ((error_count++)) || true
-            continue
-        fi
-        
-        # 验证是否成功复制
-        if [ ! -f "$build_pkg_dir/Makefile" ]; then
-            color_red "❌ 复制后缺少Makefile"
-            ((error_count++)) || true
-            continue
-        fi
-        
-        color_green "✅ 源码包处理完成: $package_name"
-        ((processed_count++)) || true
-        
-        # 添加到已处理文件列表
-        if [ -n "$processed_files" ]; then
-            processed_files="$processed_files、$source_file_clean"
-        else
-            processed_files="$source_file_clean"
-        fi
-        
-    done
-    
-    # 保存处理后的文件列表到环境变量
-    SOURCE_PACKAGES="$processed_files"
-    save_env 2>/dev/null || log_warning "保存环境变量失败"
-    
-    log "=== 处理结果 ==="
-    if [ $processed_count -gt 0 ]; then
-        color_green "✅ 源码压缩包处理完成: 成功 $processed_count/${#file_array[@]} 个包"
-        log "✅ 处理的压缩包: $SOURCE_PACKAGES"
-    else
-        if [ $error_count -gt 0 ]; then
-            color_red "❌ 所有源码压缩包处理失败"
-        else
-            log "ℹ️ 没有处理任何源码压缩包"
-        fi
-    fi
-}
-
-# 步骤7: 编译前空间检查 (已修复)
+# 步骤7: 编译前空间检查
 pre_build_space_check() {
     log "=== 编译前空间检查 ==="
     df -h 2>/dev/null || true
@@ -689,7 +758,7 @@ generate_config() {
     
     rm -f .config .config.old 2>/dev/null
     
-    # 创建基础配置 - 修复：添加更多基础依赖
+    # 创建基础配置
     cat > .config << 'EOF'
 CONFIG_TARGET_x86=y
 CONFIG_TARGET_x86_64=y
@@ -762,10 +831,9 @@ EOF
         return 1
     fi
     
-    # 添加要编译的包 - 支持多个包
+    # 添加要编译的包
     log "=== 添加目标包 ==="
     
-    # 使用更安全的方法分割字符串
     while IFS= read -r package; do
         local pkg_clean=$(echo "$package" | xargs)
         if [ -n "$pkg_clean" ]; then
@@ -797,7 +865,7 @@ apply_config() {
     
     log "=== 应用配置 ==="
     
-    # 显示启用的包 - 使用绿色显示
+    # 显示启用的包
     log "=== 已启用的包列表 ==="
     grep "^CONFIG_PACKAGE_.*=y$" .config 2>/dev/null | while read line; do
         local pkg_name=$(echo "$line" | sed 's/CONFIG_PACKAGE_\(.*\)=y/\1/')
@@ -863,7 +931,7 @@ download_dependencies() {
     cd "$BUILD_DIR" 2>/dev/null || { log_error "进入构建目录失败"; return 1; }
     
     log "=== 下载依赖包 ==="
-    # 修复：增加重试次数
+    # 增加重试次数
     for i in {1..3}; do
         log "第 $i 次尝试下载依赖..."
         if make -j1 download DOWNLOAD_RETRIES=3 2>/dev/null; then
@@ -951,7 +1019,7 @@ build_ipk() {
             
             # 尝试修复包结构
             log "💡 尝试修复包结构..."
-            if fix_package_structure "package/$pkg_clean" "$pkg_clean"; then
+            if create_standard_makefile "package/$pkg_clean" "$pkg_clean"; then
                 color_green "✅ 包结构修复成功"
             else
                 color_red "❌ 包结构修复失败，跳过"
@@ -961,7 +1029,7 @@ build_ipk() {
             # 验证Makefile结构
             if ! validate_package_makefile "$pkg_clean" "$makefile_path"; then
                 color_yellow "⚠️ Makefile验证失败，尝试修复..."
-                if fix_package_structure "package/$pkg_clean" "$pkg_clean"; then
+                if create_standard_makefile "package/$pkg_clean" "$pkg_clean"; then
                     color_green "✅ Makefile修复成功"
                 else
                     color_red "❌ Makefile修复失败，跳过"
@@ -1005,7 +1073,7 @@ build_ipk() {
                 log "💡 错误: 找不到编译规则，可能是Makefile格式不正确"
                 # 重新验证并修复Makefile
                 log "🔄 重新验证Makefile..."
-                if fix_package_structure "package/$pkg_clean" "$pkg_clean"; then
+                if create_standard_makefile "package/$pkg_clean" "$pkg_clean"; then
                     color_green "✅ Makefile修复完成，重新尝试编译"
                     # 重新尝试编译
                     if make package/${pkg_clean}/compile V=s 2>&1 | tee "$temp_log" | tee -a "$LOG_FILE"; then
@@ -1386,6 +1454,9 @@ main() {
             ;;
         "configure_feeds")
             configure_feeds
+            ;;
+        "download_custom_packages")
+            download_custom_packages "$arg1"
             ;;
         "process_source_packages")
             process_source_packages "$arg1" "$arg2"
