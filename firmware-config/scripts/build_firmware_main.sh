@@ -11,6 +11,13 @@ log() {
     echo "【$(date '+%Y-%m-%d %H:%M:%S')】$1"
 }
 
+# 详细日志函数
+log_detail() {
+    if [ "$DEBUG_MODE" = "true" ]; then
+        echo "🔍 $(date '+%Y-%m-%d %H:%M:%S')】$1"
+    fi
+}
+
 # 错误处理函数
 handle_error() {
     log "❌ 错误发生在: $1"
@@ -30,12 +37,16 @@ export DEVICE="$DEVICE"
 export CONFIG_MODE="$CONFIG_MODE"
 EOF
     chmod +x $ENV_FILE
+    log "✅ 环境变量已保存到 $ENV_FILE"
 }
 
 # 加载环境变量
 load_env() {
     if [ -f "$ENV_FILE" ]; then
         source $ENV_FILE
+        log_detail "从 $ENV_FILE 加载环境变量"
+    else
+        log "⚠️ 环境文件不存在: $ENV_FILE"
     fi
 }
 
@@ -43,10 +54,16 @@ load_env() {
 setup_environment() {
     log "=== 安装编译依赖包 ==="
     
-    # 首先更新包列表
-    sudo apt-get update || handle_error "apt-get update失败"
+    # 创建安装日志
+    INSTALL_LOG="/tmp/openwrt_deps_install.log"
+    echo "安装日志: $INSTALL_LOG"
     
-    # 安装编译OpenWrt所需的所有依赖包
+    # 更新包列表
+    log "更新包列表..."
+    sudo apt-get update 2>&1 | tee $INSTALL_LOG
+    
+    # 安装所有依赖包
+    log "安装编译依赖包..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
         build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
         gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip \
@@ -54,8 +71,16 @@ setup_environment() {
         libpython3-dev python3 python3-dev python3-pip python3-setuptools \
         python3-yaml xsltproc zip subversion ninja-build automake autoconf \
         libtool pkg-config help2man texinfo aria2 liblz4-dev zstd \
-        libcurl4-openssl-dev groff texlive texinfo cmake jq \
-        ccache u-boot-tools gperf nodejs npm swig time xsltproc || handle_error "安装依赖包失败"
+        libcurl4-openssl-dev groff texlive texinfo cmake jq ccache \
+        2>&1 | tee -a $INSTALL_LOG
+    
+    # 检查关键工具
+    log "检查关键工具安装情况:"
+    echo "gcc: $(gcc --version 2>/dev/null | head -1 || echo '未安装')"
+    echo "g++: $(g++ --version 2>/dev/null | head -1 || echo '未安装')"
+    echo "make: $(make --version 2>/dev/null | head -1 || echo '未安装')"
+    echo "git: $(git --version 2>/dev/null | head -1 || echo '未安装')"
+    echo "python3: $(python3 --version 2>/dev/null | head -1 || echo '未安装')"
     
     log "✅ 编译环境设置完成"
 }
@@ -63,9 +88,14 @@ setup_environment() {
 # 步骤2: 创建构建目录
 create_build_dir() {
     log "=== 创建构建目录 ==="
-    sudo mkdir -p $BUILD_DIR || handle_error "创建构建目录失败"
-    sudo chown -R $USER:$USER $BUILD_DIR || handle_error "修改目录所有者失败"
-    sudo chmod -R 755 $BUILD_DIR || handle_error "修改目录权限失败"
+    
+    log "创建目录: $BUILD_DIR"
+    sudo mkdir -p $BUILD_DIR
+    sudo chown -R $USER:$USER $BUILD_DIR
+    sudo chmod -R 755 $BUILD_DIR
+    
+    log "目录创建完成:"
+    ls -ld $BUILD_DIR
     log "✅ 构建目录创建完成"
 }
 
@@ -115,7 +145,7 @@ initialize_build_env() {
     
     CONFIG_MODE="$config_mode"
     
-    log "目标: $TARGET"
+    log "目标平台: $TARGET"
     log "子目标: $SUBTARGET"
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
@@ -137,11 +167,18 @@ initialize_build_env() {
     log "分支: $SELECTED_BRANCH"
     
     # 清理目录
-    sudo rm -rf ./* ./.git* 2>/dev/null || true
+    if [ -d ".git" ]; then
+        log "源码已存在，跳过克隆"
+    else
+        log "清理目录并克隆源码..."
+        sudo rm -rf ./* ./.git* 2>/dev/null || true
+        
+        # 克隆源码
+        git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
+        log "✅ 源码克隆完成"
+    fi
     
-    # 克隆源码
-    git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
-    log "✅ 源码克隆完成"
+    log "✅ 构建环境初始化完成"
 }
 
 # 步骤4: 添加 TurboACC 支持
@@ -156,8 +193,12 @@ add_turboacc_support() {
         
         if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             log "🔧 为 23.05 添加 TurboACC 支持"
-            echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
-            log "✅ TurboACC feed 添加完成"
+            if ! grep -q "turboacc" feeds.conf.default; then
+                echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+                log "✅ TurboACC feed 添加完成"
+            else
+                log "✅ TurboACC feed 已存在"
+            fi
         else
             log "ℹ️  21.02 版本已内置 TurboACC，无需额外添加"
         fi
@@ -180,6 +221,7 @@ configure_feeds() {
     fi
     
     # 创建基础 feeds 配置
+    log "创建feeds配置..."
     cat > feeds.conf.default << EOF
 src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH
 src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH
@@ -187,8 +229,13 @@ EOF
     
     # 如果是 23.05 且正常模式，添加 turboacc feed
     if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] && [ "$CONFIG_MODE" = "normal" ]; then
-        echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+        if ! grep -q "turboacc" feeds.conf.default; then
+            echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+        fi
     fi
+    
+    log "feeds.conf.default 内容:"
+    cat feeds.conf.default
     
     # 更新和安装所有 feeds
     log "=== 更新Feeds ==="
@@ -208,12 +255,12 @@ install_turboacc_packages() {
     log "=== 安装 TurboACC 包 ==="
     
     # 更新 turboacc feed
-    ./scripts/feeds update turboacc || handle_error "更新turboacc feed失败"
+    ./scripts/feeds update turboacc || log "⚠️ 更新turboacc feed失败"
     
     # 安装 turboacc 相关包
-    ./scripts/feeds install -p turboacc luci-app-turboacc || log "⚠️ 安装luci-app-turboacc失败"
-    ./scripts/feeds install -p turboacc kmod-shortcut-fe || log "⚠️ 安装kmod-shortcut-fe失败"
-    ./scripts/feeds install -p turboacc kmod-fast-classifier || log "⚠️ 安装kmod-fast-classifier失败"
+    ./scripts/feeds install -p turboacc luci-app-turboacc 2>/dev/null || log "⚠️ 安装luci-app-turboacc失败"
+    ./scripts/feeds install -p turboacc kmod-shortcut-fe 2>/dev/null || log "⚠️ 安装kmod-shortcut-fe失败"
+    ./scripts/feeds install -p turboacc kmod-fast-classifier 2>/dev/null || log "⚠️ 安装kmod-fast-classifier失败"
     
     log "✅ TurboACC 包安装完成"
 }
@@ -229,7 +276,7 @@ install_filetransfer_packages() {
     ./scripts/feeds update luci || handle_error "更新luci feed失败"
     
     # 尝试安装官方源的文件传输插件
-    log "🔧 尝试安装官方源 luci-app-filetransfer"
+    log "尝试安装官方源 luci-app-filetransfer"
     if ./scripts/feeds install -p luci luci-app-filetransfer 2>/dev/null; then
         log "✅ 成功安装官方源 luci-app-filetransfer"
     else
@@ -252,7 +299,9 @@ install_filetransfer_packages() {
 # 步骤8: 编译前空间检查
 pre_build_space_check() {
     log "=== 编译前空间检查 ==="
+    echo "磁盘使用情况:"
     df -h
+    echo ""
     AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
     AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
     log "/mnt 可用空间: ${AVAILABLE_GB}G"
@@ -284,7 +333,7 @@ generate_config() {
     echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
     
     # 🚨 关键修复：彻底禁用 passwall 和 rclone 系列插件
-    log "🔧 彻底禁用 passwall 和 rclone 系列插件"
+    log "彻底禁用 passwall 和 rclone 系列插件"
     
     echo "# ==========================================" >> .config
     echo "# 🚫 强制禁用 passwall 系列插件" >> .config
@@ -372,14 +421,14 @@ generate_config() {
     # ============================================================================
     # 🚨 USB 完全修复通用配置
     # ============================================================================
-    log "=== 🚨 USB 完全修复通用配置 - 开始 ==="
+    log "=== USB 完全修复通用配置 - 开始 ==="
     
     # USB核心驱动
-    echo "# 🟢 USB 核心驱动 - 基础必须" >> .config
+    echo "# USB 核心驱动 - 基础必须" >> .config
     echo "CONFIG_PACKAGE_kmod-usb-core=y" >> .config
     
     # USB主机控制器驱动
-    echo "# 🟢 USB 主机控制器驱动 - 通用支持" >> .config
+    echo "# USB 主机控制器驱动 - 通用支持" >> .config
     echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
     echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
     echo "CONFIG_PACKAGE_kmod-usb-ehci=y" >> .config
@@ -388,11 +437,11 @@ generate_config() {
     echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config
     
     # 平台专用USB控制器驱动
-    echo "# 🟡 平台专用USB控制器驱动" >> .config
+    echo "# 平台专用USB控制器驱动" >> .config
     
     # IPQ40xx 专用USB驱动
     if [ "$TARGET" = "ipq40xx" ]; then
-        log "🚨 IPQ40xx 专用USB控制器驱动"
+        log "IPQ40xx 专用USB控制器驱动"
         echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
@@ -401,7 +450,7 @@ generate_config() {
     
     # MT76xx/雷凌 平台USB驱动
     if [ "$TARGET" = "ramips" ]; then
-        log "🚨 MT76xx/雷凌 平台USB控制器驱动"
+        log "MT76xx/雷凌 平台USB控制器驱动"
         echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
@@ -409,18 +458,18 @@ generate_config() {
     fi
     
     # USB 存储驱动
-    echo "# 🟢 USB 存储驱动 - 核心功能" >> .config
+    echo "# USB 存储驱动 - 核心功能" >> .config
     echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
     echo "CONFIG_PACKAGE_kmod-usb-storage-extras=y" >> .config
     echo "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config
     
     # SCSI 支持
-    echo "# 🟢 SCSI 支持 - 硬盘和U盘必需" >> .config
+    echo "# SCSI 支持 - 硬盘和U盘必需" >> .config
     echo "CONFIG_PACKAGE_kmod-scsi-core=y" >> .config
     echo "CONFIG_PACKAGE_kmod-scsi-generic=y" >> .config
     
     # 文件系统支持
-    echo "# 🟢 文件系统支持 - 完整文件系统兼容" >> .config
+    echo "# 文件系统支持 - 完整文件系统兼容" >> .config
     echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
     echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
     echo "CONFIG_PACKAGE_kmod-fs-exfat=y" >> .config
@@ -428,38 +477,38 @@ generate_config() {
     
     # NTFS配置
     if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-        log "🔧 23.05版本NTFS配置优化"
+        log "23.05版本NTFS配置优化"
         echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
         echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
         echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
         echo "# CONFIG_PACKAGE_ntfs-3g-utils is not set" >> .config
         echo "# CONFIG_PACKAGE_ntfs3-mount is not set" >> .config
     else
-        log "🔧 21.02版本NTFS配置"
+        log "21.02版本NTFS配置"
         echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
         echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
         echo "CONFIG_PACKAGE_ntfs3-mount=y" >> .config
     fi
     
     # 编码支持
-    echo "# 🟢 编码支持 - 多语言文件名兼容" >> .config
+    echo "# 编码支持 - 多语言文件名兼容" >> .config
     echo "CONFIG_PACKAGE_kmod-nls-utf8=y" >> .config
     echo "CONFIG_PACKAGE_kmod-nls-cp437=y" >> .config
     echo "CONFIG_PACKAGE_kmod-nls-iso8859-1=y" >> .config
     echo "CONFIG_PACKAGE_kmod-nls-cp936=y" >> .config
     
     # 自动挂载工具
-    echo "# 🟢 自动挂载工具 - 即插即用支持" >> .config
+    echo "# 自动挂载工具 - 即插即用支持" >> .config
     echo "CONFIG_PACKAGE_block-mount=y" >> .config
     echo "CONFIG_PACKAGE_automount=y" >> .config
     
     # USB 工具和热插拔支持
-    echo "# 🟢 USB 工具和热插拔支持 - 设备管理" >> .config
+    echo "# USB 工具和热插拔支持 - 设备管理" >> .config
     echo "CONFIG_PACKAGE_usbutils=y" >> .config
     echo "CONFIG_PACKAGE_lsusb=y" >> .config
     echo "CONFIG_PACKAGE_udev=y" >> .config
     
-    log "=== 🚨 USB 完全修复通用配置 - 完成 ==="
+    log "=== USB 完全修复通用配置 - 完成 ==="
     
     # 基础中文语言包
     echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
@@ -471,14 +520,14 @@ generate_config() {
     
     # 配置模式选择
     if [ "$CONFIG_MODE" = "base" ]; then
-        log "🔧 使用基础模式 (最小化，用于测试编译)"
+        log "使用基础模式 (最小化，用于测试编译)"
         # 基础模式明确禁用 TurboACC
         echo "# CONFIG_PACKAGE_luci-app-turboacc is not set" >> .config
         echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
         echo "# CONFIG_PACKAGE_kmod-fast-classifier is not set" >> .config
         echo "# CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn is not set" >> .config
     else
-        log "🔧 使用正常模式 (完整功能)"
+        log "使用正常模式 (完整功能)"
         # 正常模式插件配置
         NORMAL_PLUGINS=(
           "CONFIG_PACKAGE_luci-app-turboacc=y"
@@ -534,7 +583,7 @@ generate_config() {
     
     # 处理额外安装插件
     if [ -n "$extra_packages" ]; then
-        log "🔧 处理额外安装插件: $extra_packages"
+        log "处理额外安装插件: $extra_packages"
         # 将顿号替换为分号，以便后续处理
         extra_packages=$(echo "$extra_packages" | sed 's/、/;/g')
         IFS=';' read -ra EXTRA_PKGS <<< "$extra_packages"
@@ -558,6 +607,7 @@ generate_config() {
     fi
     
     log "✅ 智能配置生成完成"
+    log "配置文件大小: $(wc -l < .config) 行"
 }
 
 # 步骤10: 验证USB配置
@@ -565,21 +615,24 @@ verify_usb_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 🚨 详细验证USB和存储配置 ==="
+    log "=== 详细验证USB和存储配置 ==="
     
-    echo "1. 🟢 USB核心模块:"
+    echo "1. USB核心模块:"
     grep "CONFIG_PACKAGE_kmod-usb-core" .config | grep "=y" && echo "✅ USB核心" || echo "❌ 缺少USB核心"
     
-    echo "2. 🟢 USB控制器:"
+    echo "2. USB控制器:"
     grep -E "CONFIG_PACKAGE_kmod-usb2|CONFIG_PACKAGE_kmod-usb3" .config | grep "=y" || echo "❌ 缺少USB控制器"
     
-    echo "3. 🚨 平台专用USB控制器:"
+    echo "3. 平台专用USB控制器:"
     grep -E "CONFIG_PACKAGE_kmod-usb-dwc3|CONFIG_PACKAGE_kmod-usb-dwc3-qcom" .config | grep "=y" || echo "ℹ️  无平台专用USB控制器"
     
-    echo "4. 🟢 USB存储:"
+    echo "4. USB存储:"
     grep "CONFIG_PACKAGE_kmod-usb-storage" .config | grep "=y" || echo "❌ 缺少USB存储"
     
-    log "=== 🚨 USB配置验证完成 ==="
+    echo "5. 文件系统支持:"
+    grep -E "CONFIG_PACKAGE_kmod-fs-ext4|CONFIG_PACKAGE_kmod-fs-vfat|CONFIG_PACKAGE_kmod-fs-ntfs" .config | grep "=y" || echo "❌ 缺少文件系统支持"
+    
+    log "=== USB配置验证完成 ==="
 }
 
 # 步骤11: 应用配置
@@ -590,12 +643,12 @@ apply_config() {
     log "=== 应用配置 ==="
     
     # 显示当前配置摘要
-    log "=== 配置摘要 ==="
+    log "配置摘要:"
     log "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
     
     # 🚨 关键修复：23.05版本需要先清理可能的配置冲突
     if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-        log "🔧 23.05版本配置预处理"
+        log "23.05版本配置预处理"
         # 确保ntfs-3g相关配置被正确禁用
         sed -i 's/CONFIG_PACKAGE_ntfs-3g=y/# CONFIG_PACKAGE_ntfs-3g is not set/g' .config
         sed -i 's/CONFIG_PACKAGE_ntfs-3g-utils=y/# CONFIG_PACKAGE_ntfs-3g-utils is not set/g' .config
@@ -605,14 +658,14 @@ apply_config() {
     make defconfig || handle_error "应用配置失败"
     
     # 显示应用后的配置
-    log "=== 应用配置后状态 ==="
+    log "应用配置后状态:"
     log "最终启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
     
     # 显示所有启用的插件状态
-    log "=== ✅ 所有启用的插件列表 ==="
+    log "启用的插件列表:"
     grep "^CONFIG_PACKAGE_luci-app-.*=y$" .config | sed 's/CONFIG_PACKAGE_//;s/=y//' | while read plugin; do
         log "  ✅ $plugin"
-    done
+    done | head -20
     
     log "✅ 配置应用完成"
 }
@@ -638,7 +691,7 @@ download_dependencies() {
     
     # 先检查网络
     if ! curl -s --connect-timeout 10 https://github.com > /dev/null; then
-        log "⚠️ 网络连接可能有问题，尝试设置代理"
+        log "网络连接可能有问题，尝试设置代理"
         export http_proxy=""
         export https_proxy=""
     fi
@@ -659,7 +712,7 @@ download_dependencies() {
     return 0
 }
 
-# 步骤14: 处理自定义文件
+# 步骤14: 处理自定义文件（修复版）
 process_custom_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -673,13 +726,48 @@ process_custom_files() {
     echo "自定义文件处理报告 - $(date)" > $CUSTOM_LOG
     echo "==========================================" >> $CUSTOM_LOG
     
-    # 检查自定义文件目录是否存在
-    if [ -d "$CUSTOM_FILES_DIR" ]; then
-        log "✅ 找到自定义文件目录: $CUSTOM_FILES_DIR"
-        echo "找到自定义文件目录: $CUSTOM_FILES_DIR" >> $CUSTOM_LOG
+    # 定义可能的自定义文件目录位置
+    CUSTOM_DIRS=(
+        "/home/runner/work/$(basename $(pwd))/$(basename $(pwd))/firmware-config/custom-files"
+        "$(pwd)/../firmware-config/custom-files"
+        "$(pwd)/firmware-config/custom-files"
+        "./firmware-config/custom-files"
+        "../firmware-config/custom-files"
+        "../../firmware-config/custom-files"
+    )
+    
+    CUSTOM_FILES_DIR_FOUND=""
+    
+    log "搜索自定义文件目录..."
+    echo "搜索自定义文件目录..." >> $CUSTOM_LOG
+    
+    for dir in "${CUSTOM_DIRS[@]}"; do
+        log_detail "检查目录: $dir"
+        echo "检查目录: $dir" >> $CUSTOM_LOG
+        
+        if [ -d "$dir" ]; then
+            CUSTOM_FILES_DIR_FOUND="$dir"
+            log "✅ 找到自定义文件目录: $CUSTOM_FILES_DIR_FOUND"
+            echo "找到自定义文件目录: $CUSTOM_FILES_DIR_FOUND" >> $CUSTOM_LOG
+            break
+        fi
+    done
+    
+    if [ -n "$CUSTOM_FILES_DIR_FOUND" ]; then
+        CUSTOM_FILES_DIR="$CUSTOM_FILES_DIR_FOUND"
+        log "使用自定义文件目录: $CUSTOM_FILES_DIR"
+        echo "使用目录: $CUSTOM_FILES_DIR" >> $CUSTOM_LOG
+        
+        # 显示目录内容
+        log "目录内容:"
+        ls -la "$CUSTOM_FILES_DIR/"
+        echo "目录内容:" >> $CUSTOM_LOG
+        ls -la "$CUSTOM_FILES_DIR/" >> $CUSTOM_LOG
         
         # 📦 处理IPK文件
+        log "搜索IPK文件..."
         IPK_FILES=$(find "$CUSTOM_FILES_DIR" -name "*.ipk" -type f 2>/dev/null)
+        
         if [ -n "$IPK_FILES" ]; then
             log "✅ 发现 $(echo "$IPK_FILES" | wc -l) 个IPK文件"
             echo "发现的IPK文件:" >> $CUSTOM_LOG
@@ -694,20 +782,26 @@ process_custom_files() {
             for ipk_file in $IPK_FILES; do
                 if [ -f "$ipk_file" ]; then
                     ipk_name=$(basename "$ipk_file")
-                    log "📦 复制IPK: $ipk_name"
+                    log "复制IPK: $ipk_name"
                     cp "$ipk_file" "$IPK_DEST_DIR/"
+                    echo "✅ 复制IPK: $ipk_name 到 $IPK_DEST_DIR/" >> $CUSTOM_LOG
                     ipk_count=$((ipk_count + 1))
                 fi
             done
-            log "🎯 成功复制 $ipk_count 个IPK文件"
+            log "成功复制 $ipk_count 个IPK文件"
         else
-            log "ℹ️ 未找到IPK文件"
+            log "未找到IPK文件"
+            echo "未找到IPK文件" >> $CUSTOM_LOG
         fi
         
         # 📜 处理Shell脚本
+        log "搜索Shell脚本..."
         SH_FILES=$(find "$CUSTOM_FILES_DIR" -name "*.sh" -type f 2>/dev/null)
+        
         if [ -n "$SH_FILES" ]; then
             log "✅ 发现 $(echo "$SH_FILES" | wc -l) 个Shell脚本"
+            echo "发现的Shell脚本:" >> $CUSTOM_LOG
+            echo "$SH_FILES" >> $CUSTOM_LOG
             
             # 创建脚本存放目录
             SCRIPT_DEST_DIR="$BUILD_DIR/files/etc/uci-defaults"
@@ -718,23 +812,31 @@ process_custom_files() {
             for sh_file in $SH_FILES; do
                 if [ -f "$sh_file" ]; then
                     sh_name=$(basename "$sh_file")
-                    log "📜 处理脚本: $sh_name"
+                    log "处理脚本: $sh_name"
                     cp "$sh_file" "$SCRIPT_DEST_DIR/"
                     chmod +x "$SCRIPT_DEST_DIR/$sh_name"
+                    echo "✅ 复制脚本: $sh_name 到 $SCRIPT_DEST_DIR/" >> $CUSTOM_LOG
                     script_count=$((script_count + 1))
                 fi
             done
-            log "🎯 成功处理 $script_count 个Shell脚本"
+            log "成功处理 $script_count 个Shell脚本"
         else
-            log "ℹ️ 未找到Shell脚本"
+            log "未找到Shell脚本"
+            echo "未找到Shell脚本" >> $CUSTOM_LOG
         fi
     else
-        log "🔍 未找到自定义文件目录"
-        echo "未找到自定义文件目录: $CUSTOM_FILES_DIR" >> $CUSTOM_LOG
+        log "未找到有效的自定义文件目录"
+        echo "未找到有效的自定义文件目录" >> $CUSTOM_LOG
+        echo "请确保存在 firmware-config/custom-files 目录" >> $CUSTOM_LOG
+        
+        # 显示当前目录结构
+        log "当前目录结构:"
+        pwd
+        ls -la ../
     fi
     
     echo "==========================================" >> $CUSTOM_LOG
-    echo "自定义文件处理完成" >> $CUSTOM_LOG
+    echo "自定义文件处理完成 - 总计处理: IPK($ipk_count) 脚本($script_count)" >> $CUSTOM_LOG
     
     log "✅ 自定义文件处理完成"
 }
@@ -752,12 +854,12 @@ build_firmware() {
     
     # 设置编译线程数
     local num_cores=$(nproc)
-    local build_jobs=$num_cores
+    local build_jobs=$((num_cores))
     
     if [ "$enable_cache" = "true" ]; then
         log "启用编译缓存 (使用 $build_jobs 线程)"
         # 设置ccache
-        export CCACHE_DIR="$TOOLCHAIN_BASE/cache/ccache"
+        export CCACHE_DIR="/tmp/ccache_openwrt"
         export CCACHE_MAXSIZE="10G"
         mkdir -p $CCACHE_DIR
         
@@ -807,13 +909,13 @@ check_firmware_files() {
     log "=== 固件文件检查 ==="
     if [ -d "bin/targets" ]; then
         log "✅ 固件目录存在"
-        log "=== 生成的固件列表 ==="
+        log "生成的固件列表:"
         find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) -exec ls -la {} \; | head -20
         
         # 统计文件大小
         FIRMWARE_FILES=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | head -5)
         if [ -n "$FIRMWARE_FILES" ]; then
-            log "📊 生成的固件文件:"
+            log "生成的固件文件:"
             for file in $FIRMWARE_FILES; do
                 size=$(du -h "$file" | cut -f1)
                 log "  📄 $(basename "$file") ($size)"
@@ -852,6 +954,7 @@ backup_config() {
     # 备份build.log
     if [ -f "build.log" ]; then
         cp build.log config_backup/ 2>/dev/null || true
+        log "✅ 备份编译日志"
     fi
     
     # 创建配置摘要
