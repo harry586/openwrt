@@ -49,6 +49,7 @@ env:
   BUILD_DIR: /mnt/openwrt-build
   TOOLCHAIN_DIR: /mnt/openwrt-toolchain
   DEBUG_MODE: ${{ github.event.inputs.debug_mode }}
+  SCRIPT_PATH: ./firmware-config/scripts/build_firmware_main.sh
 
 jobs:
   build-firmware:
@@ -149,26 +150,43 @@ jobs:
         echo "版本: ${{ github.event.inputs.version_selection }}"
         echo "配置模式: ${{ github.event.inputs.config_mode }}"
         echo ""
+        echo "当前目录: $(pwd)"
+        echo "脚本路径: $SCRIPT_PATH"
+        echo "脚本是否存在: $(test -f "$SCRIPT_PATH" && echo "✅ 存在" || echo "❌ 不存在")"
+        
+        # 确保脚本存在
+        if [ ! -f "$SCRIPT_PATH" ]; then
+          echo "❌ 错误: 脚本文件不存在: $SCRIPT_PATH"
+          echo "查找脚本..."
+          find . -name "build_firmware_main.sh" -type f 2>/dev/null
+          exit 1
+        fi
         
         # 执行初始化脚本
-        firmware-config/scripts/build_firmware_main.sh initialize_build_env \
+        $SCRIPT_PATH initialize_build_env \
           "${{ github.event.inputs.device_name }}" \
           "${{ github.event.inputs.version_selection }}" \
           "${{ github.event.inputs.config_mode }}"
         
-        # 读取环境变量
+        # 检查环境文件是否创建
+        echo ""
+        echo "=== 检查环境文件 ==="
         if [ -f "$BUILD_DIR/build_env.sh" ]; then
-          echo ""
-          echo "=== 生成的环境变量 ==="
+          echo "✅ 环境文件已创建: $BUILD_DIR/build_env.sh"
+          echo "=== 环境变量内容 ==="
           cat $BUILD_DIR/build_env.sh
           
-          # 导出到GitHub环境
+          # 加载环境变量以验证
           source $BUILD_DIR/build_env.sh
           echo "TARGET=$TARGET" >> $GITHUB_OUTPUT
           echo "SUBTARGET=$SUBTARGET" >> $GITHUB_OUTPUT
           echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_OUTPUT
           echo "DEVICE=$DEVICE" >> $GITHUB_OUTPUT
           echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
+        else
+          echo "❌ 错误: 环境文件未创建: $BUILD_DIR/build_env.sh"
+          echo "检查构建目录内容:"
+          ls -la $BUILD_DIR/ || echo "构建目录不存在"
         fi
 
     - name: 初始化工具链系统
@@ -203,8 +221,25 @@ jobs:
       run: |
         echo "=== 检查工具链缓存 ==="
         
-        # 加载环境变量
-        source $BUILD_DIR/build_env.sh 2>/dev/null || echo "环境文件加载失败"
+        # 首先检查环境文件是否存在
+        if [ ! -f "$BUILD_DIR/build_env.sh" ]; then
+          echo "❌ 错误: 环境文件不存在，无法继续"
+          echo "尝试从GitHub环境变量获取..."
+          
+          # 尝试从GitHub输出获取
+          if [ -n "${{ steps.init_env.outputs.SELECTED_BRANCH }}" ]; then
+            SELECTED_BRANCH="${{ steps.init_env.outputs.SELECTED_BRANCH }}"
+            TARGET="${{ steps.init_env.outputs.TARGET }}"
+            SUBTARGET="${{ steps.init_env.outputs.SUBTARGET }}"
+            DEVICE="${{ steps.init_env.outputs.DEVICE }}"
+          else
+            echo "❌ 无法获取环境变量"
+            exit 1
+          fi
+        else
+          # 加载环境变量
+          source $BUILD_DIR/build_env.sh
+        fi
         
         TOOLCHAIN_KEY="$SELECTED_BRANCH-$TARGET-$SUBTARGET"
         TOOLCHAIN_PATH="$TOOLCHAIN_DIR/$TOOLCHAIN_KEY"
@@ -238,8 +273,30 @@ jobs:
       run: |
         echo "=== 构建工具链 ==="
         
-        # 加载环境变量
-        source $BUILD_DIR/build_env.sh
+        # 检查环境文件
+        if [ ! -f "$BUILD_DIR/build_env.sh" ]; then
+          echo "❌ 环境文件不存在，尝试重新创建"
+          
+          # 从GitHub输出获取变量
+          SELECTED_BRANCH="${{ steps.init_env.outputs.SELECTED_BRANCH }}"
+          TARGET="${{ steps.init_env.outputs.TARGET }}"
+          SUBTARGET="${{ steps.init_env.outputs.SUBTARGET }}"
+          DEVICE="${{ steps.init_env.outputs.DEVICE }}"
+          CONFIG_MODE="${{ steps.init_env.outputs.CONFIG_MODE }}"
+          
+          # 创建环境文件
+          mkdir -p $BUILD_DIR
+          cat > $BUILD_DIR/build_env.sh << EOF
+#!/bin/bash
+export SELECTED_BRANCH="$SELECTED_BRANCH"
+export TARGET="$TARGET"
+export SUBTARGET="$SUBTARGET"
+export DEVICE="$DEVICE"
+export CONFIG_MODE="$CONFIG_MODE"
+EOF
+        else
+          source $BUILD_DIR/build_env.sh
+        fi
         
         cd $BUILD_DIR
         
@@ -330,7 +387,14 @@ jobs:
       run: |
         echo "=== 恢复工具链 ==="
         
-        source $BUILD_DIR/build_env.sh
+        # 加载环境变量
+        if [ -f "$BUILD_DIR/build_env.sh" ]; then
+          source $BUILD_DIR/build_env.sh
+        else
+          SELECTED_BRANCH="${{ steps.init_env.outputs.SELECTED_BRANCH }}"
+          TARGET="${{ steps.init_env.outputs.TARGET }}"
+          SUBTARGET="${{ steps.init_env.outputs.SUBTARGET }}"
+        fi
         
         TOOLCHAIN_KEY="$SELECTED_BRANCH-$TARGET-$SUBTARGET"
         TOOLCHAIN_PATH="$TOOLCHAIN_DIR/$TOOLCHAIN_KEY"
@@ -364,14 +428,14 @@ jobs:
       run: |
         echo "=== 配置Feeds ==="
         cd $BUILD_DIR
-        firmware-config/scripts/build_firmware_main.sh configure_feeds
+        $SCRIPT_PATH configure_feeds
 
     - name: 添加TurboACC支持
       if: github.event.inputs.config_mode == 'normal' && steps.init_env.outputs.SELECTED_BRANCH == 'openwrt-23.05'
       run: |
         echo "=== 添加TurboACC支持 ==="
         cd $BUILD_DIR
-        firmware-config/scripts/build_firmware_main.sh add_turboacc_support
+        $SCRIPT_PATH add_turboacc_support
 
     - name: 安装插件包
       run: |
@@ -379,12 +443,12 @@ jobs:
         cd $BUILD_DIR
         
         echo "1. 安装文件传输插件包:"
-        firmware-config/scripts/build_firmware_main.sh install_filetransfer_packages
+        $SCRIPT_PATH install_filetransfer_packages
         
         if [ "${{ github.event.inputs.config_mode }}" = "normal" ] && [ "${{ steps.init_env.outputs.SELECTED_BRANCH }}" = "openwrt-23.05" ]; then
           echo ""
           echo "2. 安装TurboACC包:"
-          firmware-config/scripts/build_firmware_main.sh install_turboacc_packages
+          $SCRIPT_PATH install_turboacc_packages
         fi
 
     - name: 编译前空间检查
@@ -408,8 +472,7 @@ jobs:
         cd $BUILD_DIR
         
         echo "生成配置，额外插件: ${{ github.event.inputs.extra_packages }}"
-        firmware-config/scripts/build_firmware_main.sh generate_config \
-          "${{ github.event.inputs.extra_packages }}"
+        $SCRIPT_PATH generate_config "${{ github.event.inputs.extra_packages }}"
         
         echo ""
         echo "📋 生成的配置摘要:"
@@ -430,19 +493,19 @@ jobs:
       run: |
         echo "=== 验证USB配置 ==="
         cd $BUILD_DIR
-        firmware-config/scripts/build_firmware_main.sh verify_usb_config
+        $SCRIPT_PATH verify_usb_config
 
     - name: 应用配置
       run: |
         echo "=== 应用配置 ==="
         cd $BUILD_DIR
-        firmware-config/scripts/build_firmware_main.sh apply_config
+        $SCRIPT_PATH apply_config
 
     - name: 修复网络环境
       run: |
         echo "=== 修复网络环境 ==="
         cd $BUILD_DIR
-        firmware-config/scripts/build_firmware_main.sh fix_network
+        $SCRIPT_PATH fix_network
 
     - name: 下载依赖包
       run: |
@@ -450,7 +513,7 @@ jobs:
         cd $BUILD_DIR
         
         echo "开始下载依赖包..."
-        firmware-config/scripts/build_firmware_main.sh download_dependencies
+        $SCRIPT_PATH download_dependencies
         
         echo ""
         echo "📦 下载目录内容:"
@@ -497,7 +560,7 @@ jobs:
         echo ""
         echo "=== 开始处理自定义文件 ==="
         cd $BUILD_DIR
-        firmware-config/scripts/build_firmware_main.sh process_custom_files
+        $SCRIPT_PATH process_custom_files
 
     - name: 编译固件
       id: build_firmware
@@ -516,7 +579,7 @@ jobs:
         echo "⏰ 编译开始时间: $(date)"
         
         # 执行编译
-        firmware-config/scripts/build_firmware_main.sh build_firmware "${{ github.event.inputs.enable_cache }}"
+        $SCRIPT_PATH build_firmware "${{ github.event.inputs.enable_cache }}"
         BUILD_EXIT_CODE=$?
         
         # 记录结束时间
@@ -549,8 +612,8 @@ jobs:
           echo "📄 日志大小: $(du -h build.log | cut -f1)"
           
           # 使用详细错误分析脚本
-          if [ -f "firmware-config/scripts/error_analysis_detailed.sh" ]; then
-            firmware-config/scripts/error_analysis_detailed.sh
+          if [ -f "$(pwd)/firmware-config/scripts/error_analysis_detailed.sh" ]; then
+            $(pwd)/firmware-config/scripts/error_analysis_detailed.sh
           else
             echo "⚠️ 详细错误分析脚本不存在，使用简单分析"
             echo "最后100行日志:"
@@ -583,7 +646,7 @@ jobs:
         cd $BUILD_DIR
         
         echo "检查固件文件..."
-        firmware-config/scripts/build_firmware_main.sh check_firmware_files
+        $SCRIPT_PATH check_firmware_files
         
         echo ""
         echo "=== 生成的固件详情 ==="
@@ -605,8 +668,36 @@ jobs:
       if: always()
       run: |
         echo "=== 备份配置文件 ==="
+        echo "当前目录: $(pwd)"
+        echo "脚本路径: $SCRIPT_PATH"
+        
+        # 确保在正确的目录
         cd $BUILD_DIR
-        firmware-config/scripts/build_firmware_main.sh backup_config
+        echo "切换到构建目录: $BUILD_DIR"
+        
+        # 检查脚本是否存在
+        if [ -f "../$SCRIPT_PATH" ]; then
+          echo "使用相对路径脚本"
+          ../$SCRIPT_PATH backup_config
+        elif [ -f "$(pwd)/../$SCRIPT_PATH" ]; then
+          echo "使用绝对路径脚本"
+          $(pwd)/../$SCRIPT_PATH backup_config
+        elif [ -f "$SCRIPT_PATH" ]; then
+          echo "使用当前目录脚本"
+          $SCRIPT_PATH backup_config
+        else
+          echo "❌ 脚本不存在，尝试手动备份"
+          # 手动备份配置
+          mkdir -p config_backup
+          if [ -f ".config" ]; then
+            cp .config config_backup/
+            echo "✅ 手动备份 .config 文件"
+          fi
+          if [ -f "build.log" ]; then
+            cp build.log config_backup/ 2>/dev/null || true
+            echo "✅ 手动备份编译日志"
+          fi
+        fi
         
         echo ""
         echo "📁 备份内容:"
