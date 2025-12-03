@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流（带分层工具链缓存）
+name: OpenWrt 智能固件构建工作流
 
 on:
   workflow_dispatch:
@@ -41,8 +41,8 @@ on:
         required: false
         default: true
         type: boolean
-      rebuild_toolchain:
-        description: '🔄 强制重新构建工具链'
+      skip_toolchain:
+        description: '⏭️ 跳过工具链缓存 (直接使用系统工具链)'
         required: false
         default: false
         type: boolean
@@ -74,71 +74,54 @@ jobs:
         AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
         AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
         echo "/mnt 可用空间: ${AVAILABLE_GB}G"
-        if [ $AVAILABLE_GB -lt 50 ]; then
-          echo "错误: /mnt 空间不足50G"
-          exit 1
+        if [ $AVAILABLE_GB -lt 30 ]; then
+          echo "警告: /mnt 空间不足30G，可能编译失败"
         fi
 
-    - name: 初始化分层工具链系统
+    - name: 设置编译环境
       run: |
-        echo "=== 初始化分层工具链系统 ==="
-        firmware-config/scripts/toolchain_manager.sh init
-
-    - name: 安装通用主机工具
-      run: |
-        echo "=== 安装通用主机工具 ==="
-        firmware-config/scripts/toolchain_manager.sh install_common
+        echo "=== 设置编译环境 ==="
+        firmware-config/scripts/build_firmware_main.sh setup_environment
 
     - name: 创建构建目录
       run: |
         firmware-config/scripts/build_firmware_main.sh create_build_dir
 
     - name: 初始化构建环境
+      id: init_env
       run: |
+        echo "=== 初始化构建环境 ==="
         firmware-config/scripts/build_firmware_main.sh initialize_build_env \
           "${{ github.event.inputs.device_name }}" \
           "${{ github.event.inputs.version_selection }}" \
           "${{ github.event.inputs.config_mode }}"
+        
+        # 获取环境变量
+        source /mnt/openwrt-build/build_env.sh 2>/dev/null || echo "环境文件未生成"
+        echo "TARGET=$TARGET" >> $GITHUB_OUTPUT
+        echo "SUBTARGET=$SUBTARGET" >> $GITHUB_OUTPUT
+        echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_OUTPUT
 
-    - name: 智能工具链处理
-      id: process_toolchain
+    - name: 初始化工具链系统
+      if: github.event.inputs.skip_toolchain == 'false'
       run: |
-        echo "=== 智能工具链处理 ==="
-        
-        # 加载环境变量
-        source ${{ env.BUILD_DIR }}/build_env.sh 2>/dev/null || true
-        
-        # 设置工具链参数
-        FORCE_REBUILD="${{ github.event.inputs.rebuild_toolchain || 'false' }}"
-        
-        # 智能选择/构建工具链
-        firmware-config/scripts/toolchain_manager.sh smart_select \
-          "$SELECTED_BRANCH" \
-          "$TARGET" \
-          "$SUBTARGET" \
-          "$FORCE_REBUILD"
-        
-        # 设置输出变量
-        if [ $? -eq 0 ]; then
-          echo "TOOLCHAIN_READY=true" >> $GITHUB_OUTPUT
-        else
-          echo "TOOLCHAIN_READY=false" >> $GITHUB_OUTPUT
-        fi
-
-    - name: 添加 TurboACC 支持
-      run: |
-        firmware-config/scripts/build_firmware_main.sh add_turboacc_support
-
-    - name: 添加文件传输插件支持
-      run: |
-        firmware-config/scripts/build_firmware_main.sh add_filetransfer_support
+        echo "=== 初始化工具链系统 ==="
+        # 创建基础目录结构
+        mkdir -p firmware-config/build-tools/{common,platforms,versions,cache,logs,archives}
+        echo "工具链目录结构创建完成"
 
     - name: 配置Feeds
       run: |
+        echo "=== 配置Feeds ==="
         firmware-config/scripts/build_firmware_main.sh configure_feeds
 
-    - name: 安装 TurboACC 包
-      if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
+    - name: 添加TurboACC支持
+      if: github.event.inputs.config_mode == 'normal' && steps.init_env.outputs.SELECTED_BRANCH == 'openwrt-23.05'
+      run: |
+        firmware-config/scripts/build_firmware_main.sh add_turboacc_support
+
+    - name: 安装TurboACC包
+      if: github.event.inputs.config_mode == 'normal' && steps.init_env.outputs.SELECTED_BRANCH == 'openwrt-23.05'
       run: |
         firmware-config/scripts/build_firmware_main.sh install_turboacc_packages
 
@@ -150,7 +133,7 @@ jobs:
       run: |
         firmware-config/scripts/build_firmware_main.sh pre_build_space_check
 
-    - name: 智能配置生成（USB完全修复通用版）
+    - name: 智能配置生成
       run: |
         firmware-config/scripts/build_firmware_main.sh generate_config \
           "${{ github.event.inputs.extra_packages }}"
@@ -176,6 +159,7 @@ jobs:
         firmware-config/scripts/build_firmware_main.sh process_custom_files
 
     - name: 编译固件
+      id: build_step
       run: |
         firmware-config/scripts/build_firmware_main.sh build_firmware "${{ github.event.inputs.enable_cache }}"
 
@@ -189,7 +173,7 @@ jobs:
         firmware-config/scripts/build_firmware_main.sh post_build_space_check
 
     - name: 固件文件检查
-      if: success()
+      if: steps.build_step.outcome == 'success'
       run: |
         firmware-config/scripts/build_firmware_main.sh check_firmware_files
 
@@ -198,35 +182,11 @@ jobs:
       run: |
         firmware-config/scripts/build_firmware_main.sh backup_config
 
-    - name: 提交工具链到仓库
-      if: github.event.inputs.rebuild_toolchain == 'true' && success()
-      run: |
-        echo "=== 提交工具链到仓库 ==="
-        
-        # 配置Git
-        git config --global user.name "GitHub Actions"
-        git config --global user.email "actions@github.com"
-        
-        # 添加工具链文件
-        git add firmware-config/build-tools/
-        
-        # 检查是否有变更
-        if git diff --cached --quiet; then
-          echo "🔄 没有工具链变更需要提交"
-        else
-          # 提交工具链
-          git commit -m "🔧 更新工具链: ${{ github.event.inputs.version_selection }}-${{ env.TARGET }}-${{ env.SUBTARGET }}"
-          
-          # 推送到仓库
-          git push origin HEAD:${{ github.ref }}
-          echo "✅ 工具链已提交到仓库"
-        fi
-
     - name: 上传固件
-      if: success()
+      if: steps.build_step.outcome == 'success'
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
+        name: firmware-${{ github.event.inputs.device_name }}-${{ steps.init_env.outputs.SELECTED_BRANCH }}
         path: ${{ env.BUILD_DIR }}/bin/targets/
         retention-days: 7
 
@@ -234,7 +194,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: build-log-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
+        name: build-log-${{ github.event.inputs.device_name }}
         path: |
           ${{ env.BUILD_DIR }}/build.log
           ${{ env.BUILD_DIR }}/error_analysis.log
@@ -244,16 +204,8 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
+        name: config-${{ github.event.inputs.device_name }}
         path: ${{ env.BUILD_DIR }}/config_backup/
-        retention-days: 7
-
-    - name: 上传自定义文件
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: custom-files-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
-        path: ${{ env.BUILD_DIR }}/custom_files_log/
         retention-days: 7
 
     - name: 清理目录
