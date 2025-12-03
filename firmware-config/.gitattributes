@@ -1,0 +1,5 @@
+# 工具链文件处理
+firmware-config/build-tools/archives/*.tar.gz filter=lfs diff=lfs merge=lfs -text
+firmware-config/build-tools/staging/*/toolchain-* filter=lfs diff=lfs merge=lfs -text
+firmware-config/build-tools/bin/* filter=lfs diff=lfs merge=lfs -text
+firmware-config/build-tools/logs/*.log -text
