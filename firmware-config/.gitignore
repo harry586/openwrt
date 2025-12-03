@@ -1,0 +1,21 @@
+# 构建目录
+/mnt/openwrt-build/
+build/
+
+# 工具链目录（部分文件由LFS管理）
+firmware-config/build-tools/platforms/
+firmware-config/build-tools/archives/
+firmware-config/build-tools/cache/
+firmware-config/build-tools/logs/
+
+# 临时文件
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# 编译产物
+bin/
+tmp/
+logs/
+*.log
