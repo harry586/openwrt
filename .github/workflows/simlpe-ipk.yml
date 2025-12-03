@@ -73,9 +73,8 @@ jobs:
         echo "=== 创建基础配置 ==="
         cd $BUILD_DIR
         
-        # 创建基础配置
-        rm -f .config
-        echo "CONFIG_TARGET_x86_64=y" >> .config
+        # 创建基础配置 - 使用多个echo命令
+        echo "CONFIG_TARGET_x86_64=y" > .config
         echo "CONFIG_TARGET_x86_64_DEVICE_generic=y" >> .config
         echo "CONFIG_PACKAGE_luci-base=y" >> .config
         echo "CONFIG_PACKAGE_luci-compat=y" >> .config
@@ -89,9 +88,8 @@ jobs:
         PACKAGE_NAMES="${{ github.event.inputs.package_names }}"
         echo "要编译的包: $PACKAGE_NAMES"
         
-        # 分割包名并添加到配置
-        IFS='、' read -ra PKG_ARRAY <<< "$PACKAGE_NAMES"
-        for package in "${PKG_ARRAY[@]}"; do
+        # 分割包名并添加到配置 - 避免复杂数组
+        echo "$PACKAGE_NAMES" | tr '、' '\n' | while read package; do
           if [ -n "$package" ]; then
             echo "CONFIG_PACKAGE_${package}=y" >> .config
             echo "✅ 添加包: $package"
@@ -120,11 +118,8 @@ jobs:
         PACKAGE_NAMES="${{ github.event.inputs.package_names }}"
         CLEAN_BUILD="${{ github.event.inputs.clean_build }}"
         
-        # 分割包名
-        IFS='、' read -ra PKG_ARRAY <<< "$PACKAGE_NAMES"
-        
-        # 编译每个包
-        for package in "${PKG_ARRAY[@]}"; do
+        # 编译每个包 - 使用简单循环
+        echo "$PACKAGE_NAMES" | tr '、' '\n' | while read package; do
           if [ -n "$package" ]; then
             echo "=== 编译包: $package ==="
             
@@ -155,27 +150,21 @@ jobs:
         # 获取要编译的包名
         PACKAGE_NAMES="${{ github.event.inputs.package_names }}"
         
-        # 分割包名并查找对应的IPK文件
-        IFS='、' read -ra PKG_ARRAY <<< "$PACKAGE_NAMES"
-        
+        # 计数变量
         IPK_COUNT=0
-        for package in "${PKG_ARRAY[@]}"; do
+        
+        # 查找对应的IPK文件
+        echo "$PACKAGE_NAMES" | tr '、' '\n' | while read package; do
           if [ -n "$package" ]; then
             echo "=== 查找 $package 的IPK文件 ==="
             
-            # 在多个位置查找IPK文件
-            SEARCH_PATHS=(
-              "bin/packages/*/*/${package}*.ipk"
-              "bin/packages/*/*/${package/-/_}*.ipk"
-              "bin/targets/*/*/packages/${package}*.ipk"
-            )
-            
-            for search_path in "${SEARCH_PATHS[@]}"; do
+            # 在多个位置查找IPK文件 - 使用简单数组
+            for search_path in "bin/packages/*/*/${package}*.ipk" "bin/packages/*/*/${package/-/_}*.ipk" "bin/targets/*/*/packages/${package}*.ipk"; do
               for ipk_file in $search_path; do
                 if [ -f "$ipk_file" ]; then
                   echo "✅ 找到: $ipk_file"
                   cp "$ipk_file" ipk_output/ 2>/dev/null || true
-                  ((IPK_COUNT++))
+                  IPK_COUNT=$((IPK_COUNT + 1))
                 fi
               done
             done
@@ -188,7 +177,7 @@ jobs:
           find bin -name "*.ipk" -type f 2>/dev/null | head -10 | while read ipk_file; do
             echo "📦 找到: $ipk_file"
             cp "$ipk_file" ipk_output/ 2>/dev/null || true
-            ((IPK_COUNT++))
+            IPK_COUNT=$((IPK_COUNT + 1))
           done
         fi
         
@@ -215,51 +204,50 @@ jobs:
         echo "=== 创建安装脚本 ==="
         cd $BUILD_DIR/ipk_output 2>/dev/null || mkdir -p $BUILD_DIR/ipk_output && cd $BUILD_DIR/ipk_output
         
-        cat > install.sh << 'EOF'
-#!/bin/bash
-# IPK包安装脚本
-
-echo "=== IPK包安装脚本 ==="
-
-# 检查是否在OpenWrt系统
-if ! command -v opkg >/dev/null 2>&1; then
-  echo "❌ 这不是OpenWrt系统"
-  exit 1
-fi
-
-# 列出所有IPK文件
-IPK_FILES=$(ls *.ipk 2>/dev/null)
-if [ -z "$IPK_FILES" ]; then
-  echo "❌ 未找到IPK文件"
-  exit 1
-fi
-
-echo "找到以下IPK文件:"
-for file in *.ipk; do
-  echo "📦 $file"
-done
-
-echo ""
-read -p "是否安装所有包? (y/N): " CONFIRM
-if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-  echo "安装取消"
-  exit 0
-fi
-
-# 更新包列表
-echo "更新包列表..."
-opkg update
-
-# 安装所有包
-for file in *.ipk; do
-  echo ""
-  echo "安装: $file"
-  opkg install "$file" --force-overwrite
-done
-
-echo ""
-echo "✅ 安装完成"
-EOF
+        # 使用多个echo命令创建脚本，避免heredoc
+        echo '#!/bin/bash' > install.sh
+        echo '# IPK包安装脚本' >> install.sh
+        echo '' >> install.sh
+        echo 'echo "=== IPK包安装脚本 ==="' >> install.sh
+        echo '' >> install.sh
+        echo '# 检查是否在OpenWrt系统' >> install.sh
+        echo 'if ! command -v opkg >/dev/null 2>&1; then' >> install.sh
+        echo '  echo "❌ 这不是OpenWrt系统"' >> install.sh
+        echo '  exit 1' >> install.sh
+        echo 'fi' >> install.sh
+        echo '' >> install.sh
+        echo '# 列出所有IPK文件' >> install.sh
+        echo 'IPK_FILES=$(ls *.ipk 2>/dev/null)' >> install.sh
+        echo 'if [ -z "$IPK_FILES" ]; then' >> install.sh
+        echo '  echo "❌ 未找到IPK文件"' >> install.sh
+        echo '  exit 1' >> install.sh
+        echo 'fi' >> install.sh
+        echo '' >> install.sh
+        echo 'echo "找到以下IPK文件:"' >> install.sh
+        echo 'for file in *.ipk; do' >> install.sh
+        echo '  echo "📦 $file"' >> install.sh
+        echo 'done' >> install.sh
+        echo '' >> install.sh
+        echo 'echo ""' >> install.sh
+        echo 'read -p "是否安装所有包? (y/N): " CONFIRM' >> install.sh
+        echo 'if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then' >> install.sh
+        echo '  echo "安装取消"' >> install.sh
+        echo '  exit 0' >> install.sh
+        echo 'fi' >> install.sh
+        echo '' >> install.sh
+        echo '# 更新包列表' >> install.sh
+        echo 'echo "更新包列表..."' >> install.sh
+        echo 'opkg update' >> install.sh
+        echo '' >> install.sh
+        echo '# 安装所有包' >> install.sh
+        echo 'for file in *.ipk; do' >> install.sh
+        echo '  echo ""' >> install.sh
+        echo '  echo "安装: $file"' >> install.sh
+        echo '  opkg install "$file" --force-overwrite' >> install.sh
+        echo 'done' >> install.sh
+        echo '' >> install.sh
+        echo 'echo ""' >> install.sh
+        echo 'echo "✅ 安装完成"' >> install.sh
         
         chmod +x install.sh
         echo "✅ 安装脚本创建完成"
@@ -270,16 +258,6 @@ EOF
         name: ipk-packages-${{ github.event.inputs.version_selection }}
         path: ${{ env.BUILD_DIR }}/ipk_output/
         retention-days: 30
-
-    - name: 上传编译日志
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-logs-${{ github.event.inputs.version_selection }}
-        path: |
-          ${{ env.BUILD_DIR }}/logs/
-          ${{ env.BUILD_DIR }}/.config
-        retention-days: 7
 
     - name: 清理构建目录
       if: always()
