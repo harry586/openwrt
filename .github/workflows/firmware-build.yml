@@ -106,20 +106,13 @@ jobs:
     - name: 设置编译环境
       run: |
         echo "=== 设置编译环境 ==="
-        
-        # 创建安装日志
         INSTALL_LOG="/tmp/install_deps_$(date +%Y%m%d_%H%M%S).log"
         echo "安装日志: $INSTALL_LOG"
-        
-        # 更新包列表
         echo "1. 更新包列表..."
         sudo apt-get update 2>&1 | tee $INSTALL_LOG
-        
-        # 安装所有依赖包（一次完成，避免多次apt-get）
         echo ""
         echo "2. 安装编译OpenWrt所需的所有依赖包..."
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpath libpython3-dev python3 python3-dev python3-pip python3-setuptools python3-yaml xsltproc zip subversion ninja-build automake autoconf libtool pkg-config help2man texinfo aria2 liblz4-dev zstd libcurl4-openssl-dev groff texlive texinfo cmake jq ccache u-boot-tools gperf nodejs npm swig time xsltproc libxml2-utils 2>&1 | tee -a $INSTALL_LOG
-        
         echo ""
         echo "3. 检查关键工具安装情况:"
         echo "gcc: $(gcc --version 2>/dev/null | head -1 || echo '未安装')"
@@ -129,7 +122,6 @@ jobs:
         echo "git: $(git --version 2>/dev/null | head -1 || echo '未安装')"
         echo "python3: $(python3 --version 2>/dev/null | head -1 || echo '未安装')"
         echo "ccache: $(ccache --version 2>/dev/null | head -1 || echo '未安装')"
-        
         echo "✅ 编译环境设置完成"
 
     - name: 创建构建目录
@@ -153,30 +145,19 @@ jobs:
         echo "当前目录: $(pwd)"
         echo "脚本路径: $SCRIPT_PATH"
         echo "脚本是否存在: $(test -f "$SCRIPT_PATH" && echo "✅ 存在" || echo "❌ 不存在")"
-        
-        # 确保脚本存在
         if [ ! -f "$SCRIPT_PATH" ]; then
           echo "❌ 错误: 脚本文件不存在: $SCRIPT_PATH"
           echo "查找脚本..."
           find . -name "build_firmware_main.sh" -type f 2>/dev/null
           exit 1
         fi
-        
-        # 执行初始化脚本
-        $SCRIPT_PATH initialize_build_env \
-          "${{ github.event.inputs.device_name }}" \
-          "${{ github.event.inputs.version_selection }}" \
-          "${{ github.event.inputs.config_mode }}"
-        
-        # 检查环境文件是否创建
+        $SCRIPT_PATH initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}"
         echo ""
         echo "=== 检查环境文件 ==="
         if [ -f "$BUILD_DIR/build_env.sh" ]; then
           echo "✅ 环境文件已创建: $BUILD_DIR/build_env.sh"
           echo "=== 环境变量内容 ==="
           cat $BUILD_DIR/build_env.sh
-          
-          # 加载环境变量以验证
           source $BUILD_DIR/build_env.sh
           echo "TARGET=$TARGET" >> $GITHUB_OUTPUT
           echo "SUBTARGET=$SUBTARGET" >> $GITHUB_OUTPUT
@@ -192,14 +173,10 @@ jobs:
     - name: 初始化工具链系统
       run: |
         echo "=== 初始化工具链系统 ==="
-        
-        # 创建工具链目录
         echo "创建工具链目录: $TOOLCHAIN_DIR"
         sudo mkdir -p $TOOLCHAIN_DIR
         sudo chown -R $USER:$USER $TOOLCHAIN_DIR
         sudo chmod -R 755 $TOOLCHAIN_DIR
-        
-        # 创建工具链数据库
         TOOLCHAIN_DB="$TOOLCHAIN_DIR/toolchain_db.json"
         echo "创建工具链数据库: $TOOLCHAIN_DB"
         echo '{' > $TOOLCHAIN_DB
@@ -212,7 +189,6 @@ jobs:
         echo '  },' >> $TOOLCHAIN_DB
         echo '  "last_updated": "'$(date -I)'"' >> $TOOLCHAIN_DB
         echo '}' >> $TOOLCHAIN_DB
-        
         echo "✅ 工具链系统初始化完成"
         echo "工具链目录: $TOOLCHAIN_DIR"
 
@@ -220,13 +196,9 @@ jobs:
       id: check_toolchain
       run: |
         echo "=== 检查工具链缓存 ==="
-        
-        # 首先检查环境文件是否存在
         if [ ! -f "$BUILD_DIR/build_env.sh" ]; then
           echo "❌ 错误: 环境文件不存在，无法继续"
           echo "尝试从GitHub环境变量获取..."
-          
-          # 尝试从GitHub输出获取
           if [ -n "${{ steps.init_env.outputs.SELECTED_BRANCH }}" ]; then
             SELECTED_BRANCH="${{ steps.init_env.outputs.SELECTED_BRANCH }}"
             TARGET="${{ steps.init_env.outputs.TARGET }}"
@@ -237,17 +209,12 @@ jobs:
             exit 1
           fi
         else
-          # 加载环境变量
           source $BUILD_DIR/build_env.sh
         fi
-        
         TOOLCHAIN_KEY="$SELECTED_BRANCH-$TARGET-$SUBTARGET"
         TOOLCHAIN_PATH="$TOOLCHAIN_DIR/$TOOLCHAIN_KEY"
-        
         echo "🔑 工具链键值: $TOOLCHAIN_KEY"
         echo "📁 工具链路径: $TOOLCHAIN_PATH"
-        
-        # 检查是否需要强制重建
         if [ "${{ github.event.inputs.rebuild_toolchain }}" = "true" ]; then
           echo "🔄 强制重建工具链"
           echo "TOOLCHAIN_EXISTS=false" >> $GITHUB_OUTPUT
@@ -256,8 +223,6 @@ jobs:
           echo "✅ 工具链缓存存在"
           echo "TOOLCHAIN_EXISTS=true" >> $GITHUB_OUTPUT
           echo "FORCE_REBUILD=false" >> $GITHUB_OUTPUT
-          
-          # 显示缓存信息
           echo "📊 缓存信息:"
           echo "  大小: $(du -sh $TOOLCHAIN_PATH | cut -f1)"
           echo "  创建时间: $(cat $TOOLCHAIN_PATH/toolchain_info.txt 2>/dev/null | head -1 || echo '未知')"
@@ -272,44 +237,30 @@ jobs:
       if: steps.check_toolchain.outputs.TOOLCHAIN_EXISTS == 'false'
       run: |
         echo "=== 构建工具链 ==="
-        
-        # 检查环境文件
         if [ ! -f "$BUILD_DIR/build_env.sh" ]; then
           echo "❌ 环境文件不存在，尝试重新创建"
-          
-          # 从GitHub输出获取变量
           SELECTED_BRANCH="${{ steps.init_env.outputs.SELECTED_BRANCH }}"
           TARGET="${{ steps.init_env.outputs.TARGET }}"
           SUBTARGET="${{ steps.init_env.outputs.SUBTARGET }}"
           DEVICE="${{ steps.init_env.outputs.DEVICE }}"
           CONFIG_MODE="${{ steps.init_env.outputs.CONFIG_MODE }}"
-          
-          # 创建环境文件
           mkdir -p $BUILD_DIR
-          cat > $BUILD_DIR/build_env.sh << EOF
-#!/bin/bash
-export SELECTED_BRANCH="$SELECTED_BRANCH"
-export TARGET="$TARGET"
-export SUBTARGET="$SUBTARGET"
-export DEVICE="$DEVICE"
-export CONFIG_MODE="$CONFIG_MODE"
-EOF
+          echo "#!/bin/bash" > $BUILD_DIR/build_env.sh
+          echo "export SELECTED_BRANCH=\"$SELECTED_BRANCH\"" >> $BUILD_DIR/build_env.sh
+          echo "export TARGET=\"$TARGET\"" >> $BUILD_DIR/build_env.sh
+          echo "export SUBTARGET=\"$SUBTARGET\"" >> $BUILD_DIR/build_env.sh
+          echo "export DEVICE=\"$DEVICE\"" >> $BUILD_DIR/build_env.sh
+          echo "export CONFIG_MODE=\"$CONFIG_MODE\"" >> $BUILD_DIR/build_env.sh
         else
           source $BUILD_DIR/build_env.sh
         fi
-        
         cd $BUILD_DIR
-        
         TOOLCHAIN_KEY="$SELECTED_BRANCH-$TARGET-$SUBTARGET"
         TOOLCHAIN_PATH="$TOOLCHAIN_DIR/$TOOLCHAIN_KEY"
-        
         echo "🔑 工具链键值: $TOOLCHAIN_KEY"
         echo "💾 保存路径: $TOOLCHAIN_PATH"
-        
-        # 清理旧目录
         rm -rf $TOOLCHAIN_PATH
         mkdir -p $TOOLCHAIN_PATH
-        
         echo "📝 创建工具链配置..."
         echo "CONFIG_TARGET_${TARGET}=y" > .config.toolchain
         echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config.toolchain
@@ -322,57 +273,30 @@ EOF
         echo "CONFIG_KERNEL_DEBUG_INFO=n" >> .config.toolchain
         echo "CONFIG_KERNEL_DEBUG_KERNEL=n" >> .config.toolchain
         echo "CONFIG_BUILD_PATENTED=y" >> .config.toolchain
-        
         echo "应用工具链配置..."
         cp .config.toolchain .config
         make defconfig
-        
         echo "🛠️ 开始编译工具链..."
         TOOLCHAIN_LOG="$TOOLCHAIN_PATH/build.log"
-        
-        # 编译工具链（使用2个核心避免资源竞争）
         make toolchain/install -j2 V=s 2>&1 | tee $TOOLCHAIN_LOG
-        
-        # 检查编译结果
         if [ ${PIPESTATUS[0]} -eq 0 ]; then
           echo "✅ 工具链编译成功"
-          
-          # 保存工具链文件
           echo "💾 保存工具链文件..."
           if [ -d "staging_dir" ]; then
             cp -r staging_dir/* $TOOLCHAIN_PATH/ 2>/dev/null || true
-            
-            # 创建工具链信息文件
             echo "工具链信息:" > $TOOLCHAIN_PATH/toolchain_info.txt
             echo "版本: $SELECTED_BRANCH" >> $TOOLCHAIN_PATH/toolchain_info.txt
             echo "目标: $TARGET-$SUBTARGET" >> $TOOLCHAIN_PATH/toolchain_info.txt
             echo "设备: $DEVICE" >> $TOOLCHAIN_PATH/toolchain_info.txt
             echo "编译时间: $(date)" >> $TOOLCHAIN_PATH/toolchain_info.txt
             echo "大小: $(du -sh $TOOLCHAIN_PATH | cut -f1)" >> $TOOLCHAIN_PATH/toolchain_info.txt
-            
             echo "📊 工具链保存完成:"
             echo "  路径: $TOOLCHAIN_PATH"
             echo "  大小: $(du -sh $TOOLCHAIN_PATH | cut -f1)"
             echo "  编译器: $(find $TOOLCHAIN_PATH -name '*-gcc' -type f | head -1 | xargs basename 2>/dev/null || echo '未知')"
           fi
-          
-          # 更新数据库
           TOOLCHAIN_DB="$TOOLCHAIN_DIR/toolchain_db.json"
-          jq --arg key "$TOOLCHAIN_KEY" \
-             --arg date "$(date -I)" \
-             --arg size "$(du -sh $TOOLCHAIN_PATH | cut -f1)" \
-             '.toolchains[$key] = {
-                "created": $date,
-                "size": $size,
-                "target": "'$TARGET'",
-                "subtarget": "'$SUBTARGET'",
-                "version": "'$SELECTED_BRANCH'"
-              }
-              | .last_updated = $date
-              | .statistics.total_builds += 1
-              | .statistics.cache_misses += 1' \
-             $TOOLCHAIN_DB > $TOOLCHAIN_DB.tmp && mv $TOOLCHAIN_DB.tmp $TOOLCHAIN_DB
-          
+          jq --arg key "$TOOLCHAIN_KEY" --arg date "$(date -I)" --arg size "$(du -sh $TOOLCHAIN_PATH | cut -f1)" '.toolchains[$key] = { "created": $date, "size": $size, "target": "'$TARGET'", "subtarget": "'$SUBTARGET'", "version": "'$SELECTED_BRANCH'" } | .last_updated = $date | .statistics.total_builds += 1 | .statistics.cache_misses += 1' $TOOLCHAIN_DB > $TOOLCHAIN_DB.tmp && mv $TOOLCHAIN_DB.tmp $TOOLCHAIN_DB
           echo "📈 工具链数据库已更新"
         else
           echo "❌ 工具链编译失败"
@@ -386,8 +310,6 @@ EOF
       if: steps.check_toolchain.outputs.TOOLCHAIN_EXISTS == 'true'
       run: |
         echo "=== 恢复工具链 ==="
-        
-        # 加载环境变量
         if [ -f "$BUILD_DIR/build_env.sh" ]; then
           source $BUILD_DIR/build_env.sh
         else
@@ -395,29 +317,21 @@ EOF
           TARGET="${{ steps.init_env.outputs.TARGET }}"
           SUBTARGET="${{ steps.init_env.outputs.SUBTARGET }}"
         fi
-        
         TOOLCHAIN_KEY="$SELECTED_BRANCH-$TARGET-$SUBTARGET"
         TOOLCHAIN_PATH="$TOOLCHAIN_DIR/$TOOLCHAIN_KEY"
-        
         echo "🔑 工具链键值: $TOOLCHAIN_KEY"
         echo "📁 从缓存恢复: $TOOLCHAIN_PATH"
-        
         if [ -d "$TOOLCHAIN_PATH" ]; then
-          # 复制到构建目录
           echo "复制工具链到构建目录..."
           mkdir -p $BUILD_DIR/staging_dir
           cp -r $TOOLCHAIN_PATH/* $BUILD_DIR/staging_dir/ 2>/dev/null || true
-          
           echo "✅ 工具链恢复完成"
           echo "📊 恢复的工具链内容:"
           find $BUILD_DIR/staging_dir -name "*-gcc" -type f | head -3 | while read file; do
             echo "  🔧 $(basename $file)"
           done
-          
-          # 更新数据库统计
           TOOLCHAIN_DB="$TOOLCHAIN_DIR/toolchain_db.json"
           jq '.statistics.cache_hits += 1' $TOOLCHAIN_DB > $TOOLCHAIN_DB.tmp && mv $TOOLCHAIN_DB.tmp $TOOLCHAIN_DB
-          
           echo "📈 缓存命中次数更新"
         else
           echo "❌ 工具链缓存不存在，无法恢复"
@@ -441,10 +355,8 @@ EOF
       run: |
         echo "=== 安装插件包 ==="
         cd $BUILD_DIR
-        
         echo "1. 安装文件传输插件包:"
         $SCRIPT_PATH install_filetransfer_packages
-        
         if [ "${{ github.event.inputs.config_mode }}" = "normal" ] && [ "${{ steps.init_env.outputs.SELECTED_BRANCH }}" = "openwrt-23.05" ]; then
           echo ""
           echo "2. 安装TurboACC包:"
@@ -459,7 +371,6 @@ EOF
         AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
         AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
         echo "📊 /mnt 可用空间: ${AVAILABLE_GB}G"
-        
         if [ -d "$TOOLCHAIN_DIR" ]; then
           echo ""
           echo "📦 工具链缓存大小:"
@@ -470,16 +381,13 @@ EOF
       run: |
         echo "=== 智能配置生成 ==="
         cd $BUILD_DIR
-        
         echo "生成配置，额外插件: ${{ github.event.inputs.extra_packages }}"
         $SCRIPT_PATH generate_config "${{ github.event.inputs.extra_packages }}"
-        
         echo ""
         echo "📋 生成的配置摘要:"
         if [ -f ".config" ]; then
           echo "✅ 启用包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config 2>/dev/null | wc -l)"
           echo "❌ 禁用包数量: $(grep "^# CONFIG_PACKAGE_.* is not set$" .config 2>/dev/null | wc -l)"
-          
           if [ "$DEBUG_MODE" = "true" ]; then
             echo ""
             echo "=== 启用的插件列表 ==="
@@ -511,10 +419,8 @@ EOF
       run: |
         echo "=== 下载依赖包 ==="
         cd $BUILD_DIR
-        
         echo "开始下载依赖包..."
         $SCRIPT_PATH download_dependencies
-        
         echo ""
         echo "📦 下载目录内容:"
         ls -la dl/ 2>/dev/null | head -5 || echo "下载目录为空"
@@ -524,25 +430,20 @@ EOF
         echo "=== 处理自定义文件 ==="
         echo "当前工作目录: $(pwd)"
         echo ""
-        
-        # 详细检查目录结构
         echo "=== 目录结构检查 ==="
         echo "1. 检查当前目录:"
         ls -la
-        
         echo ""
         echo "2. 检查 firmware-config 目录:"
         if [ -d "firmware-config" ]; then
           echo "✅ firmware-config 目录存在"
           ls -la firmware-config/
-          
           echo ""
           echo "3. 检查 custom-files 目录:"
           if [ -d "firmware-config/custom-files" ]; then
             echo "✅ firmware-config/custom-files 目录存在"
             echo "目录内容:"
             ls -la firmware-config/custom-files/
-            
             echo ""
             echo "4. 查找所有自定义文件:"
             find firmware-config/custom-files -type f | while read file; do
@@ -556,7 +457,6 @@ EOF
         else
           echo "❌ firmware-config 目录不存在"
         fi
-        
         echo ""
         echo "=== 开始处理自定义文件 ==="
         cd $BUILD_DIR
@@ -567,28 +467,19 @@ EOF
       run: |
         echo "=== 编译固件 ==="
         cd $BUILD_DIR
-        
         echo "编译参数:"
         echo "  缓存模式: ${{ github.event.inputs.enable_cache }}"
         echo "  CPU核心数: $(nproc)"
         echo "  调试模式: ${{ github.event.inputs.debug_mode }}"
         echo ""
-        
-        # 记录开始时间
         START_TIME=$(date +%s)
         echo "⏰ 编译开始时间: $(date)"
-        
-        # 执行编译
         $SCRIPT_PATH build_firmware "${{ github.event.inputs.enable_cache }}"
         BUILD_EXIT_CODE=$?
-        
-        # 记录结束时间
         END_TIME=$(date +%s)
         DURATION=$((END_TIME - START_TIME))
         echo ""
         echo "⏱️ 编译耗时: $((DURATION / 60))分钟 $((DURATION % 60))秒"
-        
-        # 设置步骤结果
         if [ $BUILD_EXIT_CODE -eq 0 ]; then
           echo "✅ 编译完成"
           echo "BUILD_SUCCESS=true" >> $GITHUB_OUTPUT
@@ -602,16 +493,12 @@ EOF
       run: |
         echo "=== 详细错误分析 ==="
         cd $BUILD_DIR
-        
-        # 首先检查是否存在日志文件
         echo "检查日志文件..."
         if [ -f "build.log" ]; then
           echo "✅ 找到编译日志: build.log"
           LOG_SIZE=$(wc -l < build.log)
           echo "📊 日志大小: $LOG_SIZE 行"
           echo "📄 日志大小: $(du -h build.log | cut -f1)"
-          
-          # 使用详细错误分析脚本
           if [ -f "$(pwd)/firmware-config/scripts/error_analysis_detailed.sh" ]; then
             $(pwd)/firmware-config/scripts/error_analysis_detailed.sh
           else
@@ -644,10 +531,8 @@ EOF
       run: |
         echo "=== 固件文件检查 ==="
         cd $BUILD_DIR
-        
         echo "检查固件文件..."
         $SCRIPT_PATH check_firmware_files
-        
         echo ""
         echo "=== 生成的固件详情 ==="
         FIRMWARE_FILES=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) 2>/dev/null | head -10)
@@ -670,12 +555,8 @@ EOF
         echo "=== 备份配置文件 ==="
         echo "当前目录: $(pwd)"
         echo "脚本路径: $SCRIPT_PATH"
-        
-        # 确保在正确的目录
         cd $BUILD_DIR
         echo "切换到构建目录: $BUILD_DIR"
-        
-        # 检查脚本是否存在
         if [ -f "../$SCRIPT_PATH" ]; then
           echo "使用相对路径脚本"
           ../$SCRIPT_PATH backup_config
@@ -687,7 +568,6 @@ EOF
           $SCRIPT_PATH backup_config
         else
           echo "❌ 脚本不存在，尝试手动备份"
-          # 手动备份配置
           mkdir -p config_backup
           if [ -f ".config" ]; then
             cp .config config_backup/
@@ -698,7 +578,6 @@ EOF
             echo "✅ 手动备份编译日志"
           fi
         fi
-        
         echo ""
         echo "📁 备份内容:"
         ls -la config_backup/ 2>/dev/null || echo "没有备份文件"
@@ -707,14 +586,12 @@ EOF
       if: always()
       run: |
         echo "=== 工具链统计信息 ==="
-        
         TOOLCHAIN_DB="$TOOLCHAIN_DIR/toolchain_db.json"
         if [ -f "$TOOLCHAIN_DB" ]; then
           echo "📊 工具链数据库: $TOOLCHAIN_DB"
           echo ""
           echo "统计信息:"
           jq '.statistics' $TOOLCHAIN_DB
-          
           echo ""
           echo "缓存的工具链:"
           jq -r '.toolchains | keys[]' $TOOLCHAIN_DB 2>/dev/null | while read key; do
@@ -725,7 +602,6 @@ EOF
         else
           echo "❌ 工具链数据库不存在"
         fi
-        
         echo ""
         echo "工具链缓存目录: $TOOLCHAIN_DIR"
         if [ -d "$TOOLCHAIN_DIR" ]; then
@@ -758,19 +634,14 @@ EOF
       run: |
         echo "=== 清理构建目录 ==="
         echo "清理临时文件，保留源码和工具链..."
-        
         if [ -d "$BUILD_DIR" ]; then
           cd $BUILD_DIR
           echo "清理前大小: $(du -sh . | cut -f1)"
-          
-          # 清理临时文件，保留重要文件
           rm -rf build_dir tmp logs dl .config.old
           echo "清理后大小: $(du -sh . | cut -f1)"
-          
           echo "📁 保留的文件:"
           ls -la
         fi
-        
         echo ""
         echo "📦 工具链缓存信息:"
         if [ -d "$TOOLCHAIN_DIR" ]; then
