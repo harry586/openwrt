@@ -5,6 +5,7 @@ set -e
 BUILD_DIR="/mnt/openwrt-build"
 ENV_FILE="$BUILD_DIR/build_env.sh"
 CUSTOM_FILES_DIR="./firmware-config/custom-files"
+TOOLCHAIN_BASE="./firmware-config/build-tools"
 
 # 日志函数
 log() {
@@ -20,13 +21,17 @@ handle_error() {
 # 保存环境变量到文件
 save_env() {
     mkdir -p $BUILD_DIR
-    echo "#!/bin/bash" > $ENV_FILE
-    echo "export SELECTED_REPO_URL=\"$SELECTED_REPO_URL\"" >> $ENV_FILE
-    echo "export SELECTED_BRANCH=\"$SELECTED_BRANCH\"" >> $ENV_FILE
-    echo "export TARGET=\"$TARGET\"" >> $ENV_FILE
-    echo "export SUBTARGET=\"$SUBTARGET\"" >> $ENV_FILE
-    echo "export DEVICE=\"$DEVICE\"" >> $ENV_FILE
-    echo "export CONFIG_MODE=\"$CONFIG_MODE\"" >> $ENV_FILE
+    cat > $ENV_FILE << EOF
+#!/bin/bash
+export SELECTED_REPO_URL="$SELECTED_REPO_URL"
+export SELECTED_BRANCH="$SELECTED_BRANCH"
+export TARGET="$TARGET"
+export SUBTARGET="$SUBTARGET"
+export DEVICE="$DEVICE"
+export CONFIG_MODE="$CONFIG_MODE"
+export ARCH="$ARCH"
+export CPU="$CPU"
+EOF
     chmod +x $ENV_FILE
 }
 
@@ -48,7 +53,7 @@ setup_environment() {
         libpython3-dev python3 python3-dev python3-pip python3-setuptools \
         python3-yaml xsltproc zip subversion ninja-build automake autoconf \
         libtool pkg-config help2man texinfo aria2 liblz4-dev zstd \
-        libcurl4-openssl-dev groff texlive texinfo cmake || handle_error "安装依赖包失败"
+        libcurl4-openssl-dev groff texlive texinfo cmake jq || handle_error "安装依赖包失败"
     log "✅ 编译环境设置完成"
 }
 
@@ -61,7 +66,7 @@ create_build_dir() {
     log "✅ 构建目录创建完成"
 }
 
-# 步骤3: 初始化构建环境（合并版本选择、设备配置和克隆源码）
+# 步骤3: 初始化构建环境
 initialize_build_env() {
     local device_name=$1
     local version_selection=$2
@@ -87,21 +92,29 @@ initialize_build_env() {
             TARGET="ipq40xx"
             SUBTARGET="generic"
             DEVICE="asus_rt-ac42u"
+            ARCH="arm"
+            CPU="cortex-a7"
             ;;
         "mi_router_4a_gigabit"|"r4ag")
             TARGET="ramips"
             SUBTARGET="mt76x8"
             DEVICE="xiaomi_mi-router-4a-gigabit"
+            ARCH="mipsel"
+            CPU="24kc"
             ;;
         "mi_router_3g"|"r3g")
             TARGET="ramips"
             SUBTARGET="mt7621"
             DEVICE="xiaomi_mi-router-3g"
+            ARCH="mipsel"
+            CPU="1004kc"
             ;;
         *)
             TARGET="ipq40xx"
             SUBTARGET="generic"
             DEVICE="$device_name"
+            ARCH="arm"
+            CPU="cortex-a7"
             ;;
     esac
     
@@ -111,6 +124,7 @@ initialize_build_env() {
     log "子目标: $SUBTARGET"
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
+    log "架构: $ARCH, CPU: $CPU"
     
     # 保存环境变量
     save_env
@@ -122,18 +136,24 @@ initialize_build_env() {
     echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
     echo "DEVICE=$DEVICE" >> $GITHUB_ENV
     echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
+    echo "ARCH=$ARCH" >> $GITHUB_ENV
+    echo "CPU=$CPU" >> $GITHUB_ENV
     
-    # 克隆源码
-    log "=== 克隆源码 ==="
-    log "仓库: $SELECTED_REPO_URL"
-    log "分支: $SELECTED_BRANCH"
-    
-    # 清理目录
-    sudo rm -rf ./* ./.git* 2>/dev/null || true
-    
-    # 克隆源码
-    git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
-    log "✅ 源码克隆完成"
+    # 克隆源码（如果不存在）
+    if [ ! -d ".git" ]; then
+        log "=== 克隆源码 ==="
+        log "仓库: $SELECTED_REPO_URL"
+        log "分支: $SELECTED_BRANCH"
+        
+        # 清理目录
+        sudo rm -rf ./* ./.git* 2>/dev/null || true
+        
+        # 克隆源码
+        git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
+        log "✅ 源码克隆完成"
+    else
+        log "✅ 源码已存在，跳过克隆"
+    fi
 }
 
 # 步骤4: 添加 TurboACC 支持
@@ -148,8 +168,13 @@ add_turboacc_support() {
         
         if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             log "🔧 为 23.05 添加 TurboACC 支持"
-            echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
-            log "✅ TurboACC feed 添加完成"
+            # 检查是否已添加
+            if ! grep -q "turboacc" feeds.conf.default; then
+                echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+                log "✅ TurboACC feed 添加完成"
+            else
+                log "✅ TurboACC feed 已存在"
+            fi
         else
             log "ℹ️  21.02 版本已内置 TurboACC，无需额外添加"
         fi
@@ -158,15 +183,12 @@ add_turboacc_support() {
     fi
 }
 
-# 步骤5: 添加文件传输插件支持（修改为使用官方源）
+# 步骤5: 添加文件传输插件支持
 add_filetransfer_support() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
     log "=== 添加文件传输插件支持 ==="
-    
-    # 所有版本都使用官方源的 luci-app-filetransfer
-    log "🔧 所有版本使用官方源的 luci-app-filetransfer"
     
     # 确保 feeds.conf.default 包含基本 feeds
     if ! grep -q "src-git luci" feeds.conf.default; then
@@ -176,9 +198,10 @@ add_filetransfer_support() {
             FEEDS_BRANCH="openwrt-21.02"
         fi
         echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
+        log "✅ 添加 luci feed"
     fi
     
-    log "✅ 文件传输插件支持添加完成（使用官方源）"
+    log "✅ 文件传输插件支持添加完成"
 }
 
 # 步骤6: 配置Feeds
@@ -194,13 +217,15 @@ configure_feeds() {
         FEEDS_BRANCH="openwrt-21.02"
     fi
     
-    # 确保 feeds.conf.default 包含基本 feeds
-    echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf.default
-    echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
-    
-    # 如果是 23.05 且正常模式，添加 turboacc feed
-    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] && [ "$CONFIG_MODE" = "normal" ]; then
-        echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+    # 创建基础 feeds 配置
+    if [ ! -f "feeds.conf.default" ] || [ ! -s "feeds.conf.default" ]; then
+        echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf.default
+        echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
+        
+        # 如果是 23.05 且正常模式，添加 turboacc feed
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] && [ "$CONFIG_MODE" = "normal" ]; then
+            echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+        fi
     fi
     
     # 更新和安装所有 feeds
@@ -224,14 +249,14 @@ install_turboacc_packages() {
     ./scripts/feeds update turboacc || handle_error "更新turboacc feed失败"
     
     # 安装 turboacc 相关包
-    ./scripts/feeds install -p turboacc luci-app-turboacc || handle_error "安装luci-app-turboacc失败"
-    ./scripts/feeds install -p turboacc kmod-shortcut-fe || handle_error "安装kmod-shortcut-fe失败"
-    ./scripts/feeds install -p turboacc kmod-fast-classifier || handle_error "安装kmod-fast-classifier失败"
+    ./scripts/feeds install -p turboacc luci-app-turboacc || log "⚠️ 安装luci-app-turboacc失败"
+    ./scripts/feeds install -p turboacc kmod-shortcut-fe || log "⚠️ 安装kmod-shortcut-fe失败"
+    ./scripts/feeds install -p turboacc kmod-fast-classifier || log "⚠️ 安装kmod-fast-classifier失败"
     
     log "✅ TurboACC 包安装完成"
 }
 
-# 步骤8: 安装文件传输插件包（增强版本兼容性）
+# 步骤8: 安装文件传输插件包
 install_filetransfer_packages() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -246,26 +271,8 @@ install_filetransfer_packages() {
     if ./scripts/feeds install -p luci luci-app-filetransfer 2>/dev/null; then
         log "✅ 成功安装官方源 luci-app-filetransfer"
     else
-        log "⚠️ 官方源安装失败，尝试备用方案"
-        
-        # 🚨 关键修复：23.05版本备用安装方案
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            log "🔧 23.05版本使用备用文件传输插件方案"
-            
-            # 检查是否存在文件传输插件目录
-            if [ -d "feeds/luci/applications/luci-app-filetransfer" ]; then
-                log "✅ 找到luci-app-filetransfer目录，手动启用"
-                echo "CONFIG_PACKAGE_luci-app-filetransfer=y" >> .config
-            else
-                log "🔧 创建临时的文件传输插件配置"
-                # 即使没有插件包，也确保配置中存在
-                echo "CONFIG_PACKAGE_luci-app-filetransfer=y" >> .config
-            fi
-        else
-            # 21.02版本应该能正常安装
-            log "🔧 21.02版本重新尝试安装"
-            ./scripts/feeds install -p luci luci-app-filetransfer || log "⚠️ 21.02版本安装也失败"
-        fi
+        log "⚠️ 官方源安装失败，使用备用方案"
+        echo "CONFIG_PACKAGE_luci-app-filetransfer=y" >> .config
     fi
     
     # 尝试安装中文语言包
@@ -287,9 +294,12 @@ pre_build_space_check() {
     AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
     AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
     log "/mnt 可用空间: ${AVAILABLE_GB}G"
+    if [ $AVAILABLE_GB -lt 20 ]; then
+        log "⚠️ 空间紧张: 剩余 ${AVAILABLE_GB}G"
+    fi
 }
 
-# 步骤10: 智能配置生成（USB完全修复通用版）
+# 步骤10: 智能配置生成
 generate_config() {
     local extra_packages=$1
     load_env
@@ -398,7 +408,7 @@ generate_config() {
     echo "CONFIG_PACKAGE_kmod-ipt-nat6=y" >> .config
     
     # ============================================================================
-    # 🚨 USB 完全修复通用配置 - 适用于所有平台和设备
+    # 🚨 USB 完全修复通用配置
     # ============================================================================
     log "=== 🚨 USB 完全修复通用配置 - 开始 ==="
     
@@ -416,11 +426,11 @@ generate_config() {
     echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config
     
     # 平台专用USB控制器驱动
-    echo "# 🟡 平台专用USB控制器驱动 - 按平台启用" >> .config
+    echo "# 🟡 平台专用USB控制器驱动" >> .config
     
     # IPQ40xx 专用USB驱动
     if [ "$TARGET" = "ipq40xx" ]; then
-        log "🚨 关键修复：IPQ40xx 专用USB控制器驱动"
+        log "🚨 IPQ40xx 专用USB控制器驱动"
         echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
@@ -429,7 +439,7 @@ generate_config() {
     
     # MT76xx/雷凌 平台USB驱动
     if [ "$TARGET" = "ramips" ]; then
-        log "🚨 关键修复：MT76xx/雷凌 平台USB控制器驱动"
+        log "🚨 MT76xx/雷凌 平台USB控制器驱动"
         echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
@@ -454,12 +464,11 @@ generate_config() {
     echo "CONFIG_PACKAGE_kmod-fs-exfat=y" >> .config
     echo "CONFIG_PACKAGE_kmod-fs-autofs4=y" >> .config
     
-    # 🚨 关键修复：NTFS配置 - 避免23.05版本冲突
+    # NTFS配置
     if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
         log "🔧 23.05版本NTFS配置优化"
         echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
         echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
-        # 🚨 关键：禁用所有ntfs-3g相关包，避免配置冲突
         echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
         echo "# CONFIG_PACKAGE_ntfs-3g-utils is not set" >> .config
         echo "# CONFIG_PACKAGE_ntfs3-mount is not set" >> .config
@@ -494,7 +503,7 @@ generate_config() {
     echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
     echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
     
-    # 🚨 关键修复：文件传输插件配置（所有版本都启用）
+    # 文件传输插件配置
     echo "CONFIG_PACKAGE_luci-app-filetransfer=y" >> .config
     echo "CONFIG_PACKAGE_luci-i18n-filetransfer-zh-cn=y" >> .config
     
@@ -600,10 +609,10 @@ verify_usb_config() {
     grep "CONFIG_PACKAGE_kmod-usb-core" .config | grep "=y" && echo "✅ USB核心" || echo "❌ 缺少USB核心"
     
     echo "2. 🟢 USB控制器:"
-    grep -E "CONFIG_PACKAGE_kmod-usb2|CONFIG_PACKAGE_kmod-usb3|CONFIG_PACKAGE_kmod-usb-ehci|CONFIG_PACKAGE_kmod-usb-ohci" .config | grep "=y" || echo "❌ 缺少USB控制器"
+    grep -E "CONFIG_PACKAGE_kmod-usb2|CONFIG_PACKAGE_kmod-usb3" .config | grep "=y" || echo "❌ 缺少USB控制器"
     
     echo "3. 🚨 平台专用USB控制器:"
-    grep -E "CONFIG_PACKAGE_kmod-usb-dwc3|CONFIG_PACKAGE_kmod-usb-dwc3-qcom|CONFIG_PACKAGE_kmod-phy-qcom-dwc3" .config | grep "=y" || echo "ℹ️  无平台专用USB控制器"
+    grep -E "CONFIG_PACKAGE_kmod-usb-dwc3|CONFIG_PACKAGE_kmod-usb-dwc3-qcom" .config | grep "=y" || echo "ℹ️  无平台专用USB控制器"
     
     echo "4. 🟢 USB存储:"
     grep "CONFIG_PACKAGE_kmod-usb-storage" .config | grep "=y" || echo "❌ 缺少USB存储"
@@ -611,7 +620,7 @@ verify_usb_config() {
     log "=== 🚨 USB配置验证完成 ==="
 }
 
-# 步骤12: 应用配置（增强插件状态显示）
+# 步骤12: 应用配置
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -621,9 +630,6 @@ apply_config() {
     # 显示当前配置摘要
     log "=== 配置摘要 ==="
     log "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
-    log "文件传输插件状态: $(grep "CONFIG_PACKAGE_luci-app-filetransfer" .config)"
-    log "USB核心驱动状态: $(grep "CONFIG_PACKAGE_kmod-usb-core" .config)"
-    log "USB存储状态: $(grep "CONFIG_PACKAGE_kmod-usb-storage" .config)"
     
     # 🚨 关键修复：23.05版本需要先清理可能的配置冲突
     if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
@@ -640,15 +646,11 @@ apply_config() {
     log "=== 应用配置后状态 ==="
     log "最终启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)"
     
-    # 🚨 增强：显示所有启用的插件状态
+    # 显示所有启用的插件状态
     log "=== ✅ 所有启用的插件列表 ==="
     grep "^CONFIG_PACKAGE_luci-app-.*=y$" .config | sed 's/CONFIG_PACKAGE_//;s/=y//' | while read plugin; do
         log "  ✅ $plugin"
     done
-    
-    # 显示关键插件状态
-    log "=== 关键插件状态 ==="
-    grep -E "CONFIG_PACKAGE_luci-app-filetransfer|CONFIG_PACKAGE_luci-app-turboacc|CONFIG_PACKAGE_luci-app-samba4" .config | head -10
     
     log "✅ 配置应用完成"
 }
@@ -675,7 +677,7 @@ download_dependencies() {
     log "✅ 依赖包下载完成"
 }
 
-# 步骤15: 处理自定义文件（完全重写搜索逻辑）
+# 步骤15: 处理自定义文件
 process_custom_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -852,13 +854,24 @@ build_firmware() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
     log "=== 编译固件 ==="
+    
+    # 设置编译线程数
+    local num_cores=$(nproc)
+    local build_jobs=$((num_cores + 1))
+    
     if [ "$enable_cache" = "true" ]; then
-        log "启用编译缓存"
-        make -j$(nproc) V=s 2>&1 | tee build.log
+        log "启用编译缓存 (使用 $build_jobs 线程)"
+        # 设置ccache
+        export CCACHE_DIR="$TOOLCHAIN_BASE/cache/ccache"
+        export CCACHE_MAXSIZE="10G"
+        mkdir -p $CCACHE_DIR
+        
+        # 首次构建需要更长时间
+        make -j$build_jobs V=s 2>&1 | tee build.log
         BUILD_EXIT_CODE=${PIPESTATUS[0]}
     else
-        log "普通编译模式"
-        make -j$(nproc) V=s 2>&1 | tee build.log
+        log "普通编译模式 (使用 $build_jobs 线程)"
+        make -j$build_jobs V=s 2>&1 | tee build.log
         BUILD_EXIT_CODE=${PIPESTATUS[0]}
     fi
     
@@ -891,11 +904,12 @@ check_firmware_files() {
     log "=== 固件文件检查 ==="
     if [ -d "bin/targets" ]; then
         log "✅ 固件目录存在"
-        find bin/targets -name "*.bin" -o -name "*.img" | while read file; do
-            log "固件文件: $file ($(du -h "$file" | cut -f1))"
-        done
         log "=== 生成的固件列表 ==="
         find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) -exec ls -la {} \;
+        
+        # 统计文件大小
+        total_size=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) -exec du -ch {} + | grep total$ | cut -f1)
+        log "📊 固件总大小: $total_size"
     else
         log "❌ 固件目录不存在"
         exit 1
@@ -933,7 +947,8 @@ backup_config() {
     echo "==========================================" >> $CONFIG_SUMMARY
     echo "版本: $SELECTED_BRANCH" >> $CONFIG_SUMMARY
     echo "设备: $DEVICE" >> $CONFIG_SUMMARY
-    echo "目标平台: $TARGET" >> $CONFIG_SUMMARY
+    echo "目标平台: $TARGET/$SUBTARGET" >> $CONFIG_SUMMARY
+    echo "架构: $ARCH-$CPU" >> $CONFIG_SUMMARY
     echo "配置模式: $CONFIG_MODE" >> $CONFIG_SUMMARY
     echo "==========================================" >> $CONFIG_SUMMARY
     
@@ -951,8 +966,13 @@ backup_config() {
 # 步骤20: 清理目录
 cleanup() {
     log "=== 清理构建目录 ==="
-    sudo rm -rf $BUILD_DIR || log "⚠️ 清理构建目录失败"
-    log "✅ 构建目录已清理"
+    # 只清理构建目录，保留工具链
+    if [ -d "$BUILD_DIR" ]; then
+        sudo rm -rf $BUILD_DIR/* 2>/dev/null || true
+        log "✅ 构建目录已清理"
+    else
+        log "ℹ️ 构建目录不存在"
+    fi
 }
 
 # 主函数
