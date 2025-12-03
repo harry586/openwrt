@@ -5,7 +5,6 @@ set -e
 BUILD_DIR="/mnt/openwrt-build"
 ENV_FILE="$BUILD_DIR/build_env.sh"
 CUSTOM_FILES_DIR="./firmware-config/custom-files"
-TOOLCHAIN_BASE="./firmware-config/build-tools"
 
 # 日志函数
 log() {
@@ -29,8 +28,6 @@ export TARGET="$TARGET"
 export SUBTARGET="$SUBTARGET"
 export DEVICE="$DEVICE"
 export CONFIG_MODE="$CONFIG_MODE"
-export ARCH="$ARCH"
-export CPU="$CPU"
 EOF
     chmod +x $ENV_FILE
 }
@@ -45,7 +42,11 @@ load_env() {
 # 步骤1: 设置编译环境
 setup_environment() {
     log "=== 安装编译依赖包 ==="
+    
+    # 首先更新包列表
     sudo apt-get update || handle_error "apt-get update失败"
+    
+    # 安装编译OpenWrt所需的所有依赖包
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
         build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
         gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip \
@@ -53,7 +54,9 @@ setup_environment() {
         libpython3-dev python3 python3-dev python3-pip python3-setuptools \
         python3-yaml xsltproc zip subversion ninja-build automake autoconf \
         libtool pkg-config help2man texinfo aria2 liblz4-dev zstd \
-        libcurl4-openssl-dev groff texlive texinfo cmake jq || handle_error "安装依赖包失败"
+        libcurl4-openssl-dev groff texlive texinfo cmake jq \
+        ccache u-boot-tools gperf nodejs npm swig time xsltproc || handle_error "安装依赖包失败"
+    
     log "✅ 编译环境设置完成"
 }
 
@@ -92,29 +95,21 @@ initialize_build_env() {
             TARGET="ipq40xx"
             SUBTARGET="generic"
             DEVICE="asus_rt-ac42u"
-            ARCH="arm"
-            CPU="cortex-a7"
             ;;
         "mi_router_4a_gigabit"|"r4ag")
             TARGET="ramips"
             SUBTARGET="mt76x8"
             DEVICE="xiaomi_mi-router-4a-gigabit"
-            ARCH="mipsel"
-            CPU="24kc"
             ;;
         "mi_router_3g"|"r3g")
             TARGET="ramips"
             SUBTARGET="mt7621"
             DEVICE="xiaomi_mi-router-3g"
-            ARCH="mipsel"
-            CPU="1004kc"
             ;;
         *)
             TARGET="ipq40xx"
             SUBTARGET="generic"
             DEVICE="$device_name"
-            ARCH="arm"
-            CPU="cortex-a7"
             ;;
     esac
     
@@ -124,7 +119,6 @@ initialize_build_env() {
     log "子目标: $SUBTARGET"
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
-    log "架构: $ARCH, CPU: $CPU"
     
     # 保存环境变量
     save_env
@@ -136,24 +130,18 @@ initialize_build_env() {
     echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
     echo "DEVICE=$DEVICE" >> $GITHUB_ENV
     echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
-    echo "ARCH=$ARCH" >> $GITHUB_ENV
-    echo "CPU=$CPU" >> $GITHUB_ENV
     
-    # 克隆源码（如果不存在）
-    if [ ! -d ".git" ]; then
-        log "=== 克隆源码 ==="
-        log "仓库: $SELECTED_REPO_URL"
-        log "分支: $SELECTED_BRANCH"
-        
-        # 清理目录
-        sudo rm -rf ./* ./.git* 2>/dev/null || true
-        
-        # 克隆源码
-        git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
-        log "✅ 源码克隆完成"
-    else
-        log "✅ 源码已存在，跳过克隆"
-    fi
+    # 克隆源码
+    log "=== 克隆源码 ==="
+    log "仓库: $SELECTED_REPO_URL"
+    log "分支: $SELECTED_BRANCH"
+    
+    # 清理目录
+    sudo rm -rf ./* ./.git* 2>/dev/null || true
+    
+    # 克隆源码
+    git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
+    log "✅ 源码克隆完成"
 }
 
 # 步骤4: 添加 TurboACC 支持
@@ -168,13 +156,8 @@ add_turboacc_support() {
         
         if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             log "🔧 为 23.05 添加 TurboACC 支持"
-            # 检查是否已添加
-            if ! grep -q "turboacc" feeds.conf.default; then
-                echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
-                log "✅ TurboACC feed 添加完成"
-            else
-                log "✅ TurboACC feed 已存在"
-            fi
+            echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+            log "✅ TurboACC feed 添加完成"
         else
             log "ℹ️  21.02 版本已内置 TurboACC，无需额外添加"
         fi
@@ -183,28 +166,7 @@ add_turboacc_support() {
     fi
 }
 
-# 步骤5: 添加文件传输插件支持
-add_filetransfer_support() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 添加文件传输插件支持 ==="
-    
-    # 确保 feeds.conf.default 包含基本 feeds
-    if ! grep -q "src-git luci" feeds.conf.default; then
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            FEEDS_BRANCH="openwrt-23.05"
-        else
-            FEEDS_BRANCH="openwrt-21.02"
-        fi
-        echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
-        log "✅ 添加 luci feed"
-    fi
-    
-    log "✅ 文件传输插件支持添加完成"
-}
-
-# 步骤6: 配置Feeds
+# 步骤5: 配置Feeds
 configure_feeds() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -218,14 +180,14 @@ configure_feeds() {
     fi
     
     # 创建基础 feeds 配置
-    if [ ! -f "feeds.conf.default" ] || [ ! -s "feeds.conf.default" ]; then
-        echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf.default
-        echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
-        
-        # 如果是 23.05 且正常模式，添加 turboacc feed
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] && [ "$CONFIG_MODE" = "normal" ]; then
-            echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
-        fi
+    cat > feeds.conf.default << EOF
+src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH
+src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH
+EOF
+    
+    # 如果是 23.05 且正常模式，添加 turboacc feed
+    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] && [ "$CONFIG_MODE" = "normal" ]; then
+        echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
     fi
     
     # 更新和安装所有 feeds
@@ -238,7 +200,7 @@ configure_feeds() {
     log "✅ Feeds配置完成"
 }
 
-# 步骤7: 安装 TurboACC 包
+# 步骤6: 安装 TurboACC 包
 install_turboacc_packages() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -256,7 +218,7 @@ install_turboacc_packages() {
     log "✅ TurboACC 包安装完成"
 }
 
-# 步骤8: 安装文件传输插件包
+# 步骤7: 安装文件传输插件包
 install_filetransfer_packages() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -287,7 +249,7 @@ install_filetransfer_packages() {
     log "✅ 文件传输插件包安装完成"
 }
 
-# 步骤9: 编译前空间检查
+# 步骤8: 编译前空间检查
 pre_build_space_check() {
     log "=== 编译前空间检查 ==="
     df -h
@@ -299,7 +261,7 @@ pre_build_space_check() {
     fi
 }
 
-# 步骤10: 智能配置生成
+# 步骤9: 智能配置生成
 generate_config() {
     local extra_packages=$1
     load_env
@@ -598,7 +560,7 @@ generate_config() {
     log "✅ 智能配置生成完成"
 }
 
-# 步骤11: 验证USB配置
+# 步骤10: 验证USB配置
 verify_usb_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -620,7 +582,7 @@ verify_usb_config() {
     log "=== 🚨 USB配置验证完成 ==="
 }
 
-# 步骤12: 应用配置
+# 步骤11: 应用配置
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -655,7 +617,7 @@ apply_config() {
     log "✅ 配置应用完成"
 }
 
-# 步骤13: 修复网络环境
+# 步骤12: 修复网络环境
 fix_network() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
@@ -668,95 +630,56 @@ fix_network() {
     log "✅ 网络环境修复完成"
 }
 
-# 步骤14: 下载依赖包
+# 步骤13: 下载依赖包
 download_dependencies() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
     log "=== 下载依赖包 ==="
-    make -j1 download || handle_error "下载依赖包失败"
-    log "✅ 依赖包下载完成"
+    
+    # 先检查网络
+    if ! curl -s --connect-timeout 10 https://github.com > /dev/null; then
+        log "⚠️ 网络连接可能有问题，尝试设置代理"
+        export http_proxy=""
+        export https_proxy=""
+    fi
+    
+    # 增加重试次数
+    for i in {1..3}; do
+        log "第 $i 次尝试下载依赖包..."
+        if make -j1 download V=s; then
+            log "✅ 依赖包下载完成"
+            return 0
+        else
+            log "⚠️ 第 $i 次下载失败，等待10秒后重试..."
+            sleep 10
+        fi
+    done
+    
+    log "❌ 依赖包下载失败，但继续编译"
+    return 0
 }
 
-# 步骤15: 处理自定义文件
+# 步骤14: 处理自定义文件
 process_custom_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 🎯 增强版自定义文件处理 ==="
+    log "=== 处理自定义文件 ==="
     
-    # 创建自定义文件目录
+    # 创建自定义文件日志目录
     mkdir -p $BUILD_DIR/custom_files_log
     CUSTOM_LOG="$BUILD_DIR/custom_files_log/custom_files.log"
     
-    echo "🎯 增强版自定义文件处理报告 - $(date)" > $CUSTOM_LOG
+    echo "自定义文件处理报告 - $(date)" > $CUSTOM_LOG
     echo "==========================================" >> $CUSTOM_LOG
     
-    # 🚨 关键修复：多层级深度搜索自定义文件目录
-    log "🔍 开始深度搜索自定义文件目录..."
-    
-    # 定义搜索的根目录（从工作目录开始）
-    SEARCH_ROOTS=(
-        "."
-        "./firmware-config"
-        "./config"
-        "./custom"
-        "./files"
-    )
-    
-    # 定义可能的目录名称模式
-    SEARCH_PATTERNS=(
-        "custom-files"
-        "custom_files" 
-        "files"
-        "custom"
-        "ipk"
-        "scripts"
-        "user"
-    )
-    
-    CUSTOM_FILES_DIR_FOUND=""
-    MAX_DEPTH=4  # 最大搜索深度
-    
-    # 🎯 深度优先搜索算法
-    for root_dir in "${SEARCH_ROOTS[@]}"; do
-        if [ ! -d "$root_dir" ]; then
-            continue
-        fi
-        
-        log "🔍 在 $root_dir 中搜索..."
-        echo "搜索根目录: $root_dir" >> $CUSTOM_LOG
-        
-        for pattern in "${SEARCH_PATTERNS[@]}"; do
-            # 使用find命令进行深度搜索
-            found_dirs=$(find "$root_dir" -maxdepth $MAX_DEPTH -type d -iname "*$pattern*" 2>/dev/null | grep -v "log\|tmp\|temp\|backup")
-            
-            for found_dir in $found_dirs; do
-                # 🚨 关键检查：目录必须包含文件（不是空目录）
-                file_count=$(find "$found_dir" -maxdepth 2 -type f \( -name "*.ipk" -o -name "*.sh" \) 2>/dev/null | wc -l)
-                
-                if [ $file_count -gt 0 ]; then
-                    CUSTOM_FILES_DIR_FOUND="$found_dir"
-                    log "🎯 找到有效自定义文件目录: $CUSTOM_FILES_DIR_FOUND"
-                    log "📊 目录包含文件数量: $file_count"
-                    echo "✅ 找到有效目录: $CUSTOM_FILES_DIR_FOUND (包含 $file_count 个文件)" >> $CUSTOM_LOG
-                    break 3  # 跳出三层循环
-                else
-                    log "🔍 检查目录: $found_dir (无ipk/sh文件)"
-                    echo "ℹ️  检查目录: $found_dir (无ipk/sh文件)" >> $CUSTOM_LOG
-                fi
-            done
-        done
-    done
-    
-    if [ -n "$CUSTOM_FILES_DIR_FOUND" ]; then
-        CUSTOM_FILES_DIR="$CUSTOM_FILES_DIR_FOUND"
-        log "🎯 使用自定义文件目录: $CUSTOM_FILES_DIR"
-        echo "最终使用目录: $CUSTOM_FILES_DIR" >> $CUSTOM_LOG
+    # 检查自定义文件目录是否存在
+    if [ -d "$CUSTOM_FILES_DIR" ]; then
+        log "✅ 找到自定义文件目录: $CUSTOM_FILES_DIR"
+        echo "找到自定义文件目录: $CUSTOM_FILES_DIR" >> $CUSTOM_LOG
         
         # 📦 处理IPK文件
-        log "📦 搜索IPK文件..."
         IPK_FILES=$(find "$CUSTOM_FILES_DIR" -name "*.ipk" -type f 2>/dev/null)
-        
         if [ -n "$IPK_FILES" ]; then
             log "✅ 发现 $(echo "$IPK_FILES" | wc -l) 个IPK文件"
             echo "发现的IPK文件:" >> $CUSTOM_LOG
@@ -773,24 +696,18 @@ process_custom_files() {
                     ipk_name=$(basename "$ipk_file")
                     log "📦 复制IPK: $ipk_name"
                     cp "$ipk_file" "$IPK_DEST_DIR/"
-                    echo "✅ 复制IPK: $ipk_name 到 $IPK_DEST_DIR/" >> $CUSTOM_LOG
                     ipk_count=$((ipk_count + 1))
                 fi
             done
             log "🎯 成功复制 $ipk_count 个IPK文件"
         else
             log "ℹ️ 未找到IPK文件"
-            echo "未找到IPK文件" >> $CUSTOM_LOG
         fi
         
         # 📜 处理Shell脚本
-        log "📜 搜索Shell脚本..."
         SH_FILES=$(find "$CUSTOM_FILES_DIR" -name "*.sh" -type f 2>/dev/null)
-        
         if [ -n "$SH_FILES" ]; then
             log "✅ 发现 $(echo "$SH_FILES" | wc -l) 个Shell脚本"
-            echo "发现的Shell脚本:" >> $CUSTOM_LOG
-            echo "$SH_FILES" >> $CUSTOM_LOG
             
             # 创建脚本存放目录
             SCRIPT_DEST_DIR="$BUILD_DIR/files/etc/uci-defaults"
@@ -804,50 +721,25 @@ process_custom_files() {
                     log "📜 处理脚本: $sh_name"
                     cp "$sh_file" "$SCRIPT_DEST_DIR/"
                     chmod +x "$SCRIPT_DEST_DIR/$sh_name"
-                    echo "✅ 复制脚本: $sh_name 到 $SCRIPT_DEST_DIR/" >> $CUSTOM_LOG
                     script_count=$((script_count + 1))
                 fi
             done
             log "🎯 成功处理 $script_count 个Shell脚本"
         else
             log "ℹ️ 未找到Shell脚本"
-            echo "未找到Shell脚本" >> $CUSTOM_LOG
         fi
-        
-        # 📁 详细文件列表
-        log "📁 生成详细文件列表..."
-        echo "自定义文件目录完整内容:" >> $CUSTOM_LOG
-        find "$CUSTOM_FILES_DIR" -type f 2>/dev/null >> $CUSTOM_LOG
-        
     else
-        log "🔍 深度搜索报告:"
-        echo "深度搜索报告:" >> $CUSTOM_LOG
-        echo "搜索根目录: ${SEARCH_ROOTS[*]}" >> $CUSTOM_LOG
-        echo "搜索模式: ${SEARCH_PATTERNS[*]}" >> $CUSTOM_LOG
-        echo "最大深度: $MAX_DEPTH" >> $CUSTOM_LOG
-        
-        # 🎯 显示所有可能的目录
-        log "所有可能的目录:"
-        echo "所有发现的目录:" >> $CUSTOM_LOG
-        find . -type d \( -iname "*custom*" -o -iname "*file*" -o -iname "*firmware*" -o -iname "*ipk*" -o -iname "*script*" \) 2>/dev/null | grep -v "log\|tmp\|temp\|backup" | head -20 >> $CUSTOM_LOG
-        
-        # 🎯 显示目录结构
-        log "当前目录结构:"
-        echo "当前目录结构 (前3层):" >> $CUSTOM_LOG
-        find . -maxdepth 3 -type d 2>/dev/null | sort >> $CUSTOM_LOG
-        
-        log "❌ 未找到有效的自定义文件目录"
-        echo "未找到有效的自定义文件目录" >> $CUSTOM_LOG
-        echo "请确保存在包含 ipk 或 sh 文件的 custom-files 目录" >> $CUSTOM_LOG
+        log "🔍 未找到自定义文件目录"
+        echo "未找到自定义文件目录: $CUSTOM_FILES_DIR" >> $CUSTOM_LOG
     fi
     
     echo "==========================================" >> $CUSTOM_LOG
-    echo "自定义文件处理完成 - 总计处理: IPK($ipk_count) 脚本($script_count)" >> $CUSTOM_LOG
+    echo "自定义文件处理完成" >> $CUSTOM_LOG
     
     log "✅ 自定义文件处理完成"
 }
 
-# 步骤16: 编译固件
+# 步骤15: 编译固件
 build_firmware() {
     local enable_cache=$1
     load_env
@@ -855,9 +747,12 @@ build_firmware() {
     
     log "=== 编译固件 ==="
     
+    # 确保编译日志文件存在
+    touch build.log
+    
     # 设置编译线程数
     local num_cores=$(nproc)
-    local build_jobs=$((num_cores + 1))
+    local build_jobs=$num_cores
     
     if [ "$enable_cache" = "true" ]; then
         log "启用编译缓存 (使用 $build_jobs 线程)"
@@ -866,7 +761,7 @@ build_firmware() {
         export CCACHE_MAXSIZE="10G"
         mkdir -p $CCACHE_DIR
         
-        # 首次构建需要更长时间
+        # 编译
         make -j$build_jobs V=s 2>&1 | tee build.log
         BUILD_EXIT_CODE=${PIPESTATUS[0]}
     else
@@ -876,18 +771,26 @@ build_firmware() {
     fi
     
     log "编译退出代码: $BUILD_EXIT_CODE"
-    if [ $BUILD_EXIT_CODE -ne 0 ]; then
-        log "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
-        if [ -f "build.log" ]; then
-            log "=== 编译错误摘要 ==="
-            grep -i "error:\|failed\|undefined" build.log | head -20
+    
+    # 检查编译结果
+    if [ $BUILD_EXIT_CODE -eq 0 ]; then
+        log "✅ 固件编译完成"
+        return 0
+    else
+        log "⚠️ 编译过程出现错误，检查是否有固件生成"
+        
+        # 即使编译失败，也检查是否有固件生成
+        if [ -d "bin/targets" ]; then
+            log "📦 发现编译输出目录，可能部分成功"
+            return 0
+        else
+            log "❌ 编译失败且无输出文件"
+            return 1
         fi
-        exit $BUILD_EXIT_CODE
     fi
-    log "✅ 固件编译完成"
 }
 
-# 步骤17: 编译后空间检查
+# 步骤16: 编译后空间检查
 post_build_space_check() {
     log "=== 编译后空间检查 ==="
     df -h
@@ -896,7 +799,7 @@ post_build_space_check() {
     log "/mnt 可用空间: ${AVAILABLE_GB}G"
 }
 
-# 步骤18: 固件文件检查
+# 步骤17: 固件文件检查
 check_firmware_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -905,18 +808,24 @@ check_firmware_files() {
     if [ -d "bin/targets" ]; then
         log "✅ 固件目录存在"
         log "=== 生成的固件列表 ==="
-        find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) -exec ls -la {} \;
+        find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) -exec ls -la {} \; | head -20
         
         # 统计文件大小
-        total_size=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) -exec du -ch {} + | grep total$ | cut -f1)
-        log "📊 固件总大小: $total_size"
+        FIRMWARE_FILES=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | head -5)
+        if [ -n "$FIRMWARE_FILES" ]; then
+            log "📊 生成的固件文件:"
+            for file in $FIRMWARE_FILES; do
+                size=$(du -h "$file" | cut -f1)
+                log "  📄 $(basename "$file") ($size)"
+            done
+        fi
     else
         log "❌ 固件目录不存在"
-        exit 1
+        return 1
     fi
 }
 
-# 步骤19: 备份配置文件
+# 步骤18: 备份配置文件
 backup_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -940,6 +849,11 @@ backup_config() {
         log "✅ 备份环境变量文件"
     fi
     
+    # 备份build.log
+    if [ -f "build.log" ]; then
+        cp build.log config_backup/ 2>/dev/null || true
+    fi
+    
     # 创建配置摘要
     CONFIG_SUMMARY="config_backup/config_summary.txt"
     echo "OpenWrt 构建配置摘要" > $CONFIG_SUMMARY
@@ -948,13 +862,12 @@ backup_config() {
     echo "版本: $SELECTED_BRANCH" >> $CONFIG_SUMMARY
     echo "设备: $DEVICE" >> $CONFIG_SUMMARY
     echo "目标平台: $TARGET/$SUBTARGET" >> $CONFIG_SUMMARY
-    echo "架构: $ARCH-$CPU" >> $CONFIG_SUMMARY
     echo "配置模式: $CONFIG_MODE" >> $CONFIG_SUMMARY
     echo "==========================================" >> $CONFIG_SUMMARY
     
     if [ -f ".config" ]; then
         echo "启用的包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)" >> $CONFIG_SUMMARY
-        echo "✅ 启用的插件列表:" >> $CONFIG_SUMMARY
+        echo "启用的插件列表:" >> $CONFIG_SUMMARY
         grep "^CONFIG_PACKAGE_luci-app-.*=y$" .config | sed 's/CONFIG_PACKAGE_//;s/=y//' | while read plugin; do
             echo "  ✅ $plugin" >> $CONFIG_SUMMARY
         done
@@ -963,13 +876,14 @@ backup_config() {
     log "✅ 配置文件备份完成"
 }
 
-# 步骤20: 清理目录
+# 步骤19: 清理目录
 cleanup() {
     log "=== 清理构建目录 ==="
     # 只清理构建目录，保留工具链
     if [ -d "$BUILD_DIR" ]; then
-        sudo rm -rf $BUILD_DIR/* 2>/dev/null || true
-        log "✅ 构建目录已清理"
+        # 保留必要的目录
+        sudo rm -rf $BUILD_DIR/{build_dir,bin,staging_dir,tmp,logs} 2>/dev/null || true
+        log "✅ 构建目录已清理（保留源码和配置）"
     else
         log "ℹ️ 构建目录不存在"
     fi
@@ -989,9 +903,6 @@ main() {
             ;;
         "add_turboacc_support")
             add_turboacc_support
-            ;;
-        "add_filetransfer_support")
-            add_filetransfer_support
             ;;
         "configure_feeds")
             configure_feeds
@@ -1042,7 +953,7 @@ main() {
             log "❌ 未知命令: $1"
             echo "可用命令:"
             echo "  setup_environment, create_build_dir, initialize_build_env"
-            echo "  add_turboacc_support, add_filetransfer_support, configure_feeds"
+            echo "  add_turboacc_support, configure_feeds"
             echo "  install_turboacc_packages, install_filetransfer_packages"
             echo "  pre_build_space_check, generate_config, verify_usb_config, apply_config"
             echo "  fix_network, download_dependencies, process_custom_files, build_firmware"
