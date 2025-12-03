@@ -3,7 +3,7 @@
 openwrt-build/
 
 # 工具链目录
-firmware-config/build-tools/
+/mnt/openwrt-toolchain/
 
 # 临时文件
 *.tmp
@@ -15,3 +15,7 @@ firmware-config/build-tools/
 bin/
 tmp/
 *.log
+build/
+staging_dir/
+dl/
+feeds/
