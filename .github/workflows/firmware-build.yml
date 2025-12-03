@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流（USB完全修复通用版）
+name: OpenWrt 智能固件构建工作流（带分层工具链缓存）
 
 on:
   workflow_dispatch:
@@ -41,9 +41,15 @@ on:
         required: false
         default: true
         type: boolean
+      rebuild_toolchain:
+        description: '🔄 强制重新构建工具链'
+        required: false
+        default: false
+        type: boolean
 
 env:
   BUILD_DIR: /mnt/openwrt-build
+  TOOLCHAIN_BASE: ./firmware-config/build-tools
 
 jobs:
   build-firmware:
@@ -73,9 +79,15 @@ jobs:
           exit 1
         fi
 
-    - name: 设置编译环境
+    - name: 初始化分层工具链系统
       run: |
-        firmware-config/scripts/build_firmware_main.sh setup_environment
+        echo "=== 初始化分层工具链系统 ==="
+        firmware-config/scripts/toolchain_manager.sh init
+
+    - name: 安装通用主机工具
+      run: |
+        echo "=== 安装通用主机工具 ==="
+        firmware-config/scripts/toolchain_manager.sh install_common
 
     - name: 创建构建目录
       run: |
@@ -87,6 +99,31 @@ jobs:
           "${{ github.event.inputs.device_name }}" \
           "${{ github.event.inputs.version_selection }}" \
           "${{ github.event.inputs.config_mode }}"
+
+    - name: 智能工具链处理
+      id: process_toolchain
+      run: |
+        echo "=== 智能工具链处理 ==="
+        
+        # 加载环境变量
+        source ${{ env.BUILD_DIR }}/build_env.sh 2>/dev/null || true
+        
+        # 设置工具链参数
+        FORCE_REBUILD="${{ github.event.inputs.rebuild_toolchain || 'false' }}"
+        
+        # 智能选择/构建工具链
+        firmware-config/scripts/toolchain_manager.sh smart_select \
+          "$SELECTED_BRANCH" \
+          "$TARGET" \
+          "$SUBTARGET" \
+          "$FORCE_REBUILD"
+        
+        # 设置输出变量
+        if [ $? -eq 0 ]; then
+          echo "TOOLCHAIN_READY=true" >> $GITHUB_OUTPUT
+        else
+          echo "TOOLCHAIN_READY=false" >> $GITHUB_OUTPUT
+        fi
 
     - name: 添加 TurboACC 支持
       run: |
@@ -160,6 +197,30 @@ jobs:
       if: always()
       run: |
         firmware-config/scripts/build_firmware_main.sh backup_config
+
+    - name: 提交工具链到仓库
+      if: github.event.inputs.rebuild_toolchain == 'true' && success()
+      run: |
+        echo "=== 提交工具链到仓库 ==="
+        
+        # 配置Git
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        
+        # 添加工具链文件
+        git add firmware-config/build-tools/
+        
+        # 检查是否有变更
+        if git diff --cached --quiet; then
+          echo "🔄 没有工具链变更需要提交"
+        else
+          # 提交工具链
+          git commit -m "🔧 更新工具链: ${{ github.event.inputs.version_selection }}-${{ env.TARGET }}-${{ env.SUBTARGET }}"
+          
+          # 推送到仓库
+          git push origin HEAD:${{ github.ref }}
+          echo "✅ 工具链已提交到仓库"
+        fi
 
     - name: 上传固件
       if: success()
