@@ -1,5 +1,14 @@
-# 工具链文件处理
+# 工具链文件处理（使用Git LFS）
+firmware-config/build-tools/platforms/**/*.so filter=lfs diff=lfs merge=lfs -text
+firmware-config/build-tools/platforms/**/*.a filter=lfs diff=lfs merge=lfs -text
+firmware-config/build-tools/platforms/**/toolchain/** filter=lfs diff=lfs merge=lfs -text
 firmware-config/build-tools/archives/*.tar.gz filter=lfs diff=lfs merge=lfs -text
-firmware-config/build-tools/staging/*/toolchain-* filter=lfs diff=lfs merge=lfs -text
-firmware-config/build-tools/bin/* filter=lfs diff=lfs merge=lfs -text
-firmware-config/build-tools/logs/*.log -text
+
+# 日志文件不跟踪
+firmware-config/build-tools/logs/* -text linguist-generated
+*.log -text linguist-generated
+
+# 编译产物不跟踪
+*.bin binary
+*.img binary
+*.gz binary
