@@ -17,7 +17,7 @@ on:
           - '23.05'
           - '21.02'
       config_mode:
-        description: '⚙️ 配置模式选择 - 🟣 基础模式 - 最小化配置，用于测试编译：✅ 文件传输。 🟠 正常模式 - 完整功能配置：✅ TurboACC 网络加速 ✅ UPnP 自动端口转发 ✅ Samba 文件共享 ✅ 磁盘管理 ✅ KMS 激活服务 ✅ SmartDNS 智能DNS ✅ 家长控制 ✅ 微信推送 ✅ 流量控制 (SQM) ✅ FTP 服务器 ✅ ARP 绑定 ✅ CPU 限制 ✅ 硬盘休眠。'
+        description: '⚙️ 配置模式选择'
         required: true
         type: choice
         default: 'normal'
@@ -25,12 +25,12 @@ on:
           - 'base'
           - 'normal'
       extra_packages:
-        description: '额外安装插件 - 格式：🔴用顿号、分隔。🔴 启用插件：+插件名。🔴 禁用插件：-插件名。🔴 示例：+luci-app-wol、+luci-app-ddns'
+        description: '额外安装插件 - 格式：用顿号、分隔，如：+luci-app-wol、+luci-app-ddns'
         required: false
         type: string
         default: ''
       enable_cache:
-        description: '⚡ 启用编译缓存 (加速编译过程)'
+        description: '⚡ 启用编译缓存'
         required: false
         default: true
         type: boolean
@@ -40,7 +40,7 @@ on:
         default: false
         type: boolean
       debug_mode:
-        description: '🐛 启用调试模式 (显示更多详细信息)'
+        description: '🐛 启用调试模式'
         required: false
         default: true
         type: boolean
@@ -56,18 +56,17 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-    - name: 检出配置仓库（包含工具链）
+    - name: 检出配置仓库
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
         path: openwrt-config
-        
+
     - name: 设置脚本执行权限
       run: |
         echo "=== 设置脚本执行权限 ==="
         chmod +x openwrt-config/firmware-config/scripts/*.sh
-        chmod +x openwrt-config/firmware-config/scripts/toolchain_manager.sh
-        
+
     - name: 初始空间检查
       run: |
         echo "=== 初始磁盘空间检查 ==="
@@ -81,15 +80,7 @@ jobs:
       run: |
         echo "=== 设置编译环境 ==="
         sudo apt-get update
-        sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-          gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip \
-          zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpath \
-          libpython3-dev python3 python3-dev python3-pip python3-setuptools \
-          python3-yaml xsltproc zip subversion ninja-build automake autoconf \
-          libtool pkg-config help2man texinfo aria2 liblz4-dev zstd \
-          libcurl4-openssl-dev groff texlive texinfo cmake jq ccache \
-          u-boot-tools gperf nodejs npm swig time xsltproc libxml2-utils \
-          tree jq rsync
+        sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpath libpython3-dev python3 python3-dev python3-pip python3-setuptools python3-yaml xsltproc zip subversion ninja-build automake autoconf libtool pkg-config help2man texinfo aria2 liblz4-dev zstd libcurl4-openssl-dev groff texlive texinfo cmake jq ccache u-boot-tools gperf nodejs npm swig time xsltproc libxml2-utils tree jq rsync
 
     - name: 创建构建目录
       run: |
@@ -97,13 +88,11 @@ jobs:
         sudo mkdir -p $BUILD_DIR $TOOLCHAIN_DIR
         sudo chown -R $USER:$USER $BUILD_DIR $TOOLCHAIN_DIR
         sudo chmod -R 755 $BUILD_DIR $TOOLCHAIN_DIR
-        
+
     - name: 复制配置文件
       run: |
         echo "=== 复制配置文件 ==="
-        cp -r openwrt-config/firmware-config/scripts/* $BUILD_DIR/ 2>/dev/null || true
         cp openwrt-config/firmware-config/scripts/build_firmware_main.sh $BUILD_DIR/
-        cp openwrt-config/firmware-config/scripts/toolchain_manager.sh $BUILD_DIR/
         chmod +x $BUILD_DIR/*.sh
 
     - name: 初始化构建环境
@@ -112,67 +101,67 @@ jobs:
         echo "=== 初始化构建环境 ==="
         cd $BUILD_DIR
         
-        # 执行初始化脚本
         ./build_firmware_main.sh initialize_build_env \
           "${{ github.event.inputs.device_name }}" \
           "${{ github.event.inputs.version_selection }}" \
           "${{ github.event.inputs.config_mode }}"
         
-        # 读取环境变量
         if [ -f "build_env.sh" ]; then
-          echo "✅ 环境文件已创建"
           source build_env.sh
-          
-          # 输出到GitHub环境
           echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
           echo "TARGET=$TARGET" >> $GITHUB_ENV
           echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
           echo "DEVICE=$DEVICE" >> $GITHUB_ENV
           echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
-          
-          # 输出到步骤输出
           echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_OUTPUT
           echo "TARGET=$TARGET" >> $GITHUB_OUTPUT
           echo "SUBTARGET=$SUBTARGET" >> $GITHUB_OUTPUT
           echo "DEVICE=$DEVICE" >> $GITHUB_OUTPUT
         else
-          echo "❌ 环境文件未创建，尝试手动创建"
-          # 手动创建环境变量
-          if [ "${{ github.event.inputs.version_selection }}" = "23.05" ]; then
-            echo "SELECTED_BRANCH=openwrt-23.05" >> $GITHUB_ENV
-            echo "SELECTED_BRANCH=openwrt-23.05" >> $GITHUB_OUTPUT
-          else
-            echo "SELECTED_BRANCH=openwrt-21.02" >> $GITHUB_ENV
-            echo "SELECTED_BRANCH=openwrt-21.02" >> $GITHUB_OUTPUT
-          fi
+          echo "❌ 环境文件未创建"
+          exit 1
         fi
 
-    - name: 恢复工具链（从仓库）
-      id: restore_toolchain
-      continue-on-error: true
+    - name: 检查仓库中的工具链
       run: |
-        echo "=== 恢复工具链 ==="
-        cd $BUILD_DIR
+        echo "=== 检查仓库中的工具链 ==="
+        TOOLCHAIN_ID="${{ steps.init_env.outputs.SELECTED_BRANCH }}-${{ steps.init_env.outputs.TARGET }}-${{ steps.init_env.outputs.SUBTARGET }}"
+        echo "工具链ID: $TOOLCHAIN_ID"
         
-        # 使用工具链管理器
-        if [ -f "toolchain_manager.sh" ]; then
-          ./toolchain_manager.sh restore \
-            "${{ steps.init_env.outputs.SELECTED_BRANCH }}" \
-            "${{ steps.init_env.outputs.TARGET }}" \
-            "${{ steps.init_env.outputs.SUBTARGET }}"
+        if [ -d "openwrt-config/toolchain-cache/$TOOLCHAIN_ID" ]; then
+          echo "✅ 仓库中存在工具链: $TOOLCHAIN_ID"
+          echo "TOOLCHAIN_EXISTS=true" >> $GITHUB_ENV
+        else
+          echo "❌ 仓库中无工具链，需要构建"
+          echo "TOOLCHAIN_EXISTS=false" >> $GITHUB_ENV
+        fi
+
+    - name: 从仓库恢复工具链
+      if: env.TOOLCHAIN_EXISTS == 'true' && github.event.inputs.rebuild_toolchain == 'false'
+      run: |
+        echo "=== 从仓库恢复工具链 ==="
+        TOOLCHAIN_ID="${{ steps.init_env.outputs.SELECTED_BRANCH }}-${{ steps.init_env.outputs.TARGET }}-${{ steps.init_env.outputs.SUBTARGET }}"
+        
+        echo "恢复工具链: $TOOLCHAIN_ID"
+        mkdir -p "$TOOLCHAIN_DIR/$TOOLCHAIN_ID"
+        
+        if [ -d "openwrt-config/toolchain-cache/$TOOLCHAIN_ID" ]; then
+          echo "复制工具链文件..."
+          cp -r "openwrt-config/toolchain-cache/$TOOLCHAIN_ID/"* "$TOOLCHAIN_DIR/$TOOLCHAIN_ID/" 2>/dev/null || true
           
-          if [ $? -eq 0 ]; then
+          if [ -f "$TOOLCHAIN_DIR/$TOOLCHAIN_ID/toolchain_info.txt" ]; then
             echo "✅ 工具链恢复成功"
+            cat "$TOOLCHAIN_DIR/$TOOLCHAIN_ID/toolchain_info.txt"
             echo "TOOLCHAIN_RESTORED=true" >> $GITHUB_ENV
           else
-            echo "❌ 工具链恢复失败，需要重新构建"
+            echo "⚠️ 工具链文件不完整"
             echo "TOOLCHAIN_RESTORED=false" >> $GITHUB_ENV
           fi
         else
-          echo "❌ 工具链管理器不存在"
+          echo "❌ 工具链目录不存在"
           echo "TOOLCHAIN_RESTORED=false" >> $GITHUB_ENV
         fi
-        
+
     - name: 配置Feeds
       run: |
         echo "=== 配置Feeds ==="
@@ -235,13 +224,11 @@ jobs:
         cd $BUILD_DIR
         
         START_TIME=$(date +%s)
-        
-        # 执行编译
         ./build_firmware_main.sh build_firmware "${{ github.event.inputs.enable_cache }}"
         BUILD_EXIT_CODE=$?
-        
         END_TIME=$(date +%s)
         DURATION=$((END_TIME - START_TIME))
+        
         echo "⏱️ 编译耗时: $((DURATION / 60))分钟 $((DURATION % 60))秒"
         
         if [ $BUILD_EXIT_CODE -eq 0 ]; then
@@ -251,110 +238,90 @@ jobs:
         fi
 
     - name: 构建工具链（如需）
-      if: steps.init_env.outputs.SELECTED_BRANCH != '' && (env.TOOLCHAIN_RESTORED == 'false' || github.event.inputs.rebuild_toolchain == 'true')
+      if: env.TOOLCHAIN_EXISTS == 'false' || github.event.inputs.rebuild_toolchain == 'true'
       run: |
         echo "=== 构建工具链 ==="
         cd $BUILD_DIR
         
-        # 加载环境变量
-        source build_env.sh 2>/dev/null || {
-          echo "SELECTED_BRANCH=${{ steps.init_env.outputs.SELECTED_BRANCH }}"
-          echo "TARGET=${{ steps.init_env.outputs.TARGET }}"
-          echo "SUBTARGET=${{ steps.init_env.outputs.SUBTARGET }}"
-          echo "DEVICE=${{ steps.init_env.outputs.DEVICE }}"
-        }
+        if [ -f "build_env.sh" ]; then
+          source build_env.sh
+        fi
         
-        echo "🔧 构建工具链: $SELECTED_BRANCH-$TARGET-$SUBTARGET"
+        SELECTED_BRANCH="${{ steps.init_env.outputs.SELECTED_BRANCH }}"
+        TARGET="${{ steps.init_env.outputs.TARGET }}"
+        SUBTARGET="${{ steps.init_env.outputs.SUBTARGET }}"
+        DEVICE="${{ steps.init_env.outputs.DEVICE }}"
         
-        # 创建工具链配置
-        cat > .config.toolchain << EOF
-CONFIG_TARGET_${TARGET}=y
-CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
-CONFIG_TARGET_ROOTFS_INITRAMFS=y
-CONFIG_TOOLCHAIN=y
-CONFIG_TOOLCHAIN_BUILD=y
-CONFIG_SDK=y
-CONFIG_IB=y
-EOF
+        echo "构建工具链: $SELECTED_BRANCH-$TARGET-$SUBTARGET"
+        
+        echo "CONFIG_TARGET_${TARGET}=y" > .config.toolchain
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config.toolchain
+        echo "CONFIG_TARGET_ROOTFS_INITRAMFS=y" >> .config.toolchain
+        echo "CONFIG_TOOLCHAIN=y" >> .config.toolchain
+        echo "CONFIG_TOOLCHAIN_BUILD=y" >> .config.toolchain
+        echo "CONFIG_SDK=y" >> .config.toolchain
+        echo "CONFIG_IB=y" >> .config.toolchain
         
         cp .config.toolchain .config
         make defconfig
         
-        echo "🛠️ 开始编译工具链..."
+        echo "开始编译工具链..."
         make toolchain/install -j$(nproc) V=s
         
-        # 保存工具链
         TOOLCHAIN_ID="$SELECTED_BRANCH-$TARGET-$SUBTARGET"
         mkdir -p "$TOOLCHAIN_DIR/$TOOLCHAIN_ID"
         
-        # 复制关键文件
         if [ -d "staging_dir" ]; then
-          echo "💾 保存工具链到: $TOOLCHAIN_DIR/$TOOLCHAIN_ID"
+          echo "保存工具链到: $TOOLCHAIN_DIR/$TOOLCHAIN_ID"
+          cp -r staging_dir "$TOOLCHAIN_DIR/$TOOLCHAIN_ID/" 2>/dev/null || true
           
-          # 只复制必要的工具链文件
-          find staging_dir -name "toolchain-*" -type d | while read toolchain; do
-            cp -r "$toolchain" "$TOOLCHAIN_DIR/$TOOLCHAIN_ID/" 2>/dev/null || true
-          done
-          
-          # 保存配置
-          cp staging_dir/.config "$TOOLCHAIN_DIR/$TOOLCHAIN_ID/" 2>/dev/null || true
-          
-          # 创建工具链信息
-          cat > "$TOOLCHAIN_DIR/$TOOLCHAIN_ID/toolchain_info.txt" << EOF
-版本: $SELECTED_BRANCH
-目标: $TARGET-$SUBTARGET
-设备: $DEVICE
-编译时间: $(date)
-大小: $(du -sh staging_dir/toolchain-* 2>/dev/null | tail -1)
-EOF
+          echo "版本: $SELECTED_BRANCH" > "$TOOLCHAIN_DIR/$TOOLCHAIN_ID/toolchain_info.txt"
+          echo "目标: $TARGET-$SUBTARGET" >> "$TOOLCHAIN_DIR/$TOOLCHAIN_ID/toolchain_info.txt"
+          echo "设备: $DEVICE" >> "$TOOLCHAIN_DIR/$TOOLCHAIN_ID/toolchain_info.txt"
+          echo "编译时间: $(date)" >> "$TOOLCHAIN_DIR/$TOOLCHAIN_ID/toolchain_info.txt"
+          echo "大小: $(du -sh staging_dir 2>/dev/null | cut -f1)" >> "$TOOLCHAIN_DIR/$TOOLCHAIN_ID/toolchain_info.txt"
         fi
 
     - name: 保存工具链到仓库
       if: always() && steps.init_env.outputs.SELECTED_BRANCH != ''
       run: |
         echo "=== 保存工具链到仓库 ==="
-        cd $BUILD_DIR
+        TOOLCHAIN_ID="${{ steps.init_env.outputs.SELECTED_BRANCH }}-${{ steps.init_env.outputs.TARGET }}-${{ steps.init_env.outputs.SUBTARGET }}"
         
-        if [ -f "toolchain_manager.sh" ]; then
-          ./toolchain_manager.sh save \
-            "${{ steps.init_env.outputs.SELECTED_BRANCH }}" \
-            "${{ steps.init_env.outputs.TARGET }}" \
-            "${{ steps.init_env.outputs.SUBTARGET }}"
+        if [ -d "$TOOLCHAIN_DIR/$TOOLCHAIN_ID" ]; then
+          echo "保存工具链: $TOOLCHAIN_ID"
+          mkdir -p "openwrt-config/toolchain-cache/$TOOLCHAIN_ID"
+          
+          echo "复制工具链文件..."
+          cp -r "$TOOLCHAIN_DIR/$TOOLCHAIN_ID/"* "openwrt-config/toolchain-cache/$TOOLCHAIN_ID/" 2>/dev/null || true
+          
+          echo "工具链保存完成"
         else
-          echo "❌ 工具链管理器不存在"
+          echo "❌ 工具链目录不存在，跳过保存"
         fi
-        
+
     - name: 提交工具链到Git仓库
       if: always() && steps.init_env.outputs.SELECTED_BRANCH != ''
       run: |
         echo "=== 提交工具链到Git仓库 ==="
         
-        # 切换到仓库目录
         cd openwrt-config
         
-        # 配置Git
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
         
-        # 创建工具链目录
-        mkdir -p toolchain-cache
-        
-        # 复制工具链文件
-        TOOLCHAIN_ID="${{ steps.init_env.outputs.SELECTED_BRANCH }}-${{ steps.init_env.outputs.TARGET }}-${{ steps.init_env.outputs.SUBTARGET }}"
-        
-        if [ -d "$TOOLCHAIN_DIR/$TOOLCHAIN_ID" ]; then
-          echo "📦 复制工具链: $TOOLCHAIN_ID"
-          mkdir -p "toolchain-cache/$TOOLCHAIN_ID"
-          cp -r "$TOOLCHAIN_DIR/$TOOLCHAIN_ID"/* "toolchain-cache/$TOOLCHAIN_ID/" 2>/dev/null || true
+        if [ -d "toolchain-cache" ]; then
+          echo "添加工具链文件到Git..."
+          git add toolchain-cache/ || echo "没有工具链文件可添加"
           
-          # 添加并提交
-          git add toolchain-cache/
-          git commit -m "保存工具链: $TOOLCHAIN_ID [skip ci]" || echo "没有变化，跳过提交"
-          
-          # 推送到仓库
-          git push origin HEAD || echo "推送失败"
+          if git diff --cached --quiet; then
+            echo "没有变化，跳过提交"
+          else
+            git commit -m "保存工具链: ${{ steps.init_env.outputs.SELECTED_BRANCH }}-${{ steps.init_env.outputs.TARGET }}-${{ steps.init_env.outputs.SUBTARGET }} [skip ci]"
+            git push origin HEAD || echo "推送失败"
+          fi
         else
-          echo "❌ 工具链目录不存在: $TOOLCHAIN_DIR/$TOOLCHAIN_ID"
+          echo "❌ toolchain-cache目录不存在"
         fi
 
     - name: 固件文件检查
@@ -393,17 +360,13 @@ EOF
       if: always()
       run: |
         echo "=== 工具链统计信息 ==="
-        cd $BUILD_DIR
+        echo "工具链保存位置: toolchain-cache/"
         
-        if [ -f "toolchain_manager.sh" ]; then
-          ./toolchain_manager.sh list
-        fi
-        
-        echo ""
-        echo "📦 工具链保存位置:"
-        echo "本地: $TOOLCHAIN_DIR"
-        echo "仓库: toolchain-cache/"
-        
-        if [ -d "toolchain-cache" ]; then
-          echo "仓库工具链大小: $(du -sh toolchain-cache | cut -f1)"
+        if [ -d "openwrt-config/toolchain-cache" ]; then
+          echo "工具链列表:"
+          ls -la openwrt-config/toolchain-cache/
+          echo ""
+          echo "总大小: $(du -sh openwrt-config/toolchain-cache | cut -f1)"
+        else
+          echo "❌ toolchain-cache目录不存在"
         fi
