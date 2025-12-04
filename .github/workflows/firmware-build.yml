@@ -224,23 +224,13 @@ jobs:
         
         # 创建环境文件
         echo "创建环境文件: $BUILD_DIR/build_env.sh"
-        cat > $BUILD_DIR/build_env.sh << 'EOF'
-#!/bin/bash
-export SELECTED_REPO_URL="$SELECTED_REPO_URL"
-export SELECTED_BRANCH="$SELECTED_BRANCH"
-export TARGET="$TARGET"
-export SUBTARGET="$SUBTARGET"
-export DEVICE="$DEVICE"
-export CONFIG_MODE="$CONFIG_MODE"
-EOF
-        
-        # 替换变量值
-        sed -i "s|\\\$SELECTED_REPO_URL|$SELECTED_REPO_URL|g" $BUILD_DIR/build_env.sh
-        sed -i "s|\\\$SELECTED_BRANCH|$SELECTED_BRANCH|g" $BUILD_DIR/build_env.sh
-        sed -i "s|\\\$TARGET|$TARGET|g" $BUILD_DIR/build_env.sh
-        sed -i "s|\\\$SUBTARGET|$SUBTARGET|g" $BUILD_DIR/build_env.sh
-        sed -i "s|\\\$DEVICE|$DEVICE|g" $BUILD_DIR/build_env.sh
-        sed -i "s|\\\$CONFIG_MODE|$CONFIG_MODE|g" $BUILD_DIR/build_env.sh
+        echo '#!/bin/bash' > $BUILD_DIR/build_env.sh
+        echo "export SELECTED_REPO_URL=\"$SELECTED_REPO_URL\"" >> $BUILD_DIR/build_env.sh
+        echo "export SELECTED_BRANCH=\"$SELECTED_BRANCH\"" >> $BUILD_DIR/build_env.sh
+        echo "export TARGET=\"$TARGET\"" >> $BUILD_DIR/build_env.sh
+        echo "export SUBTARGET=\"$SUBTARGET\"" >> $BUILD_DIR/build_env.sh
+        echo "export DEVICE=\"$DEVICE\"" >> $BUILD_DIR/build_env.sh
+        echo "export CONFIG_MODE=\"$CONFIG_MODE\"" >> $BUILD_DIR/build_env.sh
         
         chmod +x $BUILD_DIR/build_env.sh
         
@@ -475,10 +465,8 @@ EOF
           fi
           
           echo "配置feeds.conf.default"
-          cat > feeds.conf.default << EOF
-src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH
-src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH
-EOF
+          echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf.default
+          echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
           
           ./scripts/feeds update -a
           ./scripts/feeds install -a
