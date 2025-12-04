@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
 
-BUILD_DIR="/mnt/openwrt-build"
+# 使用参数传递的构建目录，或者默认值
+BUILD_DIR="${1:-/mnt/openwrt-build}"
 ENV_FILE="$BUILD_DIR/build_env.sh"
 
 # 调试输出函数
@@ -118,7 +119,7 @@ initialize_build_env() {
     log "仓库: $SELECTED_REPO_URL"
     log "分支: $SELECTED_BRANCH"
     
-    # 检查是否已经有源码（考虑到可能之前失败的情况）
+    # 检查是否已经有源码
     if [ -d ".git" ]; then
         log "源码已存在，跳过克隆"
     else
