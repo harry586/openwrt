@@ -48,7 +48,7 @@ on:
 env:
   BUILD_DIR: /mnt/openwrt-build
   TOOLCHAIN_DIR: /mnt/openwrt-toolchain
-  WORKSPACE_DIR: /tmp/openwrt-workspace
+  WORKSPACE: ${{ github.workspace }}
   DEBUG_MODE: ${{ github.event.inputs.debug_mode }}
 
 jobs:
@@ -61,43 +61,53 @@ jobs:
       with:
         fetch-depth: 0
         
-    - name: 创建目录标记系统
+    - name: 显示工作空间信息
       run: |
-        echo "=== 创建目录标记系统 ==="
-        
-        # 创建工作区目录
-        mkdir -p $WORKSPACE_DIR
-        
-        # 创建标记文件
-        echo "创建标记文件..."
-        
-        # 创建配置仓库标记
-        echo "$(pwd)" > $WORKSPACE_DIR/MARK_CONFIG_REPO
-        echo "✅ 配置仓库标记: $(cat $WORKSPACE_DIR/MARK_CONFIG_REPO)"
-        
-        # 创建脚本目录标记
-        if [ -d "firmware-config/scripts" ]; then
-          echo "$(pwd)/firmware-config/scripts" > $WORKSPACE_DIR/MARK_SCRIPTS_DIR
-          echo "✅ 脚本目录标记: $(cat $WORKSPACE_DIR/MARK_SCRIPTS_DIR)"
-        else
-          echo "❌ 脚本目录不存在"
-          find . -name "*.sh" -type f 2>/dev/null | head -5
-        fi
-        
-        # 创建自定义文件目录标记
-        if [ -d "firmware-config/custom-files" ]; then
-          echo "$(pwd)/firmware-config/custom-files" > $WORKSPACE_DIR/MARK_CUSTOM_FILES
-          echo "✅ 自定义文件目录标记: $(cat $WORKSPACE_DIR/MARK_CUSTOM_FILES)"
-        fi
-        
+        echo "=== 工作空间信息 ==="
+        echo "工作目录: $(pwd)"
+        echo "用户: $(whoami)"
+        echo "主机名: $(hostname)"
+        echo "GitHub工作区: $WORKSPACE"
         echo ""
-        echo "📁 工作区内容:"
-        ls -la $WORKSPACE_DIR/
+        echo "目录结构:"
+        ls -la
+        echo ""
+        echo "脚本目录:"
+        ls -la firmware-config/scripts/ 2>/dev/null || echo "scripts目录不存在"
+        echo ""
+        echo "自定义文件目录:"
+        ls -la firmware-config/custom-files/ 2>/dev/null || echo "custom-files目录不存在"
+
+    - name: 设置脚本执行权限
+      run: |
+        echo "=== 设置脚本执行权限 ==="
+        echo "设置所有.sh文件可执行权限..."
+        find . -name "*.sh" -type f -exec chmod +x {} \; 2>/dev/null || true
+        echo "权限设置完成:"
+        ls -la firmware-config/scripts/*.sh 2>/dev/null | head -10
+
+    - name: 初始空间检查
+      run: |
+        echo "=== 初始磁盘空间检查 ==="
+        echo "磁盘使用情况:"
+        df -h
+        echo ""
+        echo "/mnt 分区详情:"
+        df -h /mnt
+        echo ""
+        AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
+        AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+        echo "📊 /mnt 可用空间: ${AVAILABLE_GB}G"
+        if [ $AVAILABLE_GB -lt 30 ]; then
+          echo "⚠️ 警告: /mnt 空间不足30G，可能编译失败"
+        else
+          echo "✅ 磁盘空间充足"
+        fi
 
     - name: 设置编译环境
       run: |
         echo "=== 设置编译环境 ==="
-        INSTALL_LOG="/tmp/install_deps.log"
+        INSTALL_LOG="/tmp/install_deps_$(date +%Y%m%d_%H%M%S).log"
         echo "安装日志: $INSTALL_LOG"
         echo "1. 更新包列表..."
         sudo apt-get update 2>&1 | tee $INSTALL_LOG
@@ -116,7 +126,6 @@ jobs:
         echo "✅ 编译环境设置完成"
 
     - name: 下载工具链缓存
-      id: download_toolchain
       uses: actions/download-artifact@v4
       with:
         name: openwrt-toolchain-cache
@@ -157,17 +166,19 @@ jobs:
       id: init_env
       run: |
         echo "=== 初始化构建环境 ==="
+        echo "设备: ${{ github.event.inputs.device_name }}"
+        echo "版本: ${{ github.event.inputs.version_selection }}"
+        echo "配置模式: ${{ github.event.inputs.config_mode }}"
+        echo ""
+        echo "当前目录: $(pwd)"
         
-        # 加载脚本目录标记
-        SCRIPTS_DIR=$(cat $WORKSPACE_DIR/MARK_SCRIPTS_DIR 2>/dev/null || echo "")
-        if [ -z "$SCRIPTS_DIR" ]; then
-          echo "❌ 脚本目录标记不存在"
-          exit 1
-        fi
+        # 复制脚本到构建目录
+        echo "复制脚本到构建目录..."
+        cp -f "$WORKSPACE/firmware-config/scripts/build_firmware_main.sh" $BUILD_DIR/
+        chmod +x $BUILD_DIR/build_firmware_main.sh
         
-        echo "脚本目录: $SCRIPTS_DIR"
-        cd "$SCRIPTS_DIR"
-        echo "切换到脚本目录: $(pwd)"
+        cd $BUILD_DIR
+        echo "切换到构建目录: $BUILD_DIR"
         
         # 执行初始化脚本
         ./build_firmware_main.sh initialize_build_env \
@@ -176,13 +187,13 @@ jobs:
           "${{ github.event.inputs.config_mode }}"
         
         # 读取环境变量
-        if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        if [ -f "build_env.sh" ]; then
           echo ""
           echo "=== 生成的环境变量 ==="
-          cat $BUILD_DIR/build_env.sh
+          cat build_env.sh
           
           # 导出到GitHub环境
-          source $BUILD_DIR/build_env.sh
+          source build_env.sh
           echo "TARGET=$TARGET" >> $GITHUB_OUTPUT
           echo "SUBTARGET=$SUBTARGET" >> $GITHUB_OUTPUT
           echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_OUTPUT
@@ -196,11 +207,6 @@ jobs:
     - name: 配置Feeds
       run: |
         echo "=== 配置Feeds ==="
-        
-        # 加载脚本目录标记
-        SCRIPTS_DIR=$(cat $WORKSPACE_DIR/MARK_SCRIPTS_DIR)
-        cd "$SCRIPTS_DIR"
-        
         cd $BUILD_DIR
         ./build_firmware_main.sh configure_feeds
 
@@ -208,23 +214,14 @@ jobs:
       if: github.event.inputs.config_mode == 'normal' && steps.init_env.outputs.SELECTED_BRANCH == 'openwrt-23.05'
       run: |
         echo "=== 添加TurboACC支持 ==="
-        
-        # 加载脚本目录标记
-        SCRIPTS_DIR=$(cat $WORKSPACE_DIR/MARK_SCRIPTS_DIR)
-        cd "$SCRIPTS_DIR"
-        
         cd $BUILD_DIR
         ./build_firmware_main.sh add_turboacc_support
 
     - name: 安装插件包
       run: |
         echo "=== 安装插件包 ==="
-        
-        # 加载脚本目录标记
-        SCRIPTS_DIR=$(cat $WORKSPACE_DIR/MARK_SCRIPTS_DIR)
-        cd "$SCRIPTS_DIR"
-        
         cd $BUILD_DIR
+        
         echo "1. 安装文件传输插件包:"
         ./build_firmware_main.sh install_filetransfer_packages
         
@@ -234,80 +231,114 @@ jobs:
           ./build_firmware_main.sh install_turboacc_packages
         fi
 
+    - name: 编译前空间检查
+      run: |
+        echo "=== 编译前空间检查 ==="
+        df -h
+        echo ""
+        AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
+        AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+        echo "📊 /mnt 可用空间: ${AVAILABLE_GB}G"
+        
+        if [ -d "$TOOLCHAIN_DIR" ]; then
+          echo ""
+          echo "📦 工具链缓存大小:"
+          du -sh $TOOLCHAIN_DIR
+        fi
+
     - name: 智能配置生成
       run: |
         echo "=== 智能配置生成 ==="
-        
-        # 加载脚本目录标记
-        SCRIPTS_DIR=$(cat $WORKSPACE_DIR/MARK_SCRIPTS_DIR)
-        cd "$SCRIPTS_DIR"
-        
         cd $BUILD_DIR
+        
         echo "生成配置，额外插件: ${{ github.event.inputs.extra_packages }}"
         ./build_firmware_main.sh generate_config "${{ github.event.inputs.extra_packages }}"
+        
+        echo ""
+        echo "📋 生成的配置摘要:"
+        if [ -f ".config" ]; then
+          echo "✅ 启用包数量: $(grep "^CONFIG_PACKAGE_.*=y$" .config 2>/dev/null | wc -l)"
+          echo "❌ 禁用包数量: $(grep "^# CONFIG_PACKAGE_.* is not set$" .config 2>/dev/null | wc -l)"
+          
+          if [ "$DEBUG_MODE" = "true" ]; then
+            echo ""
+            echo "=== 启用的插件列表 ==="
+            grep "^CONFIG_PACKAGE_luci-app-.*=y$" .config 2>/dev/null | sed 's/CONFIG_PACKAGE_//;s/=y//' | head -20
+          fi
+        else
+          echo "❌ 配置文件不存在"
+        fi
 
     - name: 验证USB配置
       run: |
         echo "=== 验证USB配置 ==="
-        
-        # 加载脚本目录标记
-        SCRIPTS_DIR=$(cat $WORKSPACE_DIR/MARK_SCRIPTS_DIR)
-        cd "$SCRIPTS_DIR"
-        
         cd $BUILD_DIR
         ./build_firmware_main.sh verify_usb_config
 
     - name: 应用配置
       run: |
         echo "=== 应用配置 ==="
-        
-        # 加载脚本目录标记
-        SCRIPTS_DIR=$(cat $WORKSPACE_DIR/MARK_SCRIPTS_DIR)
-        cd "$SCRIPTS_DIR"
-        
         cd $BUILD_DIR
         ./build_firmware_main.sh apply_config
 
     - name: 修复网络环境
       run: |
         echo "=== 修复网络环境 ==="
-        
-        # 加载脚本目录标记
-        SCRIPTS_DIR=$(cat $WORKSPACE_DIR/MARK_SCRIPTS_DIR)
-        cd "$SCRIPTS_DIR"
-        
         cd $BUILD_DIR
         ./build_firmware_main.sh fix_network
 
     - name: 下载依赖包
       run: |
         echo "=== 下载依赖包 ==="
-        
-        # 加载脚本目录标记
-        SCRIPTS_DIR=$(cat $WORKSPACE_DIR/MARK_SCRIPTS_DIR)
-        cd "$SCRIPTS_DIR"
-        
         cd $BUILD_DIR
+        
         echo "开始下载依赖包..."
         ./build_firmware_main.sh download_dependencies
+        
+        echo ""
+        echo "📦 下载目录内容:"
+        ls -la dl/ 2>/dev/null | head -5 || echo "下载目录为空"
 
     - name: 处理自定义文件
       run: |
         echo "=== 处理自定义文件 ==="
+        echo "当前工作目录: $(pwd)"
+        echo ""
         
-        # 加载自定义文件目录标记
-        CUSTOM_FILES_DIR=$(cat $WORKSPACE_DIR/MARK_CUSTOM_FILES 2>/dev/null || echo "")
-        if [ -z "$CUSTOM_FILES_DIR" ]; then
-          echo "❌ 自定义文件目录标记不存在"
-          exit 1
+        # 详细检查目录结构
+        echo "=== 目录结构检查 ==="
+        echo "1. 检查当前目录:"
+        ls -la
+        
+        echo ""
+        echo "2. 检查 firmware-config 目录:"
+        if [ -d "firmware-config" ]; then
+          echo "✅ firmware-config 目录存在"
+          ls -la firmware-config/
+          
+          echo ""
+          echo "3. 检查 custom-files 目录:"
+          if [ -d "firmware-config/custom-files" ]; then
+            echo "✅ firmware-config/custom-files 目录存在"
+            echo "目录内容:"
+            ls -la firmware-config/custom-files/
+            
+            echo ""
+            echo "4. 查找所有自定义文件:"
+            find firmware-config/custom-files -type f | while read file; do
+              echo "📄 $file"
+            done
+          else
+            echo "❌ firmware-config/custom-files 目录不存在"
+            echo "尝试查找其他位置..."
+            find . -name "custom-files" -type d 2>/dev/null | head -5
+          fi
+        else
+          echo "❌ firmware-config 目录不存在"
         fi
         
-        echo "自定义文件目录: $CUSTOM_FILES_DIR"
-        
-        # 加载脚本目录标记
-        SCRIPTS_DIR=$(cat $WORKSPACE_DIR/MARK_SCRIPTS_DIR)
-        cd "$SCRIPTS_DIR"
-        
+        echo ""
+        echo "=== 开始处理自定义文件 ==="
         cd $BUILD_DIR
         ./build_firmware_main.sh process_custom_files
 
@@ -315,12 +346,8 @@ jobs:
       id: build_firmware
       run: |
         echo "=== 编译固件 ==="
-        
-        # 加载脚本目录标记
-        SCRIPTS_DIR=$(cat $WORKSPACE_DIR/MARK_SCRIPTS_DIR)
-        cd "$SCRIPTS_DIR"
-        
         cd $BUILD_DIR
+        
         echo "编译参数:"
         echo "  缓存模式: ${{ github.event.inputs.enable_cache }}"
         echo "  CPU核心数: $(nproc)"
@@ -350,39 +377,88 @@ jobs:
           echo "BUILD_SUCCESS=false" >> $GITHUB_OUTPUT
         fi
 
+    - name: 详细错误分析
+      if: always()
+      run: |
+        echo "=== 详细错误分析 ==="
+        cd $BUILD_DIR
+        
+        # 首先检查是否存在日志文件
+        echo "检查日志文件..."
+        if [ -f "build.log" ]; then
+          echo "✅ 找到编译日志: build.log"
+          LOG_SIZE=$(wc -l < build.log)
+          echo "📊 日志大小: $LOG_SIZE 行"
+          echo "📄 日志大小: $(du -h build.log | cut -f1)"
+          
+          # 使用详细错误分析脚本
+          if [ -f "$WORKSPACE/firmware-config/scripts/error_analysis_detailed.sh" ]; then
+            $WORKSPACE/firmware-config/scripts/error_analysis_detailed.sh
+          else
+            echo "⚠️ 详细错误分析脚本不存在，使用简单分析"
+            echo "最后100行日志:"
+            tail -100 build.log
+          fi
+        else
+          echo "❌ 编译日志不存在"
+          echo "可能的原因:"
+          echo "1. 编译未开始"
+          echo "2. 编译过程被中断"
+          echo "3. 磁盘空间不足"
+          echo ""
+          echo "当前目录内容:"
+          ls -la
+        fi
+
     - name: 固件文件检查
       if: steps.build_firmware.outputs.BUILD_SUCCESS == 'true'
       run: |
         echo "=== 固件文件检查 ==="
-        
-        # 加载脚本目录标记
-        SCRIPTS_DIR=$(cat $WORKSPACE_DIR/MARK_SCRIPTS_DIR)
-        cd "$SCRIPTS_DIR"
-        
         cd $BUILD_DIR
+        
+        echo "检查固件文件..."
         ./build_firmware_main.sh check_firmware_files
+        
+        echo ""
+        echo "=== 生成的固件详情 ==="
+        FIRMWARE_FILES=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) 2>/dev/null | head -10)
+        if [ -n "$FIRMWARE_FILES" ]; then
+          for file in $FIRMWARE_FILES; do
+            size=$(du -h "$file" | cut -f1)
+            echo "✅ 📄 $file ($size)"
+          done
+        else
+          echo "❌ 未找到固件文件"
+          echo "可能的原因:"
+          echo "1. 编译失败"
+          echo "2. 输出路径错误"
+          echo "3. 设备配置错误"
+        fi
 
     - name: 备份配置文件
       if: always()
       run: |
         echo "=== 备份配置文件 ==="
-        
-        # 加载脚本目录标记
-        SCRIPTS_DIR=$(cat $WORKSPACE_DIR/MARK_SCRIPTS_DIR)
-        cd "$SCRIPTS_DIR"
-        
         cd $BUILD_DIR
         ./build_firmware_main.sh backup_config
+        
+        echo ""
+        echo "📁 备份内容:"
+        ls -la config_backup/ 2>/dev/null || echo "没有备份文件"
 
-    - name: 构建工具链
-      if: steps.download_toolchain.outcome == 'failure' || github.event.inputs.rebuild_toolchain == 'true'
+    - name: 构建工具链（如需）
+      if: steps.init_env.outputs.SELECTED_BRANCH != '' && (failure() || github.event.inputs.rebuild_toolchain == 'true')
       run: |
         echo "=== 构建工具链 ==="
-        
         cd $BUILD_DIR
         
         # 加载环境变量
-        source build_env.sh 2>/dev/null || echo "环境文件加载失败"
+        if [ -f "build_env.sh" ]; then
+          source build_env.sh
+        else
+          echo "❌ 环境文件不存在"
+          exit 1
+        fi
         
         echo "构建工具链: $SELECTED_BRANCH-$TARGET-$SUBTARGET"
         
@@ -482,5 +558,32 @@ jobs:
         if [ -d "$TOOLCHAIN_DIR" ]; then
           echo "📦 总大小: $(du -sh $TOOLCHAIN_DIR | cut -f1)"
           echo "📁 目录内容:"
+          ls -la $TOOLCHAIN_DIR/
+        fi
+
+    - name: 清理构建目录（保留工具链）
+      if: always()
+      run: |
+        echo "=== 清理构建目录 ==="
+        echo "清理临时文件，保留源码和工具链..."
+        
+        if [ -d "$BUILD_DIR" ]; then
+          cd $BUILD_DIR
+          echo "清理前大小: $(du -sh . | cut -f1)"
+          
+          # 清理临时文件，保留重要文件
+          rm -rf build_dir tmp logs dl .config.old
+          echo "清理后大小: $(du -sh . | cut -f1)"
+          
+          echo "📁 保留的文件:"
+          ls -la
+        fi
+        
+        echo ""
+        echo "📦 工具链缓存信息:"
+        if [ -d "$TOOLCHAIN_DIR" ]; then
+          echo "位置: $TOOLCHAIN_DIR"
+          echo "大小: $(du -sh $TOOLCHAIN_DIR | cut -f1)"
+          echo "内容:"
           ls -la $TOOLCHAIN_DIR/
         fi
