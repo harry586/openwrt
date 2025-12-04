@@ -1,11 +1,9 @@
 #!/bin/bash
 set -e
 
-# 使用参数传递的构建目录，或者默认值
-BUILD_DIR="${1:-/mnt/openwrt-build}"
+BUILD_DIR="/mnt/openwrt-build"
 ENV_FILE="$BUILD_DIR/build_env.sh"
 
-# 调试输出函数
 debug_log() {
     if [ "${DEBUG_MODE}" = "true" ]; then
         echo "🔍 $(date '+%Y-%m-%d %H:%M:%S')】$1"
@@ -18,12 +16,6 @@ log() {
 
 handle_error() {
     log "❌ 错误发生在: $1"
-    echo "错误详情:"
-    echo "当前目录: $(pwd)"
-    echo "目录内容:"
-    ls -la
-    echo "环境变量:"
-    env | grep -E "SELECTED|TARGET|SUBTARGET|DEVICE|DEBUG" || true
     exit 1
 }
 
@@ -38,31 +30,18 @@ DEVICE="$DEVICE"
 CONFIG_MODE="$CONFIG_MODE"
 EOF
     chmod +x $ENV_FILE
-    log "✅ 环境变量已保存到 $ENV_FILE"
-    
-    # 调试输出
-    debug_log "保存的环境变量:"
-    debug_log "  SELECTED_REPO_URL=$SELECTED_REPO_URL"
-    debug_log "  SELECTED_BRANCH=$SELECTED_BRANCH"
-    debug_log "  TARGET=$TARGET"
-    debug_log "  SUBTARGET=$SUBTARGET"
-    debug_log "  DEVICE=$DEVICE"
-    debug_log "  CONFIG_MODE=$CONFIG_MODE"
+    log "✅ 环境变量已保存"
 }
 
 initialize_build_env() {
-    local device_name=$1
-    local version_selection=$2
-    local config_mode=$3
+    local device_name="$1"
+    local version_selection="$2"
+    local config_mode="$3"
     
     log "=== 初始化构建环境 ==="
-    echo "设备: $device_name"
-    echo "版本: $version_selection"
-    echo "配置模式: $config_mode"
     
     # 确保在构建目录
-    mkdir -p $BUILD_DIR
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    cd "$BUILD_DIR" || handle_error "进入构建目录失败"
     
     debug_log "当前目录: $(pwd)"
     debug_log "目录内容:"
@@ -125,8 +104,11 @@ initialize_build_env() {
     else
         log "克隆源码..."
         
+        # 确保目录为空
+        debug_log "清理目录..."
+        rm -rf ./* ./.git* 2>/dev/null || true
+        
         debug_log "开始克隆..."
-        # 克隆源码到当前目录
         git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
         log "✅ 源码克隆完成"
         
