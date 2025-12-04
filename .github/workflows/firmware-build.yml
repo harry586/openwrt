@@ -519,7 +519,7 @@ jobs:
       with:
         name: openwrt-toolchain-cache
         path: ${{ env.TOOLCHAIN_DIR }}
-        retention-days: 30
+        retention-days: 365
         if-no-files-found: warn
 
     - name: 上传固件
