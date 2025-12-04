@@ -118,18 +118,14 @@ initialize_build_env() {
     log "仓库: $SELECTED_REPO_URL"
     log "分支: $SELECTED_BRANCH"
     
-    # 检查是否已经有源码
+    # 检查是否已经有源码（考虑到可能之前失败的情况）
     if [ -d ".git" ]; then
         log "源码已存在，跳过克隆"
     else
         log "克隆源码..."
         
-        # 确保目录为空（除了脚本文件）
-        debug_log "检查目录是否为空..."
-        files_count=$(ls -A | wc -l)
-        debug_log "目录中文件数: $files_count"
-        
-        # 克隆源码
+        debug_log "开始克隆..."
+        # 克隆源码到当前目录
         git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
         log "✅ 源码克隆完成"
         
