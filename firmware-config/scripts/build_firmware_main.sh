@@ -63,22 +63,29 @@ save_toolchain() {
     log "找到工具链: $staging_toolchain"
     
     log "保存版本特定工具链到: $toolchain_path"
-    rsync -av "$staging_toolchain/" "$toolchain_path/" --exclude=".*" || log "⚠️  工具链复制失败"
+    # 使用cp替代rsync，避免符号链接问题
+    cp -rL "$staging_toolchain" "$toolchain_path/$(basename "$staging_toolchain")" 2>/dev/null || \
+    cp -r "$staging_toolchain" "$toolchain_path/$(basename "$staging_toolchain")" 2>/dev/null || \
+    log "⚠️  工具链复制失败"
     
     log "保存通用工具链到: $common_path"
     
     local tools=("ar" "as" "gcc" "g++" "ld" "nm" "objcopy" "objdump" "ranlib" "strip")
+    mkdir -p "$common_path/bin"
     for tool in "${tools[@]}"; do
-        find "$staging_toolchain/bin" -name "*$tool*" -exec cp -v {} "$common_path/" \; 2>/dev/null || true
+        find "$staging_toolchain/bin" -name "*$tool*" -type f -exec cp -v {} "$common_path/bin/" \; 2>/dev/null || true
     done
     
     mkdir -p "$common_path/include" "$common_path/lib"
-    find "$staging_toolchain/include" -name "*.h" -exec cp -v {} "$common_path/include/" \; 2>/dev/null || true
-    find "$staging_toolchain/lib" -name "*.a" -o -name "*.so*" | head -20 | xargs -I {} cp -v {} "$common_path/lib/" 2>/dev/null || true
+    find "$staging_toolchain/include" -name "*.h" -type f -exec cp -v {} "$common_path/include/" \; 2>/dev/null || true
+    find "$staging_toolchain/lib" \( -name "*.a" -o -name "*.so" \) -type f | head -20 | xargs -I {} cp -v {} "$common_path/lib/" 2>/dev/null || true
     
     log "✅ 工具链保存完成"
     log "特定版本工具链: $toolchain_path"
     log "通用工具链: $common_path"
+    
+    # 清理可能的多余符号链接
+    find "$TOOLCHAIN_DIR" -type l -delete 2>/dev/null || true
 }
 
 load_toolchain() {
@@ -100,27 +107,30 @@ load_toolchain() {
     if [ -d "$toolchain_path" ]; then
         log "🔧 加载版本特定工具链: $toolchain_path"
         
+        # 查找现有的工具链目录
         local existing_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
         
         if [ -n "$existing_toolchain" ]; then
-            log "已存在工具链: $existing_toolchain"
-            mv "$existing_toolchain" "${existing_toolchain}.bak"
+            log "已存在工具链: $existing_toolchain，跳过加载"
+            return 0
         fi
         
-        local toolchain_name=$(basename "$(ls -d "$toolchain_path"/* 2>/dev/null | head -1)" 2>/dev/null || echo "toolchain-unknown")
-        local target_toolchain="staging_dir/$toolchain_name"
-        
-        cp -r "$toolchain_path" "$target_toolchain" || log "⚠️  工具链复制失败"
-        log "✅ 版本特定工具链加载完成: $target_toolchain"
+        # 从仓库复制工具链
+        local toolchain_version=$(ls "$toolchain_path" 2>/dev/null | head -1)
+        if [ -n "$toolchain_version" ]; then
+            cp -r "$toolchain_path/$toolchain_version" "staging_dir/"
+            log "✅ 版本特定工具链加载完成: staging_dir/$toolchain_version"
+        fi
     fi
     
     if [ -d "$common_path" ]; then
         log "🔧 加载通用工具链组件"
         
-        mkdir -p staging_dir/host/bin
+        mkdir -p staging_dir/host
         
-        if [ -d "$common_path" ] && [ "$(ls -A "$common_path" 2>/dev/null)" ]; then
-            cp -r "$common_path"/* staging_dir/host/bin/ 2>/dev/null || true
+        if [ -d "$common_path/bin" ] && [ "$(ls -A "$common_path/bin" 2>/dev/null)" ]; then
+            mkdir -p staging_dir/host/bin
+            cp -r "$common_path/bin"/* staging_dir/host/bin/ 2>/dev/null || true
             log "✅ 通用工具链组件加载完成"
         fi
     fi
@@ -149,16 +159,22 @@ integrate_custom_files() {
     log "自定义文件目录: $custom_dir"
     
     local ipk_count=0
-    if find "$custom_dir" -name "*.ipk" -type f | read; then
+    local script_count=0
+    local other_count=0
+    
+    # 1. 集成IPK文件到package目录
+    if find "$custom_dir" -name "*.ipk" -type f | read -r; then
         mkdir -p package/custom
         log "🔧 集成IPK文件到package目录"
         
-        find "$custom_dir" -name "*.ipk" -type f | while read ipk; do
-            local ipk_name=$(basename "$ipk")
-            log "复制: $ipk_name"
-            cp "$ipk" "package/custom/"
-            ipk_count=$((ipk_count + 1))
-        done
+        while read -r ipk; do
+            if [ -f "$ipk" ]; then
+                local ipk_name=$(basename "$ipk")
+                log "复制: $ipk_name"
+                cp "$ipk" "package/custom/"
+                ipk_count=$((ipk_count + 1))
+            fi
+        done < <(find "$custom_dir" -name "*.ipk" -type f)
         
         if [ $ipk_count -gt 0 ]; then
             cat > package/custom/Makefile << 'EOF'
@@ -198,18 +214,20 @@ EOF
         fi
     fi
     
-    local script_count=0
-    if find "$custom_dir" -name "*.sh" -type f | read; then
+    # 2. 集成脚本文件到files目录
+    if find "$custom_dir" -name "*.sh" -type f | read -r; then
         mkdir -p files/usr/share/custom
         log "🔧 集成脚本文件到files目录"
         
-        find "$custom_dir" -name "*.sh" -type f | while read script; do
-            local script_name=$(basename "$script")
-            log "复制: $script_name"
-            cp "$script" "files/usr/share/custom/"
-            chmod +x "files/usr/share/custom/$script_name"
-            script_count=$((script_count + 1))
-        done
+        while read -r script; do
+            if [ -f "$script" ]; then
+                local script_name=$(basename "$script")
+                log "复制: $script_name"
+                cp "$script" "files/usr/share/custom/"
+                chmod +x "files/usr/share/custom/$script_name"
+                script_count=$((script_count + 1))
+            fi
+        done < <(find "$custom_dir" -name "*.sh" -type f)
         
         if [ $script_count -gt 0 ]; then
             mkdir -p files/etc/init.d
@@ -239,16 +257,19 @@ EOF
         fi
     fi
     
-    local other_count=0
-    find "$custom_dir" -type f \( -name "*.conf" -o -name "*.config" -o -name "*.json" \) | while read file; do
-        local file_name=$(basename "$file")
-        local file_dir=$(dirname "$file" | sed "s|$custom_dir||")
-        
-        mkdir -p "files$file_dir"
-        cp "$file" "files$file_dir/"
-        log "复制配置文件: $file_name"
-        other_count=$((other_count + 1))
-    done
+    # 3. 集成其他配置文件
+    while read -r file; do
+        if [ -f "$file" ]; then
+            local file_name=$(basename "$file")
+            local relative_path=$(echo "$file" | sed "s|^$custom_dir/||")
+            local target_dir="files/$(dirname "$relative_path")"
+            
+            mkdir -p "$target_dir"
+            cp "$file" "$target_dir/"
+            log "复制配置文件: $relative_path"
+            other_count=$((other_count + 1))
+        fi
+    done < <(find "$custom_dir" -type f \( -name "*.conf" -o -name "*.config" -o -name "*.json" -o -name "*.txt" \) 2>/dev/null)
     
     log "✅ 自定义文件集成完成"
     log "  IPK文件: $ipk_count 个"
@@ -306,7 +327,7 @@ pre_build_error_check() {
     if [ ! -d "dl" ]; then
         log "⚠️  警告: dl 目录不存在，可能需要下载依赖"
     else
-        local dl_count=$(find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" | wc -l)
+        local dl_count=$(find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" 2>/dev/null | wc -l)
         log "✅ 依赖包数量: $dl_count 个"
         
         if [ $dl_count -lt 10 ]; then
@@ -817,7 +838,7 @@ post_build_space_check() {
     df -h
     AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
     AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-    log "/mnt 可用空间: ${available_gb}G"
+    log "/mnt 可用空间: ${AVAILABLE_GB}G"
 }
 
 check_firmware_files() {
