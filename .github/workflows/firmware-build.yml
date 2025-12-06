@@ -125,6 +125,9 @@ jobs:
           echo "✅ .config 文件存在"
           echo "文件大小: $(ls -lh ${{ env.BUILD_DIR }}/.config | awk '{print $5}')"
           echo "配置行数: $(wc -l < ${{ env.BUILD_DIR }}/.config)"
+          echo "=== 配置文件内容摘要 ==="
+          echo "前20行配置:"
+          head -20 "${{ env.BUILD_DIR }}/.config"
         else
           echo "❌ .config 文件不存在"
           find ${{ env.BUILD_DIR }} -name ".config" -o -name "config" 2>/dev/null || echo "未找到任何配置文件"
@@ -197,7 +200,13 @@ jobs:
         path: ${{ env.BUILD_DIR }}/.config
         retention-days: 7
 
-    - name: 清理目录
+    - name: 清理目录（保留配置文件）
       if: always()
       run: |
+        echo "=== 清理目录但保留配置文件 ==="
+        if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
+          echo "备份配置文件..."
+          cp "${{ env.BUILD_DIR }}/.config" "/tmp/last_config.config"
+          echo "备份完成"
+        fi
         firmware-config/scripts/build_firmware_main.sh cleanup
