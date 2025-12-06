@@ -63,27 +63,51 @@ save_toolchain() {
     log "找到工具链: $staging_toolchain"
     
     log "保存版本特定工具链到: $toolchain_path"
+    # 先清空目标目录
     rm -rf "$toolchain_path"/*
-    cp -rL "$staging_toolchain" "$toolchain_path/" 2>/dev/null || \
-    cp -r "$staging_toolchain" "$toolchain_path/" 2>/dev/null || \
-    log "⚠️  工具链复制失败"
+    
+    # 复制工具链，使用-L跟随符号链接
+    if cp -rL "$staging_toolchain" "$toolchain_path/" 2>/dev/null; then
+        log "✅ 版本特定工具链保存成功"
+    elif cp -r "$staging_toolchain" "$toolchain_path/" 2>/dev/null; then
+        log "✅ 版本特定工具链保存成功（无符号链接）"
+    else
+        log "❌ 工具链复制失败"
+        return 1
+    fi
     
     log "保存通用工具链到: $common_path"
     rm -rf "$common_path"/*
     mkdir -p "$common_path/bin"
     
     local tools=("ar" "as" "gcc" "g++" "ld" "nm" "objcopy" "objdump" "ranlib" "strip")
+    local copied_tools=0
     for tool in "${tools[@]}"; do
-        find "$staging_toolchain/bin" -name "*$tool*" -type f -exec cp -v {} "$common_path/bin/" \; 2>/dev/null || true
+        if find "$staging_toolchain/bin" -name "*$tool*" -type f -exec cp -v {} "$common_path/bin/" \; 2>/dev/null; then
+            copied_tools=$((copied_tools + 1))
+        fi
     done
     
+    log "复制了 $copied_tools 个通用工具"
+    
     mkdir -p "$common_path/include" "$common_path/lib"
-    find "$staging_toolchain/include" -name "*.h" -type f -exec cp -v {} "$common_path/include/" \; 2>/dev/null || true
-    find "$staging_toolchain/lib" \( -name "*.a" -o -name "*.so" \) -type f | head -20 | xargs -I {} cp -v {} "$common_path/lib/" 2>/dev/null || true
+    local copied_headers=0
+    local copied_libs=0
+    
+    if find "$staging_toolchain/include" -name "*.h" -type f -exec cp -v {} "$common_path/include/" \; 2>/dev/null; then
+        copied_headers=$(find "$common_path/include" -name "*.h" -type f | wc -l)
+    fi
+    
+    if find "$staging_toolchain/lib" \( -name "*.a" -o -name "*.so" \) -type f | head -20 | xargs -I {} cp -v {} "$common_path/lib/" 2>/dev/null; then
+        copied_libs=$(find "$common_path/lib" \( -name "*.a" -o -name "*.so" \) -type f | wc -l)
+    fi
     
     log "✅ 工具链保存完成"
-    log "特定版本工具链: $toolchain_path"
-    log "通用工具链: $common_path"
+    log "特定版本工具链: $toolchain_path ($(du -sh "$toolchain_path" | cut -f1))"
+    log "通用工具链: $common_path ($(du -sh "$common_path" | cut -f1))"
+    log "  通用工具: $copied_tools 个"
+    log "  头文件: $copied_headers 个"
+    log "  库文件: $copied_libs 个"
     
     find "$TOOLCHAIN_DIR" -type l -delete 2>/dev/null || true
 }
@@ -97,14 +121,30 @@ load_toolchain() {
     local toolchain_path=$(get_toolchain_path)
     local common_path=$(get_common_toolchain_path)
     
-    if [ ! -d "$toolchain_path" ] && [ ! -d "$common_path/bin" ]; then
+    local found_toolchain=0
+    local using_default=0
+    
+    # 检查版本特定工具链
+    if [ -d "$toolchain_path" ] && [ "$(ls -A "$toolchain_path" 2>/dev/null)" ]; then
+        found_toolchain=1
+        log "🔧 找到版本特定工具链: $toolchain_path"
+    fi
+    
+    # 检查通用工具链
+    if [ -d "$common_path/bin" ] && [ "$(ls -A "$common_path/bin" 2>/dev/null)" ]; then
+        found_toolchain=1
+        log "🔧 找到通用工具链: $common_path/bin"
+    fi
+    
+    if [ $found_toolchain -eq 0 ]; then
         log "ℹ️  仓库中未找到工具链，将使用默认工具链"
+        using_default=1
         return 0
     fi
     
     mkdir -p staging_dir
     
-    if [ -d "$toolchain_path" ]; then
+    if [ -d "$toolchain_path" ] && [ "$(ls -A "$toolchain_path" 2>/dev/null)" ]; then
         log "🔧 加载版本特定工具链: $toolchain_path"
         
         local existing_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
@@ -114,10 +154,12 @@ load_toolchain() {
             return 0
         fi
         
-        local toolchain_version=$(ls -d "$toolchain_path"/* 2>/dev/null | head -1 | xargs basename 2>/dev/null)
-        if [ -n "$toolchain_version" ]; then
-            cp -r "$toolchain_path/$toolchain_version" "staging_dir/"
-            log "✅ 版本特定工具链加载完成: staging_dir/$toolchain_version"
+        # 复制工具链目录中的第一个目录
+        local first_dir=$(find "$toolchain_path" -maxdepth 1 -type d ! -path "$toolchain_path" | head -1)
+        if [ -n "$first_dir" ]; then
+            local toolchain_name=$(basename "$first_dir")
+            cp -r "$first_dir" "staging_dir/"
+            log "✅ 版本特定工具链加载完成: staging_dir/$toolchain_name"
         fi
     fi
     
@@ -131,9 +173,15 @@ load_toolchain() {
     
     log "=== 验证工具链 ==="
     if [ -d "staging_dir" ]; then
-        find staging_dir -name "*gcc*" -type f | head -3 | while read compiler; do
-            log "编译器: $compiler"
-        done
+        local gcc_count=$(find staging_dir -name "*gcc*" -type f | wc -l)
+        if [ $gcc_count -gt 0 ]; then
+            log "✅ 工具链验证通过，找到 $gcc_count 个编译器"
+            find staging_dir -name "*gcc*" -type f | head -2 | while read compiler; do
+                log "  编译器: $(basename "$compiler")"
+            done
+        else
+            log "⚠️  工具链验证失败，未找到编译器"
+        fi
     fi
 }
 
@@ -376,10 +424,12 @@ pre_build_error_check() {
     if [ -d "staging_dir" ]; then
         local toolchain_count=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | wc -l)
         if [ $toolchain_count -eq 0 ]; then
-            log "⚠️  警告: 未找到工具链，将自动下载"
+            log "ℹ️  未找到工具链，将自动下载或使用默认工具链"
         else
             log "✅ 工具链存在: $toolchain_count 个"
         fi
+    else
+        log "ℹ️  staging_dir目录不存在，将自动下载工具链"
     fi
     
     if [ $error_count -eq 0 ]; then
@@ -801,22 +851,69 @@ apply_config() {
         return 1
     fi
     
-    log "📋 当前配置摘要:"
+    log "📋 配置详情:"
     log "配置文件大小: $(ls -lh .config | awk '{print $5}')"
     log "配置行数: $(wc -l < .config)"
     
-    echo "=== 关键配置选项 ==="
-    echo "1. 目标配置:"
-    grep -E "^CONFIG_TARGET_" .config | head -5
+    echo ""
+    echo "=== 目标配置 ==="
+    grep -E "^CONFIG_TARGET_" .config | head -5 | while read line; do
+        echo "✅ $line"
+    done
     
-    echo "2. 启用的包数量:"
-    grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l
+    echo ""
+    echo "=== 启用的插件分类 ==="
     
-    echo "3. USB相关配置:"
-    grep -i "usb" .config | grep "=y" | head -10
+    # 基础系统插件
+    echo "🔧 基础系统插件:"
+    grep "^CONFIG_PACKAGE_" .config | grep "=y" | grep -E "busybox|base-files|dropbear|firewall|fstools|libc|libgcc|mtd|netifd|opkg|procd|ubox|ubus|ubusd|uci|uclient-fetch|usign" | head -10 | while read line; do
+        echo "  ✅ $(echo $line | sed 's/CONFIG_PACKAGE_//;s/=y//')"
+    done
     
-    echo "4. 网络相关配置:"
-    grep -i "network\|firewall\|dnsmasq" .config | grep "=y" | head -10
+    # 网络插件
+    echo ""
+    echo "🔧 网络插件:"
+    grep "^CONFIG_PACKAGE_" .config | grep "=y" | grep -E "dnsmasq|iptables|ip6tables|kmod-ipt-nat6|wpad" | head -10 | while read line; do
+        echo "  ✅ $(echo $line | sed 's/CONFIG_PACKAGE_//;s/=y//')"
+    done
+    
+    # USB插件
+    echo ""
+    echo "🔧 USB插件:"
+    grep "^CONFIG_PACKAGE_" .config | grep "=y" | grep -i "usb" | head -15 | while read line; do
+        echo "  ✅ $(echo $line | sed 's/CONFIG_PACKAGE_//;s/=y//')"
+    done
+    
+    # 文件系统插件
+    echo ""
+    echo "🔧 文件系统插件:"
+    grep "^CONFIG_PACKAGE_" .config | grep "=y" | grep -E "kmod-fs-|kmod-nls-|block-mount|automount" | head -10 | while read line; do
+        echo "  ✅ $(echo $line | sed 's/CONFIG_PACKAGE_//;s/=y//')"
+    done
+    
+    # 语言插件
+    echo ""
+    echo "🔧 语言插件:"
+    grep "^CONFIG_PACKAGE_" .config | grep "=y" | grep -i "i18n.*zh-cn" | head -10 | while read line; do
+        echo "  ✅ $(echo $line | sed 's/CONFIG_PACKAGE_//;s/=y//')"
+    done
+    
+    # 正常模式插件
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        echo ""
+        echo "🔧 正常模式插件:"
+        grep "^CONFIG_PACKAGE_" .config | grep "=y" | grep -E "luci-app-|samba|smartdns|vlmcsd|sqm|vsftpd|upnp|wechatpush|hd-idle|diskman|accesscontrol|cpulimit|arpbind" | head -20 | while read line; do
+            echo "  ✅ $(echo $line | sed 's/CONFIG_PACKAGE_//;s/=y//')"
+        done
+    fi
+    
+    # 额外插件
+    echo ""
+    echo "🔧 所有启用的插件统计:"
+    local enabled_count=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
+    local disabled_count=$(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)
+    echo "  ✅ 已启用: $enabled_count 个"
+    echo "  ❌ 已禁用: $disabled_count 个"
     
     if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
         log "🔧 23.05版本配置预处理"
@@ -911,10 +1008,24 @@ check_firmware_files() {
 cleanup() {
     log "=== 清理构建目录 ==="
     if [ -d "$BUILD_DIR" ]; then
-        log "备份配置文件..."
+        log "检查是否有需要保留的文件..."
+        
+        # 如果.config文件存在，先备份
         if [ -f "$BUILD_DIR/.config" ]; then
-            cp "$BUILD_DIR/.config" "/tmp/last_config_$(date +%Y%m%d_%H%M%S).config"
+            log "备份配置文件..."
+            mkdir -p /tmp/openwrt_backup
+            cp "$BUILD_DIR/.config" "/tmp/openwrt_backup/config_$(date +%Y%m%d_%H%M%S).config"
         fi
+        
+        # 检查是否有其他重要文件需要保留
+        local important_files=("build.log" "error_analysis.log")
+        for file in "${important_files[@]}"; do
+            if [ -f "$BUILD_DIR/$file" ]; then
+                log "发现重要文件: $file"
+            fi
+        done
+        
+        # 清理构建目录
         sudo rm -rf $BUILD_DIR || log "⚠️ 清理构建目录失败"
         log "✅ 构建目录已清理"
     else
