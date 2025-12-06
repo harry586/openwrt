@@ -4,7 +4,6 @@ set -e
 # 全局变量
 BUILD_DIR="/mnt/openwrt-build"
 ENV_FILE="$BUILD_DIR/build_env.sh"
-TOOLCHAIN_DIR="/home/runner/work/firmware-config/Toolchain"
 CUSTOM_FILES_DIR="/home/runner/work/firmware-config/custom-files"
 
 # 日志函数 - 修复：检查目录是否存在
@@ -515,8 +514,7 @@ pre_build_check() {
                     log "  📄 $file 有 $file_size 行配置"
                 fi
             fi
-        fi
-    done
+        done
     
     if [ $missing_files -gt 0 ]; then
         log "❌ 缺少 $missing_files 个关键文件"
@@ -779,11 +777,22 @@ toolchain_manager() {
         return 1
     fi
     
-    # 获取工作空间路径
-    local workspace_dir="/home/runner/work/firmware-config"
+    # 尝试获取 GitHub 工作空间路径
+    local workspace_dir=""
     
-    # 如果不在GitHub Actions环境，使用当前目录
-    if [ ! -d "$workspace_dir" ]; then
+    # 方法1: 通过环境变量获取
+    if [ -n "$GITHUB_WORKSPACE" ]; then
+        workspace_dir="$GITHUB_WORKSPACE"
+    # 方法2: 尝试常见路径
+    elif [ -d "/home/runner/work" ]; then
+        # 获取当前仓库名称
+        if [ -n "$GITHUB_REPOSITORY" ]; then
+            workspace_dir="/home/runner/work/${GITHUB_REPOSITORY##*/}"
+        else
+            workspace_dir="/home/runner/work/firmware-config"
+        fi
+    # 方法3: 使用当前目录
+    else
         workspace_dir="$(pwd)"
     fi
     
@@ -800,10 +809,12 @@ toolchain_manager() {
     local toolchain_file="$toolchain_specific/toolchain.tar.gz"
     local toolchain_marker="$toolchain_specific/toolchain.marker"
     
+    log "工作空间: $workspace_dir"
     log "工具链目录: $toolchain_dir"
     log "版本目录: $toolchain_version"
     log "平台目录: $toolchain_specific"
     log "工具链文件: $toolchain_file"
+    log "工具链标识: $toolchain_id"
     
     case $action in
         "check")
@@ -870,6 +881,7 @@ toolchain_manager() {
             log "正在保存工具链..."
             log "源目录: $build_dir/staging_dir"
             log "目标文件: $toolchain_file"
+            log "工具链大小: $(du -sh "$build_dir/staging_dir" 2>/dev/null | cut -f1 || echo "未知")"
             
             # 检查 staging_dir 内容
             log "staging_dir 内容预览:"
@@ -907,6 +919,13 @@ EOF
                     # 列出工具链目录内容
                     log "工具链目录内容:"
                     ls -la "$toolchain_specific/" 2>/dev/null || true
+                    
+                    # 显示工具链保存成功信息
+                    log "========================================"
+                    log "🎉 工具链已成功保存到仓库"
+                    log "位置: firmware-config/Toolchain/$SELECTED_BRANCH/${TARGET}_${SUBTARGET}/"
+                    log "下次编译时将自动使用此工具链"
+                    log "========================================"
                 else
                     log "❌ 工具链文件验证失败"
                     return 1
@@ -957,21 +976,34 @@ integrate_custom_files() {
     local build_dir=${1:-$BUILD_DIR}
     log "=== 自定义文件集成 ==="
     
-    if [ ! -d "$CUSTOM_FILES_DIR" ]; then
+    # 检查自定义文件目录是否存在
+    local custom_dir=""
+    if [ -n "$GITHUB_WORKSPACE" ]; then
+        custom_dir="$GITHUB_WORKSPACE/custom-files"
+    elif [ -d "/home/runner/work" ]; then
+        custom_dir="/home/runner/work/firmware-config/custom-files"
+    else
+        custom_dir="$(pwd)/custom-files"
+    fi
+    
+    if [ ! -d "$custom_dir" ]; then
         log "ℹ️ 自定义文件目录不存在，跳过集成"
+        log "检查路径: $custom_dir"
         return 0
     fi
+    
+    log "自定义文件目录: $custom_dir"
     
     # 创建 files 目录
     local files_dir="$build_dir/files"
     mkdir -p "$files_dir"
     
     # 1. 处理 IPK 文件
-    if find "$CUSTOM_FILES_DIR" -name "*.ipk" -type f | grep -q .; then
+    if find "$custom_dir" -name "*.ipk" -type f | grep -q .; then
         local ipk_dir="$files_dir/root/ipk"
         mkdir -p "$ipk_dir"
         
-        find "$CUSTOM_FILES_DIR" -name "*.ipk" -type f | while read -r ipk; do
+        find "$custom_dir" -name "*.ipk" -type f | while read -r ipk; do
             local filename=$(basename "$ipk")
             log "添加 IPK: $filename"
             cp "$ipk" "$ipk_dir/"
@@ -996,32 +1028,41 @@ fi
 exit 0
 EOF
         chmod +x "$install_script"
+        log "✅ IPK文件集成完成"
+    else
+        log "ℹ️ 未找到IPK文件"
     fi
     
     # 2. 处理脚本文件
-    if find "$CUSTOM_FILES_DIR" -name "*.sh" -type f | grep -q .; then
+    if find "$custom_dir" -name "*.sh" -type f | grep -q .; then
         local scripts_dir="$files_dir/usr/bin/custom"
         mkdir -p "$scripts_dir"
         
-        find "$CUSTOM_FILES_DIR" -name "*.sh" -type f | while read -r script; do
+        find "$custom_dir" -name "*.sh" -type f | while read -r script; do
             local filename=$(basename "$script")
             log "添加脚本: $filename"
             cp "$script" "$scripts_dir/"
             chmod +x "$scripts_dir/$filename"
         done
+        log "✅ 脚本文件集成完成"
+    else
+        log "ℹ️ 未找到脚本文件"
     fi
     
     # 3. 复制其他文件（保持目录结构）
-    find "$CUSTOM_FILES_DIR" -type f \( ! -name "*.ipk" ! -name "*.sh" \) | while read -r file; do
-        local relative_path=$(echo "$file" | sed "s|$CUSTOM_FILES_DIR/||")
-        local target_file="$files_dir/$relative_path"
-        local target_dir=$(dirname "$target_file")
-        
-        mkdir -p "$target_dir"
-        cp "$file" "$target_file"
-        
-        log "复制: $relative_path"
-    done
+    if find "$custom_dir" -type f \( ! -name "*.ipk" ! -name "*.sh" \) | grep -q .; then
+        find "$custom_dir" -type f \( ! -name "*.ipk" ! -name "*.sh" \) | while read -r file; do
+            local relative_path=$(echo "$file" | sed "s|$custom_dir/||")
+            local target_file="$files_dir/$relative_path"
+            local target_dir=$(dirname "$target_file")
+            
+            mkdir -p "$target_dir"
+            cp "$file" "$target_file"
+            
+            log "复制: $relative_path"
+        done
+        log "✅ 其他文件集成完成"
+    fi
     
     log "✅ 自定义文件集成完成"
     return 0
