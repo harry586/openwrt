@@ -20,7 +20,7 @@ on:
         description: |
           ⚙️ 配置模式选择
           
-          🟣 基础模式 - 最小化配置，用于测试编译：✅ 文件传输。
+          🟣 基础模式 - 最小化配置，用于测试编译：✅ 基础功能
           
           🟠 正常模式 - 完整功能配置：✅ TurboACC 网络加速 ✅ UPnP 自动端口转发 ✅ Samba 文件共享 ✅ 磁盘管理 ✅ KMS 激活服务 ✅ SmartDNS 智能DNS ✅ 家长控制 ✅ 微信推送 ✅ 流量控制 (SQM) ✅ FTP 服务器 ✅ ARP 绑定 ✅ CPU 限制 ✅ 硬盘休眠。
         required: true
@@ -55,13 +55,6 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-    - name: 搜索脚本文件
-      if: github.event.inputs.search_scripts != ''
-      run: |
-        echo "=== 搜索脚本文件: ${{ github.event.inputs.search_scripts }} ==="
-        find . -name "*.sh" -type f | grep -i "${{ github.event.inputs.search_scripts }}" || echo "未找到匹配的脚本文件"
-        find . -name "*.yml" -o -name "*.yaml" | grep -i "${{ github.event.inputs.search_scripts }}" || echo "未找到匹配的工作流文件"
-
     - name: 检出配置仓库
       uses: actions/checkout@v4
       with:
@@ -72,6 +65,21 @@ jobs:
         echo "=== 设置脚本执行权限 ==="
         find firmware-config/scripts -name "*.sh" -exec chmod +x {} \;
         echo "✅ 脚本执行权限设置完成"
+
+    - name: 搜索脚本文件（可选）
+      if: github.event.inputs.search_scripts != ''
+      run: |
+        echo "=== 搜索脚本文件: ${{ github.event.inputs.search_scripts }} ==="
+        echo "搜索范围: 当前仓库"
+        echo "搜索结果:"
+        echo "=== .sh 文件 ==="
+        find . -name "*.sh" -type f | grep -i "${{ github.event.inputs.search_scripts }}" || echo "未找到匹配的脚本文件"
+        echo ""
+        echo "=== .yml/.yaml 文件 ==="
+        find . \( -name "*.yml" -o -name "*.yaml" \) -type f | grep -i "${{ github.event.inputs.search_scripts }}" || echo "未找到匹配的工作流文件"
+        echo ""
+        echo "=== 配置文件 ==="
+        find . \( -name "*.conf" -o -name "*.config" -o -name "Makefile" \) -type f | grep -i "${{ github.event.inputs.search_scripts }}" || echo "未找到匹配的配置文件"
 
     - name: 初始空间检查
       run: |
@@ -196,14 +204,6 @@ jobs:
         name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
         path: ${{ env.BUILD_DIR }}/.config
         retention-days: 7
-
-    - name: 上传工具链
-      if: success() && github.event.inputs.enable_cache == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: toolchain-${{ env.SELECTED_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}
-        path: firmware-config/Toolchain/
-        retention-days: 30
 
     - name: 清理目录
       if: always()
