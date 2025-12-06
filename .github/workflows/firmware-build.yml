@@ -41,11 +41,6 @@ on:
         required: false
         default: true
         type: boolean
-      search_scripts:
-        description: '🔍 搜索脚本文件 (支持模糊查找)'
-        required: false
-        type: string
-        default: ''
 
 env:
   BUILD_DIR: /mnt/openwrt-build
@@ -65,21 +60,6 @@ jobs:
         echo "=== 设置脚本执行权限 ==="
         find firmware-config/scripts -name "*.sh" -exec chmod +x {} \;
         echo "✅ 脚本执行权限设置完成"
-
-    - name: 搜索脚本文件（可选）
-      if: github.event.inputs.search_scripts != ''
-      run: |
-        echo "=== 搜索脚本文件: ${{ github.event.inputs.search_scripts }} ==="
-        echo "搜索范围: 当前仓库"
-        echo "搜索结果:"
-        echo "=== .sh 文件 ==="
-        find . -name "*.sh" -type f | grep -i "${{ github.event.inputs.search_scripts }}" || echo "未找到匹配的脚本文件"
-        echo ""
-        echo "=== .yml/.yaml 文件 ==="
-        find . \( -name "*.yml" -o -name "*.yaml" \) -type f | grep -i "${{ github.event.inputs.search_scripts }}" || echo "未找到匹配的工作流文件"
-        echo ""
-        echo "=== 配置文件 ==="
-        find . \( -name "*.conf" -o -name "*.config" -o -name "Makefile" \) -type f | grep -i "${{ github.event.inputs.search_scripts }}" || echo "未找到匹配的配置文件"
 
     - name: 初始空间检查
       run: |
@@ -134,9 +114,21 @@ jobs:
       run: |
         firmware-config/scripts/build_firmware_main.sh verify_usb_config
 
-    - name: 应用配置
+    - name: 应用配置并显示详情
       run: |
         firmware-config/scripts/build_firmware_main.sh apply_config
+
+    - name: 检查配置文件
+      run: |
+        echo "=== 检查配置文件状态 ==="
+        if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
+          echo "✅ .config 文件存在"
+          echo "文件大小: $(ls -lh ${{ env.BUILD_DIR }}/.config | awk '{print $5}')"
+          echo "配置行数: $(wc -l < ${{ env.BUILD_DIR }}/.config)"
+        else
+          echo "❌ .config 文件不存在"
+          find ${{ env.BUILD_DIR }} -name ".config" -o -name "config" 2>/dev/null || echo "未找到任何配置文件"
+        fi
 
     - name: 修复网络环境
       run: |
