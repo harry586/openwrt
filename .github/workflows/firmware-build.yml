@@ -1,10 +1,10 @@
-name: OpenWrt 固件构建
+name: OpenWrt 智能固件构建工作流（完整版）
 
 on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: '📱 设备名称 (如: ac42u)'
+        description: '📱 设备名称 (如: ac42u, r3g等)'
         required: true
         default: 'ac42u'
         type: string
@@ -17,7 +17,12 @@ on:
           - '23.05'
           - '21.02'
       config_mode:
-        description: '⚙️ 配置模式'
+        description: |
+          ⚙️ 配置模式选择
+          
+          🟣 基础模式 - 最小化配置，用于测试编译
+          
+          🟠 正常模式 - 完整功能配置：TurboACC网络加速、UPnP端口转发、Samba文件共享、磁盘管理、KMS激活服务、SmartDNS智能DNS、家长控制、微信推送、流量控制(SQM)、FTP服务器、ARP绑定、CPU限制、硬盘休眠
         required: true
         type: choice
         default: 'normal'
@@ -25,155 +30,158 @@ on:
           - 'base'
           - 'normal'
       extra_packages:
-        description: '额外插件 (用顿号、分隔)'
+        description: |
+          额外安装插件
+          格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。示例：+luci-app-wol;+luci-app-ddns
         required: false
         type: string
         default: ''
       enable_cache:
-        description: '⚡ 启用编译缓存'
-        required: false
-        default: true
-        type: boolean
-      rebuild_toolchain:
-        description: '🔄 重新构建工具链'
-        required: false
-        default: false
-        type: boolean
-      debug_mode:
-        description: '🐛 启用调试模式'
+        description: '⚡ 启用编译缓存 (加速编译过程)'
         required: false
         default: true
         type: boolean
 
 env:
   BUILD_DIR: /mnt/openwrt-build
-  TOOLCHAIN_DIR: /mnt/openwrt-toolchain
-  WORKSPACE: ${{ github.workspace }}
-  DEBUG_MODE: ${{ github.event.inputs.debug_mode }}
 
 jobs:
   build-firmware:
     runs-on: ubuntu-22.04
     
     steps:
-    - name: 检出仓库
+    - name: 检出配置仓库
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
-        path: openwrt-config
 
-    - name: 设置权限
-      run: chmod +x openwrt-config/firmware-config/scripts/*.sh
-
-    - name: 创建目录
+    - name: 设置脚本执行权限
       run: |
-        sudo mkdir -p $BUILD_DIR $TOOLCHAIN_DIR
-        sudo chown -R $USER:$USER $BUILD_DIR $TOOLCHAIN_DIR
+        echo "=== 设置脚本执行权限 ==="
+        find firmware-config/scripts -name "*.sh" -exec chmod +x {} \;
+        echo "✅ 脚本执行权限设置完成"
 
-    - name: 初始化构建环境
-      id: init_env
+    - name: 初始空间检查
       run: |
-        # 清理并重新创建构建目录
-        sudo rm -rf $BUILD_DIR/*
-        sudo mkdir -p $BUILD_DIR
-        sudo chown -R $USER:$USER $BUILD_DIR
-        
-        cd $BUILD_DIR
-        
-        # 复制脚本
-        cp $WORKSPACE/openwrt-config/firmware-config/scripts/build_firmware_main.sh .
-        chmod +x build_firmware_main.sh
-        
-        # 执行初始化
-        export DEBUG_MODE="$DEBUG_MODE"
-        ./build_firmware_main.sh initialize_build_env \
-          "${{ github.event.inputs.device_name }}" \
-          "${{ github.event.inputs.version_selection }}" \
-          "${{ github.event.inputs.config_mode }}"
-        
-        if [ -f "build_env.sh" ]; then
-          source build_env.sh
-          echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
-          echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_OUTPUT
-          echo "TARGET=$TARGET" >> $GITHUB_ENV
-          echo "TARGET=$TARGET" >> $GITHUB_OUTPUT
-          echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
-          echo "SUBTARGET=$SUBTARGET" >> $GITHUB_OUTPUT
-          echo "DEVICE=$DEVICE" >> $GITHUB_ENV
-          echo "DEVICE=$DEVICE" >> $GITHUB_OUTPUT
-        else
+        echo "=== 初始磁盘空间检查 ==="
+        df -h
+        AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
+        AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+        echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+        if [ $AVAILABLE_GB -lt 50 ]; then
+          echo "错误: /mnt 空间不足50G"
           exit 1
         fi
 
+    - name: 设置编译环境
+      run: |
+        firmware-config/scripts/build_firmware_main.sh setup_environment
+
+    - name: 创建构建目录
+      run: |
+        firmware-config/scripts/build_firmware_main.sh create_build_dir
+
+    - name: 初始化构建环境
+      run: |
+        firmware-config/scripts/build_firmware_main.sh initialize_build_env \
+          "${{ github.event.inputs.device_name }}" \
+          "${{ github.event.inputs.version_selection }}" \
+          "${{ github.event.inputs.config_mode }}"
+
+    - name: 添加 TurboACC 支持
+      run: |
+        firmware-config/scripts/build_firmware_main.sh add_turboacc_support
+
     - name: 配置Feeds
       run: |
-        cd $BUILD_DIR
-        export DEBUG_MODE="$DEBUG_MODE"
-        ./build_firmware_main.sh configure_feeds
+        firmware-config/scripts/build_firmware_main.sh configure_feeds
 
-    - name: 安装插件包
+    - name: 编译前空间检查
       run: |
-        cd $BUILD_DIR
-        export DEBUG_MODE="$DEBUG_MODE"
-        ./build_firmware_main.sh install_filetransfer_packages
+        firmware-config/scripts/build_firmware_main.sh pre_build_space_check
 
-    - name: 智能配置生成
+    - name: 智能配置生成（USB完全修复通用版）
       run: |
-        cd $BUILD_DIR
-        export DEBUG_MODE="$DEBUG_MODE"
-        ./build_firmware_main.sh generate_config "${{ github.event.inputs.extra_packages }}"
+        firmware-config/scripts/build_firmware_main.sh generate_config \
+          "${{ github.event.inputs.extra_packages }}"
+
+    - name: 集成自定义文件
+      run: |
+        firmware-config/scripts/build_firmware_main.sh integrate_custom_files
+
+    - name: 验证USB配置
+      run: |
+        firmware-config/scripts/build_firmware_main.sh verify_usb_config
 
     - name: 应用配置
       run: |
-        cd $BUILD_DIR
-        export DEBUG_MODE="$DEBUG_MODE"
-        ./build_firmware_main.sh apply_config
+        firmware-config/scripts/build_firmware_main.sh apply_config
+
+    - name: 修复网络环境
+      run: |
+        firmware-config/scripts/build_firmware_main.sh fix_network
 
     - name: 下载依赖包
       run: |
-        cd $BUILD_DIR
-        export DEBUG_MODE="$DEBUG_MODE"
-        ./build_firmware_main.sh download_dependencies
+        firmware-config/scripts/build_firmware_main.sh download_dependencies
+
+    - name: 前置错误检查（编译前）
+      run: |
+        firmware-config/scripts/build_firmware_main.sh pre_build_check
+
+    - name: 工具链管理（检查）
+      run: |
+        firmware-config/scripts/build_firmware_main.sh toolchain_manager check || \
+          echo "工具链不存在，将在编译后生成"
 
     - name: 编译固件
-      id: build_firmware
       run: |
-        cd $BUILD_DIR
-        export DEBUG_MODE="$DEBUG_MODE"
-        ./build_firmware_main.sh build_firmware "${{ github.event.inputs.enable_cache }}"
-        
-        if [ $? -eq 0 ]; then
-          echo "BUILD_SUCCESS=true" >> $GITHUB_OUTPUT
-        else
-          echo "BUILD_SUCCESS=false" >> $GITHUB_OUTPUT
-        fi
+        firmware-config/scripts/build_firmware_main.sh build_firmware "${{ github.event.inputs.enable_cache }}"
 
-    - name: 检查固件文件
-      if: steps.build_firmware.outputs.BUILD_SUCCESS == 'true'
+    - name: 错误分析
+      if: failure()
       run: |
-        cd $BUILD_DIR
-        ./build_firmware_main.sh check_firmware_files
+        firmware-config/scripts/error_analysis.sh "$BUILD_DIR"
 
-    - name: 备份配置
-      if: always()
+    - name: 保存工具链
+      if: success()
       run: |
-        cd $BUILD_DIR
-        ./build_firmware_main.sh backup_config
+        firmware-config/scripts/build_firmware_main.sh toolchain_manager save
+
+    - name: 编译后空间检查
+      run: |
+        firmware-config/scripts/build_firmware_main.sh post_build_space_check
+
+    - name: 固件文件检查
+      if: success()
+      run: |
+        firmware-config/scripts/build_firmware_main.sh check_firmware_files
 
     - name: 上传固件
-      if: steps.build_firmware.outputs.BUILD_SUCCESS == 'true'
+      if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-${{ github.event.inputs.device_name }}
+        name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
         path: ${{ env.BUILD_DIR }}/bin/targets/
-        retention-days: 30
+        retention-days: 7
 
-    - name: 上传日志
+    - name: 上传编译日志
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: logs-${{ github.event.inputs.device_name }}
-        path: |
-          ${{ env.BUILD_DIR }}/*.log
-          ${{ env.BUILD_DIR }}/config_backup/
-        retention-days: 30
+        name: build-log-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
+        path: ${{ env.BUILD_DIR }}/build.log
+        retention-days: 7
+
+    - name: 上传配置文件
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
+        path: ${{ env.BUILD_DIR }}/.config
+        retention-days: 7
+
+    - name: 清理目录
+      if: always()
+      run: |
+        firmware-config/scripts/build_firmware_main.sh cleanup
