@@ -6,11 +6,15 @@ BUILD_DIR="/mnt/openwrt-build"
 ENV_FILE="$BUILD_DIR/build_env.sh"
 TOOLCHAIN_DIR="/home/runner/work/firmware-config/Toolchain"
 CUSTOM_FILES_DIR="/home/runner/work/firmware-config/custom-files"
-LOG_FILE="$BUILD_DIR/build.log"
 
-# 日志函数
+# 日志函数 - 修复：检查目录是否存在
 log() {
-    echo "【$(date '+%Y-%m-%d %H:%M:%S')】$1" | tee -a $LOG_FILE
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    if [ -d "$BUILD_DIR" ]; then
+        echo "【$timestamp】$1" | tee -a "$BUILD_DIR/build.log"
+    else
+        echo "【$timestamp】$1"
+    fi
 }
 
 # 错误处理函数
@@ -44,6 +48,14 @@ load_env() {
 # 步骤1: 设置编译环境
 setup_environment() {
     log "=== 安装编译依赖包 ==="
+    
+    # 创建构建目录以便记录日志
+    if [ ! -d "$BUILD_DIR" ]; then
+        sudo mkdir -p $BUILD_DIR
+        sudo chown -R $USER:$USER $BUILD_DIR
+        sudo chmod -R 755 $BUILD_DIR
+    fi
+    
     sudo apt-get update || handle_error "apt-get update失败"
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
         build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
@@ -120,12 +132,14 @@ initialize_build_env() {
     save_env
     
     # 设置GitHub环境变量
-    echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
-    echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
-    echo "TARGET=$TARGET" >> $GITHUB_ENV
-    echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
-    echo "DEVICE=$DEVICE" >> $GITHUB_ENV
-    echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
+    if [ -n "$GITHUB_ENV" ]; then
+        echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
+        echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
+        echo "TARGET=$TARGET" >> $GITHUB_ENV
+        echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
+        echo "DEVICE=$DEVICE" >> $GITHUB_ENV
+        echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
+    fi
     
     # 克隆源码
     log "=== 克隆源码 ==="
@@ -412,10 +426,10 @@ generate_config() {
             echo "CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-hd-idle-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-accesscontrol-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-vlmcsd-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y" >> error_analysis.log
+            echo "CONFIG_PACKAGE_luci-i18n-accesscontrol-zh-cn=y" >> error_analysis.log
+            echo "CONFIG_PACKAGE_luci-i18n-vlmcsd-zh-cn=y" >> error_analysis.log
+            echo "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y" >> error_analysis.log
         fi
     fi
     
@@ -777,22 +791,29 @@ build_firmware() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
     log "=== 编译固件 ==="
+    
+    # 创建独立的编译日志文件
     if [ "$enable_cache" = "true" ]; then
         log "启用编译缓存"
-        make -j$(nproc) V=s 2>&1 | tee -a $LOG_FILE
+        make -j$(nproc) V=s 2>&1 | tee "$BUILD_DIR/compile.log"
         BUILD_EXIT_CODE=${PIPESTATUS[0]}
     else
         log "普通编译模式"
-        make -j$(nproc) V=s 2>&1 | tee -a $LOG_FILE
+        make -j$(nproc) V=s 2>&1 | tee "$BUILD_DIR/compile.log"
         BUILD_EXIT_CODE=${PIPESTATUS[0]}
+    fi
+    
+    # 将编译日志追加到主日志
+    if [ -f "$BUILD_DIR/compile.log" ]; then
+        cat "$BUILD_DIR/compile.log" >> "$BUILD_DIR/build.log"
     fi
     
     log "编译退出代码: $BUILD_EXIT_CODE"
     if [ $BUILD_EXIT_CODE -ne 0 ]; then
         log "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
-        if [ -f "build.log" ]; then
+        if [ -f "$BUILD_DIR/compile.log" ]; then
             log "=== 编译错误摘要 ==="
-            grep -i "error:\|failed\|undefined" build.log | head -20
+            grep -i "error:\|failed\|undefined" "$BUILD_DIR/compile.log" | head -20
         fi
         exit $BUILD_EXIT_CODE
     fi
@@ -896,7 +917,7 @@ main() {
             ;;
             
         *)
-            log "❌ 未知命令: $1"
+            echo "❌ 未知命令: $1"
             echo "可用命令:"
             echo "  前置检查: pre_build_check"
             echo "  工具链管理: toolchain_manager [check|save|update]"
