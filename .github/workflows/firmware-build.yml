@@ -37,8 +37,6 @@ on:
 
 env:
   BUILD_DIR: /mnt/openwrt-build
-  WORKSPACE_DIR: /home/runner/work/${{ github.repository }}
-  TOOLCHAIN_DIR: ${{ env.WORKSPACE_DIR }}/firmware-config/Toolchain
 
 jobs:
   build-firmware:
@@ -145,12 +143,10 @@ jobs:
         if: success()
         run: |
           echo "=== 保存工具链 ==="
-          echo "工作空间: ${{ env.WORKSPACE_DIR }}"
-          echo "工具链目录: ${{ env.TOOLCHAIN_DIR }}"
+          echo "工作空间: $(pwd)"
+          echo "仓库名称: ${{ github.repository }}"
           
-          # 确保工具链目录存在
-          mkdir -p ${{ env.TOOLCHAIN_DIR }}
-          
+          # 执行保存操作
           firmware-config/scripts/build_firmware_main.sh toolchain_manager save
 
       - name: 编译后空间检查
