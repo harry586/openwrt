@@ -426,10 +426,10 @@ generate_config() {
             echo "CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-hd-idle-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y" >> error_analysis.log
-            echo "CONFIG_PACKAGE_luci-i18n-accesscontrol-zh-cn=y" >> error_analysis.log
-            echo "CONFIG_PACKAGE_luci-i18n-vlmcsd-zh-cn=y" >> error_analysis.log
-            echo "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y" >> error_analysis.log
+            echo "CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-accesscontrol-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-vlmcsd-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y" >> .config
         fi
     fi
     
@@ -481,10 +481,10 @@ verify_usb_config() {
     log "=== 🚨 USB配置验证完成 ==="
 }
 
-# 步骤9: 前置错误检查（新增）
+# 步骤9: 前置错误检查（增强版）
 pre_build_check() {
     local build_dir=${1:-$BUILD_DIR}
-    log "=== 前置错误检查 ==="
+    log "=== 前置错误检查（增强版）==="
     
     cd $build_dir || handle_error "进入构建目录失败"
     
@@ -496,54 +496,275 @@ pre_build_check() {
     
     # 检查关键文件
     local critical_files=(".config" "feeds.conf.default" "Makefile")
+    local missing_files=0
+    
+    log "检查关键文件:"
     for file in "${critical_files[@]}"; do
         if [ ! -f "$build_dir/$file" ]; then
             log "❌ 关键文件缺失: $file"
-            return 1
+            missing_files=$((missing_files + 1))
+        else
+            log "✅ $file 存在"
+            
+            # 检查文件内容
+            if [ "$file" = ".config" ]; then
+                file_size=$(wc -l < "$build_dir/$file" 2>/dev/null || echo "0")
+                if [ "$file_size" -lt 100 ]; then
+                    log "⚠️  $file 可能不完整，只有 $file_size 行"
+                else
+                    log "  📄 $file 有 $file_size 行配置"
+                fi
+            fi
         fi
     done
+    
+    if [ $missing_files -gt 0 ]; then
+        log "❌ 缺少 $missing_files 个关键文件"
+        return 1
+    fi
     
     # 检查环境变量
     load_env
-    local required_vars=("SELECTED_BRANCH" "TARGET" "SUBTARGET" "DEVICE")
+    local required_vars=("SELECTED_BRANCH" "TARGET" "SUBTARGET" "DEVICE" "CONFIG_MODE")
+    local missing_vars=0
+    
+    log "检查环境变量:"
     for var in "${required_vars[@]}"; do
         if [ -z "${!var}" ]; then
             log "❌ 环境变量未设置: $var"
-            return 1
+            missing_vars=$((missing_vars + 1))
+        else
+            log "✅ $var: ${!var}"
         fi
     done
     
+    if [ $missing_vars -gt 0 ]; then
+        log "❌ 缺少 $missing_vars 个环境变量"
+        return 1
+    fi
+    
     # 检查 feeds 状态
+    log "检查Feeds状态:"
     if [ ! -d "$build_dir/feeds" ]; then
         log "❌ Feeds 目录不存在"
         return 1
+    else
+        feed_dirs=$(find "$build_dir/feeds" -maxdepth 1 -type d | wc -l)
+        feed_dirs=$((feed_dirs - 1))
+        log "✅ Feeds 目录存在，包含 $feed_dirs 个feed"
+        
+        # 检查关键feed
+        local required_feeds=("packages" "luci")
+        for feed in "${required_feeds[@]}"; do
+            if [ -d "$build_dir/feeds/$feed" ]; then
+                log "✅ feed '$feed' 存在"
+            else
+                log "❌ feed '$feed' 不存在"
+                return 1
+            fi
+        done
     fi
     
     # 检查系统资源
     local available_space=$(df -h $build_dir | tail -1 | awk '{print $4}')
     local mem_free=$(free -m | awk 'NR==2{print $4}')
+    local cpu_cores=$(nproc)
     
-    log "磁盘空间: $available_space"
-    log "可用内存: ${mem_free}MB"
+    log "系统资源检查:"
+    log "  磁盘空间: $available_space"
+    log "  可用内存: ${mem_free}MB"
+    log "  CPU核心: $cpu_cores"
     
     if [ $mem_free -lt 2048 ]; then
-        log "⚠️ 警告: 可用内存低于 2GB"
+        log "⚠️  警告: 可用内存低于 2GB，可能导致编译失败"
+    fi
+    
+    if [ $cpu_cores -lt 2 ]; then
+        log "⚠️  警告: CPU核心少于2个，编译速度可能较慢"
     fi
     
     # 检查编译工具
-    local required_tools=("make" "gcc" "git" "g++" "flex" "bison")
+    local required_tools=("make" "gcc" "git" "g++" "flex" "bison" "python3")
+    local missing_tools=0
+    
+    log "检查编译工具:"
     for tool in "${required_tools[@]}"; do
         if ! command -v $tool >/dev/null 2>&1; then
             log "❌ 编译工具缺失: $tool"
-            return 1
+            missing_tools=$((missing_tools + 1))
+        else
+            log "✅ $tool: $(which $tool)"
         fi
     done
     
-    log "✅ 前置检查通过"
-    return 0
+    if [ $missing_tools -gt 0 ]; then
+        log "❌ 缺少 $missing_tools 个编译工具"
+        return 1
+    fi
+    
+    # 新增：详细配置检查
+    log "=== 详细配置检查 ==="
+    
+    # 1. 检查配置冲突
+    log "1. 配置冲突检查:"
+    
+    # 检查重复配置
+    DUPLICATES=$(grep "^CONFIG_PACKAGE_" .config | sort | uniq -d)
+    if [ -n "$DUPLICATES" ]; then
+        log "❌ 发现重复配置:"
+        echo "$DUPLICATES" | while read dup; do
+            log "  - $dup"
+        done
+        return 1
+    else
+        log "✅ 无重复配置"
+    fi
+    
+    # 检查同时启用的冲突包
+    if grep -q "CONFIG_PACKAGE_kmod-fs-ntfs=y" .config && \
+       grep -q "CONFIG_PACKAGE_kmod-fs-ntfs3=y" .config; then
+        log "⚠️  NTFS驱动冲突: kmod-fs-ntfs 和 kmod-fs-ntfs3 同时启用"
+    fi
+    
+    # 检查USB驱动配置
+    log "2. USB驱动检查:"
+    USB_CONFIGS=(
+        "kmod-usb-core" "kmod-usb2" "kmod-usb-storage"
+    )
+    
+    local usb_errors=0
+    for config in "${USB_CONFIGS[@]}"; do
+        if grep -q "CONFIG_PACKAGE_${config}=y" .config; then
+            log "✅ $config: 已启用"
+        else
+            log "❌ $config: 未启用"
+            usb_errors=$((usb_errors + 1))
+        fi
+    done
+    
+    if [ $usb_errors -gt 0 ]; then
+        log "❌ 发现 $usb_errors 个USB配置问题"
+        return 1
+    fi
+    
+    # 检查目标配置
+    log "3. 目标配置检查:"
+    TARGET_CONFIGS=(
+        "CONFIG_TARGET_${TARGET}=y"
+        "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y"
+        "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
+    )
+    
+    local target_errors=0
+    for config in "${TARGET_CONFIGS[@]}"; do
+        if grep -q "^${config}$" .config; then
+            log "✅ $(echo $config | cut -d'=' -f1)"
+        else
+            log "❌ $(echo $config | cut -d'=' -f1)"
+            target_errors=$((target_errors + 1))
+        fi
+    done
+    
+    if [ $target_errors -gt 0 ]; then
+        log "❌ 发现 $target_errors 个目标配置问题"
+        return 1
+    fi
+    
+    # 检查配置完整性
+    log "4. 配置完整性:"
+    CONFIG_ENABLED=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config 2>/dev/null || echo "0")
+    CONFIG_DISABLED=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config 2>/dev/null || echo "0")
+    CONFIG_TOTAL=$((CONFIG_ENABLED + CONFIG_DISABLED))
+    
+    log "  已启用包: $CONFIG_ENABLED"
+    log "  已禁用包: $CONFIG_DISABLED"
+    log "  总配置项: $CONFIG_TOTAL"
+    
+    if [ $CONFIG_ENABLED -lt 50 ]; then
+        log "⚠️  已启用包数量较少，可能配置不完整"
+    fi
+    
+    # 检查下载的包
+    log "5. 下载包检查:"
+    if [ -d "dl" ]; then
+        DL_COUNT=$(find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" | wc -l)
+        log "  已下载包数量: $DL_COUNT"
+        
+        if [ $DL_COUNT -lt 10 ]; then
+            log "⚠️  下载包数量可能不足"
+        fi
+        
+        # 检查下载文件大小
+        dl_total_size=$(du -sh dl 2>/dev/null | cut -f1)
+        log "  下载目录大小: $dl_total_size"
+    else
+        log "⚠️  dl目录不存在，可能尚未下载依赖包"
+    fi
+    
+    # 检查文件系统支持
+    log "6. 文件系统支持检查:"
+    FS_CONFIGS=(
+        "kmod-fs-ext4" "kmod-fs-vfat" "kmod-fs-exfat"
+    )
+    
+    local fs_errors=0
+    for config in "${FS_CONFIGS[@]}"; do
+        if grep -q "CONFIG_PACKAGE_${config}=y" .config; then
+            log "✅ $config: 已启用"
+        else
+            log "❌ $config: 未启用"
+            fs_errors=$((fs_errors + 1))
+        fi
+    done
+    
+    if [ $fs_errors -gt 0 ]; then
+        log "❌ 发现 $fs_errors 个文件系统配置问题"
+        return 1
+    fi
+    
+    # 检查网络工具
+    log "7. 网络工具检查:"
+    NET_CONFIGS=(
+        "iptables" "ip6tables" "dnsmasq-full"
+    )
+    
+    local net_errors=0
+    for config in "${NET_CONFIGS[@]}"; do
+        if grep -q "CONFIG_PACKAGE_${config}=y" .config; then
+            log "✅ $config: 已启用"
+        else
+            log "❌ $config: 未启用"
+            net_errors=$((net_errors + 1))
+        fi
+    done
+    
+    if [ $net_errors -gt 0 ]; then
+        log "❌ 发现 $net_errors 个网络工具配置问题"
+        return 1
+    fi
+    
+    # 检查语言包
+    log "8. 语言包检查:"
+    if grep -q "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" .config; then
+        log "✅ 中文语言包已启用"
+    else
+        log "⚠️  中文语言包未启用"
+    fi
+    
+    log "=== 检查完成 ==="
+    
+    local total_errors=$((missing_files + missing_vars + missing_tools + usb_errors + target_errors + fs_errors + net_errors))
+    
+    if [ $total_errors -eq 0 ]; then
+        log "✅ 前置检查通过，未发现严重问题"
+        return 0
+    else
+        log "❌ 前置检查发现 $total_errors 个问题"
+        return 1
+    fi
 }
 
-# 步骤10: 工具链管理（新增）
+# 步骤10: 工具链管理（修复版）
 toolchain_manager() {
     local build_dir=${1:-$BUILD_DIR}
     local action=${2:-"check"}
@@ -558,9 +779,18 @@ toolchain_manager() {
         return 1
     fi
     
+    # 获取工作空间路径
+    local workspace_dir="/home/runner/work/firmware-config"
+    
+    # 如果不在GitHub Actions环境，使用当前目录
+    if [ ! -d "$workspace_dir" ]; then
+        workspace_dir="$(pwd)"
+    fi
+    
     # 工具链目录结构
-    local toolchain_common="$TOOLCHAIN_DIR/common"
-    local toolchain_version="$TOOLCHAIN_DIR/$SELECTED_BRANCH"
+    local toolchain_dir="$workspace_dir/Toolchain"
+    local toolchain_common="$toolchain_dir/common"
+    local toolchain_version="$toolchain_dir/$SELECTED_BRANCH"
     local toolchain_specific="$toolchain_version/${TARGET}_${SUBTARGET}"
     
     mkdir -p "$toolchain_common" "$toolchain_version" "$toolchain_specific"
@@ -570,30 +800,60 @@ toolchain_manager() {
     local toolchain_file="$toolchain_specific/toolchain.tar.gz"
     local toolchain_marker="$toolchain_specific/toolchain.marker"
     
+    log "工具链目录: $toolchain_dir"
+    log "版本目录: $toolchain_version"
+    log "平台目录: $toolchain_specific"
+    log "工具链文件: $toolchain_file"
+    
     case $action in
         "check")
             # 检查是否存在工具链
             if [ -f "$toolchain_file" ] && [ -f "$toolchain_marker" ]; then
                 log "✅ 找到工具链: $toolchain_id"
+                log "文件大小: $(du -h "$toolchain_file" 2>/dev/null | cut -f1 || echo "未知")"
                 
-                # 清理旧的 staging_dir
-                if [ -d "$build_dir/staging_dir" ]; then
-                    rm -rf "$build_dir/staging_dir"
-                fi
-                
-                # 提取工具链
-                tar -xzf "$toolchain_file" -C "$build_dir"
-                
-                if [ -d "$build_dir/staging_dir" ]; then
-                    log "✅ 工具链恢复成功"
-                    export STAGING_DIR="$build_dir/staging_dir"
-                    return 0
+                # 检查工具链是否可用
+                if tar -tzf "$toolchain_file" >/dev/null 2>&1; then
+                    # 清理旧的 staging_dir
+                    if [ -d "$build_dir/staging_dir" ]; then
+                        log "清理旧的 staging_dir"
+                        rm -rf "$build_dir/staging_dir"
+                    fi
+                    
+                    # 提取工具链
+                    log "正在提取工具链..."
+                    tar -xzf "$toolchain_file" -C "$build_dir"
+                    
+                    if [ -d "$build_dir/staging_dir" ]; then
+                        log "✅ 工具链恢复成功"
+                        export STAGING_DIR="$build_dir/staging_dir"
+                        
+                        # 检查工具链文件
+                        if find "$build_dir/staging_dir" -name "*gcc" -type f | grep -q .; then
+                            log "✅ 工具链编译器存在"
+                        else
+                            log "❌ 工具链编译器缺失"
+                            return 1
+                        fi
+                        
+                        return 0
+                    else
+                        log "❌ 工具链提取失败"
+                        return 1
+                    fi
                 else
-                    log "❌ 工具链提取失败"
+                    log "❌ 工具链文件损坏"
+                    rm -f "$toolchain_file" "$toolchain_marker"
                     return 1
                 fi
             else
-                log "ℹ️ 未找到现有工具链，需要重新生成"
+                log "ℹ️ 未找到现有工具链"
+                if [ ! -f "$toolchain_file" ]; then
+                    log "  文件不存在: $toolchain_file"
+                fi
+                if [ ! -f "$toolchain_marker" ]; then
+                    log "  标记文件不存在: $toolchain_marker"
+                fi
                 return 2
             fi
             ;;
@@ -602,21 +862,30 @@ toolchain_manager() {
             # 保存工具链
             if [ ! -d "$build_dir/staging_dir" ]; then
                 log "❌ staging_dir 不存在，无法保存工具链"
+                log "当前目录内容:"
+                ls -la "$build_dir/" 2>/dev/null | head -10 || true
                 return 1
             fi
             
-            log "保存工具链到: $toolchain_file"
+            log "正在保存工具链..."
+            log "源目录: $build_dir/staging_dir"
+            log "目标文件: $toolchain_file"
+            
+            # 检查 staging_dir 内容
+            log "staging_dir 内容预览:"
+            find "$build_dir/staging_dir" -maxdepth 2 -type d 2>/dev/null | head -10 || true
             
             # 压缩保存
-            tar -czf "$toolchain_file" \
+            log "正在压缩工具链..."
+            if tar -czf "$toolchain_file" \
                 --exclude="*.o" \
                 --exclude="*.a" \
                 --exclude="*.lo" \
                 --exclude="*.la" \
                 --exclude="*.so" \
-                -C "$build_dir" staging_dir
-            
-            if [ $? -eq 0 ]; then
+                -C "$build_dir" staging_dir 2>&1; then
+                
+                # 创建标记文件
                 cat > "$toolchain_marker" << EOF
 TOOLCHAIN_ID=$toolchain_id
 CREATED=$(date)
@@ -625,8 +894,23 @@ TARGET=$TARGET
 SUBTARGET=$SUBTARGET
 SIZE=$(du -h "$toolchain_file" | cut -f1)
 EOF
+                
                 log "✅ 工具链保存成功"
-                log "大小: $(du -h "$toolchain_file" | cut -f1)"
+                log "文件大小: $(du -h "$toolchain_file" | cut -f1)"
+                log "保存位置: $toolchain_file"
+                
+                # 验证保存的文件
+                log "验证保存的文件..."
+                if tar -tzf "$toolchain_file" >/dev/null 2>&1; then
+                    log "✅ 工具链文件验证通过"
+                    
+                    # 列出工具链目录内容
+                    log "工具链目录内容:"
+                    ls -la "$toolchain_specific/" 2>/dev/null || true
+                else
+                    log "❌ 工具链文件验证失败"
+                    return 1
+                fi
             else
                 log "❌ 工具链保存失败"
                 return 1
@@ -640,17 +924,18 @@ EOF
                 local new_time=$(date)
                 
                 log "检查工具链更新..."
+                log "旧版本: $old_time"
+                log "新版本: $new_time"
                 
                 # 总是更新到最新
-                tar -czf "$toolchain_file" \
+                if tar -czf "$toolchain_file" \
                     --exclude="*.o" \
                     --exclude="*.a" \
                     --exclude="*.lo" \
                     --exclude="*.la" \
                     --exclude="*.so" \
-                    -C "$build_dir" staging_dir
-                
-                if [ $? -eq 0 ]; then
+                    -C "$build_dir" staging_dir 2>&1; then
+                    
                     sed -i "s|CREATED=.*|CREATED=$new_time|" "$toolchain_marker"
                     sed -i "s|SIZE=.*|SIZE=$(du -h "$toolchain_file" | cut -f1)|" "$toolchain_marker"
                     log "✅ 工具链已更新"
@@ -667,7 +952,7 @@ EOF
     return 0
 }
 
-# 步骤11: 集成自定义文件（新增）
+# 步骤11: 集成自定义文件
 integrate_custom_files() {
     local build_dir=${1:-$BUILD_DIR}
     log "=== 自定义文件集成 ==="
@@ -742,12 +1027,52 @@ EOF
     return 0
 }
 
-# 步骤12: 应用配置
+# 步骤12: 应用配置（增强版）
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 应用配置 ==="
+    log "=== 应用配置（详细版）==="
+    
+    # 显示当前配置摘要
+    log "🔧 配置摘要:"
+    if [ -f ".config" ]; then
+        CONFIG_ENABLED=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config 2>/dev/null || echo "0")
+        CONFIG_DISABLED=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config 2>/dev/null || echo "0")
+        CONFIG_TOTAL=$((CONFIG_ENABLED + CONFIG_DISABLED))
+        
+        log "  已启用包: $CONFIG_ENABLED"
+        log "  已禁用包: $CONFIG_DISABLED"
+        log "  总配置项: $CONFIG_TOTAL"
+        
+        # 检查关键配置
+        log "🔍 关键配置检查:"
+        KEY_CONFIGS=(
+            "CONFIG_TARGET_${TARGET}=y"
+            "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y"
+            "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
+            "CONFIG_PACKAGE_kmod-usb-core=y"
+            "CONFIG_PACKAGE_kmod-usb-storage=y"
+            "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y"
+        )
+        
+        for config in "${KEY_CONFIGS[@]}"; do
+            if grep -q "^${config}$" .config; then
+                log "  ✅ $(echo $config | cut -d'=' -f1)"
+            else
+                log "  ❌ $(echo $config | cut -d'=' -f1)"
+            fi
+        done
+        
+        # 显示前20个启用的包
+        log "📦 已启用包示例（前20个）:"
+        grep "^CONFIG_PACKAGE_.*=y$" .config | head -20 | while read line; do
+            pkg_name=$(echo "$line" | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//')
+            log "  - $pkg_name"
+        done
+    else
+        log "❌ 配置文件不存在"
+    fi
     
     # 🚨 关键修复：23.05版本需要先清理可能的配置冲突
     if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
@@ -758,7 +1083,42 @@ apply_config() {
         sed -i 's/CONFIG_PACKAGE_ntfs3-mount=y/# CONFIG_PACKAGE_ntfs3-mount is not set/g' .config
     fi
     
+    # 保存一份原始配置副本（用于后续上传）
+    if [ -f ".config" ]; then
+        cp .config .config.backup
+        log "✅ 配置文件已备份"
+    fi
+    
+    log "正在应用配置 (make defconfig)..."
     make defconfig || handle_error "应用配置失败"
+    
+    # 比较配置变化
+    if [ -f ".config.old" ]; then
+        CONFIG_CHANGES=$(diff -u .config.old .config | grep -E "^[-+]" | grep -v "^\-\-\-" | grep -v "^\+\+\+" | wc -l)
+        log "配置变化数量: $CONFIG_CHANGES"
+        
+        if [ $CONFIG_CHANGES -gt 0 ]; then
+            log "🔄 配置已更新"
+            # 显示重要变化
+            log "重要配置变化:"
+            diff -u .config.old .config | grep -E "^[-+]CONFIG_PACKAGE_" | head -10 | while read line; do
+                if [[ $line == +* ]]; then
+                    log "  ➕ 新增: $(echo $line | sed 's/+//' | cut -d'=' -f1)"
+                elif [[ $line == -* ]]; then
+                    log "  ➖ 移除: $(echo $line | sed 's/-//' | cut -d'=' -f1)"
+                fi
+            done
+        else
+            log "✅ 配置无变化"
+        fi
+    fi
+    
+    # 显示最终配置统计
+    if [ -f ".config" ]; then
+        FINAL_ENABLED=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config 2>/dev/null || echo "0")
+        log "最终已启用包数量: $FINAL_ENABLED"
+    fi
+    
     log "✅ 配置应用完成"
 }
 
@@ -837,13 +1197,25 @@ check_firmware_files() {
     log "=== 固件文件检查 ==="
     if [ -d "bin/targets" ]; then
         log "✅ 固件目录存在"
+        
+        # 统计固件文件
+        local bin_count=$(find bin/targets -name "*.bin" -o -name "*.img" | wc -l)
+        log "固件文件数量: $bin_count"
+        
         find bin/targets -name "*.bin" -o -name "*.img" | while read file; do
             log "固件文件: $file ($(du -h "$file" | cut -f1))"
         done
+        
         log "=== 生成的固件列表 ==="
         find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) -exec ls -la {} \;
+        
+        # 检查固件大小
+        local total_size=$(du -sh bin/targets | cut -f1)
+        log "固件总大小: $total_size"
     else
         log "❌ 固件目录不存在"
+        log "当前目录内容:"
+        ls -la 2>/dev/null || true
         exit 1
     fi
 }
@@ -851,8 +1223,39 @@ check_firmware_files() {
 # 步骤18: 清理目录
 cleanup() {
     log "=== 清理构建目录 ==="
-    sudo rm -rf $BUILD_DIR || log "⚠️ 清理构建目录失败"
-    log "✅ 构建目录已清理"
+    
+    # 先检查重要文件是否存在
+    if [ -f "$BUILD_DIR/.config" ]; then
+        log "✅ 配置文件存在，大小: $(du -h "$BUILD_DIR/.config" | cut -f1)"
+    fi
+    
+    if [ -f "$BUILD_DIR/build.log" ]; then
+        log "✅ 构建日志存在，大小: $(du -h "$BUILD_DIR/build.log" | cut -f1)"
+    fi
+    
+    if [ -d "$BUILD_DIR/bin/targets" ]; then
+        log "✅ 固件目录存在"
+    fi
+    
+    # 不删除重要文件，只清理临时文件
+    if [ -d "$BUILD_DIR/tmp" ]; then
+        rm -rf "$BUILD_DIR/tmp"
+        log "✅ 清理tmp目录"
+    fi
+    
+    if [ -d "$BUILD_DIR/build_dir" ]; then
+        rm -rf "$BUILD_DIR/build_dir"
+        log "✅ 清理build_dir目录"
+    fi
+    
+    if [ -d "$BUILD_DIR/staging_dir" ]; then
+        rm -rf "$BUILD_DIR/staging_dir"
+        log "✅ 清理staging_dir目录"
+    fi
+    
+    # 保留重要文件，工作流会自己上传和清理
+    log "ℹ️  重要文件保留，工作流结束后自动清理"
+    log "✅ 临时文件清理完成"
 }
 
 # 主函数
