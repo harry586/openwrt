@@ -37,6 +37,7 @@ on:
 
 env:
   BUILD_DIR: /mnt/openwrt-build
+  SCRIPT_DIR: ./scripts  # 修复：改为相对路径
 
 jobs:
   build-firmware:
@@ -47,12 +48,18 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          path: firmware-config
+          # 移除 path 参数，让仓库检出到当前目录
+          # path: firmware-config  # 移除这一行
 
       - name: 设置脚本权限
         run: |
           echo "=== 设置脚本执行权限 ==="
-          chmod -R +x firmware-config/scripts/
+          echo "当前目录: $(pwd)"
+          echo "目录内容:"
+          ls -la
+          echo "scripts目录内容:"
+          ls -la scripts/
+          chmod -R +x scripts/
           echo "✅ 脚本执行权限设置完成"
 
       - name: 初始空间检查
@@ -70,74 +77,74 @@ jobs:
 
       - name: 设置编译环境
         run: |
-          firmware-config/scripts/build_firmware_main.sh setup_environment
+          scripts/build_firmware_main.sh setup_environment  # 修复：使用相对路径
 
       - name: 创建构建目录
         run: |
-          firmware-config/scripts/build_firmware_main.sh create_build_dir
+          scripts/build_firmware_main.sh create_build_dir
 
       - name: 初始化构建环境
         run: |
-          firmware-config/scripts/build_firmware_main.sh initialize_build_env \
+          scripts/build_firmware_main.sh initialize_build_env \
             "${{ github.event.inputs.device_name }}" \
             "${{ github.event.inputs.version_selection }}" \
             "${{ github.event.inputs.config_mode }}"
 
       - name: 添加 TurboACC 支持
         run: |
-          firmware-config/scripts/build_firmware_main.sh add_turboacc_support
+          scripts/build_firmware_main.sh add_turboacc_support
 
       - name: 配置Feeds
         run: |
-          firmware-config/scripts/build_firmware_main.sh configure_feeds
+          scripts/build_firmware_main.sh configure_feeds
 
       - name: 编译前空间检查
         run: |
-          firmware-config/scripts/build_firmware_main.sh pre_build_space_check
+          scripts/build_firmware_main.sh pre_build_space_check
 
       - name: 智能配置生成
         run: |
-          firmware-config/scripts/build_firmware_main.sh generate_config \
+          scripts/build_firmware_main.sh generate_config \
             "${{ github.event.inputs.extra_packages }}"
 
       - name: 集成自定义文件
         run: |
-          firmware-config/scripts/build_firmware_main.sh integrate_custom_files
+          scripts/build_firmware_main.sh integrate_custom_files
 
       - name: 验证USB配置
         run: |
-          firmware-config/scripts/build_firmware_main.sh verify_usb_config
+          scripts/build_firmware_main.sh verify_usb_config
 
       - name: 应用配置（详细）
         run: |
-          firmware-config/scripts/build_firmware_main.sh apply_config
+          scripts/build_firmware_main.sh apply_config
 
       - name: 修复网络环境
         run: |
-          firmware-config/scripts/build_firmware_main.sh fix_network
+          scripts/build_firmware_main.sh fix_network
 
       - name: 下载依赖包
         run: |
-          firmware-config/scripts/build_firmware_main.sh download_dependencies
+          scripts/build_firmware_main.sh download_dependencies
 
       - name: 前置错误检查（增强版）
         run: |
-          firmware-config/scripts/build_firmware_main.sh pre_build_check
+          scripts/build_firmware_main.sh pre_build_check
 
       - name: 工具链管理（检查）
         run: |
-          firmware-config/scripts/build_firmware_main.sh toolchain_manager check || \
+          scripts/build_firmware_main.sh toolchain_manager check || \
           echo "ℹ️ 工具链不存在或需要重新生成"
 
       - name: 编译固件
         run: |
-          firmware-config/scripts/build_firmware_main.sh build_firmware \
+          scripts/build_firmware_main.sh build_firmware \
             "${{ github.event.inputs.enable_cache }}"
 
       - name: 错误分析
         if: failure()
         run: |
-          firmware-config/scripts/error_analysis.sh "$BUILD_DIR"
+          scripts/error_analysis.sh "$BUILD_DIR"
 
       - name: 保存工具链（详细）
         if: success()
@@ -147,16 +154,16 @@ jobs:
           echo "仓库名称: ${{ github.repository }}"
           
           # 执行保存操作
-          firmware-config/scripts/build_firmware_main.sh toolchain_manager save
+          scripts/build_firmware_main.sh toolchain_manager save
 
       - name: 编译后空间检查
         run: |
-          firmware-config/scripts/build_firmware_main.sh post_build_space_check
+          scripts/build_firmware_main.sh post_build_space_check
 
       - name: 固件文件检查
         if: success()
         run: |
-          firmware-config/scripts/build_firmware_main.sh check_firmware_files
+          scripts/build_firmware_main.sh check_firmware_files
 
       - name: 检查配置文件是否存在
         if: always()
@@ -213,4 +220,4 @@ jobs:
       - name: 清理目录
         if: always()
         run: |
-          firmware-config/scripts/build_firmware_main.sh cleanup
+          scripts/build_firmware_main.sh cleanup
