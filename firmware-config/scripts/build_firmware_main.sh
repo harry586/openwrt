@@ -24,6 +24,7 @@ save_env() {
     echo "export SUBTARGET=\"$SUBTARGET\"" >> $ENV_FILE
     echo "export DEVICE=\"$DEVICE\"" >> $ENV_FILE
     echo "export CONFIG_MODE=\"$CONFIG_MODE\"" >> $ENV_FILE
+    echo "export REPO_ROOT=\"$REPO_ROOT\"" >> $ENV_FILE
     chmod +x $ENV_FILE
 }
 
@@ -50,93 +51,15 @@ init_toolchain_dir() {
     log "=== 初始化工具链目录 ==="
     mkdir -p "$TOOLCHAIN_DIR"
     log "✅ 工具链目录: $TOOLCHAIN_DIR"
-}
-
-save_toolchain() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 保存工具链到仓库 ==="
+    # 确保目录结构正确
+    mkdir -p "$TOOLCHAIN_DIR/common"
+    mkdir -p "$TOOLCHAIN_DIR/openwrt-21.02"
+    mkdir -p "$TOOLCHAIN_DIR/openwrt-23.05"
     
-    # 初始化工具链目录
-    init_toolchain_dir
-    
-    local toolchain_path=$(get_toolchain_path)
-    local common_path=$(get_common_toolchain_path)
-    
-    log "🔍 调试信息:"
-    log "  目标工具链路径: $toolchain_path"
-    log "  当前工作目录: $(pwd)"
-    
-    # 确保目标目录存在且有写权限
-    mkdir -p "$toolchain_path"
-    mkdir -p "$common_path"
-    
-    # 检查是否有工具链可以保存
-    local staging_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
-    
-    if [ -z "$staging_toolchain" ]; then
-        log "⚠️  未找到工具链，跳过保存"
-        return 0
-    fi
-    
-    log "找到工具链: $staging_toolchain"
-    
-    log "保存版本特定工具链到: $toolchain_path"
-    
-    # 先清理目标目录
-    rm -rf "$toolchain_path"/*
-    
-    if [ -d "$staging_toolchain" ]; then
-        # 使用tar来保持文件属性和符号链接
-        cd "$(dirname "$staging_toolchain")"
-        local toolchain_name=$(basename "$staging_toolchain")
-        
-        # 创建压缩包
-        if tar -czf "$toolchain_path/toolchain.tar.gz" "$toolchain_name"; then
-            cd "$toolchain_path"
-            # 解压到当前目录
-            tar -xzf toolchain.tar.gz
-            rm -f toolchain.tar.gz
-            log "✅ 版本特定工具链保存成功 (使用tar压缩/解压)"
-        else
-            log "❌ tar压缩失败，尝试直接复制..."
-            if cp -r "$staging_toolchain" "$toolchain_path/" 2>/dev/null; then
-                log "✅ 版本特定工具链保存成功"
-            else
-                log "❌ 所有保存方式都失败"
-                return 1
-            fi
-        fi
-    else
-        log "❌ 工具链目录不存在: $staging_toolchain"
-        return 1
-    fi
-    
-    log "保存通用工具链到: $common_path"
-    rm -rf "$common_path"/*
-    mkdir -p "$common_path/bin"
-    
-    # 复制常用工具
-    local tools=("ar" "as" "gcc" "g++" "ld" "nm" "objcopy" "objdump" "ranlib" "strip")
-    local copied_tools=0
-    for tool in "${tools[@]}"; do
-        if find "$staging_toolchain/bin" -name "*$tool*" -type f -exec cp -v {} "$common_path/bin/" \; 2>/dev/null; then
-            copied_tools=$((copied_tools + 1))
-        fi
-    done
-    
-    log "复制了 $copied_tools 个通用工具"
-    
-    # 保存编译配置文件
-    mkdir -p "$common_path/etc"
-    if [ -f "$BUILD_DIR/.config" ]; then
-        cp "$BUILD_DIR/.config" "$common_path/etc/build.config"
-        log "✅ 保存构建配置文件"
-    fi
-    
-    # 创建README文件说明工具链用途
-    cat > "$TOOLCHAIN_DIR/README.md" << EOF
+    # 创建README文件（如果不存在）
+    if [ ! -f "$TOOLCHAIN_DIR/README.md" ]; then
+        cat > "$TOOLCHAIN_DIR/README.md" << EOF
 # OpenWrt 编译工具链
 
 ## 目录结构
@@ -162,25 +85,123 @@ save_toolchain() {
 - \`lib/\` - 库文件
 - \`include/\` - 头文件
 EOF
+        log "✅ 创建README.md文件"
+    fi
+}
+
+save_toolchain() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
     
+    log "=== 保存工具链到仓库 ==="
+    
+    # 初始化工具链目录
+    init_toolchain_dir
+    
+    local toolchain_path=$(get_toolchain_path)
+    local common_path=$(get_common_toolchain_path)
+    
+    log "🔍 工具链保存路径信息:"
+    log "  目标工具链路径: $toolchain_path"
+    log "  仓库根目录: $REPO_ROOT"
+    log "  当前工作目录: $(pwd)"
+    
+    # 确保目标目录存在且有写权限
+    mkdir -p "$toolchain_path"
+    mkdir -p "$common_path"
+    
+    # 检查是否有工具链可以保存
+    local staging_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
+    
+    if [ -z "$staging_toolchain" ]; then
+        log "⚠️  未找到工具链，跳过保存"
+        return 0
+    fi
+    
+    log "找到工具链: $staging_toolchain"
+    
+    # 先清理目标目录
+    log "清理目标目录..."
+    rm -rf "$toolchain_path"/*
+    rm -rf "$common_path"/*
+    
+    if [ -d "$staging_toolchain" ]; then
+        log "保存版本特定工具链到: $toolchain_path"
+        
+        # 使用tar来保持文件属性和符号链接
+        cd "$(dirname "$staging_toolchain")"
+        local toolchain_name=$(basename "$staging_toolchain")
+        
+        # 创建压缩包
+        log "创建工具链压缩包..."
+        if tar -czf "$toolchain_path/toolchain.tar.gz" "$toolchain_name"; then
+            cd "$toolchain_path"
+            # 解压到当前目录
+            tar -xzf toolchain.tar.gz
+            rm -f toolchain.tar.gz
+            log "✅ 版本特定工具链保存成功 (使用tar压缩/解压)"
+            
+            # 记录工具链信息
+            echo "# Toolchain saved on $(date)" > "$toolchain_path/toolchain.info"
+            echo "Version: $SELECTED_BRANCH" >> "$toolchain_path/toolchain.info"
+            echo "Target: $TARGET" >> "$toolchain_path/toolchain.info"
+            echo "Subtarget: $SUBTARGET" >> "$toolchain_path/toolchain.info"
+            echo "Device: $DEVICE" >> "$toolchain_path/toolchain.info"
+        else
+            log "❌ tar压缩失败，尝试直接复制..."
+            if cp -r "$staging_toolchain" "$toolchain_path/" 2>/dev/null; then
+                log "✅ 版本特定工具链保存成功"
+            else
+                log "❌ 所有保存方式都失败"
+                return 1
+            fi
+        fi
+    else
+        log "❌ 工具链目录不存在: $staging_toolchain"
+        return 1
+    fi
+    
+    log "保存通用工具链到: $common_path"
+    mkdir -p "$common_path/bin"
+    
+    # 复制常用工具
+    local tools=("ar" "as" "gcc" "g++" "ld" "nm" "objcopy" "objdump" "ranlib" "strip")
+    local copied_tools=0
+    for tool in "${tools[@]}"; do
+        if find "$staging_toolchain/bin" -name "*$tool*" -type f -exec cp -v {} "$common_path/bin/" \; 2>/dev/null; then
+            copied_tools=$((copied_tools + 1))
+        fi
+    done
+    
+    log "复制了 $copied_tools 个通用工具"
+    
+    # 保存编译配置文件
+    mkdir -p "$common_path/etc"
+    if [ -f "$BUILD_DIR/.config" ]; then
+        cp "$BUILD_DIR/.config" "$common_path/etc/build.config"
+        log "✅ 保存构建配置文件"
+    fi
+    
+    # 显示保存结果
     log "✅ 工具链保存完成"
     log "特定版本工具链: $toolchain_path"
+    log "  文件数: $(find "$toolchain_path" -type f | wc -l)"
+    log "  大小: $(du -sh "$toolchain_path" | cut -f1)"
     log "通用工具链: $common_path"
     log "  通用工具: $copied_tools 个"
+    log "  大小: $(du -sh "$common_path" | cut -f1)"
+    
+    return 0
 }
 
 load_toolchain() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 加载工具链 (调试信息) ==="
+    log "=== 加载工具链 ==="
     log "当前工作目录: $(pwd)"
-    log "环境变量:"
-    log "  SELECTED_BRANCH: $SELECTED_BRANCH"
-    log "  TARGET: $TARGET"
-    log "  SUBTARGET: $SUBTARGET"
-    log "  DEVICE: $DEVICE"
-    log "  TOOLCHAIN_DIR: $TOOLCHAIN_DIR"
+    log "仓库根目录: $REPO_ROOT"
+    log "工具链目录: $TOOLCHAIN_DIR"
     
     # 初始化工具链目录
     init_toolchain_dir
@@ -205,7 +226,6 @@ load_toolchain() {
     fi
     
     local found_repo_toolchain=0
-    local found_build_toolchain=0
     
     # 检查仓库中的工具链
     if [ -d "$toolchain_path" ] && [ -n "$(ls -A "$toolchain_path" 2>/dev/null)" ]; then
@@ -229,49 +249,53 @@ load_toolchain() {
     
     if [ $found_repo_toolchain -eq 0 ]; then
         log "ℹ️  仓库中未找到工具链，将使用默认工具链"
-    else
-        mkdir -p staging_dir
+        return 0
+    fi
+    
+    mkdir -p staging_dir
+    
+    # 加载版本特定工具链
+    if [ -d "$toolchain_path" ] && [ -n "$(ls -A "$toolchain_path" 2>/dev/null)" ]; then
+        log "🔧 从仓库加载版本特定工具链: $toolchain_path"
         
-        # 加载版本特定工具链
-        if [ -d "$toolchain_path" ] && [ -n "$(ls -A "$toolchain_path" 2>/dev/null)" ]; then
-            log "🔧 从仓库加载版本特定工具链: $toolchain_path"
-            
-            local existing_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
-            
-            if [ -n "$existing_toolchain" ]; then
-                log "已存在工具链: $existing_toolchain，跳过加载"
+        local existing_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
+        
+        if [ -n "$existing_toolchain" ]; then
+            log "已存在工具链: $existing_toolchain，跳过加载"
+        else
+            # 查找工具链目录（可能已经解压）
+            local first_dir=$(find "$toolchain_path" -maxdepth 1 -type d ! -path "$toolchain_path" | head -1)
+            if [ -n "$first_dir" ]; then
+                local toolchain_name=$(basename "$first_dir")
+                log "复制工具链: $toolchain_name 到 staging_dir/"
+                cp -r "$first_dir" "staging_dir/"
+                log "✅ 版本特定工具链加载完成: staging_dir/$toolchain_name"
             else
-                local first_dir=$(find "$toolchain_path" -maxdepth 1 -type d ! -path "$toolchain_path" | head -1)
-                if [ -n "$first_dir" ]; then
-                    local toolchain_name=$(basename "$first_dir")
-                    cp -r "$first_dir" "staging_dir/"
-                    log "✅ 版本特定工具链加载完成: staging_dir/$toolchain_name"
-                fi
+                log "⚠️  工具链目录为空"
             fi
         fi
+    fi
+    
+    # 加载通用工具链
+    if [ -d "$common_path/bin" ] && [ -n "$(ls -A "$common_path/bin" 2>/dev/null)" ]; then
+        log "🔧 从仓库加载通用工具链组件"
         
-        # 加载通用工具链
-        if [ -d "$common_path/bin" ] && [ -n "$(ls -A "$common_path/bin" 2>/dev/null)" ]; then
-            log "🔧 从仓库加载通用工具链组件"
-            
-            mkdir -p staging_dir/host/bin
-            cp -r "$common_path/bin"/* staging_dir/host/bin/ 2>/dev/null || true
-            log "✅ 通用工具链组件加载完成"
-        fi
+        mkdir -p staging_dir/host/bin
+        cp -r "$common_path/bin"/* staging_dir/host/bin/ 2>/dev/null || true
+        log "✅ 通用工具链组件加载完成"
     fi
     
     # 检查构建目录中是否已有工具链
     if [ -d "staging_dir" ]; then
         local existing_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
         if [ -n "$existing_toolchain" ]; then
-            found_build_toolchain=1
             log "✅ 构建目录中已有工具链: $existing_toolchain"
+        else
+            log "⚠️  构建目录中未找到工具链"
         fi
     fi
     
-    if [ $found_build_toolchain -eq 0 ] && [ $found_repo_toolchain -eq 0 ]; then
-        log "ℹ️  未找到任何工具链，将自动下载"
-    fi
+    return 0
 }
 
 integrate_custom_files() {
@@ -499,16 +523,32 @@ pre_build_error_check() {
             warning_count=$((warning_count + 1))
         fi
         
-        # 检查关键依赖包是否存在
-        local critical_deps=("linux" "gcc" "binutils" "uclibc" "musl")
+        # 检查关键依赖包是否存在 - 修复：移除uclibc，OpenWrt通常使用musl
+        local critical_deps=("linux" "gcc" "binutils" "musl")
         for dep in "${critical_deps[@]}"; do
             if find dl -name "*${dep}*" -type f 2>/dev/null | grep -q .; then
                 log "✅ 找到关键依赖: $dep"
             else
-                log "⚠️  警告: 未找到关键依赖: $dep"
-                warning_count=$((warning_count + 1))
+                # 特殊处理：对于uclibc，现代OpenWrt版本通常使用musl
+                if [ "$dep" = "uclibc" ]; then
+                    log "ℹ️  注意: uclibc未找到，但现代OpenWrt通常使用musl"
+                else
+                    log "⚠️  警告: 未找到关键依赖: $dep"
+                    warning_count=$((warning_count + 1))
+                fi
             fi
         done
+        
+        # 额外检查：根据版本检查正确的C库
+        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ] || [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            log "🔧 检查musl C库..."
+            if find dl -name "*musl*" -type f 2>/dev/null | grep -q .; then
+                log "✅ 找到musl C库 (现代OpenWrt使用)"
+            else
+                log "⚠️  警告: 未找到musl C库"
+                warning_count=$((warning_count + 1))
+            fi
+        fi
     fi
     
     # 4. 检查工具链
@@ -587,6 +627,23 @@ pre_build_error_check() {
     if [ $cpu_cores -lt 2 ]; then
         log "⚠️  警告: CPU核心数较少，编译速度会受影响"
         warning_count=$((warning_count + 1))
+    fi
+    
+    # 10. 检查C库配置
+    log "🔧 检查C库配置..."
+    if [ -f ".config" ]; then
+        if grep -q "CONFIG_EXTERNAL_TOOLCHAIN=y" .config; then
+            log "ℹ️  使用外部工具链"
+        elif grep -q "CONFIG_USE_MUSL=y" .config; then
+            log "✅ 配置为使用musl C库"
+        elif grep -q "CONFIG_USE_GLIBC=y" .config; then
+            log "✅ 配置为使用glibc C库"
+        elif grep -q "CONFIG_USE_UCLIBC=y" .config; then
+            log "✅ 配置为使用uclibc C库"
+        else
+            log "⚠️  警告: 未明确指定C库类型"
+            warning_count=$((warning_count + 1))
+        fi
     fi
     
     # 总结
