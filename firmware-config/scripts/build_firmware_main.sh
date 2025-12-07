@@ -63,16 +63,23 @@ save_toolchain() {
     log "找到工具链: $staging_toolchain"
     
     log "保存版本特定工具链到: $toolchain_path"
-    # 先清空目标目录
-    rm -rf "$toolchain_path"/*
     
-    # 复制工具链，使用-L跟随符号链接
-    if cp -rL "$staging_toolchain" "$toolchain_path/" 2>/dev/null; then
-        log "✅ 版本特定工具链保存成功"
-    elif cp -r "$staging_toolchain" "$toolchain_path/" 2>/dev/null; then
-        log "✅ 版本特定工具链保存成功（无符号链接）"
+    if [ -d "$staging_toolchain" ]; then
+        if cp -rL "$staging_toolchain" "$toolchain_path/" 2>/dev/null; then
+            log "✅ 版本特定工具链保存成功"
+        elif cp -r "$staging_toolchain" "$toolchain_path/" 2>/dev/null; then
+            log "✅ 版本特定工具链保存成功（无符号链接）"
+        else
+            log "❌ 工具链复制失败，尝试使用rsync..."
+            if rsync -av "$staging_toolchain/" "$toolchain_path/" --exclude=".*" 2>/dev/null; then
+                log "✅ rsync方式保存成功"
+            else
+                log "❌ 所有保存方式都失败"
+                return 1
+            fi
+        fi
     else
-        log "❌ 工具链复制失败"
+        log "❌ 工具链目录不存在: $staging_toolchain"
         return 1
     fi
     
@@ -95,16 +102,16 @@ save_toolchain() {
     local copied_libs=0
     
     if find "$staging_toolchain/include" -name "*.h" -type f -exec cp -v {} "$common_path/include/" \; 2>/dev/null; then
-        copied_headers=$(find "$common_path/include" -name "*.h" -type f | wc -l)
+        copied_headers=$(find "$common_path/include" -name "*.h" -type f | wc -l 2>/dev/null || echo 0)
     fi
     
     if find "$staging_toolchain/lib" \( -name "*.a" -o -name "*.so" \) -type f | head -20 | xargs -I {} cp -v {} "$common_path/lib/" 2>/dev/null; then
-        copied_libs=$(find "$common_path/lib" \( -name "*.a" -o -name "*.so" \) -type f | wc -l)
+        copied_libs=$(find "$common_path/lib" \( -name "*.a" -o -name "*.so" \) -type f | wc -l 2>/dev/null || echo 0)
     fi
     
     log "✅ 工具链保存完成"
-    log "特定版本工具链: $toolchain_path ($(du -sh "$toolchain_path" | cut -f1))"
-    log "通用工具链: $common_path ($(du -sh "$common_path" | cut -f1))"
+    log "特定版本工具链: $toolchain_path"
+    log "通用工具链: $common_path"
     log "  通用工具: $copied_tools 个"
     log "  头文件: $copied_headers 个"
     log "  库文件: $copied_libs 个"
@@ -121,67 +128,60 @@ load_toolchain() {
     local toolchain_path=$(get_toolchain_path)
     local common_path=$(get_common_toolchain_path)
     
-    local found_toolchain=0
-    local using_default=0
+    local found_repo_toolchain=0
+    local found_build_toolchain=0
     
-    # 检查版本特定工具链
-    if [ -d "$toolchain_path" ] && [ "$(ls -A "$toolchain_path" 2>/dev/null)" ]; then
-        found_toolchain=1
-        log "🔧 找到版本特定工具链: $toolchain_path"
+    if [ -d "$toolchain_path" ] && [ -n "$(ls -A "$toolchain_path" 2>/dev/null)" ]; then
+        found_repo_toolchain=1
+        log "🔧 从仓库找到版本特定工具链: $toolchain_path"
     fi
     
-    # 检查通用工具链
-    if [ -d "$common_path/bin" ] && [ "$(ls -A "$common_path/bin" 2>/dev/null)" ]; then
-        found_toolchain=1
-        log "🔧 找到通用工具链: $common_path/bin"
+    if [ -d "$common_path/bin" ] && [ -n "$(ls -A "$common_path/bin" 2>/dev/null)" ]; then
+        found_repo_toolchain=1
+        log "🔧 从仓库找到通用工具链: $common_path/bin"
     fi
     
-    if [ $found_toolchain -eq 0 ]; then
+    if [ $found_repo_toolchain -eq 0 ]; then
         log "ℹ️  仓库中未找到工具链，将使用默认工具链"
-        using_default=1
-        return 0
-    fi
-    
-    mkdir -p staging_dir
-    
-    if [ -d "$toolchain_path" ] && [ "$(ls -A "$toolchain_path" 2>/dev/null)" ]; then
-        log "🔧 加载版本特定工具链: $toolchain_path"
+    else
+        mkdir -p staging_dir
         
-        local existing_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
-        
-        if [ -n "$existing_toolchain" ]; then
-            log "已存在工具链: $existing_toolchain，跳过加载"
-            return 0
+        if [ -d "$toolchain_path" ] && [ -n "$(ls -A "$toolchain_path" 2>/dev/null)" ]; then
+            log "🔧 从仓库加载版本特定工具链: $toolchain_path"
+            
+            local existing_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
+            
+            if [ -n "$existing_toolchain" ]; then
+                log "已存在工具链: $existing_toolchain，跳过加载"
+            else
+                local first_dir=$(find "$toolchain_path" -maxdepth 1 -type d ! -path "$toolchain_path" | head -1)
+                if [ -n "$first_dir" ]; then
+                    local toolchain_name=$(basename "$first_dir")
+                    cp -r "$first_dir" "staging_dir/"
+                    log "✅ 版本特定工具链加载完成: staging_dir/$toolchain_name"
+                fi
+            fi
         fi
         
-        # 复制工具链目录中的第一个目录
-        local first_dir=$(find "$toolchain_path" -maxdepth 1 -type d ! -path "$toolchain_path" | head -1)
-        if [ -n "$first_dir" ]; then
-            local toolchain_name=$(basename "$first_dir")
-            cp -r "$first_dir" "staging_dir/"
-            log "✅ 版本特定工具链加载完成: staging_dir/$toolchain_name"
+        if [ -d "$common_path/bin" ] && [ -n "$(ls -A "$common_path/bin" 2>/dev/null)" ]; then
+            log "🔧 从仓库加载通用工具链组件"
+            
+            mkdir -p staging_dir/host/bin
+            cp -r "$common_path/bin"/* staging_dir/host/bin/ 2>/dev/null || true
+            log "✅ 通用工具链组件加载完成"
         fi
     fi
     
-    if [ -d "$common_path/bin" ] && [ "$(ls -A "$common_path/bin" 2>/dev/null)" ]; then
-        log "🔧 加载通用工具链组件"
-        
-        mkdir -p staging_dir/host/bin
-        cp -r "$common_path/bin"/* staging_dir/host/bin/ 2>/dev/null || true
-        log "✅ 通用工具链组件加载完成"
-    fi
-    
-    log "=== 验证工具链 ==="
     if [ -d "staging_dir" ]; then
-        local gcc_count=$(find staging_dir -name "*gcc*" -type f | wc -l)
-        if [ $gcc_count -gt 0 ]; then
-            log "✅ 工具链验证通过，找到 $gcc_count 个编译器"
-            find staging_dir -name "*gcc*" -type f | head -2 | while read compiler; do
-                log "  编译器: $(basename "$compiler")"
-            done
-        else
-            log "⚠️  工具链验证失败，未找到编译器"
+        local existing_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
+        if [ -n "$existing_toolchain" ]; then
+            found_build_toolchain=1
+            log "✅ 构建目录中已有工具链: $existing_toolchain"
         fi
+    fi
+    
+    if [ $found_build_toolchain -eq 0 ] && [ $found_repo_toolchain -eq 0 ]; then
+        log "ℹ️  未找到任何工具链，将自动下载"
     fi
 }
 
@@ -424,9 +424,9 @@ pre_build_error_check() {
     if [ -d "staging_dir" ]; then
         local toolchain_count=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | wc -l)
         if [ $toolchain_count -eq 0 ]; then
-            log "ℹ️  未找到工具链，将自动下载或使用默认工具链"
+            log "ℹ️  未找到编译工具链，将自动下载"
         else
-            log "✅ 工具链存在: $toolchain_count 个"
+            log "✅ 已下载编译工具链: $toolchain_count 个"
         fi
     else
         log "ℹ️  staging_dir目录不存在，将自动下载工具链"
@@ -486,21 +486,26 @@ initialize_build_env() {
             TARGET="ipq40xx"
             SUBTARGET="generic"
             DEVICE="asus_rt-ac42u"
+            log "🔧 检测到高通IPQ40xx平台设备: $device_name"
+            log "🔧 该设备支持USB 3.0，将启用所有USB 3.0相关驱动"
             ;;
         "mi_router_4a_gigabit"|"r4ag")
             TARGET="ramips"
             SUBTARGET="mt76x8"
             DEVICE="xiaomi_mi-router-4a-gigabit"
+            log "🔧 检测到雷凌MT76x8平台设备: $device_name"
             ;;
         "mi_router_3g"|"r3g")
             TARGET="ramips"
             SUBTARGET="mt7621"
             DEVICE="xiaomi_mi-router-3g"
+            log "🔧 检测到雷凌MT7621平台设备: $device_name"
             ;;
         *)
             TARGET="ipq40xx"
             SUBTARGET="generic"
             DEVICE="$device_name"
+            log "🔧 未知设备，默认为高通IPQ40xx平台"
             ;;
     esac
     
@@ -673,23 +678,41 @@ generate_config() {
     echo "CONFIG_PACKAGE_kmod-usb-uhci=y" >> .config
     echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config
     
-    echo "# 🟡 平台专用USB控制器驱动 - 按平台启用" >> .config
+    echo "# 🟢 USB 3.0扩展主机控制器接口驱动 - 支持USB 3.0高速数据传输" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+    
+    echo "# 🟡 平台专用USB控制器驱动 - 根据平台启用" >> .config
+    
+    # 检测平台并启用相应驱动
+    log "🔍 检测平台类型: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
     
     if [ "$TARGET" = "ipq40xx" ]; then
-        log "🚨 关键修复：IPQ40xx 专用USB控制器驱动"
+        log "🚨 关键修复：IPQ40xx 专用USB控制器驱动（高通平台，支持USB 3.0）"
         echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
         echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+        log "✅ 已启用所有高通IPQ40xx平台的USB驱动"
     fi
     
     if [ "$TARGET" = "ramips" ]; then
-        log "🚨 关键修复：MT76xx/雷凌 平台USB控制器驱动"
-        echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config
+        if [ "$SUBTARGET" = "mt76x8" ] || [ "$SUBTARGET" = "mt7621" ]; then
+            log "🚨 关键修复：MT76xx/雷凌 平台USB控制器驱动"
+            echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
+            log "✅ 已启用雷凌MT76xx平台的USB驱动"
+        fi
     fi
+    
+    # 其他平台的通用USB 3.0驱动
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config
     
     echo "# 🟢 USB 存储驱动 - 核心功能" >> .config
     echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
@@ -705,6 +728,11 @@ generate_config() {
     echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
     echo "CONFIG_PACKAGE_kmod-fs-exfat=y" >> .config
     echo "CONFIG_PACKAGE_kmod-fs-autofs4=y" >> .config
+    
+    echo "# 🟢 USB大容量存储额外驱动" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-storage-extras=y" >> .config
     
     if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
         log "🔧 23.05版本NTFS配置优化"
@@ -734,6 +762,11 @@ generate_config() {
     echo "CONFIG_PACKAGE_usbutils=y" >> .config
     echo "CONFIG_PACKAGE_lsusb=y" >> .config
     echo "CONFIG_PACKAGE_udev=y" >> .config
+    
+    echo "# 🟢 USB串口支持 - 扩展功能" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-serial=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-serial-ftdi=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-serial-pl2303=y" >> .config
     
     log "=== 🚨 USB 完全修复通用配置 - 完成 ==="
     
@@ -829,15 +862,60 @@ verify_usb_config() {
     grep "CONFIG_PACKAGE_kmod-usb-core" .config | grep "=y" && echo "✅ USB核心" || echo "❌ 缺少USB核心"
     
     echo "2. 🟢 USB控制器:"
-    grep -E "CONFIG_PACKAGE_kmod-usb2|CONFIG_PACKAGE_kmod-usb3|CONFIG_PACKAGE_kmod-usb-ehci|CONFIG_PACKAGE_kmod-usb-ohci" .config | grep "=y" || echo "❌ 缺少USB控制器"
+    grep -E "CONFIG_PACKAGE_kmod-usb2|CONFIG_PACKAGE_kmod-usb3|CONFIG_PACKAGE_kmod-usb-ehci|CONFIG_PACKAGE_kmod-usb-ohci|CONFIG_PACKAGE_kmod-usb-xhci-hcd" .config | grep "=y" || echo "❌ 缺少USB控制器"
     
-    echo "3. 🚨 平台专用USB控制器:"
-    grep -E "CONFIG_PACKAGE_kmod-usb-dwc3|CONFIG_PACKAGE_kmod-usb-dwc3-qcom|CONFIG_PACKAGE_kmod-phy-qcom-dwc3" .config | grep "=y" || echo "ℹ️  无平台专用USB控制器"
+    echo "3. 🚨 USB 3.0关键驱动:"
+    echo "  - kmod-usb-xhci-hcd:" $(grep "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    echo "  - kmod-usb3:" $(grep "CONFIG_PACKAGE_kmod-usb3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    echo "  - kmod-usb-dwc3:" $(grep "CONFIG_PACKAGE_kmod-usb-dwc3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
     
-    echo "4. 🟢 USB存储:"
-    grep "CONFIG_PACKAGE_kmod-usb-storage" .config | grep "=y" || echo "❌ 缺少USB存储"
+    echo "4. 🚨 平台专用USB控制器:"
+    if [ "$TARGET" = "ipq40xx" ]; then
+        echo "  🔧 检测到高通IPQ40xx平台，检查专用驱动:"
+        echo "  - kmod-usb-dwc3-qcom:" $(grep "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+        echo "  - kmod-phy-qcom-dwc3:" $(grep "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    elif [ "$TARGET" = "ramips" ]; then
+        echo "  🔧 检测到雷凌平台，检查专用驱动:"
+        echo "  - kmod-usb-ohci-pci:" $(grep "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+        echo "  - kmod-usb2-pci:" $(grep "CONFIG_PACKAGE_kmod-usb2-pci=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    fi
+    
+    echo "5. 🟢 USB存储:"
+    grep "CONFIG_PACKAGE_kmod-usb-storage" .config | grep "=y" && echo "✅ USB存储" || echo "❌ 缺少USB存储"
+    
+    echo "6. 🟢 SCSI支持:"
+    grep -E "CONFIG_PACKAGE_kmod-scsi-core|CONFIG_PACKAGE_kmod-scsi-generic" .config | grep "=y" && echo "✅ SCSI支持" || echo "❌ 缺少SCSI支持"
+    
+    echo "7. 🟢 文件系统支持:"
+    echo "  - NTFS3:" $(grep "CONFIG_PACKAGE_kmod-fs-ntfs3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    echo "  - ext4:" $(grep "CONFIG_PACKAGE_kmod-fs-ext4=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    echo "  - vfat:" $(grep "CONFIG_PACKAGE_kmod-fs-vfat=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
     
     log "=== 🚨 USB配置验证完成 ==="
+    
+    # 输出总结
+    log "📊 USB配置状态总结:"
+    local usb_drivers=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-ehci" "kmod-usb-ohci" "kmod-usb-xhci-hcd" "kmod-usb-storage")
+    local missing_count=0
+    local enabled_count=0
+    
+    for driver in "${usb_drivers[@]}"; do
+        if grep -q "CONFIG_PACKAGE_${driver}=y" .config; then
+            log "  ✅ $driver: 已启用"
+            enabled_count=$((enabled_count + 1))
+        else
+            log "  ❌ $driver: 未启用"
+            missing_count=$((missing_count + 1))
+        fi
+    done
+    
+    log "📈 统计: $enabled_count 个已启用，$missing_count 个未启用"
+    
+    if [ $missing_count -gt 0 ]; then
+        log "⚠️  警告: 有 $missing_count 个关键USB驱动未启用，可能会影响USB功能"
+    else
+        log "🎉 恭喜: 所有关键USB驱动都已启用"
+    fi
 }
 
 apply_config() {
@@ -862,39 +940,88 @@ apply_config() {
     done
     
     echo ""
-    echo "=== 启用的插件分类 ==="
+    echo "=== USB配置详细状态 ==="
+    
+    # 关键USB驱动检查
+    echo "🔧 关键USB驱动状态:"
+    local critical_usb_drivers=(
+        "kmod-usb-core" "kmod-usb2" "kmod-usb3" 
+        "kmod-usb-ehci" "kmod-usb-ohci" "kmod-usb-xhci-hcd"
+        "kmod-usb-storage" "kmod-usb-storage-uas" "kmod-usb-storage-extras"
+        "kmod-scsi-core" "kmod-scsi-generic"
+    )
+    
+    for driver in "${critical_usb_drivers[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            echo "  ✅ $driver"
+        else
+            echo "  ❌ $driver"
+        fi
+    done
+    
+    # 平台专用驱动检查
+    echo ""
+    echo "🔧 平台专用USB驱动状态:"
+    if [ "$TARGET" = "ipq40xx" ]; then
+        echo "  🔧 高通IPQ40xx平台专用驱动:"
+        local qcom_drivers=("kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3-of-simple")
+        for driver in "${qcom_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "    ✅ $driver"
+            else
+                echo "    ❌ $driver"
+            fi
+        done
+    elif [ "$TARGET" = "ramips" ] && { [ "$SUBTARGET" = "mt76x8" ] || [ "$SUBTARGET" = "mt7621" ]; }; then
+        echo "  🔧 雷凌MT76xx平台专用驱动:"
+        local mtk_drivers=("kmod-usb-ohci-pci" "kmod-usb2-pci" "kmod-usb-xhci-mtk")
+        for driver in "${mtk_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "    ✅ $driver"
+            else
+                echo "    ❌ $driver"
+            fi
+        done
+    fi
+    
+    # 文件系统支持检查
+    echo ""
+    echo "🔧 文件系统支持状态:"
+    local fs_drivers=("kmod-fs-ext4" "kmod-fs-vfat" "kmod-fs-exfat" "kmod-fs-ntfs3")
+    for driver in "${fs_drivers[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            echo "  ✅ $driver"
+        else
+            echo "  ❌ $driver"
+        fi
+    done
+    
+    # 显示所有启用的USB相关插件
+    echo ""
+    echo "🔧 所有启用的USB相关插件:"
+    grep "^CONFIG_PACKAGE_" .config | grep "=y" | grep -i "usb\|scsi\|storage" | while read line; do
+        local pkg_name=$(echo $line | sed 's/CONFIG_PACKAGE_//;s/=y//')
+        echo "  ✅ $pkg_name"
+    done | head -20
     
     # 基础系统插件
+    echo ""
     echo "🔧 基础系统插件:"
-    grep "^CONFIG_PACKAGE_" .config | grep "=y" | grep -E "busybox|base-files|dropbear|firewall|fstools|libc|libgcc|mtd|netifd|opkg|procd|ubox|ubus|ubusd|uci|uclient-fetch|usign" | head -10 | while read line; do
+    grep "^CONFIG_PACKAGE_" .config | grep "=y" | grep -E "busybox|base-files|dropbear|firewall|fstools|libc|libgcc|mtd|netifd|opkg|procd|ubox|ubus|ubusd|uci|uclient-fetch|usign" | head -5 | while read line; do
         echo "  ✅ $(echo $line | sed 's/CONFIG_PACKAGE_//;s/=y//')"
     done
     
     # 网络插件
     echo ""
     echo "🔧 网络插件:"
-    grep "^CONFIG_PACKAGE_" .config | grep "=y" | grep -E "dnsmasq|iptables|ip6tables|kmod-ipt-nat6|wpad" | head -10 | while read line; do
-        echo "  ✅ $(echo $line | sed 's/CONFIG_PACKAGE_//;s/=y//')"
-    done
-    
-    # USB插件
-    echo ""
-    echo "🔧 USB插件:"
-    grep "^CONFIG_PACKAGE_" .config | grep "=y" | grep -i "usb" | head -15 | while read line; do
-        echo "  ✅ $(echo $line | sed 's/CONFIG_PACKAGE_//;s/=y//')"
-    done
-    
-    # 文件系统插件
-    echo ""
-    echo "🔧 文件系统插件:"
-    grep "^CONFIG_PACKAGE_" .config | grep "=y" | grep -E "kmod-fs-|kmod-nls-|block-mount|automount" | head -10 | while read line; do
+    grep "^CONFIG_PACKAGE_" .config | grep "=y" | grep -E "dnsmasq|iptables|ip6tables|kmod-ipt-nat6|wpad" | head -5 | while read line; do
         echo "  ✅ $(echo $line | sed 's/CONFIG_PACKAGE_//;s/=y//')"
     done
     
     # 语言插件
     echo ""
     echo "🔧 语言插件:"
-    grep "^CONFIG_PACKAGE_" .config | grep "=y" | grep -i "i18n.*zh-cn" | head -10 | while read line; do
+    grep "^CONFIG_PACKAGE_" .config | grep "=y" | grep -i "i18n.*zh-cn" | head -5 | while read line; do
         echo "  ✅ $(echo $line | sed 's/CONFIG_PACKAGE_//;s/=y//')"
     done
     
@@ -902,7 +1029,7 @@ apply_config() {
     if [ "$CONFIG_MODE" = "normal" ]; then
         echo ""
         echo "🔧 正常模式插件:"
-        grep "^CONFIG_PACKAGE_" .config | grep "=y" | grep -E "luci-app-|samba|smartdns|vlmcsd|sqm|vsftpd|upnp|wechatpush|hd-idle|diskman|accesscontrol|cpulimit|arpbind" | head -20 | while read line; do
+        grep "^CONFIG_PACKAGE_" .config | grep "=y" | grep -E "luci-app-|samba|smartdns|vlmcsd|sqm|vsftpd|upnp|wechatpush|hd-idle|diskman|accesscontrol|cpulimit|arpbind" | head -10 | while read line; do
             echo "  ✅ $(echo $line | sed 's/CONFIG_PACKAGE_//;s/=y//')"
         done
     fi
@@ -1016,14 +1143,6 @@ cleanup() {
             mkdir -p /tmp/openwrt_backup
             cp "$BUILD_DIR/.config" "/tmp/openwrt_backup/config_$(date +%Y%m%d_%H%M%S).config"
         fi
-        
-        # 检查是否有其他重要文件需要保留
-        local important_files=("build.log" "error_analysis.log")
-        for file in "${important_files[@]}"; do
-            if [ -f "$BUILD_DIR/$file" ]; then
-                log "发现重要文件: $file"
-            fi
-        done
         
         # 清理构建目录
         sudo rm -rf $BUILD_DIR || log "⚠️ 清理构建目录失败"
