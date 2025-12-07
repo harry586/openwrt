@@ -121,6 +121,7 @@ jobs:
         echo "✅ kmod-usb-storage (USB存储)"
         echo "✅ kmod-usb-storage-uas (UAS支持)"
         echo "✅ kmod-scsi-core (SCSI核心)"
+        echo "✅ 平台专用驱动 (根据设备自动选择)"
         firmware-config/scripts/build_firmware_main.sh generate_config \
           "${{ github.event.inputs.extra_packages }}"
 
@@ -157,6 +158,38 @@ jobs:
               echo "❌ $(echo $config | sed 's/CONFIG_PACKAGE_//;s/=y//') - 缺失！"
             fi
           done
+          
+          # 检查平台专用驱动
+          echo "=== 平台专用驱动检查 ==="
+          if [[ "${{ env.TARGET }}" == "ipq40xx" ]]; then
+            echo "🔧 检测到高通IPQ40xx平台"
+            qcom_configs=(
+              "CONFIG_PACKAGE_kmod-usb-dwc3=y"
+              "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y"
+              "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y"
+            )
+            for config in "${qcom_configs[@]}"; do
+              if grep -q "^$config" "${{ env.BUILD_DIR }}/.config"; then
+                echo "✅ $(echo $config | sed 's/CONFIG_PACKAGE_//;s/=y//')"
+              else
+                echo "❌ $(echo $config | sed 's/CONFIG_PACKAGE_//;s/=y//') - 缺失！"
+              fi
+            done
+          elif [[ "${{ env.TARGET }}" == "ramips" ]]; then
+            echo "🔧 检测到雷凌平台"
+            mtk_configs=(
+              "CONFIG_PACKAGE_kmod-usb-ohci-pci=y"
+              "CONFIG_PACKAGE_kmod-usb2-pci=y"
+              "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y"
+            )
+            for config in "${mtk_configs[@]}"; do
+              if grep -q "^$config" "${{ env.BUILD_DIR }}/.config"; then
+                echo "✅ $(echo $config | sed 's/CONFIG_PACKAGE_//;s/=y//')"
+              else
+                echo "❌ $(echo $config | sed 's/CONFIG_PACKAGE_//;s/=y//') - 缺失！"
+              fi
+            done
+          fi
           
           # 备份配置文件到工作区
           cp "${{ env.BUILD_DIR }}/.config" "${{ github.workspace }}/.config.backup"
@@ -260,5 +293,14 @@ jobs:
         echo "=== USB配置状态总结 ==="
         if [ -f "${{ github.workspace }}/.config.backup" ]; then
           echo "从备份配置检查USB状态:"
-          grep "CONFIG_PACKAGE_kmod-usb" "${{ github.workspace }}/.config.backup" | grep "=y" | head -15
+          echo "=== 所有启用的USB驱动 ==="
+          grep "CONFIG_PACKAGE_kmod-usb" "${{ github.workspace }}/.config.backup" | grep "=y" | head -20
+          
+          echo ""
+          echo "=== USB 3.0相关驱动 ==="
+          grep -E "CONFIG_PACKAGE_kmod-usb(3|xhci|dwc3)" "${{ github.workspace }}/.config.backup" | grep "=y"
+          
+          echo ""
+          echo "=== 存储相关驱动 ==="
+          grep -E "CONFIG_PACKAGE_kmod-(scsi|fs)" "${{ github.workspace }}/.config.backup" | grep "=y" | head -10
         fi
