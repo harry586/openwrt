@@ -1,0 +1,29 @@
+# Git LFS 配置
+# 管理工具链中的大文件
+
+# 二进制文件
+*.tar.gz filter=lfs diff=lfs merge=lfs -text
+*.tar.xz filter=lfs diff=lfs merge=lfs -text
+*.tar.bz2 filter=lfs diff=lfs merge=lfs -text
+
+# 可执行文件
+*.bin filter=lfs diff=lfs merge=lfs -text
+*.so filter=lfs diff=lfs merge=lfs -text
+*.so.* filter=lfs diff=lfs merge=lfs -text
+
+# 编译器文件 (通常很大)
+*cc1* filter=lfs diff=lfs merge=lfs -text
+*cc1plus* filter=lfs diff=lfs merge=lfs -text
+*gcc* filter=lfs diff=lfs merge=lfs -text
+
+# 工具链特定文件
+firmware-config/Toolchain/**/*.so filter=lfs diff=lfs merge=lfs -text
+firmware-config/Toolchain/**/*.so.* filter=lfs diff=lfs merge=lfs -text
+firmware-config/Toolchain/**/*.a filter=lfs diff=lfs merge=lfs -text
+firmware-config/Toolchain/**/libexec/** filter=lfs diff=lfs merge=lfs -text
+firmware-config/Toolchain/**/bin/* filter=lfs diff=lfs merge=lfs -text
+
+# 固件文件
+*.img filter=lfs diff=lfs merge=lfs -text
+*.bin filter=lfs diff=lfs merge=lfs -text
+*.trx filter=lfs diff=lfs merge=lfs -text
