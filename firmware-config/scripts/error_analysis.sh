@@ -161,8 +161,9 @@ if [ -f ".config" ]; then
     
     echo "" >> error_analysis.log
     echo "=== USB配置总结 ===" >> error_analysis.log
-    local total_usb_configs=0
-    local enabled_usb_configs=0
+    # 修复：移除local关键字，因为在函数外
+    total_usb_configs=0
+    enabled_usb_configs=0
     
     for config in "${USB_CONFIGS[@]}"; do
         total_usb_configs=$((total_usb_configs + 1))
