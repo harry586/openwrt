@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流（完整功能版）
+name: OpenWrt 智能固件构建工作流（完整功能版 - Git LFS 修复版）
 
 on:
   workflow_dispatch:
@@ -50,17 +50,42 @@ on:
 
 env:
   BUILD_DIR: /mnt/openwrt-build
+  GIT_LFS_SKIP_SMUDGE: 1
 
 jobs:
   build-firmware:
     runs-on: ubuntu-22.04
     
     steps:
-    - name: 检出配置仓库
+    - name: 安装 Git LFS
+      run: |
+        echo "=== 安装 Git LFS ==="
+        sudo apt-get update
+        sudo apt-get install -y git-lfs
+        git lfs install --skip-smudge
+        echo "✅ Git LFS 安装完成"
+
+    - name: 检出配置仓库 (启用 LFS)
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
         submodules: recursive
+        lfs: true
+
+    - name: 设置 Git LFS 配置
+      run: |
+        echo "=== 设置 Git LFS 配置 ==="
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        git config --global http.postBuffer 524288000
+        git lfs install --force
+        git lfs pull
+        echo "✅ Git LFS 配置完成"
+
+    - name: 检查大文件状态
+      run: |
+        echo "=== 检查大文件状态 ==="
+        firmware-config/scripts/build_firmware_main.sh check_large_files
 
     - name: 设置脚本执行权限
       run: |
@@ -263,11 +288,11 @@ jobs:
           echo "❌ 工具链保存失败"
         fi
 
-    - name: 提交工具链到仓库
+    - name: 准备提交工具链（使用 Git LFS）
       if: success() && github.event.inputs.enable_cache == 'true' && github.event.inputs.commit_toolchain == 'true'
       run: |
-        echo "=== 提交工具链到仓库 ==="
-        echo "这将把工具链文件提交到Git仓库，方便下次使用"
+        echo "=== 准备提交工具链到仓库（使用 Git LFS）==="
+        echo "这将把工具链文件提交到Git仓库，使用Git LFS管理大文件"
         
         # 检查是否有工具链文件
         if [ -d "firmware-config/Toolchain" ] && [ -n "$(ls -A firmware-config/Toolchain 2>/dev/null)" ]; then
@@ -277,23 +302,54 @@ jobs:
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
           
-          # 添加工具链文件
+          # 添加.gitattributes文件确保LFS配置
+          echo "🔧 确保.gitattributes文件存在并配置正确"
+          if [ ! -f ".gitattributes" ]; then
+            cp firmware-config/scripts/.gitattributes ./
+          fi
+          
+          # 确保Git LFS已正确设置
+          git lfs install --force
+          
+          # 添加所有工具链文件到LFS跟踪
+          echo "🔧 添加工具链文件到Git LFS跟踪..."
+          
+          # 使用Git LFS跟踪工具链文件
+          git add .gitattributes
+          
+          # 添加工具链文件到暂存区（Git LFS会自动处理大文件）
+          echo "📦 添加工具链文件到暂存区..."
           git add firmware-config/Toolchain/
           
           # 检查是否有变更
-          if git status --porcelain | grep -q "firmware-config/Toolchain"; then
+          if git status --porcelain | grep -q "firmware-config/Toolchain" || git status --porcelain | grep -q ".gitattributes"; then
             echo "📦 提交工具链文件..."
-            git commit -m "chore: 更新工具链文件 [skip ci]
+            git commit -m "chore: 更新工具链文件 [使用 Git LFS 管理大文件]
             
             版本: ${{ env.SELECTED_BRANCH }}
             目标: ${{ env.TARGET }}/${{ env.SUBTARGET }}
             设备: ${{ env.DEVICE }}
             模式: ${{ github.event.inputs.config_mode }}
-            时间: $(date '+%Y-%m-%d %H:%M:%S')"
+            时间: $(date '+%Y-%m-%d %H:%M:%S')
+            使用Git LFS管理大文件"
             
             echo "🚀 推送工具链到远程仓库..."
-            git push origin HEAD:${{ github.ref_name }}
-            echo "✅ 工具链已提交并推送到仓库"
+            
+            # 尝试推送，如果失败则重试
+            for i in {1..3}; do
+              echo "尝试推送 #$i..."
+              if git push origin HEAD:${{ github.ref_name }}; then
+                echo "✅ 工具链已成功提交并推送到仓库"
+                break
+              else
+                echo "⚠️  推送失败，等待10秒后重试..."
+                sleep 10
+                if [ $i -eq 3 ]; then
+                  echo "❌ 推送失败3次，跳过工具链提交"
+                  exit 0
+                fi
+              fi
+            done
           else
             echo "ℹ️  没有新的工具链文件需要提交"
           fi
@@ -374,7 +430,8 @@ jobs:
           ls -la firmware-config/Toolchain/ 2>/dev/null || echo "   无法列出目录"
           
           if [ "${{ github.event.inputs.commit_toolchain }}" = "true" ] && [ "${{ github.event.inputs.enable_cache }}" = "true" ]; then
-            echo "   工具链已提交到仓库，下次构建将自动使用"
+            echo "   工具链已通过Git LFS提交到仓库，下次构建将自动使用"
+            echo "   💡 注意: 大文件已使用Git LFS管理，不会超过GitHub文件大小限制"
           else
             echo "   工具链未提交到仓库，仅在本次工作流中可用"
           fi
@@ -387,6 +444,15 @@ jobs:
         if [ -d "firmware-config/custom-files" ]; then
           custom_count=$(find firmware-config/custom-files -type f 2>/dev/null | wc -l)
           echo "✅ 自定义文件: $custom_count 个"
+        fi
+        
+        echo ""
+        echo "🔄 Git LFS 状态:"
+        if command -v git-lfs >/dev/null 2>&1; then
+          echo "✅ Git LFS 已安装"
+          git lfs ls-files 2>/dev/null | head -5 || echo "   无LFS文件或未跟踪"
+        else
+          echo "⚠️  Git LFS 未安装"
         fi
         
         echo ""
