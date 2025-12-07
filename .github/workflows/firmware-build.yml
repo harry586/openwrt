@@ -129,6 +129,11 @@ jobs:
         echo "=== 验证USB配置 ==="
         firmware-config/scripts/build_firmware_main.sh verify_usb_config
 
+    - name: USB驱动完整性检查
+      run: |
+        echo "=== USB驱动完整性检查 ==="
+        firmware-config/scripts/build_firmware_main.sh check_usb_drivers_integrity
+
     - name: 应用配置并显示详情
       run: |
         echo "=== 应用配置并显示详情 ==="
@@ -145,6 +150,27 @@ jobs:
           # 显示文件信息
           echo "文件大小: $(ls -lh ${{ env.BUILD_DIR }}/.config | awk '{print $5}')"
           echo "配置行数: $(wc -l < ${{ env.BUILD_DIR }}/.config)"
+          
+          # 确保备份目录存在
+          mkdir -p firmware-config/config-backup
+          
+          # 备份到多个位置确保可靠性
+          backup_file="firmware-config/config-backup/config_${{ github.event.inputs.device_name }}_${{ env.SELECTED_BRANCH }}_${{ github.event.inputs.config_mode }}_$(date +%Y%m%d_%H%M%S).config"
+          
+          # 备份1: 到仓库目录
+          cp "${{ env.BUILD_DIR }}/.config" "$backup_file"
+          echo "✅ 配置文件备份到仓库目录: $backup_file"
+          
+          # 备份2: 到工作区
+          cp "${{ env.BUILD_DIR }}/.config" "${{ github.workspace }}/.config.backup"
+          echo "✅ 配置文件备份到工作区: ${{ github.workspace }}/.config.backup"
+          
+          # 备份3: 到临时目录
+          cp "${{ env.BUILD_DIR }}/.config" "/tmp/.config.backup"
+          echo "✅ 配置文件备份到临时目录: /tmp/.config.backup"
+          
+          # 显示备份文件信息
+          echo "备份文件大小: $(ls -lh $backup_file | awk '{print $5}')"
           
           # 检查关键USB配置
           echo ""
@@ -208,8 +234,8 @@ jobs:
           echo "📊 配置统计:"
           enabled_count=$(grep "^CONFIG_PACKAGE_.*=y$" "${{ env.BUILD_DIR }}/.config" | wc -l)
           disabled_count=$(grep "^# CONFIG_PACKAGE_.* is not set$" "${{ env.BUILD_DIR }}/.config" | wc -l)
-          echo "✅ 已启用插件: $enabled_count 个"
-          echo "❌ 已禁用插件: $disabled_count 个"
+          echo "✅ 已启用插件总数: $enabled_count"
+          echo "❌ 已禁用插件总数: $disabled_count"
           echo "⚠️  缺失关键配置: $missing_count 个"
           
           if [ $missing_count -gt 0 ]; then
@@ -217,15 +243,6 @@ jobs:
             echo "🚨 警告: 发现 $missing_count 个关键配置缺失！"
             echo "将在 make defconfig 后尝试修复..."
           fi
-          
-          # 备份配置文件到工作区
-          cp "${{ env.BUILD_DIR }}/.config" "${{ github.workspace }}/.config.backup"
-          echo "✅ 配置文件已备份到工作区: ${{ github.workspace }}/.config.backup"
-          
-          # 同时保存一份到仓库目录
-          mkdir -p firmware-config/config-backup
-          cp "${{ env.BUILD_DIR }}/.config" "firmware-config/config-backup/config_${{ github.event.inputs.device_name }}_${{ env.SELECTED_BRANCH }}_${{ github.event.inputs.config_mode }}.config"
-          echo "✅ 配置文件已备份到仓库目录"
         else
           echo "❌ .config 文件不存在"
           find ${{ env.BUILD_DIR }} -name ".config" -o -name "config" 2>/dev/null || echo "未找到任何配置文件"
@@ -246,6 +263,19 @@ jobs:
       run: |
         echo "=== 加载工具链 ==="
         firmware-config/scripts/build_firmware_main.sh load_toolchain
+
+    - name: 检查工具链加载状态
+      run: |
+        echo "=== 检查工具链加载状态 ==="
+        cd ${{ env.BUILD_DIR }}
+        if [ -d "staging_dir/toolchain-"* ]; then
+          echo "✅ 工具链已加载"
+          ls -d staging_dir/toolchain-* | head -1
+        else
+          echo "❌ 工具链未加载"
+          echo "尝试从仓库目录加载工具链..."
+          firmware-config/scripts/build_firmware_main.sh load_toolchain
+        fi
 
     - name: 集成自定义文件
       run: |
@@ -329,6 +359,7 @@ jobs:
         name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
         path: |
           ${{ github.workspace }}/.config.backup
+          ${{ github.workspace }}/firmware-config/config-backup/
         retention-days: 7
 
     - name: 清理目录（保留配置文件）
