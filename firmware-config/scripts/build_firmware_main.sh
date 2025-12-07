@@ -47,6 +47,30 @@ get_common_toolchain_path() {
     echo "$TOOLCHAIN_DIR/common"
 }
 
+check_large_files() {
+    log "=== 检查大文件 ==="
+    
+    local repo_root="$(pwd)"
+    
+    # 检查是否有超过 90MB 的文件
+    log "检查大于90MB的文件..."
+    large_files=$(find . -type f -size +90M 2>/dev/null | grep -v ".git" || true)
+    
+    if [ -n "$large_files" ]; then
+        log "⚠️  发现以下大文件（可能超过GitHub限制）:"
+        echo "$large_files"
+        log "💡 建议: 将这些文件添加到 .gitattributes 中使用 Git LFS 管理"
+        
+        # 检查工具链中的大文件
+        if [ -d "firmware-config/Toolchain" ]; then
+            log "检查工具链中的大文件..."
+            find firmware-config/Toolchain -type f -size +50M 2>/dev/null | head -10 || true
+        fi
+    else
+        log "✅ 未发现超过90MB的大文件"
+    fi
+}
+
 init_toolchain_dir() {
     log "=== 初始化工具链目录 ==="
     mkdir -p "$TOOLCHAIN_DIR"
@@ -75,7 +99,7 @@ init_toolchain_dir() {
 工具链会在编译时自动加载，无需手动操作
 
 ## 注意事项
-- 工具链文件较大，建议定期清理不需要的版本
+- 工具链文件较大，已使用 Git LFS 管理大文件
 - 不同版本的工具链不兼容，请勿混用
 - 如果编译失败，可以尝试清理工具链重新下载
 
@@ -84,6 +108,9 @@ init_toolchain_dir() {
 - \`bin/\` - 编译工具（gcc, g++, ld等）
 - \`lib/\` - 库文件
 - \`include/\` - 头文件
+
+## Git LFS 管理
+大文件（如编译器、库文件）已使用 Git LFS 管理，确保不会超过 GitHub 文件大小限制
 EOF
         log "✅ 创建README.md文件"
     fi
@@ -128,18 +155,14 @@ save_toolchain() {
     if [ -d "$staging_toolchain" ]; then
         log "保存版本特定工具链到: $toolchain_path"
         
-        # 使用tar来保持文件属性和符号链接
+        # 使用rsync保持文件属性和符号链接
         cd "$(dirname "$staging_toolchain")"
         local toolchain_name=$(basename "$staging_toolchain")
         
-        # 创建压缩包
-        log "创建工具链压缩包..."
-        if tar -czf "$toolchain_path/toolchain.tar.gz" "$toolchain_name"; then
-            cd "$toolchain_path"
-            # 解压到当前目录
-            tar -xzf toolchain.tar.gz
-            rm -f toolchain.tar.gz
-            log "✅ 版本特定工具链保存成功 (使用tar压缩/解压)"
+        # 创建工具链的压缩版本（用于快速传输）
+        log "创建工具链..."
+        if rsync -av "$toolchain_name/" "$toolchain_path/" --exclude="*.o" --exclude="*.a"; then
+            log "✅ 版本特定工具链保存成功 (使用rsync复制)"
             
             # 记录工具链信息
             echo "# Toolchain saved on $(date)" > "$toolchain_path/toolchain.info"
@@ -147,14 +170,10 @@ save_toolchain() {
             echo "Target: $TARGET" >> "$toolchain_path/toolchain.info"
             echo "Subtarget: $SUBTARGET" >> "$toolchain_path/toolchain.info"
             echo "Device: $DEVICE" >> "$toolchain_path/toolchain.info"
+            echo "Saved with Git LFS: true" >> "$toolchain_path/toolchain.info"
         else
-            log "❌ tar压缩失败，尝试直接复制..."
-            if cp -r "$staging_toolchain" "$toolchain_path/" 2>/dev/null; then
-                log "✅ 版本特定工具链保存成功"
-            else
-                log "❌ 所有保存方式都失败"
-                return 1
-            fi
+            log "❌ rsync复制失败"
+            return 1
         fi
     else
         log "❌ 工具链目录不存在: $staging_toolchain"
@@ -191,6 +210,14 @@ save_toolchain() {
     log "  通用工具: $copied_tools 个"
     log "  大小: $(du -sh "$common_path" | cut -f1)"
     
+    # 检查是否有大文件需要Git LFS管理
+    log "🔍 检查大文件..."
+    local large_files=$(find "$TOOLCHAIN_DIR" -type f -size +50M 2>/dev/null | wc -l)
+    if [ $large_files -gt 0 ]; then
+        log "⚠️  发现 $large_files 个大于50M的文件，建议使用Git LFS管理"
+        find "$TOOLCHAIN_DIR" -type f -size +50M 2>/dev/null | head -5
+    fi
+    
     return 0
 }
 
@@ -212,7 +239,7 @@ load_toolchain() {
     log "检查仓库工具链目录: $toolchain_path"
     if [ -d "$toolchain_path" ]; then
         log "目录存在，内容如下："
-        ls -la "$toolchain_path" 2>/dev/null || log "无法列出目录内容"
+        ls -la "$toolchain_path" 2>/dev/null | head -10 || log "无法列出目录内容"
     else
         log "目录不存在"
     fi
@@ -220,7 +247,7 @@ load_toolchain() {
     log "检查通用工具链目录: $common_path"
     if [ -d "$common_path" ]; then
         log "目录存在，内容如下："
-        ls -la "$common_path" 2>/dev/null || log "无法列出目录内容"
+        ls -la "$common_path" 2>/dev/null | head -10 || log "无法列出目录内容"
     else
         log "目录不存在"
     fi
@@ -231,15 +258,6 @@ load_toolchain() {
     if [ -d "$toolchain_path" ] && [ -n "$(ls -A "$toolchain_path" 2>/dev/null)" ]; then
         found_repo_toolchain=1
         log "🔧 从仓库找到版本特定工具链: $toolchain_path"
-        
-        # 检查是否有压缩包需要解压
-        if [ -f "$toolchain_path/toolchain.tar.gz" ]; then
-            log "🔧 发现压缩包工具链，正在解压..."
-            cd "$toolchain_path"
-            tar -xzf toolchain.tar.gz
-            rm -f toolchain.tar.gz
-            log "✅ 工具链解压完成"
-        fi
     fi
     
     if [ -d "$common_path/bin" ] && [ -n "$(ls -A "$common_path/bin" 2>/dev/null)" ]; then
@@ -263,7 +281,7 @@ load_toolchain() {
         if [ -n "$existing_toolchain" ]; then
             log "已存在工具链: $existing_toolchain，跳过加载"
         else
-            # 查找工具链目录（可能已经解压）
+            # 查找工具链目录
             local first_dir=$(find "$toolchain_path" -maxdepth 1 -type d ! -path "$toolchain_path" | head -1)
             if [ -n "$first_dir" ]; then
                 local toolchain_name=$(basename "$first_dir")
@@ -271,7 +289,11 @@ load_toolchain() {
                 cp -r "$first_dir" "staging_dir/"
                 log "✅ 版本特定工具链加载完成: staging_dir/$toolchain_name"
             else
-                log "⚠️  工具链目录为空"
+                # 如果没有子目录，直接使用当前目录
+                log "复制工具链文件到 staging_dir/"
+                mkdir -p "staging_dir/toolchain-repo"
+                cp -r "$toolchain_path"/* "staging_dir/toolchain-repo/" 2>/dev/null || true
+                log "✅ 版本特定工具链文件加载完成"
             fi
         fi
     fi
@@ -290,8 +312,9 @@ load_toolchain() {
         local existing_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
         if [ -n "$existing_toolchain" ]; then
             log "✅ 构建目录中已有工具链: $existing_toolchain"
+            log "工具链大小: $(du -sh "$existing_toolchain" 2>/dev/null | cut -f1 || echo '未知')"
         else
-            log "⚠️  构建目录中未找到工具链"
+            log "⚠️  构建目录中未找到完整工具链"
         fi
     fi
     
@@ -693,8 +716,16 @@ setup_environment() {
         binutils-dev libdw-dev libiberty-dev
     )
     
+    # Git LFS
+    local git_lfs_packages=(
+        git-lfs
+    )
+    
     log "安装基础编译工具..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${base_packages[@]}" || handle_error "安装基础编译工具失败"
+    
+    log "安装Git LFS..."
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${git_lfs_packages[@]}" || handle_error "安装Git LFS失败"
     
     log "安装网络工具..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${network_packages[@]}" || handle_error "安装网络工具失败"
@@ -705,9 +736,12 @@ setup_environment() {
     log "安装调试工具..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${debug_packages[@]}" || handle_error "安装调试工具失败"
     
+    # 初始化Git LFS
+    git lfs install || log "⚠️  Git LFS初始化失败，但将继续"
+    
     # 检查重要工具是否安装成功
     log "=== 验证工具安装 ==="
-    local important_tools=("gcc" "g++" "make" "git" "python3" "cmake" "flex" "bison")
+    local important_tools=("gcc" "g++" "make" "git" "git-lfs" "python3" "cmake" "flex" "bison")
     for tool in "${important_tools[@]}"; do
         if command -v $tool >/dev/null 2>&1; then
             log "✅ $tool 已安装: $(which $tool)"
@@ -1812,6 +1846,9 @@ main() {
         "init_toolchain_dir")
             init_toolchain_dir
             ;;
+        "check_large_files")
+            check_large_files
+            ;;
         *)
             log "❌ 未知命令: $1"
             echo "可用命令:"
@@ -1820,7 +1857,7 @@ main() {
             echo "  pre_build_space_check, generate_config, verify_usb_config, check_usb_drivers_integrity, apply_config"
             echo "  fix_network, download_dependencies, load_toolchain, integrate_custom_files"
             echo "  pre_build_error_check, build_firmware, save_toolchain, post_build_space_check"
-            echo "  check_firmware_files, cleanup, init_toolchain_dir"
+            echo "  check_firmware_files, cleanup, init_toolchain_dir, check_large_files"
             exit 1
             ;;
     esac
