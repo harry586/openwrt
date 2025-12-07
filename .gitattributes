@@ -1,10 +1,17 @@
 # Git LFS 配置
 # 管理工具链中的大文件
 
+# Git LFS 全局配置
+*.gz filter=lfs diff=lfs merge=lfs -text
+*.xz filter=lfs diff=lfs merge=lfs -text
+*.bz2 filter=lfs diff=lfs merge=lfs -text
+*.zst filter=lfs diff=lfs merge=lfs -text
+
 # 二进制文件
 *.tar.gz filter=lfs diff=lfs merge=lfs -text
 *.tar.xz filter=lfs diff=lfs merge=lfs -text
 *.tar.bz2 filter=lfs diff=lfs merge=lfs -text
+*.tar.zst filter=lfs diff=lfs merge=lfs -text
 
 # 可执行文件
 *.bin filter=lfs diff=lfs merge=lfs -text
@@ -15,15 +22,39 @@
 *cc1* filter=lfs diff=lfs merge=lfs -text
 *cc1plus* filter=lfs diff=lfs merge=lfs -text
 *gcc* filter=lfs diff=lfs merge=lfs -text
+*g++* filter=lfs diff=lfs merge=lfs -text
+*ld* filter=lfs diff=lfs merge=lfs -text
+*as* filter=lfs diff=lfs merge=lfs -text
+*ar* filter=lfs diff=lfs merge=lfs -text
 
-# 工具链特定文件
+# 工具链特定文件 - 明确指定使用 LFS
 firmware-config/Toolchain/**/*.so filter=lfs diff=lfs merge=lfs -text
 firmware-config/Toolchain/**/*.so.* filter=lfs diff=lfs merge=lfs -text
 firmware-config/Toolchain/**/*.a filter=lfs diff=lfs merge=lfs -text
 firmware-config/Toolchain/**/libexec/** filter=lfs diff=lfs merge=lfs -text
 firmware-config/Toolchain/**/bin/* filter=lfs diff=lfs merge=lfs -text
+firmware-config/Toolchain/**/initial/libexec/** filter=lfs diff=lfs merge=lfs -text
+firmware-config/Toolchain/**/initial/bin/* filter=lfs diff=lfs merge=lfs -text
+firmware-config/Toolchain/**/lib/** filter=lfs diff=lfs merge=lfs -text
+firmware-config/Toolchain/**/usr/bin/* filter=lfs diff=lfs merge=lfs -text
+
+# 工具链目录中的可执行文件
+firmware-config/Toolchain/**/bin/arm-openwrt-linux-muslgnueabi-* filter=lfs diff=lfs merge=lfs -text
+firmware-config/Toolchain/**/bin/mipsel-openwrt-linux-musl-* filter=lfs diff=lfs merge=lfs -text
 
 # 固件文件
 *.img filter=lfs diff=lfs merge=lfs -text
 *.bin filter=lfs diff=lfs merge=lfs -text
 *.trx filter=lfs diff=lfs merge=lfs -text
+*.factory.bin filter=lfs diff=lfs merge=lfs -text
+*.sysupgrade.bin filter=lfs diff=lfs merge=lfs -text
+
+# 其他大文件
+*.qcow2 filter=lfs diff=lfs merge=lfs -text
+*.vmdk filter=lfs diff=lfs merge=lfs -text
+*.vdi filter=lfs diff=lfs merge=lfs -text
+*.iso filter=lfs diff=lfs merge=lfs -text
+
+# Git LFS 锁定文件
+.gitattributes filter=lfs diff=lfs merge=lfs -text
+.gitignore filter=lfs diff=lfs merge=lfs -text
