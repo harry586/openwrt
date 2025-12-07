@@ -42,6 +42,11 @@ on:
         required: false
         default: true
         type: boolean
+      commit_toolchain:
+        description: '💾 提交工具链到仓库 (节省下次编译时间)'
+        required: false
+        default: false
+        type: boolean
 
 env:
   BUILD_DIR: /mnt/openwrt-build
@@ -62,6 +67,18 @@ jobs:
         echo "=== 设置脚本执行权限 ==="
         find firmware-config/scripts -name "*.sh" -exec chmod +x {} \;
         echo "✅ 脚本执行权限设置完成"
+
+    - name: 检查工具链目录状态
+      run: |
+        echo "=== 检查仓库中的工具链状态 ==="
+        if [ -d "firmware-config/Toolchain" ]; then
+          echo "✅ 工具链目录存在"
+          echo "工具链目录大小: $(du -sh firmware-config/Toolchain 2>/dev/null | cut -f1 || echo '0')"
+          echo "工具链目录结构:"
+          find firmware-config/Toolchain -type f -name "*.info" 2>/dev/null | head -10
+        else
+          echo "ℹ️  工具链目录不存在，将创建新目录"
+        fi
 
     - name: 初始空间检查
       run: |
@@ -147,105 +164,19 @@ jobs:
         if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
           echo "✅ .config 文件存在"
           
-          # 显示文件信息
-          echo "文件大小: $(ls -lh ${{ env.BUILD_DIR }}/.config | awk '{print $5}')"
-          echo "配置行数: $(wc -l < ${{ env.BUILD_DIR }}/.config)"
-          
           # 确保备份目录存在
           mkdir -p firmware-config/config-backup
           
-          # 备份到多个位置确保可靠性
+          # 备份到仓库目录
           backup_file="firmware-config/config-backup/config_${{ github.event.inputs.device_name }}_${{ env.SELECTED_BRANCH }}_${{ github.event.inputs.config_mode }}_$(date +%Y%m%d_%H%M%S).config"
           
-          # 备份1: 到仓库目录
           cp "${{ env.BUILD_DIR }}/.config" "$backup_file"
           echo "✅ 配置文件备份到仓库目录: $backup_file"
           
-          # 备份2: 到工作区
-          cp "${{ env.BUILD_DIR }}/.config" "${{ github.workspace }}/.config.backup"
-          echo "✅ 配置文件备份到工作区: ${{ github.workspace }}/.config.backup"
-          
-          # 备份3: 到临时目录
-          cp "${{ env.BUILD_DIR }}/.config" "/tmp/.config.backup"
-          echo "✅ 配置文件备份到临时目录: /tmp/.config.backup"
-          
           # 显示备份文件信息
           echo "备份文件大小: $(ls -lh $backup_file | awk '{print $5}')"
-          
-          # 检查关键USB配置
-          echo ""
-          echo "=== 关键USB配置检查 ==="
-          critical_usb_configs=(
-            "CONFIG_PACKAGE_kmod-usb-core=y"
-            "CONFIG_PACKAGE_kmod-usb2=y"
-            "CONFIG_PACKAGE_kmod-usb3=y"
-            "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
-            "CONFIG_PACKAGE_kmod-usb-storage=y"
-            "CONFIG_PACKAGE_kmod-scsi-core=y"
-          )
-          
-          missing_count=0
-          for config in "${critical_usb_configs[@]}"; do
-            if grep -q "^$config" "${{ env.BUILD_DIR }}/.config"; then
-              echo "✅ $(echo $config | sed 's/CONFIG_PACKAGE_//;s/=y//')"
-            else
-              echo "❌ $(echo $config | sed 's/CONFIG_PACKAGE_//;s/=y//') - 缺失！"
-              missing_count=$((missing_count + 1))
-            fi
-          done
-          
-          # 检查平台专用驱动
-          echo ""
-          echo "=== 平台专用驱动检查 ==="
-          if [[ "${{ env.TARGET }}" == "ipq40xx" ]]; then
-            echo "🔧 检测到高通IPQ40xx平台:"
-            qcom_configs=(
-              "CONFIG_PACKAGE_kmod-usb-dwc3=y"
-              "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y"
-              "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y"
-            )
-            for config in "${qcom_configs[@]}"; do
-              if grep -q "^$config" "${{ env.BUILD_DIR }}/.config"; then
-                echo "✅ $(echo $config | sed 's/CONFIG_PACKAGE_//;s/=y//')"
-              else
-                echo "❌ $(echo $config | sed 's/CONFIG_PACKAGE_//;s/=y//') - 缺失！"
-                missing_count=$((missing_count + 1))
-              fi
-            done
-          elif [[ "${{ env.TARGET }}" == "ramips" ]]; then
-            echo "🔧 检测到雷凌平台:"
-            mtk_configs=(
-              "CONFIG_PACKAGE_kmod-usb-ohci-pci=y"
-              "CONFIG_PACKAGE_kmod-usb2-pci=y"
-              "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y"
-            )
-            for config in "${mtk_configs[@]}"; do
-              if grep -q "^$config" "${{ env.BUILD_DIR }}/.config"; then
-                echo "✅ $(echo $config | sed 's/CONFIG_PACKAGE_//;s/=y//')"
-              else
-                echo "❌ $(echo $config | sed 's/CONFIG_PACKAGE_//;s/=y//') - 缺失！"
-                missing_count=$((missing_count + 1))
-              fi
-            done
-          fi
-          
-          # 显示统计信息
-          echo ""
-          echo "📊 配置统计:"
-          enabled_count=$(grep "^CONFIG_PACKAGE_.*=y$" "${{ env.BUILD_DIR }}/.config" | wc -l)
-          disabled_count=$(grep "^# CONFIG_PACKAGE_.* is not set$" "${{ env.BUILD_DIR }}/.config" | wc -l)
-          echo "✅ 已启用插件总数: $enabled_count"
-          echo "❌ 已禁用插件总数: $disabled_count"
-          echo "⚠️  缺失关键配置: $missing_count 个"
-          
-          if [ $missing_count -gt 0 ]; then
-            echo ""
-            echo "🚨 警告: 发现 $missing_count 个关键配置缺失！"
-            echo "将在 make defconfig 后尝试修复..."
-          fi
         else
           echo "❌ .config 文件不存在"
-          find ${{ env.BUILD_DIR }} -name ".config" -o -name "config" 2>/dev/null || echo "未找到任何配置文件"
           exit 1
         fi
 
@@ -253,11 +184,6 @@ jobs:
       run: |
         echo "=== 修复网络环境 ==="
         firmware-config/scripts/build_firmware_main.sh fix_network
-
-    - name: 下载依赖包
-      run: |
-        echo "=== 下载依赖包 ==="
-        firmware-config/scripts/build_firmware_main.sh download_dependencies
 
     - name: 加载工具链
       run: |
@@ -271,11 +197,16 @@ jobs:
         if [ -d "staging_dir/toolchain-"* ]; then
           echo "✅ 工具链已加载"
           ls -d staging_dir/toolchain-* | head -1
+          echo "工具链大小: $(du -sh staging_dir/toolchain-* 2>/dev/null | head -1 | cut -f1 || echo '未知')"
         else
           echo "❌ 工具链未加载"
-          echo "尝试从仓库目录加载工具链..."
-          firmware-config/scripts/build_firmware_main.sh load_toolchain
+          echo "将自动下载工具链..."
         fi
+
+    - name: 下载依赖包
+      run: |
+        echo "=== 下载依赖包 ==="
+        firmware-config/scripts/build_firmware_main.sh download_dependencies
 
     - name: 集成自定义文件
       run: |
@@ -317,7 +248,58 @@ jobs:
         echo "=== 保存工具链到仓库目录 ==="
         echo "注意：工具链将保存到仓库的 firmware-config/Toolchain/ 目录中"
         echo "这样可以永久保存工具链，下次构建时可以直接使用"
+        
+        # 保存工具链
         firmware-config/scripts/build_firmware_main.sh save_toolchain
+        
+        # 显示保存结果
+        echo "=== 工具链保存结果 ==="
+        if [ -d "firmware-config/Toolchain" ]; then
+          echo "✅ 工具链已保存到仓库目录"
+          echo "工具链目录大小: $(du -sh firmware-config/Toolchain 2>/dev/null | cut -f1 || echo '未知')"
+          echo "工具链结构:"
+          find firmware-config/Toolchain -type d 2>/dev/null | head -20
+        else
+          echo "❌ 工具链保存失败"
+        fi
+
+    - name: 提交工具链到仓库
+      if: success() && github.event.inputs.enable_cache == 'true' && github.event.inputs.commit_toolchain == 'true'
+      run: |
+        echo "=== 提交工具链到仓库 ==="
+        echo "这将把工具链文件提交到Git仓库，方便下次使用"
+        
+        # 检查是否有工具链文件
+        if [ -d "firmware-config/Toolchain" ] && [ -n "$(ls -A firmware-config/Toolchain 2>/dev/null)" ]; then
+          echo "🔧 有工具链文件需要提交"
+          
+          # 配置git用户
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          
+          # 添加工具链文件
+          git add firmware-config/Toolchain/
+          
+          # 检查是否有变更
+          if git status --porcelain | grep -q "firmware-config/Toolchain"; then
+            echo "📦 提交工具链文件..."
+            git commit -m "chore: 更新工具链文件 [skip ci]
+            
+            版本: ${{ env.SELECTED_BRANCH }}
+            目标: ${{ env.TARGET }}/${{ env.SUBTARGET }}
+            设备: ${{ env.DEVICE }}
+            模式: ${{ github.event.inputs.config_mode }}
+            时间: $(date '+%Y-%m-%d %H:%M:%S')"
+            
+            echo "🚀 推送工具链到远程仓库..."
+            git push origin HEAD:${{ github.ref_name }}
+            echo "✅ 工具链已提交并推送到仓库"
+          else
+            echo "ℹ️  没有新的工具链文件需要提交"
+          fi
+        else
+          echo "ℹ️  没有工具链文件需要提交"
+        fi
 
     - name: 错误分析
       if: failure()
@@ -358,7 +340,6 @@ jobs:
       with:
         name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
         path: |
-          ${{ github.workspace }}/.config.backup
           ${{ github.workspace }}/firmware-config/config-backup/
         retention-days: 7
 
@@ -366,11 +347,6 @@ jobs:
       if: always()
       run: |
         echo "=== 清理目录但保留配置文件 ==="
-        if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
-          echo "备份配置文件到工作区..."
-          cp "${{ env.BUILD_DIR }}/.config" "${{ github.workspace }}/last_config.config"
-          echo "备份完成: ${{ github.workspace }}/last_config.config"
-        fi
         firmware-config/scripts/build_firmware_main.sh cleanup
 
     - name: 输出最终配置状态
@@ -379,52 +355,38 @@ jobs:
         echo "=== 最终配置状态总结 ==="
         
         # 检查备份的配置文件
-        if [ -f "${{ github.workspace }}/.config.backup" ]; then
-          echo "从备份配置检查最终状态:"
+        if [ -d "firmware-config/config-backup" ]; then
+          backup_count=$(find firmware-config/config-backup -name "*.config" 2>/dev/null | wc -l)
+          echo "✅ 仓库配置文件备份: $backup_count 个"
+        fi
+        
+        echo ""
+        echo "🛠️ 工具链状态:"
+        if [ -d "firmware-config/Toolchain" ]; then
+          echo "✅ 工具链目录存在: firmware-config/Toolchain/"
           
-          echo ""
-          echo "📊 配置统计:"
-          enabled_count=$(grep "^CONFIG_PACKAGE_.*=y$" "${{ github.workspace }}/.config.backup" | wc -l)
-          disabled_count=$(grep "^# CONFIG_PACKAGE_.* is not set$" "${{ github.workspace }}/.config.backup" | wc -l)
-          echo "✅ 已启用插件总数: $enabled_count"
-          echo "❌ 已禁用插件总数: $disabled_count"
+          # 显示工具链大小
+          toolchain_size=$(du -sh firmware-config/Toolchain 2>/dev/null | cut -f1 || echo "未知")
+          echo "   工具链大小: $toolchain_size"
           
-          echo ""
-          echo "🔧 关键USB配置状态:"
-          critical_configs=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-xhci-hcd" "kmod-usb-storage" "kmod-scsi-core")
-          for config in "${critical_configs[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${config}=y" "${{ github.workspace }}/.config.backup"; then
-              echo "✅ $config"
-            else
-              echo "❌ $config - 缺失！"
-            fi
-          done
+          # 显示版本目录
+          echo "   版本目录:"
+          ls -la firmware-config/Toolchain/ 2>/dev/null || echo "   无法列出目录"
           
-          echo ""
-          echo "🛠️ 工具链状态:"
-          if [ -d "firmware-config/Toolchain" ]; then
-            echo "✅ 工具链已保存到仓库目录: firmware-config/Toolchain/"
-            echo "   下次构建将自动使用已保存的工具链，加速编译过程"
-            
-            # 显示工具链大小
-            toolchain_size=$(du -sh firmware-config/Toolchain 2>/dev/null | cut -f1 || echo "未知")
-            echo "   工具链大小: $toolchain_size"
+          if [ "${{ github.event.inputs.commit_toolchain }}" = "true" ] && [ "${{ github.event.inputs.enable_cache }}" = "true" ]; then
+            echo "   工具链已提交到仓库，下次构建将自动使用"
           else
-            echo "⚠️  工具链未保存到仓库目录"
-          fi
-          
-          echo ""
-          echo "📁 配置文件备份:"
-          if [ -f "${{ github.workspace }}/last_config.config" ]; then
-            echo "✅ 最后配置文件已备份: last_config.config"
-          fi
-          
-          if [ -d "firmware-config/config-backup" ]; then
-            backup_count=$(find firmware-config/config-backup -name "*.config" 2>/dev/null | wc -l)
-            echo "✅ 仓库配置文件备份: $backup_count 个"
+            echo "   工具链未提交到仓库，仅在本次工作流中可用"
           fi
         else
-          echo "⚠️  未找到备份的配置文件"
+          echo "⚠️  工具链目录不存在"
+        fi
+        
+        echo ""
+        echo "📁 自定义文件状态:"
+        if [ -d "firmware-config/custom-files" ]; then
+          custom_count=$(find firmware-config/custom-files -type f 2>/dev/null | wc -l)
+          echo "✅ 自定义文件: $custom_count 个"
         fi
         
         echo ""
