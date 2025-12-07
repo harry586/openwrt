@@ -72,6 +72,12 @@ jobs:
         submodules: recursive
         lfs: true
 
+    - name: 设置脚本执行权限
+      run: |
+        echo "=== 设置脚本执行权限 ==="
+        find firmware-config/scripts -name "*.sh" -exec chmod +x {} \;
+        echo "✅ 脚本执行权限设置完成"
+
     - name: 设置 Git LFS 配置
       run: |
         echo "=== 设置 Git LFS 配置 ==="
@@ -86,12 +92,6 @@ jobs:
       run: |
         echo "=== 检查大文件状态 ==="
         firmware-config/scripts/build_firmware_main.sh check_large_files
-
-    - name: 设置脚本执行权限
-      run: |
-        echo "=== 设置脚本执行权限 ==="
-        find firmware-config/scripts -name "*.sh" -exec chmod +x {} \;
-        echo "✅ 脚本执行权限设置完成"
 
     - name: 检查工具链目录状态
       run: |
