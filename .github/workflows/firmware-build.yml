@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流（USB完全修复加强版）
+name: OpenWrt 智能固件构建工作流（完整功能版）
 
 on:
   workflow_dispatch:
@@ -20,9 +20,8 @@ on:
         description: |
           ⚙️ 配置模式选择
           
-          🟣 基础模式 - 最小化配置，用于测试编译：✅ 基础功能
-          
-          🟠 正常模式 - 完整功能配置：✅ TurboACC 网络加速 ✅ UPnP 自动端口转发 ✅ Samba 文件共享 ✅ 磁盘管理 ✅ KMS 激活服务 ✅ SmartDNS 智能DNS ✅ 家长控制 ✅ 微信推送 ✅ 流量控制 (SQM) ✅ FTP 服务器 ✅ ARP 绑定 ✅ CPU 限制 ✅ 硬盘休眠。
+          🟣 基础模式 - 最小化配置，用于测试编译
+          🟠 正常模式 - 完整功能配置
           
           🔧 USB 3.0加强：所有平台的关键USB驱动都已强制启用！
         required: true
@@ -34,7 +33,7 @@ on:
       extra_packages:
         description: |
           额外安装插件
-          格式：🔴用分号;分隔。🔴 启用插件：+插件名。🔴 禁用插件：-插件名。🔴 示例：+luci-app-wol;+luci-app-ddns
+          格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。
         required: false
         type: string
         default: ''
@@ -56,6 +55,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        submodules: recursive
 
     - name: 设置脚本执行权限
       run: |
@@ -71,9 +71,14 @@ jobs:
         AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
         echo "/mnt 可用空间: ${AVAILABLE_GB}G"
         if [ $AVAILABLE_GB -lt 50 ]; then
-          echo "错误: /mnt 空间不足50G"
+          echo "❌ 错误: /mnt 空间不足50G"
           exit 1
         fi
+        echo "✅ 初始空间检查通过"
+
+    - name: 初始化工具链目录
+      run: |
+        firmware-config/scripts/build_firmware_main.sh init_toolchain_dir
 
     - name: 设置编译环境
       run: |
@@ -85,6 +90,10 @@ jobs:
 
     - name: 初始化构建环境
       run: |
+        echo "=== 初始化构建环境 ==="
+        echo "设备: ${{ github.event.inputs.device_name }}"
+        echo "版本: ${{ github.event.inputs.version_selection }}"
+        echo "配置模式: ${{ github.event.inputs.config_mode }}"
         firmware-config/scripts/build_firmware_main.sh initialize_build_env \
           "${{ github.event.inputs.device_name }}" \
           "${{ github.event.inputs.version_selection }}" \
@@ -105,43 +114,40 @@ jobs:
 
     - name: 编译前空间检查
       run: |
+        echo "=== 编译前空间检查 ==="
         firmware-config/scripts/build_firmware_main.sh pre_build_space_check
 
     - name: 智能配置生成（USB完全修复加强版）
       run: |
-        echo "=== 🚨 USB 3.0加强配置 ==="
-        echo "设备: ${{ github.event.inputs.device_name }}"
-        echo "所有关键USB驱动都将被强制启用，包括："
-        echo "✅ kmod-usb-core (USB核心)"
-        echo "✅ kmod-usb2 (USB 2.0)"
-        echo "✅ kmod-usb3 (USB 3.0)"
-        echo "✅ kmod-usb-ehci (USB 2.0高速)"
-        echo "✅ kmod-usb-ohci (USB 1.1低速)"
-        echo "✅ kmod-usb-xhci-hcd (USB 3.0扩展主机)"
-        echo "✅ kmod-usb-storage (USB存储)"
-        echo "✅ kmod-usb-storage-uas (UAS支持)"
-        echo "✅ kmod-scsi-core (SCSI核心)"
-        echo "✅ 平台专用驱动 (根据设备自动选择)"
+        echo "=== 智能配置生成 ==="
+        echo "🚨 USB 3.0加强：所有关键USB驱动强制启用"
         firmware-config/scripts/build_firmware_main.sh generate_config \
           "${{ github.event.inputs.extra_packages }}"
 
     - name: 验证USB配置
       run: |
+        echo "=== 验证USB配置 ==="
         firmware-config/scripts/build_firmware_main.sh verify_usb_config
 
     - name: 应用配置并显示详情
       run: |
+        echo "=== 应用配置并显示详情 ==="
         firmware-config/scripts/build_firmware_main.sh apply_config
 
     - name: 检查并备份配置文件
       run: |
         echo "=== 检查并备份配置文件 ==="
+        
+        # 检查配置文件
         if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
           echo "✅ .config 文件存在"
+          
+          # 显示文件信息
           echo "文件大小: $(ls -lh ${{ env.BUILD_DIR }}/.config | awk '{print $5}')"
           echo "配置行数: $(wc -l < ${{ env.BUILD_DIR }}/.config)"
           
           # 检查关键USB配置
+          echo ""
           echo "=== 关键USB配置检查 ==="
           critical_usb_configs=(
             "CONFIG_PACKAGE_kmod-usb-core=y"
@@ -149,20 +155,24 @@ jobs:
             "CONFIG_PACKAGE_kmod-usb3=y"
             "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
             "CONFIG_PACKAGE_kmod-usb-storage=y"
+            "CONFIG_PACKAGE_kmod-scsi-core=y"
           )
           
+          missing_count=0
           for config in "${critical_usb_configs[@]}"; do
             if grep -q "^$config" "${{ env.BUILD_DIR }}/.config"; then
               echo "✅ $(echo $config | sed 's/CONFIG_PACKAGE_//;s/=y//')"
             else
               echo "❌ $(echo $config | sed 's/CONFIG_PACKAGE_//;s/=y//') - 缺失！"
+              missing_count=$((missing_count + 1))
             fi
           done
           
           # 检查平台专用驱动
+          echo ""
           echo "=== 平台专用驱动检查 ==="
           if [[ "${{ env.TARGET }}" == "ipq40xx" ]]; then
-            echo "🔧 检测到高通IPQ40xx平台"
+            echo "🔧 检测到高通IPQ40xx平台:"
             qcom_configs=(
               "CONFIG_PACKAGE_kmod-usb-dwc3=y"
               "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y"
@@ -173,10 +183,11 @@ jobs:
                 echo "✅ $(echo $config | sed 's/CONFIG_PACKAGE_//;s/=y//')"
               else
                 echo "❌ $(echo $config | sed 's/CONFIG_PACKAGE_//;s/=y//') - 缺失！"
+                missing_count=$((missing_count + 1))
               fi
             done
           elif [[ "${{ env.TARGET }}" == "ramips" ]]; then
-            echo "🔧 检测到雷凌平台"
+            echo "🔧 检测到雷凌平台:"
             mtk_configs=(
               "CONFIG_PACKAGE_kmod-usb-ohci-pci=y"
               "CONFIG_PACKAGE_kmod-usb2-pci=y"
@@ -187,59 +198,112 @@ jobs:
                 echo "✅ $(echo $config | sed 's/CONFIG_PACKAGE_//;s/=y//')"
               else
                 echo "❌ $(echo $config | sed 's/CONFIG_PACKAGE_//;s/=y//') - 缺失！"
+                missing_count=$((missing_count + 1))
               fi
             done
           fi
           
+          # 显示统计信息
+          echo ""
+          echo "📊 配置统计:"
+          enabled_count=$(grep "^CONFIG_PACKAGE_.*=y$" "${{ env.BUILD_DIR }}/.config" | wc -l)
+          disabled_count=$(grep "^# CONFIG_PACKAGE_.* is not set$" "${{ env.BUILD_DIR }}/.config" | wc -l)
+          echo "✅ 已启用插件: $enabled_count 个"
+          echo "❌ 已禁用插件: $disabled_count 个"
+          echo "⚠️  缺失关键配置: $missing_count 个"
+          
+          if [ $missing_count -gt 0 ]; then
+            echo ""
+            echo "🚨 警告: 发现 $missing_count 个关键配置缺失！"
+            echo "将在 make defconfig 后尝试修复..."
+          fi
+          
           # 备份配置文件到工作区
           cp "${{ env.BUILD_DIR }}/.config" "${{ github.workspace }}/.config.backup"
-          echo "✅ 配置文件已备份到工作区"
+          echo "✅ 配置文件已备份到工作区: ${{ github.workspace }}/.config.backup"
+          
+          # 同时保存一份到仓库目录
+          mkdir -p firmware-config/config-backup
+          cp "${{ env.BUILD_DIR }}/.config" "firmware-config/config-backup/config_${{ github.event.inputs.device_name }}_${{ env.SELECTED_BRANCH }}_${{ github.event.inputs.config_mode }}.config"
+          echo "✅ 配置文件已备份到仓库目录"
         else
           echo "❌ .config 文件不存在"
           find ${{ env.BUILD_DIR }} -name ".config" -o -name "config" 2>/dev/null || echo "未找到任何配置文件"
+          exit 1
         fi
 
     - name: 修复网络环境
       run: |
+        echo "=== 修复网络环境 ==="
         firmware-config/scripts/build_firmware_main.sh fix_network
 
     - name: 下载依赖包
       run: |
+        echo "=== 下载依赖包 ==="
         firmware-config/scripts/build_firmware_main.sh download_dependencies
 
     - name: 加载工具链
       run: |
+        echo "=== 加载工具链 ==="
         firmware-config/scripts/build_firmware_main.sh load_toolchain
 
     - name: 集成自定义文件
       run: |
+        echo "=== 集成自定义文件 ==="
         firmware-config/scripts/build_firmware_main.sh integrate_custom_files
 
     - name: 前置错误检查
       run: |
+        echo "=== 前置错误检查 ==="
         firmware-config/scripts/build_firmware_main.sh pre_build_error_check
+
+    - name: 编译固件前的空间检查
+      run: |
+        echo "=== 编译固件前的空间检查 ==="
+        df -h
+        AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
+        AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+        echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+        
+        # 检查编译所需空间
+        if [ $AVAILABLE_GB -lt 10 ]; then
+          echo "❌ 错误: 编译前空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
+          exit 1
+        elif [ $AVAILABLE_GB -lt 20 ]; then
+          echo "⚠️  警告: 编译前空间较低 (建议至少20G，当前${AVAILABLE_GB}G)"
+        else
+          echo "✅ 编译前空间充足"
+        fi
 
     - name: 编译固件
       run: |
+        echo "=== 编译固件 ==="
+        echo "启用缓存: ${{ github.event.inputs.enable_cache }}"
         firmware-config/scripts/build_firmware_main.sh build_firmware "${{ github.event.inputs.enable_cache }}"
 
-    - name: 保存工具链
+    - name: 保存工具链到仓库目录
       if: success() && github.event.inputs.enable_cache == 'true'
       run: |
+        echo "=== 保存工具链到仓库目录 ==="
+        echo "注意：工具链将保存到仓库的 firmware-config/Toolchain/ 目录中"
+        echo "这样可以永久保存工具链，下次构建时可以直接使用"
         firmware-config/scripts/build_firmware_main.sh save_toolchain
 
     - name: 错误分析
       if: failure()
       run: |
+        echo "=== 错误分析 ==="
         firmware-config/scripts/error_analysis.sh
 
     - name: 编译后空间检查
       run: |
+        echo "=== 编译后空间检查 ==="
         firmware-config/scripts/build_firmware_main.sh post_build_space_check
 
     - name: 固件文件检查
       if: success()
       run: |
+        echo "=== 固件文件检查 ==="
         firmware-config/scripts/build_firmware_main.sh check_firmware_files
 
     - name: 上传固件
@@ -264,17 +328,8 @@ jobs:
       with:
         name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
         path: |
-          ${{ env.BUILD_DIR }}/.config
           ${{ github.workspace }}/.config.backup
         retention-days: 7
-
-    - name: 上传工具链（可选）
-      if: success() && github.event.inputs.enable_cache == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: toolchain-${{ env.SELECTED_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}
-        path: firmware-config/Toolchain/
-        retention-days: 30
 
     - name: 清理目录（保留配置文件）
       if: always()
@@ -283,24 +338,63 @@ jobs:
         if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
           echo "备份配置文件到工作区..."
           cp "${{ env.BUILD_DIR }}/.config" "${{ github.workspace }}/last_config.config"
-          echo "备份完成"
+          echo "备份完成: ${{ github.workspace }}/last_config.config"
         fi
         firmware-config/scripts/build_firmware_main.sh cleanup
 
-    - name: 输出USB配置状态
+    - name: 输出最终配置状态
       if: always()
       run: |
-        echo "=== USB配置状态总结 ==="
+        echo "=== 最终配置状态总结 ==="
+        
+        # 检查备份的配置文件
         if [ -f "${{ github.workspace }}/.config.backup" ]; then
-          echo "从备份配置检查USB状态:"
-          echo "=== 所有启用的USB驱动 ==="
-          grep "CONFIG_PACKAGE_kmod-usb" "${{ github.workspace }}/.config.backup" | grep "=y" | head -20
+          echo "从备份配置检查最终状态:"
           
           echo ""
-          echo "=== USB 3.0相关驱动 ==="
-          grep -E "CONFIG_PACKAGE_kmod-usb(3|xhci|dwc3)" "${{ github.workspace }}/.config.backup" | grep "=y"
+          echo "📊 配置统计:"
+          enabled_count=$(grep "^CONFIG_PACKAGE_.*=y$" "${{ github.workspace }}/.config.backup" | wc -l)
+          disabled_count=$(grep "^# CONFIG_PACKAGE_.* is not set$" "${{ github.workspace }}/.config.backup" | wc -l)
+          echo "✅ 已启用插件总数: $enabled_count"
+          echo "❌ 已禁用插件总数: $disabled_count"
           
           echo ""
-          echo "=== 存储相关驱动 ==="
-          grep -E "CONFIG_PACKAGE_kmod-(scsi|fs)" "${{ github.workspace }}/.config.backup" | grep "=y" | head -10
+          echo "🔧 关键USB配置状态:"
+          critical_configs=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-xhci-hcd" "kmod-usb-storage" "kmod-scsi-core")
+          for config in "${critical_configs[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${config}=y" "${{ github.workspace }}/.config.backup"; then
+              echo "✅ $config"
+            else
+              echo "❌ $config - 缺失！"
+            fi
+          done
+          
+          echo ""
+          echo "🛠️ 工具链状态:"
+          if [ -d "firmware-config/Toolchain" ]; then
+            echo "✅ 工具链已保存到仓库目录: firmware-config/Toolchain/"
+            echo "   下次构建将自动使用已保存的工具链，加速编译过程"
+            
+            # 显示工具链大小
+            toolchain_size=$(du -sh firmware-config/Toolchain 2>/dev/null | cut -f1 || echo "未知")
+            echo "   工具链大小: $toolchain_size"
+          else
+            echo "⚠️  工具链未保存到仓库目录"
+          fi
+          
+          echo ""
+          echo "📁 配置文件备份:"
+          if [ -f "${{ github.workspace }}/last_config.config" ]; then
+            echo "✅ 最后配置文件已备份: last_config.config"
+          fi
+          
+          if [ -d "firmware-config/config-backup" ]; then
+            backup_count=$(find firmware-config/config-backup -name "*.config" 2>/dev/null | wc -l)
+            echo "✅ 仓库配置文件备份: $backup_count 个"
+          fi
+        else
+          echo "⚠️  未找到备份的配置文件"
         fi
+        
+        echo ""
+        echo "=== 构建流程完成 ==="
