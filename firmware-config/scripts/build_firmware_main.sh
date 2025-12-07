@@ -64,10 +64,19 @@ save_toolchain() {
     local toolchain_path=$(get_toolchain_path)
     local common_path=$(get_common_toolchain_path)
     
+    log "🔍 调试信息:"
+    log "  目标工具链路径: $toolchain_path"
+    log "  当前工作目录: $(pwd)"
+    
+    # 确保目标目录存在且有写权限
+    mkdir -p "$toolchain_path"
+    mkdir -p "$common_path"
+    
+    # 检查是否有工具链可以保存
     local staging_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
     
     if [ -z "$staging_toolchain" ]; then
-        log "⚠️  未找到工具链目录，跳过保存"
+        log "⚠️  未找到工具链，跳过保存"
         return 0
     fi
     
@@ -164,13 +173,36 @@ load_toolchain() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 加载工具链 ==="
+    log "=== 加载工具链 (调试信息) ==="
+    log "当前工作目录: $(pwd)"
+    log "环境变量:"
+    log "  SELECTED_BRANCH: $SELECTED_BRANCH"
+    log "  TARGET: $TARGET"
+    log "  SUBTARGET: $SUBTARGET"
+    log "  DEVICE: $DEVICE"
+    log "  TOOLCHAIN_DIR: $TOOLCHAIN_DIR"
     
     # 初始化工具链目录
     init_toolchain_dir
     
     local toolchain_path=$(get_toolchain_path)
     local common_path=$(get_common_toolchain_path)
+    
+    log "检查仓库工具链目录: $toolchain_path"
+    if [ -d "$toolchain_path" ]; then
+        log "目录存在，内容如下："
+        ls -la "$toolchain_path" 2>/dev/null || log "无法列出目录内容"
+    else
+        log "目录不存在"
+    fi
+    
+    log "检查通用工具链目录: $common_path"
+    if [ -d "$common_path" ]; then
+        log "目录存在，内容如下："
+        ls -la "$common_path" 2>/dev/null || log "无法列出目录内容"
+    else
+        log "目录不存在"
+    fi
     
     local found_repo_toolchain=0
     local found_build_toolchain=0
@@ -1150,6 +1182,55 @@ verify_usb_config() {
     fi
 }
 
+check_usb_drivers_integrity() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 🚨 USB驱动完整性检查 ==="
+    
+    local missing_drivers=()
+    local required_drivers=(
+        "kmod-usb-core"
+        "kmod-usb2"
+        "kmod-usb3"
+        "kmod-usb-xhci-hcd"
+        "kmod-usb-storage"
+        "kmod-scsi-core"
+    )
+    
+    # 根据平台添加专用驱动
+    if [ "$TARGET" = "ipq40xx" ]; then
+        required_drivers+=("kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3")
+    fi
+    
+    # 检查所有必需驱动
+    for driver in "${required_drivers[@]}"; do
+        if ! grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            log "❌ 缺失驱动: $driver"
+            missing_drivers+=("$driver")
+        else
+            log "✅ 驱动存在: $driver"
+        fi
+    done
+    
+    # 如果有缺失驱动，尝试修复
+    if [ ${#missing_drivers[@]} -gt 0 ]; then
+        log "🚨 发现 ${#missing_drivers[@]} 个缺失的USB驱动"
+        log "正在尝试修复..."
+        
+        for driver in "${missing_drivers[@]}"; do
+            echo "CONFIG_PACKAGE_${driver}=y" >> .config
+            log "✅ 已添加: $driver"
+        done
+        
+        # 重新运行defconfig
+        make defconfig
+        log "✅ USB驱动修复完成"
+    else
+        log "🎉 所有必需USB驱动都已启用"
+    fi
+}
+
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -1290,6 +1371,23 @@ apply_config() {
     
     log "🔄 运行 make defconfig..."
     make defconfig || handle_error "应用配置失败"
+    
+    log "🚨 强制启用关键USB驱动（防止defconfig删除）"
+    # 确保 USB 3.0 关键驱动被启用
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+    
+    # 根据平台启用专用驱动
+    if [ "$TARGET" = "ipq40xx" ]; then
+        echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
+    fi
+    
+    # 其他关键USB驱动
+    echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
+    
+    # 运行defconfig后，再次检查并修复USB驱动
+    check_usb_drivers_integrity
     
     # 最终检查
     echo ""
@@ -1618,6 +1716,9 @@ main() {
         "verify_usb_config")
             verify_usb_config
             ;;
+        "check_usb_drivers_integrity")
+            check_usb_drivers_integrity
+            ;;
         "apply_config")
             apply_config
             ;;
@@ -1659,7 +1760,7 @@ main() {
             echo "可用命令:"
             echo "  setup_environment, create_build_dir, initialize_build_env"
             echo "  add_turboacc_support, configure_feeds, install_turboacc_packages"
-            echo "  pre_build_space_check, generate_config, verify_usb_config, apply_config"
+            echo "  pre_build_space_check, generate_config, verify_usb_config, check_usb_drivers_integrity, apply_config"
             echo "  fix_network, download_dependencies, load_toolchain, integrate_custom_files"
             echo "  pre_build_error_check, build_firmware, save_toolchain, post_build_space_check"
             echo "  check_firmware_files, cleanup, init_toolchain_dir"
