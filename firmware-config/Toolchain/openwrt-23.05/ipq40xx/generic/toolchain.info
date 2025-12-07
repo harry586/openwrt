@@ -1,0 +1,5 @@
+# Toolchain saved on Sun Dec  7 13:55:50 UTC 2025
+Version: openwrt-23.05
+Target: ipq40xx
+Subtarget: generic
+Device: asus_rt-ac42u
