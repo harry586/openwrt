@@ -1,0 +1,6 @@
+# Toolchain saved on Sun Dec  7 20:05:23 UTC 2025
+Version: openwrt-21.02
+Target: ipq40xx
+Subtarget: generic
+Device: asus_rt-ac42u
+Saved with Git LFS: true
