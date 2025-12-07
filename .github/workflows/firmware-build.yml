@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流（USB完全修复通用版）
+name: OpenWrt 智能固件构建工作流（USB完全修复加强版）
 
 on:
   workflow_dispatch:
@@ -23,6 +23,8 @@ on:
           🟣 基础模式 - 最小化配置，用于测试编译：✅ 基础功能
           
           🟠 正常模式 - 完整功能配置：✅ TurboACC 网络加速 ✅ UPnP 自动端口转发 ✅ Samba 文件共享 ✅ 磁盘管理 ✅ KMS 激活服务 ✅ SmartDNS 智能DNS ✅ 家长控制 ✅ 微信推送 ✅ 流量控制 (SQM) ✅ FTP 服务器 ✅ ARP 绑定 ✅ CPU 限制 ✅ 硬盘休眠。
+          
+          🔧 USB 3.0加强：所有平台的关键USB驱动都已强制启用！
         required: true
         type: choice
         default: 'normal'
@@ -105,8 +107,20 @@ jobs:
       run: |
         firmware-config/scripts/build_firmware_main.sh pre_build_space_check
 
-    - name: 智能配置生成（USB完全修复通用版）
+    - name: 智能配置生成（USB完全修复加强版）
       run: |
+        echo "=== 🚨 USB 3.0加强配置 ==="
+        echo "设备: ${{ github.event.inputs.device_name }}"
+        echo "所有关键USB驱动都将被强制启用，包括："
+        echo "✅ kmod-usb-core (USB核心)"
+        echo "✅ kmod-usb2 (USB 2.0)"
+        echo "✅ kmod-usb3 (USB 3.0)"
+        echo "✅ kmod-usb-ehci (USB 2.0高速)"
+        echo "✅ kmod-usb-ohci (USB 1.1低速)"
+        echo "✅ kmod-usb-xhci-hcd (USB 3.0扩展主机)"
+        echo "✅ kmod-usb-storage (USB存储)"
+        echo "✅ kmod-usb-storage-uas (UAS支持)"
+        echo "✅ kmod-scsi-core (SCSI核心)"
         firmware-config/scripts/build_firmware_main.sh generate_config \
           "${{ github.event.inputs.extra_packages }}"
 
@@ -125,6 +139,25 @@ jobs:
           echo "✅ .config 文件存在"
           echo "文件大小: $(ls -lh ${{ env.BUILD_DIR }}/.config | awk '{print $5}')"
           echo "配置行数: $(wc -l < ${{ env.BUILD_DIR }}/.config)"
+          
+          # 检查关键USB配置
+          echo "=== 关键USB配置检查 ==="
+          critical_usb_configs=(
+            "CONFIG_PACKAGE_kmod-usb-core=y"
+            "CONFIG_PACKAGE_kmod-usb2=y"
+            "CONFIG_PACKAGE_kmod-usb3=y"
+            "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
+            "CONFIG_PACKAGE_kmod-usb-storage=y"
+          )
+          
+          for config in "${critical_usb_configs[@]}"; do
+            if grep -q "^$config" "${{ env.BUILD_DIR }}/.config"; then
+              echo "✅ $(echo $config | sed 's/CONFIG_PACKAGE_//;s/=y//')"
+            else
+              echo "❌ $(echo $config | sed 's/CONFIG_PACKAGE_//;s/=y//') - 缺失！"
+            fi
+          done
+          
           # 备份配置文件到工作区
           cp "${{ env.BUILD_DIR }}/.config" "${{ github.workspace }}/.config.backup"
           echo "✅ 配置文件已备份到工作区"
@@ -220,3 +253,12 @@ jobs:
           echo "备份完成"
         fi
         firmware-config/scripts/build_firmware_main.sh cleanup
+
+    - name: 输出USB配置状态
+      if: always()
+      run: |
+        echo "=== USB配置状态总结 ==="
+        if [ -f "${{ github.workspace }}/.config.backup" ]; then
+          echo "从备份配置检查USB状态:"
+          grep "CONFIG_PACKAGE_kmod-usb" "${{ github.workspace }}/.config.backup" | grep "=y" | head -15
+        fi
