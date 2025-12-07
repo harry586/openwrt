@@ -118,16 +118,16 @@ jobs:
       run: |
         firmware-config/scripts/build_firmware_main.sh apply_config
 
-    - name: 检查配置文件
+    - name: 检查并备份配置文件
       run: |
-        echo "=== 检查配置文件状态 ==="
+        echo "=== 检查并备份配置文件 ==="
         if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
           echo "✅ .config 文件存在"
           echo "文件大小: $(ls -lh ${{ env.BUILD_DIR }}/.config | awk '{print $5}')"
           echo "配置行数: $(wc -l < ${{ env.BUILD_DIR }}/.config)"
-          echo "=== 配置文件内容摘要 ==="
-          echo "前20行配置:"
-          head -20 "${{ env.BUILD_DIR }}/.config"
+          # 备份配置文件到工作区
+          cp "${{ env.BUILD_DIR }}/.config" "${{ github.workspace }}/.config.backup"
+          echo "✅ 配置文件已备份到工作区"
         else
           echo "❌ .config 文件不存在"
           find ${{ env.BUILD_DIR }} -name ".config" -o -name "config" 2>/dev/null || echo "未找到任何配置文件"
@@ -197,16 +197,26 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
-        path: ${{ env.BUILD_DIR }}/.config
+        path: |
+          ${{ env.BUILD_DIR }}/.config
+          ${{ github.workspace }}/.config.backup
         retention-days: 7
+
+    - name: 上传工具链（可选）
+      if: success() && github.event.inputs.enable_cache == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: toolchain-${{ env.SELECTED_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}
+        path: firmware-config/Toolchain/
+        retention-days: 30
 
     - name: 清理目录（保留配置文件）
       if: always()
       run: |
         echo "=== 清理目录但保留配置文件 ==="
         if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
-          echo "备份配置文件..."
-          cp "${{ env.BUILD_DIR }}/.config" "/tmp/last_config.config"
+          echo "备份配置文件到工作区..."
+          cp "${{ env.BUILD_DIR }}/.config" "${{ github.workspace }}/last_config.config"
           echo "备份完成"
         fi
         firmware-config/scripts/build_firmware_main.sh cleanup
