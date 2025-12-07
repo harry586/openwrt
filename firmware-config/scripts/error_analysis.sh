@@ -406,6 +406,61 @@ echo "   - 确保使用正确的C库（现代OpenWrt用musl）" >> error_analysi
 echo "   - 重新下载C库依赖" >> error_analysis.log
 echo "" >> error_analysis.log
 
+echo "❌ USB相关错误" >> error_analysis.log
+echo "💡 可能原因:" >> error_analysis.log
+echo "   - USB驱动配置不完整" >> error_analysis.log
+echo "   - 缺少平台专用USB驱动" >> error_analysis.log
+echo "   - USB 3.0驱动未启用" >> error_analysis.log
+echo "🛠️ 解决方案:" >> error_analysis.log
+echo "   - 确保启用所有核心USB驱动: kmod-usb-core, kmod-usb2, kmod-usb3" >> error_analysis.log
+echo "   - 确保启用USB 3.0驱动: kmod-usb-xhci-hcd, kmod-usb-dwc3" >> error_analysis.log
+echo "   - 根据平台启用专用驱动: IPQ40xx->高通驱动, MT76xx->雷凌驱动" >> error_analysis.log
+echo "   - 确保启用存储支持: kmod-usb-storage, kmod-scsi-core" >> error_analysis.log
+echo "" >> error_analysis.log
+
+echo "ℹ️ 管道错误" >> error_analysis.log
+echo "💡 说明:" >> error_analysis.log
+echo "   - 这是并行编译的正常现象，通常不影响最终结果" >> error_analysis.log
+echo "   - 由于编译进程间通信导致，可以忽略" >> error_analysis.log
+echo "" >> error_analysis.log
+
+echo "=== 快速修复建议 ===" >> error_analysis.log
+echo "1. 🔄 重新运行工作流" >> error_analysis.log
+echo "2. 🧹 清理构建目录重新开始" >> error_analysis.log
+echo "3. 📦 更新所有 feeds: ./scripts/feeds update -a && ./scripts/feeds install -a" >> error_analysis.log
+echo "4. ⚙️ 检查配置冲突: make defconfig" >> error_analysis.log
+echo "5. 🐛 减少并行任务: make -j2 V=s" >> error_analysis.log
+echo "6. 🌐 检查网络连接和代理设置" >> error_analysis.log
+echo "7. 🔧 检查工具链: 确保 staging_dir/toolchain-* 目录存在且完整" >> error_analysis.log
+echo "8. 🔌 检查USB插件: 确保所有关键USB驱动已启用（当前配置已强制启用）" >> error_analysis.log
+echo "9. 🖥️ 检查平台专用驱动: 根据您的设备平台（高通/雷凌）启用相应驱动" >> error_analysis.log
+echo "10. 💾 检查文件系统支持: 确保NTFS3, ext4, vfat等文件系统驱动已启用" >> error_analysis.log
+echo "" >> error_analysis.log
+
+echo "=== 针对USB问题的特殊修复方案 ===" >> error_analysis.log
+echo "如果USB功能仍然有问题，请尝试以下步骤:" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "1. 🔍 检查USB配置状态:" >> error_analysis.log
+echo "   grep 'CONFIG_PACKAGE_kmod-usb' .config | grep '=y'" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "2. 🔧 手动添加缺失的USB驱动（如果发现缺失）:" >> error_analysis.log
+echo "   对于高通IPQ40xx平台:" >> error_analysis.log
+echo "   echo 'CONFIG_PACKAGE_kmod-usb-dwc3=y' >> .config" >> error_analysis.log
+echo "   echo 'CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y' >> .config" >> error_analysis.log
+echo "   echo 'CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y' >> .config" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "   对于雷凌MT76xx平台:" >> error_analysis.log
+echo "   echo 'CONFIG_PACKAGE_kmod-usb-ohci-pci=y' >> .config" >> error_analysis.log
+echo "   echo 'CONFIG_PACKAGE_kmod-usb2-pci=y' >> .config" >> error_analysis.log
+echo "   echo 'CONFIG_PACKAGE_kmod-usb-xhci-mtk=y' >> .config" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "3. 🛠️ 重新应用配置:" >> error_analysis.log
+echo "   make defconfig" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "4. 🔄 重新编译:" >> error_analysis.log
+echo "   make -j$(nproc) V=s" >> error_analysis.log
+echo "" >> error_analysis.log
+
 echo "错误分析完成 - 查看 error_analysis.log 获取详细信息" >> error_analysis.log
 
 cat error_analysis.log
