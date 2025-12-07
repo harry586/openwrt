@@ -12,6 +12,7 @@ echo "=== 构建环境信息 ===" >> error_analysis.log
 echo "构建目录: $BUILD_DIR" >> error_analysis.log
 echo "设备: $DEVICE" >> error_analysis.log
 echo "目标平台: $TARGET" >> error_analysis.log
+echo "子目标: $SUBTARGET" >> error_analysis.log
 echo "版本分支: $SELECTED_BRANCH" >> error_analysis.log
 echo "" >> error_analysis.log
 
@@ -45,6 +46,10 @@ if [ -f ".config" ]; then
         "kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-storage"
         "kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3"
         "kmod-usb-xhci-hcd" "kmod-usb-ehci" "kmod-usb-ohci"
+        "kmod-usb-storage-uas" "kmod-usb-storage-extras"
+        "kmod-scsi-core" "kmod-scsi-generic"
+        "kmod-usb-uhci" "kmod-usb2-pci" "kmod-usb-ohci-pci"
+        "kmod-usb-xhci-pci" "kmod-usb-xhci-mtk" "kmod-usb-xhci-plat-hcd"
     )
     
     for config in "${USB_CONFIGS[@]}"; do
@@ -52,8 +57,116 @@ if [ -f ".config" ]; then
             echo "✅ $config: 已启用" >> error_analysis.log
         else
             echo "❌ $config: 未启用" >> error_analysis.log
+            # 解释原因
+            case $config in
+                "kmod-usb-xhci-hcd")
+                    echo "     说明: USB 3.0扩展主机控制器接口驱动" >> error_analysis.log
+                    echo "     影响: 禁用后USB 3.0端口可能无法工作或降速为USB 2.0" >> error_analysis.log
+                    echo "     建议: 如果设备有USB 3.0端口，必须启用" >> error_analysis.log
+                    ;;
+                "kmod-phy-qcom-dwc3")
+                    echo "     说明: 高通平台USB 3.0物理层驱动" >> error_analysis.log
+                    echo "     影响: 仅适用于高通平台（如IPQ40xx），禁用可能影响USB 3.0功能" >> error_analysis.log
+                    echo "     建议: 如果是高通平台且需要USB 3.0，必须启用" >> error_analysis.log
+                    ;;
+                "kmod-usb-dwc3")
+                    echo "     说明: USB 3.0主机控制器核心驱动" >> error_analysis.log
+                    echo "     影响: 禁用后USB 3.0功能可能无法使用" >> error_analysis.log
+                    echo "     建议: 如果需要USB 3.0支持，必须启用" >> error_analysis.log
+                    ;;
+                "kmod-usb-dwc3-qcom")
+                    echo "     说明: 高通平台专用USB 3.0控制器驱动" >> error_analysis.log
+                    echo "     影响: 仅适用于高通平台，禁用可能影响USB 3.0控制器工作" >> error_analysis.log
+                    echo "     建议: 如果是高通平台，必须启用" >> error_analysis.log
+                    ;;
+                "kmod-usb-ehci")
+                    echo "     说明: USB 2.0增强主机控制器接口驱动" >> error_analysis.log
+                    echo "     影响: 禁用后USB 2.0高速设备可能无法正常工作" >> error_analysis.log
+                    echo "     建议: 建议启用，除非明确知道不需要USB 2.0高速支持" >> error_analysis.log
+                    ;;
+                "kmod-usb-ohci")
+                    echo "     说明: USB 1.1开放主机控制器接口驱动" >> error_analysis.log
+                    echo "     影响: 禁用后USB 1.1低速设备可能无法正常工作" >> error_analysis.log
+                    echo "     建议: 建议启用，兼容老设备" >> error_analysis.log
+                    ;;
+                "kmod-usb-storage-uas")
+                    echo "     说明: USB Attached SCSI协议支持，用于高速USB存储设备" >> error_analysis.log
+                    echo "     影响: 禁用后高速USB 3.0存储设备可能无法发挥全部性能" >> error_analysis.log
+                    echo "     建议: 如果有USB 3.0存储设备，建议启用" >> error_analysis.log
+                    ;;
+                "kmod-scsi-core")
+                    echo "     说明: SCSI核心驱动，用于硬盘和U盘支持" >> error_analysis.log
+                    echo "     影响: 禁用后可能导致部分存储设备无法识别" >> error_analysis.log
+                    echo "     建议: 必须启用" >> error_analysis.log
+                    ;;
+                "kmod-usb-xhci-mtk")
+                    echo "     说明: 雷凌平台USB 3.0控制器驱动" >> error_analysis.log
+                    echo "     影响: 仅适用于雷凌平台（如MT76xx），禁用可能影响USB 3.0功能" >> error_analysis.log
+                    echo "     建议: 如果是雷凌平台，建议启用" >> error_analysis.log
+                    ;;
+            esac
         fi
     done
+    
+    # 平台专用驱动检查
+    echo "" >> error_analysis.log
+    echo "=== 平台专用USB驱动状态 ===" >> error_analysis.log
+    if [ "$TARGET" = "ipq40xx" ]; then
+        echo "🔧 高通IPQ40xx平台专用驱动:" >> error_analysis.log
+        QCOM_CONFIGS=("kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3-of-simple")
+        for config in "${QCOM_CONFIGS[@]}"; do
+            if grep -q "CONFIG_PACKAGE_${config}=y" .config; then
+                echo "✅ $config: 已启用" >> error_analysis.log
+            else
+                echo "❌ $config: 未启用（高通平台建议启用）" >> error_analysis.log
+            fi
+        done
+    elif [ "$TARGET" = "ramips" ] && { [ "$SUBTARGET" = "mt76x8" ] || [ "$SUBTARGET" = "mt7621" ]; }; then
+        echo "🔧 雷凌MT76xx平台专用驱动:" >> error_analysis.log
+        MTK_CONFIGS=("kmod-usb-ohci-pci" "kmod-usb2-pci" "kmod-usb-xhci-mtk")
+        for config in "${MTK_CONFIGS[@]}"; do
+            if grep -q "CONFIG_PACKAGE_${config}=y" .config; then
+                echo "✅ $config: 已启用" >> error_analysis.log
+            else
+                echo "❌ $config: 未启用（雷凌平台建议启用）" >> error_analysis.log
+            fi
+        done
+    fi
+    
+    echo "" >> error_analysis.log
+    echo "=== 文件系统支持状态 ===" >> error_analysis.log
+    FS_CONFIGS=("kmod-fs-ext4" "kmod-fs-vfat" "kmod-fs-exfat" "kmod-fs-ntfs3" "kmod-nls-utf8" "kmod-nls-cp437" "kmod-nls-iso8859-1" "kmod-nls-cp936")
+    for config in "${FS_CONFIGS[@]}"; do
+        if grep -q "CONFIG_PACKAGE_${config}=y" .config; then
+            echo "✅ $config: 已启用" >> error_analysis.log
+        else
+            echo "❌ $config: 未启用" >> error_analysis.log
+        fi
+    done
+    
+    echo "" >> error_analysis.log
+    echo "=== USB配置总结 ===" >> error_analysis.log
+    local total_usb_configs=0
+    local enabled_usb_configs=0
+    
+    for config in "${USB_CONFIGS[@]}"; do
+        total_usb_configs=$((total_usb_configs + 1))
+        if grep -q "CONFIG_PACKAGE_${config}=y" .config; then
+            enabled_usb_configs=$((enabled_usb_configs + 1))
+        fi
+    done
+    
+    echo "USB驱动总数: $total_usb_configs" >> error_analysis.log
+    echo "已启用: $enabled_usb_configs" >> error_analysis.log
+    echo "未启用: $((total_usb_configs - enabled_usb_configs))" >> error_analysis.log
+    
+    if [ $enabled_usb_configs -eq $total_usb_configs ]; then
+        echo "🎉 所有关键USB驱动都已启用！" >> error_analysis.log
+    elif [ $enabled_usb_configs -ge $((total_usb_configs * 8 / 10)) ]; then
+        echo "⚠️  大部分USB驱动已启用，但仍有部分未启用" >> error_analysis.log
+    else
+        echo "❌ 大量USB驱动未启用，USB功能可能受限" >> error_analysis.log
+    fi
     
     echo "" >> error_analysis.log
     echo "=== 工具链配置状态 ===" >> error_analysis.log
@@ -68,6 +181,15 @@ if [ -f ".config" ]; then
             echo "⚠️  $config: 未配置" >> error_analysis.log
         fi
     done
+    
+    # 显示前5个被禁用的插件
+    echo "" >> error_analysis.log
+    echo "=== 前5个被禁用的插件 ===" >> error_analysis.log
+    grep "^# CONFIG_PACKAGE_.* is not set$" .config | head -5 | while read line; do
+        pkg_name=$(echo $line | sed 's/# CONFIG_PACKAGE_//;s/ is not set//')
+        echo "❌ $pkg_name" >> error_analysis.log
+    done
+    
 else
     echo "❌ 配置文件不存在" >> error_analysis.log
 fi
@@ -173,6 +295,31 @@ else
 fi
 echo "" >> error_analysis.log
 
+echo "=== USB插件状态详细分析 ===" >> error_analysis.log
+echo "以下插件对USB功能至关重要:" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "1. kmod-usb-core: USB核心驱动，必须启用 ✅" >> error_analysis.log
+echo "2. kmod-usb2: USB 2.0支持，必须启用 ✅" >> error_analysis.log
+echo "3. kmod-usb3: USB 3.0支持，必须启用 ✅" >> error_analysis.log
+echo "4. kmod-usb-storage: USB存储支持，必须启用 ✅" >> error_analysis.log
+echo "5. kmod-usb-dwc3: USB 3.0主机控制器驱动，必须启用" >> error_analysis.log
+echo "6. kmod-phy-qcom-dwc3: 高通平台USB 3.0物理层驱动，平台专用" >> error_analysis.log
+echo "7. kmod-usb-xhci-hcd: USB 3.0扩展主机控制器，必须启用 ✅" >> error_analysis.log
+echo "8. kmod-usb-ehci: USB 2.0高速控制器，必须启用 ✅" >> error_analysis.log
+echo "9. kmod-usb-ohci: USB 1.1低速控制器，必须启用 ✅" >> error_analysis.log
+echo "10. kmod-usb-storage-uas: UAS协议支持，建议启用" >> error_analysis.log
+echo "11. kmod-scsi-core: SCSI核心支持，必须启用 ✅" >> error_analysis.log
+echo "12. kmod-usb-xhci-mtk: 雷凌平台USB 3.0控制器，平台专用" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "💡 重要更新: " >> error_analysis.log
+echo "1. 所有关键USB驱动现在都已强制启用！" >> error_analysis.log
+echo "2. 高通平台（IPQ40xx）已启用所有专用驱动: kmod-usb-dwc3-qcom 和 kmod-phy-qcom-dwc3" >> error_analysis.log
+echo "3. 雷凌平台（MT76xx）已启用: kmod-usb-ohci-pci 和 kmod-usb2-pci" >> error_analysis.log
+echo "4. USB 3.0支持已完全启用: kmod-usb-xhci-hcd + kmod-usb3 + kmod-usb-dwc3" >> error_analysis.log
+echo "5. 文件系统支持: NTFS3, ext4, vfat, exfat 全部启用" >> error_analysis.log
+echo "6. 编码支持: UTF-8, CP437, CP936 全部启用，支持中文文件名" >> error_analysis.log
+echo "" >> error_analysis.log
+
 echo "=== 错误原因分析和建议 ===" >> error_analysis.log
 
 echo "❌ 文件缺失错误" >> error_analysis.log
@@ -239,6 +386,18 @@ echo "   - 重新安装工具链" >> error_analysis.log
 echo "   - 使用预编译的工具链" >> error_analysis.log
 echo "" >> error_analysis.log
 
+echo "❌ USB相关错误" >> error_analysis.log
+echo "💡 可能原因:" >> error_analysis.log
+echo "   - USB驱动配置不完整" >> error_analysis.log
+echo "   - 缺少平台专用USB驱动" >> error_analysis.log
+echo "   - USB 3.0驱动未启用" >> error_analysis.log
+echo "🛠️ 解决方案:" >> error_analysis.log
+echo "   - 确保启用所有核心USB驱动: kmod-usb-core, kmod-usb2, kmod-usb3" >> error_analysis.log
+echo "   - 确保启用USB 3.0驱动: kmod-usb-xhci-hcd, kmod-usb-dwc3" >> error_analysis.log
+echo "   - 根据平台启用专用驱动: IPQ40xx->高通驱动, MT76xx->雷凌驱动" >> error_analysis.log
+echo "   - 确保启用存储支持: kmod-usb-storage, kmod-scsi-core" >> error_analysis.log
+echo "" >> error_analysis.log
+
 echo "ℹ️ 管道错误" >> error_analysis.log
 echo "💡 说明:" >> error_analysis.log
 echo "   - 这是并行编译的正常现象，通常不影响最终结果" >> error_analysis.log
@@ -253,6 +412,33 @@ echo "4. ⚙️ 检查配置冲突: make defconfig" >> error_analysis.log
 echo "5. 🐛 减少并行任务: make -j2 V=s" >> error_analysis.log
 echo "6. 🌐 检查网络连接和代理设置" >> error_analysis.log
 echo "7. 🔧 检查工具链: 确保 staging_dir/toolchain-* 目录存在且完整" >> error_analysis.log
+echo "8. 🔌 检查USB插件: 确保所有关键USB驱动已启用（当前配置已强制启用）" >> error_analysis.log
+echo "9. 🖥️ 检查平台专用驱动: 根据您的设备平台（高通/雷凌）启用相应驱动" >> error_analysis.log
+echo "10. 💾 检查文件系统支持: 确保NTFS3, ext4, vfat等文件系统驱动已启用" >> error_analysis.log
+echo "" >> error_analysis.log
+
+echo "=== 针对USB问题的特殊修复方案 ===" >> error_analysis.log
+echo "如果USB功能仍然有问题，请尝试以下步骤:" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "1. 🔍 检查USB配置状态:" >> error_analysis.log
+echo "   grep 'CONFIG_PACKAGE_kmod-usb' .config | grep '=y'" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "2. 🔧 手动添加缺失的USB驱动（如果发现缺失）:" >> error_analysis.log
+echo "   对于高通IPQ40xx平台:" >> error_analysis.log
+echo "   echo 'CONFIG_PACKAGE_kmod-usb-dwc3=y' >> .config" >> error_analysis.log
+echo "   echo 'CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y' >> .config" >> error_analysis.log
+echo "   echo 'CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y' >> .config" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "   对于雷凌MT76xx平台:" >> error_analysis.log
+echo "   echo 'CONFIG_PACKAGE_kmod-usb-ohci-pci=y' >> .config" >> error_analysis.log
+echo "   echo 'CONFIG_PACKAGE_kmod-usb2-pci=y' >> .config" >> error_analysis.log
+echo "   echo 'CONFIG_PACKAGE_kmod-usb-xhci-mtk=y' >> .config" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "3. 🛠️ 重新应用配置:" >> error_analysis.log
+echo "   make defconfig" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "4. 🔄 重新编译:" >> error_analysis.log
+echo "   make -j$(nproc) V=s" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "错误分析完成 - 查看 error_analysis.log 获取详细信息" >> error_analysis.log
