@@ -15,6 +15,125 @@ handle_error() {
     exit 1
 }
 
+# 新增：验证工具链完整性函数
+verify_toolchain_completeness() {
+    local toolchain_dir=$1
+    
+    log "🔧 验证工具链完整性: $toolchain_dir"
+    
+    if [ ! -d "$toolchain_dir" ]; then
+        log "❌ 工具链目录不存在: $toolchain_dir"
+        return 1
+    fi
+    
+    # 检查编译器是否存在
+    local compilers=($(find "$toolchain_dir" -name "*gcc*" -o -name "*g++*" 2>/dev/null))
+    if [ ${#compilers[@]} -eq 0 ]; then
+        log "❌ 未找到编译器，工具链不完整"
+        return 1
+    fi
+    
+    # 检查编译器是否可执行
+    for compiler in "${compilers[@]}"; do
+        if [ ! -x "$compiler" ]; then
+            log "❌ 编译器不可执行: $compiler"
+            chmod +x "$compiler" || return 1
+        fi
+    done
+    
+    # 根据目标架构检查特定编译器
+    local target_arch=""
+    case "$TARGET" in
+        "ipq40xx")
+            target_arch="arm-openwrt-linux-muslgnueabi"
+            ;;
+        "ramips")
+            if [ "$SUBTARGET" = "mt76x8" ] || [ "$SUBTARGET" = "mt7621" ]; then
+                target_arch="mipsel-openwrt-linux-musl"
+            fi
+            ;;
+    esac
+    
+    if [ -n "$target_arch" ]; then
+        log "🔍 检查目标架构编译器: $target_arch"
+        local target_compiler="$toolchain_dir/bin/${target_arch}-gcc"
+        if [ -f "$target_compiler" ]; then
+            log "✅ 找到目标架构编译器: $target_compiler"
+            # 测试编译器是否能运行
+            if "$target_compiler" --version >/dev/null 2>&1; then
+                log "✅ 编译器功能正常"
+            else
+                log "❌ 编译器无法运行"
+                return 1
+            fi
+        else
+            log "⚠️  未找到目标架构编译器: $target_arch"
+            # 尝试查找其他编译器
+            find "$toolchain_dir/bin" -name "*gcc*" 2>/dev/null | head -5
+        fi
+    fi
+    
+    log "✅ 工具链验证通过"
+    return 0
+}
+
+# 新增：设置工具链环境函数
+setup_toolchain_env() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 设置工具链环境 ==="
+    
+    # 查找工具链目录
+    local toolchain_dir=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
+    
+    if [ -d "$toolchain_dir" ]; then
+        log "✅ 找到工具链目录: $toolchain_dir"
+        
+        # 设置工具链环境变量
+        export STAGING_DIR="$toolchain_dir"
+        
+        # 查找编译器路径
+        local bin_dir="$toolchain_dir/bin"
+        if [ -d "$bin_dir" ]; then
+            export PATH="$bin_dir:$PATH"
+            log "✅ 添加工具链到PATH: $bin_dir"
+            
+            # 检查编译器是否存在
+            local target_compiler=""
+            case "$TARGET" in
+                "ipq40xx")
+                    target_compiler="arm-openwrt-linux-muslgnueabi-gcc"
+                    ;;
+                "ramips")
+                    if [ "$SUBTARGET" = "mt76x8" ]; then
+                        target_compiler="mipsel-openwrt-linux-musl-gcc"
+                    elif [ "$SUBTARGET" = "mt7621" ]; then
+                        target_compiler="mipsel-openwrt-linux-musl-gcc"
+                    fi
+                    ;;
+            esac
+            
+            if [ -n "$target_compiler" ] && [ -f "$bin_dir/$target_compiler" ]; then
+                log "✅ 找到目标编译器: $bin_dir/$target_compiler"
+                # 测试编译器
+                if "$bin_dir/$target_compiler" --version >/dev/null 2>&1; then
+                    log "✅ 编译器工作正常"
+                else
+                    log "❌ 编译器无法运行，检查权限"
+                    chmod +x "$bin_dir/$target_compiler"
+                fi
+            else
+                log "⚠️  未找到目标编译器: $target_compiler"
+                # 显示可用的编译器
+                find "$bin_dir" -name "*gcc*" 2>/dev/null | head -5
+            fi
+        fi
+    else
+        log "⚠️  未找到工具链目录，将自动下载"
+    fi
+}
+
 save_env() {
     mkdir -p $BUILD_DIR
     echo "#!/bin/bash" > $ENV_FILE
@@ -280,6 +399,8 @@ load_toolchain() {
         
         if [ -n "$existing_toolchain" ]; then
             log "已存在工具链: $existing_toolchain，跳过加载"
+            # 验证现有工具链
+            verify_toolchain_completeness "$existing_toolchain" || log "⚠️ 现有工具链验证失败"
         else
             # 查找工具链目录
             local first_dir=$(find "$toolchain_path" -maxdepth 1 -type d ! -path "$toolchain_path" | head -1)
@@ -287,13 +408,27 @@ load_toolchain() {
                 local toolchain_name=$(basename "$first_dir")
                 log "复制工具链: $toolchain_name 到 staging_dir/"
                 cp -r "$first_dir" "staging_dir/"
-                log "✅ 版本特定工具链加载完成: staging_dir/$toolchain_name"
+                
+                # 验证工具链完整性
+                if verify_toolchain_completeness "staging_dir/$toolchain_name"; then
+                    log "✅ 版本特定工具链加载完成: staging_dir/$toolchain_name"
+                else
+                    log "❌ 工具链验证失败，删除不完整的工具链"
+                    rm -rf "staging_dir/$toolchain_name"
+                    log "ℹ️  将重新下载完整工具链"
+                fi
             else
                 # 如果没有子目录，直接使用当前目录
                 log "复制工具链文件到 staging_dir/"
                 mkdir -p "staging_dir/toolchain-repo"
                 cp -r "$toolchain_path"/* "staging_dir/toolchain-repo/" 2>/dev/null || true
-                log "✅ 版本特定工具链文件加载完成"
+                
+                # 验证工具链完整性
+                if verify_toolchain_completeness "staging_dir/toolchain-repo"; then
+                    log "✅ 版本特定工具链文件加载完成"
+                else
+                    log "❌ 工具链文件不完整"
+                fi
             fi
         fi
     fi
@@ -313,6 +448,13 @@ load_toolchain() {
         if [ -n "$existing_toolchain" ]; then
             log "✅ 构建目录中已有工具链: $existing_toolchain"
             log "工具链大小: $(du -sh "$existing_toolchain" 2>/dev/null | cut -f1 || echo '未知')"
+            
+            # 验证工具链完整性
+            if verify_toolchain_completeness "$existing_toolchain"; then
+                log "✅ 工具链完整性验证通过"
+            else
+                log "❌ 工具链不完整，可能需要重新下载"
+            fi
         else
             log "⚠️  构建目录中未找到完整工具链"
         fi
@@ -1570,6 +1712,9 @@ build_firmware() {
     
     log "=== 编译固件 ==="
     
+    # 设置工具链环境
+    setup_toolchain_env
+    
     # 编译前最终检查
     log "编译前最终检查..."
     if [ ! -f ".config" ]; then
@@ -1658,6 +1803,15 @@ build_firmware() {
             
             if grep -q "out of memory\|Killed process" build.log; then
                 log "⚠️  可能是内存不足导致编译失败"
+            fi
+            
+            # 特别检查编译器错误
+            if grep -q "compiler.*not found" build.log; then
+                log "🚨 发现编译器未找到错误"
+                log "检查工具链路径..."
+                if [ -d "staging_dir" ]; then
+                    find staging_dir -name "*gcc*" 2>/dev/null | head -10
+                fi
             fi
         fi
         
