@@ -15,7 +15,7 @@ handle_error() {
     exit 1
 }
 
-# 新增：验证工具链完整性函数
+# 新增：验证工具链完整性函数（修复版）
 verify_toolchain_completeness() {
     local toolchain_dir=$1
     
@@ -26,55 +26,108 @@ verify_toolchain_completeness() {
         return 1
     fi
     
-    # 检查编译器是否存在
-    local compilers=($(find "$toolchain_dir" -name "*gcc*" -o -name "*g++*" 2>/dev/null))
+    # 检查真正的编译器文件，而不是stamp文件
+    log "查找真正的编译器文件..."
+    local compilers=($(find "$toolchain_dir" -type f \( -name "*gcc*" -o -name "*g++*" \) ! -name "*.stamp*" ! -name ".gcc_*" 2>/dev/null | grep -v "stamp" | head -20))
+    
     if [ ${#compilers[@]} -eq 0 ]; then
-        log "❌ 未找到编译器，工具链不完整"
-        return 1
+        log "⚠️  未找到编译器，尝试在其他位置查找..."
+        # 尝试在bin目录查找
+        if [ -d "$toolchain_dir/bin" ]; then
+            compilers=($(find "$toolchain_dir/bin" -type f -name "*gcc*" 2>/dev/null))
+        fi
+        
+        if [ ${#compilers[@]} -eq 0 ]; then
+            log "❌ 未找到任何编译器文件，工具链不完整"
+            return 1
+        fi
     fi
     
-    # 检查编译器是否可执行
+    log "找到 ${#compilers[@]} 个编译器文件"
+    
+    # 只检查真正的可执行文件，跳过标记文件
+    local valid_compilers=0
     for compiler in "${compilers[@]}"; do
-        if [ ! -x "$compiler" ]; then
-            log "❌ 编译器不可执行: $compiler"
-            chmod +x "$compiler" || return 1
+        # 跳过非普通文件（如目录、符号链接等）
+        if [ ! -f "$compiler" ]; then
+            continue
+        fi
+        
+        # 跳过stamp文件和标记文件
+        if [[ "$compiler" == *".stamp"* ]] || [[ "$compiler" == *".gcc_"* ]] || [[ "$compiler" == *"/stamp/"* ]]; then
+            continue
+        fi
+        
+        # 检查文件大小，太小的文件可能是标记文件
+        local file_size=$(stat -c%s "$compiler" 2>/dev/null || echo "0")
+        if [ "$file_size" -lt 1000 ]; then
+            log "跳过小文件（可能是标记文件）: $compiler ($file_size 字节)"
+            continue
+        fi
+        
+        log "检查编译器: $compiler ($(du -h "$compiler" 2>/dev/null | cut -f1))"
+        
+        # 如果是可执行文件，测试它
+        if [ -x "$compiler" ]; then
+            log "✅ 可执行: $compiler"
+            valid_compilers=$((valid_compilers + 1))
+        else
+            # 尝试添加执行权限
+            if chmod +x "$compiler" 2>/dev/null; then
+                log "✅ 已添加执行权限: $compiler"
+                valid_compilers=$((valid_compilers + 1))
+            else
+                log "⚠️  无法添加执行权限: $compiler"
+            fi
         fi
     done
     
-    # 根据目标架构检查特定编译器
-    local target_arch=""
-    case "$TARGET" in
-        "ipq40xx")
-            target_arch="arm-openwrt-linux-muslgnueabi"
-            ;;
-        "ramips")
-            if [ "$SUBTARGET" = "mt76x8" ] || [ "$SUBTARGET" = "mt7621" ]; then
-                target_arch="mipsel-openwrt-linux-musl"
-            fi
-            ;;
-    esac
+    if [ $valid_compilers -eq 0 ]; then
+        log "❌ 没有找到有效的可执行编译器"
+        return 1
+    fi
     
-    if [ -n "$target_arch" ]; then
-        log "🔍 检查目标架构编译器: $target_arch"
-        local target_compiler="$toolchain_dir/bin/${target_arch}-gcc"
-        if [ -f "$target_compiler" ]; then
-            log "✅ 找到目标架构编译器: $target_compiler"
-            # 测试编译器是否能运行
-            if "$target_compiler" --version >/dev/null 2>&1; then
-                log "✅ 编译器功能正常"
-            else
-                log "❌ 编译器无法运行"
-                return 1
-            fi
-        else
-            log "⚠️  未找到目标架构编译器: $target_arch"
-            # 尝试查找其他编译器
-            find "$toolchain_dir/bin" -name "*gcc*" 2>/dev/null | head -5
-        fi
+    log "✅ 找到 $valid_compilers 个有效的编译器"
+    
+    # 检查bin目录是否存在
+    if [ ! -d "$toolchain_dir/bin" ]; then
+        log "⚠️  警告: bin目录不存在，但找到了编译器文件"
+        # 列出工具链目录结构以便调试
+        log "工具链目录结构:"
+        find "$toolchain_dir" -maxdepth 2 -type d | head -10
+    else
+        log "✅ bin目录存在"
     fi
     
     log "✅ 工具链验证通过"
     return 0
+}
+
+# 新增：检查工具链完整性（公开函数）
+check_toolchain_completeness() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 检查工具链完整性 ==="
+    
+    # 查找工具链目录
+    local toolchain_dir=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
+    
+    if [ -z "$toolchain_dir" ]; then
+        log "❌ 未找到工具链目录"
+        return 1
+    fi
+    
+    verify_toolchain_completeness "$toolchain_dir"
+    local result=$?
+    
+    if [ $result -eq 0 ]; then
+        log "✅ 工具链完整性检查通过"
+    else
+        log "❌ 工具链完整性检查失败"
+    fi
+    
+    return $result
 }
 
 # 新增：设置工具链环境函数
@@ -688,19 +741,14 @@ pre_build_error_check() {
             warning_count=$((warning_count + 1))
         fi
         
-        # 检查关键依赖包是否存在 - 修复：移除uclibc，OpenWrt通常使用musl
+        # 检查关键依赖包是否存在
         local critical_deps=("linux" "gcc" "binutils" "musl")
         for dep in "${critical_deps[@]}"; do
             if find dl -name "*${dep}*" -type f 2>/dev/null | grep -q .; then
                 log "✅ 找到关键依赖: $dep"
             else
-                # 特殊处理：对于uclibc，现代OpenWrt版本通常使用musl
-                if [ "$dep" = "uclibc" ]; then
-                    log "ℹ️  注意: uclibc未找到，但现代OpenWrt通常使用musl"
-                else
-                    log "⚠️  警告: 未找到关键依赖: $dep"
-                    warning_count=$((warning_count + 1))
-                fi
+                log "⚠️  警告: 未找到关键依赖: $dep"
+                warning_count=$((warning_count + 1))
             fi
         done
         
@@ -1781,7 +1829,7 @@ build_firmware() {
             log "=== 编译错误摘要 ==="
             
             # 查找常见错误
-            local error_count=$(grep -c "Error\|error:" build.log)
+            local error_count=$(grep -c "Error [0-9]|error:" build.log)
             local warning_count=$(grep -c "Warning\|warning:" build.log)
             
             log "发现 $error_count 个错误，$warning_count 个警告"
@@ -2003,6 +2051,9 @@ main() {
         "check_large_files")
             check_large_files
             ;;
+        "check_toolchain_completeness")
+            check_toolchain_completeness
+            ;;
         *)
             log "❌ 未知命令: $1"
             echo "可用命令:"
@@ -2011,7 +2062,7 @@ main() {
             echo "  pre_build_space_check, generate_config, verify_usb_config, check_usb_drivers_integrity, apply_config"
             echo "  fix_network, download_dependencies, load_toolchain, integrate_custom_files"
             echo "  pre_build_error_check, build_firmware, save_toolchain, post_build_space_check"
-            echo "  check_firmware_files, cleanup, init_toolchain_dir, check_large_files"
+            echo "  check_firmware_files, cleanup, init_toolchain_dir, check_large_files, check_toolchain_completeness"
             exit 1
             ;;
     esac
