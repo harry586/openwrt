@@ -47,6 +47,11 @@ on:
         required: false
         default: false
         type: boolean
+      use_git_archive:
+        description: '📦 使用Git Archive API下载源代码（快速下载，排除大文件）'
+        required: false
+        default: false
+        type: boolean
 
 env:
   BUILD_DIR: /mnt/openwrt-build
@@ -57,7 +62,58 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
+    - name: 使用Git Archive API下载源代码（排除Toolchain）
+      if: github.event.inputs.use_git_archive == 'true'
+      run: |
+        echo "=== 使用Git Archive API下载源代码 ==="
+        echo "🔄 从GitHub API获取源代码压缩包（排除firmware-config/Toolchain/）"
+        
+        # 创建临时目录
+        mkdir -p /tmp/openwrt-source
+        cd /tmp/openwrt-source
+        
+        # 获取默认分支
+        DEFAULT_BRANCH=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          "https://api.github.com/repos/${{ github.repository }}" | jq -r '.default_branch')
+        echo "默认分支: $DEFAULT_BRANCH"
+        
+        # 使用Git Archive API下载压缩包
+        echo "下载源代码压缩包..."
+        curl -s -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          "https://api.github.com/repos/${{ github.repository }}/tarball/$DEFAULT_BRANCH" \
+          -o source.tar.gz
+        
+        if [ ! -f "source.tar.gz" ]; then
+          echo "❌ 下载源代码压缩包失败"
+          exit 1
+        fi
+        
+        echo "✅ 下载完成，文件大小: $(ls -lh source.tar.gz | awk '{print $5}')"
+        
+        # 解压压缩包
+        echo "解压源代码..."
+        tar -xzf source.tar.gz --strip-components=1
+        
+        # 检查解压结果
+        if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+          echo "✅ 源代码解压成功"
+          echo "重要文件存在: firmware-config/scripts/build_firmware_main.sh"
+          
+          # 复制到工作区
+          echo "复制文件到工作区..."
+          find . -type f -not -path "./firmware-config/Toolchain/*" -exec cp --parents {} ${{ github.workspace }} \; 2>/dev/null || true
+        else
+          echo "❌ 源代码解压失败，重要文件缺失"
+          exit 1
+        fi
+        
+        # 清理临时文件
+        cd /tmp
+        rm -rf openwrt-source
+        echo "✅ Git Archive API下载完成"
+
     - name: 安装 Git LFS
+      if: github.event.inputs.use_git_archive == 'false'
       run: |
         echo "=== 安装 Git LFS ==="
         sudo apt-get update
@@ -66,6 +122,7 @@ jobs:
         echo "✅ Git LFS 安装完成"
 
     - name: 检出配置仓库 (启用 LFS)
+      if: github.event.inputs.use_git_archive == 'false'
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
@@ -79,6 +136,7 @@ jobs:
         echo "✅ 脚本执行权限设置完成"
 
     - name: 设置 Git LFS 配置
+      if: github.event.inputs.use_git_archive == 'false'
       run: |
         echo "=== 设置 Git LFS 配置 ==="
         git config --global user.name "GitHub Actions"
@@ -89,11 +147,13 @@ jobs:
         echo "✅ Git LFS 配置完成"
 
     - name: 检查大文件状态
+      if: github.event.inputs.use_git_archive == 'false'
       run: |
         echo "=== 检查大文件状态 ==="
         firmware-config/scripts/build_firmware_main.sh check_large_files
 
     - name: 强制拉取Git LFS文件
+      if: github.event.inputs.use_git_archive == 'false'
       run: |
         echo "=== 强制拉取Git LFS文件 ==="
         git lfs pull --force || echo "Git LFS拉取失败，继续构建..."
@@ -230,6 +290,35 @@ jobs:
         echo "=== 加载工具链 ==="
         firmware-config/scripts/build_firmware_main.sh load_toolchain
 
+    - name: 修复工具链权限
+      run: |
+        echo "=== 修复工具链权限 ==="
+        cd ${{ env.BUILD_DIR }}
+        
+        if [ -d "staging_dir" ]; then
+          echo "修复工具链文件权限..."
+          
+          # 查找所有工具链目录
+          find staging_dir -type d -name "toolchain-*" | while read toolchain_dir; do
+            echo "处理工具链: $toolchain_dir"
+            
+            # 修复bin目录中的文件权限
+            if [ -d "$toolchain_dir/bin" ]; then
+              echo "修复 $toolchain_dir/bin 权限..."
+              find "$toolchain_dir/bin" -type f -exec chmod +x {} \; 2>/dev/null || true
+            fi
+            
+            # 修复可能在其他位置的编译器文件
+            echo "查找并修复编译器文件..."
+            find "$toolchain_dir" -type f \( -name "*gcc*" -o -name "*g++*" -o -name "*ld*" -o -name "*as*" -o -name "*ar*" \) \
+              ! -name "*.stamp*" ! -name ".gcc_*" -exec chmod +x {} \; 2>/dev/null || true
+          done
+          
+          echo "✅ 工具链权限修复完成"
+        else
+          echo "ℹ️  未找到staging_dir目录"
+        fi
+
     - name: 检查工具链加载状态
       run: |
         echo "=== 检查工具链加载状态 ==="
@@ -241,13 +330,7 @@ jobs:
           
           # 验证工具链完整性
           echo "验证工具链完整性..."
-          TOOLCHAIN_DIR=$(ls -d staging_dir/toolchain-* | head -1)
-          if [ -d "$TOOLCHAIN_DIR/bin" ]; then
-            echo "✅ 工具链bin目录存在"
-            ls -la $TOOLCHAIN_DIR/bin/ | grep -E "gcc|g++|arm-|mipsel-" | head -10
-          else
-            echo "❌ 工具链bin目录不存在"
-          fi
+          firmware-config/scripts/build_firmware_main.sh check_toolchain_completeness
         else
           echo "❌ 工具链未加载"
           echo "将自动下载工具链..."
@@ -381,6 +464,43 @@ jobs:
         else
           echo "ℹ️  没有工具链文件需要提交"
         fi
+
+    - name: 上传构建产物
+      if: success()
+      run: |
+        echo "=== 上传构建产物 ==="
+        cd ${{ env.BUILD_DIR }}
+        
+        # 创建构建产物目录
+        mkdir -p /tmp/build-artifacts
+        
+        # 打包固件文件
+        if [ -d "bin/targets" ]; then
+          echo "打包固件文件..."
+          tar -czf /tmp/build-artifacts/firmware.tar.gz -C bin targets/
+          echo "✅ 固件打包完成"
+        fi
+        
+        # 打包编译日志
+        if [ -f "build.log" ]; then
+          echo "打包编译日志..."
+          cp build.log /tmp/build-artifacts/build.log
+          echo "✅ 日志打包完成"
+        fi
+        
+        # 创建构建信息文件
+        echo "创建构建信息..."
+        cat > /tmp/build-artifacts/build-info.txt << EOF
+        构建时间: $(date)
+        设备: ${{ env.DEVICE }}
+        版本: ${{ env.SELECTED_BRANCH }}
+        目标平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}
+        配置模式: ${{ github.event.inputs.config_mode }}
+        EOF
+        
+        echo "✅ 构建产物准备完成"
+        echo "📤 构建产物已保存在: /tmp/build-artifacts/"
+        ls -lh /tmp/build-artifacts/
 
     - name: 错误分析
       if: failure()
