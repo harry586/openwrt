@@ -211,6 +211,78 @@ else
 fi
 echo "" >> error_analysis.log
 
+echo "=== 工具链状态详细检查 ===" >> error_analysis.log
+if [ -d "staging_dir" ]; then
+    echo "✅ 工具链目录存在: staging_dir" >> error_analysis.log
+    
+    # 详细查找工具链
+    echo "🔍 查找工具链目录:" >> error_analysis.log
+    find staging_dir -maxdepth 2 -type d -name "toolchain-*" >> error_analysis.log || echo "  未找到工具链目录" >> error_analysis.log
+    
+    # 检查编译器
+    echo "🔍 查找编译器:" >> error_analysis.log
+    find staging_dir -name "*gcc*" -type f -executable 2>/dev/null | head -10 >> error_analysis.log || echo "  未找到编译器" >> error_analysis.log
+    
+    # 检查具体的arm编译器
+    echo "🔍 检查arm编译器 (IPQ40xx):" >> error_analysis.log
+    find staging_dir -name "arm-openwrt-linux-muslgnueabi-gcc" -type f 2>/dev/null >> error_analysis.log || echo "  未找到arm编译器" >> error_analysis.log
+    
+    # 检查mipsel编译器
+    echo "🔍 检查mipsel编译器 (MT76xx):" >> error_analysis.log
+    find staging_dir -name "mipsel-openwrt-linux-musl-gcc" -type f 2>/dev/null >> error_analysis.log || echo "  未找到mipsel编译器" >> error_analysis.log
+    
+    # 检查文件大小
+    echo "📊 工具链文件大小:" >> error_analysis.log
+    du -sh staging_dir/toolchain-* 2>/dev/null | head -3 >> error_analysis.log || echo "  无法获取大小" >> error_analysis.log
+    
+    # 检查目录结构
+    echo "📁 工具链目录结构:" >> error_analysis.log
+    find staging_dir -maxdepth 3 -name "toolchain-*" -type d -exec ls -ld {} \; 2>/dev/null | head -5 >> error_analysis.log || echo "  无法列出目录结构" >> error_analysis.log
+    
+    # 检查关键文件是否存在
+    echo "🔑 检查关键工具链文件:" >> error_analysis.log
+    if [ -d "staging_dir/toolchain-"* ]; then
+        TOOLCHAIN_DIR=$(ls -d staging_dir/toolchain-* | head -1)
+        echo "工具链目录: $TOOLCHAIN_DIR" >> error_analysis.log
+        
+        CRITICAL_FILES=(
+            "bin/arm-openwrt-linux-muslgnueabi-gcc"
+            "bin/mipsel-openwrt-linux-musl-gcc"
+            "lib/gcc/arm-openwrt-linux-muslgnueabi"
+            "lib/gcc/mipsel-openwrt-linux-musl"
+            "include/stdio.h"
+            "lib/libc.so"
+        )
+        
+        for file in "${CRITICAL_FILES[@]}"; do
+            if [ -f "$TOOLCHAIN_DIR/$file" ] || [ -d "$TOOLCHAIN_DIR/$file" ]; then
+                echo "✅ $file: 存在" >> error_analysis.log
+            else
+                echo "❌ $file: 不存在" >> error_analysis.log
+            fi
+        done
+    fi
+else
+    echo "❌ 工具链目录不存在" >> error_analysis.log
+fi
+
+echo "" >> error_analysis.log
+echo "=== 23.05版本特定问题分析 ===" >> error_analysis.log
+if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+    echo "🔧 OpenWrt 23.05 常见问题:" >> error_analysis.log
+    echo "1. 工具链不兼容: 23.05可能需要更新的工具链版本" >> error_analysis.log
+    echo "2. 内核版本不同: 23.05使用Linux 5.15，需要不同的内核头文件" >> error_analysis.log
+    echo "3. musl版本更新: 可能需要更新的musl C库" >> error_analysis.log
+    echo "" >> error_analysis.log
+    echo "🛠️ 解决方案:" >> error_analysis.log
+    echo "1. 清理工具链重新下载: rm -rf staging_dir/toolchain-*" >> error_analysis.log
+    echo "2. 清理构建目录: rm -rf build_dir/target-*" >> error_analysis.log
+    echo "3. 确保使用正确的编译器: arm-openwrt-linux-muslgnueabi-gcc" >> error_analysis.log
+    echo "4. 检查内核配置: 确保CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> error_analysis.log
+fi
+
+echo "" >> error_analysis.log
+
 echo "=== 关键错误检查 ===" >> error_analysis.log
 if [ -f "build.log" ]; then
     echo "检查日志文件: build.log" >> error_analysis.log
@@ -287,49 +359,6 @@ for category in "${ERROR_CATEGORIES[@]}"; do
     eval $grep_cmd >> error_analysis.log || echo "无相关错误" >> error_analysis.log
     echo "" >> error_analysis.log
 done
-
-echo "=== 工具链状态检查 ===" >> error_analysis.log
-if [ -d "staging_dir" ]; then
-    echo "✅ 工具链目录存在" >> error_analysis.log
-    echo "工具链位置: staging_dir" >> error_analysis.log
-    
-    COMPONENTS=("toolchain" "bin" "lib" "include")
-    for comp in "${COMPONENTS[@]}"; do
-        find staging_dir -name "*$comp*" -type d 2>/dev/null | head -3 >> error_analysis.log || true
-    done
-    
-    if command -v find > /dev/null 2>&1; then
-        COMPILERS=$(find staging_dir -name "*gcc*" -o -name "*g++*" 2>/dev/null | head -5)
-        if [ -n "$COMPILERS" ]; then
-            echo "✅ 编译器文件:" >> error_analysis.log
-            echo "$COMPILERS" >> error_analysis.log
-        else
-            echo "⚠️  未找到编译器文件" >> error_analysis.log
-        fi
-    fi
-else
-    echo "❌ 工具链目录不存在" >> error_analysis.log
-fi
-echo "" >> error_analysis.log
-
-echo "=== C库依赖问题分析 ===" >> error_analysis.log
-echo "💡 关于'警告: 未找到关键依赖: uclibc'的说明:" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "1. 📚 OpenWrt C库历史:" >> error_analysis.log
-echo "   - uClibc: 旧版OpenWrt使用的轻量级C库" >> error_analysis.log
-echo "   - musl: 现代OpenWrt默认使用的C库（21.02+）" >> error_analysis.log
-echo "   - glibc: 完整功能的C库，体积较大" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "2. 🔧 修复方法:" >> error_analysis.log
-echo "   - 检查配置文件中的C库设置:" >> error_analysis.log
-echo "     grep 'CONFIG_USE_' .config" >> error_analysis.log
-echo "   - 对于OpenWrt 21.02/23.05，应该使用musl" >> error_analysis.log
-echo "   - 如果确实需要uclibc，需要特殊配置" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "3. ✅ 正确的检查方法:" >> error_analysis.log
-echo "   - 不应该检查'uclibc'，而应该检查'musl'" >> error_analysis.log
-echo "   - 脚本已修复，不再将uclibc作为关键依赖" >> error_analysis.log
-echo "" >> error_analysis.log
 
 echo "=== 错误原因分析和建议 ===" >> error_analysis.log
 
