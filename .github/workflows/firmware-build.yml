@@ -93,6 +93,14 @@ jobs:
         echo "=== 检查大文件状态 ==="
         firmware-config/scripts/build_firmware_main.sh check_large_files
 
+    - name: 强制拉取Git LFS文件
+      run: |
+        echo "=== 强制拉取Git LFS文件 ==="
+        git lfs pull --force || echo "Git LFS拉取失败，继续构建..."
+        # 检查LFS文件状态
+        echo "Git LFS文件状态:"
+        git lfs ls-files | head -20 || echo "无LFS文件或未跟踪"
+
     - name: 检查工具链目录状态
       run: |
         echo "=== 检查仓库中的工具链状态 ==="
@@ -101,6 +109,13 @@ jobs:
           echo "工具链目录大小: $(du -sh firmware-config/Toolchain 2>/dev/null | cut -f1 || echo '0')"
           echo "工具链目录结构:"
           find firmware-config/Toolchain -type f -name "*.info" 2>/dev/null | head -10
+          
+          # 检查文件是否为Git LFS指针
+          echo "检查文件是否为LFS指针:"
+          find firmware-config/Toolchain -type f -size +10M 2>/dev/null | head -5 | while read file; do
+            echo "检查: $file"
+            head -c 100 "$file" | grep -q "version https://git-lfs" && echo "  ⚠️  这是LFS指针文件" || echo "  ✅ 这是实际文件"
+          done
         else
           echo "ℹ️  工具链目录不存在，将创建新目录"
         fi
@@ -223,6 +238,16 @@ jobs:
           echo "✅ 工具链已加载"
           ls -d staging_dir/toolchain-* | head -1
           echo "工具链大小: $(du -sh staging_dir/toolchain-* 2>/dev/null | head -1 | cut -f1 || echo '未知')"
+          
+          # 验证工具链完整性
+          echo "验证工具链完整性..."
+          TOOLCHAIN_DIR=$(ls -d staging_dir/toolchain-* | head -1)
+          if [ -d "$TOOLCHAIN_DIR/bin" ]; then
+            echo "✅ 工具链bin目录存在"
+            ls -la $TOOLCHAIN_DIR/bin/ | grep -E "gcc|g++|arm-|mipsel-" | head -10
+          else
+            echo "❌ 工具链bin目录不存在"
+          fi
         else
           echo "❌ 工具链未加载"
           echo "将自动下载工具链..."
