@@ -1,48 +1,159 @@
 # OpenWrt固件构建项目Git忽略文件
 
-# 编译输出目录
+# ========== 编译输出目录 ==========
 bin/
 build/
 tmp/
 staging_dir/
 build_dir/
 
-# 下载的源码包（可以重新下载）
+# ========== 下载的源码包（可以重新下载） ==========
 dl/
+downloads/
 
-# Feeds目录（可以重新生成）
+# ========== Feeds目录（可以重新生成） ==========
 feeds/
 
-# 日志文件
+# ========== 日志文件 ==========
 *.log
 logs/
+build.log
+download.log
+error_analysis.log
 
-# 编译产物
+# ========== 编译产物 ==========
 *.bin
 *.img
 *.gz
 *.ipk
 *.trx
 *.elf
+*.factory.bin
+*.sysupgrade.bin
 
-# 配置文件
+# ========== 配置文件 ==========
 .config
 .config.old
-config_backup
+config_backup/
+.config-*
 
-# 系统文件
+# ========== Git LFS 相关 ==========
+# Git LFS 指针文件（通常不需要提交）
+*.lfs.*
+
+# ========== 系统文件 ==========
 .DS_Store
 Thumbs.db
 *.swp
 *.swo
 *~
 
-# 备份文件
+# ========== 备份文件 ==========
 *.bak
 *.backup
 *.old
+*.orig
+*.rej
 
-# 个人开发环境文件
+# ========== 个人开发环境文件 ==========
 .vscode/
 .idea/
 *.local
+.project
+.classpath
+.settings/
+
+# ========== 构建产物目录（新增） ==========
+# 注意：这个目录在我们的工作流中用于临时存储构建产物
+build-artifacts/
+/tmp/build-artifacts/
+
+# ========== 临时下载目录（新增） ==========
+# Git Archive API 下载的临时文件
+openwrt-source/
+/tmp/openwrt-source/
+
+# ========== 备份目录（新增） ==========
+# 备份文件目录，包含在仓库中但不应忽略整个目录
+# firmware-config/config-backup/ # 这个目录我们需要保留，所以注释掉
+# firmware-config/custom-files/   # 这个目录我们需要保留，所以注释掉
+
+# ========== 工具链目录的特殊处理 ==========
+# 注意：firmware-config/Toolchain/ 目录需要使用 Git LFS 管理
+# 我们不忽略整个目录，但可以忽略其中的某些临时文件
+firmware-config/Toolchain/**/*.tmp
+firmware-config/Toolchain/**/*.temp
+firmware-config/Toolchain/**/.tmp_*
+firmware-config/Toolchain/**/.stamp_*
+firmware-config/Toolchain/**/.*.stamp
+
+# ========== 特定工具的缓存文件 ==========
+.cache/
+.cargo/
+.pip/
+node_modules/
+
+# ========== 虚拟机/容器文件 ==========
+*.vmdk
+*.vdi
+*.qcow2
+*.vmx
+*.ova
+*.ovf
+
+# ========== 固件镜像文件 ==========
+# 通常在 bin/targets/ 目录下，但也可以单独存在
+firmware-*.bin
+firmware-*.img
+
+# ========== 压缩文件（除了我们需要的） ==========
+*.tar.gz
+*.tar.xz
+*.tar.bz2
+*.tar.zst
+# 但注意：source.tar.gz 是我们通过 Git Archive API 下载的临时文件，应该忽略
+
+# ========== Python 相关 ==========
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ========== IDE 特定文件 ==========
+*.sublime-project
+*.sublime-workspace
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# ========== 本地配置文件（新增） ==========
+# 本地环境配置文件，不应提交到仓库
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ========== 构建脚本的测试文件 ==========
+test-*.sh
+debug-*.sh
+
+# ========== 自定义补丁文件（临时） ==========
+patches/*.patch
+!patches/README.md
+
+# ========== 文档生成文件 ==========
+docs/_build/
+docs/_site/
