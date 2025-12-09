@@ -1,3 +1,5 @@
+[file name]: build_firmware_main.sh
+[file content begin]
 #!/bin/bash
 set -e
 
@@ -185,6 +187,65 @@ setup_toolchain_env() {
     else
         log "⚠️  未找到工具链目录，将自动下载"
     fi
+}
+
+# 新增：保存源代码信息函数
+save_source_code_info() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 保存源代码信息 ==="
+    
+    # 创建源代码信息目录
+    local source_info_dir="/tmp/build-artifacts/source-info"
+    mkdir -p "$source_info_dir"
+    
+    # 保存构建环境信息
+    cat > "$source_info_dir/build_env.txt" << EOF
+构建环境信息
+===========
+构建时间: $(date)
+设备: $DEVICE
+版本: $SELECTED_BRANCH
+目标平台: $TARGET/$SUBTARGET
+配置模式: $CONFIG_MODE
+构建目录: $BUILD_DIR
+仓库根目录: $REPO_ROOT
+EOF
+    
+    # 保存配置文件信息
+    if [ -f ".config" ]; then
+        cp ".config" "$source_info_dir/openwrt.config"
+        log "✅ 配置文件已保存"
+    fi
+    
+    # 保存feeds信息
+    if [ -f "feeds.conf.default" ]; then
+        cp "feeds.conf.default" "$source_info_dir/feeds.conf"
+        log "✅ Feeds配置已保存"
+    fi
+    
+    # 保存目录结构
+    log "📁 保存目录结构信息..."
+    find . -maxdepth 3 -type d | sort > "$source_info_dir/directory_structure.txt"
+    
+    # 保存关键文件列表
+    log "📋 保存关键文件列表..."
+    cat > "$source_info_dir/key_files.txt" << 'EOF'
+关键文件列表
+==========
+.config - OpenWrt配置文件
+feeds.conf.default - Feeds配置文件
+Makefile - 主Makefile
+rules.mk - 构建规则
+Config.in - 配置菜单
+feeds/ - Feeds目录
+package/ - 包目录
+target/ - 目标平台目录
+toolchain/ - 工具链目录
+EOF
+    
+    log "✅ 源代码信息保存完成: $source_info_dir"
 }
 
 save_env() {
@@ -2101,6 +2162,9 @@ main() {
         "check_toolchain_completeness")
             check_toolchain_completeness
             ;;
+        "save_source_code_info")
+            save_source_code_info
+            ;;
         *)
             log "❌ 未知命令: $1"
             echo "可用命令:"
@@ -2110,9 +2174,11 @@ main() {
             echo "  fix_network, download_dependencies, load_toolchain, integrate_custom_files"
             echo "  pre_build_error_check, build_firmware, save_toolchain, post_build_space_check"
             echo "  check_firmware_files, cleanup, init_toolchain_dir, check_large_files, check_toolchain_completeness"
+            echo "  save_source_code_info"
             exit 1
             ;;
     esac
 }
 
 main "$@"
+[file content end]
