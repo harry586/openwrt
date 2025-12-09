@@ -1,5 +1,4 @@
-[file name]: firmware-build.yml
-[file content begin]
+
 name: OpenWrt 智能固件构建工作流（完整功能版 - Git LFS 修复版）
 
 on:
