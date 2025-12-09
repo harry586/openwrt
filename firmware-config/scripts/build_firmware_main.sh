@@ -1215,6 +1215,13 @@ generate_config() {
     echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> .config
     echo "CONFIG_PACKAGE_kmod-ipt-nat6=y" >> .config
     
+    # 添加常用网络插件
+    echo "CONFIG_PACKAGE_bridge=y" >> .config
+    echo "CONFIG_PACKAGE_blockd=y" >> .config
+    echo "# CONFIG_PACKAGE_busybox-selinux is not set" >> .config
+    echo "# CONFIG_PACKAGE_attendedsysupgrade-common is not set" >> .config
+    echo "# CONFIG_PACKAGE_auc is not set" >> .config
+    
     log "=== 🚨 USB 完全修复通用配置 - 开始 ==="
     
     echo "# 🟢 USB 核心驱动 - 基础必须" >> .config
@@ -1227,6 +1234,7 @@ generate_config() {
     echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
     echo "CONFIG_PACKAGE_kmod-usb-uhci=y" >> .config
     echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
     
     echo "# 🟢 USB 3.0扩展主机控制器接口驱动 - 支持USB 3.0高速数据传输" >> .config
     echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
@@ -1242,7 +1250,8 @@ generate_config() {
         echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
         echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
+        # 高通平台通常不需要MTK驱动，但保留以防万一
+        echo "# CONFIG_PACKAGE_kmod-usb-xhci-mtk is not set" >> .config
         log "✅ 已启用所有高通IPQ40xx平台的USB驱动"
     fi
     
@@ -1254,6 +1263,9 @@ generate_config() {
             echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
             echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config
             echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
+            # 雷凌平台通常不需要高通专用驱动
+            echo "# CONFIG_PACKAGE_kmod-usb-dwc3-qcom is not set" >> .config
+            echo "# CONFIG_PACKAGE_kmod-phy-qcom-dwc3 is not set" >> .config
             log "✅ 已启用雷凌MT76xx平台的USB驱动"
         fi
     fi
@@ -1630,14 +1642,39 @@ apply_config() {
             echo "  ✅ 已修复 kmod-usb-xhci-hcd"
         fi
         
-        # 确保kmod-phy-qcom-dwc3启用（如果是高通平台）
-        if [ "$TARGET" = "ipq40xx" ] && ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config; then
-            echo "  修复: 启用 kmod-phy-qcom-dwc3"
-            sed -i 's/^# CONFIG_PACKAGE_kmod-phy-qcom-dwc3 is not set$/CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y/' .config
-            if ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config; then
-                echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
-            fi
-            echo "  ✅ 已修复 kmod-phy-qcom-dwc3"
+        # 确保kmod-usb-xhci-pci启用
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-pci=y" .config; then
+            echo "  修复: 启用 kmod-usb-xhci-pci"
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
+            echo "  ✅ 已修复 kmod-usb-xhci-pci"
+        fi
+        
+        # 确保kmod-usb-xhci-plat-hcd启用
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" .config; then
+            echo "  修复: 启用 kmod-usb-xhci-plat-hcd"
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config
+            echo "  ✅ 已修复 kmod-usb-xhci-plat-hcd"
+        fi
+        
+        # 确保kmod-usb-ohci-pci启用
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-ohci-pci=y" .config; then
+            echo "  修复: 启用 kmod-usb-ohci-pci"
+            echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
+            echo "  ✅ 已修复 kmod-usb-ohci-pci"
+        fi
+        
+        # 确保kmod-usb-dwc3-of-simple启用（如果是高通平台）
+        if [ "$TARGET" = "ipq40xx" ] && ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" .config; then
+            echo "  修复: 启用 kmod-usb-dwc3-of-simple"
+            echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
+            echo "  ✅ 已修复 kmod-usb-dwc3-of-simple"
+        fi
+        
+        # 确保kmod-usb-xhci-mtk启用（如果是雷凌平台）
+        if [ "$TARGET" = "ramips" ] && { [ "$SUBTARGET" = "mt76x8" ] || [ "$SUBTARGET" = "mt7621" ]; } && ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config; then
+            echo "  修复: 启用 kmod-usb-xhci-mtk"
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
+            echo "  ✅ 已修复 kmod-usb-xhci-mtk"
         fi
     fi
     
@@ -1656,11 +1693,21 @@ apply_config() {
     log "🚨 强制启用关键USB驱动（防止defconfig删除）"
     # 确保 USB 3.0 关键驱动被启用
     echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
     
     # 根据平台启用专用驱动
     if [ "$TARGET" = "ipq40xx" ]; then
         echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb-xhci-mtk is not set" >> .config
+    elif [ "$TARGET" = "ramips" ] && { [ "$SUBTARGET" = "mt76x8" ] || [ "$SUBTARGET" = "mt7621" ]; }; then
+        echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb-dwc3-qcom is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-phy-qcom-dwc3 is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb-dwc3-of-simple is not set" >> .config
     fi
     
     # 其他关键USB驱动
