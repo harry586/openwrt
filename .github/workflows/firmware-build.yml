@@ -1,3 +1,5 @@
+[file name]: firmware-build.yml
+[file content begin]
 name: OpenWrt 智能固件构建工作流（完整功能版 - Git LFS 修复版）
 
 on:
@@ -99,11 +101,32 @@ jobs:
           echo "✅ 源代码解压成功"
           echo "重要文件存在: firmware-config/scripts/build_firmware_main.sh"
           
-          # 复制到工作区
+          # 详细列出解压的文件
+          echo "解压的文件数量: $(find . -type f | wc -l)"
+          echo "解压的文件大小: $(du -sh . | cut -f1)"
+          
+          # 复制到工作区 - 使用更精确的方式
           echo "复制文件到工作区..."
-          find . -type f -not -path "./firmware-config/Toolchain/*" -exec cp --parents {} ${{ github.workspace }} \; 2>/dev/null || true
+          
+          # 确保工作区目录存在
+          mkdir -p ${{ github.workspace }}
+          
+          # 使用rsync复制所有文件，排除.git目录和Toolchain目录
+          rsync -av --exclude='.git' --exclude='firmware-config/Toolchain' . ${{ github.workspace }}/
+          
+          # 确保脚本文件有执行权限
+          chmod +x ${{ github.workspace }}/firmware-config/scripts/*.sh 2>/dev/null || true
+          
+          echo "✅ 文件复制完成"
+          echo "工作区文件数量: $(find ${{ github.workspace }} -type f 2>/dev/null | wc -l)"
+          
+          # 保存源代码压缩包作为构建产物
+          mkdir -p /tmp/build-artifacts/source-archive
+          cp source.tar.gz /tmp/build-artifacts/source-archive/
         else
           echo "❌ 源代码解压失败，重要文件缺失"
+          echo "当前目录内容:"
+          ls -la
           exit 1
         fi
         
@@ -472,6 +495,45 @@ jobs:
           echo "ℹ️  没有工具链文件需要提交"
         fi
 
+    - name: 保存源代码信息
+      if: success()
+      run: |
+        echo "=== 保存源代码信息 ==="
+        
+        # 创建源代码信息目录
+        mkdir -p /tmp/build-artifacts/source-info
+        
+        # 保存构建环境信息
+        cat > /tmp/build-artifacts/source-info/build_info.txt << EOF
+构建信息
+========
+构建时间: $(date)
+设备: ${{ github.event.inputs.device_name }}
+版本: ${{ env.SELECTED_BRANCH }}
+目标平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}
+配置模式: ${{ github.event.inputs.config_mode }}
+Git Archive API模式: ${{ github.event.inputs.use_git_archive }}
+EOF
+        
+        # 保存工作区信息
+        if [ -d "${{ github.workspace }}" ]; then
+          echo "保存工作区信息..."
+          echo "工作区目录: ${{ github.workspace }}" >> /tmp/build-artifacts/source-info/build_info.txt
+          echo "文件数量: $(find ${{ github.workspace }} -type f 2>/dev/null | wc -l)" >> /tmp/build-artifacts/source-info/build_info.txt
+          echo "目录大小: $(du -sh ${{ github.workspace }} 2>/dev/null | cut -f1)" >> /tmp/build-artifacts/source-info/build_info.txt
+        fi
+        
+        # 如果使用了Git Archive API，保存相关文件
+        if [ "${{ github.event.inputs.use_git_archive }}" = "true" ]; then
+          echo "Git Archive API模式详情:" >> /tmp/build-artifacts/source-info/build_info.txt
+          echo "已下载源代码压缩包到: /tmp/build-artifacts/source-archive/source.tar.gz" >> /tmp/build-artifacts/source-info/build_info.txt
+          if [ -f "/tmp/build-artifacts/source-archive/source.tar.gz" ]; then
+            echo "压缩包大小: $(ls -lh /tmp/build-artifacts/source-archive/source.tar.gz | awk '{print $5}')" >> /tmp/build-artifacts/source-info/build_info.txt
+          fi
+        fi
+        
+        echo "✅ 源代码信息保存完成"
+
     - name: 上传构建产物
       if: success()
       run: |
@@ -498,12 +560,12 @@ jobs:
         # 创建构建信息文件
         echo "创建构建信息..."
         cat > /tmp/build-artifacts/build-info.txt << EOF
-        构建时间: $(date)
-        设备: ${{ env.DEVICE }}
-        版本: ${{ env.SELECTED_BRANCH }}
-        目标平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}
-        配置模式: ${{ github.event.inputs.config_mode }}
-        EOF
+构建时间: $(date)
+设备: ${{ env.DEVICE }}
+版本: ${{ env.SELECTED_BRANCH }}
+目标平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}
+配置模式: ${{ github.event.inputs.config_mode }}
+EOF
         
         echo "✅ 构建产物准备完成"
         echo "📤 构建产物已保存在: /tmp/build-artifacts/"
@@ -532,6 +594,22 @@ jobs:
       with:
         name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
         path: ${{ env.BUILD_DIR }}/bin/targets/
+        retention-days: 7
+
+    - name: 上传源代码信息
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: source-info-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
+        path: /tmp/build-artifacts/source-info/
+        retention-days: 7
+
+    - name: 上传源代码压缩包（Git Archive API模式）
+      if: success() && github.event.inputs.use_git_archive == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: source-archive-${{ github.event.inputs.device_name }}
+        path: /tmp/build-artifacts/source-archive/
         retention-days: 7
 
     - name: 上传编译日志
@@ -609,3 +687,4 @@ jobs:
         
         echo ""
         echo "=== 构建流程完成 ==="
+[file content end]
