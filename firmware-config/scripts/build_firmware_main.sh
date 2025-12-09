@@ -292,10 +292,13 @@ check_large_files() {
         echo "$large_files"
         log "💡 建议: 将这些文件添加到 .gitattributes 中使用 Git LFS 管理"
         
-        # 检查工具链中的大文件
-        if [ -d "firmware-config/Toolchain" ]; then
+        # 检查工具链中的大文件 - 修复路径
+        local toolchain_path="$REPO_ROOT/firmware-config/Toolchain"
+        if [ -d "$toolchain_path" ]; then
             log "检查工具链中的大文件..."
-            find firmware-config/Toolchain -type f -size +50M 2>/dev/null | head -10 || true
+            find "$toolchain_path" -type f -size +50M 2>/dev/null | head -10 || true
+        else
+            log "ℹ️  工具链目录不存在: $toolchain_path"
         fi
     else
         log "✅ 未发现超过90MB的大文件"
@@ -469,84 +472,109 @@ load_toolchain() {
     
     log "检查仓库工具链目录: $toolchain_path"
     if [ -d "$toolchain_path" ]; then
-        log "目录存在，内容如下："
+        log "✅ 工具链目录存在"
+        log "目录内容:"
         ls -la "$toolchain_path" 2>/dev/null | head -10 || log "无法列出目录内容"
+        
+        # 检查是否有实际文件
+        local file_count=$(find "$toolchain_path" -type f 2>/dev/null | wc -l)
+        if [ $file_count -gt 0 ]; then
+            log "✅ 工具链目录有 $file_count 个文件"
+        else
+            log "⚠️  工具链目录存在但为空"
+        fi
     else
-        log "目录不存在"
+        log "ℹ️  工具链目录不存在: $toolchain_path"
+        log "将创建新目录并下载工具链"
+        mkdir -p "$toolchain_path"
     fi
     
     log "检查通用工具链目录: $common_path"
     if [ -d "$common_path" ]; then
-        log "目录存在，内容如下："
-        ls -la "$common_path" 2>/dev/null | head -10 || log "无法列出目录内容"
+        log "✅ 通用工具链目录存在"
     else
-        log "目录不存在"
+        log "ℹ️  通用工具链目录不存在"
+        mkdir -p "$common_path"
     fi
     
+    # 尝试从仓库加载工具链
     local found_repo_toolchain=0
     
-    # 检查仓库中的工具链
-    if [ -d "$toolchain_path" ] && [ -n "$(ls -A "$toolchain_path" 2>/dev/null)" ]; then
+    # 检查版本特定工具链
+    if [ -d "$toolchain_path" ] && [ "$(ls -A "$toolchain_path" 2>/dev/null)" ]; then
         found_repo_toolchain=1
-        log "🔧 从仓库找到版本特定工具链: $toolchain_path"
+        log "✅ 从仓库找到版本特定工具链: $toolchain_path"
+        
+        # 检查工具链完整性
+        local toolchain_files=$(find "$toolchain_path" -type f -name "*gcc*" 2>/dev/null | wc -l)
+        if [ $toolchain_files -gt 0 ]; then
+            log "✅ 找到 $toolchain_files 个编译器文件"
+        else
+            log "⚠️  未找到编译器文件，可能工具链不完整"
+        fi
+    else
+        log "⚠️  仓库中未找到版本特定工具链"
     fi
     
-    if [ -d "$common_path/bin" ] && [ -n "$(ls -A "$common_path/bin" 2>/dev/null)" ]; then
+    # 检查通用工具链
+    if [ -d "$common_path/bin" ] && [ "$(ls -A "$common_path/bin" 2>/dev/null)" ]; then
         found_repo_toolchain=1
-        log "🔧 从仓库找到通用工具链: $common_path/bin"
+        log "✅ 从仓库找到通用工具链: $common_path/bin"
     fi
     
     if [ $found_repo_toolchain -eq 0 ]; then
-        log "ℹ️  仓库中未找到工具链，将使用默认工具链"
+        log "⚠️  仓库中未找到任何工具链，将使用默认工具链"
         return 0
     fi
     
     mkdir -p staging_dir
     
     # 加载版本特定工具链
-    if [ -d "$toolchain_path" ] && [ -n "$(ls -A "$toolchain_path" 2>/dev/null)" ]; then
+    if [ -d "$toolchain_path" ] && [ "$(ls -A "$toolchain_path" 2>/dev/null)" ]; then
         log "🔧 从仓库加载版本特定工具链: $toolchain_path"
         
-        local existing_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
+        # 检查是否已有工具链
+        local existing_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
         
         if [ -n "$existing_toolchain" ]; then
             log "已存在工具链: $existing_toolchain，跳过加载"
-            # 验证现有工具链
-            verify_toolchain_completeness "$existing_toolchain" || log "⚠️ 现有工具链验证失败"
         else
-            # 查找工具链目录
-            local first_dir=$(find "$toolchain_path" -maxdepth 1 -type d ! -path "$toolchain_path" | head -1)
-            if [ -n "$first_dir" ]; then
-                local toolchain_name=$(basename "$first_dir")
-                log "复制工具链: $toolchain_name 到 staging_dir/"
-                cp -r "$first_dir" "staging_dir/"
-                
-                # 验证工具链完整性
-                if verify_toolchain_completeness "staging_dir/$toolchain_name"; then
-                    log "✅ 版本特定工具链加载完成: staging_dir/$toolchain_name"
-                else
-                    log "❌ 工具链验证失败，删除不完整的工具链"
-                    rm -rf "staging_dir/$toolchain_name"
-                    log "ℹ️  将重新下载完整工具链"
+            # 复制工具链文件
+            log "复制工具链文件到 staging_dir..."
+            
+            # 检查toolchain_path是目录还是直接包含工具链文件
+            if find "$toolchain_path" -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | grep -q .; then
+                # 有工具链子目录
+                local toolchain_subdir=$(find "$toolchain_path" -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
+                if [ -n "$toolchain_subdir" ]; then
+                    local toolchain_name=$(basename "$toolchain_subdir")
+                    log "复制工具链目录: $toolchain_name"
+                    cp -r "$toolchain_subdir" staging_dir/
+                    
+                    # 验证工具链
+                    if verify_toolchain_completeness "staging_dir/$toolchain_name"; then
+                        log "✅ 版本特定工具链加载完成"
+                    else
+                        log "⚠️  工具链验证失败，可能需要重新下载"
+                    fi
                 fi
             else
-                # 如果没有子目录，直接使用当前目录
-                log "复制工具链文件到 staging_dir/"
-                mkdir -p "staging_dir/toolchain-repo"
-                cp -r "$toolchain_path"/* "staging_dir/toolchain-repo/" 2>/dev/null || true
+                # 直接复制文件
+                log "复制工具链文件"
+                mkdir -p staging_dir/toolchain-repo
+                cp -r "$toolchain_path"/* staging_dir/toolchain-repo/ 2>/dev/null || true
                 
-                # 验证工具链完整性
-                if verify_toolchain_completeness "staging_dir/toolchain-repo"; then
-                    log "✅ 版本特定工具链文件加载完成"
+                if [ "$(ls -A staging_dir/toolchain-repo 2>/dev/null)" ]; then
+                    log "✅ 工具链文件复制完成"
                 else
-                    log "❌ 工具链文件不完整"
+                    log "⚠️  工具链文件复制失败"
                 fi
             fi
         fi
     fi
     
     # 加载通用工具链
-    if [ -d "$common_path/bin" ] && [ -n "$(ls -A "$common_path/bin" 2>/dev/null)" ]; then
+    if [ -d "$common_path/bin" ] && [ "$(ls -A "$common_path/bin" 2>/dev/null)" ]; then
         log "🔧 从仓库加载通用工具链组件"
         
         mkdir -p staging_dir/host/bin
@@ -554,22 +582,20 @@ load_toolchain() {
         log "✅ 通用工具链组件加载完成"
     fi
     
-    # 检查构建目录中是否已有工具链
-    if [ -d "staging_dir" ]; then
-        local existing_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
-        if [ -n "$existing_toolchain" ]; then
-            log "✅ 构建目录中已有工具链: $existing_toolchain"
-            log "工具链大小: $(du -sh "$existing_toolchain" 2>/dev/null | cut -f1 || echo '未知')"
-            
-            # 验证工具链完整性
-            if verify_toolchain_completeness "$existing_toolchain"; then
-                log "✅ 工具链完整性验证通过"
-            else
-                log "❌ 工具链不完整，可能需要重新下载"
-            fi
+    # 最终检查
+    local final_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
+    if [ -n "$final_toolchain" ]; then
+        log "✅ 工具链加载成功: $final_toolchain"
+        log "工具链大小: $(du -sh "$final_toolchain" 2>/dev/null | cut -f1 || echo '未知')"
+        
+        # 验证完整性
+        if verify_toolchain_completeness "$final_toolchain"; then
+            log "✅ 工具链完整性验证通过"
         else
-            log "⚠️  构建目录中未找到完整工具链"
+            log "⚠️  工具链完整性验证失败"
         fi
+    else
+        log "⚠️  构建目录中未找到完整工具链，将自动下载"
     fi
     
     return 0
@@ -1489,7 +1515,7 @@ verify_usb_config() {
     if [ "$TARGET" = "ipq40xx" ]; then
         echo "  🔧 检测到高通IPQ40xx平台，检查专用驱动:"
         echo "  - kmod-usb-dwc3-qcom:" $(grep "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
-        echo "  - kmod-phy-qcom-dwc3:" $(greq "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+        echo "  - kmod-phy-qcom-dwc3:" $(grep "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
     elif [ "$TARGET" = "ramips" ]; then
         echo "  🔧 检测到雷凌平台，检查专用驱动:"
         echo "  - kmod-usb-ohci-pci:" $(grep "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
