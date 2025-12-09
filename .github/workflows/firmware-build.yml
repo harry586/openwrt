@@ -397,10 +397,17 @@ jobs:
         fi
 
     - name: 准备提交工具链（使用 Git LFS）
-      if: success() && github.event.inputs.enable_cache == 'true' && github.event.inputs.commit_toolchain == 'true'
+      if: success() && github.event.inputs.enable_cache == 'true' && github.event.inputs.commit_toolchain == 'true' && github.event.inputs.use_git_archive == 'false'
       run: |
         echo "=== 准备提交工具链到仓库（使用 Git LFS）==="
         echo "这将把工具链文件提交到Git仓库，使用Git LFS管理大文件"
+        
+        # 检查当前目录是否是Git仓库
+        if [ ! -d ".git" ]; then
+          echo "❌ 当前目录不是Git仓库，跳过工具链提交"
+          echo "ℹ️  原因：可能使用了Git Archive API下载，或者.git目录不存在"
+          exit 0
+        fi
         
         # 检查是否有工具链文件
         if [ -d "firmware-config/Toolchain" ] && [ -n "$(ls -A firmware-config/Toolchain 2>/dev/null)" ]; then
@@ -574,7 +581,7 @@ jobs:
           echo "   版本目录:"
           ls -la firmware-config/Toolchain/ 2>/dev/null || echo "   无法列出目录"
           
-          if [ "${{ github.event.inputs.commit_toolchain }}" = "true" ] && [ "${{ github.event.inputs.enable_cache }}" = "true" ]; then
+          if [ "${{ github.event.inputs.commit_toolchain }}" = "true" ] && [ "${{ github.event.inputs.enable_cache }}" = "true" ] && [ "${{ github.event.inputs.use_git_archive }}" = "false" ]; then
             echo "   工具链已通过Git LFS提交到仓库，下次构建将自动使用"
             echo "   💡 注意: 大文件已使用Git LFS管理，不会超过GitHub文件大小限制"
           else
