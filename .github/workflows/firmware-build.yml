@@ -125,6 +125,15 @@ jobs:
           rm -rf openwrt-source
           echo "✅ Git Archive API下载完成"
       
+      # 新增：立即上传Git Archive源代码
+      - name: 立即上传Git Archive源代码
+        if: github.event.inputs.use_git_archive == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-archive-source-${{ github.event.inputs.device_name }}
+          path: /tmp/build-artifacts/source-archive/
+          retention-days: 7
+      
       - name: 安装 Git LFS
         if: github.event.inputs.use_git_archive == 'false'
         run: |
@@ -177,20 +186,24 @@ jobs:
       - name: 检查工具链目录状态
         run: |
           echo "=== 检查仓库中的工具链状态 ==="
-          if [ -d "firmware-config/Toolchain" ]; then
+          TOOLCHAIN_DIR="${{ github.workspace }}/firmware-config/Toolchain"
+          
+          if [ -d "$TOOLCHAIN_DIR" ]; then
             echo "✅ 工具链目录存在"
-            echo "工具链目录大小: $(du -sh firmware-config/Toolchain 2>/dev/null | cut -f1 || echo '0')"
+            echo "路径: $TOOLCHAIN_DIR"
+            echo "工具链目录大小: $(du -sh "$TOOLCHAIN_DIR" 2>/dev/null | cut -f1 || echo '未知')"
             echo "工具链目录结构:"
-            find firmware-config/Toolchain -type f -name "*.info" 2>/dev/null | head -10
+            find "$TOOLCHAIN_DIR" -type f -name "*.info" 2>/dev/null | head -10
             
             # 检查文件是否为Git LFS指针
             echo "检查文件是否为LFS指针:"
-            find firmware-config/Toolchain -type f -size +10M 2>/dev/null | head -5 | while read file; do
+            find "$TOOLCHAIN_DIR" -type f -size +10M 2>/dev/null | head -5 | while read file; do
               echo "检查: $file"
               head -c 100 "$file" | grep -q "version https://git-lfs" && echo "  ⚠️  这是LFS指针文件" || echo "  ✅ 这是实际文件"
             done
           else
             echo "ℹ️  工具链目录不存在，将创建新目录"
+            mkdir -p "$TOOLCHAIN_DIR"
           fi
       
       - name: 初始空间检查
@@ -327,22 +340,49 @@ jobs:
             echo "ℹ️  未找到staging_dir目录"
           fi
       
-      - name: 检查工具链加载状态
+      - name: 检查工具链加载状态（改进版）
         run: |
-          echo "=== 检查工具链加载状态 ==="
+          echo "=== 检查工具链加载状态（改进版）==="
           cd ${{ env.BUILD_DIR }}
-          if [ -d "staging_dir/toolchain-"* ]; then
-            echo "✅ 工具链已加载"
-            ls -d staging_dir/toolchain-* | head -1
-            echo "工具链大小: $(du -sh staging_dir/toolchain-* 2>/dev/null | head -1 | cut -f1 || echo '未知')"
-            
-            # 验证工具链完整性
-            echo "验证工具链完整性..."
-            firmware-config/scripts/build_firmware_main.sh check_toolchain_completeness
+          
+          echo "1. 检查仓库中的工具链..."
+          if [ -d "${{ github.workspace }}/firmware-config/Toolchain" ]; then
+            echo "✅ 仓库工具链目录存在"
+            echo "路径: ${{ github.workspace }}/firmware-config/Toolchain"
+            echo "目录大小: $(du -sh "${{ github.workspace }}/firmware-config/Toolchain" 2>/dev/null | cut -f1 || echo '未知')"
+            echo "目录内容:"
+            ls -la "${{ github.workspace }}/firmware-config/Toolchain/" 2>/dev/null | head -10 || echo "无法列出"
           else
-            echo "❌ 工具链未加载"
+            echo "⚠️  仓库工具链目录不存在"
+          fi
+          
+          echo ""
+          echo "2. 检查构建目录中的工具链..."
+          if [ -d "staging_dir" ]; then
+            if find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | grep -q .; then
+              echo "✅ 构建目录中有工具链"
+              find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | while read dir; do
+                echo "  工具链: $dir"
+                echo "  大小: $(du -sh "$dir" 2>/dev/null | cut -f1 || echo '未知')"
+                
+                # 检查编译器
+                if [ -d "$dir/bin" ]; then
+                  echo "  编译器文件:"
+                  find "$dir/bin" -name "*gcc*" 2>/dev/null | head -5 || echo "    无编译器文件"
+                fi
+              done
+            else
+              echo "❌ 构建目录中没有工具链"
+              echo "将自动下载工具链..."
+            fi
+          else
+            echo "❌ staging_dir目录不存在"
             echo "将自动下载工具链..."
           fi
+          
+          echo ""
+          echo "3. 验证工具链完整性..."
+          firmware-config/scripts/build_firmware_main.sh check_toolchain_completeness || echo "工具链完整性检查失败"
       
       - name: 下载依赖包
         run: |
@@ -528,6 +568,19 @@ jobs:
           echo "📤 构建产物已保存在: /tmp/build-artifacts/"
           ls -lh /tmp/build-artifacts/
       
+      # 新增：上传关键构建产物（无论成功失败）
+      - name: 上传关键构建产物（无论成功失败）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: critical-artifacts-${{ github.event.inputs.device_name }}-${{ github.run_id }}
+          path: |
+            ${{ env.BUILD_DIR }}/.config
+            ${{ env.BUILD_DIR }}/feeds.conf.default
+            ${{ env.BUILD_DIR }}/build.log
+            /tmp/build-artifacts/
+          retention-days: 7
+      
       - name: 错误分析
         if: failure()
         run: |
@@ -561,11 +614,11 @@ jobs:
           path: /tmp/build-artifacts/source-info/
           retention-days: 7
       
-      - name: 上传源代码压缩包（Git Archive API模式）
+      - name: 上传Git Archive源代码压缩包（成功时）
         if: success() && github.event.inputs.use_git_archive == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: source-archive-${{ github.event.inputs.device_name }}
+          name: source-archive-final-${{ github.event.inputs.device_name }}
           path: /tmp/build-artifacts/source-archive/
           retention-days: 7
       
