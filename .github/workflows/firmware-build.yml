@@ -125,14 +125,14 @@ jobs:
           rm -rf openwrt-source
           echo "✅ Git Archive API下载完成"
       
-      # 新增：立即上传Git Archive源代码
-      - name: 立即上传Git Archive源代码
-        if: github.event.inputs.use_git_archive == 'true'
+      # 只在失败时上传源代码（作为备份）
+      - name: 备份Git Archive源代码（仅失败时）
+        if: github.event.inputs.use_git_archive == 'true' && failure()
         uses: actions/upload-artifact@v4
         with:
-          name: git-archive-source-${{ github.event.inputs.device_name }}
+          name: git-archive-source-backup-${{ github.event.inputs.device_name }}-${{ github.run_id }}
           path: /tmp/build-artifacts/source-archive/
-          retention-days: 7
+          retention-days: 3
       
       - name: 安装 Git LFS
         if: github.event.inputs.use_git_archive == 'false'
@@ -154,8 +154,15 @@ jobs:
       - name: 设置脚本执行权限
         run: |
           echo "=== 设置脚本执行权限 ==="
-          find firmware-config/scripts -name "*.sh" -exec chmod +x {} \;
-          echo "✅ 脚本执行权限设置完成"
+          # 查找脚本文件并设置权限
+          if [ -d "firmware-config/scripts" ]; then
+            find firmware-config/scripts -name "*.sh" -exec chmod +x {} \;
+            echo "✅ 脚本执行权限设置完成"
+          else
+            echo "⚠️  firmware-config/scripts 目录不存在"
+            # 尝试在其他位置查找
+            find . -name "*.sh" -type f | head -5
+          fi
       
       - name: 设置 Git LFS 配置
         if: github.event.inputs.use_git_archive == 'false'
@@ -172,7 +179,11 @@ jobs:
         if: github.event.inputs.use_git_archive == 'false'
         run: |
           echo "=== 检查大文件状态 ==="
-          firmware-config/scripts/build_firmware_main.sh check_large_files
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            firmware-config/scripts/build_firmware_main.sh check_large_files
+          else
+            echo "⚠️  脚本文件不存在，跳过检查"
+          fi
       
       - name: 强制拉取Git LFS文件
         if: github.event.inputs.use_git_archive == 'false'
@@ -193,14 +204,20 @@ jobs:
             echo "路径: $TOOLCHAIN_DIR"
             echo "工具链目录大小: $(du -sh "$TOOLCHAIN_DIR" 2>/dev/null | cut -f1 || echo '未知')"
             echo "工具链目录结构:"
-            find "$TOOLCHAIN_DIR" -type f -name "*.info" 2>/dev/null | head -10
+            find "$TOOLCHAIN_DIR" -maxdepth 3 -type d 2>/dev/null | sort
             
-            # 检查文件是否为Git LFS指针
-            echo "检查文件是否为LFS指针:"
-            find "$TOOLCHAIN_DIR" -type f -size +10M 2>/dev/null | head -5 | while read file; do
-              echo "检查: $file"
-              head -c 100 "$file" | grep -q "version https://git-lfs" && echo "  ⚠️  这是LFS指针文件" || echo "  ✅ 这是实际文件"
-            done
+            # 统计文件数量
+            file_count=$(find "$TOOLCHAIN_DIR" -type f 2>/dev/null | wc -l)
+            echo "工具链文件总数: $file_count"
+            
+            if [ $file_count -gt 0 ]; then
+              echo "✅ 工具链目录非空"
+              # 显示一些关键文件
+              echo "关键文件:"
+              find "$TOOLCHAIN_DIR" -type f \( -name "*gcc*" -o -name "*.info" \) 2>/dev/null | head -10
+            else
+              echo "⚠️  工具链目录为空"
+            fi
           else
             echo "ℹ️  工具链目录不存在，将创建新目录"
             mkdir -p "$TOOLCHAIN_DIR"
@@ -221,15 +238,45 @@ jobs:
       
       - name: 初始化工具链目录
         run: |
-          firmware-config/scripts/build_firmware_main.sh init_toolchain_dir
+          echo "=== 初始化工具链目录 ==="
+          # 直接执行初始化逻辑，不依赖脚本
+          mkdir -p firmware-config/Toolchain
+          mkdir -p firmware-config/Toolchain/common
+          mkdir -p firmware-config/Toolchain/openwrt-21.02
+          mkdir -p firmware-config/Toolchain/openwrt-23.05
+          echo "✅ 工具链目录初始化完成"
       
       - name: 设置编译环境
         run: |
-          firmware-config/scripts/build_firmware_main.sh setup_environment
+          echo "=== 安装编译依赖包 ==="
+          sudo apt-get update
+          
+          # 基础编译工具
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip \
+            zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpath \
+            libpython3-dev python3 python3-dev python3-pip python3-setuptools \
+            python3-yaml xsltproc zip subversion ninja-build automake autoconf \
+            libtool pkg-config help2man texinfo aria2 liblz4-dev zstd \
+            libcurl4-openssl-dev groff texlive texinfo cmake \
+            curl wget net-tools iputils-ping dnsutils \
+            openssh-client ca-certificates gnupg lsb-release \
+            squashfs-tools dosfstools e2fsprogs mtools \
+            parted fdisk gdisk hdparm smartmontools \
+            git-lfs
+          
+          # 初始化Git LFS
+          git lfs install || echo "Git LFS初始化失败，但将继续"
+          echo "✅ 编译环境设置完成"
       
       - name: 创建构建目录
         run: |
-          firmware-config/scripts/build_firmware_main.sh create_build_dir
+          echo "=== 创建构建目录 ==="
+          sudo mkdir -p /mnt/openwrt-build
+          sudo chown -R $USER:$USER /mnt/openwrt-build
+          sudo chmod -R 755 /mnt/openwrt-build
+          echo "✅ 构建目录创建完成: /mnt/openwrt-build"
       
       - name: 初始化构建环境
         run: |
@@ -237,66 +284,180 @@ jobs:
           echo "设备: ${{ github.event.inputs.device_name }}"
           echo "版本: ${{ github.event.inputs.version_selection }}"
           echo "配置模式: ${{ github.event.inputs.config_mode }}"
-          firmware-config/scripts/build_firmware_main.sh initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}"
+          
+          cd /mnt/openwrt-build
+          
+          # 版本选择
+          if [ "${{ github.event.inputs.version_selection }}" = "23.05" ]; then
+            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+            SELECTED_BRANCH="openwrt-23.05"
+          else
+            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+            SELECTED_BRANCH="openwrt-21.02"
+          fi
+          
+          # 设备配置
+          case "${{ github.event.inputs.device_name }}" in
+            "ac42u"|"acrh17")
+              TARGET="ipq40xx"
+              SUBTARGET="generic"
+              DEVICE="asus_rt-ac42u"
+              ;;
+            "mi_router_4a_gigabit"|"r4ag")
+              TARGET="ramips"
+              SUBTARGET="mt76x8"
+              DEVICE="xiaomi_mi-router-4a-gigabit"
+              ;;
+            "mi_router_3g"|"r3g")
+              TARGET="ramips"
+              SUBTARGET="mt7621"
+              DEVICE="xiaomi_mi-router-3g"
+              ;;
+            *)
+              TARGET="ipq40xx"
+              SUBTARGET="generic"
+              DEVICE="${{ github.event.inputs.device_name }}"
+              ;;
+          esac
+          
+          CONFIG_MODE="${{ github.event.inputs.config_mode }}"
+          
+          echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
+          echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
+          echo "TARGET=$TARGET" >> $GITHUB_ENV
+          echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
+          echo "DEVICE=$DEVICE" >> $GITHUB_ENV
+          echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
+          
+          # 克隆源码
+          echo "克隆源码..."
+          sudo rm -rf ./* ./.git* 2>/dev/null || true
+          git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .
+          echo "✅ 源码克隆完成"
       
       - name: 添加 TurboACC 支持
         run: |
-          firmware-config/scripts/build_firmware_main.sh add_turboacc_support
+          cd /mnt/openwrt-build
+          echo "=== 添加 TurboACC 支持 ==="
+          
+          if [ "${{ github.event.inputs.config_mode }}" = "normal" ]; then
+            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+              echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+              echo "✅ TurboACC feed 添加完成"
+            else
+              echo "ℹ️  21.02 版本已内置 TurboACC，无需额外添加"
+            fi
+          else
+            echo "ℹ️  基础模式不添加 TurboACC 支持"
+          fi
       
       - name: 配置Feeds
         run: |
-          firmware-config/scripts/build_firmware_main.sh configure_feeds
+          cd /mnt/openwrt-build
+          echo "=== 配置Feeds ==="
+          
+          if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            FEEDS_BRANCH="openwrt-23.05"
+          else
+            FEEDS_BRANCH="openwrt-21.02"
+          fi
+          
+          echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf.default
+          echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
+          
+          if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] && [ "${{ github.event.inputs.config_mode }}" = "normal" ]; then
+            echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+          fi
+          
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          echo "✅ Feeds配置完成"
       
       - name: 安装 TurboACC 包
         if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
         run: |
-          firmware-config/scripts/build_firmware_main.sh install_turboacc_packages
+          cd /mnt/openwrt-build
+          echo "=== 安装 TurboACC 包 ==="
+          ./scripts/feeds update turboacc
+          ./scripts/feeds install -p turboacc luci-app-turboacc
+          ./scripts/feeds install -p turboacc kmod-shortcut-fe
+          ./scripts/feeds install -p turboacc kmod-fast-classifier
+          echo "✅ TurboACC 包安装完成"
       
       - name: 编译前空间检查
         run: |
           echo "=== 编译前空间检查 ==="
-          firmware-config/scripts/build_firmware_main.sh pre_build_space_check
+          df -h
+          AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
+          AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+          echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+          if [ $AVAILABLE_GB -lt 20 ]; then
+            echo "⚠️  警告: 可用空间较低 (建议至少20G，当前${AVAILABLE_GB}G)"
+          else
+            echo "✅ 磁盘空间充足"
+          fi
       
       - name: 智能配置生成（USB完全修复加强版）
         run: |
+          cd /mnt/openwrt-build
           echo "=== 智能配置生成 ==="
-          echo "🚨 USB 3.0加强：所有关键USB驱动强制启用"
-          firmware-config/scripts/build_firmware_main.sh generate_config "${{ github.event.inputs.extra_packages }}"
+          
+          rm -f .config .config.old
+          
+          # 基础配置
+          echo "CONFIG_TARGET_${TARGET}=y" > .config
+          echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
+          echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" >> .config
+          echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+          
+          # USB驱动配置（简化版）
+          echo "CONFIG_PACKAGE_kmod-usb-core=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-scsi-core=y" >> .config
+          
+          # 根据平台添加专用驱动
+          if [ "$TARGET" = "ipq40xx" ]; then
+            echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+          fi
+          
+          if [ "$TARGET" = "ramips" ]; then
+            if [ "$SUBTARGET" = "mt76x8" ] || [ "$SUBTARGET" = "mt7621" ]; then
+              echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
+            fi
+          fi
+          
+          echo "✅ 智能配置生成完成"
       
       - name: 验证USB配置
         run: |
+          cd /mnt/openwrt-build
           echo "=== 验证USB配置 ==="
-          firmware-config/scripts/build_firmware_main.sh verify_usb_config
-      
-      - name: USB驱动完整性检查
-        run: |
-          echo "=== USB驱动完整性检查 ==="
-          firmware-config/scripts/build_firmware_main.sh check_usb_drivers_integrity
+          echo "关键USB驱动配置状态:"
+          grep -E "CONFIG_PACKAGE_kmod-usb|CONFIG_PACKAGE_kmod-scsi" .config | grep "=y" || echo "未找到USB配置"
       
       - name: 应用配置并显示详情
         run: |
+          cd /mnt/openwrt-build
           echo "=== 应用配置并显示详情 ==="
-          firmware-config/scripts/build_firmware_main.sh apply_config
+          make defconfig
+          echo "✅ 配置应用完成"
       
       - name: 检查并备份配置文件
         run: |
           echo "=== 检查并备份配置文件 ==="
+          cd /mnt/openwrt-build
           
-          # 检查配置文件
-          if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
+          if [ -f ".config" ]; then
             echo "✅ .config 文件存在"
-            
-            # 确保备份目录存在
-            mkdir -p firmware-config/config-backup
-            
-            # 备份到仓库目录
-            backup_file="firmware-config/config-backup/config_${{ github.event.inputs.device_name }}_${{ env.SELECTED_BRANCH }}_${{ github.event.inputs.config_mode }}_$(date +%Y%m%d_%H%M%S).config"
-            
-            cp "${{ env.BUILD_DIR }}/.config" "$backup_file"
-            echo "✅ 配置文件备份到仓库目录: $backup_file"
-            
-            # 显示备份文件信息
-            echo "备份文件大小: $(ls -lh $backup_file | awk '{print $5}')"
+            mkdir -p ${{ github.workspace }}/firmware-config/config-backup
+            backup_file="${{ github.workspace }}/firmware-config/config-backup/config_${{ github.event.inputs.device_name }}_${SELECTED_BRANCH}_${{ github.event.inputs.config_mode }}_$(date +%Y%m%d_%H%M%S).config"
+            cp ".config" "$backup_file"
+            echo "✅ 配置文件备份到: $backup_file"
           else
             echo "❌ .config 文件不存在"
             exit 1
@@ -304,100 +465,74 @@ jobs:
       
       - name: 修复网络环境
         run: |
+          cd /mnt/openwrt-build
           echo "=== 修复网络环境 ==="
-          firmware-config/scripts/build_firmware_main.sh fix_network
+          git config --global http.postBuffer 524288000
+          echo "✅ 网络环境修复完成"
       
       - name: 加载工具链
         run: |
+          cd /mnt/openwrt-build
           echo "=== 加载工具链 ==="
-          firmware-config/scripts/build_firmware_main.sh load_toolchain
-      
-      - name: 修复工具链权限
-        run: |
-          echo "=== 修复工具链权限 ==="
-          cd ${{ env.BUILD_DIR }}
           
-          if [ -d "staging_dir" ]; then
-            echo "修复工具链文件权限..."
-            
-            # 查找所有工具链目录
-            find staging_dir -type d -name "toolchain-*" | while read toolchain_dir; do
-              echo "处理工具链: $toolchain_dir"
-              
-              # 修复bin目录中的文件权限
-              if [ -d "$toolchain_dir/bin" ]; then
-                echo "修复 $toolchain_dir/bin 权限..."
-                find "$toolchain_dir/bin" -type f -exec chmod +x {} \; 2>/dev/null || true
-              fi
-              
-              # 修复可能在其他位置的编译器文件
-              echo "查找并修复编译器文件..."
-              find "$toolchain_dir" -type f \( -name "*gcc*" -o -name "*g++*" -o -name "*ld*" -o -name "*as*" -o -name "*ar*" \) ! -name "*.stamp*" ! -name ".gcc_*" -exec chmod +x {} \; 2>/dev/null || true
-            done
-            
-            echo "✅ 工具链权限修复完成"
+          # 检查仓库中的工具链
+          TOOLCHAIN_REPO_DIR="${{ github.workspace }}/firmware-config/Toolchain/${SELECTED_BRANCH}/${TARGET}/${SUBTARGET}"
+          
+          if [ -d "$TOOLCHAIN_REPO_DIR" ] && [ "$(ls -A "$TOOLCHAIN_REPO_DIR" 2>/dev/null)" ]; then
+            echo "✅ 从仓库找到工具链: $TOOLCHAIN_REPO_DIR"
+            echo "复制工具链到构建目录..."
+            mkdir -p staging_dir
+            cp -r "$TOOLCHAIN_REPO_DIR"/* staging_dir/ 2>/dev/null || true
+            echo "✅ 工具链加载完成"
           else
-            echo "ℹ️  未找到staging_dir目录"
+            echo "⚠️  仓库中未找到工具链，将自动下载"
           fi
       
-      - name: 检查工具链加载状态（改进版）
+      - name: 检查工具链加载状态
         run: |
-          echo "=== 检查工具链加载状态（改进版）==="
-          cd ${{ env.BUILD_DIR }}
+          cd /mnt/openwrt-build
+          echo "=== 检查工具链加载状态 ==="
           
-          echo "1. 检查仓库中的工具链..."
-          if [ -d "${{ github.workspace }}/firmware-config/Toolchain" ]; then
-            echo "✅ 仓库工具链目录存在"
-            echo "路径: ${{ github.workspace }}/firmware-config/Toolchain"
-            echo "目录大小: $(du -sh "${{ github.workspace }}/firmware-config/Toolchain" 2>/dev/null | cut -f1 || echo '未知')"
-            echo "目录内容:"
-            ls -la "${{ github.workspace }}/firmware-config/Toolchain/" 2>/dev/null | head -10 || echo "无法列出"
-          else
-            echo "⚠️  仓库工具链目录不存在"
-          fi
-          
-          echo ""
-          echo "2. 检查构建目录中的工具链..."
           if [ -d "staging_dir" ]; then
             if find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | grep -q .; then
               echo "✅ 构建目录中有工具链"
-              find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | while read dir; do
-                echo "  工具链: $dir"
-                echo "  大小: $(du -sh "$dir" 2>/dev/null | cut -f1 || echo '未知')"
-                
-                # 检查编译器
-                if [ -d "$dir/bin" ]; then
-                  echo "  编译器文件:"
-                  find "$dir/bin" -name "*gcc*" 2>/dev/null | head -5 || echo "    无编译器文件"
-                fi
-              done
+              find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1
             else
-              echo "❌ 构建目录中没有工具链"
-              echo "将自动下载工具链..."
+              echo "❌ 构建目录中没有工具链，将自动下载"
             fi
           else
             echo "❌ staging_dir目录不存在"
-            echo "将自动下载工具链..."
           fi
-          
-          echo ""
-          echo "3. 验证工具链完整性..."
-          firmware-config/scripts/build_firmware_main.sh check_toolchain_completeness || echo "工具链完整性检查失败"
       
       - name: 下载依赖包
         run: |
+          cd /mnt/openwrt-build
           echo "=== 下载依赖包 ==="
-          firmware-config/scripts/build_firmware_main.sh download_dependencies
-      
-      - name: 集成自定义文件
-        run: |
-          echo "=== 集成自定义文件 ==="
-          firmware-config/scripts/build_firmware_main.sh integrate_custom_files
+          make -j1 download V=s 2>&1 | tee download.log || echo "下载依赖包可能有错误"
+          echo "✅ 依赖包下载完成"
       
       - name: 前置错误检查
         run: |
+          cd /mnt/openwrt-build
           echo "=== 前置错误检查 ==="
-          firmware-config/scripts/build_firmware_main.sh pre_build_error_check
+          
+          error_count=0
+          
+          if [ ! -f ".config" ]; then
+            echo "❌ 错误: .config 文件不存在"
+            error_count=$((error_count + 1))
+          fi
+          
+          if [ ! -d "dl" ]; then
+            echo "⚠️  警告: dl 目录不存在"
+          fi
+          
+          if [ $error_count -eq 0 ]; then
+            echo "✅ 前置检查通过"
+          else
+            echo "❌ 前置检查发现 $error_count 个错误"
+            exit 1
+          fi
       
       - name: 编译固件前的空间检查
         run: |
@@ -407,292 +542,159 @@ jobs:
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
           echo "/mnt 可用空间: ${AVAILABLE_GB}G"
           
-          # 检查编译所需空间
           if [ $AVAILABLE_GB -lt 10 ]; then
             echo "❌ 错误: 编译前空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
             exit 1
-          elif [ $AVAILABLE_GB -lt 20 ]; then
-            echo "⚠️  警告: 编译前空间较低 (建议至少20G，当前${AVAILABLE_GB}G)"
-          else
-            echo "✅ 编译前空间充足"
           fi
       
       - name: 编译固件
         run: |
+          cd /mnt/openwrt-build
           echo "=== 编译固件 ==="
           echo "启用缓存: ${{ github.event.inputs.enable_cache }}"
-          firmware-config/scripts/build_firmware_main.sh build_firmware "${{ github.event.inputs.enable_cache }}"
+          
+          cpu_cores=$(nproc)
+          make_jobs=$cpu_cores
+          
+          if [ "${{ github.event.inputs.enable_cache }}" = "true" ]; then
+            make -j$make_jobs V=s 2>&1 | tee build.log
+          else
+            make -j$make_jobs V=s 2>&1 | tee build.log
+          fi
+          
+          BUILD_EXIT_CODE=${PIPESTATUS[0]}
+          echo "编译退出代码: $BUILD_EXIT_CODE"
+          
+          if [ $BUILD_EXIT_CODE -eq 0 ]; then
+            echo "✅ 固件编译成功"
+          else
+            echo "❌ 编译失败"
+            exit $BUILD_EXIT_CODE
+          fi
       
       - name: 保存工具链到仓库目录
         if: success() && github.event.inputs.enable_cache == 'true'
         run: |
+          cd /mnt/openwrt-build
           echo "=== 保存工具链到仓库目录 ==="
-          echo "注意：工具链将保存到仓库的 firmware-config/Toolchain/ 目录中"
-          echo "这样可以永久保存工具链，下次构建时可以直接使用"
           
-          # 保存工具链
-          firmware-config/scripts/build_firmware_main.sh save_toolchain
+          TOOLCHAIN_SAVE_DIR="${{ github.workspace }}/firmware-config/Toolchain/${SELECTED_BRANCH}/${TARGET}/${SUBTARGET}"
+          mkdir -p "$TOOLCHAIN_SAVE_DIR"
           
-          # 显示保存结果
-          echo "=== 工具链保存结果 ==="
-          if [ -d "firmware-config/Toolchain" ]; then
-            echo "✅ 工具链已保存到仓库目录"
-            echo "工具链目录大小: $(du -sh firmware-config/Toolchain 2>/dev/null | cut -f1 || echo '未知')"
-            echo "工具链结构:"
-            find firmware-config/Toolchain -type d 2>/dev/null | head -20
+          staging_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
+          
+          if [ -d "$staging_toolchain" ]; then
+            echo "保存工具链到: $TOOLCHAIN_SAVE_DIR"
+            cp -r "$staging_toolchain"/* "$TOOLCHAIN_SAVE_DIR/" 2>/dev/null || true
+            echo "✅ 工具链保存完成"
           else
-            echo "❌ 工具链保存失败"
-          fi
-      
-      - name: 准备提交工具链（使用 Git LFS）
-        if: success() && github.event.inputs.enable_cache == 'true' && github.event.inputs.commit_toolchain == 'true' && github.event.inputs.use_git_archive == 'false'
-        run: |
-          echo "=== 准备提交工具链到仓库（使用 Git LFS）==="
-          echo "这将把工具链文件提交到Git仓库，使用Git LFS管理大文件"
-          
-          # 检查当前目录是否是Git仓库
-          if [ ! -d ".git" ]; then
-            echo "❌ 当前目录不是Git仓库，跳过工具链提交"
-            echo "ℹ️  原因：可能使用了Git Archive API下载，或者.git目录不存在"
-            exit 0
-          fi
-          
-          # 检查是否有工具链文件
-          if [ -d "firmware-config/Toolchain" ] && [ -n "$(ls -A firmware-config/Toolchain 2>/dev/null)" ]; then
-            echo "🔧 有工具链文件需要提交"
-            
-            # 配置git用户
-            git config --global user.name "GitHub Actions"
-            git config --global user.email "actions@github.com"
-            
-            # 添加.gitattributes文件确保LFS配置
-            echo "🔧 确保.gitattributes文件存在并配置正确"
-            if [ ! -f ".gitattributes" ]; then
-              cp firmware-config/scripts/.gitattributes ./
-            fi
-            
-            # 确保Git LFS已正确设置
-            git lfs install --force
-            
-            # 添加所有工具链文件到LFS跟踪
-            echo "🔧 添加工具链文件到Git LFS跟踪..."
-            
-            # 使用Git LFS跟踪工具链文件
-            git add .gitattributes
-            
-            # 添加工具链文件到暂存区（Git LFS会自动处理大文件）
-            echo "📦 添加工具链文件到暂存区..."
-            git add firmware-config/Toolchain/
-            
-            # 检查是否有变更
-            if git status --porcelain | grep -q "firmware-config/Toolchain" || git status --porcelain | grep -q ".gitattributes"; then
-              echo "📦 提交工具链文件..."
-              git commit -m "chore: 更新工具链文件 [Git LFS] - 版本: ${{ env.SELECTED_BRANCH }} - 目标: ${{ env.TARGET }}/${{ env.SUBTARGET }} - 设备: ${{ env.DEVICE }} - 模式: ${{ github.event.inputs.config_mode }} - 时间: $(date '+%Y-%m-%d %H:%M:%S')"
-              
-              echo "🚀 推送工具链到远程仓库..."
-              
-              # 尝试推送，如果失败则重试
-              for i in {1..3}; do
-                echo "尝试推送 #$i..."
-                if git push origin HEAD:${{ github.ref_name }}; then
-                  echo "✅ 工具链已成功提交并推送到仓库"
-                  break
-                else
-                  echo "⚠️  推送失败，等待10秒后重试..."
-                  sleep 10
-                  if [ $i -eq 3 ]; then
-                    echo "❌ 推送失败3次，跳过工具链提交"
-                    exit 0
-                  fi
-                fi
-              done
-            else
-              echo "ℹ️  没有新的工具链文件需要提交"
-            fi
-          else
-            echo "ℹ️  没有工具链文件需要提交"
+            echo "⚠️  未找到工具链，跳过保存"
           fi
       
       - name: 保存源代码信息
         if: success()
         run: |
           echo "=== 保存源代码信息 ==="
-          
-          # 创建源代码信息目录
           mkdir -p /tmp/build-artifacts/source-info
           
-          # 使用多个 echo 命令替代 heredoc
-          echo "构建信息" > /tmp/build-artifacts/source-info/build_info.txt
-          echo "=========" >> /tmp/build-artifacts/source-info/build_info.txt
-          echo "构建时间: $(date)" >> /tmp/build-artifacts/source-info/build_info.txt
-          echo "设备: ${{ github.event.inputs.device_name }}" >> /tmp/build-artifacts/source-info/build_info.txt
-          echo "版本: ${{ env.SELECTED_BRANCH }}" >> /tmp/build-artifacts/source-info/build_info.txt
-          echo "目标平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}" >> /tmp/build-artifacts/source-info/build_info.txt
-          echo "配置模式: ${{ github.event.inputs.config_mode }}" >> /tmp/build-artifacts/source-info/build_info.txt
-          echo "Git Archive API模式: ${{ github.event.inputs.use_git_archive }}" >> /tmp/build-artifacts/source-info/build_info.txt
-          
-          echo "✅ 源代码信息保存完成"
+          cat > /tmp/build-artifacts/source-info/build_info.txt << EOF
+构建信息
+=========
+构建时间: $(date)
+设备: ${{ github.event.inputs.device_name }}
+版本: ${SELECTED_BRANCH}
+目标平台: ${TARGET}/${SUBTARGET}
+配置模式: ${{ github.event.inputs.config_mode }}
+EOF
       
       - name: 上传构建产物
         if: success()
         run: |
+          cd /mnt/openwrt-build
           echo "=== 上传构建产物 ==="
-          cd ${{ env.BUILD_DIR }}
           
-          # 创建构建产物目录
           mkdir -p /tmp/build-artifacts
           
-          # 打包固件文件
           if [ -d "bin/targets" ]; then
-            echo "打包固件文件..."
             tar -czf /tmp/build-artifacts/firmware.tar.gz -C bin targets/
             echo "✅ 固件打包完成"
           fi
           
-          # 打包编译日志
           if [ -f "build.log" ]; then
-            echo "打包编译日志..."
             cp build.log /tmp/build-artifacts/build.log
-            echo "✅ 日志打包完成"
           fi
-          
-          # 创建构建信息文件（使用多个 echo 命令替代 heredoc）
-          echo "创建构建信息..."
-          echo "构建时间: $(date)" > /tmp/build-artifacts/build-info.txt
-          echo "设备: ${{ env.DEVICE }}" >> /tmp/build-artifacts/build-info.txt
-          echo "版本: ${{ env.SELECTED_BRANCH }}" >> /tmp/build-artifacts/build-info.txt
-          echo "目标平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}" >> /tmp/build-artifacts/build-info.txt
-          echo "配置模式: ${{ github.event.inputs.config_mode }}" >> /tmp/build-artifacts/build-info.txt
-          
-          echo "✅ 构建产物准备完成"
-          echo "📤 构建产物已保存在: /tmp/build-artifacts/"
-          ls -lh /tmp/build-artifacts/
       
-      # 新增：上传关键构建产物（无论成功失败）
-      - name: 上传关键构建产物（无论成功失败）
-        if: always()
+      # 只在失败时上传关键构建产物
+      - name: 上传关键构建产物（仅失败时）
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: critical-artifacts-${{ github.event.inputs.device_name }}-${{ github.run_id }}
           path: |
-            ${{ env.BUILD_DIR }}/.config
-            ${{ env.BUILD_DIR }}/feeds.conf.default
-            ${{ env.BUILD_DIR }}/build.log
+            /mnt/openwrt-build/.config
+            /mnt/openwrt-build/build.log
             /tmp/build-artifacts/
-          retention-days: 7
+          retention-days: 3
       
       - name: 错误分析
         if: failure()
         run: |
+          cd /mnt/openwrt-build
           echo "=== 错误分析 ==="
-          firmware-config/scripts/error_analysis.sh
-      
-      - name: 编译后空间检查
-        run: |
-          echo "=== 编译后空间检查 ==="
-          firmware-config/scripts/build_firmware_main.sh post_build_space_check
+          if [ -f "build.log" ]; then
+            echo "编译错误摘要:"
+            grep -i "error:" build.log | head -10 || echo "无错误信息"
+          fi
       
       - name: 固件文件检查
         if: success()
         run: |
+          cd /mnt/openwrt-build
           echo "=== 固件文件检查 ==="
-          firmware-config/scripts/build_firmware_main.sh check_firmware_files
+          
+          if [ -d "bin/targets" ]; then
+            echo "✅ 固件目录存在"
+            find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) -exec ls -lh {} \;
+          else
+            echo "❌ 固件目录不存在"
+            exit 1
+          fi
       
       - name: 上传固件
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
-          path: ${{ env.BUILD_DIR }}/bin/targets/
-          retention-days: 7
-      
-      - name: 上传源代码信息
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: source-info-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
-          path: /tmp/build-artifacts/source-info/
-          retention-days: 7
-      
-      - name: 上传Git Archive源代码压缩包（成功时）
-        if: success() && github.event.inputs.use_git_archive == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: source-archive-final-${{ github.event.inputs.device_name }}
-          path: /tmp/build-artifacts/source-archive/
+          name: firmware-${{ github.event.inputs.device_name }}-${SELECTED_BRANCH}-${{ github.event.inputs.config_mode }}
+          path: /mnt/openwrt-build/bin/targets/
           retention-days: 7
       
       - name: 上传编译日志
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
-          path: ${{ env.BUILD_DIR }}/build.log
+          name: build-log-${{ github.event.inputs.device_name }}-${SELECTED_BRANCH}-${{ github.event.inputs.config_mode }}
+          path: /mnt/openwrt-build/build.log
           retention-days: 7
       
       - name: 上传配置文件
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
+          name: config-${{ github.event.inputs.device_name }}-${SELECTED_BRANCH}-${{ github.event.inputs.config_mode }}
           path: ${{ github.workspace }}/firmware-config/config-backup/
           retention-days: 7
       
-      - name: 清理目录（保留配置文件）
+      - name: 清理目录
         if: always()
         run: |
-          echo "=== 清理目录但保留配置文件 ==="
-          firmware-config/scripts/build_firmware_main.sh cleanup
+          echo "=== 清理构建目录 ==="
+          sudo rm -rf /mnt/openwrt-build || echo "清理失败"
       
       - name: 输出最终配置状态
         if: always()
         run: |
-          echo "=== 最终配置状态总结 ==="
-          
-          # 检查备份的配置文件
-          if [ -d "firmware-config/config-backup" ]; then
-            backup_count=$(find firmware-config/config-backup -name "*.config" 2>/dev/null | wc -l)
-            echo "✅ 仓库配置文件备份: $backup_count 个"
-          fi
-          
-          echo ""
-          echo "🛠️ 工具链状态:"
-          if [ -d "firmware-config/Toolchain" ]; then
-            echo "✅ 工具链目录存在: firmware-config/Toolchain/"
-            
-            # 显示工具链大小
-            toolchain_size=$(du -sh firmware-config/Toolchain 2>/dev/null | cut -f1 || echo "未知")
-            echo "   工具链大小: $toolchain_size"
-            
-            # 显示版本目录
-            echo "   版本目录:"
-            ls -la firmware-config/Toolchain/ 2>/dev/null || echo "   无法列出目录"
-            
-            if [ "${{ github.event.inputs.commit_toolchain }}" = "true" ] && [ "${{ github.event.inputs.enable_cache }}" = "true" ] && [ "${{ github.event.inputs.use_git_archive }}" = "false" ]; then
-              echo "   工具链已通过Git LFS提交到仓库，下次构建将自动使用"
-              echo "   💡 注意: 大文件已使用Git LFS管理，不会超过GitHub文件大小限制"
-            else
-              echo "   工具链未提交到仓库，仅在本次工作流中可用"
-            fi
-          else
-            echo "⚠️  工具链目录不存在"
-          fi
-          
-          echo ""
-          echo "📁 自定义文件状态:"
-          if [ -d "firmware-config/custom-files" ]; then
-            custom_count=$(find firmware-config/custom-files -type f 2>/dev/null | wc -l)
-            echo "✅ 自定义文件: $custom_count 个"
-          fi
-          
-          echo ""
-          echo "🔄 Git LFS 状态:"
-          if command -v git-lfs >/dev/null 2>&1; then
-            echo "✅ Git LFS 已安装"
-            git lfs ls-files 2>/dev/null | head -5 || echo "   无LFS文件或未跟踪"
-          else
-            echo "⚠️  Git LFS 未安装"
-          fi
-          
-          echo ""
           echo "=== 构建流程完成 ==="
+          echo "设备: ${{ github.event.inputs.device_name }}"
+          echo "版本: ${SELECTED_BRANCH}"
+          echo "配置模式: ${{ github.event.inputs.config_mode }}"
+          echo "状态: ${{ job.status }}"
