@@ -1,5 +1,3 @@
-[file name]: build_firmware_main.sh
-[file content begin]
 #!/bin/bash
 set -e
 
@@ -1491,7 +1489,7 @@ verify_usb_config() {
     if [ "$TARGET" = "ipq40xx" ]; then
         echo "  🔧 检测到高通IPQ40xx平台，检查专用驱动:"
         echo "  - kmod-usb-dwc3-qcom:" $(grep "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
-        echo "  - kmod-phy-qcom-dwc3:" $(grep "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+        echo "  - kmod-phy-qcom-dwc3:" $(greq "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
     elif [ "$TARGET" = "ramips" ]; then
         echo "  🔧 检测到雷凌平台，检查专用驱动:"
         echo "  - kmod-usb-ohci-pci:" $(grep "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
@@ -2181,4 +2179,3 @@ main() {
 }
 
 main "$@"
-[file content end]
