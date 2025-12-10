@@ -151,8 +151,8 @@ jobs:
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step8_setup_environment
       
-      # 步骤9：创建构建目录
-      - name: "📁 9. 创建构建目录"
+      # 步骤9：检查构建目录
+      - name: "📁 9. 检查构建目录"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step9_create_build_dir
       
