@@ -273,7 +273,7 @@ smart_manage_large_files() {
     log "✅ 智能大文件管理完成"
 }
 
-# ========== OpenWrt源码下载函数（新增） ==========
+# ========== OpenWrt源码下载函数 ==========
 
 # 下载OpenWrt源代码
 download_openwrt_source() {
@@ -458,8 +458,9 @@ EOF
 check_toolchain_completeness() {
     log "=== 检查工具链完整性 ==="
     
-    if [ -d "$BUILD_DIR/staging_dir" ]; then
-        local toolchain_dirs=$(find "$BUILD_DIR/staging_dir" -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null)
+    # 修复路径：使用 openwrt/staging_dir
+    if [ -d "$BUILD_DIR/openwrt/staging_dir" ]; then
+        local toolchain_dirs=$(find "$BUILD_DIR/openwrt/staging_dir" -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null)
         
         if [ -n "$toolchain_dirs" ]; then
             log "✅ 工具链目录存在"
@@ -470,13 +471,13 @@ check_toolchain_completeness() {
             # 根据目标平台检查相应的编译器
             if [ "$TARGET" = "ramips" ] && [ "$SUBTARGET" = "mt76x8" ]; then
                 # 检查 mipsel 编译器
-                if find "$BUILD_DIR/staging_dir" -name "mipsel-openwrt-linux-*-gcc" -type f -executable 2>/dev/null | grep -q .; then
+                if find "$BUILD_DIR/openwrt/staging_dir" -name "mipsel-openwrt-linux-*-gcc" -type f -executable 2>/dev/null | grep -q .; then
                     compiler_found=true
                     log "✅ 找到 mipsel 编译器"
                 fi
             elif [ "$TARGET" = "ramips" ] && [ "$SUBTARGET" = "mt7621" ]; then
                 # 检查 mipsel 编译器
-                if find "$BUILD_DIR/staging_dir" -name "mipsel-openwrt-linux-*-gcc" -type f -executable 2>/dev/null | grep -q .; then
+                if find "$BUILD_DIR/openwrt/staging_dir" -name "mipsel-openwrt-linux-*-gcc" -type f -executable 2>/dev/null | grep -q .; then
                     compiler_found=true
                     log "✅ 找到 mipsel 编译器"
                 fi
@@ -620,6 +621,16 @@ generate_config() {
     # 生成默认配置
     make defconfig
     
+    # 显示配置摘要
+    log "📋 默认配置摘要:"
+    log "目标平台: $TARGET/$SUBTARGET"
+    log "设备: $DEVICE"
+    log "配置行数: $(wc -l < .config)"
+    
+    # 显示关键配置项
+    log "🔑 关键配置项:"
+    grep -E "^(CONFIG_TARGET|CONFIG_PACKAGE|CONFIG_DEVEL|CONFIG_BUILD)" .config | head -20
+    
     log "✅ 默认配置生成完成"
 }
 
@@ -641,13 +652,17 @@ verify_usb_config() {
         )
         
         local missing_count=0
+        log "📋 USB驱动检查列表:"
         for driver in "${usb_drivers[@]}"; do
+            local config_name=$(echo "$driver" | cut -d'=' -f1)
             if ! grep -q "^$driver" .config; then
                 log "❌ 缺失: $driver"
                 missing_count=$((missing_count + 1))
                 # 自动添加缺失的配置
                 echo "$driver" >> .config
                 log "✅ 自动添加: $driver"
+            else
+                log "✅ 已配置: $config_name"
             fi
         done
         
@@ -680,6 +695,10 @@ check_usb_drivers_integrity() {
         log "  总 USB 配置项: $usb_configs"
         log "  已启用的 USB 驱动: $enabled_usb_configs"
         
+        # 显示已启用的USB驱动
+        log "📋 已启用的USB驱动:"
+        grep "^CONFIG_PACKAGE_kmod-usb.*=y" .config | head -10
+        
         if [ $enabled_usb_configs -gt 0 ]; then
             log "✅ USB 驱动基本配置完整"
         else
@@ -711,6 +730,13 @@ apply_config() {
         
         log "  已启用的包: $enabled_packages"
         log "  已禁用的包: $disabled_packages"
+        
+        # 显示前10个启用的包
+        log "📦 前10个启用的包:"
+        grep "^CONFIG_PACKAGE_.*=y" .config | head -10 | while read line; do
+            local pkg=$(echo "$line" | sed 's/CONFIG_PACKAGE_//;s/=y//')
+            log "  ✅ $pkg"
+        done
         
         log "✅ 配置应用完成"
     else
@@ -755,6 +781,13 @@ download_dependencies() {
     if [ -d "dl" ]; then
         local dl_count=$(find dl -type f 2>/dev/null | wc -l || echo "0")
         log "📊 已下载文件: $dl_count 个"
+        
+        # 显示前5个下载的文件
+        log "📁 前5个下载的文件:"
+        find dl -type f | head -5 | while read file; do
+            local size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "未知")
+            log "  - $(basename "$file") ($size)"
+        done
     else
         log "❌ dl 目录不存在"
     fi
@@ -771,19 +804,35 @@ integrate_custom_files() {
     log "🔌 集成自定义文件..."
     
     # 检查是否有自定义文件目录
-    if [ -d "$REPO_ROOT/firmware-config/files" ]; then
-        log "📁 找到自定义文件目录"
+    local custom_files_dir="$REPO_ROOT/firmware-config/files"
+    
+    if [ -d "$custom_files_dir" ]; then
+        log "📁 找到自定义文件目录: $custom_files_dir"
+        log "📊 目录内容:"
+        find "$custom_files_dir" -type f | head -10 | while read file; do
+            log "  - $(basename "$file")"
+        done
         
         # 创建files目录（如果不存在）
         mkdir -p files
         
         # 复制文件到构建目录
-        if [ -d "$REPO_ROOT/firmware-config/files" ]; then
-            cp -r "$REPO_ROOT/firmware-config/files/"* files/ 2>/dev/null || true
-            log "✅ 自定义文件复制完成"
-        fi
+        log "📦 复制自定义文件..."
+        cp -r "$custom_files_dir/"* files/ 2>/dev/null || true
+        
+        # 检查复制结果
+        local copied_count=$(find files -type f 2>/dev/null | wc -l || echo "0")
+        log "✅ 自定义文件复制完成，共复制 $copied_count 个文件"
+        
+        # 显示复制的文件
+        log "📋 复制的文件:"
+        find files -type f | head -5 | while read file; do
+            log "  - $file"
+        done
     else
-        log "ℹ️  无自定义文件目录"
+        log "ℹ️  无自定义文件目录: $custom_files_dir 不存在"
+        log "📁 检查路径: $REPO_ROOT"
+        log "📁 当前工作目录: $(pwd)"
     fi
     
     log "=== 自定义文件集成完成 ==="
@@ -799,32 +848,89 @@ pre_build_error_check() {
     
     # 检查关键目录
     local errors=0
+    local warnings=0
     
-    if [ ! -f ".config" ]; then
-        log "❌ 错误: .config 文件不存在"
+    log "📋 检查项目:"
+    
+    # 1. 检查 .config 文件
+    if [ -f ".config" ]; then
+        log "  ✅ .config 文件存在"
+        log "    文件大小: $(ls -lh .config | awk '{print $5}')"
+        log "    配置行数: $(wc -l < .config)"
+    else
+        log "  ❌ 错误: .config 文件不存在"
         errors=$((errors + 1))
     fi
     
-    if [ ! -d "staging_dir" ]; then
-        log "❌ 错误: staging_dir 目录不存在"
+    # 2. 检查 staging_dir 目录
+    if [ -d "staging_dir" ]; then
+        log "  ✅ staging_dir 目录存在"
+        log "    目录大小: $(du -sh staging_dir 2>/dev/null | cut -f1 || echo '未知')"
+    else
+        log "  ❌ 错误: staging_dir 目录不存在"
         errors=$((errors + 1))
     fi
     
-    if [ ! -d "dl" ]; then
-        log "⚠️  警告: dl 目录不存在，依赖包可能未下载"
+    # 3. 检查 dl 目录
+    if [ -d "dl" ]; then
+        local dl_count=$(find dl -type f 2>/dev/null | wc -l || echo "0")
+        log "  ✅ dl 目录存在，包含 $dl_count 个文件"
+    else
+        log "  ⚠️  警告: dl 目录不存在，依赖包可能未下载"
+        warnings=$((warnings + 1))
     fi
     
-    # 检查磁盘空间
-    local available_gb=$(df -BG /mnt | tail -1 | awk '{print $4}' | sed 's/G//')
+    # 4. 检查工具链
+    if [ -d "staging_dir/toolchain-"* ] 2>/dev/null; then
+        local toolchain_size=$(du -sh staging_dir/toolchain-* 2>/dev/null | head -1 | cut -f1 || echo "未知")
+        log "  ✅ 工具链存在，大小: $toolchain_size"
+    else
+        log "  ⚠️  警告: 工具链目录不存在"
+        warnings=$((warnings + 1))
+    fi
+    
+    # 5. 检查磁盘空间
+    local available_gb=$(df -BG /mnt 2>/dev/null | tail -1 | awk '{print $4}' | sed 's/G//' || echo "0")
+    log "  💽 磁盘空间检查:"
+    log "    可用空间: ${available_gb}G"
+    
     if [ $available_gb -lt 10 ]; then
-        log "❌ 错误: 磁盘空间不足，仅剩 ${available_gb}G"
+        log "    ❌ 错误: 磁盘空间不足，仅剩 ${available_gb}G"
         errors=$((errors + 1))
+    elif [ $available_gb -lt 20 ]; then
+        log "    ⚠️  警告: 磁盘空间较低，仅剩 ${available_gb}G"
+        warnings=$((warnings + 1))
+    else
+        log "    ✅ 磁盘空间充足"
     fi
+    
+    # 6. 检查目标配置
+    if [ -f ".config" ]; then
+        log "  🎯 目标配置检查:"
+        if grep -q "CONFIG_TARGET_ramips=y" .config; then
+            log "    ✅ CONFIG_TARGET_ramips=y"
+        else
+            log "    ❌ 缺失: CONFIG_TARGET_ramips=y"
+            errors=$((errors + 1))
+        fi
+        
+        if grep -q "CONFIG_TARGET_ramips_mt76x8=y" .config; then
+            log "    ✅ CONFIG_TARGET_ramips_mt76x8=y"
+        else
+            log "    ❌ 缺失: CONFIG_TARGET_ramips_mt76x8=y"
+            errors=$((errors + 1))
+        fi
+    fi
+    
+    # 总结
+    log "📊 检查总结:"
+    log "  错误数: $errors"
+    log "  警告数: $warnings"
     
     if [ $errors -eq 0 ]; then
         log "✅ 前置检查通过，无致命错误"
     else
-        log "❌ 前置检查发现 $errors 个错误"
+        log "❌ 前置检查发现 $errors 个错误，需要修复"
         exit 1
     fi
     
@@ -850,6 +956,13 @@ build_firmware() {
         make_flags="-j1 V=s"
         log "🐌 禁用缓存编译（单线程）"
     fi
+    
+    # 显示编译信息
+    log "📋 编译信息:"
+    log "  目标: $TARGET/$SUBTARGET"
+    log "  设备: $DEVICE"
+    log "  版本: $SELECTED_BRANCH"
+    log "  配置模式: $CONFIG_MODE"
     
     # 开始编译
     log "🚀 编译命令: make $make_flags"
@@ -885,12 +998,32 @@ check_firmware_files() {
         if [ $firmware_files -gt 0 ]; then
             log "🎉 编译成功！找到 $firmware_files 个固件文件"
             
-            # 显示前5个固件文件
+            # 显示所有固件文件
             log "📁 固件文件列表:"
-            find bin/targets -name "*.bin" -o -name "*.img" 2>/dev/null | head -5 | while read file; do
+            find bin/targets -name "*.bin" -o -name "*.img" 2>/dev/null | while read file; do
                 local size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "未知")
-                log "  - $(basename "$file") ($size)"
+                local filename=$(basename "$file")
+                log "  - $filename ($size)"
+                
+                # 检查是否包含目标设备名
+                if [[ "$filename" == *"$DEVICE"* ]]; then
+                    log "    ✅ 包含设备名: $DEVICE"
+                else
+                    log "    ⚠️  不包含设备名: $DEVICE"
+                fi
             done
+            
+            # 检查目标设备是否正确
+            log "🔍 检查目标设备配置:"
+            if [ -f ".config" ]; then
+                if grep -q "CONFIG_TARGET_ramips_mt76x8_DEVICE_$DEVICE=y" .config; then
+                    log "  ✅ 配置正确: CONFIG_TARGET_ramips_mt76x8_DEVICE_$DEVICE=y"
+                else
+                    log "  ❌ 配置错误: 未找到 CONFIG_TARGET_ramips_mt76x8_DEVICE_$DEVICE=y"
+                    log "  🔍 当前配置中的设备:"
+                    grep "CONFIG_TARGET_ramips_mt76x8_DEVICE_" .config || log "    无相关配置"
+                fi
+            fi
         else
             log "❌ 编译失败：未找到固件文件"
             exit 1
@@ -1475,12 +1608,14 @@ workflow_step10_init_build_env() {
     log "  目标: $TARGET"
     log "  子目标: $SUBTARGET"
     log "  设备: $DEVICE"
+    log "  配置模式: $CONFIG_MODE"
     
     # 设置GitHub环境变量
     echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
     echo "TARGET=$TARGET" >> $GITHUB_ENV
     echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
     echo "DEVICE=$DEVICE" >> $GITHUB_ENV
+    echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
     
     log ""
     log "🎉 步骤10完成：构建环境初始化完成"
@@ -1502,6 +1637,7 @@ workflow_step11_show_config() {
     log "  构建目录: $BUILD_DIR"
     log "  启用缓存: $ENABLE_CACHE"
     log "  提交工具链: $COMMIT_TOOLCHAIN"
+    log "  额外插件: $EXTRA_PACKAGES"
     log ""
     
     log "🎉 步骤11完成：构建配置显示完成"
@@ -1648,6 +1784,10 @@ workflow_step20_backup_config() {
         log "📊 备份文件信息:"
         log "  大小: $(ls -lh $backup_file | awk '{print $5}')"
         log "  行数: $(wc -l < $backup_file)"
+        
+        # 显示备份文件关键配置
+        log "🔑 备份文件关键配置:"
+        grep -E "^(CONFIG_TARGET|CONFIG_PACKAGE_kmod-usb)" "$backup_file" | head -10
     else
         log "❌ .config 文件不存在"
         exit 1
