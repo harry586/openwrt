@@ -135,7 +135,8 @@ EOF
     log "📊 更新完成: 添加了 $added_count 个新规则"
     log "📄 文件位置: $gitattributes_file"
     
-    return $added_count
+    # 修复：返回0而不是 $added_count，避免触发 set -e
+    return 0
 }
 
 # 自动更新 .gitignore 文件
@@ -226,7 +227,8 @@ EOF
     log "📊 更新完成: 添加了 $added_count 个新规则"
     log "📄 文件位置: $gitignore_file"
     
-    return $added_count
+    # 修复：返回0而不是 $added_count，避免触发 set -e
+    return 0
 }
 
 # 智能管理大文件（整合功能）
@@ -1011,7 +1013,29 @@ workflow_step31_error_analysis() {
     log "========================================"
     log ""
     
-    error_analysis.sh
+    # 使用完整路径调用错误分析脚本
+    local error_analysis_script="$REPO_ROOT/firmware-config/scripts/error_analysis.sh"
+    
+    if [ -f "$error_analysis_script" ]; then
+        log "📊 运行错误分析脚本..."
+        cd "$REPO_ROOT"
+        bash "$error_analysis_script"
+    else
+        log "❌ 错误分析脚本不存在: $error_analysis_script"
+        log "📊 执行基本错误分析..."
+        echo "=== 基本错误分析 ==="
+        echo "分析时间: $(date)"
+        echo "当前目录: $(pwd)"
+        echo "构建目录: $BUILD_DIR"
+        echo "设备: $DEVICE"
+        echo "目标平台: $TARGET/$SUBTARGET"
+        echo ""
+        echo "=== 磁盘空间 ==="
+        df -h
+        echo ""
+        echo "=== 构建目录状态 ==="
+        ls -la "$BUILD_DIR/" 2>/dev/null | head -10 || echo "构建目录不存在"
+    fi
     
     log ""
     log "🎉 步骤31完成：错误分析完成"
@@ -1118,18 +1142,7 @@ workflow_step38_final_summary() {
     log "========================================"
 }
 
-# ========== 原有函数保持不变 ==========
-# 注意：这里只展示新增和修改的部分，原有函数保持不变
-# 包括：verify_toolchain_completeness, check_toolchain_completeness, setup_toolchain_env, 
-# save_source_code_info, save_env, load_env, get_toolchain_path, get_common_toolchain_path, 
-# check_large_files, init_toolchain_dir, save_toolchain, load_toolchain, integrate_custom_files,
-# pre_build_error_check, setup_environment, create_build_dir, initialize_build_env,
-# add_turboacc_support, configure_feeds, install_turboacc_packages, pre_build_space_check,
-# generate_config, verify_usb_config, check_usb_drivers_integrity, apply_config,
-# fix_network, download_dependencies, build_firmware, post_build_space_check,
-# check_firmware_files, cleanup 等函数
-
-# 主调度函数
+# ========== 主调度函数 ==========
 workflow_main() {
     case $1 in
         "step1_download_source")
