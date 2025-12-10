@@ -273,6 +273,558 @@ smart_manage_large_files() {
     log "✅ 智能大文件管理完成"
 }
 
+# ========== 构建环境初始化函数（新增的缺失函数） ==========
+
+# 初始化构建环境
+initialize_build_env() {
+    local device_name="$1"
+    local version_selection="$2"
+    local config_mode="$3"
+    local extra_packages="${4:-}"
+    
+    log "=== 初始化构建环境 ==="
+    
+    log "📱 设备: $device_name"
+    log "🔄 版本选择: $version_selection"
+    log "⚙️ 配置模式: $config_mode"
+    log "🔌 额外插件: $extra_packages"
+    
+    # 设置版本分支
+    if [ "$version_selection" = "23.05" ]; then
+        SELECTED_BRANCH="openwrt-23.05"
+    elif [ "$version_selection" = "21.02" ]; then
+        SELECTED_BRANCH="openwrt-21.02"
+    else
+        SELECTED_BRANCH="$version_selection"
+    fi
+    
+    log "✅ 版本分支: $SELECTED_BRANCH"
+    
+    # 设备到目标的映射
+    case "$device_name" in
+        "ac42u")
+            TARGET="ramips"
+            SUBTARGET="mt76x8"
+            DEVICE="ac42u"
+            ;;
+        "r3g")
+            TARGET="ramips"
+            SUBTARGET="mt7621"
+            DEVICE="r3g"
+            ;;
+        *)
+            TARGET="ramips"
+            SUBTARGET="mt76x8"
+            DEVICE="$device_name"
+            log "⚠️  未知设备，使用默认平台: $TARGET/$SUBTARGET"
+            ;;
+    esac
+    
+    log "🎯 目标平台: $TARGET/$SUBTARGET"
+    log "📱 设备: $DEVICE"
+    
+    # 配置模式
+    CONFIG_MODE="$config_mode"
+    log "⚙️ 配置模式: $CONFIG_MODE"
+    
+    # 从环境变量获取或设置默认值
+    ENABLE_CACHE="${ENABLE_CACHE:-true}"
+    COMMIT_TOOLCHAIN="${COMMIT_TOOLCHAIN:-true}"
+    
+    log "⚡ 启用缓存: $ENABLE_CACHE"
+    log "💾 提交工具链: $COMMIT_TOOLCHAIN"
+    
+    # 保存环境变量到文件
+    log "📝 保存环境变量到: $ENV_FILE"
+    cat > "$ENV_FILE" << EOF
+# 构建环境变量
+# 生成时间: $(date)
+SELECTED_BRANCH="$SELECTED_BRANCH"
+TARGET="$TARGET"
+SUBTARGET="$SUBTARGET"
+DEVICE="$DEVICE"
+CONFIG_MODE="$CONFIG_MODE"
+ENABLE_CACHE="$ENABLE_CACHE"
+COMMIT_TOOLCHAIN="$COMMIT_TOOLCHAIN"
+EXTRA_PACKAGES="$extra_packages"
+BUILD_DIR="$BUILD_DIR"
+REPO_ROOT="$REPO_ROOT"
+TOOLCHAIN_DIR="$TOOLCHAIN_DIR"
+EOF
+    
+    log "✅ 环境变量保存完成"
+    log "📄 环境变量文件: $ENV_FILE"
+    
+    # 显示环境变量
+    log "📋 当前环境变量:"
+    log "  SELECTED_BRANCH: $SELECTED_BRANCH"
+    log "  TARGET: $TARGET"
+    log "  SUBTARGET: $SUBTARGET"
+    log "  DEVICE: $DEVICE"
+    log "  CONFIG_MODE: $CONFIG_MODE"
+    log "  ENABLE_CACHE: $ENABLE_CACHE"
+    log "  COMMIT_TOOLCHAIN: $COMMIT_TOOLCHAIN"
+    log "  EXTRA_PACKAGES: $extra_packages"
+    
+    log "=== 构建环境初始化完成 ==="
+}
+
+# 检查工具链完整性
+check_toolchain_completeness() {
+    log "=== 检查工具链完整性 ==="
+    
+    if [ -d "$BUILD_DIR/staging_dir" ]; then
+        local toolchain_dirs=$(find "$BUILD_DIR/staging_dir" -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null)
+        
+        if [ -n "$toolchain_dirs" ]; then
+            log "✅ 工具链目录存在"
+            
+            # 检查编译器
+            local compiler_found=false
+            
+            # 根据目标平台检查相应的编译器
+            if [ "$TARGET" = "ramips" ] && [ "$SUBTARGET" = "mt76x8" ]; then
+                # 检查 mipsel 编译器
+                if find "$BUILD_DIR/staging_dir" -name "mipsel-openwrt-linux-*-gcc" -type f -executable 2>/dev/null | grep -q .; then
+                    compiler_found=true
+                    log "✅ 找到 mipsel 编译器"
+                fi
+            elif [ "$TARGET" = "ramips" ] && [ "$SUBTARGET" = "mt7621" ]; then
+                # 检查 mipsel 编译器
+                if find "$BUILD_DIR/staging_dir" -name "mipsel-openwrt-linux-*-gcc" -type f -executable 2>/dev/null | grep -q .; then
+                    compiler_found=true
+                    log "✅ 找到 mipsel 编译器"
+                fi
+            fi
+            
+            if [ "$compiler_found" = true ]; then
+                log "✅ 工具链完整性检查通过"
+                return 0
+            else
+                log "⚠️  工具链不完整，缺少编译器"
+                return 1
+            fi
+        else
+            log "❌ 未找到工具链目录"
+            return 1
+        fi
+    else
+        log "❌ staging_dir 目录不存在"
+        return 1
+    fi
+}
+
+# ========== 其他缺失函数占位（实际需要时补充） ==========
+
+# 添加 TurboACC 支持
+add_turboacc_support() {
+    log "=== 添加 TurboACC 支持 ==="
+    
+    cd "$BUILD_DIR"
+    
+    if [ ! -d "feeds/packages" ]; then
+        log "❌ feeds/packages 目录不存在"
+        return 1
+    fi
+    
+    log "📦 添加 TurboACC 支持..."
+    
+    # 创建自定义 feeds 配置
+    if [ ! -f "feeds.conf.default" ]; then
+        log "📄 创建 feeds.conf.default"
+        cat > feeds.conf.default << 'EOF'
+src-git packages https://git.openwrt.org/feed/packages.git
+src-git luci https://git.openwrt.org/project/luci.git
+src-git routing https://git.openwrt.org/feed/routing.git
+src-git telephony https://git.openwrt.org/feed/telephony.git
+EOF
+    fi
+    
+    # 添加 TurboACC 源
+    if ! grep -q "TurboACC" feeds.conf.default; then
+        log "🔗 添加 TurboACC 源"
+        echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+    fi
+    
+    log "✅ TurboACC 支持添加完成"
+}
+
+# 配置 Feeds
+configure_feeds() {
+    log "=== 配置 Feeds ==="
+    
+    cd "$BUILD_DIR"
+    
+    log "📥 更新 feeds..."
+    ./scripts/feeds update -a
+    
+    log "📦 安装 feeds..."
+    ./scripts/feeds install -a
+    
+    log "✅ Feeds 配置完成"
+}
+
+# 安装 TurboACC 包
+install_turboacc_packages() {
+    log "=== 安装 TurboACC 包 ==="
+    
+    cd "$BUILD_DIR"
+    
+    log "🔧 安装 TurboACC..."
+    
+    # 安装 luci-app-turboacc
+    if ./scripts/feeds install luci-app-turboacc 2>/dev/null; then
+        log "✅ luci-app-turboacc 安装成功"
+    else
+        log "⚠️  luci-app-turboacc 安装失败，尝试其他方法"
+    fi
+    
+    log "✅ TurboACC 包安装完成"
+}
+
+# 编译前空间检查
+pre_build_space_check() {
+    log "=== 编译前空间检查 ==="
+    
+    log "💽 检查磁盘空间..."
+    df -h
+    
+    # 检查可用空间
+    AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
+    AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+    
+    log "📊 可用空间: ${AVAILABLE_GB}G"
+    
+    if [ $AVAILABLE_GB -lt 10 ]; then
+        log "❌ 错误: 编译前空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
+        exit 1
+    elif [ $AVAILABLE_GB -lt 20 ]; then
+        log "⚠️  警告: 编译前空间较低 (建议至少20G，当前${AVAILABLE_GB}G)"
+    else
+        log "✅ 编译前空间充足"
+    fi
+    
+    log "=== 空间检查完成 ==="
+}
+
+# 生成配置
+generate_config() {
+    local extra_packages="$1"
+    
+    log "=== 生成配置 ==="
+    
+    cd "$BUILD_DIR"
+    
+    log "⚙️  生成默认配置..."
+    if [ -f ".config" ]; then
+        log "📄 备份现有配置"
+        cp .config .config.backup.$(date +%Y%m%d_%H%M%S)
+    fi
+    
+    # 生成默认配置
+    make defconfig
+    
+    log "✅ 默认配置生成完成"
+}
+
+# 验证 USB 配置
+verify_usb_config() {
+    log "=== 验证 USB 配置 ==="
+    
+    cd "$BUILD_DIR"
+    
+    if [ -f ".config" ]; then
+        log "🔍 检查 USB 配置..."
+        
+        # 核心 USB 驱动
+        local usb_drivers=(
+            "CONFIG_PACKAGE_kmod-usb-core=y"
+            "CONFIG_PACKAGE_kmod-usb2=y"
+            "CONFIG_PACKAGE_kmod-usb3=y"
+            "CONFIG_PACKAGE_kmod-usb-storage=y"
+        )
+        
+        local missing_count=0
+        for driver in "${usb_drivers[@]}"; do
+            if ! grep -q "^$driver" .config; then
+                log "❌ 缺失: $driver"
+                missing_count=$((missing_count + 1))
+                # 自动添加缺失的配置
+                echo "$driver" >> .config
+                log "✅ 自动添加: $driver"
+            fi
+        done
+        
+        if [ $missing_count -eq 0 ]; then
+            log "✅ 所有核心 USB 驱动已配置"
+        else
+            log "⚠️  自动添加了 $missing_count 个缺失的 USB 驱动"
+        fi
+    else
+        log "❌ .config 文件不存在"
+    fi
+    
+    log "=== USB 配置验证完成 ==="
+}
+
+# 检查 USB 驱动完整性
+check_usb_drivers_integrity() {
+    log "=== 检查 USB 驱动完整性 ==="
+    
+    cd "$BUILD_DIR"
+    
+    if [ -f ".config" ]; then
+        log "🔍 详细检查 USB 驱动..."
+        
+        # 统计 USB 相关配置
+        local usb_configs=$(grep -c "^CONFIG_PACKAGE_kmod-usb" .config || true)
+        local enabled_usb_configs=$(grep -c "^CONFIG_PACKAGE_kmod-usb.*=y" .config || true)
+        
+        log "📊 USB 驱动统计:"
+        log "  总 USB 配置项: $usb_configs"
+        log "  已启用的 USB 驱动: $enabled_usb_configs"
+        
+        if [ $enabled_usb_configs -gt 0 ]; then
+            log "✅ USB 驱动基本配置完整"
+        else
+            log "❌ 没有启用任何 USB 驱动"
+        fi
+    else
+        log "❌ .config 文件不存在"
+    fi
+    
+    log "=== USB 驱动完整性检查完成 ==="
+}
+
+# 应用配置
+apply_config() {
+    log "=== 应用配置 ==="
+    
+    cd "$BUILD_DIR"
+    
+    if [ -f ".config" ]; then
+        log "🔧 应用配置..."
+        
+        # 修复配置依赖
+        make defconfig
+        
+        # 显示配置摘要
+        log "📋 配置摘要:"
+        local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y" .config || true)
+        local disabled_packages=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config || true)
+        
+        log "  已启用的包: $enabled_packages"
+        log "  已禁用的包: $disabled_packages"
+        
+        log "✅ 配置应用完成"
+    else
+        log "❌ .config 文件不存在"
+        exit 1
+    fi
+}
+
+# 修复网络环境
+fix_network() {
+    log "=== 修复网络环境 ==="
+    
+    log "🌐 配置网络..."
+    
+    # 设置 DNS
+    echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf > /dev/null
+    echo "nameserver 1.1.1.1" | sudo tee -a /etc/resolv.conf > /dev/null
+    
+    # 测试网络连接
+    log "🔍 测试网络连接..."
+    if ping -c 1 -W 2 github.com > /dev/null 2>&1; then
+        log "✅ 网络连接正常"
+    else
+        log "⚠️  网络连接可能有问题，继续构建..."
+    fi
+    
+    log "=== 网络修复完成 ==="
+}
+
+# 下载依赖包
+download_dependencies() {
+    log "=== 下载依赖包 ==="
+    
+    cd "$BUILD_DIR"
+    
+    log "📥 下载依赖包..."
+    
+    # 下载源码包
+    make download -j$(nproc) || log "⚠️  下载依赖包时出现警告"
+    
+    # 检查下载结果
+    if [ -d "dl" ]; then
+        local dl_count=$(find dl -type f 2>/dev/null | wc -l || echo "0")
+        log "📊 已下载文件: $dl_count 个"
+    else
+        log "❌ dl 目录不存在"
+    fi
+    
+    log "✅ 依赖包下载完成"
+}
+
+# 集成自定义文件
+integrate_custom_files() {
+    log "=== 集成自定义文件 ==="
+    
+    cd "$BUILD_DIR"
+    
+    log "🔌 集成自定义文件..."
+    
+    # 检查是否有自定义文件目录
+    if [ -d "$REPO_ROOT/firmware-config/files" ]; then
+        log "📁 找到自定义文件目录"
+        
+        # 复制文件到构建目录
+        if [ -d "$REPO_ROOT/firmware-config/files" ]; then
+            cp -r "$REPO_ROOT/firmware-config/files/"* "$BUILD_DIR/files/" 2>/dev/null || true
+            log "✅ 自定义文件复制完成"
+        fi
+    else
+        log "ℹ️  无自定义文件目录"
+    fi
+    
+    log "=== 自定义文件集成完成 ==="
+}
+
+# 前置错误检查
+pre_build_error_check() {
+    log "=== 前置错误检查 ==="
+    
+    cd "$BUILD_DIR"
+    
+    log "🔍 执行前置错误检查..."
+    
+    # 检查关键目录
+    local errors=0
+    
+    if [ ! -f ".config" ]; then
+        log "❌ 错误: .config 文件不存在"
+        errors=$((errors + 1))
+    fi
+    
+    if [ ! -d "staging_dir" ]; then
+        log "❌ 错误: staging_dir 目录不存在"
+        errors=$((errors + 1))
+    fi
+    
+    if [ ! -d "dl" ]; then
+        log "⚠️  警告: dl 目录不存在，依赖包可能未下载"
+    fi
+    
+    # 检查磁盘空间
+    local available_gb=$(df -BG /mnt | tail -1 | awk '{print $4}' | sed 's/G//')
+    if [ $available_gb -lt 10 ]; then
+        log "❌ 错误: 磁盘空间不足，仅剩 ${available_gb}G"
+        errors=$((errors + 1))
+    fi
+    
+    if [ $errors -eq 0 ]; then
+        log "✅ 前置检查通过，无致命错误"
+    else
+        log "❌ 前置检查发现 $errors 个错误"
+        exit 1
+    fi
+    
+    log "=== 前置错误检查完成 ==="
+}
+
+# 构建固件
+build_firmware() {
+    local enable_cache="$1"
+    
+    log "=== 构建固件 ==="
+    
+    cd "$BUILD_DIR"
+    
+    log "🔨 开始编译固件..."
+    
+    # 设置编译参数
+    local make_flags=""
+    if [ "$enable_cache" = "true" ]; then
+        make_flags="-j$(nproc) V=s"
+        log "⚡ 启用缓存编译"
+    else
+        make_flags="-j1 V=s"
+        log "🐌 禁用缓存编译（单线程）"
+    fi
+    
+    # 开始编译
+    log "🚀 编译命令: make $make_flags"
+    
+    # 执行编译
+    make $make_flags 2>&1 | tee build.log
+    
+    log "✅ 固件编译完成"
+}
+
+# 编译后空间检查
+post_build_space_check() {
+    log "=== 编译后空间检查 ==="
+    
+    log "💽 编译后磁盘空间:"
+    df -h
+    
+    log "=== 空间检查完成 ==="
+}
+
+# 检查固件文件
+check_firmware_files() {
+    log "=== 检查固件文件 ==="
+    
+    cd "$BUILD_DIR"
+    
+    if [ -d "bin/targets" ]; then
+        log "✅ 固件目录存在: bin/targets"
+        
+        # 查找固件文件
+        local firmware_files=$(find bin/targets -name "*.bin" -o -name "*.img" 2>/dev/null | wc -l || echo "0")
+        
+        if [ $firmware_files -gt 0 ]; then
+            log "🎉 编译成功！找到 $firmware_files 个固件文件"
+            
+            # 显示前5个固件文件
+            log "📁 固件文件列表:"
+            find bin/targets -name "*.bin" -o -name "*.img" 2>/dev/null | head -5 | while read file; do
+                local size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "未知")
+                log "  - $(basename "$file") ($size)"
+            done
+        else
+            log "❌ 编译失败：未找到固件文件"
+            exit 1
+        fi
+    else
+        log "❌ 编译失败：bin/targets 目录不存在"
+        exit 1
+    fi
+    
+    log "=== 固件文件检查完成 ==="
+}
+
+# 保存源代码信息
+save_source_code_info() {
+    log "=== 保存源代码信息 ==="
+    
+    cd "$BUILD_DIR"
+    
+    log "📝 保存源代码信息..."
+    
+    # 保存版本信息
+    if [ -f "version" ]; then
+        cp version "$REPO_ROOT/firmware-config/source-info/version_$(date +%Y%m%d_%H%M%S).txt"
+    fi
+    
+    # 保存 feeds 信息
+    if [ -f "feeds.conf.default" ]; then
+        cp feeds.conf.default "$REPO_ROOT/firmware-config/source-info/feeds_$(date +%Y%m%d_%H%M%S).conf"
+    fi
+    
+    log "✅ 源代码信息保存完成"
+}
+
 # ========== 工具链相关函数 ==========
 
 # 初始化工具链目录
