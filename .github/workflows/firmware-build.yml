@@ -49,62 +49,56 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      # 步骤1：直接写命令，不使用脚本（因为脚本还未下载）
-      - name: "📥 1. 下载完整源代码（支持工具链提交）"
-        id: download_source
+      # 步骤0：下载构建脚本
+      - name: "📥 0. 下载构建脚本"
+        id: download_scripts
         run: |
           echo "========================================"
-          echo "📥 步骤1：下载完整源代码（支持工具链提交）"
+          echo "📥 步骤0：下载构建脚本"
           echo "========================================"
           echo ""
-          echo "📊 仓库信息:"
-          echo "  仓库: ${{ github.repository }}"
-          echo "  分支: ${{ github.ref_name }}"
-          echo "  工作区: ${{ github.workspace }}"
+          
+          # 创建工作区目录
+          mkdir -p ${{ github.workspace }}
+          cd ${{ github.workspace }}
+          
+          echo "📊 工作区: ${{ github.workspace }}"
+          echo "📁 当前目录内容:"
+          ls -la
           echo ""
           
           # 清理工作区
           echo "🧹 清理工作区..."
-          cd ${{ github.workspace }}
-          ls -la
-          echo "移除工作区现有文件..."
           find . -maxdepth 1 ! -name '.' ! -name '..' -exec rm -rf {} + 2>/dev/null || true
           echo "✅ 工作区清理完成"
           echo ""
           
-          # 克隆完整仓库
+          # 克隆完整仓库以获取所有脚本
           echo "📦 克隆完整仓库..."
-          echo "命令: git clone --depth 1 https://github.com/${{ github.repository }}.git ."
           git clone --depth 1 https://github.com/${{ github.repository }}.git .
           
           if [ ! -d ".git" ]; then
             echo "❌ 错误: 仓库克隆失败，.git目录不存在"
-            echo "当前目录内容:"
-            ls -la
             exit 1
           fi
           
           echo "✅ 完整仓库克隆完成"
           echo "📊 仓库大小: $(du -sh . | cut -f1)"
-          echo "📁 Git信息:"
-          git log --oneline -1
           echo ""
           
-          # 显示关键文件
-          echo "📄 关键文件检查:"
+          # 检查关键脚本文件
+          echo "📄 关键脚本检查:"
           if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
             echo "✅ 主构建脚本: firmware-config/scripts/build_firmware_main.sh"
             echo "  文件大小: $(ls -lh firmware-config/scripts/build_firmware_main.sh | awk '{print $5}')"
-            echo "  权限: $(ls -la firmware-config/scripts/build_firmware_main.sh | awk '{print $1}')"
           else
             echo "❌ 错误: 主构建脚本不存在"
-            echo "当前目录结构:"
-            find . -maxdepth 3 -type d | sort
             exit 1
           fi
           
           if [ -f "firmware-config/scripts/error_analysis.sh" ]; then
             echo "✅ 错误分析脚本: firmware-config/scripts/error_analysis.sh"
+            echo "  文件大小: $(ls -lh firmware-config/scripts/error_analysis.sh | awk '{print $5}')"
           else
             echo "⚠️  警告: 错误分析脚本不存在"
           fi
@@ -115,16 +109,21 @@ jobs:
           echo "✅ 脚本权限设置完成"
           
           echo ""
-          echo "🎉 步骤1完成：源代码下载完成，准备进行构建"
+          echo "🎉 步骤0完成：构建脚本下载完成"
           echo "========================================"
       
-      # 步骤2：现在可以使用脚本了
-      - name: "📤 2. 立即上传源代码（排除工具链目录）"
-        id: upload_source
+      # 步骤1：下载完整源代码
+      - name: "📥 1. 下载完整源代码"
+        id: download_source
+        run: |
+          firmware-config/scripts/build_firmware_main.sh workflow_main step1_download_source "${{ github.workspace }}"
+      
+      # 步骤2：立即上传源代码
+      - name: "📤 2. 立即上传源代码"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step2_upload_source
       
-      # 步骤3：上传源代码压缩包（使用 actions）
+      # 步骤3：上传源代码压缩包
       - name: "📤 3. 上传源代码压缩包"
         uses: actions/upload-artifact@v4
         with:
@@ -137,7 +136,7 @@ jobs:
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step4_install_git_lfs
       
-      # 步骤5：检查大文件状态（包含自动更新功能）
+      # 步骤5：检查大文件状态
       - name: "📊 5. 检查大文件状态"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step5_check_large_files
