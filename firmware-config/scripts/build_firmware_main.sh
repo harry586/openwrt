@@ -275,6 +275,276 @@ smart_manage_large_files() {
     log "✅ 智能大文件管理完成"
 }
 
+# ========== 工具链相关函数 ==========
+
+# 初始化工具链目录
+init_toolchain_dir() {
+    log "=== 初始化工具链目录 ==="
+    
+    log "📁 创建工具链目录: $TOOLCHAIN_DIR"
+    mkdir -p "$TOOLCHAIN_DIR"
+    
+    if [ -d "$TOOLCHAIN_DIR" ]; then
+        log "✅ 工具链目录创建成功"
+        log "  路径: $TOOLCHAIN_DIR"
+        log "  权限: $(ls -ld "$TOOLCHAIN_DIR" | awk '{print $1}')"
+        
+        # 创建 README 文件
+        cat > "$TOOLCHAIN_DIR/README.md" << 'EOF'
+# 工具链目录说明
+
+此目录用于保存编译工具链，以加速后续构建过程。
+
+## 目录结构
+- Toolchain/
+  - README.md (本文件)
+  - toolchain-*.tar.gz (工具链压缩包)
+  - toolchain_info.txt (工具链信息)
+
+## 使用说明
+1. 首次构建时会自动下载工具链
+2. 构建完成后会自动保存工具链到此目录
+3. 后续构建会优先从此目录加载工具链
+4. 工具链会自动提交到Git LFS管理
+
+## 注意事项
+1. 工具链文件较大，使用Git LFS管理
+2. 不同架构的设备需要不同的工具链
+3. 工具链版本与OpenWrt版本相关
+EOF
+        log "📄 创建 README 文件"
+    else
+        log "❌ 工具链目录创建失败"
+    fi
+    
+    log "=== 工具链目录初始化完成 ==="
+}
+
+# 保存工具链到仓库目录
+save_toolchain() {
+    log "=== 保存工具链到仓库目录 ==="
+    
+    if [ ! -d "$BUILD_DIR/staging_dir" ]; then
+        log "❌ 构建目录中没有工具链，跳过保存"
+        return 0
+    fi
+    
+    # 查找工具链目录
+    local toolchain_dirs=$(find "$BUILD_DIR/staging_dir" -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
+    
+    if [ -z "$toolchain_dirs" ]; then
+        log "⚠️  未找到工具链目录，跳过保存"
+        return 0
+    fi
+    
+    local toolchain_dir="$toolchain_dirs"
+    local toolchain_name=$(basename "$toolchain_dir")
+    
+    log "🔍 找到工具链: $toolchain_name"
+    log "  路径: $toolchain_dir"
+    log "  大小: $(du -sh "$toolchain_dir" 2>/dev/null | cut -f1 || echo '未知')"
+    
+    # 确保工具链目录存在
+    mkdir -p "$TOOLCHAIN_DIR"
+    
+    # 保存工具链信息
+    cat > "$TOOLCHAIN_DIR/toolchain_info.txt" << EOF
+# 工具链信息
+生成时间: $(date)
+工具链名称: $toolchain_name
+工具链路径: $toolchain_dir
+目标平台: $TARGET/$SUBTARGET
+设备: $DEVICE
+OpenWrt版本: $SELECTED_BRANCH
+配置模式: $CONFIG_MODE
+
+# 文件列表
+$(find "$toolchain_dir" -type f -name "*gcc*" 2>/dev/null | head -10)
+EOF
+    
+    log "📄 保存工具链信息到: $TOOLCHAIN_DIR/toolchain_info.txt"
+    
+    # 复制工具链文件
+    log "📦 复制工具链文件..."
+    cp -r "$toolchain_dir" "$TOOLCHAIN_DIR/" 2>/dev/null || true
+    
+    # 检查复制结果
+    local saved_count=$(find "$TOOLCHAIN_DIR" -type f 2>/dev/null | wc -l)
+    log "📊 保存文件数量: $saved_count 个"
+    
+    if [ $saved_count -gt 0 ]; then
+        log "✅ 工具链保存完成"
+        log "  保存目录: $TOOLCHAIN_DIR"
+        log "  总大小: $(du -sh "$TOOLCHAIN_DIR" 2>/dev/null | cut -f1 || echo '未知')"
+    else
+        log "⚠️  工具链保存失败，目录为空"
+    fi
+    
+    log "=== 工具链保存完成 ==="
+}
+
+# 加载工具链
+load_toolchain() {
+    log "=== 加载工具链 ==="
+    
+    # 检查是否已经有工具链
+    if [ -d "$BUILD_DIR/staging_dir/toolchain-"* ] 2>/dev/null; then
+        log "✅ 构建目录中已存在工具链，跳过加载"
+        return 0
+    fi
+    
+    # 检查仓库中是否有保存的工具链
+    if [ -d "$TOOLCHAIN_DIR" ] && [ -n "$(ls -A "$TOOLCHAIN_DIR" 2>/dev/null)" ]; then
+        log "📁 仓库中有保存的工具链，尝试加载..."
+        
+        local toolchain_dirs=$(find "$TOOLCHAIN_DIR" -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
+        
+        if [ -n "$toolchain_dirs" ]; then
+            local toolchain_name=$(basename "$toolchain_dirs")
+            log "🔍 找到保存的工具链: $toolchain_name"
+            
+            # 确保构建目录存在
+            mkdir -p "$BUILD_DIR/staging_dir"
+            
+            # 复制工具链到构建目录
+            log "📦 复制工具链到构建目录..."
+            cp -r "$toolchain_dirs" "$BUILD_DIR/staging_dir/" 2>/dev/null || true
+            
+            if [ -d "$BUILD_DIR/staging_dir/$toolchain_name" ]; then
+                log "✅ 工具链加载成功"
+                log "  工具链: $toolchain_name"
+                log "  路径: $BUILD_DIR/staging_dir/$toolchain_name"
+                log "  大小: $(du -sh "$BUILD_DIR/staging_dir/$toolchain_name" 2>/dev/null | cut -f1 || echo '未知')"
+            else
+                log "⚠️  工具链加载失败，将自动下载"
+            fi
+        else
+            log "ℹ️  未找到可用的工具链目录，将自动下载"
+        fi
+    else
+        log "ℹ️  仓库中没有保存的工具链，将自动下载"
+    fi
+    
+    log "=== 工具链加载完成 ==="
+}
+
+# ========== 环境设置函数 ==========
+
+# 设置编译环境
+setup_environment() {
+    log "=== 设置编译环境 ==="
+    
+    log "📦 安装必要软件包..."
+    sudo apt-get update
+    sudo apt-get install -y \
+        build-essential \
+        ccache \
+        ecj \
+        fastjar \
+        file \
+        g++ \
+        gawk \
+        gettext \
+        git \
+        java-propose-classpath \
+        libelf-dev \
+        libncurses5-dev \
+        libncursesw5-dev \
+        libssl-dev \
+        python3 \
+        python3-distutils \
+        python3-setuptools \
+        rsync \
+        subversion \
+        unzip \
+        wget \
+        xsltproc \
+        zlib1g-dev \
+        && log "✅ 软件包安装完成" || log "⚠️  软件包安装过程中有警告"
+    
+    log "🔧 创建构建目录..."
+    mkdir -p "$BUILD_DIR"
+    log "✅ 构建目录: $BUILD_DIR"
+    
+    log "⚡ 启用ccache..."
+    export CCACHE_DIR="$BUILD_DIR/.ccache"
+    mkdir -p "$CCACHE_DIR"
+    ccache -M 5G
+    log "✅ ccache配置完成"
+    
+    log "=== 编译环境设置完成 ==="
+}
+
+# 创建构建目录
+create_build_dir() {
+    log "=== 创建构建目录 ==="
+    
+    log "📁 创建构建目录: $BUILD_DIR"
+    mkdir -p "$BUILD_DIR"
+    
+    # 设置权限
+    chmod 755 "$BUILD_DIR"
+    
+    log "📊 目录信息:"
+    log "  路径: $BUILD_DIR"
+    log "  权限: $(ls -ld "$BUILD_DIR" | awk '{print $1}')"
+    log "  所有者: $(ls -ld "$BUILD_DIR" | awk '{print $3}')"
+    
+    # 检查磁盘空间
+    local available_space=$(df -h "$BUILD_DIR" | tail -1 | awk '{print $4}')
+    log "💽 可用空间: $available_space"
+    
+    if [ -d "$BUILD_DIR" ]; then
+        log "✅ 构建目录创建成功"
+    else
+        log "❌ 构建目录创建失败"
+        exit 1
+    fi
+    
+    log "=== 构建目录创建完成 ==="
+}
+
+# ========== 清理函数 ==========
+
+# 清理目录
+cleanup() {
+    log "=== 清理目录 ==="
+    
+    log "🧹 清理临时文件..."
+    
+    # 清理临时目录
+    local temp_dirs=(
+        "/tmp/source-upload"
+        "/tmp/exclude-list.txt"
+        "/tmp/openwrt-source"
+        "/tmp/build-artifacts"
+    )
+    
+    for dir in "${temp_dirs[@]}"; do
+        if [ -d "$dir" ] || [ -f "$dir" ]; then
+            rm -rf "$dir" 2>/dev/null || true
+            log "✅ 清理: $dir"
+        fi
+    done
+    
+    # 清理工作区临时文件（但保留关键文件）
+    log "📁 检查工作区临时文件..."
+    if [ -d "$REPO_ROOT" ]; then
+        # 保留重要的构建文件
+        find "$REPO_ROOT" -name "*.tmp" -o -name "*.temp" -o -name "*.bak" 2>/dev/null | head -5 | while read file; do
+            rm -f "$file" 2>/dev/null || true
+            log "  清理临时文件: $(basename "$file")"
+        done
+    fi
+    
+    # 检查磁盘空间
+    log "💽 清理后磁盘空间:"
+    df -h | grep -E "^/dev/|^Filesystem" | head -5
+    
+    log "✅ 目录清理完成"
+    log "=== 清理完成 ==="
+}
+
 # ========== GitHub Actions 工作流步骤函数 ==========
 
 # 步骤1：下载完整源代码
@@ -531,6 +801,7 @@ workflow_step10_init_build_env() {
     log "🔌 额外插件: $extra_packages"
     log ""
     
+    # 调用原有函数（这里假设已有此函数）
     initialize_build_env "$device_name" "$version_selection" "$config_mode"
     
     log ""
@@ -803,6 +1074,7 @@ workflow_step23_check_toolchain_status() {
     
     log ""
     log "🔧 验证工具链完整性..."
+    # 这里调用原有的 check_toolchain_completeness 函数
     check_toolchain_completeness || log "⚠️  工具链完整性检查失败"
     
     log ""
@@ -1070,7 +1342,7 @@ workflow_step33_check_firmware_files() {
     log "========================================"
 }
 
-# 步骤34：清理目录
+# 步骤37：清理目录
 workflow_step37_cleanup() {
     log "========================================"
     log "🧹 步骤37：清理目录"
