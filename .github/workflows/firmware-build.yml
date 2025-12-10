@@ -715,12 +715,11 @@ jobs:
             # 检查是否有变更
             if git status --porcelain | grep -q "firmware-config/Toolchain" || git status --porcelain | grep -q ".gitattributes"; then
               echo "📦 提交工具链文件..."
-              git commit -m "chore: 自动更新工具链 [构建自动化]
-版本: ${{ env.SELECTED_BRANCH }}
-目标: ${{ env.TARGET }}/${{ env.SUBTARGET }}
-设备: ${{ env.DEVICE }}
-模式: ${{ github.event.inputs.config_mode }}
-时间: $(date '+%Y-%m-%d %H:%M:%S')"
+              
+              # 使用单行提交消息
+              COMMIT_MSG="chore: 自动更新工具链 [构建自动化] 版本: ${{ env.SELECTED_BRANCH }} 目标: ${{ env.TARGET }}/${{ env.SUBTARGET }} 设备: ${{ env.DEVICE }} 模式: ${{ github.event.inputs.config_mode }} 时间: $(date '+%Y-%m-%d %H:%M:%S')"
+              
+              git commit -m "$COMMIT_MSG"
               
               echo "🚀 推送工具链到远程仓库..."
               
