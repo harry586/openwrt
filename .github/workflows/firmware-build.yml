@@ -49,74 +49,69 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      # 步骤0：下载构建脚本
-      - name: "📥 0. 下载构建脚本"
-        id: download_scripts
+      # 步骤0：准备构建环境
+      - name: "📁 0. 准备构建环境"
+        id: prepare_environment
         run: |
           echo "========================================"
-          echo "📥 步骤0：下载构建脚本"
+          echo "📁 步骤0：准备构建环境"
           echo "========================================"
           echo ""
           
-          # 创建工作区目录
-          mkdir -p ${{ github.workspace }}
-          cd ${{ github.workspace }}
+          # 创建构建目录
+          echo "📁 创建构建目录: ${{ env.BUILD_DIR }}"
+          sudo mkdir -p ${{ env.BUILD_DIR }}
+          sudo chmod 777 ${{ env.BUILD_DIR }}
           
-          echo "📊 工作区: ${{ github.workspace }}"
-          echo "📁 当前目录内容:"
-          ls -la
-          echo ""
-          
-          # 清理工作区
-          echo "🧹 清理工作区..."
-          find . -maxdepth 1 ! -name '.' ! -name '..' -exec rm -rf {} + 2>/dev/null || true
-          echo "✅ 工作区清理完成"
-          echo ""
-          
-          # 克隆完整仓库以获取所有脚本
-          echo "📦 克隆完整仓库..."
-          git clone --depth 1 https://github.com/${{ github.repository }}.git .
-          
-          if [ ! -d ".git" ]; then
-            echo "❌ 错误: 仓库克隆失败，.git目录不存在"
+          # 检查目录是否创建成功
+          if [ -d "${{ env.BUILD_DIR }}" ]; then
+            echo "✅ 构建目录创建成功"
+            echo "  路径: ${{ env.BUILD_DIR }}"
+            echo "  权限: $(ls -ld ${{ env.BUILD_DIR }} | awk '{print $1}')"
+          else
+            echo "❌ 构建目录创建失败"
             exit 1
           fi
           
-          echo "✅ 完整仓库克隆完成"
-          echo "📊 仓库大小: $(du -sh . | cut -f1)"
-          echo ""
-          
-          # 检查关键脚本文件
-          echo "📄 关键脚本检查:"
-          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
-            echo "✅ 主构建脚本: firmware-config/scripts/build_firmware_main.sh"
-            echo "  文件大小: $(ls -lh firmware-config/scripts/build_firmware_main.sh | awk '{print $5}')"
-          else
-            echo "❌ 错误: 主构建脚本不存在"
-            exit 1
-          fi
-          
-          if [ -f "firmware-config/scripts/error_analysis.sh" ]; then
-            echo "✅ 错误分析脚本: firmware-config/scripts/error_analysis.sh"
-            echo "  文件大小: $(ls -lh firmware-config/scripts/error_analysis.sh | awk '{print $5}')"
-          else
-            echo "⚠️  警告: 错误分析脚本不存在"
-          fi
+          # 创建其他必要目录
+          echo "📁 创建其他必要目录..."
+          mkdir -p /tmp/source-upload
+          mkdir -p /tmp/build-artifacts
           
           echo ""
-          echo "🔧 设置脚本执行权限..."
-          find . -name "*.sh" -type f -exec chmod +x {} \; 2>/dev/null || true
-          echo "✅ 脚本权限设置完成"
+          echo "💽 磁盘空间检查:"
+          df -h ${{ env.BUILD_DIR }}
           
           echo ""
-          echo "🎉 步骤0完成：构建脚本下载完成"
+          echo "🎉 步骤0完成：环境准备完成"
           echo "========================================"
       
       # 步骤1：下载完整源代码
       - name: "📥 1. 下载完整源代码"
         id: download_source
         run: |
-          firmware-config/scripts/build_firmware_main.sh workflow_main step1_download_source "${{ github.workspace }}"
+          # 创建工作区目录
+          mkdir -p ${{ github.workspace }}
+          cd ${{ github.workspace }}
+          
+          # 清理工作区
+          echo "🧹 清理工作区..."
+          find . -maxdepth 1 ! -name '.' ! -name '..' -exec rm -rf {} + 2>/dev/null || true
+          
+          # 克隆完整仓库
+          echo "📦 克隆完整仓库..."
+          git clone --depth 1 https://github.com/${{ github.repository }}.git .
+          
+          if [ ! -d ".git" ]; then
+            echo "❌ 错误: 仓库克隆失败"
+            exit 1
+          fi
+          
+          # 设置脚本权限
+          echo "🔧 设置脚本权限..."
+          find . -name "*.sh" -type f -exec chmod +x {} \; 2>/dev/null || true
+          
+          echo "✅ 源代码下载完成"
       
       # 步骤2：立即上传源代码
       - name: "📤 2. 立即上传源代码"
@@ -274,7 +269,29 @@ jobs:
       - name: "⚠️ 31. 错误分析（如果失败）"
         if: failure()
         run: |
-          firmware-config/scripts/build_firmware_main.sh workflow_main step31_error_analysis
+          echo "=== 错误分析开始 ==="
+          echo "检查构建目录..."
+          if [ -d "${{ env.BUILD_DIR }}" ]; then
+            echo "✅ 构建目录存在: ${{ env.BUILD_DIR }}"
+            if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+              firmware-config/scripts/build_firmware_main.sh workflow_main step31_error_analysis
+            else
+              echo "❌ 主构建脚本不存在"
+              echo "基本错误分析:"
+              df -h
+              ls -la ${{ env.BUILD_DIR }}/ 2>/dev/null || echo "构建目录为空"
+            fi
+          else
+            echo "❌ 构建目录不存在: ${{ env.BUILD_DIR }}"
+            echo "创建构建目录..."
+            mkdir -p ${{ env.BUILD_DIR }}
+            echo "基本错误分析:"
+            df -h
+            echo "当前工作区:"
+            pwd
+            ls -la
+          fi
+          echo "=== 错误分析结束 ==="
       
       # 步骤32：编译后空间检查
       - name: "📊 32. 编译后空间检查"
@@ -318,10 +335,24 @@ jobs:
       - name: "🧹 37. 清理目录"
         if: always()
         run: |
-          firmware-config/scripts/build_firmware_main.sh workflow_main step37_cleanup
+          echo "=== 清理目录开始 ==="
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            firmware-config/scripts/build_firmware_main.sh workflow_main step37_cleanup
+          else
+            echo "主构建脚本不存在，执行基本清理..."
+            rm -rf /tmp/source-upload 2>/dev/null || true
+            echo "✅ 基本清理完成"
+          fi
+          echo "=== 清理目录结束 ==="
       
       # 步骤38：最终构建总结
       - name: "📈 38. 最终构建总结"
         if: always()
         run: |
-          firmware-config/scripts/build_firmware_main.sh workflow_main step38_final_summary "${{ job.status }}"
+          echo "=== 最终构建总结 ==="
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            firmware-config/scripts/build_firmware_main.sh workflow_main step38_final_summary "${{ job.status }}"
+          else
+            echo "主构建脚本不存在"
+            echo "构建状态: ${{ job.status }}"
+          fi
