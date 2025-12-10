@@ -248,7 +248,7 @@ jobs:
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step25_integrate_custom_files
       
-      # 步骤26：前置错误检查
+      # 步骤26：前置错误检查（已修复）
       - name: "🚨 26. 前置错误检查"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step26_pre_build_error_check
