@@ -49,16 +49,82 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
+      # 步骤1：直接写命令，不使用脚本（因为脚本还未下载）
       - name: "📥 1. 下载完整源代码（支持工具链提交）"
         id: download_source
         run: |
-          firmware-config/scripts/build_firmware_main.sh workflow_main step1_download_source "${{ github.workspace }}"
+          echo "========================================"
+          echo "📥 步骤1：下载完整源代码（支持工具链提交）"
+          echo "========================================"
+          echo ""
+          echo "📊 仓库信息:"
+          echo "  仓库: ${{ github.repository }}"
+          echo "  分支: ${{ github.ref_name }}"
+          echo "  工作区: ${{ github.workspace }}"
+          echo ""
+          
+          # 清理工作区
+          echo "🧹 清理工作区..."
+          cd ${{ github.workspace }}
+          ls -la
+          echo "移除工作区现有文件..."
+          find . -maxdepth 1 ! -name '.' ! -name '..' -exec rm -rf {} + 2>/dev/null || true
+          echo "✅ 工作区清理完成"
+          echo ""
+          
+          # 克隆完整仓库
+          echo "📦 克隆完整仓库..."
+          echo "命令: git clone --depth 1 https://github.com/${{ github.repository }}.git ."
+          git clone --depth 1 https://github.com/${{ github.repository }}.git .
+          
+          if [ ! -d ".git" ]; then
+            echo "❌ 错误: 仓库克隆失败，.git目录不存在"
+            echo "当前目录内容:"
+            ls -la
+            exit 1
+          fi
+          
+          echo "✅ 完整仓库克隆完成"
+          echo "📊 仓库大小: $(du -sh . | cut -f1)"
+          echo "📁 Git信息:"
+          git log --oneline -1
+          echo ""
+          
+          # 显示关键文件
+          echo "📄 关键文件检查:"
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            echo "✅ 主构建脚本: firmware-config/scripts/build_firmware_main.sh"
+            echo "  文件大小: $(ls -lh firmware-config/scripts/build_firmware_main.sh | awk '{print $5}')"
+            echo "  权限: $(ls -la firmware-config/scripts/build_firmware_main.sh | awk '{print $1}')"
+          else
+            echo "❌ 错误: 主构建脚本不存在"
+            echo "当前目录结构:"
+            find . -maxdepth 3 -type d | sort
+            exit 1
+          fi
+          
+          if [ -f "firmware-config/scripts/error_analysis.sh" ]; then
+            echo "✅ 错误分析脚本: firmware-config/scripts/error_analysis.sh"
+          else
+            echo "⚠️  警告: 错误分析脚本不存在"
+          fi
+          
+          echo ""
+          echo "🔧 设置脚本执行权限..."
+          find . -name "*.sh" -type f -exec chmod +x {} \; 2>/dev/null || true
+          echo "✅ 脚本权限设置完成"
+          
+          echo ""
+          echo "🎉 步骤1完成：源代码下载完成，准备进行构建"
+          echo "========================================"
       
+      # 步骤2：现在可以使用脚本了
       - name: "📤 2. 立即上传源代码（排除工具链目录）"
         id: upload_source
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step2_upload_source
       
+      # 步骤3：上传源代码压缩包（使用 actions）
       - name: "📤 3. 上传源代码压缩包"
         uses: actions/upload-artifact@v4
         with:
@@ -66,132 +132,163 @@ jobs:
           path: /tmp/source-upload/
           retention-days: 7
       
+      # 步骤4：安装Git LFS
       - name: "🔧 4. 安装Git LFS和配置"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step4_install_git_lfs
       
+      # 步骤5：检查大文件状态（包含自动更新功能）
       - name: "📊 5. 检查大文件状态"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step5_check_large_files
       
+      # 步骤6：检查工具链目录状态
       - name: "🗂️ 6. 检查工具链目录状态"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step6_check_toolchain_dir
       
+      # 步骤7：初始化工具链目录
       - name: "💾 7. 初始化工具链目录"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step7_init_toolchain_dir
       
+      # 步骤8：设置编译环境
       - name: "🛠️ 8. 设置编译环境"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step8_setup_environment
       
+      # 步骤9：创建构建目录
       - name: "📁 9. 创建构建目录"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step9_create_build_dir
       
+      # 步骤10：初始化构建环境
       - name: "🚀 10. 初始化构建环境"
         id: init_build_env
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step10_init_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}" "${{ github.event.inputs.extra_packages }}"
       
+      # 步骤11：显示构建配置
       - name: "⚡ 11. 显示构建配置"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step11_show_config
       
+      # 步骤12：添加TurboACC支持
       - name: "🔌 12. 添加TurboACC支持"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step12_add_turboacc_support
       
+      # 步骤13：配置Feeds
       - name: "📦 13. 配置Feeds"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step13_configure_feeds
       
+      # 步骤14：安装TurboACC包
       - name: "🔧 14. 安装TurboACC包"
         if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step14_install_turboacc_packages
       
+      # 步骤15：编译前空间检查
       - name: "💽 15. 编译前空间检查"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step15_pre_build_space_check
       
+      # 步骤16：智能配置生成
       - name: "⚙️ 16. 智能配置生成（USB完全修复加强版）"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step16_generate_config "${{ github.event.inputs.extra_packages }}"
       
+      # 步骤17：验证USB配置
       - name: "🔍 17. 验证USB配置"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step17_verify_usb_config
       
+      # 步骤18：USB驱动完整性检查
       - name: "🛡️ 18. USB驱动完整性检查"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step18_check_usb_drivers_integrity
       
+      # 步骤19：应用配置并显示详情
       - name: "✅ 19. 应用配置并显示详情"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step19_apply_config
       
+      # 步骤20：检查并备份配置文件
       - name: "💾 20. 检查并备份配置文件"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step20_backup_config
       
+      # 步骤21：修复网络环境
       - name: "🌐 21. 修复网络环境"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step21_fix_network
       
+      # 步骤22：加载工具链
       - name: "🔧 22. 加载工具链"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step22_load_toolchain
       
+      # 步骤23：检查工具链加载状态
       - name: "📊 23. 检查工具链加载状态"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step23_check_toolchain_status
       
+      # 步骤24：下载依赖包
       - name: "📥 24. 下载依赖包"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step24_download_dependencies
       
+      # 步骤25：集成自定义文件
       - name: "🔌 25. 集成自定义文件"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step25_integrate_custom_files
       
+      # 步骤26：前置错误检查
       - name: "🚨 26. 前置错误检查"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step26_pre_build_error_check
       
+      # 步骤27：编译固件前的空间检查
       - name: "💽 27. 编译固件前的空间检查"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step27_final_space_check
       
+      # 步骤28：编译固件（启用缓存）
       - name: "🔨 28. 编译固件（启用缓存）"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step28_build_firmware
       
+      # 步骤29：保存工具链到仓库目录
       - name: "💾 29. 保存工具链到仓库目录（自动执行）"
         if: success()
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step29_save_toolchain
       
+      # 步骤30：提交工具链到仓库
       - name: "📤 30. 提交工具链到仓库（自动执行）"
         if: success()
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step30_commit_toolchain
       
+      # 步骤31：错误分析
       - name: "⚠️ 31. 错误分析（如果失败）"
         if: failure()
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step31_error_analysis
       
+      # 步骤32：编译后空间检查
       - name: "📊 32. 编译后空间检查"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step32_post_build_space_check
       
+      # 步骤33：固件文件检查
       - name: "📦 33. 固件文件检查"
         if: success()
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step33_check_firmware_files
       
+      # 步骤34：上传固件
       - name: "⬆️ 34. 上传固件"
         if: success()
         uses: actions/upload-artifact@v4
@@ -200,6 +297,7 @@ jobs:
           path: ${{ env.BUILD_DIR }}/bin/targets/
           retention-days: 7
       
+      # 步骤35：上传编译日志
       - name: "⬆️ 35. 上传编译日志"
         if: always()
         uses: actions/upload-artifact@v4
@@ -208,6 +306,7 @@ jobs:
           path: ${{ env.BUILD_DIR }}/build.log
           retention-days: 7
       
+      # 步骤36：上传配置文件
       - name: "⬆️ 36. 上传配置文件"
         if: always()
         uses: actions/upload-artifact@v4
@@ -216,11 +315,13 @@ jobs:
           path: ${{ github.workspace }}/firmware-config/config-backup/
           retention-days: 7
       
+      # 步骤37：清理目录
       - name: "🧹 37. 清理目录"
         if: always()
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step37_cleanup
       
+      # 步骤38：最终构建总结
       - name: "📈 38. 最终构建总结"
         if: always()
         run: |
