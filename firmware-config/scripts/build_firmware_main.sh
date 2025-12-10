@@ -15,6 +15,66 @@ handle_error() {
     exit 1
 }
 
+# ========== 新增：前置错误检查函数 ==========
+pre_build_error_check() {
+    log "=== 前置错误检查 ==="
+    
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
+    
+    # 检查.config文件
+    if [ ! -f ".config" ]; then
+        log "❌ 错误: .config 文件不存在"
+        exit 1
+    fi
+    
+    # 检查关键目录
+    local critical_dirs=("staging_dir" "build_dir" "dl" "feeds" "package")
+    for dir in "${critical_dirs[@]}"; do
+        if [ ! -d "$dir" ]; then
+            log "⚠️  警告: 目录 $dir 不存在"
+        fi
+    done
+    
+    # 检查工具链
+    log "检查工具链状态..."
+    if [ -d "staging_dir" ]; then
+        local toolchain_dirs=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | wc -l)
+        if [ $toolchain_dirs -eq 0 ]; then
+            log "⚠️  警告: 构建目录中没有工具链，可能需要下载"
+        else
+            log "✅ 构建目录中有 $toolchain_dirs 个工具链"
+            find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | while read dir; do
+                log "  工具链: $(basename $dir) ($(du -sh "$dir" 2>/dev/null | cut -f1 || echo '未知大小'))"
+            done
+        fi
+    else
+        log "⚠️  警告: staging_dir 目录不存在"
+    fi
+    
+    # 检查磁盘空间
+    log "检查磁盘空间..."
+    local available_space=$(df -m "$BUILD_DIR" | tail -1 | awk '{print $4}')
+    local available_gb=$((available_space / 1024))
+    log "可用空间: ${available_gb}G"
+    
+    if [ $available_gb -lt 5 ]; then
+        log "🚨 严重警告: 磁盘空间不足 (需要至少5G，当前${available_gb}G)"
+    else
+        log "✅ 磁盘空间充足"
+    fi
+    
+    # 检查关键文件
+    local critical_files=(".config" "Makefile" "rules.mk" "Config.in")
+    for file in "${critical_files[@]}"; do
+        if [ ! -f "$file" ]; then
+            log "❌ 错误: 关键文件 $file 不存在"
+            exit 1
+        fi
+    done
+    
+    log "✅ 前置错误检查完成"
+}
+
 # ========== 自动更新 Git 配置文件功能 ==========
 
 # 自动更新 .gitattributes 文件
@@ -605,6 +665,140 @@ EOF
     fi
 }
 
+# ========== 修复：加载工具链函数（增强版）==========
+load_toolchain() {
+    log "=== 加载工具链（增强版）==="
+    
+    load_env
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
+    
+    log "当前工作目录: $(pwd)"
+    log "仓库根目录: $REPO_ROOT"
+    log "工具链目录: $TOOLCHAIN_DIR"
+    
+    # 首先检查构建目录中是否已有工具链
+    local existing_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
+    if [ -n "$existing_toolchain" ]; then
+        log "✅ 构建目录中已有工具链，跳过加载: $existing_toolchain"
+        log "工具链大小: $(du -sh "$existing_toolchain" 2>/dev/null | cut -f1 || echo '未知')"
+        return 0
+    fi
+    
+    # 获取工具链路径
+    local toolchain_path=$(get_toolchain_path)
+    local common_path=$(get_common_toolchain_path)
+    
+    log "检查仓库工具链目录:"
+    log "  版本特定路径: $toolchain_path"
+    log "  通用工具链路径: $common_path"
+    
+    # 创建staging_dir目录（如果不存在）
+    mkdir -p staging_dir
+    
+    local found_toolchain=0
+    
+    # 首先尝试从版本特定路径加载
+    if [ -d "$toolchain_path" ] && [ -n "$(ls -A "$toolchain_path" 2>/dev/null)" ]; then
+        log "🔍 从版本特定路径查找工具链: $toolchain_path"
+        
+        # 查找工具链目录（可能是直接复制过来的工具链目录）
+        local toolchain_dirs=$(find "$toolchain_path" -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
+        
+        if [ -n "$toolchain_dirs" ]; then
+            local toolchain_name=$(basename "$toolchain_dirs")
+            log "📦 找到工具链目录: $toolchain_name"
+            log "复制工具链到构建目录..."
+            
+            # 复制工具链到staging_dir
+            cp -r "$toolchain_dirs" staging_dir/
+            
+            if [ -d "staging_dir/$toolchain_name" ]; then
+                log "✅ 版本特定工具链加载成功"
+                log "工具链路径: staging_dir/$toolchain_name"
+                found_toolchain=1
+            fi
+        else
+            # 如果没有找到toolchain-*目录，检查是否整个目录就是工具链
+            log "未找到toolchain-*格式的目录，检查整个目录..."
+            local dir_content=$(ls -A "$toolchain_path" 2>/dev/null | head -5)
+            if [ -n "$dir_content" ]; then
+                log "目录内容: $dir_content"
+                
+                # 检查是否有bin目录和编译器
+                if [ -d "$toolchain_path/bin" ]; then
+                    local compilers=$(find "$toolchain_path/bin" -name "*gcc*" 2>/dev/null | head -3)
+                    if [ -n "$compilers" ]; then
+                        log "🔧 找到编译器，创建工具链目录..."
+                        mkdir -p staging_dir/toolchain-repo
+                        cp -r "$toolchain_path/"* staging_dir/toolchain-repo/ 2>/dev/null || true
+                        
+                        # 重命名为标准格式
+                        local new_name="toolchain-repo-$(date +%s)"
+                        mv staging_dir/toolchain-repo staging_dir/"$new_name" 2>/dev/null || true
+                        
+                        if [ -d "staging_dir/$new_name" ]; then
+                            log "✅ 工具链文件加载成功"
+                            found_toolchain=1
+                        fi
+                    fi
+                fi
+            fi
+        fi
+    fi
+    
+    # 如果版本特定路径没有找到，尝试通用路径
+    if [ $found_toolchain -eq 0 ] && [ -d "$common_path" ] && [ -n "$(ls -A "$common_path" 2>/dev/null)" ]; then
+        log "🔍 从通用工具链路径查找: $common_path"
+        
+        # 检查是否有编译器
+        if [ -d "$common_path/bin" ]; then
+            local compilers=$(find "$common_path/bin" -name "*gcc*" 2>/dev/null | head -3)
+            if [ -n "$compilers" ]; then
+                log "🔧 找到通用编译器，创建工具链目录..."
+                mkdir -p staging_dir/toolchain-common
+                cp -r "$common_path/"* staging_dir/toolchain-common/ 2>/dev/null || true
+                
+                log "✅ 通用工具链加载成功"
+                found_toolchain=1
+            fi
+        fi
+    fi
+    
+    # 如果都没有找到工具链
+    if [ $found_toolchain -eq 0 ]; then
+        log "⚠️  仓库中未找到可用的工具链，将自动下载"
+        log "工具链保存路径说明:"
+        log "  版本特定路径: $toolchain_path"
+        log "  通用路径: $common_path"
+        
+        # 显示工具链目录结构（用于调试）
+        if [ -d "$TOOLCHAIN_DIR" ]; then
+            log "当前工具链目录结构:"
+            find "$TOOLCHAIN_DIR" -maxdepth 3 -type d 2>/dev/null | sort | head -20 || log "无法列出目录"
+        fi
+    else
+        # 验证加载的工具链
+        log "🔧 验证加载的工具链..."
+        local loaded_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
+        if [ -n "$loaded_toolchain" ]; then
+            verify_toolchain_completeness "$loaded_toolchain" || log "⚠️ 工具链验证失败"
+        fi
+    fi
+    
+    log "✅ 工具链加载完成"
+    log "构建目录状态:"
+    if [ -d "staging_dir" ]; then
+        find staging_dir -maxdepth 1 -type d 2>/dev/null | while read dir; do
+            local dir_name=$(basename "$dir")
+            if [ "$dir_name" != "staging_dir" ]; then
+                log "  - $dir_name ($(du -sh "$dir" 2>/dev/null | cut -f1 || echo '未知'))"
+            fi
+        done
+    fi
+    
+    return 0
+}
+
 save_toolchain() {
     load_env
     cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
@@ -705,129 +899,6 @@ save_toolchain() {
     if [ $large_files -gt 0 ]; then
         log "⚠️  发现 $large_files 个大于50M的文件，建议使用Git LFS管理"
         find "$TOOLCHAIN_DIR" -type f -size +50M 2>/dev/null | head -5
-    fi
-    
-    return 0
-}
-
-load_toolchain() {
-    load_env
-    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
-    
-    log "=== 加载工具链 ==="
-    log "当前工作目录: $(pwd)"
-    log "仓库根目录: $REPO_ROOT"
-    log "工具链目录: $TOOLCHAIN_DIR"
-    
-    # 初始化工具链目录
-    init_toolchain_dir
-    
-    local toolchain_path=$(get_toolchain_path)
-    local common_path=$(get_common_toolchain_path)
-    
-    log "检查仓库工具链目录: $toolchain_path"
-    if [ -d "$toolchain_path" ]; then
-        log "目录存在，内容如下："
-        ls -la "$toolchain_path" 2>/dev/null | head -10 || log "无法列出目录内容"
-    else
-        log "目录不存在"
-    fi
-    
-    log "检查通用工具链目录: $common_path"
-    if [ -d "$common_path" ]; then
-        log "目录存在，内容如下："
-        ls -la "$common_path" 2>/dev/null | head -10 || log "无法列出目录内容"
-    else
-        log "目录不存在"
-    fi
-    
-    local found_repo_toolchain=0
-    
-    # 检查仓库中的工具链
-    if [ -d "$toolchain_path" ] && [ -n "$(ls -A "$toolchain_path" 2>/dev/null)" ]; then
-        found_repo_toolchain=1
-        log "🔧 从仓库找到版本特定工具链: $toolchain_path"
-    fi
-    
-    if [ -d "$common_path/bin" ] && [ -n "$(ls -A "$common_path/bin" 2>/dev/null)" ]; then
-        found_repo_toolchain=1
-        log "🔧 从仓库找到通用工具链: $common_path/bin"
-    fi
-    
-    if [ $found_repo_toolchain -eq 0 ]; then
-        log "ℹ️  仓库中未找到工具链，将使用默认工具链"
-        return 0
-    fi
-    
-    mkdir -p staging_dir
-    
-    # 加载版本特定工具链
-    if [ -d "$toolchain_path" ] && [ -n "$(ls -A "$toolchain_path" 2>/dev/null)" ]; then
-        log "🔧 从仓库加载版本特定工具链: $toolchain_path"
-        
-        local existing_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
-        
-        if [ -n "$existing_toolchain" ]; then
-            log "已存在工具链: $existing_toolchain，跳过加载"
-            # 验证现有工具链
-            verify_toolchain_completeness "$existing_toolchain" || log "⚠️ 现有工具链验证失败"
-        else
-            # 查找工具链目录
-            local first_dir=$(find "$toolchain_path" -maxdepth 1 -type d ! -path "$toolchain_path" | head -1)
-            if [ -n "$first_dir" ]; then
-                local toolchain_name=$(basename "$first_dir")
-                log "复制工具链: $toolchain_name 到 staging_dir/"
-                cp -r "$first_dir" "staging_dir/"
-                
-                # 验证工具链完整性
-                if verify_toolchain_completeness "staging_dir/$toolchain_name"; then
-                    log "✅ 版本特定工具链加载完成: staging_dir/$toolchain_name"
-                else
-                    log "❌ 工具链验证失败，删除不完整的工具链"
-                    rm -rf "staging_dir/$toolchain_name"
-                    log "ℹ️  将重新下载完整工具链"
-                fi
-            else
-                # 如果没有子目录，直接使用当前目录
-                log "复制工具链文件到 staging_dir/"
-                mkdir -p "staging_dir/toolchain-repo"
-                cp -r "$toolchain_path"/* "staging_dir/toolchain-repo/" 2>/dev/null || true
-                
-                # 验证工具链完整性
-                if verify_toolchain_completeness "staging_dir/toolchain-repo"; then
-                    log "✅ 版本特定工具链文件加载完成"
-                else
-                    log "❌ 工具链文件不完整"
-                fi
-            fi
-        fi
-    fi
-    
-    # 加载通用工具链
-    if [ -d "$common_path/bin" ] && [ -n "$(ls -A "$common_path/bin" 2>/dev/null)" ]; then
-        log "🔧 从仓库加载通用工具链组件"
-        
-        mkdir -p staging_dir/host/bin
-        cp -r "$common_path/bin"/* staging_dir/host/bin/ 2>/dev/null || true
-        log "✅ 通用工具链组件加载完成"
-    fi
-    
-    # 检查构建目录中是否已有工具链
-    if [ -d "staging_dir" ]; then
-        local existing_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
-        if [ -n "$existing_toolchain" ]; then
-            log "✅ 构建目录中已有工具链: $existing_toolchain"
-            log "工具链大小: $(du -sh "$existing_toolchain" 2>/dev/null | cut -f1 || echo '未知')"
-            
-            # 验证工具链完整性
-            if verify_toolchain_completeness "$existing_toolchain"; then
-                log "✅ 工具链完整性验证通过"
-            else
-                log "❌ 工具链不完整，可能需要重新下载"
-            fi
-        else
-            log "⚠️  构建目录中未找到完整工具链"
-        fi
     fi
     
     return 0
@@ -1179,53 +1250,6 @@ EOF
     fi
     
     log "=== 工具链保存完成 ==="
-}
-
-# 加载工具链
-load_toolchain() {
-    log "=== 加载工具链 ==="
-    
-    cd "$BUILD_DIR/openwrt"
-    
-    # 检查是否已经有工具链
-    if [ -d "staging_dir/toolchain-"* ] 2>/dev/null; then
-        log "✅ 构建目录中已存在工具链，跳过加载"
-        return 0
-    fi
-    
-    # 检查仓库中是否有保存的工具链
-    if [ -d "$TOOLCHAIN_DIR" ] && [ -n "$(ls -A "$TOOLCHAIN_DIR" 2>/dev/null)" ]; then
-        log "📁 仓库中有保存的工具链，尝试加载..."
-        
-        local toolchain_dirs=$(find "$TOOLCHAIN_DIR" -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
-        
-        if [ -n "$toolchain_dirs" ]; then
-            local toolchain_name=$(basename "$toolchain_dirs")
-            log "🔍 找到保存的工具链: $toolchain_name"
-            
-            # 确保构建目录存在
-            mkdir -p "staging_dir"
-            
-            # 复制工具链到构建目录
-            log "📦 复制工具链到构建目录..."
-            cp -r "$toolchain_dirs" "staging_dir/" 2>/dev/null || true
-            
-            if [ -d "staging_dir/$toolchain_name" ]; then
-                log "✅ 工具链加载成功"
-                log "  工具链: $toolchain_name"
-                log "  路径: staging_dir/$toolchain_name"
-                log "  大小: $(du -sh "staging_dir/$toolchain_name" 2>/dev/null | cut -f1 || echo '未知')"
-            else
-                log "⚠️  工具链加载失败，将自动下载"
-            fi
-        else
-            log "ℹ️  未找到可用的工具链目录，将自动下载"
-        fi
-    else
-        log "ℹ️  仓库中没有保存的工具链，将自动下载"
-    fi
-    
-    log "=== 工具链加载完成 ==="
 }
 
 # ========== 环境设置函数 ==========
@@ -2803,7 +2827,7 @@ workflow_step22_load_toolchain() {
     log "========================================"
 }
 
-# 步骤23：检查工具链加载状态
+# ========== 修复：检查工具链加载状态函数 ==========
 workflow_step23_check_toolchain_status() {
     log "========================================"
     log "📊 步骤23：检查工具链加载状态"
@@ -2812,40 +2836,99 @@ workflow_step23_check_toolchain_status() {
     
     cd $BUILD_DIR/openwrt
     
-    log "🔍 检查构建目录工具链状态..."
-    if [ -d "staging_dir" ]; then
-        log "✅ staging_dir 目录存在"
-        
-        local toolchain_dirs=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | wc -l)
-        log "📊 找到 $toolchain_dirs 个工具链目录"
-        
-        if [ $toolchain_dirs -gt 0 ]; then
-            log "🎉 工具链已成功加载到构建目录"
-            find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | while read dir; do
-                log "  工具链: $(basename $dir)"
-                log "    大小: $(du -sh "$dir" 2>/dev/null | cut -f1 || echo '未知')"
+    log "🔍 详细检查构建目录工具链状态..."
+    
+    # 检查staging_dir是否存在
+    if [ ! -d "staging_dir" ]; then
+        log "❌ staging_dir 目录不存在，创建它..."
+        mkdir -p staging_dir
+    fi
+    
+    log "✅ staging_dir 目录存在"
+    
+    # 详细查找所有工具链相关目录
+    log "📁 staging_dir 目录内容:"
+    find staging_dir -maxdepth 2 -type d 2>/dev/null | sort | while read dir; do
+        local dir_name=$(basename "$dir")
+        if [[ "$dir_name" == toolchain* ]] || [[ "$dir" == *toolchain* ]]; then
+            log "  🔍 工具链相关目录: $dir"
+            log "    大小: $(du -sh "$dir" 2>/dev/null | cut -f1 || echo '未知')"
+            
+            # 检查编译器
+            if [ -d "$dir/bin" ]; then
+                local compiler_count=$(find "$dir/bin" -name "*gcc*" 2>/dev/null | wc -l)
+                log "    编译器文件: $compiler_count 个"
+                if [ $compiler_count -gt 0 ]; then
+                    find "$dir/bin" -name "*gcc*" 2>/dev/null | head -3 | while read compiler; do
+                        if [ -f "$compiler" ]; then
+                            log "      - $(basename $compiler) ($(stat -c%s "$compiler" 2>/dev/null | numfmt --to=iec || echo '未知大小'))"
+                        fi
+                    done
+                fi
+            fi
+        fi
+    done
+    
+    # 查找所有工具链目录
+    local toolchain_dirs=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null)
+    local toolchain_count=$(echo "$toolchain_dirs" | wc -l)
+    
+    log "📊 找到 $toolchain_count 个工具链目录"
+    
+    if [ $toolchain_count -gt 0 ]; then
+        log "🎉 工具链已成功加载到构建目录"
+        echo "$toolchain_dirs" | while read dir; do
+            log "  🔧 工具链: $(basename $dir)"
+            log "    路径: $dir"
+            log "    大小: $(du -sh "$dir" 2>/dev/null | cut -f1 || echo '未知')"
+            
+            # 详细检查编译器
+            if [ -d "$dir/bin" ]; then
+                log "    📁 bin目录内容:"
+                ls -la "$dir/bin" 2>/dev/null | head -5 || log "      无法列出目录内容"
                 
-                # 检查编译器
+                # 测试编译器
+                local compilers=$(find "$dir/bin" -name "*gcc*" -type f 2>/dev/null | head -2)
+                for compiler in $compilers; do
+                    if [ -x "$compiler" ]; then
+                        log "    ✅ 编译器可执行: $(basename $compiler)"
+                    else
+                        log "    ⚠️  编译器不可执行，尝试添加权限: $(basename $compiler)"
+                        chmod +x "$compiler" 2>/dev/null && log "      ✅ 权限添加成功" || log "      ❌ 权限添加失败"
+                    fi
+                done
+            fi
+        done
+    else
+        log "⚠️  构建目录中没有找到标准格式的工具链目录"
+        
+        # 检查是否有其他形式的工具链
+        log "🔍 检查其他可能的工具链形式..."
+        local other_dirs=$(find staging_dir -maxdepth 2 -type d -name "bin" 2>/dev/null | xargs -I {} dirname {})
+        if [ -n "$other_dirs" ]; then
+            log "找到可能的工具链位置:"
+            echo "$other_dirs" | while read dir; do
                 if [ -d "$dir/bin" ]; then
-                    local compiler_count=$(find "$dir/bin" -name "*gcc*" 2>/dev/null | wc -l)
-                    log "    编译器文件: $compiler_count 个"
-                    if [ $compiler_count -gt 0 ]; then
-                        find "$dir/bin" -name "*gcc*" 2>/dev/null | head -3 | while read compiler; do
-                            log "      - $(basename $compiler)"
-                        done
+                    local gcc_count=$(find "$dir/bin" -name "*gcc*" 2>/dev/null | wc -l)
+                    if [ $gcc_count -gt 0 ]; then
+                        log "  📍 可能工具链: $dir"
+                        log "    包含 $gcc_count 个编译器文件"
+                        log "    大小: $(du -sh "$dir" 2>/dev/null | cut -f1 || echo '未知')"
                     fi
                 fi
             done
         else
-            log "⚠️  构建目录中没有工具链，将自动下载"
+            log "❌ 构建目录中没有工具链，将自动下载"
         fi
-    else
-        log "❌ staging_dir 目录不存在，将自动创建并下载工具链"
     fi
     
     log ""
     log "🔧 验证工具链完整性..."
-    check_toolchain_completeness || log "⚠️  工具链完整性检查失败"
+    check_toolchain_completeness || {
+        log "⚠️  工具链完整性检查失败"
+        log "💡 建议: 删除staging_dir目录重新下载工具链"
+        log "命令: rm -rf staging_dir && make toolchain/install"
+    }
     
     log ""
     log "🎉 步骤23完成：工具链加载状态检查完成"
@@ -2880,7 +2963,7 @@ workflow_step25_integrate_custom_files() {
     log "========================================"
 }
 
-# 步骤26：前置错误检查
+# ========== 修复：工作流步骤26函数 ==========
 workflow_step26_pre_build_error_check() {
     log "========================================"
     log "🚨 步骤26：前置错误检查"
