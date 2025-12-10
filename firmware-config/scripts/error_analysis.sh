@@ -1,11 +1,33 @@
 #!/bin/bash
 set -e
 
-BUILD_DIR=${1:-/mnt/openwrt-build}
+# 修复：检查构建目录是否存在
+if [ -z "$1" ] && [ -n "$BUILD_DIR" ]; then
+    BUILD_DIR="$BUILD_DIR"
+elif [ -n "$1" ]; then
+    BUILD_DIR="$1"
+else
+    BUILD_DIR="/mnt/openwrt-build"
+fi
+
+# 如果目录不存在，创建它
+if [ ! -d "$BUILD_DIR" ]; then
+    echo "⚠️  构建目录不存在: $BUILD_DIR"
+    echo "创建构建目录..."
+    mkdir -p "$BUILD_DIR"
+    if [ -d "$BUILD_DIR" ]; then
+        echo "✅ 构建目录创建成功"
+    else
+        echo "❌ 构建目录创建失败，使用当前目录"
+        BUILD_DIR="."
+    fi
+fi
+
 cd "$BUILD_DIR"
 
 echo "=== 固件构建错误分析报告 ===" > error_analysis.log
 echo "生成时间: $(date)" >> error_analysis.log
+echo "构建目录: $BUILD_DIR" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "=== 构建环境信息 ===" >> error_analysis.log
@@ -492,6 +514,13 @@ echo "   make -j$(nproc) V=s" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "错误分析完成 - 查看 error_analysis.log 获取详细信息" >> error_analysis.log
+
+# 在最后添加目录检查
+echo "" >> error_analysis.log
+echo "=== 目录状态 ===" >> error_analysis.log
+echo "当前目录: $(pwd)" >> error_analysis.log
+echo "目录内容:" >> error_analysis.log
+ls -la 2>/dev/null | head -10 >> error_analysis.log || echo "无法列出目录内容" >> error_analysis.log
 
 cat error_analysis.log
 
