@@ -364,7 +364,7 @@ verify_toolchain_completeness() {
 # 新增：检查工具链完整性（公开函数）
 check_toolchain_completeness() {
     load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
     log "=== 检查工具链完整性 ==="
     
@@ -391,7 +391,7 @@ check_toolchain_completeness() {
 # 新增：设置工具链环境函数
 setup_toolchain_env() {
     load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
     log "=== 设置工具链环境 ==="
     
@@ -448,7 +448,7 @@ setup_toolchain_env() {
 # 新增：保存源代码信息函数
 save_source_code_info() {
     load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
     log "=== 保存源代码信息 ==="
     
@@ -607,7 +607,7 @@ EOF
 
 save_toolchain() {
     load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
     log "=== 保存工具链到仓库 ==="
     
@@ -685,8 +685,8 @@ save_toolchain() {
     
     # 保存编译配置文件
     mkdir -p "$common_path/etc"
-    if [ -f "$BUILD_DIR/.config" ]; then
-        cp "$BUILD_DIR/.config" "$common_path/etc/build.config"
+    if [ -f "$BUILD_DIR/openwrt/.config" ]; then
+        cp "$BUILD_DIR/openwrt/.config" "$common_path/etc/build.config"
         log "✅ 保存构建配置文件"
     fi
     
@@ -712,7 +712,7 @@ save_toolchain() {
 
 load_toolchain() {
     load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
     log "=== 加载工具链 ==="
     log "当前工作目录: $(pwd)"
@@ -1120,13 +1120,15 @@ EOF
 save_toolchain() {
     log "=== 保存工具链到仓库目录 ==="
     
-    if [ ! -d "$BUILD_DIR/openwrt/staging_dir" ]; then
+    cd "$BUILD_DIR/openwrt"
+    
+    if [ ! -d "staging_dir" ]; then
         log "❌ 构建目录中没有工具链，跳过保存"
         return 0
     fi
     
     # 查找工具链目录
-    local toolchain_dirs=$(find "$BUILD_DIR/openwrt/staging_dir" -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
+    local toolchain_dirs=$(find "staging_dir" -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
     
     if [ -z "$toolchain_dirs" ]; then
         log "⚠️  未找到工具链目录，跳过保存"
@@ -1183,8 +1185,10 @@ EOF
 load_toolchain() {
     log "=== 加载工具链 ==="
     
+    cd "$BUILD_DIR/openwrt"
+    
     # 检查是否已经有工具链
-    if [ -d "$BUILD_DIR/openwrt/staging_dir/toolchain-"* ] 2>/dev/null; then
+    if [ -d "staging_dir/toolchain-"* ] 2>/dev/null; then
         log "✅ 构建目录中已存在工具链，跳过加载"
         return 0
     fi
@@ -1200,17 +1204,17 @@ load_toolchain() {
             log "🔍 找到保存的工具链: $toolchain_name"
             
             # 确保构建目录存在
-            mkdir -p "$BUILD_DIR/openwrt/staging_dir"
+            mkdir -p "staging_dir"
             
             # 复制工具链到构建目录
             log "📦 复制工具链到构建目录..."
-            cp -r "$toolchain_dirs" "$BUILD_DIR/openwrt/staging_dir/" 2>/dev/null || true
+            cp -r "$toolchain_dirs" "staging_dir/" 2>/dev/null || true
             
-            if [ -d "$BUILD_DIR/openwrt/staging_dir/$toolchain_name" ]; then
+            if [ -d "staging_dir/$toolchain_name" ]; then
                 log "✅ 工具链加载成功"
                 log "  工具链: $toolchain_name"
-                log "  路径: $BUILD_DIR/openwrt/staging_dir/$toolchain_name"
-                log "  大小: $(du -sh "$BUILD_DIR/openwrt/staging_dir/$toolchain_name" 2>/dev/null | cut -f1 || echo '未知')"
+                log "  路径: staging_dir/$toolchain_name"
+                log "  大小: $(du -sh "staging_dir/$toolchain_name" 2>/dev/null | cut -f1 || echo '未知')"
             else
                 log "⚠️  工具链加载失败，将自动下载"
             fi
@@ -1303,12 +1307,12 @@ create_build_dir() {
     log "=== 构建目录创建完成 ==="
 }
 
-# ========== 原有函数（保持不变）==========
+# ========== 原有函数（修复目录路径）==========
 
 # 添加 TurboACC 支持
 add_turboacc_support() {
     load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
     log "=== 添加 TurboACC 支持 ==="
     
@@ -1330,7 +1334,7 @@ add_turboacc_support() {
 # 配置 Feeds
 configure_feeds() {
     load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
     log "=== 配置Feeds ==="
     
@@ -1369,7 +1373,7 @@ configure_feeds() {
 # 安装 TurboACC 包
 install_turboacc_packages() {
     load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
     log "=== 安装 TurboACC 包 ==="
     
@@ -1430,7 +1434,7 @@ pre_build_space_check() {
 generate_config() {
     local extra_packages=$1
     load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
     log "=== 智能配置生成系统（USB完全修复通用版）==="
     log "版本: $SELECTED_BRANCH"
@@ -1682,7 +1686,7 @@ generate_config() {
 # 验证 USB 配置
 verify_usb_config() {
     load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
     log "=== 🚨 详细验证USB和存储配置 ==="
     
@@ -1701,7 +1705,7 @@ verify_usb_config() {
     if [ "$TARGET" = "ipq40xx" ]; then
         echo "  🔧 检测到高通IPQ40xx平台，检查专用驱动:"
         echo "  - kmod-usb-dwc3-qcom:" $(grep "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
-        echo "  - kmod-phy-qcom-dwc3:" $(greq "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+        echo "  - kmod-phy-qcom-dwc3:" $(grep "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
     elif [ "$TARGET" = "ramips" ]; then
         echo "  🔧 检测到雷凌平台，检查专用驱动:"
         echo "  - kmod-usb-ohci-pci:" $(grep "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
@@ -1749,7 +1753,7 @@ verify_usb_config() {
 # 检查 USB 驱动完整性
 check_usb_drivers_integrity() {
     load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
     log "=== 🚨 USB驱动完整性检查 ==="
     
@@ -1799,7 +1803,7 @@ check_usb_drivers_integrity() {
 # 应用配置并分类显示插件
 apply_config() {
     load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
     log "=== 应用配置并显示详情 ==="
     
@@ -2004,7 +2008,7 @@ apply_config() {
 
 # 修复网络环境
 fix_network() {
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
     log "=== 修复网络环境 ==="
     
@@ -2038,7 +2042,7 @@ fix_network() {
 
 # 下载依赖包
 download_dependencies() {
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
     log "=== 下载依赖包 ==="
     
@@ -2079,7 +2083,7 @@ download_dependencies() {
 build_firmware() {
     local enable_cache=$1
     load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
     log "=== 编译固件 ==="
     
@@ -2204,8 +2208,8 @@ post_build_space_check() {
     echo "构建目录大小: $build_dir_usage"
     
     # 固件文件大小
-    if [ -d "$BUILD_DIR/bin/targets" ]; then
-        local firmware_size=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) -exec du -ch {} + 2>/dev/null | tail -1 | cut -f1)
+    if [ -d "$BUILD_DIR/openwrt/bin/targets" ]; then
+        local firmware_size=$(find "$BUILD_DIR/openwrt/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) -exec du -ch {} + 2>/dev/null | tail -1 | cut -f1)
         echo "固件文件总大小: $firmware_size"
     fi
     
@@ -2226,7 +2230,7 @@ post_build_space_check() {
 # 检查固件文件
 check_firmware_files() {
     load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
     log "=== 固件文件检查 ==="
     
@@ -2282,19 +2286,19 @@ cleanup() {
         log "检查是否有需要保留的文件..."
         
         # 如果.config文件存在，先备份
-        if [ -f "$BUILD_DIR/.config" ]; then
+        if [ -f "$BUILD_DIR/openwrt/.config" ]; then
             log "备份配置文件..."
             mkdir -p /tmp/openwrt_backup
             local backup_file="/tmp/openwrt_backup/config_$(date +%Y%m%d_%H%M%S).config"
-            cp "$BUILD_DIR/.config" "$backup_file"
+            cp "$BUILD_DIR/openwrt/.config" "$backup_file"
             log "✅ 配置文件备份到: $backup_file"
         fi
         
         # 如果build.log存在，备份
-        if [ -f "$BUILD_DIR/build.log" ]; then
+        if [ -f "$BUILD_DIR/openwrt/build.log" ]; then
             log "备份编译日志..."
             mkdir -p /tmp/openwrt_backup
-            cp "$BUILD_DIR/build.log" "/tmp/openwrt_backup/build_$(date +%Y%m%d_%H%M%S).log"
+            cp "$BUILD_DIR/openwrt/build.log" "/tmp/openwrt_backup/build_$(date +%Y%m%d_%H%M%S).log"
         fi
         
         # 清理构建目录
