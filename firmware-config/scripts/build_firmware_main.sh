@@ -135,7 +135,6 @@ EOF
     log "📊 更新完成: 添加了 $added_count 个新规则"
     log "📄 文件位置: $gitattributes_file"
     
-    # 修复：返回0而不是 $added_count，避免触发 set -e
     return 0
 }
 
@@ -227,7 +226,6 @@ EOF
     log "📊 更新完成: 添加了 $added_count 个新规则"
     log "📄 文件位置: $gitignore_file"
     
-    # 修复：返回0而不是 $added_count，避免触发 set -e
     return 0
 }
 
@@ -479,27 +477,30 @@ setup_environment() {
 create_build_dir() {
     log "=== 创建构建目录 ==="
     
-    log "📁 创建构建目录: $BUILD_DIR"
-    mkdir -p "$BUILD_DIR"
+    log "📁 检查构建目录: $BUILD_DIR"
     
-    # 设置权限
-    chmod 755 "$BUILD_DIR"
-    
-    log "📊 目录信息:"
-    log "  路径: $BUILD_DIR"
-    log "  权限: $(ls -ld "$BUILD_DIR" | awk '{print $1}')"
-    log "  所有者: $(ls -ld "$BUILD_DIR" | awk '{print $3}')"
+    if [ -d "$BUILD_DIR" ]; then
+        log "✅ 构建目录已存在，跳过创建"
+        log "📊 目录信息:"
+        log "  路径: $BUILD_DIR"
+        log "  权限: $(ls -ld "$BUILD_DIR" | awk '{print $1}')"
+        log "  所有者: $(ls -ld "$BUILD_DIR" | awk '{print $3":"$4}')"
+    else
+        log "📁 创建构建目录: $BUILD_DIR"
+        mkdir -p "$BUILD_DIR"
+        
+        # 只有在目录不存在时才设置权限
+        if [ -d "$BUILD_DIR" ]; then
+            log "✅ 构建目录创建成功"
+        else
+            log "❌ 构建目录创建失败"
+            exit 1
+        fi
+    fi
     
     # 检查磁盘空间
     local available_space=$(df -h "$BUILD_DIR" | tail -1 | awk '{print $4}')
     log "💽 可用空间: $available_space"
-    
-    if [ -d "$BUILD_DIR" ]; then
-        log "✅ 构建目录创建成功"
-    else
-        log "❌ 构建目录创建失败"
-        exit 1
-    fi
     
     log "=== 构建目录创建完成 ==="
 }
@@ -772,14 +773,14 @@ workflow_step8_setup_environment() {
 # 步骤9：创建构建目录
 workflow_step9_create_build_dir() {
     log "========================================"
-    log "📁 步骤9：创建构建目录"
+    log "📁 步骤9：检查构建目录"
     log "========================================"
     log ""
     
     create_build_dir
     
     log ""
-    log "🎉 步骤9完成：构建目录创建完成"
+    log "🎉 步骤9完成：构建目录检查完成"
     log "========================================"
 }
 
@@ -801,7 +802,6 @@ workflow_step10_init_build_env() {
     log "🔌 额外插件: $extra_packages"
     log ""
     
-    # 调用原有函数（这里假设已有此函数）
     initialize_build_env "$device_name" "$version_selection" "$config_mode"
     
     log ""
@@ -1074,7 +1074,6 @@ workflow_step23_check_toolchain_status() {
     
     log ""
     log "🔧 验证工具链完整性..."
-    # 这里调用原有的 check_toolchain_completeness 函数
     check_toolchain_completeness || log "⚠️  工具链完整性检查失败"
     
     log ""
