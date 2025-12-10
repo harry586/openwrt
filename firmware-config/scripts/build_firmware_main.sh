@@ -273,7 +273,72 @@ smart_manage_large_files() {
     log "✅ 智能大文件管理完成"
 }
 
-# ========== 构建环境初始化函数（新增的缺失函数） ==========
+# ========== OpenWrt源码下载函数（新增） ==========
+
+# 下载OpenWrt源代码
+download_openwrt_source() {
+    log "=== 下载OpenWrt源代码 ==="
+    
+    cd "$BUILD_DIR"
+    
+    log "📥 下载OpenWrt $SELECTED_BRANCH 源代码..."
+    
+    # 根据分支选择下载对应的OpenWrt版本
+    local openwrt_url=""
+    case "$SELECTED_BRANCH" in
+        "openwrt-23.05")
+            openwrt_url="https://github.com/openwrt/openwrt.git"
+            ;;
+        "openwrt-21.02")
+            openwrt_url="https://github.com/openwrt/openwrt.git"
+            ;;
+        *)
+            openwrt_url="https://github.com/openwrt/openwrt.git"
+            log "⚠️  使用默认的OpenWrt主分支"
+            ;;
+    esac
+    
+    log "🔗 下载地址: $openwrt_url"
+    log "📂 目标目录: $BUILD_DIR"
+    
+    # 检查是否已经存在OpenWrt源码
+    if [ -d "$BUILD_DIR/openwrt" ] && [ -f "$BUILD_DIR/openwrt/feeds.conf.default" ]; then
+        log "✅ OpenWrt源码已存在，跳过下载"
+        log "📊 源码目录信息:"
+        log "  路径: $BUILD_DIR/openwrt"
+        log "  大小: $(du -sh "$BUILD_DIR/openwrt" 2>/dev/null | cut -f1 || echo '未知')"
+        return 0
+    fi
+    
+    # 清理旧的源码目录
+    if [ -d "$BUILD_DIR/openwrt" ]; then
+        log "🧹 清理旧的源码目录..."
+        rm -rf "$BUILD_DIR/openwrt"
+    fi
+    
+    # 下载OpenWrt源码
+    log "⏬ 正在下载OpenWrt源码..."
+    git clone --depth 1 --branch "$SELECTED_BRANCH" "$openwrt_url" "$BUILD_DIR/openwrt"
+    
+    if [ ! -d "$BUILD_DIR/openwrt" ]; then
+        log "❌ OpenWrt源码下载失败"
+        exit 1
+    fi
+    
+    log "✅ OpenWrt源码下载完成"
+    log "📊 下载信息:"
+    log "  版本: $SELECTED_BRANCH"
+    log "  目录: $BUILD_DIR/openwrt"
+    log "  大小: $(du -sh "$BUILD_DIR/openwrt" 2>/dev/null | cut -f1 || echo '未知')"
+    
+    # 显示源码目录结构
+    log "📁 源码目录结构:"
+    find "$BUILD_DIR/openwrt" -maxdepth 2 -type d | head -20
+    
+    log "=== OpenWrt源码下载完成 ==="
+}
+
+# ========== 构建环境初始化函数 ==========
 
 # 初始化构建环境
 initialize_build_env() {
@@ -333,6 +398,26 @@ initialize_build_env() {
     
     log "⚡ 启用缓存: $ENABLE_CACHE"
     log "💾 提交工具链: $COMMIT_TOOLCHAIN"
+    
+    # 下载OpenWrt源代码
+    download_openwrt_source
+    
+    # 创建符号链接，确保构建系统能找到源码
+    if [ -d "$BUILD_DIR/openwrt" ] && [ ! -L "$BUILD_DIR"/*.sh ]; then
+        log "🔗 创建构建系统链接..."
+        
+        # 进入OpenWrt源码目录
+        cd "$BUILD_DIR/openwrt"
+        
+        # 备份原始的feeds.conf.default
+        if [ -f "feeds.conf.default" ]; then
+            cp feeds.conf.default feeds.conf.default.backup
+            log "📄 备份feeds.conf.default"
+        fi
+        
+        # 回到构建目录
+        cd "$BUILD_DIR"
+    fi
     
     # 保存环境变量到文件
     log "📝 保存环境变量到: $ENV_FILE"
@@ -414,17 +499,23 @@ check_toolchain_completeness() {
     fi
 }
 
-# ========== 其他缺失函数占位（实际需要时补充） ==========
+# ========== 其他函数 ==========
 
 # 添加 TurboACC 支持
 add_turboacc_support() {
     log "=== 添加 TurboACC 支持 ==="
     
-    cd "$BUILD_DIR"
+    # 确保在OpenWrt源码目录中
+    cd "$BUILD_DIR/openwrt"
+    
+    if [ ! -d "feeds" ]; then
+        log "📁 创建feeds目录..."
+        mkdir -p feeds
+    fi
     
     if [ ! -d "feeds/packages" ]; then
-        log "❌ feeds/packages 目录不存在"
-        return 1
+        log "📦 初始化feeds..."
+        mkdir -p feeds/packages
     fi
     
     log "📦 添加 TurboACC 支持..."
@@ -444,6 +535,8 @@ EOF
     if ! grep -q "TurboACC" feeds.conf.default; then
         log "🔗 添加 TurboACC 源"
         echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+    else
+        log "ℹ️  TurboACC源已存在"
     fi
     
     log "✅ TurboACC 支持添加完成"
@@ -453,7 +546,7 @@ EOF
 configure_feeds() {
     log "=== 配置 Feeds ==="
     
-    cd "$BUILD_DIR"
+    cd "$BUILD_DIR/openwrt"
     
     log "📥 更新 feeds..."
     ./scripts/feeds update -a
@@ -468,15 +561,18 @@ configure_feeds() {
 install_turboacc_packages() {
     log "=== 安装 TurboACC 包 ==="
     
-    cd "$BUILD_DIR"
+    cd "$BUILD_DIR/openwrt"
     
     log "🔧 安装 TurboACC..."
+    
+    # 先更新feeds
+    ./scripts/feeds update turboacc
     
     # 安装 luci-app-turboacc
     if ./scripts/feeds install luci-app-turboacc 2>/dev/null; then
         log "✅ luci-app-turboacc 安装成功"
     else
-        log "⚠️  luci-app-turboacc 安装失败，尝试其他方法"
+        log "⚠️  luci-app-turboacc 安装失败，跳过"
     fi
     
     log "✅ TurboACC 包安装完成"
@@ -513,7 +609,7 @@ generate_config() {
     
     log "=== 生成配置 ==="
     
-    cd "$BUILD_DIR"
+    cd "$BUILD_DIR/openwrt"
     
     log "⚙️  生成默认配置..."
     if [ -f ".config" ]; then
@@ -531,7 +627,7 @@ generate_config() {
 verify_usb_config() {
     log "=== 验证 USB 配置 ==="
     
-    cd "$BUILD_DIR"
+    cd "$BUILD_DIR/openwrt"
     
     if [ -f ".config" ]; then
         log "🔍 检查 USB 配置..."
@@ -571,7 +667,7 @@ verify_usb_config() {
 check_usb_drivers_integrity() {
     log "=== 检查 USB 驱动完整性 ==="
     
-    cd "$BUILD_DIR"
+    cd "$BUILD_DIR/openwrt"
     
     if [ -f ".config" ]; then
         log "🔍 详细检查 USB 驱动..."
@@ -600,7 +696,7 @@ check_usb_drivers_integrity() {
 apply_config() {
     log "=== 应用配置 ==="
     
-    cd "$BUILD_DIR"
+    cd "$BUILD_DIR/openwrt"
     
     if [ -f ".config" ]; then
         log "🔧 应用配置..."
@@ -648,7 +744,7 @@ fix_network() {
 download_dependencies() {
     log "=== 下载依赖包 ==="
     
-    cd "$BUILD_DIR"
+    cd "$BUILD_DIR/openwrt"
     
     log "📥 下载依赖包..."
     
@@ -670,7 +766,7 @@ download_dependencies() {
 integrate_custom_files() {
     log "=== 集成自定义文件 ==="
     
-    cd "$BUILD_DIR"
+    cd "$BUILD_DIR/openwrt"
     
     log "🔌 集成自定义文件..."
     
@@ -678,9 +774,12 @@ integrate_custom_files() {
     if [ -d "$REPO_ROOT/firmware-config/files" ]; then
         log "📁 找到自定义文件目录"
         
+        # 创建files目录（如果不存在）
+        mkdir -p files
+        
         # 复制文件到构建目录
         if [ -d "$REPO_ROOT/firmware-config/files" ]; then
-            cp -r "$REPO_ROOT/firmware-config/files/"* "$BUILD_DIR/files/" 2>/dev/null || true
+            cp -r "$REPO_ROOT/firmware-config/files/"* files/ 2>/dev/null || true
             log "✅ 自定义文件复制完成"
         fi
     else
@@ -694,7 +793,7 @@ integrate_custom_files() {
 pre_build_error_check() {
     log "=== 前置错误检查 ==="
     
-    cd "$BUILD_DIR"
+    cd "$BUILD_DIR/openwrt"
     
     log "🔍 执行前置错误检查..."
     
@@ -738,7 +837,7 @@ build_firmware() {
     
     log "=== 构建固件 ==="
     
-    cd "$BUILD_DIR"
+    cd "$BUILD_DIR/openwrt"
     
     log "🔨 开始编译固件..."
     
@@ -775,7 +874,7 @@ post_build_space_check() {
 check_firmware_files() {
     log "=== 检查固件文件 ==="
     
-    cd "$BUILD_DIR"
+    cd "$BUILD_DIR/openwrt"
     
     if [ -d "bin/targets" ]; then
         log "✅ 固件目录存在: bin/targets"
@@ -808,9 +907,12 @@ check_firmware_files() {
 save_source_code_info() {
     log "=== 保存源代码信息 ==="
     
-    cd "$BUILD_DIR"
+    cd "$BUILD_DIR/openwrt"
     
     log "📝 保存源代码信息..."
+    
+    # 创建源代码信息目录
+    mkdir -p "$REPO_ROOT/firmware-config/source-info"
     
     # 保存版本信息
     if [ -f "version" ]; then
@@ -874,13 +976,13 @@ EOF
 save_toolchain() {
     log "=== 保存工具链到仓库目录 ==="
     
-    if [ ! -d "$BUILD_DIR/staging_dir" ]; then
+    if [ ! -d "$BUILD_DIR/openwrt/staging_dir" ]; then
         log "❌ 构建目录中没有工具链，跳过保存"
         return 0
     fi
     
     # 查找工具链目录
-    local toolchain_dirs=$(find "$BUILD_DIR/staging_dir" -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
+    local toolchain_dirs=$(find "$BUILD_DIR/openwrt/staging_dir" -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
     
     if [ -z "$toolchain_dirs" ]; then
         log "⚠️  未找到工具链目录，跳过保存"
@@ -938,7 +1040,7 @@ load_toolchain() {
     log "=== 加载工具链 ==="
     
     # 检查是否已经有工具链
-    if [ -d "$BUILD_DIR/staging_dir/toolchain-"* ] 2>/dev/null; then
+    if [ -d "$BUILD_DIR/openwrt/staging_dir/toolchain-"* ] 2>/dev/null; then
         log "✅ 构建目录中已存在工具链，跳过加载"
         return 0
     fi
@@ -954,17 +1056,17 @@ load_toolchain() {
             log "🔍 找到保存的工具链: $toolchain_name"
             
             # 确保构建目录存在
-            mkdir -p "$BUILD_DIR/staging_dir"
+            mkdir -p "$BUILD_DIR/openwrt/staging_dir"
             
             # 复制工具链到构建目录
             log "📦 复制工具链到构建目录..."
-            cp -r "$toolchain_dirs" "$BUILD_DIR/staging_dir/" 2>/dev/null || true
+            cp -r "$toolchain_dirs" "$BUILD_DIR/openwrt/staging_dir/" 2>/dev/null || true
             
-            if [ -d "$BUILD_DIR/staging_dir/$toolchain_name" ]; then
+            if [ -d "$BUILD_DIR/openwrt/staging_dir/$toolchain_name" ]; then
                 log "✅ 工具链加载成功"
                 log "  工具链: $toolchain_name"
-                log "  路径: $BUILD_DIR/staging_dir/$toolchain_name"
-                log "  大小: $(du -sh "$BUILD_DIR/staging_dir/$toolchain_name" 2>/dev/null | cut -f1 || echo '未知')"
+                log "  路径: $BUILD_DIR/openwrt/staging_dir/$toolchain_name"
+                log "  大小: $(du -sh "$BUILD_DIR/openwrt/staging_dir/$toolchain_name" 2>/dev/null | cut -f1 || echo '未知')"
             else
                 log "⚠️  工具链加载失败，将自动下载"
             fi
@@ -1530,7 +1632,7 @@ workflow_step20_backup_config() {
     log ""
     
     # 检查配置文件
-    if [ -f "$BUILD_DIR/.config" ]; then
+    if [ -f "$BUILD_DIR/openwrt/.config" ]; then
         log "✅ .config 文件存在"
         
         # 确保备份目录存在
@@ -1539,7 +1641,7 @@ workflow_step20_backup_config() {
         # 备份到仓库目录
         backup_file="firmware-config/config-backup/config_${DEVICE}_${SELECTED_BRANCH}_${CONFIG_MODE}_$(date +%Y%m%d_%H%M%S).config"
         
-        cp "$BUILD_DIR/.config" "$backup_file"
+        cp "$BUILD_DIR/openwrt/.config" "$backup_file"
         log "✅ 配置文件备份到仓库目录: $backup_file"
         
         # 显示备份文件信息
@@ -1591,7 +1693,7 @@ workflow_step23_check_toolchain_status() {
     log "========================================"
     log ""
     
-    cd $BUILD_DIR
+    cd $BUILD_DIR/openwrt
     
     log "🔍 检查构建目录工具链状态..."
     if [ -d "staging_dir" ]; then
