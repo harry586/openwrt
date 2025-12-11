@@ -277,18 +277,12 @@ jobs:
             
             if git status --porcelain | grep -q "."; then
               echo "提交修复更改..."
-              # 创建临时文件存储commit消息
-              COMMIT_MSG_FILE=$(mktemp)
-              cat > "$COMMIT_MSG_FILE" << 'EOF'
-fix: 自动修复更新
-              
-修复内容:
-- 增强路径搜索功能
-- 修复脚本执行顺序
-- 优化工作流步骤
-EOF
-              git commit -F "$COMMIT_MSG_FILE"
-              rm -f "$COMMIT_MSG_FILE"
+              git commit -m "fix: 自动修复更新 [$(date '+%Y-%m-%d %H:%M:%S')]"
+              git commit --amend -m "fix: 自动修复更新 [$(date '+%Y-%m-%d %H:%M:%S')]
+              修复内容:
+              - 增强路径搜索功能
+              - 修复脚本执行顺序
+              - 优化工作流步骤"
               
               for i in {1..3}; do
                 echo "推送尝试 $i/3..."
