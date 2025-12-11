@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流（修复完整版）
+name: OpenWrt 智能固件构建工作流（集成智能修复版）
 
 on:
   workflow_dispatch:
@@ -238,128 +238,355 @@ jobs:
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step23_check_toolchain_status
       
-      # 步骤23.5：关键环境修复（新增核心步骤）
-      - name: "🔨 23.5 关键环境修复"
+      # 🔥 步骤24：智能查找并运行修复脚本（核心修复步骤）
+      - name: "🔍 24. 智能查找并运行修复脚本"
+        id: find_and_run_fix
         run: |
-          echo "=== 执行关键环境修复 ==="
-          cd ${{ env.BUILD_DIR }}/openwrt
+          echo "========================================"
+          echo "🔍 步骤24：智能查找并运行修复脚本"
+          echo "========================================"
+          echo ""
           
-          # 1. 修复工具链权限
-          echo "1. 修复编译器权限..."
-          find staging_dir -type f \( -name "*gcc*" -o -name "*ar" -o -name "*ld" \) -exec chmod +x {} \; 2>/dev/null || true
+          # 定义可能的脚本位置（按优先级排序）
+          POSSIBLE_PATHS=(
+            "firmware-config/scripts/fix-build.sh"           # 用户指定位置（最高优先级）
+            "firmware-config/scripts/fix-build-issues.sh"    # 备用修复脚本
+            ".github/scripts/fix-build-issues.sh"           # 标准GitHub脚本位置
+            "scripts/fix-build.sh"                          # 根目录scripts文件夹
+            "firmware-config/fix-build.sh"                  # 配置目录根
+            "fix-script.sh"                                 # 根目录通用名
+            "automation/fix-build.sh"                       # 自动化目录
+          )
           
-          # 2. 创建缺失目录
-          echo "2. 创建缺失目录..."
-          mkdir -p staging_dir/target-*/host/include 2>/dev/null || true
-          mkdir -p staging_dir/hostpkg/lib 2>/dev/null || true
-          mkdir -p files/etc/smartdns 2>/dev/null || true
+          FIX_SCRIPT=""
+          SCRIPT_LOCATION=""
+          FOUND_IN="预设路径"
           
-          # 3. 创建SmartDNS默认配置（防止编译错误）
-          echo "3. 创建SmartDNS默认配置..."
-          cat > files/etc/smartdns/domain-block.list << 'EOF'
-# 默认广告域名列表
-ad.example.com
-EOF
+          echo "📂 开始查找修复脚本..."
+          echo "搜索优先级:"
+          for i in "${!POSSIBLE_PATHS[@]}"; do
+            echo "  $((i+1)). ${POSSIBLE_PATHS[$i]}"
+          done
+          echo ""
           
-          cat > files/etc/smartdns/domain-forwarding.list << 'EOF'
-# 默认转发规则
-example.com 8.8.8.8
-EOF
+          # 第一阶段：检查预设路径
+          for path in "${POSSIBLE_PATHS[@]}"; do
+            FULL_PATH="${{ github.workspace }}/$path"
+            if [ -f "$FULL_PATH" ]; then
+              FIX_SCRIPT="$FULL_PATH"
+              SCRIPT_LOCATION="$path"
+              echo "✅ 在预设路径找到脚本: $path"
+              break
+            else
+              echo "  ⏳ 检查: $path ... 不存在"
+            fi
+          done
           
-          # 4. 修复libgnuintl.so问题
-          echo "4. 处理libgnuintl.so..."
-          if [ ! -f "staging_dir/hostpkg/lib/libgnuintl.so" ]; then
-            mkdir -p staging_dir/hostpkg/lib
-            touch staging_dir/hostpkg/lib/libgnuintl.so
-            echo "✅ 已创建libgnuintl.so占位文件"
+          # 第二阶段：如果没有找到，尝试全局查找
+          if [ -z "$FIX_SCRIPT" ]; then
+            echo ""
+            echo "🔄 未在预设路径找到脚本，尝试全局查找..."
+            FOUND_SCRIPTS=$(find "${{ github.workspace }}" -type f \( -name "*fix*.sh" -o -name "*repair*.sh" -o -name "*patch*.sh" \) 2>/dev/null | head -10)
+            
+            if [ -n "$FOUND_SCRIPTS" ]; then
+              # 按优先级排序：优先选择包含"build"或"openwrt"的脚本
+              SELECTED_SCRIPT=""
+              for script in $FOUND_SCRIPTS; do
+                if [[ "$script" == *"build"* ]] || [[ "$script" == *"openwrt"* ]]; then
+                  SELECTED_SCRIPT="$script"
+                  break
+                fi
+              done
+              
+              # 如果没有找到包含关键字的，选择第一个
+              if [ -z "$SELECTED_SCRIPT" ]; then
+                SELECTED_SCRIPT=$(echo "$FOUND_SCRIPTS" | head -1)
+              fi
+              
+              FIX_SCRIPT="$SELECTED_SCRIPT"
+              SCRIPT_LOCATION=$(echo "$FIX_SCRIPT" | sed "s|${{ github.workspace }}/||")
+              FOUND_IN="全局查找"
+              echo "🔍 全局查找到脚本: $SCRIPT_LOCATION"
+              echo "找到的其他脚本:"
+              echo "$FOUND_SCRIPTS" | while read s; do
+                if [ "$s" != "$SELECTED_SCRIPT" ]; then
+                  echo "  📄 $(echo $s | sed "s|${{ github.workspace }}/||")"
+                fi
+              done
+            fi
           fi
           
-          echo "✅ 关键环境修复完成"
+          # 执行脚本（如果找到）
+          if [ -n "$FIX_SCRIPT" ] && [ -f "$FIX_SCRIPT" ]; then
+            echo ""
+            echo "🚀 开始执行修复脚本 ($FOUND_IN)"
+            echo "脚本位置: $SCRIPT_LOCATION"
+            echo "完整路径: $FIX_SCRIPT"
+            echo "========================================"
+            
+            # 设置执行权限
+            chmod +x "$FIX_SCRIPT"
+            
+            # 进入构建目录
+            cd ${{ env.BUILD_DIR }}/openwrt || { echo "❌ 无法进入构建目录"; exit 1; }
+            
+            # 检查当前目录
+            echo "当前工作目录: $(pwd)"
+            echo "目录内容:"
+            ls -la 2>/dev/null | head -5 || true
+            
+            # 执行修复脚本并记录输出
+            echo ""
+            echo "📝 修复脚本输出:"
+            echo "----------------------------------------"
+            
+            # 创建日志文件
+            LOG_FILE="/tmp/fix-script-output-$(date +%Y%m%d_%H%M%S).log"
+            
+            # 执行脚本（带超时保护）
+            timeout 300 "$FIX_SCRIPT" 2>&1 | tee "$LOG_FILE"
+            
+            # 检查执行结果
+            FIX_EXIT_CODE=${PIPESTATUS[0]}
+            
+            echo "----------------------------------------"
+            
+            if [ $FIX_EXIT_CODE -eq 0 ]; then
+              echo "✅ 修复脚本执行成功"
+              echo "📄 修复日志已保存至: $LOG_FILE"
+              echo "fix_script_status=success" >> $GITHUB_OUTPUT
+              echo "fix_script_location=$SCRIPT_LOCATION" >> $GITHUB_OUTPUT
+              echo "fix_script_found_in=$FOUND_IN" >> $GITHUB_OUTPUT
+            elif [ $FIX_EXIT_CODE -eq 124 ]; then
+              echo "⏰ 修复脚本执行超时（5分钟），但可能已部分完成"
+              echo "fix_script_status=timeout" >> $GITHUB_OUTPUT
+              echo "fix_script_location=$SCRIPT_LOCATION" >> $GITHUB_OUTPUT
+              echo "fix_script_found_in=$FOUND_IN" >> $GITHUB_OUTPUT
+            else
+              echo "⚠️ 修复脚本执行有错误 (退出码: $FIX_EXIT_CODE)"
+              echo "📄 错误日志: $LOG_FILE"
+              echo "最后20行输出:"
+              tail -20 "$LOG_FILE" 2>/dev/null || echo "无法读取日志"
+              echo "fix_script_status=error" >> $GITHUB_OUTPUT
+              echo "fix_script_location=$SCRIPT_LOCATION" >> $GITHUB_OUTPUT
+              echo "fix_script_found_in=$FOUND_IN" >> $GITHUB_OUTPUT
+            fi
+            
+          else
+            echo "❌ 未找到任何修复脚本"
+            echo ""
+            echo "💡 建议操作:"
+            echo "1. 将修复脚本放置在以下位置之一:"
+            for path in "${POSSIBLE_PATHS[@]}"; do
+              echo "   - $path"
+            done
+            echo ""
+            echo "2. 脚本命名建议:"
+            echo "   - fix-build.sh (推荐)"
+            echo "   - fix-openwrt.sh"
+            echo "   - repair-build.sh"
+            echo ""
+            echo "3. 确保脚本有执行权限 (chmod +x)"
+            echo ""
+            echo "跳过修复步骤，继续编译流程..."
+            echo "fix_script_status=not_found" >> $GITHUB_OUTPUT
+            echo "fix_script_location=none" >> $GITHUB_OUTPUT
+            echo "fix_script_found_in=none" >> $GITHUB_OUTPUT
+          fi
+          
+          echo ""
+          echo "🎉 步骤24完成：修复脚本查找与执行完成"
+          echo "========================================"
       
-      # 步骤24：下载依赖包
-      - name: "📥 24. 下载依赖包"
+      # 步骤25：根据修复结果决策
+      - name: "⚖️ 25. 修复结果评估"
+        run: |
+          echo "========================================"
+          echo "⚖️ 步骤25：修复结果评估"
+          echo "========================================"
+          echo ""
+          
+          echo "📊 修复脚本执行情况:"
+          echo "  状态: ${{ steps.find_and_run_fix.outputs.fix_script_status }}"
+          echo "  位置: ${{ steps.find_and_run_fix.outputs.fix_script_location }}"
+          echo "  发现方式: ${{ steps.find_and_run_fix.outputs.fix_script_found_in }}"
+          echo ""
+          
+          case "${{ steps.find_and_run_fix.outputs.fix_script_status }}" in
+            "success")
+              echo "✅ 修复成功，继续编译流程"
+              echo "   所有已知问题应已解决"
+              ;;
+            "timeout")
+              echo "⚠️ 修复脚本执行超时"
+              echo "   但可能已修复部分问题，继续编译流程"
+              echo "   如需完整修复，请优化修复脚本性能"
+              ;;
+            "error")
+              echo "⚠️ 修复脚本执行有错误"
+              echo "   继续编译流程，部分问题可能未修复"
+              echo "   建议检查修复脚本日志"
+              ;;
+            "not_found")
+              echo "ℹ️ 未找到修复脚本"
+              echo "   使用原始配置继续编译"
+              echo "   如需修复功能，请创建修复脚本"
+              ;;
+            *)
+              echo "🔍 未知状态: ${{ steps.find_and_run_fix.outputs.fix_script_status }}"
+              echo "   继续编译流程"
+              ;;
+          esac
+          
+          echo ""
+          echo "💡 下一步建议:"
+          if [ "${{ steps.find_and_run_fix.outputs.fix_script_status }}" = "not_found" ]; then
+            echo "1. 创建修复脚本并放置在 firmware-config/scripts/fix-build.sh"
+            echo "2. 确保脚本有执行权限"
+            echo "3. 重新运行工作流"
+          else
+            echo "1. 编译将使用修复后的环境进行"
+            echo "2. 如果仍有问题，请检查修复脚本输出日志"
+            echo "3. 可手动运行修复脚本进一步调试"
+          fi
+          
+          echo ""
+          echo "🎉 步骤25完成：修复评估完成"
+          echo "========================================"
+      
+      # 步骤26：下载依赖包
+      - name: "📥 26. 下载依赖包"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step24_download_dependencies
       
-      # 步骤25：集成自定义文件
-      - name: "🔌 25. 集成自定义文件"
+      # 步骤27：集成自定义文件
+      - name: "🔌 27. 集成自定义文件"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step25_integrate_custom_files
       
-      # 步骤26：前置错误检查
-      - name: "🚨 26. 前置错误检查"
+      # 步骤28：前置错误检查
+      - name: "🚨 28. 前置错误检查"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step26_pre_build_error_check
       
-      # 步骤27：编译固件前的空间检查
-      - name: "💽 27. 编译固件前的空间检查"
+      # 步骤29：编译固件前的空间检查
+      - name: "💽 29. 编译固件前的空间检查"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step27_final_space_check
       
-      # 步骤28：编译固件（启用缓存）
-      - name: "🔨 28. 编译固件（启用缓存）"
+      # 步骤30：编译固件（启用缓存）
+      - name: "🔨 30. 编译固件（启用缓存）"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step28_build_firmware
       
-      # 步骤29：保存工具链到仓库目录
-      - name: "💾 29. 保存工具链到仓库目录"
+      # 步骤31：保存工具链到仓库目录
+      - name: "💾 31. 保存工具链到仓库目录"
         if: success() && github.event.inputs.enable_cache == 'true'
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step29_save_toolchain
       
-      # 步骤30：提交工具链到仓库
-      - name: "📤 30. 提交工具链到仓库"
+      # 步骤32：提交工具链到仓库
+      - name: "📤 32. 提交工具链到仓库"
         if: success() && github.event.inputs.enable_cache == 'true' && github.event.inputs.commit_toolchain == 'true'
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step30_commit_toolchain
       
-      # 步骤31：错误分析
-      - name: "⚠️ 31. 错误分析"
+      # 步骤33：错误分析
+      - name: "⚠️ 33. 错误分析"
         if: failure()
         run: |
-          echo "=== 错误分析开始 ==="
+          echo "========================================"
+          echo "⚠️ 步骤33：错误分析"
+          echo "========================================"
+          
+          # 检查修复脚本状态
+          echo ""
+          echo "🔍 修复脚本执行历史:"
+          echo "  状态: ${{ steps.find_and_run_fix.outputs.fix_script_status }}"
+          echo "  位置: ${{ steps.find_and_run_fix.outputs.fix_script_location }}"
+          
+          # 尝试进入构建目录
           cd ${{ env.BUILD_DIR }}/openwrt 2>/dev/null || cd ${{ github.workspace }}
           
-          # 显示最后100行日志
-          echo "最后100行编译日志:"
-          tail -100 build.log 2>/dev/null | tail -50 || echo "无法读取build.log"
+          # 分析编译日志
+          if [ -f "build.log" ]; then
+            echo ""
+            echo "📄 编译错误摘要:"
+            echo "----------------------------------------"
+            
+            # 提取关键错误
+            ERROR_COUNT=$(grep -c -i "error:\|ERROR\|failed\|Failed" build.log 2>/dev/null || echo "0")
+            WARNING_COUNT=$(grep -c -i "warning:\|WARNING" build.log 2>/dev/null || echo "0")
+            
+            echo "错误数量: $ERROR_COUNT"
+            echo "警告数量: $WARNING_COUNT"
+            echo ""
+            
+            if [ "$ERROR_COUNT" -gt 0 ]; then
+              echo "🔴 关键错误列表:"
+              grep -i "error:" build.log 2>/dev/null | head -10 | while read error; do
+                echo "  ❌ $error"
+              done
+              
+              # 常见错误类型检测
+              echo ""
+              echo "🔧 常见问题检测:"
+              
+              if grep -q "libgnuintl.so" build.log 2>/dev/null; then
+                echo "  ❌ 检测到 libgnuintl.so 缺失"
+                echo "     修复建议: 确保修复脚本已创建该文件"
+              fi
+              
+              if grep -q "No such file or directory" build.log 2>/dev/null; then
+                echo "  ❌ 检测到文件缺失错误"
+                echo "     缺失文件:"
+                grep "No such file or directory" build.log 2>/dev/null | head -3 | sed 's/.*error: //'
+              fi
+              
+              if grep -q "undefined reference" build.log 2>/dev/null; then
+                echo "  ❌ 检测到链接错误"
+                echo "     可能是库文件缺失或版本不匹配"
+              fi
+              
+              if grep -q "out of memory\|Killed" build.log 2>/dev/null; then
+                echo "  ❌ 检测到内存不足"
+                echo "     建议: 增加编译资源或减少并行任务"
+              fi
+            fi
+            
+            # 显示最后50行日志
+            echo ""
+            echo "📋 最后50行编译日志:"
+            echo "----------------------------------------"
+            tail -50 build.log 2>/dev/null || echo "无法读取build.log"
+            echo "----------------------------------------"
+          else
+            echo "❌ 编译日志不存在"
+          fi
           
-          # 常见错误分析
           echo ""
-          echo "=== 常见错误检测 ==="
+          echo "💡 解决建议:"
+          echo "1. 检查修复脚本是否已正确处理所有已知问题"
+          echo "2. 查看完整的 build.log 文件"
+          echo "3. 重新运行工作流"
           
-          if grep -q "libgnuintl.so" build.log 2>/dev/null; then
-            echo "❌ 检测到libgnuintl.so缺失错误"
-            echo "建议：步骤23.5已创建占位文件，可能需要重新运行"
-          fi
-          
-          if grep -q "No such file or directory" build.log 2>/dev/null; then
-            echo "❌ 检测到文件缺失错误"
-            echo "缺失文件:"
-            grep "No such file or directory" build.log 2>/dev/null | head -5
-          fi
-          
-          if grep -q "undefined reference" build.log 2>/dev/null; then
-            echo "❌ 检测到链接错误"
-            echo "错误片段:"
-            grep "undefined reference" build.log 2>/dev/null | head -3
-          fi
-          
-          echo "=== 错误分析结束 ==="
+          echo ""
+          echo "🎉 步骤33完成：错误分析完成"
+          echo "========================================"
       
-      # 步骤32：编译后空间检查
-      - name: "📊 32. 编译后空间检查"
+      # 步骤34：编译后空间检查
+      - name: "📊 34. 编译后空间检查"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step32_post_build_space_check
       
-      # 步骤33：固件文件检查
-      - name: "📦 33. 固件文件检查"
+      # 步骤35：固件文件检查
+      - name: "📦 35. 固件文件检查"
         if: success()
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step33_check_firmware_files
       
-      # 步骤34：上传固件
-      - name: "⬆️ 34. 上传固件"
+      # 步骤36：上传固件
+      - name: "⬆️ 36. 上传固件"
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -367,8 +594,8 @@ EOF
           path: ${{ env.BUILD_DIR }}/bin/targets/
           retention-days: 7
       
-      # 步骤35：上传编译日志
-      - name: "⬆️ 35. 上传编译日志"
+      # 步骤37：上传编译日志
+      - name: "⬆️ 37. 上传编译日志"
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -376,8 +603,8 @@ EOF
           path: ${{ env.BUILD_DIR }}/build.log
           retention-days: 7
       
-      # 步骤36：上传配置文件
-      - name: "⬆️ 36. 上传配置文件"
+      # 步骤38：上传配置文件
+      - name: "⬆️ 38. 上传配置文件"
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -385,29 +612,95 @@ EOF
           path: ${{ github.workspace }}/firmware-config/config-backup/
           retention-days: 7
       
-      # 步骤37：清理目录
-      - name: "🧹 37. 清理目录"
-        if: always()
+      # 步骤39：上传修复脚本日志（如果存在）
+      - name: "⬆️ 39. 上传修复脚本日志"
+        if: always() && steps.find_and_run_fix.outputs.fix_script_status != 'not_found'
         run: |
-          echo "=== 清理目录开始 ==="
-          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
-            firmware-config/scripts/build_firmware_main.sh workflow_main step37_cleanup
+          echo "查找修复脚本日志..."
+          LOG_FILES=$(find /tmp -name "fix-script-output-*.log" 2>/dev/null | head -3)
+          if [ -n "$LOG_FILES" ]; then
+            echo "找到修复日志:"
+            for log in $LOG_FILES; do
+              echo "  📄 $log ($(du -h "$log" 2>/dev/null | cut -f1 || echo '未知'))"
+            done
+            
+            # 创建临时目录存放日志
+            mkdir -p /tmp/fix-logs
+            cp $LOG_FILES /tmp/fix-logs/ 2>/dev/null || true
+            
+            echo "✅ 修复日志准备完毕"
           else
-            echo "主构建脚本不存在，执行基本清理..."
-            rm -rf /tmp/source-upload 2>/dev/null || true
-            rm -rf /tmp/build-artifacts 2>/dev/null || true
-            echo "✅ 基本清理完成"
+            echo "未找到修复脚本日志"
           fi
-          echo "=== 清理目录结束 ==="
+        shell: bash
       
-      # 步骤38：最终构建总结
-      - name: "📈 38. 最终构建总结"
+      - name: "⬆️ 39.1 上传修复日志文件"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "fix-script-logs-${{ github.event.inputs.device_name }}"
+          path: /tmp/fix-logs/
+          retention-days: 7
+      
+      # 步骤40：清理目录
+      - name: "🧹 40. 清理目录"
         if: always()
         run: |
-          echo "=== 最终构建总结 ==="
-          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
-            firmware-config/scripts/build_firmware_main.sh workflow_main step38_final_summary "${{ job.status }}"
-          else
-            echo "主构建脚本不存在"
-            echo "构建状态: ${{ job.status }}"
+          firmware-config/scripts/build_firmware_main.sh workflow_main step37_cleanup
+      
+      # 步骤41：最终构建总结
+      - name: "📈 41. 最终构建总结"
+        if: always()
+        run: |
+          echo "========================================"
+          echo "📈 步骤41：最终构建总结"
+          echo "========================================"
+          echo ""
+          
+          echo "🎯 构建配置:"
+          echo "  设备: ${{ github.event.inputs.device_name }}"
+          echo "  版本: ${{ env.SELECTED_BRANCH }}"
+          echo "  配置模式: ${{ github.event.inputs.config_mode }}"
+          echo "  启用缓存: ${{ github.event.inputs.enable_cache }}"
+          echo ""
+          
+          echo "🔧 修复脚本执行情况:"
+          echo "  状态: ${{ steps.find_and_run_fix.outputs.fix_script_status }}"
+          if [ "${{ steps.find_and_run_fix.outputs.fix_script_status }}" != "not_found" ]; then
+            echo "  位置: ${{ steps.find_and_run_fix.outputs.fix_script_location }}"
+            echo "  发现方式: ${{ steps.find_and_run_fix.outputs.fix_script_found_in }}"
           fi
+          echo ""
+          
+          echo "📦 构建产物:"
+          echo "  1. 固件文件: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}"
+          echo "  2. 编译日志: build-log-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}"
+          echo "  3. 配置文件: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}"
+          if [ "${{ steps.find_and_run_fix.outputs.fix_script_status }}" != "not_found" ]; then
+            echo "  4. 修复日志: fix-script-logs-${{ github.event.inputs.device_name }}"
+          fi
+          echo ""
+          
+          echo "📊 构建状态: ${{ job.status }}"
+          echo ""
+          
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "🎉 构建成功！所有产物已上传至Artifacts"
+            echo ""
+            echo "💡 下次构建建议:"
+            echo "  1. 工具链已缓存，下次编译更快"
+            echo "  2. 修复脚本已就绪，自动处理问题"
+            echo "  3. 可调整配置模式尝试不同功能"
+          else
+            echo "❌ 构建失败"
+            echo ""
+            echo "🔍 排查建议:"
+            echo "  1. 查看错误分析日志（步骤33）"
+            echo "  2. 检查修复脚本输出"
+            echo "  3. 验证配置文件是否正确"
+            echo "  4. 清理环境后重试"
+          fi
+          
+          echo ""
+          echo "🏁 构建流程全部完成"
+          echo "========================================"
