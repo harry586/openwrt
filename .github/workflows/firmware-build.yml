@@ -13,27 +13,15 @@ on:
         required: true
         type: choice
         default: "21.02"
-        options:
-          - "23.05"
-          - "21.02"
+        options: ["23.05", "21.02"]
       config_mode:
-        description: |
-          ⚙️ 配置模式选择
-          
-          🟣 基础模式 - 最小化配置，用于测试编译
-          🟠 正常模式 - 完整功能配置
-          
-          🔧 USB 3.0加强：所有平台的关键USB驱动都已强制启用！
+        description: "⚙️ 配置模式选择"
         required: true
         type: choice
         default: "normal"
-        options:
-          - "base"
-          - "normal"
+        options: ["base", "normal"]
       extra_packages:
-        description: |
-          额外安装插件
-          格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。
+        description: "额外安装插件 格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。"
         required: false
         type: string
         default: ""
@@ -81,7 +69,6 @@ jobs:
           find_fix_script() {
             local script_name="$1"
             local search_dirs="$2"
-            
             IFS=':' read -ra dirs <<< "$search_dirs"
             for dir in "${dirs[@]}"; do
               if [ -d "$dir" ]; then
@@ -109,15 +96,13 @@ jobs:
           
           if [ -z "$FIX_SCRIPT" ]; then
             echo "⚠️  未找到修复脚本，创建默认修复脚本..."
-            cat > /tmp/default-fix.sh << 'EOF'
-#!/bin/bash
-echo "=== 默认修复脚本 ==="
-echo "创建必要的目录结构..."
-mkdir -p firmware-config/scripts
-mkdir -p firmware-config/Toolchain
-mkdir -p .github/workflows
-echo "✅ 默认修复完成"
-EOF
+            echo '#!/bin/bash' > /tmp/default-fix.sh
+            echo 'echo "=== 默认修复脚本 ==="' >> /tmp/default-fix.sh
+            echo 'echo "创建必要的目录结构..."' >> /tmp/default-fix.sh
+            echo 'mkdir -p firmware-config/scripts' >> /tmp/default-fix.sh
+            echo 'mkdir -p firmware-config/Toolchain' >> /tmp/default-fix.sh
+            echo 'mkdir -p .github/workflows' >> /tmp/default-fix.sh
+            echo 'echo "✅ 默认修复完成"' >> /tmp/default-fix.sh
             chmod +x /tmp/default-fix.sh
             FIX_SCRIPT="/tmp/default-fix.sh"
             echo "fix_script_location=default" >> $GITHUB_OUTPUT
@@ -156,32 +141,22 @@ EOF
         id: find_main_script
         run: |
           echo "=== 智能查找主构建脚本 ==="
-          
           cd "${{ github.workspace }}"
           
           # 智能查找主脚本
           find_main_script() {
-            local possible_paths=(
-              "firmware-config/scripts/build_firmware_main.sh"
-              "scripts/build_firmware_main.sh" 
-              "build_firmware_main.sh"
-              ".github/scripts/build_firmware_main.sh"
-            )
-            
+            local possible_paths=("firmware-config/scripts/build_firmware_main.sh" "scripts/build_firmware_main.sh" "build_firmware_main.sh" ".github/scripts/build_firmware_main.sh")
             for path in "${possible_paths[@]}"; do
               if [ -f "$path" ]; then
                 echo "$path"
                 return 0
               fi
             done
-            
-            # 递归查找
             local found=$(find . -name "build_firmware_main.sh" -type f 2>/dev/null | head -1)
             if [ -n "$found" ]; then
               echo "$found"
               return 0
             fi
-            
             return 1
           }
           
@@ -189,20 +164,13 @@ EOF
           
           if [ -n "$MAIN_SCRIPT" ]; then
             echo "✅ 找到主构建脚本: $MAIN_SCRIPT"
-            
-            # 确保脚本可执行
             chmod +x "$MAIN_SCRIPT"
-            
-            # 计算仓库根目录
             REPO_ROOT=$(cd "$(dirname "$MAIN_SCRIPT")/../.." && pwd)
-            
             echo "📊 脚本信息:"
             echo "  路径: $MAIN_SCRIPT"
             echo "  大小: $(ls -lh "$MAIN_SCRIPT" | awk '{print $5}')"
             echo "  权限: $(ls -la "$MAIN_SCRIPT" | awk '{print $1}')"
             echo "  仓库根目录: $REPO_ROOT"
-            
-            # 设置输出变量
             echo "MAIN_SCRIPT_PATH=$MAIN_SCRIPT" >> $GITHUB_OUTPUT
             echo "REPO_ROOT=$REPO_ROOT" >> $GITHUB_OUTPUT
             echo "script_found=true" >> $GITHUB_OUTPUT
@@ -210,7 +178,6 @@ EOF
             echo "❌ 未找到主构建脚本"
             echo "当前目录内容:"
             find . -maxdepth 3 -type f -name "*.sh" | head -10
-            
             echo "script_found=false" >> $GITHUB_OUTPUT
             exit 1
           fi
@@ -220,25 +187,18 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           echo "=== 下载源代码 ==="
-          
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
           WORKSPACE="${{ github.workspace }}"
-          
           echo "使用主脚本: $MAIN_SCRIPT"
           echo "工作空间: $WORKSPACE"
-          
-          # 检查脚本是否存在且可执行
           if [ ! -f "$MAIN_SCRIPT" ]; then
             echo "❌ 主脚本不存在: $MAIN_SCRIPT"
             exit 1
           fi
-          
           if [ ! -x "$MAIN_SCRIPT" ]; then
             echo "🔧 添加执行权限..."
             chmod +x "$MAIN_SCRIPT"
           fi
-          
-          # 执行下载步骤
           "$MAIN_SCRIPT" workflow_main step1_download_source "$WORKSPACE"
       
       # 步骤4：上传源代码压缩包
@@ -246,9 +206,7 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           echo "=== 上传源代码压缩包 ==="
-          
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step2_upload_source
           else
@@ -267,9 +225,7 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           echo "=== Git LFS配置 ==="
-          
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step4_install_git_lfs
           else
@@ -284,7 +240,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step5_check_large_files
           fi
@@ -294,7 +249,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step6_check_toolchain_dir
           fi
@@ -304,7 +258,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step7_init_toolchain_dir
           fi
@@ -314,7 +267,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step8_setup_environment
           else
@@ -328,7 +280,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step9_create_build_dir
           fi
@@ -338,13 +289,8 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
-            "$MAIN_SCRIPT" workflow_main step10_init_build_env \
-              "${{ github.event.inputs.device_name }}" \
-              "${{ github.event.inputs.version_selection }}" \
-              "${{ github.event.inputs.config_mode }}" \
-              "${{ github.event.inputs.extra_packages }}"
+            "$MAIN_SCRIPT" workflow_main step10_init_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}" "${{ github.event.inputs.extra_packages }}"
           else
             echo "❌ 主脚本不可执行，无法初始化构建环境"
             exit 1
@@ -355,7 +301,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step11_show_config
           fi
@@ -365,7 +310,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step12_add_turboacc_support
           fi
@@ -375,7 +319,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step13_configure_feeds
           fi
@@ -385,7 +328,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true' && env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step14_install_turboacc_packages
           fi
@@ -395,7 +337,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step15_pre_build_space_check
           else
@@ -409,7 +350,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step16_generate_config "${{ github.event.inputs.extra_packages }}"
           fi
@@ -419,7 +359,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step17_verify_usb_config
           fi
@@ -429,7 +368,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step18_check_usb_drivers_integrity
           fi
@@ -439,7 +377,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step19_apply_config
           fi
@@ -449,7 +386,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step20_backup_config
           fi
@@ -459,7 +395,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step21_fix_network
           fi
@@ -469,7 +404,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step22_load_toolchain
           fi
@@ -479,7 +413,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step23_check_toolchain_status
           fi
@@ -489,7 +422,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step24_download_dependencies
           fi
@@ -499,7 +431,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step25_integrate_custom_files
           fi
@@ -509,7 +440,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step26_pre_build_error_check
           fi
@@ -519,7 +449,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step27_final_space_check
           else
@@ -535,7 +464,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step28_build_firmware
           else
@@ -548,7 +476,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true' && github.event.inputs.enable_cache == 'true' && success()
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step29_save_toolchain
           fi
@@ -558,7 +485,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true' && github.event.inputs.enable_cache == 'true' && github.event.inputs.commit_toolchain == 'true' && success()
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step30_commit_toolchain
           fi
@@ -568,17 +494,13 @@ EOF
         if: failure()
         run: |
           echo "=== 编译失败分析 ==="
-          
-          # 智能查找错误分析脚本
           ERROR_SCRIPT=""
-          
           for path in "firmware-config/scripts/error_analysis.sh" "scripts/error_analysis.sh" "error_analysis.sh"; do
             if [ -f "$path" ]; then
               ERROR_SCRIPT="$path"
               break
             fi
           done
-          
           if [ -n "$ERROR_SCRIPT" ]; then
             echo "运行错误分析脚本: $ERROR_SCRIPT"
             chmod +x "$ERROR_SCRIPT"
@@ -602,7 +524,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true'
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step32_post_build_space_check
           fi
@@ -612,7 +533,6 @@ EOF
         if: steps.find_main_script.outputs.script_found == 'true' && success()
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step33_check_firmware_files
           fi
@@ -658,41 +578,18 @@ EOF
         if: steps.smart_fix.outputs.fix_script_status == 'success' && steps.find_main_script.outputs.script_found == 'true' && success()
         run: |
           echo "=== 提交修复结果 ==="
-          
           cd "${{ github.workspace }}"
-          
-          # 检查是否有需要提交的更改
           echo "检查Git状态..."
           git status --porcelain | head -20
-          
           CHANGED_FILES=$(git status --porcelain | grep -E "\.(sh|yml|md)$" | wc -l)
-          
           if [ $CHANGED_FILES -gt 0 ]; then
             echo "📦 检测到 $CHANGED_FILES 个文件更改，准备提交..."
-            
-            # 配置Git
             git config --global user.name "GitHub Actions Bot"
             git config --global user.email "actions@github.com"
-            
-            # 添加更改
             git add -A
-            
-            # 创建提交信息
-            COMMIT_MSG="fix: 自动修复更新 [$(date '+%Y-%m-%d %H:%M:%S')]
-            
-            修复内容:
-            - 路径问题修复
-            - 脚本权限修复
-            - 配置文件优化
-            修复脚本状态: ${{ steps.smart_fix.outputs.fix_script_status }}
-            设备: ${{ github.event.inputs.device_name }}
-            模式: ${{ github.event.inputs.config_mode }}"
-            
-            # 提交更改
+            COMMIT_MSG="fix: 自动修复更新 [$(date '+%Y-%m-%d %H:%M:%S')] 修复内容: - 路径问题修复 - 脚本权限修复 - 配置文件优化 修复脚本状态: ${{ steps.smart_fix.outputs.fix_script_status }} 设备: ${{ github.event.inputs.device_name }} 模式: ${{ github.event.inputs.config_mode }}"
             if git commit -m "$COMMIT_MSG"; then
               echo "✅ 更改已提交到本地仓库"
-              
-              # 尝试推送
               for i in {1..3}; do
                 echo "推送尝试 #$i/3..."
                 if git push; then
@@ -715,7 +612,6 @@ EOF
         if: always()
         run: |
           MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-          
           if [ -x "$MAIN_SCRIPT" ]; then
             "$MAIN_SCRIPT" workflow_main step37_cleanup
           else
@@ -734,24 +630,19 @@ EOF
           echo "🏁 最终构建总结"
           echo "========================================"
           echo ""
-          
           echo "📊 构建状态: ${{ job.status }}"
           echo "📱 设备: ${{ github.event.inputs.device_name }}"
           echo "🔄 版本: ${{ github.event.inputs.version_selection }}"
           echo "⚙️ 配置模式: ${{ github.event.inputs.config_mode }}"
-          
           if [ -n "${{ env.SELECTED_BRANCH }}" ]; then
             echo "🌿 分支: ${{ env.SELECTED_BRANCH }}"
           fi
-          
           if [ -n "${{ env.TARGET }}" ]; then
             echo "🎯 目标平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}"
           fi
-          
           echo ""
           echo "🔧 修复脚本状态: ${{ steps.smart_fix.outputs.fix_script_status || '未运行' }}"
           echo "📝 主脚本状态: ${{ steps.find_main_script.outputs.script_found || '未找到' }}"
-          
           if [ "${{ job.status }}" = "success" ]; then
             echo ""
             echo "✅ 构建成功！"
@@ -761,7 +652,6 @@ EOF
             if [ "${{ github.event.inputs.enable_cache }}" = "true" ]; then
               echo "  ✅ 编译缓存已启用"
             fi
-            
             if [ "${{ github.event.inputs.commit_toolchain }}" = "true" ]; then
               echo "  ✅ 工具链已提交到仓库"
             fi
@@ -770,7 +660,6 @@ EOF
             echo "❌ 构建失败"
             echo "🔍 请查看错误分析日志和构建日志"
           fi
-          
           echo ""
           echo "========================================"
           echo "          🏁 构建流程全部完成          "
