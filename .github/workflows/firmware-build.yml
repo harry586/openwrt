@@ -255,6 +255,7 @@ EOF
             echo "⚠️  主脚本不可执行，跳过上传"
           fi
       
+      # 步骤5：上传源代码压缩包到Artifacts
       - name: "📦 5. 上传源代码压缩包到Artifacts"
         uses: actions/upload-artifact@v4
         with:
