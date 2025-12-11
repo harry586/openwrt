@@ -17,10 +17,7 @@ on:
           - "23.05"
           - "21.02"
       config_mode:
-        description: |
-          ⚙️ 配置模式选择
-          🟣 基础模式 - 最小化配置，用于测试编译
-          🟠 正常模式 - 完整功能配置
+        description: "⚙️ 配置模式选择 🟣 基础模式 - 最小化配置，用于测试编译 🟠 正常模式 - 完整功能配置"
         required: true
         type: choice
         default: "normal"
@@ -28,9 +25,7 @@ on:
           - "base"
           - "normal"
       extra_packages:
-        description: |
-          额外安装插件
-          格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。
+        description: "额外安装插件 格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。"
         required: false
         type: string
         default: ""
@@ -68,16 +63,8 @@ jobs:
           GIT_AUTHOR_EMAIL: "actions@github.com"
         run: |
           echo "=== 开始查找并运行修复脚本 ==="
-          
-          # 查找修复脚本
           FIX_SCRIPT=""
-          SEARCH_PATHS=(
-            "firmware-config/scripts/fix-build.sh"
-            ".github/scripts/fix-build.sh"
-            "scripts/fix-build.sh"
-            "fix-build.sh"
-            "$(pwd)/fix-build.sh"
-          )
+          SEARCH_PATHS=("firmware-config/scripts/fix-build.sh" ".github/scripts/fix-build.sh" "scripts/fix-build.sh" "fix-build.sh" "$(pwd)/fix-build.sh")
           
           for script_path in "${SEARCH_PATHS[@]}"; do
             if [ -f "$script_path" ]; then
@@ -87,7 +74,6 @@ jobs:
             fi
           done
           
-          # 如果没找到，尝试模糊搜索
           if [ -z "$FIX_SCRIPT" ]; then
             echo "尝试模糊搜索修复脚本..."
             FOUND_SCRIPTS=$(find . -name "*fix*.sh" -type f 2>/dev/null | head -5)
@@ -100,8 +86,6 @@ jobs:
           if [ -n "$FIX_SCRIPT" ] && [ -f "$FIX_SCRIPT" ]; then
             echo "运行修复脚本: $FIX_SCRIPT"
             chmod +x "$FIX_SCRIPT"
-            
-            # 运行修复脚本，设置超时
             timeout 300 bash "$FIX_SCRIPT"
             FIX_EXIT_CODE=$?
             
@@ -137,15 +121,8 @@ jobs:
         id: download_source
         run: |
           echo "=== 智能下载源代码 ==="
-          
-          # 先查找构建脚本
           MAIN_SCRIPT=""
-          SEARCH_PATHS=(
-            "firmware-config/scripts/build_firmware_main.sh"
-            "scripts/build_firmware_main.sh"
-            "build_firmware_main.sh"
-            "$(pwd)/build_firmware_main.sh"
-          )
+          SEARCH_PATHS=("firmware-config/scripts/build_firmware_main.sh" "scripts/build_firmware_main.sh" "build_firmware_main.sh" "$(pwd)/build_firmware_main.sh")
           
           for script_path in "${SEARCH_PATHS[@]}"; do
             if [ -f "$script_path" ]; then
@@ -155,7 +132,6 @@ jobs:
             fi
           done
           
-          # 模糊搜索
           if [ -z "$MAIN_SCRIPT" ]; then
             echo "尝试模糊搜索构建脚本..."
             FOUND_SCRIPTS=$(find . -name "*build*.sh" -type f 2>/dev/null | head -5)
@@ -185,8 +161,6 @@ jobs:
         if: steps.download_source.outputs.download_status == '0'
         run: |
           echo "=== 上传源代码 ==="
-          
-          # 查找构建脚本
           if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
             firmware-config/scripts/build_firmware_main.sh workflow_main step2_upload_source
           elif [ -f "build_firmware_main.sh" ]; then
@@ -200,25 +174,17 @@ jobs:
       - name: "🔧 4. Git LFS配置"
         run: |
           echo "=== Git LFS配置 ==="
-          
-          # 安装Git LFS
           sudo apt-get update
           sudo apt-get install -y git-lfs
-          
-          # 配置
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
           git config --global http.postBuffer 524288000
-          
-          # 初始化
           git lfs install --force
           git lfs pull 2>/dev/null || echo "Git LFS拉取失败，继续构建"
       
       - name: "📊 5. 大文件检查"
         run: |
           echo "=== 大文件检查 ==="
-          
-          # 查找构建脚本
           if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
             firmware-config/scripts/build_firmware_main.sh workflow_main step5_check_large_files
           elif [ -f "build_firmware_main.sh" ]; then
@@ -230,7 +196,6 @@ jobs:
       - name: "🗂️ 6. 工具链目录检查"
         run: |
           echo "=== 工具链目录检查 ==="
-          
           if [ -f "build_firmware_main.sh" ]; then
             ./build_firmware_main.sh workflow_main step6_check_toolchain_dir
           else
@@ -240,7 +205,6 @@ jobs:
       - name: "💾 7. 初始化工具链目录"
         run: |
           echo "=== 初始化工具链目录 ==="
-          
           if [ -f "build_firmware_main.sh" ]; then
             ./build_firmware_main.sh workflow_main step7_init_toolchain_dir
           else
@@ -250,7 +214,6 @@ jobs:
       - name: "🛠️ 8. 设置编译环境"
         run: |
           echo "=== 设置编译环境 ==="
-          
           if [ -f "build_firmware_main.sh" ]; then
             ./build_firmware_main.sh workflow_main step8_setup_environment
           else
@@ -262,7 +225,6 @@ jobs:
       - name: "📁 9. 创建构建目录"
         run: |
           echo "=== 创建构建目录 ==="
-          
           if [ -f "build_firmware_main.sh" ]; then
             ./build_firmware_main.sh workflow_main step9_create_build_dir
           else
@@ -276,8 +238,6 @@ jobs:
       - name: "🚀 10. 初始化构建环境"
         run: |
           echo "=== 初始化构建环境 ==="
-          
-          # 使用智能查找
           if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
             firmware-config/scripts/build_firmware_main.sh workflow_main step10_init_build_env \
               "${{ github.event.inputs.device_name }}" \
@@ -298,7 +258,6 @@ jobs:
       - name: "⚡ 11. 显示配置"
         run: |
           echo "=== 显示配置 ==="
-          
           if [ -f "build_firmware_main.sh" ]; then
             ./build_firmware_main.sh workflow_main step11_show_config
           fi
@@ -310,30 +269,22 @@ jobs:
         if: always() && steps.run_fix_script.outputs.fix_status == 'success'
         run: |
           echo "=== 最终修复提交 ==="
-          
-          # 检查是否有修复需要提交
           if [ -f "/tmp/fix_changes.log" ]; then
             echo "检测到修复更改，尝试提交..."
-            
-            # 配置Git
             git config --global user.name "GitHub Actions Bot"
             git config --global user.email "actions@github.com"
-            
-            # 添加所有更改
             git add -A
             
-            # 检查是否有更改
             if git status --porcelain | grep -q "."; then
               echo "提交修复更改..."
-              git commit -m "fix: 自动修复更新 [$(date '+%Y-%m-%d %H:%M:%S')]
-              
+              git commit -m "fix: 自动修复更新 [$(date '+%Y-%m-%d %H:%M:%S')]"
+              git commit --amend -m "fix: 自动修复更新 [$(date '+%Y-%m-%d %H:%M:%S')]
+
 修复内容:
 - 增强路径搜索功能
 - 修复脚本执行顺序
-- 优化工作流步骤
-              "
+- 优化工作流步骤"
               
-              # 尝试推送
               for i in {1..3}; do
                 echo "推送尝试 $i/3..."
                 if git push; then
