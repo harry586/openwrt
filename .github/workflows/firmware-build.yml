@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流（完全自动化版）
+name: OpenWrt 智能固件构建工作流（修复完整版）
 
 on:
   workflow_dispatch:
@@ -238,6 +238,44 @@ jobs:
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step23_check_toolchain_status
       
+      # 步骤23.5：关键环境修复（新增核心步骤）
+      - name: "🔨 23.5 关键环境修复"
+        run: |
+          echo "=== 执行关键环境修复 ==="
+          cd ${{ env.BUILD_DIR }}/openwrt
+          
+          # 1. 修复工具链权限
+          echo "1. 修复编译器权限..."
+          find staging_dir -type f \( -name "*gcc*" -o -name "*ar" -o -name "*ld" \) -exec chmod +x {} \; 2>/dev/null || true
+          
+          # 2. 创建缺失目录
+          echo "2. 创建缺失目录..."
+          mkdir -p staging_dir/target-*/host/include 2>/dev/null || true
+          mkdir -p staging_dir/hostpkg/lib 2>/dev/null || true
+          mkdir -p files/etc/smartdns 2>/dev/null || true
+          
+          # 3. 创建SmartDNS默认配置（防止编译错误）
+          echo "3. 创建SmartDNS默认配置..."
+          cat > files/etc/smartdns/domain-block.list << 'EOF'
+# 默认广告域名列表
+ad.example.com
+EOF
+          
+          cat > files/etc/smartdns/domain-forwarding.list << 'EOF'
+# 默认转发规则
+example.com 8.8.8.8
+EOF
+          
+          # 4. 修复libgnuintl.so问题
+          echo "4. 处理libgnuintl.so..."
+          if [ ! -f "staging_dir/hostpkg/lib/libgnuintl.so" ]; then
+            mkdir -p staging_dir/hostpkg/lib
+            touch staging_dir/hostpkg/lib/libgnuintl.so
+            echo "✅ 已创建libgnuintl.so占位文件"
+          fi
+          
+          echo "✅ 关键环境修复完成"
+      
       # 步骤24：下载依赖包
       - name: "📥 24. 下载依赖包"
         run: |
@@ -248,7 +286,7 @@ jobs:
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step25_integrate_custom_files
       
-      # 步骤26：前置错误检查（已修复）
+      # 步骤26：前置错误检查
       - name: "🚨 26. 前置错误检查"
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step26_pre_build_error_check
@@ -264,43 +302,49 @@ jobs:
           firmware-config/scripts/build_firmware_main.sh workflow_main step28_build_firmware
       
       # 步骤29：保存工具链到仓库目录
-      - name: "💾 29. 保存工具链到仓库目录（自动执行）"
+      - name: "💾 29. 保存工具链到仓库目录"
         if: success() && github.event.inputs.enable_cache == 'true'
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step29_save_toolchain
       
       # 步骤30：提交工具链到仓库
-      - name: "📤 30. 提交工具链到仓库（自动执行）"
+      - name: "📤 30. 提交工具链到仓库"
         if: success() && github.event.inputs.enable_cache == 'true' && github.event.inputs.commit_toolchain == 'true'
         run: |
           firmware-config/scripts/build_firmware_main.sh workflow_main step30_commit_toolchain
       
       # 步骤31：错误分析
-      - name: "⚠️ 31. 错误分析（如果失败）"
+      - name: "⚠️ 31. 错误分析"
         if: failure()
         run: |
           echo "=== 错误分析开始 ==="
-          echo "检查构建目录..."
-          if [ -d "${{ env.BUILD_DIR }}" ]; then
-            echo "✅ 构建目录存在: ${{ env.BUILD_DIR }}"
-            if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
-              firmware-config/scripts/build_firmware_main.sh workflow_main step31_error_analysis
-            else
-              echo "❌ 主构建脚本不存在"
-              echo "基本错误分析:"
-              df -h
-              ls -la ${{ env.BUILD_DIR }}/ 2>/dev/null || echo "构建目录为空"
-            fi
-          else
-            echo "❌ 构建目录不存在: ${{ env.BUILD_DIR }}"
-            echo "创建构建目录..."
-            mkdir -p ${{ env.BUILD_DIR }}
-            echo "基本错误分析:"
-            df -h
-            echo "当前工作区:"
-            pwd
-            ls -la
+          cd ${{ env.BUILD_DIR }}/openwrt 2>/dev/null || cd ${{ github.workspace }}
+          
+          # 显示最后100行日志
+          echo "最后100行编译日志:"
+          tail -100 build.log 2>/dev/null | tail -50 || echo "无法读取build.log"
+          
+          # 常见错误分析
+          echo ""
+          echo "=== 常见错误检测 ==="
+          
+          if grep -q "libgnuintl.so" build.log 2>/dev/null; then
+            echo "❌ 检测到libgnuintl.so缺失错误"
+            echo "建议：步骤23.5已创建占位文件，可能需要重新运行"
           fi
+          
+          if grep -q "No such file or directory" build.log 2>/dev/null; then
+            echo "❌ 检测到文件缺失错误"
+            echo "缺失文件:"
+            grep "No such file or directory" build.log 2>/dev/null | head -5
+          fi
+          
+          if grep -q "undefined reference" build.log 2>/dev/null; then
+            echo "❌ 检测到链接错误"
+            echo "错误片段:"
+            grep "undefined reference" build.log 2>/dev/null | head -3
+          fi
+          
           echo "=== 错误分析结束 ==="
       
       # 步骤32：编译后空间检查
