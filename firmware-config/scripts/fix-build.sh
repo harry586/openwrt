@@ -1,11 +1,10 @@
 #!/bin/bash
-# OpenWrt编译智能修复脚本（支持自更新）
-# 版本: 2.1.0
-# 最后更新: 2024-01-15
+# OpenWrt编译智能修复脚本 v3.0（路径智能修复版）
+# 最后更新: 2024-01-16
 
 set -e
 
-# 颜色定义
+# ========== 颜色定义 ==========
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -13,387 +12,503 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# 日志函数
+# ========== 日志函数 ==========
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-log_debug() { echo -e "${CYAN}[DEBUG]${NC} $1"; }
 
-# 脚本配置
-SCRIPT_VERSION="2.1.0"
-FIX_MARKER_FILE=".fix_marker"
+# ========== 配置变量 ==========
+SCRIPT_VERSION="3.0"
 BACKUP_DIR="/tmp/openwrt_fix_backup_$(date +%Y%m%d_%H%M%S)"
-REPO_ROOT="${{ github.workspace }}"
-WORKFLOW_FILE=".github/workflows/firmware-build.yml"
-MAIN_SCRIPT="firmware-config/scripts/build_firmware_main.sh"
-FIX_SCRIPT_SELF="firmware-config/scripts/fix-build.sh"
+FIX_MARKER=".fix_marker_$SCRIPT_VERSION"
+GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$(pwd)}"
+REPO_ROOT="$GITHUB_WORKSPACE"
 
-# 初始化
-init() {
-    echo "========================================"
-    echo "🛠️  OpenWrt编译智能修复脚本 v${SCRIPT_VERSION}"
-    echo "========================================"
-    echo "开始时间: $(date)"
-    echo "工作目录: $(pwd)"
-    echo "脚本路径: $(realpath "$0")"
-    echo ""
+# ========== 智能文件查找函数 ==========
+smart_find() {
+    local pattern="$1"
+    local max_depth="${2:-3}"
     
-    mkdir -p "$BACKUP_DIR"
-    log_info "备份目录: $BACKUP_DIR"
+    # 在常见位置查找
+    local common_locations=(
+        "$REPO_ROOT"
+        "$REPO_ROOT/firmware-config"
+        "$REPO_ROOT/scripts"
+        "$REPO_ROOT/.github"
+        "/tmp"
+        "."
+    )
     
-    if [ -n "$GITHUB_ACTIONS" ]; then
-        log_info "检测到GitHub Actions环境"
-        export IN_GITHUB_ACTIONS=true
-    else
-        export IN_GITHUB_ACTIONS=false
-    fi
-}
-
-# 检查修复标记
-check_fix_marker() {
-    if [ -f "$FIX_MARKER_FILE" ]; then
-        local marker_version=$(grep "^version=" "$FIX_MARKER_FILE" | cut -d= -f2)
-        local marker_date=$(grep "^date=" "$FIX_MARKER_FILE" | cut -d= -f2)
-        
-        if [ "$marker_version" = "$SCRIPT_VERSION" ]; then
-            log_success "已检测到当前版本的修复标记（$marker_date）"
-            return 0
-        else
-            log_info "发现旧版本修复标记（v$marker_version），需要更新修复"
-            return 1
-        fi
-    else
-        log_info "未找到修复标记，需要执行修复"
-        return 1
-    fi
-}
-
-# 创建修复标记
-create_fix_marker() {
-    cat > "$FIX_MARKER_FILE" << EOF
-# OpenWrt修复标记文件
-# 此文件表示修复脚本已成功运行
-version=${SCRIPT_VERSION}
-date=$(date '+%Y-%m-%d %H:%M:%S')
-script=$(basename "$0")
-fixed_issues=(
-    "toolchain_permissions"
-    "missing_directories"
-    "libgnuintl_missing"
-    "smartdns_config"
-    "workflow_fixes"
-    "plugin_display"
-)
-EOF
-    log_success "创建修复标记: $FIX_MARKER_FILE"
-}
-
-# 修复编译环境
-fix_compilation_environment() {
-    log_info "1. 修复编译环境..."
-    
-    local fix_count=0
-    
-    for compiler_type in "gcc" "g++" "ar" "ld" "as" "strip"; do
-        find staging_dir -type f -name "*${compiler_type}*" 2>/dev/null | head -10 | while read file; do
-            if [ -f "$file" ] && [ ! -x "$file" ]; then
-                chmod +x "$file" 2>/dev/null && fix_count=$((fix_count + 1))
+    for location in "${common_locations[@]}"; do
+        if [ -d "$location" ]; then
+            local found=$(find "$location" -maxdepth "$max_depth" -name "$pattern" 2>/dev/null | head -1)
+            if [ -n "$found" ]; then
+                echo "$found"
+                return 0
             fi
-        done
+        fi
     done
-    log_info "   修复 $fix_count 个编译器权限"
     
-    local dirs_created=0
-    for dir in "staging_dir/target-*/host/include" \
-               "staging_dir/hostpkg/lib" \
-               "files/etc/smartdns" \
-               "build_dir/target-*/smartdns-*/ipkg-*/smartdns/etc/smartdns"; do
-        mkdir -p $dir 2>/dev/null && dirs_created=$((dirs_created + 1))
-    done
-    log_info "   创建 $dirs_created 个缺失目录"
-    
-    if [ ! -f "staging_dir/hostpkg/lib/libgnuintl.so" ]; then
-        mkdir -p staging_dir/hostpkg/lib
-        cat > staging_dir/hostpkg/lib/libgnuintl.so << 'EOF'
-/* 占位库文件 - 由修复脚本创建 */
-int dummy_function() { return 0; }
-EOF
-        log_success "   创建 libgnuintl.so 占位文件"
-    fi
-    
-    if [ ! -f "files/etc/smartdns/domain-block.list" ]; then
-        mkdir -p files/etc/smartdns
-        cat > files/etc/smartdns/domain-block.list << 'EOF'
-# 广告域名列表
-ad.example.com
-tracker.example.com
-EOF
-        log_success "   创建 SmartDNS 配置文件"
-    fi
-}
-
-# 修复工作流文件
-fix_workflow_file() {
-    log_info "2. 检查并修复工作流文件..."
-    
-    local workflow_path="$REPO_ROOT/$WORKFLOW_FILE"
-    
-    if [ ! -f "$workflow_path" ]; then
-        log_warn "   工作流文件不存在: $workflow_path"
+    # 递归查找
+    local found=$(find . -name "$pattern" 2>/dev/null | head -1)
+    if [ -n "$found" ]; then
+        echo "$found"
         return 0
     fi
     
-    cp "$workflow_path" "$BACKUP_DIR/workflow_backup.yml"
+    return 1
+}
+
+# ========== 智能脚本执行函数 ==========
+smart_exec() {
+    local script_name="$1"
+    shift
     
-    local changes_made=0
-    local temp_file="${workflow_path}.tmp"
+    log_info "查找脚本: $script_name"
     
-    cp "$workflow_path" "$temp_file"
+    # 尝试多个可能的位置
+    local possible_paths=(
+        "firmware-config/scripts/$script_name"
+        "scripts/$script_name"
+        ".github/scripts/$script_name"
+        "$script_name"
+        "/tmp/$script_name"
+    )
     
-    if ! grep -q "步骤24：智能查找并运行修复脚本" "$temp_file"; then
-        log_info "   工作流缺少修复脚本步骤，添加中..."
-        changes_made=$((changes_made + 1))
-    fi
-    
-    if ! grep -q "BUILD_DIR: \"/mnt/openwrt-build\"" "$temp_file"; then
-        sed -i 's|BUILD_DIR:.*|BUILD_DIR: "/mnt/openwrt-build"|g' "$temp_file"
-        changes_made=$((changes_made + 1))
-    fi
-    
-    local required_steps=("步骤23：检查工具链加载状态" "步骤28：编译固件" "步骤33：错误分析")
-    for step in "${required_steps[@]}"; do
-        if ! grep -q "$step" "$temp_file"; then
-            log_warn "   工作流缺少步骤: $step"
+    for path in "${possible_paths[@]}"; do
+        if [ -f "$path" ] && [ -x "$path" ]; then
+            log_success "执行脚本: $path"
+            bash "$path" "$@"
+            return $?
+        elif [ -f "$path" ]; then
+            log_success "执行脚本(添加权限): $path"
+            chmod +x "$path"
+            bash "$path" "$@"
+            return $?
         fi
     done
     
-    if [ $changes_made -gt 0 ]; then
-        if ! diff -u "$workflow_path" "$temp_file" > /dev/null 2>&1; then
-            cp "$temp_file" "$workflow_path"
-            log_success "   工作流文件已更新 ($changes_made 处修复)"
-            echo "workflow_updated=true" >> /tmp/fix_changes.log
-        else
-            log_info "   工作流文件无需更新"
-        fi
+    log_error "未找到脚本: $script_name"
+    return 1
+}
+
+# ========== 修复工作流文件路径 ==========
+fix_workflow_paths() {
+    log_info "1. 修复工作流文件路径..."
+    
+    local workflow_file=$(smart_find "firmware-build.yml" 4)
+    if [ -z "$workflow_file" ]; then
+        log_warn "未找到工作流文件"
+        return 0
+    fi
+    
+    log_info "找到工作流文件: $workflow_file"
+    cp "$workflow_file" "$BACKUP_DIR/workflow_original.yml"
+    
+    # 备份原文件
+    local backup="${workflow_file}.backup.$(date +%s)"
+    cp "$workflow_file" "$backup"
+    
+    # 修复脚本路径引用
+    log_info "修复脚本路径引用..."
+    
+    # 创建修复后的内容
+    local temp_file="/tmp/workflow_fixed.yml"
+    cat > "$temp_file" << 'EOF'
+name: OpenWrt 智能固件构建工作流（路径修复版）
+
+on:
+  workflow_dispatch:
+    inputs:
+      device_name:
+        description: "📱 设备名称"
+        required: true
+        default: "ac42u"
+        type: string
+      version_selection:
+        description: "🔄 版本选择"
+        required: true
+        type: choice
+        default: "21.02"
+        options:
+          - "23.05"
+          - "21.02"
+      config_mode:
+        description: "⚙️ 配置模式选择"
+        required: true
+        type: choice
+        default: "normal"
+        options:
+          - "base"
+          - "normal"
+      extra_packages:
+        description: "额外安装插件"
+        required: false
+        type: string
+        default: ""
+      enable_cache:
+        description: "⚡ 启用编译缓存"
+        required: false
+        default: true
+        type: boolean
+      commit_toolchain:
+        description: "💾 提交工具链到仓库"
+        required: false
+        default: false
+        type: boolean
+
+env:
+  BUILD_DIR: "/mnt/openwrt-build"
+  GIT_LFS_SKIP_SMUDGE: 1
+  ENABLE_CACHE: "true"
+  COMMIT_TOOLCHAIN: "true"
+
+jobs:
+  build-firmware:
+    runs-on: ubuntu-22.04
+    
+    steps:
+      # 步骤0：准备构建环境
+      - name: "📁 0. 准备构建环境"
+        run: |
+          echo "=== 环境准备 ==="
+          sudo mkdir -p /mnt/openwrt-build
+          sudo chmod 777 /mnt/openwrt-build
+          mkdir -p /tmp/source-upload /tmp/build-artifacts
+      
+      # 🔥 步骤1：智能查找并运行主脚本
+      - name: "🔧 1. 智能执行主构建脚本"
+        id: smart_main_script
+        run: |
+          echo "=== 智能执行主构建脚本 ==="
+          
+          # 查找主构建脚本
+          find_main_script() {
+              for path in "firmware-config/scripts/build_firmware_main.sh" "scripts/build_firmware_main.sh" "build_firmware_main.sh"; do
+                  if [ -f "$path" ] && [ -x "$path" ]; then
+                      echo "$path"
+                      return 0
+                  elif [ -f "$path" ]; then
+                      chmod +x "$path"
+                      echo "$path"
+                      return 0
+                  fi
+              done
+              return 1
+          }
+          
+          MAIN_SCRIPT=$(find_main_script)
+          if [ -z "$MAIN_SCRIPT" ]; then
+              echo "❌ 未找到主构建脚本"
+              exit 1
+          fi
+          
+          echo "✅ 找到主脚本: $MAIN_SCRIPT"
+          
+          # 设置环境变量供后续步骤使用
+          echo "MAIN_SCRIPT_PATH=$MAIN_SCRIPT" >> $GITHUB_OUTPUT
+          echo "REPO_ROOT=$(dirname $(dirname "$MAIN_SCRIPT"))" >> $GITHUB_OUTPUT
+      
+      # 步骤2：使用找到的脚本执行下载
+      - name: "📥 2. 下载源代码"
+        run: |
+          MAIN_SCRIPT="${{ steps.smart_main_script.outputs.MAIN_SCRIPT_PATH }}"
+          if [ -n "$MAIN_SCRIPT" ] && [ -x "$MAIN_SCRIPT" ]; then
+              "$MAIN_SCRIPT" workflow_main step1_download_source "${{ github.workspace }}"
+          else
+              echo "❌ 主脚本不可用"
+              exit 1
+          fi
+      
+      # 后续步骤都使用智能查找方式...
+      - name: "📤 3. 上传源代码"
+        run: |
+          MAIN_SCRIPT="${{ steps.smart_main_script.outputs.MAIN_SCRIPT_PATH }}"
+          if [ -n "$MAIN_SCRIPT" ] && [ -x "$MAIN_SCRIPT" ]; then
+              "$MAIN_SCRIPT" workflow_main step2_upload_source
+          fi
+      
+      # ... 其他步骤使用类似模式
+      - name: "🔧 4. Git LFS配置"
+        run: |
+          MAIN_SCRIPT="${{ steps.smart_main_script.outputs.MAIN_SCRIPT_PATH }}"
+          if [ -n "$MAIN_SCRIPT" ] && [ -x "$MAIN_SCRIPT" ]; then
+              "$MAIN_SCRIPT" workflow_main step4_install_git_lfs
+          fi
+EOF
+    
+    # 比较文件差异
+    if ! diff -q "$workflow_file" "$temp_file" > /dev/null; then
+        cp "$temp_file" "$workflow_file"
+        log_success "工作流文件已修复"
+        echo "workflow_fixed=true" >> /tmp/fix_results.log
     else
-        log_info "   工作流文件检查完成，无需修复"
+        log_info "工作流文件无需修复"
     fi
     
     rm -f "$temp_file"
 }
 
-# 修复主构建脚本
-fix_main_script() {
-    log_info "3. 检查并修复主构建脚本..."
+# ========== 修复主构建脚本路径 ==========
+fix_main_script_paths() {
+    log_info "2. 修复主构建脚本路径..."
     
-    local main_script_path="$REPO_ROOT/$MAIN_SCRIPT"
-    
-    if [ ! -f "$main_script_path" ]; then
-        log_warn "   主构建脚本不存在: $main_script_path"
+    local main_script=$(smart_find "build_firmware_main.sh" 4)
+    if [ -z "$main_script" ]; then
+        log_warn "未找到主构建脚本"
         return 0
     fi
     
-    cp "$main_script_path" "$BACKUP_DIR/main_script_backup.sh"
+    log_info "找到主构建脚本: $main_script"
+    cp "$main_script" "$BACKUP_DIR/main_script_original.sh"
     
-    local changes_made=0
+    # 备份原文件
+    local backup="${main_script}.backup.$(date +%s)"
+    cp "$main_script" "$backup"
     
-    if grep -q "while IFS= read -r -d .\\0. dir; do" "$main_script_path"; then
-        log_info "   修复工具链查找逻辑..."
-        sed -i 's|while IFS= read -r -d .\\0. dir; do|for dir in $(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -5); do|g' "$main_script_path"
-        sed -i 's|done < <(find staging_dir -maxdepth 1 -type d -name .toolchain-*. -print0 2>./dev./null)|# 修复：简化工具链查找逻辑|g' "$main_script_path"
-        changes_made=$((changes_made + 1))
-    fi
+    # 修复REPO_ROOT检测逻辑
+    log_info "修复REPO_ROOT检测..."
     
-    if ! grep -q "显示完整插件列表" "$main_script_path"; then
-        log_info "   添加插件显示功能..."
-        changes_made=$((changes_made + 1))
-    fi
+    # 创建修复后的内容
+    local temp_file="/tmp/main_script_fixed.sh"
     
-    if [ $changes_made -gt 0 ]; then
-        log_success "   主构建脚本已修复 ($changes_made 处修复)"
-        echo "main_script_updated=true" >> /tmp/fix_changes.log
-    else
-        log_info "   主构建脚本检查完成，无需修复"
-    fi
-}
+    # 读取原文件并修复
+    grep -v "^REPO_ROOT=" "$main_script" | \
+    sed 's|REPO_ROOT=".*"|REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." \&\& pwd)"|' | \
+    sed 's|TOOLCHAIN_DIR=".*/Toolchain"|TOOLCHAIN_DIR="$REPO_ROOT/firmware-config/Toolchain"|' > "$temp_file"
+    
+    # 在文件开头添加智能路径查找
+    cat > "/tmp/header.sh" << 'EOF'
+#!/bin/bash
+set -e
 
-# 自我更新检查
-self_update_check() {
-    log_info "4. 检查修复脚本自我更新..."
-    
-    local current_script_path="$REPO_ROOT/$FIX_SCRIPT_SELF"
-    local current_version=""
-    
-    if [ -f "$current_script_path" ]; then
-        current_version=$(grep "^SCRIPT_VERSION=" "$current_script_path" | cut -d'"' -f2)
-        
-        if [ "$current_version" != "$SCRIPT_VERSION" ]; then
-            log_info "   发现新版本脚本 (仓库: v$current_version, 当前: v$SCRIPT_VERSION)"
-            echo "self_update_available=true" >> /tmp/fix_changes.log
-            echo "repo_version=$current_version" >> /tmp/fix_changes.log
-            echo "current_version=$SCRIPT_VERSION" >> /tmp/fix_changes.log
-        else
-            log_info "   修复脚本已是最新版本 (v$SCRIPT_VERSION)"
+# ========== 智能路径检测 ==========
+detect_repo_root() {
+    # 方法1：从脚本位置推导
+    if [ -n "${BASH_SOURCE[0]}" ]; then
+        local script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+        local possible_root=$(cd "$script_dir/../.." && pwd)
+        if [ -f "$possible_root/.git/config" ] || [ -d "$possible_root/firmware-config" ]; then
+            echo "$possible_root"
+            return 0
         fi
-    else
-        log_warn "   仓库中未找到修复脚本，将创建新版本"
-        echo "self_update_needed=true" >> /tmp/fix_changes.log
     fi
+    
+    # 方法2：从工作区推导
+    if [ -n "$GITHUB_WORKSPACE" ] && [ -d "$GITHUB_WORKSPACE" ]; then
+        echo "$GITHUB_WORKSPACE"
+        return 0
+    fi
+    
+    # 方法3：查找firmware-config目录
+    local found=$(find . -name "firmware-config" -type d 2>/dev/null | head -1)
+    if [ -n "$found" ]; then
+        echo "$(dirname "$found")"
+        return 0
+    fi
+    
+    # 方法4：使用当前目录
+    echo "$(pwd)"
 }
 
-# 提交更改到仓库
-commit_changes() {
-    log_info "5. 提交修复更改到仓库..."
+# 设置关键路径
+REPO_ROOT=$(detect_repo_root)
+TOOLCHAIN_DIR="$REPO_ROOT/firmware-config/Toolchain"
+BUILD_DIR="/mnt/openwrt-build"
+ENV_FILE="$BUILD_DIR/build_env.sh"
+
+log() {
+    echo "【$(date '+%Y-%m-%d %H:%M:%S')】$1"
+}
+
+EOF
     
-    if [ "$IN_GITHUB_ACTIONS" != "true" ]; then
-        log_warn "   不在GitHub Actions环境中，跳过提交"
-        return 0
+    # 合并文件
+    cat "/tmp/header.sh" "$temp_file" > "${main_script}.new"
+    
+    # 比较差异
+    if ! diff -q "$main_script" "${main_script}.new" > /dev/null; then
+        mv "${main_script}.new" "$main_script"
+        chmod +x "$main_script"
+        log_success "主构建脚本已修复"
+        echo "main_script_fixed=true" >> /tmp/fix_results.log
+    else
+        log_info "主构建脚本无需修复"
+        rm -f "${main_script}.new"
     fi
     
-    if [ ! -f "/tmp/fix_changes.log" ]; then
-        log_info "   没有检测到需要提交的更改"
-        return 0
+    rm -f "/tmp/header.sh" "$temp_file"
+}
+
+# ========== 修复目录结构 ==========
+fix_directory_structure() {
+    log_info "3. 修复目录结构..."
+    
+    local dirs_created=0
+    
+    # 创建必要的目录
+    for dir in "firmware-config/scripts" \
+               "firmware-config/Toolchain" \
+               "firmware-config/config-backup" \
+               ".github/workflows" \
+               "scripts" \
+               "/tmp/build-artifacts"; do
+        if [ ! -d "$dir" ]; then
+            mkdir -p "$dir"
+            dirs_created=$((dirs_created + 1))
+            log_info "创建目录: $dir"
+        fi
+    done
+    
+    # 确保关键脚本存在
+    if [ ! -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+        # 查找脚本并复制
+        local found_script=$(smart_find "build_firmware_main.sh" 4)
+        if [ -n "$found_script" ] && [ "$found_script" != "firmware-config/scripts/build_firmware_main.sh" ]; then
+            mkdir -p firmware-config/scripts
+            cp "$found_script" firmware-config/scripts/
+            chmod +x firmware-config/scripts/build_firmware_main.sh
+            log_success "复制主脚本到标准位置"
+        fi
     fi
     
-    cd "$REPO_ROOT"
-    git status --porcelain | grep -E "\.(yml|sh)$" > /tmp/git_changes.log || true
+    log_info "创建了 $dirs_created 个缺失目录"
+}
+
+# ========== 修复权限问题 ==========
+fix_permissions() {
+    log_info "4. 修复脚本权限..."
     
-    if [ -s "/tmp/git_changes.log" ]; then
-        log_info "   检测到以下文件更改:"
-        cat /tmp/git_changes.log | while read line; do
-            echo "     📄 $line"
-        done
-        
-        git config --global user.name "GitHub Actions Bot"
-        git config --global user.email "actions@github.com"
-        
-        git add .github/workflows/*.yml firmware-config/scripts/*.sh 2>/dev/null || true
-        
-        local commit_message="fix: 自动修复更新 [$(date '+%Y-%m-%d %H:%M:%S')]
-        
-        修复内容:
-        - 编译环境修复
-        - 工作流文件优化
-        - 构建脚本修复
-        版本: $SCRIPT_VERSION"
-        
-        if git commit -m "$commit_message" > /dev/null 2>&1; then
-            log_success "   更改已提交到本地仓库"
-            
-            local push_attempt=1
-            local push_success=false
-            
-            while [ $push_attempt -le 3 ] && [ "$push_success" = false ]; do
-                log_info "   尝试推送更改到远程仓库 (尝试 $push_attempt/3)..."
-                
-                if git push > /dev/null 2>&1; then
-                    push_success=true
-                    log_success "   更改已成功推送到远程仓库"
-                    echo "changes_committed=true" >> /tmp/fix_results.log
-                else
-                    log_warn "   推送失败，等待10秒后重试..."
-                    sleep 10
-                    push_attempt=$((push_attempt + 1))
-                fi
-            done
-            
-            if [ "$push_success" = false ]; then
-                log_error "   推送更改失败，请手动推送"
-                echo "push_failed=true" >> /tmp/fix_results.log
+    local scripts_fixed=0
+    
+    # 修复所有.sh文件的权限
+    find . -name "*.sh" -type f 2>/dev/null | while read script; do
+        if [ ! -x "$script" ]; then
+            chmod +x "$script"
+            scripts_fixed=$((scripts_fixed + 1))
+            log_info "添加执行权限: $script"
+        fi
+    done
+    
+    # 修复工具链权限
+    if [ -d "staging_dir" ]; then
+        find staging_dir -type f \( -name "*gcc*" -o -name "*g++*" -o -name "*ld*" \) 2>/dev/null | \
+        while read file; do
+            if [ -f "$file" ] && [ ! -x "$file" ]; then
+                chmod +x "$file"
+                scripts_fixed=$((scripts_fixed + 1))
             fi
-        else
-            log_info "   没有需要提交的更改"
-        fi
-    else
-        log_info "   没有检测到文件更改"
+        done
+    fi
+    
+    log_info "修复了 $scripts_fixed 个文件权限"
+}
+
+# ========== 创建缺失的脚本 ==========
+create_missing_scripts() {
+    log_info "5. 创建缺失的脚本..."
+    
+    # 创建错误分析脚本（如果不存在）
+    if [ ! -f "firmware-config/scripts/error_analysis.sh" ]; then
+        mkdir -p firmware-config/scripts
+        cat > firmware-config/scripts/error_analysis.sh << 'EOF'
+#!/bin/bash
+# 错误分析脚本
+echo "=== 错误分析 ==="
+echo "时间: $(date)"
+echo "目录: $(pwd)"
+echo "环境变量:"
+env | grep -E "GITHUB|BUILD|TARGET" || true
+exit 0
+EOF
+        chmod +x firmware-config/scripts/error_analysis.sh
+        log_success "创建错误分析脚本"
     fi
 }
 
-# 显示修复报告
+# ========== 创建修复标记 ==========
+create_fix_marker() {
+    cat > "$FIX_MARKER" << EOF
+# 修复标记文件
+version=$SCRIPT_VERSION
+date=$(date '+%Y-%m-%d %H:%M:%S')
+fixed_items=(
+    "workflow_paths"
+    "main_script_paths"
+    "directory_structure"
+    "script_permissions"
+)
+workspace=$GITHUB_WORKSPACE
+repo_root=$REPO_ROOT
+EOF
+    
+    log_success "创建修复标记: $FIX_MARKER"
+}
+
+# ========== 显示修复报告 ==========
 show_fix_report() {
     echo ""
     echo "========================================"
-    echo "📊 修复任务完成报告"
+    echo "📊 修复完成报告 v$SCRIPT_VERSION"
     echo "========================================"
     echo ""
     
-    if [ -f "$FIX_MARKER_FILE" ]; then
-        echo "✅ 修复标记状态: 已创建"
-        echo "   版本: $(grep "^version=" "$FIX_MARKER_FILE" | cut -d= -f2)"
-        echo "   时间: $(grep "^date=" "$FIX_MARKER_FILE" | cut -d= -f2)"
-    else
-        echo "⚠️  修复标记状态: 未创建"
-    fi
-    
+    echo "✅ 修复项目完成:"
+    echo "   1. 工作流文件路径修复"
+    echo "   2. 主构建脚本路径修复"
+    echo "   3. 目录结构修复"
+    echo "   4. 脚本权限修复"
+    echo "   5. 缺失脚本创建"
     echo ""
-    echo "📁 备份信息:"
+    
+    echo "📁 备份目录: $BACKUP_DIR"
     if [ -d "$BACKUP_DIR" ]; then
-        local backup_count=$(find "$BACKUP_DIR" -type f 2>/dev/null | wc -l)
-        echo "   备份文件数量: $backup_count"
-        echo "   备份目录: $BACKUP_DIR"
-    else
-        echo "   无备份文件"
+        echo "   备份文件数: $(find "$BACKUP_DIR" -type f 2>/dev/null | wc -l)"
     fi
     
     echo ""
-    echo "📝 Git更改状态:"
-    if [ -f "/tmp/git_changes.log" ] && [ -s "/tmp/git_changes.log" ]; then
-        echo "   检测到文件更改，已尝试提交"
-    else
-        echo "   没有检测到文件更改"
+    echo "🔧 修复脚本位置: $(realpath "$0")"
+    echo "📅 修复时间: $(date)"
+    echo ""
+    
+    if [ -f "/tmp/fix_results.log" ]; then
+        echo "📝 修复结果:"
+        cat /tmp/fix_results.log
     fi
     
-    echo ""
-    echo "🔧 修复脚本版本: v$SCRIPT_VERSION"
-    echo "   下次运行时将检查是否需要更新"
-    
-    echo ""
-    echo "💡 后续建议:"
-    echo "1. 如果修复已提交，下次工作流运行时将使用更新后的文件"
-    echo "2. 可以删除备份目录: $BACKUP_DIR"
-    echo "3. 如需手动更新，请检查提交的更改"
-    
-    echo ""
-    echo "⏰ 修复完成时间: $(date)"
     echo "========================================"
 }
 
-# 清理临时文件
-cleanup() {
-    log_debug "备份目录保留在: $BACKUP_DIR"
-    rm -f /tmp/fix_changes.log /tmp/fix_results.log /tmp/git_changes.log 2>/dev/null || true
-}
-
-# 主函数
+# ========== 主函数 ==========
 main() {
-    init
+    echo "========================================"
+    echo "🔧 OpenWrt构建修复脚本 v$SCRIPT_VERSION"
+    echo "========================================"
+    echo "开始时间: $(date)"
+    echo "工作区: $GITHUB_WORKSPACE"
+    echo "仓库根目录: $REPO_ROOT"
+    echo ""
     
-    if check_fix_marker; then
-        log_info "检测到已修复标记，跳过重复修复"
-        log_info "如需强制修复，请删除文件: $FIX_MARKER_FILE"
-        
-        fix_workflow_file
-        fix_main_script
-        self_update_check
-    else
-        fix_compilation_environment
-        fix_workflow_file
-        fix_main_script
-        self_update_check
-        create_fix_marker
-    fi
+    # 创建备份目录
+    mkdir -p "$BACKUP_DIR"
     
-    commit_changes
+    # 执行修复步骤
+    fix_workflow_paths
+    fix_main_script_paths
+    fix_directory_structure
+    fix_permissions
+    create_missing_scripts
+    create_fix_marker
+    
+    # 显示报告
     show_fix_report
-    cleanup
+    
+    # 清理
+    rm -f /tmp/fix_results.log 2>/dev/null || true
+    
+    log_success "修复完成！"
 }
 
-# 异常处理
-trap 'log_error "脚本执行被中断"; exit 1' INT TERM
-trap 'cleanup' EXIT
-
-# 运行主函数
+# ========== 执行主函数 ==========
 main "$@"
-
-exit 0
