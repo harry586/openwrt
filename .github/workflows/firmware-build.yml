@@ -51,10 +51,19 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
+      # ========== 第0阶段：检出代码 ==========
+      
+      # 步骤1：检出仓库代码
+      - name: "📥 1. 检出仓库代码"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取所有历史记录，以便Git LFS正常工作
+          lfs: true  # 启用Git LFS支持
+      
       # ========== 第1阶段：初始准备 ==========
       
-      # 步骤1：准备初始环境
-      - name: "📁 1. 准备初始环境"
+      # 步骤2：准备初始环境
+      - name: "📁 2. 准备初始环境"
         run: |
           echo "=== 准备初始环境 ==="
           echo "工作目录: $(pwd)"
@@ -65,12 +74,14 @@ jobs:
           sudo chmod 777 ${{ env.BUILD_DIR }}
           mkdir -p /tmp/source-upload /tmp/build-artifacts
       
-      # 步骤2：查找并运行修复脚本
-      - name: "🔧 2. 查找并运行修复脚本"
+      # 步骤3：查找并运行修复脚本
+      - name: "🔧 3. 查找并运行修复脚本"
         id: run_fix_script
         run: |
           echo "=== 查找并运行修复脚本 ==="
           echo "当前目录: $(pwd)"
+          echo "列出所有sh文件:"
+          find . -name "*.sh" -type f | head -10
           
           # 查找修复脚本
           if [ -f "./fix-build.sh" ]; then
@@ -88,11 +99,13 @@ jobs:
             echo "fix_status=skipped" >> $GITHUB_OUTPUT
           fi
       
-      # 步骤3：查找并准备主构建脚本
-      - name: "🔧 3. 查找并准备主构建脚本"
+      # 步骤4：查找并准备主构建脚本
+      - name: "🔧 4. 查找并准备主构建脚本"
         id: find_main_script
         run: |
           echo "=== 查找主构建脚本 ==="
+          echo "当前目录结构:"
+          find . -maxdepth 3 -type d | sort
           
           # 检查构建脚本是否存在并添加权限
           if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
@@ -107,14 +120,16 @@ jobs:
             echo "main_script_found=true" >> $GITHUB_OUTPUT
           else
             echo "❌ 未找到主构建脚本"
+            echo "列出可能的文件:"
+            find . -name "*build*.sh" -type f
             echo "MAIN_SCRIPT_PATH=" >> $GITHUB_OUTPUT
             echo "main_script_found=false" >> $GITHUB_OUTPUT
           fi
       
       # ========== 第2阶段：智能下载 ==========
       
-      # 步骤4：智能下载源代码
-      - name: "📥 4. 智能下载源代码"
+      # 步骤5：智能下载源代码
+      - name: "📥 5. 智能下载源代码"
         id: download_source
         run: |
           echo "=== 智能下载源代码 ==="
@@ -126,19 +141,16 @@ jobs:
             "$MAIN_SCRIPT" workflow_main step1_download_source "${{ github.workspace }}"
             DOWNLOAD_EXIT_CODE=$?
           else
-            echo "❌ 未找到构建脚本，直接克隆仓库..."
-            git clone --depth 1 https://github.com/${{ github.repository }}.git "${{ github.workspace }}/temp-repo"
-            cp -r "${{ github.workspace }}/temp-repo/"* "${{ github.workspace }}/" 2>/dev/null || true
-            cp -r "${{ github.workspace }}/temp-repo/".* "${{ github.workspace }}/" 2>/dev/null || true
-            rm -rf "${{ github.workspace }}/temp-repo"
+            echo "⚠️ 未找到构建脚本，跳过下载步骤"
+            echo "注意：代码已通过检出步骤获取，无需再次下载"
             DOWNLOAD_EXIT_CODE=0
           fi
           
           echo "下载退出码: $DOWNLOAD_EXIT_CODE"
           echo "download_status=$DOWNLOAD_EXIT_CODE" >> $GITHUB_OUTPUT
       
-      # 步骤5：上传源代码
-      - name: "📤 5. 上传源代码"
+      # 步骤6：上传源代码
+      - name: "📤 6. 上传源代码"
         if: steps.download_source.outputs.download_status == '0'
         run: |
           echo "=== 上传源代码 ==="
@@ -154,8 +166,8 @@ jobs:
       
       # ========== 第3阶段：配置环境 ==========
       
-      # 步骤6：Git LFS配置
-      - name: "🔧 6. Git LFS配置"
+      # 步骤7：Git LFS配置
+      - name: "🔧 7. Git LFS配置"
         run: |
           echo "=== Git LFS配置 ==="
           sudo apt-get update
@@ -166,8 +178,8 @@ jobs:
           git lfs install --force
           git lfs pull 2>/dev/null || echo "Git LFS拉取失败，继续构建"
       
-      # 步骤7：大文件检查
-      - name: "📊 7. 大文件检查"
+      # 步骤8：大文件检查
+      - name: "📊 8. 大文件检查"
         run: |
           echo "=== 大文件检查 ==="
           if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
@@ -180,8 +192,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过检查"
           fi
       
-      # 步骤8：工具链目录检查
-      - name: "🗂️ 8. 工具链目录检查"
+      # 步骤9：工具链目录检查
+      - name: "🗂️ 9. 工具链目录检查"
         run: |
           echo "=== 工具链目录检查 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -191,8 +203,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过检查"
           fi
       
-      # 步骤9：初始化工具链目录
-      - name: "💾 9. 初始化工具链目录"
+      # 步骤10：初始化工具链目录
+      - name: "💾 10. 初始化工具链目录"
         run: |
           echo "=== 初始化工具链目录 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -202,8 +214,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过初始化"
           fi
       
-      # 步骤10：设置编译环境
-      - name: "🛠️ 10. 设置编译环境"
+      # 步骤11：设置编译环境
+      - name: "🛠️ 11. 设置编译环境"
         run: |
           echo "=== 设置编译环境 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -215,8 +227,8 @@ jobs:
             sudo apt-get install -y build-essential git ccache
           fi
       
-      # 步骤11：创建构建目录
-      - name: "📁 11. 创建构建目录"
+      # 步骤12：创建构建目录
+      - name: "📁 12. 创建构建目录"
         run: |
           echo "=== 创建构建目录 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -229,8 +241,8 @@ jobs:
       
       # ========== 第4阶段：构建执行 ==========
       
-      # 步骤12：初始化构建环境
-      - name: "🚀 12. 初始化构建环境"
+      # 步骤13：初始化构建环境
+      - name: "🚀 13. 初始化构建环境"
         run: |
           echo "=== 初始化构建环境 ==="
           if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
@@ -249,11 +261,13 @@ jobs:
               "${{ github.event.inputs.extra_packages }}"
           else
             echo "❌ 错误: 未找到构建脚本"
+            echo "可用脚本列表:"
+            find . -name "*.sh" -type f
             exit 1
           fi
       
-      # 步骤13：显示配置
-      - name: "⚡ 13. 显示配置"
+      # 步骤14：显示配置
+      - name: "⚡ 14. 显示配置"
         run: |
           echo "=== 显示配置 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -261,8 +275,8 @@ jobs:
             ./build_firmware_main.sh workflow_main step11_show_config
           fi
       
-      # 步骤14：添加TurboACC支持
-      - name: "🔌 14. 添加TurboACC支持"
+      # 步骤15：添加TurboACC支持
+      - name: "🔌 15. 添加TurboACC支持"
         run: |
           echo "=== 添加TurboACC支持 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -272,8 +286,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤15：配置Feeds
-      - name: "📦 15. 配置Feeds"
+      # 步骤16：配置Feeds
+      - name: "📦 16. 配置Feeds"
         run: |
           echo "=== 配置Feeds ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -283,8 +297,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤16：安装TurboACC包
-      - name: "🔧 16. 安装TurboACC包"
+      # 步骤17：安装TurboACC包
+      - name: "🔧 17. 安装TurboACC包"
         run: |
           echo "=== 安装TurboACC包 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -294,8 +308,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤17：编译前空间检查
-      - name: "💽 17. 编译前空间检查"
+      # 步骤18：编译前空间检查
+      - name: "💽 18. 编译前空间检查"
         run: |
           echo "=== 编译前空间检查 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -305,8 +319,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤18：智能配置生成
-      - name: "⚙️ 18. 智能配置生成"
+      # 步骤19：智能配置生成
+      - name: "⚙️ 19. 智能配置生成"
         run: |
           echo "=== 智能配置生成 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -316,8 +330,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤19：验证USB配置
-      - name: "🔍 19. 验证USB配置"
+      # 步骤20：验证USB配置
+      - name: "🔍 20. 验证USB配置"
         run: |
           echo "=== 验证USB配置 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -327,8 +341,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤20：USB驱动完整性检查
-      - name: "🛡️ 20. USB驱动完整性检查"
+      # 步骤21：USB驱动完整性检查
+      - name: "🛡️ 21. USB驱动完整性检查"
         run: |
           echo "=== USB驱动完整性检查 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -338,8 +352,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤21：应用配置并显示详情
-      - name: "✅ 21. 应用配置并显示详情"
+      # 步骤22：应用配置并显示详情
+      - name: "✅ 22. 应用配置并显示详情"
         run: |
           echo "=== 应用配置并显示详情 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -349,8 +363,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤22：检查并备份配置文件
-      - name: "💾 22. 检查并备份配置文件"
+      # 步骤23：检查并备份配置文件
+      - name: "💾 23. 检查并备份配置文件"
         run: |
           echo "=== 检查并备份配置文件 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -360,8 +374,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤23：修复网络环境
-      - name: "🌐 23. 修复网络环境"
+      # 步骤24：修复网络环境
+      - name: "🌐 24. 修复网络环境"
         run: |
           echo "=== 修复网络环境 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -371,8 +385,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤24：加载工具链
-      - name: "🔧 24. 加载工具链"
+      # 步骤25：加载工具链
+      - name: "🔧 25. 加载工具链"
         run: |
           echo "=== 加载工具链 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -382,8 +396,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤25：检查工具链加载状态
-      - name: "📊 25. 检查工具链加载状态"
+      # 步骤26：检查工具链加载状态
+      - name: "📊 26. 检查工具链加载状态"
         run: |
           echo "=== 检查工具链加载状态 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -393,8 +407,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤26：下载依赖包
-      - name: "📥 26. 下载依赖包"
+      # 步骤27：下载依赖包
+      - name: "📥 27. 下载依赖包"
         run: |
           echo "=== 下载依赖包 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -404,8 +418,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤27：集成自定义文件
-      - name: "🔌 27. 集成自定义文件"
+      # 步骤28：集成自定义文件
+      - name: "🔌 28. 集成自定义文件"
         run: |
           echo "=== 集成自定义文件 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -415,8 +429,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤28：前置错误检查
-      - name: "🚨 28. 前置错误检查"
+      # 步骤29：前置错误检查
+      - name: "🚨 29. 前置错误检查"
         run: |
           echo "=== 前置错误检查 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -426,8 +440,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤29：编译前的空间检查
-      - name: "💽 29. 编译前的空间检查"
+      # 步骤30：编译前的空间检查
+      - name: "💽 30. 编译前的空间检查"
         run: |
           echo "=== 编译前的空间检查 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -437,8 +451,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤30：编译固件
-      - name: "🔨 30. 编译固件"
+      # 步骤31：编译固件
+      - name: "🔨 31. 编译固件"
         run: |
           echo "=== 编译固件 ==="
           if [ -f "build_firmware_main.sh" ]; then
@@ -449,8 +463,8 @@ jobs:
             exit 1
           fi
       
-      # 步骤31：保存工具链到仓库目录
-      - name: "💾 31. 保存工具链到仓库目录"
+      # 步骤32：保存工具链到仓库目录
+      - name: "💾 32. 保存工具链到仓库目录"
         if: github.event.inputs.commit_toolchain == 'true'
         run: |
           echo "=== 保存工具链到仓库目录 ==="
@@ -461,8 +475,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤32：提交工具链到仓库
-      - name: "📤 32. 提交工具链到仓库"
+      # 步骤33：提交工具链到仓库
+      - name: "📤 33. 提交工具链到仓库"
         if: github.event.inputs.commit_toolchain == 'true'
         run: |
           echo "=== 提交工具链到仓库 ==="
@@ -473,8 +487,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤33：错误分析（如果失败）
-      - name: "⚠️ 33. 错误分析"
+      # 步骤34：错误分析（如果失败）
+      - name: "⚠️ 34. 错误分析"
         if: failure()
         run: |
           echo "=== 错误分析 ==="
@@ -489,8 +503,8 @@ jobs:
             df -h
           fi
       
-      # 步骤34：编译后空间检查
-      - name: "📊 34. 编译后空间检查"
+      # 步骤35：编译后空间检查
+      - name: "📊 35. 编译后空间检查"
         if: always()
         run: |
           echo "=== 编译后空间检查 ==="
@@ -501,8 +515,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤35：固件文件检查
-      - name: "📦 35. 固件文件检查"
+      # 步骤36：固件文件检查
+      - name: "📦 36. 固件文件检查"
         if: success()
         run: |
           echo "=== 固件文件检查 ==="
@@ -513,8 +527,8 @@ jobs:
             echo "ℹ️ 未找到构建脚本，跳过此步骤"
           fi
       
-      # 步骤36：清理目录
-      - name: "🧹 36. 清理目录"
+      # 步骤37：清理目录
+      - name: "🧹 37. 清理目录"
         if: always()
         run: |
           echo "=== 清理目录 ==="
@@ -527,8 +541,8 @@ jobs:
       
       # ========== 第5阶段：修复结果处理 ==========
       
-      # 步骤37：最终修复提交
-      - name: "📤 37. 最终修复提交"
+      # 步骤38：最终修复提交
+      - name: "📤 38. 最终修复提交"
         if: always() && steps.run_fix_script.outputs.fix_status == 'success'
         run: |
           echo "=== 最终修复提交 ==="
@@ -564,8 +578,8 @@ jobs:
             echo "没有检测到修复更改"
           fi
       
-      # 步骤38：最终构建总结
-      - name: "📈 38. 最终构建总结"
+      # 步骤39：最终构建总结
+      - name: "📈 39. 最终构建总结"
         if: always()
         run: |
           echo "=== 构建总结 ==="
@@ -578,6 +592,7 @@ jobs:
           echo "提交工具链: ${{ github.event.inputs.commit_toolchain }}"
           echo ""
           echo "修复脚本状态: ${{ steps.run_fix_script.outputs.fix_status }}"
+          echo "主构建脚本状态: ${{ steps.find_main_script.outputs.main_script_found }}"
           
           if [ "${{ job.status }}" = "success" ]; then
             echo "✅ 构建成功"
