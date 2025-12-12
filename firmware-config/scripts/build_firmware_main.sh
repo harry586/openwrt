@@ -352,9 +352,12 @@ download_openwrt_source() {
         rm -rf "$BUILD_DIR/openwrt"
     fi
     
+    # 确保在正确目录下载
+    cd "$BUILD_DIR"
+    
     # 下载OpenWrt源码
     log_info "正在下载OpenWrt源码: $branch_name"
-    git clone --depth 1 --branch "$branch_name" "$openwrt_url" "$BUILD_DIR/openwrt"
+    git clone --depth 1 --branch "$branch_name" "$openwrt_url" "openwrt"
     
     if [ ! -d "$BUILD_DIR/openwrt" ]; then
         log_error "OpenWrt源码下载失败"
@@ -1040,7 +1043,7 @@ integrate_custom_files() {
     log_success "自定义文件集成完成"
 }
 
-# ========== 新增：前置错误检查函数 ==========
+# ========== 前置错误检查函数 ==========
 
 # 前置错误检查
 pre_build_error_check() {
@@ -1426,10 +1429,21 @@ workflow_step1_download_source() {
     echo "📥 步骤1：下载完整源代码"
     echo "========================================"
     
-    cd "$workspace"
+    # 如果指定了工作空间，切换到该目录
+    if [ -n "$workspace" ] && [ "$workspace" != "." ]; then
+        cd "$workspace"
+    fi
+    
+    # 检查是否已经是git仓库
+    if [ -d ".git" ]; then
+        echo "✅ 当前目录已经是git仓库，跳过克隆"
+        echo "========================================"
+        return 0
+    fi
     
     # 克隆完整仓库
     local repo_url="https://github.com/$GITHUB_REPOSITORY.git"
+    echo "正在克隆仓库: $repo_url"
     git clone --depth 1 "$repo_url" .
     
     if [ ! -d ".git" ]; then
