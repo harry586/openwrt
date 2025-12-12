@@ -440,6 +440,157 @@ load_env() {
     fi
 }
 
+# ========== 新增：构建分析函数（成功和失败都分析）==========
+
+# 构建分析函数
+workflow_step31_build_analysis() {
+    local build_status="$1"
+    
+    echo "========================================"
+    echo "📊 步骤31：构建分析"
+    echo "========================================"
+    
+    echo "📅 分析时间: $(date)"
+    echo "🏗️ 构建状态: $build_status"
+    echo "📁 构建目录: $BUILD_DIR"
+    echo ""
+    
+    echo "=== 系统资源状态 ==="
+    df -h
+    echo ""
+    free -h
+    echo ""
+    
+    echo "=== 构建目录状态 ==="
+    if [ -d "$BUILD_DIR" ]; then
+        echo "✅ 构建目录存在"
+        echo "📊 目录大小: $(du -sh $BUILD_DIR 2>/dev/null | cut -f1 || echo '未知')"
+        
+        # 检查OpenWrt源码目录
+        if [ -d "$BUILD_DIR/openwrt" ]; then
+            echo "📁 OpenWrt源码目录存在"
+            
+            # 检查构建日志
+            if [ -f "$BUILD_DIR/openwrt/build.log" ]; then
+                echo "📄 构建日志存在 ($(ls -lh $BUILD_DIR/openwrt/build.log | awk '{print $5}'))"
+                
+                # 分析构建日志
+                echo ""
+                echo "=== 构建日志分析 ==="
+                
+                # 统计错误和警告
+                local error_count=$(grep -c -i "error:" "$BUILD_DIR/openwrt/build.log" 2>/dev/null || echo "0")
+                local warning_count=$(grep -c -i "warning:" "$BUILD_DIR/openwrt/build.log" 2>/dev/null || echo "0")
+                local failed_count=$(grep -c -i "failed" "$BUILD_DIR/openwrt/build.log" 2>/dev/null || echo "0")
+                
+                echo "❌ 错误数量: $error_count"
+                echo "⚠️ 警告数量: $warning_count"
+                echo "🚫 失败数量: $failed_count"
+                
+                # 显示前5个错误
+                if [ $error_count -gt 0 ]; then
+                    echo ""
+                    echo "=== 前5个错误 ==="
+                    grep -i "error:" "$BUILD_DIR/openwrt/build.log" | head -5
+                fi
+                
+                # 显示前5个警告
+                if [ $warning_count -gt 0 ]; then
+                    echo ""
+                    echo "=== 前5个警告 ==="
+                    grep -i "warning:" "$BUILD_DIR/openwrt/build.log" | head -5
+                fi
+                
+                # 检查常见问题
+                echo ""
+                echo "=== 常见问题检查 ==="
+                
+                # 检查内存不足
+                if grep -q -i "out of memory\|oom\|killed" "$BUILD_DIR/openwrt/build.log" 2>/dev/null; then
+                    echo "❌ 发现内存不足问题"
+                else
+                    echo "✅ 未发现内存不足问题"
+                fi
+                
+                # 检查磁盘空间
+                if grep -q -i "no space left\|disk full" "$BUILD_DIR/openwrt/build.log" 2>/dev/null; then
+                    echo "❌ 发现磁盘空间问题"
+                else
+                    echo "✅ 未发现磁盘空间问题"
+                fi
+                
+                # 检查网络问题
+                if grep -q -i "connection.*failed\|timeout\|network" "$BUILD_DIR/openwrt/build.log" 2>/dev/null; then
+                    echo "❌ 发现网络问题"
+                else
+                    echo "✅ 未发现网络问题"
+                fi
+                
+                # 检查工具链问题
+                if grep -q -i "toolchain\|compiler.*not found" "$BUILD_DIR/openwrt/build.log" 2>/dev/null; then
+                    echo "❌ 发现工具链问题"
+                else
+                    echo "✅ 未发现工具链问题"
+                fi
+                
+                # 检查依赖问题
+                if grep -q -i "dependency\|requires\|depends" "$BUILD_DIR/openwrt/build.log" 2>/dev/null; then
+                    echo "⚠️ 发现依赖问题"
+                else
+                    echo "✅ 未发现依赖问题"
+                fi
+            else
+                echo "❌ 构建日志不存在"
+            fi
+            
+            # 检查固件文件
+            if [ -d "$BUILD_DIR/openwrt/bin/targets" ]; then
+                echo ""
+                echo "=== 固件文件检查 ==="
+                local firmware_count=$(find "$BUILD_DIR/openwrt/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+                echo "📦 固件文件数: $firmware_count"
+                
+                if [ $firmware_count -gt 0 ]; then
+                    echo "✅ 固件生成成功"
+                    
+                    # 显示固件文件大小
+                    find "$BUILD_DIR/openwrt/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) -exec ls -lh {} \; 2>/dev/null | head -3
+                else
+                    echo "❌ 未生成固件文件"
+                fi
+            else
+                echo "❌ 固件目录不存在"
+            fi
+        else
+            echo "❌ OpenWrt源码目录不存在"
+        fi
+    else
+        echo "❌ 构建目录不存在"
+    fi
+    
+    echo ""
+    echo "=== 分析建议 ==="
+    if [ "$build_status" = "success" ]; then
+        if [ $error_count -gt 0 ] || [ $warning_count -gt 0 ]; then
+            echo "⚠️ 构建成功但有警告或错误，建议："
+            echo "   1. 检查警告信息是否影响功能"
+            echo "   2. 查看完整构建日志"
+            echo "   3. 测试固件功能完整性"
+        else
+            echo "✅ 构建完全成功，无错误和警告"
+        fi
+    else
+        echo "🔧 构建失败，建议："
+        echo "   1. 根据错误信息修复问题"
+        echo "   2. 检查系统资源（内存、磁盘）"
+        echo "   3. 查看完整错误日志"
+    fi
+    
+    echo ""
+    echo "✅ 构建分析完成"
+    echo "========================================"
+}
+
 # ========== 配置生成 ==========
 
 # 生成配置
@@ -1247,8 +1398,8 @@ workflow_main() {
         "step29_save_essential_toolchain")
             save_essential_toolchain
             ;;
-        "step31_error_analysis")
-            workflow_step31_error_analysis
+        "step31_build_analysis")
+            workflow_step31_build_analysis "$2"
             ;;
         "step32_post_build_space_check")
             post_build_space_check
@@ -1519,34 +1670,6 @@ workflow_step23_check_toolchain_status() {
     fi
     
     echo "✅ 工具链状态检查完成"
-    echo "========================================"
-}
-
-# 步骤31：错误分析
-workflow_step31_error_analysis() {
-    echo "========================================"
-    echo "⚠️ 步骤31：错误分析"
-    echo "========================================"
-    
-    echo "=== 错误分析报告 ==="
-    echo "分析时间: $(date)"
-    echo "当前目录: $(pwd)"
-    echo "构建目录: $BUILD_DIR"
-    echo ""
-    echo "=== 磁盘使用情况 ==="
-    df -h
-    echo ""
-    echo "=== 内存使用情况 ==="
-    free -h
-    echo ""
-    echo "=== 最后构建日志片段 ==="
-    if [ -f "$BUILD_DIR/openwrt/build.log" ]; then
-        tail -20 "$BUILD_DIR/openwrt/build.log"
-    else
-        echo "构建日志不存在"
-    fi
-    
-    echo "✅ 错误分析完成"
     echo "========================================"
 }
 
