@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流（极简版）
+name: OpenWrt 智能固件构建工作流（完整版）
 
 on:
   workflow_dispatch:
@@ -52,82 +52,221 @@ jobs:
         with:
           fetch-depth: 1
       
-      # 步骤2：运行基础修复
-      - name: "🔧 2. 运行基础修复"
+      # 步骤2：运行修复脚本
+      - name: "🔧 2. 运行修复脚本"
         run: |
-          firmware-config/scripts/build_firmware_main.sh workflow_main step2_basic_fix
+          echo "=== 运行修复脚本 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step2_run_fix_script
       
-      # 步骤3：设置构建环境
-      - name: "🛠️ 3. 设置构建环境"
+      # 步骤3：准备构建环境
+      - name: "📁 3. 准备环境"
         run: |
-          firmware-config/scripts/build_firmware_main.sh workflow_main step3_setup_environment
+          echo "=== 准备构建环境 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step3_prepare_environment
       
-      # 步骤4：准备构建目录
-      - name: "📁 4. 准备构建目录"
+      # 步骤4：设置编译环境
+      - name: "🛠️ 4. 设置编译环境"
         run: |
-          firmware-config/scripts/build_firmware_main.sh workflow_main step4_prepare_build_dir
+          echo "=== 设置编译环境 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step4_setup_environment
       
-      # 步骤5：初始化构建环境
-      - name: "🚀 5. 初始化构建环境"
+      # 步骤5：创建构建目录
+      - name: "📁 5. 创建构建目录"
         run: |
-          firmware-config/scripts/build_firmware_main.sh workflow_main step5_init_build_env \
+          echo "=== 创建构建目录 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step5_create_build_dir
+      
+      # 步骤6：检查工具链目录
+      - name: "🗂️ 6. 检查工具链目录"
+        run: |
+          echo "=== 检查工具链目录 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step6_check_toolchain_dir
+      
+      # 步骤7：下载源代码
+      - name: "📥 7. 下载源代码"
+        run: |
+          echo "=== 下载源代码 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step7_download_source
+      
+      # 步骤8：上传源代码压缩包
+      - name: "📤 8. 上传源代码压缩包"
+        run: |
+          echo "=== 上传源代码压缩包 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step8_upload_source_package
+      
+      # 步骤9：上传源代码压缩包到Artifacts
+      - name: "📦 9. 上传源代码压缩包到Artifacts"
+        uses: actions/upload-artifact@v4
+        with:
+          name: "source-code-${{ github.event.inputs.device_name }}-${{ github.run_id }}"
+          path: /tmp/source-upload/
+      
+      # 步骤10：初始化构建环境
+      - name: "🚀 10. 初始化构建环境"
+        run: |
+          echo "=== 初始化构建环境 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step10_init_build_env \
             "${{ github.event.inputs.device_name }}" \
             "${{ github.event.inputs.version_selection }}" \
             "${{ github.event.inputs.config_mode }}" \
             "${{ github.event.inputs.extra_packages }}"
       
-      # 步骤6：显示配置摘要
-      - name: "⚡ 6. 显示配置摘要"
+      # 步骤11：显示配置
+      - name: "⚡ 11. 显示配置"
         run: |
-          firmware-config/scripts/build_firmware_main.sh workflow_main step6_show_config
+          echo "=== 显示配置 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step11_show_config
       
-      # 步骤7：下载OpenWrt源代码
-      - name: "📥 7. 下载OpenWrt源代码"
+      # 步骤12：添加TurboACC支持
+      - name: "🔌 12. 添加TurboACC支持"
+        if: github.event.inputs.config_mode == 'normal'
         run: |
-          firmware-config/scripts/build_firmware_main.sh workflow_main step7_download_openwrt_source
+          echo "=== 添加TurboACC支持 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step12_add_turboacc_support
       
-      # 步骤8：配置Feeds
-      - name: "📦 8. 配置Feeds"
+      # 步骤13：配置Feeds
+      - name: "📦 13. 配置Feeds"
         run: |
-          firmware-config/scripts/build_firmware_main.sh workflow_main step8_configure_feeds
+          echo "=== 配置Feeds ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step13_configure_feeds
       
-      # 步骤9：生成配置
-      - name: "⚙️ 9. 生成配置"
+      # 步骤14：安装TurboACC包
+      - name: "🔧 14. 安装TurboACC包"
+        if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
         run: |
-          firmware-config/scripts/build_firmware_main.sh workflow_main step9_generate_config "${{ github.event.inputs.extra_packages }}"
+          echo "=== 安装TurboACC包 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step14_install_turboacc_packages
       
-      # 步骤10：应用配置并修复插件
-      - name: "🔧 10. 应用配置并修复插件"
+      # 步骤15：空间检查
+      - name: "💽 15. 空间检查"
         run: |
-          firmware-config/scripts/build_firmware_main.sh workflow_main step10_apply_and_fix_config
+          echo "=== 空间检查 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step15_space_check
       
-      # 步骤11：下载依赖包
-      - name: "📥 11. 下载依赖包"
+      # 步骤16：生成配置
+      - name: "⚙️ 16. 生成配置"
         run: |
-          firmware-config/scripts/build_firmware_main.sh workflow_main step11_download_dependencies
+          echo "=== 生成配置 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step16_generate_config "${{ github.event.inputs.extra_packages }}"
       
-      # 步骤12：编译固件
-      - name: "🔨 12. 编译固件"
+      # 步骤17：验证USB配置
+      - name: "🔍 17. 验证USB配置"
         run: |
-          firmware-config/scripts/build_firmware_main.sh workflow_main step12_build_firmware "${{ github.event.inputs.enable_cache }}"
+          echo "=== 验证USB配置 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step17_verify_usb_config
       
-      # 步骤13：保存工具链
-      - name: "💾 13. 保存工具链"
+      # 步骤18：USB驱动完整性检查
+      - name: "🛡️ 18. USB驱动完整性检查"
+        run: |
+          echo "=== USB驱动完整性检查 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step18_check_usb_drivers_integrity
+      
+      # 步骤19：应用配置并显示详情
+      - name: "✅ 19. 应用配置并显示详情"
+        run: |
+          echo "=== 应用配置并显示详情 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step19_apply_config
+      
+      # 步骤20：备份配置
+      - name: "💾 20. 备份配置"
+        run: |
+          echo "=== 备份配置 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step20_backup_config
+      
+      # 步骤21：修复网络
+      - name: "🌐 21. 修复网络"
+        run: |
+          echo "=== 修复网络 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step21_fix_network
+      
+      # 步骤22：加载工具链
+      - name: "🔧 22. 加载工具链"
+        run: |
+          echo "=== 加载工具链 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step22_load_toolchain
+      
+      # 步骤23：检查工具链状态
+      - name: "📊 23. 检查工具链状态"
+        run: |
+          echo "=== 检查工具链状态 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step23_check_toolchain_status
+      
+      # 步骤24：下载依赖包
+      - name: "📥 24. 下载依赖包"
+        run: |
+          echo "=== 下载依赖包 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step24_download_dependencies
+      
+      # 步骤25：集成自定义文件
+      - name: "🔌 25. 集成自定义文件"
+        run: |
+          echo "=== 集成自定义文件 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step25_integrate_custom_files
+      
+      # 步骤26：前置错误检查
+      - name: "🚨 26. 前置错误检查"
+        run: |
+          echo "=== 前置错误检查 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step26_pre_build_error_check
+      
+      # 步骤27：最终空间检查
+      - name: "💽 27. 最终空间检查"
+        run: |
+          echo "=== 最终空间检查 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step27_final_space_check
+      
+      # 步骤28：编译固件
+      - name: "🔨 28. 编译固件"
+        run: |
+          echo "=== 编译固件 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step28_build_firmware "${{ github.event.inputs.enable_cache }}"
+      
+      # 步骤29：保存通用工具链
+      - name: "💾 29. 保存通用工具链"
         if: github.event.inputs.save_toolchain == 'true' && success()
         run: |
-          firmware-config/scripts/build_firmware_main.sh workflow_main step13_save_toolchain
+          echo "=== 保存通用工具链 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step29_save_toolchain
       
-      # 步骤14：上传固件
-      - name: "⬆️ 14. 上传固件"
+      # 步骤30：提交修复结果
+      - name: "💾 30. 提交修复结果到仓库"
+        if: steps.smart_fix.outputs.fix_script_status == 'success' && success()
+        run: |
+          echo "=== 提交修复结果 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step30_commit_fixes
+      
+      # 步骤31：构建分析
+      - name: "📊 31. 构建分析"
+        if: always()
+        run: |
+          echo "=== 构建分析 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step31_build_analysis "${{ job.status }}"
+      
+      # 步骤32：编译后空间检查
+      - name: "📊 32. 编译后空间检查"
+        if: always()
+        run: |
+          echo "=== 编译后空间检查 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step32_post_build_space_check
+      
+      # 步骤33：固件文件检查
+      - name: "📦 33. 固件文件检查"
+        if: success()
+        run: |
+          echo "=== 固件文件检查 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step33_check_firmware_files
+      
+      # 步骤34：上传固件
+      - name: "⬆️ 34. 上传固件"
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: "firmware-${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}"
+          name: "firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH || 'unknown' }}-${{ github.event.inputs.config_mode }}"
           path: /mnt/openwrt-build/bin/targets/
           retention-days: 30
       
-      # 步骤15：上传日志
-      - name: "⬆️ 15. 上传日志"
+      # 步骤35：上传日志
+      - name: "⬆️ 35. 上传日志"
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -135,14 +274,25 @@ jobs:
           path: /mnt/openwrt-build/build.log
           retention-days: 30
       
-      # 步骤16：清理构建目录
-      - name: "🧹 16. 清理构建目录"
+      # 步骤36：上传配置
+      - name: "⬆️ 36. 上传配置"
         if: always()
-        run: |
-          firmware-config/scripts/build_firmware_main.sh workflow_main step16_cleanup
+        uses: actions/upload-artifact@v4
+        with:
+          name: "config-${{ github.event.inputs.device_name }}-${{ github.run_id }}"
+          path: ${{ github.workspace }}/firmware-config/config-backup/
+          retention-days: 30
       
-      # 步骤17：构建总结
-      - name: "📈 17. 构建总结"
+      # 步骤37：清理目录
+      - name: "🧹 37. 清理目录"
         if: always()
         run: |
-          firmware-config/scripts/build_firmware_main.sh workflow_main step17_build_summary "${{ job.status }}"
+          echo "=== 清理目录 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step37_cleanup
+      
+      # 步骤38：最终总结
+      - name: "📈 38. 最终总结"
+        if: always()
+        run: |
+          echo "=== 构建总结 ==="
+          firmware-config/scripts/build_firmware_main.sh workflow_main step38_final_summary "${{ job.status }}"
