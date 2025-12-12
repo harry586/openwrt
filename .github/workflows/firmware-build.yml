@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流（完整版）
+name: OpenWrt 智能固件构建工作流
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ on:
           - "23.05"
           - "21.02"
       config_mode:
-        description: "⚙️ 配置模式选择 🟣 基础模式 - 最小化配置，用于测试编译 🟠 正常模式 - 完整功能配置"
+        description: "⚙️ 配置模式选择"
         required: true
         type: choice
         default: "normal"
@@ -25,224 +25,97 @@ on:
           - "base"
           - "normal"
       extra_packages:
-        description: "额外安装插件 格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。"
+        description: "额外安装插件 (用分号分隔)"
         required: false
         type: string
         default: ""
       enable_cache:
-        description: "⚡ 启用编译缓存 (加速编译过程)"
+        description: "⚡ 启用编译缓存"
         required: false
         default: true
         type: boolean
-      commit_toolchain:
-        description: "💾 提交工具链到仓库 (节省下次编译时间)"
+      save_toolchain:
+        description: "💾 保存通用工具链"
         required: false
         default: false
         type: boolean
 
 env:
   BUILD_DIR: "/mnt/openwrt-build"
-  GIT_LFS_SKIP_SMUDGE: 1
   ENABLE_CACHE: "true"
-  COMMIT_TOOLCHAIN: "true"
 
 jobs:
   build-firmware:
     runs-on: ubuntu-22.04
     
     steps:
-      # ========== 第0阶段：检出代码 ==========
+      # ========== 第1阶段：准备环境 ==========
       
-      # 步骤1：检出仓库代码
-      - name: "📥 1. 检出仓库代码"
+      # 步骤1：检出代码
+      - name: "📥 1. 检出代码"
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # 获取所有历史记录，以便Git LFS正常工作
-          lfs: true  # 启用Git LFS支持
+          fetch-depth: 1
       
-      # ========== 第1阶段：初始准备 ==========
-      
-      # 步骤2：准备初始环境
-      - name: "📁 2. 准备初始环境"
+      # 步骤2：运行修复脚本
+      - name: "🔧 2. 运行修复脚本"
         run: |
-          echo "=== 准备初始环境 ==="
-          echo "工作目录: $(pwd)"
-          echo "列出文件:"
-          ls -la
-          echo "创建必要目录..."
-          sudo mkdir -p ${{ env.BUILD_DIR }}
-          sudo chmod 777 ${{ env.BUILD_DIR }}
-          mkdir -p /tmp/source-upload /tmp/build-artifacts
-      
-      # 步骤3：查找并运行修复脚本
-      - name: "🔧 3. 查找并运行修复脚本"
-        id: run_fix_script
-        run: |
-          echo "=== 查找并运行修复脚本 ==="
-          echo "当前目录: $(pwd)"
-          echo "列出所有sh文件:"
-          find . -name "*.sh" -type f | head -10
-          
-          # 查找修复脚本
-          if [ -f "./fix-build.sh" ]; then
-            echo "✅ 找到修复脚本: ./fix-build.sh"
-            chmod +x ./fix-build.sh
-            timeout 300 bash ./fix-build.sh
-            echo "fix_status=success" >> $GITHUB_OUTPUT
-          elif [ -f "firmware-config/scripts/fix-build.sh" ]; then
-            echo "✅ 找到修复脚本: firmware-config/scripts/fix-build.sh"
+          echo "=== 运行修复脚本 ==="
+          if [ -f "firmware-config/scripts/fix-build.sh" ]; then
             chmod +x firmware-config/scripts/fix-build.sh
-            timeout 300 bash firmware-config/scripts/fix-build.sh
-            echo "fix_status=success" >> $GITHUB_OUTPUT
+            firmware-config/scripts/fix-build.sh || echo "修复脚本执行完成"
           else
-            echo "⚠️ 未找到修复脚本，跳过修复步骤"
-            echo "fix_status=skipped" >> $GITHUB_OUTPUT
+            echo "⚠️ 未找到修复脚本"
           fi
       
-      # 步骤4：查找并准备主构建脚本
-      - name: "🔧 4. 查找并准备主构建脚本"
-        id: find_main_script
+      # 步骤3：准备构建环境
+      - name: "📁 3. 准备环境"
         run: |
-          echo "=== 查找主构建脚本 ==="
-          echo "当前目录结构:"
-          find . -maxdepth 3 -type d | sort
-          
-          # 检查构建脚本是否存在并添加权限
-          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
-            echo "✅ 找到主构建脚本: firmware-config/scripts/build_firmware_main.sh"
-            chmod +x firmware-config/scripts/build_firmware_main.sh
-            echo "MAIN_SCRIPT_PATH=firmware-config/scripts/build_firmware_main.sh" >> $GITHUB_OUTPUT
-            echo "main_script_found=true" >> $GITHUB_OUTPUT
-          elif [ -f "./build_firmware_main.sh" ]; then
-            echo "✅ 找到主构建脚本: ./build_firmware_main.sh"
-            chmod +x ./build_firmware_main.sh
-            echo "MAIN_SCRIPT_PATH=./build_firmware_main.sh" >> $GITHUB_OUTPUT
-            echo "main_script_found=true" >> $GITHUB_OUTPUT
-          else
-            echo "❌ 未找到主构建脚本"
-            echo "列出可能的文件:"
-            find . -name "*build*.sh" -type f
-            echo "MAIN_SCRIPT_PATH=" >> $GITHUB_OUTPUT
-            echo "main_script_found=false" >> $GITHUB_OUTPUT
-          fi
+          echo "=== 准备构建环境 ==="
+          sudo mkdir -p /mnt/openwrt-build
+          sudo chmod 777 /mnt/openwrt-build
+          mkdir -p /tmp/build-artifacts
       
-      # ========== 第2阶段：智能下载 ==========
+      # ========== 第2阶段：初始化构建 ==========
       
-      # 步骤5：智能下载源代码
-      - name: "📥 5. 智能下载源代码"
-        id: download_source
-        run: |
-          echo "=== 智能下载源代码 ==="
-          
-          # 如果主构建脚本存在，使用它下载
-          if [ "${{ steps.find_main_script.outputs.main_script_found }}" = "true" ]; then
-            MAIN_SCRIPT="${{ steps.find_main_script.outputs.MAIN_SCRIPT_PATH }}"
-            echo "使用主构建脚本: $MAIN_SCRIPT"
-            "$MAIN_SCRIPT" workflow_main step1_download_source "${{ github.workspace }}"
-            DOWNLOAD_EXIT_CODE=$?
-          else
-            echo "⚠️ 未找到构建脚本，跳过下载步骤"
-            echo "注意：代码已通过检出步骤获取，无需再次下载"
-            DOWNLOAD_EXIT_CODE=0
-          fi
-          
-          echo "下载退出码: $DOWNLOAD_EXIT_CODE"
-          echo "download_status=$DOWNLOAD_EXIT_CODE" >> $GITHUB_OUTPUT
-      
-      # 步骤6：上传源代码
-      - name: "📤 6. 上传源代码"
-        if: steps.download_source.outputs.download_status == '0'
-        run: |
-          echo "=== 上传源代码 ==="
-          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
-            chmod +x firmware-config/scripts/build_firmware_main.sh
-            firmware-config/scripts/build_firmware_main.sh workflow_main step2_upload_source
-          elif [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step2_upload_source
-          else
-            echo "ℹ️ 未找到构建脚本，跳过上传"
-          fi
-      
-      # ========== 第3阶段：配置环境 ==========
-      
-      # 步骤7：Git LFS配置
-      - name: "🔧 7. Git LFS配置"
-        run: |
-          echo "=== Git LFS配置 ==="
-          sudo apt-get update
-          sudo apt-get install -y git-lfs
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          git config --global http.postBuffer 524288000
-          git lfs install --force
-          git lfs pull 2>/dev/null || echo "Git LFS拉取失败，继续构建"
-      
-      # 步骤8：大文件检查
-      - name: "📊 8. 大文件检查"
-        run: |
-          echo "=== 大文件检查 ==="
-          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
-            chmod +x firmware-config/scripts/build_firmware_main.sh
-            firmware-config/scripts/build_firmware_main.sh workflow_main step5_check_large_files
-          elif [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step5_check_large_files
-          else
-            echo "ℹ️ 未找到构建脚本，跳过检查"
-          fi
-      
-      # 步骤9：工具链目录检查
-      - name: "🗂️ 9. 工具链目录检查"
-        run: |
-          echo "=== 工具链目录检查 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step6_check_toolchain_dir
-          else
-            echo "ℹ️ 未找到构建脚本，跳过检查"
-          fi
-      
-      # 步骤10：初始化工具链目录
-      - name: "💾 10. 初始化工具链目录"
-        run: |
-          echo "=== 初始化工具链目录 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step7_init_toolchain_dir
-          else
-            echo "ℹ️ 未找到构建脚本，跳过初始化"
-          fi
-      
-      # 步骤11：设置编译环境
-      - name: "🛠️ 11. 设置编译环境"
+      # 步骤4：设置编译环境
+      - name: "🛠️ 4. 设置编译环境"
         run: |
           echo "=== 设置编译环境 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step8_setup_environment
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            chmod +x firmware-config/scripts/build_firmware_main.sh
+            firmware-config/scripts/build_firmware_main.sh workflow_main step8_setup_environment
           else
-            echo "⚠️ 未找到构建脚本，尝试直接安装"
-            sudo apt-get update
-            sudo apt-get install -y build-essential git ccache
+            echo "❌ 错误: 未找到构建脚本"
+            exit 1
           fi
       
-      # 步骤12：创建构建目录
-      - name: "📁 12. 创建构建目录"
+      # 步骤5：创建构建目录
+      - name: "📁 5. 创建构建目录"
         run: |
           echo "=== 创建构建目录 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step9_create_build_dir
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            chmod +x firmware-config/scripts/build_firmware_main.sh
+            firmware-config/scripts/build_firmware_main.sh workflow_main step9_create_build_dir
           else
-            echo "⚠️ 未找到构建脚本，手动创建目录"
-            mkdir -p ${{ env.BUILD_DIR }}
+            echo "❌ 错误: 未找到构建脚本"
+            exit 1
           fi
       
-      # ========== 第4阶段：构建执行 ==========
+      # 步骤6：检查工具链目录
+      - name: "🗂️ 6. 检查工具链目录"
+        run: |
+          echo "=== 检查工具链目录 ==="
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            chmod +x firmware-config/scripts/build_firmware_main.sh
+            firmware-config/scripts/build_firmware_main.sh workflow_main step6_check_toolchain_dir
+          else
+            echo "❌ 错误: 未找到构建脚本"
+            exit 1
+          fi
       
-      # 步骤13：初始化构建环境
-      - name: "🚀 13. 初始化构建环境"
+      # 步骤7：初始化构建环境
+      - name: "🚀 7. 初始化构建环境"
         run: |
           echo "=== 初始化构建环境 ==="
           if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
@@ -252,348 +125,152 @@ jobs:
               "${{ github.event.inputs.version_selection }}" \
               "${{ github.event.inputs.config_mode }}" \
               "${{ github.event.inputs.extra_packages }}"
-          elif [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step10_init_build_env \
-              "${{ github.event.inputs.device_name }}" \
-              "${{ github.event.inputs.version_selection }}" \
-              "${{ github.event.inputs.config_mode }}" \
-              "${{ github.event.inputs.extra_packages }}"
           else
             echo "❌ 错误: 未找到构建脚本"
-            echo "可用脚本列表:"
-            find . -name "*.sh" -type f
             exit 1
           fi
       
-      # 步骤14：显示配置
-      - name: "⚡ 14. 显示配置"
-        run: |
-          echo "=== 显示配置 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step11_show_config
-          fi
+      # ========== 第3阶段：配置和编译 ==========
       
-      # 步骤15：添加TurboACC支持
-      - name: "🔌 15. 添加TurboACC支持"
-        run: |
-          echo "=== 添加TurboACC支持 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step12_add_turboacc_support
-          else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
-          fi
-      
-      # 步骤16：配置Feeds
-      - name: "📦 16. 配置Feeds"
+      # 步骤8：配置Feeds
+      - name: "📦 8. 配置Feeds"
         run: |
           echo "=== 配置Feeds ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step13_configure_feeds
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            chmod +x firmware-config/scripts/build_firmware_main.sh
+            firmware-config/scripts/build_firmware_main.sh workflow_main step13_configure_feeds
           else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
-          fi
-      
-      # 步骤17：安装TurboACC包
-      - name: "🔧 17. 安装TurboACC包"
-        run: |
-          echo "=== 安装TurboACC包 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step14_install_turboacc_packages
-          else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
-          fi
-      
-      # 步骤18：编译前空间检查
-      - name: "💽 18. 编译前空间检查"
-        run: |
-          echo "=== 编译前空间检查 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step15_pre_build_space_check
-          else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
-          fi
-      
-      # 步骤19：智能配置生成
-      - name: "⚙️ 19. 智能配置生成"
-        run: |
-          echo "=== 智能配置生成 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step16_generate_config "${{ github.event.inputs.extra_packages }}"
-          else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
-          fi
-      
-      # 步骤20：验证USB配置
-      - name: "🔍 20. 验证USB配置"
-        run: |
-          echo "=== 验证USB配置 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step17_verify_usb_config
-          else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
-          fi
-      
-      # 步骤21：USB驱动完整性检查
-      - name: "🛡️ 21. USB驱动完整性检查"
-        run: |
-          echo "=== USB驱动完整性检查 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step18_check_usb_drivers_integrity
-          else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
-          fi
-      
-      # 步骤22：应用配置并显示详情
-      - name: "✅ 22. 应用配置并显示详情"
-        run: |
-          echo "=== 应用配置并显示详情 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step19_apply_config
-          else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
-          fi
-      
-      # 步骤23：检查并备份配置文件
-      - name: "💾 23. 检查并备份配置文件"
-        run: |
-          echo "=== 检查并备份配置文件 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step20_backup_config
-          else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
-          fi
-      
-      # 步骤24：修复网络环境
-      - name: "🌐 24. 修复网络环境"
-        run: |
-          echo "=== 修复网络环境 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step21_fix_network
-          else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
-          fi
-      
-      # 步骤25：加载工具链
-      - name: "🔧 25. 加载工具链"
-        run: |
-          echo "=== 加载工具链 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step22_load_toolchain
-          else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
-          fi
-      
-      # 步骤26：检查工具链加载状态
-      - name: "📊 26. 检查工具链加载状态"
-        run: |
-          echo "=== 检查工具链加载状态 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step23_check_toolchain_status
-          else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
-          fi
-      
-      # 步骤27：下载依赖包
-      - name: "📥 27. 下载依赖包"
-        run: |
-          echo "=== 下载依赖包 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step24_download_dependencies
-          else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
-          fi
-      
-      # 步骤28：集成自定义文件
-      - name: "🔌 28. 集成自定义文件"
-        run: |
-          echo "=== 集成自定义文件 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step25_integrate_custom_files
-          else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
-          fi
-      
-      # 步骤29：前置错误检查
-      - name: "🚨 29. 前置错误检查"
-        run: |
-          echo "=== 前置错误检查 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step26_pre_build_error_check
-          else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
-          fi
-      
-      # 步骤30：编译前的空间检查
-      - name: "💽 30. 编译前的空间检查"
-        run: |
-          echo "=== 编译前的空间检查 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step27_final_space_check
-          else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
-          fi
-      
-      # 步骤31：编译固件
-      - name: "🔨 31. 编译固件"
-        run: |
-          echo "=== 编译固件 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step28_build_firmware
-          else
-            echo "❌ 未找到构建脚本，无法编译"
+            echo "❌ 错误: 未找到构建脚本"
             exit 1
           fi
       
-      # 步骤32：保存工具链到仓库目录
-      - name: "💾 32. 保存工具链到仓库目录"
-        if: github.event.inputs.commit_toolchain == 'true'
+      # 步骤9：生成配置
+      - name: "⚙️ 9. 生成配置"
         run: |
-          echo "=== 保存工具链到仓库目录 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step29_save_toolchain
+          echo "=== 生成配置 ==="
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            chmod +x firmware-config/scripts/build_firmware_main.sh
+            firmware-config/scripts/build_firmware_main.sh generate_config "${{ github.event.inputs.extra_packages }}"
           else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
+            echo "❌ 错误: 未找到构建脚本"
+            exit 1
           fi
       
-      # 步骤33：提交工具链到仓库
-      - name: "📤 33. 提交工具链到仓库"
-        if: github.event.inputs.commit_toolchain == 'true'
+      # 步骤10：应用配置
+      - name: "✅ 10. 应用配置"
         run: |
-          echo "=== 提交工具链到仓库 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step30_commit_toolchain
+          echo "=== 应用配置 ==="
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            chmod +x firmware-config/scripts/build_firmware_main.sh
+            firmware-config/scripts/build_firmware_main.sh apply_config
           else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
+            echo "❌ 错误: 未找到构建脚本"
+            exit 1
           fi
       
-      # 步骤34：错误分析（如果失败）
-      - name: "⚠️ 34. 错误分析"
-        if: failure()
+      # 步骤11：下载依赖包
+      - name: "📥 11. 下载依赖包"
         run: |
-          echo "=== 错误分析 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step31_error_analysis
+          echo "=== 下载依赖包 ==="
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            chmod +x firmware-config/scripts/build_firmware_main.sh
+            firmware-config/scripts/build_firmware_main.sh workflow_main step24_download_dependencies
           else
-            echo "📊 执行基本错误分析..."
-            echo "=== 基本错误分析 ==="
-            echo "分析时间: $(date)"
-            echo "当前目录: $(pwd)"
-            df -h
+            echo "❌ 错误: 未找到构建脚本"
+            exit 1
           fi
       
-      # 步骤35：编译后空间检查
-      - name: "📊 35. 编译后空间检查"
-        if: always()
+      # 步骤12：编译前的空间检查
+      - name: "💽 12. 编译前的空间检查"
         run: |
-          echo "=== 编译后空间检查 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step32_post_build_space_check
+          echo "=== 编译前的空间检查 ==="
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            chmod +x firmware-config/scripts/build_firmware_main.sh
+            firmware-config/scripts/build_firmware_main.sh workflow_main step27_final_space_check
           else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
+            echo "❌ 错误: 未找到构建脚本"
+            exit 1
           fi
       
-      # 步骤36：固件文件检查
-      - name: "📦 36. 固件文件检查"
+      # 步骤13：编译固件
+      - name: "🔨 13. 编译固件"
+        run: |
+          echo "=== 编译固件 ==="
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            chmod +x firmware-config/scripts/build_firmware_main.sh
+            firmware-config/scripts/build_firmware_main.sh workflow_main step28_build_firmware
+          else
+            echo "❌ 错误: 未找到构建脚本"
+            exit 1
+          fi
+      
+      # 步骤14：保存通用工具链
+      - name: "💾 14. 保存通用工具链"
+        if: github.event.inputs.save_toolchain == 'true'
+        run: |
+          echo "=== 保存通用工具链 ==="
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            chmod +x firmware-config/scripts/build_firmware_main.sh
+            firmware-config/scripts/build_firmware_main.sh workflow_main step29_save_essential_toolchain
+          else
+            echo "❌ 错误: 未找到构建脚本"
+            exit 1
+          fi
+      
+      # ========== 第4阶段：结果处理 ==========
+      
+      # 步骤15：固件文件检查
+      - name: "📦 15. 固件文件检查"
         if: success()
         run: |
           echo "=== 固件文件检查 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step33_check_firmware_files
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            chmod +x firmware-config/scripts/build_firmware_main.sh
+            firmware-config/scripts/build_firmware_main.sh workflow_main step33_check_firmware_files
           else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
+            echo "❌ 错误: 未找到构建脚本"
+            exit 1
           fi
       
-      # 步骤37：清理目录
-      - name: "🧹 37. 清理目录"
+      # 步骤16：错误分析（如果失败）
+      - name: "⚠️ 16. 错误分析"
+        if: failure()
+        run: |
+          echo "=== 错误分析 ==="
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            chmod +x firmware-config/scripts/build_firmware_main.sh
+            firmware-config/scripts/build_firmware_main.sh workflow_main step31_error_analysis
+          else
+            echo "执行基本错误分析..."
+            df -h
+            free -h
+          fi
+      
+      # 步骤17：编译后空间检查
+      - name: "📊 17. 编译后空间检查"
         if: always()
         run: |
-          echo "=== 清理目录 ==="
-          if [ -f "build_firmware_main.sh" ]; then
-            chmod +x build_firmware_main.sh
-            ./build_firmware_main.sh workflow_main step37_cleanup
+          echo "=== 编译后空间检查 ==="
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            chmod +x firmware-config/scripts/build_firmware_main.sh
+            firmware-config/scripts/build_firmware_main.sh workflow_main step32_post_build_space_check
           else
-            echo "ℹ️ 未找到构建脚本，跳过此步骤"
+            echo "❌ 错误: 未找到构建脚本"
+            exit 1
           fi
       
-      # ========== 第5阶段：修复结果处理 ==========
-      
-      # 步骤38：最终修复提交
-      - name: "📤 38. 最终修复提交"
-        if: always() && steps.run_fix_script.outputs.fix_status == 'success'
-        run: |
-          echo "=== 最终修复提交 ==="
-          if [ -f "/tmp/fix_changes.log" ]; then
-            echo "检测到修复更改，尝试提交..."
-            git config --global user.name "GitHub Actions Bot"
-            git config --global user.email "actions@github.com"
-            git add -A
-            
-            if git status --porcelain | grep -q "."; then
-              echo "提交修复更改..."
-              git commit -m "fix: 自动修复更新 [$(date '+%Y-%m-%d %H:%M:%S')]"
-              git commit --amend -m "fix: 自动修复更新 [$(date '+%Y-%m-%d %H:%M:%S')]
-              修复内容:
-              - 增强路径搜索功能
-              - 修复脚本执行顺序
-              - 优化工作流步骤"
-              
-              for i in {1..3}; do
-                echo "推送尝试 $i/3..."
-                if git push; then
-                  echo "✅ 修复更改已提交"
-                  break
-                else
-                  echo "推送失败，等待10秒..."
-                  sleep 10
-                fi
-              done
-            else
-              echo "没有需要提交的更改"
-            fi
-          else
-            echo "没有检测到修复更改"
-          fi
-      
-      # 步骤39：最终构建总结
-      - name: "📈 39. 最终构建总结"
+      # 步骤18：最终总结
+      - name: "📈 18. 最终总结"
         if: always()
         run: |
           echo "=== 构建总结 ==="
           echo "构建状态: ${{ job.status }}"
           echo "设备: ${{ github.event.inputs.device_name }}"
           echo "版本: ${{ github.event.inputs.version_selection }}"
-          echo "模式: ${{ github.event.inputs.config_mode }}"
-          echo "额外插件: ${{ github.event.inputs.extra_packages }}"
+          echo "配置模式: ${{ github.event.inputs.config_mode }}"
           echo "启用缓存: ${{ github.event.inputs.enable_cache }}"
-          echo "提交工具链: ${{ github.event.inputs.commit_toolchain }}"
+          echo "保存通用工具链: ${{ github.event.inputs.save_toolchain }}"
           echo ""
-          echo "修复脚本状态: ${{ steps.run_fix_script.outputs.fix_status }}"
-          echo "主构建脚本状态: ${{ steps.find_main_script.outputs.main_script_found }}"
-          
           if [ "${{ job.status }}" = "success" ]; then
             echo "✅ 构建成功"
           else
