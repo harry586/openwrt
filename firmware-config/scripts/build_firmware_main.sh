@@ -1,5 +1,5 @@
 #!/bin/bash
-# OpenWrt智能构建主脚本（整合版）
+# OpenWrt智能构建主脚本（完整功能版）
 # 最后更新: 2024-01-16
 
 set -e
@@ -29,33 +29,6 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 handle_error() {
     log_error "错误发生在: $1"
     exit 1
-}
-
-# ========== 智能文件查找函数 ==========
-smart_find() {
-    local pattern="$1"
-    local max_depth="${2:-3}"
-    
-    local common_locations=(
-        "$REPO_ROOT"
-        "$REPO_ROOT/firmware-config"
-        "$REPO_ROOT/scripts"
-        "$REPO_ROOT/.github"
-        "/tmp"
-        "."
-    )
-    
-    for location in "${common_locations[@]}"; do
-        if [ -d "$location" ]; then
-            local found=$(find "$location" -maxdepth "$max_depth" -name "$pattern" 2>/dev/null | head -1)
-            if [ -n "$found" ]; then
-                echo "$found"
-                return 0
-            fi
-        fi
-    done
-    
-    return 1
 }
 
 # ========== 环境设置函数 ==========
@@ -112,9 +85,9 @@ create_build_dir() {
     log_info "可用空间: $available_space"
 }
 
-# ========== 工具链管理（保留必要功能）==========
+# ========== 工具链管理 ==========
 
-# 初始化工具链目录（仅创建结构）
+# 初始化工具链目录
 init_toolchain_dir() {
     log_info "初始化工具链目录..."
     
@@ -220,7 +193,7 @@ load_toolchain() {
     log_success "工具链环境设置完成"
 }
 
-# 保存通用工具链（仅保存必要的部分）
+# 保存通用工具链
 save_essential_toolchain() {
     log_info "保存通用工具链..."
     
@@ -557,27 +530,423 @@ generate_config() {
     log_success "配置生成完成"
 }
 
-# 应用配置
+# ========== 新增：TurboACC支持函数 ==========
+
+# 添加 TurboACC 支持
+add_turboacc_support() {
+    load_env
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
+    
+    log_info "添加 TurboACC 支持..."
+    
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        log_info "为正常模式添加 TurboACC 支持"
+        
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            log_info "为 23.05 添加 TurboACC 支持"
+            echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+            log_success "TurboACC feed 添加完成"
+        else
+            log_info "21.02 版本已内置 TurboACC，无需额外添加"
+        fi
+    else
+        log_info "基础模式不添加 TurboACC 支持"
+    fi
+}
+
+# 安装 TurboACC 包
+install_turboacc_packages() {
+    load_env
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
+    
+    log_info "安装 TurboACC 包..."
+    
+    ./scripts/feeds update turboacc || handle_error "更新turboacc feed失败"
+    
+    ./scripts/feeds install -p turboacc luci-app-turboacc || handle_error "安装luci-app-turboacc失败"
+    ./scripts/feeds install -p turboacc kmod-shortcut-fe || handle_error "安装kmod-shortcut-fe失败"
+    ./scripts/feeds install -p turboacc kmod-fast-classifier || handle_error "安装kmod-fast-classifier失败"
+    
+    log_success "TurboACC 包安装完成"
+}
+
+# ========== 新增：USB配置验证函数 ==========
+
+# 验证 USB 配置
+verify_usb_config() {
+    load_env
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
+    
+    log_info "验证USB配置..."
+    
+    echo "=== USB配置状态 ==="
+    echo ""
+    
+    # 检查关键USB驱动
+    local usb_drivers=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-storage")
+    local missing_count=0
+    
+    for driver in "${usb_drivers[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            echo "✅ $driver: 已启用"
+        else
+            echo "❌ $driver: 未启用"
+            missing_count=$((missing_count + 1))
+        fi
+    done
+    
+    echo ""
+    echo "=== 平台专用USB驱动 ==="
+    
+    if [ "$TARGET" = "ipq40xx" ]; then
+        echo "高通IPQ40xx平台:"
+        local qcom_drivers=("kmod-usb-dwc3" "kmod-usb-dwc3-qcom")
+        for driver in "${qcom_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "  ✅ $driver: 已启用"
+            else
+                echo "  ⚠️  $driver: 未启用"
+            fi
+        done
+    elif [ "$TARGET" = "ramips" ]; then
+        echo "雷凌平台:"
+        local mtk_drivers=("kmod-usb-ohci-pci" "kmod-usb2-pci")
+        for driver in "${mtk_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "  ✅ $driver: 已启用"
+            else
+                echo "  ⚠️  $driver: 未启用"
+            fi
+        done
+    fi
+    
+    echo ""
+    if [ $missing_count -eq 0 ]; then
+        log_success "USB配置验证通过"
+    else
+        log_warn "USB配置有 $missing_count 个关键驱动未启用"
+    fi
+}
+
+# 检查 USB 驱动完整性
+check_usb_drivers_integrity() {
+    load_env
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
+    
+    log_info "检查USB驱动完整性..."
+    
+    local missing_drivers=()
+    local required_drivers=(
+        "kmod-usb-core"
+        "kmod-usb2"
+        "kmod-usb-storage"
+    )
+    
+    # 根据平台添加专用驱动
+    if [ "$TARGET" = "ipq40xx" ]; then
+        required_drivers+=("kmod-usb-dwc3")
+    fi
+    
+    # 检查所有必需驱动
+    for driver in "${required_drivers[@]}"; do
+        if ! grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            log_warn "缺失驱动: $driver"
+            missing_drivers+=("$driver")
+        else
+            log_info "✅ 驱动存在: $driver"
+        fi
+    done
+    
+    # 如果有缺失驱动，尝试修复
+    if [ ${#missing_drivers[@]} -gt 0 ]; then
+        log_warn "发现 ${#missing_drivers[@]} 个缺失的USB驱动"
+        log_info "正在尝试修复..."
+        
+        for driver in "${missing_drivers[@]}"; do
+            echo "CONFIG_PACKAGE_${driver}=y" >> .config
+            log_info "✅ 已添加: $driver"
+        done
+        
+        log_success "USB驱动修复完成"
+    else
+        log_success "所有必需USB驱动都已启用"
+    fi
+}
+
+# ========== 新增：应用配置显示详情函数 ==========
+
+# 应用配置并显示详情
 apply_config() {
     load_env
     cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
-    log_info "应用配置..."
+    log_info "应用配置并显示详情..."
     
+    if [ ! -f ".config" ]; then
+        log_error ".config 文件不存在，无法应用配置"
+        return 1
+    fi
+    
+    log_info "📋 配置详情:"
+    log_info "配置文件大小: $(ls -lh .config | awk '{print $5}')"
+    log_info "配置行数: $(wc -l < .config)"
+    
+    echo ""
+    echo "=== 详细配置状态 ==="
+    echo ""
+    
+    # 1. 关键USB配置状态
+    echo "🔧 关键USB配置状态:"
+    local critical_usb_drivers=(
+        "kmod-usb-core" "kmod-usb2" "kmod-usb3" 
+        "kmod-usb-ehci" "kmod-usb-ohci"
+        "kmod-usb-storage" "kmod-usb-storage-uas" "kmod-usb-storage-extras"
+        "kmod-scsi-core" "kmod-scsi-generic"
+    )
+    
+    local missing_usb=0
+    for driver in "${critical_usb_drivers[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            echo "  ✅ $driver"
+        else
+            echo "  ❌ $driver - 缺失！"
+            missing_usb=$((missing_usb + 1))
+        fi
+    done
+    
+    # 2. 平台专用驱动检查
+    echo ""
+    echo "🔧 平台专用USB驱动状态:"
+    if [ "$TARGET" = "ipq40xx" ]; then
+        echo "  高通IPQ40xx平台专用驱动:"
+        local qcom_drivers=("kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3")
+        for driver in "${qcom_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "    ✅ $driver"
+            else
+                echo "    ❌ $driver - 缺失！"
+                missing_usb=$((missing_usb + 1))
+            fi
+        done
+    elif [ "$TARGET" = "ramips" ] && { [ "$SUBTARGET" = "mt76x8" ] || [ "$SUBTARGET" = "mt7621" ]; }; then
+        echo "  雷凌MT76xx平台专用驱动:"
+        local mtk_drivers=("kmod-usb-ohci-pci" "kmod-usb2-pci")
+        for driver in "${mtk_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "    ✅ $driver"
+            else
+                echo "    ❌ $driver - 缺失！"
+                missing_usb=$((missing_usb + 1))
+            fi
+        done
+    fi
+    
+    # 3. 文件系统支持检查
+    echo ""
+    echo "🔧 文件系统支持状态:"
+    local fs_drivers=("kmod-fs-ext4" "kmod-fs-vfat" "kmod-fs-exfat" "kmod-fs-ntfs3")
+    for driver in "${fs_drivers[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            echo "  ✅ $driver"
+        else
+            echo "  ❌ $driver - 缺失！"
+        fi
+    done
+    
+    # 4. 网络和基础功能
+    echo ""
+    echo "🔧 网络和基础功能:"
+    local network_features=(
+        "dnsmasq-full" "iptables" "firewall" "dropbear"
+        "luci" "luci-i18n-base-zh-cn" "luci-app-turboacc"
+    )
+    for feature in "${network_features[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${feature}=y" .config; then
+            echo "  ✅ $feature"
+        elif grep -q "^# CONFIG_PACKAGE_${feature} is not set" .config; then
+            echo "  ❌ $feature - 已禁用"
+        else
+            echo "  ⚠️  $feature - 未配置"
+        fi
+    done
+    
+    # 5. 统计信息
+    echo ""
+    echo "📊 配置统计信息:"
+    local enabled_count=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
+    local disabled_count=$(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)
+    echo "  ✅ 已启用插件: $enabled_count 个"
+    echo "  ❌ 已禁用插件: $disabled_count 个"
+    
+    # 6. 显示具体被禁用的插件（分类显示）
+    if [ $disabled_count -gt 0 ]; then
+        echo ""
+        echo "📋 分类显示被禁用的插件:"
+        
+        # 网络相关
+        echo "  🔌 网络相关:"
+        grep "^# CONFIG_PACKAGE_.* is not set$" .config | grep -i "dnsmasq\|firewall\|dropbear" | head -5 | while read line; do
+            local pkg_name=$(echo $line | sed 's/# CONFIG_PACKAGE_//;s/ is not set//')
+            echo "    ❌ $pkg_name"
+        done
+        
+        # USB相关
+        echo "  🔧 USB相关:"
+        grep "^# CONFIG_PACKAGE_.* is not set$" .config | grep -i "usb" | head -5 | while read line; do
+            local pkg_name=$(echo $line | sed 's/# CONFIG_PACKAGE_//;s/ is not set//')
+            echo "    ❌ $pkg_name"
+        done
+        
+        # 文件系统
+        echo "  💾 文件系统:"
+        grep "^# CONFIG_PACKAGE_.* is not set$" .config | grep -i "fs-\|ntfs\|ext\|vfat" | head -5 | while read line; do
+            local pkg_name=$(echo $line | sed 's/# CONFIG_PACKAGE_//;s/ is not set//')
+            echo "    ❌ $pkg_name"
+        done
+        
+        if [ $disabled_count -gt 15 ]; then
+            local remaining=$((disabled_count - 15))
+            echo "  ... 还有 $remaining 个被禁用的插件"
+        fi
+    fi
+    
+    # 7. 修复缺失的关键USB驱动
+    if [ $missing_usb -gt 0 ]; then
+        echo ""
+        echo "🚨 修复缺失的关键USB驱动:"
+        
+        # 确保kmod-usb-core启用
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" .config; then
+            echo "  修复: 启用 kmod-usb-core"
+            sed -i 's/^# CONFIG_PACKAGE_kmod-usb-core is not set$/CONFIG_PACKAGE_kmod-usb-core=y/' .config
+            echo "  ✅ 已修复 kmod-usb-core"
+        fi
+        
+        # 确保kmod-usb2启用
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config; then
+            echo "  修复: 启用 kmod-usb2"
+            echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+            echo "  ✅ 已修复 kmod-usb2"
+        fi
+        
+        # 确保kmod-usb-storage启用
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" .config; then
+            echo "  修复: 启用 kmod-usb-storage"
+            echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
+            echo "  ✅ 已修复 kmod-usb-storage"
+        fi
+    fi
+    
+    echo ""
+    log_info "运行 make defconfig..."
+    make defconfig || handle_error "应用配置失败"
+    
+    log_success "配置应用完成"
+    log_info "最终配置大小: $(ls -lh .config | awk '{print $5}')"
+}
+
+# ========== 新增：集成自定义文件函数 ==========
+
+# 集成自定义文件
+integrate_custom_files() {
+    log_info "集成自定义文件..."
+    
+    cd "$BUILD_DIR/openwrt"
+    
+    log_info "🔌 集成自定义文件..."
+    
+    # 检查是否有自定义文件目录
+    local custom_files_dir="$REPO_ROOT/firmware-config/custom-files"
+    
+    if [ -d "$custom_files_dir" ]; then
+        log_info "找到自定义文件目录: $custom_files_dir"
+        log_info "目录内容:"
+        find "$custom_files_dir" -type f | head -10 | while read file; do
+            local size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "未知")
+            log_info "  - $(basename "$file") ($size)"
+        done
+        
+        # 创建files目录（如果不存在）
+        mkdir -p files
+        
+        # 复制文件到构建目录
+        log_info "复制自定义文件..."
+        cp -r "$custom_files_dir/"* files/ 2>/dev/null || true
+        
+        # 检查复制结果
+        local copied_count=$(find files -type f 2>/dev/null | wc -l || echo "0")
+        log_success "自定义文件复制完成，共复制 $copied_count 个文件"
+        
+        # 显示复制的文件
+        log_info "复制的文件:"
+        find files -type f | head -5 | while read file; do
+            log_info "  - $file"
+        done
+    else
+        log_info "无自定义文件目录: $custom_files_dir 不存在"
+    fi
+    
+    log_success "自定义文件集成完成"
+}
+
+# ========== 新增：前置错误检查函数 ==========
+
+# 前置错误检查
+pre_build_error_check() {
+    log_info "前置错误检查..."
+    
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
+    
+    # 检查.config文件
     if [ ! -f ".config" ]; then
         log_error ".config 文件不存在"
         exit 1
     fi
     
-    # 显示配置摘要
-    log_info "配置摘要:"
-    log_info "  目标平台: $TARGET/$SUBTARGET"
-    log_info "  设备: $DEVICE"
-    log_info "  配置模式: $CONFIG_MODE"
+    # 检查关键目录
+    local critical_dirs=("staging_dir" "build_dir" "dl" "feeds" "package")
+    for dir in "${critical_dirs[@]}"; do
+        if [ ! -d "$dir" ]; then
+            log_warn "警告: 目录 $dir 不存在"
+        fi
+    done
     
-    make defconfig || handle_error "应用配置失败"
+    # 检查工具链
+    log_info "检查工具链状态..."
+    if [ -d "staging_dir" ]; then
+        local toolchain_dirs=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | wc -l)
+        if [ $toolchain_dirs -eq 0 ]; then
+            log_warn "警告: 构建目录中没有工具链，可能需要下载"
+        else
+            log_info "构建目录中有 $toolchain_dirs 个工具链"
+        fi
+    else
+        log_warn "警告: staging_dir 目录不存在"
+    fi
     
-    log_success "配置应用完成"
+    # 检查磁盘空间
+    log_info "检查磁盘空间..."
+    local available_space=$(df -m "$BUILD_DIR" | tail -1 | awk '{print $4}')
+    local available_gb=$((available_space / 1024))
+    log_info "可用空间: ${available_gb}G"
+    
+    if [ $available_gb -lt 5 ]; then
+        log_error "严重警告: 磁盘空间不足 (需要至少5G，当前${available_gb}G)"
+        exit 1
+    else
+        log_success "磁盘空间充足"
+    fi
+    
+    # 检查关键文件
+    local critical_files=(".config" "Makefile" "rules.mk" "Config.in")
+    for file in "${critical_files[@]}"; do
+        if [ ! -f "$file" ]; then
+            log_error "错误: 关键文件 $file 不存在"
+            exit 1
+        fi
+    done
+    
+    log_success "前置错误检查完成"
 }
 
 # ========== 构建流程 ==========
@@ -800,6 +1169,9 @@ workflow_main() {
         "step2_upload_source")
             workflow_step2_upload_source
             ;;
+        "step4_install_git_lfs")
+            workflow_step4_install_git_lfs
+            ;;
         "step5_check_large_files")
             workflow_step5_check_large_files
             ;;
@@ -821,38 +1193,79 @@ workflow_main() {
         "step11_show_config")
             workflow_step11_show_config
             ;;
+        "step12_add_turboacc_support")
+            add_turboacc_support
+            ;;
         "step13_configure_feeds")
             workflow_step13_configure_feeds
             ;;
+        "step14_install_turboacc_packages")
+            install_turboacc_packages
+            ;;
+        "step15_pre_build_space_check")
+            pre_build_space_check
+            ;;
+        "step16_generate_config")
+            generate_config "$2"
+            ;;
+        "step17_verify_usb_config")
+            verify_usb_config
+            ;;
+        "step18_check_usb_drivers_integrity")
+            check_usb_drivers_integrity
+            ;;
+        "step19_apply_config")
+            apply_config
+            ;;
+        "step20_backup_config")
+            workflow_step20_backup_config
+            ;;
+        "step21_fix_network")
+            workflow_step21_fix_network
+            ;;
+        "step22_load_toolchain")
+            load_toolchain
+            ;;
+        "step23_check_toolchain_status")
+            workflow_step23_check_toolchain_status
+            ;;
         "step24_download_dependencies")
-            workflow_step24_download_dependencies
+            download_dependencies
+            ;;
+        "step25_integrate_custom_files")
+            integrate_custom_files
+            ;;
+        "step26_pre_build_error_check")
+            pre_build_error_check
             ;;
         "step27_final_space_check")
-            workflow_step27_final_space_check
+            pre_build_space_check
             ;;
         "step28_build_firmware")
-            workflow_step28_build_firmware
+            build_firmware "true"
             ;;
         "step29_save_essential_toolchain")
-            workflow_step29_save_essential_toolchain
+            save_essential_toolchain
             ;;
         "step31_error_analysis")
             workflow_step31_error_analysis
             ;;
         "step32_post_build_space_check")
-            workflow_step32_post_build_space_check
+            post_build_space_check
             ;;
         "step33_check_firmware_files")
-            workflow_step33_check_firmware_files
+            check_firmware_files
             ;;
         "step37_cleanup")
-            workflow_step37_cleanup
+            cleanup
             ;;
         *)
             main "$@"
             ;;
     esac
 }
+
+# ========== 工作流具体步骤实现 ==========
 
 # 步骤1：下载完整源代码
 workflow_step1_download_source() {
@@ -897,6 +1310,31 @@ workflow_step2_upload_source() {
     echo "========================================"
 }
 
+# 步骤4：安装Git LFS和配置
+workflow_step4_install_git_lfs() {
+    echo "========================================"
+    echo "🔧 步骤4：安装Git LFS和配置"
+    echo "========================================"
+    
+    log_info "安装Git LFS..."
+    sudo apt-get update
+    sudo apt-get install -y git-lfs
+    
+    log_info "配置Git..."
+    git config --global user.name "GitHub Actions"
+    git config --global user.email "actions@github.com"
+    git config --global http.postBuffer 524288000
+    
+    log_info "初始化Git LFS..."
+    git lfs install --force
+    
+    log_info "拉取Git LFS文件..."
+    git lfs pull || log_info "Git LFS拉取失败，继续构建..."
+    
+    echo "✅ Git LFS安装和配置完成"
+    echo "========================================"
+}
+
 # 步骤5：大文件检查
 workflow_step5_check_large_files() {
     echo "========================================"
@@ -906,6 +1344,7 @@ workflow_step5_check_large_files() {
     echo "扫描大文件..."
     find . -type f -size +50M 2>/dev/null | grep -v ".git" | head -10 || echo "未发现超过50MB的大文件"
     
+    echo "✅ 大文件检查完成"
     echo "========================================"
 }
 
@@ -917,6 +1356,7 @@ workflow_step6_check_toolchain_dir() {
     
     check_toolchain_dir
     
+    echo "✅ 工具链目录检查完成"
     echo "========================================"
 }
 
@@ -928,6 +1368,7 @@ workflow_step7_init_toolchain_dir() {
     
     init_toolchain_dir
     
+    echo "✅ 工具链目录初始化完成"
     echo "========================================"
 }
 
@@ -939,6 +1380,7 @@ workflow_step8_setup_environment() {
     
     setup_environment
     
+    echo "✅ 编译环境设置完成"
     echo "========================================"
 }
 
@@ -950,6 +1392,7 @@ workflow_step9_create_build_dir() {
     
     create_build_dir
     
+    echo "✅ 构建目录创建完成"
     echo "========================================"
 }
 
@@ -966,6 +1409,7 @@ workflow_step10_init_build_env() {
     
     initialize_build_env "$device_name" "$version_selection" "$config_mode" "$extra_packages"
     
+    echo "✅ 构建环境初始化完成"
     echo "========================================"
 }
 
@@ -983,6 +1427,7 @@ workflow_step11_show_config() {
     echo "  目标平台: $TARGET/$SUBTARGET"
     echo "  构建目录: $BUILD_DIR"
     
+    echo "✅ 配置显示完成"
     echo "========================================"
 }
 
@@ -994,50 +1439,86 @@ workflow_step13_configure_feeds() {
     
     configure_feeds
     
+    echo "✅ Feeds配置完成"
     echo "========================================"
 }
 
-# 步骤24：下载依赖包
-workflow_step24_download_dependencies() {
+# 步骤20：备份配置
+workflow_step20_backup_config() {
     echo "========================================"
-    echo "📥 步骤24：下载依赖包"
-    echo "========================================"
-    
-    download_dependencies
-    
-    echo "========================================"
-}
-
-# 步骤27：编译前的空间检查
-workflow_step27_final_space_check() {
-    echo "========================================"
-    echo "💽 步骤27：编译前的空间检查"
+    echo "💾 步骤20：备份配置"
     echo "========================================"
     
-    pre_build_space_check
+    load_env
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
-    echo "========================================"
-}
-
-# 步骤28：编译固件
-workflow_step28_build_firmware() {
-    echo "========================================"
-    echo "🔨 步骤28：编译固件"
-    echo "========================================"
+    # 确保备份目录存在
+    mkdir -p "$REPO_ROOT/firmware-config/config-backup"
     
-    build_firmware "true"
+    # 备份到仓库目录
+    backup_file="$REPO_ROOT/firmware-config/config-backup/config_${DEVICE}_${SELECTED_BRANCH}_${CONFIG_MODE}_$(date +%Y%m%d_%H%M%S).config"
+    
+    cp ".config" "$backup_file"
+    echo "✅ 配置文件备份到: $backup_file"
     
     echo "========================================"
 }
 
-# 步骤29：保存通用工具链
-workflow_step29_save_essential_toolchain() {
+# 步骤21：修复网络
+workflow_step21_fix_network() {
     echo "========================================"
-    echo "💾 步骤29：保存通用工具链"
+    echo "🌐 步骤21：修复网络"
     echo "========================================"
     
-    save_essential_toolchain
+    cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
+    echo "设置git配置..."
+    git config --global http.postBuffer 524288000
+    git config --global http.lowSpeedLimit 0
+    git config --global http.lowSpeedTime 999999
+    
+    echo "设置环境变量..."
+    export GIT_SSL_NO_VERIFY=1
+    export PYTHONHTTPSVERIFY=0
+    export CURL_SSL_NO_VERIFY=1
+    
+    echo "✅ 网络环境修复完成"
+    echo "========================================"
+}
+
+# 步骤23：检查工具链状态
+workflow_step23_check_toolchain_status() {
+    echo "========================================"
+    echo "📊 步骤23：检查工具链状态"
+    echo "========================================"
+    
+    load_env
+    cd $BUILD_DIR/openwrt
+    
+    echo "检查工具链状态..."
+    
+    if [ -d "staging_dir" ]; then
+        echo "✅ staging_dir 目录存在"
+        
+        # 查找所有工具链目录
+        local toolchain_dirs=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null)
+        local toolchain_count=$(echo "$toolchain_dirs" | wc -l)
+        
+        echo "找到 $toolchain_count 个工具链目录"
+        
+        if [ $toolchain_count -gt 0 ]; then
+            echo "$toolchain_dirs" | while read dir; do
+                echo "  🔧 工具链: $(basename $dir)"
+                echo "    大小: $(du -sh "$dir" 2>/dev/null | cut -f1 || echo '未知')"
+            done
+        else
+            echo "⚠️  构建目录中没有找到标准格式的工具链目录"
+        fi
+    else
+        echo "❌ staging_dir 目录不存在"
+    fi
+    
+    echo "✅ 工具链状态检查完成"
     echo "========================================"
 }
 
@@ -1057,40 +1538,15 @@ workflow_step31_error_analysis() {
     echo ""
     echo "=== 内存使用情况 ==="
     free -h
+    echo ""
+    echo "=== 最后构建日志片段 ==="
+    if [ -f "$BUILD_DIR/openwrt/build.log" ]; then
+        tail -20 "$BUILD_DIR/openwrt/build.log"
+    else
+        echo "构建日志不存在"
+    fi
     
-    echo "========================================"
-}
-
-# 步骤32：编译后空间检查
-workflow_step32_post_build_space_check() {
-    echo "========================================"
-    echo "📊 步骤32：编译后空间检查"
-    echo "========================================"
-    
-    post_build_space_check
-    
-    echo "========================================"
-}
-
-# 步骤33：固件文件检查
-workflow_step33_check_firmware_files() {
-    echo "========================================"
-    echo "📦 步骤33：固件文件检查"
-    echo "========================================"
-    
-    check_firmware_files
-    
-    echo "========================================"
-}
-
-# 步骤37：清理目录
-workflow_step37_cleanup() {
-    echo "========================================"
-    echo "🧹 步骤37：清理目录"
-    echo "========================================"
-    
-    cleanup
-    
+    echo "✅ 错误分析完成"
     echo "========================================"
 }
 
@@ -1106,6 +1562,12 @@ main() {
         "initialize_build_env")
             initialize_build_env "$2" "$3" "$4"
             ;;
+        "add_turboacc_support")
+            add_turboacc_support
+            ;;
+        "install_turboacc_packages")
+            install_turboacc_packages
+            ;;
         "configure_feeds")
             configure_feeds
             ;;
@@ -1114,6 +1576,12 @@ main() {
             ;;
         "generate_config")
             generate_config "$2"
+            ;;
+        "verify_usb_config")
+            verify_usb_config
+            ;;
+        "check_usb_drivers_integrity")
+            check_usb_drivers_integrity
             ;;
         "apply_config")
             apply_config
@@ -1124,14 +1592,17 @@ main() {
         "load_toolchain")
             load_toolchain
             ;;
-        "check_toolchain_completeness")
-            check_toolchain_completeness
+        "integrate_custom_files")
+            integrate_custom_files
             ;;
-        "save_essential_toolchain")
-            save_essential_toolchain
+        "pre_build_error_check")
+            pre_build_error_check
             ;;
         "build_firmware")
             build_firmware "$2"
+            ;;
+        "save_essential_toolchain")
+            save_essential_toolchain
             ;;
         "post_build_space_check")
             post_build_space_check
@@ -1148,12 +1619,21 @@ main() {
         "check_toolchain_dir")
             check_toolchain_dir
             ;;
+        "check_toolchain_completeness")
+            check_toolchain_completeness
+            ;;
         *)
             echo "可用命令:"
+            echo ""
             echo "  构建命令:"
             echo "    setup_environment, create_build_dir, initialize_build_env"
             echo "    configure_feeds, generate_config, apply_config, download_dependencies"
             echo "    load_toolchain, build_firmware, check_firmware_files, cleanup"
+            echo ""
+            echo "  功能命令:"
+            echo "    add_turboacc_support, install_turboacc_packages"
+            echo "    verify_usb_config, check_usb_drivers_integrity"
+            echo "    integrate_custom_files, pre_build_error_check"
             echo ""
             echo "  工具链命令:"
             echo "    init_toolchain_dir, check_toolchain_dir, check_toolchain_completeness"
