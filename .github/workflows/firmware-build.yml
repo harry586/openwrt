@@ -116,7 +116,12 @@ jobs:
           echo "=== 下载源代码 ==="
           if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
             chmod +x firmware-config/scripts/build_firmware_main.sh
-            firmware-config/scripts/build_firmware_main.sh workflow_main step1_download_source "${{ github.workspace }}"
+            # 改为检查是否已经存在源代码，而不是重复克隆
+            if [ ! -d "/mnt/openwrt-build/openwrt" ]; then
+              firmware-config/scripts/build_firmware_main.sh workflow_main step1_download_source "/mnt/openwrt-build"
+            else
+              echo "✅ 源代码已存在，跳过下载"
+            fi
           else
             echo "❌ 错误: 未找到构建脚本"
             exit 1
