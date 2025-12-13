@@ -1,5 +1,5 @@
 #!/bin/bash
-# OpenWrt智能构建主脚本 - 修复版本
+# OpenWrt智能构建主脚本 - 修复权限版本
 
 set -e
 
@@ -385,38 +385,70 @@ setup_environment() {
     
     log_info "启用ccache..."
     export CCACHE_DIR="$BUILD_DIR/.ccache"
+    # 在创建ccache目录前确保构建目录存在且有权限
+    create_build_dir
     mkdir -p "$CCACHE_DIR"
     ccache -M 5G
     
     log_success "编译环境设置完成"
 }
 
-# 创建构建目录（修复版本）
+# 创建构建目录（修复权限版本）
 create_build_dir() {
     log_info "创建构建目录..."
     
+    # 首先检查/mnt目录是否存在且有权限
     if [ ! -d "/mnt" ]; then
-        log_info "创建/mnt目录..."
-        sudo mkdir -p /mnt
+        log_warn "/mnt目录不存在，尝试创建..."
+        # 在GitHub Actions中可能需要使用root权限
+        sudo mkdir -p /mnt 2>/dev/null || {
+            log_warn "无法创建/mnt目录，尝试使用当前用户权限..."
+            mkdir -p /mnt 2>/dev/null || log_error "创建/mnt目录失败"
+        }
     fi
     
-    sudo chmod 777 /mnt 2>/dev/null || true
+    # 设置/mnt目录权限（在可能的情况下）
+    sudo chmod 777 /mnt 2>/dev/null || {
+        log_warn "无法设置/mnt目录权限，尝试继续..."
+        chmod 777 /mnt 2>/dev/null || true
+    }
     
+    # 创建构建目录
     if [ ! -d "$BUILD_DIR" ]; then
         log_info "创建构建目录: $BUILD_DIR"
-        sudo mkdir -p "$BUILD_DIR"
-        sudo chown -R $USER:$USER "$BUILD_DIR"
-        sudo chmod 755 "$BUILD_DIR"
+        sudo mkdir -p "$BUILD_DIR" 2>/dev/null || {
+            log_warn "使用sudo创建目录失败，尝试普通用户权限..."
+            mkdir -p "$BUILD_DIR" 2>/dev/null || log_error "创建构建目录失败"
+        }
     fi
     
-    # 确保当前用户有访问权限
+    # 确保构建目录有正确权限
+    log_info "设置构建目录权限..."
+    sudo chown -R $(whoami):$(whoami) "$BUILD_DIR" 2>/dev/null || {
+        log_warn "无法更改目录所有权，尝试设置权限..."
+        sudo chmod -R 777 "$BUILD_DIR" 2>/dev/null || {
+            chmod -R 777 "$BUILD_DIR" 2>/dev/null || log_warn "设置目录权限失败，但继续尝试..."
+        }
+    }
+    
+    # 验证目录可写
     if [ ! -w "$BUILD_DIR" ]; then
-        log_warn "构建目录不可写，尝试修复权限..."
-        sudo chown -R $USER:$USER "$BUILD_DIR"
-        sudo chmod 755 "$BUILD_DIR"
+        log_error "构建目录不可写: $BUILD_DIR"
+        log_info "尝试最终修复..."
+        # 最终尝试：使用当前用户权限重新创建
+        rm -rf "$BUILD_DIR" 2>/dev/null || true
+        mkdir -p "$BUILD_DIR" || {
+            log_error "无法创建可写的构建目录"
+            exit 1
+        }
     fi
     
-    log_success "构建目录: $BUILD_DIR"
+    log_success "构建目录创建完成: $BUILD_DIR"
+    
+    # 显示目录权限
+    log_info "目录权限信息:"
+    ls -ld /mnt 2>/dev/null | awk '{print "  /mnt权限: "$1" 用户:"$3" 组:"$4}'
+    ls -ld "$BUILD_DIR" 2>/dev/null | awk '{print "  构建目录权限: "$1" 用户:"$3" 组:"$4}'
     
     local available_space=$(df -h "$BUILD_DIR" | tail -1 | awk '{print $4}')
     log_info "可用空间: $available_space"
@@ -614,6 +646,9 @@ initialize_build_env() {
             DEVICE="$device_name"
             ;;
     esac
+    
+    # 确保构建目录存在
+    create_build_dir
     
     cat > "$ENV_FILE" << EOF
 SELECTED_BRANCH="$SELECTED_BRANCH"
@@ -1109,7 +1144,17 @@ cleanup() {
             log_info "配置文件备份到: /tmp/openwrt_backup/"
         fi
         
-        sudo rm -rf $BUILD_DIR || log_warn "清理构建目录失败"
+        # 在GitHub Actions中，使用普通用户权限清理
+        if [ -n "$GITHUB_ACTIONS" ]; then
+            rm -rf $BUILD_DIR 2>/dev/null || {
+                log_warn "普通权限清理失败，尝试继续..."
+                # 尝试删除内容但保留目录
+                find $BUILD_DIR -mindepth 1 -delete 2>/dev/null || true
+            }
+        else
+            sudo rm -rf $BUILD_DIR || log_warn "清理构建目录失败"
+        fi
+        
         log_success "构建目录已清理"
     else
         log_info "构建目录不存在，无需清理"
