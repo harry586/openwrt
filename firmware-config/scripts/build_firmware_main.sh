@@ -1,5 +1,5 @@
 #!/bin/bash
-# OpenWrt智能构建主脚本
+# OpenWrt智能构建主脚本 - 修复版本
 
 set -e
 
@@ -391,7 +391,7 @@ setup_environment() {
     log_success "编译环境设置完成"
 }
 
-# 创建构建目录
+# 创建构建目录（修复版本）
 create_build_dir() {
     log_info "创建构建目录..."
     
@@ -403,11 +403,18 @@ create_build_dir() {
     sudo chmod 777 /mnt 2>/dev/null || true
     
     if [ ! -d "$BUILD_DIR" ]; then
-        log_info "创建构建目录..."
+        log_info "创建构建目录: $BUILD_DIR"
         sudo mkdir -p "$BUILD_DIR"
+        sudo chown -R $USER:$USER "$BUILD_DIR"
+        sudo chmod 755 "$BUILD_DIR"
     fi
     
-    sudo chmod 777 "$BUILD_DIR" 2>/dev/null || true
+    # 确保当前用户有访问权限
+    if [ ! -w "$BUILD_DIR" ]; then
+        log_warn "构建目录不可写，尝试修复权限..."
+        sudo chown -R $USER:$USER "$BUILD_DIR"
+        sudo chmod 755 "$BUILD_DIR"
+    fi
     
     log_success "构建目录: $BUILD_DIR"
     
