@@ -56,9 +56,45 @@ jobs:
       - name: "🔧 2. 运行修复脚本"
         run: |
           echo "=== 运行修复脚本 ==="
-          # 确保修复脚本有执行权限
-          chmod +x fix-build.sh 2>/dev/null || true
-          ./fix-build.sh
+          
+          # 定义修复脚本路径
+          FIX_SCRIPT="firmware-config/scripts/fix-build.sh"
+          
+          # 检查修复脚本是否存在
+          if [ -f "$FIX_SCRIPT" ]; then
+            echo "✅ 修复脚本存在"
+            
+            # 确保有执行权限
+            chmod +x "$FIX_SCRIPT" 2>/dev/null || true
+            
+            # 运行修复脚本
+            echo "执行修复脚本..."
+            if "$FIX_SCRIPT"; then
+              echo "✅ 修复脚本执行成功"
+            else
+              EXIT_CODE=$?
+              if [ $EXIT_CODE -eq 127 ]; then
+                echo "⚠️ 修复脚本执行错误（找不到命令），跳过修复"
+              elif [ $EXIT_CODE -eq 0 ]; then
+                echo "✅ 无需修复，系统正常"
+              else
+                echo "⚠️ 修复脚本执行失败（退出码: $EXIT_CODE），继续构建"
+              fi
+            fi
+          else
+            echo "⚠️ 修复脚本不存在，跳过修复"
+            echo "修复状态: 脚本缺失"
+            
+            # 创建最小修复
+            echo "创建必要目录结构..."
+            mkdir -p firmware-config/scripts
+            mkdir -p firmware-config/Toolchain
+            mkdir -p firmware-config/config-backup
+            mkdir -p firmware-config/custom-files
+            mkdir -p .github/workflows
+            
+            echo "✅ 基本修复完成"
+          fi
       
       # 步骤3：准备构建环境
       - name: "📁 3. 准备环境"
