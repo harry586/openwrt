@@ -1,4 +1,4 @@
- name: OpenWrt 智能固件构建工作流（完整版）
+name: OpenWrt 智能固件构建工作流（完整版）
 
 on:
   workflow_dispatch:
