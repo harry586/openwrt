@@ -30,137 +30,132 @@ handle_error() {
     exit 1
 }
 
-# ========== 工作流步骤函数（35个步骤完整版） ==========
+# ========== 工作流步骤函数（36个步骤完整版） ==========
 
 workflow_main() {
     case $1 in
         # 阶段1：初始化和修复
-        "step3_prepare_environment")
-            echo "步骤3：准备构建环境"
-            mkdir -p firmware-config/scripts
-            mkdir -p firmware-config/Toolchain
-            mkdir -p firmware-config/config-backup
-            mkdir -p firmware-config/custom-files
-            echo "✅ 环境准备完成"
+        "step4_prepare_environment")
+            workflow_step4_prepare_environment
             ;;
         
-        "step4_setup_environment")
+        "step5_setup_environment")
             setup_environment
             ;;
         
-        "step5_create_build_dir")
+        "step6_create_build_dir")
             create_build_dir
             ;;
         
-        "step6_check_toolchain_dir")
+        "step7_check_toolchain_dir")
             check_toolchain_dir
             ;;
         
-        "step7_init_build_env")
-            workflow_step7_init_build_env "$2" "$3" "$4" "$5"
+        "step8_init_build_env")
+            workflow_step8_init_build_env "$2" "$3" "$4" "$5"
             ;;
         
-        "step8_show_config")
-            workflow_step8_show_config
+        "step9_show_config")
+            workflow_step9_show_config
             ;;
         
         # 阶段3：源码管理
-        "step9_download_source")
+        "step10_download_source")
             download_openwrt_source
             ;;
         
         # 阶段4：配置生成
-        "step10_add_turboacc_support")
+        "step11_add_turboacc_support")
             add_turboacc_support
             ;;
         
-        "step11_configure_feeds")
+        "step12_configure_feeds")
             configure_feeds
             ;;
         
-        "step12_install_turboacc_packages")
+        "step13_install_turboacc_packages")
             install_turboacc_packages
             ;;
         
-        "step13_space_check")
+        "step14_space_check")
             pre_build_space_check
             ;;
         
-        "step14_generate_config")
+        "step15_generate_config")
             generate_config "$2"
             ;;
         
-        "step15_verify_usb_config")
+        "step16_verify_usb_config")
             verify_usb_config
             ;;
         
-        "step16_check_usb_drivers_integrity")
+        "step17_check_usb_drivers_integrity")
             check_usb_drivers_integrity
             ;;
         
-        "step17_apply_config")
+        "step18_apply_config")
             apply_config
             ;;
         
-        "step18_backup_config")
-            workflow_step18_backup_config
+        "step19_backup_config")
+            workflow_step19_backup_config
             ;;
         
         # 阶段5：工具链和依赖
-        "step19_fix_network")
-            workflow_step19_fix_network
+        "step20_fix_network")
+            workflow_step20_fix_network
             ;;
         
-        "step20_load_toolchain")
+        "step21_load_toolchain")
             load_toolchain
             ;;
         
-        "step21_check_toolchain_status")
-            workflow_step21_check_toolchain_status
+        "step22_check_toolchain_status")
+            workflow_step22_check_toolchain_status
             ;;
         
-        "step22_download_dependencies")
+        "step23_download_dependencies")
             download_dependencies
             ;;
         
-        "step23_integrate_custom_files")
+        "step24_integrate_custom_files")
             integrate_custom_files
             ;;
         
         # 阶段6：构建前准备
-        "step24_pre_build_error_check")
+        "step25_pre_build_error_check")
             pre_build_error_check
             ;;
         
-        "step25_final_space_check")
+        "step26_final_space_check")
             pre_build_space_check
             ;;
         
         # 阶段7：构建固件
-        "step27_build_firmware")
+        "step28_build_firmware")
             build_firmware "$2"
             ;;
         
         # 阶段8：构建后处理
-        "step28_build_analysis")
-            workflow_step28_build_analysis "$2"
+        "step29_build_analysis")
+            workflow_step29_build_analysis "$2"
             ;;
         
-        "step29_post_build_space_check")
+        "step30_post_build_space_check")
             post_build_space_check
             ;;
         
-        "step30_check_firmware_files")
+        "step31_check_firmware_files")
             check_firmware_files
             ;;
         
         # 阶段9：清理和总结
-        "step34_cleanup")
+        "step35_cleanup")
             cleanup
             ;;
         
-        "step35_final_summary")
-            workflow_step35_final_summary "$2"
+        "step36_final_summary")
+            workflow_step36_final_summary "$2"
             ;;
         
         *)
@@ -171,15 +166,38 @@ workflow_main() {
 
 # ========== 具体步骤实现 ==========
 
-# 步骤7：初始化构建环境
-workflow_step7_init_build_env() {
+# 步骤4：准备构建环境
+workflow_step4_prepare_environment() {
+    echo "========================================"
+    echo "📁 步骤4：准备构建环境"
+    echo "========================================"
+    
+    echo "创建必要目录结构..."
+    mkdir -p firmware-config/scripts
+    mkdir -p firmware-config/Toolchain/common
+    mkdir -p firmware-config/Toolchain/configs
+    mkdir -p firmware-config/config-backup
+    mkdir -p firmware-config/custom-files
+    
+    echo "✅ 环境准备完成"
+    echo "目录结构:"
+    echo "  firmware-config/scripts/"
+    echo "  firmware-config/Toolchain/common/"
+    echo "  firmware-config/Toolchain/configs/"
+    echo "  firmware-config/config-backup/"
+    echo "  firmware-config/custom-files/"
+    echo "========================================"
+}
+
+# 步骤8：初始化构建环境
+workflow_step8_init_build_env() {
     local device_name="$1"
     local version_selection="$2"
     local config_mode="$3"
     local extra_packages="${4:-}"
     
     echo "========================================"
-    echo "🚀 步骤7：初始化构建环境"
+    echo "🚀 步骤8：初始化构建环境"
     echo "========================================"
     
     initialize_build_env "$device_name" "$version_selection" "$config_mode" "$extra_packages"
@@ -188,10 +206,10 @@ workflow_step7_init_build_env() {
     echo "========================================"
 }
 
-# 步骤8：显示配置
-workflow_step8_show_config() {
+# 步骤9：显示配置
+workflow_step9_show_config() {
     echo "========================================"
-    echo "⚡ 步骤8：显示配置"
+    echo "⚡ 步骤9：显示配置"
     echo "========================================"
     
     load_env
@@ -210,10 +228,10 @@ workflow_step8_show_config() {
     echo "========================================"
 }
 
-# 步骤18：备份配置
-workflow_step18_backup_config() {
+# 步骤19：备份配置
+workflow_step19_backup_config() {
     echo "========================================"
-    echo "💾 步骤18：备份配置"
+    echo "💾 步骤19：备份配置"
     echo "========================================"
     
     load_env
@@ -229,10 +247,10 @@ workflow_step18_backup_config() {
     echo "========================================"
 }
 
-# 步骤19：修复网络
-workflow_step19_fix_network() {
+# 步骤20：修复网络
+workflow_step20_fix_network() {
     echo "========================================"
-    echo "🌐 步骤19：修复网络"
+    echo "🌐 步骤20：修复网络"
     echo "========================================"
     
     cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
@@ -241,7 +259,6 @@ workflow_step19_fix_network() {
     git config --global http.postBuffer 524288000
     git config --global http.lowSpeedLimit 0
     git config --global http.lowSpeedTime 999999
-    git config --global core.compression 0
     
     echo "设置环境变量..."
     export GIT_SSL_NO_VERIFY=1
@@ -252,10 +269,10 @@ workflow_step19_fix_network() {
     echo "========================================"
 }
 
-# 步骤21：检查工具链状态
-workflow_step21_check_toolchain_status() {
+# 步骤22：检查工具链状态
+workflow_step22_check_toolchain_status() {
     echo "========================================"
-    echo "📊 步骤21：检查工具链状态"
+    echo "📊 步骤22：检查工具链状态"
     echo "========================================"
     
     load_env
@@ -270,15 +287,6 @@ workflow_step21_check_toolchain_status() {
         local toolchain_count=$(echo "$toolchain_dirs" | wc -l)
         
         echo "找到 $toolchain_count 个工具链目录"
-        
-        if [ $toolchain_count -gt 0 ]; then
-            echo "$toolchain_dirs" | while read dir; do
-                echo "  🔧 工具链: $(basename $dir)"
-                echo "    大小: $(du -sh "$dir" 2>/dev/null | cut -f1 || echo '未知')"
-            done
-        else
-            echo "⚠️  构建目录中没有找到标准格式的工具链目录"
-        fi
     else
         echo "❌ staging_dir 目录不存在"
     fi
@@ -287,12 +295,12 @@ workflow_step21_check_toolchain_status() {
     echo "========================================"
 }
 
-# 步骤28：构建分析
-workflow_step28_build_analysis() {
+# 步骤29：构建分析
+workflow_step29_build_analysis() {
     local build_status="$1"
     
     echo "========================================"
-    echo "📊 步骤28：构建分析"
+    echo "📊 步骤29：构建分析"
     echo "========================================"
     
     echo "📅 分析时间: $(date)"
@@ -306,12 +314,6 @@ workflow_step28_build_analysis() {
         
         echo "❌ 错误数量: $error_count"
         echo "⚠️ 警告数量: $warning_count"
-        
-        if [ $error_count -gt 0 ]; then
-            echo ""
-            echo "最后3个错误:"
-            grep -i "error:" "$BUILD_DIR/openwrt/build.log" | tail -3
-        fi
     else
         echo "❌ 构建日志不存在"
     fi
@@ -320,12 +322,12 @@ workflow_step28_build_analysis() {
     echo "========================================"
 }
 
-# 步骤35：最终总结
-workflow_step35_final_summary() {
+# 步骤36：最终总结
+workflow_step36_final_summary() {
     local build_status="$1"
     
     echo "========================================"
-    echo "📈 步骤35：最终总结"
+    echo "📈 步骤36：最终总结"
     echo "========================================"
     
     echo "🏁 构建完成"
@@ -348,7 +350,7 @@ workflow_step35_final_summary() {
     echo "========================================"
 }
 
-# ========== 核心功能函数（保持原有实现） ==========
+# ========== 核心功能函数 ==========
 
 # 设置编译环境
 setup_environment() {
