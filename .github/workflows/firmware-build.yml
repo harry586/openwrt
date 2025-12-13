@@ -29,9 +29,9 @@ on:
         description: "🔧 使用修复脚本修复环境"
         required: false
         type: boolean
-        default: true
+        default: false
       save_toolchain_to_repo:
-        description: "💾 提交工具链到仓库 (节省下次编译时间)"
+        description: "💾 提交工具链到仓库"
         required: false
         type: boolean
         default: true
