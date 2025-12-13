@@ -1,6 +1,5 @@
 #!/bin/bash
-# OpenWrt智能构建主脚本（构建功能版）
-# 修复脚本独立存在，不包含修复逻辑
+# OpenWrt智能构建主脚本（完整实现版）
 
 set -e
 
@@ -72,27 +71,43 @@ setup_environment() {
     log_success "编译环境设置完成"
 }
 
-# 创建构建目录
+# 创建构建目录（增强权限修复）
 create_build_dir() {
     log_info "创建构建目录..."
     
-    # 确保/mnt目录存在并有适当权限
     if [ ! -d "/mnt" ]; then
         log_info "创建/mnt目录..."
         sudo mkdir -p /mnt
     fi
     
-    # 设置/mnt目录权限（如果可能）
-    sudo chmod 777 /mnt 2>/dev/null || log_warn "无法修改/mnt目录权限，将继续尝试"
+    local mnt_permissions=$(stat -c "%a" /mnt 2>/dev/null || echo "未知")
+    if [ "$mnt_permissions" != "777" ] && [ "$mnt_permissions" != "755" ]; then
+        log_info "修复/mnt目录权限 (当前: $mnt_permissions)..."
+        sudo chmod 777 /mnt 2>/dev/null || {
+            log_warn "无法使用sudo修复/mnt权限，尝试其他方法"
+            chmod 777 /mnt 2>/dev/null || true
+        }
+    fi
     
-    # 创建构建目录并设置权限
-    sudo mkdir -p "$BUILD_DIR"
-    sudo chmod 777 "$BUILD_DIR"
+    if [ ! -d "$BUILD_DIR" ]; then
+        log_info "创建构建目录..."
+        sudo mkdir -p "$BUILD_DIR"
+    fi
+    
+    local build_permissions=$(stat -c "%a" "$BUILD_DIR" 2>/dev/null || echo "未知")
+    if [ "$build_permissions" != "777" ] && [ "$build_permissions" != "755" ]; then
+        log_info "修复构建目录权限 (当前: $build_permissions)..."
+        sudo chmod 777 "$BUILD_DIR" 2>/dev/null || {
+            log_warn "无法使用sudo修复构建目录权限，尝试其他方法"
+            chmod 777 "$BUILD_DIR" 2>/dev/null || true
+        }
+    fi
+    
+    sudo chown -R $USER:$USER "$BUILD_DIR" 2>/dev/null || true
     
     log_success "构建目录: $BUILD_DIR"
-    log_info "构建目录权限: $(ls -ld $BUILD_DIR)"
+    log_info "构建目录权限: $(stat -c "%a" "$BUILD_DIR" 2>/dev/null || echo '未知')"
     
-    # 检查磁盘空间
     local available_space=$(df -h "$BUILD_DIR" | tail -1 | awk '{print $4}')
     log_info "可用空间: $available_space"
 }
@@ -105,34 +120,25 @@ init_toolchain_dir() {
     
     mkdir -p "$TOOLCHAIN_DIR"
     
-    # 创建说明文件
     cat > "$TOOLCHAIN_DIR/README.md" << 'EOF'
 # OpenWrt 编译工具链目录
 
 ## 说明
-此目录用于存放通用且必要的工具链文件，不存储完整的平台特定工具链。
-
-## 管理策略
-1. 保留通用编译工具（如gcc、binutils等）
-2. 平台特定工具链在编译时自动下载
-3. 避免Git LFS配额问题
+此目录用于存放通用且必要的工具链文件。
 
 ## 目录结构
-- README.md - 本文件
-- .gitkeep - 保持目录结构
 - common/ - 通用工具链组件
 - configs/ - 工具链配置
 
-## 通用工具链内容
-- 基础编译工具（ccache, gcc, binutils等）
-- 常用库文件
-- 交叉编译工具链框架
+## 权限说明
+所有目录和文件应该具有可执行权限。
 EOF
     
-    # 创建必要目录结构
     mkdir -p "$TOOLCHAIN_DIR/common"
     mkdir -p "$TOOLCHAIN_DIR/configs"
     touch "$TOOLCHAIN_DIR/.gitkeep"
+    
+    chmod -R 755 "$TOOLCHAIN_DIR"
     
     log_success "工具链目录初始化完成"
 }
@@ -144,11 +150,9 @@ check_toolchain_dir() {
     if [ -d "$TOOLCHAIN_DIR" ]; then
         log_success "工具链目录存在: $TOOLCHAIN_DIR"
         
-        # 显示目录内容
         echo "目录结构:"
         find "$TOOLCHAIN_DIR" -maxdepth 2 -type d | sort
         
-        # 检查通用工具链
         if [ -d "$TOOLCHAIN_DIR/common" ]; then
             local common_files=$(find "$TOOLCHAIN_DIR/common" -type f 2>/dev/null | wc -l)
             log_info "通用工具链文件: $common_files 个"
@@ -167,28 +171,22 @@ load_toolchain() {
     
     cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
-    # 确保构建目录存在
     mkdir -p staging_dir
     
-    # 检查是否有现有的工具链
     local existing_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
     if [ -n "$existing_toolchain" ]; then
         log_success "发现现有工具链，将复用: $existing_toolchain"
         return 0
     fi
     
-    # 检查仓库中是否有通用工具链
     if [ -d "$TOOLCHAIN_DIR/common" ] && [ -n "$(ls -A "$TOOLCHAIN_DIR/common" 2>/dev/null)" ]; then
         log_info "发现通用工具链，尝试加载..."
         
-        # 创建工具链目录
         local toolchain_name="toolchain-common-$(date +%s)"
         mkdir -p "staging_dir/$toolchain_name"
         
-        # 复制通用工具链文件
         cp -r "$TOOLCHAIN_DIR/common/"* "staging_dir/$toolchain_name/" 2>/dev/null || true
         
-        # 检查是否复制成功
         if [ -n "$(ls -A "staging_dir/$toolchain_name" 2>/dev/null)" ]; then
             log_success "通用工具链加载成功"
             log_info "工具链大小: $(du -sh "staging_dir/$toolchain_name" 2>/dev/null | cut -f1 || echo '未知')"
@@ -199,7 +197,6 @@ load_toolchain() {
         log_info "未找到通用工具链，将在编译时自动下载"
     fi
     
-    # 设置工具链环境变量
     export STAGING_DIR="$BUILD_DIR/openwrt/staging_dir"
     
     log_success "工具链环境设置完成"
@@ -211,13 +208,11 @@ save_essential_toolchain() {
     
     cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
-    # 只保存构建目录中存在的通用工具链
     if [ ! -d "staging_dir" ]; then
         log_warn "构建目录中没有工具链，跳过保存"
         return 0
     fi
     
-    # 查找工具链目录
     local staging_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
     
     if [ -z "$staging_toolchain" ]; then
@@ -227,17 +222,13 @@ save_essential_toolchain() {
     
     log_info "找到工具链: $staging_toolchain"
     
-    # 确保目标目录存在
     mkdir -p "$TOOLCHAIN_DIR/common"
     
-    # 只保存必要的通用文件
     local essential_files=0
     
-    # 保存编译器等关键文件
     if [ -d "$staging_toolchain/bin" ]; then
         log_info "保存通用编译工具..."
         
-        # 查找并保存常用的编译器工具
         local tools=("ccache" "gcc" "g++" "ld" "as" "ar" "nm" "objcopy" "objdump" "ranlib" "strip")
         for tool in "${tools[@]}"; do
             if find "$staging_toolchain/bin" -name "*$tool*" -type f -exec cp -v {} "$TOOLCHAIN_DIR/common/" \; 2>/dev/null; then
@@ -246,14 +237,12 @@ save_essential_toolchain() {
         done
     fi
     
-    # 保存配置文件
     if [ -f "$BUILD_DIR/openwrt/.config" ]; then
         cp "$BUILD_DIR/openwrt/.config" "$TOOLCHAIN_DIR/configs/build_config.txt"
         log_info "保存构建配置文件"
         essential_files=$((essential_files + 1))
     fi
     
-    # 保存工具链信息
     cat > "$TOOLCHAIN_DIR/configs/toolchain_info.txt" << EOF
 # 通用工具链信息
 保存时间: $(date)
@@ -280,7 +269,6 @@ check_toolchain_completeness() {
     load_env
     cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
-    # 检查构建目录中的工具链
     local toolchain_dir=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
     
     if [ -z "$toolchain_dir" ]; then
@@ -288,11 +276,9 @@ check_toolchain_completeness() {
         return 1
     fi
     
-    # 验证工具链完整性
     if [ -d "$toolchain_dir" ]; then
         log_success "找到工具链目录: $toolchain_dir"
         
-        # 检查关键目录
         local critical_dirs=("bin" "lib" "include" "usr")
         local missing_dirs=0
         
@@ -305,7 +291,6 @@ check_toolchain_completeness() {
             fi
         done
         
-        # 检查编译器
         if [ -d "$toolchain_dir/bin" ]; then
             local compilers=$(find "$toolchain_dir/bin" -name "*gcc*" 2>/dev/null | wc -l)
             log_info "找到 $compilers 个编译器文件"
@@ -340,7 +325,6 @@ download_openwrt_source() {
     
     cd "$BUILD_DIR"
     
-    # 根据分支选择下载对应的OpenWrt版本
     local openwrt_url="https://github.com/openwrt/openwrt.git"
     local branch_name=""
     
@@ -352,22 +336,18 @@ download_openwrt_source() {
         branch_name="master"
     fi
     
-    # 检查是否已经存在OpenWrt源码
     if [ -d "$BUILD_DIR/openwrt" ] && [ -f "$BUILD_DIR/openwrt/feeds.conf.default" ]; then
         log_success "OpenWrt源码已存在，跳过下载"
         return 0
     fi
     
-    # 清理旧的源码目录
     if [ -d "$BUILD_DIR/openwrt" ]; then
         log_info "清理旧的源码目录..."
         rm -rf "$BUILD_DIR/openwrt"
     fi
     
-    # 确保在正确目录下载
     cd "$BUILD_DIR"
     
-    # 下载OpenWrt源码
     log_info "正在下载OpenWrt源码: $branch_name"
     git clone --depth 1 --branch "$branch_name" "$openwrt_url" "openwrt"
     
@@ -396,7 +376,6 @@ initialize_build_env() {
     log_info "配置模式: $config_mode"
     log_info "额外插件: $extra_packages"
     
-    # 设置版本分支
     if [ "$version_selection" = "23.05" ]; then
         SELECTED_BRANCH="openwrt-23.05"
     elif [ "$version_selection" = "21.02" ]; then
@@ -405,7 +384,6 @@ initialize_build_env() {
         SELECTED_BRANCH="$version_selection"
     fi
     
-    # 设备到目标的映射
     case "$device_name" in
         "ac42u")
             TARGET="ipq40xx"
@@ -429,7 +407,6 @@ initialize_build_env() {
             ;;
     esac
     
-    # 保存环境变量到文件
     cat > "$ENV_FILE" << EOF
 # 构建环境变量
 SELECTED_BRANCH="$SELECTED_BRANCH"
@@ -442,7 +419,6 @@ BUILD_DIR="$BUILD_DIR"
 REPO_ROOT="$REPO_ROOT"
 EOF
     
-    # 下载OpenWrt源代码
     download_openwrt_source
     
     log_success "构建环境初始化完成"
@@ -481,19 +457,15 @@ workflow_step31_build_analysis() {
         echo "✅ 构建目录存在"
         echo "📊 目录大小: $(du -sh $BUILD_DIR 2>/dev/null | cut -f1 || echo '未知')"
         
-        # 检查OpenWrt源码目录
         if [ -d "$BUILD_DIR/openwrt" ]; then
             echo "📁 OpenWrt源码目录存在"
             
-            # 检查构建日志
             if [ -f "$BUILD_DIR/openwrt/build.log" ]; then
                 echo "📄 构建日志存在 ($(ls -lh $BUILD_DIR/openwrt/build.log | awk '{print $5}'))"
                 
-                # 分析构建日志
                 echo ""
                 echo "=== 构建日志分析 ==="
                 
-                # 统计错误和警告
                 local error_count=$(grep -c -i "error:" "$BUILD_DIR/openwrt/build.log" 2>/dev/null || echo "0")
                 local warning_count=$(grep -c -i "warning:" "$BUILD_DIR/openwrt/build.log" 2>/dev/null || echo "0")
                 local failed_count=$(grep -c -i "failed" "$BUILD_DIR/openwrt/build.log" 2>/dev/null || echo "0")
@@ -502,53 +474,45 @@ workflow_step31_build_analysis() {
                 echo "⚠️ 警告数量: $warning_count"
                 echo "🚫 失败数量: $failed_count"
                 
-                # 显示前5个错误
                 if [ $error_count -gt 0 ]; then
                     echo ""
                     echo "=== 前5个错误 ==="
                     grep -i "error:" "$BUILD_DIR/openwrt/build.log" | head -5
                 fi
                 
-                # 显示前5个警告
                 if [ $warning_count -gt 0 ]; then
                     echo ""
                     echo "=== 前5个警告 ==="
                     grep -i "warning:" "$BUILD_DIR/openwrt/build.log" | head -5
                 fi
                 
-                # 检查常见问题
                 echo ""
                 echo "=== 常见问题检查 ==="
                 
-                # 检查内存不足
                 if grep -q -i "out of memory\|oom\|killed" "$BUILD_DIR/openwrt/build.log" 2>/dev/null; then
                     echo "❌ 发现内存不足问题"
                 else
                     echo "✅ 未发现内存不足问题"
                 fi
                 
-                # 检查磁盘空间
                 if grep -q -i "no space left\|disk full" "$BUILD_DIR/openwrt/build.log" 2>/dev/null; then
                     echo "❌ 发现磁盘空间问题"
                 else
                     echo "✅ 未发现磁盘空间问题"
                 fi
                 
-                # 检查网络问题
                 if grep -q -i "connection.*failed\|timeout\|network" "$BUILD_DIR/openwrt/build.log" 2>/dev/null; then
                     echo "❌ 发现网络问题"
                 else
                     echo "✅ 未发现网络问题"
                 fi
                 
-                # 检查工具链问题
                 if grep -q -i "toolchain\|compiler.*not found" "$BUILD_DIR/openwrt/build.log" 2>/dev/null; then
                     echo "❌ 发现工具链问题"
                 else
                     echo "✅ 未发现工具链问题"
                 fi
                 
-                # 检查依赖问题
                 if grep -q -i "dependency\|requires\|depends" "$BUILD_DIR/openwrt/build.log" 2>/dev/null; then
                     echo "⚠️ 发现依赖问题"
                 else
@@ -558,7 +522,6 @@ workflow_step31_build_analysis() {
                 echo "❌ 构建日志不存在"
             fi
             
-            # 检查固件文件
             if [ -d "$BUILD_DIR/openwrt/bin/targets" ]; then
                 echo ""
                 echo "=== 固件文件检查 ==="
@@ -568,7 +531,6 @@ workflow_step31_build_analysis() {
                 if [ $firmware_count -gt 0 ]; then
                     echo "✅ 固件生成成功"
                     
-                    # 显示固件文件大小
                     find "$BUILD_DIR/openwrt/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) -exec ls -lh {} \; 2>/dev/null | head -3
                 else
                     echo "❌ 未生成固件文件"
@@ -618,14 +580,12 @@ generate_config() {
     
     rm -f .config .config.old
     
-    # 基础目标配置
     echo "CONFIG_TARGET_${TARGET}=y" > .config
     echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
     echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" >> .config
     echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
     echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
     
-    # 基础包
     echo "CONFIG_PACKAGE_busybox=y" >> .config
     echo "CONFIG_PACKAGE_base-files=y" >> .config
     echo "CONFIG_PACKAGE_dropbear=y" >> .config
@@ -641,7 +601,6 @@ generate_config() {
     echo "CONFIG_PACKAGE_ubus=y" >> .config
     echo "CONFIG_PACKAGE_uci=y" >> .config
     
-    # USB驱动（通用）
     echo "# USB驱动" >> .config
     echo "CONFIG_PACKAGE_kmod-usb-core=y" >> .config
     echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
@@ -650,17 +609,14 @@ generate_config() {
     echo "CONFIG_PACKAGE_kmod-usb-storage-extras=y" >> .config
     echo "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config
     
-    # 文件系统支持
     echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
     echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
     echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
     
-    # 网络基础
     echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
     echo "CONFIG_PACKAGE_iptables=y" >> .config
     echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> .config
     
-    # 根据配置模式添加功能
     if [ "$CONFIG_MODE" = "normal" ]; then
         echo "# 正常模式插件" >> .config
         echo "CONFIG_PACKAGE_luci=y" >> .config
@@ -670,7 +626,6 @@ generate_config() {
         echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
     fi
     
-    # 处理额外插件
     if [ -n "$extra_packages" ]; then
         log_info "处理额外安装插件: $extra_packages"
         IFS=';' read -ra EXTRA_PKGS <<< "$extra_packages"
@@ -748,7 +703,6 @@ verify_usb_config() {
     echo "=== USB配置状态 ==="
     echo ""
     
-    # 检查关键USB驱动
     local usb_drivers=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-storage")
     local missing_count=0
     
@@ -808,12 +762,10 @@ check_usb_drivers_integrity() {
         "kmod-usb-storage"
     )
     
-    # 根据平台添加专用驱动
     if [ "$TARGET" = "ipq40xx" ]; then
         required_drivers+=("kmod-usb-dwc3")
     fi
     
-    # 检查所有必需驱动
     for driver in "${required_drivers[@]}"; do
         if ! grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
             log_warn "缺失驱动: $driver"
@@ -823,7 +775,6 @@ check_usb_drivers_integrity() {
         fi
     done
     
-    # 如果有缺失驱动，尝试修复
     if [ ${#missing_drivers[@]} -gt 0 ]; then
         log_warn "发现 ${#missing_drivers[@]} 个缺失的USB驱动"
         log_info "正在尝试修复..."
@@ -861,7 +812,6 @@ apply_config() {
     echo "=== 详细配置状态 ==="
     echo ""
     
-    # 1. 关键USB配置状态
     echo "🔧 关键USB配置状态:"
     local critical_usb_drivers=(
         "kmod-usb-core" "kmod-usb2" "kmod-usb3" 
@@ -880,7 +830,6 @@ apply_config() {
         fi
     done
     
-    # 2. 平台专用驱动检查
     echo ""
     echo "🔧 平台专用USB驱动状态:"
     if [ "$TARGET" = "ipq40xx" ]; then
@@ -907,7 +856,6 @@ apply_config() {
         done
     fi
     
-    # 3. 文件系统支持检查
     echo ""
     echo "🔧 文件系统支持状态:"
     local fs_drivers=("kmod-fs-ext4" "kmod-fs-vfat" "kmod-fs-exfat" "kmod-fs-ntfs3")
@@ -919,7 +867,6 @@ apply_config() {
         fi
     done
     
-    # 4. 网络和基础功能
     echo ""
     echo "🔧 网络和基础功能:"
     local network_features=(
@@ -936,7 +883,6 @@ apply_config() {
         fi
     done
     
-    # 5. 统计信息
     echo ""
     echo "📊 配置统计信息:"
     local enabled_count=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
@@ -944,26 +890,22 @@ apply_config() {
     echo "  ✅ 已启用插件: $enabled_count 个"
     echo "  ❌ 已禁用插件: $disabled_count 个"
     
-    # 6. 显示具体被禁用的插件（分类显示）
     if [ $disabled_count -gt 0 ]; then
         echo ""
         echo "📋 分类显示被禁用的插件:"
         
-        # 网络相关
         echo "  🔌 网络相关:"
         grep "^# CONFIG_PACKAGE_.* is not set$" .config | grep -i "dnsmasq\|firewall\|dropbear" | head -5 | while read line; do
             local pkg_name=$(echo $line | sed 's/# CONFIG_PACKAGE_//;s/ is not set//')
             echo "    ❌ $pkg_name"
         done
         
-        # USB相关
         echo "  🔧 USB相关:"
         grep "^# CONFIG_PACKAGE_.* is not set$" .config | grep -i "usb" | head -5 | while read line; do
             local pkg_name=$(echo $line | sed 's/# CONFIG_PACKAGE_//;s/ is not set//')
             echo "    ❌ $pkg_name"
         done
         
-        # 文件系统
         echo "  💾 文件系统:"
         grep "^# CONFIG_PACKAGE_.* is not set$" .config | grep -i "fs-\|ntfs\|ext\|vfat" | head -5 | while read line; do
             local pkg_name=$(echo $line | sed 's/# CONFIG_PACKAGE_//;s/ is not set//')
@@ -976,26 +918,22 @@ apply_config() {
         fi
     fi
     
-    # 7. 修复缺失的关键USB驱动
     if [ $missing_usb -gt 0 ]; then
         echo ""
         echo "🚨 修复缺失的关键USB驱动:"
         
-        # 确保kmod-usb-core启用
         if ! grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" .config; then
             echo "  修复: 启用 kmod-usb-core"
             sed -i 's/^# CONFIG_PACKAGE_kmod-usb-core is not set$/CONFIG_PACKAGE_kmod-usb-core=y/' .config
             echo "  ✅ 已修复 kmod-usb-core"
         fi
         
-        # 确保kmod-usb2启用
         if ! grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config; then
             echo "  修复: 启用 kmod-usb2"
             echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
             echo "  ✅ 已修复 kmod-usb2"
         fi
         
-        # 确保kmod-usb-storage启用
         if ! grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" .config; then
             echo "  修复: 启用 kmod-usb-storage"
             echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
@@ -1021,7 +959,6 @@ integrate_custom_files() {
     
     log_info "🔌 集成自定义文件..."
     
-    # 检查是否有自定义文件目录
     local custom_files_dir="$REPO_ROOT/firmware-config/custom-files"
     
     if [ -d "$custom_files_dir" ]; then
@@ -1032,18 +969,14 @@ integrate_custom_files() {
             log_info "  - $(basename "$file") ($size)"
         done
         
-        # 创建files目录（如果不存在）
         mkdir -p files
         
-        # 复制文件到构建目录
         log_info "复制自定义文件..."
         cp -r "$custom_files_dir/"* files/ 2>/dev/null || true
         
-        # 检查复制结果
         local copied_count=$(find files -type f 2>/dev/null | wc -l || echo "0")
         log_success "自定义文件复制完成，共复制 $copied_count 个文件"
         
-        # 显示复制的文件
         log_info "复制的文件:"
         find files -type f | head -5 | while read file; do
             log_info "  - $file"
@@ -1063,13 +996,11 @@ pre_build_error_check() {
     
     cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
-    # 检查.config文件
     if [ ! -f ".config" ]; then
         log_error ".config 文件不存在"
         exit 1
     fi
     
-    # 检查关键目录
     local critical_dirs=("staging_dir" "build_dir" "dl" "feeds" "package")
     for dir in "${critical_dirs[@]}"; do
         if [ ! -d "$dir" ]; then
@@ -1077,7 +1008,6 @@ pre_build_error_check() {
         fi
     done
     
-    # 检查工具链
     log_info "检查工具链状态..."
     if [ -d "staging_dir" ]; then
         local toolchain_dirs=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | wc -l)
@@ -1090,7 +1020,6 @@ pre_build_error_check() {
         log_warn "警告: staging_dir 目录不存在"
     fi
     
-    # 检查磁盘空间
     log_info "检查磁盘空间..."
     local available_space=$(df -m "$BUILD_DIR" | tail -1 | awk '{print $4}')
     local available_gb=$((available_space / 1024))
@@ -1103,7 +1032,6 @@ pre_build_error_check() {
         log_success "磁盘空间充足"
     fi
     
-    # 检查关键文件
     local critical_files=(".config" "Makefile" "rules.mk" "Config.in")
     for file in "${critical_files[@]}"; do
         if [ ! -f "$file" ]; then
@@ -1124,7 +1052,6 @@ configure_feeds() {
     
     log_info "配置Feeds..."
     
-    # 使用immortalwrt的feeds
     if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
         FEEDS_BRANCH="openwrt-23.05"
     else
@@ -1149,19 +1076,15 @@ download_dependencies() {
     
     log_info "下载依赖包..."
     
-    # 检查依赖包目录
     if [ ! -d "dl" ]; then
         mkdir -p dl
     fi
     
-    # 显示现有依赖包
     local existing_deps=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
     log_info "现有依赖包数量: $existing_deps 个"
     
-    # 下载依赖包
     make -j1 download V=s 2>&1 | tee download.log || handle_error "下载依赖包失败"
     
-    # 检查下载结果
     local downloaded_deps=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
     log_info "下载后依赖包数量: $downloaded_deps 个"
     
@@ -1182,14 +1105,11 @@ build_firmware() {
     
     log_info "编译固件..."
     
-    # 加载工具链
     load_toolchain
     
-    # 获取CPU核心数
     local cpu_cores=$(nproc)
     local make_jobs=$cpu_cores
     
-    # 如果内存小于4GB，减少并行任务
     local total_mem=$(free -m | awk '/^Mem:/{print $2}')
     if [ $total_mem -lt 4096 ]; then
         make_jobs=$((cpu_cores / 2))
@@ -1199,7 +1119,6 @@ build_firmware() {
         log_warn "内存较低(${total_mem}MB)，减少并行任务到 $make_jobs"
     fi
     
-    # 开始编译
     if [ "$enable_cache" = "true" ]; then
         log_info "启用编译缓存，使用 $make_jobs 个并行任务"
         make -j$make_jobs V=s 2>&1 | tee build.log
@@ -1213,12 +1132,10 @@ build_firmware() {
     if [ $BUILD_EXIT_CODE -eq 0 ]; then
         log_success "固件编译成功"
         
-        # 检查生成的固件
         if [ -d "bin/targets" ]; then
             local firmware_count=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
             log_success "生成固件文件: $firmware_count 个"
             
-            # 显示固件文件
             find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | head -3 | while read file; do
                 log_info "固件: $file ($(du -h "$file" | cut -f1))"
             done
@@ -1226,7 +1143,6 @@ build_firmware() {
     else
         log_error "编译失败，退出代码: $BUILD_EXIT_CODE"
         
-        # 分析失败原因
         if [ -f "build.log" ]; then
             log_error "编译错误摘要:"
             grep -i "Error\|error:" build.log | head -5
@@ -1246,11 +1162,9 @@ check_firmware_files() {
     if [ -d "bin/targets" ]; then
         log_success "固件目录存在"
         
-        # 显示固件文件
         echo "=== 生成的固件文件 ==="
         find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) -exec ls -lh {} \;
         
-        # 统计固件文件
         local firmware_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
         log_success "固件文件数: $firmware_files 个"
     else
@@ -1268,16 +1182,13 @@ pre_build_space_check() {
     echo "当前目录: $(pwd)"
     echo "构建目录: $BUILD_DIR"
     
-    # 磁盘信息
     echo "=== 磁盘使用情况 ==="
     df -h
     
-    # 检查可用空间
     local available_space=$(df /mnt --output=avail | tail -1)
     local available_gb=$((available_space / 1024 / 1024))
     log_info "/mnt 可用空间: ${available_gb}G"
     
-    # 编译所需空间估算
     local estimated_space=15
     if [ $available_gb -lt $estimated_space ]; then
         log_warn "可用空间(${available_gb}G)可能不足，建议至少${estimated_space}G"
@@ -1293,7 +1204,6 @@ post_build_space_check() {
     echo "=== 磁盘使用情况 ==="
     df -h
     
-    # 构建目录空间
     if [ -d "$BUILD_DIR" ]; then
         local build_dir_usage=$(du -sh $BUILD_DIR 2>/dev/null | cut -f1) || echo "无法获取构建目录大小"
         echo "构建目录大小: $build_dir_usage"
@@ -1309,14 +1219,12 @@ cleanup() {
     if [ -d "$BUILD_DIR" ]; then
         log_info "备份配置文件和日志..."
         
-        # 备份.config文件
         if [ -f "$BUILD_DIR/openwrt/.config" ]; then
             mkdir -p /tmp/openwrt_backup
             cp "$BUILD_DIR/openwrt/.config" "/tmp/openwrt_backup/config_$(date +%Y%m%d_%H%M%S).config"
             log_info "配置文件备份到: /tmp/openwrt_backup/"
         fi
         
-        # 清理构建目录
         sudo rm -rf $BUILD_DIR || log_warn "清理构建目录失败"
         log_success "构建目录已清理"
     else
@@ -1324,11 +1232,12 @@ cleanup() {
     fi
 }
 
-# ========== 工作流步骤函数 ==========
+# ========== 工作流步骤函数（完整38个步骤） ==========
 
 # 工作流主调度
 workflow_main() {
     case $1 in
+        # 阶段1：初始化和修复（步骤1-3）
         "step3_prepare_environment")
             echo "步骤3：准备构建环境"
             mkdir -p firmware-config/scripts
@@ -1343,29 +1252,41 @@ workflow_main() {
         "step5_create_build_dir")
             create_build_dir
             ;;
+        
+        # 阶段2：环境设置（步骤4-8）
         "step6_check_toolchain_dir")
             check_toolchain_dir
             ;;
-        "step7_download_source")
-            echo "步骤7：下载源代码"
-            echo "此步骤需要具体实现"
+        "step7_init_build_env")
+            workflow_step7_init_build_env "$2" "$3" "$4" "$5"
             ;;
-        "step8_upload_source_package")
-            echo "步骤8：上传源代码压缩包"
+        "step8_show_config")
+            workflow_step8_show_config
+            ;;
+        
+        # 阶段3：源码管理（步骤9-11）
+        "step9_download_source")
+            download_openwrt_source
+            ;;
+        "step10_upload_source_package")
+            echo "步骤10：准备源代码压缩包"
             mkdir -p /tmp/source-upload
-            echo "✅ 准备上传目录"
+            if [ -d "/mnt/openwrt-build/openwrt" ]; then
+                cd /mnt/openwrt-build
+                tar -czf /tmp/source-upload/openwrt-source.tar.gz openwrt/
+                echo "✅ 源代码压缩包创建完成"
+                echo "大小: $(du -h /tmp/source-upload/openwrt-source.tar.gz | cut -f1)"
+            else
+                echo "⚠️ 源代码目录不存在"
+            fi
             ;;
-        "step10_init_build_env")
-            workflow_step10_init_build_env "$2" "$3" "$4" "$5"
-            ;;
-        "step11_show_config")
-            workflow_step11_show_config
-            ;;
+        
+        # 阶段4：配置生成（步骤12-20）
         "step12_add_turboacc_support")
             add_turboacc_support
             ;;
         "step13_configure_feeds")
-            workflow_step13_configure_feeds
+            configure_feeds
             ;;
         "step14_install_turboacc_packages")
             install_turboacc_packages
@@ -1388,6 +1309,8 @@ workflow_main() {
         "step20_backup_config")
             workflow_step20_backup_config
             ;;
+        
+        # 阶段5：工具链和依赖（步骤21-25）
         "step21_fix_network")
             workflow_step21_fix_network
             ;;
@@ -1403,12 +1326,16 @@ workflow_main() {
         "step25_integrate_custom_files")
             integrate_custom_files
             ;;
+        
+        # 阶段6：构建前检查（步骤26-27）
         "step26_pre_build_error_check")
             pre_build_error_check
             ;;
         "step27_final_space_check")
             pre_build_space_check
             ;;
+        
+        # 阶段7：构建固件（步骤28-30）
         "step28_build_firmware")
             build_firmware "$2"
             ;;
@@ -1419,6 +1346,8 @@ workflow_main() {
             echo "步骤30：提交修复结果到仓库"
             echo "此步骤需要手动执行或配置GitHub Token"
             ;;
+        
+        # 阶段8：构建后处理（步骤31-36）
         "step31_build_analysis")
             workflow_step31_build_analysis "$2"
             ;;
@@ -1428,6 +1357,8 @@ workflow_main() {
         "step33_check_firmware_files")
             check_firmware_files
             ;;
+        
+        # 阶段9：清理和总结（步骤37-38）
         "step37_cleanup")
             cleanup
             ;;
@@ -1436,6 +1367,7 @@ workflow_main() {
             echo "构建状态: $2"
             echo "构建完成时间: $(date)"
             ;;
+        
         *)
             main "$@"
             ;;
@@ -1444,15 +1376,15 @@ workflow_main() {
 
 # ========== 工作流具体步骤实现 ==========
 
-# 步骤10：初始化构建环境
-workflow_step10_init_build_env() {
+# 步骤7：初始化构建环境
+workflow_step7_init_build_env() {
     local device_name="$1"
     local version_selection="$2"
     local config_mode="$3"
     local extra_packages="${4:-}"
     
     echo "========================================"
-    echo "🚀 步骤10：初始化构建环境"
+    echo "🚀 步骤7：初始化构建环境"
     echo "========================================"
     
     initialize_build_env "$device_name" "$version_selection" "$config_mode" "$extra_packages"
@@ -1461,10 +1393,10 @@ workflow_step10_init_build_env() {
     echo "========================================"
 }
 
-# 步骤11：显示配置
-workflow_step11_show_config() {
+# 步骤8：显示配置
+workflow_step8_show_config() {
     echo "========================================"
-    echo "⚡ 步骤11：显示配置"
+    echo "⚡ 步骤8：显示配置"
     echo "========================================"
     
     load_env
@@ -1479,18 +1411,6 @@ workflow_step11_show_config() {
     echo "========================================"
 }
 
-# 步骤13：配置Feeds
-workflow_step13_configure_feeds() {
-    echo "========================================"
-    echo "📦 步骤13：配置Feeds"
-    echo "========================================"
-    
-    configure_feeds
-    
-    echo "✅ Feeds配置完成"
-    echo "========================================"
-}
-
 # 步骤20：备份配置
 workflow_step20_backup_config() {
     echo "========================================"
@@ -1500,10 +1420,8 @@ workflow_step20_backup_config() {
     load_env
     cd $BUILD_DIR/openwrt || handle_error "进入OpenWrt源码目录失败"
     
-    # 确保备份目录存在
     mkdir -p "$REPO_ROOT/firmware-config/config-backup"
     
-    # 备份到仓库目录
     backup_file="$REPO_ROOT/firmware-config/config-backup/config_${DEVICE}_${SELECTED_BRANCH}_${CONFIG_MODE}_$(date +%Y%m%d_%H%M%S).config"
     
     cp ".config" "$backup_file"
@@ -1548,7 +1466,6 @@ workflow_step23_check_toolchain_status() {
     if [ -d "staging_dir" ]; then
         echo "✅ staging_dir 目录存在"
         
-        # 查找所有工具链目录
         local toolchain_dirs=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null)
         local toolchain_count=$(echo "$toolchain_dirs" | wc -l)
         
@@ -1644,6 +1561,9 @@ main() {
             ;;
         *)
             echo "可用命令:"
+            echo ""
+            echo "  工作流命令:"
+            echo "    workflow_main [步骤名] [参数] - 执行特定工作流步骤"
             echo ""
             echo "  构建命令:"
             echo "    setup_environment, create_build_dir, initialize_build_env"
