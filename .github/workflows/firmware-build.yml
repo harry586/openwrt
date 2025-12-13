@@ -108,10 +108,17 @@ jobs:
           echo "=== 设置编译环境 ==="
           firmware-config/scripts/build_firmware_main.sh workflow_main step4_setup_environment
       
-      # 步骤5：创建构建目录
+      # 步骤5：创建构建目录（修复权限问题）
       - name: "📁 5. 创建构建目录"
         run: |
           echo "=== 创建构建目录 ==="
+          
+          # 预先创建/mnt目录并设置权限
+          echo "准备/mnt目录..."
+          sudo mkdir -p /mnt
+          sudo chmod 777 /mnt || true
+          
+          # 运行主脚本创建构建目录
           firmware-config/scripts/build_firmware_main.sh workflow_main step5_create_build_dir
       
       # 步骤6：检查工具链目录
