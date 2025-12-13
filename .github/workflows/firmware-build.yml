@@ -56,9 +56,9 @@ jobs:
       - name: "🔧 2. 运行修复脚本"
         run: |
           echo "=== 运行修复脚本 ==="
-          echo "设置脚本执行权限..."
-          chmod +x firmware-config/scripts/build_firmware_main.sh 2>/dev/null || true
-          firmware-config/scripts/build_firmware_main.sh workflow_main step2_run_fix_script
+          # 确保修复脚本有执行权限
+          chmod +x fix-build.sh 2>/dev/null || true
+          ./fix-build.sh
       
       # 步骤3：准备构建环境
       - name: "📁 3. 准备环境"
