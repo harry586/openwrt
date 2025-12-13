@@ -1,7 +1,7 @@
 #!/bin/bash
-# OpenWrt构建完整修复脚本
+# OpenWrt构建完整修复脚本（增强权限修复版）
 # 位置: firmware-config/scripts/fix-build.sh
-# 功能: 智能检查并修复构建环境
+# 功能: 智能检查并修复构建环境，特别修复目录权限问题
 
 set -e
 
@@ -74,6 +74,7 @@ check_critical_files() {
     # 关键文件列表（相对于仓库根目录）
     local critical_files=(
         "firmware-config/scripts/build_firmware_main.sh"
+        "firmware-config/scripts/fix-build.sh"
         ".github/workflows/firmware-build.yml"
     )
     
@@ -167,6 +168,46 @@ check_toolchain_dir() {
     fi
 }
 
+# 检查构建目录权限（新增）
+check_build_dir_permissions() {
+    local repo_root="$(get_repo_root)"
+    
+    log_info "检查构建目录权限..."
+    
+    # 检查/mnt目录权限
+    if [ -d "/mnt" ]; then
+        local mnt_permissions=$(stat -c "%a" /mnt 2>/dev/null || echo "未知")
+        local mnt_owner=$(stat -c "%U:%G" /mnt 2>/dev/null || echo "未知")
+        log_info "/mnt 目录权限: $mnt_permissions, 所有者: $mnt_owner"
+        
+        if [ "$mnt_permissions" != "777" ] && [ "$mnt_permissions" != "755" ]; then
+            log_warn "/mnt 目录权限不足 (当前: $mnt_permissions)"
+            return 1
+        fi
+    else
+        log_warn "/mnt 目录不存在"
+        return 1
+    fi
+    
+    # 检查构建目录权限
+    if [ -d "/mnt/openwrt-build" ]; then
+        local build_dir_permissions=$(stat -c "%a" /mnt/openwrt-build 2>/dev/null || echo "未知")
+        local build_dir_owner=$(stat -c "%U:%G" /mnt/openwrt-build 2>/dev/null || echo "未知")
+        log_info "构建目录权限: $build_dir_permissions, 所有者: $build_dir_owner"
+        
+        if [ "$build_dir_permissions" != "777" ] && [ "$build_dir_permissions" != "755" ]; then
+            log_warn "构建目录权限不足 (当前: $build_dir_permissions)"
+            return 1
+        fi
+    else
+        log_warn "构建目录不存在"
+        return 0  # 目录不存在不是权限问题
+    fi
+    
+    log_success "✅ 构建目录权限正常"
+    return 0
+}
+
 # ========== 修复函数 ==========
 
 # 修复目录结构
@@ -227,6 +268,7 @@ fix_file_permissions() {
     local critical_files=(
         "firmware-config/scripts/build_firmware_main.sh"
         "firmware-config/scripts/fix-build.sh"
+        "firmware-config/scripts/error_analysis.sh"
     )
     
     for file in "${critical_files[@]}"; do
@@ -243,6 +285,62 @@ fix_file_permissions() {
     else
         log_success "权限修复完成，修复了 $fixed_count 个文件"
     fi
+}
+
+# 修复构建目录权限（新增关键修复）
+fix_build_dir_permissions() {
+    log_info "修复构建目录权限..."
+    
+    local fixed_items=0
+    
+    # 1. 修复/mnt目录权限
+    if [ ! -d "/mnt" ]; then
+        log_info "创建/mnt目录..."
+        sudo mkdir -p /mnt
+        fixed_items=$((fixed_items + 1))
+    fi
+    
+    # 设置/mnt目录权限
+    log_info "设置/mnt目录权限为777..."
+    sudo chmod 777 /mnt 2>/dev/null || {
+        log_warn "无法设置/mnt目录权限，尝试非sudo方式..."
+        chmod 777 /mnt 2>/dev/null || true
+    }
+    fixed_items=$((fixed_items + 1))
+    
+    # 2. 检查并修复构建目录
+    if [ ! -d "/mnt/openwrt-build" ]; then
+        log_info "创建构建目录..."
+        mkdir -p /mnt/openwrt-build
+        fixed_items=$((fixed_items + 1))
+    fi
+    
+    # 设置构建目录权限
+    log_info "设置构建目录权限为777..."
+    chmod 777 /mnt/openwrt-build 2>/dev/null || {
+        log_warn "无法设置构建目录权限，尝试使用sudo..."
+        sudo chmod 777 /mnt/openwrt-build 2>/dev/null || true
+    }
+    fixed_items=$((fixed_items + 1))
+    
+    # 3. 设置所有权（如果是sudo创建的目录）
+    log_info "确保目录所有权正确..."
+    sudo chown -R $USER:$USER /mnt/openwrt-build 2>/dev/null || true
+    fixed_items=$((fixed_items + 1))
+    
+    # 验证修复结果
+    if [ -d "/mnt/openwrt-build" ]; then
+        local permissions=$(stat -c "%a" /mnt/openwrt-build 2>/dev/null || echo "未知")
+        log_info "构建目录权限: $permissions"
+        
+        if [ "$permissions" = "777" ] || [ "$permissions" = "755" ]; then
+            log_success "✅ 构建目录权限修复成功"
+        else
+            log_warn "⚠️ 构建目录权限可能仍有问题 (当前: $permissions)"
+        fi
+    fi
+    
+    log_info "权限修复完成，处理了 $fixed_items 个项目"
 }
 
 # 修复工作流文件
@@ -290,7 +388,7 @@ jobs:
           FIX_SCRIPT="firmware-config/scripts/fix-build.sh"
           if [ -f "$FIX_SCRIPT" ]; then
             chmod +x "$FIX_SCRIPT"
-            "$FIX_SCRIPT"
+            "$FIX_SCRIPT" --fix-build-dir
           else
             echo "⚠️ 修复脚本不存在"
           fi
@@ -314,6 +412,12 @@ EOF
         if ! grep -q "^jobs:" "$workflow_dest"; then
             log_warn "工作流文件缺少jobs字段，修复中..."
             echo -e "\njobs:\n  build:\n    runs-on: ubuntu-22.04" >> "$workflow_dest"
+        fi
+        
+        # 确保修复脚本调用包含--fix-build-dir参数
+        if grep -q '"$FIX_SCRIPT"' "$workflow_dest" && ! grep -q '"$FIX_SCRIPT".*--fix-build-dir' "$workflow_dest"; then
+            log_info "更新工作流以包含构建目录修复..."
+            sed -i 's/"\$FIX_SCRIPT"/"\$FIX_SCRIPT" --fix-build-dir/g' "$workflow_dest"
         fi
         
         log_success "工作流文件修复完成"
@@ -413,6 +517,9 @@ fix_toolchain_dir() {
 ## 目录结构
 - common/ - 通用工具链组件
 - configs/ - 工具链配置
+
+## 权限说明
+所有目录和文件应该具有可执行权限，以便构建系统访问。
 EOF
         log_info "✅ 创建工具链说明文件"
     fi
@@ -420,6 +527,9 @@ EOF
     # 创建.gitkeep文件以保持目录结构
     touch "$toolchain_dir/common/.gitkeep"
     touch "$toolchain_dir/configs/.gitkeep"
+    
+    # 设置目录权限
+    chmod -R 755 "$toolchain_dir" 2>/dev/null || true
     
     log_success "工具链目录修复完成"
 }
@@ -429,23 +539,40 @@ create_fix_record() {
     local repo_root="$(get_repo_root)"
     local record_file="$repo_root/.fix-record.txt"
     
+    local fix_time="$(date '+%Y-%m-%d %H:%M:%S')"
+    local git_status="未知"
+    
+    # 尝试获取Git状态
+    if command -v git &> /dev/null && [ -d "$repo_root/.git" ]; then
+        git_status=$(git log --oneline -1 2>/dev/null || echo "无提交历史")
+    fi
+    
     cat > "$record_file" << EOF
 # OpenWrt构建修复记录
-修复时间: $(date)
+修复时间: $fix_time
 修复脚本: firmware-config/scripts/fix-build.sh
+Git状态: $git_status
 修复内容:
   1. 目录结构修复
   2. 文件权限修复
-  3. 工作流文件修复
-  4. 主构建脚本修复
-  5. 工具链目录修复
+  3. 构建目录权限修复（关键）
+  4. 工作流文件修复
+  5. 主构建脚本修复
+  6. 工具链目录修复
 
 ## 修复详情
-$(date '+%Y-%m-%d %H:%M:%S') - 修复完成
-
+$fix_time - 修复完成
 EOF
     
     log_info "修复记录已保存到: .fix-record.txt"
+    
+    # 显示修复记录
+    echo ""
+    echo "========================================"
+    echo "📝 修复完成报告"
+    echo "========================================"
+    cat "$record_file"
+    echo "========================================"
 }
 
 # ========== 主修复流程 ==========
@@ -470,6 +597,10 @@ run_complete_fix() {
     check_critical_files || check_results=$((check_results + 1))
     check_workflow_format || check_results=$((check_results + 1))
     check_toolchain_dir || check_results=$((check_results + 1))
+    check_build_dir_permissions || {
+        log_warn "⚠️ 构建目录权限问题检测到"
+        check_results=$((check_results + 1))
+    }
     
     echo ""
     
@@ -487,6 +618,10 @@ run_complete_fix() {
     
     # 3. 执行修复
     log_info "=== 执行修复 ==="
+    
+    # 先修复构建目录权限（最关键的问题）
+    fix_build_dir_permissions
+    echo ""
     
     fix_directories
     echo ""
@@ -513,6 +648,7 @@ run_complete_fix() {
     local verify_results=0
     check_directories || verify_results=$((verify_results + 1))
     check_critical_files || verify_results=$((verify_results + 1))
+    check_build_dir_permissions || verify_results=$((verify_results + 1))
     
     echo ""
     
@@ -522,6 +658,41 @@ run_complete_fix() {
     else
         log_warn "⚠️  修复完成，但仍有 $verify_results 个问题未解决"
         echo "修复状态: 部分修复"
+    fi
+    
+    echo "修复时间: $(date)"
+    echo "========================================"
+}
+
+# 运行构建目录专用修复
+run_build_dir_fix() {
+    echo "========================================"
+    echo "🔧 构建目录权限修复（专用）"
+    echo "========================================"
+    
+    log_info "修复构建目录权限..."
+    
+    # 检查当前状态
+    log_info "=== 检查当前状态 ==="
+    check_build_dir_permissions || {
+        log_warn "发现权限问题"
+    }
+    
+    echo ""
+    
+    # 执行修复
+    fix_build_dir_permissions
+    
+    echo ""
+    
+    # 验证修复结果
+    log_info "=== 验证修复结果 ==="
+    if check_build_dir_permissions; then
+        log_success "✅ 构建目录权限修复成功"
+        echo "修复状态: 成功"
+    else
+        log_error "❌ 构建目录权限修复失败"
+        echo "修复状态: 失败"
     fi
     
     echo "修复时间: $(date)"
@@ -540,6 +711,7 @@ handle_arguments() {
             check_critical_files
             check_workflow_format
             check_toolchain_dir
+            check_build_dir_permissions
             echo "检查完成"
             ;;
         "quick")
@@ -547,18 +719,28 @@ handle_arguments() {
             echo "=== 快速修复模式 ==="
             fix_directories
             fix_file_permissions
+            fix_build_dir_permissions
             echo "✅ 快速修复完成"
+            ;;
+        "--fix-build-dir")
+            # 构建目录专用修复
+            run_build_dir_fix
             ;;
         "help"|"--help"|"-h")
             # 帮助信息
-            echo "OpenWrt构建修复脚本"
+            echo "OpenWrt构建修复脚本（增强权限修复版）"
             echo "用法: $0 [选项]"
             echo ""
             echo "选项:"
-            echo "  check     仅检查，不修复"
-            echo "  quick     快速修复（仅目录和权限）"
-            echo "  help      显示此帮助信息"
-            echo "  无参数    完整修复"
+            echo "  check                仅检查，不修复"
+            echo "  quick                快速修复（目录、权限、构建目录）"
+            echo "  --fix-build-dir      构建目录专用修复（解决权限问题）"
+            echo "  help                 显示此帮助信息"
+            echo "  无参数               完整修复"
+            echo ""
+            echo "注意："
+            echo "  如果遇到 'mkdir: cannot create directory' 权限错误，"
+            echo "  请使用: $0 --fix-build-dir"
             ;;
         *)
             # 完整修复模式（默认）
