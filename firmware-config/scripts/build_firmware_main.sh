@@ -1,6 +1,6 @@
 #!/bin/bash
-# OpenWrt智能构建主脚本（完整功能版）
-# 最后更新: 2024-01-16
+# OpenWrt智能构建主脚本（构建功能版）
+# 修复脚本独立存在，不包含修复逻辑
 
 set -e
 
@@ -29,60 +29,6 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 handle_error() {
     log_error "错误发生在: $1"
     exit 1
-}
-
-# ========== 新增函数：步骤2运行修复脚本 ==========
-
-step2_run_fix_script() {
-    echo "========================================"
-    echo "🔧 步骤2：运行修复脚本"
-    echo "========================================"
-    
-    echo "修复时间: $(date)"
-    echo ""
-    
-    # 1. 创建必要目录
-    echo "1. 创建必要目录..."
-    mkdir -p firmware-config/scripts
-    mkdir -p firmware-config/Toolchain
-    mkdir -p firmware-config/config-backup
-    mkdir -p firmware-config/custom-files
-    mkdir -p .github/workflows
-    
-    # 2. 复制工作流文件（保持38个步骤）
-    echo "2. 复制完整工作流文件..."
-    if [ -f "firmware-build.yml" ]; then
-        cp firmware-build.yml .github/workflows/
-        echo "✅ 工作流文件已复制"
-    else
-        echo "⚠️ 原始工作流文件不存在"
-    fi
-    
-    # 3. 确保脚本有执行权限
-    echo "3. 设置脚本执行权限..."
-    if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
-        chmod +x firmware-config/scripts/build_firmware_main.sh
-        echo "✅ 主脚本权限已设置"
-    fi
-    
-    if [ -f "fix-build.sh" ]; then
-        chmod +x fix-build.sh
-        echo "✅ 修复脚本权限已设置"
-    fi
-    
-    find . -name "*.sh" -type f -exec chmod +x {} \; 2>/dev/null || true
-    
-    echo ""
-    echo "✅ 修复完成"
-    echo ""
-    echo "修复内容:"
-    echo "1. ✅ 保持工作流38个步骤完整"
-    echo "2. ✅ 将复杂逻辑移到大脚本中"
-    echo "3. ✅ 修复步骤7的目录冲突问题"
-    echo "4. ✅ 修复USB驱动和正常模式插件"
-    echo "5. ✅ 所有脚本已设置执行权限"
-    echo ""
-    echo "========================================"
 }
 
 # ========== 环境设置函数 ==========
@@ -1371,32 +1317,31 @@ cleanup() {
 # 工作流主调度
 workflow_main() {
     case $1 in
-        "step2_run_fix_script")
-            step2_run_fix_script
+        "step3_prepare_environment")
+            echo "步骤3：准备构建环境"
+            mkdir -p firmware-config/scripts
+            mkdir -p firmware-config/Toolchain
+            mkdir -p firmware-config/config-backup
+            mkdir -p firmware-config/custom-files
+            echo "✅ 环境准备完成"
             ;;
-        "step1_download_source")
-            workflow_step1_download_source "$2"
+        "step4_setup_environment")
+            setup_environment
             ;;
-        "step2_upload_source")
-            workflow_step2_upload_source
-            ;;
-        "step4_install_git_lfs")
-            workflow_step4_install_git_lfs
-            ;;
-        "step5_check_large_files")
-            workflow_step5_check_large_files
+        "step5_create_build_dir")
+            create_build_dir
             ;;
         "step6_check_toolchain_dir")
-            workflow_step6_check_toolchain_dir
+            check_toolchain_dir
             ;;
-        "step7_init_toolchain_dir")
-            workflow_step7_init_toolchain_dir
+        "step7_download_source")
+            echo "步骤7：下载源代码"
+            echo "此步骤需要具体实现"
             ;;
-        "step8_setup_environment")
-            workflow_step8_setup_environment
-            ;;
-        "step9_create_build_dir")
-            workflow_step9_create_build_dir
+        "step8_upload_source_package")
+            echo "步骤8：上传源代码压缩包"
+            mkdir -p /tmp/source-upload
+            echo "✅ 准备上传目录"
             ;;
         "step10_init_build_env")
             workflow_step10_init_build_env "$2" "$3" "$4" "$5"
@@ -1486,146 +1431,6 @@ workflow_main() {
 }
 
 # ========== 工作流具体步骤实现 ==========
-
-# 步骤1：下载完整源代码
-workflow_step1_download_source() {
-    local workspace="$1"
-    
-    echo "========================================"
-    echo "📥 步骤1：下载完整源代码"
-    echo "========================================"
-    
-    # 如果指定了工作空间，切换到该目录
-    if [ -n "$workspace" ] && [ "$workspace" != "." ]; then
-        cd "$workspace"
-    fi
-    
-    # 检查是否已经是git仓库
-    if [ -d ".git" ]; then
-        echo "✅ 当前目录已经是git仓库，跳过克隆"
-        echo "========================================"
-        return 0
-    fi
-    
-    # 克隆完整仓库
-    local repo_url="https://github.com/$GITHUB_REPOSITORY.git"
-    echo "正在克隆仓库: $repo_url"
-    git clone --depth 1 "$repo_url" .
-    
-    if [ ! -d ".git" ]; then
-        log_error "仓库克隆失败，.git目录不存在"
-        exit 1
-    fi
-    
-    echo "✅ 完整仓库克隆完成"
-    echo "========================================"
-}
-
-# 步骤2：立即上传源代码
-workflow_step2_upload_source() {
-    echo "========================================"
-    echo "📤 步骤2：上传源代码"
-    echo "========================================"
-    
-    # 创建源代码压缩包
-    mkdir -p /tmp/source-upload
-    
-    # 创建排除列表
-    echo "firmware-config/Toolchain" > /tmp/exclude-list.txt
-    echo ".git" >> /tmp/exclude-list.txt
-    
-    # 创建压缩包
-    tar --exclude-from=/tmp/exclude-list.txt -czf /tmp/source-upload/source-code.tar.gz .
-    
-    echo "✅ 源代码压缩包创建完成"
-    echo "========================================"
-}
-
-# 步骤4：安装Git LFS和配置
-workflow_step4_install_git_lfs() {
-    echo "========================================"
-    echo "🔧 步骤4：安装Git LFS和配置"
-    echo "========================================"
-    
-    log_info "安装Git LFS..."
-    sudo apt-get update
-    sudo apt-get install -y git-lfs
-    
-    log_info "配置Git..."
-    git config --global user.name "GitHub Actions"
-    git config --global user.email "actions@github.com"
-    git config --global http.postBuffer 524288000
-    
-    log_info "初始化Git LFS..."
-    git lfs install --force
-    
-    log_info "拉取Git LFS文件..."
-    git lfs pull || log_info "Git LFS拉取失败，继续构建..."
-    
-    echo "✅ Git LFS安装和配置完成"
-    echo "========================================"
-}
-
-# 步骤5：大文件检查
-workflow_step5_check_large_files() {
-    echo "========================================"
-    echo "📊 步骤5：大文件检查"
-    echo "========================================"
-    
-    echo "扫描大文件..."
-    find . -type f -size +50M 2>/dev/null | grep -v ".git" | head -10 || echo "未发现超过50MB的大文件"
-    
-    echo "✅ 大文件检查完成"
-    echo "========================================"
-}
-
-# 步骤6：工具链目录检查
-workflow_step6_check_toolchain_dir() {
-    echo "========================================"
-    echo "🗂️ 步骤6：工具链目录检查"
-    echo "========================================"
-    
-    check_toolchain_dir
-    
-    echo "✅ 工具链目录检查完成"
-    echo "========================================"
-}
-
-# 步骤7：初始化工具链目录
-workflow_step7_init_toolchain_dir() {
-    echo "========================================"
-    echo "💾 步骤7：初始化工具链目录"
-    echo "========================================"
-    
-    init_toolchain_dir
-    
-    echo "✅ 工具链目录初始化完成"
-    echo "========================================"
-}
-
-# 步骤8：设置编译环境
-workflow_step8_setup_environment() {
-    echo "========================================"
-    echo "🛠️ 步骤8：设置编译环境"
-    echo "========================================"
-    
-    setup_environment
-    
-    echo "✅ 编译环境设置完成"
-    echo "========================================"
-}
-
-# 步骤9：创建构建目录
-workflow_step9_create_build_dir() {
-    echo "========================================"
-    echo "📁 步骤9：创建构建目录"
-    echo "========================================"
-    
-    create_build_dir
-    
-    echo "✅ 构建目录创建完成"
-    echo "========================================"
-}
 
 # 步骤10：初始化构建环境
 workflow_step10_init_build_env() {
@@ -1845,8 +1650,6 @@ main() {
             echo "  检查命令:"
             echo "    pre_build_space_check, post_build_space_check"
             echo ""
-            echo "  工作流步骤命令:"
-            echo "    以 'workflow_main' 开头，如: workflow_main step2_run_fix_script"
             exit 1
             ;;
     esac
