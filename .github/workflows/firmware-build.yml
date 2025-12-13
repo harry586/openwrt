@@ -1,4 +1,4 @@
-name: OpenWrt 智能固件构建工作流（完整版）
+ name: OpenWrt 智能固件构建工作流（完整版）
 
 on:
   workflow_dispatch:
@@ -56,6 +56,8 @@ jobs:
       - name: "🔧 2. 运行修复脚本"
         run: |
           echo "=== 运行修复脚本 ==="
+          echo "设置脚本执行权限..."
+          chmod +x firmware-config/scripts/build_firmware_main.sh 2>/dev/null || true
           firmware-config/scripts/build_firmware_main.sh workflow_main step2_run_fix_script
       
       # 步骤3：准备构建环境
@@ -230,7 +232,7 @@ jobs:
       
       # 步骤30：提交修复结果
       - name: "💾 30. 提交修复结果到仓库"
-        if: steps.smart_fix.outputs.fix_script_status == 'success' && success()
+        if: success()
         run: |
           echo "=== 提交修复结果 ==="
           firmware-config/scripts/build_firmware_main.sh workflow_main step30_commit_fixes
