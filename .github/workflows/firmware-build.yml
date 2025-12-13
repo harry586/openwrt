@@ -52,10 +52,11 @@ jobs:
         with:
           fetch-depth: 1
       
-      # 步骤2：运行修复脚本
-      - name: "🔧 2. 运行修复脚本"
+      # 步骤2：运行修复脚本（关键修复）
+      - name: "🔧 2. 运行修复脚本（解决权限问题）"
         run: |
           echo "=== 运行修复脚本 ==="
+          echo "解决 'mkdir: cannot create directory' 权限问题..."
           
           # 定义修复脚本路径
           FIX_SCRIPT="firmware-config/scripts/fix-build.sh"
@@ -67,8 +68,16 @@ jobs:
             # 确保有执行权限
             chmod +x "$FIX_SCRIPT" 2>/dev/null || true
             
-            # 运行修复脚本
-            echo "执行修复脚本..."
+            # 首先运行构建目录专用修复
+            echo "执行构建目录权限修复..."
+            if "$FIX_SCRIPT" --fix-build-dir; then
+              echo "✅ 构建目录权限修复成功"
+            else
+              echo "⚠️ 构建目录权限修复可能有问题，继续执行完整修复"
+            fi
+            
+            # 运行完整修复
+            echo "执行完整修复..."
             if "$FIX_SCRIPT"; then
               echo "✅ 修复脚本执行成功"
             else
@@ -82,10 +91,9 @@ jobs:
               fi
             fi
           else
-            echo "⚠️ 修复脚本不存在，跳过修复"
-            echo "修复状态: 脚本缺失"
+            echo "❌ 修复脚本不存在，创建紧急修复..."
             
-            # 创建最小修复
+            # 紧急创建必要目录结构
             echo "创建必要目录结构..."
             mkdir -p firmware-config/scripts
             mkdir -p firmware-config/Toolchain
@@ -93,7 +101,14 @@ jobs:
             mkdir -p firmware-config/custom-files
             mkdir -p .github/workflows
             
-            echo "✅ 基本修复完成"
+            # 紧急修复权限
+            echo "修复构建目录权限..."
+            sudo mkdir -p /mnt
+            sudo chmod 777 /mnt
+            mkdir -p /mnt/openwrt-build
+            chmod 777 /mnt/openwrt-build
+            
+            echo "✅ 紧急修复完成"
           fi
       
       # 步骤3：准备构建环境
@@ -108,15 +123,22 @@ jobs:
           echo "=== 设置编译环境 ==="
           firmware-config/scripts/build_firmware_main.sh workflow_main step4_setup_environment
       
-      # 步骤5：创建构建目录（修复权限问题）
+      # 步骤5：创建构建目录（已修复权限）
       - name: "📁 5. 创建构建目录"
         run: |
           echo "=== 创建构建目录 ==="
           
-          # 预先创建/mnt目录并设置权限
-          echo "准备/mnt目录..."
-          sudo mkdir -p /mnt
-          sudo chmod 777 /mnt || true
+          # 验证权限
+          echo "验证构建目录权限..."
+          if [ -d "/mnt/openwrt-build" ]; then
+            echo "✅ 构建目录已存在"
+            echo "权限: $(stat -c "%a" /mnt/openwrt-build 2>/dev/null || echo '未知')"
+          else
+            echo "⚠️ 构建目录不存在，重新创建..."
+            mkdir -p /mnt/openwrt-build
+            chmod 777 /mnt/openwrt-build
+            echo "✅ 构建目录创建完成"
+          fi
           
           # 运行主脚本创建构建目录
           firmware-config/scripts/build_firmware_main.sh workflow_main step5_create_build_dir
