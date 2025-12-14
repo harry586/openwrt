@@ -45,6 +45,7 @@ if [ -f ".config" ]; then
     if grep -q "CONFIG_USE_MUSL=y" .config; then
         echo "✅ C库: musl (现代OpenWrt默认使用)" >> error_analysis.log
         echo "💡 注意: musl是轻量级C库，适用于嵌入式系统" >> error_analysis.log
+        echo "🔧 说明: 现代OpenWrt/ImmortalWrt默认使用musl，glibc未配置是正常现象" >> error_analysis.log
     elif grep -q "CONFIG_USE_GLIBC=y" .config; then
         echo "✅ C库: glibc (功能完整的C库)" >> error_analysis.log
         echo "💡 注意: glibc功能更完整，但体积较大" >> error_analysis.log
@@ -194,6 +195,12 @@ if [ -f ".config" ]; then
             echo "✅ $config: 已配置" >> error_analysis.log
         else
             echo "⚠️ $config: 未配置" >> error_analysis.log
+            # 特别说明glibc未配置的原因
+            if [ "$config" = "glibc" ]; then
+                echo "     说明: glibc是桌面系统的标准C库，体积较大" >> error_analysis.log
+                echo "     说明: OpenWrt/ImmortalWrt默认使用musl作为轻量级C库" >> error_analysis.log
+                echo "     说明: glibc未配置是正常现象，不影响编译和运行" >> error_analysis.log
+            fi
         fi
     done
     
