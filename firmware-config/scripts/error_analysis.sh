@@ -184,12 +184,12 @@ if [ -f ".config" ]; then
     fi
     
     echo "" >> error_analysis.log
-    echo "=== 工具链配置状态 ===" >> error_analysis.log
-    TOOLCHAIN_CONFIGS=(
+    echo "=== 编译器配置状态 ===" >> error_analysis.log
+    COMPILER_CONFIGS=(
         "gcc" "binutils" "libc" "libgcc" "musl" "glibc"
     )
     
-    for config in "${TOOLCHAIN_CONFIGS[@]}"; do
+    for config in "${COMPILER_CONFIGS[@]}"; do
         if grep -q "CONFIG_PACKAGE_${config}" .config; then
             echo "✅ $config: 已配置" >> error_analysis.log
         else
@@ -241,12 +241,12 @@ echo "" >> error_analysis.log
 echo "=== 23.05版本特定问题分析 ===" >> error_analysis.log
 if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
     echo "🔧 OpenWrt 23.05 常见问题:" >> error_analysis.log
-    echo "1. 工具链不兼容: 23.05可能需要更新的工具链版本" >> error_analysis.log
+    echo "1. 编译器不兼容: 23.05可能需要更新的编译器版本" >> error_analysis.log
     echo "2. 内核版本不同: 23.05使用Linux 5.15，需要不同的内核头文件" >> error_analysis.log
     echo "3. musl版本更新: 可能需要更新的musl C库" >> error_analysis.log
     echo "" >> error_analysis.log
     echo "🛠️ 解决方案:" >> error_analysis.log
-    echo "1. 清理工具链重新下载: rm -rf staging_dir/toolchain-*" >> error_analysis.log
+    echo "1. 清理编译器重新下载: rm -rf staging_dir/compiler-*" >> error_analysis.log
     echo "2. 清理构建目录: rm -rf build_dir/target-*" >> error_analysis.log
     echo "3. 确保使用正确的编译器: arm-openwrt-linux-muslgnueabi-gcc" >> error_analysis.log
     echo "4. 检查内核配置: 确保CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> error_analysis.log
@@ -432,7 +432,7 @@ echo "3. 📦 更新所有 feeds: ./scripts/feeds update -a && ./scripts/feeds i
 echo "4. ⚙️ 检查配置冲突: make defconfig" >> error_analysis.log
 echo "5. 🐛 减少并行任务: make -j2 V=s" >> error_analysis.log
 echo "6. 🌐 检查网络连接和代理设置" >> error_analysis.log
-echo "7. 🔧 检查编译器: 确保 staging_dir/toolchain-* 目录存在且完整" >> error_analysis.log
+echo "7. 🔧 检查编译器: 确保 staging_dir/compiler-* 目录存在且完整" >> error_analysis.log
 echo "8. 🔌 检查USB插件: 确保所有关键USB驱动已启用（当前配置已强制启用）" >> error_analysis.log
 echo "9. 🖥️ 检查平台专用驱动: 根据您的设备平台（高通/雷凌）启用相应驱动" >> error_analysis.log
 echo "10. 💾 检查文件系统支持: 确保NTFS3, ext4, vfat等文件系统驱动已启用" >> error_analysis.log
