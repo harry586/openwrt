@@ -239,7 +239,7 @@ jobs:
             echo "📥 克隆OpenWrt源码..."
             git clone --depth 1 https://github.com/immortalwrt/immortalwrt.git . --branch openwrt-21.02
             
-            # 创建最小配置
+            # 创建最小配置 - 修复EOF语法
             echo "⚙️ 创建编译器构建配置..."
             cat > .config << 'EOF'
 CONFIG_TARGET_ipq40xx=y
@@ -653,12 +653,201 @@ EOF
             echo "✅ 编译前空间充足"
           fi
       
-      # 步骤 21: 编译固件
-      - name: "21. 编译固件"
+      # 步骤 21: 智能编译固件（含编译器检查和重编译）
+      - name: "21. 智能编译固件"
         run: |
-          echo "=== 步骤 21: 编译固件 ==="
+          echo "=== 步骤 21: 智能编译固件 ==="
+          
+          COMPILER_DIR="${{ env.COMPILER_DIR }}"
+          COMPILER_OUTPUT_DIR="$COMPILER_DIR/compiled"
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          
+          echo "🔧 智能编译器检查流程:"
+          
+          # 1. 检查现有编译器是否可用
+          cd "$BUILD_DIR"
+          COMPILER_USABLE=false
+          NEED_RECOMPILE=false
+          
+          if [ -d "$COMPILER_OUTPUT_DIR" ]; then
+            echo "🔍 检查预编译编译器可用性..."
+            
+            # 检查关键文件完整性
+            REQUIRED_FILES=(
+              "bin/arm-openwrt-linux-muslgnueabi-gcc"
+              "bin/arm-openwrt-linux-muslgnueabi-g++"
+              "bin/arm-openwrt-linux-muslgnueabi-ld"
+              "bin/arm-openwrt-linux-muslgnueabi-ar"
+              "bin/arm-openwrt-linux-muslgnueabi-strip"
+              "lib/gcc/arm-openwrt-linux-muslgnueabi/8.4.0/libgcc.a"
+            )
+            
+            missing_files=0
+            for file in "${REQUIRED_FILES[@]}"; do
+              if [ ! -f "$COMPILER_OUTPUT_DIR/$file" ]; then
+                missing_files=$((missing_files + 1))
+              fi
+            done
+            
+            if [ $missing_files -eq 0 ]; then
+              echo "✅ 预编译编译器完整"
+              
+              # 测试编译器是否能正常工作
+              if [ -x "$COMPILER_OUTPUT_DIR/bin/arm-openwrt-linux-muslgnueabi-gcc" ]; then
+                echo "🔧 测试编译器功能..."
+                test_output=$("$COMPILER_OUTPUT_DIR/bin/arm-openwrt-linux-muslgnueabi-gcc" --version 2>&1)
+                if echo "$test_output" | grep -q "gcc"; then
+                  echo "✅ 编译器工作正常"
+                  COMPILER_USABLE=true
+                else
+                  echo "❌ 编译器测试失败"
+                  NEED_RECOMPILE=true
+                fi
+              else
+                echo "❌ 编译器不可执行"
+                NEED_RECOMPILE=true
+              fi
+            else
+              echo "❌ 预编译编译器缺失 $missing_files 个关键文件"
+              NEED_RECOMPILE=true
+            fi
+          else
+            echo "❌ 未找到预编译编译器"
+            NEED_RECOMPILE=true
+          fi
+          
+          # 2. 如果需要重新编译编译器
+          if [ "$NEED_RECOMPILE" = true ]; then
+            echo "🚨 需要重新编译交叉编译器"
+            
+            # 保存当前配置
+            if [ -f ".config" ]; then
+              cp .config .config.backup
+              echo "✅ 备份当前配置"
+            fi
+            
+            # 清理旧编译器目录
+            rm -rf "$COMPILER_OUTPUT_DIR"
+            mkdir -p "$COMPILER_OUTPUT_DIR"
+            
+            # 设置编译器构建配置
+            cat > .config << 'EOF'
+CONFIG_TARGET_ipq40xx=y
+CONFIG_TARGET_ipq40xx_generic=y
+CONFIG_TARGET_ROOTFS_INITRAMFS=y
+CONFIG_EXTERNAL_TOOLCHAIN=y
+CONFIG_USE_MUSL=y
+EOF
+            
+            # 编译编译器
+            echo "🔨 编译交叉编译器..."
+            make toolchain/install -j$(nproc) V=s 2>&1 | tee compiler-rebuild.log
+            
+            if [ $? -eq 0 ] && [ -d "staging_dir/toolchain-"* ]; then
+              echo "✅ 交叉编译器重新编译成功"
+              
+              # 复制编译器到预编译目录
+              cp -r staging_dir/toolchain-* "$COMPILER_OUTPUT_DIR/" 2>/dev/null || true
+              
+              # 检查编译器是否完整
+              if [ -f "$COMPILER_OUTPUT_DIR/bin/arm-openwrt-linux-muslgnueabi-gcc" ]; then
+                COMPILER_USABLE=true
+                
+                # 提交编译器到仓库
+                cd "${{ github.workspace }}"
+                if [ -d "$COMPILER_OUTPUT_DIR" ]; then
+                  echo "📤 准备提交重新编译的编译器到仓库..."
+                  
+                  # 配置Git
+                  git config --global user.email "github-actions@github.com"
+                  git config --global user.name "GitHub Actions"
+                  
+                  # 检查是否有更改
+                  git_status=$(git status --porcelain "firmware-config/build-Compiler-file/compiled/" 2>/dev/null)
+                  
+                  if [ -n "$git_status" ]; then
+                    echo "🔄 检测到编译器更改，正在提交..."
+                    
+                    # 添加文件
+                    git add "firmware-config/build-Compiler-file/compiled/"
+                    
+                    # 与仓库中的版本比较
+                    echo "🔍 比较编译器版本..."
+                    compiler_date=$(date +%Y%m%d_%H%M%S)
+                    git_commit=$(git log -1 --format="%h" -- firmware-config/build-Compiler-file/compiled/ 2>/dev/null || echo "无历史提交")
+                    
+                    # 提交
+                    commit_message="fix: 重新编译交叉编译器 (${{ github.event.inputs.device_name }} - $compiler_date) 之前提交: $git_commit"
+                    git commit -m "$commit_message"
+                    
+                    echo "✅ 编译器已提交到本地仓库"
+                    echo "📝 提交信息: $commit_message"
+                    
+                    # 尝试推送
+                    echo "🚀 推送到远程仓库..."
+                    if git push origin ${GITHUB_REF##*/}; then
+                      echo "🎉 编译器已成功推送到远程仓库！"
+                    else
+                      echo "⚠️ 推送失败，提交已保存在本地"
+                    fi
+                  else
+                    echo "✅ 编译器文件没有更改，无需提交"
+                  fi
+                fi
+              fi
+            else
+              echo "❌ 交叉编译器重新编译失败"
+              echo "📋 编译日志摘要:"
+              tail -20 compiler-rebuild.log 2>/dev/null || echo "无日志"
+            fi
+            
+            # 恢复配置
+            if [ -f ".config.backup" ]; then
+              cp .config.backup .config
+              echo "✅ 恢复原始配置"
+            fi
+          fi
+          
+          # 3. 使用预编译编译器加速构建（如果可用）
+          if [ "$COMPILER_USABLE" = true ]; then
+            echo "🚀 使用预编译的交叉编译器加速构建..."
+            
+            # 如果staging_dir中已有编译器，先备份
+            if [ -d "staging_dir/toolchain-"* ]; then
+              mv staging_dir/toolchain-* staging_dir/toolchain-backup-$(date +%s) 2>/dev/null || true
+            fi
+            
+            # 复制预编译编译器到staging_dir
+            if [ -d "$COMPILER_OUTPUT_DIR/toolchain-"* ]; then
+              cp -r "$COMPILER_OUTPUT_DIR/toolchain-"* staging_dir/
+              echo "✅ 预编译编译器已复制到构建目录"
+            fi
+          else
+            echo "⚠️ 将使用内置的编译器构建流程"
+          fi
+          
+          # 4. 开始编译固件
+          echo "🔨 开始编译固件..."
+          
+          # 获取CPU核心数
+          cpu_cores=$(nproc)
+          make_jobs=$cpu_cores
+          
+          # 如果内存小于4GB，减少并行任务
+          total_mem=$(free -m | awk '/^Mem:/{print $2}')
+          if [ $total_mem -lt 4096 ]; then
+            make_jobs=$((cpu_cores / 2))
+            if [ $make_jobs -lt 1 ]; then
+              make_jobs=1
+            fi
+            echo "⚠️ 内存较低(${total_mem}MB)，减少并行任务到 $make_jobs"
+          fi
+          
           # 启用编译缓存，使用并行编译
+          echo "使用 $make_jobs 个并行任务进行编译..."
           firmware-config/scripts/build_firmware_main.sh build_firmware "true"
+          
+          echo "✅ 智能编译完成"
       
       # 步骤 22: 搜索并打包构建产物
       - name: "22. 搜索并打包构建产物"
