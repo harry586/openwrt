@@ -161,7 +161,7 @@ jobs:
             
             # 检查必要的编译器文件
             echo "🔍 检查必要的编译器文件:"
-            required_compilers=("gcc" "g++" "as" "ld" "ar" "strip" "objcopy" "objdump")
+            required_compilers=("gcc" "g++" "as" "ld" "ar" "strip" "objcopy" "objdump" "nm" "ranlib")
             for compiler in "${required_compilers[@]}"; do
               if find "$COMPILER_DIR" -name "*$compiler*" -type f 2>/dev/null | grep -q .; then
                 echo "  ✅ 找到: $compiler"
@@ -175,10 +175,10 @@ jobs:
             echo "✅ 已创建编译器文件目录: $COMPILER_DIR"
           fi
       
-      # 步骤 6: 下载并立即保存编译器文件到仓库
-      - name: "6. 下载并立即保存编译器文件到仓库"
+      # 步骤 6: 下载并保存编译器文件到仓库
+      - name: "6. 下载并保存编译器文件到仓库"
         run: |
-          echo "=== 步骤 6: 下载并立即保存编译器文件到仓库 ==="
+          echo "=== 步骤 6: 下载并保存编译器文件到仓库 ==="
           
           COMPILER_DIR="${{ env.COMPILER_DIR }}"
           mkdir -p "$COMPILER_DIR"
@@ -221,11 +221,10 @@ jobs:
           echo "📊 当前编译器文件:"
           ls -lh "$COMPILER_DIR" 2>/dev/null || echo "无文件"
           
-          # 立即保存到仓库
-          echo "🔄 立即保存编译器文件到仓库..."
+          # 保存到仓库
+          echo "🔄 保存编译器文件到仓库..."
           
           if [ -d "$COMPILER_DIR" ]; then
-            # 检查是否有新的编译器文件
             file_count=$(find "$COMPILER_DIR" -type f -name "*.tar.*" -o -name "*.gz" 2>/dev/null | wc -l)
             
             if [ $file_count -gt 0 ]; then
@@ -233,33 +232,8 @@ jobs:
               echo "  文件数量: $file_count"
               echo "  目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
               
-              # 显示文件列表
               echo "📋 文件列表:"
               find "$COMPILER_DIR" -type f 2>/dev/null | head -10 || echo "  无文件"
-              
-              # 尝试提交到仓库
-              echo "🚀 尝试提交编译器文件到仓库..."
-              
-              # 配置Git
-              git config --global user.email "github-actions@github.com"
-              git config --global user.name "GitHub Actions"
-              
-              # 添加编译器文件
-              if git add "$COMPILER_DIR"/* 2>/dev/null; then
-                # 检查是否有更改
-                if git diff --cached --quiet; then
-                  echo "ℹ️ 没有新的编译器文件需要提交"
-                else
-                  # 提交更改
-                  git commit -m "build: 保存编译器文件 (${{ github.event.inputs.device_name }} - ${{ github.event.inputs.version_selection }})"
-                  
-                  # 尝试推送（非必须，只是尝试）
-                  echo "📤 编译器文件已保存到本地仓库"
-                  echo "💡 注意：需要手动推送或在后续步骤中推送"
-                fi
-              else
-                echo "⚠️ 无法添加编译器文件到Git"
-              fi
             else
               echo "ℹ️ 编译器目录为空，无需保存"
             fi
@@ -267,7 +241,7 @@ jobs:
             echo "⚠️ 编译器目录不存在"
           fi
           
-          echo "✅ 编译器文件保存流程完成"
+          echo "✅ 编译器文件下载流程完成"
       
       # 步骤 7: 初始空间检查
       - name: "7. 初始空间检查"
@@ -508,11 +482,11 @@ jobs:
           # 启用编译缓存，使用并行编译
           firmware-config/scripts/build_firmware_main.sh build_firmware "true"
       
-      # 步骤 24: 上传构建产物（打包的固件和日志）
-      - name: "24. 上传构建产物（打包的固件和日志）"
+      # 步骤 24: 搜索并打包构建产物
+      - name: "24. 搜索并打包构建产物"
         if: success()
         run: |
-          echo "=== 步骤 24: 上传构建产物 ==="
+          echo "=== 步骤 24: 搜索并打包构建产物 ==="
           cd ${{ env.BUILD_DIR }}
           
           # 创建构建产物目录
