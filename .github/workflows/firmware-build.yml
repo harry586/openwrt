@@ -175,10 +175,10 @@ jobs:
             echo "✅ 已创建编译器文件目录: $COMPILER_DIR"
           fi
       
-      # 步骤 6: 下载必要编译器文件
-      - name: "6. 下载必要编译器文件"
+      # 步骤 6: 下载并立即保存编译器文件到仓库
+      - name: "6. 下载并立即保存编译器文件到仓库"
         run: |
-          echo "=== 步骤 6: 下载必要编译器文件 ==="
+          echo "=== 步骤 6: 下载并立即保存编译器文件到仓库 ==="
           
           COMPILER_DIR="${{ env.COMPILER_DIR }}"
           mkdir -p "$COMPILER_DIR"
@@ -217,9 +217,57 @@ jobs:
             fi
           done
           
-          echo "✅ 编译器文件检查完成"
+          echo "✅ 编译器文件下载完成"
           echo "📊 当前编译器文件:"
           ls -lh "$COMPILER_DIR" 2>/dev/null || echo "无文件"
+          
+          # 立即保存到仓库
+          echo "🔄 立即保存编译器文件到仓库..."
+          
+          if [ -d "$COMPILER_DIR" ]; then
+            # 检查是否有新的编译器文件
+            file_count=$(find "$COMPILER_DIR" -type f -name "*.tar.*" -o -name "*.gz" 2>/dev/null | wc -l)
+            
+            if [ $file_count -gt 0 ]; then
+              echo "📊 编译器文件统计:"
+              echo "  文件数量: $file_count"
+              echo "  目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
+              
+              # 显示文件列表
+              echo "📋 文件列表:"
+              find "$COMPILER_DIR" -type f 2>/dev/null | head -10 || echo "  无文件"
+              
+              # 尝试提交到仓库
+              echo "🚀 尝试提交编译器文件到仓库..."
+              
+              # 配置Git
+              git config --global user.email "github-actions@github.com"
+              git config --global user.name "GitHub Actions"
+              
+              # 添加编译器文件
+              if git add "$COMPILER_DIR"/* 2>/dev/null; then
+                # 检查是否有更改
+                if git diff --cached --quiet; then
+                  echo "ℹ️ 没有新的编译器文件需要提交"
+                else
+                  # 提交更改
+                  git commit -m "build: 保存编译器文件 (${{ github.event.inputs.device_name }} - ${{ github.event.inputs.version_selection }})"
+                  
+                  # 尝试推送（非必须，只是尝试）
+                  echo "📤 编译器文件已保存到本地仓库"
+                  echo "💡 注意：需要手动推送或在后续步骤中推送"
+                fi
+              else
+                echo "⚠️ 无法添加编译器文件到Git"
+              fi
+            else
+              echo "ℹ️ 编译器目录为空，无需保存"
+            fi
+          else
+            echo "⚠️ 编译器目录不存在"
+          fi
+          
+          echo "✅ 编译器文件保存流程完成"
       
       # 步骤 7: 初始空间检查
       - name: "7. 初始空间检查"
@@ -416,119 +464,28 @@ jobs:
           echo "=== 步骤 18: 修复网络环境 ==="
           firmware-config/scripts/build_firmware_main.sh fix_network
       
-      # 步骤 19: 准备编译器文件
-      - name: "19. 准备编译器文件"
+      # 步骤 19: 下载依赖包
+      - name: "19. 下载依赖包"
         run: |
-          echo "=== 步骤 19: 准备编译器文件 ==="
-          
-          COMPILER_DIR="${{ env.COMPILER_DIR }}"
-          BUILD_DIR="${{ env.BUILD_DIR }}"
-          
-          echo "复制编译器文件到构建目录..."
-          
-          # 创建工具链目录
-          mkdir -p "$BUILD_DIR/staging_dir/host/bin"
-          
-          # 检查并复制编译器文件
-          if [ -d "$COMPILER_DIR" ]; then
-            echo "🔍 查找编译器文件..."
-            
-            # 查找可用的编译器文件
-            find "$COMPILER_DIR" -type f \( -name "*gcc*" -o -name "*g++*" -o -name "*as*" -o -name "*ld*" -o -name "*ar*" \) 2>/dev/null | while read compiler_file; do
-              filename=$(basename "$compiler_file")
-              echo "  复制: $filename"
-              cp "$compiler_file" "$BUILD_DIR/staging_dir/host/bin/" 2>/dev/null || true
-            done
-            
-            # 确保文件有执行权限
-            chmod +x "$BUILD_DIR/staging_dir/host/bin/"* 2>/dev/null || true
-            
-            echo "✅ 编译器文件准备完成"
-            echo "📊 已复制编译器文件:"
-            ls -la "$BUILD_DIR/staging_dir/host/bin/" 2>/dev/null | head -10 || echo "无文件"
-          else
-            echo "⚠️ 编译器文件目录不存在，将使用自动下载的工具链"
-          fi
-      
-      # 步骤 20: 立即保存已下载的编译器文件到仓库
-      - name: "20. 立即保存已下载的编译器文件到仓库"
-        if: always()  # 即使失败也要保存
-        run: |
-          echo "=== 步骤 20: 立即保存已下载的编译器文件到仓库 ==="
-          
-          COMPILER_DIR="${{ env.COMPILER_DIR }}"
-          
-          echo "🔄 检查并提交已下载的编译器文件到仓库..."
-          
-          if [ -d "$COMPILER_DIR" ]; then
-            # 检查是否有新的编译器文件
-            file_count=$(find "$COMPILER_DIR" -type f -name "*.tar.*" -o -name "*.gz" 2>/dev/null | wc -l)
-            
-            if [ $file_count -gt 0 ]; then
-              echo "📊 编译器文件统计:"
-              echo "  文件数量: $file_count"
-              echo "  目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
-              
-              # 显示文件列表
-              echo "📋 文件列表:"
-              find "$COMPILER_DIR" -type f 2>/dev/null | head -10 || echo "  无文件"
-              
-              # 尝试提交到仓库
-              echo "🚀 尝试提交编译器文件到仓库..."
-              
-              # 配置Git
-              git config --global user.email "github-actions@github.com"
-              git config --global user.name "GitHub Actions"
-              
-              # 添加编译器文件
-              if git add "$COMPILER_DIR"/* 2>/dev/null; then
-                # 检查是否有更改
-                if git diff --cached --quiet; then
-                  echo "ℹ️ 没有新的编译器文件需要提交"
-                else
-                  # 提交更改
-                  git commit -m "build: 保存编译器文件 (${{ github.event.inputs.device_name }} - ${{ env.SELECTED_BRANCH }})"
-                  
-                  # 尝试推送（非必须，只是尝试）
-                  echo "📤 编译器文件已保存到本地仓库"
-                  echo "💡 注意：需要手动推送或在后续步骤中推送"
-                fi
-              else
-                echo "⚠️ 无法添加编译器文件到Git"
-              fi
-            else
-              echo "ℹ️ 编译器目录为空，无需保存"
-            fi
-          else
-            echo "⚠️ 编译器目录不存在"
-            mkdir -p "$COMPILER_DIR"
-            echo "✅ 已创建编译器目录: $COMPILER_DIR"
-          fi
-          
-          echo "✅ 编译器文件保存流程完成"
-      
-      # 步骤 21: 下载依赖包
-      - name: "21. 下载依赖包"
-        run: |
-          echo "=== 步骤 21: 下载依赖包 ==="
+          echo "=== 步骤 19: 下载依赖包 ==="
           firmware-config/scripts/build_firmware_main.sh download_dependencies
       
-      # 步骤 22: 集成自定义文件
-      - name: "22. 集成自定义文件"
+      # 步骤 20: 集成自定义文件
+      - name: "20. 集成自定义文件"
         run: |
-          echo "=== 步骤 22: 集成自定义文件 ==="
+          echo "=== 步骤 20: 集成自定义文件 ==="
           firmware-config/scripts/build_firmware_main.sh integrate_custom_files
       
-      # 步骤 23: 前置错误检查
-      - name: "23. 前置错误检查"
+      # 步骤 21: 前置错误检查
+      - name: "21. 前置错误检查"
         run: |
-          echo "=== 步骤 23: 前置错误检查 ==="
+          echo "=== 步骤 21: 前置错误检查 ==="
           firmware-config/scripts/build_firmware_main.sh pre_build_error_check
       
-      # 步骤 24: 编译固件前的空间检查
-      - name: "24. 编译固件前的空间检查"
+      # 步骤 22: 编译固件前的空间检查
+      - name: "22. 编译固件前的空间检查"
         run: |
-          echo "=== 步骤 24: 编译固件前的空间检查 ==="
+          echo "=== 步骤 22: 编译固件前的空间检查 ==="
           df -h
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
@@ -544,70 +501,18 @@ jobs:
             echo "✅ 编译前空间充足"
           fi
       
-      # 步骤 25: 编译固件
-      - name: "25. 编译固件"
+      # 步骤 23: 编译固件
+      - name: "23. 编译固件"
         run: |
-          echo "=== 步骤 25: 编译固件 ==="
+          echo "=== 步骤 23: 编译固件 ==="
           # 启用编译缓存，使用并行编译
           firmware-config/scripts/build_firmware_main.sh build_firmware "true"
       
-      # 步骤 26: 保存编译器文件
-      - name: "26. 保存编译器文件"
+      # 步骤 24: 上传构建产物（打包的固件和日志）
+      - name: "24. 上传构建产物（打包的固件和日志）"
         if: success()
         run: |
-          echo "=== 步骤 26: 保存编译器文件 ==="
-          
-          COMPILER_DIR="${{ env.COMPILER_DIR }}"
-          BUILD_DIR="${{ env.BUILD_DIR }}"
-          
-          # 确保编译器目录存在
-          mkdir -p "$COMPILER_DIR"
-          
-          echo "保存编译器文件到仓库目录..."
-          
-          # 从构建目录复制编译器文件
-          if [ -d "$BUILD_DIR/staging_dir/host/bin" ]; then
-            echo "🔍 查找构建目录中的编译器文件..."
-            
-            # 复制编译器文件
-            find "$BUILD_DIR/staging_dir/host/bin" -type f \( -name "*gcc*" -o -name "*g++*" -o -name "*as*" -o -name "*ld*" -o -name "*ar*" \) 2>/dev/null | while read compiler_file; do
-              filename=$(basename "$compiler_file")
-              echo "  保存: $filename"
-              cp "$compiler_file" "$COMPILER_DIR/" 2>/dev/null || true
-            done
-            
-            echo "✅ 编译器文件保存完成"
-            echo "📊 保存的编译器文件:"
-            ls -lh "$COMPILER_DIR/" 2>/dev/null | head -10 || echo "无文件"
-          else
-            echo "⚠️ 构建目录中没有编译器文件可保存"
-          fi
-      
-      # 步骤 27: 保存源代码信息
-      - name: "27. 保存源代码信息"
-        if: success()
-        run: |
-          echo "=== 步骤 27: 保存源代码信息 ==="
-          
-          # 创建源代码信息目录
-          mkdir -p /tmp/build-artifacts/source-info
-          
-          echo "构建信息" > /tmp/build-artifacts/source-info/build_info.txt
-          echo "=========" >> /tmp/build-artifacts/source-info/build_info.txt
-          echo "构建时间: $(date)" >> /tmp/build-artifacts/source-info/build_info.txt
-          echo "设备: ${{ github.event.inputs.device_name }}" >> /tmp/build-artifacts/source-info/build_info.txt
-          echo "版本: ${{ env.SELECTED_BRANCH }}" >> /tmp/build-artifacts/source-info/build_info.txt
-          echo "目标平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}" >> /tmp/build-artifacts/source-info/build_info.txt
-          echo "配置模式: ${{ github.event.inputs.config_mode }}" >> /tmp/build-artifacts/source-info/build_info.txt
-          echo "Git Archive API模式: ${{ github.event.inputs.use_git_archive }}" >> /tmp/build-artifacts/source-info/build_info.txt
-          
-          echo "✅ 源代码信息保存完成"
-      
-      # 步骤 28: 上传构建产物（打包的固件和日志）
-      - name: "28. 上传构建产物（打包的固件和日志）"
-        if: success()
-        run: |
-          echo "=== 步骤 28: 上传构建产物 ==="
+          echo "=== 步骤 24: 上传构建产物 ==="
           cd ${{ env.BUILD_DIR }}
           
           # 创建构建产物目录
@@ -657,8 +562,8 @@ jobs:
             echo "ℹ️ 没有需要上传的构建产物"
           fi
       
-      # 步骤 29: 上传固件原始目录
-      - name: "29. 上传固件原始目录"
+      # 步骤 25: 上传固件原始目录
+      - name: "25. 上传固件原始目录"
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -666,17 +571,8 @@ jobs:
           path: ${{ env.BUILD_DIR }}/bin/targets/
           retention-days: 7
       
-      # 步骤 30: 上传源代码信息
-      - name: "30. 上传源代码信息"
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: source-info-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
-          path: /tmp/build-artifacts/source-info/
-          retention-days: 7
-      
-      # 步骤 31: 上传配置文件
-      - name: "31. 上传配置文件"
+      # 步骤 26: 上传配置文件
+      - name: "26. 上传配置文件"
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -684,91 +580,16 @@ jobs:
           path: ${{ github.workspace }}/firmware-config/config-backup/
           retention-days: 7
       
-      # 步骤 32: 错误分析（无论成功失败都运行）
-      - name: "32. 错误分析"
+      # 步骤 27: 错误分析（无论成功失败都运行）
+      - name: "27. 错误分析"
         if: always()
         run: |
-          echo "=== 步骤 32: 错误分析 ==="
+          echo "=== 步骤 27: 错误分析 ==="
           firmware-config/scripts/error_analysis.sh
       
-      # 步骤 33: 编译后空间检查
-      - name: "33. 编译后空间检查"
+      # 步骤 28: 编译后空间检查
+      - name: "28. 编译后空间检查"
         if: always()
         run: |
-          echo "=== 步骤 33: 编译后空间检查 ==="
+          echo "=== 步骤 28: 编译后空间检查 ==="
           firmware-config/scripts/build_firmware_main.sh post_build_space_check
-      
-      # 步骤 34: 固件文件检查
-      - name: "34. 固件文件检查"
-        if: success()
-        run: |
-          echo "=== 步骤 34: 固件文件检查 ==="
-          firmware-config/scripts/build_firmware_main.sh check_firmware_files
-      
-      # 步骤 35: 清理目录（保留配置文件）
-      - name: "35. 清理目录（保留配置文件）"
-        if: always()
-        run: |
-          echo "=== 步骤 35: 清理目录但保留配置文件 ==="
-          firmware-config/scripts/build_firmware_main.sh cleanup
-      
-      # 步骤 36: 输出最终配置状态
-      - name: "36. 输出最终配置状态"
-        if: always()
-        run: |
-          echo "=== 步骤 36: 最终配置状态总结 ==="
-          
-          # 检查备份的配置文件
-          if [ -d "firmware-config/config-backup" ]; then
-            backup_count=$(find firmware-config/config-backup -name "*.config" 2>/dev/null | wc -l)
-            echo "✅ 仓库配置文件备份: $backup_count 个"
-          fi
-          
-          echo ""
-          echo "🛠️ 编译器文件状态:"
-          COMPILER_DIR="${{ env.COMPILER_DIR }}"
-          if [ -d "$COMPILER_DIR" ]; then
-            echo "✅ 编译器文件目录存在: firmware-config/build-Compiler-file/"
-            
-            # 显示编译器文件大小
-            compiler_size=$(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo "未知")
-            echo "   编译器文件大小: $compiler_size"
-            
-            # 显示编译器文件列表
-            echo "   编译器文件列表:"
-            ls -la "$COMPILER_DIR/" 2>/dev/null | head -10 || echo "   无法列出文件"
-          else
-            echo "⚠️ 编译器文件目录不存在"
-          fi
-          
-          echo ""
-          echo "📁 自定义文件状态:"
-          if [ -d "firmware-config/custom-files" ]; then
-            custom_count=$(find firmware-config/custom-files -type f 2>/dev/null | wc -l)
-            echo "✅ 自定义文件: $custom_count 个"
-          fi
-          
-          echo ""
-          echo "📋 正常模式插件总结:"
-          echo "  ✅ TurboACC 网络加速"
-          echo "  ✅ UPnP 自动端口转发"
-          echo "  ✅ Samba 文件共享"
-          echo "  ✅ 磁盘管理"
-          echo "  ✅ KMS 激活服务"
-          echo "  ✅ SmartDNS 智能DNS"
-          echo "  ✅ 家长控制"
-          echo "  ✅ 微信推送"
-          echo "  ✅ 流量控制 (SQM)"
-          echo "  ✅ FTP 服务器"
-          echo "  ✅ ARP 绑定"
-          echo "  ✅ CPU 限制"
-          echo "  ✅ 硬盘休眠"
-          
-          echo ""
-          echo "🔌 USB驱动加强:"
-          echo "  ✅ 所有关键USB驱动强制启用"
-          echo "  ✅ USB 3.0完全支持"
-          echo "  ✅ 平台专用驱动自动配置"
-          
-          echo ""
-          echo "=== 构建流程完成 ==="
