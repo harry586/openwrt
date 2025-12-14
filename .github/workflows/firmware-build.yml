@@ -37,11 +37,7 @@ on:
         required: false
         type: string
         default: ""
-      use_git_archive:
-        description: "📦 使用Git Archive API下载源代码"
-        required: false
-        default: true
-        type: boolean
+      # Git Archive API选项已移除，默认启用
 
 env:
   BUILD_DIR: "/mnt/openwrt-build"
@@ -52,9 +48,8 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      # 步骤 1: 使用Git Archive API下载源代码
+      # 步骤 1: 使用Git Archive API下载源代码（默认启用）
       - name: "1. 使用Git Archive API下载源代码"
-        if: github.event.inputs.use_git_archive == 'true'
         run: |
           echo "=== 步骤 1: 使用Git Archive API下载源代码 ==="
           echo "🔄 从GitHub API获取源代码压缩包"
@@ -124,32 +119,16 @@ jobs:
       
       # 步骤 2: 立即上传Git Archive源代码
       - name: "2. 立即上传Git Archive源代码"
-        if: github.event.inputs.use_git_archive == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: git-archive-source-${{ github.event.inputs.device_name }}
           path: /tmp/build-artifacts/source-archive/
           retention-days: 7
       
-      # 步骤 3: 检出配置仓库
-      - name: "3. 检出配置仓库"
-        if: github.event.inputs.use_git_archive == 'false'
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: recursive
-      
-      # 步骤 4: 设置脚本执行权限
-      - name: "4. 设置脚本执行权限"
+      # 步骤 3: 检查编译器文件目录状态
+      - name: "3. 检查编译器文件目录状态"
         run: |
-          echo "=== 步骤 4: 设置脚本执行权限 ==="
-          find firmware-config/scripts -name "*.sh" -exec chmod +x {} \;
-          echo "✅ 脚本执行权限设置完成"
-      
-      # 步骤 5: 检查编译器文件目录状态
-      - name: "5. 检查编译器文件目录状态"
-        run: |
-          echo "=== 步骤 5: 检查编译器文件目录状态 ==="
+          echo "=== 步骤 3: 检查编译器文件目录状态 ==="
           COMPILER_DIR="${{ env.COMPILER_DIR }}"
           
           if [ -d "$COMPILER_DIR" ]; then
@@ -158,95 +137,258 @@ jobs:
             echo "目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
             echo "目录内容:"
             ls -la "$COMPILER_DIR/" 2>/dev/null | head -10 || echo "无法列出"
-            
-            # 检查必要的编译器文件
-            echo "🔍 检查必要的编译器文件:"
-            required_compilers=("gcc" "g++" "as" "ld" "ar" "strip" "objcopy" "objdump" "nm" "ranlib")
-            for compiler in "${required_compilers[@]}"; do
-              if find "$COMPILER_DIR" -name "*$compiler*" -type f 2>/dev/null | grep -q .; then
-                echo "  ✅ 找到: $compiler"
-              else
-                echo "  ❌ 未找到: $compiler"
-              fi
-            done
           else
             echo "ℹ️ 编译器文件目录不存在，将创建新目录"
             mkdir -p "$COMPILER_DIR"
             echo "✅ 已创建编译器文件目录: $COMPILER_DIR"
           fi
       
-      # 步骤 6: 下载并保存编译器文件到仓库
-      - name: "6. 下载并保存编译器文件到仓库"
+      # 步骤 4: 智能检查并编译交叉编译器
+      - name: "4. 智能检查并编译交叉编译器"
         run: |
-          echo "=== 步骤 6: 下载并保存编译器文件到仓库 ==="
+          echo "=== 步骤 4: 智能检查并编译交叉编译器 ==="
           
           COMPILER_DIR="${{ env.COMPILER_DIR }}"
-          mkdir -p "$COMPILER_DIR"
+          COMPILER_OUTPUT_DIR="$COMPILER_DIR/compiled"
+          BUILD_DIR="${{ env.BUILD_DIR }}"
           
-          echo "🔍 编译器文件清单:"
-          echo "1. gcc - GNU C编译器"
-          echo "2. g++ - GNU C++编译器"
-          echo "3. as - GNU汇编器"
-          echo "4. ld - GNU链接器"
-          echo "5. ar - GNU归档工具"
-          echo "6. strip - 符号剥离工具"
-          echo "7. objcopy - 目标文件复制工具"
-          echo "8. objdump - 目标文件反汇编工具"
-          echo "9. nm - 符号列表工具"
-          echo "10. ranlib - 生成归档索引"
+          echo "🔧 智能编译器管理流程:"
+          echo "1. 检查现有编译器状态"
+          echo "2. 只在必要时重新编译"
+          echo "3. 编译后保存并提交到仓库"
+          echo "4. 显示编译器详细信息"
           
-          # 检查并下载缺失的编译器文件
-          echo "📥 检查并下载缺失的编译器文件..."
+          # 1. 检查现有编译器状态
+          echo "🔍 检查现有编译器状态..."
+          NEED_COMPILE=false
+          NEED_COMMIT=false
           
-          # 定义编译器下载列表
-          declare -A compiler_urls=(
-            ["gcc-11.3.0.tar.xz"]="https://ftp.gnu.org/gnu/gcc/gcc-11.3.0/gcc-11.3.0.tar.xz"
-            ["binutils-2.38.tar.xz"]="https://ftp.gnu.org/gnu/binutils/binutils-2.38.tar.xz"
-            ["make-4.3.tar.gz"]="https://ftp.gnu.org/gnu/make/make-4.3.tar.gz"
-          )
-          
-          cd "$COMPILER_DIR"
-          
-          for file in "${!compiler_urls[@]}"; do
-            url="${compiler_urls[$file]}"
-            if [ ! -f "$file" ]; then
-              echo "下载: $file"
-              wget --no-check-certificate -q --show-progress "$url" || echo "下载失败: $file"
-            else
-              echo "已存在: $file"
-            fi
-          done
-          
-          echo "✅ 编译器文件下载完成"
-          echo "📊 当前编译器文件:"
-          ls -lh "$COMPILER_DIR" 2>/dev/null || echo "无文件"
-          
-          # 保存到仓库
-          echo "🔄 保存编译器文件到仓库..."
-          
-          if [ -d "$COMPILER_DIR" ]; then
-            file_count=$(find "$COMPILER_DIR" -type f -name "*.tar.*" -o -name "*.gz" 2>/dev/null | wc -l)
+          if [ -d "$COMPILER_OUTPUT_DIR" ]; then
+            echo "✅ 找到已编译的交叉编译器"
             
-            if [ $file_count -gt 0 ]; then
-              echo "📊 编译器文件统计:"
-              echo "  文件数量: $file_count"
-              echo "  目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
+            # 检查编译器完整性
+            REQUIRED_FILES=(
+              "bin/arm-openwrt-linux-muslgnueabi-gcc"
+              "bin/arm-openwrt-linux-muslgnueabi-g++"
+              "bin/arm-openwrt-linux-muslgnueabi-ld"
+              "bin/arm-openwrt-linux-muslgnueabi-ar"
+              "bin/arm-openwrt-linux-muslgnueabi-strip"
+              "lib/gcc/arm-openwrt-linux-muslgnueabi/8.4.0/libgcc.a"
+            )
+            
+            missing_files=0
+            echo "📋 检查编译器文件完整性:"
+            for file in "${REQUIRED_FILES[@]}"; do
+              if [ -f "$COMPILER_OUTPUT_DIR/$file" ]; then
+                echo "  ✅ $file"
+              else
+                echo "  ❌ $file - 缺失"
+                missing_files=$((missing_files + 1))
+              fi
+            done
+            
+            if [ $missing_files -eq 0 ]; then
+              echo "✅ 编译器文件完整，无需重新编译"
+              echo "💡 交叉编译器是通用的，可以长期使用"
               
-              echo "📋 文件列表:"
-              find "$COMPILER_DIR" -type f 2>/dev/null | head -10 || echo "  无文件"
+              # 获取编译器版本
+              gcc_file="$COMPILER_OUTPUT_DIR/bin/arm-openwrt-linux-muslgnueabi-gcc"
+              if [ -x "$gcc_file" ]; then
+                compiler_version=$($gcc_file --version 2>&1 | head -1)
+                echo "🔧 编译器版本: $compiler_version"
+              fi
+              
+              # 显示编译器大小
+              compiler_size=$(du -sh "$COMPILER_OUTPUT_DIR" 2>/dev/null | cut -f1 || echo "未知")
+              echo "📦 编译器大小: $compiler_size"
+              
+              # 统计文件数量
+              file_count=$(find "$COMPILER_OUTPUT_DIR" -type f 2>/dev/null | wc -l)
+              dir_count=$(find "$COMPILER_OUTPUT_DIR" -type d 2>/dev/null | wc -l)
+              echo "📊 编译器统计: $file_count 个文件, $((dir_count - 1)) 个目录"
+              
+              # 检查Git状态（是否已提交）
+              cd "${{ github.workspace }}"
+              git_status=$(git status --porcelain "firmware-config/build-Compiler-file/compiled/" 2>/dev/null)
+              
+              if [ -n "$git_status" ]; then
+                echo "🔄 编译器有未提交的更改，需要提交"
+                NEED_COMMIT=true
+              fi
             else
-              echo "ℹ️ 编译器目录为空，无需保存"
+              echo "❌ 编译器不完整，缺失 $missing_files 个关键文件，需要重新编译"
+              NEED_COMPILE=true
             fi
           else
-            echo "⚠️ 编译器目录不存在"
+            echo "❌ 未找到已编译的交叉编译器，需要编译"
+            NEED_COMPILE=true
           fi
           
-          echo "✅ 编译器文件下载流程完成"
+          # 2. 只在必要时编译
+          if [ "$NEED_COMPILE" = true ]; then
+            echo "🚀 开始编译交叉编译器..."
+            
+            # 创建构建目录
+            mkdir -p "$BUILD_DIR"
+            cd "$BUILD_DIR"
+            
+            # 清理旧目录
+            rm -rf ./* ./.git* 2>/dev/null || true
+            
+            # 克隆源码
+            echo "📥 克隆OpenWrt源码..."
+            git clone --depth 1 https://github.com/immortalwrt/immortalwrt.git . --branch openwrt-21.02
+            
+            # 创建最小配置
+            echo "⚙️ 创建编译器构建配置..."
+            cat > .config << 'EOF'
+CONFIG_TARGET_ipq40xx=y
+CONFIG_TARGET_ipq40xx_generic=y
+CONFIG_TARGET_ROOTFS_INITRAMFS=y
+CONFIG_EXTERNAL_TOOLCHAIN=y
+CONFIG_USE_MUSL=y
+EOF
+            
+            # 下载依赖
+            echo "📦 下载编译器依赖..."
+            mkdir -p dl
+            
+            declare -A compiler_urls=(
+              ["gcc-11.3.0.tar.xz"]="https://ftp.gnu.org/gnu/gcc/gcc-11.3.0/gcc-11.3.0.tar.xz"
+              ["binutils-2.38.tar.xz"]="https://ftp.gnu.org/gnu/binutils/binutils-2.38.tar.xz"
+              ["linux-5.15.133.tar.xz"]="https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.15.133.tar.xz"
+              ["musl-1.2.4.tar.gz"]="https://musl.libc.org/releases/musl-1.2.4.tar.gz"
+              ["gmp-6.2.1.tar.xz"]="https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.xz"
+              ["mpfr-4.1.0.tar.xz"]="https://ftp.gnu.org/gnu/mpfr/mpfr-4.1.0.tar.xz"
+              ["mpc-1.2.1.tar.gz"]="https://ftp.gnu.org/gnu/mpc/mpc-1.2.1.tar.gz"
+            )
+            
+            downloaded=0
+            for file in "${!compiler_urls[@]}"; do
+              if [ ! -f "dl/$file" ]; then
+                echo "下载: $file"
+                wget --no-check-certificate -q --show-progress -O "dl/$file" "${compiler_urls[$file]}" && downloaded=$((downloaded + 1)) || echo "下载失败: $file"
+              fi
+            done
+            
+            echo "📊 依赖下载完成: 新下载 $downloaded 个文件"
+            
+            # 编译编译器
+            echo "🔨 编译交叉编译器 (可能需要10-20分钟)..."
+            
+            # 只编译toolchain
+            make toolchain/install -j$(nproc) V=s 2>&1 | tee compiler-build.log
+            
+            # 检查编译结果
+            if [ $? -eq 0 ] && [ -d "staging_dir/toolchain-"* ]; then
+              echo "✅ 交叉编译器编译成功！"
+              
+              # 清理旧的编译器目录
+              rm -rf "$COMPILER_OUTPUT_DIR"
+              mkdir -p "$COMPILER_OUTPUT_DIR"
+              
+              # 复制编译器
+              echo "💾 保存编译好的编译器..."
+              cp -r staging_dir/toolchain-* "$COMPILER_OUTPUT_DIR/" 2>/dev/null || true
+              
+              NEED_COMMIT=true
+            else
+              echo "❌ 交叉编译器编译失败"
+              echo "📋 编译日志摘要:"
+              tail -20 compiler-build.log 2>/dev/null || echo "无日志"
+              exit 1
+            fi
+          else
+            echo "✅ 使用现有的编译器，跳过编译步骤"
+          fi
+          
+          # 3. 显示最终编译器信息
+          echo "📊 最终编译器信息:"
+          if [ -d "$COMPILER_OUTPUT_DIR" ]; then
+            total_size=$(du -sh "$COMPILER_OUTPUT_DIR" 2>/dev/null | cut -f1 || echo "未知")
+            file_count=$(find "$COMPILER_OUTPUT_DIR" -type f 2>/dev/null | wc -l)
+            
+            echo "📍 路径: $COMPILER_OUTPUT_DIR"
+            echo "📦 总大小: $total_size"
+            echo "📄 文件数量: $file_count 个"
+            
+            # 显示关键文件
+            echo "🔧 关键编译器文件:"
+            find "$COMPILER_OUTPUT_DIR/bin" -type f -name "*gcc*" -o -name "*g++*" -o -name "*ar" -o -name "*ld" -o -name "*strip" 2>/dev/null | head -10 | while read file; do
+              file_name=$(basename "$file")
+              file_size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "未知")
+              echo "  📄 $file_name ($file_size)"
+            done
+            
+            # 创建编译器信息文件
+            cat > "$COMPILER_OUTPUT_DIR/compiler-info.txt" << EOF
+交叉编译器信息
+===============
+编译时间: $(date)
+目标平台: arm_cortex-a7+neon-vfpv4
+编译器: gcc-8.4.0
+C库: musl
+总大小: $total_size
+文件数量: $file_count
+Git提交: ${{ github.sha }}
+构建工作流: ${{ github.workflow }}
+状态: 完整可用
+说明: 此交叉编译器是通用的，可以长期使用
+EOF
+          fi
+          
+          # 4. 智能提交到仓库
+          if [ "$NEED_COMMIT" = true ]; then
+            echo "📤 准备提交编译器到仓库..."
+            cd "${{ github.workspace }}"
+            
+            # 配置Git
+            git config --global user.email "github-actions@github.com"
+            git config --global user.name "GitHub Actions"
+            
+            # 检查是否有更改
+            git_status=$(git status --porcelain "firmware-config/build-Compiler-file/compiled/" 2>/dev/null)
+            
+            if [ -n "$git_status" ]; then
+              echo "🔄 检测到编译器更改，正在提交..."
+              
+              # 添加文件
+              git add "firmware-config/build-Compiler-file/compiled/"
+              
+              # 提交
+              commit_message="build: 更新交叉编译器 (${{ github.event.inputs.device_name }} - $(date +%Y%m%d))"
+              git commit -m "$commit_message"
+              
+              echo "✅ 编译器已提交到本地仓库"
+              echo "📝 提交信息: $commit_message"
+              
+              # 显示提交的统计
+              echo "📊 提交统计:"
+              echo "  添加/修改文件: $(git diff --cached --name-only | wc -l)"
+              echo "  总大小: $total_size"
+              
+              # 尝试推送
+              echo "🚀 推送到远程仓库..."
+              if git push origin ${GITHUB_REF##*/}; then
+                echo "🎉 编译器已成功推送到远程仓库！"
+                echo "🔗 可以在仓库的 firmware-config/build-Compiler-file/compiled/ 目录查看"
+              else
+                echo "⚠️ 推送失败，可能是权限问题"
+                echo "💡 提交已保存在本地，可在后续步骤中手动推送"
+              fi
+            else
+              echo "✅ 编译器文件没有更改，无需提交"
+            fi
+          else
+            echo "✅ 编译器无需提交到仓库"
+          fi
+          
+          echo "✅ 智能编译器管理完成"
       
-      # 步骤 7: 初始空间检查
-      - name: "7. 初始空间检查"
+      # 步骤 5: 初始空间检查
+      - name: "5. 初始空间检查"
         run: |
-          echo "=== 步骤 7: 初始磁盘空间检查 ==="
+          echo "=== 步骤 5: 初始磁盘空间检查 ==="
           df -h
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
@@ -257,18 +399,18 @@ jobs:
           fi
           echo "✅ 初始空间检查通过"
       
-      # 步骤 8: 设置编译环境和构建目录
-      - name: "8. 设置编译环境和构建目录"
+      # 步骤 6: 设置编译环境和构建目录
+      - name: "6. 设置编译环境和构建目录"
         run: |
-          echo "=== 步骤 8: 设置编译环境和构建目录 ==="
+          echo "=== 步骤 6: 设置编译环境和构建目录 ==="
           
-          echo "🔄 步骤 8.1: 设置编译环境"
+          echo "🔄 步骤 6.1: 设置编译环境"
           firmware-config/scripts/build_firmware_main.sh setup_environment
           
-          echo "🔄 步骤 8.2: 创建构建目录"
+          echo "🔄 步骤 6.2: 创建构建目录"
           firmware-config/scripts/build_firmware_main.sh create_build_dir
           
-          echo "🔄 步骤 8.3: 初始化构建环境"
+          echo "🔄 步骤 6.3: 初始化构建环境"
           echo "设备: ${{ github.event.inputs.device_name }}"
           echo "版本: ${{ github.event.inputs.version_selection }}"
           echo "配置模式: ${{ github.event.inputs.config_mode }}"
@@ -276,54 +418,54 @@ jobs:
           
           echo "✅ 编译环境和构建目录设置完成"
       
-      # 步骤 9: 添加 TurboACC 支持
-      - name: "9. 添加 TurboACC 支持"
+      # 步骤 7: 添加 TurboACC 支持
+      - name: "7. 添加 TurboACC 支持"
         run: |
-          echo "=== 步骤 9: 添加 TurboACC 支持 ==="
+          echo "=== 步骤 7: 添加 TurboACC 支持 ==="
           firmware-config/scripts/build_firmware_main.sh add_turboacc_support
       
-      # 步骤 10: 配置Feeds
-      - name: "10. 配置Feeds"
+      # 步骤 8: 配置Feeds
+      - name: "8. 配置Feeds"
         run: |
-          echo "=== 步骤 10: 配置Feeds ==="
+          echo "=== 步骤 8: 配置Feeds ==="
           firmware-config/scripts/build_firmware_main.sh configure_feeds
       
-      # 步骤 11: 安装 TurboACC 包
-      - name: "11. 安装 TurboACC 包"
+      # 步骤 9: 安装 TurboACC 包
+      - name: "9. 安装 TurboACC 包"
         if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
         run: |
-          echo "=== 步骤 11: 安装 TurboACC 包 ==="
+          echo "=== 步骤 9: 安装 TurboACC 包 ==="
           firmware-config/scripts/build_firmware_main.sh install_turboacc_packages
       
-      # 步骤 12: 编译前空间检查
-      - name: "12. 编译前空间检查"
+      # 步骤 10: 编译前空间检查
+      - name: "10. 编译前空间检查"
         run: |
-          echo "=== 步骤 12: 编译前空间检查 ==="
+          echo "=== 步骤 10: 编译前空间检查 ==="
           firmware-config/scripts/build_firmware_main.sh pre_build_space_check
       
-      # 步骤 13: 智能配置生成（USB完全修复加强版）
-      - name: "13. 智能配置生成（USB完全修复加强版）"
+      # 步骤 11: 智能配置生成（USB完全修复加强版）
+      - name: "11. 智能配置生成（USB完全修复加强版）"
         run: |
-          echo "=== 步骤 13: 智能配置生成 ==="
+          echo "=== 步骤 11: 智能配置生成 ==="
           echo "🚨 USB 3.0加强：所有关键USB驱动强制启用"
           firmware-config/scripts/build_firmware_main.sh generate_config "${{ github.event.inputs.extra_packages }}"
       
-      # 步骤 14: 验证USB配置
-      - name: "14. 验证USB配置"
+      # 步骤 12: 验证USB配置
+      - name: "12. 验证USB配置"
         run: |
-          echo "=== 步骤 14: 验证USB配置 ==="
+          echo "=== 步骤 12: 验证USB配置 ==="
           firmware-config/scripts/build_firmware_main.sh verify_usb_config
       
-      # 步骤 15: USB驱动完整性检查
-      - name: "15. USB驱动完整性检查"
+      # 步骤 13: USB驱动完整性检查
+      - name: "13. USB驱动完整性检查"
         run: |
-          echo "=== 步骤 15: USB驱动完整性检查 ==="
+          echo "=== 步骤 13: USB驱动完整性检查 ==="
           firmware-config/scripts/build_firmware_main.sh check_usb_drivers_integrity
       
-      # 步骤 16: 应用配置并显示详情
-      - name: "16. 应用配置并显示详情"
+      # 步骤 14: 应用配置并显示详情
+      - name: "14. 应用配置并显示详情"
         run: |
-          echo "=== 步骤 16: 应用配置并显示详情 ==="
+          echo "=== 步骤 14: 应用配置并显示详情 ==="
           
           # 先保存原始配置文件
           if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
@@ -407,10 +549,10 @@ jobs:
           
           echo "✅ 配置详情检查完成"
       
-      # 步骤 17: 检查并备份配置文件
-      - name: "17. 检查并备份配置文件"
+      # 步骤 15: 检查并备份配置文件
+      - name: "15. 检查并备份配置文件"
         run: |
-          echo "=== 步骤 17: 检查并备份配置文件 ==="
+          echo "=== 步骤 15: 检查并备份配置文件 ==="
           
           # 检查配置文件
           if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
@@ -432,34 +574,70 @@ jobs:
             exit 1
           fi
       
-      # 步骤 18: 修复网络环境
-      - name: "18. 修复网络环境"
+      # 步骤 16: 修复网络环境
+      - name: "16. 修复网络环境"
         run: |
-          echo "=== 步骤 18: 修复网络环境 ==="
+          echo "=== 步骤 16: 修复网络环境 ==="
           firmware-config/scripts/build_firmware_main.sh fix_network
       
-      # 步骤 19: 下载依赖包
-      - name: "19. 下载依赖包"
+      # 步骤 17: 下载依赖包
+      - name: "17. 下载依赖包"
         run: |
-          echo "=== 步骤 19: 下载依赖包 ==="
+          echo "=== 步骤 17: 下载依赖包 ==="
           firmware-config/scripts/build_firmware_main.sh download_dependencies
       
-      # 步骤 20: 集成自定义文件
-      - name: "20. 集成自定义文件"
+      # 步骤 18: 集成自定义文件
+      - name: "18. 集成自定义文件"
         run: |
-          echo "=== 步骤 20: 集成自定义文件 ==="
+          echo "=== 步骤 18: 集成自定义文件 ==="
           firmware-config/scripts/build_firmware_main.sh integrate_custom_files
       
-      # 步骤 21: 前置错误检查
-      - name: "21. 前置错误检查"
+      # 步骤 19: 前置错误检查
+      - name: "19. 前置错误检查"
         run: |
-          echo "=== 步骤 21: 前置错误检查 ==="
+          echo "=== 步骤 19: 前置错误检查 ==="
+          
+          # 先显示编译器文件状态
+          echo "🔍 检查交叉编译器状态:"
+          COMPILER_DIR="${{ env.COMPILER_DIR }}"
+          COMPILER_OUTPUT_DIR="$COMPILER_DIR/compiled"
+          
+          if [ -d "$COMPILER_OUTPUT_DIR" ]; then
+            echo "✅ 找到编译好的交叉编译器"
+            total_size=$(du -sh "$COMPILER_OUTPUT_DIR" 2>/dev/null | cut -f1 || echo "未知")
+            file_count=$(find "$COMPILER_OUTPUT_DIR" -type f 2>/dev/null | wc -l)
+            echo "📁 编译器目录: $COMPILER_OUTPUT_DIR"
+            echo "📦 总大小: $total_size"
+            echo "📄 文件数量: $file_count 个"
+            
+            # 检查关键文件
+            echo "🔧 检查关键编译器文件:"
+            if [ -f "$COMPILER_OUTPUT_DIR/bin/arm-openwrt-linux-muslgnueabi-gcc" ]; then
+              echo "  ✅ arm-openwrt-linux-muslgnueabi-gcc: 存在"
+            else
+              echo "  ❌ arm-openwrt-linux-muslgnueabi-gcc: 缺失"
+            fi
+            
+            if [ -f "$COMPILER_OUTPUT_DIR/bin/arm-openwrt-linux-muslgnueabi-g++" ]; then
+              echo "  ✅ arm-openwrt-linux-muslgnueabi-g++: 存在"
+            else
+              echo "  ❌ arm-openwrt-linux-muslgnueabi-g++: 缺失"
+            fi
+            
+            echo "💡 编译器状态: 完整的交叉编译器，可以用于加速构建"
+          else
+            echo "⚠️ 未找到编译好的交叉编译器"
+            echo "📝 将在构建过程中编译编译器"
+          fi
+          
+          echo ""
+          echo "🔧 执行前置错误检查脚本..."
           firmware-config/scripts/build_firmware_main.sh pre_build_error_check
       
-      # 步骤 22: 编译固件前的空间检查
-      - name: "22. 编译固件前的空间检查"
+      # 步骤 20: 编译固件前的空间检查
+      - name: "20. 编译固件前的空间检查"
         run: |
-          echo "=== 步骤 22: 编译固件前的空间检查 ==="
+          echo "=== 步骤 20: 编译固件前的空间检查 ==="
           df -h
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
@@ -475,18 +653,18 @@ jobs:
             echo "✅ 编译前空间充足"
           fi
       
-      # 步骤 23: 编译固件
-      - name: "23. 编译固件"
+      # 步骤 21: 编译固件
+      - name: "21. 编译固件"
         run: |
-          echo "=== 步骤 23: 编译固件 ==="
+          echo "=== 步骤 21: 编译固件 ==="
           # 启用编译缓存，使用并行编译
           firmware-config/scripts/build_firmware_main.sh build_firmware "true"
       
-      # 步骤 24: 搜索并打包构建产物
-      - name: "24. 搜索并打包构建产物"
+      # 步骤 22: 搜索并打包构建产物
+      - name: "22. 搜索并打包构建产物"
         if: success()
         run: |
-          echo "=== 步骤 24: 搜索并打包构建产物 ==="
+          echo "=== 步骤 22: 搜索并打包构建产物 ==="
           cd ${{ env.BUILD_DIR }}
           
           # 创建构建产物目录
@@ -536,8 +714,8 @@ jobs:
             echo "ℹ️ 没有需要上传的构建产物"
           fi
       
-      # 步骤 25: 上传固件原始目录
-      - name: "25. 上传固件原始目录"
+      # 步骤 23: 上传固件原始目录
+      - name: "23. 上传固件原始目录"
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -545,8 +723,8 @@ jobs:
           path: ${{ env.BUILD_DIR }}/bin/targets/
           retention-days: 7
       
-      # 步骤 26: 上传配置文件
-      - name: "26. 上传配置文件"
+      # 步骤 24: 上传配置文件
+      - name: "24. 上传配置文件"
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -554,16 +732,16 @@ jobs:
           path: ${{ github.workspace }}/firmware-config/config-backup/
           retention-days: 7
       
-      # 步骤 27: 错误分析（无论成功失败都运行）
-      - name: "27. 错误分析"
+      # 步骤 25: 错误分析（无论成功失败都运行）
+      - name: "25. 错误分析"
         if: always()
         run: |
-          echo "=== 步骤 27: 错误分析 ==="
+          echo "=== 步骤 25: 错误分析 ==="
           firmware-config/scripts/error_analysis.sh
       
-      # 步骤 28: 编译后空间检查
-      - name: "28. 编译后空间检查"
+      # 步骤 26: 编译后空间检查
+      - name: "26. 编译后空间检查"
         if: always()
         run: |
-          echo "=== 步骤 28: 编译后空间检查 ==="
+          echo "=== 步骤 26: 编译后空间检查 ==="
           firmware-config/scripts/build_firmware_main.sh post_build_space_check
