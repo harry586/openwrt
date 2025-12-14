@@ -68,7 +68,7 @@ Config.in - 配置菜单
 feeds/ - Feeds目录
 package/ - 包目录
 target/ - 目标平台目录
-toolchain/ - 工具链目录
+toolchain/ - 编译器目录
 EOF
     
     log "✅ 源代码信息保存完成: $source_info_dir"
@@ -416,29 +416,29 @@ pre_build_error_check() {
         fi
     fi
     
-    # 4. 检查工具链
+    # 4. 检查编译器
     if [ -d "staging_dir" ]; then
-        local toolchain_count=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | wc -l)
-        if [ $toolchain_count -eq 0 ]; then
-            log "⚠️ 警告: 未找到编译工具链，将自动下载"
+        local compiler_count=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" 2>/dev/null | wc -l)
+        if [ $compiler_count -eq 0 ]; then
+            log "⚠️ 警告: 未找到编译器，将自动下载"
             warning_count=$((warning_count + 1))
         else
-            log "✅ 已下载编译工具链: $toolchain_count 个"
+            log "✅ 已下载编译器: $compiler_count 个"
             
-            # 检查工具链完整性
-            local toolchain_dir=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
-            if [ -d "$toolchain_dir/bin" ]; then
-                local compiler_count=$(find "$toolchain_dir/bin" -name "*gcc*" -o -name "*g++*" 2>/dev/null | wc -l)
-                if [ $compiler_count -gt 0 ]; then
-                    log "✅ 工具链编译器文件: $compiler_count 个"
+            # 检查编译器完整性
+            local compiler_dir=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" | head -1)
+            if [ -d "$compiler_dir/bin" ]; then
+                local compiler_files=$(find "$compiler_dir/bin" -name "*gcc*" -o -name "*g++*" 2>/dev/null | wc -l)
+                if [ $compiler_files -gt 0 ]; then
+                    log "✅ 编译器文件: $compiler_files 个"
                 else
-                    log "⚠️ 警告: 工具链缺少编译器文件"
+                    log "⚠️ 警告: 编译器缺少编译器文件"
                     warning_count=$((warning_count + 1))
                 fi
             fi
         fi
     else
-        log "ℹ️ staging_dir目录不存在，将自动下载工具链"
+        log "ℹ️ staging_dir目录不存在，将自动下载编译器"
     fi
     
     # 5. 检查关键文件
@@ -497,8 +497,8 @@ pre_build_error_check() {
     # 10. 检查C库配置
     log "🔧 检查C库配置..."
     if [ -f ".config" ]; then
-        if grep -q "CONFIG_EXTERNAL_TOOLCHAIN=y" .config; then
-            log "ℹ️ 使用外部工具链"
+        if grep -q "CONFIG_EXTERNAL_COMPILER=y" .config; then
+            log "ℹ️ 使用外部编译器"
         elif grep -q "CONFIG_USE_MUSL=y" .config; then
             log "✅ 配置为使用musl C库"
         elif grep -q "CONFIG_USE_GLIBC=y" .config; then
@@ -1535,7 +1535,7 @@ build_firmware() {
             # 特别检查编译器错误
             if grep -q "compiler.*not found" build.log; then
                 log "🚨 发现编译器未找到错误"
-                log "检查编译器工具链路径..."
+                log "检查编译器路径..."
                 if [ -d "staging_dir" ]; then
                     find staging_dir -name "*gcc*" 2>/dev/null | head -10
                 fi
