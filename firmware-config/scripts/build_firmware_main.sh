@@ -615,6 +615,9 @@ setup_environment() {
     # 调试工具
     local debug_packages=("gdb" "strace" "ltrace" "valgrind" "binutils-dev" "libdw-dev" "libiberty-dev")
     
+    # 终端支持包 - 解决"Error opening terminal: unknown"问题
+    local terminal_packages=("ncurses-term" "ncurses-base" "ncurses-bin" "libncursesw5" "libncursesw5-dev" "libtinfo5" "libtinfo-dev" "terminfo" "termcap")
+    
     log "安装基础编译工具..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${base_packages[@]}" || handle_error "安装基础编译工具失败"
     
@@ -627,9 +630,30 @@ setup_environment() {
     log "安装调试工具..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${debug_packages[@]}" || handle_error "安装调试工具失败"
     
+    log "安装终端支持包 (解决终端错误)..."
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${terminal_packages[@]}" || handle_error "安装终端支持包失败"
+    
+    # 设置终端环境变量
+    log "设置终端环境变量..."
+    export TERM=xterm-256color
+    export TERMINFO=/usr/share/terminfo
+    export TERMCAP=/etc/termcap
+    
+    echo "export TERM=xterm-256color" >> ~/.bashrc
+    echo "export TERMINFO=/usr/share/terminfo" >> ~/.bashrc
+    echo "export TERMCAP=/etc/termcap" >> ~/.bashrc
+    
+    # 创建必要的terminfo文件
+    log "检查terminfo文件..."
+    if [ ! -f "/usr/share/terminfo/x/xterm-256color" ]; then
+        log "创建terminfo文件..."
+        sudo mkdir -p /usr/share/terminfo/x
+        sudo ln -s /lib/terminfo/x/xterm /usr/share/terminfo/x/xterm-256color 2>/dev/null || true
+    fi
+    
     # 检查重要工具是否安装成功
     log "=== 验证工具安装 ==="
-    local important_tools=("gcc" "g++" "make" "git" "python3" "cmake" "flex" "bison")
+    local important_tools=("gcc" "g++" "make" "git" "python3" "cmake" "flex" "bison" "ncurses5-config")
     for tool in "${important_tools[@]}"; do
         if command -v $tool >/dev/null 2>&1; then
             log "✅ $tool 已安装: $(which $tool)"
@@ -637,6 +661,16 @@ setup_environment() {
             log "❌ $tool 未安装"
         fi
     done
+    
+    # 检查终端支持
+    log "=== 检查终端支持 ==="
+    if [ -d "/usr/share/terminfo" ]; then
+        log "✅ terminfo目录存在"
+        terminfo_count=$(find /usr/share/terminfo -name "xterm*" 2>/dev/null | wc -l)
+        log "✅ xterm相关terminfo文件: $terminfo_count 个"
+    else
+        log "⚠️ terminfo目录不存在"
+    fi
     
     log "✅ 编译环境设置完成"
 }
