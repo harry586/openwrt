@@ -142,10 +142,43 @@ jobs:
             echo "✅ 已创建编译器文件目录: $COMPILER_DIR"
           fi
       
-      # 步骤 4: 智能检查并编译交叉编译器（修复了YAML语法）
-      - name: "4. 智能检查并编译交叉编译器"
+      # 步骤 4: 初始空间检查
+      - name: "4. 初始空间检查"
         run: |
-          echo "=== 步骤 4: 智能检查并编译交叉编译器 ==="
+          echo "=== 步骤 4: 初始磁盘空间检查 ==="
+          df -h
+          AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
+          AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+          echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+          if [ $AVAILABLE_GB -lt 50 ]; then
+            echo "❌ 错误: /mnt 空间不足50G"
+            exit 1
+          fi
+          echo "✅ 初始空间检查通过"
+      
+      # 步骤 5: 设置编译环境和构建目录
+      - name: "5. 设置编译环境和构建目录"
+        run: |
+          echo "=== 步骤 5: 设置编译环境和构建目录 ==="
+          
+          echo "🔄 步骤 5.1: 设置编译环境"
+          firmware-config/scripts/build_firmware_main.sh setup_environment
+          
+          echo "🔄 步骤 5.2: 创建构建目录"
+          firmware-config/scripts/build_firmware_main.sh create_build_dir
+          
+          echo "🔄 步骤 5.3: 初始化构建环境"
+          echo "设备: ${{ github.event.inputs.device_name }}"
+          echo "版本: ${{ github.event.inputs.version_selection }}"
+          echo "配置模式: ${{ github.event.inputs.config_mode }}"
+          firmware-config/scripts/build_firmware_main.sh initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}"
+          
+          echo "✅ 编译环境和构建目录设置完成"
+      
+      # 步骤 6: 智能检查并编译交叉编译器（修复了YAML语法）
+      - name: "6. 智能检查并编译交叉编译器"
+        run: |
+          echo "=== 步骤 6: 智能检查并编译交叉编译器 ==="
           
           COMPILER_DIR="${{ env.COMPILER_DIR }}"
           COMPILER_OUTPUT_DIR="$COMPILER_DIR/compiled"
@@ -220,8 +253,27 @@ jobs:
           if [ "$NEED_COMPILE" = true ]; then
             echo "🚀 开始编译交叉编译器..."
             
-            # 创建构建目录
-            mkdir -p "$BUILD_DIR"
+            # 确保构建目录存在且有正确权限
+            echo "📁 检查构建目录权限: $BUILD_DIR"
+            if [ ! -d "$BUILD_DIR" ]; then
+              echo "构建目录不存在，创建..."
+              sudo mkdir -p "$BUILD_DIR" || {
+                echo "❌ 使用sudo创建失败，尝试用户目录"
+                BUILD_DIR="/tmp/openwrt-build-compiler"
+                mkdir -p "$BUILD_DIR"
+              }
+            fi
+            
+            # 确保目录有正确权限
+            sudo chown -R $USER:$USER "$BUILD_DIR" 2>/dev/null || true
+            sudo chmod -R 755 "$BUILD_DIR" 2>/dev/null || true
+            
+            if [ ! -w "$BUILD_DIR" ]; then
+              echo "❌ 构建目录不可写，尝试修复..."
+              mkdir -p /tmp/openwrt-compiler-build
+              BUILD_DIR="/tmp/openwrt-compiler-build"
+            fi
+            
             cd "$BUILD_DIR"
             
             # 清理旧目录
@@ -368,39 +420,6 @@ jobs:
           fi
           
           echo "✅ 智能编译器管理完成"
-      
-      # 步骤 5: 初始空间检查
-      - name: "5. 初始空间检查"
-        run: |
-          echo "=== 步骤 5: 初始磁盘空间检查 ==="
-          df -h
-          AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
-          AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-          echo "/mnt 可用空间: ${AVAILABLE_GB}G"
-          if [ $AVAILABLE_GB -lt 50 ]; then
-            echo "❌ 错误: /mnt 空间不足50G"
-            exit 1
-          fi
-          echo "✅ 初始空间检查通过"
-      
-      # 步骤 6: 设置编译环境和构建目录
-      - name: "6. 设置编译环境和构建目录"
-        run: |
-          echo "=== 步骤 6: 设置编译环境和构建目录 ==="
-          
-          echo "🔄 步骤 6.1: 设置编译环境"
-          firmware-config/scripts/build_firmware_main.sh setup_environment
-          
-          echo "🔄 步骤 6.2: 创建构建目录"
-          firmware-config/scripts/build_firmware_main.sh create_build_dir
-          
-          echo "🔄 步骤 6.3: 初始化构建环境"
-          echo "设备: ${{ github.event.inputs.device_name }}"
-          echo "版本: ${{ github.event.inputs.version_selection }}"
-          echo "配置模式: ${{ github.event.inputs.config_mode }}"
-          firmware-config/scripts/build_firmware_main.sh initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}"
-          
-          echo "✅ 编译环境和构建目录设置完成"
       
       # 步骤 7: 添加 TurboACC 支持
       - name: "7. 添加 TurboACC 支持"
