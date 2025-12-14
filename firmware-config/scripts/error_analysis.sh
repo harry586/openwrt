@@ -58,15 +58,7 @@ if [ -f ".config" ]; then
     
     echo "" >> error_analysis.log
     echo "=== 关键USB配置状态 ===" >> error_analysis.log
-    USB_CONFIGS=(
-        "kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-storage"
-        "kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3"
-        "kmod-usb-xhci-hcd" "kmod-usb-ehci" "kmod-usb-ohci"
-        "kmod-usb-storage-uas" "kmod-usb-storage-extras"
-        "kmod-scsi-core" "kmod-scsi-generic"
-        "kmod-usb-uhci" "kmod-usb2-pci" "kmod-usb-ohci-pci"
-        "kmod-usb-xhci-pci" "kmod-usb-xhci-mtk" "kmod-usb-xhci-plat-hcd"
-    )
+    USB_CONFIGS=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-storage" "kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-xhci-hcd" "kmod-usb-ehci" "kmod-usb-ohci" "kmod-usb-storage-uas" "kmod-usb-storage-extras" "kmod-scsi-core" "kmod-scsi-generic" "kmod-usb-uhci" "kmod-usb2-pci" "kmod-usb-ohci-pci" "kmod-usb-xhci-pci" "kmod-usb-xhci-mtk" "kmod-usb-xhci-plat-hcd")
     
     for config in "${USB_CONFIGS[@]}"; do
         if grep -q "CONFIG_PACKAGE_${config}=y" .config; then
@@ -186,9 +178,7 @@ if [ -f ".config" ]; then
     
     echo "" >> error_analysis.log
     echo "=== 编译器配置状态 ===" >> error_analysis.log
-    COMPILER_CONFIGS=(
-        "gcc" "binutils" "libc" "libgcc" "musl" "glibc"
-    )
+    COMPILER_CONFIGS=("gcc" "binutils" "libc" "libgcc" "musl" "glibc")
     
     for config in "${COMPILER_CONFIGS[@]}"; do
         if grep -q "CONFIG_PACKAGE_${config}" .config; then
@@ -306,24 +296,7 @@ echo "开始收集和分析错误日志..." >> error_analysis.log
 echo "使用日志文件: build.log" >> error_analysis.log
 echo "" >> error_analysis.log
 
-ERROR_CATEGORIES=(
-    "严重错误 (Failed):|failed|FAILED"
-    "编译错误 (error:):|error:"
-    "退出错误 (error 1/error 2):|error [12]|Error [12]"
-    "文件缺失错误:|No such file|file not found|cannot find"
-    "依赖错误:|depends on|missing dependencies"
-    "配置错误:|configuration error|config error"
-    "语法错误:|syntax error"
-    "类型错误:|type error"
-    "未定义引用:|undefined reference"
-    "内存错误:|out of memory|Killed process|oom"
-    "权限错误:|Permission denied|operation not permitted"
-    "网络错误:|Connection refused|timeout|Network is unreachable"
-    "哈希校验错误:|Hash mismatch|Bad hash"
-    "管道错误:|Broken pipe"
-    "编译器错误:|compiler|gcc|binutils|ld"
-    "C库相关错误:|musl|glibc|uclibc|libc"
-)
+ERROR_CATEGORIES=("严重错误 (Failed):|failed|FAILED" "编译错误 (error:):|error:" "退出错误 (error 1/error 2):|error [12]|Error [12]" "文件缺失错误:|No such file|file not found|cannot find" "依赖错误:|depends on|missing dependencies" "配置错误:|configuration error|config error" "语法错误:|syntax error" "类型错误:|type error" "未定义引用:|undefined reference" "内存错误:|out of memory|Killed process|oom" "权限错误:|Permission denied|operation not permitted" "网络错误:|Connection refused|timeout|Network is unreachable" "哈希校验错误:|Hash mismatch|Bad hash" "管道错误:|Broken pipe" "编译器错误:|compiler|gcc|binutils|ld" "C库相关错误:|musl|glibc|uclibc|libc")
 
 for category in "${ERROR_CATEGORIES[@]}"; do
     IFS='|' read -r category_name patterns <<< "$category"
