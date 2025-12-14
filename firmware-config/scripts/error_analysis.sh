@@ -280,6 +280,10 @@ if [ -f "build.log" ]; then
     grep -E "compiler|gcc|binutils|ld" build.log -i | head -10 >> error_analysis.log || echo "无编译器错误" >> error_analysis.log
     
     echo "" >> error_analysis.log
+    echo "❌ 终端相关错误:" >> error_analysis.log
+    grep -E "Error opening terminal|terminal.*unknown|TERM.*not set" build.log -i | head -5 >> error_analysis.log || echo "无终端错误" >> error_analysis.log
+    
+    echo "" >> error_analysis.log
     echo "⚠️ 被忽略的错误:" >> error_analysis.log
     grep "Error.*ignored" build.log >> error_analysis.log || echo "无被忽略错误" >> error_analysis.log
     
@@ -296,7 +300,7 @@ echo "开始收集和分析错误日志..." >> error_analysis.log
 echo "使用日志文件: build.log" >> error_analysis.log
 echo "" >> error_analysis.log
 
-ERROR_CATEGORIES=("严重错误 (Failed):|failed|FAILED" "编译错误 (error:):|error:" "退出错误 (error 1/error 2):|error [12]|Error [12]" "文件缺失错误:|No such file|file not found|cannot find" "依赖错误:|depends on|missing dependencies" "配置错误:|configuration error|config error" "语法错误:|syntax error" "类型错误:|type error" "未定义引用:|undefined reference" "内存错误:|out of memory|Killed process|oom" "权限错误:|Permission denied|operation not permitted" "网络错误:|Connection refused|timeout|Network is unreachable" "哈希校验错误:|Hash mismatch|Bad hash" "管道错误:|Broken pipe" "编译器错误:|compiler|gcc|binutils|ld" "C库相关错误:|musl|glibc|uclibc|libc")
+ERROR_CATEGORIES=("严重错误 (Failed):|failed|FAILED" "编译错误 (error:):|error:" "退出错误 (error 1/error 2):|error [12]|Error [12]" "文件缺失错误:|No such file|file not found|cannot find" "依赖错误:|depends on|missing dependencies" "配置错误:|configuration error|config error" "语法错误:|syntax error" "类型错误:|type error" "未定义引用:|undefined reference" "内存错误:|out of memory|Killed process|oom" "权限错误:|Permission denied|operation not permitted" "网络错误:|Connection refused|timeout|Network is unreachable" "哈希校验错误:|Hash mismatch|Bad hash" "管道错误:|Broken pipe" "编译器错误:|compiler|gcc|binutils|ld" "终端错误:|Error opening terminal|terminal.*unknown|TERM.*not set" "C库相关错误:|musl|glibc|uclibc|libc")
 
 for category in "${ERROR_CATEGORIES[@]}"; do
     IFS='|' read -r category_name patterns <<< "$category"
@@ -312,6 +316,25 @@ for category in "${ERROR_CATEGORIES[@]}"; do
 done
 
 echo "=== 错误原因分析和建议 ===" >> error_analysis.log
+
+echo "❌ 终端错误 (Error opening terminal: unknown)" >> error_analysis.log
+echo "💡 问题分析:" >> error_analysis.log
+echo "   - GitHub Actions 运行环境缺少完整的终端支持" >> error_analysis.log
+echo "   - 构建过程中某些配置工具需要终端界面" >> error_analysis.log
+echo "   - TERM 环境变量未正确设置" >> error_analysis.log
+echo "🛠️ 解决方案:" >> error_analysis.log
+echo "  1. 安装终端支持包:" >> error_analysis.log
+echo "     sudo apt-get install -y ncurses-term ncurses-base ncurses-bin libncursesw5 libtinfo5 terminfo" >> error_analysis.log
+echo "  2. 设置环境变量:" >> error_analysis.log
+echo "     export TERM=xterm-256color" >> error_analysis.log
+echo "     export TERMINFO=/usr/share/terminfo" >> error_analysis.log
+echo "     export TERMCAP=/etc/termcap" >> error_analysis.log
+echo "  3. 创建terminfo链接:" >> error_analysis.log
+echo "     sudo mkdir -p /usr/share/terminfo/x" >> error_analysis.log
+echo "     sudo ln -s /lib/terminfo/x/xterm /usr/share/terminfo/x/xterm-256color 2>/dev/null || true" >> error_analysis.log
+echo "  4. 在构建脚本中添加终端支持包:" >> error_analysis.log
+echo "     修改 setup_environment 函数，添加 terminal_packages 数组" >> error_analysis.log
+echo "" >> error_analysis.log
 
 echo "❌ 文件缺失错误" >> error_analysis.log
 echo "💡 可能原因:" >> error_analysis.log
@@ -416,6 +439,7 @@ echo "7. 🔧 检查编译器: 确保 staging_dir/compiler-* 目录存在且完�
 echo "8. 🔌 检查USB插件: 确保所有关键USB驱动已启用（当前配置已强制启用）" >> error_analysis.log
 echo "9. 🖥️ 检查平台专用驱动: 根据您的设备平台（高通/雷凌）启用相应驱动" >> error_analysis.log
 echo "10. 💾 检查文件系统支持: 确保NTFS3, ext4, vfat等文件系统驱动已启用" >> error_analysis.log
+echo "11. 💻 修复终端错误: 安装 ncurses-term 包并设置 TERM 环境变量" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "=== 针对USB问题的特殊修复方案 ===" >> error_analysis.log
@@ -440,6 +464,33 @@ echo "   make defconfig" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "4. 🔄 重新编译:" >> error_analysis.log
 echo "   make -j$(nproc) V=s" >> error_analysis.log
+echo "" >> error_analysis.log
+
+echo "=== 针对终端错误的特殊修复方案 ===" >> error_analysis.log
+echo "如果遇到 'Error opening terminal: unknown' 错误，请执行以下步骤:" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "1. 🔧 安装终端支持包:" >> error_analysis.log
+echo "   sudo apt-get update" >> error_analysis.log
+echo "   sudo apt-get install -y ncurses-term ncurses-base ncurses-bin libncursesw5 libncursesw5-dev libtinfo5 libtinfo-dev terminfo termcap" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "2. 🔧 设置环境变量:" >> error_analysis.log
+echo "   export TERM=xterm-256color" >> error_analysis.log
+echo "   export TERMINFO=/usr/share/terminfo" >> error_analysis.log
+echo "   export TERMCAP=/etc/termcap" >> error_analysis.log
+echo "   echo 'export TERM=xterm-256color' >> ~/.bashrc" >> error_analysis.log
+echo "   echo 'export TERMINFO=/usr/share/terminfo' >> ~/.bashrc" >> error_analysis.log
+echo "   echo 'export TERMCAP=/etc/termcap' >> ~/.bashrc" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "3. 🔧 创建terminfo文件:" >> error_analysis.log
+echo "   sudo mkdir -p /usr/share/terminfo/x" >> error_analysis.log
+echo "   sudo ln -s /lib/terminfo/x/xterm /usr/share/terminfo/x/xterm-256color 2>/dev/null || true" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "4. 🔧 测试终端支持:" >> error_analysis.log
+echo "   echo \$TERM" >> error_analysis.log
+echo "   ls -la /usr/share/terminfo/x/xterm* 2>/dev/null || echo 'terminfo文件不存在'" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "5. 🔧 在构建脚本中修复:" >> error_analysis.log
+echo "   修改 setup_environment 函数，添加终端支持包安装" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "错误分析完成 - 查看 error_analysis.log 获取详细信息" >> error_analysis.log
