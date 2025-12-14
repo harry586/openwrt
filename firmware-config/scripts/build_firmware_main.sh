@@ -4,7 +4,7 @@ set -e
 BUILD_DIR="/mnt/openwrt-build"
 ENV_FILE="$BUILD_DIR/build_env.sh"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-TOOLCHAIN_DIR="$REPO_ROOT/firmware-config/Toolchain"
+COMPILER_DIR="$REPO_ROOT/firmware-config/build-Compiler-file"
 
 log() {
     echo "【$(date '+%Y-%m-%d %H:%M:%S')】$1"
@@ -13,178 +13,6 @@ log() {
 handle_error() {
     log "❌ 错误发生在: $1"
     exit 1
-}
-
-# 新增：验证工具链完整性函数（修复版）
-verify_toolchain_completeness() {
-    local toolchain_dir=$1
-    
-    log "🔧 验证工具链完整性: $toolchain_dir"
-    
-    if [ ! -d "$toolchain_dir" ]; then
-        log "❌ 工具链目录不存在: $toolchain_dir"
-        return 1
-    fi
-    
-    # 检查真正的编译器文件，而不是stamp文件
-    log "查找真正的编译器文件..."
-    local compilers=($(find "$toolchain_dir" -type f \( -name "*gcc*" -o -name "*g++*" \) ! -name "*.stamp*" ! -name ".gcc_*" 2>/dev/null | grep -v "stamp" | head -20))
-    
-    if [ ${#compilers[@]} -eq 0 ]; then
-        log "⚠️  未找到编译器，尝试在其他位置查找..."
-        # 尝试在bin目录查找
-        if [ -d "$toolchain_dir/bin" ]; then
-            compilers=($(find "$toolchain_dir/bin" -type f -name "*gcc*" 2>/dev/null))
-        fi
-        
-        if [ ${#compilers[@]} -eq 0 ]; then
-            log "❌ 未找到任何编译器文件，工具链不完整"
-            return 1
-        fi
-    fi
-    
-    log "找到 ${#compilers[@]} 个编译器文件"
-    
-    # 只检查真正的可执行文件，跳过标记文件
-    local valid_compilers=0
-    for compiler in "${compilers[@]}"; do
-        # 跳过非普通文件（如目录、符号链接等）
-        if [ ! -f "$compiler" ]; then
-            continue
-        fi
-        
-        # 跳过stamp文件和标记文件
-        if [[ "$compiler" == *".stamp"* ]] || [[ "$compiler" == *".gcc_"* ]] || [[ "$compiler" == *"/stamp/"* ]]; then
-            continue
-        fi
-        
-        # 检查文件大小，太小的文件可能是标记文件
-        local file_size=$(stat -c%s "$compiler" 2>/dev/null || echo "0")
-        if [ "$file_size" -lt 1000 ]; then
-            log "跳过小文件（可能是标记文件）: $compiler ($file_size 字节)"
-            continue
-        fi
-        
-        log "检查编译器: $compiler ($(du -h "$compiler" 2>/dev/null | cut -f1))"
-        
-        # 如果是可执行文件，测试它
-        if [ -x "$compiler" ]; then
-            log "✅ 可执行: $compiler"
-            valid_compilers=$((valid_compilers + 1))
-        else
-            # 尝试添加执行权限
-            if chmod +x "$compiler" 2>/dev/null; then
-                log "✅ 已添加执行权限: $compiler"
-                valid_compilers=$((valid_compilers + 1))
-            else
-                log "⚠️  无法添加执行权限: $compiler"
-            fi
-        fi
-    done
-    
-    if [ $valid_compilers -eq 0 ]; then
-        log "❌ 没有找到有效的可执行编译器"
-        return 1
-    fi
-    
-    log "✅ 找到 $valid_compilers 个有效的编译器"
-    
-    # 检查bin目录是否存在
-    if [ ! -d "$toolchain_dir/bin" ]; then
-        log "⚠️  警告: bin目录不存在，但找到了编译器文件"
-        # 列出工具链目录结构以便调试
-        log "工具链目录结构:"
-        find "$toolchain_dir" -maxdepth 2 -type d | head -10
-    else
-        log "✅ bin目录存在"
-    fi
-    
-    log "✅ 工具链验证通过"
-    return 0
-}
-
-# 新增：检查工具链完整性（公开函数）
-check_toolchain_completeness() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 检查工具链完整性 ==="
-    
-    # 查找工具链目录
-    local toolchain_dir=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
-    
-    if [ -z "$toolchain_dir" ]; then
-        log "❌ 未找到工具链目录"
-        return 1
-    fi
-    
-    verify_toolchain_completeness "$toolchain_dir"
-    local result=$?
-    
-    if [ $result -eq 0 ]; then
-        log "✅ 工具链完整性检查通过"
-    else
-        log "❌ 工具链完整性检查失败"
-    fi
-    
-    return $result
-}
-
-# 新增：设置工具链环境函数
-setup_toolchain_env() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 设置工具链环境 ==="
-    
-    # 查找工具链目录
-    local toolchain_dir=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
-    
-    if [ -d "$toolchain_dir" ]; then
-        log "✅ 找到工具链目录: $toolchain_dir"
-        
-        # 设置工具链环境变量
-        export STAGING_DIR="$toolchain_dir"
-        
-        # 查找编译器路径
-        local bin_dir="$toolchain_dir/bin"
-        if [ -d "$bin_dir" ]; then
-            export PATH="$bin_dir:$PATH"
-            log "✅ 添加工具链到PATH: $bin_dir"
-            
-            # 检查编译器是否存在
-            local target_compiler=""
-            case "$TARGET" in
-                "ipq40xx")
-                    target_compiler="arm-openwrt-linux-muslgnueabi-gcc"
-                    ;;
-                "ramips")
-                    if [ "$SUBTARGET" = "mt76x8" ]; then
-                        target_compiler="mipsel-openwrt-linux-musl-gcc"
-                    elif [ "$SUBTARGET" = "mt7621" ]; then
-                        target_compiler="mipsel-openwrt-linux-musl-gcc"
-                    fi
-                    ;;
-            esac
-            
-            if [ -n "$target_compiler" ] && [ -f "$bin_dir/$target_compiler" ]; then
-                log "✅ 找到目标编译器: $bin_dir/$target_compiler"
-                # 测试编译器
-                if "$bin_dir/$target_compiler" --version >/dev/null 2>&1; then
-                    log "✅ 编译器工作正常"
-                else
-                    log "❌ 编译器无法运行，检查权限"
-                    chmod +x "$bin_dir/$target_compiler"
-                fi
-            else
-                log "⚠️  未找到目标编译器: $target_compiler"
-                # 显示可用的编译器
-                find "$bin_dir" -name "*gcc*" 2>/dev/null | head -5
-            fi
-        fi
-    else
-        log "⚠️  未找到工具链目录，将自动下载"
-    fi
 }
 
 # 新增：保存源代码信息函数
@@ -265,340 +93,79 @@ load_env() {
     fi
 }
 
-get_toolchain_path() {
-    load_env
-    # 确保Toolchain目录存在
-    mkdir -p "$TOOLCHAIN_DIR/$SELECTED_BRANCH/$TARGET/$SUBTARGET"
-    echo "$TOOLCHAIN_DIR/$SELECTED_BRANCH/$TARGET/$SUBTARGET"
-}
-
-get_common_toolchain_path() {
-    # 确保common目录存在
-    mkdir -p "$TOOLCHAIN_DIR/common"
-    echo "$TOOLCHAIN_DIR/common"
-}
-
-check_large_files() {
-    log "=== 检查大文件 ==="
+# 新增：下载必要编译器文件函数
+download_compiler_files() {
+    log "=== 下载必要编译器文件 ==="
+    log "编译器文件目录: $COMPILER_DIR"
     
-    local repo_root="$(pwd)"
+    # 确保目录存在
+    mkdir -p "$COMPILER_DIR"
     
-    # 检查是否有超过 90MB 的文件
-    log "检查大于90MB的文件..."
-    large_files=$(find . -type f -size +90M 2>/dev/null | grep -v ".git" || true)
+    # 编译器文件清单
+    local compiler_list=(
+        "gcc-11.3.0.tar.xz"         # GNU C编译器
+        "binutils-2.38.tar.xz"      # GNU二进制工具集
+        "make-4.3.tar.gz"           # GNU make工具
+        "gmp-6.2.1.tar.xz"          # GNU多精度算术库
+        "mpfr-4.1.0.tar.xz"         # GNU多精度浮点库
+        "mpc-1.2.1.tar.gz"          # GNU多精度复数库
+        "isl-0.24.tar.xz"           # 整数集库
+    )
     
-    if [ -n "$large_files" ]; then
-        log "⚠️  发现以下大文件（可能超过GitHub限制）:"
-        echo "$large_files"
-        log "💡 建议: 将这些文件添加到 .gitattributes 中使用 Git LFS 管理"
+    # 编译器文件下载URL
+    declare -A compiler_urls=(
+        ["gcc-11.3.0.tar.xz"]="https://ftp.gnu.org/gnu/gcc/gcc-11.3.0/gcc-11.3.0.tar.xz"
+        ["binutils-2.38.tar.xz"]="https://ftp.gnu.org/gnu/binutils/binutils-2.38.tar.xz"
+        ["make-4.3.tar.gz"]="https://ftp.gnu.org/gnu/make/make-4.3.tar.gz"
+        ["gmp-6.2.1.tar.xz"]="https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.xz"
+        ["mpfr-4.1.0.tar.xz"]="https://ftp.gnu.org/gnu/mpfr/mpfr-4.1.0.tar.xz"
+        ["mpc-1.2.1.tar.gz"]="https://ftp.gnu.org/gnu/mpc/mpc-1.2.1.tar.gz"
+        ["isl-0.24.tar.xz"]="https://gcc.gnu.org/pub/gcc/infrastructure/isl-0.24.tar.xz"
+    )
+    
+    log "🔍 编译器文件清单:"
+    local total_files=0
+    local existing_files=0
+    local downloaded_files=0
+    
+    for file in "${compiler_list[@]}"; do
+        total_files=$((total_files + 1))
         
-        # 检查工具链中的大文件 - 修复路径
-        local toolchain_path="$REPO_ROOT/firmware-config/Toolchain"
-        if [ -d "$toolchain_path" ]; then
-            log "检查工具链中的大文件..."
-            find "$toolchain_path" -type f -size +50M 2>/dev/null | head -10 || true
+        if [ -f "$COMPILER_DIR/$file" ]; then
+            log "  ✅ $file: 已存在"
+            existing_files=$((existing_files + 1))
         else
-            log "ℹ️  工具链目录不存在: $toolchain_path"
-        fi
-    else
-        log "✅ 未发现超过90MB的大文件"
-    fi
-}
-
-init_toolchain_dir() {
-    log "=== 初始化工具链目录 ==="
-    mkdir -p "$TOOLCHAIN_DIR"
-    log "✅ 工具链目录: $TOOLCHAIN_DIR"
-    
-    # 确保目录结构正确
-    mkdir -p "$TOOLCHAIN_DIR/common"
-    mkdir -p "$TOOLCHAIN_DIR/openwrt-21.02"
-    mkdir -p "$TOOLCHAIN_DIR/openwrt-23.05"
-    
-    # 创建README文件（如果不存在）
-    if [ ! -f "$TOOLCHAIN_DIR/README.md" ]; then
-        cat > "$TOOLCHAIN_DIR/README.md" << EOF
-# OpenWrt 编译工具链
-
-## 目录结构
-- \`common/\` - 通用工具链组件，包含基本的编译工具
-- \`<版本>/<平台>/<子平台>/ - 版本特定的完整工具链
-
-## 用途
-1. **加速编译**：保存的工具链可以避免重复下载和编译
-2. **离线编译**：在没有网络的环境下也可以进行编译
-3. **版本管理**：不同版本和平台的工具链独立保存
-
-## 使用方式
-工具链会在编译时自动加载，无需手动操作
-
-## 注意事项
-- 工具链文件较大，已使用 Git LFS 管理大文件
-- 不同版本的工具链不兼容，请勿混用
-- 如果编译失败，可以尝试清理工具链重新下载
-
-## 文件说明
-- \`build.config\` - 编译时使用的配置文件备份
-- \`bin/\` - 编译工具（gcc, g++, ld等）
-- \`lib/\` - 库文件
-- \`include/\` - 头文件
-
-## Git LFS 管理
-大文件（如编译器、库文件）已使用 Git LFS 管理，确保不会超过 GitHub 文件大小限制
-EOF
-        log "✅ 创建README.md文件"
-    fi
-}
-
-save_toolchain() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 保存工具链到仓库 ==="
-    
-    # 初始化工具链目录
-    init_toolchain_dir
-    
-    local toolchain_path=$(get_toolchain_path)
-    local common_path=$(get_common_toolchain_path)
-    
-    log "🔍 工具链保存路径信息:"
-    log "  目标工具链路径: $toolchain_path"
-    log "  仓库根目录: $REPO_ROOT"
-    log "  当前工作目录: $(pwd)"
-    
-    # 确保目标目录存在且有写权限
-    mkdir -p "$toolchain_path"
-    mkdir -p "$common_path"
-    
-    # 检查是否有工具链可以保存
-    local staging_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
-    
-    if [ -z "$staging_toolchain" ]; then
-        log "⚠️  未找到工具链，跳过保存"
-        return 0
-    fi
-    
-    log "找到工具链: $staging_toolchain"
-    
-    # 先清理目标目录
-    log "清理目标目录..."
-    rm -rf "$toolchain_path"/*
-    rm -rf "$common_path"/*
-    
-    if [ -d "$staging_toolchain" ]; then
-        log "保存版本特定工具链到: $toolchain_path"
-        
-        # 使用rsync保持文件属性和符号链接
-        cd "$(dirname "$staging_toolchain")"
-        local toolchain_name=$(basename "$staging_toolchain")
-        
-        # 创建工具链的压缩版本（用于快速传输）
-        log "创建工具链..."
-        if rsync -av "$toolchain_name/" "$toolchain_path/" --exclude="*.o" --exclude="*.a"; then
-            log "✅ 版本特定工具链保存成功 (使用rsync复制)"
+            log "  📥 $file: 需要下载"
             
-            # 记录工具链信息
-            echo "# Toolchain saved on $(date)" > "$toolchain_path/toolchain.info"
-            echo "Version: $SELECTED_BRANCH" >> "$toolchain_path/toolchain.info"
-            echo "Target: $TARGET" >> "$toolchain_path/toolchain.info"
-            echo "Subtarget: $SUBTARGET" >> "$toolchain_path/toolchain.info"
-            echo "Device: $DEVICE" >> "$toolchain_path/toolchain.info"
-            echo "Saved with Git LFS: true" >> "$toolchain_path/toolchain.info"
-        else
-            log "❌ rsync复制失败"
-            return 1
-        fi
-    else
-        log "❌ 工具链目录不存在: $staging_toolchain"
-        return 1
-    fi
-    
-    log "保存通用工具链到: $common_path"
-    mkdir -p "$common_path/bin"
-    
-    # 复制常用工具
-    local tools=("ar" "as" "gcc" "g++" "ld" "nm" "objcopy" "objdump" "ranlib" "strip")
-    local copied_tools=0
-    for tool in "${tools[@]}"; do
-        if find "$staging_toolchain/bin" -name "*$tool*" -type f -exec cp -v {} "$common_path/bin/" \; 2>/dev/null; then
-            copied_tools=$((copied_tools + 1))
+            # 下载文件
+            local url="${compiler_urls[$file]}"
+            if [ -n "$url" ]; then
+                log "    下载: $url"
+                if wget --no-check-certificate -q --show-progress -O "$COMPILER_DIR/$file" "$url"; then
+                    log "    ✅ 下载成功"
+                    downloaded_files=$((downloaded_files + 1))
+                else
+                    log "    ❌ 下载失败"
+                fi
+            else
+                log "    ⚠️ 无下载URL"
+            fi
         fi
     done
     
-    log "复制了 $copied_tools 个通用工具"
+    log "📊 下载统计:"
+    log "  总计: $total_files 个编译器文件"
+    log "  已存在: $existing_files 个"
+    log "  新下载: $downloaded_files 个"
     
-    # 保存编译配置文件
-    mkdir -p "$common_path/etc"
-    if [ -f "$BUILD_DIR/.config" ]; then
-        cp "$BUILD_DIR/.config" "$common_path/etc/build.config"
-        log "✅ 保存构建配置文件"
+    # 显示目录大小
+    if [ $existing_files -gt 0 ] || [ $downloaded_files -gt 0 ]; then
+        log "📁 编译器目录大小: $(du -sh "$COMPILER_DIR" | cut -f1)"
+        log "📋 编译器文件列表:"
+        ls -lh "$COMPILER_DIR" 2>/dev/null | head -15 || log "  无文件"
     fi
     
-    # 显示保存结果
-    log "✅ 工具链保存完成"
-    log "特定版本工具链: $toolchain_path"
-    log "  文件数: $(find "$toolchain_path" -type f | wc -l)"
-    log "  大小: $(du -sh "$toolchain_path" | cut -f1)"
-    log "通用工具链: $common_path"
-    log "  通用工具: $copied_tools 个"
-    log "  大小: $(du -sh "$common_path" | cut -f1)"
-    
-    # 检查是否有大文件需要Git LFS管理
-    log "🔍 检查大文件..."
-    local large_files=$(find "$TOOLCHAIN_DIR" -type f -size +50M 2>/dev/null | wc -l)
-    if [ $large_files -gt 0 ]; then
-        log "⚠️  发现 $large_files 个大于50M的文件，建议使用Git LFS管理"
-        find "$TOOLCHAIN_DIR" -type f -size +50M 2>/dev/null | head -5
-    fi
-    
-    return 0
-}
-
-load_toolchain() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 加载工具链 ==="
-    log "当前工作目录: $(pwd)"
-    log "仓库根目录: $REPO_ROOT"
-    log "工具链目录: $TOOLCHAIN_DIR"
-    
-    # 初始化工具链目录
-    init_toolchain_dir
-    
-    local toolchain_path=$(get_toolchain_path)
-    local common_path=$(get_common_toolchain_path)
-    
-    log "检查仓库工具链目录: $toolchain_path"
-    if [ -d "$toolchain_path" ]; then
-        log "✅ 工具链目录存在"
-        log "目录内容:"
-        ls -la "$toolchain_path" 2>/dev/null | head -10 || log "无法列出目录内容"
-        
-        # 检查是否有实际文件
-        local file_count=$(find "$toolchain_path" -type f 2>/dev/null | wc -l)
-        if [ $file_count -gt 0 ]; then
-            log "✅ 工具链目录有 $file_count 个文件"
-        else
-            log "⚠️  工具链目录存在但为空"
-        fi
-    else
-        log "ℹ️  工具链目录不存在: $toolchain_path"
-        log "将创建新目录并下载工具链"
-        mkdir -p "$toolchain_path"
-    fi
-    
-    log "检查通用工具链目录: $common_path"
-    if [ -d "$common_path" ]; then
-        log "✅ 通用工具链目录存在"
-    else
-        log "ℹ️  通用工具链目录不存在"
-        mkdir -p "$common_path"
-    fi
-    
-    # 尝试从仓库加载工具链
-    local found_repo_toolchain=0
-    
-    # 检查版本特定工具链
-    if [ -d "$toolchain_path" ] && [ "$(ls -A "$toolchain_path" 2>/dev/null)" ]; then
-        found_repo_toolchain=1
-        log "✅ 从仓库找到版本特定工具链: $toolchain_path"
-        
-        # 检查工具链完整性
-        local toolchain_files=$(find "$toolchain_path" -type f -name "*gcc*" 2>/dev/null | wc -l)
-        if [ $toolchain_files -gt 0 ]; then
-            log "✅ 找到 $toolchain_files 个编译器文件"
-        else
-            log "⚠️  未找到编译器文件，可能工具链不完整"
-        fi
-    else
-        log "⚠️  仓库中未找到版本特定工具链"
-    fi
-    
-    # 检查通用工具链
-    if [ -d "$common_path/bin" ] && [ "$(ls -A "$common_path/bin" 2>/dev/null)" ]; then
-        found_repo_toolchain=1
-        log "✅ 从仓库找到通用工具链: $common_path/bin"
-    fi
-    
-    if [ $found_repo_toolchain -eq 0 ]; then
-        log "⚠️  仓库中未找到任何工具链，将使用默认工具链"
-        return 0
-    fi
-    
-    mkdir -p staging_dir
-    
-    # 加载版本特定工具链
-    if [ -d "$toolchain_path" ] && [ "$(ls -A "$toolchain_path" 2>/dev/null)" ]; then
-        log "🔧 从仓库加载版本特定工具链: $toolchain_path"
-        
-        # 检查是否已有工具链
-        local existing_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
-        
-        if [ -n "$existing_toolchain" ]; then
-            log "已存在工具链: $existing_toolchain，跳过加载"
-        else
-            # 复制工具链文件
-            log "复制工具链文件到 staging_dir..."
-            
-            # 检查toolchain_path是目录还是直接包含工具链文件
-            if find "$toolchain_path" -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | grep -q .; then
-                # 有工具链子目录
-                local toolchain_subdir=$(find "$toolchain_path" -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
-                if [ -n "$toolchain_subdir" ]; then
-                    local toolchain_name=$(basename "$toolchain_subdir")
-                    log "复制工具链目录: $toolchain_name"
-                    cp -r "$toolchain_subdir" staging_dir/
-                    
-                    # 验证工具链
-                    if verify_toolchain_completeness "staging_dir/$toolchain_name"; then
-                        log "✅ 版本特定工具链加载完成"
-                    else
-                        log "⚠️  工具链验证失败，可能需要重新下载"
-                    fi
-                fi
-            else
-                # 直接复制文件
-                log "复制工具链文件"
-                mkdir -p staging_dir/toolchain-repo
-                cp -r "$toolchain_path"/* staging_dir/toolchain-repo/ 2>/dev/null || true
-                
-                if [ "$(ls -A staging_dir/toolchain-repo 2>/dev/null)" ]; then
-                    log "✅ 工具链文件复制完成"
-                else
-                    log "⚠️  工具链文件复制失败"
-                fi
-            fi
-        fi
-    fi
-    
-    # 加载通用工具链
-    if [ -d "$common_path/bin" ] && [ "$(ls -A "$common_path/bin" 2>/dev/null)" ]; then
-        log "🔧 从仓库加载通用工具链组件"
-        
-        mkdir -p staging_dir/host/bin
-        cp -r "$common_path/bin"/* staging_dir/host/bin/ 2>/dev/null || true
-        log "✅ 通用工具链组件加载完成"
-    fi
-    
-    # 最终检查
-    local final_toolchain=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
-    if [ -n "$final_toolchain" ]; then
-        log "✅ 工具链加载成功: $final_toolchain"
-        log "工具链大小: $(du -sh "$final_toolchain" 2>/dev/null | cut -f1 || echo '未知')"
-        
-        # 验证完整性
-        if verify_toolchain_completeness "$final_toolchain"; then
-            log "✅ 工具链完整性验证通过"
-        else
-            log "⚠️  工具链完整性验证失败"
-        fi
-    else
-        log "⚠️  构建目录中未找到完整工具链，将自动下载"
-    fi
-    
-    return 0
+    log "✅ 编译器文件下载完成"
 }
 
 integrate_custom_files() {
@@ -610,7 +177,7 @@ integrate_custom_files() {
     local custom_dir="$REPO_ROOT/firmware-config/custom-files"
     
     if [ ! -d "$custom_dir" ]; then
-        log "ℹ️  自定义文件目录不存在: $custom_dir"
+        log "ℹ️ 自定义文件目录不存在: $custom_dir"
         return 0
     fi
     
@@ -815,14 +382,14 @@ pre_build_error_check() {
     
     # 3. 检查依赖包
     if [ ! -d "dl" ]; then
-        log "⚠️  警告: dl 目录不存在，可能需要下载依赖"
+        log "⚠️ 警告: dl 目录不存在，可能需要下载依赖"
         warning_count=$((warning_count + 1))
     else
         local dl_count=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
         log "✅ 依赖包数量: $dl_count 个"
         
         if [ $dl_count -lt 10 ]; then
-            log "⚠️  警告: 依赖包数量较少，可能下载不完整"
+            log "⚠️ 警告: 依赖包数量较少，可能下载不完整"
             warning_count=$((warning_count + 1))
         fi
         
@@ -832,7 +399,7 @@ pre_build_error_check() {
             if find dl -name "*${dep}*" -type f 2>/dev/null | grep -q .; then
                 log "✅ 找到关键依赖: $dep"
             else
-                log "⚠️  警告: 未找到关键依赖: $dep"
+                log "⚠️ 警告: 未找到关键依赖: $dep"
                 warning_count=$((warning_count + 1))
             fi
         done
@@ -843,7 +410,7 @@ pre_build_error_check() {
             if find dl -name "*musl*" -type f 2>/dev/null | grep -q .; then
                 log "✅ 找到musl C库 (现代OpenWrt使用)"
             else
-                log "⚠️  警告: 未找到musl C库"
+                log "⚠️ 警告: 未找到musl C库"
                 warning_count=$((warning_count + 1))
             fi
         fi
@@ -853,7 +420,7 @@ pre_build_error_check() {
     if [ -d "staging_dir" ]; then
         local toolchain_count=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | wc -l)
         if [ $toolchain_count -eq 0 ]; then
-            log "⚠️  警告: 未找到编译工具链，将自动下载"
+            log "⚠️ 警告: 未找到编译工具链，将自动下载"
             warning_count=$((warning_count + 1))
         else
             log "✅ 已下载编译工具链: $toolchain_count 个"
@@ -865,13 +432,13 @@ pre_build_error_check() {
                 if [ $compiler_count -gt 0 ]; then
                     log "✅ 工具链编译器文件: $compiler_count 个"
                 else
-                    log "⚠️  警告: 工具链缺少编译器文件"
+                    log "⚠️ 警告: 工具链缺少编译器文件"
                     warning_count=$((warning_count + 1))
                 fi
             fi
         fi
     else
-        log "ℹ️  staging_dir目录不存在，将自动下载工具链"
+        log "ℹ️ staging_dir目录不存在，将自动下载工具链"
     fi
     
     # 5. 检查关键文件
@@ -891,7 +458,7 @@ pre_build_error_check() {
         if [ $script_files -gt 0 ]; then
             log "✅ 可执行脚本文件: $script_files 个"
         else
-            log "⚠️  警告: 没有可执行的脚本文件"
+            log "⚠️ 警告: 没有可执行的脚本文件"
             warning_count=$((warning_count + 1))
         fi
     fi
@@ -905,7 +472,7 @@ pre_build_error_check() {
         log "❌ 错误: 磁盘空间不足 (需要至少10G，当前${available_gb}G)"
         error_count=$((error_count + 1))
     elif [ $available_gb -lt 20 ]; then
-        log "⚠️  警告: 磁盘空间较低 (建议至少20G，当前${available_gb}G)"
+        log "⚠️ 警告: 磁盘空间较低 (建议至少20G，当前${available_gb}G)"
         warning_count=$((warning_count + 1))
     fi
     
@@ -914,7 +481,7 @@ pre_build_error_check() {
     log "系统内存: ${total_mem}MB"
     
     if [ $total_mem -lt 1024 ]; then
-        log "⚠️  警告: 内存较低 (建议至少1GB)"
+        log "⚠️ 警告: 内存较低 (建议至少1GB)"
         warning_count=$((warning_count + 1))
     fi
     
@@ -923,7 +490,7 @@ pre_build_error_check() {
     log "CPU核心数: $cpu_cores"
     
     if [ $cpu_cores -lt 2 ]; then
-        log "⚠️  警告: CPU核心数较少，编译速度会受影响"
+        log "⚠️ 警告: CPU核心数较少，编译速度会受影响"
         warning_count=$((warning_count + 1))
     fi
     
@@ -931,7 +498,7 @@ pre_build_error_check() {
     log "🔧 检查C库配置..."
     if [ -f ".config" ]; then
         if grep -q "CONFIG_EXTERNAL_TOOLCHAIN=y" .config; then
-            log "ℹ️  使用外部工具链"
+            log "ℹ️ 使用外部工具链"
         elif grep -q "CONFIG_USE_MUSL=y" .config; then
             log "✅ 配置为使用musl C库"
         elif grep -q "CONFIG_USE_GLIBC=y" .config; then
@@ -939,7 +506,7 @@ pre_build_error_check() {
         elif grep -q "CONFIG_USE_UCLIBC=y" .config; then
             log "✅ 配置为使用uclibc C库"
         else
-            log "⚠️  警告: 未明确指定C库类型"
+            log "⚠️ 警告: 未明确指定C库类型"
             warning_count=$((warning_count + 1))
         fi
     fi
@@ -949,7 +516,7 @@ pre_build_error_check() {
         if [ $warning_count -eq 0 ]; then
             log "✅ 前置检查通过，可以开始编译"
         else
-            log "⚠️  前置检查通过，但有 $warning_count 个警告，建议修复"
+            log "⚠️ 前置检查通过，但有 $warning_count 个警告，建议修复"
         fi
         return 0
     else
@@ -991,16 +558,8 @@ setup_environment() {
         binutils-dev libdw-dev libiberty-dev
     )
     
-    # Git LFS
-    local git_lfs_packages=(
-        git-lfs
-    )
-    
     log "安装基础编译工具..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${base_packages[@]}" || handle_error "安装基础编译工具失败"
-    
-    log "安装Git LFS..."
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${git_lfs_packages[@]}" || handle_error "安装Git LFS失败"
     
     log "安装网络工具..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${network_packages[@]}" || handle_error "安装网络工具失败"
@@ -1011,12 +570,9 @@ setup_environment() {
     log "安装调试工具..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${debug_packages[@]}" || handle_error "安装调试工具失败"
     
-    # 初始化Git LFS
-    git lfs install || log "⚠️  Git LFS初始化失败，但将继续"
-    
     # 检查重要工具是否安装成功
     log "=== 验证工具安装 ==="
-    local important_tools=("gcc" "g++" "make" "git" "git-lfs" "python3" "cmake" "flex" "bison")
+    local important_tools=("gcc" "g++" "make" "git" "python3" "cmake" "flex" "bison")
     for tool in "${important_tools[@]}"; do
         if command -v $tool >/dev/null 2>&1; then
             log "✅ $tool 已安装: $(which $tool)"
@@ -1139,10 +695,10 @@ add_turboacc_support() {
             echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
             log "✅ TurboACC feed 添加完成"
         else
-            log "ℹ️  21.02 版本已内置 TurboACC，无需额外添加"
+            log "ℹ️ 21.02 版本已内置 TurboACC，无需额外添加"
         fi
     else
-        log "ℹ️  基础模式不添加 TurboACC 支持"
+        log "ℹ️ 基础模式不添加 TurboACC 支持"
     fi
 }
 
@@ -1234,7 +790,7 @@ pre_build_space_check() {
     # 编译所需空间估算
     local estimated_space=15  # 估计需要15GB
     if [ $available_gb -lt $estimated_space ]; then
-        log "⚠️  警告: 可用空间(${available_gb}G)可能不足，建议至少${estimated_space}G"
+        log "⚠️ 警告: 可用空间(${available_gb}G)可能不足，建议至少${estimated_space}G"
     else
         log "✅ 磁盘空间充足: ${available_gb}G 可用"
     fi
@@ -1554,7 +1110,7 @@ verify_usb_config() {
     log "📈 统计: $enabled_count 个已启用，$missing_count 个未启用"
     
     if [ $missing_count -gt 0 ]; then
-        log "⚠️  警告: 有 $missing_count 个关键USB驱动未启用，可能会影响USB功能"
+        log "⚠️ 警告: 有 $missing_count 个关键USB驱动未启用，可能会影响USB功能"
     else
         log "🎉 恭喜: 所有关键USB驱动都已启用"
     fi
@@ -1841,7 +1397,7 @@ fix_network() {
     if curl -s --connect-timeout 10 https://github.com > /dev/null; then
         log "✅ 网络连接正常"
     else
-        log "⚠️  网络连接可能有问题"
+        log "⚠️ 网络连接可能有问题"
     fi
     
     log "✅ 网络环境修复完成"
@@ -1873,12 +1429,12 @@ download_dependencies() {
     if [ $downloaded_deps -gt $existing_deps ]; then
         log "✅ 成功下载了 $((downloaded_deps - existing_deps)) 个新依赖包"
     else
-        log "ℹ️  没有下载新的依赖包"
+        log "ℹ️ 没有下载新的依赖包"
     fi
     
     # 检查下载日志中的错误
     if grep -q "ERROR\|Failed\|404" download.log 2>/dev/null; then
-        log "⚠️  下载过程中发现错误:"
+        log "⚠️ 下载过程中发现错误:"
         grep -E "ERROR|Failed|404" download.log | head -10
     fi
     
@@ -1892,9 +1448,6 @@ build_firmware() {
     
     log "=== 编译固件 ==="
     
-    # 设置工具链环境
-    setup_toolchain_env
-    
     # 编译前最终检查
     log "编译前最终检查..."
     if [ ! -f ".config" ]; then
@@ -1903,11 +1456,11 @@ build_firmware() {
     fi
     
     if [ ! -d "staging_dir" ]; then
-        log "⚠️  警告: staging_dir 目录不存在"
+        log "⚠️ 警告: staging_dir 目录不存在"
     fi
     
     if [ ! -d "dl" ]; then
-        log "⚠️  警告: dl 目录不存在"
+        log "⚠️ 警告: dl 目录不存在"
     fi
     
     # 获取CPU核心数
@@ -1921,19 +1474,13 @@ build_firmware() {
         if [ $make_jobs -lt 1 ]; then
             make_jobs=1
         fi
-        log "⚠️  内存较低(${total_mem}MB)，减少并行任务到 $make_jobs"
+        log "⚠️ 内存较低(${total_mem}MB)，减少并行任务到 $make_jobs"
     fi
     
-    # 开始编译
-    if [ "$enable_cache" = "true" ]; then
-        log "启用编译缓存，使用 $make_jobs 个并行任务"
-        make -j$make_jobs V=s 2>&1 | tee build.log
-        BUILD_EXIT_CODE=${PIPESTATUS[0]}
-    else
-        log "普通编译模式，使用 $make_jobs 个并行任务"
-        make -j$make_jobs V=s 2>&1 | tee build.log
-        BUILD_EXIT_CODE=${PIPESTATUS[0]}
-    fi
+    # 开始编译（默认启用缓存）
+    log "启用编译缓存，使用 $make_jobs 个并行任务"
+    make -j$make_jobs V=s 2>&1 | tee build.log
+    BUILD_EXIT_CODE=${PIPESTATUS[0]}
     
     log "编译退出代码: $BUILD_EXIT_CODE"
     
@@ -1974,15 +1521,15 @@ build_firmware() {
             
             # 检查常见错误类型
             if grep -q "undefined reference" build.log; then
-                log "⚠️  发现未定义引用错误"
+                log "⚠️ 发现未定义引用错误"
             fi
             
             if grep -q "No such file" build.log; then
-                log "⚠️  发现文件不存在错误"
+                log "⚠️ 发现文件不存在错误"
             fi
             
             if grep -q "out of memory\|Killed process" build.log; then
-                log "⚠️  可能是内存不足导致编译失败"
+                log "⚠️ 可能是内存不足导致编译失败"
             fi
             
             # 特别检查编译器错误
@@ -2023,7 +1570,7 @@ post_build_space_check() {
     log "/mnt 可用空间: ${available_gb}G"
     
     if [ $available_gb -lt 5 ]; then
-        log "⚠️  警告: 磁盘空间较低，建议清理"
+        log "⚠️ 警告: 磁盘空间较低，建议清理"
     else
         log "✅ 磁盘空间充足"
     fi
@@ -2063,9 +1610,9 @@ check_firmware_files() {
             
             # 检查固件大小是否合理
             if [ $total_size_mb -lt 5 ]; then
-                log "⚠️  警告: 固件文件可能太小"
+                log "⚠️ 警告: 固件文件可能太小"
             elif [ $total_size_mb -gt 100 ]; then
-                log "⚠️  警告: 固件文件可能太大"
+                log "⚠️ 警告: 固件文件可能太大"
             else
                 log "✅ 固件大小正常"
             fi
@@ -2108,7 +1655,7 @@ cleanup() {
         sudo rm -rf $BUILD_DIR || log "⚠️ 清理构建目录失败"
         log "✅ 构建目录已清理"
     else
-        log "ℹ️  构建目录不存在，无需清理"
+        log "ℹ️ 构建目录不存在，无需清理"
     fi
 }
 
@@ -2153,9 +1700,6 @@ main() {
         "download_dependencies")
             download_dependencies
             ;;
-        "load_toolchain")
-            load_toolchain
-            ;;
         "integrate_custom_files")
             integrate_custom_files
             ;;
@@ -2164,9 +1708,6 @@ main() {
             ;;
         "build_firmware")
             build_firmware "$2"
-            ;;
-        "save_toolchain")
-            save_toolchain
             ;;
         "post_build_space_check")
             post_build_space_check
@@ -2177,17 +1718,11 @@ main() {
         "cleanup")
             cleanup
             ;;
-        "init_toolchain_dir")
-            init_toolchain_dir
-            ;;
-        "check_large_files")
-            check_large_files
-            ;;
-        "check_toolchain_completeness")
-            check_toolchain_completeness
-            ;;
         "save_source_code_info")
             save_source_code_info
+            ;;
+        "download_compiler_files")
+            download_compiler_files
             ;;
         *)
             log "❌ 未知命令: $1"
@@ -2195,10 +1730,9 @@ main() {
             echo "  setup_environment, create_build_dir, initialize_build_env"
             echo "  add_turboacc_support, configure_feeds, install_turboacc_packages"
             echo "  pre_build_space_check, generate_config, verify_usb_config, check_usb_drivers_integrity, apply_config"
-            echo "  fix_network, download_dependencies, load_toolchain, integrate_custom_files"
-            echo "  pre_build_error_check, build_firmware, save_toolchain, post_build_space_check"
-            echo "  check_firmware_files, cleanup, init_toolchain_dir, check_large_files, check_toolchain_completeness"
-            echo "  save_source_code_info"
+            echo "  fix_network, download_dependencies, integrate_custom_files"
+            echo "  pre_build_error_check, build_firmware, post_build_space_check"
+            echo "  check_firmware_files, cleanup, save_source_code_info, download_compiler_files"
             exit 1
             ;;
     esac
