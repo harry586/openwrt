@@ -37,7 +37,6 @@ on:
         required: false
         type: string
         default: ""
-      # Git Archive API选项已移除，默认启用
 
 env:
   BUILD_DIR: "/mnt/openwrt-build"
@@ -143,7 +142,7 @@ jobs:
             echo "✅ 已创建编译器文件目录: $COMPILER_DIR"
           fi
       
-      # 步骤 4: 智能检查并编译交叉编译器
+      # 步骤 4: 智能检查并编译交叉编译器（修复了YAML语法）
       - name: "4. 智能检查并编译交叉编译器"
         run: |
           echo "=== 步骤 4: 智能检查并编译交叉编译器 ==="
@@ -167,14 +166,7 @@ jobs:
             echo "✅ 找到已编译的交叉编译器"
             
             # 检查编译器完整性
-            REQUIRED_FILES=(
-              "bin/arm-openwrt-linux-muslgnueabi-gcc"
-              "bin/arm-openwrt-linux-muslgnueabi-g++"
-              "bin/arm-openwrt-linux-muslgnueabi-ld"
-              "bin/arm-openwrt-linux-muslgnueabi-ar"
-              "bin/arm-openwrt-linux-muslgnueabi-strip"
-              "lib/gcc/arm-openwrt-linux-muslgnueabi/8.4.0/libgcc.a"
-            )
+            REQUIRED_FILES=("bin/arm-openwrt-linux-muslgnueabi-gcc" "bin/arm-openwrt-linux-muslgnueabi-g++" "bin/arm-openwrt-linux-muslgnueabi-ld" "bin/arm-openwrt-linux-muslgnueabi-ar" "bin/arm-openwrt-linux-muslgnueabi-strip" "lib/gcc/arm-openwrt-linux-muslgnueabi/8.4.0/libgcc.a")
             
             missing_files=0
             echo "📋 检查编译器文件完整性:"
@@ -239,35 +231,29 @@ jobs:
             echo "📥 克隆OpenWrt源码..."
             git clone --depth 1 https://github.com/immortalwrt/immortalwrt.git . --branch openwrt-21.02
             
-            # 创建最小配置 - 修复EOF语法
+            # 创建最小配置 - 使用多个echo命令替代heredoc
             echo "⚙️ 创建编译器构建配置..."
-            cat > .config << 'EOF'
-CONFIG_TARGET_ipq40xx=y
-CONFIG_TARGET_ipq40xx_generic=y
-CONFIG_TARGET_ROOTFS_INITRAMFS=y
-CONFIG_EXTERNAL_TOOLCHAIN=y
-CONFIG_USE_MUSL=y
-EOF
+            echo "CONFIG_TARGET_ipq40xx=y" > .config
+            echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+            echo "CONFIG_TARGET_ROOTFS_INITRAMFS=y" >> .config
+            echo "CONFIG_EXTERNAL_TOOLCHAIN=y" >> .config
+            echo "CONFIG_USE_MUSL=y" >> .config
             
             # 下载依赖
             echo "📦 下载编译器依赖..."
             mkdir -p dl
             
-            declare -A compiler_urls=(
-              ["gcc-11.3.0.tar.xz"]="https://ftp.gnu.org/gnu/gcc/gcc-11.3.0/gcc-11.3.0.tar.xz"
-              ["binutils-2.38.tar.xz"]="https://ftp.gnu.org/gnu/binutils/binutils-2.38.tar.xz"
-              ["linux-5.15.133.tar.xz"]="https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.15.133.tar.xz"
-              ["musl-1.2.4.tar.gz"]="https://musl.libc.org/releases/musl-1.2.4.tar.gz"
-              ["gmp-6.2.1.tar.xz"]="https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.xz"
-              ["mpfr-4.1.0.tar.xz"]="https://ftp.gnu.org/gnu/mpfr/mpfr-4.1.0.tar.xz"
-              ["mpc-1.2.1.tar.gz"]="https://ftp.gnu.org/gnu/mpc/mpc-1.2.1.tar.gz"
-            )
+            # 下载编译器文件 - 使用数组
+            COMPILER_FILES=("gcc-11.3.0.tar.xz" "binutils-2.38.tar.xz" "linux-5.15.133.tar.xz" "musl-1.2.4.tar.gz" "gmp-6.2.1.tar.xz" "mpfr-4.1.0.tar.xz" "mpc-1.2.1.tar.gz")
+            COMPILER_URLS=("https://ftp.gnu.org/gnu/gcc/gcc-11.3.0/gcc-11.3.0.tar.xz" "https://ftp.gnu.org/gnu/binutils/binutils-2.38.tar.xz" "https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.15.133.tar.xz" "https://musl.libc.org/releases/musl-1.2.4.tar.gz" "https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.xz" "https://ftp.gnu.org/gnu/mpfr/mpfr-4.1.0.tar.xz" "https://ftp.gnu.org/gnu/mpc/mpc-1.2.1.tar.gz")
             
             downloaded=0
-            for file in "${!compiler_urls[@]}"; do
+            for i in "${!COMPILER_FILES[@]}"; do
+              file="${COMPILER_FILES[$i]}"
+              url="${COMPILER_URLS[$i]}"
               if [ ! -f "dl/$file" ]; then
                 echo "下载: $file"
-                wget --no-check-certificate -q --show-progress -O "dl/$file" "${compiler_urls[$file]}" && downloaded=$((downloaded + 1)) || echo "下载失败: $file"
+                wget --no-check-certificate -q --show-progress -O "dl/$file" "$url" && downloaded=$((downloaded + 1)) || echo "下载失败: $file"
               fi
             done
             
@@ -320,21 +306,19 @@ EOF
               echo "  📄 $file_name ($file_size)"
             done
             
-            # 创建编译器信息文件
-            cat > "$COMPILER_OUTPUT_DIR/compiler-info.txt" << EOF
-交叉编译器信息
-===============
-编译时间: $(date)
-目标平台: arm_cortex-a7+neon-vfpv4
-编译器: gcc-8.4.0
-C库: musl
-总大小: $total_size
-文件数量: $file_count
-Git提交: ${{ github.sha }}
-构建工作流: ${{ github.workflow }}
-状态: 完整可用
-说明: 此交叉编译器是通用的，可以长期使用
-EOF
+            # 创建编译器信息文件 - 使用多个echo
+            echo "交叉编译器信息" > "$COMPILER_OUTPUT_DIR/compiler-info.txt"
+            echo "===============" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
+            echo "编译时间: $(date)" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
+            echo "目标平台: arm_cortex-a7+neon-vfpv4" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
+            echo "编译器: gcc-8.4.0" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
+            echo "C库: musl" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
+            echo "总大小: $total_size" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
+            echo "文件数量: $file_count" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
+            echo "Git提交: ${{ github.sha }}" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
+            echo "构建工作流: ${{ github.workflow }}" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
+            echo "状态: 完整可用" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
+            echo "说明: 此交叉编译器是通用的，可以长期使用" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
           fi
           
           # 4. 智能提交到仓库
@@ -481,21 +465,20 @@ EOF
           cd "${{ env.BUILD_DIR }}"
           
           # 定义正常模式的完整插件列表
-          declare -A normal_plugins=(
-            ["TurboACC 网络加速"]="luci-app-turboacc"
-            ["UPnP 自动端口转发"]="luci-app-upnp"
-            ["Samba 文件共享"]="luci-app-samba4"
-            ["磁盘管理"]="luci-app-diskman"
-            ["KMS 激活服务"]="luci-app-vlmcsd"
-            ["SmartDNS 智能DNS"]="luci-app-smartdns"
-            ["家长控制"]="luci-app-accesscontrol"
-            ["微信推送"]="luci-app-wechatpush"
-            ["流量控制 (SQM)"]="luci-app-sqm"
-            ["FTP 服务器"]="luci-app-vsftpd"
-            ["ARP 绑定"]="luci-app-arpbind"
-            ["CPU 限制"]="luci-app-cpulimit"
-            ["硬盘休眠"]="luci-app-hd-idle"
-          )
+          declare -A normal_plugins
+          normal_plugins["TurboACC 网络加速"]="luci-app-turboacc"
+          normal_plugins["UPnP 自动端口转发"]="luci-app-upnp"
+          normal_plugins["Samba 文件共享"]="luci-app-samba4"
+          normal_plugins["磁盘管理"]="luci-app-diskman"
+          normal_plugins["KMS 激活服务"]="luci-app-vlmcsd"
+          normal_plugins["SmartDNS 智能DNS"]="luci-app-smartdns"
+          normal_plugins["家长控制"]="luci-app-accesscontrol"
+          normal_plugins["微信推送"]="luci-app-wechatpush"
+          normal_plugins["流量控制 (SQM)"]="luci-app-sqm"
+          normal_plugins["FTP 服务器"]="luci-app-vsftpd"
+          normal_plugins["ARP 绑定"]="luci-app-arpbind"
+          normal_plugins["CPU 限制"]="luci-app-cpulimit"
+          normal_plugins["硬盘休眠"]="luci-app-hd-idle"
           
           echo "📋 正常模式插件状态检查:"
           
@@ -673,14 +656,7 @@ EOF
             echo "🔍 检查预编译编译器可用性..."
             
             # 检查关键文件完整性
-            REQUIRED_FILES=(
-              "bin/arm-openwrt-linux-muslgnueabi-gcc"
-              "bin/arm-openwrt-linux-muslgnueabi-g++"
-              "bin/arm-openwrt-linux-muslgnueabi-ld"
-              "bin/arm-openwrt-linux-muslgnueabi-ar"
-              "bin/arm-openwrt-linux-muslgnueabi-strip"
-              "lib/gcc/arm-openwrt-linux-muslgnueabi/8.4.0/libgcc.a"
-            )
+            REQUIRED_FILES=("bin/arm-openwrt-linux-muslgnueabi-gcc" "bin/arm-openwrt-linux-muslgnueabi-g++" "bin/arm-openwrt-linux-muslgnueabi-ld" "bin/arm-openwrt-linux-muslgnueabi-ar" "bin/arm-openwrt-linux-muslgnueabi-strip" "lib/gcc/arm-openwrt-linux-muslgnueabi/8.4.0/libgcc.a")
             
             missing_files=0
             for file in "${REQUIRED_FILES[@]}"; do
@@ -730,14 +706,12 @@ EOF
             rm -rf "$COMPILER_OUTPUT_DIR"
             mkdir -p "$COMPILER_OUTPUT_DIR"
             
-            # 设置编译器构建配置
-            cat > .config << 'EOF'
-CONFIG_TARGET_ipq40xx=y
-CONFIG_TARGET_ipq40xx_generic=y
-CONFIG_TARGET_ROOTFS_INITRAMFS=y
-CONFIG_EXTERNAL_TOOLCHAIN=y
-CONFIG_USE_MUSL=y
-EOF
+            # 设置编译器构建配置 - 使用多个echo命令
+            echo "CONFIG_TARGET_ipq40xx=y" > .config
+            echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+            echo "CONFIG_TARGET_ROOTFS_INITRAMFS=y" >> .config
+            echo "CONFIG_EXTERNAL_TOOLCHAIN=y" >> .config
+            echo "CONFIG_USE_MUSL=y" >> .config
             
             # 编译编译器
             echo "🔨 编译交叉编译器..."
