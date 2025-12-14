@@ -420,8 +420,9 @@ pre_build_error_check() {
     if [ -d "staging_dir" ]; then
         local compiler_count=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" 2>/dev/null | wc -l)
         if [ $compiler_count -eq 0 ]; then
-            log "⚠️ 警告: 未找到编译器，将自动下载"
-            warning_count=$((warning_count + 1))
+            log "ℹ️ 未找到已构建的编译器，将在编译过程中自动构建"
+            log "📦 注意：编译器会从下载的依赖包自动构建，无需手动下载"
+            # 这只是信息，不是错误
         else
             log "✅ 已下载编译器: $compiler_count 个"
             
@@ -438,7 +439,7 @@ pre_build_error_check() {
             fi
         fi
     else
-        log "ℹ️ staging_dir目录不存在，将自动下载编译器"
+        log "ℹ️ staging_dir目录不存在，编译时将自动创建和构建编译器"
     fi
     
     # 5. 检查关键文件
