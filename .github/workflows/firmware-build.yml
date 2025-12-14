@@ -276,11 +276,21 @@ jobs:
             
             echo "📊 依赖下载完成: 新下载 $downloaded 个文件"
             
-            # 编译编译器
+            # 编译编译器 - 设置环境变量跳过交互式配置
             echo "🔨 编译交叉编译器 (可能需要10-20分钟)..."
+            echo "⚠️ 注意: 设置环境变量跳过交互式配置..."
             
-            # 只编译toolchain
-            make toolchain/install -j$(nproc) V=s 2>&1 | tee compiler-build.log
+            # 设置环境变量避免交互式配置
+            export TERM=dumb
+            export TERMINFO=/usr/share/terminfo
+            export TERMCAP=/etc/termcap
+            export DEBIAN_FRONTEND=noninteractive
+            export BUILD_LOG=1
+            export V=s
+            
+            # 只编译toolchain，强制非交互模式
+            echo "执行编译命令..."
+            make toolchain/install -j$(nproc) 2>&1 | tee compiler-build.log
             
             # 检查编译结果
             if [ $? -eq 0 ] && [ -d "staging_dir/toolchain-"* ]; then
@@ -299,7 +309,46 @@ jobs:
               echo "❌ 交叉编译器编译失败"
               echo "📋 编译日志摘要:"
               tail -20 compiler-build.log 2>/dev/null || echo "无日志"
-              exit 1
+              
+              # 检查具体错误
+              echo "🔍 检查具体错误原因..."
+              if grep -q "Error opening terminal" compiler-build.log; then
+                echo "🚨 发现终端错误，尝试修复..."
+                echo "重新运行编译，设置更多环境变量..."
+                
+                # 设置更多环境变量避免终端交互
+                export TERM=vt100
+                export TERMINFO=/usr/share/terminfo
+                export TERMCAP=/etc/termcap
+                export DEBIAN_FRONTEND=noninteractive
+                export BUILD_LOG=1
+                export V=s
+                export MAKE_TERMOUT=
+                export MAKE_TERMERR=
+                
+                # 再次尝试编译
+                echo "再次尝试编译..."
+                make toolchain/install -j$(nproc) 2>&1 | tee compiler-build-retry.log
+                
+                if [ $? -eq 0 ] && [ -d "staging_dir/toolchain-"* ]; then
+                  echo "✅ 交叉编译器编译成功（第二次尝试）！"
+                  
+                  # 清理旧的编译器目录
+                  sudo rm -rf "$COMPILER_OUTPUT_DIR" 2>/dev/null || true
+                  mkdir -p "$COMPILER_OUTPUT_DIR"
+                  
+                  # 复制编译器
+                  echo "💾 保存编译好的编译器..."
+                  cp -r staging_dir/toolchain-* "$COMPILER_OUTPUT_DIR/" 2>/dev/null || true
+                  
+                  NEED_COMMIT=true
+                else
+                  echo "❌ 交叉编译器编译仍然失败"
+                  exit 1
+                fi
+              else
+                exit 1
+              fi
             fi
           else
             echo "✅ 使用现有的编译器，跳过编译步骤"
@@ -730,9 +779,20 @@ jobs:
             echo "CONFIG_EXTERNAL_TOOLCHAIN=y" >> .config
             echo "CONFIG_USE_MUSL=y" >> .config
             
+            # 设置环境变量避免交互式配置
+            echo "🔧 设置环境变量避免交互式配置..."
+            export TERM=dumb
+            export TERMINFO=/usr/share/terminfo
+            export TERMCAP=/etc/termcap
+            export DEBIAN_FRONTEND=noninteractive
+            export BUILD_LOG=1
+            export V=s
+            export MAKE_TERMOUT=
+            export MAKE_TERMERR=
+            
             # 编译编译器
             echo "🔨 编译交叉编译器..."
-            make toolchain/install -j$(nproc) V=s 2>&1 | tee compiler-rebuild.log
+            make toolchain/install -j$(nproc) 2>&1 | tee compiler-rebuild.log
             
             if [ $? -eq 0 ] && [ -d "staging_dir/toolchain-"* ]; then
               echo "✅ 交叉编译器重新编译成功"
