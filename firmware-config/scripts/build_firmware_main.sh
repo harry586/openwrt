@@ -27,17 +27,15 @@ save_source_code_info() {
     mkdir -p "$source_info_dir"
     
     # 保存构建环境信息
-    cat > "$source_info_dir/build_env.txt" << EOF
-构建环境信息
-===========
-构建时间: $(date)
-设备: $DEVICE
-版本: $SELECTED_BRANCH
-目标平台: $TARGET/$SUBTARGET
-配置模式: $CONFIG_MODE
-构建目录: $BUILD_DIR
-仓库根目录: $REPO_ROOT
-EOF
+    echo "构建环境信息" > "$source_info_dir/build_env.txt"
+    echo "===========" >> "$source_info_dir/build_env.txt"
+    echo "构建时间: $(date)" >> "$source_info_dir/build_env.txt"
+    echo "设备: $DEVICE" >> "$source_info_dir/build_env.txt"
+    echo "版本: $SELECTED_BRANCH" >> "$source_info_dir/build_env.txt"
+    echo "目标平台: $TARGET/$SUBTARGET" >> "$source_info_dir/build_env.txt"
+    echo "配置模式: $CONFIG_MODE" >> "$source_info_dir/build_env.txt"
+    echo "构建目录: $BUILD_DIR" >> "$source_info_dir/build_env.txt"
+    echo "仓库根目录: $REPO_ROOT" >> "$source_info_dir/build_env.txt"
     
     # 保存配置文件信息
     if [ -f ".config" ]; then
@@ -57,19 +55,17 @@ EOF
     
     # 保存关键文件列表
     log "📋 保存关键文件列表..."
-    cat > "$source_info_dir/key_files.txt" << 'EOF'
-关键文件列表
-==========
-.config - OpenWrt配置文件
-feeds.conf.default - Feeds配置文件
-Makefile - 主Makefile
-rules.mk - 构建规则
-Config.in - 配置菜单
-feeds/ - Feeds目录
-package/ - 包目录
-target/ - 目标平台目录
-toolchain/ - 编译器目录
-EOF
+    echo "关键文件列表" > "$source_info_dir/key_files.txt"
+    echo "==========" >> "$source_info_dir/key_files.txt"
+    echo ".config - OpenWrt配置文件" >> "$source_info_dir/key_files.txt"
+    echo "feeds.conf.default - Feeds配置文件" >> "$source_info_dir/key_files.txt"
+    echo "Makefile - 主Makefile" >> "$source_info_dir/key_files.txt"
+    echo "rules.mk - 构建规则" >> "$source_info_dir/key_files.txt"
+    echo "Config.in - 配置菜单" >> "$source_info_dir/key_files.txt"
+    echo "feeds/ - Feeds目录" >> "$source_info_dir/key_files.txt"
+    echo "package/ - 包目录" >> "$source_info_dir/key_files.txt"
+    echo "target/ - 目标平台目录" >> "$source_info_dir/key_files.txt"
+    echo "toolchain/ - 编译器目录" >> "$source_info_dir/key_files.txt"
     
     log "✅ 源代码信息保存完成: $source_info_dir"
 }
@@ -102,26 +98,17 @@ download_compiler_files() {
     mkdir -p "$COMPILER_DIR"
     
     # 编译器文件清单
-    local compiler_list=(
-        "gcc-11.3.0.tar.xz"         # GNU C编译器
-        "binutils-2.38.tar.xz"      # GNU二进制工具集
-        "make-4.3.tar.gz"           # GNU make工具
-        "gmp-6.2.1.tar.xz"          # GNU多精度算术库
-        "mpfr-4.1.0.tar.xz"         # GNU多精度浮点库
-        "mpc-1.2.1.tar.gz"          # GNU多精度复数库
-        "isl-0.24.tar.xz"           # 整数集库
-    )
+    local compiler_list=("gcc-11.3.0.tar.xz" "binutils-2.38.tar.xz" "make-4.3.tar.gz" "gmp-6.2.1.tar.xz" "mpfr-4.1.0.tar.xz" "mpc-1.2.1.tar.gz" "isl-0.24.tar.xz")
     
     # 编译器文件下载URL
-    declare -A compiler_urls=(
-        ["gcc-11.3.0.tar.xz"]="https://ftp.gnu.org/gnu/gcc/gcc-11.3.0/gcc-11.3.0.tar.xz"
-        ["binutils-2.38.tar.xz"]="https://ftp.gnu.org/gnu/binutils/binutils-2.38.tar.xz"
-        ["make-4.3.tar.gz"]="https://ftp.gnu.org/gnu/make/make-4.3.tar.gz"
-        ["gmp-6.2.1.tar.xz"]="https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.xz"
-        ["mpfr-4.1.0.tar.xz"]="https://ftp.gnu.org/gnu/mpfr/mpfr-4.1.0.tar.xz"
-        ["mpc-1.2.1.tar.gz"]="https://ftp.gnu.org/gnu/mpc/mpc-1.2.1.tar.gz"
-        ["isl-0.24.tar.xz"]="https://gcc.gnu.org/pub/gcc/infrastructure/isl-0.24.tar.xz"
-    )
+    declare -A compiler_urls
+    compiler_urls["gcc-11.3.0.tar.xz"]="https://ftp.gnu.org/gnu/gcc/gcc-11.3.0/gcc-11.3.0.tar.xz"
+    compiler_urls["binutils-2.38.tar.xz"]="https://ftp.gnu.org/gnu/binutils/binutils-2.38.tar.xz"
+    compiler_urls["make-4.3.tar.gz"]="https://ftp.gnu.org/gnu/make/make-4.3.tar.gz"
+    compiler_urls["gmp-6.2.1.tar.xz"]="https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.xz"
+    compiler_urls["mpfr-4.1.0.tar.xz"]="https://ftp.gnu.org/gnu/mpfr/mpfr-4.1.0.tar.xz"
+    compiler_urls["mpc-1.2.1.tar.gz"]="https://ftp.gnu.org/gnu/mpc/mpc-1.2.1.tar.gz"
+    compiler_urls["isl-0.24.tar.xz"]="https://gcc.gnu.org/pub/gcc/infrastructure/isl-0.24.tar.xz"
     
     log "🔍 编译器文件清单:"
     local total_files=0
@@ -207,39 +194,38 @@ integrate_custom_files() {
         ipk_count=${#ipk_files[@]}
         
         if [ $ipk_count -gt 0 ]; then
-            cat > package/custom/Makefile << 'EOF'
-include $(TOPDIR)/rules.mk
-
-PKG_NAME:=custom-packages
-PKG_VERSION:=1.0
-PKG_RELEASE:=1
-
-PKG_MAINTAINER:=Custom Build
-PKG_LICENSE:=GPL-2.0
-
-include $(INCLUDE_DIR)/package.mk
-
-define Package/custom-packages
-  SECTION:=custom
-  CATEGORY:=Custom
-  TITLE:=Custom Packages Collection
-  DEPENDS:=
-endef
-
-define Package/custom-packages/description
-  This package contains custom IPK files.
-endef
-
-define Build/Compile
-  true
-endef
-
-define Package/custom-packages/install
-  true
-endef
-
-$(eval $(call BuildPackage,custom-packages))
-EOF
+            echo "include \$(TOPDIR)/rules.mk" > package/custom/Makefile
+            echo "" >> package/custom/Makefile
+            echo "PKG_NAME:=custom-packages" >> package/custom/Makefile
+            echo "PKG_VERSION:=1.0" >> package/custom/Makefile
+            echo "PKG_RELEASE:=1" >> package/custom/Makefile
+            echo "" >> package/custom/Makefile
+            echo "PKG_MAINTAINER:=Custom Build" >> package/custom/Makefile
+            echo "PKG_LICENSE:=GPL-2.0" >> package/custom/Makefile
+            echo "" >> package/custom/Makefile
+            echo "include \$(INCLUDE_DIR)/package.mk" >> package/custom/Makefile
+            echo "" >> package/custom/Makefile
+            echo "define Package/custom-packages" >> package/custom/Makefile
+            echo "  SECTION:=custom" >> package/custom/Makefile
+            echo "  CATEGORY:=Custom" >> package/custom/Makefile
+            echo "  TITLE:=Custom Packages Collection" >> package/custom/Makefile
+            echo "  DEPENDS:=" >> package/custom/Makefile
+            echo "endef" >> package/custom/Makefile
+            echo "" >> package/custom/Makefile
+            echo "define Package/custom-packages/description" >> package/custom/Makefile
+            echo "  This package contains custom IPK files." >> package/custom/Makefile
+            echo "endef" >> package/custom/Makefile
+            echo "" >> package/custom/Makefile
+            echo "define Build/Compile" >> package/custom/Makefile
+            echo "  true" >> package/custom/Makefile
+            echo "endef" >> package/custom/Makefile
+            echo "" >> package/custom/Makefile
+            echo "define Package/custom-packages/install" >> package/custom/Makefile
+            echo "  true" >> package/custom/Makefile
+            echo "endef" >> package/custom/Makefile
+            echo "" >> package/custom/Makefile
+            echo "\$(eval \$(call BuildPackage,custom-packages))" >> package/custom/Makefile
+            
             log "✅ 创建自定义包Makefile"
         fi
     fi
@@ -261,27 +247,26 @@ EOF
         
         if [ $script_count -gt 0 ]; then
             mkdir -p files/etc/init.d
-            cat > files/etc/init.d/custom-scripts << 'EOF'
-#!/bin/sh /etc/rc.common
-
-START=99
-STOP=10
-
-start() {
-    echo "Starting custom scripts..."
-    for script in /usr/share/custom/*.sh; do
-        if [ -x "$script" ]; then
-            echo "Running: $(basename "$script")"
-            sh "$script" &
-        fi
-    done
-}
-
-stop() {
-    echo "Stopping custom scripts..."
-    pkill -f "sh /usr/share/custom/"
-}
-EOF
+            echo "#!/bin/sh /etc/rc.common" > files/etc/init.d/custom-scripts
+            echo "" >> files/etc/init.d/custom-scripts
+            echo "START=99" >> files/etc/init.d/custom-scripts
+            echo "STOP=10" >> files/etc/init.d/custom-scripts
+            echo "" >> files/etc/init.d/custom-scripts
+            echo "start() {" >> files/etc/init.d/custom-scripts
+            echo "    echo \"Starting custom scripts...\"" >> files/etc/init.d/custom-scripts
+            echo "    for script in /usr/share/custom/*.sh; do" >> files/etc/init.d/custom-scripts
+            echo "        if [ -x \"\$script\" ]; then" >> files/etc/init.d/custom-scripts
+            echo "            echo \"Running: \$(basename \"\$script\")\"" >> files/etc/init.d/custom-scripts
+            echo "            sh \"\$script\" &" >> files/etc/init.d/custom-scripts
+            echo "        fi" >> files/etc/init.d/custom-scripts
+            echo "    done" >> files/etc/init.d/custom-scripts
+            echo "}" >> files/etc/init.d/custom-scripts
+            echo "" >> files/etc/init.d/custom-scripts
+            echo "stop() {" >> files/etc/init.d/custom-scripts
+            echo "    echo \"Stopping custom scripts...\"" >> files/etc/init.d/custom-scripts
+            echo "    pkill -f \"sh /usr/share/custom/\"" >> files/etc/init.d/custom-scripts
+            echo "}" >> files/etc/init.d/custom-scripts
+            
             chmod +x files/etc/init.d/custom-scripts
             log "✅ 创建自定义脚本启动服务"
         fi
@@ -339,18 +324,106 @@ pre_build_error_check() {
     local error_count=0
     local warning_count=0
     
-    # 1. 检查配置文件
+    # 1. 检查编译器状态 - 智能判断
+    log "🔍 检查编译器状态..."
+    
+    # 检查是否有预编译的交叉编译器
+    local precompiled_compiler="$COMPILER_DIR/compiled"
+    local compiler_found=false
+    local compiler_usable=false
+    
+    if [ -d "$precompiled_compiler" ]; then
+        log "✅ 找到预编译的交叉编译器"
+        log "📁 编译器目录: $precompiled_compiler"
+        
+        # 显示编译器大小
+        local compiler_size=$(du -sh "$precompiled_compiler" 2>/dev/null | cut -f1 || echo "未知")
+        log "📦 编译器大小: $compiler_size"
+        
+        # 检查关键文件完整性
+        REQUIRED_COMPILER_FILES=("bin/arm-openwrt-linux-muslgnueabi-gcc" "bin/arm-openwrt-linux-muslgnueabi-g++" "bin/arm-openwrt-linux-muslgnueabi-ld" "bin/arm-openwrt-linux-muslgnueabi-ar" "bin/arm-openwrt-linux-muslgnueabi-strip" "lib/gcc/arm-openwrt-linux-muslgnueabi/8.4.0/libgcc.a")
+        
+        local missing_files=0
+        for file in "${REQUIRED_COMPILER_FILES[@]}"; do
+            if [ -f "$precompiled_compiler/$file" ]; then
+                log "  ✅ $file"
+            else
+                log "  ❌ $file - 缺失"
+                missing_files=$((missing_files + 1))
+            fi
+        done
+        
+        if [ $missing_files -eq 0 ]; then
+            log "✅ 预编译的交叉编译器文件完整"
+            compiler_usable=true
+            
+            # 检查编译器版本
+            local gcc_file="$precompiled_compiler/bin/arm-openwrt-linux-muslgnueabi-gcc"
+            if [ -x "$gcc_file" ]; then
+                log "🔧 获取编译器版本..."
+                "$gcc_file" --version 2>&1 | head -1 | while read version; do
+                    log "✅ 编译器版本: $version"
+                done
+            fi
+            
+            # 统计文件数量
+            local file_count=$(find "$precompiled_compiler" -type f 2>/dev/null | wc -l)
+            log "📊 编译器包含: $file_count 个文件"
+            
+        else
+            log "⚠️ 警告: 预编译的交叉编译器缺失 $missing_files 个关键文件"
+            warning_count=$((warning_count + 1))
+        fi
+        
+        compiler_found=true
+    else
+        log "ℹ️ 未找到预编译的交叉编译器"
+    fi
+    
+    # 检查构建目录中的编译器
+    if [ -d "staging_dir" ]; then
+        local compiler_count=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | wc -l)
+        if [ $compiler_count -eq 0 ]; then
+            log "ℹ️ 构建目录中未找到已构建的编译器"
+            
+            if [ "$compiler_usable" = true ]; then
+                log "💡 建议: 可以使用预编译的交叉编译器，跳过编译器构建步骤"
+                log "💡 操作: 将 $precompiled_compiler 复制到 staging_dir/"
+            else
+                log "📦 将从源代码编译交叉编译器 (需要10-20分钟)"
+                log "💡 注意: 这可能会显著增加构建时间"
+            fi
+        else
+            log "✅ 构建目录中找到编译器: $compiler_count 个"
+            
+            # 检查编译器完整性
+            local compiler_dir=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
+            if [ -d "$compiler_dir/bin" ]; then
+                local compiler_files=$(find "$compiler_dir/bin" -name "*gcc*" -o -name "*g++*" 2>/dev/null | wc -l)
+                if [ $compiler_files -gt 0 ]; then
+                    log "✅ 编译器文件: $compiler_files 个"
+                else
+                    log "⚠️ 警告: 编译器目录缺少编译器文件"
+                    warning_count=$((warning_count + 1))
+                fi
+            fi
+        fi
+    else
+        log "ℹ️ staging_dir目录不存在，编译时将创建"
+        
+        if [ "$compiler_usable" = true ]; then
+            log "💡 优化: 可以直接使用预编译的编译器，减少构建时间"
+        fi
+    fi
+    
+    # 2. 检查配置文件
     if [ ! -f ".config" ]; then
         log "❌ 错误: .config 文件不存在"
         error_count=$((error_count + 1))
     else
         log "✅ .config 文件存在"
         
-        local critical_configs=(
-            "CONFIG_TARGET_${TARGET}=y"
-            "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y"
-            "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
-        )
+        local critical_configs=("CONFIG_TARGET_${TARGET}=y" "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y")
         
         for config in "${critical_configs[@]}"; do
             if ! grep -q "^$config" .config; then
@@ -362,7 +435,7 @@ pre_build_error_check() {
         done
     fi
     
-    # 2. 检查feeds
+    # 3. 检查feeds
     if [ ! -d "feeds" ]; then
         log "❌ 错误: feeds 目录不存在"
         error_count=$((error_count + 1))
@@ -380,7 +453,7 @@ pre_build_error_check() {
         done
     fi
     
-    # 3. 检查依赖包
+    # 4. 检查依赖包
     if [ ! -d "dl" ]; then
         log "⚠️ 警告: dl 目录不存在，可能需要下载依赖"
         warning_count=$((warning_count + 1))
@@ -416,7 +489,7 @@ pre_build_error_check() {
         fi
     fi
     
-    # 4. 检查编译器
+    # 5. 检查编译器
     if [ -d "staging_dir" ]; then
         local compiler_count=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" 2>/dev/null | wc -l)
         if [ $compiler_count -eq 0 ]; then
@@ -442,7 +515,7 @@ pre_build_error_check() {
         log "ℹ️ staging_dir目录不存在，编译时将自动创建和构建编译器"
     fi
     
-    # 5. 检查关键文件
+    # 6. 检查关键文件
     local critical_files=("Makefile" "rules.mk" "Config.in" "feeds.conf.default")
     for file in "${critical_files[@]}"; do
         if [ -f "$file" ]; then
@@ -453,7 +526,7 @@ pre_build_error_check() {
         fi
     done
     
-    # 6. 检查脚本权限
+    # 7. 检查脚本权限
     if [ -d "scripts" ]; then
         local script_files=$(find scripts -name "*.sh" -type f -executable 2>/dev/null | wc -l)
         if [ $script_files -gt 0 ]; then
@@ -531,33 +604,16 @@ setup_environment() {
     sudo apt-get update || handle_error "apt-get update失败"
     
     # 基础编译工具
-    local base_packages=(
-        build-essential clang flex bison g++ gawk gcc-multilib g++-multilib
-        gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip
-        zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpath
-        libpython3-dev python3 python3-dev python3-pip python3-setuptools
-        python3-yaml xsltproc zip subversion ninja-build automake autoconf
-        libtool pkg-config help2man texinfo aria2 liblz4-dev zstd
-        libcurl4-openssl-dev groff texlive texinfo cmake
-    )
+    local base_packages=("build-essential" "clang" "flex" "bison" "g++" "gawk" "gcc-multilib" "g++-multilib" "gettext" "git" "libncurses5-dev" "libssl-dev" "python3-distutils" "rsync" "unzip" "zlib1g-dev" "file" "wget" "libelf-dev" "ecj" "fastjar" "java-propose-classpath" "libpython3-dev" "python3" "python3-dev" "python3-pip" "python3-setuptools" "python3-yaml" "xsltproc" "zip" "subversion" "ninja-build" "automake" "autoconf" "libtool" "pkg-config" "help2man" "texinfo" "aria2" "liblz4-dev" "zstd" "libcurl4-openssl-dev" "groff" "texlive" "texinfo" "cmake")
     
     # 网络工具
-    local network_packages=(
-        curl wget net-tools iputils-ping dnsutils
-        openssh-client ca-certificates gnupg lsb-release
-    )
+    local network_packages=("curl" "wget" "net-tools" "iputils-ping" "dnsutils" "openssh-client" "ca-certificates" "gnupg" "lsb-release")
     
     # 文件系统工具
-    local filesystem_packages=(
-        squashfs-tools dosfstools e2fsprogs mtools
-        parted fdisk gdisk hdparm smartmontools
-    )
+    local filesystem_packages=("squashfs-tools" "dosfstools" "e2fsprogs" "mtools" "parted" "fdisk" "gdisk" "hdparm" "smartmontools")
     
     # 调试工具
-    local debug_packages=(
-        gdb strace ltrace valgrind
-        binutils-dev libdw-dev libiberty-dev
-    )
+    local debug_packages=("gdb" "strace" "ltrace" "valgrind" "binutils-dev" "libdw-dev" "libiberty-dev")
     
     log "安装基础编译工具..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${base_packages[@]}" || handle_error "安装基础编译工具失败"
@@ -980,29 +1036,7 @@ generate_config() {
     else
         log "🔧 使用正常模式 (完整功能)"
         
-        NORMAL_PLUGINS=(
-          "CONFIG_PACKAGE_luci-app-turboacc=y"
-          "CONFIG_PACKAGE_kmod-shortcut-fe=y"
-          "CONFIG_PACKAGE_kmod-fast-classifier=y"
-          "CONFIG_PACKAGE_luci-app-upnp=y"
-          "CONFIG_PACKAGE_miniupnpd=y"
-          "CONFIG_PACKAGE_vsftpd=y"
-          "CONFIG_PACKAGE_luci-app-vsftpd=y"
-          "CONFIG_PACKAGE_luci-app-arpbind=y"
-          "CONFIG_PACKAGE_luci-app-cpulimit=y"
-          "CONFIG_PACKAGE_samba4-server=y"
-          "CONFIG_PACKAGE_luci-app-samba4=y"
-          "CONFIG_PACKAGE_luci-app-wechatpush=y"
-          "CONFIG_PACKAGE_sqm-scripts=y"
-          "CONFIG_PACKAGE_luci-app-sqm=y"
-          "CONFIG_PACKAGE_luci-app-hd-idle=y"
-          "CONFIG_PACKAGE_luci-app-diskman=y"
-          "CONFIG_PACKAGE_luci-app-accesscontrol=y"
-          "CONFIG_PACKAGE_vlmcsd=y"
-          "CONFIG_PACKAGE_luci-app-vlmcsd=y"
-          "CONFIG_PACKAGE_smartdns=y"
-          "CONFIG_PACKAGE_luci-app-smartdns=y"
-        )
+        NORMAL_PLUGINS=("CONFIG_PACKAGE_luci-app-turboacc=y" "CONFIG_PACKAGE_kmod-shortcut-fe=y" "CONFIG_PACKAGE_kmod-fast-classifier=y" "CONFIG_PACKAGE_luci-app-upnp=y" "CONFIG_PACKAGE_miniupnpd=y" "CONFIG_PACKAGE_vsftpd=y" "CONFIG_PACKAGE_luci-app-vsftpd=y" "CONFIG_PACKAGE_luci-app-arpbind=y" "CONFIG_PACKAGE_luci-app-cpulimit=y" "CONFIG_PACKAGE_samba4-server=y" "CONFIG_PACKAGE_luci-app-samba4=y" "CONFIG_PACKAGE_luci-app-wechatpush=y" "CONFIG_PACKAGE_sqm-scripts=y" "CONFIG_PACKAGE_luci-app-sqm=y" "CONFIG_PACKAGE_luci-app-hd-idle=y" "CONFIG_PACKAGE_luci-app-diskman=y" "CONFIG_PACKAGE_luci-app-accesscontrol=y" "CONFIG_PACKAGE_vlmcsd=y" "CONFIG_PACKAGE_luci-app-vlmcsd=y" "CONFIG_PACKAGE_smartdns=y" "CONFIG_PACKAGE_luci-app-smartdns=y")
         
         for plugin in "${NORMAL_PLUGINS[@]}"; do
             echo "$plugin" >> .config
@@ -1124,14 +1158,7 @@ check_usb_drivers_integrity() {
     log "=== 🚨 USB驱动完整性检查 ==="
     
     local missing_drivers=()
-    local required_drivers=(
-        "kmod-usb-core"
-        "kmod-usb2"
-        "kmod-usb3"
-        "kmod-usb-xhci-hcd"
-        "kmod-usb-storage"
-        "kmod-scsi-core"
-    )
+    local required_drivers=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-xhci-hcd" "kmod-usb-storage" "kmod-scsi-core")
     
     # 根据平台添加专用驱动
     if [ "$TARGET" = "ipq40xx" ]; then
@@ -1187,12 +1214,7 @@ apply_config() {
     
     # 1. 关键USB配置状态
     echo "🔧 关键USB配置状态:"
-    local critical_usb_drivers=(
-        "kmod-usb-core" "kmod-usb2" "kmod-usb3" 
-        "kmod-usb-ehci" "kmod-usb-ohci" "kmod-usb-xhci-hcd"
-        "kmod-usb-storage" "kmod-usb-storage-uas" "kmod-usb-storage-extras"
-        "kmod-scsi-core" "kmod-scsi-generic"
-    )
+    local critical_usb_drivers=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-ehci" "kmod-usb-ohci" "kmod-usb-xhci-hcd" "kmod-usb-storage" "kmod-usb-storage-uas" "kmod-usb-storage-extras" "kmod-scsi-core" "kmod-scsi-generic")
     
     local missing_usb=0
     for driver in "${critical_usb_drivers[@]}"; do
