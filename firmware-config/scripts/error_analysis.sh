@@ -52,7 +52,7 @@ if [ -f ".config" ]; then
         echo "✅ C库: uclibc (旧版OpenWrt使用)" >> error_analysis.log
         echo "💡 注意: uclibc是较旧的C库，现代OpenWrt已转向musl" >> error_analysis.log
     else
-        echo "⚠️  C库: 未明确指定" >> error_analysis.log
+        echo "⚠️ C库: 未明确指定" >> error_analysis.log
     fi
     
     echo "" >> error_analysis.log
@@ -161,7 +161,6 @@ if [ -f ".config" ]; then
     
     echo "" >> error_analysis.log
     echo "=== USB配置总结 ===" >> error_analysis.log
-    # 修复：移除local关键字，因为在函数外
     total_usb_configs=0
     enabled_usb_configs=0
     
@@ -179,7 +178,7 @@ if [ -f ".config" ]; then
     if [ $enabled_usb_configs -eq $total_usb_configs ]; then
         echo "🎉 所有关键USB驱动都已启用！" >> error_analysis.log
     elif [ $enabled_usb_configs -ge $((total_usb_configs * 8 / 10)) ]; then
-        echo "⚠️  大部分USB驱动已启用，但仍有部分未启用" >> error_analysis.log
+        echo "⚠️ 大部分USB驱动已启用，但仍有部分未启用" >> error_analysis.log
     else
         echo "❌ 大量USB驱动未启用，USB功能可能受限" >> error_analysis.log
     fi
@@ -194,7 +193,7 @@ if [ -f ".config" ]; then
         if grep -q "CONFIG_PACKAGE_${config}" .config; then
             echo "✅ $config: 已配置" >> error_analysis.log
         else
-            echo "⚠️  $config: 未配置" >> error_analysis.log
+            echo "⚠️ $config: 未配置" >> error_analysis.log
         fi
     done
     
@@ -211,17 +210,13 @@ else
 fi
 echo "" >> error_analysis.log
 
-echo "=== 工具链状态详细检查 ===" >> error_analysis.log
+echo "=== 编译器文件状态检查 ===" >> error_analysis.log
 if [ -d "staging_dir" ]; then
-    echo "✅ 工具链目录存在: staging_dir" >> error_analysis.log
+    echo "✅ 编译目录存在: staging_dir" >> error_analysis.log
     
-    # 详细查找工具链
-    echo "🔍 查找工具链目录:" >> error_analysis.log
-    find staging_dir -maxdepth 2 -type d -name "toolchain-*" >> error_analysis.log || echo "  未找到工具链目录" >> error_analysis.log
-    
-    # 检查编译器
-    echo "🔍 查找编译器:" >> error_analysis.log
-    find staging_dir -name "*gcc*" -type f -executable 2>/dev/null | head -10 >> error_analysis.log || echo "  未找到编译器" >> error_analysis.log
+    # 检查编译器文件
+    echo "🔍 检查编译器文件:" >> error_analysis.log
+    find staging_dir -name "*gcc*" -type f -executable 2>/dev/null | head -10 >> error_analysis.log || echo "  未找到编译器文件" >> error_analysis.log
     
     # 检查具体的arm编译器
     echo "🔍 检查arm编译器 (IPQ40xx):" >> error_analysis.log
@@ -231,39 +226,15 @@ if [ -d "staging_dir" ]; then
     echo "🔍 检查mipsel编译器 (MT76xx):" >> error_analysis.log
     find staging_dir -name "mipsel-openwrt-linux-musl-gcc" -type f 2>/dev/null >> error_analysis.log || echo "  未找到mipsel编译器" >> error_analysis.log
     
-    # 检查文件大小
-    echo "📊 工具链文件大小:" >> error_analysis.log
-    du -sh staging_dir/toolchain-* 2>/dev/null | head -3 >> error_analysis.log || echo "  无法获取大小" >> error_analysis.log
+    # 检查编译器版本
+    echo "🔍 检查编译器版本:" >> error_analysis.log
+    find staging_dir -name "*gcc" -type f -executable 2>/dev/null | head -3 | while read compiler; do
+        echo "编译器: $compiler" >> error_analysis.log
+        $compiler --version 2>&1 | head -1 >> error_analysis.log 2>/dev/null || echo "  无法获取版本" >> error_analysis.log
+    done
     
-    # 检查目录结构
-    echo "📁 工具链目录结构:" >> error_analysis.log
-    find staging_dir -maxdepth 3 -name "toolchain-*" -type d -exec ls -ld {} \; 2>/dev/null | head -5 >> error_analysis.log || echo "  无法列出目录结构" >> error_analysis.log
-    
-    # 检查关键文件是否存在
-    echo "🔑 检查关键工具链文件:" >> error_analysis.log
-    if [ -d "staging_dir/toolchain-"* ]; then
-        TOOLCHAIN_DIR=$(ls -d staging_dir/toolchain-* | head -1)
-        echo "工具链目录: $TOOLCHAIN_DIR" >> error_analysis.log
-        
-        CRITICAL_FILES=(
-            "bin/arm-openwrt-linux-muslgnueabi-gcc"
-            "bin/mipsel-openwrt-linux-musl-gcc"
-            "lib/gcc/arm-openwrt-linux-muslgnueabi"
-            "lib/gcc/mipsel-openwrt-linux-musl"
-            "include/stdio.h"
-            "lib/libc.so"
-        )
-        
-        for file in "${CRITICAL_FILES[@]}"; do
-            if [ -f "$TOOLCHAIN_DIR/$file" ] || [ -d "$TOOLCHAIN_DIR/$file" ]; then
-                echo "✅ $file: 存在" >> error_analysis.log
-            else
-                echo "❌ $file: 不存在" >> error_analysis.log
-            fi
-        done
-    fi
 else
-    echo "❌ 工具链目录不存在" >> error_analysis.log
+    echo "❌ 编译目录不存在" >> error_analysis.log
 fi
 
 echo "" >> error_analysis.log
@@ -308,8 +279,8 @@ if [ -f "build.log" ]; then
     grep -E "out of memory|Killed process|oom" build.log | head -5 >> error_analysis.log || echo "无内存错误" >> error_analysis.log
     
     echo "" >> error_analysis.log
-    echo "❌ 工具链相关错误:" >> error_analysis.log
-    grep -E "toolchain|compiler|linker|gcc|binutils" build.log -i | head -10 >> error_analysis.log || echo "无工具链错误" >> error_analysis.log
+    echo "❌ 编译器相关错误:" >> error_analysis.log
+    grep -E "compiler|gcc|binutils|ld" build.log -i | head -10 >> error_analysis.log || echo "无编译器错误" >> error_analysis.log
     
     echo "" >> error_analysis.log
     echo "⚠️ 被忽略的错误:" >> error_analysis.log
@@ -343,7 +314,7 @@ ERROR_CATEGORIES=(
     "网络错误:|Connection refused|timeout|Network is unreachable"
     "哈希校验错误:|Hash mismatch|Bad hash"
     "管道错误:|Broken pipe"
-    "工具链错误:|toolchain|compiler|gcc|binutils|ld"
+    "编译器错误:|compiler|gcc|binutils|ld"
     "C库相关错误:|musl|glibc|uclibc|libc"
 )
 
@@ -415,15 +386,15 @@ echo "   - 安装缺失的开发包" >> error_analysis.log
 echo "   - 使用兼容的编译器版本" >> error_analysis.log
 echo "" >> error_analysis.log
 
-echo "❌ 工具链错误" >> error_analysis.log
+echo "❌ 编译器错误" >> error_analysis.log
 echo "💡 可能原因:" >> error_analysis.log
-echo "   - 工具链未正确安装" >> error_analysis.log
+echo "   - 编译器未正确安装" >> error_analysis.log
 echo "   - 编译器路径配置错误" >> error_analysis.log
 echo "   - 缺少必要的编译工具" >> error_analysis.log
 echo "🛠️ 解决方案:" >> error_analysis.log
-echo "   - 检查工具链配置" >> error_analysis.log
-echo "   - 重新安装工具链" >> error_analysis.log
-echo "   - 使用预编译的工具链" >> error_analysis.log
+echo "   - 检查编译器配置" >> error_analysis.log
+echo "   - 重新安装编译器" >> error_analysis.log
+echo "   - 使用预编译的编译器" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "❌ C库相关错误" >> error_analysis.log
@@ -461,7 +432,7 @@ echo "3. 📦 更新所有 feeds: ./scripts/feeds update -a && ./scripts/feeds i
 echo "4. ⚙️ 检查配置冲突: make defconfig" >> error_analysis.log
 echo "5. 🐛 减少并行任务: make -j2 V=s" >> error_analysis.log
 echo "6. 🌐 检查网络连接和代理设置" >> error_analysis.log
-echo "7. 🔧 检查工具链: 确保 staging_dir/toolchain-* 目录存在且完整" >> error_analysis.log
+echo "7. 🔧 检查编译器: 确保 staging_dir/toolchain-* 目录存在且完整" >> error_analysis.log
 echo "8. 🔌 检查USB插件: 确保所有关键USB驱动已启用（当前配置已强制启用）" >> error_analysis.log
 echo "9. 🖥️ 检查平台专用驱动: 根据您的设备平台（高通/雷凌）启用相应驱动" >> error_analysis.log
 echo "10. 💾 检查文件系统支持: 确保NTFS3, ext4, vfat等文件系统驱动已启用" >> error_analysis.log
