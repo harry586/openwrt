@@ -329,9 +329,11 @@ pre_build_error_check() {
     
     # 检查是否有预编译的交叉编译器
     local precompiled_compiler="$COMPILER_DIR/compiled"
+    local compiler_source="$COMPILER_DIR/source"
     local compiler_found=false
     local compiler_usable=false
     
+    # 检查预编译编译器
     if [ -d "$precompiled_compiler" ]; then
         log "✅ 找到预编译的交叉编译器"
         log "📁 编译器目录: $precompiled_compiler"
@@ -380,6 +382,27 @@ pre_build_error_check() {
         log "ℹ️ 未找到预编译的交叉编译器"
     fi
     
+    # 检查编译器源代码
+    if [ -d "$compiler_source" ]; then
+        log "✅ 找到编译器源代码包"
+        local source_count=$(find "$compiler_source" -name "*.tar.*" -o -name "*.gz" 2>/dev/null | wc -l)
+        local source_size=$(du -sh "$compiler_source" 2>/dev/null | cut -f1 || echo "未知")
+        log "📊 编译器源代码: $source_count 个包, 总大小: $source_size"
+        
+        # 显示主要的源代码包
+        log "📋 主要编译器源代码包:"
+        find "$compiler_source" -name "*.tar.*" -o -name "*.gz" 2>/dev/null | head -10 | while read file; do
+            local file_name=$(basename "$file")
+            local file_size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "未知")
+            log "  📄 $file_name ($file_size)"
+        done
+        
+        log "💡 编译器源代码包已准备，将在固件编译过程中使用"
+    else
+        log "ℹ️ 未找到编译器源代码包"
+        log "📦 将在编译过程中从网络下载编译器源代码"
+    fi
+    
     # 检查构建目录中的编译器
     if [ -d "staging_dir" ]; then
         local compiler_count=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | wc -l)
@@ -390,8 +413,12 @@ pre_build_error_check() {
                 log "💡 建议: 可以使用预编译的交叉编译器，跳过编译器构建步骤"
                 log "💡 操作: 将 $precompiled_compiler 复制到 staging_dir/"
             else
-                log "📦 将从源代码编译交叉编译器 (需要10-20分钟)"
-                log "💡 注意: 这可能会显著增加构建时间"
+                log "📦 将从源代码编译交叉编译器"
+                if [ -d "$compiler_source" ]; then
+                    log "💡 优化: 已有编译器源代码包，将直接使用"
+                else
+                    log "💡 注意: 需要从网络下载编译器源代码"
+                fi
             fi
         else
             log "✅ 构建目录中找到编译器: $compiler_count 个"
@@ -413,6 +440,8 @@ pre_build_error_check() {
         
         if [ "$compiler_usable" = true ]; then
             log "💡 优化: 可以直接使用预编译的编译器，减少构建时间"
+        elif [ -d "$compiler_source" ]; then
+            log "💡 优化: 已有编译器源代码包，将用于编译器构建"
         fi
     fi
     
