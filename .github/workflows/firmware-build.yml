@@ -250,51 +250,16 @@ jobs:
             echo "✅ 编译器源代码信息文件已创建"
           fi
           
-          # 4. 如果所有文件都下载完成，尝试提交到仓库
+          # 4. 仅显示完成信息，不提交到仓库
           if [ $((existing_files + downloaded_files)) -eq $total_files ] && [ $downloaded_files -gt 0 ]; then
-            echo "📤 准备提交编译器源代码到仓库..."
-            cd "${{ github.workspace }}"
-            
-            # 配置Git
-            git config --global user.email "github-actions@github.com"
-            git config --global user.name "GitHub Actions"
-            
-            # 检查是否有更改
-            git_status=$(git status --porcelain "firmware-config/build-Compiler-file/source/" 2>/dev/null)
-            
-            if [ -n "$git_status" ]; then
-              echo "🔄 检测到编译器源代码更改，正在提交..."
-              
-              # 添加文件
-              git add "firmware-config/build-Compiler-file/source/"
-              
-              # 提交
-              commit_message="build: 更新编译器源代码包 (${{ github.event.inputs.device_name }} - $(date +%Y%m%d))"
-              git commit -m "$commit_message"
-              
-              echo "✅ 编译器源代码已提交到本地仓库"
-              echo "📝 提交信息: $commit_message"
-              
-              # 显示提交的统计
-              echo "📊 提交统计:"
-              echo "  添加/修改文件: $downloaded_files 个"
-              echo "  总大小: $total_size"
-              
-              # 尝试推送
-              echo "🚀 推送到远程仓库..."
-              if git push origin ${GITHUB_REF##*/}; then
-                echo "🎉 编译器源代码已成功推送到远程仓库！"
-                echo "🔗 可以在仓库的 firmware-config/build-Compiler-file/source/ 目录查看"
-              else
-                echo "⚠️ 推送失败，可能是权限问题"
-                echo "💡 提交已保存在本地，可在后续步骤中手动推送"
-              fi
-            else
-              echo "✅ 编译器源代码文件没有更改，无需提交"
-            fi
+            echo "✅ 所有编译器源代码文件已准备就绪"
+            echo "📦 新下载了 $downloaded_files 个编译器源代码包"
+            echo "💡 编译器源代码将用于固件编译过程"
           elif [ $((existing_files + downloaded_files)) -lt $total_files ]; then
             echo "⚠️ 警告: 编译器源代码文件不完整 ($((existing_files + downloaded_files))/$total_files)"
             echo "💡 将在固件编译过程中自动下载缺失的文件"
+          else
+            echo "✅ 编译器源代码文件已准备就绪"
           fi
           
           echo "✅ 智能编译器源代码管理完成"
