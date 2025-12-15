@@ -256,7 +256,7 @@ integrate_custom_files() {
             echo "    echo \"Starting custom scripts...\"" >> files/etc/init.d/custom-scripts
             echo "    for script in /usr/share/custom/*.sh; do" >> files/etc/init.d/custom-scripts
             echo "        if [ -x \"\$script\" ]; then" >> files/etc/init.d/custom-scripts
-            echo "            echo \"Running: \$(basename \"\$script\")\"" >> files/etc-系统日志/init.d/custom-scripts
+            echo "            echo \"Running: \$(basename \"\$script\")\"" >> files/etc/init.d/custom-scripts
             echo "            sh \"\$script\" &" >> files/etc/init.d/custom-scripts
             echo "        fi" >> files/etc/init.d/custom-scripts
             echo "    done" >> files/etc/init.d/custom-scripts
