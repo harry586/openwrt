@@ -142,254 +142,117 @@ jobs:
             echo "✅ 已创建编译器文件目录: $COMPILER_DIR"
           fi
       
-      # 步骤 4: 智能检查并编译交叉编译器（修复了YAML语法）
-      - name: "4. 智能检查并编译交叉编译器"
+      # 步骤 4: 智能检查并下载交叉编译器源代码
+      - name: "4. 智能检查并下载交叉编译器源代码"
         run: |
-          echo "=== 步骤 4: 智能检查并编译交叉编译器 ==="
+          echo "=== 步骤 4: 智能检查并下载交叉编译器源代码 ==="
           
           COMPILER_DIR="${{ env.COMPILER_DIR }}"
-          COMPILER_OUTPUT_DIR="$COMPILER_DIR/compiled"
+          COMPILER_SOURCE_DIR="$COMPILER_DIR/source"
           BUILD_DIR="${{ env.BUILD_DIR }}"
           
-          echo "🔧 智能编译器管理流程:"
-          echo "1. 检查现有编译器状态"
-          echo "2. 只在必要时重新编译"
-          echo "3. 编译后保存并提交到仓库"
-          echo "4. 显示编译器详细信息"
+          echo "🔧 智能编译器源代码管理流程:"
+          echo "1. 检查现有编译器源代码状态"
+          echo "2. 下载缺失的编译器源代码包"
+          echo "3. 保存编译器源代码包"
+          echo "4. 显示编译器源代码包信息"
           
-          # 1. 检查现有编译器状态
-          echo "🔍 检查现有编译器状态..."
-          NEED_COMPILE=false
-          NEED_COMMIT=false
+          # 1. 检查现有编译器源代码状态
+          echo "🔍 检查现有编译器源代码状态..."
           
-          if [ -d "$COMPILER_OUTPUT_DIR" ]; then
-            echo "✅ 找到已编译的交叉编译器"
+          # 创建编译器源代码目录
+          mkdir -p "$COMPILER_SOURCE_DIR"
+          
+          # 编译器源代码文件清单
+          COMPILER_SOURCE_FILES=("gcc-11.3.0.tar.xz" "binutils-2.38.tar.xz" "linux-5.15.133.tar.xz" "musl-1.2.4.tar.gz" "gmp-6.2.1.tar.xz" "mpfr-4.1.0.tar.xz" "mpc-1.2.1.tar.gz")
+          COMPILER_SOURCE_URLS=("https://ftp.gnu.org/gnu/gcc/gcc-11.3.0/gcc-11.3.0.tar.xz" "https://ftp.gnu.org/gnu/binutils/binutils-2.38.tar.xz" "https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.15.133.tar.xz" "https://musl.libc.org/releases/musl-1.2.4.tar.gz" "https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.xz" "https://ftp.gnu.org/gnu/mpfr/mpfr-4.1.0.tar.xz" "https://ftp.gnu.org/gnu/mpc/mpc-1.2.1.tar.gz")
+          
+          total_files=${#COMPILER_SOURCE_FILES[@]}
+          existing_files=0
+          downloaded_files=0
+          
+          echo "📋 编译器源代码文件清单 ($total_files 个文件):"
+          for i in "${!COMPILER_SOURCE_FILES[@]}"; do
+            file="${COMPILER_SOURCE_FILES[$i]}"
+            url="${COMPILER_SOURCE_URLS[$i]}"
             
-            # 检查编译器完整性
-            REQUIRED_FILES=("bin/arm-openwrt-linux-muslgnueabi-gcc" "bin/arm-openwrt-linux-muslgnueabi-g++" "bin/arm-openwrt-linux-muslgnueabi-ld" "bin/arm-openwrt-linux-muslgnueabi-ar" "bin/arm-openwrt-linux-muslgnueabi-strip" "lib/gcc/arm-openwrt-linux-muslgnueabi/8.4.0/libgcc.a")
-            
-            missing_files=0
-            echo "📋 检查编译器文件完整性:"
-            for file in "${REQUIRED_FILES[@]}"; do
-              if [ -f "$COMPILER_OUTPUT_DIR/$file" ]; then
-                echo "  ✅ $file"
+            if [ -f "$COMPILER_SOURCE_DIR/$file" ]; then
+              echo "  ✅ $file: 已存在"
+              existing_files=$((existing_files + 1))
+              
+              # 检查文件完整性
+              file_size=$(stat -c%s "$COMPILER_SOURCE_DIR/$file" 2>/dev/null || echo 0)
+              if [ $file_size -gt 1000 ]; then
+                echo "     大小: $(du -h "$COMPILER_SOURCE_DIR/$file" 2>/dev/null | cut -f1)"
               else
-                echo "  ❌ $file - 缺失"
-                missing_files=$((missing_files + 1))
-              fi
-            done
-            
-            if [ $missing_files -eq 0 ]; then
-              echo "✅ 编译器文件完整，无需重新编译"
-              echo "💡 交叉编译器是通用的，可以长期使用"
-              
-              # 获取编译器版本
-              gcc_file="$COMPILER_OUTPUT_DIR/bin/arm-openwrt-linux-muslgnueabi-gcc"
-              if [ -x "$gcc_file" ]; then
-                compiler_version=$($gcc_file --version 2>&1 | head -1)
-                echo "🔧 编译器版本: $compiler_version"
-              fi
-              
-              # 显示编译器大小
-              compiler_size=$(du -sh "$COMPILER_OUTPUT_DIR" 2>/dev/null | cut -f1 || echo "未知")
-              echo "📦 编译器大小: $compiler_size"
-              
-              # 统计文件数量
-              file_count=$(find "$COMPILER_OUTPUT_DIR" -type f 2>/dev/null | wc -l)
-              dir_count=$(find "$COMPILER_OUTPUT_DIR" -type d 2>/dev/null | wc -l)
-              echo "📊 编译器统计: $file_count 个文件, $((dir_count - 1)) 个目录"
-              
-              # 检查Git状态（是否已提交）
-              cd "${{ github.workspace }}"
-              git_status=$(git status --porcelain "firmware-config/build-Compiler-file/compiled/" 2>/dev/null)
-              
-              if [ -n "$git_status" ]; then
-                echo "🔄 编译器有未提交的更改，需要提交"
-                NEED_COMMIT=true
+                echo "     ⚠️ 文件大小异常: ${file_size}字节"
+                # 删除异常文件，重新下载
+                rm -f "$COMPILER_SOURCE_DIR/$file"
+                echo "     已删除异常文件，将重新下载"
               fi
             else
-              echo "❌ 编译器不完整，缺失 $missing_files 个关键文件，需要重新编译"
-              NEED_COMPILE=true
-            fi
-          else
-            echo "❌ 未找到已编译的交叉编译器，需要编译"
-            NEED_COMPILE=true
-          fi
-          
-          # 2. 只在必要时编译
-          if [ "$NEED_COMPILE" = true ]; then
-            echo "🚀 开始编译交叉编译器..."
-            
-            # 创建构建目录 - 使用sudo权限
-            echo "📁 创建构建目录: $BUILD_DIR"
-            sudo mkdir -p "$BUILD_DIR" || echo "⚠️ 目录可能已存在"
-            
-            # 设置目录权限 - 确保当前用户可以访问
-            echo "🔧 设置目录权限..."
-            sudo chown -R $USER:$USER "$BUILD_DIR" || echo "⚠️ 权限设置警告"
-            sudo chmod -R 755 "$BUILD_DIR" || echo "⚠️ 权限设置警告"
-            
-            # 检查目录权限
-            if [ -w "$BUILD_DIR" ]; then
-              echo "✅ 构建目录权限正常"
-            else
-              echo "❌ 构建目录权限错误，尝试修复..."
-              sudo chown -R $USER:$USER "$BUILD_DIR"
-              sudo chmod -R 755 "$BUILD_DIR"
-            fi
-            
-            cd "$BUILD_DIR"
-            
-            # 清理旧目录
-            echo "🧹 清理旧目录..."
-            sudo rm -rf ./* ./.git* 2>/dev/null || true
-            
-            # 克隆源码
-            echo "📥 克隆OpenWrt源码..."
-            git clone --depth 1 https://github.com/immortalwrt/immortalwrt.git . --branch openwrt-21.02
-            
-            # 创建最小配置 - 使用多个echo命令替代heredoc
-            echo "⚙️ 创建编译器构建配置..."
-            echo "CONFIG_TARGET_ipq40xx=y" > .config
-            echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
-            echo "CONFIG_TARGET_ROOTFS_INITRAMFS=y" >> .config
-            echo "CONFIG_EXTERNAL_TOOLCHAIN=y" >> .config
-            echo "CONFIG_USE_MUSL=y" >> .config
-            
-            # 下载依赖
-            echo "📦 下载编译器依赖..."
-            mkdir -p dl
-            
-            # 下载编译器文件 - 使用数组
-            COMPILER_FILES=("gcc-11.3.0.tar.xz" "binutils-2.38.tar.xz" "linux-5.15.133.tar.xz" "musl-1.2.4.tar.gz" "gmp-6.2.1.tar.xz" "mpfr-4.1.0.tar.xz" "mpc-1.2.1.tar.gz")
-            COMPILER_URLS=("https://ftp.gnu.org/gnu/gcc/gcc-11.3.0/gcc-11.3.0.tar.xz" "https://ftp.gnu.org/gnu/binutils/binutils-2.38.tar.xz" "https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.15.133.tar.xz" "https://musl.libc.org/releases/musl-1.2.4.tar.gz" "https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.xz" "https://ftp.gnu.org/gnu/mpfr/mpfr-4.1.0.tar.xz" "https://ftp.gnu.org/gnu/mpc/mpc-1.2.1.tar.gz")
-            
-            downloaded=0
-            for i in "${!COMPILER_FILES[@]}"; do
-              file="${COMPILER_FILES[$i]}"
-              url="${COMPILER_URLS[$i]}"
-              if [ ! -f "dl/$file" ]; then
-                echo "下载: $file"
-                wget --no-check-certificate -q --show-progress -O "dl/$file" "$url" && downloaded=$((downloaded + 1)) || echo "下载失败: $file"
-              fi
-            done
-            
-            echo "📊 依赖下载完成: 新下载 $downloaded 个文件"
-            
-            # 编译编译器 - 设置环境变量跳过交互式配置
-            echo "🔨 编译交叉编译器 (可能需要10-20分钟)..."
-            echo "⚠️ 注意: 设置环境变量跳过交互式配置..."
-            
-            # 设置环境变量避免交互式配置
-            export TERM=dumb
-            export TERMINFO=/usr/share/terminfo
-            export TERMCAP=/etc/termcap
-            export DEBIAN_FRONTEND=noninteractive
-            export BUILD_LOG=1
-            export V=s
-            
-            # 只编译toolchain，强制非交互模式
-            echo "执行编译命令..."
-            make toolchain/install -j$(nproc) 2>&1 | tee compiler-build.log
-            
-            # 检查编译结果
-            if [ $? -eq 0 ] && [ -d "staging_dir/toolchain-"* ]; then
-              echo "✅ 交叉编译器编译成功！"
+              echo "  📥 $file: 需要下载"
               
-              # 清理旧的编译器目录
-              sudo rm -rf "$COMPILER_OUTPUT_DIR" 2>/dev/null || true
-              mkdir -p "$COMPILER_OUTPUT_DIR"
-              
-              # 复制编译器
-              echo "💾 保存编译好的编译器..."
-              cp -r staging_dir/toolchain-* "$COMPILER_OUTPUT_DIR/" 2>/dev/null || true
-              
-              NEED_COMMIT=true
-            else
-              echo "❌ 交叉编译器编译失败"
-              echo "📋 编译日志摘要:"
-              tail -20 compiler-build.log 2>/dev/null || echo "无日志"
-              
-              # 检查具体错误
-              echo "🔍 检查具体错误原因..."
-              if grep -q "Error opening terminal" compiler-build.log; then
-                echo "🚨 发现终端错误，尝试修复..."
-                echo "重新运行编译，设置更多环境变量..."
-                
-                # 设置更多环境变量避免终端交互
-                export TERM=vt100
-                export TERMINFO=/usr/share/terminfo
-                export TERMCAP=/etc/termcap
-                export DEBIAN_FRONTEND=noninteractive
-                export BUILD_LOG=1
-                export V=s
-                export MAKE_TERMOUT=
-                export MAKE_TERMERR=
-                
-                # 再次尝试编译
-                echo "再次尝试编译..."
-                make toolchain/install -j$(nproc) 2>&1 | tee compiler-build-retry.log
-                
-                if [ $? -eq 0 ] && [ -d "staging_dir/toolchain-"* ]; then
-                  echo "✅ 交叉编译器编译成功（第二次尝试）！"
-                  
-                  # 清理旧的编译器目录
-                  sudo rm -rf "$COMPILER_OUTPUT_DIR" 2>/dev/null || true
-                  mkdir -p "$COMPILER_OUTPUT_DIR"
-                  
-                  # 复制编译器
-                  echo "💾 保存编译好的编译器..."
-                  cp -r staging_dir/toolchain-* "$COMPILER_OUTPUT_DIR/" 2>/dev/null || true
-                  
-                  NEED_COMMIT=true
+              # 下载文件
+              echo "     下载URL: $url"
+              if wget --no-check-certificate -q --show-progress -O "$COMPILER_SOURCE_DIR/$file.tmp" "$url"; then
+                # 检查下载的文件大小
+                downloaded_size=$(stat -c%s "$COMPILER_SOURCE_DIR/$file.tmp" 2>/dev/null || echo 0)
+                if [ $downloaded_size -gt 1000 ]; then
+                  mv "$COMPILER_SOURCE_DIR/$file.tmp" "$COMPILER_SOURCE_DIR/$file"
+                  echo "     ✅ 下载成功 ($(du -h "$COMPILER_SOURCE_DIR/$file" 2>/dev/null | cut -f1))"
+                  downloaded_files=$((downloaded_files + 1))
                 else
-                  echo "❌ 交叉编译器编译仍然失败"
-                  exit 1
+                  echo "     ❌ 下载的文件大小异常: ${downloaded_size}字节"
+                  rm -f "$COMPILER_SOURCE_DIR/$file.tmp"
                 fi
               else
-                exit 1
+                echo "     ❌ 下载失败"
+                rm -f "$COMPILER_SOURCE_DIR/$file.tmp" 2>/dev/null || true
               fi
             fi
-          else
-            echo "✅ 使用现有的编译器，跳过编译步骤"
+          done
+          
+          # 2. 显示下载统计
+          echo "📊 下载统计:"
+          echo "  总计: $total_files 个编译器源代码文件"
+          echo "  已存在: $existing_files 个"
+          echo "  新下载: $downloaded_files 个"
+          
+          # 3. 显示编译器源代码目录信息
+          echo "📁 编译器源代码目录信息:"
+          echo "  路径: $COMPILER_SOURCE_DIR"
+          
+          if [ $((existing_files + downloaded_files)) -gt 0 ]; then
+            total_size=$(du -sh "$COMPILER_SOURCE_DIR" 2>/dev/null | cut -f1 || echo "未知")
+            echo "  总大小: $total_size"
+            
+            # 显示文件列表
+            echo "📋 文件列表:"
+            ls -lh "$COMPILER_SOURCE_DIR" 2>/dev/null || echo "  无文件"
+            
+            # 创建编译器源代码信息文件
+            echo "交叉编译器源代码信息" > "$COMPILER_SOURCE_DIR/compiler-source-info.txt"
+            echo "==================" >> "$COMPILER_SOURCE_DIR/compiler-source-info.txt"
+            echo "下载时间: $(date)" >> "$COMPILER_SOURCE_DIR/compiler-source-info.txt"
+            echo "目标平台: arm_cortex-a7+neon-vfpv4" >> "$COMPILER_SOURCE_DIR/compiler-source-info.txt"
+            echo "编译器版本: gcc-11.3.0" >> "$COMPILER_SOURCE_DIR/compiler-source-info.txt"
+            echo "binutils版本: 2.38" >> "$COMPILER_SOURCE_DIR/compiler-source-info.txt"
+            echo "Linux内核版本: 5.15.133" >> "$COMPILER_SOURCE_DIR/compiler-source-info.txt"
+            echo "musl版本: 1.2.4" >> "$COMPILER_SOURCE_DIR/compiler-source-info.txt"
+            echo "文件总数: $((existing_files + downloaded_files))/$total_files" >> "$COMPILER_SOURCE_DIR/compiler-source-info.txt"
+            echo "总大小: $total_size" >> "$COMPILER_SOURCE_DIR/compiler-source-info.txt"
+            echo "Git提交: ${{ github.sha }}" >> "$COMPILER_SOURCE_DIR/compiler-source-info.txt"
+            echo "构建工作流: ${{ github.workflow }}" >> "$COMPILER_SOURCE_DIR/compiler-source-info.txt"
+            echo "状态: 源代码包已准备" >> "$COMPILER_SOURCE_DIR/compiler-source-info.txt"
+            echo "说明: 这些是编译器源代码包，将在固件编译过程中使用" >> "$COMPILER_SOURCE_DIR/compiler-source-info.txt"
+            
+            echo "✅ 编译器源代码信息文件已创建"
           fi
           
-          # 3. 显示最终编译器信息
-          echo "📊 最终编译器信息:"
-          if [ -d "$COMPILER_OUTPUT_DIR" ]; then
-            total_size=$(du -sh "$COMPILER_OUTPUT_DIR" 2>/dev/null | cut -f1 || echo "未知")
-            file_count=$(find "$COMPILER_OUTPUT_DIR" -type f 2>/dev/null | wc -l)
-            
-            echo "📍 路径: $COMPILER_OUTPUT_DIR"
-            echo "📦 总大小: $total_size"
-            echo "📄 文件数量: $file_count 个"
-            
-            # 显示关键文件
-            echo "🔧 关键编译器文件:"
-            find "$COMPILER_OUTPUT_DIR/bin" -type f -name "*gcc*" -o -name "*g++*" -o -name "*ar" -o -name "*ld" -o -name "*strip" 2>/dev/null | head -10 | while read file; do
-              file_name=$(basename "$file")
-              file_size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "未知")
-              echo "  📄 $file_name ($file_size)"
-            done
-            
-            # 创建编译器信息文件 - 使用多个echo
-            echo "交叉编译器信息" > "$COMPILER_OUTPUT_DIR/compiler-info.txt"
-            echo "===============" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
-            echo "编译时间: $(date)" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
-            echo "目标平台: arm_cortex-a7+neon-vfpv4" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
-            echo "编译器: gcc-8.4.0" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
-            echo "C库: musl" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
-            echo "总大小: $total_size" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
-            echo "文件数量: $file_count" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
-            echo "Git提交: ${{ github.sha }}" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
-            echo "构建工作流: ${{ github.workflow }}" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
-            echo "状态: 完整可用" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
-            echo "说明: 此交叉编译器是通用的，可以长期使用" >> "$COMPILER_OUTPUT_DIR/compiler-info.txt"
-          fi
-          
-          # 4. 智能提交到仓库
-          if [ "$NEED_COMMIT" = true ]; then
-            echo "📤 准备提交编译器到仓库..."
+          # 4. 如果所有文件都下载完成，尝试提交到仓库
+          if [ $((existing_files + downloaded_files)) -eq $total_files ] && [ $downloaded_files -gt 0 ]; then
+            echo "📤 准备提交编译器源代码到仓库..."
             cd "${{ github.workspace }}"
             
             # 配置Git
@@ -397,43 +260,44 @@ jobs:
             git config --global user.name "GitHub Actions"
             
             # 检查是否有更改
-            git_status=$(git status --porcelain "firmware-config/build-Compiler-file/compiled/" 2>/dev/null)
+            git_status=$(git status --porcelain "firmware-config/build-Compiler-file/source/" 2>/dev/null)
             
             if [ -n "$git_status" ]; then
-              echo "🔄 检测到编译器更改，正在提交..."
+              echo "🔄 检测到编译器源代码更改，正在提交..."
               
               # 添加文件
-              git add "firmware-config/build-Compiler-file/compiled/"
+              git add "firmware-config/build-Compiler-file/source/"
               
               # 提交
-              commit_message="build: 更新交叉编译器 (${{ github.event.inputs.device_name }} - $(date +%Y%m%d))"
+              commit_message="build: 更新编译器源代码包 (${{ github.event.inputs.device_name }} - $(date +%Y%m%d))"
               git commit -m "$commit_message"
               
-              echo "✅ 编译器已提交到本地仓库"
+              echo "✅ 编译器源代码已提交到本地仓库"
               echo "📝 提交信息: $commit_message"
               
               # 显示提交的统计
               echo "📊 提交统计:"
-              echo "  添加/修改文件: $(git diff --cached --name-only | wc -l)"
+              echo "  添加/修改文件: $downloaded_files 个"
               echo "  总大小: $total_size"
               
               # 尝试推送
               echo "🚀 推送到远程仓库..."
               if git push origin ${GITHUB_REF##*/}; then
-                echo "🎉 编译器已成功推送到远程仓库！"
-                echo "🔗 可以在仓库的 firmware-config/build-Compiler-file/compiled/ 目录查看"
+                echo "🎉 编译器源代码已成功推送到远程仓库！"
+                echo "🔗 可以在仓库的 firmware-config/build-Compiler-file/source/ 目录查看"
               else
                 echo "⚠️ 推送失败，可能是权限问题"
                 echo "💡 提交已保存在本地，可在后续步骤中手动推送"
               fi
             else
-              echo "✅ 编译器文件没有更改，无需提交"
+              echo "✅ 编译器源代码文件没有更改，无需提交"
             fi
-          else
-            echo "✅ 编译器无需提交到仓库"
+          elif [ $((existing_files + downloaded_files)) -lt $total_files ]; then
+            echo "⚠️ 警告: 编译器源代码文件不完整 ($((existing_files + downloaded_files))/$total_files)"
+            echo "💡 将在固件编译过程中自动下载缺失的文件"
           fi
           
-          echo "✅ 智能编译器管理完成"
+          echo "✅ 智能编译器源代码管理完成"
       
       # 步骤 5: 初始空间检查
       - name: "5. 初始空间检查"
@@ -649,13 +513,15 @@ jobs:
           # 先显示编译器文件状态
           echo "🔍 检查交叉编译器状态:"
           COMPILER_DIR="${{ env.COMPILER_DIR }}"
+          COMPILER_SOURCE_DIR="$COMPILER_DIR/source"
           COMPILER_OUTPUT_DIR="$COMPILER_DIR/compiled"
           
+          # 检查预编译的编译器
           if [ -d "$COMPILER_OUTPUT_DIR" ]; then
-            echo "✅ 找到编译好的交叉编译器"
+            echo "✅ 找到预编译的交叉编译器"
             total_size=$(du -sh "$COMPILER_OUTPUT_DIR" 2>/dev/null | cut -f1 || echo "未知")
             file_count=$(find "$COMPILER_OUTPUT_DIR" -type f 2>/dev/null | wc -l)
-            echo "📁 编译器目录: $COMPILER_OUTPUT_DIR"
+            echo "📁 预编译编译器目录: $COMPILER_OUTPUT_DIR"
             echo "📦 总大小: $total_size"
             echo "📄 文件数量: $file_count 个"
             
@@ -673,10 +539,31 @@ jobs:
               echo "  ❌ arm-openwrt-linux-muslgnueabi-g++: 缺失"
             fi
             
-            echo "💡 编译器状态: 完整的交叉编译器，可以用于加速构建"
+            echo "💡 预编译编译器状态: 如果完整可用，将用于加速构建"
           else
-            echo "⚠️ 未找到编译好的交叉编译器"
-            echo "📝 将在构建过程中编译编译器"
+            echo "⚠️ 未找到预编译的交叉编译器"
+          fi
+          
+          # 检查编译器源代码
+          if [ -d "$COMPILER_SOURCE_DIR" ]; then
+            echo "✅ 找到编译器源代码包"
+            source_size=$(du -sh "$COMPILER_SOURCE_DIR" 2>/dev/null | cut -f1 || echo "未知")
+            source_count=$(find "$COMPILER_SOURCE_DIR" -name "*.tar.*" -o -name "*.gz" 2>/dev/null | wc -l)
+            echo "📁 编译器源代码目录: $COMPILER_SOURCE_DIR"
+            echo "📦 总大小: $source_size"
+            echo "📄 源代码包数量: $source_count 个"
+            
+            # 显示源代码包列表
+            echo "📋 编译器源代码包列表:"
+            find "$COMPILER_SOURCE_DIR" -name "*.tar.*" -o -name "*.gz" 2>/dev/null | head -10 | while read file; do
+              file_name=$(basename "$file")
+              file_size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "未知")
+              echo "  📄 $file_name ($file_size)"
+            done
+            
+            echo "💡 编译器源代码状态: 将在固件编译过程中使用这些源代码包"
+          else
+            echo "⚠️ 未找到编译器源代码包"
           fi
           
           echo ""
@@ -708,6 +595,7 @@ jobs:
           echo "=== 步骤 21: 智能编译固件 ==="
           
           COMPILER_DIR="${{ env.COMPILER_DIR }}"
+          COMPILER_SOURCE_DIR="$COMPILER_DIR/source"
           COMPILER_OUTPUT_DIR="$COMPILER_DIR/compiled"
           BUILD_DIR="${{ env.BUILD_DIR }}"
           
@@ -766,6 +654,25 @@ jobs:
             if [ -f ".config" ]; then
               cp .config .config.backup
               echo "✅ 备份当前配置"
+            fi
+            
+            # 检查是否有编译器源代码包
+            echo "🔍 检查编译器源代码包..."
+            if [ -d "$COMPILER_SOURCE_DIR" ]; then
+              echo "✅ 找到编译器源代码包"
+              
+              # 复制编译器源代码到构建目录的dl文件夹
+              if [ ! -d "dl" ]; then
+                mkdir -p dl
+              fi
+              
+              # 复制所有源代码包
+              cp "$COMPILER_SOURCE_DIR"/*.tar.* "$COMPILER_SOURCE_DIR"/*.gz dl/ 2>/dev/null || true
+              
+              source_count=$(find dl -name "*.tar.*" -o -name "*.gz" 2>/dev/null | wc -l)
+              echo "✅ 已复制 $source_count 个编译器源代码包到 dl 目录"
+            else
+              echo "⚠️ 未找到编译器源代码包，将从网络下载"
             fi
             
             # 清理旧编译器目录
