@@ -256,7 +256,7 @@ integrate_custom_files() {
             echo "    echo \"Starting custom scripts...\"" >> files/etc/init.d/custom-scripts
             echo "    for script in /usr/share/custom/*.sh; do" >> files/etc/init.d/custom-scripts
             echo "        if [ -x \"\$script\" ]; then" >> files/etc/init.d/custom-scripts
-            echo "            echo \"Running: \$(basename \"\$script\")\"" >> files/etc/init.d/custom-scripts
+            echo "            echo \"Running: \$(basename \"\$script\")\"" >> files/etc-系统日志/init.d/custom-scripts
             echo "            sh \"\$script\" &" >> files/etc/init.d/custom-scripts
             echo "        fi" >> files/etc/init.d/custom-scripts
             echo "    done" >> files/etc/init.d/custom-scripts
@@ -645,7 +645,8 @@ setup_environment() {
     local debug_packages=("gdb" "strace" "ltrace" "valgrind" "binutils-dev" "libdw-dev" "libiberty-dev")
     
     # 终端支持包 - 解决"Error opening terminal: unknown"问题
-    local terminal_packages=("ncurses-term" "ncurses-base" "ncurses-bin" "libncursesw5" "libncursesw5-dev" "libtinfo5" "libtinfo-dev" "terminfo" "termcap")
+    # 注意：Ubuntu 22.04 中 termcap 包已被废弃，使用 ncurses-term 替代
+    local terminal_packages=("ncurses-term" "ncurses-base" "ncurses-bin" "libncursesw5" "libncursesw5-dev" "libtinfo5" "libtinfo-dev" "terminfo")
     
     log "安装基础编译工具..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${base_packages[@]}" || handle_error "安装基础编译工具失败"
@@ -660,24 +661,44 @@ setup_environment() {
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${debug_packages[@]}" || handle_error "安装调试工具失败"
     
     log "安装终端支持包 (解决终端错误)..."
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${terminal_packages[@]}" || handle_error "安装终端支持包失败"
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${terminal_packages[@]}" || {
+        log "⚠️ 部分终端包安装失败，尝试替代方案..."
+        # 尝试安装替代包
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ncurses-term ncurses-base libncursesw5 libtinfo5 terminfo || {
+            log "⚠️ 替代包也安装失败，继续构建..."
+        }
+    }
     
     # 设置终端环境变量
     log "设置终端环境变量..."
     export TERM=xterm-256color
     export TERMINFO=/usr/share/terminfo
-    export TERMCAP=/etc/termcap
+    # 检查 termcap 是否存在，如果不存在则不设置
+    if [ -f "/etc/termcap" ] || [ -d "/usr/share/terminfo" ]; then
+        export TERMCAP=/etc/termcap
+    else
+        log "⚠️ termcap 文件不存在，跳过设置 TERMCAP"
+    fi
     
     echo "export TERM=xterm-256color" >> ~/.bashrc
     echo "export TERMINFO=/usr/share/terminfo" >> ~/.bashrc
-    echo "export TERMCAP=/etc/termcap" >> ~/.bashrc
+    if [ -f "/etc/termcap" ] || [ -d "/usr/share/terminfo" ]; then
+        echo "export TERMCAP=/etc/termcap" >> ~/.bashrc
+    fi
     
     # 创建必要的terminfo文件
     log "检查terminfo文件..."
     if [ ! -f "/usr/share/terminfo/x/xterm-256color" ]; then
         log "创建terminfo文件..."
         sudo mkdir -p /usr/share/terminfo/x
-        sudo ln -s /lib/terminfo/x/xterm /usr/share/terminfo/x/xterm-256color 2>/dev/null || true
+        # 尝试创建符号链接
+        if [ -f "/lib/terminfo/x/xterm" ]; then
+            sudo ln -s /lib/terminfo/x/xterm /usr/share/terminfo/x/xterm-256color 2>/dev/null || true
+        elif [ -f "/usr/share/terminfo/x/xterm" ]; then
+            sudo ln -s /usr/share/terminfo/x/xterm /usr/share/terminfo/x/xterm-256color 2>/dev/null || true
+        else
+            log "⚠️ 未找到 xterm terminfo 文件"
+        fi
     fi
     
     # 检查重要工具是否安装成功
