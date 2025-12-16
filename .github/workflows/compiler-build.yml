@@ -77,7 +77,7 @@ jobs:
           
           echo "[3/10] 安装编译依赖..."
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential gcc g++ make flex bison libgmp-dev libmpfr-dev libmpc-dev libisl-dev python3 python3-dev git wget curl zlib1g-dev liblzma-dev file gawk gettext libncurses5-dev libssl-dev python3-distutils rsync unzip ncurses-term ncurses-base libncursesw5 libtinfo5 terminfo gnutls-bin libgnutls28-dev
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential gcc g++ make flex bison libgmp-dev libmpfr-dev libmpc-dev libisl-dev python3 python3-dev git wget curl zlib1g-dev liblzma-dev file gawk gettext libncurses5-dev libssl-dev python3-distutils rsync unzip ncurses-term ncurses-base libncursesw5 libtinfo5 terminfo gnutls-bin libgnutls28-dev libcurl4-gnutls-dev
           
           echo "[4/10] 修复网络和Git配置..."
           git config --global http.postBuffer 524288000
@@ -86,7 +86,9 @@ jobs:
           git config --global core.compression 0
           git config --global core.looseCompression 0
           git config --global http.sslVerify false
-          git config --global http.sslBackend "openssl"
+          # 修复：移除错误的openssl后端配置，使用正确的gnutls
+          git config --global http.sslBackend "gnutls"
+          git config --global init.defaultBranch main
           
           export GIT_SSL_NO_VERIFY=1
           export CURL_SSL_NO_VERIFY=1
@@ -120,7 +122,10 @@ jobs:
             fi
           done
           
-          echo "[8/10] 使用GitHub加速镜像..."
+          echo "[8/10] 设置Git环境变量..."
+          # 设置Git使用正确的SSL后端
+          export GIT_SSL_BACKEND="gnutls"
+          echo "GIT_SSL_BACKEND=gnutls" >> $GITHUB_ENV
           
           echo "[9/10] 清理可能的缓存..."
           sudo rm -rf /tmp/*openwrt* /tmp/*compiler* 2>/dev/null || true
@@ -128,7 +133,7 @@ jobs:
           echo "[10/10] 环境检查完成..."
           echo "✅ 环境准备完成"
       
-      # 5. 获取源码和配置（修复架构问题）
+      # 5. 获取源码和配置（修复SSL和架构问题）
       - name: 📥 获取源码
         run: |
           echo "=== 获取OpenWrt源码 ==="
@@ -139,18 +144,37 @@ jobs:
           cd "${{ env.BUILD_DIR }}"
           echo "当前目录: $(pwd)"
           
-          echo "[1/5] 克隆OpenWrt源码（使用浅克隆避免网络问题）..."
-          git init
-          git remote add origin https://github.com/openwrt/openwrt.git
-          git fetch --depth 1 origin v23.05.2
-          git checkout FETCH_HEAD
+          echo "[1/5] 设置Git SSL配置..."
+          # 确保使用正确的SSL后端
+          export GIT_SSL_BACKEND="gnutls"
+          export GIT_SSL_NO_VERIFY=1
+          git config --global http.sslVerify false
           
-          echo "[2/5] 简化feeds配置..."
+          echo "[2/5] 克隆OpenWrt源码（使用完整克隆）..."
+          # 使用完整的clone命令，避免init+fetch的问题
+          rm -rf ./* 2>/dev/null || true
+          git clone --depth 1 --branch v23.05.2 https://github.com/openwrt/openwrt.git .
+          
+          if [ $? -ne 0 ]; then
+            echo "⚠️ Git clone失败，尝试使用wget下载..."
+            # 备选方案：直接下载源码包
+            wget https://github.com/openwrt/openwrt/archive/refs/tags/v23.05.2.tar.gz -O openwrt.tar.gz
+            if [ $? -eq 0 ]; then
+              tar -xzf openwrt.tar.gz --strip-components=1
+              rm -f openwrt.tar.gz
+              echo "✅ 使用wget下载成功"
+            else
+              echo "❌ 所有下载方法都失败"
+              exit 1
+            fi
+          fi
+          
+          echo "[3/5] 简化feeds配置..."
           echo "src-git packages https://github.com/openwrt/packages.git;v23.05.2" > feeds.conf.default
           echo "# 注释掉可能出问题的feeds" >> feeds.conf.default
           echo "# src-git luci https://github.com/openwrt/luci.git;v23.05.2" >> feeds.conf.default
           
-          echo "[3/5] 创建ARM64架构配置..."
+          echo "[4/5] 创建ARM64架构配置..."
           echo "# OpenWrt ARM64 交叉编译器构建配置" > .config
           echo "# 生成时间: $(date)" >> .config
           echo "" >> .config
@@ -195,15 +219,13 @@ jobs:
           echo "CONFIG_PACKAGE_dropbear=n" >> .config
           echo "CONFIG_PACKAGE_iptables=n" >> .config
           
-          echo "[4/5] 配置验证..."
+          echo "[5/5] 配置验证..."
           echo "配置摘要:"
           echo "目标架构: ARM64 (aarch64)"
           echo "C库: musl"
           echo "GCC版本: 11.3.0"
           echo "配置文件大小: $(wc -l < .config) 行"
           
-          echo "[5/5] 显示关键配置..."
-          grep -E "CONFIG_TARGET|CONFIG_GCC|CONFIG_USE_MUSL" .config
           echo "✅ 源码配置完成"
       
       # 6. 编译工具链（简化流程，避免feeds问题）
@@ -222,6 +244,8 @@ jobs:
           export FORCE_UNSAFE_CONFIGURE=1
           export TERM=xterm-256color
           export TERMINFO=/usr/share/terminfo
+          export GIT_SSL_BACKEND="gnutls"
+          export GIT_SSL_NO_VERIFY=1
           
           echo "=== 步骤1: 跳过feeds更新 ==="
           echo "时间: $(date)"
@@ -246,6 +270,10 @@ jobs:
           mkdir -p dl
           
           echo "下载关键源码包..."
+          # 设置下载环境
+          export GIT_SSL_NO_VERIFY=1
+          export CURL_SSL_NO_VERIFY=1
+          
           make -j1 download V=s 2>&1 | tee /tmp/download.log
           DOWNLOAD_STATUS=${PIPESTATUS[0]}
           
@@ -495,7 +523,7 @@ jobs:
           fi
           echo "✅ 保存完成"
       
-      # 9. 提交到仓库（修复YAML语法）
+      # 9. 提交到仓库
       - name: 📤 提交更新
         run: |
           echo "=== 提交编译器到仓库 ==="
