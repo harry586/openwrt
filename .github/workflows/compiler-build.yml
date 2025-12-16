@@ -420,9 +420,9 @@ jobs:
             echo "找到: $dir ($(du -sh "$dir" 2>/dev/null | cut -f1 || echo '未知'))"
           done
           
-          COMPILER_DIR=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
+          TOOLCHAIN_DIR=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
           
-          if [ -z "$COMPILER_DIR" ] || [ ! -d "$COMPILER_DIR" ]; then
+          if [ -z "$TOOLCHAIN_DIR" ] || [ ! -d "$TOOLCHAIN_DIR" ]; then
             echo "❌ 错误: 未找到编译器目录"
             echo "搜索路径: staging_dir/toolchain-*"
             echo "staging_dir 内容:"
@@ -432,8 +432,8 @@ jobs:
             exit 1
           fi
           
-          echo "✅ 编译器目录: $COMPILER_DIR"
-          echo "目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1)"
+          echo "✅ 编译器目录: $TOOLCHAIN_DIR"
+          echo "目录大小: $(du -sh "$TOOLCHAIN_DIR" 2>/dev/null | cut -f1)"
           
           echo "[2/5] 检查关键文件..."
           # 检查编译器文件
@@ -450,7 +450,7 @@ jobs:
           missing_files=()
           for desc in "${!REQUIRED_FILES[@]}"; do
             pattern="${REQUIRED_FILES[$desc]}"
-            file=$(find "$COMPILER_DIR" -name "$pattern" -type f 2>/dev/null | head -1)
+            file=$(find "$TOOLCHAIN_DIR" -name "$pattern" -type f 2>/dev/null | head -1)
             
             if [ -n "$file" ]; then
               size=$(stat -c%s "$file" 2>/dev/null | numfmt --to=iec || echo '?')
@@ -472,7 +472,7 @@ jobs:
           fi
           
           echo "[3/5] 测试编译器..."
-          GCC_PATH=$(find "$COMPILER_DIR/bin" -name "*gcc" -type f 2>/dev/null | head -1)
+          GCC_PATH=$(find "$TOOLCHAIN_DIR/bin" -name "*gcc" -type f 2>/dev/null | head -1)
           
           if [ -n "$GCC_PATH" ] && [ -x "$GCC_PATH" ]; then
             echo "🔧 测试编译器: $GCC_PATH"
@@ -506,20 +506,20 @@ jobs:
           else
             echo "❌ 无法找到可用的GCC编译器"
             echo "bin目录内容:"
-            ls -la "$COMPILER_DIR/bin/" 2>/dev/null | head -10
+            ls -la "$TOOLCHAIN_DIR/bin/" 2>/dev/null | head -10
           fi
           
           echo "[4/5] 统计编译器信息..."
           echo "编译器统计:"
-          echo "总文件数: $(find "$COMPILER_DIR" -type f 2>/dev/null | wc -l)"
-          echo "总目录数: $(find "$COMPILER_DIR" -type d 2>/dev/null | wc -l)"
-          echo "bin目录: $(find "$COMPILER_DIR/bin" -type f 2>/dev/null | wc -l) 个文件"
-          echo "lib目录: $(find "$COMPILER_DIR/lib" -type f 2>/dev/null | wc -l) 个文件"
-          echo "include目录: $(find "$COMPILER_DIR/include" -type f 2>/dev/null | wc -l) 个文件"
+          echo "总文件数: $(find "$TOOLCHAIN_DIR" -type f 2>/dev/null | wc -l)"
+          echo "总目录数: $(find "$TOOLCHAIN_DIR" -type d 2>/dev/null | wc -l)"
+          echo "bin目录: $(find "$TOOLCHAIN_DIR/bin" -type f 2>/dev/null | wc -l) 个文件"
+          echo "lib目录: $(find "$TOOLCHAIN_DIR/lib" -type f 2>/dev/null | wc -l) 个文件"
+          echo "include目录: $(find "$TOOLCHAIN_DIR/include" -type f 2>/dev/null | wc -l) 个文件"
           
           echo "[5/5] 显示编译器结构..."
           echo "编译器顶层结构:"
-          ls -la "$COMPILER_DIR/" | head -10
+          ls -la "$TOOLCHAIN_DIR/" | head -10
           
           echo "✅ 验证完成"
       
@@ -530,9 +530,9 @@ jobs:
           cd "${{ env.BUILD_DIR }}"
           
           # 查找编译器
-          COMPILER_DIR=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
+          TOOLCHAIN_DIR=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
           
-          if [ ! -d "$COMPILER_DIR" ]; then
+          if [ ! -d "$TOOLCHAIN_DIR" ]; then
             echo "❌ 错误: 编译器目录不存在"
             exit 1
           fi
@@ -541,11 +541,16 @@ jobs:
           # 确保输出目录存在并清空
           sudo mkdir -p "${{ env.COMPILER_DIR }}" 2>/dev/null || true
           sudo chown -R $USER:$USER "${{ env.COMPILER_DIR }}" 2>/dev/null || true
-          rm -rf "${{ env.COMPILER_DIR:?}"/* 2>/dev/null || true
+          
+          # 修复：安全地清空目录
+          if [ -d "${{ env.COMPILER_DIR }}" ]; then
+            echo "清空输出目录..."
+            rm -rf "${{ env.COMPILER_DIR }}"/*
+          fi
           
           echo "[2/5] 复制编译器文件..."
-          # 复制整个编译器
-          cp -r "$COMPILER_DIR"/* "${{ env.COMPILER_DIR }}/" 2>&1 | tee /tmp/copy.log
+          # 复制整个编译器 - 修复了这里的语法
+          cp -r "$TOOLCHAIN_DIR"/* "${{ env.COMPILER_DIR }}/" 2>&1 | tee /tmp/copy.log
           
           echo "[3/5] 创建构建信息..."
           # 创建详细的构建信息文件
