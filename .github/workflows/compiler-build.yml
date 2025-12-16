@@ -7,8 +7,7 @@ on:
     - cron: '0 0 * * 0'
 
 env:
-  # 使用 /mnt 作为构建目录
-  BUILD_DIR: "/mnt/compiler-build-$(date +%s)"
+  # 基础目录路径，不包含时间戳
   COMPILER_DIR: "${{ github.workspace }}/firmware-config/build-Compiler-file/compiled"
 
 jobs:
@@ -21,8 +20,8 @@ jobs:
       - name: 📥 检出仓库
         uses: actions/checkout@v4
       
-      # 2. 设置版本信息
-      - name: 🔍 设置版本
+      # 2. 设置版本信息和构建目录
+      - name: 🔍 设置版本和目录
         run: |
           echo "=== 编译器版本配置 ==="
           
@@ -32,11 +31,17 @@ jobs:
           echo "LINUX_VERSION=5.15.133" >> $GITHUB_ENV
           echo "MUSL_VERSION=1.2.4" >> $GITHUB_ENV
           
+          # 动态生成构建目录（每次运行都重新计算）
+          BUILD_TIMESTAMP=$(date +%s)
+          BUILD_DIR="/mnt/compiler-build-${BUILD_TIMESTAMP}"
+          echo "BUILD_DIR=${BUILD_DIR}" >> $GITHUB_ENV
+          
           echo "📦 版本信息:"
           echo "├─ GCC: 11.3.0"
           echo "├─ Binutils: 2.38"
           echo "├─ Linux Kernel: 5.15.133"
           echo "└─ Musl: 1.2.4"
+          echo "📁 构建目录: ${BUILD_DIR}"
       
       # 3. 显示构建信息
       - name: 📋 显示信息
@@ -62,7 +67,7 @@ jobs:
         run: |
           echo "=== 准备构建环境（使用 /mnt） ==="
           
-          echo "[1/7] 检查 /mnt 状态..."
+          echo "[1/6] 检查 /mnt 状态..."
           # 检查 /mnt 是否存在
           if [ ! -d "/mnt" ]; then
             echo "⚠️  /mnt 目录不存在，尝试创建..."
@@ -73,15 +78,15 @@ jobs:
           echo "/mnt 权限:"
           ls -ld /mnt || echo "无法访问 /mnt"
           
-          echo "[2/7] 检查 /mnt 可用空间..."
+          echo "[2/6] 检查 /mnt 可用空间..."
           df -h /mnt 2>/dev/null || echo "无法获取 /mnt 磁盘信息"
           
-          echo "[3/7] 创建构建目录..."
+          echo "[3/6] 创建构建目录..."
           # 创建构建目录并设置权限
           echo "创建目录: ${{ env.BUILD_DIR }}"
           sudo mkdir -p "${{ env.BUILD_DIR }}"
           
-          echo "[4/7] 设置目录权限..."
+          echo "[4/6] 设置目录权限..."
           # 设置正确的所有权和权限
           sudo chown -R $USER:$USER "${{ env.BUILD_DIR }}"
           sudo chmod 755 "${{ env.BUILD_DIR }}"
@@ -90,11 +95,7 @@ jobs:
           echo "目录权限:"
           ls -ld "${{ env.BUILD_DIR }}"
           
-          echo "[5/7] 进入构建目录..."
-          cd "${{ env.BUILD_DIR }}"
-          echo "当前目录: $(pwd)"
-          
-          echo "[6/7] 安装编译依赖..."
+          echo "[5/6] 安装编译依赖..."
           sudo apt-get update
           
           # 安装必需的工具
@@ -111,7 +112,7 @@ jobs:
             file pkg-config \
             gawk gettext automake autoconf libtool 2>&1 | tee /tmp/deps-install.log
           
-          echo "[7/7] 验证工具和权限..."
+          echo "[6/6] 验证工具和权限..."
           echo "关键工具检查:"
           for tool in gcc g++ make flex bison python3 git wget; do
             if command -v $tool >/dev/null; then
@@ -122,19 +123,22 @@ jobs:
             fi
           done
           
-          echo "目录权限验证:"
-          touch test-write.txt && echo "✅ 可写入" && rm test-write.txt
-          mkdir test-dir && echo "✅ 可创建目录" && rmdir test-dir
-          
           echo "✅ 环境准备完成"
       
       # 5. 获取源码
       - name: 📥 获取源码
         run: |
           echo "=== 获取OpenWrt源码 ==="
+          echo "进入构建目录: ${{ env.BUILD_DIR }}"
+          
+          # 确保目录存在
+          if [ ! -d "${{ env.BUILD_DIR }}" ]; then
+            echo "❌ 错误: 构建目录不存在"
+            exit 1
+          fi
+          
           cd "${{ env.BUILD_DIR }}"
           echo "当前目录: $(pwd)"
-          echo "构建目录: ${{ env.BUILD_DIR }}"
           
           echo "[1/4] 清理旧内容（如果有）..."
           # 确保目录是干净的
@@ -200,6 +204,14 @@ jobs:
         timeout-minutes: 180
         run: |
           echo "=== 开始详细编译过程 ==="
+          echo "进入构建目录: ${{ env.BUILD_DIR }}"
+          
+          # 确保目录存在
+          if [ ! -d "${{ env.BUILD_DIR }}" ]; then
+            echo "❌ 错误: 构建目录不存在"
+            exit 1
+          fi
+          
           cd "${{ env.BUILD_DIR }}"
           echo "工作目录: $(pwd)"
           echo "磁盘信息:"
@@ -425,6 +437,14 @@ jobs:
       - name: ✅ 验证结果
         run: |
           echo "=== 验证编译结果 ==="
+          echo "进入构建目录: ${{ env.BUILD_DIR }}"
+          
+          # 确保目录存在
+          if [ ! -d "${{ env.BUILD_DIR }}" ]; then
+            echo "❌ 错误: 构建目录不存在"
+            exit 1
+          fi
+          
           cd "${{ env.BUILD_DIR }}"
           
           echo "[1/5] 查找编译器目录..."
@@ -540,6 +560,13 @@ jobs:
       - name: 💾 保存编译器
         run: |
           echo "=== 保存编译器到仓库 ==="
+          
+          # 确保构建目录存在
+          if [ ! -d "${{ env.BUILD_DIR }}" ]; then
+            echo "❌ 错误: 构建目录不存在"
+            exit 1
+          fi
+          
           cd "${{ env.BUILD_DIR }}"
           
           # 查找编译器
