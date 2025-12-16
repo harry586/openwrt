@@ -495,50 +495,27 @@ jobs:
           fi
           echo "✅ 保存完成"
       
-      # 9. 提交到仓库（修复commit message中的YAML问题）
+      # 9. 提交到仓库（修复YAML语法）
       - name: 📤 提交更新
         run: |
           echo "=== 提交编译器到仓库 ==="
           cd "${{ github.workspace }}"
           git config user.email "github-actions@github.com"
           git config user.name "GitHub Actions"
-          echo "[1/4] 检查变更..."
           
+          echo "[1/3] 检查变更..."
           if [ -d "${{ env.COMPILER_DIR }}" ] && [ "$(find "${{ env.COMPILER_DIR }}" -type f 2>/dev/null | wc -l)" -gt 10 ]; then
             echo "检测到新的编译器文件，准备提交..."
-            SIZE=$(du -sh "${{ env.COMPILER_DIR }}" 2>/dev/null | cut -f1 || echo "未知")
-            FILE_COUNT=$(find "${{ env.COMPILER_DIR }}" -type f 2>/dev/null | wc -l)
-            DATE_TAG=$(date +%Y%m%d)
-            ARCH="${{ env.TARGET_ARCH }}"
             
-            echo "[2/4] 添加到Git..."
+            echo "[2/3] 添加到Git..."
             git add -f "firmware-config/build-Compiler-file/compiled"
             
-            echo "[3/4] 提交..."
-            # 使用简单的commit message，避免YAML解析问题
-            COMMIT_TITLE="build(compiler): 自动构建${ARCH}交叉编译器 v${{ env.GCC_VERSION }} [$DATE_TAG]"
-            COMMIT_BODY="版本信息:
-• GCC: ${{ env.GCC_VERSION }}
-• Binutils: ${{ env.BINUTILS_VERSION }}
-• Linux内核: ${{ env.LINUX_VERSION }}
-• Musl: ${{ env.MUSL_VERSION }}
-• 目标: ${ARCH} (${{ env.TARGET_TRIPLET }})
-
-构建详情:
-• 大小: $SIZE
-• 文件数: $FILE_COUNT
-• 时间: $(date '+%Y-%m-%d %H:%M:%S')
-• 工作流: ${{ github.workflow }}
-• 运行ID: #${{ github.run_id }}
-
-用途: OpenWrt/ImmortalWrt固件构建
-位置: firmware-config/build-Compiler-file/compiled/
-
-Signed-off-by: GitHub Actions <actions@github.com>"
+            echo "[3/3] 提交并推送..."
+            ARCH="${{ env.TARGET_ARCH }}"
+            DATE_TAG=$(date +%Y%m%d)
             
-            git commit -m "$COMMIT_TITLE" -m "$COMMIT_BODY"
+            git commit -m "build(compiler): 自动构建${ARCH}交叉编译器 [$DATE_TAG]" -m "版本: GCC ${{ env.GCC_VERSION }}, Binutils ${{ env.BINUTILS_VERSION }}" -m "目标: ${{ env.TARGET_ARCH }} (${{ env.TARGET_TRIPLET }})" -m "工作流: ${{ github.workflow }}, 运行ID: #${{ github.run_id }}" -m "Signed-off-by: GitHub Actions <actions@github.com>"
             
-            echo "[4/4] 推送到仓库..."
             if git push; then
               echo "🎉 ${ARCH}编译器已成功提交到仓库"
             else
@@ -548,7 +525,7 @@ Signed-off-by: GitHub Actions <actions@github.com>"
             echo "✅ 没有足够的编译器文件，跳过提交"
           fi
       
-      # 10. 上传日志（简化路径定义）
+      # 10. 上传日志
       - name: 📄 上传日志
         if: always()
         uses: actions/upload-artifact@v4
