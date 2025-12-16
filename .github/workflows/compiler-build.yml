@@ -7,7 +7,6 @@ on:
     - cron: '0 0 * * 0'
 
 env:
-  # 基础目录路径
   COMPILER_DIR: "${{ github.workspace }}/firmware-config/build-Compiler-file/compiled"
 
 jobs:
@@ -24,18 +23,13 @@ jobs:
       - name: 🔍 设置版本和目录
         run: |
           echo "=== 编译器版本配置 ==="
-          
-          # 使用OpenWrt 23.05兼容的稳定版本
           echo "GCC_VERSION=11.3.0" >> $GITHUB_ENV
           echo "BINUTILS_VERSION=2.38" >> $GITHUB_ENV
           echo "LINUX_VERSION=5.15.133" >> $GITHUB_ENV
           echo "MUSL_VERSION=1.2.4" >> $GITHUB_ENV
-          
-          # 动态生成构建目录
           BUILD_TIMESTAMP=$(date +%s)
           BUILD_DIR="/mnt/compiler-build-${BUILD_TIMESTAMP}"
           echo "BUILD_DIR=${BUILD_DIR}" >> $GITHUB_ENV
-          
           echo "📦 版本信息:"
           echo "├─ GCC: 11.3.0"
           echo "├─ Binutils: 2.38"
@@ -67,38 +61,22 @@ jobs:
       - name: 🏗️ 准备环境
         run: |
           echo "=== 准备构建环境 ==="
-          
           echo "[1/6] 检查 /mnt 状态..."
           if [ ! -d "/mnt" ]; then
             echo "创建 /mnt 目录..."
             sudo mkdir -p /mnt
             sudo chmod 755 /mnt
           fi
-          
           echo "[2/6] 创建构建目录..."
           echo "创建目录: ${{ env.BUILD_DIR }}"
           sudo mkdir -p "${{ env.BUILD_DIR }}"
           sudo chown -R $USER:$USER "${{ env.BUILD_DIR }}"
           sudo chmod 755 "${{ env.BUILD_DIR }}"
-          
           echo "✅ 目录创建完成"
           ls -ld "${{ env.BUILD_DIR }}"
-          
           echo "[3/6] 安装编译依赖..."
           sudo apt-get update
-          
-          # 最小化依赖安装，加快速度
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            build-essential \
-            gcc g++ make \
-            flex bison \
-            libgmp-dev libmpfr-dev libmpc-dev libisl-dev \
-            python3 python3-dev \
-            git wget curl \
-            zlib1g-dev liblzma-dev \
-            file \
-            gawk gettext 2>&1 | tee /tmp/deps-install.log
-          
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential gcc g++ make flex bison libgmp-dev libmpfr-dev libmpc-dev libisl-dev python3 python3-dev git wget curl zlib1g-dev liblzma-dev file gawk gettext 2>&1 | tee /tmp/deps-install.log
           echo "[4/6] 验证工具..."
           echo "关键工具检查:"
           for tool in gcc g++ make flex bison python3 git wget; do
@@ -108,66 +86,56 @@ jobs:
               echo "  ❌ $tool: 未找到"
             fi
           done
-          
           echo "✅ 环境准备完成"
       
       # 5. 获取源码和配置
       - name: 📥 获取源码
         run: |
           echo "=== 获取OpenWrt源码 ==="
-          
           if [ ! -d "${{ env.BUILD_DIR }}" ]; then
             echo "❌ 错误: 构建目录不存在"
             exit 1
           fi
-          
           cd "${{ env.BUILD_DIR }}"
           echo "当前目录: $(pwd)"
-          
           echo "[1/3] 克隆OpenWrt源码..."
-          # 使用稳定版本
           git clone --depth 1 --branch v23.05.2 https://github.com/openwrt/openwrt.git . 2>&1 | tee /tmp/clone.log
-          
           echo "[2/3] 创建ARM架构配置..."
-          # 创建ARM64架构的最小配置
-          cat > .config << 'EOF'
-# OpenWrt ARM64 交叉编译器构建配置
-# 生成时间: $(date)
-
-# 目标平台: ARM64 (aarch64)
-CONFIG_TARGET_armvirt=y
-CONFIG_TARGET_armvirt_64=y
-CONFIG_TARGET_armvirt_64_Default=y
-
-# 文件系统
-CONFIG_TARGET_ROOTFS_INITRAMFS=y
-
-# 工具链配置
-CONFIG_EXTERNAL_TOOLCHAIN=n
-CONFIG_USE_MUSL=y
-CONFIG_BUILD_TOOLCHAIN=y
-
-# 版本配置
-CONFIG_GCC_VERSION="11.3.0"
-CONFIG_BINUTILS_VERSION="2.38"
-CONFIG_LINUX_VERSION="5.15.133"
-CONFIG_MUSL_VERSION="1.2.4"
-
-# 禁用所有软件包，只构建工具链
-CONFIG_ALL_NONSHARED=n
-CONFIG_ALL_KMODS=n
-
-# 禁用所有包
-CONFIG_PACKAGE_busybox=n
-EOF
-          
+          # 使用多个echo命令创建配置文件
+          echo "# OpenWrt ARM64 交叉编译器构建配置" > .config
+          echo "# 生成时间: $(date)" >> .config
+          echo "" >> .config
+          echo "# 目标平台: ARM64 (aarch64)" >> .config
+          echo "CONFIG_TARGET_armvirt=y" >> .config
+          echo "CONFIG_TARGET_armvirt_64=y" >> .config
+          echo "CONFIG_TARGET_armvirt_64_Default=y" >> .config
+          echo "" >> .config
+          echo "# 文件系统" >> .config
+          echo "CONFIG_TARGET_ROOTFS_INITRAMFS=y" >> .config
+          echo "" >> .config
+          echo "# 工具链配置" >> .config
+          echo "CONFIG_EXTERNAL_TOOLCHAIN=n" >> .config
+          echo "CONFIG_USE_MUSL=y" >> .config
+          echo "CONFIG_BUILD_TOOLCHAIN=y" >> .config
+          echo "" >> .config
+          echo "# 版本配置" >> .config
+          echo 'CONFIG_GCC_VERSION="11.3.0"' >> .config
+          echo 'CONFIG_BINUTILS_VERSION="2.38"' >> .config
+          echo 'CONFIG_LINUX_VERSION="5.15.133"' >> .config
+          echo 'CONFIG_MUSL_VERSION="1.2.4"' >> .config
+          echo "" >> .config
+          echo "# 禁用所有软件包，只构建工具链" >> .config
+          echo "CONFIG_ALL_NONSHARED=n" >> .config
+          echo "CONFIG_ALL_KMODS=n" >> .config
+          echo "" >> .config
+          echo "# 禁用所有包" >> .config
+          echo "CONFIG_PACKAGE_busybox=n" >> .config
           echo "[3/3] 配置验证..."
           echo "配置摘要:"
           echo "目标架构: ARM64 (aarch64)"
           echo "C库: musl"
           echo "GCC版本: 11.3.0"
           echo "配置文件大小: $(wc -l < .config) 行"
-          
           echo "✅ 源码配置完成"
       
       # 6. 编译工具链（优化版）
@@ -175,81 +143,62 @@ EOF
         timeout-minutes: 150
         run: |
           echo "=== 开始编译工具链 ==="
-          
           if [ ! -d "${{ env.BUILD_DIR }}" ]; then
             echo "❌ 错误: 构建目录不存在"
             exit 1
           fi
-          
           cd "${{ env.BUILD_DIR }}"
           echo "工作目录: $(pwd)"
           echo "开始时间: $(date)"
-          
-          # 设置编译环境
           export FORCE_UNSAFE_CONFIGURE=1
-          
           echo "=== 步骤1: 下载源码 ==="
           echo "时间: $(date)"
-          
-          # 并行下载，但限制并发数
           make -j4 download 2>&1 | tee /tmp/step1-download.log
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
             echo "❌ 下载失败"
             exit 1
           fi
           echo "✅ 下载完成"
-          
           echo "=== 步骤2: 编译binutils ==="
           echo "时间: $(date)"
-          
-          # 单线程编译binutils，避免问题
           make toolchain/binutils/compile -j1 V=0 2>&1 | tee /tmp/step2-binutils.log
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
             echo "❌ binutils编译失败"
             exit 1
           fi
           echo "✅ binutils编译完成"
-          
           echo "=== 步骤3: 编译gcc初始阶段 ==="
           echo "时间: $(date)"
-          
           make toolchain/gcc/compile -j1 V=0 2>&1 | tee /tmp/step3-gcc-stage1.log
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
             echo "❌ gcc初始阶段失败"
             exit 1
           fi
           echo "✅ gcc初始阶段完成"
-          
           echo "=== 步骤4: 编译musl ==="
           echo "时间: $(date)"
-          
           make toolchain/musl/compile -j1 V=0 2>&1 | tee /tmp/step4-musl.log
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
             echo "❌ musl编译失败"
             exit 1
           fi
           echo "✅ musl编译完成"
-          
           echo "=== 步骤5: 编译完整gcc ==="
           echo "时间: $(date)"
-          
           make toolchain/gcc/compile -j1 V=0 2>&1 | tee /tmp/step5-gcc-final.log
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
             echo "❌ 完整gcc编译失败"
             exit 1
           fi
           echo "✅ 完整gcc编译完成"
-          
           echo "=== 步骤6: 安装工具链 ==="
           echo "时间: $(date)"
-          
           make toolchain/install -j1 V=0 2>&1 | tee /tmp/step6-install.log
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
             echo "❌ 安装失败"
             exit 1
           fi
           echo "✅ 安装完成"
-          
           echo ""
           echo "🎉 🎉 🎉 ARM64交叉编译器构建成功！"
           echo "════════════════════════════════════════════════════════"
@@ -260,29 +209,22 @@ EOF
       - name: ✅ 验证结果
         run: |
           echo "=== 验证编译结果 ==="
-          
           if [ ! -d "${{ env.BUILD_DIR }}" ]; then
             echo "❌ 错误: 构建目录不存在"
             exit 1
           fi
-          
           cd "${{ env.BUILD_DIR }}"
-          
           echo "[1/4] 查找工具链目录..."
           TOOLCHAIN_DIR=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
-          
           if [ -z "$TOOLCHAIN_DIR" ] || [ ! -d "$TOOLCHAIN_DIR" ]; then
             echo "❌ 未找到工具链目录"
             find staging_dir -type d 2>/dev/null || echo "staging_dir不存在"
             exit 1
           fi
-          
           echo "✅ 工具链目录: $TOOLCHAIN_DIR"
           echo "目录大小: $(du -sh "$TOOLCHAIN_DIR" 2>/dev/null | cut -f1)"
-          
           echo "[2/4] 检查ARM64编译器..."
           GCC_PATH=$(find "$TOOLCHAIN_DIR/bin" -name "aarch64-*gcc" -type f 2>/dev/null | head -1)
-          
           if [ -n "$GCC_PATH" ] && [ -x "$GCC_PATH" ]; then
             echo "✅ 找到ARM64编译器: $(basename "$GCC_PATH")"
             echo "版本信息:"
@@ -295,7 +237,6 @@ EOF
             done
             exit 1
           fi
-          
           echo "[3/4] 检查关键工具..."
           for tool in gcc g++ ld ar strip; do
             file=$(find "$TOOLCHAIN_DIR/bin" -name "aarch64-*$tool" -type f 2>/dev/null | head -1)
@@ -305,17 +246,12 @@ EOF
               echo "  ❌ $tool: 未找到"
             fi
           done
-          
           echo "[4/4] 测试交叉编译..."
-          # 测试ARM64交叉编译
-          cat > test-arm.c << 'EOF'
-#include <stdio.h>
-int main() {
-    printf("ARM64 cross-compiler test OK\n");
-    return 0;
-}
-EOF
-          
+          echo '#include <stdio.h>' > test-arm.c
+          echo 'int main() {' >> test-arm.c
+          echo '    printf("ARM64 cross-compiler test OK\n");' >> test-arm.c
+          echo '    return 0;' >> test-arm.c
+          echo '}' >> test-arm.c
           if $GCC_PATH test-arm.c -o test-arm 2>/tmp/compile-test.log; then
             echo "✅ 交叉编译测试通过"
             echo "生成文件类型:"
@@ -325,96 +261,81 @@ EOF
             echo "⚠️ 交叉编译测试失败"
             cat /tmp/compile-test.log
           fi
-          
           echo "✅ 验证完成"
       
       # 8. 保存到仓库
       - name: 💾 保存编译器
         run: |
           echo "=== 保存ARM64编译器到仓库 ==="
-          
           if [ ! -d "${{ env.BUILD_DIR }}" ]; then
             echo "❌ 错误: 构建目录不存在"
             exit 1
           fi
-          
           cd "${{ env.BUILD_DIR }}"
-          
-          # 查找工具链
           TOOLCHAIN_DIR=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
-          
           if [ ! -d "$TOOLCHAIN_DIR" ]; then
             echo "❌ 错误: 工具链目录不存在"
             exit 1
           fi
-          
           echo "[1/5] 准备输出目录..."
           mkdir -p "${{ env.COMPILER_DIR }}"
-          
-          # 清空输出目录
           if [ -d "${{ env.COMPILER_DIR }}" ]; then
             echo "清空输出目录..."
             rm -rf "${{ env.COMPILER_DIR }}"/* 2>/dev/null || true
           fi
-          
           echo "[2/5] 复制工具链文件..."
           cp -r "$TOOLCHAIN_DIR"/* "${{ env.COMPILER_DIR }}/" 2>&1 | tee /tmp/copy.log
-          
           echo "[3/5] 创建构建信息..."
-          cat > "${{ env.COMPILER_DIR }}/BUILD-INFO.txt" << 'EOF'
-========================================
-OpenWrt ARM64 交叉编译器 - 自动构建
-========================================
-
-构建时间: $(date)
-工作流: ${{ github.workflow }}
-运行ID: ${{ github.run_id }}
-提交: ${{ github.sha }}
-
-=========== 版本信息 ===========
-GCC: 11.3.0
-Binutils: 2.38
-Linux内核: 5.15.133
-Musl: 1.2.4
-目标架构: aarch64 (ARM64)
-
-=========== 工具链信息 ===========
-目标三元组: aarch64-openwrt-linux-musl
-C库: musl
-字节序: 小端 (little-endian)
-ABI: LP64
-
-=========== 文件统计 ===========
-总文件数: $(find "${{ env.COMPILER_DIR }}" -type f 2>/dev/null | wc -l)
-总大小: $(du -sh "${{ env.COMPILER_DIR }}" 2>/dev/null | cut -f1)
-
-=========== 使用方法 ===========
-在OpenWrt构建环境中:
-
-1. 设置环境变量:
-   export STAGING_DIR=/path/to/this/compiler
-   make
-
-2. 或者在make命令中直接指定:
-   make STAGING_DIR=/path/to/this/compiler
-
-=========== 主要工具 ===========
-bin/aarch64-openwrt-linux-musl-gcc      # C编译器
-bin/aarch64-openwrt-linux-musl-g++      # C++编译器
-bin/aarch64-openwrt-linux-musl-ld       # 链接器
-bin/aarch64-openwrt-linux-musl-ar       # 静态库工具
-bin/aarch64-openwrt-linux-musl-strip    # 符号剥离
-
-========================================
-此文件由GitHub Actions自动生成
-========================================
-EOF
-          
+          echo "========================================" > "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "OpenWrt ARM64 交叉编译器 - 自动构建" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "========================================" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "构建时间: $(date)" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "工作流: ${{ github.workflow }}" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "运行ID: ${{ github.run_id }}" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "提交: ${{ github.sha }}" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "=========== 版本信息 ===========" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "GCC: 11.3.0" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "Binutils: 2.38" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "Linux内核: 5.15.133" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "Musl: 1.2.4" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "目标架构: aarch64 (ARM64)" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "=========== 工具链信息 ===========" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "目标三元组: aarch64-openwrt-linux-musl" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "C库: musl" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "字节序: 小端 (little-endian)" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "ABI: LP64" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "=========== 文件统计 ===========" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "总文件数: $(find "${{ env.COMPILER_DIR }}" -type f 2>/dev/null | wc -l)" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "总大小: $(du -sh "${{ env.COMPILER_DIR }}" 2>/dev/null | cut -f1)" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "=========== 使用方法 ===========" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "在OpenWrt构建环境中:" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "1. 设置环境变量:" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "   export STAGING_DIR=/path/to/this/compiler" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "   make" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "2. 或者在make命令中直接指定:" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "   make STAGING_DIR=/path/to/this/compiler" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "=========== 主要工具 ===========" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "bin/aarch64-openwrt-linux-musl-gcc      # C编译器" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "bin/aarch64-openwrt-linux-musl-g++      # C++编译器" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "bin/aarch64-openwrt-linux-musl-ld       # 链接器" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "bin/aarch64-openwrt-linux-musl-ar       # 静态库工具" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "bin/aarch64-openwrt-linux-musl-strip    # 符号剥离" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "========================================" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "此文件由GitHub Actions自动生成" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
+          echo "========================================" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
           echo "[4/5] 验证复制结果..."
           echo "输出目录: ${{ env.COMPILER_DIR }}"
           echo "大小: $(du -sh "${{ env.COMPILER_DIR }}" 2>/dev/null | cut -f1)"
           echo "文件数: $(find "${{ env.COMPILER_DIR }}" -type f 2>/dev/null | wc -l)"
-          
           echo "[5/5] 最终测试..."
           TEST_GCC=$(find "${{ env.COMPILER_DIR }}/bin" -name "aarch64-*gcc" -type f 2>/dev/null | head -1)
           if [ -n "$TEST_GCC" ] && [ -x "$TEST_GCC" ]; then
@@ -423,34 +344,26 @@ EOF
           else
             echo "⚠️  警告: 编译器不可执行"
           fi
-          
           echo "✅ 保存完成"
       
       # 9. 提交到仓库
       - name: 📤 提交更新
         run: |
           echo "=== 提交编译器到仓库 ==="
-          
           cd "${{ github.workspace }}"
-          
           git config user.email "github-actions@github.com"
           git config user.name "GitHub Actions"
-          
           echo "[1/4] 检查变更..."
-          
           if [ -d "${{ env.COMPILER_DIR }}" ] && [ "$(find "${{ env.COMPILER_DIR }}" -type f 2>/dev/null | wc -l)" -gt 10 ]; then
             echo "检测到新的编译器文件，准备提交..."
-            
             SIZE=$(du -sh "${{ env.COMPILER_DIR }}" 2>/dev/null | cut -f1 || echo "未知")
             FILE_COUNT=$(find "${{ env.COMPILER_DIR }}" -type f 2>/dev/null | wc -l)
             DATE_TAG=$(date +%Y%m%d)
-            
             echo "[2/4] 添加到Git..."
             git add -f "firmware-config/build-Compiler-file/compiled"
-            
             echo "[3/4] 提交..."
             git commit -m "build(compiler): 自动构建ARM64交叉编译器 v11.3.0 [$DATE_TAG]
-
+            
             🔧 版本信息:
             • GCC: 11.3.0
             • Binutils: 2.38
@@ -469,14 +382,12 @@ EOF
             📍 位置: firmware-config/build-Compiler-file/compiled/
             
             Signed-off-by: GitHub Actions <actions@github.com>"
-            
             echo "[4/4] 推送到仓库..."
             if git push; then
               echo "🎉 ARM64编译器已成功提交到仓库"
             else
               echo "⚠️ 推送失败，但提交已保存在本地"
             fi
-            
           else
             echo "✅ 没有足够的编译器文件，跳过提交"
           fi
@@ -487,8 +398,5 @@ EOF
         uses: actions/upload-artifact@v4
         with:
           name: compiler-build-logs-$(date +%Y%m%d-%H%M%S)
-          path: |
-            /tmp/*.log
-            /tmp/step*.log
-            ${{ env.BUILD_DIR }}/.config
+          path: /tmp/*.log,/tmp/step*.log,${{ env.BUILD_DIR }}/.config
           retention-days: 7
