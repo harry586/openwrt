@@ -361,7 +361,7 @@ EOF
           cp -r "$TOOLCHAIN_DIR"/* "${{ env.COMPILER_DIR }}/" 2>&1 | tee /tmp/copy.log
           
           echo "[3/5] 创建构建信息..."
-          cat > "${{ env.COMPILER_DIR }}/BUILD-INFO.txt" << EOF
+          cat > "${{ env.COMPILER_DIR }}/BUILD-INFO.txt" << 'EOF'
 ========================================
 OpenWrt ARM64 交叉编译器 - 自动构建
 ========================================
