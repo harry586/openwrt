@@ -57,33 +57,53 @@ jobs:
           echo ""
           echo "📅 开始时间: $(date)"
       
-      # 4. 准备环境
+      # 4. 准备环境（修复终端问题）
       - name: 🏗️ 准备环境
         run: |
           echo "=== 准备构建环境 ==="
-          echo "[1/6] 检查 /mnt 状态..."
+          echo "[1/8] 检查 /mnt 状态..."
           if [ ! -d "/mnt" ]; then
             echo "创建 /mnt 目录..."
             sudo mkdir -p /mnt
             sudo chmod 755 /mnt
           fi
-          echo "[2/6] 创建构建目录..."
+          echo "[2/8] 创建构建目录..."
           echo "创建目录: ${{ env.BUILD_DIR }}"
           sudo mkdir -p "${{ env.BUILD_DIR }}"
           sudo chown -R $USER:$USER "${{ env.BUILD_DIR }}"
           sudo chmod 755 "${{ env.BUILD_DIR }}"
           echo "✅ 目录创建完成"
           ls -ld "${{ env.BUILD_DIR }}"
-          echo "[3/6] 安装编译依赖..."
+          echo "[3/8] 安装编译依赖..."
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential gcc g++ make flex bison libgmp-dev libmpfr-dev libmpc-dev libisl-dev python3 python3-dev git wget curl zlib1g-dev liblzma-dev file gawk gettext 2>&1 | tee /tmp/deps-install.log
-          echo "[4/6] 设置终端环境..."
-          # 设置终端环境，避免menuconfig错误
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential gcc g++ make flex bison libgmp-dev libmpfr-dev libmpc-dev \
+            libisl-dev python3 python3-dev git wget curl zlib1g-dev liblzma-dev \
+            file gawk gettext libncurses5-dev libssl-dev python3-distutils \
+            rsync unzip ncurses-term ncurses-base libncursesw5 libtinfo5 \
+            terminfo 2>&1 | tee /tmp/deps-install.log
+          echo "[4/8] 修复终端环境（关键修复）..."
+          # 修复 "Error opening terminal: unknown" 问题
+          sudo apt-get install -y ncurses-term ncurses-base libncursesw5 libtinfo5 terminfo
           export TERM=xterm-256color
           export TERMINFO=/usr/share/terminfo
+          # 创建必要的terminfo文件
+          sudo mkdir -p /usr/share/terminfo/x
+          if [ -f "/lib/terminfo/x/xterm" ]; then
+            sudo ln -sf /lib/terminfo/x/xterm /usr/share/terminfo/x/xterm-256color 2>/dev/null || true
+          fi
           echo "TERM=$TERM" >> $GITHUB_ENV
           echo "TERMINFO=$TERMINFO" >> $GITHUB_ENV
-          echo "[5/6] 验证工具..."
+          echo "[5/8] 设置环境变量..."
+          echo "export TERM=xterm-256color" >> ~/.bashrc
+          echo "export TERMINFO=/usr/share/terminfo" >> ~/.bashrc
+          echo "[6/8] 设置Git配置..."
+          git config --global http.postBuffer 524288000
+          git config --global http.lowSpeedLimit 0
+          git config --global http.lowSpeedTime 999999
+          git config --global core.compression 0
+          git config --global core.looseCompression 0
+          echo "[7/8] 验证工具..."
           echo "关键工具检查:"
           for tool in gcc g++ make flex bison python3 git wget; do
             if command -v $tool >/dev/null; then
@@ -92,9 +112,12 @@ jobs:
               echo "  ❌ $tool: 未找到"
             fi
           done
+          echo "[8/8] 设置安全配置..."
+          export FORCE_UNSAFE_CONFIGURE=1
+          echo "FORCE_UNSAFE_CONFIGURE=1" >> $GITHUB_ENV
           echo "✅ 环境准备完成"
       
-      # 5. 获取源码和配置
+      # 5. 获取源码和配置（使用正确的架构）
       - name: 📥 获取源码
         run: |
           echo "=== 获取OpenWrt源码 ==="
@@ -104,10 +127,13 @@ jobs:
           fi
           cd "${{ env.BUILD_DIR }}"
           echo "当前目录: $(pwd)"
-          echo "[1/3] 克隆OpenWrt源码..."
+          echo "[1/4] 克隆OpenWrt源码..."
           git clone --depth 1 --branch v23.05.2 https://github.com/openwrt/openwrt.git . 2>&1 | tee /tmp/clone.log
-          echo "[2/3] 创建ARM架构配置..."
-          # 使用多个echo命令创建配置文件
+          echo "[2/4] 更新feeds..."
+          ./scripts/feeds update -a 2>&1 | tee /tmp/feeds-update.log
+          ./scripts/feeds install -a 2>&1 | tee /tmp/feeds-install.log
+          echo "[3/4] 创建ARM架构配置..."
+          # 参考build_firmware_main.sh中的配置方法
           echo "# OpenWrt ARM64 交叉编译器构建配置" > .config
           echo "# 生成时间: $(date)" >> .config
           echo "" >> .config
@@ -118,10 +144,13 @@ jobs:
           echo "" >> .config
           echo "# 文件系统" >> .config
           echo "CONFIG_TARGET_ROOTFS_INITRAMFS=y" >> .config
+          echo "CONFIG_TARGET_ROOTFS_SQUASHFS=n" >> .config
           echo "" >> .config
           echo "# 工具链配置" >> .config
           echo "CONFIG_EXTERNAL_TOOLCHAIN=n" >> .config
           echo "CONFIG_USE_MUSL=y" >> .config
+          echo "# CONFIG_USE_GLIBC is not set" >> .config
+          echo "# CONFIG_USE_UCLIBC is not set" >> .config
           echo "CONFIG_BUILD_TOOLCHAIN=y" >> .config
           echo "" >> .config
           echo "# 版本配置" >> .config
@@ -133,14 +162,17 @@ jobs:
           echo "# 禁用所有软件包，只构建工具链" >> .config
           echo "CONFIG_ALL_NONSHARED=n" >> .config
           echo "CONFIG_ALL_KMODS=n" >> .config
-          echo "" >> .config
-          echo "# 禁用所有包" >> .config
-          echo "CONFIG_PACKAGE_busybox=n" >> .config
+          echo "CONFIG_ALL=n" >> .config
           echo "" >> .config
           echo "# 跳过某些检查" >> .config
           echo "CONFIG_DEVEL=y" >> .config
           echo "CONFIG_CCACHE=n" >> .config
-          echo "[3/3] 配置验证..."
+          echo "CONFIG_SIGNED_PACKAGES=n" >> .config
+          echo "" >> .config
+          echo "# 确保工具链构建" >> .config
+          echo "CONFIG_TOOLCHAIN=y" >> .config
+          echo "CONFIG_TOOLCHAIN_BUILD=y" >> .config
+          echo "[4/4] 配置验证..."
           echo "配置摘要:"
           echo "目标架构: ARM64 (aarch64)"
           echo "C库: musl"
@@ -148,7 +180,7 @@ jobs:
           echo "配置文件大小: $(wc -l < .config) 行"
           echo "✅ 源码配置完成"
       
-      # 6. 编译工具链（优化版）
+      # 6. 编译工具链（优化版，借鉴build_firmware_main.sh的经验）
       - name: 🔨 编译工具链
         timeout-minutes: 150
         run: |
@@ -161,77 +193,123 @@ jobs:
           echo "工作目录: $(pwd)"
           echo "开始时间: $(date)"
           
-          # 设置编译环境
+          # 设置编译环境（修复终端问题）
           export FORCE_UNSAFE_CONFIGURE=1
           export TERM=xterm-256color
           export TERMINFO=/usr/share/terminfo
+          export TERMCAP=/etc/termcap
           
-          echo "=== 步骤1: 强制应用配置并下载 ==="
+          echo "=== 步骤1: 应用配置（避免menuconfig） ==="
           echo "时间: $(date)"
           
-          # 先强制应用配置，避免menuconfig
+          # 备份配置文件
           cp .config .config.bak
           
-          # 使用老式方法：直接修改.config并跳过menuconfig
-          echo "应用配置..."
-          scripts/config/conf --defconfig=.config Kconfig 2>&1 | tee /tmp/config-apply.log
+          # 使用defconfig直接应用配置，避免menuconfig
+          echo "运行 make defconfig..."
+          make defconfig 2>&1 | tee /tmp/defconfig.log
           
-          # 直接下载源码，不运行menuconfig
-          echo "下载源码..."
-          make -j4 download V=s 2>&1 | tee /tmp/step1-download.log
+          # 检查defconfig是否成功
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            echo "⚠️ defconfig失败，使用原始配置"
+            cp .config.bak .config
+            # 直接手动设置必要的配置
+            sed -i 's/^CONFIG_TARGET_armvirt_64_Default=y$/# CONFIG_TARGET_armvirt_64_Default is not set/' .config
+            sed -i 's/^CONFIG_TARGET_armvirt_64=y$/CONFIG_TARGET_armvirt_64=y/' .config
+          fi
+          
+          echo "=== 步骤2: 下载源码包 ==="
+          echo "时间: $(date)"
+          
+          # 创建dl目录
+          mkdir -p dl
+          
+          # 先尝试下载关键包
+          echo "下载编译器源码包..."
+          make -j1 download V=s 2>&1 | tee /tmp/download.log
           DOWNLOAD_STATUS=${PIPESTATUS[0]}
           
           if [ $DOWNLOAD_STATUS -ne 0 ]; then
-            echo "⚠️ 下载出现警告，尝试继续..."
-            # 检查是否有实际错误
-            if grep -q "Error" /tmp/step1-download.log; then
+            echo "⚠️ 下载出现警告，检查日志..."
+            if grep -q "Error\|ERROR\|Failed" /tmp/download.log; then
               echo "❌ 下载失败，有严重错误"
+              echo "错误摘要:"
+              grep -E "Error|ERROR|Failed" /tmp/download.log | head -10
               exit 1
+            else
+              echo "✅ 下载完成，只有警告信息"
             fi
+          else
+            echo "✅ 下载成功"
           fi
-          echo "✅ 下载完成或可继续"
           
-          echo "=== 步骤2: 编译binutils ==="
+          echo "=== 步骤3: 构建binutils ==="
           echo "时间: $(date)"
-          make toolchain/binutils/compile -j1 V=s 2>&1 | tee /tmp/step2-binutils.log
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+          
+          # 使用build_firmware_main.sh中的方法
+          make toolchain/binutils/compile -j$(nproc) V=s 2>&1 | tee /tmp/binutils.log
+          BINUTILS_STATUS=${PIPESTATUS[0]}
+          
+          if [ $BINUTILS_STATUS -ne 0 ]; then
             echo "❌ binutils编译失败"
+            echo "错误摘要:"
+            grep -E "Error|ERROR|Failed|undefined" /tmp/binutils.log | head -20
             exit 1
           fi
           echo "✅ binutils编译完成"
           
-          echo "=== 步骤3: 编译gcc初始阶段 ==="
+          echo "=== 步骤4: 构建gcc初始阶段 ==="
           echo "时间: $(date)"
-          make toolchain/gcc/compile -j1 V=s 2>&1 | tee /tmp/step3-gcc-stage1.log
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+          
+          make toolchain/gcc/initial/compile -j$(nproc) V=s 2>&1 | tee /tmp/gcc-initial.log
+          GCC_INITIAL_STATUS=${PIPESTATUS[0]}
+          
+          if [ $GCC_INITIAL_STATUS -ne 0 ]; then
             echo "❌ gcc初始阶段失败"
+            echo "错误摘要:"
+            grep -E "Error|ERROR|Failed|undefined" /tmp/gcc-initial.log | head -20
             exit 1
           fi
           echo "✅ gcc初始阶段完成"
           
-          echo "=== 步骤4: 编译musl ==="
+          echo "=== 步骤5: 构建musl C库 ==="
           echo "时间: $(date)"
-          make toolchain/musl/compile -j1 V=s 2>&1 | tee /tmp/step4-musl.log
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+          
+          make toolchain/musl/compile -j$(nproc) V=s 2>&1 | tee /tmp/musl.log
+          MUSL_STATUS=${PIPESTATUS[0]}
+          
+          if [ $MUSL_STATUS -ne 0 ]; then
             echo "❌ musl编译失败"
+            echo "错误摘要:"
+            grep -E "Error|ERROR|Failed|undefined" /tmp/musl.log | head -20
             exit 1
           fi
           echo "✅ musl编译完成"
           
-          echo "=== 步骤5: 编译完整gcc ==="
+          echo "=== 步骤6: 构建完整gcc ==="
           echo "时间: $(date)"
-          make toolchain/gcc/compile -j1 V=s 2>&1 | tee /tmp/step5-gcc-final.log
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+          
+          make toolchain/gcc/final/compile -j$(nproc) V=s 2>&1 | tee /tmp/gcc-final.log
+          GCC_FINAL_STATUS=${PIPESTATUS[0]}
+          
+          if [ $GCC_FINAL_STATUS -ne 0 ]; then
             echo "❌ 完整gcc编译失败"
+            echo "错误摘要:"
+            grep -E "Error|ERROR|Failed|undefined" /tmp/gcc-final.log | head -20
             exit 1
           fi
           echo "✅ 完整gcc编译完成"
           
-          echo "=== 步骤6: 安装工具链 ==="
+          echo "=== 步骤7: 安装工具链 ==="
           echo "时间: $(date)"
-          make toolchain/install -j1 V=s 2>&1 | tee /tmp/step6-install.log
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+          
+          make toolchain/install -j$(nproc) V=s 2>&1 | tee /tmp/install.log
+          INSTALL_STATUS=${PIPESTATUS[0]}
+          
+          if [ $INSTALL_STATUS -ne 0 ]; then
             echo "❌ 安装失败"
+            echo "错误摘要:"
+            grep -E "Error|ERROR|Failed|undefined" /tmp/install.log | head -20
             exit 1
           fi
           echo "✅ 安装完成"
@@ -239,8 +317,9 @@ jobs:
           echo ""
           echo "🎉 🎉 🎉 ARM64交叉编译器构建成功！"
           echo "════════════════════════════════════════════════════════"
-          echo "总耗时: 从 $(date) 到 $(date)"
+          echo "完成时间: $(date)"
           echo "构建目录大小: $(du -sh . | cut -f1)"
+          echo "staging_dir大小: $(du -sh staging_dir 2>/dev/null | cut -f1 || echo '未知')"
       
       # 7. 验证结果
       - name: ✅ 验证结果
@@ -251,16 +330,17 @@ jobs:
             exit 1
           fi
           cd "${{ env.BUILD_DIR }}"
-          echo "[1/4] 查找工具链目录..."
+          echo "[1/5] 查找工具链目录..."
           TOOLCHAIN_DIR=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
           if [ -z "$TOOLCHAIN_DIR" ] || [ ! -d "$TOOLCHAIN_DIR" ]; then
             echo "❌ 未找到工具链目录"
-            find staging_dir -type d 2>/dev/null || echo "staging_dir不存在"
+            echo "staging_dir内容:"
+            ls -la staging_dir/ 2>/dev/null || echo "staging_dir不存在"
             exit 1
           fi
           echo "✅ 工具链目录: $TOOLCHAIN_DIR"
           echo "目录大小: $(du -sh "$TOOLCHAIN_DIR" 2>/dev/null | cut -f1)"
-          echo "[2/4] 检查ARM64编译器..."
+          echo "[2/5] 检查ARM64编译器..."
           GCC_PATH=$(find "$TOOLCHAIN_DIR/bin" -name "aarch64-*gcc" -type f 2>/dev/null | head -1)
           if [ -n "$GCC_PATH" ] && [ -x "$GCC_PATH" ]; then
             echo "✅ 找到ARM64编译器: $(basename "$GCC_PATH")"
@@ -274,7 +354,7 @@ jobs:
             done
             exit 1
           fi
-          echo "[3/4] 检查关键工具..."
+          echo "[3/5] 检查关键工具..."
           for tool in gcc g++ ld ar strip; do
             file=$(find "$TOOLCHAIN_DIR/bin" -name "aarch64-*$tool" -type f 2>/dev/null | head -1)
             if [ -n "$file" ] && [ -x "$file" ]; then
@@ -283,10 +363,10 @@ jobs:
               echo "  ❌ $tool: 未找到"
             fi
           done
-          echo "[4/4] 测试交叉编译..."
+          echo "[4/5] 测试交叉编译..."
           echo '#include <stdio.h>' > test-arm.c
           echo 'int main() {' >> test-arm.c
-          echo '    printf("ARM64 cross-compiler test OK\n");' >> test-arm.c
+          echo '    printf("ARM64 cross-compiler test OK\\n");' >> test-arm.c
           echo '    return 0;' >> test-arm.c
           echo '}' >> test-arm.c
           if $GCC_PATH test-arm.c -o test-arm 2>/tmp/compile-test.log; then
@@ -297,6 +377,13 @@ jobs:
           else
             echo "⚠️ 交叉编译测试失败"
             cat /tmp/compile-test.log
+          fi
+          echo "[5/5] 检查库文件..."
+          LIBGCC_PATH=$(find "$TOOLCHAIN_DIR" -name "libgcc.a" -type f 2>/dev/null | head -1)
+          if [ -f "$LIBGCC_PATH" ]; then
+            echo "✅ 找到libgcc.a: $LIBGCC_PATH"
+          else
+            echo "⚠️ 未找到libgcc.a"
           fi
           echo "✅ 验证完成"
       
@@ -314,15 +401,15 @@ jobs:
             echo "❌ 错误: 工具链目录不存在"
             exit 1
           fi
-          echo "[1/5] 准备输出目录..."
+          echo "[1/6] 准备输出目录..."
           mkdir -p "${{ env.COMPILER_DIR }}"
           if [ -d "${{ env.COMPILER_DIR }}" ]; then
             echo "清空输出目录..."
             rm -rf "${{ env.COMPILER_DIR }}"/* 2>/dev/null || true
           fi
-          echo "[2/5] 复制工具链文件..."
-          cp -r "$TOOLCHAIN_DIR"/* "${{ env.COMPILER_DIR }}/" 2>&1 | tee /tmp/copy.log
-          echo "[3/5] 创建构建信息..."
+          echo "[2/6] 复制工具链文件..."
+          cp -r "$TOOLCHAIN_DIR"/* "${{ env.COMPILER_DIR }}/" 2>&1 | tee /tmp/copy.log | head -20
+          echo "[3/6] 创建构建信息..."
           echo "========================================" > "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
           echo "OpenWrt ARM64 交叉编译器 - 自动构建" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
           echo "========================================" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
@@ -369,11 +456,16 @@ jobs:
           echo "========================================" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
           echo "此文件由GitHub Actions自动生成" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
           echo "========================================" >> "${{ env.COMPILER_DIR }}/BUILD-INFO.txt"
-          echo "[4/5] 验证复制结果..."
+          echo "[4/6] 验证复制结果..."
           echo "输出目录: ${{ env.COMPILER_DIR }}"
           echo "大小: $(du -sh "${{ env.COMPILER_DIR }}" 2>/dev/null | cut -f1)"
           echo "文件数: $(find "${{ env.COMPILER_DIR }}" -type f 2>/dev/null | wc -l)"
-          echo "[5/5] 最终测试..."
+          echo "[5/6] 创建版本文件..."
+          echo "ARM64_CROSS_COMPILER_VERSION=11.3.0" > "${{ env.COMPILER_DIR }}/VERSION"
+          echo "BUILD_DATE=$(date '+%Y-%m-%d')" >> "${{ env.COMPILER_DIR }}/VERSION"
+          echo "TARGET_ARCH=aarch64" >> "${{ env.COMPILER_DIR }}/VERSION"
+          echo "LIBC=musl" >> "${{ env.COMPILER_DIR }}/VERSION"
+          echo "[6/6] 最终测试..."
           TEST_GCC=$(find "${{ env.COMPILER_DIR }}/bin" -name "aarch64-*gcc" -type f 2>/dev/null | head -1)
           if [ -n "$TEST_GCC" ] && [ -x "$TEST_GCC" ]; then
             echo "✅ ARM64编译器测试:"
@@ -435,5 +527,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: compiler-build-logs-$(date +%Y%m%d-%H%M%S)
-          path: /tmp/*.log,/tmp/step*.log,${{ env.BUILD_DIR }}/.config
+          path: |
+            /tmp/*.log
+            /tmp/deps-install.log
+            ${{ env.BUILD_DIR }}/.config
+            ${{ env.BUILD_DIR }}/download.log
           retention-days: 7
