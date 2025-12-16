@@ -1,3 +1,4 @@
+# .github/workflows/compiler-build.yml
 name: 🔍 编译器构建（ARM64版本）
 
 on:
@@ -547,11 +548,11 @@ Signed-off-by: GitHub Actions <actions@github.com>"
             echo "✅ 没有足够的编译器文件，跳过提交"
           fi
       
-      # 10. 上传日志
+      # 10. 上传日志（修复路径问题）
       - name: 📄 上传日志
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: compiler-build-logs-$(date +%Y%m%d-%H%M%S)
-          path: /tmp/*.log
+          path: "/tmp/*.log,/tmp/deps-install.log,${{ env.BUILD_DIR }}/.config,${{ env.BUILD_DIR }}/download.log,${{ env.BUILD_DIR }}/toolchain-compile.log"
           retention-days: 7
