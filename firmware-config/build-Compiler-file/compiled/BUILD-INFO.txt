@@ -1,0 +1,41 @@
+========================================
+OpenWrt 交叉编译器 - 自动构建
+========================================
+
+构建时间: Tue Dec 16 17:43:14 UTC 2025
+工作流: 🔍 编译器构建（ARM64版本）
+运行ID: 20276557782
+提交: 06714b27d8929d0bd7a7524f5327288b44618540
+
+=========== 版本信息 ===========
+GCC: 11.3.0
+Binutils: 2.38
+Linux内核: 5.15.133
+Musl: 1.2.4
+目标架构: mips
+目标三元组: mips-openwrt-linux-musl
+
+=========== 文件统计 ===========
+总文件数: 2771
+总大小: 291M
+
+=========== 使用方法 ===========
+在OpenWrt构建环境中:
+
+1. 设置环境变量:
+   export STAGING_DIR=/path/to/this/compiler
+   make
+
+2. 或者在make命令中直接指定:
+   make STAGING_DIR=/path/to/this/compiler
+
+=========== 主要工具 ===========
+bin/mips-openwrt-linux-musl-gcc      # gcc
+bin/mips-openwrt-linux-musl-g++      # g++
+bin/mips-openwrt-linux-musl-ld      # ld
+bin/mips-openwrt-linux-musl-gcc-ar      # ar
+bin/mips-openwrt-linux-musl-strip      # strip
+
+========================================
+此文件由GitHub Actions自动生成
+========================================
