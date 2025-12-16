@@ -86,7 +86,6 @@ jobs:
           git config --global core.compression 0
           git config --global core.looseCompression 0
           git config --global http.sslVerify false
-          # 修复：移除错误的openssl后端配置，使用正确的gnutls
           git config --global http.sslBackend "gnutls"
           git config --global init.defaultBranch main
           
@@ -123,7 +122,6 @@ jobs:
           done
           
           echo "[8/10] 设置Git环境变量..."
-          # 设置Git使用正确的SSL后端
           export GIT_SSL_BACKEND="gnutls"
           echo "GIT_SSL_BACKEND=gnutls" >> $GITHUB_ENV
           
@@ -133,7 +131,7 @@ jobs:
           echo "[10/10] 环境检查完成..."
           echo "✅ 环境准备完成"
       
-      # 5. 获取源码和配置（修复SSL和架构问题）
+      # 5. 获取源码和配置（简化配置，避免YAML问题）
       - name: 📥 获取源码
         run: |
           echo "=== 获取OpenWrt源码 ==="
@@ -144,20 +142,17 @@ jobs:
           cd "${{ env.BUILD_DIR }}"
           echo "当前目录: $(pwd)"
           
-          echo "[1/5] 设置Git SSL配置..."
-          # 确保使用正确的SSL后端
+          echo "[1/6] 设置Git SSL配置..."
           export GIT_SSL_BACKEND="gnutls"
           export GIT_SSL_NO_VERIFY=1
           git config --global http.sslVerify false
           
-          echo "[2/5] 克隆OpenWrt源码（使用完整克隆）..."
-          # 使用完整的clone命令，避免init+fetch的问题
+          echo "[2/6] 克隆OpenWrt源码..."
           rm -rf ./* 2>/dev/null || true
           git clone --depth 1 --branch v23.05.2 https://github.com/openwrt/openwrt.git .
           
           if [ $? -ne 0 ]; then
             echo "⚠️ Git clone失败，尝试使用wget下载..."
-            # 备选方案：直接下载源码包
             wget https://github.com/openwrt/openwrt/archive/refs/tags/v23.05.2.tar.gz -O openwrt.tar.gz
             if [ $? -eq 0 ]; then
               tar -xzf openwrt.tar.gz --strip-components=1
@@ -169,12 +164,18 @@ jobs:
             fi
           fi
           
-          echo "[3/5] 简化feeds配置..."
+          echo "[3/6] 创建ARM64架构site配置..."
+          mkdir -p include/site
+          echo "ac_cv_sys_file_offset_bits=64" > include/site/arm64
+          echo "ac_cv_sys_large_files=yes" >> include/site/arm64
+          echo "✅ 创建site配置: include/site/arm64"
+          
+          echo "[4/6] 简化feeds配置..."
           echo "src-git packages https://github.com/openwrt/packages.git;v23.05.2" > feeds.conf.default
           echo "# 注释掉可能出问题的feeds" >> feeds.conf.default
           echo "# src-git luci https://github.com/openwrt/luci.git;v23.05.2" >> feeds.conf.default
           
-          echo "[4/5] 创建ARM64架构配置..."
+          echo "[5/6] 创建ARM64架构配置..."
           echo "# OpenWrt ARM64 交叉编译器构建配置" > .config
           echo "# 生成时间: $(date)" >> .config
           echo "" >> .config
@@ -219,16 +220,15 @@ jobs:
           echo "CONFIG_PACKAGE_dropbear=n" >> .config
           echo "CONFIG_PACKAGE_iptables=n" >> .config
           
-          echo "[5/5] 配置验证..."
+          echo "[6/6] 配置验证..."
           echo "配置摘要:"
           echo "目标架构: ARM64 (aarch64)"
           echo "C库: musl"
           echo "GCC版本: 11.3.0"
           echo "配置文件大小: $(wc -l < .config) 行"
-          
           echo "✅ 源码配置完成"
       
-      # 6. 编译工具链（简化流程，避免feeds问题）
+      # 6. 编译工具链（修复site config问题）
       - name: 🔨 编译工具链
         timeout-minutes: 180
         run: |
@@ -247,10 +247,14 @@ jobs:
           export GIT_SSL_BACKEND="gnutls"
           export GIT_SSL_NO_VERIFY=1
           
-          echo "=== 步骤1: 跳过feeds更新 ==="
+          echo "=== 步骤1: 创建site配置 ==="
           echo "时间: $(date)"
-          mkdir -p feeds/luci feeds/packages
-          echo "✅ 跳过feeds更新"
+          mkdir -p include/site
+          if [ ! -f "include/site/arm64" ]; then
+            echo "创建arm64 site配置..."
+            echo "ac_cv_sys_file_offset_bits=64" > include/site/arm64
+            echo "ac_cv_sys_large_files=yes" >> include/site/arm64
+          fi
           
           echo "=== 步骤2: 应用配置 ==="
           echo "时间: $(date)"
@@ -260,17 +264,11 @@ jobs:
             echo "⚠️ defconfig有警告，继续..."
           fi
           
-          echo "CONFIG_TARGET_armvirt=y" >> .config
-          echo "CONFIG_TARGET_armvirt_64=y" >> .config
-          echo "CONFIG_TARGET_armvirt_64_Default=y" >> .config
-          echo "CONFIG_ARCH=\"arm64\"" >> .config
-          
           echo "=== 步骤3: 下载源码包 ==="
           echo "时间: $(date)"
           mkdir -p dl
           
           echo "下载关键源码包..."
-          # 设置下载环境
           export GIT_SSL_NO_VERIFY=1
           export CURL_SSL_NO_VERIFY=1
           
@@ -289,42 +287,76 @@ jobs:
             fi
           fi
           
-          echo "=== 步骤4: 构建工具链（简化步骤） ==="
+          echo "=== 步骤4: 构建binutils ==="
           echo "时间: $(date)"
-          
-          echo "构建工具链..."
-          make toolchain/compile -j$(nproc) V=s 2>&1 | tee /tmp/toolchain-compile.log
-          TOOLCHAIN_STATUS=${PIPESTATUS[0]}
-          
-          if [ $TOOLCHAIN_STATUS -ne 0 ]; then
-            echo "❌ 工具链构建失败"
+          echo "构建binutils..."
+          make toolchain/binutils/compile -j$(nproc) V=s 2>&1 | tee /tmp/binutils.log
+          BINUTILS_STATUS=${PIPESTATUS[0]}
+          if [ $BINUTILS_STATUS -ne 0 ]; then
+            echo "❌ binutils编译失败"
             echo "错误摘要:"
-            grep -E "Error|ERROR|Failed|undefined|No such file" /tmp/toolchain-compile.log | head -30
-            echo "尝试分步骤构建..."
-            
-            echo "步骤4.1: 构建binutils..."
-            make toolchain/binutils/compile -j$(nproc) V=s 2>&1 | tee /tmp/binutils.log
-            
-            echo "步骤4.2: 构建gcc初始阶段..."
-            make toolchain/gcc/initial/compile -j$(nproc) V=s 2>&1 | tee /tmp/gcc-initial.log
-            
-            echo "步骤4.3: 构建musl..."
-            make toolchain/musl/compile -j$(nproc) V=s 2>&1 | tee /tmp/musl.log
-            
-            echo "步骤4.4: 构建完整gcc..."
-            make toolchain/gcc/final/compile -j$(nproc) V=s 2>&1 | tee /tmp/gcc-final.log
+            grep -E "Error|ERROR|Failed|undefined|No such file|Missing site config" /tmp/binutils.log | head -30
+            exit 1
           fi
+          echo "✅ binutils编译完成"
           
-          echo "=== 步骤5: 安装工具链 ==="
+          echo "=== 步骤5: 构建gcc初始阶段 ==="
+          echo "时间: $(date)"
+          echo "构建gcc初始阶段..."
+          make toolchain/gcc/initial/compile -j$(nproc) V=s 2>&1 | tee /tmp/gcc-initial.log
+          GCC_INITIAL_STATUS=${PIPESTATUS[0]}
+          if [ $GCC_INITIAL_STATUS -ne 0 ]; then
+            echo "❌ gcc初始阶段失败"
+            echo "错误摘要:"
+            grep -E "Error|ERROR|Failed|undefined|No such file|Missing site config" /tmp/gcc-initial.log | head -30
+            exit 1
+          fi
+          echo "✅ gcc初始阶段完成"
+          
+          echo "=== 步骤6: 构建musl C库 ==="
+          echo "时间: $(date)"
+          echo "构建musl C库..."
+          make toolchain/musl/compile -j$(nproc) V=s 2>&1 | tee /tmp/musl.log
+          MUSL_STATUS=${PIPESTATUS[0]}
+          if [ $MUSL_STATUS -ne 0 ]; then
+            echo "❌ musl编译失败"
+            echo "错误摘要:"
+            grep -E "Error|ERROR|Failed|undefined|No such file|Missing site config" /tmp/musl.log | head -30
+            exit 1
+          fi
+          echo "✅ musl编译完成"
+          
+          echo "=== 步骤7: 构建完整gcc ==="
+          echo "时间: $(date)"
+          echo "构建完整gcc..."
+          make toolchain/gcc/final/compile -j$(nproc) V=s 2>&1 | tee /tmp/gcc-final.log
+          GCC_FINAL_STATUS=${PIPESTATUS[0]}
+          if [ $GCC_FINAL_STATUS -ne 0 ]; then
+            echo "❌ 完整gcc编译失败"
+            echo "错误摘要:"
+            grep -E "Error|ERROR|Failed|undefined|No such file|Missing site config" /tmp/gcc-final.log | head -30
+            exit 1
+          fi
+          echo "✅ 完整gcc编译完成"
+          
+          echo "=== 步骤8: 安装工具链 ==="
           echo "时间: $(date)"
           make toolchain/install -j$(nproc) V=s 2>&1 | tee /tmp/install.log
+          INSTALL_STATUS=${PIPESTATUS[0]}
+          if [ $INSTALL_STATUS -ne 0 ]; then
+            echo "❌ 安装失败"
+            echo "错误摘要:"
+            grep -E "Error|ERROR|Failed|undefined|No such file|Missing site config" /tmp/install.log | head -30
+            exit 1
+          fi
+          echo "✅ 安装完成"
           
           echo ""
           echo "🎉 工具链构建完成！"
           echo "完成时间: $(date)"
           echo "构建目录大小: $(du -sh . | cut -f1)"
       
-      # 7. 验证结果（修复ARM64检查）
+      # 7. 验证结果
       - name: ✅ 验证结果
         run: |
           echo "=== 验证编译结果 ==="
@@ -523,7 +555,7 @@ jobs:
           fi
           echo "✅ 保存完成"
       
-      # 9. 提交到仓库
+      # 9. 提交到仓库（简化commit message）
       - name: 📤 提交更新
         run: |
           echo "=== 提交编译器到仓库 ==="
@@ -542,7 +574,7 @@ jobs:
             ARCH="${{ env.TARGET_ARCH }}"
             DATE_TAG=$(date +%Y%m%d)
             
-            git commit -m "build(compiler): 自动构建${ARCH}交叉编译器 [$DATE_TAG]" -m "版本: GCC ${{ env.GCC_VERSION }}, Binutils ${{ env.BINUTILS_VERSION }}" -m "目标: ${{ env.TARGET_ARCH }} (${{ env.TARGET_TRIPLET }})" -m "工作流: ${{ github.workflow }}, 运行ID: #${{ github.run_id }}" -m "Signed-off-by: GitHub Actions <actions@github.com>"
+            git commit -m "build(compiler): 自动构建${ARCH}交叉编译器 [$DATE_TAG]" -m "GCC: ${{ env.GCC_VERSION }}" -m "Binutils: ${{ env.BINUTILS_VERSION }}" -m "目标: ${{ env.TARGET_ARCH }}" -m "工作流: ${{ github.workflow }}" -m "运行ID: #${{ github.run_id }}"
             
             if git push; then
               echo "🎉 ${ARCH}编译器已成功提交到仓库"
@@ -558,16 +590,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: compiler-build-logs-$(date +%Y%m%d-%H%M%S)
-          path: |
-            /tmp/deps-install.log
-            /tmp/defconfig.log
-            /tmp/download.log
-            /tmp/toolchain-compile.log
-            /tmp/binutils.log
-            /tmp/gcc-initial.log
-            /tmp/musl.log
-            /tmp/gcc-final.log
-            /tmp/install.log
-            /tmp/compile-test.log
+          name: compiler-build-logs
+          path: /tmp/deps-install.log /tmp/defconfig.log /tmp/download.log /tmp/binutils.log /tmp/gcc-initial.log /tmp/musl.log /tmp/gcc-final.log /tmp/install.log /tmp/compile-test.log
           retention-days: 7
