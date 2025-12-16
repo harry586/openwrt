@@ -1,5 +1,5 @@
 # .github/workflows/compiler-build.yml
-name: 🔍 编译器构建（稳定版）
+name: 🔍 编译器构建（简化版）
 
 on:
   workflow_dispatch:
@@ -19,81 +19,29 @@ jobs:
       # 1. 检出
       - uses: actions/checkout@v4
       
-      # 2. 稳定获取版本（修复版）
+      # 2. 简化的版本获取
       - name: 🔍 获取版本信息
-        id: get_versions
         run: |
-          echo "=== 获取编译器版本信息 ==="
+          echo "=== 设置编译器版本 ==="
           
-          # 安全的版本获取函数
-          get_version_safe() {
-            local name=$1
-            local url=$2
-            local pattern=$3
-            local default=$4
-            
-            echo "获取 $name 版本..."
-            
-            # 尝试获取，最多3次
-            for i in {1..3}; do
-              echo "  尝试 $i/3..."
-              
-              # 使用curl，带超时和重试
-              if html=$(curl -s --max-time 15 --retry 1 "$url" 2>/dev/null); then
-                if [ -n "$html" ]; then
-                  # 使用更宽松的正则表达式
-                  version=$(echo "$html" | grep -o "$pattern" | sort -V | tail -1)
-                  if [ -n "$version" ]; then
-                    echo "  ✅ 成功: $version"
-                    echo "$version"
-                    return 0
-                  fi
-                fi
-              fi
-              
-              sleep 1
-            done
-            
-            echo "  ⚠️ 使用默认版本: $default"
-            echo "$default"
-            return 1
-          }
-          
-          # 1. GCC版本（使用已知的OpenWrt兼容版本）
-          echo "获取GCC版本..."
-          GCC_VERSION="11.3.0"  # OpenWrt 23.05使用的版本
-          echo "使用OpenWrt兼容版本: $GCC_VERSION"
-          
-          # 2. Binutils版本
+          # 使用已知稳定的版本（避免网络问题）
+          # 这些版本与OpenWrt 23.05兼容
+          GCC_VERSION="11.3.0"
           BINUTILS_VERSION="2.38"
-          echo "Binutils版本: $BINUTILS_VERSION"
+          LINUX_VERSION="5.15.133"
+          MUSL_VERSION="1.2.4"
           
-          # 3. Linux内核版本（获取5.15 LTS最新版）
-          echo "获取Linux内核版本..."
-          LINUX_VERSION=$(get_version_safe "Linux内核" \
-            "https://cdn.kernel.org/pub/linux/kernel/v5.x/" \
-            "5\\.15\\.[0-9]+" \
-            "5.15.133")
-          
-          # 4. Musl版本
-          echo "获取Musl版本..."
-          MUSL_VERSION=$(get_version_safe "Musl" \
-            "https://musl.libc.org/releases/" \
-            "1\\.[0-9]+\\.[0-9]+" \
-            "1.2.4")
-          
-          echo ""
-          echo "📦 最终版本配置:"
+          echo "📦 编译器版本配置:"
           echo "├─ GCC: $GCC_VERSION"
           echo "├─ Binutils: $BINUTILS_VERSION"
           echo "├─ Linux Kernel: $LINUX_VERSION"
           echo "└─ Musl: $MUSL_VERSION"
           
-          # 输出到环境变量
-          echo "gcc_version=$GCC_VERSION" >> $GITHUB_OUTPUT
-          echo "binutils_version=$BINUTILS_VERSION" >> $GITHUB_OUTPUT
-          echo "linux_version=$LINUX_VERSION" >> $GITHUB_OUTPUT
-          echo "musl_version=$MUSL_VERSION" >> $GITHUB_OUTPUT
+          # 写入环境文件
+          echo "GCC_VERSION=$GCC_VERSION" >> $GITHUB_ENV
+          echo "BINUTILS_VERSION=$BINUTILS_VERSION" >> $GITHUB_ENV
+          echo "LINUX_VERSION=$LINUX_VERSION" >> $GITHUB_ENV
+          echo "MUSL_VERSION=$MUSL_VERSION" >> $GITHUB_ENV
       
       # 3. 显示构建信息
       - name: 📋 显示构建信息
@@ -103,16 +51,18 @@ jobs:
           echo "编译器输出: ${{ env.COMPILER_DIR }}"
           echo ""
           echo "版本信息:"
-          echo "  GCC: ${{ steps.get_versions.outputs.gcc_version }}"
-          echo "  Binutils: ${{ steps.get_versions.outputs.binutils_version }}"
-          echo "  Linux: ${{ steps.get_versions.outputs.linux_version }}"
-          echo "  Musl: ${{ steps.get_versions.outputs.musl_version }}"
+          echo "  GCC: ${{ env.GCC_VERSION }}"
+          echo "  Binutils: ${{ env.BINUTILS_VERSION }}"
+          echo "  Linux: ${{ env.LINUX_VERSION }}"
+          echo "  Musl: ${{ env.MUSL_VERSION }}"
           echo ""
-          echo "系统信息:"
-          echo "  CPU: $(nproc) cores"
-          echo "  内存: $(free -h | grep Mem | awk '{print $2}')"
-          echo "  磁盘:"
+          echo "🖥️ 系统资源:"
+          echo "CPU: $(nproc) cores"
+          echo "内存: $(free -h | grep Mem | awk '{print $2}')"
+          echo "磁盘使用:"
           df -h /mnt
+          echo ""
+          echo "📅 开始时间: $(date)"
       
       # 4. 准备构建环境
       - name: 🏗️ 准备环境
@@ -120,336 +70,434 @@ jobs:
           echo "=== 准备构建环境 ==="
           
           # 安装依赖
-          echo "[1/4] 更新包列表..."
+          echo "[1/3] 安装编译依赖..."
           sudo apt-get update
           
-          echo "[2/4] 安装编译依赖..."
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          # 安装必需的工具
+          sudo apt-get install -y \
             build-essential \
             gcc g++ make \
             flex bison \
             libgmp-dev libmpfr-dev libmpc-dev libisl-dev \
-            texinfo texlive \
+            texinfo \
             ncurses-dev libncursesw5-dev \
             python3 python3-dev \
-            git wget curl ca-certificates \
-            zlib1g-dev liblzma-dev \
-            file pkg-config 2>&1 | tee /tmp/deps.log
+            git wget curl \
+            zlib1g-dev \
+            file pkg-config \
+            gawk 2>&1 | tee /tmp/deps.log
           
-          echo "[3/4] 验证工具..."
-          for tool in gcc g++ make flex bison; do
+          echo "[2/3] 验证工具..."
+          echo "关键工具版本:"
+          for tool in gcc g++ make flex bison python3; do
             if command -v $tool >/dev/null; then
-              echo "  ✅ $tool: $($tool --version 2>&1 | head -1)"
+              version=$($tool --version 2>&1 | head -1)
+              echo "  ✅ $tool: $version"
             else
-              echo "  ❌ $tool: 未安装"
+              echo "  ❌ $tool: 未找到"
             fi
           done
           
-          echo "[4/4] 创建构建目录..."
+          echo "[3/3] 创建构建目录..."
           mkdir -p "${{ env.BUILD_DIR }}"
           cd "${{ env.BUILD_DIR }}"
           
           echo "✅ 环境准备完成"
       
-      # 5. 获取OpenWrt源码并配置
+      # 5. 获取OpenWrt源码
       - name: 📥 获取源码
         run: |
           echo "=== 获取OpenWrt源码 ==="
           cd "${{ env.BUILD_DIR }}"
           
           echo "[1/3] 克隆源码..."
-          git clone --depth 1 https://github.com/openwrt/openwrt.git . 2>&1 | tee /tmp/clone.log
+          # 使用已知的稳定分支
+          git clone --depth 1 --branch v23.05.2 https://github.com/openwrt/openwrt.git . 2>&1 | tee /tmp/clone.log
           
-          echo "[2/3] 显示版本..."
-          echo "OpenWrt版本: $(cat version.txt 2>/dev/null || echo '未知')"
-          echo "发布日期: $(cat release.txt 2>/dev/null || echo '未知')"
+          echo "[2/3] 显示源码信息..."
+          echo "分支: $(git branch --show-current)"
+          echo "提交: $(git log -1 --format='%h - %s')"
+          echo "版本: $(cat version.txt 2>/dev/null || echo '未知')"
           
-          echo "[3/3] 创建配置..."
+          echo "[3/3] 创建编译器构建配置..."
+          # 创建最小化配置，只构建工具链
           cat > .config << 'EOF'
-          # 交叉编译器构建配置
-          # 自动生成于 $(date)
-          
-          # 目标平台（使用通用的ARM64平台）
+          # 最小化工具链构建配置
           CONFIG_TARGET_armsr=y
           CONFIG_TARGET_armsr_armv8=y
-          
-          # 工具链配置
           CONFIG_TARGET_ROOTFS_INITRAMFS=y
           CONFIG_EXTERNAL_TOOLCHAIN=n
           CONFIG_USE_MUSL=y
           CONFIG_BUILD_TOOLCHAIN=y
           
           # 版本配置
-          CONFIG_GCC_VERSION="${{ steps.get_versions.outputs.gcc_version }}"
-          CONFIG_BINUTILS_VERSION="${{ steps.get_versions.outputs.binutils_version }}"
-          CONFIG_LINUX_VERSION="${{ steps.get_versions.outputs.linux_version }}"
-          CONFIG_MUSL_VERSION="${{ steps.get_versions.outputs.musl_version }}"
+          CONFIG_GCC_VERSION="${{ env.GCC_VERSION }}"
+          CONFIG_BINUTILS_VERSION="${{ env.BINUTILS_VERSION }}"
+          CONFIG_LINUX_VERSION="${{ env.LINUX_VERSION }}"
+          CONFIG_MUSL_VERSION="${{ env.MUSL_VERSION }}"
           
-          # 禁用不需要的包
+          # 禁用所有包，只构建工具链
           CONFIG_PACKAGE_busybox=n
           CONFIG_PACKAGE_dnsmasq=n
           CONFIG_PACKAGE_firewall=n
           CONFIG_PACKAGE_luci=n
           CONFIG_PACKAGE_wpad=n
+          CONFIG_PACKAGE_opkg=n
           EOF
           
           echo "✅ 源码准备完成"
-          echo "配置文件前20行:"
-          head -20 .config
+          echo "配置文件摘要:"
+          grep -E "CONFIG_(TARGET|GCC|BINUTILS|LINUX|MUSL|PACKAGE)" .config | head -15
       
-      # 6. 分步编译（带详细进度显示）
-      - name: 🔨 编译过程
+      # 6. 分步编译（最详细的输出）
+      - name: 🔨 详细编译过程
         timeout-minutes: 180
         run: |
-          echo "=== 开始编译过程 ==="
+          echo "=== 开始详细编译过程 ==="
+          echo "工作目录: $(pwd)"
           echo "开始时间: $(date)"
-          echo "构建目录: $(pwd)"
           
           cd "${{ env.BUILD_DIR }}"
           
-          # 设置详细输出
-          export V=s
+          # 设置最大详细度
+          export V=99
           export TERM=dumb
           export TERMINFO=/usr/share/terminfo
           export FORCE_UNSAFE_CONFIGURE=1
           
-          # 步骤计数器
-          STEP=1
-          TOTAL_STEPS=6
+          # 启动监控
+          echo "[监控] 启动资源监控..."
+          (
+            counter=0
+            while true; do
+              echo ""
+              echo "📊 监控快照 #$counter - $(date '+%H:%M:%S')"
+              echo "----------------------------------------"
+              
+              # 内存使用
+              echo "内存:"
+              free -m | grep -E "^Mem:|^Swap:" | awk '{print "  "$1": "$3"/"$2"MB ("int($3*100/$2)"%)"}'
+              
+              # CPU使用
+              echo "CPU负载: $(uptime | awk -F'load average:' '{print $2}')"
+              
+              # 磁盘使用
+              echo "磁盘:"
+              df -h /mnt | tail -1 | awk '{print "  /mnt: "$4" 可用 / "$2" 总"}'
+              
+              # 编译进程
+              echo "编译进程:"
+              ps aux | grep -E "(gcc|g\+\+|make|ld|as|ar|strip)" | grep -v grep | awk '{print "  "$11}' | sort | uniq -c
+              
+              # 构建进度
+              if [ -d "build_dir" ]; then
+                echo "构建文件统计:"
+                echo "  *.o文件: $(find build_dir -name "*.o" 2>/dev/null | wc -l)"
+                echo "  *.a文件: $(find build_dir -name "*.a" 2>/dev/null | wc -l)"
+              fi
+              
+              counter=$((counter + 1))
+              sleep 30
+            done
+          ) &
+          MONITOR_PID=$!
           
-          # 函数：显示步骤信息
-          show_step() {
+          # 函数：运行步骤并检查结果
+          run_step() {
+            local step_num=$1
+            local step_name=$2
+            local command=$3
+            local log_file="/tmp/step${step_num}.log"
+            
             echo ""
             echo "════════════════════════════════════════════════"
-            echo "步骤 $STEP/$TOTAL_STEPS: $1"
+            echo "步骤 ${step_num}: ${step_name}"
             echo "开始时间: $(date)"
+            echo "命令: ${command}"
             echo "════════════════════════════════════════════════"
-            STEP=$((STEP + 1))
-          }
-          
-          # 函数：检查步骤结果
-          check_result() {
-            local status=$1
-            local step_name=$2
+            
+            # 执行命令
+            eval "$command" 2>&1 | tee "$log_file"
+            local status=${PIPESTATUS[0]}
+            
+            echo "════════════════════════════════════════════════"
+            echo "步骤 ${step_num} 完成"
+            echo "状态: $status"
+            echo "结束时间: $(date)"
+            echo "════════════════════════════════════════════════"
             
             if [ $status -eq 0 ]; then
-              echo "✅ $step_name 成功"
-              echo "结束时间: $(date)"
+              echo "✅ ${step_name} 成功"
+              
+              # 显示摘要信息
+              case $step_num in
+                1)
+                  echo "下载统计:"
+                  echo "  - 文件数: $(find dl -type f 2>/dev/null | wc -l)"
+                  echo "  - 总大小: $(du -sh dl 2>/dev/null | cut -f1 || echo '未知')"
+                  ;;
+                2)
+                  echo "配置摘要:"
+                  grep -E "CONFIG_(GCC|BINUTILS|LINUX|MUSL)" .config
+                  ;;
+                3)
+                  echo "binutils 文件:"
+                  find build_dir -path "*binutils*" -name "*.a" 2>/dev/null | head -3
+                  ;;
+              esac
+              
               return 0
             else
-              echo "❌ $step_name 失败 (退出码: $status)"
-              echo "结束时间: $(date)"
+              echo "❌ ${step_name} 失败 (退出码: $status)"
+              echo "错误日志最后50行:"
+              tail -50 "$log_file"
+              
+              # 停止监控
+              kill $MONITOR_PID 2>/dev/null || true
               return 1
             fi
           }
           
           # 步骤1: 下载
-          show_step "下载依赖包"
-          make -j$(nproc) download V=s 2>&1 | tee /tmp/step1-download.log
-          DOWNLOAD_STATUS=${PIPESTATUS[0]}
-          
-          if check_result $DOWNLOAD_STATUS "下载"; then
-            echo "下载统计:"
-            echo "  - 文件数: $(find dl -type f 2>/dev/null | wc -l)"
-            echo "  - 总大小: $(du -sh dl 2>/dev/null | cut -f1 || echo '未知')"
-          else
-            echo "下载失败日志最后50行:"
-            tail -50 /tmp/step1-download.log
-            exit 1
-          fi
+          run_step 1 "下载依赖包" "make -j$(nproc) download V=sc"
+          [ $? -ne 0 ] && exit 1
           
           # 步骤2: 配置
-          show_step "配置编译环境"
-          make defconfig V=s 2>&1 | tee /tmp/step2-defconfig.log
-          DEFCONFIG_STATUS=${PIPESTATUS[0]}
-          
-          check_result $DEFCONFIG_STATUS "配置"
-          
-          # 显示最终配置
-          echo "最终配置摘要:"
-          grep -E "CONFIG_(TARGET|GCC|BINUTILS|LINUX|MUSL)" .config | head -10
+          run_step 2 "配置环境" "make defconfig V=sc"
+          [ $? -ne 0 ] && exit 1
           
           # 步骤3: 编译binutils
-          show_step "编译binutils (${{ steps.get_versions.outputs.binutils_version }})"
-          timeout 45m make toolchain/binutils/compile -j1 V=s 2>&1 | tee /tmp/step3-binutils.log
-          BINUTILS_STATUS=${PIPESTATUS[0]}
-          
-          if check_result $BINUTILS_STATUS "binutils编译"; then
-            echo "检查生成的文件:"
-            find build_dir -path "*binutils*" \( -name "*.o" -o -name "*.a" \) 2>/dev/null | head -3 | while read file; do
-              echo "  - $(basename "$file") ($(stat -c%s "$file" 2>/dev/null | numfmt --to=iec || echo '?' ))"
-            done
-          else
-            echo "binutils编译错误:"
-            grep -i "error\|failed" /tmp/step3-binutils.log | tail -20
-            exit 1
-          fi
+          run_step 3 "编译binutils" "timeout 60m make toolchain/binutils/compile -j1 V=sc"
+          [ $? -ne 0 ] && exit 1
           
           # 步骤4: 编译gcc初始阶段
-          show_step "编译gcc初始阶段 (${{ steps.get_versions.outputs.gcc_version }})"
-          timeout 45m make toolchain/gcc/compile -j1 V=s 2>&1 | tee /tmp/step4-gcc-stage1.log
-          GCC_STAGE1_STATUS=${PIPESTATUS[0]}
-          
-          check_result $GCC_STAGE1_STATUS "gcc初始阶段编译"
+          run_step 4 "编译gcc初始阶段" "timeout 60m make toolchain/gcc/compile -j1 V=sc"
+          [ $? -ne 0 ] && exit 1
           
           # 步骤5: 编译musl
-          show_step "编译musl (${{ steps.get_versions.outputs.musl_version }})"
-          timeout 30m make toolchain/musl/compile -j1 V=s 2>&1 | tee /tmp/step5-musl.log
-          MUSL_STATUS=${PIPESTATUS[0]}
-          
-          check_result $MUSL_STATUS "musl编译"
+          run_step 5 "编译musl" "timeout 45m make toolchain/musl/compile -j1 V=sc"
+          [ $? -ne 0 ] && exit 1
           
           # 步骤6: 编译完整gcc
-          show_step "编译完整gcc"
-          timeout 60m make toolchain/gcc/compile -j1 V=s 2>&1 | tee /tmp/step6-gcc-final.log
-          GCC_FINAL_STATUS=${PIPESTATUS[0]}
+          run_step 6 "编译完整gcc" "timeout 90m make toolchain/gcc/compile -j1 V=sc"
+          [ $? -ne 0 ] && exit 1
           
-          if check_result $GCC_FINAL_STATUS "完整gcc编译"; then
-            echo "🎉 gcc编译成功！"
-          else
-            echo "gcc编译错误:"
-            tail -30 /tmp/step6-gcc-final.log
-            exit 1
-          fi
+          # 步骤7: 安装工具链
+          run_step 7 "安装工具链" "timeout 30m make toolchain/install -j1 V=sc"
+          [ $? -ne 0 ] && exit 1
+          
+          # 停止监控
+          kill $MONITOR_PID 2>/dev/null || true
           
           echo ""
-          echo "════════════════════════════════════════════════"
-          echo "🎉 所有编译步骤完成！"
-          echo "总开始时间: $(grep '开始时间' /tmp/step1-download.log | head -1 | cut -d: -f2-)"
+          echo "🎉 🎉 🎉 所有编译步骤成功完成！"
+          echo "总开始时间: $(grep '开始时间' /tmp/step1.log | head -1 | cut -d: -f2-)"
           echo "总结束时间: $(date)"
-          echo "════════════════════════════════════════════════"
       
-      # 7. 安装并保存工具链
-      - name: 📦 保存工具链
+      # 7. 验证并保存工具链
+      - name: ✅ 验证工具链
         run: |
-          echo "=== 保存编译好的工具链 ==="
+          echo "=== 验证编译结果 ==="
           cd "${{ env.BUILD_DIR }}"
           
-          # 安装工具链
-          echo "[1/3] 安装工具链..."
-          make toolchain/install -j1 V=s 2>&1 | tee /tmp/install.log
-          
           # 查找工具链
-          echo "[2/3] 查找工具链..."
+          echo "[1/3] 查找工具链..."
           TOOLCHAIN_DIR=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
           
           if [ ! -d "$TOOLCHAIN_DIR" ]; then
             echo "❌ 未找到工具链目录"
-            echo "可能的目录:"
-            find staging_dir -type d -name "toolchain*" 2>/dev/null
+            echo "staging_dir 内容:"
+            ls -la staging_dir/ 2>/dev/null || echo "staging_dir 不存在"
             exit 1
           fi
           
           echo "✅ 找到工具链: $(basename "$TOOLCHAIN_DIR")"
+          echo "路径: $TOOLCHAIN_DIR"
           
-          # 复制到仓库
-          echo "[3/3] 复制到仓库..."
+          # 测试编译器
+          echo "[2/3] 测试编译器..."
+          GCC_FILE="$TOOLCHAIN_DIR/bin/"*"-gcc"
+          
+          if [ -f $GCC_FILE ]; then
+            echo "✅ 找到GCC编译器: $(basename "$GCC_FILE")"
+            echo "版本信息:"
+            $GCC_FILE --version 2>&1 | head -3
+            
+            # 简单编译测试
+            echo "编译测试..."
+            cat > /tmp/test.c << 'EOF'
+            #include <stdio.h>
+            int main() {
+                printf("Compiler test OK!\n");
+                return 0;
+            }
+            EOF
+            
+            if $GCC_FILE /tmp/test.c -o /tmp/test.out 2>/dev/null; then
+              echo "✅ 编译测试通过"
+              /tmp/test.out
+            else
+              echo "⚠️ 编译测试失败"
+            fi
+            
+            rm -f /tmp/test.c /tmp/test.out 2>/dev/null
+          else
+            echo "❌ 未找到GCC编译器"
+            echo "bin目录内容:"
+            ls -la "$TOOLCHAIN_DIR/bin/" 2>/dev/null | head -10
+          fi
+          
+          # 检查其他关键文件
+          echo "[3/3] 检查关键文件..."
+          for file in "bin/*-g++" "bin/*-ld" "bin/*-ar" "bin/*-strip"; do
+            if find "$TOOLCHAIN_DIR" -name "$(basename "$file")" -type f 2>/dev/null | head -1 | grep -q .; then
+              echo "✅ $(basename "$file")"
+            else
+              echo "⚠️ $(basename "$file") - 未找到"
+            fi
+          done
+          
+          echo "工具链大小: $(du -sh "$TOOLCHAIN_DIR" | cut -f1)"
+      
+      # 8. 保存到仓库
+      - name: 💾 保存到仓库
+        run: |
+          echo "=== 保存工具链到仓库 ==="
+          
+          cd "${{ env.BUILD_DIR }}"
+          
+          # 查找工具链
+          TOOLCHAIN_DIR=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
+          
+          if [ ! -d "$TOOLCHAIN_DIR" ]; then
+            echo "❌ 无法找到工具链"
+            exit 1
+          fi
+          
+          echo "[1/4] 清理旧编译器..."
           rm -rf "${{ env.COMPILER_DIR }}"
           mkdir -p "${{ env.COMPILER_DIR }}"
           
+          echo "[2/4] 复制工具链..."
+          # 复制整个工具链
           cp -r "$TOOLCHAIN_DIR"/* "${{ env.COMPILER_DIR }}/"
           
-          # 创建信息文件
+          echo "[3/4] 创建信息文件..."
+          # 创建详细的README
           cat > "${{ env.COMPILER_DIR }}/README.md" << EOF
           # OpenWrt 交叉编译器
           
-          自动构建的交叉编译器，用于OpenWrt/ImmortalWrt固件编译。
-          
           ## 构建信息
           - **构建时间**: $(date)
-          - **工作流**: ${{ github.workflow }}
-          - **运行ID**: ${{ github.run_id }}
+          - **OpenWrt版本**: $(cat version.txt 2>/dev/null || echo '23.05.2')
+          - **工作流运行**: ${{ github.run_id }}
           
           ## 版本信息
           | 组件 | 版本 |
           |------|------|
-          | GCC | ${{ steps.get_versions.outputs.gcc_version }} |
-          | Binutils | ${{ steps.get_versions.outputs.binutils_version }} |
-          | Linux内核 | ${{ steps.get_versions.outputs.linux_version }} |
-          | Musl | ${{ steps.get_versions.outputs.musl_version }} |
+          | GCC | ${{ env.GCC_VERSION }} |
+          | Binutils | ${{ env.BINUTILS_VERSION }} |
+          | Linux内核 | ${{ env.LINUX_VERSION }} |
+          | Musl | ${{ env.MUSL_VERSION }} |
           
-          ## 目录结构
-          \`\`\`
-          compiled/
-          ├── bin/          # 编译器可执行文件
-          ├── include/      # 头文件
-          ├── lib/         # 库文件
-          └── README.md    # 本文档
-          \`\`\`
+          ## 架构信息
+          - **目标**: arm-openwrt-linux-muslgnueabi
+          - **C库**: musl
+          - **字节序**: 小端
           
           ## 使用方法
-          在OpenWrt构建中设置环境变量：
+          在OpenWrt构建中，设置环境变量：
           \`\`\`bash
           export STAGING_DIR=/path/to/this/compiler
           \`\`\`
           
-          或直接在make命令中指定：
+          或者在make命令中指定：
           \`\`\`bash
           make STAGING_DIR=/path/to/this/compiler
           \`\`\`
+          
+          ## 文件列表
+          主要文件：
+          \`\`\`
+          bin/arm-openwrt-linux-muslgnueabi-gcc    # C编译器
+          bin/arm-openwrt-linux-muslgnueabi-g++    # C++编译器
+          bin/arm-openwrt-linux-muslgnueabi-ld     # 链接器
+          bin/arm-openwrt-linux-muslgnueabi-ar     # 归档工具
+          bin/arm-openwrt-linux-muslgnueabi-strip  # 符号剥离工具
+          \`\`\`
           EOF
           
-          # 测试编译器
-          echo "🔧 测试编译器功能..."
-          GCC_PATH=$(find "${{ env.COMPILER_DIR }}" -name "*gcc" -type f | head -1)
-          if [ -n "$GCC_PATH" ]; then
-            echo "编译器路径: $GCC_PATH"
-            $GCC_PATH --version 2>&1 | head -1
-          fi
+          echo "[4/4] 显示结果..."
+          echo "✅ 工具链已保存到: ${{ env.COMPILER_DIR }}"
+          echo "📦 大小: $(du -sh "${{ env.COMPILER_DIR }}" | cut -f1)"
+          echo "📁 文件数: $(find "${{ env.COMPILER_DIR }}" -type f 2>/dev/null | wc -l)"
           
-          echo "📦 工具链大小: $(du -sh "${{ env.COMPILER_DIR }}" | cut -f1)"
-          echo "📁 文件数量: $(find "${{ env.COMPILER_DIR }}" -type f 2>/dev/null | wc -l)"
+          # 显示一些关键文件
+          echo "关键文件示例:"
+          find "${{ env.COMPILER_DIR }}/bin" -type f -name "*gcc" -o -name "*g++" 2>/dev/null | head -5
       
-      # 8. 提交到仓库
-      - name: 📤 提交更新
+      # 9. 提交更新
+      - name: 📤 提交到仓库
         run: |
-          echo "=== 提交到仓库 ==="
+          echo "=== 提交编译器到仓库 ==="
           
           cd "${{ github.workspace }}"
           
+          # 配置Git
           git config user.email "github-actions@github.com"
           git config user.name "GitHub Actions"
           
-          # 检查变更
-          if git diff --quiet "firmware-config/build-Compiler-file/compiled" 2>/dev/null; then
-            echo "✅ 编译器没有变化，无需提交"
+          echo "[1/3] 检查变更..."
+          # 检查是否有实际变更
+          if [ -d "${{ env.COMPILER_DIR }}" ]; then
+            # 计算目录大小
+            SIZE=$(du -sh "${{ env.COMPILER_DIR }}" | cut -f1)
+            
+            # 检查是否真的有新文件
+            if [ "$(find "${{ env.COMPILER_DIR }}" -type f 2>/dev/null | wc -l)" -gt 0 ]; then
+              echo "检测到新编译器，大小: $SIZE"
+              
+              echo "[2/3] 添加到Git..."
+              git add "firmware-config/build-Compiler-file/compiled"
+              
+              echo "[3/3] 提交并推送..."
+              git commit -m "build(compiler): 更新交叉编译器 v${{ env.GCC_VERSION }}
+              
+              版本信息:
+              • GCC: ${{ env.GCC_VERSION }}
+              • Binutils: ${{ env.BINUTILS_VERSION }}
+              • Linux内核: ${{ env.LINUX_VERSION }}
+              • Musl: ${{ env.MUSL_VERSION }}
+              
+              构建详情:
+              • 大小: $SIZE
+              • 时间: $(date '+%Y-%m-%d %H:%M')
+              • 工作流: ${{ github.workflow }}
+              
+              用于OpenWrt/ImmortalWrt固件构建。"
+              
+              # 尝试推送
+              if git push; then
+                echo "🎉 编译器已成功提交到仓库"
+              else
+                echo "⚠️ 推送失败，但提交已保存在本地"
+              fi
+            else
+              echo "✅ 编译器目录为空，无需提交"
+            fi
           else
-            echo "🔄 检测到编译器更新，准备提交..."
-            
-            git add "firmware-config/build-Compiler-file/compiled"
-            
-            # 生成提交信息
-            SIZE=$(du -sh "firmware-config/build-Compiler-file/compiled" | cut -f1)
-            
-            git commit -m "build(compiler): 更新交叉编译器
-
-            版本信息:
-            - GCC: ${{ steps.get_versions.outputs.gcc_version }}
-            - Binutils: ${{ steps.get_versions.outputs.binutils_version }}
-            - Linux内核: ${{ steps.get_versions.outputs.linux_version }}
-            - Musl: ${{ steps.get_versions.outputs.musl_version }}
-            
-            构建详情:
-            - 大小: $SIZE
-            - 时间: $(date '+%Y-%m-%d %H:%M')
-            - 工作流: ${{ github.workflow }}
-            
-            用于OpenWrt固件构建。"
-            
-            # 推送
-            echo "🚀 推送到仓库..."
-            git push
-            
-            echo "🎉 编译器已提交到仓库"
+            echo "✅ 编译器目录不存在，无需提交"
           fi
       
-      # 9. 上传日志
+      # 10. 上传日志（便于调试）
       - name: 📄 上传日志
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: compiler-logs-$(date +%Y%m%d-%H%M%S)
+          name: compiler-debug-logs
           path: |
             /tmp/*.log
+            /tmp/step*.log
             ${{ env.BUILD_DIR }}/.config
+            ${{ env.BUILD_DIR }}/build.log
           retention-days: 7
