@@ -1,5 +1,5 @@
 # .github/workflows/compiler-build.yml
-name: 🔍 编译器构建（/mnt 权限修复版）
+name: 🔍 编译器构建（/mnt版本）
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
     - cron: '0 0 * * 0'
 
 env:
-  # 使用 /mnt，但正确设置权限
+  # 使用 /mnt 作为构建目录
   BUILD_DIR: "/mnt/compiler-build-$(date +%s)"
   COMPILER_DIR: "${{ github.workspace }}/firmware-config/build-Compiler-file/compiled"
 
@@ -17,8 +17,9 @@ jobs:
     timeout-minutes: 240
     
     steps:
-      # 1. 检出
-      - uses: actions/checkout@v4
+      # 1. 检出仓库
+      - name: 📥 检出仓库
+        uses: actions/checkout@v4
       
       # 2. 设置版本信息
       - name: 🔍 设置版本
@@ -52,27 +53,36 @@ jobs:
           echo "CPU: $(nproc) 核心"
           echo "内存: $(free -h | grep Mem | awk '{print $2}')"
           echo "/mnt 磁盘信息:"
-          df -h /mnt
-          echo "/mnt 权限:"
-          ls -ld /mnt
+          df -h /mnt || echo "无法访问 /mnt"
           echo ""
           echo "📅 开始时间: $(date)"
       
-      # 4. 准备环境（修复 /mnt 权限）
+      # 4. 准备环境（使用 /mnt）
       - name: 🏗️ 准备环境
         run: |
-          echo "=== 准备构建环境 ==="
+          echo "=== 准备构建环境（使用 /mnt） ==="
           
-          echo "[1/5] 检查 /mnt 权限..."
-          # 检查 /mnt 的权限
-          echo "/mnt 当前状态:"
-          ls -ld /mnt
-          echo "/mnt 目录内容:"
-          ls -la /mnt/ 2>/dev/null || echo "  空目录"
+          echo "[1/7] 检查 /mnt 状态..."
+          # 检查 /mnt 是否存在
+          if [ ! -d "/mnt" ]; then
+            echo "⚠️  /mnt 目录不存在，尝试创建..."
+            sudo mkdir -p /mnt
+            sudo chmod 755 /mnt
+          fi
           
-          echo "[2/5] 创建构建目录（使用sudo）..."
-          # 使用sudo创建目录并设置权限
+          echo "/mnt 权限:"
+          ls -ld /mnt || echo "无法访问 /mnt"
+          
+          echo "[2/7] 检查 /mnt 可用空间..."
+          df -h /mnt 2>/dev/null || echo "无法获取 /mnt 磁盘信息"
+          
+          echo "[3/7] 创建构建目录..."
+          # 创建构建目录并设置权限
+          echo "创建目录: ${{ env.BUILD_DIR }}"
           sudo mkdir -p "${{ env.BUILD_DIR }}"
+          
+          echo "[4/7] 设置目录权限..."
+          # 设置正确的所有权和权限
           sudo chown -R $USER:$USER "${{ env.BUILD_DIR }}"
           sudo chmod 755 "${{ env.BUILD_DIR }}"
           
@@ -80,7 +90,11 @@ jobs:
           echo "目录权限:"
           ls -ld "${{ env.BUILD_DIR }}"
           
-          echo "[3/5] 安装编译依赖..."
+          echo "[5/7] 进入构建目录..."
+          cd "${{ env.BUILD_DIR }}"
+          echo "当前目录: $(pwd)"
+          
+          echo "[6/7] 安装编译依赖..."
           sudo apt-get update
           
           # 安装必需的工具
@@ -97,7 +111,7 @@ jobs:
             file pkg-config \
             gawk gettext automake autoconf libtool 2>&1 | tee /tmp/deps-install.log
           
-          echo "[4/5] 验证工具..."
+          echo "[7/7] 验证工具和权限..."
           echo "关键工具检查:"
           for tool in gcc g++ make flex bison python3 git wget; do
             if command -v $tool >/dev/null; then
@@ -108,9 +122,6 @@ jobs:
             fi
           done
           
-          echo "[5/5] 进入构建目录..."
-          cd "${{ env.BUILD_DIR }}"
-          echo "当前目录: $(pwd)"
           echo "目录权限验证:"
           touch test-write.txt && echo "✅ 可写入" && rm test-write.txt
           mkdir test-dir && echo "✅ 可创建目录" && rmdir test-dir
@@ -121,6 +132,7 @@ jobs:
       - name: 📥 获取源码
         run: |
           echo "=== 获取OpenWrt源码 ==="
+          cd "${{ env.BUILD_DIR }}"
           echo "当前目录: $(pwd)"
           echo "构建目录: ${{ env.BUILD_DIR }}"
           
@@ -188,6 +200,7 @@ jobs:
         timeout-minutes: 180
         run: |
           echo "=== 开始详细编译过程 ==="
+          cd "${{ env.BUILD_DIR }}"
           echo "工作目录: $(pwd)"
           echo "磁盘信息:"
           df -h .
@@ -538,18 +551,17 @@ jobs:
           fi
           
           echo "[1/5] 准备输出目录..."
-          # 确保输出目录存在并清空
-          sudo mkdir -p "${{ env.COMPILER_DIR }}" 2>/dev/null || true
-          sudo chown -R $USER:$USER "${{ env.COMPILER_DIR }}" 2>/dev/null || true
+          # 确保输出目录存在
+          mkdir -p "${{ env.COMPILER_DIR }}"
           
-          # 修复：安全地清空目录
+          # 清空输出目录
           if [ -d "${{ env.COMPILER_DIR }}" ]; then
             echo "清空输出目录..."
-            rm -rf "${{ env.COMPILER_DIR }}"/*
+            rm -rf "${{ env.COMPILER_DIR }}"/* 2>/dev/null || true
           fi
           
           echo "[2/5] 复制编译器文件..."
-          # 复制整个编译器 - 修复了这里的语法
+          # 复制整个编译器
           cp -r "$TOOLCHAIN_DIR"/* "${{ env.COMPILER_DIR }}/" 2>&1 | tee /tmp/copy.log
           
           echo "[3/5] 创建构建信息..."
@@ -705,17 +717,3 @@ jobs:
             ${{ env.BUILD_DIR }}/version.txt
             ${{ env.BUILD_DIR }}/build.log
           retention-days: 7
-      
-      # 11. 清理 /mnt 目录（可选）
-      - name: 🧹 清理 /mnt
-        if: always()
-        run: |
-          echo "=== 清理 /mnt 构建目录 ==="
-          
-          if [ -d "${{ env.BUILD_DIR }}" ]; then
-            echo "清理构建目录: ${{ env.BUILD_DIR }}"
-            sudo rm -rf "${{ env.BUILD_DIR }}" 2>/dev/null || true
-            echo "✅ 清理完成"
-          else
-            echo "✅ 构建目录不存在，无需清理"
-          fi
