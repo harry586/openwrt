@@ -26,23 +26,18 @@ on:
           - musl
           - glibc
       gcc_version:
-        description: 'GCC版本 (auto=自动检测最新)'
+        description: 'GCC版本'
         required: true
-        default: 'auto'
+        default: '12.3.0'
         type: string
       clean_build:
         description: '清理之前的构建缓存'
         required: true
         default: false
         type: boolean
-      upload_release:
-        description: '创建GitHub Release'
-        required: true
-        default: false
-        type: boolean
 
   schedule:
-    - cron: '0 2 * * 0'  # 每周日凌晨2点自动构建
+    - cron: '0 2 * * 0'
 
 env:
   OPENWRT_VERSION: "23.05.2"
@@ -57,7 +52,6 @@ jobs:
       linux_version: ${{ steps.version-detection.outputs.linux_version }}
       musl_version: ${{ steps.version-detection.outputs.musl_version }}
       glibc_version: ${{ steps.version-detection.outputs.glibc_version }}
-      arch_config: ${{ steps.arch-config.outputs.config }}
     steps:
       - name: 🏗️ 初始化
         run: |
@@ -65,169 +59,30 @@ jobs:
           echo "触发方式: ${{ github.event_name }}"
           echo "运行ID: ${{ github.run_id }}"
           echo "时间: $(date)"
-          echo ""
           
-          # 创建输出目录
           mkdir -p "${{ env.COMPILER_BASE_DIR }}"
-          
-          # 保存运行信息
           echo "RUN_ID=${{ github.run_id }}" >> $GITHUB_ENV
           echo "RUN_NUMBER=${{ github.run_number }}" >> $GITHUB_ENV
-          echo "RUN_ATTEMPT=${{ github.run_attempt }}" >> $GITHUB_ENV
 
       - name: 🔍 版本检测
         id: version-detection
         run: |
-          echo "=== 检测最新工具链版本 ==="
-          
-          # 设置默认值
-          GCC_VERSION="12.3.0"
+          echo "=== 检测工具链版本 ==="
+          GCC_VERSION="${{ github.event.inputs.gcc_version }}"
           BINUTILS_VERSION="2.40"
           LINUX_VERSION="5.15.133"
           MUSL_VERSION="1.2.4"
           GLIBC_VERSION="2.37"
           
-          # 如果用户指定了auto，尝试检测最新版本
-          if [ "${{ github.event.inputs.gcc_version }}" = "auto" ] || [ "${{ github.event.inputs.gcc_version }}" = "" ]; then
-            echo "使用预定义的GCC版本: $GCC_VERSION"
-          else
-            GCC_VERSION="${{ github.event.inputs.gcc_version }}"
-            echo "使用指定的GCC版本: $GCC_VERSION"
-          fi
-          
           echo "GCC版本: $GCC_VERSION"
           echo "Binutils版本: $BINUTILS_VERSION"
           echo "Linux内核版本: $LINUX_VERSION"
-          echo "Musl版本: $MUSL_VERSION"
-          echo "Glibc版本: $GLIBC_VERSION"
           
           echo "gcc_version=$GCC_VERSION" >> $GITHUB_OUTPUT
           echo "binutils_version=$BINUTILS_VERSION" >> $GITHUB_OUTPUT
           echo "linux_version=$LINUX_VERSION" >> $GITHUB_OUTPUT
           echo "musl_version=$MUSL_VERSION" >> $GITHUB_OUTPUT
           echo "glibc_version=$GLIBC_VERSION" >> $GITHUB_OUTPUT
-
-      - name: ⚙️ 架构配置
-        id: arch-config
-        run: |
-          echo "=== 架构配置生成 ==="
-          ARCH="${{ github.event.inputs.target_arch }}"
-          
-          case "$ARCH" in
-            aarch64)
-              CONFIG=$(cat <<EOF
-{
-  "target": "armvirt",
-  "subtarget": "64",
-  "arch": "aarch64",
-  "prefix": "aarch64-openwrt-linux",
-  "cpu_type": "cortex-a53",
-  "tune": "cortex-a53",
-  "abi": "lp64",
-  "float_abi": ""
-}
-EOF
-              )
-              ;;
-            x86_64)
-              CONFIG=$(cat <<EOF
-{
-  "target": "x86",
-  "subtarget": "64",
-  "arch": "x86_64",
-  "prefix": "x86_64-openwrt-linux",
-  "cpu_type": "x86_64",
-  "tune": "generic",
-  "abi": "64",
-  "float_abi": ""
-}
-EOF
-              )
-              ;;
-            mips)
-              CONFIG=$(cat <<EOF
-{
-  "target": "ramips",
-  "subtarget": "mt7621",
-  "arch": "mips",
-  "prefix": "mips-openwrt-linux",
-  "cpu_type": "24kc",
-  "tune": "24kc",
-  "abi": "32",
-  "float_abi": "softfloat"
-}
-EOF
-              )
-              ;;
-            mipsel)
-              CONFIG=$(cat <<EOF
-{
-  "target": "ramips",
-  "subtarget": "mt7621",
-  "arch": "mipsel",
-  "prefix": "mipsel-openwrt-linux",
-  "cpu_type": "24kc",
-  "tune": "24kc",
-  "abi": "32",
-  "float_abi": "softfloat"
-}
-EOF
-              )
-              ;;
-            arm_cortex-a7)
-              CONFIG=$(cat <<EOF
-{
-  "target": "sunxi",
-  "subtarget": "cortexa7",
-  "arch": "arm",
-  "prefix": "arm-openwrt-linux",
-  "cpu_type": "cortex-a7",
-  "tune": "cortex-a7",
-  "abi": "eabi",
-  "float_abi": "hard"
-}
-EOF
-              )
-              ;;
-            arm_cortex-a53)
-              CONFIG=$(cat <<EOF
-{
-  "target": "rockchip",
-  "subtarget": "armv8",
-  "arch": "aarch64",
-  "prefix": "aarch64-openwrt-linux",
-  "cpu_type": "cortex-a53",
-  "tune": "cortex-a53",
-  "abi": "lp64",
-  "float_abi": ""
-}
-EOF
-              )
-              ;;
-            riscv64)
-              CONFIG=$(cat <<EOF
-{
-  "target": "virt",
-  "subtarget": "rv64",
-  "arch": "riscv64",
-  "prefix": "riscv64-openwrt-linux",
-  "cpu_type": "generic",
-  "tune": "generic",
-  "abi": "lp64d",
-  "float_abi": "hard"
-}
-EOF
-              )
-              ;;
-            *)
-              echo "❌ 不支持的架构: $ARCH"
-              exit 1
-              ;;
-          esac
-          
-          echo "架构配置:"
-          echo "$CONFIG" | jq .
-          echo "config=$CONFIG" >> $GITHUB_OUTPUT
 
   build-compiler:
     needs: setup
@@ -244,16 +99,66 @@ EOF
         run: |
           echo "=== 设置构建环境 ==="
           
-          # 解析架构配置
-          ARCH_CONFIG='${{ needs.setup.outputs.arch_config }}'
-          TARGET=$(echo "$ARCH_CONFIG" | jq -r '.target')
-          SUBTARGET=$(echo "$ARCH_CONFIG" | jq -r '.subtarget')
-          ARCH=$(echo "$ARCH_CONFIG" | jq -r '.arch')
-          PREFIX=$(echo "$ARCH_CONFIG" | jq -r '.prefix')
-          CPU_TYPE=$(echo "$ARCH_CONFIG" | jq -r '.cpu_type')
+          ARCH="${{ github.event.inputs.target_arch }}"
+          LIBC="${{ github.event.inputs.libc }}"
           
-          # 根据C库类型调整前缀
-          if [ "${{ github.event.inputs.libc }}" = "musl" ]; then
+          case "$ARCH" in
+            aarch64)
+              TARGET="armvirt"
+              SUBTARGET="64"
+              ARCH_NAME="aarch64"
+              PREFIX="aarch64-openwrt-linux"
+              CPU_TYPE="cortex-a53"
+              ;;
+            x86_64)
+              TARGET="x86"
+              SUBTARGET="64"
+              ARCH_NAME="x86_64"
+              PREFIX="x86_64-openwrt-linux"
+              CPU_TYPE="x86_64"
+              ;;
+            mips)
+              TARGET="ramips"
+              SUBTARGET="mt7621"
+              ARCH_NAME="mips"
+              PREFIX="mips-openwrt-linux"
+              CPU_TYPE="24kc"
+              ;;
+            mipsel)
+              TARGET="ramips"
+              SUBTARGET="mt7621"
+              ARCH_NAME="mipsel"
+              PREFIX="mipsel-openwrt-linux"
+              CPU_TYPE="24kc"
+              ;;
+            arm_cortex-a7)
+              TARGET="sunxi"
+              SUBTARGET="cortexa7"
+              ARCH_NAME="arm"
+              PREFIX="arm-openwrt-linux"
+              CPU_TYPE="cortex-a7"
+              ;;
+            arm_cortex-a53)
+              TARGET="rockchip"
+              SUBTARGET="armv8"
+              ARCH_NAME="aarch64"
+              PREFIX="aarch64-openwrt-linux"
+              CPU_TYPE="cortex-a53"
+              ;;
+            riscv64)
+              TARGET="virt"
+              SUBTARGET="rv64"
+              ARCH_NAME="riscv64"
+              PREFIX="riscv64-openwrt-linux"
+              CPU_TYPE="generic"
+              ;;
+            *)
+              echo "不支持的架构: $ARCH"
+              exit 1
+              ;;
+          esac
+          
+          if [ "$LIBC" = "musl" ]; then
             PREFIX="${PREFIX}-musl"
             LIBC_SUFFIX="musl"
             USE_MUSL="y"
@@ -265,31 +170,26 @@ EOF
             USE_GLIBC="y"
           fi
           
-          # 设置版本信息
           GCC_VERSION='${{ needs.setup.outputs.gcc_version }}'
           BINUTILS_VERSION='${{ needs.setup.outputs.binutils_version }}'
           LINUX_VERSION='${{ needs.setup.outputs.linux_version }}'
           
-          # 生成唯一构建ID
-          BUILD_ID="${ARCH}_${LIBC_SUFFIX}_gcc-${GCC_VERSION}_$(date +%Y%m%d_%H%M%S)"
+          BUILD_ID="${ARCH_NAME}_${LIBC_SUFFIX}_gcc-${GCC_VERSION}_$(date +%Y%m%d_%H%M%S)"
           BUILD_DIR="/tmp/compiler-build-${BUILD_ID}"
-          OUTPUT_DIR="${{ env.COMPILER_BASE_DIR }}/${ARCH}/${LIBC_SUFFIX}/gcc-${GCC_VERSION}"
+          OUTPUT_DIR="${{ env.COMPILER_BASE_DIR }}/${ARCH_NAME}/${LIBC_SUFFIX}/gcc-${GCC_VERSION}"
           
-          echo "目标架构: $ARCH"
-          echo "C库类型: ${{ github.event.inputs.libc }} ($LIBC_SUFFIX)"
-          echo "目标: $TARGET"
-          echo "子目标: $SUBTARGET"
+          echo "目标架构: $ARCH_NAME"
+          echo "C库类型: $LIBC_SUFFIX"
           echo "编译器前缀: $PREFIX-"
           echo "GCC版本: $GCC_VERSION"
           echo "构建目录: $BUILD_DIR"
           echo "输出目录: $OUTPUT_DIR"
           
-          # 保存到环境变量
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
           echo "OUTPUT_DIR=$OUTPUT_DIR" >> $GITHUB_ENV
           echo "TARGET=$TARGET" >> $GITHUB_ENV
           echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
-          echo "ARCH=$ARCH" >> $GITHUB_ENV
+          echo "ARCH_NAME=$ARCH_NAME" >> $GITHUB_ENV
           echo "PREFIX=$PREFIX" >> $GITHUB_ENV
           echo "CPU_TYPE=$CPU_TYPE" >> $GITHUB_ENV
           echo "USE_MUSL=$USE_MUSL" >> $GITHUB_ENV
@@ -304,26 +204,14 @@ EOF
         run: |
           echo "=== 安装构建依赖 ==="
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            build-essential gcc g++ make flex bison libgmp-dev libmpfr-dev \
-            libmpc-dev libisl-dev python3 python3-dev git wget curl \
-            zlib1g-dev liblzma-dev file gawk gettext libncurses5-dev \
-            libssl-dev python3-distutils rsync unzip ncurses-term \
-            ncurses-base libncursesw5 libtinfo5 terminfo gnutls-bin \
-            libgnutls28-dev libcurl4-gnutls-dev \
-            autoconf automake autopoint libtool pkg-config texinfo \
-            gperf cmake ninja-build patchutils bc bzip2 xz-utils \
-            help2man libexpat-dev libgdbm-dev libreadline-dev \
-            libsqlite3-dev libffi-dev lzma-dev zstd libzstd-dev \
-            libelf-dev libdw-dev libcap-dev libattr1-dev libaudit-dev \
-            libiberty-dev jq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential gcc g++ make flex bison libgmp-dev libmpfr-dev libmpc-dev libisl-dev python3 python3-dev git wget curl zlib1g-dev liblzma-dev file gawk gettext libncurses5-dev libssl-dev python3-distutils rsync unzip ncurses-term ncurses-base libncursesw5 libtinfo5 terminfo gnutls-bin libgnutls28-dev libcurl4-gnutls-dev autoconf automake autopoint libtool pkg-config texinfo gperf cmake ninja-build patchutils bc bzip2 xz-utils help2man libexpat-dev libgdbm-dev libreadline-dev libsqlite3-dev libffi-dev lzma-dev zstd libzstd-dev libelf-dev libdw-dev libcap-dev libattr1-dev libaudit-dev libiberty-dev jq
 
       - name: 🗑️ 清理构建缓存
         if: ${{ github.event.inputs.clean_build == 'true' }}
         run: |
           echo "=== 清理构建缓存 ==="
           sudo rm -rf /tmp/compiler-build-* 2>/dev/null || true
-          echo "✅ 清理完成"
+          echo "清理完成"
 
       - name: 📥 下载OpenWrt源码
         run: |
@@ -332,16 +220,14 @@ EOF
           cd "${{ env.BUILD_DIR }}"
           
           echo "克隆OpenWrt ${{ env.OPENWRT_VERSION }} 分支..."
-          git clone --depth 1 --branch v${{ env.OPENWRT_VERSION }} \
-            https://github.com/openwrt/openwrt.git . 2>&1 | tee /tmp/clone.log
+          git clone --depth 1 --branch v${{ env.OPENWRT_VERSION }} https://github.com/openwrt/openwrt.git . 2>&1 | tee /tmp/clone.log
           
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
             echo "Git clone失败，尝试使用tar包..."
-            wget -q --show-progress -O openwrt.tar.xz \
-              https://github.com/openwrt/openwrt/archive/refs/tags/v${{ env.OPENWRT_VERSION }}.tar.gz
+            wget -q --show-progress -O openwrt.tar.xz https://github.com/openwrt/openwrt/archive/refs/tags/v${{ env.OPENWRT_VERSION }}.tar.gz
             tar -xzf openwrt.tar.xz --strip-components=1
             rm -f openwrt.tar.xz
-            echo "✅ 使用tar包下载成功"
+            echo "使用tar包下载成功"
           fi
           
           echo "源码目录: $(pwd)"
@@ -352,104 +238,63 @@ EOF
           echo "=== 生成OpenWrt配置 ==="
           cd "${{ env.BUILD_DIR }}"
           
-          # 创建site配置目录
           mkdir -p include/site
+          echo "ac_cv_sys_file_offset_bits=64" > include/site/${{ env.ARCH_NAME }}
+          echo "ac_cv_sys_large_files=yes" >> include/site/${{ env.ARCH_NAME }}
+          echo "ac_cv_c_bigendian=no" >> include/site/${{ env.ARCH_NAME }}
           
-          # 根据架构创建site配置
-          cat > include/site/${{ env.ARCH }} << 'EOF'
-ac_cv_sys_file_offset_bits=64
-ac_cv_sys_large_files=yes
-ac_cv_c_bigendian=no
-ac_cv_func_malloc_0_nonnull=yes
-ac_cv_func_realloc_0_nonnull=yes
-EOF
+          CONFIG_FILE=".config"
+          echo "# 目标配置" > $CONFIG_FILE
+          echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> $CONFIG_FILE
+          echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> $CONFIG_FILE
+          echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}_Default=y" >> $CONFIG_FILE
+          echo "CONFIG_TARGET_SUBTARGET=\"${{ env.SUBTARGET }}\"" >> $CONFIG_FILE
+          echo "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" >> $CONFIG_FILE
+          echo "CONFIG_ARCH=\"${{ env.ARCH_NAME }}\"" >> $CONFIG_FILE
+          echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" >> $CONFIG_FILE
+          echo "CONFIG_TARGET_OPTIMIZATION=\"-Os -pipe\"" >> $CONFIG_FILE
+          echo "CONFIG_CPU_TYPE=\"${{ env.CPU_TYPE }}\"" >> $CONFIG_FILE
+          echo "" >> $CONFIG_FILE
           
-          # 创建基础配置
-          cat > .config << EOF
-CONFIG_TARGET_${{ env.TARGET }}=y
-CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y
-CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}_Default=y
-CONFIG_TARGET_SUBTARGET="${{ env.SUBTARGET }}"
-CONFIG_TARGET_ARCH="${{ env.ARCH }}"
-CONFIG_ARCH="${{ env.ARCH }}"
-CONFIG_TARGET_PREFIX="${{ env.PREFIX }}-"
-CONFIG_TARGET_OPTIMIZATION="-Os -pipe"
-CONFIG_CPU_TYPE="${{ env.CPU_TYPE }}"
-
-# 工具链配置
-CONFIG_EXTERNAL_TOOLCHAIN=n
-CONFIG_USE_MUSL=${{ env.USE_MUSL }}
-CONFIG_USE_GLIBC=${{ env.USE_GLIBC }}
-CONFIG_BUILD_TOOLCHAIN=y
-CONFIG_TOOLCHAIN_BUILD=y
-CONFIG_TOOLCHAINOPTS=y
-
-# 版本配置
-CONFIG_GCC_VERSION="${{ env.GCC_VERSION }}"
-CONFIG_BINUTILS_VERSION="${{ env.BINUTILS_VERSION }}"
-CONFIG_LINUX_VERSION="${{ env.LINUX_VERSION }}"
-EOF
+          echo "# 工具链配置" >> $CONFIG_FILE
+          echo "CONFIG_EXTERNAL_TOOLCHAIN=n" >> $CONFIG_FILE
+          echo "CONFIG_USE_MUSL=${{ env.USE_MUSL }}" >> $CONFIG_FILE
+          echo "CONFIG_USE_GLIBC=${{ env.USE_GLIBC }}" >> $CONFIG_FILE
+          echo "CONFIG_BUILD_TOOLCHAIN=y" >> $CONFIG_FILE
+          echo "CONFIG_TOOLCHAIN_BUILD=y" >> $CONFIG_FILE
+          echo "CONFIG_TOOLCHAINOPTS=y" >> $CONFIG_FILE
+          echo "" >> $CONFIG_FILE
           
-          # 根据C库类型添加配置
+          echo "# 版本配置" >> $CONFIG_FILE
+          echo "CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"" >> $CONFIG_FILE
+          echo "CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"" >> $CONFIG_FILE
+          echo "CONFIG_LINUX_VERSION=\"${{ env.LINUX_VERSION }}\"" >> $CONFIG_FILE
+          
           if [ "${{ env.USE_MUSL }}" = "y" ]; then
-            MUSL_VERSION='${{ needs.setup.outputs.musl_version }}'
-            echo "CONFIG_MUSL_VERSION=\"$MUSL_VERSION\"" >> .config
+            echo "CONFIG_MUSL_VERSION=\"${{ needs.setup.outputs.musl_version }}\"" >> $CONFIG_FILE
           else
-            GLIBC_VERSION='${{ needs.setup.outputs.glibc_version }}'
-            echo "CONFIG_GLIBC_VERSION=\"$GLIBC_VERSION\"" >> .config
+            echo "CONFIG_GLIBC_VERSION=\"${{ needs.setup.outputs.glibc_version }}\"" >> $CONFIG_FILE
           fi
           
-          # 优化配置
-          cat >> .config << 'EOF'
-
-# 只构建工具链，不构建包
-CONFIG_ALL=n
-CONFIG_ALL_KMODS=n
-CONFIG_ALL_NONSHARED=n
-CONFIG_BUILD_PACKAGES=n
-
-# 关闭所有默认包
-CONFIG_PACKAGE_busybox=n
-CONFIG_PACKAGE_dnsmasq=n
-CONFIG_PACKAGE_firewall=n
-CONFIG_PACKAGE_dropbear=n
-CONFIG_PACKAGE_iptables=n
-CONFIG_PACKAGE_kmod=n
-
-# 开发选项
-CONFIG_DEVEL=y
-CONFIG_CCACHE=n
-CONFIG_SIGNED_PACKAGES=n
-CONFIG_STRIP_ARGS="--strip-all"
-
-# 目标系统配置
-CONFIG_TARGET_ROOTFS_INITRAMFS=y
-CONFIG_TARGET_ROOTFS_CPIOGZ=y
-CONFIG_TARGET_ROOTFS_TARGZ=n
-CONFIG_TARGET_ROOTFS_SQUASHFS=n
-
-# 优化选项
-CONFIG_GCC_DEFAULT_PIE=n
-CONFIG_GCC_DEFAULT_SSP=n
-CONFIG_GCC_DEFAULT_RELAX=n
-CONFIG_SJLJ_EXCEPTIONS=n
-CONFIG_USE_MKLIBS=n
-CONFIG_USE_LIBSTDCXX=n
-CONFIG_STRIP_KERNEL_EXPORTS=n
-CONFIG_USE_UCLIBC=n
-
-# 内核配置
-CONFIG_KERNEL_KALLSYMS=n
-CONFIG_KERNEL_DEBUG_KERNEL=n
-CONFIG_KERNEL_DEBUG_INFO=n
-CONFIG_KERNEL_PERF_EVENTS=n
-CONFIG_KERNEL_PROFILING=n
-EOF
+          echo "" >> $CONFIG_FILE
+          echo "# 优化配置" >> $CONFIG_FILE
+          echo "CONFIG_ALL=n" >> $CONFIG_FILE
+          echo "CONFIG_ALL_KMODS=n" >> $CONFIG_FILE
+          echo "CONFIG_ALL_NONSHARED=n" >> $CONFIG_FILE
+          echo "CONFIG_BUILD_PACKAGES=n" >> $CONFIG_FILE
+          echo "CONFIG_PACKAGE_busybox=n" >> $CONFIG_FILE
+          echo "CONFIG_PACKAGE_dnsmasq=n" >> $CONFIG_FILE
+          echo "CONFIG_PACKAGE_firewall=n" >> $CONFIG_FILE
+          echo "CONFIG_PACKAGE_dropbear=n" >> $CONFIG_FILE
+          echo "CONFIG_DEVEL=y" >> $CONFIG_FILE
+          echo "CONFIG_CCACHE=n" >> $CONFIG_FILE
+          echo "CONFIG_TARGET_ROOTFS_INITRAMFS=y" >> $CONFIG_FILE
+          echo "CONFIG_TARGET_ROOTFS_CPIOGZ=y" >> $CONFIG_FILE
+          echo "CONFIG_GCC_DEFAULT_PIE=n" >> $CONFIG_FILE
+          echo "CONFIG_GCC_DEFAULT_SSP=n" >> $CONFIG_FILE
           
           echo "配置文件生成完成"
-          echo "配置行数: $(wc -l < .config)"
-          echo "配置摘要:"
-          grep -E "CONFIG_TARGET|CONFIG_ARCH|CONFIG_GCC|CONFIG_USE_" .config
+          echo "配置行数: $(wc -l < $CONFIG_FILE)"
 
       - name: 🔨 编译工具链
         timeout-minutes: 150
@@ -457,55 +302,35 @@ EOF
           echo "=== 开始编译工具链 ==="
           cd "${{ env.BUILD_DIR }}"
           
-          # 设置环境变量
           export FORCE_UNSAFE_CONFIGURE=1
           export TERM=xterm-256color
-          export TERMINFO=/usr/share/terminfo
           
           echo "开始时间: $(date)"
           echo "CPU核心数: $(nproc)"
-          echo "内存: $(free -h | grep Mem | awk '{print $2}')"
           
-          # 1. 应用配置
           echo "步骤1: 应用配置..."
           make defconfig 2>&1 | tee /tmp/defconfig.log
           
-          # 2. 下载源码
           echo "步骤2: 下载源码包..."
           mkdir -p dl
           make -j1 download V=s 2>&1 | tee /tmp/download.log
           
-          # 检查关键包
-          echo "检查关键包:"
-          for pkg in gcc binutils linux; do
-            if ls dl/${pkg}-*.tar.* 2>/dev/null | grep -q .; then
-              echo "  ✅ $pkg"
-            else
-              echo "  ❌ $pkg: 未找到"
-            fi
-          done
-          
-          # 3. 编译binutils
           echo "步骤3: 编译binutils..."
           make toolchain/binutils/compile -j$(nproc) V=s 2>&1 | tee /tmp/binutils.log
-          
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "❌ binutils编译失败"
-            grep -E "Error:|error:|failed:" /tmp/binutils.log | tail -20
+            echo "binutils编译失败"
+            grep -E "Error:|error:|failed:" /tmp/binutils.log | tail -10
             exit 1
           fi
           
-          # 4. 编译gcc初始阶段
           echo "步骤4: 编译gcc初始阶段..."
           make toolchain/gcc/initial/compile -j$(nproc) V=s 2>&1 | tee /tmp/gcc-initial.log
-          
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "❌ gcc初始阶段编译失败"
-            grep -E "Error:|error:|failed:" /tmp/gcc-initial.log | tail -20
+            echo "gcc初始阶段编译失败"
+            grep -E "Error:|error:|failed:" /tmp/gcc-initial.log | tail -10
             exit 1
           fi
           
-          # 5. 编译C库
           if [ "${{ env.USE_MUSL }}" = "y" ]; then
             echo "步骤5: 编译musl C库..."
             make toolchain/musl/compile -j$(nproc) V=s 2>&1 | tee /tmp/musl.log
@@ -514,30 +339,18 @@ EOF
             make toolchain/glibc/compile -j$(nproc) V=s 2>&1 | tee /tmp/glibc.log
           fi
           
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "❌ C库编译失败"
-            exit 1
-          fi
-          
-          # 6. 编译完整gcc
           echo "步骤6: 编译完整gcc..."
           make toolchain/gcc/final/compile -j$(nproc) V=s 2>&1 | tee /tmp/gcc-final.log
-          
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "❌ gcc最终编译失败"
-            grep -E "Error:|error:|failed:" /tmp/gcc-final.log | tail -20
+            echo "gcc最终编译失败"
+            grep -E "Error:|error:|failed:" /tmp/gcc-final.log | tail -10
             exit 1
           fi
           
-          # 7. 安装工具链
           echo "步骤7: 安装工具链..."
           make toolchain/install -j$(nproc) V=s 2>&1 | tee /tmp/install.log
           
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "⚠️ 安装过程有警告，继续..."
-          fi
-          
-          echo "✅ 工具链编译完成"
+          echo "工具链编译完成"
           echo "结束时间: $(date)"
           echo "构建目录大小: $(du -sh . | cut -f1)"
 
@@ -546,343 +359,134 @@ EOF
           echo "=== 验证编译结果 ==="
           cd "${{ env.BUILD_DIR }}"
           
-          # 查找工具链目录
           TOOLCHAIN_DIR=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" | head -1)
           
           if [ -z "$TOOLCHAIN_DIR" ] || [ ! -d "$TOOLCHAIN_DIR" ]; then
-            echo "❌ 未找到工具链目录"
-            echo "staging_dir内容:"
-            ls -la staging_dir/ 2>/dev/null || echo "目录不存在"
+            echo "未找到工具链目录"
             exit 1
           fi
           
-          echo "✅ 工具链目录: $TOOLCHAIN_DIR"
+          echo "工具链目录: $TOOLCHAIN_DIR"
           echo "目录大小: $(du -sh "$TOOLCHAIN_DIR" | cut -f1)"
           
-          # 查找编译器
           COMPILER_PATH=$(find "$TOOLCHAIN_DIR/bin" -name "*gcc" | head -1)
           
           if [ -z "$COMPILER_PATH" ] || [ ! -x "$COMPILER_PATH" ]; then
-            echo "❌ 未找到可执行的编译器"
-            echo "bin目录内容:"
-            ls -la "$TOOLCHAIN_DIR/bin/" 2>/dev/null | head -20
+            echo "未找到可执行的编译器"
             exit 1
           fi
           
           COMPILER_NAME=$(basename "$COMPILER_PATH")
-          echo "✅ 找到编译器: $COMPILER_NAME"
+          echo "找到编译器: $COMPILER_NAME"
           
-          # 验证编译器
           echo "编译器信息:"
-          "$COMPILER_PATH" --version 2>&1 | head -3
+          "$COMPILER_PATH" --version 2>&1 | head -2
           
-          # 测试编译
           echo "测试交叉编译..."
-          cat > test.c << 'EOF'
-#include <stdio.h>
-#include <stdlib.h>
-
-int main() {
-    printf("Cross-compiler test successful!\n");
-    printf("Architecture: ${{ env.ARCH }}\n");
-    printf("C Library: ${{ env.LIBC_SUFFIX }}\n");
-    printf("GCC Version: ${{ env.GCC_VERSION }}\n");
-    return 0;
-}
-EOF
+          echo '#include <stdio.h>' > test.c
+          echo 'int main() { printf("Test OK\\n"); return 0; }' >> test.c
           
-          "$COMPILER_PATH" test.c -o test_program 2>&1 | tee /tmp/compile-test.log
+          "$COMPILER_PATH" test.c -o test_program 2>&1
           
-          if [ ${PIPESTATUS[0]} -eq 0 ] && [ -f "test_program" ]; then
-            echo "✅ 交叉编译测试通过"
-            echo "生成文件信息:"
+          if [ $? -eq 0 ] && [ -f "test_program" ]; then
+            echo "交叉编译测试通过"
             file test_program
             rm -f test.c test_program
           else
-            echo "❌ 交叉编译测试失败"
-            cat /tmp/compile-test.log
+            echo "交叉编译测试失败"
             exit 1
           fi
           
-          # 保存验证信息
           echo "VALIDATION_PASSED=true" >> $GITHUB_ENV
           echo "TOOLCHAIN_DIR=$TOOLCHAIN_DIR" >> $GITHUB_ENV
           echo "COMPILER_PATH=$COMPILER_PATH" >> $GITHUB_ENV
-          echo "COMPILER_NAME=$COMPILER_NAME" >> $GITHUB_ENV
 
       - name: 💾 保存编译器
         run: |
           echo "=== 保存编译器 ==="
           cd "${{ env.BUILD_DIR }}"
           
-          # 创建输出目录
           mkdir -p "${{ env.OUTPUT_DIR }}"
           
-          # 复制工具链
           echo "复制工具链文件..."
-          rsync -av --progress "$TOOLCHAIN_DIR/" "${{ env.OUTPUT_DIR }}/" 2>&1 | tail -20
+          cp -r "$TOOLCHAIN_DIR"/* "${{ env.OUTPUT_DIR }}/" 2>/dev/null || true
           
-          # 创建元数据文件
           echo "创建元数据文件..."
-          cat > "${{ env.OUTPUT_DIR }}/metadata.json" << EOF
-{
-  "architecture": "${{ env.ARCH }}",
-  "libc": "${{ env.LIBC_SUFFIX }}",
-  "target": "${{ env.TARGET }}",
-  "subtarget": "${{ env.SUBTARGET }}",
-  "compiler_prefix": "${{ env.PREFIX }}-",
-  "cpu_type": "${{ env.CPU_TYPE }}",
-  "versions": {
-    "gcc": "${{ env.GCC_VERSION }}",
-    "binutils": "${{ env.BINUTILS_VERSION }}",
-    "linux": "${{ env.LINUX_VERSION }}",
-    "openwrt": "${{ env.OPENWRT_VERSION }}"
-  },
-  "build_info": {
-    "date": "$(date -Iseconds)",
-    "workflow_run": "${{ github.run_id }}",
-    "workflow_number": "${{ github.run_number }}",
-    "build_id": "${{ env.BUILD_ID }}"
-  },
-  "validation": {
-    "compiler": "$COMPILER_NAME",
-    "test_passed": true,
-    "toolchain_size": "$(du -sh "${{ env.OUTPUT_DIR }}" | cut -f1)",
-    "file_count": "$(find "${{ env.OUTPUT_DIR }}" -type f | wc -l)"
-  }
-}
-EOF
+          echo "{" > "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"architecture\": \"${{ env.ARCH_NAME }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"libc\": \"${{ env.LIBC_SUFFIX }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"target\": \"${{ env.TARGET }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"subtarget\": \"${{ env.SUBTARGET }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"compiler_prefix\": \"${{ env.PREFIX }}-\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"gcc_version\": \"${{ env.GCC_VERSION }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"binutils_version\": \"${{ env.BINUTILS_VERSION }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"linux_version\": \"${{ env.LINUX_VERSION }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"openwrt_version\": \"${{ env.OPENWRT_VERSION }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"build_date\": \"$(date -Iseconds)\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"workflow_run\": \"${{ github.run_id }}\"" >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "}" >> "${{ env.OUTPUT_DIR }}/metadata.json"
           
-          # 创建使用说明
-          cat > "${{ env.OUTPUT_DIR }}/README.md" << EOF
-# ${{ env.ARCH }} ${{ env.LIBC_SUFFIX }} 交叉编译器
-
-## 📋 基本信息
-
-- **架构**: ${{ env.ARCH }}
-- **C库**: ${{ env.LIBC_SUFFIX }}
-- **目标平台**: ${{ env.TARGET }}/${{ env.SUBTARGET }}
-- **编译器前缀**: \`${{ env.PREFIX }}-\`
-- **GCC版本**: ${{ env.GCC_VERSION }}
-- **构建日期**: $(date)
-- **OpenWrt版本**: ${{ env.OPENWRT_VERSION }}
-
-## 🚀 快速使用
-
-### 方法1: 设置环境变量
-\`\`\`bash
-export STAGING_DIR="$(pwd)"
-export PATH="\$STAGING_DIR/bin:\$PATH"
-\`\`\`
-
-### 方法2: 直接调用
-\`\`\`bash
-# C编译器
-./bin/${{ env.PREFIX }}-gcc -o program program.c
-
-# C++编译器
-./bin/${{ env.PREFIX }}-g++ -o program program.cpp
-
-# 查看版本
-./bin/${{ env.PREFIX }}-gcc --version
-\`\`\`
-
-### 方法3: 在OpenWrt构建中使用
-\`\`\`bash
-make STAGING_DIR="$(pwd)"
-\`\`\`
-
-## 📁 文件结构
-
-\`\`\`
-./
-├── bin/                    # 工具链程序
-│   ├── ${{ env.PREFIX }}-gcc          # C编译器
-│   ├── ${{ env.PREFIX }}-g++          # C++编译器
-│   ├── ${{ env.PREFIX }}-ld           # 链接器
-│   ├── ${{ env.PREFIX }}-ar           # 归档工具
-│   └── ${{ env.PREFIX }}-strip        # 剥离工具
-├── include/                # 头文件
-├── lib/                    # 库文件
-├── libexec/                # GCC内部工具
-├── share/                  # 共享数据
-├── metadata.json          # 构建元数据
-└── README.md              # 本文档
-\`\`\`
-
-## 🔧 可用工具
-
-| 工具 | 命令 | 用途 |
-|------|------|------|
-| C编译器 | \`${{ env.PREFIX }}-gcc\` | 编译C程序 |
-| C++编译器 | \`${{ env.PREFIX }}-g++\` | 编译C++程序 |
-| 链接器 | \`${{ env.PREFIX }}-ld\` | 链接目标文件 |
-| 归档工具 | \`${{ env.PREFIX }}-ar\` | 创建静态库 |
-| 剥离工具 | \`${{ env.PREFIX }}-strip\` | 剥离调试信息 |
-| 汇编器 | \`${{ env.PREFIX }}-as\` | 汇编汇编代码 |
-| 对象拷贝 | \`${{ env.PREFIX }}-objcopy\` | 复制对象文件 |
-| 对象转储 | \`${{ env.PREFIX }}-objdump\` | 显示对象信息 |
-
-## 📊 构建信息
-
-- **文件总数**: $(find "${{ env.OUTPUT_DIR }}" -type f | wc -l)
-- **目录大小**: $(du -sh "${{ env.OUTPUT_DIR }}" | cut -f1)
-- **构建ID**: ${{ env.BUILD_ID }}
-- **工作流运行**: #${{ github.run_id }}
-
-## ❓ 常见问题
-
-### 1. 如何验证编译器工作正常？
-\`\`\`bash
-./bin/${{ env.PREFIX }}-gcc --version
-echo 'int main(){return 0;}' | ./bin/${{ env.PREFIX }}-gcc -x c -o /dev/null -
-\`\`\`
-
-### 2. 编译时出现"找不到头文件"错误？
-确保设置了正确的环境变量：
-\`\`\`bash
-export STAGING_DIR="$(pwd)"
-\`\`\`
-
-### 3. 如何在CMake中使用？
-\`\`\`cmake
-set(CMAKE_C_COMPILER "\${STAGING_DIR}/bin/${{ env.PREFIX }}-gcc")
-set(CMAKE_CXX_COMPILER "\${STAGING_DIR}/bin/${{ env.PREFIX }}-g++")
-\`\`\`
-
-## 📄 许可证
-
-本编译器基于 OpenWrt 项目构建，遵循相应的开源许可证。
-
----
-*最后更新: $(date)*
-EOF
+          echo "创建使用说明..."
+          echo "# ${{ env.ARCH_NAME }} ${{ env.LIBC_SUFFIX }} 交叉编译器" > "${{ env.OUTPUT_DIR }}/README.md"
+          echo "" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "## 基本信息" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- **架构**: ${{ env.ARCH_NAME }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- **C库**: ${{ env.LIBC_SUFFIX }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- **GCC版本**: ${{ env.GCC_VERSION }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- **构建日期**: $(date)" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "## 使用方法" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo '```bash' >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "export STAGING_DIR=\"$(pwd)\"" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo 'export PATH="$STAGING_DIR/bin:$PATH"' >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "${{ env.PREFIX }}-gcc --version" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo '```' >> "${{ env.OUTPUT_DIR }}/README.md"
           
-          echo "✅ 编译器保存完成"
+          echo "编译器保存完成"
           echo "输出目录: ${{ env.OUTPUT_DIR }}"
-          echo "文件数量: $(find "${{ env.OUTPUT_DIR }}" -type f | wc -l)"
-          echo "目录大小: $(du -sh "${{ env.OUTPUT_DIR }}" | cut -f1)"
+          echo "文件数量: $(find "${{ env.OUTPUT_DIR }}" -type f 2>/dev/null | wc -l)"
 
       - name: 📊 更新索引
         run: |
           echo "=== 更新编译器索引 ==="
-          
-          # 创建主索引文件
           INDEX_FILE="${{ env.COMPILER_BASE_DIR }}/INDEX.md"
           
-          cat > "$INDEX_FILE" << EOF
-# 📚 交叉编译器库
-
-## 📋 概览
-
-本仓库提供预编译的 OpenWrt 交叉编译器，支持多种架构和C库类型。
-
-| 架构 | 描述 | 支持状态 |
-|------|------|----------|
-| aarch64 | ARM 64位 | ✅ 支持 |
-| x86_64 | x86 64位 | ✅ 支持 |
-| mips | MIPS 32位大端 | ✅ 支持 |
-| mipsel | MIPS 32位小端 | ✅ 支持 |
-| arm_cortex-a7 | ARM Cortex-A7 | ✅ 支持 |
-| arm_cortex-a53 | ARM Cortex-A53 | ✅ 支持 |
-| riscv64 | RISC-V 64位 | ✅ 支持 |
-
-## 📁 目录结构
-
-\`\`\`
-compilers/
-├── aarch64/                    # ARM64架构
-│   ├── musl/                  # musl C库
-│   │   └── gcc-12.3.0/       # GCC 12.3.0版本
-│   │       ├── bin/          # 工具链程序
-│   │       ├── include/      # 头文件
-│   │       ├── lib/          # 库文件
-│   │       ├── metadata.json # 元数据
-│   │       └── README.md     # 使用说明
-│   └── glibc/                 # glibc C库
-├── x86_64/                    # x86_64架构
-├── mips/                      # MIPS架构
-├── mipsel/                    # MIPS小端架构
-├── arm_cortex-a7/             # ARM Cortex-A7
-├── arm_cortex-a53/            # ARM Cortex-A53
-└── riscv64/                   # RISC-V 64位
-\`\`\`
-
-## 🔄 最近构建
-
-| 架构 | C库 | GCC版本 | 构建时间 | 状态 |
-|------|-----|---------|----------|------|
-EOF
+          echo "# 交叉编译器库" > "$INDEX_FILE"
+          echo "" >> "$INDEX_FILE"
+          echo "## 可用编译器" >> "$INDEX_FILE"
+          echo "" >> "$INDEX_FILE"
+          echo "| 架构 | C库 | GCC版本 | 构建时间 |" >> "$INDEX_FILE"
+          echo "|------|-----|---------|----------|" >> "$INDEX_FILE"
           
-          # 扫描所有编译器并添加到索引
           find "${{ env.COMPILER_BASE_DIR }}" -name "metadata.json" | while read meta; do
-            ARCH=$(jq -r '.architecture' "$meta")
-            LIBC=$(jq -r '.libc' "$meta")
-            GCC_VER=$(jq -r '.versions.gcc' "$meta")
-            BUILD_DATE=$(jq -r '.build_info.date' "$meta" | cut -d'T' -f1)
-            COMPILER_DIR=$(dirname "$meta")
-            RELATIVE_DIR="${COMPILER_DIR#${{ env.COMPILER_BASE_DIR }}/}"
-            
-            echo "| $ARCH | $LIBC | $GCC_VER | $BUILD_DATE | ✅ 可用 |" >> "$INDEX_FILE"
+            if [ -f "$meta" ]; then
+              ARCH=$(grep -o '"architecture": "[^"]*' "$meta" | cut -d'"' -f4)
+              LIBC=$(grep -o '"libc": "[^"]*' "$meta" | cut -d'"' -f4)
+              GCC_VER=$(grep -o '"gcc_version": "[^"]*' "$meta" | cut -d'"' -f4)
+              BUILD_DATE=$(grep -o '"build_date": "[^"]*' "$meta" | cut -d'"' -f4 | cut -d'T' -f1)
+              
+              if [ -n "$ARCH" ] && [ -n "$LIBC" ] && [ -n "$GCC_VER" ]; then
+                echo "| $ARCH | $LIBC | $GCC_VER | $BUILD_DATE |" >> "$INDEX_FILE"
+              fi
+            fi
           done
           
-          cat >> "$INDEX_FILE" << 'EOF'
-
-## 🚀 使用方法
-
-### 1. 选择编译器
-根据目标架构和C库需求，进入对应目录：
-\`\`\`bash
-cd compilers/aarch64/musl/gcc-12.3.0
-\`\`\`
-
-### 2. 设置环境
-\`\`\`bash
-export STAGING_DIR="$(pwd)"
-export PATH="\$STAGING_DIR/bin:\$PATH"
-\`\`\`
-
-### 3. 验证编译器
-\`\`\`bash
-aarch64-openwrt-linux-musl-gcc --version
-\`\`\`
-
-## ⚙️ 构建新编译器
-
-### 自动构建
-每周日凌晨2点自动检测最新版本并构建。
-
-### 手动构建
-1. 进入 GitHub Actions 页面
-2. 选择 **🔧 交叉编译器矩阵构建**
-3. 点击 **Run workflow**
-4. 选择架构、C库类型和版本
-5. 开始构建
-
-## 📈 统计信息
-
-- **总编译器数量**: $(find "${{ env.COMPILER_BASE_DIR }}" -name "metadata.json" | wc -l)
-- **最后更新**: $(date)
-- **工作流状态**: [![构建状态](https://github.com/${{ github.repository }}/actions/workflows/compiler-matrix-build.yml/badge.svg)](https://github.com/${{ github.repository }}/actions)
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request 来：
-- 添加新的架构支持
-- 改进构建脚本
-- 修复问题
-- 更新文档
-
-## 📄 许可证
-
-基于 OpenWrt 项目构建，遵循相应的开源许可证。
-
----
-*索引生成时间: $(date)*
-EOF
+          echo "" >> "$INDEX_FILE"
+          echo "## 目录结构" >> "$INDEX_FILE"
+          echo '```' >> "$INDEX_FILE"
+          echo "compilers/" >> "$INDEX_FILE"
+          echo "├── aarch64/" >> "$INDEX_FILE"
+          echo "│   ├── musl/" >> "$INDEX_FILE"
+          echo "│   └── glibc/" >> "$INDEX_FILE"
+          echo "├── x86_64/" >> "$INDEX_FILE"
+          echo "├── mips/" >> "$INDEX_FILE"
+          echo "├── mipsel/" >> "$INDEX_FILE"
+          echo "├── arm_cortex-a7/" >> "$INDEX_FILE"
+          echo "├── arm_cortex-a53/" >> "$INDEX_FILE"
+          echo "└── riscv64/" >> "$INDEX_FILE"
+          echo '```' >> "$INDEX_FILE"
           
-          echo "✅ 索引更新完成"
-          echo "索引文件: $INDEX_FILE"
+          echo "索引更新完成"
 
       - name: 📤 提交到Git仓库
         run: |
@@ -891,133 +495,37 @@ EOF
           
           git config user.email "github-actions@github.com"
           git config user.name "GitHub Actions"
-          git config pull.rebase false
           
-          # 添加编译器文件
           git add -f "${{ env.COMPILER_BASE_DIR }}"/*
           
-          # 检查是否有变更
           if ! git diff --cached --quiet; then
             echo "检测到变更，创建提交..."
             
-            # 创建提交信息
-            COMMIT_MSG="build(compiler): 添加 ${{ env.ARCH }}-${{ env.LIBC_SUFFIX }} 交叉编译器"
-            COMMIT_MSG="$COMMIT_MSG\n\n架构: ${{ env.ARCH }}"
-            COMMIT_MSG="$COMMIT_MSG\nC库: ${{ env.LIBC_SUFFIX }}"
-            COMMIT_MSG="$COMMIT_MSG\nGCC: ${{ env.GCC_VERSION }}"
-            COMMIT_MSG="$COMMIT_MSG\n目标: ${{ env.TARGET }}/${{ env.SUBTARGET }}"
-            COMMIT_MSG="$COMMIT_MSG\n工作流: #${{ github.run_id }}"
-            COMMIT_MSG="$COMMIT_MSG\n构建ID: ${{ env.BUILD_ID }}"
+            git commit -m "build: 添加 ${{ env.ARCH_NAME }}-${{ env.LIBC_SUFFIX }} 编译器" \
+              -m "GCC: ${{ env.GCC_VERSION }}" \
+              -m "目标: ${{ env.TARGET }}/${{ env.SUBTARGET }}" \
+              -m "工作流: #${{ github.run_id }}"
             
-            echo -e "$COMMIT_MSG" | git commit -F -
-            
-            # 尝试推送
             if git push; then
-              echo "✅ 编译器已成功提交到仓库"
+              echo "编译器已成功提交到仓库"
             else
-              echo "⚠️ 推送失败，尝试拉取最新变更后重试..."
-              git pull origin main --no-edit
+              echo "推送失败，尝试拉取后重试"
+              git pull origin main
               git push
-              echo "✅ 推送成功"
             fi
           else
-            echo "✅ 没有变更需要提交"
+            echo "没有变更需要提交"
           fi
-
-      - name: 🏷️ 创建GitHub Release
-        if: ${{ github.event.inputs.upload_release == 'true' && github.event_name == 'workflow_dispatch' }}
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: "compiler-${{ env.ARCH }}-${{ env.LIBC_SUFFIX }}-${{ env.GCC_VERSION }}-$(date +%Y%m%d)"
-          name: "${{ env.ARCH }} ${{ env.LIBC_SUFFIX }} 交叉编译器 v${{ env.GCC_VERSION }}"
-          body: |
-            ## 🏗️ 编译器信息
-            
-            ### 基本信息
-            - **架构**: ${{ env.ARCH }}
-            - **C库**: ${{ env.LIBC_SUFFIX }}
-            - **GCC版本**: ${{ env.GCC_VERSION }}
-            - **Binutils版本**: ${{ env.BINUTILS_VERSION }}
-            - **Linux内核版本**: ${{ env.LINUX_VERSION }}
-            - **OpenWrt版本**: ${{ env.OPENWRT_VERSION }}
-            - **构建日期**: $(date)
-            
-            ### 目标平台
-            - **目标**: ${{ env.TARGET }}
-            - **子目标**: ${{ env.SUBTARGET }}
-            - **CPU类型**: ${{ env.CPU_TYPE }}
-            - **编译器前缀**: `${{ env.PREFIX }}-`
-            
-            ### 构建信息
-            - **工作流运行**: #${{ github.run_id }}
-            - **构建ID**: ${{ env.BUILD_ID }}
-            - **文件数量**: $(find "${{ env.OUTPUT_DIR }}" -type f | wc -l)
-            - **目录大小**: $(du -sh "${{ env.OUTPUT_DIR }}" | cut -f1)
-            
-            ## 🚀 快速使用
-            
-            1. **下载并解压**
-            ```bash
-            tar -xzf compiler-${{ env.ARCH }}-${{ env.LIBC_SUFFIX }}.tar.gz
-            cd compiler-${{ env.ARCH }}-${{ env.LIBC_SUFFIX }}
-            ```
-            
-            2. **设置环境变量**
-            ```bash
-            export STAGING_DIR="$(pwd)"
-            export PATH="\$STAGING_DIR/bin:\$PATH"
-            ```
-            
-            3. **验证编译器**
-            ```bash
-            ${{ env.PREFIX }}-gcc --version
-            ```
-            
-            ## 📁 包含内容
-            
-            - 完整的交叉编译工具链
-            - 头文件和库文件
-            - 使用说明文档
-            - 构建元数据
-            
-            ## 🔧 支持的工具
-            
-            | 工具 | 命令 |
-            |------|------|
-            | C编译器 | `${{ env.PREFIX }}-gcc` |
-            | C++编译器 | `${{ env.PREFIX }}-g++` |
-            | 链接器 | `${{ env.PREFIX }}-ld` |
-            | 归档工具 | `${{ env.PREFIX }}-ar` |
-            | 剥离工具 | `${{ env.PREFIX }}-strip` |
-            
-            ## 📄 详细文档
-            
-            查看解压后的 `README.md` 获取完整使用说明。
-            
-            ---
-            *自动构建于 GitHub Actions*
-          draft: false
-          prerelease: false
-          files: |
-            ${{ env.OUTPUT_DIR }}/**/*
 
       - name: 📋 生成构建报告
         if: always()
         run: |
           echo "=== 构建报告 ==="
           echo "构建ID: ${{ env.BUILD_ID }}"
-          echo "架构: ${{ env.ARCH }}"
+          echo "架构: ${{ env.ARCH_NAME }}"
           echo "C库: ${{ env.LIBC_SUFFIX }}"
           echo "GCC版本: ${{ env.GCC_VERSION }}"
           echo "目标平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}"
-          echo "构建目录: ${{ env.BUILD_DIR }}"
-          echo "输出目录: ${{ env.OUTPUT_DIR }}"
-          
-          if [ -d "${{ env.OUTPUT_DIR }}" ]; then
-            echo "输出文件数: $(find "${{ env.OUTPUT_DIR }}" -type f | wc -l)"
-            echo "输出目录大小: $(du -sh "${{ env.OUTPUT_DIR }}" | cut -f1)"
-          fi
-          
           echo "构建状态: ${{ job.status }}"
           echo "报告时间: $(date)"
 
@@ -1026,33 +534,5 @@ EOF
         uses: actions/upload-artifact@v4
         with:
           name: build-logs-${{ env.BUILD_ID }}
-          path: |
-            /tmp/*.log
-            ${{ env.BUILD_DIR }}/.config
+          path: /tmp/*.log
           retention-days: 30
-
-  post-build:
-    needs: build-compiler
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: 📥 检出仓库
-        uses: actions/checkout@v4
-      
-      - name: 📊 更新状态徽章
-        run: |
-          echo "=== 更新状态 ==="
-          echo "构建完成时间: $(date)"
-          echo "工作流状态: ${{ needs.build-compiler.result }}"
-          
-          # 可以在这里添加状态徽章更新逻辑
-          # 例如更新README中的构建状态
-
-      - name: 📧 发送通知
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        run: |
-          echo "构建完成通知"
-          echo "工作流: ${{ github.workflow }}"
-          echo "运行ID: #${{ github.run_id }}"
-          echo "状态: ${{ needs.build-compiler.result }}"
-          echo "查看详情: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
