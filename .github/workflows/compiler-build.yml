@@ -41,7 +41,7 @@ on:
 
 env:
   OPENWRT_VERSION: "23.05.2"
-  COMPILER_BASE_DIR: "${{ github.workspace }}/compilers"
+  COMPILER_BASE_DIR: "${{ github.workspace }}/firmware-config/build-Compiler-file/compilers"
 
 jobs:
   setup:
@@ -99,6 +99,7 @@ jobs:
               TARGET="armvirt"
               SUBTARGET="armv7"
               ARCH_NAME="arm"
+              ARCH_DIR="arm_cortex-a7"
               PREFIX="arm-openwrt-linux"
               CPU_TYPE="cortex-a7"
               TUNE="cortex-a7"
@@ -109,6 +110,7 @@ jobs:
               TARGET="armvirt"
               SUBTARGET="64"
               ARCH_NAME="aarch64"
+              ARCH_DIR="aarch64"
               PREFIX="aarch64-openwrt-linux"
               CPU_TYPE="cortex-a53"
               TUNE="cortex-a53"
@@ -119,6 +121,7 @@ jobs:
               TARGET="x86"
               SUBTARGET="64"
               ARCH_NAME="x86_64"
+              ARCH_DIR="x86_64"
               PREFIX="x86_64-openwrt-linux"
               CPU_TYPE="x86_64"
               TUNE="generic"
@@ -129,6 +132,7 @@ jobs:
               TARGET="ramips"
               SUBTARGET="mt7621"
               ARCH_NAME="mips"
+              ARCH_DIR="mips"
               PREFIX="mips-openwrt-linux"
               CPU_TYPE="24kc"
               TUNE="24kc"
@@ -139,6 +143,7 @@ jobs:
               TARGET="ramips"
               SUBTARGET="mt7621"
               ARCH_NAME="mipsel"
+              ARCH_DIR="mipsel"
               PREFIX="mipsel-openwrt-linux"
               CPU_TYPE="24kc"
               TUNE="24kc"
@@ -149,6 +154,7 @@ jobs:
               TARGET="rockchip"
               SUBTARGET="armv8"
               ARCH_NAME="aarch64"
+              ARCH_DIR="arm_cortex-a53"
               PREFIX="aarch64-openwrt-linux"
               CPU_TYPE="cortex-a53"
               TUNE="cortex-a53"
@@ -159,6 +165,7 @@ jobs:
               TARGET="virt"
               SUBTARGET="rv64"
               ARCH_NAME="riscv64"
+              ARCH_DIR="riscv64"
               PREFIX="riscv64-openwrt-linux"
               CPU_TYPE="generic"
               TUNE="generic"
@@ -173,25 +180,29 @@ jobs:
           if [ "$LIBC" = "musl" ]; then
             PREFIX="${PREFIX}-musl"
             LIBC_SUFFIX="musl"
+            LIBC_DIR="musl"
             USE_MUSL="y"
             USE_GLIBC="n"
           else
             PREFIX="${PREFIX}-gnu"
             LIBC_SUFFIX="glibc"
+            LIBC_DIR="glibc"
             USE_MUSL="n"
             USE_GLIBC="y"
           fi
           GCC_VERSION='${{ needs.setup.outputs.gcc_version }}'
           BINUTILS_VERSION='${{ needs.setup.outputs.binutils_version }}'
           LINUX_VERSION='${{ needs.setup.outputs.linux_version }}'
-          BUILD_ID="${ARCH_NAME}_${LIBC_SUFFIX}_gcc-${GCC_VERSION}_$(date +%Y%m%d_%H%M%S)"
+          BUILD_ID="${ARCH_DIR}_${LIBC_DIR}_gcc-${GCC_VERSION}_$(date +%Y%m%d_%H%M%S)"
           BUILD_DIR="/tmp/compiler-build-${BUILD_ID}"
-          OUTPUT_DIR="${{ env.COMPILER_BASE_DIR }}/${ARCH_NAME}/${LIBC_SUFFIX}/gcc-${GCC_VERSION}"
+          OUTPUT_DIR="${{ env.COMPILER_BASE_DIR }}/${ARCH_DIR}/${LIBC_DIR}/gcc-${GCC_VERSION}"
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
           echo "OUTPUT_DIR=$OUTPUT_DIR" >> $GITHUB_ENV
           echo "TARGET=$TARGET" >> $GITHUB_ENV
           echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
           echo "ARCH_NAME=$ARCH_NAME" >> $GITHUB_ENV
+          echo "ARCH_DIR=$ARCH_DIR" >> $GITHUB_ENV
+          echo "LIBC_DIR=$LIBC_DIR" >> $GITHUB_ENV
           echo "PREFIX=$PREFIX" >> $GITHUB_ENV
           echo "CPU_TYPE=$CPU_TYPE" >> $GITHUB_ENV
           echo "TUNE=$TUNE" >> $GITHUB_ENV
@@ -205,11 +216,10 @@ jobs:
           echo "LIBC_SUFFIX=$LIBC_SUFFIX" >> $GITHUB_ENV
           echo "BUILD_ID=$BUILD_ID" >> $GITHUB_ENV
 
-      - name: 🔧 安装依赖（修复版）
+      - name: 🔧 安装依赖
         run: |
           echo "=== 安装构建依赖 ==="
           sudo apt-get update
-          # 修复：移除不可用的 texinfo-doc-nonfree，使用标准包
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential gcc g++ make flex bison libgmp-dev libmpfr-dev libmpc-dev libisl-dev python3 python3-dev git wget curl zlib1g-dev liblzma-dev file gawk gettext libncurses5-dev libssl-dev python3-distutils rsync unzip ncurses-term ncurses-base libncursesw5 libtinfo5 terminfo gnutls-bin libgnutls28-dev libcurl4-gnutls-dev autoconf automake autopoint libtool pkg-config texinfo gperf cmake ninja-build patchutils bc bzip2 xz-utils help2man libexpat-dev libgdbm-dev libreadline-dev libsqlite3-dev libffi-dev lzma-dev zstd libzstd-dev libelf-dev libdw-dev libcap-dev libattr1-dev libaudit-dev libiberty-dev jq info install-info
 
       - name: 🗑️ 清理构建缓存
@@ -363,18 +373,23 @@ jobs:
             done
           fi
           echo "创建说明文件..."
-          echo "# ${{ env.ARCH_NAME }} ${{ env.LIBC_SUFFIX }} 交叉编译器" > "${{ env.OUTPUT_DIR }}/README.md"
+          echo "# ${{ env.ARCH_DIR }} ${{ env.LIBC_DIR }} 交叉编译器" > "${{ env.OUTPUT_DIR }}/README.md"
           echo "" >> "${{ env.OUTPUT_DIR }}/README.md"
           echo "## 基本信息" >> "${{ env.OUTPUT_DIR }}/README.md"
-          echo "- 架构: ${{ env.ARCH_NAME }}" >> "${{ env.OUTPUT_DIR }}/README.md"
-          echo "- C库: ${{ env.LIBC_SUFFIX }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- 架构: ${{ env.ARCH_DIR }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- C库: ${{ env.LIBC_DIR }}" >> "${{ env.OUTPUT_DIR }}/README.md"
           echo "- GCC版本: ${{ env.GCC_VERSION }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- 编译器前缀: ${{ env.PREFIX }}-" >> "${{ env.OUTPUT_DIR }}/README.md"
           echo "- 构建时间: $(date)" >> "${{ env.OUTPUT_DIR }}/README.md"
           echo "" >> "${{ env.OUTPUT_DIR }}/README.md"
           echo "## 使用方法" >> "${{ env.OUTPUT_DIR }}/README.md"
           echo '```bash' >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "# 设置环境变量" >> "${{ env.OUTPUT_DIR }}/README.md"
           echo "export STAGING_DIR=\"$(pwd)\"" >> "${{ env.OUTPUT_DIR }}/README.md"
           echo 'export PATH="$STAGING_DIR/bin:$PATH"' >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "# 验证编译器" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "${{ env.PREFIX }}-gcc --version" >> "${{ env.OUTPUT_DIR }}/README.md"
           echo '```' >> "${{ env.OUTPUT_DIR }}/README.md"
           echo "编译器保存完成"
           echo "输出目录: ${{ env.OUTPUT_DIR }}"
@@ -387,8 +402,8 @@ jobs:
           ERROR_DIR="${{ env.COMPILER_BASE_DIR }}/errors/${{ env.BUILD_ID }}"
           mkdir -p "$ERROR_DIR"
           echo "构建ID: ${{ env.BUILD_ID }}" > "$ERROR_DIR/error.log"
-          echo "架构: ${{ env.ARCH_NAME }}" >> "$ERROR_DIR/error.log"
-          echo "C库: ${{ env.LIBC_SUFFIX }}" >> "$ERROR_DIR/error.log"
+          echo "架构: ${{ env.ARCH_DIR }}" >> "$ERROR_DIR/error.log"
+          echo "C库: ${{ env.LIBC_DIR }}" >> "$ERROR_DIR/error.log"
           echo "时间: $(date)" >> "$ERROR_DIR/error.log"
           echo "错误: GMP编译失败，host工具链问题" >> "$ERROR_DIR/error.log"
           echo "构建失败，请检查依赖或尝试其他架构"
@@ -400,10 +415,10 @@ jobs:
           cd "${{ github.workspace }}"
           git config user.email "github-actions@github.com"
           git config user.name "GitHub Actions"
-          git add -f "${{ env.COMPILER_BASE_DIR }}"/*
+          git add -f "firmware-config/build-Compiler-file/compilers/*"
           if ! git diff --cached --quiet; then
             echo "检测到变更，创建提交..."
-            git commit -m "build: 添加 ${{ env.ARCH_NAME }}-${{ env.LIBC_SUFFIX }} 编译器" -m "GCC: ${{ env.GCC_VERSION }}" -m "目标: ${{ env.TARGET }}" -m "工作流: #${{ github.run_id }}"
+            git commit -m "build(compiler): 添加 ${{ env.ARCH_DIR }}-${{ env.LIBC_DIR }} 交叉编译器" -m "GCC: ${{ env.GCC_VERSION }}" -m "目标: ${{ env.TARGET }}/${{ env.SUBTARGET }}" -m "工作流: #${{ github.run_id }}"
             if git push; then
               echo "✅ 编译器已提交到仓库"
             else
@@ -421,3 +436,71 @@ jobs:
           name: build-logs-${{ env.BUILD_ID }}
           path: /tmp/*.log
           retention-days: 30
+
+  generate-index:
+    needs: build-compiler
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 检出仓库
+        uses: actions/checkout@v4
+      
+      - name: 📊 生成索引文件
+        run: |
+          echo "=== 生成编译器索引 ==="
+          BASE_DIR="${{ github.workspace }}/firmware-config/build-Compiler-file/compilers"
+          INDEX_FILE="$BASE_DIR/README.md"
+          
+          echo "# 交叉编译器库" > "$INDEX_FILE"
+          echo "" >> "$INDEX_FILE"
+          echo "## 📁 目录结构" >> "$INDEX_FILE"
+          echo '```' >> "$INDEX_FILE"
+          echo "compilers/" >> "$INDEX_FILE"
+          
+          # 扫描架构目录
+          if [ -d "$BASE_DIR" ]; then
+            for arch_dir in "$BASE_DIR"/*/; do
+              if [ -d "$arch_dir" ]; then
+                arch=$(basename "$arch_dir")
+                echo "├── $arch/" >> "$INDEX_FILE"
+                
+                for libc_dir in "$arch_dir"/*/; do
+                  if [ -d "$libc_dir" ]; then
+                    libc=$(basename "$libc_dir")
+                    echo "│   ├── $libc/" >> "$INDEX_FILE"
+                    
+                    for compiler_dir in "$libc_dir"/*/; do
+                      if [ -d "$compiler_dir" ]; then
+                        compiler=$(basename "$compiler_dir")
+                        echo "│   │   └── $compiler/" >> "$INDEX_FILE"
+                      fi
+                    done
+                  fi
+                done
+              fi
+            done
+          fi
+          
+          echo '```' >> "$INDEX_FILE"
+          echo "" >> "$INDEX_FILE"
+          echo "## 🔧 使用方法" >> "$INDEX_FILE"
+          echo '```bash' >> "$INDEX_FILE"
+          echo "# 进入对应架构目录" >> "$INDEX_FILE"
+          echo "cd firmware-config/build-Compiler-file/compilers/arm_cortex-a7/musl/gcc-12.3.0" >> "$INDEX_FILE"
+          echo "" >> "$INDEX_FILE"
+          echo "# 设置环境变量" >> "$INDEX_FILE"
+          echo "export STAGING_DIR=\"$(pwd)\"" >> "$INDEX_FILE"
+          echo 'export PATH="$STAGING_DIR/bin:$PATH"' >> "$INDEX_FILE"
+          echo '```' >> "$INDEX_FILE"
+          
+          echo "索引文件生成完成: $INDEX_FILE"
+          
+          # 提交索引文件
+          git config user.email "github-actions@github.com"
+          git config user.name "GitHub Actions"
+          git add "$INDEX_FILE"
+          if ! git diff --cached --quiet; then
+            git commit -m "docs: 更新编译器索引"
+            git push
+            echo "✅ 索引文件已提交"
+          fi
