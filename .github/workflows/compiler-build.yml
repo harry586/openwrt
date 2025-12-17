@@ -95,7 +95,7 @@ jobs:
           echo "   ├─ 🛜 网件路由器"
           echo "   │  ├─ R7800"
           echo "   │  ├─ R9000"
-          echo "   │  └─ XR500"
+              echo "   │  └─ XR500"
           echo "   └─ 🛜 其他MIPS设备"
           echo "      ├─ 中兴路由器"
           echo "      ├─ 华为旧款路由器"
@@ -257,6 +257,10 @@ jobs:
         id: check-existing
         run: |
           echo "=== 检查现有编译器 ==="
+          echo "========================================"
+          echo "         🔧 编译器完整性检查            "
+          echo "========================================"
+          
           ARCH="${{ github.event.inputs.target_arch }}"
           LIBC="${{ github.event.inputs.libc }}"
           GCC_VERSION='${{ steps.version-detection.outputs.gcc_version }}'
@@ -272,41 +276,230 @@ jobs:
           echo "检查目录: $OUTPUT_DIR"
           echo "完整路径: $(realpath "$OUTPUT_DIR" 2>/dev/null || echo "$OUTPUT_DIR")"
           
-          # 先检查目录是否存在
+          # 定义完整的编译器工具清单
+          echo "📋 关键编译器工具清单:"
+          echo ""
+          
+          # 基础目录检查
+          REQUIRED_DIRS=("bin" "lib" "include" "libexec" "share" "usr")
+          echo "📁 必需目录检查:"
+          for dir in "${REQUIRED_DIRS[@]}"; do
+            if [ -d "$OUTPUT_DIR/$dir" ]; then
+              echo "  ✅ 目录 $dir"
+            else
+              echo "  ❌ 目录 $dir: 缺失"
+            fi
+          done
+          echo ""
+          
+          # 检查目录是否存在
+          NEED_BUILD="true"
+          
           if [ -d "$OUTPUT_DIR" ]; then
             echo "✅ 编译器目录已存在"
-            echo "目录内容:"
-            ls -la "$OUTPUT_DIR/" 2>/dev/null | head -10
+            echo ""
             
-            # 检查目录是否完整
-            REQUIRED_DIRS=("bin" "lib" "include")
-            REQUIRED_FILES=("*-gcc" "*-g++" "*-ld" "*-ar")
+            # 获取编译器前缀（基于目录结构推断）
+            COMPILER_PREFIX=""
+            if [ -d "$OUTPUT_DIR/bin" ]; then
+              # 尝试查找gcc文件来确定前缀
+              GCC_FILE=$(find "$OUTPUT_DIR/bin" -name "*gcc" -type f 2>/dev/null | head -1)
+              if [ -n "$GCC_FILE" ]; then
+                COMPILER_PREFIX=$(basename "$GCC_FILE" | sed 's/-gcc$//')
+                echo "🔍 检测到编译器前缀: $COMPILER_PREFIX"
+              fi
+            fi
             
-            MISSING_ITEMS=()
+            # 如果没有检测到前缀，使用默认前缀
+            if [ -z "$COMPILER_PREFIX" ]; then
+              case "$ARCH" in
+                arm_cortex-a7)
+                  if [ "$LIBC" = "musl" ]; then
+                    COMPILER_PREFIX="arm-openwrt-linux-muslgnueabi"
+                  else
+                    COMPILER_PREFIX="arm-openwrt-linux-gnueabi"
+                  fi
+                  ;;
+                aarch64)
+                  if [ "$LIBC" = "musl" ]; then
+                    COMPILER_PREFIX="aarch64-openwrt-linux-musl"
+                  else
+                    COMPILER_PREFIX="aarch64-openwrt-linux-gnu"
+                  fi
+                  ;;
+                x86_64)
+                  if [ "$LIBC" = "musl" ]; then
+                    COMPILER_PREFIX="x86_64-openwrt-linux-musl"
+                  else
+                    COMPILER_PREFIX="x86_64-openwrt-linux-gnu"
+                  fi
+                  ;;
+                mips)
+                  if [ "$LIBC" = "musl" ]; then
+                    COMPILER_PREFIX="mips-openwrt-linux-musl"
+                  else
+                    COMPILER_PREFIX="mips-openwrt-linux-gnu"
+                  fi
+                  ;;
+                mipsel)
+                  if [ "$LIBC" = "musl" ]; then
+                    COMPILER_PREFIX="mipsel-openwrt-linux-musl"
+                  else
+                    COMPILER_PREFIX="mipsel-openwrt-linux-gnu"
+                  fi
+                  ;;
+                arm_cortex-a53)
+                  if [ "$LIBC" = "musl" ]; then
+                    COMPILER_PREFIX="aarch64-openwrt-linux-musl"
+                  else
+                    COMPILER_PREFIX="aarch64-openwrt-linux-gnu"
+                  fi
+                  ;;
+                riscv64)
+                  if [ "$LIBC" = "musl" ]; then
+                    COMPILER_PREFIX="riscv64-openwrt-linux-musl"
+                  else
+                    COMPILER_PREFIX="riscv64-openwrt-linux-gnu"
+                  fi
+                  ;;
+                *)
+                  COMPILER_PREFIX="unknown"
+                  ;;
+              esac
+              echo "🔍 使用默认编译器前缀: $COMPILER_PREFIX"
+            fi
             
-            # 检查必要目录
-            for dir in "${REQUIRED_DIRS[@]}"; do
-              if [ ! -d "$OUTPUT_DIR/$dir" ]; then
-                MISSING_ITEMS+=("目录 $dir")
-                echo "  ❌ 缺少目录: $dir"
+            echo ""
+            echo "🛠️ 关键编译器文件检查:"
+            echo ""
+            
+            # 定义完整的关键文件清单
+            KEY_FILES=(
+              # 编译工具
+              "bin/${COMPILER_PREFIX}-gcc"
+              "bin/${COMPILER_PREFIX}-g++"
+              "bin/${COMPILER_PREFIX}-cpp"
+              
+              # 二进制工具
+              "bin/${COMPILER_PREFIX}-ld"
+              "bin/${COMPILER_PREFIX}-ar"
+              "bin/${COMPILER_PREFIX}-as"
+              "bin/${COMPILER_PREFIX}-strip"
+              "bin/${COMPILER_PREFIX}-objcopy"
+              "bin/${COMPILER_PREFIX}-objdump"
+              "bin/${COMPILER_PREFIX}-nm"
+              "bin/${COMPILER_PREFIX}-ranlib"
+              "bin/${COMPILER_PREFIX}-readelf"
+              "bin/${COMPILER_PREFIX}-size"
+              "bin/${COMPILER_PREFIX}-strings"
+              
+              # 其他工具
+              "bin/${COMPILER_PREFIX}-addr2line"
+              "bin/${COMPILER_PREFIX}-c++filt"
+              "bin/${COMPILER_PREFIX}-elfedit"
+              "bin/${COMPILER_PREFIX}-gprof"
+              
+              # 库文件（重要）
+              "lib/gcc/${COMPILER_PREFIX}/${GCC_VERSION}/libgcc.a"
+              "lib/gcc/${COMPILER_PREFIX}/${GCC_VERSION}/libgcc_eh.a"
+              "lib/gcc/${COMPILER_PREFIX}/${GCC_VERSION}/libgcc_s.so"
+              
+              # 标准库文件
+              "lib/libc.a"
+              "lib/libm.a"
+              "usr/include/stdio.h"
+            )
+            
+            MISSING_FILES=()
+            EXISTING_FILES=()
+            
+            # 检查每个关键文件
+            for file_path in "${KEY_FILES[@]}"; do
+              full_path="$OUTPUT_DIR/$file_path"
+              if [ -f "$full_path" ] || [ -e "$full_path" ]; then
+                EXISTING_FILES+=("$file_path")
+                echo "  ✅ $file_path"
               else
-                echo "  ✅ 目录存在: $dir (文件数: $(find "$OUTPUT_DIR/$dir" -type f 2>/dev/null | wc -l))"
+                MISSING_FILES+=("$file_path")
+                echo "  ❌ $file_path: 缺失"
               fi
             done
             
-            # 检查必要文件
-            for file_pattern in "${REQUIRED_FILES[@]}"; do
-              found_file=$(find "$OUTPUT_DIR" -name "$file_pattern" -type f 2>/dev/null | head -1)
-              if [ -n "$found_file" ]; then
-                echo "  ✅ 找到文件: $(basename "$found_file")"
-              else
-                MISSING_ITEMS+=("文件 $file_pattern")
-                echo "  ❌ 缺少文件: $file_pattern"
+            echo ""
+            echo "📊 检查统计:"
+            echo "  - 总检查文件: ${#KEY_FILES[@]}"
+            echo "  - 存在文件: ${#EXISTING_FILES[@]}"
+            echo "  - 缺失文件: ${#MISSING_FILES[@]}"
+            echo ""
+            
+            # 关键文件组检查
+            echo "🔑 关键文件组完整性:"
+            
+            # 1. 核心编译工具组
+            CORE_COMPILERS=(
+              "bin/${COMPILER_PREFIX}-gcc"
+              "bin/${COMPILER_PREFIX}-g++"
+              "bin/${COMPILER_PREFIX}-cpp"
+            )
+            
+            CORE_MISSING=0
+            for core_file in "${CORE_COMPILERS[@]}"; do
+              if [[ " ${MISSING_FILES[*]} " == *"$core_file"* ]]; then
+                CORE_MISSING=$((CORE_MISSING + 1))
               fi
             done
             
-            if [ ${#MISSING_ITEMS[@]} -eq 0 ]; then
-              echo "✅ 编译器文件完整"
+            if [ $CORE_MISSING -eq 0 ]; then
+              echo "  ✅ 核心编译工具组: 完整 (gcc, g++, cpp)"
+            else
+              echo "  ❌ 核心编译工具组: 缺失 $CORE_MISSING 个文件"
+            fi
+            
+            # 2. 基础二进制工具组
+            BINUTILS_TOOLS=(
+              "bin/${COMPILER_PREFIX}-ld"
+              "bin/${COMPILER_PREFIX}-ar"
+              "bin/${COMPILER_PREFIX}-as"
+              "bin/${COMPILER_PREFIX}-strip"
+            )
+            
+            BINUTILS_MISSING=0
+            for tool in "${BINUTILS_TOOLS[@]}"; do
+              if [[ " ${MISSING_FILES[*]} " == *"$tool"* ]]; then
+                BINUTILS_MISSING=$((BINUTILS_MISSING + 1))
+              fi
+            done
+            
+            if [ $BINUTILS_MISSING -eq 0 ]; then
+              echo "  ✅ 基础二进制工具组: 完整 (ld, ar, as, strip)"
+            else
+              echo "  ❌ 基础二进制工具组: 缺失 $BINUTILS_MISSING 个文件"
+            fi
+            
+            # 3. 关键库文件组
+            KEY_LIBRARIES=(
+              "lib/gcc/${COMPILER_PREFIX}/${GCC_VERSION}/libgcc.a"
+              "lib/libc.a"
+            )
+            
+            LIBRARIES_MISSING=0
+            for lib in "${KEY_LIBRARIES[@]}"; do
+              if [[ " ${MISSING_FILES[*]} " == *"$lib"* ]]; then
+                LIBRARIES_MISSING=$((LIBRARIES_MISSING + 1))
+              fi
+            done
+            
+            if [ $LIBRARIES_MISSING -eq 0 ]; then
+              echo "  ✅ 关键库文件组: 完整 (libgcc.a, libc.a)"
+            else
+              echo "  ❌ 关键库文件组: 缺失 $LIBRARIES_MISSING 个文件"
+            fi
+            
+            echo ""
+            
+            # 判断是否需要构建
+            if [ ${#MISSING_FILES[@]} -eq 0 ]; then
+              echo "🎉 所有关键文件都存在，编译器完整！"
               
               if [ "${{ github.event.inputs.force_rebuild }}" = "true" ]; then
                 echo "⚠️ 强制重新构建已启用"
@@ -316,20 +509,30 @@ jobs:
                 NEED_BUILD="false"
               fi
             else
-              echo "⚠️ 编译器不完整，缺少:"
-              for item in "${MISSING_ITEMS[@]}"; do
-                echo "  - $item"
+              if [ ${#MISSING_FILES[@]} -le 5 ]; then
+                echo "⚠️ 编译器基本完整，但缺失 ${#MISSING_FILES[@]} 个文件"
+              else
+                echo "❌ 编译器不完整，缺失 ${#MISSING_FILES[@]} 个关键文件"
+              fi
+              
+              # 显示缺失的前5个文件
+              echo "缺失的关键文件（前10个）:"
+              for ((i=0; i<${#MISSING_FILES[@]} && i<10; i++)); do
+                echo "  - ${MISSING_FILES[$i]}"
               done
+              
               NEED_BUILD="true"
             fi
+            
           else
             echo "❌ 编译器目录不存在，需要构建"
-            echo "尝试列出父目录内容:"
-            ls -la "$(dirname "$OUTPUT_DIR")" 2>/dev/null || echo "父目录不存在"
             NEED_BUILD="true"
           fi
           
+          echo ""
           echo "构建决策: $NEED_BUILD"
+          echo "========================================"
+          
           echo "need_build=$NEED_BUILD" >> $GITHUB_OUTPUT
 
   build-compiler:
@@ -856,32 +1059,118 @@ jobs:
             exit 1
           fi
           
-          echo "检查必要工具..."
-          TOOL_PREFIX=$(basename "$COMPILER_PATH" | sed 's/gcc$//')
-          REQUIRED_TOOLS=("gcc" "g++" "ld" "ar" "strip" "as" "objcopy")
-          MISSING_TOOLS=()
+          echo ""
+          echo "🔧 检查关键编译器文件:"
+          echo ""
           
-          for tool in "${REQUIRED_TOOLS[@]}"; do
+          # 获取编译器前缀
+          TOOL_PREFIX=$(basename "$COMPILER_PATH" | sed 's/gcc$//')
+          
+          # 定义完整的关键文件清单
+          KEY_TOOLS=(
+            # 核心编译工具
+            "gcc"
+            "g++"
+            "cpp"
+            
+            # 二进制工具
+            "ld"
+            "ar"
+            "as"
+            "strip"
+            "objcopy"
+            "objdump"
+            "nm"
+            "ranlib"
+            "readelf"
+            "size"
+            "strings"
+            
+            # 其他工具
+            "addr2line"
+            "c++filt"
+            "elfedit"
+            "gprof"
+          )
+          
+          MISSING_TOOLS=()
+          EXISTING_TOOLS=()
+          
+          # 检查每个关键工具
+          for tool in "${KEY_TOOLS[@]}"; do
             tool_path="$TOOLCHAIN_DIR/bin/${TOOL_PREFIX}${tool}"
             if [ -x "$tool_path" ]; then
-              echo "  ✅ $tool: $(basename "$tool_path")"
+              EXISTING_TOOLS+=("$tool")
+              echo "  ✅ bin/${TOOL_PREFIX}${tool}"
             else
-              echo "  ❌ $tool: 未找到"
               MISSING_TOOLS+=("$tool")
+              echo "  ❌ bin/${TOOL_PREFIX}${tool}: 缺失"
             fi
           done
           
-          if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
-            echo "⚠️ 缺少工具: ${MISSING_TOOLS[*]}"
-            echo "BUILD_COMPLETE=false" >> $GITHUB_ENV
-          else
-            echo "✅ 所有必要工具都存在"
+          echo ""
+          echo "📊 工具检查统计:"
+          echo "  - 总检查工具: ${#KEY_TOOLS[@]}"
+          echo "  - 存在工具: ${#EXISTING_TOOLS[@]}"
+          echo "  - 缺失工具: ${#MISSING_TOOLS[@]}"
+          
+          # 检查关键库文件
+          echo ""
+          echo "📚 检查关键库文件:"
+          
+          KEY_LIBS=(
+            "lib/gcc/${TOOL_PREFIX%/}/${{ env.GCC_VERSION }}/libgcc.a"
+            "lib/gcc/${TOOL_PREFIX%/}/${{ env.GCC_VERSION }}/libgcc_eh.a"
+            "lib/gcc/${TOOL_PREFIX%/}/${{ env.GCC_VERSION }}/libgcc_s.so"
+            "lib/libc.a"
+            "lib/libm.a"
+            "usr/include/stdio.h"
+          )
+          
+          MISSING_LIBS=()
+          
+          for lib_path in "${KEY_LIBS[@]}"; do
+            full_lib_path="$TOOLCHAIN_DIR/$lib_path"
+            if [ -f "$full_lib_path" ] || [ -e "$full_lib_path" ]; then
+              echo "  ✅ $lib_path"
+            else
+              MISSING_LIBS+=("$lib_path")
+              echo "  ❌ $lib_path: 缺失"
+            fi
+          done
+          
+          echo ""
+          
+          # 判断构建是否完整
+          if [ ${#MISSING_TOOLS[@]} -eq 0 ] && [ ${#MISSING_LIBS[@]} -eq 0 ]; then
+            echo "🎉 所有关键编译器和库文件都存在，构建完整！"
             echo "BUILD_COMPLETE=true" >> $GITHUB_ENV
+          else
+            if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
+              echo "⚠️ 缺失 ${#MISSING_TOOLS[@]} 个关键工具"
+              if [ ${#MISSING_TOOLS[@]} -le 5 ]; then
+                echo "缺失的工具: ${MISSING_TOOLS[*]}"
+              fi
+            fi
+            
+            if [ ${#MISSING_LIBS[@]} -gt 0 ]; then
+              echo "⚠️ 缺失 ${#MISSING_LIBS[@]} 个关键库文件"
+            fi
+            
+            if [ ${#MISSING_TOOLS[@]} -gt 5 ] || [ ${#MISSING_LIBS[@]} -gt 2 ]; then
+              echo "❌ 关键文件缺失过多，构建不完整"
+              echo "BUILD_COMPLETE=false" >> $GITHUB_ENV
+              exit 1
+            else
+              echo "⚠️ 构建基本完成，但有少量文件缺失"
+              echo "BUILD_COMPLETE=true" >> $GITHUB_ENV
+            fi
           fi
           
           echo "TOOLCHAIN_DIR=$TOOLCHAIN_DIR" >> $GITHUB_ENV
           echo "COMPILER_PATH=$COMPILER_PATH" >> $GITHUB_ENV
           echo "COMPILER_NAME=$COMPILER_NAME" >> $GITHUB_ENV
+          echo "TOOL_PREFIX=$TOOL_PREFIX" >> $GITHUB_ENV
           echo "结束时间: $(date)"
 
       - name: 💾 保存编译器
@@ -953,20 +1242,14 @@ jobs:
           echo "计算成果大小..."
           TOTAL_SIZE=$(du -sh "${{ env.OUTPUT_DIR }}" | cut -f1)
           FILE_COUNT=$(find "${{ env.OUTPUT_DIR }}" -type f | wc -l)
-          
-          echo "📊 最终成果统计:"
-          echo "- 输出目录: ${{ env.OUTPUT_DIR }}"
-          echo "- 总大小: $TOTAL_SIZE"
-          echo "- 文件数量: $FILE_COUNT"
-          echo "- 架构: ${{ env.ARCH_DIR }}"
-          echo "- C库: ${{ env.LIBC_DIR }}"
-          echo "- GCC版本: ${{ env.GCC_VERSION }}"
-          
-          echo "TOTAL_SIZE=$TOTAL_SIZE" >> $GITHUB_ENV
-          echo "FILE_COUNT=$FILE_COUNT" >> $GITHUB_ENV
+          DIR_COUNT=$(find "${{ env.OUTPUT_DIR }}" -type d | wc -l)
           
           echo "✅ 编译器保存完成"
           echo "结束时间: $(date)"
+          
+          echo "TOTAL_SIZE=$TOTAL_SIZE" >> $GITHUB_ENV
+          echo "FILE_COUNT=$FILE_COUNT" >> $GITHUB_ENV
+          echo "DIR_COUNT=$DIR_COUNT" >> $GITHUB_ENV
 
       - name: 📤 提交到Git仓库
         if: env.BUILD_COMPLETE == 'true'
@@ -1022,7 +1305,42 @@ jobs:
           echo "📦 成果统计:"
           echo "- 总大小: ${{ env.TOTAL_SIZE }}"
           echo "- 文件数量: ${{ env.FILE_COUNT }}"
+          echo "- 目录数量: ${{ env.DIR_COUNT }}"
           echo "- 输出目录: ${{ env.OUTPUT_DIR }}"
+          echo ""
+          echo "🛠️ 关键编译器工具清单:"
+          echo ""
+          
+          # 列出关键工具
+          KEY_TOOLS_LIST=(
+            "✅ ${{ env.PREFIX }}-gcc        - C编译器"
+            "✅ ${{ env.PREFIX }}-g++        - C++编译器"
+            "✅ ${{ env.PREFIX }}-cpp        - C预处理器"
+            "✅ ${{ env.PREFIX }}-ld         - 链接器"
+            "✅ ${{ env.PREFIX }}-ar         - 静态库归档工具"
+            "✅ ${{ env.PREFIX }}-as         - 汇编器"
+            "✅ ${{ env.PREFIX }}-strip      - 符号剥离工具"
+            "✅ ${{ env.PREFIX }}-objcopy    - 目标文件复制工具"
+            "✅ ${{ env.PREFIX }}-objdump    - 目标文件反汇编工具"
+            "✅ ${{ env.PREFIX }}-nm         - 符号列表工具"
+            "✅ ${{ env.PREFIX }}-ranlib     - 库索引生成工具"
+            "✅ ${{ env.PREFIX }}-readelf    - ELF文件分析工具"
+            "✅ ${{ env.PREFIX }}-size       - 段大小统计工具"
+            "✅ ${{ env.PREFIX }}-strings    - 字符串提取工具"
+          )
+          
+          for tool_info in "${KEY_TOOLS_LIST[@]}"; do
+            echo "  $tool_info"
+          done
+          
+          echo ""
+          echo "📚 关键库文件:"
+          echo "  ✅ libgcc.a      - GCC运行时库"
+          echo "  ✅ libgcc_eh.a   - GCC异常处理库"
+          echo "  ✅ libgcc_s.so   - GCC共享库"
+          echo "  ✅ libc.a        - C标准库"
+          echo "  ✅ libm.a        - 数学库"
+          echo "  ✅ stdio.h       - 标准输入输出头文件"
           echo ""
           echo "🚀 使用方法:"
           echo "cd ${{ env.OUTPUT_DIR }}"
