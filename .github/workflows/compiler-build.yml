@@ -187,12 +187,23 @@ jobs:
       glibc_version: ${{ steps.version-detection.outputs.glibc_version }}
       need_build: ${{ steps.check-existing.outputs.need_build }}
     steps:
+      - name: 📥 检出仓库（用于检查现有编译器）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            firmware-config/build-Compiler-file/compilers
+          sparse-checkout-cone-mode: false
+
       - name: 🏗️ 初始化
         run: |
           echo "=== 交叉编译器构建系统 ==="
           mkdir -p "${{ env.COMPILER_BASE_DIR }}"
           echo "基础目录: ${{ env.COMPILER_BASE_DIR }}"
           echo "开始时间: $(date)"
+          
+          echo "当前工作区内容:"
+          ls -la "${{ github.workspace }}/firmware-config/build-Compiler-file/compilers" 2>/dev/null || echo "编译器目录不存在"
 
       - name: 🔍 动态检测GCC版本
         id: version-detection
@@ -259,11 +270,13 @@ jobs:
           OUTPUT_DIR="${{ env.COMPILER_BASE_DIR }}/${ARCH}/${LIBC_DIR}/gcc-${GCC_VERSION}"
           
           echo "检查目录: $OUTPUT_DIR"
+          echo "完整路径: $(realpath "$OUTPUT_DIR" 2>/dev/null || echo "$OUTPUT_DIR")"
           
-          NEED_BUILD="true"
-          
+          # 先检查目录是否存在
           if [ -d "$OUTPUT_DIR" ]; then
             echo "✅ 编译器目录已存在"
+            echo "目录内容:"
+            ls -la "$OUTPUT_DIR/" 2>/dev/null | head -10
             
             # 检查目录是否完整
             REQUIRED_DIRS=("bin" "lib" "include")
@@ -275,13 +288,20 @@ jobs:
             for dir in "${REQUIRED_DIRS[@]}"; do
               if [ ! -d "$OUTPUT_DIR/$dir" ]; then
                 MISSING_ITEMS+=("目录 $dir")
+                echo "  ❌ 缺少目录: $dir"
+              else
+                echo "  ✅ 目录存在: $dir (文件数: $(find "$OUTPUT_DIR/$dir" -type f 2>/dev/null | wc -l))"
               fi
             done
             
             # 检查必要文件
             for file_pattern in "${REQUIRED_FILES[@]}"; do
-              if ! find "$OUTPUT_DIR" -name "$file_pattern" -type f | head -1 | grep -q .; then
+              found_file=$(find "$OUTPUT_DIR" -name "$file_pattern" -type f 2>/dev/null | head -1)
+              if [ -n "$found_file" ]; then
+                echo "  ✅ 找到文件: $(basename "$found_file")"
+              else
                 MISSING_ITEMS+=("文件 $file_pattern")
+                echo "  ❌ 缺少文件: $file_pattern"
               fi
             done
             
@@ -304,6 +324,8 @@ jobs:
             fi
           else
             echo "❌ 编译器目录不存在，需要构建"
+            echo "尝试列出父目录内容:"
+            ls -la "$(dirname "$OUTPUT_DIR")" 2>/dev/null || echo "父目录不存在"
             NEED_BUILD="true"
           fi
           
