@@ -1,5 +1,5 @@
 # .github/workflows/compiler-matrix-build.yml
-name: 🔧 交叉编译器矩阵构建
+name: 🔧 交叉编译器构建
 
 on:
   workflow_dispatch:
@@ -277,7 +277,7 @@ jobs:
           fi
           echo "配置文件生成完成"
 
-      - name: 🔨 编译工具链
+      - name: 🔨 编译工具链（修复版）
         timeout-minutes: 150
         run: |
           echo "=== 开始编译工具链 ==="
@@ -296,18 +296,14 @@ jobs:
           export ABI=64
           export CC="gcc"
           export CXX="g++"
-          echo "步骤4: 使用更简单的方法构建工具链..."
-          make toolchain/download V=s 2>&1 | tee /tmp/download.log
+          echo "步骤4: 下载源码包..."
+          mkdir -p dl
+          make -j1 download V=s 2>&1 | tee /tmp/download.log
           echo "步骤5: 直接编译交叉工具链..."
-          make toolchain/compile V=s 2>&1 | tee /tmp/compile.log || true
-          if [ $? -ne 0 ]; then
-            echo "第一次编译失败，尝试简化构建..."
-            rm -rf build_dir/host/gmp-* 2>/dev/null || true
-            make toolchain/compile V=s 2>&1 | tee /tmp/compile2.log || true
-          fi
+          make toolchain/compile V=s 2>&1 | tee /tmp/compile.log
           echo "步骤6: 安装工具链..."
-          make toolchain/install V=s 2>&1 | tee /tmp/install.log || true
-          echo "✅ 工具链构建尝试完成"
+          make toolchain/install V=s 2>&1 | tee /tmp/install.log
+          echo "✅ 工具链构建完成"
           echo "结束时间: $(date)"
 
       - name: ✅ 检查构建结果
@@ -405,25 +401,42 @@ jobs:
           echo "架构: ${{ env.ARCH_DIR }}" >> "$ERROR_DIR/error.log"
           echo "C库: ${{ env.LIBC_DIR }}" >> "$ERROR_DIR/error.log"
           echo "时间: $(date)" >> "$ERROR_DIR/error.log"
-          echo "错误: GMP编译失败，host工具链问题" >> "$ERROR_DIR/error.log"
+          echo "错误: 工具链构建失败" >> "$ERROR_DIR/error.log"
           echo "构建失败，请检查依赖或尝试其他架构"
 
-      - name: 📤 提交到Git仓库
+      - name: 📤 提交到Git仓库（修复Git冲突）
         if: env.BUILD_SUCCESS == 'true'
         run: |
           echo "=== 提交编译器到Git仓库 ==="
           cd "${{ github.workspace }}"
+          
+          # 修复：配置Git避免分支冲突
           git config user.email "github-actions@github.com"
           git config user.name "GitHub Actions"
+          git config pull.rebase false
+          
+          # 先拉取最新代码
+          echo "拉取最新代码..."
+          git pull origin main --no-edit
+          
+          # 添加编译器文件
+          echo "添加编译器文件..."
           git add -f "firmware-config/build-Compiler-file/compilers/*"
+          
           if ! git diff --cached --quiet; then
             echo "检测到变更，创建提交..."
+            
+            # 创建提交
             git commit -m "build(compiler): 添加 ${{ env.ARCH_DIR }}-${{ env.LIBC_DIR }} 交叉编译器" -m "GCC: ${{ env.GCC_VERSION }}" -m "目标: ${{ env.TARGET }}/${{ env.SUBTARGET }}" -m "工作流: #${{ github.run_id }}"
-            if git push; then
-              echo "✅ 编译器已提交到仓库"
+            
+            # 推送
+            echo "推送到仓库..."
+            if git push origin main; then
+              echo "✅ 编译器已成功提交到仓库"
             else
-              git pull origin main
-              git push
+              echo "⚠️ 推送失败，重新尝试..."
+              git pull origin main --rebase
+              git push origin main
             fi
           else
             echo "没有变更需要提交"
@@ -437,70 +450,17 @@ jobs:
           path: /tmp/*.log
           retention-days: 30
 
-  generate-index:
+  cleanup:
     needs: build-compiler
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: 📥 检出仓库
-        uses: actions/checkout@v4
-      
-      - name: 📊 生成索引文件
+      - name: 📋 生成构建报告
         run: |
-          echo "=== 生成编译器索引 ==="
-          BASE_DIR="${{ github.workspace }}/firmware-config/build-Compiler-file/compilers"
-          INDEX_FILE="$BASE_DIR/README.md"
-          
-          echo "# 交叉编译器库" > "$INDEX_FILE"
-          echo "" >> "$INDEX_FILE"
-          echo "## 📁 目录结构" >> "$INDEX_FILE"
-          echo '```' >> "$INDEX_FILE"
-          echo "compilers/" >> "$INDEX_FILE"
-          
-          # 扫描架构目录
-          if [ -d "$BASE_DIR" ]; then
-            for arch_dir in "$BASE_DIR"/*/; do
-              if [ -d "$arch_dir" ]; then
-                arch=$(basename "$arch_dir")
-                echo "├── $arch/" >> "$INDEX_FILE"
-                
-                for libc_dir in "$arch_dir"/*/; do
-                  if [ -d "$libc_dir" ]; then
-                    libc=$(basename "$libc_dir")
-                    echo "│   ├── $libc/" >> "$INDEX_FILE"
-                    
-                    for compiler_dir in "$libc_dir"/*/; do
-                      if [ -d "$compiler_dir" ]; then
-                        compiler=$(basename "$compiler_dir")
-                        echo "│   │   └── $compiler/" >> "$INDEX_FILE"
-                      fi
-                    done
-                  fi
-                done
-              fi
-            done
-          fi
-          
-          echo '```' >> "$INDEX_FILE"
-          echo "" >> "$INDEX_FILE"
-          echo "## 🔧 使用方法" >> "$INDEX_FILE"
-          echo '```bash' >> "$INDEX_FILE"
-          echo "# 进入对应架构目录" >> "$INDEX_FILE"
-          echo "cd firmware-config/build-Compiler-file/compilers/arm_cortex-a7/musl/gcc-12.3.0" >> "$INDEX_FILE"
-          echo "" >> "$INDEX_FILE"
-          echo "# 设置环境变量" >> "$INDEX_FILE"
-          echo "export STAGING_DIR=\"$(pwd)\"" >> "$INDEX_FILE"
-          echo 'export PATH="$STAGING_DIR/bin:$PATH"' >> "$INDEX_FILE"
-          echo '```' >> "$INDEX_FILE"
-          
-          echo "索引文件生成完成: $INDEX_FILE"
-          
-          # 提交索引文件
-          git config user.email "github-actions@github.com"
-          git config user.name "GitHub Actions"
-          git add "$INDEX_FILE"
-          if ! git diff --cached --quiet; then
-            git commit -m "docs: 更新编译器索引"
-            git push
-            echo "✅ 索引文件已提交"
-          fi
+          echo "=== 构建报告 ==="
+          echo "构建ID: ${{ needs.build-compiler.outputs.BUILD_ID || 'N/A' }}"
+          echo "架构: ${{ needs.build-compiler.outputs.ARCH_DIR || 'N/A' }}"
+          echo "C库: ${{ needs.build-compiler.outputs.LIBC_DIR || 'N/A' }}"
+          echo "GCC版本: ${{ needs.build-compiler.outputs.GCC_VERSION || 'N/A' }}"
+          echo "构建状态: ${{ needs.build-compiler.result }}"
+          echo "报告时间: $(date)"
