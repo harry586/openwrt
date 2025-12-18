@@ -700,6 +700,11 @@ jobs:
           echo "=== 安装构建依赖 ==="
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential gcc g++ make flex bison libgmp-dev libmpfr-dev libmpc-dev libisl-dev python3 python3-dev python3-pip git wget curl zlib1g-dev liblzma-dev file gawk gettext libncurses5-dev libssl-dev python3-distutils rsync unzip ncurses-term autoconf automake libtool pkg-config texinfo gperf cmake ninja-build patchutils bc bzip2 xz-utils help2man libexpat-dev libgdbm-dev libreadline-dev libsqlite3-dev libffi-dev lzma-dev zstd libzstd-dev libelf-dev libdw-dev jq texlive texlive-latex-extra texlive-fonts-extra doxygen graphviz locales locales-all sudo apt-utils dialog man-db manpages manpages-dev
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ncurses-term ncurses-base ncurses-bin libncursesw5 libncursesw5-dev libtinfo5 libtinfo-dev terminfo
+          export TERM=xterm-256color
+          export TERMINFO=/usr/share/terminfo
+          echo "export TERM=xterm-256color" >> ~/.bashrc
+          echo "export TERMINFO=/usr/share/terminfo" >> ~/.bashrc
           sudo locale-gen en_US.UTF-8
           export LANG=en_US.UTF-8
           export LC_ALL=en_US.UTF-8
@@ -733,7 +738,6 @@ jobs:
           cd "${{ env.BUILD_DIR }}"
           CONFIG_FILE=".config"
           > $CONFIG_FILE
-          # 目标配置
           echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> $CONFIG_FILE
           echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> $CONFIG_FILE
           echo "CONFIG_TARGET_BOARD=\"${{ env.TARGET }}\"" >> $CONFIG_FILE
@@ -741,14 +745,12 @@ jobs:
           echo "CONFIG_TARGET_ARCH_PACKAGES=\"${{ env.ARCH_NAME }}\"" >> $CONFIG_FILE
           echo "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" >> $CONFIG_FILE
           echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" >> $CONFIG_FILE
-          # 工具链配置
           echo "CONFIG_BUILD_TOOLCHAIN=y" >> $CONFIG_FILE
           echo "CONFIG_TOOLCHAINOPTS=y" >> $CONFIG_FILE
           echo "CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"" >> $CONFIG_FILE
           echo "CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"" >> $CONFIG_FILE
           echo "CONFIG_LINUX_VERSION=\"${{ env.LINUX_VERSION }}\"" >> $CONFIG_FILE
           echo "CONFIG_LIBC=\"${{ env.LIBC_SUFFIX }}\"" >> $CONFIG_FILE
-          # C库配置
           if [ "${{ env.USE_MUSL }}" = "y" ]; then
             echo "CONFIG_USE_MUSL=y" >> $CONFIG_FILE
             echo "CONFIG_MUSL_VERSION=\"${{ needs.setup.outputs.musl_version }}\"" >> $CONFIG_FILE
@@ -756,9 +758,7 @@ jobs:
             echo "CONFIG_USE_GLIBC=y" >> $CONFIG_FILE
             echo "CONFIG_GLIBC_VERSION=\"${{ needs.setup.outputs.glibc_version }}\"" >> $CONFIG_FILE
           fi
-          # 架构配置
           echo "CONFIG_ARCH_${{ env.ARCH_NAME }}=y" >> $CONFIG_FILE
-          # 处理器配置
           if [ "${{ env.ARCH_NAME }}" = "arm" ] || [ "${{ env.ARCH_NAME }}" = "aarch64" ]; then
             echo "CONFIG_CPU_TYPE=\"${{ env.CPU_TYPE }}\"" >> $CONFIG_FILE
             echo "CONFIG_CPU_TUNE=\"${{ env.TUNE }}\"" >> $CONFIG_FILE
@@ -768,7 +768,6 @@ jobs:
           elif [ "${{ env.ARCH_NAME }}" = "mips" ] || [ "${{ env.ARCH_NAME }}" = "mipsel" ]; then
             echo "CONFIG_CPU_TYPE=\"${{ env.CPU_TYPE }}\"" >> $CONFIG_FILE
           fi
-          # 其他配置
           echo "CONFIG_DEVEL=y" >> $CONFIG_FILE
           echo "CONFIG_BUILD_PATENTED=y" >> $CONFIG_FILE
           echo "CONFIG_CCACHE=n" >> $CONFIG_FILE
@@ -781,27 +780,63 @@ jobs:
           echo "CONFIG_EXTERNAL_TOOLCHAIN=n" >> $CONFIG_FILE
           echo "配置文件生成完成，共 $(wc -l < $CONFIG_FILE) 行"
 
-      - name: 🛠️ 应用配置（非交互式）
+      - name: 🔧 修复网络和终端环境
         run: |
-          echo "=== 应用配置（非交互式）==="
+          echo "=== 修复网络和终端环境 ==="
           cd "${{ env.BUILD_DIR }}"
-          # 创建必要的目录
-          mkdir -p include/site
-          mkdir -p tmp
-          # 设置环境变量避免交互
+          git config --global http.postBuffer 524288000
+          git config --global http.lowSpeedLimit 0
+          git config --global http.lowSpeedTime 999999
+          git config --global core.compression 0
+          git config --global core.looseCompression 0
           export FORCE_UNSAFE_CONFIGURE=1
           export TERM=dumb
           export DEBIAN_FRONTEND=noninteractive
-          # 直接使用make olddefconfig而不是defconfig
-          echo "应用配置..."
-          yes "" | make olddefconfig 2>&1 | tee /tmp/olddefconfig.log
-          if [ ${PIPESTATUS[0]} -eq 0 ]; then
-            echo "✅ 配置应用成功"
-          else
-            echo "⚠️ 配置应用有警告，继续..."
+          export GIT_SSL_NO_VERIFY=1
+          export PYTHONHTTPSVERIFY=0
+          export CURL_SSL_NO_VERIFY=1
+          mkdir -p include/site
+          mkdir -p tmp
+          echo "✅ 网络和终端环境修复完成"
+
+      - name: 🛠️ 应用配置（非交互式修复版）
+        run: |
+          echo "=== 应用配置（非交互式修复版）==="
+          cd "${{ env.BUILD_DIR }}"
+          if [ -f ".config" ]; then
+            cp .config .config.original
+            echo "✅ 已备份原始配置文件"
           fi
-          echo "配置摘要:"
-          grep -E "CONFIG_TARGET|CONFIG_BUILD_TOOLCHAIN|CONFIG_GCC|CONFIG_LIBC" .config || true
+          echo "🚨 关键修复：使用自定义的defconfig脚本，避免交互式输入"
+          echo "🔄 运行 make defconfig (自动回答)..."
+          export FORCE_UNSAFE_CONFIGURE=1
+          export TERM=dumb
+          export DEBIAN_FRONTEND=noninteractive
+          mkdir -p include/site
+          mkdir -p tmp
+          echo "使用管道处理所有提示..."
+          yes "" | make defconfig 2>&1 | tee /tmp/defconfig_output.log
+          exit_code=${PIPESTATUS[0]}
+          echo "defconfig退出代码: $exit_code"
+          if [ $exit_code -eq 0 ]; then
+            echo "✅ defconfig成功"
+            if [ -f ".config" ]; then
+              config_lines=$(wc -l < .config)
+              echo "配置文件行数: $config_lines"
+            else
+              echo "❌ 配置文件未生成"
+              exit 1
+            fi
+          else
+            echo "❌ defconfig失败"
+            echo "错误输出:"
+            tail -20 /tmp/defconfig_output.log
+            exit 1
+          fi
+          echo ""
+          echo "📋 配置摘要:"
+          grep -E "CONFIG_TARGET|CONFIG_BUILD_TOOLCHAIN|CONFIG_GCC|CONFIG_LIBC" .config 2>/dev/null | head -20 || echo "无法获取配置摘要"
+          echo "✅ 配置应用完成"
 
       - name: 🔨 编译工具链
         timeout-minutes: 150
@@ -814,13 +849,28 @@ jobs:
           echo "系统信息:"
           echo "- CPU核心: $(nproc)"
           echo "- 内存: $(free -h | grep Mem | awk '{print $2}')"
-          # 下载源码
           echo "下载源码包..."
           mkdir -p dl
-          make -j1 download V=s 2>&1 | tail -20
-          # 编译工具链
+          make -j1 download V=s 2>&1 | tail -30
+          DOWNLOAD_STATUS=${PIPESTATUS[0]}
+          if [ $DOWNLOAD_STATUS -eq 0 ]; then
+            echo "✅ 源码包下载成功"
+          else
+            echo "⚠️ 源码包下载有警告，继续..."
+          fi
           echo "编译工具链..."
-          make toolchain/compile -j$(nproc) V=s 2>&1 | tee /tmp/compile.log
+          CPU_CORES=$(nproc)
+          MAKE_JOBS=$CPU_CORES
+          TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
+          if [ $TOTAL_MEM -lt 4096 ]; then
+            MAKE_JOBS=$((CPU_CORES / 2))
+            if [ $MAKE_JOBS -lt 1 ]; then
+              MAKE_JOBS=1
+            fi
+            echo "⚠️ 内存较低(${TOTAL_MEM}MB)，减少并行任务到 $MAKE_JOBS"
+          fi
+          echo "使用 $MAKE_JOBS 个并行任务进行编译..."
+          make toolchain/compile -j$MAKE_JOBS V=s 2>&1 | tee /tmp/compile.log
           COMPILE_STATUS=${PIPESTATUS[0]}
           if [ $COMPILE_STATUS -eq 0 ]; then
             echo "✅ 工具链编译成功"
@@ -830,9 +880,8 @@ jobs:
             grep -E "Error:|error:|failed:" /tmp/compile.log | tail -20
             exit 1
           fi
-          # 安装工具链
           echo "安装工具链..."
-          make toolchain/install -j$(nproc) V=s 2>&1 | tee /tmp/install.log
+          make toolchain/install -j$MAKE_JOBS V=s 2>&1 | tee /tmp/install.log
           INSTALL_STATUS=${PIPESTATUS[0]}
           if [ $INSTALL_STATUS -eq 0 ]; then
             echo "✅ 工具链安装成功"
@@ -887,9 +936,22 @@ jobs:
           mkdir -p "${{ env.OUTPUT_DIR }}"
           if [ -d "${{ env.OUTPUT_DIR }}" ] && [ "$(ls -A "${{ env.OUTPUT_DIR }}" 2>/dev/null)" ]; then
             rm -rf "${{ env.OUTPUT_DIR }}"/*
+            echo "✅ 清理输出目录"
           fi
           echo "复制工具链..."
+          if [ ! -d "$TOOLCHAIN_DIR" ]; then
+            echo "❌ 工具链目录不存在: $TOOLCHAIN_DIR"
+            exit 1
+          fi
           cp -r "$TOOLCHAIN_DIR"/* "${{ env.OUTPUT_DIR }}/" 2>&1 | grep -v "cannot stat" || true
+          if [ -d "${{ env.OUTPUT_DIR }}/bin" ]; then
+            echo "✅ 工具链复制成功"
+            file_count=$(find "${{ env.OUTPUT_DIR }}" -type f 2>/dev/null | wc -l)
+            echo "📊 复制文件数: $file_count"
+          else
+            echo "❌ 工具链复制失败，bin目录不存在"
+            exit 1
+          fi
           echo "创建元数据..."
           echo "{" > "${{ env.OUTPUT_DIR }}/metadata.json"
           echo "  \"architecture\": \"${{ env.ARCH_DIR }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
