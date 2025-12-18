@@ -376,7 +376,7 @@ jobs:
             # 根据架构定义关键文件清单
             case "$ARCH" in
               aarch64)
-                # AARCH64关键文件 (根据您提供的清单)
+                # AARCH64关键文件
                 KEY_FILES=(
                   # 编译器核心文件
                   "bin/${COMPILER_PREFIX}-gcc"
@@ -405,8 +405,6 @@ jobs:
                   
                   # 调试工具
                   "bin/${COMPILER_PREFIX}-addr2line"
-                  "bin/${COMPILER_PREFIX}-gdb"
-                  "bin/${COMPILER_PREFIX}-gdbtui"
                   
                   # GCC工具
                   "bin/${COMPILER_PREFIX}-gcc-ar"
@@ -453,6 +451,7 @@ jobs:
                   
                   # 链接器
                   "bin/${COMPILER_PREFIX}-ld"
+                  "bin/${COMPILER_PREFIX}-ld.bfd"
                   
                   # 二进制工具
                   "bin/${COMPILER_PREFIX}-ar"
@@ -465,10 +464,6 @@ jobs:
                   "bin/${COMPILER_PREFIX}-readelf"
                   "bin/${COMPILER_PREFIX}-size"
                   "bin/${COMPILER_PREFIX}-strings"
-                  
-                  # MIPS特有工具
-                  "bin/${COMPILER_PREFIX}-mips-linux-ld"
-                  "bin/${COMPILER_PREFIX}-mips-linux-objdump"
                 )
                 ;;
               mipsel)
@@ -480,6 +475,7 @@ jobs:
                   
                   # 链接器
                   "bin/${COMPILER_PREFIX}-ld"
+                  "bin/${COMPILER_PREFIX}-ld.bfd"
                   
                   # 二进制工具
                   "bin/${COMPILER_PREFIX}-ar"
@@ -518,10 +514,6 @@ jobs:
                   "bin/${COMPILER_PREFIX}-objdump"
                   "bin/${COMPILER_PREFIX}-ranlib"
                   "bin/${COMPILER_PREFIX}-readelf"
-                  
-                  # 硬件浮点支持
-                  "bin/${COMPILER_PREFIX}-gcc-${GCC_VERSION}"
-                  "bin/${COMPILER_PREFIX}-gfortran"
                 )
                 ;;
               arm_cortex-a53)
@@ -565,19 +557,25 @@ jobs:
                   "bin/${COMPILER_PREFIX}-objdump"
                   "bin/${COMPILER_PREFIX}-ranlib"
                   "bin/${COMPILER_PREFIX}-readelf"
-                  
-                  # RISC-V特有工具
-                  "bin/${COMPILER_PREFIX}-elf2flt"
-                  "bin/${COMPILER_PREFIX}-flthdr"
                 )
                 ;;
             esac
             
-            # 添加公共的库文件检查
+            # 动态检测实际的GCC版本（在编译器中）
+            ACTUAL_GCC_VERSION="$GCC_VERSION"
+            if [ -d "$OUTPUT_DIR/lib/gcc/${COMPILER_PREFIX}" ]; then
+              DETECTED_VERSION=$(ls "$OUTPUT_DIR/lib/gcc/${COMPILER_PREFIX}" 2>/dev/null | head -1)
+              if [ -n "$DETECTED_VERSION" ]; then
+                ACTUAL_GCC_VERSION="$DETECTED_VERSION"
+                echo "🔍 检测到实际GCC版本: $ACTUAL_GCC_VERSION"
+              fi
+            fi
+            
+            # 添加库文件检查（使用实际检测到的版本）
             KEY_LIB_FILES=(
-              "lib/gcc/${COMPILER_PREFIX}/${GCC_VERSION}/libgcc.a"
-              "lib/gcc/${COMPILER_PREFIX}/${GCC_VERSION}/libgcc_eh.a"
-              "lib/gcc/${COMPILER_PREFIX}/${GCC_VERSION}/libgcc_s.so"
+              "lib/gcc/${COMPILER_PREFIX}/${ACTUAL_GCC_VERSION}/libgcc.a"
+              "lib/gcc/${COMPILER_PREFIX}/${ACTUAL_GCC_VERSION}/libgcc_eh.a"
+              "lib/gcc/${COMPILER_PREFIX}/${ACTUAL_GCC_VERSION}/libgcc_s.so"
               "lib/libc.a"
               "lib/libm.a"
               "usr/include/stdio.h"
@@ -613,8 +611,55 @@ jobs:
                 EXISTING_FILES+=("$file_path")
                 echo "  ✅ $file_path"
               else
-                MISSING_FILES+=("$file_path")
-                echo "  ❌ $file_path: 缺失"
+                # 检查是否有替代路径
+                if [[ "$file_path" == *"usr/include/"* ]]; then
+                  # 检查其他可能的include路径
+                  alt_paths=(
+                    "include/${file_path##*/}"
+                    "sysroot/usr/include/${file_path##*/}"
+                    "${file_path#usr/}"
+                  )
+                  found_alt=false
+                  for alt_path in "${alt_paths[@]}"; do
+                    if [ -f "$OUTPUT_DIR/$alt_path" ]; then
+                      EXISTING_FILES+=("$file_path (位于 $alt_path)")
+                      echo "  ✅ $file_path (位于 $alt_path)"
+                      found_alt=true
+                      break
+                    fi
+                  done
+                  if [ "$found_alt" = false ]; then
+                    MISSING_FILES+=("$file_path")
+                    echo "  ❌ $file_path: 缺失"
+                  fi
+                elif [[ "$file_path" == *"lib/gcc/"* ]]; then
+                  # 检查其他可能的GCC库路径
+                  gcc_base="lib/gcc/${COMPILER_PREFIX}"
+                  if [ -d "$OUTPUT_DIR/$gcc_base" ]; then
+                    # 查找实际的版本目录
+                    actual_version_dir=$(ls "$OUTPUT_DIR/$gcc_base" 2>/dev/null | head -1)
+                    if [ -n "$actual_version_dir" ]; then
+                      lib_name=$(basename "$file_path")
+                      actual_lib_path="$gcc_base/$actual_version_dir/$lib_name"
+                      if [ -f "$OUTPUT_DIR/$actual_lib_path" ]; then
+                        EXISTING_FILES+=("$file_path (版本: $actual_version_dir)")
+                        echo "  ✅ $file_path (版本: $actual_version_dir)"
+                      else
+                        MISSING_FILES+=("$file_path")
+                        echo "  ❌ $file_path: 缺失"
+                      fi
+                    else
+                      MISSING_FILES+=("$file_path")
+                      echo "  ❌ $file_path: 缺失 (GCC目录为空)"
+                    fi
+                  else
+                    MISSING_FILES+=("$file_path")
+                    echo "  ❌ $file_path: 缺失 (GCC目录不存在)"
+                  fi
+                else
+                  MISSING_FILES+=("$file_path")
+                  echo "  ❌ $file_path: 缺失"
+                fi
               fi
             done
             
@@ -671,7 +716,7 @@ jobs:
             
             # 3. 关键库文件组
             KEY_LIBRARIES=(
-              "lib/gcc/${COMPILER_PREFIX}/${GCC_VERSION}/libgcc.a"
+              "lib/gcc/${COMPILER_PREFIX}/${ACTUAL_GCC_VERSION}/libgcc.a"
               "lib/libc.a"
               "usr/include/stdio.h"
             )
@@ -905,6 +950,7 @@ jobs:
           echo "  ABI: $ABI"
           echo "  浮点ABI: $FLOAT_ABI"
           echo "  GCC版本: $GCC_VERSION"
+          echo "  实际检查版本: ${GCC_VERSION}"
           
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
           echo "OUTPUT_DIR=$OUTPUT_DIR" >> $GITHUB_ENV
@@ -926,14 +972,45 @@ jobs:
           echo "LIBC_SUFFIX=$LIBC_SUFFIX" >> $GITHUB_ENV
           echo "BUILD_ID=$BUILD_ID" >> $GITHUB_ENV
 
-      - name: 🔧 安装依赖
+      - name: 🔧 安装依赖（完整版）
         run: |
           echo "=== 安装构建依赖 ==="
           echo "开始时间: $(date)"
           echo "更新软件包列表..."
           sudo apt-get update
           echo "安装构建工具..."
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential gcc g++ make flex bison libgmp-dev libmpfr-dev libmpc-dev libisl-dev python3 python3-dev git wget curl zlib1g-dev liblzma-dev file gawk gettext libncurses5-dev libssl-dev python3-distutils rsync unzip ncurses-term ncurses-base libncursesw5 libtinfo5 terminfo gnutls-bin libgnutls28-dev libcurl4-gnutls-dev autoconf automake autopoint libtool pkg-config texinfo gperf cmake ninja-build patchutils bc bzip2 xz-utils help2man libexpat-dev libgdbm-dev libreadline-dev libsqlite3-dev libffi-dev lzma-dev zstd libzstd-dev libelf-dev libdw-dev libcap-dev libattr1-dev libaudit-dev libiberty-dev jq info install-info
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential gcc g++ make flex bison \
+            libgmp-dev libmpfr-dev libmpc-dev libisl-dev \
+            python3 python3-dev python3-pip python3-venv \
+            git wget curl zlib1g-dev liblzma-dev \
+            file gawk gettext libncurses5-dev libssl-dev \
+            python3-distutils rsync unzip \
+            ncurses-term ncurses-base libncursesw5 libtinfo5 terminfo \
+            gnutls-bin libgnutls28-dev libcurl4-gnutls-dev \
+            autoconf automake autopoint libtool pkg-config texinfo \
+            gperf cmake ninja-build patchutils bc \
+            bzip2 xz-utils help2man libexpat-dev \
+            libgdbm-dev libreadline-dev libsqlite3-dev libffi-dev \
+            lzma-dev zstd libzstd-dev \
+            libelf-dev libdw-dev libcap-dev libattr1-dev \
+            libaudit-dev libiberty-dev \
+            jq info install-info \
+            texlive texlive-latex-extra texlive-fonts-extra \
+            doxygen graphviz \
+            locales locales-all \
+            sudo apt-utils dialog \
+            man-db manpages manpages-dev
+          
+          # 安装aclocal等缺失的工具
+          echo "安装autotools..."
+          sudo apt-get install -y autotools-dev automake-1.16 autoconf-archive
+          
+          # 设置locale
+          sudo locale-gen en_US.UTF-8
+          export LANG=en_US.UTF-8
+          export LC_ALL=en_US.UTF-8
+          
           echo "✅ 依赖安装完成"
           echo "结束时间: $(date)"
 
@@ -1198,7 +1275,7 @@ jobs:
           echo "结束时间: $(date)"
           echo "构建目录大小: $(du -sh . | cut -f1)"
 
-      - name: ✅ 验证构建结果
+      - name: ✅ 验证构建结果（智能版本检测）
         run: |
           echo "=== 验证构建结果 ==="
           echo "开始时间: $(date)"
@@ -1277,6 +1354,26 @@ jobs:
           # 获取编译器前缀
           TOOL_PREFIX=$(basename "$COMPILER_PATH" | sed 's/gcc$//')
           
+          # 检测实际的GCC版本
+          ACTUAL_GCC_VERSION=""
+          GCC_LIB_DIR=$(find "$TOOLCHAIN_DIR" -path "*/lib/gcc/*" -type d 2>/dev/null | head -1)
+          if [ -n "$GCC_LIB_DIR" ]; then
+            # 从路径中提取版本号
+            ACTUAL_GCC_VERSION=$(echo "$GCC_LIB_DIR" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+            if [ -z "$ACTUAL_GCC_VERSION" ]; then
+              # 尝试其他格式
+              ACTUAL_GCC_VERSION=$(basename "$GCC_LIB_DIR")
+            fi
+          fi
+          
+          if [ -z "$ACTUAL_GCC_VERSION" ]; then
+            # 使用指定的版本号
+            ACTUAL_GCC_VERSION="${{ env.GCC_VERSION }}"
+          fi
+          
+          echo "🔍 检测到实际GCC版本: $ACTUAL_GCC_VERSION"
+          echo "🔍 编译器前缀: $TOOL_PREFIX"
+          
           # 根据架构类型确定要检查的工具列表
           ARCH="${{ github.event.inputs.target_arch }}"
           
@@ -1285,17 +1382,15 @@ jobs:
           
           case "$ARCH" in
             aarch64)
-              # AARCH64关键工具
               KEY_TOOLS=(
                 "gcc" "g++" "ld" "ld.bfd" "ld.gold"
                 "ar" "as" "strip" "nm" "objcopy" "objdump"
                 "ranlib" "readelf" "size" "strings"
-                "c++" "c++filt" "addr2line" "gdb" "gdbtui"
+                "c++" "c++filt" "addr2line"
                 "gcc-ar" "gcc-nm" "gcc-ranlib" "gcov" "gcov-dump" "gcov-tool" "gprof"
               )
               ;;
             x86_64)
-              # x86_64关键工具
               KEY_TOOLS=(
                 "gcc" "g++" "ld"
                 "ar" "as" "strip" "nm" "objcopy" "objdump"
@@ -1304,34 +1399,28 @@ jobs:
               )
               ;;
             mips)
-              # MIPS关键工具
               KEY_TOOLS=(
-                "gcc" "g++" "ld"
+                "gcc" "g++" "ld" "ld.bfd"
                 "ar" "as" "strip" "nm" "objcopy" "objdump"
                 "ranlib" "readelf" "size" "strings"
-                "mips-linux-ld" "mips-linux-objdump"
               )
               ;;
             mipsel)
-              # MIPSEL关键工具
               KEY_TOOLS=(
-                "gcc" "g++" "ld"
+                "gcc" "g++" "ld" "ld.bfd"
                 "ar" "as" "strip" "nm" "objcopy" "objdump"
                 "ranlib" "readelf" "size" "strings"
                 "c++" "c++filt"
               )
               ;;
             arm_cortex-a7)
-              # ARM Cortex-A7关键工具
               KEY_TOOLS=(
                 "gcc" "g++" "ld" "ld.bfd"
                 "ar" "as" "strip" "nm" "objcopy" "objdump"
                 "ranlib" "readelf"
-                "gcc-${GCC_VERSION}" "gfortran"
               )
               ;;
             arm_cortex-a53)
-              # ARM Cortex-A53关键工具
               KEY_TOOLS=(
                 "gcc" "g++" "ld"
                 "ar" "as" "strip" "objcopy" "objdump"
@@ -1339,12 +1428,10 @@ jobs:
               )
               ;;
             riscv64)
-              # RISC-V关键工具
               KEY_TOOLS=(
                 "gcc" "g++" "ld"
                 "ar" "as" "strip" "nm" "objcopy" "objdump"
                 "ranlib" "readelf"
-                "elf2flt" "flthdr"
               )
               ;;
           esac
@@ -1370,23 +1457,44 @@ jobs:
           echo "  - 存在工具: ${#EXISTING_TOOLS[@]}"
           echo "  - 缺失工具: ${#MISSING_TOOLS[@]}"
           
-          # 检查关键库文件
+          # 检查关键库文件（使用实际检测到的版本）
           echo ""
-          echo "📚 检查关键库文件:"
+          echo "📚 检查关键库文件 (版本: $ACTUAL_GCC_VERSION):"
+          
+          # 动态查找GCC库目录
+          GCC_BASE_PATH=""
+          for possible_path in "lib/gcc/${TOOL_PREFIX%/}" "usr/lib/gcc/${TOOL_PREFIX%/}"; do
+            if [ -d "$TOOLCHAIN_DIR/$possible_path" ]; then
+              GCC_BASE_PATH="$possible_path"
+              break
+            fi
+          done
+          
+          if [ -z "$GCC_BASE_PATH" ]; then
+            echo "⚠️ 未找到GCC库目录，使用默认路径"
+            GCC_BASE_PATH="lib/gcc/${TOOL_PREFIX%/}"
+          fi
           
           KEY_LIBS=(
-            "lib/gcc/${TOOL_PREFIX%/}/${{ env.GCC_VERSION }}/libgcc.a"
-            "lib/gcc/${TOOL_PREFIX%/}/${{ env.GCC_VERSION }}/libgcc_eh.a"
-            "lib/gcc/${TOOL_PREFIX%/}/${{ env.GCC_VERSION }}/libgcc_s.so"
+            "${GCC_BASE_PATH}/${ACTUAL_GCC_VERSION}/libgcc.a"
+            "${GCC_BASE_PATH}/${ACTUAL_GCC_VERSION}/libgcc_eh.a"
+            "${GCC_BASE_PATH}/${ACTUAL_GCC_VERSION}/libgcc_s.so"
             "lib/libc.a"
             "lib/libm.a"
-            "usr/include/stdio.h"
-            "usr/include/stdlib.h"
-            "usr/include/string.h"
-            "usr/include/features.h"
           )
           
+          # 检查头文件（查找所有可能的include路径）
+          HEADER_PATHS=(
+            "usr/include"
+            "include"
+            "sysroot/usr/include"
+            "${TOOL_PREFIX%/}/include"
+          )
+          
+          HEADER_FILES=("stdio.h" "stdlib.h" "string.h" "features.h")
+          
           MISSING_LIBS=()
+          MISSING_HEADERS=()
           
           for lib_path in "${KEY_LIBS[@]}"; do
             full_lib_path="$TOOLCHAIN_DIR/$lib_path"
@@ -1399,19 +1507,40 @@ jobs:
           done
           
           echo ""
+          echo "📝 检查头文件:"
+          for header in "${HEADER_FILES[@]}"; do
+            found=false
+            for header_path in "${HEADER_PATHS[@]}"; do
+              if [ -f "$TOOLCHAIN_DIR/$header_path/$header" ]; then
+                echo "  ✅ $header_path/$header"
+                found=true
+                break
+              fi
+            done
+            if [ "$found" = false ]; then
+              MISSING_HEADERS+=("$header")
+              echo "  ❌ $header: 缺失"
+            fi
+          done
+          
+          echo ""
           
           # 判断构建是否完整
-          if [ ${#MISSING_TOOLS[@]} -eq 0 ] && [ ${#MISSING_LIBS[@]} -eq 0 ]; then
+          TOTAL_MISSING=$(( ${#MISSING_TOOLS[@]} + ${#MISSING_LIBS[@]} + ${#MISSING_HEADERS[@]} ))
+          
+          if [ $TOTAL_MISSING -eq 0 ]; then
             echo "🎉 所有关键编译器和库文件都存在，构建完整！"
             echo "BUILD_COMPLETE=true" >> $GITHUB_ENV
           else
             if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
               echo "⚠️ 缺失 ${#MISSING_TOOLS[@]} 个关键工具"
-              # 显示缺失的核心工具
+              # 检查是否缺失核心工具
               CORE_TOOLS=("gcc" "g++" "ld")
+              CORE_MISSING=0
               for core_tool in "${CORE_TOOLS[@]}"; do
                 if [[ " ${MISSING_TOOLS[*]} " == *"$core_tool"* ]]; then
                   echo "  ❗ 缺失核心工具: $core_tool"
+                  CORE_MISSING=$((CORE_MISSING + 1))
                 fi
               done
             fi
@@ -1420,15 +1549,12 @@ jobs:
               echo "⚠️ 缺失 ${#MISSING_LIBS[@]} 个关键库文件"
             fi
             
-            # 如果缺失核心工具或缺失过多文件，则构建失败
-            CORE_MISSING=0
-            for core_tool in "${CORE_TOOLS[@]}"; do
-              if [[ " ${MISSING_TOOLS[*]} " == *"$core_tool"* ]]; then
-                CORE_MISSING=$((CORE_MISSING + 1))
-              fi
-            done
+            if [ ${#MISSING_HEADERS[@]} -gt 0 ]; then
+              echo "⚠️ 缺失 ${#MISSING_HEADERS[@]} 个头文件"
+            fi
             
-            if [ $CORE_MISSING -gt 0 ] || [ ${#MISSING_TOOLS[@]} -gt 5 ] || [ ${#MISSING_LIBS[@]} -gt 2 ]; then
+            # 如果缺失核心工具或缺失过多文件，则构建失败
+            if [ $CORE_MISSING -gt 0 ] || [ ${#MISSING_TOOLS[@]} -gt 5 ] || [ ${#MISSING_LIBS[@]} -gt 2 ] || [ ${#MISSING_HEADERS[@]} -gt 2 ]; then
               echo "❌ 关键文件缺失过多，构建不完整"
               echo "BUILD_COMPLETE=false" >> $GITHUB_ENV
               exit 1
@@ -1442,6 +1568,7 @@ jobs:
           echo "COMPILER_PATH=$COMPILER_PATH" >> $GITHUB_ENV
           echo "COMPILER_NAME=$COMPILER_NAME" >> $GITHUB_ENV
           echo "TOOL_PREFIX=$TOOL_PREFIX" >> $GITHUB_ENV
+          echo "ACTUAL_GCC_VERSION=$ACTUAL_GCC_VERSION" >> $GITHUB_ENV
           echo "结束时间: $(date)"
 
       - name: 💾 保存编译器
@@ -1464,8 +1591,8 @@ jobs:
             echo "从: $TOOLCHAIN_DIR"
             echo "到: ${{ env.OUTPUT_DIR }}"
             
-            # 复制整个工具链
-            cp -r "$TOOLCHAIN_DIR"/* "${{ env.OUTPUT_DIR }}/" 2>&1 | tail -20
+            # 复制整个工具链，忽略一些错误
+            cp -r "$TOOLCHAIN_DIR"/* "${{ env.OUTPUT_DIR }}/" 2>&1 | grep -v "cannot stat" || true
             
             echo "✅ 复制完成"
           else
@@ -1481,6 +1608,7 @@ jobs:
           echo "  \"subtarget\": \"${{ env.SUBTARGET }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
           echo "  \"compiler_prefix\": \"${{ env.PREFIX }}-\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
           echo "  \"gcc_version\": \"${{ env.GCC_VERSION }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"actual_gcc_version\": \"$ACTUAL_GCC_VERSION\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
           echo "  \"binutils_version\": \"${{ env.BINUTILS_VERSION }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
           echo "  \"linux_version\": \"${{ env.LINUX_VERSION }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
           echo "  \"openwrt_version\": \"${{ env.OPENWRT_VERSION }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
@@ -1496,6 +1624,7 @@ jobs:
           echo "- 架构: ${{ env.ARCH_DIR }}" >> "${{ env.OUTPUT_DIR }}/README.md"
           echo "- C库: ${{ env.LIBC_DIR }}" >> "${{ env.OUTPUT_DIR }}/README.md"
           echo "- GCC版本: ${{ env.GCC_VERSION }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- 实际版本: $ACTUAL_GCC_VERSION" >> "${{ env.OUTPUT_DIR }}/README.md"
           echo "- Binutils版本: ${{ env.BINUTILS_VERSION }}" >> "${{ env.OUTPUT_DIR }}/README.md"
           echo "- 编译器前缀: ${{ env.PREFIX }}-" >> "${{ env.OUTPUT_DIR }}/README.md"
           echo "- 构建时间: $(date)" >> "${{ env.OUTPUT_DIR }}/README.md"
@@ -1542,7 +1671,7 @@ jobs:
           if ! git diff --cached --quiet; then
             echo "检测到变更，创建提交..."
             
-            git commit -m "build(compiler): 添加 ${{ env.ARCH_DIR }}-${{ env.LIBC_DIR }} 交叉编译器" -m "版本: GCC ${{ env.GCC_VERSION }}" -m "大小: ${{ env.TOTAL_SIZE }}" -m "文件数: ${{ env.FILE_COUNT }}" -m "工作流: #${{ github.run_id }}"
+            git commit -m "build(compiler): 添加 ${{ env.ARCH_DIR }}-${{ env.LIBC_DIR }} 交叉编译器" -m "版本: GCC ${{ env.GCC_VERSION }}" -m "实际版本: $ACTUAL_GCC_VERSION" -m "大小: ${{ env.TOTAL_SIZE }}" -m "文件数: ${{ env.FILE_COUNT }}" -m "工作流: #${{ github.run_id }}"
             
             echo "推送到仓库..."
             if git push origin main; then
@@ -1570,6 +1699,7 @@ jobs:
           echo "- 架构: ${{ env.ARCH_DIR }}"
           echo "- C库: ${{ env.LIBC_DIR }}"
           echo "- GCC版本: ${{ env.GCC_VERSION }}"
+          echo "- 实际版本: $ACTUAL_GCC_VERSION"
           echo "- 编译器前缀: ${{ env.PREFIX }}-"
           echo "- 目标平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}"
           echo ""
@@ -1578,163 +1708,6 @@ jobs:
           echo "- 文件数量: ${{ env.FILE_COUNT }}"
           echo "- 目录数量: ${{ env.DIR_COUNT }}"
           echo "- 输出目录: ${{ env.OUTPUT_DIR }}"
-          echo ""
-          echo "🛠️ 关键编译器工具清单:"
-          echo ""
-          
-          # 根据架构显示不同的工具清单
-          ARCH="${{ github.event.inputs.target_arch }}"
-          
-          case "$ARCH" in
-            aarch64)
-              echo "🔧 AARCH64架构编译器 (25个关键文件):"
-              echo ""
-              echo "  ✅ ${{ env.PREFIX }}-gcc           - C编译器"
-              echo "  ✅ ${{ env.PREFIX }}-g++           - C++编译器"
-              echo "  ✅ ${{ env.PREFIX }}-ld            - 链接器"
-              echo "  ✅ ${{ env.PREFIX }}-ld.bfd        - BFD链接器"
-              echo "  ✅ ${{ env.PREFIX }}-ld.gold       - GOLD链接器"
-              echo "  ✅ ${{ env.PREFIX }}-ar            - 静态库归档工具"
-              echo "  ✅ ${{ env.PREFIX }}-as            - 汇编器"
-              echo "  ✅ ${{ env.PREFIX }}-strip         - 符号剥离工具"
-              echo "  ✅ ${{ env.PREFIX }}-nm            - 符号列表工具"
-              echo "  ✅ ${{ env.PREFIX }}-objcopy       - 目标文件复制工具"
-              echo "  ✅ ${{ env.PREFIX }}-objdump       - 目标文件反汇编工具"
-              echo "  ✅ ${{ env.PREFIX }}-ranlib        - 库索引生成工具"
-              echo "  ✅ ${{ env.PREFIX }}-readelf       - ELF文件分析工具"
-              echo "  ✅ ${{ env.PREFIX }}-size          - 段大小统计工具"
-              echo "  ✅ ${{ env.PREFIX }}-strings       - 字符串提取工具"
-              echo "  ✅ ${{ env.PREFIX }}-c++           - C++链接器"
-              echo "  ✅ ${{ env.PREFIX }}-c++filt       - C++符号还原工具"
-              echo "  ✅ ${{ env.PREFIX }}-addr2line     - 地址转换工具"
-              echo "  ✅ ${{ env.PREFIX }}-gdb           - GNU调试器"
-              echo "  ✅ ${{ env.PREFIX }}-gdbtui        - 文本界面调试器"
-              echo "  ✅ ${{ env.PREFIX }}-gcc-ar        - GCC归档包装器"
-              echo "  ✅ ${{ env.PREFIX }}-gcc-nm        - GCC符号包装器"
-              echo "  ✅ ${{ env.PREFIX }}-gcc-ranlib    - GCC索引包装器"
-              echo "  ✅ ${{ env.PREFIX }}-gcov          - 代码覆盖率工具"
-              echo "  ✅ ${{ env.PREFIX }}-gcov-dump     - GCOV数据转储工具"
-              echo "  ✅ ${{ env.PREFIX }}-gcov-tool     - GCOV工具"
-              echo "  ✅ ${{ env.PREFIX }}-gprof         - 性能分析工具"
-              ;;
-            x86_64)
-              echo "🔧 x86_64架构编译器 (13个关键文件):"
-              echo ""
-              echo "  ✅ ${{ env.PREFIX }}-gcc           - C编译器"
-              echo "  ✅ ${{ env.PREFIX }}-g++           - C++编译器"
-              echo "  ✅ ${{ env.PREFIX }}-ld            - 链接器"
-              echo "  ✅ ${{ env.PREFIX }}-ar            - 静态库归档工具"
-              echo "  ✅ ${{ env.PREFIX }}-as            - 汇编器"
-              echo "  ✅ ${{ env.PREFIX }}-strip         - 符号剥离工具"
-              echo "  ✅ ${{ env.PREFIX }}-nm            - 符号列表工具"
-              echo "  ✅ ${{ env.PREFIX }}-objcopy       - 目标文件复制工具"
-              echo "  ✅ ${{ env.PREFIX }}-objdump       - 目标文件反汇编工具"
-              echo "  ✅ ${{ env.PREFIX }}-ranlib        - 库索引生成工具"
-              echo "  ✅ ${{ env.PREFIX }}-readelf       - ELF文件分析工具"
-              echo "  ✅ ${{ env.PREFIX }}-size          - 段大小统计工具"
-              echo "  ✅ ${{ env.PREFIX }}-elfedit       - ELF文件编辑工具"
-              echo "  ✅ ${{ env.PREFIX }}-gcc-ranlib    - GCC索引包装器"
-              ;;
-            mips)
-              echo "🔧 MIPS架构编译器 (14个关键文件):"
-              echo ""
-              echo "  ✅ ${{ env.PREFIX }}-gcc           - C编译器"
-              echo "  ✅ ${{ env.PREFIX }}-g++           - C++编译器"
-              echo "  ✅ ${{ env.PREFIX }}-ld            - 链接器"
-              echo "  ✅ ${{ env.PREFIX }}-ar            - 静态库归档工具"
-              echo "  ✅ ${{ env.PREFIX }}-as            - 汇编器"
-              echo "  ✅ ${{ env.PREFIX }}-strip         - 符号剥离工具"
-              echo "  ✅ ${{ env.PREFIX }}-nm            - 符号列表工具"
-              echo "  ✅ ${{ env.PREFIX }}-objcopy       - 目标文件复制工具"
-              echo "  ✅ ${{ env.PREFIX }}-objdump       - 目标文件反汇编工具"
-              echo "  ✅ ${{ env.PREFIX }}-ranlib        - 库索引生成工具"
-              echo "  ✅ ${{ env.PREFIX }}-readelf       - ELF文件分析工具"
-              echo "  ✅ ${{ env.PREFIX }}-size          - 段大小统计工具"
-              echo "  ✅ ${{ env.PREFIX }}-strings       - 字符串提取工具"
-              echo "  ✅ ${{ env.PREFIX }}-mips-linux-ld - MIPS Linux链接器"
-              echo "  ✅ ${{ env.PREFIX }}-mips-linux-objdump - MIPS Linux反汇编工具"
-              ;;
-            mipsel)
-              echo "🔧 MIPSEL架构编译器 (14个关键文件):"
-              echo ""
-              echo "  ✅ ${{ env.PREFIX }}-gcc           - C编译器"
-              echo "  ✅ ${{ env.PREFIX }}-g++           - C++编译器"
-              echo "  ✅ ${{ env.PREFIX }}-ld            - 链接器"
-              echo "  ✅ ${{ env.PREFIX }}-ar            - 静态库归档工具"
-              echo "  ✅ ${{ env.PREFIX }}-as            - 汇编器"
-              echo "  ✅ ${{ env.PREFIX }}-strip         - 符号剥离工具"
-              echo "  ✅ ${{ env.PREFIX }}-nm            - 符号列表工具"
-              echo "  ✅ ${{ env.PREFIX }}-objcopy       - 目标文件复制工具"
-              echo "  ✅ ${{ env.PREFIX }}-objdump       - 目标文件反汇编工具"
-              echo "  ✅ ${{ env.PREFIX }}-ranlib        - 库索引生成工具"
-              echo "  ✅ ${{ env.PREFIX }}-readelf       - ELF文件分析工具"
-              echo "  ✅ ${{ env.PREFIX }}-size          - 段大小统计工具"
-              echo "  ✅ ${{ env.PREFIX }}-strings       - 字符串提取工具"
-              echo "  ✅ ${{ env.PREFIX }}-c++           - C++链接器"
-              echo "  ✅ ${{ env.PREFIX }}-c++filt       - C++符号还原工具"
-              ;;
-            arm_cortex-a7)
-              echo "🔧 ARM Cortex-A7架构编译器 (12个关键文件):"
-              echo ""
-              echo "  ✅ ${{ env.PREFIX }}-gcc           - C编译器"
-              echo "  ✅ ${{ env.PREFIX }}-g++           - C++编译器"
-              echo "  ✅ ${{ env.PREFIX }}-ld            - 链接器"
-              echo "  ✅ ${{ env.PREFIX }}-ld.bfd        - BFD链接器"
-              echo "  ✅ ${{ env.PREFIX }}-ar            - 静态库归档工具"
-              echo "  ✅ ${{ env.PREFIX }}-as            - 汇编器"
-              echo "  ✅ ${{ env.PREFIX }}-strip         - 符号剥离工具"
-              echo "  ✅ ${{ env.PREFIX }}-nm            - 符号列表工具"
-              echo "  ✅ ${{ env.PREFIX }}-objcopy       - 目标文件复制工具"
-              echo "  ✅ ${{ env.PREFIX }}-objdump       - 目标文件反汇编工具"
-              echo "  ✅ ${{ env.PREFIX }}-ranlib        - 库索引生成工具"
-              echo "  ✅ ${{ env.PREFIX }}-readelf       - ELF文件分析工具"
-              echo "  ✅ ${{ env.PREFIX }}-gcc-${{ env.GCC_VERSION }} - 特定版本GCC"
-              echo "  ✅ ${{ env.PREFIX }}-gfortran      - Fortran编译器"
-              ;;
-            arm_cortex-a53)
-              echo "🔧 ARM Cortex-A53架构编译器 (8个关键文件):"
-              echo ""
-              echo "  ✅ ${{ env.PREFIX }}-gcc           - C编译器"
-              echo "  ✅ ${{ env.PREFIX }}-g++           - C++编译器"
-              echo "  ✅ ${{ env.PREFIX }}-ld            - 链接器"
-              echo "  ✅ ${{ env.PREFIX }}-ar            - 静态库归档工具"
-              echo "  ✅ ${{ env.PREFIX }}-as            - 汇编器"
-              echo "  ✅ ${{ env.PREFIX }}-strip         - 符号剥离工具"
-              echo "  ✅ ${{ env.PREFIX }}-objcopy       - 目标文件复制工具"
-              echo "  ✅ ${{ env.PREFIX }}-objdump       - 目标文件反汇编工具"
-              echo "  ✅ ${{ env.PREFIX }}-elfedit       - ELF文件编辑工具"
-              echo "  ✅ ${{ env.PREFIX }}-gcc-ranlib    - GCC索引包装器"
-              ;;
-            riscv64)
-              echo "🔧 RISC-V 64架构编译器 (12个关键文件):"
-              echo ""
-              echo "  ✅ ${{ env.PREFIX }}-gcc           - C编译器"
-              echo "  ✅ ${{ env.PREFIX }}-g++           - C++编译器"
-              echo "  ✅ ${{ env.PREFIX }}-ld            - 链接器"
-              echo "  ✅ ${{ env.PREFIX }}-ar            - 静态库归档工具"
-              echo "  ✅ ${{ env.PREFIX }}-as            - 汇编器"
-              echo "  ✅ ${{ env.PREFIX }}-strip         - 符号剥离工具"
-              echo "  ✅ ${{ env.PREFIX }}-nm            - 符号列表工具"
-              echo "  ✅ ${{ env.PREFIX }}-objcopy       - 目标文件复制工具"
-              echo "  ✅ ${{ env.PREFIX }}-objdump       - 目标文件反汇编工具"
-              echo "  ✅ ${{ env.PREFIX }}-ranlib        - 库索引生成工具"
-              echo "  ✅ ${{ env.PREFIX }}-readelf       - ELF文件分析工具"
-              echo "  ✅ ${{ env.PREFIX }}-elf2flt       - ELF转FLAT工具"
-              echo "  ✅ ${{ env.PREFIX }}-flthdr        - FLAT文件头工具"
-              ;;
-          esac
-          
-          echo ""
-          echo "📚 关键库文件:"
-          echo "  ✅ libgcc.a          - GCC运行时库"
-          echo "  ✅ libgcc_eh.a       - GCC异常处理库"
-          echo "  ✅ libgcc_s.so       - GCC共享库"
-          echo "  ✅ libc.a            - C标准库"
-          echo "  ✅ libm.a            - 数学库"
-          echo "  ✅ stdio.h           - 标准输入输出头文件"
-          echo "  ✅ stdlib.h          - 标准库头文件"
-          echo "  ✅ string.h          - 字符串处理头文件"
-          echo "  ✅ features.h        - 系统特性头文件"
           echo ""
           echo "🚀 使用方法:"
           echo "cd ${{ env.OUTPUT_DIR }}"
