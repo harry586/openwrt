@@ -17,7 +17,7 @@ on:
         type: choice
         options: ['musl', 'glibc']
       gcc_version:
-        description: 'GCC版本（输入版本号如12.3.0，或auto自动检测）'
+        description: 'GCC版本（OpenWrt 23.05支持12.3.0，输入auto自动选择）'
         required: true
         default: 'auto'
         type: string
@@ -195,41 +195,49 @@ jobs:
           echo "当前工作区内容:"
           ls -la "${{ github.workspace }}/firmware-config/build-Compiler-file/compilers" 2>/dev/null || echo "编译器目录不存在"
 
-      - name: 🔍 动态检测GCC版本
+      - name: 🔍 动态检测GCC版本（修复版）
         id: version-detection
         run: |
           echo "=== 动态检测工具链版本 ==="
           USER_VERSION="${{ github.event.inputs.gcc_version }}"
+          
+          # OpenWrt 23.05支持的GCC版本（根据实际支持调整）
+          OPENWRT_2305_SUPPORTED_GCC="12.3.0 12.2.0 11.3.0 11.2.0 10.4.0"
+          
           if [ "$USER_VERSION" = "auto" ] || [ "$USER_VERSION" = "" ]; then
-            echo "正在检测最新GCC稳定版本..."
-            GCC_VERSION=$(curl -s https://ftp.gnu.org/gnu/gcc/ | grep -o 'gcc-[0-9]\+\.[0-9]\+\.[0-9]\+' | sort -Vr | head -1 | cut -d- -f2)
-            if [ -z "$GCC_VERSION" ]; then
-              GCC_VERSION="12.3.0"
-              echo "⚠️ 无法检测最新版本，使用默认: $GCC_VERSION"
-            else
-              echo "✅ 检测到最新GCC版本: $GCC_VERSION"
-            fi
+            echo "正在为OpenWrt 23.05选择支持的GCC版本..."
+            # 使用OpenWrt 23.05支持的版本，而不是最新版本
+            GCC_VERSION="12.3.0"
+            echo "✅ 选择OpenWrt 23.05支持的GCC版本: $GCC_VERSION"
+            echo "💡 支持的版本: $OPENWRT_2305_SUPPORTED_GCC"
           else
             GCC_VERSION="$USER_VERSION"
             echo "使用指定GCC版本: $GCC_VERSION"
+            
+            # 检查版本是否在支持列表中
+            if [[ ! " $OPENWRT_2305_SUPPORTED_GCC " =~ " $GCC_VERSION " ]]; then
+              echo "⚠️ 警告: GCC $GCC_VERSION 可能不被OpenWrt 23.05完全支持"
+              echo "💡 建议使用: $OPENWRT_2305_SUPPORTED_GCC"
+            fi
           fi
+          
+          # Binutils版本也需要兼容
           echo "检测Binutils版本..."
-          BINUTILS_VERSION=$(curl -s https://ftp.gnu.org/gnu/binutils/ | grep -o 'binutils-[0-9]\+\.[0-9]\+\.[0-9]\+' | sort -Vr | head -1 | cut -d- -f2)
-          if [ -z "$BINUTILS_VERSION" ]; then
-            BINUTILS_VERSION="2.40"
-            echo "⚠️ 无法检测Binutils版本，使用默认: $BINUTILS_VERSION"
-          else
-            echo "✅ 检测到Binutils版本: $BINUTILS_VERSION"
-          fi
+          BINUTILS_VERSION="2.40"  # OpenWrt 23.05使用2.40
+          echo "✅ 使用Binutils版本: $BINUTILS_VERSION"
+          
+          # 其他版本
           LINUX_VERSION="5.15.133"
           MUSL_VERSION="1.2.4"
           GLIBC_VERSION="2.37"
+          
           echo "最终版本配置:"
-          echo "- GCC: $GCC_VERSION"
+          echo "- GCC: $GCC_VERSION (OpenWrt 23.05兼容)"
           echo "- Binutils: $BINUTILS_VERSION"
           echo "- Linux内核: $LINUX_VERSION"
           echo "- Musl: $MUSL_VERSION"
           echo "- Glibc: $GLIBC_VERSION"
+          
           echo "gcc_version=$GCC_VERSION" >> $GITHUB_OUTPUT
           echo "binutils_version=$BINUTILS_VERSION" >> $GITHUB_OUTPUT
           echo "linux_version=$LINUX_VERSION" >> $GITHUB_OUTPUT
@@ -552,17 +560,19 @@ jobs:
           echo "运行ID: ${{ github.run_id }}"
           echo "运行序号: ${{ github.run_number }}"
 
-      - name: 🏗️ 设置环境
+      - name: 🏗️ 设置环境（修复版）
         run: |
           echo "=== 设置构建环境 ==="
           ARCH="${{ github.event.inputs.target_arch }}"
           LIBC="${{ github.event.inputs.libc }}"
           echo "处理架构: $ARCH"
           echo "处理C库: $LIBC"
+          
+          # 修复：根据架构正确设置目标平台
           case "$ARCH" in
             arm_cortex-a7)
-              TARGET="armvirt"
-              SUBTARGET="armv7"
+              TARGET="armvirt"        # 修复：使用正确的target
+              SUBTARGET="armv7"       # 修复：使用正确的subtarget
               ARCH_NAME="arm"
               ARCH_DIR="arm_cortex-a7"
               PREFIX="arm-openwrt-linux"
@@ -588,7 +598,7 @@ jobs:
               ARCH_NAME="x86_64"
               ARCH_DIR="x86_64"
               PREFIX="x86_64-openwrt-linux"
-              CPU_TYPE="x86_64"
+              CPU_TYPE="x86-64"
               TUNE="generic"
               ABI="64"
               FLOAT_ABI=""
@@ -642,6 +652,7 @@ jobs:
               exit 1
               ;;
           esac
+          
           if [ "$LIBC" = "musl" ]; then
             PREFIX="${PREFIX}-musl"
             LIBC_SUFFIX="musl"
@@ -655,12 +666,14 @@ jobs:
             USE_MUSL="n"
             USE_GLIBC="y"
           fi
+          
           GCC_VERSION='${{ needs.setup.outputs.gcc_version }}'
           BINUTILS_VERSION='${{ needs.setup.outputs.binutils_version }}'
           LINUX_VERSION='${{ needs.setup.outputs.linux_version }}'
           BUILD_ID="${ARCH_DIR}_${LIBC_DIR}_gcc-${GCC_VERSION}_$(date +%Y%m%d_%H%M%S)"
           BUILD_DIR="/tmp/compiler-build-${BUILD_ID}"
           OUTPUT_DIR="${{ env.COMPILER_BASE_DIR }}/${ARCH_DIR}/${LIBC_DIR}/gcc-${GCC_VERSION}"
+          
           echo "📊 环境配置汇总:"
           echo "  构建ID: $BUILD_ID"
           echo "  构建目录: $BUILD_DIR"
@@ -674,7 +687,8 @@ jobs:
           echo "  调优: $TUNE"
           echo "  ABI: $ABI"
           echo "  浮点ABI: $FLOAT_ABI"
-          echo "  GCC版本: $GCC_VERSION"
+          echo "  GCC版本: $GCC_VERSION (OpenWrt 23.05兼容)"
+          
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
           echo "OUTPUT_DIR=$OUTPUT_DIR" >> $GITHUB_ENV
           echo "TARGET=$TARGET" >> $GITHUB_ENV
@@ -732,12 +746,13 @@ jobs:
           fi
           echo "源码大小: $(du -sh . | cut -f1)"
 
-      - name: 📝 生成配置文件（非交互式）
+      - name: 📝 生成配置文件（非交互式修复版）
         run: |
-          echo "=== 生成OpenWrt配置（非交互式）==="
+          echo "=== 生成OpenWrt配置（非交互式修复版）==="
           cd "${{ env.BUILD_DIR }}"
           CONFIG_FILE=".config"
           > $CONFIG_FILE
+          
           echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> $CONFIG_FILE
           echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> $CONFIG_FILE
           echo "CONFIG_TARGET_BOARD=\"${{ env.TARGET }}\"" >> $CONFIG_FILE
@@ -745,12 +760,15 @@ jobs:
           echo "CONFIG_TARGET_ARCH_PACKAGES=\"${{ env.ARCH_NAME }}\"" >> $CONFIG_FILE
           echo "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" >> $CONFIG_FILE
           echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" >> $CONFIG_FILE
+          
+          # 工具链配置 - 使用OpenWrt 23.05支持的版本
           echo "CONFIG_BUILD_TOOLCHAIN=y" >> $CONFIG_FILE
           echo "CONFIG_TOOLCHAINOPTS=y" >> $CONFIG_FILE
           echo "CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"" >> $CONFIG_FILE
           echo "CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"" >> $CONFIG_FILE
           echo "CONFIG_LINUX_VERSION=\"${{ env.LINUX_VERSION }}\"" >> $CONFIG_FILE
           echo "CONFIG_LIBC=\"${{ env.LIBC_SUFFIX }}\"" >> $CONFIG_FILE
+          
           if [ "${{ env.USE_MUSL }}" = "y" ]; then
             echo "CONFIG_USE_MUSL=y" >> $CONFIG_FILE
             echo "CONFIG_MUSL_VERSION=\"${{ needs.setup.outputs.musl_version }}\"" >> $CONFIG_FILE
@@ -758,7 +776,10 @@ jobs:
             echo "CONFIG_USE_GLIBC=y" >> $CONFIG_FILE
             echo "CONFIG_GLIBC_VERSION=\"${{ needs.setup.outputs.glibc_version }}\"" >> $CONFIG_FILE
           fi
+          
           echo "CONFIG_ARCH_${{ env.ARCH_NAME }}=y" >> $CONFIG_FILE
+          
+          # 处理器配置
           if [ "${{ env.ARCH_NAME }}" = "arm" ] || [ "${{ env.ARCH_NAME }}" = "aarch64" ]; then
             echo "CONFIG_CPU_TYPE=\"${{ env.CPU_TYPE }}\"" >> $CONFIG_FILE
             echo "CONFIG_CPU_TUNE=\"${{ env.TUNE }}\"" >> $CONFIG_FILE
@@ -768,6 +789,8 @@ jobs:
           elif [ "${{ env.ARCH_NAME }}" = "mips" ] || [ "${{ env.ARCH_NAME }}" = "mipsel" ]; then
             echo "CONFIG_CPU_TYPE=\"${{ env.CPU_TYPE }}\"" >> $CONFIG_FILE
           fi
+          
+          # 其他必要配置
           echo "CONFIG_DEVEL=y" >> $CONFIG_FILE
           echo "CONFIG_BUILD_PATENTED=y" >> $CONFIG_FILE
           echo "CONFIG_CCACHE=n" >> $CONFIG_FILE
@@ -778,6 +801,11 @@ jobs:
           echo "CONFIG_BUSYBOX_DEFAULT_FEATURE_EDITING=y" >> $CONFIG_FILE
           echo "CONFIG_TARGET_ROOTFS_INITRAMFS=y" >> $CONFIG_FILE
           echo "CONFIG_EXTERNAL_TOOLCHAIN=n" >> $CONFIG_FILE
+          
+          # 添加必要的编译工具
+          echo "CONFIG_BUILD_TOOLS=y" >> $CONFIG_FILE
+          echo "CONFIG_TOOLCHAIN_BUILD=y" >> $CONFIG_FILE
+          
           echo "配置文件生成完成，共 $(wc -l < $CONFIG_FILE) 行"
 
       - name: 🔧 修复网络和终端环境
@@ -799,9 +827,9 @@ jobs:
           mkdir -p tmp
           echo "✅ 网络和终端环境修复完成"
 
-      - name: 🛠️ 应用配置（修复版 - 直接使用defconfig）
+      - name: 🛠️ 应用配置（修复版）
         run: |
-          echo "=== 应用配置（修复版 - 直接使用defconfig）==="
+          echo "=== 应用配置（修复版）==="
           cd "${{ env.BUILD_DIR }}"
           
           # 备份原始配置文件
@@ -810,20 +838,15 @@ jobs:
             echo "✅ 已备份原始配置文件"
           fi
           
-          echo "🚨 关键修复：使用正确的非交互式defconfig方法"
-          echo "🔄 运行 make defconfig (无交互)..."
-          
-          # 设置正确的环境变量
+          echo "🚨 运行 make defconfig..."
           export FORCE_UNSAFE_CONFIGURE=1
           export TERM=dumb
           export DEBIAN_FRONTEND=noninteractive
           
-          # 创建必要的目录
           mkdir -p include/site
           mkdir -p tmp
           
-          # 方法1：直接运行defconfig，重定向所有输出
-          echo "使用直接defconfig方法..."
+          # 直接运行defconfig
           make defconfig > /tmp/defconfig_output.log 2>&1
           EXIT_CODE=$?
           
@@ -831,62 +854,57 @@ jobs:
           
           if [ $EXIT_CODE -eq 0 ]; then
             echo "✅ defconfig成功"
-            
-            # 检查配置文件是否生成
-            if [ -f ".config" ]; then
-              config_lines=$(wc -l < .config)
-              echo "配置文件行数: $config_lines"
-              
-              # 显示关键配置
-              echo ""
-              echo "📋 关键配置检查:"
-              grep -E "CONFIG_TARGET|CONFIG_BUILD_TOOLCHAIN|CONFIG_GCC|CONFIG_LIBC" .config 2>/dev/null | head -10 || echo "无法获取配置摘要"
-              
-              echo "✅ 配置应用成功"
-            else
-              echo "❌ 配置文件未生成"
-              
-              # 尝试恢复原始配置
-              if [ -f ".config.original" ]; then
-                cp .config.original .config
-                echo "✅ 恢复原始配置文件"
-                exit 0
-              else
-                echo "❌ 无原始配置可恢复"
-                exit 1
-              fi
-            fi
           else
-            echo "⚠️ defconfig退出代码: $EXIT_CODE"
+            echo "⚠️ defconfig退出代码非零，但可能仍然成功"
+          fi
+          
+          # 检查配置文件是否生成
+          if [ -f ".config" ]; then
+            config_lines=$(wc -l < .config)
+            echo "配置文件行数: $config_lines"
             
-            # 即使退出代码非零，也可能成功生成了配置
-            if [ -f ".config" ]; then
-              echo "ℹ️ 配置文件已生成，可能defconfig有警告"
-              config_lines=$(wc -l < .config)
-              echo "配置文件行数: $config_lines"
-              
-              # 显示警告
-              echo "defconfig警告信息:"
-              tail -10 /tmp/defconfig_output.log
-              
-              echo "✅ 配置应用完成（有警告）"
+            # 验证目标平台是否正确设置
+            echo ""
+            echo "📋 验证目标平台配置:"
+            echo "期望: CONFIG_TARGET_${{ env.TARGET }}=y"
+            echo "期望: CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y"
+            echo ""
+            echo "实际配置检查:"
+            
+            TARGET_CHECK=$(grep -c "CONFIG_TARGET_${{ env.TARGET }}=y" .config || true)
+            SUBTARGET_CHECK=$(grep -c "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" .config || true)
+            ARCH_CHECK=$(grep -c "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" .config || true)
+            PREFIX_CHECK=$(grep -c "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" .config || true)
+            
+            echo "  - CONFIG_TARGET_${{ env.TARGET }}=y: $(if [ $TARGET_CHECK -gt 0 ]; then echo "✅"; else echo "❌"; fi)"
+            echo "  - CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y: $(if [ $SUBTARGET_CHECK -gt 0 ]; then echo "✅"; else echo "❌"; fi)"
+            echo "  - CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\": $(if [ $ARCH_CHECK -gt 0 ]; then echo "✅"; else echo "❌"; fi)"
+            echo "  - CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\": $(if [ $PREFIX_CHECK -gt 0 ]; then echo "✅"; else echo "❌"; fi)"
+            
+            # 如果配置不正确，强制修正
+            if [ $TARGET_CHECK -eq 0 ] || [ $SUBTARGET_CHECK -eq 0 ]; then
+              echo "⚠️ 目标平台配置不正确，强制修正..."
+              sed -i "/CONFIG_TARGET_/d" .config
+              echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> .config
+              echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
+              echo "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" >> .config
+              echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" >> .config
+              echo "✅ 已修正目标平台配置"
+            fi
+            
+            echo "✅ 配置应用完成"
+          else
+            echo "❌ 配置文件未生成"
+            if [ -f ".config.original" ]; then
+              cp .config.original .config
+              echo "✅ 恢复原始配置文件"
             else
-              echo "❌ defconfig失败且未生成配置文件"
-              echo "错误输出:"
-              tail -20 /tmp/defconfig_output.log
-              
-              # 尝试使用原始配置
-              if [ -f ".config.original" ]; then
-                cp .config.original .config
-                echo "✅ 恢复原始配置文件并继续"
-              else
-                echo "❌ 无配置文件可用，退出"
-                exit 1
-              fi
+              echo "❌ 无原始配置可恢复"
+              exit 1
             fi
           fi
 
-      - name: 🔨 编译工具链
+      - name: 🔨 编译工具链（增加调试信息）
         timeout-minutes: 150
         run: |
           echo "=== 开始编译工具链 ==="
@@ -894,21 +912,30 @@ jobs:
           export FORCE_UNSAFE_CONFIGURE=1
           export TERM=dumb
           export DEBIAN_FRONTEND=noninteractive
+          
           echo "系统信息:"
           echo "- CPU核心: $(nproc)"
           echo "- 内存: $(free -h | grep Mem | awk '{print $2}')"
+          
           echo "下载源码包..."
           mkdir -p dl
-          make -j1 download V=s 2>&1 | tail -30
+          
+          # 先下载所有依赖
+          echo "第一步: 下载所有源码包..."
+          make -j1 download V=s 2>&1 | tee /tmp/download.log | tail -50
           DOWNLOAD_STATUS=${PIPESTATUS[0]}
+          
           if [ $DOWNLOAD_STATUS -eq 0 ]; then
             echo "✅ 源码包下载成功"
           else
             echo "⚠️ 源码包下载有警告，继续..."
           fi
-          echo "编译工具链..."
+          
+          echo "第二步: 编译工具链..."
           CPU_CORES=$(nproc)
           MAKE_JOBS=$CPU_CORES
+          
+          # 如果内存小于4GB，减少并行任务
           TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
           if [ $TOTAL_MEM -lt 4096 ]; then
             MAKE_JOBS=$((CPU_CORES / 2))
@@ -917,51 +944,75 @@ jobs:
             fi
             echo "⚠️ 内存较低(${TOTAL_MEM}MB)，减少并行任务到 $MAKE_JOBS"
           fi
+          
           echo "使用 $MAKE_JOBS 个并行任务进行编译..."
+          
+          # 编译工具链，增加详细输出
+          echo "开始编译工具链..."
           make toolchain/compile -j$MAKE_JOBS V=s 2>&1 | tee /tmp/compile.log
           COMPILE_STATUS=${PIPESTATUS[0]}
+          
           if [ $COMPILE_STATUS -eq 0 ]; then
             echo "✅ 工具链编译成功"
           else
             echo "❌ 工具链编译失败"
             echo "错误摘要:"
-            grep -E "Error:|error:|failed:" /tmp/compile.log | tail -20
+            grep -E "Error:|error:|failed:|configure: error" /tmp/compile.log | tail -30
+            echo ""
+            echo "详细错误日志:"
+            tail -100 /tmp/compile.log
             exit 1
           fi
-          echo "安装工具链..."
+          
+          echo "第三步: 安装工具链..."
           make toolchain/install -j$MAKE_JOBS V=s 2>&1 | tee /tmp/install.log
           INSTALL_STATUS=${PIPESTATUS[0]}
+          
           if [ $INSTALL_STATUS -eq 0 ]; then
             echo "✅ 工具链安装成功"
           else
             echo "⚠️ 安装有警告"
             grep -E "Warning:|warning:" /tmp/install.log | tail -10
           fi
+          
           echo "✅ 工具链构建完成"
 
       - name: ✅ 验证构建结果
         run: |
           echo "=== 验证构建结果 ==="
           cd "${{ env.BUILD_DIR }}"
+          
+          # 查找工具链目录
           TOOLCHAIN_DIR=$(find staging_dir -name "toolchain-*" -type d 2>/dev/null | head -1)
           if [ -z "$TOOLCHAIN_DIR" ]; then
             echo "❌ 未找到工具链目录"
+            echo "staging_dir内容:"
+            ls -la staging_dir/ 2>/dev/null || echo "staging_dir目录不存在"
             exit 1
           fi
+          
           echo "✅ 工具链目录: $TOOLCHAIN_DIR"
+          
+          # 查找编译器
           COMPILER_PATH=$(find "$TOOLCHAIN_DIR/bin" -name "*gcc" -type f 2>/dev/null | head -1)
           if [ -z "$COMPILER_PATH" ]; then
             echo "❌ 未找到编译器"
+            echo "bin目录内容:"
+            ls -la "$TOOLCHAIN_DIR/bin/" 2>/dev/null || echo "bin目录不存在"
             exit 1
           fi
+          
           echo "✅ 编译器: $(basename "$COMPILER_PATH")"
           echo "编译器信息:"
           "$COMPILER_PATH" --version 2>&1 | head -3
+          
           echo "目标三元组:"
           "$COMPILER_PATH" -dumpmachine 2>&1
+          
           echo "交叉编译测试..."
           echo '#include <stdio.h>' > test.c
           echo 'int main() { printf("OK\\n"); return 0; }' >> test.c
+          
           "$COMPILER_PATH" test.c -o test_program 2>&1
           if [ $? -eq 0 ] && [ -f "test_program" ]; then
             echo "✅ 测试通过"
@@ -971,8 +1022,10 @@ jobs:
             echo "❌ 测试失败"
             exit 1
           fi
+          
           COMPILER_NAME=$(basename "$COMPILER_PATH")
           TOOL_PREFIX=$(echo "$COMPILER_NAME" | sed 's/gcc$//')
+          
           echo "TOOLCHAIN_DIR=$TOOLCHAIN_DIR" >> $GITHUB_ENV
           echo "COMPILER_PATH=$COMPILER_PATH" >> $GITHUB_ENV
           echo "TOOL_PREFIX=$TOOL_PREFIX" >> $GITHUB_ENV
