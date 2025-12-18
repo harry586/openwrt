@@ -10,21 +10,21 @@ on:
         default: 'arm_cortex-a7'
         type: choice
         options:
-          - aarch64        # ARM 64位（树莓派4/RK3399/电视盒子）
-          - x86_64         # x86 64位（PC/服务器/虚拟机）
-          - mips           # MIPS 32位大端（MT7621/老路由器）
-          - mipsel         # MIPS 32位小端（MT7620/MT7621）
-          - arm_cortex-a7  # ARM Cortex-A7（IPQ40xx/MT7623/全志H3）
-          - arm_cortex-a53 # ARM Cortex-A53（MT7622/部分64位设备）
-          - riscv64        # RISC-V 64位（新架构开发板）
+          - aarch64
+          - x86_64
+          - mips
+          - mipsel
+          - arm_cortex-a7
+          - arm_cortex-a53
+          - riscv64
       libc:
         description: 'C库类型（嵌入式推荐musl）'
         required: true
         default: 'musl'
         type: choice
         options:
-          - musl   # 轻量级，嵌入式推荐
-          - glibc  # 功能完整
+          - musl
+          - glibc
       gcc_version:
         description: 'GCC版本（输入版本号如12.3.0，或auto自动检测）'
         required: true
@@ -213,7 +213,6 @@ jobs:
           
           if [ "$USER_VERSION" = "auto" ] || [ "$USER_VERSION" = "" ]; then
             echo "正在检测最新GCC稳定版本..."
-            # 从GNU官网获取最新稳定版本
             GCC_VERSION=$(curl -s https://ftp.gnu.org/gnu/gcc/ | grep -o 'gcc-[0-9]\+\.[0-9]\+\.[0-9]\+' | sort -Vr | head -1 | cut -d- -f2)
             if [ -z "$GCC_VERSION" ]; then
               GCC_VERSION="12.3.0"
@@ -226,7 +225,6 @@ jobs:
             echo "使用指定GCC版本: $GCC_VERSION"
           fi
           
-          # 检测Binutils版本
           echo "检测Binutils版本..."
           BINUTILS_VERSION=$(curl -s https://ftp.gnu.org/gnu/binutils/ | grep -o 'binutils-[0-9]\+\.[0-9]\+\.[0-9]\+' | sort -Vr | head -1 | cut -d- -f2)
           if [ -z "$BINUTILS_VERSION" ]; then
@@ -276,11 +274,9 @@ jobs:
           echo "检查目录: $OUTPUT_DIR"
           echo "完整路径: $(realpath "$OUTPUT_DIR" 2>/dev/null || echo "$OUTPUT_DIR")"
           
-          # 定义完整的编译器工具清单
           echo "📋 关键编译器工具清单:"
           echo ""
           
-          # 基础目录检查
           REQUIRED_DIRS=("bin" "lib" "include" "libexec" "share" "usr")
           echo "📁 必需目录检查:"
           for dir in "${REQUIRED_DIRS[@]}"; do
@@ -292,17 +288,14 @@ jobs:
           done
           echo ""
           
-          # 检查目录是否存在
           NEED_BUILD="true"
           
           if [ -d "$OUTPUT_DIR" ]; then
             echo "✅ 编译器目录已存在"
             echo ""
             
-            # 获取编译器前缀（基于目录结构推断）
             COMPILER_PREFIX=""
             if [ -d "$OUTPUT_DIR/bin" ]; then
-              # 尝试查找gcc文件来确定前缀
               GCC_FILE=$(find "$OUTPUT_DIR/bin" -name "*gcc" -type f 2>/dev/null | head -1)
               if [ -n "$GCC_FILE" ]; then
                 COMPILER_PREFIX=$(basename "$GCC_FILE" | sed 's/-gcc$//')
@@ -310,7 +303,6 @@ jobs:
               fi
             fi
             
-            # 如果没有检测到前缀，根据架构和libc类型生成前缀
             if [ -z "$COMPILER_PREFIX" ]; then
               case "$ARCH" in
                 arm_cortex-a7)
@@ -373,195 +365,30 @@ jobs:
             echo "🛠️ 关键编译器文件检查:"
             echo ""
             
-            # 根据架构定义关键文件清单
             case "$ARCH" in
               aarch64)
-                # AARCH64关键文件
-                KEY_FILES=(
-                  # 编译器核心文件
-                  "bin/${COMPILER_PREFIX}-gcc"
-                  "bin/${COMPILER_PREFIX}-g++"
-                  
-                  # 链接器
-                  "bin/${COMPILER_PREFIX}-ld"
-                  "bin/${COMPILER_PREFIX}-ld.bfd"
-                  "bin/${COMPILER_PREFIX}-ld.gold"
-                  
-                  # 二进制工具
-                  "bin/${COMPILER_PREFIX}-ar"
-                  "bin/${COMPILER_PREFIX}-as"
-                  "bin/${COMPILER_PREFIX}-strip"
-                  "bin/${COMPILER_PREFIX}-nm"
-                  "bin/${COMPILER_PREFIX}-objcopy"
-                  "bin/${COMPILER_PREFIX}-objdump"
-                  "bin/${COMPILER_PREFIX}-ranlib"
-                  "bin/${COMPILER_PREFIX}-readelf"
-                  "bin/${COMPILER_PREFIX}-size"
-                  "bin/${COMPILER_PREFIX}-strings"
-                  
-                  # C++支持
-                  "bin/${COMPILER_PREFIX}-c++"
-                  "bin/${COMPILER_PREFIX}-c++filt"
-                  
-                  # 调试工具
-                  "bin/${COMPILER_PREFIX}-addr2line"
-                  
-                  # GCC工具
-                  "bin/${COMPILER_PREFIX}-gcc-ar"
-                  "bin/${COMPILER_PREFIX}-gcc-nm"
-                  "bin/${COMPILER_PREFIX}-gcc-ranlib"
-                  "bin/${COMPILER_PREFIX}-gcov"
-                  "bin/${COMPILER_PREFIX}-gcov-dump"
-                  "bin/${COMPILER_PREFIX}-gcov-tool"
-                  "bin/${COMPILER_PREFIX}-gprof"
-                )
+                KEY_FILES=("bin/${COMPILER_PREFIX}-gcc" "bin/${COMPILER_PREFIX}-g++" "bin/${COMPILER_PREFIX}-ld" "bin/${COMPILER_PREFIX}-ld.bfd" "bin/${COMPILER_PREFIX}-ld.gold" "bin/${COMPILER_PREFIX}-ar" "bin/${COMPILER_PREFIX}-as" "bin/${COMPILER_PREFIX}-strip" "bin/${COMPILER_PREFIX}-nm" "bin/${COMPILER_PREFIX}-objcopy" "bin/${COMPILER_PREFIX}-objdump" "bin/${COMPILER_PREFIX}-ranlib" "bin/${COMPILER_PREFIX}-readelf" "bin/${COMPILER_PREFIX}-size" "bin/${COMPILER_PREFIX}-strings" "bin/${COMPILER_PREFIX}-c++" "bin/${COMPILER_PREFIX}-c++filt" "bin/${COMPILER_PREFIX}-addr2line" "bin/${COMPILER_PREFIX}-gcc-ar" "bin/${COMPILER_PREFIX}-gcc-nm" "bin/${COMPILER_PREFIX}-gcc-ranlib" "bin/${COMPILER_PREFIX}-gcov" "bin/${COMPILER_PREFIX}-gcov-dump" "bin/${COMPILER_PREFIX}-gcov-tool" "bin/${COMPILER_PREFIX}-gprof")
                 ;;
               x86_64)
-                # x86_64关键文件
-                KEY_FILES=(
-                  # 编译器核心文件
-                  "bin/${COMPILER_PREFIX}-gcc"
-                  "bin/${COMPILER_PREFIX}-g++"
-                  
-                  # 链接器
-                  "bin/${COMPILER_PREFIX}-ld"
-                  
-                  # 二进制工具
-                  "bin/${COMPILER_PREFIX}-ar"
-                  "bin/${COMPILER_PREFIX}-as"
-                  "bin/${COMPILER_PREFIX}-strip"
-                  "bin/${COMPILER_PREFIX}-nm"
-                  "bin/${COMPILER_PREFIX}-objcopy"
-                  "bin/${COMPILER_PREFIX}-objdump"
-                  "bin/${COMPILER_PREFIX}-ranlib"
-                  "bin/${COMPILER_PREFIX}-readelf"
-                  "bin/${COMPILER_PREFIX}-size"
-                  
-                  # 架构特有工具
-                  "bin/${COMPILER_PREFIX}-elfedit"
-                  "bin/${COMPILER_PREFIX}-gcc-ranlib"
-                )
+                KEY_FILES=("bin/${COMPILER_PREFIX}-gcc" "bin/${COMPILER_PREFIX}-g++" "bin/${COMPILER_PREFIX}-ld" "bin/${COMPILER_PREFIX}-ar" "bin/${COMPILER_PREFIX}-as" "bin/${COMPILER_PREFIX}-strip" "bin/${COMPILER_PREFIX}-nm" "bin/${COMPILER_PREFIX}-objcopy" "bin/${COMPILER_PREFIX}-objdump" "bin/${COMPILER_PREFIX}-ranlib" "bin/${COMPILER_PREFIX}-readelf" "bin/${COMPILER_PREFIX}-size" "bin/${COMPILER_PREFIX}-elfedit" "bin/${COMPILER_PREFIX}-gcc-ranlib")
                 ;;
               mips)
-                # MIPS关键文件
-                KEY_FILES=(
-                  # 编译器核心文件
-                  "bin/${COMPILER_PREFIX}-gcc"
-                  "bin/${COMPILER_PREFIX}-g++"
-                  
-                  # 链接器
-                  "bin/${COMPILER_PREFIX}-ld"
-                  "bin/${COMPILER_PREFIX}-ld.bfd"
-                  
-                  # 二进制工具
-                  "bin/${COMPILER_PREFIX}-ar"
-                  "bin/${COMPILER_PREFIX}-as"
-                  "bin/${COMPILER_PREFIX}-strip"
-                  "bin/${COMPILER_PREFIX}-nm"
-                  "bin/${COMPILER_PREFIX}-objcopy"
-                  "bin/${COMPILER_PREFIX}-objdump"
-                  "bin/${COMPILER_PREFIX}-ranlib"
-                  "bin/${COMPILER_PREFIX}-readelf"
-                  "bin/${COMPILER_PREFIX}-size"
-                  "bin/${COMPILER_PREFIX}-strings"
-                )
+                KEY_FILES=("bin/${COMPILER_PREFIX}-gcc" "bin/${COMPILER_PREFIX}-g++" "bin/${COMPILER_PREFIX}-ld" "bin/${COMPILER_PREFIX}-ld.bfd" "bin/${COMPILER_PREFIX}-ar" "bin/${COMPILER_PREFIX}-as" "bin/${COMPILER_PREFIX}-strip" "bin/${COMPILER_PREFIX}-nm" "bin/${COMPILER_PREFIX}-objcopy" "bin/${COMPILER_PREFIX}-objdump" "bin/${COMPILER_PREFIX}-ranlib" "bin/${COMPILER_PREFIX}-readelf" "bin/${COMPILER_PREFIX}-size" "bin/${COMPILER_PREFIX}-strings")
                 ;;
               mipsel)
-                # MIPSEL关键文件
-                KEY_FILES=(
-                  # 编译器核心文件
-                  "bin/${COMPILER_PREFIX}-gcc"
-                  "bin/${COMPILER_PREFIX}-g++"
-                  
-                  # 链接器
-                  "bin/${COMPILER_PREFIX}-ld"
-                  "bin/${COMPILER_PREFIX}-ld.bfd"
-                  
-                  # 二进制工具
-                  "bin/${COMPILER_PREFIX}-ar"
-                  "bin/${COMPILER_PREFIX}-as"
-                  "bin/${COMPILER_PREFIX}-strip"
-                  "bin/${COMPILER_PREFIX}-nm"
-                  "bin/${COMPILER_PREFIX}-objcopy"
-                  "bin/${COMPILER_PREFIX}-objdump"
-                  "bin/${COMPILER_PREFIX}-ranlib"
-                  "bin/${COMPILER_PREFIX}-readelf"
-                  "bin/${COMPILER_PREFIX}-size"
-                  "bin/${COMPILER_PREFIX}-strings"
-                  
-                  # C++工具
-                  "bin/${COMPILER_PREFIX}-c++"
-                  "bin/${COMPILER_PREFIX}-c++filt"
-                )
+                KEY_FILES=("bin/${COMPILER_PREFIX}-gcc" "bin/${COMPILER_PREFIX}-g++" "bin/${COMPILER_PREFIX}-ld" "bin/${COMPILER_PREFIX}-ld.bfd" "bin/${COMPILER_PREFIX}-ar" "bin/${COMPILER_PREFIX}-as" "bin/${COMPILER_PREFIX}-strip" "bin/${COMPILER_PREFIX}-nm" "bin/${COMPILER_PREFIX}-objcopy" "bin/${COMPILER_PREFIX}-objdump" "bin/${COMPILER_PREFIX}-ranlib" "bin/${COMPILER_PREFIX}-readelf" "bin/${COMPILER_PREFIX}-size" "bin/${COMPILER_PREFIX}-strings" "bin/${COMPILER_PREFIX}-c++" "bin/${COMPILER_PREFIX}-c++filt")
                 ;;
               arm_cortex-a7)
-                # ARM Cortex-A7关键文件
-                KEY_FILES=(
-                  # 编译器核心文件
-                  "bin/${COMPILER_PREFIX}-gcc"
-                  "bin/${COMPILER_PREFIX}-g++"
-                  
-                  # 链接器
-                  "bin/${COMPILER_PREFIX}-ld"
-                  "bin/${COMPILER_PREFIX}-ld.bfd"
-                  
-                  # 二进制工具
-                  "bin/${COMPILER_PREFIX}-ar"
-                  "bin/${COMPILER_PREFIX}-as"
-                  "bin/${COMPILER_PREFIX}-strip"
-                  "bin/${COMPILER_PREFIX}-nm"
-                  "bin/${COMPILER_PREFIX}-objcopy"
-                  "bin/${COMPILER_PREFIX}-objdump"
-                  "bin/${COMPILER_PREFIX}-ranlib"
-                  "bin/${COMPILER_PREFIX}-readelf"
-                )
+                KEY_FILES=("bin/${COMPILER_PREFIX}-gcc" "bin/${COMPILER_PREFIX}-g++" "bin/${COMPILER_PREFIX}-ld" "bin/${COMPILER_PREFIX}-ld.bfd" "bin/${COMPILER_PREFIX}-ar" "bin/${COMPILER_PREFIX}-as" "bin/${COMPILER_PREFIX}-strip" "bin/${COMPILER_PREFIX}-nm" "bin/${COMPILER_PREFIX}-objcopy" "bin/${COMPILER_PREFIX}-objdump" "bin/${COMPILER_PREFIX}-ranlib" "bin/${COMPILER_PREFIX}-readelf")
                 ;;
               arm_cortex-a53)
-                # ARM Cortex-A53关键文件
-                KEY_FILES=(
-                  # 编译器核心文件
-                  "bin/${COMPILER_PREFIX}-gcc"
-                  "bin/${COMPILER_PREFIX}-g++"
-                  
-                  # 链接器
-                  "bin/${COMPILER_PREFIX}-ld"
-                  
-                  # 二进制工具
-                  "bin/${COMPILER_PREFIX}-ar"
-                  "bin/${COMPILER_PREFIX}-as"
-                  "bin/${COMPILER_PREFIX}-strip"
-                  "bin/${COMPILER_PREFIX}-objcopy"
-                  "bin/${COMPILER_PREFIX}-objdump"
-                  
-                  # 架构特有工具
-                  "bin/${COMPILER_PREFIX}-elfedit"
-                  "bin/${COMPILER_PREFIX}-gcc-ranlib"
-                )
+                KEY_FILES=("bin/${COMPILER_PREFIX}-gcc" "bin/${COMPILER_PREFIX}-g++" "bin/${COMPILER_PREFIX}-ld" "bin/${COMPILER_PREFIX}-ar" "bin/${COMPILER_PREFIX}-as" "bin/${COMPILER_PREFIX}-strip" "bin/${COMPILER_PREFIX}-objcopy" "bin/${COMPILER_PREFIX}-objdump" "bin/${COMPILER_PREFIX}-elfedit" "bin/${COMPILER_PREFIX}-gcc-ranlib")
                 ;;
               riscv64)
-                # RISC-V关键文件
-                KEY_FILES=(
-                  # 编译器核心文件
-                  "bin/${COMPILER_PREFIX}-gcc"
-                  "bin/${COMPILER_PREFIX}-g++"
-                  
-                  # 链接器
-                  "bin/${COMPILER_PREFIX}-ld"
-                  
-                  # 二进制工具
-                  "bin/${COMPILER_PREFIX}-ar"
-                  "bin/${COMPILER_PREFIX}-as"
-                  "bin/${COMPILER_PREFIX}-strip"
-                  "bin/${COMPILER_PREFIX}-nm"
-                  "bin/${COMPILER_PREFIX}-objcopy"
-                  "bin/${COMPILER_PREFIX}-objdump"
-                  "bin/${COMPILER_PREFIX}-ranlib"
-                  "bin/${COMPILER_PREFIX}-readelf"
-                )
+                KEY_FILES=("bin/${COMPILER_PREFIX}-gcc" "bin/${COMPILER_PREFIX}-g++" "bin/${COMPILER_PREFIX}-ld" "bin/${COMPILER_PREFIX}-ar" "bin/${COMPILER_PREFIX}-as" "bin/${COMPILER_PREFIX}-strip" "bin/${COMPILER_PREFIX}-nm" "bin/${COMPILER_PREFIX}-objcopy" "bin/${COMPILER_PREFIX}-objdump" "bin/${COMPILER_PREFIX}-ranlib" "bin/${COMPILER_PREFIX}-readelf")
                 ;;
             esac
             
-            # 动态检测实际的GCC版本（在编译器中）
             ACTUAL_GCC_VERSION="$GCC_VERSION"
             if [ -d "$OUTPUT_DIR/lib/gcc/${COMPILER_PREFIX}" ]; then
               DETECTED_VERSION=$(ls "$OUTPUT_DIR/lib/gcc/${COMPILER_PREFIX}" 2>/dev/null | head -1)
@@ -571,26 +398,11 @@ jobs:
               fi
             fi
             
-            # 添加库文件检查（使用实际检测到的版本）
-            KEY_LIB_FILES=(
-              "lib/gcc/${COMPILER_PREFIX}/${ACTUAL_GCC_VERSION}/libgcc.a"
-              "lib/gcc/${COMPILER_PREFIX}/${ACTUAL_GCC_VERSION}/libgcc_eh.a"
-              "lib/gcc/${COMPILER_PREFIX}/${ACTUAL_GCC_VERSION}/libgcc_s.so"
-              "lib/libc.a"
-              "lib/libm.a"
-              "usr/include/stdio.h"
-              "usr/include/stdlib.h"
-              "usr/include/string.h"
-              "usr/include/features.h"
-            )
-            
-            # 合并工具和库文件
-            ALL_KEY_FILES=("${KEY_FILES[@]}" "${KEY_LIB_FILES[@]}")
+            KEY_LIB_FILES=("lib/gcc/${COMPILER_PREFIX}/${ACTUAL_GCC_VERSION}/libgcc.a" "lib/gcc/${COMPILER_PREFIX}/${ACTUAL_GCC_VERSION}/libgcc_eh.a" "lib/gcc/${COMPILER_PREFIX}/${ACTUAL_GCC_VERSION}/libgcc_s.so" "lib/libc.a" "lib/libm.a" "usr/include/stdio.h" "usr/include/stdlib.h" "usr/include/string.h" "usr/include/features.h")
             
             MISSING_FILES=()
             EXISTING_FILES=()
             
-            # 检查每个关键文件
             echo "🔧 编译器工具文件 (${#KEY_FILES[@]}个):"
             for file_path in "${KEY_FILES[@]}"; do
               full_path="$OUTPUT_DIR/$file_path"
@@ -611,14 +423,8 @@ jobs:
                 EXISTING_FILES+=("$file_path")
                 echo "  ✅ $file_path"
               else
-                # 检查是否有替代路径
                 if [[ "$file_path" == *"usr/include/"* ]]; then
-                  # 检查其他可能的include路径
-                  alt_paths=(
-                    "include/${file_path##*/}"
-                    "sysroot/usr/include/${file_path##*/}"
-                    "${file_path#usr/}"
-                  )
+                  alt_paths=("include/${file_path##*/}" "sysroot/usr/include/${file_path##*/}" "${file_path#usr/}")
                   found_alt=false
                   for alt_path in "${alt_paths[@]}"; do
                     if [ -f "$OUTPUT_DIR/$alt_path" ]; then
@@ -633,10 +439,8 @@ jobs:
                     echo "  ❌ $file_path: 缺失"
                   fi
                 elif [[ "$file_path" == *"lib/gcc/"* ]]; then
-                  # 检查其他可能的GCC库路径
                   gcc_base="lib/gcc/${COMPILER_PREFIX}"
                   if [ -d "$OUTPUT_DIR/$gcc_base" ]; then
-                    # 查找实际的版本目录
                     actual_version_dir=$(ls "$OUTPUT_DIR/$gcc_base" 2>/dev/null | head -1)
                     if [ -n "$actual_version_dir" ]; then
                       lib_name=$(basename "$file_path")
@@ -665,21 +469,14 @@ jobs:
             
             echo ""
             echo "📊 检查统计:"
-            echo "  - 总检查文件: ${#ALL_KEY_FILES[@]}"
+            echo "  - 总检查文件: $((${#KEY_FILES[@]} + ${#KEY_LIB_FILES[@]}))"
             echo "  - 存在文件: ${#EXISTING_FILES[@]}"
             echo "  - 缺失文件: ${#MISSING_FILES[@]}"
             echo ""
             
-            # 关键文件组检查
             echo "🔑 关键文件组完整性:"
             
-            # 1. 核心编译工具组（必须存在）
-            CORE_COMPILERS=(
-              "bin/${COMPILER_PREFIX}-gcc"
-              "bin/${COMPILER_PREFIX}-g++"
-              "bin/${COMPILER_PREFIX}-ld"
-            )
-            
+            CORE_COMPILERS=("bin/${COMPILER_PREFIX}-gcc" "bin/${COMPILER_PREFIX}-g++" "bin/${COMPILER_PREFIX}-ld")
             CORE_MISSING=0
             for core_file in "${CORE_COMPILERS[@]}"; do
               if [[ " ${MISSING_FILES[*]} " == *"$core_file"* ]]; then
@@ -693,14 +490,7 @@ jobs:
               echo "  ❌ 核心编译工具组: 缺失 $CORE_MISSING 个文件"
             fi
             
-            # 2. 基础二进制工具组
-            BINUTILS_TOOLS=(
-              "bin/${COMPILER_PREFIX}-ar"
-              "bin/${COMPILER_PREFIX}-as"
-              "bin/${COMPILER_PREFIX}-strip"
-              "bin/${COMPILER_PREFIX}-objcopy"
-            )
-            
+            BINUTILS_TOOLS=("bin/${COMPILER_PREFIX}-ar" "bin/${COMPILER_PREFIX}-as" "bin/${COMPILER_PREFIX}-strip" "bin/${COMPILER_PREFIX}-objcopy")
             BINUTILS_MISSING=0
             for tool in "${BINUTILS_TOOLS[@]}"; do
               if [[ " ${MISSING_FILES[*]} " == *"$tool"* ]]; then
@@ -714,13 +504,7 @@ jobs:
               echo "  ❌ 基础二进制工具组: 缺失 $BINUTILS_MISSING 个文件"
             fi
             
-            # 3. 关键库文件组
-            KEY_LIBRARIES=(
-              "lib/gcc/${COMPILER_PREFIX}/${ACTUAL_GCC_VERSION}/libgcc.a"
-              "lib/libc.a"
-              "usr/include/stdio.h"
-            )
-            
+            KEY_LIBRARIES=("lib/gcc/${COMPILER_PREFIX}/${ACTUAL_GCC_VERSION}/libgcc.a" "lib/libc.a" "usr/include/stdio.h")
             LIBRARIES_MISSING=0
             for lib in "${KEY_LIBRARIES[@]}"; do
               if [[ " ${MISSING_FILES[*]} " == *"$lib"* ]]; then
@@ -736,7 +520,6 @@ jobs:
             
             echo ""
             
-            # 判断是否需要构建
             if [ ${#MISSING_FILES[@]} -eq 0 ]; then
               echo "🎉 所有关键文件都存在，编译器完整！"
               
@@ -748,7 +531,6 @@ jobs:
                 NEED_BUILD="false"
               fi
             else
-              # 显示缺失的文件类型统计
               TOOL_MISSING=0
               LIB_MISSING=0
               for missing_file in "${MISSING_FILES[@]}"; do
@@ -763,12 +545,10 @@ jobs:
               echo "  - 缺失工具文件: $TOOL_MISSING 个"
               echo "  - 缺失库/头文件: $LIB_MISSING 个"
               
-              # 显示缺失的关键文件
               if [ $CORE_MISSING -gt 0 ]; then
                 echo "  ❗ 缺失核心编译工具，必须重新构建"
               fi
               
-              # 显示缺失的前10个文件
               if [ ${#MISSING_FILES[@]} -gt 0 ]; then
                 echo ""
                 echo "缺失的关键文件（前10个）:"
@@ -1002,11 +782,9 @@ jobs:
             sudo apt-utils dialog \
             man-db manpages manpages-dev
           
-          # 安装aclocal等缺失的工具
           echo "安装autotools..."
           sudo apt-get install -y autotools-dev automake-1.16 autoconf-archive
           
-          # 设置locale
           sudo locale-gen en_US.UTF-8
           export LANG=en_US.UTF-8
           export LC_ALL=en_US.UTF-8
@@ -1051,9 +829,9 @@ jobs:
           echo "源码大小: $(du -sh . | cut -f1)"
           echo "结束时间: $(date)"
 
-      - name: 📝 生成配置文件
+      - name: 📝 生成配置文件（修复版）
         run: |
-          echo "=== 生成OpenWrt配置 ==="
+          echo "=== 生成OpenWrt配置（修复版）==="
           echo "开始时间: $(date)"
           cd "${{ env.BUILD_DIR }}"
           echo "当前目录: $(pwd)"
@@ -1069,33 +847,66 @@ jobs:
           CONFIG_FILE=".config"
           echo "生成主配置文件: $CONFIG_FILE"
           
+          # 修复：确保所有必要的配置项都存在
           echo "# 目标配置" > $CONFIG_FILE
           echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> $CONFIG_FILE
           echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> $CONFIG_FILE
+          echo "CONFIG_TARGET_ARCH_PACKAGES=\"${{ env.ARCH_NAME }}\"" >> $CONFIG_FILE
           echo "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" >> $CONFIG_FILE
+          echo "CONFIG_TARGET_BOARD=\"${{ env.TARGET }}\"" >> $CONFIG_FILE
+          echo "CONFIG_TARGET_SUBTARGET=\"${{ env.SUBTARGET }}\"" >> $CONFIG_FILE
+          echo "CONFIG_TARGET_PROFILE=\"Generic\"" >> $CONFIG_FILE
           echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" >> $CONFIG_FILE
+          echo "CONFIG_TARGET_ROOTFS_INITRAMFS=y" >> $CONFIG_FILE
           echo "CONFIG_EXTERNAL_TOOLCHAIN=n" >> $CONFIG_FILE
-          echo "CONFIG_USE_MUSL=${{ env.USE_MUSL }}" >> $CONFIG_FILE
           echo "CONFIG_BUILD_TOOLCHAIN=y" >> $CONFIG_FILE
+          echo "CONFIG_TOOLCHAINOPTS=y" >> $CONFIG_FILE
           echo "CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"" >> $CONFIG_FILE
           echo "CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"" >> $CONFIG_FILE
           echo "CONFIG_LINUX_VERSION=\"${{ env.LINUX_VERSION }}\"" >> $CONFIG_FILE
-          echo "CONFIG_ALL=n" >> $CONFIG_FILE
-          echo "CONFIG_ALL_KMODS=n" >> $CONFIG_FILE
-          echo "CONFIG_ALL_NONSHARED=n" >> $CONFIG_FILE
-          echo "CONFIG_DEVEL=y" >> $CONFIG_FILE
-          echo "CONFIG_CCACHE=n" >> $CONFIG_FILE
-          echo "CONFIG_TARGET_ROOTFS_INITRAMFS=y" >> $CONFIG_FILE
+          echo "CONFIG_LIBC=\"${{ env.LIBC_SUFFIX }}\"" >> $CONFIG_FILE
           
           if [ "${{ env.USE_MUSL }}" = "y" ]; then
+            echo "CONFIG_USE_MUSL=y" >> $CONFIG_FILE
             echo "CONFIG_MUSL_VERSION=\"${{ needs.setup.outputs.musl_version }}\"" >> $CONFIG_FILE
           else
+            echo "CONFIG_USE_GLIBC=y" >> $CONFIG_FILE
             echo "CONFIG_GLIBC_VERSION=\"${{ needs.setup.outputs.glibc_version }}\"" >> $CONFIG_FILE
           fi
           
+          # 架构特定配置
+          echo "CONFIG_ARCH_${{ env.ARCH_NAME }}=y" >> $CONFIG_FILE
+          
+          # 处理器配置
+          if [ "${{ env.ARCH_NAME }}" = "arm" ] || [ "${{ env.ARCH_NAME }}" = "aarch64" ]; then
+            echo "CONFIG_CPU_TYPE=\"${{ env.CPU_TYPE }}\"" >> $CONFIG_FILE
+            echo "CONFIG_CPU_TUNE=\"${{ env.TUNE }}\"" >> $CONFIG_FILE
+            echo "CONFIG_CPU_SUBTYPE=\"${{ env.CPU_TYPE }}\"" >> $CONFIG_FILE
+            if [ "${{ env.FLOAT_ABI }}" != "" ]; then
+              echo "CONFIG_FPU=\"${{ env.FLOAT_ABI }}\"" >> $CONFIG_FILE
+            fi
+          fi
+          
+          # 开发选项
+          echo "CONFIG_DEVEL=y" >> $CONFIG_FILE
+          echo "CONFIG_BUILD_PATENTED=y" >> $CONFIG_FILE
+          echo "CONFIG_CCACHE=n" >> $CONFIG_FILE
+          echo "CONFIG_ALL=n" >> $CONFIG_FILE
+          echo "CONFIG_ALL_KMODS=n" >> $CONFIG_FILE
+          echo "CONFIG_ALL_NONSHARED=n" >> $CONFIG_FILE
+          
+          # 基础包配置
+          echo "CONFIG_BASE_FILES=y" >> $CONFIG_FILE
+          echo "CONFIG_BUSYBOX_DEFAULT_FEATURE_EDITING=y" >> $CONFIG_FILE
+          
           echo "配置文件大小: $(wc -l < $CONFIG_FILE) 行"
           echo "配置摘要:"
-          grep -E "CONFIG_TARGET|CONFIG_GCC|CONFIG_BINUTILS" $CONFIG_FILE
+          echo "目标: ${{ env.TARGET }}/${{ env.SUBTARGET }}"
+          echo "架构: ${{ env.ARCH_NAME }}"
+          echo "前缀: ${{ env.PREFIX }}-"
+          echo "GCC: ${{ env.GCC_VERSION }}"
+          echo "构建工具链: y"
+          echo "C库: ${{ env.LIBC_SUFFIX }}"
           echo "✅ 配置文件生成完成"
           echo "结束时间: $(date)"
 
@@ -1123,7 +934,6 @@ jobs:
           echo "        当前配置摘要          "
           echo "=============================="
           
-          # 检查工具链配置
           echo "🔧 工具链配置:"
           if grep -q "CONFIG_BUILD_TOOLCHAIN=y" .config; then
             echo "  ✅ 构建工具链: 启用"
@@ -1135,7 +945,6 @@ jobs:
           echo "  🔍 Binutils版本: $(grep 'CONFIG_BINUTILS_VERSION=' .config | cut -d'"' -f2)"
           echo "  🔍 Linux内核版本: $(grep 'CONFIG_LINUX_VERSION=' .config | cut -d'"' -f2)"
           
-          # 检查C库配置
           echo "📚 C库配置:"
           if grep -q "CONFIG_USE_MUSL=y" .config; then
             echo "  ✅ Musl C库: 启用"
@@ -1145,7 +954,6 @@ jobs:
             echo "  🔍 Glibc版本: $(grep 'CONFIG_GLIBC_VERSION=' .config | cut -d'"' -f2)"
           fi
           
-          # 检查开发选项
           echo "💻 开发选项:"
           if grep -q "CONFIG_DEVEL=y" .config; then
             echo "  ✅ 开发模式: 启用"
@@ -1159,7 +967,6 @@ jobs:
             echo "  ❌ CCache缓存: 启用"
           fi
           
-          # 检查包管理
           echo "📦 包管理配置:"
           if grep -q "CONFIG_ALL=n" .config; then
             echo "  ✅ 所有包: 禁用"
@@ -1179,12 +986,12 @@ jobs:
             echo "  ❌ 所有非共享库: 启用"
           fi
           
-          # 检查目标配置
           echo "🎯 目标平台配置:"
-          echo "  目标: $(grep 'CONFIG_TARGET_' .config | grep '=y' | head -1 | cut -d'=' -f1 | sed 's/CONFIG_TARGET_//')"
-          echo "  子目标: $(grep 'CONFIG_TARGET_.*_SUBTARGET' .config | grep '=y' | cut -d'=' -f1 | sed 's/CONFIG_TARGET_//' | sed 's/_SUBTARGET//')"
+          echo "  目标: $(grep 'CONFIG_TARGET_BOARD=' .config | cut -d'"' -f2)"
+          echo "  子目标: $(grep 'CONFIG_TARGET_SUBTARGET=' .config | cut -d'"' -f2)"
           echo "  架构: $(grep 'CONFIG_TARGET_ARCH=' .config | cut -d'"' -f2)"
           echo "  编译器前缀: $(grep 'CONFIG_TARGET_PREFIX=' .config | cut -d'"' -f2)"
+          echo "  处理器类型: $(grep 'CONFIG_CPU_TYPE=' .config | cut -d'"' -f2 2>/dev/null || echo '未指定')"
           
           echo "=============================="
           echo "✅ 配置菜单生成完成"
@@ -1351,88 +1158,48 @@ jobs:
           echo "🔧 检查关键编译器文件:"
           echo ""
           
-          # 获取编译器前缀
           TOOL_PREFIX=$(basename "$COMPILER_PATH" | sed 's/gcc$//')
           
-          # 检测实际的GCC版本
           ACTUAL_GCC_VERSION=""
           GCC_LIB_DIR=$(find "$TOOLCHAIN_DIR" -path "*/lib/gcc/*" -type d 2>/dev/null | head -1)
           if [ -n "$GCC_LIB_DIR" ]; then
-            # 从路径中提取版本号
             ACTUAL_GCC_VERSION=$(echo "$GCC_LIB_DIR" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
             if [ -z "$ACTUAL_GCC_VERSION" ]; then
-              # 尝试其他格式
               ACTUAL_GCC_VERSION=$(basename "$GCC_LIB_DIR")
             fi
           fi
           
           if [ -z "$ACTUAL_GCC_VERSION" ]; then
-            # 使用指定的版本号
             ACTUAL_GCC_VERSION="${{ env.GCC_VERSION }}"
           fi
           
           echo "🔍 检测到实际GCC版本: $ACTUAL_GCC_VERSION"
           echo "🔍 编译器前缀: $TOOL_PREFIX"
           
-          # 根据架构类型确定要检查的工具列表
           ARCH="${{ github.event.inputs.target_arch }}"
-          
-          # 初始化关键工具数组
           KEY_TOOLS=()
           
           case "$ARCH" in
             aarch64)
-              KEY_TOOLS=(
-                "gcc" "g++" "ld" "ld.bfd" "ld.gold"
-                "ar" "as" "strip" "nm" "objcopy" "objdump"
-                "ranlib" "readelf" "size" "strings"
-                "c++" "c++filt" "addr2line"
-                "gcc-ar" "gcc-nm" "gcc-ranlib" "gcov" "gcov-dump" "gcov-tool" "gprof"
-              )
+              KEY_TOOLS=("gcc" "g++" "ld" "ld.bfd" "ld.gold" "ar" "as" "strip" "nm" "objcopy" "objdump" "ranlib" "readelf" "size" "strings" "c++" "c++filt" "addr2line" "gcc-ar" "gcc-nm" "gcc-ranlib" "gcov" "gcov-dump" "gcov-tool" "gprof")
               ;;
             x86_64)
-              KEY_TOOLS=(
-                "gcc" "g++" "ld"
-                "ar" "as" "strip" "nm" "objcopy" "objdump"
-                "ranlib" "readelf" "size"
-                "elfedit" "gcc-ranlib"
-              )
+              KEY_TOOLS=("gcc" "g++" "ld" "ar" "as" "strip" "nm" "objcopy" "objdump" "ranlib" "readelf" "size" "elfedit" "gcc-ranlib")
               ;;
             mips)
-              KEY_TOOLS=(
-                "gcc" "g++" "ld" "ld.bfd"
-                "ar" "as" "strip" "nm" "objcopy" "objdump"
-                "ranlib" "readelf" "size" "strings"
-              )
+              KEY_TOOLS=("gcc" "g++" "ld" "ld.bfd" "ar" "as" "strip" "nm" "objcopy" "objdump" "ranlib" "readelf" "size" "strings")
               ;;
             mipsel)
-              KEY_TOOLS=(
-                "gcc" "g++" "ld" "ld.bfd"
-                "ar" "as" "strip" "nm" "objcopy" "objdump"
-                "ranlib" "readelf" "size" "strings"
-                "c++" "c++filt"
-              )
+              KEY_TOOLS=("gcc" "g++" "ld" "ld.bfd" "ar" "as" "strip" "nm" "objcopy" "objdump" "ranlib" "readelf" "size" "strings" "c++" "c++filt")
               ;;
             arm_cortex-a7)
-              KEY_TOOLS=(
-                "gcc" "g++" "ld" "ld.bfd"
-                "ar" "as" "strip" "nm" "objcopy" "objdump"
-                "ranlib" "readelf"
-              )
+              KEY_TOOLS=("gcc" "g++" "ld" "ld.bfd" "ar" "as" "strip" "nm" "objcopy" "objdump" "ranlib" "readelf")
               ;;
             arm_cortex-a53)
-              KEY_TOOLS=(
-                "gcc" "g++" "ld"
-                "ar" "as" "strip" "objcopy" "objdump"
-                "elfedit" "gcc-ranlib"
-              )
+              KEY_TOOLS=("gcc" "g++" "ld" "ar" "as" "strip" "objcopy" "objdump" "elfedit" "gcc-ranlib")
               ;;
             riscv64)
-              KEY_TOOLS=(
-                "gcc" "g++" "ld"
-                "ar" "as" "strip" "nm" "objcopy" "objdump"
-                "ranlib" "readelf"
-              )
+              KEY_TOOLS=("gcc" "g++" "ld" "ar" "as" "strip" "nm" "objcopy" "objdump" "ranlib" "readelf")
               ;;
           esac
           
@@ -1457,11 +1224,9 @@ jobs:
           echo "  - 存在工具: ${#EXISTING_TOOLS[@]}"
           echo "  - 缺失工具: ${#MISSING_TOOLS[@]}"
           
-          # 检查关键库文件（使用实际检测到的版本）
           echo ""
           echo "📚 检查关键库文件 (版本: $ACTUAL_GCC_VERSION):"
           
-          # 动态查找GCC库目录
           GCC_BASE_PATH=""
           for possible_path in "lib/gcc/${TOOL_PREFIX%/}" "usr/lib/gcc/${TOOL_PREFIX%/}"; do
             if [ -d "$TOOLCHAIN_DIR/$possible_path" ]; then
@@ -1475,22 +1240,9 @@ jobs:
             GCC_BASE_PATH="lib/gcc/${TOOL_PREFIX%/}"
           fi
           
-          KEY_LIBS=(
-            "${GCC_BASE_PATH}/${ACTUAL_GCC_VERSION}/libgcc.a"
-            "${GCC_BASE_PATH}/${ACTUAL_GCC_VERSION}/libgcc_eh.a"
-            "${GCC_BASE_PATH}/${ACTUAL_GCC_VERSION}/libgcc_s.so"
-            "lib/libc.a"
-            "lib/libm.a"
-          )
+          KEY_LIBS=("${GCC_BASE_PATH}/${ACTUAL_GCC_VERSION}/libgcc.a" "${GCC_BASE_PATH}/${ACTUAL_GCC_VERSION}/libgcc_eh.a" "${GCC_BASE_PATH}/${ACTUAL_GCC_VERSION}/libgcc_s.so" "lib/libc.a" "lib/libm.a")
           
-          # 检查头文件（查找所有可能的include路径）
-          HEADER_PATHS=(
-            "usr/include"
-            "include"
-            "sysroot/usr/include"
-            "${TOOL_PREFIX%/}/include"
-          )
-          
+          HEADER_PATHS=("usr/include" "include" "sysroot/usr/include" "${TOOL_PREFIX%/}/include")
           HEADER_FILES=("stdio.h" "stdlib.h" "string.h" "features.h")
           
           MISSING_LIBS=()
@@ -1525,7 +1277,6 @@ jobs:
           
           echo ""
           
-          # 判断构建是否完整
           TOTAL_MISSING=$(( ${#MISSING_TOOLS[@]} + ${#MISSING_LIBS[@]} + ${#MISSING_HEADERS[@]} ))
           
           if [ $TOTAL_MISSING -eq 0 ]; then
@@ -1534,7 +1285,6 @@ jobs:
           else
             if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
               echo "⚠️ 缺失 ${#MISSING_TOOLS[@]} 个关键工具"
-              # 检查是否缺失核心工具
               CORE_TOOLS=("gcc" "g++" "ld")
               CORE_MISSING=0
               for core_tool in "${CORE_TOOLS[@]}"; do
@@ -1553,7 +1303,6 @@ jobs:
               echo "⚠️ 缺失 ${#MISSING_HEADERS[@]} 个头文件"
             fi
             
-            # 如果缺失核心工具或缺失过多文件，则构建失败
             if [ $CORE_MISSING -gt 0 ] || [ ${#MISSING_TOOLS[@]} -gt 5 ] || [ ${#MISSING_LIBS[@]} -gt 2 ] || [ ${#MISSING_HEADERS[@]} -gt 2 ]; then
               echo "❌ 关键文件缺失过多，构建不完整"
               echo "BUILD_COMPLETE=false" >> $GITHUB_ENV
@@ -1591,7 +1340,6 @@ jobs:
             echo "从: $TOOLCHAIN_DIR"
             echo "到: ${{ env.OUTPUT_DIR }}"
             
-            # 复制整个工具链，忽略一些错误
             cp -r "$TOOLCHAIN_DIR"/* "${{ env.OUTPUT_DIR }}/" 2>&1 | grep -v "cannot stat" || true
             
             echo "✅ 复制完成"
@@ -1671,7 +1419,13 @@ jobs:
           if ! git diff --cached --quiet; then
             echo "检测到变更，创建提交..."
             
-            git commit -m "build(compiler): 添加 ${{ env.ARCH_DIR }}-${{ env.LIBC_DIR }} 交叉编译器" -m "版本: GCC ${{ env.GCC_VERSION }}" -m "实际版本: $ACTUAL_GCC_VERSION" -m "大小: ${{ env.TOTAL_SIZE }}" -m "文件数: ${{ env.FILE_COUNT }}" -m "工作流: #${{ github.run_id }}"
+            git commit \
+              -m "build(compiler): 添加 ${{ env.ARCH_DIR }}-${{ env.LIBC_DIR }} 交叉编译器" \
+              -m "版本: GCC ${{ env.GCC_VERSION }}" \
+              -m "实际版本: $ACTUAL_GCC_VERSION" \
+              -m "大小: ${{ env.TOTAL_SIZE }}" \
+              -m "文件数: ${{ env.FILE_COUNT }}" \
+              -m "工作流: #${{ github.run_id }}"
             
             echo "推送到仓库..."
             if git push origin main; then
