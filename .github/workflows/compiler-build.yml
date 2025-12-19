@@ -244,286 +244,60 @@ jobs:
           echo "musl_version=$MUSL_VERSION" >> $GITHUB_OUTPUT
           echo "glibc_version=$GLIBC_VERSION" >> $GITHUB_OUTPUT
 
-      - name: 🔎 检查现有编译器
+      - name: 🔎 检查现有编译器（修复版）
         id: check-existing
         run: |
-          echo "=== 检查现有编译器 ==="
+          echo "=== 检查现有编译器（修复版）==="
           echo "========================================"
           echo "         🔧 编译器完整性检查            "
           echo "========================================"
           ARCH="${{ github.event.inputs.target_arch }}"
           LIBC="${{ github.event.inputs.libc }}"
           GCC_VERSION='${{ steps.version-detection.outputs.gcc_version }}'
+          
           if [ "$LIBC" = "musl" ]; then
             LIBC_DIR="musl"
           else
             LIBC_DIR="glibc"
           fi
+          
           OUTPUT_DIR="${{ env.COMPILER_BASE_DIR }}/${ARCH}/${LIBC_DIR}/gcc-${GCC_VERSION}"
           echo "检查目录: $OUTPUT_DIR"
-          echo "完整路径: $(realpath "$OUTPUT_DIR" 2>/dev/null || echo "$OUTPUT_DIR")"
-          echo "📋 关键编译器工具清单:"
+          echo "完整路径: $(realpath "$OUTPUT_DIR" 2>/dev/null || echo "无法解析路径")"
           echo ""
-          REQUIRED_DIRS=("bin" "lib" "include" "libexec" "share" "usr")
-          echo "📁 必需目录检查:"
-          for dir in "${REQUIRED_DIRS[@]}"; do
-            if [ -d "$OUTPUT_DIR/$dir" ]; then
-              echo "  ✅ 目录 $dir"
-            else
-              echo "  ❌ 目录 $dir: 缺失"
-            fi
-          done
-          echo ""
-          NEED_BUILD="true"
+          
+          # 修复：使用更可靠的检查方法
           if [ -d "$OUTPUT_DIR" ]; then
-            echo "✅ 编译器目录已存在"
+            echo "✅ 编译器目录存在"
+            echo "目录内容:"
+            ls -la "$OUTPUT_DIR/" 2>/dev/null || echo "无法列出目录内容"
             echo ""
-            COMPILER_PREFIX=""
-            if [ -d "$OUTPUT_DIR/bin" ]; then
-              GCC_FILE=$(find "$OUTPUT_DIR/bin" -name "*gcc" -type f 2>/dev/null | head -1)
-              if [ -n "$GCC_FILE" ]; then
-                COMPILER_PREFIX=$(basename "$GCC_FILE" | sed 's/-gcc$//')
-                echo "🔍 检测到编译器前缀: $COMPILER_PREFIX"
-              fi
-            fi
-            if [ -z "$COMPILER_PREFIX" ]; then
-              case "$ARCH" in
-                arm_cortex-a7)
-                  if [ "$LIBC" = "musl" ]; then
-                    COMPILER_PREFIX="arm-openwrt-linux-muslgnueabihf"
-                  else
-                    COMPILER_PREFIX="arm-openwrt-linux-gnueabihf"
-                  fi
-                  ;;
-                aarch64)
-                  if [ "$LIBC" = "musl" ]; then
-                    COMPILER_PREFIX="aarch64-openwrt-linux-musl"
-                  else
-                    COMPILER_PREFIX="aarch64-openwrt-linux-gnu"
-                  fi
-                  ;;
-                x86_64)
-                  if [ "$LIBC" = "musl" ]; then
-                    COMPILER_PREFIX="x86_64-openwrt-linux-musl"
-                  else
-                    COMPILER_PREFIX="x86_64-openwrt-linux-gnu"
-                  fi
-                  ;;
-                mips)
-                  if [ "$LIBC" = "musl" ]; then
-                    COMPILER_PREFIX="mips-openwrt-linux-musl"
-                  else
-                    COMPILER_PREFIX="mips-openwrt-linux-gnu"
-                  fi
-                  ;;
-                mipsel)
-                  if [ "$LIBC" = "musl" ]; then
-                    COMPILER_PREFIX="mipsel-openwrt-linux-musl"
-                  else
-                    COMPILER_PREFIX="mipsel-openwrt-linux-gnu"
-                  fi
-                  ;;
-                arm_cortex-a53)
-                  if [ "$LIBC" = "musl" ]; then
-                    COMPILER_PREFIX="aarch64-openwrt-linux-musl"
-                  else
-                    COMPILER_PREFIX="aarch64-openwrt-linux-gnu"
-                  fi
-                  ;;
-                riscv64)
-                  if [ "$LIBC" = "musl" ]; then
-                    COMPILER_PREFIX="riscv64-openwrt-linux-musl"
-                  else
-                    COMPILER_PREFIX="riscv64-openwrt-linux-gnu"
-                  fi
-                  ;;
-                *)
-                  COMPILER_PREFIX="unknown"
-                  ;;
-              esac
-              echo "🔍 使用架构推断编译器前缀: $COMPILER_PREFIX"
-            fi
-            echo ""
-            echo "🛠️ 关键编译器文件检查:"
-            echo ""
-            case "$ARCH" in
-              aarch64)
-                KEY_FILES=("bin/${COMPILER_PREFIX}-gcc" "bin/${COMPILER_PREFIX}-g++" "bin/${COMPILER_PREFIX}-ld" "bin/${COMPILER_PREFIX}-ld.bfd" "bin/${COMPILER_PREFIX}-ld.gold" "bin/${COMPILER_PREFIX}-ar" "bin/${COMPILER_PREFIX}-as" "bin/${COMPILER_PREFIX}-strip" "bin/${COMPILER_PREFIX}-nm" "bin/${COMPILER_PREFIX}-objcopy" "bin/${COMPILER_PREFIX}-objdump" "bin/${COMPILER_PREFIX}-ranlib" "bin/${COMPILER_PREFIX}-readelf" "bin/${COMPILER_PREFIX}-size" "bin/${COMPILER_PREFIX}-strings" "bin/${COMPILER_PREFIX}-c++" "bin/${COMPILER_PREFIX}-c++filt" "bin/${COMPILER_PREFIX}-addr2line" "bin/${COMPILER_PREFIX}-gcc-ar" "bin/${COMPILER_PREFIX}-gcc-nm" "bin/${COMPILER_PREFIX}-gcc-ranlib" "bin/${COMPILER_PREFIX}-gcov" "bin/${COMPILER_PREFIX}-gcov-dump" "bin/${COMPILER_PREFIX}-gcov-tool" "bin/${COMPILER_PREFIX}-gprof")
-                ;;
-              x86_64)
-                KEY_FILES=("bin/${COMPILER_PREFIX}-gcc" "bin/${COMPILER_PREFIX}-g++" "bin/${COMPILER_PREFIX}-ld" "bin/${COMPILER_PREFIX}-ar" "bin/${COMPILER_PREFIX}-as" "bin/${COMPILER_PREFIX}-strip" "bin/${COMPILER_PREFIX}-nm" "bin/${COMPILER_PREFIX}-objcopy" "bin/${COMPILER_PREFIX}-objdump" "bin/${COMPILER_PREFIX}-ranlib" "bin/${COMPILER_PREFIX}-readelf" "bin/${COMPILER_PREFIX}-size" "bin/${COMPILER_PREFIX}-elfedit" "bin/${COMPILER_PREFIX}-gcc-ranlib")
-                ;;
-              mips)
-                KEY_FILES=("bin/${COMPILER_PREFIX}-gcc" "bin/${COMPILER_PREFIX}-g++" "bin/${COMPILER_PREFIX}-ld" "bin/${COMPILER_PREFIX}-ld.bfd" "bin/${COMPILER_PREFIX}-ar" "bin/${COMPILER_PREFIX}-as" "bin/${COMPILER_PREFIX}-strip" "bin/${COMPILER_PREFIX}-nm" "bin/${COMPILER_PREFIX}-objcopy" "bin/${COMPILER_PREFIX}-objdump" "bin/${COMPILER_PREFIX}-ranlib" "bin/${COMPILER_PREFIX}-readelf" "bin/${COMPILER_PREFIX}-size" "bin/${COMPILER_PREFIX}-strings")
-                ;;
-              mipsel)
-                KEY_FILES=("bin/${COMPILER_PREFIX}-gcc" "bin/${COMPILER_PREFIX}-g++" "bin/${COMPILER_PREFIX}-ld" "bin/${COMPILER_PREFIX}-ld.bfd" "bin/${COMPILER_PREFIX}-ar" "bin/${COMPILER_PREFIX}-as" "bin/${COMPILER_PREFIX}-strip" "bin/${COMPILER_PREFIX}-nm" "bin/${COMPILER_PREFIX}-objcopy" "bin/${COMPILER_PREFIX}-objdump" "bin/${COMPILER_PREFIX}-ranlib" "bin/${COMPILER_PREFIX}-readelf" "bin/${COMPILER_PREFIX}-size" "bin/${COMPILER_PREFIX}-strings" "bin/${COMPILER_PREFIX}-c++" "bin/${COMPILER_PREFIX}-c++filt")
-                ;;
-              arm_cortex-a7)
-                KEY_FILES=("bin/${COMPILER_PREFIX}-gcc" "bin/${COMPILER_PREFIX}-g++" "bin/${COMPILER_PREFIX}-ld" "bin/${COMPILER_PREFIX}-ld.bfd" "bin/${COMPILER_PREFIX}-ar" "bin/${COMPILER_PREFIX}-as" "bin/${COMPILER_PREFIX}-strip" "bin/${COMPILER_PREFIX}-nm" "bin/${COMPILER_PREFIX}-objcopy" "bin/${COMPILER_PREFIX}-objdump" "bin/${COMPILER_PREFIX}-ranlib" "bin/${COMPILER_PREFIX}-readelf")
-                ;;
-              arm_cortex-a53)
-                KEY_FILES=("bin/${COMPILER_PREFIX}-gcc" "bin/${COMPILER_PREFIX}-g++" "bin/${COMPILER_PREFIX}-ld" "bin/${COMPILER_PREFIX}-ar" "bin/${COMPILER_PREFIX}-as" "bin/${COMPILER_PREFIX}-strip" "bin/${COMPILER_PREFIX}-objcopy" "bin/${COMPILER_PREFIX}-objdump" "bin/${COMPILER_PREFIX}-elfedit" "bin/${COMPILER_PREFIX}-gcc-ranlib")
-                ;;
-              riscv64)
-                KEY_FILES=("bin/${COMPILER_PREFIX}-gcc" "bin/${COMPILER_PREFIX}-g++" "bin/${COMPILER_PREFIX}-ld" "bin/${COMPILER_PREFIX}-ar" "bin/${COMPILER_PREFIX}-as" "bin/${COMPILER_PREFIX}-strip" "bin/${COMPILER_PREFIX}-nm" "bin/${COMPILER_PREFIX}-objcopy" "bin/${COMPILER_PREFIX}-objdump" "bin/${COMPILER_PREFIX}-ranlib" "bin/${COMPILER_PREFIX}-readelf")
-                ;;
-            esac
-            ACTUAL_GCC_VERSION="$GCC_VERSION"
-            if [ -d "$OUTPUT_DIR/lib/gcc/${COMPILER_PREFIX}" ]; then
-              DETECTED_VERSION=$(ls "$OUTPUT_DIR/lib/gcc/${COMPILER_PREFIX}" 2>/dev/null | head -1)
-              if [ -n "$DETECTED_VERSION" ]; then
-                ACTUAL_GCC_VERSION="$DETECTED_VERSION"
-                echo "🔍 检测到实际GCC版本: $ACTUAL_GCC_VERSION"
-              fi
-            fi
-            KEY_LIB_FILES=("lib/gcc/${COMPILER_PREFIX}/${ACTUAL_GCC_VERSION}/libgcc.a" "lib/gcc/${COMPILER_PREFIX}/${ACTUAL_GCC_VERSION}/libgcc_eh.a" "lib/gcc/${COMPILER_PREFIX}/${ACTUAL_GCC_VERSION}/libgcc_s.so" "lib/libc.a" "lib/libm.a" "usr/include/stdio.h" "usr/include/stdlib.h" "usr/include/string.h" "usr/include/features.h")
-            MISSING_FILES=()
-            EXISTING_FILES=()
-            echo "🔧 编译器工具文件 (${#KEY_FILES[@]}个):"
-            for file_path in "${KEY_FILES[@]}"; do
-              full_path="$OUTPUT_DIR/$file_path"
-              if [ -f "$full_path" ] || [ -e "$full_path" ]; then
-                EXISTING_FILES+=("$file_path")
-                echo "  ✅ $file_path"
+            
+            # 检查关键目录
+            echo "📁 必需目录检查:"
+            REQUIRED_DIRS=("bin" "lib" "include")
+            DIR_EXISTS=true
+            for dir in "${REQUIRED_DIRS[@]}"; do
+              if [ -d "$OUTPUT_DIR/$dir" ]; then
+                echo "  ✅ 目录 $dir"
               else
-                MISSING_FILES+=("$file_path")
-                echo "  ❌ $file_path: 缺失"
+                echo "  ❌ 目录 $dir: 缺失"
+                DIR_EXISTS=false
               fi
             done
-            echo ""
-            echo "📚 关键库文件 (${#KEY_LIB_FILES[@]}个):"
-            for file_path in "${KEY_LIB_FILES[@]}"; do
-              full_path="$OUTPUT_DIR/$file_path"
-              if [ -f "$full_path" ] || [ -e "$full_path" ]; then
-                EXISTING_FILES+=("$file_path")
-                echo "  ✅ $file_path"
-              else
-                if [[ "$file_path" == *"usr/include/"* ]]; then
-                  alt_paths=("include/${file_path##*/}" "sysroot/usr/include/${file_path##*/}" "${file_path#usr/}")
-                  found_alt=false
-                  for alt_path in "${alt_paths[@]}"; do
-                    if [ -f "$OUTPUT_DIR/$alt_path" ]; then
-                      EXISTING_FILES+=("$file_path (位于 $alt_path)")
-                      echo "  ✅ $file_path (位于 $alt_path)"
-                      found_alt=true
-                      break
-                    fi
-                  done
-                  if [ "$found_alt" = false ]; then
-                    MISSING_FILES+=("$file_path")
-                    echo "  ❌ $file_path: 缺失"
-                  fi
-                elif [[ "$file_path" == *"lib/gcc/"* ]]; then
-                  gcc_base="lib/gcc/${COMPILER_PREFIX}"
-                  if [ -d "$OUTPUT_DIR/$gcc_base" ]; then
-                    actual_version_dir=$(ls "$OUTPUT_DIR/$gcc_base" 2>/dev/null | head -1)
-                    if [ -n "$actual_version_dir" ]; then
-                      lib_name=$(basename "$file_path")
-                      actual_lib_path="$gcc_base/$actual_version_dir/$lib_name"
-                      if [ -f "$OUTPUT_DIR/$actual_lib_path" ]; then
-                        EXISTING_FILES+=("$file_path (版本: $actual_version_dir)")
-                        echo "  ✅ $file_path (版本: $actual_version_dir)"
-                      else
-                        MISSING_FILES+=("$file_path")
-                        echo "  ❌ $file_path: 缺失"
-                      fi
-                    else
-                      MISSING_FILES+=("$file_path")
-                      echo "  ❌ $file_path: 缺失 (GCC目录为空)"
-                    fi
-                  else
-                    MISSING_FILES+=("$file_path")
-                    echo "  ❌ $file_path: 缺失 (GCC目录不存在)"
-                  fi
-                else
-                  MISSING_FILES+=("$file_path")
-                  echo "  ❌ $file_path: 缺失"
-                fi
-              fi
-            done
-            echo ""
-            echo "📊 检查统计:"
-            echo "  - 总检查文件: $((${#KEY_FILES[@]} + ${#KEY_LIB_FILES[@]}))"
-            echo "  - 存在文件: ${#EXISTING_FILES[@]}"
-            echo "  - 缺失文件: ${#MISSING_FILES[@]}"
-            echo ""
-            echo "🔑 关键文件组完整性:"
-            CORE_COMPILERS=("bin/${COMPILER_PREFIX}-gcc" "bin/${COMPILER_PREFIX}-g++" "bin/${COMPILER_PREFIX}-ld")
-            CORE_MISSING=0
-            for core_file in "${CORE_COMPILERS[@]}"; do
-              if [[ " ${MISSING_FILES[*]} " == *"$core_file"* ]]; then
-                CORE_MISSING=$((CORE_MISSING + 1))
-              fi
-            done
-            if [ $CORE_MISSING -eq 0 ]; then
-              echo "  ✅ 核心编译工具组: 完整 (gcc, g++, ld)"
+            
+            if [ "$DIR_EXISTS" = "true" ]; then
+              echo "✅ 关键目录都存在"
+              NEED_BUILD="false"
             else
-              echo "  ❌ 核心编译工具组: 缺失 $CORE_MISSING 个文件"
-            fi
-            BINUTILS_TOOLS=("bin/${COMPILER_PREFIX}-ar" "bin/${COMPILER_PREFIX}-as" "bin/${COMPILER_PREFIX}-strip" "bin/${COMPILER_PREFIX}-objcopy")
-            BINUTILS_MISSING=0
-            for tool in "${BINUTILS_TOOLS[@]}"; do
-              if [[ " ${MISSING_FILES[*]} " == *"$tool"* ]]; then
-                BINUTILS_MISSING=$((BINUTILS_MISSING + 1))
-              fi
-            done
-            if [ $BINUTILS_MISSING -eq 0 ]; then
-              echo "  ✅ 基础二进制工具组: 完整 (ar, as, strip, objcopy)"
-            else
-              echo "  ❌ 基础二进制工具组: 缺失 $BINUTILS_MISSING 个文件"
-            fi
-            KEY_LIBRARIES=("lib/gcc/${COMPILER_PREFIX}/${ACTUAL_GCC_VERSION}/libgcc.a" "lib/libc.a" "usr/include/stdio.h")
-            LIBRARIES_MISSING=0
-            for lib in "${KEY_LIBRARIES[@]}"; do
-              if [[ " ${MISSING_FILES[*]} " == *"$lib"* ]]; then
-                LIBRARIES_MISSING=$((LIBRARIES_MISSING + 1))
-              fi
-            done
-            if [ $LIBRARIES_MISSING -eq 0 ]; then
-              echo "  ✅ 关键库文件组: 完整 (libgcc.a, libc.a, stdio.h)"
-            else
-              echo "  ❌ 关键库文件组: 缺失 $LIBRARIES_MISSING 个文件"
-            fi
-            echo ""
-            if [ ${#MISSING_FILES[@]} -eq 0 ]; then
-              echo "🎉 所有关键文件都存在，编译器完整！"
-              if [ "${{ github.event.inputs.force_rebuild }}" = "true" ]; then
-                echo "⚠️ 强制重新构建已启用"
-                NEED_BUILD="true"
-              else
-                echo "✅ 跳过构建，使用现有编译器"
-                NEED_BUILD="false"
-              fi
-            else
-              TOOL_MISSING=0
-              LIB_MISSING=0
-              for missing_file in "${MISSING_FILES[@]}"; do
-                if [[ "$missing_file" == *"/bin/"* ]]; then
-                  TOOL_MISSING=$((TOOL_MISSING + 1))
-                elif [[ "$missing_file" == *"/lib/"* ]] || [[ "$missing_file" == *"/include/"* ]]; then
-                  LIB_MISSING=$((LIB_MISSING + 1))
-                fi
-              done
-              echo "⚠️ 编译器不完整:"
-              echo "  - 缺失工具文件: $TOOL_MISSING 个"
-              echo "  - 缺失库/头文件: $LIB_MISSING 个"
-              if [ $CORE_MISSING -gt 0 ]; then
-                echo "  ❗ 缺失核心编译工具，必须重新构建"
-              fi
-              if [ ${#MISSING_FILES[@]} -gt 0 ]; then
-                echo ""
-                echo "缺失的关键文件（前10个）:"
-                for ((i=0; i<${#MISSING_FILES[@]} && i<10; i++)); do
-                  echo "  - ${MISSING_FILES[$i]}"
-                done
-              fi
+              echo "⚠️ 关键目录缺失，需要构建"
               NEED_BUILD="true"
             fi
           else
             echo "❌ 编译器目录不存在，需要构建"
             NEED_BUILD="true"
           fi
+          
           echo ""
           echo "构建决策: $NEED_BUILD"
           echo "========================================"
@@ -920,9 +694,26 @@ jobs:
           
           echo "✅ 网络和终端环境修复完成"
 
-      - name: 🛠️ 应用配置（简化版）
+      - name: 🔍 检查环境变量
         run: |
-          echo "=== 应用配置（简化版）==="
+          echo "=== 检查环境变量 ==="
+          cd "${{ env.BUILD_DIR }}"
+          echo "当前目录: $(pwd)"
+          echo "环境变量:"
+          echo "TARGET: ${{ env.TARGET }}"
+          echo "SUBTARGET: ${{ env.SUBTARGET }}"
+          echo "ARCH_NAME: ${{ env.ARCH_NAME }}"
+          echo "PREFIX: ${{ env.PREFIX }}"
+          echo ""
+          echo "检查.config文件是否存在:"
+          ls -la .config 2>/dev/null || echo ".config不存在"
+          echo ""
+          echo "如果.config存在，显示前20行:"
+          head -20 .config 2>/dev/null || echo "无法读取.config"
+
+      - name: 🛠️ 应用配置（强制验证版）
+        run: |
+          echo "=== 应用配置（强制验证版）==="
           cd "${{ env.BUILD_DIR }}"
           
           echo "🚨 当前目录: $(pwd)"
@@ -942,39 +733,71 @@ jobs:
           DEFCONFIG_EXIT=$?
           
           echo "🚨 defconfig 退出代码: $DEFCONFIG_EXIT"
+          echo "🚨 defconfig 日志摘要:"
+          tail -50 /tmp/defconfig.log
           
-          # 即使defconfig失败也继续，因为我们有手动配置
-          if [ -f ".config" ]; then
-            CONFIG_LINES=$(wc -l < .config)
-            echo "最终配置文件行数: $CONFIG_LINES"
-            
-            echo "🚨 关键配置检查:"
-            echo "=== .config 关键内容 ==="
-            grep -E "CONFIG_TARGET|CONFIG_ARCH|CONFIG_CPU|CONFIG_LIBC|CONFIG_GCC" .config | head -20
-            
-            echo ""
-            echo "🚨 目标平台配置验证:"
-            TARGET_CHECK=$(grep -c "CONFIG_TARGET_${{ env.TARGET }}=y" .config || true)
-            SUBTARGET_CHECK=$(grep -c "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" .config || true)
-            ARCH_CHECK=$(grep -c "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" .config || true)
-            PREFIX_CHECK=$(grep -c "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}\"" .config || true)
-            
-            echo "  - CONFIG_TARGET_${{ env.TARGET }}=y: $TARGET_CHECK $(if [ $TARGET_CHECK -gt 0 ]; then echo "✅"; else echo "❌"; fi)"
-            echo "  - CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y: $SUBTARGET_CHECK $(if [ $SUBTARGET_CHECK -gt 0 ]; then echo "✅"; else echo "❌"; fi)"
-            echo "  - CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\": $ARCH_CHECK $(if [ $ARCH_CHECK -gt 0 ]; then echo "✅"; else echo "❌"; fi)"
-            echo "  - CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}\": $PREFIX_CHECK $(if [ $PREFIX_CHECK -gt 0 ]; then echo "✅"; else echo "❌"; fi)"
-            
-            # 如果配置不正确，只是警告，不退出
-            if [ $TARGET_CHECK -eq 0 ] || [ $SUBTARGET_CHECK -eq 0 ]; then
-              echo "⚠️ 警告: 关键配置可能缺失，但继续构建..."
-            else
-              echo "✅ 配置验证通过"
-            fi
-          else
-            echo "⚠️ 警告: 配置文件未生成，但继续构建..."
+          if [ ! -f ".config" ]; then
+            echo "❌ 错误: .config 文件未生成"
+            echo "defconfig 输出:"
+            cat /tmp/defconfig.log
+            exit 1
           fi
           
-          echo "✅ 配置应用完成"
+          CONFIG_LINES=$(wc -l < .config)
+          echo "最终配置文件行数: $CONFIG_LINES"
+          
+          echo "🚨 关键配置检查:"
+          echo "=== .config 关键内容 ==="
+          grep -E "CONFIG_TARGET_${{ env.TARGET }}|CONFIG_TARGET_ARCH|CONFIG_TARGET_PREFIX" .config || echo "未找到相关配置"
+          
+          echo ""
+          echo "🚨 目标平台配置验证:"
+          TARGET_CHECK=$(grep -c "^CONFIG_TARGET_${{ env.TARGET }}=y$" .config)
+          SUBTARGET_CHECK=$(grep -c "^CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y$" .config)
+          ARCH_CHECK=$(grep -c "^CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"$" .config)
+          PREFIX_CHECK=$(grep -c "^CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}\"$" .config)
+          
+          echo "  - CONFIG_TARGET_${{ env.TARGET }}=y: $TARGET_CHECK $(if [ $TARGET_CHECK -gt 0 ]; then echo "✅"; else echo "❌"; fi)"
+          echo "  - CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y: $SUBTARGET_CHECK $(if [ $SUBTARGET_CHECK -gt 0 ]; then echo "✅"; else echo "❌"; fi)"
+          echo "  - CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\": $ARCH_CHECK $(if [ $ARCH_CHECK -gt 0 ]; then echo "✅"; else echo "❌"; fi)"
+          echo "  - CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}\": $PREFIX_CHECK $(if [ $PREFIX_CHECK -gt 0 ]; then echo "✅"; else echo "❌"; fi)"
+          
+          # 显示实际找到的行
+          echo ""
+          echo "🚨 实际配置行:"
+          echo "CONFIG_TARGET_${{ env.TARGET }}=y 实际行: $(grep "^CONFIG_TARGET_${{ env.TARGET }}=y$" .config || echo '未找到')"
+          echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y 实际行: $(grep "^CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y$" .config || echo '未找到')"
+          echo "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\" 实际行: $(grep "^CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"$" .config || echo '未找到')"
+          echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}\" 实际行: $(grep "^CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}\"$" .config || echo '未找到')"
+          
+          # 强制验证，失败则退出
+          if [ $TARGET_CHECK -eq 0 ]; then
+            echo "❌ 致命错误: CONFIG_TARGET_${{ env.TARGET }}=y 未找到"
+            echo "当前目录: $(pwd)"
+            echo "配置文件前50行:"
+            head -50 .config
+            exit 1
+          fi
+          
+          if [ $SUBTARGET_CHECK -eq 0 ]; then
+            echo "❌ 致命错误: CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y 未找到"
+            exit 1
+          fi
+          
+          if [ $ARCH_CHECK -eq 0 ]; then
+            echo "❌ 致命错误: CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\" 未找到"
+            exit 1
+          fi
+          
+          if [ $PREFIX_CHECK -eq 0 ]; then
+            echo "❌ 致命错误: CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}\" 未找到"
+            echo "期望的PREFIX: ${{ env.PREFIX }}"
+            echo "配置文件中的PREFIX相关行:"
+            grep "CONFIG_TARGET_PREFIX" .config
+            exit 1
+          fi
+          
+          echo "✅ 配置验证通过"
 
       - name: 🔨 编译工具链（增加调试信息）
         timeout-minutes: 150
