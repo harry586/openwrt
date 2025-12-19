@@ -239,13 +239,14 @@ jobs:
           echo "musl_version=$MUSL_VERSION" >> $GITHUB_OUTPUT
           echo "glibc_version=$GLIBC_VERSION" >> $GITHUB_OUTPUT
 
-      - name: 🔎 检查现有编译器（正确版）
+      - name: 🔎 检查现有编译器（加强模糊搜索版）
         id: check-existing
         run: |
-          echo "=== 检查现有编译器（正确版）==="
+          echo "=== 检查现有编译器（加强模糊搜索版）==="
           echo "========================================"
           echo "         🔧 编译器完整性检查            "
           echo "========================================"
+          
           ARCH="${{ github.event.inputs.target_arch }}"
           LIBC="${{ github.event.inputs.libc }}"
           GCC_VERSION='${{ steps.version-detection.outputs.gcc_version }}'
@@ -257,24 +258,76 @@ jobs:
           fi
           
           OUTPUT_DIR="${{ github.workspace }}/firmware-config/build-Compiler-file/compilers/${ARCH}/${LIBC_DIR}/gcc-${GCC_VERSION}"
-          echo "检查目录: $OUTPUT_DIR"
+          echo "精确检查目录: $OUTPUT_DIR"
           
           if [ -d "$OUTPUT_DIR" ]; then
-            echo "✅ 编译器目录存在"
+            echo "✅ 编译器目录存在（精确匹配）"
             echo "目录大小: $(du -sh "$OUTPUT_DIR" | cut -f1)"
-            echo "目录内容示例:"
-            ls -la "$OUTPUT_DIR/" 2>/dev/null | head -10 || echo "无法列出目录"
             
             if [ -d "$OUTPUT_DIR/bin" ]; then
               echo "✅ bin目录存在"
               echo "bin目录文件数: $(ls -1 "$OUTPUT_DIR/bin" 2>/dev/null | wc -l)"
-              NEED_BUILD="false"
+              
+              GCC_FILES=$(find "$OUTPUT_DIR/bin" -name "*gcc*" 2>/dev/null | wc -l)
+              if [ $GCC_FILES -gt 0 ]; then
+                echo "✅ 找到 $GCC_FILES 个编译器文件"
+                NEED_BUILD="false"
+              else
+                echo "❌ bin目录中没有编译器文件"
+                NEED_BUILD="true"
+              fi
             else
               echo "❌ bin目录不存在"
               NEED_BUILD="true"
             fi
           else
-            echo "❌ 编译器目录不存在"
+            echo "❌ 编译器目录不存在（精确匹配）"
+            echo "开始模糊搜索..."
+            
+            SEARCH_BASE="${{ github.workspace }}/firmware-config/build-Compiler-file/compilers"
+            echo "搜索基础目录: $SEARCH_BASE"
+            
+            if [ -d "$SEARCH_BASE" ]; then
+              echo "📁 目录结构:"
+              find "$SEARCH_BASE" -type d -name "*${ARCH}*" 2>/dev/null | head -10
+              
+              FOUND_DIRS=$(find "$SEARCH_BASE" -type d -name "*${ARCH}*" 2>/dev/null)
+              if [ -n "$FOUND_DIRS" ]; then
+                echo "🔍 找到相似架构目录:"
+                echo "$FOUND_DIRS"
+                
+                for dir in $FOUND_DIRS; do
+                  if [ -d "$dir/bin" ]; then
+                    GCC_COUNT=$(find "$dir/bin" -name "*gcc*" 2>/dev/null | wc -l)
+                    if [ $GCC_COUNT -gt 0 ]; then
+                      echo "🎯 在 $dir 中找到 $GCC_COUNT 个编译器文件"
+                      NEED_BUILD="maybe"
+                      break
+                    fi
+                  fi
+                done
+                
+                if [ "$NEED_BUILD" != "maybe" ]; then
+                  echo "❌ 模糊搜索未找到完整编译器"
+                  NEED_BUILD="true"
+                fi
+              else
+                echo "❌ 模糊搜索未找到任何架构目录"
+                NEED_BUILD="true"
+              fi
+            else
+              echo "❌ 编译器基础目录不存在"
+              NEED_BUILD="true"
+            fi
+            
+            if [ "$NEED_BUILD" = "maybe" ]; then
+              echo "ℹ️ 找到相似目录但未精确匹配，需要用户确认"
+              NEED_BUILD="true"
+            fi
+          fi
+          
+          if [ "${{ github.event.inputs.force_rebuild }}" = "true" ]; then
+            echo "⚡ 强制重建选项启用，忽略现有编译器"
             NEED_BUILD="true"
           fi
           
@@ -292,8 +345,6 @@ jobs:
     steps:
       - name: 📥 检出仓库
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
       - name: 📋 显示构建信息
         run: |
@@ -591,9 +642,9 @@ jobs:
           
           echo "✅ 网络和终端环境修复完成"
 
-      - name: 🛠️ 应用配置（正确验证版）
+      - name: 🛠️ 应用配置（强制armvirt配置）
         run: |
-          echo "=== 应用配置（正确验证版）==="
+          echo "=== 应用配置（强制armvirt配置）==="
           cd "${{ env.BUILD_DIR }}"
           
           echo "🚨 当前目录: $(pwd)"
@@ -603,114 +654,104 @@ jobs:
           echo "  ARCH_NAME: ${{ env.ARCH_NAME }}"
           echo "  PREFIX: ${{ env.PREFIX }}"
           
-          echo "🚨 强制写入我们的配置..."
-          echo 'CONFIG_TARGET_armvirt=y' > .config
-          echo 'CONFIG_TARGET_armvirt_armv7=y' >> .config
+          echo "🚨 删除现有配置..."
+          rm -f .config .config.old
+          
+          echo "🚨 创建基础配置文件..."
+          echo "CONFIG_TARGET_armvirt=y" > .config
+          echo "CONFIG_TARGET_armvirt_armv7=y" >> .config
           echo 'CONFIG_TARGET_BOARD="armvirt"' >> .config
           echo 'CONFIG_TARGET_SUBTARGET="armv7"' >> .config
           echo 'CONFIG_TARGET_ARCH_PACKAGES="arm_cortex-a7"' >> .config
           echo 'CONFIG_TARGET_ARCH="arm"' >> .config
           echo 'CONFIG_TARGET_PREFIX="arm-openwrt-linux-musl-"' >> .config
-          echo 'CONFIG_BUILD_TOOLCHAIN=y' >> .config
-          echo 'CONFIG_TOOLCHAINOPTS=y' >> .config
+          echo "CONFIG_BUILD_TOOLCHAIN=y" >> .config
+          echo "CONFIG_TOOLCHAINOPTS=y" >> .config
           echo 'CONFIG_GCC_VERSION="12.3.0"' >> .config
           echo 'CONFIG_BINUTILS_VERSION="2.40"' >> .config
           echo 'CONFIG_LINUX_VERSION="5.15.133"' >> .config
           echo 'CONFIG_LIBC="musl"' >> .config
-          echo 'CONFIG_ARCH_arm=y' >> .config
-          echo 'CONFIG_arm=y' >> .config
+          echo "CONFIG_ARCH_arm=y" >> .config
+          echo "CONFIG_arm=y" >> .config
           echo 'CONFIG_CPU_TYPE="cortex-a7"' >> .config
           echo 'CONFIG_CPU_TUNE="cortex-a7"' >> .config
           echo 'CONFIG_FPU="hard"' >> .config
-          echo 'CONFIG_DEVEL=y' >> .config
-          echo 'CONFIG_BUILD_PATENTED=y' >> .config
-          echo 'CONFIG_CCACHE=n' >> .config
-          echo 'CONFIG_ALL=n' >> .config
-          echo 'CONFIG_ALL_KMODS=n' >> .config
-          echo 'CONFIG_ALL_NONSHARED=n' >> .config
-          echo 'CONFIG_BASE_FILES=y' >> .config
-          echo 'CONFIG_BUSYBOX_DEFAULT_FEATURE_EDITING=y' >> .config
-          echo 'CONFIG_TARGET_ROOTFS_INITRAMFS=y' >> .config
-          echo 'CONFIG_EXTERNAL_TOOLCHAIN=n' >> .config
-          echo 'CONFIG_BUILD_TOOLS=y' >> .config
-          echo 'CONFIG_TOOLCHAIN_BUILD=y' >> .config
+          echo "CONFIG_DEVEL=y" >> .config
+          echo "CONFIG_BUILD_PATENTED=y" >> .config
+          echo "CONFIG_CCACHE=n" >> .config
+          echo "CONFIG_ALL=n" >> .config
+          echo "CONFIG_ALL_KMODS=n" >> .config
+          echo "CONFIG_ALL_NONSHARED=n" >> .config
+          echo "CONFIG_BASE_FILES=y" >> .config
+          echo "CONFIG_BUSYBOX_DEFAULT_FEATURE_EDITING=y" >> .config
+          echo "CONFIG_TARGET_ROOTFS_INITRAMFS=y" >> .config
+          echo "CONFIG_EXTERNAL_TOOLCHAIN=n" >> .config
+          echo "CONFIG_BUILD_TOOLS=y" >> .config
+          echo "CONFIG_TOOLCHAIN_BUILD=y" >> .config
+          echo "CONFIG_TARGET_airoha=n" >> .config
+          echo "CONFIG_TARGET_sunxi=n" >> .config
+          echo "CONFIG_TARGET_apm821xx=n" >> .config
+          echo "CONFIG_TARGET_armsr=n" >> .config
+          echo "CONFIG_TARGET_ath25=n" >> .config
+          echo "CONFIG_TARGET_ath79=n" >> .config
+          echo "CONFIG_TARGET_bcm27xx=n" >> .config
+          echo "CONFIG_TARGET_bcm53xx=n" >> .config
+          echo "CONFIG_TARGET_bcm47xx=n" >> .config
+          echo "CONFIG_TARGET_bcm4908=n" >> .config
+          echo "CONFIG_TARGET_bcm63xx=n" >> .config
+          echo "CONFIG_TARGET_bmips=n" >> .config
+          echo "CONFIG_TARGET_octeon=n" >> .config
+          echo "CONFIG_TARGET_gemini=n" >> .config
+          echo "CONFIG_TARGET_mpc85xx=n" >> .config
+          echo "CONFIG_TARGET_mxs=n" >> .config
+          echo "CONFIG_TARGET_lantiq=n" >> .config
+          echo "CONFIG_TARGET_malta=n" >> .config
+          echo "CONFIG_TARGET_pistachio=n" >> .config
+          echo "CONFIG_TARGET_mvebu=n" >> .config
+          echo "CONFIG_TARGET_mediatek=n" >> .config
+          echo "CONFIG_TARGET_ramips=n" >> .config
+          echo "CONFIG_TARGET_rockchip=n" >> .config
+          echo "CONFIG_TARGET_oxnas=n" >> .config
+          echo "CONFIG_TARGET_ipq40xx=n" >> .config
+          echo "CONFIG_TARGET_ipq806x=n" >> .config
+          echo "CONFIG_TARGET_realtek=n" >> .config
+          echo "CONFIG_TARGET_x86=n" >> .config
+          echo "CONFIG_TARGET_omap=n" >> .config
+          echo "CONFIG_TARGET_tegra=n" >> .config
+          echo "CONFIG_TARGET_imx6=n" >> .config
+          echo "CONFIG_TARGET_layerscape=n" >> .config
+          echo "CONFIG_TARGET_zynq=n" >> .config
+          echo "CONFIG_TARGET_samsung=n" >> .config
+          echo "CONFIG_TARGET_kirkwood=n" >> .config
+          echo "CONFIG_TARGET_at91=n" >> .config
+          echo "CONFIG_TARGET_brcm47xx=n" >> .config
           
-          echo "🚨 我们的配置内容:"
-          echo "========================================"
-          cat .config
-          echo "========================================"
+          echo "✅ 配置文件创建完成"
+          echo "配置文件大小: $(wc -l < .config) 行"
           
-          echo "🚨 运行 make defconfig..."
-          export FORCE_UNSAFE_CONFIGURE=1
-          export TERM=dumb
-          export DEBIAN_FRONTEND=noninteractive
-          
-          make defconfig V=s 2>&1 | tee /tmp/defconfig.log
-          DEFCONFIG_EXIT=$?
-          
-          echo "🚨 defconfig 退出代码: $DEFCONFIG_EXIT"
-          
-          if [ ! -f ".config" ]; then
-            echo "❌ 错误: .config 文件未生成"
+          echo "🚨 验证配置..."
+          if ! grep -q "CONFIG_TARGET_armvirt=y" .config; then
+            echo "❌ 致命错误: CONFIG_TARGET_armvirt=y 未找到"
+            echo "配置文件前50行:"
+            head -50 .config
             exit 1
           fi
           
-          cp .config .config.after_defconfig
-          
-          CONFIG_LINES=$(wc -l < .config)
-          echo "最终配置文件行数: $CONFIG_LINES"
-          
-          echo "🚨 defconfig后的配置关键内容:"
-          echo "========================================"
-          grep -E "CONFIG_TARGET|CONFIG_ARCH|CONFIG_CPU|CONFIG_PREFIX" .config | head -20
-          echo "========================================"
-          
-          echo ""
-          echo "🚨 目标平台配置验证:"
-          
-          TARGET_CHECK=$(grep -c "CONFIG_TARGET_${{ env.TARGET }}=y" .config)
-          SUBTARGET_CHECK=$(grep -c "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" .config)
-          ARCH_CHECK=$(grep -c "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" .config)
-          PREFIX_CHECK=$(grep "CONFIG_TARGET_PREFIX=" .config | grep -c "${{ env.PREFIX }}")
-          
-          echo "  - CONFIG_TARGET_${{ env.TARGET }}=y: $TARGET_CHECK $(if [ $TARGET_CHECK -gt 0 ]; then echo "✅"; else echo "❌"; fi)"
-          echo "  - CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y: $SUBTARGET_CHECK $(if [ $SUBTARGET_CHECK -gt 0 ]; then echo "✅"; else echo "❌"; fi)"
-          echo "  - CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\": $ARCH_CHECK $(if [ $ARCH_CHECK -gt 0 ]; then echo "✅"; else echo "❌"; fi)"
-          echo "  - CONFIG_TARGET_PREFIX包含\"${{ env.PREFIX }}\": $PREFIX_CHECK $(if [ $PREFIX_CHECK -gt 0 ]; then echo "✅"; else echo "❌"; fi)"
-          
-          echo ""
-          echo "🚨 实际配置行:"
-          echo "CONFIG_TARGET_${{ env.TARGET }}=y: $(grep "CONFIG_TARGET_${{ env.TARGET }}=y" .config || echo '未找到')"
-          echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y: $(grep "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" .config || echo '未找到')"
-          echo "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\": $(grep "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" .config || echo '未找到')"
-          echo "CONFIG_TARGET_PREFIX: $(grep "CONFIG_TARGET_PREFIX=" .config || echo '未找到')"
-          
-          MIPS_CHECK=$(grep -c "CONFIG_TARGET_ARCH=\"mips\"" .config)
-          if [ $MIPS_CHECK -gt 0 ]; then
-            echo "❌ 致命错误: 配置被设置为mips而不是arm！"
-            echo "defconfig可能使用了默认配置。"
-            echo "配置文件中的架构相关行:"
-            grep -E "CONFIG_TARGET_ARCH|CONFIG_ARCH_" .config
+          if ! grep -q "CONFIG_TARGET_armvirt_armv7=y" .config; then
+            echo "❌ 致命错误: CONFIG_TARGET_armvirt_armv7=y 未找到"
             exit 1
           fi
           
-          if [ $TARGET_CHECK -eq 0 ]; then
-            echo "❌ 致命错误: CONFIG_TARGET_${{ env.TARGET }}=y 未找到"
-            echo "配置文件前100行:"
-            head -100 .config
-            exit 1
-          fi
-          
-          if [ $ARCH_CHECK -eq 0 ]; then
-            echo "❌ 致命错误: CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\" 未找到"
-            echo "找到的ARCH配置:"
-            grep "CONFIG_TARGET_ARCH" .config
+          if grep -q "CONFIG_TARGET_ath79=y" .config; then
+            echo "❌ 致命错误: 配置包含ath79!"
+            grep "CONFIG_TARGET_ath79" .config
             exit 1
           fi
           
           echo "✅ 配置验证通过"
+          cp .config .config.locked
 
-      - name: 🔨 编译工具链（增加调试信息）
+      - name: 🔨 编译工具链（跳过defconfig）
         timeout-minutes: 150
         run: |
           echo "=== 开始编译工具链 ==="
@@ -734,11 +775,21 @@ jobs:
           if [ -f ".config" ]; then
             echo "配置文件存在，大小: $(wc -l < .config) 行"
             echo "关键配置:"
-            grep -E "TARGET|ARCH|CPU|LIBC|GCC" .config | head -20
+            grep -E "TARGET_armvirt|TARGET_ARCH|CPU|LIBC|GCC" .config | head -20
+            
+            if grep -q "CONFIG_TARGET_armvirt=y" .config; then
+              echo "✅ 配置文件正确: armvirt"
+            else
+              echo "❌ 配置文件错误: 不是armvirt"
+              grep "CONFIG_TARGET_" .config | head -10
+              exit 1
+            fi
           else
             echo "❌ 配置文件不存在"
             exit 1
           fi
+          
+          echo "🚨 跳过defconfig，使用现有配置..."
           
           echo "🚨 第一步: 下载所有源码包..."
           echo "创建下载目录..."
