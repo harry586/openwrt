@@ -4,7 +4,7 @@ set -e
 BUILD_DIR=${1:-/mnt/openwrt-build}
 cd "$BUILD_DIR"
 
-echo "=== 固件构建错误分析报告 ===" > error_analysis.log
+echo "=== 固件构建错误分析报告（增强版）===" > error_analysis.log
 echo "生成时间: $(date)" >> error_analysis.log
 echo "" >> error_analysis.log
 
@@ -58,7 +58,15 @@ if [ -f ".config" ]; then
     
     echo "" >> error_analysis.log
     echo "=== 关键USB配置状态 ===" >> error_analysis.log
-    USB_CONFIGS=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-storage" "kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-xhci-hcd" "kmod-usb-ehci" "kmod-usb-ohci" "kmod-usb-storage-uas" "kmod-usb-storage-extras" "kmod-scsi-core" "kmod-scsi-generic" "kmod-usb-uhci" "kmod-usb2-pci" "kmod-usb-ohci-pci" "kmod-usb-xhci-pci" "kmod-usb-xhci-mtk" "kmod-usb-xhci-plat-hcd")
+    USB_CONFIGS=(
+        "kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-storage"
+        "kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3"
+        "kmod-usb-xhci-hcd" "kmod-usb-ehci" "kmod-usb-ohci"
+        "kmod-usb-storage-uas" "kmod-usb-storage-extras"
+        "kmod-scsi-core" "kmod-scsi-generic"
+        "kmod-usb-uhci" "kmod-usb2-pci" "kmod-usb-ohci-pci"
+        "kmod-usb-xhci-pci" "kmod-usb-xhci-mtk" "kmod-usb-xhci-plat-hcd"
+    )
     
     for config in "${USB_CONFIGS[@]}"; do
         if grep -q "CONFIG_PACKAGE_${config}=y" .config; then
@@ -178,7 +186,9 @@ if [ -f ".config" ]; then
     
     echo "" >> error_analysis.log
     echo "=== 编译器配置状态 ===" >> error_analysis.log
-    COMPILER_CONFIGS=("gcc" "binutils" "libc" "libgcc" "musl" "glibc")
+    COMPILER_CONFIGS=(
+        "gcc" "binutils" "libc" "libgcc" "musl" "glibc"
+    )
     
     for config in "${COMPILER_CONFIGS[@]}"; do
         if grep -q "CONFIG_PACKAGE_${config}" .config; then
@@ -230,6 +240,22 @@ if [ -d "staging_dir" ]; then
         $compiler --version 2>&1 | head -1 >> error_analysis.log 2>/dev/null || echo "  无法获取版本" >> error_analysis.log
     done
     
+    # 新增：检查头文件路径
+    echo "" >> error_analysis.log
+    echo "🔍 检查编译器头文件路径:" >> error_analysis.log
+    find staging_dir -name "stdc-predef.h" -type f 2>/dev/null >> error_analysis.log || echo "  未找到stdc-predef.h头文件" >> error_analysis.log
+    
+    find staging_dir -name "stdio.h" -type f 2>/dev/null | head -1 >> error_analysis.log || echo "  未找到stdio.h头文件" >> error_analysis.log
+    
+    # 检查host/include目录
+    echo "🔍 检查host/include目录:" >> error_analysis.log
+    if [ -d "staging_dir/host/include" ]; then
+        echo "✅ host/include目录存在" >> error_analysis.log
+        echo "  头文件数量: $(find staging_dir/host/include -name "*.h" -type f 2>/dev/null | wc -l)" >> error_analysis.log
+    else
+        echo "❌ host/include目录不存在" >> error_analysis.log
+    fi
+    
 else
     echo "❌ 编译目录不存在" >> error_analysis.log
 fi
@@ -241,12 +267,14 @@ if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
     echo "1. 编译器不兼容: 23.05可能需要更新的编译器版本" >> error_analysis.log
     echo "2. 内核版本不同: 23.05使用Linux 5.15，需要不同的内核头文件" >> error_analysis.log
     echo "3. musl版本更新: 可能需要更新的musl C库" >> error_analysis.log
+    echo "4. libtool版本: 可能需要更新的libtool版本" >> error_analysis.log
     echo "" >> error_analysis.log
     echo "🛠️ 解决方案:" >> error_analysis.log
     echo "1. 清理编译器重新下载: rm -rf staging_dir/compiler-*" >> error_analysis.log
     echo "2. 清理构建目录: rm -rf build_dir/target-*" >> error_analysis.log
     echo "3. 确保使用正确的编译器: arm-openwrt-linux-muslgnueabi-gcc" >> error_analysis.log
     echo "4. 检查内核配置: 确保CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> error_analysis.log
+    echo "5. 安装最新的libtool和autoconf: sudo apt-get install libtool autoconf" >> error_analysis.log
 fi
 
 echo "" >> error_analysis.log
@@ -280,8 +308,12 @@ if [ -f "build.log" ]; then
     grep -E "compiler|gcc|binutils|ld" build.log -i | head -10 >> error_analysis.log || echo "无编译器错误" >> error_analysis.log
     
     echo "" >> error_analysis.log
-    echo "❌ 终端相关错误:" >> error_analysis.log
-    grep -E "Error opening terminal|terminal.*unknown|TERM.*not set" build.log -i | head -5 >> error_analysis.log || echo "无终端错误" >> error_analysis.log
+    echo "❌ 头文件相关错误:" >> error_analysis.log
+    grep -E "stdc-predef.h|host/include|No such file or directory.*include" build.log -i | head -10 >> error_analysis.log || echo "无头文件错误" >> error_analysis.log
+    
+    echo "" >> error_analysis.log
+    echo "❌ libtool相关错误:" >> error_analysis.log
+    grep -E "libtool|aclocal|autoconf|automake" build.log -i | head -10 >> error_analysis.log || echo "无libtool错误" >> error_analysis.log
     
     echo "" >> error_analysis.log
     echo "⚠️ 被忽略的错误:" >> error_analysis.log
@@ -290,6 +322,10 @@ if [ -f "build.log" ]; then
     echo "" >> error_analysis.log
     echo "ℹ️ 管道错误 (通常是正常现象):" >> error_analysis.log
     grep "Broken pipe" build.log | head -3 >> error_analysis.log || echo "无管道错误" >> error_analysis.log
+    
+    echo "" >> error_analysis.log
+    echo "⚠️ 配置不同步警告:" >> error_analysis.log
+    grep "configuration is out of sync" build.log >> error_analysis.log || echo "无配置不同步警告" >> error_analysis.log
 else
     echo "未找到构建日志文件 build.log" >> error_analysis.log
 fi
@@ -300,7 +336,27 @@ echo "开始收集和分析错误日志..." >> error_analysis.log
 echo "使用日志文件: build.log" >> error_analysis.log
 echo "" >> error_analysis.log
 
-ERROR_CATEGORIES=("严重错误 (Failed):|failed|FAILED" "编译错误 (error:):|error:" "退出错误 (error 1/error 2):|error [12]|Error [12]" "文件缺失错误:|No such file|file not found|cannot find" "依赖错误:|depends on|missing dependencies" "配置错误:|configuration error|config error" "语法错误:|syntax error" "类型错误:|type error" "未定义引用:|undefined reference" "内存错误:|out of memory|Killed process|oom" "权限错误:|Permission denied|operation not permitted" "网络错误:|Connection refused|timeout|Network is unreachable" "哈希校验错误:|Hash mismatch|Bad hash" "管道错误:|Broken pipe" "编译器错误:|compiler|gcc|binutils|ld" "终端错误:|Error opening terminal|terminal.*unknown|TERM.*not set" "C库相关错误:|musl|glibc|uclibc|libc")
+ERROR_CATEGORIES=(
+    "严重错误 (Failed):|failed|FAILED"
+    "编译错误 (error:):|error:"
+    "退出错误 (error 1/error 2):|error [12]|Error [12]"
+    "文件缺失错误:|No such file|file not found|cannot find"
+    "依赖错误:|depends on|missing dependencies"
+    "配置错误:|configuration error|config error"
+    "语法错误:|syntax error"
+    "类型错误:|type error"
+    "未定义引用:|undefined reference"
+    "内存错误:|out of memory|Killed process|oom"
+    "权限错误:|Permission denied|operation not permitted"
+    "网络错误:|Connection refused|timeout|Network is unreachable"
+    "哈希校验错误:|Hash mismatch|Bad hash"
+    "管道错误:|Broken pipe"
+    "编译器错误:|compiler|gcc|binutils|ld"
+    "头文件错误:|stdc-predef.h|host/include|include.*not found"
+    "libtool错误:|libtool|aclocal|autoconf|automake"
+    "C库相关错误:|musl|glibc|uclibc|libc"
+    "配置不同步警告:|configuration is out of sync"
+)
 
 for category in "${ERROR_CATEGORIES[@]}"; do
     IFS='|' read -r category_name patterns <<< "$category"
@@ -315,36 +371,19 @@ for category in "${ERROR_CATEGORIES[@]}"; do
     echo "" >> error_analysis.log
 done
 
-echo "=== 错误原因分析和建议 ===" >> error_analysis.log
-
-echo "❌ 终端错误 (Error opening terminal: unknown)" >> error_analysis.log
-echo "💡 问题分析:" >> error_analysis.log
-echo "   - GitHub Actions 运行环境缺少完整的终端支持" >> error_analysis.log
-echo "   - 构建过程中某些配置工具需要终端界面" >> error_analysis.log
-echo "   - TERM 环境变量未正确设置" >> error_analysis.log
-echo "🛠️ 解决方案:" >> error_analysis.log
-echo "  1. 安装终端支持包:" >> error_analysis.log
-echo "     sudo apt-get install -y ncurses-term ncurses-base ncurses-bin libncursesw5 libtinfo5 terminfo" >> error_analysis.log
-echo "  2. 设置环境变量:" >> error_analysis.log
-echo "     export TERM=xterm-256color" >> error_analysis.log
-echo "     export TERMINFO=/usr/share/terminfo" >> error_analysis.log
-echo "     export TERMCAP=/etc/termcap" >> error_analysis.log
-echo "  3. 创建terminfo链接:" >> error_analysis.log
-echo "     sudo mkdir -p /usr/share/terminfo/x" >> error_analysis.log
-echo "     sudo ln -s /lib/terminfo/x/xterm /usr/share/terminfo/x/xterm-256color 2>/dev/null || true" >> error_analysis.log
-echo "  4. 在构建脚本中添加终端支持包:" >> error_analysis.log
-echo "     修改 setup_environment 函数，添加 terminal_packages 数组" >> error_analysis.log
-echo "" >> error_analysis.log
+echo "=== 错误原因分析和建议（增强版）===" >> error_analysis.log
 
 echo "❌ 文件缺失错误" >> error_analysis.log
 echo "💡 可能原因:" >> error_analysis.log
 echo "   - 源码不完整或下载失败" >> error_analysis.log
 echo "   - 依赖包未正确下载" >> error_analysis.log
 echo "   - 网络连接问题导致下载中断" >> error_analysis.log
+echo "   - 头文件路径配置错误" >> error_analysis.log
 echo "🛠️ 解决方案:" >> error_analysis.log
 echo "   - 重新运行工作流" >> error_analysis.log
 echo "   - 检查网络连接" >> error_analysis.log
 echo "   - 清理缓存重新编译" >> error_analysis.log
+echo "   - 确保安装了正确的开发包: sudo apt-get install linux-headers-generic libc6-dev" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "❌ 依赖错误" >> error_analysis.log
@@ -372,6 +411,7 @@ echo "❌ 配置错误" >> error_analysis.log
 echo "💡 可能原因:" >> error_analysis.log
 echo "   - .config 文件配置冲突" >> error_analysis.log
 echo "   - 不兼容的选项组合" >> error_analysis.log
+echo "   - 配置不同步" >> error_analysis.log
 echo "🛠️ 解决方案:" >> error_analysis.log
 echo "   - 检查 .config 文件中的冲突选项" >> error_analysis.log
 echo "   - 运行 'make defconfig' 修复配置" >> error_analysis.log
@@ -400,6 +440,29 @@ echo "   - 重新安装编译器" >> error_analysis.log
 echo "   - 使用预编译的编译器" >> error_analysis.log
 echo "" >> error_analysis.log
 
+echo "❌ 头文件错误" >> error_analysis.log
+echo "💡 可能原因:" >> error_analysis.log
+echo "   - 缺少stdc-predef.h等标准头文件" >> error_analysis.log
+echo "   - host/include目录不存在" >> error_analysis.log
+echo "   - 头文件路径配置错误" >> error_analysis.log
+echo "🛠️ 解决方案:" >> error_analysis.log
+echo "   - 安装linux-headers-generic和libc6-dev" >> error_analysis.log
+echo "   - 确保staging_dir/host/include目录存在" >> error_analysis.log
+echo "   - 设置正确的CFLAGS和CPPFLAGS环境变量" >> error_analysis.log
+echo "   - 命令: sudo apt-get install linux-headers-generic libc6-dev libc6-dev-i386" >> error_analysis.log
+echo "" >> error_analysis.log
+
+echo "❌ libtool错误" >> error_analysis.log
+echo "💡 可能原因:" >> error_analysis.log
+echo "   - libtool未安装或版本过旧" >> error_analysis.log
+echo "   - libtool.m4文件缺失" >> error_analysis.log
+echo "   - aclocal目录不存在" >> error_analysis.log
+echo "🛠️ 解决方案:" >> error_analysis.log
+echo "   - 安装libtool和autoconf: sudo apt-get install libtool autoconf automake" >> error_analysis.log
+echo "   - 确保staging_dir/host/share/aclocal目录存在" >> error_analysis.log
+echo "   - 复制libtool.m4到正确位置: cp /usr/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/" >> error_analysis.log
+echo "" >> error_analysis.log
+
 echo "❌ C库相关错误" >> error_analysis.log
 echo "💡 可能原因:" >> error_analysis.log
 echo "   - 错误的C库配置（uclibc/musl/glibc混用）" >> error_analysis.log
@@ -426,6 +489,21 @@ echo "ℹ️ 管道错误" >> error_analysis.log
 echo "💡 说明:" >> error_analysis.log
 echo "   - 这是并行编译的正常现象，通常不影响最终结果" >> error_analysis.log
 echo "   - 由于编译进程间通信导致，可以忽略" >> error_analysis.log
+echo "   - 如果大量出现，可以减少并行任务数" >> error_analysis.log
+echo "🛠️ 解决方案:" >> error_analysis.log
+echo "   - 减少并行任务: make -j2 或 make -j4" >> error_analysis.log
+echo "   - 忽略这些错误，它们通常不影响最终编译结果" >> error_analysis.log
+echo "" >> error_analysis.log
+
+echo "⚠️ 配置不同步警告" >> error_analysis.log
+echo "💡 说明:" >> error_analysis.log
+echo "   - 配置文件(.config)与Makefile不同步" >> error_analysis.log
+echo "   - 可能是手动修改了.config文件" >> error_analysis.log
+echo "   - 可能是feeds更新后配置需要重新同步" >> error_analysis.log
+echo "🛠️ 解决方案:" >> error_analysis.log
+echo "   - 运行 make defconfig 同步配置" >> error_analysis.log
+echo "   - 或者运行 make menuconfig 重新配置" >> error_analysis.log
+echo "   - 重新生成.config文件" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "=== 快速修复建议 ===" >> error_analysis.log
@@ -436,10 +514,11 @@ echo "4. ⚙️ 检查配置冲突: make defconfig" >> error_analysis.log
 echo "5. 🐛 减少并行任务: make -j2 V=s" >> error_analysis.log
 echo "6. 🌐 检查网络连接和代理设置" >> error_analysis.log
 echo "7. 🔧 检查编译器: 确保 staging_dir/compiler-* 目录存在且完整" >> error_analysis.log
-echo "8. 🔌 检查USB插件: 确保所有关键USB驱动已启用（当前配置已强制启用）" >> error_analysis.log
-echo "9. 🖥️ 检查平台专用驱动: 根据您的设备平台（高通/雷凌）启用相应驱动" >> error_analysis.log
-echo "10. 💾 检查文件系统支持: 确保NTFS3, ext4, vfat等文件系统驱动已启用" >> error_analysis.log
-echo "11. 💻 修复终端错误: 安装 ncurses-term 包并设置 TERM 环境变量" >> error_analysis.log
+echo "8. 📚 安装缺失的开发包: sudo apt-get install linux-headers-generic libc6-dev libtool autoconf automake" >> error_analysis.log
+echo "9. 🔌 检查USB插件: 确保所有关键USB驱动已启用（当前配置已强制启用）" >> error_analysis.log
+echo "10. 🖥️ 检查平台专用驱动: 根据您的设备平台（高通/雷凌）启用相应驱动" >> error_analysis.log
+echo "11. 💾 检查文件系统支持: 确保NTFS3, ext4, vfat等文件系统驱动已启用" >> error_analysis.log
+echo "12. 📁 检查头文件路径: 确保 staging_dir/host/include 目录存在且有头文件" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "=== 针对USB问题的特殊修复方案 ===" >> error_analysis.log
@@ -466,31 +545,30 @@ echo "4. 🔄 重新编译:" >> error_analysis.log
 echo "   make -j$(nproc) V=s" >> error_analysis.log
 echo "" >> error_analysis.log
 
-echo "=== 针对终端错误的特殊修复方案 ===" >> error_analysis.log
-echo "如果遇到 'Error opening terminal: unknown' 错误，请执行以下步骤:" >> error_analysis.log
+echo "=== 针对头文件和libtool错误的修复方案 ===" >> error_analysis.log
+echo "如果遇到头文件或libtool错误，请尝试以下步骤:" >> error_analysis.log
 echo "" >> error_analysis.log
-echo "1. 🔧 安装终端支持包:" >> error_analysis.log
+echo "1. 📦 安装必要的开发包:" >> error_analysis.log
 echo "   sudo apt-get update" >> error_analysis.log
-echo "   sudo apt-get install -y ncurses-term ncurses-base ncurses-bin libncursesw5 libncursesw5-dev libtinfo5 libtinfo-dev terminfo termcap" >> error_analysis.log
+echo "   sudo apt-get install linux-headers-generic libc6-dev libc6-dev-i386 \\" >> error_analysis.log
+echo "       libc6-dev-x32 libc6-dev-armhf-cross libc6-dev-arm64-cross \\" >> error_analysis.log
+echo "       libtool autoconf automake libltdl-dev m4" >> error_analysis.log
 echo "" >> error_analysis.log
-echo "2. 🔧 设置环境变量:" >> error_analysis.log
-echo "   export TERM=xterm-256color" >> error_analysis.log
-echo "   export TERMINFO=/usr/share/terminfo" >> error_analysis.log
-echo "   export TERMCAP=/etc/termcap" >> error_analysis.log
-echo "   echo 'export TERM=xterm-256color' >> ~/.bashrc" >> error_analysis.log
-echo "   echo 'export TERMINFO=/usr/share/terminfo' >> ~/.bashrc" >> error_analysis.log
-echo "   echo 'export TERMCAP=/etc/termcap' >> ~/.bashrc" >> error_analysis.log
+echo "2. 📁 创建缺失的目录:" >> error_analysis.log
+echo "   mkdir -p staging_dir/host/include" >> error_analysis.log
+echo "   mkdir -p staging_dir/host/share/aclocal" >> error_analysis.log
 echo "" >> error_analysis.log
-echo "3. 🔧 创建terminfo文件:" >> error_analysis.log
-echo "   sudo mkdir -p /usr/share/terminfo/x" >> error_analysis.log
-echo "   sudo ln -s /lib/terminfo/x/xterm /usr/share/terminfo/x/xterm-256color 2>/dev/null || true" >> error_analysis.log
+echo "3. 📋 复制必要的文件:" >> error_analysis.log
+echo "   cp /usr/include/stdc-predef.h staging_dir/host/include/ 2>/dev/null || true" >> error_analysis.log
+echo "   cp /usr/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/ 2>/dev/null || true" >> error_analysis.log
 echo "" >> error_analysis.log
-echo "4. 🔧 测试终端支持:" >> error_analysis.log
-echo "   echo \$TERM" >> error_analysis.log
-echo "   ls -la /usr/share/terminfo/x/xterm* 2>/dev/null || echo 'terminfo文件不存在'" >> error_analysis.log
+echo "4. 🌍 设置环境变量:" >> error_analysis.log
+echo "   export CFLAGS=\"-I${BUILD_DIR}/staging_dir/host/include\"" >> error_analysis.log
+echo "   export LDFLAGS=\"-L${BUILD_DIR}/staging_dir/host/lib\"" >> error_analysis.log
+echo "   export CPPFLAGS=\"-I${BUILD_DIR}/staging_dir/host/include\"" >> error_analysis.log
 echo "" >> error_analysis.log
-echo "5. 🔧 在构建脚本中修复:" >> error_analysis.log
-echo "   修改 setup_environment 函数，添加终端支持包安装" >> error_analysis.log
+echo "5. 🔄 重新编译:" >> error_analysis.log
+echo "   make -j2 V=s" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "错误分析完成 - 查看 error_analysis.log 获取详细信息" >> error_analysis.log
