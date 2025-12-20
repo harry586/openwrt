@@ -283,20 +283,42 @@ jobs:
               echo "❌ ARM架构配置错误: TARGET应为armvirt, SUBTARGET应为armv7"
               echo "当前: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
               exit 1
+            else
+              echo "✅ ARM架构配置正确"
             fi
+          else
+            echo "ℹ️ 非ARM架构，跳过特定检查"
           fi
+          echo "检查C库配置:"
           if [ "$LIBC_DIR" = "musl" ]; then
-            if [[ ! "$PREFIX" =~ "musl$" ]]; then
+            # 修复：使用字符串匹配而不是正则表达式
+            if [[ "$PREFIX" == *"musl" ]]; then
+              echo "✅ Musl配置正确: PREFIX包含musl"
+            else
               echo "❌ Musl配置错误: PREFIX应包含musl"
               echo "当前: PREFIX=$PREFIX"
               exit 1
             fi
           else
-            if [[ ! "$PREFIX" =~ "gnu$" ]]; then
+            if [[ "$PREFIX" == *"gnu" ]]; then
+              echo "✅ Glibc配置正确: PREFIX包含gnu"
+            else
               echo "❌ Glibc配置错误: PREFIX应包含gnu"
               echo "当前: PREFIX=$PREFIX"
               exit 1
             fi
+          fi
+          echo "检查路径配置:"
+          if [[ "$OUTPUT_DIR" == *"firmware-config/build-Compiler-file/compilers"* ]]; then
+            echo "✅ 输出目录路径正确"
+          else
+            echo "⚠️ 警告: 输出目录路径可能不正确"
+            echo "当前: $OUTPUT_DIR"
+          fi
+          if [[ "$BUILD_DIR" == "/home/runner/compiler-build-"* ]]; then
+            echo "✅ 构建目录路径正确"
+          else
+            echo "⚠️ 警告: 构建目录路径可能不正确"
           fi
           echo "✅ 所有环境变量验证通过"
 
