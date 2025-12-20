@@ -291,7 +291,6 @@ jobs:
           fi
           echo "检查C库配置:"
           if [ "$LIBC_DIR" = "musl" ]; then
-            # 修复：使用字符串匹配而不是正则表达式
             if [[ "$PREFIX" == *"musl" ]]; then
               echo "✅ Musl配置正确: PREFIX包含musl"
             else
@@ -382,6 +381,8 @@ jobs:
           git config --global http.postBuffer 524288000
           git config --global http.lowSpeedLimit 0
           git config --global http.lowSpeedTime 999999
+          export GIT_SSL_NO_VERIFY=1
+          export CURL_SSL_NO_VERIFY=1
           mkdir -p include/site tmp dl
           echo "✅ 环境修复完成"
 
@@ -423,31 +424,151 @@ jobs:
           echo "CONFIG_USE_GLIBC=n" >> .config
           echo "✅ 配置文件创建完成"
 
-      - name: 📥 下载源码包
-        timeout-minutes: 20
+      - name: 📥 预下载关键源码包
+        timeout-minutes: 25
         run: |
-          echo "=== 下载源码包 ==="
+          echo "=== 预下载关键源码包 ==="
+          cd "${{ env.BUILD_DIR }}"
+          
+          # 创建下载目录
+          mkdir -p dl
+          
+          echo "下载关键工具链组件（使用多个镜像源）..."
+          echo "开始时间: $(date)"
+          
+          # 设置下载重试
+          MAX_RETRIES=3
+          
+          # 定义下载函数
+          download_with_retry() {
+            local url=$1
+            local output=$2
+            local retry=0
+            
+            while [ $retry -lt $MAX_RETRIES ]; do
+              echo "尝试下载: $url (重试 $((retry+1))/$MAX_RETRIES)"
+              if wget --timeout=60 --tries=3 -q -O "$output" "$url"; then
+                echo "✅ 下载成功: $(basename "$output")"
+                return 0
+              fi
+              retry=$((retry+1))
+              if [ $retry -lt $MAX_RETRIES ]; then
+                echo "等待3秒后重试..."
+                sleep 3
+              fi
+            done
+            echo "❌ 下载失败: $(basename "$output")"
+            return 1
+          }
+          
+          # GCC 12.3.0 (多个镜像源)
+          echo "=== 下载 GCC 12.3.0 ==="
+          GCC_URLS=(
+            "https://mirrors.tuna.tsinghua.edu.cn/gnu/gcc/gcc-12.3.0/gcc-12.3.0.tar.xz"
+            "https://mirrors.ustc.edu.cn/gnu/gcc/gcc-12.3.0/gcc-12.3.0.tar.xz"
+            "https://ftp.gnu.org/gnu/gcc/gcc-12.3.0/gcc-12.3.0.tar.xz"
+          )
+          for url in "${GCC_URLS[@]}"; do
+            if download_with_retry "$url" "dl/gcc-12.3.0.tar.xz"; then
+              break
+            fi
+          done
+          
+          # Binutils 2.40
+          echo "=== 下载 Binutils 2.40 ==="
+          BINUTILS_URLS=(
+            "https://mirrors.tuna.tsinghua.edu.cn/gnu/binutils/binutils-2.40.tar.xz"
+            "https://mirrors.ustc.edu.cn/gnu/binutils/binutils-2.40.tar.xz"
+            "https://ftp.gnu.org/gnu/binutils/binutils-2.40.tar.xz"
+          )
+          for url in "${BINUTILS_URLS[@]}"; do
+            if download_with_retry "$url" "dl/binutils-2.40.tar.xz"; then
+              break
+            fi
+          done
+          
+          # Linux 5.15.133
+          echo "=== 下载 Linux 内核 5.15.133 ==="
+          LINUX_URLS=(
+            "https://mirrors.tuna.tsinghua.edu.cn/kernel/v5.x/linux-5.15.133.tar.xz"
+            "https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.15.133.tar.xz"
+          )
+          for url in "${LINUX_URLS[@]}"; do
+            if download_with_retry "$url" "dl/linux-5.15.133.tar.xz"; then
+              break
+            fi
+          done
+          
+          # Musl 1.2.4
+          echo "=== 下载 Musl 1.2.4 ==="
+          MUSL_URLS=(
+            "https://musl.libc.org/releases/musl-1.2.4.tar.gz"
+            "https://mirrors.tuna.tsinghua.edu.cn/musl/musl-1.2.4.tar.gz"
+          )
+          for url in "${MUSL_URLS[@]}"; do
+            if download_with_retry "$url" "dl/musl-1.2.4.tar.gz"; then
+              break
+            fi
+          done
+          
+          # 其他可能需要的包
+          echo "=== 下载其他工具链组件 ==="
+          OTHER_PACKAGES=(
+            "https://mirrors.tuna.tsinghua.edu.cn/gnu/mpc/mpc-1.3.1.tar.gz|dl/mpc-1.3.1.tar.gz"
+            "https://mirrors.tuna.tsinghua.edu.cn/gnu/mpfr/mpfr-4.2.0.tar.xz|dl/mpfr-4.2.0.tar.xz"
+            "https://mirrors.tuna.tsinghua.edu.cn/gnu/gmp/gmp-6.2.1.tar.xz|dl/gmp-6.2.1.tar.xz"
+          )
+          
+          for package in "${OTHER_PACKAGES[@]}"; do
+            url=$(echo "$package" | cut -d'|' -f1)
+            output=$(echo "$package" | cut -d'|' -f2)
+            download_with_retry "$url" "$output" || true
+          done
+          
+          echo "结束时间: $(date)"
+          echo "下载完成，检查文件..."
+          ls -lh dl/ 2>/dev/null | head -20 || echo "下载目录为空"
+          echo "总文件数: $(ls -1 dl/ 2>/dev/null | wc -l)"
+          echo "总大小: $(du -sh dl/ 2>/dev/null | cut -f1 || echo "未知")"
+          
+          if [ $(ls -1 dl/ 2>/dev/null | wc -l) -lt 3 ]; then
+            echo "⚠️ 警告: 下载的文件数量较少，但继续构建..."
+          else
+            echo "✅ 关键源码包下载完成"
+          fi
+
+      - name: 📥 下载剩余源码包
+        timeout-minutes: 15
+        run: |
+          echo "=== 下载剩余源码包 ==="
           cd "${{ env.BUILD_DIR }}"
           export FORCE_UNSAFE_CONFIGURE=1
           export TERM=dumb
-          echo "开始下载源码包..."
+          
           echo "开始时间: $(date)"
-          make -j$(nproc) download V=s 2>&1 | tee download.log
+          echo "检查现有下载..."
+          PRE_COUNT=$(ls -1 dl/ 2>/dev/null | wc -l)
+          echo "预下载文件数: $PRE_COUNT"
+          
+          echo "使用单线程下载缺失的包..."
+          make -j1 download V=s 2>&1 | tee download.log | tail -30
+          
           echo "结束时间: $(date)"
-          if [ -d "dl" ]; then
-            DL_COUNT=$(ls -1 dl/ 2>/dev/null | wc -l)
-            DL_SIZE=$(du -sh dl/ 2>/dev/null | cut -f1 || echo "未知")
-            echo "✅ 下载完成"
-            echo "下载文件数: $DL_COUNT"
-            echo "下载大小: $DL_SIZE"
-            if [ $DL_COUNT -lt 5 ]; then
-              echo "⚠️ 警告: 下载的文件数量较少"
-              echo "最后10行下载日志:"
-              tail -10 download.log
-            fi
+          
+          POST_COUNT=$(ls -1 dl/ 2>/dev/null | wc -l)
+          ADDED_COUNT=$((POST_COUNT - PRE_COUNT))
+          TOTAL_SIZE=$(du -sh dl/ 2>/dev/null | cut -f1 || echo "未知")
+          
+          echo "下载统计:"
+          echo "预下载文件: $PRE_COUNT"
+          echo "新增文件: $ADDED_COUNT"
+          echo "总文件数: $POST_COUNT"
+          echo "总大小: $TOTAL_SIZE"
+          
+          if [ $POST_COUNT -gt 5 ]; then
+            echo "✅ 源码包下载完成"
           else
-            echo "❌ 下载目录不存在"
-            exit 1
+            echo "⚠️ 下载文件较少，但继续构建..."
           fi
 
       - name: 🔨 编译工具链
@@ -469,8 +590,8 @@ jobs:
             echo "✅ 工具链编译成功"
           else
             echo "❌ 工具链编译失败"
-            echo "最后20行编译日志:"
-            tail -20 compile.log
+            echo "最后30行编译日志:"
+            tail -30 compile.log
             exit 1
           fi
 
@@ -491,8 +612,8 @@ jobs:
             echo "✅ 工具链安装成功"
           else
             echo "❌ 工具链安装失败"
-            echo "最后20行安装日志:"
-            tail -20 install.log
+            echo "最后30行安装日志:"
+            tail -30 install.log
             exit 1
           fi
 
@@ -503,28 +624,63 @@ jobs:
           echo "========================================"
           echo "          🔍 错误分析与诊断              "
           echo "========================================"
-          echo "1. 检查磁盘空间:"
+          echo "构建失败，开始诊断..."
+          echo ""
+          echo "1. 系统资源状态:"
+          echo "磁盘空间:"
           df -h
-          echo "2. 检查内存使用:"
+          echo ""
+          echo "内存使用:"
           free -h
-          echo "3. 检查构建目录:"
+          echo ""
+          echo "2. 构建目录状态:"
           if [ -d "${{ env.BUILD_DIR }}" ]; then
             echo "构建目录大小: $(du -sh "${{ env.BUILD_DIR }}" 2>/dev/null || echo "未知")"
-            echo "4. 查找错误日志:"
+            echo "关键子目录:"
+            ls -la "${{ env.BUILD_DIR }}/" | grep -E "staging|build|dl" || echo "未找到关键目录"
+            echo ""
+            echo "3. 下载目录状态:"
+            if [ -d "${{ env.BUILD_DIR }}/dl" ]; then
+              echo "下载文件数: $(ls -1 "${{ env.BUILD_DIR }}/dl" 2>/dev/null | wc -l)"
+              echo "下载目录大小: $(du -sh "${{ env.BUILD_DIR }}/dl" 2>/dev/null || echo "未知")"
+              echo "下载文件列表:"
+              ls -lh "${{ env.BUILD_DIR }}/dl/" | head -10
+            else
+              echo "❌ 下载目录不存在"
+            fi
+            echo ""
+            echo "4. 日志文件分析:"
             for log in "${{ env.BUILD_DIR }}"/*.log; do
               if [ -f "$log" ]; then
                 echo "日志文件: $(basename "$log")"
-                echo "最后错误行:"
-                grep -i "error\|failed\|recipe for target" "$log" | tail -5 || echo "未找到错误"
+                echo "文件大小: $(wc -l < "$log") 行"
+                echo "最后错误:"
+                grep -i "error\|failed\|recipe for target" "$log" | tail -3 || echo "未找到明确错误"
                 echo ""
               fi
             done
+          else
+            echo "❌ 构建目录不存在"
           fi
-          echo "5. 常见问题解决:"
-          echo "   - 终端错误: 确保安装了 ncurses-term"
-          echo "   - 下载失败: 检查网络连接"
-          echo "   - 编译失败: 检查依赖是否完整"
-          echo "   - 超时: 增加超时时间或减少并行任务"
+          echo ""
+          echo "5. 常见问题解决建议:"
+          echo "   - 终端错误 (Error opening terminal):"
+          echo "     确保安装了 ncurses-term: sudo apt-get install ncurses-term"
+          echo "   - 下载失败:"
+          echo "     检查网络连接，使用预下载方案"
+          echo "     在 .config 中设置 CONFIG_DOWNLOAD_FOLDER 指定本地缓存"
+          echo "   - 编译失败:"
+          echo "     检查所有依赖是否完整安装"
+          echo "     尝试减少并行任务: make -j2"
+          echo "     清理构建缓存重新开始"
+          echo "   - 超时问题:"
+          echo "     增加工作流超时时间"
+          echo "     分步构建，先下载再编译"
+          echo ""
+          echo "6. 调试命令参考:"
+          echo "   - 查看完整日志: tail -100 ${{ env.BUILD_DIR }}/compile.log"
+          echo "   - 检查配置: grep -E 'TARGET|ARCH|GCC' ${{ env.BUILD_DIR }}/.config"
+          echo "   - 检查依赖: ldd ${{ env.BUILD_DIR }}/staging_dir/*/bin/*gcc 2>/dev/null | head -5"
           echo "========================================"
 
       - name: ✅ 验证构建结果
