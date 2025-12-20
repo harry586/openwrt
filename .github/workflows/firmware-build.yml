@@ -13,27 +13,15 @@ on:
         required: true
         type: choice
         default: "21.02"
-        options:
-          - "23.05"
-          - "21.02"
+        options: ["23.05", "21.02"]
       config_mode:
-        description: |
-          ⚙️ 配置模式选择
-          
-          🟣 基础模式 - 最小化配置，用于测试编译
-          🟠 正常模式 - 完整功能配置：✅ TurboACC 网络加速 ✅ UPnP 自动端口转发 ✅ Samba 文件共享 ✅ 磁盘管理 ✅ KMS 激活服务 ✅ SmartDNS 智能DNS ✅ 家长控制 ✅ 微信推送 ✅ 流量控制 (SQM) ✅ FTP 服务器 ✅ ARP 绑定 ✅ CPU 限制 ✅ 硬盘休眠
-          
-          🔧 USB 3.0加强：所有平台的关键USB驱动都已强制启用！
+        description: "⚙️ 配置模式选择 - 🟣 基础模式 - 最小化配置 🟠 正常模式 - 完整功能配置"
         required: true
         type: choice
         default: "normal"
-        options:
-          - "base"
-          - "normal"
+        options: ["base", "normal"]
       extra_packages:
-        description: |
-          额外安装插件
-          格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。
+        description: "额外安装插件 - 格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。"
         required: false
         type: string
         default: ""
@@ -59,15 +47,12 @@ jobs:
           echo "=== 步骤 1: 使用Git Archive API下载源代码 ==="
           echo "🔄 从GitHub API获取源代码压缩包"
           
-          # 创建临时目录
           mkdir -p /tmp/openwrt-source
           cd /tmp/openwrt-source
           
-          # 获取默认分支
           DEFAULT_BRANCH=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}" | jq -r '.default_branch')
           echo "默认分支: $DEFAULT_BRANCH"
           
-          # 使用Git Archive API下载压缩包
           echo "下载源代码压缩包..."
           curl -s -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}/tarball/$DEFAULT_BRANCH" -o source.tar.gz
           
@@ -78,46 +63,34 @@ jobs:
           
           echo "✅ 下载完成，文件大小: $(ls -lh source.tar.gz | awk '{print $5}')"
           
-          # 解压压缩包
           echo "解压源代码..."
           tar -xzf source.tar.gz --strip-components=1
           
-          # 检查解压结果
           if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
             echo "✅ 源代码解压成功"
             echo "重要文件存在: firmware-config/scripts/build_firmware_main.sh"
             
-            # 复制到工作区 - 使用更精确的方式
-            echo "复制文件到工作区..."
-            
-            # 确保工作区目录存在
             mkdir -p ${{ github.workspace }}
             
-            # 检查并删除编译器目录（如果有的话）
             if [ -d "firmware-config/build-Compiler-file" ]; then
               echo "⚠️ 发现编译器目录，排除不复制"
               rm -rf firmware-config/build-Compiler-file
             fi
             
-            # 使用rsync复制所有文件，排除.git目录
             rsync -av --exclude='.git' . ${{ github.workspace }}/
             
-            # 确保脚本文件有执行权限
             chmod +x ${{ github.workspace }}/firmware-config/scripts/*.sh 2>/dev/null || true
             
             echo "✅ 文件复制完成"
             
-            # 保存源代码压缩包作为构建产物
             mkdir -p /tmp/build-artifacts/source-archive
             cp source.tar.gz /tmp/build-artifacts/source-archive/
           else
             echo "❌ 源代码解压失败，重要文件缺失"
-            echo "当前目录内容:"
             ls -la
             exit 1
           fi
           
-          # 清理临时文件
           cd /tmp
           rm -rf openwrt-source
           echo "✅ Git Archive API下载完成"
@@ -159,8 +132,6 @@ jobs:
             echo "目录内容:"
             ls -la "$COMPILER_DIR/" 2>/dev/null | head -10 || echo "无法列出"
             
-            # 检查必要的编译器文件
-            echo "🔍 检查必要的编译器文件:"
             required_compilers=("gcc" "g++" "as" "ld" "ar" "strip" "objcopy" "objdump" "nm" "ranlib")
             for compiler in "${required_compilers[@]}"; do
               if find "$COMPILER_DIR" -name "*$compiler*" -type f 2>/dev/null | grep -q .; then
@@ -192,16 +163,14 @@ jobs:
           echo "6. mpc - GNU多精度复数库源代码"
           echo "7. isl - 整数集库源代码"
           
-          # 定义编译器源代码下载列表
-          declare -A compiler_urls=(
-            ["gcc-11.3.0.tar.xz"]="https://ftp.gnu.org/gnu/gcc/gcc-11.3.0/gcc-11.3.0.tar.xz"
-            ["binutils-2.38.tar.xz"]="https://ftp.gnu.org/gnu/binutils/binutils-2.38.tar.xz"
-            ["make-4.3.tar.gz"]="https://ftp.gnu.org/gnu/make/make-4.3.tar.gz"
-            ["gmp-6.2.1.tar.xz"]="https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.xz"
-            ["mpfr-4.1.0.tar.xz"]="https://ftp.gnu.org/gnu/mpfr/mpfr-4.1.0.tar.xz"
-            ["mpc-1.2.1.tar.gz"]="https://ftp.gnu.org/gnu/mpc/mpc-1.2.1.tar.gz"
-            ["isl-0.24.tar.xz"]="https://gcc.gnu.org/pub/gcc/infrastructure/isl-0.24.tar.xz"
-          )
+          declare -A compiler_urls
+          compiler_urls["gcc-11.3.0.tar.xz"]="https://ftp.gnu.org/gnu/gcc/gcc-11.3.0/gcc-11.3.0.tar.xz"
+          compiler_urls["binutils-2.38.tar.xz"]="https://ftp.gnu.org/gnu/binutils/binutils-2.38.tar.xz"
+          compiler_urls["make-4.3.tar.gz"]="https://ftp.gnu.org/gnu/make/make-4.3.tar.gz"
+          compiler_urls["gmp-6.2.1.tar.xz"]="https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.xz"
+          compiler_urls["mpfr-4.1.0.tar.xz"]="https://ftp.gnu.org/gnu/mpfr/mpfr-4.1.0.tar.xz"
+          compiler_urls["mpc-1.2.1.tar.gz"]="https://ftp.gnu.org/gnu/mpc/mpc-1.2.1.tar.gz"
+          compiler_urls["isl-0.24.tar.xz"]="https://gcc.gnu.org/pub/gcc/infrastructure/isl-0.24.tar.xz"
           
           cd "$COMPILER_DIR"
           
@@ -213,7 +182,6 @@ jobs:
               echo "URL: $url"
               wget --no-check-certificate -q --show-progress "$url" || {
                 echo "下载失败: $file，尝试备用方案..."
-                # 尝试使用curl作为备用
                 curl -L "$url" -o "$file" || echo "备用下载也失败: $file"
               }
             else
@@ -225,16 +193,12 @@ jobs:
           echo "📊 当前编译器源代码文件:"
           ls -lh "$COMPILER_DIR" 2>/dev/null || echo "无文件"
           
-          # 统计下载的文件
           file_count=$(find "$COMPILER_DIR" -type f -name "*.tar.*" -o -name "*.gz" 2>/dev/null | wc -l)
           
           if [ $file_count -gt 0 ]; then
             echo "📊 编译器源代码统计:"
             echo "  文件数量: $file_count"
             echo "  目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
-            
-            echo "📋 文件列表:"
-            find "$COMPILER_DIR" -type f 2>/dev/null | head -10 || echo "  无文件"
           else
             echo "⚠️ 编译器目录为空"
           fi
@@ -323,35 +287,30 @@ jobs:
         run: |
           echo "=== 步骤 16: 应用配置并显示详情 ==="
           
-          # 先保存原始配置文件
           if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
             cp "${{ env.BUILD_DIR }}/.config" "${{ env.BUILD_DIR }}/.config.original"
             echo "✅ 已备份原始配置文件"
           fi
           
-          # 应用配置
           firmware-config/scripts/build_firmware_main.sh apply_config
           
-          # 检查应用后的配置状态
           echo "=== 插件配置状态检查 ==="
           cd "${{ env.BUILD_DIR }}"
           
-          # 定义正常模式的完整插件列表
-          declare -A normal_plugins=(
-            ["TurboACC 网络加速"]="luci-app-turboacc"
-            ["UPnP 自动端口转发"]="luci-app-upnp"
-            ["Samba 文件共享"]="luci-app-samba4"
-            ["磁盘管理"]="luci-app-diskman"
-            ["KMS 激活服务"]="luci-app-vlmcsd"
-            ["SmartDNS 智能DNS"]="luci-app-smartdns"
-            ["家长控制"]="luci-app-accesscontrol"
-            ["微信推送"]="luci-app-wechatpush"
-            ["流量控制 (SQM)"]="luci-app-sqm"
-            ["FTP 服务器"]="luci-app-vsftpd"
-            ["ARP 绑定"]="luci-app-arpbind"
-            ["CPU 限制"]="luci-app-cpulimit"
-            ["硬盘休眠"]="luci-app-hd-idle"
-          )
+          declare -A normal_plugins
+          normal_plugins["TurboACC 网络加速"]="luci-app-turboacc"
+          normal_plugins["UPnP 自动端口转发"]="luci-app-upnp"
+          normal_plugins["Samba 文件共享"]="luci-app-samba4"
+          normal_plugins["磁盘管理"]="luci-app-diskman"
+          normal_plugins["KMS 激活服务"]="luci-app-vlmcsd"
+          normal_plugins["SmartDNS 智能DNS"]="luci-app-smartdns"
+          normal_plugins["家长控制"]="luci-app-accesscontrol"
+          normal_plugins["微信推送"]="luci-app-wechatpush"
+          normal_plugins["流量控制 (SQM)"]="luci-app-sqm"
+          normal_plugins["FTP 服务器"]="luci-app-vsftpd"
+          normal_plugins["ARP 绑定"]="luci-app-arpbind"
+          normal_plugins["CPU 限制"]="luci-app-cpulimit"
+          normal_plugins["硬盘休眠"]="luci-app-hd-idle"
           
           echo "📋 正常模式插件状态检查:"
           
@@ -380,7 +339,6 @@ jobs:
           echo "  已启用: $enabled_plugins 个"
           echo "  已禁用: $disabled_plugins 个"
           
-          # 检查基础模式是否禁用了插件
           if [ "${{ github.event.inputs.config_mode }}" = "base" ]; then
             echo ""
             echo "🔧 基础模式配置确认:"
@@ -391,7 +349,6 @@ jobs:
             fi
           fi
           
-          # 额外检查USB驱动状态
           echo ""
           echo "🔌 USB驱动状态确认:"
           critical_usb_drivers=("kmod-usb-xhci-hcd" "kmod-usb3" "kmod-usb-dwc3" "kmod-usb-storage" "kmod-scsi-core")
@@ -410,20 +367,16 @@ jobs:
         run: |
           echo "=== 步骤 17: 检查并备份配置文件 ==="
           
-          # 检查配置文件
           if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
             echo "✅ .config 文件存在"
             
-            # 确保备份目录存在
             mkdir -p firmware-config/config-backup
             
-            # 备份到仓库目录
             backup_file="firmware-config/config-backup/config_${{ github.event.inputs.device_name }}_${{ env.SELECTED_BRANCH }}_${{ github.event.inputs.config_mode }}_$(date +%Y%m%d_%H%M%S).config"
             
             cp "${{ env.BUILD_DIR }}/.config" "$backup_file"
             echo "✅ 配置文件备份到仓库目录: $backup_file"
             
-            # 显示备份文件信息
             echo "备份文件大小: $(ls -lh $backup_file | awk '{print $5}')"
           else
             echo "❌ .config 文件不存在"
@@ -463,7 +416,6 @@ jobs:
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
           echo "/mnt 可用空间: ${AVAILABLE_GB}G"
           
-          # 检查编译所需空间
           if [ $AVAILABLE_GB -lt 10 ]; then
             echo "❌ 错误: 编译前空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
             exit 1
@@ -477,7 +429,6 @@ jobs:
       - name: "23. 编译固件"
         run: |
           echo "=== 步骤 23: 编译固件 ==="
-          # 启用编译缓存，使用并行编译
           firmware-config/scripts/build_firmware_main.sh build_firmware "true"
       
       # 步骤 24: 搜索并打包构建产物
@@ -487,19 +438,15 @@ jobs:
           echo "=== 步骤 24: 搜索并打包构建产物 ==="
           cd ${{ env.BUILD_DIR }}
           
-          # 创建构建产物目录
           mkdir -p /tmp/build-artifacts
           
-          # 检查是否已有相同文件，避免重复上传
           echo "🔍 检查是否已有相同构建产物..."
           need_upload=false
           
-          # 打包固件文件
           if [ -d "bin/targets" ]; then
             echo "打包固件文件..."
             tar -czf /tmp/build-artifacts/firmware.tar.gz -C bin targets/
             
-            # 检查文件大小
             firmware_size=$(stat -c%s /tmp/build-artifacts/firmware.tar.gz 2>/dev/null || echo "0")
             if [ $firmware_size -gt 0 ]; then
               echo "✅ 固件打包完成，大小: $(du -h /tmp/build-artifacts/firmware.tar.gz | cut -f1)"
@@ -511,7 +458,6 @@ jobs:
             echo "⚠️ bin/targets目录不存在"
           fi
           
-          # 打包编译日志
           if [ -f "build.log" ]; then
             echo "打包编译日志..."
             cp build.log /tmp/build-artifacts/build.log
@@ -519,7 +465,6 @@ jobs:
             need_upload=true
           fi
           
-          # 创建构建信息文件
           echo "构建时间: $(date)" > /tmp/build-artifacts/build-info.txt
           echo "设备: ${{ env.DEVICE }}" >> /tmp/build-artifacts/build-info.txt
           echo "版本: ${{ env.SELECTED_BRANCH }}" >> /tmp/build-artifacts/build-info.txt
@@ -543,26 +488,23 @@ jobs:
           path: ${{ env.BUILD_DIR }}/bin/targets/
           retention-days: 7
       
-      # 步骤 26: 汇总并保存已编译的编译器文件
-      - name: "26. 汇总并保存已编译的编译器文件"
+      # 步骤 26: 汇总已编译的编译器文件并提交到仓库目录
+      - name: "26. 汇总已编译的编译器文件并提交到仓库目录"
         if: success()
         run: |
-          echo "=== 步骤 26: 汇总并保存已编译的编译器文件 ==="
+          echo "=== 步骤 26: 汇总已编译的编译器文件并提交到仓库目录 ==="
           echo "🔍 开始收集已编译的编译器文件..."
           
-          # 创建编译器文件保存目录
-          COMPILER_SAVE_DIR="${{ github.workspace }}/firmware-config/build-Compiler-file"
+          COMPILER_SAVE_DIR="${{ github.workspace }}/firmware-config/build-Compiler-file/compiled"
           mkdir -p "$COMPILER_SAVE_DIR"
           
           echo "编译器文件保存目录: $COMPILER_SAVE_DIR"
           
-          # 检查构建目录中的编译器文件
           BUILD_DIR="${{ env.BUILD_DIR }}"
           
           echo "📊 搜索已编译的编译器文件..."
           
-          # 1. 搜索所有编译器文件
-          find "$BUILD_DIR/staging_dir" -type f -name "*gcc*" -o -name "*g++*" -o -name "*as*" -o -name "*ld*" -o -name "*ar*" -o -name "*strip*" -o -name "*objcopy*" -o -name "*objdump*" -o -name "*nm*" -o -name "*ranlib*" 2>/dev/null | head -50 > /tmp/compiler_files.txt
+          find "$BUILD_DIR/staging_dir" -type f \( -name "*gcc*" -o -name "*g++*" -o -name "*as*" -o -name "*ld*" -o -name "*ar*" -o -name "*strip*" -o -name "*objcopy*" -o -name "*objdump*" -o -name "*nm*" -o -name "*ranlib*" \) 2>/dev/null | head -100 > /tmp/compiler_files.txt
           
           total_files=$(wc -l < /tmp/compiler_files.txt)
           echo "📈 找到 $total_files 个编译器文件"
@@ -572,19 +514,16 @@ jobs:
             exit 0
           fi
           
-          # 2. 创建分类目录
           echo "📁 创建分类目录..."
-          mkdir -p "$COMPILER_SAVE_DIR/arm"      # ARM架构
-          mkdir -p "$COMPILER_SAVE_DIR/mips"     # MIPS架构
-          mkdir -p "$COMPILER_SAVE_DIR/mipsel"   # MIPS小端
-          mkdir -p "$COMPILER_SAVE_DIR/x86"      # x86架构
-          mkdir -p "$COMPILER_SAVE_DIR/x86_64"   # x86_64架构
-          mkdir -p "$COMPILER_SAVE_DIR/generic"  # 通用编译器
+          mkdir -p "$COMPILER_SAVE_DIR/arm"
+          mkdir -p "$COMPILER_SAVE_DIR/mips"
+          mkdir -p "$COMPILER_SAVE_DIR/mipsel"
+          mkdir -p "$COMPILER_SAVE_DIR/x86"
+          mkdir -p "$COMPILER_SAVE_DIR/x86_64"
+          mkdir -p "$COMPILER_SAVE_DIR/generic"
           
-          # 3. 分类复制编译器文件
           echo "📋 分类复制编译器文件..."
           
-          # 计数器
           arm_count=0
           mips_count=0
           mipsel_count=0
@@ -592,12 +531,10 @@ jobs:
           x86_64_count=0
           generic_count=0
           
-          # 读取文件列表并分类复制
           while IFS= read -r file; do
             if [ -f "$file" ] && [ -x "$file" ]; then
               filename=$(basename "$file")
               
-              # 根据文件名分类
               if [[ "$filename" == *"arm"* ]] || [[ "$file" == *"arm"* ]]; then
                 cp "$file" "$COMPILER_SAVE_DIR/arm/" 2>/dev/null && arm_count=$((arm_count + 1))
               elif [[ "$filename" == *"mips"* ]] && [[ "$filename" != *"mipsel"* ]]; then
@@ -614,7 +551,6 @@ jobs:
             fi
           done < /tmp/compiler_files.txt
           
-          # 4. 显示分类统计
           echo ""
           echo "📊 编译器文件分类统计:"
           echo "  ARM架构: $arm_count 个文件"
@@ -625,7 +561,6 @@ jobs:
           echo "  通用编译器: $generic_count 个文件"
           echo "  总计: $((arm_count + mips_count + mipsel_count + x86_count + x86_64_count + generic_count)) 个文件"
           
-          # 5. 显示各目录内容
           echo ""
           echo "📁 各目录详细内容:"
           
@@ -634,75 +569,74 @@ jobs:
             if [ -d "$dir_path" ] && [ "$(ls -A "$dir_path" 2>/dev/null)" ]; then
               file_count=$(find "$dir_path" -type f | wc -l)
               echo "  $arch_dir 目录 ($file_count 个文件):"
-              ls "$dir_path" | head -10 | while read file; do
+              ls "$dir_path" | head -5 | while read file; do
                 size=$(stat -c%s "$dir_path/$file" 2>/dev/null || echo "0")
                 size_kb=$((size / 1024))
                 echo "    - $file (${size_kb}KB)"
               done
-              if [ $file_count -gt 10 ]; then
-                echo "    ... 还有 $((file_count - 10)) 个文件"
+              if [ $file_count -gt 5 ]; then
+                echo "    ... 还有 $((file_count - 5)) 个文件"
               fi
             else
               echo "  $arch_dir 目录: 空"
             fi
           done
           
-          # 6. 创建编译器信息文件
           echo ""
           echo "📝 创建编译器信息文件..."
-          cat > "$COMPILER_SAVE_DIR/compiler_info.txt" << EOF
-编译器文件汇总信息
-==================
-
-生成时间: $(date)
-构建设备: ${{ env.DEVICE }}
-目标平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}
-OpenWrt版本: ${{ env.SELECTED_BRANCH }}
-
-文件分类统计:
-------------
-ARM架构: $arm_count 个文件
-MIPS架构: $mips_count 个文件
-MIPS小端: $mipsel_count 个文件
-x86架构: $x86_count 个文件
-x86_64架构: $x86_64_count 个文件
-通用编译器: $generic_count 个文件
-总计: $((arm_count + mips_count + mipsel_count + x86_count + x86_64_count + generic_count)) 个文件
-
-关键编译器列表:
----------------
-EOF
+          echo "编译器文件汇总信息" > "$COMPILER_SAVE_DIR/compiler_info.txt"
+          echo "==================" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
+          echo "" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
+          echo "生成时间: $(date)" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
+          echo "构建设备: ${{ env.DEVICE }}" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
+          echo "目标平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
+          echo "OpenWrt版本: ${{ env.SELECTED_BRANCH }}" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
+          echo "" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
+          echo "文件分类统计:" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
+          echo "------------" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
+          echo "ARM架构: $arm_count 个文件" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
+          echo "MIPS架构: $mips_count 个文件" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
+          echo "MIPS小端: $mipsel_count 个文件" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
+          echo "x86架构: $x86_count 个文件" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
+          echo "x86_64架构: $x86_64_count 个文件" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
+          echo "通用编译器: $generic_count 个文件" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
+          echo "总计: $((arm_count + mips_count + mipsel_count + x86_count + x86_64_count + generic_count)) 个文件" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
           
-          # 添加关键编译器信息
-          for arch_dir in arm mips mipsel x86 x86_64 generic; do
-            dir_path="$COMPILER_SAVE_DIR/$arch_dir"
-            if [ -d "$dir_path" ]; then
-              echo "" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
-              echo "$arch_dir 架构:" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
-              find "$dir_path" -type f -name "*gcc*" -o -name "*g++*" -o -name "*as*" -o -name "*ld*" 2>/dev/null | head -5 | while read file; do
-                filename=$(basename "$file")
-                size=$(stat -c%s "$file" 2>/dev/null || echo "0")
-                size_kb=$((size / 1024))
-                echo "  - $filename (${size_kb}KB)" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
-              done
-            fi
-          done
-          
-          # 7. 显示总目录大小
           total_size=$(du -sh "$COMPILER_SAVE_DIR" 2>/dev/null | cut -f1)
           echo ""
           echo "📦 编译器文件总目录大小: $total_size"
           
-          # 8. 创建压缩包
-          echo ""
           echo "📦 创建编译器文件压缩包..."
           cd "$COMPILER_SAVE_DIR"
-          tar -czf ../compiler-files.tar.gz ./*
+          tar -czf "../compiled-compilers.tar.gz" ./*
           cd - > /dev/null
           
-          echo "✅ 编译器文件汇总完成"
+          echo "✅ 编译器文件收集完成"
           echo "📁 保存目录: $COMPILER_SAVE_DIR"
-          echo "📦 压缩包: ${{ github.workspace }}/firmware-config/compiler-files.tar.gz"
+          echo "📦 压缩包: ${{ github.workspace }}/firmware-config/build-Compiler-file/compiled-compilers.tar.gz"
+          
+          echo "🔄 提交编译器文件到仓库目录..."
+          
+          cd "${{ github.workspace }}"
+          
+          git config --local user.email "github-actions@github.com"
+          git config --local user.name "GitHub Actions"
+          
+          git add firmware-config/build-Compiler-file/
+          
+          git status --porcelain firmware-config/build-Compiler-file/
+          
+          if git diff --cached --quiet -- firmware-config/build-Compiler-file/; then
+            echo "ℹ️ 没有新的编译器文件需要提交"
+          else
+            echo "📝 提交编译器文件到仓库..."
+            git commit -m "feat: 添加已编译的编译器文件" -m "设备: ${{ env.DEVICE }}" -m "平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}" -m "版本: ${{ env.SELECTED_BRANCH }}" -m "ARM: $arm_count 文件" -m "MIPS: $mips_count 文件" -m "MIPS小端: $mipsel_count 文件" -m "x86: $x86_count 文件" -m "x86_64: $x86_64_count 文件" -m "通用: $generic_count 文件" -m "总计: $((arm_count + mips_count + mipsel_count + x86_count + x86_64_count + generic_count)) 文件"
+            
+            echo "🔄 推送到仓库..."
+            git push origin HEAD:${{ github.ref_name }}
+            
+            echo "✅ 编译器文件已提交到仓库目录"
+          fi
       
       # 步骤 27: 上传配置文件
       - name: "27. 上传配置文件"
@@ -713,13 +647,13 @@ EOF
           path: ${{ github.workspace }}/firmware-config/config-backup/
           retention-days: 7
       
-      # 步骤 28: 上传编译器文件
-      - name: "28. 上传编译器文件"
+      # 步骤 28: 上传编译器文件压缩包
+      - name: "28. 上传编译器文件压缩包"
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: compiler-files-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
-          path: ${{ github.workspace }}/firmware-config/build-Compiler-file/
+          path: ${{ github.workspace }}/firmware-config/build-Compiler-file/compiled-compilers.tar.gz
           retention-days: 7
       
       # 步骤 29: 错误分析（无论成功失败都运行）
