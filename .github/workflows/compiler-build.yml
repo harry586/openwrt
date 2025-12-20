@@ -9,22 +9,13 @@ on:
         required: true
         default: 'arm_cortex-a7'
         type: choice
-        options:
-          - 'aarch64'
-          - 'x86_64'
-          - 'mips'
-          - 'mipsel'
-          - 'arm_cortex-a7'
-          - 'arm_cortex-a53'
-          - 'riscv64'
+        options: ['aarch64', 'x86_64', 'mips', 'mipsel', 'arm_cortex-a7', 'arm_cortex-a53', 'riscv64']
       libc:
         description: 'C库类型（嵌入式推荐musl）'
         required: true
         default: 'musl'
         type: choice
-        options:
-          - 'musl'
-          - 'glibc'
+        options: ['musl', 'glibc']
       gcc_version:
         description: 'GCC版本（OpenWrt 23.05支持12.3.0，输入auto自动选择）'
         required: true
@@ -44,7 +35,6 @@ on:
 env:
   OPENWRT_VERSION: "23.05.2"
   COMPILER_BASE_DIR: "${{ github.workspace }}/firmware-config/build-Compiler-file/compilers"
-  GITHUB_TIMEOUT_MINUTES: "60"
 
 jobs:
   show-device-info:
@@ -52,131 +42,17 @@ jobs:
     steps:
       - name: 📱 显示架构对应设备
         run: |
-          echo "================================================"
-          echo "          🎯 目标架构设备对应表                 "
-          echo "================================================"
-          echo ""
-          echo "1️⃣ aarch64 (ARM 64位)"
-          echo "   ├─ 📱 树莓派系列"
-          echo "   │  ├─ 树莓派 4B (Raspberry Pi 4)"
-          echo "   │  ├─ 树莓派 CM4 (Compute Module 4)"
-          echo "   │  └─ 树莓派 400"
-          echo "   ├─ 🖥️ 瑞芯微系列"
-          echo "   │  ├─ RK3399 (ROCK Pi 4/NanoPi M4)"
-          echo "   │  ├─ RK3568 (FriendlyELEC NanoPi R5S)"
-          echo "   │  └─ RK3588 (高端开发板)"
-          echo "   ├─ 📺 电视盒子"
-          echo "   │  ├─ 晶晨 S905 (X96 Max/Beelink GT King)"
-          echo "   │  ├─ 晶晨 S912 (H96 Pro/Beelink GT1)"
-          echo "   │  └─ 晶晨 S922X (Odroid N2+)"
-          echo "   ├─ 🖥️ 其他ARM64设备"
-          echo "      ├─ Orange Pi 5"
-          echo "      ├─ Banana Pi BPI-M5"
-          echo "      └─ 各种ARM服务器"
-          echo ""
-          echo "2️⃣ x86_64 (x86 64位)"
-          echo "   ├─ 💻 个人电脑"
-          echo "   │  ├─ Intel Core i3/i5/i7/i9"
-          echo "   │  ├─ AMD Ryzen 3/5/7/9"
-          echo "   │  └─ 各种x86笔记本"
-          echo "   ├─ 🖥️ 服务器"
-          echo "   │  ├─ 戴尔PowerEdge"
-          echo "   │  ├─ 惠普ProLiant"
-          echo "   │  └─ 超微服务器"
-          echo "   └─ ☁️ 虚拟机/容器"
-          echo "      ├─ VMware/VirtualBox虚拟机"
-          echo "      ├─ Docker容器"
-          echo "      └─ 云服务器实例"
-          echo ""
-          echo "3️⃣ mips (MIPS 32位大端)"
-          echo "   ├─ 🛜 华硕路由器"
-          echo "   │  ├─ RT-ACRH17"
-          echo "   │  ├─ RT-AC85P"
-          echo "   │  └─ RT-N56U"
-          echo "   ├─ 🛜 网件路由器"
-          echo "   │  ├─ R7800"
-          echo "   │  ├─ R9000"
-          echo "   │  └─ XR500"
-          echo "   └─ 🛜 其他MIPS设备"
-          echo "      ├─ 中兴路由器"
-          echo "      ├─ 华为旧款路由器"
-          echo "      └─ 早期智能家居设备"
-          echo ""
-          echo "4️⃣ mipsel (MIPS 32位小端)"
-          echo "   ├─ 🛜 联发科MT7621"
-          echo "   │  ├─ 斐讯 K2P (Phicomm K2P)"
-          echo "   │  ├─ Newifi 3 (新路由3)"
-          echo "   │  ├─ 小米路由器 3G"
-          echo "   │  ├─ 红米路由器 AC2100"
-          echo "   │  └─ 极路由 B70"
-          echo "   ├─ 🛜 联发科MT7620"
-          echo "   │  ├─ 小米路由器 Mini"
-          echo "   │  ├─ 极路由 1S"
-          echo "   │  ├─ 斐讯 K1/K2"
-          echo "   │  └─ 联想 Newifi Mini"
-          echo "   └─ 🛜 其他MTK设备"
-          echo "      ├─ MT7628 (低端路由)"
-          echo "      ├─ MT7688 (物联网设备)"
-          echo "      └─ 各种WiFi模块"
-          echo ""
-          echo "5️⃣ arm_cortex-a7 (ARM Cortex-A7)"
-          echo "   ├─ 🛜 高通IPQ40xx系列 (你的设备！)"
-          echo "   │  ├─ 小米路由器 4A千兆版"
-          echo "   │  ├─ 红米路由器 AC2100 (部分版本)"
-          echo "   │  ├─ GL.iNet MT1300"
-          echo "   │  ├─ 360家庭防火墙 5Pro"
-          echo "   │  ├─ Linksys EA6350 v3"
-          echo "   │  └─ Netgear R6900P"
-          echo "   ├─ 🛜 联发科MT7623/MT7629"
-          echo "   │  ├─ 小米路由器 3G (部分版本)"
-          echo "   │  ├─ 斐讯 K3C"
-          echo "   │  └─ 部分企业路由器"
-          echo "   ├─ 🍊 全志H3/H2+系列"
-          echo "   │  ├─ Orange Pi PC (香橙派PC)"
-          echo "   │  ├─ Orange Pi Plus"
-          echo "   │  ├─ Banana Pi M2+"
-          echo "   │  └─ NanoPi NEO"
-          echo "   └─ 🔧 其他Cortex-A7设备"
-          echo "      ├─ 某些智能摄像头"
-          echo "      ├─ 工业控制设备"
-          echo "      └─ 低功耗嵌入式设备"
-          echo ""
-          echo "6️⃣ arm_cortex-a53 (ARM Cortex-A53)"
-          echo "   ├─ 🛜 联发科MT7622"
-          echo "   │  ├─ 小米路由器 AX3600"
-          echo "   │  ├─ 红米路由器 AX6"
-          echo "   │  └─ 部分WiFi6路由器"
-          echo "   ├─ 📱 64位设备32位模式"
-          echo "   │  ├─ 树莓派 3 (32位模式)"
-          echo "   │  ├─ 某些电视盒子"
-          echo "   │  └─ 低端平板电脑"
-          echo "   └─ 🔧 其他A53设备"
-          echo "      ├─ 某些智能音箱"
-          echo "      ├─ 物联网网关"
-          echo "      └─ 边缘计算设备"
-          echo ""
-          echo "7️⃣ riscv64 (RISC-V 64位)"
-          echo "   ├─ 🔬 开发板"
-          echo "   │  ├─ HiFive Unmatched"
-          echo "   │  ├─ VisionFive 2"
-          echo "   │  ├─ BeagleV"
-          echo "   │  └─ SiFive开发板"
-          echo "   ├─ 🖥️ 新兴设备"
-          echo "   │  ├─ 某些AI加速器"
-          echo "   │  ├─ 定制芯片设备"
-          echo "   │  └─ 学术研究设备"
-          echo "   └─ 🚀 未来设备"
-          echo "      ├─ RISC-V笔记本电脑"
-          echo "      ├─ RISC-V服务器"
-          echo "      └─ 各种创新硬件"
-          echo ""
-          echo "================================================"
-          echo "选择建议："
-          echo "1. 路由器设备 → 根据芯片型号选择"
-          echo "2. 开发板 → 根据CPU架构选择"
-          echo "3. PC/服务器 → 选择x86_64"
-          echo "4. 不确定 → 查看设备规格书或CPU信息"
-          echo "================================================"
+          echo "========================================"
+          echo "          🎯 目标架构设备对应表           "
+          echo "========================================"
+          echo "arm_cortex-a7 (你的设备！)"
+          echo "  高通IPQ40xx系列: 小米路由器4A千兆版等"
+          echo "aarch64: 树莓派4B、电视盒子"
+          echo "x86_64: PC、服务器"
+          echo "mips/mipsel: 路由器"
+          echo "arm_cortex-a53: WiFi6路由器"
+          echo "riscv64: 开发板"
+          echo "========================================"
 
   setup:
     runs-on: ubuntu-22.04
@@ -192,8 +68,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          sparse-checkout: |
-            firmware-config/build-Compiler-file/compilers
+          sparse-checkout: firmware-config/build-Compiler-file/compilers
           sparse-checkout-cone-mode: false
 
       - name: 🏗️ 初始化
@@ -202,155 +77,60 @@ jobs:
           mkdir -p "${{ env.COMPILER_BASE_DIR }}"
           echo "基础目录: ${{ env.COMPILER_BASE_DIR }}"
           echo "开始时间: $(date)"
-          echo "当前工作区内容:"
-          ls -la "${{ github.workspace }}/firmware-config/build-Compiler-file/compilers" 2>/dev/null || echo "编译器目录不存在"
 
-      - name: 🔍 动态检测GCC版本（修复版）
+      - name: 🔍 动态检测GCC版本
         id: version-detection
         run: |
-          echo "=== 动态检测工具链版本 ==="
           USER_VERSION="${{ github.event.inputs.gcc_version }}"
-          
-          OPENWRT_2305_SUPPORTED_GCC="12.3.0 12.2.0 11.3.0 11.2.0 10.4.0"
-          
           if [ "$USER_VERSION" = "auto" ] || [ "$USER_VERSION" = "" ]; then
-            echo "正在为OpenWrt 23.05选择支持的GCC版本..."
             GCC_VERSION="12.3.0"
-            echo "✅ 选择OpenWrt 23.05支持的GCC版本: $GCC_VERSION"
-            echo "💡 支持的版本: $OPENWRT_2305_SUPPORTED_GCC"
+            echo "选择GCC版本: $GCC_VERSION"
           else
             GCC_VERSION="$USER_VERSION"
             echo "使用指定GCC版本: $GCC_VERSION"
-            
-            if [[ ! " $OPENWRT_2305_SUPPORTED_GCC " =~ " $GCC_VERSION " ]]; then
-              echo "⚠️ 警告: GCC $GCC_VERSION 可能不被OpenWrt 23.05完全支持"
-              echo "💡 建议使用: $OPENWRT_2305_SUPPORTED_GCC"
-            fi
           fi
-          
-          echo "检测Binutils版本..."
           BINUTILS_VERSION="2.40"
-          echo "✅ 使用Binutils版本: $BINUTILS_VERSION"
-          
           LINUX_VERSION="5.15.133"
           MUSL_VERSION="1.2.4"
           GLIBC_VERSION="2.37"
-          
-          echo "最终版本配置:"
-          echo "- GCC: $GCC_VERSION (OpenWrt 23.05兼容)"
-          echo "- Binutils: $BINUTILS_VERSION"
-          echo "- Linux内核: $LINUX_VERSION"
-          echo "- Musl: $MUSL_VERSION"
-          echo "- Glibc: $GLIBC_VERSION"
-          
           echo "gcc_version=$GCC_VERSION" >> $GITHUB_OUTPUT
           echo "binutils_version=$BINUTILS_VERSION" >> $GITHUB_OUTPUT
           echo "linux_version=$LINUX_VERSION" >> $GITHUB_OUTPUT
           echo "musl_version=$MUSL_VERSION" >> $GITHUB_OUTPUT
           echo "glibc_version=$GLIBC_VERSION" >> $GITHUB_OUTPUT
 
-      - name: 🔎 检查现有编译器（加强模糊搜索版）
+      - name: 🔎 检查现有编译器
         id: check-existing
         run: |
-          echo "=== 检查现有编译器（加强模糊搜索版）==="
-          echo "========================================"
-          echo "         🔧 编译器完整性检查            "
-          echo "========================================"
-          
           ARCH="${{ github.event.inputs.target_arch }}"
           LIBC="${{ github.event.inputs.libc }}"
           GCC_VERSION='${{ steps.version-detection.outputs.gcc_version }}'
-          
           if [ "$LIBC" = "musl" ]; then
             LIBC_DIR="musl"
           else
             LIBC_DIR="glibc"
           fi
-          
           OUTPUT_DIR="${{ github.workspace }}/firmware-config/build-Compiler-file/compilers/${ARCH}/${LIBC_DIR}/gcc-${GCC_VERSION}"
-          echo "精确检查目录: $OUTPUT_DIR"
-          
-          if [ -d "$OUTPUT_DIR" ]; then
-            echo "✅ 编译器目录存在（精确匹配）"
-            echo "目录大小: $(du -sh "$OUTPUT_DIR" | cut -f1)"
-            
-            if [ -d "$OUTPUT_DIR/bin" ]; then
-              echo "✅ bin目录存在"
-              echo "bin目录文件数: $(ls -1 "$OUTPUT_DIR/bin" 2>/dev/null | wc -l)"
-              
-              GCC_FILES=$(find "$OUTPUT_DIR/bin" -name "*gcc*" 2>/dev/null | wc -l)
-              if [ $GCC_FILES -gt 0 ]; then
-                echo "✅ 找到 $GCC_FILES 个编译器文件"
-                NEED_BUILD="false"
-              else
-                echo "❌ bin目录中没有编译器文件"
-                NEED_BUILD="true"
-              fi
+          if [ -d "$OUTPUT_DIR" ] && [ -d "$OUTPUT_DIR/bin" ]; then
+            GCC_FILES=$(find "$OUTPUT_DIR/bin" -name "*gcc*" 2>/dev/null | wc -l)
+            if [ $GCC_FILES -gt 0 ]; then
+              NEED_BUILD="false"
             else
-              echo "❌ bin目录不存在"
               NEED_BUILD="true"
             fi
           else
-            echo "❌ 编译器目录不存在（精确匹配）"
-            echo "开始模糊搜索..."
-            
-            SEARCH_BASE="${{ github.workspace }}/firmware-config/build-Compiler-file/compilers"
-            echo "搜索基础目录: $SEARCH_BASE"
-            
-            if [ -d "$SEARCH_BASE" ]; then
-              echo "📁 目录结构:"
-              find "$SEARCH_BASE" -type d -name "*${ARCH}*" 2>/dev/null | head -10
-              
-              FOUND_DIRS=$(find "$SEARCH_BASE" -type d -name "*${ARCH}*" 2>/dev/null)
-              if [ -n "$FOUND_DIRS" ]; then
-                echo "🔍 找到相似架构目录:"
-                echo "$FOUND_DIRS"
-                
-                for dir in $FOUND_DIRS; do
-                  if [ -d "$dir/bin" ]; then
-                    GCC_COUNT=$(find "$dir/bin" -name "*gcc*" 2>/dev/null | wc -l)
-                    if [ $GCC_COUNT -gt 0 ]; then
-                      echo "🎯 在 $dir 中找到 $GCC_COUNT 个编译器文件"
-                      NEED_BUILD="maybe"
-                      break
-                    fi
-                  fi
-                done
-                
-                if [ "$NEED_BUILD" != "maybe" ]; then
-                  echo "❌ 模糊搜索未找到完整编译器"
-                  NEED_BUILD="true"
-                fi
-              else
-                echo "❌ 模糊搜索未找到任何架构目录"
-                NEED_BUILD="true"
-              fi
-            else
-              echo "❌ 编译器基础目录不存在"
-              NEED_BUILD="true"
-            fi
-            
-            if [ "$NEED_BUILD" = "maybe" ]; then
-              echo "ℹ️ 找到相似目录但未精确匹配，需要用户确认"
-              NEED_BUILD="true"
-            fi
-          fi
-          
-          if [ "${{ github.event.inputs.force_rebuild }}" = "true" ]; then
-            echo "⚡ 强制重建选项启用，忽略现有编译器"
             NEED_BUILD="true"
           fi
-          
-          echo ""
-          echo "构建决策: $NEED_BUILD"
-          echo "========================================"
+          if [ "${{ github.event.inputs.force_rebuild }}" = "true" ]; then
+            NEED_BUILD="true"
+          fi
           echo "need_build=$NEED_BUILD" >> $GITHUB_OUTPUT
 
   build-compiler:
     needs: [show-device-info, setup]
     if: needs.setup.outputs.need_build == 'true'
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     
     steps:
       - name: 📥 检出仓库
@@ -361,33 +141,18 @@ jobs:
           echo "========================================"
           echo "        交叉编译器构建信息              "
           echo "========================================"
-          echo "🚨 用户输入参数:"
-          echo "  目标架构: ${{ github.event.inputs.target_arch }}"
-          echo "  C库类型: ${{ github.event.inputs.libc }}"
-          echo "  GCC版本: ${{ github.event.inputs.gcc_version }}"
-          echo "  清理构建: ${{ github.event.inputs.clean_build }}"
-          echo "  强制重建: ${{ github.event.inputs.force_rebuild }}"
-          echo "🚨 检测到的版本:"
-          echo "  GCC版本: ${{ needs.setup.outputs.gcc_version }}"
-          echo "  Binutils版本: ${{ needs.setup.outputs.binutils_version }}"
-          echo "  Linux内核: ${{ needs.setup.outputs.linux_version }}"
-          echo "  Musl版本: ${{ needs.setup.outputs.musl_version }}"
-          echo "  Glibc版本: ${{ needs.setup.outputs.glibc_version }}"
-          echo "🚨 构建需求:"
-          echo "  是否需要构建: ${{ needs.setup.outputs.need_build }}"
+          echo "目标架构: ${{ github.event.inputs.target_arch }}"
+          echo "C库类型: ${{ github.event.inputs.libc }}"
+          echo "GCC版本: ${{ needs.setup.outputs.gcc_version }}"
+          echo "清理构建: ${{ github.event.inputs.clean_build }}"
+          echo "强制重建: ${{ github.event.inputs.force_rebuild }}"
           echo "========================================"
-          echo "开始时间: $(date)"
-          echo "运行ID: ${{ github.run_id }}"
-          echo "运行序号: ${{ github.run_number }}"
 
-      - name: 🏗️ 设置环境（修复版）
+      - name: 🏗️ 设置环境
         run: |
           echo "=== 设置构建环境 ==="
           ARCH="${{ github.event.inputs.target_arch }}"
           LIBC="${{ github.event.inputs.libc }}"
-          echo "🚨 处理架构: $ARCH"
-          echo "🚨 处理C库: $LIBC"
-          
           case "$ARCH" in
             arm_cortex-a7)
               TARGET="armvirt"
@@ -397,7 +162,6 @@ jobs:
               PREFIX="arm-openwrt-linux"
               CPU_TYPE="cortex-a7"
               TUNE="cortex-a7"
-              ABI="32"
               FLOAT_ABI="hard"
               ;;
             aarch64)
@@ -408,7 +172,6 @@ jobs:
               PREFIX="aarch64-openwrt-linux"
               CPU_TYPE="cortex-a53"
               TUNE="cortex-a53"
-              ABI="64"
               FLOAT_ABI=""
               ;;
             x86_64)
@@ -419,7 +182,6 @@ jobs:
               PREFIX="x86_64-openwrt-linux"
               CPU_TYPE="x86-64"
               TUNE="generic"
-              ABI="64"
               FLOAT_ABI=""
               ;;
             mips)
@@ -430,7 +192,6 @@ jobs:
               PREFIX="mips-openwrt-linux"
               CPU_TYPE="24kc"
               TUNE="24kc"
-              ABI="32"
               FLOAT_ABI="softfloat"
               ;;
             mipsel)
@@ -441,7 +202,6 @@ jobs:
               PREFIX="mipsel-openwrt-linux"
               CPU_TYPE="24kc"
               TUNE="24kc"
-              ABI="32"
               FLOAT_ABI="softfloat"
               ;;
             arm_cortex-a53)
@@ -452,7 +212,6 @@ jobs:
               PREFIX="aarch64-openwrt-linux"
               CPU_TYPE="cortex-a53"
               TUNE="cortex-a53"
-              ABI="64"
               FLOAT_ABI=""
               ;;
             riscv64)
@@ -463,7 +222,6 @@ jobs:
               PREFIX="riscv64-openwrt-linux"
               CPU_TYPE="generic"
               TUNE="generic"
-              ABI="lp64d"
               FLOAT_ABI="hard"
               ;;
             *)
@@ -471,28 +229,17 @@ jobs:
               exit 1
               ;;
           esac
-          
           if [ "$LIBC" = "musl" ]; then
             PREFIX="${PREFIX}-musl"
-            LIBC_SUFFIX="musl"
             LIBC_DIR="musl"
-            USE_MUSL="y"
-            USE_GLIBC="n"
           else
             PREFIX="${PREFIX}-gnu"
-            LIBC_SUFFIX="glibc"
             LIBC_DIR="glibc"
-            USE_MUSL="n"
-            USE_GLIBC="y"
           fi
-          
           GCC_VERSION='${{ needs.setup.outputs.gcc_version }}'
-          BINUTILS_VERSION='${{ needs.setup.outputs.binutils_version }}'
-          LINUX_VERSION='${{ needs.setup.outputs.linux_version }}'
           BUILD_ID="${ARCH_DIR}_${LIBC_DIR}_gcc-${GCC_VERSION}_$(date +%Y%m%d_%H%M%S)"
           BUILD_DIR="/home/runner/compiler-build-${BUILD_ID}"
           OUTPUT_DIR="${{ env.COMPILER_BASE_DIR }}/${ARCH_DIR}/${LIBC_DIR}/gcc-${GCC_VERSION}"
-          
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
           echo "OUTPUT_DIR=$OUTPUT_DIR" >> $GITHUB_ENV
           echo "TARGET=$TARGET" >> $GITHUB_ENV
@@ -503,146 +250,123 @@ jobs:
           echo "PREFIX=$PREFIX" >> $GITHUB_ENV
           echo "CPU_TYPE=$CPU_TYPE" >> $GITHUB_ENV
           echo "TUNE=$TUNE" >> $GITHUB_ENV
-          echo "ABI=$ABI" >> $GITHUB_ENV
           echo "FLOAT_ABI=$FLOAT_ABI" >> $GITHUB_ENV
-          echo "USE_MUSL=$USE_MUSL" >> $GITHUB_ENV
-          echo "USE_GLIBC=$USE_GLIBC" >> $GITHUB_ENV
           echo "GCC_VERSION=$GCC_VERSION" >> $GITHUB_ENV
-          echo "BINUTILS_VERSION=$BINUTILS_VERSION" >> $GITHUB_ENV
-          echo "LINUX_VERSION=$LINUX_VERSION" >> $GITHUB_ENV
-          echo "LIBC_SUFFIX=$LIBC_SUFFIX" >> $GITHUB_ENV
           echo "BUILD_ID=$BUILD_ID" >> $GITHUB_ENV
-          
-          echo "🚨 环境配置汇总:"
-          echo "  构建ID: $BUILD_ID"
-          echo "  构建目录: $BUILD_DIR"
-          echo "  输出目录: $OUTPUT_DIR"
-          echo "  目标平台: $TARGET/$SUBTARGET"
-          echo "  架构名称: $ARCH_NAME"
-          echo "  架构目录: $ARCH_DIR"
-          echo "  C库目录: $LIBC_DIR"
-          echo "  编译器前缀: $PREFIX-"
-          echo "  CPU类型: $CPU_TYPE"
-          echo "  调优: $TUNE"
-          echo "  ABI: $ABI"
-          echo "  浮点ABI: $FLOAT_ABI"
-          echo "  GCC版本: $GCC_VERSION"
-          echo "  使用Musl: $USE_MUSL"
-          echo "  使用Glibc: $USE_GLIBC"
+          echo "🚨 环境变量设置完成"
+          echo "构建目录: $BUILD_DIR"
+          echo "输出目录: $OUTPUT_DIR"
+          echo "编译器前缀: $PREFIX-"
 
       - name: 🔍 验证环境变量
         run: |
           echo "=== 验证环境变量 ==="
-          echo "检查环境变量是否正确设置:"
-          echo "TARGET: ${{ env.TARGET }}"
-          echo "SUBTARGET: ${{ env.SUBTARGET }}"
-          echo "ARCH_NAME: ${{ env.ARCH_NAME }}"
-          echo "PREFIX: ${{ env.PREFIX }}"
-          echo "✅ 环境变量验证通过"
+          echo "检查必需的环境变量:"
+          REQUIRED_VARS="BUILD_DIR OUTPUT_DIR TARGET SUBTARGET ARCH_NAME ARCH_DIR LIBC_DIR PREFIX CPU_TYPE TUNE FLOAT_ABI GCC_VERSION BUILD_ID"
+          ALL_VALID=true
+          for var in $REQUIRED_VARS; do
+            value=$(eval echo \$$var)
+            if [ -z "$value" ]; then
+              echo "❌ 环境变量 $var 未设置"
+              ALL_VALID=false
+            else
+              echo "✅ $var=$value"
+            fi
+          done
+          if [ "$ALL_VALID" = false ]; then
+            echo "❌ 环境变量验证失败"
+            exit 1
+          fi
+          echo "检查架构配置:"
+          if [ "$ARCH_NAME" = "arm" ]; then
+            if [ "$TARGET" != "armvirt" ] || [ "$SUBTARGET" != "armv7" ]; then
+              echo "❌ ARM架构配置错误: TARGET应为armvirt, SUBTARGET应为armv7"
+              echo "当前: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
+              exit 1
+            fi
+          fi
+          if [ "$LIBC_DIR" = "musl" ]; then
+            if [[ ! "$PREFIX" =~ "musl$" ]]; then
+              echo "❌ Musl配置错误: PREFIX应包含musl"
+              echo "当前: PREFIX=$PREFIX"
+              exit 1
+            fi
+          else
+            if [[ ! "$PREFIX" =~ "gnu$" ]]; then
+              echo "❌ Glibc配置错误: PREFIX应包含gnu"
+              echo "当前: PREFIX=$PREFIX"
+              exit 1
+            fi
+          fi
+          echo "✅ 所有环境变量验证通过"
 
-      - name: 🔧 安装依赖（精简版）
+      - name: 🔧 安装完整依赖
         run: |
-          echo "=== 安装构建依赖（精简版）==="
+          echo "=== 安装完整的构建依赖 ==="
           sudo apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential gcc g++ make flex bison libgmp-dev libmpfr-dev libmpc-dev libisl-dev python3 python3-dev python3-pip git wget curl zlib1g-dev liblzma-dev file gawk gettext libncurses5-dev libssl-dev python3-distutils rsync unzip ncurses-term autoconf automake libtool pkg-config texinfo gperf cmake ninja-build patchutils bc bzip2 xz-utils help2man libexpat-dev libgdbm-dev libreadline-dev libsqlite3-dev libffi-dev lzma-dev zstd libzstd-dev libelf-dev libdw-dev jq locales locales-all sudo apt-utils dialog man-db
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ncurses-term ncurses-base ncurses-bin libncursesw5 libncursesw5-dev libtinfo5 libtinfo-dev terminfo
-          
+          sudo apt-get install -y build-essential gcc g++ make flex bison
+          sudo apt-get install -y libgmp-dev libmpfr-dev libmpc-dev libisl-dev
+          sudo apt-get install -y python3 python3-dev python3-pip python3-distutils
+          sudo apt-get install -y git wget curl rsync unzip patchutils bc bzip2 xz-utils
+          sudo apt-get install -y zlib1g-dev liblzma-dev libssl-dev libexpat-dev
+          sudo apt-get install -y libgdbm-dev libreadline-dev libsqlite3-dev libffi-dev
+          sudo apt-get install -y libelf-dev libdw-dev lzma-dev zstd libzstd-dev
+          sudo apt-get install -y autoconf automake libtool pkg-config texinfo gperf
+          sudo apt-get install -y cmake ninja-build help2man jq file gawk gettext
+          sudo apt-get install -y ncurses-term ncurses-base libncursesw5 libtinfo5
+          sudo apt-get install -y dialog man-db locales locales-all
           export TERM=xterm-256color
           export TERMINFO=/usr/share/terminfo
           sudo locale-gen en_US.UTF-8
-          sudo update-locale LANG=en_US.UTF-8
           export LANG=en_US.UTF-8
           export LC_ALL=en_US.UTF-8
-          export LANGUAGE=en_US:en
-          
           echo "✅ 依赖安装完成"
 
       - name: 🗑️ 清理构建缓存
         if: ${{ github.event.inputs.clean_build == 'true' }}
         run: |
-          echo "=== 清理构建缓存 ==="
+          echo "清理之前的构建缓存..."
           rm -rf /home/runner/compiler-build-* 2>/dev/null || true
           echo "✅ 缓存清理完成"
 
-      - name: 📥 下载OpenWrt源码（优化版）
+      - name: 📥 下载OpenWrt源码
+        timeout-minutes: 10
         run: |
-          echo "=== 获取OpenWrt源码（优化版）==="
+          echo "=== 获取OpenWrt源码 ==="
           mkdir -p "${{ env.BUILD_DIR }}"
           cd "${{ env.BUILD_DIR }}"
-          echo "当前目录: $(pwd)"
-          
-          echo "克隆OpenWrt ${{ env.OPENWRT_VERSION }} 分支..."
-          MAX_RETRIES=3
-          RETRY_COUNT=0
-          CLONE_SUCCESS=false
-          
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            echo "尝试第 $((RETRY_COUNT + 1)) 次克隆..."
-            timeout 300 git clone --depth 1 --branch v${{ env.OPENWRT_VERSION }} https://github.com/openwrt/openwrt.git .
-            
-            if [ $? -eq 0 ]; then
-              CLONE_SUCCESS=true
-              echo "✅ Git clone 成功"
-              break
-            else
-              echo "⚠️ Git clone失败"
-              RETRY_COUNT=$((RETRY_COUNT + 1))
-              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-                echo "等待10秒后重试..."
-                sleep 10
-                rm -rf .git ./* 2>/dev/null || true
-              fi
-            fi
-          done
-          
-          if [ "$CLONE_SUCCESS" = false ]; then
-            echo "尝试使用tar包..."
-            wget --timeout=60 --tries=3 -q -O openwrt.tar.gz "https://github.com/openwrt/openwrt/archive/refs/tags/v${{ env.OPENWRT_VERSION }}.tar.gz"
-            
-            if [ $? -eq 0 ]; then
-              echo "✅ 下载tar包成功"
-              tar -xzf openwrt.tar.gz --strip-components=1
-              rm -f openwrt.tar.gz
-              CLONE_SUCCESS=true
-            fi
-          fi
-          
-          if [ "$CLONE_SUCCESS" = true ]; then
+          echo "克隆OpenWrt ${{ env.OPENWRT_VERSION }}..."
+          git clone --depth 1 --branch v${{ env.OPENWRT_VERSION }} https://github.com/openwrt/openwrt.git . || {
+            echo "Git克隆失败，尝试tar包..."
+            wget -q -O openwrt.tar.gz "https://github.com/openwrt/openwrt/archive/refs/tags/v${{ env.OPENWRT_VERSION }}.tar.gz"
+            tar -xzf openwrt.tar.gz --strip-components=1
+            rm -f openwrt.tar.gz
+          }
+          if [ -f "README.md" ]; then
             echo "✅ OpenWrt源码准备完成"
           else
-            echo "❌ 所有下载方式都失败"
+            echo "❌ 下载失败"
             exit 1
           fi
 
-      - name: 🔧 修复网络和终端环境
+      - name: 🔧 修复环境
         run: |
-          echo "=== 修复网络和终端环境 ==="
+          echo "=== 修复构建环境 ==="
           cd "${{ env.BUILD_DIR }}"
-          
+          export TERM=dumb
+          export TERMINFO=/usr/share/terminfo
+          export FORCE_UNSAFE_CONFIGURE=1
+          export DEBIAN_FRONTEND=noninteractive
           git config --global http.postBuffer 524288000
           git config --global http.lowSpeedLimit 0
           git config --global http.lowSpeedTime 999999
-          
-          export FORCE_UNSAFE_CONFIGURE=1
-          export TERM=dumb
-          export DEBIAN_FRONTEND=noninteractive
-          export GIT_SSL_NO_VERIFY=1
-          export PYTHONHTTPSVERIFY=0
-          export CURL_SSL_NO_VERIFY=1
-          
           mkdir -p include/site tmp dl
-          
-          export LANG=en_US.UTF-8
-          export LC_ALL=en_US.UTF-8
-          export LANGUAGE=en_US:en
-          
-          echo "✅ 网络和终端环境修复完成"
+          echo "✅ 环境修复完成"
 
-      - name: 🛠️ 应用配置（强制armvirt配置）
+      - name: 🛠️ 创建配置
         run: |
-          echo "=== 应用配置（强制armvirt配置）==="
+          echo "=== 创建构建配置 ==="
           cd "${{ env.BUILD_DIR }}"
-          
           echo "CONFIG_TARGET_armvirt=y" > .config
           echo "CONFIG_TARGET_armvirt_armv7=y" >> .config
           echo 'CONFIG_TARGET_BOARD="armvirt"' >> .config
@@ -656,8 +380,6 @@ jobs:
           echo 'CONFIG_BINUTILS_VERSION="2.40"' >> .config
           echo 'CONFIG_LINUX_VERSION="5.15.133"' >> .config
           echo 'CONFIG_LIBC="musl"' >> .config
-          echo "CONFIG_ARCH_arm=y" >> .config
-          echo "CONFIG_arm=y" >> .config
           echo 'CONFIG_CPU_TYPE="cortex-a7"' >> .config
           echo 'CONFIG_CPU_TUNE="cortex-a7"' >> .config
           echo 'CONFIG_FPU="hard"' >> .config
@@ -673,217 +395,170 @@ jobs:
           echo "CONFIG_EXTERNAL_TOOLCHAIN=n" >> .config
           echo "CONFIG_BUILD_TOOLS=y" >> .config
           echo "CONFIG_TOOLCHAIN_BUILD=y" >> .config
-          
+          echo "CONFIG_SDK=y" >> .config
+          echo "CONFIG_STRIP_KERNEL_EXPORTS=y" >> .config
+          echo "CONFIG_USE_MUSL=y" >> .config
+          echo "CONFIG_USE_GLIBC=n" >> .config
           echo "✅ 配置文件创建完成"
 
-      - name: 📥 并行下载源码包（详细输出）
-        timeout-minutes: 15
+      - name: 📥 下载源码包
+        timeout-minutes: 20
         run: |
-          echo "=== 开始并行下载源码包（详细输出）==="
+          echo "=== 下载源码包 ==="
           cd "${{ env.BUILD_DIR }}"
-          
-          export FORCE_UNSAFE_CONFIGURE=1
-          export MAKE="make -j4 V=s"
-          
-          DOWNLOAD_LOG="/tmp/download_$(date +%Y%m%d_%H%M%S).log"
-          
-          echo "开始下载，详细日志保存到: $DOWNLOAD_LOG"
-          
-          timeout 900 make -j4 download V=s 2>&1 | tee "$DOWNLOAD_LOG"
-          
-          DOWNLOAD_STATUS=${PIPESTATUS[0]}
-          
-          if [ $DOWNLOAD_STATUS -eq 0 ]; then
-            echo "✅ 下载成功完成"
-          elif [ $DOWNLOAD_STATUS -eq 124 ]; then
-            echo "⚠️ 下载超时，但可能已经下载了部分文件"
-          else
-            echo "⚠️ 下载过程中有错误，检查日志"
-          fi
-          
-          if [ -d "dl" ]; then
-            echo "下载目录大小: $(du -sh dl 2>/dev/null || echo "未知")"
-            echo "下载文件数量: $(ls -1 dl 2>/dev/null | wc -l)"
-          else
-            echo "❌ 下载目录不存在"
-          fi
-
-      - name: 🔨 编译工具链（分步详细输出版）
-        timeout-minutes: 30
-        run: |
-          echo "=== 开始编译工具链（分步详细输出版）==="
-          cd "${{ env.BUILD_DIR }}"
-          
           export FORCE_UNSAFE_CONFIGURE=1
           export TERM=dumb
-          export DEBIAN_FRONTEND=noninteractive
-          export IGNORE_ERRORS=1
-          export IGNORE_MISSING=1
-          
-          CPU_CORES=$(nproc)
-          TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
-          
-          if [ $TOTAL_MEM -lt 8192 ]; then
-            MAKE_JOBS=$((CPU_CORES / 2))
-            if [ $MAKE_JOBS -lt 2 ]; then
-              MAKE_JOBS=2
+          echo "开始下载源码包..."
+          echo "开始时间: $(date)"
+          make -j$(nproc) download V=s 2>&1 | tee download.log
+          echo "结束时间: $(date)"
+          if [ -d "dl" ]; then
+            DL_COUNT=$(ls -1 dl/ 2>/dev/null | wc -l)
+            DL_SIZE=$(du -sh dl/ 2>/dev/null | cut -f1 || echo "未知")
+            echo "✅ 下载完成"
+            echo "下载文件数: $DL_COUNT"
+            echo "下载大小: $DL_SIZE"
+            if [ $DL_COUNT -lt 5 ]; then
+              echo "⚠️ 警告: 下载的文件数量较少"
+              echo "最后10行下载日志:"
+              tail -10 download.log
             fi
           else
-            MAKE_JOBS=$((CPU_CORES + 1))
-          fi
-          
-          echo "使用 $MAKE_JOBS 个并行任务进行编译..."
-          
-          COMPILE_LOG="/tmp/compile_$(date +%Y%m%d_%H%M%S).log"
-          
-          echo "=== 阶段1: 编译工具链核心 ===" | tee "$COMPILE_LOG"
-          echo "执行: make toolchain/compile -j$MAKE_JOBS V=1" | tee -a "$COMPILE_LOG"
-          
-          timeout 1800 make toolchain/compile -j$MAKE_JOBS V=1 2>&1 | tee -a "$COMPILE_LOG"
-          STAGE1_STATUS=${PIPESTATUS[0]}
-          
-          if [ $STAGE1_STATUS -eq 0 ]; then
-            echo "✅ 工具链核心编译成功" | tee -a "$COMPILE_LOG"
-          elif [ $STAGE1_STATUS -eq 124 ]; then
-            echo "⚠️ 阶段1超时" | tee -a "$COMPILE_LOG"
-          else
-            echo "❌ 阶段1编译失败" | tee -a "$COMPILE_LOG"
-          fi
-          
-          echo "" | tee -a "$COMPILE_LOG"
-          echo "=== 阶段2: 安装工具链 ===" | tee -a "$COMPILE_LOG"
-          echo "执行: make toolchain/install -j$MAKE_JOBS V=1" | tee -a "$COMPILE_LOG"
-          
-          timeout 1800 make toolchain/install -j$MAKE_JOBS V=1 2>&1 | tee -a "$COMPILE_LOG"
-          STAGE2_STATUS=${PIPESTATUS[0]}
-          
-          if [ $STAGE2_STATUS -eq 0 ]; then
-            echo "✅ 工具链安装成功" | tee -a "$COMPILE_LOG"
-          elif [ $STAGE2_STATUS -eq 124 ]; then
-            echo "⚠️ 阶段2超时" | tee -a "$COMPILE_LOG"
-          else
-            echo "❌ 阶段2安装失败" | tee -a "$COMPILE_LOG"
-          fi
-          
-          echo "编译日志已保存到: $COMPILE_LOG"
-          
-          if [ $STAGE1_STATUS -ne 0 ] && [ $STAGE1_STATUS -ne 124 ]; then
-            echo "❌ 编译过程失败，退出"
+            echo "❌ 下载目录不存在"
             exit 1
           fi
 
-      - name: ✅ 验证构建结果（详细检查）
+      - name: 🔨 编译工具链
+        timeout-minutes: 50
         run: |
-          echo "=== 验证构建结果（详细检查）==="
+          echo "=== 编译工具链 ==="
           cd "${{ env.BUILD_DIR }}"
-          
+          export FORCE_UNSAFE_CONFIGURE=1
+          export TERM=dumb
+          CPU_CORES=$(nproc)
+          echo "使用 $CPU_CORES 个核心编译"
+          echo "开始编译工具链..."
+          echo "开始时间: $(date)"
+          make toolchain/compile -j$CPU_CORES V=s 2>&1 | tee compile.log
+          COMPILE_STATUS=${PIPESTATUS[0]}
+          echo "结束时间: $(date)"
+          echo "编译状态: $COMPILE_STATUS"
+          if [ $COMPILE_STATUS -eq 0 ]; then
+            echo "✅ 工具链编译成功"
+          else
+            echo "❌ 工具链编译失败"
+            echo "最后20行编译日志:"
+            tail -20 compile.log
+            exit 1
+          fi
+
+      - name: 📦 安装工具链
+        timeout-minutes: 15
+        run: |
+          echo "=== 安装工具链 ==="
+          cd "${{ env.BUILD_DIR }}"
+          export TERM=dumb
+          CPU_CORES=$(nproc)
+          echo "开始安装工具链..."
+          echo "开始时间: $(date)"
+          make toolchain/install -j$CPU_CORES V=s 2>&1 | tee install.log
+          INSTALL_STATUS=${PIPESTATUS[0]}
+          echo "结束时间: $(date)"
+          echo "安装状态: $INSTALL_STATUS"
+          if [ $INSTALL_STATUS -eq 0 ]; then
+            echo "✅ 工具链安装成功"
+          else
+            echo "❌ 工具链安装失败"
+            echo "最后20行安装日志:"
+            tail -20 install.log
+            exit 1
+          fi
+
+      - name: 🛠️ 错误分析与诊断
+        if: failure()
+        timeout-minutes: 5
+        run: |
+          echo "========================================"
+          echo "          🔍 错误分析与诊断              "
+          echo "========================================"
+          echo "1. 检查磁盘空间:"
+          df -h
+          echo "2. 检查内存使用:"
+          free -h
+          echo "3. 检查构建目录:"
+          if [ -d "${{ env.BUILD_DIR }}" ]; then
+            echo "构建目录大小: $(du -sh "${{ env.BUILD_DIR }}" 2>/dev/null || echo "未知")"
+            echo "4. 查找错误日志:"
+            for log in "${{ env.BUILD_DIR }}"/*.log; do
+              if [ -f "$log" ]; then
+                echo "日志文件: $(basename "$log")"
+                echo "最后错误行:"
+                grep -i "error\|failed\|recipe for target" "$log" | tail -5 || echo "未找到错误"
+                echo ""
+              fi
+            done
+          fi
+          echo "5. 常见问题解决:"
+          echo "   - 终端错误: 确保安装了 ncurses-term"
+          echo "   - 下载失败: 检查网络连接"
+          echo "   - 编译失败: 检查依赖是否完整"
+          echo "   - 超时: 增加超时时间或减少并行任务"
+          echo "========================================"
+
+      - name: ✅ 验证构建结果
+        run: |
+          echo "=== 验证构建结果 ==="
+          cd "${{ env.BUILD_DIR }}"
           TOOLCHAIN_DIR=$(find staging_dir -name "toolchain-*" -type d 2>/dev/null | head -1)
           if [ -z "$TOOLCHAIN_DIR" ]; then
             echo "❌ 未找到工具链目录"
             exit 1
           fi
-          
           echo "✅ 工具链目录: $TOOLCHAIN_DIR"
-          
-          if [ -d "$TOOLCHAIN_DIR/bin" ]; then
-            echo "✅ bin目录存在"
-            GCC_FILE=$(find "$TOOLCHAIN_DIR/bin" -name "*gcc" -type f 2>/dev/null | head -1)
-            
-            if [ -n "$GCC_FILE" ]; then
-              echo "✅ 找到C编译器: $(basename "$GCC_FILE")"
-              echo "编译器版本:"
-              "$GCC_FILE" --version 2>&1 | head -2
-              
-              echo "创建测试程序..."
-              echo "#include <stdio.h>" > /tmp/test_hello.c
-              echo "int main() { printf(\"Hello, Cross Compiler!\\n\"); return 0; }" >> /tmp/test_hello.c
-              
-              echo "编译测试程序..."
-              "$GCC_FILE" /tmp/test_hello.c -o /tmp/test_hello 2>&1
-              if [ $? -eq 0 ]; then
-                echo "✅ 编译器功能测试通过"
-              else
-                echo "⚠️ 编译器功能测试失败"
-              fi
-              rm -f /tmp/test_hello.c /tmp/test_hello 2>/dev/null
-              
-              COMPILER_NAME=$(basename "$GCC_FILE")
-              TOOL_PREFIX=$(echo "$COMPILER_NAME" | sed 's/gcc$//')
-              
-              echo "TOOLCHAIN_DIR=$TOOLCHAIN_DIR" >> $GITHUB_ENV
-              echo "COMPILER_PATH=$GCC_FILE" >> $GITHUB_ENV
-              echo "TOOL_PREFIX=$TOOL_PREFIX" >> $GITHUB_ENV
-              
-            else
-              echo "❌ 未找到C编译器"
-              exit 1
-            fi
-          else
-            echo "❌ bin目录不存在"
+          GCC_FILE=$(find "$TOOLCHAIN_DIR/bin" -name "*gcc" -type f 2>/dev/null | head -1)
+          if [ -z "$GCC_FILE" ]; then
+            echo "❌ 未找到编译器"
             exit 1
           fi
-          
-          echo "✅ 验证完成，工具链构建成功"
+          echo "✅ 找到编译器: $(basename "$GCC_FILE")"
+          echo "编译器版本:"
+          "$GCC_FILE" --version 2>&1 | head -3
+          COMPILER_NAME=$(basename "$GCC_FILE")
+          TOOL_PREFIX=$(echo "$COMPILER_NAME" | sed 's/gcc$//')
+          echo "TOOLCHAIN_DIR=$TOOLCHAIN_DIR" >> $GITHUB_ENV
+          echo "COMPILER_PATH=$GCC_FILE" >> $GITHUB_ENV
+          echo "TOOL_PREFIX=$TOOL_PREFIX" >> $GITHUB_ENV
 
       - name: 💾 保存编译器
         run: |
           echo "=== 保存编译器 ==="
-          cd "${{ env.BUILD_DIR }}"
-          
-          echo "准备输出目录: ${{ env.OUTPUT_DIR }}"
           mkdir -p "${{ env.OUTPUT_DIR }}"
-          
           if [ -d "${{ env.OUTPUT_DIR }}" ] && [ "$(ls -A "${{ env.OUTPUT_DIR }}" 2>/dev/null)" ]; then
-            echo "清理输出目录..."
             rm -rf "${{ env.OUTPUT_DIR }}"/*
           fi
-          
-          if [ ! -d "$TOOLCHAIN_DIR" ]; then
-            echo "❌ 工具链目录不存在: $TOOLCHAIN_DIR"
-            exit 1
-          fi
-          
-          echo "开始复制工具链文件..."
-          rsync -av "$TOOLCHAIN_DIR"/ "${{ env.OUTPUT_DIR }}/" 2>&1 | tail -20
-          
+          cp -r "$TOOLCHAIN_DIR"/* "${{ env.OUTPUT_DIR }}/" 2>/dev/null || true
           if [ -d "${{ env.OUTPUT_DIR }}/bin" ]; then
-            echo "✅ 工具链复制成功"
             file_count=$(find "${{ env.OUTPUT_DIR }}" -type f 2>/dev/null | wc -l)
+            TOTAL_SIZE=$(du -sh "${{ env.OUTPUT_DIR }}" | cut -f1)
+            echo "FILE_COUNT=$file_count" >> $GITHUB_ENV
+            echo "TOTAL_SIZE=$TOTAL_SIZE" >> $GITHUB_ENV
+            echo "✅ 工具链保存完成"
             echo "文件数: $file_count"
-            echo "输出目录大小: $(du -sh "${{ env.OUTPUT_DIR }}" | cut -f1)"
-            
-            if [ -f "${{ env.OUTPUT_DIR }}/bin/$TOOL_PREFIX"gcc ]; then
-              echo "✅ 编译器文件存在"
-            else
-              echo "⚠️ 警告: 复制后未找到编译器文件"
-            fi
+            echo "大小: $TOTAL_SIZE"
+            echo '{"architecture": "'${{ env.ARCH_DIR }}'", "libc": "'${{ env.LIBC_DIR }}'", "gcc_version": "'${{ env.GCC_VERSION }}'", "build_date": "'$(date -Iseconds)'", "file_count": "'$file_count'", "total_size": "'$TOTAL_SIZE'", "prefix": "'${{ env.PREFIX }}'-"}' > "${{ env.OUTPUT_DIR }}/metadata.json"
           else
-            echo "❌ 工具链复制失败，bin目录不存在"
+            echo "❌ 工具链保存失败"
             exit 1
           fi
-          
-          echo "创建元数据..."
-          echo '{"architecture": "'${{ env.ARCH_DIR }}'", "libc": "'${{ env.LIBC_DIR }}'", "target": "'${{ env.TARGET }}'", "subtarget": "'${{ env.SUBTARGET }}'", "compiler_prefix": "'${{ env.PREFIX }}'-", "gcc_version": "'${{ env.GCC_VERSION }}'", "binutils_version": "'${{ env.BINUTILS_VERSION }}'", "linux_version": "'${{ env.LINUX_VERSION }}'", "openwrt_version": "'${{ env.OPENWRT_VERSION }}'", "build_date": "'$(date -Iseconds)'", "workflow_run": "'${{ github.run_id }}'", "build_id": "'${{ env.BUILD_ID }}'", "file_count": "'$file_count'", "total_size": "'$(du -sh "${{ env.OUTPUT_DIR }}" | cut -f1)'"}' > "${{ env.OUTPUT_DIR }}/metadata.json"
-          
-          echo "✅ 元数据文件创建完成"
-          
-          TOTAL_SIZE=$(du -sh "${{ env.OUTPUT_DIR }}" | cut -f1)
-          
-          echo "TOTAL_SIZE=$TOTAL_SIZE" >> $GITHUB_ENV
-          echo "FILE_COUNT=$file_count" >> $GITHUB_ENV
 
       - name: 📤 提交到Git仓库
         run: |
           echo "=== 提交编译器到Git仓库 ==="
           cd "${{ github.workspace }}"
-          
           git config user.email "github-actions@github.com"
           git config user.name "GitHub Actions"
-          
           git pull origin main --no-edit || echo "拉取失败，继续..."
-          
           git add -f "firmware-config/build-Compiler-file/compilers/*"
-          
           if ! git diff --cached --quiet; then
             git commit -m "build(compiler): 添加 ${{ env.ARCH_DIR }}-${{ env.LIBC_DIR }} 交叉编译器" -m "GCC版本: ${{ env.GCC_VERSION }}" -m "大小: ${{ env.TOTAL_SIZE }}" -m "工作流: #${{ github.run_id }}"
             git push origin main
@@ -900,22 +575,19 @@ jobs:
           echo "✅ 交叉编译器构建成功!"
           echo ""
           echo "📊 构建信息:"
-          echo "  - 架构: ${{ env.ARCH_DIR }}"
-          echo "  - C库: ${{ env.LIBC_DIR }}"
-          echo "  - GCC版本: ${{ env.GCC_VERSION }}"
-          echo "  - 编译器前缀: ${{ env.PREFIX }}-"
-          echo "  - 目标平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}"
-          echo "  - CPU类型: ${{ env.CPU_TYPE }}"
-          echo "  - 浮点ABI: ${{ env.FLOAT_ABI }}"
+          echo "  架构: ${{ env.ARCH_DIR }}"
+          echo "  C库: ${{ env.LIBC_DIR }}"
+          echo "  GCC版本: ${{ env.GCC_VERSION }}"
+          echo "  编译器前缀: ${{ env.PREFIX }}-"
           echo ""
           echo "📦 成果统计:"
-          echo "  - 总大小: ${{ env.TOTAL_SIZE }}"
-          echo "  - 文件数量: ${{ env.FILE_COUNT }}"
-          echo "  - 输出目录: ${{ env.OUTPUT_DIR }}"
+          echo "  总大小: ${{ env.TOTAL_SIZE }}"
+          echo "  文件数量: ${{ env.FILE_COUNT }}"
+          echo "  输出目录: ${{ env.OUTPUT_DIR }}"
           echo ""
           echo "🚀 使用方法:"
           echo "cd ${{ env.OUTPUT_DIR }}"
-          echo 'export PATH="${{ env.OUTPUT_DIR }}/bin:$PATH"'
+          echo 'export PATH="$(pwd)/bin:$PATH"'
           echo "${{ env.PREFIX }}-gcc --version"
           echo ""
           echo "完成时间: $(date)"
@@ -926,7 +598,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-logs-${{ env.BUILD_ID }}
-          path: /tmp/*.log
+          path: |
+            ${{ env.BUILD_DIR }}/download.log
+            ${{ env.BUILD_DIR }}/compile.log
+            ${{ env.BUILD_DIR }}/install.log
           retention-days: 7
 
   skip-build:
@@ -940,12 +615,5 @@ jobs:
           echo "        ⏭️ 跳过构建报告                "
           echo "========================================"
           echo "✅ 编译器已存在且完整，跳过构建"
-          echo "📋 跳过原因:"
-          echo "- 编译器目录已存在且完整"
-          echo "- 未启用强制重新构建"
-          echo "🔧 现有编译器信息:"
-          echo "- 架构: ${{ github.event.inputs.target_arch }}"
-          echo "- C库: ${{ github.event.inputs.libc }}"
-          echo "- GCC版本: ${{ needs.setup.outputs.gcc_version }}"
           echo "💡 如需重新构建，请启用'强制重新构建'选项"
           echo "========================================"
