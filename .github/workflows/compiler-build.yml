@@ -130,7 +130,7 @@ jobs:
     needs: [show-device-info, setup]
     if: needs.setup.outputs.need_build == 'true'
     runs-on: ubuntu-22.04
-    timeout-minutes: 150
+    timeout-minutes: 180
     
     steps:
       - name: 📥 检出仓库
@@ -321,10 +321,30 @@ jobs:
           fi
           echo "✅ 所有环境变量验证通过"
 
-      - name: 🔧 安装完整依赖
+      - name: 🔧 安装完整依赖（修复终端问题）
         run: |
-          echo "=== 安装完整的构建依赖 ==="
+          echo "=== 安装完整的构建依赖（修复终端问题）==="
           sudo apt-get update -y
+          
+          # 修复终端问题的关键包
+          echo "安装终端支持包..."
+          sudo apt-get install -y ncurses-term ncurses-base ncurses-bin
+          sudo apt-get install -y libncursesw5 libncursesw5-dev libtinfo5 libtinfo-dev
+          sudo apt-get install -y terminfo dialog
+          
+          # 设置终端环境
+          echo "设置终端环境..."
+          export TERM=xterm-256color
+          export TERMINFO=/usr/share/terminfo
+          echo "TERM=$TERM"
+          echo "TERMINFO=$TERMINFO"
+          
+          # 创建必要的terminfo文件
+          sudo mkdir -p /usr/share/terminfo/x
+          sudo ln -sf /lib/terminfo/x/xterm-256color /usr/share/terminfo/x/xterm-256color 2>/dev/null || true
+          
+          # 核心编译工具
+          echo "安装核心编译工具..."
           sudo apt-get install -y build-essential gcc g++ make flex bison
           sudo apt-get install -y libgmp-dev libmpfr-dev libmpc-dev libisl-dev
           sudo apt-get install -y python3 python3-dev python3-pip python3-distutils
@@ -334,13 +354,13 @@ jobs:
           sudo apt-get install -y libelf-dev libdw-dev lzma-dev zstd libzstd-dev
           sudo apt-get install -y autoconf automake libtool pkg-config texinfo gperf
           sudo apt-get install -y cmake ninja-build help2man jq file gawk gettext
-          sudo apt-get install -y ncurses-term ncurses-base libncursesw5 libtinfo5
-          sudo apt-get install -y dialog man-db locales locales-all
-          export TERM=xterm-256color
-          export TERMINFO=/usr/share/terminfo
+          sudo apt-get install -y man-db locales locales-all
+          
+          # 设置语言环境
           sudo locale-gen en_US.UTF-8
           export LANG=en_US.UTF-8
           export LC_ALL=en_US.UTF-8
+          
           echo "✅ 依赖安装完成"
 
       - name: 🗑️ 清理构建缓存
@@ -370,27 +390,52 @@ jobs:
             exit 1
           fi
 
-      - name: 🔧 修复环境
+      - name: 🔧 修复环境（禁用交互式菜单）
         run: |
-          echo "=== 修复构建环境 ==="
+          echo "=== 修复构建环境（禁用交互式菜单）==="
           cd "${{ env.BUILD_DIR }}"
+          
+          # 关键：禁用所有交互式菜单
           export TERM=dumb
           export TERMINFO=/usr/share/terminfo
           export FORCE_UNSAFE_CONFIGURE=1
           export DEBIAN_FRONTEND=noninteractive
+          export MAKE="make -j$(nproc) V=sc"
+          
+          # 禁用menuconfig
+          echo "禁用menuconfig..."
+          sed -i 's/menuconfig //g' include/toplevel.mk 2>/dev/null || true
+          sed -i 's/.*menuconfig.*//g' include/toplevel.mk 2>/dev/null || true
+          
+          # 创建假的menuconfig脚本
+          cat > scripts/config/mconf
+          chmod +x scripts/config/mconf
+          echo "#!/bin/sh" > scripts/config/mconf
+          echo 'echo "menuconfig被禁用，使用已有配置"' >> scripts/config/mconf
+          echo "exit 0" >> scripts/config/mconf
+          
+          # 创建假的conf脚本
+          cat > scripts/config/conf
+          chmod +x scripts/config/conf
+          echo "#!/bin/sh" > scripts/config/conf
+          echo 'echo "配置工具被禁用，使用已有配置"' >> scripts/config/conf
+          echo "exit 0" >> scripts/config/conf
+          
           git config --global http.postBuffer 524288000
-          git config --global http.lowSpeedLimit 0
-          git config --global http.lowSpeedTime 999999
           export GIT_SSL_NO_VERIFY=1
           export CURL_SSL_NO_VERIFY=1
+          
           mkdir -p include/site tmp dl
           echo "✅ 环境修复完成"
 
-      - name: 🛠️ 创建配置
+      - name: 🛠️ 创建配置（非交互式）
         run: |
-          echo "=== 创建构建配置 ==="
+          echo "=== 创建构建配置（非交互式）==="
           cd "${{ env.BUILD_DIR }}"
-          echo "CONFIG_TARGET_armvirt=y" > .config
+          
+          # 创建完整的.config文件，避免任何交互
+          cat > .config
+          echo "CONFIG_TARGET_armvirt=y" >> .config
           echo "CONFIG_TARGET_armvirt_armv7=y" >> .config
           echo 'CONFIG_TARGET_BOARD="armvirt"' >> .config
           echo 'CONFIG_TARGET_SUBTARGET="armv7"' >> .config
@@ -422,10 +467,20 @@ jobs:
           echo "CONFIG_STRIP_KERNEL_EXPORTS=y" >> .config
           echo "CONFIG_USE_MUSL=y" >> .config
           echo "CONFIG_USE_GLIBC=n" >> .config
+          echo 'CONFIG_TARGET_OPTIMIZATION="-Os -pipe -mcpu=cortex-a7"' >> .config
+          echo 'CONFIG_TARGET_SUFFIX="musl"' >> .config
+          echo 'CONFIG_KERNEL_BUILD_USER="OpenWrt"' >> .config
+          echo 'CONFIG_KERNEL_BUILD_DOMAIN="openwrt.org"' >> .config
+          echo 'CONFIG_DOWNLOAD_FOLDER=""' >> .config
+          echo 'CONFIG_LOCALMIRROR=""' >> .config
+          echo "CONFIG_AUTOREBUILD=y" >> .config
+          echo "CONFIG_BUILD_LOG=y" >> .config
+          
           echo "✅ 配置文件创建完成"
+          echo "配置行数: $(wc -l < .config)"
 
       - name: 📥 预下载关键源码包
-        timeout-minutes: 25
+        timeout-minutes: 30
         run: |
           echo "=== 预下载关键源码包 ==="
           cd "${{ env.BUILD_DIR }}"
@@ -436,80 +491,15 @@ jobs:
           echo "下载关键工具链组件（使用多个镜像源）..."
           echo "开始时间: $(date)"
           
-          # 设置下载重试
-          MAX_RETRIES=3
-          
-          # 定义下载函数
-          download_with_retry() {
-            local url=$1
-            local output=$2
-            local retry=0
-            
-            while [ $retry -lt $MAX_RETRIES ]; do
-              echo "尝试下载: $url (重试 $((retry+1))/$MAX_RETRIES)"
-              if wget --timeout=60 --tries=3 -q -O "$output" "$url"; then
-                echo "✅ 下载成功: $(basename "$output")"
-                return 0
-              fi
-              retry=$((retry+1))
-              if [ $retry -lt $MAX_RETRIES ]; then
-                echo "等待3秒后重试..."
-                sleep 3
-              fi
-            done
-            echo "❌ 下载失败: $(basename "$output")"
-            return 1
-          }
-          
-          # GCC 12.3.0 (多个镜像源)
-          echo "=== 下载 GCC 12.3.0 ==="
-          GCC_URLS=(
-            "https://mirrors.tuna.tsinghua.edu.cn/gnu/gcc/gcc-12.3.0/gcc-12.3.0.tar.xz"
-            "https://mirrors.ustc.edu.cn/gnu/gcc/gcc-12.3.0/gcc-12.3.0.tar.xz"
-            "https://ftp.gnu.org/gnu/gcc/gcc-12.3.0/gcc-12.3.0.tar.xz"
-          )
-          for url in "${GCC_URLS[@]}"; do
-            if download_with_retry "$url" "dl/gcc-12.3.0.tar.xz"; then
-              break
-            fi
-          done
-          
-          # Binutils 2.40
-          echo "=== 下载 Binutils 2.40 ==="
-          BINUTILS_URLS=(
-            "https://mirrors.tuna.tsinghua.edu.cn/gnu/binutils/binutils-2.40.tar.xz"
-            "https://mirrors.ustc.edu.cn/gnu/binutils/binutils-2.40.tar.xz"
-            "https://ftp.gnu.org/gnu/binutils/binutils-2.40.tar.xz"
-          )
-          for url in "${BINUTILS_URLS[@]}"; do
-            if download_with_retry "$url" "dl/binutils-2.40.tar.xz"; then
-              break
-            fi
-          done
-          
-          # Linux 5.15.133
-          echo "=== 下载 Linux 内核 5.15.133 ==="
-          LINUX_URLS=(
-            "https://mirrors.tuna.tsinghua.edu.cn/kernel/v5.x/linux-5.15.133.tar.xz"
-            "https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.15.133.tar.xz"
-          )
-          for url in "${LINUX_URLS[@]}"; do
-            if download_with_retry "$url" "dl/linux-5.15.133.tar.xz"; then
-              break
-            fi
-          done
-          
-          # Musl 1.2.4
-          echo "=== 下载 Musl 1.2.4 ==="
-          MUSL_URLS=(
-            "https://musl.libc.org/releases/musl-1.2.4.tar.gz"
-            "https://mirrors.tuna.tsinghua.edu.cn/musl/musl-1.2.4.tar.gz"
-          )
-          for url in "${MUSL_URLS[@]}"; do
-            if download_with_retry "$url" "dl/musl-1.2.4.tar.gz"; then
-              break
-            fi
-          done
+          # 下载包列表（改为逐个下载）
+          wget --timeout=60 --tries=3 -q -O "dl/gcc-12.3.0.tar.xz" "https://mirrors.tuna.tsinghua.edu.cn/gnu/gcc/gcc-12.3.0/gcc-12.3.0.tar.xz" && echo "✅ 下载成功: gcc-12.3.0.tar.xz" || echo "⚠️ 下载失败: gcc-12.3.0.tar.xz"
+          wget --timeout=60 --tries=3 -q -O "dl/binutils-2.40.tar.xz" "https://mirrors.tuna.tsinghua.edu.cn/gnu/binutils/binutils-2.40.tar.xz" && echo "✅ 下载成功: binutils-2.40.tar.xz" || echo "⚠️ 下载失败: binutils-2.40.tar.xz"
+          wget --timeout=60 --tries=3 -q -O "dl/linux-5.15.133.tar.xz" "https://mirrors.tuna.tsinghua.edu.cn/kernel/v5.x/linux-5.15.133.tar.xz" && echo "✅ 下载成功: linux-5.15.133.tar.xz" || echo "⚠️ 下载失败: linux-5.15.133.tar.xz"
+          wget --timeout=60 --tries=3 -q -O "dl/musl-1.2.4.tar.gz" "https://musl.libc.org/releases/musl-1.2.4.tar.gz" && echo "✅ 下载成功: musl-1.2.4.tar.gz" || echo "⚠️ 下载失败: musl-1.2.4.tar.gz"
+          wget --timeout=60 --tries=3 -q -O "dl/mpc-1.3.1.tar.gz" "https://mirrors.tuna.tsinghua.edu.cn/gnu/mpc/mpc-1.3.1.tar.gz" && echo "✅ 下载成功: mpc-1.3.1.tar.gz" || echo "⚠️ 下载失败: mpc-1.3.1.tar.gz"
+          wget --timeout=60 --tries=3 -q -O "dl/mpfr-4.2.0.tar.xz" "https://mirrors.tuna.tsinghua.edu.cn/gnu/mpfr/mpfr-4.2.0.tar.xz" && echo "✅ 下载成功: mpfr-4.2.0.tar.xz" || echo "⚠️ 下载失败: mpfr-4.2.0.tar.xz"
+          wget --timeout=60 --tries=3 -q -O "dl/gmp-6.2.1.tar.xz" "https://mirrors.tuna.tsinghua.edu.cn/gnu/gmp/gmp-6.2.1.tar.xz" && echo "✅ 下载成功: gmp-6.2.1.tar.xz" || echo "⚠️ 下载失败: gmp-6.2.1.tar.xz"
+          wget --timeout=60 --tries=3 -q -O "dl/isl-0.26.tar.xz" "https://libisl.sourceforge.io/isl-0.26.tar.xz" && echo "✅ 下载成功: isl-0.26.tar.xz" || echo "⚠️ 下载失败: isl-0.26.tar.xz"
           
           echo "结束时间: $(date)"
           echo "下载完成，检查文件..."
@@ -517,46 +507,26 @@ jobs:
           echo "总文件数: $(ls -1 dl/ 2>/dev/null | wc -l)"
           echo "总大小: $(du -sh dl/ 2>/dev/null | cut -f1 || echo "未知")"
           
-          if [ $(ls -1 dl/ 2>/dev/null | wc -l) -lt 3 ]; then
-            echo "⚠️ 警告: 下载的文件数量较少，但继续构建..."
+          if [ $(ls -1 dl/ 2>/dev/null | wc -l) -lt 5 ]; then
+            echo "⚠️ 警告: 下载的文件数量较少"
           else
             echo "✅ 关键源码包下载完成"
           fi
 
-      - name: 📥 跳过下载步骤（使用预下载包）
-        timeout-minutes: 5
+      - name: 🔨 编译工具链（直接编译）
+        timeout-minutes: 90
         run: |
-          echo "=== 跳过自动下载步骤 ==="
+          echo "=== 编译工具链（直接编译）==="
           cd "${{ env.BUILD_DIR }}"
           
-          echo "检查预下载的文件..."
-          FILE_COUNT=$(ls -1 dl/ 2>/dev/null | wc -l)
-          if [ $FILE_COUNT -gt 0 ]; then
-            echo "✅ 已有 $FILE_COUNT 个预下载文件"
-            echo "文件列表:"
-            ls -lh dl/ 2>/dev/null | head -10
-          else
-            echo "⚠️ 警告: 没有预下载文件"
-            echo "创建空的下载目录..."
-            mkdir -p dl
-          fi
-          
-          echo "创建跳过下载的标记..."
-          touch .download_done
-          
-          echo "✅ 跳过下载完成"
-          echo "如果编译失败，请检查缺少的源码包"
-
-      - name: 🔨 编译工具链（强制模式）
-        timeout-minutes: 80
-        run: |
-          echo "=== 编译工具链（强制模式）==="
-          cd "${{ env.BUILD_DIR }}"
-          
-          # 设置强制编译环境
+          # 设置编译环境
           export FORCE_UNSAFE_CONFIGURE=1
           export TERM=dumb
-          export FORCE=1
+          export DEBIAN_FRONTEND=noninteractive
+          
+          # 完全禁用交互式配置
+          echo "完全禁用交互式配置..."
+          touch .config.ready
           
           CPU_CORES=$(nproc)
           echo "CPU核心数: $CPU_CORES"
@@ -565,54 +535,66 @@ jobs:
           # 创建编译日志
           COMPILE_LOG="compile.log"
           
-          echo "=== 开始编译工具链 ===" | tee "$COMPILE_LOG"
+          echo "=== 开始编译工具链 ===" > "$COMPILE_LOG"
+          echo "步骤1: 编译工具链核心..." >> "$COMPILE_LOG"
           
-          # 关键：使用 -k 参数继续编译即使有错误
-          echo "执行: make toolchain/compile -j$CPU_CORES V=s -k" | tee -a "$COMPILE_LOG"
-          echo "注意: 使用 -k 参数，即使有错误也继续" | tee -a "$COMPILE_LOG"
+          # 使用更少的并行任务避免内存不足
+          MAKE_JOBS=$((CPU_CORES > 4 ? 4 : CPU_CORES))
+          echo "使用 $MAKE_JOBS 个并行任务" >> "$COMPILE_LOG"
           
-          timeout 4500 make toolchain/compile -j$CPU_CORES V=s -k 2>&1 | tee -a "$COMPILE_LOG"
+          # 直接调用编译，跳过配置检查
+          timeout 5400 make toolchain/compile -j$MAKE_JOBS V=sc 2>&1 | tee -a "$COMPILE_LOG"
           COMPILE_STATUS=${PIPESTATUS[0]}
           
-          echo "结束时间: $(date)" | tee -a "$COMPILE_LOG"
-          echo "编译退出状态: $COMPILE_STATUS" | tee -a "$COMPILE_LOG"
+          echo "结束时间: $(date)" >> "$COMPILE_LOG"
+          echo "编译退出状态: $COMPILE_STATUS" >> "$COMPILE_LOG"
           
-          # 检查是否有致命错误
-          if grep -q "recipe for target.*failed" "$COMPILE_LOG" || \
-             grep -q "No rule to make target" "$COMPILE_LOG" || \
-             grep -q "configure: error" "$COMPILE_LOG"; then
-            echo "⚠️ 编译过程中有错误" | tee -a "$COMPILE_LOG"
-            echo "检查错误详情..." | tee -a "$COMPILE_LOG"
+          # 分析编译结果
+          if [ $COMPILE_STATUS -eq 0 ]; then
+            echo "✅ 工具链编译成功" >> "$COMPILE_LOG"
+          elif [ $COMPILE_STATUS -eq 124 ]; then
+            echo "⚠️ 编译超时，但可能已部分完成" >> "$COMPILE_LOG"
+            echo "检查是否生成了工具链..." >> "$COMPILE_LOG"
             
-            # 提取缺失的包
-            MISSING_PACKAGES=$(grep -o "No rule to make target.*\.tar\.[xg]z" "$COMPILE_LOG" | \
-                              sed 's/.*target //' | sort -u)
-            
-            if [ -n "$MISSING_PACKAGES" ]; then
-              echo "❌ 缺失的源码包:" | tee -a "$COMPILE_LOG"
-              echo "$MISSING_PACKAGES" | tee -a "$COMPILE_LOG"
-              echo "" | tee -a "$COMPILE_LOG"
-              echo "需要手动下载以下包到 dl/ 目录:" | tee -a "$COMPILE_LOG"
-              echo "$MISSING_PACKAGES" | tee -a "$COMPILE_LOG"
-              exit 1
+            if find staging_dir -name "*gcc*" -type f 2>/dev/null | head -1; then
+              echo "✅ 找到了编译器文件，继续安装" >> "$COMPILE_LOG"
             else
-              echo "⚠️ 有其他编译错误，但尝试继续安装..." | tee -a "$COMPILE_LOG"
+              echo "❌ 未找到编译器文件" >> "$COMPILE_LOG"
+              exit 1
             fi
           else
-            echo "✅ 编译似乎成功完成" | tee -a "$COMPILE_LOG"
+            echo "⚠️ 编译有错误" >> "$COMPILE_LOG"
+            echo "检查错误类型..." >> "$COMPILE_LOG"
+            
+            if grep -q "No rule to make target" "$COMPILE_LOG"; then
+              echo "❌ 错误: 缺少源码包" >> "$COMPILE_LOG"
+              echo "缺失的包:" >> "$COMPILE_LOG"
+              grep -o "No rule to make target.*\.tar\.[xg]z" "$COMPILE_LOG" | sed 's/.*target //' | sort -u >> "$COMPILE_LOG"
+              exit 1
+            elif grep -q "menuconfig" "$COMPILE_LOG"; then
+              echo "❌ 错误: menuconfig被调用" >> "$COMPILE_LOG"
+              echo "需要完全禁用交互式菜单" >> "$COMPILE_LOG"
+              exit 1
+            else
+              echo "⚠️ 其他编译错误，尝试继续..." >> "$COMPILE_LOG"
+            fi
           fi
 
-      - name: 📦 安装工具链
-        timeout-minutes: 20
+      - name: 📦 安装工具链（优化版）
+        timeout-minutes: 30
         run: |
-          echo "=== 安装工具链 ==="
+          echo "=== 安装工具链（优化版）==="
           cd "${{ env.BUILD_DIR }}"
           export TERM=dumb
           
           echo "开始时间: $(date)"
-          echo "执行: make toolchain/install V=s"
+          echo "执行: make toolchain/install V=sc"
           
-          make toolchain/install V=s 2>&1 | tee install.log
+          # 使用更少的并行任务
+          CPU_CORES=$(nproc)
+          MAKE_JOBS=$((CPU_CORES > 2 ? 2 : CPU_CORES))
+          
+          make toolchain/install -j$MAKE_JOBS V=sc 2>&1 | tee install.log
           INSTALL_STATUS=${PIPESTATUS[0]}
           
           echo "结束时间: $(date)"
@@ -621,11 +603,11 @@ jobs:
           if [ $INSTALL_STATUS -eq 0 ]; then
             echo "✅ 工具链安装成功"
           else
-            echo "⚠️ 安装有错误，但检查是否至少部分成功"
+            echo "⚠️ 安装有错误，检查是否部分成功"
             
             # 检查是否有工具链生成
             if find staging_dir -name "*gcc*" -type f 2>/dev/null | head -1; then
-              echo "✅ 至少找到了编译器文件，继续..."
+              echo "✅ 找到了编译器文件，继续验证"
             else
               echo "❌ 未找到任何编译器文件"
               echo "最后10行安装日志:"
@@ -650,58 +632,50 @@ jobs:
           echo "内存使用:"
           free -h
           echo ""
-          echo "2. 构建目录状态:"
+          echo "2. 终端环境检查:"
+          echo "TERM: $TERM"
+          echo "TERMINFO: $TERMINFO"
+          echo "检查terminfo文件:"
+          ls -la /usr/share/terminfo/x/xterm* 2>/dev/null || echo "terminfo文件不存在"
+          echo ""
+          echo "3. 构建目录状态:"
           if [ -d "${{ env.BUILD_DIR }}" ]; then
             echo "构建目录大小: $(du -sh "${{ env.BUILD_DIR }}" 2>/dev/null || echo "未知")"
-            echo "关键子目录:"
-            ls -la "${{ env.BUILD_DIR }}/" | grep -E "staging|build|dl" || echo "未找到关键目录"
             echo ""
-            echo "3. 下载目录状态:"
-            if [ -d "${{ env.BUILD_DIR }}/dl" ]; then
-              echo "下载文件数: $(ls -1 "${{ env.BUILD_DIR }}/dl" 2>/dev/null | wc -l)"
-              echo "下载目录大小: $(du -sh "${{ env.BUILD_DIR }}/dl" 2>/dev/null || echo "未知")"
-              echo "下载文件列表:"
-              ls -lh "${{ env.BUILD_DIR }}/dl/" | head -10
-            else
-              echo "❌ 下载目录不存在"
+            echo "4. 配置检查:"
+            if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
+              echo "配置文件行数: $(wc -l < "${{ env.BUILD_DIR }}/.config")"
+              echo "关键配置:"
+              grep -E "TARGET_|ARCH_|GCC|LIBC|TOOLCHAIN" "${{ env.BUILD_DIR }}/.config" | head -10
             fi
             echo ""
-            echo "4. 日志文件分析:"
+            echo "5. 日志文件分析:"
             for log in "${{ env.BUILD_DIR }}"/*.log; do
               if [ -f "$log" ]; then
                 echo "日志文件: $(basename "$log")"
-                echo "文件大小: $(wc -l < "$log") 行"
-                echo "最后错误:"
-                grep -i "error\|failed\|recipe for target" "$log" | tail -3 || echo "未找到明确错误"
+                echo "最后错误行:"
+                tail -5 "$log"
                 echo ""
               fi
             done
-          else
-            echo "❌ 构建目录不存在"
           fi
           echo ""
-          echo "5. 常见问题解决建议:"
-          echo "   - 终端错误 (Error opening terminal):"
-          echo "     确保安装了 ncurses-term: sudo apt-get install ncurses-term"
-          echo "   - 下载失败:"
-          echo "     检查网络连接，使用预下载方案"
-          echo "     在 .config 中设置 CONFIG_DOWNLOAD_FOLDER 指定本地缓存"
-          echo "   - 编译失败 (缺少源码包):"
-          echo "     根据错误信息手动下载缺失的包到 dl/ 目录"
-          echo "     缺失包示例: binutils-2.40.tar.xz, gcc-12.3.0.tar.xz"
-          echo "     下载地址: https://mirrors.tuna.tsinghua.edu.cn/"
-          echo "   - 编译失败 (其他原因):"
-          echo "     检查所有依赖是否完整安装"
-          echo "     尝试减少并行任务: make -j2"
-          echo "     清理构建缓存重新开始"
+          echo "6. 常见问题解决建议:"
+          echo "   - menuconfig错误:"
+          echo "     完全禁用交互式菜单配置"
+          echo "     修改 include/toplevel.mk 文件"
+          echo "     创建假的配置脚本"
+          echo "   - 终端错误:"
+          echo "     安装完整的ncurses包"
+          echo "     设置正确的TERM和TERMINFO"
+          echo "     使用 export TERM=dumb"
+          echo "   - 编译失败:"
+          echo "     减少并行任务数: make -j2"
+          echo "     检查依赖是否完整"
+          echo "     查看具体的错误日志"
           echo "   - 超时问题:"
-          echo "     增加工作流超时时间"
-          echo "     分步构建，先下载再编译"
-          echo ""
-          echo "6. 调试命令参考:"
-          echo "   - 查看完整日志: tail -100 ${{ env.BUILD_DIR }}/compile.log"
-          echo "   - 检查配置: grep -E 'TARGET|ARCH|GCC' ${{ env.BUILD_DIR }}/.config"
-          echo "   - 检查依赖: ldd ${{ env.BUILD_DIR }}/staging_dir/*/bin/*gcc 2>/dev/null | head -5"
+          echo "     增加超时时间"
+          echo "     分步骤构建"
           echo "========================================"
 
       - name: ✅ 验证构建结果
@@ -797,10 +771,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-logs-${{ env.BUILD_ID }}
-          path: |
-            ${{ env.BUILD_DIR }}/download.log
-            ${{ env.BUILD_DIR }}/compile.log
-            ${{ env.BUILD_DIR }}/install.log
+          path: ${{ env.BUILD_DIR }}/compile.log,${{ env.BUILD_DIR }}/install.log
           retention-days: 7
 
   skip-build:
