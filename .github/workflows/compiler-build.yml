@@ -44,7 +44,7 @@ on:
 env:
   OPENWRT_VERSION: "23.05.2"
   COMPILER_BASE_DIR: "${{ github.workspace }}/firmware-config/build-Compiler-file/compilers"
-  GITHUB_TIMEOUT_MINUTES: 60
+  GITHUB_TIMEOUT_MINUTES: "60"
 
 jobs:
   show-device-info:
@@ -350,7 +350,7 @@ jobs:
     needs: [show-device-info, setup]
     if: needs.setup.outputs.need_build == 'true'
     runs-on: ubuntu-22.04
-    timeout-minutes: ${{ env.GITHUB_TIMEOUT_MINUTES }}
+    timeout-minutes: 60
     
     steps:
       - name: 📥 检出仓库
