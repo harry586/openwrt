@@ -1287,7 +1287,8 @@ generate_config() {
         echo "# CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn is not set" >> .config
     else
         log "🔧 使用正常模式 (完整功能配置)"
-        echo "# 🟠 正常模式 - 完整功能配置" >> .config
+        echo "# 🟠 正常模式 - 完整功能配置：✅ TurboACC 网络加速 ✅ UPnP 自动端口转发 ✅ Samba 文件共享 ✅ 磁盘管理 ✅ KMS 激活服务 ✅ SmartDNS 智能DNS ✅ 家长控制 ✅ 微信推送 ✅ 流量控制 (SQM) ✅ FTP 服务器 ✅ ARP 绑定 ✅ CPU 限制 ✅ 硬盘休眠" >> .config
+        echo "# 🔧 USB 3.0加强：所有平台的关键USB驱动都已强制启用！" >> .config
         
         NORMAL_PLUGINS=(
           "CONFIG_PACKAGE_luci-app-turboacc=y"
@@ -1727,12 +1728,8 @@ apply_config() {
         echo "    ✅ CPU 限制"
         echo "    ✅ 硬盘休眠"
         echo "  🚀 优点: 功能完整，适合日常使用"
+        echo "  🔧 USB 3.0加强：所有平台的关键USB驱动都已强制启用！"
     fi
-    
-    echo ""
-    echo "🔌 USB 3.0加强说明:"
-    echo "  ✅ 所有平台的关键USB驱动都已强制启用！"
-    echo "  🔧 确保USB 3.0、USB 2.0、存储设备等完全正常工作"
     
     log "✅ 配置应用完成"
     log "最终配置文件: .config"
