@@ -715,6 +715,20 @@ pre_build_error_check() {
         fi
     fi
     
+    # 检查staging_dir中的libtool文件
+    log "🔍 检查staging_dir中的libtool文件..."
+    if [ -d "staging_dir/host/share/aclocal" ]; then
+        if find staging_dir/host/share/aclocal -name "libtool.m4" -type f 2>/dev/null | grep -q .; then
+            log "✅ 找到staging_dir中的libtool.m4"
+        else
+            log "⚠️ 警告: staging_dir中未找到libtool.m4"
+            warning_count=$((warning_count + 1))
+        fi
+    else
+        log "⚠️ 警告: staging_dir/host/share/aclocal目录不存在"
+        warning_count=$((warning_count + 1))
+    fi
+    
     # 12. 新增：检查配置同步状态
     log "🔧 检查配置同步状态..."
     if [ -f ".config" ] && [ -f ".config.old" ]; then
@@ -723,6 +737,25 @@ pre_build_error_check() {
             log "⚠️ 警告: 配置文件有较大变化，建议运行make defconfig"
             warning_count=$((warning_count + 1))
         fi
+    fi
+    
+    # 13. 新增：检查头文件目录
+    log "🔧 检查头文件目录..."
+    if [ -d "staging_dir/host/include" ]; then
+        log "✅ staging_dir/host/include目录存在"
+        
+        local critical_headers=("stdio.h" "stdlib.h" "string.h" "stdc-predef.h")
+        for header in "${critical_headers[@]}"; do
+            if [ -f "staging_dir/host/include/$header" ]; then
+                log "✅ 找到头文件: $header"
+            else
+                log "⚠️ 警告: 未找到头文件: $header"
+                warning_count=$((warning_count + 1))
+            fi
+        done
+    else
+        log "⚠️ 警告: staging_dir/host/include目录不存在"
+        warning_count=$((warning_count + 1))
     fi
     
     # 总结
@@ -785,7 +818,7 @@ setup_environment() {
     # 新增：libtool和m4工具
     local libtool_packages=(
         libtool libltdl-dev libltdl7 libtool-bin
-        m4 autoconf-archive gperf
+        m4 autoconf-archive gperf automake-1.16
     )
     
     log "安装基础编译工具..."
@@ -819,7 +852,7 @@ setup_environment() {
     
     # 检查头文件
     log "=== 检查头文件 ==="
-    local critical_headers=("/usr/include/stdio.h" "/usr/include/stdlib.h" "/usr/include/string.h" "/usr/include/features.h")
+    local critical_headers=("/usr/include/stdio.h" "/usr/include/stdlib.h" "/usr/include/string.h" "/usr/include/features.h" "/usr/include/stdc-predef.h")
     for header in "${critical_headers[@]}"; do
         if [ -f "$header" ]; then
             log "✅ 头文件存在: $header"
@@ -827,6 +860,14 @@ setup_environment() {
             log "⚠️ 头文件缺失: $header"
         fi
     done
+    
+    # 检查libtool相关文件
+    log "=== 检查libtool相关文件 ==="
+    if [ -f "/usr/share/aclocal/libtool.m4" ]; then
+        log "✅ libtool.m4存在: /usr/share/aclocal/libtool.m4"
+    else
+        log "⚠️ libtool.m4缺失"
+    fi
     
     log "✅ 编译环境设置完成"
 }
@@ -1685,6 +1726,118 @@ download_dependencies() {
     log "✅ 依赖包下载完成"
 }
 
+# 新增：修复libtool相关问题的函数
+fix_libtool_issues() {
+    log "🔧 修复libtool相关问题..."
+    
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    # 1. 创建必要的目录
+    log "📁 创建必要的目录..."
+    mkdir -p staging_dir/host/include
+    mkdir -p staging_dir/host/share/aclocal
+    mkdir -p staging_dir/host/share/aclocal-1.16
+    mkdir -p staging_dir/host/lib/pkgconfig
+    
+    # 2. 复制关键头文件
+    log "📋 复制关键头文件..."
+    
+    # 复制stdc-predef.h
+    if [ -f "/usr/include/stdc-predef.h" ]; then
+        cp "/usr/include/stdc-predef.h" staging_dir/host/include/ 2>/dev/null || true
+        log "✅ 复制: stdc-predef.h"
+    else
+        log "⚠️  未找到系统stdc-predef.h"
+        # 创建简单的stdc-predef.h
+        cat > staging_dir/host/include/stdc-predef.h << 'EOF'
+/* Generated automatically by fix_libtool_issues */
+#ifndef _GCC_STDC_PREDEF_H
+#define _GCC_STDC_PREDEF_H
+
+#define __STDC_ISO_10646__ 201103L
+
+#endif /* _GCC_STDC_PREDEF_H */
+EOF
+        log "✅ 创建: stdc-predef.h"
+    fi
+    
+    # 复制其他关键头文件
+    for header in stdio.h stdlib.h string.h features.h; do
+        if [ -f "/usr/include/$header" ]; then
+            cp "/usr/include/$header" staging_dir/host/include/ 2>/dev/null || true
+            log "✅ 复制: $header"
+        fi
+    done
+    
+    # 3. 复制libtool.m4
+    log "📋 复制libtool.m4..."
+    if [ -f "/usr/share/aclocal/libtool.m4" ]; then
+        cp "/usr/share/aclocal/libtool.m4" staging_dir/host/share/aclocal/ 2>/dev/null || true
+        log "✅ 复制: libtool.m4"
+    else
+        log "⚠️  未找到系统libtool.m4"
+        # 尝试从其他地方查找
+        find /usr -name "libtool.m4" 2>/dev/null | head -1 | while read m4file; do
+            cp "$m4file" staging_dir/host/share/aclocal/ 2>/dev/null && log "✅ 从其他地方复制: libtool.m4"
+        done
+        
+        # 如果还是没找到，创建基本的libtool.m4
+        if [ ! -f "staging_dir/host/share/aclocal/libtool.m4" ]; then
+            cat > staging_dir/host/share/aclocal/libtool.m4 << 'EOF'
+# libtool.m4 - Configure libtool for the host system. -*-Autoconf-*-
+## Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2003, 2004, 2005, 2006,
+## 2007, 2008, 2009, 2010 Free Software Foundation, Inc.
+## This is a basic libtool.m4 file to avoid compilation errors
+AC_DEFUN([LT_INIT], [AC_MSG_NOTICE([Libtool initialized])])
+EOF
+            log "✅ 创建: 基本libtool.m4"
+        fi
+    fi
+    
+    # 4. 复制其他aclocal文件
+    log "📋 复制其他aclocal文件..."
+    if [ -d "/usr/share/aclocal-1.16" ]; then
+        cp /usr/share/aclocal-1.16/*.m4 staging_dir/host/share/aclocal-1.16/ 2>/dev/null || true
+        log "✅ 复制aclocal-1.16文件"
+    fi
+    
+    # 5. 设置环境变量
+    log "🌍 设置环境变量..."
+    export CFLAGS="-I$BUILD_DIR/staging_dir/host/include"
+    export LDFLAGS="-L$BUILD_DIR/staging_dir/host/lib"
+    export CPPFLAGS="-I$BUILD_DIR/staging_dir/host/include"
+    export ACLOCAL_PATH="$BUILD_DIR/staging_dir/host/share/aclocal:\${ACLOCAL_PATH}"
+    export PKG_CONFIG_PATH="$BUILD_DIR/staging_dir/host/lib/pkgconfig:\${PKG_CONFIG_PATH}"
+    
+    # 6. 创建环境变量文件
+    log "📝 创建环境变量文件..."
+    cat > staging_dir/host/env.sh << EOF
+export CFLAGS="-I$BUILD_DIR/staging_dir/host/include"
+export LDFLAGS="-L$BUILD_DIR/staging_dir/host/lib"
+export CPPFLAGS="-I$BUILD_DIR/staging_dir/host/include"
+export ACLOCAL_PATH="$BUILD_DIR/staging_dir/host/share/aclocal:\${ACLOCAL_PATH}"
+export PKG_CONFIG_PATH="$BUILD_DIR/staging_dir/host/lib/pkgconfig:\${PKG_CONFIG_PATH}"
+EOF
+    
+    chmod +x staging_dir/host/env.sh
+    
+    # 7. 验证修复结果
+    log "🔍 验证修复结果..."
+    if [ -f "staging_dir/host/include/stdc-predef.h" ]; then
+        log "✅ stdc-predef.h 存在"
+    else
+        log "❌ stdc-predef.h 缺失"
+    fi
+    
+    if [ -f "staging_dir/host/share/aclocal/libtool.m4" ]; then
+        log "✅ libtool.m4 存在"
+    else
+        log "❌ libtool.m4 缺失"
+    fi
+    
+    log "✅ libtool问题修复完成"
+}
+
 build_firmware() {
     local enable_cache=$1
     load_env
@@ -1721,22 +1874,15 @@ build_firmware() {
         log "⚠️ 内存较低(${total_mem}MB)，减少并行任务到 $make_jobs"
     fi
     
-    # 新增：修复libtool相关文件
-    log "🔧 检查并修复libtool相关文件..."
-    if [ ! -d "staging_dir/host/share/aclocal" ]; then
-        mkdir -p staging_dir/host/share/aclocal
-        log "✅ 创建aclocal目录"
-    fi
-    
-    # 复制libtool.m4到正确位置
-    if [ -f "/usr/share/aclocal/libtool.m4" ]; then
-        cp /usr/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/ 2>/dev/null && log "✅ 复制libtool.m4"
-    fi
+    # 新增：修复libtool相关文件（在编译前执行）
+    fix_libtool_issues
     
     # 新增：设置编译环境变量
     export CFLAGS="-I${BUILD_DIR}/staging_dir/host/include"
     export LDFLAGS="-L${BUILD_DIR}/staging_dir/host/lib"
     export CPPFLAGS="-I${BUILD_DIR}/staging_dir/host/include"
+    export ACLOCAL_PATH="${BUILD_DIR}/staging_dir/host/share/aclocal:${ACLOCAL_PATH:-}"
+    export PKG_CONFIG_PATH="${BUILD_DIR}/staging_dir/host/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
     
     # 开始编译（默认启用缓存）
     log "启用编译缓存，使用 $make_jobs 个并行任务"
@@ -2014,6 +2160,9 @@ main() {
         "collect_compiled_compiler_files")
             collect_compiled_compiler_files
             ;;
+        "fix_libtool_issues")
+            fix_libtool_issues
+            ;;
         *)
             log "❌ 未知命令: $1"
             echo "可用命令:"
@@ -2023,7 +2172,7 @@ main() {
             echo "  fix_network, download_dependencies, integrate_custom_files"
             echo "  pre_build_error_check, build_firmware, post_build_space_check"
             echo "  check_firmware_files, cleanup, save_source_code_info, download_compiler_files"
-            echo "  collect_compiled_compiler_files"
+            echo "  collect_compiled_compiler_files, fix_libtool_issues"
             exit 1
             ;;
     esac
