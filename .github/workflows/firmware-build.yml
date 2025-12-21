@@ -496,10 +496,10 @@ jobs:
           echo "🔍 检查GCC构建目录..."
           
           # 查找不同版本的GCC目录
-          GCC_PATTERNS=("gcc-12.3.0" "gcc-11.3.0" "gcc-8.4.0" "gcc-[0-9]*\.[0-9]*\.[0-9]*")
+          GCC_PATTERNS="gcc-12.3.0 gcc-11.3.0 gcc-8.4.0"
           GCC_DIR=""
           
-          for pattern in "${GCC_PATTERNS[@]}"; do
+          for pattern in $GCC_PATTERNS; do
             found_dir=$(find build_dir -name "$pattern" -type d 2>/dev/null | head -1)
             if [ -n "$found_dir" ]; then
               GCC_DIR="$found_dir"
@@ -529,65 +529,64 @@ jobs:
             export CXXFLAGS="$CFLAGS"
             export LDFLAGS="-L${{ env.BUILD_DIR }}/staging_dir/host/lib -Wl,-O1"
             echo "✅ 已设置编译环境变量"
-            exit 0
-          fi
-          
-          echo "📋 备份原始头文件..."
-          if [ -f "$GCC_DIR/gcc/system.h" ]; then
-            cp "$GCC_DIR/gcc/system.h" "$GCC_DIR/gcc/system.h.backup"
-            echo "  ✅ 备份system.h"
           else
-            echo "  ⚠️  system.h不存在"
-          fi
-          
-          if [ -f "$GCC_DIR/gcc/auto-host.h" ]; then
-            cp "$GCC_DIR/gcc/auto-host.h" "$GCC_DIR/gcc/auto-host.h.backup"
-            echo "  ✅ 备份auto-host.h"
-          else
-            echo "  ⚠️  auto-host.h不存在"
-          fi
-          
-          echo "🔧 修复头文件声明冲突..."
-          
-          # 修复system.h中的冲突声明
-          if [ -f "$GCC_DIR/gcc/system.h" ]; then
-            # 备份原始文件
-            cp "$GCC_DIR/gcc/system.h" "$GCC_DIR/gcc/system.h.original"
-            
-            # 移除冲突的声明行
-            sed -i 's/^void\* sbrk(int);$//' "$GCC_DIR/gcc/system.h"
-            sed -i 's/^const char\* strsignal(int);$//' "$GCC_DIR/gcc/system.h"
-            sed -i 's/^char\* basename(const char\*);$//' "$GCC_DIR/gcc/system.h"
-            
-            echo "  ✅ 修复system.h完成"
-            
-            # 检查修复效果
-            original_lines=$(wc -l < "$GCC_DIR/gcc/system.h.original")
-            fixed_lines=$(wc -l < "$GCC_DIR/gcc/system.h")
-            if [ $original_lines -eq $fixed_lines ]; then
-              echo "  ℹ️  行数未变化，可能已修复或无需修复"
+            echo "📋 备份原始头文件..."
+            if [ -f "$GCC_DIR/gcc/system.h" ]; then
+              cp "$GCC_DIR/gcc/system.h" "$GCC_DIR/gcc/system.h.backup"
+              echo "  ✅ 备份system.h"
+            else
+              echo "  ⚠️  system.h不存在"
             fi
-          fi
-          
-          # 修复auto-host.h中的声明配置
-          if [ -f "$GCC_DIR/gcc/auto-host.h" ]; then
-            # 备份原始文件
-            cp "$GCC_DIR/gcc/auto-host.h" "$GCC_DIR/gcc/auto-host.h.original"
             
-            # 取消定义冲突的宏
-            sed -i 's/^#define HAVE_DECL_SBRK.*$/#undef HAVE_DECL_SBRK/' "$GCC_DIR/gcc/auto-host.h"
-            sed -i 's/^#define HAVE_DECL_STRSIGNAL.*$/#undef HAVE_DECL_STRSIGNAL/' "$GCC_DIR/gcc/auto-host.h"
-            sed -i 's/^#define HAVE_DECL_BASENAME.*$/#undef HAVE_DECL_BASENAME/' "$GCC_DIR/gcc/auto-host.h"
+            if [ -f "$GCC_DIR/gcc/auto-host.h" ]; then
+              cp "$GCC_DIR/gcc/auto-host.h" "$GCC_DIR/gcc/auto-host.h.backup"
+              echo "  ✅ 备份auto-host.h"
+            else
+              echo "  ⚠️  auto-host.h不存在"
+            fi
             
-            echo "  ✅ 修复auto-host.h完成"
+            echo "🔧 修复头文件声明冲突..."
+            
+            # 修复system.h中的冲突声明
+            if [ -f "$GCC_DIR/gcc/system.h" ]; then
+              # 备份原始文件
+              cp "$GCC_DIR/gcc/system.h" "$GCC_DIR/gcc/system.h.original"
+              
+              # 移除冲突的声明行
+              sed -i 's/^void\* sbrk(int);$//' "$GCC_DIR/gcc/system.h"
+              sed -i 's/^const char\* strsignal(int);$//' "$GCC_DIR/gcc/system.h"
+              sed -i 's/^char\* basename(const char\*);$//' "$GCC_DIR/gcc/system.h"
+              
+              echo "  ✅ 修复system.h完成"
+              
+              # 检查修复效果
+              original_lines=$(wc -l < "$GCC_DIR/gcc/system.h.original")
+              fixed_lines=$(wc -l < "$GCC_DIR/gcc/system.h")
+              if [ $original_lines -eq $fixed_lines ]; then
+                echo "  ℹ️  行数未变化，可能已修复或无需修复"
+              fi
+            fi
+            
+            # 修复auto-host.h中的声明配置
+            if [ -f "$GCC_DIR/gcc/auto-host.h" ]; then
+              # 备份原始文件
+              cp "$GCC_DIR/gcc/auto-host.h" "$GCC_DIR/gcc/auto-host.h.original"
+              
+              # 取消定义冲突的宏
+              sed -i 's/^#define HAVE_DECL_SBRK.*$/#undef HAVE_DECL_SBRK/' "$GCC_DIR/gcc/auto-host.h"
+              sed -i 's/^#define HAVE_DECL_STRSIGNAL.*$/#undef HAVE_DECL_STRSIGNAL/' "$GCC_DIR/gcc/auto-host.h"
+              sed -i 's/^#define HAVE_DECL_BASENAME.*$/#undef HAVE_DECL_BASENAME/' "$GCC_DIR/gcc/auto-host.h"
+              
+              echo "  ✅ 修复auto-host.h完成"
+            fi
+            
+            echo "🚨 添加-fpermissive编译标志..."
+            export CFLAGS="-I${{ env.BUILD_DIR }}/staging_dir/host/include -O2 -pipe -fpermissive"
+            export CXXFLAGS="$CFLAGS"
+            export LDFLAGS="-L${{ env.BUILD_DIR }}/staging_dir/host/lib -Wl,-O1"
+            
+            echo "✅ 编译器头文件修复完成"
           fi
-          
-          echo "🚨 添加-fpermissive编译标志..."
-          export CFLAGS="-I${{ env.BUILD_DIR }}/staging_dir/host/include -O2 -pipe -fpermissive"
-          export CXXFLAGS="$CFLAGS"
-          export LDFLAGS="-L${{ env.BUILD_DIR }}/staging_dir/host/lib -Wl,-O1"
-          
-          echo "✅ 编译器头文件修复完成"
       
       # 步骤 21: 修复GDB编译错误（修复版 - 直接操作）
       - name: "21. 修复GDB编译错误（修复版）"
@@ -615,11 +614,13 @@ jobs:
           # 方法2: 查找并修复GDB源码中的断言错误
           echo "🔍 查找GDB构建目录..."
           
-          # 查找不同版本的GDB目录
-          GDB_PATTERNS=("gdb-10.1" "gdb-9.2" "gdb-12.1" "gdb-[0-9]*\.[0-9]*")
+          # 查找不同版本的GDB目录 - 修复语法错误
           GDB_DIR=""
           
-          for pattern in "${GDB_PATTERNS[@]}"; do
+          # 使用简单的字符串而不是数组
+          GDB_PATTERNS="gdb-10.1 gdb-9.2 gdb-12.1"
+          
+          for pattern in $GDB_PATTERNS; do
             found_dir=$(find build_dir -name "$pattern" -type d 2>/dev/null | head -1)
             if [ -n "$found_dir" ]; then
               GDB_DIR="$found_dir"
@@ -627,6 +628,15 @@ jobs:
               break
             fi
           done
+          
+          # 如果没有找到特定版本，尝试查找任意GDB版本
+          if [ -z "$GDB_DIR" ]; then
+            found_dir=$(find build_dir -type d -name "gdb-*" 2>/dev/null | head -1)
+            if [ -n "$found_dir" ]; then
+              GDB_DIR="$found_dir"
+              echo "✅ 找到GDB目录（任意版本）: $GDB_DIR"
+            fi
+          fi
           
           if [ -n "$GDB_DIR" ] && [ -f "$GDB_DIR/gdb/common/common-utils.c" ]; then
             echo "🔧 修复GDB内部断言错误..."
@@ -641,7 +651,12 @@ jobs:
             fi
             
             # 修改internal_error函数调用
-            sed -i 's/internal_error (file, line, _(\"%s: Assertion \`%s'\ failed.\"),/fprintf(stderr, \"GDB Assertion failed: %s\\n\", __func__); return;/g' "$GDB_DIR/gdb/common/common-utils.c" 2>/dev/null || echo "ℹ️ 未找到需要替换的internal_error调用"
+            if grep -q "internal_error.*Assertion" "$GDB_DIR/gdb/common/common-utils.c"; then
+              sed -i 's/internal_error (file, line, _(\"%s: Assertion \`%s'\ failed.\"),/fprintf(stderr, \"GDB Assertion failed: %s\\n\", __func__); return;/g' "$GDB_DIR/gdb/common/common-utils.c"
+              echo "✅ 修复了internal_error函数调用"
+            else
+              echo "ℹ️ 未找到需要替换的internal_error调用"
+            fi
             
             echo "✅ GDB源码修复完成"
           else
