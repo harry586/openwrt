@@ -574,7 +574,7 @@ jobs:
               
               # 取消定义冲突的宏
               sed -i 's/^#define HAVE_DECL_SBRK.*$/#undef HAVE_DECL_SBRK/' "$GCC_DIR/gcc/auto-host.h"
-              sed -i 's/^#define HAVE_DECL_STRSIGNAL.*$/#undef HAVE_DECL_STRSIGNAL/' "$GCC_DIR/gcc/auto-host.h"
+              sed -i 's/^#define HAVE_DECL_STRSIGNAL.*$/#undef HAVE_DECL_STRSIGNAL/" "$GCC_DIR/gcc/auto-host.h"
               sed -i 's/^#define HAVE_DECL_BASENAME.*$/#undef HAVE_DECL_BASENAME/' "$GCC_DIR/gcc/auto-host.h"
               
               echo "  ✅ 修复auto-host.h完成"
@@ -638,7 +638,7 @@ jobs:
               
               # 修改internal_error函数调用
               if grep -q "internal_error.*Assertion" "$GDB_DIR/gdb/common/common-utils.c"; then
-                sed -i 's/internal_error (file, line, _("%s: Assertion `%s'\ failed."),/fprintf(stderr, "GDB Assertion failed: %s\\n", __func__); return;/g' "$GDB_DIR/gdb/common/common-utils.c"
+                sed -i 's/internal_error (file, line, _("%s: Assertion `%s'' failed."),/fprintf(stderr, "GDB Assertion failed: %s\\n", __func__); return;/g' "$GDB_DIR/gdb/common/common-utils.c"
                 echo "✅ 修复了internal_error函数调用"
               else
                 echo "ℹ️ 未找到需要替换的internal_error调用"
