@@ -103,7 +103,7 @@ if [ -f ".config" ]; then
                 "kmod-usb-ohci")
                     echo "     说明: USB 1.1开放主机控制器接口驱动" >> error_analysis.log
                     echo "     影响: 禁用后USB 1.1低速设备可能无法正常工作" >> error_analysis.log
-                    echo "     建议: 建议启用，兼容老设备" >> error_analysis.log
+                    echo "建议: 建议启用，兼容老设备" >> error_analysis.log
                     ;;
                 "kmod-usb-storage-uas")
                     echo "     说明: USB Attached SCSI协议支持，用于高速USB存储设备" >> error_analysis.log
@@ -612,7 +612,7 @@ echo "   - 方案2: 修复GDB内部断言错误" >> error_analysis.log
 echo "     1. 找到GDB源码目录: find build_dir -name 'gdb-10.1' -type d" >> error_analysis.log
 echo "     2. 备份原始文件: cp gdb/common/common-utils.c gdb/common/common-utils.c.backup" >> error_analysis.log
 echo "     3. 添加DISABLE_ASSERT宏定义: 在文件开头添加 #define DISABLE_ASSERT 1" >> error_analysis.log
-echo "     4. 或者修改internal_error函数调用，跳过断言检查" >> error_analysis.log
+echo "     4. 修改internal_error函数调用，跳过断言检查" >> error_analysis.log
 echo "     5. 重新编译GDB" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "   - 方案3: 降级到GDB旧版本" >> error_analysis.log
@@ -719,11 +719,11 @@ echo "   cp /usr/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/ 2>/dev
 echo "   cp /usr/share/aclocal-1.16/*.m4 staging_dir/host/share/aclocal-1.16/ 2>/dev/null || true" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "4. 🌍 设置环境变量:" >> error_analysis.log
-echo "   export CFLAGS=\"-I${BUILD_DIR}/staging_dir/host/include -O2 -pipe\"" >> error_analysis.log
-echo "   export LDFLAGS=\"-L${BUILD_DIR}/staging_dir/host/lib -Wl,-O1\"" >> error_analysis.log
-echo "   export CPPFLAGS=\"-I${BUILD_DIR}/staging_dir/host/include\"" >> error_analysis.log
-echo "   export ACLOCAL_PATH=\"${BUILD_DIR}/staging_dir/host/share/aclocal:\${ACLOCAL_PATH}\"" >> error_analysis.log
-echo "   export PKG_CONFIG_PATH=\"${BUILD_DIR}/staging_dir/host/lib/pkgconfig:\${PKG_CONFIG_PATH}\"" >> error_analysis.log
+echo "   export CFLAGS=\"-I\${BUILD_DIR}/staging_dir/host/include -O2 -pipe\"" >> error_analysis.log
+echo "   export LDFLAGS=\"-L\${BUILD_DIR}/staging_dir/host/lib -Wl,-O1\"" >> error_analysis.log
+echo "   export CPPFLAGS=\"-I\${BUILD_DIR}/staging_dir/host/include\"" >> error_analysis.log
+echo "   export ACLOCAL_PATH=\"\${BUILD_DIR}/staging_dir/host/share/aclocal:\${ACLOCAL_PATH}\"" >> error_analysis.log
+echo "   export PKG_CONFIG_PATH=\"\${BUILD_DIR}/staging_dir/host/lib/pkgconfig:\${PKG_CONFIG_PATH}\"" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "5. 🛠️ 修复libtool配置:" >> error_analysis.log
 echo "   if [ -f \"staging_dir/host/bin/libtool\" ]; then" >> error_analysis.log
@@ -761,9 +761,9 @@ echo "   sed -i 's/^#define HAVE_DECL_STRSIGNAL.*\$/#undef HAVE_DECL_STRSIGNAL/'
 echo "   sed -i 's/^#define HAVE_DECL_BASENAME.*\$/#undef HAVE_DECL_BASENAME/' \"\$GCC_DIR/gcc/auto-host.h\"" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "5. 🌍 设置编译环境变量:" >> error_analysis.log
-echo "   export CFLAGS=\"-I${BUILD_DIR}/staging_dir/host/include -O2 -pipe -fpermissive\"" >> error_analysis.log
+echo "   export CFLAGS=\"-I\${BUILD_DIR}/staging_dir/host/include -O2 -pipe -fpermissive\"" >> error_analysis.log
 echo "   export CXXFLAGS=\"\$CFLAGS\"" >> error_analysis.log
-echo "   export LDFLAGS=\"-L${BUILD_DIR}/staging_dir/host/lib -Wl,-O1\"" >> error_analysis.log
+echo "   export LDFLAGS=\"-L\${BUILD_DIR}/staging_dir/host/lib -Wl,-O1\"" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "6. 🔄 重新编译:" >> error_analysis.log
 echo "   make -j2 V=s" >> error_analysis.log
@@ -773,7 +773,7 @@ echo "=== 针对GDB编译错误的修复方案（关键修复）===" >> error_an
 echo "如果遇到GDB编译错误（internal_error Assertion等），请执行以下步骤:" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "1. 🚫 方案1: 禁用GDB编译（最简单有效）" >> error_analysis.log
-echo "   cd $BUILD_DIR" >> error_analysis.log
+echo "   cd \$BUILD_DIR" >> error_analysis.log
 echo "   echo '# CONFIG_PACKAGE_gdb is not set' >> .config" >> error_analysis.log
 echo "   make defconfig" >> error_analysis.log
 echo "   echo '✅ 已禁用GDB编译'" >> error_analysis.log
@@ -797,9 +797,9 @@ echo "   fi" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "3. 📝 方案3: 添加编译选项跳过GDB错误" >> error_analysis.log
 echo "   echo '修改编译选项跳过GDB错误...'" >> error_analysis.log
-echo "   export CFLAGS=\"-I$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive -Wno-error -Wno-implicit-function-declaration\"" >> error_analysis.log
+echo "   export CFLAGS=\"-I\$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive -Wno-error -Wno-implicit-function-declaration\"" >> error_analysis.log
 echo "   export CXXFLAGS=\"\$CFLAGS\"" >> error_analysis.log
-echo "   export LDFLAGS=\"-L$BUILD_DIR/staging_dir/host/lib -Wl,-O1\"" >> error_analysis.log
+echo "   export LDFLAGS=\"-L\$BUILD_DIR/staging_dir/host/lib -Wl,-O1\"" >> error_analysis.log
 echo "   echo '✅ 编译选项已设置'" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "4. 🔄 方案4: 清理GDB重新编译" >> error_analysis.log
