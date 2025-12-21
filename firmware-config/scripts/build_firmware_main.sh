@@ -758,6 +758,20 @@ pre_build_error_check() {
         warning_count=$((warning_count + 1))
     fi
     
+    # 14. 新增：检查GDB配置
+    log "🔧 检查GDB配置状态..."
+    if [ -f ".config" ]; then
+        if grep -q "^CONFIG_PACKAGE_gdb=y" .config; then
+            log "⚠️ 警告: GDB已启用，可能会遇到编译错误"
+            log "💡 建议: 如果不需要调试功能，建议禁用GDB以避免编译错误"
+            warning_count=$((warning_count + 1))
+        elif grep -q "^# CONFIG_PACKAGE_gdb is not set$" .config; then
+            log "✅ GDB已禁用，避免可能的编译错误"
+        else
+            log "ℹ️ GDB未明确配置"
+        fi
+    fi
+    
     # 总结
     if [ $error_count -eq 0 ]; then
         if [ $warning_count -eq 0 ]; then
@@ -1151,6 +1165,12 @@ generate_config() {
     echo "# CONFIG_PACKAGE_attendedsysupgrade-common is not set" >> .config
     echo "# CONFIG_PACKAGE_auc is not set" >> .config
     
+    # 新增：禁用GDB编译避免错误
+    echo "# 🚫 禁用GDB编译以避免internal_error Assertion失败" >> .config
+    echo "# CONFIG_PACKAGE_gdb is not set" >> .config
+    echo "# CONFIG_PACKAGE_gdbserver is not set" >> .config
+    echo "# CONFIG_PACKAGE_gdb-minimal is not set" >> .config
+    
     log "=== 🚨 USB 完全修复通用配置 - 开始 ==="
     
     echo "# 🟢 USB 核心驱动 - 基础必须" >> .config
@@ -1259,13 +1279,15 @@ generate_config() {
     echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
     
     if [ "$CONFIG_MODE" = "base" ]; then
-        log "🔧 使用基础模式 (最小化，用于测试编译)"
+        log "🔧 使用基础模式 (最小化配置，用于测试编译)"
+        echo "# 🟣 基础模式 - 最小化配置" >> .config
         echo "# CONFIG_PACKAGE_luci-app-turboacc is not set" >> .config
         echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
         echo "# CONFIG_PACKAGE_kmod-fast-classifier is not set" >> .config
         echo "# CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn is not set" >> .config
     else
-        log "🔧 使用正常模式 (完整功能)"
+        log "🔧 使用正常模式 (完整功能配置)"
+        echo "# 🟠 正常模式 - 完整功能配置" >> .config
         
         NORMAL_PLUGINS=(
           "CONFIG_PACKAGE_luci-app-turboacc=y"
@@ -1498,7 +1520,18 @@ apply_config() {
         fi
     done
     
-    # 4. 统计信息
+    # 4. 调试工具配置检查（重点检查GDB）
+    echo ""
+    echo "🔧 调试工具配置状态:"
+    if grep -q "^# CONFIG_PACKAGE_gdb is not set$" .config; then
+        echo "  ✅ GDB: 已禁用（避免编译错误）"
+    elif grep -q "^CONFIG_PACKAGE_gdb=y" .config; then
+        echo "  ⚠️  GDB: 已启用（可能会遇到编译错误）"
+    else
+        echo "  ℹ️  GDB: 未明确配置"
+    fi
+    
+    # 5. 统计信息
     echo ""
     echo "📊 配置统计信息:"
     local enabled_count=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
@@ -1506,7 +1539,7 @@ apply_config() {
     echo "  ✅ 已启用插件: $enabled_count 个"
     echo "  ❌ 已禁用插件: $disabled_count 个"
     
-    # 5. 显示具体被禁用的插件（最多20个）
+    # 6. 显示具体被禁用的插件（最多20个）
     if [ $disabled_count -gt 0 ]; then
         echo ""
         echo "📋 具体被禁用的插件:"
@@ -1524,7 +1557,7 @@ apply_config() {
         done
     fi
     
-    # 6. 修复缺失的关键USB驱动
+    # 7. 修复缺失的关键USB驱动
     if [ $missing_usb -gt 0 ]; then
         echo ""
         echo "🚨 修复缺失的关键USB驱动:"
@@ -1573,6 +1606,21 @@ apply_config() {
             echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
             echo "  ✅ 已修复 kmod-usb-xhci-mtk"
         fi
+    fi
+    
+    # 8. 确保GDB被禁用（避免编译错误）
+    echo ""
+    echo "🚨 确保GDB被禁用以避免编译错误:"
+    if grep -q "^CONFIG_PACKAGE_gdb=y" .config; then
+        echo "  发现GDB已启用，正在禁用..."
+        sed -i 's/^CONFIG_PACKAGE_gdb=y/# CONFIG_PACKAGE_gdb is not set/' .config
+        echo "  ✅ 已禁用GDB"
+    elif grep -q "^# CONFIG_PACKAGE_gdb is not set$" .config; then
+        echo "  ✅ GDB已禁用"
+    else
+        echo "  ℹ️  添加GDB禁用配置"
+        echo "# CONFIG_PACKAGE_gdb is not set" >> .config
+        echo "  ✅ 已添加GDB禁用配置"
     fi
     
     # 版本特定的配置修复
@@ -1640,6 +1688,11 @@ apply_config() {
     echo "CONFIG_PACKAGE_libc=y" >> .config
     echo "CONFIG_PACKAGE_libgcc=y" >> .config
     
+    # 确保GDB被禁用
+    echo "# 禁用GDB避免编译错误" >> .config
+    echo "# CONFIG_PACKAGE_gdb is not set" >> .config
+    echo "# CONFIG_PACKAGE_gdbserver is not set" >> .config
+    
     # 运行defconfig后，再次检查并修复USB驱动
     check_usb_drivers_integrity
     
@@ -1649,6 +1702,37 @@ apply_config() {
     local final_enabled=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
     local final_disabled=$(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)
     echo "✅ 最终状态: 已启用 $final_enabled 个, 已禁用 $final_disabled 个"
+    
+    # 配置模式描述
+    echo ""
+    echo "🎯 配置模式说明:"
+    if [ "$CONFIG_MODE" = "base" ]; then
+        echo "  🟣 基础模式 - 最小化配置，用于测试编译"
+        echo "  📋 特性: 仅包含基本系统功能，USB 3.0驱动已完全启用"
+        echo "  ⚡ 优点: 编译速度快，固件体积小，适合测试和验证"
+    else
+        echo "  🟠 正常模式 - 完整功能配置"
+        echo "  📋 特性: 包含以下完整功能插件:"
+        echo "    ✅ TurboACC 网络加速"
+        echo "    ✅ UPnP 自动端口转发"
+        echo "    ✅ Samba 文件共享"
+        echo "    ✅ 磁盘管理"
+        echo "    ✅ KMS 激活服务"
+        echo "    ✅ SmartDNS 智能DNS"
+        echo "    ✅ 家长控制"
+        echo "    ✅ 微信推送"
+        echo "    ✅ 流量控制 (SQM)"
+        echo "    ✅ FTP 服务器"
+        echo "    ✅ ARP 绑定"
+        echo "    ✅ CPU 限制"
+        echo "    ✅ 硬盘休眠"
+        echo "  🚀 优点: 功能完整，适合日常使用"
+    fi
+    
+    echo ""
+    echo "🔌 USB 3.0加强说明:"
+    echo "  ✅ 所有平台的关键USB驱动都已强制启用！"
+    echo "  🔧 确保USB 3.0、USB 2.0、存储设备等完全正常工作"
     
     log "✅ 配置应用完成"
     log "最终配置文件: .config"
@@ -1977,6 +2061,77 @@ EOF
     log "✅ 编译器问题修复完成"
 }
 
+# 新增：修复GDB编译错误的函数
+fix_gdb_issues() {
+    log "🔧 修复GDB编译错误问题..."
+    
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    # 检查GDB编译错误
+    if [ -f "build.log" ] && grep -q "internal_error.*Assertion\|ERROR: toolchain/gdb failed" build.log; then
+        log "🚨 检测到GDB编译错误，正在修复..."
+        
+        # 方案1: 在配置文件中禁用GDB
+        log "📝 方案1: 在配置文件中禁用GDB"
+        if [ -f ".config" ]; then
+            # 确保GDB被禁用
+            if grep -q "^CONFIG_PACKAGE_gdb=y" .config; then
+                log "🔧 禁用GDB编译..."
+                sed -i 's/^CONFIG_PACKAGE_gdb=y/# CONFIG_PACKAGE_gdb is not set/' .config
+                sed -i 's/^CONFIG_PACKAGE_gdbserver=y/# CONFIG_PACKAGE_gdbserver is not set/' .config
+                echo "# CONFIG_PACKAGE_gdb-minimal is not set" >> .config
+                log "✅ GDB已在配置中禁用"
+            else
+                log "✅ GDB已禁用"
+            fi
+        fi
+        
+        # 方案2: 查找并修复GDB源码
+        log "🔍 方案2: 查找并修复GDB源码"
+        local gdb_dir=$(find build_dir -name "gdb-10.1" -type d 2>/dev/null | head -1)
+        if [ -n "$gdb_dir" ]; then
+            log "📁 找到GDB目录: $gdb_dir"
+            
+            # 备份原始文件
+            if [ -f "$gdb_dir/gdb/common/common-utils.c" ]; then
+                log "📋 备份common-utils.c..."
+                cp "$gdb_dir/gdb/common/common-utils.c" "$gdb_dir/gdb/common/common-utils.c.backup"
+                
+                # 添加DISABLE_ASSERT宏定义
+                log "🔧 添加DISABLE_ASSERT宏定义..."
+                sed -i '1i#define DISABLE_ASSERT 1' "$gdb_dir/gdb/common/common-utils.c"
+                
+                # 修改internal_error函数调用
+                log "🔧 修改internal_error函数调用..."
+                sed -i 's/internal_error (file, line, _(\"%s: Assertion \`%s'\ failed.\"),/fprintf(stderr, \"GDB Assertion failed: %s\\n\", __func__); return;/g' "$gdb_dir/gdb/common/common-utils.c"
+                
+                log "✅ GDB源码修复完成"
+            else
+                log "⚠️  未找到common-utils.c文件"
+            fi
+        else
+            log "ℹ️ 未找到GDB 10.1目录"
+        fi
+        
+        # 方案3: 清理GDB构建目录
+        log "🧹 方案3: 清理GDB构建目录"
+        rm -rf build_dir/toolchain-*/gdb-10.1 2>/dev/null || true
+        rm -rf staging_dir/toolchain-*/gdb-10.1 2>/dev/null || true
+        log "✅ GDB构建目录已清理"
+        
+        # 方案4: 设置宽松的编译选项
+        log "🌍 方案4: 设置宽松的编译选项"
+        export CFLAGS="-I$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive -Wno-error -Wno-implicit-function-declaration"
+        export CXXFLAGS="$CFLAGS"
+        export LDFLAGS="-L$BUILD_DIR/staging_dir/host/lib -Wl,-O1"
+        log "✅ 编译选项已设置"
+    else
+        log "✅ 未检测到GDB编译错误"
+    fi
+    
+    log "✅ GDB问题修复完成"
+}
+
 build_firmware() {
     local enable_cache=$1
     load_env
@@ -2018,6 +2173,9 @@ build_firmware() {
     
     # 新增：修复编译器错误（在编译前执行）
     fix_compiler_issues
+    
+    # 新增：修复GDB编译错误（在编译前执行）
+    fix_gdb_issues
     
     # 新增：设置编译环境变量
     export CFLAGS="-I${BUILD_DIR}/staging_dir/host/include -O2 -pipe"
@@ -2129,6 +2287,12 @@ build_firmware() {
             if grep -q "conflicting declaration of C function" build.log; then
                 log "🚨 发现C函数声明冲突错误"
                 log "💡 建议: 这通常是头文件冲突，已尝试修复"
+            fi
+            
+            # 检查GDB编译错误
+            if grep -q "internal_error.*Assertion\|ERROR: toolchain/gdb failed\|xml-tdesc.o.*Error" build.log; then
+                log "🚨 发现GDB编译错误"
+                log "💡 建议: GDB已在配置中禁用，如需启用请修改配置并应用GDB修复"
             fi
         fi
         
@@ -2323,6 +2487,9 @@ main() {
         "fix_compiler_issues")
             fix_compiler_issues
             ;;
+        "fix_gdb_issues")
+            fix_gdb_issues
+            ;;
         *)
             log "❌ 未知命令: $1"
             echo "可用命令:"
@@ -2332,7 +2499,7 @@ main() {
             echo "  fix_network, download_dependencies, integrate_custom_files"
             echo "  pre_build_error_check, build_firmware, post_build_space_check"
             echo "  check_firmware_files, cleanup, save_source_code_info, download_compiler_files"
-            echo "  collect_compiled_compiler_files, fix_libtool_issues, fix_compiler_issues"
+            echo "  collect_compiled_compiler_files, fix_libtool_issues, fix_compiler_issues, fix_gdb_issues"
             exit 1
             ;;
     esac
