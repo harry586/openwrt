@@ -313,6 +313,17 @@ if [ -d "staging_dir" ]; then
         fi
     done
     
+    # 新增：检查GDB构建目录
+    echo "" >> error_analysis.log
+    echo "🔍 检查GDB构建目录状态:" >> error_analysis.log
+    find build_dir -name "gdb-10.1" -type d 2>/dev/null | while read gdb_dir; do
+        echo "GDB目录: $gdb_dir" >> error_analysis.log
+        echo "  目录大小: $(du -sh "$gdb_dir" 2>/dev/null | cut -f1)" >> error_analysis.log
+        if [ -f "$gdb_dir/gdb/Makefile" ]; then
+            echo "  ✅ Makefile存在" >> error_analysis.log
+        fi
+    done
+    
 else
     echo "❌ 编译目录不存在" >> error_analysis.log
 fi
@@ -326,6 +337,7 @@ if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
     echo "3. musl版本更新: 可能需要更新的musl C库" >> error_analysis.log
     echo "4. libtool版本: 可能需要更新的libtool版本" >> error_analysis.log
     echo "5. GCC头文件冲突: GCC 8.4.0可能有头文件声明冲突" >> error_analysis.log
+    echo "6. GDB编译错误: GDB 10.1可能有内部错误断言失败" >> error_analysis.log
     echo "" >> error_analysis.log
     echo "🛠️ 解决方案:" >> error_analysis.log
     echo "1. 清理编译器重新下载: rm -rf staging_dir/compiler-*" >> error_analysis.log
@@ -336,6 +348,8 @@ if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
     echo "6. 复制libtool.m4到正确位置: cp /usr/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/" >> error_analysis.log
     echo "7. 修复GCC头文件冲突: 修改gcc/system.h和auto-host.h文件" >> error_analysis.log
     echo "8. 添加-fpermissive编译标志: export CFLAGS=\"\$CFLAGS -fpermissive\"" >> error_analysis.log
+    echo "9. 禁用GDB编译（如果不需调试）: 在.config中添加 # CONFIG_PACKAGE_gdb is not set" >> error_analysis.log
+    echo "10. 修复GDB内部错误: 在gdb源码中添加DISABLE_ASSERT宏定义" >> error_analysis.log
 fi
 
 echo "" >> error_analysis.log
@@ -381,6 +395,10 @@ if [ -f "build.log" ]; then
     grep -E "declaration does not declare anything|conflicting declaration of C function|ambiguating new declaration" build.log -i | head -10 >> error_analysis.log || echo "无GCC声明错误" >> error_analysis.log
     
     echo "" >> error_analysis.log
+    echo "❌ GDB编译错误（新增关键检查）:" >> error_analysis.log
+    grep -E "gdb.*failed|ERROR: toolchain/gdb failed|internal_error.*Assertion|xml-tdesc.o.*Error" build.log -i | head -10 >> error_analysis.log || echo "无GDB编译错误" >> error_analysis.log
+    
+    echo "" >> error_analysis.log
     echo "⚠️ 被忽略的错误:" >> error_analysis.log
     grep "Error.*ignored" build.log >> error_analysis.log || echo "无被忽略错误" >> error_analysis.log
     
@@ -421,6 +439,7 @@ ERROR_CATEGORIES=(
     "libtool错误:|libtool|aclocal|autoconf|automake|libtool.m4"
     "C库相关错误:|musl|glibc|uclibc|libc"
     "GCC头文件声明错误:|declaration does not declare anything|conflicting declaration of C function|ambiguating new declaration"
+    "GDB编译错误:|gdb.*failed|ERROR: toolchain/gdb failed|internal_error.*Assertion|xml-tdesc.o.*Error"
     "配置不同步警告:|configuration is out of sync"
 )
 
@@ -576,6 +595,40 @@ echo "     4. 同样处理auto-host.h文件" >> error_analysis.log
 echo "     5. 重新编译" >> error_analysis.log
 echo "" >> error_analysis.log
 
+echo "❌ GDB编译错误（新增关键修复）" >> error_analysis.log
+echo "💡 可能原因:" >> error_analysis.log
+echo "   - GDB内部断言失败: internal_error Assertion" >> error_analysis.log
+echo "   - GDB 10.1版本与当前环境不兼容" >> error_analysis.log
+echo "   - 缺少必要的开发库或头文件" >> error_analysis.log
+echo "   - 编译器选项冲突导致GDB编译失败" >> error_analysis.log
+echo "   - XML描述文件处理错误（xml-tdesc.o相关）" >> error_analysis.log
+echo "🛠️ 解决方案:" >> error_analysis.log
+echo "   - 方案1: 禁用GDB编译（推荐，大多数用户不需要GDB）" >> error_analysis.log
+echo "     在.config中添加: # CONFIG_PACKAGE_gdb is not set" >> error_analysis.log
+echo "     运行: echo '# CONFIG_PACKAGE_gdb is not set' >> .config" >> error_analysis.log
+echo "     重新编译: make defconfig && make -j2 V=s" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "   - 方案2: 修复GDB内部断言错误" >> error_analysis.log
+echo "     1. 找到GDB源码目录: find build_dir -name 'gdb-10.1' -type d" >> error_analysis.log
+echo "     2. 备份原始文件: cp gdb/common/common-utils.c gdb/common/common-utils.c.backup" >> error_analysis.log
+echo "     3. 添加DISABLE_ASSERT宏定义: 在文件开头添加 #define DISABLE_ASSERT 1" >> error_analysis.log
+echo "     4. 或者修改internal_error函数调用，跳过断言检查" >> error_analysis.log
+echo "     5. 重新编译GDB" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "   - 方案3: 降级到GDB旧版本" >> error_analysis.log
+echo "     1. 删除当前GDB: rm -rf build_dir/toolchain-*/gdb-10.1" >> error_analysis.log
+echo "     2. 修改工具链配置使用GDB 9.2或更早版本" >> error_analysis.log
+echo "     3. 重新下载和编译" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "   - 方案4: 跳过GDB错误继续编译（风险较高）" >> error_analysis.log
+echo "     1. 修改toolchain/gdb/Makefile，添加忽略错误的编译选项" >> error_analysis.log
+echo "     2. 或者手动编译GDB并复制到正确位置" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "   - 方案5: 使用更宽松的编译器选项" >> error_analysis.log
+echo "     export CFLAGS=\"\$CFLAGS -fpermissive -Wno-error\"" >> error_analysis.log
+echo "     export CXXFLAGS=\"\$CXXFLAGS -fpermissive -Wno-error\"" >> error_analysis.log
+echo "" >> error_analysis.log
+
 echo "ℹ️ 管道错误" >> error_analysis.log
 echo "💡 说明:" >> error_analysis.log
 echo "   - 这是并行编译的正常现象，通常不影响最终结果" >> error_analysis.log
@@ -614,6 +667,8 @@ echo "13. 🔧 修复libtool.m4: 复制系统libtool.m4到正确位置" >> error
 echo "14. 🛠️ 设置环境变量: 确保ACLOCAL_PATH和PKG_CONFIG_PATH设置正确" >> error_analysis.log
 echo "15. 🚨 修复GCC头文件冲突: 如果遇到GCC声明错误，执行修复步骤" >> error_analysis.log
 echo "16. 📝 添加-fpermissive标志: export CFLAGS=\"\$CFLAGS -fpermissive\"" >> error_analysis.log
+echo "17. 🚫 禁用GDB编译（解决GDB错误）: echo '# CONFIG_PACKAGE_gdb is not set' >> .config" >> error_analysis.log
+echo "18. 🔧 修复GDB内部断言: 修改gdb源码中的internal_error断言检查" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "=== 针对USB问题的特殊修复方案 ===" >> error_analysis.log
@@ -712,6 +767,48 @@ echo "   export LDFLAGS=\"-L${BUILD_DIR}/staging_dir/host/lib -Wl,-O1\"" >> erro
 echo "" >> error_analysis.log
 echo "6. 🔄 重新编译:" >> error_analysis.log
 echo "   make -j2 V=s" >> error_analysis.log
+echo "" >> error_analysis.log
+
+echo "=== 针对GDB编译错误的修复方案（关键修复）===" >> error_analysis.log
+echo "如果遇到GDB编译错误（internal_error Assertion等），请执行以下步骤:" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "1. 🚫 方案1: 禁用GDB编译（最简单有效）" >> error_analysis.log
+echo "   cd $BUILD_DIR" >> error_analysis.log
+echo "   echo '# CONFIG_PACKAGE_gdb is not set' >> .config" >> error_analysis.log
+echo "   make defconfig" >> error_analysis.log
+echo "   echo '✅ 已禁用GDB编译'" >> error_analysis.log
+echo "   echo '📋 重新编译固件...'" >> error_analysis.log
+echo "   make -j2 V=s" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "2. 🔧 方案2: 修复GDB源码中的断言错误" >> error_analysis.log
+echo "   GDB_DIR=\$(find build_dir -name 'gdb-10.1' -type d 2>/dev/null | head -1)" >> error_analysis.log
+echo "   if [ -n \"\$GDB_DIR\" ]; then" >> error_analysis.log
+echo "     echo \"找到GDB目录: \$GDB_DIR\"" >> error_analysis.log
+echo "     echo \"备份原始文件...\"" >> error_analysis.log
+echo "     cp \"\$GDB_DIR/gdb/common/common-utils.c\" \"\$GDB_DIR/gdb/common/common-utils.c.backup\"" >> error_analysis.log
+echo "     echo \"添加DISABLE_ASSERT宏定义...\"" >> error_analysis.log
+echo "     sed -i '1i#define DISABLE_ASSERT 1' \"\$GDB_DIR/gdb/common/common-utils.c\"" >> error_analysis.log
+echo "     echo \"修改internal_error函数调用...\"" >> error_analysis.log
+echo "     sed -i 's/internal_error (file, line, _(\"%s: Assertion \`%s'\ failed.\"),/fprintf(stderr, \"GDB Assertion failed: %s\\n\", __func__); return;/g' \"\$GDB_DIR/gdb/common/common-utils.c\"" >> error_analysis.log
+echo "     echo \"✅ GDB源码修复完成\"" >> error_analysis.log
+echo "   else" >> error_analysis.log
+echo "     echo \"未找到GDB目录\"" >> error_analysis.log
+echo "   fi" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "3. 📝 方案3: 添加编译选项跳过GDB错误" >> error_analysis.log
+echo "   echo '修改编译选项跳过GDB错误...'" >> error_analysis.log
+echo "   export CFLAGS=\"-I$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive -Wno-error -Wno-implicit-function-declaration\"" >> error_analysis.log
+echo "   export CXXFLAGS=\"\$CFLAGS\"" >> error_analysis.log
+echo "   export LDFLAGS=\"-L$BUILD_DIR/staging_dir/host/lib -Wl,-O1\"" >> error_analysis.log
+echo "   echo '✅ 编译选项已设置'" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "4. 🔄 方案4: 清理GDB重新编译" >> error_analysis.log
+echo "   echo '清理GDB构建目录...'" >> error_analysis.log
+echo "   rm -rf build_dir/toolchain-*/gdb-10.1" >> error_analysis.log
+echo "   rm -rf staging_dir/toolchain-*/gdb-10.1" >> error_analysis.log
+echo "   echo '✅ GDB目录已清理'" >> error_analysis.log
+echo "   echo '重新编译工具链...'" >> error_analysis.log
+echo "   make toolchain/install -j2 V=s" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "错误分析完成 - 查看 error_analysis.log 获取详细信息" >> error_analysis.log
