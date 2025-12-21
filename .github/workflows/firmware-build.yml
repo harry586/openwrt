@@ -15,7 +15,12 @@ on:
         default: "21.02"
         options: ["23.05", "21.02"]
       config_mode:
-        description: "⚙️ 配置模式选择 - 🟣 基础模式 - 最小化配置 🟠 正常模式 - 完整功能配置"
+        description: "⚙️ 配置模式选择
+          
+          🟣 基础模式 - 最小化配置，用于测试编译
+          🟠 正常模式 - 完整功能配置：✅ TurboACC 网络加速 ✅ UPnP 自动端口转发 ✅ Samba 文件共享 ✅ 磁盘管理 ✅ KMS 激活服务 ✅ SmartDNS 智能DNS ✅ 家长控制 ✅ 微信推送 ✅ 流量控制 (SQM) ✅ FTP 服务器 ✅ ARP 绑定 ✅ CPU 限制 ✅ 硬盘休眠
+          
+          🔧 USB 3.0加强：所有平台的关键USB驱动都已强制启用！"
         required: true
         type: choice
         default: "normal"
@@ -40,18 +45,16 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      # 步骤 1: 使用Git Archive API下载源代码
+      # 步骤 1: 使用Git Archive API下载源代码（不在界面显示）
       - name: "1. 使用Git Archive API下载源代码"
         if: github.event.inputs.use_git_archive == 'true'
         run: |
-          echo "=== 步骤 1: 使用Git Archive API下载源代码 ==="
-          echo "🔄 从GitHub API获取源代码压缩包"
+          echo "正在下载源代码..."
           
           mkdir -p /tmp/openwrt-source
           cd /tmp/openwrt-source
           
           DEFAULT_BRANCH=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}" | jq -r '.default_branch')
-          echo "默认分支: $DEFAULT_BRANCH"
           
           echo "下载源代码压缩包..."
           curl -s -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}/tarball/$DEFAULT_BRANCH" -o source.tar.gz
@@ -61,19 +64,13 @@ jobs:
             exit 1
           fi
           
-          echo "✅ 下载完成，文件大小: $(ls -lh source.tar.gz | awk '{print $5}')"
-          
           echo "解压源代码..."
           tar -xzf source.tar.gz --strip-components=1
           
           if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
-            echo "✅ 源代码解压成功"
-            echo "重要文件存在: firmware-config/scripts/build_firmware_main.sh"
-            
             mkdir -p ${{ github.workspace }}
             
             if [ -d "firmware-config/build-Compiler-file" ]; then
-              echo "⚠️ 发现编译器目录，排除不复制"
               rm -rf firmware-config/build-Compiler-file
             fi
             
@@ -81,13 +78,10 @@ jobs:
             
             chmod +x ${{ github.workspace }}/firmware-config/scripts/*.sh 2>/dev/null || true
             
-            echo "✅ 文件复制完成"
-            
             mkdir -p /tmp/build-artifacts/source-archive
             cp source.tar.gz /tmp/build-artifacts/source-archive/
           else
             echo "❌ 源代码解压失败，重要文件缺失"
-            ls -la
             exit 1
           fi
           
@@ -370,6 +364,7 @@ jobs:
             echo "    ✅ CPU 限制"
             echo "    ✅ 硬盘休眠"
             echo "  🚀 优点: 功能完整，适合日常使用"
+            echo "  🔧 USB 3.0加强：所有平台的关键USB驱动都已强制启用！"
           fi
           
           echo ""
