@@ -1969,7 +1969,7 @@ fix_compiler_issues() {
                 # 修复声明问题
                 log "🔧 修复auto-host.h声明问题..."
                 sed -i 's/^#define HAVE_DECL_SBRK.*$/#undef HAVE_DECL_SBRK/' "$gcc_dir/gcc/auto-host.h"
-                sed -i 's/^#define HAVE_DECL_STRSIGNAL.*$/#undef HAVE_DECL_STRSIGNAL/' "$gcc_dir/gcc/auto-host.h"
+                sed -i 's/^#define HAVE_DECL_STRSIGNAL.*$/#undef HAVE_DECL_STRSIGNAL/" "$gcc_dir/gcc/auto-host.h"
                 sed -i 's/^#define HAVE_DECL_BASENAME.*$/#undef HAVE_DECL_BASENAME/' "$gcc_dir/gcc/auto-host.h"
                 
                 log "✅ auto-host.h修复完成"
