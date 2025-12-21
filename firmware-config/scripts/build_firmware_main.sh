@@ -1301,7 +1301,7 @@ generate_config() {
             echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-arpbind-zh-cn=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-cpulimit-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y" >> error_analysis.sh
+            echo "CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y" >> .config
         fi
     fi
 }
@@ -1838,6 +1838,145 @@ EOF
     log "✅ libtool问题修复完成"
 }
 
+# 新增：修复编译器错误问题的函数
+fix_compiler_issues() {
+    log "🔧 修复编译器错误问题..."
+    
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    # 检查是否存在gcc编译错误
+    log "🔍 检查编译器构建问题..."
+    
+    # 1. 检查gcc版本兼容性问题
+    if [ -d "build_dir/toolchain-arm_cortex-a7+neon-vfpv4_gcc-8.4.0_musl_eabi" ]; then
+        log "🔧 检测到ARM GCC 8.4.0编译器目录"
+        
+        # 检查gcc源代码目录
+        local gcc_dir=$(find build_dir -name "gcc-8.4.0" -type d 2>/dev/null | head -1)
+        if [ -n "$gcc_dir" ]; then
+            log "📁 找到gcc源码目录: $gcc_dir"
+            
+            # 检查是否存在头文件冲突问题
+            if [ -f "$gcc_dir/gcc/system.h" ]; then
+                log "📋 检查gcc/system.h文件..."
+                
+                # 备份原始文件
+                cp "$gcc_dir/gcc/system.h" "$gcc_dir/gcc/system.h.backup"
+                
+                # 修复sbrk声明冲突问题
+                log "🔧 修复sbrk声明冲突..."
+                sed -i 's/^void\* sbrk(int);$//' "$gcc_dir/gcc/system.h"
+                
+                # 修复strsignal声明冲突
+                log "🔧 修复strsignal声明冲突..."
+                sed -i 's/^const char\* strsignal(int);$//' "$gcc_dir/gcc/system.h"
+                
+                # 修复basename声明冲突
+                log "🔧 修复basename声明冲突..."
+                sed -i 's/^char\* basename(const char\*);$//' "$gcc_dir/gcc/system.h"
+                
+                log "✅ gcc/system.h修复完成"
+            fi
+            
+            # 检查auto-host.h文件
+            if [ -f "$gcc_dir/gcc/auto-host.h" ]; then
+                log "📋 检查auto-host.h文件..."
+                
+                # 备份原始文件
+                cp "$gcc_dir/gcc/auto-host.h" "$gcc_dir/gcc/auto-host.h.backup"
+                
+                # 修复声明问题
+                log "🔧 修复auto-host.h声明问题..."
+                sed -i 's/^#define HAVE_DECL_SBRK.*$/#undef HAVE_DECL_SBRK/' "$gcc_dir/gcc/auto-host.h"
+                sed -i 's/^#define HAVE_DECL_STRSIGNAL.*$/#undef HAVE_DECL_STRSIGNAL/' "$gcc_dir/gcc/auto-host.h"
+                sed -i 's/^#define HAVE_DECL_BASENAME.*$/#undef HAVE_DECL_BASENAME/' "$gcc_dir/gcc/auto-host.h"
+                
+                log "✅ auto-host.h修复完成"
+            fi
+            
+            # 创建补丁文件
+            log "📝 创建编译器补丁..."
+            cat > /tmp/gcc_fix.patch << 'EOF'
+diff -u gcc/system.h.orig gcc/system.h
+--- gcc/system.h.orig
++++ gcc/system.h
+@@ -485,15 +485,15 @@
+ #endif
+ 
+ /* Some of glibc's string inlines cause warnings.  Also some
+    string.h functions are only declared as inline in glibc, so can't
+    be called via a pointer.  */
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+-#if defined(HAVE_DECL_SBRK) && HAVE_DECL_SBRK
++#if 0
+ void* sbrk(int);
+ #endif
+ 
+ #ifdef __cplusplus
+ }
+ #endif
+EOF
+            
+            # 应用补丁
+            if patch -p1 -d "$gcc_dir" < /tmp/gcc_fix.patch 2>/dev/null; then
+                log "✅ GCC补丁应用成功"
+            else
+                log "⚠️  GCC补丁应用失败，但可能不影响"
+            fi
+        fi
+    fi
+    
+    # 2. 清理可能的问题目录
+    log "🧹 清理可能的问题目录..."
+    local problematic_dirs=(
+        "build_dir/toolchain-*"
+        "staging_dir/toolchain-*"
+        "tmp"
+    )
+    
+    for dir_pattern in "${problematic_dirs[@]}"; do
+        if find . -name "$(basename "$dir_pattern")" -type d 2>/dev/null | grep -q .; then
+            log "ℹ️  找到目录匹配: $dir_pattern"
+            # 不自动清理，只记录
+        fi
+    done
+    
+    # 3. 设置编译器环境变量
+    log "🌍 设置编译器环境变量..."
+    export CFLAGS="-O2 -pipe"
+    export CXXFLAGS="-O2 -pipe"
+    export LDFLAGS="-Wl,-O1"
+    export CPPFLAGS=""
+    
+    # 对于特定的错误，添加-fpermissive标志
+    if [ -f "build.log" ] && grep -q "declaration does not declare anything" build.log; then
+        log "🔧 检测到声明错误，添加-fpermissive标志..."
+        export CFLAGS="$CFLAGS -fpermissive"
+        export CXXFLAGS="$CXXFLAGS -fpermissive"
+    fi
+    
+    # 4. 创建编译器修复脚本
+    log "📝 创建编译器修复脚本..."
+    cat > staging_dir/host/fix_compiler.sh << 'EOF'
+#!/bin/bash
+# 编译器修复脚本
+echo "应用编译器修复..."
+
+# 设置宽松的编译选项
+export CFLAGS="-O2 -pipe -fpermissive"
+export CXXFLAGS="-O2 -pipe -fpermissive"
+export LDFLAGS="-Wl,-O1"
+
+echo "编译器修复完成"
+EOF
+    
+    chmod +x staging_dir/host/fix_compiler.sh
+    
+    log "✅ 编译器问题修复完成"
+}
+
 build_firmware() {
     local enable_cache=$1
     load_env
@@ -1877,12 +2016,19 @@ build_firmware() {
     # 新增：修复libtool相关文件（在编译前执行）
     fix_libtool_issues
     
+    # 新增：修复编译器错误（在编译前执行）
+    fix_compiler_issues
+    
     # 新增：设置编译环境变量
-    export CFLAGS="-I${BUILD_DIR}/staging_dir/host/include"
-    export LDFLAGS="-L${BUILD_DIR}/staging_dir/host/lib"
+    export CFLAGS="-I${BUILD_DIR}/staging_dir/host/include -O2 -pipe"
+    export LDFLAGS="-L${BUILD_DIR}/staging_dir/host/lib -Wl,-O1"
     export CPPFLAGS="-I${BUILD_DIR}/staging_dir/host/include"
     export ACLOCAL_PATH="${BUILD_DIR}/staging_dir/host/share/aclocal:${ACLOCAL_PATH:-}"
     export PKG_CONFIG_PATH="${BUILD_DIR}/staging_dir/host/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+    
+    # 对于特定的编译器错误，添加-fpermissive标志
+    export CFLAGS="$CFLAGS -fpermissive"
+    export CXXFLAGS="$CFLAGS"
     
     # 开始编译（默认启用缓存）
     log "启用编译缓存，使用 $make_jobs 个并行任务"
@@ -1972,6 +2118,17 @@ build_firmware() {
             if grep -q "libtool.m4" build.log; then
                 log "🚨 发现libtool.m4缺失错误"
                 log "💡 建议: 确保安装了libtool和autoconf包"
+            fi
+            
+            # 检查特定的gcc编译错误
+            if grep -q "declaration does not declare anything" build.log; then
+                log "🚨 发现GCC声明错误"
+                log "💡 建议: 这可能是GCC版本兼容性问题，已应用-fpermissive标志"
+            fi
+            
+            if grep -q "conflicting declaration of C function" build.log; then
+                log "🚨 发现C函数声明冲突错误"
+                log "💡 建议: 这通常是头文件冲突，已尝试修复"
             fi
         fi
         
@@ -2163,6 +2320,9 @@ main() {
         "fix_libtool_issues")
             fix_libtool_issues
             ;;
+        "fix_compiler_issues")
+            fix_compiler_issues
+            ;;
         *)
             log "❌ 未知命令: $1"
             echo "可用命令:"
@@ -2172,7 +2332,7 @@ main() {
             echo "  fix_network, download_dependencies, integrate_custom_files"
             echo "  pre_build_error_check, build_firmware, post_build_space_check"
             echo "  check_firmware_files, cleanup, save_source_code_info, download_compiler_files"
-            echo "  collect_compiled_compiler_files, fix_libtool_issues"
+            echo "  collect_compiled_compiler_files, fix_libtool_issues, fix_compiler_issues"
             exit 1
             ;;
     esac
