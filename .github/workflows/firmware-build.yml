@@ -614,51 +614,40 @@ jobs:
           # 方法2: 查找并修复GDB源码中的断言错误
           echo "🔍 查找GDB构建目录..."
           
-          # 查找不同版本的GDB目录 - 修复语法错误
+          # 查找不同版本的GDB目录 - 简化查找逻辑
           GDB_DIR=""
           
-          # 使用简单的字符串而不是数组
-          GDB_PATTERNS="gdb-10.1 gdb-9.2 gdb-12.1"
+          # 直接使用find命令查找GDB目录
+          found_dir=$(find build_dir -type d -name "gdb-*" 2>/dev/null | head -1)
           
-          for pattern in $GDB_PATTERNS; do
-            found_dir=$(find build_dir -name "$pattern" -type d 2>/dev/null | head -1)
-            if [ -n "$found_dir" ]; then
-              GDB_DIR="$found_dir"
-              echo "✅ 找到GDB目录: $GDB_DIR"
-              break
-            fi
-          done
-          
-          # 如果没有找到特定版本，尝试查找任意GDB版本
-          if [ -z "$GDB_DIR" ]; then
-            found_dir=$(find build_dir -type d -name "gdb-*" 2>/dev/null | head -1)
-            if [ -n "$found_dir" ]; then
-              GDB_DIR="$found_dir"
-              echo "✅ 找到GDB目录（任意版本）: $GDB_DIR"
-            fi
-          fi
-          
-          if [ -n "$GDB_DIR" ] && [ -f "$GDB_DIR/gdb/common/common-utils.c" ]; then
-            echo "🔧 修复GDB内部断言错误..."
+          if [ -n "$found_dir" ]; then
+            GDB_DIR="$found_dir"
+            echo "✅ 找到GDB目录: $GDB_DIR"
             
-            # 备份原始文件
-            cp "$GDB_DIR/gdb/common/common-utils.c" "$GDB_DIR/gdb/common/common-utils.c.backup"
-            
-            # 在文件开头添加DISABLE_ASSERT宏定义
-            if ! grep -q "^#define DISABLE_ASSERT" "$GDB_DIR/gdb/common/common-utils.c"; then
-              sed -i '1i#define DISABLE_ASSERT 1' "$GDB_DIR/gdb/common/common-utils.c"
-              echo "✅ 添加了DISABLE_ASSERT宏定义"
-            fi
-            
-            # 修改internal_error函数调用
-            if grep -q "internal_error.*Assertion" "$GDB_DIR/gdb/common/common-utils.c"; then
-              sed -i 's/internal_error (file, line, _(\"%s: Assertion \`%s'\ failed.\"),/fprintf(stderr, \"GDB Assertion failed: %s\\n\", __func__); return;/g' "$GDB_DIR/gdb/common/common-utils.c"
-              echo "✅ 修复了internal_error函数调用"
+            if [ -f "$GDB_DIR/gdb/common/common-utils.c" ]; then
+              echo "🔧 修复GDB内部断言错误..."
+              
+              # 备份原始文件
+              cp "$GDB_DIR/gdb/common/common-utils.c" "$GDB_DIR/gdb/common/common-utils.c.backup"
+              
+              # 在文件开头添加DISABLE_ASSERT宏定义
+              if ! grep -q "^#define DISABLE_ASSERT" "$GDB_DIR/gdb/common/common-utils.c"; then
+                sed -i '1i#define DISABLE_ASSERT 1' "$GDB_DIR/gdb/common/common-utils.c"
+                echo "✅ 添加了DISABLE_ASSERT宏定义"
+              fi
+              
+              # 修改internal_error函数调用
+              if grep -q "internal_error.*Assertion" "$GDB_DIR/gdb/common/common-utils.c"; then
+                sed -i 's/internal_error (file, line, _(\"%s: Assertion \`%s'\ failed.\"),/fprintf(stderr, \"GDB Assertion failed: %s\\n\", __func__); return;/g' "$GDB_DIR/gdb/common/common-utils.c"
+                echo "✅ 修复了internal_error函数调用"
+              else
+                echo "ℹ️ 未找到需要替换的internal_error调用"
+              fi
+              
+              echo "✅ GDB源码修复完成"
             else
-              echo "ℹ️ 未找到需要替换的internal_error调用"
+              echo "ℹ️ 找到GDB目录但未找到common-utils.c文件"
             fi
-            
-            echo "✅ GDB源码修复完成"
           else
             echo "ℹ️ 未找到GDB源码目录，可能尚未编译或已跳过"
           fi
