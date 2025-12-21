@@ -252,9 +252,45 @@ if [ -d "staging_dir" ]; then
     if [ -d "staging_dir/host/include" ]; then
         echo "✅ host/include目录存在" >> error_analysis.log
         echo "  头文件数量: $(find staging_dir/host/include -name "*.h" -type f 2>/dev/null | wc -l)" >> error_analysis.log
+        # 检查具体头文件
+        echo "  关键头文件:" >> error_analysis.log
+        for header in "stdio.h" "stdlib.h" "string.h" "features.h" "stdc-predef.h"; do
+            if find staging_dir/host/include -name "$header" -type f 2>/dev/null | grep -q .; then
+                echo "    ✅ $header" >> error_analysis.log
+            else
+                echo "    ❌ $header - 缺失" >> error_analysis.log
+            fi
+        done
     else
         echo "❌ host/include目录不存在" >> error_analysis.log
     fi
+    
+    # 新增：检查libtool相关文件
+    echo "" >> error_analysis.log
+    echo "🔍 检查libtool相关文件:" >> error_analysis.log
+    if [ -d "staging_dir/host/share/aclocal" ]; then
+        echo "✅ host/share/aclocal目录存在" >> error_analysis.log
+        echo "  aclocal文件数量: $(find staging_dir/host/share/aclocal -name "*.m4" -type f 2>/dev/null | wc -l)" >> error_analysis.log
+        
+        # 检查libtool.m4
+        if find staging_dir/host/share/aclocal -name "libtool.m4" -type f 2>/dev/null | grep -q .; then
+            echo "  ✅ libtool.m4存在" >> error_analysis.log
+        else
+            echo "  ❌ libtool.m4缺失 - 这是关键错误" >> error_analysis.log
+        fi
+    else
+        echo "❌ host/share/aclocal目录不存在" >> error_analysis.log
+    fi
+    
+    # 新增：检查libtool二进制文件
+    echo "🔍 检查libtool二进制文件:" >> error_analysis.log
+    find staging_dir -name "libtool" -type f -executable 2>/dev/null | head -3 >> error_analysis.log || echo "  未找到libtool二进制文件" >> error_analysis.log
+    
+    # 新增：检查autoconf/automake文件
+    echo "🔍 检查autoconf/automake文件:" >> error_analysis.log
+    find staging_dir -name "aclocal" -type f -executable 2>/dev/null | head -2 >> error_analysis.log || echo "  未找到aclocal" >> error_analysis.log
+    find staging_dir -name "autoconf" -type f -executable 2>/dev/null | head -2 >> error_analysis.log || echo "  未找到autoconf" >> error_analysis.log
+    find staging_dir -name "automake" -type f -executable 2>/dev/null | head -2 >> error_analysis.log || echo "  未找到automake" >> error_analysis.log
     
 else
     echo "❌ 编译目录不存在" >> error_analysis.log
@@ -274,7 +310,8 @@ if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
     echo "2. 清理构建目录: rm -rf build_dir/target-*" >> error_analysis.log
     echo "3. 确保使用正确的编译器: arm-openwrt-linux-muslgnueabi-gcc" >> error_analysis.log
     echo "4. 检查内核配置: 确保CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> error_analysis.log
-    echo "5. 安装最新的libtool和autoconf: sudo apt-get install libtool autoconf" >> error_analysis.log
+    echo "5. 安装最新的libtool和autoconf: sudo apt-get install libtool autoconf automake libltdl-dev" >> error_analysis.log
+    echo "6. 复制libtool.m4到正确位置: cp /usr/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/" >> error_analysis.log
 fi
 
 echo "" >> error_analysis.log
@@ -313,7 +350,7 @@ if [ -f "build.log" ]; then
     
     echo "" >> error_analysis.log
     echo "❌ libtool相关错误:" >> error_analysis.log
-    grep -E "libtool|aclocal|autoconf|automake" build.log -i | head -10 >> error_analysis.log || echo "无libtool错误" >> error_analysis.log
+    grep -E "libtool|aclocal|autoconf|automake|libtool.m4" build.log -i | head -10 >> error_analysis.log || echo "无libtool错误" >> error_analysis.log
     
     echo "" >> error_analysis.log
     echo "⚠️ 被忽略的错误:" >> error_analysis.log
@@ -353,7 +390,7 @@ ERROR_CATEGORIES=(
     "管道错误:|Broken pipe"
     "编译器错误:|compiler|gcc|binutils|ld"
     "头文件错误:|stdc-predef.h|host/include|include.*not found"
-    "libtool错误:|libtool|aclocal|autoconf|automake"
+    "libtool错误:|libtool|aclocal|autoconf|automake|libtool.m4"
     "C库相关错误:|musl|glibc|uclibc|libc"
     "配置不同步警告:|configuration is out of sync"
 )
@@ -383,7 +420,8 @@ echo "🛠️ 解决方案:" >> error_analysis.log
 echo "   - 重新运行工作流" >> error_analysis.log
 echo "   - 检查网络连接" >> error_analysis.log
 echo "   - 清理缓存重新编译" >> error_analysis.log
-echo "   - 确保安装了正确的开发包: sudo apt-get install linux-headers-generic libc6-dev" >> error_analysis.log
+echo "   - 确保安装了正确的开发包: sudo apt-get install linux-headers-generic libc6-dev libc6-dev-i386" >> error_analysis.log
+echo "   - 创建缺失的头文件目录: mkdir -p staging_dir/host/include" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "❌ 依赖错误" >> error_analysis.log
@@ -450,6 +488,7 @@ echo "   - 安装linux-headers-generic和libc6-dev" >> error_analysis.log
 echo "   - 确保staging_dir/host/include目录存在" >> error_analysis.log
 echo "   - 设置正确的CFLAGS和CPPFLAGS环境变量" >> error_analysis.log
 echo "   - 命令: sudo apt-get install linux-headers-generic libc6-dev libc6-dev-i386" >> error_analysis.log
+echo "   - 复制系统头文件: cp /usr/include/stdc-predef.h staging_dir/host/include/" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "❌ libtool错误" >> error_analysis.log
@@ -457,10 +496,13 @@ echo "💡 可能原因:" >> error_analysis.log
 echo "   - libtool未安装或版本过旧" >> error_analysis.log
 echo "   - libtool.m4文件缺失" >> error_analysis.log
 echo "   - aclocal目录不存在" >> error_analysis.log
+echo "   - autoconf/automake工具不完整" >> error_analysis.log
 echo "🛠️ 解决方案:" >> error_analysis.log
-echo "   - 安装libtool和autoconf: sudo apt-get install libtool autoconf automake" >> error_analysis.log
+echo "   - 安装libtool和autoconf: sudo apt-get install libtool autoconf automake libltdl-dev m4" >> error_analysis.log
 echo "   - 确保staging_dir/host/share/aclocal目录存在" >> error_analysis.log
 echo "   - 复制libtool.m4到正确位置: cp /usr/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/" >> error_analysis.log
+echo "   - 修复libtool相关环境: export ACLOCAL_PATH=\$BUILD_DIR/staging_dir/host/share/aclocal" >> error_analysis.log
+echo "   - 检查并修复automake版本: automake --version" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "❌ C库相关错误" >> error_analysis.log
@@ -514,11 +556,13 @@ echo "4. ⚙️ 检查配置冲突: make defconfig" >> error_analysis.log
 echo "5. 🐛 减少并行任务: make -j2 V=s" >> error_analysis.log
 echo "6. 🌐 检查网络连接和代理设置" >> error_analysis.log
 echo "7. 🔧 检查编译器: 确保 staging_dir/compiler-* 目录存在且完整" >> error_analysis.log
-echo "8. 📚 安装缺失的开发包: sudo apt-get install linux-headers-generic libc6-dev libtool autoconf automake" >> error_analysis.log
+echo "8. 📚 安装缺失的开发包: sudo apt-get install linux-headers-generic libc6-dev libtool autoconf automake libltdl-dev m4" >> error_analysis.log
 echo "9. 🔌 检查USB插件: 确保所有关键USB驱动已启用（当前配置已强制启用）" >> error_analysis.log
 echo "10. 🖥️ 检查平台专用驱动: 根据您的设备平台（高通/雷凌）启用相应驱动" >> error_analysis.log
 echo "11. 💾 检查文件系统支持: 确保NTFS3, ext4, vfat等文件系统驱动已启用" >> error_analysis.log
 echo "12. 📁 检查头文件路径: 确保 staging_dir/host/include 目录存在且有头文件" >> error_analysis.log
+echo "13. 🔧 修复libtool.m4: 复制系统libtool.m4到正确位置" >> error_analysis.log
+echo "14. 🛠️ 设置环境变量: 确保ACLOCAL_PATH和PKG_CONFIG_PATH设置正确" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "=== 针对USB问题的特殊修复方案 ===" >> error_analysis.log
@@ -545,29 +589,42 @@ echo "4. 🔄 重新编译:" >> error_analysis.log
 echo "   make -j$(nproc) V=s" >> error_analysis.log
 echo "" >> error_analysis.log
 
-echo "=== 针对头文件和libtool错误的修复方案 ===" >> error_analysis.log
+echo "=== 针对头文件和libtool错误的修复方案（紧急修复）===" >> error_analysis.log
 echo "如果遇到头文件或libtool错误，请尝试以下步骤:" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "1. 📦 安装必要的开发包:" >> error_analysis.log
 echo "   sudo apt-get update" >> error_analysis.log
 echo "   sudo apt-get install linux-headers-generic libc6-dev libc6-dev-i386 \\" >> error_analysis.log
 echo "       libc6-dev-x32 libc6-dev-armhf-cross libc6-dev-arm64-cross \\" >> error_analysis.log
-echo "       libtool autoconf automake libltdl-dev m4" >> error_analysis.log
+echo "       libtool autoconf automake libltdl-dev m4 libtool-bin gperf \\" >> error_analysis.log
+echo "       autoconf-archive" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "2. 📁 创建缺失的目录:" >> error_analysis.log
 echo "   mkdir -p staging_dir/host/include" >> error_analysis.log
 echo "   mkdir -p staging_dir/host/share/aclocal" >> error_analysis.log
+echo "   mkdir -p staging_dir/host/share/aclocal-1.16" >> error_analysis.log
+echo "   mkdir -p staging_dir/host/lib/pkgconfig" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "3. 📋 复制必要的文件:" >> error_analysis.log
 echo "   cp /usr/include/stdc-predef.h staging_dir/host/include/ 2>/dev/null || true" >> error_analysis.log
+echo "   cp /usr/include/stdio.h staging_dir/host/include/ 2>/dev/null || true" >> error_analysis.log
+echo "   cp /usr/include/features.h staging_dir/host/include/ 2>/dev/null || true" >> error_analysis.log
 echo "   cp /usr/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/ 2>/dev/null || true" >> error_analysis.log
+echo "   cp /usr/share/aclocal-1.16/*.m4 staging_dir/host/share/aclocal-1.16/ 2>/dev/null || true" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "4. 🌍 设置环境变量:" >> error_analysis.log
 echo "   export CFLAGS=\"-I${BUILD_DIR}/staging_dir/host/include\"" >> error_analysis.log
 echo "   export LDFLAGS=\"-L${BUILD_DIR}/staging_dir/host/lib\"" >> error_analysis.log
 echo "   export CPPFLAGS=\"-I${BUILD_DIR}/staging_dir/host/include\"" >> error_analysis.log
+echo "   export ACLOCAL_PATH=\"${BUILD_DIR}/staging_dir/host/share/aclocal:\${ACLOCAL_PATH}\"" >> error_analysis.log
+echo "   export PKG_CONFIG_PATH=\"${BUILD_DIR}/staging_dir/host/lib/pkgconfig:\${PKG_CONFIG_PATH}\"" >> error_analysis.log
 echo "" >> error_analysis.log
-echo "5. 🔄 重新编译:" >> error_analysis.log
+echo "5. 🛠️ 修复libtool配置:" >> error_analysis.log
+echo "   if [ -f \"staging_dir/host/bin/libtool\" ]; then" >> error_analysis.log
+echo "     staging_dir/host/bin/libtool --config | head -20" >> error_analysis.log
+echo "   fi" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "6. 🔄 重新编译:" >> error_analysis.log
 echo "   make -j2 V=s" >> error_analysis.log
 echo "" >> error_analysis.log
 
