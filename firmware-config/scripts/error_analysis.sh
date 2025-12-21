@@ -292,6 +292,27 @@ if [ -d "staging_dir" ]; then
     find staging_dir -name "autoconf" -type f -executable 2>/dev/null | head -2 >> error_analysis.log || echo "  未找到autoconf" >> error_analysis.log
     find staging_dir -name "automake" -type f -executable 2>/dev/null | head -2 >> error_analysis.log || echo "  未找到automake" >> error_analysis.log
     
+    # 新增：检查GCC构建目录
+    echo "" >> error_analysis.log
+    echo "🔍 检查GCC构建目录状态:" >> error_analysis.log
+    find build_dir -name "gcc-8.4.0" -type d 2>/dev/null | while read gcc_dir; do
+        echo "GCC目录: $gcc_dir" >> error_analysis.log
+        if [ -f "$gcc_dir/gcc/system.h" ]; then
+            echo "  ✅ system.h存在" >> error_analysis.log
+            # 检查是否有备份文件
+            if [ -f "$gcc_dir/gcc/system.h.backup" ]; then
+                echo "  ✅ system.h备份存在" >> error_analysis.log
+            fi
+        fi
+        
+        if [ -f "$gcc_dir/gcc/auto-host.h" ]; then
+            echo "  ✅ auto-host.h存在" >> error_analysis.log
+            if [ -f "$gcc_dir/gcc/auto-host.h.backup" ]; then
+                echo "  ✅ auto-host.h备份存在" >> error_analysis.log
+            fi
+        fi
+    done
+    
 else
     echo "❌ 编译目录不存在" >> error_analysis.log
 fi
@@ -304,6 +325,7 @@ if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
     echo "2. 内核版本不同: 23.05使用Linux 5.15，需要不同的内核头文件" >> error_analysis.log
     echo "3. musl版本更新: 可能需要更新的musl C库" >> error_analysis.log
     echo "4. libtool版本: 可能需要更新的libtool版本" >> error_analysis.log
+    echo "5. GCC头文件冲突: GCC 8.4.0可能有头文件声明冲突" >> error_analysis.log
     echo "" >> error_analysis.log
     echo "🛠️ 解决方案:" >> error_analysis.log
     echo "1. 清理编译器重新下载: rm -rf staging_dir/compiler-*" >> error_analysis.log
@@ -312,6 +334,8 @@ if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
     echo "4. 检查内核配置: 确保CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> error_analysis.log
     echo "5. 安装最新的libtool和autoconf: sudo apt-get install libtool autoconf automake libltdl-dev" >> error_analysis.log
     echo "6. 复制libtool.m4到正确位置: cp /usr/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/" >> error_analysis.log
+    echo "7. 修复GCC头文件冲突: 修改gcc/system.h和auto-host.h文件" >> error_analysis.log
+    echo "8. 添加-fpermissive编译标志: export CFLAGS=\"\$CFLAGS -fpermissive\"" >> error_analysis.log
 fi
 
 echo "" >> error_analysis.log
@@ -353,6 +377,10 @@ if [ -f "build.log" ]; then
     grep -E "libtool|aclocal|autoconf|automake|libtool.m4" build.log -i | head -10 >> error_analysis.log || echo "无libtool错误" >> error_analysis.log
     
     echo "" >> error_analysis.log
+    echo "❌ GCC头文件声明错误（新增）:" >> error_analysis.log
+    grep -E "declaration does not declare anything|conflicting declaration of C function|ambiguating new declaration" build.log -i | head -10 >> error_analysis.log || echo "无GCC声明错误" >> error_analysis.log
+    
+    echo "" >> error_analysis.log
     echo "⚠️ 被忽略的错误:" >> error_analysis.log
     grep "Error.*ignored" build.log >> error_analysis.log || echo "无被忽略错误" >> error_analysis.log
     
@@ -392,6 +420,7 @@ ERROR_CATEGORIES=(
     "头文件错误:|stdc-predef.h|host/include|include.*not found"
     "libtool错误:|libtool|aclocal|autoconf|automake|libtool.m4"
     "C库相关错误:|musl|glibc|uclibc|libc"
+    "GCC头文件声明错误:|declaration does not declare anything|conflicting declaration of C function|ambiguating new declaration"
     "配置不同步警告:|configuration is out of sync"
 )
 
@@ -527,6 +556,26 @@ echo "   - 根据平台启用专用驱动: IPQ40xx->高通驱动, MT76xx->雷凌
 echo "   - 确保启用存储支持: kmod-usb-storage, kmod-scsi-core" >> error_analysis.log
 echo "" >> error_analysis.log
 
+echo "❌ GCC头文件声明错误（新增关键修复）" >> error_analysis.log
+echo "💡 可能原因:" >> error_analysis.log
+echo "   - GCC头文件中的函数声明冲突" >> error_analysis.log
+echo "   - 系统头文件与GCC内部头文件冲突" >> error_analysis.log
+echo "   - 多个头文件定义了相同的函数" >> error_analysis.log
+echo "   - GCC版本与系统库版本不兼容" >> error_analysis.log
+echo "🛠️ 解决方案:" >> error_analysis.log
+echo "   - 添加-fpermissive编译标志: export CFLAGS=\"\$CFLAGS -fpermissive\"" >> error_analysis.log
+echo "   - 修改GCC头文件中的冲突声明" >> error_analysis.log
+echo "   - 备份并修复gcc/system.h文件" >> error_analysis.log
+echo "   - 修复auto-host.h中的声明配置" >> error_analysis.log
+echo "   - 使用更宽松的编译选项" >> error_analysis.log
+echo "   - 具体修复步骤:" >> error_analysis.log
+echo "     1. 找到GCC源码目录: find build_dir -name 'gcc-8.4.0' -type d" >> error_analysis.log
+echo "     2. 备份原始文件: cp gcc/system.h gcc/system.h.backup" >> error_analysis.log
+echo "     3. 移除冲突的声明行" >> error_analysis.log
+echo "     4. 同样处理auto-host.h文件" >> error_analysis.log
+echo "     5. 重新编译" >> error_analysis.log
+echo "" >> error_analysis.log
+
 echo "ℹ️ 管道错误" >> error_analysis.log
 echo "💡 说明:" >> error_analysis.log
 echo "   - 这是并行编译的正常现象，通常不影响最终结果" >> error_analysis.log
@@ -563,6 +612,8 @@ echo "11. 💾 检查文件系统支持: 确保NTFS3, ext4, vfat等文件系统�
 echo "12. 📁 检查头文件路径: 确保 staging_dir/host/include 目录存在且有头文件" >> error_analysis.log
 echo "13. 🔧 修复libtool.m4: 复制系统libtool.m4到正确位置" >> error_analysis.log
 echo "14. 🛠️ 设置环境变量: 确保ACLOCAL_PATH和PKG_CONFIG_PATH设置正确" >> error_analysis.log
+echo "15. 🚨 修复GCC头文件冲突: 如果遇到GCC声明错误，执行修复步骤" >> error_analysis.log
+echo "16. 📝 添加-fpermissive标志: export CFLAGS=\"\$CFLAGS -fpermissive\"" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "=== 针对USB问题的特殊修复方案 ===" >> error_analysis.log
@@ -613,8 +664,8 @@ echo "   cp /usr/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/ 2>/dev
 echo "   cp /usr/share/aclocal-1.16/*.m4 staging_dir/host/share/aclocal-1.16/ 2>/dev/null || true" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "4. 🌍 设置环境变量:" >> error_analysis.log
-echo "   export CFLAGS=\"-I${BUILD_DIR}/staging_dir/host/include\"" >> error_analysis.log
-echo "   export LDFLAGS=\"-L${BUILD_DIR}/staging_dir/host/lib\"" >> error_analysis.log
+echo "   export CFLAGS=\"-I${BUILD_DIR}/staging_dir/host/include -O2 -pipe\"" >> error_analysis.log
+echo "   export LDFLAGS=\"-L${BUILD_DIR}/staging_dir/host/lib -Wl,-O1\"" >> error_analysis.log
 echo "   export CPPFLAGS=\"-I${BUILD_DIR}/staging_dir/host/include\"" >> error_analysis.log
 echo "   export ACLOCAL_PATH=\"${BUILD_DIR}/staging_dir/host/share/aclocal:\${ACLOCAL_PATH}\"" >> error_analysis.log
 echo "   export PKG_CONFIG_PATH=\"${BUILD_DIR}/staging_dir/host/lib/pkgconfig:\${PKG_CONFIG_PATH}\"" >> error_analysis.log
@@ -623,6 +674,41 @@ echo "5. 🛠️ 修复libtool配置:" >> error_analysis.log
 echo "   if [ -f \"staging_dir/host/bin/libtool\" ]; then" >> error_analysis.log
 echo "     staging_dir/host/bin/libtool --config | head -20" >> error_analysis.log
 echo "   fi" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "6. 🔄 重新编译:" >> error_analysis.log
+echo "   make -j2 V=s" >> error_analysis.log
+echo "" >> error_analysis.log
+
+echo "=== 针对GCC头文件冲突错误的修复方案（关键修复）===" >> error_analysis.log
+echo "如果遇到GCC头文件声明冲突错误，请执行以下步骤:" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "1. 🔍 定位GCC源码目录:" >> error_analysis.log
+echo "   GCC_DIR=\$(find build_dir -name 'gcc-8.4.0' -type d 2>/dev/null | head -1)" >> error_analysis.log
+echo "   if [ -n \"\$GCC_DIR\" ]; then" >> error_analysis.log
+echo "     echo \"找到GCC目录: \$GCC_DIR\"" >> error_analysis.log
+echo "   else" >> error_analysis.log
+echo "     echo \"未找到GCC目录，可能已经修复\"" >> error_analysis.log
+echo "     exit 0" >> error_analysis.log
+echo "   fi" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "2. 📋 备份原始文件:" >> error_analysis.log
+echo "   cp \"\$GCC_DIR/gcc/system.h\" \"\$GCC_DIR/gcc/system.h.backup\"" >> error_analysis.log
+echo "   cp \"\$GCC_DIR/gcc/auto-host.h\" \"\$GCC_DIR/gcc/auto-host.h.backup\"" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "3. 🔧 修复system.h文件:" >> error_analysis.log
+echo "   sed -i 's/^void\\* sbrk(int);\$//' \"\$GCC_DIR/gcc/system.h\"" >> error_analysis.log
+echo "   sed -i 's/^const char\\* strsignal(int);\$//' \"\$GCC_DIR/gcc/system.h\"" >> error_analysis.log
+echo "   sed -i 's/^char\\* basename(const char\\*);\$//' \"\$GCC_DIR/gcc/system.h\"" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "4. 🔧 修复auto-host.h文件:" >> error_analysis.log
+echo "   sed -i 's/^#define HAVE_DECL_SBRK.*\$/#undef HAVE_DECL_SBRK/' \"\$GCC_DIR/gcc/auto-host.h\"" >> error_analysis.log
+echo "   sed -i 's/^#define HAVE_DECL_STRSIGNAL.*\$/#undef HAVE_DECL_STRSIGNAL/' \"\$GCC_DIR/gcc/auto-host.h\"" >> error_analysis.log
+echo "   sed -i 's/^#define HAVE_DECL_BASENAME.*\$/#undef HAVE_DECL_BASENAME/' \"\$GCC_DIR/gcc/auto-host.h\"" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "5. 🌍 设置编译环境变量:" >> error_analysis.log
+echo "   export CFLAGS=\"-I${BUILD_DIR}/staging_dir/host/include -O2 -pipe -fpermissive\"" >> error_analysis.log
+echo "   export CXXFLAGS=\"\$CFLAGS\"" >> error_analysis.log
+echo "   export LDFLAGS=\"-L${BUILD_DIR}/staging_dir/host/lib -Wl,-O1\"" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "6. 🔄 重新编译:" >> error_analysis.log
 echo "   make -j2 V=s" >> error_analysis.log
