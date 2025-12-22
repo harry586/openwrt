@@ -608,7 +608,7 @@ echo "     在.config中添加: # CONFIG_PACKAGE_gdb is not set" >> error_analys
 echo "     运行: echo '# CONFIG_PACKAGE_gdb is not set' >> .config" >> error_analysis.log
 echo "     重新编译: make defconfig && make -j2 V=s" >> error_analysis.log
 echo "" >> error_analysis.log
-echo "   - 方案2: 修复GDB内部断言错误" >> error_analysis.log
+echo "   - 方案2: 修复GDB源码中的断言错误" >> error_analysis.log
 echo "     1. 找到GDB源码目录: find build_dir -name 'gdb-10.1' -type d" >> error_analysis.log
 echo "     2. 备份原始文件: cp gdb/common/common-utils.c gdb/common/common-utils.c.backup" >> error_analysis.log
 echo "     3. 添加DISABLE_ASSERT宏定义: 在文件开头添加 #define DISABLE_ASSERT 1" >> error_analysis.log
@@ -789,7 +789,7 @@ echo "     cp \"\$GDB_DIR/gdb/common/common-utils.c\" \"\$GDB_DIR/gdb/common/com
 echo "     echo \"添加DISABLE_ASSERT宏定义...\"" >> error_analysis.log
 echo "     sed -i '1i#define DISABLE_ASSERT 1' \"\$GDB_DIR/gdb/common/common-utils.c\"" >> error_analysis.log
 echo "     echo \"修改internal_error函数调用...\"" >> error_analysis.log
-echo "     sed -i 's/internal_error (file, line, _(\"%s: Assertion \`%s'\ failed.\"),/fprintf(stderr, \"GDB Assertion failed: %s\\n\", __func__); return;/g' \"\$GDB_DIR/gdb/common/common-utils.c\"" >> error_analysis.log
+echo "     sed -i 's/internal_error (file, line, _(\"%s: Assertion \`%s'\'' failed.\"),/fprintf(stderr, \"GDB Assertion failed: %s\\n\", __func__); return;/g' \"\$GDB_DIR/gdb/common/common-utils.c\"" >> error_analysis.log
 echo "     echo \"✅ GDB源码修复完成\"" >> error_analysis.log
 echo "   else" >> error_analysis.log
 echo "     echo \"未找到GDB目录\"" >> error_analysis.log
