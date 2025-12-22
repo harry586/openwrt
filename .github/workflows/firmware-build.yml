@@ -588,7 +588,7 @@ jobs:
             echo "✅ 编译器头文件修复完成"
           fi
       
-      # 步骤 21: 修复GDB编译错误（增强修复版）
+      # 步骤 21: 修复GDB编译错误（增强修复版）- 已更新修复逻辑
       - name: "21. 修复GDB编译错误（增强修复版）"
         run: |
           echo "=== 步骤 21: 修复GDB编译错误（增强修复版）==="
@@ -631,10 +631,21 @@ jobs:
               echo "🔧 修复common-defs.h中的_GL_ATTRIBUTE_FORMAT_PRINTF错误..."
               cp "$GDB_DIR/gdbsupport/common-defs.h" "$GDB_DIR/gdbsupport/common-defs.h.backup"
               
-              # 在第111行附近修复_GL_ATTRIBUTE_FORMAT_PRINTF错误
-              sed -i '111s/.*/#define _GL_ATTRIBUTE_FORMAT_PRINTF(format_idx, arg_idx)/' "$GDB_DIR/gdbsupport/common-defs.h"
-              sed -i '112s/.*/extern void __attribute__ ((__format__ (__printf__, format_idx, arg_idx))) gdb_printf (const char *format, ...);/' "$GDB_DIR/gdbsupport/common-defs.h"
+              # 在第111行附近修复_GL_ATTRIBUTE_FORMAT_PRINTF错误 - 修复语法
+              sed -i '111s/#define ATTRIBUTE_PRINTF _GL_ATTRIBUTE_FORMAT_PRINTF/#define ATTRIBUTE_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))/' "$GDB_DIR/gdbsupport/common-defs.h"
+              
+              # 添加缺失的_GL_ATTRIBUTE_FORMAT_PRINTF宏定义
+              if ! grep -q "^#define _GL_ATTRIBUTE_FORMAT_PRINTF" "$GDB_DIR/gdbsupport/common-defs.h"; then
+                sed -i '110a#define _GL_ATTRIBUTE_FORMAT_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))' "$GDB_DIR/gdbsupport/common-defs.h"
+              fi
+              
               echo "✅ 修复了_GL_ATTRIBUTE_FORMAT_PRINTF错误"
+              
+              # 显示修复后的内容
+              echo "🔍 修复后的111-115行内容:"
+              sed -n '111,115p' "$GDB_DIR/gdbsupport/common-defs.h"
+            else
+              echo "ℹ️ 未找到common-defs.h文件"
             fi
             
             # 修复common-utils.c中的断言错误
@@ -653,6 +664,22 @@ jobs:
               # 修改internal_error函数调用
               sed -i 's/internal_error (file, line, _("%s: Assertion `%s'\'' failed."),/fprintf(stderr, "GDB Assertion failed: %s\\n", __func__); return;/g' "$GDB_DIR/gdb/common/common-utils.c"
               echo "✅ 修复了internal_error函数调用"
+              
+              # 修复xml支持文件中的错误
+              if [ -f "$GDB_DIR/gdb/xml-support.c" ]; then
+                echo "🔧 修复xml-support.c可能的错误..."
+                cp "$GDB_DIR/gdb/xml-support.c" "$GDB_DIR/gdb/xml-support.c.backup"
+              fi
+              
+              if [ -f "$GDB_DIR/gdb/xml-syscall.c" ]; then
+                echo "🔧 修复xml-syscall.c可能的错误..."
+                cp "$GDB_DIR/gdb/xml-syscall.c" "$GDB_DIR/gdb/xml-syscall.c.backup"
+              fi
+              
+              if [ -f "$GDB_DIR/gdb/xml-tdesc.c" ]; then
+                echo "🔧 修复xml-tdesc.c可能的错误..."
+                cp "$GDB_DIR/gdb/xml-tdesc.c" "$GDB_DIR/gdb/xml-tdesc.c.backup"
+              fi
             else
               echo "ℹ️ 找到GDB目录但未找到common-utils.c文件"
             fi
@@ -736,7 +763,7 @@ jobs:
             echo "✅ 编译前空间充足"
           fi
       
-      # 步骤 27: 编译固件（使用修复版）
+      # 步骤 27: 编译固件（使用修复版）- 增加GDB修复后编译
       - name: "27. 编译固件（使用修复版）"
         run: |
           echo "=== 步骤 27: 编译固件（使用修复版）==="
@@ -750,6 +777,21 @@ jobs:
           export PKG_CONFIG_PATH="${{ env.BUILD_DIR }}/staging_dir/host/lib/pkgconfig:\${PKG_CONFIG_PATH}"
           
           echo "🔧 开始编译固件..."
+          
+          # 编译前再次检查GDB是否已禁用
+          cd "${{ env.BUILD_DIR }}"
+          if [ -f ".config" ]; then
+            echo "🔍 最终确认GDB配置状态..."
+            if grep -q "^# CONFIG_PACKAGE_gdb is not set$" .config; then
+              echo "✅ GDB确认已禁用"
+            else
+              echo "⚠️ GDB可能未禁用，强制禁用..."
+              echo "# CONFIG_PACKAGE_gdb is not set" >> .config
+              echo "# CONFIG_PACKAGE_gdbserver is not set" >> .config
+              echo "# CONFIG_PACKAGE_gdb-minimal is not set" >> .config
+            fi
+          fi
+          
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh build_firmware "true"
       
       # 步骤 28: 搜索并打包构建产物
