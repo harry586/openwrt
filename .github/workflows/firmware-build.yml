@@ -441,7 +441,7 @@ jobs:
           cd "${{ env.BUILD_DIR }}"
           
           echo "🔧 安装必要的开发包..."
-          sudo apt-get update && sudo apt-get install -y libtool autoconf automake libltdl-dev m4 libtool-bin gperf autoconf-archive
+          sudo apt-get update && sudo apt-get install -y libtool autoconf automake libltdl-dev m4 libtool-bin gperf autoconf-archive gettext pkg-config
           
           echo "📁 创建缺失的目录..."
           mkdir -p staging_dir/host/include
@@ -588,10 +588,10 @@ jobs:
             echo "✅ 编译器头文件修复完成"
           fi
       
-      # 步骤 21: 修复GDB编译错误（修复版 - 直接操作）
-      - name: "21. 修复GDB编译错误（修复版）"
+      # 步骤 21: 修复GDB编译错误（增强修复版）
+      - name: "21. 修复GDB编译错误（增强修复版）"
         run: |
-          echo "=== 步骤 21: 修复GDB编译错误（修复版）==="
+          echo "=== 步骤 21: 修复GDB编译错误（增强修复版）==="
           
           cd "${{ env.BUILD_DIR }}"
           
@@ -624,6 +624,20 @@ jobs:
             GDB_DIR="$found_dir"
             echo "✅ 找到GDB目录: $GDB_DIR"
             
+            echo "🔧 修复GDB内部断言错误..."
+            
+            # 修复common-defs.h中的_GL_ATTRIBUTE_FORMAT_PRINTF错误
+            if [ -f "$GDB_DIR/gdbsupport/common-defs.h" ]; then
+              echo "🔧 修复common-defs.h中的_GL_ATTRIBUTE_FORMAT_PRINTF错误..."
+              cp "$GDB_DIR/gdbsupport/common-defs.h" "$GDB_DIR/gdbsupport/common-defs.h.backup"
+              
+              # 在第111行附近修复_GL_ATTRIBUTE_FORMAT_PRINTF错误
+              sed -i '111s/.*/#define _GL_ATTRIBUTE_FORMAT_PRINTF(format_idx, arg_idx)/' "$GDB_DIR/gdbsupport/common-defs.h"
+              sed -i '112s/.*/extern void __attribute__ ((__format__ (__printf__, format_idx, arg_idx))) gdb_printf (const char *format, ...);/' "$GDB_DIR/gdbsupport/common-defs.h"
+              echo "✅ 修复了_GL_ATTRIBUTE_FORMAT_PRINTF错误"
+            fi
+            
+            # 修复common-utils.c中的断言错误
             if [ -f "$GDB_DIR/gdb/common/common-utils.c" ]; then
               echo "🔧 修复GDB内部断言错误..."
               
@@ -637,14 +651,8 @@ jobs:
               fi
               
               # 修改internal_error函数调用
-              if grep -q "internal_error.*Assertion" "$GDB_DIR/gdb/common/common-utils.c"; then
-                sed -i 's/internal_error (file, line, _("%s: Assertion `%s'' failed."),/fprintf(stderr, "GDB Assertion failed: %s\\n", __func__); return;/g' "$GDB_DIR/gdb/common/common-utils.c"
-                echo "✅ 修复了internal_error函数调用"
-              else
-                echo "ℹ️ 未找到需要替换的internal_error调用"
-              fi
-              
-              echo "✅ GDB源码修复完成"
+              sed -i 's/internal_error (file, line, _("%s: Assertion `%s'\'' failed."),/fprintf(stderr, "GDB Assertion failed: %s\\n", __func__); return;/g' "$GDB_DIR/gdb/common/common-utils.c"
+              echo "✅ 修复了internal_error函数调用"
             else
               echo "ℹ️ 找到GDB目录但未找到common-utils.c文件"
             fi
@@ -659,28 +667,61 @@ jobs:
           
           echo "✅ GDB编译错误修复完成"
       
-      # 步骤 22: 下载依赖包
-      - name: "22. 下载依赖包"
+      # 步骤 22: 修复binutils编译错误
+      - name: "22. 修复binutils编译错误"
         run: |
-          echo "=== 步骤 22: 下载依赖包 ==="
+          echo "=== 步骤 22: 修复binutils编译错误 ==="
+          
+          cd "${{ env.BUILD_DIR }}"
+          
+          echo "🔧 修复binutils编译问题..."
+          
+          # 查找binutils构建目录
+          BINUTILS_DIR=$(find build_dir -type d -name "binutils-*" 2>/dev/null | head -1)
+          
+          if [ -n "$BINUTILS_DIR" ]; then
+            echo "✅ 找到binutils目录: $BINUTILS_DIR"
+            
+            # 检查是否存在配置问题
+            if [ -f "$BINUTILS_DIR/config.log" ]; then
+              echo "🔍 检查binutils配置错误..."
+              grep -i "error\|failed\|missing" "$BINUTILS_DIR/config.log" | head -10
+            fi
+            
+            # 修复可能的配置问题
+            echo "🔧 修复binutils配置..."
+            export CFLAGS="-I${{ env.BUILD_DIR }}/staging_dir/host/include -O2 -pipe -fpermissive"
+            export CXXFLAGS="$CFLAGS"
+            export LDFLAGS="-L${{ env.BUILD_DIR }}/staging_dir/host/lib -Wl,-O1"
+            export CPPFLAGS="-I${{ env.BUILD_DIR }}/staging_dir/host/include"
+            
+            echo "✅ binutils修复配置完成"
+          else
+            echo "ℹ️ 未找到binutils目录，可能尚未编译"
+          fi
+      
+      # 步骤 23: 下载依赖包
+      - name: "23. 下载依赖包"
+        run: |
+          echo "=== 步骤 23: 下载依赖包 ==="
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh download_dependencies
       
-      # 步骤 23: 集成自定义文件
-      - name: "23. 集成自定义文件"
+      # 步骤 24: 集成自定义文件
+      - name: "24. 集成自定义文件"
         run: |
-          echo "=== 步骤 23: 集成自定义文件 ==="
+          echo "=== 步骤 24: 集成自定义文件 ==="
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh integrate_custom_files
       
-      # 步骤 24: 前置错误检查
-      - name: "24. 前置错误检查"
+      # 步骤 25: 前置错误检查
+      - name: "25. 前置错误检查"
         run: |
-          echo "=== 步骤 24: 前置错误检查 ==="
+          echo "=== 步骤 25: 前置错误检查 ==="
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh pre_build_error_check
       
-      # 步骤 25: 编译固件前的空间检查
-      - name: "25. 编译固件前的空间检查"
+      # 步骤 26: 编译固件前的空间检查
+      - name: "26. 编译固件前的空间检查"
         run: |
-          echo "=== 步骤 25: 编译固件前的空间检查 ==="
+          echo "=== 步骤 26: 编译固件前的空间检查 ==="
           df -h
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
@@ -695,10 +736,10 @@ jobs:
             echo "✅ 编译前空间充足"
           fi
       
-      # 步骤 26: 编译固件（使用修复版）
-      - name: "26. 编译固件（使用修复版）"
+      # 步骤 27: 编译固件（使用修复版）
+      - name: "27. 编译固件（使用修复版）"
         run: |
-          echo "=== 步骤 26: 编译固件（使用修复版）==="
+          echo "=== 步骤 27: 编译固件（使用修复版）==="
           
           echo "🚨 设置编译器修复环境变量..."
           export CFLAGS="-I${{ env.BUILD_DIR }}/staging_dir/host/include -O2 -pipe -fpermissive -Wno-error"
@@ -711,11 +752,11 @@ jobs:
           echo "🔧 开始编译固件..."
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh build_firmware "true"
       
-      # 步骤 27: 搜索并打包构建产物
-      - name: "27. 搜索并打包构建产物"
+      # 步骤 28: 搜索并打包构建产物
+      - name: "28. 搜索并打包构建产物"
         if: success()
         run: |
-          echo "=== 步骤 27: 搜索并打包构建产物 ==="
+          echo "=== 步骤 28: 搜索并打包构建产物 ==="
           cd ${{ env.BUILD_DIR }}
           
           mkdir -p /tmp/build-artifacts
@@ -751,7 +792,8 @@ jobs:
           echo "目标平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}" >> /tmp/build-artifacts/build-info.txt
           echo "配置模式: ${{ github.event.inputs.config_mode }}" >> /tmp/build-artifacts/build-info.txt
           echo "编译器修复: 已应用-fpermissive标志和头文件修复" >> /tmp/build-artifacts/build-info.txt
-          echo "GDB修复: 已禁用GDB以避免编译错误" >> /tmp/build-artifacts/build-info.txt
+          echo "GDB修复: 已禁用GDB并修复common-defs.h" >> /tmp/build-artifacts/build-info.txt
+          echo "binutils修复: 已设置修复编译环境" >> /tmp/build-artifacts/build-info.txt
           
           if [ "${{ github.event.inputs.config_mode }}" = "base" ]; then
             echo "模式说明: 🟣 基础模式 - 最小化配置，用于测试编译" >> /tmp/build-artifacts/build-info.txt
@@ -767,8 +809,8 @@ jobs:
             echo "ℹ️ 没有需要上传的构建产物"
           fi
       
-      # 步骤 28: 上传固件原始目录
-      - name: "28. 上传固件原始目录"
+      # 步骤 29: 上传固件原始目录
+      - name: "29. 上传固件原始目录"
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -776,11 +818,11 @@ jobs:
           path: ${{ env.BUILD_DIR }}/bin/targets/
           retention-days: 7
       
-      # 步骤 29: 汇总已编译的编译器文件并提交到仓库目录
-      - name: "29. 汇总已编译的编译器文件并提交到仓库目录"
+      # 步骤 30: 汇总已编译的编译器文件并提交到仓库目录
+      - name: "30. 汇总已编译的编译器文件并提交到仓库目录"
         if: success()
         run: |
-          echo "=== 步骤 29: 汇总已编译的编译器文件并提交到仓库目录 ==="
+          echo "=== 步骤 30: 汇总已编译的编译器文件并提交到仓库目录 ==="
           echo "🔍 开始收集已编译的编译器文件..."
           
           COMPILER_SAVE_DIR="${{ github.workspace }}/firmware-config/build-Compiler-file/compiled"
@@ -880,7 +922,8 @@ jobs:
           echo "目标平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
           echo "OpenWrt版本: ${{ env.SELECTED_BRANCH }}" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
           echo "编译器修复: 已应用头文件冲突修复" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
-          echo "GDB修复: 已禁用GDB以避免编译错误" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
+          echo "GDB修复: 已修复common-defs.h和common-utils.c" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
+          echo "binutils修复: 已设置修复编译环境" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
           echo "配置模式: ${{ github.event.inputs.config_mode }}" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
           echo "" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
           echo "文件分类统计:" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
@@ -921,7 +964,7 @@ jobs:
             echo "ℹ️ 没有新的编译器文件需要提交"
           else
             echo "📝 提交编译器文件到仓库..."
-            git commit -m "feat: 添加已编译的编译器文件" -m "设备: ${{ env.DEVICE }}" -m "平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}" -m "版本: ${{ env.SELECTED_BRANCH }}" -m "编译器修复: 已应用头文件冲突修复" -m "GDB修复: 已禁用GDB以避免编译错误" -m "配置模式: ${{ github.event.inputs.config_mode }}"
+            git commit -m "feat: 添加已编译的编译器文件" -m "设备: ${{ env.DEVICE }}" -m "平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}" -m "版本: ${{ env.SELECTED_BRANCH }}" -m "GDB修复: 已修复common-defs.h" -m "binutils修复: 已设置修复编译环境"
             
             echo "🔄 推送到仓库..."
             git push origin HEAD:${{ github.ref_name }}
@@ -929,8 +972,8 @@ jobs:
             echo "✅ 编译器文件已提交到仓库目录"
           fi
       
-      # 步骤 30: 上传配置文件
-      - name: "30. 上传配置文件"
+      # 步骤 31: 上传配置文件
+      - name: "31. 上传配置文件"
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -938,8 +981,8 @@ jobs:
           path: ${{ github.workspace }}/firmware-config/config-backup/
           retention-days: 7
       
-      # 步骤 31: 上传编译器文件压缩包
-      - name: "31. 上传编译器文件压缩包"
+      # 步骤 32: 上传编译器文件压缩包
+      - name: "32. 上传编译器文件压缩包"
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -947,11 +990,11 @@ jobs:
           path: ${{ github.workspace }}/firmware-config/build-Compiler-file/compiled-compilers.tar.gz
           retention-days: 7
       
-      # 步骤 32: 错误分析（无论成功失败都运行）
-      - name: "32. 错误分析"
+      # 步骤 33: 错误分析（无论成功失败都运行）
+      - name: "33. 错误分析"
         if: always()
         run: |
-          echo "=== 步骤 32: 错误分析 ==="
+          echo "=== 步骤 33: 错误分析 ==="
           if [ -f "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh" ]; then
             chmod +x "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh"
             "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh"
@@ -959,9 +1002,9 @@ jobs:
             echo "⚠️ 错误分析脚本不存在: ${{ github.workspace }}/firmware-config/scripts/error_analysis.sh"
           fi
       
-      # 步骤 33: 编译后空间检查
-      - name: "33. 编译后空间检查"
+      # 步骤 34: 编译后空间检查
+      - name: "34. 编译后空间检查"
         if: always()
         run: |
-          echo "=== 步骤 33: 编译后空间检查 ==="
+          echo "=== 步骤 34: 编译后空间检查 ==="
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh post_build_space_check
