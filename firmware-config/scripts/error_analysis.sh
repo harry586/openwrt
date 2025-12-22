@@ -58,15 +58,7 @@ if [ -f ".config" ]; then
     
     echo "" >> error_analysis.log
     echo "=== 关键USB配置状态 ===" >> error_analysis.log
-    USB_CONFIGS=(
-        "kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-storage"
-        "kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3"
-        "kmod-usb-xhci-hcd" "kmod-usb-ehci" "kmod-usb-ohci"
-        "kmod-usb-storage-uas" "kmod-usb-storage-extras"
-        "kmod-scsi-core" "kmod-scsi-generic"
-        "kmod-usb-uhci" "kmod-usb2-pci" "kmod-usb-ohci-pci"
-        "kmod-usb-xhci-pci" "kmod-usb-xhci-mtk" "kmod-usb-xhci-plat-hcd"
-    )
+    USB_CONFIGS=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-storage" "kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-xhci-hcd" "kmod-usb-ehci" "kmod-usb-ohci" "kmod-usb-storage-uas" "kmod-usb-storage-extras" "kmod-scsi-core" "kmod-scsi-generic" "kmod-usb-uhci" "kmod-usb2-pci" "kmod-usb-ohci-pci" "kmod-usb-xhci-pci" "kmod-usb-xhci-mtk" "kmod-usb-xhci-plat-hcd")
     
     for config in "${USB_CONFIGS[@]}"; do
         if grep -q "CONFIG_PACKAGE_${config}=y" .config; then
@@ -186,9 +178,7 @@ if [ -f ".config" ]; then
     
     echo "" >> error_analysis.log
     echo "=== 编译器配置状态 ===" >> error_analysis.log
-    COMPILER_CONFIGS=(
-        "gcc" "binutils" "libc" "libgcc" "musl" "glibc"
-    )
+    COMPILER_CONFIGS=("gcc" "binutils" "libc" "libgcc" "musl" "glibc")
     
     for config in "${COMPILER_CONFIGS[@]}"; do
         if grep -q "CONFIG_PACKAGE_${config}" .config; then
@@ -322,6 +312,29 @@ if [ -d "staging_dir" ]; then
         if [ -f "$gdb_dir/gdb/Makefile" ]; then
             echo "  ✅ Makefile存在" >> error_analysis.log
         fi
+        # 检查common-defs.h
+        if [ -f "$gdb_dir/gdbsupport/common-defs.h" ]; then
+            echo "  ✅ common-defs.h存在" >> error_analysis.log
+            if [ -f "$gdb_dir/gdbsupport/common-defs.h.backup" ]; then
+                echo "  ✅ common-defs.h备份存在" >> error_analysis.log
+            fi
+        fi
+    done
+    
+    # 新增：检查binutils构建目录
+    echo "" >> error_analysis.log
+    echo "🔍 检查binutils构建目录状态:" >> error_analysis.log
+    find build_dir -name "binutils-2.40" -type d 2>/dev/null | while read binutils_dir; do
+        echo "binutils目录: $binutils_dir" >> error_analysis.log
+        echo "  目录大小: $(du -sh "$binutils_dir" 2>/dev/null | cut -f1)" >> error_analysis.log
+        if [ -f "$binutils_dir/Makefile" ]; then
+            echo "  ✅ Makefile存在" >> error_analysis.log
+        fi
+        if [ -f "$binutils_dir/config.log" ]; then
+            echo "  ✅ config.log存在" >> error_analysis.log
+            echo "  最后10行配置日志:" >> error_analysis.log
+            tail -10 "$binutils_dir/config.log" >> error_analysis.log
+        fi
     done
     
 else
@@ -337,19 +350,22 @@ if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
     echo "3. musl版本更新: 可能需要更新的musl C库" >> error_analysis.log
     echo "4. libtool版本: 可能需要更新的libtool版本" >> error_analysis.log
     echo "5. GCC头文件冲突: GCC 8.4.0可能有头文件声明冲突" >> error_analysis.log
-    echo "6. GDB编译错误: GDB 10.1可能有内部错误断言失败" >> error_analysis.log
+    echo "6. GDB编译错误: GDB 10.1可能有_GL_ATTRIBUTE_FORMAT_PRINTF错误" >> error_analysis.log
+    echo "7. binutils编译错误: binutils 2.40可能有配置或编译错误" >> error_analysis.log
     echo "" >> error_analysis.log
     echo "🛠️ 解决方案:" >> error_analysis.log
     echo "1. 清理编译器重新下载: rm -rf staging_dir/compiler-*" >> error_analysis.log
     echo "2. 清理构建目录: rm -rf build_dir/target-*" >> error_analysis.log
     echo "3. 确保使用正确的编译器: arm-openwrt-linux-muslgnueabi-gcc" >> error_analysis.log
     echo "4. 检查内核配置: 确保CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> error_analysis.log
-    echo "5. 安装最新的libtool和autoconf: sudo apt-get install libtool autoconf automake libltdl-dev" >> error_analysis.log
+    echo "5. 安装最新的libtool和autoconf: sudo apt-get install libtool autoconf automake libltdl-dev gettext pkg-config" >> error_analysis.log
     echo "6. 复制libtool.m4到正确位置: cp /usr/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/" >> error_analysis.log
     echo "7. 修复GCC头文件冲突: 修改gcc/system.h和auto-host.h文件" >> error_analysis.log
     echo "8. 添加-fpermissive编译标志: export CFLAGS=\"\$CFLAGS -fpermissive\"" >> error_analysis.log
-    echo "9. 禁用GDB编译（如果不需调试）: 在.config中添加 # CONFIG_PACKAGE_gdb is not set" >> error_analysis.log
-    echo "10. 修复GDB内部错误: 在gdb源码中添加DISABLE_ASSERT宏定义" >> error_analysis.log
+    echo "9. 修复GDB _GL_ATTRIBUTE_FORMAT_PRINTF错误: 修改gdbsupport/common-defs.h第111行" >> error_analysis.log
+    echo "10. 禁用GDB编译（如果不需调试）: 在.config中添加 # CONFIG_PACKAGE_gdb is not set" >> error_analysis.log
+    echo "11. 修复GDB内部错误: 在gdb源码中添加DISABLE_ASSERT宏定义" >> error_analysis.log
+    echo "12. 修复binutils编译错误: 检查config.log，设置正确的编译环境变量" >> error_analysis.log
 fi
 
 echo "" >> error_analysis.log
@@ -396,7 +412,11 @@ if [ -f "build.log" ]; then
     
     echo "" >> error_analysis.log
     echo "❌ GDB编译错误（新增关键检查）:" >> error_analysis.log
-    grep -E "gdb.*failed|ERROR: toolchain/gdb failed|internal_error.*Assertion|xml-tdesc.o.*Error" build.log -i | head -10 >> error_analysis.log || echo "无GDB编译错误" >> error_analysis.log
+    grep -E "_GL_ATTRIBUTE_FORMAT_PRINTF|gdb.*failed|ERROR: toolchain/gdb failed|internal_error.*Assertion|xml-tdesc.o.*Error" build.log -i | head -10 >> error_analysis.log || echo "无GDB编译错误" >> error_analysis.log
+    
+    echo "" >> error_analysis.log
+    echo "❌ binutils编译错误（新增关键检查）:" >> error_analysis.log
+    grep -E "toolchain/binutils/compile.*failed|binutils.*Error|binutils.*failed" build.log -i | head -10 >> error_analysis.log || echo "无binutils编译错误" >> error_analysis.log
     
     echo "" >> error_analysis.log
     echo "⚠️ 被忽略的错误:" >> error_analysis.log
@@ -419,29 +439,7 @@ echo "开始收集和分析错误日志..." >> error_analysis.log
 echo "使用日志文件: build.log" >> error_analysis.log
 echo "" >> error_analysis.log
 
-ERROR_CATEGORIES=(
-    "严重错误 (Failed):|failed|FAILED"
-    "编译错误 (error:):|error:"
-    "退出错误 (error 1/error 2):|error [12]|Error [12]"
-    "文件缺失错误:|No such file|file not found|cannot find"
-    "依赖错误:|depends on|missing dependencies"
-    "配置错误:|configuration error|config error"
-    "语法错误:|syntax error"
-    "类型错误:|type error"
-    "未定义引用:|undefined reference"
-    "内存错误:|out of memory|Killed process|oom"
-    "权限错误:|Permission denied|operation not permitted"
-    "网络错误:|Connection refused|timeout|Network is unreachable"
-    "哈希校验错误:|Hash mismatch|Bad hash"
-    "管道错误:|Broken pipe"
-    "编译器错误:|compiler|gcc|binutils|ld"
-    "头文件错误:|stdc-predef.h|host/include|include.*not found"
-    "libtool错误:|libtool|aclocal|autoconf|automake|libtool.m4"
-    "C库相关错误:|musl|glibc|uclibc|libc"
-    "GCC头文件声明错误:|declaration does not declare anything|conflicting declaration of C function|ambiguating new declaration"
-    "GDB编译错误:|gdb.*failed|ERROR: toolchain/gdb failed|internal_error.*Assertion|xml-tdesc.o.*Error"
-    "配置不同步警告:|configuration is out of sync"
-)
+ERROR_CATEGORIES=("严重错误 (Failed):|failed|FAILED" "编译错误 (error:):|error:" "退出错误 (error 1/error 2):|error [12]|Error [12]" "文件缺失错误:|No such file|file not found|cannot find" "依赖错误:|depends on|missing dependencies" "配置错误:|configuration error|config error" "语法错误:|syntax error" "类型错误:|type error" "未定义引用:|undefined reference" "内存错误:|out of memory|Killed process|oom" "权限错误:|Permission denied|operation not permitted" "网络错误:|Connection refused|timeout|Network is unreachable" "哈希校验错误:|Hash mismatch|Bad hash" "管道错误:|Broken pipe" "编译器错误:|compiler|gcc|binutils|ld" "头文件错误:|stdc-predef.h|host/include|include.*not found" "libtool错误:|libtool|aclocal|autoconf|automake|libtool.m4" "C库相关错误:|musl|glibc|uclibc|libc" "GCC头文件声明错误:|declaration does not declare anything|conflicting declaration of C function|ambiguating new declaration" "GDB编译错误:|_GL_ATTRIBUTE_FORMAT_PRINTF|gdb.*failed|ERROR: toolchain/gdb failed|internal_error.*Assertion|xml-tdesc.o.*Error" "binutils编译错误:|toolchain/binutils/compile.*failed|binutils.*Error|binutils.*failed" "配置不同步警告:|configuration is out of sync")
 
 for category in "${ERROR_CATEGORIES[@]}"; do
     IFS='|' read -r category_name patterns <<< "$category"
@@ -457,6 +455,37 @@ for category in "${ERROR_CATEGORIES[@]}"; do
 done
 
 echo "=== 错误原因分析和建议（增强版）===" >> error_analysis.log
+
+echo "❌ GDB _GL_ATTRIBUTE_FORMAT_PRINTF 错误（新增关键修复）" >> error_analysis.log
+echo "💡 可能原因:" >> error_analysis.log
+echo "   - GDB源码中的_GL_ATTRIBUTE_FORMAT_PRINTF宏定义错误" >> error_analysis.log
+echo "   - gdbsupport/common-defs.h第111行附近有语法错误" >> error_analysis.log
+echo "   - 编译器无法识别_GL_ATTRIBUTE_FORMAT_PRINTF属性" >> error_analysis.log
+echo "🛠️ 解决方案:" >> error_analysis.log
+echo "   - 找到GDB源码目录: find build_dir -name 'gdb-10.1' -type d" >> error_analysis.log
+echo "   - 备份common-defs.h: cp gdbsupport/common-defs.h gdbsupport/common-defs.h.backup" >> error_analysis.log
+echo "   - 修复第111行:" >> error_analysis.log
+echo "     sed -i '111s/.*/#define _GL_ATTRIBUTE_FORMAT_PRINTF(format_idx, arg_idx)/' gdbsupport/common-defs.h" >> error_analysis.log
+echo "     sed -i '112s/.*/extern void __attribute__ ((__format__ (__printf__, format_idx, arg_idx))) gdb_printf (const char *format, ...);/' gdbsupport/common-defs.h" >> error_analysis.log
+echo "   - 或者禁用GDB编译: echo '# CONFIG_PACKAGE_gdb is not set' >> .config" >> error_analysis.log
+echo "" >> error_analysis.log
+
+echo "❌ binutils编译错误（新增关键修复）" >> error_analysis.log
+echo "💡 可能原因:" >> error_analysis.log
+echo "   - binutils配置错误" >> error_analysis.log
+echo "   - 缺少必要的编译工具或库" >> error_analysis.log
+echo "   - 编译环境变量设置不正确" >> error_analysis.log
+echo "   - 头文件路径问题" >> error_analysis.log
+echo "🛠️ 解决方案:" >> error_analysis.log
+echo "   - 检查binutils配置日志: cat build_dir/binutils-2.40/config.log | grep -i error" >> error_analysis.log
+echo "   - 设置正确的编译环境变量:" >> error_analysis.log
+echo "     export CFLAGS=\"-I\$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive\"" >> error_analysis.log
+echo "     export CXXFLAGS=\"\$CFLAGS\"" >> error_analysis.log
+echo "     export LDFLAGS=\"-L\$BUILD_DIR/staging_dir/host/lib -Wl,-O1\"" >> error_analysis.log
+echo "     export CPPFLAGS=\"-I\$BUILD_DIR/staging_dir/host/include\"" >> error_analysis.log
+echo "   - 确保安装了gettext和pkg-config: sudo apt-get install gettext pkg-config" >> error_analysis.log
+echo "   - 清理并重新编译binutils: rm -rf build_dir/binutils-2.40 && make toolchain/binutils/compile -j2 V=s" >> error_analysis.log
+echo "" >> error_analysis.log
 
 echo "❌ 文件缺失错误" >> error_analysis.log
 echo "💡 可能原因:" >> error_analysis.log
@@ -595,40 +624,6 @@ echo "     4. 同样处理auto-host.h文件" >> error_analysis.log
 echo "     5. 重新编译" >> error_analysis.log
 echo "" >> error_analysis.log
 
-echo "❌ GDB编译错误（新增关键修复）" >> error_analysis.log
-echo "💡 可能原因:" >> error_analysis.log
-echo "   - GDB内部断言失败: internal_error Assertion" >> error_analysis.log
-echo "   - GDB 10.1版本与当前环境不兼容" >> error_analysis.log
-echo "   - 缺少必要的开发库或头文件" >> error_analysis.log
-echo "   - 编译器选项冲突导致GDB编译失败" >> error_analysis.log
-echo "   - XML描述文件处理错误（xml-tdesc.o相关）" >> error_analysis.log
-echo "🛠️ 解决方案:" >> error_analysis.log
-echo "   - 方案1: 禁用GDB编译（推荐，大多数用户不需要GDB）" >> error_analysis.log
-echo "     在.config中添加: # CONFIG_PACKAGE_gdb is not set" >> error_analysis.log
-echo "     运行: echo '# CONFIG_PACKAGE_gdb is not set' >> .config" >> error_analysis.log
-echo "     重新编译: make defconfig && make -j2 V=s" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "   - 方案2: 修复GDB源码中的断言错误" >> error_analysis.log
-echo "     1. 找到GDB源码目录: find build_dir -name 'gdb-10.1' -type d" >> error_analysis.log
-echo "     2. 备份原始文件: cp gdb/common/common-utils.c gdb/common/common-utils.c.backup" >> error_analysis.log
-echo "     3. 添加DISABLE_ASSERT宏定义: 在文件开头添加 #define DISABLE_ASSERT 1" >> error_analysis.log
-echo "     4. 修改internal_error函数调用，跳过断言检查" >> error_analysis.log
-echo "     5. 重新编译GDB" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "   - 方案3: 降级到GDB旧版本" >> error_analysis.log
-echo "     1. 删除当前GDB: rm -rf build_dir/toolchain-*/gdb-10.1" >> error_analysis.log
-echo "     2. 修改工具链配置使用GDB 9.2或更早版本" >> error_analysis.log
-echo "     3. 重新下载和编译" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "   - 方案4: 跳过GDB错误继续编译（风险较高）" >> error_analysis.log
-echo "     1. 修改toolchain/gdb/Makefile，添加忽略错误的编译选项" >> error_analysis.log
-echo "     2. 或者手动编译GDB并复制到正确位置" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "   - 方案5: 使用更宽松的编译器选项" >> error_analysis.log
-echo "     export CFLAGS=\"\$CFLAGS -fpermissive -Wno-error\"" >> error_analysis.log
-echo "     export CXXFLAGS=\"\$CXXFLAGS -fpermissive -Wno-error\"" >> error_analysis.log
-echo "" >> error_analysis.log
-
 echo "ℹ️ 管道错误" >> error_analysis.log
 echo "💡 说明:" >> error_analysis.log
 echo "   - 这是并行编译的正常现象，通常不影响最终结果" >> error_analysis.log
@@ -658,7 +653,7 @@ echo "4. ⚙️ 检查配置冲突: make defconfig" >> error_analysis.log
 echo "5. 🐛 减少并行任务: make -j2 V=s" >> error_analysis.log
 echo "6. 🌐 检查网络连接和代理设置" >> error_analysis.log
 echo "7. 🔧 检查编译器: 确保 staging_dir/compiler-* 目录存在且完整" >> error_analysis.log
-echo "8. 📚 安装缺失的开发包: sudo apt-get install linux-headers-generic libc6-dev libtool autoconf automake libltdl-dev m4" >> error_analysis.log
+echo "8. 📚 安装缺失的开发包: sudo apt-get install linux-headers-generic libc6-dev libtool autoconf automake libltdl-dev m4 gettext pkg-config" >> error_analysis.log
 echo "9. 🔌 检查USB插件: 确保所有关键USB驱动已启用（当前配置已强制启用）" >> error_analysis.log
 echo "10. 🖥️ 检查平台专用驱动: 根据您的设备平台（高通/雷凌）启用相应驱动" >> error_analysis.log
 echo "11. 💾 检查文件系统支持: 确保NTFS3, ext4, vfat等文件系统驱动已启用" >> error_analysis.log
@@ -668,147 +663,59 @@ echo "14. 🛠️ 设置环境变量: 确保ACLOCAL_PATH和PKG_CONFIG_PATH设置
 echo "15. 🚨 修复GCC头文件冲突: 如果遇到GCC声明错误，执行修复步骤" >> error_analysis.log
 echo "16. 📝 添加-fpermissive标志: export CFLAGS=\"\$CFLAGS -fpermissive\"" >> error_analysis.log
 echo "17. 🚫 禁用GDB编译（解决GDB错误）: echo '# CONFIG_PACKAGE_gdb is not set' >> .config" >> error_analysis.log
-echo "18. 🔧 修复GDB内部断言: 修改gdb源码中的internal_error断言检查" >> error_analysis.log
+echo "18. 🔧 修复GDB _GL_ATTRIBUTE_FORMAT_PRINTF错误: 修改gdbsupport/common-defs.h第111行" >> error_analysis.log
+echo "19. 🔧 修复binutils编译错误: 检查config.log，设置正确的编译环境" >> error_analysis.log
 echo "" >> error_analysis.log
 
-echo "=== 针对USB问题的特殊修复方案 ===" >> error_analysis.log
-echo "如果USB功能仍然有问题，请尝试以下步骤:" >> error_analysis.log
+echo "=== 针对GDB _GL_ATTRIBUTE_FORMAT_PRINTF错误的特殊修复方案 ===" >> error_analysis.log
+echo "如果遇到GDB _GL_ATTRIBUTE_FORMAT_PRINTF错误，请尝试以下步骤:" >> error_analysis.log
 echo "" >> error_analysis.log
-echo "1. 🔍 检查USB配置状态:" >> error_analysis.log
-echo "   grep 'CONFIG_PACKAGE_kmod-usb' .config | grep '=y'" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "2. 🔧 手动添加缺失的USB驱动（如果发现缺失）:" >> error_analysis.log
-echo "   对于高通IPQ40xx平台:" >> error_analysis.log
-echo "   echo 'CONFIG_PACKAGE_kmod-usb-dwc3=y' >> .config" >> error_analysis.log
-echo "   echo 'CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y' >> .config" >> error_analysis.log
-echo "   echo 'CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y' >> .config" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "   对于雷凌MT76xx平台:" >> error_analysis.log
-echo "   echo 'CONFIG_PACKAGE_kmod-usb-ohci-pci=y' >> .config" >> error_analysis.log
-echo "   echo 'CONFIG_PACKAGE_kmod-usb2-pci=y' >> .config" >> error_analysis.log
-echo "   echo 'CONFIG_PACKAGE_kmod-usb-xhci-mtk=y' >> .config" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "3. 🛠️ 重新应用配置:" >> error_analysis.log
-echo "   make defconfig" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "4. 🔄 重新编译:" >> error_analysis.log
-echo "   make -j$(nproc) V=s" >> error_analysis.log
-echo "" >> error_analysis.log
-
-echo "=== 针对头文件和libtool错误的修复方案（紧急修复）===" >> error_analysis.log
-echo "如果遇到头文件或libtool错误，请尝试以下步骤:" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "1. 📦 安装必要的开发包:" >> error_analysis.log
-echo "   sudo apt-get update" >> error_analysis.log
-echo "   sudo apt-get install linux-headers-generic libc6-dev libc6-dev-i386 \\" >> error_analysis.log
-echo "       libc6-dev-x32 libc6-dev-armhf-cross libc6-dev-arm64-cross \\" >> error_analysis.log
-echo "       libtool autoconf automake libltdl-dev m4 libtool-bin gperf \\" >> error_analysis.log
-echo "       autoconf-archive" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "2. 📁 创建缺失的目录:" >> error_analysis.log
-echo "   mkdir -p staging_dir/host/include" >> error_analysis.log
-echo "   mkdir -p staging_dir/host/share/aclocal" >> error_analysis.log
-echo "   mkdir -p staging_dir/host/share/aclocal-1.16" >> error_analysis.log
-echo "   mkdir -p staging_dir/host/lib/pkgconfig" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "3. 📋 复制必要的文件:" >> error_analysis.log
-echo "   cp /usr/include/stdc-predef.h staging_dir/host/include/ 2>/dev/null || true" >> error_analysis.log
-echo "   cp /usr/include/stdio.h staging_dir/host/include/ 2>/dev/null || true" >> error_analysis.log
-echo "   cp /usr/include/features.h staging_dir/host/include/ 2>/dev/null || true" >> error_analysis.log
-echo "   cp /usr/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/ 2>/dev/null || true" >> error_analysis.log
-echo "   cp /usr/share/aclocal-1.16/*.m4 staging_dir/host/share/aclocal-1.16/ 2>/dev/null || true" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "4. 🌍 设置环境变量:" >> error_analysis.log
-echo "   export CFLAGS=\"-I\${BUILD_DIR}/staging_dir/host/include -O2 -pipe\"" >> error_analysis.log
-echo "   export LDFLAGS=\"-L\${BUILD_DIR}/staging_dir/host/lib -Wl,-O1\"" >> error_analysis.log
-echo "   export CPPFLAGS=\"-I\${BUILD_DIR}/staging_dir/host/include\"" >> error_analysis.log
-echo "   export ACLOCAL_PATH=\"\${BUILD_DIR}/staging_dir/host/share/aclocal:\${ACLOCAL_PATH}\"" >> error_analysis.log
-echo "   export PKG_CONFIG_PATH=\"\${BUILD_DIR}/staging_dir/host/lib/pkgconfig:\${PKG_CONFIG_PATH}\"" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "5. 🛠️ 修复libtool配置:" >> error_analysis.log
-echo "   if [ -f \"staging_dir/host/bin/libtool\" ]; then" >> error_analysis.log
-echo "     staging_dir/host/bin/libtool --config | head -20" >> error_analysis.log
-echo "   fi" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "6. 🔄 重新编译:" >> error_analysis.log
-echo "   make -j2 V=s" >> error_analysis.log
-echo "" >> error_analysis.log
-
-echo "=== 针对GCC头文件冲突错误的修复方案（关键修复）===" >> error_analysis.log
-echo "如果遇到GCC头文件声明冲突错误，请执行以下步骤:" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "1. 🔍 定位GCC源码目录:" >> error_analysis.log
-echo "   GCC_DIR=\$(find build_dir -name 'gcc-8.4.0' -type d 2>/dev/null | head -1)" >> error_analysis.log
-echo "   if [ -n \"\$GCC_DIR\" ]; then" >> error_analysis.log
-echo "     echo \"找到GCC目录: \$GCC_DIR\"" >> error_analysis.log
-echo "   else" >> error_analysis.log
-echo "     echo \"未找到GCC目录，可能已经修复\"" >> error_analysis.log
-echo "     exit 0" >> error_analysis.log
-echo "   fi" >> error_analysis.log
+echo "1. 🔍 定位GDB源码目录:" >> error_analysis.log
+echo "   GDB_DIR=\$(find build_dir -type d -name 'gdb-*' 2>/dev/null | head -1)" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "2. 📋 备份原始文件:" >> error_analysis.log
-echo "   cp \"\$GCC_DIR/gcc/system.h\" \"\$GCC_DIR/gcc/system.h.backup\"" >> error_analysis.log
-echo "   cp \"\$GCC_DIR/gcc/auto-host.h\" \"\$GCC_DIR/gcc/auto-host.h.backup\"" >> error_analysis.log
+echo "   cp \"\$GDB_DIR/gdbsupport/common-defs.h\" \"\$GDB_DIR/gdbsupport/common-defs.h.backup\"" >> error_analysis.log
 echo "" >> error_analysis.log
-echo "3. 🔧 修复system.h文件:" >> error_analysis.log
-echo "   sed -i 's/^void\\* sbrk(int);\$//' \"\$GCC_DIR/gcc/system.h\"" >> error_analysis.log
-echo "   sed -i 's/^const char\\* strsignal(int);\$//' \"\$GCC_DIR/gcc/system.h\"" >> error_analysis.log
-echo "   sed -i 's/^char\\* basename(const char\\*);\$//' \"\$GCC_DIR/gcc/system.h\"" >> error_analysis.log
+echo "3. 🔧 修复common-defs.h:" >> error_analysis.log
+echo "   sed -i '111s/.*/#define _GL_ATTRIBUTE_FORMAT_PRINTF(format_idx, arg_idx)/' \"\$GDB_DIR/gdbsupport/common-defs.h\"" >> error_analysis.log
+echo "   sed -i '112s/.*/extern void __attribute__ ((__format__ (__printf__, format_idx, arg_idx))) gdb_printf (const char *format, ...);/' \"\$GDB_DIR/gdbsupport/common-defs.h\"" >> error_analysis.log
 echo "" >> error_analysis.log
-echo "4. 🔧 修复auto-host.h文件:" >> error_analysis.log
-echo "   sed -i 's/^#define HAVE_DECL_SBRK.*\$/#undef HAVE_DECL_SBRK/' \"\$GCC_DIR/gcc/auto-host.h\"" >> error_analysis.log
-echo "   sed -i 's/^#define HAVE_DECL_STRSIGNAL.*\$/#undef HAVE_DECL_STRSIGNAL/' \"\$GCC_DIR/gcc/auto-host.h\"" >> error_analysis.log
-echo "   sed -i 's/^#define HAVE_DECL_BASENAME.*\$/#undef HAVE_DECL_BASENAME/' \"\$GCC_DIR/gcc/auto-host.h\"" >> error_analysis.log
+echo "4. 🔧 修复common-utils.c中的断言错误:" >> error_analysis.log
+echo "   if [ -f \"\$GDB_DIR/gdb/common/common-utils.c\" ]; then" >> error_analysis.log
+echo "     cp \"\$GDB_DIR/gdb/common/common-utils.c\" \"\$GDB_DIR/gdb/common/common-utils.c.backup\"" >> error_analysis.log
+echo "     sed -i '1i#define DISABLE_ASSERT 1' \"\$GDB_DIR/gdb/common/common-utils.c\"" >> error_analysis.log
+echo "     sed -i 's/internal_error (file, line, _(\"%s: Assertion \`%s'\'' failed.\"),/fprintf(stderr, \"GDB Assertion failed: %s\\n\", __func__); return;/g' \"\$GDB_DIR/gdb/common/common-utils.c\"" >> error_analysis.log
+echo "   fi" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "5. 🌍 设置编译环境变量:" >> error_analysis.log
-echo "   export CFLAGS=\"-I\${BUILD_DIR}/staging_dir/host/include -O2 -pipe -fpermissive\"" >> error_analysis.log
+echo "   export CFLAGS=\"-I\$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive -Wno-error\"" >> error_analysis.log
 echo "   export CXXFLAGS=\"\$CFLAGS\"" >> error_analysis.log
-echo "   export LDFLAGS=\"-L\${BUILD_DIR}/staging_dir/host/lib -Wl,-O1\"" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "6. 🔄 重新编译:" >> error_analysis.log
 echo "   make -j2 V=s" >> error_analysis.log
 echo "" >> error_analysis.log
 
-echo "=== 针对GDB编译错误的修复方案（关键修复）===" >> error_analysis.log
-echo "如果遇到GDB编译错误（internal_error Assertion等），请执行以下步骤:" >> error_analysis.log
+echo "=== 针对binutils编译错误的特殊修复方案 ===" >> error_analysis.log
+echo "如果遇到binutils编译错误，请尝试以下步骤:" >> error_analysis.log
 echo "" >> error_analysis.log
-echo "1. 🚫 方案1: 禁用GDB编译（最简单有效）" >> error_analysis.log
-echo "   cd \$BUILD_DIR" >> error_analysis.log
-echo "   echo '# CONFIG_PACKAGE_gdb is not set' >> .config" >> error_analysis.log
-echo "   make defconfig" >> error_analysis.log
-echo "   echo '✅ 已禁用GDB编译'" >> error_analysis.log
-echo "   echo '📋 重新编译固件...'" >> error_analysis.log
-echo "   make -j2 V=s" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "2. 🔧 方案2: 修复GDB源码中的断言错误" >> error_analysis.log
-echo "   GDB_DIR=\$(find build_dir -name 'gdb-10.1' -type d 2>/dev/null | head -1)" >> error_analysis.log
-echo "   if [ -n \"\$GDB_DIR\" ]; then" >> error_analysis.log
-echo "     echo \"找到GDB目录: \$GDB_DIR\"" >> error_analysis.log
-echo "     echo \"备份原始文件...\"" >> error_analysis.log
-echo "     cp \"\$GDB_DIR/gdb/common/common-utils.c\" \"\$GDB_DIR/gdb/common/common-utils.c.backup\"" >> error_analysis.log
-echo "     echo \"添加DISABLE_ASSERT宏定义...\"" >> error_analysis.log
-echo "     sed -i '1i#define DISABLE_ASSERT 1' \"\$GDB_DIR/gdb/common/common-utils.c\"" >> error_analysis.log
-echo "     echo \"修改internal_error函数调用...\"" >> error_analysis.log
-echo "     sed -i 's/internal_error (file, line, _(\"%s: Assertion \`%s'\'' failed.\"),/fprintf(stderr, \"GDB Assertion failed: %s\\n\", __func__); return;/g' \"\$GDB_DIR/gdb/common/common-utils.c\"" >> error_analysis.log
-echo "     echo \"✅ GDB源码修复完成\"" >> error_analysis.log
-echo "   else" >> error_analysis.log
-echo "     echo \"未找到GDB目录\"" >> error_analysis.log
+echo "1. 🔍 检查binutils配置日志:" >> error_analysis.log
+echo "   BINUTILS_DIR=\$(find build_dir -type d -name 'binutils-*' 2>/dev/null | head -1)" >> error_analysis.log
+echo "   if [ -f \"\$BINUTILS_DIR/config.log\" ]; then" >> error_analysis.log
+echo "     echo '=== binutils配置错误 ==='" >> error_analysis.log
+echo "     grep -i error \"\$BINUTILS_DIR/config.log\"" >> error_analysis.log
 echo "   fi" >> error_analysis.log
 echo "" >> error_analysis.log
-echo "3. 📝 方案3: 添加编译选项跳过GDB错误" >> error_analysis.log
-echo "   echo '修改编译选项跳过GDB错误...'" >> error_analysis.log
-echo "   export CFLAGS=\"-I\$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive -Wno-error -Wno-implicit-function-declaration\"" >> error_analysis.log
+echo "2. 🛠️ 设置修复编译环境:" >> error_analysis.log
+echo "   export CFLAGS=\"-I\$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive\"" >> error_analysis.log
 echo "   export CXXFLAGS=\"\$CFLAGS\"" >> error_analysis.log
 echo "   export LDFLAGS=\"-L\$BUILD_DIR/staging_dir/host/lib -Wl,-O1\"" >> error_analysis.log
-echo "   echo '✅ 编译选项已设置'" >> error_analysis.log
+echo "   export CPPFLAGS=\"-I\$BUILD_DIR/staging_dir/host/include\"" >> error_analysis.log
+echo "   export ACLOCAL_PATH=\"\$BUILD_DIR/staging_dir/host/share/aclocal:\${ACLOCAL_PATH}\"" >> error_analysis.log
+echo "   export PKG_CONFIG_PATH=\"\$BUILD_DIR/staging_dir/host/lib/pkgconfig:\${PKG_CONFIG_PATH}\"" >> error_analysis.log
 echo "" >> error_analysis.log
-echo "4. 🔄 方案4: 清理GDB重新编译" >> error_analysis.log
-echo "   echo '清理GDB构建目录...'" >> error_analysis.log
-echo "   rm -rf build_dir/toolchain-*/gdb-10.1" >> error_analysis.log
-echo "   rm -rf staging_dir/toolchain-*/gdb-10.1" >> error_analysis.log
-echo "   echo '✅ GDB目录已清理'" >> error_analysis.log
-echo "   echo '重新编译工具链...'" >> error_analysis.log
-echo "   make toolchain/install -j2 V=s" >> error_analysis.log
+echo "3. 🧹 清理并重新编译:" >> error_analysis.log
+echo "   rm -rf \"\$BINUTILS_DIR\"" >> error_analysis.log
+echo "   make toolchain/binutils/compile -j2 V=s" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "错误分析完成 - 查看 error_analysis.log 获取详细信息" >> error_analysis.log
