@@ -42,49 +42,22 @@ setup_environment() {
     sudo apt-get update || handle_error "apt-get update失败"
     
     # 基础编译工具
-    base_packages=(
-        build-essential clang flex bison g++ gawk gcc-multilib g++-multilib
-        gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip
-        zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpath
-        libpython3-dev python3 python3-dev python3-pip python3-setuptools
-        python3-yaml xsltproc zip subversion ninja-build automake autoconf
-        libtool pkg-config help2man texinfo aria2 liblz4-dev zstd
-        libcurl4-openssl-dev groff texlive texinfo cmake
-    )
+    base_packages=("build-essential" "clang" "flex" "bison" "g++" "gawk" "gcc-multilib" "g++-multilib" "gettext" "git" "libncurses5-dev" "libssl-dev" "python3-distutils" "rsync" "unzip" "zlib1g-dev" "file" "wget" "libelf-dev" "ecj" "fastjar" "java-propose-classpath" "libpython3-dev" "python3" "python3-dev" "python3-pip" "python3-setuptools" "python3-yaml" "xsltproc" "zip" "subversion" "ninja-build" "automake" "autoconf" "libtool" "pkg-config" "help2man" "texinfo" "aria2" "liblz4-dev" "zstd" "libcurl4-openssl-dev" "groff" "texlive" "texinfo" "cmake")
     
     # 网络工具
-    network_packages=(
-        curl wget net-tools iputils-ping dnsutils
-        openssh-client ca-certificates gnupg lsb-release
-    )
+    network_packages=("curl" "wget" "net-tools" "iputils-ping" "dnsutils" "openssh-client" "ca-certificates" "gnupg" "lsb-release")
     
     # 文件系统工具
-    filesystem_packages=(
-        squashfs-tools dosfstools e2fsprogs mtools
-        parted fdisk gdisk hdparm smartmontools
-    )
+    filesystem_packages=("squashfs-tools" "dosfstools" "e2fsprogs" "mtools" "parted" "fdisk" "gdisk" "hdparm" "smartmontools")
     
     # 调试工具
-    debug_packages=(
-        gdb strace ltrace valgrind
-        binutils-dev libdw-dev libiberty-dev
-    )
+    debug_packages=("gdb" "strace" "ltrace" "valgrind" "binutils-dev" "libdw-dev" "libiberty-dev")
     
     # 头文件相关包
-    header_packages=(
-        linux-headers-generic linux-libc-dev libc6-dev
-        libc6-dev-i386 libc6-dev-x32 libc6-dev-armhf-cross
-        libc6-dev-arm64-cross libc6-dev-mips64el-cross
-        libc6-dev-mipsel-cross libc6-dev-powerpc-cross
-        libc6-dev-ppc64el-cross libc6-dev-s390x-cross
-        libc6-dev-sparc64-cross libc6-dev-x32
-    )
+    header_packages=("linux-headers-generic" "linux-libc-dev" "libc6-dev" "libc6-dev-i386" "libc6-dev-x32" "libc6-dev-armhf-cross" "libc6-dev-arm64-cross" "libc6-dev-mips64el-cross" "libc6-dev-mipsel-cross" "libc6-dev-powerpc-cross" "libc6-dev-ppc64el-cross" "libc6-dev-s390x-cross" "libc6-dev-sparc64-cross" "libc6-dev-x32")
     
     # libtool和m4工具
-    libtool_packages=(
-        libtool libltdl-dev libltdl7 libtool-bin
-        m4 autoconf-archive gperf automake-1.16
-    )
+    libtool_packages=("libtool" "libltdl-dev" "libltdl7" "libtool-bin" "m4" "autoconf-archive" "gperf" "automake-1.16")
     
     log "安装基础编译工具..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${base_packages[@]}" || handle_error "安装基础编译工具失败"
@@ -104,9 +77,13 @@ setup_environment() {
     log "安装libtool相关包..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${libtool_packages[@]}" || handle_error "安装libtool相关包失败"
     
+    # 新增：安装gettext和pkg-config
+    log "安装gettext和pkg-config..."
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gettext pkg-config || log "⚠️ gettext或pkg-config安装失败"
+    
     # 检查重要工具是否安装成功
     log "=== 验证工具安装 ==="
-    important_tools=("gcc" "g++" "make" "git" "python3" "cmake" "flex" "bison" "libtool" "m4" "autoconf" "automake")
+    important_tools=("gcc" "g++" "make" "git" "python3" "cmake" "flex" "bison" "libtool" "m4" "autoconf" "automake" "gettext" "pkg-config")
     for tool in "${important_tools[@]}"; do
         if command -v $tool >/dev/null 2>&1; then
             log "✅ $tool 已安装: $(which $tool)"
@@ -548,29 +525,7 @@ generate_config() {
         echo "# 🟠 正常模式 - 完整功能配置：✅ TurboACC 网络加速 ✅ UPnP 自动端口转发 ✅ Samba 文件共享 ✅ 磁盘管理 ✅ KMS 激活服务 ✅ SmartDNS 智能DNS ✅ 家长控制 ✅ 微信推送 ✅ 流量控制 (SQM) ✅ FTP 服务器 ✅ ARP 绑定 ✅ CPU 限制 ✅ 硬盘休眠" >> .config
         echo "# 🔧 USB 3.0加强：所有平台的关键USB驱动都已强制启用！" >> .config
         
-        NORMAL_PLUGINS=(
-          "CONFIG_PACKAGE_luci-app-turboacc=y"
-          "CONFIG_PACKAGE_kmod-shortcut-fe=y"
-          "CONFIG_PACKAGE_kmod-fast-classifier=y"
-          "CONFIG_PACKAGE_luci-app-upnp=y"
-          "CONFIG_PACKAGE_miniupnpd=y"
-          "CONFIG_PACKAGE_vsftpd=y"
-          "CONFIG_PACKAGE_luci-app-vsftpd=y"
-          "CONFIG_PACKAGE_luci-app-arpbind=y"
-          "CONFIG_PACKAGE_luci-app-cpulimit=y"
-          "CONFIG_PACKAGE_samba4-server=y"
-          "CONFIG_PACKAGE_luci-app-samba4=y"
-          "CONFIG_PACKAGE_luci-app-wechatpush=y"
-          "CONFIG_PACKAGE_sqm-scripts=y"
-          "CONFIG_PACKAGE_luci-app-sqm=y"
-          "CONFIG_PACKAGE_luci-app-hd-idle=y"
-          "CONFIG_PACKAGE_luci-app-diskman=y"
-          "CONFIG_PACKAGE_luci-app-accesscontrol=y"
-          "CONFIG_PACKAGE_vlmcsd=y"
-          "CONFIG_PACKAGE_luci-app-vlmcsd=y"
-          "CONFIG_PACKAGE_smartdns=y"
-          "CONFIG_PACKAGE_luci-app-smartdns=y"
-        )
+        NORMAL_PLUGINS=("CONFIG_PACKAGE_luci-app-turboacc=y" "CONFIG_PACKAGE_kmod-shortcut-fe=y" "CONFIG_PACKAGE_kmod-fast-classifier=y" "CONFIG_PACKAGE_luci-app-upnp=y" "CONFIG_PACKAGE_miniupnpd=y" "CONFIG_PACKAGE_vsftpd=y" "CONFIG_PACKAGE_luci-app-vsftpd=y" "CONFIG_PACKAGE_luci-app-arpbind=y" "CONFIG_PACKAGE_luci-app-cpulimit=y" "CONFIG_PACKAGE_samba4-server=y" "CONFIG_PACKAGE_luci-app-samba4=y" "CONFIG_PACKAGE_luci-app-wechatpush=y" "CONFIG_PACKAGE_sqm-scripts=y" "CONFIG_PACKAGE_luci-app-sqm=y" "CONFIG_PACKAGE_luci-app-hd-idle=y" "CONFIG_PACKAGE_luci-app-diskman=y" "CONFIG_PACKAGE_luci-app-accesscontrol=y" "CONFIG_PACKAGE_vlmcsd=y" "CONFIG_PACKAGE_luci-app-vlmcsd=y" "CONFIG_PACKAGE_smartdns=y" "CONFIG_PACKAGE_luci-app-smartdns=y")
         
         for plugin in "${NORMAL_PLUGINS[@]}"; do
             echo "$plugin" >> .config
@@ -662,14 +617,7 @@ check_usb_drivers_integrity() {
     log "=== 🚨 USB驱动完整性检查 ==="
     
     missing_drivers=()
-    required_drivers=(
-        "kmod-usb-core"
-        "kmod-usb2"
-        "kmod-usb3"
-        "kmod-usb-xhci-hcd"
-        "kmod-usb-storage"
-        "kmod-scsi-core"
-    )
+    required_drivers=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-xhci-hcd" "kmod-usb-storage" "kmod-scsi-core")
     
     # 根据平台添加专用驱动
     if [ "$TARGET" = "ipq40xx" ]; then
@@ -726,12 +674,7 @@ apply_config() {
     
     # 1. 关键USB配置状态
     echo "🔧 关键USB配置状态:"
-    critical_usb_drivers=(
-        "kmod-usb-core" "kmod-usb2" "kmod-usb3" 
-        "kmod-usb-ehci" "kmod-usb-ohci" "kmod-usb-xhci-hcd"
-        "kmod-usb-storage" "kmod-usb-storage-uas" "kmod-usb-storage-extras"
-        "kmod-scsi-core" "kmod-scsi-generic"
-    )
+    critical_usb_drivers=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-ehci" "kmod-usb-ohci" "kmod-usb-xhci-hcd" "kmod-usb-storage" "kmod-usb-storage-uas" "kmod-usb-storage-extras" "kmod-scsi-core" "kmod-scsi-generic")
     
     missing_usb=0
     for driver in "${critical_usb_drivers[@]}"; do
@@ -1216,11 +1159,7 @@ pre_build_error_check() {
     else
         log "✅ .config 文件存在"
         
-        critical_configs=(
-            "CONFIG_TARGET_${TARGET}=y"
-            "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y"
-            "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
-        )
+        critical_configs=("CONFIG_TARGET_${TARGET}=y" "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y")
         
         for config in "${critical_configs[@]}"; do
             if ! grep -q "^$config" .config; then
@@ -1491,7 +1430,7 @@ pre_build_error_check() {
     fi
 }
 
-# 编译固件
+# 编译固件（增强修复版）
 build_firmware() {
     local enable_cache=$1
     load_env
@@ -1531,9 +1470,18 @@ build_firmware() {
     # 开始编译
     log "开始编译，使用 $make_jobs 个并行任务"
     
+    # 设置修复环境变量
+    export CFLAGS="-I$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive -Wno-error"
+    export CXXFLAGS="$CFLAGS"
+    export LDFLAGS="-L$BUILD_DIR/staging_dir/host/lib -Wl,-O1"
+    export CPPFLAGS="-I$BUILD_DIR/staging_dir/host/include"
+    export ACLOCAL_PATH="$BUILD_DIR/staging_dir/host/share/aclocal:\${ACLOCAL_PATH}"
+    export PKG_CONFIG_PATH="$BUILD_DIR/staging_dir/host/lib/pkgconfig:\${PKG_CONFIG_PATH}"
+    
     # 使用优化的编译参数，减少Broken pipe错误
     if [ $make_jobs -gt 4 ]; then
         log "🔧 使用优化的编译参数以减少管道错误"
+        log "🔧 设置修复后的编译环境变量"
         make -j$make_jobs V=s 2>&1 | tee build.log || {
             BUILD_EXIT_CODE=${PIPESTATUS[0]}
             log "编译失败，退出代码: $BUILD_EXIT_CODE"
@@ -1625,9 +1573,20 @@ build_firmware() {
             fi
             
             # 检查GDB编译错误
+            if grep -q "_GL_ATTRIBUTE_FORMAT_PRINTF" build.log; then
+                log "🚨 发现GDB _GL_ATTRIBUTE_FORMAT_PRINTF 错误"
+                log "💡 建议: 需要修复gdbsupport/common-defs.h文件"
+            fi
+            
             if grep -q "internal_error.*Assertion\|ERROR: toolchain/gdb failed" build.log; then
                 log "🚨 发现GDB编译错误"
-                log "💡 建议: GDB已在配置中禁用"
+                log "💡 建议: GDB已在配置中禁用或需要修复"
+            fi
+            
+            # 检查binutils错误
+            if grep -q "toolchain/binutils/compile.*failed" build.log; then
+                log "🚨 发现binutils编译错误"
+                log "💡 建议: 需要检查binutils配置和编译环境"
             fi
         fi
         
