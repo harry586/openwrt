@@ -318,6 +318,25 @@ if [ -d "staging_dir" ]; then
             if [ -f "$gdb_dir/gdbsupport/common-defs.h.backup" ]; then
                 echo "  ✅ common-defs.h备份存在" >> error_analysis.log
             fi
+            
+            # 检查_GL_ATTRIBUTE_FORMAT_PRINTF修复状态
+            echo "  🔍 检查_GL_ATTRIBUTE_FORMAT_PRINTF修复状态:" >> error_analysis.log
+            if grep -q "^#define ATTRIBUTE_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))" "$gdb_dir/gdbsupport/common-defs.h"; then
+                echo "    ✅ _GL_ATTRIBUTE_FORMAT_PRINTF已修复" >> error_analysis.log
+            else
+                echo "    ❌ _GL_ATTRIBUTE_FORMAT_PRINTF未修复" >> error_analysis.log
+                echo "    💡 建议: 运行修复脚本或手动修复common-defs.h第111行" >> error_analysis.log
+            fi
+        fi
+        
+        # 检查common-utils.c修复状态
+        if [ -f "$gdb_dir/gdb/common/common-utils.c" ]; then
+            echo "  🔍 检查common-utils.c修复状态:" >> error_analysis.log
+            if grep -q "^#define DISABLE_ASSERT 1" "$gdb_dir/gdb/common/common-utils.c"; then
+                echo "    ✅ DISABLE_ASSERT已添加" >> error_analysis.log
+            else
+                echo "    ❌ DISABLE_ASSERT未添加" >> error_analysis.log
+            fi
         fi
     done
     
@@ -461,13 +480,18 @@ echo "💡 可能原因:" >> error_analysis.log
 echo "   - GDB源码中的_GL_ATTRIBUTE_FORMAT_PRINTF宏定义错误" >> error_analysis.log
 echo "   - gdbsupport/common-defs.h第111行附近有语法错误" >> error_analysis.log
 echo "   - 编译器无法识别_GL_ATTRIBUTE_FORMAT_PRINTF属性" >> error_analysis.log
+echo "   - 宏定义语法错误：原定义应为 #define ATTRIBUTE_PRINTF _GL_ATTRIBUTE_FORMAT_PRINTF" >> error_analysis.log
+echo "   - 但_GL_ATTRIBUTE_FORMAT_PRINTF宏未正确定义或缺失参数" >> error_analysis.log
 echo "🛠️ 解决方案:" >> error_analysis.log
 echo "   - 找到GDB源码目录: find build_dir -name 'gdb-10.1' -type d" >> error_analysis.log
 echo "   - 备份common-defs.h: cp gdbsupport/common-defs.h gdbsupport/common-defs.h.backup" >> error_analysis.log
 echo "   - 修复第111行:" >> error_analysis.log
-echo "     sed -i '111s/.*/#define _GL_ATTRIBUTE_FORMAT_PRINTF(format_idx, arg_idx)/' gdbsupport/common-defs.h" >> error_analysis.log
-echo "     sed -i '112s/.*/extern void __attribute__ ((__format__ (__printf__, format_idx, arg_idx))) gdb_printf (const char *format, ...);/' gdbsupport/common-defs.h" >> error_analysis.log
+echo "     将: #define ATTRIBUTE_PRINTF _GL_ATTRIBUTE_FORMAT_PRINTF" >> error_analysis.log
+echo "     改为: #define ATTRIBUTE_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))" >> error_analysis.log
+echo "   - 如果需要，在110行添加_GL_ATTRIBUTE_FORMAT_PRINTF的定义:" >> error_analysis.log
+echo "     #define _GL_ATTRIBUTE_FORMAT_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))" >> error_analysis.log
 echo "   - 或者禁用GDB编译: echo '# CONFIG_PACKAGE_gdb is not set' >> .config" >> error_analysis.log
+echo "   - 运行修复脚本: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh fix_gdb_compilation_error" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "❌ binutils编译错误（新增关键修复）" >> error_analysis.log
@@ -665,6 +689,7 @@ echo "16. 📝 添加-fpermissive标志: export CFLAGS=\"\$CFLAGS -fpermissive\"
 echo "17. 🚫 禁用GDB编译（解决GDB错误）: echo '# CONFIG_PACKAGE_gdb is not set' >> .config" >> error_analysis.log
 echo "18. 🔧 修复GDB _GL_ATTRIBUTE_FORMAT_PRINTF错误: 修改gdbsupport/common-defs.h第111行" >> error_analysis.log
 echo "19. 🔧 修复binutils编译错误: 检查config.log，设置正确的编译环境" >> error_analysis.log
+echo "20. 🔧 运行GDB修复脚本: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh fix_gdb_compilation_error" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "=== 针对GDB _GL_ATTRIBUTE_FORMAT_PRINTF错误的特殊修复方案 ===" >> error_analysis.log
@@ -677,8 +702,8 @@ echo "2. 📋 备份原始文件:" >> error_analysis.log
 echo "   cp \"\$GDB_DIR/gdbsupport/common-defs.h\" \"\$GDB_DIR/gdbsupport/common-defs.h.backup\"" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "3. 🔧 修复common-defs.h:" >> error_analysis.log
-echo "   sed -i '111s/.*/#define _GL_ATTRIBUTE_FORMAT_PRINTF(format_idx, arg_idx)/' \"\$GDB_DIR/gdbsupport/common-defs.h\"" >> error_analysis.log
-echo "   sed -i '112s/.*/extern void __attribute__ ((__format__ (__printf__, format_idx, arg_idx))) gdb_printf (const char *format, ...);/' \"\$GDB_DIR/gdbsupport/common-defs.h\"" >> error_analysis.log
+echo "   sed -i '111s/#define ATTRIBUTE_PRINTF _GL_ATTRIBUTE_FORMAT_PRINTF/#define ATTRIBUTE_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))/' \"\$GDB_DIR/gdbsupport/common-defs.h\"" >> error_analysis.log
+echo "   sed -i '110a#define _GL_ATTRIBUTE_FORMAT_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))' \"\$GDB_DIR/gdbsupport/common-defs.h\"" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "4. 🔧 修复common-utils.c中的断言错误:" >> error_analysis.log
 echo "   if [ -f \"\$GDB_DIR/gdb/common/common-utils.c\" ]; then" >> error_analysis.log
