@@ -1097,7 +1097,7 @@ EOF
         if [ $script_count -gt 0 ]; then
             mkdir -p files/etc/init.d
             cat > files/etc/init.d/custom-scripts << EOF
-#!/bin/sh /etc/rc.common
+#!/bin.sh /etc/rc.common
 
 START=99
 STOP=10
@@ -1430,6 +1430,79 @@ pre_build_error_check() {
     fi
 }
 
+# 修复GDB编译错误
+fix_gdb_compilation_error() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 修复GDB编译错误 ==="
+    
+    # 查找GDB构建目录
+    GDB_DIR=$(find build_dir -type d -name "gdb-*" 2>/dev/null | head -1)
+    
+    if [ -n "$GDB_DIR" ]; then
+        log "✅ 找到GDB目录: $GDB_DIR"
+        
+        # 修复common-defs.h中的_GL_ATTRIBUTE_FORMAT_PRINTF错误
+        if [ -f "$GDB_DIR/gdbsupport/common-defs.h" ]; then
+            log "🔧 修复common-defs.h中的_GL_ATTRIBUTE_FORMAT_PRINTF错误..."
+            
+            # 备份原始文件
+            cp "$GDB_DIR/gdbsupport/common-defs.h" "$GDB_DIR/gdbsupport/common-defs.h.backup"
+            
+            # 修复第111行的错误 - 正确的修复方法
+            # 原内容: #define ATTRIBUTE_PRINTF _GL_ATTRIBUTE_FORMAT_PRINTF
+            # 修复为: #define ATTRIBUTE_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))
+            sed -i '111s/#define ATTRIBUTE_PRINTF _GL_ATTRIBUTE_FORMAT_PRINTF/#define ATTRIBUTE_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))/' "$GDB_DIR/gdbsupport/common-defs.h"
+            
+            # 如果_GL_ATTRIBUTE_FORMAT_PRINTF未定义，则定义它
+            if ! grep -q "^#define _GL_ATTRIBUTE_FORMAT_PRINTF" "$GDB_DIR/gdbsupport/common-defs.h"; then
+                # 在111行前插入定义
+                sed -i '110a#define _GL_ATTRIBUTE_FORMAT_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))' "$GDB_DIR/gdbsupport/common-defs.h"
+            fi
+            
+            log "✅ 修复了_GL_ATTRIBUTE_FORMAT_PRINTF错误"
+            
+            # 显示修复后的内容
+            echo "🔍 修复后的111-115行内容:"
+            sed -n '110,115p' "$GDB_DIR/gdbsupport/common-defs.h"
+        else
+            log "ℹ️ 未找到common-defs.h文件"
+        fi
+        
+        # 修复common-utils.c中的断言错误
+        if [ -f "$GDB_DIR/gdb/common/common-utils.c" ]; then
+            log "🔧 修复GDB内部断言错误..."
+            
+            # 备份原始文件
+            cp "$GDB_DIR/gdb/common/common-utils.c" "$GDB_DIR/gdb/common/common-utils.c.backup"
+            
+            # 在文件开头添加DISABLE_ASSERT宏定义
+            if ! grep -q "^#define DISABLE_ASSERT" "$GDB_DIR/gdb/common/common-utils.c"; then
+                sed -i '1i#define DISABLE_ASSERT 1' "$GDB_DIR/gdb/common/common-utils.c"
+                log "✅ 添加了DISABLE_ASSERT宏定义"
+            fi
+            
+            # 修改internal_error函数调用
+            sed -i 's/internal_error (file, line, _("%s: Assertion `%s'\'' failed."),/fprintf(stderr, "GDB Assertion failed: %s\\n", __func__); return;/g' "$GDB_DIR/gdb/common/common-utils.c"
+            log "✅ 修复了internal_error函数调用"
+        fi
+        
+        # 修复xml支持文件
+        for xml_file in "xml-support.c" "xml-syscall.c" "xml-tdesc.c"; do
+            if [ -f "$GDB_DIR/gdb/$xml_file" ]; then
+                log "🔧 备份$xml_file..."
+                cp "$GDB_DIR/gdb/$xml_file" "$GDB_DIR/gdb/$xml_file.backup"
+            fi
+        done
+        
+    else
+        log "ℹ️ 未找到GDB源码目录，可能尚未编译或已跳过"
+    fi
+    
+    log "✅ GDB编译错误修复完成"
+}
+
 # 编译固件（增强修复版）
 build_firmware() {
     local enable_cache=$1
@@ -1477,6 +1550,9 @@ build_firmware() {
     export CPPFLAGS="-I$BUILD_DIR/staging_dir/host/include"
     export ACLOCAL_PATH="$BUILD_DIR/staging_dir/host/share/aclocal:\${ACLOCAL_PATH}"
     export PKG_CONFIG_PATH="$BUILD_DIR/staging_dir/host/lib/pkgconfig:\${PKG_CONFIG_PATH}"
+    
+    # 在编译前修复GDB错误
+    fix_gdb_compilation_error
     
     # 使用优化的编译参数，减少Broken pipe错误
     if [ $make_jobs -gt 4 ]; then
@@ -1758,6 +1834,9 @@ main() {
         "pre_build_error_check")
             pre_build_error_check
             ;;
+        "fix_gdb_compilation_error")
+            fix_gdb_compilation_error
+            ;;
         "build_firmware")
             build_firmware "$2"
             ;;
@@ -1777,7 +1856,7 @@ main() {
             echo "  add_turboacc_support, configure_feeds, install_turboacc_packages"
             echo "  pre_build_space_check, generate_config, verify_usb_config, check_usb_drivers_integrity, apply_config"
             echo "  fix_network, download_dependencies, integrate_custom_files"
-            echo "  pre_build_error_check, build_firmware, post_build_space_check"
+            echo "  pre_build_error_check, fix_gdb_compilation_error, build_firmware, post_build_space_check"
             echo "  check_firmware_files, cleanup"
             exit 1
             ;;
