@@ -495,7 +495,7 @@ jobs:
               original_lines=$(wc -l < "$GCC_DIR/gcc/system.h.original")
               fixed_lines=$(wc -l < "$GCC_DIR/gcc/system.h")
               if [ $original_lines -eq $fixed_lines ]; then
-                echo "  ℹ️  行数未变化，可能已修复或无需修复"
+                echo "  ℹ️ 行数未变化，可能已修复或无需修复"
               fi
             fi
             # 修复auto-host.h中的声明配置
@@ -504,7 +504,7 @@ jobs:
               cp "$GCC_DIR/gcc/auto-host.h" "$GCC_DIR/gcc/auto-host.h.original"
               # 取消定义冲突的宏
               sed -i 's/^#define HAVE_DECL_SBRK.*$/#undef HAVE_DECL_SBRK/' "$GCC_DIR/gcc/auto-host.h"
-              sed -i 's/^#define HAVE_DECL_STRSIGNAL.*$/#undef HAVE_DECL_STRSIGNAL/" "$GCC_DIR/gcc/auto-host.h"
+              sed -i 's/^#define HAVE_DECL_STRSIGNAL.*$/#undef HAVE_DECL_STRSIGNAL/' "$GCC_DIR/gcc/auto-host.h"
               sed -i 's/^#define HAVE_DECL_BASENAME.*$/#undef HAVE_DECL_BASENAME/' "$GCC_DIR/gcc/auto-host.h"
               echo "  ✅ 修复auto-host.h完成"
             fi
