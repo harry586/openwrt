@@ -481,6 +481,119 @@ for category in "${ERROR_CATEGORIES[@]}"; do
     echo "" >> error_analysis.log
 done
 
+echo "=== GDB编译错误详细分析 ===" >> error_analysis.log
+echo "生成时间: $(date)" >> error_analysis.log
+echo "" >> error_analysis.log
+
+echo "🔍 检测到的GDB编译错误:" >> error_analysis.log
+
+# 检查常见的GDB错误模式
+if grep -q "_GL_ATTRIBUTE_FORMAT_PRINTF" build.log 2>/dev/null; then
+    echo "❌ 发现 _GL_ATTRIBUTE_FORMAT_PRINTF 宏定义错误" >> error_analysis.log
+    echo "💡 错误描述: GDB源码中的ATTRIBUTE_PRINTF宏定义不正确" >> error_analysis.log
+    echo "🛠️ 解决方案:" >> error_analysis.log
+    echo "  1. 找到GDB源码目录: find build_dir -name 'gdb-*' -type d" >> error_analysis.log
+    echo "  2. 修复common-defs.h文件:" >> error_analysis.log
+    echo "     sed -i '111s/#define ATTRIBUTE_PRINTF _GL_ATTRIBUTE_FORMAT_PRINTF/#define ATTRIBUTE_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))/' gdbsupport/common-defs.h" >> error_analysis.log
+    echo "  3. 或者运行完整修复脚本: ./fix_gdb_complete.sh" >> error_analysis.log
+    echo "" >> error_analysis.log
+fi
+
+if grep -q "xml-support.o.*Error\|xml-syscall.o.*Error\|xml-tdesc.o.*Error" build.log 2>/dev/null; then
+    echo "❌ 发现XML相关文件编译错误" >> error_analysis.log
+    echo "💡 错误描述: GDB的XML支持文件编译失败" >> error_analysis.log
+    echo "🛠️ 解决方案:" >> error_analysis.log
+    echo "  1. 修复XML源文件:" >> error_analysis.log
+    echo "     for file in xml-support.c xml-syscall.c xml-tdesc.c; do" >> error_analysis.log
+    echo "       sed -i '1i#include <stdio.h>' \$file" >> error_analysis.log
+    echo "       sed -i '1i#include <stdlib.h>' \$file" >> error_analysis.log
+    echo "     done" >> error_analysis.log
+    echo "  2. 或者禁用GDB编译:" >> error_analysis.log
+    echo "     echo '# CONFIG_PACKAGE_gdb is not set' >> .config" >> error_analysis.log
+    echo "" >> error_analysis.log
+fi
+
+if grep -q "toolchain/gdb failed\|gdb.*failed" build.log 2>/dev/null; then
+    echo "❌ GDB编译完全失败" >> error_analysis.log
+    echo "💡 错误描述: GDB工具链编译过程中断" >> error_analysis.log
+    echo "🛠️ 解决方案:" >> error_analysis.log
+    echo "  1. 强制禁用GDB:" >> error_analysis.log
+    echo "     sed -i '/CONFIG_PACKAGE_gdb/d' .config" >> error_analysis.log
+    echo "     echo '# CONFIG_PACKAGE_gdb is not set' >> .config" >> error_analysis.log
+    echo "  2. 清理GDB构建目录:" >> error_analysis.log
+    echo "     rm -rf build_dir/*gdb*" >> error_analysis.log
+    echo "  3. 重新编译工具链:" >> error_analysis.log
+    echo "     make toolchain/install -j1 V=s" >> error_analysis.log
+    echo "" >> error_analysis.log
+fi
+
+# 检查GDB目录状态
+echo "🔍 GDB构建目录状态检查:" >> error_analysis.log
+GDB_DIR=$(find build_dir -type d -name "gdb-*" 2>/dev/null | head -1)
+if [ -n "$GDB_DIR" ]; then
+    echo "✅ 找到GDB目录: $GDB_DIR" >> error_analysis.log
+    echo "  目录大小: $(du -sh "$GDB_DIR" 2>/dev/null | cut -f1)" >> error_analysis.log
+    
+    # 检查common-defs.h
+    if [ -f "$GDB_DIR/gdbsupport/common-defs.h" ]; then
+        echo "  ✅ common-defs.h存在" >> error_analysis.log
+        
+        # 检查_GL_ATTRIBUTE_FORMAT_PRINTF修复状态
+        echo "  🔍 检查_GL_ATTRIBUTE_FORMAT_PRINTF修复状态:" >> error_analysis.log
+        if grep -q "^#define ATTRIBUTE_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))" "$GDB_DIR/gdbsupport/common-defs.h"; then
+            echo "    ✅ _GL_ATTRIBUTE_FORMAT_PRINTF已正确修复" >> error_analysis.log
+        else
+            echo "    ❌ _GL_ATTRIBUTE_FORMAT_PRINTF未正确修复" >> error_analysis.log
+            echo "    💡 需要修复第111行附近的宏定义" >> error_analysis.log
+        fi
+    else
+        echo "  ❌ common-defs.h不存在" >> error_analysis.log
+    fi
+    
+    # 检查XML文件
+    echo "  🔍 检查XML相关文件:" >> error_analysis.log
+    for xml_file in xml-support.c xml-syscall.c xml-tdesc.c; do
+        if [ -f "$GDB_DIR/gdb/$xml_file" ]; then
+            echo "    ✅ $xml_file存在" >> error_analysis.log
+        else
+            echo "    ❌ $xml_file不存在" >> error_analysis.log
+        fi
+    done
+else
+    echo "❌ 未找到GDB构建目录" >> error_analysis.log
+fi
+
+echo "" >> error_analysis.log
+echo "=== GDB错误快速修复命令 ===" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "1. 🚨 紧急修复 - 强制禁用GDB:" >> error_analysis.log
+echo "   sed -i '/CONFIG_PACKAGE_gdb/d' .config" >> error_analysis.log
+echo "   echo '# CONFIG_PACKAGE_gdb is not set' >> .config" >> error_analysis.log
+echo "   echo '# CONFIG_PACKAGE_gdbserver is not set' >> .config" >> error_analysis.log
+echo "   make defconfig" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "2. 🔧 完整修复 - 修复GDB源码:" >> error_analysis.log
+echo "   # 首先找到GDB目录" >> error_analysis.log
+echo "   GDB_DIR=\$(find build_dir -name 'gdb-*' -type d | head -1)" >> error_analysis.log
+echo "   cd \"\$GDB_DIR\"" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "   # 修复common-defs.h" >> error_analysis.log
+echo "   sed -i '111s/#define ATTRIBUTE_PRINTF _GL_ATTRIBUTE_FORMAT_PRINTF/#define ATTRIBUTE_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))/' gdbsupport/common-defs.h" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "   # 修复XML文件" >> error_analysis.log
+echo "   for file in xml-support.c xml-syscall.c xml-tdesc.c; do" >> error_analysis.log
+echo "     sed -i '1i#include <stdio.h>' gdb/\$file" >> error_analysis.log
+echo "     sed -i '1i#include <stdlib.h>' gdb/\$file" >> error_analysis.log
+echo "   done" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "3. 🛠️ 使用修复脚本:" >> error_analysis.log
+echo "   chmod +x firmware-config/scripts/fix_gdb_complete.sh" >> error_analysis.log
+echo "   ./firmware-config/scripts/fix_gdb_complete.sh" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "4. 🔄 重新编译工具链:" >> error_analysis.log
+echo "   make toolchain/install -j1 V=s" >> error_analysis.log
+echo "" >> error_analysis.log
+
 echo "=== 错误原因分析和建议（增强版）===" >> error_analysis.log
 
 echo "❌ 工具链构建错误（关键修复）" >> error_analysis.log
