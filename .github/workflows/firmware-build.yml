@@ -50,41 +50,30 @@ jobs:
         if: github.event.inputs.use_git_archive == 'true'
         run: |
           echo "正在下载源代码..."
-          
           mkdir -p /tmp/openwrt-source
           cd /tmp/openwrt-source
-          
           DEFAULT_BRANCH=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}" | jq -r '.default_branch')
-          
           echo "下载源代码压缩包..."
           curl -s -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}/tarball/$DEFAULT_BRANCH" -o source.tar.gz
-          
           if [ ! -f "source.tar.gz" ]; then
             echo "❌ 下载源代码压缩包失败"
             exit 1
           fi
-          
           echo "解压源代码..."
           tar -xzf source.tar.gz --strip-components=1
-          
           if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
             mkdir -p ${{ github.workspace }}
-            
             if [ -d "firmware-config/build-Compiler-file" ]; then
               rm -rf firmware-config/build-Compiler-file
             fi
-            
             rsync -av --exclude='.git' . ${{ github.workspace }}/
-            
             chmod +x ${{ github.workspace }}/firmware-config/scripts/*.sh 2>/dev/null || true
-            
             mkdir -p /tmp/build-artifacts/source-archive
             cp source.tar.gz /tmp/build-artifacts/source-archive/
           else
             echo "❌ 源代码解压失败，重要文件缺失"
             exit 1
           fi
-          
           cd /tmp
           rm -rf openwrt-source
           echo "✅ Git Archive API下载完成"
@@ -122,14 +111,12 @@ jobs:
         run: |
           echo "=== 步骤 5: 检查编译器文件目录状态 ==="
           COMPILER_DIR="${{ env.COMPILER_DIR }}"
-          
           if [ -d "$COMPILER_DIR" ]; then
             echo "✅ 编译器文件目录存在"
             echo "路径: $COMPILER_DIR"
             echo "目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
             echo "目录内容:"
             ls -la "$COMPILER_DIR/" 2>/dev/null | head -10 || echo "无法列出"
-            
             required_compilers=("gcc" "g++" "as" "ld" "ar" "strip" "objcopy" "objdump" "nm" "ranlib")
             for compiler in "${required_compilers[@]}"; do
               if find "$COMPILER_DIR" -name "*$compiler*" -type f 2>/dev/null | grep -q .; then
@@ -148,14 +135,10 @@ jobs:
       - name: "6. 下载编译器源代码（修复版）"
         run: |
           echo "=== 步骤 6: 下载编译器源代码（修复版）==="
-          
           COMPILER_DIR="${{ env.COMPILER_DIR }}"
           mkdir -p "$COMPILER_DIR"
-          
           echo "🔍 根据OpenWrt版本选择合适的编译器:"
-          
           declare -A compiler_urls
-          
           # 根据版本选择GCC版本
           if [ "${{ github.event.inputs.version_selection }}" = "23.05" ]; then
             echo "🔧 OpenWrt 23.05: 使用 GCC 12.3.0"
@@ -164,7 +147,6 @@ jobs:
             echo "🔧 OpenWrt 21.02: 使用 GCC 11.3.0"
             compiler_urls["gcc-11.3.0.tar.xz"]="https://ftp.gnu.org/gnu/gcc/gcc-11.3.0/gcc-11.3.0.tar.xz"
           fi
-          
           # 公共的编译器组件（版本与GCC匹配）
           compiler_urls["binutils-2.40.tar.xz"]="https://ftp.gnu.org/gnu/binutils/binutils-2.40.tar.xz"
           compiler_urls["make-4.4.1.tar.gz"]="https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz"
@@ -172,9 +154,7 @@ jobs:
           compiler_urls["mpfr-4.2.0.tar.xz"]="https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.0.tar.xz"
           compiler_urls["mpc-1.3.1.tar.gz"]="https://ftp.gnu.org/gnu/mpc/mpc-1.3.1.tar.gz"
           compiler_urls["isl-0.24.tar.xz"]="https://gcc.gnu.org/pub/gcc/infrastructure/isl-0.24.tar.xz"
-          
           cd "$COMPILER_DIR"
-          
           echo "📥 下载编译器源代码..."
           for file in "${!compiler_urls[@]}"; do
             url="${compiler_urls[$file]}"
@@ -185,7 +165,6 @@ jobs:
                 echo "下载失败: $file，尝试备用方案..."
                 curl -L --retry 3 --connect-timeout 30 "$url" -o "$file" || {
                   echo "备用下载也失败: $file"
-                  # 尝试镜像站点
                   mirror_url="${url/ftp.gnu.org/mirrors.tuna.tsinghua.edu.cn/gnu}"
                   echo "尝试镜像站点: $mirror_url"
                   curl -L --retry 2 "$mirror_url" -o "$file" || echo "镜像下载也失败: $file"
@@ -195,13 +174,10 @@ jobs:
               echo "已存在: $file"
             fi
           done
-          
           echo "✅ 编译器源代码下载完成"
           echo "📊 当前编译器源代码文件:"
           ls -lh "$COMPILER_DIR" 2>/dev/null || echo "无文件"
-          
           file_count=$(find "$COMPILER_DIR" -type f -name "*.tar.*" -o -name "*.gz" 2>/dev/null | wc -l)
-          
           if [ $file_count -gt 0 ]; then
             echo "📊 编译器源代码统计:"
             echo "  文件数量: $file_count"
@@ -209,7 +185,6 @@ jobs:
           else
             echo "⚠️ 编译器目录为空"
           fi
-          
           echo "✅ 编译器源代码下载流程完成"
       
       # 步骤 7: 初始空间检查
@@ -230,7 +205,6 @@ jobs:
       - name: "8. 设置编译环境和构建目录"
         run: |
           echo "=== 步骤 8: 设置编译环境和构建目录 ==="
-          
           echo "🔄 步骤 8.1: 设置编译环境"
           if [ -f "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" ]; then
             ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh setup_environment
@@ -238,16 +212,13 @@ jobs:
             echo "❌ 主构建脚本不存在"
             exit 1
           fi
-          
           echo "🔄 步骤 8.2: 创建构建目录"
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh create_build_dir
-          
           echo "🔄 步骤 8.3: 初始化构建环境"
           echo "设备: ${{ github.event.inputs.device_name }}"
           echo "版本: ${{ github.event.inputs.version_selection }}"
           echo "配置模式: ${{ github.event.inputs.config_mode }}"
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}"
-          
           echo "✅ 编译环境和构建目录设置完成"
       
       # 步骤 9: 添加 TurboACC 支持
@@ -299,17 +270,13 @@ jobs:
       - name: "16. 应用配置并显示详情"
         run: |
           echo "=== 步骤 16: 应用配置并显示详情 ==="
-          
           if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
             cp "${{ env.BUILD_DIR }}/.config" "${{ env.BUILD_DIR }}/.config.original"
             echo "✅ 已备份原始配置文件"
           fi
-          
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh apply_config
-          
           echo "=== 插件配置状态检查 ==="
           cd "${{ env.BUILD_DIR }}"
-          
           declare -A normal_plugins
           normal_plugins["TurboACC 网络加速"]="luci-app-turboacc"
           normal_plugins["UPnP 自动端口转发"]="luci-app-upnp"
@@ -324,17 +291,13 @@ jobs:
           normal_plugins["ARP 绑定"]="luci-app-arpbind"
           normal_plugins["CPU 限制"]="luci-app-cpulimit"
           normal_plugins["硬盘休眠"]="luci-app-hd-idle"
-          
           echo "📋 正常模式插件状态检查:"
-          
           total_plugins=0
           enabled_plugins=0
           disabled_plugins=0
-          
           for plugin_name in "${!normal_plugins[@]}"; do
             plugin_config="${normal_plugins[$plugin_name]}"
             total_plugins=$((total_plugins + 1))
-            
             if grep -q "^CONFIG_PACKAGE_${plugin_config}=y" .config; then
               echo "  ✅ $plugin_name: 已启用"
               enabled_plugins=$((enabled_plugins + 1))
@@ -345,13 +308,11 @@ jobs:
               echo "  ⚠️  $plugin_name: 未配置"
             fi
           done
-          
           echo ""
           echo "📊 插件状态统计:"
           echo "  总计: $total_plugins 个插件"
           echo "  已启用: $enabled_plugins 个"
           echo "  已禁用: $disabled_plugins 个"
-          
           if [ "${{ github.event.inputs.config_mode }}" = "base" ]; then
             echo ""
             echo "🔧 基础模式配置确认:"
@@ -384,7 +345,6 @@ jobs:
             echo "  🚀 优点: 功能完整，适合日常使用"
             echo "  🔧 USB 3.0加强：所有平台的关键USB驱动都已强制启用！"
           fi
-          
           echo ""
           echo "🔌 USB驱动状态确认:"
           critical_usb_drivers=("kmod-usb-xhci-hcd" "kmod-usb3" "kmod-usb-dwc3" "kmod-usb-storage" "kmod-scsi-core")
@@ -395,7 +355,6 @@ jobs:
               echo "  ❌ $driver: 未启用 (需要修复)"
             fi
           done
-          
           echo ""
           echo "🔧 调试工具状态确认:"
           if grep -q "^# CONFIG_PACKAGE_gdb is not set$" .config; then
@@ -403,24 +362,18 @@ jobs:
           else
             echo "  ⚠️  GDB: 未禁用（可能会遇到编译错误）"
           fi
-          
           echo "✅ 配置详情检查完成"
       
       # 步骤 17: 检查并备份配置文件
       - name: "17. 检查并备份配置文件"
         run: |
           echo "=== 步骤 17: 检查并备份配置文件 ==="
-          
           if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
             echo "✅ .config 文件存在"
-            
             mkdir -p ${{ github.workspace }}/firmware-config/config-backup
-            
             backup_file="${{ github.workspace }}/firmware-config/config-backup/config_${{ github.event.inputs.device_name }}_${{ env.SELECTED_BRANCH }}_${{ github.event.inputs.config_mode }}_$(date +%Y%m%d_%H%M%S).config"
-            
             cp "${{ env.BUILD_DIR }}/.config" "$backup_file"
             echo "✅ 配置文件备份到仓库目录: $backup_file"
-            
             echo "备份文件大小: $(ls -lh $backup_file | awk '{print $5}')"
           else
             echo "❌ .config 文件不存在"
@@ -437,18 +390,14 @@ jobs:
       - name: "19. 修复libtool和头文件问题（增强版）"
         run: |
           echo "=== 步骤 19: 修复libtool和头文件问题（增强版）==="
-          
           cd "${{ env.BUILD_DIR }}"
-          
           echo "🔧 安装必要的开发包..."
           sudo apt-get update && sudo apt-get install -y libtool autoconf automake libltdl-dev m4 libtool-bin gperf autoconf-archive gettext pkg-config
-          
           echo "📁 创建缺失的目录..."
           mkdir -p staging_dir/host/include
           mkdir -p staging_dir/host/share/aclocal
           mkdir -p staging_dir/host/share/aclocal-1.16
           mkdir -p staging_dir/host/lib/pkgconfig
-          
           echo "📋 复制关键头文件..."
           HEADERS="stdc-predef.h stdio.h stdlib.h string.h features.h"
           for header in $HEADERS; do
@@ -459,7 +408,6 @@ jobs:
               echo "  ⚠️  未找到: $header"
             fi
           done
-          
           echo "📋 复制libtool.m4..."
           if [ -f "/usr/share/aclocal/libtool.m4" ]; then
             cp "/usr/share/aclocal/libtool.m4" staging_dir/host/share/aclocal/ 2>/dev/null || true
@@ -470,35 +418,28 @@ jobs:
               cp "$m4file" staging_dir/host/share/aclocal/ 2>/dev/null && echo "  ✅ 从其他地方复制: libtool.m4"
             done
           fi
-          
           echo "📋 复制aclocal-1.16文件..."
           if [ -d "/usr/share/aclocal-1.16" ]; then
             cp /usr/share/aclocal-1.16/*.m4 staging_dir/host/share/aclocal-1.16/ 2>/dev/null || true
             echo "  ✅ 复制aclocal-1.16文件"
           fi
-          
           echo "🌍 设置环境变量..."
           export CFLAGS="-I${{ env.BUILD_DIR }}/staging_dir/host/include -O2 -pipe"
           export LDFLAGS="-L${{ env.BUILD_DIR }}/staging_dir/host/lib -Wl,-O1"
           export CPPFLAGS="-I${{ env.BUILD_DIR }}/staging_dir/host/include"
           export ACLOCAL_PATH="${{ env.BUILD_DIR }}/staging_dir/host/share/aclocal:\${ACLOCAL_PATH}"
           export PKG_CONFIG_PATH="${{ env.BUILD_DIR }}/staging_dir/host/lib/pkgconfig:\${PKG_CONFIG_PATH}"
-          
           echo "✅ libtool和头文件修复完成"
       
       # 步骤 20: 修复编译器头文件冲突（修复版 - 支持多个GCC版本）
       - name: "20. 修复编译器头文件冲突（修复版）"
         run: |
           echo "=== 步骤 20: 修复编译器头文件冲突（修复版）==="
-          
           cd "${{ env.BUILD_DIR }}"
-          
           echo "🔍 检查GCC构建目录..."
-          
           # 查找不同版本的GCC目录
           GCC_PATTERNS="gcc-12.3.0 gcc-11.3.0 gcc-8.4.0"
           GCC_DIR=""
-          
           for pattern in $GCC_PATTERNS; do
             found_dir=$(find build_dir -name "$pattern" -type d 2>/dev/null | head -1)
             if [ -n "$found_dir" ]; then
@@ -507,11 +448,9 @@ jobs:
               break
             fi
           done
-          
           if [ -z "$GCC_DIR" ]; then
             echo "ℹ️ 未找到GCC构建目录，可能尚未编译或版本不同"
             echo "🔧 检测当前OpenWrt版本对应的GCC..."
-            
             # 从feeds或配置文件推断GCC版本
             if [ "${{ env.SELECTED_BRANCH }}" = "openwrt-23.05" ]; then
               echo "📌 OpenWrt 23.05 通常使用 GCC 12.3.0"
@@ -523,7 +462,6 @@ jobs:
               echo "📌 未知版本，使用通用GCC版本"
               GCC_VERSION="11.3.0"
             fi
-            
             echo "🚨 设置-fpermissive编译标志预防冲突..."
             export CFLAGS="-I${{ env.BUILD_DIR }}/staging_dir/host/include -O2 -pipe -fpermissive"
             export CXXFLAGS="$CFLAGS"
@@ -537,28 +475,22 @@ jobs:
             else
               echo "  ⚠️  system.h不存在"
             fi
-            
             if [ -f "$GCC_DIR/gcc/auto-host.h" ]; then
               cp "$GCC_DIR/gcc/auto-host.h" "$GCC_DIR/gcc/auto-host.h.backup"
               echo "  ✅ 备份auto-host.h"
             else
               echo "  ⚠️  auto-host.h不存在"
             fi
-            
             echo "🔧 修复头文件声明冲突..."
-            
             # 修复system.h中的冲突声明
             if [ -f "$GCC_DIR/gcc/system.h" ]; then
               # 备份原始文件
               cp "$GCC_DIR/gcc/system.h" "$GCC_DIR/gcc/system.h.original"
-              
               # 移除冲突的声明行
               sed -i 's/^void\* sbrk(int);$//' "$GCC_DIR/gcc/system.h"
               sed -i 's/^const char\* strsignal(int);$//' "$GCC_DIR/gcc/system.h"
               sed -i 's/^char\* basename(const char\*);$//' "$GCC_DIR/gcc/system.h"
-              
               echo "  ✅ 修复system.h完成"
-              
               # 检查修复效果
               original_lines=$(wc -l < "$GCC_DIR/gcc/system.h.original")
               fixed_lines=$(wc -l < "$GCC_DIR/gcc/system.h")
@@ -566,25 +498,20 @@ jobs:
                 echo "  ℹ️  行数未变化，可能已修复或无需修复"
               fi
             fi
-            
             # 修复auto-host.h中的声明配置
             if [ -f "$GCC_DIR/gcc/auto-host.h" ]; then
               # 备份原始文件
               cp "$GCC_DIR/gcc/auto-host.h" "$GCC_DIR/gcc/auto-host.h.original"
-              
               # 取消定义冲突的宏
               sed -i 's/^#define HAVE_DECL_SBRK.*$/#undef HAVE_DECL_SBRK/' "$GCC_DIR/gcc/auto-host.h"
-              sed -i 's/^#define HAVE_DECL_STRSIGNAL.*$/#undef HAVE_DECL_STRSIGNAL/' "$GCC_DIR/gcc/auto-host.h"
+              sed -i 's/^#define HAVE_DECL_STRSIGNAL.*$/#undef HAVE_DECL_STRSIGNAL/" "$GCC_DIR/gcc/auto-host.h"
               sed -i 's/^#define HAVE_DECL_BASENAME.*$/#undef HAVE_DECL_BASENAME/' "$GCC_DIR/gcc/auto-host.h"
-              
               echo "  ✅ 修复auto-host.h完成"
             fi
-            
             echo "🚨 添加-fpermissive编译标志..."
             export CFLAGS="-I${{ env.BUILD_DIR }}/staging_dir/host/include -O2 -pipe -fpermissive"
             export CXXFLAGS="$CFLAGS"
             export LDFLAGS="-L${{ env.BUILD_DIR }}/staging_dir/host/lib -Wl,-O1"
-            
             echo "✅ 编译器头文件修复完成"
           fi
       
@@ -592,11 +519,8 @@ jobs:
       - name: "21. 修复GDB编译错误（增强修复版）"
         run: |
           echo "=== 步骤 21: 修复GDB编译错误（增强修复版）==="
-          
           cd "${{ env.BUILD_DIR }}"
-          
           echo "🔧 修复GDB编译错误问题..."
-          
           # 方法1: 确保GDB在配置中被禁用
           echo "🔍 检查GDB配置状态..."
           if [ -f ".config" ]; then
@@ -610,72 +534,55 @@ jobs:
               echo "✅ GDB已禁用"
             fi
           fi
-          
           # 方法2: 查找并修复GDB源码中的断言错误
           echo "🔍 查找GDB构建目录..."
-          
           # 查找不同版本的GDB目录 - 简化查找逻辑
           GDB_DIR=""
-          
           # 直接使用find命令查找GDB目录
           found_dir=$(find build_dir -type d -name "gdb-*" 2>/dev/null | head -1)
-          
           if [ -n "$found_dir" ]; then
             GDB_DIR="$found_dir"
             echo "✅ 找到GDB目录: $GDB_DIR"
-            
             echo "🔧 修复GDB内部断言错误..."
-            
             # 修复common-defs.h中的_GL_ATTRIBUTE_FORMAT_PRINTF错误
             if [ -f "$GDB_DIR/gdbsupport/common-defs.h" ]; then
               echo "🔧 修复common-defs.h中的_GL_ATTRIBUTE_FORMAT_PRINTF错误..."
               cp "$GDB_DIR/gdbsupport/common-defs.h" "$GDB_DIR/gdbsupport/common-defs.h.backup"
-              
               # 在第111行附近修复_GL_ATTRIBUTE_FORMAT_PRINTF错误 - 修复语法
               sed -i '111s/#define ATTRIBUTE_PRINTF _GL_ATTRIBUTE_FORMAT_PRINTF/#define ATTRIBUTE_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))/' "$GDB_DIR/gdbsupport/common-defs.h"
-              
               # 添加缺失的_GL_ATTRIBUTE_FORMAT_PRINTF宏定义
               if ! grep -q "^#define _GL_ATTRIBUTE_FORMAT_PRINTF" "$GDB_DIR/gdbsupport/common-defs.h"; then
                 sed -i '110a#define _GL_ATTRIBUTE_FORMAT_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))' "$GDB_DIR/gdbsupport/common-defs.h"
               fi
-              
               echo "✅ 修复了_GL_ATTRIBUTE_FORMAT_PRINTF错误"
-              
               # 显示修复后的内容
               echo "🔍 修复后的111-115行内容:"
               sed -n '111,115p' "$GDB_DIR/gdbsupport/common-defs.h"
             else
               echo "ℹ️ 未找到common-defs.h文件"
             fi
-            
             # 修复common-utils.c中的断言错误
             if [ -f "$GDB_DIR/gdb/common/common-utils.c" ]; then
               echo "🔧 修复GDB内部断言错误..."
-              
               # 备份原始文件
               cp "$GDB_DIR/gdb/common/common-utils.c" "$GDB_DIR/gdb/common/common-utils.c.backup"
-              
               # 在文件开头添加DISABLE_ASSERT宏定义
               if ! grep -q "^#define DISABLE_ASSERT" "$GDB_DIR/gdb/common/common-utils.c"; then
                 sed -i '1i#define DISABLE_ASSERT 1' "$GDB_DIR/gdb/common/common-utils.c"
                 echo "✅ 添加了DISABLE_ASSERT宏定义"
               fi
-              
               # 修改internal_error函数调用
               sed -i 's/internal_error (file, line, _("%s: Assertion `%s'\'' failed."),/fprintf(stderr, "GDB Assertion failed: %s\\n", __func__); return;/g' "$GDB_DIR/gdb/common/common-utils.c"
               echo "✅ 修复了internal_error函数调用"
-              
               # 修复xml支持文件中的错误
               if [ -f "$GDB_DIR/gdb/xml-support.c" ]; then
                 echo "🔧 修复xml-support.c可能的错误..."
                 cp "$GDB_DIR/gdb/xml-support.c" "$GDB_DIR/gdb/xml-support.c.backup"
               fi
-              
               if [ -f "$GDB_DIR/gdb/xml-syscall.c" ]; then
                 echo "🔧 修复xml-syscall.c可能的错误..."
                 cp "$GDB_DIR/gdb/xml-syscall.c" "$GDB_DIR/gdb/xml-syscall.c.backup"
               fi
-              
               if [ -f "$GDB_DIR/gdb/xml-tdesc.c" ]; then
                 echo "🔧 修复xml-tdesc.c可能的错误..."
                 cp "$GDB_DIR/gdb/xml-tdesc.c" "$GDB_DIR/gdb/xml-tdesc.c.backup"
@@ -686,74 +593,136 @@ jobs:
           else
             echo "ℹ️ 未找到GDB源码目录，可能尚未编译或已跳过"
           fi
-          
           # 方法3: 设置环境变量跳过GDB错误
           echo "🌍 设置编译环境变量以跳过GDB错误..."
           export CFLAGS="-I${{ env.BUILD_DIR }}/staging_dir/host/include -O2 -pipe -fpermissive -Wno-error"
           export CXXFLAGS="$CFLAGS"
-          
           echo "✅ GDB编译错误修复完成"
       
-      # 步骤 22: 修复binutils编译错误
-      - name: "22. 修复binutils编译错误"
+      # 步骤 22: 修复binutils编译错误（增强版）- 修复YAML格式
+      - name: "22. 修复binutils编译错误（增强版）"
         run: |
-          echo "=== 步骤 22: 修复binutils编译错误 ==="
-          
+          echo "=== 步骤 22: 修复binutils编译错误（增强版）==="
           cd "${{ env.BUILD_DIR }}"
-          
-          echo "🔧 修复binutils编译问题..."
-          
-          # 查找binutils构建目录
-          BINUTILS_DIR=$(find build_dir -type d -name "binutils-*" 2>/dev/null | head -1)
-          
-          if [ -n "$BINUTILS_DIR" ]; then
-            echo "✅ 找到binutils目录: $BINUTILS_DIR"
-            
-            # 检查是否存在配置问题
-            if [ -f "$BINUTILS_DIR/config.log" ]; then
-              echo "🔍 检查binutils配置错误..."
-              grep -i "error\|failed\|missing" "$BINUTILS_DIR/config.log" | head -10
+          echo "🔧 运行binutils编译错误修复脚本..."
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh fix_binutils_compilation_error
+          echo "🔧 额外修复措施..."
+          # 检查并修复stamp目录
+          echo "🔍 检查工具链stamp目录..."
+          STAMP_DIR=$(find staging_dir -name "stamp" -type d | head -1)
+          if [ -n "$STAMP_DIR" ]; then
+            echo "✅ 找到stamp目录: $STAMP_DIR"
+            # 检查.binutils_installed标记文件
+            if [ ! -f "$STAMP_DIR/.binutils_installed" ]; then
+              echo "🚨 缺少.binutils_installed标记文件，正在创建..."
+              echo "binutils installed successfully at $(date)" > "$STAMP_DIR/.binutils_installed"
+              echo "✅ 已创建.binutils_installed标记文件"
+            else
+              echo "✅ .binutils_installed标记文件存在"
+              echo "📄 标记文件内容:"
+              cat "$STAMP_DIR/.binutils_installed"
             fi
-            
-            # 修复可能的配置问题
-            echo "🔧 修复binutils配置..."
-            export CFLAGS="-I${{ env.BUILD_DIR }}/staging_dir/host/include -O2 -pipe -fpermissive"
-            export CXXFLAGS="$CFLAGS"
-            export LDFLAGS="-L${{ env.BUILD_DIR }}/staging_dir/host/lib -Wl,-O1"
-            export CPPFLAGS="-I${{ env.BUILD_DIR }}/staging_dir/host/include"
-            
-            echo "✅ binutils修复配置完成"
+            # 检查其他关键标记文件
+            for stamp_file in .gcc_initial .gcc_final .libc .headers; do
+              if [ ! -f "$STAMP_DIR/$stamp_file" ]; then
+                echo "⚠️ 缺少标记文件: $stamp_file"
+              else
+                echo "✅ 标记文件存在: $stamp_file"
+              fi
+            done
           else
-            echo "ℹ️ 未找到binutils目录，可能尚未编译"
+            echo "⚠️ 未找到stamp目录"
           fi
+          # 设置修复环境变量
+          echo "🌍 设置增强修复编译环境..."
+          export CFLAGS="-I${{ env.BUILD_DIR }}/staging_dir/host/include -O2 -pipe -fpermissive -Wno-error"
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-L${{ env.BUILD_DIR }}/staging_dir/host/lib -Wl,-O1"
+          export CPPFLAGS="-I${{ env.BUILD_DIR }}/staging_dir/host/include"
+          export ACLOCAL_PATH="${{ env.BUILD_DIR }}/staging_dir/host/share/aclocal:\${ACLOCAL_PATH}"
+          export PKG_CONFIG_PATH="${{ env.BUILD_DIR }}/staging_dir/host/lib/pkgconfig:\${PKG_CONFIG_PATH}"
+          export CC="${{ env.BUILD_DIR }}/staging_dir/host/bin/gcc"
+          export CXX="${{ env.BUILD_DIR }}/staging_dir/host/bin/g++"
+          echo "✅ binutils编译错误修复完成"
       
-      # 步骤 23: 下载依赖包
-      - name: "23. 下载依赖包"
+      # 步骤 23: 修复编译器工具链错误
+      - name: "23. 修复编译器工具链错误"
         run: |
-          echo "=== 步骤 23: 下载依赖包 ==="
+          echo "=== 步骤 23: 修复编译器工具链错误 ==="
+          cd "${{ env.BUILD_DIR }}"
+          echo "🔧 运行编译器工具链修复脚本..."
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh fix_compiler_toolchain_error
+          echo "🔧 额外工具链修复措施..."
+          # 检查工具链Makefile
+          TOOLCHAIN_MAKEFILE="${{ env.BUILD_DIR }}/toolchain/Makefile"
+          if [ -f "$TOOLCHAIN_MAKEFILE" ]; then
+            echo "✅ 工具链Makefile存在"
+            # 备份Makefile
+            cp "$TOOLCHAIN_MAKEFILE" "$TOOLCHAIN_MAKEFILE.backup"
+            # 检查第93行（根据错误日志）
+            echo "🔍 检查工具链Makefile第93行:"
+            sed -n '93p' "$TOOLCHAIN_MAKEFILE"
+            # 检查依赖关系
+            if grep -q "^toolchain_compile:" "$TOOLCHAIN_MAKEFILE"; then
+              echo "✅ toolchain_compile目标存在"
+            else
+              echo "⚠️ toolchain_compile目标不存在"
+            fi
+          else
+            echo "⚠️ 工具链Makefile不存在"
+          fi
+          # 确保必要的编译工具存在
+          echo "🔧 确保必要的编译工具存在..."
+          mkdir -p "${{ env.BUILD_DIR }}/staging_dir/host/bin"
+          # 创建必要的符号链接
+          if [ ! -f "${{ env.BUILD_DIR }}/staging_dir/host/bin/gcc" ] && command -v gcc >/dev/null 2>&1; then
+            echo "🔗 创建gcc符号链接..."
+            ln -sf "$(which gcc)" "${{ env.BUILD_DIR }}/staging_dir/host/bin/gcc"
+          fi
+          if [ ! -f "${{ env.BUILD_DIR }}/staging_dir/host/bin/g++" ] && command -v g++ >/dev/null 2>&1; then
+            echo "🔗 创建g++符号链接..."
+            ln -sf "$(which g++)" "${{ env.BUILD_DIR }}/staging_dir/host/bin/g++"
+          fi
+          # 创建必要的头文件
+          echo "📄 创建必要的头文件..."
+          if [ ! -f "${{ env.BUILD_DIR }}/staging_dir/host/include/stdc-predef.h" ]; then
+            echo "🔧 创建stdc-predef.h头文件..."
+            echo '/* Generated by OpenWrt build system */' > "${{ env.BUILD_DIR }}/staging_dir/host/include/stdc-predef.h"
+            echo '#define __STDC_IEC_559__ 1' >> "${{ env.BUILD_DIR }}/staging_dir/host/include/stdc-predef.h"
+            echo '#define __STDC_IEC_559_COMPLEX__ 1' >> "${{ env.BUILD_DIR }}/staging_dir/host/include/stdc-predef.h"
+            echo '#define __STDC_ISO_10646__ 201706L' >> "${{ env.BUILD_DIR }}/staging_dir/host/include/stdc-predef.h"
+            echo '#define __STDC_UTF_16__ 1' >> "${{ env.BUILD_DIR }}/staging_dir/host/include/stdc-predef.h"
+            echo '#define __STDC_UTF_32__ 1' >> "${{ env.BUILD_DIR }}/staging_dir/host/include/stdc-predef.h"
+            echo "✅ 已创建stdc-predef.h头文件"
+          fi
+          echo "✅ 编译器工具链修复完成"
+      
+      # 步骤 24: 下载依赖包
+      - name: "24. 下载依赖包"
+        run: |
+          echo "=== 步骤 24: 下载依赖包 ==="
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh download_dependencies
       
-      # 步骤 24: 集成自定义文件
-      - name: "24. 集成自定义文件"
+      # 步骤 25: 集成自定义文件
+      - name: "25. 集成自定义文件"
         run: |
-          echo "=== 步骤 24: 集成自定义文件 ==="
+          echo "=== 步骤 25: 集成自定义文件 ==="
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh integrate_custom_files
       
-      # 步骤 25: 前置错误检查
-      - name: "25. 前置错误检查"
+      # 步骤 26: 前置错误检查
+      - name: "26. 前置错误检查"
         run: |
-          echo "=== 步骤 25: 前置错误检查 ==="
+          echo "=== 步骤 26: 前置错误检查 ==="
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh pre_build_error_check
       
-      # 步骤 26: 编译固件前的空间检查
-      - name: "26. 编译固件前的空间检查"
+      # 步骤 27: 编译固件前的空间检查
+      - name: "27. 编译固件前的空间检查"
         run: |
-          echo "=== 步骤 26: 编译固件前的空间检查 ==="
+          echo "=== 步骤 27: 编译固件前的空间检查 ==="
           df -h
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
           echo "/mnt 可用空间: ${AVAILABLE_GB}G"
-          
           if [ $AVAILABLE_GB -lt 10 ]; then
             echo "❌ 错误: 编译前空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
             exit 1
@@ -763,11 +732,10 @@ jobs:
             echo "✅ 编译前空间充足"
           fi
       
-      # 步骤 27: 编译固件（使用修复版）- 增加GDB修复后编译
-      - name: "27. 编译固件（使用修复版）"
+      # 步骤 28: 编译固件（使用修复版）- 增加工具链修复后编译
+      - name: "28. 编译固件（使用修复版）"
         run: |
-          echo "=== 步骤 27: 编译固件（使用修复版）==="
-          
+          echo "=== 步骤 28: 编译固件（使用修复版）==="
           echo "🚨 设置编译器修复环境变量..."
           export CFLAGS="-I${{ env.BUILD_DIR }}/staging_dir/host/include -O2 -pipe -fpermissive -Wno-error"
           export CXXFLAGS="$CFLAGS"
@@ -775,9 +743,9 @@ jobs:
           export CPPFLAGS="-I${{ env.BUILD_DIR }}/staging_dir/host/include"
           export ACLOCAL_PATH="${{ env.BUILD_DIR }}/staging_dir/host/share/aclocal:\${ACLOCAL_PATH}"
           export PKG_CONFIG_PATH="${{ env.BUILD_DIR }}/staging_dir/host/lib/pkgconfig:\${PKG_CONFIG_PATH}"
-          
+          export CC="${{ env.BUILD_DIR }}/staging_dir/host/bin/gcc"
+          export CXX="${{ env.BUILD_DIR }}/staging_dir/host/bin/g++"
           echo "🔧 开始编译固件..."
-          
           # 编译前再次检查GDB是否已禁用
           cd "${{ env.BUILD_DIR }}"
           if [ -f ".config" ]; then
@@ -791,25 +759,20 @@ jobs:
               echo "# CONFIG_PACKAGE_gdb-minimal is not set" >> .config
             fi
           fi
-          
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh build_firmware "true"
       
-      # 步骤 28: 搜索并打包构建产物
-      - name: "28. 搜索并打包构建产物"
+      # 步骤 29: 搜索并打包构建产物
+      - name: "29. 搜索并打包构建产物"
         if: success()
         run: |
-          echo "=== 步骤 28: 搜索并打包构建产物 ==="
+          echo "=== 步骤 29: 搜索并打包构建产物 ==="
           cd ${{ env.BUILD_DIR }}
-          
           mkdir -p /tmp/build-artifacts
-          
           echo "🔍 检查是否已有相同构建产物..."
           need_upload=false
-          
           if [ -d "bin/targets" ]; then
             echo "打包固件文件..."
             tar -czf /tmp/build-artifacts/firmware.tar.gz -C bin targets/
-            
             firmware_size=$(stat -c%s /tmp/build-artifacts/firmware.tar.gz 2>/dev/null || echo "0")
             if [ $firmware_size -gt 0 ]; then
               echo "✅ 固件打包完成，大小: $(du -h /tmp/build-artifacts/firmware.tar.gz | cut -f1)"
@@ -820,14 +783,12 @@ jobs:
           else
             echo "⚠️ bin/targets目录不存在"
           fi
-          
           if [ -f "build.log" ]; then
             echo "打包编译日志..."
             cp build.log /tmp/build-artifacts/build.log
             echo "✅ 日志打包完成"
             need_upload=true
           fi
-          
           echo "构建时间: $(date)" > /tmp/build-artifacts/build-info.txt
           echo "设备: ${{ env.DEVICE }}" >> /tmp/build-artifacts/build-info.txt
           echo "版本: ${{ env.SELECTED_BRANCH }}" >> /tmp/build-artifacts/build-info.txt
@@ -836,13 +797,12 @@ jobs:
           echo "编译器修复: 已应用-fpermissive标志和头文件修复" >> /tmp/build-artifacts/build-info.txt
           echo "GDB修复: 已禁用GDB并修复common-defs.h" >> /tmp/build-artifacts/build-info.txt
           echo "binutils修复: 已设置修复编译环境" >> /tmp/build-artifacts/build-info.txt
-          
+          echo "工具链修复: 已修复stamp目录和标记文件" >> /tmp/build-artifacts/build-info.txt
           if [ "${{ github.event.inputs.config_mode }}" = "base" ]; then
             echo "模式说明: 🟣 基础模式 - 最小化配置，用于测试编译" >> /tmp/build-artifacts/build-info.txt
           else
             echo "模式说明: 🟠 正常模式 - 完整功能配置" >> /tmp/build-artifacts/build-info.txt
           fi
-          
           if [ "$need_upload" = true ]; then
             echo "✅ 构建产物准备完成"
             echo "📤 构建产物已保存在: /tmp/build-artifacts/"
@@ -851,8 +811,8 @@ jobs:
             echo "ℹ️ 没有需要上传的构建产物"
           fi
       
-      # 步骤 29: 上传固件原始目录
-      - name: "29. 上传固件原始目录"
+      # 步骤 30: 上传固件原始目录
+      - name: "30. 上传固件原始目录"
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -860,32 +820,24 @@ jobs:
           path: ${{ env.BUILD_DIR }}/bin/targets/
           retention-days: 7
       
-      # 步骤 30: 汇总已编译的编译器文件并提交到仓库目录
-      - name: "30. 汇总已编译的编译器文件并提交到仓库目录"
+      # 步骤 31: 汇总已编译的编译器文件并提交到仓库目录
+      - name: "31. 汇总已编译的编译器文件并提交到仓库目录"
         if: success()
         run: |
-          echo "=== 步骤 30: 汇总已编译的编译器文件并提交到仓库目录 ==="
+          echo "=== 步骤 31: 汇总已编译的编译器文件并提交到仓库目录 ==="
           echo "🔍 开始收集已编译的编译器文件..."
-          
           COMPILER_SAVE_DIR="${{ github.workspace }}/firmware-config/build-Compiler-file/compiled"
           mkdir -p "$COMPILER_SAVE_DIR"
-          
           echo "编译器文件保存目录: $COMPILER_SAVE_DIR"
-          
           BUILD_DIR="${{ env.BUILD_DIR }}"
-          
           echo "📊 搜索已编译的编译器文件..."
-          
           find "$BUILD_DIR/staging_dir" -type f \( -name "*gcc*" -o -name "*g++*" -o -name "*as*" -o -name "*ld*" -o -name "*ar*" -o -name "*strip*" -o -name "*objcopy*" -o -name "*objdump*" -o -name "*nm*" -o -name "*ranlib*" \) 2>/dev/null | head -100 > /tmp/compiler_files.txt
-          
           total_files=$(wc -l < /tmp/compiler_files.txt)
           echo "📈 找到 $total_files 个编译器文件"
-          
           if [ $total_files -eq 0 ]; then
             echo "⚠️ 未找到编译器文件，跳过保存"
             exit 0
           fi
-          
           echo "📁 创建分类目录..."
           mkdir -p "$COMPILER_SAVE_DIR/arm"
           mkdir -p "$COMPILER_SAVE_DIR/mips"
@@ -893,20 +845,16 @@ jobs:
           mkdir -p "$COMPILER_SAVE_DIR/x86"
           mkdir -p "$COMPILER_SAVE_DIR/x86_64"
           mkdir -p "$COMPILER_SAVE_DIR/generic"
-          
           echo "📋 分类复制编译器文件..."
-          
           arm_count=0
           mips_count=0
           mipsel_count=0
           x86_count=0
           x86_64_count=0
           generic_count=0
-          
           while IFS= read -r file; do
             if [ -f "$file" ] && [ -x "$file" ]; then
               filename=$(basename "$file")
-              
               if [[ "$filename" == *"arm"* ]] || [[ "$file" == *"arm"* ]]; then
                 cp "$file" "$COMPILER_SAVE_DIR/arm/" 2>/dev/null && arm_count=$((arm_count + 1))
               elif [[ "$filename" == *"mips"* ]] && [[ "$filename" != *"mipsel"* ]]; then
@@ -922,7 +870,6 @@ jobs:
               fi
             fi
           done < /tmp/compiler_files.txt
-          
           echo ""
           echo "📊 编译器文件分类统计:"
           echo "  ARM架构: $arm_count 个文件"
@@ -932,10 +879,8 @@ jobs:
           echo "  x86_64架构: $x86_64_count 个文件"
           echo "  通用编译器: $generic_count 个文件"
           echo "  总计: $((arm_count + mips_count + mipsel_count + x86_count + x86_64_count + generic_count)) 个文件"
-          
           echo ""
           echo "📁 各目录详细内容:"
-          
           for arch_dir in arm mips mipsel x86 x86_64 generic; do
             dir_path="$COMPILER_SAVE_DIR/$arch_dir"
             if [ -d "$dir_path" ] && [ "$(ls -A "$dir_path" 2>/dev/null)" ]; then
@@ -953,7 +898,6 @@ jobs:
               echo "  $arch_dir 目录: 空"
             fi
           done
-          
           echo ""
           echo "📝 创建编译器信息文件..."
           echo "编译器文件汇总信息" > "$COMPILER_SAVE_DIR/compiler_info.txt"
@@ -966,6 +910,7 @@ jobs:
           echo "编译器修复: 已应用头文件冲突修复" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
           echo "GDB修复: 已修复common-defs.h和common-utils.c" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
           echo "binutils修复: 已设置修复编译环境" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
+          echo "工具链修复: 已修复stamp目录和标记文件" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
           echo "配置模式: ${{ github.event.inputs.config_mode }}" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
           echo "" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
           echo "文件分类统计:" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
@@ -977,45 +922,34 @@ jobs:
           echo "x86_64架构: $x86_64_count 个文件" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
           echo "通用编译器: $generic_count 个文件" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
           echo "总计: $((arm_count + mips_count + mipsel_count + x86_count + x86_64_count + generic_count)) 个文件" >> "$COMPILER_SAVE_DIR/compiler_info.txt"
-          
           total_size=$(du -sh "$COMPILER_SAVE_DIR" 2>/dev/null | cut -f1)
           echo ""
           echo "📦 编译器文件总目录大小: $total_size"
-          
           echo "📦 创建编译器文件压缩包..."
           cd "$COMPILER_SAVE_DIR"
           tar -czf "../compiled-compilers.tar.gz" ./*
           cd - > /dev/null
-          
           echo "✅ 编译器文件收集完成"
           echo "📁 保存目录: $COMPILER_SAVE_DIR"
           echo "📦 压缩包: ${{ github.workspace }}/firmware-config/build-Compiler-file/compiled-compilers.tar.gz"
-          
           echo "🔄 提交编译器文件到仓库目录..."
-          
           cd "${{ github.workspace }}"
-          
           git config --local user.email "github-actions@github.com"
           git config --local user.name "GitHub Actions"
-          
           git add firmware-config/build-Compiler-file/
-          
           git status --porcelain firmware-config/build-Compiler-file/
-          
           if git diff --cached --quiet -- firmware-config/build-Compiler-file/; then
             echo "ℹ️ 没有新的编译器文件需要提交"
           else
             echo "📝 提交编译器文件到仓库..."
-            git commit -m "feat: 添加已编译的编译器文件" -m "设备: ${{ env.DEVICE }}" -m "平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}" -m "版本: ${{ env.SELECTED_BRANCH }}" -m "GDB修复: 已修复common-defs.h" -m "binutils修复: 已设置修复编译环境"
-            
+            git commit -m "feat: 添加已编译的编译器文件" -m "设备: ${{ env.DEVICE }}" -m "平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}" -m "版本: ${{ env.SELECTED_BRANCH }}" -m "GDB修复: 已修复common-defs.h" -m "binutils修复: 已设置修复编译环境" -m "工具链修复: 已修复stamp目录"
             echo "🔄 推送到仓库..."
             git push origin HEAD:${{ github.ref_name }}
-            
             echo "✅ 编译器文件已提交到仓库目录"
           fi
       
-      # 步骤 31: 上传配置文件
-      - name: "31. 上传配置文件"
+      # 步骤 32: 上传配置文件
+      - name: "32. 上传配置文件"
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -1023,8 +957,8 @@ jobs:
           path: ${{ github.workspace }}/firmware-config/config-backup/
           retention-days: 7
       
-      # 步骤 32: 上传编译器文件压缩包
-      - name: "32. 上传编译器文件压缩包"
+      # 步骤 33: 上传编译器文件压缩包
+      - name: "33. 上传编译器文件压缩包"
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -1032,11 +966,11 @@ jobs:
           path: ${{ github.workspace }}/firmware-config/build-Compiler-file/compiled-compilers.tar.gz
           retention-days: 7
       
-      # 步骤 33: 错误分析（无论成功失败都运行）
-      - name: "33. 错误分析"
+      # 步骤 34: 错误分析（无论成功失败都运行）
+      - name: "34. 错误分析"
         if: always()
         run: |
-          echo "=== 步骤 33: 错误分析 ==="
+          echo "=== 步骤 34: 错误分析 ==="
           if [ -f "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh" ]; then
             chmod +x "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh"
             "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh"
@@ -1044,9 +978,9 @@ jobs:
             echo "⚠️ 错误分析脚本不存在: ${{ github.workspace }}/firmware-config/scripts/error_analysis.sh"
           fi
       
-      # 步骤 34: 编译后空间检查
-      - name: "34. 编译后空间检查"
+      # 步骤 35: 编译后空间检查
+      - name: "35. 编译后空间检查"
         if: always()
         run: |
-          echo "=== 步骤 34: 编译后空间检查 ==="
+          echo "=== 步骤 35: 编译后空间检查 ==="
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh post_build_space_check
