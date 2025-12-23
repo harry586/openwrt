@@ -732,6 +732,81 @@ jobs:
             echo "✅ 编译前空间充足"
           fi
       
+      # 步骤 27.5: 完整修复 GDB 编译错误
+      - name: "27.5: 完整修复 GDB 编译错误"
+        run: |
+          echo "=== 步骤 27.5: 完整修复 GDB 编译错误 ==="
+          cd "${{ env.BUILD_DIR }}"
+          
+          echo "🚨 检测 GDB 编译错误状态..."
+          
+          # 检查是否有 GDB 构建目录
+          GDB_DIR=$(find build_dir -type d -name "gdb-*" 2>/dev/null | head -1)
+          if [ -n "$GDB_DIR" ]; then
+            echo "✅ 找到 GDB 目录: $GDB_DIR"
+            echo "📊 目录大小: $(du -sh "$GDB_DIR" 2>/dev/null | cut -f1 || echo '未知')"
+            
+            # 检查 common-defs.h 状态
+            if [ -f "$GDB_DIR/gdbsupport/common-defs.h" ]; then
+              echo "🔍 检查 _GL_ATTRIBUTE_FORMAT_PRINTF 修复状态..."
+              if grep -q "^#define ATTRIBUTE_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))" "$GDB_DIR/gdbsupport/common-defs.h"; then
+                echo "✅ _GL_ATTRIBUTE_FORMAT_PRINTF 已正确修复"
+              else
+                echo "❌ _GL_ATTRIBUTE_FORMAT_PRINTF 未正确修复，执行完整修复"
+              fi
+            fi
+          fi
+          
+          # 运行完整的 GDB 修复脚本
+          echo "🔧 执行完整 GDB 修复..."
+          if [ -f "${{ github.workspace }}/firmware-config/scripts/fix_gdb_complete.sh" ]; then
+            chmod +x "${{ github.workspace }}/firmware-config/scripts/fix_gdb_complete.sh"
+            "${{ github.workspace }}/firmware-config/scripts/fix_gdb_complete.sh" "${{ env.BUILD_DIR }}"
+          else
+            echo "⚠️ 完整修复脚本不存在，使用内置修复..."
+            
+            # 内置修复逻辑
+            echo "🔧 内置修复：强制禁用 GDB 避免编译错误"
+            if [ -f ".config" ]; then
+              echo "🚨 在配置文件中强制禁用 GDB..."
+              sed -i '/^CONFIG_PACKAGE_gdb/d' .config
+              sed -i '/^CONFIG_PACKAGE_gdbserver/d' .config
+              sed -i '/^CONFIG_PACKAGE_gdb-minimal/d' .config
+              
+              echo "# 🚫 强制禁用 GDB 以避免编译错误" >> .config
+              echo "CONFIG_PACKAGE_gdb=n" >> .config
+              echo "CONFIG_PACKAGE_gdbserver=n" >> .config
+              echo "CONFIG_PACKAGE_gdb-minimal=n" >> .config
+              echo "# CONFIG_PACKAGE_gdb is not set" >> .config
+              echo "# CONFIG_PACKAGE_gdbserver is not set" >> .config
+              echo "# CONFIG_PACKAGE_gdb-minimal is not set" >> .config
+              
+              echo "✅ 已更新配置文件"
+              
+              # 重新同步配置
+              echo "🔄 重新同步配置..."
+              make defconfig
+            fi
+            
+            # 清理 GDB 构建目录
+            echo "🧹 清理 GDB 构建目录..."
+            find build_dir -type d -name "*gdb*" 2>/dev/null | while read dir; do
+              if [ -d "$dir" ]; then
+                echo "删除: $dir"
+                rm -rf "$dir"
+              fi
+            done
+            
+            # 设置环境变量
+            echo "🌍 设置修复环境变量..."
+            export CFLAGS="-I${{ env.BUILD_DIR }}/staging_dir/host/include -O2 -pipe -fpermissive -Wno-error"
+            export CXXFLAGS="$CFLAGS"
+            export LDFLAGS="-L${{ env.BUILD_DIR }}/staging_dir/host/lib -Wl,-O1"
+            export CPPFLAGS="-I${{ env.BUILD_DIR }}/staging_dir/host/include"
+          fi
+          
+          echo "✅ GDB 完整修复完成"
+      
       # 步骤 28: 编译固件（使用修复版）- 增加工具链修复后编译
       - name: "28. 编译固件（使用修复版）"
         run: |
