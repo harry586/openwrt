@@ -371,6 +371,7 @@ if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
     echo "5. GCC头文件冲突: GCC 8.4.0可能有头文件声明冲突" >> error_analysis.log
     echo "6. GDB编译错误: GDB 10.1可能有_GL_ATTRIBUTE_FORMAT_PRINTF错误" >> error_analysis.log
     echo "7. binutils编译错误: binutils 2.40可能有配置或编译错误" >> error_analysis.log
+    echo "8. 工具链构建错误: 工具链Makefile第93行可能失败" >> error_analysis.log
     echo "" >> error_analysis.log
     echo "🛠️ 解决方案:" >> error_analysis.log
     echo "1. 清理编译器重新下载: rm -rf staging_dir/compiler-*" >> error_analysis.log
@@ -385,6 +386,9 @@ if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
     echo "10. 禁用GDB编译（如果不需调试）: 在.config中添加 # CONFIG_PACKAGE_gdb is not set" >> error_analysis.log
     echo "11. 修复GDB内部错误: 在gdb源码中添加DISABLE_ASSERT宏定义" >> error_analysis.log
     echo "12. 修复binutils编译错误: 检查config.log，设置正确的编译环境变量" >> error_analysis.log
+    echo "13. 修复工具链构建错误: 检查staging_dir/toolchain-*/stamp/.binutils_installed文件" >> error_analysis.log
+    echo "14. 运行修复脚本: $GITHUB_WORKSPACE/firmware-config/scripts/build_firmware_main.sh fix_binutils_compilation_error" >> error_analysis.log
+    echo "15. 运行工具链修复脚本: $GITHUB_WORKSPACE/firmware-config/scripts/build_firmware_main.sh fix_compiler_toolchain_error" >> error_analysis.log
 fi
 
 echo "" >> error_analysis.log
@@ -438,6 +442,10 @@ if [ -f "build.log" ]; then
     grep -E "toolchain/binutils/compile.*failed|binutils.*Error|binutils.*failed" build.log -i | head -10 >> error_analysis.log || echo "无binutils编译错误" >> error_analysis.log
     
     echo "" >> error_analysis.log
+    echo "❌ 工具链构建错误（新增关键检查）:" >> error_analysis.log
+    grep -E "toolchain/Makefile.*93|toolchain_compile.*failed|stamp/.binutils_installed" build.log -i | head -10 >> error_analysis.log || echo "无工具链构建错误" >> error_analysis.log
+    
+    echo "" >> error_analysis.log
     echo "⚠️ 被忽略的错误:" >> error_analysis.log
     grep "Error.*ignored" build.log >> error_analysis.log || echo "无被忽略错误" >> error_analysis.log
     
@@ -458,24 +466,60 @@ echo "开始收集和分析错误日志..." >> error_analysis.log
 echo "使用日志文件: build.log" >> error_analysis.log
 echo "" >> error_analysis.log
 
-ERROR_CATEGORIES=("严重错误 (Failed):|failed|FAILED" "编译错误 (error:):|error:" "退出错误 (error 1/error 2):|error [12]|Error [12]" "文件缺失错误:|No such file|file not found|cannot find" "依赖错误:|depends on|missing dependencies" "配置错误:|configuration error|config error" "语法错误:|syntax error" "类型错误:|type error" "未定义引用:|undefined reference" "内存错误:|out of memory|Killed process|oom" "权限错误:|Permission denied|operation not permitted" "网络错误:|Connection refused|timeout|Network is unreachable" "哈希校验错误:|Hash mismatch|Bad hash" "管道错误:|Broken pipe" "编译器错误:|compiler|gcc|binutils|ld" "头文件错误:|stdc-predef.h|host/include|include.*not found" "libtool错误:|libtool|aclocal|autoconf|automake|libtool.m4" "C库相关错误:|musl|glibc|uclibc|libc" "GCC头文件声明错误:|declaration does not declare anything|conflicting declaration of C function|ambiguating new declaration" "GDB编译错误:|_GL_ATTRIBUTE_FORMAT_PRINTF|gdb.*failed|ERROR: toolchain/gdb failed|internal_error.*Assertion|xml-tdesc.o.*Error" "binutils编译错误:|toolchain/binutils/compile.*failed|binutils.*Error|binutils.*failed" "配置不同步警告:|configuration is out of sync")
+ERROR_CATEGORIES=("严重错误 (Failed):|failed|FAILED" "编译错误 (error:):|error:" "退出错误 (error 1/error 2):|error [12]|Error [12]" "文件缺失错误:|No such file|file not found|cannot find" "依赖错误:|depends on|missing dependencies" "配置错误:|configuration error|config error" "语法错误:|syntax error" "类型错误:|type error" "未定义引用:|undefined reference" "内存错误:|out of memory|Killed process|oom" "权限错误:|Permission denied|operation not permitted" "网络错误:|Connection refused|timeout|Network is unreachable" "哈希校验错误:|Hash mismatch|Bad hash" "管道错误:|Broken pipe" "编译器错误:|compiler|gcc|binutils|ld" "头文件错误:|stdc-predef.h|host/include|include.*not found" "libtool错误:|libtool|aclocal|autoconf|automake|libtool.m4" "C库相关错误:|musl|glibc|uclibc|libc" "GCC头文件声明错误:|declaration does not declare anything|conflicting declaration of C function|ambiguating new declaration" "GDB编译错误:|_GL_ATTRIBUTE_FORMAT_PRINTF|gdb.*failed|ERROR: toolchain/gdb failed|internal_error.*Assertion|xml-tdesc.o.*Error" "binutils编译错误:|toolchain/binutils/compile.*failed|binutils.*Error|binutils.*failed" "工具链构建错误:|toolchain/Makefile.*93|toolchain_compile.*failed|stamp/.binutils_installed" "配置不同步警告:|configuration is out of sync")
 
 for category in "${ERROR_CATEGORIES[@]}"; do
     IFS='|' read -r category_name patterns <<< "$category"
     echo "=== $category_name ===" >> error_analysis.log
     pattern_array=($patterns)
-    grep_cmd="grep -i"
     for pattern in "${pattern_array[@]}"; do
-        grep_cmd+=" -e \"$pattern\""
+        grep -i -e "$pattern" build.log | head -5 >> error_analysis.log 2>/dev/null || true
     done
-    grep_cmd+=" build.log | head -5"
-    eval $grep_cmd >> error_analysis.log || echo "无相关错误" >> error_analysis.log
+    if [ ! -s error_analysis.log ] || ! tail -1 error_analysis.log | grep -q .; then
+        echo "无相关错误" >> error_analysis.log
+    fi
     echo "" >> error_analysis.log
 done
 
 echo "=== 错误原因分析和建议（增强版）===" >> error_analysis.log
 
-echo "❌ GDB _GL_ATTRIBUTE_FORMAT_PRINTF 错误（新增关键修复）" >> error_analysis.log
+echo "❌ 工具链构建错误（关键修复）" >> error_analysis.log
+echo "💡 可能原因:" >> error_analysis.log
+echo "   - binutils编译失败导致工具链构建中断" >> error_analysis.log
+echo "   - 缺少.binutils_installed标记文件" >> error_analysis.log
+echo "   - 工具链Makefile第93行执行失败" >> error_analysis.log
+echo "   - 编译器环境配置不正确" >> error_analysis.log
+echo "   - 缺少必要的头文件或库文件" >> error_analysis.log
+echo "🛠️ 解决方案:" >> error_analysis.log
+echo "   - 检查stamp目录: staging_dir/toolchain-*/stamp/" >> error_analysis.log
+echo "   - 创建缺失的标记文件: touch staging_dir/toolchain-*/stamp/.binutils_installed" >> error_analysis.log
+echo "   - 设置正确的编译环境变量:" >> error_analysis.log
+echo "     export CFLAGS=\"-I\$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive\"" >> error_analysis.log
+echo "     export CXXFLAGS=\"\$CFLAGS\"" >> error_analysis.log
+echo "     export LDFLAGS=\"-L\$BUILD_DIR/staging_dir/host/lib -Wl,-O1\"" >> error_analysis.log
+echo "   - 运行修复脚本: $GITHUB_WORKSPACE/firmware-config/scripts/build_firmware_main.sh fix_binutils_compilation_error" >> error_analysis.log
+echo "   - 运行工具链修复脚本: $GITHUB_WORKSPACE/firmware-config/scripts/build_firmware_main.sh fix_compiler_toolchain_error" >> error_analysis.log
+echo "   - 单独编译工具链: make toolchain/install V=s" >> error_analysis.log
+echo "" >> error_analysis.log
+
+echo "❌ binutils编译错误（关键修复）" >> error_analysis.log
+echo "💡 可能原因:" >> error_analysis.log
+echo "   - binutils配置错误" >> error_analysis.log
+echo "   - 缺少必要的编译工具或库" >> error_analysis.log
+echo "   - 编译环境变量设置不正确" >> error_analysis.log
+echo "   - 头文件路径问题" >> error_analysis.log
+echo "🛠️ 解决方案:" >> error_analysis.log
+echo "   - 检查binutils配置日志: cat build_dir/binutils-2.40/config.log | grep -i error" >> error_analysis.log
+echo "   - 设置正确的编译环境变量:" >> error_analysis.log
+echo "     export CFLAGS=\"-I\$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive\"" >> error_analysis.log
+echo "     export CXXFLAGS=\"\$CFLAGS\"" >> error_analysis.log
+echo "     export LDFLAGS=\"-L\$BUILD_DIR/staging_dir/host/lib -Wl,-O1\"" >> error_analysis.log
+echo "     export CPPFLAGS=\"-I\$BUILD_DIR/staging_dir/host/include\"" >> error_analysis.log
+echo "   - 确保安装了gettext和pkg-config: sudo apt-get install gettext pkg-config" >> error_analysis.log
+echo "   - 清理并重新编译binutils: rm -rf build_dir/binutils-2.40 && make toolchain/binutils/compile -j2 V=s" >> error_analysis.log
+echo "" >> error_analysis.log
+
+echo "❌ GDB _GL_ATTRIBUTE_FORMAT_PRINTF 错误（关键修复）" >> error_analysis.log
 echo "💡 可能原因:" >> error_analysis.log
 echo "   - GDB源码中的_GL_ATTRIBUTE_FORMAT_PRINTF宏定义错误" >> error_analysis.log
 echo "   - gdbsupport/common-defs.h第111行附近有语法错误" >> error_analysis.log
@@ -491,24 +535,7 @@ echo "     改为: #define ATTRIBUTE_PRINTF(format_idx, arg_idx) __attribute__ (
 echo "   - 如果需要，在110行添加_GL_ATTRIBUTE_FORMAT_PRINTF的定义:" >> error_analysis.log
 echo "     #define _GL_ATTRIBUTE_FORMAT_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))" >> error_analysis.log
 echo "   - 或者禁用GDB编译: echo '# CONFIG_PACKAGE_gdb is not set' >> .config" >> error_analysis.log
-echo "   - 运行修复脚本: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh fix_gdb_compilation_error" >> error_analysis.log
-echo "" >> error_analysis.log
-
-echo "❌ binutils编译错误（新增关键修复）" >> error_analysis.log
-echo "💡 可能原因:" >> error_analysis.log
-echo "   - binutils配置错误" >> error_analysis.log
-echo "   - 缺少必要的编译工具或库" >> error_analysis.log
-echo "   - 编译环境变量设置不正确" >> error_analysis.log
-echo "   - 头文件路径问题" >> error_analysis.log
-echo "🛠️ 解决方案:" >> error_analysis.log
-echo "   - 检查binutils配置日志: cat build_dir/binutils-2.40/config.log | grep -i error" >> error_analysis.log
-echo "   - 设置正确的编译环境变量:" >> error_analysis.log
-echo "     export CFLAGS=\"-I\$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive\"" >> error_analysis.log
-echo "     export CXXFLAGS=\"\$CFLAGS\"" >> error_analysis.log
-echo "     export LDFLAGS=\"-L\$BUILD_DIR/staging_dir/host/lib -Wl,-O1\"" >> error_analysis.log
-echo "     export CPPFLAGS=\"-I\$BUILD_DIR/staging_dir/host/include\"" >> error_analysis.log
-echo "   - 确保安装了gettext和pkg-config: sudo apt-get install gettext pkg-config" >> error_analysis.log
-echo "   - 清理并重新编译binutils: rm -rf build_dir/binutils-2.40 && make toolchain/binutils/compile -j2 V=s" >> error_analysis.log
+echo "   - 运行修复脚本: $GITHUB_WORKSPACE/firmware-config/scripts/build_firmware_main.sh fix_gdb_compilation_error" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "❌ 文件缺失错误" >> error_analysis.log
@@ -628,7 +655,7 @@ echo "   - 根据平台启用专用驱动: IPQ40xx->高通驱动, MT76xx->雷凌
 echo "   - 确保启用存储支持: kmod-usb-storage, kmod-scsi-core" >> error_analysis.log
 echo "" >> error_analysis.log
 
-echo "❌ GCC头文件声明错误（新增关键修复）" >> error_analysis.log
+echo "❌ GCC头文件声明错误（关键修复）" >> error_analysis.log
 echo "💡 可能原因:" >> error_analysis.log
 echo "   - GCC头文件中的函数声明冲突" >> error_analysis.log
 echo "   - 系统头文件与GCC内部头文件冲突" >> error_analysis.log
@@ -689,35 +716,35 @@ echo "16. 📝 添加-fpermissive标志: export CFLAGS=\"\$CFLAGS -fpermissive\"
 echo "17. 🚫 禁用GDB编译（解决GDB错误）: echo '# CONFIG_PACKAGE_gdb is not set' >> .config" >> error_analysis.log
 echo "18. 🔧 修复GDB _GL_ATTRIBUTE_FORMAT_PRINTF错误: 修改gdbsupport/common-defs.h第111行" >> error_analysis.log
 echo "19. 🔧 修复binutils编译错误: 检查config.log，设置正确的编译环境" >> error_analysis.log
-echo "20. 🔧 运行GDB修复脚本: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh fix_gdb_compilation_error" >> error_analysis.log
+echo "20. 🔧 修复工具链构建错误: 检查stamp目录，创建.binutils_installed标记" >> error_analysis.log
+echo "21. 🔧 运行binutils修复脚本: $GITHUB_WORKSPACE/firmware-config/scripts/build_firmware_main.sh fix_binutils_compilation_error" >> error_analysis.log
+echo "22. 🔧 运行工具链修复脚本: $GITHUB_WORKSPACE/firmware-config/scripts/build_firmware_main.sh fix_compiler_toolchain_error" >> error_analysis.log
 echo "" >> error_analysis.log
 
-echo "=== 针对GDB _GL_ATTRIBUTE_FORMAT_PRINTF错误的特殊修复方案 ===" >> error_analysis.log
-echo "如果遇到GDB _GL_ATTRIBUTE_FORMAT_PRINTF错误，请尝试以下步骤:" >> error_analysis.log
+echo "=== 针对工具链构建错误的特殊修复方案 ===" >> error_analysis.log
+echo "如果遇到工具链构建错误（toolchain/Makefile:93），请尝试以下步骤:" >> error_analysis.log
 echo "" >> error_analysis.log
-echo "1. 🔍 定位GDB源码目录:" >> error_analysis.log
-echo "   GDB_DIR=\$(find build_dir -type d -name 'gdb-*' 2>/dev/null | head -1)" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "2. 📋 备份原始文件:" >> error_analysis.log
-echo "   cp \"\$GDB_DIR/gdbsupport/common-defs.h\" \"\$GDB_DIR/gdbsupport/common-defs.h.backup\"" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "3. 🔧 修复common-defs.h:" >> error_analysis.log
-echo "   sed -i '111s/#define ATTRIBUTE_PRINTF _GL_ATTRIBUTE_FORMAT_PRINTF/#define ATTRIBUTE_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))/' \"\$GDB_DIR/gdbsupport/common-defs.h\"" >> error_analysis.log
-echo "   sed -i '110a#define _GL_ATTRIBUTE_FORMAT_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))' \"\$GDB_DIR/gdbsupport/common-defs.h\"" >> error_analysis.log
-echo "" >> error_analysis.log
-echo "4. 🔧 修复common-utils.c中的断言错误:" >> error_analysis.log
-echo "   if [ -f \"\$GDB_DIR/gdb/common/common-utils.c\" ]; then" >> error_analysis.log
-echo "     cp \"\$GDB_DIR/gdb/common/common-utils.c\" \"\$GDB_DIR/gdb/common/common-utils.c.backup\"" >> error_analysis.log
-echo "     sed -i '1i#define DISABLE_ASSERT 1' \"\$GDB_DIR/gdb/common/common-utils.c\"" >> error_analysis.log
-echo "     sed -i 's/internal_error (file, line, _(\"%s: Assertion \`%s'\'' failed.\"),/fprintf(stderr, \"GDB Assertion failed: %s\\n\", __func__); return;/g' \"\$GDB_DIR/gdb/common/common-utils.c\"" >> error_analysis.log
+echo "1. 🔍 检查stamp目录状态:" >> error_analysis.log
+echo "   STAMP_DIR=\$(find staging_dir -name \"stamp\" -type d | head -1)" >> error_analysis.log
+echo "   if [ -d \"\$STAMP_DIR\" ]; then" >> error_analysis.log
+echo "     echo '检查标记文件...'" >> error_analysis.log
+echo "     ls -la \"\$STAMP_DIR/\"" >> error_analysis.log
 echo "   fi" >> error_analysis.log
 echo "" >> error_analysis.log
-echo "5. 🌍 设置编译环境变量:" >> error_analysis.log
-echo "   export CFLAGS=\"-I\$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive -Wno-error\"" >> error_analysis.log
-echo "   export CXXFLAGS=\"\$CFLAGS\"" >> error_analysis.log
+echo "2. 📄 创建缺失的标记文件:" >> error_analysis.log
+echo "   if [ ! -f \"\$STAMP_DIR/.binutils_installed\" ]; then" >> error_analysis.log
+echo "     echo '创建.binutils_installed标记文件...'" >> error_analysis.log
+echo "     echo \"binutils installed at \$(date)\" > \"\$STAMP_DIR/.binutils_installed\"" >> error_analysis.log
+echo "   fi" >> error_analysis.log
 echo "" >> error_analysis.log
-echo "6. 🔄 重新编译:" >> error_analysis.log
-echo "   make -j2 V=s" >> error_analysis.log
+echo "3. 🔧 设置修复编译环境:" >> error_analysis.log
+echo "   export CFLAGS=\"-I\$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive\"" >> error_analysis.log
+echo "   export CXXFLAGS=\"\$CFLAGS\"" >> error_analysis.log
+echo "   export LDFLAGS=\"-L\$BUILD_DIR/staging_dir/host/lib -Wl,-O1\"" >> error_analysis.log
+echo "   export CPPFLAGS=\"-I\$BUILD_DIR/staging_dir/host/include\"" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "4. 🔄 单独编译工具链:" >> error_analysis.log
+echo "   make toolchain/install -j2 V=s" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "=== 针对binutils编译错误的特殊修复方案 ===" >> error_analysis.log
