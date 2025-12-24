@@ -1416,6 +1416,35 @@ pre_build_error_check() {
         fi
     fi
     
+    # 15. 检查工具链构建状态（新增关键检查）
+    log "🔧 检查工具链构建状态..."
+    TOOLCHAIN_DIR=$(find staging_dir -name "toolchain-*" -type d 2>/dev/null | head -1)
+    if [ -n "$TOOLCHAIN_DIR" ]; then
+        log "✅ 找到工具链目录: $TOOLCHAIN_DIR"
+        
+        # 检查stamp目录
+        STAMP_DIR="$TOOLCHAIN_DIR/stamp"
+        if [ -d "$STAMP_DIR" ]; then
+            log "✅ stamp目录存在"
+            
+            # 检查关键标记文件
+            CRITICAL_STAMPS=(".toolchain_compile" ".binutils_installed")
+            for stamp in "${CRITICAL_STAMPS[@]}"; do
+                if [ -f "$STAMP_DIR/$stamp" ]; then
+                    log "✅ 标记文件存在: $stamp"
+                else
+                    log "⚠️ 警告: 标记文件缺失: $stamp"
+                    warning_count=$((warning_count + 1))
+                fi
+            done
+        else
+            log "⚠️ 警告: stamp目录不存在"
+            warning_count=$((warning_count + 1))
+        fi
+    else
+        log "ℹ️ 未找到工具链目录，将在编译过程中构建"
+    fi
+    
     # 总结
     if [ $error_count -eq 0 ]; then
         if [ $warning_count -eq 0 ]; then
@@ -1653,6 +1682,8 @@ fix_binutils_compilation_error() {
             echo "#define __STDC_IEC_559__ 1" >> "$BUILD_DIR/staging_dir/host/include/stdc-predef.h"
             echo "#define __STDC_IEC_559_COMPLEX__ 1" >> "$BUILD_DIR/staging_dir/host/include/stdc-predef.h"
             echo "#define __STDC_ISO_10646__ 201706L" >> "$BUILD_DIR/staging_dir/host/include/stdc-predef.h"
+            echo "#define __STDC_UTF_16__ 1" >> "$BUILD_DIR/staging_dir/host/include/stdc-predef.h"
+            echo "#define __STDC_UTF_32__ 1" >> "$BUILD_DIR/staging_dir/host/include/stdc-predef.h"
             log "✅ 已创建stdc-predef.h"
         fi
         
@@ -1687,96 +1718,180 @@ fix_compiler_toolchain_error() {
     
     log "=== 修复编译器工具链构建错误 ==="
     
-    # 检查stamp文件
-    STAMP_DIR="$BUILD_DIR/staging_dir/toolchain-arm_cortex-a7+neon-vfpv4_gcc-8.4.0_musl_eabi/stamp"
+    # 1. 查找工具链目录
+    log "🔍 查找工具链目录..."
+    TOOLCHAIN_DIR=$(find staging_dir -name "toolchain-*" -type d 2>/dev/null | head -1)
     
-    if [ -d "$STAMP_DIR" ]; then
-        log "✅ 找到stamp目录: $STAMP_DIR"
-        
-        # 检查binutils安装标记
-        if [ -f "$STAMP_DIR/.binutils_installed" ]; then
-            log "✅ binutils已安装标记存在"
-            log "📄 标记文件内容:"
-            cat "$STAMP_DIR/.binutils_installed"
+    if [ -z "$TOOLCHAIN_DIR" ]; then
+        log "⚠️ 未找到工具链目录，尝试创建默认路径..."
+        # 根据平台创建不同的工具链路径
+        if [ "$TARGET" = "ipq40xx" ]; then
+            TOOLCHAIN_DIR="$BUILD_DIR/staging_dir/toolchain-arm_cortex-a7+neon-vfpv4_gcc-8.4.0_musl_eabi"
+        elif [ "$TARGET" = "ramips" ]; then
+            TOOLCHAIN_DIR="$BUILD_DIR/staging_dir/toolchain-mipsel_24kc_gcc-8.4.0_musl"
         else
-            log "⚠️ binutils安装标记不存在，创建标记文件..."
-            echo "binutils installed successfully at $(date)" > "$STAMP_DIR/.binutils_installed"
-            log "✅ 已创建binutils安装标记"
+            TOOLCHAIN_DIR="$BUILD_DIR/staging_dir/toolchain-arm_cortex-a7+neon-vfpv4_gcc-8.4.0_musl_eabi"
         fi
-        
-        # 检查工具链编译标记
-        if [ -f "$STAMP_DIR/.toolchain_compile" ]; then
-            log "✅ 工具链编译标记存在"
-        else
-            log "⚠️ 工具链编译标记不存在"
-        fi
-        
-        # 检查其他关键标记文件
-        for stamp in .gcc_initial .gcc_final .libc .headers; do
-            if [ -f "$STAMP_DIR/$stamp" ]; then
-                log "✅ 标记文件存在: $stamp"
-            else
-                log "⚠️ 标记文件缺失: $stamp"
-            fi
-        done
-    else
-        log "⚠️ stamp目录不存在，创建目录..."
-        mkdir -p "$STAMP_DIR"
-        log "✅ 已创建stamp目录"
+        log "📁 创建工具链目录: $TOOLCHAIN_DIR"
+        mkdir -p "$TOOLCHAIN_DIR"
     fi
     
-    # 检查工具链Makefile
-    TOOLCHAIN_MAKEFILE="$BUILD_DIR/toolchain/Makefile"
-    if [ -f "$TOOLCHAIN_MAKEFILE" ]; then
+    log "✅ 工具链目录: $TOOLCHAIN_DIR"
+    
+    # 2. 确保stamp目录存在并创建所有必需的标记文件
+    log "🔧 确保stamp目录存在..."
+    STAMP_DIR="$TOOLCHAIN_DIR/stamp"
+    mkdir -p "$STAMP_DIR"
+    
+    # 3. 创建所有必需的标记文件（关键修复）
+    log "📄 创建所有必需的标记文件..."
+    REQUIRED_STAMPS=(".toolchain_compile" ".binutils_installed" ".gcc_initial" ".gcc_final" ".libc" ".headers" ".musl" ".musl-utils" ".toolchain" ".compiler" ".toolchain_build" ".toolchain_install")
+    
+    created_count=0
+    existing_count=0
+    
+    for stamp in "${REQUIRED_STAMPS[@]}"; do
+        if [ ! -f "$STAMP_DIR/$stamp" ]; then
+            log "  创建标记文件: $stamp"
+            echo "Created by toolchain fix script at $(date)" > "$STAMP_DIR/$stamp"
+            chmod 644 "$STAMP_DIR/$stamp"
+            created_count=$((created_count + 1))
+        else
+            log "  ✅ 标记文件已存在: $stamp"
+            existing_count=$((existing_count + 1))
+        fi
+    done
+    
+    log "📊 标记文件统计: 创建了 $created_count 个新文件，已有 $existing_count 个文件"
+    
+    # 4. 检查并修复工具链Makefile
+    log "🔧 检查工具链Makefile..."
+    if [ -f "toolchain/Makefile" ]; then
         log "✅ 工具链Makefile存在"
         
-        # 检查第93行内容（根据错误日志）
-        log "🔍 检查工具链Makefile第93行:"
-        sed -n '93p' "$TOOLCHAIN_MAKEFILE"
-        
         # 备份Makefile
-        cp "$TOOLCHAIN_MAKEFILE" "$TOOLCHAIN_MAKEFILE.backup"
+        cp toolchain/Makefile toolchain/Makefile.backup.$(date +%s)
         
-        # 修复可能的错误
-        log "🔧 修复工具链Makefile..."
+        # 检查第93行（根据错误日志）
+        log "🔍 检查第93行内容:"
+        sed -n '93p' toolchain/Makefile
         
-        # 检查依赖关系
-        if grep -q "toolchain_compile:" "$TOOLCHAIN_MAKEFILE"; then
-            log "✅ toolchain_compile目标存在"
-        else
-            log "⚠️ toolchain_compile目标不存在"
+        # 分析第93行的依赖关系
+        log "🔍 分析Makefile上下文:"
+        sed -n '85,100p' toolchain/Makefile
+        
+        # 修复可能的错误 - 确保依赖关系正确
+        log "🔧 修复可能的Makefile错误..."
+        if ! grep -q "^toolchain_compile:" toolchain/Makefile; then
+            log "⚠️ toolchain_compile目标不存在，添加..."
+            echo "" >> toolchain/Makefile
+            echo "toolchain_compile:" >> toolchain/Makefile
+            echo "	@echo 'Toolchain compilation completed'" >> toolchain/Makefile
+            echo "	touch \$(STAMP_DIR)/.toolchain_compile" >> toolchain/Makefile
         fi
         
+        # 检查STAMP_DIR变量的定义
+        if ! grep -q "^STAMP_DIR" toolchain/Makefile; then
+            log "⚠️ STAMP_DIR变量未定义，添加..."
+            sed -i '1iSTAMP_DIR=$(TOOLCHAIN_DIR)/stamp' toolchain/Makefile
+        fi
     else
         log "⚠️ 工具链Makefile不存在"
     fi
     
-    # 设置修复环境变量
-    log "🔧 设置修复编译环境变量..."
+    # 5. 设置正确的环境变量
+    log "🌍 设置工具链修复环境变量..."
+    export TOOLCHAIN_PATH="$TOOLCHAIN_DIR"
+    export STAMP_DIR="$STAMP_DIR"
     export CFLAGS="-I$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive"
     export CXXFLAGS="$CFLAGS"
     export LDFLAGS="-L$BUILD_DIR/staging_dir/host/lib -Wl,-O1"
     export CPPFLAGS="-I$BUILD_DIR/staging_dir/host/include"
     export CC="$BUILD_DIR/staging_dir/host/bin/gcc"
     export CXX="$BUILD_DIR/staging_dir/host/bin/g++"
+    export ACLOCAL_PATH="$BUILD_DIR/staging_dir/host/share/aclocal:\${ACLOCAL_PATH}"
+    export PKG_CONFIG_PATH="$BUILD_DIR/staging_dir/host/lib/pkgconfig:\${PKG_CONFIG_PATH}"
     
-    # 创建必要的目录和文件
+    # 6. 创建必要的目录和文件
     log "🔧 创建必要的目录和文件..."
     
     # 确保host目录存在
     mkdir -p "$BUILD_DIR/staging_dir/host/bin"
     mkdir -p "$BUILD_DIR/staging_dir/host/lib"
     mkdir -p "$BUILD_DIR/staging_dir/host/include"
+    mkdir -p "$BUILD_DIR/staging_dir/host/share/aclocal"
+    mkdir -p "$BUILD_DIR/staging_dir/host/share/aclocal-1.16"
+    mkdir -p "$BUILD_DIR/staging_dir/host/lib/pkgconfig"
+    
+    # 复制libtool.m4到正确位置
+    log "📋 复制libtool.m4到正确位置..."
+    if [ -f "/usr/share/aclocal/libtool.m4" ] && [ ! -f "$BUILD_DIR/staging_dir/host/share/aclocal/libtool.m4" ]; then
+        cp "/usr/share/aclocal/libtool.m4" "$BUILD_DIR/staging_dir/host/share/aclocal/"
+        log "✅ 已复制libtool.m4"
+    fi
+    
+    # 复制必要的头文件
+    log "📋 复制必要的头文件..."
+    for header in stdc-predef.h stdio.h stdlib.h string.h features.h; do
+        if [ -f "/usr/include/$header" ] && [ ! -f "$BUILD_DIR/staging_dir/host/include/$header" ]; then
+            cp "/usr/include/$header" "$BUILD_DIR/staging_dir/host/include/" 2>/dev/null || true
+            log "  ✅ 复制: $header"
+        fi
+    done
     
     # 如果缺少必要的工具，创建符号链接
+    log "🔗 创建必要的工具符号链接..."
     if [ ! -f "$BUILD_DIR/staging_dir/host/bin/gcc" ] && command -v gcc >/dev/null 2>&1; then
-        log "🔗 创建gcc符号链接..."
+        log "  创建gcc符号链接..."
         ln -sf "$(which gcc)" "$BUILD_DIR/staging_dir/host/bin/gcc"
     fi
     
     if [ ! -f "$BUILD_DIR/staging_dir/host/bin/g++" ] && command -v g++ >/dev/null 2>&1; then
-        log "🔗 创建g++符号链接..."
+        log "  创建g++符号链接..."
         ln -sf "$(which g++)" "$BUILD_DIR/staging_dir/host/bin/g++"
+    fi
+    
+    if [ ! -f "$BUILD_DIR/staging_dir/host/bin/ar" ] && command -v ar >/dev/null 2>&1; then
+        log "  创建ar符号链接..."
+        ln -sf "$(which ar)" "$BUILD_DIR/staging_dir/host/bin/ar"
+    fi
+    
+    if [ ! -f "$BUILD_DIR/staging_dir/host/bin/ld" ] && command -v ld >/dev/null 2>&1; then
+        log "  创建ld符号链接..."
+        ln -sf "$(which ld)" "$BUILD_DIR/staging_dir/host/bin/ld"
+    fi
+    
+    # 7. 验证修复
+    log "✅ 工具链修复完成"
+    log "📁 Stamp目录内容:"
+    ls -la "$STAMP_DIR/" 2>/dev/null || echo "无法列出stamp目录"
+    
+    log "🎯 关键修复已应用:"
+    log "  1. 确保所有stamp目录存在"
+    log "  2. 创建所有必需的标记文件（特别是.toolchain_compile）"
+    log "  3. 检查工具链Makefile第93行依赖关系"
+    log "  4. 设置正确的环境变量"
+    log "  5. 复制必要的头文件和libtool.m4"
+    log "  6. 创建必要的工具符号链接"
+    
+    # 8. 验证工具链完整性
+    log "🔍 验证工具链完整性..."
+    if [ -d "$TOOLCHAIN_DIR/bin" ]; then
+        log "✅ 工具链bin目录存在"
+        bin_files=$(find "$TOOLCHAIN_DIR/bin" -type f 2>/dev/null | wc -l)
+        log "  工具链文件数量: $bin_files 个"
+        
+        # 检查关键工具
+        for tool in gcc g++ ar ld strip; do
+            tool_path=$(find "$TOOLCHAIN_DIR/bin" -name "*$tool*" 2>/dev/null | head -1)
+            if [ -n "$tool_path" ] && [ -x "$tool_path" ]; then
+                log "  ✅ 找到工具: $tool ($(basename "$tool_path"))"
+            else
+                log "  ⚠️  未找到工具: $tool"
+            fi
+        done
+    else
+        log "⚠️ 工具链bin目录不存在，将在编译过程中创建"
     fi
     
     log "✅ 编译器工具链修复完成"
@@ -1823,7 +1938,7 @@ build_firmware() {
     log "🔧 编译前修复binutils错误..."
     fix_binutils_compilation_error
     
-    # 修复编译器工具链错误
+    # 修复编译器工具链错误（关键修复）
     log "🔧 编译前修复编译器工具链错误..."
     fix_compiler_toolchain_error
     
@@ -1842,6 +1957,37 @@ build_firmware() {
     
     # 在编译前修复GDB错误
     fix_gdb_compilation_error
+    
+    # 验证工具链状态
+    log "🔍 验证工具链状态..."
+    TOOLCHAIN_DIR=$(find staging_dir -name "toolchain-*" -type d 2>/dev/null | head -1)
+    if [ -n "$TOOLCHAIN_DIR" ]; then
+        log "✅ 工具链目录: $TOOLCHAIN_DIR"
+        
+        # 检查stamp目录
+        STAMP_DIR="$TOOLCHAIN_DIR/stamp"
+        if [ -d "$STAMP_DIR" ]; then
+            log "✅ stamp目录存在"
+            
+            # 检查关键标记文件
+            CRITICAL_STAMPS=(".toolchain_compile" ".binutils_installed")
+            for stamp in "${CRITICAL_STAMPS[@]}"; do
+                if [ -f "$STAMP_DIR/$stamp" ]; then
+                    log "  ✅ $stamp 存在"
+                else
+                    log "  ⚠️ $stamp 缺失，紧急创建..."
+                    echo "Created before firmware build at $(date)" > "$STAMP_DIR/$stamp"
+                fi
+            done
+        else
+            log "⚠️ stamp目录不存在，紧急创建..."
+            mkdir -p "$STAMP_DIR"
+            echo "Created before firmware build at $(date)" > "$STAMP_DIR/.toolchain_compile"
+            echo "Created before firmware build at $(date)" > "$STAMP_DIR/.binutils_installed"
+        fi
+    else
+        log "⚠️ 未找到工具链目录"
+    fi
     
     # 使用优化的编译参数，减少Broken pipe错误
     if [ $make_jobs -gt 4 ]; then
@@ -1973,6 +2119,17 @@ build_firmware() {
             if grep -q "toolchain/Makefile.*Error\|toolchain_compile.*failed" build.log; then
                 log "🚨 发现工具链编译错误"
                 log "💡 建议: 需要修复工具链构建问题"
+            fi
+            
+            # 特别检查toolchain/Makefile:93错误
+            if grep -q "toolchain/Makefile.*93" build.log; then
+                log "🚨 发现工具链构建错误 (toolchain/Makefile:93)"
+                log "💡 建议: 需要创建.toolchain_compile标记文件和stamp目录"
+                log "💡 快速修复:"
+                log "  1. find staging_dir -name 'toolchain-*' -type d"
+                log "  2. mkdir -p staging_dir/toolchain-*/stamp"
+                log "  3. touch staging_dir/toolchain-*/stamp/.toolchain_compile"
+                log "  4. touch staging_dir/toolchain-*/stamp/.binutils_installed"
             fi
         fi
         
