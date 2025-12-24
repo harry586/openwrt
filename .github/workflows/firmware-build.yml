@@ -486,7 +486,7 @@ jobs:
             if [ -f "$GCC_DIR/gcc/system.h" ]; then
               # 备份原始文件
               cp "$GCC_DIR/gcc/system.h" "$GCC_DIR/gcc/system.h.original"
-              # 移除冲突的声明行
+              # 移除冲突的声明行 - 修正语法错误
               sed -i 's/^void\* sbrk(int);$//' "$GCC_DIR/gcc/system.h"
               sed -i 's/^const char\* strsignal(int);$//' "$GCC_DIR/gcc/system.h"
               sed -i 's/^char\* basename(const char\*);$//' "$GCC_DIR/gcc/system.h"
@@ -494,18 +494,18 @@ jobs:
               # 检查修复效果
               original_lines=$(wc -l < "$GCC_DIR/gcc/system.h.original")
               fixed_lines=$(wc -l < "$GCC_DIR/gcc/system.h")
-              if [ $original_lines -eq $fixed_lines ]; then
+              if [ "$original_lines" -eq "$fixed_lines" ]; then
                 echo "  ℹ️ 行数未变化，可能已修复或无需修复"
               fi
             fi
-            # 修复auto-host.h中的声明配置
+            # 修复auto-host.h中的声明配置 - 修正引号错误
             if [ -f "$GCC_DIR/gcc/auto-host.h" ]; then
               # 备份原始文件
               cp "$GCC_DIR/gcc/auto-host.h" "$GCC_DIR/gcc/auto-host.h.original"
-              # 取消定义冲突的宏
+              # 取消定义冲突的宏 - 修正sed命令中的引号问题
               sed -i 's/^#define HAVE_DECL_SBRK.*$/#undef HAVE_DECL_SBRK/' "$GCC_DIR/gcc/auto-host.h"
-              sed -i 's/^#define HAVE_DECL_STRSIGNAL.*$/#undef HAVE_DECL_STRSIGNAL/" "$GCC_DIR/gcc/auto-host.h"
-              sed -i 's/^#define HAVE_DECL_BASENAME.*$/#undef HAVE_DECL_BASENAME/" "$GCC_DIR/gcc/auto-host.h"
+              sed -i 's/^#define HAVE_DECL_STRSIGNAL.*$/#undef HAVE_DECL_STRSIGNAL/' "$GCC_DIR/gcc/auto-host.h"
+              sed -i 's/^#define HAVE_DECL_BASENAME.*$/#undef HAVE_DECL_BASENAME/' "$GCC_DIR/gcc/auto-host.h"
               echo "  ✅ 修复auto-host.h完成"
             fi
             echo "🚨 添加-fpermissive编译标志..."
