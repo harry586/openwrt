@@ -410,10 +410,36 @@ jobs:
           echo "🔧 运行编译环境检查与修复..."
           firmware-config/scripts/build_firmware_main-01.sh check_and_fix_build_environment "${{ env.BUILD_DIR }}"
       
+      # 步骤 22.6: 修复 xz 交叉编译错误（新增关键步骤）
+      - name: "22.6. 修复 xz 交叉编译错误"
+        run: |
+          echo "=== 步骤 22.6: 修复 xz 交叉编译错误 ==="
+          echo "🚨 修复 xz 工具交叉编译检测失败问题"
+          
+          echo "🔧 运行 xz 交叉编译错误修复..."
+          firmware-config/scripts/build_firmware_main-01.sh fix_xz_cross_compile_error "${{ env.BUILD_DIR }}"
+          
+          echo "🔧 运行所有工具交叉编译问题修复..."
+          firmware-config/scripts/build_firmware_main-01.sh fix_all_tools_cross_compile "${{ env.BUILD_DIR }}"
+      
       # 步骤 23: 编译固件
       - name: "23. 编译固件"
         run: |
           echo "=== 步骤 23: 编译固件 ==="
+          
+          echo "🔧 设置交叉编译环境变量..."
+          # 设置交叉编译环境变量
+          export ac_cv_c_compiler_gnu=yes
+          export ac_cv_prog_cc_g=yes
+          export ac_cv_prog_cc_works=yes
+          export ac_cv_prog_cc_cross=yes
+          export gl_cv_cc_nested_functions=yes
+          export gl_cv_func_mbrtowc=yes
+          
+          echo "✅ 环境变量设置完成"
+          echo "  ac_cv_prog_cc_cross: $ac_cv_prog_cc_cross"
+          echo "  ac_cv_prog_cc_works: $ac_cv_prog_cc_works"
+          
           # 启用编译缓存，使用并行编译
           firmware-config/scripts/build_firmware_main.sh build_firmware "true"
       
