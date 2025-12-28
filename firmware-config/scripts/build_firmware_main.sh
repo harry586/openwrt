@@ -129,24 +129,50 @@ download_compiler_files() {
     log "=== 下载必要编译器文件 ==="
     log "编译器文件目录: $COMPILER_DIR"
     
+    # 加载环境变量获取版本信息
+    load_env
+    
+    log "🔍 检测OpenWrt版本: $SELECTED_BRANCH"
+    
+    # 根据版本选择编译器版本
+    case "$SELECTED_BRANCH" in
+        "openwrt-23.05")
+            GCC_VERSION="11.3.0"
+            BINUTILS_VERSION="2.38"
+            log "🔧 OpenWrt 23.05 使用 GCC 11.3.0 + Binutils 2.38"
+            ;;
+        "openwrt-21.02")
+            GCC_VERSION="8.4.0"
+            BINUTILS_VERSION="2.35"
+            log "🔧 OpenWrt 21.02 使用 GCC 8.4.0 + Binutils 2.35"
+            ;;
+        *)
+            GCC_VERSION="11.3.0"
+            BINUTILS_VERSION="2.38"
+            log "⚠️ 未知版本分支，默认使用 GCC 11.3.0 + Binutils 2.38"
+            ;;
+    esac
+    
     # 确保目录存在
     mkdir -p "$COMPILER_DIR"
     
-    # 编译器文件清单
+    # 编译器文件清单（根据版本动态选择）
     local compiler_list=(
-        "gcc-11.3.0.tar.xz"         # GNU C编译器
-        "binutils-2.38.tar.xz"      # GNU二进制工具集
-        "make-4.3.tar.gz"           # GNU make工具
-        "gmp-6.2.1.tar.xz"          # GNU多精度算术库
-        "mpfr-4.1.0.tar.xz"         # GNU多精度浮点库
-        "mpc-1.2.1.tar.gz"          # GNU多精度复数库
-        "isl-0.24.tar.xz"           # 整数集库
+        "gcc-${GCC_VERSION}.tar.xz"
+        "binutils-${BINUTILS_VERSION}.tar.xz"
+        "make-4.3.tar.gz"
+        "gmp-6.2.1.tar.xz"
+        "mpfr-4.1.0.tar.xz"
+        "mpc-1.2.1.tar.gz"
+        "isl-0.24.tar.xz"
     )
     
-    # 编译器文件下载URL
+    # 编译器文件下载URL（根据版本动态生成）
     declare -A compiler_urls=(
         ["gcc-11.3.0.tar.xz"]="https://ftp.gnu.org/gnu/gcc/gcc-11.3.0/gcc-11.3.0.tar.xz"
+        ["gcc-8.4.0.tar.xz"]="https://ftp.gnu.org/gnu/gcc/gcc-8.4.0/gcc-8.4.0.tar.xz"
         ["binutils-2.38.tar.xz"]="https://ftp.gnu.org/gnu/binutils/binutils-2.38.tar.xz"
+        ["binutils-2.35.tar.xz"]="https://ftp.gnu.org/gnu/binutils/binutils-2.35.tar.xz"
         ["make-4.3.tar.gz"]="https://ftp.gnu.org/gnu/make/make-4.3.tar.gz"
         ["gmp-6.2.1.tar.xz"]="https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.xz"
         ["mpfr-4.1.0.tar.xz"]="https://ftp.gnu.org/gnu/mpfr/mpfr-4.1.0.tar.xz"
@@ -154,7 +180,10 @@ download_compiler_files() {
         ["isl-0.24.tar.xz"]="https://gcc.gnu.org/pub/gcc/infrastructure/isl-0.24.tar.xz"
     )
     
-    log "🔍 编译器文件清单:"
+    log "🔍 编译器文件清单 (版本特定):"
+    log "  GCC: $GCC_VERSION"
+    log "  Binutils: $BINUTILS_VERSION"
+    
     local total_files=0
     local existing_files=0
     local downloaded_files=0
@@ -196,7 +225,7 @@ download_compiler_files() {
         ls -lh "$COMPILER_DIR" 2>/dev/null | head -15 || log "  无文件"
     fi
     
-    log "✅ 编译器文件下载完成"
+    log "✅ 版本特定编译器文件下载完成"
 }
 
 # 新增：汇总已编译的编译器文件并提交到仓库目录
@@ -299,6 +328,8 @@ collect_compiler_files() {
 构建设备: ${DEVICE:-未设置}
 目标平台: ${TARGET:-未设置}/${SUBTARGET:-未设置}
 OpenWrt版本: ${SELECTED_BRANCH:-未设置}
+GCC版本: ${GCC_VERSION:-8.4.0}
+Binutils版本: ${BINUTILS_VERSION:-2.35}
 编译器修复: 已应用头文件冲突修复
 GDB修复: 已修复common-defs.h和common-utils.c
 binutils修复: 已设置修复编译环境
@@ -345,6 +376,8 @@ EOF
                 -m "设备: ${DEVICE:-未设置}" \
                 -m "平台: ${TARGET:-未设置}/${SUBTARGET:-未设置}" \
                 -m "版本: ${SELECTED_BRANCH:-未设置}" \
+                -m "GCC版本: ${GCC_VERSION:-8.4.0}" \
+                -m "Binutils版本: ${BINUTILS_VERSION:-2.35}" \
                 -m "GDB修复: 已修复common-defs.h" \
                 -m "binutils修复: 已设置修复编译环境" \
                 -m "工具链修复: 已修复stamp目录"
