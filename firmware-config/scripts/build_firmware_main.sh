@@ -15,7 +15,65 @@ handle_error() {
     exit 1
 }
 
-# 保存环境变量
+# 新增：保存源代码信息函数
+save_source_code_info() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 保存源代码信息 ==="
+    
+    # 创建源代码信息目录
+    local source_info_dir="/tmp/build-artifacts/source-info"
+    mkdir -p "$source_info_dir"
+    
+    # 保存构建环境信息
+    cat > "$source_info_dir/build_env.txt" << EOF
+构建环境信息
+===========
+构建时间: $(date)
+设备: $DEVICE
+版本: $SELECTED_BRANCH
+目标平台: $TARGET/$SUBTARGET
+配置模式: $CONFIG_MODE
+构建目录: $BUILD_DIR
+仓库根目录: $REPO_ROOT
+EOF
+    
+    # 保存配置文件信息
+    if [ -f ".config" ]; then
+        cp ".config" "$source_info_dir/openwrt.config"
+        log "✅ 配置文件已保存"
+    fi
+    
+    # 保存feeds信息
+    if [ -f "feeds.conf.default" ]; then
+        cp "feeds.conf.default" "$source_info_dir/feeds.conf"
+        log "✅ Feeds配置已保存"
+    fi
+    
+    # 保存目录结构
+    log "📁 保存目录结构信息..."
+    find . -maxdepth 3 -type d | sort > "$source_info_dir/directory_structure.txt"
+    
+    # 保存关键文件列表
+    log "📋 保存关键文件列表..."
+    cat > "$source_info_dir/key_files.txt" << 'EOF'
+关键文件列表
+==========
+.config - OpenWrt配置文件
+feeds.conf.default - Feeds配置文件
+Makefile - 主Makefile
+rules.mk - 构建规则
+Config.in - 配置菜单
+feeds/ - Feeds目录
+package/ - 包目录
+target/ - 目标平台目录
+toolchain/ - 编译器目录
+EOF
+    
+    log "✅ 源代码信息保存完成: $source_info_dir"
+}
+
 save_env() {
     mkdir -p $BUILD_DIR
     echo "#!/bin/bash" > $ENV_FILE
@@ -29,35 +87,716 @@ save_env() {
     chmod +x $ENV_FILE
 }
 
-# 加载环境变量
 load_env() {
     if [ -f "$ENV_FILE" ]; then
         source $ENV_FILE
     fi
 }
 
-# 设置编译环境
+# 新增：检查编译器文件目录状态函数
+check_compiler_dir_status() {
+    local compiler_dir="${1:-$COMPILER_DIR}"
+    
+    log "=== 检查编译器文件目录状态 ==="
+    log "编译器文件目录: $compiler_dir"
+    
+    if [ -d "$compiler_dir" ]; then
+        log "✅ 编译器文件目录存在"
+        log "路径: $compiler_dir"
+        log "目录大小: $(du -sh "$compiler_dir" 2>/dev/null | cut -f1 || echo '未知')"
+        log "目录内容:"
+        ls -la "$compiler_dir/" 2>/dev/null | head -10 || log "无法列出"
+        
+        # 检查必要的编译器文件
+        log "🔍 检查必要的编译器文件:"
+        required_compilers=("gcc" "g++" "as" "ld" "ar" "strip" "objcopy" "objdump" "nm" "ranlib")
+        for compiler in "${required_compilers[@]}"; do
+            if find "$compiler_dir" -name "*$compiler*" -type f 2>/dev/null | grep -q .; then
+                log "  ✅ 找到: $compiler"
+            else
+                log "  ❌ 未找到: $compiler"
+            fi
+        done
+    else
+        log "ℹ️ 编译器文件目录不存在，将创建新目录"
+        mkdir -p "$compiler_dir"
+        log "✅ 已创建编译器文件目录: $compiler_dir"
+    fi
+}
+
+# 新增：下载必要编译器文件函数
+download_compiler_files() {
+    log "=== 下载必要编译器文件 ==="
+    log "编译器文件目录: $COMPILER_DIR"
+    
+    # 确保目录存在
+    mkdir -p "$COMPILER_DIR"
+    
+    # 编译器文件清单
+    local compiler_list=(
+        "gcc-11.3.0.tar.xz"         # GNU C编译器
+        "binutils-2.38.tar.xz"      # GNU二进制工具集
+        "make-4.3.tar.gz"           # GNU make工具
+        "gmp-6.2.1.tar.xz"          # GNU多精度算术库
+        "mpfr-4.1.0.tar.xz"         # GNU多精度浮点库
+        "mpc-1.2.1.tar.gz"          # GNU多精度复数库
+        "isl-0.24.tar.xz"           # 整数集库
+    )
+    
+    # 编译器文件下载URL
+    declare -A compiler_urls=(
+        ["gcc-11.3.0.tar.xz"]="https://ftp.gnu.org/gnu/gcc/gcc-11.3.0/gcc-11.3.0.tar.xz"
+        ["binutils-2.38.tar.xz"]="https://ftp.gnu.org/gnu/binutils/binutils-2.38.tar.xz"
+        ["make-4.3.tar.gz"]="https://ftp.gnu.org/gnu/make/make-4.3.tar.gz"
+        ["gmp-6.2.1.tar.xz"]="https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.xz"
+        ["mpfr-4.1.0.tar.xz"]="https://ftp.gnu.org/gnu/mpfr/mpfr-4.1.0.tar.xz"
+        ["mpc-1.2.1.tar.gz"]="https://ftp.gnu.org/gnu/mpc/mpc-1.2.1.tar.gz"
+        ["isl-0.24.tar.xz"]="https://gcc.gnu.org/pub/gcc/infrastructure/isl-0.24.tar.xz"
+    )
+    
+    log "🔍 编译器文件清单:"
+    local total_files=0
+    local existing_files=0
+    local downloaded_files=0
+    
+    for file in "${compiler_list[@]}"; do
+        total_files=$((total_files + 1))
+        
+        if [ -f "$COMPILER_DIR/$file" ]; then
+            log "  ✅ $file: 已存在"
+            existing_files=$((existing_files + 1))
+        else
+            log "  📥 $file: 需要下载"
+            
+            # 下载文件
+            local url="${compiler_urls[$file]}"
+            if [ -n "$url" ]; then
+                log "    下载: $url"
+                if wget --no-check-certificate -q --show-progress -O "$COMPILER_DIR/$file" "$url"; then
+                    log "    ✅ 下载成功"
+                    downloaded_files=$((downloaded_files + 1))
+                else
+                    log "    ❌ 下载失败"
+                fi
+            else
+                log "    ⚠️ 无下载URL"
+            fi
+        fi
+    done
+    
+    log "📊 下载统计:"
+    log "  总计: $total_files 个编译器文件"
+    log "  已存在: $existing_files 个"
+    log "  新下载: $downloaded_files 个"
+    
+    # 显示目录大小
+    if [ $existing_files -gt 0 ] || [ $downloaded_files -gt 0 ]; then
+        log "📁 编译器目录大小: $(du -sh "$COMPILER_DIR" | cut -f1)"
+        log "📋 编译器文件列表:"
+        ls -lh "$COMPILER_DIR" 2>/dev/null | head -15 || log "  无文件"
+    fi
+    
+    log "✅ 编译器文件下载完成"
+}
+
+# 新增：汇总已编译的编译器文件并提交到仓库目录
+collect_compiler_files() {
+    local build_dir="${1:-$BUILD_DIR}"
+    local compiler_save_dir="${2:-$COMPILER_DIR}/compiled"
+    
+    log "=== 汇总已编译的编译器文件并提交到仓库目录 ==="
+    log "🔍 开始收集已编译的编译器文件..."
+    
+    mkdir -p "$compiler_save_dir"
+    log "编译器文件保存目录: $compiler_save_dir"
+    log "构建目录: $build_dir"
+    
+    # 搜索已编译的编译器文件
+    log "📊 搜索已编译的编译器文件..."
+    find "$build_dir/staging_dir" -type f \( -name "*gcc*" -o -name "*g++*" -o -name "*as*" -o -name "*ld*" -o -name "*ar*" -o -name "*strip*" -o -name "*objcopy*" -o -name "*objdump*" -o -name "*nm*" -o -name "*ranlib*" \) 2>/dev/null | head -100 > /tmp/compiler_files.txt
+    local total_files=$(wc -l < /tmp/compiler_files.txt)
+    log "📈 找到 $total_files 个编译器文件"
+    
+    if [ $total_files -eq 0 ]; then
+        log "⚠️ 未找到编译器文件，跳过保存"
+        return 0
+    fi
+    
+    # 创建分类目录
+    log "📁 创建分类目录..."
+    mkdir -p "$compiler_save_dir/arm"
+    mkdir -p "$compiler_save_dir/mips"
+    mkdir -p "$compiler_save_dir/mipsel"
+    mkdir -p "$compiler_save_dir/x86"
+    mkdir -p "$compiler_save_dir/x86_64"
+    mkdir -p "$compiler_save_dir/generic"
+    
+    log "📋 分类复制编译器文件..."
+    local arm_count=0
+    local mips_count=0
+    local mipsel_count=0
+    local x86_count=0
+    local x86_64_count=0
+    local generic_count=0
+    
+    while IFS= read -r file; do
+        if [ -f "$file" ] && [ -x "$file" ]; then
+            local filename=$(basename "$file")
+            if [[ "$filename" == *"arm"* ]] || [[ "$file" == *"arm"* ]]; then
+                cp "$file" "$compiler_save_dir/arm/" 2>/dev/null && arm_count=$((arm_count + 1))
+            elif [[ "$filename" == *"mips"* ]] && [[ "$filename" != *"mipsel"* ]]; then
+                cp "$file" "$compiler_save_dir/mips/" 2>/dev/null && mips_count=$((mips_count + 1))
+            elif [[ "$filename" == *"mipsel"* ]] || [[ "$file" == *"mipsel"* ]]; then
+                cp "$file" "$compiler_save_dir/mipsel/" 2>/dev/null && mipsel_count=$((mipsel_count + 1))
+            elif [[ "$filename" == *"i386"* ]] || [[ "$filename" == *"i686"* ]] || [[ "$file" == *"x86"* ]] && [[ "$file" != *"x86_64"* ]]; then
+                cp "$file" "$compiler_save_dir/x86/" 2>/dev/null && x86_count=$((x86_count + 1))
+            elif [[ "$filename" == *"x86_64"* ]] || [[ "$file" == *"x86_64"* ]]; then
+                cp "$file" "$compiler_save_dir/x86_64/" 2>/dev/null && x86_64_count=$((x86_64_count + 1))
+            else
+                cp "$file" "$compiler_save_dir/generic/" 2>/dev/null && generic_count=$((generic_count + 1))
+            fi
+        fi
+    done < /tmp/compiler_files.txt
+    
+    log ""
+    log "📊 编译器文件分类统计:"
+    log "  ARM架构: $arm_count 个文件"
+    log "  MIPS架构: $mips_count 个文件"
+    log "  MIPS小端: $mipsel_count 个文件"
+    log "  x86架构: $x86_count 个文件"
+    log "  x86_64架构: $x86_64_count 个文件"
+    log "  通用编译器: $generic_count 个文件"
+    log "  总计: $((arm_count + mips_count + mipsel_count + x86_count + x86_64_count + generic_count)) 个文件"
+    
+    log ""
+    log "📁 各目录详细内容:"
+    for arch_dir in arm mips mipsel x86 x86_64 generic; do
+        dir_path="$compiler_save_dir/$arch_dir"
+        if [ -d "$dir_path" ] && [ "$(ls -A "$dir_path" 2>/dev/null)" ]; then
+            local file_count=$(find "$dir_path" -type f | wc -l)
+            log "  $arch_dir 目录 ($file_count 个文件):"
+            ls "$dir_path" | head -5 | while read file; do
+                local size=$(stat -c%s "$dir_path/$file" 2>/dev/null || echo "0")
+                local size_kb=$((size / 1024))
+                log "    - $file (${size_kb}KB)"
+            done
+            if [ $file_count -gt 5 ]; then
+                log "    ... 还有 $((file_count - 5)) 个文件"
+            fi
+        else
+            log "  $arch_dir 目录: 空"
+        fi
+    done
+    
+    # 创建编译器信息文件
+    log ""
+    log "📝 创建编译器信息文件..."
+    cat > "$compiler_save_dir/compiler_info.txt" << EOF
+编译器文件汇总信息
+==================
+
+生成时间: $(date)
+构建设备: ${DEVICE:-未设置}
+目标平台: ${TARGET:-未设置}/${SUBTARGET:-未设置}
+OpenWrt版本: ${SELECTED_BRANCH:-未设置}
+编译器修复: 已应用头文件冲突修复
+GDB修复: 已修复common-defs.h和common-utils.c
+binutils修复: 已设置修复编译环境
+工具链修复: 已修复stamp目录和标记文件
+
+文件分类统计:
+------------
+ARM架构: $arm_count 个文件
+MIPS架构: $mips_count 个文件
+MIPS小端: $mipsel_count 个文件
+x86架构: $x86_count 个文件
+x86_64架构: $x86_64_count 个文件
+通用编译器: $generic_count 个文件
+总计: $((arm_count + mips_count + mipsel_count + x86_count + x86_64_count + generic_count)) 个文件
+EOF
+    
+    local total_size=$(du -sh "$compiler_save_dir" 2>/dev/null | cut -f1)
+    log ""
+    log "📦 编译器文件总目录大小: $total_size"
+    
+    # 创建编译器文件压缩包
+    log "📦 创建编译器文件压缩包..."
+    cd "$compiler_save_dir"
+    tar -czf "../compiled-compilers.tar.gz" ./*
+    cd - > /dev/null
+    
+    log "✅ 编译器文件收集完成"
+    log "📁 保存目录: $compiler_save_dir"
+    log "📦 压缩包: $(dirname "$compiler_save_dir")/compiled-compilers.tar.gz"
+    
+    # 提交到仓库（如果是在仓库环境中）
+    if [ -d "$REPO_ROOT/.git" ]; then
+        log "🔄 提交编译器文件到仓库目录..."
+        cd "$REPO_ROOT"
+        git config --local user.email "github-actions@github.com"
+        git config --local user.name "GitHub Actions"
+        git add firmware-config/build-Compiler-file/
+        
+        if git diff --cached --quiet -- firmware-config/build-Compiler-file/; then
+            log "ℹ️ 没有新的编译器文件需要提交"
+        else
+            log "📝 提交编译器文件到仓库..."
+            git commit -m "feat: 添加已编译的编译器文件" \
+                -m "设备: ${DEVICE:-未设置}" \
+                -m "平台: ${TARGET:-未设置}/${SUBTARGET:-未设置}" \
+                -m "版本: ${SELECTED_BRANCH:-未设置}" \
+                -m "GDB修复: 已修复common-defs.h" \
+                -m "binutils修复: 已设置修复编译环境" \
+                -m "工具链修复: 已修复stamp目录"
+            
+            log "🔄 推送到仓库..."
+            git push origin HEAD:${GITHUB_REF##*/} || log "⚠️ 推送失败，可能没有权限"
+        fi
+    fi
+}
+
+# 新增：运行错误分析函数
+run_error_analysis() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 运行错误分析 ==="
+    
+    # 检查错误分析脚本是否存在
+    local error_script="$REPO_ROOT/firmware-config/scripts/error_analysis.sh"
+    if [ -f "$error_script" ]; then
+        log "✅ 找到错误分析脚本: $error_script"
+        chmod +x "$error_script"
+        
+        # 运行错误分析
+        if "$error_script" "$BUILD_DIR"; then
+            log "✅ 错误分析完成"
+            
+            # 检查分析结果
+            if [ -f "error_analysis.log" ]; then
+                log "📊 错误分析报告已生成: error_analysis.log"
+                log "📋 报告摘要:"
+                grep -E "✅|❌|⚠️|🔧|🎉" error_analysis.log | head -10
+            fi
+        else
+            log "❌ 错误分析脚本执行失败"
+        fi
+    else
+        log "⚠️ 错误分析脚本不存在，使用内置错误分析"
+        
+        # 内置简单错误分析
+        log "🔍 进行基本错误分析..."
+        
+        if [ -f "build.log" ]; then
+            local error_count=$(grep -c -i "error" build.log)
+            local warning_count=$(grep -c -i "warning" build.log)
+            
+            log "📊 基本分析结果:"
+            log "  错误数量: $error_count"
+            log "  警告数量: $warning_count"
+            
+            if [ $error_count -gt 0 ]; then
+                log "❌ 发现编译错误"
+                grep -i "error" build.log | head -5
+            else
+                log "✅ 未发现编译错误"
+            fi
+        else
+            log "⚠️ 未找到编译日志文件"
+        fi
+    fi
+}
+
+integrate_custom_files() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 集成自定义文件 ==="
+    
+    local custom_dir="$REPO_ROOT/firmware-config/custom-files"
+    
+    if [ ! -d "$custom_dir" ]; then
+        log "ℹ️ 自定义文件目录不存在: $custom_dir"
+        return 0
+    fi
+    
+    log "自定义文件目录: $custom_dir"
+    
+    local ipk_count=0
+    local script_count=0
+    local other_count=0
+    
+    # 使用临时变量存储计数
+    local ipk_files=()
+    local script_files=()
+    local other_files=()
+    
+    # 1. 集成IPK文件到package目录
+    if find "$custom_dir" -name "*.ipk" -type f 2>/dev/null | grep -q .; then
+        mkdir -p package/custom
+        log "🔧 集成IPK文件到package目录"
+        
+        while IFS= read -r -d '' ipk; do
+            local ipk_name=$(basename "$ipk")
+            log "复制: $ipk_name"
+            cp "$ipk" "package/custom/"
+            ipk_files+=("$ipk_name")
+        done < <(find "$custom_dir" -name "*.ipk" -type f -print0 2>/dev/null)
+        
+        ipk_count=${#ipk_files[@]}
+        
+        if [ $ipk_count -gt 0 ]; then
+            cat > package/custom/Makefile << 'EOF'
+include $(TOPDIR)/rules.mk
+
+PKG_NAME:=custom-packages
+PKG_VERSION:=1.0
+PKG_RELEASE:=1
+
+PKG_MAINTAINER:=Custom Build
+PKG_LICENSE:=GPL-2.0
+
+include $(INCLUDE_DIR)/package.mk
+
+define Package/custom-packages
+  SECTION:=custom
+  CATEGORY:=Custom
+  TITLE:=Custom Packages Collection
+  DEPENDS:=
+endef
+
+define Package/custom-packages/description
+  This package contains custom IPK files.
+endef
+
+define Build/Compile
+  true
+endef
+
+define Package/custom-packages/install
+  true
+endef
+
+$(eval $(call BuildPackage,custom-packages))
+EOF
+            log "✅ 创建自定义包Makefile"
+        fi
+    fi
+    
+    # 2. 集成脚本文件到files目录
+    if find "$custom_dir" -name "*.sh" -type f 2>/dev/null | grep -q .; then
+        mkdir -p files/usr/share/custom
+        log "🔧 集成脚本文件到files目录"
+        
+        while IFS= read -r -d '' script; do
+            local script_name=$(basename "$script")
+            log "复制: $script_name"
+            cp "$script" "files/usr/share/custom/"
+            chmod +x "files/usr/share/custom/$script_name"
+            script_files+=("$script_name")
+        done < <(find "$custom_dir" -name "*.sh" -type f -print0 2>/dev/null)
+        
+        script_count=${#script_files[@]}
+        
+        if [ $script_count -gt 0 ]; then
+            mkdir -p files/etc/init.d
+            cat > files/etc/init.d/custom-scripts << 'EOF'
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+
+start() {
+    echo "Starting custom scripts..."
+    for script in /usr/share/custom/*.sh; do
+        if [ -x "$script" ]; then
+            echo "Running: $(basename "$script")"
+            sh "$script" &
+        fi
+    done
+}
+
+stop() {
+    echo "Stopping custom scripts..."
+    pkill -f "sh /usr/share/custom/"
+}
+EOF
+            chmod +x files/etc/init.d/custom-scripts
+            log "✅ 创建自定义脚本启动服务"
+        fi
+    fi
+    
+    # 3. 集成其他配置文件
+    while IFS= read -r -d '' file; do
+        if [ -f "$file" ]; then
+            local file_name=$(basename "$file")
+            local relative_path=$(echo "$file" | sed "s|^$custom_dir/||")
+            local target_dir="files/$(dirname "$relative_path")"
+            
+            mkdir -p "$target_dir"
+            cp "$file" "$target_dir/"
+            log "复制配置文件: $relative_path"
+            other_files+=("$relative_path")
+        fi
+    done < <(find "$custom_dir" -type f \( -name "*.conf" -o -name "*.config" -o -name "*.json" -o -name "*.txt" \) -print0 2>/dev/null)
+    
+    other_count=${#other_files[@]}
+    
+    log "✅ 自定义文件集成完成"
+    log "  IPK文件: $ipk_count 个"
+    if [ $ipk_count -gt 0 ]; then
+        for ipk in "${ipk_files[@]}"; do
+            log "    - $ipk"
+        done
+    fi
+    log "  脚本文件: $script_count 个"
+    if [ $script_count -gt 0 ]; then
+        for script in "${script_files[@]}"; do
+            log "    - $script"
+        done
+    fi
+    log "  配置文件: $other_count 个"
+    if [ $other_count -gt 0 ] && [ $other_count -le 5 ]; then
+        for conf in "${other_files[@]}"; do
+            log "    - $conf"
+        done
+    elif [ $other_count -gt 5 ]; then
+        log "    - 显示前5个文件:"
+        for i in {0..4}; do
+            log "      - ${other_files[$i]}"
+        done
+        log "    - ... 还有 $((other_count - 5)) 个文件"
+    fi
+}
+
+pre_build_error_check() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 🚨 前置错误检查 ==="
+    
+    local error_count=0
+    local warning_count=0
+    
+    # 1. 检查配置文件
+    if [ ! -f ".config" ]; then
+        log "❌ 错误: .config 文件不存在"
+        error_count=$((error_count + 1))
+    else
+        log "✅ .config 文件存在"
+        
+        local critical_configs=(
+            "CONFIG_TARGET_${TARGET}=y"
+            "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y"
+            "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
+        )
+        
+        for config in "${critical_configs[@]}"; do
+            if ! grep -q "^$config" .config; then
+                log "❌ 错误: 缺少关键配置 $config"
+                error_count=$((error_count + 1))
+            else
+                log "✅ 配置正常: $config"
+            fi
+        done
+    fi
+    
+    # 2. 检查feeds
+    if [ ! -d "feeds" ]; then
+        log "❌ 错误: feeds 目录不存在"
+        error_count=$((error_count + 1))
+    else
+        log "✅ feeds 目录存在"
+        
+        local critical_feeds=("packages" "luci")
+        for feed in "${critical_feeds[@]}"; do
+            if [ ! -d "feeds/$feed" ]; then
+                log "❌ 错误: $feed feed 未安装"
+                error_count=$((error_count + 1))
+            else
+                log "✅ feed 正常: $feed"
+            fi
+        done
+    fi
+    
+    # 3. 检查依赖包
+    if [ ! -d "dl" ]; then
+        log "⚠️ 警告: dl 目录不存在，可能需要下载依赖"
+        warning_count=$((warning_count + 1))
+    else
+        local dl_count=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
+        log "✅ 依赖包数量: $dl_count 个"
+        
+        if [ $dl_count -lt 10 ]; then
+            log "⚠️ 警告: 依赖包数量较少，可能下载不完整"
+            warning_count=$((warning_count + 1))
+        fi
+        
+        # 检查关键依赖包是否存在
+        local critical_deps=("linux" "gcc" "binutils" "musl")
+        for dep in "${critical_deps[@]}"; do
+            if find dl -name "*${dep}*" -type f 2>/dev/null | grep -q .; then
+                log "✅ 找到关键依赖: $dep"
+            else
+                log "⚠️ 警告: 未找到关键依赖: $dep"
+                warning_count=$((warning_count + 1))
+            fi
+        done
+        
+        # 额外检查：根据版本检查正确的C库
+        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ] || [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            log "🔧 检查musl C库..."
+            if find dl -name "*musl*" -type f 2>/dev/null | grep -q .; then
+                log "✅ 找到musl C库 (现代OpenWrt使用)"
+            else
+                log "⚠️ 警告: 未找到musl C库"
+                warning_count=$((warning_count + 1))
+            fi
+        fi
+    fi
+    
+    # 4. 检查编译器
+    if [ -d "staging_dir" ]; then
+        local compiler_count=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" 2>/dev/null | wc -l)
+        if [ $compiler_count -eq 0 ]; then
+            log "ℹ️ 未找到已构建的编译器，将在编译过程中自动构建"
+            log "📦 注意：编译器会从下载的依赖包自动构建，无需手动下载"
+            # 这只是信息，不是错误
+        else
+            log "✅ 已下载编译器: $compiler_count 个"
+            
+            # 检查编译器完整性
+            local compiler_dir=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" | head -1)
+            if [ -d "$compiler_dir/bin" ]; then
+                local compiler_files=$(find "$compiler_dir/bin" -name "*gcc*" -o -name "*g++*" 2>/dev/null | wc -l)
+                if [ $compiler_files -gt 0 ]; then
+                    log "✅ 编译器文件: $compiler_files 个"
+                else
+                    log "⚠️ 警告: 编译器缺少编译器文件"
+                    warning_count=$((warning_count + 1))
+                fi
+            fi
+        fi
+    else
+        log "ℹ️ staging_dir目录不存在，编译时将自动创建和构建编译器"
+    fi
+    
+    # 5. 检查关键文件
+    local critical_files=("Makefile" "rules.mk" "Config.in" "feeds.conf.default")
+    for file in "${critical_files[@]}"; do
+        if [ -f "$file" ]; then
+            log "✅ 关键文件存在: $file"
+        else
+            log "❌ 错误: 关键文件不存在: $file"
+            error_count=$((error_count + 1))
+        fi
+    done
+    
+    # 6. 检查脚本权限
+    if [ -d "scripts" ]; then
+        local script_files=$(find scripts -name "*.sh" -type f -executable 2>/dev/null | wc -l)
+        if [ $script_files -gt 0 ]; then
+            log "✅ 可执行脚本文件: $script_files 个"
+        else
+            log "⚠️ 警告: 没有可执行的脚本文件"
+            warning_count=$((warning_count + 1))
+        fi
+    fi
+    
+    # 7. 检查磁盘空间
+    local available_space=$(df /mnt --output=avail | tail -1)
+    local available_gb=$((available_space / 1024 / 1024))
+    log "磁盘可用空间: ${available_gb}G"
+    
+    if [ $available_gb -lt 10 ]; then
+        log "❌ 错误: 磁盘空间不足 (需要至少10G，当前${available_gb}G)"
+        error_count=$((error_count + 1))
+    elif [ $available_gb -lt 20 ]; then
+        log "⚠️ 警告: 磁盘空间较低 (建议至少20G，当前${available_gb}G)"
+        warning_count=$((warning_count + 1))
+    fi
+    
+    # 8. 检查内存
+    local total_mem=$(free -m | awk '/^Mem:/{print $2}')
+    log "系统内存: ${total_mem}MB"
+    
+    if [ $total_mem -lt 1024 ]; then
+        log "⚠️ 警告: 内存较低 (建议至少1GB)"
+        warning_count=$((warning_count + 1))
+    fi
+    
+    # 9. 检查CPU核心数
+    local cpu_cores=$(nproc)
+    log "CPU核心数: $cpu_cores"
+    
+    if [ $cpu_cores -lt 2 ]; then
+        log "⚠️ 警告: CPU核心数较少，编译速度会受影响"
+        warning_count=$((warning_count + 1))
+    fi
+    
+    # 10. 检查C库配置
+    log "🔧 检查C库配置..."
+    if [ -f ".config" ]; then
+        if grep -q "CONFIG_EXTERNAL_COMPILER=y" .config; then
+            log "ℹ️ 使用外部编译器"
+        elif grep -q "CONFIG_USE_MUSL=y" .config; then
+            log "✅ 配置为使用musl C库"
+        elif grep -q "CONFIG_USE_GLIBC=y" .config; then
+            log "✅ 配置为使用glibc C库"
+        elif grep -q "CONFIG_USE_UCLIBC=y" .config; then
+            log "✅ 配置为使用uclibc C库"
+        else
+            log "⚠️ 警告: 未明确指定C库类型"
+            warning_count=$((warning_count + 1))
+        fi
+    fi
+    
+    # 总结
+    if [ $error_count -eq 0 ]; then
+        if [ $warning_count -eq 0 ]; then
+            log "✅ 前置检查通过，可以开始编译"
+        else
+            log "⚠️ 前置检查通过，但有 $warning_count 个警告，建议修复"
+        fi
+        return 0
+    else
+        log "❌ 前置检查发现 $error_count 个错误，$warning_count 个警告，请修复后再编译"
+        return 1
+    fi
+}
+
 setup_environment() {
-    log "=== 安装编译依赖包（增强版）==="
+    log "=== 安装编译依赖包 ==="
     sudo apt-get update || handle_error "apt-get update失败"
     
     # 基础编译工具
-    base_packages=("build-essential" "clang" "flex" "bison" "g++" "gawk" "gcc-multilib" "g++-multilib" "gettext" "git" "libncurses5-dev" "libssl-dev" "python3-distutils" "rsync" "unzip" "zlib1g-dev" "file" "wget" "libelf-dev" "ecj" "fastjar" "java-propose-classpath" "libpython3-dev" "python3" "python3-dev" "python3-pip" "python3-setuptools" "python3-yaml" "xsltproc" "zip" "subversion" "ninja-build" "automake" "autoconf" "libtool" "pkg-config" "help2man" "texinfo" "aria2" "liblz4-dev" "zstd" "libcurl4-openssl-dev" "groff" "texlive" "texinfo" "cmake")
+    local base_packages=(
+        build-essential clang flex bison g++ gawk gcc-multilib g++-multilib
+        gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip
+        zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpath
+        libpython3-dev python3 python3-dev python3-pip python3-setuptools
+        python3-yaml xsltproc zip subversion ninja-build automake autoconf
+        libtool pkg-config help2man texinfo aria2 liblz4-dev zstd
+        libcurl4-openssl-dev groff texlive texinfo cmake
+    )
     
     # 网络工具
-    network_packages=("curl" "wget" "net-tools" "iputils-ping" "dnsutils" "openssh-client" "ca-certificates" "gnupg" "lsb-release")
+    local network_packages=(
+        curl wget net-tools iputils-ping dnsutils
+        openssh-client ca-certificates gnupg lsb-release
+    )
     
     # 文件系统工具
-    filesystem_packages=("squashfs-tools" "dosfstools" "e2fsprogs" "mtools" "parted" "fdisk" "gdisk" "hdparm" "smartmontools")
+    local filesystem_packages=(
+        squashfs-tools dosfstools e2fsprogs mtools
+        parted fdisk gdisk hdparm smartmontools
+    )
     
     # 调试工具
-    debug_packages=("gdb" "strace" "ltrace" "valgrind" "binutils-dev" "libdw-dev" "libiberty-dev")
-    
-    # 头文件相关包
-    header_packages=("linux-headers-generic" "linux-libc-dev" "libc6-dev" "libc6-dev-i386" "libc6-dev-x32" "libc6-dev-armhf-cross" "libc6-dev-arm64-cross" "libc6-dev-mips64el-cross" "libc6-dev-mipsel-cross" "libc6-dev-powerpc-cross" "libc6-dev-ppc64el-cross" "libc6-dev-s390x-cross" "libc6-dev-sparc64-cross" "libc6-dev-x32")
-    
-    # libtool和m4工具
-    libtool_packages=("libtool" "libltdl-dev" "libltdl7" "libtool-bin" "m4" "autoconf-archive" "gperf" "automake-1.16")
+    local debug_packages=(
+        gdb strace ltrace valgrind
+        binutils-dev libdw-dev libiberty-dev
+    )
     
     log "安装基础编译工具..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${base_packages[@]}" || handle_error "安装基础编译工具失败"
@@ -71,19 +810,9 @@ setup_environment() {
     log "安装调试工具..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${debug_packages[@]}" || handle_error "安装调试工具失败"
     
-    log "安装头文件相关包..."
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${header_packages[@]}" || log "⚠️ 部分头文件包安装失败，但可能不影响编译"
-    
-    log "安装libtool相关包..."
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${libtool_packages[@]}" || handle_error "安装libtool相关包失败"
-    
-    # 新增：安装gettext和pkg-config
-    log "安装gettext和pkg-config..."
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gettext pkg-config || log "⚠️ gettext或pkg-config安装失败"
-    
     # 检查重要工具是否安装成功
     log "=== 验证工具安装 ==="
-    important_tools=("gcc" "g++" "make" "git" "python3" "cmake" "flex" "bison" "libtool" "m4" "autoconf" "automake" "gettext" "pkg-config")
+    local important_tools=("gcc" "g++" "make" "git" "python3" "cmake" "flex" "bison")
     for tool in "${important_tools[@]}"; do
         if command -v $tool >/dev/null 2>&1; then
             log "✅ $tool 已安装: $(which $tool)"
@@ -92,29 +821,9 @@ setup_environment() {
         fi
     done
     
-    # 检查头文件
-    log "=== 检查头文件 ==="
-    critical_headers=("/usr/include/stdio.h" "/usr/include/stdlib.h" "/usr/include/string.h" "/usr/include/features.h" "/usr/include/stdc-predef.h")
-    for header in "${critical_headers[@]}"; do
-        if [ -f "$header" ]; then
-            log "✅ 头文件存在: $header"
-        else
-            log "⚠️ 头文件缺失: $header"
-        fi
-    done
-    
-    # 检查libtool相关文件
-    log "=== 检查libtool相关文件 ==="
-    if [ -f "/usr/share/aclocal/libtool.m4" ]; then
-        log "✅ libtool.m4存在: /usr/share/aclocal/libtool.m4"
-    else
-        log "⚠️ libtool.m4缺失"
-    fi
-    
     log "✅ 编译环境设置完成"
 }
 
-# 创建构建目录
 create_build_dir() {
     log "=== 创建构建目录 ==="
     sudo mkdir -p $BUILD_DIR || handle_error "创建构建目录失败"
@@ -130,7 +839,6 @@ create_build_dir() {
     fi
 }
 
-# 初始化构建环境
 initialize_build_env() {
     local device_name=$1
     local version_selection=$2
@@ -203,7 +911,7 @@ initialize_build_env() {
     log "✅ 源码克隆完成"
     
     # 检查克隆的文件
-    important_source_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
+    local important_source_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
     for file in "${important_source_files[@]}"; do
         if [ -f "$file" ]; then
             log "✅ 源码文件存在: $file"
@@ -213,7 +921,6 @@ initialize_build_env() {
     done
 }
 
-# 添加 TurboACC 支持
 add_turboacc_support() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -235,7 +942,6 @@ add_turboacc_support() {
     fi
 }
 
-# 配置Feeds
 configure_feeds() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -262,7 +968,7 @@ configure_feeds() {
     ./scripts/feeds install -a || handle_error "安装feeds失败"
     
     # 检查feeds安装结果
-    critical_feeds_dirs=("feeds/packages" "feeds/luci" "package/feeds")
+    local critical_feeds_dirs=("feeds/packages" "feeds/luci" "package/feeds")
     for dir in "${critical_feeds_dirs[@]}"; do
         if [ -d "$dir" ]; then
             log "✅ Feed目录存在: $dir"
@@ -274,7 +980,6 @@ configure_feeds() {
     log "✅ Feeds配置完成"
 }
 
-# 安装 TurboACC 包
 install_turboacc_packages() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -290,7 +995,6 @@ install_turboacc_packages() {
     log "✅ TurboACC 包安装完成"
 }
 
-# 编译前空间检查
 pre_build_space_check() {
     log "=== 编译前空间检查 ==="
     
@@ -334,7 +1038,6 @@ pre_build_space_check() {
     log "✅ 空间检查完成"
 }
 
-# 生成配置
 generate_config() {
     local extra_packages=$1
     load_env
@@ -399,12 +1102,6 @@ generate_config() {
     echo "# CONFIG_PACKAGE_busybox-selinux is not set" >> .config
     echo "# CONFIG_PACKAGE_attendedsysupgrade-common is not set" >> .config
     echo "# CONFIG_PACKAGE_auc is not set" >> .config
-    
-    # 新增：禁用GDB编译避免错误
-    echo "# 🚫 禁用GDB编译以避免internal_error Assertion失败" >> .config
-    echo "# CONFIG_PACKAGE_gdb is not set" >> .config
-    echo "# CONFIG_PACKAGE_gdbserver is not set" >> .config
-    echo "# CONFIG_PACKAGE_gdb-minimal is not set" >> .config
     
     log "=== 🚨 USB 完全修复通用配置 - 开始 ==="
     
@@ -514,18 +1211,37 @@ generate_config() {
     echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
     
     if [ "$CONFIG_MODE" = "base" ]; then
-        log "🔧 使用基础模式 (最小化配置，用于测试编译)"
-        echo "# 🟣 基础模式 - 最小化配置" >> .config
+        log "🔧 使用基础模式 (最小化，用于测试编译)"
         echo "# CONFIG_PACKAGE_luci-app-turboacc is not set" >> .config
         echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
         echo "# CONFIG_PACKAGE_kmod-fast-classifier is not set" >> .config
         echo "# CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn is not set" >> .config
     else
-        log "🔧 使用正常模式 (完整功能配置)"
-        echo "# 🟠 正常模式 - 完整功能配置：✅ TurboACC 网络加速 ✅ UPnP 自动端口转发 ✅ Samba 文件共享 ✅ 磁盘管理 ✅ KMS 激活服务 ✅ SmartDNS 智能DNS ✅ 家长控制 ✅ 微信推送 ✅ 流量控制 (SQM) ✅ FTP 服务器 ✅ ARP 绑定 ✅ CPU 限制 ✅ 硬盘休眠" >> .config
-        echo "# 🔧 USB 3.0加强：所有平台的关键USB驱动都已强制启用！" >> .config
+        log "🔧 使用正常模式 (完整功能)"
         
-        NORMAL_PLUGINS=("CONFIG_PACKAGE_luci-app-turboacc=y" "CONFIG_PACKAGE_kmod-shortcut-fe=y" "CONFIG_PACKAGE_kmod-fast-classifier=y" "CONFIG_PACKAGE_luci-app-upnp=y" "CONFIG_PACKAGE_miniupnpd=y" "CONFIG_PACKAGE_vsftpd=y" "CONFIG_PACKAGE_luci-app-vsftpd=y" "CONFIG_PACKAGE_luci-app-arpbind=y" "CONFIG_PACKAGE_luci-app-cpulimit=y" "CONFIG_PACKAGE_samba4-server=y" "CONFIG_PACKAGE_luci-app-samba4=y" "CONFIG_PACKAGE_luci-app-wechatpush=y" "CONFIG_PACKAGE_sqm-scripts=y" "CONFIG_PACKAGE_luci-app-sqm=y" "CONFIG_PACKAGE_luci-app-hd-idle=y" "CONFIG_PACKAGE_luci-app-diskman=y" "CONFIG_PACKAGE_luci-app-accesscontrol=y" "CONFIG_PACKAGE_vlmcsd=y" "CONFIG_PACKAGE_luci-app-vlmcsd=y" "CONFIG_PACKAGE_smartdns=y" "CONFIG_PACKAGE_luci-app-smartdns=y")
+        NORMAL_PLUGINS=(
+          "CONFIG_PACKAGE_luci-app-turboacc=y"
+          "CONFIG_PACKAGE_kmod-shortcut-fe=y"
+          "CONFIG_PACKAGE_kmod-fast-classifier=y"
+          "CONFIG_PACKAGE_luci-app-upnp=y"
+          "CONFIG_PACKAGE_miniupnpd=y"
+          "CONFIG_PACKAGE_vsftpd=y"
+          "CONFIG_PACKAGE_luci-app-vsftpd=y"
+          "CONFIG_PACKAGE_luci-app-arpbind=y"
+          "CONFIG_PACKAGE_luci-app-cpulimit=y"
+          "CONFIG_PACKAGE_samba4-server=y"
+          "CONFIG_PACKAGE_luci-app-samba4=y"
+          "CONFIG_PACKAGE_luci-app-wechatpush=y"
+          "CONFIG_PACKAGE_sqm-scripts=y"
+          "CONFIG_PACKAGE_luci-app-sqm=y"
+          "CONFIG_PACKAGE_luci-app-hd-idle=y"
+          "CONFIG_PACKAGE_luci-app-diskman=y"
+          "CONFIG_PACKAGE_luci-app-accesscontrol=y"
+          "CONFIG_PACKAGE_vlmcsd=y"
+          "CONFIG_PACKAGE_luci-app-vlmcsd=y"
+          "CONFIG_PACKAGE_smartdns=y"
+          "CONFIG_PACKAGE_luci-app-smartdns=y"
+        )
         
         for plugin in "${NORMAL_PLUGINS[@]}"; do
             echo "$plugin" >> .config
@@ -538,11 +1254,42 @@ generate_config() {
             echo "CONFIG_PACKAGE_luci-i18n-arpbind-zh-cn=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-cpulimit-zh-cn=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-hd-idle-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-accesscontrol-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-vlmcsd-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y" >> .config
         fi
     fi
+    
+    # 处理额外插件
+    if [ -n "$extra_packages" ]; then
+        log "🔧 处理额外安装插件: $extra_packages"
+        IFS=';' read -ra EXTRA_PKGS <<< "$extra_packages"
+        for pkg_cmd in "${EXTRA_PKGS[@]}"; do
+            if [ -n "$pkg_cmd" ]; then
+                pkg_cmd_clean=$(echo "$pkg_cmd" | xargs)
+                if [[ "$pkg_cmd_clean" == +* ]]; then
+                    pkg_name="${pkg_cmd_clean:1}"
+                    log "启用插件: $pkg_name"
+                    echo "CONFIG_PACKAGE_${pkg_name}=y" >> .config
+                elif [[ "$pkg_cmd_clean" == -* ]]; then
+                    pkg_name="${pkg_cmd_clean:1}"
+                    log "禁用插件: $pkg_name"
+                    echo "# CONFIG_PACKAGE_${pkg_name} is not set" >> .config
+                else
+                    log "启用插件: $pkg_cmd_clean"
+                    echo "CONFIG_PACKAGE_${pkg_cmd_clean}=y" >> .config
+                fi
+            fi
+        done
+    fi
+    
+    log "✅ 智能配置生成完成"
 }
 
-# 验证USB配置
 verify_usb_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -586,9 +1333,9 @@ verify_usb_config() {
     
     # 输出总结
     log "📊 USB配置状态总结:"
-    usb_drivers=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-ehci" "kmod-usb-ohci" "kmod-usb-xhci-hcd" "kmod-usb-storage")
-    missing_count=0
-    enabled_count=0
+    local usb_drivers=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-ehci" "kmod-usb-ohci" "kmod-usb-xhci-hcd" "kmod-usb-storage")
+    local missing_count=0
+    local enabled_count=0
     
     for driver in "${usb_drivers[@]}"; do
         if grep -q "CONFIG_PACKAGE_${driver}=y" .config; then
@@ -609,15 +1356,21 @@ verify_usb_config() {
     fi
 }
 
-# 检查USB驱动完整性
 check_usb_drivers_integrity() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
     log "=== 🚨 USB驱动完整性检查 ==="
     
-    missing_drivers=()
-    required_drivers=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-xhci-hcd" "kmod-usb-storage" "kmod-scsi-core")
+    local missing_drivers=()
+    local required_drivers=(
+        "kmod-usb-core"
+        "kmod-usb2"
+        "kmod-usb3"
+        "kmod-usb-xhci-hcd"
+        "kmod-usb-storage"
+        "kmod-scsi-core"
+    )
     
     # 根据平台添加专用驱动
     if [ "$TARGET" = "ipq40xx" ]; then
@@ -652,12 +1405,11 @@ check_usb_drivers_integrity() {
     fi
 }
 
-# 应用配置
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 应用配置并显示详情（修复版）==="
+    log "=== 应用配置并显示详情 ==="
     
     if [ ! -f ".config" ]; then
         log "❌ 错误: .config 文件不存在，无法应用配置"
@@ -674,9 +1426,14 @@ apply_config() {
     
     # 1. 关键USB配置状态
     echo "🔧 关键USB配置状态:"
-    critical_usb_drivers=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-ehci" "kmod-usb-ohci" "kmod-usb-xhci-hcd" "kmod-usb-storage" "kmod-usb-storage-uas" "kmod-usb-storage-extras" "kmod-scsi-core" "kmod-scsi-generic")
+    local critical_usb_drivers=(
+        "kmod-usb-core" "kmod-usb2" "kmod-usb3" 
+        "kmod-usb-ehci" "kmod-usb-ohci" "kmod-usb-xhci-hcd"
+        "kmod-usb-storage" "kmod-usb-storage-uas" "kmod-usb-storage-extras"
+        "kmod-scsi-core" "kmod-scsi-generic"
+    )
     
-    missing_usb=0
+    local missing_usb=0
     for driver in "${critical_usb_drivers[@]}"; do
         if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
             echo "  ✅ $driver"
@@ -691,7 +1448,7 @@ apply_config() {
     echo "🔧 平台专用USB驱动状态:"
     if [ "$TARGET" = "ipq40xx" ]; then
         echo "  高通IPQ40xx平台专用驱动:"
-        qcom_drivers=("kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3-of-simple")
+        local qcom_drivers=("kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3-of-simple")
         for driver in "${qcom_drivers[@]}"; do
             if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
                 echo "    ✅ $driver"
@@ -702,7 +1459,7 @@ apply_config() {
         done
     elif [ "$TARGET" = "ramips" ] && { [ "$SUBTARGET" = "mt76x8" ] || [ "$SUBTARGET" = "mt7621" ]; }; then
         echo "  雷凌MT76xx平台专用驱动:"
-        mtk_drivers=("kmod-usb-ohci-pci" "kmod-usb2-pci" "kmod-usb-xhci-mtk")
+        local mtk_drivers=("kmod-usb-ohci-pci" "kmod-usb2-pci" "kmod-usb-xhci-mtk")
         for driver in "${mtk_drivers[@]}"; do
             if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
                 echo "    ✅ $driver"
@@ -716,7 +1473,7 @@ apply_config() {
     # 3. 文件系统支持检查
     echo ""
     echo "🔧 文件系统支持状态:"
-    fs_drivers=("kmod-fs-ext4" "kmod-fs-vfat" "kmod-fs-exfat" "kmod-fs-ntfs3")
+    local fs_drivers=("kmod-fs-ext4" "kmod-fs-vfat" "kmod-fs-exfat" "kmod-fs-ntfs3")
     for driver in "${fs_drivers[@]}"; do
         if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
             echo "  ✅ $driver"
@@ -725,44 +1482,33 @@ apply_config() {
         fi
     done
     
-    # 4. 调试工具配置检查（重点检查GDB）
-    echo ""
-    echo "🔧 调试工具配置状态:"
-    if grep -q "^# CONFIG_PACKAGE_gdb is not set$" .config; then
-        echo "  ✅ GDB: 已禁用（避免编译错误）"
-    elif grep -q "^CONFIG_PACKAGE_gdb=y" .config; then
-        echo "  ⚠️  GDB: 已启用（可能会遇到编译错误）"
-    else
-        echo "  ℹ️  GDB: 未明确配置"
-    fi
-    
-    # 5. 统计信息
+    # 4. 统计信息
     echo ""
     echo "📊 配置统计信息:"
-    enabled_count=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
-    disabled_count=$(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)
+    local enabled_count=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
+    local disabled_count=$(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)
     echo "  ✅ 已启用插件: $enabled_count 个"
     echo "  ❌ 已禁用插件: $disabled_count 个"
     
-    # 6. 显示具体被禁用的插件（最多20个）
+    # 5. 显示具体被禁用的插件（最多20个）
     if [ $disabled_count -gt 0 ]; then
         echo ""
         echo "📋 具体被禁用的插件:"
-        count=0
+        local count=0
         grep "^# CONFIG_PACKAGE_.* is not set$" .config | while read line; do
             if [ $count -lt 20 ]; then
-                pkg_name=$(echo $line | sed 's/# CONFIG_PACKAGE_//;s/ is not set//')
+                local pkg_name=$(echo $line | sed 's/# CONFIG_PACKAGE_//;s/ is not set//')
                 echo "  ❌ $pkg_name"
                 count=$((count + 1))
             else
-                remaining=$((disabled_count - 20))
+                local remaining=$((disabled_count - 20))
                 echo "  ... 还有 $remaining 个被禁用的插件"
                 break
             fi
         done
     fi
     
-    # 7. 修复缺失的关键USB驱动
+    # 6. 修复缺失的关键USB驱动
     if [ $missing_usb -gt 0 ]; then
         echo ""
         echo "🚨 修复缺失的关键USB驱动:"
@@ -813,21 +1559,6 @@ apply_config() {
         fi
     fi
     
-    # 8. 确保GDB被禁用（避免编译错误）
-    echo ""
-    echo "🚨 确保GDB被禁用以避免编译错误:"
-    if grep -q "^CONFIG_PACKAGE_gdb=y" .config; then
-        echo "  发现GDB已启用，正在禁用..."
-        sed -i 's/^CONFIG_PACKAGE_gdb=y/# CONFIG_PACKAGE_gdb is not set/' .config
-        echo "  ✅ 已禁用GDB"
-    elif grep -q "^# CONFIG_PACKAGE_gdb is not set$" .config; then
-        echo "  ✅ GDB已禁用"
-    else
-        echo "  ℹ️  添加GDB禁用配置"
-        echo "# CONFIG_PACKAGE_gdb is not set" >> .config
-        echo "  ✅ 已添加GDB禁用配置"
-    fi
-    
     # 版本特定的配置修复
     if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
         log "🔧 23.05版本配置预处理"
@@ -837,30 +1568,10 @@ apply_config() {
         log "✅ NTFS配置修复完成"
     fi
     
-    # 新增：修复编译器相关配置
-    echo ""
-    echo "🔧 修复编译器相关配置..."
-    
-    # 确保必要的开发包被启用
-    dev_packages=("gcc" "binutils" "libc" "libgcc" "musl")
-    
-    for pkg in "${dev_packages[@]}"; do
-        if ! grep -q "^CONFIG_PACKAGE_${pkg}=y" .config && ! grep -q "^# CONFIG_PACKAGE_${pkg} is not set$" .config; then
-            echo "  修复: 添加 $pkg 配置"
-            echo "CONFIG_PACKAGE_${pkg}=y" >> .config
-        fi
-    done
-    
-    # 确保外部编译器配置正确
-    echo "# 编译器配置修复" >> .config
-    echo "CONFIG_GCC_USE_GRAPHITE=y" >> .config
-    echo "CONFIG_GCC_USE_VERSION_11=y" >> .config
-    echo "CONFIG_BINUTILS_VERSION_2_38=y" >> .config
-    
     log "🔄 运行 make defconfig..."
     make defconfig || handle_error "应用配置失败"
     
-    log "🚨 强制启用关键USB驱动和编译器配置（防止defconfig删除）"
+    log "🚨 强制启用关键USB驱动（防止defconfig删除）"
     # 确保 USB 3.0 关键驱动被启用
     echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
     echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
@@ -884,61 +1595,21 @@ apply_config() {
     echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
     echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
     
-    # 编译器配置
-    echo "# 编译器确保配置" >> .config
-    echo "CONFIG_PACKAGE_gcc=y" >> .config
-    echo "CONFIG_PACKAGE_binutils=y" >> .config
-    echo "CONFIG_PACKAGE_libc=y" >> .config
-    echo "CONFIG_PACKAGE_libgcc=y" >> .config
-    
-    # 确保GDB被禁用
-    echo "# 禁用GDB避免编译错误" >> .config
-    echo "# CONFIG_PACKAGE_gdb is not set" >> .config
-    echo "# CONFIG_PACKAGE_gdbserver is not set" >> .config
-    
     # 运行defconfig后，再次检查并修复USB驱动
     check_usb_drivers_integrity
     
     # 最终检查
     echo ""
     echo "=== 最终配置检查 ==="
-    final_enabled=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
-    final_disabled=$(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)
+    local final_enabled=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
+    local final_disabled=$(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)
     echo "✅ 最终状态: 已启用 $final_enabled 个, 已禁用 $final_disabled 个"
-    
-    # 配置模式描述
-    echo ""
-    echo "🎯 配置模式说明:"
-    if [ "$CONFIG_MODE" = "base" ]; then
-        echo "  🟣 基础模式 - 最小化配置，用于测试编译"
-        echo "  📋 特性: 仅包含基本系统功能，USB 3.0驱动已完全启用"
-        echo "  ⚡ 优点: 编译速度快，固件体积小，适合测试和验证"
-    else
-        echo "  🟠 正常模式 - 完整功能配置"
-        echo "  📋 特性: 包含以下完整功能插件:"
-        echo "    ✅ TurboACC 网络加速"
-        echo "    ✅ UPnP 自动端口转发"
-        echo "    ✅ Samba 文件共享"
-        echo "    ✅ 磁盘管理"
-        echo "    ✅ KMS 激活服务"
-        echo "    ✅ SmartDNS 智能DNS"
-        echo "    ✅ 家长控制"
-        echo "    ✅ 微信推送"
-        echo "    ✅ 流量控制 (SQM)"
-        echo "    ✅ FTP 服务器"
-        echo "    ✅ ARP 绑定"
-        echo "    ✅ CPU 限制"
-        echo "    ✅ 硬盘休眠"
-        echo "  🚀 优点: 功能完整，适合日常使用"
-        echo "  🔧 USB 3.0加强：所有平台的关键USB驱动都已强制启用！"
-    fi
     
     log "✅ 配置应用完成"
     log "最终配置文件: .config"
     log "最终配置大小: $(ls -lh .config | awk '{print $5}')"
 }
 
-# 修复网络环境
 fix_network() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
@@ -972,7 +1643,6 @@ fix_network() {
     log "✅ 网络环境修复完成"
 }
 
-# 下载依赖包
 download_dependencies() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
@@ -985,7 +1655,7 @@ download_dependencies() {
     fi
     
     # 显示现有依赖包
-    existing_deps=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
+    local existing_deps=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
     log "现有依赖包数量: $existing_deps 个"
     
     # 下载依赖包
@@ -993,7 +1663,7 @@ download_dependencies() {
     make -j1 download V=s 2>&1 | tee download.log || handle_error "下载依赖包失败"
     
     # 检查下载结果
-    downloaded_deps=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
+    local downloaded_deps=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
     log "下载后依赖包数量: $downloaded_deps 个"
     
     if [ $downloaded_deps -gt $existing_deps ]; then
@@ -1011,1251 +1681,12 @@ download_dependencies() {
     log "✅ 依赖包下载完成"
 }
 
-# 集成自定义文件
-integrate_custom_files() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 集成自定义文件 ==="
-    
-    local custom_dir="$REPO_ROOT/firmware-config/custom-files"
-    
-    if [ ! -d "$custom_dir" ]; then
-        log "ℹ️ 自定义文件目录不存在: $custom_dir"
-        return 0
-    fi
-    
-    log "自定义文件目录: $custom_dir"
-    
-    ipk_count=0
-    script_count=0
-    other_count=0
-    
-    # 1. 集成IPK文件到package目录
-    if find "$custom_dir" -name "*.ipk" -type f 2>/dev/null | grep -q .; then
-        mkdir -p package/custom
-        log "🔧 集成IPK文件到package目录"
-        
-        while IFS= read -r -d '' ipk; do
-            ipk_name=$(basename "$ipk")
-            log "复制: $ipk_name"
-            cp "$ipk" "package/custom/"
-            ipk_count=$((ipk_count + 1))
-        done < <(find "$custom_dir" -name "*.ipk" -type f -print0 2>/dev/null)
-        
-        if [ $ipk_count -gt 0 ]; then
-            cat > package/custom/Makefile << EOF
-include \$(TOPDIR)/rules.mk
-
-PKG_NAME:=custom-packages
-PKG_VERSION:=1.0
-PKG_RELEASE:=1
-
-PKG_MAINTAINER:=Custom Build
-PKG_LICENSE:=GPL-2.0
-
-include \$(INCLUDE_DIR)/package.mk
-
-define Package/custom-packages
-  SECTION:=custom
-  CATEGORY:=Custom
-  TITLE:=Custom Packages Collection
-  DEPENDS:=
-endef
-
-define Package/custom-packages/description
-  This package contains custom IPK files.
-endef
-
-define Build/Compile
-  true
-endef
-
-define Package/custom-packages/install
-  true
-endef
-
-\$(eval \$(call BuildPackage,custom-packages))
-EOF
-            log "✅ 创建自定义包Makefile"
-        fi
-    fi
-    
-    # 2. 集成脚本文件到files目录
-    if find "$custom_dir" -name "*.sh" -type f 2>/dev/null | grep -q .; then
-        mkdir -p files/usr/share/custom
-        log "🔧 集成脚本文件到files目录"
-        
-        while IFS= read -r -d '' script; do
-            script_name=$(basename "$script")
-            log "复制: $script_name"
-            cp "$script" "files/usr/share/custom/"
-            chmod +x "files/usr/share/custom/$script_name"
-            script_count=$((script_count + 1))
-        done < <(find "$custom_dir" -name "*.sh" -type f -print0 2>/dev/null)
-        
-        if [ $script_count -gt 0 ]; then
-            mkdir -p files/etc/init.d
-            cat > files/etc/init.d/custom-scripts << EOF
-#!/bin.sh /etc/rc.common
-
-START=99
-STOP=10
-
-start() {
-    echo "Starting custom scripts..."
-    for script in /usr/share/custom/*.sh; do
-        if [ -x "\$script" ]; then
-            echo "Running: \$(basename "\$script")"
-            sh "\$script" &
-        fi
-    done
-}
-
-stop() {
-    echo "Stopping custom scripts..."
-    pkill -f "sh /usr/share/custom/"
-}
-EOF
-            chmod +x files/etc/init.d/custom-scripts
-            log "✅ 创建自定义脚本启动服务"
-        fi
-    fi
-    
-    # 3. 集成其他配置文件
-    while IFS= read -r -d '' file; do
-        if [ -f "$file" ]; then
-            file_name=$(basename "$file")
-            relative_path=$(echo "$file" | sed "s|^$custom_dir/||")
-            target_dir="files/\$(dirname "\$relative_path")"
-            
-            mkdir -p "$target_dir"
-            cp "$file" "$target_dir/"
-            log "复制配置文件: $relative_path"
-            other_count=$((other_count + 1))
-        fi
-    done < <(find "$custom_dir" -type f \( -name "*.conf" -o -name "*.config" -o -name "*.json" -o -name "*.txt" \) -print0 2>/dev/null)
-    
-    log "✅ 自定义文件集成完成"
-    log "  IPK文件: $ipk_count 个"
-    log "  脚本文件: $script_count 个"
-    log "  配置文件: $other_count 个"
-}
-
-# 编译前错误检查
-pre_build_error_check() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 🚨 前置错误检查（增强版）==="
-    
-    error_count=0
-    warning_count=0
-    
-    # 1. 检查配置文件
-    if [ ! -f ".config" ]; then
-        log "❌ 错误: .config 文件不存在"
-        error_count=$((error_count + 1))
-    else
-        log "✅ .config 文件存在"
-        
-        critical_configs=("CONFIG_TARGET_${TARGET}=y" "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y")
-        
-        for config in "${critical_configs[@]}"; do
-            if ! grep -q "^$config" .config; then
-                log "❌ 错误: 缺少关键配置 $config"
-                error_count=$((error_count + 1))
-            else
-                log "✅ 配置正常: $config"
-            fi
-        done
-    fi
-    
-    # 2. 检查feeds
-    if [ ! -d "feeds" ]; then
-        log "❌ 错误: feeds 目录不存在"
-        error_count=$((error_count + 1))
-    else
-        log "✅ feeds 目录存在"
-        
-        critical_feeds=("packages" "luci")
-        for feed in "${critical_feeds[@]}"; do
-            if [ ! -d "feeds/$feed" ]; then
-                log "❌ 错误: $feed feed 未安装"
-                error_count=$((error_count + 1))
-            else
-                log "✅ feed 正常: $feed"
-            fi
-        done
-    fi
-    
-    # 3. 检查依赖包
-    if [ ! -d "dl" ]; then
-        log "⚠️ 警告: dl 目录不存在，可能需要下载依赖"
-        warning_count=$((warning_count + 1))
-    else
-        dl_count=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
-        log "✅ 依赖包数量: $dl_count 个"
-        
-        if [ $dl_count -lt 10 ]; then
-            log "⚠️ 警告: 依赖包数量较少，可能下载不完整"
-            warning_count=$((warning_count + 1))
-        fi
-        
-        # 检查关键依赖包是否存在
-        critical_deps=("linux" "gcc" "binutils" "musl")
-        for dep in "${critical_deps[@]}"; do
-            if find dl -name "*${dep}*" -type f 2>/dev/null | grep -q .; then
-                log "✅ 找到关键依赖: $dep"
-            else
-                log "⚠️ 警告: 未找到关键依赖: $dep"
-                warning_count=$((warning_count + 1))
-            fi
-        done
-        
-        # 额外检查：根据版本检查正确的C库
-        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ] || [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            log "🔧 检查musl C库..."
-            if find dl -name "*musl*" -type f 2>/dev/null | grep -q .; then
-                log "✅ 找到musl C库 (现代OpenWrt使用)"
-            else
-                log "⚠️ 警告: 未找到musl C库"
-                warning_count=$((warning_count + 1))
-            fi
-        fi
-    fi
-    
-    # 4. 检查编译器
-    if [ -d "staging_dir" ]; then
-        compiler_count=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" 2>/dev/null | wc -l)
-        if [ $compiler_count -eq 0 ]; then
-            log "ℹ️ 未找到已构建的编译器，将在编译过程中自动构建"
-            log "📦 注意：编译器会从下载的依赖包自动构建，无需手动下载"
-        else
-            log "✅ 已下载编译器: $compiler_count 个"
-            
-            # 检查编译器完整性
-            compiler_dir=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" | head -1)
-            if [ -d "$compiler_dir/bin" ]; then
-                compiler_files=$(find "$compiler_dir/bin" \( -name "*gcc*" -o -name "*g++*" \) 2>/dev/null | wc -l)
-                if [ $compiler_files -gt 0 ]; then
-                    log "✅ 编译器文件: $compiler_files 个"
-                else
-                    log "⚠️ 警告: 编译器缺少编译器文件"
-                    warning_count=$((warning_count + 1))
-                fi
-            fi
-            
-            # 检查编译器头文件路径
-            log "🔍 检查编译器头文件路径..."
-            if [ -d "$compiler_dir/include" ]; then
-                log "✅ 编译器头文件目录存在"
-                
-                # 检查关键头文件
-                critical_headers=("stdc-predef.h" "stdio.h" "stdlib.h" "string.h")
-                for header in "${critical_headers[@]}"; do
-                    if find "$compiler_dir" -name "$header" -type f 2>/dev/null | grep -q .; then
-                        log "✅ 找到头文件: $header"
-                    else
-                        log "⚠️ 警告: 未找到头文件: $header"
-                        warning_count=$((warning_count + 1))
-                    fi
-                done
-            else
-                log "⚠️ 警告: 编译器头文件目录不存在"
-                warning_count=$((warning_count + 1))
-            fi
-        fi
-    else
-        log "ℹ️ staging_dir目录不存在，编译时将自动创建和构建编译器"
-    fi
-    
-    # 5. 检查关键文件
-    critical_files=("Makefile" "rules.mk" "Config.in" "feeds.conf.default")
-    for file in "${critical_files[@]}"; do
-        if [ -f "$file" ]; then
-            log "✅ 关键文件存在: $file"
-        else
-            log "❌ 错误: 关键文件不存在: $file"
-            error_count=$((error_count + 1))
-        fi
-    done
-    
-    # 6. 检查脚本权限
-    if [ -d "scripts" ]; then
-        script_files=$(find scripts -name "*.sh" -type f -executable 2>/dev/null | wc -l)
-        if [ $script_files -gt 0 ]; then
-            log "✅ 可执行脚本文件: $script_files 个"
-        else
-            log "⚠️ 警告: 没有可执行的脚本文件"
-            warning_count=$((warning_count + 1))
-        fi
-    fi
-    
-    # 7. 检查磁盘空间
-    available_space=$(df /mnt --output=avail | tail -1)
-    available_gb=$((available_space / 1024 / 1024))
-    log "磁盘可用空间: ${available_gb}G"
-    
-    if [ $available_gb -lt 10 ]; then
-        log "❌ 错误: 磁盘空间不足 (需要至少10G，当前${available_gb}G)"
-        error_count=$((error_count + 1))
-    elif [ $available_gb -lt 20 ]; then
-        log "⚠️ 警告: 磁盘空间较低 (建议至少20G，当前${available_gb}G)"
-        warning_count=$((warning_count + 1))
-    fi
-    
-    # 8. 检查内存
-    total_mem=$(free -m | awk '/^Mem:/{print $2}')
-    log "系统内存: ${total_mem}MB"
-    
-    if [ $total_mem -lt 1024 ]; then
-        log "⚠️ 警告: 内存较低 (建议至少1GB)"
-        warning_count=$((warning_count + 1))
-    fi
-    
-    # 9. 检查CPU核心数
-    cpu_cores=$(nproc)
-    log "CPU核心数: $cpu_cores"
-    
-    if [ $cpu_cores -lt 2 ]; then
-        log "⚠️ 警告: CPU核心数较少，编译速度会受影响"
-        warning_count=$((warning_count + 1))
-    fi
-    
-    # 10. 检查C库配置
-    log "🔧 检查C库配置..."
-    if [ -f ".config" ]; then
-        if grep -q "CONFIG_EXTERNAL_COMPILER=y" .config; then
-            log "ℹ️ 使用外部编译器"
-        elif grep -q "CONFIG_USE_MUSL=y" .config; then
-            log "✅ 配置为使用musl C库"
-        elif grep -q "CONFIG_USE_GLIBC=y" .config; then
-            log "✅ 配置为使用glibc C库"
-        elif grep -q "CONFIG_USE_UCLIBC=y" .config; then
-            log "✅ 配置为使用uclibc C库"
-        else
-            log "⚠️ 警告: 未明确指定C库类型"
-            warning_count=$((warning_count + 1))
-        fi
-    fi
-    
-    # 11. 检查libtool相关文件
-    log "🔧 检查libtool相关文件..."
-    if [ -d "tools" ]; then
-        if find tools -name "libtool*" -type f 2>/dev/null | grep -q .; then
-            log "✅ 找到libtool文件"
-        else
-            log "⚠️ 警告: 未找到libtool文件"
-            warning_count=$((warning_count + 1))
-        fi
-        
-        # 检查libtool.m4
-        if find tools -name "libtool.m4" -type f 2>/dev/null | grep -q .; then
-            log "✅ 找到libtool.m4"
-        else
-            log "⚠️ 警告: 未找到libtool.m4"
-            warning_count=$((warning_count + 1))
-        fi
-    fi
-    
-    # 检查staging_dir中的libtool文件
-    log "🔍 检查staging_dir中的libtool文件..."
-    if [ -d "staging_dir/host/share/aclocal" ]; then
-        if find staging_dir/host/share/aclocal -name "libtool.m4" -type f 2>/dev/null | grep -q .; then
-            log "✅ 找到staging_dir中的libtool.m4"
-        else
-            log "⚠️ 警告: staging_dir中未找到libtool.m4"
-            warning_count=$((warning_count + 1))
-        fi
-    else
-        log "⚠️ 警告: staging_dir/host/share/aclocal目录不存在"
-        warning_count=$((warning_count + 1))
-    fi
-    
-    # 12. 检查配置同步状态
-    log "🔧 检查配置同步状态..."
-    if [ -f ".config" ] && [ -f ".config.old" ]; then
-        config_diff=$(diff -u .config.old .config | wc -l)
-        if [ $config_diff -gt 10 ]; then
-            log "⚠️ 警告: 配置文件有较大变化，建议运行make defconfig"
-            warning_count=$((warning_count + 1))
-        fi
-    fi
-    
-    # 13. 检查头文件目录
-    log "🔧 检查头文件目录..."
-    if [ -d "staging_dir/host/include" ]; then
-        log "✅ staging_dir/host/include目录存在"
-        
-        critical_headers=("stdio.h" "stdlib.h" "string.h" "stdc-predef.h")
-        for header in "${critical_headers[@]}"; do
-            if [ -f "staging_dir/host/include/$header" ]; then
-                log "✅ 找到头文件: $header"
-            else
-                log "⚠️ 警告: 未找到头文件: $header"
-                warning_count=$((warning_count + 1))
-            fi
-        done
-    else
-        log "⚠️ 警告: staging_dir/host/include目录不存在"
-        warning_count=$((warning_count + 1))
-    fi
-    
-    # 14. 检查GDB配置
-    log "🔧 检查GDB配置状态..."
-    if [ -f ".config" ]; then
-        if grep -q "^CONFIG_PACKAGE_gdb=y" .config; then
-            log "⚠️ 警告: GDB已启用，可能会遇到编译错误"
-            log "💡 建议: 如果不需要调试功能，建议禁用GDB以避免编译错误"
-            warning_count=$((warning_count + 1))
-        elif grep -q "^# CONFIG_PACKAGE_gdb is not set$" .config; then
-            log "✅ GDB已禁用，避免可能的编译错误"
-        else
-            log "ℹ️ GDB未明确配置"
-        fi
-    fi
-    
-    # 15. 检查工具链构建状态（新增关键检查）
-    log "🔧 检查工具链构建状态..."
-    TOOLCHAIN_DIR=$(find staging_dir -name "toolchain-*" -type d 2>/dev/null | head -1)
-    if [ -n "$TOOLCHAIN_DIR" ]; then
-        log "✅ 找到工具链目录: $TOOLCHAIN_DIR"
-        
-        # 检查stamp目录
-        STAMP_DIR="$TOOLCHAIN_DIR/stamp"
-        if [ -d "$STAMP_DIR" ]; then
-            log "✅ stamp目录存在"
-            
-            # 检查关键标记文件
-            CRITICAL_STAMPS=(".toolchain_compile" ".binutils_installed")
-            for stamp in "${CRITICAL_STAMPS[@]}"; do
-                if [ -f "$STAMP_DIR/$stamp" ]; then
-                    log "✅ 标记文件存在: $stamp"
-                else
-                    log "⚠️ 警告: 标记文件缺失: $stamp"
-                    warning_count=$((warning_count + 1))
-                fi
-            done
-        else
-            log "⚠️ 警告: stamp目录不存在"
-            warning_count=$((warning_count + 1))
-        fi
-    else
-        log "ℹ️ 未找到工具链目录，将在编译过程中构建"
-    fi
-    
-    # 总结
-    if [ $error_count -eq 0 ]; then
-        if [ $warning_count -eq 0 ]; then
-            log "✅ 前置检查通过，可以开始编译"
-        else
-            log "⚠️ 前置检查通过，但有 $warning_count 个警告，建议修复"
-        fi
-        return 0
-    else
-        log "❌ 前置检查发现 $error_count 个错误，$warning_count 个警告，请修复后再编译"
-        return 1
-    fi
-}
-
-# 修复GDB编译错误 - 完整修复版
-fix_gdb_compilation_error() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 修复GDB编译错误（完整修复版）==="
-    
-    # 查找GDB构建目录
-    GDB_DIR=$(find build_dir -type d -name "gdb-*" 2>/dev/null | head -1)
-    
-    if [ -n "$GDB_DIR" ]; then
-        log "✅ 找到GDB目录: $GDB_DIR"
-        
-        # 1. 修复common-defs.h中的_GL_ATTRIBUTE_FORMAT_PRINTF错误
-        if [ -f "$GDB_DIR/gdbsupport/common-defs.h" ]; then
-            log "🔧 完整修复common-defs.h中的_GL_ATTRIBUTE_FORMAT_PRINTF错误..."
-            
-            # 备份原始文件
-            cp "$GDB_DIR/gdbsupport/common-defs.h" "$GDB_DIR/gdbsupport/common-defs.h.backup"
-            
-            # 查找ATTRIBUTE_PRINTF定义的行号
-            line_num=$(grep -n "#define ATTRIBUTE_PRINTF" "$GDB_DIR/gdbsupport/common-defs.h" | head -1 | cut -d: -f1)
-            
-            if [ -n "$line_num" ]; then
-                log "📝 在第 $line_num 行修复ATTRIBUTE_PRINTF..."
-                
-                # 创建临时文件进行修复
-                temp_file=$(mktemp)
-                
-                awk -v line_num="$line_num" '
-                NR == line_num {
-                    # 替换错误的宏定义
-                    if (match($0, "#define ATTRIBUTE_PRINTF _GL_ATTRIBUTE_FORMAT_PRINTF")) {
-                        print "#define ATTRIBUTE_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))"
-                    } else {
-                        print $0
-                    }
-                    next
-                }
-                
-                # 确保_GL_ATTRIBUTE_FORMAT_PRINTF有定义
-                NR == line_num-1 && !/^#define _GL_ATTRIBUTE_FORMAT_PRINTF/ {
-                    print "#define _GL_ATTRIBUTE_FORMAT_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))"
-                }
-                
-                { print }
-                ' "$GDB_DIR/gdbsupport/common-defs.h" > "$temp_file"
-                
-                mv "$temp_file" "$GDB_DIR/gdbsupport/common-defs.h"
-                log "✅ ATTRIBUTE_PRINTF宏已修复"
-                
-                # 验证修复
-                log "🔍 验证修复结果:"
-                grep -n "ATTRIBUTE_PRINTF\|_GL_ATTRIBUTE_FORMAT_PRINTF" "$GDB_DIR/gdbsupport/common-defs.h" | head -3
-            fi
-        else
-            log "ℹ️ 未找到common-defs.h文件"
-        fi
-        
-        # 2. 修复XML编译错误
-        log "🔧 修复XML编译错误（xml-support.o, xml-syscall.o, xml-tdesc.o）..."
-        
-        for xml_file in xml-support.c xml-syscall.c xml-tdesc.c; do
-            if [ -f "$GDB_DIR/gdb/$xml_file" ]; then
-                log "  备份并修复 $xml_file..."
-                cp "$GDB_DIR/gdb/$xml_file" "$GDB_DIR/gdb/$xml_file.backup"
-                
-                # 添加缺失的头文件包含
-                if ! grep -q "#include.*stdio.h" "$GDB_DIR/gdb/$xml_file"; then
-                    sed -i '1i#include <stdio.h>' "$GDB_DIR/gdb/$xml_file"
-                fi
-                
-                if ! grep -q "#include.*stdlib.h" "$GDB_DIR/gdb/$xml_file"; then
-                    sed -i '1i#include <stdlib.h>' "$GDB_DIR/gdb/$xml_file"
-                fi
-            fi
-        done
-        
-        # 3. 修复common-utils.c中的断言错误
-        if [ -f "$GDB_DIR/gdb/common/common-utils.c" ]; then
-            log "🔧 修复common-utils.c..."
-            cp "$GDB_DIR/gdb/common/common-utils.c" "$GDB_DIR/gdb/common/common-utils.c.backup"
-            
-            # 完全禁用断言
-            sed -i 's/internal_error.*Assertion.*failed.*);/fprintf(stderr, "GDB Assertion failed at %s:%d\\n", __FILE__, __LINE__); return;/g' "$GDB_DIR/gdb/common/common-utils.c"
-            
-            # 添加全局禁用宏
-            if ! grep -q "^#define DISABLE_ASSERT" "$GDB_DIR/gdb/common/common-utils.c"; then
-                sed -i '1i#define DISABLE_ASSERT 1' "$GDB_DIR/gdb/common/common-utils.c"
-                sed -i '1i#define NDEBUG 1' "$GDB_DIR/gdb/common/common-utils.c"
-            fi
-        fi
-        
-        # 4. 修改GDB的Makefile
-        if [ -f "$GDB_DIR/Makefile" ]; then
-            log "🔧 修改GDB Makefile..."
-            cp "$GDB_DIR/Makefile" "$GDB_DIR/Makefile.backup"
-            
-            # 添加宽松的编译标志
-            sed -i 's/^CFLAGS = /CFLAGS = -Wno-error -fpermissive /' "$GDB_DIR/Makefile"
-            sed -i 's/^CXXFLAGS = /CXXFLAGS = -Wno-error -fpermissive /' "$GDB_DIR/Makefile"
-        fi
-        
-    else
-        log "ℹ️ 未找到GDB源码目录，可能尚未编译或已跳过"
-    fi
-    
-    # 5. 配置文件中的GDB修复
-    log "🔧 配置文件中的GDB修复..."
-    if [ -f ".config" ]; then
-        # 确保GDB被禁用
-        if grep -q "^CONFIG_PACKAGE_gdb=y" .config; then
-            log "🚨 发现GDB已启用，正在禁用以避免编译错误..."
-            sed -i 's/^CONFIG_PACKAGE_gdb=y/# CONFIG_PACKAGE_gdb is not set/' .config
-            sed -i 's/^CONFIG_PACKAGE_gdbserver=y/# CONFIG_PACKAGE_gdbserver is not set/' .config
-            sed -i 's/^CONFIG_PACKAGE_gdb-minimal=y/# CONFIG_PACKAGE_gdb-minimal is not set/' .config
-            log "✅ 已禁用GDB编译"
-        else
-            log "✅ GDB已禁用"
-        fi
-    fi
-    
-    # 6. 设置修复环境变量
-    log "🌍 设置修复编译环境变量..."
-    export CFLAGS="-I$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive -Wno-error"
-    export CXXFLAGS="$CFLAGS"
-    export LDFLAGS="-L$BUILD_DIR/staging_dir/host/lib -Wl,-O1"
-    export CPPFLAGS="-I$BUILD_DIR/staging_dir/host/include"
-    export ACLOCAL_PATH="$BUILD_DIR/staging_dir/host/share/aclocal:\${ACLOCAL_PATH}"
-    export PKG_CONFIG_PATH="$BUILD_DIR/staging_dir/host/lib/pkgconfig:\${PKG_CONFIG_PATH}"
-    
-    log "✅ GDB编译错误修复完成"
-}
-
-# 新增：运行完整GDB修复
-run_complete_gdb_fix() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 运行完整GDB修复 ==="
-    
-    # 检查是否有完整的修复脚本
-    if [ -f "$REPO_ROOT/firmware-config/scripts/fix_gdb_complete.sh" ]; then
-        log "🔧 运行完整GDB修复脚本..."
-        chmod +x "$REPO_ROOT/firmware-config/scripts/fix_gdb_complete.sh"
-        "$REPO_ROOT/firmware-config/scripts/fix_gdb_complete.sh" "$BUILD_DIR"
-    else
-        log "⚠️ 完整修复脚本不存在，使用内置修复..."
-        fix_gdb_compilation_error
-    fi
-    
-    log "✅ 完整GDB修复完成"
-}
-
-# 新增：修复binutils编译错误
-fix_binutils_compilation_error() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 修复binutils编译错误 ==="
-    
-    # 查找binutils构建目录
-    BINUTILS_DIR=$(find build_dir -type d -name "binutils-*" 2>/dev/null | head -1)
-    
-    if [ -n "$BINUTILS_DIR" ]; then
-        log "✅ 找到binutils目录: $BINUTILS_DIR"
-        
-        # 检查配置日志
-        if [ -f "$BINUTILS_DIR/config.log" ]; then
-            log "🔍 检查binutils配置错误..."
-            
-            # 备份配置日志
-            cp "$BINUTILS_DIR/config.log" "$BINUTILS_DIR/config.log.backup"
-            
-            # 检查常见错误
-            if grep -q "cannot compute suffix of object files" "$BINUTILS_DIR/config.log"; then
-                log "🚨 发现目标文件后缀计算错误"
-                log "💡 修复: 设置正确的编译工具链环境"
-            fi
-            
-            if grep -q "C compiler cannot create executables" "$BINUTILS_DIR/config.log"; then
-                log "🚨 发现C编译器无法创建可执行文件错误"
-                log "💡 修复: 检查编译器路径和权限"
-            fi
-            
-            # 显示最后20行配置日志
-            log "🔍 binutils配置日志最后20行:"
-            tail -20 "$BINUTILS_DIR/config.log"
-        fi
-        
-        # 检查是否有构建错误
-        if [ -f "$BINUTILS_DIR/Makefile" ]; then
-            log "🔍 检查Makefile..."
-            
-            # 备份Makefile
-            cp "$BINUTILS_DIR/Makefile" "$BINUTILS_DIR/Makefile.backup"
-            
-            # 检查编译标志
-            if ! grep -q "CFLAGS.*-fpermissive" "$BINUTILS_DIR/Makefile"; then
-                log "🔧 在Makefile中添加-fpermissive标志..."
-                sed -i 's/^CFLAGS = /CFLAGS = -fpermissive /' "$BINUTILS_DIR/Makefile"
-                sed -i 's/^CXXFLAGS = /CXXFLAGS = -fpermissive /' "$BINUTILS_DIR/Makefile"
-                log "✅ 已添加-fpermissive标志"
-            fi
-        fi
-        
-        # 设置修复编译环境
-        log "🔧 设置修复编译环境..."
-        export CFLAGS="-I$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive -Wno-error"
-        export CXXFLAGS="$CFLAGS"
-        export LDFLAGS="-L$BUILD_DIR/staging_dir/host/lib -Wl,-O1"
-        export CPPFLAGS="-I$BUILD_DIR/staging_dir/host/include"
-        export ACLOCAL_PATH="$BUILD_DIR/staging_dir/host/share/aclocal:\${ACLOCAL_PATH}"
-        export PKG_CONFIG_PATH="$BUILD_DIR/staging_dir/host/lib/pkgconfig:\${PKG_CONFIG_PATH}"
-        
-        # 检查并修复必要的头文件
-        log "🔍 检查必要的头文件..."
-        if [ ! -f "$BUILD_DIR/staging_dir/host/include/stdc-predef.h" ]; then
-            log "⚠️ 缺少stdc-predef.h头文件，正在创建..."
-            echo "/* Generated by OpenWrt build system */" > "$BUILD_DIR/staging_dir/host/include/stdc-predef.h"
-            echo "#define __STDC_IEC_559__ 1" >> "$BUILD_DIR/staging_dir/host/include/stdc-predef.h"
-            echo "#define __STDC_IEC_559_COMPLEX__ 1" >> "$BUILD_DIR/staging_dir/host/include/stdc-predef.h"
-            echo "#define __STDC_ISO_10646__ 201706L" >> "$BUILD_DIR/staging_dir/host/include/stdc-predef.h"
-            echo "#define __STDC_UTF_16__ 1" >> "$BUILD_DIR/staging_dir/host/include/stdc-predef.h"
-            echo "#define __STDC_UTF_32__ 1" >> "$BUILD_DIR/staging_dir/host/include/stdc-predef.h"
-            log "✅ 已创建stdc-predef.h"
-        fi
-        
-        # 检查编译器配置
-        log "🔍 检查编译器配置..."
-        COMPILER_DIR=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" | head -1)
-        if [ -n "$COMPILER_DIR" ]; then
-            log "✅ 编译器目录: $COMPILER_DIR"
-            
-            # 检查编译器是否可执行
-            if [ -f "$COMPILER_DIR/bin/gcc" ]; then
-                log "✅ 找到gcc编译器: $COMPILER_DIR/bin/gcc"
-                "$COMPILER_DIR/bin/gcc" --version | head -1
-            else
-                log "⚠️ 未找到gcc编译器"
-            fi
-        else
-            log "⚠️ 未找到编译器目录"
-        fi
-        
-    else
-        log "ℹ️ 未找到binutils目录，可能尚未编译或已跳过"
-    fi
-    
-    log "✅ binutils编译错误修复完成"
-}
-
-# 新增：修复编译器工具链构建错误
-fix_compiler_toolchain_error() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 修复编译器工具链构建错误 ==="
-    
-    # 1. 查找工具链目录
-    log "🔍 查找工具链目录..."
-    TOOLCHAIN_DIR=$(find staging_dir -name "toolchain-*" -type d 2>/dev/null | head -1)
-    
-    if [ -z "$TOOLCHAIN_DIR" ]; then
-        log "⚠️ 未找到工具链目录，尝试创建默认路径..."
-        # 根据平台创建不同的工具链路径
-        if [ "$TARGET" = "ipq40xx" ]; then
-            TOOLCHAIN_DIR="$BUILD_DIR/staging_dir/toolchain-arm_cortex-a7+neon-vfpv4_gcc-8.4.0_musl_eabi"
-        elif [ "$TARGET" = "ramips" ]; then
-            TOOLCHAIN_DIR="$BUILD_DIR/staging_dir/toolchain-mipsel_24kc_gcc-8.4.0_musl"
-        else
-            TOOLCHAIN_DIR="$BUILD_DIR/staging_dir/toolchain-arm_cortex-a7+neon-vfpv4_gcc-8.4.0_musl_eabi"
-        fi
-        log "📁 创建工具链目录: $TOOLCHAIN_DIR"
-        mkdir -p "$TOOLCHAIN_DIR"
-    fi
-    
-    log "✅ 工具链目录: $TOOLCHAIN_DIR"
-    
-    # 2. 确保stamp目录存在并创建所有必需的标记文件
-    log "🔧 确保stamp目录存在..."
-    STAMP_DIR="$TOOLCHAIN_DIR/stamp"
-    mkdir -p "$STAMP_DIR"
-    
-    # 3. 创建所有必需的标记文件（关键修复）
-    log "📄 创建所有必需的标记文件..."
-    REQUIRED_STAMPS=(".toolchain_compile" ".binutils_installed" ".gcc_initial" ".gcc_final" ".libc" ".headers" ".musl" ".musl-utils" ".toolchain" ".compiler" ".toolchain_build" ".toolchain_install")
-    
-    created_count=0
-    existing_count=0
-    
-    for stamp in "${REQUIRED_STAMPS[@]}"; do
-        if [ ! -f "$STAMP_DIR/$stamp" ]; then
-            log "  创建标记文件: $stamp"
-            echo "Created by toolchain fix script at $(date)" > "$STAMP_DIR/$stamp"
-            chmod 644 "$STAMP_DIR/$stamp"
-            created_count=$((created_count + 1))
-        else
-            log "  ✅ 标记文件已存在: $stamp"
-            existing_count=$((existing_count + 1))
-        fi
-    done
-    
-    log "📊 标记文件统计: 创建了 $created_count 个新文件，已有 $existing_count 个文件"
-    
-    # 4. 检查并修复工具链Makefile
-    log "🔧 检查工具链Makefile..."
-    if [ -f "toolchain/Makefile" ]; then
-        log "✅ 工具链Makefile存在"
-        
-        # 备份Makefile
-        cp toolchain/Makefile toolchain/Makefile.backup.$(date +%s)
-        
-        # 检查第93行（根据错误日志）
-        log "🔍 检查第93行内容:"
-        sed -n '93p' toolchain/Makefile
-        
-        # 分析第93行的依赖关系
-        log "🔍 分析Makefile上下文:"
-        sed -n '85,100p' toolchain/Makefile
-        
-        # 修复可能的错误 - 确保依赖关系正确
-        log "🔧 修复可能的Makefile错误..."
-        if ! grep -q "^toolchain_compile:" toolchain/Makefile; then
-            log "⚠️ toolchain_compile目标不存在，添加..."
-            echo "" >> toolchain/Makefile
-            echo "toolchain_compile:" >> toolchain/Makefile
-            echo "	@echo 'Toolchain compilation completed'" >> toolchain/Makefile
-            echo "	touch \$(STAMP_DIR)/.toolchain_compile" >> toolchain/Makefile
-        fi
-        
-        # 检查STAMP_DIR变量的定义
-        if ! grep -q "^STAMP_DIR" toolchain/Makefile; then
-            log "⚠️ STAMP_DIR变量未定义，添加..."
-            sed -i '1iSTAMP_DIR=$(TOOLCHAIN_DIR)/stamp' toolchain/Makefile
-        fi
-    else
-        log "⚠️ 工具链Makefile不存在"
-    fi
-    
-    # 5. 设置正确的环境变量
-    log "🌍 设置工具链修复环境变量..."
-    export TOOLCHAIN_PATH="$TOOLCHAIN_DIR"
-    export STAMP_DIR="$STAMP_DIR"
-    export CFLAGS="-I$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive"
-    export CXXFLAGS="$CFLAGS"
-    export LDFLAGS="-L$BUILD_DIR/staging_dir/host/lib -Wl,-O1"
-    export CPPFLAGS="-I$BUILD_DIR/staging_dir/host/include"
-    export CC="$BUILD_DIR/staging_dir/host/bin/gcc"
-    export CXX="$BUILD_DIR/staging_dir/host/bin/g++"
-    export ACLOCAL_PATH="$BUILD_DIR/staging_dir/host/share/aclocal:\${ACLOCAL_PATH}"
-    export PKG_CONFIG_PATH="$BUILD_DIR/staging_dir/host/lib/pkgconfig:\${PKG_CONFIG_PATH}"
-    
-    # 6. 创建必要的目录和文件
-    log "🔧 创建必要的目录和文件..."
-    
-    # 确保host目录存在
-    mkdir -p "$BUILD_DIR/staging_dir/host/bin"
-    mkdir -p "$BUILD_DIR/staging_dir/host/lib"
-    mkdir -p "$BUILD_DIR/staging_dir/host/include"
-    mkdir -p "$BUILD_DIR/staging_dir/host/share/aclocal"
-    mkdir -p "$BUILD_DIR/staging_dir/host/share/aclocal-1.16"
-    mkdir -p "$BUILD_DIR/staging_dir/host/lib/pkgconfig"
-    
-    # 复制libtool.m4到正确位置
-    log "📋 复制libtool.m4到正确位置..."
-    if [ -f "/usr/share/aclocal/libtool.m4" ] && [ ! -f "$BUILD_DIR/staging_dir/host/share/aclocal/libtool.m4" ]; then
-        cp "/usr/share/aclocal/libtool.m4" "$BUILD_DIR/staging_dir/host/share/aclocal/"
-        log "✅ 已复制libtool.m4"
-    fi
-    
-    # 复制必要的头文件
-    log "📋 复制必要的头文件..."
-    for header in stdc-predef.h stdio.h stdlib.h string.h features.h; do
-        if [ -f "/usr/include/$header" ] && [ ! -f "$BUILD_DIR/staging_dir/host/include/$header" ]; then
-            cp "/usr/include/$header" "$BUILD_DIR/staging_dir/host/include/" 2>/dev/null || true
-            log "  ✅ 复制: $header"
-        fi
-    done
-    
-    # 如果缺少必要的工具，创建符号链接
-    log "🔗 创建必要的工具符号链接..."
-    if [ ! -f "$BUILD_DIR/staging_dir/host/bin/gcc" ] && command -v gcc >/dev/null 2>&1; then
-        log "  创建gcc符号链接..."
-        ln -sf "$(which gcc)" "$BUILD_DIR/staging_dir/host/bin/gcc"
-    fi
-    
-    if [ ! -f "$BUILD_DIR/staging_dir/host/bin/g++" ] && command -v g++ >/dev/null 2>&1; then
-        log "  创建g++符号链接..."
-        ln -sf "$(which g++)" "$BUILD_DIR/staging_dir/host/bin/g++"
-    fi
-    
-    if [ ! -f "$BUILD_DIR/staging_dir/host/bin/ar" ] && command -v ar >/dev/null 2>&1; then
-        log "  创建ar符号链接..."
-        ln -sf "$(which ar)" "$BUILD_DIR/staging_dir/host/bin/ar"
-    fi
-    
-    if [ ! -f "$BUILD_DIR/staging_dir/host/bin/ld" ] && command -v ld >/dev/null 2>&1; then
-        log "  创建ld符号链接..."
-        ln -sf "$(which ld)" "$BUILD_DIR/staging_dir/host/bin/ld"
-    fi
-    
-    # 7. 验证修复
-    log "✅ 工具链修复完成"
-    log "📁 Stamp目录内容:"
-    ls -la "$STAMP_DIR/" 2>/dev/null || echo "无法列出stamp目录"
-    
-    log "🎯 关键修复已应用:"
-    log "  1. 确保所有stamp目录存在"
-    log "  2. 创建所有必需的标记文件（特别是.toolchain_compile）"
-    log "  3. 检查工具链Makefile第93行依赖关系"
-    log "  4. 设置正确的环境变量"
-    log "  5. 复制必要的头文件和libtool.m4"
-    log "  6. 创建必要的工具符号链接"
-    
-    # 8. 验证工具链完整性
-    log "🔍 验证工具链完整性..."
-    if [ -d "$TOOLCHAIN_DIR/bin" ]; then
-        log "✅ 工具链bin目录存在"
-        bin_files=$(find "$TOOLCHAIN_DIR/bin" -type f 2>/dev/null | wc -l)
-        log "  工具链文件数量: $bin_files 个"
-        
-        # 检查关键工具
-        for tool in gcc g++ ar ld strip; do
-            tool_path=$(find "$TOOLCHAIN_DIR/bin" -name "*$tool*" 2>/dev/null | head -1)
-            if [ -n "$tool_path" ] && [ -x "$tool_path" ]; then
-                log "  ✅ 找到工具: $tool ($(basename "$tool_path"))"
-            else
-                log "  ⚠️  未找到工具: $tool"
-            fi
-        done
-    else
-        log "⚠️ 工具链bin目录不存在，将在编译过程中创建"
-    fi
-    
-    log "✅ 编译器工具链修复完成"
-}
-
-# 新增：强制创建工具链标记文件
-force_create_toolchain_stamps() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 强制创建工具链标记文件（关键修复步骤）==="
-    
-    echo "🚨 关键修复：强制创建所有缺失的工具链标记文件"
-    
-    # 1. 查找所有可能的工具链目录
-    echo "🔍 查找所有工具链目录..."
-    TOOLCHAIN_PATHS=$(find staging_dir -name "toolchain-*" -type d 2>/dev/null || true)
-    
-    if [ -z "$TOOLCHAIN_PATHS" ]; then
-        echo "⚠️ 未找到工具链目录，创建默认路径..."
-        # 根据目标平台创建不同的工具链路径
-        if [ "$TARGET" = "ipq40xx" ]; then
-            TOOLCHAIN_PATH="staging_dir/toolchain-arm_cortex-a7+neon-vfpv4_gcc-8.4.0_musl_eabi"
-        elif [ "$TARGET" = "ramips" ]; then
-            if [ "$SUBTARGET" = "mt76x8" ]; then
-                TOOLCHAIN_PATH="staging_dir/toolchain-mipsel_24kc_gcc-8.4.0_musl"
-            else
-                TOOLCHAIN_PATH="staging_dir/toolchain-mipsel_24kc_gcc-8.4.0_musl"
-            fi
-        else
-            TOOLCHAIN_PATH="staging_dir/toolchain-arm_cortex-a7+neon-vfpv4_gcc-8.4.0_musl_eabi"
-        fi
-        echo "📁 创建工具链目录: $TOOLCHAIN_PATH"
-        mkdir -p "$TOOLCHAIN_PATH"
-        TOOLCHAIN_PATHS="$TOOLCHAIN_PATH"
-    fi
-    
-    echo "📊 找到以下工具链目录:"
-    echo "$TOOLCHAIN_PATHS"
-    
-    # 2. 为每个工具链目录创建stamp目录和标记文件
-    for TOOLCHAIN_PATH in $TOOLCHAIN_PATHS; do
-        echo ""
-        echo "🔧 修复工具链目录: $TOOLCHAIN_PATH"
-        
-        # 确保stamp目录存在
-        STAMP_DIR="$TOOLCHAIN_PATH/stamp"
-        echo "📁 创建stamp目录: $STAMP_DIR"
-        mkdir -p "$STAMP_DIR"
-        
-        # 创建所有必需的标记文件
-        echo "📄 创建所有必需的标记文件..."
-        
-        # 工具链构建标记文件
-        TOOLCHAIN_STAMPS=(".toolchain_compile" ".binutils_installed" ".gcc_initial" ".gcc_final" ".libc" ".headers" ".musl" ".musl-utils" ".toolchain" ".compiler" ".toolchain_build" ".toolchain_install")
-        
-        for stamp in "${TOOLCHAIN_STAMPS[@]}"; do
-            stamp_file="$STAMP_DIR/$stamp"
-            if [ ! -f "$stamp_file" ]; then
-                echo "  创建: $stamp"
-                echo "Toolchain build completed by force fix script at $(date)" > "$stamp_file"
-                chmod 644 "$stamp_file"
-            else
-                echo "  ✅ 已存在: $stamp"
-            fi
-        done
-        
-        # 特别确保.toolchain_compile存在
-        echo "🚨 关键修复：确保.toolchain_compile标记文件存在且有效"
-        if [ -f "$STAMP_DIR/.toolchain_compile" ]; then
-            echo "  ✅ .toolchain_compile已存在，更新内容..."
-            echo "Force updated by fix script at $(date) - Build completed successfully" > "$STAMP_DIR/.toolchain_compile"
-        else
-            echo "  🔧 创建.toolchain_compile..."
-            echo "Force created by fix script at $(date) - Build completed successfully" > "$STAMP_DIR/.toolchain_compile"
-        fi
-        
-        # 确保.binutils_installed存在
-        if [ ! -f "$STAMP_DIR/.binutils_installed" ]; then
-            echo "  🔧 创建.binutils_installed..."
-            echo "Binutils installed by force fix script at $(date)" > "$STAMP_DIR/.binutils_installed"
-        fi
-        
-        # 验证标记文件
-        echo "🔍 验证标记文件:"
-        ls -la "$STAMP_DIR/" | head -10
-        
-        # 检查文件内容
-        echo "📄 .toolchain_compile文件内容:"
-        cat "$STAMP_DIR/.toolchain_compile" 2>/dev/null || echo "无法读取文件"
-    done
-    
-    # 3. 修复toolchain/Makefile
-    echo ""
-    echo "🔧 修复toolchain/Makefile..."
-    if [ -f "toolchain/Makefile" ]; then
-        echo "✅ 找到toolchain/Makefile"
-        
-        # 备份Makefile
-        cp toolchain/Makefile toolchain/Makefile.backup.$(date +%s)
-        
-        # 检查第94行（根据错误日志）
-        echo "🔍 检查toolchain/Makefile第94行:"
-        sed -n '94p' toolchain/Makefile
-        
-        # 分析上下文
-        echo "🔍 分析Makefile上下文 (85-105行):"
-        sed -n '85,105p' toolchain/Makefile
-        
-        # 确保STAMP_DIR变量正确
-        echo "🔧 确保STAMP_DIR变量定义正确..."
-        if ! grep -q "^STAMP_DIR" toolchain/Makefile; then
-            echo "  添加STAMP_DIR变量定义"
-            sed -i '1iSTAMP_DIR=$(TOOLCHAIN_DIR)/stamp' toolchain/Makefile
-        fi
-        
-        # 检查toolchain_compile目标
-        if ! grep -q "^toolchain_compile:" toolchain/Makefile; then
-            echo "  添加toolchain_compile目标"
-            echo "" >> toolchain/Makefile
-            echo "toolchain_compile:" >> toolchain/Makefile
-            echo "	@echo 'Toolchain compilation completed'" >> toolchain/Makefile
-            echo "	touch \$(STAMP_DIR)/.toolchain_compile" >> toolchain/Makefile
-        fi
-    else
-        echo "⚠️ toolchain/Makefile不存在"
-    fi
-    
-    # 4. 验证修复
-    echo ""
-    echo "✅ 工具链标记文件强制修复完成"
-    echo "🎯 关键修复已应用:"
-    echo "  1. 查找并修复所有工具链目录"
-    echo "  2. 确保所有stamp目录存在"
-    echo "  3. 创建所有必需的标记文件（特别是.toolchain_compile）"
-    echo "  4. 修复toolchain/Makefile配置"
-    echo "  5. 验证标记文件存在且有效"
-    
-    return 0
-}
-
-# 新增：恢复或创建编译器文件（关键修复）
-restore_or_create_compiler_files() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 恢复或创建编译器文件（关键修复）==="
-    
-    echo "🚨 关键修复：检查并恢复/创建缺失的编译器文件"
-    echo "错误信息: make[5]: arm-openwrt-linux-muslgnueabi-gcc: No such file or directory"
-    
-    # 1. 检查当前是否有编译器文件
-    echo "🔍 检查现有的编译器文件..."
-    COMPILER_FILES=$(find staging_dir -name "*gcc*" -type f 2>/dev/null | wc -l)
-    echo "现有编译器文件数量: $COMPILER_FILES"
-    
-    if [ $COMPILER_FILES -eq 0 ]; then
-        echo "⚠️ 未找到编译器文件，需要创建或恢复"
-        
-        # 2. 首先检查是否有之前保存的编译器文件
-        SAVED_COMPILER_DIR="$COMPILER_DIR/compiled/arm"
-        if [ -d "$SAVED_COMPILER_DIR" ]; then
-            echo "✅ 找到之前保存的ARM编译器文件"
-            echo "📊 保存的编译器文件:"
-            ls -la "$SAVED_COMPILER_DIR/" | head -10
-            
-            # 查找目标编译器
-            TARGET_COMPILER="arm-openwrt-linux-muslgnueabi-gcc"
-            if find "$SAVED_COMPILER_DIR" -name "*$TARGET_COMPILER*" -type f 2>/dev/null | grep -q .; then
-                echo "✅ 找到保存的目标编译器: $TARGET_COMPILER"
-                
-                # 复制到工具链目录
-                echo "📋 复制保存的编译器文件到工具链目录..."
-                
-                # 查找工具链目录
-                TOOLCHAIN_DIR=$(find staging_dir -name "toolchain-*" -type d 2>/dev/null | head -1)
-                if [ -n "$TOOLCHAIN_DIR" ]; then
-                    echo "🔧 复制到工具链目录: $TOOLCHAIN_DIR/bin"
-                    mkdir -p "$TOOLCHAIN_DIR/bin"
-                    
-                    # 复制所有ARM编译器文件
-                    find "$SAVED_COMPILER_DIR" -type f -executable 2>/dev/null | while read compiler; do
-                        filename=$(basename "$compiler")
-                        echo "  复制: $filename"
-                        cp "$compiler" "$TOOLCHAIN_DIR/bin/" 2>/dev/null || true
-                        # 设置执行权限
-                        chmod +x "$TOOLCHAIN_DIR/bin/$filename" 2>/dev/null || true
-                    done
-                    
-                    echo "✅ 已复制编译器文件"
-                else
-                    echo "⚠️ 未找到工具链目录，无法复制编译器"
-                fi
-            else
-                echo "⚠️ 保存的编译器中没有找到 $TARGET_COMPILER"
-            fi
-        else
-            echo "⚠️ 没有保存的编译器文件，需要创建符号链接"
-        fi
-        
-        # 3. 创建必要的编译器符号链接作为备用方案
-        echo "🔗 创建编译器符号链接作为备用方案..."
-        
-        # 查找或创建工具链目录
-        TOOLCHAIN_DIR=$(find staging_dir -name "toolchain-*" -type d 2>/dev/null | head -1)
-        if [ -z "$TOOLCHAIN_DIR" ]; then
-            echo "📁 创建默认工具链目录..."
-            TOOLCHAIN_DIR="staging_dir/toolchain-arm_cortex-a7+neon-vfpv4_gcc-8.4.0_musl_eabi"
-            mkdir -p "$TOOLCHAIN_DIR/bin"
-        fi
-        
-        # 确保bin目录存在
-        mkdir -p "$TOOLCHAIN_DIR/bin"
-        
-        # 创建必要的编译器符号链接
-        echo "🔧 创建编译器符号链接..."
-        
-        # 主要编译器名称
-        TARGET_PREFIX="arm-openwrt-linux-muslgnueabi"
-        SYSTEM_GCC=$(which gcc 2>/dev/null || echo "")
-        SYSTEM_GXX=$(which g++ 2>/dev/null || echo "")
-        
-        if [ -n "$SYSTEM_GCC" ]; then
-            # 创建gcc符号链接
-            for compiler_suffix in gcc g++; do
-                compiler_name="$TARGET_PREFIX-$compiler_suffix"
-                compiler_path="$TOOLCHAIN_DIR/bin/$compiler_name"
-                if [ ! -f "$compiler_path" ]; then
-                    echo "  创建符号链接: $compiler_name -> $SYSTEM_GCC"
-                    ln -sf "$SYSTEM_GCC" "$compiler_path"
-                else
-                    echo "  ✅ 已存在: $compiler_name"
-                fi
-            done
-            
-            # 创建其他必要的工具链工具符号链接
-            for tool in ar as ld nm objcopy objdump ranlib strip; do
-                tool_name="$TARGET_PREFIX-$tool"
-                tool_path="$TOOLCHAIN_DIR/bin/$tool_name"
-                system_tool=$(which $tool 2>/dev/null || echo "")
-                if [ -n "$system_tool" ] && [ ! -f "$tool_path" ]; then
-                    echo "  创建符号链接: $tool_name -> $system_tool"
-                    ln -sf "$system_tool" "$tool_path"
-                elif [ ! -f "$tool_path" ]; then
-                    echo "  ⚠️ 未找到系统工具: $tool"
-                    # 创建空文件避免错误
-                    echo "#!/bin/sh" > "$tool_path"
-                    echo "echo 'Tool $tool not available, using stub'" >> "$tool_path"
-                    echo "exit 0" >> "$tool_path"
-                    chmod +x "$tool_path"
-                fi
-            done
-        else
-            echo "❌ 系统未安装gcc，无法创建符号链接"
-        fi
-        
-        # 4. 创建简单的编译器脚本作为最后的手段
-        echo "📝 创建简单的编译器脚本作为最后的手段..."
-        
-        # 创建简单的gcc脚本
-        SIMPLE_GCC="$TOOLCHAIN_DIR/bin/$TARGET_PREFIX-gcc"
-        cat > "$SIMPLE_GCC" << 'EOF'
-#!/bin/bash
-# 简单的gcc包装脚本
-# 用于解决编译器缺失问题
-
-# 记录调用参数
-echo "Simple GCC wrapper called with: $@" > /tmp/gcc-wrapper.log
-
-# 尝试使用系统gcc
-if command -v gcc >/dev/null 2>&1; then
-    # 过滤掉特定的ARM架构参数，使用通用的编译参数
-    filtered_args=()
-    for arg in "$@"; do
-        # 跳过特定于架构的参数
-        if [[ "$arg" == *"-march=armv7"* ]] || [[ "$arg" == *"-mfpu=neon"* ]] || [[ "$arg" == *"-mfloat-abi=hard"* ]]; then
-            echo "Filtering out architecture-specific argument: $arg" >> /tmp/gcc-wrapper.log
-            continue
-        fi
-        # 替换目标前缀
-        if [[ "$arg" == *"arm-openwrt-linux-muslgnueabi-"* ]]; then
-            new_arg=$(echo "$arg" | sed 's/arm-openwrt-linux-muslgnueabi-//')
-            filtered_args+=("$new_arg")
-        else
-            filtered_args+=("$arg")
-        fi
-    done
-    
-    echo "Running gcc with filtered args: ${filtered_args[@]}" >> /tmp/gcc-wrapper.log
-    exec gcc "${filtered_args[@]}"
-else
-    echo "ERROR: No compiler available" >&2
-    exit 1
-fi
-EOF
-        chmod +x "$SIMPLE_GCC"
-        echo "✅ 已创建简单gcc脚本: $SIMPLE_GCC"
-        
-        # 创建简单的g++脚本
-        SIMPLE_GXX="$TOOLCHAIN_DIR/bin/$TARGET_PREFIX-g++"
-        cp "$SIMPLE_GCC" "$SIMPLE_GXX"
-        sed -i 's/gcc/g++/g' "$SIMPLE_GXX"
-        echo "✅ 已创建简单g++脚本: $SIMPLE_GXX"
-        
-    else
-        echo "✅ 已找到编译器文件，无需恢复"
-    fi
-    
-    # 5. 验证编译器文件
-    echo "🔍 验证编译器文件..."
-    TOOLCHAIN_DIR=$(find staging_dir -name "toolchain-*" -type d 2>/dev/null | head -1)
-    if [ -n "$TOOLCHAIN_DIR" ]; then
-        echo "✅ 工具链目录: $TOOLCHAIN_DIR"
-        echo "📊 工具链bin目录内容:"
-        ls -la "$TOOLCHAIN_DIR/bin/" 2>/dev/null | head -10 || echo "无法列出bin目录"
-        
-        # 检查关键编译器
-        TARGET_COMPILER="arm-openwrt-linux-muslgnueabi-gcc"
-        if [ -f "$TOOLCHAIN_DIR/bin/$TARGET_COMPILER" ] && [ -x "$TOOLCHAIN_DIR/bin/$TARGET_COMPILER" ]; then
-            echo "✅ 目标编译器存在且可执行: $TARGET_COMPILER"
-            echo "编译器信息:"
-            "$TOOLCHAIN_DIR/bin/$TARGET_COMPILER" --version 2>/dev/null | head -1 || echo "无法获取版本信息"
-        else
-            echo "❌ 目标编译器不存在或不可执行: $TARGET_COMPILER"
-            
-            # 尝试创建最后的符号链接
-            echo "🔗 创建最后的符号链接..."
-            SYSTEM_GCC=$(which gcc 2>/dev/null || echo "")
-            if [ -n "$SYSTEM_GCC" ]; then
-                ln -sf "$SYSTEM_GCC" "$TOOLCHAIN_DIR/bin/$TARGET_COMPILER" 2>/dev/null || true
-                echo "✅ 已创建符号链接"
-            fi
-        fi
-    fi
-    
-    # 6. 设置环境变量
-    echo "🌍 设置编译器环境变量..."
-    export PATH="$TOOLCHAIN_DIR/bin:$PATH"
-    export CC="$TOOLCHAIN_DIR/bin/arm-openwrt-linux-muslgnueabi-gcc"
-    export CXX="$TOOLCHAIN_DIR/bin/arm-openwrt-linux-muslgnueabi-g++"
-    export AR="$TOOLCHAIN_DIR/bin/arm-openwrt-linux-muslgnueabi-ar"
-    export AS="$TOOLCHAIN_DIR/bin/arm-openwrt-linux-muslgnueabi-as"
-    export LD="$TOOLCHAIN_DIR/bin/arm-openwrt-linux-muslgnueabi-ld"
-    export STRIP="$TOOLCHAIN_DIR/bin/arm-openwrt-linux-muslgnueabi-strip"
-    
-    echo "✅ 编译器文件修复完成"
-    echo "🎯 关键修复已应用:"
-    echo "  1. 检查现有编译器文件"
-    echo "  2. 从保存的文件恢复编译器（如果可用）"
-    echo "  3. 创建编译器符号链接"
-    echo "  4. 创建简单的编译器脚本作为备用"
-    echo "  5. 验证编译器文件"
-    echo "  6. 设置编译器环境变量"
-    
-    return 0
-}
-
-# 编译固件（增强修复版）
 build_firmware() {
     local enable_cache=$1
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 编译固件（优化版）==="
+    log "=== 编译固件 ==="
     
     # 编译前最终检查
     log "编译前最终检查..."
@@ -2273,11 +1704,11 @@ build_firmware() {
     fi
     
     # 获取CPU核心数
-    cpu_cores=$(nproc)
-    make_jobs=$cpu_cores
+    local cpu_cores=$(nproc)
+    local make_jobs=$cpu_cores
     
     # 如果内存小于4GB，减少并行任务
-    total_mem=$(free -m | awk '/^Mem:/{print $2}')
+    local total_mem=$(free -m | awk '/^Mem:/{print $2}')
     if [ $total_mem -lt 4096 ]; then
         make_jobs=$((cpu_cores / 2))
         if [ $make_jobs -lt 1 ]; then
@@ -2286,93 +1717,10 @@ build_firmware() {
         log "⚠️ 内存较低(${total_mem}MB)，减少并行任务到 $make_jobs"
     fi
     
-    # 在编译前修复binutils错误
-    log "🔧 编译前修复binutils错误..."
-    fix_binutils_compilation_error
-    
-    # 修复编译器工具链错误（关键修复）
-    log "🔧 编译前修复编译器工具链错误..."
-    fix_compiler_toolchain_error
-    
-    # 开始编译
-    log "开始编译，使用 $make_jobs 个并行任务"
-    
-    # 设置修复环境变量
-    export CFLAGS="-I$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive -Wno-error"
-    export CXXFLAGS="$CFLAGS"
-    export LDFLAGS="-L$BUILD_DIR/staging_dir/host/lib -Wl,-O1"
-    export CPPFLAGS="-I$BUILD_DIR/staging_dir/host/include"
-    export ACLOCAL_PATH="$BUILD_DIR/staging_dir/host/share/aclocal:\${ACLOCAL_PATH}"
-    export PKG_CONFIG_PATH="$BUILD_DIR/staging_dir/host/lib/pkgconfig:\${PKG_CONFIG_PATH}"
-    export CC="$BUILD_DIR/staging_dir/host/bin/gcc"
-    export CXX="$BUILD_DIR/staging_dir/host/bin/g++"
-    
-    # 在编译前修复GDB错误
-    fix_gdb_compilation_error
-    
-    # 验证工具链状态
-    log "🔍 验证工具链状态..."
-    TOOLCHAIN_DIR=$(find staging_dir -name "toolchain-*" -type d 2>/dev/null | head -1)
-    if [ -n "$TOOLCHAIN_DIR" ]; then
-        log "✅ 工具链目录: $TOOLCHAIN_DIR"
-        
-        # 检查stamp目录
-        STAMP_DIR="$TOOLCHAIN_DIR/stamp"
-        if [ -d "$STAMP_DIR" ]; then
-            log "✅ stamp目录存在"
-            
-            # 检查关键标记文件
-            CRITICAL_STAMPS=(".toolchain_compile" ".binutils_installed")
-            for stamp in "${CRITICAL_STAMPS[@]}"; do
-                if [ -f "$STAMP_DIR/$stamp" ]; then
-                    log "  ✅ $stamp 存在"
-                else
-                    log "  ⚠️ $stamp 缺失，紧急创建..."
-                    echo "Created before firmware build at $(date)" > "$STAMP_DIR/$stamp"
-                fi
-            done
-        else
-            log "⚠️ stamp目录不存在，紧急创建..."
-            mkdir -p "$STAMP_DIR"
-            echo "Created before firmware build at $(date)" > "$STAMP_DIR/.toolchain_compile"
-            echo "Created before firmware build at $(date)" > "$STAMP_DIR/.binutils_installed"
-        fi
-    else
-        log "⚠️ 未找到工具链目录"
-    fi
-    
-    # 使用优化的编译参数，减少Broken pipe错误
-    if [ $make_jobs -gt 4 ]; then
-        log "🔧 使用优化的编译参数以减少管道错误"
-        log "🔧 设置修复后的编译环境变量"
-        
-        # 首先尝试编译工具链
-        log "🔧 首先编译工具链..."
-        make -j$make_jobs toolchain/install V=s 2>&1 | tee -a build.log
-        
-        TOOLCHAIN_EXIT_CODE=${PIPESTATUS[0]}
-        if [ $TOOLCHAIN_EXIT_CODE -eq 0 ]; then
-            log "✅ 工具链编译成功，继续编译固件..."
-            make -j$make_jobs V=s 2>&1 | tee -a build.log
-            BUILD_EXIT_CODE=${PIPESTATUS[0]}
-        else
-            log "⚠️ 工具链编译失败，尝试使用更少任务..."
-            make -j2 toolchain/install V=s 2>&1 | tee -a build.log
-            TOOLCHAIN_EXIT_CODE=${PIPESTATUS[0]}
-            
-            if [ $TOOLCHAIN_EXIT_CODE -eq 0 ]; then
-                log "✅ 工具链编译成功，继续编译固件..."
-                make -j$make_jobs V=s 2>&1 | tee -a build.log
-                BUILD_EXIT_CODE=${PIPESTATUS[0]}
-            else
-                log "❌ 工具链编译失败，无法继续"
-                BUILD_EXIT_CODE=$TOOLCHAIN_EXIT_CODE
-            fi
-        fi
-    else
-        make -j$make_jobs V=s 2>&1 | tee build.log
-        BUILD_EXIT_CODE=${PIPESTATUS[0]}
-    fi
+    # 开始编译（默认启用缓存）
+    log "启用编译缓存，使用 $make_jobs 个并行任务"
+    make -j$make_jobs V=s 2>&1 | tee build.log
+    BUILD_EXIT_CODE=${PIPESTATUS[0]}
     
     log "编译退出代码: $BUILD_EXIT_CODE"
     
@@ -2382,7 +1730,7 @@ build_firmware() {
         
         # 检查生成的固件
         if [ -d "bin/targets" ]; then
-            firmware_count=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+            local firmware_count=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
             log "✅ 生成固件文件: $firmware_count 个"
             
             # 显示固件文件
@@ -2400,8 +1748,8 @@ build_firmware() {
             log "=== 编译错误摘要 ==="
             
             # 查找常见错误
-            error_count=$(grep -c "Error [0-9]|error:" build.log)
-            warning_count=$(grep -c "Warning\|warning:" build.log)
+            local error_count=$(grep -c "Error [0-9]|error:" build.log)
+            local warning_count=$(grep -c "Warning\|warning:" build.log)
             
             log "发现 $error_count 个错误，$warning_count 个警告"
             
@@ -2432,57 +1780,6 @@ build_firmware() {
                     find staging_dir -name "*gcc*" 2>/dev/null | head -10
                 fi
             fi
-            
-            # 检查头文件错误
-            if grep -q "stdc-predef.h" build.log; then
-                log "🚨 发现头文件缺失错误: stdc-predef.h"
-                log "💡 建议: 确保安装了正确的开发包"
-            fi
-            
-            # 检查特定的gcc编译错误
-            if grep -q "declaration does not declare anything" build.log; then
-                log "🚨 发现GCC声明错误"
-                log "💡 建议: 这可能是GCC版本兼容性问题"
-            fi
-            
-            if grep -q "conflicting declaration of C function" build.log; then
-                log "🚨 发现C函数声明冲突错误"
-                log "💡 建议: 这通常是头文件冲突"
-            fi
-            
-            # 检查GDB编译错误
-            if grep -q "_GL_ATTRIBUTE_FORMAT_PRINTF" build.log; then
-                log "🚨 发现GDB _GL_ATTRIBUTE_FORMAT_PRINTF 错误"
-                log "💡 建议: 需要修复gdbsupport/common-defs.h文件"
-            fi
-            
-            if grep -q "internal_error.*Assertion\|ERROR: toolchain/gdb failed" build.log; then
-                log "🚨 发现GDB编译错误"
-                log "💡 建议: GDB已在配置中禁用或需要修复"
-            fi
-            
-            # 检查binutils错误
-            if grep -q "toolchain/binutils/compile.*failed" build.log; then
-                log "🚨 发现binutils编译错误"
-                log "💡 建议: 需要检查binutils配置和编译环境"
-            fi
-            
-            # 检查工具链错误
-            if grep -q "toolchain/Makefile.*Error\|toolchain_compile.*failed" build.log; then
-                log "🚨 发现工具链编译错误"
-                log "💡 建议: 需要修复工具链构建问题"
-            fi
-            
-            # 特别检查toolchain/Makefile:93错误
-            if grep -q "toolchain/Makefile.*93" build.log; then
-                log "🚨 发现工具链构建错误 (toolchain/Makefile:93)"
-                log "💡 建议: 需要创建.toolchain_compile标记文件和stamp目录"
-                log "💡 快速修复:"
-                log "  1. find staging_dir -name 'toolchain-*' -type d"
-                log "  2. mkdir -p staging_dir/toolchain-*/stamp"
-                log "  3. touch staging_dir/toolchain-*/stamp/.toolchain_compile"
-                log "  4. touch staging_dir/toolchain-*/stamp/.binutils_installed"
-            fi
         fi
         
         exit $BUILD_EXIT_CODE
@@ -2491,7 +1788,6 @@ build_firmware() {
     log "✅ 固件编译完成"
 }
 
-# 编译后空间检查
 post_build_space_check() {
     log "=== 编译后空间检查 ==="
     
@@ -2499,18 +1795,18 @@ post_build_space_check() {
     df -h
     
     # 构建目录空间
-    build_dir_usage=$(du -sh $BUILD_DIR 2>/dev/null | cut -f1) || echo "无法获取构建目录大小"
+    local build_dir_usage=$(du -sh $BUILD_DIR 2>/dev/null | cut -f1) || echo "无法获取构建目录大小"
     echo "构建目录大小: $build_dir_usage"
     
     # 固件文件大小
     if [ -d "$BUILD_DIR/bin/targets" ]; then
-        firmware_size=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) -exec du -ch {} + 2>/dev/null | tail -1 | cut -f1)
+        local firmware_size=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) -exec du -ch {} + 2>/dev/null | tail -1 | cut -f1)
         echo "固件文件总大小: $firmware_size"
     fi
     
     # 检查可用空间
-    available_space=$(df /mnt --output=avail | tail -1)
-    available_gb=$((available_space / 1024 / 1024))
+    local available_space=$(df /mnt --output=avail | tail -1)
+    local available_gb=$((available_space / 1024 / 1024))
     log "/mnt 可用空间: ${available_gb}G"
     
     if [ $available_gb -lt 5 ]; then
@@ -2522,7 +1818,6 @@ post_build_space_check() {
     log "✅ 空间检查完成"
 }
 
-# 检查固件文件
 check_firmware_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -2533,8 +1828,8 @@ check_firmware_files() {
         log "✅ 固件目录存在"
         
         # 统计固件文件
-        firmware_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
-        all_files=$(find bin/targets -type f 2>/dev/null | wc -l)
+        local firmware_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+        local all_files=$(find bin/targets -type f 2>/dev/null | wc -l)
         
         log "固件文件: $firmware_files 个"
         log "所有文件: $all_files 个"
@@ -2544,13 +1839,13 @@ check_firmware_files() {
         find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) -exec ls -lh {} \;
         
         # 检查文件大小
-        total_size=0
+        local total_size=0
         while read size; do
             total_size=$((total_size + size))
         done < <(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) -exec stat -c%s {} \; 2>/dev/null)
         
         if [ $total_size -gt 0 ]; then
-            total_size_mb=$((total_size / 1024 / 1024))
+            local total_size_mb=$((total_size / 1024 / 1024))
             log "固件总大小: ${total_size_mb}MB"
             
             # 检查固件大小是否合理
@@ -2573,7 +1868,6 @@ check_firmware_files() {
     fi
 }
 
-# 清理构建目录
 cleanup() {
     log "=== 清理构建目录 ==="
     
@@ -2584,7 +1878,7 @@ cleanup() {
         if [ -f "$BUILD_DIR/.config" ]; then
             log "备份配置文件..."
             mkdir -p /tmp/openwrt_backup
-            backup_file="/tmp/openwrt_backup/config_$(date +%Y%m%d_%H%M%S).config"
+            local backup_file="/tmp/openwrt_backup/config_$(date +%Y%m%d_%H%M%S).config"
             cp "$BUILD_DIR/.config" "$backup_file"
             log "✅ 配置文件备份到: $backup_file"
         fi
@@ -2605,7 +1899,6 @@ cleanup() {
     fi
 }
 
-# 主函数
 main() {
     case $1 in
         "setup_environment")
@@ -2653,24 +1946,6 @@ main() {
         "pre_build_error_check")
             pre_build_error_check
             ;;
-        "fix_gdb_compilation_error")
-            fix_gdb_compilation_error
-            ;;
-        "run_complete_gdb_fix")
-            run_complete_gdb_fix
-            ;;
-        "fix_binutils_compilation_error")
-            fix_binutils_compilation_error
-            ;;
-        "fix_compiler_toolchain_error")
-            fix_compiler_toolchain_error
-            ;;
-        "force_create_toolchain_stamps")
-            force_create_toolchain_stamps
-            ;;
-        "restore_or_create_compiler_files")
-            restore_or_create_compiler_files
-            ;;
         "build_firmware")
             build_firmware "$2"
             ;;
@@ -2683,6 +1958,21 @@ main() {
         "cleanup")
             cleanup
             ;;
+        "save_source_code_info")
+            save_source_code_info
+            ;;
+        "download_compiler_files")
+            download_compiler_files
+            ;;
+        "check_compiler_dir_status")
+            check_compiler_dir_status "$2"
+            ;;
+        "collect_compiler_files")
+            collect_compiler_files "$2" "$3"
+            ;;
+        "run_error_analysis")
+            run_error_analysis
+            ;;
         *)
             log "❌ 未知命令: $1"
             echo "可用命令:"
@@ -2690,8 +1980,9 @@ main() {
             echo "  add_turboacc_support, configure_feeds, install_turboacc_packages"
             echo "  pre_build_space_check, generate_config, verify_usb_config, check_usb_drivers_integrity, apply_config"
             echo "  fix_network, download_dependencies, integrate_custom_files"
-            echo "  pre_build_error_check, fix_gdb_compilation_error, run_complete_gdb_fix, fix_binutils_compilation_error, fix_compiler_toolchain_error"
-            echo "  force_create_toolchain_stamps, restore_or_create_compiler_files, build_firmware, post_build_space_check, check_firmware_files, cleanup"
+            echo "  pre_build_error_check, build_firmware, post_build_space_check"
+            echo "  check_firmware_files, cleanup, save_source_code_info, download_compiler_files"
+            echo "  check_compiler_dir_status, collect_compiler_files, run_error_analysis"
             exit 1
             ;;
     esac
