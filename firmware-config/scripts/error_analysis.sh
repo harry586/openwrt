@@ -372,16 +372,22 @@ if [ -d "staging_dir" ]; then
             
             # 检查关键标记文件
             echo "  关键标记文件状态:" >> error_analysis.log
-            CRITICAL_STAMPS=(".toolchain_compile" ".binutils_installed" ".gcc_initial" ".gcc_final")
+            CRITICAL_STAMPS=(".toolchain_compile" ".binutils_installed" ".gcc_initial" ".gcc_final" ".libc" ".headers")
+            missing_count=0
             for stamp in "${CRITICAL_STAMPS[@]}"; do
                 if [ -f "$STAMP_DIR/$stamp" ]; then
                     echo "    ✅ $stamp 存在" >> error_analysis.log
-                    echo "      文件大小: $(stat -c%s "$STAMP_DIR/$stamp" 2>/dev/null || echo '未知') 字节" >> error_analysis.log
-                    echo "      修改时间: $(stat -c%y "$STAMP_DIR/$stamp" 2>/dev/null | cut -d'.' -f1)" >> error_analysis.log
                 else
-                    echo "    ❌ $stamp 缺失 - 这是工具链构建错误的关键原因" >> error_analysis.log
+                    echo "    ❌ $stamp 缺失" >> error_analysis.log
+                    missing_count=$((missing_count + 1))
                 fi
             done
+            
+            if [ $missing_count -gt 0 ]; then
+                echo "  ⚠️  有 $missing_count 个关键标记文件缺失，需要修复" >> error_analysis.log
+            else
+                echo "  ✅ 所有关键标记文件都存在" >> error_analysis.log
+            fi
         else
             echo "❌ stamp目录不存在 - 这是工具链构建失败的主要原因" >> error_analysis.log
             echo "💡 修复建议: mkdir -p $STAMP_DIR" >> error_analysis.log
@@ -407,7 +413,7 @@ echo "" >> error_analysis.log
 echo "=== 23.05版本特定问题分析 ===" >> error_analysis.log
 if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
     echo "🔧 OpenWrt 23.05 常见问题:" >> error_analysis.log
-    echo "1. 编译器不兼容: 23.05可能需要更新的编译器版本" >> error_analysis.log
+    echo "1. 编译器不兼容: 23.05使用GCC 11.3.0，21.02使用GCC 8.4.0" >> error_analysis.log
     echo "2. 内核版本不同: 23.05使用Linux 5.15，需要不同的内核头文件" >> error_analysis.log
     echo "3. musl版本更新: 可能需要更新的musl C库" >> error_analysis.log
     echo "4. libtool版本: 可能需要更新的libtool版本" >> error_analysis.log
@@ -417,26 +423,32 @@ if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
     echo "8. 工具链构建错误: toolchain/Makefile:93 是最常见的错误" >> error_analysis.log
     echo "9. 缺少.toolchain_compile标记: 导致工具链构建中断" >> error_analysis.log
     echo "10. stamp目录问题: 标记文件缺失或不完整" >> error_analysis.log
+    echo "11. 头文件缺失: stdio.h, stdlib.h等关键头文件缺失" >> error_analysis.log
+    echo "12. 版本不匹配: 下载的编译器版本与OpenWrt版本不匹配" >> error_analysis.log
     echo "" >> error_analysis.log
     echo "🛠️ 解决方案:" >> error_analysis.log
-    echo "1. 清理编译器重新下载: rm -rf staging_dir/compiler-*" >> error_analysis.log
-    echo "2. 清理构建目录: rm -rf build_dir/target-*" >> error_analysis.log
-    echo "3. 确保使用正确的编译器: arm-openwrt-linux-muslgnueabi-gcc" >> error_analysis.log
-    echo "4. 检查内核配置: 确保CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> error_analysis.log
-    echo "5. 安装最新的libtool和autoconf: sudo apt-get install libtool autoconf automake libltdl-dev gettext pkg-config" >> error_analysis.log
-    echo "6. 复制libtool.m4到正确位置: cp /usr/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/" >> error_analysis.log
-    echo "7. 修复GCC头文件冲突: 修改gcc/system.h和auto-host.h文件" >> error_analysis.log
-    echo "8. 添加-fpermissive编译标志: export CFLAGS=\"\$CFLAGS -fpermissive\"" >> error_analysis.log
-    echo "9. 修复GDB _GL_ATTRIBUTE_FORMAT_PRINTF错误: 修改gdbsupport/common-defs.h第111行" >> error_analysis.log
-    echo "10. 禁用GDB编译（如果不需调试）: 在.config中添加 # CONFIG_PACKAGE_gdb is not set" >> error_analysis.log
-    echo "11. 修复GDB内部错误: 在gdb源码中添加DISABLE_ASSERT宏定义" >> error_analysis.log
-    echo "12. 修复binutils编译错误: 检查config.log，设置正确的编译环境变量" >> error_analysis.log
-    echo "13. 修复工具链构建错误: 确保stamp目录存在并创建.toolchain_compile标记文件" >> error_analysis.log
-    echo "14. 运行修复脚本: $GITHUB_WORKSPACE/firmware-config/scripts/build_firmware_main.sh fix_binutils_compilation_error" >> error_analysis.log
-    echo "15. 运行工具链修复脚本: $GITHUB_WORKSPACE/firmware-config/scripts/build_firmware_main.sh fix_compiler_toolchain_error" >> error_analysis.log
-    echo "16. 单独编译工具链: make toolchain/install -j2 V=s" >> error_analysis.log
-    echo "17. 手动创建stamp目录和标记文件: mkdir -p staging_dir/toolchain-*/stamp && touch staging_dir/toolchain-*/stamp/.toolchain_compile" >> error_analysis.log
-    echo "18. 检查工具链Makefile第93行: 确保依赖关系正确" >> error_analysis.log
+    echo "1. 使用版本特定的编译器: OpenWrt 23.05使用GCC 11.3.0，21.02使用GCC 8.4.0" >> error_analysis.log
+    echo "2. 清理编译器重新下载: rm -rf staging_dir/compiler-*" >> error_analysis.log
+    echo "3. 清理构建目录: rm -rf build_dir/target-*" >> error_analysis.log
+    echo "4. 确保使用正确的编译器: arm-openwrt-linux-muslgnueabi-gcc" >> error_analysis.log
+    echo "5. 检查内核配置: 确保CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> error_analysis.log
+    echo "6. 安装最新的libtool和autoconf: sudo apt-get install libtool autoconf automake libltdl-dev gettext pkg-config" >> error_analysis.log
+    echo "7. 复制libtool.m4到正确位置: cp /usr/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/" >> error_analysis.log
+    echo "8. 修复GCC头文件冲突: 修改gcc/system.h和auto-host.h文件" >> error_analysis.log
+    echo "9. 添加-fpermissive编译标志: export CFLAGS=\"\$CFLAGS -fpermissive\"" >> error_analysis.log
+    echo "10. 修复GDB _GL_ATTRIBUTE_FORMAT_PRINTF错误: 修改gdbsupport/common-defs.h第111行" >> error_analysis.log
+    echo "11. 禁用GDB编译（如果不需调试）: 在.config中添加 # CONFIG_PACKAGE_gdb is not set" >> error_analysis.log
+    echo "12. 修复GDB内部错误: 在gdb源码中添加DISABLE_ASSERT宏定义" >> error_analysis.log
+    echo "13. 修复binutils编译错误: 检查config.log，设置正确的编译环境变量" >> error_analysis.log
+    echo "14. 修复工具链构建错误: 确保stamp目录存在并创建.toolchain_compile标记文件" >> error_analysis.log
+    echo "15. 运行修复脚本: firmware-config/scripts/build_firmware_main-01.sh fix_binutils_compilation_error" >> error_analysis.log
+    echo "16. 运行工具链修复脚本: firmware-config/scripts/build_firmware_main-01.sh fix_compiler_toolchain_error" >> error_analysis.log
+    echo "17. 单独编译工具链: make toolchain/install -j2 V=s" >> error_analysis.log
+    echo "18. 手动创建stamp目录和标记文件: mkdir -p staging_dir/toolchain-*/stamp && touch staging_dir/toolchain-*/stamp/.toolchain_compile" >> error_analysis.log
+    echo "19. 检查工具链Makefile第93行: 确保依赖关系正确" >> error_analysis.log
+    echo "20. 修复头文件缺失: firmware-config/scripts/build_firmware_main-01.sh fix_missing_headers" >> error_analysis.log
+    echo "21. 修复标记文件: firmware-config/scripts/build_firmware_main-01.sh fix_missing_stamp_files" >> error_analysis.log
+    echo "22. 运行综合修复: firmware-config/scripts/build_firmware_main-01.sh run_comprehensive_fixes" >> error_analysis.log
 fi
 
 echo "" >> error_analysis.log
@@ -504,14 +516,16 @@ if [ -f "build.log" ]; then
         echo "  2. stamp目录不存在" >> error_analysis.log
         echo "  3. 工具链依赖未正确构建" >> error_analysis.log
         echo "  4. 编译器环境配置错误" >> error_analysis.log
+        echo "  5. 关键标记文件缺失: .gcc_initial, .gcc_final等" >> error_analysis.log
         echo "" >> error_analysis.log
         echo "🛠️ 具体修复步骤:" >> error_analysis.log
         echo "  1. 找到工具链目录: find staging_dir -name 'toolchain-*' -type d" >> error_analysis.log
         echo "  2. 创建stamp目录: mkdir -p staging_dir/toolchain-*/stamp" >> error_analysis.log
         echo "  3. 创建标记文件: touch staging_dir/toolchain-*/stamp/.toolchain_compile" >> error_analysis.log
         echo "  4. 创建其他标记文件: touch staging_dir/toolchain-*/stamp/.binutils_installed" >> error_analysis.log
-        echo "  5. 单独编译工具链: make toolchain/compile -j2 V=s" >> error_analysis.log
-        echo "  6. 安装工具链: make toolchain/install -j2 V=s" >> error_analysis.log
+        echo "  5. 创建.gcc_initial和.gcc_final标记: touch staging_dir/toolchain-*/stamp/.gcc_initial staging_dir/toolchain-*/stamp/.gcc_final" >> error_analysis.log
+        echo "  6. 单独编译工具链: make toolchain/compile -j2 V=s" >> error_analysis.log
+        echo "  7. 安装工具链: make toolchain/install -j2 V=s" >> error_analysis.log
     else
         echo "未发现toolchain/Makefile:93错误" >> error_analysis.log
     fi
@@ -566,7 +580,7 @@ if grep -q "_GL_ATTRIBUTE_FORMAT_PRINTF" build.log 2>/dev/null; then
     echo "  1. 找到GDB源码目录: find build_dir -name 'gdb-*' -type d" >> error_analysis.log
     echo "  2. 修复common-defs.h文件:" >> error_analysis.log
     echo "     sed -i '111s/#define ATTRIBUTE_PRINTF _GL_ATTRIBUTE_FORMAT_PRINTF/#define ATTRIBUTE_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))/' gdbsupport/common-defs.h" >> error_analysis.log
-    echo "  3. 或者运行完整修复脚本: ./fix_gdb_complete.sh" >> error_analysis.log
+    echo "  3. 或者运行完整修复脚本: firmware-config/scripts/build_firmware_main-01.sh fix_gdb_compilation_error" >> error_analysis.log
     echo "" >> error_analysis.log
 fi
 
@@ -658,8 +672,7 @@ echo "     sed -i '1i#include <stdlib.h>' gdb/\$file" >> error_analysis.log
 echo "   done" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "3. 🛠️ 使用修复脚本:" >> error_analysis.log
-echo "   chmod +x firmware-config/scripts/fix_gdb_complete.sh" >> error_analysis.log
-echo "   ./firmware-config/scripts/fix_gdb_complete.sh" >> error_analysis.log
+echo "   firmware-config/scripts/build_firmware_main-01.sh fix_gdb_compilation_error" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "4. 🔄 重新编译工具链:" >> error_analysis.log
 echo "   make toolchain/install -j1 V=s" >> error_analysis.log
@@ -684,9 +697,11 @@ if grep -q "toolchain/Makefile.*93" build.log 2>/dev/null; then
     echo "     echo 'toolchain compiled successfully at \$(date)' > \"\$TOOLCHAIN_DIR/stamp/.toolchain_compile\"" >> error_analysis.log
     echo "  4. 创建.binutils_installed标记文件:" >> error_analysis.log
     echo "     echo 'binutils installed at \$(date)' > \"\$TOOLCHAIN_DIR/stamp/.binutils_installed\"" >> error_analysis.log
-    echo "  5. 单独编译工具链:" >> error_analysis.log
+    echo "  5. 创建.gcc_initial和.gcc_final标记文件:" >> error_analysis.log
+    echo "     touch \"\$TOOLCHAIN_DIR/stamp/.gcc_initial\" \"\$TOOLCHAIN_DIR/stamp/.gcc_final\"" >> error_analysis.log
+    echo "  6. 单独编译工具链:" >> error_analysis.log
     echo "     make toolchain/compile -j2 V=s" >> error_analysis.log
-    echo "  6. 单独安装工具链:" >> error_analysis.log
+    echo "  7. 单独安装工具链:" >> error_analysis.log
     echo "     make toolchain/install -j2 V=s" >> error_analysis.log
     echo "" >> error_analysis.log
 fi
@@ -701,7 +716,7 @@ if grep -q "stamp/.toolchain_compile" build.log 2>/dev/null; then
     echo "       touch \"staging_dir/toolchain-*/stamp/\$stamp\" 2>/dev/null || true" >> error_analysis.log
     echo "     done" >> error_analysis.log
     echo "  2. 运行工具链修复脚本:" >> error_analysis.log
-    echo "     \$GITHUB_WORKSPACE/firmware-config/scripts/build_firmware_main.sh fix_compiler_toolchain_error" >> error_analysis.log
+    echo "     firmware-config/scripts/build_firmware_main-01.sh fix_missing_stamp_files" >> error_analysis.log
     echo "" >> error_analysis.log
 fi
 
@@ -721,7 +736,7 @@ if [ -n "$TOOLCHAIN_DIR" ]; then
         
         # 检查关键标记文件
         echo "  关键标记文件状态:" >> error_analysis.log
-        CRITICAL_STAMPS=(".toolchain_compile" ".binutils_installed" ".gcc_initial" ".gcc_final")
+        CRITICAL_STAMPS=(".toolchain_compile" ".binutils_installed" ".gcc_initial" ".gcc_final" ".libc" ".headers")
         missing_count=0
         for stamp in "${CRITICAL_STAMPS[@]}"; do
             if [ -f "$STAMP_DIR/$stamp" ]; then
@@ -757,7 +772,7 @@ echo "   touch \"\$TOOLCHAIN_DIR/stamp/.gcc_initial\"" >> error_analysis.log
 echo "   touch \"\$TOOLCHAIN_DIR/stamp/.gcc_final\"" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "2. 🔧 完整修复 - 运行修复脚本:" >> error_analysis.log
-echo "   \$GITHUB_WORKSPACE/firmware-config/scripts/build_firmware_main.sh fix_compiler_toolchain_error" >> error_analysis.log
+echo "   firmware-config/scripts/build_firmware_main-01.sh fix_missing_stamp_files" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "3. 🔄 单独编译工具链:" >> error_analysis.log
 echo "   make toolchain/compile -j2 V=s" >> error_analysis.log
@@ -778,14 +793,16 @@ echo "   - stamp目录不存在" >> error_analysis.log
 echo "   - 工具链依赖未正确构建" >> error_analysis.log
 echo "   - 编译器环境配置不正确" >> error_analysis.log
 echo "   - 缺少必要的头文件或库文件" >> error_analysis.log
+echo "   - 关键标记文件缺失: .gcc_initial, .gcc_final等" >> error_analysis.log
 echo "🛠️ 解决方案:" >> error_analysis.log
 echo "   - 检查stamp目录: staging_dir/toolchain-*/stamp/" >> error_analysis.log
 echo "   - 创建缺失的标记文件: touch staging_dir/toolchain-*/stamp/.toolchain_compile" >> error_analysis.log
+echo "   - 创建.gcc_initial和.gcc_final标记: touch staging_dir/toolchain-*/stamp/.gcc_initial staging_dir/toolchain-*/stamp/.gcc_final" >> error_analysis.log
 echo "   - 设置正确的编译环境变量:" >> error_analysis.log
 echo "     export CFLAGS=\"-I\$BUILD_DIR/staging_dir/host/include -O2 -pipe -fpermissive\"" >> error_analysis.log
 echo "     export CXXFLAGS=\"\$CFLAGS\"" >> error_analysis.log
 echo "     export LDFLAGS=\"-L\$BUILD_DIR/staging_dir/host/lib -Wl,-O1\"" >> error_analysis.log
-echo "   - 运行修复脚本: $GITHUB_WORKSPACE/firmware-config/scripts/build_firmware_main.sh fix_compiler_toolchain_error" >> error_analysis.log
+echo "   - 运行修复脚本: firmware-config/scripts/build_firmware_main-01.sh fix_missing_stamp_files" >> error_analysis.log
 echo "   - 单独编译工具链: make toolchain/install V=s" >> error_analysis.log
 echo "" >> error_analysis.log
 
@@ -804,6 +821,7 @@ echo "     export LDFLAGS=\"-L\$BUILD_DIR/staging_dir/host/lib -Wl,-O1\"" >> err
 echo "     export CPPFLAGS=\"-I\$BUILD_DIR/staging_dir/host/include\"" >> error_analysis.log
 echo "   - 确保安装了gettext和pkg-config: sudo apt-get install gettext pkg-config" >> error_analysis.log
 echo "   - 清理并重新编译binutils: rm -rf build_dir/binutils-2.40 && make toolchain/binutils/compile -j2 V=s" >> error_analysis.log
+echo "   - 运行修复脚本: firmware-config/scripts/build_firmware_main-01.sh fix_binutils_compilation_error" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "❌ GDB _GL_ATTRIBUTE_FORMAT_PRINTF 错误（关键修复）" >> error_analysis.log
@@ -822,7 +840,42 @@ echo "     改为: #define ATTRIBUTE_PRINTF(format_idx, arg_idx) __attribute__ (
 echo "   - 如果需要，在110行添加_GL_ATTRIBUTE_FORMAT_PRINTF的定义:" >> error_analysis.log
 echo "     #define _GL_ATTRIBUTE_FORMAT_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))" >> error_analysis.log
 echo "   - 或者禁用GDB编译: echo '# CONFIG_PACKAGE_gdb is not set' >> .config" >> error_analysis.log
-echo "   - 运行修复脚本: $GITHUB_WORKSPACE/firmware-config/scripts/build_firmware_main.sh fix_gdb_compilation_error" >> error_analysis.log
+echo "   - 运行修复脚本: firmware-config/scripts/build_firmware_main-01.sh fix_gdb_compilation_error" >> error_analysis.log
+echo "" >> error_analysis.log
+
+echo "❌ 头文件缺失错误（关键修复）" >> error_analysis.log
+echo "💡 可能原因:" >> error_analysis.log
+echo "   - host/include目录不存在" >> error_analysis.log
+echo "   - 缺少标准头文件: stdio.h, stdlib.h, string.h等" >> error_analysis.log
+echo "   - 编译器找不到头文件路径" >> error_analysis.log
+echo "   - 系统头文件与OpenWrt构建环境不兼容" >> error_analysis.log
+echo "🛠️ 解决方案:" >> error_analysis.log
+echo "   - 创建host/include目录: mkdir -p staging_dir/host/include" >> error_analysis.log
+echo "   - 创建必需的头文件:" >> error_analysis.log
+echo "     cat > staging_dir/host/include/stdio.h << 'EOF'" >> error_analysis.log
+echo "     /* Minimal stdio.h for OpenWrt build */" >> error_analysis.log
+echo "     #ifndef _STDIO_H" >> error_analysis.log
+echo "     #define _STDIO_H" >> error_analysis.log
+echo "     /* ... 头文件内容 ... */" >> error_analysis.log
+echo "     #endif" >> error_analysis.log
+echo "     EOF" >> error_analysis.log
+echo "   - 运行修复脚本: firmware-config/scripts/build_firmware_main-01.sh fix_missing_headers" >> error_analysis.log
+echo "   - 设置正确的头文件路径:" >> error_analysis.log
+echo "     export C_INCLUDE_PATH=\"\$BUILD_DIR/staging_dir/host/include:\${C_INCLUDE_PATH}\"" >> error_analysis.log
+echo "     export CPLUS_INCLUDE_PATH=\"\$BUILD_DIR/staging_dir/host/include:\${CPLUS_INCLUDE_PATH}\"" >> error_analysis.log
+echo "" >> error_analysis.log
+
+echo "❌ init脚本错误（关键修复）" >> error_analysis.log
+echo "💡 可能原因:" >> error_analysis.log
+echo "   - cpufreq脚本引用错误的jshn.sh路径" >> error_analysis.log
+echo "   - cpulimit脚本缺少/lib/functions.sh引用" >> error_analysis.log
+echo "   - libubox路径不正确" >> error_analysis.log
+echo "   - 脚本执行权限问题" >> error_analysis.log
+echo "🛠️ 解决方案:" >> error_analysis.log
+echo "   - 修复cpufreq脚本: sed -i '2s|/usr/share/libubox/jshn.sh|/lib/functions.sh|g' etc/init.d/cpufreq" >> error_analysis.log
+echo "   - 修复cpulimit脚本: sed -i '3i\. /lib/functions.sh' etc/init.d/cpulimit" >> error_analysis.log
+echo "   - 检查libubox目录: find staging_dir -name 'libubox' -type d" >> error_analysis.log
+echo "   - 运行修复脚本: firmware-config/scripts/build_firmware_main-01.sh fix_init_script_errors" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "❌ 文件缺失错误" >> error_analysis.log
@@ -962,6 +1015,22 @@ echo "     4. 同样处理auto-host.h文件" >> error_analysis.log
 echo "     5. 重新编译" >> error_analysis.log
 echo "" >> error_analysis.log
 
+echo "❌ 版本不匹配错误（新增关键修复）" >> error_analysis.log
+echo "💡 可能原因:" >> error_analysis.log
+echo "   - OpenWrt 23.05使用GCC 8.4.0（应该是11.3.0）" >> error_analysis.log
+echo "   - OpenWrt 21.02使用GCC 11.3.0（应该是8.4.0）" >> error_analysis.log
+echo "   - 下载的编译器版本与目标版本不匹配" >> error_analysis.log
+echo "   - 版本特定依赖包错误" >> error_analysis.log
+echo "🛠️ 解决方案:" >> error_analysis.log
+echo "   - 检查OpenWrt版本: echo \$SELECTED_BRANCH" >> error_analysis.log
+echo "   - 选择正确的编译器版本:" >> error_analysis.log
+echo "     OpenWrt 23.05: GCC 11.3.0, Binutils 2.38" >> error_analysis.log
+echo "     OpenWrt 21.02: GCC 8.4.0, Binutils 2.35" >> error_analysis.log
+echo "   - 运行版本特定的编译器下载: firmware-config/scripts/build_firmware_main-01.sh download_version_specific_compiler_files" >> error_analysis.log
+echo "   - 清理错误的编译器文件: rm -rf firmware-config/build-Compiler-file/*" >> error_analysis.log
+echo "   - 重新下载正确的编译器版本" >> error_analysis.log
+echo "" >> error_analysis.log
+
 echo "ℹ️ 管道错误" >> error_analysis.log
 echo "💡 说明:" >> error_analysis.log
 echo "   - 这是并行编译的正常现象，通常不影响最终结果" >> error_analysis.log
@@ -1004,8 +1073,8 @@ echo "17. 🚫 禁用GDB编译（解决GDB错误）: echo '# CONFIG_PACKAGE_gdb 
 echo "18. 🔧 修复GDB _GL_ATTRIBUTE_FORMAT_PRINTF错误: 修改gdbsupport/common-defs.h第111行" >> error_analysis.log
 echo "19. 🔧 修复binutils编译错误: 检查config.log，设置正确的编译环境" >> error_analysis.log
 echo "20. 🔧 修复工具链构建错误: 检查stamp目录，创建.toolchain_compile标记" >> error_analysis.log
-echo "21. 🔧 运行binutils修复脚本: $GITHUB_WORKSPACE/firmware-config/scripts/build_firmware_main.sh fix_binutils_compilation_error" >> error_analysis.log
-echo "22. 🔧 运行工具链修复脚本: $GITHUB_WORKSPACE/firmware-config/scripts/build_firmware_main.sh fix_compiler_toolchain_error" >> error_analysis.log
+echo "21. 🔧 运行binutils修复脚本: firmware-config/scripts/build_firmware_main-01.sh fix_binutils_compilation_error" >> error_analysis.log
+echo "22. 🔧 运行工具链修复脚本: firmware-config/scripts/build_firmware_main-01.sh fix_compiler_toolchain_error" >> error_analysis.log
 echo "23. 🔧 单独编译工具链: make toolchain/compile -j2 V=s" >> error_analysis.log
 echo "24. 🔧 创建stamp目录和标记文件: mkdir -p staging_dir/toolchain-*/stamp && touch staging_dir/toolchain-*/stamp/.toolchain_compile" >> error_analysis.log
 echo "25. 🔧 运行综合修复脚本: firmware-config/scripts/build_firmware_main-01.sh run_comprehensive_fixes" >> error_analysis.log
@@ -1014,6 +1083,8 @@ echo "27. 🔧 修复标记文件: firmware-config/scripts/build_firmware_main-0
 echo "28. 🔧 修复init脚本错误: firmware-config/scripts/build_firmware_main-01.sh fix_init_script_errors" >> error_analysis.log
 echo "29. 🔧 修复samba文件: firmware-config/scripts/build_firmware_main-01.sh fix_samba_missing_files" >> error_analysis.log
 echo "30. 🔧 修复uboot文件: firmware-config/scripts/build_firmware_main-01.sh fix_uboot_missing_files" >> error_analysis.log
+echo "31. 🔧 检查并修复编译环境: firmware-config/scripts/build_firmware_main-01.sh check_and_fix_build_environment" >> error_analysis.log
+echo "32. 🔧 下载版本特定的编译器: firmware-config/scripts/build_firmware_main-01.sh download_version_specific_compiler_files" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "=== 针对工具链构建错误的特殊修复方案 ===" >> error_analysis.log
@@ -1039,6 +1110,16 @@ echo "" >> error_analysis.log
 echo "   if [ ! -f \"\$STAMP_DIR/.binutils_installed\" ]; then" >> error_analysis.log
 echo "     echo '创建.binutils_installed标记文件...'" >> error_analysis.log
 echo "     echo \"binutils installed at \$(date)\" > \"\$STAMP_DIR/.binutils_installed\"" >> error_analysis.log
+echo "   fi" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "   if [ ! -f \"\$STAMP_DIR/.gcc_initial\" ]; then" >> error_analysis.log
+echo "     echo '创建.gcc_initial标记文件...'" >> error_analysis.log
+echo "     touch \"\$STAMP_DIR/.gcc_initial\"" >> error_analysis.log
+echo "   fi" >> error_analysis.log
+echo "" >> error_analysis.log
+echo "   if [ ! -f \"\$STAMP_DIR/.gcc_final\" ]; then" >> error_analysis.log
+echo "     echo '创建.gcc_final标记文件...'" >> error_analysis.log
+echo "     touch \"\$STAMP_DIR/.gcc_final\"" >> error_analysis.log
 echo "   fi" >> error_analysis.log
 echo "" >> error_analysis.log
 echo "3. 🔧 设置修复编译环境:" >> error_analysis.log
