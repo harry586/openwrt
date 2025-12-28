@@ -1008,6 +1008,12 @@ echo "21. 🔧 运行binutils修复脚本: $GITHUB_WORKSPACE/firmware-config/scr
 echo "22. 🔧 运行工具链修复脚本: $GITHUB_WORKSPACE/firmware-config/scripts/build_firmware_main.sh fix_compiler_toolchain_error" >> error_analysis.log
 echo "23. 🔧 单独编译工具链: make toolchain/compile -j2 V=s" >> error_analysis.log
 echo "24. 🔧 创建stamp目录和标记文件: mkdir -p staging_dir/toolchain-*/stamp && touch staging_dir/toolchain-*/stamp/.toolchain_compile" >> error_analysis.log
+echo "25. 🔧 运行综合修复脚本: firmware-config/scripts/build_firmware_main-01.sh run_comprehensive_fixes" >> error_analysis.log
+echo "26. 🔧 修复头文件缺失: firmware-config/scripts/build_firmware_main-01.sh fix_missing_headers" >> error_analysis.log
+echo "27. 🔧 修复标记文件: firmware-config/scripts/build_firmware_main-01.sh fix_missing_stamp_files" >> error_analysis.log
+echo "28. 🔧 修复init脚本错误: firmware-config/scripts/build_firmware_main-01.sh fix_init_script_errors" >> error_analysis.log
+echo "29. 🔧 修复samba文件: firmware-config/scripts/build_firmware_main-01.sh fix_samba_missing_files" >> error_analysis.log
+echo "30. 🔧 修复uboot文件: firmware-config/scripts/build_firmware_main-01.sh fix_uboot_missing_files" >> error_analysis.log
 echo "" >> error_analysis.log
 
 echo "=== 针对工具链构建错误的特殊修复方案 ===" >> error_analysis.log
