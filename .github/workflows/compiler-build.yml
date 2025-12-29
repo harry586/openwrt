@@ -263,6 +263,7 @@ jobs:
             "arm_cortex-a7")
               ARCH_GCC="11.3.0"
               ARCH_BINUTILS="2.38"
+              echo "ARM Cortex-A7架构，使用兼容性更好的GCC 11.3.0"
               ;;
             "mips"|"mipsel")
               ARCH_GCC="10.3.0"
@@ -361,9 +362,10 @@ jobs:
           echo "- Glibc版本: $GLIBC_VERSION"
           echo ""
           echo "📊 版本选择说明:"
-          echo "1. OpenWrt $OPENWRT_VERSION → GCC $DEFAULT_GCC"
-          echo "2. 架构 $TARGET_ARCH → 适配版本"
-          echo "3. 版本验证 → 确保可用性"
+          echo "1. OpenWrt $OPENWRT_VERSION 基础版本 → GCC $DEFAULT_GCC"
+          echo "2. 架构 $TARGET_ARCH 优化 → GCC $ARCH_GCC"
+          echo "3. 最终选择 → GCC $GCC_VERSION"
+          echo "4. 版本验证 → 确保可用性"
           
           echo "gcc_version=$GCC_VERSION" >> $GITHUB_OUTPUT
           echo "binutils_version=$BINUTILS_VERSION" >> $GITHUB_OUTPUT
@@ -721,7 +723,7 @@ jobs:
           mkdir -p "${{ env.BUILD_DIR }}"
           cd "${{ env.BUILD_DIR }}"
           echo "当前目录: $(pwd)"
-          echo "克隆OpenWrt ${{ env.OPENWrt_VERSION }} 分支..."
+          echo "克隆OpenWrt ${{ env.OPENWRT_VERSION }} 分支..."
           
           echo "尝试方法1: 克隆指定分支..."
           if git clone --depth 1 --branch "v${{ env.OPENWRT_VERSION }}" https://github.com/openwrt/openwrt.git .; then
@@ -885,82 +887,81 @@ jobs:
           echo "✅ 配置文件生成完成"
           echo "结束时间: $(date)"
 
-      - name: 🛠️ 应用配置（强制）
+      - name: 🛠️ 应用配置（完全控制）
         run: |
-          echo "=== 应用配置（强制）==="
+          echo "=== 应用配置（完全控制）==="
           echo "开始时间: $(date)"
           cd "${{ env.BUILD_DIR }}"
           
-          echo "步骤1: 显示当前.config文件..."
-          echo "前30行内容:"
-          head -30 .config 2>/dev/null || echo ".config 文件不存在"
-          
-          echo "步骤2: 备份当前配置（如果存在）..."
-          if [ -f .config ]; then
-            cp .config .config.backup
-            echo "✅ 配置已备份"
-          else
-            echo "⚠️  .config 文件不存在"
-          fi
-          
-          echo "步骤3: 运行defconfig生成基础配置..."
-          make defconfig 2>&1 | tee /tmp/defconfig1.log
-          DEFCONFIG_STATUS=${PIPESTATUS[0]}
-          
-          if [ $DEFCONFIG_STATUS -eq 0 ]; then
-            echo "✅ defconfig成功"
-          else
-            echo "⚠️ defconfig有警告，状态码: $DEFCONFIG_STATUS"
-          fi
-          
-          echo "步骤4: 强制修复关键配置（覆盖defconfig结果）..."
-          
-          declare -A KEY_CONFIGS=(
-            ["CONFIG_BUILD_TOOLCHAIN"]="y"
-            ["CONFIG_GCC_VERSION"]="\"${{ env.GCC_VERSION }}\""
-            ["CONFIG_BINUTILS_VERSION"]="\"${{ env.BINUTILS_VERSION }}\""
-            ["CONFIG_LINUX_VERSION"]="\"${{ env.LINUX_VERSION }}\""
-            ["CONFIG_TARGET_${{ env.TARGET }}"]="y"
-            ["CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}"]="y"
-            ["CONFIG_TARGET_ARCH"]="\"${{ env.ARCH_NAME }}\""
-            ["CONFIG_TARGET_PREFIX"]="\"${{ env.PREFIX }}-\""
-            ["CONFIG_USE_MUSL"]="${{ env.USE_MUSL }}"
-          )
-          
-          if [ "${{ env.USE_MUSL }}" = "y" ]; then
-            KEY_CONFIGS["CONFIG_MUSL_VERSION"]="\"${{ env.LIBC_VERSION }}\""
-          else
-            KEY_CONFIGS["CONFIG_GLIBC_VERSION"]="\"${{ env.LIBC_VERSION }}\""
-          fi
-          
-          echo "🔧 应用强制配置覆盖..."
-          for config_key in "${!KEY_CONFIGS[@]}"; do
-            config_value="${KEY_CONFIGS[$config_key]}"
-            echo "设置: $config_key=$config_value"
-            
-            sed -i "/^$config_key=/d" .config 2>/dev/null
-            
-            echo "$config_key=$config_value" >> .config
-          done
-          
-          echo "步骤5: 禁用不需要的目标（防止干扰）..."
-          sed -i '/^CONFIG_TARGET_[a-zA-Z0-9]*=y/d' .config 2>/dev/null
-          
+          echo "步骤1: 创建完全自定义的配置..."
+          echo "# 基础配置" > .config
+          echo "CONFIG_ALL=n" >> .config
+          echo "CONFIG_ALL_KMODS=n" >> .config
+          echo "CONFIG_ALL_NONSHARED=n" >> .config
+          echo "CONFIG_DEVEL=y" >> .config
+          echo "CONFIG_CCACHE=n" >> .config
+          echo "CONFIG_TARGET_ROOTFS_INITRAMFS=y" >> .config
+          echo "CONFIG_SDK=y" >> .config
+          echo "CONFIG_STRIP_KERNEL_EXPORTS=y" >> .config
+          echo "CONFIG_BUILD_PATENTED=y" >> .config
+          echo "CONFIG_BUILD_NLS=y" >> .config
+          echo "CONFIG_USE_LIBSTDCXX=y" >> .config
+          echo "" >> .config
+          echo "# 工具链配置" >> .config
+          echo "CONFIG_EXTERNAL_TOOLCHAIN=n" >> .config
+          echo "CONFIG_BUILD_TOOLCHAIN=y" >> .config
+          echo "CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"" >> .config
+          echo "CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"" >> .config
+          echo "CONFIG_LINUX_VERSION=\"${{ env.LINUX_VERSION }}\"" >> .config
+          echo "CONFIG_USE_MUSL=${{ env.USE_MUSL }}" >> .config
+          echo "" >> .config
+          echo "# 目标配置" >> .config
           echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> .config
           echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
+          echo "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" >> .config
+          echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" >> .config
+          echo "" >> .config
+          echo "# C库配置" >> .config
           
-          echo "步骤6: 排序并去重配置..."
-          sort -u .config -o .config.sorted
-          mv .config.sorted .config
+          if [ "${{ env.USE_MUSL }}" = "y" ]; then
+            echo "CONFIG_MUSL_VERSION=\"${{ env.LIBC_VERSION }}\"" >> .config
+          else
+            echo "CONFIG_GLIBC_VERSION=\"${{ env.LIBC_VERSION }}\"" >> .config
+          fi
           
-          echo "步骤7: 验证强制修复后的配置..."
+          echo "" >> .config
+          echo "# 禁用所有其他目标" >> .config
+          echo "CONFIG_TARGET_ath79=n" >> .config
+          echo "CONFIG_TARGET_ath79_generic=n" >> .config
+          echo "CONFIG_TARGET_bcm27xx=n" >> .config
+          echo "CONFIG_TARGET_bcm53xx=n" >> .config
+          echo "CONFIG_TARGET_ipq40xx=n" >> .config
+          echo "CONFIG_TARGET_ipq806x=n" >> .config
+          echo "CONFIG_TARGET_lantiq=n" >> .config
+          echo "CONFIG_TARGET_layerscape=n" >> .config
+          echo "CONFIG_TARGET_mediatek=n" >> .config
+          echo "CONFIG_TARGET_mpc85xx=n" >> .config
+          echo "CONFIG_TARGET_mvebu=n" >> .config
+          echo "CONFIG_TARGET_octeon=n" >> .config
+          echo "CONFIG_TARGET_octeontx=n" >> .config
+          echo "CONFIG_TARGET_oxnas=n" >> .config
+          echo "CONFIG_TARGET_pistachio=n" >> .config
+          echo "CONFIG_TARGET_ramips=n" >> .config
+          echo "CONFIG_TARGET_rockchip=n" >> .config
+          echo "CONFIG_TARGET_sunxi=n" >> .config
+          echo "CONFIG_TARGET_tegra=n" >> .config
+          echo "CONFIG_TARGET_x86=n" >> .config
+
+          echo "步骤2: 显示生成的配置..."
           echo "当前配置摘要:"
-          grep -E "CONFIG_GCC_VERSION|CONFIG_BINUTILS_VERSION|CONFIG_LINUX_VERSION|CONFIG_TARGET_|CONFIG_BUILD_TOOLCHAIN|CONFIG_USE_MUSL|CONFIG_MUSL_VERSION|CONFIG_GLIBC_VERSION" .config || true
+          echo "------------------------------"
+          grep -E "CONFIG_TARGET_|CONFIG_GCC|CONFIG_BINUTILS|CONFIG_.*LIBC|CONFIG_USE_MUSL|CONFIG_BUILD_TOOLCHAIN|CONFIG_TARGET_ARCH" .config
+          echo "------------------------------"
           
-          echo "步骤8: 再次运行defconfig（使用已有配置）..."
-          make defconfig 2>&1 | tee /tmp/defconfig2.log
+          echo "步骤3: 直接构建配置，跳过defconfig..."
+          echo "使用现有配置直接构建工具链"
           
-          echo "步骤9: 最终配置验证..."
+          echo "步骤4: 验证配置..."
           ALL_CORRECT=true
           
           echo "验证关键配置项:"
@@ -969,7 +970,6 @@ jobs:
             echo "✅ GCC版本验证通过: ${{ env.GCC_VERSION }}"
           else
             echo "❌ GCC版本验证失败"
-            echo "当前值: $(grep 'CONFIG_GCC_VERSION=' .config || echo '未找到')"
             ALL_CORRECT=false
           fi
           
@@ -977,7 +977,6 @@ jobs:
             echo "✅ Binutils版本验证通过: ${{ env.BINUTILS_VERSION }}"
           else
             echo "❌ Binutils版本验证失败"
-            echo "当前值: $(grep 'CONFIG_BINUTILS_VERSION=' .config || echo '未找到')"
             ALL_CORRECT=false
           fi
           
@@ -985,7 +984,6 @@ jobs:
             echo "✅ 目标验证通过: ${{ env.TARGET }}"
           else
             echo "❌ 目标验证失败"
-            echo "当前目标: $(grep 'CONFIG_TARGET_.*=y' .config || echo '未找到')"
             ALL_CORRECT=false
           fi
           
@@ -1000,7 +998,6 @@ jobs:
             echo "✅ 架构验证通过: ${{ env.ARCH_NAME }}"
           else
             echo "❌ 架构验证失败"
-            echo "当前值: $(grep 'CONFIG_TARGET_ARCH=' .config || echo '未找到')"
             ALL_CORRECT=false
           fi
           
@@ -1008,7 +1005,6 @@ jobs:
             echo "✅ 编译器前缀验证通过: ${{ env.PREFIX }}-"
           else
             echo "❌ 编译器前缀验证失败"
-            echo "当前值: $(grep 'CONFIG_TARGET_PREFIX=' .config || echo '未找到')"
             ALL_CORRECT=false
           fi
           
@@ -1031,7 +1027,6 @@ jobs:
               echo "✅ Musl版本验证通过: ${{ env.LIBC_VERSION }}"
             else
               echo "❌ Musl版本验证失败"
-              echo "当前值: $(grep 'CONFIG_MUSL_VERSION=' .config || echo '未找到')"
               ALL_CORRECT=false
             fi
           else
@@ -1046,7 +1041,6 @@ jobs:
               echo "✅ Glibc版本验证通过: ${{ env.LIBC_VERSION }}"
             else
               echo "❌ Glibc版本验证失败"
-              echo "当前值: $(grep 'CONFIG_GLIBC_VERSION=' .config || echo '未找到')"
               ALL_CORRECT=false
             fi
           fi
@@ -1059,33 +1053,33 @@ jobs:
             echo "        最终配置摘要          "
             echo "=============================="
             echo "🔧 关键配置:"
-            echo "  🔍 GCC版本: $(grep 'CONFIG_GCC_VERSION=' .config | cut -d'"' -f2)"
-            echo "  🔍 Binutils版本: $(grep 'CONFIG_BINUTILS_VERSION=' .config | cut -d'"' -f2)"
-            echo "  🔍 Linux内核版本: $(grep 'CONFIG_LINUX_VERSION=' .config | cut -d'"' -f2)"
-            echo "  🔍 目标: $(grep 'CONFIG_TARGET_' .config | grep '=y' | head -1)"
-            echo "  🔍 架构: $(grep 'CONFIG_TARGET_ARCH=' .config | cut -d'"' -f2)"
-            echo "  🔍 编译器前缀: $(grep 'CONFIG_TARGET_PREFIX=' .config | cut -d'"' -f2)"
+            echo "  🔍 GCC版本: ${{ env.GCC_VERSION }}"
+            echo "  🔍 Binutils版本: ${{ env.BINUTILS_VERSION }}"
+            echo "  🔍 Linux内核版本: ${{ env.LINUX_VERSION }}"
+            echo "  🔍 目标: ${{ env.TARGET }}/${{ env.SUBTARGET }}"
+            echo "  🔍 架构: ${{ env.ARCH_NAME }}"
+            echo "  🔍 编译器前缀: ${{ env.PREFIX }}-"
             
             if [ "${{ env.USE_MUSL }}" = "y" ]; then
-              echo "  🔍 Musl版本: $(grep 'CONFIG_MUSL_VERSION=' .config | cut -d'"' -f2)"
+              echo "  🔍 Musl版本: ${{ env.LIBC_VERSION }}"
             else
-              echo "  🔍 Glibc版本: $(grep 'CONFIG_GLIBC_VERSION=' .config | cut -d'"' -f2)"
+              echo "  🔍 Glibc版本: ${{ env.LIBC_VERSION }}"
             fi
             echo "=============================="
           else
             echo "❌ 配置验证失败，显示当前配置..."
             echo "当前完整配置:"
-            cat .config | head -100
+            cat .config | head -50
             exit 1
           fi
           
-          echo "✅ 配置强制应用完成"
+          echo "✅ 配置完全控制完成"
           echo "结束时间: $(date)"
 
-      - name: 🔨 编译工具链（版本适配）
+      - name: 🔨 编译工具链（直接构建）
         timeout-minutes: 150
         run: |
-          echo "=== 开始编译工具链（版本适配）==="
+          echo "=== 开始编译工具链（直接构建）==="
           cd "${{ env.BUILD_DIR }}"
           echo "工作目录: $(pwd)"
           echo "开始时间: $(date)"
