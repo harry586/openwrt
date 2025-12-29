@@ -10,21 +10,21 @@ on:
         default: 'arm_cortex-a7'
         type: choice
         options:
-          - aarch64        # ARM 64位（树莓派4/RK3399/电视盒子）
-          - x86_64         # x86 64位（PC/服务器/虚拟机）
-          - mips           # MIPS 32位大端（MT7621/老路由器）
-          - mipsel         # MIPS 32位小端（MT7620/MT7621）
-          - arm_cortex-a7  # ARM Cortex-A7（IPQ40xx/MT7623/全志H3）
-          - arm_cortex-a53 # ARM Cortex-A53（MT7622/部分64位设备）
-          - riscv64        # RISC-V 64位（新架构开发板）
+          - aarch64
+          - x86_64
+          - mips
+          - mipsel
+          - arm_cortex-a7
+          - arm_cortex-a53
+          - riscv64
       libc:
         description: 'C库类型（嵌入式推荐musl）'
         required: true
         default: 'musl'
         type: choice
         options:
-          - musl   # 轻量级，嵌入式推荐
-          - glibc  # 功能完整
+          - musl
+          - glibc
       gcc_version:
         description: 'GCC版本（输入版本号如12.3.0，或auto自动检测）'
         required: true
@@ -874,112 +874,59 @@ jobs:
           CONFIG_FILE=".config"
           echo "步骤4: 生成主配置文件: $CONFIG_FILE"
           
-          # 生成完整的配置
-          cat > $CONFIG_FILE << EOF
-# 目标配置
-CONFIG_TARGET_${{ env.TARGET }}=y
-CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y
-CONFIG_TARGET_ARCH="${{ env.ARCH_NAME }}"
-CONFIG_TARGET_PREFIX="${{ env.PREFIX }}-"
-CONFIG_EXTERNAL_TOOLCHAIN=n
-CONFIG_USE_MUSL=${{ env.USE_MUSL }}
-CONFIG_BUILD_TOOLCHAIN=y
-CONFIG_GCC_VERSION="${{ env.GCC_VERSION }}"
-CONFIG_BINUTILS_VERSION="${{ env.BINUTILS_VERSION }}"
-CONFIG_LINUX_VERSION="${{ env.LINUX_VERSION }}"
-EOF
-
+          # 生成完整的配置 - 使用多个echo命令，避免heredoc
+          echo "# 目标配置" > $CONFIG_FILE
+          echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> $CONFIG_FILE
+          echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> $CONFIG_FILE
+          echo "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" >> $CONFIG_FILE
+          echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" >> $CONFIG_FILE
+          echo "CONFIG_EXTERNAL_TOOLCHAIN=n" >> $CONFIG_FILE
+          echo "CONFIG_USE_MUSL=${{ env.USE_MUSL }}" >> $CONFIG_FILE
+          echo "CONFIG_BUILD_TOOLCHAIN=y" >> $CONFIG_FILE
+          echo "CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"" >> $CONFIG_FILE
+          echo "CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"" >> $CONFIG_FILE
+          echo "CONFIG_LINUX_VERSION=\"${{ env.LINUX_VERSION }}\"" >> $CONFIG_FILE
+          
           # 根据C库类型添加配置
           if [ "${{ env.USE_MUSL }}" = "y" ]; then
-            cat >> $CONFIG_FILE << EOF
-CONFIG_MUSL_VERSION="${{ env.LIBC_VERSION }}"
-EOF
+            echo "CONFIG_MUSL_VERSION=\"${{ env.LIBC_VERSION }}\"" >> $CONFIG_FILE
           else
-            cat >> $CONFIG_FILE << EOF
-CONFIG_GLIBC_VERSION="${{ env.LIBC_VERSION }}"
-EOF
+            echo "CONFIG_GLIBC_VERSION=\"${{ env.LIBC_VERSION }}\"" >> $CONFIG_FILE
           fi
           
           # 添加优化配置
-          cat >> $CONFIG_FILE << EOF
-# 优化构建配置
-CONFIG_ALL=n
-CONFIG_ALL_KMODS=n
-CONFIG_ALL_NONSHARED=n
-CONFIG_DEVEL=y
-CONFIG_CCACHE=n
-CONFIG_TARGET_ROOTFS_INITRAMFS=y
-CONFIG_SDK=y
-CONFIG_STRIP_KERNEL_EXPORTS=y
-CONFIG_BUILD_PATENTED=y
-CONFIG_BUILD_NLS=y
-CONFIG_USE_LIBSTDCXX=y
-EOF
+          echo "# 优化构建配置" >> $CONFIG_FILE
+          echo "CONFIG_ALL=n" >> $CONFIG_FILE
+          echo "CONFIG_ALL_KMODS=n" >> $CONFIG_FILE
+          echo "CONFIG_ALL_NONSHARED=n" >> $CONFIG_FILE
+          echo "CONFIG_DEVEL=y" >> $CONFIG_FILE
+          echo "CONFIG_CCACHE=n" >> $CONFIG_FILE
+          echo "CONFIG_TARGET_ROOTFS_INITRAMFS=y" >> $CONFIG_FILE
+          echo "CONFIG_SDK=y" >> $CONFIG_FILE
+          echo "CONFIG_STRIP_KERNEL_EXPORTS=y" >> $CONFIG_FILE
+          echo "CONFIG_BUILD_PATENTED=y" >> $CONFIG_FILE
+          echo "CONFIG_BUILD_NLS=y" >> $CONFIG_FILE
+          echo "CONFIG_USE_LIBSTDCXX=y" >> $CONFIG_FILE
 
           # 根据GCC版本添加优化选项
           GCC_MAJOR=$(echo "${{ env.GCC_VERSION }}" | cut -d. -f1)
           if [ $GCC_MAJOR -ge 11 ]; then
-            cat >> $CONFIG_FILE << EOF
-# GCC 11+ 优化选项
-CONFIG_GCC_USE_VERSION_${GCC_MAJOR}=y
-CONFIG_GCC_USE_GRAPHITE=y
-EOF
+            echo "# GCC 11+ 优化选项" >> $CONFIG_FILE
+            echo "CONFIG_GCC_USE_VERSION_${GCC_MAJOR}=y" >> $CONFIG_FILE
+            echo "CONFIG_GCC_USE_GRAPHITE=y" >> $CONFIG_FILE
           fi
           
           # 禁用不需要的目标（防止默认配置覆盖）
-          cat >> $CONFIG_FILE << EOF
-# 禁用其他目标（防止默认配置覆盖）
-CONFIG_TARGET_ath79=n
-CONFIG_TARGET_ath79_generic=n
-CONFIG_TARGET_bcm27xx=n
-CONFIG_TARGET_bcm53xx=n
-CONFIG_TARGET_ipq40xx=n
-CONFIG_TARGET_ipq806x=n
-CONFIG_TARGET_lantiq=n
-CONFIG_TARGET_layerscape=n
-CONFIG_TARGET_mediatek=n
-CONFIG_TARGET_mpc85xx=n
-CONFIG_TARGET_mvebu=n
-CONFIG_TARGET_octeon=n
-CONFIG_TARGET_octeontx=n
-CONFIG_TARGET_oxnas=n
-CONFIG_TARGET_pistachio=n
-CONFIG_TARGET_ramips=n
-CONFIG_TARGET_rockchip=n
-CONFIG_TARGET_sunxi=n
-CONFIG_TARGET_tegra=n
-CONFIG_TARGET_x86=n
-CONFIG_TARGET_arc=n
-CONFIG_TARGET_arm64=n
-CONFIG_TARGET_armsr=n
-CONFIG_TARGET_bcm47xx=n
-CONFIG_TARGET_bcm4908=n
-CONFIG_TARGET_bmips=n
-CONFIG_TARGET_brcm2708=n
-CONFIG_TARGET_brcm47xx=n
-CONFIG_TARGET_brcm63xx=n
-CONFIG_TARGET_cns3xxx=n
-CONFIG_TARGET_gemini=n
-CONFIG_TARGET_imx6=n
-CONFIG_TARGET_kirkwood=n
-CONFIG_TARGET_malta=n
-CONFIG_TARGET_mxs=n
-CONFIG_TARGET_omap=n
-CONFIG_TARGET_orion=n
-CONFIG_TARGET_pxa=n
-CONFIG_TARGET_samsung=n
-CONFIG_TARGET_sifiveu=n
-CONFIG_TARGET_socfpga=n
-CONFIG_TARGET_uml=n
-CONFIG_TARGET_zynq=n
-EOF
+          echo "# 禁用其他目标（防止默认配置覆盖）" >> $CONFIG_FILE
+          TARGETS_TO_DISABLE="ath79 ath79_generic bcm27xx bcm53xx ipq40xx ipq806x lantiq layerscape mediatek mpc85xx mvebu octeon octeontx oxnas pistachio ramips rockchip sunxi tegra x86 arc arm64 armsr bcm47xx bcm4908 bmips brcm2708 brcm47xx brcm63xx cns3xxx gemini imx6 kirkwood malta mxs omap orion pxa samsung sifiveu socfpga uml zynq"
+          for target in $TARGETS_TO_DISABLE; do
+            echo "CONFIG_TARGET_${target}=n" >> $CONFIG_FILE
+          done
 
           # 最后再次确认我们的目标
-          cat >> $CONFIG_FILE << EOF
-# 确认启用我们的目标
-CONFIG_TARGET_${{ env.TARGET }}=y
-CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y
-EOF
+          echo "# 确认启用我们的目标" >> $CONFIG_FILE
+          echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> $CONFIG_FILE
+          echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> $CONFIG_FILE
           
           echo "配置文件大小: $(wc -l < $CONFIG_FILE) 行"
           echo "配置摘要:"
@@ -1411,12 +1358,7 @@ EOF
           COMPILER_PATH=""
           
           # 搜索GCC编译器的可能路径
-          SEARCH_PATHS=(
-            "$TOOLCHAIN_DIR/bin"
-            "$TOOLCHAIN_DIR/usr/bin"
-            "$TOOLCHAIN_DIR/libexec/gcc/*/*"
-            "$TOOLCHAIN_DIR"
-          )
+          SEARCH_PATHS=("$TOOLCHAIN_DIR/bin" "$TOOLCHAIN_DIR/usr/bin" "$TOOLCHAIN_DIR/libexec/gcc/*/*" "$TOOLCHAIN_DIR")
           
           for search_path in "${SEARCH_PATHS[@]}"; do
             if [ -d "$(dirname "$search_path" 2>/dev/null)" ] || [ -d "$search_path" ]; then
@@ -1486,28 +1428,12 @@ EOF
           
           echo "工具前缀: $TOOL_PREFIX"
           
-          # 完整的关键工具列表
-          declare -A TOOL_CATEGORIES=(
-            ["编译器"]="gcc g++ cpp gfortran gcov gcov-dump gcov-tool"
-            ["汇编器"]="as gas"
-            ["链接器"]="ld ld.bfd ld.gold lld"
-            ["归档器"]="ar ranlib"
-            ["符号工具"]="nm objdump objcopy strip strings size readelf addr2line"
-            ["调试工具"]="gdb gdbserver"
-            ["预处理"]="cpp cpp0"
-            ["其他工具"]="elfedit windres dlltool"
-            ["运行时"]="ldd ld.so"
-          )
+          # 完整的关键工具列表 - 简化数组定义
+          TOOL_CATEGORIES_KEYS=("编译器" "汇编器" "链接器" "归档器" "符号工具" "调试工具" "预处理" "其他工具" "运行时")
+          TOOL_CATEGORIES_VALUES=("gcc g++ cpp gfortran gcov gcov-dump gcov-tool" "as gas" "ld ld.bfd ld.gold lld" "ar ranlib" "nm objdump objcopy strip strings size readelf addr2line" "gdb gdbserver" "cpp cpp0" "elfedit windres dlltool" "ldd ld.so")
           
           # 搜索路径
-          BIN_PATHS=(
-            "$TOOLCHAIN_DIR/bin"
-            "$TOOLCHAIN_DIR/usr/bin"
-            "$TOOLCHAIN_DIR/usr/sbin"
-            "$TOOLCHAIN_DIR/sbin"
-            "$TOOLCHAIN_DIR/libexec/gcc/*/*"
-            "$TOOLCHAIN_DIR"
-          )
+          BIN_PATHS=("$TOOLCHAIN_DIR/bin" "$TOOLCHAIN_DIR/usr/bin" "$TOOLCHAIN_DIR/usr/sbin" "$TOOLCHAIN_DIR/sbin" "$TOOLCHAIN_DIR/libexec/gcc/*/*" "$TOOLCHAIN_DIR")
           
           echo "🔍 搜索工具链目录: $TOOLCHAIN_DIR"
           echo ""
@@ -1517,9 +1443,12 @@ EOF
           ALL_FOUND=()
           
           # 检查每个类别的工具
-          for category in "${!TOOL_CATEGORIES[@]}"; do
+          for i in "${!TOOL_CATEGORIES_KEYS[@]}"; do
+            category="${TOOL_CATEGORIES_KEYS[$i]}"
+            tools_str="${TOOL_CATEGORIES_VALUES[$i]}"
+            tools=($tools_str)
+            
             echo "📋 $category:"
-            tools=(${TOOL_CATEGORIES[$category]})
             category_missing=()
             
             for tool_base in "${tools[@]}"; do
@@ -1573,12 +1502,7 @@ EOF
           echo "📋 运行时库检查:"
           
           # 查找libc库
-          LIBC_PATHS=(
-            "$TOOLCHAIN_DIR/lib"
-            "$TOOLCHAIN_DIR/usr/lib"
-            "$TOOLCHAIN_DIR/lib64"
-            "$TOOLCHAIN_DIR/usr/lib64"
-          )
+          LIBC_PATHS=("$TOOLCHAIN_DIR/lib" "$TOOLCHAIN_DIR/usr/lib" "$TOOLCHAIN_DIR/lib64" "$TOOLCHAIN_DIR/usr/lib64")
           
           LIBC_FOUND=false
           for lib_path in "${LIBC_PATHS[@]}"; do
@@ -1597,11 +1521,7 @@ EOF
           fi
           
           # 查找头文件
-          HEADER_PATHS=(
-            "$TOOLCHAIN_DIR/include"
-            "$TOOLCHAIN_DIR/usr/include"
-            "$TOOLCHAIN_DIR/sysroot/include"
-          )
+          HEADER_PATHS=("$TOOLCHAIN_DIR/include" "$TOOLCHAIN_DIR/usr/include" "$TOOLCHAIN_DIR/sysroot/include")
           
           HEADER_FOUND=false
           for header_path in "${HEADER_PATHS[@]}"; do
@@ -1745,90 +1665,88 @@ EOF
           fi
           
           echo "创建详细的元数据文件..."
-          cat > "${{ env.OUTPUT_DIR }}/metadata.json" << EOF
-          {
-            "architecture": "${{ env.ARCH_DIR }}",
-            "arch_name": "${{ env.ARCH_NAME }}",
-            "libc": "${{ env.LIBC_DIR }}",
-            "libc_version": "${{ env.LIBC_VERSION }}",
-            "target": "${{ env.TARGET }}",
-            "subtarget": "${{ env.SUBTARGET }}",
-            "compiler_prefix": "${{ env.PREFIX }}-",
-            "gcc_version": "${{ env.GCC_VERSION }}",
-            "binutils_version": "${{ env.BINUTILS_VERSION }}",
-            "linux_version": "${{ env.LINUX_VERSION }}",
-            "openwrt_version": "${{ env.OPENWRT_VERSION }}",
-            "cpu_type": "${{ env.CPU_TYPE }}",
-            "tune": "${{ env.TUNE }}",
-            "abi": "${{ env.ABI }}",
-            "float_abi": "${{ env.FLOAT_ABI }}",
-            "build_date": "$(date -Iseconds)",
-            "workflow_run": "${{ github.run_id }}",
-            "build_id": "${{ env.BUILD_ID }}",
-            "tools_count": "${{ env.ALL_TOOLS_COUNT }}",
-            "target_triplet": "${{ env.TARGET_TRIPLET }}",
-            "tool_prefix": "${{ env.TOOL_PREFIX }}"
-          }
-          EOF
+          # 使用多个echo命令创建JSON文件
+          echo "{" > "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"architecture\": \"${{ env.ARCH_DIR }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"arch_name\": \"${{ env.ARCH_NAME }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"libc\": \"${{ env.LIBC_DIR }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"libc_version\": \"${{ env.LIBC_VERSION }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"target\": \"${{ env.TARGET }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"subtarget\": \"${{ env.SUBTARGET }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"compiler_prefix\": \"${{ env.PREFIX }}-\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"gcc_version\": \"${{ env.GCC_VERSION }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"binutils_version\": \"${{ env.BINUTILS_VERSION }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"linux_version\": \"${{ env.LINUX_VERSION }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"openwrt_version\": \"${{ env.OPENWRT_VERSION }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"cpu_type\": \"${{ env.CPU_TYPE }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"tune\": \"${{ env.TUNE }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"abi\": \"${{ env.ABI }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"float_abi\": \"${{ env.FLOAT_ABI }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"build_date\": \"$(date -Iseconds)\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"workflow_run\": \"${{ github.run_id }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"build_id\": \"${{ env.BUILD_ID }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"tools_count\": \"${{ env.ALL_TOOLS_COUNT }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"target_triplet\": \"${{ env.TARGET_TRIPLET }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"tool_prefix\": \"${{ env.TOOL_PREFIX }}\"" >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "}" >> "${{ env.OUTPUT_DIR }}/metadata.json"
           
           echo "创建说明文件..."
-          cat > "${{ env.OUTPUT_DIR }}/README.md" << EOF
-          # ${{ env.ARCH_DIR }} ${{ env.LIBC_DIR }} 交叉编译器
-
-          ## 基本信息
-          - 架构: ${{ env.ARCH_DIR }} (${{ env.ARCH_NAME }})
-          - C库: ${{ env.LIBC_DIR }} ${{ env.LIBC_VERSION }}
-          - GCC版本: ${{ env.GCC_VERSION }}
-          - Binutils版本: ${{ env.BINUTILS_VERSION }}
-          - Linux内核: ${{ env.LINUX_VERSION }}
-          - OpenWrt版本: ${{ env.OPENWRT_VERSION }}
-          - 编译器前缀: ${{ env.PREFIX }}-
-          - 目标三元组: ${{ env.TARGET_TRIPLET }}
-          - CPU类型: ${{ env.CPU_TYPE }}
-          - 调优: ${{ env.TUNE }}
-          - ABI: ${{ env.ABI }}
-          - 浮点ABI: ${{ env.FLOAT_ABI }}
-          - 工具数量: ${{ env.ALL_TOOLS_COUNT }}
-          - 构建时间: $(date)
-
-          ## 版本兼容性
-          此编译器专为以下环境设计：
-          - OpenWrt ${{ env.OPENWRT_VERSION }}
-          - ${{ env.ARCH_DIR }} 架构设备
-          - ${{ env.LIBC_DIR }} C库
-
-          ## 使用方法
-          \`\`\`bash
-          # 设置环境变量
-          export STAGING_DIR="\$(pwd)"
-          export PATH="\$STAGING_DIR/bin:\$PATH"
-          
-          # 验证编译器
-          ${{ env.PREFIX }}-gcc --version
-          
-          # 编译示例程序
-          ${{ env.PREFIX }}-gcc -o hello hello.c
-          \`\`\`
-
-          ## 包含的工具
-          - 编译器: gcc, g++, cpp
-          - 汇编器: as, gas
-          - 链接器: ld, ld.bfd
-          - 二进制工具: objcopy, objdump, strip, nm
-          - 归档工具: ar, ranlib
-          - 调试工具: gdb, gdbserver
-
-          ## 注意事项
-          1. 此工具链专为交叉编译设计
-          2. 需要相应的头文件和库文件
-          3. 建议在OpenWrt构建系统中使用
-          4. 版本已针对目标架构优化
-
-          ## 构建信息
-          - 工作流: #${{ github.run_id }}
-          - 构建ID: ${{ env.BUILD_ID }}
-          - 保存路径: ${{ env.OUTPUT_DIR }}
-          EOF
+          # 使用多个echo命令创建README
+          echo "# ${{ env.ARCH_DIR }} ${{ env.LIBC_DIR }} 交叉编译器" > "${{ env.OUTPUT_DIR }}/README.md"
+          echo "" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "## 基本信息" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- 架构: ${{ env.ARCH_DIR }} (${{ env.ARCH_NAME }})" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- C库: ${{ env.LIBC_DIR }} ${{ env.LIBC_VERSION }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- GCC版本: ${{ env.GCC_VERSION }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- Binutils版本: ${{ env.BINUTILS_VERSION }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- Linux内核: ${{ env.LINUX_VERSION }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- OpenWrt版本: ${{ env.OPENWRT_VERSION }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- 编译器前缀: ${{ env.PREFIX }}-" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- 目标三元组: ${{ env.TARGET_TRIPLET }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- CPU类型: ${{ env.CPU_TYPE }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- 调优: ${{ env.TUNE }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- ABI: ${{ env.ABI }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- 浮点ABI: ${{ env.FLOAT_ABI }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- 工具数量: ${{ env.ALL_TOOLS_COUNT }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- 构建时间: $(date)" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "## 版本兼容性" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "此编译器专为以下环境设计：" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- OpenWrt ${{ env.OPENWRT_VERSION }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- ${{ env.ARCH_DIR }} 架构设备" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- ${{ env.LIBC_DIR }} C库" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "## 使用方法" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo '```bash' >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "# 设置环境变量" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo 'export STAGING_DIR="$(pwd)"' >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo 'export PATH="$STAGING_DIR/bin:$PATH"' >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "# 验证编译器" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "${{ env.PREFIX }}-gcc --version" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "# 编译示例程序" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "${{ env.PREFIX }}-gcc -o hello hello.c" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo '```' >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "## 包含的工具" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- 编译器: gcc, g++, cpp" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- 汇编器: as, gas" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- 链接器: ld, ld.bfd" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- 二进制工具: objcopy, objdump, strip, nm" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- 归档工具: ar, ranlib" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- 调试工具: gdb, gdbserver" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "## 注意事项" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "1. 此工具链专为交叉编译设计" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "2. 需要相应的头文件和库文件" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "3. 建议在OpenWrt构建系统中使用" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "4. 版本已针对目标架构优化" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "## 构建信息" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- 工作流: #${{ github.run_id }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- 构建ID: ${{ env.BUILD_ID }}" >> "${{ env.OUTPUT_DIR }}/README.md"
+          echo "- 保存路径: ${{ env.OUTPUT_DIR }}" >> "${{ env.OUTPUT_DIR }}/README.md"
           
           echo "计算成果大小..."
           TOTAL_SIZE=$(du -sh "${{ env.OUTPUT_DIR }}" | cut -f1)
@@ -1871,11 +1789,8 @@ EOF
           
           if ! git diff --cached --quiet; then
             echo "检测到变更，创建提交..."
-            
-            COMMIT_MSG="build(compiler): 添加 ${{ env.ARCH_DIR }}-${{ env.LIBC_DIR }} 交叉编译器 v${{ env.GCC_VERSION }}"
-            COMMIT_BODY="架构: ${{ env.ARCH_DIR }}\nC库: ${{ env.LIBC_DIR }} ${{ env.LIBC_VERSION }}\nGCC: ${{ env.GCC_VERSION }}\nBinutils: ${{ env.BINUTILS_VERSION }}\n大小: ${{ env.TOTAL_SIZE }}\n工具数: ${{ env.ALL_TOOLS_COUNT }}\n工作流: #${{ github.run_id }}"
-            
-            git commit -m "$COMMIT_MSG" -m "$COMMIT_BODY"
+            # 使用多个-m参数而不是复杂的多行消息
+            git commit -m "build(compiler): 添加 ${{ env.ARCH_DIR }}-${{ env.LIBC_DIR }} 交叉编译器 v${{ env.GCC_VERSION }}" -m "架构: ${{ env.ARCH_DIR }}" -m "C库: ${{ env.LIBC_DIR }} ${{ env.LIBC_VERSION }}" -m "GCC: ${{ env.GCC_VERSION }}" -m "Binutils: ${{ env.BINUTILS_VERSION }}" -m "大小: ${{ env.TOTAL_SIZE }}" -m "工具数: ${{ env.ALL_TOOLS_COUNT }}" -m "工作流: #${{ github.run_id }}"
             
             echo "推送到仓库..."
             if git push origin main; then
