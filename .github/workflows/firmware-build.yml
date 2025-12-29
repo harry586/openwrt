@@ -75,43 +75,40 @@ jobs:
           tar -xzf source.tar.gz --strip-components=1
           
           # 检查解压结果
+          echo "📁 检查解压结果..."
           if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
-            echo "✅ 源代码解压成功"
-            echo "重要文件存在: firmware-config/scripts/build_firmware_main.sh"
-            
-            # 复制到工作区 - 使用更精确的方式
-            echo "复制文件到工作区..."
-            
-            # 确保工作区目录存在
-            mkdir -p ${{ github.workspace }}
-            
-            # 检查并删除编译器目录（如果有的话）
-            if [ -d "firmware-config/build-Compiler-file" ]; then
-              echo "⚠️ 发现编译器目录，排除不复制"
-              rm -rf firmware-config/build-Compiler-file
-            fi
-            
-            # 使用rsync复制所有文件，排除.git目录
-            rsync -av --exclude='.git' . ${{ github.workspace }}/
-            
-            # 确保脚本文件有执行权限
-            chmod +x ${{ github.workspace }}/firmware-config/scripts/*.sh 2>/dev/null || true
-            
-            echo "✅ 文件复制完成"
-            
-            # 保存源代码压缩包作为构建产物
-            mkdir -p /tmp/build-artifacts/source-archive
-            cp source.tar.gz /tmp/build-artifacts/source-archive/
+            echo "✅ 主脚本存在: firmware-config/scripts/build_firmware_main.sh"
           else
-            echo "❌ 源代码解压失败，重要文件缺失"
-            echo "当前目录内容:"
-            ls -la
-            exit 1
+            echo "❌ 主脚本不存在，但继续尝试..."
           fi
           
+          # 列出所有脚本文件
+          echo "📋 脚本文件列表:"
+          find . -name "*.sh" -type f | grep -i script || echo "未找到脚本文件"
+          
+          # 复制到工作区
+          echo "复制文件到工作区..."
+          mkdir -p ${{ github.workspace }}
+          
+          # 使用tar直接解压到工作区，避免权限问题
+          cd ${{ github.workspace }}
+          tar -xzf /tmp/openwrt-source/source.tar.gz --strip-components=1
+          
+          # 确保脚本文件有执行权限
+          echo "设置脚本执行权限..."
+          find . -name "*.sh" -type f -exec chmod +x {} \;
+          
+          # 验证文件
+          echo "✅ 文件复制完成"
+          echo "📋 工作区脚本文件:"
+          ls -la firmware-config/scripts/ 2>/dev/null || echo "脚本目录可能不存在"
+          
+          # 保存源代码压缩包作为构建产物
+          mkdir -p /tmp/build-artifacts/source-archive
+          cp /tmp/openwrt-source/source.tar.gz /tmp/build-artifacts/source-archive/
+          
           # 清理临时文件
-          cd /tmp
-          rm -rf openwrt-source
+          rm -rf /tmp/openwrt-source
           echo "✅ Git Archive API下载完成"
       
       # 步骤 2: 立即上传Git Archive源代码
@@ -131,12 +128,54 @@ jobs:
           fetch-depth: 0
           submodules: recursive
       
-      # 步骤 4: 设置脚本执行权限
-      - name: "4. 设置脚本执行权限"
+      # 步骤 4: 验证和设置脚本执行权限
+      - name: "4. 验证和设置脚本执行权限"
         run: |
-          echo "=== 步骤 4: 设置脚本执行权限 ==="
-          find firmware-config/scripts -name "*.sh" -exec chmod +x {} \;
-          echo "✅ 脚本执行权限设置完成"
+          echo "=== 步骤 4: 验证和设置脚本执行权限 ==="
+          
+          # 检查工作区目录
+          echo "工作区目录: ${{ github.workspace }}"
+          echo "当前目录: $(pwd)"
+          
+          # 查找所有脚本文件
+          echo "🔍 查找脚本文件..."
+          find . -name "*.sh" -type f | while read script; do
+            echo "找到脚本: $script"
+            chmod +x "$script"
+          done
+          
+          # 特别检查脚本目录
+          echo "📁 检查脚本目录..."
+          if [ -d "firmware-config/scripts" ]; then
+            echo "✅ 脚本目录存在"
+            ls -la firmware-config/scripts/
+            
+            # 设置执行权限
+            chmod +x firmware-config/scripts/*.sh 2>/dev/null || true
+            
+            # 验证关键脚本
+            REQUIRED_SCRIPTS=(
+              "build_firmware_main.sh"
+              "build_firmware_main-01.sh"
+              "build_firmware_main-02.sh"
+            )
+            
+            for script in "${REQUIRED_SCRIPTS[@]}"; do
+              script_path="firmware-config/scripts/$script"
+              if [ -f "$script_path" ]; then
+                echo "✅ $script 存在且可执行"
+                ls -la "$script_path"
+              else
+                echo "❌ $script 不存在"
+              fi
+            done
+          else
+            echo "❌ 脚本目录不存在"
+            # 尝试创建
+            mkdir -p firmware-config/scripts
+          fi
+          
+          echo "✅ 脚本权限设置完成"
       
       # 步骤 5: 检查编译器文件目录状态
       - name: "5. 检查编译器文件目录状态"
@@ -144,7 +183,17 @@ jobs:
           echo "=== 步骤 5: 检查编译器文件目录状态 ==="
           
           echo "🔍 运行编译器文件目录状态检查..."
-          firmware-config/scripts/build_firmware_main.sh check_compiler_dir_status "${{ env.COMPILER_DIR }}"
+          echo "脚本路径: firmware-config/scripts/build_firmware_main.sh"
+          echo "编译器目录: ${{ env.COMPILER_DIR }}"
+          
+          # 验证脚本可执行
+          if [ -x "firmware-config/scripts/build_firmware_main.sh" ]; then
+            firmware-config/scripts/build_firmware_main.sh check_compiler_dir_status "${{ env.COMPILER_DIR }}"
+          else
+            echo "❌ 脚本不可执行，尝试修复..."
+            chmod +x firmware-config/scripts/build_firmware_main.sh
+            firmware-config/scripts/build_firmware_main.sh check_compiler_dir_status "${{ env.COMPILER_DIR }}"
+          fi
       
       # 步骤 5.5: 下载版本特定的编译器文件
       - name: "5.5. 下载版本特定的编译器文件"
@@ -152,7 +201,21 @@ jobs:
           echo "=== 步骤 5.5: 下载版本特定的编译器文件 ==="
           
           echo "🔧 运行版本特定的编译器文件下载脚本..."
-          firmware-config/scripts/build_firmware_main-01.sh download_version_specific_compiler_files
+          
+          # 确保脚本可执行
+          SCRIPT_PATH="firmware-config/scripts/build_firmware_main-01.sh"
+          if [ -f "$SCRIPT_PATH" ]; then
+            if [ ! -x "$SCRIPT_PATH" ]; then
+              chmod +x "$SCRIPT_PATH"
+            fi
+            echo "执行脚本: $SCRIPT_PATH"
+            "$SCRIPT_PATH" download_version_specific_compiler_files
+          else
+            echo "❌ 脚本不存在: $SCRIPT_PATH"
+            echo "当前目录内容:"
+            ls -la firmware-config/scripts/
+            exit 1
+          fi
       
       # 步骤 6: 下载并保存编译器文件到仓库
       - name: "6. 下载并保存编译器文件到仓库"
@@ -387,7 +450,21 @@ jobs:
           echo "=== 步骤 22.5: 检查并修复编译环境 ==="
           
           echo "🔧 运行编译环境检查与修复..."
-          firmware-config/scripts/build_firmware_main-01.sh check_and_fix_build_environment "${{ env.BUILD_DIR }}"
+          
+          # 验证脚本存在且可执行
+          SCRIPT_PATH="firmware-config/scripts/build_firmware_main-01.sh"
+          if [ -f "$SCRIPT_PATH" ]; then
+            if [ ! -x "$SCRIPT_PATH" ]; then
+              chmod +x "$SCRIPT_PATH"
+            fi
+            echo "执行脚本: $SCRIPT_PATH"
+            "$SCRIPT_PATH" check_and_fix_build_environment "${{ env.BUILD_DIR }}"
+          else
+            echo "❌ 脚本不存在: $SCRIPT_PATH"
+            echo "当前脚本目录内容:"
+            ls -la firmware-config/scripts/
+            exit 1
+          fi
       
       # 步骤 22.6: 强制修复 xz 配置（终极版）- 新增步骤
       - name: "22.6. 强制修复 xz 配置（终极版）"
@@ -397,16 +474,25 @@ jobs:
           echo "🚨 运行终极 xz 配置修复..."
           
           # 确保脚本有执行权限
-          chmod +x firmware-config/scripts/build_firmware_main-02.sh 2>/dev/null || true
-          
-          # 运行强制修复
-          firmware-config/scripts/build_firmware_main-02.sh force_fix_xz_config "${{ env.BUILD_DIR }}"
-          
-          echo "✅ 终极修复完成"
-          
-          # 验证修复
-          echo "🔍 验证修复结果..."
-          firmware-config/scripts/build_firmware_main-02.sh check_build_environment "${{ env.BUILD_DIR }}"
+          SCRIPT_PATH="firmware-config/scripts/build_firmware_main-02.sh"
+          if [ -f "$SCRIPT_PATH" ]; then
+            chmod +x "$SCRIPT_PATH" 2>/dev/null || true
+            
+            # 运行强制修复
+            echo "执行脚本: $SCRIPT_PATH"
+            "$SCRIPT_PATH" force_fix_xz_config "${{ env.BUILD_DIR }}"
+            
+            echo "✅ 终极修复完成"
+            
+            # 验证修复
+            echo "🔍 验证修复结果..."
+            "$SCRIPT_PATH" check_build_environment "${{ env.BUILD_DIR }}"
+          else
+            echo "❌ 脚本不存在: $SCRIPT_PATH"
+            echo "当前脚本目录内容:"
+            ls -la firmware-config/scripts/
+            exit 1
+          fi
       
       # 步骤 23: 编译固件（修复版）
       - name: "23. 编译固件（修复版）"
@@ -418,72 +504,96 @@ jobs:
           
           # 创建编译前修复脚本
           PRE_BUILD_FIX_SCRIPT=/tmp/pre_build_fix.sh
-          echo '#!/bin/bash' > $PRE_BUILD_FIX_SCRIPT
-          echo 'echo "=== 编译前最终修复 ==="' >> $PRE_BUILD_FIX_SCRIPT
-          echo 'export ac_cv_c_compiler_gnu=yes' >> $PRE_BUILD_FIX_SCRIPT
-          echo 'export ac_cv_prog_cc_g=yes' >> $PRE_BUILD_FIX_SCRIPT
-          echo 'export ac_cv_prog_cc_works=yes' >> $PRE_BUILD_FIX_SCRIPT
-          echo 'export ac_cv_prog_cc_cross=yes' >> $PRE_BUILD_FIX_SCRIPT
-          echo 'export gl_cv_cc_nested_functions=yes' >> $PRE_BUILD_FIX_SCRIPT
-          echo 'export gl_cv_func_mbrtowc=yes' >> $PRE_BUILD_FIX_SCRIPT
-          echo 'export ac_cv_func_mmap_fixed_mapped=yes' >> $PRE_BUILD_FIX_SCRIPT
-          echo 'export ac_cv_sizeof_void_p=4' >> $PRE_BUILD_FIX_SCRIPT
-          echo 'export build_alias=x86_64-pc-linux-gnu' >> $PRE_BUILD_FIX_SCRIPT
-          echo 'export host_alias=x86_64-pc-linux-gnu' >> $PRE_BUILD_FIX_SCRIPT
-          echo 'export target_alias=x86_64-pc-linux-gnu' >> $PRE_BUILD_FIX_SCRIPT
-          echo 'xz_dir=$(find build_dir -name "xz-*" -type d 2>/dev/null | head -1)' >> $PRE_BUILD_FIX_SCRIPT
-          echo 'if [ -n "$xz_dir" ]; then' >> $PRE_BUILD_FIX_SCRIPT
-          echo '  echo "🔧 修复 xz 目录: $xz_dir"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '  if [ ! -f "$xz_dir/config.status" ]; then' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "#! /bin/sh" > "$xz_dir/config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "# Generated by configure fix" >> "$xz_dir/config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "SHELL=/bin/sh" >> "$xz_dir/config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "srcdir=." >> "$xz_dir/config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "host=x86_64-pc-linux-gnu" >> "$xz_dir/config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "build=x86_64-pc-linux-gnu" >> "$xz_dir/config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "target=x86_64-pc-linux-gnu" >> "$xz_dir/config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "CC=gcc" >> "$xz_dir/config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "CFLAGS=-O2" >> "$xz_dir/config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "LDFLAGS=" >> "$xz_dir/config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "LIBS=" >> "$xz_dir/config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "cross_compiling=yes" >> "$xz_dir/config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "ac_cv_c_compiler_gnu=yes" >> "$xz_dir/config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "ac_cv_prog_cc_g=yes" >> "$xz_dir/config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "ac_cv_prog_cc_works=yes" >> "$xz_dir/config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "ac_cv_prog_cc_cross=yes" >> "$xz_dir/config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "ac_cv_func_mmap_fixed_mapped=yes" >> "$xz_dir/config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "ac_cv_sizeof_void_p=4" >> "$xz_dir/config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    chmod +x "$xz_dir/config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "✅ 创建 config.status"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '  fi' >> $PRE_BUILD_FIX_SCRIPT
-          echo '  echo "configured at $(date) - pre-build fix" > "$xz_dir/.configured"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '  echo "✅ 创建 .configured 标记文件"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '  if [ -f "$xz_dir/configure" ]; then' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    cp "$xz_dir/configure" "$xz_dir/configure.backup"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    sed -i "s/if test \"\$cross_compiling\" = yes; then/if test \"\$cross_compiling\" = yes -o \"\$cross_compiling\" = \"maybe\"; then/g" "$xz_dir/configure"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    sed -i "s/ac_cv_prog_cc_cross=no/ac_cv_prog_cc_cross=yes/g" "$xz_dir/configure"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    sed -i "s/ac_cv_c_compiler_gnu=no/ac_cv_c_compiler_gnu=yes/g" "$xz_dir/configure"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    echo "✅ 修复 configure 文件"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '  fi' >> $PRE_BUILD_FIX_SCRIPT
-          echo 'fi' >> $PRE_BUILD_FIX_SCRIPT
-          echo 'for dir in build_dir/*-*; do' >> $PRE_BUILD_FIX_SCRIPT
-          echo '  if [ -d "$dir" ] && [[ "$(basename "$dir")" =~ ^[a-z]+-[0-9] ]]; then' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    if [ ! -f "$dir/.configured" ]; then' >> $PRE_BUILD_FIX_SCRIPT
-          echo '      echo "configured at $(date)" > "$dir/.configured"' >> $PRE_BUILD_FIX_SCRIPT
-          echo '    fi' >> $PRE_BUILD_FIX_SCRIPT
-          echo '  fi' >> $PRE_BUILD_FIX_SCRIPT
-          echo 'done' >> $PRE_BUILD_FIX_SCRIPT
-          echo 'echo "✅ 编译前修复完成"' >> $PRE_BUILD_FIX_SCRIPT
+          
+          cat > $PRE_BUILD_FIX_SCRIPT << 'SCRIPTEOF'
+#!/bin/bash
+echo "=== 编译前最终修复 ==="
+
+# 设置交叉编译环境变量
+export ac_cv_c_compiler_gnu=yes
+export ac_cv_prog_cc_g=yes
+export ac_cv_prog_cc_works=yes
+export ac_cv_prog_cc_cross=yes
+export gl_cv_cc_nested_functions=yes
+export gl_cv_func_mbrtowc=yes
+export ac_cv_func_mmap_fixed_mapped=yes
+export ac_cv_sizeof_void_p=4
+
+# 设置构建类型
+export build_alias=x86_64-pc-linux-gnu
+export host_alias=x86_64-pc-linux-gnu
+export target_alias=x86_64-pc-linux-gnu
+
+# 检查并修复 xz 目录
+xz_dir=$(find build_dir -name "xz-*" -type d 2>/dev/null | head -1)
+if [ -n "$xz_dir" ]; then
+  echo "🔧 修复 xz 目录: $xz_dir"
+  
+  # 确保 config.status 存在并设置正确
+  if [ ! -f "$xz_dir/config.status" ]; then
+    cat > "$xz_dir/config.status" << 'CONFIGEOF'
+#! /bin/sh
+# Generated by configure fix
+SHELL=/bin/sh
+srcdir=.
+host=x86_64-pc-linux-gnu
+build=x86_64-pc-linux-gnu
+target=x86_64-pc-linux-gnu
+CC=gcc
+CFLAGS=-O2
+LDFLAGS=
+LIBS=
+cross_compiling=yes
+ac_cv_c_compiler_gnu=yes
+ac_cv_prog_cc_g=yes
+ac_cv_prog_cc_works=yes
+ac_cv_prog_cc_cross=yes
+ac_cv_func_mmap_fixed_mapped=yes
+ac_cv_sizeof_void_p=4
+CONFIGEOF
+    chmod +x "$xz_dir/config.status"
+    echo "✅ 创建 config.status"
+  fi
+  
+  # 创建 .configured 标记文件
+  echo "configured at $(date) - pre-build fix" > "$xz_dir/.configured"
+  echo "✅ 创建 .configured 标记文件"
+  
+  # 如果 configure 文件存在，修复它
+  if [ -f "$xz_dir/configure" ]; then
+    # 备份
+    cp "$xz_dir/configure" "$xz_dir/configure.backup"
+    
+    # 修改交叉编译检测逻辑
+    sed -i 's/if test "$cross_compiling" = yes; then/if test "$cross_compiling" = yes -o "$cross_compiling" = "maybe"; then/g' "$xz_dir/configure"
+    
+    # 强制设置检测结果
+    sed -i 's/ac_cv_prog_cc_cross=no/ac_cv_prog_cc_cross=yes/g' "$xz_dir/configure"
+    sed -i 's/ac_cv_c_compiler_gnu=no/ac_cv_c_compiler_gnu=yes/g' "$xz_dir/configure"
+    
+    echo "✅ 修复 configure 文件"
+  fi
+fi
+
+# 为其他工具创建标记文件
+for dir in build_dir/*-*; do
+  if [ -d "$dir" ] && [[ "$(basename "$dir")" =~ ^[a-z]+-[0-9] ]]; then
+    if [ ! -f "$dir/.configured" ]; then
+      echo "configured at $(date)" > "$dir/.configured"
+    fi
+  fi
+done
+
+echo "✅ 编译前修复完成"
+SCRIPTEOF
           
           chmod +x $PRE_BUILD_FIX_SCRIPT
           
           # 运行编译前修复
           $PRE_BUILD_FIX_SCRIPT
           
-          echo "🔧 运行修复脚本的编译环境检查..."
-          firmware-config/scripts/build_firmware_main-01.sh check_and_fix_build_environment "${{ env.BUILD_DIR }}"
-          
           echo "🔧 设置编译环境..."
+          # 导出环境变量到 make 进程
           export ac_cv_prog_cc_cross=yes
           export ac_cv_prog_cc_works=yes
           export ac_cv_func_mmap_fixed_mapped=yes
@@ -505,6 +615,7 @@ jobs:
           
           if [ $TOOLS_EXIT_CODE -eq 0 ]; then
             echo "✅ 工具编译成功，开始编译固件..."
+            # 调用主脚本进行编译
             firmware-config/scripts/build_firmware_main.sh build_firmware "true"
           else
             echo "❌ 工具编译失败，尝试直接编译完整固件..."
