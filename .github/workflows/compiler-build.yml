@@ -152,7 +152,7 @@ jobs:
           echo "   └─ 🔧 其他A53设备"
           echo "      ├─ 某些智能音箱"
           echo "      ├─ 物联网网关"
-          echo "      └─ 边缘计算设备"
+          echo "      ├─ 边缘计算设备"
           echo ""
           echo "7️⃣ riscv64 (RISC-V 64位)"
           echo "   ├─ 🔬 开发板"
@@ -395,11 +395,16 @@ jobs:
           echo "2. 架构 $TARGET_ARCH → 适配版本"
           echo "3. 版本验证 → 确保可用性"
           
+          # 设置输出变量
           echo "gcc_version=$GCC_VERSION" >> $GITHUB_OUTPUT
           echo "binutils_version=$BINUTILS_VERSION" >> $GITHUB_OUTPUT
           echo "linux_version=$LINUX_VERSION" >> $GITHUB_OUTPUT
           echo "musl_version=$MUSL_VERSION" >> $GITHUB_OUTPUT
           echo "glibc_version=$GLIBC_VERSION" >> $GITHUB_OUTPUT
+          
+          # 同时设置到环境变量以便调试
+          echo "DEBUG_GCC_VERSION=$GCC_VERSION" >> $GITHUB_ENV
+          echo "DEBUG_BINUTILS_VERSION=$BINUTILS_VERSION" >> $GITHUB_ENV
 
       - name: 🔎 检查现有编译器
         id: check-existing
@@ -409,6 +414,10 @@ jobs:
           LIBC="${{ github.event.inputs.libc }}"
           GCC_VERSION='${{ steps.version-detection.outputs.gcc_version }}'
           BINUTILS_VERSION='${{ steps.version-detection.outputs.binutils_version }}'
+          
+          echo "检查版本变量:"
+          echo "- GCC_VERSION: '$GCC_VERSION'"
+          echo "- BINUTILS_VERSION: '$BINUTILS_VERSION'"
           
           if [ "$LIBC" = "musl" ]; then
             LIBC_DIR="musl"
@@ -636,6 +645,7 @@ jobs:
             LIBC_DIR="musl"
             USE_MUSL="y"
             USE_GLIBC="n"
+            # 注意：这里使用 needs.setup.outputs，不是 env
             LIBC_VERSION='${{ needs.setup.outputs.musl_version }}'
           else
             PREFIX="${PREFIX}-gnu"
@@ -646,6 +656,7 @@ jobs:
             LIBC_VERSION='${{ needs.setup.outputs.glibc_version }}'
           fi
           
+          # 从setup作业获取版本
           GCC_VERSION='${{ needs.setup.outputs.gcc_version }}'
           BINUTILS_VERSION='${{ needs.setup.outputs.binutils_version }}'
           LINUX_VERSION='${{ needs.setup.outputs.linux_version }}'
@@ -823,12 +834,20 @@ jobs:
           grep "VERSION_NUMBER" include/version.mk 2>/dev/null || echo "版本文件未找到"
           echo "结束时间: $(date)"
 
-      - name: 📝 生成配置文件（版本适配）
+      - name: 📝 生成配置文件（修复版本传递）
         run: |
-          echo "=== 生成OpenWrt配置（版本适配）==="
+          echo "=== 生成OpenWrt配置（修复版本传递）==="
           echo "开始时间: $(date)"
           cd "${{ env.BUILD_DIR }}"
           echo "当前目录: $(pwd)"
+          
+          # 从环境变量获取版本（这些已经在"🏗️ 设置环境"步骤中设置）
+          echo "使用版本:"
+          echo "- GCC: ${{ env.GCC_VERSION }}"
+          echo "- Binutils: ${{ env.BINUTILS_VERSION }}"
+          echo "- Linux: ${{ env.LINUX_VERSION }}"
+          echo "- C库版本: ${{ env.LIBC_VERSION }}"
+          echo "- C库类型: ${{ env.LIBC_DIR }}"
           
           echo "创建site配置目录..."
           mkdir -p include/site
@@ -850,7 +869,10 @@ jobs:
           CONFIG_FILE=".config"
           echo "生成主配置文件: $CONFIG_FILE"
           
-          echo "# 目标配置" > $CONFIG_FILE
+          # 清空现有配置
+          > $CONFIG_FILE
+          
+          echo "# 目标配置" >> $CONFIG_FILE
           echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> $CONFIG_FILE
           echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> $CONFIG_FILE
           echo "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" >> $CONFIG_FILE
@@ -890,7 +912,7 @@ jobs:
           echo "配置文件大小: $(wc -l < $CONFIG_FILE) 行"
           echo "配置摘要:"
           echo "------------------------------"
-          grep -E "CONFIG_TARGET|CONFIG_GCC|CONFIG_BINUTILS|CONFIG_.*LIBC|CONFIG_USE_MUSL" $CONFIG_FILE
+          cat $CONFIG_FILE | grep -E "CONFIG_TARGET|CONFIG_GCC|CONFIG_BINUTILS|CONFIG_.*LIBC|CONFIG_USE_MUSL|CONFIG_BUILD_TOOLCHAIN"
           echo "------------------------------"
           echo "✅ 配置文件生成完成"
           echo "结束时间: $(date)"
@@ -940,10 +962,19 @@ jobs:
           echo "  🔍 Linux内核版本: $LINUX_CONF"
           
           # 检查版本是否匹配
-          if [ "$GCC_CONF" = "${{ env.GCC_VERSION }}" ]; then
-            echo "  ✅ GCC版本匹配"
+          EXPECTED_GCC="${{ env.GCC_VERSION }}"
+          EXPECTED_BINUTILS="${{ env.BINUTILS_VERSION }}"
+          
+          if [ "$GCC_CONF" = "$EXPECTED_GCC" ]; then
+            echo "  ✅ GCC版本匹配: 配置=$GCC_CONF, 期望=$EXPECTED_GCC"
           else
-            echo "  ⚠️ GCC版本不匹配: 配置=$GCC_CONF, 期望=${{ env.GCC_VERSION }}"
+            echo "  ⚠️ GCC版本不匹配: 配置=$GCC_CONF, 期望=$EXPECTED_GCC"
+          fi
+          
+          if [ "$BINUTILS_CONF" = "$EXPECTED_BINUTILS" ]; then
+            echo "  ✅ Binutils版本匹配: 配置=$BINUTILS_CONF, 期望=$EXPECTED_BINUTILS"
+          else
+            echo "  ⚠️ Binutils版本不匹配: 配置=$BINUTILS_CONF, 期望=$EXPECTED_BINUTILS"
           fi
           
           # 检查C库配置
@@ -951,11 +982,23 @@ jobs:
           if grep -q "CONFIG_USE_MUSL=y" .config; then
             echo "  ✅ Musl C库: 启用"
             MUSL_CONF=$(grep 'CONFIG_MUSL_VERSION=' .config | cut -d'"' -f2)
+            EXPECTED_MUSL="${{ env.LIBC_VERSION }}"
             echo "  🔍 Musl版本: $MUSL_CONF"
+            if [ "$MUSL_CONF" = "$EXPECTED_MUSL" ]; then
+              echo "  ✅ Musl版本匹配: 配置=$MUSL_CONF, 期望=$EXPECTED_MUSL"
+            else
+              echo "  ⚠️ Musl版本不匹配: 配置=$MUSL_CONF, 期望=$EXPECTED_MUSL"
+            fi
           else
             echo "  ✅ Glibc: 启用"
             GLIBC_CONF=$(grep 'CONFIG_GLIBC_VERSION=' .config | cut -d'"' -f2)
+            EXPECTED_GLIBC="${{ env.LIBC_VERSION }}"
             echo "  🔍 Glibc版本: $GLIBC_CONF"
+            if [ "$GLIBC_CONF" = "$EXPECTED_GLIBC" ]; then
+              echo "  ✅ Glibc版本匹配: 配置=$GLIBC_CONF, 期望=$EXPECTED_GLIBC"
+            else
+              echo "  ⚠️ Glibc版本不匹配: 配置=$GLIBC_CONF, 期望=$EXPECTED_GLIBC"
+            fi
           fi
           
           # 检查开发选项
@@ -983,6 +1026,19 @@ jobs:
           echo "  子目标: $SUBTARGET_CONF"
           echo "  架构: $ARCH_CONF"
           echo "  编译器前缀: $PREFIX_CONF"
+          
+          # 验证目标配置
+          if [ "$TARGET_CONF" = "${{ env.TARGET }}" ]; then
+            echo "  ✅ 目标匹配: 配置=$TARGET_CONF, 期望=${{ env.TARGET }}"
+          else
+            echo "  ⚠️ 目标不匹配: 配置=$TARGET_CONF, 期望=${{ env.TARGET }}"
+          fi
+          
+          if [ "$ARCH_CONF" = "${{ env.ARCH_NAME }}" ]; then
+            echo "  ✅ 架构匹配: 配置=$ARCH_CONF, 期望=${{ env.ARCH_NAME }}"
+          else
+            echo "  ⚠️ 架构不匹配: 配置=$ARCH_CONF, 期望=${{ env.ARCH_NAME }}"
+          fi
           
           echo "=============================="
           echo "✅ 配置菜单生成完成"
@@ -1501,7 +1557,7 @@ jobs:
             "gcc_version": "${{ env.GCC_VERSION }}",
             "binutils_version": "${{ env.BINUTILS_VERSION }}",
             "linux_version": "${{ env.LINUX_VERSION }}",
-            "openwrt_version": "${{ env.OPENWRT_VERSION }}",
+            "openwrt_version": "${{ env.OPENWrt_VERSION }}",
             "cpu_type": "${{ env.CPU_TYPE }}",
             "tune": "${{ env.TUNE }}",
             "abi": "${{ env.ABI }}",
