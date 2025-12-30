@@ -1,0 +1,23 @@
+{
+  "architecture": "arm_cortex-a7",
+  "arch_name": "arm",
+  "libc": "musl",
+  "libc_version": "1.2.4",
+  "target": "ipq40xx",
+  "subtarget": "generic",
+  "compiler_prefix": "arm-openwrt-linux-musl-",
+  "gcc_version": "11.3.0",
+  "binutils_version": "2.38",
+  "linux_version": "5.15.133",
+  "openwrt_version": "23.05.2",
+  "cpu_type": "cortex-a7",
+  "tune": "cortex-a7",
+  "abi": "32",
+  "float_abi": "hard",
+  "build_date": "2025-12-30T15:06:29+00:00",
+  "workflow_run": "20598969032",
+  "build_id": "arm_cortex-a7_musl_gcc-11.3.0_binutils-2.38_20251230_143913",
+  "target_triplet": "makefile.gcc",
+  "status": "partial",
+  "notes": "可能包含GMP构建问题"
+}
