@@ -475,7 +475,7 @@ jobs:
     needs: [show-device-info, setup]
     if: needs.setup.outputs.need_build == 'true'
     runs-on: ubuntu-22.04
-    timeout-minutes: 180
+    timeout-minutes: 240  # 增加超时时间到240分钟
     
     steps:
       - name: 📥 检出仓库
@@ -735,10 +735,10 @@ jobs:
               echo "✅ 切换版本成功"
             else
               echo "方法2失败，尝试方法3: 使用tar包..."
-              wget -q --show-progress -O openwrt.tar.xz "https://github.com/openwrt/openwrt/archive/refs/tags/v${{ env.OPENWRT_VERSION }}.tar.gz"
+              wget --tries=3 --timeout=60 --show-progress -O openwrt.tar.gz "https://github.com/openwrt/openwrt/archive/refs/tags/v${{ env.OPENWRT_VERSION }}.tar.gz"
               if [ $? -eq 0 ]; then
-                tar -xzf openwrt.tar.xz --strip-components=1
-                rm -f openwrt.tar.xz
+                tar -xzf openwrt.tar.gz --strip-components=1
+                rm -f openwrt.tar.gz
                 echo "✅ 使用tar包下载成功"
               else
                 echo "❌ 所有下载方法都失败"
@@ -1076,10 +1076,124 @@ jobs:
           echo "✅ 配置完全控制完成"
           echo "结束时间: $(date)"
 
-      - name: 🔨 编译工具链（直接构建）
-        timeout-minutes: 150
+      - name: 📥 预下载源码包（改进版）
+        timeout-minutes: 60  # 单独为下载设置超时
         run: |
-          echo "=== 开始编译工具链（直接构建）==="
+          echo "=== 预下载源码包（改进版）==="
+          cd "${{ env.BUILD_DIR }}"
+          echo "开始时间: $(date)"
+          echo "工作目录: $(pwd)"
+          
+          echo "创建下载目录..."
+          mkdir -p dl
+          
+          echo "显示当前配置的关键版本信息..."
+          echo "GCC版本: ${{ env.GCC_VERSION }}"
+          echo "Binutils版本: ${{ env.BINUTILS_VERSION }}"
+          echo "Linux版本: ${{ env.LINUX_VERSION }}"
+          
+          if [ "${{ env.USE_MUSL }}" = "y" ]; then
+            echo "Musl版本: ${{ env.LIBC_VERSION }}"
+          else
+            echo "Glibc版本: ${{ env.LIBC_VERSION }}"
+          fi
+          
+          echo "步骤1: 下载核心工具链包（独立下载，避免超时）..."
+          
+          # 下载GCC
+          echo "下载GCC ${{ env.GCC_VERSION }}..."
+          GCC_URL="https://ftp.gnu.org/gnu/gcc/gcc-${{ env.GCC_VERSION }}/gcc-${{ env.GCC_VERSION }}.tar.xz"
+          echo "URL: $GCC_URL"
+          
+          if wget --tries=3 --timeout=120 --show-progress -O "dl/gcc-${{ env.GCC_VERSION }}.tar.xz" "$GCC_URL"; then
+            echo "✅ GCC下载成功"
+          else
+            echo "⚠️ GCC下载失败，尝试备用镜像..."
+            wget --tries=3 --timeout=120 --show-progress -O "dl/gcc-${{ env.GCC_VERSION }}.tar.xz" "https://mirrors.kernel.org/gnu/gcc/gcc-${{ env.GCC_VERSION }}/gcc-${{ env.GCC_VERSION }}.tar.xz"
+          fi
+          
+          # 下载Binutils
+          echo "下载Binutils ${{ env.BINUTILS_VERSION }}..."
+          BINUTILS_URL="https://ftp.gnu.org/gnu/binutils/binutils-${{ env.BINUTILS_VERSION }}.tar.xz"
+          echo "URL: $BINUTILS_URL"
+          
+          if wget --tries=3 --timeout=120 --show-progress -O "dl/binutils-${{ env.BINUTILS_VERSION }}.tar.xz" "$BINUTILS_URL"; then
+            echo "✅ Binutils下载成功"
+          else
+            echo "⚠️ Binutils下载失败，尝试备用镜像..."
+            wget --tries=3 --timeout=120 --show-progress -O "dl/binutils-${{ env.BINUTILS_VERSION }}.tar.xz" "https://mirrors.kernel.org/gnu/binutils/binutils-${{ env.BINUTILS_VERSION }}.tar.xz"
+          fi
+          
+          # 下载Linux内核
+          echo "下载Linux ${{ env.LINUX_VERSION }}..."
+          LINUX_URL="https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-${{ env.LINUX_VERSION }}.tar.xz"
+          echo "URL: $LINUX_URL"
+          
+          if wget --tries=3 --timeout=120 --show-progress -O "dl/linux-${{ env.LINUX_VERSION }}.tar.xz" "$LINUX_URL"; then
+            echo "✅ Linux下载成功"
+          else
+            echo "⚠️ Linux下载失败，尝试备用源..."
+            wget --tries=3 --timeout=120 --show-progress -O "dl/linux-${{ env.LINUX_VERSION }}.tar.xz" "https://mirrors.edge.kernel.org/pub/linux/kernel/v5.x/linux-${{ env.LINUX_VERSION }}.tar.xz"
+          fi
+          
+          # 下载C库
+          if [ "${{ env.USE_MUSL }}" = "y" ]; then
+            echo "下载Musl ${{ env.LIBC_VERSION }}..."
+            MUSL_URL="https://musl.libc.org/releases/musl-${{ env.LIBC_VERSION }}.tar.gz"
+            echo "URL: $MUSL_URL"
+            
+            if wget --tries=3 --timeout=120 --show-progress -O "dl/musl-${{ env.LIBC_VERSION }}.tar.gz" "$MUSL_URL"; then
+              echo "✅ Musl下载成功"
+            else
+              echo "⚠️ Musl下载失败，尝试备用源..."
+              wget --tries=3 --timeout=120 --show-progress -O "dl/musl-${{ env.LIBC_VERSION }}.tar.gz" "https://github.com/ifduyue/musl/archive/refs/tags/v${{ env.LIBC_VERSION }}.tar.gz"
+            fi
+          else
+            echo "下载Glibc ${{ env.LIBC_VERSION }}..."
+            GLIBC_URL="https://ftp.gnu.org/gnu/glibc/glibc-${{ env.LIBC_VERSION }}.tar.xz"
+            echo "URL: $GLIBC_URL"
+            
+            if wget --tries=3 --timeout=120 --show-progress -O "dl/glibc-${{ env.LIBC_VERSION }}.tar.xz" "$GLIBC_URL"; then
+              echo "✅ Glibc下载成功"
+            else
+              echo "⚠️ Glibc下载失败，尝试备用镜像..."
+              wget --tries=3 --timeout=120 --show-progress -O "dl/glibc-${{ env.LIBC_VERSION }}.tar.xz" "https://mirrors.kernel.org/gnu/glibc/glibc-${{ env.LIBC_VERSION }}.tar.xz"
+            fi
+          fi
+          
+          echo "步骤2: 验证下载的文件..."
+          echo "下载目录内容:"
+          ls -lh dl/
+          
+          echo "检查关键文件大小:"
+          for file in dl/gcc-*.tar.xz dl/binutils-*.tar.xz dl/linux-*.tar.xz; do
+            if [ -f "$file" ]; then
+              echo "$(basename $file): $(ls -lh "$file" | awk '{print $5}')"
+            fi
+          done
+          
+          echo "步骤3: 创建必要的链接..."
+          # 创建符号链接，确保OpenWrt能找到下载的文件
+          if [ ! -f dl/gcc.tar.xz ] && [ -f dl/gcc-${{ env.GCC_VERSION }}.tar.xz ]; then
+            ln -sf gcc-${{ env.GCC_VERSION }}.tar.xz dl/gcc.tar.xz
+            echo "创建gcc链接"
+          fi
+          
+          if [ ! -f dl/binutils.tar.xz ] && [ -f dl/binutils-${{ env.BINUTILS_VERSION }}.tar.xz ]; then
+            ln -sf binutils-${{ env.BINUTILS_VERSION }}.tar.xz dl/binutils.tar.xz
+            echo "创建binutils链接"
+          fi
+          
+          echo "✅ 预下载完成"
+          echo "结束时间: $(date)"
+          echo "下载文件统计:"
+          echo "- 总文件数: $(ls -1 dl/ | wc -l)"
+          echo "- 总大小: $(du -sh dl | cut -f1)"
+
+      - name: 🔨 编译工具链（优化版）
+        timeout-minutes: 180  # 编译阶段单独设置超时
+        run: |
+          echo "=== 开始编译工具链（优化版）==="
           cd "${{ env.BUILD_DIR }}"
           echo "工作目录: $(pwd)"
           echo "开始时间: $(date)"
@@ -1103,103 +1217,102 @@ jobs:
           echo "- Linux内核版本: ${{ env.LINUX_VERSION }}"
           echo "- C库版本: ${{ env.LIBC_VERSION }}"
           
-          echo "步骤1: 创建host工具目录..."
+          echo "步骤1: 检查下载文件..."
+          echo "下载目录内容:"
+          ls -lh dl/ | head -10
+          
+          REQUIRED_FILES=("gcc-${{ env.GCC_VERSION }}.tar.xz" "binutils-${{ env.BINUTILS_VERSION }}.tar.xz" "linux-${{ env.LINUX_VERSION }}.tar.xz")
+          
+          for file in "${REQUIRED_FILES[@]}"; do
+            if [ -f "dl/$file" ]; then
+              echo "✅ $file 存在 ($(ls -lh "dl/$file" | awk '{print $5}'))"
+            else
+              echo "⚠️ $file 不存在，让make自动下载"
+            fi
+          done
+          
+          echo "步骤2: 创建host工具目录..."
           mkdir -p staging_dir/host/bin
           mkdir -p staging_dir/host/lib
           mkdir -p staging_dir/host/include
           
-          echo "步骤2: 最终配置检查..."
-          echo "当前配置:"
-          grep -E "CONFIG_GCC_VERSION|CONFIG_BINUTILS_VERSION|CONFIG_TARGET_|CONFIG_BUILD_TOOLCHAIN" .config
+          echo "步骤3: 开始编译工具链（分步进行）..."
           
-          echo "步骤3: 下载源码包..."
-          mkdir -p dl
-          echo "开始下载工具链源码..."
-          
-          echo "下载关键包..."
-          for pkg in gcc binutils linux; do
-            echo "下载 $pkg..."
-            make package/toolchain/$pkg/download V=s 2>&1 | tail -20
-          done
-          
-          echo "下载所有必要的包..."
-          make -j1 download V=s 2>&1 | tee /tmp/download.log
-          DOWNLOAD_STATUS=${PIPESTATUS[0]}
-          if [ $DOWNLOAD_STATUS -eq 0 ]; then
-            echo "✅ 下载成功"
-          else
-            echo "⚠️ 下载有警告，继续尝试..."
-            echo "下载状态: $DOWNLOAD_STATUS"
-          fi
-          
-          echo "检查关键包下载情况:"
-          for pkg in gcc binutils linux; do
-            pkg_files=$(find dl -name "${pkg}-*.tar.*" -o -name "${pkg}-*.tar.gz" -o -name "${pkg}-*.tar.bz2" 2>/dev/null | wc -l)
-            if [ $pkg_files -gt 0 ]; then
-              echo "  ✅ $pkg: 找到 $pkg_files 个文件"
-              find dl -name "${pkg}-*" -type f 2>/dev/null | head -2 | xargs -I {} basename {}
-            else
-              echo "  ❌ $pkg: 未找到"
-            fi
-          done
-          
-          if [ "${{ env.USE_MUSL }}" = "y" ]; then
-            musl_files=$(find dl -name "musl-*.tar.*" 2>/dev/null | wc -l)
-            if [ $musl_files -gt 0 ]; then
-              echo "  ✅ musl: 找到 $musl_files 个文件"
-            else
-              echo "  ❌ musl: 未找到"
-            fi
-          fi
-          
-          echo "步骤4: 编译工具链..."
-          echo "开始编译，使用 $(nproc) 个核心..."
-          
-          echo "子步骤4.1: 准备工具链..."
-          make toolchain/prepare -j$(nproc) V=s 2>&1 | tee /tmp/prepare.log
+          echo "子步骤3.1: 准备工具链..."
+          echo "开始时间: $(date)"
+          make toolchain/prepare -j$(nproc) V=sc 2>&1 | tee /tmp/prepare.log
           PREPARE_STATUS=${PIPESTATUS[0]}
           
           if [ $PREPARE_STATUS -eq 0 ]; then
             echo "✅ 工具链准备成功"
+            echo "准备完成时间: $(date)"
           else
-            echo "⚠️ 工具链准备有警告"
+            echo "⚠️ 工具链准备有警告，状态码: $PREPARE_STATUS"
+            echo "查看错误信息..."
+            grep -E "Error:|error:|failed:" /tmp/prepare.log | tail -20 || true
+            echo "尝试继续..."
           fi
           
-          echo "子步骤4.2: 编译工具链..."
-          make toolchain/compile -j$(nproc) V=s 2>&1 | tee /tmp/compile.log
+          echo "子步骤3.2: 编译工具链..."
+          echo "开始时间: $(date)"
+          
+          # 使用更详细的输出，但限制频率
+          make toolchain/compile -j$(nproc) V=s 2>&1 | tee /tmp/compile.log | grep -E "Building|Installing|Configuring|Compiling|ERROR|Error|error|FAILED|Failed" | tail -100
           COMPILE_STATUS=${PIPESTATUS[0]}
           
           if [ $COMPILE_STATUS -eq 0 ]; then
             echo "✅ 工具链编译成功"
+            echo "编译完成时间: $(date)"
           else
             echo "❌ 工具链编译失败，状态码: $COMPILE_STATUS"
             echo "错误摘要:"
-            grep -E "Error:|error:|failed:" /tmp/compile.log | tail -30
-            echo "尝试单线程编译..."
-            make toolchain/compile -j1 V=s 2>&1 | tee /tmp/compile-single.log
+            grep -E "Error:|error:|failed:|Failed" /tmp/compile.log | tail -30
+            echo "尝试单线程编译关键部分..."
+            
+            # 尝试单线程编译
+            echo "开始单线程编译..."
+            make toolchain/compile -j1 V=s 2>&1 | tee /tmp/compile-single.log | tail -50
             COMPILE_SINGLE_STATUS=${PIPESTATUS[0]}
+            
             if [ $COMPILE_SINGLE_STATUS -eq 0 ]; then
               echo "✅ 单线程编译成功"
             else
               echo "❌ 所有编译尝试都失败"
+              echo "最后的错误:"
+              tail -50 /tmp/compile-single.log
+              echo "构建日志已保存，请检查"
               exit 1
             fi
           fi
           
-          echo "步骤5: 安装工具链..."
-          make toolchain/install -j$(nproc) V=s 2>&1 | tee /tmp/install.log
+          echo "步骤4: 安装工具链..."
+          echo "开始时间: $(date)"
+          make toolchain/install -j$(nproc) V=s 2>&1 | tee /tmp/install.log | tail -50
           INSTALL_STATUS=${PIPESTATUS[0]}
+          
           if [ $INSTALL_STATUS -eq 0 ]; then
             echo "✅ 工具链安装成功"
+            echo "安装完成时间: $(date)"
           else
             echo "⚠️ 安装有警告，状态码: $INSTALL_STATUS"
             echo "警告摘要:"
-            grep -E "Warning:|warning:" /tmp/install.log | tail -10
+            grep -E "Warning:|warning:" /tmp/install.log | tail -10 || true
           fi
           
           echo "✅ 工具链构建完成"
-          echo "结束时间: $(date)"
+          echo "总构建时间: $(date)"
           echo "构建目录大小: $(du -sh . | cut -f1)"
+          
+          echo "步骤5: 检查构建结果..."
+          if find staging_dir -name "*gcc" -type f 2>/dev/null | head -1; then
+            echo "✅ 找到编译器文件"
+            echo "编译器位置:"
+            find staging_dir -name "*gcc" -type f 2>/dev/null | head -3
+          else
+            echo "⚠️ 未找到编译器文件"
+            echo "staging_dir内容:"
+            ls -la staging_dir/ 2>/dev/null | head -20
+          fi
 
       - name: ✅ 验证构建结果（完整工具链）
         run: |
