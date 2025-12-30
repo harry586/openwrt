@@ -14,10 +14,10 @@
   "tune": "cortex-a7",
   "abi": "32",
   "float_abi": "hard",
-  "build_date": "2025-12-30T15:06:29+00:00",
-  "workflow_run": "20598969032",
-  "build_id": "arm_cortex-a7_musl_gcc-11.3.0_binutils-2.38_20251230_143913",
-  "target_triplet": "makefile.gcc",
-  "status": "partial",
+  "build_date": "2025-12-30T17:07:31+00:00",
+  "workflow_run": "20600991216",
+  "build_id": "arm_cortex-a7_musl_gcc-11.3.0_binutils-2.38_20251230_162318",
+  "target_triplet": "arm-openwrt-linux-muslgnueabi",
+  "status": "complete",
   "notes": "可能包含GMP构建问题"
 }
