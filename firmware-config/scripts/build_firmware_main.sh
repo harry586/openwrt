@@ -37,6 +37,7 @@ save_source_code_info() {
 配置模式: $CONFIG_MODE
 构建目录: $BUILD_DIR
 仓库根目录: $REPO_ROOT
+预构建编译器目录: $COMPILER_DIR
 EOF
     
     # 保存配置文件信息
@@ -84,6 +85,7 @@ save_env() {
     echo "export DEVICE=\"$DEVICE\"" >> $ENV_FILE
     echo "export CONFIG_MODE=\"$CONFIG_MODE\"" >> $ENV_FILE
     echo "export REPO_ROOT=\"$REPO_ROOT\"" >> $ENV_FILE
+    echo "export COMPILER_DIR=\"$COMPILER_DIR\"" >> $ENV_FILE
     chmod +x $ENV_FILE
 }
 
@@ -93,351 +95,52 @@ load_env() {
     fi
 }
 
-# 新增：检查编译器文件目录状态函数
-check_compiler_dir_status() {
-    local compiler_dir="${1:-$COMPILER_DIR}"
+# 修改：验证预构建编译器文件函数
+verify_compiler_files() {
+    log "=== 验证预构建编译器文件 ==="
+    log "预构建编译器文件目录: $COMPILER_DIR"
     
-    log "=== 检查编译器文件目录状态 ==="
-    log "编译器文件目录: $compiler_dir"
-    
-    if [ -d "$compiler_dir" ]; then
-        log "✅ 编译器文件目录存在"
-        log "路径: $compiler_dir"
-        log "目录大小: $(du -sh "$compiler_dir" 2>/dev/null | cut -f1 || echo '未知')"
-        log "目录内容:"
-        ls -la "$compiler_dir/" 2>/dev/null | head -10 || log "无法列出"
-        
-        # 检查必要的编译器文件
-        log "🔍 检查必要的编译器文件:"
-        required_compilers=("gcc" "g++" "as" "ld" "ar" "strip" "objcopy" "objdump" "nm" "ranlib")
-        for compiler in "${required_compilers[@]}"; do
-            if find "$compiler_dir" -name "*$compiler*" -type f 2>/dev/null | grep -q .; then
-                log "  ✅ 找到: $compiler"
-            else
-                log "  ❌ 未找到: $compiler"
-            fi
-        done
-    else
-        log "ℹ️ 编译器文件目录不存在，将创建新目录"
-        mkdir -p "$compiler_dir"
-        log "✅ 已创建编译器文件目录: $compiler_dir"
-    fi
-}
-
-# 新增：下载必要编译器文件函数
-download_compiler_files() {
-    log "=== 下载必要编译器文件 ==="
-    log "编译器文件目录: $COMPILER_DIR"
-    
-    # 加载环境变量获取版本信息
-    load_env
-    
-    log "🔍 检测OpenWrt版本: $SELECTED_BRANCH"
-    
-    # 根据版本选择编译器版本
-    case "$SELECTED_BRANCH" in
-        "openwrt-23.05")
-            GCC_VERSION="11.3.0"
-            BINUTILS_VERSION="2.38"
-            log "🔧 OpenWrt 23.05 使用 GCC 11.3.0 + Binutils 2.38"
-            ;;
-        "openwrt-21.02")
-            GCC_VERSION="8.4.0"
-            BINUTILS_VERSION="2.35"
-            log "🔧 OpenWrt 21.02 使用 GCC 8.4.0 + Binutils 2.35"
-            ;;
-        *)
-            GCC_VERSION="11.3.0"
-            BINUTILS_VERSION="2.38"
-            log "⚠️ 未知版本分支，默认使用 GCC 11.3.0 + Binutils 2.38"
-            ;;
-    esac
-    
-    # 确保目录存在
-    mkdir -p "$COMPILER_DIR"
-    
-    # 编译器文件清单（根据版本动态选择）
-    local compiler_list=(
-        "gcc-${GCC_VERSION}.tar.xz"
-        "binutils-${BINUTILS_VERSION}.tar.xz"
-        "make-4.3.tar.gz"
-        "gmp-6.2.1.tar.xz"
-        "mpfr-4.1.0.tar.xz"
-        "mpc-1.2.1.tar.gz"
-        "isl-0.24.tar.xz"
-    )
-    
-    # 编译器文件下载URL（根据版本动态生成）
-    declare -A compiler_urls=(
-        ["gcc-11.3.0.tar.xz"]="https://ftp.gnu.org/gnu/gcc/gcc-11.3.0/gcc-11.3.0.tar.xz"
-        ["gcc-8.4.0.tar.xz"]="https://ftp.gnu.org/gnu/gcc/gcc-8.4.0/gcc-8.4.0.tar.xz"
-        ["binutils-2.38.tar.xz"]="https://ftp.gnu.org/gnu/binutils/binutils-2.38.tar.xz"
-        ["binutils-2.35.tar.xz"]="https://ftp.gnu.org/gnu/binutils/binutils-2.35.tar.xz"
-        ["make-4.3.tar.gz"]="https://ftp.gnu.org/gnu/make/make-4.3.tar.gz"
-        ["gmp-6.2.1.tar.xz"]="https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.xz"
-        ["mpfr-4.1.0.tar.xz"]="https://ftp.gnu.org/gnu/mpfr/mpfr-4.1.0.tar.xz"
-        ["mpc-1.2.1.tar.gz"]="https://ftp.gnu.org/gnu/mpc/mpc-1.2.1.tar.gz"
-        ["isl-0.24.tar.xz"]="https://gcc.gnu.org/pub/gcc/infrastructure/isl-0.24.tar.xz"
-    )
-    
-    log "🔍 编译器文件清单 (版本特定):"
-    log "  GCC: $GCC_VERSION"
-    log "  Binutils: $BINUTILS_VERSION"
-    
-    local total_files=0
-    local existing_files=0
-    local downloaded_files=0
-    
-    for file in "${compiler_list[@]}"; do
-        total_files=$((total_files + 1))
-        
-        if [ -f "$COMPILER_DIR/$file" ]; then
-            log "  ✅ $file: 已存在"
-            existing_files=$((existing_files + 1))
-        else
-            log "  📥 $file: 需要下载"
-            
-            # 下载文件
-            local url="${compiler_urls[$file]}"
-            if [ -n "$url" ]; then
-                log "    下载: $url"
-                if wget --no-check-certificate -q --show-progress -O "$COMPILER_DIR/$file" "$url"; then
-                    log "    ✅ 下载成功"
-                    downloaded_files=$((downloaded_files + 1))
-                else
-                    log "    ❌ 下载失败"
-                fi
-            else
-                log "    ⚠️ 无下载URL"
-            fi
-        fi
-    done
-    
-    log "📊 下载统计:"
-    log "  总计: $total_files 个编译器文件"
-    log "  已存在: $existing_files 个"
-    log "  新下载: $downloaded_files 个"
-    
-    # 显示目录大小
-    if [ $existing_files -gt 0 ] || [ $downloaded_files -gt 0 ]; then
-        log "📁 编译器目录大小: $(du -sh "$COMPILER_DIR" | cut -f1)"
-        log "📋 编译器文件列表:"
-        ls -lh "$COMPILER_DIR" 2>/dev/null | head -15 || log "  无文件"
-    fi
-    
-    log "✅ 版本特定编译器文件下载完成"
-}
-
-# 新增：汇总已编译的编译器文件并提交到仓库目录
-collect_compiler_files() {
-    local build_dir="${1:-$BUILD_DIR}"
-    local compiler_save_dir="${2:-$COMPILER_DIR}/compiled"
-    
-    log "=== 汇总已编译的编译器文件并提交到仓库目录 ==="
-    log "🔍 开始收集已编译的编译器文件..."
-    
-    mkdir -p "$compiler_save_dir"
-    log "编译器文件保存目录: $compiler_save_dir"
-    log "构建目录: $build_dir"
-    
-    # 搜索已编译的编译器文件
-    log "📊 搜索已编译的编译器文件..."
-    find "$build_dir/staging_dir" -type f \( -name "*gcc*" -o -name "*g++*" -o -name "*as*" -o -name "*ld*" -o -name "*ar*" -o -name "*strip*" -o -name "*objcopy*" -o -name "*objdump*" -o -name "*nm*" -o -name "*ranlib*" \) 2>/dev/null | head -100 > /tmp/compiler_files.txt
-    local total_files=$(wc -l < /tmp/compiler_files.txt)
-    log "📈 找到 $total_files 个编译器文件"
-    
-    if [ $total_files -eq 0 ]; then
-        log "⚠️ 未找到编译器文件，跳过保存"
+    if [ ! -d "$COMPILER_DIR" ]; then
+        log "⚠️ 警告: 预构建编译器文件目录不存在"
+        log "💡 将使用OpenWrt自动构建的编译器"
         return 0
     fi
     
-    # 创建分类目录
-    log "📁 创建分类目录..."
-    mkdir -p "$compiler_save_dir/arm"
-    mkdir -p "$compiler_save_dir/mips"
-    mkdir -p "$compiler_save_dir/mipsel"
-    mkdir -p "$compiler_save_dir/x86"
-    mkdir -p "$compiler_save_dir/x86_64"
-    mkdir -p "$compiler_save_dir/generic"
+    log "✅ 预构建编译器文件目录存在"
+    log "📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
     
-    log "📋 分类复制编译器文件..."
-    local arm_count=0
-    local mips_count=0
-    local mipsel_count=0
-    local x86_count=0
-    local x86_64_count=0
-    local generic_count=0
+    # 检查目录内容
+    log "📋 编译器文件列表:"
+    ls -lh "$COMPILER_DIR" 2>/dev/null | head -10 || log "  无文件"
     
-    while IFS= read -r file; do
-        if [ -f "$file" ] && [ -x "$file" ]; then
-            local filename=$(basename "$file")
-            if [[ "$filename" == *"arm"* ]] || [[ "$file" == *"arm"* ]]; then
-                cp "$file" "$compiler_save_dir/arm/" 2>/dev/null && arm_count=$((arm_count + 1))
-            elif [[ "$filename" == *"mips"* ]] && [[ "$filename" != *"mipsel"* ]]; then
-                cp "$file" "$compiler_save_dir/mips/" 2>/dev/null && mips_count=$((mips_count + 1))
-            elif [[ "$filename" == *"mipsel"* ]] || [[ "$file" == *"mipsel"* ]]; then
-                cp "$file" "$compiler_save_dir/mipsel/" 2>/dev/null && mipsel_count=$((mipsel_count + 1))
-            elif [[ "$filename" == *"i386"* ]] || [[ "$filename" == *"i686"* ]] || [[ "$file" == *"x86"* ]] && [[ "$file" != *"x86_64"* ]]; then
-                cp "$file" "$compiler_save_dir/x86/" 2>/dev/null && x86_count=$((x86_count + 1))
-            elif [[ "$filename" == *"x86_64"* ]] || [[ "$file" == *"x86_64"* ]]; then
-                cp "$file" "$compiler_save_dir/x86_64/" 2>/dev/null && x86_64_count=$((x86_64_count + 1))
-            else
-                cp "$file" "$compiler_save_dir/generic/" 2>/dev/null && generic_count=$((generic_count + 1))
-            fi
-        fi
-    done < /tmp/compiler_files.txt
+    # 检查编译器文件类型
+    log "🔧 编译器文件类型检查:"
+    local total_files=$(find "$COMPILER_DIR" -type f 2>/dev/null | wc -l)
+    local gcc_files=$(find "$COMPILER_DIR" -name "*gcc*" -type f 2>/dev/null | wc -l)
+    local binutils_files=$(find "$COMPILER_DIR" -name "*binutils*" -o -name "*as*" -o -name "*ld*" -o -name "*ar*" 2>/dev/null | wc -l)
     
-    log ""
-    log "📊 编译器文件分类统计:"
-    log "  ARM架构: $arm_count 个文件"
-    log "  MIPS架构: $mips_count 个文件"
-    log "  MIPS小端: $mipsel_count 个文件"
-    log "  x86架构: $x86_count 个文件"
-    log "  x86_64架构: $x86_64_count 个文件"
-    log "  通用编译器: $generic_count 个文件"
-    log "  总计: $((arm_count + mips_count + mipsel_count + x86_count + x86_64_count + generic_count)) 个文件"
+    log "📊 文件统计:"
+    log "  总文件数: $total_files"
+    log "  GCC相关文件: $gcc_files"
+    log "  Binutils工具文件: $binutils_files"
     
-    log ""
-    log "📁 各目录详细内容:"
-    for arch_dir in arm mips mipsel x86 x86_64 generic; do
-        dir_path="$compiler_save_dir/$arch_dir"
-        if [ -d "$dir_path" ] && [ "$(ls -A "$dir_path" 2>/dev/null)" ]; then
-            local file_count=$(find "$dir_path" -type f | wc -l)
-            log "  $arch_dir 目录 ($file_count 个文件):"
-            ls "$dir_path" | head -5 | while read file; do
-                local size=$(stat -c%s "$dir_path/$file" 2>/dev/null || echo "0")
-                local size_kb=$((size / 1024))
-                log "    - $file (${size_kb}KB)"
-            done
-            if [ $file_count -gt 5 ]; then
-                log "    ... 还有 $((file_count - 5)) 个文件"
-            fi
-        else
-            log "  $arch_dir 目录: 空"
-        fi
-    done
-    
-    # 创建编译器信息文件
-    log ""
-    log "📝 创建编译器信息文件..."
-    cat > "$compiler_save_dir/compiler_info.txt" << EOF
-编译器文件汇总信息
-==================
-
-生成时间: $(date)
-构建设备: ${DEVICE:-未设置}
-目标平台: ${TARGET:-未设置}/${SUBTARGET:-未设置}
-OpenWrt版本: ${SELECTED_BRANCH:-未设置}
-GCC版本: ${GCC_VERSION:-8.4.0}
-Binutils版本: ${BINUTILS_VERSION:-2.35}
-编译器修复: 已应用头文件冲突修复
-GDB修复: 已修复common-defs.h和common-utils.c
-binutils修复: 已设置修复编译环境
-工具链修复: 已修复stamp目录和标记文件
-
-文件分类统计:
-------------
-ARM架构: $arm_count 个文件
-MIPS架构: $mips_count 个文件
-MIPS小端: $mipsel_count 个文件
-x86架构: $x86_count 个文件
-x86_64架构: $x86_64_count 个文件
-通用编译器: $generic_count 个文件
-总计: $((arm_count + mips_count + mipsel_count + x86_count + x86_64_count + generic_count)) 个文件
-EOF
-    
-    local total_size=$(du -sh "$compiler_save_dir" 2>/dev/null | cut -f1)
-    log ""
-    log "📦 编译器文件总目录大小: $total_size"
-    
-    # 创建编译器文件压缩包
-    log "📦 创建编译器文件压缩包..."
-    cd "$compiler_save_dir"
-    tar -czf "../compiled-compilers.tar.gz" ./*
-    cd - > /dev/null
-    
-    log "✅ 编译器文件收集完成"
-    log "📁 保存目录: $compiler_save_dir"
-    log "📦 压缩包: $(dirname "$compiler_save_dir")/compiled-compilers.tar.gz"
-    
-    # 提交到仓库（如果是在仓库环境中）
-    if [ -d "$REPO_ROOT/.git" ]; then
-        log "🔄 提交编译器文件到仓库目录..."
-        cd "$REPO_ROOT"
-        git config --local user.email "github-actions@github.com"
-        git config --local user.name "GitHub Actions"
-        git add firmware-config/build-Compiler-file/
-        
-        if git diff --cached --quiet -- firmware-config/build-Compiler-file/; then
-            log "ℹ️ 没有新的编译器文件需要提交"
-        else
-            log "📝 提交编译器文件到仓库..."
-            git commit -m "feat: 添加已编译的编译器文件" \
-                -m "设备: ${DEVICE:-未设置}" \
-                -m "平台: ${TARGET:-未设置}/${SUBTARGET:-未设置}" \
-                -m "版本: ${SELECTED_BRANCH:-未设置}" \
-                -m "GCC版本: ${GCC_VERSION:-8.4.0}" \
-                -m "Binutils版本: ${BINUTILS_VERSION:-2.35}" \
-                -m "GDB修复: 已修复common-defs.h" \
-                -m "binutils修复: 已设置修复编译环境" \
-                -m "工具链修复: 已修复stamp目录"
-            
-            log "🔄 推送到仓库..."
-            git push origin HEAD:${GITHUB_REF##*/} || log "⚠️ 推送失败，可能没有权限"
-        fi
+    # 检查目标平台对应的编译器
+    local target_compiler=""
+    if [ "$TARGET" = "ipq40xx" ]; then
+        log "🔍 检查ARM编译器 (IPQ40xx平台)"
+        target_compiler=$(find "$COMPILER_DIR" -name "*arm*" -o -name "*aarch64*" -type f 2>/dev/null | head -1)
+    elif [ "$TARGET" = "ramips" ]; then
+        log "🔍 检查MIPS编译器 (MT76xx平台)"
+        target_compiler=$(find "$COMPILER_DIR" -name "*mips*" -o -name "*mipsel*" -type f 2>/dev/null | head -1)
     fi
-}
-
-# 新增：运行错误分析函数
-run_error_analysis() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 运行错误分析 ==="
-    
-    # 检查错误分析脚本是否存在
-    local error_script="$REPO_ROOT/firmware-config/scripts/error_analysis.sh"
-    if [ -f "$error_script" ]; then
-        log "✅ 找到错误分析脚本: $error_script"
-        chmod +x "$error_script"
-        
-        # 运行错误分析
-        if "$error_script" "$BUILD_DIR"; then
-            log "✅ 错误分析完成"
-            
-            # 检查分析结果
-            if [ -f "error_analysis.log" ]; then
-                log "📊 错误分析报告已生成: error_analysis.log"
-                log "📋 报告摘要:"
-                grep -E "✅|❌|⚠️|🔧|🎉" error_analysis.log | head -10
-            fi
-        else
-            log "❌ 错误分析脚本执行失败"
-        fi
+    if [ -n "$target_compiler" ]; then
+        log "✅ 找到平台专用编译器: $(basename "$target_compiler")"
     else
-        log "⚠️ 错误分析脚本不存在，使用内置错误分析"
-        
-        # 内置简单错误分析
-        log "🔍 进行基本错误分析..."
-        
-        if [ -f "build.log" ]; then
-            local error_count=$(grep -c -i "error" build.log)
-            local warning_count=$(grep -c -i "warning" build.log)
-            
-            log "📊 基本分析结果:"
-            log "  错误数量: $error_count"
-            log "  警告数量: $warning_count"
-            
-            if [ $error_count -gt 0 ]; then
-                log "❌ 发现编译错误"
-                grep -i "error" build.log | head -5
-            else
-                log "✅ 未发现编译错误"
-            fi
-        else
-            log "⚠️ 未找到编译日志文件"
-        fi
+        log "⚠️ 未找到平台专用编译器"
     fi
+    
+    log "✅ 预构建编译器文件验证完成"
 }
 
 integrate_custom_files() {
@@ -688,15 +391,14 @@ pre_build_error_check() {
         fi
     fi
     
-    # 4. 检查编译器
+    # 4. 检查编译器状态
     if [ -d "staging_dir" ]; then
         local compiler_count=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" 2>/dev/null | wc -l)
         if [ $compiler_count -eq 0 ]; then
-            log "ℹ️ 未找到已构建的编译器，将在编译过程中自动构建"
-            log "📦 注意：编译器会从下载的依赖包自动构建，无需手动下载"
-            # 这只是信息，不是错误
+            log "ℹ️ 未找到已构建的编译器，将自动构建"
+            log "💡 注意：如果有预构建的编译器文件，OpenWrt会自动使用"
         else
-            log "✅ 已下载编译器: $compiler_count 个"
+            log "✅ 已检测到编译器: $compiler_count 个"
             
             # 检查编译器完整性
             local compiler_dir=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" | head -1)
@@ -711,7 +413,7 @@ pre_build_error_check() {
             fi
         fi
     else
-        log "ℹ️ staging_dir目录不存在，编译时将自动创建和构建编译器"
+        log "ℹ️ staging_dir目录不存在，编译时将自动创建"
     fi
     
     # 5. 检查关键文件
@@ -783,6 +485,10 @@ pre_build_error_check() {
             warning_count=$((warning_count + 1))
         fi
     fi
+    
+    # 11. 检查预构建编译器文件
+    log "🔧 检查预构建编译器文件..."
+    verify_compiler_files
     
     # 总结
     if [ $error_count -eq 0 ]; then
@@ -933,6 +639,7 @@ initialize_build_env() {
     echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
     echo "DEVICE=$DEVICE" >> $GITHUB_ENV
     echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
+    echo "COMPILER_DIR=$COMPILER_DIR" >> $GITHUB_ENV
     
     log "=== 克隆源码 ==="
     log "仓库: $SELECTED_REPO_URL"
@@ -1736,6 +1443,9 @@ build_firmware() {
         log "⚠️ 警告: dl 目录不存在"
     fi
     
+    # 检查预构建编译器文件
+    verify_compiler_files
+    
     # 获取CPU核心数
     local cpu_cores=$(nproc)
     local make_jobs=$cpu_cores
@@ -1751,7 +1461,7 @@ build_firmware() {
     fi
     
     # 开始编译（默认启用缓存）
-    log "启用编译缓存，使用 $make_jobs 个并行任务"
+    log "使用预构建编译器文件，启用编译缓存，使用 $make_jobs 个并行任务"
     make -j$make_jobs V=s 2>&1 | tee build.log
     BUILD_EXIT_CODE=${PIPESTATUS[0]}
     
@@ -1994,17 +1704,8 @@ main() {
         "save_source_code_info")
             save_source_code_info
             ;;
-        "download_compiler_files")
-            download_compiler_files
-            ;;
-        "check_compiler_dir_status")
-            check_compiler_dir_status "$2"
-            ;;
-        "collect_compiler_files")
-            collect_compiler_files "$2" "$3"
-            ;;
-        "run_error_analysis")
-            run_error_analysis
+        "verify_compiler_files")
+            verify_compiler_files
             ;;
         *)
             log "❌ 未知命令: $1"
@@ -2014,8 +1715,7 @@ main() {
             echo "  pre_build_space_check, generate_config, verify_usb_config, check_usb_drivers_integrity, apply_config"
             echo "  fix_network, download_dependencies, integrate_custom_files"
             echo "  pre_build_error_check, build_firmware, post_build_space_check"
-            echo "  check_firmware_files, cleanup, save_source_code_info, download_compiler_files"
-            echo "  check_compiler_dir_status, collect_compiler_files, run_error_analysis"
+            echo "  check_firmware_files, cleanup, save_source_code_info, verify_compiler_files"
             exit 1
             ;;
     esac
