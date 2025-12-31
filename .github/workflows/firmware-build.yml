@@ -23,7 +23,7 @@ on:
           🟣 基础模式 - 最小化配置，用于测试编译
           🟠 正常模式 - 完整功能配置：✅ TurboACC 网络加速 ✅ UPnP 自动端口转发 ✅ Samba 文件共享 ✅ 磁盘管理 ✅ KMS 激活服务 ✅ SmartDNS 智能DNS ✅ 家长控制 ✅ 微信推送 ✅ 流量控制 (SQM) ✅ FTP 服务器 ✅ ARP 绑定 ✅ CPU 限制 ✅ 硬盘休眠
           
-          🔧 USB 3.0加强：所有平台的关键USB驱动都已强制启用！
+          🔧 USB 3.0加强：所有关键USB驱动都已强制启用！
         required: true
         type: choice
         default: "normal"
@@ -45,7 +45,7 @@ on:
 
 env:
   BUILD_DIR: "/mnt/openwrt-build"
-  COMPILER_DIR: "${{ github.workspace }}/firmware-config/build-Compiler-file"
+  COMPILER_ROOT: "${{ github.workspace }}/firmware-config/build-Compiler-file"
 
 jobs:
   build-firmware:
@@ -146,55 +146,159 @@ jobs:
           find firmware-config/scripts -name "*.sh" -exec chmod +x {} \;
           echo "✅ 脚本执行权限设置完成"
       
-      # 步骤 5: 验证预构建编译器文件
-      - name: "5. 验证预构建编译器文件"
+      # 步骤 5: 搜索并验证预构建编译器文件
+      - name: "5. 搜索并验证预构建编译器文件"
         run: |
-          echo "=== 步骤 5: 验证预构建编译器文件 ==="
-          COMPILER_DIR="${{ env.COMPILER_DIR }}"
+          echo "=== 步骤 5: 搜索并验证预构建编译器文件 ==="
+          COMPILER_ROOT="${{ env.COMPILER_ROOT }}"
           
-          echo "🔍 检查预构建编译器文件目录..."
+          echo "🔍 开始搜索预构建编译器文件..."
+          echo "📁 搜索根目录: $COMPILER_ROOT"
           
-          if [ -d "$COMPILER_DIR" ]; then
-            echo "✅ 预构建编译器文件目录存在"
-            echo "📁 目录路径: $COMPILER_DIR"
-            echo "📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
+          # 首先检查根目录是否存在
+          if [ ! -d "$COMPILER_ROOT" ]; then
+            echo "⚠️ 编译器根目录不存在，正在搜索其他可能位置..."
             
-            # 显示目录结构
-            echo "📋 目录结构概览:"
-            find "$COMPILER_DIR" -maxdepth 2 -type d | sort | head -15
+            # 搜索可能的编译器目录
+            echo "🔎 正在搜索编译器文件..."
+            find "${{ github.workspace }}" -type d -name "*compiler*" -o -name "*toolchain*" -o -name "*gcc*" -o -name "*binutils*" 2>/dev/null | head -10 | while read dir; do
+              echo "  发现目录: $dir"
+              # 检查是否有编译器文件
+              if find "$dir" -name "*gcc*" -type f 2>/dev/null | head -1 >/dev/null; then
+                echo "  ✅ 可能包含编译器文件"
+              fi
+            done
             
-            # 检查编译器文件类型
-            echo "🔧 编译器文件类型检查:"
-            find "$COMPILER_DIR" -name "*gcc*" -type f 2>/dev/null | head -5 | while read file; do
-              echo "  🔍 $(basename "$file") ($(file "$file" | cut -d: -f2-))"
-            done || echo "  未找到gcc文件"
-            
-            # 检查交叉编译器
-            echo "🔄 交叉编译器检查:"
-            if [ "${{ github.event.inputs.device_name }}" = "ac42u" ] || [ "${{ github.event.inputs.device_name }}" = "acrh17" ]; then
-              echo "  🔧 目标平台: ARM (IPQ40xx)"
-              arm_compilers=$(find "$COMPILER_DIR" -name "*arm*" -type f 2>/dev/null | wc -l)
-              echo "  📊 ARM编译器文件: $arm_compilers 个"
-            elif [ "${{ github.event.inputs.device_name }}" = "mi_router_4a_gigabit" ] || [ "${{ github.event.inputs.device_name }}" = "r4ag" ] || [ "${{ github.event.inputs.device_name }}" = "mi_router_3g" ] || [ "${{ github.event.inputs.device_name }}" = "r3g" ]; then
-              echo "  🔧 目标平台: MIPS (MT76xx)"
-              mips_compilers=$(find "$COMPILER_DIR" -name "*mips*" -type f 2>/dev/null | wc -l)
-              echo "  📊 MIPS编译器文件: $mips_compilers 个"
-            fi
-            
-            # 列出可执行文件
-            echo "⚙️ 可执行文件检查:"
-            find "$COMPILER_DIR" -type f -executable 2>/dev/null | head -10 | while read exe; do
-              echo "  ✅ $(basename "$exe")"
-            done || echo "  未找到可执行文件"
-            
-          else
-            echo "❌ 错误: 预构建编译器文件目录不存在"
-            echo "📁 预期路径: $COMPILER_DIR"
-            echo "💡 请确保已上传预构建的编译器文件到该目录"
+            echo "❌ 未找到预构建编译器文件目录"
+            echo "💡 请确保已上传预构建的编译器文件到: $COMPILER_ROOT"
+            echo "💡 或者上传到 firmware-config/build-Compiler-file 目录"
             exit 1
           fi
           
-          echo "✅ 预构建编译器文件验证完成"
+          echo "✅ 编译器根目录存在"
+          echo "📊 根目录大小: $(du -sh "$COMPILER_ROOT" 2>/dev/null | cut -f1 || echo '未知')"
+          
+          # 列出所有子目录
+          echo "📂 编译器目录结构:"
+          find "$COMPILER_ROOT" -maxdepth 3 -type d 2>/dev/null | sort | head -20
+          
+          # 搜索编译器文件（加强模糊搜索）
+          echo "🔧 搜索编译器文件 (模糊搜索):"
+          
+          # 搜索各种编译器文件
+          declare -A compiler_files
+          
+          # GCC编译器
+          echo "1. 🔍 搜索GCC编译器:"
+          gcc_files=$(find "$COMPILER_ROOT" -type f \( -name "*gcc*" -o -name "*g++*" -o -name "*c++*" \) 2>/dev/null | wc -l)
+          echo "   找到 $gcc_files 个GCC相关文件"
+          if [ $gcc_files -gt 0 ]; then
+            find "$COMPILER_ROOT" -type f \( -name "*gcc*" -o -name "*g++*" -o -name "*c++*" \) 2>/dev/null | head -5 | while read file; do
+              echo "   ✅ $(basename "$file") - $(dirname "$file" | sed "s|$COMPILER_ROOT/||")"
+            done
+          fi
+          
+          # Binutils工具
+          echo "2. 🔍 搜索Binutils工具:"
+          binutils_files=$(find "$COMPILER_ROOT" -type f \( -name "*as*" -o -name "*ld*" -o -name "*ar*" -o -name "*strip*" -o -name "*objcopy*" -o -name "*objdump*" -o -name "*nm*" -o -name "*ranlib*" \) 2>/dev/null | wc -l)
+          echo "   找到 $binutils_files 个Binutils工具文件"
+          if [ $binutils_files -gt 0 ]; then
+            find "$COMPILER_ROOT" -type f \( -name "*as*" -o -name "*ld*" \) 2>/dev/null | head -3 | while read file; do
+              echo "   ✅ $(basename "$file") - $(dirname "$file" | sed "s|$COMPILER_ROOT/||")"
+            done
+          fi
+          
+          # 根据目标平台搜索交叉编译器
+          echo "3. 🔍 搜索交叉编译器 (基于设备平台):"
+          DEVICE_NAME="${{ github.event.inputs.device_name }}"
+          
+          if [[ "$DEVICE_NAME" =~ ^(ac42u|acrh17)$ ]]; then
+            echo "   🎯 目标平台: ARM (IPQ40xx)"
+            echo "   🔎 搜索ARM交叉编译器..."
+            arm_files=$(find "$COMPILER_ROOT" -type f \( -name "*arm*" -o -name "*aarch64*" \) 2>/dev/null | wc -l)
+            echo "   找到 $arm_files 个ARM相关文件"
+            if [ $arm_files -gt 0 ]; then
+              find "$COMPILER_ROOT" -type f \( -name "*arm*" -o -name "*aarch64*" \) 2>/dev/null | head -5 | while read file; do
+                echo "   ✅ $(basename "$file") - $(dirname "$file" | sed "s|$COMPILER_ROOT/||")"
+              done
+            fi
+          elif [[ "$DEVICE_NAME" =~ ^(mi_router_4a_gigabit|r4ag|mi_router_3g|r3g)$ ]]; then
+            echo "   🎯 目标平台: MIPS (MT76xx)"
+            echo "   🔎 搜索MIPS交叉编译器..."
+            mips_files=$(find "$COMPILER_ROOT" -type f \( -name "*mips*" -o -name "*mipsel*" \) 2>/dev/null | wc -l)
+            echo "   找到 $mips_files 个MIPS相关文件"
+            if [ $mips_files -gt 0 ]; then
+              find "$COMPILER_ROOT" -type f \( -name "*mips*" -o -name "*mipsel*" \) 2>/dev/null | head -5 | while read file; do
+                echo "   ✅ $(basename "$file") - $(dirname "$file" | sed "s|$COMPILER_ROOT/||")"
+              done
+            fi
+          else
+            echo "   ⚠️ 未知设备，搜索通用编译器..."
+            generic_files=$(find "$COMPILER_ROOT" -type f -name "*gcc*" 2>/dev/null | wc -l)
+            echo "   找到 $generic_files 个通用编译器文件"
+          fi
+          
+          # 检查可执行文件
+          echo "4. 🔍 检查可执行文件:"
+          executable_files=$(find "$COMPILER_ROOT" -type f -executable 2>/dev/null | wc -l)
+          echo "   找到 $executable_files 个可执行文件"
+          if [ $executable_files -gt 0 ]; then
+            find "$COMPILER_ROOT" -type f -executable 2>/dev/null | head -5 | while read file; do
+              echo "   ⚙️ $(basename "$file") - $(file "$file" | cut -d: -f2-)"
+            done
+          fi
+          
+          # 统计总文件数
+          echo "5. 📊 编译器文件统计:"
+          total_files=$(find "$COMPILER_ROOT" -type f 2>/dev/null | wc -l)
+          total_dirs=$(find "$COMPILER_ROOT" -type d 2>/dev/null | wc -l)
+          echo "   总目录数: $total_dirs"
+          echo "   总文件数: $total_files"
+          
+          # 按文件类型统计
+          echo "   📁 按类型统计:"
+          echo "     .tar.gz/.tar.xz: $(find "$COMPILER_ROOT" -type f \( -name "*.tar.gz" -o -name "*.tar.xz" -o -name "*.tgz" \) 2>/dev/null | wc -l)"
+          echo "     .sh脚本文件: $(find "$COMPILER_ROOT" -type f -name "*.sh" 2>/dev/null | wc -l)"
+          echo "     配置文件: $(find "$COMPILER_ROOT" -type f \( -name "*.conf" -o -name "*.config" -o -name "*.cfg" \) 2>/dev/null | wc -l)"
+          
+          # 设置编译器环境变量供后续步骤使用
+          echo "🔄 设置编译器环境变量..."
+          
+          # 寻找可能的编译器目录（优先级：arm > mips > generic）
+          COMPILER_DIR=""
+          
+          if [[ "$DEVICE_NAME" =~ ^(ac42u|acrh17)$ ]]; then
+            # 搜索ARM编译器目录
+            COMPILER_DIR=$(find "$COMPILER_ROOT" -type d \( -name "*arm*" -o -name "*aarch64*" \) 2>/dev/null | head -1)
+            if [ -n "$COMPILER_DIR" ]; then
+              echo "✅ 找到ARM编译器目录: $COMPILER_DIR"
+            fi
+          elif [[ "$DEVICE_NAME" =~ ^(mi_router_4a_gigabit|r4ag|mi_router_3g|r3g)$ ]]; then
+            # 搜索MIPS编译器目录
+            COMPILER_DIR=$(find "$COMPILER_ROOT" -type d \( -name "*mips*" -o -name "*mipsel*" \) 2>/dev/null | head -1)
+            if [ -n "$COMPILER_DIR" ]; then
+              echo "✅ 找到MIPS编译器目录: $COMPILER_DIR"
+            fi
+          fi
+          
+          # 如果没找到特定平台目录，找通用目录
+          if [ -z "$COMPILER_DIR" ]; then
+            COMPILER_DIR=$(find "$COMPILER_ROOT" -type d -name "compiler*" -o -name "toolchain*" -o -name "gcc*" 2>/dev/null | head -1)
+            if [ -n "$COMPILER_DIR" ]; then
+              echo "✅ 找到通用编译器目录: $COMPILER_DIR"
+            else
+              # 使用根目录
+              COMPILER_DIR="$COMPILER_ROOT"
+              echo "ℹ️ 使用编译器根目录: $COMPILER_DIR"
+            fi
+          fi
+          
+          # 设置环境变量
+          echo "COMPILER_DIR=$COMPILER_DIR" >> $GITHUB_ENV
+          echo "COMPILER_ROOT=$COMPILER_ROOT" >> $GITHUB_ENV
+          
+          echo "✅ 编译器文件搜索验证完成"
+          echo "📌 将使用的编译器目录: $COMPILER_DIR"
       
       # 步骤 6: 初始空间检查
       - name: "6. 初始空间检查"
@@ -403,8 +507,8 @@ jobs:
           echo "=== 步骤 19: 集成自定义文件 ==="
           firmware-config/scripts/build_firmware_main.sh integrate_custom_files
       
-      # 步骤 20: 前置错误检查
-      - name: "20. 前置错误检查"
+      # 步骤 20: 前置错误检查（包含编译器验证）
+      - name: "20. 前置错误检查（包含编译器验证）"
         run: |
           echo "=== 步骤 20: 前置错误检查 ==="
           firmware-config/scripts/build_firmware_main.sh pre_build_error_check
@@ -428,28 +532,33 @@ jobs:
             echo "✅ 编译前空间充足"
           fi
       
-      # 步骤 22: 编译固件
-      - name: "22. 编译固件"
+      # 步骤 22: 编译固件（使用预构建编译器）
+      - name: "22. 编译固件（使用预构建编译器）"
         run: |
           echo "=== 步骤 22: 编译固件 ==="
-          echo "🔧 使用预构建编译器文件进行编译..."
+          echo "🔧 检查并调用预构建编译器..."
           
-          # 验证预构建编译器可用性
-          COMPILER_DIR="${{ env.COMPILER_DIR }}"
-          echo "📁 预构建编译器目录: $COMPILER_DIR"
+          # 检查预构建编译器调用状态
+          echo "📌 编译器调用状态:"
+          echo "  编译器根目录: ${{ env.COMPILER_ROOT }}"
+          echo "  编译器目录: ${{ env.COMPILER_DIR }}"
           
-          if [ -d "$COMPILER_DIR" ]; then
-            echo "✅ 预构建编译器文件存在"
-            # 列出可用的编译器文件
-            echo "🔍 可用编译器文件:"
-            find "$COMPILER_DIR" -name "*gcc*" -type f -executable 2>/dev/null | head -5 | while read file; do
-              echo "  ✅ $(basename "$file")"
-            done || echo "  ⚠️ 未找到可执行gcc文件"
-          else
-            echo "⚠️ 预构建编译器目录不存在，将使用系统自动构建的编译器"
+          # 显示编译器目录内容
+          if [ -d "${{ env.COMPILER_DIR }}" ]; then
+            echo "📁 编译器目录内容:"
+            ls -la "${{ env.COMPILER_DIR }}" 2>/dev/null | head -10 || echo "  无法列出目录内容"
+            
+            # 检查是否有可执行的编译器
+            echo "🔍 查找可执行的编译器:"
+            find "${{ env.COMPILER_DIR }}" -type f -executable -name "*gcc*" 2>/dev/null | head -5 | while read compiler; do
+              echo "  ✅ 找到编译器: $(basename "$compiler")"
+              echo "     路径: $(dirname "$compiler")"
+              echo "     大小: $(du -h "$compiler" | cut -f1)"
+            done
           fi
           
           # 启用编译缓存，使用并行编译
+          echo "🚀 开始编译固件..."
           firmware-config/scripts/build_firmware_main.sh build_firmware "true"
       
       # 步骤 23: 搜索并打包构建产物
@@ -497,6 +606,8 @@ jobs:
           echo "版本: ${{ env.SELECTED_BRANCH }}" >> /tmp/build-artifacts/build-info.txt
           echo "目标平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}" >> /tmp/build-artifacts/build-info.txt
           echo "配置模式: ${{ github.event.inputs.config_mode }}" >> /tmp/build-artifacts/build-info.txt
+          echo "编译器目录: ${{ env.COMPILER_DIR }}" >> /tmp/build-artifacts/build-info.txt
+          echo "编译器根目录: ${{ env.COMPILER_ROOT }}" >> /tmp/build-artifacts/build-info.txt
           
           if [ "$need_upload" = true ]; then
             echo "✅ 构建产物准备完成"
