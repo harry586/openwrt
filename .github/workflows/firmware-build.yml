@@ -17,13 +17,7 @@ on:
           - "23.05"
           - "21.02"
       config_mode:
-        description: |
-          ⚙️ 配置模式选择
-          
-          🟣 基础模式 - 最小化配置，用于测试编译
-          🟠 正常模式 - 完整功能配置：✅ TurboACC 网络加速 ✅ UPnP 自动端口转发 ✅ Samba 文件共享 ✅ 磁盘管理 ✅ KMS 激活服务 ✅ SmartDNS 智能DNS ✅ 家长控制 ✅ 微信推送 ✅ 流量控制 (SQM) ✅ FTP 服务器 ✅ ARP 绑定 ✅ CPU 限制 ✅ 硬盘休眠
-          
-          🔧 USB 3.0加强：所有关键USB驱动都已强制启用！
+        description: "⚙️ 配置模式选择 - 🟣 基础模式 - 最小化配置，用于测试编译。🟠 正常模式 - 完整功能配置"
         required: true
         type: choice
         default: "normal"
@@ -31,9 +25,7 @@ on:
           - "base"
           - "normal"
       extra_packages:
-        description: |
-          额外安装插件
-          格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。
+        description: "额外安装插件 - 格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。"
         required: false
         type: string
         default: ""
@@ -53,68 +45,125 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      # 步骤 1: 使用稀疏检出下载源代码（只排除编译器文件）
-      - name: "1. 使用稀疏检出下载源代码"
+      # 步骤 1: 使用Git LFS稀疏检出下载源代码（最小化）
+      - name: "1. 使用Git LFS稀疏检出下载源代码"
         if: github.event.inputs.use_git_archive == 'true'
         run: |
-          echo "=== 步骤 1: 使用稀疏检出下载源代码 ==="
-          echo "🔄 使用Git稀疏检出，只排除编译器文件..."
+          echo "=== 步骤 1: 使用Git LFS稀疏检出下载源代码 ==="
+          echo "🔄 使用Git LFS稀疏检出，最小化下载..."
           
           # 创建工作区目录
           mkdir -p ${{ github.workspace }}
           cd ${{ github.workspace }}
           
-          # 初始化Git仓库
+          # 配置Git
+          git config --global init.defaultBranch main
+          
+          # 初始化Git仓库（不拉取历史）
+          echo "初始化Git仓库..."
           git init
           git remote add origin "https://github.com/${{ github.repository }}.git"
+          
+          # 启用稀疏检出
           git config core.sparseCheckout true
           
-          # 创建稀疏检出规则文件（只排除编译器目录）
+          # 创建稀疏检出规则文件
           echo "创建稀疏检出规则..."
-          cat > .git/info/sparse-checkout << 'EOF'
-          # 包含所有文件和目录
-          /*
+          echo "# 包含所有文件和目录" > .git/info/sparse-checkout
+          echo "/*" >> .git/info/sparse-checkout
+          echo "" >> .git/info/sparse-checkout
+          echo "# 排除编译器目录" >> .git/info/sparse-checkout
+          echo "!firmware-config/build-Compiler-file/" >> .git/info/sparse-checkout
           
-          # 只排除编译器文件目录
-          !firmware-config/build-Compiler-file/
-          EOF
+          # 配置不拉取历史
+          git config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
+          git config fetch.unpackLimit 1
           
-          # 拉取代码（只拉取当前分支，不包含历史）
-          echo "拉取源代码..."
-          git pull origin main --depth=1
+          # 只拉取最新提交，不拉取历史
+          echo "拉取最新源代码（不包含历史）..."
+          git fetch origin main --depth=1
+          git checkout main
+          
+          # 清理.git目录（减小大小）
+          echo "清理.git目录..."
+          rm -rf .git/logs .git/refs/tags .git/refs/remotes
+          find .git/objects -type f | head -100 | xargs rm -f 2>/dev/null || true
           
           # 确保编译器目录存在（空目录）
           mkdir -p firmware-config/build-Compiler-file
           
-          # 显示目录结构
-          echo "📁 目录结构:"
-          find . -maxdepth 3 -type d | sort | head -20
+          # 显示实际文件大小（排除.git目录）
+          echo "📊 实际源代码大小（排除.git）: $(du -sh --exclude=.git . | cut -f1)"
+          echo "📊 文件数量: $(find . -type f ! -path "./.git/*" | wc -l)"
           
-          # 检查工作区大小
-          echo "📊 工作区大小: $(du -sh . | cut -f1)"
-          echo "📊 文件数量: $(find . -type f | wc -l)"
+          # 列出实际源代码文件
+          echo "📁 实际源代码目录结构:"
+          find . -maxdepth 3 -type d ! -path "./.git/*" ! -path "./firmware-config/build-Compiler-file/*" | sort | head -20
           
-          echo "✅ 稀疏检出下载完成"
+          echo "✅ Git LFS稀疏检出下载完成"
       
-      # 步骤 2: 检查Git源代码大小（改为10MB限制）
-      - name: "2. 检查Git源代码大小"
+      # 步骤 2: 修复检查脚本为10MB限制
+      - name: "2. 修复检查脚本为10MB限制"
         if: github.event.inputs.use_git_archive == 'true'
         run: |
-          echo "=== 步骤 2: 检查Git源代码大小（10MB限制）==="
+          echo "=== 步骤 2: 修复检查脚本为10MB限制 ==="
           
-          # 使用脚本的检查功能
-          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
-            # 创建临时修改版本为10MB限制
-            cp firmware-config/scripts/build_firmware_main.sh /tmp/check_script.sh
-            sed -i 's/size_limit=\$((2 \* 1024 \* 1024))/size_limit=\$((10 \* 1024 \* 1024))/g' /tmp/check_script.sh
-            sed -i 's/大小限制: \$size_limit 字节 (2MB)/大小限制: \$size_limit 字节 (10MB)/g' /tmp/check_script.sh
-            sed -i 's/限制大小: 2048KB/限制大小: 10240KB/g' /tmp/check_script.sh
-            
-            # 运行检查
-            bash /tmp/check_script.sh check_git_source_size
-          else
-            echo "⚠️ 脚本文件不存在，手动检查大小..."
-          fi
+          # 创建检查脚本文件
+          echo '#!/bin/bash' > /tmp/check_real_source_size.sh
+          echo 'set -e' >> /tmp/check_real_source_size.sh
+          echo '' >> /tmp/check_real_source_size.sh
+          echo 'REPO_ROOT="${{ github.workspace }}"' >> /tmp/check_real_source_size.sh
+          echo '' >> /tmp/check_real_source_size.sh
+          echo 'echo "=== 检查实际源代码大小（排除.git和编译器文件）==="' >> /tmp/check_real_source_size.sh
+          echo '' >> /tmp/check_real_source_size.sh
+          echo '# 计算实际源代码大小（排除.git目录和编译器文件）' >> /tmp/check_real_source_size.sh
+          echo 'echo "计算实际源代码大小..."' >> /tmp/check_real_source_size.sh
+          echo 'REAL_SIZE=0' >> /tmp/check_real_source_size.sh
+          echo 'while IFS= read -r -d "" file; do' >> /tmp/check_real_source_size.sh
+          echo '    if [ -f "$file" ]; then' >> /tmp/check_real_source_size.sh
+          echo '        size=$(stat -c%s "$file" 2>/dev/null || echo "0")' >> /tmp/check_real_source_size.sh
+          echo '        REAL_SIZE=$((REAL_SIZE + size))' >> /tmp/check_real_source_size.sh
+          echo '    fi' >> /tmp/check_real_source_size.sh
+          echo 'done < <(find "$REPO_ROOT" -type f ! -path "*/.git/*" ! -path "*/firmware-config/build-Compiler-file/*" -print0 2>/dev/null)' >> /tmp/check_real_source_size.sh
+          echo '' >> /tmp/check_real_source_size.sh
+          echo 'echo "实际源代码目录: $REPO_ROOT"' >> /tmp/check_real_source_size.sh
+          echo 'echo "实际源代码大小: $REAL_SIZE 字节 ($((REAL_SIZE / 1024))KB)"' >> /tmp/check_real_source_size.sh
+          echo 'echo "大小限制: 10485760 字节 (10MB)"' >> /tmp/check_real_source_size.sh
+          echo '' >> /tmp/check_real_source_size.sh
+          echo '# 显示详细目录大小（只显示实际源代码目录）' >> /tmp/check_real_source_size.sh
+          echo 'echo ""' >> /tmp/check_real_source_size.sh
+          echo 'echo "📊 实际源代码目录大小详情:"' >> /tmp/check_real_source_size.sh
+          echo 'echo "总大小: $(du -sh "$REPO_ROOT" --exclude=.git --exclude="firmware-config/build-Compiler-file" 2>/dev/null | cut -f1 || echo "未知")"' >> /tmp/check_real_source_size.sh
+          echo '' >> /tmp/check_real_source_size.sh
+          echo 'echo ""' >> /tmp/check_real_source_size.sh
+          echo 'echo "前10大文件（排除.git和编译器文件）:"' >> /tmp/check_real_source_size.sh
+          echo 'find "$REPO_ROOT" -type f ! -path "*/.git/*" ! -path "*/firmware-config/build-Compiler-file/*" -exec du -h {} \; 2>/dev/null | sort -hr | head -10' >> /tmp/check_real_source_size.sh
+          echo '' >> /tmp/check_real_source_size.sh
+          echo 'echo ""' >> /tmp/check_real_source_size.sh
+          echo 'echo "前10大目录（排除.git和编译器文件）:"' >> /tmp/check_real_source_size.sh
+          echo 'du -h --max-depth=3 "$REPO_ROOT" --exclude=.git --exclude="firmware-config/build-Compiler-file" 2>/dev/null | sort -hr | head -10' >> /tmp/check_real_source_size.sh
+          echo '' >> /tmp/check_real_source_size.sh
+          echo '# 10MB检查' >> /tmp/check_real_source_size.sh
+          echo 'SIZE_LIMIT=$((10 * 1024 * 1024))' >> /tmp/check_real_source_size.sh
+          echo '' >> /tmp/check_real_source_size.sh
+          echo 'echo ""' >> /tmp/check_real_source_size.sh
+          echo 'echo "=== 检查结果 ==="' >> /tmp/check_real_source_size.sh
+          echo 'if [ $REAL_SIZE -gt $SIZE_LIMIT ]; then' >> /tmp/check_real_source_size.sh
+          echo '    echo "❌ 错误: 实际源代码大小超过10MB限制"' >> /tmp/check_real_source_size.sh
+          echo '    echo "当前大小: $((REAL_SIZE / 1024))KB"' >> /tmp/check_real_source_size.sh
+          echo '    echo "限制大小: 10240KB"' >> /tmp/check_real_source_size.sh
+          echo '    echo "超出: $((REAL_SIZE - SIZE_LIMIT)) 字节 ($((($REAL_SIZE - SIZE_LIMIT) / 1024))KB)"' >> /tmp/check_real_source_size.sh
+          echo '    exit 1' >> /tmp/check_real_source_size.sh
+          echo 'else' >> /tmp/check_real_source_size.sh
+          echo '    echo "✅ 实际源代码大小检查通过: $((REAL_SIZE / 1024))KB < 10240KB"' >> /tmp/check_real_source_size.sh
+          echo 'fi' >> /tmp/check_real_source_size.sh
+          echo '' >> /tmp/check_real_source_size.sh
+          echo 'echo "✅ 检查完成"' >> /tmp/check_real_source_size.sh
+          
+          chmod +x /tmp/check_real_source_size.sh
+          
+          # 运行检查
+          /tmp/check_real_source_size.sh
       
       # 步骤 3: 立即上传Git Archive源代码
       - name: "3. 立即上传Git Archive源代码"
@@ -130,38 +179,44 @@ jobs:
         if: github.event.inputs.use_git_archive == 'true'
         run: |
           echo "=== 步骤 4: 最终验证源代码大小 ==="
-          echo "🔄 最终验证源代码大小..."
+          echo "🔄 最终验证实际源代码大小..."
           
           REPO_ROOT="${{ github.workspace }}"
-          TOTAL_SIZE=$(du -sb "$REPO_ROOT" 2>/dev/null | awk '{print $1}' || echo "0")
+          
+          # 计算实际源代码大小
+          REAL_SIZE=0
+          while IFS= read -r -d '' file; do
+              if [ -f "$file" ]; then
+                  size=$(stat -c%s "$file" 2>/dev/null || echo "0")
+                  REAL_SIZE=$((REAL_SIZE + size))
+              fi
+          done < <(find "$REPO_ROOT" -type f ! -path "*/.git/*" ! -path "*/firmware-config/build-Compiler-file/*" -print0 2>/dev/null)
+          
           SIZE_LIMIT=$((10 * 1024 * 1024))
           
-          echo "最终检查 - 总大小: $((TOTAL_SIZE / 1024))KB"
+          echo "最终检查 - 实际源代码大小: $((REAL_SIZE / 1024))KB"
           
-          if [ $TOTAL_SIZE -gt $SIZE_LIMIT ]; then
-            echo "⚠️ 最终检查: 大小超过10MB建议限制"
+          if [ $REAL_SIZE -gt $SIZE_LIMIT ]; then
+            echo "❌ 最终检查失败: 实际源代码大小超过10MB限制"
+            exit 1
           else
-            echo "✅ 最终检查通过: $((TOTAL_SIZE / 1024))KB < 10240KB"
+            echo "✅ 最终检查通过: $((REAL_SIZE / 1024))KB < 10240KB"
           fi
       
-      # 步骤 5: 检出配置仓库（当不使用Git Archive时）
+      # 步骤 5: 检出配置仓库
       - name: "5. 检出配置仓库"
         if: github.event.inputs.use_git_archive == 'false'
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          submodules: recursive
+          fetch-depth: 1
       
       # 步骤 6: 检查并准备编译器目录
       - name: "6. 检查并准备编译器目录"
-        run: |
-          echo "=== 步骤 6: 检查并准备编译器目录 ==="
-          firmware-config/scripts/build_firmware_main.sh check_and_prepare_compiler_dir
+        run: firmware-config/scripts/build_firmware_main.sh check_and_prepare_compiler_dir
       
       # 步骤 7: 设置脚本执行权限
       - name: "7. 设置脚本执行权限"
         run: |
-          echo "=== 步骤 7: 设置脚本执行权限 ==="
           find firmware-config/scripts -name "*.sh" -exec chmod +x {} \;
           echo "✅ 脚本执行权限设置完成"
       
@@ -211,9 +266,6 @@ jobs:
           # 检查编译器目录是否存在
           if [ ! -d "$COMPILER_ROOT" ]; then
             echo "❌ 错误: 编译器根目录不存在: $COMPILER_ROOT"
-            echo "请确保 firmware-config/build-Compiler-file 目录存在"
-            echo "当前目录结构:"
-            ls -la "$REPO_ROOT/firmware-config/" 2>/dev/null || echo "无法列出目录"
             exit 1
           fi
           
@@ -329,15 +381,11 @@ jobs:
             fi
           else
             echo "❌ 未找到可执行的GCC编译器"
-            echo "  在目录 $COMPILER_DIR 中搜索:"
-            find "$COMPILER_DIR" -type f -name "*gcc*" 2>/dev/null | head -5
           fi
           
           # 检查是否包含bin目录
           if [ -d "$COMPILER_DIR/bin" ]; then
             echo "✅ 编译器包含bin目录"
-            echo "🔧 bin目录内容(前10个):"
-            ls "$COMPILER_DIR/bin" | head -10
           fi
           
           echo "✅ 编译器查找完成"
@@ -377,28 +425,20 @@ jobs:
       
       # 步骤 11: 添加 TurboACC 支持
       - name: "11. 添加 TurboACC 支持"
-        run: |
-          echo "=== 步骤 11: 添加 TurboACC 支持 ==="
-          firmware-config/scripts/build_firmware_main.sh add_turboacc_support
+        run: firmware-config/scripts/build_firmware_main.sh add_turboacc_support
       
       # 步骤 12: 配置Feeds
       - name: "12. 配置Feeds"
-        run: |
-          echo "=== 步骤 12: 配置Feeds ==="
-          firmware-config/scripts/build_firmware_main.sh configure_feeds
+        run: firmware-config/scripts/build_firmware_main.sh configure_feeds
       
       # 步骤 13: 安装 TurboACC 包
       - name: "13. 安装 TurboACC 包"
         if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
-        run: |
-          echo "=== 步骤 13: 安装 TurboACC 包 ==="
-          firmware-config/scripts/build_firmware_main.sh install_turboacc_packages
+        run: firmware-config/scripts/build_firmware_main.sh install_turboacc_packages
       
       # 步骤 14: 编译前空间检查
       - name: "14. 编译前空间检查"
-        run: |
-          echo "=== 步骤 14: 编译前空间检查 ==="
-          firmware-config/scripts/build_firmware_main.sh pre_build_space_check
+        run: firmware-config/scripts/build_firmware_main.sh pre_build_space_check
       
       # 步骤 15: 智能配置生成（USB完全修复加强版）
       - name: "15. 智能配置生成（USB完全修复加强版）"
@@ -409,15 +449,11 @@ jobs:
       
       # 步骤 16: 验证USB配置
       - name: "16. 验证USB配置"
-        run: |
-          echo "=== 步骤 16: 验证USB配置 ==="
-          firmware-config/scripts/build_firmware_main.sh verify_usb_config
+        run: firmware-config/scripts/build_firmware_main.sh verify_usb_config
       
       # 步骤 17: USB驱动完整性检查
       - name: "17. USB驱动完整性检查"
-        run: |
-          echo "=== 步骤 17: USB驱动完整性检查 ==="
-          firmware-config/scripts/build_firmware_main.sh check_usb_drivers_integrity
+        run: firmware-config/scripts/build_firmware_main.sh check_usb_drivers_integrity
       
       # 步骤 18: 应用配置并显示详情
       - name: "18. 应用配置并显示详情"
@@ -438,21 +474,20 @@ jobs:
           cd "${{ env.BUILD_DIR }}"
           
           # 定义正常模式的完整插件列表
-          declare -A normal_plugins=(
-            ["TurboACC 网络加速"]="luci-app-turboacc"
-            ["UPnP 自动端口转发"]="luci-app-upnp"
-            ["Samba 文件共享"]="luci-app-samba4"
-            ["磁盘管理"]="luci-app-diskman"
-            ["KMS 激活服务"]="luci-app-vlmcsd"
-            ["SmartDNS 智能DNS"]="luci-app-smartdns"
-            ["家长控制"]="luci-app-accesscontrol"
-            ["微信推送"]="luci-app-wechatpush"
-            ["流量控制 (SQM)"]="luci-app-sqm"
-            ["FTP 服务器"]="luci-app-vsftpd"
-            ["ARP 绑定"]="luci-app-arpbind"
-            ["CPU 限制"]="luci-app-cpulimit"
-            ["硬盘休眠"]="luci-app-hd-idle"
-          )
+          declare -A normal_plugins
+          normal_plugins["TurboACC 网络加速"]="luci-app-turboacc"
+          normal_plugins["UPnP 自动端口转发"]="luci-app-upnp"
+          normal_plugins["Samba 文件共享"]="luci-app-samba4"
+          normal_plugins["磁盘管理"]="luci-app-diskman"
+          normal_plugins["KMS 激活服务"]="luci-app-vlmcsd"
+          normal_plugins["SmartDNS 智能DNS"]="luci-app-smartdns"
+          normal_plugins["家长控制"]="luci-app-accesscontrol"
+          normal_plugins["微信推送"]="luci-app-wechatpush"
+          normal_plugins["流量控制 (SQM)"]="luci-app-sqm"
+          normal_plugins["FTP 服务器"]="luci-app-vsftpd"
+          normal_plugins["ARP 绑定"]="luci-app-arpbind"
+          normal_plugins["CPU 限制"]="luci-app-cpulimit"
+          normal_plugins["硬盘休眠"]="luci-app-hd-idle"
           
           echo "📋 正常模式插件状态检查:"
           
@@ -519,7 +554,8 @@ jobs:
             mkdir -p firmware-config/config-backup
             
             # 备份到仓库目录
-            backup_file="firmware-config/config-backup/config_${{ github.event.inputs.device_name }}_${{ env.SELECTED_BRANCH }}_${{ github.event.inputs.config_mode }}_$(date +%Y%m%d_%H%M%S).config"
+            timestamp=$(date +%Y%m%d_%H%M%S)
+            backup_file="firmware-config/config-backup/config_${{ github.event.inputs.device_name }}_${{ env.SELECTED_BRANCH }}_${{ github.event.inputs.config_mode }}_$timestamp.config"
             
             cp "${{ env.BUILD_DIR }}/.config" "$backup_file"
             echo "✅ 配置文件备份到仓库目录: $backup_file"
@@ -533,27 +569,19 @@ jobs:
       
       # 步骤 20: 修复网络环境
       - name: "20. 修复网络环境"
-        run: |
-          echo "=== 步骤 20: 修复网络环境 ==="
-          firmware-config/scripts/build_firmware_main.sh fix_network
+        run: firmware-config/scripts/build_firmware_main.sh fix_network
       
       # 步骤 21: 下载依赖包
       - name: "21. 下载依赖包"
-        run: |
-          echo "=== 步骤 21: 下载依赖包 ==="
-          firmware-config/scripts/build_firmware_main.sh download_dependencies
+        run: firmware-config/scripts/build_firmware_main.sh download_dependencies
       
       # 步骤 22: 集成自定义文件
       - name: "22. 集成自定义文件"
-        run: |
-          echo "=== 步骤 22: 集成自定义文件 ==="
-          firmware-config/scripts/build_firmware_main.sh integrate_custom_files
+        run: firmware-config/scripts/build_firmware_main.sh integrate_custom_files
       
       # 步骤 23: 前置错误检查（包含编译器验证）
       - name: "23. 前置错误检查（包含编译器验证）"
-        run: |
-          echo "=== 步骤 23: 前置错误检查 ==="
-          firmware-config/scripts/build_firmware_main.sh pre_build_error_check
+        run: firmware-config/scripts/build_firmware_main.sh pre_build_error_check
       
       # 步骤 24: 编译固件前的空间检查
       - name: "24. 编译固件前的空间检查"
@@ -574,8 +602,8 @@ jobs:
             echo "✅ 编译前空间充足"
           fi
       
-      # 步骤 25: 编译固件（使用改进的编译器搜索和调用）
-      - name: "25. 编译固件（使用改进的编译器搜索和调用）"
+      # 步骤 25: 编译固件
+      - name: "25. 编译固件"
         run: |
           echo "=== 步骤 25: 编译固件 ==="
           echo "🔧 使用改进的编译器搜索和调用功能..."
@@ -584,14 +612,6 @@ jobs:
           echo "📌 编译器调用信息:"
           echo "  编译器根目录: ${{ env.COMPILER_ROOT }}"
           echo "  编译器目录: ${{ env.COMPILER_DIR }}"
-          
-          # 验证编译器完整性
-          echo "🔍 验证编译器..."
-          firmware-config/scripts/build_firmware_main.sh verify_compiler_files
-          
-          # 检查编译器调用状态
-          echo "🔍 检查编译器调用状态..."
-          firmware-config/scripts/build_firmware_main.sh check_compiler_invocation
           
           echo "🚀 开始编译，将尝试调用预构建编译器..."
           
@@ -672,16 +692,12 @@ jobs:
           path: ${{ github.workspace }}/firmware-config/config-backup/
           retention-days: 7
       
-      # 步骤 29: 错误分析（无论成功失败都运行）
+      # 步骤 29: 错误分析
       - name: "29. 错误分析"
         if: always()
-        run: |
-          echo "=== 步骤 29: 错误分析 ==="
-          firmware-config/scripts/error_analysis.sh
+        run: firmware-config/scripts/error_analysis.sh
       
       # 步骤 30: 编译后空间检查
       - name: "30. 编译后空间检查"
         if: always()
-        run: |
-          echo "=== 步骤 30: 编译后空间检查 ==="
-          firmware-config/scripts/build_firmware_main.sh post_build_space_check
+        run: firmware-config/scripts/build_firmware_main.sh post_build_space_check
