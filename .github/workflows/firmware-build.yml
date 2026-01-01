@@ -53,11 +53,11 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      # 步骤 1: 使用Git Archive API下载源代码（排除编译器文件）
-      - name: "1. 使用Git Archive API下载源代码（排除编译器文件）"
+      # 步骤 1: 使用Git Archive API下载源代码（浅层，最小化）
+      - name: "1. 使用Git Archive API下载最小化源代码"
         if: github.event.inputs.use_git_archive == 'true'
         run: |
-          echo "=== 步骤 1: 使用Git Archive API下载源代码 ==="
+          echo "=== 步骤 1: 使用Git Archive API下载最小化源代码 ==="
           echo "🔄 从GitHub API获取源代码压缩包"
           
           # 创建临时目录
@@ -68,9 +68,11 @@ jobs:
           DEFAULT_BRANCH=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}" | jq -r '.default_branch')
           echo "默认分支: $DEFAULT_BRANCH"
           
-          # 使用Git Archive API下载压缩包
+          # 使用Git Archive API下载压缩包（浅层下载）
           echo "下载源代码压缩包..."
-          curl -s -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}/tarball/$DEFAULT_BRANCH" -o source.tar.gz
+          curl -s -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/tarball/$DEFAULT_BRANCH" \
+            -o source.tar.gz
           
           if [ ! -f "source.tar.gz" ]; then
             echo "❌ 下载源代码压缩包失败"
@@ -83,132 +85,109 @@ jobs:
           echo "解压源代码..."
           tar -xzf source.tar.gz --strip-components=1
           
-          # 检查解压结果
-          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
-            echo "✅ 源代码解压成功"
-            echo "重要文件存在: firmware-config/scripts/build_firmware_main.sh"
+          # 检查目录大小
+          echo "📊 解压后目录大小: $(du -sh . | cut -f1)"
+          echo "📊 文件数量: $(find . -type f 2>/dev/null | wc -l)"
+          
+          # 只保留必要的文件
+          echo "🔄 清理不必要的文件..."
+          
+          # 删除所有大于500KB的文件（除了必要的配置文件）
+          echo "🔍 删除大于500KB的非配置文件..."
+          find . -type f ! -name "*.sh" ! -name "*.yml" ! -name "*.yaml" ! -name "*.conf" ! -name "*.config" \
+            ! -name "*.json" ! -name "*.txt" ! -name "*.md" ! -name "*.gitignore" ! -name "LICENSE" \
+            -size +500k -exec echo "删除大文件: {}" \; -exec rm -f {} \; 2>/dev/null
+          
+          # 复制到工作区
+          echo "🔄 复制文件到工作区..."
+          mkdir -p ${{ github.workspace }}
+          
+          # 只复制必要的目录和文件
+          echo "复制 firmware-config 目录..."
+          if [ -d "firmware-config" ]; then
+            # 创建目录结构
+            mkdir -p ${{ github.workspace }}/firmware-config
+            mkdir -p ${{ github.workspace }}/firmware-config/scripts
+            mkdir -p ${{ github.workspace }}/firmware-config/custom-files
+            mkdir -p ${{ github.workspace }}/firmware-config/build-Compiler-file
             
-            # 复制到工作区
-            echo "复制文件到工作区（排除编译器文件）..."
+            # 复制脚本文件
+            if [ -d "firmware-config/scripts" ]; then
+              find firmware-config/scripts -name "*.sh" -type f -exec cp {} ${{ github.workspace }}/firmware-config/scripts/ \; 2>/dev/null
+            fi
             
-            # 确保工作区目录存在
-            mkdir -p ${{ github.workspace }}
-            
-            # 使用rsync复制所有文件，排除.git目录和编译器文件
-            rsync -av \
-              --exclude='.git' \
-              --exclude='firmware-config/build-Compiler-file' \
-              . ${{ github.workspace }}/
-            
-            # 确保脚本文件有执行权限
-            chmod +x ${{ github.workspace }}/firmware-config/scripts/*.sh 2>/dev/null || true
-            
-            echo "✅ 文件复制完成"
-            
-            # 保存源代码压缩包作为构建产物（不包含编译器文件）
-            mkdir -p /tmp/build-artifacts/source-archive
-            cp source.tar.gz /tmp/build-artifacts/source-archive/
-            
-            # 显示复制后的目录大小
-            echo "📊 复制后的工作区大小:"
-            du -sh ${{ github.workspace }}
-            
-            # 显示排除后的文件统计
-            echo "📊 排除编译器文件后的统计:"
-            echo "总文件数: $(find ${{ github.workspace }} -type f ! -path "*/.git/*" ! -path "*/firmware-config/build-Compiler-file/*" 2>/dev/null | wc -l)"
-            echo "总大小: $(du -sh ${{ github.workspace }} --exclude=".git" --exclude="firmware-config/build-Compiler-file" 2>/dev/null | cut -f1)"
-          else
-            echo "❌ 源代码解压失败，重要文件缺失"
-            echo "当前目录内容:"
-            ls -la
-            exit 1
+            # 复制自定义文件（如果有）
+            if [ -d "firmware-config/custom-files" ]; then
+              cp -r firmware-config/custom-files/* ${{ github.workspace }}/firmware-config/custom-files/ 2>/dev/null || true
+            fi
           fi
+          
+          # 复制其他必要的配置文件
+          echo "复制其他配置文件..."
+          for file in .gitignore README.md LICENSE .github; do
+            if [ -e "$file" ]; then
+              cp -r "$file" ${{ github.workspace }}/ 2>/dev/null || true
+            fi
+          done
+          
+          # 确保脚本文件有执行权限
+          chmod +x ${{ github.workspace }}/firmware-config/scripts/*.sh 2>/dev/null || true
+          
+          echo "✅ 文件复制完成"
+          
+          # 保存源代码压缩包作为构建产物
+          mkdir -p /tmp/build-artifacts/source-archive
+          cp source.tar.gz /tmp/build-artifacts/source-archive/
+          
+          # 显示工作区信息
+          echo "📊 工作区大小: $(du -sh ${{ github.workspace }} 2>/dev/null | cut -f1)"
+          echo "📊 工作区文件数量: $(find ${{ github.workspace }} -type f 2>/dev/null | wc -l)"
           
           # 清理临时文件
           cd /tmp
           rm -rf openwrt-source
           echo "✅ Git Archive API下载完成"
       
-      # 步骤 2: 检查Git源代码大小（排除编译器文件后）
-      - name: "2. 检查Git源代码大小（排除编译器文件后）"
+      # 步骤 2: 检查工作区大小（在步骤1之后）
+      - name: "2. 检查工作区大小"
         if: github.event.inputs.use_git_archive == 'true'
         run: |
-          echo "=== 步骤 2: 检查Git源代码大小（排除编译器文件后）==="
-          echo "⚠️ 注意：此检查将排除编译器文件"
+          echo "=== 步骤 2: 检查工作区大小 ==="
           
-          # 创建临时脚本进行排除检查
-          cat > /tmp/check_size_with_exclude.sh << 'EOF'
-          #!/bin/bash
-          set -e
+          WORKSPACE="${{ github.workspace }}"
           
-          REPO_ROOT="$1"
-          echo "检查目录: $REPO_ROOT"
+          # 计算总大小
+          TOTAL_SIZE=$(du -sb $WORKSPACE 2>/dev/null | awk '{print $1}' || echo "0")
           
-          # 计算排除编译器文件后的总大小（字节）
-          echo "计算排除后的源代码大小..."
+          echo "📊 工作区总大小: $((TOTAL_SIZE / 1024))KB ($((TOTAL_SIZE / 1024 / 1024))MB)"
+          echo "📊 文件数量: $(find $WORKSPACE -type f 2>/dev/null | wc -l)"
           
-          # 使用find命令查找并计算大小，排除.git和编译器目录
-          TOTAL_SIZE=0
-          while IFS= read -r -d '' file; do
-            if [ -f "$file" ]; then
-              size=$(stat -c%s "$file" 2>/dev/null || echo "0")
-              TOTAL_SIZE=$((TOTAL_SIZE + size))
-            fi
-          done < <(find "$REPO_ROOT" -type f ! -path "*/.git/*" ! -path "*/firmware-config/build-Compiler-file/*" -print0 2>/dev/null)
+          # 列出所有文件及其大小
+          echo "📋 文件列表:"
+          find $WORKSPACE -type f -exec du -h {} \; 2>/dev/null | sort -hr | head -20
           
-          echo "排除后的总大小: $TOTAL_SIZE 字节 ($((TOTAL_SIZE / 1024))KB)"
-          
-          # 2MB限制
+          # 2MB检查
           SIZE_LIMIT=$((2 * 1024 * 1024))
           
-          # 显示详细统计
-          echo ""
-          echo "=== 详细统计（已排除编译器文件）==="
-          echo "1. 文件数量统计:"
-          FILE_COUNT=$(find "$REPO_ROOT" -type f ! -path "*/.git/*" ! -path "*/firmware-config/build-Compiler-file/*" 2>/dev/null | wc -l)
-          echo "   文件总数: $FILE_COUNT"
-          
-          echo "2. 目录大小统计:"
-          echo "   总大小: $(du -sh "$REPO_ROOT" --exclude=".git" --exclude="firmware-config/build-Compiler-file" 2>/dev/null | cut -f1)"
-          
-          echo "3. 前10大文件（已排除编译器文件）:"
-          find "$REPO_ROOT" -type f ! -path "*/.git/*" ! -path "*/firmware-config/build-Compiler-file/*" -exec du -h {} \; 2>/dev/null | sort -hr | head -10
-          
-          echo "4. 前10大目录（已排除编译器文件）:"
-          du -h --max-depth=3 "$REPO_ROOT" --exclude=".git" --exclude="firmware-config/build-Compiler-file" 2>/dev/null | sort -hr | head -10
-          
-          echo ""
-          echo "=== 检查结果 ==="
           if [ $TOTAL_SIZE -gt $SIZE_LIMIT ]; then
-            echo "❌ 错误: Git上传源代码大小超过2MB限制"
+            echo "❌ 错误: 工作区大小超过2MB限制"
             echo "当前大小: $((TOTAL_SIZE / 1024))KB"
             echo "限制大小: 2048KB"
             echo "超出: $((TOTAL_SIZE - SIZE_LIMIT)) 字节 ($((($TOTAL_SIZE - SIZE_LIMIT) / 1024))KB)"
             
             # 分析大文件
-            echo ""
-            echo "🔍 分析大文件（>100KB）:"
-            find "$REPO_ROOT" -type f ! -path "*/.git/*" ! -path "*/firmware-config/build-Compiler-file/*" -size +100k -exec du -h {} \; 2>/dev/null | sort -hr
+            echo "🔍 分析大文件(>100KB):"
+            find $WORKSPACE -type f -size +100k -exec du -h {} \; 2>/dev/null | sort -hr
+            
+            echo "💡 建议操作:"
+            echo "1. 检查是否有意外的大文件"
+            echo "2. 确保只上传必要的配置文件"
+            echo "3. 删除不必要的文件"
             
             exit 1
           else
-            echo "✅ Git上传源代码大小检查通过: $((TOTAL_SIZE / 1024))KB < 2048KB"
-            
-            # 检查是否有可疑的大文件
-            LARGE_FILES_COUNT=$(find "$REPO_ROOT" -type f ! -path "*/.git/*" ! -path "*/firmware-config/build-Compiler-file/*" -size +500k 2>/dev/null | wc -l)
-            if [ $LARGE_FILES_COUNT -gt 0 ]; then
-              echo "⚠️ 警告: 发现 $LARGE_FILES_COUNT 个大于500KB的文件（已排除编译器文件）"
-              find "$REPO_ROOT" -type f ! -path "*/.git/*" ! -path "*/firmware-config/build-Compiler-file/*" -size +500k -exec du -h {} \; 2>/dev/null | head -5
-            else
-              echo "✅ 没有发现大于500KB的可疑文件"
-            fi
+            echo "✅ 工作区大小检查通过: $((TOTAL_SIZE / 1024))KB < 2048KB"
           fi
-          EOF
-          
-          chmod +x /tmp/check_size_with_exclude.sh
-          
-          # 运行检查
-          /tmp/check_size_with_exclude.sh "${{ github.workspace }}"
       
       # 步骤 3: 立即上传Git Archive源代码
       - name: "3. 立即上传Git Archive源代码"
@@ -219,65 +198,50 @@ jobs:
           path: /tmp/build-artifacts/source-archive/
           retention-days: 7
       
-      # 步骤 4: 最终验证源代码大小（在步骤3之后）
-      - name: "4. 最终验证源代码大小"
+      # 步骤 4: 最终验证和清理（在步骤3之后）
+      - name: "4. 最终验证和清理"
         if: github.event.inputs.use_git_archive == 'true'
         run: |
-          echo "=== 步骤 4: 最终验证源代码大小 ==="
-          echo "🔄 最终验证源代码大小，确保没有大文件..."
+          echo "=== 步骤 4: 最终验证和清理 ==="
           
-          # 使用脚本的检查功能
-          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
-            # 创建临时修改的检查脚本，排除编译器文件
-            cat > /tmp/final_check.sh << 'EOF'
-          #!/bin/bash
-          set -e
+          WORKSPACE="${{ github.workspace }}"
           
-          REPO_ROOT="${{ github.workspace }}"
+          # 再次检查大小
+          FINAL_SIZE=$(du -sb $WORKSPACE 2>/dev/null | awk '{print $1}' || echo "0")
+          echo "最终工作区大小: $((FINAL_SIZE / 1024))KB"
           
-          echo "📊 最终验证：计算排除编译器文件后的总大小"
-          
-          # 计算排除编译器文件后的总大小
-          EXCLUDED_SIZE=0
-          while IFS= read -r -d '' file; do
-            if [ -f "$file" ]; then
-              size=$(stat -c%s "$file" 2>/dev/null || echo "0")
-              EXCLUDED_SIZE=$((EXCLUDED_SIZE + size))
-            fi
-          done < <(find "$REPO_ROOT" -type f ! -path "*/.git/*" ! -path "*/firmware-config/build-Compiler-file/*" -print0 2>/dev/null)
-          
-          echo "排除编译器后大小: $((EXCLUDED_SIZE / 1024))KB"
-          
+          # 如果仍然太大，尝试进一步清理
           SIZE_LIMIT=$((2 * 1024 * 1024))
-          
-          if [ $EXCLUDED_SIZE -gt $SIZE_LIMIT ]; then
-            echo "❌ 最终检查失败: 排除编译器后仍超过2MB限制"
-            echo "当前大小: $((EXCLUDED_SIZE / 1024))KB"
-            echo "限制大小: 2048KB"
+          if [ $FINAL_SIZE -gt $SIZE_LIMIT ]; then
+            echo "⚠️ 工作区仍然太大，尝试进一步清理..."
             
-            # 显示前10大文件（排除编译器目录）
-            echo ""
-            echo "🔍 前10大文件（排除编译器文件）:"
-            find "$REPO_ROOT" -type f ! -path "*/.git/*" ! -path "*/firmware-config/build-Compiler-file/*" -exec du -h {} \; 2>/dev/null | sort -hr | head -10
+            # 删除所有日志文件
+            find $WORKSPACE -name "*.log" -type f -delete 2>/dev/null
+            # 删除所有备份文件
+            find $WORKSPACE -name "*.bak" -type f -delete 2>/dev/null
+            find $WORKSPACE -name "*.backup" -type f -delete 2>/dev/null
+            # 删除所有临时文件
+            find $WORKSPACE -name "*.tmp" -type f -delete 2>/dev/null
+            find $WORKSPACE -name "*.temp" -type f -delete 2>/dev/null
             
-            exit 1
-          else
-            echo "✅ 最终检查通过: 排除编译器后大小 $((EXCLUDED_SIZE / 1024))KB < 2048KB"
+            # 重新计算大小
+            FINAL_SIZE=$(du -sb $WORKSPACE 2>/dev/null | awk '{print $1}' || echo "0")
+            echo "清理后大小: $((FINAL_SIZE / 1024))KB"
+            
+            if [ $FINAL_SIZE -gt $SIZE_LIMIT ]; then
+              echo "❌ 最终检查失败: 工作区大小仍然超过2MB"
+              exit 1
+            fi
           fi
-          EOF
           
-            chmod +x /tmp/final_check.sh
-            /tmp/final_check.sh
-          else
-            echo "⚠️ 脚本文件不存在，跳过最终源代码大小检查"
-          fi
+          echo "✅ 最终验证通过"
       
-      # 步骤 5: 检出配置仓库
+      # 步骤 5: 检出配置仓库（当不使用Git Archive时）
       - name: "5. 检出配置仓库"
         if: github.event.inputs.use_git_archive == 'false'
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1  # 只下载最新提交
           submodules: recursive
       
       # 步骤 6: 检查Git源代码大小（手动检出时）
@@ -576,77 +540,6 @@ jobs:
           # 应用配置
           firmware-config/scripts/build_firmware_main.sh apply_config
           
-          # 检查应用后的配置状态
-          echo "=== 插件配置状态检查 ==="
-          cd "${{ env.BUILD_DIR }}"
-          
-          # 定义正常模式的完整插件列表
-          declare -A normal_plugins=(
-            ["TurboACC 网络加速"]="luci-app-turboacc"
-            ["UPnP 自动端口转发"]="luci-app-upnp"
-            ["Samba 文件共享"]="luci-app-samba4"
-            ["磁盘管理"]="luci-app-diskman"
-            ["KMS 激活服务"]="luci-app-vlmcsd"
-            ["SmartDNS 智能DNS"]="luci-app-smartdns"
-            ["家长控制"]="luci-app-accesscontrol"
-            ["微信推送"]="luci-app-wechatpush"
-            ["流量控制 (SQM)"]="luci-app-sqm"
-            ["FTP 服务器"]="luci-app-vsftpd"
-            ["ARP 绑定"]="luci-app-arpbind"
-            ["CPU 限制"]="luci-app-cpulimit"
-            ["硬盘休眠"]="luci-app-hd-idle"
-          )
-          
-          echo "📋 正常模式插件状态检查:"
-          
-          total_plugins=0
-          enabled_plugins=0
-          disabled_plugins=0
-          
-          for plugin_name in "${!normal_plugins[@]}"; do
-            plugin_config="${normal_plugins[$plugin_name]}"
-            total_plugins=$((total_plugins + 1))
-            
-            if grep -q "^CONFIG_PACKAGE_${plugin_config}=y" .config; then
-              echo "  ✅ $plugin_name: 已启用"
-              enabled_plugins=$((enabled_plugins + 1))
-            elif grep -q "^# CONFIG_PACKAGE_${plugin_config} is not set$" .config; then
-              echo "  ❌ $plugin_name: 已禁用"
-              disabled_plugins=$((disabled_plugins + 1))
-            else
-              echo "  ⚠️  $plugin_name: 未配置"
-            fi
-          done
-          
-          echo ""
-          echo "📊 插件状态统计:"
-          echo "  总计: $total_plugins 个插件"
-          echo "  已启用: $enabled_plugins 个"
-          echo "  已禁用: $disabled_plugins 个"
-          
-          # 检查基础模式是否禁用了插件
-          if [ "${{ github.event.inputs.config_mode }}" = "base" ]; then
-            echo ""
-            echo "🔧 基础模式配置确认:"
-            if [ $enabled_plugins -eq 0 ]; then
-              echo "  ✅ 基础模式: 所有额外插件已正确禁用"
-            else
-              echo "  ⚠️  基础模式: 有 $enabled_plugins 个插件未禁用，需要检查"
-            fi
-          fi
-          
-          # 额外检查USB驱动状态
-          echo ""
-          echo "🔌 USB驱动状态确认:"
-          critical_usb_drivers=("kmod-usb-xhci-hcd" "kmod-usb3" "kmod-usb-dwc3" "kmod-usb-storage" "kmod-scsi-core")
-          for driver in "${critical_usb_drivers[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-              echo "  ✅ $driver: 已启用"
-            else
-              echo "  ❌ $driver: 未启用 (需要修复)"
-            fi
-          done
-          
           echo "✅ 配置详情检查完成"
       
       # 步骤 20: 检查并备份配置文件
@@ -666,9 +559,6 @@ jobs:
             
             cp "${{ env.BUILD_DIR }}/.config" "$backup_file"
             echo "✅ 配置文件备份到仓库目录: $backup_file"
-            
-            # 显示备份文件信息
-            echo "备份文件大小: $(ls -lh $backup_file | awk '{print $5}')"
           else
             echo "❌ .config 文件不存在"
             exit 1
@@ -815,7 +705,7 @@ jobs:
           path: ${{ github.workspace }}/firmware-config/config-backup/
           retention-days: 7
       
-      # 步骤 30: 错误分析（无论成功失败都运行）
+      # 步骤 30: 错误分析
       - name: "30. 错误分析"
         if: always()
         run: |
