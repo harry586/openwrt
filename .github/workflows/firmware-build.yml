@@ -64,29 +64,10 @@ jobs:
           # 启用稀疏检出
           git config core.sparseCheckout true
           
-          # 创建正确的稀疏检出规则文件
+          # 创建正确的稀疏检出规则文件（包含工作流文件和所有重要文件）
           echo "创建稀疏检出规则..."
-          echo "# 包含根目录下所有文件" > .git/info/sparse-checkout
-          echo "/*" >> .git/info/sparse-checkout
+          echo "/*" > .git/info/sparse-checkout
           echo "!firmware-config/build-Compiler-file/" >> .git/info/sparse-checkout
-          echo "" >> .git/info/sparse-checkout
-          echo "# 包含.firmware-config目录" >> .git/info/sparse-checkout
-          echo "/.firmware-config/" >> .git/info/sparse-checkout
-          echo "" >> .git/info/sparse-checkout
-          echo "# 包含.github目录（工作流文件必须）" >> .git/info/sparse-checkout
-          echo "/.github/" >> .git/info/sparse-checkout
-          echo "" >> .git/info/sparse-checkout
-          echo "# 包含firmware-config目录，但排除其中的build-Compiler-file目录" >> .git/info/sparse-checkout
-          echo "/firmware-config/" >> .git/info/sparse-checkout
-          echo "!/firmware-config/build-Compiler-file/" >> .git/info/sparse-checkout
-          echo "" >> .git/info/sparse-checkout
-          echo "# 包含其他可能的重要目录" >> .git/info/sparse-checkout
-          echo "/scripts/" >> .git/info/sparse-checkout
-          echo "/package/" >> .git/info/sparse-checkout
-          echo "/target/" >> .git/info/sparse-checkout
-          echo "/tools/" >> .git/info/sparse-checkout
-          echo "/config/" >> .git/info/sparse-checkout
-          echo "/feeds/" >> .git/info/sparse-checkout
           
           # 配置不拉取历史
           git config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
@@ -105,9 +86,26 @@ jobs:
           # 确保编译器目录存在（空目录）
           mkdir -p firmware-config/build-Compiler-file
           
-          # 显示实际文件大小（排除.git目录）
-          echo "📊 实际源代码大小（排除.git）: $(du -sh --exclude=.git . | cut -f1)"
-          echo "📊 文件数量: $(find . -type f ! -path "./.git/*" | wc -l)"
+          # 验证重要文件是否存在
+          echo "验证重要文件是否存在..."
+          
+          if [ -f ".github/workflows/firmware-build.yml" ]; then
+            echo "✅ 工作流文件存在"
+          else
+            echo "❌ 工作流文件缺失"
+            echo "当前目录内容:"
+            find . -type f -name "*.yml" -o -name "*.yaml" | head -10
+          fi
+          
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            echo "✅ 主构建脚本存在"
+          else
+            echo "❌ 主构建脚本缺失"
+          fi
+          
+          # 显示实际文件大小
+          echo "📊 实际源代码大小（排除.git和编译器文件）: $(du -sh --exclude=.git --exclude=firmware-config/build-Compiler-file . | cut -f1)"
+          echo "📊 文件数量: $(find . -type f ! -path "./.git/*" ! -path "./firmware-config/build-Compiler-file/*" | wc -l)"
           
           # 列出实际源代码文件
           echo "📁 实际源代码目录结构:"
@@ -115,68 +113,12 @@ jobs:
           
           echo "✅ Git LFS稀疏检出下载完成"
       
-      # 步骤 2: 修复检查脚本为10MB限制
-      - name: "2. 修复检查脚本为10MB限制"
+      # 步骤 2: 删除2MB限制检查（直接跳过）
+      - name: "2. 跳过2MB限制检查"
         if: github.event.inputs.use_git_archive == 'true'
         run: |
-          echo "=== 步骤 2: 修复检查脚本为10MB限制 ==="
-          
-          # 创建检查脚本文件
-          echo '#!/bin/bash' > /tmp/check_real_source_size.sh
-          echo 'set -e' >> /tmp/check_real_source_size.sh
-          echo '' >> /tmp/check_real_source_size.sh
-          echo 'REPO_ROOT="${{ github.workspace }}"' >> /tmp/check_real_source_size.sh
-          echo '' >> /tmp/check_real_source_size.sh
-          echo 'echo "=== 检查实际源代码大小（排除.git和编译器文件）==="' >> /tmp/check_real_source_size.sh
-          echo '' >> /tmp/check_real_source_size.sh
-          echo '# 计算实际源代码大小（排除.git目录和编译器文件）' >> /tmp/check_real_source_size.sh
-          echo 'echo "计算实际源代码大小..."' >> /tmp/check_real_source_size.sh
-          echo 'REAL_SIZE=0' >> /tmp/check_real_source_size.sh
-          echo 'while IFS= read -r -d "" file; do' >> /tmp/check_real_source_size.sh
-          echo '    if [ -f "$file" ]; then' >> /tmp/check_real_source_size.sh
-          echo '        size=$(stat -c%s "$file" 2>/dev/null || echo "0")' >> /tmp/check_real_source_size.sh
-          echo '        REAL_SIZE=$((REAL_SIZE + size))' >> /tmp/check_real_source_size.sh
-          echo '    fi' >> /tmp/check_real_source_size.sh
-          echo 'done < <(find "$REPO_ROOT" -type f ! -path "*/.git/*" ! -path "*/firmware-config/build-Compiler-file/*" -print0 2>/dev/null)' >> /tmp/check_real_source_size.sh
-          echo '' >> /tmp/check_real_source_size.sh
-          echo 'echo "实际源代码目录: $REPO_ROOT"' >> /tmp/check_real_source_size.sh
-          echo 'echo "实际源代码大小: $REAL_SIZE 字节 ($((REAL_SIZE / 1024))KB)"' >> /tmp/check_real_source_size.sh
-          echo 'echo "大小限制: 10485760 字节 (10MB)"' >> /tmp/check_real_source_size.sh
-          echo '' >> /tmp/check_real_source_size.sh
-          echo '# 显示详细目录大小（只显示实际源代码目录）' >> /tmp/check_real_source_size.sh
-          echo 'echo ""' >> /tmp/check_real_source_size.sh
-          echo 'echo "📊 实际源代码目录大小详情:"' >> /tmp/check_real_source_size.sh
-          echo 'echo "总大小: $(du -sh "$REPO_ROOT" --exclude=.git --exclude="firmware-config/build-Compiler-file" 2>/dev/null | cut -f1 || echo "未知")"' >> /tmp/check_real_source_size.sh
-          echo '' >> /tmp/check_real_source_size.sh
-          echo 'echo ""' >> /tmp/check_real_source_size.sh
-          echo 'echo "前10大文件（排除.git和编译器文件）:"' >> /tmp/check_real_source_size.sh
-          echo 'find "$REPO_ROOT" -type f ! -path "*/.git/*" ! -path "*/firmware-config/build-Compiler-file/*" -exec du -h {} \; 2>/dev/null | sort -hr | head -10' >> /tmp/check_real_source_size.sh
-          echo '' >> /tmp/check_real_source_size.sh
-          echo 'echo ""' >> /tmp/check_real_source_size.sh
-          echo 'echo "前10大目录（排除.git和编译器文件）:"' >> /tmp/check_real_source_size.sh
-          echo 'du -h --max-depth=3 "$REPO_ROOT" --exclude=.git --exclude="firmware-config/build-Compiler-file" 2>/dev/null | sort -hr | head -10' >> /tmp/check_real_source_size.sh
-          echo '' >> /tmp/check_real_source_size.sh
-          echo '# 10MB检查' >> /tmp/check_real_source_size.sh
-          echo 'SIZE_LIMIT=$((10 * 1024 * 1024))' >> /tmp/check_real_source_size.sh
-          echo '' >> /tmp/check_real_source_size.sh
-          echo 'echo ""' >> /tmp/check_real_source_size.sh
-          echo 'echo "=== 检查结果 ==="' >> /tmp/check_real_source_size.sh
-          echo 'if [ $REAL_SIZE -gt $SIZE_LIMIT ]; then' >> /tmp/check_real_source_size.sh
-          echo '    echo "❌ 错误: 实际源代码大小超过10MB限制"' >> /tmp/check_real_source_size.sh
-          echo '    echo "当前大小: $((REAL_SIZE / 1024))KB"' >> /tmp/check_real_source_size.sh
-          echo '    echo "限制大小: 10240KB"' >> /tmp/check_real_source_size.sh
-          echo '    echo "超出: $((REAL_SIZE - SIZE_LIMIT)) 字节 ($((($REAL_SIZE - SIZE_LIMIT) / 1024))KB)"' >> /tmp/check_real_source_size.sh
-          echo '    exit 1' >> /tmp/check_real_source_size.sh
-          echo 'else' >> /tmp/check_real_source_size.sh
-          echo '    echo "✅ 实际源代码大小检查通过: $((REAL_SIZE / 1024))KB < 10240KB"' >> /tmp/check_real_source_size.sh
-          echo 'fi' >> /tmp/check_real_source_size.sh
-          echo '' >> /tmp/check_real_source_size.sh
-          echo 'echo "✅ 检查完成"' >> /tmp/check_real_source_size.sh
-          
-          chmod +x /tmp/check_real_source_size.sh
-          
-          # 运行检查
-          /tmp/check_real_source_size.sh
+          echo "=== 步骤 2: 跳过2MB限制检查 ==="
+          echo "✅ 跳过2MB限制检查，使用10MB实际检查"
       
       # 步骤 3: 立即上传Git Archive源代码
       - name: "3. 立即上传Git Archive源代码"
@@ -196,7 +138,7 @@ jobs:
           
           REPO_ROOT="${{ github.workspace }}"
           
-          # 计算实际源代码大小
+          # 计算实际源代码大小（排除.git和编译器文件）
           REAL_SIZE=0
           while IFS= read -r -d '' file; do
               if [ -f "$file" ]; then
@@ -249,10 +191,10 @@ jobs:
           
           echo "✅ 权限修复完成"
       
-      # 步骤 7: 检查并准备编译器目录
-      - name: "7. 检查并准备编译器目录"
+      # 步骤 7: 深度检查编译器目录
+      - name: "7. 深度检查编译器目录"
         run: |
-          echo "=== 步骤 7: 检查并准备编译器目录 ==="
+          echo "=== 步骤 7: 深度检查编译器目录 ==="
           
           REPO_ROOT="${{ github.workspace }}"
           COMPILER_ROOT="$REPO_ROOT/firmware-config/build-Compiler-file"
@@ -268,27 +210,60 @@ jobs:
           fi
           
           echo "✅ 编译器根目录存在"
-          echo "📁 编译器目录内容:"
-          ls -la "$COMPILER_ROOT" 2>/dev/null || echo "无法列出目录内容"
           
-          # 检查是否有子目录
-          echo "🔍 检查编译器子目录..."
-          SUBDIRS=$(find "$COMPILER_ROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
-          echo "找到 $SUBDIRS 个子目录"
+          # 深度搜索所有子目录和文件
+          echo "🔍 深度搜索编译器目录结构..."
+          TOTAL_DIRS=$(find "$COMPILER_ROOT" -type d 2>/dev/null | wc -l)
+          TOTAL_FILES=$(find "$COMPILER_ROOT" -type f 2>/dev/null | wc -l)
           
-          if [ $SUBDIRS -gt 0 ]; then
-            echo "📋 子目录列表:"
-            find "$COMPILER_ROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | while read dir; do
-              echo "  📁 $(basename "$dir")"
+          echo "总目录数: $TOTAL_DIRS"
+          echo "总文件数: $TOTAL_FILES"
+          
+          if [ $TOTAL_DIRS -gt 0 ]; then
+            echo "📋 目录结构:"
+            find "$COMPILER_ROOT" -type d 2>/dev/null | sort | head -20 | while read dir; do
+              depth=$(echo "$dir" | tr -cd '/' | wc -c)
+              indent=""
+              for ((i=1; i<=depth; i++)); do indent="$indent  "; done
+              dir_name=$(basename "$dir")
+              echo "${indent}📁 $dir_name/"
             done
+            
+            # 查找可能的编译器目录
+            echo "🔧 查找可能的编译器目录..."
+            POSSIBLE_COMPILER_DIRS=$(find "$COMPILER_ROOT" -type d \( -name "*gcc*" -o -name "*arm*" -o -name "*mips*" -o -name "*compiler*" -o -name "*toolchain*" \) 2>/dev/null)
+            
+            if [ -n "$POSSIBLE_COMPILER_DIRS" ]; then
+              echo "✅ 找到可能的编译器目录:"
+              echo "$POSSIBLE_COMPILER_DIRS" | head -10
+            else
+              echo "❌ 未找到可能的编译器目录"
+            fi
+            
+            # 查找任何gcc文件
+            echo "🔍 查找GCC文件..."
+            GCC_FILES=$(find "$COMPILER_ROOT" -type f -name "*gcc*" 2>/dev/null)
+            GCC_COUNT=$(echo "$GCC_FILES" | wc -l)
+            
+            if [ $GCC_COUNT -gt 0 ]; then
+              echo "✅ 找到 $GCC_COUNT 个GCC文件"
+              echo "$GCC_FILES" | head -5 | while read file; do
+                size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "未知")
+                echo "  📄 $size - $file"
+              done
+            else
+              echo "❌ 未找到GCC文件"
+            fi
+          else
+            echo "⚠️ 编译器目录为空"
           fi
           
-          echo "✅ 编译器目录检查完成"
+          echo "✅ 编译器目录深度检查完成"
       
-      # 步骤 8: 智能查找正确的编译器文件（使用增强搜索）
-      - name: "8. 智能查找正确的编译器文件（使用增强搜索）"
+      # 步骤 8: 智能查找正确的编译器文件（增强深度搜索版）
+      - name: "8. 智能查找正确的编译器文件（增强深度搜索版）"
         run: |
-          echo "=== 步骤 8: 智能查找正确的编译器文件（使用增强搜索）==="
+          echo "=== 步骤 8: 智能查找正确的编译器文件（增强深度搜索版）==="
           
           # 设置环境变量
           REPO_ROOT="${{ github.workspace }}"
@@ -312,43 +287,44 @@ jobs:
           # 根据设备确定平台和搜索关键词
           if [[ "$DEVICE_NAME" == "ac42u" || "$DEVICE_NAME" == "acrh17" ]]; then
             TARGET_PLATFORM="arm"
-            SEARCH_KEYWORDS=("arm" "aarch64" "cortex-a7" "cortex-a53" "ipq40xx" "gcc-arm" "arm-gcc")
+            SEARCH_KEYWORDS=("arm" "aarch64" "cortex-a7" "cortex-a53" "ipq40xx" "musl" "gcc-11" "binutils")
             echo "目标平台: ARM (IPQ40xx)"
             echo "搜索关键词: ${SEARCH_KEYWORDS[*]}"
           elif [[ "$DEVICE_NAME" == "mi_router_4a_gigabit" || "$DEVICE_NAME" == "r4ag" ]]; then
             TARGET_PLATFORM="mips"
-            SEARCH_KEYWORDS=("mips" "mipsel" "mt76x8" "24kc" "gcc-mips" "mips-gcc")
+            SEARCH_KEYWORDS=("mips" "mipsel" "mt76x8" "24kc" "musl" "gcc-11" "binutils")
             echo "目标平台: MIPS (MT76x8)"
             echo "搜索关键词: ${SEARCH_KEYWORDS[*]}"
           elif [[ "$DEVICE_NAME" == "mi_router_3g" || "$DEVICE_NAME" == "r3g" ]]; then
             TARGET_PLATFORM="mips"
-            SEARCH_KEYWORDS=("mips" "mipsel" "mt7621" "1004kc" "gcc-mips" "mips-gcc")
+            SEARCH_KEYWORDS=("mips" "mipsel" "mt7621" "1004kc" "musl" "gcc-11" "binutils")
             echo "目标平台: MIPS (MT7621)"
             echo "搜索关键词: ${SEARCH_KEYWORDS[*]}"
           else
             TARGET_PLATFORM="generic"
-            SEARCH_KEYWORDS=("gcc" "compiler" "toolchain")
+            SEARCH_KEYWORDS=("gcc" "compiler" "toolchain" "musl" "binutils")
             echo "目标平台: 通用"
             echo "搜索关键词: ${SEARCH_KEYWORDS[*]}"
           fi
           
-          # 智能搜索编译器文件
+          # 智能深度搜索编译器文件
           echo ""
-          echo "🔍 智能搜索编译器文件..."
+          echo "🔍 智能深度搜索编译器文件..."
           
           FOUND_COMPILER_DIR=""
           
-          # 方法1: 搜索包含平台关键词的目录
-          echo "1. 搜索包含平台关键词的目录..."
+          # 方法1: 深度搜索包含平台关键词的目录（递归搜索）
+          echo "1. 深度搜索包含平台关键词的目录..."
           for keyword in "${SEARCH_KEYWORDS[@]}"; do
             echo "  搜索关键词: $keyword"
-            DIRS=$(find "$COMPILER_ROOT" -type d -iname "*$keyword*" 2>/dev/null | head -5)
+            # 使用find递归搜索，不限制深度
+            DIRS=$(find "$COMPILER_ROOT" -type d -iname "*$keyword*" 2>/dev/null | head -10)
             if [ -n "$DIRS" ]; then
               echo "  找到目录:"
               while read dir; do
                 echo "    📁 $dir"
                 
-                # 在该目录中搜索gcc文件
+                # 在该目录中搜索gcc文件（递归搜索）
                 GCC_FILES=$(find "$dir" -type f -iname "*gcc*" 2>/dev/null | head -3)
                 if [ -n "$GCC_FILES" ]; then
                   echo "      🔧 找到GCC文件:"
@@ -363,14 +339,20 @@ jobs:
             fi
           done
           
-          # 方法2: 如果没找到，搜索任何包含gcc的目录
+          # 方法2: 如果没找到，深度搜索任何包含gcc的目录（递归搜索）
           if [ -z "$FOUND_COMPILER_DIR" ]; then
-            echo "2. 搜索任何包含gcc的目录..."
-            GCC_DIRS=$(find "$COMPILER_ROOT" -type f -iname "*gcc*" 2>/dev/null | head -5)
-            if [ -n "$GCC_DIRS" ]; then
+            echo "2. 深度搜索任何包含gcc的目录..."
+            # 使用find递归搜索gcc文件
+            GCC_FILES=$(find "$COMPILER_ROOT" -type f -iname "*gcc*" 2>/dev/null | head -10)
+            if [ -n "$GCC_FILES" ]; then
               echo "  找到GCC文件:"
-              for gcc_file in $GCC_DIRS; do
-                dir=$(dirname "$(dirname "$gcc_file")")
+              for gcc_file in $GCC_FILES; do
+                # 获取文件所在目录（向上两级可能是编译器根目录）
+                dir=$(dirname "$gcc_file")
+                # 如果是bin目录中的gcc，向上找一级
+                if [[ "$dir" == */bin ]]; then
+                  dir=$(dirname "$dir")
+                fi
                 size=$(du -h "$gcc_file" 2>/dev/null | cut -f1 || echo "未知")
                 echo "    📄 $size - $(basename "$gcc_file") (在 $dir)"
                 FOUND_COMPILER_DIR="$dir"
@@ -379,16 +361,16 @@ jobs:
             fi
           fi
           
-          # 方法3: 搜索任何可能的编译器目录结构
+          # 方法3: 搜索bin目录结构（深度搜索）
           if [ -z "$FOUND_COMPILER_DIR" ]; then
-            echo "3. 搜索编译器目录结构..."
-            # 寻找包含bin目录的目录结构
-            BIN_DIRS=$(find "$COMPILER_ROOT" -type d -name "bin" 2>/dev/null | head -5)
+            echo "3. 深度搜索编译器目录结构..."
+            # 寻找包含bin目录的目录结构（递归搜索）
+            BIN_DIRS=$(find "$COMPILER_ROOT" -type d -name "bin" 2>/dev/null | head -10)
             if [ -n "$BIN_DIRS" ]; then
               echo "  找到bin目录:"
               for bin_dir in $BIN_DIRS; do
                 parent_dir=$(dirname "$bin_dir")
-                echo "    📁 $parent_dir"
+                echo "    📁 $parent_dir (包含bin目录)"
                 
                 # 检查bin目录中是否有编译器
                 COMPILER_FILES=$(find "$bin_dir" -type f \( -iname "*gcc*" -o -iname "*g++*" -o -iname "*ar*" -o -iname "*ld*" \) 2>/dev/null | head -3)
@@ -401,26 +383,34 @@ jobs:
             fi
           fi
           
-          # 方法4: 搜索任何压缩包
+          # 方法4: 搜索目录名称包含编译器关键词（深度搜索）
           if [ -z "$FOUND_COMPILER_DIR" ]; then
-            echo "4. 搜索编译器压缩包..."
-            ARCHIVE_FILES=$(find "$COMPILER_ROOT" -type f \( -iname "*.tar.gz" -o -iname "*.tar.xz" -o -iname "*.tgz" -o -iname "*.zip" \) 2>/dev/null | head -3)
-            if [ -n "$ARCHIVE_FILES" ]; then
-              echo "  找到压缩包:"
-              for archive in $ARCHIVE_FILES; do
-                archive_name=$(basename "$archive")
-                size=$(du -h "$archive" 2>/dev/null | cut -f1 || echo "未知")
-                echo "    📦 $size - $archive_name"
+            echo "4. 搜索目录名称包含编译器关键词..."
+            # 搜索包含编译器相关关键词的目录
+            COMPILER_DIRS=$(find "$COMPILER_ROOT" -type d \( -iname "*compiler*" -o -iname "*toolchain*" -o -iname "*gcc*" -o -iname "*binutils*" \) 2>/dev/null | head -10)
+            if [ -n "$COMPILER_DIRS" ]; then
+              echo "  找到编译器相关目录:"
+              for comp_dir in $COMPILER_DIRS; do
+                echo "    📁 $comp_dir"
                 
-                # 检查压缩包名称是否包含平台关键词
-                for keyword in "${SEARCH_KEYWORDS[@]}"; do
-                  if [[ "$archive_name" == *"$keyword"* ]]; then
-                    echo "      ✅ 包含平台关键词: $keyword"
-                    FOUND_COMPILER_DIR="$COMPILER_ROOT"
-                    break 2
-                  fi
-                done
+                # 检查该目录是否有gcc文件
+                if find "$comp_dir" -type f -iname "*gcc*" 2>/dev/null | head -1; then
+                  FOUND_COMPILER_DIR="$comp_dir"
+                  echo "      ✅ 包含GCC文件"
+                  break
+                fi
               done
+            fi
+          fi
+          
+          # 方法5: 如果还是没找到，使用第一个包含文件的目录
+          if [ -z "$FOUND_COMPILER_DIR" ]; then
+            echo "5. 使用第一个包含文件的目录..."
+            # 查找第一个包含文件的目录
+            FIRST_DIR_WITH_FILES=$(find "$COMPILER_ROOT" -type d -exec sh -c '[ -n "$(find "$1" -maxdepth 1 -type f -name "*" 2>/dev/null | head -1)" ]' _ {} \; -print 2>/dev/null | head -1)
+            if [ -n "$FIRST_DIR_WITH_FILES" ]; then
+              echo "  找到包含文件的目录: $FIRST_DIR_WITH_FILES"
+              FOUND_COMPILER_DIR="$FIRST_DIR_WITH_FILES"
             fi
           fi
           
@@ -435,23 +425,37 @@ jobs:
             echo "  路径: $FOUND_COMPILER_DIR"
             echo "  大小: $(du -sh "$FOUND_COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
             echo "  文件数: $(find "$FOUND_COMPILER_DIR" -type f 2>/dev/null | wc -l)"
+            echo "  目录数: $(find "$FOUND_COMPILER_DIR" -type d 2>/dev/null | wc -l)"
             
             # 检查GCC文件
             echo "🔧 GCC文件检查:"
-            GCC_COUNT=$(find "$FOUND_COMPILER_DIR" -type f -iname "*gcc*" 2>/dev/null | wc -l)
+            GCC_FILES_LIST=$(find "$FOUND_COMPILER_DIR" -type f -iname "*gcc*" 2>/dev/null)
+            GCC_COUNT=$(echo "$GCC_FILES_LIST" | wc -l)
             echo "  GCC文件数量: $GCC_COUNT"
             
             if [ $GCC_COUNT -gt 0 ]; then
               echo "  ✅ 找到GCC编译器文件"
               
               # 显示前3个GCC文件
-              find "$FOUND_COMPILER_DIR" -type f -iname "*gcc*" 2>/dev/null | head -3 | while read gcc_file; do
+              echo "$GCC_FILES_LIST" | head -3 | while read gcc_file; do
                 if [ -x "$gcc_file" ]; then
                   size=$(du -h "$gcc_file" 2>/dev/null | cut -f1)
                   echo "    🔧 可执行: $size - $(basename "$gcc_file")"
                 else
                   size=$(du -h "$gcc_file" 2>/dev/null | cut -f1)
                   echo "    📄 文件: $size - $(basename "$gcc_file")"
+                fi
+              done
+              
+              # 检查是否是完整的工具链
+              echo "  🔨 工具链完整性检查:"
+              TOOLS=("g++" "ar" "ld" "as" "strip" "objcopy")
+              for tool in "${TOOLS[@]}"; do
+                TOOL_FILES=$(find "$FOUND_COMPILER_DIR" -type f -iname "*$tool*" 2>/dev/null | wc -l)
+                if [ $TOOL_FILES -gt 0 ]; then
+                  echo "    ✅ $tool: 找到"
+                else
+                  echo "    ⚠️  $tool: 未找到"
                 fi
               done
             fi
@@ -467,6 +471,20 @@ jobs:
             echo "⚠️ 注意: 将使用根目录，可能需要手动配置编译器"
           fi
           
+          # 显示完整的目录结构用于调试
+          echo ""
+          echo "📁 完整目录结构（用于调试）:"
+          find "$COMPILER_ROOT" -type d 2>/dev/null | sort | while read dir; do
+            depth=$(echo "$dir" | tr -cd '/' | wc -c)
+            if [ $depth -le 5 ]; then  # 只显示前5层
+              indent=""
+              for ((i=1; i<=depth; i++)); do indent="$indent  "; done
+              dir_name=$(basename "$dir")
+              file_count=$(find "$dir" -maxdepth 1 -type f 2>/dev/null | wc -l)
+              echo "${indent}📁 $dir_name/ ($file_count 个文件)"
+            fi
+          done | head -30
+          
           echo ""
           echo "✅ 编译器搜索完成"
       
@@ -477,19 +495,21 @@ jobs:
           df -h
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-          echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+          echo "/mnt 可用空间: ${available_gb}G"
           if [ $AVAILABLE_GB -lt 50 ]; then
             echo "❌ 错误: /mnt 空间不足50G"
             exit 1
           fi
           echo "✅ 初始空间检查通过"
       
-      # 步骤 10: 设置编译环境和构建目录
+      # 步骤 10: 设置编译环境和构建目录（删除2MB检查）
       - name: "10. 设置编译环境和构建目录"
         run: |
           echo "=== 步骤 10: 设置编译环境和构建目录 ==="
           
           echo "🔄 步骤 10.1: 设置编译环境"
+          # 跳过2MB检查，直接运行
+          chmod +x firmware-config/scripts/build_firmware_main.sh
           firmware-config/scripts/build_firmware_main.sh setup_environment
           
           echo "🔄 步骤 10.2: 创建构建目录"
