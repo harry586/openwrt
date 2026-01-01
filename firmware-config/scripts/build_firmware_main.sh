@@ -6,14 +6,67 @@ ENV_FILE="$BUILD_DIR/build_env.sh"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMPILER_ROOT="$REPO_ROOT/firmware-config/build-Compiler-file"
 
+# 确保有日志目录
+mkdir -p /tmp/build-logs
+
 log() {
     echo "【$(date '+%Y-%m-%d %H:%M:%S')】$1"
 }
 
 handle_error() {
     log "❌ 错误发生在: $1"
+    log "详细错误信息:"
+    echo "最后10行日志:"
+    tail -50 /tmp/build-logs/*.log 2>/dev/null || echo "无日志文件"
     exit 1
 }
+
+# 检查脚本权限
+check_script_permissions() {
+    log "=== 检查脚本权限 ==="
+    
+    # 检查当前脚本权限
+    local script_path="$0"
+    log "当前脚本: $script_path"
+    
+    if [ ! -x "$script_path" ]; then
+        log "❌ 脚本没有执行权限: $script_path"
+        log "修复权限..."
+        chmod +x "$script_path"
+        log "✅ 已修复脚本权限"
+    else
+        log "✅ 脚本有执行权限"
+    fi
+    
+    # 检查scripts目录下所有脚本
+    local scripts_dir="$(dirname "$0")"
+    log "检查scripts目录: $scripts_dir"
+    
+    if [ -d "$scripts_dir" ]; then
+        local script_count=0
+        local fixed_count=0
+        
+        for script in "$scripts_dir"/*.sh; do
+            if [ -f "$script" ]; then
+                script_count=$((script_count + 1))
+                if [ ! -x "$script" ]; then
+                    log "修复脚本权限: $(basename "$script")"
+                    chmod +x "$script"
+                    fixed_count=$((fixed_count + 1))
+                fi
+            fi
+        done
+        
+        log "✅ 脚本权限检查完成"
+        log "总计: $script_count 个脚本"
+        log "修复: $fixed_count 个脚本权限"
+    else
+        log "⚠️ scripts目录不存在: $scripts_dir"
+    fi
+}
+
+# 在脚本开始时检查权限
+check_script_permissions
 
 # 检查Git上传源代码大小
 check_git_source_size() {
