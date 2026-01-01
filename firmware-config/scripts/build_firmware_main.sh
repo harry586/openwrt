@@ -68,118 +68,6 @@ check_script_permissions() {
 # 在脚本开始时检查权限
 check_script_permissions
 
-# 检查Git上传源代码大小
-check_git_source_size() {
-    log "=== 检查Git上传源代码大小 ==="
-    
-    # 计算源代码目录大小（不包括.git目录）
-    local source_size=$(du -sb "$REPO_ROOT" 2>/dev/null | awk '{print $1}' || echo "0")
-    local size_limit=$((2 * 1024 * 1024))  # 2MB限制
-    
-    log "源代码目录: $REPO_ROOT"
-    log "源代码大小: $source_size 字节 ($(($source_size / 1024))KB)"
-    log "大小限制: $size_limit 字节 (2MB)"
-    
-    # 显示详细目录大小
-    log "📊 详细目录大小分析:"
-    echo "=== 目录大小详情 ==="
-    echo "总大小: $(du -sh "$REPO_ROOT" 2>/dev/null | cut -f1 || echo "未知")"
-    echo ""
-    echo "前10大目录:"
-    du -h --max-depth=2 "$REPO_ROOT" 2>/dev/null | sort -hr | head -15
-    
-    echo ""
-    echo "=== 文件大小详情 ==="
-    echo "前20大文件:"
-    find "$REPO_ROOT" -type f ! -path "*/.git/*" -exec du -h {} \; 2>/dev/null | sort -hr | head -20
-    
-    if [ $source_size -gt $size_limit ]; then
-        log "❌ 错误: Git上传源代码大小超过2MB限制"
-        log "当前大小: $(($source_size / 1024))KB"
-        log "限制大小: 2048KB"
-        log "超出: $(($source_size - $size_limit)) 字节 ($((($source_size - $size_limit) / 1024))KB)"
-        
-        # 显示最大的文件和目录
-        log "🔍 分析大文件和目录:"
-        
-        # 检查最大的文件
-        log "📄 最大的文件:"
-        find "$REPO_ROOT" -type f ! -path "*/.git/*" -exec du -h {} \; 2>/dev/null | sort -hr | head -10 | while read line; do
-            log "  $line"
-        done
-        
-        # 检查最大的目录
-        log "📁 最大的目录:"
-        du -h --max-depth=3 "$REPO_ROOT" 2>/dev/null | sort -hr | head -10 | while read line; do
-            log "  $line"
-        done
-        
-        # 检查编译器目录大小
-        if [ -d "$COMPILER_ROOT" ]; then
-            local compiler_size=$(du -sb "$COMPILER_ROOT" 2>/dev/null | awk '{print $1}' || echo "0")
-            log "🔧 编译器目录大小: $(($compiler_size / 1024))KB"
-            if [ $compiler_size -gt $((500 * 1024)) ]; then
-                log "⚠️ 编译器目录过大 (>500KB)，建议使用Git LFS或外部存储"
-            fi
-        fi
-        
-        # 建议操作
-        log "💡 建议操作:"
-        log "  1. 检查是否有大文件上传到Git"
-        log "  2. 使用.gitignore排除不必要的文件:"
-        log "     在.gitignore中添加:"
-        log "     # 大文件"
-        log "     *.tar.gz"
-        log "     *.tar.xz"
-        log "     *.zip"
-        log "     *.7z"
-        log "     # 编译器文件"
-        log "     firmware-config/build-Compiler-file/*"
-        log "     # 构建产物"
-        log "     *.bin"
-        log "     *.img"
-        log "     *.ipk"
-        log "  3. 对于大文件，使用Git LFS或外部存储"
-        log "  4. 预构建编译器文件应放在单独的存储中"
-        log "  5. 清理不必要的文件:"
-        log "     rm -rf firmware-config/build-Compiler-file/*.tar.*"
-        log "     rm -rf firmware-config/build-Compiler-file/*.zip"
-        
-        # 提供清理命令
-        log "🛠️ 清理命令示例:"
-        log "  # 删除所有tar.gz/tar.xz文件"
-        log "  find \"$REPO_ROOT\" -name \"*.tar.gz\" -o -name \"*.tar.xz\" -o -name \"*.tgz\" -o -name \"*.zip\" | xargs rm -f"
-        log "  # 删除大于100KB的文件"
-        log "  find \"$REPO_ROOT\" -type f -size +100k ! -path \"*/.git/*\" -exec rm -f {} \;"
-        
-        exit 1
-    else
-        log "✅ Git上传源代码大小检查通过: $(($source_size / 1024))KB < 2048KB"
-        
-        # 检查是否有可疑的大文件
-        log "🔍 检查可疑的大文件 (>500KB):"
-        local large_files=$(find "$REPO_ROOT" -type f ! -path "*/.git/*" -size +500k 2>/dev/null | wc -l)
-        if [ $large_files -gt 0 ]; then
-            log "⚠️ 发现 $large_files 个大于500KB的文件:"
-            find "$REPO_ROOT" -type f ! -path "*/.git/*" -size +500k 2>/dev/null | head -10 | while read file; do
-                local file_size=$(du -h "$file" 2>/dev/null | cut -f1)
-                log "  📄 $file_size - $file"
-            done
-            log "💡 建议将这些大文件添加到.gitignore或使用Git LFS"
-        else
-            log "✅ 没有发现大于500KB的可疑文件"
-        fi
-        
-        # 检查文件数量
-        local file_count=$(find "$REPO_ROOT" -type f ! -path "*/.git/*" 2>/dev/null | wc -l)
-        log "📊 文件统计:"
-        log "  文件总数: $file_count 个"
-        log "  目录总数: $(find "$REPO_ROOT" -type d ! -path "*/.git/*" 2>/dev/null | wc -l) 个"
-        
-        return 0
-    fi
-}
-
 # 检查并准备编译器目录（增强版）
 check_and_prepare_compiler_dir() {
     log "=== 检查并准备编译器目录（增强版）==="
@@ -2802,9 +2690,7 @@ main() {
         "intelligent_platform_aware_compiler_search")
             intelligent_platform_aware_compiler_search "$2" "$3" "$4"
             ;;
-        "check_git_source_size")
-            check_git_source_size
-            ;;
+        # 已移除：check_git_source_size
         "check_and_prepare_compiler_dir")
             check_and_prepare_compiler_dir
             ;;
@@ -2819,15 +2705,15 @@ main() {
             echo "  pre_build_error_check, build_firmware, post_build_space_check"
             echo "  check_firmware_files, cleanup, save_source_code_info, verify_compiler_files"
             echo "  check_compiler_invocation, search_compiler_files, universal_compiler_search"
-            echo "  search_compiler_files_simple, check_git_source_size, check_and_prepare_compiler_dir"
+            echo "  search_compiler_files_simple, check_and_prepare_compiler_dir"
             echo "  intelligent_platform_aware_compiler_search - 智能平台感知编译器搜索"
             exit 1
             ;;
     esac
 }
 
-# 在脚本开始时检查Git源代码大小
-check_git_source_size
+# 注释掉已移除的2MB限制检查函数调用
+# check_git_source_size  # 此函数已被移除，不再调用
 
 # 检查并准备编译器目录
 check_and_prepare_compiler_dir
