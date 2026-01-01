@@ -124,8 +124,19 @@ jobs:
           rm -rf openwrt-source
           echo "✅ Git Archive API下载完成"
       
-      # 步骤 2: 立即上传Git Archive源代码
-      - name: "2. 立即上传Git Archive源代码"
+      # 步骤 2: 检查Git源代码大小（在步骤1和步骤3之间）
+      - name: "2. 检查Git源代码大小"
+        if: github.event.inputs.use_git_archive == 'true'
+        run: |
+          echo "=== 步骤 2: 检查Git源代码大小（Git Archive下载后）==="
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            firmware-config/scripts/build_firmware_main.sh check_git_source_size
+          else
+            echo "⚠️ 脚本文件不存在，跳过源代码大小检查"
+          fi
+      
+      # 步骤 3: 立即上传Git Archive源代码
+      - name: "3. 立即上传Git Archive源代码"
         if: github.event.inputs.use_git_archive == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -133,25 +144,47 @@ jobs:
           path: /tmp/build-artifacts/source-archive/
           retention-days: 7
       
-      # 步骤 3: 检出配置仓库
-      - name: "3. 检出配置仓库"
+      # 步骤 4: 再次检查Git源代码大小（在步骤3之后，步骤5之前）
+      - name: "4. 再次检查Git源代码大小"
+        if: github.event.inputs.use_git_archive == 'true'
+        run: |
+          echo "=== 步骤 4: 再次检查Git源代码大小 ==="
+          echo "🔄 再次验证源代码大小，确保没有大文件..."
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            firmware-config/scripts/build_firmware_main.sh check_git_source_size
+          else
+            echo "⚠️ 脚本文件不存在，跳过源代码大小检查"
+          fi
+      
+      # 步骤 5: 检出配置仓库（当不使用Git Archive时）
+      - name: "5. 检出配置仓库"
         if: github.event.inputs.use_git_archive == 'false'
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: recursive
       
-      # 步骤 4: 设置脚本执行权限
-      - name: "4. 设置脚本执行权限"
+      # 步骤 6: 检查并准备编译器目录
+      - name: "6. 检查并准备编译器目录"
         run: |
-          echo "=== 步骤 4: 设置脚本执行权限 ==="
+          echo "=== 步骤 6: 检查并准备编译器目录 ==="
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            firmware-config/scripts/build_firmware_main.sh check_and_prepare_compiler_dir
+          else
+            echo "⚠️ 脚本文件不存在，跳过编译器目录检查"
+          fi
+      
+      # 步骤 7: 设置脚本执行权限
+      - name: "7. 设置脚本执行权限"
+        run: |
+          echo "=== 步骤 7: 设置脚本执行权限 ==="
           find firmware-config/scripts -name "*.sh" -exec chmod +x {} \;
           echo "✅ 脚本执行权限设置完成"
       
-      # 步骤 5: 智能查找正确的编译器文件
-      - name: "5. 智能查找正确的编译器文件"
+      # 步骤 8: 智能查找正确的编译器文件
+      - name: "8. 智能查找正确的编译器文件"
         run: |
-          echo "=== 步骤 5: 智能查找正确的编译器文件 ==="
+          echo "=== 步骤 8: 智能查找正确的编译器文件 ==="
           
           # 设置环境变量
           REPO_ROOT="${{ github.workspace }}"
@@ -325,10 +358,10 @@ jobs:
           
           echo "✅ 编译器查找完成"
       
-      # 步骤 6: 初始空间检查
-      - name: "6. 初始空间检查"
+      # 步骤 9: 初始空间检查
+      - name: "9. 初始空间检查"
         run: |
-          echo "=== 步骤 6: 初始磁盘空间检查 ==="
+          echo "=== 步骤 9: 初始磁盘空间检查 ==="
           df -h
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
@@ -339,18 +372,18 @@ jobs:
           fi
           echo "✅ 初始空间检查通过"
       
-      # 步骤 7: 设置编译环境和构建目录
-      - name: "7. 设置编译环境和构建目录"
+      # 步骤 10: 设置编译环境和构建目录
+      - name: "10. 设置编译环境和构建目录"
         run: |
-          echo "=== 步骤 7: 设置编译环境和构建目录 ==="
+          echo "=== 步骤 10: 设置编译环境和构建目录 ==="
           
-          echo "🔄 步骤 7.1: 设置编译环境"
+          echo "🔄 步骤 10.1: 设置编译环境"
           firmware-config/scripts/build_firmware_main.sh setup_environment
           
-          echo "🔄 步骤 7.2: 创建构建目录"
+          echo "🔄 步骤 10.2: 创建构建目录"
           firmware-config/scripts/build_firmware_main.sh create_build_dir
           
-          echo "🔄 步骤 7.3: 初始化构建环境"
+          echo "🔄 步骤 10.3: 初始化构建环境"
           echo "设备: ${{ github.event.inputs.device_name }}"
           echo "版本: ${{ github.event.inputs.version_selection }}"
           echo "配置模式: ${{ github.event.inputs.config_mode }}"
@@ -358,54 +391,54 @@ jobs:
           
           echo "✅ 编译环境和构建目录设置完成"
       
-      # 步骤 8: 添加 TurboACC 支持
-      - name: "8. 添加 TurboACC 支持"
+      # 步骤 11: 添加 TurboACC 支持
+      - name: "11. 添加 TurboACC 支持"
         run: |
-          echo "=== 步骤 8: 添加 TurboACC 支持 ==="
+          echo "=== 步骤 11: 添加 TurboACC 支持 ==="
           firmware-config/scripts/build_firmware_main.sh add_turboacc_support
       
-      # 步骤 9: 配置Feeds
-      - name: "9. 配置Feeds"
+      # 步骤 12: 配置Feeds
+      - name: "12. 配置Feeds"
         run: |
-          echo "=== 步骤 9: 配置Feeds ==="
+          echo "=== 步骤 12: 配置Feeds ==="
           firmware-config/scripts/build_firmware_main.sh configure_feeds
       
-      # 步骤 10: 安装 TurboACC 包
-      - name: "10. 安装 TurboACC 包"
+      # 步骤 13: 安装 TurboACC 包
+      - name: "13. 安装 TurboACC 包"
         if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
         run: |
-          echo "=== 步骤 10: 安装 TurboACC 包 ==="
+          echo "=== 步骤 13: 安装 TurboACC 包 ==="
           firmware-config/scripts/build_firmware_main.sh install_turboacc_packages
       
-      # 步骤 11: 编译前空间检查
-      - name: "11. 编译前空间检查"
+      # 步骤 14: 编译前空间检查
+      - name: "14. 编译前空间检查"
         run: |
-          echo "=== 步骤 11: 编译前空间检查 ==="
+          echo "=== 步骤 14: 编译前空间检查 ==="
           firmware-config/scripts/build_firmware_main.sh pre_build_space_check
       
-      # 步骤 12: 智能配置生成（USB完全修复加强版）
-      - name: "12. 智能配置生成（USB完全修复加强版）"
+      # 步骤 15: 智能配置生成（USB完全修复加强版）
+      - name: "15. 智能配置生成（USB完全修复加强版）"
         run: |
-          echo "=== 步骤 12: 智能配置生成 ==="
+          echo "=== 步骤 15: 智能配置生成 ==="
           echo "🚨 USB 3.0加强：所有关键USB驱动强制启用"
           firmware-config/scripts/build_firmware_main.sh generate_config "${{ github.event.inputs.extra_packages }}"
       
-      # 步骤 13: 验证USB配置
-      - name: "13. 验证USB配置"
+      # 步骤 16: 验证USB配置
+      - name: "16. 验证USB配置"
         run: |
-          echo "=== 步骤 13: 验证USB配置 ==="
+          echo "=== 步骤 16: 验证USB配置 ==="
           firmware-config/scripts/build_firmware_main.sh verify_usb_config
       
-      # 步骤 14: USB驱动完整性检查
-      - name: "14. USB驱动完整性检查"
+      # 步骤 17: USB驱动完整性检查
+      - name: "17. USB驱动完整性检查"
         run: |
-          echo "=== 步骤 14: USB驱动完整性检查 ==="
+          echo "=== 步骤 17: USB驱动完整性检查 ==="
           firmware-config/scripts/build_firmware_main.sh check_usb_drivers_integrity
       
-      # 步骤 15: 应用配置并显示详情
-      - name: "15. 应用配置并显示详情"
+      # 步骤 18: 应用配置并显示详情
+      - name: "18. 应用配置并显示详情"
         run: |
-          echo "=== 步骤 15: 应用配置并显示详情 ==="
+          echo "=== 步骤 18: 应用配置并显示详情 ==="
           
           # 先保存原始配置文件
           if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
@@ -489,10 +522,10 @@ jobs:
           
           echo "✅ 配置详情检查完成"
       
-      # 步骤 16: 检查并备份配置文件
-      - name: "16. 检查并备份配置文件"
+      # 步骤 19: 检查并备份配置文件
+      - name: "19. 检查并备份配置文件"
         run: |
-          echo "=== 步骤 16: 检查并备份配置文件 ==="
+          echo "=== 步骤 19: 检查并备份配置文件 ==="
           
           # 检查配置文件
           if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
@@ -514,34 +547,34 @@ jobs:
             exit 1
           fi
       
-      # 步骤 17: 修复网络环境
-      - name: "17. 修复网络环境"
+      # 步骤 20: 修复网络环境
+      - name: "20. 修复网络环境"
         run: |
-          echo "=== 步骤 17: 修复网络环境 ==="
+          echo "=== 步骤 20: 修复网络环境 ==="
           firmware-config/scripts/build_firmware_main.sh fix_network
       
-      # 步骤 18: 下载依赖包
-      - name: "18. 下载依赖包"
+      # 步骤 21: 下载依赖包
+      - name: "21. 下载依赖包"
         run: |
-          echo "=== 步骤 18: 下载依赖包 ==="
+          echo "=== 步骤 21: 下载依赖包 ==="
           firmware-config/scripts/build_firmware_main.sh download_dependencies
       
-      # 步骤 19: 集成自定义文件
-      - name: "19. 集成自定义文件"
+      # 步骤 22: 集成自定义文件
+      - name: "22. 集成自定义文件"
         run: |
-          echo "=== 步骤 19: 集成自定义文件 ==="
+          echo "=== 步骤 22: 集成自定义文件 ==="
           firmware-config/scripts/build_firmware_main.sh integrate_custom_files
       
-      # 步骤 20: 前置错误检查（包含编译器验证）
-      - name: "20. 前置错误检查（包含编译器验证）"
+      # 步骤 23: 前置错误检查（包含编译器验证）
+      - name: "23. 前置错误检查（包含编译器验证）"
         run: |
-          echo "=== 步骤 20: 前置错误检查 ==="
+          echo "=== 步骤 23: 前置错误检查 ==="
           firmware-config/scripts/build_firmware_main.sh pre_build_error_check
       
-      # 步骤 21: 编译固件前的空间检查
-      - name: "21. 编译固件前的空间检查"
+      # 步骤 24: 编译固件前的空间检查
+      - name: "24. 编译固件前的空间检查"
         run: |
-          echo "=== 步骤 21: 编译固件前的空间检查 ==="
+          echo "=== 步骤 24: 编译固件前的空间检查 ==="
           df -h
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
@@ -557,10 +590,10 @@ jobs:
             echo "✅ 编译前空间充足"
           fi
       
-      # 步骤 22: 编译固件（使用改进的编译器搜索和调用）
-      - name: "22. 编译固件（使用改进的编译器搜索和调用）"
+      # 步骤 25: 编译固件（使用改进的编译器搜索和调用）
+      - name: "25. 编译固件（使用改进的编译器搜索和调用）"
         run: |
-          echo "=== 步骤 22: 编译固件 ==="
+          echo "=== 步骤 25: 编译固件 ==="
           echo "🔧 使用改进的编译器搜索和调用功能..."
           
           # 显示编译器信息
@@ -582,11 +615,11 @@ jobs:
           echo "🚀 开始编译固件..."
           firmware-config/scripts/build_firmware_main.sh build_firmware "true"
       
-      # 步骤 23: 搜索并打包构建产物
-      - name: "23. 搜索并打包构建产物"
+      # 步骤 26: 搜索并打包构建产物
+      - name: "26. 搜索并打包构建产物"
         if: success()
         run: |
-          echo "=== 步骤 23: 搜索并打包构建产物 ==="
+          echo "=== 步骤 26: 搜索并打包构建产物 ==="
           cd ${{ env.BUILD_DIR }}
           
           # 创建构建产物目录
@@ -637,8 +670,8 @@ jobs:
             echo "ℹ️ 没有需要上传的构建产物"
           fi
       
-      # 步骤 24: 上传固件原始目录
-      - name: "24. 上传固件原始目录"
+      # 步骤 27: 上传固件原始目录
+      - name: "27. 上传固件原始目录"
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -646,8 +679,8 @@ jobs:
           path: ${{ env.BUILD_DIR }}/bin/targets/
           retention-days: 7
       
-      # 步骤 25: 上传配置文件
-      - name: "25. 上传配置文件"
+      # 步骤 28: 上传配置文件
+      - name: "28. 上传配置文件"
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -655,16 +688,16 @@ jobs:
           path: ${{ github.workspace }}/firmware-config/config-backup/
           retention-days: 7
       
-      # 步骤 26: 错误分析（无论成功失败都运行）
-      - name: "26. 错误分析"
+      # 步骤 29: 错误分析（无论成功失败都运行）
+      - name: "29. 错误分析"
         if: always()
         run: |
-          echo "=== 步骤 26: 错误分析 ==="
+          echo "=== 步骤 29: 错误分析 ==="
           firmware-config/scripts/error_analysis.sh
       
-      # 步骤 27: 编译后空间检查
-      - name: "27. 编译后空间检查"
+      # 步骤 30: 编译后空间检查
+      - name: "30. 编译后空间检查"
         if: always()
         run: |
-          echo "=== 步骤 27: 编译后空间检查 ==="
+          echo "=== 步骤 30: 编译后空间检查 ==="
           firmware-config/scripts/build_firmware_main.sh post_build_space_check
