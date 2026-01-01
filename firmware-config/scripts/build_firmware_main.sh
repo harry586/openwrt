@@ -293,107 +293,29 @@ search_compiler_files() {
     fi
 }
 
-# 保存环境变量函数
-save_env() {
-    mkdir -p $BUILD_DIR
-    echo "#!/bin/bash" > $ENV_FILE
-    echo "export SELECTED_REPO_URL=\"$SELECTED_REPO_URL\"" >> $ENV_FILE
-    echo "export SELECTED_BRANCH=\"$SELECTED_BRANCH\"" >> $ENV_FILE
-    echo "export TARGET=\"$TARGET\"" >> $ENV_FILE
-    echo "export SUBTARGET=\"$SUBTARGET\"" >> $ENV_FILE
-    echo "export DEVICE=\"$DEVICE\"" >> $ENV_FILE
-    echo "export CONFIG_MODE=\"$CONFIG_MODE\"" >> $ENV_FILE
-    echo "export REPO_ROOT=\"$REPO_ROOT\"" >> $ENV_FILE
-    echo "export COMPILER_ROOT=\"$COMPILER_ROOT\"" >> $ENV_FILE
-    echo "export COMPILER_DIR=\"$COMPILER_DIR\"" >> $ENV_FILE
-    chmod +x $ENV_FILE
-}
-
-# 加载环境变量函数
-load_env() {
-    if [ -f "$ENV_FILE" ]; then
-        source $ENV_FILE
-    fi
-}
-
-# 保存源代码信息函数
-save_source_code_info() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 保存源代码信息 ==="
-    
-    # 创建源代码信息目录
-    local source_info_dir="/tmp/build-artifacts/source-info"
-    mkdir -p "$source_info_dir"
-    
-    # 保存构建环境信息
-    cat > "$source_info_dir/build_env.txt" << EOF
-构建环境信息
-===========
-构建时间: $(date)
-设备: $DEVICE
-版本: $SELECTED_BRANCH
-目标平台: $TARGET/$SUBTARGET
-配置模式: $CONFIG_MODE
-构建目录: $BUILD_DIR
-仓库根目录: $REPO_ROOT
-预构建编译器根目录: $COMPILER_ROOT
-预构建编译器目录: $COMPILER_DIR
-EOF
-    
-    # 保存配置文件信息
-    if [ -f ".config" ]; then
-        cp ".config" "$source_info_dir/openwrt.config"
-        log "✅ 配置文件已保存"
-    fi
-    
-    # 保存feeds信息
-    if [ -f "feeds.conf.default" ]; then
-        cp "feeds.conf.default" "$source_info_dir/feeds.conf"
-        log "✅ Feeds配置已保存"
-    fi
-    
-    # 保存目录结构
-    log "📁 保存目录结构信息..."
-    find . -maxdepth 3 -type d | sort > "$source_info_dir/directory_structure.txt"
-    
-    # 保存关键文件列表
-    log "📋 保存关键文件列表..."
-    cat > "$source_info_dir/key_files.txt" << 'EOF'
-关键文件列表
-==========
-.config - OpenWrt配置文件
-feeds.conf.default - Feeds配置文件
-Makefile - 主Makefile
-rules.mk - 构建规则
-Config.in - 配置菜单
-feeds/ - Feeds目录
-package/ - 包目录
-target/ - 目标平台目录
-toolchain/ - 编译器目录
-EOF
-    
-    log "✅ 源代码信息保存完成: $source_info_dir"
-}
-
-# 验证预构建编译器文件函数（改进版）
+# 验证预构建编译器文件函数（修复版）
 verify_compiler_files() {
-    log "=== 验证预构建编译器文件（改进版）==="
+    log "=== 验证预构建编译器文件（修复版）==="
     
     # 确定目标平台
     local target_platform=""
+    local target_suffix=""
     case "$TARGET" in
         "ipq40xx")
             target_platform="arm"
+            target_suffix="arm_cortex-a7"
             log "目标平台: ARM (高通IPQ40xx)"
+            log "目标架构: $target_suffix"
             ;;
         "ramips")
             target_platform="mips"
+            target_suffix="mipsel_24kc"
             log "目标平台: MIPS (雷凌MT76xx)"
+            log "目标架构: $target_suffix"
             ;;
         *)
             target_platform="generic"
+            target_suffix="generic"
             log "目标平台: 通用"
             ;;
     esac
@@ -403,43 +325,32 @@ verify_compiler_files() {
         log "✅ 使用环境变量中的编译器目录: $COMPILER_DIR"
         local compiler_dir="$COMPILER_DIR"
     else
-        # 加强版搜索编译器文件
-        log "🔍 加强版搜索编译器文件..."
+        log "🔍 搜索正确的编译器..."
         
-        # 尝试多个可能的根目录
-        local search_roots=(
-            "$COMPILER_ROOT"
-            "$REPO_ROOT/firmware-config"
-            "$REPO_ROOT"
-            "/tmp"
-            "$HOME"
-        )
-        
-        for search_root in "${search_roots[@]}"; do
-            if [ -d "$search_root" ]; then
-                log "🔄 在 $search_root 中搜索编译器文件..."
-                compiler_dir=$(search_compiler_files "$search_root" "$target_platform")
-                
-                if [ -n "$compiler_dir" ] && [ -d "$compiler_dir" ]; then
-                    log "✅ 找到编译器目录: $compiler_dir"
-                    export COMPILER_DIR="$compiler_dir"
-                    
-                    # 保存到环境文件
-                    if [ -f "$ENV_FILE" ]; then
-                        echo "export COMPILER_DIR=\"$compiler_dir\"" >> $ENV_FILE
-                    fi
-                    
-                    # 保存到GitHub环境变量
-                    if [ -n "$GITHUB_ENV" ]; then
-                        echo "COMPILER_DIR=$compiler_dir" >> $GITHUB_ENV
-                    fi
-                    
-                    break
-                fi
+        # 根据目标平台搜索正确的编译器
+        if [ "$target_platform" = "arm" ]; then
+            # 搜索ARM编译器
+            compiler_dir=$(find "$COMPILER_ROOT" -type d -path "*arm*" \( -name "*gcc-11.3.0*" -o -name "*gcc-11*" \) 2>/dev/null | head -1)
+            if [ -z "$compiler_dir" ]; then
+                compiler_dir=$(find "$COMPILER_ROOT" -type d -name "*arm*" 2>/dev/null | head -1)
             fi
-        done
+        elif [ "$target_platform" = "mips" ]; then
+            # 搜索MIPS编译器
+            compiler_dir=$(find "$COMPILER_ROOT" -type d -path "*mips*" \( -name "*gcc-11.3.0*" -o -name "*gcc-11*" \) 2>/dev/null | head -1)
+            if [ -z "$compiler_dir" ]; then
+                compiler_dir=$(find "$COMPILER_ROOT" -type d -name "*mips*" 2>/dev/null | head -1)
+            fi
+        fi
         
+        # 如果没找到，搜索任何gcc-11.3.0
         if [ -z "$compiler_dir" ] || [ ! -d "$compiler_dir" ]; then
+            compiler_dir=$(find "$COMPILER_ROOT" -type d -name "*gcc-11.3.0*" 2>/dev/null | head -1)
+        fi
+        
+        if [ -n "$compiler_dir" ] && [ -d "$compiler_dir" ]; then
+            log "✅ 找到编译器目录: $compiler_dir"
+            export COMPILER_DIR="$compiler_dir"
+        else
             log "⚠️ 未找到合适的预构建编译器目录"
             log "💡 将使用OpenWrt自动构建的编译器"
             return 0
@@ -451,54 +362,43 @@ verify_compiler_files() {
     log "  路径: $compiler_dir"
     log "  大小: $(du -sh "$compiler_dir" 2>/dev/null | cut -f1 || echo '未知')"
     
-    # 显示目录结构
-    log "📁 目录结构:"
-    find "$compiler_dir" -maxdepth 2 -type d 2>/dev/null | head -15 | while read dir; do
-        log "  📂 $(echo "$dir" | sed "s|$compiler_dir/||")"
-    done
-    
-    # 检查关键文件
-    log "🔧 关键文件检查:"
-    
-    # 定义关键文件类型
-    local critical_files=(
-        "*gcc*"
-        "*g++*"
-        "*as*"
-        "*ld*"
-        "*ar*"
-        "*strip*"
-        "*objcopy*"
-        "*.a"
-        "*.so*"
-        "*.h"
-    )
-    
-    local found_count=0
-    for pattern in "${critical_files[@]}"; do
-        local file_count=$(find "$compiler_dir" -type f -iname "$pattern" 2>/dev/null | wc -l)
-        if [ $file_count -gt 0 ]; then
-            log "  ✅ $pattern: 找到 $file_count 个文件"
-            found_count=$((found_count + 1))
-        else
-            log "  ⚠️ $pattern: 未找到"
-        fi
-    done
-    
     # 查找可执行的编译器
     log "⚙️ 可执行编译器检查:"
-    local gcc_executable=$(find "$compiler_dir" -type f -executable -iname "*gcc*" 2>/dev/null | head -1)
-    local gpp_executable=$(find "$compiler_dir" -type f -executable -iname "*g++*" 2>/dev/null | head -1)
+    local gcc_executable=$(find "$compiler_dir" -type f -executable -name "*gcc*" 2>/dev/null | head -1)
+    local gpp_executable=$(find "$compiler_dir" -type f -executable -name "*g++*" 2>/dev/null | head -1)
     
     if [ -n "$gcc_executable" ]; then
         log "  ✅ 找到可执行GCC: $(basename "$gcc_executable")"
         
         # 测试编译器版本
         if "$gcc_executable" --version 2>&1 | head -1 >/dev/null 2>&1; then
-            local version=$("$gcc_executable" --version 2>&1 | head -1 | cut -c1-50)
+            local version=$("$gcc_executable" --version 2>&1 | head -1)
             log "     版本: $version"
+            
+            # 检查是否是gcc 11.x版本
+            if [[ "$version" == *"11."* ]]; then
+                log "     ✅ 版本正确: GCC 11.x"
+            else
+                log "     ⚠️ 版本不是GCC 11.x"
+            fi
         else
             log "     ⚠️ 无法获取版本信息"
+        fi
+        
+        # 检查平台匹配
+        local gcc_name=$(basename "$gcc_executable")
+        if [ "$target_platform" = "arm" ]; then
+            if [[ "$gcc_name" == *arm* ]] || [[ "$gcc_name" == *aarch64* ]]; then
+                log "     🎯 编译器平台匹配: ARM"
+            else
+                log "     ⚠️ 编译器平台不匹配: $gcc_name (期望: ARM)"
+            fi
+        elif [ "$target_platform" = "mips" ]; then
+            if [[ "$gcc_name" == *mips* ]] || [[ "$gcc_name" == *mipsel* ]]; then
+                log "     🎯 编译器平台匹配: MIPS"
+            else
+                log "     ⚠️ 编译器平台不匹配: $gcc_name (期望: MIPS)"
+            fi
         fi
     else
         log "  ❌ 未找到可执行的GCC编译器"
@@ -514,7 +414,7 @@ verify_compiler_files() {
     local tool_found_count=0
     
     for tool in "${required_tools[@]}"; do
-        local tool_executable=$(find "$compiler_dir" -type f -executable -iname "*${tool}*" 2>/dev/null | head -1)
+        local tool_executable=$(find "$compiler_dir" -type f -executable -name "*${tool}*" 2>/dev/null | head -1)
         if [ -n "$tool_executable" ]; then
             log "  ✅ $tool: 找到"
             tool_found_count=$((tool_found_count + 1))
@@ -525,26 +425,30 @@ verify_compiler_files() {
     
     # 总结评估
     log "📈 编译器完整性评估:"
-    log "  关键文件类型: $found_count/10 找到"
-    log "  工具链工具: $tool_found_count/${#required_tools[@]} 找到"
     log "  可执行编译器: $([ -n "$gcc_executable" ] && echo "是" || echo "否")"
+    log "  工具链工具: $tool_found_count/${#required_tools[@]} 找到"
+    log "  平台匹配: $([ -n "$gcc_executable" ] && [ "$target_platform" = "arm" ] && [[ "$(basename "$gcc_executable")" == *arm* ]] && echo "是" || echo "否")"
     
     # 评估是否可用
-    if [ -n "$gcc_executable" ] && [ $tool_found_count -ge 5 ] && [ $found_count -ge 5 ]; then
+    if [ -n "$gcc_executable" ] && [ $tool_found_count -ge 5 ]; then
         log "🎉 预构建编译器文件基本完整，可以尝试使用"
         log "📌 编译器目录: $compiler_dir"
         
         # 添加到PATH环境变量
-        export PATH="$compiler_dir/bin:$compiler_dir:$PATH"
-        log "🔧 已将编译器目录添加到PATH环境变量"
+        if [ -d "$compiler_dir/bin" ]; then
+            export PATH="$compiler_dir/bin:$compiler_dir:$PATH"
+            log "🔧 已将编译器目录添加到PATH环境变量"
+        fi
         
         return 0
-    elif [ $found_count -ge 3 ]; then
+    elif [ -n "$gcc_executable" ]; then
         log "⚠️ 预构建编译器文件部分完整，可能可用"
         log "💡 将尝试使用，但可能回退到自动构建"
         
         # 仍然尝试添加到PATH
-        export PATH="$compiler_dir/bin:$compiler_dir:$PATH"
+        if [ -d "$compiler_dir/bin" ]; then
+            export PATH="$compiler_dir/bin:$compiler_dir:$PATH"
+        fi
         return 0
     else
         log "⚠️ 预构建编译器文件可能不完整"
@@ -649,6 +553,90 @@ check_compiler_invocation() {
     fi
     
     log "✅ 编译器调用状态检查完成"
+}
+
+# 保存环境变量函数
+save_env() {
+    mkdir -p $BUILD_DIR
+    echo "#!/bin/bash" > $ENV_FILE
+    echo "export SELECTED_REPO_URL=\"$SELECTED_REPO_URL\"" >> $ENV_FILE
+    echo "export SELECTED_BRANCH=\"$SELECTED_BRANCH\"" >> $ENV_FILE
+    echo "export TARGET=\"$TARGET\"" >> $ENV_FILE
+    echo "export SUBTARGET=\"$SUBTARGET\"" >> $ENV_FILE
+    echo "export DEVICE=\"$DEVICE\"" >> $ENV_FILE
+    echo "export CONFIG_MODE=\"$CONFIG_MODE\"" >> $ENV_FILE
+    echo "export REPO_ROOT=\"$REPO_ROOT\"" >> $ENV_FILE
+    echo "export COMPILER_ROOT=\"$COMPILER_ROOT\"" >> $ENV_FILE
+    echo "export COMPILER_DIR=\"$COMPILER_DIR\"" >> $ENV_FILE
+    chmod +x $ENV_FILE
+}
+
+# 加载环境变量函数
+load_env() {
+    if [ -f "$ENV_FILE" ]; then
+        source $ENV_FILE
+    fi
+}
+
+# 保存源代码信息函数
+save_source_code_info() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 保存源代码信息 ==="
+    
+    # 创建源代码信息目录
+    local source_info_dir="/tmp/build-artifacts/source-info"
+    mkdir -p "$source_info_dir"
+    
+    # 保存构建环境信息
+    cat > "$source_info_dir/build_env.txt" << EOF
+构建环境信息
+===========
+构建时间: $(date)
+设备: $DEVICE
+版本: $SELECTED_BRANCH
+目标平台: $TARGET/$SUBTARGET
+配置模式: $CONFIG_MODE
+构建目录: $BUILD_DIR
+仓库根目录: $REPO_ROOT
+预构建编译器根目录: $COMPILER_ROOT
+预构建编译器目录: $COMPILER_DIR
+EOF
+    
+    # 保存配置文件信息
+    if [ -f ".config" ]; then
+        cp ".config" "$source_info_dir/openwrt.config"
+        log "✅ 配置文件已保存"
+    fi
+    
+    # 保存feeds信息
+    if [ -f "feeds.conf.default" ]; then
+        cp "feeds.conf.default" "$source_info_dir/feeds.conf"
+        log "✅ Feeds配置已保存"
+    fi
+    
+    # 保存目录结构
+    log "📁 保存目录结构信息..."
+    find . -maxdepth 3 -type d | sort > "$source_info_dir/directory_structure.txt"
+    
+    # 保存关键文件列表
+    log "📋 保存关键文件列表..."
+    cat > "$source_info_dir/key_files.txt" << 'EOF'
+关键文件列表
+==========
+.config - OpenWrt配置文件
+feeds.conf.default - Feeds配置文件
+Makefile - 主Makefile
+rules.mk - 构建规则
+Config.in - 配置菜单
+feeds/ - Feeds目录
+package/ - 包目录
+target/ - 目标平台目录
+toolchain/ - 编译器目录
+EOF
+    
+    log "✅ 源代码信息保存完成: $source_info_dir"
 }
 
 integrate_custom_files() {
@@ -994,7 +982,7 @@ pre_build_error_check() {
         fi
     fi
     
-    # 11. 检查预构建编译器文件（使用改进版）
+    # 11. 检查预构建编译器文件（使用修复版）
     log "🔧 检查预构建编译器文件..."
     verify_compiler_files
     
@@ -2199,6 +2187,7 @@ cleanup() {
     fi
 }
 
+# 主函数
 main() {
     case $1 in
         "setup_environment")
