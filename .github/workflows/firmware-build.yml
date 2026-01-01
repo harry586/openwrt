@@ -241,10 +241,10 @@ jobs:
       - name: "7. 检查并准备编译器目录"
         run: firmware-config/scripts/build_firmware_main.sh check_and_prepare_compiler_dir
       
-      # 步骤 8: 智能查找正确的编译器文件
-      - name: "8. 智能查找正确的编译器文件"
+      # 步骤 8: 智能查找正确的编译器文件（使用增强搜索）
+      - name: "8. 智能查找正确的编译器文件（使用增强搜索）"
         run: |
-          echo "=== 步骤 8: 智能查找正确的编译器文件 ==="
+          echo "=== 步骤 8: 智能查找正确的编译器文件（使用增强搜索）==="
           
           # 设置环境变量
           REPO_ROOT="${{ github.workspace }}"
@@ -252,6 +252,20 @@ jobs:
           
           echo "📁 仓库根目录: $REPO_ROOT"
           echo "🔧 编译器根目录: $COMPILER_ROOT"
+          
+          # 检查编译器根目录是否存在
+          if [ ! -d "$COMPILER_ROOT" ]; then
+            echo "❌ 错误: 编译器根目录不存在: $COMPILER_ROOT"
+            exit 1
+          fi
+          
+          echo "✅ 编译器根目录存在"
+          
+          # 运行增强的目录检查
+          echo "🔄 运行增强的目录检查..."
+          firmware-config/scripts/build_firmware_main.sh check_and_prepare_compiler_dir
+          
+          echo ""
           
           # 确定目标平台
           DEVICE_NAME="${{ github.event.inputs.device_name }}"
@@ -284,131 +298,78 @@ jobs:
               ;;
           esac
           
-          # 检查编译器目录是否存在
-          if [ ! -d "$COMPILER_ROOT" ]; then
-            echo "❌ 错误: 编译器根目录不存在: $COMPILER_ROOT"
-            exit 1
-          fi
+          # 使用增强搜索功能
+          echo ""
+          echo "🔍 使用增强搜索功能查找编译器..."
+          COMPILER_DIR=$(firmware-config/scripts/build_firmware_main.sh universal_compiler_search "$COMPILER_ROOT" "$TARGET_PLATFORM")
           
-          echo "✅ 编译器根目录存在"
-          
-          # 智能搜索正确的编译器
-          echo "🔍 智能搜索编译器..."
-          COMPILER_DIR=""
-          
-          # 1. 首先尝试精确匹配：平台 + gcc-11.3.0
-          if [ "$TARGET_PLATFORM" = "arm" ]; then
-            echo "🔍 搜索ARM平台的gcc-11.3.0编译器..."
-            COMPILER_DIR=$(find "$COMPILER_ROOT" -type d -path "*arm*" -name "*gcc-11.3.0*" 2>/dev/null | head -1)
-          elif [ "$TARGET_PLATFORM" = "mips" ]; then
-            echo "🔍 搜索MIPS平台的gcc-11.3.0编译器..."
-            COMPILER_DIR=$(find "$COMPILER_ROOT" -type d -path "*mips*" -name "*gcc-11.3.0*" 2>/dev/null | head -1)
-          fi
-          
-          # 2. 如果没找到，尝试平台 + gcc-11
-          if [ -z "$COMPILER_DIR" ] || [ ! -d "$COMPILER_DIR" ]; then
-            echo "🔍 搜索平台的gcc-11编译器..."
-            if [ "$TARGET_PLATFORM" = "arm" ]; then
-              COMPILER_DIR=$(find "$COMPILER_ROOT" -type d -path "*arm*" -name "*gcc-11*" 2>/dev/null | head -1)
-            elif [ "$TARGET_PLATFORM" = "mips" ]; then
-              COMPILER_DIR=$(find "$COMPILER_ROOT" -type d -path "*mips*" -name "*gcc-11*" 2>/dev/null | head -1)
-            fi
-          fi
-          
-          # 3. 如果还没找到，尝试任何gcc-11.3.0
-          if [ -z "$COMPILER_DIR" ] || [ ! -d "$COMPILER_DIR" ]; then
-            echo "🔍 搜索任何gcc-11.3.0编译器..."
-            COMPILER_DIR=$(find "$COMPILER_ROOT" -type d -name "*gcc-11.3.0*" 2>/dev/null | head -1)
-          fi
-          
-          # 4. 如果还没找到，搜索包含bin目录的编译器
-          if [ -z "$COMPILER_DIR" ] || [ ! -d "$COMPILER_DIR" ]; then
-            echo "🔍 搜索包含bin目录的编译器..."
-            BIN_DIRS=$(find "$COMPILER_ROOT" -type d -name "bin" 2>/dev/null | head -5)
+          if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+            echo "✅ 成功找到编译器目录: $COMPILER_DIR"
             
-            for BIN_DIR in $BIN_DIRS; do
-              # 检查bin目录中是否有匹配平台的gcc
-              if [ "$TARGET_PLATFORM" = "arm" ]; then
-                if find "$BIN_DIR" -name "*arm*gcc*" -type f 2>/dev/null | head -1 >/dev/null; then
-                  COMPILER_DIR=$(dirname "$BIN_DIR")
-                  echo "✅ 找到ARM编译器目录: $COMPILER_DIR"
-                  break
-                fi
-              elif [ "$TARGET_PLATFORM" = "mips" ]; then
-                if find "$BIN_DIR" -name "*mips*gcc*" -type f 2>/dev/null | head -1 >/dev/null; then
-                  COMPILER_DIR=$(dirname "$BIN_DIR")
-                  echo "✅ 找到MIPS编译器目录: $COMPILER_DIR"
-                  break
-                fi
-              fi
-            done
-          fi
-          
-          # 5. 如果还是没找到，使用第一个找到的编译器
-          if [ -z "$COMPILER_DIR" ] || [ ! -d "$COMPILER_DIR" ]; then
-            echo "⚠️ 未找到特定编译器，使用第一个找到的编译器..."
-            COMPILER_DIR=$(find "$COMPILER_ROOT" -type d -name "*gcc*" 2>/dev/null | head -1)
-          fi
-          
-          # 6. 最后回退到根目录
-          if [ -z "$COMPILER_DIR" ] || [ ! -d "$COMPILER_DIR" ]; then
-            echo "⚠️ 未找到任何编译器目录，使用根目录"
-            COMPILER_DIR="$COMPILER_ROOT"
-          fi
-          
-          echo "✅ 最终编译器目录: $COMPILER_DIR"
-          echo "COMPILER_DIR=$COMPILER_DIR" >> $GITHUB_ENV
-          
-          # 验证编译器
-          echo "📊 编译器验证:"
-          echo "  路径: $COMPILER_DIR"
-          echo "  大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
-          
-          # 查找GCC
-          GCC_PATH=$(find "$COMPILER_DIR" -type f -name "*gcc*" -executable 2>/dev/null | head -1)
-          
-          if [ -n "$GCC_PATH" ]; then
-            echo "✅ 找到可执行GCC: $GCC_PATH"
-            GCC_NAME=$(basename "$GCC_PATH")
+            # 验证编译器目录
+            echo "📊 编译器目录详细信息:"
+            echo "  路径: $COMPILER_DIR"
+            echo "  大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
+            echo "  文件数: $(find "$COMPILER_DIR" -type f 2>/dev/null | wc -l)"
             
-            # 检查平台匹配
-            if [ "$TARGET_PLATFORM" = "arm" ]; then
-              if [[ "$GCC_NAME" == *arm* ]] || [[ "$GCC_NAME" == *aarch64* ]]; then
-                echo "  🎯 GCC与目标平台(ARM)匹配"
-              else
-                echo "  ⚠️  GCC平台不匹配: $GCC_NAME (期望: ARM)"
-              fi
-            elif [ "$TARGET_PLATFORM" = "mips" ]; then
-              if [[ "$GCC_NAME" == *mips* ]] || [[ "$GCC_NAME" == *mipsel* ]]; then
-                echo "  🎯 GCC与目标平台(MIPS)匹配"
-              else
-                echo "  ⚠️  GCC平台不匹配: $GCC_NAME (期望: MIPS)"
-              fi
-            fi
+            # 检查是否包含编译器文件
+            echo "🔧 编译器文件验证:"
+            GCC_FILES=$(find "$COMPILER_DIR" -type f -name "*gcc*" 2>/dev/null | wc -l)
+            echo "  GCC文件数: $GCC_FILES"
             
-            # 获取GCC版本
-            if "$GCC_PATH" --version 2>&1 | head -1 >/dev/null 2>&1; then
-              VERSION=$("$GCC_PATH" --version 2>&1 | head -1)
-              echo "  版本: $VERSION"
+            if [ $GCC_FILES -gt 0 ]; then
+              echo "  ✅ 找到GCC文件"
               
-              # 检查是否是gcc 11.x版本
-              if [[ "$VERSION" == *"11."* ]]; then
-                echo "  ✅ 版本正确: GCC 11.x"
-              else
-                echo "  ⚠️  版本不是GCC 11.x: $VERSION"
-              fi
+              # 显示前3个GCC文件
+              find "$COMPILER_DIR" -type f -name "*gcc*" 2>/dev/null | head -3 | while read gcc_file; do
+                if [ -x "$gcc_file" ]; then
+                  size=$(du -h "$gcc_file" 2>/dev/null | cut -f1)
+                  version=$("$gcc_file" --version 2>&1 | head -1 | cut -c1-50 2>/dev/null || echo "无法获取版本")
+                  echo "    🔧 $size - $(basename "$gcc_file") - $version"
+                else
+                  size=$(du -h "$gcc_file" 2>/dev/null | cut -f1)
+                  echo "    📄 $size - $(basename "$gcc_file") (不可执行)"
+                fi
+              done
             else
-              echo "  ⚠️ 无法获取版本信息"
+              echo "  ⚠️ 未找到GCC文件，搜索其他编译器文件..."
+              
+              # 搜索任何可能的编译器文件
+              ANY_COMPILER_FILES=$(find "$COMPILER_DIR" -type f \( -name "*g++*" -o -name "*as*" -o -name "*ld*" -o -name "*ar*" \) 2>/dev/null | wc -l)
+              echo "  其他编译器文件数: $ANY_COMPILER_FILES"
             fi
+            
+            # 检查目录结构
+            echo ""
+            echo "📁 编译器目录结构:"
+            find "$COMPILER_DIR" -maxdepth 2 -type d 2>/dev/null | while read dir; do
+              depth=$(echo "$dir" | tr -cd '/' | wc -c)
+              indent=""
+              for ((i=1; i<=depth; i++)); do indent="$indent  "; done
+              
+              file_count=$(find "$dir" -maxdepth 1 -type f 2>/dev/null | wc -l)
+              dir_name=$(basename "$dir")
+              echo "${indent}📂 $dir_name/ ($file_count 个文件)"
+            done | head -15
+            
+            # 设置环境变量
+            echo "COMPILER_DIR=$COMPILER_DIR" >> $GITHUB_ENV
+            echo "✅ 编译器目录已设置: $COMPILER_DIR"
+            
           else
-            echo "❌ 未找到可执行的GCC编译器"
+            echo "❌ 未找到合适的编译器目录"
+            echo "🔄 尝试使用根目录..."
+            COMPILER_DIR="$COMPILER_ROOT"
+            echo "COMPILER_DIR=$COMPILER_DIR" >> $GITHUB_ENV
+            echo "⚠️ 使用根目录作为编译器目录: $COMPILER_DIR"
+            
+            # 列出根目录内容以帮助调试
+            echo ""
+            echo "📁 根目录内容（用于调试）:"
+            ls -la "$COMPILER_DIR" 2>/dev/null || echo "无法列出目录内容"
           fi
           
-          # 检查是否包含bin目录
-          if [ -d "$COMPILER_DIR/bin" ]; then
-            echo "✅ 编译器包含bin目录"
-          fi
-          
+          echo ""
           echo "✅ 编译器查找完成"
       
       # 步骤 9: 初始空间检查
@@ -627,7 +588,7 @@ jobs:
       - name: "25. 编译固件"
         run: |
           echo "=== 步骤 25: 编译固件 ==="
-          echo "🔧 使用改进的编译器搜索和调用功能..."
+          echo "🔧 使用增强的编译器搜索和调用功能..."
           
           # 显示编译器信息
           echo "📌 编译器调用信息:"
