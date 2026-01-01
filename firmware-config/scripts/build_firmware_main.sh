@@ -15,6 +15,76 @@ handle_error() {
     exit 1
 }
 
+# 检查Git上传源代码大小
+check_git_source_size() {
+    log "=== 检查Git上传源代码大小 ==="
+    
+    # 计算源代码目录大小（不包括.git目录）
+    local source_size=$(du -sb "$REPO_ROOT" 2>/dev/null | awk '{print $1}' || echo "0")
+    local size_limit=$((2 * 1024 * 1024))  # 2MB限制
+    
+    log "源代码目录: $REPO_ROOT"
+    log "源代码大小: $source_size 字节"
+    log "大小限制: $size_limit 字节 (2MB)"
+    
+    if [ $source_size -gt $size_limit ]; then
+        log "❌ 错误: Git上传源代码大小超过2MB限制"
+        log "当前大小: $(($source_size / 1024))KB"
+        log "限制大小: 2048KB"
+        
+        # 显示目录大小详情
+        log "📊 目录大小详情:"
+        du -h --max-depth=2 "$REPO_ROOT" | sort -hr | head -20
+        
+        # 建议操作
+        log "💡 建议:"
+        log "  1. 检查是否有大文件上传到Git"
+        log "  2. 使用.gitignore排除不必要的文件"
+        log "  3. 对于大文件，使用Git LFS或外部存储"
+        log "  4. 预构建编译器文件应放在单独的存储中"
+        
+        exit 1
+    else
+        log "✅ Git上传源代码大小检查通过: $(($source_size / 1024))KB < 2048KB"
+    fi
+    
+    # 检查是否存在编译器目录
+    log "🔍 检查编译器目录: $COMPILER_ROOT"
+    if [ -d "$COMPILER_ROOT" ]; then
+        local compiler_size=$(du -sh "$COMPILER_ROOT" 2>/dev/null | cut -f1)
+        log "✅ 编译器目录存在，大小: $compiler_size"
+        
+        # 列出编译器目录内容
+        log "📁 编译器目录内容:"
+        find "$COMPILER_ROOT" -maxdepth 2 -type d 2>/dev/null | while read dir; do
+            local count=$(find "$dir" -maxdepth 1 -type f 2>/dev/null | wc -l)
+            echo "  📂 $(echo "$dir" | sed "s|$COMPILER_ROOT/||") ($count 个文件)"
+        done | head -20
+        
+    else
+        log "⚠️ 警告: 编译器目录不存在"
+        log "💡 将使用OpenWrt自动构建的编译器"
+        
+        # 尝试在其他位置查找编译器
+        log "🔄 尝试在其他位置查找编译器文件..."
+        local possible_dirs=(
+            "$REPO_ROOT/compiler"
+            "$REPO_ROOT/toolchain"
+            "$REPO_ROOT/prebuilt"
+            "/tmp/compiler"
+            "$HOME/compiler"
+        )
+        
+        for dir in "${possible_dirs[@]}"; do
+            if [ -d "$dir" ]; then
+                log "✅ 找到备用编译器目录: $dir"
+                COMPILER_ROOT="$dir"
+                break
+            fi
+        done
+    fi
+}
+
 # 简化的编译器搜索函数
 search_compiler_files_simple() {
     local search_root="${1:-$COMPILER_ROOT}"
@@ -22,10 +92,27 @@ search_compiler_files_simple() {
     
     log "🔍 简单直接搜索编译器文件..."
     
-    # 如果指定的根目录不存在，退出
+    # 如果指定的根目录不存在，尝试自动查找
     if [ ! -d "$search_root" ]; then
-        log "❌ 编译器目录不存在: $search_root"
-        return 1
+        log "⚠️ 编译器目录不存在: $search_root"
+        log "🔄 尝试自动查找编译器..."
+        
+        # 在仓库中搜索可能的编译器目录
+        local found_dirs=$(find "$REPO_ROOT" -type d \( -name "*gcc*" -o -name "*compiler*" -o -name "*toolchain*" -o -name "*arm*" -o -name "*mips*" \) 2>/dev/null | head -5)
+        
+        if [ -n "$found_dirs" ]; then
+            log "找到可能的编译器目录:"
+            for dir in $found_dirs; do
+                echo "  📁 $dir"
+            done
+            
+            # 使用第一个找到的目录
+            search_root=$(echo "$found_dirs" | head -1)
+            log "🔄 使用找到的编译器目录: $search_root"
+        else
+            log "❌ 错误: 未找到任何编译器文件"
+            return 1
+        fi
     fi
     
     log "搜索目录: $search_root"
@@ -99,6 +186,15 @@ search_compiler_files() {
     local search_root="${1:-$COMPILER_ROOT}"
     local target_platform="$2"
     
+    # 首先检查目录是否存在
+    if [ ! -d "$search_root" ]; then
+        log "⚠️ 指定搜索目录不存在: $search_root"
+        log "🔄 尝试在仓库中其他位置搜索编译器文件..."
+        
+        # 搜索整个仓库中的编译器文件
+        search_root="$REPO_ROOT"
+    fi
+    
     # 首先尝试简单搜索
     local result=$(search_compiler_files_simple "$search_root" "$target_platform")
     if [ $? -eq 0 ] && [ -n "$result" ]; then
@@ -108,15 +204,6 @@ search_compiler_files() {
     
     # 如果简单搜索失败，使用原来的增强搜索
     log "🔍 加强版模糊搜索预构建编译器文件..."
-    
-    # 如果指定的根目录不存在，尝试在仓库中其他位置搜索
-    if [ ! -d "$search_root" ]; then
-        log "⚠️ 指定搜索目录不存在: $search_root"
-        log "🔄 尝试在仓库中其他位置搜索编译器文件..."
-        
-        # 搜索整个仓库中的编译器文件
-        search_root="$REPO_ROOT"
-    fi
     
     log "搜索根目录: $search_root"
     log "目标平台: $target_platform"
@@ -327,24 +414,35 @@ verify_compiler_files() {
     else
         log "🔍 搜索正确的编译器..."
         
-        # 根据目标平台搜索正确的编译器
-        if [ "$target_platform" = "arm" ]; then
-            # 搜索ARM编译器
-            compiler_dir=$(find "$COMPILER_ROOT" -type d -path "*arm*" \( -name "*gcc-11.3.0*" -o -name "*gcc-11*" \) 2>/dev/null | head -1)
-            if [ -z "$compiler_dir" ]; then
-                compiler_dir=$(find "$COMPILER_ROOT" -type d -name "*arm*" 2>/dev/null | head -1)
+        # 首先检查默认编译器目录
+        if [ -d "$COMPILER_ROOT" ]; then
+            log "✅ 编译器根目录存在: $COMPILER_ROOT"
+            
+            # 根据目标平台搜索正确的编译器
+            if [ "$target_platform" = "arm" ]; then
+                # 搜索ARM编译器
+                compiler_dir=$(find "$COMPILER_ROOT" -type d -path "*arm*" \( -name "*gcc-11.3.0*" -o -name "*gcc-11*" \) 2>/dev/null | head -1)
+                if [ -z "$compiler_dir" ]; then
+                    compiler_dir=$(find "$COMPILER_ROOT" -type d -name "*arm*" 2>/dev/null | head -1)
+                fi
+            elif [ "$target_platform" = "mips" ]; then
+                # 搜索MIPS编译器
+                compiler_dir=$(find "$COMPILER_ROOT" -type d -path "*mips*" \( -name "*gcc-11.3.0*" -o -name "*gcc-11*" \) 2>/dev/null | head -1)
+                if [ -z "$compiler_dir" ]; then
+                    compiler_dir=$(find "$COMPILER_ROOT" -type d -name "*mips*" 2>/dev/null | head -1)
+                fi
             fi
-        elif [ "$target_platform" = "mips" ]; then
-            # 搜索MIPS编译器
-            compiler_dir=$(find "$COMPILER_ROOT" -type d -path "*mips*" \( -name "*gcc-11.3.0*" -o -name "*gcc-11*" \) 2>/dev/null | head -1)
-            if [ -z "$compiler_dir" ]; then
-                compiler_dir=$(find "$COMPILER_ROOT" -type d -name "*mips*" 2>/dev/null | head -1)
+            
+            # 如果没找到，搜索任何gcc-11.3.0
+            if [ -z "$compiler_dir" ] || [ ! -d "$compiler_dir" ]; then
+                compiler_dir=$(find "$COMPILER_ROOT" -type d -name "*gcc-11.3.0*" 2>/dev/null | head -1)
             fi
         fi
         
-        # 如果没找到，搜索任何gcc-11.3.0
+        # 如果还是没找到，使用搜索函数
         if [ -z "$compiler_dir" ] || [ ! -d "$compiler_dir" ]; then
-            compiler_dir=$(find "$COMPILER_ROOT" -type d -name "*gcc-11.3.0*" 2>/dev/null | head -1)
+            log "🔄 使用搜索函数查找编译器..."
+            compiler_dir=$(search_compiler_files "$COMPILER_ROOT" "$target_platform")
         fi
         
         if [ -n "$compiler_dir" ] && [ -d "$compiler_dir" ]; then
@@ -427,7 +525,6 @@ verify_compiler_files() {
     log "📈 编译器完整性评估:"
     log "  可执行编译器: $([ -n "$gcc_executable" ] && echo "是" || echo "否")"
     log "  工具链工具: $tool_found_count/${#required_tools[@]} 找到"
-    log "  平台匹配: $([ -n "$gcc_executable" ] && [ "$target_platform" = "arm" ] && [[ "$(basename "$gcc_executable")" == *arm* ]] && echo "是" || echo "否")"
     
     # 评估是否可用
     if [ -n "$gcc_executable" ] && [ $tool_found_count -ge 5 ]; then
@@ -2262,6 +2359,9 @@ main() {
         "search_compiler_files_simple")
             search_compiler_files_simple "$2" "$3"
             ;;
+        "check_git_source_size")
+            check_git_source_size
+            ;;
         *)
             log "❌ 未知命令: $1"
             echo "可用命令:"
@@ -2272,9 +2372,13 @@ main() {
             echo "  pre_build_error_check, build_firmware, post_build_space_check"
             echo "  check_firmware_files, cleanup, save_source_code_info, verify_compiler_files"
             echo "  check_compiler_invocation, search_compiler_files, search_compiler_files_simple"
+            echo "  check_git_source_size - 检查Git上传源代码大小"
             exit 1
             ;;
     esac
 }
+
+# 在脚本开始时检查Git源代码大小
+check_git_source_size
 
 main "$@"
