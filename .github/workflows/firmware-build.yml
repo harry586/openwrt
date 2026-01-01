@@ -1,3 +1,4 @@
+# .github/workflows/firmware-build.yml
 name: OpenWrt 智能固件构建工作流（完整功能版 - 编译器预构建版）
 
 on:
@@ -210,15 +211,35 @@ jobs:
         with:
           fetch-depth: 1
       
-      # 步骤 6: 检查并准备编译器目录
-      - name: "6. 检查并准备编译器目录"
-        run: firmware-config/scripts/build_firmware_main.sh check_and_prepare_compiler_dir
-      
-      # 步骤 7: 设置脚本执行权限
-      - name: "7. 设置脚本执行权限"
+      # 步骤 6: 修复权限问题（新增关键步骤）
+      - name: "6. 修复权限问题（关键修复）"
         run: |
-          find firmware-config/scripts -name "*.sh" -exec chmod +x {} \;
-          echo "✅ 脚本执行权限设置完成"
+          echo "=== 步骤 6: 修复权限问题 ==="
+          echo "⚠️ 修复所有脚本的执行权限..."
+          
+          # 查找并修复所有脚本文件的权限
+          find firmware-config -type f -name "*.sh" -exec chmod +x {} \;
+          
+          # 修复主脚本权限
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            chmod +x firmware-config/scripts/build_firmware_main.sh
+            echo "✅ 修复主脚本权限: firmware-config/scripts/build_firmware_main.sh"
+          else
+            echo "❌ 主脚本不存在: firmware-config/scripts/build_firmware_main.sh"
+            echo "列出firmware-config目录内容:"
+            find firmware-config -type f 2>/dev/null || echo "firmware-config目录不存在"
+            exit 1
+          fi
+          
+          # 验证权限
+          echo "验证脚本权限:"
+          ls -la firmware-config/scripts/*.sh 2>/dev/null || echo "scripts目录不存在"
+          
+          echo "✅ 权限修复完成"
+      
+      # 步骤 7: 检查并准备编译器目录
+      - name: "7. 检查并准备编译器目录"
+        run: firmware-config/scripts/build_firmware_main.sh check_and_prepare_compiler_dir
       
       # 步骤 8: 智能查找正确的编译器文件
       - name: "8. 智能查找正确的编译器文件"
@@ -692,10 +713,46 @@ jobs:
           path: ${{ github.workspace }}/firmware-config/config-backup/
           retention-days: 7
       
-      # 步骤 29: 错误分析
-      - name: "29. 错误分析"
+      # 步骤 29: 执行错误分析
+      - name: "29. 执行错误分析"
         if: always()
-        run: firmware-config/scripts/error_analysis.sh
+        run: |
+          echo "=== 步骤 29: 执行错误分析 ==="
+          
+          # 检查错误分析脚本是否存在
+          if [ -f "firmware-config/scripts/error_analysis.sh" ]; then
+            echo "✅ 找到错误分析脚本"
+            chmod +x firmware-config/scripts/error_analysis.sh
+            firmware-config/scripts/error_analysis.sh
+          else
+            echo "⚠️ 错误分析脚本不存在，创建简易分析..."
+            
+            # 创建简易错误分析
+            echo "简易错误分析报告:" > /tmp/error-analysis.txt
+            echo "========================" >> /tmp/error-analysis.txt
+            
+            if [ -f "${{ env.BUILD_DIR }}/build.log" ]; then
+              echo "📊 编译日志分析:" >> /tmp/error-analysis.txt
+              echo "文件大小: $(ls -lh ${{ env.BUILD_DIR }}/build.log | awk '{print $5}')" >> /tmp/error-analysis.txt
+              
+              # 检查常见错误
+              ERROR_COUNT=$(grep -c -i "error\|failed" ${{ env.BUILD_DIR }}/build.log || echo "0")
+              WARNING_COUNT=$(grep -c -i "warning" ${{ env.BUILD_DIR }}/build.log || echo "0")
+              
+              echo "错误数量: $ERROR_COUNT" >> /tmp/error-analysis.txt
+              echo "警告数量: $WARNING_COUNT" >> /tmp/error-analysis.txt
+              
+              if [ $ERROR_COUNT -gt 0 ]; then
+                echo "前10个错误:" >> /tmp/error-analysis.txt
+                grep -i "error\|failed" ${{ env.BUILD_DIR }}/build.log | head -10 >> /tmp/error-analysis.txt
+              fi
+              
+              echo "✅ 简易分析完成"
+              cat /tmp/error-analysis.txt
+            else
+              echo "ℹ️ 未找到编译日志"
+            fi
+          fi
       
       # 步骤 30: 编译后空间检查
       - name: "30. 编译后空间检查"
