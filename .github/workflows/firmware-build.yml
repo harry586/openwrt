@@ -53,102 +53,77 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      # 步骤 1: 使用Git Archive API下载源代码（浅层，最小化）
-      - name: "1. 使用Git Archive API下载最小化源代码"
+      # 步骤 1: 使用Git Archive API下载源代码（但排除编译器文件）
+      - name: "1. 使用Git Archive API下载源代码（排除编译器文件）"
         if: github.event.inputs.use_git_archive == 'true'
         run: |
-          echo "=== 步骤 1: 使用Git Archive API下载最小化源代码 ==="
-          echo "🔄 从GitHub API获取源代码压缩包"
+          echo "=== 步骤 1: 使用Git Archive API下载源代码（排除编译器文件）==="
+          echo "⚠️ 注意：由于编译器文件过大，我们将只下载配置文件"
           
           # 创建临时目录
           mkdir -p /tmp/openwrt-source
           cd /tmp/openwrt-source
           
-          # 获取默认分支
-          DEFAULT_BRANCH=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}" | jq -r '.default_branch')
-          echo "默认分支: $DEFAULT_BRANCH"
+          # 创建最小化的工作区结构
+          echo "🔄 创建最小化工作区..."
+          mkdir -p ${{ github.workspace }}/firmware-config
+          mkdir -p ${{ github.workspace }}/firmware-config/scripts
+          mkdir -p ${{ github.workspace }}/firmware-config/custom-files
+          mkdir -p ${{ github.workspace }}/firmware-config/build-Compiler-file
+          mkdir -p ${{ github.workspace }}/firmware-config/config-backup
           
-          # 使用Git Archive API下载压缩包（浅层下载）
-          echo "下载源代码压缩包..."
-          curl -s -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/tarball/$DEFAULT_BRANCH" \
-            -o source.tar.gz
+          # 直接从原始仓库下载必要的文件
+          echo "📥 直接下载必要的配置文件..."
           
-          if [ ! -f "source.tar.gz" ]; then
-            echo "❌ 下载源代码压缩包失败"
-            exit 1
-          fi
+          # 下载脚本文件
+          echo "下载脚本文件..."
+          SCRIPT_FILES=(
+            "build_firmware_main.sh"
+            "error_analysis.sh"
+          )
           
-          echo "✅ 下载完成，文件大小: $(ls -lh source.tar.gz | awk '{print $5}')"
-          
-          # 解压压缩包
-          echo "解压源代码..."
-          tar -xzf source.tar.gz --strip-components=1
-          
-          # 检查目录大小
-          echo "📊 解压后目录大小: $(du -sh . | cut -f1)"
-          echo "📊 文件数量: $(find . -type f 2>/dev/null | wc -l)"
-          
-          # 只保留必要的文件
-          echo "🔄 清理不必要的文件..."
-          
-          # 删除所有大于500KB的文件（除了必要的配置文件）
-          echo "🔍 删除大于500KB的非配置文件..."
-          find . -type f ! -name "*.sh" ! -name "*.yml" ! -name "*.yaml" ! -name "*.conf" ! -name "*.config" \
-            ! -name "*.json" ! -name "*.txt" ! -name "*.md" ! -name "*.gitignore" ! -name "LICENSE" \
-            -size +500k -exec echo "删除大文件: {}" \; -exec rm -f {} \; 2>/dev/null
-          
-          # 复制到工作区
-          echo "🔄 复制文件到工作区..."
-          mkdir -p ${{ github.workspace }}
-          
-          # 只复制必要的目录和文件
-          echo "复制 firmware-config 目录..."
-          if [ -d "firmware-config" ]; then
-            # 创建目录结构
-            mkdir -p ${{ github.workspace }}/firmware-config
-            mkdir -p ${{ github.workspace }}/firmware-config/scripts
-            mkdir -p ${{ github.workspace }}/firmware-config/custom-files
-            mkdir -p ${{ github.workspace }}/firmware-config/build-Compiler-file
-            
-            # 复制脚本文件
-            if [ -d "firmware-config/scripts" ]; then
-              find firmware-config/scripts -name "*.sh" -type f -exec cp {} ${{ github.workspace }}/firmware-config/scripts/ \; 2>/dev/null
-            fi
-            
-            # 复制自定义文件（如果有）
-            if [ -d "firmware-config/custom-files" ]; then
-              cp -r firmware-config/custom-files/* ${{ github.workspace }}/firmware-config/custom-files/ 2>/dev/null || true
-            fi
-          fi
-          
-          # 复制其他必要的配置文件
-          echo "复制其他配置文件..."
-          for file in .gitignore README.md LICENSE .github; do
-            if [ -e "$file" ]; then
-              cp -r "$file" ${{ github.workspace }}/ 2>/dev/null || true
-            fi
+          for script in "${SCRIPT_FILES[@]}"; do
+            echo "下载: firmware-config/scripts/$script"
+            curl -s -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://raw.githubusercontent.com/${{ github.repository }}/main/firmware-config/scripts/$script" \
+              -o "${{ github.workspace }}/firmware-config/scripts/$script" 2>/dev/null || echo "⚠️ 无法下载: $script"
           done
           
           # 确保脚本文件有执行权限
           chmod +x ${{ github.workspace }}/firmware-config/scripts/*.sh 2>/dev/null || true
           
-          echo "✅ 文件复制完成"
+          # 复制工作流文件
+          echo "复制工作流文件..."
+          curl -s -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://raw.githubusercontent.com/${{ github.repository }}/main/.github/workflows/firmware-build.yml" \
+            -o "${{ github.workspace }}/.github/workflows/firmware-build.yml" 2>/dev/null || true
           
-          # 保存源代码压缩包作为构建产物
-          mkdir -p /tmp/build-artifacts/source-archive
-          cp source.tar.gz /tmp/build-artifacts/source-archive/
+          # 复制其他必要文件
+          echo "复制其他必要文件..."
+          ESSENTIAL_FILES=(
+            ".gitignore"
+            "README.md"
+            "LICENSE"
+          )
           
-          # 显示工作区信息
+          for file in "${ESSENTIAL_FILES[@]}"; do
+            echo "下载: $file"
+            curl -s -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://raw.githubusercontent.com/${{ github.repository }}/main/$file" \
+              -o "${{ github.workspace }}/$file" 2>/dev/null || echo "⚠️ 无法下载: $file"
+          done
+          
+          echo "✅ 最小化源代码下载完成"
+          
+          # 检查工作区大小
           echo "📊 工作区大小: $(du -sh ${{ github.workspace }} 2>/dev/null | cut -f1)"
-          echo "📊 工作区文件数量: $(find ${{ github.workspace }} -type f 2>/dev/null | wc -l)"
-          
-          # 清理临时文件
-          cd /tmp
-          rm -rf openwrt-source
-          echo "✅ Git Archive API下载完成"
+          echo "📊 文件列表:"
+          find ${{ github.workspace }} -type f 2>/dev/null | while read file; do
+            size=$(du -h "$file" 2>/dev/null | cut -f1)
+            echo "  $size - $file"
+          done
       
-      # 步骤 2: 检查工作区大小（在步骤1之后）
+      # 步骤 2: 检查工作区大小
       - name: "2. 检查工作区大小"
         if: github.event.inputs.use_git_archive == 'true'
         run: |
@@ -164,7 +139,7 @@ jobs:
           
           # 列出所有文件及其大小
           echo "📋 文件列表:"
-          find $WORKSPACE -type f -exec du -h {} \; 2>/dev/null | sort -hr | head -20
+          find $WORKSPACE -type f -exec du -h {} \; 2>/dev/null | sort -hr
           
           # 2MB检查
           SIZE_LIMIT=$((2 * 1024 * 1024))
@@ -175,73 +150,67 @@ jobs:
             echo "限制大小: 2048KB"
             echo "超出: $((TOTAL_SIZE - SIZE_LIMIT)) 字节 ($((($TOTAL_SIZE - SIZE_LIMIT) / 1024))KB)"
             
-            # 分析大文件
-            echo "🔍 分析大文件(>100KB):"
-            find $WORKSPACE -type f -size +100k -exec du -h {} \; 2>/dev/null | sort -hr
+            # 删除大文件
+            echo "🔄 尝试删除大文件..."
+            find $WORKSPACE -type f -size +500k -exec echo "删除: {}" \; -exec rm -f {} \; 2>/dev/null
             
-            echo "💡 建议操作:"
-            echo "1. 检查是否有意外的大文件"
-            echo "2. 确保只上传必要的配置文件"
-            echo "3. 删除不必要的文件"
+            # 重新计算
+            TOTAL_SIZE=$(du -sb $WORKSPACE 2>/dev/null | awk '{print $1}' || echo "0")
+            echo "清理后大小: $((TOTAL_SIZE / 1024))KB"
             
-            exit 1
-          else
-            echo "✅ 工作区大小检查通过: $((TOTAL_SIZE / 1024))KB < 2048KB"
-          fi
-      
-      # 步骤 3: 立即上传Git Archive源代码
-      - name: "3. 立即上传Git Archive源代码"
-        if: github.event.inputs.use_git_archive == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: git-archive-source-${{ github.event.inputs.device_name }}
-          path: /tmp/build-artifacts/source-archive/
-          retention-days: 7
-      
-      # 步骤 4: 最终验证和清理（在步骤3之后）
-      - name: "4. 最终验证和清理"
-        if: github.event.inputs.use_git_archive == 'true'
-        run: |
-          echo "=== 步骤 4: 最终验证和清理 ==="
-          
-          WORKSPACE="${{ github.workspace }}"
-          
-          # 再次检查大小
-          FINAL_SIZE=$(du -sb $WORKSPACE 2>/dev/null | awk '{print $1}' || echo "0")
-          echo "最终工作区大小: $((FINAL_SIZE / 1024))KB"
-          
-          # 如果仍然太大，尝试进一步清理
-          SIZE_LIMIT=$((2 * 1024 * 1024))
-          if [ $FINAL_SIZE -gt $SIZE_LIMIT ]; then
-            echo "⚠️ 工作区仍然太大，尝试进一步清理..."
-            
-            # 删除所有日志文件
-            find $WORKSPACE -name "*.log" -type f -delete 2>/dev/null
-            # 删除所有备份文件
-            find $WORKSPACE -name "*.bak" -type f -delete 2>/dev/null
-            find $WORKSPACE -name "*.backup" -type f -delete 2>/dev/null
-            # 删除所有临时文件
-            find $WORKSPACE -name "*.tmp" -type f -delete 2>/dev/null
-            find $WORKSPACE -name "*.temp" -type f -delete 2>/dev/null
-            
-            # 重新计算大小
-            FINAL_SIZE=$(du -sb $WORKSPACE 2>/dev/null | awk '{print $1}' || echo "0")
-            echo "清理后大小: $((FINAL_SIZE / 1024))KB"
-            
-            if [ $FINAL_SIZE -gt $SIZE_LIMIT ]; then
-              echo "❌ 最终检查失败: 工作区大小仍然超过2MB"
+            if [ $TOTAL_SIZE -gt $SIZE_LIMIT ]; then
+              echo "❌ 仍然超过限制，请手动清理"
               exit 1
             fi
           fi
           
-          echo "✅ 最终验证通过"
+          echo "✅ 工作区大小检查通过: $((TOTAL_SIZE / 1024))KB < 2048KB"
+      
+      # 步骤 3: 上传最小化源代码（可选）
+      - name: "3. 上传最小化源代码"
+        if: github.event.inputs.use_git_archive == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: minimal-source-${{ github.event.inputs.device_name }}
+          path: ${{ github.workspace }}
+          retention-days: 1
+      
+      # 步骤 4: 最终验证
+      - name: "4. 最终验证"
+        run: |
+          echo "=== 步骤 4: 最终验证 ==="
+          
+          WORKSPACE="${{ github.workspace }}"
+          
+          # 验证必要文件是否存在
+          echo "🔍 验证必要文件..."
+          REQUIRED_FILES=(
+            "firmware-config/scripts/build_firmware_main.sh"
+          )
+          
+          missing_files=0
+          for file in "${REQUIRED_FILES[@]}"; do
+            if [ -f "$WORKSPACE/$file" ]; then
+              echo "✅ $file 存在"
+            else
+              echo "❌ $file 缺失"
+              missing_files=$((missing_files + 1))
+            fi
+          done
+          
+          if [ $missing_files -gt 0 ]; then
+            echo "❌ 缺失 $missing_files 个必要文件"
+            exit 1
+          fi
+          
+          echo "✅ 所有必要文件都存在"
       
       # 步骤 5: 检出配置仓库（当不使用Git Archive时）
       - name: "5. 检出配置仓库"
         if: github.event.inputs.use_git_archive == 'false'
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1  # 只下载最新提交
+          fetch-depth: 1
           submodules: recursive
       
       # 步骤 6: 检查Git源代码大小（手动检出时）
