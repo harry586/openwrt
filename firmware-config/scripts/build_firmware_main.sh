@@ -1079,7 +1079,7 @@ install_turboacc_packages() {
     ./scripts/feeds update turboacc || handle_error "更新turboacc feed失败"
     
     ./scripts/feeds install -p turboacc luci-app-turboacc || handle_error "安装luci-app-turboacc失败"
-    ./scripts/feeds install -p turboacc kmod-shortcut-fe || handle_error "安装kmod-shortcut-fe失败")
+    ./scripts/feeds install -p turboacc kmod-shortcut-fe || handle_error "安装kmod-shortcut-fe失败"
     ./scripts/feeds install -p turboacc kmod-fast-classifier || handle_error "安装kmod-fast-classifier失败"
     
     log "✅ TurboACC 包安装完成"
