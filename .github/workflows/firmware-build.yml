@@ -162,6 +162,7 @@ jobs:
           name: filtered-source-${{ github.event.inputs.device_name }}
           path: /tmp/build-artifacts/source-archive/
           retention-days: 7
+          if-no-files-found: error
       
       # 步骤 3: 使用标准检出（当不使用Git Archive时）
       - name: "3. 标准检出源代码"
@@ -479,7 +480,7 @@ jobs:
             COMPILER_DIRS=$(find "$COMPILER_ROOT" -type d \( -iname "*compiler*" -o -iname "*toolchain*" -o -iname "*gcc*" -o -iname "*binutils*" \) 2>/dev/null | head -20)
             if [ -n "$COMPILER_DIRS" ]; then
               echo "  找到编译器相关目录:"
-              for comp_dir in $COMPILER_DIRs; do
+              for comp_dir in $COMPILER_DIRS; do
                 relative_path=$(echo "$comp_dir" | sed "s|$COMPILER_ROOT/||")
                 echo "    📁 $relative_path"
                 
@@ -862,6 +863,7 @@ jobs:
           name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
           path: ${{ env.BUILD_DIR }}/bin/targets/
           retention-days: 7
+          if-no-files-found: error
       
       # 步骤 26: 上传配置文件
       - name: "26. 上传配置文件"
@@ -871,6 +873,7 @@ jobs:
           name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
           path: ${{ github.workspace }}/firmware-config/config-backup/
           retention-days: 7
+          if-no-files-found: error
       
       # 步骤 27: 执行错误分析
       - name: "27. 执行错误分析"
