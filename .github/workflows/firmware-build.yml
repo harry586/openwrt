@@ -213,30 +213,63 @@ jobs:
             DIRS=$(find "$COMPILER_ROOT" -type d -iname "*$keyword*" 2>/dev/null | head -5)
             if [ -n "$DIRS" ]; then
               while read dir; do
-                GCC_FILES=$(find "$dir" -type f -iname "*gcc*" 2>/dev/null | head -1)
+                # 查找真正的GCC编译器（排除工具链工具）
+                GCC_FILES=$(find "$dir" -type f -executable -name "*gcc" ! -name "*gcc-*" 2>/dev/null | head -1)
                 if [ -n "$GCC_FILES" ]; then
                   FOUND_COMPILER_DIR="$dir"
+                  echo "🔍 找到真正的GCC编译器: $(basename "$GCC_FILES")"
+                  echo "📁 在目录: $dir"
                   break 2
                 fi
               done <<< "$DIRS"
             fi
           done
           
-          # 如果没找到，搜索任何包含gcc的目录
+          # 如果没找到，搜索任何包含gcc的目录（排除工具链工具）
           if [ -z "$FOUND_COMPILER_DIR" ]; then
-            GCC_FILES=$(find "$COMPILER_ROOT" -type f -iname "*gcc*" 2>/dev/null | head -1)
+            echo "🔍 未通过关键词找到，尝试通用搜索..."
+            GCC_FILES=$(find "$COMPILER_ROOT" -type f -executable \
+              -name "*gcc" \
+              ! -name "*gcc-ar" \
+              ! -name "*gcc-ranlib" \
+              ! -name "*gcc-nm" \
+              2>/dev/null | head -1)
+            
             if [ -n "$GCC_FILES" ]; then
               dir=$(dirname "$GCC_FILES")
               if [[ "$dir" == */bin ]]; then
                 dir=$(dirname "$dir")
               fi
               FOUND_COMPILER_DIR="$dir"
+              echo "✅ 找到GCC编译器文件: $(basename "$GCC_FILES")"
+              echo "📁 所在目录: $FOUND_COMPILER_DIR"
             fi
           fi
           
           # 最终决策
           if [ -n "$FOUND_COMPILER_DIR" ]; then
             echo "✅ 找到编译器目录: $FOUND_COMPILER_DIR"
+            
+            # 验证编译器版本
+            echo "🔍 验证编译器版本..."
+            GCC_PATH=$(find "$FOUND_COMPILER_DIR" -type f -executable \
+              -name "*gcc" \
+              ! -name "*gcc-ar" \
+              ! -name "*gcc-ranlib" \
+              ! -name "*gcc-nm" \
+              2>/dev/null | head -1)
+            
+            if [ -n "$GCC_PATH" ]; then
+              VERSION=$("$GCC_PATH" --version 2>&1 | head -1)
+              echo "📋 编译器版本信息: $VERSION"
+              
+              if echo "$VERSION" | grep -q "11\."; then
+                echo "🎯 GCC 11.x 版本验证通过"
+              else
+                echo "⚠️ 编译器版本不是GCC 11.x"
+              fi
+            fi
+            
             echo "COMPILER_DIR=$FOUND_COMPILER_DIR" >> $GITHUB_ENV
           else
             echo "❌ 未找到合适的编译器目录"
@@ -368,11 +401,35 @@ jobs:
           echo "=== 步骤 16: 修复网络环境 ==="
           firmware-config/scripts/build_firmware_main.sh fix_network
       
-      # 步骤 17: 下载依赖包
-      - name: "17. 下载依赖包"
+      # 步骤 17: 下载依赖包（带重试）
+      - name: "17. 下载依赖包（带重试）"
         run: |
-          echo "=== 步骤 17: 下载依赖包 ==="
-          firmware-config/scripts/build_firmware_main.sh download_dependencies
+          echo "=== 步骤 17: 下载依赖包（带重试） ==="
+          
+          # 最多重试3次
+          for i in {1..3}; do
+            echo "🔁 下载依赖包 - 第 $i 次尝试"
+            
+            firmware-config/scripts/build_firmware_main.sh download_dependencies
+            
+            # 检查下载结果
+            if [ $? -eq 0 ] && [ $(find ${{ env.BUILD_DIR }}/dl -type f 2>/dev/null | wc -l) -gt 100 ]; then
+              echo "✅ 依赖包下载成功"
+              break
+            else
+              echo "⚠️ 第 $i 次下载不完整，等待10秒后重试..."
+              sleep 10
+            fi
+          done
+          
+          # 最终检查
+          dl_count=$(find ${{ env.BUILD_DIR }}/dl -type f 2>/dev/null | wc -l)
+          echo "📊 最终依赖包数量: $dl_count 个"
+          
+          if [ $dl_count -lt 50 ]; then
+            echo "❌ 依赖包数量不足，编译可能失败"
+            echo "💡 建议手动下载或检查网络连接"
+          fi
       
       # 步骤 18: 集成自定义文件
       - name: "18. 集成自定义文件"
