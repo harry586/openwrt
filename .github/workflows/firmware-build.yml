@@ -72,34 +72,57 @@ jobs:
           echo "解压源代码..."
           tar -xzf source.tar.gz --strip-components=1
           
-          # 检查解压结果并验证多个重要文件
-          echo "🔍 验证源代码完整性..."
-          IMPORTANT_FILES=(
+          # 检查解压结果并验证关键构建文件
+          echo "🔍 验证源代码关键文件..."
+          
+          # 关键构建文件（必需的）
+          CRITICAL_FILES=(
             "firmware-config/scripts/build_firmware_main.sh"
             ".github/workflows/firmware-build.yml"
             "firmware-config/scripts/error_analysis.sh"
-            "firmware-config/custom-files/README.md"
-            "README.md"
           )
           
+          # 检查关键文件
+          echo "🔑 关键构建文件检查:"
           file_check_pass=true
-          for file in "${IMPORTANT_FILES[@]}"; do
+          for file in "${CRITICAL_FILES[@]}"; do
             if [ -f "$file" ]; then
-              echo "✅ 重要文件存在: $file ($(ls -lh "$file" | awk '{print $5}'))"
+              echo "  ✅ 存在: $file ($(ls -lh "$file" | awk '{print $5}'))"
             else
-              echo "❌ 重要文件缺失: $file"
+              echo "  ❌ 缺失: $file"
               file_check_pass=false
             fi
           done
           
+          # 可选显示其他文件
+          echo ""
+          echo "📄 其他文件检查（不影响构建）:"
+          OPTIONAL_FILES=(
+            "README.md"
+            "firmware-config/custom-files/"
+            "firmware-config/README.md"
+          )
+          
+          for item in "${OPTIONAL_FILES[@]}"; do
+            if [ -e "$item" ]; then
+              if [ -f "$item" ]; then
+                echo "  📎 文件: $item ($(ls -lh "$item" | awk '{print $5}'))"
+              elif [ -d "$item" ]; then
+                echo "  📁 目录: $item/"
+              fi
+            else
+              echo "  ℹ️  不存在（可选）: $item"
+            fi
+          done
+          
           if [ "$file_check_pass" = false ]; then
-            echo "❌ 源代码完整性检查失败"
-            echo "当前目录内容:"
+            echo "❌ 关键构建文件缺失，无法继续构建"
+            echo "当前目录结构:"
             find . -maxdepth 3 -type f | head -30
             exit 1
           fi
           
-          echo "✅ 源代码完整性检查通过"
+          echo "✅ 源代码关键文件检查通过"
           
           # 检查编译器目录大小（30MB限制）
           if [ -d "firmware-config/build-Compiler-file" ]; then
@@ -142,8 +165,8 @@ jobs:
           echo "✅ 文件复制完成"
           
           # 验证工作区文件
-          echo "🔍 验证工作区文件..."
-          for file in "${IMPORTANT_FILES[@]}"; do
+          echo "🔍 验证工作区关键文件..."
+          for file in "${CRITICAL_FILES[@]}"; do
             if [ -f "${{ github.workspace }}/$file" ]; then
               echo "✅ 工作区文件存在: $file"
             else
@@ -210,15 +233,16 @@ jobs:
           echo "解压源代码..."
           tar -xzf source-full.tar.gz --strip-components=1
           
-          # 检查解压结果
-          IMPORTANT_FILES=(
+          # 检查关键构建文件
+          echo "🔍 检查关键构建文件..."
+          CRITICAL_FILES=(
             "firmware-config/scripts/build_firmware_main.sh"
             ".github/workflows/firmware-build.yml"
             "firmware-config/scripts/error_analysis.sh"
           )
           
           file_check_pass=true
-          for file in "${IMPORTANT_FILES[@]}"; do
+          for file in "${CRITICAL_FILES[@]}"; do
             if [ -f "$file" ]; then
               echo "✅ 文件存在: $file"
             else
@@ -409,7 +433,7 @@ jobs:
             TARGET_PLATFORM="mips"
             SEARCH_KEYWORDS=("mips" "mipsel" "mt76x8" "24kc")
             echo "目标平台: MIPS (MT76x8)"
-          elif [[ "$DEVICE_NAME" == "mi_router_3g" || "$DEVICE_NAME" == "r3g" ]]; then
+          elif [[ "$DEVICE_NAME" == "mi_router_3g" || "$DEVICE_NAME" == "r3g" ]; then
             TARGET_PLATFORM="mips"
             SEARCH_KEYWORDS=("mips" "mipsel" "mt7621" "1004kc")
             echo "目标平台: MIPS (MT7621)"
