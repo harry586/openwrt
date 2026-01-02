@@ -57,10 +57,8 @@ jobs:
           DEFAULT_BRANCH=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}" | jq -r '.default_branch')
           echo "默认分支: $DEFAULT_BRANCH"
           
-          # 使用Git Archive API下载压缩包，通过API参数排除大目录
-          echo "下载源代码压缩包（通过API排除大文件目录）..."
-          
-          # 直接下载压缩包，后续手动排除大目录
+          # 使用Git Archive API下载压缩包
+          echo "下载源代码压缩包..."
           curl -s -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}/tarball/$DEFAULT_BRANCH" -o source.tar.gz
           
           if [ ! -f "source.tar.gz" ]; then
@@ -68,7 +66,7 @@ jobs:
             exit 1
           fi
           
-          echo "✅ 下载完成，初始文件大小: $(ls -lh source.tar.gz | awk '{print $5}')"
+          echo "✅ 下载完成，文件大小: $(ls -lh source.tar.gz | awk '{print $5}')"
           
           # 解压压缩包
           echo "解压源代码..."
@@ -85,7 +83,7 @@ jobs:
             
             # 检查并删除编译器目录（关键修复）
             if [ -d "firmware-config/build-Compiler-file" ]; then
-              echo "⚠️ 发现编译器目录，计算大小并删除..."
+              echo "⚠️ 发现编译器目录，直接删除以避免GitHub 30MB限制..."
               compiler_size=$(du -sh firmware-config/build-Compiler-file 2>/dev/null | cut -f1 || echo "未知")
               echo "编译器目录大小: $compiler_size"
               rm -rf firmware-config/build-Compiler-file
@@ -94,7 +92,7 @@ jobs:
               echo "ℹ️ 未发现编译器目录"
             fi
             
-            # 检查其他可能的大目录
+            # 检查并删除其他可能的大目录
             echo "检查其他可能的大文件目录..."
             
             # 查找可能的压缩文件和大目录
@@ -107,10 +105,10 @@ jobs:
               fi
             done
             
-            # 创建精简的源代码压缩包
-            echo "创建精简的源代码压缩包..."
+            # 创建精简的源代码压缩包用于上传
+            echo "创建精简的源代码压缩包用于上传..."
             mkdir -p /tmp/build-artifacts/source-archive
-            tar -czf /tmp/build-artifacts/source-archive/source-filtered.tar.gz --exclude='.git' --exclude='firmware-config/build-Compiler-file' .
+            tar -czf /tmp/build-artifacts/source-archive/source-filtered.tar.gz --exclude='.git' .
             
             echo "✅ 精简源代码压缩包创建完成"
             echo "精简后大小: $(ls -lh /tmp/build-artifacts/source-archive/source-filtered.tar.gz | awk '{print $5}')"
@@ -481,7 +479,7 @@ jobs:
             COMPILER_DIRS=$(find "$COMPILER_ROOT" -type d \( -iname "*compiler*" -o -iname "*toolchain*" -o -iname "*gcc*" -o -iname "*binutils*" \) 2>/dev/null | head -20)
             if [ -n "$COMPILER_DIRS" ]; then
               echo "  找到编译器相关目录:"
-              for comp_dir in $COMPILER_DIRS; do
+              for comp_dir in $COMPILER_DIRs; do
                 relative_path=$(echo "$comp_dir" | sed "s|$COMPILER_ROOT/||")
                 echo "    📁 $relative_path"
                 
@@ -570,7 +568,7 @@ jobs:
           echo "=== 步骤 8: 设置编译环境和构建目录 ==="
           
           echo "🔄 步骤 8.1: 设置编译环境"
-          # 运行主脚本设置环境 - 使用简化版本，跳过重复检查
+          # 运行主脚本设置环境
           chmod +x firmware-config/scripts/build_firmware_main.sh
           firmware-config/scripts/build_firmware_main.sh setup_environment
           
@@ -589,7 +587,6 @@ jobs:
       - name: "9. 添加 TurboACC 支持"
         run: |
           echo "=== 步骤 9: 添加 TurboACC 支持 ==="
-          # 直接运行功能，跳过脚本权限检查
           firmware-config/scripts/build_firmware_main.sh add_turboacc_support
       
       # 步骤 10: 配置Feeds
