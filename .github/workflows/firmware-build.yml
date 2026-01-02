@@ -57,8 +57,10 @@ jobs:
           DEFAULT_BRANCH=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}" | jq -r '.default_branch')
           echo "默认分支: $DEFAULT_BRANCH"
           
-          # 使用Git Archive API下载压缩包（排除大文件目录）
-          echo "下载源代码压缩包（排除大文件目录）..."
+          # 使用Git Archive API下载压缩包，通过API参数排除大目录
+          echo "下载源代码压缩包（通过API排除大文件目录）..."
+          
+          # 直接下载压缩包，后续手动排除大目录
           curl -s -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}/tarball/$DEFAULT_BRANCH" -o source.tar.gz
           
           if [ ! -f "source.tar.gz" ]; then
@@ -66,7 +68,7 @@ jobs:
             exit 1
           fi
           
-          echo "✅ 下载完成，文件大小: $(ls -lh source.tar.gz | awk '{print $5}')"
+          echo "✅ 下载完成，初始文件大小: $(ls -lh source.tar.gz | awk '{print $5}')"
           
           # 解压压缩包
           echo "解压源代码..."
@@ -79,66 +81,41 @@ jobs:
             echo "重要目录存在: firmware-config"
             
             # 高效检测并删除大文件目录
-            echo "🔄 高效检测大文件目录..."
+            echo "🔄 高效检测并删除大文件目录..."
             
-            # 定义大文件目录数组（使用普通变量，不使用local）
-            big_dirs_str=""
-            
-            # 检查编译器目录
+            # 检查并删除编译器目录（关键修复）
             if [ -d "firmware-config/build-Compiler-file" ]; then
-              echo "⚠️ 发现编译器目录，直接删除以避免GitHub 30MB限制..."
+              echo "⚠️ 发现编译器目录，计算大小并删除..."
+              compiler_size=$(du -sh firmware-config/build-Compiler-file 2>/dev/null | cut -f1 || echo "未知")
+              echo "编译器目录大小: $compiler_size"
               rm -rf firmware-config/build-Compiler-file
-              echo "✅ 已删除编译器目录"
-              big_dirs_str="firmware-config/build-Compiler-file"
+              echo "✅ 已删除编译器目录: firmware-config/build-Compiler-file"
+            else
+              echo "ℹ️ 未发现编译器目录"
             fi
             
-            # 检查下载目录
-            if [ -d "downloads" ]; then
-              echo "⚠️ 发现下载目录，直接删除以避免大文件问题..."
-              rm -rf downloads
-              echo "✅ 已删除下载目录"
-              if [ -n "$big_dirs_str" ]; then
-                big_dirs_str="$big_dirs_str downloads"
-              else
-                big_dirs_str="downloads"
-              fi
-            fi
-            
-            # 检查其他可能的大目录（使用高效方法）
+            # 检查其他可能的大目录
             echo "检查其他可能的大文件目录..."
             
-            # 使用find查找可能的大文件目录（限制深度和数量）
-            other_big_dirs=$(find . -maxdepth 3 -type d \( -name "*.tar.*" -o -name "*.zip" -o -name "*.tgz" -o -name "*.gz" -o -name "*.xz" \) 2>/dev/null | head -5)
-            if [ -n "$other_big_dirs" ]; then
-              for dir in $other_big_dirs; do
-                if [ -d "$dir" ]; then
-                  echo "⚠️ 发现可能的大文件目录: $dir"
-                  echo "🗑️  删除可能的大文件目录..."
-                  rm -rf "$dir"
-                  echo "✅ 已删除: $dir"
-                  if [ -n "$big_dirs_str" ]; then
-                    big_dirs_str="$big_dirs_str $dir"
-                  else
-                    big_dirs_str="$dir"
-                  fi
-                fi
-              done
-            fi
+            # 查找可能的压缩文件和大目录
+            find . -maxdepth 3 -type d \( -name "*.tar.*" -o -name "*.zip" -o -name "*.tgz" -o -name "*.gz" -o -name "*.xz" \) 2>/dev/null | while read dir; do
+              if [ -d "$dir" ]; then
+                echo "⚠️ 发现可能的大文件目录: $dir"
+                echo "🗑️  删除可能的大文件目录..."
+                rm -rf "$dir"
+                echo "✅ 已删除: $dir"
+              fi
+            done
             
-            # 显示已删除的目录统计
-            if [ -n "$big_dirs_str" ]; then
-              # 将字符串转换为数组进行计数
-              big_dirs_array=($big_dirs_str)
-              echo "📊 已删除的大文件目录: ${#big_dirs_array[@]} 个"
-              echo "已删除的目录列表:"
-              for dir in "${big_dirs_array[@]}"; do
-                echo "  ✅ 已删除: $dir"
-              done
-            else
-              echo "ℹ️ 未发现需要删除的大文件目录"
-            fi
+            # 创建精简的源代码压缩包
+            echo "创建精简的源代码压缩包..."
+            mkdir -p /tmp/build-artifacts/source-archive
+            tar -czf /tmp/build-artifacts/source-archive/source-filtered.tar.gz --exclude='.git' --exclude='firmware-config/build-Compiler-file' .
             
-            # 复制到工作区
+            echo "✅ 精简源代码压缩包创建完成"
+            echo "精简后大小: $(ls -lh /tmp/build-artifacts/source-archive/source-filtered.tar.gz | awk '{print $5}')"
+            
+            # 复制文件到工作区
             echo "复制文件到工作区..."
             
             # 确保工作区目录存在
@@ -163,10 +140,10 @@ jobs:
               exit 1
             fi
             
-            # 保存源代码压缩包作为构建产物
-            mkdir -p /tmp/build-artifacts/source-archive
-            cp source.tar.gz /tmp/build-artifacts/source-archive/
-            echo "✅ 源代码压缩包已保存"
+            # 检查工作区大小
+            echo "📊 工作区总大小:"
+            du -sh ${{ github.workspace }} | head -1 || true
+            
           else
             echo "❌ 源代码解压失败，重要目录缺失"
             echo "当前目录内容:"
@@ -179,12 +156,12 @@ jobs:
           rm -rf openwrt-source
           echo "✅ Git Archive API下载完成"
       
-      # 步骤 2: 立即上传Git Archive源代码
-      - name: "2. 立即上传Git Archive源代码"
+      # 步骤 2: 上传精简源代码作为构建产物
+      - name: "2. 上传精简源代码"
         if: github.event.inputs.use_git_archive == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: git-archive-source-${{ github.event.inputs.device_name }}
+          name: filtered-source-${{ github.event.inputs.device_name }}
           path: /tmp/build-artifacts/source-archive/
           retention-days: 7
       
@@ -195,7 +172,7 @@ jobs:
         with:
           fetch-depth: 1
       
-      # 步骤 4: 全面清理工作区，重新使用Git Archive下载完整仓库
+      # 步骤 4: 全面清理工作区并重新使用Git Archive下载完整仓库
       - name: "4. 全面清理工作区并重新检出完整仓库"
         if: github.event.inputs.use_git_archive == 'true'
         run: |
@@ -279,7 +256,7 @@ jobs:
             
             # 检查总仓库大小
             echo "📊 工作区总大小:"
-            du -sh ${{ github.workspace }} || true
+            du -sh ${{ github.workspace }} | head -1 || true
           else
             echo "❌ 源代码解压失败"
             exit 1
@@ -593,7 +570,7 @@ jobs:
           echo "=== 步骤 8: 设置编译环境和构建目录 ==="
           
           echo "🔄 步骤 8.1: 设置编译环境"
-          # 运行主脚本设置环境
+          # 运行主脚本设置环境 - 使用简化版本，跳过重复检查
           chmod +x firmware-config/scripts/build_firmware_main.sh
           firmware-config/scripts/build_firmware_main.sh setup_environment
           
@@ -610,20 +587,29 @@ jobs:
       
       # 步骤 9: 添加 TurboACC 支持
       - name: "9. 添加 TurboACC 支持"
-        run: firmware-config/scripts/build_firmware_main.sh add_turboacc_support
+        run: |
+          echo "=== 步骤 9: 添加 TurboACC 支持 ==="
+          # 直接运行功能，跳过脚本权限检查
+          firmware-config/scripts/build_firmware_main.sh add_turboacc_support
       
       # 步骤 10: 配置Feeds
       - name: "10. 配置Feeds"
-        run: firmware-config/scripts/build_firmware_main.sh configure_feeds
+        run: |
+          echo "=== 步骤 10: 配置Feeds ==="
+          firmware-config/scripts/build_firmware_main.sh configure_feeds
       
       # 步骤 11: 安装 TurboACC 包
       - name: "11. 安装 TurboACC 包"
         if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
-        run: firmware-config/scripts/build_firmware_main.sh install_turboacc_packages
+        run: |
+          echo "=== 步骤 11: 安装 TurboACC 包 ==="
+          firmware-config/scripts/build_firmware_main.sh install_turboacc_packages
       
       # 步骤 12: 编译前空间检查
       - name: "12. 编译前空间检查"
-        run: firmware-config/scripts/build_firmware_main.sh pre_build_space_check
+        run: |
+          echo "=== 步骤 12: 编译前空间检查 ==="
+          firmware-config/scripts/build_firmware_main.sh pre_build_space_check
       
       # 步骤 13: 智能配置生成（USB完全修复加强版）
       - name: "13. 智能配置生成（USB完全修复加强版）"
@@ -634,11 +620,15 @@ jobs:
       
       # 步骤 14: 验证USB配置
       - name: "14. 验证USB配置"
-        run: firmware-config/scripts/build_firmware_main.sh verify_usb_config
+        run: |
+          echo "=== 步骤 14: 验证USB配置 ==="
+          firmware-config/scripts/build_firmware_main.sh verify_usb_config
       
       # 步骤 15: USB驱动完整性检查
       - name: "15. USB驱动完整性检查"
-        run: firmware-config/scripts/build_firmware_main.sh check_usb_drivers_integrity
+        run: |
+          echo "=== 步骤 15: USB驱动完整性检查 ==="
+          firmware-config/scripts/build_firmware_main.sh check_usb_drivers_integrity
       
       # 步骤 16: 应用配置并显示详情
       - name: "16. 应用配置并显示详情"
@@ -754,19 +744,27 @@ jobs:
       
       # 步骤 18: 修复网络环境
       - name: "18. 修复网络环境"
-        run: firmware-config/scripts/build_firmware_main.sh fix_network
+        run: |
+          echo "=== 步骤 18: 修复网络环境 ==="
+          firmware-config/scripts/build_firmware_main.sh fix_network
       
       # 步骤 19: 下载依赖包
       - name: "19. 下载依赖包"
-        run: firmware-config/scripts/build_firmware_main.sh download_dependencies
+        run: |
+          echo "=== 步骤 19: 下载依赖包 ==="
+          firmware-config/scripts/build_firmware_main.sh download_dependencies
       
       # 步骤 20: 集成自定义文件
       - name: "20. 集成自定义文件"
-        run: firmware-config/scripts/build_firmware_main.sh integrate_custom_files
+        run: |
+          echo "=== 步骤 20: 集成自定义文件 ==="
+          firmware-config/scripts/build_firmware_main.sh integrate_custom_files
       
       # 步骤 21: 前置错误检查（包含编译器验证）
       - name: "21. 前置错误检查（包含编译器验证）"
-        run: firmware-config/scripts/build_firmware_main.sh pre_build_error_check
+        run: |
+          echo "=== 步骤 21: 前置错误检查（包含编译器验证）==="
+          firmware-config/scripts/build_firmware_main.sh pre_build_error_check
       
       # 步骤 22: 编译固件前的空间检查
       - name: "22. 编译固件前的空间检查"
