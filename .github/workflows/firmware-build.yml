@@ -43,7 +43,7 @@ jobs:
     
     steps:
       # 步骤 1: 使用Git Archive API下载源代码（高效排除大文件目录）
-      - name: "1. 使用Git Archive API下载源代码（高效排除）"
+      - name: "1. 使用Git Archive API下载源代码（高效排除大文件目录）"
         if: github.event.inputs.use_git_archive == 'true'
         run: |
           echo "=== 步骤 1: 使用Git Archive API下载源代码（高效排除大文件目录）==="
@@ -81,15 +81,15 @@ jobs:
             # 高效检测并删除大文件目录
             echo "🔄 高效检测大文件目录..."
             
-            # 直接删除已知的大文件目录（快速方法）
-            local big_dirs=()
+            # 定义大文件目录数组（使用普通变量，不使用local）
+            big_dirs_str=""
             
             # 检查编译器目录
             if [ -d "firmware-config/build-Compiler-file" ]; then
               echo "⚠️ 发现编译器目录，直接删除以避免GitHub 30MB限制..."
               rm -rf firmware-config/build-Compiler-file
               echo "✅ 已删除编译器目录"
-              big_dirs+=("firmware-config/build-Compiler-file")
+              big_dirs_str="firmware-config/build-Compiler-file"
             fi
             
             # 检查下载目录
@@ -97,24 +97,41 @@ jobs:
               echo "⚠️ 发现下载目录，直接删除以避免大文件问题..."
               rm -rf downloads
               echo "✅ 已删除下载目录"
-              big_dirs+=("downloads")
+              if [ -n "$big_dirs_str" ]; then
+                big_dirs_str="$big_dirs_str downloads"
+              else
+                big_dirs_str="downloads"
+              fi
             fi
             
-            # 检查其他可能的大目录
-            local other_big_dirs=$(find . -maxdepth 2 -type d -name "*.tar.*" -o -name "*.zip" -o -name "*.tgz" 2>/dev/null | head -10)
-            for dir in $other_big_dirs; do
-              if [ -d "$dir" ]; then
-                echo "⚠️ 发现可能的大文件目录: $dir"
-                echo "🗑️  删除可能的大文件目录..."
-                rm -rf "$dir"
-                echo "✅ 已删除: $dir"
-                big_dirs+=("$dir")
-              fi
-            done
+            # 检查其他可能的大目录（使用高效方法）
+            echo "检查其他可能的大文件目录..."
             
-            if [ ${#big_dirs[@]} -gt 0 ]; then
-              echo "📊 已删除的大文件目录: ${#big_dirs[@]} 个"
-              for dir in "${big_dirs[@]}"; do
+            # 使用find查找可能的大文件目录（限制深度和数量）
+            other_big_dirs=$(find . -maxdepth 3 -type d \( -name "*.tar.*" -o -name "*.zip" -o -name "*.tgz" -o -name "*.gz" -o -name "*.xz" \) 2>/dev/null | head -5)
+            if [ -n "$other_big_dirs" ]; then
+              for dir in $other_big_dirs; do
+                if [ -d "$dir" ]; then
+                  echo "⚠️ 发现可能的大文件目录: $dir"
+                  echo "🗑️  删除可能的大文件目录..."
+                  rm -rf "$dir"
+                  echo "✅ 已删除: $dir"
+                  if [ -n "$big_dirs_str" ]; then
+                    big_dirs_str="$big_dirs_str $dir"
+                  else
+                    big_dirs_str="$dir"
+                  fi
+                fi
+              done
+            fi
+            
+            # 显示已删除的目录统计
+            if [ -n "$big_dirs_str" ]; then
+              # 将字符串转换为数组进行计数
+              big_dirs_array=($big_dirs_str)
+              echo "📊 已删除的大文件目录: ${#big_dirs_array[@]} 个"
+              echo "已删除的目录列表:"
+              for dir in "${big_dirs_array[@]}"; do
                 echo "  ✅ 已删除: $dir"
               done
             else
