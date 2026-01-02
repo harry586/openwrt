@@ -37,11 +37,11 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      # 步骤 1: 使用Git Archive API下载源代码并打包上传
-      - name: "1. 使用Git Archive API下载源代码并打包上传"
+      # 步骤 1: 使用Git Archive API下载源代码
+      - name: "1. 使用Git Archive API下载源代码"
         run: |
-          echo "=== 步骤 1: 使用Git Archive API下载源代码并打包上传 ==="
-          echo "🔄 从GitHub API获取源代码压缩包，并打包上传..."
+          echo "=== 步骤 1: 使用Git Archive API下载源代码 ==="
+          echo "🔄 从GitHub API获取源代码压缩包..."
           
           # 清空工作区
           echo "清空工作区..."
@@ -88,12 +88,12 @@ jobs:
               echo "ℹ️ 未发现编译器目录"
             fi
             
-            # 第一步：建立Artifacts目录
-            echo "📦 第一步：建立Artifacts目录..."
+            # 建立Artifacts目录
+            echo "📦 建立Artifacts目录..."
             mkdir -p /tmp/build-artifacts/source-archive
             
-            # 第二步：从工作区直接创建排除编译器目录的精简源代码压缩包
-            echo "📦 第二步：从工作区直接创建排除编译器目录的精简源代码压缩包..."
+            # 从工作区直接创建排除编译器目录的精简源代码压缩包
+            echo "📦 创建排除编译器目录的精简源代码压缩包..."
             echo "源目录: ${{ github.workspace }}"
             echo "Artifacts目录: /tmp/build-artifacts/source-archive/"
             
@@ -105,64 +105,31 @@ jobs:
             
             echo "✅ 精简源代码压缩包创建完成"
             
-            # 第三步：显示Artifacts内容和大小
-            echo "📋 第三步：显示Artifacts内容和大小..."
+            # 显示Artifacts内容和大小
+            echo "📋 显示Artifacts内容和大小..."
             echo "Artifacts目录内容:"
             ls -lh /tmp/build-artifacts/source-archive/
             echo ""
             echo "Artifacts总大小: $(du -sh /tmp/build-artifacts/source-archive | cut -f1)"
             echo "压缩包大小: $(ls -lh /tmp/build-artifacts/source-archive/source-filtered.tar.gz | awk '{print $5}')"
             
-            # 显示压缩包内的文件结构（前20个）
-            echo ""
-            echo "压缩包内文件结构（前20个）:"
-            tar -tzf /tmp/build-artifacts/source-archive/source-filtered.tar.gz | head -20
-            
-            # 第四步：上传Artifacts
-            echo "⬆️ 第四步：上传Artifacts..."
-            
-            # 第四步续：确保脚本文件有执行权限
-            echo "🔧 第四步续：设置脚本执行权限..."
+            # 确保脚本文件有执行权限
+            echo "🔧 设置脚本执行权限..."
             chmod +x firmware-config/scripts/*.sh 2>/dev/null || true
             
             if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
               echo "✅ 主构建脚本权限设置完成"
-              echo "脚本大小: $(ls -lh firmware-config/scripts/build_firmware_main.sh | awk '{print $5}')"
             else
               echo "❌ 主构建脚本不存在"
               exit 1
             fi
             
-            # 验证关键文件
-            echo ""
-            echo "验证关键文件..."
-            critical_files=(
-              "firmware-config/scripts/build_firmware_main.sh"
-              "firmware-config/scripts/error_analysis.sh"
-              ".github/workflows/firmware-build.yml"
-            )
-            
-            for file in "${critical_files[@]}"; do
-              if [ -f "$file" ]; then
-                echo "✅ $file: 存在"
-              else
-                echo "❌ $file: 缺失"
-              fi
-            done
-            
             # 显示工作区大小
             echo ""
             echo "📊 工作区大小:"
             echo "工作区总大小: $(du -sh ${{ github.workspace }} | cut -f1 || echo '未知')"
-            echo "工作区包含编译器目录: $(if [ -d "firmware-config/build-Compiler-file" ]; then echo "是"; else echo "否"; fi)"
             
-            echo ""
-            echo "🎯 步骤1完成总结："
-            echo "  1. ✅ 源代码直接下载到工作区"
-            echo "  2. ✅ 编译器目录保留在工作区"
-            echo "  3. ✅ 直接创建排除编译器目录的精简压缩包"
-            echo "  4. ✅ Artifacts已上传（大小: $(ls -lh /tmp/build-artifacts/source-archive/source-filtered.tar.gz | awk '{print $5}')）"
-            echo "  5. ✅ 脚本权限设置完成"
+            echo "✅ 步骤1完成"
             
           else
             echo "❌ 源代码解压失败，重要目录缺失"
@@ -170,13 +137,20 @@ jobs:
             ls -la
             exit 1
           fi
-          
-          echo "✅ 步骤1完成"
       
-      # 步骤 2: 修复权限问题
-      - name: "2. 修复权限问题"
+      # 步骤 2: 上传精简源代码Artifacts
+      - name: "2. 上传精简源代码Artifacts"
+        uses: actions/upload-artifact@v4
+        with:
+          name: filtered-source-${{ github.event.inputs.device_name }}
+          path: /tmp/build-artifacts/source-archive/
+          retention-days: 7
+          if-no-files-found: error
+      
+      # 步骤 3: 修复权限问题
+      - name: "3. 修复权限问题"
         run: |
-          echo "=== 步骤 2: 修复权限问题 ==="
+          echo "=== 步骤 3: 修复权限问题 ==="
           echo "🔧 修复所有脚本的执行权限..."
           
           # 查找并修复所有脚本文件的权限
@@ -193,16 +167,12 @@ jobs:
             exit 1
           fi
           
-          # 验证权限
-          echo "验证脚本权限:"
-          ls -la firmware-config/scripts/*.sh 2>/dev/null || echo "scripts目录不存在"
-          
           echo "✅ 权限修复完成"
       
-      # 步骤 3: 深度检查编译器目录并智能查找正确的编译器文件（合并版）
-      - name: "3. 深度检查编译器目录并智能查找（合并版）"
+      # 步骤 4: 深度检查编译器目录并智能查找正确的编译器文件
+      - name: "4. 深度检查编译器目录并智能查找"
         run: |
-          echo "=== 步骤 3: 深度检查编译器目录并智能查找（合并版）==="
+          echo "=== 步骤 4: 深度检查编译器目录并智能查找 ==="
           
           REPO_ROOT="${{ github.workspace }}"
           COMPILER_ROOT="$REPO_ROOT/firmware-config/build-Compiler-file"
@@ -212,120 +182,39 @@ jobs:
           
           # 检查编译器根目录是否存在
           if [ ! -d "$COMPILER_ROOT" ]; then
-            echo "⚠️ 编译器根目录不存在于工作空间: $COMPILER_ROOT"
-            echo "ℹ️ 这可能是因为："
-            echo "   1. 仓库中原本就没有编译器目录"
-            echo "   2. 编译器目录在步骤1中被删除了"
-            echo "✅ 将使用OpenWrt自动构建的编译器"
+            echo "⚠️ 编译器根目录不存在于工作空间"
             echo "COMPILER_DIR=" >> $GITHUB_ENV
             exit 0
           fi
           
           echo "✅ 编译器根目录存在于工作空间"
           
-          # 深度搜索所有子目录和文件（递归搜索，无深度限制）
-          echo "🔍 深度搜索编译器目录结构（递归搜索）..."
-          TOTAL_DIRS=$(find "$COMPILER_ROOT" -type d 2>/dev/null | wc -l)
-          TOTAL_FILES=$(find "$COMPILER_ROOT" -type f 2>/dev/null | wc -l)
-          
-          echo "总目录数: $TOTAL_DIRS"
-          echo "总文件数: $TOTAL_FILES"
-          
-          if [ $TOTAL_FILES -gt 0 ]; then
-            echo "📋 目录结构（递归显示）:"
-            find "$COMPILER_ROOT" -type d 2>/dev/null | sort | while read dir; do
-              depth=$(echo "$dir" | tr -cd '/' | wc -c)
-              if [ $depth -le 12 ]; then  # 显示前12层
-                indent=""
-                for ((i=1; i<=depth; i++)); do indent="$indent  "; done
-                dir_name=$(basename "$dir")
-                file_count=$(find "$dir" -type f 2>/dev/null | wc -l)
-                relative_path=$(echo "$dir" | sed "s|$COMPILER_ROOT/||")
-                echo "${indent}📁 $dir_name/ ($file_count 个文件) [$relative_path]"
-              fi
-            done | head -150
-            
-            # 递归查找任何gcc文件
-            echo "🔍 递归查找GCC文件..."
-            GCC_FILES=$(find "$COMPILER_ROOT" -type f -name "*gcc*" 2>/dev/null)
-            GCC_COUNT=$(echo "$GCC_FILES" | wc -l)
-            
-            if [ $GCC_COUNT -gt 0 ]; then
-              echo "✅ 找到 $GCC_COUNT 个GCC文件"
-              echo "$GCC_FILES" | head -10 | while read file; do
-                if [ -f "$file" ]; then
-                  size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "未知")
-                  relative_path=$(echo "$file" | sed "s|$REPO_ROOT/||")
-                  echo "  📄 $size - $relative_path"
-                fi
-              done
-            else
-              echo "❌ 未找到GCC文件"
-            fi
-          else
-            echo "⚠️ 编译器目录为空（没有文件）"
-            echo "ℹ️ 编译器目录可能不包含任何文件"
-            echo "COMPILER_DIR=" >> $GITHUB_ENV
-            exit 0
-          fi
-          
-          # 智能查找正确的编译器文件（递归搜索）
-          echo ""
-          echo "🔍 智能查找正确的编译器文件（递归搜索）..."
-          
+          # 智能查找编译器目录
           DEVICE_NAME="${{ github.event.inputs.device_name }}"
           echo "🎯 设备名称: $DEVICE_NAME"
           
-          # 根据设备确定平台和搜索关键词
-          TARGET_PLATFORM=""
+          # 根据设备确定搜索关键词
           SEARCH_KEYWORDS=()
           
           if [[ "$DEVICE_NAME" == "ac42u" || "$DEVICE_NAME" == "acrh17" ]]; then
-            TARGET_PLATFORM="arm"
-            SEARCH_KEYWORDS=("arm" "aarch64" "cortex-a7" "cortex-a53" "ipq40xx" "musl" "gcc-11" "binutils")
-            echo "目标平台: ARM (IPQ40xx)"
-            echo "搜索关键词: ${SEARCH_KEYWORDS[*]}"
+            SEARCH_KEYWORDS=("arm" "aarch64" "cortex-a7" "cortex-a53" "ipq40xx")
           elif [[ "$DEVICE_NAME" == "mi_router_4a_gigabit" || "$DEVICE_NAME" == "r4ag" ]]; then
-            TARGET_PLATFORM="mips"
-            SEARCH_KEYWORDS=("mips" "mipsel" "mt76x8" "24kc" "musl" "gcc-11" "binutils")
-            echo "目标平台: MIPS (MT76x8)"
-            echo "搜索关键词: ${SEARCH_KEYWORDS[*]}"
+            SEARCH_KEYWORDS=("mips" "mipsel" "mt76x8" "24kc")
           elif [[ "$DEVICE_NAME" == "mi_router_3g" || "$DEVICE_NAME" == "r3g" ]]; then
-            TARGET_PLATFORM="mips"
-            SEARCH_KEYWORDS=("mips" "mipsel" "mt7621" "1004kc" "musl" "gcc-11" "binutils")
-            echo "目标平台: MIPS (MT7621)"
-            echo "搜索关键词: ${SEARCH_KEYWORDS[*]}"
+            SEARCH_KEYWORDS=("mips" "mipsel" "mt7621" "1004kc")
           else
-            TARGET_PLATFORM="generic"
-            SEARCH_KEYWORDS=("gcc" "compiler" "toolchain" "musl" "binutils")
-            echo "目标平台: 通用"
-            echo "搜索关键词: ${SEARCH_KEYWORDS[*]}"
+            SEARCH_KEYWORDS=("gcc" "compiler" "toolchain")
           fi
           
           FOUND_COMPILER_DIR=""
           
-          # 方法1: 递归深度搜索包含平台关键词的目录
-          echo "1. 递归深度搜索包含平台关键词的目录..."
+          # 搜索编译器目录
           for keyword in "${SEARCH_KEYWORDS[@]}"; do
-            echo "  递归搜索关键词: '$keyword'"
-            # 使用find递归搜索，无深度限制
-            DIRS=$(find "$COMPILER_ROOT" -type d -iname "*$keyword*" 2>/dev/null | head -20)
+            DIRS=$(find "$COMPILER_ROOT" -type d -iname "*$keyword*" 2>/dev/null | head -5)
             if [ -n "$DIRS" ]; then
-              echo "  找到目录:"
               while read dir; do
-                relative_path=$(echo "$dir" | sed "s|$COMPILER_ROOT/||")
-                echo "    📁 $relative_path"
-                
-                # 在该目录中递归搜索gcc文件
-                GCC_FILES=$(find "$dir" -type f -iname "*gcc*" 2>/dev/null | head -5)
+                GCC_FILES=$(find "$dir" -type f -iname "*gcc*" 2>/dev/null | head -1)
                 if [ -n "$GCC_FILES" ]; then
-                  echo "      🔧 找到GCC文件:"
-                  for gcc_file in $GCC_FILES; do
-                    if [ -f "$gcc_file" ]; then
-                      size=$(du -h "$gcc_file" 2>/dev/null | cut -f1 || echo "未知")
-                      echo "        📄 $size - $(basename "$gcc_file")"
-                    fi
-                  done
                   FOUND_COMPILER_DIR="$dir"
                   break 2
                 fi
@@ -333,134 +222,33 @@ jobs:
             fi
           done
           
-          # 方法2: 如果没找到，递归深度搜索任何包含gcc的目录
+          # 如果没找到，搜索任何包含gcc的目录
           if [ -z "$FOUND_COMPILER_DIR" ]; then
-            echo "2. 递归深度搜索任何包含gcc的目录..."
-            # 使用find递归搜索gcc文件，无深度限制
-            GCC_FILES=$(find "$COMPILER_ROOT" -type f -iname "*gcc*" 2>/dev/null | head -20)
+            GCC_FILES=$(find "$COMPILER_ROOT" -type f -iname "*gcc*" 2>/dev/null | head -1)
             if [ -n "$GCC_FILES" ]; then
-              echo "  找到GCC文件:"
-              for gcc_file in $GCC_FILES; do
-                if [ -f "$gcc_file" ]; then
-                  # 获取文件所在目录
-                  dir=$(dirname "$gcc_file")
-                  # 如果是bin目录中的gcc，向上找一级
-                  if [[ "$dir" == */bin ]]; then
-                    dir=$(dirname "$dir")
-                  fi
-                  size=$(du -h "$gcc_file" 2>/dev/null | cut -f1 || echo "未知")
-                  relative_path=$(echo "$dir" | sed "s|$COMPILER_ROOT/||")
-                  echo "    📄 $size - $(basename "$gcc_file") (在 $relative_path)"
-                  FOUND_COMPILER_DIR="$dir"
-                  break
-                fi
-              done
-            fi
-          fi
-          
-          # 方法3: 递归搜索bin目录结构
-          if [ -z "$FOUND_COMPILER_DIR" ]; then
-            echo "3. 递归搜索编译器目录结构..."
-            # 寻找包含bin目录的目录结构（递归搜索）
-            BIN_DIRS=$(find "$COMPILER_ROOT" -type d -name "bin" 2>/dev/null | head -20)
-            if [ -n "$BIN_DIRS" ]; then
-              echo "  找到bin目录:"
-              for bin_dir in $BIN_DIRS; do
-                parent_dir=$(dirname "$bin_dir")
-                relative_path=$(echo "$parent_dir" | sed "s|$COMPILER_ROOT/||")
-                echo "    📁 $relative_path (包含bin目录)"
-                
-                # 检查bin目录中是否有编译器
-                COMPILER_FILES=$(find "$bin_dir" -type f \( -iname "*gcc*" -o -iname "*g++*" -o -iname "*ar*" -o -iname "*ld*" \) 2>/dev/null | head -5)
-                if [ -n "$COMPILER_FILES" ]; then
-                  echo "      🔧 找到编译器文件"
-                  FOUND_COMPILER_DIR="$parent_dir"
-                  break
-                fi
-              done
-            fi
-          fi
-          
-          # 方法4: 递归搜索目录名称包含编译器关键词
-          if [ -z "$FOUND_COMPILER_DIR" ]; then
-            echo "4. 递归搜索目录名称包含编译器关键词..."
-            # 递归搜索包含编译器相关关键词的目录
-            COMPILER_DIRS=$(find "$COMPILER_ROOT" -type d \( -iname "*compiler*" -o -iname "*toolchain*" -o -iname "*gcc*" -o -iname "*binutils*" \) 2>/dev/null | head -20)
-            if [ -n "$COMPILER_DIRS" ]; then
-              echo "  找到编译器相关目录:"
-              for comp_dir in $COMPILER_DIRS; do
-                relative_path=$(echo "$comp_dir" | sed "s|$COMPILER_ROOT/||")
-                echo "    📁 $relative_path"
-                
-                # 检查该目录是否有gcc文件
-                if find "$comp_dir" -type f -iname "*gcc*" 2>/dev/null | head -1 >/dev/null; then
-                  FOUND_COMPILER_DIR="$comp_dir"
-                  echo "      ✅ 包含GCC文件"
-                  break
-                fi
-              done
-            fi
-          fi
-          
-          # 方法5: 如果还是没找到，使用第一个包含文件的目录
-          if [ -z "$FOUND_COMPILER_DIR" ]; then
-            echo "5. 使用第一个包含文件的目录..."
-            # 查找第一个包含文件的目录
-            FIRST_DIR_WITH_FILES=$(find "$COMPILER_ROOT" -type d -exec sh -c '[ -n "$(find "$1" -type f -name "*" 2>/dev/null | head -1)" ]' _ {} \; -print 2>/dev/null | head -1)
-            if [ -n "$FIRST_DIR_WITH_FILES" ]; then
-              relative_path=$(echo "$FIRST_DIR_WITH_FILES" | sed "s|$COMPILER_ROOT/||")
-              echo "  找到包含文件的目录: $relative_path"
-              FOUND_COMPILER_DIR="$FIRST_DIR_WITH_FILES"
+              dir=$(dirname "$GCC_FILES")
+              if [[ "$dir" == */bin ]]; then
+                dir=$(dirname "$dir")
+              fi
+              FOUND_COMPILER_DIR="$dir"
             fi
           fi
           
           # 最终决策
-          echo ""
-          echo "=== 搜索结果 ==="
           if [ -n "$FOUND_COMPILER_DIR" ]; then
             echo "✅ 找到编译器目录: $FOUND_COMPILER_DIR"
-            
-            # 验证目录
-            echo "📊 目录验证:"
-            relative_path=$(echo "$FOUND_COMPILER_DIR" | sed "s|$COMPILER_ROOT/||")
-            echo "  路径: $relative_path"
-            echo "  大小: $(du -sh "$FOUND_COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
-            echo "  文件数: $(find "$FOUND_COMPILER_DIR" -type f 2>/dev/null | wc -l)"
-            echo "  目录数: $(find "$FOUND_COMPILER_DIR" -type d 2>/dev/null | wc -l)"
-            
-            # 设置环境变量
             echo "COMPILER_DIR=$FOUND_COMPILER_DIR" >> $GITHUB_ENV
-            echo "✅ 已设置编译器目录环境变量"
-            
           else
             echo "❌ 未找到合适的编译器目录"
-            echo "🔄 使用根目录作为编译器目录"
-            echo "COMPILER_DIR=$COMPILER_ROOT" >> $GITHUB_ENV
-            echo "⚠️ 注意: 将使用根目录，可能需要手动配置编译器"
+            echo "COMPILER_DIR=" >> $GITHUB_ENV
           fi
           
-          # 显示完整的目录结构用于调试
-          echo ""
-          echo "📁 完整目录结构（用于调试）:"
-          find "$COMPILER_ROOT" -type d 2>/dev/null | sort | while read dir; do
-            depth=$(echo "$dir" | tr -cd '/' | wc -c)
-            if [ $depth -le 8 ]; then  # 只显示前8层
-              indent=""
-              for ((i=1; i<=depth; i++)); do indent="$indent  "; done
-              dir_name=$(basename "$dir")
-              file_count=$(find "$dir" -type f 2>/dev/null | wc -l)
-              relative_path=$(echo "$dir" | sed "s|$COMPILER_ROOT/||")
-              echo "${indent}📁 $dir_name/ ($file_count 个文件) [$relative_path]"
-            fi
-          done | head -50
-          
-          echo ""
           echo "✅ 编译器搜索完成"
       
-      # 步骤 4: 初始空间检查
-      - name: "4. 初始空间检查"
+      # 步骤 5: 初始空间检查
+      - name: "5. 初始空间检查"
         run: |
-          echo "=== 步骤 4: 初始磁盘空间检查 ==="
+          echo "=== 步骤 5: 初始磁盘空间检查 ==="
           df -h
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
@@ -471,20 +259,19 @@ jobs:
           fi
           echo "✅ 初始空间检查通过"
       
-      # 步骤 5: 设置编译环境和构建目录
-      - name: "5. 设置编译环境和构建目录"
+      # 步骤 6: 设置编译环境和构建目录
+      - name: "6. 设置编译环境和构建目录"
         run: |
-          echo "=== 步骤 5: 设置编译环境和构建目录 ==="
+          echo "=== 步骤 6: 设置编译环境和构建目录 ==="
           
-          echo "🔄 步骤 5.1: 设置编译环境"
-          # 运行主脚本设置环境
+          echo "🔄 步骤 6.1: 设置编译环境"
           chmod +x firmware-config/scripts/build_firmware_main.sh
           firmware-config/scripts/build_firmware_main.sh setup_environment
           
-          echo "🔄 步骤 5.2: 创建构建目录"
+          echo "🔄 步骤 6.2: 创建构建目录"
           firmware-config/scripts/build_firmware_main.sh create_build_dir
           
-          echo "🔄 步骤 5.3: 初始化构建环境"
+          echo "🔄 步骤 6.3: 初始化构建环境"
           echo "设备: ${{ github.event.inputs.device_name }}"
           echo "版本: ${{ github.event.inputs.version_selection }}"
           echo "配置模式: ${{ github.event.inputs.config_mode }}"
@@ -492,54 +279,54 @@ jobs:
           
           echo "✅ 编译环境和构建目录设置完成"
       
-      # 步骤 6: 添加 TurboACC 支持
-      - name: "6. 添加 TurboACC 支持"
+      # 步骤 7: 添加 TurboACC 支持
+      - name: "7. 添加 TurboACC 支持"
         run: |
-          echo "=== 步骤 6: 添加 TurboACC 支持 ==="
+          echo "=== 步骤 7: 添加 TurboACC 支持 ==="
           firmware-config/scripts/build_firmware_main.sh add_turboacc_support
       
-      # 步骤 7: 配置Feeds
-      - name: "7. 配置Feeds"
+      # 步骤 8: 配置Feeds
+      - name: "8. 配置Feeds"
         run: |
-          echo "=== 步骤 7: 配置Feeds ==="
+          echo "=== 步骤 8: 配置Feeds ==="
           firmware-config/scripts/build_firmware_main.sh configure_feeds
       
-      # 步骤 8: 安装 TurboACC 包
-      - name: "8. 安装 TurboACC 包"
+      # 步骤 9: 安装 TurboACC 包
+      - name: "9. 安装 TurboACC 包"
         if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
         run: |
-          echo "=== 步骤 8: 安装 TurboACC 包 ==="
+          echo "=== 步骤 9: 安装 TurboACC 包 ==="
           firmware-config/scripts/build_firmware_main.sh install_turboacc_packages
       
-      # 步骤 9: 编译前空间检查
-      - name: "9. 编译前空间检查"
+      # 步骤 10: 编译前空间检查
+      - name: "10. 编译前空间检查"
         run: |
-          echo "=== 步骤 9: 编译前空间检查 ==="
+          echo "=== 步骤 10: 编译前空间检查 ==="
           firmware-config/scripts/build_firmware_main.sh pre_build_space_check
       
-      # 步骤 10: 智能配置生成（USB完全修复加强版）
-      - name: "10. 智能配置生成（USB完全修复加强版）"
+      # 步骤 11: 智能配置生成（USB完全修复加强版）
+      - name: "11. 智能配置生成（USB完全修复加强版）"
         run: |
-          echo "=== 步骤 10: 智能配置生成 ==="
+          echo "=== 步骤 11: 智能配置生成 ==="
           echo "🚨 USB 3.0加强：所有平台的关键USB驱动都已强制启用！"
           firmware-config/scripts/build_firmware_main.sh generate_config "${{ github.event.inputs.extra_packages }}"
       
-      # 步骤 11: 验证USB配置
-      - name: "11. 验证USB配置"
+      # 步骤 12: 验证USB配置
+      - name: "12. 验证USB配置"
         run: |
-          echo "=== 步骤 11: 验证USB配置 ==="
+          echo "=== 步骤 12: 验证USB配置 ==="
           firmware-config/scripts/build_firmware_main.sh verify_usb_config
       
-      # 步骤 12: USB驱动完整性检查
-      - name: "12. USB驱动完整性检查"
+      # 步骤 13: USB驱动完整性检查
+      - name: "13. USB驱动完整性检查"
         run: |
-          echo "=== 步骤 12: USB驱动完整性检查 ==="
+          echo "=== 步骤 13: USB驱动完整性检查 ==="
           firmware-config/scripts/build_firmware_main.sh check_usb_drivers_integrity
       
-      # 步骤 13: 应用配置并显示详情
-      - name: "13. 应用配置并显示详情"
+      # 步骤 14: 应用配置并显示详情
+      - name: "14. 应用配置并显示详情"
         run: |
-          echo "=== 步骤 13: 应用配置并显示详情 ==="
+          echo "=== 步骤 14: 应用配置并显示详情 ==="
           
           # 先保存原始配置文件
           if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
@@ -550,82 +337,12 @@ jobs:
           # 应用配置
           firmware-config/scripts/build_firmware_main.sh apply_config
           
-          # 检查应用后的配置状态
-          echo "=== 插件配置状态检查 ==="
-          cd "${{ env.BUILD_DIR }}"
-          
-          # 定义正常模式的完整插件列表
-          declare -A normal_plugins
-          normal_plugins["TurboACC 网络加速"]="luci-app-turboacc"
-          normal_plugins["UPnP 自动端口转发"]="luci-app-upnp"
-          normal_plugins["Samba 文件共享"]="luci-app-samba4"
-          normal_plugins["磁盘管理"]="luci-app-diskman"
-          normal_plugins["KMS 激活服务"]="luci-app-vlmcsd"
-          normal_plugins["SmartDNS 智能DNS"]="luci-app-smartdns"
-          normal_plugins["家长控制"]="luci-app-accesscontrol"
-          normal_plugins["微信推送"]="luci-app-wechatpush"
-          normal_plugins["流量控制 (SQM)"]="luci-app-sqm"
-          normal_plugins["FTP 服务器"]="luci-app-vsftpd"
-          normal_plugins["ARP 绑定"]="luci-app-arpbind"
-          normal_plugins["CPU 限制"]="luci-app-cpulimit"
-          normal_plugins["硬盘休眠"]="luci-app-hd-idle"
-          
-          echo "📋 正常模式插件状态检查:"
-          
-          total_plugins=0
-          enabled_plugins=0
-          disabled_plugins=0
-          
-          for plugin_name in "${!normal_plugins[@]}"; do
-            plugin_config="${normal_plugins[$plugin_name]}"
-            total_plugins=$((total_plugins + 1))
-            
-            if grep -q "^CONFIG_PACKAGE_${plugin_config}=y" .config; then
-              echo "  ✅ $plugin_name: 已启用"
-              enabled_plugins=$((enabled_plugins + 1))
-            elif grep -q "^# CONFIG_PACKAGE_${plugin_config} is not set$" .config; then
-              echo "  ❌ $plugin_name: 已禁用"
-              disabled_plugins=$((disabled_plugins + 1))
-            else
-              echo "  ⚠️  $plugin_name: 未配置"
-            fi
-          done
-          
-          echo ""
-          echo "📊 插件状态统计:"
-          echo "  总计: $total_plugins 个插件"
-          echo "  已启用: $enabled_plugins 个"
-          echo "  已禁用: $disabled_plugins 个"
-          
-          # 检查基础模式是否禁用了插件
-          if [ "${{ github.event.inputs.config_mode }}" = "base" ]; then
-            echo ""
-            echo "🔧 基础模式配置确认:"
-            if [ $enabled_plugins -eq 0 ]; then
-              echo "  ✅ 基础模式: 所有额外插件已正确禁用"
-            else
-              echo "  ⚠️  基础模式: 有 $enabled_plugins 个插件未禁用，需要检查"
-            fi
-          fi
-          
-          # 额外检查USB驱动状态
-          echo ""
-          echo "🔌 USB驱动状态确认:"
-          critical_usb_drivers=("kmod-usb-xhci-hcd" "kmod-usb3" "kmod-usb-dwc3" "kmod-usb-storage" "kmod-scsi-core")
-          for driver in "${critical_usb_drivers[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-              echo "  ✅ $driver: 已启用"
-            else
-              echo "  ❌ $driver: 未启用 (需要修复)"
-            fi
-          done
-          
           echo "✅ 配置详情检查完成"
       
-      # 步骤 14: 检查并备份配置文件
-      - name: "14. 检查并备份配置文件"
+      # 步骤 15: 检查并备份配置文件
+      - name: "15. 检查并备份配置文件"
         run: |
-          echo "=== 步骤 14: 检查并备份配置文件 ==="
+          echo "=== 步骤 15: 检查并备份配置文件 ==="
           
           # 检查配置文件
           if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
@@ -640,48 +357,44 @@ jobs:
             
             cp "${{ env.BUILD_DIR }}/.config" "$backup_file"
             echo "✅ 配置文件备份到仓库目录: $backup_file"
-            
-            # 显示备份文件信息
-            echo "备份文件大小: $(ls -lh $backup_file | awk '{print $5}')"
           else
             echo "❌ .config 文件不存在"
             exit 1
           fi
       
-      # 步骤 15: 修复网络环境
-      - name: "15. 修复网络环境"
+      # 步骤 16: 修复网络环境
+      - name: "16. 修复网络环境"
         run: |
-          echo "=== 步骤 15: 修复网络环境 ==="
+          echo "=== 步骤 16: 修复网络环境 ==="
           firmware-config/scripts/build_firmware_main.sh fix_network
       
-      # 步骤 16: 下载依赖包
-      - name: "16. 下载依赖包"
+      # 步骤 17: 下载依赖包
+      - name: "17. 下载依赖包"
         run: |
-          echo "=== 步骤 16: 下载依赖包 ==="
+          echo "=== 步骤 17: 下载依赖包 ==="
           firmware-config/scripts/build_firmware_main.sh download_dependencies
       
-      # 步骤 17: 集成自定义文件
-      - name: "17. 集成自定义文件"
+      # 步骤 18: 集成自定义文件
+      - name: "18. 集成自定义文件"
         run: |
-          echo "=== 步骤 17: 集成自定义文件 ==="
+          echo "=== 步骤 18: 集成自定义文件 ==="
           firmware-config/scripts/build_firmware_main.sh integrate_custom_files
       
-      # 步骤 18: 前置错误检查（包含编译器验证）
-      - name: "18. 前置错误检查（包含编译器验证）"
+      # 步骤 19: 前置错误检查
+      - name: "19. 前置错误检查"
         run: |
-          echo "=== 步骤 18: 前置错误检查（包含编译器验证）==="
+          echo "=== 步骤 19: 前置错误检查 ==="
           firmware-config/scripts/build_firmware_main.sh pre_build_error_check
       
-      # 步骤 19: 编译固件前的空间检查
-      - name: "19. 编译固件前的空间检查"
+      # 步骤 20: 编译固件前的空间检查
+      - name: "20. 编译固件前的空间检查"
         run: |
-          echo "=== 步骤 19: 编译固件前的空间检查 ==="
+          echo "=== 步骤 20: 编译固件前的空间检查 ==="
           df -h
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
           echo "/mnt 可用空间: ${AVAILABLE_GB}G"
           
-          # 检查编译所需空间
           if [ $AVAILABLE_GB -lt 10 ]; then
             echo "❌ 错误: 编译前空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
             exit 1
@@ -691,10 +404,10 @@ jobs:
             echo "✅ 编译前空间充足"
           fi
       
-      # 步骤 20: 编译固件
-      - name: "20. 编译固件"
+      # 步骤 21: 编译固件
+      - name: "21. 编译固件"
         run: |
-          echo "=== 步骤 20: 编译固件 ==="
+          echo "=== 步骤 21: 编译固件 ==="
           echo "🔧 使用增强的编译器搜索和调用功能..."
           
           # 显示编译器信息
@@ -703,38 +416,23 @@ jobs:
           echo "  编译器目录: ${{ env.COMPILER_DIR }}"
           
           echo "🚀 开始编译，将尝试调用预构建编译器..."
-          
-          # 启用编译缓存，使用并行编译
-          echo "🚀 开始编译固件..."
           firmware-config/scripts/build_firmware_main.sh build_firmware "true"
       
-      # 步骤 21: 搜索并打包构建产物
-      - name: "21. 搜索并打包构建产物"
+      # 步骤 22: 搜索并打包构建产物
+      - name: "22. 搜索并打包构建产物"
         if: success()
         run: |
-          echo "=== 步骤 21: 搜索并打包构建产物 ==="
+          echo "=== 步骤 22: 搜索并打包构建产物 ==="
           cd ${{ env.BUILD_DIR }}
           
           # 创建构建产物目录
           mkdir -p /tmp/build-artifacts
           
-          # 检查是否已有相同文件，避免重复上传
-          echo "🔍 检查是否已有相同构建产物..."
-          need_upload=false
-          
           # 打包固件文件
           if [ -d "bin/targets" ]; then
             echo "打包固件文件..."
             tar -czf /tmp/build-artifacts/firmware.tar.gz -C bin targets/
-            
-            # 检查文件大小
-            firmware_size=$(stat -c%s /tmp/build-artifacts/firmware.tar.gz 2>/dev/null || echo "0")
-            if [ $firmware_size -gt 0 ]; then
-              echo "✅ 固件打包完成，大小: $(du -h /tmp/build-artifacts/firmware.tar.gz | cut -f1)"
-              need_upload=true
-            else
-              echo "⚠️ 固件打包失败或文件为空"
-            fi
+            echo "✅ 固件打包完成"
           else
             echo "⚠️ bin/targets目录不存在"
           fi
@@ -744,27 +442,12 @@ jobs:
             echo "打包编译日志..."
             cp build.log /tmp/build-artifacts/build.log
             echo "✅ 日志打包完成"
-            need_upload=true
           fi
           
-          # 创建构建信息文件
-          echo "构建时间: $(date)" > /tmp/build-artifacts/build-info.txt
-          echo "设备: ${{ env.DEVICE }}" >> /tmp/build-artifacts/build-info.txt
-          echo "版本: ${{ env.SELECTED_BRANCH }}" >> /tmp/build-artifacts/build-info.txt
-          echo "目标平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}" >> /tmp/build-artifacts/build-info.txt
-          echo "配置模式: ${{ github.event.inputs.config_mode }}" >> /tmp/build-artifacts/build-info.txt
-          echo "编译器目录: ${{ env.COMPILER_DIR }}" >> /tmp/build-artifacts/build-info.txt
-          
-          if [ "$need_upload" = true ]; then
-            echo "✅ 构建产物准备完成"
-            echo "📤 构建产物已保存在: /tmp/build-artifacts/"
-            ls -lh /tmp/build-artifacts/
-          else
-            echo "ℹ️ 没有需要上传的构建产物"
-          fi
+          echo "✅ 构建产物准备完成"
       
-      # 步骤 22: 上传固件原始目录
-      - name: "22. 上传固件原始目录"
+      # 步骤 23: 上传固件原始目录
+      - name: "23. 上传固件原始目录"
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -773,8 +456,8 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 23: 上传配置文件
-      - name: "23. 上传配置文件"
+      # 步骤 24: 上传配置文件
+      - name: "24. 上传配置文件"
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -783,11 +466,11 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 24: 执行错误分析
-      - name: "24. 执行错误分析"
+      # 步骤 25: 执行错误分析
+      - name: "25. 执行错误分析"
         if: always()
         run: |
-          echo "=== 步骤 24: 执行错误分析 ==="
+          echo "=== 步骤 25: 执行错误分析 ==="
           
           # 检查错误分析脚本是否存在
           if [ -f "firmware-config/scripts/error_analysis.sh" ]; then
@@ -795,36 +478,10 @@ jobs:
             chmod +x firmware-config/scripts/error_analysis.sh
             firmware-config/scripts/error_analysis.sh
           else
-            echo "⚠️ 错误分析脚本不存在，创建简易分析..."
-            
-            # 创建简易错误分析
-            echo "简易错误分析报告:" > /tmp/error-analysis.txt
-            echo "========================" >> /tmp/error-analysis.txt
-            
-            if [ -f "${{ env.BUILD_DIR }}/build.log" ]; then
-              echo "📊 编译日志分析:" >> /tmp/error-analysis.txt
-              echo "文件大小: $(ls -lh ${{ env.BUILD_DIR }}/build.log | awk '{print $5}')" >> /tmp/error-analysis.txt
-              
-              # 检查常见错误
-              ERROR_COUNT=$(grep -c -i "error\|failed" ${{ env.BUILD_DIR }}/build.log || echo "0")
-              WARNING_COUNT=$(grep -c -i "warning" ${{ env.BUILD_DIR }}/build.log || echo "0")
-              
-              echo "错误数量: $ERROR_COUNT" >> /tmp/error-analysis.txt
-              echo "警告数量: $WARNING_COUNT" >> /tmp/error-analysis.txt
-              
-              if [ $ERROR_COUNT -gt 0 ]; then
-                echo "前10个错误:" >> /tmp/error-analysis.txt
-                grep -i "error\|failed" ${{ env.BUILD_DIR }}/build.log | head -10 >> /tmp/error-analysis.txt
-              fi
-              
-              echo "✅ 简易分析完成"
-              cat /tmp/error-analysis.txt
-            else
-              echo "ℹ️ 未找到编译日志"
-            fi
+            echo "⚠️ 错误分析脚本不存在"
           fi
       
-      # 步骤 25: 编译后空间检查
-      - name: "25. 编译后空间检查"
+      # 步骤 26: 编译后空间检查
+      - name: "26. 编译后空间检查"
         if: always()
         run: firmware-config/scripts/build_firmware_main.sh post_build_space_check
