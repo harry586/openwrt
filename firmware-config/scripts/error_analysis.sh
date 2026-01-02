@@ -238,7 +238,7 @@ analyze_config_file() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 6. 检查编译器状态
+# 6. 检查编译器状态（改进版）
 check_compiler_status() {
     log "🔧 检查编译器状态..."
     
@@ -255,21 +255,46 @@ check_compiler_status() {
             local toolchain_dir=$(find "$BUILD_DIR/staging_dir" -name "toolchain-*" -type d 2>/dev/null | head -1)
             echo "🔍 工具链目录: $(basename "$toolchain_dir")" >> "$REPORT_FILE"
             
-            # 检查编译器
-            echo "🔍 编译器检查:" >> "$REPORT_FILE"
-            find "$toolchain_dir/bin" -name "*gcc*" -type f 2>/dev/null | head -5 | while read compiler; do
-                local compiler_name=$(basename "$compiler")
-                if [ -x "$compiler" ]; then
-                    echo "  ✅ $compiler_name: 可执行" >> "$REPORT_FILE"
-                    # 尝试获取版本
-                    local version=$("$compiler" --version 2>&1 | head -1 | cut -d' ' -f3-)
-                    if [ -n "$version" ]; then
-                        echo "     版本: $version" >> "$REPORT_FILE"
-                    fi
+            # 检查真正的GCC编译器（排除工具链工具）
+            echo "🔍 编译器详细检查:" >> "$REPORT_FILE"
+            
+            # 查找真正的gcc编译器（不是工具链工具）
+            local real_gcc=$(find "$toolchain_dir/bin" -type f -executable \
+              -name "*gcc" \
+              ! -name "*gcc-ar" \
+              ! -name "*gcc-ranlib" \
+              ! -name "*gcc-nm" \
+              ! -name "*-gcc-ar" \
+              2>/dev/null | head -1)
+            
+            if [ -n "$real_gcc" ]; then
+                echo "  ✅ 找到真正的GCC编译器: $(basename "$real_gcc")" >> "$REPORT_FILE"
+                
+                local version=$("$real_gcc" --version 2>&1 | head -1)
+                echo "     版本: $version" >> "$REPORT_FILE"
+                
+                # 检查GCC 11.x
+                if echo "$version" | grep -q "11\."; then
+                    echo "     ✅ GCC 11.x 版本正确" >> "$REPORT_FILE"
                 else
-                    echo "  ❌ $compiler_name: 不可执行" >> "$REPORT_FILE"
+                    echo "     ⚠️ 不是GCC 11.x 版本" >> "$REPORT_FILE"
                 fi
-            done
+            else
+                echo "  ⚠️ 未找到真正的GCC编译器" >> "$REPORT_FILE"
+                echo "     找到的工具链工具:" >> "$REPORT_FILE"
+                find "$toolchain_dir/bin" -name "*gcc*" -type f 2>/dev/null | head -5 | while read tool; do
+                    local tool_name=$(basename "$tool")
+                    echo "     - $tool_name" >> "$REPORT_FILE"
+                    
+                    # 如果是工具链工具，显示其版本
+                    if [[ "$tool_name" == *gcc-ar* ]] || [[ "$tool_name" == *gcc-ranlib* ]] || [[ "$tool_name" == *gcc-nm* ]]; then
+                        local tool_version=$("$tool" --version 2>&1 | head -1)
+                        echo "       版本: $tool_version" >> "$REPORT_FILE"
+                        echo "       ⚠️ 注意: 这是GCC工具链工具，不是GCC编译器" >> "$REPORT_FILE"
+                    fi
+                done
+            fi
+            
         else
             echo "❌ 未找到工具链目录" >> "$REPORT_FILE"
             echo "💡 工具链可能尚未编译完成" >> "$REPORT_FILE"
@@ -368,6 +393,14 @@ analyze_build_log() {
                 echo "" >> "$REPORT_FILE"
             fi
             
+            # 编译器版本错误
+            if grep -q "requires gcc\|gcc version" "$BUILD_DIR/build.log" 2>/dev/null; then
+                echo "❌ 检测到编译器版本错误" >> "$REPORT_FILE"
+                echo "💡 可能是GCC版本不匹配" >> "$REPORT_FILE"
+                echo "🛠️ 修复方法: 使用GCC 11.x版本" >> "$REPORT_FILE"
+                echo "" >> "$REPORT_FILE"
+            fi
+            
         else
             echo "✅ 构建日志中没有发现错误" >> "$REPORT_FILE"
         fi
@@ -437,6 +470,7 @@ analyze_version_specific() {
             echo "  2. 工具链构建错误 (toolchain/Makefile:93)" >> "$REPORT_FILE"
             echo "  3. 头文件缺失问题" >> "$REPORT_FILE"
             echo "  4. libtool版本兼容性问题" >> "$REPORT_FILE"
+            echo "  5. GCC 11.x 编译器兼容性问题" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
             
             echo "🛠️ 解决方案:" >> "$REPORT_FILE"
@@ -444,6 +478,7 @@ analyze_version_specific() {
             echo "  2. 创建stamp标记文件" >> "$REPORT_FILE"
             echo "  3. 安装libtool和autoconf" >> "$REPORT_FILE"
             echo "  4. 设置-fpermissive编译标志" >> "$REPORT_FILE"
+            echo "  5. 确保使用GCC 11.x版本编译器" >> "$REPORT_FILE"
             
         elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
             echo "🔧 OpenWrt 21.02 版本特性:" >> "$REPORT_FILE"
@@ -525,6 +560,18 @@ generate_fix_suggestions() {
             echo "  echo '#ifndef _STDIO_H' >> $BUILD_DIR/staging_dir/host/include/stdio.h" >> "$REPORT_FILE"
             echo "  echo '#define _STDIO_H' >> $BUILD_DIR/staging_dir/host/include/stdio.h" >> "$REPORT_FILE"
             echo "  echo '#endif' >> $BUILD_DIR/staging_dir/host/include/stdio.h" >> "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+        fi
+        
+        # 编译器版本错误
+        if grep -q "requires gcc\|gcc version" "$BUILD_DIR/build.log" 2>/dev/null; then
+            echo "🔧 编译器版本错误修复:" >> "$REPORT_FILE"
+            echo "  💡 检测到GCC版本兼容性问题" >> "$REPORT_FILE"
+            echo "  🛠️ 修复方法:" >> "$REPORT_FILE"
+            echo "    1. 检查当前GCC版本: gcc --version" >> "$REPORT_FILE"
+            echo "    2. 确保使用GCC 11.x版本" >> "$REPORT_FILE"
+            echo "    3. 如果使用预构建编译器，验证编译器目录是否正确" >> "$REPORT_FILE"
+            echo "    4. 检查预构建编译器是否是真正的GCC编译器，而不是工具链工具" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
         fi
     fi
@@ -661,6 +708,13 @@ output_report() {
         if grep -q "💡" "$REPORT_FILE"; then
             echo "💡 修复建议摘要:"
             grep "💡" "$REPORT_FILE" | head -5
+            echo ""
+        fi
+        
+        # 显示编译器相关警告
+        if grep -q "编译器版本" "$REPORT_FILE" || grep -q "GCC" "$REPORT_FILE"; then
+            echo "🔧 编译器相关警告:"
+            grep -E "编译器版本|GCC|gcc" "$REPORT_FILE" | head -5
             echo ""
         fi
         
