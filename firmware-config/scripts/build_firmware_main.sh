@@ -75,8 +75,8 @@ check_and_prepare_compiler_dir() {
     log "🔍 检查编译器目录: $COMPILER_ROOT"
     
     if [ -d "$COMPILER_ROOT" ]; then
-        # 深度搜索目录结构
-        log "📊 深度搜索目录结构..."
+        # 深度搜索目录结构（递归搜索，无深度限制）
+        log "📊 深度搜索目录结构（递归搜索）..."
         
         # 查找所有目录
         local total_dirs=$(find "$COMPILER_ROOT" -type d 2>/dev/null | wc -l)
@@ -86,28 +86,28 @@ check_and_prepare_compiler_dir() {
         log "总文件数: $total_files"
         
         if [ $total_files -gt 0 ]; then
-            log "📁 前50个目录结构:"
+            log "📁 目录结构:"
             find "$COMPILER_ROOT" -type d 2>/dev/null | sort | while read dir; do
                 depth=$(echo "$dir" | tr -cd '/' | wc -c)
-                if [ $depth -le 8 ]; then  # 只显示前8层
+                if [ $depth -le 10 ]; then  # 显示前10层
                     indent=""
                     for ((i=1; i<=depth; i++)); do indent="$indent  "; done
                     dir_name=$(basename "$dir")
-                    file_count=$(find "$dir" -maxdepth 1 -type f 2>/dev/null | wc -l)
+                    file_count=$(find "$dir" -type f 2>/dev/null | wc -l)
                     echo "${indent}📂 $dir_name/ ($file_count 个文件)"
                 fi
-            done | head -50
+            done | head -100
             
-            # 深度查找GCC文件
-            log "🔍 深度搜索GCC文件..."
+            # 深度查找GCC文件（递归搜索，无深度限制）
+            log "🔍 深度搜索GCC文件（递归搜索）..."
             local gcc_files=$(find "$COMPILER_ROOT" -type f -name "*gcc*" 2>/dev/null)
             local gcc_count=$(echo "$gcc_files" | wc -l)
             
             if [ $gcc_count -gt 0 ]; then
                 log "✅ 找到 $gcc_count 个GCC编译器文件"
                 
-                # 显示前10个找到的GCC文件（包含完整路径）
-                echo "$gcc_files" | head -10 | while read file; do
+                # 显示找到的GCC文件（包含完整路径）
+                echo "$gcc_files" | head -15 | while read file; do
                     if [ -f "$file" ]; then
                         local file_size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "未知")
                         local file_path=$(echo "$file" | sed "s|$REPO_ROOT/||")
@@ -126,6 +126,18 @@ check_and_prepare_compiler_dir() {
                 done
             else
                 log "⚠️ 警告: 编译器目录中没有找到GCC文件"
+                # 递归搜索其他编译器文件
+                log "🔍 递归搜索其他编译器工具..."
+                local compiler_tools=$(find "$COMPILER_ROOT" -type f \( -name "*g++*" -o -name "*as*" -o -name "*ld*" -o -name "*ar*" -o -name "*strip*" \) 2>/dev/null)
+                local tool_count=$(echo "$compiler_tools" | wc -l)
+                if [ $tool_count -gt 0 ]; then
+                    log "✅ 找到 $tool_count 个其他编译器工具"
+                    echo "$compiler_tools" | head -10 | while read tool; do
+                        local tool_size=$(du -h "$tool" 2>/dev/null | cut -f1 || echo "未知")
+                        local tool_path=$(echo "$tool" | sed "s|$REPO_ROOT/||")
+                        echo "  🔧 $tool_size - $tool_path"
+                    done
+                fi
             fi
         else
             log "⚠️ 编译器目录为空（没有文件）"
@@ -137,9 +149,9 @@ check_and_prepare_compiler_dir() {
         log "⚠️ 警告: 编译器目录不存在"
         log "🔄 尝试在整个仓库中搜索编译器文件..."
         
-        # 尝试在整个仓库中搜索可能的编译器文件
-        log "🔍 在整个仓库中搜索GCC文件..."
-        local found_compilers=$(find "$REPO_ROOT" -type f -name "*gcc*" 2>/dev/null | head -10)
+        # 尝试在整个仓库中搜索可能的编译器文件（递归搜索）
+        log "🔍 在整个仓库中递归搜索GCC文件..."
+        local found_compilers=$(find "$REPO_ROOT" -type f -name "*gcc*" 2>/dev/null | head -20)
         
         if [ -n "$found_compilers" ]; then
             log "✅ 在仓库中找到GCC文件:"
@@ -162,9 +174,9 @@ check_and_prepare_compiler_dir() {
             # 获取第一个编译器文件所在的目录
             local first_gcc=$(echo "$found_compilers" | head -1)
             if [ -f "$first_gcc" ]; then
-                # 向上三级获取编译器根目录
+                # 获取完整的编译器目录路径
                 local gcc_dir=$(dirname "$first_gcc")
-                COMPILER_ROOT=$(dirname "$(dirname "$gcc_dir")")
+                COMPILER_ROOT=$(dirname "$gcc_dir")
                 log "🔄 更新编译器目录为: $COMPILER_ROOT"
                 
                 # 更新环境变量
@@ -191,15 +203,15 @@ search_compiler_files_simple() {
     local search_root="${1:-$COMPILER_ROOT}"
     local target_platform="$2"
     
-    log "🔍 简单直接搜索编译器文件..."
+    log "🔍 简单直接搜索编译器文件（递归搜索）..."
     
     # 如果指定的根目录不存在，尝试自动查找
     if [ ! -d "$search_root" ]; then
         log "⚠️ 编译器目录不存在: $search_root"
         log "🔄 尝试自动查找编译器..."
         
-        # 在仓库中搜索可能的编译器目录
-        local found_dirs=$(find "$REPO_ROOT" -type d \( -name "*gcc*" -o -name "*compiler*" -o -name "*toolchain*" -o -name "*arm*" -o -name "*mips*" \) 2>/dev/null | head -5)
+        # 在仓库中递归搜索可能的编译器目录
+        local found_dirs=$(find "$REPO_ROOT" -type d \( -name "*gcc*" -o -name "*compiler*" -o -name "*toolchain*" -o -name "*arm*" -o -name "*mips*" \) 2>/dev/null | head -10)
         
         if [ -n "$found_dirs" ]; then
             log "找到可能的编译器目录:"
@@ -220,8 +232,8 @@ search_compiler_files_simple() {
     log "目标平台: $target_platform"
     
     # 直接查找编译器目录
-    # 首先查找包含bin目录的编译器安装
-    local bin_dirs=$(find "$search_root" -type d -name "bin" 2>/dev/null | head -5)
+    # 首先递归查找包含bin目录的编译器安装
+    local bin_dirs=$(find "$search_root" -type d -name "bin" 2>/dev/null | head -10)
     
     if [ -n "$bin_dirs" ]; then
         log "找到bin目录:"
@@ -252,9 +264,9 @@ search_compiler_files_simple() {
         done
     fi
     
-    # 如果没有找到bin目录，搜索任何包含gcc的目录
-    log "🔍 搜索包含GCC的目录..."
-    local gcc_files=$(find "$search_root" -type f -name "*gcc*" 2>/dev/null | head -5)
+    # 如果没有找到bin目录，递归搜索任何包含gcc的目录
+    log "🔍 递归搜索包含GCC的目录..."
+    local gcc_files=$(find "$search_root" -type f -name "*gcc*" 2>/dev/null | head -10)
     
     if [ -n "$gcc_files" ]; then
         log "找到GCC文件:"
@@ -265,7 +277,11 @@ search_compiler_files_simple() {
         # 使用第一个GCC文件所在的目录
         local first_gcc=$(echo "$gcc_files" | head -1)
         if [ -f "$first_gcc" ]; then
-            local compiler_dir=$(dirname "$(dirname "$first_gcc")")
+            local compiler_dir=$(dirname "$first_gcc")
+            # 如果是bin目录中的gcc，向上找一级
+            if [[ "$compiler_dir" == */bin ]]; then
+                compiler_dir=$(dirname "$compiler_dir")
+            fi
             log "⚠️ 使用GCC文件所在的目录: $compiler_dir"
             echo "$compiler_dir"
             return 0
@@ -284,13 +300,13 @@ search_compiler_files_simple() {
     return 1
 }
 
-# 智能平台感知的编译器搜索函数
+# 智能平台感知的编译器搜索函数（增强递归版）
 intelligent_platform_aware_compiler_search() {
     local search_root="${1:-$COMPILER_ROOT}"
     local target_platform="$2"
     local device_name="$3"
     
-    log "=== 智能平台感知的编译器搜索 ==="
+    log "=== 智能平台感知的编译器搜索（递归增强版）==="
     log "搜索根目录: $search_root"
     log "目标平台: $target_platform"
     log "设备名称: $device_name"
@@ -348,31 +364,32 @@ intelligent_platform_aware_compiler_search() {
     esac
     
     # 详细显示目录结构
-    log "📁 目录结构概览:"
+    log "📁 目录结构概览（递归搜索）:"
     local total_files=$(find "$search_root" -type f 2>/dev/null | wc -l)
     local total_dirs=$(find "$search_root" -type d 2>/dev/null | wc -l)
     log "总文件数: $total_files, 总目录数: $total_dirs"
     
     # 列出所有子目录（用于调试）
     if [ $total_dirs -gt 1 ]; then
-        log "📋 子目录列表:"
-        find "$search_root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | while read dir; do
+        log "📋 子目录列表（递归显示）:"
+        find "$search_root" -mindepth 1 -maxdepth 3 -type d 2>/dev/null | while read dir; do
             local dir_name=$(basename "$dir")
             local file_count=$(find "$dir" -type f 2>/dev/null | wc -l)
-            echo "  📁 $dir_name/ ($file_count 个文件)"
-        done
+            local relative_path=$(echo "$dir" | sed "s|$search_root/||")
+            echo "  📁 $dir_name/ ($file_count 个文件) [$relative_path]"
+        done | head -30
     fi
     
-    # 阶段1：精确匹配搜索（按平台关键词搜索目录）
+    # 阶段1：精确匹配搜索（递归搜索按平台关键词）
     log ""
-    log "🔍 阶段1: 精确平台匹配搜索..."
+    log "🔍 阶段1: 精确平台匹配搜索（递归）..."
     local best_match_dir=""
     local best_match_score=0
     
     for keyword in "${search_keywords[@]}"; do
-        log "  搜索关键词: '$keyword'"
+        log "  递归搜索关键词: '$keyword'"
         
-        # 搜索包含关键词的目录
+        # 递归搜索包含关键词的目录
         local matched_dirs=$(find "$search_root" -type d -iname "*$keyword*" 2>/dev/null)
         
         if [ -n "$matched_dirs" ]; then
@@ -382,11 +399,12 @@ intelligent_platform_aware_compiler_search() {
                 # 计算匹配分数
                 local score=0
                 local dir_name=$(basename "$matched_dir")
+                local relative_path=$(echo "$matched_dir" | sed "s|$search_root/||")
                 
                 # 基础分数
                 score=10
                 
-                # 检查是否包含编译器文件
+                # 检查是否包含编译器文件（递归搜索）
                 local gcc_count=$(find "$matched_dir" -type f -iname "*gcc*" 2>/dev/null | wc -l)
                 local bin_dir=$(find "$matched_dir" -type d -name "bin" 2>/dev/null)
                 
@@ -400,7 +418,7 @@ intelligent_platform_aware_compiler_search() {
                     log "    ✅ 包含bin目录 (+15分)"
                 fi
                 
-                # 检查是否包含可执行文件
+                # 检查是否包含可执行文件（递归搜索）
                 local executable_count=$(find "$matched_dir" -type f -executable -name "*gcc*" 2>/dev/null | wc -l)
                 if [ $executable_count -gt 0 ]; then
                     score=$((score + 25))
@@ -419,7 +437,7 @@ intelligent_platform_aware_compiler_search() {
                     log "    🎯 精确架构匹配: $architecture (+30分)"
                 fi
                 
-                log "    📊 $matched_dir - 总分: $score"
+                log "    📊 $relative_path - 总分: $score"
                 
                 # 更新最佳匹配
                 if [ $score -gt $best_match_score ]; then
@@ -453,7 +471,7 @@ intelligent_platform_aware_compiler_search() {
                     unzip -q "$best_match_dir" -d "$temp_dir" 2>/dev/null
                 fi
                 
-                # 在解压目录中搜索编译器
+                # 在解压目录中搜索编译器（递归搜索）
                 local extracted_gcc=$(find "$temp_dir" -type f -name "*gcc*" 2>/dev/null | head -1)
                 if [ -n "$extracted_gcc" ]; then
                     local compiler_dir=$(dirname "$(dirname "$extracted_gcc")")
@@ -471,12 +489,12 @@ intelligent_platform_aware_compiler_search() {
         fi
     fi
     
-    # 阶段2：通用搜索（搜索任何编译器文件）
+    # 阶段2：通用搜索（递归搜索任何编译器文件）
     log ""
-    log "🔍 阶段2: 通用编译器文件搜索..."
+    log "🔍 阶段2: 通用编译器文件搜索（递归）..."
     
-    # 搜索所有GCC文件
-    local all_gcc_files=$(find "$search_root" -type f -iname "*gcc*" 2>/dev/null | head -10)
+    # 递归搜索所有GCC文件
+    local all_gcc_files=$(find "$search_root" -type f -iname "*gcc*" 2>/dev/null | head -20)
     local gcc_count=$(echo "$all_gcc_files" | wc -l)
     
     if [ $gcc_count -gt 0 ]; then
@@ -491,6 +509,7 @@ intelligent_platform_aware_compiler_search() {
                 local gcc_score=0
                 local gcc_name=$(basename "$gcc_file")
                 local gcc_dir=$(dirname "$gcc_file")
+                local relative_path=$(echo "$gcc_file" | sed "s|$search_root/||")
                 
                 # 基础分数
                 gcc_score=10
@@ -506,7 +525,7 @@ intelligent_platform_aware_compiler_search() {
                 # 平台匹配检查
                 local platform_match=false
                 for keyword in "${search_keywords[@]}"; do
-                    if [[ "$gcc_name" == *"$keyword"* ]] || [[ "$gcc_dir" == *"$keyword"* ]]; then
+                    if [[ "$gcc_name" == *"$keyword"* ]] || [[ "$relative_path" == *"$keyword"* ]]; then
                         platform_match=true
                         gcc_score=$((gcc_score + 15))
                         log "    ✅ 平台关键词匹配: $keyword (+15分)"
@@ -526,7 +545,7 @@ intelligent_platform_aware_compiler_search() {
                     log "    📁 在bin目录中 (+10分)"
                 fi
                 
-                log "    📊 总分: $gcc_score"
+                log "    📊 路径: $relative_path, 总分: $gcc_score"
                 
                 # 更新最佳GCC文件
                 if [ $gcc_score -gt $best_gcc_score ]; then
@@ -554,11 +573,11 @@ intelligent_platform_aware_compiler_search() {
         fi
     fi
     
-    # 阶段3：搜索其他编译器工具
+    # 阶段3：递归搜索其他编译器工具
     log ""
-    log "🔍 阶段3: 搜索其他编译器工具..."
+    log "🔍 阶段3: 递归搜索其他编译器工具..."
     
-    local other_tools=$(find "$search_root" -type f \( -iname "*g++*" -o -iname "*as*" -o -iname "*ld*" -o -iname "*ar*" \) 2>/dev/null | head -5)
+    local other_tools=$(find "$search_root" -type f \( -iname "*g++*" -o -iname "*as*" -o -iname "*ld*" -o -iname "*ar*" \) 2>/dev/null | head -10)
     
     if [ -n "$other_tools" ]; then
         log "✅ 找到其他编译器工具"
@@ -602,7 +621,7 @@ universal_compiler_search() {
     local search_root="${1:-$COMPILER_ROOT}"
     local target_platform="$2"
     
-    log "=== 通用编译器搜索（适应任何目录结构）==="
+    log "=== 通用编译器搜索（递归搜索任何目录结构）==="
     log "搜索根目录: $search_root"
     log "目标平台: $target_platform"
     
@@ -612,7 +631,7 @@ universal_compiler_search() {
         device_name="$DEVICE"
     fi
     
-    # 使用智能平台感知搜索
+    # 使用智能平台感知搜索（递归版）
     local compiler_dir=$(intelligent_platform_aware_compiler_search "$search_root" "$target_platform" "$device_name")
     
     if [ -n "$compiler_dir" ] && [ -d "$compiler_dir" ]; then
@@ -625,25 +644,26 @@ universal_compiler_search() {
     fi
 }
 
-# 智能查找正确的编译器文件（主函数）
+# 智能查找正确的编译器文件（主函数，递归增强版）
 search_compiler_files() {
     local search_root="${1:-$COMPILER_ROOT}"
     local target_platform="$2"
     
-    log "=== 智能查找正确的编译器文件 ==="
+    log "=== 智能查找正确的编译器文件（递归增强版）==="
     
     # 首先检查搜索根目录
     if [ ! -d "$search_root" ]; then
         log "❌ 搜索根目录不存在: $search_root"
-        log "🔄 尝试在仓库中查找..."
+        log "🔄 尝试在仓库中递归查找..."
         
-        # 在仓库中搜索可能的编译器目录
-        local found_dirs=$(find "$REPO_ROOT" -type d \( -name "*compiler*" -o -name "*toolchain*" -o -name "*gcc*" \) 2>/dev/null | head -3)
+        # 在仓库中递归搜索可能的编译器目录
+        local found_dirs=$(find "$REPO_ROOT" -type d \( -name "*compiler*" -o -name "*toolchain*" -o -name "*gcc*" \) 2>/dev/null | head -10)
         
         if [ -n "$found_dirs" ]; then
             log "在仓库中找到可能的编译器目录:"
             for dir in $found_dirs; do
-                log "  📁 $dir"
+                local relative_path=$(echo "$dir" | sed "s|$REPO_ROOT/||")
+                log "  📁 $relative_path"
             done
             
             # 使用第一个找到的目录
@@ -655,7 +675,7 @@ search_compiler_files() {
         fi
     fi
     
-    # 使用智能平台感知搜索
+    # 使用智能平台感知搜索（递归版）
     local compiler_dir=$(intelligent_platform_aware_compiler_search "$search_root" "$target_platform" "$DEVICE")
     
     if [ -n "$compiler_dir" ] && [ -d "$compiler_dir" ]; then
@@ -666,8 +686,9 @@ search_compiler_files() {
         log "  路径: $compiler_dir"
         log "  大小: $(du -sh "$compiler_dir" 2>/dev/null | cut -f1 || echo '未知')"
         log "  文件数: $(find "$compiler_dir" -type f 2>/dev/null | wc -l)"
+        log "  目录数: $(find "$compiler_dir" -type d 2>/dev/null | wc -l)"
         
-        # 查找并测试GCC
+        # 查找并测试GCC（递归搜索）
         local gcc_path=$(find "$compiler_dir" -type f -name "*gcc*" -executable 2>/dev/null | head -1)
         if [ -n "$gcc_path" ]; then
             log "  ✅ 找到可执行GCC: $(basename "$gcc_path")"
@@ -696,7 +717,7 @@ search_compiler_files() {
                 fi
             fi
         else
-            log "  ⚠️ 未找到可执行GCC，搜索任何GCC文件..."
+            log "  ⚠️ 未找到可执行GCC，递归搜索任何GCC文件..."
             local any_gcc=$(find "$compiler_dir" -type f -name "*gcc*" 2>/dev/null | head -1)
             if [ -n "$any_gcc" ]; then
                 log "  📄 找到GCC文件: $(basename "$any_gcc")"
@@ -712,9 +733,9 @@ search_compiler_files() {
     fi
 }
 
-# 验证预构建编译器文件（使用增强搜索）
+# 验证预构建编译器文件（使用增强递归搜索）
 verify_compiler_files() {
-    log "=== 验证预构建编译器文件（使用增强搜索）==="
+    log "=== 验证预构建编译器文件（使用增强递归搜索）==="
     
     # 确定目标平台
     local target_platform=""
@@ -744,7 +765,7 @@ verify_compiler_files() {
         log "✅ 使用环境变量中的编译器目录: $COMPILER_DIR"
         local compiler_dir="$COMPILER_DIR"
     else
-        log "🔍 搜索正确的编译器..."
+        log "🔍 递归搜索正确的编译器..."
         
         # 首先检查编译器根目录
         if [ ! -d "$COMPILER_ROOT" ]; then
@@ -753,7 +774,7 @@ verify_compiler_files() {
             return 0
         fi
         
-        # 使用智能搜索函数
+        # 使用递归搜索函数
         compiler_dir=$(search_compiler_files "$COMPILER_ROOT" "$target_platform")
         
         if [ -n "$compiler_dir" ] && [ -d "$compiler_dir" ]; then
@@ -770,9 +791,10 @@ verify_compiler_files() {
     log "📊 编译器目录详细检查:"
     log "  路径: $compiler_dir"
     log "  大小: $(du -sh "$compiler_dir" 2>/dev/null | cut -f1 || echo '未知')"
+    log "  目录深度: $(find "$compiler_dir" -type d 2>/dev/null | wc -l)"
     
-    # 查找可执行的编译器
-    log "⚙️ 可执行编译器检查:"
+    # 查找可执行的编译器（递归搜索）
+    log "⚙️ 可执行编译器检查（递归）:"
     local gcc_executable=$(find "$compiler_dir" -type f -executable -name "*gcc*" 2>/dev/null | head -1)
     local gpp_executable=$(find "$compiler_dir" -type f -executable -name "*g++*" 2>/dev/null | head -1)
     
@@ -817,15 +839,15 @@ verify_compiler_files() {
         log "  ✅ 找到可执行G++: $(basename "$gpp_executable")"
     fi
     
-    # 检查必要的工具链
-    log "🔨 工具链完整性检查:"
+    # 检查必要的工具链（递归搜索）
+    log "🔨 工具链完整性检查（递归）:"
     local required_tools=("as" "ld" "ar" "strip" "objcopy" "objdump" "nm" "ranlib")
     local tool_found_count=0
     
     for tool in "${required_tools[@]}"; do
         local tool_executable=$(find "$compiler_dir" -type f -executable -name "*${tool}*" 2>/dev/null | head -1)
         if [ -n "$tool_executable" ]; then
-            log "  ✅ $tool: 找到"
+            log "  ✅ $tool: 找到 ($(basename "$tool_executable"))"
             tool_found_count=$((tool_found_count + 1))
         else
             log "  ⚠️ $tool: 未找到"
@@ -836,6 +858,7 @@ verify_compiler_files() {
     log "📈 编译器完整性评估:"
     log "  可执行编译器: $([ -n "$gcc_executable" ] && echo "是" || echo "否")"
     log "  工具链工具: $tool_found_count/${#required_tools[@]} 找到"
+    log "  总文件数: $(find "$compiler_dir" -type f 2>/dev/null | wc -l)"
     
     # 评估是否可用
     if [ -n "$gcc_executable" ] && [ $tool_found_count -ge 5 ]; then
@@ -894,9 +917,9 @@ check_compiler_invocation() {
         
         # 在构建目录中搜索调用的编译器
         if [ -d "$BUILD_DIR/staging_dir" ]; then
-            log "📁 检查 staging_dir 中的编译器..."
+            log "📁 检查 staging_dir 中的编译器（递归搜索）..."
             
-            # 查找实际使用的编译器
+            # 递归查找实际使用的编译器
             local used_compiler=$(find "$BUILD_DIR/staging_dir" -type f -executable -iname "*gcc*" 2>/dev/null | head -1)
             if [ -n "$used_compiler" ]; then
                 log "  ✅ 找到正在使用的编译器: $(basename "$used_compiler")"
@@ -1391,7 +1414,7 @@ pre_build_error_check() {
     fi
     
     # 11. 检查预构建编译器文件（使用增强搜索版）
-    log "🔧 检查预构建编译器文件..."
+    log "🔧 检查预构建编译器文件（递归搜索）..."
     verify_compiler_files
     
     # 12. 检查编译器调用状态（使用改进版）
