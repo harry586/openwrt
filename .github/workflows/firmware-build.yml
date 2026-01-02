@@ -42,12 +42,12 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      # 步骤 1: 使用Git Archive API下载源代码（智能排除大文件目录）
-      - name: "1. 使用Git Archive API下载源代码（智能排除）"
+      # 步骤 1: 使用Git Archive API下载源代码（高效排除大文件目录）
+      - name: "1. 使用Git Archive API下载源代码（高效排除）"
         if: github.event.inputs.use_git_archive == 'true'
         run: |
-          echo "=== 步骤 1: 使用Git Archive API下载源代码（智能排除大文件目录）==="
-          echo "🔄 从GitHub API获取源代码压缩包，智能排除大文件目录..."
+          echo "=== 步骤 1: 使用Git Archive API下载源代码（高效排除大文件目录）==="
+          echo "🔄 从GitHub API获取源代码压缩包，高效排除大文件目录..."
           
           # 创建临时目录
           mkdir -p /tmp/openwrt-source
@@ -78,49 +78,47 @@ jobs:
             echo "✅ 源代码解压成功"
             echo "重要目录存在: firmware-config"
             
-            # 智能检测并删除大文件目录（关键步骤）
-            echo "🔄 智能检测大文件目录..."
+            # 高效检测并删除大文件目录
+            echo "🔄 高效检测大文件目录..."
             
-            # 检查所有目录的大小
-            find . -type d -exec sh -c '
-              dir="$1"
-              size=$(find "$dir" -type f -exec stat -c%s {} \; 2>/dev/null | awk "{sum+=\$1} END {print sum+0}")
-              if [ $size -gt $((30 * 1024 * 1024)) ]; then
-                echo "⚠️ 发现大文件目录: $dir (${size}字节)"
-                echo "🗑️  删除大文件目录以避免GitHub 30MB限制..."
-                rm -rf "$dir"
-                echo "✅ 已删除大文件目录: $dir"
-              fi
-            ' _ {} \;
+            # 直接删除已知的大文件目录（快速方法）
+            local big_dirs=()
             
-            # 特别检查编译器目录
+            # 检查编译器目录
             if [ -d "firmware-config/build-Compiler-file" ]; then
-              echo "⚠️ 发现编译器目录，检查大小..."
-              compiler_size=$(find "firmware-config/build-Compiler-file" -type f -exec stat -c%s {} \; 2>/dev/null | awk '{sum+=$1} END {print sum+0}')
-              compiler_size_mb=$((compiler_size / 1024 / 1024))
-              
-              if [ $compiler_size -gt $((30 * 1024 * 1024)) ]; then
-                echo "🚨 编译器目录过大: ${compiler_size_mb}MB，超过30MB限制"
-                echo "🗑️  删除编译器目录以避免上传失败..."
-                rm -rf firmware-config/build-Compiler-file
-                echo "✅ 已删除编译器目录"
-              else
-                echo "✅ 编译器目录大小合适: ${compiler_size_mb}MB"
-              fi
+              echo "⚠️ 发现编译器目录，直接删除以避免GitHub 30MB限制..."
+              rm -rf firmware-config/build-Compiler-file
+              echo "✅ 已删除编译器目录"
+              big_dirs+=("firmware-config/build-Compiler-file")
             fi
             
             # 检查下载目录
             if [ -d "downloads" ]; then
-              echo "⚠️ 检查下载目录大小..."
-              download_size=$(find "downloads" -type f -exec stat -c%s {} \; 2>/dev/null | awk '{sum+=$1} END {print sum+0}')
-              download_size_mb=$((download_size / 1024 / 1024))
-              
-              if [ $download_size -gt $((30 * 1024 * 1024)) ]; then
-                echo "🚨 下载目录过大: ${download_size_mb}MB"
-                echo "🗑️  删除下载目录..."
-                rm -rf downloads
-                echo "✅ 已删除下载目录"
+              echo "⚠️ 发现下载目录，直接删除以避免大文件问题..."
+              rm -rf downloads
+              echo "✅ 已删除下载目录"
+              big_dirs+=("downloads")
+            fi
+            
+            # 检查其他可能的大目录
+            local other_big_dirs=$(find . -maxdepth 2 -type d -name "*.tar.*" -o -name "*.zip" -o -name "*.tgz" 2>/dev/null | head -10)
+            for dir in $other_big_dirs; do
+              if [ -d "$dir" ]; then
+                echo "⚠️ 发现可能的大文件目录: $dir"
+                echo "🗑️  删除可能的大文件目录..."
+                rm -rf "$dir"
+                echo "✅ 已删除: $dir"
+                big_dirs+=("$dir")
               fi
+            done
+            
+            if [ ${#big_dirs[@]} -gt 0 ]; then
+              echo "📊 已删除的大文件目录: ${#big_dirs[@]} 个"
+              for dir in "${big_dirs[@]}"; do
+                echo "  ✅ 已删除: $dir"
+              done
+            else
+              echo "ℹ️ 未发现需要删除的大文件目录"
             fi
             
             # 复制到工作区
@@ -378,6 +376,9 @@ jobs:
           echo "🎯 设备名称: $DEVICE_NAME"
           
           # 根据设备确定平台和搜索关键词
+          TARGET_PLATFORM=""
+          SEARCH_KEYWORDS=()
+          
           if [[ "$DEVICE_NAME" == "ac42u" || "$DEVICE_NAME" == "acrh17" ]]; then
             TARGET_PLATFORM="arm"
             SEARCH_KEYWORDS=("arm" "aarch64" "cortex-a7" "cortex-a53" "ipq40xx" "musl" "gcc-11" "binutils")
@@ -388,7 +389,7 @@ jobs:
             SEARCH_KEYWORDS=("mips" "mipsel" "mt76x8" "24kc" "musl" "gcc-11" "binutils")
             echo "目标平台: MIPS (MT76x8)"
             echo "搜索关键词: ${SEARCH_KEYWORDS[*]}"
-          elif [[ "$DEVICE_NAME" == "mi_router_3g" || "$DEVICE_NAME" == "r3g" ]; then
+          elif [[ "$DEVICE_NAME" == "mi_router_3g" || "$DEVICE_NAME" == "r3g" ]]; then
             TARGET_PLATFORM="mips"
             SEARCH_KEYWORDS=("mips" "mipsel" "mt7621" "1004kc" "musl" "gcc-11" "binutils")
             echo "目标平台: MIPS (MT7621)"
