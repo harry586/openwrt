@@ -148,13 +148,33 @@ intelligent_platform_aware_compiler_search() {
                 # 基础分数
                 score=10
                 
-                # 检查是否包含编译器文件（递归搜索）
-                local gcc_count=$(find "$matched_dir" -type f -iname "*gcc*" 2>/dev/null | wc -l)
+                # 检查是否包含真正的GCC编译器文件（排除工具链工具）
+                local real_gcc_count=$(find "$matched_dir" -type f -executable \
+                  -name "*gcc" \
+                  ! -name "*gcc-ar" \
+                  ! -name "*gcc-ranlib" \
+                  ! -name "*gcc-nm" \
+                  2>/dev/null | wc -l)
                 local bin_dir=$(find "$matched_dir" -type d -name "bin" 2>/dev/null)
                 
-                if [ $gcc_count -gt 0 ]; then
-                    score=$((score + 20))
-                    log "    ✅ 包含 $gcc_count 个GCC文件 (+20分)"
+                if [ $real_gcc_count -gt 0 ]; then
+                    score=$((score + 30))
+                    log "    ✅ 包含 $real_gcc_count 个真正的GCC编译器 (+30分)"
+                    
+                    # 检查GCC版本
+                    local gcc_file=$(find "$matched_dir" -type f -executable \
+                      -name "*gcc" \
+                      ! -name "*gcc-ar" \
+                      ! -name "*gcc-ranlib" \
+                      ! -name "*gcc-nm" \
+                      2>/dev/null | head -1)
+                    if [ -n "$gcc_file" ]; then
+                        local version=$("$gcc_file" --version 2>&1 | head -1)
+                        if echo "$version" | grep -q "11\."; then
+                            score=$((score + 20))
+                            log "    🎯 GCC 11.x 版本匹配 (+20分)"
+                        fi
+                    fi
                 fi
                 
                 if [ -n "$bin_dir" ]; then
@@ -163,7 +183,7 @@ intelligent_platform_aware_compiler_search() {
                 fi
                 
                 # 检查是否包含可执行文件（递归搜索）
-                local executable_count=$(find "$matched_dir" -type f -executable -name "*gcc*" 2>/dev/null | wc -l)
+                local executable_count=$(find "$matched_dir" -type f -executable -name "*gcc" ! -name "*gcc-*" 2>/dev/null | wc -l)
                 if [ $executable_count -gt 0 ]; then
                     score=$((score + 25))
                     log "    ✅ 包含 $executable_count 个可执行GCC (+25分)"
@@ -215,11 +235,16 @@ intelligent_platform_aware_compiler_search() {
                     unzip -q "$best_match_dir" -d "$temp_dir" 2>/dev/null
                 fi
                 
-                # 在解压目录中搜索编译器（递归搜索）
-                local extracted_gcc=$(find "$temp_dir" -type f -name "*gcc*" 2>/dev/null | head -1)
+                # 在解压目录中搜索真正的GCC编译器（排除工具链工具）
+                local extracted_gcc=$(find "$temp_dir" -type f -executable \
+                  -name "*gcc" \
+                  ! -name "*gcc-ar" \
+                  ! -name "*gcc-ranlib" \
+                  ! -name "*gcc-nm" \
+                  2>/dev/null | head -1)
                 if [ -n "$extracted_gcc" ]; then
                     local compiler_dir=$(dirname "$(dirname "$extracted_gcc")")
-                    log "✅ 从压缩包中找到编译器: $compiler_dir"
+                    log "✅ 从压缩包中找到真正的GCC编译器: $compiler_dir"
                     rm -rf "$temp_dir"
                     echo "$compiler_dir"
                     return 0
@@ -237,12 +262,17 @@ intelligent_platform_aware_compiler_search() {
     log ""
     log "🔍 阶段2: 通用编译器文件搜索（递归）..."
     
-    # 递归搜索所有GCC文件
-    local all_gcc_files=$(find "$search_root" -type f -iname "*gcc*" 2>/dev/null | head -20)
+    # 递归搜索真正的GCC编译器（排除工具链工具）
+    local all_gcc_files=$(find "$search_root" -type f -executable \
+      -name "*gcc" \
+      ! -name "*gcc-ar" \
+      ! -name "*gcc-ranlib" \
+      ! -name "*gcc-nm" \
+      2>/dev/null | head -20)
     local gcc_count=$(echo "$all_gcc_files" | wc -l)
     
     if [ $gcc_count -gt 0 ]; then
-        log "✅ 找到 $gcc_count 个GCC文件"
+        log "✅ 找到 $gcc_count 个真正的GCC编译器文件"
         
         # 分析每个GCC文件
         local best_gcc_file=""
@@ -281,6 +311,13 @@ intelligent_platform_aware_compiler_search() {
                 if [ -n "$architecture" ] && [[ "$gcc_name" == *"$architecture"* ]]; then
                     gcc_score=$((gcc_score + 25))
                     log "    🎯 架构匹配: $architecture (+25分)"
+                fi
+                
+                # 检查GCC版本
+                local version=$("$gcc_file" --version 2>&1 | head -1)
+                if echo "$version" | grep -q "11\."; then
+                    gcc_score=$((gcc_score + 30))
+                    log "    ✅ GCC 11.x 版本 (+30分)"
                 fi
                 
                 # 路径包含bin目录
@@ -360,6 +397,49 @@ intelligent_platform_aware_compiler_search() {
     return 1
 }
 
+# 专门的GCC版本检查函数
+check_gcc_version() {
+    local gcc_path="$1"
+    local target_version="${2:-11}"
+    
+    if [ ! -x "$gcc_path" ]; then
+        log "❌ 文件不可执行: $gcc_path"
+        return 1
+    fi
+    
+    local version_output=$("$gcc_path" --version 2>&1)
+    
+    if echo "$version_output" | grep -qi "gcc"; then
+        local full_version=$(echo "$version_output" | head -1)
+        local compiler_name=$(basename "$gcc_path")
+        log "✅ 找到GCC编译器: $compiler_name"
+        log "   完整版本信息: $full_version"
+        
+        # 提取版本号
+        local version_num=$(echo "$full_version" | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+" | head -1)
+        if [ -n "$version_num" ]; then
+            log "   版本号: $version_num"
+            
+            # 检查主要版本
+            local major_version=$(echo "$version_num" | cut -d. -f1)
+            if [ "$major_version" -eq "$target_version" ]; then
+                log "   🎯 GCC $target_version.x 版本匹配成功"
+                return 0
+            else
+                log "   ⚠️ 不是GCC $target_version.x (检测到 $major_version.x)"
+                return 1
+            fi
+        else
+            log "   ⚠️ 无法提取版本号"
+            return 1
+        fi
+    else
+        log "⚠️ 不是GCC编译器或无法获取版本: $(basename "$gcc_path")"
+        log "   输出: $(echo "$version_output" | head -1)"
+        return 1
+    fi
+}
+
 # 验证预构建编译器文件（使用增强递归搜索）
 verify_compiler_files() {
     log "=== 验证预构建编译器文件（使用增强递归搜索）==="
@@ -403,27 +483,36 @@ verify_compiler_files() {
     log "  大小: $(du -sh "$compiler_dir" 2>/dev/null | cut -f1 || echo '未知')"
     log "  目录深度: $(find "$compiler_dir" -type d 2>/dev/null | wc -l)"
     
-    # 查找可执行的编译器（递归搜索）
+    # 查找真正的GCC编译器（排除工具链工具）
     log "⚙️ 可执行编译器检查（递归）:"
-    local gcc_executable=$(find "$compiler_dir" -type f -executable -name "*gcc*" 2>/dev/null | head -1)
-    local gpp_executable=$(find "$compiler_dir" -type f -executable -name "*g++*" 2>/dev/null | head -1)
+    local gcc_executable=$(find "$compiler_dir" -type f -executable \
+      -name "*gcc" \
+      ! -name "*gcc-ar" \
+      ! -name "*gcc-ranlib" \
+      ! -name "*gcc-nm" \
+      2>/dev/null | head -1)
+    
+    local gpp_executable=$(find "$compiler_dir" -type f -executable \
+      -name "*g++" \
+      ! -name "*g++-*" \
+      2>/dev/null | head -1)
+    
+    local gcc_version_valid=0
     
     if [ -n "$gcc_executable" ]; then
-        log "  ✅ 找到可执行GCC: $(basename "$gcc_executable")"
+        local executable_name=$(basename "$gcc_executable")
+        log "  ✅ 找到可执行GCC: $executable_name"
         
-        # 测试编译器版本
-        if "$gcc_executable" --version 2>&1 | head -1 >/dev/null 2>&1; then
-            local version=$("$gcc_executable" --version 2>&1 | head -1)
-            log "     版本: $version"
-            
-            # 检查是否是gcc 11.x版本
-            if [[ "$version" == *"11."* ]]; then
-                log "     ✅ 版本正确: GCC 11.x"
-            else
-                log "     ⚠️ 版本不是GCC 11.x"
-            fi
+        # 使用专门的版本检查函数
+        if check_gcc_version "$gcc_executable" "11"; then
+            gcc_version_valid=1
+            log "     🎯 GCC 11.x 版本验证成功"
         else
-            log "     ⚠️ 无法获取版本信息"
+            log "     ⚠️ GCC版本检查失败"
+            
+            # 显示实际版本信息
+            local version=$("$gcc_executable" --version 2>&1 | head -1)
+            log "     实际版本: $version"
         fi
         
         # 检查平台匹配
@@ -442,7 +531,29 @@ verify_compiler_files() {
             fi
         fi
     else
-        log "  ❌ 未找到可执行的GCC编译器"
+        log "  🔍 未找到真正的GCC编译器，查找工具链工具..."
+        
+        # 查找工具链工具
+        local toolchain_tools=$(find "$compiler_dir" -type f -executable \
+          -name "*gcc*" \
+          2>/dev/null | head -5)
+        
+        if [ -n "$toolchain_tools" ]; then
+            log "  找到的工具链工具:"
+            while read tool; do
+                local tool_name=$(basename "$tool")
+                log "    🔧 $tool_name"
+                
+                # 如果是gcc-ar等工具，显示其版本
+                if [[ "$tool_name" == *gcc-ar* ]] || [[ "$tool_name" == *gcc-ranlib* ]] || [[ "$tool_name" == *gcc-nm* ]]; then
+                    local tool_version=$("$tool" --version 2>&1 | head -1)
+                    log "      版本信息: $tool_version"
+                    log "      ⚠️ 注意: 这是GCC工具链工具，不是GCC编译器"
+                fi
+            done <<< "$toolchain_tools"
+        else
+            log "  ❌ 未找到任何GCC相关可执行文件"
+        fi
     fi
     
     if [ -n "$gpp_executable" ]; then
@@ -466,13 +577,14 @@ verify_compiler_files() {
     
     # 总结评估
     log "📈 编译器完整性评估:"
-    log "  可执行编译器: $([ -n "$gcc_executable" ] && echo "是" || echo "否")"
+    log "  真正的GCC编译器: $([ -n "$gcc_executable" ] && echo "是" || echo "否")"
+    log "  GCC 11.x 版本: $([ $gcc_version_valid -eq 1 ] && echo "是" || echo "否")"
     log "  工具链工具: $tool_found_count/${#required_tools[@]} 找到"
     log "  总文件数: $(find "$compiler_dir" -type f 2>/dev/null | wc -l)"
     
     # 评估是否可用
-    if [ -n "$gcc_executable" ] && [ $tool_found_count -ge 5 ]; then
-        log "🎉 预构建编译器文件基本完整，可以尝试使用"
+    if [ -n "$gcc_executable" ] && [ $gcc_version_valid -eq 1 ] && [ $tool_found_count -ge 5 ]; then
+        log "🎉 预构建编译器文件完整，GCC 11.x 版本验证通过"
         log "📌 编译器目录: $compiler_dir"
         
         # 添加到PATH环境变量
@@ -482,8 +594,8 @@ verify_compiler_files() {
         fi
         
         return 0
-    elif [ -n "$gcc_executable" ]; then
-        log "⚠️ 预构建编译器文件部分完整，可能可用"
+    elif [ -n "$gcc_executable" ] && [ $gcc_version_valid -eq 1 ]; then
+        log "⚠️ GCC 11.x 版本正确，但工具链不完整"
         log "💡 将尝试使用，但可能回退到自动构建"
         
         # 仍然尝试添加到PATH
@@ -491,8 +603,19 @@ verify_compiler_files() {
             export PATH="$compiler_dir/bin:$compiler_dir:$PATH"
         fi
         return 0
+    elif [ -n "$gcc_executable" ]; then
+        log "⚠️ 找到GCC编译器但不是11.x版本"
+        log "💡 建议使用GCC 11.x版本以获得最佳兼容性"
+        
+        # 显示实际版本信息
+        if [ -n "$gcc_executable" ]; then
+            local actual_version=$("$gcc_executable" --version 2>&1 | head -1)
+            log "  实际GCC版本: $actual_version"
+        fi
+        
+        return 1
     else
-        log "⚠️ 预构建编译器文件可能不完整"
+        log "⚠️ 预构建编译器文件可能不完整或版本不匹配"
         log "💡 将使用OpenWrt自动构建的编译器作为后备"
         return 1
     fi
@@ -530,21 +653,48 @@ check_compiler_invocation() {
             log "📁 检查 staging_dir 中的编译器（递归搜索）..."
             
             # 递归查找实际使用的编译器
-            local used_compiler=$(find "$BUILD_DIR/staging_dir" -type f -executable -iname "*gcc*" 2>/dev/null | head -1)
+            local used_compiler=$(find "$BUILD_DIR/staging_dir" -type f -executable \
+              -name "*gcc" \
+              ! -name "*gcc-ar" \
+              ! -name "*gcc-ranlib" \
+              ! -name "*gcc-nm" \
+              2>/dev/null | head -1)
+            
             if [ -n "$used_compiler" ]; then
-                log "  ✅ 找到正在使用的编译器: $(basename "$used_compiler")"
+                log "  ✅ 找到正在使用的真正的GCC编译器: $(basename "$used_compiler")"
                 log "     路径: $used_compiler"
+                
+                # 检查GCC版本
+                local version=$("$used_compiler" --version 2>&1 | head -1)
+                log "     版本: $version"
                 
                 # 检查是否来自预构建目录
                 if [[ "$used_compiler" == *"$COMPILER_DIR"* ]]; then
                     log "  🎯 编译器来自预构建目录: 是"
-                    log "  📍 成功调用了预构建的编译器文件"
+                    log "  📌 成功调用了预构建的编译器文件"
+                    
+                    # 验证GCC版本
+                    if echo "$version" | grep -q "11\."; then
+                        log "  ✅ GCC 11.x 版本验证成功"
+                    else
+                        log "  ⚠️ 编译器不是GCC 11.x 版本"
+                    fi
                 else
                     log "  🔄 编译器来自其他位置: 否"
-                    log "  📍 使用的是OpenWrt自动构建的编译器"
+                    log "  📌 使用的是OpenWrt自动构建的编译器"
                 fi
             else
-                log "  ⚠️ 未找到正在使用的编译器"
+                log "  ⚠️ 未找到真正的GCC编译器"
+                
+                # 查找工具链工具
+                local toolchain_tools=$(find "$BUILD_DIR/staging_dir" -type f -executable -name "*gcc*" 2>/dev/null | head -5)
+                if [ -n "$toolchain_tools" ]; then
+                    log "  找到的工具链工具:"
+                    while read tool; do
+                        local tool_name=$(basename "$tool")
+                        log "    🔧 $tool_name"
+                    done <<< "$toolchain_tools"
+                fi
             fi
         else
             log "  ℹ️ staging_dir 目录不存在，编译器尚未构建"
@@ -589,6 +739,13 @@ check_compiler_invocation() {
         local sys_version=$(gcc --version 2>&1 | head -1)
         log "  ✅ 系统GCC: $sys_gcc"
         log "     版本: $sys_version"
+        
+        # 检查系统GCC版本
+        if echo "$sys_version" | grep -q "11\."; then
+            log "     ✅ 系统GCC是11.x版本"
+        else
+            log "     ⚠️ 系统GCC不是11.x版本"
+        fi
     else
         log "  ❌ 系统GCC未找到"
     fi
@@ -922,7 +1079,7 @@ install_turboacc_packages() {
     ./scripts/feeds update turboacc || handle_error "更新turboacc feed失败"
     
     ./scripts/feeds install -p turboacc luci-app-turboacc || handle_error "安装luci-app-turboacc失败"
-    ./scripts/feeds install -p turboacc kmod-shortcut-fe || handle_error "安装kmod-shortcut-fe失败"
+    ./scripts/feeds install -p turboacc kmod-shortcut-fe || handle_error "安装kmod-shortcut-fe失败")
     ./scripts/feeds install -p turboacc kmod-fast-classifier || handle_error "安装kmod-fast-classifier失败"
     
     log "✅ TurboACC 包安装完成"
@@ -1825,14 +1982,40 @@ build_firmware() {
         log "  预构建编译器目录: $COMPILER_DIR"
         
         # 检查预构建编译器是否会被调用
-        local prebuilt_gcc=$(find "$COMPILER_DIR" -type f -name "*gcc*" -executable 2>/dev/null | head -1)
+        local prebuilt_gcc=$(find "$COMPILER_DIR" -type f -executable \
+          -name "*gcc" \
+          ! -name "*gcc-ar" \
+          ! -name "*gcc-ranlib" \
+          ! -name "*gcc-nm" \
+          2>/dev/null | head -1)
+        
         if [ -n "$prebuilt_gcc" ]; then
             log "  ✅ 找到预构建GCC编译器: $(basename "$prebuilt_gcc")"
             log "     路径: $(dirname "$prebuilt_gcc")"
             
+            # 检查GCC版本
+            local version=$("$prebuilt_gcc" --version 2>&1 | head -1)
+            log "     GCC版本: $version"
+            
+            if echo "$version" | grep -q "11\."; then
+                log "     ✅ GCC 11.x 版本正确"
+            else
+                log "     ⚠️ GCC版本不是11.x"
+            fi
+            
             # 添加到PATH环境变量（尝试让OpenWrt使用预构建编译器）
             export PATH="$COMPILER_DIR/bin:$COMPILER_DIR:$PATH"
             log "  🔧 已将预构建编译器目录添加到PATH"
+        else
+            log "  ⚠️ 未找到真正的GCC编译器，只有工具链工具"
+            local toolchain_tools=$(find "$COMPILER_DIR" -type f -executable -name "*gcc*" 2>/dev/null | head -5)
+            if [ -n "$toolchain_tools" ]; then
+                log "  找到的工具链工具:"
+                while read tool; do
+                    local tool_name=$(basename "$tool")
+                    log "    🔧 $tool_name"
+                done <<< "$toolchain_tools"
+            fi
         fi
     else
         log "  ℹ️ 未设置预构建编译器目录，将使用OpenWrt自动构建的编译器"
@@ -1860,6 +2043,13 @@ build_firmware() {
             if [ $prebuilt_calls -gt 0 ]; then
                 log "  🎯 预构建编译器调用次数: $prebuilt_calls/$total_calls"
                 log "  📌 成功调用了预构建的编译器文件"
+                
+                # 检查GCC版本调用
+                if grep -q "$COMPILER_DIR" build.log 2>/dev/null; then
+                    grep "$COMPILER_DIR" build.log | grep "gcc" | head -2 | while read line; do
+                        log "     示例调用: $(echo "$line" | tr -s ' ' | cut -c1-80)"
+                    done
+                fi
             else
                 log "  🔄 未检测到预构建编译器调用"
                 log "  📌 使用的是OpenWrt自动构建的编译器"
@@ -1903,7 +2093,12 @@ build_firmware() {
                 log "🚨 发现编译器未找到错误"
                 log "检查编译器路径..."
                 if [ -d "staging_dir" ]; then
-                    find staging_dir -name "*gcc*" 2>/dev/null | head -10
+                    find staging_dir -type f -executable \
+                      -name "*gcc" \
+                      ! -name "*gcc-ar" \
+                      ! -name "*gcc-ranlib" \
+                      ! -name "*gcc-nm" \
+                      2>/dev/null | head -10
                 fi
             fi
             
@@ -2130,10 +2325,15 @@ search_compiler_files() {
     
     log "搜索关键词: ${search_keywords[*]}"
     
-    # 搜索GCC文件
-    log "搜索GCC文件..."
-    find "$search_root" -type f -iname "*gcc*" 2>/dev/null | head -20 | while read file; do
-        log "找到: $file"
+    # 搜索真正的GCC编译器（排除工具链工具）
+    log "搜索真正的GCC编译器..."
+    find "$search_root" -type f -executable \
+      -name "*gcc" \
+      ! -name "*gcc-ar" \
+      ! -name "*gcc-ranlib" \
+      ! -name "*gcc-nm" \
+      2>/dev/null | head -20 | while read file; do
+        log "找到真正的GCC编译器: $file"
     done
     
     # 搜索编译器目录
@@ -2174,15 +2374,20 @@ search_compiler_files_simple() {
     
     log "=== 简单编译器文件搜索 ==="
     
-    # 直接查找所有GCC文件
-    local gcc_files=$(find "$search_root" -type f -iname "*gcc*" 2>/dev/null | head -5)
+    # 直接查找真正的GCC编译器（排除工具链工具）
+    local gcc_files=$(find "$search_root" -type f -executable \
+      -name "*gcc" \
+      ! -name "*gcc-ar" \
+      ! -name "*gcc-ranlib" \
+      ! -name "*gcc-nm" \
+      2>/dev/null | head -5)
     
     if [ -n "$gcc_files" ]; then
-        log "✅ 找到GCC文件:"
+        log "✅ 找到真正的GCC编译器:"
         echo "$gcc_files"
         return 0
     else
-        log "❌ 未找到GCC文件"
+        log "❌ 未找到真正的GCC编译器"
         return 1
     fi
 }
