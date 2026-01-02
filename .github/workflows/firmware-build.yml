@@ -57,7 +57,7 @@ jobs:
           git init
           git remote add origin "https://github.com/${{ github.repository }}.git"
           git config core.sparseCheckout false
-          git fetch --depth=1 origin main
+          git fetch --depth=3 origin main
           git checkout main
           
           # 验证工作流文件是否存在
