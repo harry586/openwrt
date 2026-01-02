@@ -151,13 +151,21 @@ check_build_result() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 5. 分析配置文件
+# 5. 分析配置文件（修复版）
 analyze_config_file() {
     log "⚙️  分析配置文件..."
     
     print_subheader "配置文件分析"
     
     if [ -f "$BUILD_DIR/.config" ]; then
+        # 检查配置文件是否为空
+        if [ ! -s "$BUILD_DIR/.config" ]; then
+            echo "❌ 配置文件状态: 存在但为空" >> "$REPORT_FILE"
+            echo "💡 配置文件为空，可能是构建过程中出现问题" >> "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+            return
+        fi
+        
         local config_size=$(ls -lh "$BUILD_DIR/.config" 2>/dev/null | awk '{print $5}' || echo "未知")
         local config_lines=$(wc -l < "$BUILD_DIR/.config" 2>/dev/null || echo "0")
         
@@ -191,128 +199,37 @@ analyze_config_file() {
         echo "" >> "$REPORT_FILE"
         
         # C库配置
-        print_subheader "C库配置状态"
-        if grep -q "CONFIG_USE_MUSL=y" "$BUILD_DIR/.config" 2>/dev/null; then
-            echo "✅ C库: musl (现代OpenWrt默认使用)" >> "$REPORT_FILE"
-            echo "💡 musl是轻量级C库，适用于嵌入式系统" >> "$REPORT_FILE"
-        elif grep -q "CONFIG_USE_GLIBC=y" "$BUILD_DIR/.config" 2>/dev/null; then
-            echo "✅ C库: glibc (功能完整的C库)" >> "$REPORT_FILE"
-            echo "💡 glibc功能更完整，但体积较大" >> "$REPORT_FILE"
-        elif grep -q "CONFIG_USE_UCLIBC=y" "$BUILD_DIR/.config" 2>/dev/null; then
-            echo "✅ C库: uclibc (旧版OpenWrt使用)" >> "$REPORT_FILE"
-            echo "💡 uclibc是较旧的C库，现代OpenWrt已转向musl" >> "$REPORT_FILE"
-        else
-            echo "⚠️ C库: 未明确指定" >> "$REPORT_FILE"
-        fi
-        echo "" >> "$REPORT_FILE"
-        
-        # 内核配置
-        print_subheader "内核配置状态"
-        local kernel_version=$(grep "^CONFIG_LINUX_[0-9]*_[0-9]*.*=y" "$BUILD_DIR/.config" 2>/dev/null | head -1 | sed 's/CONFIG_LINUX_//;s/=y//;s/_/./g')
-        if [ -n "$kernel_version" ]; then
-            echo "✅ 内核版本: Linux $kernel_version" >> "$REPORT_FILE"
-        else
-            echo "⚠️ 内核版本: 未明确指定" >> "$REPORT_FILE"
-        fi
-        echo "" >> "$REPORT_FILE"
-        
-        # USB配置详细分析
-        print_subheader "USB配置详细分析"
-        local usb_configs=(
-            "kmod-usb-core:USB核心驱动"
-            "kmod-usb2:USB 2.0支持"
-            "kmod-usb3:USB 3.0支持"
-            "kmod-usb-storage:USB存储支持"
-            "kmod-usb-dwc3:USB 3.0主机控制器"
-            "kmod-usb-xhci-hcd:USB 3.0扩展主机控制器"
-            "kmod-usb-ehci:USB 2.0增强主机控制器"
-            "kmod-usb-ohci:USB 1.1开放主机控制器"
-            "kmod-usb-storage-uas:USB Attached SCSI协议"
-            "kmod-scsi-core:SCSI核心驱动"
-            "kmod-usb-dwc3-qcom:高通平台USB 3.0驱动"
-            "kmod-phy-qcom-dwc3:高通USB物理层驱动"
-            "kmod-usb-xhci-mtk:雷凌平台USB 3.0驱动"
-            "kmod-usb2-pci:USB 2.0 PCI支持"
-            "kmod-usb-ohci-pci:USB 1.1 PCI支持"
-            "kmod-usb-xhci-pci:USB 3.0 PCI支持"
-        )
-        
-        local usb_enabled=0
-        local usb_total=${#usb_configs[@]}
-        
-        for config_entry in "${usb_configs[@]}"; do
-            IFS=':' read -r config_name config_desc <<< "$config_entry"
-            if grep -q "^CONFIG_PACKAGE_${config_name}=y" "$BUILD_DIR/.config" 2>/dev/null; then
-                echo "✅ $config_name: 已启用 ($config_desc)" >> "$REPORT_FILE"
-                ((usb_enabled++))
+        if [ $total_configs -gt 0 ]; then
+            print_subheader "C库配置状态"
+            if grep -q "CONFIG_USE_MUSL=y" "$BUILD_DIR/.config" 2>/dev/null; then
+                echo "✅ C库: musl (现代OpenWrt默认使用)" >> "$REPORT_FILE"
+                echo "💡 musl是轻量级C库，适用于嵌入式系统" >> "$REPORT_FILE"
+            elif grep -q "CONFIG_USE_GLIBC=y" "$BUILD_DIR/.config" 2>/dev/null; then
+                echo "✅ C库: glibc (功能完整的C库)" >> "$REPORT_FILE"
+                echo "💡 glibc功能更完整，但体积较大" >> "$REPORT_FILE"
+            elif grep -q "CONFIG_USE_UCLIBC=y" "$BUILD_DIR/.config" 2>/dev/null; then
+                echo "✅ C库: uclibc (旧版OpenWrt使用)" >> "$REPORT_FILE"
+                echo "💡 uclibc是较旧的C库，现代OpenWrt已转向musl" >> "$REPORT_FILE"
             else
-                echo "❌ $config_name: 未启用 ($config_desc)" >> "$REPORT_FILE"
+                echo "⚠️ C库: 未明确指定" >> "$REPORT_FILE"
             fi
-        done
-        echo "" >> "$REPORT_FILE"
-        
-        echo "📊 USB配置统计:" >> "$REPORT_FILE"
-        echo "  总USB驱动数: $usb_total" >> "$REPORT_FILE"
-        echo "  已启用: $usb_enabled" >> "$REPORT_FILE"
-        echo "  未启用: $((usb_total - usb_enabled))" >> "$REPORT_FILE"
-        
-        if [ $usb_enabled -eq $usb_total ]; then
-            echo "🎉 所有关键USB驱动都已启用！" >> "$REPORT_FILE"
-        elif [ $usb_enabled -ge $((usb_total * 8 / 10)) ]; then
-            echo "⚠️ 大部分USB驱动已启用，但仍有部分未启用" >> "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+            
+            # USB配置检查（简化版）
+            print_subheader "关键USB配置状态"
+            local critical_usb_drivers=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-storage")
+            
+            for driver in "${critical_usb_drivers[@]}"; do
+                if grep -q "^CONFIG_PACKAGE_${driver}=y" "$BUILD_DIR/.config" 2>/dev/null; then
+                    echo "✅ $driver: 已启用" >> "$REPORT_FILE"
+                else
+                    echo "❌ $driver: 未启用" >> "$REPORT_FILE"
+                fi
+            done
+            echo "" >> "$REPORT_FILE"
         else
-            echo "❌ 大量USB驱动未启用，USB功能可能受限" >> "$REPORT_FILE"
+            echo "⚠️ 配置文件中没有找到任何配置项" >> "$REPORT_FILE"
         fi
-        echo "" >> "$REPORT_FILE"
-        
-        # 文件系统支持
-        print_subheader "文件系统支持状态"
-        local fs_configs=(
-            "kmod-fs-ext4:ext4文件系统"
-            "kmod-fs-vfat:FAT/VFAT文件系统"
-            "kmod-fs-exfat:exFAT文件系统"
-            "kmod-fs-ntfs3:NTFS文件系统"
-            "kmod-fs-btrfs:Btrfs文件系统"
-            "kmod-fs-f2fs:F2FS文件系统"
-            "kmod-fs-xfs:XFS文件系统"
-        )
-        
-        for fs_entry in "${fs_configs[@]}"; do
-            IFS=':' read -r fs_name fs_desc <<< "$fs_entry"
-            if grep -q "^CONFIG_PACKAGE_${fs_name}=y" "$BUILD_DIR/.config" 2>/dev/null; then
-                echo "✅ $fs_name: 已启用 ($fs_desc)" >> "$REPORT_FILE"
-            else
-                echo "❌ $fs_name: 未启用 ($fs_desc)" >> "$REPORT_FILE"
-            fi
-        done
-        echo "" >> "$REPORT_FILE"
-        
-        # 编码支持
-        local nls_configs=(
-            "kmod-nls-utf8:UTF-8编码"
-            "kmod-nls-cp437:CP437编码"
-            "kmod-nls-iso8859-1:ISO-8859-1编码"
-            "kmod-nls-cp936:CP936编码(简体中文)"
-            "kmod-nls-cp950:CP950编码(繁体中文)"
-        )
-        
-        for nls_entry in "${nls_configs[@]}"; do
-            IFS=':' read -r nls_name nls_desc <<< "$nls_entry"
-            if grep -q "^CONFIG_PACKAGE_${nls_name}=y" "$BUILD_DIR/.config" 2>/dev/null; then
-                echo "✅ $nls_name: 已启用 ($nls_desc)" >> "$REPORT_FILE"
-            else
-                echo "❌ $nls_name: 未启用 ($nls_desc)" >> "$REPORT_FILE"
-            fi
-        done
-        echo "" >> "$REPORT_FILE"
-        
-        # 显示前10个被禁用的重要包
-        print_subheader "重要禁用包列表"
-        grep "^# CONFIG_PACKAGE_[A-Za-z0-9_-]* is not set" "$BUILD_DIR/.config" 2>/dev/null | \
-            grep -E "(kmod-|luci-|base)" | head -10 | while read line; do
-            pkg_name=$(echo "$line" | sed 's/# CONFIG_PACKAGE_//;s/ is not set//')
-            echo "❌ $pkg_name" >> "$REPORT_FILE"
-        done
         
     else
         echo "❌ 配置文件不存在: $BUILD_DIR/.config" >> "$REPORT_FILE"
@@ -345,70 +262,14 @@ check_compiler_status() {
                 if [ -x "$compiler" ]; then
                     echo "  ✅ $compiler_name: 可执行" >> "$REPORT_FILE"
                     # 尝试获取版本
-                    local version=$("$compiler" --version 2>&1 | head -1)
-                    echo "     版本: $version" >> "$REPORT_FILE"
+                    local version=$("$compiler" --version 2>&1 | head -1 | cut -d' ' -f3-)
+                    if [ -n "$version" ]; then
+                        echo "     版本: $version" >> "$REPORT_FILE"
+                    fi
                 else
                     echo "  ❌ $compiler_name: 不可执行" >> "$REPORT_FILE"
                 fi
             done
-            echo "" >> "$REPORT_FILE"
-            
-            # 检查头文件目录
-            echo "🔍 头文件目录检查:" >> "$REPORT_FILE"
-            if [ -d "$BUILD_DIR/staging_dir/host/include" ]; then
-                local header_count=$(find "$BUILD_DIR/staging_dir/host/include" -name "*.h" 2>/dev/null | wc -l)
-                echo "  ✅ host/include目录存在" >> "$REPORT_FILE"
-                echo "     头文件数量: $header_count" >> "$REPORT_FILE"
-                
-                # 检查关键头文件
-                local critical_headers=("stdio.h" "stdlib.h" "string.h" "stddef.h" "stdint.h" "stdbool.h" "stdarg.h")
-                echo "     关键头文件状态:" >> "$REPORT_FILE"
-                for header in "${critical_headers[@]}"; do
-                    if find "$BUILD_DIR/staging_dir/host/include" -name "$header" -type f 2>/dev/null | grep -q .; then
-                        echo "       ✅ $header" >> "$REPORT_FILE"
-                    else
-                        echo "       ❌ $header - 缺失" >> "$REPORT_FILE"
-                    fi
-                done
-            else
-                echo "  ❌ host/include目录不存在" >> "$REPORT_FILE"
-                echo "  💡 建议: 创建目录并复制系统头文件" >> "$REPORT_FILE"
-            fi
-            echo "" >> "$REPORT_FILE"
-            
-            # 检查lib目录
-            echo "🔍 库文件目录检查:" >> "$REPORT_FILE"
-            if [ -d "$BUILD_DIR/staging_dir/host/lib" ]; then
-                local lib_count=$(find "$BUILD_DIR/staging_dir/host/lib" -name "*.so*" -o -name "*.a" 2>/dev/null | wc -l)
-                echo "  ✅ host/lib目录存在" >> "$REPORT_FILE"
-                echo "     库文件数量: $lib_count" >> "$REPORT_FILE"
-            else
-                echo "  ❌ host/lib目录不存在" >> "$REPORT_FILE"
-            fi
-            echo "" >> "$REPORT_FILE"
-            
-            # 检查stamp目录
-            local stamp_dir="$toolchain_dir/stamp"
-            if [ -d "$stamp_dir" ]; then
-                echo "✅ stamp目录存在" >> "$REPORT_FILE"
-                local stamp_count=$(find "$stamp_dir" -type f 2>/dev/null | wc -l)
-                echo "  标记文件数量: $stamp_count" >> "$REPORT_FILE"
-                
-                # 检查关键标记文件
-                local critical_stamps=(".toolchain_compile" ".binutils_installed" ".gcc_initial" ".gcc_final" ".libc" ".headers")
-                echo "  关键标记文件状态:" >> "$REPORT_FILE"
-                for stamp in "${critical_stamps[@]}"; do
-                    if [ -f "$stamp_dir/$stamp" ]; then
-                        echo "    ✅ $stamp" >> "$REPORT_FILE"
-                    else
-                        echo "    ❌ $stamp - 缺失" >> "$REPORT_FILE"
-                    fi
-                done
-            else
-                echo "❌ stamp目录不存在" >> "$REPORT_FILE"
-                echo "💡 建议: mkdir -p \"$stamp_dir\"" >> "$REPORT_FILE"
-            fi
-            
         else
             echo "❌ 未找到工具链目录" >> "$REPORT_FILE"
             echo "💡 工具链可能尚未编译完成" >> "$REPORT_FILE"
@@ -421,13 +282,21 @@ check_compiler_status() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 7. 分析构建日志
+# 7. 分析构建日志（修复版）
 analyze_build_log() {
     log "📝 分析构建日志..."
     
     print_subheader "构建日志分析"
     
     if [ -f "$BUILD_DIR/build.log" ]; then
+        # 检查日志文件是否为空
+        if [ ! -s "$BUILD_DIR/build.log" ]; then
+            echo "❌ 构建日志状态: 存在但为空" >> "$REPORT_FILE"
+            echo "💡 构建日志为空，可能是构建过程被中断" >> "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+            return
+        fi
+        
         local log_size=$(ls -lh "$BUILD_DIR/build.log" 2>/dev/null | awk '{print $5}' || echo "未知")
         local log_lines=$(wc -l < "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
         
@@ -452,28 +321,24 @@ analyze_build_log() {
             print_subheader "关键错误摘要"
             
             # 分类提取错误
-            echo "🔴 严重错误 (前20个):" >> "$REPORT_FILE"
-            grep -i "error" "$BUILD_DIR/build.log" | grep -v "ignored" | head -20 >> "$REPORT_FILE" || echo "  无严重错误" >> "$REPORT_FILE"
+            echo "🔴 严重错误 (前10个):" >> "$REPORT_FILE"
+            grep -i "error" "$BUILD_DIR/build.log" | grep -v "ignored" | head -10 >> "$REPORT_FILE" || echo "  无严重错误" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
             
             echo "🟡 Makefile错误:" >> "$REPORT_FILE"
-            grep -i "make.*error\|recipe for target.*failed" "$BUILD_DIR/build.log" | head -10 >> "$REPORT_FILE" || echo "  无Makefile错误" >> "$REPORT_FILE"
+            grep -i "make.*error\|recipe for target.*failed" "$BUILD_DIR/build.log" | head -5 >> "$REPORT_FILE" || echo "  无Makefile错误" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
             
             echo "🔵 编译器错误:" >> "$REPORT_FILE"
-            grep -i "gcc.*error\|ld.*error\|collect2.*error" "$BUILD_DIR/build.log" | head -10 >> "$REPORT_FILE" || echo "  无编译器错误" >> "$REPORT_FILE"
+            grep -i "gcc.*error\|ld.*error\|collect2.*error" "$BUILD_DIR/build.log" | head -5 >> "$REPORT_FILE" || echo "  无编译器错误" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
             
             echo "🟣 文件缺失错误:" >> "$REPORT_FILE"
-            grep -i "no such file\|file not found\|cannot find" "$BUILD_DIR/build.log" | head -10 >> "$REPORT_FILE" || echo "  无文件缺失错误" >> "$REPORT_FILE"
+            grep -i "no such file\|file not found\|cannot find" "$BUILD_DIR/build.log" | head -5 >> "$REPORT_FILE" || echo "  无文件缺失错误" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
             
             echo "🟠 依赖错误:" >> "$REPORT_FILE"
-            grep -i "depends on\|missing dependencies\|undefined reference" "$BUILD_DIR/build.log" | head -10 >> "$REPORT_FILE" || echo "  无依赖错误" >> "$REPORT_FILE"
-            echo "" >> "$REPORT_FILE"
-            
-            echo "🔴 内存错误:" >> "$REPORT_FILE"
-            grep -i "out of memory\|killed process\|oom" "$BUILD_DIR/build.log" | head -5 >> "$REPORT_FILE" || echo "  无内存错误" >> "$REPORT_FILE"
+            grep -i "depends on\|missing dependencies\|undefined reference" "$BUILD_DIR/build.log" | head -5 >> "$REPORT_FILE" || echo "  无依赖错误" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
             
             # 特定错误模式检查
@@ -503,12 +368,6 @@ analyze_build_log() {
                 echo "" >> "$REPORT_FILE"
             fi
             
-            # 显示日志最后100行
-            if [ $log_lines -gt 100 ]; then
-                print_subheader "构建日志尾部 (最后100行)"
-                tail -100 "$BUILD_DIR/build.log" >> "$REPORT_FILE"
-            fi
-            
         else
             echo "✅ 构建日志中没有发现错误" >> "$REPORT_FILE"
         fi
@@ -527,6 +386,13 @@ check_download_log() {
     print_subheader "下载日志分析"
     
     if [ -f "$BUILD_DIR/download.log" ]; then
+        # 检查日志文件是否为空
+        if [ ! -s "$BUILD_DIR/download.log" ]; then
+            echo "ℹ️ 下载日志文件存在但为空" >> "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+            return
+        fi
+        
         local download_errors=$(grep -c -i "error\|failed\|404\|not found" "$BUILD_DIR/download.log" 2>/dev/null || echo "0")
         
         if [ $download_errors -gt 0 ]; then
@@ -557,43 +423,48 @@ analyze_version_specific() {
     
     print_subheader "版本特定问题分析"
     
-    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-        echo "🔧 OpenWrt 23.05 版本特性:" >> "$REPORT_FILE"
-        echo "  编译器: GCC 11.3.0" >> "$REPORT_FILE"
-        echo "  内核: Linux 5.15" >> "$REPORT_FILE"
-        echo "  musl: 1.2.3" >> "$REPORT_FILE"
-        echo "  binutils: 2.38" >> "$REPORT_FILE"
-        echo "" >> "$REPORT_FILE"
-        
-        echo "⚠️ 常见问题:" >> "$REPORT_FILE"
-        echo "  1. GDB _GL_ATTRIBUTE_FORMAT_PRINTF 错误" >> "$REPORT_FILE"
-        echo "  2. 工具链构建错误 (toolchain/Makefile:93)" >> "$REPORT_FILE"
-        echo "  3. 头文件缺失问题" >> "$REPORT_FILE"
-        echo "  4. libtool版本兼容性问题" >> "$REPORT_FILE"
-        echo "" >> "$REPORT_FILE"
-        
-        echo "🛠️ 解决方案:" >> "$REPORT_FILE"
-        echo "  1. 修复GDB源码: 修改gdbsupport/common-defs.h" >> "$REPORT_FILE"
-        echo "  2. 创建stamp标记文件" >> "$REPORT_FILE"
-        echo "  3. 安装libtool和autoconf" >> "$REPORT_FILE"
-        echo "  4. 设置-fpermissive编译标志" >> "$REPORT_FILE"
-        
-    elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-        echo "🔧 OpenWrt 21.02 版本特性:" >> "$REPORT_FILE"
-        echo "  编译器: GCC 8.4.0" >> "$REPORT_FILE"
-        echo "  内核: Linux 5.4" >> "$REPORT_FILE"
-        echo "  musl: 1.1.24" >> "$REPORT_FILE"
-        echo "  binutils: 2.35" >> "$REPORT_FILE"
-        echo "" >> "$REPORT_FILE"
-        
-        echo "✅ 版本特点:" >> "$REPORT_FILE"
-        echo "  1. 相对稳定，问题较少" >> "$REPORT_FILE"
-        echo "  2. 文档和教程丰富" >> "$REPORT_FILE"
-        echo "  3. 兼容性好" >> "$REPORT_FILE"
-        
+    if [ -n "$SELECTED_BRANCH" ]; then
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            echo "🔧 OpenWrt 23.05 版本特性:" >> "$REPORT_FILE"
+            echo "  编译器: GCC 11.3.0" >> "$REPORT_FILE"
+            echo "  内核: Linux 5.15" >> "$REPORT_FILE"
+            echo "  musl: 1.2.3" >> "$REPORT_FILE"
+            echo "  binutils: 2.38" >> "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+            
+            echo "⚠️ 常见问题:" >> "$REPORT_FILE"
+            echo "  1. GDB _GL_ATTRIBUTE_FORMAT_PRINTF 错误" >> "$REPORT_FILE"
+            echo "  2. 工具链构建错误 (toolchain/Makefile:93)" >> "$REPORT_FILE"
+            echo "  3. 头文件缺失问题" >> "$REPORT_FILE"
+            echo "  4. libtool版本兼容性问题" >> "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+            
+            echo "🛠️ 解决方案:" >> "$REPORT_FILE"
+            echo "  1. 修复GDB源码: 修改gdbsupport/common-defs.h" >> "$REPORT_FILE"
+            echo "  2. 创建stamp标记文件" >> "$REPORT_FILE"
+            echo "  3. 安装libtool和autoconf" >> "$REPORT_FILE"
+            echo "  4. 设置-fpermissive编译标志" >> "$REPORT_FILE"
+            
+        elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+            echo "🔧 OpenWrt 21.02 版本特性:" >> "$REPORT_FILE"
+            echo "  编译器: GCC 8.4.0" >> "$REPORT_FILE"
+            echo "  内核: Linux 5.4" >> "$REPORT_FILE"
+            echo "  musl: 1.1.24" >> "$REPORT_FILE"
+            echo "  binutils: 2.35" >> "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+            
+            echo "✅ 版本特点:" >> "$REPORT_FILE"
+            echo "  1. 相对稳定，问题较少" >> "$REPORT_FILE"
+            echo "  2. 文档和教程丰富" >> "$REPORT_FILE"
+            echo "  3. 兼容性好" >> "$REPORT_FILE"
+            
+        else
+            echo "ℹ️ 当前版本分支: $SELECTED_BRANCH" >> "$REPORT_FILE"
+            echo "💡 请参考官方文档获取版本特定信息" >> "$REPORT_FILE"
+        fi
     else
-        echo "ℹ️ 未知版本分支: $SELECTED_BRANCH" >> "$REPORT_FILE"
-        echo "💡 请确认版本分支设置是否正确" >> "$REPORT_FILE"
+        echo "ℹ️ 版本分支未设置" >> "$REPORT_FILE"
+        echo "💡 请设置 SELECTED_BRANCH 环境变量获取版本特定信息" >> "$REPORT_FILE"
     fi
     echo "" >> "$REPORT_FILE"
 }
@@ -612,11 +483,16 @@ generate_fix_suggestions() {
     echo "  4. 🚀 重新构建: make -j2 V=s 2>&1 | tee build.log" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
-    # 根据问题类型给出建议
-    echo "🎯 针对性修复方案:" >> "$REPORT_FILE"
-    
-    # 检查常见问题并给出建议
-    if [ -f "$BUILD_DIR/build.log" ]; then
+    # 检查常见的文件缺失错误
+    if [ -f "$BUILD_DIR/build.log" ] && [ -s "$BUILD_DIR/build.log" ]; then
+        if grep -q "No such file or directory" "$BUILD_DIR/build.log"; then
+            echo "🔧 文件缺失错误修复:" >> "$REPORT_FILE"
+            echo "  💡 发现文件缺失错误，可能是编译过程中文件下载不完整" >> "$REPORT_FILE"
+            echo "  🛠️ 修复方法: 重新下载依赖包" >> "$REPORT_FILE"
+            echo "    cd $BUILD_DIR && make download -j4 V=s" >> "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+        fi
+        
         # 工具链错误
         if grep -q "toolchain/Makefile" "$BUILD_DIR/build.log" 2>/dev/null; then
             echo "🔧 工具链构建错误修复:" >> "$REPORT_FILE"
@@ -651,32 +527,6 @@ generate_fix_suggestions() {
             echo "  echo '#endif' >> $BUILD_DIR/staging_dir/host/include/stdio.h" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
         fi
-        
-        # 内存错误
-        if grep -q "out of memory\|Killed process" "$BUILD_DIR/build.log" 2>/dev/null; then
-            echo "🔧 内存不足修复:" >> "$REPORT_FILE"
-            echo "  1. 减少并行任务: make -j1 V=s" >> "$REPORT_FILE"
-            echo "  2. 增加交换空间:" >> "$REPORT_FILE"
-            echo "     sudo fallocate -l 4G /swapfile" >> "$REPORT_FILE"
-            echo "     sudo chmod 600 /swapfile" >> "$REPORT_FILE"
-            echo "     sudo mkswap /swapfile" >> "$REPORT_FILE"
-            echo "     sudo swapon /swapfile" >> "$REPORT_FILE"
-            echo "  3. 清理内存缓存: sync && echo 3 | sudo tee /proc/sys/vm/drop_caches" >> "$REPORT_FILE"
-            echo "" >> "$REPORT_FILE"
-        fi
-    fi
-    
-    # USB配置建议
-    if [ -f "$BUILD_DIR/.config" ]; then
-        local usb_enabled=$(grep -c "^CONFIG_PACKAGE_kmod-usb.*=y" "$BUILD_DIR/.config" 2>/dev/null || echo "0")
-        if [ $usb_enabled -lt 8 ]; then
-            echo "🔧 USB配置建议:" >> "$REPORT_FILE"
-            echo "  当前USB驱动较少，建议启用更多USB驱动:" >> "$REPORT_FILE"
-            echo "  cd $BUILD_DIR && make menuconfig" >> "$REPORT_FILE"
-            echo "  进入: Kernel modules -> USB Support" >> "$REPORT_FILE"
-            echo "  启用: kmod-usb-core, kmod-usb2, kmod-usb3, kmod-usb-storage等" >> "$REPORT_FILE"
-            echo "" >> "$REPORT_FILE"
-        fi
     fi
     
     # 系统依赖建议
@@ -684,17 +534,12 @@ generate_fix_suggestions() {
     echo "  建议安装以下构建依赖:" >> "$REPORT_FILE"
     echo "  sudo apt-get update" >> "$REPORT_FILE"
     echo "  sudo apt-get install build-essential libncurses5-dev gawk git libssl-dev gettext zlib1g-dev swig unzip time xsltproc python3 python3-setuptools rsync wget" >> "$REPORT_FILE"
-    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-        echo "  sudo apt-get install libtool autoconf automake libltdl-dev pkg-config gettext texinfo" >> "$REPORT_FILE"
-    fi
     echo "" >> "$REPORT_FILE"
     
     # 快速命令
     echo "🚀 快速修复命令:" >> "$REPORT_FILE"
     echo "  1. 一键清理重建: cd $BUILD_DIR && make clean && ./scripts/feeds update -a && ./scripts/feeds install -a && make defconfig && make -j2 V=s" >> "$REPORT_FILE"
     echo "  2. 仅重新编译: cd $BUILD_DIR && make -j1 V=s" >> "$REPORT_FILE"
-    echo "  3. 修复工具链: firmware-config/scripts/build_firmware_main-01.sh fix_compiler_toolchain_error" >> "$REPORT_FILE"
-    echo "  4. 修复GDB: firmware-config/scripts/build_firmware_main-01.sh fix_gdb_compilation_error" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
 }
 
@@ -716,13 +561,13 @@ generate_summary() {
         firmware_exists=1
     fi
     
-    if [ -f "$BUILD_DIR/build.log" ]; then
+    if [ -f "$BUILD_DIR/build.log" ] && [ -s "$BUILD_DIR/build.log" ]; then
         build_log_exists=1
         error_count=$(grep -c -i "error" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
         warning_count=$(grep -c -i "warning" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
     fi
     
-    if [ -f "$BUILD_DIR/.config" ]; then
+    if [ -f "$BUILD_DIR/.config" ] && [ -s "$BUILD_DIR/.config" ]; then
         config_exists=1
     fi
     
