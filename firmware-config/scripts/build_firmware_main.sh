@@ -697,9 +697,6 @@ pre_build_error_check() {
     fi
 }
 
-# 以下保持原有函数不变，只展示部分关键函数...
-# [由于篇幅限制，以下只显示修改后的关键函数，其他函数保持不变]
-
 setup_environment() {
     log "=== 安装编译依赖包 ==="
     sudo apt-get update || handle_error "apt-get update失败"
@@ -2101,6 +2098,134 @@ initialize_compiler_env() {
         
         return 1
     fi
+}
+
+# 搜索编译器文件函数
+search_compiler_files() {
+    local search_root="${1:-$COMPILER_ROOT}"
+    local target_platform="${2:-generic}"
+    
+    log "=== 搜索编译器文件 ==="
+    log "搜索根目录: $search_root"
+    log "目标平台: $target_platform"
+    
+    if [ ! -d "$search_root" ]; then
+        log "❌ 搜索根目录不存在: $search_root"
+        return 1
+    fi
+    
+    # 根据平台确定搜索关键词
+    local search_keywords=()
+    case "$target_platform" in
+        "arm")
+            search_keywords=("arm" "aarch64" "cortex" "armv7" "armv8")
+            ;;
+        "mips")
+            search_keywords=("mips" "mipsel" "mips64" "24kc" "1004kc")
+            ;;
+        *)
+            search_keywords=("gcc" "compiler" "toolchain" "binutils")
+            ;;
+    esac
+    
+    log "搜索关键词: ${search_keywords[*]}"
+    
+    # 搜索GCC文件
+    log "搜索GCC文件..."
+    find "$search_root" -type f -iname "*gcc*" 2>/dev/null | head -20 | while read file; do
+        log "找到: $file"
+    done
+    
+    # 搜索编译器目录
+    log "搜索编译器目录..."
+    for keyword in "${search_keywords[@]}"; do
+        find "$search_root" -type d -iname "*$keyword*" 2>/dev/null | head -10 | while read dir; do
+            log "找到目录: $dir"
+        done
+    done
+    
+    return 0
+}
+
+# 通用编译器搜索函数
+universal_compiler_search() {
+    local search_root="${1:-$COMPILER_ROOT}"
+    local device_name="${2:-unknown}"
+    
+    log "=== 通用编译器搜索 ==="
+    
+    # 调用智能搜索函数
+    local compiler_dir=$(intelligent_platform_aware_compiler_search "$search_root" "generic" "$device_name")
+    
+    if [ -n "$compiler_dir" ]; then
+        log "✅ 找到编译器目录: $compiler_dir"
+        echo "$compiler_dir"
+        return 0
+    else
+        log "❌ 未找到编译器目录"
+        return 1
+    fi
+}
+
+# 简单编译器文件搜索
+search_compiler_files_simple() {
+    local search_root="${1:-$COMPILER_ROOT}"
+    local target_platform="${2:-generic}"
+    
+    log "=== 简单编译器文件搜索 ==="
+    
+    # 直接查找所有GCC文件
+    local gcc_files=$(find "$search_root" -type f -iname "*gcc*" 2>/dev/null | head -5)
+    
+    if [ -n "$gcc_files" ]; then
+        log "✅ 找到GCC文件:"
+        echo "$gcc_files"
+        return 0
+    else
+        log "❌ 未找到GCC文件"
+        return 1
+    fi
+}
+
+# 保存源代码信息
+save_source_code_info() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 保存源代码信息 ==="
+    
+    local source_info_file="$REPO_ROOT/firmware-config/source-info.txt"
+    
+    echo "=== 源代码信息 ===" > "$source_info_file"
+    echo "生成时间: $(date)" >> "$source_info_file"
+    echo "构建目录: $BUILD_DIR" >> "$source_info_file"
+    echo "仓库URL: $SELECTED_REPO_URL" >> "$source_info_file"
+    echo "分支: $SELECTED_BRANCH" >> "$source_info_file"
+    echo "目标: $TARGET" >> "$source_info_file"
+    echo "子目标: $SUBTARGET" >> "$source_info_file"
+    echo "设备: $DEVICE" >> "$source_info_file"
+    echo "配置模式: $CONFIG_MODE" >> "$source_info_file"
+    echo "编译器根目录: $COMPILER_ROOT" >> "$source_info_file"
+    echo "编译器目录: $COMPILER_DIR" >> "$source_info_file"
+    
+    # 收集目录信息
+    echo "" >> "$source_info_file"
+    echo "=== 目录结构 ===" >> "$source_info_file"
+    find . -maxdepth 2 -type d | sort >> "$source_info_file"
+    
+    # 收集关键文件信息
+    echo "" >> "$source_info_file"
+    echo "=== 关键文件 ===" >> "$source_info_file"
+    local key_files=("Makefile" "feeds.conf.default" ".config" "rules.mk" "Config.in")
+    for file in "${key_files[@]}"; do
+        if [ -f "$file" ]; then
+            echo "$file: 存在 ($(ls -lh "$file" | awk '{print $5}'))" >> "$source_info_file"
+        else
+            echo "$file: 不存在" >> "$source_info_file"
+        fi
+    done
+    
+    log "✅ 源代码信息已保存到: $source_info_file"
 }
 
 # 主函数
