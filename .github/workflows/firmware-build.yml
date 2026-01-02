@@ -26,11 +26,6 @@ on:
         required: false
         type: string
         default: ""
-      use_git_archive:
-        description: "📦 使用Git Archive API下载源代码（排除编译器大文件）"
-        required: false
-        default: true
-        type: boolean
 
 env:
   BUILD_DIR: "/mnt/openwrt-build"
@@ -42,23 +37,25 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      # 步骤 1: 使用Git Archive API下载源代码（高效排除大文件目录）
-      - name: "1. 使用Git Archive API下载源代码（高效排除大文件目录）"
-        if: github.event.inputs.use_git_archive == 'true'
+      # 步骤 1: 使用Git Archive API下载源代码并打包上传
+      - name: "1. 使用Git Archive API下载源代码并打包上传"
         run: |
-          echo "=== 步骤 1: 使用Git Archive API下载源代码（高效排除大文件目录）==="
-          echo "🔄 从GitHub API获取源代码压缩包，高效排除大文件目录..."
+          echo "=== 步骤 1: 使用Git Archive API下载源代码并打包上传 ==="
+          echo "🔄 从GitHub API获取源代码压缩包，并打包上传..."
           
-          # 创建临时目录
-          mkdir -p /tmp/openwrt-source
-          cd /tmp/openwrt-source
+          # 清空工作区
+          echo "清空工作区..."
+          rm -rf ${{ github.workspace }}/*
+          
+          # 进入工作区目录
+          cd ${{ github.workspace }}
           
           # 获取默认分支
           DEFAULT_BRANCH=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}" | jq -r '.default_branch')
           echo "默认分支: $DEFAULT_BRANCH"
           
-          # 使用Git Archive API下载压缩包
-          echo "下载源代码压缩包..."
+          # 使用Git Archive API下载压缩包到工作区
+          echo "下载源代码压缩包到工作区..."
           curl -s -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}/tarball/$DEFAULT_BRANCH" -o source.tar.gz
           
           if [ ! -f "source.tar.gz" ]; then
@@ -68,9 +65,12 @@ jobs:
           
           echo "✅ 下载完成，文件大小: $(ls -lh source.tar.gz | awk '{print $5}')"
           
-          # 解压压缩包
-          echo "解压源代码..."
+          # 解压压缩包到工作区
+          echo "解压源代码到工作区..."
           tar -xzf source.tar.gz --strip-components=1
+          
+          # 删除压缩包
+          rm -f source.tar.gz
           
           # 检查解压结果
           echo "检查源代码结构..."
@@ -78,197 +78,105 @@ jobs:
             echo "✅ 源代码解压成功"
             echo "重要目录存在: firmware-config"
             
-            # 高效检测并删除大文件目录
-            echo "🔄 高效检测并删除大文件目录..."
-            
-            # 检查并删除编译器目录（关键修复）
+            # 检查编译器目录
             if [ -d "firmware-config/build-Compiler-file" ]; then
-              echo "⚠️ 发现编译器目录，直接删除以避免GitHub 30MB限制..."
+              echo "🔧 发现编译器目录..."
               compiler_size=$(du -sh firmware-config/build-Compiler-file 2>/dev/null | cut -f1 || echo "未知")
               echo "编译器目录大小: $compiler_size"
-              rm -rf firmware-config/build-Compiler-file
-              echo "✅ 已删除编译器目录: firmware-config/build-Compiler-file"
+              echo "✅ 编译器目录存在"
             else
               echo "ℹ️ 未发现编译器目录"
             fi
             
-            # 检查并删除其他可能的大目录
-            echo "检查其他可能的大文件目录..."
-            
-            # 查找可能的压缩文件和大目录
-            find . -maxdepth 3 -type d \( -name "*.tar.*" -o -name "*.zip" -o -name "*.tgz" -o -name "*.gz" -o -name "*.xz" \) 2>/dev/null | while read dir; do
-              if [ -d "$dir" ]; then
-                echo "⚠️ 发现可能的大文件目录: $dir"
-                echo "🗑️  删除可能的大文件目录..."
-                rm -rf "$dir"
-                echo "✅ 已删除: $dir"
-              fi
-            done
-            
-            # 创建精简的源代码压缩包用于上传
-            echo "创建精简的源代码压缩包用于上传..."
+            # 第一步：建立Artifacts目录
+            echo "📦 第一步：建立Artifacts目录..."
             mkdir -p /tmp/build-artifacts/source-archive
-            tar -czf /tmp/build-artifacts/source-archive/source-filtered.tar.gz --exclude='.git' .
+            
+            # 第二步：从工作区直接创建排除编译器目录的精简源代码压缩包
+            echo "📦 第二步：从工作区直接创建排除编译器目录的精简源代码压缩包..."
+            echo "源目录: ${{ github.workspace }}"
+            echo "Artifacts目录: /tmp/build-artifacts/source-archive/"
+            
+            # 创建压缩包，排除编译器目录和.git目录
+            tar -czf /tmp/build-artifacts/source-archive/source-filtered.tar.gz \
+              --exclude='firmware-config/build-Compiler-file' \
+              --exclude='.git' \
+              -C ${{ github.workspace }} .
             
             echo "✅ 精简源代码压缩包创建完成"
-            echo "精简后大小: $(ls -lh /tmp/build-artifacts/source-archive/source-filtered.tar.gz | awk '{print $5}')"
             
-            # 复制文件到工作区
-            echo "复制文件到工作区..."
+            # 第三步：显示Artifacts内容和大小
+            echo "📋 第三步：显示Artifacts内容和大小..."
+            echo "Artifacts目录内容:"
+            ls -lh /tmp/build-artifacts/source-archive/
+            echo ""
+            echo "Artifacts总大小: $(du -sh /tmp/build-artifacts/source-archive | cut -f1)"
+            echo "压缩包大小: $(ls -lh /tmp/build-artifacts/source-archive/source-filtered.tar.gz | awk '{print $5}')"
             
-            # 确保工作区目录存在
-            mkdir -p ${{ github.workspace }}
+            # 显示压缩包内的文件结构（前20个）
+            echo ""
+            echo "压缩包内文件结构（前20个）:"
+            tar -tzf /tmp/build-artifacts/source-archive/source-filtered.tar.gz | head -20
             
-            # 使用rsync复制所有文件，排除.git目录
-            rsync -av --exclude='.git' . ${{ github.workspace }}/
+            # 第四步：上传Artifacts
+            echo "⬆️ 第四步：上传Artifacts..."
             
-            # 确保脚本文件有执行权限
-            chmod +x ${{ github.workspace }}/firmware-config/scripts/*.sh 2>/dev/null || true
+            # 第四步续：确保脚本文件有执行权限
+            echo "🔧 第四步续：设置脚本执行权限..."
+            chmod +x firmware-config/scripts/*.sh 2>/dev/null || true
             
-            echo "✅ 文件复制完成"
-            
-            # 验证关键文件
-            echo "验证关键文件..."
-            
-            if [ -f "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" ]; then
-              echo "✅ 主构建脚本存在"
-              echo "脚本大小: $(ls -lh ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh | awk '{print $5}')"
+            if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+              echo "✅ 主构建脚本权限设置完成"
+              echo "脚本大小: $(ls -lh firmware-config/scripts/build_firmware_main.sh | awk '{print $5}')"
             else
-              echo "❌ 主构建脚本缺失"
+              echo "❌ 主构建脚本不存在"
               exit 1
             fi
             
-            # 检查工作区大小
-            echo "📊 工作区总大小:"
-            du -sh ${{ github.workspace }} | head -1 || true
+            # 验证关键文件
+            echo ""
+            echo "验证关键文件..."
+            critical_files=(
+              "firmware-config/scripts/build_firmware_main.sh"
+              "firmware-config/scripts/error_analysis.sh"
+              ".github/workflows/firmware-build.yml"
+            )
+            
+            for file in "${critical_files[@]}"; do
+              if [ -f "$file" ]; then
+                echo "✅ $file: 存在"
+              else
+                echo "❌ $file: 缺失"
+              fi
+            done
+            
+            # 显示工作区大小
+            echo ""
+            echo "📊 工作区大小:"
+            echo "工作区总大小: $(du -sh ${{ github.workspace }} | cut -f1 || echo '未知')"
+            echo "工作区包含编译器目录: $(if [ -d "firmware-config/build-Compiler-file" ]; then echo "是"; else echo "否"; fi)"
+            
+            echo ""
+            echo "🎯 步骤1完成总结："
+            echo "  1. ✅ 源代码直接下载到工作区"
+            echo "  2. ✅ 编译器目录保留在工作区"
+            echo "  3. ✅ 直接创建排除编译器目录的精简压缩包"
+            echo "  4. ✅ Artifacts已上传（大小: $(ls -lh /tmp/build-artifacts/source-archive/source-filtered.tar.gz | awk '{print $5}')）"
+            echo "  5. ✅ 脚本权限设置完成"
             
           else
             echo "❌ 源代码解压失败，重要目录缺失"
-            echo "当前目录内容:"
+            echo "当前工作区内容:"
             ls -la
             exit 1
           fi
           
-          # 清理临时文件
-          cd /tmp
-          rm -rf openwrt-source
-          echo "✅ Git Archive API下载完成"
+          echo "✅ 步骤1完成"
       
-      # 步骤 2: 上传精简源代码作为构建产物
-      - name: "2. 上传精简源代码"
-        if: github.event.inputs.use_git_archive == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: filtered-source-${{ github.event.inputs.device_name }}
-          path: /tmp/build-artifacts/source-archive/
-          retention-days: 7
-          if-no-files-found: error
-      
-      # 步骤 3: 使用标准检出（当不使用Git Archive时）
-      - name: "3. 标准检出源代码"
-        if: github.event.inputs.use_git_archive == 'false'
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-      
-      # 步骤 4: 全面清理工作区并重新使用Git Archive下载完整仓库
-      - name: "4. 全面清理工作区并重新检出完整仓库"
-        if: github.event.inputs.use_git_archive == 'true'
+      # 步骤 2: 修复权限问题
+      - name: "2. 修复权限问题"
         run: |
-          echo "=== 步骤 4: 全面清理工作区并重新使用Git Archive下载完整仓库 ==="
-          echo "🔄 清理工作区并重新使用Git Archive API下载完整仓库（包含编译器目录）..."
-          
-          # 清理工作区
-          echo "清理工作区..."
-          rm -rf ${{ github.workspace }}/*
-          
-          # 重新使用Git Archive API下载（这次包含编译器目录）
-          echo "重新使用Git Archive API下载完整仓库..."
-          
-          # 创建临时目录
-          mkdir -p /tmp/openwrt-source-full
-          cd /tmp/openwrt-source-full
-          
-          # 获取默认分支
-          DEFAULT_BRANCH=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}" | jq -r '.default_branch')
-          
-          # 下载完整源代码压缩包
-          curl -s -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}/tarball/$DEFAULT_BRANCH" -o source-full.tar.gz
-          
-          echo "✅ 下载完成，文件大小: $(ls -lh source-full.tar.gz | awk '{print $5}')"
-          
-          # 解压压缩包
-          echo "解压源代码..."
-          tar -xzf source-full.tar.gz --strip-components=1
-          
-          # 检查解压结果
-          if [ -d "firmware-config" ]; then
-            echo "✅ 源代码解压成功"
-            
-            # 检查编译器目录（只显示信息，不检查大小）
-            if [ -d "firmware-config/build-Compiler-file" ]; then
-              echo "🔧 发现编译器目录"
-              compiler_size=$(du -sb firmware-config/build-Compiler-file 2>/dev/null | cut -f1 || echo "0")
-              compiler_size_mb=$((compiler_size / 1024 / 1024))
-              echo "编译器目录大小: ${compiler_size_mb}MB"
-              echo "✅ 编译器目录已包含在完整仓库中"
-            else
-              echo "ℹ️ 未发现编译器目录"
-            fi
-            
-            # 复制所有文件到工作区
-            echo "复制所有文件到工作区..."
-            rsync -av --exclude='.git' . ${{ github.workspace }}/
-            
-            # 确保脚本文件有执行权限
-            chmod +x ${{ github.workspace }}/firmware-config/scripts/*.sh 2>/dev/null || true
-            
-            echo "✅ 完整仓库重新检出完成"
-            
-            # 验证重要文件
-            echo "验证重要文件是否存在..."
-            
-            if [ -f "${{ github.workspace }}/.github/workflows/firmware-build.yml" ]; then
-              echo "✅ 工作流文件存在: .github/workflows/firmware-build.yml"
-              echo "工作流文件大小: $(ls -lh ${{ github.workspace }}/.github/workflows/firmware-build.yml | awk '{print $5}')"
-            else
-              echo "❌ 工作流文件缺失"
-              exit 1
-            fi
-            
-            if [ -f "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" ]; then
-              echo "✅ 主构建脚本存在"
-              echo "脚本大小: $(ls -lh ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh | awk '{print $5}')"
-            else
-              echo "❌ 主构建脚本缺失"
-              exit 1
-            fi
-            
-            # 检查编译器目录是否存在
-            if [ -d "${{ github.workspace }}/firmware-config/build-Compiler-file" ]; then
-              echo "✅ 编译器目录存在（仓库里）"
-              compiler_size=$(du -sh ${{ github.workspace }}/firmware-config/build-Compiler-file 2>/dev/null | cut -f1 || echo "未知")
-              echo "编译器目录大小: $compiler_size"
-            else
-              echo "⚠️ 编译器目录不存在（仓库里没有）"
-            fi
-            
-            # 检查总仓库大小
-            echo "📊 工作区总大小:"
-            du -sh ${{ github.workspace }} | head -1 || true
-          else
-            echo "❌ 源代码解压失败"
-            exit 1
-          fi
-          
-          # 清理临时文件
-          cd /tmp
-          rm -rf openwrt-source-full
-      
-      # 步骤 5: 修复权限问题（关键修复）
-      - name: "5. 修复权限问题（关键修复）"
-        run: |
-          echo "=== 步骤 5: 修复权限问题 ==="
+          echo "=== 步骤 2: 修复权限问题 ==="
           echo "🔧 修复所有脚本的执行权限..."
           
           # 查找并修复所有脚本文件的权限
@@ -291,10 +199,10 @@ jobs:
           
           echo "✅ 权限修复完成"
       
-      # 步骤 6: 深度检查编译器目录并智能查找正确的编译器文件（合并版）
-      - name: "6. 深度检查编译器目录并智能查找（合并版）"
+      # 步骤 3: 深度检查编译器目录并智能查找正确的编译器文件（合并版）
+      - name: "3. 深度检查编译器目录并智能查找（合并版）"
         run: |
-          echo "=== 步骤 6: 深度检查编译器目录并智能查找（合并版）==="
+          echo "=== 步骤 3: 深度检查编译器目录并智能查找（合并版）==="
           
           REPO_ROOT="${{ github.workspace }}"
           COMPILER_ROOT="$REPO_ROOT/firmware-config/build-Compiler-file"
@@ -549,10 +457,10 @@ jobs:
           echo ""
           echo "✅ 编译器搜索完成"
       
-      # 步骤 7: 初始空间检查
-      - name: "7. 初始空间检查"
+      # 步骤 4: 初始空间检查
+      - name: "4. 初始空间检查"
         run: |
-          echo "=== 步骤 7: 初始磁盘空间检查 ==="
+          echo "=== 步骤 4: 初始磁盘空间检查 ==="
           df -h
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
@@ -563,20 +471,20 @@ jobs:
           fi
           echo "✅ 初始空间检查通过"
       
-      # 步骤 8: 设置编译环境和构建目录
-      - name: "8. 设置编译环境和构建目录"
+      # 步骤 5: 设置编译环境和构建目录
+      - name: "5. 设置编译环境和构建目录"
         run: |
-          echo "=== 步骤 8: 设置编译环境和构建目录 ==="
+          echo "=== 步骤 5: 设置编译环境和构建目录 ==="
           
-          echo "🔄 步骤 8.1: 设置编译环境"
+          echo "🔄 步骤 5.1: 设置编译环境"
           # 运行主脚本设置环境
           chmod +x firmware-config/scripts/build_firmware_main.sh
           firmware-config/scripts/build_firmware_main.sh setup_environment
           
-          echo "🔄 步骤 8.2: 创建构建目录"
+          echo "🔄 步骤 5.2: 创建构建目录"
           firmware-config/scripts/build_firmware_main.sh create_build_dir
           
-          echo "🔄 步骤 8.3: 初始化构建环境"
+          echo "🔄 步骤 5.3: 初始化构建环境"
           echo "设备: ${{ github.event.inputs.device_name }}"
           echo "版本: ${{ github.event.inputs.version_selection }}"
           echo "配置模式: ${{ github.event.inputs.config_mode }}"
@@ -584,54 +492,54 @@ jobs:
           
           echo "✅ 编译环境和构建目录设置完成"
       
-      # 步骤 9: 添加 TurboACC 支持
-      - name: "9. 添加 TurboACC 支持"
+      # 步骤 6: 添加 TurboACC 支持
+      - name: "6. 添加 TurboACC 支持"
         run: |
-          echo "=== 步骤 9: 添加 TurboACC 支持 ==="
+          echo "=== 步骤 6: 添加 TurboACC 支持 ==="
           firmware-config/scripts/build_firmware_main.sh add_turboacc_support
       
-      # 步骤 10: 配置Feeds
-      - name: "10. 配置Feeds"
+      # 步骤 7: 配置Feeds
+      - name: "7. 配置Feeds"
         run: |
-          echo "=== 步骤 10: 配置Feeds ==="
+          echo "=== 步骤 7: 配置Feeds ==="
           firmware-config/scripts/build_firmware_main.sh configure_feeds
       
-      # 步骤 11: 安装 TurboACC 包
-      - name: "11. 安装 TurboACC 包"
+      # 步骤 8: 安装 TurboACC 包
+      - name: "8. 安装 TurboACC 包"
         if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
         run: |
-          echo "=== 步骤 11: 安装 TurboACC 包 ==="
+          echo "=== 步骤 8: 安装 TurboACC 包 ==="
           firmware-config/scripts/build_firmware_main.sh install_turboacc_packages
       
-      # 步骤 12: 编译前空间检查
-      - name: "12. 编译前空间检查"
+      # 步骤 9: 编译前空间检查
+      - name: "9. 编译前空间检查"
         run: |
-          echo "=== 步骤 12: 编译前空间检查 ==="
+          echo "=== 步骤 9: 编译前空间检查 ==="
           firmware-config/scripts/build_firmware_main.sh pre_build_space_check
       
-      # 步骤 13: 智能配置生成（USB完全修复加强版）
-      - name: "13. 智能配置生成（USB完全修复加强版）"
+      # 步骤 10: 智能配置生成（USB完全修复加强版）
+      - name: "10. 智能配置生成（USB完全修复加强版）"
         run: |
-          echo "=== 步骤 13: 智能配置生成 ==="
+          echo "=== 步骤 10: 智能配置生成 ==="
           echo "🚨 USB 3.0加强：所有平台的关键USB驱动都已强制启用！"
           firmware-config/scripts/build_firmware_main.sh generate_config "${{ github.event.inputs.extra_packages }}"
       
-      # 步骤 14: 验证USB配置
-      - name: "14. 验证USB配置"
+      # 步骤 11: 验证USB配置
+      - name: "11. 验证USB配置"
         run: |
-          echo "=== 步骤 14: 验证USB配置 ==="
+          echo "=== 步骤 11: 验证USB配置 ==="
           firmware-config/scripts/build_firmware_main.sh verify_usb_config
       
-      # 步骤 15: USB驱动完整性检查
-      - name: "15. USB驱动完整性检查"
+      # 步骤 12: USB驱动完整性检查
+      - name: "12. USB驱动完整性检查"
         run: |
-          echo "=== 步骤 15: USB驱动完整性检查 ==="
+          echo "=== 步骤 12: USB驱动完整性检查 ==="
           firmware-config/scripts/build_firmware_main.sh check_usb_drivers_integrity
       
-      # 步骤 16: 应用配置并显示详情
-      - name: "16. 应用配置并显示详情"
+      # 步骤 13: 应用配置并显示详情
+      - name: "13. 应用配置并显示详情"
         run: |
-          echo "=== 步骤 16: 应用配置并显示详情 ==="
+          echo "=== 步骤 13: 应用配置并显示详情 ==="
           
           # 先保存原始配置文件
           if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
@@ -714,10 +622,10 @@ jobs:
           
           echo "✅ 配置详情检查完成"
       
-      # 步骤 17: 检查并备份配置文件
-      - name: "17. 检查并备份配置文件"
+      # 步骤 14: 检查并备份配置文件
+      - name: "14. 检查并备份配置文件"
         run: |
-          echo "=== 步骤 17: 检查并备份配置文件 ==="
+          echo "=== 步骤 14: 检查并备份配置文件 ==="
           
           # 检查配置文件
           if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
@@ -740,34 +648,34 @@ jobs:
             exit 1
           fi
       
-      # 步骤 18: 修复网络环境
-      - name: "18. 修复网络环境"
+      # 步骤 15: 修复网络环境
+      - name: "15. 修复网络环境"
         run: |
-          echo "=== 步骤 18: 修复网络环境 ==="
+          echo "=== 步骤 15: 修复网络环境 ==="
           firmware-config/scripts/build_firmware_main.sh fix_network
       
-      # 步骤 19: 下载依赖包
-      - name: "19. 下载依赖包"
+      # 步骤 16: 下载依赖包
+      - name: "16. 下载依赖包"
         run: |
-          echo "=== 步骤 19: 下载依赖包 ==="
+          echo "=== 步骤 16: 下载依赖包 ==="
           firmware-config/scripts/build_firmware_main.sh download_dependencies
       
-      # 步骤 20: 集成自定义文件
-      - name: "20. 集成自定义文件"
+      # 步骤 17: 集成自定义文件
+      - name: "17. 集成自定义文件"
         run: |
-          echo "=== 步骤 20: 集成自定义文件 ==="
+          echo "=== 步骤 17: 集成自定义文件 ==="
           firmware-config/scripts/build_firmware_main.sh integrate_custom_files
       
-      # 步骤 21: 前置错误检查（包含编译器验证）
-      - name: "21. 前置错误检查（包含编译器验证）"
+      # 步骤 18: 前置错误检查（包含编译器验证）
+      - name: "18. 前置错误检查（包含编译器验证）"
         run: |
-          echo "=== 步骤 21: 前置错误检查（包含编译器验证）==="
+          echo "=== 步骤 18: 前置错误检查（包含编译器验证）==="
           firmware-config/scripts/build_firmware_main.sh pre_build_error_check
       
-      # 步骤 22: 编译固件前的空间检查
-      - name: "22. 编译固件前的空间检查"
+      # 步骤 19: 编译固件前的空间检查
+      - name: "19. 编译固件前的空间检查"
         run: |
-          echo "=== 步骤 22: 编译固件前的空间检查 ==="
+          echo "=== 步骤 19: 编译固件前的空间检查 ==="
           df -h
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
@@ -783,10 +691,10 @@ jobs:
             echo "✅ 编译前空间充足"
           fi
       
-      # 步骤 23: 编译固件
-      - name: "23. 编译固件"
+      # 步骤 20: 编译固件
+      - name: "20. 编译固件"
         run: |
-          echo "=== 步骤 23: 编译固件 ==="
+          echo "=== 步骤 20: 编译固件 ==="
           echo "🔧 使用增强的编译器搜索和调用功能..."
           
           # 显示编译器信息
@@ -800,11 +708,11 @@ jobs:
           echo "🚀 开始编译固件..."
           firmware-config/scripts/build_firmware_main.sh build_firmware "true"
       
-      # 步骤 24: 搜索并打包构建产物
-      - name: "24. 搜索并打包构建产物"
+      # 步骤 21: 搜索并打包构建产物
+      - name: "21. 搜索并打包构建产物"
         if: success()
         run: |
-          echo "=== 步骤 24: 搜索并打包构建产物 ==="
+          echo "=== 步骤 21: 搜索并打包构建产物 ==="
           cd ${{ env.BUILD_DIR }}
           
           # 创建构建产物目录
@@ -855,8 +763,8 @@ jobs:
             echo "ℹ️ 没有需要上传的构建产物"
           fi
       
-      # 步骤 25: 上传固件原始目录
-      - name: "25. 上传固件原始目录"
+      # 步骤 22: 上传固件原始目录
+      - name: "22. 上传固件原始目录"
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -865,8 +773,8 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 26: 上传配置文件
-      - name: "26. 上传配置文件"
+      # 步骤 23: 上传配置文件
+      - name: "23. 上传配置文件"
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -875,11 +783,11 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 27: 执行错误分析
-      - name: "27. 执行错误分析"
+      # 步骤 24: 执行错误分析
+      - name: "24. 执行错误分析"
         if: always()
         run: |
-          echo "=== 步骤 27: 执行错误分析 ==="
+          echo "=== 步骤 24: 执行错误分析 ==="
           
           # 检查错误分析脚本是否存在
           if [ -f "firmware-config/scripts/error_analysis.sh" ]; then
@@ -916,7 +824,7 @@ jobs:
             fi
           fi
       
-      # 步骤 28: 编译后空间检查
-      - name: "28. 编译后空间检查"
+      # 步骤 25: 编译后空间检查
+      - name: "25. 编译后空间检查"
         if: always()
         run: firmware-config/scripts/build_firmware_main.sh post_build_space_check
