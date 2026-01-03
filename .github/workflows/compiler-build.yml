@@ -275,11 +275,7 @@ jobs:
             echo "验证GCC版本 $version 是否存在..."
             
             # 尝试多个镜像源
-            MIRRORS=(
-              "https://ftp.gnu.org/gnu/gcc/gcc-$version/gcc-$version.tar.xz"
-              "https://mirrors.kernel.org/gnu/gcc/gcc-$version/gcc-$version.tar.xz"
-              "https://mirror.rackspace.com/gnu/gcc/gcc-$version/gcc-$version.tar.xz"
-            )
+            MIRRORS=("https://ftp.gnu.org/gnu/gcc/gcc-$version/gcc-$version.tar.xz" "https://mirrors.kernel.org/gnu/gcc/gcc-$version/gcc-$version.tar.xz" "https://mirror.rackspace.com/gnu/gcc/gcc-$version/gcc-$version.tar.xz")
             
             for mirror in "${MIRRORS[@]}"; do
               if curl -s --head "$mirror" --connect-timeout 10 | grep -q "200 OK"; then
@@ -303,11 +299,7 @@ jobs:
               
               # 获取所有可用版本
               echo "获取GNU镜像上的GCC版本列表..."
-              AVAILABLE_VERSIONS=$(curl -s --connect-timeout 20 "https://ftp.gnu.org/gnu/gcc/" | \
-                grep -o 'gcc-[0-9]\+\.[0-9]\+\.[0-9]\+' | \
-                sort -Vr | \
-                cut -d- -f2 | \
-                uniq)
+              AVAILABLE_VERSIONS=$(curl -s --connect-timeout 20 "https://ftp.gnu.org/gnu/gcc/" | grep -o 'gcc-[0-9]\+\.[0-9]\+\.[0-9]\+' | sort -Vr | cut -d- -f2 | uniq)
               
               echo "可用版本列表:"
               echo "$AVAILABLE_VERSIONS" | head -10
@@ -347,11 +339,7 @@ jobs:
               MAJOR_VERSION=$(echo "$GCC_VERSION" | cut -d. -f1)
               echo "查找主版本 $MAJOR_VERSION 的可用版本..."
               
-              AVAILABLE_VERSIONS=$(curl -s --connect-timeout 20 "https://ftp.gnu.org/gnu/gcc/" | \
-                grep -o "gcc-$MAJOR_VERSION\.[0-9]\+\.[0-9]\+" | \
-                sort -Vr | \
-                cut -d- -f2 | \
-                uniq)
+              AVAILABLE_VERSIONS=$(curl -s --connect-timeout 20 "https://ftp.gnu.org/gnu/gcc/" | grep -o "gcc-$MAJOR_VERSION\.[0-9]\+\.[0-9]\+" | sort -Vr | cut -d- -f2 | uniq)
               
               if [ -n "$AVAILABLE_VERSIONS" ]; then
                 NEW_VERSION=$(echo "$AVAILABLE_VERSIONS" | head -1)
@@ -401,9 +389,7 @@ jobs:
           BINUTILS_URL="https://ftp.gnu.org/gnu/binutils/binutils-$BINUTILS_VERSION.tar.xz"
           if ! curl -s --head "$BINUTILS_URL" | grep -q "200 OK"; then
             echo "⚠️ Binutils $BINUTILS_VERSION 不可用，尝试检测最新版本"
-            BINUTILS_VERSION=$(curl -s https://ftp.gnu.org/gnu/binutils/ | \
-              grep -o 'binutils-[0-9]\+\.[0-9]\+\.[0-9]\+' | \
-              sort -Vr | head -1 | cut -d- -f2)
+            BINUTILS_VERSION=$(curl -s https://ftp.gnu.org/gnu/binutils/ | grep -o 'binutils-[0-9]\+\.[0-9]\+\.[0-9]\+' | sort -Vr | head -1 | cut -d- -f2)
           fi
           
           LINUX_VERSION="$DEFAULT_LINUX"
@@ -719,49 +705,29 @@ jobs:
           sudo apt-get update
           
           echo "安装基础构建工具..."
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            build-essential gcc g++ make flex bison git wget curl file \
-            gawk gettext rsync unzip autoconf automake autopoint libtool \
-            pkg-config texinfo gperf cmake ninja-build patchutils bc \
-            bzip2 xz-utils help2man jq info install-info liblzma-dev \
-            zstd libzstd-dev libexpat-dev libgdbm-dev libreadline-dev \
-            libsqlite3-dev libffi-dev libelf-dev libdw-dev libcap-dev \
-            libattr1-dev libaudit-dev libiberty-dev libssl-dev
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential gcc g++ make flex bison git wget curl file gawk gettext rsync unzip autoconf automake autopoint libtool pkg-config texinfo gperf cmake ninja-build patchutils bc bzip2 xz-utils help2man jq info install-info liblzma-dev zstd libzstd-dev libexpat-dev libgdbm-dev libreadline-dev libsqlite3-dev libffi-dev libelf-dev libdw-dev libcap-dev libattr1-dev libaudit-dev libiberty-dev libssl-dev
           
           echo "安装版本特定的依赖..."
           if [ $GCC_MAJOR -ge 13 ]; then
             echo "GCC 13+ 需要较新的依赖..."
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-              libgmp-dev libmpfr-dev libmpc-dev libisl-dev \
-              libgnutls28-dev libcurl4-gnutls-dev python3 python3-dev \
-              python3-distutils libncurses5-dev libssl-dev gnutls-bin \
-              liblzma-dev zlib1g-dev libstdc++-12-dev
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libgmp-dev libmpfr-dev libmpc-dev libisl-dev libgnutls28-dev libcurl4-gnutls-dev python3 python3-dev python3-distutils libncurses5-dev libssl-dev gnutls-bin liblzma-dev zlib1g-dev libstdc++-12-dev
           elif [ $GCC_MAJOR -ge 11 ]; then
             echo "GCC 11-12 依赖..."
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-              libgmp-dev libmpfr-dev libmpc-dev libisl-dev \
-              libgnutls28-dev libcurl4-gnutls-dev python3 python3-dev \
-              python3-distutils libncurses5-dev libssl-dev gnutls-bin \
-              liblzma-dev zlib1g-dev libstdc++-11-dev
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libgmp-dev libmpfr-dev libmpc-dev libisl-dev libgnutls28-dev libcurl4-gnutls-dev python3 python3-dev python3-distutils libncurses5-dev libssl-dev gnutls-bin liblzma-dev zlib1g-dev libstdc++-11-dev
           else
             echo "GCC 10及以下版本依赖..."
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-              libgmp-dev libmpfr-dev libmpc-dev libisl-dev \
-              libgnutls28-dev python3 python3-dev libncurses5-dev \
-              libssl-dev liblzma-dev zlib1g-dev
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libgmp-dev libmpfr-dev libmpc-dev libisl-dev libgnutls28-dev python3 python3-dev libncurses5-dev libssl-dev liblzma-dev zlib1g-dev
           fi
           
           ARCH="${{ github.event.inputs.target_arch }}"
           case "$ARCH" in
             "riscv64")
               echo "RISC-V架构需要额外的依赖..."
-              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-                device-tree-compiler qemu-system-riscv64 libfdt-dev
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y device-tree-compiler qemu-system-riscv64 libfdt-dev
               ;;
             "aarch64"|"arm_cortex-a7"|"arm_cortex-a53")
               echo "ARM架构依赖..."
-              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-                gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
               ;;
           esac
           
@@ -779,8 +745,7 @@ jobs:
           
           echo "安装GMP开发库..."
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            libgmp-dev libgmp10 libgmp3-dev libgmp10-doc
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libgmp-dev libgmp10 libgmp3-dev libgmp10-doc
           
           echo "验证GMP安装..."
           echo "GMP头文件位置:"
@@ -867,11 +832,7 @@ jobs:
             
             echo "下载GCC $version..."
             
-            MIRRORS=(
-              "https://ftp.gnu.org/gnu/gcc/gcc-$version/gcc-$version.tar.xz"
-              "https://mirrors.kernel.org/gnu/gcc/gcc-$version/gcc-$version.tar.xz"
-              "https://mirror.rackspace.com/gnu/gcc/gcc-$version/gcc-$version.tar.xz"
-            )
+            MIRRORS=("https://ftp.gnu.org/gnu/gcc/gcc-$version/gcc-$version.tar.xz" "https://mirrors.kernel.org/gnu/gcc/gcc-$version/gcc-$version.tar.xz" "https://mirror.rackspace.com/gnu/gcc/gcc-$version/gcc-$version.tar.xz")
             
             for mirror in "${MIRRORS[@]}"; do
               echo "尝试镜像: $mirror"
@@ -893,11 +854,7 @@ jobs:
             
             echo "下载Binutils $version..."
             
-            MIRRORS=(
-              "https://ftp.gnu.org/gnu/binutils/binutils-$version.tar.xz"
-              "https://mirrors.kernel.org/gnu/binutils/binutils-$version.tar.xz"
-              "https://mirror.rackspace.com/gnu/binutils/binutils-$version.tar.xz"
-            )
+            MIRRORS=("https://ftp.gnu.org/gnu/binutils/binutils-$version.tar.xz" "https://mirrors.kernel.org/gnu/binutils/binutils-$version.tar.xz" "https://mirror.rackspace.com/gnu/binutils/binutils-$version.tar.xz")
             
             for mirror in "${MIRRORS[@]}"; do
               echo "尝试镜像: $mirror"
@@ -926,10 +883,7 @@ jobs:
           
           # 下载Linux内核
           echo "下载Linux ${{ env.LINUX_VERSION }}..."
-          LINUX_MIRRORS=(
-            "https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-${{ env.LINUX_VERSION }}.tar.xz"
-            "https://mirrors.edge.kernel.org/pub/linux/kernel/v5.x/linux-${{ env.LINUX_VERSION }}.tar.xz"
-          )
+          LINUX_MIRRORS=("https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-${{ env.LINUX_VERSION }}.tar.xz" "https://mirrors.edge.kernel.org/pub/linux/kernel/v5.x/linux-${{ env.LINUX_VERSION }}.tar.xz")
           
           for mirror in "${LINUX_MIRRORS[@]}"; do
             echo "尝试镜像: $mirror"
@@ -942,10 +896,7 @@ jobs:
           # 下载C库
           if [ "${{ env.USE_MUSL }}" = "y" ]; then
             echo "下载Musl ${{ env.LIBC_VERSION }}..."
-            MUSL_MIRRORS=(
-              "https://musl.libc.org/releases/musl-${{ env.LIBC_VERSION }}.tar.gz"
-              "https://github.com/ifduyue/musl/archive/refs/tags/v${{ env.LIBC_VERSION }}.tar.gz"
-            )
+            MUSL_MIRRORS=("https://musl.libc.org/releases/musl-${{ env.LIBC_VERSION }}.tar.gz" "https://github.com/ifduyue/musl/archive/refs/tags/v${{ env.LIBC_VERSION }}.tar.gz")
             
             for mirror in "${MUSL_MIRRORS[@]}"; do
               echo "尝试镜像: $mirror"
@@ -956,10 +907,7 @@ jobs:
             done
           else
             echo "下载Glibc ${{ env.LIBC_VERSION }}..."
-            GLIBC_MIRRORS=(
-              "https://ftp.gnu.org/gnu/glibc/glibc-${{ env.LIBC_VERSION }}.tar.xz"
-              "https://mirrors.kernel.org/gnu/glibc/glibc-${{ env.LIBC_VERSION }}.tar.xz"
-            )
+            GLIBC_MIRRORS=("https://ftp.gnu.org/gnu/glibc/glibc-${{ env.LIBC_VERSION }}.tar.xz" "https://mirrors.kernel.org/gnu/glibc/glibc-${{ env.LIBC_VERSION }}.tar.xz")
             
             for mirror in "${GLIBC_MIRRORS[@]}"; do
               echo "尝试镜像: $mirror"
@@ -1001,36 +949,34 @@ jobs:
           rm -f .config .config.old .config.cmd 2>/dev/null || true
           
           echo "步骤2: 创建完整的.config文件..."
-          cat > .config << EOF
-# 基础配置
-CONFIG_ALL=n
-CONFIG_ALL_KMODS=n
-CONFIG_ALL_NONSHARED=n
-CONFIG_DEVEL=y
-CONFIG_CCACHE=n
-CONFIG_TARGET_ROOTFS_INITRAMFS=y
-CONFIG_SDK=y
-CONFIG_STRIP_KERNEL_EXPORTS=y
-CONFIG_BUILD_PATENTED=y
-CONFIG_BUILD_NLS=y
-CONFIG_USE_LIBSTDCXX=y
-
-# 工具链配置
-CONFIG_EXTERNAL_TOOLCHAIN=n
-CONFIG_BUILD_TOOLCHAIN=y
-CONFIG_GCC_VERSION="${{ env.GCC_VERSION }}"
-CONFIG_BINUTILS_VERSION="${{ env.BINUTILS_VERSION }}"
-CONFIG_LINUX_VERSION="${{ env.LINUX_VERSION }}"
-CONFIG_USE_MUSL=${{ env.USE_MUSL }}
-
-# 目标配置
-CONFIG_TARGET_${{ env.TARGET }}=y
-CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y
-CONFIG_TARGET_ARCH="${{ env.ARCH_NAME }}"
-CONFIG_TARGET_PREFIX="${{ env.PREFIX }}-"
-
-# C库配置
-EOF
+          echo "# 基础配置" > .config
+          echo "CONFIG_ALL=n" >> .config
+          echo "CONFIG_ALL_KMODS=n" >> .config
+          echo "CONFIG_ALL_NONSHARED=n" >> .config
+          echo "CONFIG_DEVEL=y" >> .config
+          echo "CONFIG_CCACHE=n" >> .config
+          echo "CONFIG_TARGET_ROOTFS_INITRAMFS=y" >> .config
+          echo "CONFIG_SDK=y" >> .config
+          echo "CONFIG_STRIP_KERNEL_EXPORTS=y" >> .config
+          echo "CONFIG_BUILD_PATENTED=y" >> .config
+          echo "CONFIG_BUILD_NLS=y" >> .config
+          echo "CONFIG_USE_LIBSTDCXX=y" >> .config
+          echo "" >> .config
+          echo "# 工具链配置" >> .config
+          echo "CONFIG_EXTERNAL_TOOLCHAIN=n" >> .config
+          echo "CONFIG_BUILD_TOOLCHAIN=y" >> .config
+          echo "CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"" >> .config
+          echo "CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"" >> .config
+          echo "CONFIG_LINUX_VERSION=\"${{ env.LINUX_VERSION }}\"" >> .config
+          echo "CONFIG_USE_MUSL=${{ env.USE_MUSL }}" >> .config
+          echo "" >> .config
+          echo "# 目标配置" >> .config
+          echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> .config
+          echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
+          echo "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" >> .config
+          echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}\"" >> .config
+          echo "" >> .config
+          echo "# C库配置" >> .config
           
           if [ "${{ env.USE_MUSL }}" = "y" ]; then
             echo "CONFIG_MUSL_VERSION=\"${{ env.LIBC_VERSION }}\"" >> .config
@@ -1057,10 +1003,8 @@ EOF
           
           echo "步骤3: 创建site配置..."
           mkdir -p include/site
-          cat > include/site/${{ env.ARCH_NAME }} << EOF
-ac_cv_sys_file_offset_bits=64
-ac_cv_sys_large_files=yes
-EOF
+          echo "ac_cv_sys_file_offset_bits=64" > include/site/${{ env.ARCH_NAME }}
+          echo "ac_cv_sys_large_files=yes" >> include/site/${{ env.ARCH_NAME }}
           
           if [ "${{ env.ARCH_NAME }}" = "mips" ]; then
             echo "ac_cv_c_bigendian=yes" >> include/site/${{ env.ARCH_NAME }}
@@ -1454,7 +1398,6 @@ EOF
             echo "使用环境变量中的编译器路径: $COMPILER_PATH"
           else
             echo "重新查找编译器..."
-            # 修复数组定义
             SEARCH_PATTERNS=("staging_dir/toolchain-*/bin/*gcc" "staging_dir/host/bin/*gcc" "staging_dir/bin/*gcc")
             
             for pattern in "${SEARCH_PATTERNS[@]}"; do
@@ -1676,22 +1619,20 @@ EOF
             mkdir -p "$FINAL_OUTPUT_DIR/include"
             
             echo "创建说明文件..."
-            cat > "$FINAL_OUTPUT_DIR/README.txt" << EOF
-警告：编译器构建可能不完整
-=======================================
-此编译器构建过程中可能出现了问题。
-
-可能的原因：
-1. GMP库构建失败
-2. 工具链配置问题
-3. 构建环境不完整
-
-建议：
-1. 检查构建日志
-2. 重新运行构建
-3. 尝试不同的GCC版本
-=======================================
-EOF
+            echo "警告：编译器构建可能不完整" > "$FINAL_OUTPUT_DIR/README.txt"
+            echo "=======================================" >> "$FINAL_OUTPUT_DIR/README.txt"
+            echo "此编译器构建过程中可能出现了问题。" >> "$FINAL_OUTPUT_DIR/README.txt"
+            echo "" >> "$FINAL_OUTPUT_DIR/README.txt"
+            echo "可能的原因：" >> "$FINAL_OUTPUT_DIR/README.txt"
+            echo "1. GMP库构建失败" >> "$FINAL_OUTPUT_DIR/README.txt"
+            echo "2. 工具链配置问题" >> "$FINAL_OUTPUT_DIR/README.txt"
+            echo "3. 构建环境不完整" >> "$FINAL_OUTPUT_DIR/README.txt"
+            echo "" >> "$FINAL_OUTPUT_DIR/README.txt"
+            echo "建议：" >> "$FINAL_OUTPUT_DIR/README.txt"
+            echo "1. 检查构建日志" >> "$FINAL_OUTPUT_DIR/README.txt"
+            echo "2. 重新运行构建" >> "$FINAL_OUTPUT_DIR/README.txt"
+            echo "3. 尝试不同的GCC版本" >> "$FINAL_OUTPUT_DIR/README.txt"
+            echo "=======================================" >> "$FINAL_OUTPUT_DIR/README.txt"
           fi
           
           # 确定最终使用的GCC版本
@@ -1702,34 +1643,32 @@ EOF
           fi
           
           echo "创建元数据文件..."
-          cat > "$FINAL_OUTPUT_DIR/metadata.json" << EOF
-{
-  "architecture": "${{ env.ARCH_DIR }}",
-  "arch_name": "${{ env.ARCH_NAME }}",
-  "libc": "${{ env.LIBC_DIR }}",
-  "libc_version": "${{ env.LIBC_VERSION }}",
-  "target": "${{ env.TARGET }}",
-  "subtarget": "${{ env.SUBTARGET }}",
-  "compiler_prefix": "${{ env.PREFIX }}-",
-  "gcc_version": "$FINAL_GCC_VERSION",
-  "binutils_version": "${{ env.BINUTILS_VERSION }}",
-  "linux_version": "${{ env.LINUX_VERSION }}",
-  "openwrt_version": "${{ env.OPENWRT_VERSION }}",
-  "cpu_type": "${{ env.CPU_TYPE }}",
-  "tune": "${{ env.TUNE }}",
-  "abi": "${{ env.ABI }}",
-  "float_abi": "${{ env.FLOAT_ABI }}",
-  "build_date": "$(date -Iseconds)",
-  "workflow_run": "${{ github.run_id }}",
-  "build_id": "${{ env.BUILD_ID }}",
-  "target_triplet": "${{ env.TARGET_TRIPLET }}",
-  "actual_gcc_version": "$FINAL_GCC_VERSION",
-  "configured_gcc_version": "${{ env.GCC_VERSION }}",
-  "version_match": "${{ env.VERSION_MATCH == 'true' && 'yes' || 'no' }}",
-  "status": "${{ env.BUILD_COMPLETE == 'true' && 'complete' || 'partial' }}",
-  "notes": "实际GCC版本: $FINAL_GCC_VERSION，配置GCC版本: ${{ env.GCC_VERSION }}"
-}
-EOF
+          echo "{" > "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"architecture\": \"${{ env.ARCH_DIR }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"arch_name\": \"${{ env.ARCH_NAME }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"libc\": \"${{ env.LIBC_DIR }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"libc_version\": \"${{ env.LIBC_VERSION }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"target\": \"${{ env.TARGET }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"subtarget\": \"${{ env.SUBTARGET }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"compiler_prefix\": \"${{ env.PREFIX }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"gcc_version\": \"$FINAL_GCC_VERSION\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"binutils_version\": \"${{ env.BINUTILS_VERSION }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"linux_version\": \"${{ env.LINUX_VERSION }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"openwrt_version\": \"${{ env.OPENWRT_VERSION }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"cpu_type\": \"${{ env.CPU_TYPE }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"tune\": \"${{ env.TUNE }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"abi\": \"${{ env.ABI }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"float_abi\": \"${{ env.FLOAT_ABI }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"build_date\": \"$(date -Iseconds)\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"workflow_run\": \"${{ github.run_id }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"build_id\": \"${{ env.BUILD_ID }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"target_triplet\": \"${{ env.TARGET_TRIPLET }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"actual_gcc_version\": \"$FINAL_GCC_VERSION\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"configured_gcc_version\": \"${{ env.GCC_VERSION }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"version_match\": \"${{ env.VERSION_MATCH == 'true' && 'yes' || 'no' }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"status\": \"${{ env.BUILD_COMPLETE == 'true' && 'complete' || 'partial' }}\"," >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "  \"notes\": \"实际GCC版本: $FINAL_GCC_VERSION，配置GCC版本: ${{ env.GCC_VERSION }}\"" >> "$FINAL_OUTPUT_DIR/metadata.json"
+          echo "}" >> "$FINAL_OUTPUT_DIR/metadata.json"
           
           echo "计算成果大小..."
           TOTAL_SIZE=$(du -sh "$FINAL_OUTPUT_DIR" | cut -f1)
@@ -1774,15 +1713,15 @@ EOF
           if ! git diff --cached --quiet; then
             echo "检测到变更，创建提交..."
             git commit -m "build(compiler): 添加 ${{ env.ARCH_DIR }}-${{ env.LIBC_DIR }} 交叉编译器" \
-                       -m "架构: ${{ env.ARCH_DIR }}" \
-                       -m "C库: ${{ env.LIBC_DIR }} ${{ env.LIBC_VERSION }}" \
-                       -m "实际GCC: ${{ env.FINAL_GCC_VERSION }}" \
-                       -m "配置GCC: ${{ env.GCC_VERSION }}" \
-                       -m "版本匹配: ${{ env.VERSION_MATCH == 'true' && '是' || '否' }}" \
-                       -m "Binutils: ${{ env.BINUTILS_VERSION }}" \
-                       -m "大小: ${{ env.TOTAL_SIZE }}" \
-                       -m "状态: ${{ env.BUILD_COMPLETE == 'true' && '完成' || '部分完成' }}" \
-                       -m "工作流: #${{ github.run_id }}"
+              -m "架构: ${{ env.ARCH_DIR }}" \
+              -m "C库: ${{ env.LIBC_DIR }} ${{ env.LIBC_VERSION }}" \
+              -m "实际GCC: ${{ env.FINAL_GCC_VERSION }}" \
+              -m "配置GCC: ${{ env.GCC_VERSION }}" \
+              -m "版本匹配: ${{ env.VERSION_MATCH == 'true' && '是' || '否' }}" \
+              -m "Binutils: ${{ env.BINUTILS_VERSION }}" \
+              -m "大小: ${{ env.TOTAL_SIZE }}" \
+              -m "状态: ${{ env.BUILD_COMPLETE == 'true' && '完成' || '部分完成' }}" \
+              -m "工作流: #${{ github.run_id }}"
             
             echo "推送到仓库..."
             if git push origin main; then
