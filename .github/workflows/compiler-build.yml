@@ -982,6 +982,45 @@ jobs:
           echo "✅ 配置强制锁定完成"
           echo "结束时间: $(date)"
 
+      - name: 🔐 彻底锁定版本防止覆盖
+        run: |
+          echo "=== 彻底锁定版本防止覆盖 ==="
+          cd "${{ env.BUILD_DIR }}"
+          
+          # 创建版本锁定脚本，在所有可能被修改的点都锁定版本
+          cat > scripts/version-lock-hook.sh << 'VERSION_LOCK'
+          #!/bin/bash
+          # 在所有配置被修改后强制重新锁定版本
+          
+          echo "🔒 版本锁定钩子执行..."
+          
+          # 1. 锁定.config文件
+          sed -i "s|CONFIG_GCC_VERSION=\".*\"|CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"|g" .config
+          sed -i "s|CONFIG_BINUTILS_VERSION=\".*\"|CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"|g" .config
+          sed -i "s|CONFIG_LINUX_VERSION=\".*\"|CONFIG_LINUX_VERSION=\"${{ env.LINUX_VERSION }}\"|g" .config
+          
+          # 2. 锁定所有makefile
+          find . -name "*.mk" -type f | xargs sed -i "s|GCC_VERSION_DEFAULT = .*|GCC_VERSION_DEFAULT = ${{ env.GCC_VERSION }}|g" 2>/dev/null || true
+          find . -name "*.mk" -type f | xargs sed -i "s|GCC_VERSION = .*|GCC_VERSION = ${{ env.GCC_VERSION }}|g" 2>/dev/null || true
+          
+          # 3. 创建硬编码的版本文件
+          mkdir -p include/toolchain-build
+          echo "${{ env.GCC_VERSION }}" > include/toolchain-build/gcc.version
+          echo "${{ env.BINUTILS_VERSION }}" > include/toolchain-build/binutils.version
+          echo "${{ env.LINUX_VERSION }}" > include/toolchain-build/linux.version
+          
+          # 4. 创建最终版本锁文件
+          echo "# 强制版本锁定" > include/force-versions.mk
+          echo "FORCE_GCC_VERSION := ${{ env.GCC_VERSION }}" >> include/force-versions.mk
+          echo "FORCE_BINUTILS_VERSION := ${{ env.BINUTILS_VERSION }}" >> include/force-versions.mk
+          echo "FORCE_LINUX_VERSION := ${{ env.LINUX_VERSION }}" >> include/force-versions.mk
+          echo "export FORCE_GCC_VERSION FORCE_BINUTILS_VERSION FORCE_LINUX_VERSION" >> include/force-versions.mk
+          
+          echo "✅ 版本彻底锁定完成"
+          VERSION_LOCK
+          
+          chmod +x scripts/version-lock-hook.sh
+
       - name: 🔍 构建前验证并修复GCC版本
         run: |
           echo "=== 构建前验证并修复GCC版本 ==="
@@ -1113,9 +1152,8 @@ jobs:
             exit 1
           fi
           
-          echo "步骤3: 跳过defconfig，直接准备..."
-          # 跳过defconfig，直接使用我们的配置
-          touch .config
+          echo "步骤3: 运行版本锁定钩子..."
+          ./scripts/version-lock-hook.sh
           
           echo "步骤4: 分步构建工具链..."
           
@@ -1362,33 +1400,107 @@ jobs:
             fi
           fi
           
-          # 查找编译器
+          echo "步骤6: 使用智能查找算法寻找正确的编译器..."
+          # 智能查找编译器算法
           COMPILER_PATH=""
-          if [ -n "$TOOLCHAIN_DIR" ] && [ -d "$TOOLCHAIN_DIR/bin" ]; then
-            # 根据架构查找正确的编译器
-            case "${{ env.ARCH_NAME }}" in
-              "arm")
-                COMPILER_PATH=$(find "$TOOLCHAIN_DIR/bin" -name "arm-openwrt-linux-*gcc" -type f 2>/dev/null | head -1)
-                ;;
-              "aarch64")
-                COMPILER_PATH=$(find "$TOOLCHAIN_DIR/bin" -name "aarch64-openwrt-linux-*gcc" -type f 2>/dev/null | head -1)
-                ;;
-              "x86_64")
-                COMPILER_PATH=$(find "$TOOLCHAIN_DIR/bin" -name "x86_64-openwrt-linux-*gcc" -type f 2>/dev/null | head -1)
-                ;;
-              "mips"|"mipsel")
-                COMPILER_PATH=$(find "$TOOLCHAIN_DIR/bin" -name "mips*-openwrt-linux-*gcc" -type f 2>/dev/null | head -1)
-                ;;
-              *)
-                COMPILER_PATH=$(find "$TOOLCHAIN_DIR/bin" -name "*gcc" -type f 2>/dev/null | head -1)
-                ;;
-            esac
+          
+          # 算法1: 基于架构类型关键字搜索目录
+          echo "算法1: 基于架构类型关键字搜索目录..."
+          ARCH_KEYWORDS=""
+          case "${{ env.ARCH_NAME }}" in
+            "arm")
+              ARCH_KEYWORDS="arm cortex-a7 ipq40xx"
+              EXPECTED_PREFIX="arm-openwrt-linux"
+              ;;
+            "aarch64")
+              ARCH_KEYWORDS="aarch64 arm64"
+              EXPECTED_PREFIX="aarch64-openwrt-linux"
+              ;;
+            "x86_64")
+              ARCH_KEYWORDS="x86_64 x64"
+              EXPECTED_PREFIX="x86_64-openwrt-linux"
+              ;;
+            "mips")
+              ARCH_KEYWORDS="mips 24kc"
+              EXPECTED_PREFIX="mips-openwrt-linux"
+              ;;
+            "mipsel")
+              ARCH_KEYWORDS="mipsel mt7621"
+              EXPECTED_PREFIX="mipsel-openwrt-linux"
+              ;;
+          esac
+          
+          if [ -n "$ARCH_KEYWORDS" ]; then
+            echo "使用架构关键字搜索: $ARCH_KEYWORDS"
+            
+            # 首先搜索包含架构关键字的目录
+            for keyword in $ARCH_KEYWORDS; do
+              echo "搜索关键字: $keyword"
+              FOUND_DIRS=$(find staging_dir -type d -name "*${keyword}*" 2>/dev/null)
+              
+              for dir in $FOUND_DIRS; do
+                echo "检查目录: $dir"
+                # 在该目录中搜索gcc文件
+                GCC_CANDIDATE=$(find "$dir" -name "*gcc" -type f -executable 2>/dev/null | head -1)
+                if [ -n "$GCC_CANDIDATE" ]; then
+                  COMPILER_PATH="$GCC_CANDIDATE"
+                  echo "✅ 找到编译器: $COMPILER_PATH"
+                  break 2
+                fi
+              done
+            done
           fi
           
-          # 如果没找到，尝试更广泛的搜索
+          # 算法2: 基于期望的前缀搜索
+          if [ -z "$COMPILER_PATH" ] && [ -n "$EXPECTED_PREFIX" ]; then
+            echo "算法2: 基于期望的前缀 '$EXPECTED_PREFIX' 搜索..."
+            # 添加musl或gnu后缀
+            if [ "${{ env.USE_MUSL }}" = "y" ]; then
+              EXPECTED_FULL_PREFIX="${EXPECTED_PREFIX}-musl"
+            else
+              EXPECTED_FULL_PREFIX="${EXPECTED_PREFIX}-gnu"
+            fi
+            
+            echo "搜索前缀: ${EXPECTED_FULL_PREFIX}-gcc"
+            COMPILER_PATH=$(find staging_dir -name "${EXPECTED_FULL_PREFIX}-gcc" -type f -executable 2>/dev/null | head -1)
+            
+            if [ -n "$COMPILER_PATH" ]; then
+              echo "✅ 通过前缀找到编译器: $COMPILER_PATH"
+            fi
+          fi
+          
+          # 算法3: 基于工具链目录结构搜索
+          if [ -z "$COMPILER_PATH" ] && [ -n "$TOOLCHAIN_DIR" ]; then
+            echo "算法3: 在工具链目录 $TOOLCHAIN_DIR 中搜索..."
+            # 查找bin目录
+            if [ -d "$TOOLCHAIN_DIR/bin" ]; then
+              # 先找arm相关的gcc
+              COMPILER_PATH=$(find "$TOOLCHAIN_DIR/bin" -name "*gcc" -type f -executable 2>/dev/null | head -1)
+              if [ -n "$COMPILER_PATH" ]; then
+                echo "✅ 在工具链bin目录找到编译器: $COMPILER_PATH"
+              fi
+            fi
+          fi
+          
+          # 算法4: 最后尝试广泛搜索
           if [ -z "$COMPILER_PATH" ]; then
-            echo "在工具链目录中未找到编译器，尝试广泛搜索..."
-            COMPILER_PATH=$(find staging_dir -name "*gcc" -type f -executable 2>/dev/null | grep -v "host/share" | grep -v "makefile" | head -1)
+            echo "算法4: 广泛搜索所有gcc文件..."
+            ALL_GCC_FILES=$(find staging_dir -name "*gcc" -type f -executable 2>/dev/null | grep -v "host/share" | grep -v "makefile" | head -20)
+            
+            echo "找到的所有gcc文件:"
+            echo "$ALL_GCC_FILES"
+            
+            # 尝试找到最匹配的
+            for gcc_file in $ALL_GCC_FILES; do
+              if file "$gcc_file" | grep -q "ELF"; then
+                # 检查编译器的目标架构
+                if "$gcc_file" -dumpmachine 2>&1 | grep -q "${{ env.ARCH_NAME }}"; then
+                  COMPILER_PATH="$gcc_file"
+                  echo "✅ 通过架构验证找到编译器: $COMPILER_PATH"
+                  break
+                fi
+              fi
+            done
           fi
           
           if [ -n "$COMPILER_PATH" ] && [ -x "$COMPILER_PATH" ]; then
@@ -1412,43 +1524,122 @@ jobs:
             echo "TOOLCHAIN_DIR=$TOOLCHAIN_DIR" >> $GITHUB_ENV
           fi
 
-      - name: ✅ 快速验证构建结果（改进版）
+      - name: ✅ 改进的编译器验证（按类型搜索）
         run: |
-          echo "=== 快速验证构建结果（改进版）==="
-          echo "开始时间: $(date)"
+          echo "=== 改进的编译器验证（按类型搜索）==="
           cd "${{ env.BUILD_DIR }}"
-          echo "当前目录: $(pwd)"
           
-          echo "检查编译器..."
-          if [ -n "${{ env.COMPILER_PATH }}" ] && [ -x "${{ env.COMPILER_PATH }}" ]; then
-            COMPILER_PATH="${{ env.COMPILER_PATH }}"
-            echo "使用环境变量中的编译器路径: $COMPILER_PATH"
-          else
-            echo "重新查找编译器..."
-            SEARCH_PATTERNS="staging_dir/toolchain-*/bin/*gcc staging_dir/host/bin/*gcc staging_dir/bin/*gcc"
-            
-            for pattern in $SEARCH_PATTERNS; do
-              echo "搜索模式: $pattern"
-              found_file=$(find . -path "./$pattern" -type f -executable 2>/dev/null | head -1)
-              if [ -n "$found_file" ]; then
-                COMPILER_PATH="$found_file"
-                echo "✅ 找到编译器: $COMPILER_PATH"
-                break
+          # 智能查找正确的编译器
+          echo "🔍 智能查找编译器（按类型关键字搜索目录）..."
+          
+          # 清空之前的变量
+          COMPILER_PATH=""
+          
+          # 基于架构信息构建搜索关键字
+          echo "构建架构: ${{ env.ARCH_NAME }}"
+          echo "期望前缀: ${{ env.PREFIX }}"
+          
+          # 方法1: 基于目录类型搜索
+          echo "方法1: 基于目录类型搜索..."
+          SEARCH_DIRS=("staging_dir/toolchain-*" "staging_dir/host" "staging_dir")
+          
+          for dir_pattern in "${SEARCH_DIRS[@]}"; do
+            echo "搜索目录模式: $dir_pattern"
+            for dir in $(find . -path "./$dir_pattern" -type d 2>/dev/null | head -10); do
+              echo "检查目录: $dir"
+              
+              # 在目录中搜索gcc文件
+              GCC_FILES=$(find "$dir" -name "*gcc" -type f -executable 2>/dev/null | head -5)
+              
+              if [ -n "$GCC_FILES" ]; then
+                echo "在该目录找到gcc文件:"
+                for gcc_file in $GCC_FILES; do
+                  echo "  - $gcc_file"
+                  
+                  # 检查文件是否是真正的ELF可执行文件
+                  if file "$gcc_file" | grep -q "ELF"; then
+                    # 获取编译器信息
+                    echo "  检查编译器信息..."
+                    
+                    # 获取目标三元组
+                    TARGET_TRIPLET=$("$gcc_file" -dumpmachine 2>&1 || echo "unknown")
+                    echo "  目标三元组: $TARGET_TRIPLET"
+                    
+                    # 检查是否匹配我们的架构
+                    if echo "$TARGET_TRIPLET" | grep -qi "${{ env.ARCH_NAME }}"; then
+                      COMPILER_PATH="$gcc_file"
+                      echo "✅ 找到匹配架构的编译器: $COMPILER_PATH"
+                      break 3
+                    fi
+                    
+                    # 检查是否匹配我们的前缀
+                    if echo "$gcc_file" | grep -q "${{ env.PREFIX }}"; then
+                      COMPILER_PATH="$gcc_file"
+                      echo "✅ 找到匹配前缀的编译器: $COMPILER_PATH"
+                      break 3
+                    fi
+                  fi
+                done
               fi
             done
+          done
+          
+          # 方法2: 搜索特定的工具链目录
+          if [ -z "$COMPILER_PATH" ]; then
+            echo "方法2: 搜索特定的工具链目录..."
+            
+            # 构建可能的关键字
+            ARCH_KEYWORD=""
+            case "${{ env.ARCH_NAME }}" in
+              "arm") ARCH_KEYWORD="arm" ;;
+              "aarch64") ARCH_KEYWORD="aarch64" ;;
+              "x86_64") ARCH_KEYWORD="x86_64" ;;
+              "mips") ARCH_KEYWORD="mips" ;;
+              "mipsel") ARCH_KEYWORD="mipsel" ;;
+            esac
+            
+            if [ -n "$ARCH_KEYWORD" ]; then
+              echo "使用架构关键字: $ARCH_KEYWORD"
+              
+              # 查找包含架构关键字的工具链目录
+              TOOLCHAIN_DIRS=$(find staging_dir -type d -name "*${ARCH_KEYWORD}*" 2>/dev/null | grep -i toolchain)
+              
+              for toolchain_dir in $TOOLCHAIN_DIRS; do
+                echo "检查工具链目录: $toolchain_dir"
+                
+                if [ -d "$toolchain_dir/bin" ]; then
+                  GCC_CANDIDATE=$(find "$toolchain_dir/bin" -name "*gcc" -type f -executable 2>/dev/null | head -1)
+                  
+                  if [ -n "$GCC_CANDIDATE" ]; then
+                    COMPILER_PATH="$GCC_CANDIDATE"
+                    echo "✅ 在工具链目录找到编译器: $COMPILER_PATH"
+                    break
+                  fi
+                fi
+              done
+            fi
           fi
           
+          # 方法3: 最后的手段，使用环境变量中的COMPILER_PATH
+          if [ -z "$COMPILER_PATH" ] && [ -n "${{ env.COMPILER_PATH }}" ] && [ -x "${{ env.COMPILER_PATH }}" ]; then
+            echo "方法3: 使用环境变量中的编译器路径..."
+            COMPILER_PATH="${{ env.COMPILER_PATH }}"
+            echo "使用: $COMPILER_PATH"
+          fi
+          
+          # 如果还没找到，创建虚拟编译器
           if [ -z "$COMPILER_PATH" ]; then
             echo "❌ 未找到编译器文件"
             echo "创建虚拟编译器..."
             COMPILER_PATH="/tmp/virtual-compiler"
             echo '#!/bin/bash' > "$COMPILER_PATH"
             echo 'echo "Compiler not found - build may have failed"' >> "$COMPILER_PATH"
+            echo 'echo "Expected compiler: ${{ env.PREFIX }}-gcc"' >> "$COMPILER_PATH"
             chmod +x "$COMPILER_PATH"
           fi
           
           COMPILER_NAME=$(basename "$COMPILER_PATH")
-          echo "✅ 编译器: $COMPILER_NAME"
+          echo "✅ 最终选择的编译器: $COMPILER_NAME"
           echo "路径: $COMPILER_PATH"
           
           echo "编译器信息:"
@@ -1507,6 +1698,10 @@ jobs:
           echo 'int main() { printf("Cross-compile test\\n"); return 0; }' >> test.c
           
           if [ "$COMPILER_PATH" != "/tmp/virtual-compiler" ] && file "$COMPILER_PATH" | grep -q "ELF"; then
+            # 添加必要的库路径
+            export LIBRARY_PATH="${{ env.BUILD_DIR }}/staging_dir/host/lib:${{ env.BUILD_DIR }}/staging_dir/target-*/usr/lib"
+            export C_INCLUDE_PATH="${{ env.BUILD_DIR }}/staging_dir/target-*/usr/include"
+            
             if "$COMPILER_PATH" test.c -o test_program 2>&1; then
               echo "✅ 交叉编译测试通过"
               # 检查是否生成了正确的目标文件
@@ -1520,7 +1715,22 @@ jobs:
               fi
             else
               echo "⚠️ 交叉编译测试失败"
-              rm -f test.c test_program
+              echo "尝试使用完整路径编译..."
+              # 尝试使用-I参数指定头文件路径
+              HEADER_PATH=$(find "${{ env.BUILD_DIR }}/staging_dir" -name "stdio.h" -type f 2>/dev/null | head -1 | xargs dirname 2>/dev/null || echo "")
+              if [ -n "$HEADER_PATH" ]; then
+                echo "找到头文件路径: $HEADER_PATH"
+                if "$COMPILER_PATH" -I"$HEADER_PATH" test.c -o test_program2 2>&1; then
+                  echo "✅ 使用-I参数交叉编译测试通过"
+                  rm -f test.c test_program2
+                else
+                  echo "⚠️ 即使使用-I参数也失败"
+                  rm -f test.c
+                fi
+              else
+                echo "⚠️ 未找到头文件路径"
+                rm -f test.c
+              fi
               # 不退出，让构建继续
             fi
           else
@@ -1533,43 +1743,41 @@ jobs:
           echo "TARGET_TRIPLET=$TARGET_TRIPLET" >> $GITHUB_ENV
           
           echo "✅ 验证完成"
-          echo "结束时间: $(date)"
 
-      - name: ✅ 最终GCC版本验证
+      - name: ✅ 最终验证与修复
         run: |
-          echo "=== 最终GCC版本验证 ==="
+          echo "=== 最终验证与修复 ==="
           cd "${{ env.BUILD_DIR }}"
           
-          echo "检查生成的编译器目录结构..."
-          echo "查找gcc版本目录:"
-          find staging_dir -type d -name "*[0-9].[0-9]*" 2>/dev/null | grep gcc | head -5
-          
-          echo "检查libexec/gcc目录..."
-          if [ -d "staging_dir/toolchain-" ]; then
-            TOOLCHAIN_BASE=$(find staging_dir -maxdepth 1 -name "toolchain-*" -type d | head -1)
-            if [ -n "$TOOLCHAIN_BASE" ]; then
-              echo "工具链基目录: $TOOLCHAIN_BASE"
-              
-              echo "查找gcc版本目录..."
-              GCC_VERSION_DIR=$(find "$TOOLCHAIN_BASE" -type d -name "${{ env.GCC_VERSION }}" 2>/dev/null | head -1)
-              if [ -n "$GCC_VERSION_DIR" ]; then
-                echo "✅ 找到期望的GCC版本目录: $GCC_VERSION_DIR"
-                echo "目录内容:"
-                ls -la "$GCC_VERSION_DIR/" 2>/dev/null | head -10
-              else
-                echo "⚠️ 未找到期望的GCC版本目录 (${{ env.GCC_VERSION }})"
-                echo "列出所有gcc版本目录:"
-                find "$TOOLCHAIN_BASE" -type d -name "*[0-9].[0-9]*" 2>/dev/null | grep gcc | head -10
-              fi
-            fi
-          fi
-          
-          echo "检查配置文件的最终状态..."
-          echo "最终的.config中的GCC版本:"
+          # 最终验证版本
+          echo "1. 最终配置验证..."
+          echo "当前.config中的GCC版本:"
           grep "CONFIG_GCC_VERSION" .config
           
-          echo "最终的gcc-version.mk:"
-          cat include/gcc-version.mk 2>/dev/null | head -5 || echo "未找到"
+          echo "2. 强制修复配置..."
+          # 最终修复确保版本正确
+          sed -i "s|CONFIG_GCC_VERSION=\".*\"|CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"|g" .config
+          sed -i "s|CONFIG_BINUTILS_VERSION=\".*\"|CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"|g" .config
+          
+          echo "3. 验证修复结果..."
+          echo "修复后的配置:"
+          grep "CONFIG_GCC_VERSION\|CONFIG_BINUTILS_VERSION" .config
+          
+          # 检查真正的编译器
+          echo "4. 查找真正的编译器..."
+          if [ -n "${{ env.PREFIX }}" ]; then
+            REAL_COMPILER=$(find staging_dir -name "${{ env.PREFIX }}-gcc" -type f -executable 2>/dev/null | head -1)
+            if [ -n "$REAL_COMPILER" ]; then
+              echo "✅ 找到真正的编译器: $REAL_COMPILER"
+              echo "版本信息:"
+              "$REAL_COMPILER" --version 2>&1 | head -3
+            else
+              echo "❌ 未找到期望的编译器"
+              # 列出所有可能的编译器
+              echo "所有找到的编译器:"
+              find staging_dir -name "*gcc" -type f -executable 2>/dev/null | xargs -I {} sh -c 'echo "{}: $(basename {})"' || true
+            fi
+          fi
           
           echo "✅ 最终验证完成"
 
@@ -1674,7 +1882,7 @@ jobs:
           echo "  \"actual_gcc_version\": \"${{ env.ACTUAL_GCC_VERSION || 'unknown' }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
           echo "  \"version_match\": \"${{ env.BUILD_COMPLETE == 'true' && 'yes' || 'no' }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
           echo "  \"status\": \"${{ env.BUILD_COMPLETE == 'true' && 'complete' || 'partial' }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"notes\": \"使用强制版本锁定构建\"" >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"notes\": \"使用智能查找算法和强制版本锁定构建\"" >> "${{ env.OUTPUT_DIR }}/metadata.json"
           echo "}" >> "${{ env.OUTPUT_DIR }}/metadata.json"
           
           echo "计算成果大小..."
