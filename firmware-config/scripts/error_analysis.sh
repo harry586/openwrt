@@ -238,7 +238,7 @@ analyze_config_file() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 6. 检查编译器状态（改进版）
+# 6. 检查编译器状态（改进版 - 兼容GCC 8-15版本）
 check_compiler_status() {
     log "🔧 检查编译器状态..."
     
@@ -273,11 +273,14 @@ check_compiler_status() {
                 local version=$("$real_gcc" --version 2>&1 | head -1)
                 echo "     版本: $version" >> "$REPORT_FILE"
                 
-                # 检查GCC 11.x
-                if echo "$version" | grep -q "11\."; then
-                    echo "     ✅ GCC 11.x 版本正确" >> "$REPORT_FILE"
-                else
-                    echo "     ⚠️ 不是GCC 11.x 版本" >> "$REPORT_FILE"
+                # 检查GCC版本兼容性（8-15）
+                local major_version=$(echo "$version" | grep -o "[0-9]\+" | head -1)
+                if [ -n "$major_version" ]; then
+                    if [ "$major_version" -ge 8 ] && [ "$major_version" -le 15 ]; then
+                        echo "     ✅ GCC $major_version.x 版本兼容" >> "$REPORT_FILE"
+                    else
+                        echo "     ⚠️ GCC版本 $major_version.x 可能不兼容（期望8-15）" >> "$REPORT_FILE"
+                    fi
                 fi
             else
                 echo "  ⚠️ 未找到真正的GCC编译器" >> "$REPORT_FILE"
@@ -298,6 +301,37 @@ check_compiler_status() {
         else
             echo "❌ 未找到工具链目录" >> "$REPORT_FILE"
             echo "💡 工具链可能尚未编译完成" >> "$REPORT_FILE"
+        fi
+        
+        # 检查预构建编译器（如果设置了COMPILER_DIR）
+        if [ -n "${COMPILER_DIR}" ] && [ -d "${COMPILER_DIR}" ]; then
+            echo "" >> "$REPORT_FILE"
+            print_subheader "预构建编译器检查"
+            echo "🔍 预构建编译器目录: $COMPILER_DIR" >> "$REPORT_FILE"
+            
+            # 检查预构建编译器中的GCC
+            local prebuilt_gcc=$(find "$COMPILER_DIR" -type f -executable \
+                -name "*gcc" \
+                ! -name "*gcc-ar" \
+                ! -name "*gcc-ranlib" \
+                ! -name "*gcc-nm" \
+                2>/dev/null | head -1)
+            
+            if [ -n "$prebuilt_gcc" ]; then
+                echo "  ✅ 找到预构建GCC编译器: $(basename "$prebuilt_gcc")" >> "$REPORT_FILE"
+                
+                local version=$("$prebuilt_gcc" --version 2>&1 | head -1)
+                echo "     版本: $version" >> "$REPORT_FILE"
+                
+                # 检查是否被调用
+                if grep -q "$COMPILER_DIR" "$BUILD_DIR/build.log" 2>/dev/null; then
+                    echo "  🎯 预构建编译器被调用: 是" >> "$REPORT_FILE"
+                else
+                    echo "  🔄 预构建编译器被调用: 否" >> "$REPORT_FILE"
+                fi
+            else
+                echo "  ⚠️ 未找到预构建GCC编译器" >> "$REPORT_FILE"
+            fi
         fi
         
     else
@@ -397,7 +431,15 @@ analyze_build_log() {
             if grep -q "requires gcc\|gcc version" "$BUILD_DIR/build.log" 2>/dev/null; then
                 echo "❌ 检测到编译器版本错误" >> "$REPORT_FILE"
                 echo "💡 可能是GCC版本不匹配" >> "$REPORT_FILE"
-                echo "🛠️ 修复方法: 使用GCC 11.x版本" >> "$REPORT_FILE"
+                echo "🛠️ 修复方法: 使用GCC 8-15版本" >> "$REPORT_FILE"
+                echo "" >> "$REPORT_FILE"
+            fi
+            
+            # 预构建编译器相关错误
+            if [ -n "${COMPILER_DIR}" ] && grep -q "${COMPILER_DIR}" "$BUILD_DIR/build.log" 2>/dev/null; then
+                echo "❌ 检测到预构建编译器相关错误" >> "$REPORT_FILE"
+                echo "💡 预构建编译器可能不兼容" >> "$REPORT_FILE"
+                echo "🛠️ 修复方法: 检查预构建编译器完整性和版本" >> "$REPORT_FILE"
                 echo "" >> "$REPORT_FILE"
             fi
             
@@ -459,7 +501,7 @@ analyze_version_specific() {
     if [ -n "$SELECTED_BRANCH" ]; then
         if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             echo "🔧 OpenWrt 23.05 版本特性:" >> "$REPORT_FILE"
-            echo "  编译器: GCC 11.3.0" >> "$REPORT_FILE"
+            echo "  编译器: GCC 11.3.0 或更高" >> "$REPORT_FILE"
             echo "  内核: Linux 5.15" >> "$REPORT_FILE"
             echo "  musl: 1.2.3" >> "$REPORT_FILE"
             echo "  binutils: 2.38" >> "$REPORT_FILE"
@@ -470,7 +512,7 @@ analyze_version_specific() {
             echo "  2. 工具链构建错误 (toolchain/Makefile:93)" >> "$REPORT_FILE"
             echo "  3. 头文件缺失问题" >> "$REPORT_FILE"
             echo "  4. libtool版本兼容性问题" >> "$REPORT_FILE"
-            echo "  5. GCC 11.x 编译器兼容性问题" >> "$REPORT_FILE"
+            echo "  5. 编译器版本兼容性问题 (支持GCC 8-15)" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
             
             echo "🛠️ 解决方案:" >> "$REPORT_FILE"
@@ -478,7 +520,7 @@ analyze_version_specific() {
             echo "  2. 创建stamp标记文件" >> "$REPORT_FILE"
             echo "  3. 安装libtool和autoconf" >> "$REPORT_FILE"
             echo "  4. 设置-fpermissive编译标志" >> "$REPORT_FILE"
-            echo "  5. 确保使用GCC 11.x版本编译器" >> "$REPORT_FILE"
+            echo "  5. 确保使用GCC 8-15版本编译器" >> "$REPORT_FILE"
             
         elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
             echo "🔧 OpenWrt 21.02 版本特性:" >> "$REPORT_FILE"
@@ -569,9 +611,22 @@ generate_fix_suggestions() {
             echo "  💡 检测到GCC版本兼容性问题" >> "$REPORT_FILE"
             echo "  🛠️ 修复方法:" >> "$REPORT_FILE"
             echo "    1. 检查当前GCC版本: gcc --version" >> "$REPORT_FILE"
-            echo "    2. 确保使用GCC 11.x版本" >> "$REPORT_FILE"
+            echo "    2. 确保使用GCC 8-15版本" >> "$REPORT_FILE"
             echo "    3. 如果使用预构建编译器，验证编译器目录是否正确" >> "$REPORT_FILE"
             echo "    4. 检查预构建编译器是否是真正的GCC编译器，而不是工具链工具" >> "$REPORT_FILE"
+            echo "    5. 使用两步搜索法查找正确的编译器目录" >> "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+        fi
+        
+        # 预构建编译器相关错误
+        if [ -n "${COMPILER_DIR}" ] && grep -q "${COMPILER_DIR}" "$BUILD_DIR/build.log" 2>/dev/null; then
+            echo "🔧 预构建编译器错误修复:" >> "$REPORT_FILE"
+            echo "  💡 检测到预构建编译器相关问题" >> "$REPORT_FILE"
+            echo "  🛠️ 修复方法:" >> "$REPORT_FILE"
+            echo "    1. 检查预构建编译器目录: $COMPILER_DIR" >> "$REPORT_FILE"
+            echo "    2. 验证预构建编译器是否包含真正的GCC编译器" >> "$REPORT_FILE"
+            echo "    3. 检查预构建编译器版本兼容性" >> "$REPORT_FILE"
+            echo "    4. 暂时禁用预构建编译器: unset COMPILER_DIR" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
         fi
     fi
@@ -587,6 +642,7 @@ generate_fix_suggestions() {
     echo "🚀 快速修复命令:" >> "$REPORT_FILE"
     echo "  1. 一键清理重建: cd $BUILD_DIR && make clean && ./scripts/feeds update -a && ./scripts/feeds install -a && make defconfig && make -j2 V=s" >> "$REPORT_FILE"
     echo "  2. 仅重新编译: cd $BUILD_DIR && make -j1 V=s" >> "$REPORT_FILE"
+    echo "  3. 重新搜索编译器: firmware-config/scripts/build_firmware_main.sh initialize_compiler_env [设备名]" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
 }
 
@@ -628,6 +684,7 @@ generate_summary() {
     echo "  ✅ 构建日志: $(if [ $build_log_exists -eq 1 ]; then echo "存在 (错误: $error_count, 警告: $warning_count)"; else echo '缺失'; fi)" >> "$REPORT_FILE"
     echo "  ✅ 编译目录: $(if [ $staging_dir_exists -eq 1 ]; then echo '存在'; else echo '缺失'; fi)" >> "$REPORT_FILE"
     echo "  ✅ 固件生成: $(if [ $firmware_exists -eq 1 ]; then echo '成功'; else echo '失败'; fi)" >> "$REPORT_FILE"
+    echo "  🔧 编译器目录: $(if [ -n "${COMPILER_DIR}" ] && [ -d "${COMPILER_DIR}" ]; then echo '已设置'; else echo '未设置'; fi)" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
     # 状态评估
