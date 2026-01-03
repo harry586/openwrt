@@ -238,7 +238,7 @@ analyze_config_file() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 6. 检查编译器状态（改进版 - 兼容GCC 8-15版本）
+# 6. 检查编译器状态（增强版 - 兼容GCC 8-15版本）
 check_compiler_status() {
     log "🔧 检查编译器状态..."
     
@@ -307,6 +307,65 @@ check_compiler_status() {
         echo "❌ 编译目录不存在: staging_dir" >> "$REPORT_FILE"
         echo "💡 构建可能尚未开始或已清理" >> "$REPORT_FILE"
     fi
+    
+    # 编译器版本详细检查
+    print_subheader "编译器版本详细检查"
+    
+    # 查找所有可能的GCC编译器
+    local all_gcc_files=$(find "$BUILD_DIR" -type f -executable \
+      -name "*gcc" \
+      ! -name "*gcc-ar" \
+      ! -name "*gcc-ranlib" \
+      ! -name "*gcc-nm" \
+      2>/dev/null)
+    
+    local count=0
+    if [ -n "$all_gcc_files" ]; then
+        echo "$all_gcc_files" | head -5 | while read gcc_file; do
+            count=$((count + 1))
+            local version=$("$gcc_file" --version 2>&1 | head -1)
+            local dir_name=$(dirname "$gcc_file")
+            
+            echo "  🔍 编译器 #$count:" >> "$REPORT_FILE"
+            echo "      文件: $(basename "$gcc_file")" >> "$REPORT_FILE"
+            echo "      目录: $(echo "$dir_name" | sed "s|$BUILD_DIR/||")" >> "$REPORT_FILE"
+            echo "      版本: $version" >> "$REPORT_FILE"
+            
+            # 检查是否来自预构建目录
+            if [ -n "$COMPILER_DIR" ] && [[ "$gcc_file" == *"$COMPILER_DIR"* ]]; then
+                echo "      来源: 🎯 预构建编译器" >> "$REPORT_FILE"
+            else
+                echo "      来源: 🛠️ 自动构建" >> "$REPORT_FILE"
+            fi
+            
+            echo "" >> "$REPORT_FILE"
+        done
+    else
+        echo "  ⚠️ 未找到真正的GCC编译器" >> "$REPORT_FILE"
+    fi
+    
+    # 检查预构建编译器目录
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+        echo "  🔍 预构建编译器目录检查:" >> "$REPORT_FILE"
+        echo "      目录: $COMPILER_DIR" >> "$REPORT_FILE"
+        
+        local prebuilt_gcc=$(find "$COMPILER_DIR" -type f -executable \
+          -name "*gcc" \
+          ! -name "*gcc-ar" \
+          ! -name "*gcc-ranlib" \
+          ! -name "*gcc-nm" \
+          2>/dev/null | head -1)
+        
+        if [ -n "$prebuilt_gcc" ]; then
+            local prebuilt_version=$("$prebuilt_gcc" --version 2>&1 | head -1)
+            echo "      预构建GCC版本: $prebuilt_version" >> "$REPORT_FILE"
+        else
+            echo "      ⚠️ 预构建目录中未找到真正的GCC编译器" >> "$REPORT_FILE"
+        fi
+    else
+        echo "  ℹ️ 未设置预构建编译器目录" >> "$REPORT_FILE"
+    fi
+    
     echo "" >> "$REPORT_FILE"
 }
 
@@ -635,8 +694,33 @@ generate_summary() {
     echo "  ✅ 固件生成: $(if [ $firmware_exists -eq 1 ]; then echo '成功'; else echo '失败'; fi)" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
+    # 编译器来源分析
+    print_subheader "编译器来源分析"
+    
+    # 检查预构建编译器使用情况
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+        echo "  🎯 预构建编译器目录: $COMPILER_DIR" >> "$REPORT_FILE"
+        
+        # 检查是否实际使用了预构建编译器
+        if [ -f "$BUILD_DIR/build.log" ] && [ -s "$BUILD_DIR/build.log" ]; then
+            local prebuilt_calls=$(grep -c "$COMPILER_DIR" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
+            if [ $prebuilt_calls -gt 0 ]; then
+                echo "  ✅ 使用了预构建编译器" >> "$REPORT_FILE"
+                echo "     调用次数: $prebuilt_calls" >> "$REPORT_FILE"
+            else
+                echo "  🔄 未使用预构建编译器（使用自动构建）" >> "$REPORT_FILE"
+            fi
+        else
+            echo "  ℹ️ 无法确定编译器使用情况（无构建日志）" >> "$REPORT_FILE"
+        fi
+    else
+        echo "  🛠️ 未设置预构建编译器，使用自动构建" >> "$REPORT_FILE"
+    fi
+    
     # 状态评估
-    echo "📈 状态评估:" >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
+    print_subheader "状态评估"
+    
     if [ $firmware_exists -eq 1 ]; then
         echo "  🎉 状态: 构建成功！" >> "$REPORT_FILE"
         echo "  💡 建议: 固件已生成，可以准备刷机" >> "$REPORT_FILE"
@@ -659,7 +743,8 @@ generate_summary() {
     echo "" >> "$REPORT_FILE"
     
     # 下一步行动
-    echo "🚀 下一步行动建议:" >> "$REPORT_FILE"
+    print_subheader "下一步行动建议"
+    
     if [ $firmware_exists -eq 1 ]; then
         echo "  1. 📁 检查固件文件: ls -la $BUILD_DIR/bin/targets/" >> "$REPORT_FILE"
         echo "  2. 🔧 准备刷机工具" >> "$REPORT_FILE"
@@ -722,6 +807,15 @@ output_report() {
             grep -E "编译器版本|GCC|gcc" "$REPORT_FILE" | head -5
             echo ""
         fi
+        
+        # 显示编译器来源信息
+        echo "🔍 编译器来源信息:"
+        if grep -q "预构建编译器" "$REPORT_FILE"; then
+            grep -E "预构建编译器|自动构建" "$REPORT_FILE" | head -3
+        else
+            echo "ℹ️ 使用自动构建的编译器"
+        fi
+        echo ""
         
         # 显示完整报告
         echo "📁 完整报告位置:"
