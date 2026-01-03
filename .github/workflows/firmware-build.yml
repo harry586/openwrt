@@ -171,6 +171,7 @@ jobs:
       
       # 步骤 4: 深度检查编译器目录并智能查找正确的编译器文件（两步搜索法）
       - name: "4. 深度检查编译器目录并智能查找（两步搜索法）"
+        id: compiler_search
         run: |
           echo "=== 步骤 4: 深度检查编译器目录并智能查找（两步搜索法）==="
           
@@ -309,6 +310,9 @@ jobs:
             echo ""
             echo "✅ 找到编译器目录: $FOUND_COMPILER_DIR"
             echo "COMPILER_DIR=$FOUND_COMPILER_DIR" >> $GITHUB_ENV
+            
+            # 使用GitHub Actions输出供后续步骤使用
+            echo "compiler_dir=$FOUND_COMPILER_DIR" >> $GITHUB_OUTPUT
           else
             echo ""
             echo "❌ 未找到合适的编译器目录"
