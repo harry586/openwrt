@@ -37,11 +37,15 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      # 步骤 1: 使用Git Archive API下载源代码
-      - name: "1. 使用Git Archive API下载源代码"
+      # 步骤 1: 使用Git Archive API下载源代码（增强命名版）
+      - name: "1. 使用Git Archive API下载源代码（增强命名版）"
         run: |
-          echo "=== 步骤 1: 使用Git Archive API下载源代码 ==="
+          echo "=== 步骤 1: 使用Git Archive API下载源代码（增强命名版）==="
           echo "🔄 从GitHub API获取源代码压缩包..."
+          
+          # 获取时间戳
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          echo "时间戳: $TIMESTAMP"
           
           # 清空工作区
           echo "清空工作区..."
@@ -88,30 +92,40 @@ jobs:
               echo "ℹ️ 未发现编译器目录"
             fi
             
-            # 建立Artifacts目录
-            echo "📦 建立Artifacts目录..."
-            mkdir -p /tmp/build-artifacts/source-archive
+            # 创建带有日期时间的Artifacts目录
+            echo "📦 建立带时间戳的Artifacts目录..."
+            mkdir -p /tmp/build-artifacts/source-archive-$TIMESTAMP
             
-            # 从工作区直接创建排除编译器目录的精简源代码压缩包
-            echo "📦 创建排除编译器目录的精简源代码压缩包..."
+            # 创建排除编译器目录的精简源代码压缩包（带名称和日期）
+            echo "📦 创建排除编译器目录的精简源代码压缩包（带名称和日期）..."
             echo "源目录: ${{ github.workspace }}"
-            echo "Artifacts目录: /tmp/build-artifacts/source-archive/"
+            echo "Artifacts目录: /tmp/build-artifacts/source-archive-$TIMESTAMP/"
             
-            # 创建压缩包，排除编译器目录和.git目录
-            tar -czf /tmp/build-artifacts/source-archive/source-filtered.tar.gz \
+            # 主压缩包（带日期时间）
+            tar -czf /tmp/build-artifacts/source-archive-$TIMESTAMP/source-$TIMESTAMP.tar.gz \
               --exclude='firmware-config/build-Compiler-file' \
               --exclude='.git' \
               -C ${{ github.workspace }} .
             
-            echo "✅ 精简源代码压缩包创建完成"
+            # 次级压缩包（按类型分类）
+            tar -czf /tmp/build-artifacts/source-archive-$TIMESTAMP/scripts-$TIMESTAMP.tar.gz \
+              -C ${{ github.workspace }} firmware-config/scripts/
             
-            # 显示Artifacts内容和大小
-            echo "📋 显示Artifacts内容和大小..."
-            echo "Artifacts目录内容:"
-            ls -lh /tmp/build-artifacts/source-archive/
+            tar -czf /tmp/build-artifacts/source-archive-$TIMESTAMP/configs-$TIMESTAMP.tar.gz \
+              -C ${{ github.workspace }} firmware-config/custom-files/ firmware-config/config-backup/
+            
+            echo "✅ 带日期时间的源代码压缩包创建完成"
+            
+            # 显示详细信息
+            echo "📋 Artifacts详细信息:"
+            echo "主目录: /tmp/build-artifacts/source-archive-$TIMESTAMP/"
+            echo "文件列表:"
+            ls -lh /tmp/build-artifacts/source-archive-$TIMESTAMP/
             echo ""
-            echo "Artifacts总大小: $(du -sh /tmp/build-artifacts/source-archive | cut -f1)"
-            echo "压缩包大小: $(ls -lh /tmp/build-artifacts/source-archive/source-filtered.tar.gz | awk '{print $5}')"
+            echo "每个文件详情:"
+            for file in /tmp/build-artifacts/source-archive-$TIMESTAMP/*; do
+                echo "  $(basename "$file") - $(ls -lh "$file" | awk '{print $5}')"
+            done
             
             # 确保脚本文件有执行权限
             echo "🔧 设置脚本执行权限..."
@@ -138,12 +152,12 @@ jobs:
             exit 1
           fi
       
-      # 步骤 2: 上传精简源代码Artifacts
-      - name: "2. 上传精简源代码Artifacts"
+      # 步骤 2: 上传精简源代码Artifacts（带日期时间）
+      - name: "2. 上传精简源代码Artifacts（带日期时间）"
         uses: actions/upload-artifact@v4
         with:
-          name: filtered-source-${{ github.event.inputs.device_name }}
-          path: /tmp/build-artifacts/source-archive/
+          name: filtered-source-${{ github.event.inputs.device_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/build-artifacts/source-archive-*/
           retention-days: 7
           if-no-files-found: error
       
@@ -451,7 +465,7 @@ jobs:
       # 步骤 17: 下载依赖包（带重试）
       - name: "17. 下载依赖包（带重试）"
         run: |
-          echo "=== 步骤 17: 下载依赖包（带重试） ==="
+          echo "=== 步骤 17: 下载依赖包（带重试）==="
           
           # 最多重试3次
           for i in {1..3}; do
@@ -531,30 +545,97 @@ jobs:
           echo "🚀 开始编译..."
           firmware-config/scripts/build_firmware_main.sh build_firmware "true"
       
-      # 步骤 22: 搜索并打包构建产物
-      - name: "22. 搜索并打包构建产物"
+      # 步骤 22: 搜索并打包构建产物（增强版）
+      - name: "22. 搜索并打包构建产物（增强版）"
         if: success()
         run: |
-          echo "=== 步骤 22: 搜索并打包构建产物 ==="
+          echo "=== 步骤 22: 搜索并打包构建产物（增强版）==="
           cd ${{ env.BUILD_DIR }}
+          
+          # 获取时间戳
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
           
           # 创建构建产物目录
           mkdir -p /tmp/build-artifacts
+          mkdir -p /tmp/build-artifacts/firmware-details
           
-          # 打包固件文件
+          # 生成固件详情报告
+          echo "=== 固件详情报告 ===" > /tmp/build-artifacts/firmware-details/report.txt
+          echo "生成时间: $(date)" >> /tmp/build-artifacts/firmware-details/report.txt
+          echo "设备: ${{ github.event.inputs.device_name }}" >> /tmp/build-artifacts/firmware-details/report.txt
+          echo "版本: ${{ env.SELECTED_BRANCH }}" >> /tmp/build-artifacts/firmware-details/report.txt
+          echo "配置模式: ${{ github.event.inputs.config_mode }}" >> /tmp/build-artifacts/firmware-details/report.txt
+          echo "" >> /tmp/build-artifacts/firmware-details/report.txt
+          
+          # 检查并显示固件文件详情
           if [ -d "bin/targets" ]; then
-            echo "打包固件文件..."
-            tar -czf /tmp/build-artifacts/firmware.tar.gz -C bin targets/
-            echo "✅ 固件打包完成"
+            echo "✅ 找到固件目录" >> /tmp/build-artifacts/firmware-details/report.txt
+            
+            # 统计固件文件
+            local firmware_count=0
+            local total_size=0
+            
+            echo "📊 固件文件详情:" >> /tmp/build-artifacts/firmware-details/report.txt
+            echo "==========================================" >> /tmp/build-artifacts/firmware-details/report.txt
+            
+            find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) 2>/dev/null | while read file; do
+                firmware_count=$((firmware_count + 1))
+                local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                local bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
+                total_size=$((total_size + bytes))
+                
+                echo "📁 文件 #$firmware_count:" >> /tmp/build-artifacts/firmware-details/report.txt
+                echo "  名称: $(basename "$file")" >> /tmp/build-artifacts/firmware-details/report.txt
+                echo "  大小: $size ($bytes 字节)" >> /tmp/build-artifacts/firmware-details/report.txt
+                echo "  路径: $(echo "$file" | sed "s|$BUILD_DIR/||")" >> /tmp/build-artifacts/firmware-details/report.txt
+                echo "  类型: $(file -b "$file" 2>/dev/null | cut -c1-50 || echo "未知")" >> /tmp/build-artifacts/firmware-details/report.txt
+                echo "" >> /tmp/build-artifacts/firmware-details/report.txt
+            done
+            
+            echo "==========================================" >> /tmp/build-artifacts/firmware-details/report.txt
+            echo "📈 统计信息:" >> /tmp/build-artifacts/firmware-details/report.txt
+            echo "  固件总数: $firmware_count 个" >> /tmp/build-artifacts/firmware-details/report.txt
+            echo "  总大小: $(numfmt --to=iec $total_size)" >> /tmp/build-artifacts/firmware-details/report.txt
+            
+            # 按类型分类
+            echo "" >> /tmp/build-artifacts/firmware-details/report.txt
+            echo "🔍 按类型分类:" >> /tmp/build-artifacts/firmware-details/report.txt
+            
+            local initramfs_count=$(find bin/targets -name '*initramfs*' -type f 2>/dev/null | wc -l)
+            local squashfs_count=$(find bin/targets -name '*squashfs*' -type f 2>/dev/null | wc -l)
+            local sysupgrade_count=$(find bin/targets -name '*sysupgrade*' -type f 2>/dev/null | wc -l)
+            
+            echo "  initramfs: $initramfs_count 个" >> /tmp/build-artifacts/firmware-details/report.txt
+            echo "  squashfs: $squashfs_count 个" >> /tmp/build-artifacts/firmware-details/report.txt
+            echo "  sysupgrade: $sysupgrade_count 个" >> /tmp/build-artifacts/firmware-details/report.txt
+            
+            # 打包固件文件（带时间戳）
+            echo ""
+            echo "📦 打包固件文件（带时间戳）..."
+            tar -czf /tmp/build-artifacts/firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}-$TIMESTAMP.tar.gz -C bin targets/
+            echo "✅ 固件打包完成: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}-$TIMESTAMP.tar.gz"
+            
           else
+            echo "❌ 未找到固件目录" >> /tmp/build-artifacts/firmware-details/report.txt
             echo "⚠️ bin/targets目录不存在"
           fi
           
           # 打包编译日志
           if [ -f "build.log" ]; then
-            echo "打包编译日志..."
+            echo "📄 打包编译日志..."
             cp build.log /tmp/build-artifacts/build.log
             echo "✅ 日志打包完成"
+            
+            # 生成编译摘要
+            echo "=== 编译摘要 ===" > /tmp/build-artifacts/compile-summary.txt
+            echo "编译时间: $(date)" >> /tmp/build-artifacts/compile-summary.txt
+            echo "设备: ${{ github.event.inputs.device_name }}" >> /tmp/build-artifacts/compile-summary.txt
+            echo "版本: ${{ env.SELECTED_BRANCH }}" >> /tmp/build-artifacts/compile-summary.txt
+            echo "配置模式: ${{ github.event.inputs.config_mode }}" >> /tmp/build-artifacts/compile-summary.txt
+            echo "错误数: $(grep -c -i "error" build.log 2>/dev/null || echo "0")" >> /tmp/build-artifacts/compile-summary.txt
+            echo "警告数: $(grep -c -i "warning" build.log 2>/dev/null || echo "0")" >> /tmp/build-artifacts/compile-summary.txt
+            echo "编译结果: $([ -d "bin/targets" ] && echo "成功" || echo "失败")" >> /tmp/build-artifacts/compile-summary.txt
+            echo "生成时间: $TIMESTAMP" >> /tmp/build-artifacts/compile-summary.txt
           fi
           
           echo "✅ 构建产物准备完成"
@@ -579,11 +660,31 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 25: 执行错误分析
-      - name: "25. 执行错误分析"
+      # 步骤 25: 上传固件详情报告
+      - name: "25. 上传固件详情报告"
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-details-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
+          path: /tmp/build-artifacts/firmware-details/
+          retention-days: 7
+          if-no-files-found: warn
+      
+      # 步骤 26: 上传编译摘要
+      - name: "26. 上传编译摘要"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compile-summary-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}
+          path: /tmp/build-artifacts/compile-summary.txt
+          retention-days: 7
+          if-no-files-found: warn
+      
+      # 步骤 27: 执行错误分析
+      - name: "27. 执行错误分析"
         if: always()
         run: |
-          echo "=== 步骤 25: 执行错误分析 ==="
+          echo "=== 步骤 27: 执行错误分析 ==="
           
           # 检查错误分析脚本是否存在
           if [ -f "firmware-config/scripts/error_analysis.sh" ]; then
@@ -594,7 +695,7 @@ jobs:
             echo "⚠️ 错误分析脚本不存在"
           fi
       
-      # 步骤 26: 编译后空间检查
-      - name: "26. 编译后空间检查"
+      # 步骤 28: 编译后空间检查
+      - name: "28. 编译后空间检查"
         if: always()
         run: firmware-config/scripts/build_firmware_main.sh post_build_space_check
