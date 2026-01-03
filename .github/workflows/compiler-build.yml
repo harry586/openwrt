@@ -465,7 +465,7 @@ jobs:
     needs: [show-device-info, setup]
     if: needs.setup.outputs.need_build == 'true'
     runs-on: ubuntu-22.04
-    timeout-minutes: 300  # 增加总超时到300分钟
+    timeout-minutes: 300
     
     steps:
       - name: 📥 检出仓库
@@ -509,7 +509,7 @@ jobs:
           
           case "$ARCH" in
             arm_cortex-a7)
-              TARGET="ipq40xx"  # 修复：使用正确的目标
+              TARGET="ipq40xx"
               SUBTARGET="generic"
               ARCH_NAME="arm"
               ARCH_DIR="arm_cortex-a7"
@@ -853,48 +853,57 @@ jobs:
           echo "✅ 预下载完成"
           echo "结束时间: $(date)"
 
-      - name: 🔐 强制锁定配置（关键修复）
+      - name: 🔐 强制锁定配置（关键修复 - 方案1）
         run: |
-          echo "=== 强制锁定配置（关键修复）==="
+          echo "=== 强制锁定配置（关键修复 - 方案1）==="
           echo "开始时间: $(date)"
           cd "${{ env.BUILD_DIR }}"
-          echo "当前目录: $(pwd)"
           
-          echo "⚠️ 重要：防止OpenWrt默认配置覆盖我们的配置"
-          echo "步骤1: 删除所有可能干扰配置的文件..."
+          echo "⚠️ 重要：彻底锁定配置，防止覆盖"
+          
+          echo "步骤1: 完全清理配置..."
           rm -f .config .config.old .config.cmd 2>/dev/null || true
+          rm -rf tmp/ 2>/dev/null || true
           
-          echo "步骤2: 创建完整的.config文件..."
-          # 使用echo逐行写入
-          echo "# 基础配置" > .config
-          echo "CONFIG_ALL=n" >> .config
-          echo "CONFIG_ALL_KMODS=n" >> .config
-          echo "CONFIG_ALL_NONSHARED=n" >> .config
-          echo "CONFIG_DEVEL=y" >> .config
-          echo "CONFIG_CCACHE=n" >> .config
-          echo "CONFIG_TARGET_ROOTFS_INITRAMFS=y" >> .config
-          echo "CONFIG_SDK=y" >> .config
-          echo "CONFIG_STRIP_KERNEL_EXPORTS=y" >> .config
-          echo "CONFIG_BUILD_PATENTED=y" >> .config
-          echo "CONFIG_BUILD_NLS=y" >> .config
-          echo "CONFIG_USE_LIBSTDCXX=y" >> .config
-          echo "" >> .config
-          echo "# 工具链配置" >> .config
-          echo "CONFIG_EXTERNAL_TOOLCHAIN=n" >> .config
-          echo "CONFIG_BUILD_TOOLCHAIN=y" >> .config
-          echo "CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"" >> .config
-          echo "CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"" >> .config
-          echo "CONFIG_LINUX_VERSION=\"${{ env.LINUX_VERSION }}\"" >> .config
-          echo "CONFIG_USE_MUSL=${{ env.USE_MUSL }}" >> .config
-          echo "" >> .config
-          echo "# 目标配置" >> .config
-          echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> .config
-          echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
-          echo "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" >> .config
-          echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" >> .config
-          echo "" >> .config
-          echo "# C库配置" >> .config
+          echo "步骤2: 创建完整的.config文件（强制版本锁定）..."
+          cat > .config << 'EOF'
+# ========================================
+# 强制锁定的交叉编译器配置
+# ========================================
+
+# 基础配置
+CONFIG_ALL=n
+CONFIG_ALL_KMODS=n
+CONFIG_ALL_NONSHARED=n
+CONFIG_DEVEL=y
+CONFIG_CCACHE=n
+CONFIG_TARGET_ROOTFS_INITRAMFS=y
+CONFIG_SDK=y
+CONFIG_STRIP_KERNEL_EXPORTS=y
+CONFIG_BUILD_PATENTED=y
+CONFIG_BUILD_NLS=y
+CONFIG_USE_LIBSTDCXX=y
+CONFIG_STRIP_ARGS="--strip-all"
+
+# 工具链配置（强制锁定版本）
+CONFIG_EXTERNAL_TOOLCHAIN=n
+CONFIG_BUILD_TOOLCHAIN=y
+CONFIG_GCC_VERSION="${{ env.GCC_VERSION }}"
+CONFIG_BINUTILS_VERSION="${{ env.BINUTILS_VERSION }}"
+CONFIG_LINUX_VERSION="${{ env.LINUX_VERSION }}"
+CONFIG_USE_MUSL=${{ env.USE_MUSL }}
+CONFIG_GCC_USE_DEFAULT_SSP=n
+
+# 目标配置
+CONFIG_TARGET_${{ env.TARGET }}=y
+CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y
+CONFIG_TARGET_ARCH="${{ env.ARCH_NAME }}"
+CONFIG_TARGET_PREFIX="${{ env.PREFIX }}-"
+
+# C库配置
+EOF
           
+          # 根据C库类型添加配置
           if [ "${{ env.USE_MUSL }}" = "y" ]; then
             echo "CONFIG_MUSL_VERSION=\"${{ env.LIBC_VERSION }}\"" >> .config
           else
@@ -902,13 +911,16 @@ jobs:
           fi
           
           echo "" >> .config
-          echo "# 禁用所有其他目标（防止配置覆盖）" >> .config
+          echo "# 强制禁用所有其他目标" >> .config
           
-          # 列出所有可能的TARGET配置并禁用它们
+          # 禁用所有可能的其他目标
           TARGETS="ath79 ath79_generic bcm27xx bcm53xx ipq40xx ipq806x lantiq layerscape mediatek mpc85xx mvebu octeon octeontx oxnas pistachio ramips rockchip sunxi tegra x86 arc arm64 armsr bcm47xx bcm4908 bmips brcm2708 brcm47xx brcm63xx cns3xxx gemini imx6 kirkwood malta mxs omap orion pxa samsung sifiveu socfpga uml zynq"
           
           for target in $TARGETS; do
-            echo "CONFIG_TARGET_${target}=n" >> .config
+            if [ "$target" != "${{ env.TARGET }}" ]; then
+              echo "CONFIG_TARGET_${target}=n" >> .config
+              echo "CONFIG_TARGET_${target}_generic=n" >> .config
+            fi
           done
           
           echo "" >> .config
@@ -916,57 +928,132 @@ jobs:
           echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> .config
           echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
           
-          echo "步骤3: 创建site配置..."
-          mkdir -p include/site
-          echo "ac_cv_sys_file_offset_bits=64" > include/site/${{ env.ARCH_NAME }}
-          echo "ac_cv_sys_large_files=yes" >> include/site/${{ env.ARCH_NAME }}
+          echo "步骤3: 创建强制的feeds.conf文件..."
+          cat > feeds.conf << 'EOF'
+src-git-full packages https://git.openwrt.org/feed/packages.git^${{ env.OPENWRT_VERSION }}
+src-git-full luci https://git.openwrt.org/project/luci.git^${{ env.OPENWRT_VERSION }}
+src-git-full routing https://git.openwrt.org/feed/routing.git^${{ env.OPENWRT_VERSION }}
+src-git-full telephony https://git.openwrt.org/feed/telephony.git^${{ env.OPENWRT_VERSION }}
+EOF
           
-          if [ "${{ env.ARCH_NAME }}" = "mips" ]; then
-            echo "ac_cv_c_bigendian=yes" >> include/site/${{ env.ARCH_NAME }}
-          else
-            echo "ac_cv_c_bigendian=no" >> include/site/${{ env.ARCH_NAME }}
-          fi
+          echo "步骤4: 直接写入arch配置，绕过defconfig..."
+          mkdir -p target/linux/${{ env.TARGET }}
           
-          echo "步骤4: 显示生成的配置..."
-          echo "当前配置摘要:"
+          # 创建arch.mk文件，强制指定GCC版本
+          cat > target/linux/${{ env.TARGET }}/Makefile << EOF
+# 强制架构配置
+ifeq (\$(CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}),y)
+ARCH:=${{ env.ARCH_NAME }}
+BOARD:=${{ env.TARGET }}
+BOARDNAME:=${{ env.TARGET }}_${{ env.SUBTARGET }}
+FEATURES:=squashfs
+MAINTAINER:=Custom Build
+EOF
+          
+          echo "步骤5: 创建版本锁定脚本..."
+          cat > scripts/force-gcc-version.sh << EOF
+#!/bin/sh
+# 强制锁定GCC版本脚本
+
+echo "=== 强制锁定GCC版本为 ${{ env.GCC_VERSION }} ==="
+
+# 修改gcc-common.mk，防止版本被覆盖
+sed -i "s/DEFAULT_GCC_VERSION = .*/DEFAULT_GCC_VERSION = ${{ env.GCC_VERSION }}/" include/gcc-common.mk 2>/dev/null || true
+sed -i "s/GCC_VERSION_DEFAULT = .*/GCC_VERSION_DEFAULT = ${{ env.GCC_VERSION }}/" include/gcc-version.mk 2>/dev/null || true
+
+# 直接修改gcc-version.mk
+echo "GCC_VERSION_DEFAULT=${{ env.GCC_VERSION }}" > include/gcc-version.mk
+echo "GCC_VERSION=${{ env.GCC_VERSION }}" >> include/gcc-version.mk
+
+# 确保版本文件存在
+mkdir -p include/toolchain-build
+echo "${{ env.GCC_VERSION }}" > include/toolchain-build/gcc.version
+echo "${{ env.BINUTILS_VERSION }}" > include/toolchain-build/binutils.version
+
+# 修改内核版本配置
+sed -i "s/LINUX_VERSION:=[0-9.]*/LINUX_VERSION:=${{ env.LINUX_VERSION }}/" include/kernel-version.mk 2>/dev/null || true
+
+echo "✅ GCC版本锁定完成"
+EOF
+          
+          chmod +x scripts/force-gcc-version.sh
+          
+          echo "步骤6: 运行版本锁定脚本..."
+          ./scripts/force-gcc-version.sh
+          
+          echo "步骤7: 验证配置..."
+          echo "当前.config内容:"
           echo "------------------------------"
-          grep -E "CONFIG_TARGET_|CONFIG_GCC|CONFIG_BINUTILS|CONFIG_.*LIBC|CONFIG_USE_MUSL|CONFIG_BUILD_TOOLCHAIN|CONFIG_TARGET_ARCH" .config
+          grep -E "CONFIG_GCC_VERSION|CONFIG_BINUTILS_VERSION|CONFIG_TARGET|CONFIG_ARCH" .config
           echo "------------------------------"
           
-          echo "步骤5: 验证配置完整性..."
-          ALL_CORRECT=true
-          
-          if grep -q "CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"" .config; then
-            echo "✅ GCC版本验证通过"
-          else
-            echo "❌ GCC版本验证失败"
-            ALL_CORRECT=false
-          fi
-          
-          if grep -q "CONFIG_TARGET_${{ env.TARGET }}=y" .config; then
-            echo "✅ 目标验证通过: ${{ env.TARGET }}"
-          else
-            echo "❌ 目标验证失败"
-            ALL_CORRECT=false
-          fi
-          
-          if grep -q "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" .config; then
-            echo "✅ 架构验证通过: ${{ env.ARCH_NAME }}"
-          else
-            echo "❌ 架构验证失败"
-            ALL_CORRECT=false
-          fi
-          
-          if [ "$ALL_CORRECT" = true ]; then
-            echo "✅ 所有配置验证通过"
-          else
-            echo "❌ 配置验证失败，显示当前配置..."
-            cat .config
-            exit 1
-          fi
+          echo "检查GCC版本文件:"
+          cat include/gcc-version.mk 2>/dev/null || echo "未找到gcc-version.mk"
           
           echo "✅ 配置强制锁定完成"
           echo "结束时间: $(date)"
+
+      - name: 🔍 构建前验证并修复GCC版本
+        run: |
+          echo "=== 构建前验证并修复GCC版本 ==="
+          cd "${{ env.BUILD_DIR }}"
+          
+          echo "1. 检查当前配置的GCC版本..."
+          CONFIG_GCC=$(grep 'CONFIG_GCC_VERSION=' .config | cut -d'"' -f2)
+          echo "配置中的GCC版本: $CONFIG_GCC"
+          echo "期望的GCC版本: ${{ env.GCC_VERSION }}"
+          
+          if [ "$CONFIG_GCC" != "${{ env.GCC_VERSION }}" ]; then
+            echo "❌ 配置不匹配！正在修复..."
+            sed -i "s/CONFIG_GCC_VERSION=\".*\"/CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"/" .config
+            echo "✅ 已修复配置"
+          fi
+          
+          echo "2. 检查OpenWrt默认版本设置..."
+          if [ -f "include/gcc-version.mk" ]; then
+            echo "检查并修复gcc-version.mk..."
+            if ! grep -q "GCC_VERSION_DEFAULT = ${{ env.GCC_VERSION }}" include/gcc-version.mk; then
+              echo "修复gcc-version.mk..."
+              sed -i "s/GCC_VERSION_DEFAULT = .*/GCC_VERSION_DEFAULT = ${{ env.GCC_VERSION }}/" include/gcc-version.mk
+              sed -i "s/GCC_VERSION = .*/GCC_VERSION = ${{ env.GCC_VERSION }}/" include/gcc-version.mk
+              echo "✅ gcc-version.mk已修复"
+            else
+              echo "✅ gcc-version.mk已正确设置"
+            fi
+          else
+            echo "⚠️ 未找到gcc-version.mk，创建它..."
+            mkdir -p include
+            echo "GCC_VERSION_DEFAULT=${{ env.GCC_VERSION }}" > include/gcc-version.mk
+            echo "GCC_VERSION=${{ env.GCC_VERSION }}" >> include/gcc-version.mk
+          fi
+          
+          echo "3. 检查内核版本..."
+          if [ -f "include/kernel-version.mk" ]; then
+            echo "检查内核版本..."
+            KERNEL_VERSION=$(grep "LINUX_VERSION:=" include/kernel-version.mk | cut -d= -f2)
+            echo "当前内核版本: $KERNEL_VERSION"
+            echo "期望内核版本: ${{ env.LINUX_VERSION }}"
+            
+            if [ "$KERNEL_VERSION" != "${{ env.LINUX_VERSION }}" ]; then
+              echo "修复内核版本..."
+              sed -i "s/LINUX_VERSION:=[0-9.]*/LINUX_VERSION:=${{ env.LINUX_VERSION }}/" include/kernel-version.mk
+            fi
+          fi
+          
+          echo "4. 创建版本锁定文件..."
+          mkdir -p include/toolchain-build
+          echo "${{ env.GCC_VERSION }}" > include/toolchain-build/gcc.version
+          echo "${{ env.BINUTILS_VERSION }}" > include/toolchain-build/binutils.version
+          echo "${{ env.LINUX_VERSION }}" > include/toolchain-build/linux.version
+          
+          echo "5. 最终验证..."
+          echo "配置中的GCC版本: $(grep 'CONFIG_GCC_VERSION=' .config | cut -d'"' -f2)"
+          echo "gcc-version.mk中的版本:"
+          grep "GCC_VERSION" include/gcc-version.mk 2>/dev/null || echo "未找到"
+          echo "版本文件内容:"
+          cat include/toolchain-build/gcc.version 2>/dev/null || echo "未找到"
+          
+          echo "✅ 版本验证修复完成"
 
       - name: 🛠️ 修复GMP构建问题（改进版）
         run: |
@@ -1322,8 +1409,6 @@ jobs:
             "$COMPILER_PATH" --version 2>&1 | head -3 || echo "⚠️ 无法获取版本信息"
           else
             echo "⚠️ 未找到真正的编译器文件"
-            echo "列出可能的编译器位置:"
-            find staging_dir -type f -name "*gcc" 2>/dev/null | grep -v "host/share" | head -10
             echo "创建虚拟编译器以便继续..."
             COMPILER_PATH="/tmp/virtual-gcc"
             echo '#!/bin/bash' > "$COMPILER_PATH"
@@ -1367,8 +1452,6 @@ jobs:
           
           if [ -z "$COMPILER_PATH" ]; then
             echo "❌ 未找到编译器文件"
-            echo "列出构建目录结构..."
-            find staging_dir -type d -name "*toolchain*" 2>/dev/null | head -10
             echo "创建虚拟编译器..."
             COMPILER_PATH="/tmp/virtual-compiler"
             echo '#!/bin/bash' > "$COMPILER_PATH"
@@ -1383,13 +1466,40 @@ jobs:
           echo "编译器信息:"
           if [ "$COMPILER_PATH" != "/tmp/virtual-compiler" ]; then
             if file "$COMPILER_PATH" | grep -q "ELF"; then
-              "$COMPILER_PATH" --version 2>&1 | head -3 || echo "⚠️ 无法获取版本信息"
+              echo "编译器版本信息:"
+              "$COMPILER_PATH" --version 2>&1 | head -5 || echo "⚠️ 无法获取版本信息"
+              
+              # 提取实际的GCC版本
+              ACTUAL_GCC_VERSION=$("$COMPILER_PATH" --version 2>&1 | head -1 | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+')
+              EXPECTED_GCC_VERSION="${{ env.GCC_VERSION }}"
+              
+              if [ -n "$ACTUAL_GCC_VERSION" ]; then
+                echo "检测到的GCC版本: $ACTUAL_GCC_VERSION"
+                echo "期望的GCC版本: $EXPECTED_GCC_VERSION"
+                
+                if [ "$ACTUAL_GCC_VERSION" = "$EXPECTED_GCC_VERSION" ]; then
+                  echo "✅ GCC版本匹配！"
+                  echo "BUILD_COMPLETE=true" >> $GITHUB_ENV
+                  echo "ACTUAL_GCC_VERSION=$ACTUAL_GCC_VERSION" >> $GITHUB_ENV
+                else
+                  echo "❌ GCC版本不匹配！"
+                  echo "实际版本: $ACTUAL_GCC_VERSION"
+                  echo "期望版本: $EXPECTED_GCC_VERSION"
+                  echo "BUILD_COMPLETE=false" >> $GITHUB_ENV
+                  echo "VERSION_MISMATCH=true" >> $GITHUB_ENV
+                fi
+              else
+                echo "⚠️ 无法提取GCC版本"
+                echo "BUILD_COMPLETE=false" >> $GITHUB_ENV
+              fi
             else
               echo "⚠️ 文件不是可执行ELF文件"
               head -5 "$COMPILER_PATH" 2>/dev/null || true
+              echo "BUILD_COMPLETE=false" >> $GITHUB_ENV
             fi
           else
             echo "虚拟编译器 - 无版本信息"
+            echo "BUILD_COMPLETE=false" >> $GITHUB_ENV
           fi
           
           echo "目标三元组:"
@@ -1415,7 +1525,6 @@ jobs:
               if file test_program 2>/dev/null | grep -q "${{ env.ARCH_NAME }}"; then
                 echo "✅ 生成了正确的目标架构文件"
                 rm -f test.c test_program
-                echo "BUILD_COMPLETE=true" >> $GITHUB_ENV
               else
                 echo "⚠️ 文件架构不匹配"
                 file test_program 2>/dev/null || true
@@ -1437,6 +1546,44 @@ jobs:
           
           echo "✅ 验证完成"
           echo "结束时间: $(date)"
+
+      - name: ✅ 最终GCC版本验证
+        run: |
+          echo "=== 最终GCC版本验证 ==="
+          cd "${{ env.BUILD_DIR }}"
+          
+          echo "检查生成的编译器目录结构..."
+          echo "查找gcc版本目录:"
+          find staging_dir -type d -name "*[0-9].[0-9]*" 2>/dev/null | grep gcc | head -5
+          
+          echo "检查libexec/gcc目录..."
+          if [ -d "staging_dir/toolchain-" ]; then
+            TOOLCHAIN_BASE=$(find staging_dir -maxdepth 1 -name "toolchain-*" -type d | head -1)
+            if [ -n "$TOOLCHAIN_BASE" ]; then
+              echo "工具链基目录: $TOOLCHAIN_BASE"
+              
+              echo "查找gcc版本目录..."
+              GCC_VERSION_DIR=$(find "$TOOLCHAIN_BASE" -type d -name "${{ env.GCC_VERSION }}" 2>/dev/null | head -1)
+              if [ -n "$GCC_VERSION_DIR" ]; then
+                echo "✅ 找到期望的GCC版本目录: $GCC_VERSION_DIR"
+                echo "目录内容:"
+                ls -la "$GCC_VERSION_DIR/" 2>/dev/null | head -10
+              else
+                echo "⚠️ 未找到期望的GCC版本目录 (${{ env.GCC_VERSION }})"
+                echo "列出所有gcc版本目录:"
+                find "$TOOLCHAIN_BASE" -type d -name "*[0-9].[0-9]*" 2>/dev/null | grep gcc | head -10
+              fi
+            fi
+          fi
+          
+          echo "检查配置文件的最终状态..."
+          echo "最终的.config中的GCC版本:"
+          grep "CONFIG_GCC_VERSION" .config
+          
+          echo "最终的gcc-version.mk:"
+          cat include/gcc-version.mk 2>/dev/null | head -5 || echo "未找到"
+          
+          echo "✅ 最终验证完成"
 
       - name: 💾 保存编译器
         if: env.TOOLCHAIN_DIR != ''
@@ -1475,7 +1622,6 @@ jobs:
             fi
           else
             echo "尝试查找替代工具链位置..."
-            # 修复数组定义，在一行内完成
             ALTERNATIVE_DIRS=("staging_dir" "staging_dir/toolchain-*" "staging_dir/host" "build_dir/target-*")
             
             found_files=false
@@ -1516,30 +1662,34 @@ jobs:
             fi
           fi
           
-          echo "创建元数据文件..."
-          echo "{" > "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"architecture\": \"${{ env.ARCH_DIR }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"arch_name\": \"${{ env.ARCH_NAME }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"libc\": \"${{ env.LIBC_DIR }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"libc_version\": \"${{ env.LIBC_VERSION }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"target\": \"${{ env.TARGET }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"subtarget\": \"${{ env.SUBTARGET }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"compiler_prefix\": \"${{ env.PREFIX }}-\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"gcc_version\": \"${{ env.GCC_VERSION }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"binutils_version\": \"${{ env.BINUTILS_VERSION }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"linux_version\": \"${{ env.LINUX_VERSION }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"openwrt_version\": \"${{ env.OPENWRT_VERSION }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"cpu_type\": \"${{ env.CPU_TYPE }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"tune\": \"${{ env.TUNE }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"abi\": \"${{ env.ABI }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"float_abi\": \"${{ env.FLOAT_ABI }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"build_date\": \"$(date -Iseconds)\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"workflow_run\": \"${{ github.run_id }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"build_id\": \"${{ env.BUILD_ID }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"target_triplet\": \"${{ env.TARGET_TRIPLET }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"status\": \"${{ env.BUILD_COMPLETE == 'true' && 'complete' || 'partial' }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"notes\": \"可能包含GMP构建问题\"" >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "}" >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "创建详细的元数据文件..."
+          cat > "${{ env.OUTPUT_DIR }}/metadata.json" << EOF
+{
+  "architecture": "${{ env.ARCH_DIR }}",
+  "arch_name": "${{ env.ARCH_NAME }}",
+  "libc": "${{ env.LIBC_DIR }}",
+  "libc_version": "${{ env.LIBC_VERSION }}",
+  "target": "${{ env.TARGET }}",
+  "subtarget": "${{ env.SUBTARGET }}",
+  "compiler_prefix": "${{ env.PREFIX }}-",
+  "gcc_version": "${{ env.GCC_VERSION }}",
+  "binutils_version": "${{ env.BINUTILS_VERSION }}",
+  "linux_version": "${{ env.LINUX_VERSION }}",
+  "openwrt_version": "${{ env.OPENWRT_VERSION }}",
+  "cpu_type": "${{ env.CPU_TYPE }}",
+  "tune": "${{ env.TUNE }}",
+  "abi": "${{ env.ABI }}",
+  "float_abi": "${{ env.FLOAT_ABI }}",
+  "build_date": "$(date -Iseconds)",
+  "workflow_run": "${{ github.run_id }}",
+  "build_id": "${{ env.BUILD_ID }}",
+  "target_triplet": "${{ env.TARGET_TRIPLET }}",
+  "actual_gcc_version": "${{ env.ACTUAL_GCC_VERSION || 'unknown' }}",
+  "version_match": "${{ env.BUILD_COMPLETE == 'true' && 'yes' || 'no' }}",
+  "status": "${{ env.BUILD_COMPLETE == 'true' && 'complete' || 'partial' }}",
+  "notes": "使用强制版本锁定构建"
+}
+EOF
           
           echo "计算成果大小..."
           TOTAL_SIZE=$(du -sh "${{ env.OUTPUT_DIR }}" | cut -f1)
@@ -1551,7 +1701,9 @@ jobs:
           echo "- 文件数量: $FILE_COUNT"
           echo "- 架构: ${{ env.ARCH_DIR }}"
           echo "- C库: ${{ env.LIBC_DIR }}"
-          echo "- GCC版本: ${{ env.GCC_VERSION }}"
+          echo "- 期望GCC版本: ${{ env.GCC_VERSION }}"
+          echo "- 实际GCC版本: ${{ env.ACTUAL_GCC_VERSION || 'unknown' }}"
+          echo "- 版本匹配: ${{ env.BUILD_COMPLETE == 'true' && '是' || '否' }}"
           echo "- 构建状态: ${{ env.BUILD_COMPLETE == 'true' && '完成' || '部分完成' }}"
           
           echo "TOTAL_SIZE=$TOTAL_SIZE" >> $GITHUB_ENV
@@ -1579,8 +1731,16 @@ jobs:
           
           if ! git diff --cached --quiet; then
             echo "检测到变更，创建提交..."
-            # 简化commit message，使用多个 -m 参数
-            git commit -m "build(compiler): 添加 ${{ env.ARCH_DIR }}-${{ env.LIBC_DIR }} 交叉编译器" -m "架构: ${{ env.ARCH_DIR }}" -m "C库: ${{ env.LIBC_DIR }} ${{ env.LIBC_VERSION }}" -m "GCC: ${{ env.GCC_VERSION }}" -m "Binutils: ${{ env.BINUTILS_VERSION }}" -m "大小: ${{ env.TOTAL_SIZE }}" -m "状态: ${{ env.BUILD_COMPLETE == 'true' && '完成' || '部分完成' }}" -m "工作流: #${{ github.run_id }}"
+            COMMIT_MSG="build(compiler): 添加 ${{ env.ARCH_DIR }}-${{ env.LIBC_DIR }} 交叉编译器"
+            COMMIT_MSG="$COMMIT_MSG\n架构: ${{ env.ARCH_DIR }}"
+            COMMIT_MSG="$COMMIT_MSG\nC库: ${{ env.LIBC_DIR }} ${{ env.LIBC_VERSION }}"
+            COMMIT_MSG="$COMMIT_MSG\n期望GCC: ${{ env.GCC_VERSION }}"
+            COMMIT_MSG="$COMMIT_MSG\n实际GCC: ${{ env.ACTUAL_GCC_VERSION || 'unknown' }}"
+            COMMIT_MSG="$COMMIT_MSG\n版本匹配: ${{ env.BUILD_COMPLETE == 'true' && '是' || '否' }}"
+            COMMIT_MSG="$COMMIT_MSG\n大小: ${{ env.TOTAL_SIZE }}"
+            COMMIT_MSG="$COMMIT_MSG\n工作流: #${{ github.run_id }}"
+            
+            echo -e "$COMMIT_MSG" | git commit -F -
             
             echo "推送到仓库..."
             if git push origin main; then
@@ -1605,21 +1765,28 @@ jobs:
           
           if [ "${{ env.BUILD_COMPLETE }}" = "true" ]; then
             echo "✅ 交叉编译器构建成功!"
+            echo "   ✅ GCC版本匹配正确!"
           else
-            echo "⚠️ 交叉编译器构建部分完成"
+            if [ "${{ env.VERSION_MISMATCH }}" = "true" ]; then
+              echo "⚠️ 交叉编译器构建完成但版本不匹配!"
+            else
+              echo "⚠️ 交叉编译器构建部分完成"
+            fi
           fi
           
           echo ""
           echo "📊 构建信息:"
           echo "- 架构: ${{ env.ARCH_DIR }} (${{ env.ARCH_NAME }})"
           echo "- C库: ${{ env.LIBC_DIR }} ${{ env.LIBC_VERSION }}"
-          echo "- GCC版本: ${{ env.GCC_VERSION }}"
+          echo "- 期望GCC版本: ${{ env.GCC_VERSION }}"
+          echo "- 实际GCC版本: ${{ env.ACTUAL_GCC_VERSION || '未知' }}"
           echo "- Binutils版本: ${{ env.BINUTILS_VERSION }}"
           echo "- Linux内核: ${{ env.LINUX_VERSION }}"
           echo "- 编译器前缀: ${{ env.PREFIX }}-"
           echo "- 目标平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}"
           echo "- 目标三元组: ${{ env.TARGET_TRIPLET }}"
           echo "- 构建状态: ${{ env.BUILD_COMPLETE == 'true' && '完成' || '部分完成' }}"
+          echo "- 版本匹配: ${{ env.BUILD_COMPLETE == 'true' && '是' || '否' }}"
           echo ""
           echo "📦 成果统计:"
           echo "- 总大小: ${{ env.TOTAL_SIZE }}"
@@ -1634,8 +1801,24 @@ jobs:
             echo 'export PATH="$STAGING_DIR/bin:$PATH"'
             echo "${{ env.PREFIX }}-gcc --version"
           else
-            echo "⚠️ 注意: 编译器可能不完整"
-            echo "建议检查构建日志，可能需要重新构建"
+            if [ "${{ env.VERSION_MISMATCH }}" = "true" ]; then
+              echo "⚠️ 警告: GCC版本不匹配!"
+              echo "期望: ${{ env.GCC_VERSION }}"
+              echo "实际: ${{ env.ACTUAL_GCC_VERSION || '未知' }}"
+              echo ""
+              echo "可能原因:"
+              echo "1. OpenWrt默认配置覆盖了自定义版本"
+              echo "2. 某些依赖包强制使用了特定版本"
+              echo "3. 配置文件被其他进程修改"
+              echo ""
+              echo "建议:"
+              echo "1. 检查构建日志中的配置阶段"
+              echo "2. 查看include/gcc-version.mk文件"
+              echo "3. 尝试更严格的版本锁定"
+            else
+              echo "⚠️ 注意: 编译器可能不完整"
+              echo "建议检查构建日志，可能需要重新构建"
+            fi
           fi
           
           echo ""
