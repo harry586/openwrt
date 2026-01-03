@@ -303,37 +303,6 @@ check_compiler_status() {
             echo "💡 工具链可能尚未编译完成" >> "$REPORT_FILE"
         fi
         
-        # 检查预构建编译器（如果设置了COMPILER_DIR）
-        if [ -n "${COMPILER_DIR}" ] && [ -d "${COMPILER_DIR}" ]; then
-            echo "" >> "$REPORT_FILE"
-            print_subheader "预构建编译器检查"
-            echo "🔍 预构建编译器目录: $COMPILER_DIR" >> "$REPORT_FILE"
-            
-            # 检查预构建编译器中的GCC
-            local prebuilt_gcc=$(find "$COMPILER_DIR" -type f -executable \
-                -name "*gcc" \
-                ! -name "*gcc-ar" \
-                ! -name "*gcc-ranlib" \
-                ! -name "*gcc-nm" \
-                2>/dev/null | head -1)
-            
-            if [ -n "$prebuilt_gcc" ]; then
-                echo "  ✅ 找到预构建GCC编译器: $(basename "$prebuilt_gcc")" >> "$REPORT_FILE"
-                
-                local version=$("$prebuilt_gcc" --version 2>&1 | head -1)
-                echo "     版本: $version" >> "$REPORT_FILE"
-                
-                # 检查是否被调用
-                if grep -q "$COMPILER_DIR" "$BUILD_DIR/build.log" 2>/dev/null; then
-                    echo "  🎯 预构建编译器被调用: 是" >> "$REPORT_FILE"
-                else
-                    echo "  🔄 预构建编译器被调用: 否" >> "$REPORT_FILE"
-                fi
-            else
-                echo "  ⚠️ 未找到预构建GCC编译器" >> "$REPORT_FILE"
-            fi
-        fi
-        
     else
         echo "❌ 编译目录不存在: staging_dir" >> "$REPORT_FILE"
         echo "💡 构建可能尚未开始或已清理" >> "$REPORT_FILE"
@@ -432,14 +401,6 @@ analyze_build_log() {
                 echo "❌ 检测到编译器版本错误" >> "$REPORT_FILE"
                 echo "💡 可能是GCC版本不匹配" >> "$REPORT_FILE"
                 echo "🛠️ 修复方法: 使用GCC 8-15版本" >> "$REPORT_FILE"
-                echo "" >> "$REPORT_FILE"
-            fi
-            
-            # 预构建编译器相关错误
-            if [ -n "${COMPILER_DIR}" ] && grep -q "${COMPILER_DIR}" "$BUILD_DIR/build.log" 2>/dev/null; then
-                echo "❌ 检测到预构建编译器相关错误" >> "$REPORT_FILE"
-                echo "💡 预构建编译器可能不兼容" >> "$REPORT_FILE"
-                echo "🛠️ 修复方法: 检查预构建编译器完整性和版本" >> "$REPORT_FILE"
                 echo "" >> "$REPORT_FILE"
             fi
             
@@ -617,18 +578,6 @@ generate_fix_suggestions() {
             echo "    5. 使用两步搜索法查找正确的编译器目录" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
         fi
-        
-        # 预构建编译器相关错误
-        if [ -n "${COMPILER_DIR}" ] && grep -q "${COMPILER_DIR}" "$BUILD_DIR/build.log" 2>/dev/null; then
-            echo "🔧 预构建编译器错误修复:" >> "$REPORT_FILE"
-            echo "  💡 检测到预构建编译器相关问题" >> "$REPORT_FILE"
-            echo "  🛠️ 修复方法:" >> "$REPORT_FILE"
-            echo "    1. 检查预构建编译器目录: $COMPILER_DIR" >> "$REPORT_FILE"
-            echo "    2. 验证预构建编译器是否包含真正的GCC编译器" >> "$REPORT_FILE"
-            echo "    3. 检查预构建编译器版本兼容性" >> "$REPORT_FILE"
-            echo "    4. 暂时禁用预构建编译器: unset COMPILER_DIR" >> "$REPORT_FILE"
-            echo "" >> "$REPORT_FILE"
-        fi
     fi
     
     # 系统依赖建议
@@ -684,7 +633,6 @@ generate_summary() {
     echo "  ✅ 构建日志: $(if [ $build_log_exists -eq 1 ]; then echo "存在 (错误: $error_count, 警告: $warning_count)"; else echo '缺失'; fi)" >> "$REPORT_FILE"
     echo "  ✅ 编译目录: $(if [ $staging_dir_exists -eq 1 ]; then echo '存在'; else echo '缺失'; fi)" >> "$REPORT_FILE"
     echo "  ✅ 固件生成: $(if [ $firmware_exists -eq 1 ]; then echo '成功'; else echo '失败'; fi)" >> "$REPORT_FILE"
-    echo "  🔧 编译器目录: $(if [ -n "${COMPILER_DIR}" ] && [ -d "${COMPILER_DIR}" ]; then echo '已设置'; else echo '未设置'; fi)" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
     # 状态评估
