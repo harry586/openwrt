@@ -169,10 +169,10 @@ jobs:
           
           echo "✅ 权限修复完成"
       
-      # 步骤 4: 深度检查编译器目录并智能查找正确的编译器文件
-      - name: "4. 深度检查编译器目录并智能查找"
+      # 步骤 4: 深度检查编译器目录并智能查找正确的编译器文件（两步搜索法）
+      - name: "4. 深度检查编译器目录并智能查找（两步搜索法）"
         run: |
-          echo "=== 步骤 4: 深度检查编译器目录并智能查找 ==="
+          echo "=== 步骤 4: 深度检查编译器目录并智能查找（两步搜索法）==="
           
           REPO_ROOT="${{ github.workspace }}"
           COMPILER_ROOT="$REPO_ROOT/firmware-config/build-Compiler-file"
@@ -189,90 +189,130 @@ jobs:
           
           echo "✅ 编译器根目录存在于工作空间"
           
-          # 智能查找编译器目录
+          # 显示编译器目录结构
+          echo "📊 编译器目录结构（深度3）:"
+          find "$COMPILER_ROOT" -maxdepth 3 -type d 2>/dev/null | while read dir; do
+            dir_name=$(basename "$dir")
+            relative_path=$(echo "$dir" | sed "s|$COMPILER_ROOT/||")
+            echo "  $dir_name/ [$relative_path]"
+          done
+          
+          # 根据设备确定平台和类型关键词
           DEVICE_NAME="${{ github.event.inputs.device_name }}"
           echo "🎯 设备名称: $DEVICE_NAME"
           
-          # 根据设备确定搜索关键词
-          SEARCH_KEYWORDS=()
-          
+          # 确定平台类型
           if [[ "$DEVICE_NAME" == "ac42u" || "$DEVICE_NAME" == "acrh17" ]]; then
-            SEARCH_KEYWORDS=("arm" "aarch64" "cortex-a7" "cortex-a53" "ipq40xx")
+            TARGET_PLATFORM="arm"
+            TYPE_KEYWORDS=("arm_cortex-a7" "arm")
+            echo "平台: ARM"
+            echo "类型关键词: ${TYPE_KEYWORDS[*]}"
           elif [[ "$DEVICE_NAME" == "mi_router_4a_gigabit" || "$DEVICE_NAME" == "r4ag" ]]; then
-            SEARCH_KEYWORDS=("mips" "mipsel" "mt76x8" "24kc")
+            TARGET_PLATFORM="mips"
+            TYPE_KEYWORDS=("mips")
+            echo "平台: MIPS (MT76x8)"
+            echo "类型关键词: ${TYPE_KEYWORDS[*]}"
           elif [[ "$DEVICE_NAME" == "mi_router_3g" || "$DEVICE_NAME" == "r3g" ]]; then
-            SEARCH_KEYWORDS=("mips" "mipsel" "mt7621" "1004kc")
+            TARGET_PLATFORM="mips"
+            TYPE_KEYWORDS=("mips")
+            echo "平台: MIPS (MT7621)"
+            echo "类型关键词: ${TYPE_KEYWORDS[*]}"
           else
-            SEARCH_KEYWORDS=("gcc" "compiler" "toolchain")
+            TARGET_PLATFORM="generic"
+            TYPE_KEYWORDS=("compilers")
+            echo "平台: 通用"
+            echo "类型关键词: ${TYPE_KEYWORDS[*]}"
           fi
           
           FOUND_COMPILER_DIR=""
           
-          # 搜索编译器目录
-          for keyword in "${SEARCH_KEYWORDS[@]}"; do
-            DIRS=$(find "$COMPILER_ROOT" -type d -iname "*$keyword*" 2>/dev/null | head -5)
-            if [ -n "$DIRS" ]; then
-              while read dir; do
-                # 查找真正的GCC编译器（排除工具链工具）
-                GCC_FILES=$(find "$dir" -type f -executable -name "*gcc" ! -name "*gcc-*" 2>/dev/null | head -1)
+          # 第一步：按类型关键词搜索目录
+          echo ""
+          echo "🔍 第一步：按类型关键词搜索目录"
+          
+          for keyword in "${TYPE_KEYWORDS[@]}"; do
+            echo "  搜索关键词: '$keyword'"
+            
+            TYPE_DIRS=$(find "$COMPILER_ROOT" -type d -iname "*$keyword*" 2>/dev/null | head -10)
+            
+            if [ -n "$TYPE_DIRS" ]; then
+              echo "  ✅ 找到匹配类型目录:"
+              
+              while read type_dir; do
+                echo "    📁 $type_dir"
+                
+                # 第二步：在类型目录内搜索真正的GCC编译器
+                echo "    🔍 第二步：在该目录内搜索真正的GCC编译器文件"
+                
+                GCC_FILES=$(find "$type_dir" -type f -executable \
+                  -name "*gcc" \
+                  ! -name "*gcc-ar" \
+                  ! -name "*gcc-ranlib" \
+                  ! -name "*gcc-nm" \
+                  2>/dev/null | head -3)
+                
                 if [ -n "$GCC_FILES" ]; then
-                  FOUND_COMPILER_DIR="$dir"
-                  echo "🔍 找到真正的GCC编译器: $(basename "$GCC_FILES")"
-                  echo "📁 在目录: $dir"
+                  echo "    ✅ 找到真正的GCC编译器文件:"
+                  echo "$GCC_FILES" | while read gcc_file; do
+                    echo "      📄 $(basename "$gcc_file")"
+                  done
+                  
+                  # 取第一个找到的GCC文件
+                  FIRST_GCC=$(echo "$GCC_FILES" | head -1)
+                  GCC_DIR=$(dirname "$FIRST_GCC")
+                  
+                  # 如果gcc在bin目录中，使用父目录
+                  if [[ "$GCC_DIR" == */bin ]]; then
+                    FOUND_COMPILER_DIR=$(dirname "$GCC_DIR")
+                    echo "    📁 GCC在bin目录中，使用父目录: $FOUND_COMPILER_DIR"
+                  else
+                    FOUND_COMPILER_DIR="$GCC_DIR"
+                    echo "    📁 GCC所在目录: $FOUND_COMPILER_DIR"
+                  fi
+                  
+                  # 验证编译器版本
+                  echo "    🔧 验证编译器版本..."
+                  VERSION=$("$FIRST_GCC" --version 2>&1 | head -1)
+                  echo "     版本信息: $VERSION"
+                  
+                  # 检查主要版本
+                  MAJOR_VERSION=$(echo "$VERSION" | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+" | head -1 | cut -d. -f1)
+                  if [ -n "$MAJOR_VERSION" ]; then
+                    if [ "$MAJOR_VERSION" -ge 8 ] && [ "$MAJOR_VERSION" -le 15 ]; then
+                      echo "      ✅ GCC $MAJOR_VERSION.x 版本兼容"
+                    else
+                      echo "      ⚠️ GCC版本 $MAJOR_VERSION.x 可能不兼容（期望8-15）"
+                    fi
+                  fi
+                  
                   break 2
+                else
+                  echo "    ⚠️ 该目录未找到真正的GCC编译器文件"
+                  
+                  # 显示该目录中的其他文件
+                  OTHER_FILES=$(find "$type_dir" -type f \( -name "*gcc*" -o -name "*g++*" \) 2>/dev/null | head -5)
+                  if [ -n "$OTHER_FILES" ]; then
+                    echo "    找到的其他文件:"
+                    echo "$OTHER_FILES" | while read file; do
+                      echo "      - $(basename "$file")"
+                    done
+                  fi
                 fi
-              done <<< "$DIRS"
+              done <<< "$TYPE_DIRS"
+            else
+              echo "  ⚠️ 未找到匹配 '$keyword' 的目录"
             fi
           done
           
-          # 如果没找到，搜索任何包含gcc的目录（排除工具链工具）
-          if [ -z "$FOUND_COMPILER_DIR" ]; then
-            echo "🔍 未通过关键词找到，尝试通用搜索..."
-            GCC_FILES=$(find "$COMPILER_ROOT" -type f -executable \
-              -name "*gcc" \
-              ! -name "*gcc-ar" \
-              ! -name "*gcc-ranlib" \
-              ! -name "*gcc-nm" \
-              2>/dev/null | head -1)
-            
-            if [ -n "$GCC_FILES" ]; then
-              dir=$(dirname "$GCC_FILES")
-              if [[ "$dir" == */bin ]]; then
-                dir=$(dirname "$dir")
-              fi
-              FOUND_COMPILER_DIR="$dir"
-              echo "✅ 找到GCC编译器文件: $(basename "$GCC_FILES")"
-              echo "📁 所在目录: $FOUND_COMPILER_DIR"
-            fi
-          fi
-          
           # 最终决策
           if [ -n "$FOUND_COMPILER_DIR" ]; then
+            echo ""
             echo "✅ 找到编译器目录: $FOUND_COMPILER_DIR"
-            
-            # 验证编译器版本
-            echo "🔍 验证编译器版本..."
-            GCC_PATH=$(find "$FOUND_COMPILER_DIR" -type f -executable \
-              -name "*gcc" \
-              ! -name "*gcc-ar" \
-              ! -name "*gcc-ranlib" \
-              ! -name "*gcc-nm" \
-              2>/dev/null | head -1)
-            
-            if [ -n "$GCC_PATH" ]; then
-              VERSION=$("$GCC_PATH" --version 2>&1 | head -1)
-              echo "📋 编译器版本信息: $VERSION"
-              
-              if echo "$VERSION" | grep -q "11\."; then
-                echo "🎯 GCC 11.x 版本验证通过"
-              else
-                echo "⚠️ 编译器版本不是GCC 11.x"
-              fi
-            fi
-            
             echo "COMPILER_DIR=$FOUND_COMPILER_DIR" >> $GITHUB_ENV
           else
+            echo ""
             echo "❌ 未找到合适的编译器目录"
+            echo "ℹ️ 将使用OpenWrt自动构建的编译器"
             echo "COMPILER_DIR=" >> $GITHUB_ENV
           fi
           
@@ -309,6 +349,9 @@ jobs:
           echo "版本: ${{ github.event.inputs.version_selection }}"
           echo "配置模式: ${{ github.event.inputs.config_mode }}"
           firmware-config/scripts/build_firmware_main.sh initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}"
+          
+          echo "🔄 步骤 6.4: 初始化编译器环境（使用两步搜索法）"
+          firmware-config/scripts/build_firmware_main.sh initialize_compiler_env "${{ github.event.inputs.device_name }}"
           
           echo "✅ 编译环境和构建目录设置完成"
       
@@ -465,14 +508,23 @@ jobs:
       - name: "21. 编译固件"
         run: |
           echo "=== 步骤 21: 编译固件 ==="
-          echo "🔧 使用增强的编译器搜索和调用功能..."
+          echo "🔧 使用两步搜索法找到的编译器..."
           
           # 显示编译器信息
           echo "📌 编译器调用信息:"
           echo "  编译器根目录: ${{ env.COMPILER_ROOT }}"
           echo "  编译器目录: ${{ env.COMPILER_DIR }}"
           
-          echo "🚀 开始编译，将尝试调用预构建编译器..."
+          # 检查编译器目录是否存在
+          if [ -n "${{ env.COMPILER_DIR }}" ] && [ -d "${{ env.COMPILER_DIR }}" ]; then
+            echo "  ✅ 预构建编译器目录存在"
+            echo "  目录内容预览:"
+            find "${{ env.COMPILER_DIR }}" -maxdepth 2 -type f -name "*gcc*" 2>/dev/null | head -5
+          else
+            echo "  ℹ️ 未设置预构建编译器目录，将使用OpenWrt自动构建的编译器"
+          fi
+          
+          echo "🚀 开始编译..."
           firmware-config/scripts/build_firmware_main.sh build_firmware "true"
       
       # 步骤 22: 搜索并打包构建产物
