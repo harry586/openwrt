@@ -886,6 +886,40 @@ initialize_compiler_env() {
     local device_name="$1"
     log "=== 初始化编译器环境（使用两步搜索法）==="
     
+    # 首先检查环境变量中的COMPILER_DIR
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+        log "✅ 使用环境变量中的编译器目录: $COMPILER_DIR"
+        
+        # 验证编译器目录是否真的包含GCC
+        log "🔍 验证编译器目录有效性..."
+        local gcc_files=$(find "$COMPILER_DIR" -type f -executable \
+          -name "*gcc" \
+          ! -name "*gcc-ar" \
+          ! -name "*gcc-ranlib" \
+          ! -name "*gcc-nm" \
+          2>/dev/null | head -3)
+        
+        if [ -n "$gcc_files" ]; then
+            log "✅ 确认编译器目录包含真正的GCC"
+            local first_gcc=$(echo "$gcc_files" | head -1)
+            log "  🎯 GCC文件: $(basename "$first_gcc")"
+            log "  🔧 GCC版本: $("$first_gcc" --version 2>&1 | head -1)"
+            
+            # 保存到环境文件
+            if [ -f "$ENV_FILE" ]; then
+                echo "export COMPILER_DIR=\"$COMPILER_DIR\"" >> $ENV_FILE
+            fi
+            
+            # 验证编译器
+            verify_compiler_files
+            return 0
+        else
+            log "⚠️ 编译器目录存在但不包含真正的GCC"
+        fi
+    else
+        log "🔍 COMPILER_DIR未设置或目录不存在"
+    fi
+    
     # 根据设备确定平台
     local target_platform=""
     case "$device_name" in
