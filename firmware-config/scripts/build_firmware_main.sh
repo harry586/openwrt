@@ -489,9 +489,9 @@ verify_compiler_files() {
     fi
 }
 
-# 检查编译器调用状态（改进版）
+# 检查编译器调用状态（增强版）
 check_compiler_invocation() {
-    log "=== 检查编译器调用状态（改进版）==="
+    log "=== 检查编译器调用状态（增强版）==="
     
     # 检查是否有预构建编译器目录
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
@@ -620,6 +620,54 @@ check_compiler_invocation() {
         log "  ❌ 系统GCC未找到"
     fi
     
+    # 编译器调用状态详情
+    log "🔧 编译器调用状态详情:"
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+        log "  📌 预构建编译器目录: $COMPILER_DIR"
+        
+        # 检查预构建编译器中的GCC版本
+        local prebuilt_gcc=$(find "$COMPILER_DIR" -type f -executable \
+          -name "*gcc" \
+          ! -name "*gcc-ar" \
+          ! -name "*gcc-ranlib" \
+          ! -name "*gcc-nm" \
+          2>/dev/null | head -1)
+        
+        if [ -n "$prebuilt_gcc" ]; then
+            log "  ✅ 预构建GCC: $(basename "$prebuilt_gcc")"
+            local prebuilt_version=$("$prebuilt_gcc" --version 2>&1 | head -1)
+            log "     版本: $prebuilt_version"
+        else
+            log "  ⚠️ 预构建目录中未找到真正的GCC编译器"
+        fi
+    fi
+    
+    # 检查实际使用的编译器
+    if [ -d "$BUILD_DIR/staging_dir" ]; then
+        log "  🔍 实际使用的编译器:"
+        local used_gcc=$(find "$BUILD_DIR/staging_dir" -type f -executable \
+          -name "*gcc" \
+          ! -name "*gcc-ar" \
+          ! -name "*gcc-ranlib" \
+          ! -name "*gcc-nm" \
+          2>/dev/null | head -1)
+        
+        if [ -n "$used_gcc" ]; then
+            log "  ✅ 实际GCC: $(basename "$used_gcc")"
+            local used_version=$("$used_gcc" --version 2>&1 | head -1)
+            log "     版本: $used_version"
+            
+            # 检查是否来自预构建目录
+            if [[ "$used_gcc" == *"$COMPILER_DIR"* ]]; then
+                log "  🎯 编译器来源: 预构建目录"
+            else
+                log "  🛠️ 编译器来源: OpenWrt自动构建"
+            fi
+        else
+            log "  ℹ️ 未找到正在使用的GCC编译器（可能尚未构建）"
+        fi
+    fi
+    
     log "✅ 编译器调用状态检查完成"
 }
 
@@ -707,7 +755,7 @@ pre_build_error_check() {
     log "🔧 检查预构建编译器文件（两步搜索法）..."
     verify_compiler_files
     
-    # 9. 检查编译器调用状态（使用改进版）
+    # 9. 检查编译器调用状态（使用增强版）
     check_compiler_invocation
     
     # 总结
@@ -1923,7 +1971,7 @@ build_firmware() {
     log "🔧 检查预构建编译器调用状态..."
     verify_compiler_files
     
-    # 检查编译器调用状态（使用改进版）
+    # 检查编译器调用状态（使用增强版）
     check_compiler_invocation
     
     # 获取CPU核心数
