@@ -69,15 +69,15 @@ jobs:
           
           case "$ARCH_TYPE" in
             'all')
-              ARCH_LIST='["aarch64", "x86_64", "mips", "mipsel", "arm_cortex-a7", "arm_cortex-a53", "riscv64"]'
+              ARCH_LIST='["aarch64","x86_64","mips","mipsel","arm_cortex-a7","arm_cortex-a53","riscv64"]'
               echo "✅ 选择所有架构类型"
               ;;
             'arm')
-              ARCH_LIST='["arm_cortex-a7", "arm_cortex-a53"]'
+              ARCH_LIST='["arm_cortex-a7","arm_cortex-a53"]'
               echo "✅ 选择ARM架构"
               ;;
             'mips')
-              ARCH_LIST='["mips", "mipsel"]'
+              ARCH_LIST='["mips","mipsel"]'
               echo "✅ 选择MIPS架构"
               ;;
             'x86')
@@ -166,7 +166,9 @@ jobs:
   build-matrix:
     needs: setup
     runs-on: ubuntu-22.04
+    timeout-minutes: 360
     strategy:
+      fail-fast: false
       matrix:
         arch: ${{ fromJSON(needs.setup.outputs.arch_list) }}
     steps:
@@ -197,8 +199,14 @@ jobs:
           if [ -d "$OUTPUT_DIR/bin" ]; then
             COMPILER_FILES=$(find "$OUTPUT_DIR/bin" -name "*gcc" -type f 2>/dev/null)
             if [ -n "$COMPILER_FILES" ]; then
-              echo "✅ 编译器已存在，跳过构建"
-              echo "SKIP_BUILD=true" >> $GITHUB_ENV
+              COMPILER_VERSION=$("$COMPILER_FILES" --version 2>&1 | head -1 | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+" || echo "")
+              if [ -n "$COMPILER_VERSION" ] && [ "$COMPILER_VERSION" = "$GCC_VERSION" ]; then
+                echo "✅ 编译器已存在且版本正确，跳过构建"
+                echo "SKIP_BUILD=true" >> $GITHUB_ENV
+              else
+                echo "⚠️ 有编译器但版本不匹配，需要重新构建"
+                echo "SKIP_BUILD=false" >> $GITHUB_ENV
+              fi
             else
               echo "⚠️ 有目录但无编译器文件，需要构建"
               echo "SKIP_BUILD=false" >> $GITHUB_ENV
@@ -349,131 +357,122 @@ jobs:
           
           echo "源码大小: $(du -sh . | cut -f1)"
 
-      - name: 🛠️ 直接修改Makefile强制版本
+      - name: 🛠️ 修改配置强制特定GCC版本
         if: env.SKIP_BUILD != 'true'
         run: |
-          echo "=== 直接修改Makefile强制版本 ==="
+          echo "=== 修改配置强制GCC版本 ==="
           cd "${{ env.BUILD_DIR }}"
           
           echo "当前工作目录: $(pwd)"
           
-          echo "步骤1: 修改GCC版本配置..."
-          if [ -f "Config.in" ]; then
-            echo "备份原始Config.in"
-            cp Config.in Config.in.backup
+          echo "步骤1: 清理现有的配置..."
+          if [ -f ".config" ]; then
+            rm -f .config
           fi
           
-          echo "在Config.in中强制GCC版本..."
-          if grep -q "config GCC_VERSION" Config.in 2>/dev/null; then
-            echo "找到现有的GCC_VERSION配置，修改为指定版本..."
-            sed -i 's/default ".*" if !GCC_USE_VERSION_CONTROL/default "${{ needs.setup.outputs.gcc_version }}" if !GCC_USE_VERSION_CONTROL/g' Config.in
-          fi
-          
-          echo "步骤2: 修改工具链Makefile..."
-          if [ -f "toolchain/gcc/common.mk" ]; then
-            echo "备份common.mk"
-            cp toolchain/gcc/common.mk toolchain/gcc/common.mk.backup
-            
-            echo "强制指定GCC版本为 ${{ needs.setup.outputs.gcc_version }}"
-            echo "" >> toolchain/gcc/common.mk
-            echo "# 强制使用指定版本" >> toolchain/gcc/common.mk
-            echo "GCC_VERSION:=${{ needs.setup.outputs.gcc_version }}" >> toolchain/gcc/common.mk
-            echo "GCC_SOURCE:=gcc-\$(GCC_VERSION)" >> toolchain/gcc/common.mk
-          fi
-          
-          echo "✅ 版本强制修改完成"
-
-      - name: ⚙️ 手动创建配置并构建
-        if: env.SKIP_BUILD != 'true'
-        timeout-minutes: 240
-        run: |
-          echo "=== 手动创建配置并构建 ==="
-          cd "${{ env.BUILD_DIR }}"
-          
-          echo "步骤1: 准备feeds..."
+          echo "步骤2: 下载feeds..."
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           
-          echo "步骤2: 手动创建.config文件..."
-          echo "# Target" > .config
-          echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> .config
-          echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
-          echo "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" >> .config
-          echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" >> .config
-          echo "" >> .config
+          echo "步骤3: 创建基础配置..."
+          
+          # 选择目标平台
+          case "${{ env.ARCH_NAME }}" in
+            arm)
+              echo "CONFIG_TARGET_ipq40xx=y" > .config
+              echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+              ;;
+            aarch64)
+              echo "CONFIG_TARGET_armvirt=y" > .config
+              echo "CONFIG_TARGET_armvirt_64=y" >> .config
+              ;;
+            x86_64)
+              echo "CONFIG_TARGET_x86=y" > .config
+              echo "CONFIG_TARGET_x86_64=y" >> .config
+              ;;
+            mips)
+              echo "CONFIG_TARGET_ramips=y" > .config
+              echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
+              ;;
+            mipsel)
+              echo "CONFIG_TARGET_ramips=y" > .config
+              echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
+              ;;
+            riscv64)
+              echo "CONFIG_TARGET_virt=y" > .config
+              echo "CONFIG_TARGET_virt_rv64=y" >> .config
+              ;;
+          esac
+          
+          # 工具链配置 - 强制指定版本
           echo "# 工具链配置" >> .config
           echo "CONFIG_BUILD_TOOLCHAIN=y" >> .config
           echo "CONFIG_TOOLCHAINOPTS=y" >> .config
-          echo "CONFIG_GCC_USE_VERSION_CONTROL=n" >> .config
           echo "CONFIG_GCC_VERSION=\"${{ needs.setup.outputs.gcc_version }}\"" >> .config
-          echo "CONFIG_GCC_${{ needs.setup.outputs.gcc_version }}=y" >> .config
           echo "CONFIG_BINUTILS_VERSION=\"${{ needs.setup.outputs.binutils_version }}\"" >> .config
+          echo "CONFIG_LIBC=\"musl\"" >> .config
+          echo "CONFIG_MUSL_VERSION=\"${{ needs.setup.outputs.musl_version }}\"" >> .config
           echo "CONFIG_LINUX_VERSION=\"${{ needs.setup.outputs.linux_version }}\"" >> .config
           echo "CONFIG_USE_MUSL=y" >> .config
-          echo "CONFIG_MUSL_VERSION=\"${{ needs.setup.outputs.musl_version }}\"" >> .config
-          echo "" >> .config
-          echo "# 基础配置" >> .config
+          echo "CONFIG_GCC_USE_VERSION_CONTROL=n" >> .config
+          echo "CONFIG_TOOLCHAIN_LIBC_MUSL=y" >> .config
+          
+          # SDK相关配置
+          echo "# SDK配置" >> .config
+          echo "CONFIG_SDK=y" >> .config
+          echo "CONFIG_DEVEL=y" >> .config
+          
+          # 禁用不需要的包
+          echo "# 禁用不需要的包" >> .config
           echo "CONFIG_ALL=n" >> .config
           echo "CONFIG_ALL_KMODS=n" >> .config
           echo "CONFIG_ALL_NONSHARED=n" >> .config
-          echo "CONFIG_DEVEL=y" >> .config
-          echo "CONFIG_SDK=y" >> .config
-          echo "CONFIG_BUILD_LOG=y" >> .config
-          echo "" >> .config
-          echo "# 禁用所有其他目标" >> .config
-          echo "CONFIG_TARGET_ath79=n" >> .config
-          echo "CONFIG_TARGET_bcm27xx=n" >> .config
-          echo "CONFIG_TARGET_bcm53xx=n" >> .config
-          echo "CONFIG_TARGET_ipq806x=n" >> .config
-          echo "CONFIG_TARGET_lantiq=n" >> .config
-          echo "CONFIG_TARGET_mediatek=n" >> .config
-          echo "CONFIG_TARGET_ramips=n" >> .config
-          echo "CONFIG_TARGET_rockchip=n" >> .config
-          echo "CONFIG_TARGET_sunxi=n" >> .config
-          echo "CONFIG_TARGET_x86=n" >> .config
           
-          echo "步骤3: 显示配置..."
-          echo "生成的配置关键部分:"
-          grep -E "CONFIG_TARGET_|CONFIG_GCC|CONFIG_BINUTILS|CONFIG_MUSL" .config | grep -v "=n"
+          echo "步骤4: 生成配置..."
+          yes "" | make oldconfig 2>&1 | tail -20
           
-          echo "步骤4: 应用配置..."
-          yes "" | make oldconfig
+          echo "步骤5: 检查GCC配置..."
+          grep "CONFIG_GCC" .config || echo "未找到GCC配置"
+          grep "GCC_VERSION" .config || echo "未找到GCC_VERSION"
           
-          echo "步骤5: 验证配置..."
-          echo "最终配置中的GCC版本:"
-          grep "CONFIG_GCC_VERSION" .config
+          echo "✅ 配置创建完成"
+
+      - name: ⚙️ 构建工具链
+        if: env.SKIP_BUILD != 'true'
+        timeout-minutes: 240
+        run: |
+          echo "=== 构建工具链 ==="
+          cd "${{ env.BUILD_DIR }}"
           
-          echo "步骤6: 下载源码..."
-          make download -j$(nproc) V=s 2>&1 | tail -50
+          echo "步骤1: 下载源码..."
+          make download -j$(nproc) 2>&1 | tail -100
           
-          echo "步骤7: 检查下载的GCC包..."
-          echo "下载目录中的GCC包:"
-          ls -lh dl/gcc-*.tar.* 2>/dev/null || echo "未找到GCC包"
+          echo "步骤2: 检查下载的GCC源码..."
+          ls -lh dl/gcc-*.tar.* 2>/dev/null || echo "未找到GCC源码"
           
-          echo "步骤8: 构建工具链..."
-          echo "开始构建，这可能需要较长时间..."
+          echo "步骤3: 构建工具链..."
+          echo "开始时间: $(date)"
           
-          START_TIME=$(date +%s)
-          
-          make toolchain/compile -j$(nproc) V=s 2>&1 | tee /tmp/compile.log
+          # 只构建工具链相关部分
+          echo "构建toolchain..."
+          make toolchain/compile -j$(nproc) 2>&1 | tee /tmp/toolchain-compile.log
           COMPILE_STATUS=${PIPESTATUS[0]}
           
-          END_TIME=$(date +%s)
-          DURATION=$((END_TIME - START_TIME))
-          echo "构建时间: $((DURATION / 60))分钟$((DURATION % 60))秒"
-          
           if [ $COMPILE_STATUS -eq 0 ]; then
-            echo "✅ 工具链编译成功"
+            echo "✅ toolchain编译成功"
           else
-            echo "⚠️ 工具链编译有问题，状态码: $COMPILE_STATUS"
+            echo "⚠️ toolchain编译失败，尝试继续构建其他部分"
             echo "错误摘要:"
-            grep -E "Error:|error:|failed:" /tmp/compile.log | tail -20
+            grep -E "Error:|error:|failed:" /tmp/toolchain-compile.log | tail -20
           fi
           
-          echo "步骤9: 安装工具链..."
-          make toolchain/install -j$(nproc) V=s 2>&1 | tail -50
+          echo "步骤4: 安装工具链..."
+          make toolchain/install -j$(nproc) 2>&1 | tee /tmp/toolchain-install.log
           
-          echo "✅ 工具链构建完成"
+          echo "步骤5: 构建目标SDK..."
+          make target/compile -j$(nproc) 2>&1 | tee /tmp/target-compile.log
+          
+          echo "构建完成时间: $(date)"
 
       - name: 🔎 查找并验证工具链
         if: env.SKIP_BUILD != 'true'
@@ -511,15 +510,12 @@ jobs:
                   echo "  ✅ 匹配期望的GCC版本"
                   SELECTED_TOOLCHAIN="$dir"
                   SELECTED_COMPILER="$COMPILER"
+                else
+                  echo "  ⚠️ 版本不匹配: $VERSION (期望: ${{ needs.setup.outputs.gcc_version }})"
                 fi
               fi
             fi
           done
-          
-          if [ -z "$SELECTED_TOOLCHAIN" ] && [ -n "$TOOLCHAINS" ]; then
-            SELECTED_TOOLCHAIN=$(echo "$TOOLCHAINS" | head -1)
-            echo "⚠️ 未找到匹配GCC版本的工具链，选择第一个: $SELECTED_TOOLCHAIN"
-          fi
           
           if [ -n "$SELECTED_TOOLCHAIN" ]; then
             echo "✅ 选择工具链目录: $SELECTED_TOOLCHAIN"
@@ -539,7 +535,23 @@ jobs:
             echo "工具链大小: $TOOLCHAIN_SIZE"
             echo "TOOLCHAIN_SIZE=$TOOLCHAIN_SIZE" >> $GITHUB_ENV
           else
-            echo "❌ 未找到有效的工具链"
+            echo "⚠️ 未找到匹配版本的工具链，尝试使用第一个"
+            if [ -n "$TOOLCHAINS" ]; then
+              FIRST_TOOLCHAIN=$(echo "$TOOLCHAINS" | head -1)
+              echo "TOOLCHAIN_DIR=$FIRST_TOOLCHAIN" >> $GITHUB_ENV
+              echo "⚠️ 使用工具链目录: $FIRST_TOOLCHAIN"
+              
+              # 尝试找到编译器
+              COMPILER=$(find "$FIRST_TOOLCHAIN/bin" -name "*gcc" -type f 2>/dev/null | head -1)
+              if [ -n "$COMPILER" ]; then
+                echo "COMPILER_PATH=$COMPILER" >> $GITHUB_ENV
+              fi
+              
+              TOOLCHAIN_SIZE=$(du -sh "$FIRST_TOOLCHAIN" 2>/dev/null | cut -f1 || echo "0")
+              echo "TOOLCHAIN_SIZE=$TOOLCHAIN_SIZE" >> $GITHUB_ENV
+            else
+              echo "❌ 未找到任何有效的工具链"
+            fi
           fi
 
       - name: 💾 保存编译器
@@ -551,46 +563,52 @@ jobs:
           rm -rf "${{ env.OUTPUT_DIR }}" 2>/dev/null || true
           mkdir -p "${{ env.OUTPUT_DIR }}"
           
-          echo "复制工具链..."
-          cp -r "${{ env.TOOLCHAIN_DIR }}"/* "${{ env.OUTPUT_DIR }}"/ 2>&1 | tail -20
-          
-          echo "验证复制..."
-          if [ -d "${{ env.OUTPUT_DIR }}/bin" ]; then
-            echo "✅ bin目录存在"
-            echo "编译器文件:"
-            find "${{ env.OUTPUT_DIR }}/bin" -name "*gcc" -type f 2>/dev/null | head -5
+          if [ -d "${{ env.TOOLCHAIN_DIR }}" ]; then
+            echo "复制工具链..."
+            cp -r "${{ env.TOOLCHAIN_DIR }}"/* "${{ env.OUTPUT_DIR }}"/ 2>&1 | tail -20
             
-            COMPILER=$(find "${{ env.OUTPUT_DIR }}/bin" -name "*gcc" -type f 2>/dev/null | head -1)
-            if [ -n "$COMPILER" ] && [ -x "$COMPILER" ]; then
-              echo "编译器测试:"
-              "$COMPILER" --version 2>&1 | head -3
+            echo "验证复制..."
+            if [ -d "${{ env.OUTPUT_DIR }}/bin" ]; then
+              echo "✅ bin目录存在"
+              echo "编译器文件:"
+              find "${{ env.OUTPUT_DIR }}/bin" -name "*gcc" -type f 2>/dev/null | head -5
               
-              echo "编译测试..."
-              echo 'int main(){return 0;}' > /tmp/test.c
-              "$COMPILER" /tmp/test.c -o /tmp/test.out 2>&1 && echo "✅ 编译测试通过" || echo "⚠️ 编译测试失败"
-              rm -f /tmp/test.c /tmp/test.out 2>/dev/null || true
+              COMPILER=$(find "${{ env.OUTPUT_DIR }}/bin" -name "*gcc" -type f 2>/dev/null | head -1)
+              if [ -n "$COMPILER" ] && [ -x "$COMPILER" ]; then
+                echo "编译器测试:"
+                "$COMPILER" --version 2>&1 | head -3
+                
+                echo "编译测试..."
+                echo 'int main(){return 0;}' > /tmp/test.c
+                "$COMPILER" /tmp/test.c -o /tmp/test.out 2>&1 && echo "✅ 编译测试通过" || echo "⚠️ 编译测试失败"
+                rm -f /tmp/test.c /tmp/test.out 2>/dev/null || true
+              fi
+            else
+              echo "⚠️ bin目录不存在"
             fi
+            
+            TOTAL_SIZE=$(du -sh "${{ env.OUTPUT_DIR }}" | cut -f1 || echo "0K")
+            FILE_COUNT=$(find "${{ env.OUTPUT_DIR }}" -type f 2>/dev/null | wc -l || echo 0)
+            
+            echo "📊 保存结果:"
+            echo "- 总大小: $TOTAL_SIZE"
+            echo "- 文件数量: $FILE_COUNT"
+            
+            echo "TOTAL_SIZE=$TOTAL_SIZE" >> $GITHUB_ENV
+            echo "FILE_COUNT=$FILE_COUNT" >> $GITHUB_ENV
           else
-            echo "⚠️ bin目录不存在"
+            echo "❌ 工具链目录不存在: ${{ env.TOOLCHAIN_DIR }}"
+            echo "TOTAL_SIZE=0K" >> $GITHUB_ENV
+            echo "FILE_COUNT=0" >> $GITHUB_ENV
           fi
-          
-          TOTAL_SIZE=$(du -sh "${{ env.OUTPUT_DIR }}" | cut -f1)
-          FILE_COUNT=$(find "${{ env.OUTPUT_DIR }}" -type f | wc -l)
-          
-          echo "📊 保存结果:"
-          echo "- 总大小: $TOTAL_SIZE"
-          echo "- 文件数量: $FILE_COUNT"
-          
-          echo "TOTAL_SIZE=$TOTAL_SIZE" >> $GITHUB_ENV
-          echo "FILE_COUNT=$FILE_COUNT" >> $GITHUB_ENV
 
       - name: 📝 创建元数据
-        if: env.SKIP_BUILD != 'true' && env.TOTAL_SIZE != ''
+        if: env.SKIP_BUILD != 'true' && env.TOTAL_SIZE != '0K'
         run: |
           echo "=== 创建元数据 ==="
           
           ACTUAL_GCC="未知"
-          if [ -n "${{ env.COMPILER_PATH }}" ]; then
+          if [ -n "${{ env.COMPILER_PATH }}" ] && [ -x "${{ env.COMPILER_PATH }}" ]; then
             ACTUAL_GCC=$("${{ env.COMPILER_PATH }}" --version 2>&1 | head -1 | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+" || echo "未知")
           fi
           
@@ -607,7 +625,7 @@ jobs:
           echo "  \"openwrt_version\": \"${{ needs.setup.outputs.openwrt_version }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
           echo "  \"target\": \"${{ env.TARGET }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
           echo "  \"subtarget\": \"${{ env.SUBTARGET }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"compiler_prefix\": \"${{ env.PREFIX }}-"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"compiler_prefix\": \"${{ env.PREFIX }}-\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
           echo "  \"build_date\": \"$(date -Iseconds)\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
           echo "  \"build_id\": \"${{ env.BUILD_ID }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
           echo "  \"size\": \"${{ env.TOTAL_SIZE }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
@@ -618,7 +636,7 @@ jobs:
           cat "${{ env.OUTPUT_DIR }}/metadata.json"
 
       - name: 📤 提交到Git仓库
-        if: env.SKIP_BUILD != 'true' && env.TOTAL_SIZE != '' && env.TOTAL_SIZE != '8.0K'
+        if: env.SKIP_BUILD != 'true' && env.TOTAL_SIZE != '' && env.TOTAL_SIZE != '0K' && env.TOTAL_SIZE != '8.0K'
         run: |
           echo "=== 提交编译器到Git仓库 ==="
           cd "${{ github.workspace }}"
@@ -630,7 +648,7 @@ jobs:
           git add -f "firmware-config/build-Compiler-file/compilers/*"
           
           if ! git diff --cached --quiet; then
-            ACTUAL_GCC_VERSION=$(grep -o '"actual_gcc_version": "[^"]*' "${{ env.OUTPUT_DIR }}/metadata.json" | cut -d'"' -f4)
+            ACTUAL_GCC_VERSION=$(grep -o '"actual_gcc_version": "[^"]*' "${{ env.OUTPUT_DIR }}/metadata.json" 2>/dev/null | cut -d'"' -f4 || echo "未知")
             
             git commit -m "build(compiler): 添加 ${{ matrix.arch }} 交叉编译器" \
               -m "架构: ${{ matrix.arch }}" \
@@ -652,7 +670,7 @@ jobs:
           echo "          🎉 构建完成报告              "
           echo "========================================"
           
-          if [ "${{ env.TOTAL_SIZE }}" ] && [ "${{ env.TOTAL_SIZE }}" != "8.0K" ]; then
+          if [ "${{ env.TOTAL_SIZE }}" ] && [ "${{ env.TOTAL_SIZE }}" != "0K" ] && [ "${{ env.TOTAL_SIZE }}" != "8.0K" ]; then
             echo "✅ 交叉编译器构建完成!"
           else
             echo "⚠️ 交叉编译器构建可能有问题"
@@ -662,14 +680,17 @@ jobs:
           echo "📊 构建信息:"
           echo "- 架构: ${{ matrix.arch }} (${{ env.ARCH_NAME }})"
           echo "- 目标GCC版本: ${{ needs.setup.outputs.gcc_version }}"
-          ACTUAL_GCC_VERSION=$(grep -o '"actual_gcc_version": "[^"]*' "${{ env.OUTPUT_DIR }}/metadata.json" 2>/dev/null | cut -d'"' -f4 || echo '未知')
+          ACTUAL_GCC_VERSION="未知"
+          if [ -f "${{ env.OUTPUT_DIR }}/metadata.json" ]; then
+            ACTUAL_GCC_VERSION=$(grep -o '"actual_gcc_version": "[^"]*' "${{ env.OUTPUT_DIR }}/metadata.json" 2>/dev/null | cut -d'"' -f4 || echo "未知")
+          fi
           echo "- 实际GCC版本: $ACTUAL_GCC_VERSION"
           echo "- Binutils版本: ${{ needs.setup.outputs.binutils_version }}"
           echo "- Musl版本: ${{ needs.setup.outputs.musl_version }}"
           echo "- 输出目录: ${{ env.OUTPUT_DIR }}"
           echo "- 总大小: ${{ env.TOTAL_SIZE }}"
           
-          if [ "${{ env.TOTAL_SIZE }}" ] && [ "${{ env.TOTAL_SIZE }}" != "8.0K" ]; then
+          if [ "${{ env.TOTAL_SIZE }}" ] && [ "${{ env.TOTAL_SIZE }}" != "0K" ] && [ "${{ env.TOTAL_SIZE }}" != "8.0K" ]; then
             echo ""
             echo "🚀 使用方法:"
             echo "cd ${{ env.OUTPUT_DIR }}"
@@ -689,7 +710,7 @@ jobs:
       - name: 📊 构建总结
         run: |
           echo "========================================"
-          echo "           🎯 构建任务完成              "
+          echo "           🎯 构建任务总结              "
           echo "========================================"
           echo "架构类型: ${{ github.event.inputs.arch_type }}"
           echo "GCC版本: ${{ github.event.inputs.gcc_version }}"
