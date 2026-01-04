@@ -32,11 +32,43 @@ jobs:
       linux_version: ${{ steps.version-detection.outputs.linux_version }}
       musl_version: ${{ steps.version-detection.outputs.musl_version }}
       glibc_version: ${{ steps.version-detection.outputs.glibc_version }}
+      start_time: ${{ steps.get-time.outputs.start_time }}
     steps:
       - name: 📥 检出仓库
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+
+      - name: ⏰ 获取开始时间
+        id: get-time
+        run: |
+          echo "start_time=$(date)" >> $GITHUB_OUTPUT
+
+      - name: 🔧 设置构建目录权限
+        run: |
+          echo "=== 设置构建目录权限 ==="
+          echo "创建并设置/mnt/compiler-build目录权限..."
+          
+          # 检查目录是否存在
+          if [ ! -d "/mnt/compiler-build" ]; then
+            echo "创建/mnt/compiler-build目录..."
+            sudo mkdir -p /mnt/compiler-build
+          fi
+          
+          # 设置权限
+          echo "设置目录权限..."
+          sudo chmod -R 777 /mnt/compiler-build
+          
+          # 设置所有权（可选，根据实际需要）
+          echo "设置目录所有权..."
+          sudo chown -R $USER:$USER /mnt/compiler-build 2>/dev/null || true
+          
+          echo "验证目录权限..."
+          ls -ld /mnt/compiler-build
+          echo "目录内容:"
+          ls -la /mnt/compiler-build/ 2>/dev/null || echo "目录为空"
+          
+          echo "✅ 目录权限设置完成"
 
       - name: 🏗️ 初始化环境
         run: |
@@ -55,31 +87,31 @@ jobs:
           
           case "$ARCH_TYPE" in
             'all')
-              ARCH_LIST="aarch64 x86_64 mips mipsel arm_cortex-a7 arm_cortex-a53 riscv64"
+              ARCH_LIST='["aarch64", "x86_64", "mips", "mipsel", "arm_cortex-a7", "arm_cortex-a53", "riscv64"]'
               echo "✅ 选择所有架构类型"
               ;;
             'arm')
-              ARCH_LIST="arm_cortex-a7 arm_cortex-a53"
+              ARCH_LIST='["arm_cortex-a7", "arm_cortex-a53"]'
               echo "✅ 选择ARM架构"
               ;;
             'mips')
-              ARCH_LIST="mips mipsel"
+              ARCH_LIST='["mips", "mipsel"]'
               echo "✅ 选择MIPS架构"
               ;;
             'x86')
-              ARCH_LIST="x86_64"
+              ARCH_LIST='["x86_64"]'
               echo "✅ 选择x86架构"
               ;;
             'riscv')
-              ARCH_LIST="riscv64"
+              ARCH_LIST='["riscv64"]'
               echo "✅ 选择RISC-V架构"
               ;;
             'aarch64')
-              ARCH_LIST="aarch64"
+              ARCH_LIST='["aarch64"]'
               echo "✅ 选择AArch64架构"
               ;;
             *)
-              ARCH_LIST="aarch64"
+              ARCH_LIST='["aarch64"]'
               echo "⚠️ 未知类型，默认选择AArch64"
               ;;
           esac
@@ -160,6 +192,22 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+
+      - name: 🔧 设置运行环境权限
+        run: |
+          echo "=== 设置运行环境权限 ==="
+          echo "当前用户: $(whoami)"
+          echo "用户ID: $(id -u)"
+          echo "组ID: $(id -g)"
+          
+          echo "设置构建目录权限..."
+          sudo mkdir -p /mnt/compiler-build
+          sudo chmod -R 777 /mnt/compiler-build
+          sudo chown -R $(whoami):$(whoami) /mnt/compiler-build 2>/dev/null || true
+          
+          echo "验证权限..."
+          ls -ld /mnt/compiler-build
+          touch /mnt/compiler-build/test-permission && echo "✅ 写入权限正常" && rm /mnt/compiler-build/test-permission
 
       - name: 🔍 检查现有编译器
         run: |
