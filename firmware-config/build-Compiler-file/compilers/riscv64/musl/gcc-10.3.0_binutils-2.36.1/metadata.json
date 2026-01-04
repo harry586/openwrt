@@ -1,0 +1,13 @@
+{
+  "architecture": "riscv64",
+  "arch_name": "riscv64",
+  "libc": "musl",
+  "libc_version": "1.2.2",
+  "gcc_version": "10.3.0",
+  "binutils_version": "2.36.1",
+  "linux_version": "5.4.188",
+  "openwrt_version": "21.02.5",
+  "build_date": "2026-01-04T14:14:45+00:00",
+  "build_success": "false",
+  "size": "28K"
+}
