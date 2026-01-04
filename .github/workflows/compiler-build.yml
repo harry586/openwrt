@@ -350,20 +350,12 @@ jobs:
           echo "- Linux内核: $LINUX_VERSION"
           echo "- Musl版本: $MUSL_VERSION"
           echo "- Glibc版本: $GLIBC_VERSION"
-          echo ""
-          echo "📊 版本选择说明:"
-          echo "1. OpenWrt $OPENWrt_VERSION 基础版本 → GCC $DEFAULT_GCC"
-          echo "2. 架构 $TARGET_ARCH 优化 → GCC $ARCH_GCC"
-          echo "3. 最终选择 → GCC $GCC_VERSION"
-          echo "4. 版本验证 → 确保可用性"
           
           echo "gcc_version=$GCC_VERSION" >> $GITHUB_OUTPUT
           echo "binutils_version=$BINUTILS_VERSION" >> $GITHUB_OUTPUT
           echo "linux_version=$LINUX_VERSION" >> $GITHUB_OUTPUT
           echo "musl_version=$MUSL_VERSION" >> $GITHUB_OUTPUT
           echo "glibc_version=$GLIBC_VERSION" >> $GITHUB_OUTPUT
-          echo "DEBUG_GCC_VERSION=$GCC_VERSION" >> $GITHUB_ENV
-          echo "DEBUG_BINUTILS_VERSION=$BINUTILS_VERSION" >> $GITHUB_ENV
 
       - name: 🔎 检查现有编译器
         id: check-existing
@@ -470,8 +462,6 @@ jobs:
     steps:
       - name: 📥 检出仓库
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
       - name: 📋 显示构建信息
         run: |
@@ -493,10 +483,6 @@ jobs:
           echo "开始时间: $(date)"
           echo "运行ID: ${{ github.run_id }}"
           echo "运行序号: ${{ github.run_number }}"
-          echo "版本选择策略:"
-          echo "- 根据OpenWrt版本选择基础版本"
-          echo "- 根据目标架构调整版本"
-          echo "- 验证版本可用性"
           echo "========================================"
 
       - name: 🏗️ 设置环境
@@ -508,7 +494,6 @@ jobs:
           echo "原始架构输入: $ARCH"
           echo "C库类型: $LIBC"
           
-          # 确保架构映射绝对正确
           case "$ARCH" in
             arm_cortex-a7)
               TARGET="ipq40xx"
@@ -635,7 +620,6 @@ jobs:
           echo "  CPU_TYPE: $CPU_TYPE"
           echo "  USE_MUSL: $USE_MUSL"
           
-          # 设置环境变量
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
           echo "OUTPUT_DIR=$OUTPUT_DIR" >> $GITHUB_ENV
           echo "TARGET=$TARGET" >> $GITHUB_ENV
@@ -771,152 +755,142 @@ jobs:
           
           echo "1. 创建初始配置文件..."
           
-          # 为特定目标创建初始配置
           case "${{ env.TARGET }}" in
             ipq40xx)
-              cat > .config << EOF
-CONFIG_TARGET_ipq40xx=y
-CONFIG_TARGET_ipq40xx_generic=y
-CONFIG_TARGET_ARCH="arm"
-CONFIG_TARGET_SUFFIX="hard"
-CONFIG_TARGET_PREFIX="${{ env.PREFIX }}-"
-CONFIG_GCC_VERSION="${{ env.GCC_VERSION }}"
-CONFIG_BINUTILS_VERSION="${{ env.BINUTILS_VERSION }}"
-CONFIG_LINUX_VERSION="${{ env.LINUX_VERSION }}"
-CONFIG_USE_MUSL=y
-CONFIG_MUSL_VERSION="${{ env.LIBC_VERSION }}"
-CONFIG_CPU_TYPE="${{ env.CPU_TYPE }}"
-CONFIG_DEVEL=y
-CONFIG_SDK=y
-CONFIG_TARGET_OPTIMIZATION="-Os -pipe"
-CONFIG_BUILD_LOG=y
-EOF
+              echo "# Auto-generated config for ipq40xx" > .config
+              echo "CONFIG_TARGET_ipq40xx=y" >> .config
+              echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+              echo "CONFIG_TARGET_ARCH=\"arm\"" >> .config
+              echo "CONFIG_TARGET_SUFFIX=\"hard\"" >> .config
+              echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" >> .config
+              echo "CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"" >> .config
+              echo "CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"" >> .config
+              echo "CONFIG_LINUX_VERSION=\"${{ env.LINUX_VERSION }}\"" >> .config
+              echo "CONFIG_USE_MUSL=y" >> .config
+              echo "CONFIG_MUSL_VERSION=\"${{ env.LIBC_VERSION }}\"" >> .config
+              echo "CONFIG_CPU_TYPE=\"${{ env.CPU_TYPE }}\"" >> .config
+              echo "CONFIG_DEVEL=y" >> .config
+              echo "CONFIG_SDK=y" >> .config
+              echo "CONFIG_TARGET_OPTIMIZATION=\"-Os -pipe\"" >> .config
+              echo "CONFIG_BUILD_LOG=y" >> .config
               ;;
             x86)
-              cat > .config << EOF
-CONFIG_TARGET_x86=y
-CONFIG_TARGET_x86_64=y
-CONFIG_TARGET_ARCH="x86_64"
-CONFIG_TARGET_PREFIX="${{ env.PREFIX }}-"
-CONFIG_GCC_VERSION="${{ env.GCC_VERSION }}"
-CONFIG_BINUTILS_VERSION="${{ env.BINUTILS_VERSION }}"
-CONFIG_LINUX_VERSION="${{ env.LINUX_VERSION }}"
-CONFIG_USE_MUSL=y
-CONFIG_MUSL_VERSION="${{ env.LIBC_VERSION }}"
-CONFIG_CPU_TYPE="x86_64"
-CONFIG_DEVEL=y
-CONFIG_SDK=y
-CONFIG_TARGET_OPTIMIZATION="-Os -pipe"
-CONFIG_BUILD_LOG=y
-EOF
+              echo "# Auto-generated config for x86" > .config
+              echo "CONFIG_TARGET_x86=y" >> .config
+              echo "CONFIG_TARGET_x86_64=y" >> .config
+              echo "CONFIG_TARGET_ARCH=\"x86_64\"" >> .config
+              echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" >> .config
+              echo "CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"" >> .config
+              echo "CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"" >> .config
+              echo "CONFIG_LINUX_VERSION=\"${{ env.LINUX_VERSION }}\"" >> .config
+              echo "CONFIG_USE_MUSL=y" >> .config
+              echo "CONFIG_MUSL_VERSION=\"${{ env.LIBC_VERSION }}\"" >> .config
+              echo "CONFIG_CPU_TYPE=\"x86_64\"" >> .config
+              echo "CONFIG_DEVEL=y" >> .config
+              echo "CONFIG_SDK=y" >> .config
+              echo "CONFIG_TARGET_OPTIMIZATION=\"-Os -pipe\"" >> .config
+              echo "CONFIG_BUILD_LOG=y" >> .config
               ;;
             ramips)
               if [ "${{ env.ARCH_NAME }}" = "mips" ]; then
-                cat > .config << EOF
-CONFIG_TARGET_ramips=y
-CONFIG_TARGET_ramips_mt7621=y
-CONFIG_TARGET_ARCH="mips"
-CONFIG_TARGET_PREFIX="${{ env.PREFIX }}-"
-CONFIG_GCC_VERSION="${{ env.GCC_VERSION }}"
-CONFIG_BINUTILS_VERSION="${{ env.BINUTILS_VERSION }}"
-CONFIG_LINUX_VERSION="${{ env.LINUX_VERSION }}"
-CONFIG_USE_MUSL=y
-CONFIG_MUSL_VERSION="${{ env.LIBC_VERSION }}"
-CONFIG_CPU_TYPE="24kc"
-CONFIG_DEVEL=y
-CONFIG_SDK=y
-CONFIG_TARGET_OPTIMIZATION="-Os -pipe"
-CONFIG_BUILD_LOG=y
-EOF
+                echo "# Auto-generated config for ramips mips" > .config
+                echo "CONFIG_TARGET_ramips=y" >> .config
+                echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
+                echo "CONFIG_TARGET_ARCH=\"mips\"" >> .config
+                echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" >> .config
+                echo "CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"" >> .config
+                echo "CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"" >> .config
+                echo "CONFIG_LINUX_VERSION=\"${{ env.LINUX_VERSION }}\"" >> .config
+                echo "CONFIG_USE_MUSL=y" >> .config
+                echo "CONFIG_MUSL_VERSION=\"${{ env.LIBC_VERSION }}\"" >> .config
+                echo "CONFIG_CPU_TYPE=\"24kc\"" >> .config
+                echo "CONFIG_DEVEL=y" >> .config
+                echo "CONFIG_SDK=y" >> .config
+                echo "CONFIG_TARGET_OPTIMIZATION=\"-Os -pipe\"" >> .config
+                echo "CONFIG_BUILD_LOG=y" >> .config
               else
-                cat > .config << EOF
-CONFIG_TARGET_ramips=y
-CONFIG_TARGET_ramips_mt7621=y
-CONFIG_TARGET_ARCH="mipsel"
-CONFIG_TARGET_PREFIX="${{ env.PREFIX }}-"
-CONFIG_GCC_VERSION="${{ env.GCC_VERSION }}"
-CONFIG_BINUTILS_VERSION="${{ env.BINUTILS_VERSION }}"
-CONFIG_LINUX_VERSION="${{ env.LINUX_VERSION }}"
-CONFIG_USE_MUSL=y
-CONFIG_MUSL_VERSION="${{ env.LIBC_VERSION }}"
-CONFIG_CPU_TYPE="24kc"
-CONFIG_DEVEL=y
-CONFIG_SDK=y
-CONFIG_TARGET_OPTIMIZATION="-Os -pipe"
-CONFIG_BUILD_LOG=y
-EOF
+                echo "# Auto-generated config for ramips mipsel" > .config
+                echo "CONFIG_TARGET_ramips=y" >> .config
+                echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
+                echo "CONFIG_TARGET_ARCH=\"mipsel\"" >> .config
+                echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" >> .config
+                echo "CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"" >> .config
+                echo "CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"" >> .config
+                echo "CONFIG_LINUX_VERSION=\"${{ env.LINUX_VERSION }}\"" >> .config
+                echo "CONFIG_USE_MUSL=y" >> .config
+                echo "CONFIG_MUSL_VERSION=\"${{ env.LIBC_VERSION }}\"" >> .config
+                echo "CONFIG_CPU_TYPE=\"24kc\"" >> .config
+                echo "CONFIG_DEVEL=y" >> .config
+                echo "CONFIG_SDK=y" >> .config
+                echo "CONFIG_TARGET_OPTIMIZATION=\"-Os -pipe\"" >> .config
+                echo "CONFIG_BUILD_LOG=y" >> .config
               fi
               ;;
             armvirt)
-              cat > .config << EOF
-CONFIG_TARGET_armvirt=y
-CONFIG_TARGET_armvirt_64=y
-CONFIG_TARGET_ARCH="aarch64"
-CONFIG_TARGET_PREFIX="${{ env.PREFIX }}-"
-CONFIG_GCC_VERSION="${{ env.GCC_VERSION }}"
-CONFIG_BINUTILS_VERSION="${{ env.BINUTILS_VERSION }}"
-CONFIG_LINUX_VERSION="${{ env.LINUX_VERSION }}"
-CONFIG_USE_MUSL=y
-CONFIG_MUSL_VERSION="${{ env.LIBC_VERSION }}"
-CONFIG_CPU_TYPE="${{ env.CPU_TYPE }}"
-CONFIG_DEVEL=y
-CONFIG_SDK=y
-CONFIG_TARGET_OPTIMIZATION="-Os -pipe"
-CONFIG_BUILD_LOG=y
-EOF
+              echo "# Auto-generated config for armvirt" > .config
+              echo "CONFIG_TARGET_armvirt=y" >> .config
+              echo "CONFIG_TARGET_armvirt_64=y" >> .config
+              echo "CONFIG_TARGET_ARCH=\"aarch64\"" >> .config
+              echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" >> .config
+              echo "CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"" >> .config
+              echo "CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"" >> .config
+              echo "CONFIG_LINUX_VERSION=\"${{ env.LINUX_VERSION }}\"" >> .config
+              echo "CONFIG_USE_MUSL=y" >> .config
+              echo "CONFIG_MUSL_VERSION=\"${{ env.LIBC_VERSION }}\"" >> .config
+              echo "CONFIG_CPU_TYPE=\"${{ env.CPU_TYPE }}\"" >> .config
+              echo "CONFIG_DEVEL=y" >> .config
+              echo "CONFIG_SDK=y" >> .config
+              echo "CONFIG_TARGET_OPTIMIZATION=\"-Os -pipe\"" >> .config
+              echo "CONFIG_BUILD_LOG=y" >> .config
               ;;
             rockchip)
-              cat > .config << EOF
-CONFIG_TARGET_rockchip=y
-CONFIG_TARGET_rockchip_armv8=y
-CONFIG_TARGET_ARCH="aarch64"
-CONFIG_TARGET_PREFIX="${{ env.PREFIX }}-"
-CONFIG_GCC_VERSION="${{ env.GCC_VERSION }}"
-CONFIG_BINUTILS_VERSION="${{ env.BINUTILS_VERSION }}"
-CONFIG_LINUX_VERSION="${{ env.LINUX_VERSION }}"
-CONFIG_USE_MUSL=y
-CONFIG_MUSL_VERSION="${{ env.LIBC_VERSION }}"
-CONFIG_CPU_TYPE="${{ env.CPU_TYPE }}"
-CONFIG_DEVEL=y
-CONFIG_SDK=y
-CONFIG_TARGET_OPTIMIZATION="-Os -pipe"
-CONFIG_BUILD_LOG=y
-EOF
+              echo "# Auto-generated config for rockchip" > .config
+              echo "CONFIG_TARGET_rockchip=y" >> .config
+              echo "CONFIG_TARGET_rockchip_armv8=y" >> .config
+              echo "CONFIG_TARGET_ARCH=\"aarch64\"" >> .config
+              echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" >> .config
+              echo "CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"" >> .config
+              echo "CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"" >> .config
+              echo "CONFIG_LINUX_VERSION=\"${{ env.LINUX_VERSION }}\"" >> .config
+              echo "CONFIG_USE_MUSL=y" >> .config
+              echo "CONFIG_MUSL_VERSION=\"${{ env.LIBC_VERSION }}\"" >> .config
+              echo "CONFIG_CPU_TYPE=\"${{ env.CPU_TYPE }}\"" >> .config
+              echo "CONFIG_DEVEL=y" >> .config
+              echo "CONFIG_SDK=y" >> .config
+              echo "CONFIG_TARGET_OPTIMIZATION=\"-Os -pipe\"" >> .config
+              echo "CONFIG_BUILD_LOG=y" >> .config
               ;;
             virt)
-              cat > .config << EOF
-CONFIG_TARGET_virt=y
-CONFIG_TARGET_virt_rv64=y
-CONFIG_TARGET_ARCH="riscv64"
-CONFIG_TARGET_PREFIX="${{ env.PREFIX }}-"
-CONFIG_GCC_VERSION="${{ env.GCC_VERSION }}"
-CONFIG_BINUTILS_VERSION="${{ env.BINUTILS_VERSION }}"
-CONFIG_LINUX_VERSION="${{ env.LINUX_VERSION }}"
-CONFIG_USE_MUSL=y
-CONFIG_MUSL_VERSION="${{ env.LIBC_VERSION }}"
-CONFIG_CPU_TYPE="generic"
-CONFIG_DEVEL=y
-CONFIG_SDK=y
-CONFIG_TARGET_OPTIMIZATION="-Os -pipe"
-CONFIG_BUILD_LOG=y
-EOF
+              echo "# Auto-generated config for virt" > .config
+              echo "CONFIG_TARGET_virt=y" >> .config
+              echo "CONFIG_TARGET_virt_rv64=y" >> .config
+              echo "CONFIG_TARGET_ARCH=\"riscv64\"" >> .config
+              echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" >> .config
+              echo "CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"" >> .config
+              echo "CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"" >> .config
+              echo "CONFIG_LINUX_VERSION=\"${{ env.LINUX_VERSION }}\"" >> .config
+              echo "CONFIG_USE_MUSL=y" >> .config
+              echo "CONFIG_MUSL_VERSION=\"${{ env.LIBC_VERSION }}\"" >> .config
+              echo "CONFIG_CPU_TYPE=\"generic\"" >> .config
+              echo "CONFIG_DEVEL=y" >> .config
+              echo "CONFIG_SDK=y" >> .config
+              echo "CONFIG_TARGET_OPTIMIZATION=\"-Os -pipe\"" >> .config
+              echo "CONFIG_BUILD_LOG=y" >> .config
               ;;
             *)
-              # 通用配置
-              cat > .config << EOF
-CONFIG_TARGET_${{ env.TARGET }}=y
-CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y
-CONFIG_TARGET_ARCH="${{ env.ARCH_NAME }}"
-CONFIG_TARGET_PREFIX="${{ env.PREFIX }}-"
-CONFIG_GCC_VERSION="${{ env.GCC_VERSION }}"
-CONFIG_BINUTILS_VERSION="${{ env.BINUTILS_VERSION }}"
-CONFIG_LINUX_VERSION="${{ env.LINUX_VERSION }}"
-CONFIG_CPU_TYPE="${{ env.CPU_TYPE }}"
-CONFIG_DEVEL=y
-CONFIG_SDK=y
-CONFIG_TARGET_OPTIMIZATION="-Os -pipe"
-CONFIG_BUILD_LOG=y
-EOF
+              echo "# Auto-generated config for ${{ env.TARGET }}" > .config
+              echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> .config
+              echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
+              echo "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" >> .config
+              echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" >> .config
+              echo "CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"" >> .config
+              echo "CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"" >> .config
+              echo "CONFIG_LINUX_VERSION=\"${{ env.LINUX_VERSION }}\"" >> .config
+              echo "CONFIG_CPU_TYPE=\"${{ env.CPU_TYPE }}\"" >> .config
+              echo "CONFIG_DEVEL=y" >> .config
+              echo "CONFIG_SDK=y" >> .config
+              echo "CONFIG_TARGET_OPTIMIZATION=\"-Os -pipe\"" >> .config
+              echo "CONFIG_BUILD_LOG=y" >> .config
               if [ "${{ env.USE_MUSL }}" = "y" ]; then
                   echo "CONFIG_USE_MUSL=y" >> .config
                   echo "CONFIG_MUSL_VERSION=\"${{ env.LIBC_VERSION }}\"" >> .config
@@ -955,7 +929,6 @@ EOF
           
           echo "步骤1: 下载核心工具链包..."
           
-          # 下载GCC
           echo "下载GCC ${{ env.GCC_VERSION }}..."
           GCC_URL="https://ftp.gnu.org/gnu/gcc/gcc-${{ env.GCC_VERSION }}/gcc-${{ env.GCC_VERSION }}.tar.xz"
           echo "URL: $GCC_URL"
@@ -967,7 +940,6 @@ EOF
             wget --tries=3 --timeout=120 --show-progress -O "dl/gcc-${{ env.GCC_VERSION }}.tar.xz" "https://mirrors.kernel.org/gnu/gcc/gcc-${{ env.GCC_VERSION }}/gcc-${{ env.GCC_VERSION }}.tar.xz" || true
           fi
           
-          # 下载Binutils
           echo "下载Binutils ${{ env.BINUTILS_VERSION }}..."
           BINUTILS_URL="https://ftp.gnu.org/gnu/binutils/binutils-${{ env.BINUTILS_VERSION }}.tar.xz"
           echo "URL: $BINUTILS_URL"
@@ -979,7 +951,6 @@ EOF
             wget --tries=3 --timeout=120 --show-progress -O "dl/binutils-${{ env.BINUTILS_VERSION }}.tar.xz" "https://mirrors.kernel.org/gnu/binutils/binutils-${{ env.BINUTILS_VERSION }}.tar.xz" || true
           fi
           
-          # 下载Linux内核
           echo "下载Linux ${{ env.LINUX_VERSION }}..."
           LINUX_URL="https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-${{ env.LINUX_VERSION }}.tar.xz"
           echo "URL: $LINUX_URL"
@@ -991,7 +962,6 @@ EOF
             wget --tries=3 --timeout=120 --show-progress -O "dl/linux-${{ env.LINUX_VERSION }}.tar.xz" "https://mirrors.edge.kernel.org/pub/linux/kernel/v5.x/linux-${{ env.LINUX_VERSION }}.tar.xz" || true
           fi
           
-          # 下载C库
           if [ "${{ env.USE_MUSL }}" = "y" ]; then
             echo "下载Musl ${{ env.LIBC_VERSION }}..."
             MUSL_URL="https://musl.libc.org/releases/musl-${{ env.LIBC_VERSION }}.tar.gz"
@@ -1083,28 +1053,23 @@ EOF
           
           echo "1. 创建完整的 .config 文件..."
           
-          # 先完全清空.config文件
           echo "# Auto-generated config for ${{ env.TARGET }}/${{ env.SUBTARGET }}" > .config
           echo "" >> .config
           
-          # 基本配置
-          cat >> .config << 'EOF'
-CONFIG_ALL=y
-CONFIG_ALL_KMODS=n
-CONFIG_ALL_NONSHARED=n
-CONFIG_DEVEL=y
-CONFIG_SDK=y
-CONFIG_TARGET_ROOTFS_INITRAMFS=y
-CONFIG_TOOLCHAINOPTS=y
-CONFIG_TARGET_OPTIMIZATION="-Os -pipe"
-CONFIG_BINARY_FOLDER=""
-CONFIG_DOWNLOAD_FOLDER=""
-CONFIG_LOCALMIRROR=""
-CONFIG_AUTOREBUILD=y
-CONFIG_BUILD_LOG=y
-EOF
+          echo "CONFIG_ALL=y" >> .config
+          echo "CONFIG_ALL_KMODS=n" >> .config
+          echo "CONFIG_ALL_NONSHARED=n" >> .config
+          echo "CONFIG_DEVEL=y" >> .config
+          echo "CONFIG_SDK=y" >> .config
+          echo "CONFIG_TARGET_ROOTFS_INITRAMFS=y" >> .config
+          echo "CONFIG_TOOLCHAINOPTS=y" >> .config
+          echo "CONFIG_TARGET_OPTIMIZATION=\"-Os -pipe\"" >> .config
+          echo "CONFIG_BINARY_FOLDER=\"\"" >> .config
+          echo "CONFIG_DOWNLOAD_FOLDER=\"\"" >> .config
+          echo "CONFIG_LOCALMIRROR=\"\"" >> .config
+          echo "CONFIG_AUTOREBUILD=y" >> .config
+          echo "CONFIG_BUILD_LOG=y" >> .config
           
-          # 根据目标添加配置
           echo "" >> .config
           echo "# 目标配置" >> .config
           echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> .config
@@ -1112,7 +1077,6 @@ EOF
           echo "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" >> .config
           echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" >> .config
           
-          # 架构特定配置
           echo "" >> .config
           echo "# 架构配置" >> .config
           case "${{ env.ARCH_NAME }}" in
@@ -1141,14 +1105,12 @@ EOF
               ;;
           esac
           
-          # 工具链配置
           echo "" >> .config
           echo "# 工具链配置" >> .config
           echo "CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"" >> .config
           echo "CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"" >> .config
           echo "CONFIG_LINUX_VERSION=\"${{ env.LINUX_VERSION }}\"" >> .config
           
-          # C库配置
           echo "" >> .config
           echo "# C库配置" >> .config
           if [ "${{ env.USE_MUSL }}" = "y" ]; then
@@ -1161,21 +1123,26 @@ EOF
               echo "CONFIG_GLIBC_VERSION=\"${{ env.LIBC_VERSION }}\"" >> .config
           fi
           
-          # CPU调优
           echo "" >> .config
           echo "# CPU调优" >> .config
           echo "CONFIG_CPU_TYPE=\"${{ env.CPU_TYPE }}\"" >> .config
           echo "CONFIG_TARGET_OPTIONS=\"${{ env.TUNE }}\"" >> .config
           
-          # 禁用所有其他目标
           echo "" >> .config
           echo "# 禁用其他目标" >> .config
-          ALL_TARGETS=("ath79" "bcm27xx" "bcm53xx" "ipq806x" "lantiq" "mediatek" "mpc85xx" "mvebu" "ramips" "rockchip" "sunxi" "x86" "virt")
-          for target in "${ALL_TARGETS[@]}"; do
-              if [ "$target" != "${{ env.TARGET }}" ]; then
-                  echo "CONFIG_TARGET_${target}=n" >> .config
-              fi
-          done
+          echo "CONFIG_TARGET_ath79=n" >> .config
+          echo "CONFIG_TARGET_bcm27xx=n" >> .config
+          echo "CONFIG_TARGET_bcm53xx=n" >> .config
+          echo "CONFIG_TARGET_ipq806x=n" >> .config
+          echo "CONFIG_TARGET_lantiq=n" >> .config
+          echo "CONFIG_TARGET_mediatek=n" >> .config
+          echo "CONFIG_TARGET_mpc85xx=n" >> .config
+          echo "CONFIG_TARGET_mvebu=n" >> .config
+          echo "CONFIG_TARGET_ramips=n" >> .config
+          echo "CONFIG_TARGET_rockchip=n" >> .config
+          echo "CONFIG_TARGET_sunxi=n" >> .config
+          echo "CONFIG_TARGET_x86=n" >> .config
+          echo "CONFIG_TARGET_virt=n" >> .config
           
           echo "2. 验证配置..."
           echo "===== 配置摘要 ====="
@@ -1187,23 +1154,21 @@ EOF
           echo "====================="
           
           echo "3. 创建配置验证脚本..."
-          cat > verify_config.sh << 'EOF'
-#!/bin/bash
-echo "=== 配置验证 ==="
-if ! grep -q "^CONFIG_TARGET_${{ env.TARGET }}=y" .config; then
-    echo "❌ 错误: 目标 ${{ env.TARGET }} 未启用"
-    exit 1
-fi
-if ! grep -q "^CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" .config; then
-    echo "❌ 错误: 架构不是 ${{ env.ARCH_NAME }}"
-    exit 1
-fi
-if ! grep -q "^CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" .config; then
-    echo "❌ 错误: 前缀不是 ${{ env.PREFIX }}-"
-    exit 1
-fi
-echo "✅ 配置验证通过"
-EOF
+          echo '#!/bin/bash' > verify_config.sh
+          echo 'echo "=== 配置验证 ==="' >> verify_config.sh
+          echo 'if ! grep -q "^CONFIG_TARGET_${{ env.TARGET }}=y" .config; then' >> verify_config.sh
+          echo '    echo "❌ 错误: 目标 ${{ env.TARGET }} 未启用"' >> verify_config.sh
+          echo '    exit 1' >> verify_config.sh
+          echo 'fi' >> verify_config.sh
+          echo 'if ! grep -q "^CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" .config; then' >> verify_config.sh
+          echo '    echo "❌ 错误: 架构不是 ${{ env.ARCH_NAME }}"' >> verify_config.sh
+          echo '    exit 1' >> verify_config.sh
+          echo 'fi' >> verify_config.sh
+          echo 'if ! grep -q "^CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" .config; then' >> verify_config.sh
+          echo '    echo "❌ 错误: 前缀不是 ${{ env.PREFIX }}-"' >> verify_config.sh
+          echo '    exit 1' >> verify_config.sh
+          echo 'fi' >> verify_config.sh
+          echo 'echo "✅ 配置验证通过"' >> verify_config.sh
           
           chmod +x verify_config.sh
           ./verify_config.sh
@@ -1230,20 +1195,17 @@ EOF
               echo "实际目标: $ACTUAL_TARGET"
               echo "强制修复..."
               
-              # 创建全新的.config文件
-              cat > .config << EOF
-# 强制配置 - ${{ env.TARGET }}/${{ env.SUBTARGET }}
-CONFIG_TARGET_${{ env.TARGET }}=y
-CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y
-CONFIG_TARGET_ARCH="${{ env.ARCH_NAME }}"
-CONFIG_TARGET_PREFIX="${{ env.PREFIX }}-"
-CONFIG_GCC_VERSION="${{ env.GCC_VERSION }}"
-CONFIG_BINUTILS_VERSION="${{ env.BINUTILS_VERSION }}"
-CONFIG_LINUX_VERSION="${{ env.LINUX_VERSION }}"
-CONFIG_TARGET_OPTIMIZATION="-Os -pipe"
-CONFIG_DEVEL=y
-CONFIG_SDK=y
-EOF
+              echo "# 强制配置 - ${{ env.TARGET }}/${{ env.SUBTARGET }}" > .config
+              echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> .config
+              echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
+              echo "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" >> .config
+              echo "CONFIG_TARGET_PREFIX=\"${{ env.PREFIX }}-\"" >> .config
+              echo "CONFIG_GCC_VERSION=\"${{ env.GCC_VERSION }}\"" >> .config
+              echo "CONFIG_BINUTILS_VERSION=\"${{ env.BINUTILS_VERSION }}\"" >> .config
+              echo "CONFIG_LINUX_VERSION=\"${{ env.LINUX_VERSION }}\"" >> .config
+              echo "CONFIG_TARGET_OPTIMIZATION=\"-Os -pipe\"" >> .config
+              echo "CONFIG_DEVEL=y" >> .config
+              echo "CONFIG_SDK=y" >> .config
               
               if [ "${{ env.USE_MUSL }}" = "y" ]; then
                   echo "CONFIG_USE_MUSL=y" >> .config
@@ -1300,12 +1262,10 @@ EOF
           echo "当前配置中的目标:"
           grep "CONFIG_TARGET_" .config | grep "=y" || echo "未找到目标配置"
           
-          # 验证配置
           if ! grep -q "CONFIG_TARGET_${{ env.TARGET }}=y" .config; then
               echo "❌ 配置错误：目标不是 ${{ env.TARGET }}"
               echo "强制修复配置..."
               
-              # 强制写入正确的配置
               echo "# 强制配置修复" >> .config
               echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> .config
               echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
@@ -1325,9 +1285,7 @@ EOF
           echo "架构: $(grep "CONFIG_TARGET_ARCH=" .config)"
           echo "前缀: $(grep "CONFIG_TARGET_PREFIX=" .config)"
           
-          # 如果配置仍然不正确，直接退出
-          if ! grep -q "CONFIG_TARGET_${{ env.TARGET }}=y" .config || \
-             ! grep -q "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" .config; then
+          if ! grep -q "CONFIG_TARGET_${{ env.TARGET }}=y" .config || ! grep -q "CONFIG_TARGET_ARCH=\"${{ env.ARCH_NAME }}\"" .config; then
               echo "❌ 配置仍然不正确，停止构建"
               echo "完整的.config文件:"
               grep -E "CONFIG_TARGET_|CONFIG_ARCH" .config
@@ -1348,7 +1306,6 @@ EOF
           if ! grep -q "CONFIG_TARGET_${{ env.TARGET }}=y" .config; then
               echo "❌ 配置应用失败，手动修复..."
               
-              # 强制修复
               sed -i '/^CONFIG_TARGET_/d' .config 2>/dev/null || true
               echo "CONFIG_TARGET_${{ env.TARGET }}=y" >> .config
               echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
@@ -1556,203 +1513,6 @@ EOF
           echo "✅ 工具链构建完成"
           echo "总构建时间: $(date)"
           echo "构建目录大小: $(du -sh . | cut -f1)"
-          
-          # 修复的关键部分：详细的编译器搜索逻辑
-          echo ""
-          echo "🚨 关键修复：详细的编译器搜索逻辑"
-          echo "========================================"
-          
-          # 显示当前目录结构
-          echo "📁 当前构建目录结构:"
-          find . -maxdepth 3 -type d | sort
-          
-          echo ""
-          echo "🔍 第一步：搜索 staging_dir 目录..."
-          if [ -d "staging_dir" ]; then
-              echo "✅ staging_dir 目录存在"
-              echo "📊 staging_dir 内容:"
-              ls -la staging_dir/
-              
-              # 搜索工具链目录
-              echo ""
-              echo "🔍 第二步：搜索工具链目录..."
-              TOOLCHAIN_DIRS=$(find staging_dir -type d -name "toolchain-*" 2>/dev/null)
-              
-              if [ -n "$TOOLCHAIN_DIRS" ]; then
-                  echo "✅ 找到工具链目录:"
-                  echo "$TOOLCHAIN_DIRS" | while read dir; do
-                      echo "  📁 $dir"
-                      echo "    目录内容:"
-                      ls -la "$dir/" 2>/dev/null | head -5 || echo "    无法访问"
-                  done
-              else
-                  echo "⚠️ 未找到标准工具链目录"
-                  
-                  # 搜索所有可能的编译器目录
-                  echo ""
-                  echo "🔍 搜索所有可能的编译器目录..."
-                  ALL_DIRS=$(find staging_dir -type d 2>/dev/null | head -20)
-                  echo "找到的目录:"
-                  echo "$ALL_DIRS"
-              fi
-          else
-              echo "❌ staging_dir 目录不存在"
-          fi
-          
-          echo ""
-          echo "🔍 第三步：搜索真正的GCC编译器文件..."
-          
-          # 根据目标架构设置搜索关键词
-          case "${{ env.ARCH_NAME }}" in
-            "arm")
-              SEARCH_KEYWORDS=("arm" "cortex" "a7" "armv7")
-              EXPECTED_PREFIX="arm"
-              ;;
-            "aarch64")
-              SEARCH_KEYWORDS=("aarch64" "arm64")
-              EXPECTED_PREFIX="aarch64"
-              ;;
-            "mips")
-              SEARCH_KEYWORDS=("mips" "24kc")
-              EXPECTED_PREFIX="mips"
-              ;;
-            "mipsel")
-              SEARCH_KEYWORDS=("mipsel" "24kc")
-              EXPECTED_PREFIX="mipsel"
-              ;;
-            "x86_64")
-              SEARCH_KEYWORDS=("x86_64" "x64")
-              EXPECTED_PREFIX="x86_64"
-              ;;
-            *)
-              SEARCH_KEYWORDS=("gcc" "compiler")
-              EXPECTED_PREFIX=""
-              ;;
-          esac
-          
-          echo "目标架构: ${{ env.ARCH_NAME }}"
-          echo "搜索关键词: ${SEARCH_KEYWORDS[*]}"
-          echo "期望前缀: $EXPECTED_PREFIX"
-          
-          # 搜索真正的GCC编译器
-          ALL_GCC_FILES=$(find . -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | sort)
-          
-          if [ -n "$ALL_GCC_FILES" ]; then
-              echo ""
-              echo "✅ 找到GCC编译器文件:"
-              GCC_COUNT=0
-              
-              for gcc_file in $ALL_GCC_FILES; do
-                  GCC_COUNT=$((GCC_COUNT + 1))
-                  echo ""
-                  echo "  [$GCC_COUNT] 文件: $(basename "$gcc_file")"
-                  echo "      路径: $gcc_file"
-                  echo "      目录: $(dirname "$gcc_file")"
-                  
-                  if [ -x "$gcc_file" ]; then
-                      echo "      可执行: 是"
-                      
-                      # 获取编译器信息
-                      TARGET_TRIPLET=$("$gcc_file" -dumpmachine 2>&1 || echo "unknown")
-                      echo "      目标三元组: $TARGET_TRIPLET"
-                      
-                      VERSION=$("$gcc_file" --version 2>&1 | head -1)
-                      echo "      版本: $VERSION"
-                      
-                      # 检查是否匹配目标架构
-                      MATCHED=false
-                      for keyword in "${SEARCH_KEYWORDS[@]}"; do
-                          if echo "$TARGET_TRIPLET" | grep -iq "$keyword"; then
-                              MATCHED=true
-                              echo "      🎯 匹配关键词: $keyword"
-                              
-                              # 确定编译器目录
-                              GCC_DIR=$(dirname "$gcc_file")
-                              if [[ "$GCC_DIR" == */bin ]]; then
-                                  COMPILER_DIR=$(dirname "$GCC_DIR")
-                                  echo "      📁 编译器目录: $COMPILER_DIR"
-                                  
-                                  # 检查目录内容
-                                  echo "      目录内容预览:"
-                                  ls -la "$COMPILER_DIR/" 2>/dev/null | head -5 || echo "      无法访问"
-                                  
-                                  # 保存找到的编译器目录
-                                  echo "TOOLCHAIN_DIR=$COMPILER_DIR" >> $GITHUB_ENV
-                                  echo "COMPILER_PATH=$gcc_file" >> $GITHUB_ENV
-                                  echo "TARGET_TRIPLET=$TARGET_TRIPLET" >> $GITHUB_ENV
-                                  
-                                  break 2
-                              else
-                                  COMPILER_DIR="$GCC_DIR"
-                                  echo "      📁 编译器目录: $COMPILER_DIR"
-                                  
-                                  # 检查目录内容
-                                  echo "      目录内容预览:"
-                                  ls -la "$COMPILER_DIR/" 2>/dev/null | head -5 || echo "      无法访问"
-                                  
-                                  # 保存找到的编译器目录
-                                  echo "TOOLCHAIN_DIR=$COMPILER_DIR" >> $GITHUB_ENV
-                                  echo "COMPILER_PATH=$gcc_file" >> $GITHUB_ENV
-                                  echo "TARGET_TRIPLET=$TARGET_TRIPLET" >> $GITHUB_ENV
-                                  
-                                  break 2
-                              fi
-                          fi
-                      done
-                      
-                      if [ "$MATCHED" = false ]; then
-                          echo "      ⚠️ 不匹配任何关键词"
-                      fi
-                  else
-                      echo "      可执行: 否"
-                  fi
-              done
-          else
-              echo "❌ 未找到GCC编译器文件"
-          fi
-          
-          # 如果还没有找到，尝试其他搜索方法
-          if [ -z "$COMPILER_DIR" ]; then
-              echo ""
-              echo "🔍 第四步：备选搜索方案..."
-              
-              # 搜索bin目录
-              BIN_DIRS=$(find . -type d -name "bin" 2>/dev/null)
-              echo "找到的bin目录:"
-              echo "$BIN_DIRS" | head -10
-              
-              for bin_dir in $BIN_DIRS; do
-                  echo "检查bin目录: $bin_dir"
-                  GCC_IN_BIN=$(find "$bin_dir" -type f -executable -name "*gcc" 2>/dev/null | head -1)
-                  
-                  if [ -n "$GCC_IN_BIN" ]; then
-                      echo "✅ 在bin目录找到GCC: $GCC_IN_BIN"
-                      COMPILER_DIR=$(dirname "$bin_dir")
-                      echo "📁 编译器目录: $COMPILER_DIR"
-                      echo "TOOLCHAIN_DIR=$COMPILER_DIR" >> $GITHUB_ENV
-                      echo "COMPILER_PATH=$GCC_IN_BIN" >> $GITHUB_ENV
-                      break
-                  fi
-              done
-          fi
-          
-          # 最终检查
-          if [ -z "$COMPILER_DIR" ]; then
-              echo "⚠️ 未找到编译器目录，创建虚拟目录"
-              COMPILER_DIR="/tmp/virtual-compiler"
-              mkdir -p "$COMPILER_DIR/bin"
-              echo '#!/bin/bash' > "$COMPILER_DIR/bin/virtual-gcc"
-              echo 'echo "Virtual GCC - Toolchain build may be incomplete"' >> "$COMPILER_DIR/bin/virtual-gcc"
-              echo 'echo "Target: ${{ env.PREFIX }}-"' >> "$COMPILER_DIR/bin/virtual-gcc"
-              echo 'exit 1' >> "$COMPILER_DIR/bin/virtual-gcc"
-              chmod +x "$COMPILER_DIR/bin/virtual-gcc"
-              echo "TOOLCHAIN_DIR=$COMPILER_DIR" >> $GITHUB_ENV
-              echo "COMPILER_PATH=$COMPILER_DIR/bin/virtual-gcc" >> $GITHUB_ENV
-          fi
-          
-          echo "✅ 编译器搜索完成"
-          echo "找到的编译器目录: $COMPILER_DIR"
-          echo "找到的编译器路径: $COMPILER_PATH"
 
       - name: ✅ 改进的编译器验证（按类型搜索）
         run: |
@@ -2109,12 +1869,10 @@ EOF
                   echo "警告：编译器构建可能不完整" > "${{ env.OUTPUT_DIR }}/README.txt"
                   echo "=======================================" >> "${{ env.OUTPUT_DIR }}/README.txt"
                   echo "此编译器构建过程中可能出现了问题。" >> "${{ env.OUTPUT_DIR }}/README.txt"
-                  echo "" >> "${{ env.OUTPUT_DIR }}/README.txt"
                   echo "可能的原因：" >> "${{ env.OUTPUT_DIR }}/README.txt"
                   echo "1. GMP库构建失败" >> "${{ env.OUTPUT_DIR }}/README.txt"
                   echo "2. 工具链配置问题" >> "${{ env.OUTPUT_DIR }}/README.txt"
                   echo "3. 构建环境不完整" >> "${{ env.OUTPUT_DIR }}/README.txt"
-                  echo "" >> "${{ env.OUTPUT_DIR }}/README.txt"
                   echo "建议：" >> "${{ env.OUTPUT_DIR }}/README.txt"
                   echo "1. 检查构建日志" >> "${{ env.OUTPUT_DIR }}/README.txt"
                   echo "2. 重新运行构建" >> "${{ env.OUTPUT_DIR }}/README.txt"
@@ -2177,7 +1935,6 @@ EOF
         if: env.TOOLCHAIN_DIR != ''
         run: |
           echo "=== 提交编译器到Git仓库 ==="
-          echo "开始时间: $(date)"
           cd "${{ github.workspace }}"
           
           git config user.email "github-actions@github.com"
@@ -2193,46 +1950,19 @@ EOF
           if ! git diff --cached --quiet; then
               echo "步骤3: 检测到变更，创建提交..."
               
-              COMMIT_MESSAGES=(
-                "build(compiler): 添加 ${{ env.ARCH_DIR }}-${{ env.LIBC_DIR }} 交叉编译器"
-                "架构: ${{ env.ARCH_DIR }}"
-                "C库: ${{ env.LIBC_DIR }} ${{ env.LIBC_VERSION }}"
-                "GCC: ${{ env.GCC_VERSION }}"
-                "实际GCC: ${{ env.ACTUAL_GCC_VERSION || 'unknown' }}"
-                "Binutils: ${{ env.BINUTILS_VERSION }}"
-                "大小: ${{ env.TOTAL_SIZE }}"
-                "状态: ${{ env.BUILD_COMPLETE == 'true' && '完成' || '部分完成' }}"
-                "工作流: #${{ github.run_id }}"
-              )
-              
-              echo "提交消息:"
-              for msg in "${COMMIT_MESSAGES[@]}"; do
-                  echo "  - $msg"
-              done
-              
-              git commit -m "${COMMIT_MESSAGES[0]}" \
-                -m "${COMMIT_MESSAGES[1]}" \
-                -m "${COMMIT_MESSAGES[2]}" \
-                -m "${COMMIT_MESSAGES[3]}" \
-                -m "${COMMIT_MESSAGES[4]}" \
-                -m "${COMMIT_MESSAGES[5]}" \
-                -m "${COMMIT_MESSAGES[6]}" \
-                -m "${COMMIT_MESSAGES[7]}" \
-                -m "${COMMIT_MESSAGES[8]}"
+              git commit -m "build(compiler): 添加 ${{ env.ARCH_DIR }}-${{ env.LIBC_DIR }} 交叉编译器" \
+                -m "架构: ${{ env.ARCH_DIR }}" \
+                -m "C库: ${{ env.LIBC_DIR }} ${{ env.LIBC_VERSION }}" \
+                -m "GCC: ${{ env.GCC_VERSION }}" \
+                -m "Binutils: ${{ env.BINUTILS_VERSION }}" \
+                -m "状态: ${{ env.BUILD_COMPLETE == 'true' && '完成' || '部分完成' }}" \
+                -m "工作流: #${{ github.run_id }}"
               
               echo "步骤4: 推送到仓库..."
-              if git push origin main; then
-                  echo "✅ 编译器已成功提交到仓库"
-              else
-                  echo "⚠️ 推送失败，重新尝试..."
-                  git pull origin main --rebase
-                  git push origin main
-              fi
+              git push origin main
           else
               echo "没有变更需要提交"
           fi
-          
-          echo "结束时间: $(date)"
 
       - name: 📊 显示最终成果
         if: env.TOOLCHAIN_DIR != ''
@@ -2243,7 +1973,6 @@ EOF
           
           if [ "${{ env.BUILD_COMPLETE }}" = "true" ]; then
             echo "✅ 交叉编译器构建成功!"
-            echo "   ✅ GCC版本匹配正确!"
           else
             if [ "${{ env.VERSION_MISMATCH }}" = "true" ]; then
               echo "⚠️ 交叉编译器构建完成但版本不匹配!"
@@ -2266,11 +1995,6 @@ EOF
           echo "- 构建状态: ${{ env.BUILD_COMPLETE == 'true' && '完成' || '部分完成' }}"
           echo "- 版本匹配: ${{ env.BUILD_COMPLETE == 'true' && '是' || '否' }}"
           echo ""
-          echo "📦 成果统计:"
-          echo "- 总大小: ${{ env.TOTAL_SIZE }}"
-          echo "- 文件数量: ${{ env.FILE_COUNT }}"
-          echo "- 输出目录: ${{ env.OUTPUT_DIR }}"
-          echo ""
           
           if [ "${{ env.BUILD_COMPLETE }}" = "true" ]; then
             echo "🚀 使用方法:"
@@ -2278,29 +2002,8 @@ EOF
             echo "export STAGING_DIR=\$(pwd)"
             echo 'export PATH="$STAGING_DIR/bin:$PATH"'
             echo "${{ env.PREFIX }}-gcc --version"
-          else
-            if [ "${{ env.VERSION_MISMATCH }}" = "true" ]; then
-              echo "⚠️ 警告: GCC版本不匹配!"
-              echo "期望: ${{ env.GCC_VERSION }}"
-              echo "实际: ${{ env.ACTUAL_GCC_VERSION || '未知' }}"
-              echo ""
-              echo "可能原因:"
-              echo "1. OpenWrt默认配置覆盖了自定义版本"
-              echo "2. 某些依赖包强制使用了特定版本"
-              echo "3. 配置文件被其他进程修改"
-              echo ""
-              echo "建议:"
-              echo "1. 检查构建日志中的配置阶段"
-              echo "2. 查看include/gcc-version.mk文件"
-              echo "3. 尝试更严格的版本锁定"
-            else
-              echo "⚠️ 注意: 编译器可能不完整"
-              echo "建议检查构建日志，可能需要重新构建"
-            fi
           fi
           
-          echo ""
-          echo "⏰ 构建时间: $(date)"
           echo "========================================"
 
       - name: 📄 上传构建日志
@@ -2333,6 +2036,4 @@ EOF
           echo "- C库: ${{ github.event.inputs.libc }}"
           echo "- GCC版本: ${{ needs.setup.outputs.gcc_version }}"
           echo "- Binutils版本: ${{ needs.setup.outputs.binutils_version }}"
-          echo ""
-          echo "💡 如需重新构建，请启用'强制重新构建'选项"
           echo "========================================"
