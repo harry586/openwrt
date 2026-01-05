@@ -108,19 +108,19 @@ jobs:
               BINUTILS_VERSION="2.36.1"
               LINUX_VERSION="5.4.188"
               MUSL_VERSION="1.2.2"
-              echo "ℹ️ OpenWrt 21.02.5: ARM架构可能使用GCC 8.4.0"
+              echo "ℹ️ OpenWrt 21.02.5"
               ;;
             '22.03.5')
               BINUTILS_VERSION="2.38"
               LINUX_VERSION="5.10.179"
               MUSL_VERSION="1.2.3"
-              echo "✅ OpenWrt 22.03.5: 使用GCC 11.3.0"
+              echo "✅ OpenWrt 22.03.5"
               ;;
             '23.05.2')
               BINUTILS_VERSION="2.40"
               LINUX_VERSION="5.15.133"
               MUSL_VERSION="1.2.4"
-              echo "✅ OpenWrt 23.05.2: 使用GCC 12.3.0"
+              echo "✅ OpenWrt 23.05.2"
               ;;
           esac
           echo "openwrt_version=$OPENWRT_VERSION" >> $GITHUB_OUTPUT
@@ -206,20 +206,20 @@ jobs:
           ARCH="${{ matrix.arch }}"
           case "$ARCH" in
             arm_cortex-a7)
-              TARGET="bcm27xx"
-              SUBTARGET="bcm2711"
+              TARGET="ipq40xx"
+              SUBTARGET="generic"
               ARCH_NAME="arm"
-              PREFIX="arm-openwrt-linux-muslgnueabi"
+              PREFIX="arm-openwrt-linux-musl"
               ;;
             arm_cortex-a53)
-              TARGET="bcm27xx"
-              SUBTARGET="bcm2710"
+              TARGET="sunxi"
+              SUBTARGET="cortexa53"
               ARCH_NAME="arm"
-              PREFIX="arm-openwrt-linux-muslgnueabi"
+              PREFIX="arm-openwrt-linux-musl"
               ;;
             aarch64)
-              TARGET="bcm27xx"
-              SUBTARGET="bcm2711"
+              TARGET="armvirt"
+              SUBTARGET="64"
               ARCH_NAME="aarch64"
               PREFIX="aarch64-openwrt-linux-musl"
               ;;
@@ -293,7 +293,11 @@ jobs:
           echo "步骤2: 配置目标平台..."
           rm -f .config
           case "${{ env.ARCH_NAME }}" in
-            arm|aarch64)
+            arm)
+              echo "CONFIG_TARGET_${{ env.TARGET }}=y" > .config
+              echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
+              ;;
+            aarch64)
               echo "CONFIG_TARGET_${{ env.TARGET }}=y" > .config
               echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
               ;;
@@ -357,40 +361,40 @@ jobs:
           echo "当前工作目录: $(pwd)"
           echo "查找工具链目录..."
           
-          # 查找所有可能的工具链目录
-          FIND_CMD="find staging_dir -type d -name '*toolchain*' 2>/dev/null"
-          TOOLCHAINS=$(eval $FIND_CMD)
+          # 方法1: 查找标准工具链目录
+          TOOLCHAINS=$(find staging_dir -type d -name "*toolchain*" 2>/dev/null | head -5)
           
           if [ -z "$TOOLCHAINS" ]; then
-            echo "未找到toolchain目录，尝试其他方式..."
-            # 查找bin目录
-            BIN_DIRS=$(find staging_dir -type d -name "bin" 2>/dev/null)
-            for dir in $BIN_DIRS; do
-              if [ -d "$dir" ]; then
-                TOOLCHAINS=$(dirname "$dir")
-                echo "通过bin目录找到: $TOOLCHAINS"
-                break
-              fi
-            done
+            echo "方法2: 查找bin目录..."
+            BIN_DIR=$(find staging_dir -type d -name "bin" 2>/dev/null | head -1)
+            if [ -n "$BIN_DIR" ]; then
+              TOOLCHAINS=$(dirname "$BIN_DIR")
+              echo "通过bin目录找到: $TOOLCHAINS"
+            fi
           fi
           
           if [ -z "$TOOLCHAINS" ]; then
             echo "❌ 未找到任何工具链目录"
-            echo "staging_dir完整结构:"
-            find staging_dir -type d 2>/dev/null | sort
+            echo "staging_dir结构:"
+            find staging_dir -maxdepth 3 -type d 2>/dev/null | sort
             exit 1
           fi
           
-          echo "找到的目录:"
+          echo "找到的候选目录:"
           echo "$TOOLCHAINS"
           
-          # 选择第一个找到的目录
-          SELECTED_TOOLCHAIN=$(echo "$TOOLCHAINS" | head -1)
-          echo "✅ 选择工具链目录: $SELECTED_TOOLCHAIN"
+          # 选择第一个有效的目录
+          SELECTED_TOOLCHAIN=""
+          for dir in $TOOLCHAINS; do
+            if [ -d "$dir" ]; then
+              SELECTED_TOOLCHAIN="$dir"
+              echo "✅ 选择工具链目录: $SELECTED_TOOLCHAIN"
+              break
+            fi
+          done
           
-          # 检查目录是否存在
-          if [ ! -d "$SELECTED_TOOLCHAIN" ]; then
-            echo "❌ 工具链目录不存在: $SELECTED_TOOLCHAIN"
+          if [ -z "$SELECTED_TOOLCHAIN" ]; then
+            echo "❌ 没有有效的工具链目录"
             exit 1
           fi
           
