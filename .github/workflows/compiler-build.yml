@@ -313,10 +313,9 @@ jobs:
               echo "CONFIG_TARGET_arm=y" > .config
               if [ "$MATRIX_ARCH" = "arm_cortex-a7" ]; then
                 # arm_cortex-a7 需要特定的配置
-                echo "CONFIG_TARGET_SUBTARGET=\"ipq40xx\"" >> .config
+                echo "CONFIG_TARGET_arm_cortex-a7=y" >> .config
                 echo "CONFIG_TARGET_arm_cortex-a7_neon-vfpv4=y" >> .config
               else
-                echo "CONFIG_TARGET_SUBTARGET=\"rockchip\"" >> .config
                 echo "CONFIG_TARGET_arm_cortex-a53=y" >> .config
               fi
               ;;
@@ -390,198 +389,215 @@ jobs:
           fi
           echo "构建完成时间: $(date)"
 
-      - name: 🔍 智能查找工具链
+      - name: 🔍 查找并验证工具链
         if: env.SKIP_BUILD != 'true'
         continue-on-error: true
         run: |
           cd "$BUILD_DIR"
-          echo "=== 智能查找工具链 ==="
+          echo "=== 查找并验证工具链 ==="
           
-          # 清空之前的环境变量
-          echo "TOOLCHAIN_DIR=" > /tmp/toolchain_info.txt
-          echo "COMPILER_PATH=" >> /tmp/toolchain_info.txt
-          echo "ACTUAL_GCC_VERSION=" >> /tmp/toolchain_info.txt
+          # 清理之前的输出文件
+          rm -f /tmp/toolchain_info.txt
           
-          # 根据架构前缀查找对应的工具链
-          echo "查找前缀为 $PREFIX- 的编译器..."
+          echo "查找 staging_dir 目录结构..."
+          find staging_dir -maxdepth 2 -type d 2>/dev/null | sort
           
-          # 方法1：在 staging_dir 中查找对应架构的工具链
-          echo "方法1: 查找 staging_dir 目录..."
-          ALL_DIRS=$(find staging_dir -type d 2>/dev/null | grep -v "initial" | sort)
-          FOUND=0
+          echo "正在查找工具链..."
+          TOOLCHAINS_FOUND=0
           
-          for DIR in $ALL_DIRS; do
-            if [ -d "$DIR/bin" ]; then
-              # 查找匹配当前架构前缀的编译器
-              COMPILER=$(find "$DIR/bin" -name "$PREFIX-*gcc" -type f 2>/dev/null | head -1)
-              if [ -n "$COMPILER" ] && [ -x "$COMPILER" ]; then
-                echo "✅ 找到匹配的编译器: $COMPILER"
-                VERSION=$("$COMPILER" --version 2>&1 | head -1 | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+" | head -1 | tr -d '\n' || echo "未知")
-                echo "版本: $VERSION"
-                echo "目录: $DIR"
-                
-                echo "TOOLCHAIN_DIR=$DIR" > /tmp/toolchain_info.txt
-                echo "COMPILER_PATH=$COMPILER" >> /tmp/toolchain_info.txt
-                echo "ACTUAL_GCC_VERSION=$VERSION" >> /tmp/toolchain_info.txt
-                FOUND=1
-                break
-              fi
-            fi
-          done
+          # 方法1: 直接查找包含架构名的工具链目录
+          echo "方法1: 查找包含架构名的工具链目录..."
+          ARCH_PATTERN=$(echo "$MATRIX_ARCH" | sed 's/_/-/g')
+          POSSIBLE_DIRS=$(find staging_dir -type d -name "*$ARCH_PATTERN*" 2>/dev/null | grep -v "initial")
           
-          # 方法2：如果没有找到，查找任何包含架构名的工具链
-          if [ $FOUND -eq 0 ]; then
-            echo "方法2: 查找包含架构名的工具链..."
-            ARCH_PATTERN=$(echo "$ARCH_NAME" | sed 's/_/-/g')
-            TOOLCHAINS=$(find staging_dir -type d -name "*$ARCH_PATTERN*" 2>/dev/null | grep -v "initial")
+          if [ -n "$POSSIBLE_DIRS" ]; then
+            echo "找到可能的目录:"
+            echo "$POSSIBLE_DIRS"
             
-            for TC_DIR in $TOOLCHAINS; do
-              if [ -d "$TC_DIR/bin" ]; then
-                COMPILER=$(find "$TC_DIR/bin" -name "*gcc" -type f 2>/dev/null | head -1)
+            for DIR in $POSSIBLE_DIRS; do
+              if [ -d "$DIR/bin" ]; then
+                COMPILER=$(find "$DIR/bin" -name "*gcc" -type f 2>/dev/null | head -1)
                 if [ -n "$COMPILER" ] && [ -x "$COMPILER" ]; then
                   echo "✅ 找到编译器: $COMPILER"
                   VERSION=$("$COMPILER" --version 2>&1 | head -1 | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+" | head -1 | tr -d '\n' || echo "未知")
                   echo "版本: $VERSION"
-                  echo "目录: $TC_DIR"
+                  echo "目录: $DIR"
                   
-                  echo "TOOLCHAIN_DIR=$TC_DIR" > /tmp/toolchain_info.txt
+                  # 保存绝对路径
+                  ABS_DIR=$(realpath "$DIR")
+                  echo "TOOLCHAIN_DIR=$ABS_DIR" > /tmp/toolchain_info.txt
                   echo "COMPILER_PATH=$COMPILER" >> /tmp/toolchain_info.txt
                   echo "ACTUAL_GCC_VERSION=$VERSION" >> /tmp/toolchain_info.txt
-                  FOUND=1
+                  TOOLCHAINS_FOUND=1
                   break
                 fi
               fi
             done
           fi
           
-          # 方法3：如果还没找到，列出所有编译器
-          if [ $FOUND -eq 0 ]; then
+          # 方法2: 查找所有工具链-* 目录
+          if [ $TOOLCHAINS_FOUND -eq 0 ]; then
+            echo "方法2: 查找所有 toolchain-* 目录..."
+            ALL_TOOLCHAINS=$(find staging_dir -type d -name "toolchain-*" 2>/dev/null | grep -v "initial")
+            
+            for TC_DIR in $ALL_TOOLCHAINS; do
+              echo "检查目录: $TC_DIR"
+              if [ -d "$TC_DIR/bin" ]; then
+                COMPILER=$(find "$TC_DIR/bin" -name "*gcc" -type f 2>/dev/null | head -1)
+                if [ -n "$COMPILER" ] && [ -x "$COMPILER" ]; then
+                  # 检查编译器名称是否匹配前缀
+                  COMPILER_NAME=$(basename "$COMPILER")
+                  if echo "$COMPILER_NAME" | grep -q "^$PREFIX"; then
+                    echo "✅ 找到匹配的编译器: $COMPILER"
+                    VERSION=$("$COMPILER" --version 2>&1 | head -1 | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+" | head -1 | tr -d '\n' || echo "未知")
+                    echo "版本: $VERSION"
+                    
+                    ABS_DIR=$(realpath "$TC_DIR")
+                    echo "TOOLCHAIN_DIR=$ABS_DIR" > /tmp/toolchain_info.txt
+                    echo "COMPILER_PATH=$COMPILER" >> /tmp/toolchain_info.txt
+                    echo "ACTUAL_GCC_VERSION=$VERSION" >> /tmp/toolchain_info.txt
+                    TOOLCHAINS_FOUND=1
+                    break
+                  fi
+                fi
+              fi
+            done
+          fi
+          
+          # 方法3: 查找所有编译器，然后筛选
+          if [ $TOOLCHAINS_FOUND -eq 0 ]; then
             echo "方法3: 查找所有编译器..."
             ALL_COMPILERS=$(find staging_dir -name "*gcc" -type f 2>/dev/null | grep -v "initial")
+            
             for COMPILER in $ALL_COMPILERS; do
               if [ -x "$COMPILER" ]; then
-                echo "检查编译器: $COMPILER"
                 COMPILER_NAME=$(basename "$COMPILER")
-                # 检查编译器名称是否包含架构提示
-                if echo "$COMPILER_NAME" | grep -q "$ARCH_NAME\|arm\|aarch64\|mips\|x86\|riscv"; then
+                # 检查是否匹配架构
+                if echo "$COMPILER_NAME" | grep -q "$PREFIX\|$ARCH_NAME"; then
                   echo "✅ 找到可能的编译器: $COMPILER"
                   VERSION=$("$COMPILER" --version 2>&1 | head -1 | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+" | head -1 | tr -d '\n' || echo "未知")
                   TC_DIR=$(dirname $(dirname "$COMPILER"))
                   
-                  echo "TOOLCHAIN_DIR=$TC_DIR" > /tmp/toolchain_info.txt
+                  ABS_DIR=$(realpath "$TC_DIR")
+                  echo "TOOLCHAIN_DIR=$ABS_DIR" > /tmp/toolchain_info.txt
                   echo "COMPILER_PATH=$COMPILER" >> /tmp/toolchain_info.txt
                   echo "ACTUAL_GCC_VERSION=$VERSION" >> /tmp/toolchain_info.txt
-                  FOUND=1
+                  TOOLCHAINS_FOUND=1
                   break
                 fi
               fi
             done
           fi
           
-          if [ $FOUND -eq 0 ]; then
+          if [ $TOOLCHAINS_FOUND -eq 0 ]; then
             echo "❌ 未找到合适的工具链"
-            echo "当前 staging_dir 结构:"
-            find staging_dir -maxdepth 2 -type d 2>/dev/null | sort
+            echo "列出所有 staging_dir 内容:"
+            ls -la staging_dir/ 2>/dev/null || echo "staging_dir 不存在"
             exit 1
           fi
-          
-          # 读取工具链信息
-          source /tmp/toolchain_info.txt
-          echo "最终选择的工具链:"
-          echo "目录: $TOOLCHAIN_DIR"
-          echo "编译器: $COMPILER_PATH"
-          echo "GCC版本: $ACTUAL_GCC_VERSION"
 
-      - name: 💾 保存编译器到文件
+      - name: 📝 准备输出目录
         if: env.SKIP_BUILD != 'true'
         run: |
-          echo "=== 保存编译器到文件 ==="
+          echo "=== 准备输出目录 ==="
           # 读取工具链信息
           if [ -f /tmp/toolchain_info.txt ]; then
             source /tmp/toolchain_info.txt
           else
-            echo "❌ 未找到工具链信息文件"
-            exit 1
+            echo "❌ 未找到工具链信息"
+            echo "TOOLCHAIN_DIR=" > /tmp/toolchain_info.txt
+            echo "COMPILER_PATH=" >> /tmp/toolchain_info.txt
+            echo "ACTUAL_GCC_VERSION=" >> /tmp/toolchain_info.txt
           fi
           
-          # 清理GCC版本号
-          CLEAN_GCC_VERSION=$(echo "$ACTUAL_GCC_VERSION" | tr -d '\n\r' | xargs echo -n)
+          # 清理GCC版本
+          if [ -n "$ACTUAL_GCC_VERSION" ]; then
+            CLEAN_GCC_VERSION=$(echo "$ACTUAL_GCC_VERSION" | tr -d '\n\r' | xargs echo -n)
+          else
+            CLEAN_GCC_VERSION="unknown"
+          fi
           
-          # 生成输出目录路径
+          # 生成输出目录
           OUTPUT_DIR="${{ env.COMPILER_BASE_DIR }}/compilers/$MATRIX_ARCH/musl/openwrt-${{ needs.setup.outputs.openwrt_version }}/gcc-${CLEAN_GCC_VERSION}_binutils-${{ needs.setup.outputs.binutils_version }}"
           echo "输出目录: $OUTPUT_DIR"
           
-          # 保存目录信息
-          echo "OUTPUT_DIR=$OUTPUT_DIR" > /tmp/build_output.txt
-          echo "TOOLCHAIN_DIR=$TOOLCHAIN_DIR" >> /tmp/build_output.txt
-          echo "ACTUAL_GCC_VERSION=$ACTUAL_GCC_VERSION" >> /tmp/build_output.txt
-          echo "PREFIX=$PREFIX" >> /tmp/build_output.txt
+          # 保存到文件
+          echo "OUTPUT_DIR=$OUTPUT_DIR" > /tmp/build_info.txt
+          echo "TOOLCHAIN_DIR=$TOOLCHAIN_DIR" >> /tmp/build_info.txt
+          echo "ACTUAL_GCC_VERSION=$ACTUAL_GCC_VERSION" >> /tmp/build_info.txt
+          echo "PREFIX=$PREFIX" >> /tmp/build_info.txt
+          echo "MATRIX_ARCH=$MATRIX_ARCH" >> /tmp/build_info.txt
+          echo "ARCH_NAME=$ARCH_NAME" >> /tmp/build_info.txt
 
       - name: 💾 复制工具链文件
         if: env.SKIP_BUILD != 'true'
         run: |
           echo "=== 复制工具链文件 ==="
           # 读取信息
-          source /tmp/build_output.txt
+          source /tmp/build_info.txt
           
-          echo "准备复制工具链..."
           echo "源目录: $TOOLCHAIN_DIR"
           echo "目标目录: $OUTPUT_DIR"
+          
+          # 检查源目录是否存在
+          if [ -z "$TOOLCHAIN_DIR" ] || [ ! -d "$TOOLCHAIN_DIR" ]; then
+            echo "❌ 源目录不存在或为空"
+            echo "TOTAL_SIZE=0K" >> /tmp/build_info.txt
+            echo "FILE_COUNT=0" >> /tmp/build_info.txt
+            exit 1
+          fi
+          
+          echo "源目录存在，大小: $(du -sh "$TOOLCHAIN_DIR" 2>/dev/null | cut -f1 || echo "未知")"
           
           # 清理并创建目标目录
           rm -rf "$OUTPUT_DIR" 2>/dev/null || true
           mkdir -p "$OUTPUT_DIR"
           
-          if [ -d "$TOOLCHAIN_DIR" ]; then
-            echo "正在复制工具链文件..."
-            cp -r "$TOOLCHAIN_DIR"/* "$OUTPUT_DIR"/ 2>&1 | tail -20
+          echo "正在复制文件..."
+          # 使用cp命令复制
+          cp -r "$TOOLCHAIN_DIR"/* "$OUTPUT_DIR"/ 2>&1 | tail -20
+          
+          # 验证复制
+          if [ -d "$OUTPUT_DIR/bin" ]; then
+            echo "✅ bin目录复制成功"
+            COMPILER_COUNT=$(find "$OUTPUT_DIR/bin" -name "*gcc" -type f 2>/dev/null | wc -l)
+            echo "找到 $COMPILER_COUNT 个编译器"
             
-            # 验证复制
-            if [ -d "$OUTPUT_DIR/bin" ]; then
-              echo "✅ bin目录复制成功"
-              COMPILER_COUNT=$(find "$OUTPUT_DIR/bin" -name "*gcc" -type f 2>/dev/null | wc -l)
-              echo "找到 $COMPILER_COUNT 个编译器"
-              
-              # 测试编译器
-              COMPILER=$(find "$OUTPUT_DIR/bin" -name "*gcc" -type f 2>/dev/null | head -1)
-              if [ -n "$COMPILER" ] && [ -x "$COMPILER" ]; then
-                echo "编译器测试:"
-                "$COMPILER" --version 2>&1 | head -1
-              fi
-            else
-              echo "⚠️ bin目录未找到，检查复制结果"
-              ls -la "$OUTPUT_DIR" 2>/dev/null || echo "无法列出目录"
+            # 测试编译器
+            COMPILER=$(find "$OUTPUT_DIR/bin" -name "*gcc" -type f 2>/dev/null | head -1)
+            if [ -n "$COMPILER" ] && [ -x "$COMPILER" ]; then
+              echo "编译器测试:"
+              "$COMPILER" --version 2>&1 | head -1
             fi
-            
-            # 计算大小和文件数
-            TOTAL_SIZE=$(du -sh "$OUTPUT_DIR" | cut -f1 || echo "0K")
-            FILE_COUNT=$(find "$OUTPUT_DIR" -type f 2>/dev/null | wc -l || echo 0)
-            
-            echo "保存结果:"
-            echo "大小: $TOTAL_SIZE"
-            echo "文件数: $FILE_COUNT"
-            
-            # 保存结果
-            echo "TOTAL_SIZE=$TOTAL_SIZE" >> /tmp/build_output.txt
-            echo "FILE_COUNT=$FILE_COUNT" >> /tmp/build_output.txt
           else
-            echo "❌ 源目录不存在"
-            echo "TOTAL_SIZE=0K" >> /tmp/build_output.txt
-            echo "FILE_COUNT=0" >> /tmp/build_output.txt
+            echo "⚠️ bin目录未找到"
+            echo "目标目录内容:"
+            ls -la "$OUTPUT_DIR" 2>/dev/null || echo "无法列出目录"
           fi
+          
+          # 计算大小
+          TOTAL_SIZE=$(du -sh "$OUTPUT_DIR" 2>/dev/null | cut -f1 || echo "0K")
+          FILE_COUNT=$(find "$OUTPUT_DIR" -type f 2>/dev/null | wc -l || echo 0)
+          
+          echo "复制完成:"
+          echo "大小: $TOTAL_SIZE"
+          echo "文件数: $FILE_COUNT"
+          
+          # 保存结果
+          echo "TOTAL_SIZE=$TOTAL_SIZE" >> /tmp/build_info.txt
+          echo "FILE_COUNT=$FILE_COUNT" >> /tmp/build_info.txt
 
-      - name: 📝 读取最终构建结果
+      - name: 📝 读取构建结果
         if: env.SKIP_BUILD != 'true'
         run: |
-          echo "=== 读取最终构建结果 ==="
-          if [ -f /tmp/build_output.txt ]; then
-            source /tmp/build_output.txt
+          echo "=== 读取构建结果 ==="
+          if [ -f /tmp/build_info.txt ]; then
+            source /tmp/build_info.txt
             echo "构建结果:"
             echo "输出目录: $OUTPUT_DIR"
-            echo "工具链目录: $TOOLCHAIN_DIR"
-            echo "GCC版本: $ACTUAL_GCC_VERSION"
             echo "总大小: $TOTAL_SIZE"
             echo "文件数: $FILE_COUNT"
+            echo "GCC版本: $ACTUAL_GCC_VERSION"
             
             # 设置环境变量
             echo "FINAL_OUTPUT_DIR=$OUTPUT_DIR" >> $GITHUB_ENV
@@ -589,20 +605,21 @@ jobs:
             echo "FINAL_FILE_COUNT=$FILE_COUNT" >> $GITHUB_ENV
             echo "FINAL_GCC_VERSION=$ACTUAL_GCC_VERSION" >> $GITHUB_ENV
             echo "FINAL_PREFIX=$PREFIX" >> $GITHUB_ENV
+            echo "FINAL_ARCH_NAME=$ARCH_NAME" >> $GITHUB_ENV
           else
-            echo "❌ 未找到构建输出文件"
+            echo "❌ 未找到构建信息文件"
             echo "FINAL_TOTAL_SIZE=0K" >> $GITHUB_ENV
             echo "FINAL_FILE_COUNT=0" >> $GITHUB_ENV
           fi
 
-      - name: 📝 创建元数据文件
+      - name: 📝 创建元数据
         if: env.SKIP_BUILD != 'true' && env.FINAL_TOTAL_SIZE != '0K'
         run: |
-          echo "=== 创建元数据文件 ==="
+          echo "=== 创建元数据 ==="
           ACTUAL_GCC="$FINAL_GCC_VERSION"
           ACTUAL_GCC=$(echo "$ACTUAL_GCC" | tr -d '\n\r' | xargs echo -n)
           if [ -z "$ACTUAL_GCC" ]; then
-            ACTUAL_GCC="未知"
+            ACTUAL_GCC="unknown"
           fi
           
           echo "创建 metadata.json..."
@@ -610,7 +627,7 @@ jobs:
           
           echo "{" > "$METADATA_FILE"
           echo "  \"architecture\": \"$MATRIX_ARCH\"," >> "$METADATA_FILE"
-          echo "  \"arch_name\": \"$ARCH_NAME\"," >> "$METADATA_FILE"
+          echo "  \"arch_name\": \"$FINAL_ARCH_NAME\"," >> "$METADATA_FILE"
           echo "  \"libc\": \"musl\"," >> "$METADATA_FILE"
           echo "  \"libc_version\": \"${{ needs.setup.outputs.musl_version }}\"," >> "$METADATA_FILE"
           echo "  \"gcc_version\": \"$ACTUAL_GCC\"," >> "$METADATA_FILE"
@@ -629,10 +646,10 @@ jobs:
           echo "元数据内容:"
           cat "$METADATA_FILE"
 
-      - name: 📤 提交编译器到仓库
+      - name: 📤 提交到仓库
         if: env.SKIP_BUILD != 'true' && env.FINAL_TOTAL_SIZE != '' && env.FINAL_TOTAL_SIZE != '0K' && env.FINAL_TOTAL_SIZE != '8.0K'
         run: |
-          echo "=== 提交编译器到仓库 ==="
+          echo "=== 提交到仓库 ==="
           cd "${{ github.workspace }}"
           git config user.email "github-actions@github.com"
           git config user.name "GitHub Actions"
@@ -656,7 +673,7 @@ jobs:
             echo "没有变更需要提交"
           fi
 
-      - name: 📊 生成最终报告
+      - name: 📊 最终报告
         if: env.SKIP_BUILD != 'true'
         run: |
           echo "========================================"
@@ -671,7 +688,7 @@ jobs:
           fi
           echo ""
           echo "📊 构建信息:"
-          echo "- 架构: $MATRIX_ARCH ($ARCH_NAME)"
+          echo "- 架构: $MATRIX_ARCH ($FINAL_ARCH_NAME)"
           echo "- OpenWrt版本: ${{ needs.setup.outputs.openwrt_version }}"
           echo "- 实际GCC版本: $FINAL_GCC_VERSION"
           echo "- Binutils版本: ${{ needs.setup.outputs.binutils_version }}"
