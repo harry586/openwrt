@@ -4,12 +4,19 @@ name: 🔧 交叉编译器构建
 on:
   workflow_dispatch:
     inputs:
+      openwrt_version:
+        description: 'OpenWrt版本'
+        required: true
+        default: '21.02.5'
+        type: choice
+        options: ['21.02.5','22.03.5','23.05.2']
+      
       arch_type:
         description: '架构类型'
         required: true
         default: 'all'
         type: choice
-        options: ['all', 'arm', 'mips', 'x86', 'riscv', 'aarch64']
+        options: ['all','arm','mips','x86','riscv','aarch64']
 
 env:
   COMPILER_BASE_DIR: "${{ github.workspace }}/firmware-config/build-Compiler-file"
@@ -97,14 +104,39 @@ jobs:
         id: version-detection
         run: |
           echo "=== 版本检测 ==="
+          OPENWRT_VERSION="${{ github.event.inputs.openwrt_version }}"
           
-          # 固定使用OpenWrt 21.02.5
-          OPENWRT_VERSION="21.02.5"
-          BINUTILS_VERSION="2.36.1"
-          LINUX_VERSION="5.4.188"
-          MUSL_VERSION="1.2.2"
+          echo "用户选择的OpenWrt版本: $OPENWRT_VERSION"
           
-          echo "🎯 使用OpenWrt 21.02.5版本:"
+          case "$OPENWRT_VERSION" in
+            '21.02.5')
+              BINUTILS_VERSION="2.36.1"
+              LINUX_VERSION="5.4.188"
+              MUSL_VERSION="1.2.2"
+              echo "ℹ️ OpenWrt 21.02.5: 不同架构可能使用不同GCC版本"
+              ;;
+            '22.03.5')
+              BINUTILS_VERSION="2.38"
+              LINUX_VERSION="5.10.179"
+              MUSL_VERSION="1.2.3"
+              echo "ℹ️ OpenWrt 22.03.5: 主要使用GCC 11.3.0"
+              ;;
+            '23.05.2')
+              BINUTILS_VERSION="2.40"
+              LINUX_VERSION="5.15.133"
+              MUSL_VERSION="1.2.4"
+              echo "ℹ️ OpenWrt 23.05.2: 主要使用GCC 12.3.0"
+              ;;
+            *)
+              OPENWRT_VERSION="21.02.5"
+              BINUTILS_VERSION="2.36.1"
+              LINUX_VERSION="5.4.188"
+              MUSL_VERSION="1.2.2"
+              echo "⚠️ 未知版本，使用默认21.02.5"
+              ;;
+          esac
+          
+          echo "🎯 版本选择:"
           echo "- OpenWrt版本: $OPENWRT_VERSION"
           echo "- Binutils版本: $BINUTILS_VERSION"
           echo "- Linux内核: $LINUX_VERSION"
@@ -145,13 +177,11 @@ jobs:
           OPENWRT_VERSION='${{ needs.setup.outputs.openwrt_version }}'
           BINUTILS_VERSION='${{ needs.setup.outputs.binutils_version }}'
           
-          # 构建前不知道具体GCC版本，检查基础目录
           OUTPUT_BASE_DIR="${{ env.COMPILER_BASE_DIR }}/compilers/${ARCH}/musl/openwrt-${OPENWRT_VERSION}"
           
           echo "检查目录: $OUTPUT_BASE_DIR"
           
           if [ -d "$OUTPUT_BASE_DIR" ]; then
-            # 检查是否有子目录（实际GCC版本目录）
             SUBDIRS=$(find "$OUTPUT_BASE_DIR" -maxdepth 1 -type d -name "gcc-*" 2>/dev/null | wc -l)
             if [ "$SUBDIRS" -gt 0 ]; then
               echo "✅ 已有此OpenWrt版本的编译器，跳过构建"
@@ -219,4 +249,406 @@ jobs:
               ;;
             x86_64)
               TARGET="x86"
-              SUBTARGET="64
+              SUBTARGET="64"
+              ARCH_NAME="x86_64"
+              PREFIX="x86_64-openwrt-linux-musl"
+              CPU_TYPE="x86_64"
+              TUNE="generic"
+              ;;
+            mips)
+              TARGET="ramips"
+              SUBTARGET="mt7621"
+              ARCH_NAME="mips"
+              PREFIX="mips-openwrt-linux-musl"
+              CPU_TYPE="24kc"
+              TUNE="24kc"
+              ;;
+            mipsel)
+              TARGET="ramips"
+              SUBTARGET="mt7621"
+              ARCH_NAME="mipsel"
+              PREFIX="mipsel-openwrt-linux-musl"
+              CPU_TYPE="24kc"
+              TUNE="24kc"
+              ;;
+            arm_cortex-a53)
+              TARGET="rockchip"
+              SUBTARGET="armv8"
+              ARCH_NAME="aarch64"
+              PREFIX="aarch64-openwrt-linux-musl"
+              CPU_TYPE="cortex-a53"
+              TUNE="cortex-a53"
+              ;;
+            riscv64)
+              TARGET="virt"
+              SUBTARGET="rv64"
+              ARCH_NAME="riscv64"
+              PREFIX="riscv64-openwrt-linux-musl"
+              CPU_TYPE="generic"
+              TUNE="generic"
+              ;;
+          esac
+          
+          BUILD_ID="${ARCH}_musl_openwrt-${{ needs.setup.outputs.openwrt_version }}_$(date +%Y%m%d_%H%M%S)"
+          BUILD_DIR="${{ env.BUILD_BASE_DIR }}/${BUILD_ID}"
+          
+          echo "📊 环境配置汇总:"
+          echo "  构建ID: $BUILD_ID"
+          echo "  构建目录: $BUILD_DIR"
+          echo "  目标平台: $TARGET/$SUBTARGET"
+          echo "  架构名称: $ARCH_NAME"
+          echo "  编译器前缀: $PREFIX-"
+          
+          echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
+          echo "TARGET=$TARGET" >> $GITHUB_ENV
+          echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
+          echo "ARCH_NAME=$ARCH_NAME" >> $GITHUB_ENV
+          echo "PREFIX=$PREFIX" >> $GITHUB_ENV
+          echo "BUILD_ID=$BUILD_ID" >> $GITHUB_ENV
+
+      - name: 🔧 安装依赖
+        if: env.SKIP_BUILD != 'true'
+        run: |
+          echo "=== 安装构建依赖 ==="
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential gcc g++ make flex bison git wget curl file gawk gettext rsync unzip autoconf automake libtool pkg-config texinfo gperf cmake ninja-build patchutils bc bzip2 xz-utils help2man jq liblzma-dev zstd libzstd-dev libexpat-dev libgdbm-dev libreadline-dev libsqlite3-dev libffi-dev libelf-dev libdw-dev libgmp-dev libmpfr-dev libmpc-dev libisl-dev libgnutls28-dev python3 python3-dev libncurses5-dev libssl-dev liblzma-dev zlib1g-dev
+
+      - name: 📥 下载OpenWrt源码
+        if: env.SKIP_BUILD != 'true'
+        run: |
+          echo "=== 获取OpenWrt源码 ==="
+          mkdir -p "${{ env.BUILD_DIR }}"
+          cd "${{ env.BUILD_DIR }}"
+          
+          OPENWRT_VERSION="${{ needs.setup.outputs.openwrt_version }}"
+          
+          echo "克隆OpenWrt $OPENWRT_VERSION 源码..."
+          git clone --depth 1 --branch "v$OPENWRT_VERSION" https://github.com/openwrt/openwrt.git .
+          
+          echo "源码大小: $(du -sh . | cut -f1)"
+
+      - name: ⚙️ 使用OpenWrt默认配置构建SDK
+        if: env.SKIP_BUILD != 'true'
+        timeout-minutes: 240
+        run: |
+          echo "=== 使用OpenWrt默认配置构建SDK ==="
+          cd "${{ env.BUILD_DIR }}"
+          
+          echo "步骤1: 更新feeds..."
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          
+          echo "步骤2: 配置目标平台..."
+          rm -f .config
+          
+          case "${{ env.ARCH_NAME }}" in
+            arm)
+              echo "CONFIG_TARGET_ipq40xx=y" > .config
+              echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+              ;;
+            aarch64)
+              echo "CONFIG_TARGET_armvirt=y" > .config
+              echo "CONFIG_TARGET_armvirt_64=y" >> .config
+              ;;
+            x86_64)
+              echo "CONFIG_TARGET_x86=y" > .config
+              echo "CONFIG_TARGET_x86_64=y" >> .config
+              ;;
+            mips)
+              echo "CONFIG_TARGET_ramips=y" > .config
+              echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
+              ;;
+            mipsel)
+              echo "CONFIG_TARGET_ramips=y" > .config
+              echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
+              ;;
+            riscv64)
+              echo "CONFIG_TARGET_virt=y" > .config
+              echo "CONFIG_TARGET_virt_rv64=y" >> .config
+              ;;
+          esac
+          
+          echo "CONFIG_SDK=y" >> .config
+          echo "CONFIG_BUILD_TOOLCHAIN=y" >> .config
+          echo "CONFIG_TOOLCHAINOPTS=y" >> .config
+          
+          echo "步骤3: 应用配置..."
+          yes "" | make oldconfig 2>&1 | tail -30
+          
+          echo "步骤4: 显示配置摘要..."
+          echo "目标配置:"
+          grep "CONFIG_TARGET" .config | grep -v "=n"
+          
+          echo "步骤5: 下载源码..."
+          make download -j$(nproc) 2>&1 | tee /tmp/download.log
+          DOWNLOAD_STATUS=${PIPESTATUS[0]}
+          
+          if [ $DOWNLOAD_STATUS -eq 0 ]; then
+            echo "✅ 源码下载成功"
+          else
+            echo "⚠️ 源码下载有问题，但继续构建..."
+          fi
+          
+          echo "步骤6: 构建工具链..."
+          echo "开始时间: $(date)"
+          
+          make toolchain/clean 2>&1 | tail -20
+          
+          echo "编译工具链..."
+          make toolchain/compile -j$(nproc) 2>&1 | tee /tmp/toolchain.log
+          TOOLCHAIN_STATUS=${PIPESTATUS[0]}
+          
+          if [ $TOOLCHAIN_STATUS -eq 0 ]; then
+            echo "✅ 工具链编译成功"
+            echo "安装工具链..."
+            make toolchain/install -j$(nproc) 2>&1 | tail -50
+          else
+            echo "❌ 工具链编译失败"
+            echo "错误摘要:"
+            grep -E "Error:|error:|failed:" /tmp/toolchain.log | tail -20
+            echo "尝试简化构建..."
+            make toolchain/compile -j1 V=s 2>&1 | tail -100
+          fi
+          
+          echo "构建完成时间: $(date)"
+
+      - name: 🔎 查找并验证工具链
+        if: env.SKIP_BUILD != 'true'
+        run: |
+          echo "=== 查找并验证工具链 ==="
+          cd "${{ env.BUILD_DIR }}"
+          
+          echo "查找所有工具链目录..."
+          TOOLCHAINS=$(find staging_dir -type d -name "toolchain-*" 2>/dev/null | sort)
+          
+          if [ -z "$TOOLCHAINS" ]; then
+            echo "⚠️ 未找到toolchain-*目录，尝试其他模式..."
+            BIN_DIRS=$(find staging_dir -type d -name "bin" 2>/dev/null)
+            for dir in $BIN_DIRS; do
+              if find "$dir" -name "*gcc" -type f 2>/dev/null | grep -q .; then
+                TOOLCHAINS=$(dirname "$dir")
+                echo "通过bin目录找到工具链父目录: $TOOLCHAINS"
+                break
+              fi
+            done
+          fi
+          
+          if [ -z "$TOOLCHAINS" ]; then
+            echo "❌ 未找到任何工具链"
+            find staging_dir -maxdepth 2 -type d 2>/dev/null | sort
+            exit 1
+          fi
+          
+          echo "找到的工具链:"
+          SELECTED_TOOLCHAIN=""
+          SELECTED_COMPILER=""
+          ACTUAL_GCC_VERSION=""
+          
+          for dir in $TOOLCHAINS; do
+            SIZE=$(du -sh "$dir" 2>/dev/null | cut -f1 || echo "未知")
+            echo "- $dir (大小: $SIZE)"
+            
+            if [ -d "$dir/bin" ]; then
+              COMPILER=$(find "$dir/bin" -name "*gcc" -type f 2>/dev/null | head -1)
+              if [ -n "$COMPILER" ] && [ -x "$COMPILER" ]; then
+                VERSION=$("$COMPILER" --version 2>&1 | head -1 | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+" || echo "未知")
+                echo "  编译器: $(basename $COMPILER), 版本: $VERSION"
+                
+                if [ -z "$SELECTED_TOOLCHAIN" ]; then
+                  SELECTED_TOOLCHAIN="$dir"
+                  SELECTED_COMPILER="$COMPILER"
+                  ACTUAL_GCC_VERSION="$VERSION"
+                  echo "  ✅ 选择此工具链"
+                fi
+              fi
+            fi
+          done
+          
+          if [ -n "$SELECTED_TOOLCHAIN" ]; then
+            echo "✅ 选择工具链目录: $SELECTED_TOOLCHAIN"
+            echo "工具链GCC版本: $ACTUAL_GCC_VERSION"
+            
+            OUTPUT_DIR="${{ env.COMPILER_BASE_DIR }}/compilers/${{ matrix.arch }}/musl/openwrt-${{ needs.setup.outputs.openwrt_version }}/gcc-${ACTUAL_GCC_VERSION}_binutils-${{ needs.setup.outputs.binutils_version }}"
+            
+            echo "TOOLCHAIN_DIR=$SELECTED_TOOLCHAIN" >> $GITHUB_ENV
+            echo "COMPILER_PATH=$SELECTED_COMPILER" >> $GITHUB_ENV
+            echo "ACTUAL_GCC_VERSION=$ACTUAL_GCC_VERSION" >> $GITHUB_ENV
+            echo "OUTPUT_DIR=$OUTPUT_DIR" >> $GITHUB_ENV
+            
+            TOOLCHAIN_SIZE=$(du -sh "$SELECTED_TOOLCHAIN" 2>/dev/null | cut -f1 || echo "0")
+            echo "TOOLCHAIN_SIZE=$TOOLCHAIN_SIZE" >> $GITHUB_ENV
+          else
+            echo "❌ 未找到有效的工具链"
+            exit 1
+          fi
+
+      - name: 💾 保存编译器
+        if: env.SKIP_BUILD != 'true' && env.TOOLCHAIN_DIR != ''
+        run: |
+          echo "=== 保存编译器 ==="
+          
+          echo "准备输出目录: ${{ env.OUTPUT_DIR }}"
+          rm -rf "${{ env.OUTPUT_DIR }}" 2>/dev/null || true
+          mkdir -p "${{ env.OUTPUT_DIR }}"
+          
+          if [ -d "${{ env.TOOLCHAIN_DIR }}" ]; then
+            echo "复制工具链..."
+            rsync -a "${{ env.TOOLCHAIN_DIR }}"/ "${{ env.OUTPUT_DIR }}"/ 2>&1 | tail -20
+            
+            echo "验证复制..."
+            if [ -d "${{ env.OUTPUT_DIR }}/bin" ]; then
+              echo "✅ bin目录存在"
+              COMPILER_COUNT=$(find "${{ env.OUTPUT_DIR }}/bin" -name "*gcc" -type f 2>/dev/null | wc -l)
+              echo "找到 $COMPILER_COUNT 个编译器"
+              
+              COMPILER=$(find "${{ env.OUTPUT_DIR }}/bin" -name "*gcc" -type f 2>/dev/null | head -1)
+              if [ -n "$COMPILER" ] && [ -x "$COMPILER" ]; then
+                echo "编译器信息:"
+                "$COMPILER" --version 2>&1 | head -3
+                
+                echo "简单编译测试..."
+                echo '#include <stdio.h>' > /tmp/test_compile.c
+                echo 'int main() {' >> /tmp/test_compile.c
+                echo '    printf("Hello from cross-compiler!\\n");' >> /tmp/test_compile.c
+                echo '    return 0;' >> /tmp/test_compile.c
+                echo '}' >> /tmp/test_compile.c
+                
+                "$COMPILER" /tmp/test_compile.c -o /tmp/test_compile.out 2>&1
+                if [ $? -eq 0 ]; then
+                  echo "✅ 编译测试通过"
+                else
+                  echo "⚠️ 编译测试失败"
+                fi
+                rm -f /tmp/test_compile.c /tmp/test_compile.out 2>/dev/null || true
+              fi
+            else
+              echo "⚠️ bin目录不存在"
+              ls -la "${{ env.OUTPUT_DIR }}" 2>/dev/null || echo "无法列出目录"
+            fi
+            
+            TOTAL_SIZE=$(du -sh "${{ env.OUTPUT_DIR }}" | cut -f1 || echo "0K")
+            FILE_COUNT=$(find "${{ env.OUTPUT_DIR }}" -type f 2>/dev/null | wc -l || echo 0)
+            
+            echo "📊 保存结果:"
+            echo "- 总大小: $TOTAL_SIZE"
+            echo "- 文件数量: $FILE_COUNT"
+            
+            echo "TOTAL_SIZE=$TOTAL_SIZE" >> $GITHUB_ENV
+            echo "FILE_COUNT=$FILE_COUNT" >> $GITHUB_ENV
+          else
+            echo "❌ 工具链目录不存在: ${{ env.TOOLCHAIN_DIR }}"
+            echo "TOTAL_SIZE=0K" >> $GITHUB_ENV
+            echo "FILE_COUNT=0" >> $GITHUB_ENV
+          fi
+
+      - name: 📝 创建元数据
+        if: env.SKIP_BUILD != 'true' && env.TOTAL_SIZE != '0K'
+        run: |
+          echo "=== 创建元数据 ==="
+          
+          ACTUAL_GCC="${{ env.ACTUAL_GCC_VERSION }}"
+          if [ -z "$ACTUAL_GCC" ]; then
+            ACTUAL_GCC="未知"
+          fi
+          
+          echo "创建metadata.json..."
+          echo "{" > "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"architecture\": \"${{ matrix.arch }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"arch_name\": \"${{ env.ARCH_NAME }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"libc\": \"musl\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"libc_version\": \"${{ needs.setup.outputs.musl_version }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"gcc_version\": \"$ACTUAL_GCC\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"binutils_version\": \"${{ needs.setup.outputs.binutils_version }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"linux_version\": \"${{ needs.setup.outputs.linux_version }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"openwrt_version\": \"${{ needs.setup.outputs.openwrt_version }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"target\": \"${{ env.TARGET }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"subtarget\": \"${{ env.SUBTARGET }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"compiler_prefix\": \"${{ env.PREFIX }}-\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"build_date\": \"$(date -Iseconds)\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"build_id\": \"${{ env.BUILD_ID }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"size\": \"${{ env.TOTAL_SIZE }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "  \"file_count\": ${{ env.FILE_COUNT }}" >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo "}" >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          
+          echo "元数据内容:"
+          cat "${{ env.OUTPUT_DIR }}/metadata.json"
+
+      - name: 📤 提交到Git仓库
+        if: env.SKIP_BUILD != 'true' && env.TOTAL_SIZE != '' && env.TOTAL_SIZE != '0K' && env.TOTAL_SIZE != '8.0K'
+        run: |
+          echo "=== 提交编译器到Git仓库 ==="
+          cd "${{ github.workspace }}"
+          
+          git config user.email "github-actions@github.com"
+          git config user.name "GitHub Actions"
+          
+          git pull origin main --no-edit
+          git add -f "firmware-config/build-Compiler-file/compilers/*"
+          
+          if ! git diff --cached --quiet; then
+            ACTUAL_GCC_VERSION=$(grep -o '"gcc_version": "[^"]*' "${{ env.OUTPUT_DIR }}/metadata.json" 2>/dev/null | cut -d'"' -f4 || echo "未知")
+            
+            git commit -m "build(compiler): 添加 ${{ matrix.arch }} 交叉编译器" -m "架构: ${{ matrix.arch }}" -m "OpenWrt: ${{ needs.setup.outputs.openwrt_version }}" -m "GCC: $ACTUAL_GCC_VERSION" -m "Binutils: ${{ needs.setup.outputs.binutils_version }}" -m "大小: ${{ env.TOTAL_SIZE }}" -m "文件数: ${{ env.FILE_COUNT }}"
+            
+            git push origin main
+            echo "✅ 已提交到仓库"
+          else
+            echo "没有变更需要提交"
+          fi
+
+      - name: 📊 构建报告
+        if: env.SKIP_BUILD != 'true'
+        run: |
+          echo "========================================"
+          echo "          🎉 构建完成报告              "
+          echo "========================================"
+          
+          if [ "${{ env.TOTAL_SIZE }}" ] && [ "${{ env.TOTAL_SIZE }}" != "0K" ] && [ "${{ env.TOTAL_SIZE }}" != "8.0K" ]; then
+            echo "✅ 交叉编译器构建完成!"
+          else
+            echo "⚠️ 交叉编译器构建可能有问题"
+          fi
+          
+          echo ""
+          echo "📊 构建信息:"
+          echo "- 架构: ${{ matrix.arch }} (${{ env.ARCH_NAME }})"
+          echo "- OpenWrt版本: ${{ needs.setup.outputs.openwrt_version }}"
+          ACTUAL_GCC_VERSION="未知"
+          if [ -f "${{ env.OUTPUT_DIR }}/metadata.json" ]; then
+            ACTUAL_GCC_VERSION=$(grep -o '"gcc_version": "[^"]*' "${{ env.OUTPUT_DIR }}/metadata.json" 2>/dev/null | cut -d'"' -f4 || echo "未知")
+          fi
+          echo "- 实际GCC版本: $ACTUAL_GCC_VERSION"
+          echo "- Binutils版本: ${{ needs.setup.outputs.binutils_version }}"
+          echo "- Musl版本: ${{ needs.setup.outputs.musl_version }}"
+          echo "- 输出目录: ${{ env.OUTPUT_DIR }}"
+          echo "- 总大小: ${{ env.TOTAL_SIZE }}"
+          
+          if [ "${{ env.TOTAL_SIZE }}" ] && [ "${{ env.TOTAL_SIZE }}" != "0K" ] && [ "${{ env.TOTAL_SIZE }}" != "8.0K" ]; then
+            echo ""
+            echo "🚀 使用方法:"
+            echo "cd ${{ env.OUTPUT_DIR }}"
+            echo 'export PATH="$PWD/bin:$PATH"'
+            echo "${{ env.PREFIX }}-gcc --version"
+          fi
+          
+          echo ""
+          echo "⏰ 完成时间: $(date)"
+          echo "========================================"
+
+  summary:
+    needs: build-matrix
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: 📊 构建总结
+        run: |
+          echo "========================================"
+          echo "           🎯 构建任务总结              "
+          echo "========================================"
+          echo "OpenWrt版本: ${{ needs.setup.outputs.openwrt_version }}"
+          echo "架构类型: ${{ github.event.inputs.arch_type }}"
+          echo "开始时间: ${{ needs.setup.outputs.start_time }}"
+          echo "完成时间: $(date)"
+          echo "========================================"
+          echo "所有构建任务已完成"
+          echo "========================================"
