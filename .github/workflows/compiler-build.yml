@@ -1,5 +1,5 @@
 # .github/workflows/compiler-build.yml
-name: 🔧 交叉编译器构建（并行+详细报告）
+name: 🔧 交叉编译器构建（修复版）
 
 on:
   workflow_dispatch:
@@ -210,20 +210,22 @@ jobs:
               TARGET="ipq40xx"
               SUBTARGET="generic"
               ARCH_NAME="arm"
-              PREFIX="arm-openwrt-linux-musl"
+              # 修正：OpenWrt实际生成的编译器名称是arm-openwrt-linux-muslgnueabi-gcc
+              PREFIX="arm-openwrt-linux-muslgnueabi"
               CPU_TYPE="cortex-a7"
               TARGET_CPU="arm_cortex-a7"
-              EXPECTED_COMPILER="arm-openwrt-linux-musl-gcc"
+              EXPECTED_COMPILER_PATTERN="arm-openwrt-linux-musl"
               ARCH_TYPE_TITLE="ARM Cortex-A7 (32位)"
               ;;
             arm_cortex-a53)
+              # 重要修复：使用正确的目标配置来避免构建aarch64
               TARGET="sunxi"
               SUBTARGET="cortexa53"
               ARCH_NAME="arm"
-              PREFIX="arm-openwrt-linux-musl"
+              PREFIX="arm-openwrt-linux-muslgnueabi"
               CPU_TYPE="cortex-a53"
               TARGET_CPU="arm_cortex-a53"
-              EXPECTED_COMPILER="arm-openwrt-linux-musl-gcc"
+              EXPECTED_COMPILER_PATTERN="arm-openwrt-linux-musl"
               ARCH_TYPE_TITLE="ARM Cortex-A53 (32位)"
               ;;
             aarch64)
@@ -233,7 +235,7 @@ jobs:
               PREFIX="aarch64-openwrt-linux-musl"
               CPU_TYPE="cortex-a53"
               TARGET_CPU="aarch64_cortex-a53"
-              EXPECTED_COMPILER="aarch64-openwrt-linux-musl-gcc"
+              EXPECTED_COMPILER_PATTERN="aarch64-openwrt-linux-musl"
               ARCH_TYPE_TITLE="AArch64 (64位)"
               ;;
             x86_64)
@@ -243,7 +245,7 @@ jobs:
               PREFIX="x86_64-openwrt-linux-musl"
               CPU_TYPE=""
               TARGET_CPU="x86_64"
-              EXPECTED_COMPILER="x86_64-openwrt-linux-musl-gcc"
+              EXPECTED_COMPILER_PATTERN="x86_64-openwrt-linux-musl"
               ARCH_TYPE_TITLE="x86_64 (64位)"
               ;;
             mips)
@@ -253,7 +255,7 @@ jobs:
               PREFIX="mips-openwrt-linux-musl"
               CPU_TYPE="24kc"
               TARGET_CPU="mips_24kc"
-              EXPECTED_COMPILER="mips-openwrt-linux-musl-gcc"
+              EXPECTED_COMPILER_PATTERN="mips-openwrt-linux-musl"
               ARCH_TYPE_TITLE="MIPS (大端)"
               ;;
             mipsel)
@@ -263,7 +265,7 @@ jobs:
               PREFIX="mipsel-openwrt-linux-musl"
               CPU_TYPE="24kc"
               TARGET_CPU="mipsel_24kc"
-              EXPECTED_COMPILER="mipsel-openwrt-linux-musl-gcc"
+              EXPECTED_COMPILER_PATTERN="mipsel-openwrt-linux-musl"
               ARCH_TYPE_TITLE="MIPSel (小端)"
               ;;
             riscv64)
@@ -273,7 +275,7 @@ jobs:
               PREFIX="riscv64-openwrt-linux-musl"
               CPU_TYPE=""
               TARGET_CPU="riscv64"
-              EXPECTED_COMPILER="riscv64-openwrt-linux-musl-gcc"
+              EXPECTED_COMPILER_PATTERN="riscv64-openwrt-linux-musl"
               ARCH_TYPE_TITLE="RISC-V 64位"
               ;;
           esac
@@ -294,7 +296,7 @@ jobs:
           echo "BUILD_ID=$BUILD_ID" >> $GITHUB_ENV
           echo "TARGET_CPU=$TARGET_CPU" >> $GITHUB_ENV
           echo "CPU_TYPE=$CPU_TYPE" >> $GITHUB_ENV
-          echo "EXPECTED_COMPILER=$EXPECTED_COMPILER" >> $GITHUB_ENV
+          echo "EXPECTED_COMPILER_PATTERN=$EXPECTED_COMPILER_PATTERN" >> $GITHUB_ENV
           echo "ARCH_TYPE_TITLE=$ARCH_TYPE_TITLE" >> $GITHUB_ENV
 
       - name: 🔧 安装依赖
@@ -315,50 +317,99 @@ jobs:
           git clone --depth 1 --branch "v$OPENWRT_VERSION" https://github.com/openwrt/openwrt.git .
           echo "源码大小: $(du -sh . | cut -f1)"
 
-      - name: ⚙️ 配置并构建SDK
+      - name: ⚙️ 强制配置并构建SDK
         if: env.SKIP_BUILD != 'true'
         timeout-minutes: 240
         run: |
-          echo "=== 配置并构建SDK ==="
+          echo "=== 强制配置并构建SDK ==="
           cd "${{ env.BUILD_DIR }}"
           
           echo "步骤1: 更新feeds..."
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           
-          echo "步骤2: 配置目标平台..."
+          echo "步骤2: 强制配置目标平台..."
           rm -f .config
           
+          # 根据架构强制配置，避免错误的架构选择
           case "${{ matrix.arch }}" in
             arm_cortex-a7)
               echo "CONFIG_TARGET_ipq40xx=y" > .config
               echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+              echo "CONFIG_TARGET_SUBTARGET=\"generic\"" >> .config
+              echo "CONFIG_TARGET_ARCH_PACKAGES=\"arm_cortex-a7_neon-vfpv4\"" >> .config
               echo "CONFIG_TARGET_OPTIMIZATION=\"-march=armv7-a -mtune=cortex-a7\"" >> .config
+              echo "CONFIG_arm=y" >> .config
+              echo "CONFIG_ARCH=\"arm\"" >> .config
+              echo "CONFIG_CPU_TYPE=\"cortex-a7\"" >> .config
+              echo "CONFIG_FPU=\"neon-vfpv4\"" >> .config
+              echo "CONFIG_FLOAT=\"hard\"" >> .config
+              echo "CONFIG_SOFT_FLOAT=n" >> .config
+              echo "CONFIG_ARM_UNWIND=y" >> .config
               ;;
             arm_cortex-a53)
+              # 强制配置为32位ARM
               echo "CONFIG_TARGET_sunxi=y" > .config
               echo "CONFIG_TARGET_sunxi_cortexa53=y" >> .config
+              echo "CONFIG_TARGET_SUBTARGET=\"cortexa53\"" >> .config
+              echo "CONFIG_TARGET_ARCH_PACKAGES=\"arm_cortex-a53_neon-vfpv4\"" >> .config
               echo "CONFIG_TARGET_OPTIMIZATION=\"-march=armv8-a -mtune=cortex-a53\"" >> .config
+              echo "CONFIG_arm=y" >> .config
+              echo "CONFIG_ARCH=\"arm\"" >> .config
+              echo "CONFIG_CPU_TYPE=\"cortex-a53\"" >> .config
+              echo "CONFIG_FPU=\"neon-vfpv4\"" >> .config
+              echo "CONFIG_FLOAT=\"hard\"" >> .config
+              echo "CONFIG_SOFT_FLOAT=n" >> .config
+              echo "CONFIG_ARM_UNWIND=y" >> .config
+              # 明确禁用64位
+              echo "CONFIG_arm64=n" >> .config
+              echo "CONFIG_ARCH_64BIT=n" >> .config
               ;;
             aarch64)
               echo "CONFIG_TARGET_armvirt=y" > .config
               echo "CONFIG_TARGET_armvirt_64=y" >> .config
+              echo "CONFIG_TARGET_SUBTARGET=\"64\"" >> .config
+              echo "CONFIG_TARGET_ARCH_PACKAGES=\"aarch64_generic\"" >> .config
               echo "CONFIG_TARGET_OPTIMIZATION=\"-march=armv8-a -mtune=cortex-a53\"" >> .config
+              echo "CONFIG_arm64=y" >> .config
+              echo "CONFIG_ARCH=\"arm64\"" >> .config
+              echo "CONFIG_CPU_TYPE=\"cortex-a53\"" >> .config
+              echo "CONFIG_ARCH_64BIT=y" >> .config
               ;;
             x86_64)
               echo "CONFIG_TARGET_x86=y" > .config
               echo "CONFIG_TARGET_x86_64=y" >> .config
               echo "CONFIG_TARGET_OPTIMIZATION=\"-march=x86-64 -mtune=generic\"" >> .config
+              echo "CONFIG_x86_64=y" >> .config
+              echo "CONFIG_ARCH=\"x86_64\"" >> .config
               ;;
-            mips|mipsel)
+            mips)
               echo "CONFIG_TARGET_ramips=y" > .config
               echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
               echo "CONFIG_TARGET_OPTIMIZATION=\"-march=24kc -mtune=24kc\"" >> .config
+              echo "CONFIG_mips=y" >> .config
+              echo "CONFIG_ARCH=\"mips\"" >> .config
+              echo "CONFIG_CPU_TYPE=\"24kc\"" >> .config
+              echo "CONFIG_BIG_ENDIAN=y" >> .config
+              echo "CONFIG_LITTLE_ENDIAN=n" >> .config
+              ;;
+            mipsel)
+              echo "CONFIG_TARGET_ramips=y" > .config
+              echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
+              echo "CONFIG_TARGET_OPTIMIZATION=\"-march=24kc -mtune=24kc\"" >> .config
+              echo "CONFIG_mips=y" >> .config
+              echo "CONFIG_ARCH=\"mips\"" >> .config
+              echo "CONFIG_CPU_TYPE=\"24kc\"" >> .config
+              echo "CONFIG_BIG_ENDIAN=n" >> .config
+              echo "CONFIG_LITTLE_ENDIAN=y" >> .config
               ;;
             riscv64)
               echo "CONFIG_TARGET_virt=y" > .config
               echo "CONFIG_TARGET_virt_rv64=y" >> .config
               echo "CONFIG_TARGET_OPTIMIZATION=\"-march=rv64gc -mtune=generic\"" >> .config
+              echo "CONFIG_riscv=y" >> .config
+              echo "CONFIG_ARCH=\"riscv\"" >> .config
+              echo "CONFIG_ARCH_64BIT=y" >> .config
               ;;
           esac
           
@@ -368,11 +419,18 @@ jobs:
           echo "CONFIG_DEVEL=y" >> .config
           echo "CONFIG_LIBC=\"musl\"" >> .config
           echo "CONFIG_USE_MUSL=y" >> .config
+          echo "CONFIG_TARGET_ROOTFS_INITRAMFS=n" >> .config
+          echo "CONFIG_TARGET_ROOTFS_EXT4FS=n" >> .config
+          echo "CONFIG_TARGET_ROOTFS_SQUASHFS=n" >> .config
           
           echo "步骤3: 应用配置..."
           yes "" | make oldconfig 2>&1 | tail -30
           
-          echo "步骤4: 下载源码..."
+          echo "步骤4: 显示当前配置..."
+          echo "目标架构配置:"
+          grep -E "CONFIG_TARGET|CONFIG_ARCH|CONFIG_CPU" .config | grep -v "=n" | head -20
+          
+          echo "步骤5: 下载源码..."
           make download -j$(nproc) 2>&1 | tee /tmp/download.log
           DOWNLOAD_STATUS=${PIPESTATUS[0]}
           if [ $DOWNLOAD_STATUS -eq 0 ]; then
@@ -381,7 +439,7 @@ jobs:
             echo "⚠️ 源码下载有问题，但继续构建..."
           fi
           
-          echo "步骤5: 构建工具链..."
+          echo "步骤6: 构建工具链..."
           echo "开始时间: $(date)"
           make toolchain/clean 2>&1 | tail -20
           
@@ -403,11 +461,11 @@ jobs:
           
           echo "构建完成时间: $(date)"
 
-      - name: 🔍 验证构建结果
+      - name: 🔍 智能验证构建结果
         id: validate-build
         if: env.SKIP_BUILD != 'true' && env.BUILD_SUCCESS == 'true'
         run: |
-          echo "=== 验证构建结果 ==="
+          echo "=== 智能验证构建结果 ==="
           cd "${{ env.BUILD_DIR }}"
           
           # 查找工具链目录
@@ -443,15 +501,90 @@ jobs:
           echo "编译器版本: $COMPILER_VERSION"
           echo "编译器目标: $COMPILER_TARGET"
           
-          # 验证编译器名称
-          if [[ ! "$COMPILER_NAME" =~ ^${{ env.EXPECTED_COMPILER }}$ ]]; then
-            echo "❌ 错误: 编译器名称不符合预期"
-            echo "预期: ${{ env.EXPECTED_COMPILER }}"
-            echo "实际: $COMPILER_NAME"
-            echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
-            echo "VALIDATION_ERROR=\"编译器名称错误: 预期 ${{ env.EXPECTED_COMPILER }}, 实际 $COMPILER_NAME\"" >> $GITHUB_ENV
-            exit 1
-          fi
+          # 智能验证：检查编译器是否匹配预期的架构模式
+          ARCH="${{ matrix.arch }}"
+          EXPECTED_PATTERN="${{ env.EXPECTED_COMPILER_PATTERN }}"
+          
+          # 根据架构进行智能匹配
+          case "$ARCH" in
+            arm_cortex-a7|arm_cortex-a53)
+              # ARM架构：允许多种变体
+              if echo "$COMPILER_NAME" | grep -q "arm.*openwrt.*linux.*musl"; then
+                echo "✅ ARM架构验证通过: $COMPILER_NAME"
+                
+                # 检查是否是错误的aarch64
+                if echo "$COMPILER_NAME" | grep -q "aarch64"; then
+                  echo "❌ 错误: 构建了错误的64位编译器 (应该是32位ARM)"
+                  echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
+                  echo "VALIDATION_ERROR=\"架构错误: 预期32位ARM, 实际构建了aarch64\"" >> $GITHUB_ENV
+                  exit 1
+                fi
+              else
+                echo "❌ 错误: 编译器不匹配ARM架构模式"
+                echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
+                echo "VALIDATION_ERROR=\"编译器不匹配ARM架构: $COMPILER_NAME\"" >> $GITHUB_ENV
+                exit 1
+              fi
+              ;;
+            aarch64)
+              if echo "$COMPILER_NAME" | grep -q "aarch64.*openwrt.*linux.*musl"; then
+                echo "✅ AArch64架构验证通过: $COMPILER_NAME"
+                
+                # 检查是否是错误的32位ARM
+                if echo "$COMPILER_NAME" | grep -q "^arm-"; then
+                  echo "❌ 错误: 构建了错误的32位编译器 (应该是64位AArch64)"
+                  echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
+                  echo "VALIDATION_ERROR=\"架构错误: 预期AArch64, 实际构建了32位ARM\"" >> $GITHUB_ENV
+                  exit 1
+                fi
+              else
+                echo "❌ 错误: 编译器不匹配AArch64架构模式"
+                echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
+                echo "VALIDATION_ERROR=\"编译器不匹配AArch64架构: $COMPILER_NAME\"" >> $GITHUB_ENV
+                exit 1
+              fi
+              ;;
+            x86_64)
+              if echo "$COMPILER_NAME" | grep -q "x86_64.*openwrt.*linux.*musl"; then
+                echo "✅ x86_64架构验证通过: $COMPILER_NAME"
+              else
+                echo "❌ 错误: 编译器不匹配x86_64架构模式"
+                echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
+                echo "VALIDATION_ERROR=\"编译器不匹配x86_64架构: $COMPILER_NAME\"" >> $GITHUB_ENV
+                exit 1
+              fi
+              ;;
+            mips)
+              if echo "$COMPILER_NAME" | grep -q "mips.*openwrt.*linux.*musl"; then
+                echo "✅ MIPS架构验证通过: $COMPILER_NAME"
+              else
+                echo "❌ 错误: 编译器不匹配MIPS架构模式"
+                echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
+                echo "VALIDATION_ERROR=\"编译器不匹配MIPS架构: $COMPILER_NAME\"" >> $GITHUB_ENV
+                exit 1
+              fi
+              ;;
+            mipsel)
+              if echo "$COMPILER_NAME" | grep -q "mipsel.*openwrt.*linux.*musl"; then
+                echo "✅ MIPSel架构验证通过: $COMPILER_NAME"
+              else
+                echo "❌ 错误: 编译器不匹配MIPSel架构模式"
+                echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
+                echo "VALIDATION_ERROR=\"编译器不匹配MIPSel架构: $COMPILER_NAME\"" >> $GITHUB_ENV
+                exit 1
+              fi
+              ;;
+            riscv64)
+              if echo "$COMPILER_NAME" | grep -q "riscv64.*openwrt.*linux.*musl"; then
+                echo "✅ RISC-V架构验证通过: $COMPILER_NAME"
+              else
+                echo "❌ 错误: 编译器不匹配RISC-V架构模式"
+                echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
+                echo "VALIDATION_ERROR=\"编译器不匹配RISC-V架构: $COMPILER_NAME\"" >> $GITHUB_ENV
+                exit 1
+              fi
+              ;;
+          esac
           
           # 测试编译器功能
           TEST_FILE="/tmp/test_$$.c"
@@ -542,33 +675,33 @@ jobs:
           echo "GCC_VERSION=$CLEAN_GCC_VERSION" >> $GITHUB_ENV
           echo "FILE_COUNT=$FILE_COUNT" >> $GITHUB_ENV
 
-      - name: 📝 记录job详细结果
+      - name: 📝 修复：记录job详细结果
         if: always()
         run: |
           echo "=== 记录job详细结果 ==="
           
-          # 准备结果信息
+          # 准备结果信息 - 修复语法错误
           ARCH_TITLE="${{ env.ARCH_TYPE_TITLE || matrix.arch }}"
           STATUS_ICON=""
           STATUS_TEXT=""
           DETAILS=""
           
-          if [ "${{ env.SKIP_BUILD }}" = "true" ]; then
+          if [ "$SKIP_BUILD" = "true" ]; then
             STATUS_ICON="⏭️"
             STATUS_TEXT="已存在，跳过"
             DETAILS="已存在此OpenWrt版本的编译器"
-          elif [ "${{ env.BUILD_SUCCESS }}" = "false" ]; then
+          elif [ "$BUILD_SUCCESS" = "false" ]; then
             STATUS_ICON="❌"
             STATUS_TEXT="构建失败"
-            DETAILS="${{ env.BUILD_ERROR || '未知构建错误' }}"
-          elif [ "${{ env.VALIDATION_SUCCESS }}" = "true" ]; then
+            DETAILS="$BUILD_ERROR"
+          elif [ "$VALIDATION_SUCCESS" = "true" ]; then
             STATUS_ICON="✅"
             STATUS_TEXT="构建成功"
-            DETAILS="编译器: ${{ env.COMPILER_NAME || 'unknown' }} v${{ env.GCC_VERSION || 'unknown' }}, 大小: ${{ env.TOTAL_SIZE || 'unknown' }}, 文件数: ${{ env.FILE_COUNT || 'unknown' }}"
-          elif [ "${{ env.VALIDATION_SUCCESS }}" = "false" ]; then
+            DETAILS="编译器: ${COMPILER_NAME:-unknown} v${GCC_VERSION:-unknown}, 大小: ${TOTAL_SIZE:-unknown}, 文件数: ${FILE_COUNT:-unknown}"
+          elif [ "$VALIDATION_SUCCESS" = "false" ]; then
             STATUS_ICON="❌"
             STATUS_TEXT="验证失败"
-            DETAILS="${{ env.VALIDATION_ERROR || '验证错误' }}"
+            DETAILS="$VALIDATION_ERROR"
           else
             STATUS_ICON="⚠️"
             STATUS_TEXT="未知状态"
@@ -592,11 +725,11 @@ jobs:
           echo '  "status_text": "'$STATUS_TEXT'",' >> "$RESULT_FILE"
           echo '  "details": "'$DETAILS'",' >> "$RESULT_FILE"
           echo '  "openwrt_version": "'${{ needs.setup.outputs.openwrt_version }}'",' >> "$RESULT_FILE"
-          echo '  "gcc_version": "'${{ env.GCC_VERSION || 'unknown' }}'",' >> "$RESULT_FILE"
-          echo '  "compiler_name": "'${{ env.COMPILER_NAME || 'unknown' }}'",' >> "$RESULT_FILE"
-          echo '  "output_dir": "'${{ env.OUTPUT_DIR || 'none' }}'",' >> "$RESULT_FILE"
-          echo '  "total_size": "'${{ env.TOTAL_SIZE || 'unknown' }}'",' >> "$RESULT_FILE"
-          echo '  "file_count": "'${{ env.FILE_COUNT || 'unknown' }}'"' >> "$RESULT_FILE"
+          echo '  "gcc_version": "'${GCC_VERSION:-unknown}'",' >> "$RESULT_FILE"
+          echo '  "compiler_name": "'${COMPILER_NAME:-unknown}'",' >> "$RESULT_FILE"
+          echo '  "output_dir": "'${OUTPUT_DIR:-none}'",' >> "$RESULT_FILE"
+          echo '  "total_size": "'${TOTAL_SIZE:-unknown}'",' >> "$RESULT_FILE"
+          echo '  "file_count": "'${FILE_COUNT:-unknown}'"' >> "$RESULT_FILE"
           echo '}' >> "$RESULT_FILE"
           
           echo "结果已保存到: $RESULT_FILE"
@@ -610,23 +743,23 @@ jobs:
           
           ARCH_TITLE="${{ env.ARCH_TYPE_TITLE || matrix.arch }}"
           
-          if [ "${{ env.SKIP_BUILD }}" = "true" ]; then
+          if [ "$SKIP_BUILD" = "true" ]; then
             echo "⏭️ $ARCH_TITLE"
             echo "   结果: 已存在，跳过"
-          elif [ "${{ env.BUILD_SUCCESS }}" = "false" ]; then
+          elif [ "$BUILD_SUCCESS" = "false" ]; then
             echo "❌ $ARCH_TITLE"
             echo "   结果: 构建失败"
-            echo "   错误: ${{ env.BUILD_ERROR || '未知错误' }}"
-          elif [ "${{ env.VALIDATION_SUCCESS }}" = "true" ]; then
+            echo "   错误: $BUILD_ERROR"
+          elif [ "$VALIDATION_SUCCESS" = "true" ]; then
             echo "✅ $ARCH_TITLE"
             echo "   结果: 构建成功"
-            echo "   编译器: ${{ env.COMPILER_NAME || 'unknown' }} v${{ env.GCC_VERSION || 'unknown' }}"
-            echo "   输出目录: ${{ env.OUTPUT_DIR || 'unknown' }}"
-            echo "   大小: ${{ env.TOTAL_SIZE || 'unknown' }}, 文件数: ${{ env.FILE_COUNT || 'unknown' }}"
-          elif [ "${{ env.VALIDATION_SUCCESS }}" = "false" ]; then
+            echo "   编译器: ${COMPILER_NAME:-unknown} v${GCC_VERSION:-unknown}"
+            echo "   输出目录: ${OUTPUT_DIR:-unknown}"
+            echo "   大小: ${TOTAL_SIZE:-unknown}, 文件数: ${FILE_COUNT:-unknown}"
+          elif [ "$VALIDATION_SUCCESS" = "false" ]; then
             echo "❌ $ARCH_TITLE"
             echo "   结果: 验证失败"
-            echo "   错误: ${{ env.VALIDATION_ERROR || '验证错误' }}"
+            echo "   错误: $VALIDATION_ERROR"
           else
             echo "⚠️ $ARCH_TITLE"
             echo "   结果: 未知状态"
@@ -676,7 +809,7 @@ jobs:
           TOTAL_JOBS=0
           SUCCESS_COUNT=0
           SKIPPED_COUNT=0
-          FAILED_COUNT=0
+          BUILD_FAILED_COUNT=0
           VALIDATION_FAILED_COUNT=0
           
           if [ ! -d "$RESULT_DIR" ]; then
@@ -705,7 +838,9 @@ jobs:
                 echo "  $STATUS_ICON $ARCH_TITLE"
                 echo "     编译器文件: $COMPILER_NAME"
                 echo "     GCC版本: $GCC_VERSION"
-                echo "     输出目录: $(basename "$OUTPUT_DIR")"
+                if [ "$OUTPUT_DIR" != "none" ]; then
+                  echo "     输出目录: $(basename "$OUTPUT_DIR")"
+                fi
                 echo "     详情: $DETAILS"
                 echo ""
               fi
@@ -738,7 +873,7 @@ jobs:
               
               if [ "$STATUS_ICON" = "❌" ]; then
                 if [ "$STATUS_TEXT" = "构建失败" ]; then
-                  FAILED_COUNT=$((FAILED_COUNT + 1))
+                  BUILD_FAILED_COUNT=$((BUILD_FAILED_COUNT + 1))
                 else
                   VALIDATION_FAILED_COUNT=$((VALIDATION_FAILED_COUNT + 1))
                 fi
@@ -754,11 +889,11 @@ jobs:
           echo "- 总任务数: $TOTAL_JOBS"
           echo "- ✅ 成功构建: $SUCCESS_COUNT"
           echo "- ⏭️ 跳过: $SKIPPED_COUNT"
-          echo "- ❌ 构建失败: $FAILED_COUNT"
+          echo "- ❌ 构建失败: $BUILD_FAILED_COUNT"
           echo "- ❌ 验证失败: $VALIDATION_FAILED_COUNT"
           echo ""
           
-          TOTAL_FAILED=$((FAILED_COUNT + VALIDATION_FAILED_COUNT))
+          TOTAL_FAILED=$((BUILD_FAILED_COUNT + VALIDATION_FAILED_COUNT))
           if [ $TOTAL_FAILED -gt 0 ]; then
             echo "⚠️ 注意: 有 $TOTAL_FAILED 个架构构建失败"
           fi
@@ -775,7 +910,7 @@ jobs:
           echo "TOTAL_JOBS=$TOTAL_JOBS" >> $GITHUB_ENV
           echo "SUCCESS_COUNT=$SUCCESS_COUNT" >> $GITHUB_ENV
           echo "SKIPPED_COUNT=$SKIPPED_COUNT" >> $GITHUB_ENV
-          echo "FAILED_COUNT=$FAILED_COUNT" >> $GITHUB_ENV
+          echo "BUILD_FAILED_COUNT=$BUILD_FAILED_COUNT" >> $GITHUB_ENV
           echo "VALIDATION_FAILED_COUNT=$VALIDATION_FAILED_COUNT" >> $GITHUB_ENV
           echo "TOTAL_FAILED=$TOTAL_FAILED" >> $GITHUB_ENV
 
