@@ -1,0 +1,7 @@
+# Git LFS 配置
+firmware-config/build-Compiler-file/compilers/**/*.so filter=lfs diff=lfs merge=lfs -text
+firmware-config/build-Compiler-file/compilers/**/libexec/gcc/**/cc1 filter=lfs diff=lfs merge=lfs -text
+firmware-config/build-Compiler-file/compilers/**/libexec/gcc/**/cc1plus filter=lfs diff=lfs merge=lfs -text
+firmware-config/build-Compiler-file/compilers/**/libexec/gcc/**/lto1 filter=lfs diff=lfs merge=lfs -text
+firmware-config/build-Compiler-file/compilers/**/libexec/gcc/**/cc1obj filter=lfs diff=lfs merge=lfs -text
+firmware-config/build-Compiler-file/compilers/**/*.so.* filter=lfs diff=lfs merge=lfs -text
