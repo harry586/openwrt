@@ -210,42 +210,56 @@ jobs:
               SUBTARGET="generic"
               ARCH_NAME="arm"
               PREFIX="arm-openwrt-linux-musl"
+              CPU_TYPE="cortex-a7"
+              TARGET_CPU="arm_cortex-a7"
               ;;
             arm_cortex-a53)
               TARGET="sunxi"
               SUBTARGET="cortexa53"
               ARCH_NAME="arm"
               PREFIX="arm-openwrt-linux-musl"
+              CPU_TYPE="cortex-a53"
+              TARGET_CPU="arm_cortex-a53"
               ;;
             aarch64)
               TARGET="armvirt"
               SUBTARGET="64"
               ARCH_NAME="aarch64"
               PREFIX="aarch64-openwrt-linux-musl"
+              CPU_TYPE="cortex-a53"
+              TARGET_CPU="aarch64_cortex-a53"
               ;;
             x86_64)
               TARGET="x86"
               SUBTARGET="64"
               ARCH_NAME="x86_64"
               PREFIX="x86_64-openwrt-linux-musl"
+              CPU_TYPE=""
+              TARGET_CPU="x86_64"
               ;;
             mips)
               TARGET="ramips"
               SUBTARGET="mt7621"
               ARCH_NAME="mips"
               PREFIX="mips-openwrt-linux-musl"
+              CPU_TYPE="24kc"
+              TARGET_CPU="mips_24kc"
               ;;
             mipsel)
               TARGET="ramips"
               SUBTARGET="mt7621"
               ARCH_NAME="mipsel"
               PREFIX="mipsel-openwrt-linux-musl"
+              CPU_TYPE="24kc"
+              TARGET_CPU="mipsel_24kc"
               ;;
             riscv64)
               TARGET="virt"
               SUBTARGET="rv64"
               ARCH_NAME="riscv64"
               PREFIX="riscv64-openwrt-linux-musl"
+              CPU_TYPE=""
+              TARGET_CPU="riscv64"
               ;;
           esac
           BUILD_ID="${ARCH}_musl_openwrt-${{ needs.setup.outputs.openwrt_version }}_$(date +%Y%m%d_%H%M%S)"
@@ -255,6 +269,7 @@ jobs:
           echo "  构建目录: $BUILD_DIR"
           echo "  目标平台: $TARGET/$SUBTARGET"
           echo "  架构名称: $ARCH_NAME"
+          echo "  目标CPU: $TARGET_CPU"
           echo "  编译器前缀: $PREFIX-"
           echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
           echo "TARGET=$TARGET" >> $GITHUB_ENV
@@ -262,6 +277,8 @@ jobs:
           echo "ARCH_NAME=$ARCH_NAME" >> $GITHUB_ENV
           echo "PREFIX=$PREFIX" >> $GITHUB_ENV
           echo "BUILD_ID=$BUILD_ID" >> $GITHUB_ENV
+          echo "TARGET_CPU=$TARGET_CPU" >> $GITHUB_ENV
+          echo "CPU_TYPE=$CPU_TYPE" >> $GITHUB_ENV
 
       - name: 🔧 安装依赖
         if: env.SKIP_BUILD != 'true'
@@ -292,37 +309,57 @@ jobs:
           ./scripts/feeds install -a
           echo "步骤2: 配置目标平台..."
           rm -f .config
-          case "${{ env.ARCH_NAME }}" in
-            arm)
-              echo "CONFIG_TARGET_${{ env.TARGET }}=y" > .config
-              echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
+          
+          case "${{ env.TARGET_CPU }}" in
+            arm_cortex-a7)
+              echo "CONFIG_TARGET_ipq40xx=y" > .config
+              echo "CONFIG_TARGET_ipq40xx_generic=y" >> .config
+              echo "CONFIG_TARGET_OPTIMIZATION=\"-march=armv7-a -mtune=cortex-a7\"" >> .config
               ;;
-            aarch64)
-              echo "CONFIG_TARGET_${{ env.TARGET }}=y" > .config
-              echo "CONFIG_TARGET_${{ env.TARGET }}_${{ env.SUBTARGET }}=y" >> .config
+            arm_cortex-a53)
+              echo "CONFIG_TARGET_sunxi=y" > .config
+              echo "CONFIG_TARGET_sunxi_cortexa53=y" >> .config
+              echo "CONFIG_TARGET_OPTIMIZATION=\"-march=armv8-a -mtune=cortex-a53\"" >> .config
+              ;;
+            aarch64_cortex-a53)
+              echo "CONFIG_TARGET_armvirt=y" > .config
+              echo "CONFIG_TARGET_armvirt_64=y" >> .config
+              echo "CONFIG_TARGET_OPTIMIZATION=\"-march=armv8-a -mtune=cortex-a53\"" >> .config
               ;;
             x86_64)
               echo "CONFIG_TARGET_x86=y" > .config
               echo "CONFIG_TARGET_x86_64=y" >> .config
+              echo "CONFIG_TARGET_OPTIMIZATION=\"-march=x86-64 -mtune=generic\"" >> .config
               ;;
-            mips|mipsel)
+            mips_24kc)
               echo "CONFIG_TARGET_ramips=y" > .config
               echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
+              echo "CONFIG_TARGET_OPTIMIZATION=\"-march=24kc -mtune=24kc\"" >> .config
+              ;;
+            mipsel_24kc)
+              echo "CONFIG_TARGET_ramips=y" > .config
+              echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
+              echo "CONFIG_TARGET_OPTIMIZATION=\"-march=24kc -mtune=24kc\"" >> .config
               ;;
             riscv64)
               echo "CONFIG_TARGET_virt=y" > .config
               echo "CONFIG_TARGET_virt_rv64=y" >> .config
+              echo "CONFIG_TARGET_OPTIMIZATION=\"-march=rv64gc -mtune=generic\"" >> .config
               ;;
           esac
+          
           echo "CONFIG_SDK=y" >> .config
           echo "CONFIG_BUILD_TOOLCHAIN=y" >> .config
           echo "CONFIG_TOOLCHAINOPTS=y" >> .config
           echo "CONFIG_DEVEL=y" >> .config
+          echo "CONFIG_LIBC=\"musl\"" >> .config
+          echo "CONFIG_USE_MUSL=y" >> .config
+          
           echo "步骤3: 应用配置..."
           yes "" | make oldconfig 2>&1 | tail -30
           echo "步骤4: 显示配置摘要..."
           echo "目标配置:"
-          grep "CONFIG_TARGET" .config | grep -v "=n"
+          grep "CONFIG_TARGET" .config | grep -v "=n" | head -10
           echo "步骤5: 下载源码..."
           make download -j$(nproc) 2>&1 | tee /tmp/download.log
           DOWNLOAD_STATUS=${PIPESTATUS[0]}
@@ -361,11 +398,9 @@ jobs:
           echo "当前工作目录: $(pwd)"
           echo "查找工具链目录..."
           
-          # 方法1: 查找标准工具链目录
           TOOLCHAINS=$(find staging_dir -type d -name "*toolchain*" 2>/dev/null | head -5)
           
           if [ -z "$TOOLCHAINS" ]; then
-            echo "方法2: 查找bin目录..."
             BIN_DIR=$(find staging_dir -type d -name "bin" 2>/dev/null | head -1)
             if [ -n "$BIN_DIR" ]; then
               TOOLCHAINS=$(dirname "$BIN_DIR")
@@ -383,7 +418,6 @@ jobs:
           echo "找到的候选目录:"
           echo "$TOOLCHAINS"
           
-          # 选择第一个有效的目录
           SELECTED_TOOLCHAIN=""
           for dir in $TOOLCHAINS; do
             if [ -d "$dir" ]; then
@@ -398,7 +432,6 @@ jobs:
             exit 1
           fi
           
-          # 查找编译器
           COMPILER=$(find "$SELECTED_TOOLCHAIN" -name "*gcc" -type f 2>/dev/null | head -1)
           if [ -n "$COMPILER" ] && [ -x "$COMPILER" ]; then
             VERSION=$("$COMPILER" --version 2>&1 | head -1 | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+" | head -1 | tr -d '\n' || echo "unknown")
@@ -421,43 +454,55 @@ jobs:
           TOOLCHAIN_SIZE=$(du -sh "$SELECTED_TOOLCHAIN" 2>/dev/null | cut -f1 | tr -d '\n' || echo "0")
           echo "TOOLCHAIN_SIZE=$TOOLCHAIN_SIZE" >> $GITHUB_ENV
 
-      - name: 💾 复制工具链文件
+      - name: 💾 压缩并复制工具链文件
         if: env.SKIP_BUILD != 'true' && env.TOOLCHAIN_DIR != ''
         run: |
-          echo "=== 复制工具链文件 ==="
-          echo "当前目录: $(pwd)"
-          echo "构建目录: ${{ env.BUILD_DIR }}"
-          echo "源目录: ${{ env.TOOLCHAIN_DIR }}"
-          echo "目标目录: ${{ env.OUTPUT_DIR }}"
-          
-          # 进入构建目录
+          echo "=== 压缩并复制工具链文件 ==="
           cd "${{ env.BUILD_DIR }}"
-          echo "进入构建目录: $(pwd)"
           
-          # 检查源目录
-          if [ -d "${{ env.TOOLCHAIN_DIR }}" ]; then
-            echo "✅ 源目录存在"
-            echo "源目录大小: $(du -sh "${{ env.TOOLCHAIN_DIR }}" | cut -f1)"
-          else
-            echo "❌ 源目录不存在: ${{ env.TOOLCHAIN_DIR }}"
-            echo "当前目录内容:"
-            ls -la
-            echo "尝试查找所有目录:"
-            find . -type d -name "*toolchain*" 2>/dev/null
-            exit 1
+          echo "步骤1: 检查大文件..."
+          LARGE_FILES=$(find "${{ env.TOOLCHAIN_DIR }}" -type f -size +90M 2>/dev/null | head -10 || true)
+          if [ -n "$LARGE_FILES" ]; then
+            echo "发现大文件:"
+            echo "$LARGE_FILES"
+            for file in $LARGE_FILES; do
+              echo "压缩: $file"
+              ORIG_PERM=$(stat -c "%a" "$file" 2>/dev/null || echo "644")
+              ORIG_OWNER=$(stat -c "%u:%g" "$file" 2>/dev/null || echo "1000:1000")
+              gzip -9 -c "$file" > "${file}.gz" && {
+                rm -f "$file"
+                chmod "$ORIG_PERM" "${file}.gz" 2>/dev/null || true
+                chown "$ORIG_OWNER" "${file}.gz" 2>/dev/null || true
+                echo "✅ 压缩成功: ${file}.gz"
+              } || echo "⚠️ 压缩失败: $file"
+            done
           fi
           
-          # 准备输出目录
           echo "准备输出目录..."
           rm -rf "${{ env.OUTPUT_DIR }}" 2>/dev/null || true
           mkdir -p "${{ env.OUTPUT_DIR }}"
           
-          # 复制文件
           echo "开始复制工具链..."
-          cp -r "${{ env.TOOLCHAIN_DIR }}"/* "${{ env.OUTPUT_DIR }}"/ 2>&1 | tail -20
-          echo "复制完成"
+          cp -r "${{ env.TOOLCHAIN_DIR }}"/* "${{ env.OUTPUT_DIR }}/" 2>&1 | tail -20
           
-          # 验证
+          echo '#!/bin/bash' > "${{ env.OUTPUT_DIR }}/decompress.sh"
+          echo 'echo "解压压缩的大文件..."' >> "${{ env.OUTPUT_DIR }}/decompress.sh"
+          echo 'echo "注意: 运行此脚本将解压所有.gz文件并删除压缩文件"' >> "${{ env.OUTPUT_DIR }}/decompress.sh"
+          echo 'read -p "继续? [y/N]: " -n 1 -r' >> "${{ env.OUTPUT_DIR }}/decompress.sh"
+          echo 'echo' >> "${{ env.OUTPUT_DIR }}/decompress.sh"
+          echo 'if [[ $REPLY =~ ^[Yy]$ ]]; then' >> "${{ env.OUTPUT_DIR }}/decompress.sh"
+          echo '  find . -name "*.gz" -type f 2>/dev/null | while read gzfile; do' >> "${{ env.OUTPUT_DIR }}/decompress.sh"
+          echo '    orig_file="${gzfile%.gz}"' >> "${{ env.OUTPUT_DIR }}/decompress.sh"
+          echo '    echo "解压: $gzfile -> $orig_file"' >> "${{ env.OUTPUT_DIR }}/decompress.sh"
+          echo '    gunzip -c "$gzfile" > "$orig_file" && rm -f "$gzfile" && echo "✅ 解压成功"' >> "${{ env.OUTPUT_DIR }}/decompress.sh"
+          echo '  done' >> "${{ env.OUTPUT_DIR }}/decompress.sh"
+          echo '  echo "所有文件解压完成"' >> "${{ env.OUTPUT_DIR }}/decompress.sh"
+          echo 'else' >> "${{ env.OUTPUT_DIR }}/decompress.sh"
+          echo '  echo "取消解压"' >> "${{ env.OUTPUT_DIR }}/decompress.sh"
+          echo 'fi' >> "${{ env.OUTPUT_DIR }}/decompress.sh"
+          
+          chmod +x "${{ env.OUTPUT_DIR }}/decompress.sh"
+          
           if [ -d "${{ env.OUTPUT_DIR }}/bin" ]; then
             echo "✅ bin目录存在"
             COMPILER=$(find "${{ env.OUTPUT_DIR }}/bin" -name "*gcc" -type f 2>/dev/null | head -1)
@@ -488,38 +533,63 @@ jobs:
             ACTUAL_GCC="unknown"
           fi
           echo "创建metadata.json..."
-          echo "{" > "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"architecture\": \"${{ matrix.arch }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"arch_name\": \"${{ env.ARCH_NAME }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"libc\": \"musl\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"libc_version\": \"${{ needs.setup.outputs.musl_version }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"gcc_version\": \"$ACTUAL_GCC\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"binutils_version\": \"${{ needs.setup.outputs.binutils_version }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"linux_version\": \"${{ needs.setup.outputs.linux_version }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"openwrt_version\": \"${{ needs.setup.outputs.openwrt_version }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"target\": \"${{ env.TARGET }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"subtarget\": \"${{ env.SUBTARGET }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"compiler_prefix\": \"${{ env.PREFIX }}-\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"build_date\": \"$(date -Iseconds)\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"build_id\": \"${{ env.BUILD_ID }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"size\": \"${{ env.TOTAL_SIZE }}\"," >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "  \"file_count\": ${{ env.FILE_COUNT }}" >> "${{ env.OUTPUT_DIR }}/metadata.json"
-          echo "}" >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo '{' > "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo '  "architecture": "'${{ matrix.arch }}'",' >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo '  "arch_name": "'${{ env.ARCH_NAME }}'",' >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo '  "libc": "musl",' >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo '  "libc_version": "'${{ needs.setup.outputs.musl_version }}'",' >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo '  "gcc_version": "'$ACTUAL_GCC'",' >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo '  "binutils_version": "'${{ needs.setup.outputs.binutils_version }}'",' >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo '  "linux_version": "'${{ needs.setup.outputs.linux_version }}'",' >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo '  "openwrt_version": "'${{ needs.setup.outputs.openwrt_version }}'",' >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo '  "target": "'${{ env.TARGET }}'",' >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo '  "subtarget": "'${{ env.SUBTARGET }}'",' >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo '  "compiler_prefix": "'${{ env.PREFIX }}'-",' >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo '  "build_date": "'$(date -Iseconds)'",' >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo '  "build_id": "'${{ env.BUILD_ID }}'",' >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo '  "size": "'${{ env.TOTAL_SIZE }}'",' >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo '  "file_count": '${{ env.FILE_COUNT }}',' >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo '  "note": "大文件已使用gzip压缩，运行decompress.sh解压"' >> "${{ env.OUTPUT_DIR }}/metadata.json"
+          echo '}' >> "${{ env.OUTPUT_DIR }}/metadata.json"
           echo "元数据内容:"
           cat "${{ env.OUTPUT_DIR }}/metadata.json"
 
-      - name: 📤 提交到Git仓库
+      - name: 📤 配置 Git LFS 并提交到Git仓库
         if: env.SKIP_BUILD != 'true' && env.TOTAL_SIZE != '' && env.TOTAL_SIZE != '0K' && env.TOTAL_SIZE != '8.0K'
         run: |
-          echo "=== 提交编译器到Git仓库 ==="
+          echo "=== 配置 Git LFS 并提交编译器到Git仓库 ==="
           cd "${{ github.workspace }}"
+          
+          echo "安装 Git LFS..."
+          git lfs install --local || echo "Git LFS 可能未安装，尝试继续"
+          
           git config user.email "github-actions@github.com"
           git config user.name "GitHub Actions"
-          git pull origin main --no-edit
+          
+          if [ ! -f .gitattributes ]; then
+            echo "创建 .gitattributes 文件..."
+            echo "# Git LFS 配置" > .gitattributes
+            echo "firmware-config/build-Compiler-file/compilers/**/*.so filter=lfs diff=lfs merge=lfs -text" >> .gitattributes
+            echo "firmware-config/build-Compiler-file/compilers/**/libexec/gcc/**/cc1 filter=lfs diff=lfs merge=lfs -text" >> .gitattributes
+            echo "firmware-config/build-Compiler-file/compilers/**/libexec/gcc/**/cc1plus filter=lfs diff=lfs merge=lfs -text" >> .gitattributes
+            echo "firmware-config/build-Compiler-file/compilers/**/libexec/gcc/**/lto1 filter=lfs diff=lfs merge=lfs -text" >> .gitattributes
+            echo "firmware-config/build-Compiler-file/compilers/**/libexec/gcc/**/cc1obj filter=lfs diff=lfs merge=lfs -text" >> .gitattributes
+            echo "firmware-config/build-Compiler-file/compilers/**/*.so.* filter=lfs diff=lfs merge=lfs -text" >> .gitattributes
+          fi
+          
+          git pull origin main --no-edit || echo "拉取失败，可能分支不存在，继续"
+          
+          echo "配置 LFS 跟踪..."
+          git lfs track "firmware-config/build-Compiler-file/compilers/**/libexec/gcc/**/cc1" 2>/dev/null || true
+          git lfs track "firmware-config/build-Compiler-file/compilers/**/libexec/gcc/**/cc1plus" 2>/dev/null || true
+          git lfs track "firmware-config/build-Compiler-file/compilers/**/libexec/gcc/**/lto1" 2>/dev/null || true
+          
+          git add -f .gitattributes
           git add -f "firmware-config/build-Compiler-file/compilers/*"
+          
           if ! git diff --cached --quiet; then
             ACTUAL_GCC_VERSION=$(grep -o '"gcc_version": "[^"]*' "${{ env.OUTPUT_DIR }}/metadata.json" 2>/dev/null | cut -d'"' -f4 || echo "unknown")
-            git commit -m "build(compiler): 添加 ${{ matrix.arch }} 交叉编译器" -m "架构: ${{ matrix.arch }}" -m "OpenWrt: ${{ needs.setup.outputs.openwrt_version }}" -m "GCC: $ACTUAL_GCC_VERSION" -m "Binutils: ${{ needs.setup.outputs.binutils_version }}" -m "大小: ${{ env.TOTAL_SIZE }}" -m "文件数: ${{ env.FILE_COUNT }}"
+            git commit -m "build(compiler): 添加 ${{ matrix.arch }} 交叉编译器" -m "架构: ${{ matrix.arch }}" -m "OpenWrt: ${{ needs.setup.outputs.openwrt_version }}" -m "GCC: $ACTUAL_GCC_VERSION" -m "Binutils: ${{ needs.setup.outputs.binutils_version }}" -m "大小: ${{ env.TOTAL_SIZE }}" -m "文件数: ${{ env.FILE_COUNT }}" -m "注意: 大文件已使用gzip压缩，运行decompress.sh解压"
             git push origin main
             echo "✅ 已提交到仓库"
           else
@@ -554,6 +624,8 @@ jobs:
             echo ""
             echo "🚀 使用方法:"
             echo "cd ${{ env.OUTPUT_DIR }}"
+            echo '# 如果文件已压缩，先运行:'
+            echo './decompress.sh'
             echo 'export PATH="$PWD/bin:$PATH"'
             echo "${{ env.PREFIX }}-gcc --version"
           fi
