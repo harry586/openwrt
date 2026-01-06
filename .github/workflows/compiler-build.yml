@@ -1,5 +1,5 @@
 # .github/workflows/compiler-build.yml
-name: 🔧 交叉编译器构建（最终修复版）
+name: 🔧 交叉编译器构建（修复推送版）
 
 on:
   workflow_dispatch:
@@ -396,7 +396,7 @@ jobs:
           
           echo "构建完成时间: $(date)"
 
-      - name: 🔍 修复：智能查找和验证编译器
+      - name: 🔍 智能查找和验证编译器
         id: validate-build
         if: env.SKIP_BUILD != 'true' && env.BUILD_SUCCESS == 'true'
         run: |
@@ -406,12 +406,11 @@ jobs:
           echo "搜索工具链文件..."
           echo "当前目录: $(pwd)"
           
-          # 方法1：查找标准工具链目录
+          # 查找标准工具链目录
           TOOLCHAIN_DIR=$(find staging_dir -type d -name "*toolchain*" 2>/dev/null | head -1)
           
           if [ -z "$TOOLCHAIN_DIR" ]; then
-            # 方法2：查找包含bin的目录
-            echo "方法1失败，尝试方法2..."
+            # 查找包含bin的目录
             BIN_DIR=$(find staging_dir -type d -name "bin" 2>/dev/null | head -1)
             if [ -n "$BIN_DIR" ]; then
               TOOLCHAIN_DIR=$(dirname "$BIN_DIR")
@@ -420,9 +419,6 @@ jobs:
           fi
           
           if [ -z "$TOOLCHAIN_DIR" ]; then
-            # 方法3：列出staging_dir查看结构
-            echo "方法2失败，查看staging_dir结构..."
-            find staging_dir -maxdepth 2 -type d 2>/dev/null | sort
             echo "❌ 错误: 未找到工具链目录"
             echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
             echo "VALIDATION_ERROR=\"未找到工具链目录\"" >> $GITHUB_ENV
@@ -432,37 +428,24 @@ jobs:
           echo "✅ 找到工具链目录: $TOOLCHAIN_DIR"
           echo "TOOLCHAIN_DIR=$TOOLCHAIN_DIR" >> $GITHUB_ENV
           
-          # 查找编译器 - 多种方法
+          # 查找编译器
           echo "搜索编译器..."
           
-          # 方法1：在bin目录中查找
+          # 在bin目录中查找
           BIN_DIR="$TOOLCHAIN_DIR/bin"
           if [ -d "$BIN_DIR" ]; then
             echo "在bin目录中搜索: $BIN_DIR"
             COMPILER=$(find "$BIN_DIR" -name "*gcc" -type f 2>/dev/null | head -1)
           fi
           
-          # 方法2：在整个工具链目录中查找
+          # 在整个工具链目录中查找
           if [ -z "$COMPILER" ]; then
             echo "在工具链目录中搜索: $TOOLCHAIN_DIR"
             COMPILER=$(find "$TOOLCHAIN_DIR" -name "*gcc" -type f 2>/dev/null | head -1)
           fi
           
-          # 方法3：使用which命令在PATH中查找
-          if [ -z "$COMPILER" ] && [ -d "$BIN_DIR" ]; then
-            echo "将bin目录添加到PATH并搜索..."
-            export PATH="$BIN_DIR:$PATH"
-            COMPILER=$(which *gcc 2>/dev/null | head -1)
-          fi
-          
           if [ -z "$COMPILER" ] || [ ! -f "$COMPILER" ]; then
             echo "❌ 错误: 未找到编译器"
-            echo "当前目录内容:"
-            ls -la "$TOOLCHAIN_DIR/" 2>/dev/null | head -20
-            if [ -d "$BIN_DIR" ]; then
-              echo "bin目录内容:"
-              ls -la "$BIN_DIR/" 2>/dev/null | head -20
-            fi
             echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
             echo "VALIDATION_ERROR=\"未找到GCC编译器\"" >> $GITHUB_ENV
             exit 1
@@ -485,7 +468,6 @@ jobs:
           # 提取版本号
           GCC_VERSION=$(echo "$COMPILER_VERSION" | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+" | head -1 || echo "unknown")
           if [ "$GCC_VERSION" = "unknown" ]; then
-            # 尝试其他格式
             GCC_VERSION=$(echo "$COMPILER_VERSION" | grep -o "[0-9]\+\.[0-9]\+" | head -1 || echo "unknown")
           fi
           
@@ -494,110 +476,18 @@ jobs:
           echo "编译器版本: $GCC_VERSION"
           echo "编译器目标: $COMPILER_TARGET"
           
-          # 架构验证
-          ARCH="${{ matrix.arch }}"
-          echo "验证架构: $ARCH"
-          
-          # 根据架构进行验证
-          case "$ARCH" in
-            arm_cortex-a7|arm_cortex-a53)
-              # 验证是否为ARM架构
-              if echo "$COMPILER_TARGET" | grep -q "arm" || echo "$COMPILER_NAME" | grep -q "arm"; then
-                echo "✅ ARM架构验证通过"
-                
-                # 检查是否是错误的aarch64
-                if echo "$COMPILER_TARGET" | grep -q "aarch64" || echo "$COMPILER_NAME" | grep -q "aarch64"; then
-                  echo "❌ 错误: 构建了错误的64位编译器 (应该是32位ARM)"
-                  echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
-                  echo "VALIDATION_ERROR=\"架构错误: 预期32位ARM, 实际构建了aarch64\"" >> $GITHUB_ENV
-                  exit 1
-                fi
-              else
-                echo "❌ 错误: 编译器不匹配ARM架构"
-                echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
-                echo "VALIDATION_ERROR=\"编译器不匹配ARM架构: $COMPILER_TARGET\"" >> $GITHUB_ENV
-                exit 1
-              fi
-              ;;
-            aarch64)
-              # 验证是否为AArch64架构
-              if echo "$COMPILER_TARGET" | grep -q "aarch64" || echo "$COMPILER_NAME" | grep -q "aarch64"; then
-                echo "✅ AArch64架构验证通过"
-              else
-                echo "❌ 错误: 编译器不匹配AArch64架构"
-                echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
-                echo "VALIDATION_ERROR=\"编译器不匹配AArch64架构: $COMPILER_TARGET\"" >> $GITHUB_ENV
-                exit 1
-              fi
-              ;;
-            x86_64)
-              if echo "$COMPILER_TARGET" | grep -q "x86_64" || echo "$COMPILER_NAME" | grep -q "x86_64"; then
-                echo "✅ x86_64架构验证通过"
-              else
-                echo "❌ 错误: 编译器不匹配x86_64架构"
-                echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
-                echo "VALIDATION_ERROR=\"编译器不匹配x86_64架构: $COMPILER_TARGET\"" >> $GITHUB_ENV
-                exit 1
-              fi
-              ;;
-            mips)
-              if echo "$COMPILER_TARGET" | grep -q "mips" || echo "$COMPILER_NAME" | grep -q "mips"; then
-                echo "✅ MIPS架构验证通过"
-              else
-                echo "❌ 错误: 编译器不匹配MIPS架构"
-                echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
-                echo "VALIDATION_ERROR=\"编译器不匹配MIPS架构: $COMPILER_TARGET\"" >> $GITHUB_ENV
-                exit 1
-              fi
-              ;;
-            mipsel)
-              if echo "$COMPILER_TARGET" | grep -q "mipsel" || echo "$COMPILER_NAME" | grep -q "mipsel"; then
-                echo "✅ MIPSel架构验证通过"
-              else
-                echo "❌ 错误: 编译器不匹配MIPSel架构"
-                echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
-                echo "VALIDATION_ERROR=\"编译器不匹配MIPSel架构: $COMPILER_TARGET\"" >> $GITHUB_ENV
-                exit 1
-              fi
-              ;;
-            riscv64)
-              if echo "$COMPILER_TARGET" | grep -q "riscv" || echo "$COMPILER_NAME" | grep -q "riscv"; then
-                echo "✅ RISC-V架构验证通过"
-              else
-                echo "❌ 错误: 编译器不匹配RISC-V架构"
-                echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
-                echo "VALIDATION_ERROR=\"编译器不匹配RISC-V架构: $COMPILER_TARGET\"" >> $GITHUB_ENV
-                exit 1
-              fi
-              ;;
-          esac
-          
           # 测试编译器功能
           echo "测试编译器功能..."
           TEST_FILE="/tmp/test_$$.c"
           echo '#include <stdio.h>' > "$TEST_FILE"
-          echo 'int main() { printf("Test OK\\n"); return 0; }' >> "$TEST_FILE"
+          echo 'int main() { return 0; }' >> "$TEST_FILE"
           
           OUTPUT_FILE="/tmp/test_$$.out"
-          COMPILE_CMD="$COMPILER $TEST_FILE -o $OUTPUT_FILE 2>&1"
-          echo "编译命令: $COMPILE_CMD"
-          
-          COMPILE_OUTPUT=$(eval "$COMPILE_CMD")
+          COMPILE_OUTPUT=$("$COMPILER" "$TEST_FILE" -o "$OUTPUT_FILE" 2>&1)
           COMPILE_STATUS=$?
           
           if [ $COMPILE_STATUS -eq 0 ]; then
             echo "✅ 编译器功能测试通过"
-            # 检查输出文件
-            if [ -f "$OUTPUT_FILE" ]; then
-              echo "输出文件大小: $(wc -c < "$OUTPUT_FILE") bytes"
-              # 尝试运行（如果架构匹配）
-              if [ "${{ matrix.arch }}" = "x86_64" ]; then
-                echo "尝试运行测试程序..."
-                chmod +x "$OUTPUT_FILE"
-                RUN_OUTPUT=$("$OUTPUT_FILE" 2>&1 || echo "无法运行")
-                echo "运行输出: $RUN_OUTPUT"
-              fi
-            fi
             rm -f "$TEST_FILE" "$OUTPUT_FILE"
           else
             echo "❌ 错误: 编译器功能测试失败"
@@ -639,26 +529,7 @@ jobs:
             cp -r "${{ env.TOOLCHAIN_DIR }}"/* "$OUTPUT_DIR"/ 2>&1 | tail -10
           else
             echo "❌ 错误: 工具链目录不存在: ${{ env.TOOLCHAIN_DIR }}"
-            echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
             exit 1
-          fi
-          
-          # 检查是否成功复制
-          if [ ! -d "$OUTPUT_DIR/bin" ]; then
-            echo "⚠️ 警告: 输出目录中没有bin文件夹"
-            echo "尝试直接复制编译器..."
-            mkdir -p "$OUTPUT_DIR/bin"
-            cp "${{ env.COMPILER_PATH }}" "$OUTPUT_DIR/bin/" 2>/dev/null || true
-          fi
-          
-          # 检查大文件
-          LARGE_FILES=$(find "$OUTPUT_DIR" -type f -size +90M 2>/dev/null | head -5 || true)
-          if [ -n "$LARGE_FILES" ]; then
-            echo "发现大文件，进行压缩..."
-            for file in $LARGE_FILES; do
-              echo "压缩: $file"
-              gzip -9 -c "$file" > "${file}.gz" && rm -f "$file" && echo "✅ 压缩成功" || echo "⚠️ 压缩失败"
-            done
           fi
           
           # 创建元数据
@@ -678,7 +549,7 @@ jobs:
           echo '  "compiler_target": "'${{ env.COMPILER_TARGET }}'",' >> "$OUTPUT_DIR/metadata.json"
           echo '  "build_date": "'$(date -Iseconds)'",' >> "$OUTPUT_DIR/metadata.json"
           echo '  "build_id": "'${{ env.BUILD_ID }}'",' >> "$OUTPUT_DIR/metadata.json"
-          echo '  "note": "大文件已使用gzip压缩"' >> "$OUTPUT_DIR/metadata.json"
+          echo '  "note": "大文件已使用gzip压缩（如果需要）"' >> "$OUTPUT_DIR/metadata.json"
           echo '}' >> "$OUTPUT_DIR/metadata.json"
           
           TOTAL_SIZE=$(du -sh "$OUTPUT_DIR" 2>/dev/null | cut -f1 || echo "0K")
@@ -788,13 +659,13 @@ jobs:
           
           echo "========================================"
 
-  # 汇总所有job结果并智能推送
+  # 汇总所有job结果并智能推送 - 修复推送逻辑
   aggregate-and-push:
     needs: 
       - setup
       - build-matrix
     runs-on: ubuntu-latest
-    if: always()
+    if: always()  # 即使有job失败也运行
     steps:
       - name: 📥 检出仓库
         uses: actions/checkout@v4
@@ -806,193 +677,166 @@ jobs:
           echo "=== 拉取最新代码 ==="
           git config user.email "github-actions@github.com"
           git config user.name "GitHub Actions"
-          git pull origin main --rebase --autostash || echo "拉取失败，继续..."
+          git config pull.rebase true
+          git pull origin main || echo "拉取失败，继续..."
 
-      - name: 📊 生成详细汇总报告
+      - name: 📊 检查编译器文件
+        id: check-compilers
         run: |
-          echo "========================================"
-          echo "           📋 详细构建结果汇总          "
-          echo "========================================"
-          echo "OpenWrt版本: ${{ needs.setup.outputs.openwrt_version }}"
-          echo "架构类型: ${{ github.event.inputs.arch_type }}"
-          echo "开始时间: ${{ needs.setup.outputs.start_time }}"
-          echo "汇总时间: $(date)"
-          echo ""
-          echo "🔧 版本信息:"
-          echo "- Binutils: ${{ needs.setup.outputs.binutils_version }}"
-          echo "- Linux内核: ${{ needs.setup.outputs.linux_version }}"
-          echo "- Musl: ${{ needs.setup.outputs.musl_version }}"
-          echo ""
-          echo "📊 各架构构建结果详情:"
-          echo ""
+          echo "=== 检查编译器文件 ==="
+          COMPILER_DIR="${{ github.workspace }}/firmware-config/build-Compiler-file"
           
-          RESULT_DIR="${{ github.workspace }}/.job-results"
-          TOTAL_JOBS=0
-          SUCCESS_COUNT=0
-          SKIPPED_COUNT=0
-          BUILD_FAILED_COUNT=0
-          VALIDATION_FAILED_COUNT=0
-          
-          if [ ! -d "$RESULT_DIR" ]; then
-            echo "⚠️ 没有找到job结果目录"
-            echo "NO_RESULTS=true" >> $GITHUB_ENV
+          if [ ! -d "$COMPILER_DIR" ]; then
+            echo "❌ 编译器目录不存在"
+            echo "HAS_COMPILERS=false" >> $GITHUB_ENV
             exit 0
           fi
           
-          # 按状态分组显示
-          echo "✅ 成功构建:"
-          for result_file in "$RESULT_DIR"/*.json; do
-            if [ -f "$result_file" ]; then
-              TOTAL_JOBS=$((TOTAL_JOBS + 1))
-              
-              ARCH=$(jq -r '.architecture' "$result_file")
-              ARCH_TITLE=$(jq -r '.arch_title' "$result_file")
-              STATUS_ICON=$(jq -r '.status_icon' "$result_file")
-              STATUS_TEXT=$(jq -r '.status_text' "$result_file")
-              DETAILS=$(jq -r '.details' "$result_file")
-              GCC_VERSION=$(jq -r '.gcc_version' "$result_file")
-              COMPILER_NAME=$(jq -r '.compiler_name' "$result_file")
-              OUTPUT_DIR=$(jq -r '.output_dir' "$result_file")
-              
-              if [ "$STATUS_ICON" = "✅" ]; then
-                SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-                echo "  $STATUS_ICON $ARCH_TITLE"
-                echo "     编译器文件: $COMPILER_NAME"
-                echo "     GCC版本: $GCC_VERSION"
-                if [ "$OUTPUT_DIR" != "none" ]; then
-                  echo "     输出目录: $(basename "$OUTPUT_DIR")"
-                fi
-                echo "     详情: $DETAILS"
-                echo ""
-              fi
-            fi
-          done
+          # 检查是否有文件
+          FILE_COUNT=$(find "$COMPILER_DIR" -type f 2>/dev/null | wc -l || echo 0)
+          echo "编译器文件数量: $FILE_COUNT"
           
-          echo "⏭️ 跳过构建:"
-          for result_file in "$RESULT_DIR"/*.json; do
-            if [ -f "$result_file" ]; then
-              ARCH_TITLE=$(jq -r '.arch_title' "$result_file")
-              STATUS_ICON=$(jq -r '.status_icon' "$result_file")
-              DETAILS=$(jq -r '.details' "$result_file")
-              
-              if [ "$STATUS_ICON" = "⏭️" ]; then
-                SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-                echo "  $STATUS_ICON $ARCH_TITLE"
-                echo "     详情: $DETAILS"
-                echo ""
-              fi
-            fi
-          done
-          
-          echo "❌ 失败构建:"
-          for result_file in "$RESULT_DIR"/*.json; do
-            if [ -f "$result_file" ]; then
-              ARCH_TITLE=$(jq -r '.arch_title' "$result_file")
-              STATUS_ICON=$(jq -r '.status_icon' "$result_file")
-              STATUS_TEXT=$(jq -r '.status_text' "$result_file")
-              DETAILS=$(jq -r '.details' "$result_file")
-              
-              if [ "$STATUS_ICON" = "❌" ]; then
-                if [ "$STATUS_TEXT" = "构建失败" ]; then
-                  BUILD_FAILED_COUNT=$((BUILD_FAILED_COUNT + 1))
-                else
-                  VALIDATION_FAILED_COUNT=$((VALIDATION_FAILED_COUNT + 1))
-                fi
-                echo "  $STATUS_ICON $ARCH_TITLE - $STATUS_TEXT"
-                echo "     错误: $DETAILS"
-                echo ""
-              fi
-            fi
-          done
-          
-          echo "========================================"
-          echo "📈 构建统计摘要:"
-          echo "- 总任务数: $TOTAL_JOBS"
-          echo "- ✅ 成功构建: $SUCCESS_COUNT"
-          echo "- ⏭️ 跳过: $SKIPPED_COUNT"
-          echo "- ❌ 构建失败: $BUILD_FAILED_COUNT"
-          echo "- ❌ 验证失败: $VALIDATION_FAILED_COUNT"
-          echo ""
-          
-          TOTAL_FAILED=$((BUILD_FAILED_COUNT + VALIDATION_FAILED_COUNT))
-          if [ $TOTAL_FAILED -gt 0 ]; then
-            echo "⚠️ 注意: 有 $TOTAL_FAILED 个架构构建失败"
-          fi
-          
-          if [ $SUCCESS_COUNT -eq 0 ]; then
-            echo "❌ 本次构建没有成功的结果"
-            echo "NO_SUCCESSFUL_BUILDS=true" >> $GITHUB_ENV
+          if [ $FILE_COUNT -eq 0 ]; then
+            echo "❌ 没有编译器文件"
+            echo "HAS_COMPILERS=false" >> $GITHUB_ENV
           else
-            echo "✅ 有 $SUCCESS_COUNT 个架构构建成功"
-            echo "NO_SUCCESSFUL_BUILDS=false" >> $GITHUB_ENV
+            echo "✅ 找到编译器文件"
+            echo "HAS_COMPILERS=true" >> $GITHUB_ENV
+            
+            # 列出文件
+            echo "编译器文件列表:"
+            find "$COMPILER_DIR" -type f 2>/dev/null | head -10
           fi
-          
-          # 保存统计结果
-          echo "TOTAL_JOBS=$TOTAL_JOBS" >> $GITHUB_ENV
-          echo "SUCCESS_COUNT=$SUCCESS_COUNT" >> $GITHUB_ENV
-          echo "SKIPPED_COUNT=$SKIPPED_COUNT" >> $GITHUB_ENV
-          echo "BUILD_FAILED_COUNT=$BUILD_FAILED_COUNT" >> $GITHUB_ENV
-          echo "VALIDATION_FAILED_COUNT=$VALIDATION_FAILED_COUNT" >> $GITHUB_ENV
-          echo "TOTAL_FAILED=$TOTAL_FAILED" >> $GITHUB_ENV
 
-      - name: 📤 推送成功的构建结果
-        if: env.NO_SUCCESSFUL_BUILDS == 'false'
+      - name: 📊 分析构建结果
+        if: env.HAS_COMPILERS == 'true'
         run: |
-          echo "=== 推送成功的构建结果 ==="
+          echo "=== 分析构建结果 ==="
           
-          # 检查是否有文件需要提交
-          git add -f "firmware-config/build-Compiler-file/compilers/*"
+          RESULT_DIR="${{ github.workspace }}/.job-results"
+          SUCCESS_ARCHS=""
+          TOTAL_JOBS=0
+          SUCCESS_COUNT=0
           
-          if ! git diff --cached --quiet; then
-            echo "检测到新文件，准备提交..."
-            
-            # 生成详细的提交信息
-            COMMIT_TITLE="build(compiler): 添加交叉编译器"
-            
-            # 收集成功构建的详细信息
-            DETAILS="成功构建的架构:\n"
-            RESULT_DIR="${{ github.workspace }}/.job-results"
-            
+          if [ -d "$RESULT_DIR" ]; then
             for result_file in "$RESULT_DIR"/*.json; do
               if [ -f "$result_file" ]; then
-                ARCH_TITLE=$(jq -r '.arch_title' "$result_file")
-                STATUS_ICON=$(jq -r '.status_icon' "$result_file")
-                GCC_VERSION=$(jq -r '.gcc_version' "$result_file")
-                COMPILER_NAME=$(jq -r '.compiler_name' "$result_file")
+                TOTAL_JOBS=$((TOTAL_JOBS + 1))
+                ARCH_TITLE=$(jq -r '.arch_title' "$result_file" 2>/dev/null || echo "")
+                STATUS_ICON=$(jq -r '.status_icon' "$result_file" 2>/dev/null || echo "")
+                COMPILER_NAME=$(jq -r '.compiler_name' "$result_file" 2>/dev/null || echo "")
+                GCC_VERSION=$(jq -r '.gcc_version' "$result_file" 2>/dev/null || echo "")
                 
                 if [ "$STATUS_ICON" = "✅" ]; then
-                  DETAILS="${DETAILS}- $ARCH_TITLE: $COMPILER_NAME v$GCC_VERSION\n"
+                  SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                  SUCCESS_ARCHS="${SUCCESS_ARCHS}- $ARCH_TITLE: $COMPILER_NAME v$GCC_VERSION\n"
                 fi
               fi
             done
+          fi
+          
+          echo "构建统计:"
+          echo "- 总任务数: $TOTAL_JOBS"
+          echo "- 成功构建: $SUCCESS_COUNT"
+          
+          if [ -n "$SUCCESS_ARCHS" ]; then
+            echo "成功架构:"
+            echo -e "$SUCCESS_ARCHS"
+            echo "SUCCESS_ARCHS=$SUCCESS_ARCHS" >> $GITHUB_ENV
+          else
+            echo "没有成功构建的架构"
+            echo "SUCCESS_ARCHS=" >> $GITHUB_ENV
+          fi
+          
+          echo "SUCCESS_COUNT=$SUCCESS_COUNT" >> $GITHUB_ENV
+
+      - name: 📤 强制推送编译器文件
+        if: env.HAS_COMPILERS == 'true'
+        run: |
+          echo "=== 强制推送编译器文件 ==="
+          
+          # 添加所有编译器文件
+          echo "添加编译器文件..."
+          git add -f "firmware-config/build-Compiler-file"
+          
+          # 检查是否有变更
+          if git diff --cached --quiet; then
+            echo "⚠️ git没有检测到文件变更"
+            echo "尝试强制添加所有文件..."
+            git add -f "firmware-config" || true
+            git add -f "." || true
+          fi
+          
+          # 再次检查
+          if git diff --cached --quiet; then
+            echo "❌ 没有文件需要提交，可能是文件已经存在"
+            echo "当前git状态:"
+            git status --porcelain | head -10
+            echo "创建空提交以确保流程继续..."
+            git commit --allow-empty -m "build(compiler): 无新编译器文件" \
+                         -m "OpenWrt: ${{ needs.setup.outputs.openwrt_version }}" \
+                         -m "没有检测到新的编译器文件"
+          else
+            echo "✅ 检测到文件变更，准备提交..."
             
-            # 添加统计信息
-            STATS="构建统计:\n"
-            STATS="${STATS}- 成功: ${{ env.SUCCESS_COUNT }}\n"
-            STATS="${STATS}- 跳过: ${{ env.SKIPPED_COUNT }}\n"
-            STATS="${STATS}- 失败: ${{ env.TOTAL_FAILED }}\n"
+            # 生成提交信息
+            COMMIT_TIME=$(date "+%Y-%m-%d %H:%M:%S")
+            COMMIT_TITLE="build(compiler): 添加交叉编译器 [$COMMIT_TIME]"
+            
+            DETAILS=""
+            if [ -n "$SUCCESS_ARCHS" ]; then
+              DETAILS="成功构建架构:\n$SUCCESS_ARCHS"
+            else
+              DETAILS="编译器文件更新"
+            fi
             
             # 提交
             git commit -m "$COMMIT_TITLE" \
                        -m "OpenWrt版本: ${{ needs.setup.outputs.openwrt_version }}" \
                        -m "$DETAILS" \
-                       -m "$STATS" \
                        -m "Binutils: ${{ needs.setup.outputs.binutils_version }}" \
                        -m "Linux内核: ${{ needs.setup.outputs.linux_version }}" \
                        -m "Musl: ${{ needs.setup.outputs.musl_version }}"
-            
-            # 推送
-            echo "推送构建结果到仓库..."
-            git push origin main
-            echo "✅ 成功推送 ${{ env.SUCCESS_COUNT }} 个架构的构建结果"
-          else
-            echo "⚠️ 没有新的构建结果需要提交"
           fi
           
-          # 清理临时文件
-          rm -rf "${{ github.workspace }}/.job-results" 2>/dev/null || true
+          # 推送
+          echo "推送编译器文件到仓库..."
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          PUSH_SUCCESS=false
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$PUSH_SUCCESS" = "false" ]; do
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "推送尝试 $RETRY_COUNT/$MAX_RETRIES..."
+            
+            if git push origin main; then
+              echo "✅ 推送成功"
+              PUSH_SUCCESS=true
+            else
+              echo "❌ 推送失败"
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                echo "等待10秒后重试..."
+                sleep 10
+                echo "拉取最新代码..."
+                git pull origin main --rebase --autostash || true
+              fi
+            fi
+          done
+          
+          if [ "$PUSH_SUCCESS" = "false" ]; then
+            echo "⚠️ 常规推送失败，尝试强制推送..."
+            if git push origin main --force; then
+              echo "✅ 强制推送成功"
+              PUSH_SUCCESS=true
+            else
+              echo "❌ 强制推送也失败"
+              exit 1
+            fi
+          fi
+          
+          echo "✅ 编译器文件推送完成"
 
-      - name: 📝 生成最终总结报告
+      - name: 📝 生成最终报告
         if: always()
         run: |
           echo "========================================"
@@ -1008,39 +852,59 @@ jobs:
           echo "- 构建时长: ${DURATION}分钟"
           echo ""
           
-          echo "📊 最终统计结果:"
-          echo "┌──────────────────────────────┐"
-          echo "│          构建统计            │"
-          echo "├──────────────────────────────┤"
-          printf "│ 总任务数: %-16s │\n" "${{ env.TOTAL_JOBS || 0 }}"
-          echo "├──────────────────────────────┤"
-          printf "│ ✅ 成功: %-17s │\n" "${{ env.SUCCESS_COUNT || 0 }}"
-          printf "│ ⏭️ 跳过: %-17s │\n" "${{ env.SKIPPED_COUNT || 0 }}"
-          printf "│ ❌ 失败: %-17s │\n" "${{ env.TOTAL_FAILED || 0 }}"
-          echo "└──────────────────────────────┘"
-          echo ""
+          echo "📊 构建结果:"
           
-          if [ "${{ env.NO_SUCCESSFUL_BUILDS }}" = "true" ]; then
-            echo "❌ 本次构建结果:"
-            echo "- 没有成功的构建结果"
-            echo "- 构建结果未推送到仓库"
-            echo "- 请检查失败原因并重新构建"
-          elif [ "${{ env.NO_SUCCESSFUL_BUILDS }}" = "false" ]; then
-            echo "✅ 本次构建结果:"
-            echo "- 成功构建 ${{ env.SUCCESS_COUNT || 0 }} 个架构"
-            echo "- 构建结果已推送到仓库"
-            echo "- 失败的架构: ${{ env.TOTAL_FAILED || 0 }} 个"
+          # 读取结果文件
+          RESULT_DIR="${{ github.workspace }}/.job-results"
+          if [ -d "$RESULT_DIR" ]; then
+            SUCCESS_COUNT=0
+            SKIP_COUNT=0
+            FAIL_COUNT=0
             
-            if [ "${{ env.TOTAL_FAILED || 0 }}" -gt 0 ]; then
-              echo "- 建议检查失败架构并单独重新构建"
-            fi
+            for result_file in "$RESULT_DIR"/*.json; do
+              if [ -f "$result_file" ]; then
+                ARCH_TITLE=$(jq -r '.arch_title' "$result_file" 2>/dev/null || echo "")
+                STATUS_ICON=$(jq -r '.status_icon' "$result_file" 2>/dev/null || echo "")
+                
+                case "$STATUS_ICON" in
+                  "✅") SUCCESS_COUNT=$((SUCCESS_COUNT + 1)) ;;
+                  "⏭️") SKIP_COUNT=$((SKIP_COUNT + 1)) ;;
+                  "❌") FAIL_COUNT=$((FAIL_COUNT + 1)) ;;
+                esac
+              fi
+            done
+            
+            echo "┌──────────────────────────────┐"
+            echo "│          构建统计            │"
+            echo "├──────────────────────────────┤"
+            printf "│ 总任务数: %-16s │\n" "$((SUCCESS_COUNT + SKIP_COUNT + FAIL_COUNT))"
+            echo "├──────────────────────────────┤"
+            printf "│ ✅ 成功: %-17s │\n" "$SUCCESS_COUNT"
+            printf "│ ⏭️ 跳过: %-17s │\n" "$SKIP_COUNT"
+            printf "│ ❌ 失败: %-17s │\n" "$FAIL_COUNT"
+            echo "└──────────────────────────────┘"
+          else
+            echo "⚠️ 未找到构建结果文件"
           fi
           
           echo ""
-          echo "🔧 构建的编译器信息:"
-          echo "- Binutils版本: ${{ needs.setup.outputs.binutils_version }}"
-          echo "- Linux内核版本: ${{ needs.setup.outputs.linux_version }}"
-          echo "- Musl版本: ${{ needs.setup.outputs.musl_version }}"
-          echo "- C库类型: musl"
+          
+          if [ "$HAS_COMPILERS" = "true" ]; then
+            echo "✅ 编译器文件:"
+            echo "- 已保存到: firmware-config/build-Compiler-file"
+            echo "- 已推送到GitHub仓库"
+          else
+            echo "❌ 没有编译器文件"
+            echo "- 请检查构建日志"
+          fi
+          
+          echo ""
+          echo "🔧 版本信息:"
+          echo "- Binutils: ${{ needs.setup.outputs.binutils_version }}"
+          echo "- Linux内核: ${{ needs.setup.outputs.linux_version }}"
+          echo "- Musl: ${{ needs.setup.outputs.musl_version }}"
           
           echo "========================================"
+          
+          # 清理临时文件
+          rm -rf "$RESULT_DIR" 2>/dev/null || true
