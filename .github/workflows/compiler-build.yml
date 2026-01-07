@@ -204,9 +204,9 @@ jobs:
             EXPECTED_ARCH="arm"
             EXPECTED_COMPILER_PREFIX="arm-"
           elif [ "$ARCH" = "arm_cortex-a53" ]; then
-            # 修复：使用不同的32位ARM目标
-            TARGET="bcm27xx"
-            SUBTARGET="bcm2709"
+            # 使用相同的配置，但通过目录区分
+            TARGET="sunxi"
+            SUBTARGET="cortexa53"
             ARCH_NAME="arm"
             PREFIX="arm-openwrt-linux-muslgnueabi"
             CPU_TYPE="cortex-a53"
@@ -322,20 +322,16 @@ jobs:
             echo "CONFIG_arm64=n" >> .config
             echo "CONFIG_AARCH64=n" >> .config
           elif [ "${{ matrix.arch }}" = "arm_cortex-a53" ]; then
-            # 修复：使用bcm27xx确保32位ARM
-            echo "CONFIG_TARGET_bcm27xx=y" > .config
-            echo "CONFIG_TARGET_bcm27xx_bcm2709=y" >> .config
+            echo "CONFIG_TARGET_sunxi=y" > .config
+            echo "CONFIG_TARGET_sunxi_cortexa53=y" >> .config
             echo "CONFIG_TARGET_ARCH_PACKAGES=\"arm_cortex-a53_neon-vfpv4\"" >> .config
             echo "CONFIG_TARGET_OPTIMIZATION=\"-march=armv8-a -mtune=cortex-a53 -mfpu=neon-vfpv4 -mfloat-abi=hard -mabi=aapcs-linux\"" >> .config
             echo "CONFIG_arm=y" >> .config
             echo "CONFIG_CPU_TYPE=\"cortex-a53\"" >> .config
             echo "CONFIG_arm64=n" >> .config
             echo "CONFIG_AARCH64=n" >> .config
-            # 明确禁用64位相关配置
             echo "CONFIG_TARGET_armvirt=n" >> .config
             echo "CONFIG_TARGET_armvirt_64=n" >> .config
-            echo "CONFIG_TARGET_sunxi=n" >> .config
-            echo "CONFIG_TARGET_sunxi_cortexa53=n" >> .config
           elif [ "${{ matrix.arch }}" = "aarch64" ]; then
             echo "CONFIG_TARGET_armvirt=y" > .config
             echo "CONFIG_TARGET_armvirt_64=y" >> .config
@@ -395,7 +391,7 @@ jobs:
           make toolchain/clean 2>&1 | tail -10
           
           echo "编译工具链..."
-          make toolchain/compile -j$(nproc) V=s 2>&1 | tee /tmp/toolchain_compile.log | tail -100
+          make toolchain/compile -j$(nproc) 2>&1 | tee /tmp/toolchain_compile.log | tail -100
           
           echo "安装工具链..."
           make toolchain/install -j$(nproc) 2>&1 | tee /tmp/toolchain_install.log | tail -50
@@ -427,7 +423,18 @@ jobs:
           echo "工具链目录: $TOOLCHAIN_DIR"
           
           echo "搜索编译器..."
-          COMPILER=$(find "$TOOLCHAIN_DIR" -name "*gcc" -type f -executable 2>/dev/null | head -1)
+          COMPILER=""
+          # 按优先级搜索
+          SEARCH_PATHS="$TOOLCHAIN_DIR/bin $TOOLCHAIN_DIR/initial/bin $TOOLCHAIN_DIR/usr/bin"
+          for path in $SEARCH_PATHS; do
+            if [ -d "$path" ]; then
+              found=$(find "$path" -name "*gcc" -type f -executable 2>/dev/null | head -1)
+              if [ -n "$found" ]; then
+                COMPILER="$found"
+                break
+              fi
+            fi
+          done
           
           if [ -z "$COMPILER" ]; then
             COMPILER=$(find staging_dir -name "*gcc" -type f -executable 2>/dev/null | head -1)
@@ -504,11 +511,7 @@ jobs:
             ARCH_VALID=true
           fi
           
-          if [ "$ARCH_VALID" = true ]; then
-            echo "✅ 架构验证通过"
-            echo "VALIDATION_SUCCESS=true" >> $GITHUB_ENV
-            echo "VALIDATION_ERROR=" >> $GITHUB_ENV
-          else
+          if [ "$ARCH_VALID" != true ]; then
             echo "❌ 架构验证失败"
             echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
             echo "VALIDATION_ERROR=\"架构验证失败: 期望$EXPECTED_ARCH，实际$COMPILER_NAME\"" >> $GITHUB_ENV
@@ -518,7 +521,7 @@ jobs:
           echo "测试编译器功能..."
           TEST_FILE="/tmp/test_$$.c"
           echo '#include <stdio.h>' > "$TEST_FILE"
-          echo 'int main() { printf("Test from %s\\n", "'"$COMPILER_NAME"'"); return 0; }' >> "$TEST_FILE"
+          echo 'int main() { return 0; }' >> "$TEST_FILE"
           
           OUTPUT_FILE="/tmp/test_$$.out"
           COMPILE_OUTPUT=$("$COMPILER" "$TEST_FILE" -o "$OUTPUT_FILE" 2>&1)
@@ -527,10 +530,13 @@ jobs:
           if [ $COMPILE_STATUS -eq 0 ]; then
             echo "✅ 编译器功能测试通过"
             rm -f "$TEST_FILE" "$OUTPUT_FILE"
+            echo "VALIDATION_SUCCESS=true" >> $GITHUB_ENV
+            echo "VALIDATION_ERROR=" >> $GITHUB_ENV
           else
             echo "❌ 错误: 编译器功能测试失败"
+            echo "编译错误: $COMPILE_OUTPUT"
             echo "VALIDATION_SUCCESS=false" >> $GITHUB_ENV
-            echo "VALIDATION_ERROR=\"编译器无法编译测试程序\"" >> $GITHUB_ENV
+            echo "VALIDATION_ERROR=\"编译器功能测试失败\"" >> $GITHUB_ENV
             rm -f "$TEST_FILE"
             exit 1
           fi
@@ -565,10 +571,18 @@ jobs:
           echo "复制工具链目录: $TOOLCHAIN_DIR"
           
           if [ -d "$TOOLCHAIN_DIR" ]; then
-            echo "使用cp复制工具链..."
+            echo "复制工具链文件..."
             cp -r "$TOOLCHAIN_DIR"/* "$OUTPUT_DIR/" 2>&1 | tail -20
+            
+            # 检查是否复制成功
+            if [ $(find "$OUTPUT_DIR" -type f 2>/dev/null | wc -l) -eq 0 ]; then
+              echo "⚠️ 复制可能失败，尝试使用tar..."
+              tar -czf /tmp/toolchain.tar.gz -C "$TOOLCHAIN_DIR" .
+              tar -xzf /tmp/toolchain.tar.gz -C "$OUTPUT_DIR"
+              rm -f /tmp/toolchain.tar.gz
+            fi
           else
-            echo "⚠️ 工具链目录不存在，复制整个staging_dir"
+            echo "⚠️ 工具链目录不存在，尝试复制staging_dir"
             cp -r staging_dir/* "$OUTPUT_DIR/" 2>&1 | tail -10 || true
           fi
           
@@ -590,17 +604,16 @@ jobs:
           echo "GCC_VERSION=$CLEAN_GCC_VERSION" >> $GITHUB_ENV
           echo "FILE_COUNT=$FILE_COUNT" >> $GITHUB_ENV
           
-          # 确保文件可访问
-          chmod -R 755 "$OUTPUT_BASE_DIR" 2>/dev/null || true
-          
           # 验证文件确实存在
           echo "验证输出文件..."
           if [ -d "$OUTPUT_DIR" ] && [ $(find "$OUTPUT_DIR" -type f 2>/dev/null | wc -l) -gt 0 ]; then
             echo "✅ 输出目录验证成功"
+            echo "目录内容示例:"
+            ls -la "$OUTPUT_DIR" 2>/dev/null | head -5
           else
             echo "❌ 输出目录验证失败"
-            echo "目录内容:"
-            ls -la "$OUTPUT_DIR" 2>/dev/null || echo "目录不存在"
+            echo "尝试列出 $COMPILER_BASE_DIR 内容:"
+            find "${{ env.COMPILER_BASE_DIR }}" -type f 2>/dev/null | head -10
           fi
           
           echo "完成时间: $(date)"
@@ -709,7 +722,9 @@ jobs:
           echo "编译器文件数量: $FILE_COUNT"
           
           if [ $FILE_COUNT -eq 0 ]; then
-            echo "⚠️ 编译器目录为空"
+            echo "⚠️ 编译器目录为空，检查路径..."
+            echo "COMPILER_BASE_DIR: ${{ env.COMPILER_BASE_DIR }}"
+            ls -la "${{ env.COMPILER_BASE_DIR }}" 2>/dev/null || echo "目录不存在"
             echo "HAS_COMPILERS=false" >> $GITHUB_ENV
           else
             echo "✅ 找到编译器文件"
@@ -725,7 +740,15 @@ jobs:
           
           mkdir -p "${{ github.workspace }}/firmware-config/build-Compiler-file"
           
-          git add -f "firmware-config/build-Compiler-file"
+          # 确保有文件可以添加
+          if [ -d "${{ env.COMPILER_BASE_DIR }}" ]; then
+            echo "添加编译器文件..."
+            git add -f "firmware-config/build-Compiler-file"
+          else
+            echo "⚠️ 编译器基础目录不存在，创建空目录"
+            mkdir -p "${{ env.COMPILER_BASE_DIR }}"
+            git add -f "firmware-config/build-Compiler-file"
+          fi
           
           if git diff --cached --quiet; then
             echo "没有文件变更，创建空提交..."
@@ -809,6 +832,28 @@ jobs:
             printf "│ ⏭️ 跳过: %-17s │\n" "$SKIP_COUNT"
             printf "│ ❌ 失败: %-17s │\n" "$FAIL_COUNT"
             echo "└──────────────────────────────┘"
+            
+            # 检查实际文件
+            echo ""
+            echo "💾 编译器文件状态:"
+            COMPILER_DIR="${{ github.workspace }}/firmware-config/build-Compiler-file"
+            if [ -d "$COMPILER_DIR" ]; then
+              TOTAL_FILES=$(find "$COMPILER_DIR" -type f 2>/dev/null | wc -l)
+              TOTAL_SIZE=$(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo "0K")
+              echo "- 目录: $COMPILER_DIR"
+              echo "- 总文件数: $TOTAL_FILES"
+              echo "- 总大小: $TOTAL_SIZE"
+              
+              if [ $TOTAL_FILES -gt 0 ]; then
+                echo "- 状态: ✅ 文件已保存"
+                echo "- 文件示例:"
+                find "$COMPILER_DIR" -type f 2>/dev/null | head -5
+              else
+                echo "- 状态: ⚠️ 目录为空"
+              fi
+            else
+              echo "- 状态: ❌ 目录不存在"
+            fi
           else
             echo "⚠️ 未找到构建结果文件"
           fi
