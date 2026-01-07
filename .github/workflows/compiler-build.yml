@@ -29,7 +29,7 @@ jobs:
       openwrt_version: ${{ steps.version-detection.outputs.openwrt_version }}
       binutils_version: ${{ steps.version-detection.outputs.binutils_version }}
       linux_version: ${{ steps.version-detection.outputs.linux_version }}
-      musl_version: ${{ steps.setup.outputs.musl_version }}
+      musl_version: ${{ steps.version-detection.outputs.musl_version }}
       start_time: ${{ steps.get-time.outputs.start_time }}
     steps:
       - name: 📥 检出仓库
@@ -205,9 +205,9 @@ jobs:
             EXPECTED_COMPILER_PREFIX="arm-"
             FORCE_32BIT="true"
           elif [ "$ARCH" = "arm_cortex-a53" ]; then
-            # 关键修复：使用明确支持32位Cortex-A53的平台
-            TARGET="bcm27xx"
-            SUBTARGET="bcm2710"  # 树莓派3，支持32位Cortex-A53
+            # 修复：使用明确的32位ARM配置
+            TARGET="mediatek"
+            SUBTARGET="filogic"
             ARCH_NAME="arm"
             PREFIX="arm-openwrt-linux-muslgnueabi"
             CPU_TYPE="cortex-a53"
@@ -216,6 +216,7 @@ jobs:
             EXPECTED_ARCH="arm"
             EXPECTED_COMPILER_PREFIX="arm-"
             FORCE_32BIT="true"
+            echo "✅ 使用 MediaTek Filogic 平台，确保32位ARM构建"
           elif [ "$ARCH" = "aarch64" ]; then
             TARGET="armvirt"
             SUBTARGET="64"
@@ -335,9 +336,9 @@ jobs:
             echo "CONFIG_AARCH64=n" >> .config
             echo "CONFIG_ARCH_64BIT=n" >> .config
           elif [ "${{ matrix.arch }}" = "arm_cortex-a53" ]; then
-            # 关键修复：使用明确的32位ARM配置
-            echo "CONFIG_TARGET_bcm27xx=y" > .config
-            echo "CONFIG_TARGET_bcm27xx_bcm2710=y" >> .config
+            # 关键修复：使用更可靠的32位ARM平台
+            echo "CONFIG_TARGET_mediatek=y" > .config
+            echo "CONFIG_TARGET_mediatek_filogic=y" >> .config
             echo "CONFIG_TARGET_ARCH_PACKAGES=\"arm_cortex-a53_neon-vfpv4\"" >> .config
             echo "CONFIG_TARGET_OPTIMIZATION=\"-march=armv8-a -mtune=cortex-a53 -mfpu=neon-vfpv4 -mfloat-abi=hard -mabi=aapcs-linux\"" >> .config
             echo "CONFIG_arm=y" >> .config
@@ -349,10 +350,10 @@ jobs:
             echo "CONFIG_arm64=n" >> .config
             echo "CONFIG_AARCH64=n" >> .config
             echo "CONFIG_ARCH_64BIT=n" >> .config
-            # 禁用其他可能引起混淆的配置
-            echo "CONFIG_TARGET_armvirt=n" >> .config
-            echo "CONFIG_TARGET_sunxi=n" >> .config
+            # 明确设置架构
             echo "CONFIG_TARGET_ARCH=\"arm\"" >> .config
+            echo "CONFIG_TARGET_SUBTARGET=\"mediatek\"" >> .config
+            echo "CONFIG_TARGET_BOARD=\"mediatek\"" >> .config
           elif [ "${{ matrix.arch }}" = "aarch64" ]; then
             echo "CONFIG_TARGET_armvirt=y" > .config
             echo "CONFIG_TARGET_armvirt_64=y" >> .config
@@ -568,31 +569,50 @@ jobs:
           
           CLEAN_GCC_VERSION=$(echo "${{ env.COMPILER_VERSION }}" | tr -d '\n\r' | xargs echo -n)
           if [ -z "$CLEAN_GCC_VERSION" ] || [ "$CLEAN_GCC_VERSION" = "unknown" ]; then
-            CLEAN_GCC_VERSION="unknown"
+            # 尝试从编译器获取版本
+            COMPILER="${{ env.COMPILER_PATH }}"
+            if [ -x "$COMPILER" ]; then
+              CLEAN_GCC_VERSION=$("$COMPILER" -dumpversion 2>/dev/null || echo "unknown")
+            else
+              CLEAN_GCC_VERSION="unknown"
+            fi
           fi
           
           ARCH_DIR="${{ matrix.arch }}"
           OUTPUT_BASE_DIR="${{ env.COMPILER_BASE_DIR }}/compilers/${ARCH_DIR}/musl/openwrt-${{ needs.setup.outputs.openwrt_version }}"
+          echo "创建输出目录: $OUTPUT_BASE_DIR"
           mkdir -p "$OUTPUT_BASE_DIR"
-          OUTPUT_DIR="${OUTPUT_BASE_DIR}/gcc-${CLEAN_GCC_VERSION}_binutils-${{ needs.setup.outputs.binutils_version }}"
           
+          OUTPUT_DIR="${OUTPUT_BASE_DIR}/gcc-${CLEAN_GCC_VERSION}_binutils-${{ needs.setup.outputs.binutils_version }}"
           echo "准备输出目录: $OUTPUT_DIR"
+          
+          # 清理旧目录
           rm -rf "$OUTPUT_DIR" 2>/dev/null || true
           mkdir -p "$OUTPUT_DIR"
           
-          TOOLCHAIN_DIR="${{ env.TOOLCHAIN_DIR }}"
-          echo "复制工具链目录: $TOOLCHAIN_DIR"
-          
-          if [ -d "$TOOLCHAIN_DIR" ]; then
-            echo "复制工具链文件..."
-            # 使用tar确保完整复制
-            tar -czf /tmp/toolchain.tar.gz -C "$TOOLCHAIN_DIR" .
-            tar -xzf /tmp/toolchain.tar.gz -C "$OUTPUT_DIR"
-            rm -f /tmp/toolchain.tar.gz
-            echo "✅ 工具链复制完成"
-          else
-            echo "⚠️ 工具链目录不存在，尝试复制staging_dir"
+          # 首先尝试复制整个staging_dir
+          echo "复制 staging_dir 内容..."
+          if [ -d "staging_dir" ]; then
             cp -r staging_dir/* "$OUTPUT_DIR/" 2>&1 | tail -10 || true
+            echo "✅ staging_dir 复制完成"
+          fi
+          
+          # 尝试复制 toolchain
+          TOOLCHAIN_DIR="${{ env.TOOLCHAIN_DIR }}"
+          if [ -d "$TOOLCHAIN_DIR" ]; then
+            echo "复制工具链目录: $TOOLCHAIN_DIR"
+            cp -r "$TOOLCHAIN_DIR"/* "$OUTPUT_DIR/" 2>&1 | tail -10 || true
+            echo "✅ 工具链复制完成"
+          fi
+          
+          # 验证文件确实被复制
+          echo "验证复制结果..."
+          if [ -d "$OUTPUT_DIR/bin" ] || [ -d "$OUTPUT_DIR/usr" ]; then
+            echo "✅ 文件复制成功"
+          else
+            echo "❌ 文件复制失败，目录为空"
+            echo "列出目录内容:"
+            ls -la "$OUTPUT_DIR" || true
           fi
           
           echo "创建元数据..."
@@ -717,41 +737,67 @@ jobs:
           git config pull.rebase true
           git pull origin main || echo "拉取失败，继续..."
 
-      - name: 📊 检查编译器文件
+      - name: 📊 详细检查编译器文件
         id: check-compilers
         run: |
-          echo "=== 检查编译器文件 ==="
+          echo "=== 详细检查编译器文件 ==="
           COMPILER_DIR="${{ github.workspace }}/firmware-config/build-Compiler-file"
           
-          mkdir -p "$COMPILER_DIR"
-          FILE_COUNT=$(find "$COMPILER_DIR" -type f 2>/dev/null | wc -l || echo 0)
-          echo "编译器文件数量: $FILE_COUNT"
+          echo "检查目录: $COMPILER_DIR"
+          ls -la "$COMPILER_DIR" 2>/dev/null || echo "目录不存在或无法访问"
+          
+          # 递归检查所有文件
+          if [ -d "$COMPILER_DIR" ]; then
+            echo "递归查找文件:"
+            find "$COMPILER_DIR" -type f 2>/dev/null | head -20 || echo "无文件"
+            FILE_COUNT=$(find "$COMPILER_DIR" -type f 2>/dev/null | wc -l)
+            echo "编译器文件数量: $FILE_COUNT"
+          else
+            echo "⚠️ 编译器目录不存在"
+            FILE_COUNT=0
+          fi
           
           if [ $FILE_COUNT -eq 0 ]; then
             echo "⚠️ 编译器目录为空"
-            echo "检查 $COMPILER_DIR 内容:"
-            find "$COMPILER_DIR" -type f 2>/dev/null | head -10
             echo "HAS_COMPILERS=false" >> $GITHUB_ENV
           else
             echo "✅ 找到编译器文件"
             echo "HAS_COMPILERS=true" >> $GITHUB_ENV
           fi
 
-      - name: 📤 推送编译器文件
+      - name: 📤 强制推送编译器文件
         if: always()
         run: |
-          echo "=== 推送编译器文件 ==="
+          echo "=== 强制推送编译器文件 ==="
           
+          # 确保目录存在
           mkdir -p "${{ github.workspace }}/firmware-config/build-Compiler-file"
           
+          # 显示要推送的内容
+          echo "要推送的文件结构:"
+          find "${{ github.workspace }}/firmware-config/build-Compiler-file" -type f 2>/dev/null | head -10 || echo "无文件"
+          echo ""
+          echo "目录结构:"
+          ls -la "${{ github.workspace }}/firmware-config/build-Compiler-file" 2>/dev/null || echo "目录不存在"
+          
+          # 添加所有文件
           git add -f "firmware-config/build-Compiler-file"
+          
+          # 检查状态
+          echo "Git状态:"
+          git status --porcelain | head -20 || echo "无变更"
           
           if git diff --cached --quiet; then
             echo "没有文件变更，创建空提交..."
-            git commit --allow-empty -m "build(compiler): 交叉编译器构建完成" -m "OpenWrt: ${{ needs.setup.outputs.openwrt_version }}" -m "架构类型: ${{ github.event.inputs.arch_type }}" -m "构建时间: $(date)"
+            git commit --allow-empty -m "build(compiler): 交叉编译器构建完成" \
+              -m "OpenWrt: ${{ needs.setup.outputs.openwrt_version }}" \
+              -m "架构类型: ${{ github.event.inputs.arch_type }}" \
+              -m "构建时间: $(date)" \
+              -m "状态: 无新编译器文件"
           else
             echo "有文件变更，准备提交..."
             
+            # 创建详细的提交信息
             DETAILS=""
             RESULT_DIR="${{ github.workspace }}/.job-results"
             if [ -d "$RESULT_DIR" ]; then
@@ -765,11 +811,15 @@ jobs:
               done
             fi
             
-            git commit -m "build(compiler): 添加交叉编译器" -m "OpenWrt版本: ${{ needs.setup.outputs.openwrt_version }}" -m "架构类型: ${{ github.event.inputs.arch_type }}" -m "构建结果:" -m "$DETAILS"
+            git commit -m "build(compiler): 添加/更新交叉编译器" \
+              -m "OpenWrt版本: ${{ needs.setup.outputs.openwrt_version }}" \
+              -m "架构类型: ${{ github.event.inputs.arch_type }}" \
+              -m "构建结果:" \
+              -m "$DETAILS"
           fi
           
-          echo "推送更改..."
-          git push origin main || git push origin main --force
+          echo "强制推送更改..."
+          git push origin main --force-with-lease
           echo "✅ 推送完成"
 
       - name: 📝 生成最终报告
@@ -840,4 +890,6 @@ jobs:
           
           echo "========================================"
           
+          # 清理临时文件
           rm -rf "$RESULT_DIR" 2>/dev/null || true
+          echo "临时文件已清理"
