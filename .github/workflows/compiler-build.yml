@@ -204,8 +204,9 @@ jobs:
             EXPECTED_ARCH="arm"
             EXPECTED_COMPILER_PREFIX="arm-"
           elif [ "$ARCH" = "arm_cortex-a53" ]; then
-            TARGET="sunxi"
-            SUBTARGET="cortexa53"
+            # 修复：使用不同的32位ARM目标
+            TARGET="bcm27xx"
+            SUBTARGET="bcm2709"
             ARCH_NAME="arm"
             PREFIX="arm-openwrt-linux-muslgnueabi"
             CPU_TYPE="cortex-a53"
@@ -319,14 +320,22 @@ jobs:
             echo "CONFIG_arm=y" >> .config
             echo "CONFIG_CPU_TYPE=\"cortex-a7\"" >> .config
             echo "CONFIG_arm64=n" >> .config
+            echo "CONFIG_AARCH64=n" >> .config
           elif [ "${{ matrix.arch }}" = "arm_cortex-a53" ]; then
-            echo "CONFIG_TARGET_sunxi=y" > .config
-            echo "CONFIG_TARGET_sunxi_cortexa53=y" >> .config
+            # 修复：使用bcm27xx确保32位ARM
+            echo "CONFIG_TARGET_bcm27xx=y" > .config
+            echo "CONFIG_TARGET_bcm27xx_bcm2709=y" >> .config
             echo "CONFIG_TARGET_ARCH_PACKAGES=\"arm_cortex-a53_neon-vfpv4\"" >> .config
             echo "CONFIG_TARGET_OPTIMIZATION=\"-march=armv8-a -mtune=cortex-a53 -mfpu=neon-vfpv4 -mfloat-abi=hard -mabi=aapcs-linux\"" >> .config
             echo "CONFIG_arm=y" >> .config
             echo "CONFIG_CPU_TYPE=\"cortex-a53\"" >> .config
             echo "CONFIG_arm64=n" >> .config
+            echo "CONFIG_AARCH64=n" >> .config
+            # 明确禁用64位相关配置
+            echo "CONFIG_TARGET_armvirt=n" >> .config
+            echo "CONFIG_TARGET_armvirt_64=n" >> .config
+            echo "CONFIG_TARGET_sunxi=n" >> .config
+            echo "CONFIG_TARGET_sunxi_cortexa53=n" >> .config
           elif [ "${{ matrix.arch }}" = "aarch64" ]; then
             echo "CONFIG_TARGET_armvirt=y" > .config
             echo "CONFIG_TARGET_armvirt_64=y" >> .config
@@ -392,8 +401,10 @@ jobs:
           make toolchain/install -j$(nproc) 2>&1 | tee /tmp/toolchain_install.log | tail -50
           
           # 检查是否成功
-          if [ -d "staging_dir/toolchain-"* ] 2>/dev/null; then
-            echo "✅ 工具链构建成功"
+          TOOLCHAIN_DIR=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
+          if [ -n "$TOOLCHAIN_DIR" ] && [ -d "$TOOLCHAIN_DIR" ]; then
+            echo "✅ 工具链构建成功，目录: $TOOLCHAIN_DIR"
+            echo "TOOLCHAIN_DIR=$TOOLCHAIN_DIR" >> $GITHUB_ENV
             echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
             echo "BUILD_ERROR=" >> $GITHUB_ENV
           else
@@ -412,29 +423,11 @@ jobs:
           echo "=== 查找并验证编译器 ==="
           cd "${{ env.BUILD_DIR }}"
           
-          echo "搜索工具链目录..."
-          TOOLCHAIN_DIR=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null | head -1)
-          
-          if [ -z "$TOOLCHAIN_DIR" ]; then
-            echo "搜索bin目录..."
-            GCC_DIR=$(find staging_dir -name "*gcc" -type f -executable 2>/dev/null | head -1)
-            if [ -n "$GCC_DIR" ]; then
-              TOOLCHAIN_DIR=$(dirname "$(dirname "$GCC_DIR")")
-            fi
-          fi
-          
-          if [ -z "$TOOLCHAIN_DIR" ]; then
-            TOOLCHAIN_DIR="staging_dir"
-          fi
-          
-          echo "✅ 工具链目录: $TOOLCHAIN_DIR"
-          echo "TOOLCHAIN_DIR=$TOOLCHAIN_DIR" >> $GITHUB_ENV
+          TOOLCHAIN_DIR="${{ env.TOOLCHAIN_DIR }}"
+          echo "工具链目录: $TOOLCHAIN_DIR"
           
           echo "搜索编译器..."
-          COMPILER=""
-          if [ -d "$TOOLCHAIN_DIR/bin" ]; then
-            COMPILER=$(find "$TOOLCHAIN_DIR/bin" -name "*gcc" -type f -executable 2>/dev/null | head -1)
-          fi
+          COMPILER=$(find "$TOOLCHAIN_DIR" -name "*gcc" -type f -executable 2>/dev/null | head -1)
           
           if [ -z "$COMPILER" ]; then
             COMPILER=$(find staging_dir -name "*gcc" -type f -executable 2>/dev/null | head -1)
@@ -473,12 +466,14 @@ jobs:
           ARCH_VALID=false
           
           if [ "$EXPECTED_ARCH" = "arm" ]; then
-            if echo "$COMPILER_NAME" | grep -q "^arm" || echo "$COMPILER_TARGET" | grep -q "arm"; then
+            if echo "$COMPILER_NAME" | grep -q "^arm" || echo "$COMPILER_TARGET" | grep -q "^arm"; then
               if ! echo "$COMPILER_NAME" | grep -q "aarch64" && ! echo "$COMPILER_TARGET" | grep -q "aarch64"; then
                 echo "✅ ARM架构验证通过: $COMPILER_NAME"
                 ARCH_VALID=true
               else
                 echo "❌ 架构错误: 期望32位ARM，实际是64位ARM"
+                echo "编译器名称包含aarch64: $COMPILER_NAME"
+                echo "编译器目标包含aarch64: $COMPILER_TARGET"
               fi
             else
               echo "❌ 编译器不匹配ARM架构"
@@ -559,6 +554,7 @@ jobs:
           
           ARCH_DIR="${{ matrix.arch }}"
           OUTPUT_BASE_DIR="${{ env.COMPILER_BASE_DIR }}/compilers/${ARCH_DIR}/musl/openwrt-${{ needs.setup.outputs.openwrt_version }}"
+          mkdir -p "$OUTPUT_BASE_DIR"
           OUTPUT_DIR="${OUTPUT_BASE_DIR}/gcc-${CLEAN_GCC_VERSION}_binutils-${{ needs.setup.outputs.binutils_version }}"
           
           echo "准备输出目录: $OUTPUT_DIR"
@@ -569,19 +565,15 @@ jobs:
           echo "复制工具链目录: $TOOLCHAIN_DIR"
           
           if [ -d "$TOOLCHAIN_DIR" ]; then
-            rsync -av "$TOOLCHAIN_DIR/" "$OUTPUT_DIR/" 2>&1 | tail -20
+            echo "使用cp复制工具链..."
+            cp -r "$TOOLCHAIN_DIR"/* "$OUTPUT_DIR/" 2>&1 | tail -20
           else
-            echo "⚠️ 工具链目录不存在，复制staging_dir"
+            echo "⚠️ 工具链目录不存在，复制整个staging_dir"
             cp -r staging_dir/* "$OUTPUT_DIR/" 2>&1 | tail -10 || true
           fi
           
-          COMPILER_PATH="${{ env.COMPILER_PATH }}"
-          if [ -f "$COMPILER_PATH" ]; then
-            mkdir -p "$OUTPUT_DIR/bin"
-            cp "$COMPILER_PATH" "$OUTPUT_DIR/bin/" 2>/dev/null || true
-          fi
-          
-          echo '{"architecture": "'${{ matrix.arch }}'","arch_name": "'${{ env.ARCH_NAME }}'","libc": "musl","libc_version": "'${{ needs.setup.outputs.musl_version }}'","gcc_version": "'$CLEAN_GCC_VERSION'","binutils_version": "'${{ needs.setup.outputs.binutils_version }}'","linux_version": "'${{ needs.setup.outputs.linux_version }}'","openwrt_version": "'${{ needs.setup.outputs.openwrt_version }}'","target": "'${{ env.TARGET }}'","subtarget": "'${{ env.SUBTARGET }}'","compiler_prefix": "'${{ env.PREFIX }}'-","compiler_name": "'${{ env.COMPILER_NAME }}'","compiler_target": "'${{ env.COMPILER_TARGET }}'","build_date": "'$(date -Iseconds)'","build_id": "'${{ env.BUILD_ID }}'"}' > "$OUTPUT_DIR/metadata.json"
+          echo "创建元数据..."
+          echo "{\"architecture\": \"${{ matrix.arch }}\",\"arch_name\": \"${{ env.ARCH_NAME }}\",\"libc\": \"musl\",\"libc_version\": \"${{ needs.setup.outputs.musl_version }}\",\"gcc_version\": \"$CLEAN_GCC_VERSION\",\"binutils_version\": \"${{ needs.setup.outputs.binutils_version }}\",\"linux_version\": \"${{ needs.setup.outputs.linux_version }}\",\"openwrt_version\": \"${{ needs.setup.outputs.openwrt_version }}\",\"target\": \"${{ env.TARGET }}\",\"subtarget\": \"${{ env.SUBTARGET }}\",\"compiler_prefix\": \"${{ env.PREFIX }}-\",\"compiler_name\": \"${{ env.COMPILER_NAME }}\",\"compiler_target\": \"${{ env.COMPILER_TARGET }}\",\"build_date\": \"$(date -Iseconds)\",\"build_id\": \"${{ env.BUILD_ID }}\"}" > "$OUTPUT_DIR/metadata.json"
           
           TOTAL_SIZE=$(du -sh "$OUTPUT_DIR" 2>/dev/null | cut -f1 || echo "0K")
           FILE_COUNT=$(find "$OUTPUT_DIR" -type f 2>/dev/null | wc -l || echo 0)
@@ -598,7 +590,19 @@ jobs:
           echo "GCC_VERSION=$CLEAN_GCC_VERSION" >> $GITHUB_ENV
           echo "FILE_COUNT=$FILE_COUNT" >> $GITHUB_ENV
           
+          # 确保文件可访问
           chmod -R 755 "$OUTPUT_BASE_DIR" 2>/dev/null || true
+          
+          # 验证文件确实存在
+          echo "验证输出文件..."
+          if [ -d "$OUTPUT_DIR" ] && [ $(find "$OUTPUT_DIR" -type f 2>/dev/null | wc -l) -gt 0 ]; then
+            echo "✅ 输出目录验证成功"
+          else
+            echo "❌ 输出目录验证失败"
+            echo "目录内容:"
+            ls -la "$OUTPUT_DIR" 2>/dev/null || echo "目录不存在"
+          fi
+          
           echo "完成时间: $(date)"
 
       - name: 📝 记录job详细结果
@@ -637,7 +641,7 @@ jobs:
           mkdir -p "$RESULT_DIR"
           
           RESULT_FILE="$RESULT_DIR/${{ matrix.arch }}.json"
-          echo '{"architecture": "'${{ matrix.arch }}'","arch_title": "'$ARCH_TITLE'","status_icon": "'$STATUS_ICON'","status_text": "'$STATUS_TEXT'","details": "'$DETAILS'","openwrt_version": "'${{ needs.setup.outputs.openwrt_version }}'","gcc_version": "'${GCC_VERSION:-unknown}'","compiler_name": "'${COMPILER_NAME:-unknown}'","output_dir": "'${OUTPUT_DIR:-none}'","total_size": "'${TOTAL_SIZE:-unknown}'","file_count": "'${FILE_COUNT:-unknown}'"}' > "$RESULT_FILE"
+          echo "{\"architecture\": \"${{ matrix.arch }}\",\"arch_title\": \"$ARCH_TITLE\",\"status_icon\": \"$STATUS_ICON\",\"status_text\": \"$STATUS_TEXT\",\"details\": \"$DETAILS\",\"openwrt_version\": \"${{ needs.setup.outputs.openwrt_version }}\",\"gcc_version\": \"${GCC_VERSION:-unknown}\",\"compiler_name\": \"${COMPILER_NAME:-unknown}\",\"output_dir\": \"${OUTPUT_DIR:-none}\",\"total_size\": \"${TOTAL_SIZE:-unknown}\",\"file_count\": \"${FILE_COUNT:-unknown}\"}" > "$RESULT_FILE"
           
           echo "结果已保存到: $RESULT_FILE"
 
@@ -705,9 +709,13 @@ jobs:
           echo "编译器文件数量: $FILE_COUNT"
           
           if [ $FILE_COUNT -eq 0 ]; then
+            echo "⚠️ 编译器目录为空"
             echo "HAS_COMPILERS=false" >> $GITHUB_ENV
           else
+            echo "✅ 找到编译器文件"
             echo "HAS_COMPILERS=true" >> $GITHUB_ENV
+            echo "文件列表（前10个）:"
+            find "$COMPILER_DIR" -type f 2>/dev/null | head -10
           fi
 
       - name: 📤 推送编译器文件
@@ -720,8 +728,11 @@ jobs:
           git add -f "firmware-config/build-Compiler-file"
           
           if git diff --cached --quiet; then
+            echo "没有文件变更，创建空提交..."
             git commit --allow-empty -m "build(compiler): 交叉编译器构建完成" -m "OpenWrt: ${{ needs.setup.outputs.openwrt_version }}" -m "架构类型: ${{ github.event.inputs.arch_type }}" -m "构建时间: $(date)"
           else
+            echo "有文件变更，准备提交..."
+            
             DETAILS=""
             RESULT_DIR="${{ github.workspace }}/.job-results"
             if [ -d "$RESULT_DIR" ]; then
@@ -772,12 +783,19 @@ jobs:
                 STATUS_ICON=$(jq -r '.status_icon' "$result_file" 2>/dev/null || echo "")
                 
                 case "$STATUS_ICON" in
-                  "✅") SUCCESS_COUNT=$((SUCCESS_COUNT + 1)) ;;
-                  "⏭️") SKIP_COUNT=$((SKIP_COUNT + 1)) ;;
-                  "❌") FAIL_COUNT=$((FAIL_COUNT + 1)) ;;
+                  "✅") 
+                    SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                    echo "✅ $ARCH_TITLE: 成功"
+                    ;;
+                  "⏭️") 
+                    SKIP_COUNT=$((SKIP_COUNT + 1))
+                    echo "⏭️ $ARCH_TITLE: 跳过"
+                    ;;
+                  "❌") 
+                    FAIL_COUNT=$((FAIL_COUNT + 1))
+                    echo "❌ $ARCH_TITLE: 失败"
+                    ;;
                 esac
-                
-                echo "$STATUS_ICON $ARCH_TITLE"
               fi
             done
             
