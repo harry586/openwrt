@@ -205,9 +205,9 @@ jobs:
             EXPECTED_COMPILER_PREFIX="arm-"
             FORCE_32BIT="true"
           elif [ "$ARCH" = "arm_cortex-a53" ]; then
-            # 修复：使用明确的32位ARM配置
-            TARGET="mediatek"
-            SUBTARGET="filogic"
+            # 修复：使用sunxi平台，确保32位ARM构建
+            TARGET="sunxi"
+            SUBTARGET="cortexa53"
             ARCH_NAME="arm"
             PREFIX="arm-openwrt-linux-muslgnueabi"
             CPU_TYPE="cortex-a53"
@@ -216,7 +216,7 @@ jobs:
             EXPECTED_ARCH="arm"
             EXPECTED_COMPILER_PREFIX="arm-"
             FORCE_32BIT="true"
-            echo "✅ 使用 MediaTek Filogic 平台，确保32位ARM构建"
+            echo "✅ 使用 Sunxi Cortex-A53 平台，确保32位ARM构建"
           elif [ "$ARCH" = "aarch64" ]; then
             TARGET="armvirt"
             SUBTARGET="64"
@@ -336,9 +336,9 @@ jobs:
             echo "CONFIG_AARCH64=n" >> .config
             echo "CONFIG_ARCH_64BIT=n" >> .config
           elif [ "${{ matrix.arch }}" = "arm_cortex-a53" ]; then
-            # 关键修复：使用更可靠的32位ARM平台
-            echo "CONFIG_TARGET_mediatek=y" > .config
-            echo "CONFIG_TARGET_mediatek_filogic=y" >> .config
+            # 关键修复：使用明确的sunxi cortexa53配置，确保32位ARM
+            echo "CONFIG_TARGET_sunxi=y" > .config
+            echo "CONFIG_TARGET_sunxi_cortexa53=y" >> .config
             echo "CONFIG_TARGET_ARCH_PACKAGES=\"arm_cortex-a53_neon-vfpv4\"" >> .config
             echo "CONFIG_TARGET_OPTIMIZATION=\"-march=armv8-a -mtune=cortex-a53 -mfpu=neon-vfpv4 -mfloat-abi=hard -mabi=aapcs-linux\"" >> .config
             echo "CONFIG_arm=y" >> .config
@@ -350,10 +350,12 @@ jobs:
             echo "CONFIG_arm64=n" >> .config
             echo "CONFIG_AARCH64=n" >> .config
             echo "CONFIG_ARCH_64BIT=n" >> .config
-            # 明确设置架构
+            # 明确禁用其他可能引起混淆的配置
+            echo "CONFIG_TARGET_armvirt=n" >> .config
+            echo "CONFIG_TARGET_armvirt_64=n" >> .config
             echo "CONFIG_TARGET_ARCH=\"arm\"" >> .config
-            echo "CONFIG_TARGET_SUBTARGET=\"mediatek\"" >> .config
-            echo "CONFIG_TARGET_BOARD=\"mediatek\"" >> .config
+            echo "CONFIG_TARGET_SUBTARGET=\"sunxi\"" >> .config
+            echo "CONFIG_TARGET_BOARD=\"sunxi\"" >> .config
           elif [ "${{ matrix.arch }}" = "aarch64" ]; then
             echo "CONFIG_TARGET_armvirt=y" > .config
             echo "CONFIG_TARGET_armvirt_64=y" >> .config
@@ -365,6 +367,7 @@ jobs:
             echo "CONFIG_ARCH_64BIT=y" >> .config
             # 明确禁用32位
             echo "CONFIG_arm=n" >> .config
+            echo "CONFIG_TARGET_sunxi=n" >> .config
           elif [ "${{ matrix.arch }}" = "x86_64" ]; then
             echo "CONFIG_TARGET_x86=y" > .config
             echo "CONFIG_TARGET_x86_64=y" >> .config
@@ -381,7 +384,7 @@ jobs:
           elif [ "${{ matrix.arch }}" = "mipsel" ]; then
             echo "CONFIG_TARGET_ramips=y" > .config
             echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
-            echo "CONFIG_TARGET_OPTIMIZATION=\"-march=24kc -mtune=24kc\"" >> .config
+            echo "CONFIG_TARGET_OPTIMIZATION=\"  -march=24kc -mtune=24kc\"" >> .config
             echo "CONFIG_mips=y" >> .config
             echo "CONFIG_CPU_TYPE=\"24kc\"" >> .config
             echo "CONFIG_BIG_ENDIAN=n" >> .config
@@ -404,13 +407,17 @@ jobs:
           echo "CONFIG_TARGET_ROOTFS_EXT4FS=n" >> .config
           echo "CONFIG_TARGET_ROOTFS_SQUASHFS=n" >> .config
           echo "CONFIG_TARGET_PREINITOPT=y" >> .config
+          # 关键：确保生成SDK
+          echo "CONFIG_IB=y" >> .config
+          echo "CONFIG_SDK=y" >> .config
+          echo "CONFIG_BUILD_PATENTED=y" >> .config
           
           echo "步骤3: 应用配置并验证..."
           yes "" | make defconfig 2>&1 | tail -30
           
           echo "验证配置:"
           echo "架构相关配置:"
-          grep -E "CONFIG_(arm|arm64|ARCH|CPU)" .config | grep -v "=n" || true
+          grep -E "CONFIG_(TARGET|arm|arm64|ARCH|CPU)" .config | grep -v "=n" || true
           
           echo "步骤4: 下载源码..."
           make -j$(nproc) download 2>&1 | tee /tmp/download.log
@@ -590,29 +597,53 @@ jobs:
           rm -rf "$OUTPUT_DIR" 2>/dev/null || true
           mkdir -p "$OUTPUT_DIR"
           
-          # 首先尝试复制整个staging_dir
-          echo "复制 staging_dir 内容..."
-          if [ -d "staging_dir" ]; then
-            cp -r staging_dir/* "$OUTPUT_DIR/" 2>&1 | tail -10 || true
-            echo "✅ staging_dir 复制完成"
+          # 关键修复：直接复制整个build_dir到输出目录
+          echo "复制整个构建目录..."
+          BUILD_CONTENTS=$(find . -maxdepth 1 -type f -name "*.config" -o -name "*.mk" -o -name "Makefile" | wc -l)
+          if [ $BUILD_CONTENTS -gt 0 ]; then
+            # 使用tar确保权限和符号链接正确
+            tar -czf /tmp/build_contents.tar.gz \
+              staging_dir \
+              .config \
+              Config.in \
+              Makefile \
+              feeds.conf \
+              feeds 2>/dev/null || true
+            if [ -f "/tmp/build_contents.tar.gz" ]; then
+              tar -xzf /tmp/build_contents.tar.gz -C "$OUTPUT_DIR"
+              rm -f /tmp/build_contents.tar.gz
+              echo "✅ 构建目录复制完成"
+            else
+              echo "⚠️ tar打包失败，尝试直接复制"
+              cp -r staging_dir "$OUTPUT_DIR/" 2>/dev/null || true
+            fi
           fi
           
-          # 尝试复制 toolchain
-          TOOLCHAIN_DIR="${{ env.TOOLCHAIN_DIR }}"
-          if [ -d "$TOOLCHAIN_DIR" ]; then
-            echo "复制工具链目录: $TOOLCHAIN_DIR"
-            cp -r "$TOOLCHAIN_DIR"/* "$OUTPUT_DIR/" 2>&1 | tail -10 || true
-            echo "✅ 工具链复制完成"
+          # 关键：尝试构建SDK包
+          echo "尝试构建SDK包..."
+          if [ -f "include/image.mk" ]; then
+            echo "构建SDK..."
+            make package/sdk 2>&1 | tail -50 || echo "SDK构建失败，继续..."
+            
+            # 查找SDK包
+            SDK_FILE=$(find bin -name "*sdk*.tar.xz" -o -name "*sdk*.tar.gz" 2>/dev/null | head -1)
+            if [ -n "$SDK_FILE" ] && [ -f "$SDK_FILE" ]; then
+              echo "✅ 找到SDK包: $SDK_FILE"
+              cp "$SDK_FILE" "$OUTPUT_DIR/"
+              echo "SDK包已复制到: $OUTPUT_DIR/$(basename "$SDK_FILE")"
+            fi
           fi
           
           # 验证文件确实被复制
           echo "验证复制结果..."
-          if [ -d "$OUTPUT_DIR/bin" ] || [ -d "$OUTPUT_DIR/usr" ]; then
+          if [ -d "$OUTPUT_DIR/staging_dir" ] || [ -f "$OUTPUT_DIR/.config" ]; then
             echo "✅ 文件复制成功"
-          else
-            echo "❌ 文件复制失败，目录为空"
-            echo "列出目录内容:"
+            echo "输出目录内容:"
             ls -la "$OUTPUT_DIR" || true
+          else
+            echo "❌ 文件复制失败，尝试最后手段..."
+            # 最后手段：复制整个目录
+            cp -r ./* "$OUTPUT_DIR/" 2>&1 | tail -10 || true
           fi
           
           echo "创建元数据..."
@@ -744,7 +775,8 @@ jobs:
           COMPILER_DIR="${{ github.workspace }}/firmware-config/build-Compiler-file"
           
           echo "检查目录: $COMPILER_DIR"
-          ls -la "$COMPILER_DIR" 2>/dev/null || echo "目录不存在或无法访问"
+          mkdir -p "$COMPILER_DIR" 2>/dev/null || true
+          ls -la "$COMPILER_DIR" 2>/dev/null || echo "目录无法访问"
           
           # 递归检查所有文件
           if [ -d "$COMPILER_DIR" ]; then
@@ -753,7 +785,7 @@ jobs:
             FILE_COUNT=$(find "$COMPILER_DIR" -type f 2>/dev/null | wc -l)
             echo "编译器文件数量: $FILE_COUNT"
           else
-            echo "⚠️ 编译器目录不存在"
+            echo "⚠️ 编译器目录不存在，已创建"
             FILE_COUNT=0
           fi
           
@@ -775,7 +807,7 @@ jobs:
           
           # 显示要推送的内容
           echo "要推送的文件结构:"
-          find "${{ github.workspace }}/firmware-config/build-Compiler-file" -type f 2>/dev/null | head -10 || echo "无文件"
+          find "${{ github.workspace }}/firmware-config/build-Compiler-file" -type f 2>/dev/null | head -20 || echo "无文件"
           echo ""
           echo "目录结构:"
           ls -la "${{ github.workspace }}/firmware-config/build-Compiler-file" 2>/dev/null || echo "目录不存在"
@@ -785,9 +817,11 @@ jobs:
           
           # 检查状态
           echo "Git状态:"
+          CHANGES=$(git status --porcelain | wc -l)
+          echo "变更文件数: $CHANGES"
           git status --porcelain | head -20 || echo "无变更"
           
-          if git diff --cached --quiet; then
+          if [ "$CHANGES" -eq 0 ]; then
             echo "没有文件变更，创建空提交..."
             git commit --allow-empty -m "build(compiler): 交叉编译器构建完成" \
               -m "OpenWrt: ${{ needs.setup.outputs.openwrt_version }}" \
@@ -795,7 +829,7 @@ jobs:
               -m "构建时间: $(date)" \
               -m "状态: 无新编译器文件"
           else
-            echo "有文件变更，准备提交..."
+            echo "有 $CHANGES 个文件变更，准备提交..."
             
             # 创建详细的提交信息
             DETAILS=""
@@ -814,6 +848,7 @@ jobs:
             git commit -m "build(compiler): 添加/更新交叉编译器" \
               -m "OpenWrt版本: ${{ needs.setup.outputs.openwrt_version }}" \
               -m "架构类型: ${{ github.event.inputs.arch_type }}" \
+              -m "构建时间: $(date)" \
               -m "构建结果:" \
               -m "$DETAILS"
           fi
