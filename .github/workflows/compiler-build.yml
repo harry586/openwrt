@@ -1,21 +1,41 @@
 # .github/workflows/compiler-build.yml
 name: 🔧 交叉编译器构建
+description: |
+  构建OpenWrt交叉编译工具链
+  支持多种架构：ARM (32位/64位)、x86_64、MIPS、RISC-V
+  使用Musl C库，针对不同OpenWrt版本
 
 on:
   workflow_dispatch:
     inputs:
       openwrt_version:
-        description: 'OpenWrt版本'
+        description: 'OpenWrt版本 (选择要构建的OpenWrt版本)'
         required: true
         default: '21.02.5'
         type: choice
-        options: ['21.02.5', '22.03.5', '23.05.2']
+        options:
+          - '21.02.5'
+          - '22.03.5'
+          - '23.05.2'
       arch_type:
-        description: '架构类型'
+        description: |
+          架构类型
+          all: 所有支持的架构
+          arm: 仅32位ARM架构 (ipq40xx, sunxi, mediatek等路由器)
+          aarch64: 仅64位ARM架构 (armvirt, rockchip等)
+          mips: MIPS架构 (ramips等老设备)
+          x86: x86_64架构
+          riscv: RISC-V 64位架构
         required: true
         default: 'all'
         type: choice
-        options: ['all', 'arm', 'mips', 'x86', 'riscv', 'aarch64']
+        options:
+          - 'all'
+          - 'arm'
+          - 'mips'
+          - 'x86'
+          - 'riscv'
+          - 'aarch64'
 
 env:
   COMPILER_BASE_DIR: "${{ github.workspace }}/firmware-config/build-Compiler-file"
@@ -48,7 +68,6 @@ jobs:
           sudo mkdir -p /mnt/compiler-build
           sudo chmod -R 777 /mnt/compiler-build
           sudo chown -R $USER:$USER /mnt/compiler-build 2>/dev/null || true
-          ls -ld /mnt/compiler-build
 
       - name: 🏗️ 初始化环境
         run: |
@@ -59,30 +78,53 @@ jobs:
           echo "构建基础目录: ${{ env.BUILD_BASE_DIR }}"
           echo "开始时间: $(date)"
 
-      - name: 🔧 简化架构列表
+      - name: 🔧 设置架构列表
         id: setup-arch
         run: |
-          echo "=== 简化目标架构列表 ==="
+          echo "=== 设置目标架构列表 ==="
           ARCH_TYPE="${{ github.event.inputs.arch_type }}"
           
+          # 架构说明：
+          # all: 包含所有支持的架构
+          # arm: 仅32位ARM架构 (ipq40xx, sunxi, mediatek等)
+          # aarch64: 仅64位ARM架构 (armvirt, rockchip等)
+          # mips: MIPS架构 (大端和小端)
+          # x86: x86_64架构
+          # riscv: RISC-V 64位架构
+          
           if [ "$ARCH_TYPE" = "all" ]; then
-            ARCH_LIST='["arm_cortex-a7","aarch64","x86_64","mips","mipsel","riscv64"]'
+            # 包含所有支持的架构
+            ARCH_LIST='["arm_cortex-a7","arm_cortex-a9","arm_cortex-a15","aarch64","x86_64","mips","mipsel","riscv64"]'
             echo "✅ 选择所有架构类型"
+            echo "- 32位ARM: Cortex-A7, Cortex-A9, Cortex-A15"
+            echo "- 64位ARM: AArch64"
+            echo "- x86_64"
+            echo "- MIPS (大端和小端)"
+            echo "- RISC-V 64位"
           elif [ "$ARCH_TYPE" = "arm" ]; then
-            ARCH_LIST='["arm_cortex-a7","aarch64"]'
-            echo "✅ 选择ARM架构"
+            # 仅32位ARM架构 - 常见路由器平台
+            ARCH_LIST='["arm_cortex-a7","arm_cortex-a9","arm_cortex-a15"]'
+            echo "✅ 选择32位ARM架构"
+            echo "- Cortex-A7: 低功耗设备 (如: sunxi/Allwinner, ipq40xx)"
+            echo "- Cortex-A9: 中端路由器 (如: mediatek mt7623, ipq806x)"
+            echo "- Cortex-A15: 高性能路由器 (如: ipq806x高端型号)"
           elif [ "$ARCH_TYPE" = "mips" ]; then
             ARCH_LIST='["mips","mipsel"]'
             echo "✅ 选择MIPS架构"
+            echo "- mips: 大端MIPS (如: ar71xx, ath79老设备)"
+            echo "- mipsel: 小端MIPS (如: ramips mt7621)"
           elif [ "$ARCH_TYPE" = "x86" ]; then
             ARCH_LIST='["x86_64"]'
             echo "✅ 选择x86架构"
+            echo "- x86_64: 64位x86 (PC/服务器)"
           elif [ "$ARCH_TYPE" = "riscv" ]; then
             ARCH_LIST='["riscv64"]'
             echo "✅ 选择RISC-V架构"
+            echo "- riscv64: 64位RISC-V (新兴架构)"
           elif [ "$ARCH_TYPE" = "aarch64" ]; then
             ARCH_LIST='["aarch64"]'
             echo "✅ 选择AArch64架构"
+            echo "- aarch64: 64位ARM (如: armvirt虚拟平台, rockchip RK3588等)"
           else
             ARCH_LIST='["aarch64"]'
             echo "⚠️ 未知类型，默认选择AArch64"
@@ -100,17 +142,17 @@ jobs:
             BINUTILS_VERSION="2.36.1"
             LINUX_VERSION="5.4.188"
             MUSL_VERSION="1.2.2"
-            echo "ℹ️ OpenWrt 21.02.5"
+            echo "ℹ️ OpenWrt 21.02.5 - 稳定版，适合老设备"
           elif [ "$OPENWRT_VERSION" = "22.03.5" ]; then
             BINUTILS_VERSION="2.38"
             LINUX_VERSION="5.10.179"
             MUSL_VERSION="1.2.3"
-            echo "✅ OpenWrt 22.03.5"
+            echo "✅ OpenWrt 22.03.5 - LTS版，推荐使用"
           elif [ "$OPENWRT_VERSION" = "23.05.2" ]; then
             BINUTILS_VERSION="2.40"
             LINUX_VERSION="5.15.133"
             MUSL_VERSION="1.2.4"
-            echo "✅ OpenWrt 23.05.2"
+            echo "✅ OpenWrt 23.05.2 - 新版，支持新硬件"
           fi
           echo "openwrt_version=$OPENWRT_VERSION" >> $GITHUB_OUTPUT
           echo "binutils_version=$BINUTILS_VERSION" >> $GITHUB_OUTPUT
@@ -159,7 +201,9 @@ jobs:
           echo "=== 设置架构环境 ==="
           ARCH="${{ matrix.arch }}"
           
+          # ARM 32位架构配置
           if [ "$ARCH" = "arm_cortex-a7" ]; then
+            # 对应平台: sunxi (Allwinner), ipq40xx (高通)
             TARGET="sunxi"
             SUBTARGET="cortexa7"
             ARCH_NAME="arm"
@@ -169,7 +213,39 @@ jobs:
             ARCH_TYPE_TITLE="ARM Cortex-A7 (32位)"
             EXPECTED_ARCH="arm"
             EXPECTED_COMPILER_PREFIX="arm-"
+            echo "✅ 配置: ARM Cortex-A7 (32位)"
+            echo "  平台: sunxi/Allwinner, ipq40xx"
+            echo "  前缀: $PREFIX"
+          elif [ "$ARCH" = "arm_cortex-a9" ]; then
+            # 对应平台: mediatek (mt7623), ipq806x (高通)
+            TARGET="mediatek"
+            SUBTARGET="mt7623"
+            ARCH_NAME="arm"
+            PREFIX="arm-openwrt-linux-muslgnueabi"
+            CPU_TYPE="cortex-a9"
+            TARGET_CPU="arm_cortex-a9"
+            ARCH_TYPE_TITLE="ARM Cortex-A9 (32位)"
+            EXPECTED_ARCH="arm"
+            EXPECTED_COMPILER_PREFIX="arm-"
+            echo "✅ 配置: ARM Cortex-A9 (32位)"
+            echo "  平台: mediatek mt7623, ipq806x"
+            echo "  前缀: $PREFIX"
+          elif [ "$ARCH" = "arm_cortex-a15" ]; then
+            # 对应平台: ipq806x高端型号
+            TARGET="ipq806x"
+            SUBTARGET="generic"
+            ARCH_NAME="arm"
+            PREFIX="arm-openwrt-linux-muslgnueabi"
+            CPU_TYPE="cortex-a15"
+            TARGET_CPU="arm_cortex-a15"
+            ARCH_TYPE_TITLE="ARM Cortex-A15 (32位)"
+            EXPECTED_ARCH="arm"
+            EXPECTED_COMPILER_PREFIX="arm-"
+            echo "✅ 配置: ARM Cortex-A15 (32位)"
+            echo "  平台: ipq806x高端路由器"
+            echo "  前缀: $PREFIX"
           elif [ "$ARCH" = "aarch64" ]; then
+            # 64位ARM架构
             TARGET="armvirt"
             SUBTARGET="64"
             ARCH_NAME="aarch64"
@@ -179,6 +255,9 @@ jobs:
             ARCH_TYPE_TITLE="AArch64 (64位)"
             EXPECTED_ARCH="aarch64"
             EXPECTED_COMPILER_PREFIX="aarch64-"
+            echo "✅ 配置: AArch64 (64位)"
+            echo "  平台: armvirt虚拟平台, rockchip"
+            echo "  前缀: $PREFIX"
           elif [ "$ARCH" = "x86_64" ]; then
             TARGET="x86"
             SUBTARGET="64"
@@ -189,9 +268,13 @@ jobs:
             ARCH_TYPE_TITLE="x86_64 (64位)"
             EXPECTED_ARCH="x86_64"
             EXPECTED_COMPILER_PREFIX="x86_64-"
+            echo "✅ 配置: x86_64 (64位)"
+            echo "  平台: PC/服务器"
+            echo "  前缀: $PREFIX"
           elif [ "$ARCH" = "mips" ]; then
-            TARGET="ramips"
-            SUBTARGET="mt7621"
+            # 大端MIPS (老设备: ar71xx, ath79)
+            TARGET="ath79"
+            SUBTARGET="generic"
             ARCH_NAME="mips"
             PREFIX="mips-openwrt-linux-musl"
             CPU_TYPE="24kc"
@@ -199,7 +282,11 @@ jobs:
             ARCH_TYPE_TITLE="MIPS (大端)"
             EXPECTED_ARCH="mips"
             EXPECTED_COMPILER_PREFIX="mips-"
+            echo "✅ 配置: MIPS (大端)"
+            echo "  平台: ath79老设备"
+            echo "  前缀: $PREFIX"
           elif [ "$ARCH" = "mipsel" ]; then
+            # 小端MIPS (ramips平台)
             TARGET="ramips"
             SUBTARGET="mt7621"
             ARCH_NAME="mipsel"
@@ -209,6 +296,9 @@ jobs:
             ARCH_TYPE_TITLE="MIPSel (小端)"
             EXPECTED_ARCH="mipsel"
             EXPECTED_COMPILER_PREFIX="mipsel-"
+            echo "✅ 配置: MIPSel (小端)"
+            echo "  平台: ramips (mt7621等)"
+            echo "  前缀: $PREFIX"
           elif [ "$ARCH" = "riscv64" ]; then
             TARGET="virt"
             SUBTARGET="rv64"
@@ -219,6 +309,9 @@ jobs:
             ARCH_TYPE_TITLE="RISC-V 64位"
             EXPECTED_ARCH="riscv64"
             EXPECTED_COMPILER_PREFIX="riscv64-"
+            echo "✅ 配置: RISC-V 64位"
+            echo "  平台: 虚拟平台"
+            echo "  前缀: $PREFIX"
           fi
           
           BUILD_ID="${ARCH}_musl_openwrt-${{ needs.setup.outputs.openwrt_version }}_$(date +%Y%m%d_%H%M%S)"
@@ -265,40 +358,54 @@ jobs:
           echo "步骤2: 配置目标平台..."
           rm -f .config
           
+          # 根据架构配置目标平台
           if [ "${{ matrix.arch }}" = "arm_cortex-a7" ]; then
-            echo "选择sunxi cortexa7..."
+            echo "配置: sunxi cortexa7 (ipq40xx类似平台)..."
             echo "CONFIG_TARGET_sunxi=y" > .config
             echo "CONFIG_TARGET_sunxi_cortexa7=y" >> .config
             echo "CONFIG_TARGET_ARCH_PACKAGES=\"arm_cortex-a7_neon-vfpv4\"" >> .config
             echo "CONFIG_TARGET_OPTIMIZATION=\"-march=armv7-a -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard\"" >> .config
+          elif [ "${{ matrix.arch }}" = "arm_cortex-a9" ]; then
+            echo "配置: mediatek mt7623 (ipq806x类似平台)..."
+            echo "CONFIG_TARGET_mediatek=y" > .config
+            echo "CONFIG_TARGET_mediatek_mt7623=y" >> .config
+            echo "CONFIG_TARGET_ARCH_PACKAGES=\"arm_cortex-a9_neon-vfpv4-d16\"" >> .config
+            echo "CONFIG_TARGET_OPTIMIZATION=\"-march=armv7-a -mtune=cortex-a9 -mfpu=neon-vfpv4-d16 -mfloat-abi=hard\"" >> .config
+          elif [ "${{ matrix.arch }}" = "arm_cortex-a15" ]; then
+            echo "配置: ipq806x cortex-a15..."
+            echo "CONFIG_TARGET_ipq806x=y" > .config
+            echo "CONFIG_TARGET_ipq806x_generic=y" >> .config
+            echo "CONFIG_TARGET_ARCH_PACKAGES=\"arm_cortex-a15_neon-vfpv4\"" >> .config
+            echo "CONFIG_TARGET_OPTIMIZATION=\"-march=armv7-a -mtune=cortex-a15 -mfpu=neon-vfpv4 -mfloat-abi=hard\"" >> .config
           elif [ "${{ matrix.arch }}" = "aarch64" ]; then
-            echo "选择armvirt 64..."
+            echo "配置: armvirt 64位ARM..."
             echo "CONFIG_TARGET_armvirt=y" > .config
             echo "CONFIG_TARGET_armvirt_64=y" >> .config
             echo "CONFIG_TARGET_ARCH_PACKAGES=\"aarch64_generic\"" >> .config
             echo "CONFIG_TARGET_OPTIMIZATION=\"-march=armv8-a -mtune=cortex-a53\"" >> .config
           elif [ "${{ matrix.arch }}" = "x86_64" ]; then
-            echo "选择x86 64..."
+            echo "配置: x86 64位..."
             echo "CONFIG_TARGET_x86=y" > .config
             echo "CONFIG_TARGET_x86_64=y" >> .config
             echo "CONFIG_TARGET_OPTIMIZATION=\"-march=x86-64 -mtune=generic\"" >> .config
           elif [ "${{ matrix.arch }}" = "mips" ]; then
-            echo "选择ramips mt7621 (大端)..."
-            echo "CONFIG_TARGET_ramips=y" > .config
-            echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
-            echo "CONFIG_TARGET_OPTIMIZATION=\"-march=24kc -mtune=24kc\"" >> .config
+            echo "配置: ath79 大端MIPS..."
+            echo "CONFIG_TARGET_ath79=y" > .config
+            echo "CONFIG_TARGET_ath79_generic=y" >> .config
+            echo "CONFIG_TARGET_OPTIMIZATION=\"-march=74kc -mtune=74kc\"" >> .config
           elif [ "${{ matrix.arch }}" = "mipsel" ]; then
-            echo "选择ramips mt7621 (小端)..."
+            echo "配置: ramips 小端MIPS..."
             echo "CONFIG_TARGET_ramips=y" > .config
             echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
             echo "CONFIG_TARGET_OPTIMIZATION=\"-march=24kc -mtune=24kc\"" >> .config
           elif [ "${{ matrix.arch }}" = "riscv64" ]; then
-            echo "选择virt rv64..."
+            echo "配置: virt RISC-V 64位..."
             echo "CONFIG_TARGET_virt=y" > .config
             echo "CONFIG_TARGET_virt_rv64=y" >> .config
             echo "CONFIG_TARGET_OPTIMIZATION=\"-march=rv64gc -mtune=generic\"" >> .config
           fi
           
+          # 通用配置
           echo "CONFIG_SDK=y" >> .config
           echo "CONFIG_BUILD_TOOLCHAIN=y" >> .config
           echo "CONFIG_TOOLCHAINOPTS=y" >> .config
@@ -396,6 +503,7 @@ jobs:
           
           METADATA_FILE="$OUTPUT_DIR/metadata.txt"
           echo "架构: ${{ matrix.arch }}" > "$METADATA_FILE"
+          echo "平台: ${{ env.TARGET }}/${{ env.SUBTARGET }}" >> "$METADATA_FILE"
           echo "OpenWrt版本: ${{ needs.setup.outputs.openwrt_version }}" >> "$METADATA_FILE"
           echo "编译器: $COMPILER_NAME" >> "$METADATA_FILE"
           echo "编译器版本: $COMPILER_VERSION" >> "$METADATA_FILE"
@@ -403,8 +511,20 @@ jobs:
           echo "Binutils: ${{ needs.setup.outputs.binutils_version }}" >> "$METADATA_FILE"
           echo "Linux内核: ${{ needs.setup.outputs.linux_version }}" >> "$METADATA_FILE"
           echo "构建时间: $(date)" >> "$METADATA_FILE"
-          echo "目标: ${{ env.TARGET }}" >> "$METADATA_FILE"
-          echo "子目标: ${{ env.SUBTARGET }}" >> "$METADATA_FILE"
+          echo "目标平台说明:" >> "$METADATA_FILE"
+          if [ "${{ matrix.arch }}" = "arm_cortex-a7" ]; then
+            echo "- 适用: sunxi/Allwinner, ipq40xx等Cortex-A7设备" >> "$METADATA_FILE"
+          elif [ "${{ matrix.arch }}" = "arm_cortex-a9" ]; then
+            echo "- 适用: mediatek mt7623, ipq806x等Cortex-A9设备" >> "$METADATA_FILE"
+          elif [ "${{ matrix.arch }}" = "arm_cortex-a15" ]; then
+            echo "- 适用: ipq806x高端路由器等Cortex-A15设备" >> "$METADATA_FILE"
+          elif [ "${{ matrix.arch }}" = "aarch64" ]; then
+            echo "- 适用: armvirt虚拟平台, rockchip等64位ARM设备" >> "$METADATA_FILE"
+          elif [ "${{ matrix.arch }}" = "mips" ]; then
+            echo "- 适用: ath79等大端MIPS老设备" >> "$METADATA_FILE"
+          elif [ "${{ matrix.arch }}" = "mipsel" ]; then
+            echo "- 适用: ramips等小端MIPS设备" >> "$METADATA_FILE"
+          fi
           echo "前缀: ${{ env.PREFIX }}" >> "$METADATA_FILE"
           
           TOTAL_SIZE=$(du -sh "$OUTPUT_DIR" 2>/dev/null | cut -f1 || echo "0K")
@@ -490,6 +610,16 @@ jobs:
           git config pull.rebase true
           git pull origin main 2>&1 | tail -5
 
+      - name: 🔧 确保目录结构
+        run: |
+          echo "=== 确保编译器目录结构 ==="
+          COMPILER_BASE="${{ github.workspace }}/firmware-config/build-Compiler-file"
+          echo "创建基础目录: $COMPILER_BASE"
+          mkdir -p "$COMPILER_BASE"
+          
+          echo "检查目录结构..."
+          ls -la "$COMPILER_BASE" || echo "目录创建失败"
+
       - name: 📊 检查文件
         run: |
           echo "=== 检查编译器文件 ==="
@@ -498,10 +628,11 @@ jobs:
           echo "检查目录: $COMPILER_DIR"
           
           if [ -d "$COMPILER_DIR" ]; then
-            echo "目录存在，内容:"
-            find "$COMPILER_DIR" -type f 2>/dev/null | head -20 || echo "无文件"
+            echo "目录存在，查找编译器文件..."
+            echo "递归查找所有文件:"
+            find "$COMPILER_DIR" -type f 2>/dev/null | head -30 || echo "无文件"
             FILE_COUNT=$(find "$COMPILER_DIR" -type f 2>/dev/null | wc -l)
-            echo "文件数量: $FILE_COUNT"
+            echo "文件总数: $FILE_COUNT"
             
             if [ $FILE_COUNT -gt 0 ]; then
               echo "✅ 找到编译器文件"
@@ -519,30 +650,39 @@ jobs:
         run: |
           echo "=== 推送编译器文件 ==="
           
+          # 确保目录存在
           mkdir -p "${{ github.workspace }}/firmware-config/build-Compiler-file"
           
+          # 添加文件
           git add -f "firmware-config/build-Compiler-file"
           
+          # 检查是否有变更
           if git diff --cached --quiet; then
             echo "没有文件变更"
-            git commit --allow-empty -m "build(compiler): 交叉编译器构建完成" -m "OpenWrt: ${{ needs.setup.outputs.openwrt_version }}" -m "架构类型: ${{ github.event.inputs.arch_type }}" -m "状态: 无新编译器文件" -m "时间: $(date)"
+            git commit --allow-empty -m "build(compiler): 交叉编译器构建完成" -m "OpenWrt: ${{ needs.setup.outputs.openwrt_version }}" -m "架构: ${{ github.event.inputs.arch_type }}" -m "状态: 无新文件" -m "时间: $(date)"
           else
             echo "有文件变更，准备提交..."
             
-            RESULT_INFO=""
+            # 收集结果信息
+            RESULT_SUMMARY=""
             RESULT_DIR="${{ github.workspace }}/.job-results"
             if [ -d "$RESULT_DIR" ]; then
               for result_file in "$RESULT_DIR"/*.txt; do
                 if [ -f "$result_file" ]; then
-                  RESULT_INFO="${RESULT_INFO}$(cat "$result_file")\n\n"
+                  ARCH_LINE=$(grep "^架构:" "$result_file" | head -1)
+                  STATUS_LINE=$(grep "^状态:" "$result_file" | head -1)
+                  if [ -n "$ARCH_LINE" ] && [ -n "$STATUS_LINE" ]; then
+                    RESULT_SUMMARY="${RESULT_SUMMARY}${ARCH_LINE} ${STATUS_LINE}\n"
+                  fi
                 fi
               done
             fi
             
-            git commit -m "build(compiler): 添加交叉编译器" -m "OpenWrt版本: ${{ needs.setup.outputs.openwrt_version }}" -m "架构类型: ${{ github.event.inputs.arch_type }}" -m "构建时间: $(date)" -m "构建结果:"
-            
-            if [ -n "$RESULT_INFO" ]; then
-              git commit --amend -m "build(compiler): 添加交叉编译器" -m "OpenWrt版本: ${{ needs.setup.outputs.openwrt_version }}" -m "架构类型: ${{ github.event.inputs.arch_type }}" -m "构建时间: $(date)" -m "构建结果:" -m "$RESULT_INFO"
+            echo "提交构建结果..."
+            if [ -n "$RESULT_SUMMARY" ]; then
+              git commit -m "build(compiler): 添加交叉编译器" -m "OpenWrt: ${{ needs.setup.outputs.openwrt_version }}" -m "架构: ${{ github.event.inputs.arch_type }}" -m "结果:" -m "$RESULT_SUMMARY" -m "时间: $(date)"
+            else
+              git commit -m "build(compiler): 添加交叉编译器" -m "OpenWrt: ${{ needs.setup.outputs.openwrt_version }}" -m "架构: ${{ github.event.inputs.arch_type }}" -m "时间: $(date)"
             fi
           fi
           
@@ -555,29 +695,46 @@ jobs:
           echo "========================================"
           echo "           🎯 构建任务总结              "
           echo "========================================"
-          echo "OpenWrt版本: ${{ needs.setup.outputs.openwrt_version }}"
-          echo "架构类型: ${{ github.event.inputs.arch_type }}"
-          echo "开始时间: ${{ needs.setup.outputs.start_time }}"
-          echo "结束时间: $(date)"
+          echo "任务信息:"
+          echo "- OpenWrt版本: ${{ needs.setup.outputs.openwrt_version }}"
+          echo "- 架构类型: ${{ github.event.inputs.arch_type }}"
+          echo "- 开始时间: ${{ needs.setup.outputs.start_time }}"
+          echo "- 结束时间: $(date)"
           
           DURATION=$(( ($(date +%s) - $(date -d "${{ needs.setup.outputs.start_time }}" +%s)) / 60 ))
-          echo "构建时长: ${DURATION}分钟"
+          echo "- 构建时长: ${DURATION}分钟"
           
           echo ""
-          echo "各架构结果:"
+          echo "各架构构建结果:"
           
           RESULT_DIR="${{ github.workspace }}/.job-results"
           if [ -d "$RESULT_DIR" ]; then
+            SUCCESS_COUNT=0
+            FAIL_COUNT=0
+            
             for result_file in "$RESULT_DIR"/*.txt; do
               if [ -f "$result_file" ]; then
                 echo ""
                 cat "$result_file"
+                if grep -q "✅ 构建成功" "$result_file"; then
+                  SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                else
+                  FAIL_COUNT=$((FAIL_COUNT + 1))
+                fi
               fi
             done
+            
+            echo ""
+            echo "构建统计:"
+            echo "- 成功: $SUCCESS_COUNT"
+            echo "- 失败: $FAIL_COUNT"
+            echo "- 总计: $((SUCCESS_COUNT + FAIL_COUNT))"
           else
             echo "未找到结果文件"
           fi
           
+          echo ""
+          echo "输出位置: firmware-config/build-Compiler-file/"
           echo "========================================"
           
           rm -rf "$RESULT_DIR" 2>/dev/null || true
