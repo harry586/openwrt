@@ -1,56 +1,30 @@
 # .github/workflows/compiler-build.yml
 name: 🔧 交叉编译器构建
-description: |
-  构建OpenWrt交叉编译工具链
-  支持多种架构：ARM (32位/64位)、x86_64、MIPS、RISC-V
-  使用Musl C库，针对不同OpenWrt版本
 
 on:
   workflow_dispatch:
     inputs:
       openwrt_version:
-        description: 'OpenWrt版本 (选择要构建的OpenWrt版本)'
+        description: 'OpenWrt版本'
         required: true
         default: '21.02.5'
         type: choice
-        options:
-          - '21.02.5'
-          - '22.03.5'
-          - '23.05.2'
+        options: ['21.02.5', '22.03.5', '23.05.2']
       arch_type:
-        description: |
-          架构类型
-          all: 所有支持的架构
-          arm: 仅32位ARM架构 (ipq40xx, sunxi, mediatek等路由器)
-          aarch64: 仅64位ARM架构 (armvirt, rockchip等)
-          mips: MIPS架构 (ramips等老设备)
-          x86: x86_64架构
-          riscv: RISC-V 64位架构
+        description: '架构类型'
         required: true
         default: 'all'
         type: choice
-        options:
-          - 'all'
-          - 'arm'
-          - 'mips'
-          - 'x86'
-          - 'riscv'
-          - 'aarch64'
+        options: ['all', 'arm', 'mips', 'x86', 'riscv', 'aarch64']
 
 env:
-  COMPILER_BASE_DIR: "${{ github.workspace }}/firmware-config/build-Compiler-file"
+  COMPILER_BASE_DIR: "./firmware-config/build-Compiler-file"
   BUILD_BASE_DIR: "/mnt/compiler-build"
 
 jobs:
-  setup:
+  build-and-push:
     runs-on: ubuntu-22.04
-    outputs:
-      arch_list: ${{ steps.setup-arch.outputs.arch_list }}
-      openwrt_version: ${{ steps.version-detection.outputs.openwrt_version }}
-      binutils_version: ${{ steps.version-detection.outputs.binutils_version }}
-      linux_version: ${{ steps.version-detection.outputs.linux_version }}
-      musl_version: ${{ steps.version-detection.outputs.musl_version }}
-      start_time: ${{ steps.get-time.outputs.start_time }}
+    timeout-minutes: 420
     steps:
       - name: 📥 检出仓库
         uses: actions/checkout@v4
@@ -136,24 +110,6 @@ jobs:
           echo "linux_version=$LINUX_VERSION" >> $GITHUB_OUTPUT
           echo "musl_version=$MUSL_VERSION" >> $GITHUB_OUTPUT
 
-  build-compilers:
-    needs: setup
-    runs-on: ubuntu-22.04
-    timeout-minutes: 360
-    steps:
-      - name: 📥 检出仓库
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: 🔧 设置环境权限
-        run: |
-          echo "=== 设置环境权限 ==="
-          sudo mkdir -p /mnt/compiler-build
-          sudo chmod -R 777 /mnt/compiler-build
-          sudo chown -R $USER:$USER /mnt/compiler-build 2>/dev/null || true
-          mkdir -p "${{ env.COMPILER_BASE_DIR }}"
-
       - name: 🔧 安装依赖
         run: |
           echo "=== 安装构建依赖 ==="
@@ -165,28 +121,32 @@ jobs:
           echo "========================================"
           echo "        交叉编译器构建信息              "
           echo "========================================"
-          echo "OpenWrt版本: ${{ needs.setup.outputs.openwrt_version }}"
+          echo "OpenWrt版本: ${{ steps.version-detection.outputs.openwrt_version }}"
           echo "架构类型: ${{ github.event.inputs.arch_type }}"
-          echo "目标架构: ${{ fromJSON(needs.setup.outputs.arch_list) }}"
+          echo "目标架构: ${{ steps.setup-arch.outputs.arch_list }}"
           echo "C库类型: musl"
-          echo "Binutils版本: ${{ needs.setup.outputs.binutils_version }}"
-          echo "Linux内核: ${{ needs.setup.outputs.linux_version }}"
-          echo "Musl版本: ${{ needs.setup.outputs.musl_version }}"
+          echo "Binutils版本: ${{ steps.version-detection.outputs.binutils_version }}"
+          echo "Linux内核: ${{ steps.version-detection.outputs.linux_version }}"
+          echo "Musl版本: ${{ steps.version-detection.outputs.musl_version }}"
           echo "构建目录: ${{ env.BUILD_BASE_DIR }}"
           echo "输出目录: ${{ env.COMPILER_BASE_DIR }}"
           echo "========================================"
-          echo "开始时间: $(date)"
 
       - name: 🏗️ 构建所有编译器
+        id: build-compilers
         run: |
           echo "=== 构建所有编译器 ==="
           
           # 获取架构列表
-          ARCH_LIST='${{ fromJSON(needs.setup.outputs.arch_list) }}'
+          ARCH_LIST='${{ steps.setup-arch.outputs.arch_list }}'
           echo "架构列表: $ARCH_LIST"
           
           # 将JSON数组转换为bash数组
           eval "ARCH_ARRAY=($ARCH_LIST)"
+          
+          BUILD_RESULTS=""
+          SUCCESS_COUNT=0
+          FAIL_COUNT=0
           
           for ARCH in "${ARCH_ARRAY[@]}"; do
             echo ""
@@ -249,7 +209,7 @@ jobs:
             echo "编译器前缀: $PREFIX"
             
             # 创建构建目录
-            BUILD_ID="${ARCH}_musl_openwrt-${{ needs.setup.outputs.openwrt_version }}_$(date +%Y%m%d_%H%M%S)"
+            BUILD_ID="${ARCH}_musl_openwrt-${{ steps.version-detection.outputs.openwrt_version }}_$(date +%Y%m%d_%H%M%S)"
             BUILD_DIR="${{ env.BUILD_BASE_DIR }}/${BUILD_ID}"
             mkdir -p "$BUILD_DIR"
             
@@ -258,7 +218,7 @@ jobs:
             
             # 下载OpenWrt源码
             echo "下载OpenWrt源码..."
-            git clone --depth 1 --branch "v${{ needs.setup.outputs.openwrt_version }}" https://github.com/openwrt/openwrt.git .
+            git clone --depth 1 --branch "v${{ steps.version-detection.outputs.openwrt_version }}" https://github.com/openwrt/openwrt.git .
             
             # 更新feeds
             echo "更新feeds..."
@@ -328,9 +288,12 @@ jobs:
             
             # 构建工具链
             echo "构建工具链..."
+            START_TIME=$(date +%s)
             make toolchain/clean
             make toolchain/compile -j$(nproc)
             make toolchain/install -j$(nproc)
+            END_TIME=$(date +%s)
+            BUILD_TIME=$((END_TIME - START_TIME))
             
             # 查找编译器
             COMPILER=$(find staging_dir -name "*gcc" -type f -executable 2>/dev/null | head -1)
@@ -340,9 +303,10 @@ jobs:
               GCC_VERSION=$(echo "$COMPILER_VERSION" | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+" | head -1 || echo "unknown")
               
               echo "✅ 编译器构建成功: $COMPILER_NAME v$GCC_VERSION"
+              echo "构建时间: ${BUILD_TIME}秒"
               
               # 保存构建结果
-              OUTPUT_BASE_DIR="${{ env.COMPILER_BASE_DIR }}/compilers/${ARCH}/musl/openwrt-${{ needs.setup.outputs.openwrt_version }}"
+              OUTPUT_BASE_DIR="${{ env.COMPILER_BASE_DIR }}/compilers/${ARCH}/musl/openwrt-${{ steps.version-detection.outputs.openwrt_version }}"
               mkdir -p "$OUTPUT_BASE_DIR"
               
               OUTPUT_DIR="${OUTPUT_BASE_DIR}/gcc-${GCC_VERSION}_$(date +%Y%m%d_%H%M%S)"
@@ -350,34 +314,35 @@ jobs:
               
               echo "保存到: $OUTPUT_DIR"
               
-              # 使用tar避免符号链接问题
+              # 复制工具链
               if [ -d "staging_dir" ]; then
                 echo "复制工具链..."
-                # 先尝试直接复制
                 cp -r staging_dir/* "$OUTPUT_DIR/" 2>&1 | tail -5 || echo "复制遇到问题，继续..."
                 
                 # 创建元数据
                 METADATA_FILE="$OUTPUT_DIR/metadata.txt"
                 echo "架构: $ARCH" > "$METADATA_FILE"
                 echo "平台: $TARGET/$SUBTARGET" >> "$METADATA_FILE"
-                echo "OpenWrt版本: ${{ needs.setup.outputs.openwrt_version }}" >> "$METADATA_FILE"
+                echo "OpenWrt版本: ${{ steps.version-detection.outputs.openwrt_version }}" >> "$METADATA_FILE"
                 echo "编译器: $COMPILER_NAME" >> "$METADATA_FILE"
                 echo "编译器版本: $GCC_VERSION" >> "$METADATA_FILE"
-                echo "C库: musl ${{ needs.setup.outputs.musl_version }}" >> "$METADATA_FILE"
+                echo "C库: musl ${{ steps.version-detection.outputs.musl_version }}" >> "$METADATA_FILE"
                 echo "构建时间: $(date)" >> "$METADATA_FILE"
+                echo "构建耗时: ${BUILD_TIME}秒" >> "$METADATA_FILE"
                 echo "前缀: $PREFIX" >> "$METADATA_FILE"
                 
                 TOTAL_SIZE=$(du -sh "$OUTPUT_DIR" 2>/dev/null | cut -f1 || echo "0K")
                 FILE_COUNT=$(find "$OUTPUT_DIR" -type f 2>/dev/null | wc -l || echo 0)
                 
                 echo "✅ 保存成功 - 大小: $TOTAL_SIZE, 文件数: $FILE_COUNT"
+                
+                BUILD_RESULTS="${BUILD_RESULTS}✅ $ARCH_TYPE_TITLE: $COMPILER_NAME v$GCC_VERSION\n"
+                SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
               fi
-              
-              # 记录结果
-              echo "$ARCH: ✅ 成功 - $COMPILER_NAME v$GCC_VERSION" >> /tmp/build_results.txt
             else
               echo "❌ 编译器构建失败"
-              echo "$ARCH: ❌ 失败" >> /tmp/build_results.txt
+              BUILD_RESULTS="${BUILD_RESULTS}❌ $ARCH_TYPE_TITLE: 构建失败\n"
+              FAIL_COUNT=$((FAIL_COUNT + 1))
             fi
             
             # 清理构建目录
@@ -390,9 +355,16 @@ jobs:
           echo "========================================"
           echo "所有架构构建完成"
           echo "========================================"
-          if [ -f "/tmp/build_results.txt" ]; then
-            cat /tmp/build_results.txt
-          fi
+          echo "构建结果:"
+          echo -e "$BUILD_RESULTS"
+          echo "成功: $SUCCESS_COUNT, 失败: $FAIL_COUNT"
+          
+          # 保存结果到环境变量
+          echo "BUILD_RESULTS<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$BUILD_RESULTS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "SUCCESS_COUNT=$SUCCESS_COUNT" >> $GITHUB_OUTPUT
+          echo "FAIL_COUNT=$FAIL_COUNT" >> $GITHUB_OUTPUT
 
       - name: 📊 检查最终结果
         run: |
@@ -403,74 +375,61 @@ jobs:
           ls -la "$COMPILER_DIR" 2>/dev/null || echo "目录不存在"
           
           if [ -d "$COMPILER_DIR" ]; then
-            echo "递归查找文件:"
-            find "$COMPILER_DIR" -type f 2>/dev/null | head -20 || echo "无文件"
-            FILE_COUNT=$(find "$COMPILER_DIR" -type f 2>/dev/null | wc -l)
-            echo "文件总数: $FILE_COUNT"
+            echo "文件统计:"
+            find "$COMPILER_DIR" -type f 2>/dev/null | wc -l | xargs echo "文件总数:"
+            find "$COMPILER_DIR" -type d 2>/dev/null | wc -l | xargs echo "目录总数:"
             
-            if [ $FILE_COUNT -gt 0 ]; then
-              echo "✅ 编译器文件已保存"
-              echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
-            else
-              echo "⚠️ 目录存在但为空"
-              echo "BUILD_SUCCESS=false" >> $GITHUB_ENV
-            fi
+            echo "目录结构:"
+            find "$COMPILER_DIR" -type d 2>/dev/null | head -30 || true
           else
-            echo "❌ 目录不存在"
-            echo "BUILD_SUCCESS=false" >> $GITHUB_ENV
+            echo "❌ 编译器目录不存在"
           fi
 
-  push-results:
-    needs: build-compilers
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - name: 📥 检出仓库
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: 🔄 拉取最新代码
+      - name: 📤 推送文件到仓库
         run: |
-          echo "=== 拉取最新代码 ==="
-          git config user.email "github-actions@github.com"
-          git config user.name "GitHub Actions"
-          git config pull.rebase true
-          git pull origin main 2>&1 | tail -5
-
-      - name: 📊 检查文件
-        run: |
-          echo "=== 检查编译器文件 ==="
-          COMPILER_DIR="${{ github.workspace }}/firmware-config/build-Compiler-file"
+          echo "=== 推送编译器文件到仓库 ==="
           
-          echo "检查目录: $COMPILER_DIR"
+          # 检查是否有文件
+          FILE_COUNT=$(find "${{ env.COMPILER_BASE_DIR }}" -type f 2>/dev/null | wc -l)
+          echo "找到 $FILE_COUNT 个文件"
           
-          if [ -d "$COMPILER_DIR" ]; then
-            echo "目录存在:"
-            ls -la "$COMPILER_DIR" || echo "无法访问"
-            
-            echo "递归查找:"
-            find "$COMPILER_DIR" -type f 2>/dev/null | head -20 || echo "无文件"
-            FILE_COUNT=$(find "$COMPILER_DIR" -type f 2>/dev/null | wc -l)
-            echo "文件总数: $FILE_COUNT"
+          if [ $FILE_COUNT -eq 0 ]; then
+            echo "⚠️ 没有文件可推送"
+            echo "SKIP_PUSH=true" >> $GITHUB_ENV
           else
-            echo "❌ 目录不存在"
+            echo "✅ 有文件可推送"
+            echo "SKIP_PUSH=false" >> $GITHUB_ENV
           fi
 
-      - name: 📤 推送文件
+      - name: 🔄 提交和推送
+        if: env.SKIP_PUSH == 'false'
         run: |
-          echo "=== 推送编译器文件 ==="
+          echo "=== 提交和推送 ==="
           
           # 添加文件
-          git add -f "firmware-config/build-Compiler-file"
+          git add -f "${{ env.COMPILER_BASE_DIR }}"
           
-          # 检查是否有变更
-          if git diff --cached --quiet; then
-            echo "没有文件变更"
-            git commit --allow-empty -m "build(compiler): 交叉编译器构建" -m "OpenWrt: ${{ needs.setup.outputs.openwrt_version }}" -m "架构: ${{ github.event.inputs.arch_type }}" -m "状态: 无新文件" -m "时间: $(date)"
+          # 检查添加的文件
+          ADDED_FILES=$(git status --porcelain | wc -l)
+          echo "添加了 $ADDED_FILES 个文件"
+          
+          if [ $ADDED_FILES -eq 0 ]; then
+            echo "没有文件变更，创建空提交"
+            git commit --allow-empty -m "build(compiler): 交叉编译器构建" -m "OpenWrt: ${{ steps.version-detection.outputs.openwrt_version }}" -m "架构: ${{ github.event.inputs.arch_type }}" -m "状态: 无新文件" -m "时间: $(date)"
           else
-            echo "有文件变更，准备提交..."
-            git commit -m "build(compiler): 添加交叉编译器" -m "OpenWrt: ${{ needs.setup.outputs.openwrt_version }}" -m "架构: ${{ github.event.inputs.arch_type }}" -m "时间: $(date)"
+            echo "提交文件..."
+            # 获取构建结果
+            BUILD_RESULTS="${{ steps.build-compilers.outputs.BUILD_RESULTS }}"
+            SUCCESS_COUNT="${{ steps.build-compilers.outputs.SUCCESS_COUNT }}"
+            FAIL_COUNT="${{ steps.build-compilers.outputs.FAIL_COUNT }}"
+            
+            git commit -m "build(compiler): 添加交叉编译器" \
+              -m "OpenWrt: ${{ steps.version-detection.outputs.openwrt_version }}" \
+              -m "架构: ${{ github.event.inputs.arch_type }}" \
+              -m "成功: $SUCCESS_COUNT, 失败: $FAIL_COUNT" \
+              -m "构建结果:" \
+              -m "$BUILD_RESULTS" \
+              -m "时间: $(date)"
           fi
           
           echo "推送更改..."
@@ -478,19 +437,29 @@ jobs:
           echo "✅ 推送完成"
 
       - name: 📝 最终报告
+        if: always()
         run: |
           echo "========================================"
           echo "           🎯 构建任务总结              "
           echo "========================================"
           echo "任务信息:"
-          echo "- OpenWrt版本: ${{ needs.setup.outputs.openwrt_version }}"
+          echo "- OpenWrt版本: ${{ steps.version-detection.outputs.openwrt_version }}"
           echo "- 架构类型: ${{ github.event.inputs.arch_type }}"
-          echo "- 开始时间: ${{ needs.setup.outputs.start_time }}"
+          echo "- 开始时间: ${{ steps.get-time.outputs.start_time }}"
           echo "- 结束时间: $(date)"
           
-          DURATION=$(( ($(date +%s) - $(date -d "${{ needs.setup.outputs.start_time }}" +%s)) / 60 ))
+          DURATION=$(( ($(date +%s) - $(date -d "${{ steps.get-time.outputs.start_time }}" +%s)) / 60 ))
           echo "- 构建时长: ${DURATION}分钟"
           
           echo ""
-          echo "输出位置: firmware-config/build-Compiler-file/"
+          echo "构建结果:"
+          echo "${{ steps.build-compilers.outputs.BUILD_RESULTS }}"
+          
+          echo ""
+          echo "构建统计:"
+          echo "- 成功: ${{ steps.build-compilers.outputs.SUCCESS_COUNT }}"
+          echo "- 失败: ${{ steps.build-compilers.outputs.FAIL_COUNT }}"
+          
+          echo ""
+          echo "输出位置: ${{ env.COMPILER_BASE_DIR }}"
           echo "========================================"
