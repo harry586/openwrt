@@ -95,13 +95,13 @@ jobs:
             echo "源目录: ${{ github.workspace }}"
             echo "Artifacts目录: /tmp/build-artifacts/source-archive-$TIMESTAMP/"
             
-            # 主压缩包（带日期时间）- 仅打包实际存在的目录
+            # 主压缩包（带日期时间）
             echo "📦 打包主压缩包..."
             tar -czf /tmp/build-artifacts/source-archive-$TIMESTAMP/source-$TIMESTAMP.tar.gz \
               --exclude='.git' \
               -C ${{ github.workspace }} .
             
-            # 次级压缩包（按类型分类）- 仅打包存在的目录
+            # 次级压缩包（按类型分类）
             echo "📦 打包脚本文件..."
             if [ -d "firmware-config/scripts" ]; then
               tar -czf /tmp/build-artifacts/source-archive-$TIMESTAMP/scripts-$TIMESTAMP.tar.gz \
@@ -113,22 +113,26 @@ jobs:
             fi
             
             echo "📦 打包配置文件..."
-            # 检查哪些目录存在
-            local tar_files=""
+            # 检查哪些目录存在并构建tar命令
+            TAR_CMD="tar -czf /tmp/build-artifacts/source-archive-$TIMESTAMP/configs-$TIMESTAMP.tar.gz"
+            HAS_FILES=false
+            
             if [ -d "firmware-config/custom-files" ]; then
-              tar_files="firmware-config/custom-files/"
+              TAR_CMD="$TAR_CMD -C ${{ github.workspace }} firmware-config/custom-files/"
+              HAS_FILES=true
             fi
+            
             if [ -d "firmware-config/config-backup" ]; then
-              if [ -n "$tar_files" ]; then
-                tar_files="$tar_files firmware-config/config-backup/"
+              if [ "$HAS_FILES" = true ]; then
+                TAR_CMD="$TAR_CMD firmware-config/config-backup/"
               else
-                tar_files="firmware-config/config-backup/"
+                TAR_CMD="$TAR_CMD -C ${{ github.workspace }} firmware-config/config-backup/"
+                HAS_FILES=true
               fi
             fi
             
-            if [ -n "$tar_files" ]; then
-              tar -czf /tmp/build-artifacts/source-archive-$TIMESTAMP/configs-$TIMESTAMP.tar.gz \
-                -C ${{ github.workspace }} $tar_files
+            if [ "$HAS_FILES" = true ]; then
+              $TAR_CMD
               echo "✅ 配置文件打包完成"
             else
               echo "⚠️ 配置目录为空，创建空配置文件包"
@@ -447,21 +451,21 @@ jobs:
             echo "✅ 找到固件目录" >> /tmp/build-artifacts/firmware-details/report.txt
             
             # 统计固件文件
-            local firmware_count=0
-            local total_size=0
+            FIRMWARE_COUNT=0
+            TOTAL_SIZE=0
             
             echo "📊 固件文件详情:" >> /tmp/build-artifacts/firmware-details/report.txt
             echo "==========================================" >> /tmp/build-artifacts/firmware-details/report.txt
             
             find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) 2>/dev/null | while read file; do
-                firmware_count=$((firmware_count + 1))
-                local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                local bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
-                total_size=$((total_size + bytes))
+                FIRMWARE_COUNT=$((FIRMWARE_COUNT + 1))
+                SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                BYTES=$(stat -c%s "$file" 2>/dev/null || echo "0")
+                TOTAL_SIZE=$((TOTAL_SIZE + BYTES))
                 
-                echo "📁 文件 #$firmware_count:" >> /tmp/build-artifacts/firmware-details/report.txt
+                echo "📁 文件 #$FIRMWARE_COUNT:" >> /tmp/build-artifacts/firmware-details/report.txt
                 echo "  名称: $(basename "$file")" >> /tmp/build-artifacts/firmware-details/report.txt
-                echo "  大小: $size ($bytes 字节)" >> /tmp/build-artifacts/firmware-details/report.txt
+                echo "  大小: $SIZE ($BYTES 字节)" >> /tmp/build-artifacts/firmware-details/report.txt
                 echo "  路径: $(echo "$file" | sed "s|$BUILD_DIR/||")" >> /tmp/build-artifacts/firmware-details/report.txt
                 echo "  类型: $(file -b "$file" 2>/dev/null | cut -c1-50 || echo "未知")" >> /tmp/build-artifacts/firmware-details/report.txt
                 echo "" >> /tmp/build-artifacts/firmware-details/report.txt
@@ -469,20 +473,20 @@ jobs:
             
             echo "==========================================" >> /tmp/build-artifacts/firmware-details/report.txt
             echo "📈 统计信息:" >> /tmp/build-artifacts/firmware-details/report.txt
-            echo "  固件总数: $firmware_count 个" >> /tmp/build-artifacts/firmware-details/report.txt
-            echo "  总大小: $(numfmt --to=iec $total_size)" >> /tmp/build-artifacts/firmware-details/report.txt
+            echo "  固件总数: $FIRMWARE_COUNT 个" >> /tmp/build-artifacts/firmware-details/report.txt
+            echo "  总大小: $(numfmt --to=iec $TOTAL_SIZE)" >> /tmp/build-artifacts/firmware-details/report.txt
             
             # 按类型分类
             echo "" >> /tmp/build-artifacts/firmware-details/report.txt
             echo "🔍 按类型分类:" >> /tmp/build-artifacts/firmware-details/report.txt
             
-            local initramfs_count=$(find bin/targets -name '*initramfs*' -type f 2>/dev/null | wc -l)
-            local squashfs_count=$(find bin/targets -name '*squashfs*' -type f 2>/dev/null | wc -l)
-            local sysupgrade_count=$(find bin/targets -name '*sysupgrade*' -type f 2>/dev/null | wc -l)
+            INITRAMFS_COUNT=$(find bin/targets -name '*initramfs*' -type f 2>/dev/null | wc -l)
+            SQUASHFS_COUNT=$(find bin/targets -name '*squashfs*' -type f 2>/dev/null | wc -l)
+            SYSUPGRADE_COUNT=$(find bin/targets -name '*sysupgrade*' -type f 2>/dev/null | wc -l)
             
-            echo "  initramfs: $initramfs_count 个" >> /tmp/build-artifacts/firmware-details/report.txt
-            echo "  squashfs: $squashfs_count 个" >> /tmp/build-artifacts/firmware-details/report.txt
-            echo "  sysupgrade: $sysupgrade_count 个" >> /tmp/build-artifacts/firmware-details/report.txt
+            echo "  initramfs: $INITRAMFS_COUNT 个" >> /tmp/build-artifacts/firmware-details/report.txt
+            echo "  squashfs: $SQUASHFS_COUNT 个" >> /tmp/build-artifacts/firmware-details/report.txt
+            echo "  sysupgrade: $SYSUPGRADE_COUNT 个" >> /tmp/build-artifacts/firmware-details/report.txt
             
             # 打包固件文件（带时间戳）
             echo ""
