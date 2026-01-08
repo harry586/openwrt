@@ -70,7 +70,7 @@ download_openwrt_sdk() {
     local sdk_url=""
     local sdk_filename=""
     
-    if [ "$version" = "23.05" ]; then
+    if [ "$version" = "23.05" ] || [ "$version" = "openwrt-23.05" ]; then
         # OpenWrt 23.05 SDK
         case "$target" in
             "ipq40xx")
@@ -96,7 +96,7 @@ download_openwrt_sdk() {
                 return 1
                 ;;
         esac
-    elif [ "$version" = "21.02" ]; then
+    elif [ "$version" = "21.02" ] || [ "$version" = "openwrt-21.02" ]; then
         # OpenWrt 21.02 SDK
         case "$target" in
             "ipq40xx")
@@ -877,13 +877,15 @@ initialize_build_env() {
     done
 }
 
-# 初始化编译器环境（下载OpenWrt官方SDK）
+# 初始化编译器环境（下载OpenWrt官方SDK）- 修复版本传递问题
 initialize_compiler_env() {
     local device_name="$1"
     log "=== 初始化编译器环境（下载OpenWrt官方SDK）==="
     
-    # 首先检查环境变量中的COMPILER_DIR
+    # 首先加载环境变量
     load_env
+    
+    # 检查环境变量中的COMPILER_DIR
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
         log "✅ 使用环境变量中的编译器目录: $COMPILER_DIR"
         
@@ -944,8 +946,29 @@ initialize_compiler_env() {
             ;;
     esac
     
+    # 检查SELECTED_BRANCH是否存在，如果没有则设置默认值
+    if [ -z "$SELECTED_BRANCH" ]; then
+        log "⚠️ SELECTED_BRANCH未设置，使用默认值openwrt-21.02"
+        SELECTED_BRANCH="openwrt-21.02"
+    fi
+    
+    # 简化版本字符串（从openwrt-23.05转为23.05）
+    local version_for_sdk=""
+    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+        version_for_sdk="23.05"
+    elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+        version_for_sdk="21.02"
+    else
+        # 尝试提取版本号
+        version_for_sdk=$(echo "$SELECTED_BRANCH" | grep -o "[0-9][0-9]\.[0-9][0-9]" || echo "21.02")
+        log "⚠️ 无法识别的版本分支，尝试使用: $version_for_sdk"
+    fi
+    
+    log "📌 SDK版本: $version_for_sdk"
+    log "📌 目标平台: $TARGET/$SUBTARGET"
+    
     # 下载OpenWrt官方SDK
-    if download_openwrt_sdk "$TARGET" "$SUBTARGET" "$SELECTED_BRANCH"; then
+    if download_openwrt_sdk "$TARGET" "$SUBTARGET" "$version_for_sdk"; then
         log "✅ OpenWrt SDK下载并设置成功"
         log "📌 编译器目录: $COMPILER_DIR"
         
@@ -1960,9 +1983,9 @@ build_firmware() {
             # 检查版本兼容性
             local major_version=$(echo "$version" | grep -o "[0-9]\+" | head -1)
             if [ -n "$major_version" ] && [ "$major_version" -ge 8 ] && [ "$major_version" -le 15 ]; then
-                log "     ✅ GCC $major_version.x 版本兼容"
+                log "  ✅ GCC $major_version.x 版本兼容"
             else
-                log "     ⚠️ GCC版本可能不兼容"
+                log "  ⚠️ 编译器版本可能不兼容"
             fi
             
             # 添加到PATH环境变量（尝试让OpenWrt使用预构建编译器）
