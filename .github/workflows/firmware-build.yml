@@ -81,6 +81,11 @@ jobs:
             echo "✅ 源代码解压成功"
             echo "重要目录存在: firmware-config"
             
+            # 创建必要的目录（如果不存在）
+            echo "🔧 创建必要的目录结构..."
+            mkdir -p firmware-config/config-backup
+            mkdir -p firmware-config/custom-files
+            
             # 创建带有日期时间的Artifacts目录
             echo "📦 建立带时间戳的Artifacts目录..."
             mkdir -p /tmp/build-artifacts/source-archive-$TIMESTAMP
@@ -90,17 +95,45 @@ jobs:
             echo "源目录: ${{ github.workspace }}"
             echo "Artifacts目录: /tmp/build-artifacts/source-archive-$TIMESTAMP/"
             
-            # 主压缩包（带日期时间）
+            # 主压缩包（带日期时间）- 仅打包实际存在的目录
+            echo "📦 打包主压缩包..."
             tar -czf /tmp/build-artifacts/source-archive-$TIMESTAMP/source-$TIMESTAMP.tar.gz \
               --exclude='.git' \
               -C ${{ github.workspace }} .
             
-            # 次级压缩包（按类型分类）
-            tar -czf /tmp/build-artifacts/source-archive-$TIMESTAMP/scripts-$TIMESTAMP.tar.gz \
-              -C ${{ github.workspace }} firmware-config/scripts/
+            # 次级压缩包（按类型分类）- 仅打包存在的目录
+            echo "📦 打包脚本文件..."
+            if [ -d "firmware-config/scripts" ]; then
+              tar -czf /tmp/build-artifacts/source-archive-$TIMESTAMP/scripts-$TIMESTAMP.tar.gz \
+                -C ${{ github.workspace }} firmware-config/scripts/
+              echo "✅ 脚本文件打包完成"
+            else
+              echo "⚠️ firmware-config/scripts 目录不存在，创建空脚本包"
+              tar -czf /tmp/build-artifacts/source-archive-$TIMESTAMP/scripts-$TIMESTAMP.tar.gz -T /dev/null
+            fi
             
-            tar -czf /tmp/build-artifacts/source-archive-$TIMESTAMP/configs-$TIMESTAMP.tar.gz \
-              -C ${{ github.workspace }} firmware-config/custom-files/ firmware-config/config-backup/
+            echo "📦 打包配置文件..."
+            # 检查哪些目录存在
+            local tar_files=""
+            if [ -d "firmware-config/custom-files" ]; then
+              tar_files="firmware-config/custom-files/"
+            fi
+            if [ -d "firmware-config/config-backup" ]; then
+              if [ -n "$tar_files" ]; then
+                tar_files="$tar_files firmware-config/config-backup/"
+              else
+                tar_files="firmware-config/config-backup/"
+              fi
+            fi
+            
+            if [ -n "$tar_files" ]; then
+              tar -czf /tmp/build-artifacts/source-archive-$TIMESTAMP/configs-$TIMESTAMP.tar.gz \
+                -C ${{ github.workspace }} $tar_files
+              echo "✅ 配置文件打包完成"
+            else
+              echo "⚠️ 配置目录为空，创建空配置文件包"
+              tar -czf /tmp/build-artifacts/source-archive-$TIMESTAMP/configs-$TIMESTAMP.tar.gz -T /dev/null
+            fi
             
             echo "✅ 带日期时间的源代码压缩包创建完成"
             
@@ -123,6 +156,8 @@ jobs:
               echo "✅ 主构建脚本权限设置完成"
             else
               echo "❌ 主构建脚本不存在"
+              echo "列出firmware-config目录内容:"
+              find firmware-config -type f 2>/dev/null
               exit 1
             fi
             
