@@ -29,6 +29,28 @@ print_subheader() {
     echo "" >> "$REPORT_FILE"
 }
 
+# 从环境文件加载环境变量
+load_build_env() {
+    local env_file="$BUILD_DIR/build_env.sh"
+    if [ -f "$env_file" ]; then
+        source "$env_file"
+        log "✅ 从 $env_file 加载环境变量"
+        
+        # 显示关键环境变量
+        echo "📌 构建环境变量:" >> "$REPORT_FILE"
+        echo "  SELECTED_BRANCH: $SELECTED_BRANCH" >> "$REPORT_FILE"
+        echo "  TARGET: $TARGET" >> "$REPORT_FILE"
+        echo "  SUBTARGET: $SUBTARGET" >> "$REPORT_FILE"
+        echo "  DEVICE: $DEVICE" >> "$REPORT_FILE"
+        echo "  CONFIG_MODE: $CONFIG_MODE" >> "$REPORT_FILE"
+        echo "  COMPILER_DIR: $COMPILER_DIR" >> "$REPORT_FILE"
+        echo "" >> "$REPORT_FILE"
+    else
+        log "⚠️ 环境文件不存在: $env_file"
+        echo "⚠️ 环境文件不存在: $env_file" >> "$REPORT_FILE"
+    fi
+}
+
 # 1. 初始化报告
 init_report() {
     log "📝 初始化错误分析报告..."
@@ -37,9 +59,13 @@ init_report() {
     echo "==================================================" > "$REPORT_FILE"
     echo "        🚨 OpenWrt固件构建错误分析报告           " >> "$REPORT_FILE"
     echo "==================================================" >> "$REPORT_FILE"
-    echo "分析时间: $(date)" >> "$REPORT_FILE"
-    echo "报告版本: 2.0.0" >> "$REPORT_FILE"
+    echo "分析时间: $(date '+%Y-%m-%d %H:%M:%S')" >> "$REPORT_FILE"
+    echo "报告时间戳: $TIMESTAMP" >> "$REPORT_FILE"
+    echo "报告版本: 2.1.0" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
+    
+    # 加载构建环境变量
+    load_build_env
 }
 
 # 2. 收集系统信息
@@ -69,6 +95,12 @@ collect_system_info() {
     echo "  子目标: ${SUBTARGET:-未设置}" >> "$REPORT_FILE"
     echo "  版本分支: ${SELECTED_BRANCH:-未设置}" >> "$REPORT_FILE"
     echo "  架构: ${ARCH:-自动检测}" >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
+    
+    # 显示当前时间
+    echo "🕐 当前时间:" >> "$REPORT_FILE"
+    echo "  系统时间: $(date)" >> "$REPORT_FILE"
+    echo "  时间戳: $TIMESTAMP" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
 }
 
@@ -244,6 +276,42 @@ check_compiler_status() {
     
     print_subheader "编译器状态检查"
     
+    # 首先检查是否有下载的SDK编译器
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+        echo "🎯 编译器来源: 预构建的OpenWrt SDK" >> "$REPORT_FILE"
+        echo "📌 编译器目录: $COMPILER_DIR" >> "$REPORT_FILE"
+        
+        # 检查预构建编译器中的GCC版本
+        local prebuilt_gcc=$(find "$COMPILER_DIR" -type f -executable \
+          -name "*gcc" \
+          ! -name "*gcc-ar" \
+          ! -name "*gcc-ranlib" \
+          ! -name "*gcc-nm" \
+          2>/dev/null | head -1)
+        
+        if [ -n "$prebuilt_gcc" ]; then
+            echo "✅ 找到预构建GCC编译器: $(basename "$prebuilt_gcc")" >> "$REPORT_FILE"
+            local prebuilt_version=$("$prebuilt_gcc" --version 2>&1 | head -1)
+            echo "     版本: $prebuilt_version" >> "$REPORT_FILE"
+            
+            # 检查GCC版本兼容性
+            local major_version=$(echo "$prebuilt_version" | grep -o "[0-9]\+" | head -1)
+            if [ -n "$major_version" ]; then
+                if [ "$major_version" -ge 8 ] && [ "$major_version" -le 15 ]; then
+                    echo "     ✅ GCC $major_version.x 版本兼容" >> "$REPORT_FILE"
+                else
+                    echo "     ⚠️ GCC版本 $major_version.x 可能不兼容（期望8-15）" >> "$REPORT_FILE"
+                fi
+            fi
+        else
+            echo "⚠️ 预构建目录中未找到真正的GCC编译器" >> "$REPORT_FILE"
+        fi
+    else
+        echo "🛠️ 编译器来源: OpenWrt自动构建" >> "$REPORT_FILE"
+        echo "💡 未找到预构建SDK编译器，将使用自动构建的编译器" >> "$REPORT_FILE"
+    fi
+    
+    # 检查构建目录中的编译器
     if [ -d "$BUILD_DIR/staging_dir" ]; then
         echo "✅ 编译目录存在: staging_dir" >> "$REPORT_FILE"
         
@@ -284,18 +352,6 @@ check_compiler_status() {
                 fi
             else
                 echo "  ⚠️ 未找到真正的GCC编译器" >> "$REPORT_FILE"
-                echo "     找到的工具链工具:" >> "$REPORT_FILE"
-                find "$toolchain_dir/bin" -name "*gcc*" -type f 2>/dev/null | head -5 | while read tool; do
-                    local tool_name=$(basename "$tool")
-                    echo "     - $tool_name" >> "$REPORT_FILE"
-                    
-                    # 如果是工具链工具，显示其版本
-                    if [[ "$tool_name" == *gcc-ar* ]] || [[ "$tool_name" == *gcc-ranlib* ]] || [[ "$tool_name" == *gcc-nm* ]]; then
-                        local tool_version=$("$tool" --version 2>&1 | head -1)
-                        echo "       版本: $tool_version" >> "$REPORT_FILE"
-                        echo "       ⚠️ 注意: 这是GCC工具链工具，不是GCC编译器" >> "$REPORT_FILE"
-                    fi
-                done
             fi
             
         else
@@ -321,49 +377,30 @@ check_compiler_status() {
     
     local count=0
     if [ -n "$all_gcc_files" ]; then
+        echo "🔍 找到的编译器文件:" >> "$REPORT_FILE"
         echo "$all_gcc_files" | head -5 | while read gcc_file; do
             count=$((count + 1))
             local version=$("$gcc_file" --version 2>&1 | head -1)
             local dir_name=$(dirname "$gcc_file")
             
-            echo "  🔍 编译器 #$count:" >> "$REPORT_FILE"
+            echo "  编译器 #$count:" >> "$REPORT_FILE"
             echo "      文件: $(basename "$gcc_file")" >> "$REPORT_FILE"
             echo "      目录: $(echo "$dir_name" | sed "s|$BUILD_DIR/||")" >> "$REPORT_FILE"
             echo "      版本: $version" >> "$REPORT_FILE"
             
             # 检查是否来自预构建目录
             if [ -n "$COMPILER_DIR" ] && [[ "$gcc_file" == *"$COMPILER_DIR"* ]]; then
-                echo "      来源: 🎯 预构建编译器" >> "$REPORT_FILE"
-            else
+                echo "      来源: 🎯 预构建SDK" >> "$REPORT_FILE"
+            elif [[ "$gcc_file" == *"staging_dir"* ]]; then
                 echo "      来源: 🛠️ 自动构建" >> "$REPORT_FILE"
+            else
+                echo "      来源: 🔍 其他位置" >> "$REPORT_FILE"
             fi
             
             echo "" >> "$REPORT_FILE"
         done
     else
-        echo "  ⚠️ 未找到真正的GCC编译器" >> "$REPORT_FILE"
-    fi
-    
-    # 检查预构建编译器目录
-    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-        echo "  🔍 预构建编译器目录检查:" >> "$REPORT_FILE"
-        echo "      目录: $COMPILER_DIR" >> "$REPORT_FILE"
-        
-        local prebuilt_gcc=$(find "$COMPILER_DIR" -type f -executable \
-          -name "*gcc" \
-          ! -name "*gcc-ar" \
-          ! -name "*gcc-ranlib" \
-          ! -name "*gcc-nm" \
-          2>/dev/null | head -1)
-        
-        if [ -n "$prebuilt_gcc" ]; then
-            local prebuilt_version=$("$prebuilt_gcc" --version 2>&1 | head -1)
-            echo "      预构建GCC版本: $prebuilt_version" >> "$REPORT_FILE"
-        else
-            echo "      ⚠️ 预构建目录中未找到真正的GCC编译器" >> "$REPORT_FILE"
-        fi
-    else
-        echo "  ℹ️ 未设置预构建编译器目录" >> "$REPORT_FILE"
+        echo "  ⚠️ 未找到任何GCC编译器文件" >> "$REPORT_FILE"
     fi
     
     echo "" >> "$REPORT_FILE"
@@ -519,6 +556,9 @@ analyze_version_specific() {
     print_subheader "版本特定问题分析"
     
     if [ -n "$SELECTED_BRANCH" ]; then
+        echo "📌 当前OpenWrt版本: $SELECTED_BRANCH" >> "$REPORT_FILE"
+        echo "" >> "$REPORT_FILE"
+        
         if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             echo "🔧 OpenWrt 23.05 版本特性:" >> "$REPORT_FILE"
             echo "  编译器: GCC 11.3.0 或更高" >> "$REPORT_FILE"
@@ -560,8 +600,8 @@ analyze_version_specific() {
             echo "💡 请参考官方文档获取版本特定信息" >> "$REPORT_FILE"
         fi
     else
-        echo "ℹ️ 版本分支未设置" >> "$REPORT_FILE"
-        echo "💡 请设置 SELECTED_BRANCH 环境变量获取版本特定信息" >> "$REPORT_FILE"
+        echo "⚠️ 版本分支未设置" >> "$REPORT_FILE"
+        echo "💡 请检查环境变量设置" >> "$REPORT_FILE"
     fi
     echo "" >> "$REPORT_FILE"
 }
@@ -699,22 +739,35 @@ generate_summary() {
     
     # 检查预构建编译器使用情况
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-        echo "  🎯 预构建编译器目录: $COMPILER_DIR" >> "$REPORT_FILE"
+        echo "  🎯 编译器来源: 预构建的OpenWrt SDK" >> "$REPORT_FILE"
+        echo "  📌 编译器目录: $COMPILER_DIR" >> "$REPORT_FILE"
         
         # 检查是否实际使用了预构建编译器
         if [ -f "$BUILD_DIR/build.log" ] && [ -s "$BUILD_DIR/build.log" ]; then
             local prebuilt_calls=$(grep -c "$COMPILER_DIR" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
             if [ $prebuilt_calls -gt 0 ]; then
-                echo "  ✅ 使用了预构建编译器" >> "$REPORT_FILE"
+                echo "  ✅ 构建中使用了预构建SDK编译器" >> "$REPORT_FILE"
                 echo "     调用次数: $prebuilt_calls" >> "$REPORT_FILE"
             else
-                echo "  🔄 未使用预构建编译器（使用自动构建）" >> "$REPORT_FILE"
+                echo "  🔄 构建中未使用预构建SDK编译器" >> "$REPORT_FILE"
+                echo "  💡 可能使用了自动构建的编译器" >> "$REPORT_FILE"
             fi
         else
             echo "  ℹ️ 无法确定编译器使用情况（无构建日志）" >> "$REPORT_FILE"
         fi
     else
-        echo "  🛠️ 未设置预构建编译器，使用自动构建" >> "$REPORT_FILE"
+        echo "  🛠️ 编译器来源: OpenWrt自动构建" >> "$REPORT_FILE"
+        echo "  💡 未使用预构建SDK编译器" >> "$REPORT_FILE"
+    fi
+    
+    # SDK编译器信息
+    if [ -n "$SELECTED_BRANCH" ]; then
+        echo "  📌 OpenWrt版本: $SELECTED_BRANCH" >> "$REPORT_FILE"
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            echo "  🔧 SDK编译器: GCC 11.3.0" >> "$REPORT_FILE"
+        elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+            echo "  🔧 SDK编译器: GCC 8.4.0" >> "$REPORT_FILE"
+        fi
     fi
     
     # 状态评估
@@ -801,20 +854,24 @@ output_report() {
             echo ""
         fi
         
-        # 显示编译器相关警告
-        if grep -q "编译器版本" "$REPORT_FILE" || grep -q "GCC" "$REPORT_FILE"; then
-            echo "🔧 编译器相关警告:"
-            grep -E "编译器版本|GCC|gcc" "$REPORT_FILE" | head -5
-            echo ""
+        # 显示编译器相关信息
+        echo "🔧 编译器信息:"
+        if grep -q "预构建的OpenWrt SDK" "$REPORT_FILE"; then
+            echo "  🎯 使用预构建的OpenWrt SDK编译器"
+        elif grep -q "OpenWrt自动构建" "$REPORT_FILE"; then
+            echo "  🛠️ 使用OpenWrt自动构建的编译器"
         fi
         
-        # 显示编译器来源信息
-        echo "🔍 编译器来源信息:"
-        if grep -q "预构建编译器" "$REPORT_FILE"; then
-            grep -E "预构建编译器|自动构建" "$REPORT_FILE" | head -3
-        else
-            echo "ℹ️ 使用自动构建的编译器"
+        # 显示SDK版本信息
+        if grep -q "OpenWrt版本:" "$REPORT_FILE"; then
+            grep "OpenWrt版本:" "$REPORT_FILE"
         fi
+        
+        # 显示时间信息
+        echo ""
+        echo "🕐 时间信息:"
+        echo "  分析时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "  报告时间戳: $TIMESTAMP"
         echo ""
         
         # 显示完整报告
