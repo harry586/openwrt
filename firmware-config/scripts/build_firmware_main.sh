@@ -890,10 +890,10 @@ initialize_build_env() {
     done
 }
 
-# 初始化编译器环境（下载OpenWrt官方SDK）- 修复版本传递问题
+# 初始化编译器环境（下载OpenWrt官方SDK）- 增强日志版
 initialize_compiler_env() {
     local device_name="$1"
-    log "=== 初始化编译器环境（下载OpenWrt官方SDK）==="
+    log "=== 初始化编译器环境（下载OpenWrt官方SDK）- 增强日志版 ==="
     
     # 首先加载环境变量
     load_env
@@ -926,10 +926,10 @@ initialize_compiler_env() {
             verify_compiler_files
             return 0
         else
-            log "⚠️ 编译器目录存在但不包含真正的GCC"
+            log "⚠️ 编译器目录存在但不包含真正的GCC，将重新下载SDK"
         fi
     else
-        log "🔍 COMPILER_DIR未设置或目录不存在"
+        log "🔍 COMPILER_DIR未设置或目录不存在，将下载OpenWrt官方SDK"
     fi
     
     # 根据设备确定平台
@@ -963,6 +963,8 @@ initialize_compiler_env() {
     if [ -z "$SELECTED_BRANCH" ]; then
         log "⚠️ SELECTED_BRANCH未设置，使用默认值openwrt-21.02"
         SELECTED_BRANCH="openwrt-21.02"
+        # 保存到环境文件
+        echo "export SELECTED_BRANCH=\"$SELECTED_BRANCH\"" >> $ENV_FILE
     fi
     
     # 简化版本字符串（从openwrt-23.05转为23.05）
@@ -980,14 +982,46 @@ initialize_compiler_env() {
     log "📌 SDK版本: $version_for_sdk"
     log "📌 目标平台: $TARGET/$SUBTARGET"
     
+    # 详细显示SDK下载信息
+    log "🔍 SDK下载详细信息:"
+    log "  设备: $device_name"
+    log "  OpenWrt版本: $SELECTED_BRANCH"
+    log "  SDK版本: $version_for_sdk"
+    log "  目标: $TARGET"
+    log "  子目标: $SUBTARGET"
+    
     # 下载OpenWrt官方SDK
+    log "🚀 开始下载OpenWrt官方SDK..."
     if download_openwrt_sdk "$TARGET" "$SUBTARGET" "$version_for_sdk"; then
-        log "✅ OpenWrt SDK下载并设置成功"
+        log "🎉 OpenWrt SDK下载并设置成功"
         log "📌 编译器目录: $COMPILER_DIR"
+        
+        # 显示SDK目录信息
+        if [ -d "$COMPILER_DIR" ]; then
+            log "📊 SDK目录信息:"
+            log "  目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
+            log "  文件数量: $(find "$COMPILER_DIR" -type f 2>/dev/null | wc -l)"
+            
+            # 查找GCC编译器
+            local gcc_file=$(find "$COMPILER_DIR" -type f -executable \
+              -name "*gcc" \
+              ! -name "*gcc-ar" \
+              ! -name "*gcc-ranlib" \
+              ! -name "*gcc-nm" \
+              2>/dev/null | head -1)
+            
+            if [ -n "$gcc_file" ]; then
+                log "✅ 找到SDK中的GCC编译器: $(basename "$gcc_file")"
+                log "  🔧 完整路径: $gcc_file"
+                log "  📋 版本信息: $("$gcc_file" --version 2>&1 | head -1)"
+            fi
+        fi
         
         # 保存到环境文件
         if [ -f "$ENV_FILE" ]; then
             echo "export COMPILER_DIR=\"$COMPILER_DIR\"" >> $ENV_FILE
+            echo "export TARGET=\"$TARGET\"" >> $ENV_FILE
+            echo "export SUBTARGET=\"$SUBTARGET\"" >> $ENV_FILE
         fi
         
         # 保存到GitHub环境变量
@@ -997,7 +1031,7 @@ initialize_compiler_env() {
         
         return 0
     else
-        log "⚠️ OpenWrt SDK下载失败"
+        log "❌ OpenWrt SDK下载失败"
         log "💡 将使用OpenWrt自动构建的编译器作为后备"
         
         # 设置空的编译器目录
