@@ -469,7 +469,7 @@ check_compiler_invocation() {
         if [ -d "$BUILD_DIR/staging_dir" ]; then
             log "📁 检查 staging_dir 中的编译器..."
             
-            # 递归查找实际使用的编译器
+            # 查找真正的GCC编译器（排除工具链工具）
             local used_compiler=$(find "$BUILD_DIR/staging_dir" -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
@@ -502,20 +502,31 @@ check_compiler_invocation() {
                     log "  📌 使用的是OpenWrt自动构建的编译器"
                 fi
             else
-                log "  ⚠️ 未找到真正的GCC编译器"
+                log "  ℹ️ 未找到真正的GCC编译器（当前未构建）"
                 
-                # 查找工具链工具
-                local toolchain_tools=$(find "$BUILD_DIR/staging_dir" -type f -executable -name "*gcc*" 2>/dev/null | head -5)
-                if [ -n "$toolchain_tools" ]; then
-                    log "  找到的工具链工具:"
-                    while read tool; do
-                        local tool_name=$(basename "$tool")
-                        log "    🔧 $tool_name"
-                    done <<< "$toolchain_tools"
+                # 检查是否有SDK编译器
+                log "  🔍 检查SDK编译器:"
+                if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+                    local sdk_gcc=$(find "$COMPILER_DIR" -type f -executable \
+                      -name "*gcc" \
+                      ! -name "*gcc-ar" \
+                      ! -name "*gcc-ranlib" \
+                      ! -name "*gcc-nm" \
+                      2>/dev/null | head -1)
+                    
+                    if [ -n "$sdk_gcc" ]; then
+                        log "    ✅ SDK编译器存在: $(basename "$sdk_gcc")"
+                        local sdk_version=$("$sdk_gcc" --version 2>&1 | head -1)
+                        log "       版本: $sdk_version"
+                        log "    📌 将使用下载的SDK编译器进行构建"
+                    else
+                        log "    ⚠️ SDK目录中未找到真正的GCC编译器"
+                    fi
                 fi
             fi
         else
             log "  ℹ️ staging_dir 目录不存在，编译器尚未构建"
+            log "  📌 将使用下载的SDK编译器进行构建"
         fi
         
         # 检查构建日志中的编译器调用
@@ -659,12 +670,14 @@ pre_build_error_check() {
     if [ -d "staging_dir" ]; then
         local compiler_count=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" 2>/dev/null | wc -l)
         if [ $compiler_count -eq 0 ]; then
-            log "ℹ️ 未找到已构建的编译器，将自动构建"
+            log "ℹ️ 未找到已构建的编译器"
+            log "📌 已下载SDK编译器，无需自动构建"
         else
             log "✅ 已检测到编译器: $compiler_count 个"
         fi
     else
-        log "ℹ️ staging_dir目录不存在，编译时将自动创建"
+        log "ℹ️ staging_dir目录不存在"
+        log "📌 将使用下载的SDK编译器进行构建"
     fi
     
     # 5. 检查关键文件
@@ -1555,7 +1568,40 @@ apply_config() {
         fi
     done
     
-    # 4. 统计信息
+    # 4. 功能性插件状态
+    echo ""
+    echo "🚀 功能性插件状态:"
+    
+    local functional_plugins=(
+        "luci-app-turboacc" "TurboACC 网络加速"
+        "luci-app-upnp" "UPnP 自动端口转发"
+        "samba4-server" "Samba 文件共享"
+        "luci-app-diskman" "磁盘管理"
+        "vlmcsd" "KMS 激活服务"
+        "smartdns" "SmartDNS 智能DNS"
+        "luci-app-accesscontrol" "家长控制"
+        "luci-app-wechatpush" "微信推送"
+        "sqm-scripts" "流量控制 (SQM)"
+        "vsftpd" "FTP 服务器"
+        "luci-app-arpbind" "ARP 绑定"
+        "luci-app-cpulimit" "CPU 限制"
+        "luci-app-hd-idle" "硬盘休眠"
+    )
+    
+    for i in $(seq 0 2 $((${#functional_plugins[@]} - 1))); do
+        local plugin="${functional_plugins[$i]}"
+        local desc="${functional_plugins[$((i + 1))]}"
+        
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
+            echo "  ✅ $desc ($plugin)"
+        elif grep -q "^# CONFIG_PACKAGE_${plugin} is not set" .config; then
+            echo "  ❌ $desc ($plugin) - 已禁用"
+        else
+            echo "  ⚪ $desc ($plugin) - 未配置"
+        fi
+    done
+    
+    # 5. 统计信息
     echo ""
     echo "📊 配置统计信息:"
     local enabled_count=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
@@ -1563,7 +1609,7 @@ apply_config() {
     echo "  ✅ 已启用插件: $enabled_count 个"
     echo "  ❌ 已禁用插件: $disabled_count 个"
     
-    # 5. 显示具体被禁用的插件（最多20个）
+    # 6. 显示具体被禁用的插件（最多20个）
     if [ $disabled_count -gt 0 ]; then
         echo ""
         echo "📋 具体被禁用的插件:"
@@ -1581,7 +1627,7 @@ apply_config() {
         done
     fi
     
-    # 6. 修复缺失的关键USB驱动
+    # 7. 修复缺失的关键USB驱动
     if [ $missing_usb -gt 0 ]; then
         echo ""
         echo "🚨 修复缺失的关键USB驱动:"
@@ -2226,7 +2272,7 @@ cleanup() {
 # 搜索编译器文件函数
 search_compiler_files() {
     local search_root="${1:-/tmp}"
-    local target_platform="${2:-generic}"
+    local target_platform="$2"
     
     log "=== 搜索编译器文件 ==="
     log "搜索根目录: $search_root"
