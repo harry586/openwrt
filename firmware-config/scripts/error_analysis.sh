@@ -62,6 +62,7 @@ init_report() {
     echo "分析时间: $(date '+%Y-%m-%d %H:%M:%S')" >> "$REPORT_FILE"
     echo "报告时间戳: $TIMESTAMP" >> "$REPORT_FILE"
     echo "报告版本: 2.1.0" >> "$REPORT_FILE"
+    echo "构建目录: $BUILD_DIR" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
     # 加载构建环境变量
@@ -79,6 +80,7 @@ collect_system_info() {
     echo "  主机名: $(hostname)" >> "$REPORT_FILE"
     echo "  用户: $(whoami)" >> "$REPORT_FILE"
     echo "  终端: $TERM" >> "$REPORT_FILE"
+    echo "  分析时间: $(date '+%Y-%m-%d %H:%M:%S')" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
     echo "📊 系统版本:" >> "$REPORT_FILE"
@@ -895,6 +897,8 @@ output_report() {
 # 主执行函数
 main() {
     log "🚀 开始OpenWrt构建错误分析"
+    echo "分析开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "构建目录: $BUILD_DIR"
     
     # 检查构建目录
     if [ ! -d "$BUILD_DIR" ]; then
