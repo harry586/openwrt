@@ -4,7 +4,6 @@ set -e
 BUILD_DIR="/mnt/openwrt-build"
 ENV_FILE="$BUILD_DIR/build_env.sh"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-COMPILER_ROOT="$REPO_ROOT/firmware-config/build-Compiler-file"
 
 # 确保有日志目录
 mkdir -p /tmp/build-logs
@@ -32,7 +31,6 @@ save_env() {
     echo "export DEVICE=\"$DEVICE\"" >> $ENV_FILE
     echo "export CONFIG_MODE=\"$CONFIG_MODE\"" >> $ENV_FILE
     echo "export REPO_ROOT=\"$REPO_ROOT\"" >> $ENV_FILE
-    echo "export COMPILER_ROOT=\"$COMPILER_ROOT\"" >> $ENV_FILE
     echo "export COMPILER_DIR=\"$COMPILER_DIR\"" >> $ENV_FILE
     chmod +x $ENV_FILE
 }
@@ -44,214 +42,165 @@ load_env() {
     fi
 }
 
-# 智能平台感知的编译器搜索（两步搜索法）
+# 智能平台感知的编译器搜索（两步搜索法） - 修改为下载SDK
 intelligent_platform_aware_compiler_search() {
-    local search_root="${1:-$COMPILER_ROOT}"
+    local search_root="${1:-/tmp}"
     local target_platform="$2"
     local device_name="$3"
     
     log "=== 智能平台感知的编译器搜索（两步搜索法）==="
-    log "搜索根目录: $search_root"
     log "目标平台: $target_platform"
     log "设备名称: $device_name"
     
-    if [ ! -d "$search_root" ]; then
-        log "❌ 搜索根目录不存在: $search_root"
+    log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
+    return 1
+}
+
+# 新增：下载OpenWrt官方SDK工具链函数
+download_openwrt_sdk() {
+    local target="$1"
+    local subtarget="$2"
+    local version="$3"
+    
+    log "=== 下载OpenWrt官方SDK工具链 ==="
+    log "目标平台: $target/$subtarget"
+    log "OpenWrt版本: $version"
+    
+    # 确定SDK下载URL
+    local sdk_url=""
+    local sdk_filename=""
+    
+    if [ "$version" = "23.05" ]; then
+        # OpenWrt 23.05 SDK
+        case "$target" in
+            "ipq40xx")
+                # 高通IPQ40xx平台
+                sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-11.3.0_musl.Linux-x86_64.tar.xz"
+                sdk_filename="openwrt-sdk-23.05.3-ipq40xx-generic_gcc-11.3.0_musl.Linux-x86_64.tar.xz"
+                ;;
+            "ramips")
+                # MIPS平台
+                if [ "$subtarget" = "mt76x8" ]; then
+                    sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt76x8/openwrt-sdk-23.05.3-ramips-mt76x8_gcc-11.3.0_musl_eabi.Linux-x86_64.tar.xz"
+                    sdk_filename="openwrt-sdk-23.05.3-ramips-mt76x8_gcc-11.3.0_musl_eabi.Linux-x86_64.tar.xz"
+                elif [ "$subtarget" = "mt7621" ]; then
+                    sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt7621/openwrt-sdk-23.05.3-ramips-mt7621_gcc-11.3.0_musl.Linux-x86_64.tar.xz"
+                    sdk_filename="openwrt-sdk-23.05.3-ramips-mt7621_gcc-11.3.0_musl.Linux-x86_64.tar.xz"
+                else
+                    log "❌ 不支持的子目标: $subtarget"
+                    return 1
+                fi
+                ;;
+            *)
+                log "❌ 不支持的目标平台: $target"
+                return 1
+                ;;
+        esac
+    elif [ "$version" = "21.02" ]; then
+        # OpenWrt 21.02 SDK
+        case "$target" in
+            "ipq40xx")
+                sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+                sdk_filename="openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+                ;;
+            "ramips")
+                if [ "$subtarget" = "mt76x8" ]; then
+                    sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt76x8/openwrt-sdk-21.02.7-ramips-mt76x8_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+                    sdk_filename="openwrt-sdk-21.02.7-ramips-mt76x8_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+                elif [ "$subtarget" = "mt7621" ]; then
+                    sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt7621/openwrt-sdk-21.02.7-ramips-mt7621_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+                    sdk_filename="openwrt-sdk-21.02.7-ramips-mt7621_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+                else
+                    log "❌ 不支持的子目标: $subtarget"
+                    return 1
+                fi
+                ;;
+            *)
+                log "❌ 不支持的目标平台: $target"
+                return 1
+                ;;
+        esac
+    else
+        log "❌ 不支持的OpenWrt版本: $version"
         return 1
     fi
     
-    # 显示编译器目录结构
-    log "📊 编译器目录结构（深度3）:"
-    find "$search_root" -maxdepth 3 -type d 2>/dev/null | while read dir; do
-        local dir_name=$(basename "$dir")
-        local relative_path=$(echo "$dir" | sed "s|$search_root/||")
-        echo "  $dir_name/ [$relative_path]"
-    done
+    if [ -z "$sdk_url" ]; then
+        log "❌ 无法确定SDK下载URL"
+        return 1
+    fi
     
-    # 第一步：根据平台类型关键词搜索目录
-    log ""
-    log "🔍 第一步：根据平台类型关键词搜索目录"
+    log "📥 SDK下载URL: $sdk_url"
+    log "📁 SDK文件名: $sdk_filename"
     
-    local platform_keywords=()
-    local type_search_paths=()
+    # 创建SDK目录
+    local sdk_dir="$BUILD_DIR/sdk"
+    mkdir -p "$sdk_dir"
     
-    case "$target_platform" in
-        "arm")
-            # ARM平台关键词
-            platform_keywords=("arm_cortex-a7" "arm")
-            log "🎯 ARM平台关键词: ${platform_keywords[*]}"
-            
-            # 根据设备确定具体搜索策略
-            case "$device_name" in
-                "ac42u"|"acrh17")
-                    # 优先搜索arm_cortex-a7
-                    type_search_paths=(
-                        "$search_root/compilers/arm_cortex-a7"
-                        "$search_root/compilers/arm"
-                    )
-                    log "🔍 ARM平台搜索路径（按顺序）:"
-                    for path in "${type_search_paths[@]}"; do
-                        log "  - $path"
-                    done
-                    ;;
-                *)
-                    type_search_paths=("$search_root/compilers/arm")
-                    ;;
-            esac
-            ;;
-        "mips")
-            # MIPS平台关键词
-            platform_keywords=("mips")
-            log "🎯 MIPS平台关键词: ${platform_keywords[*]}"
-            
-            case "$device_name" in
-                "mi_router_4a_gigabit"|"r4ag")
-                    type_search_paths=("$search_root/compilers/mips")
-                    log "🔍 MIPS平台搜索路径:"
-                    for path in "${type_search_paths[@]}"; do
-                        log "  - $path"
-                    done
-                    ;;
-                "mi_router_3g"|"r3g")
-                    type_search_paths=("$search_root/compilers/mips")
-                    log "🔍 MIPS平台搜索路径:"
-                    for path in "${type_search_paths[@]}"; do
-                        log "  - $path"
-                    done
-                    ;;
-                *)
-                    type_search_paths=("$search_root/compilers/mips")
-                    ;;
-            esac
-            ;;
-        *)
-            # 通用平台
-            platform_keywords=("gcc" "compiler")
-            type_search_paths=("$search_root/compilers")
-            log "🔍 通用平台搜索路径:"
-            for path in "${type_search_paths[@]}"; do
-                log "  - $path"
-            done
-            ;;
-    esac
-    
-    # 第二步：在找到的目录内搜索真正的GCC编译器
-    log ""
-    log "🔍 第二步：在找到的目录内搜索真正的GCC编译器"
-    
-    local found_compiler_dir=""
-    
-    for type_dir in "${type_search_paths[@]}"; do
-        if [ ! -d "$type_dir" ]; then
-            log "  跳过不存在的目录: $type_dir"
-            continue
+    # 下载SDK
+    log "开始下载OpenWrt SDK..."
+    if wget --tries=3 --timeout=30 -q -O "$sdk_dir/$sdk_filename" "$sdk_url"; then
+        log "✅ SDK下载成功"
+    else
+        log "⚠️ 首次下载失败，尝试备用下载..."
+        # 尝试使用curl
+        if curl -L --connect-timeout 30 --retry 3 -o "$sdk_dir/$sdk_filename" "$sdk_url"; then
+            log "✅ SDK下载成功（使用curl）"
+        else
+            log "❌ SDK下载失败"
+            return 1
         fi
-        
-        log "  搜索目录: $type_dir"
-        
-        # 在类型目录内搜索真正的GCC编译器（排除工具链工具）
-        local gcc_files=$(find "$type_dir" -type f -executable \
+    fi
+    
+    # 解压SDK
+    log "解压SDK..."
+    cd "$sdk_dir"
+    if tar -xf "$sdk_filename" --strip-components=1; then
+        log "✅ SDK解压成功"
+        rm -f "$sdk_filename"
+    else
+        log "❌ SDK解压失败"
+        return 1
+    fi
+    
+    # 查找SDK中的编译器
+    local toolchain_dir=""
+    if [ -d "toolchain" ]; then
+        toolchain_dir="$sdk_dir/toolchain"
+        log "✅ 找到toolchain目录: $toolchain_dir"
+    else
+        # 在SDK中搜索编译器
+        local gcc_file=$(find "$sdk_dir" -type f -executable \
             -name "*gcc" \
             ! -name "*gcc-ar" \
             ! -name "*gcc-ranlib" \
             ! -name "*gcc-nm" \
-            2>/dev/null | head -5)
+            2>/dev/null | head -1)
         
-        if [ -n "$gcc_files" ]; then
-            log "  ✅ 找到真正的GCC编译器文件"
-            
-            # 取第一个找到的GCC文件
-            local first_gcc=$(echo "$gcc_files" | head -1)
-            local gcc_dir=$(dirname "$first_gcc")
-            
-            # 如果gcc在bin目录中，使用父目录
-            if [[ "$gcc_dir" == */bin ]]; then
-                found_compiler_dir=$(dirname "$gcc_dir")
-                log "  📁 GCC在bin目录中，使用父目录: $found_compiler_dir"
-            else
-                found_compiler_dir="$gcc_dir"
-                log "  📁 GCC所在目录: $found_compiler_dir"
-            fi
-            
-            log "  🎯 GCC文件: $(basename "$first_gcc")"
-            
-            # 检查版本
-            local version=$("$first_gcc" --version 2>&1 | head -1)
-            log "  🔧 GCC版本: $version"
-            
-            # 检查主要版本兼容性
-            local major_version=$(echo "$version" | grep -o "[0-9]\+\.[0-9]\+\.[0-9]\+" | head -1 | cut -d. -f1)
-            if [ -n "$major_version" ]; then
-                if [ "$major_version" -ge 8 ] && [ "$major_version" -le 15 ]; then
-                    log "  ✅ GCC $major_version.x 版本兼容"
-                else
-                    log "  ⚠️ GCC版本 $major_version.x 可能不兼容（期望8-15）"
+        if [ -n "$gcc_file" ]; then
+            toolchain_dir=$(dirname "$(dirname "$gcc_file")")
+            log "✅ 在SDK中找到GCC编译器: $gcc_file"
+            log "📁 编译器目录: $toolchain_dir"
+        else
+            # 尝试查找staging_dir中的工具链
+            if [ -d "staging_dir" ]; then
+                toolchain_dir=$(find "$sdk_dir/staging_dir" -name "toolchain-*" -type d | head -1)
+                if [ -n "$toolchain_dir" ]; then
+                    log "✅ 在staging_dir中找到工具链目录: $toolchain_dir"
                 fi
             fi
-            
-            break
-        else
-            log "  ⚠️ 未找到真正的GCC编译器，查找其他编译器相关文件"
-            
-            # 查找其他可能的编译器文件
-            local other_files=$(find "$type_dir" -type f \
-                \( -name "*g++*" -o -name "*gcc*" \) \
-                2>/dev/null | head -5)
-            
-            if [ -n "$other_files" ]; then
-                log "  找到其他文件:"
-                while read file; do
-                    log "    - $(basename "$file")"
-                done <<< "$other_files"
-            fi
         fi
-    done
-    
-    # 如果没找到，尝试关键词搜索
-    if [ -z "$found_compiler_dir" ]; then
-        log ""
-        log "🔍 备选方案：使用关键词搜索"
-        
-        for keyword in "${platform_keywords[@]}"; do
-            log "  搜索关键词: '$keyword'"
-            
-            local keyword_dirs=$(find "$search_root" -type d -iname "*$keyword*" 2>/dev/null | head -5)
-            
-            if [ -n "$keyword_dirs" ]; then
-                log "  找到匹配关键词的目录:"
-                
-                while read dir; do
-                    # 在这些目录中搜索GCC
-                    local gcc_file=$(find "$dir" -type f -executable \
-                        -name "*gcc" \
-                        ! -name "*gcc-ar" \
-                        ! -name "*gcc-ranlib" \
-                        ! -name "*gcc-nm" \
-                        2>/dev/null | head -1)
-                    
-                    if [ -n "$gcc_file" ]; then
-                        local gcc_dir=$(dirname "$gcc_file")
-                        
-                        if [[ "$gcc_dir" == */bin ]]; then
-                            found_compiler_dir=$(dirname "$gcc_dir")
-                        else
-                            found_compiler_dir="$gcc_dir"
-                        fi
-                        
-                        log "  🎯 通过关键词找到: $found_compiler_dir"
-                        break 2
-                    fi
-                done <<< "$keyword_dirs"
-            fi
-        done
     fi
     
-    if [ -n "$found_compiler_dir" ]; then
-        log "✅ 找到编译器目录: $found_compiler_dir"
-        echo "$found_compiler_dir"
+    if [ -n "$toolchain_dir" ] && [ -d "$toolchain_dir" ]; then
+        log "✅ 找到SDK中的编译器目录: $toolchain_dir"
+        export COMPILER_DIR="$toolchain_dir"
+        
+        # 验证编译器
+        verify_compiler_files
         return 0
     else
-        log "❌ 未找到编译器目录"
+        log "❌ 未在SDK中找到编译器目录"
         return 1
     fi
 }
@@ -303,7 +252,7 @@ check_gcc_version() {
 
 # 验证预构建编译器文件（使用两步搜索法）
 verify_compiler_files() {
-    log "=== 验证预构建编译器文件（使用两步搜索法）==="
+    log "=== 验证预构建编译器文件 ==="
     
     # 确定目标平台
     local target_platform=""
@@ -751,8 +700,8 @@ pre_build_error_check() {
         warning_count=$((warning_count + 1))
     fi
     
-    # 8. 检查预构建编译器文件（使用两步搜索法）
-    log "🔧 检查预构建编译器文件（两步搜索法）..."
+    # 8. 检查预构建编译器文件
+    log "🔧 检查预构建编译器文件..."
     verify_compiler_files
     
     # 9. 检查编译器调用状态（使用增强版）
@@ -907,7 +856,6 @@ initialize_build_env() {
     echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
     echo "DEVICE=$DEVICE" >> $GITHUB_ENV
     echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
-    echo "COMPILER_ROOT=$COMPILER_ROOT" >> $GITHUB_ENV
     
     log "=== 克隆源码 ==="
     log "仓库: $SELECTED_REPO_URL"
@@ -929,12 +877,13 @@ initialize_build_env() {
     done
 }
 
-# 初始化编译器环境（使用两步搜索法）
+# 初始化编译器环境（下载OpenWrt官方SDK）
 initialize_compiler_env() {
     local device_name="$1"
-    log "=== 初始化编译器环境（使用两步搜索法）==="
+    log "=== 初始化编译器环境（下载OpenWrt官方SDK）==="
     
     # 首先检查环境变量中的COMPILER_DIR
+    load_env
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
         log "✅ 使用环境变量中的编译器目录: $COMPILER_DIR"
         
@@ -973,11 +922,21 @@ initialize_compiler_env() {
     case "$device_name" in
         "ac42u"|"acrh17")
             target_platform="arm"
+            TARGET="ipq40xx"
+            SUBTARGET="generic"
             log "目标平台: ARM (高通IPQ40xx)"
             ;;
-        "mi_router_4a_gigabit"|"r4ag"|"mi_router_3g"|"r3g")
+        "mi_router_4a_gigabit"|"r4ag")
             target_platform="mips"
-            log "目标平台: MIPS (雷凌MT76xx/MT7621)"
+            TARGET="ramips"
+            SUBTARGET="mt76x8"
+            log "目标平台: MIPS (雷凌MT76x8)"
+            ;;
+        "mi_router_3g"|"r3g")
+            target_platform="mips"
+            TARGET="ramips"
+            SUBTARGET="mt7621"
+            log "目标平台: MIPS (雷凌MT7621)"
             ;;
         *)
             target_platform="generic"
@@ -985,36 +944,25 @@ initialize_compiler_env() {
             ;;
     esac
     
-    log "目标平台: $target_platform"
-    
-    # 使用两步搜索法
-    log "🔍 使用两步搜索法查找编译器..."
-    log "第一步：根据类型关键词搜索目录"
-    log "第二步：在类型目录内搜索GCC文件"
-    
-    local compiler_dir=$(intelligent_platform_aware_compiler_search "$COMPILER_ROOT" "$target_platform" "$device_name")
-    
-    if [ -n "$compiler_dir" ] && [ -d "$compiler_dir" ]; then
-        log "✅ 成功找到编译器目录: $compiler_dir"
-        export COMPILER_DIR="$compiler_dir"
+    # 下载OpenWrt官方SDK
+    if download_openwrt_sdk "$TARGET" "$SUBTARGET" "$SELECTED_BRANCH"; then
+        log "✅ OpenWrt SDK下载并设置成功"
+        log "📌 编译器目录: $COMPILER_DIR"
         
         # 保存到环境文件
         if [ -f "$ENV_FILE" ]; then
-            echo "export COMPILER_DIR=\"$compiler_dir\"" >> $ENV_FILE
+            echo "export COMPILER_DIR=\"$COMPILER_DIR\"" >> $ENV_FILE
         fi
         
         # 保存到GitHub环境变量
         if [ -n "$GITHUB_ENV" ]; then
-            echo "COMPILER_DIR=$compiler_dir" >> $GITHUB_ENV
+            echo "COMPILER_DIR=$COMPILER_DIR" >> $GITHUB_ENV
         fi
-        
-        # 验证编译器（放宽版本要求）
-        verify_compiler_files
         
         return 0
     else
-        log "⚠️ 未找到预构建编译器目录"
-        log "💡 将使用OpenWrt自动构建的编译器"
+        log "⚠️ OpenWrt SDK下载失败"
+        log "💡 将使用OpenWrt自动构建的编译器作为后备"
         
         # 设置空的编译器目录
         export COMPILER_DIR=""
@@ -1950,7 +1898,7 @@ build_firmware() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 编译固件（使用两步搜索法找到的编译器）==="
+    log "=== 编译固件（使用OpenWrt官方SDK工具链）==="
     
     # 编译前最终检查
     log "编译前最终检查..."
@@ -1967,7 +1915,7 @@ build_firmware() {
         log "⚠️ 警告: dl 目录不存在"
     fi
     
-    # 检查预构建编译器文件（使用两步搜索法）
+    # 检查预构建编译器文件
     log "🔧 检查预构建编译器调用状态..."
     verify_compiler_files
     
@@ -2254,7 +2202,7 @@ cleanup() {
 
 # 搜索编译器文件函数
 search_compiler_files() {
-    local search_root="${1:-$COMPILER_ROOT}"
+    local search_root="${1:-/tmp}"
     local target_platform="${2:-generic}"
     
     log "=== 搜索编译器文件 ==="
@@ -2266,87 +2214,30 @@ search_compiler_files() {
         return 1
     fi
     
-    # 根据平台确定搜索关键词
-    local search_keywords=()
-    case "$target_platform" in
-        "arm")
-            search_keywords=("arm" "aarch64" "cortex" "armv7" "armv8")
-            ;;
-        "mips")
-            search_keywords=("mips" "mipsel" "mips64" "24kc" "1004kc")
-            ;;
-        *)
-            search_keywords=("gcc" "compiler" "toolchain" "binutils")
-            ;;
-    esac
-    
-    log "搜索关键词: ${search_keywords[*]}"
-    
-    # 搜索真正的GCC编译器（排除工具链工具）
-    log "搜索真正的GCC编译器..."
-    find "$search_root" -type f -executable \
-      -name "*gcc" \
-      ! -name "*gcc-ar" \
-      ! -name "*gcc-ranlib" \
-      ! -name "*gcc-nm" \
-      2>/dev/null | head -20 | while read file; do
-        log "找到真正的GCC编译器: $file"
-    done
-    
-    # 搜索编译器目录
-    log "搜索编译器目录..."
-    for keyword in "${search_keywords[@]}"; do
-        find "$search_root" -type d -iname "*$keyword*" 2>/dev/null | head -10 | while read dir; do
-            log "找到目录: $dir"
-        done
-    done
-    
-    return 0
+    log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
+    return 1
 }
 
 # 通用编译器搜索函数
 universal_compiler_search() {
-    local search_root="${1:-$COMPILER_ROOT}"
+    local search_root="${1:-/tmp}"
     local device_name="${2:-unknown}"
     
     log "=== 通用编译器搜索 ==="
     
-    # 调用智能搜索函数
-    local compiler_dir=$(intelligent_platform_aware_compiler_search "$search_root" "generic" "$device_name")
-    
-    if [ -n "$compiler_dir" ]; then
-        log "✅ 找到编译器目录: $compiler_dir"
-        echo "$compiler_dir"
-        return 0
-    else
-        log "❌ 未找到编译器目录"
-        return 1
-    fi
+    log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
+    return 1
 }
 
 # 简单编译器文件搜索
 search_compiler_files_simple() {
-    local search_root="${1:-$COMPILER_ROOT}"
+    local search_root="${1:-/tmp}"
     local target_platform="${2:-generic}"
     
     log "=== 简单编译器文件搜索 ==="
     
-    # 直接查找真正的GCC编译器（排除工具链工具）
-    local gcc_files=$(find "$search_root" -type f -executable \
-      -name "*gcc" \
-      ! -name "*gcc-ar" \
-      ! -name "*gcc-ranlib" \
-      ! -name "*gcc-nm" \
-      2>/dev/null | head -5)
-    
-    if [ -n "$gcc_files" ]; then
-        log "✅ 找到真正的GCC编译器:"
-        echo "$gcc_files"
-        return 0
-    else
-        log "❌ 未找到真正的GCC编译器"
-        return 1
-    fi
+    log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
+    return 1
 }
 
 # 保存源代码信息
@@ -2367,7 +2258,6 @@ save_source_code_info() {
     echo "子目标: $SUBTARGET" >> "$source_info_file"
     echo "设备: $DEVICE" >> "$source_info_file"
     echo "配置模式: $CONFIG_MODE" >> "$source_info_file"
-    echo "编译器根目录: $COMPILER_ROOT" >> "$source_info_file"
     echo "编译器目录: $COMPILER_DIR" >> "$source_info_file"
     
     # 收集目录信息
@@ -2478,7 +2368,7 @@ main() {
             log "❌ 未知命令: $1"
             echo "可用命令:"
             echo "  setup_environment, create_build_dir, initialize_build_env"
-            echo "  initialize_compiler_env - 初始化编译器环境（两步搜索法）"
+            echo "  initialize_compiler_env - 初始化编译器环境（下载OpenWrt官方SDK）"
             echo "  add_turboacc_support, configure_feeds, install_turboacc_packages"
             echo "  pre_build_space_check, generate_config, verify_usb_config, check_usb_drivers_integrity, apply_config"
             echo "  fix_network, download_dependencies, integrate_custom_files"
