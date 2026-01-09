@@ -15,30 +15,46 @@ log() {
 handle_error() {
     log "❌ 错误发生在: $1"
     log "详细错误信息:"
-    echo "最后10行日志:"
+    echo "最后50行日志:"
     tail -50 /tmp/build-logs/*.log 2>/dev/null || echo "无日志文件"
     exit 1
 }
 
-# 保存环境变量函数
+# 保存环境变量函数 - 修复版
 save_env() {
     mkdir -p $BUILD_DIR
     echo "#!/bin/bash" > $ENV_FILE
-    echo "export SELECTED_REPO_URL=\"$SELECTED_REPO_URL\"" >> $ENV_FILE
-    echo "export SELECTED_BRANCH=\"$SELECTED_BRANCH\"" >> $ENV_FILE
-    echo "export TARGET=\"$TARGET\"" >> $ENV_FILE
-    echo "export SUBTARGET=\"$SUBTARGET\"" >> $ENV_FILE
-    echo "export DEVICE=\"$DEVICE\"" >> $ENV_FILE
-    echo "export CONFIG_MODE=\"$CONFIG_MODE\"" >> $ENV_FILE
-    echo "export REPO_ROOT=\"$REPO_ROOT\"" >> $ENV_FILE
-    echo "export COMPILER_DIR=\"$COMPILER_DIR\"" >> $ENV_FILE
+    echo "export SELECTED_REPO_URL=\"${SELECTED_REPO_URL}\"" >> $ENV_FILE
+    echo "export SELECTED_BRANCH=\"${SELECTED_BRANCH}\"" >> $ENV_FILE
+    echo "export TARGET=\"${TARGET}\"" >> $ENV_FILE
+    echo "export SUBTARGET=\"${SUBTARGET}\"" >> $ENV_FILE
+    echo "export DEVICE=\"${DEVICE}\"" >> $ENV_FILE
+    echo "export CONFIG_MODE=\"${CONFIG_MODE}\"" >> $ENV_FILE
+    echo "export REPO_ROOT=\"${REPO_ROOT}\"" >> $ENV_FILE
+    echo "export COMPILER_DIR=\"${COMPILER_DIR}\"" >> $ENV_FILE
+    
+    # 确保环境变量可被其他步骤访问
+    if [ -n "$GITHUB_ENV" ]; then
+        echo "SELECTED_REPO_URL=${SELECTED_REPO_URL}" >> $GITHUB_ENV
+        echo "SELECTED_BRANCH=${SELECTED_BRANCH}" >> $GITHUB_ENV
+        echo "TARGET=${TARGET}" >> $GITHUB_ENV
+        echo "SUBTARGET=${SUBTARGET}" >> $GITHUB_ENV
+        echo "DEVICE=${DEVICE}" >> $GITHUB_ENV
+        echo "CONFIG_MODE=${CONFIG_MODE}" >> $GITHUB_ENV
+        echo "COMPILER_DIR=${COMPILER_DIR}" >> $GITHUB_ENV
+    fi
+    
     chmod +x $ENV_FILE
+    log "✅ 环境变量已保存到: $ENV_FILE"
 }
 
 # 加载环境变量函数
 load_env() {
     if [ -f "$ENV_FILE" ]; then
         source $ENV_FILE
+        log "✅ 从 $ENV_FILE 加载环境变量"
+    else
+        log "⚠️ 环境文件不存在: $ENV_FILE"
     fi
 }
 
@@ -641,6 +657,15 @@ pre_build_error_check() {
     local error_count=0
     local warning_count=0
     
+    # 显示当前环境变量
+    log "当前环境变量:"
+    log "  SELECTED_BRANCH: $SELECTED_BRANCH"
+    log "  TARGET: $TARGET"
+    log "  SUBTARGET: $SUBTARGET"
+    log "  DEVICE: $DEVICE"
+    log "  CONFIG_MODE: $CONFIG_MODE"
+    log "  COMPILER_DIR: $COMPILER_DIR"
+    
     # 1. 检查配置文件
     if [ ! -f ".config" ]; then
         log "❌ 错误: .config 文件不存在"
@@ -918,9 +943,7 @@ initialize_compiler_env() {
             log "  🔧 GCC版本: $("$first_gcc" --version 2>&1 | head -1)"
             
             # 保存到环境文件
-            if [ -f "$ENV_FILE" ]; then
-                echo "export COMPILER_DIR=\"$COMPILER_DIR\"" >> $ENV_FILE
-            fi
+            save_env
             
             # 验证编译器
             verify_compiler_files
@@ -963,8 +986,6 @@ initialize_compiler_env() {
     if [ -z "$SELECTED_BRANCH" ]; then
         log "⚠️ SELECTED_BRANCH未设置，使用默认值openwrt-21.02"
         SELECTED_BRANCH="openwrt-21.02"
-        # 保存到环境文件
-        echo "export SELECTED_BRANCH=\"$SELECTED_BRANCH\"" >> $ENV_FILE
     fi
     
     # 简化版本字符串（从openwrt-23.05转为23.05）
@@ -1018,16 +1039,7 @@ initialize_compiler_env() {
         fi
         
         # 保存到环境文件
-        if [ -f "$ENV_FILE" ]; then
-            echo "export COMPILER_DIR=\"$COMPILER_DIR\"" >> $ENV_FILE
-            echo "export TARGET=\"$TARGET\"" >> $ENV_FILE
-            echo "export SUBTARGET=\"$SUBTARGET\"" >> $ENV_FILE
-        fi
-        
-        # 保存到GitHub环境变量
-        if [ -n "$GITHUB_ENV" ]; then
-            echo "COMPILER_DIR=$COMPILER_DIR" >> $GITHUB_ENV
-        fi
+        save_env
         
         return 0
     else
@@ -1036,6 +1048,7 @@ initialize_compiler_env() {
         
         # 设置空的编译器目录
         export COMPILER_DIR=""
+        save_env
         
         return 1
     fi
@@ -2003,6 +2016,15 @@ build_firmware() {
     
     log "=== 编译固件（使用OpenWrt官方SDK工具链）==="
     
+    # 显示详细的编译信息
+    log "📋 编译信息:"
+    log "  构建目录: $BUILD_DIR"
+    log "  设备: $DEVICE"
+    log "  版本: $SELECTED_BRANCH"
+    log "  配置模式: $CONFIG_MODE"
+    log "  编译器目录: $COMPILER_DIR"
+    log "  启用缓存: $enable_cache"
+    
     # 编译前最终检查
     log "编译前最终检查..."
     if [ ! -f ".config" ]; then
@@ -2190,6 +2212,9 @@ build_firmware() {
     fi
     
     log "✅ 固件编译完成"
+    
+    # 编译完成后保存环境变量
+    save_env
 }
 
 post_build_space_check() {
