@@ -79,19 +79,10 @@ jobs:
           
           echo "✅ 步骤2完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 3: 上传源代码Artifacts
-      - name: "3. 上传源代码Artifacts"
-        uses: actions/upload-artifact@v4
-        with:
-          name: source-${{ github.event.inputs.device_name }}-${{ github.run_id }}
-          path: ${{ github.workspace }}
-          retention-days: 7
-          if-no-files-found: error
-      
-      # 步骤 4: 修复权限问题
-      - name: "4. 修复权限问题"
+      # 步骤 3: 修复权限问题
+      - name: "3. 修复权限问题"
         run: |
-          echo "=== 步骤 4: 修复权限问题 ==="
+          echo "=== 步骤 3: 修复权限问题 ==="
           echo "🔧 修复所有脚本的执行权限..."
           
           # 设置主脚本权限
@@ -111,10 +102,10 @@ jobs:
           
           echo "✅ 权限修复完成"
       
-      # 步骤 5: 初始空间检查
-      - name: "5. 初始空间检查"
+      # 步骤 4: 初始空间检查
+      - name: "4. 初始空间检查"
         run: |
-          echo "=== 步骤 5: 初始磁盘空间检查 ==="
+          echo "=== 步骤 4: 初始磁盘空间检查 ==="
           echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           echo "📊 磁盘使用情况:"
@@ -134,20 +125,20 @@ jobs:
           fi
           echo "✅ 初始空间检查通过"
       
-      # 步骤 6: 设置编译环境和构建目录
-      - name: "6. 设置编译环境和构建目录"
+      # 步骤 5: 设置编译环境和构建目录
+      - name: "5. 设置编译环境和构建目录"
         run: |
-          echo "=== 步骤 6: 设置编译环境和构建目录 ==="
+          echo "=== 步骤 5: 设置编译环境和构建目录 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          echo "🔄 步骤 6.1: 设置编译环境"
+          echo "🔄 步骤 5.1: 设置编译环境"
           chmod +x firmware-config/scripts/build_firmware_main.sh
           firmware-config/scripts/build_firmware_main.sh setup_environment
           
-          echo "🔄 步骤 6.2: 创建构建目录"
+          echo "🔄 步骤 5.2: 创建构建目录"
           firmware-config/scripts/build_firmware_main.sh create_build_dir
           
-          echo "🔄 步骤 6.3: 初始化构建环境"
+          echo "🔄 步骤 5.3: 初始化构建环境"
           echo "设备: ${{ github.event.inputs.device_name }}"
           echo "版本: ${{ github.event.inputs.version_selection }}"
           echo "配置模式: ${{ github.event.inputs.config_mode }}"
@@ -155,11 +146,11 @@ jobs:
           
           echo "✅ 编译环境和构建目录设置完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 7: 下载OpenWrt官方SDK（独立步骤）
-      - name: "7. 下载OpenWrt官方SDK（独立步骤）"
+      # 步骤 6: 下载OpenWrt官方SDK（独立步骤）
+      - name: "6. 下载OpenWrt官方SDK（独立步骤）"
         run: |
-          echo "=== 步骤 7: 下载OpenWrt官方SDK（独立步骤）==="
-          echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "=== 步骤 6: 下载OpenWrt官方SDK（独立步骤）==="
+          echo "开始时间: $(date '+%Y-%m-d %H:%M:%S')"
           echo "🚀 开始下载OpenWrt官方SDK工具链..."
           
           # 确保脚本有执行权限
@@ -170,10 +161,10 @@ jobs:
           
           echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 8: 验证SDK下载结果（修复版）- 增强日志
-      - name: "8. 验证SDK下载结果（修复版）- 增强日志"
+      # 步骤 7: 验证SDK下载结果（修复版）- 增强日志
+      - name: "7. 验证SDK下载结果（修复版）- 增强日志"
         run: |
-          echo "=== 步骤 8: 验证SDK下载结果（修复版）- 增强日志 ==="
+          echo "=== 步骤 7: 验证SDK下载结果（修复版）- 增强日志 ==="
           echo "验证时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           echo "🔍 检查SDK下载结果..."
@@ -241,68 +232,68 @@ jobs:
           
           echo "✅ SDK验证完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 9: 添加 TurboACC 支持
-      - name: "9. 添加 TurboACC 支持"
+      # 步骤 8: 添加 TurboACC 支持
+      - name: "8. 添加 TurboACC 支持"
         run: |
-          echo "=== 步骤 9: 添加 TurboACC 支持 ==="
+          echo "=== 步骤 8: 添加 TurboACC 支持 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           firmware-config/scripts/build_firmware_main.sh add_turboacc_support
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 10: 配置Feeds
-      - name: "10. 配置Feeds"
+      # 步骤 9: 配置Feeds
+      - name: "9. 配置Feeds"
         run: |
-          echo "=== 步骤 10: 配置Feeds ==="
+          echo "=== 步骤 9: 配置Feeds ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           firmware-config/scripts/build_firmware_main.sh configure_feeds
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 11: 安装 TurboACC 包
-      - name: "11. 安装 TurboACC 包"
+      # 步骤 10: 安装 TurboACC 包
+      - name: "10. 安装 TurboACC 包"
         if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
         run: |
-          echo "=== 步骤 11: 安装 TurboACC 包 ==="
+          echo "=== 步骤 10: 安装 TurboACC 包 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           firmware-config/scripts/build_firmware_main.sh install_turboacc_packages
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 12: 编译前空间检查
-      - name: "12. 编译前空间检查"
+      # 步骤 11: 编译前空间检查
+      - name: "11. 编译前空间检查"
         run: |
-          echo "=== 步骤 12: 编译前空间检查 ==="
+          echo "=== 步骤 11: 编译前空间检查 ==="
           echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           firmware-config/scripts/build_firmware_main.sh pre_build_space_check
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 13: 智能配置生成（USB完全修复加强版）
-      - name: "13. 智能配置生成（USB完全修复加强版）"
+      # 步骤 12: 智能配置生成（USB完全修复加强版）
+      - name: "12. 智能配置生成（USB完全修复加强版）"
         run: |
-          echo "=== 步骤 13: 智能配置生成 ==="
+          echo "=== 步骤 12: 智能配置生成 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🚨 USB 3.0加强：所有平台的关键USB驱动都已强制启用！"
           firmware-config/scripts/build_firmware_main.sh generate_config "${{ github.event.inputs.extra_packages }}"
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 14: 验证USB配置
-      - name: "14. 验证USB配置"
+      # 步骤 13: 验证USB配置
+      - name: "13. 验证USB配置"
         run: |
-          echo "=== 步骤 14: 验证USB配置 ==="
+          echo "=== 步骤 13: 验证USB配置 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           firmware-config/scripts/build_firmware_main.sh verify_usb_config
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 15: USB驱动完整性检查
-      - name: "15. USB驱动完整性检查"
+      # 步骤 14: USB驱动完整性检查
+      - name: "14. USB驱动完整性检查"
         run: |
-          echo "=== 步骤 15: USB驱动完整性检查 ==="
+          echo "=== 步骤 14: USB驱动完整性检查 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           firmware-config/scripts/build_firmware_main.sh check_usb_drivers_integrity
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 16: 应用配置并显示详情
-      - name: "16. 应用配置并显示详情"
+      # 步骤 15: 应用配置并显示详情
+      - name: "15. 应用配置并显示详情"
         run: |
-          echo "=== 步骤 16: 应用配置并显示详情 ==="
+          echo "=== 步骤 15: 应用配置并显示详情 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 先保存原始配置文件
@@ -316,10 +307,10 @@ jobs:
           
           echo "✅ 配置详情检查完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 17: 检查并备份配置文件
-      - name: "17. 检查并备份配置文件"
+      # 步骤 16: 检查并备份配置文件
+      - name: "16. 检查并备份配置文件"
         run: |
-          echo "=== 步骤 17: 检查并备份配置文件 ==="
+          echo "=== 步骤 16: 检查并备份配置文件 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 检查配置文件
@@ -343,18 +334,18 @@ jobs:
             exit 1
           fi
       
-      # 步骤 18: 修复网络环境
-      - name: "18. 修复网络环境"
+      # 步骤 17: 修复网络环境
+      - name: "17. 修复网络环境"
         run: |
-          echo "=== 步骤 18: 修复网络环境 ==="
+          echo "=== 步骤 17: 修复网络环境 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           firmware-config/scripts/build_firmware_main.sh fix_network
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 19: 下载依赖包（带重试）- 增强日志
-      - name: "19. 下载依赖包（带重试）- 增强日志"
+      # 步骤 18: 下载依赖包（带重试）- 增强日志
+      - name: "18. 下载依赖包（带重试）- 增强日志"
         run: |
-          echo "=== 步骤 19: 下载依赖包（带重试）- 增强日志 ==="
+          echo "=== 步骤 18: 下载依赖包（带重试）- 增强日志 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 确保环境变量加载
@@ -437,18 +428,18 @@ jobs:
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 20: 集成自定义文件
-      - name: "20. 集成自定义文件"
+      # 步骤 19: 集成自定义文件
+      - name: "19. 集成自定义文件"
         run: |
-          echo "=== 步骤 20: 集成自定义文件 ==="
+          echo "=== 步骤 19: 集成自定义文件 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           firmware-config/scripts/build_firmware_main.sh integrate_custom_files
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 21: 前置错误检查 - 增强日志
-      - name: "21. 前置错误检查 - 增强日志"
+      # 步骤 20: 前置错误检查 - 增强日志
+      - name: "20. 前置错误检查 - 增强日志"
         run: |
-          echo "=== 步骤 21: 前置错误检查 - 增强日志 ==="
+          echo "=== 步骤 20: 前置错误检查 - 增强日志 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 确保环境变量加载
@@ -490,10 +481,10 @@ jobs:
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 22: 编译固件前的空间检查
-      - name: "22. 编译固件前的空间检查"
+      # 步骤 21: 编译固件前的空间检查
+      - name: "21. 编译固件前的空间检查"
         run: |
-          echo "=== 步骤 22: 编译固件前的空间检查 ==="
+          echo "=== 步骤 21: 编译固件前的空间检查 ==="
           echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           df -h
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
@@ -509,10 +500,10 @@ jobs:
             echo "✅ 编译前空间充足"
           fi
       
-      # 步骤 23: 编译固件前显示SDK信息 - 修复版
-      - name: "23. 编译固件前显示SDK信息 - 修复版"
+      # 步骤 22: 编译固件前显示SDK信息 - 修复版
+      - name: "22. 编译固件前显示SDK信息 - 修复版"
         run: |
-          echo "=== 步骤 23: 编译固件前显示SDK信息 - 修复版 ==="
+          echo "=== 步骤 22: 编译固件前显示SDK信息 - 修复版 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🔧 使用OpenWrt官方SDK工具链..."
           
@@ -562,10 +553,10 @@ jobs:
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 24: 编译固件（启用详细日志输出）- 修复版
-      - name: "24. 编译固件（启用详细日志输出）- 修复版"
+      # 步骤 23: 编译固件（启用详细日志输出）- 修复版
+      - name: "23. 编译固件（启用详细日志输出）- 修复版"
         run: |
-          echo "=== 步骤 24: 编译固件（启用详细日志输出）- 修复版 ==="
+          echo "=== 步骤 23: 编译固件（启用详细日志输出）- 修复版 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🚀 开始编译..."
           
@@ -626,11 +617,11 @@ jobs:
             exit $BUILD_EXIT_CODE
           fi
       
-      # 步骤 25: 搜索并打包构建产物
-      - name: "25. 搜索并打包构建产物"
+      # 步骤 24: 搜索并打包构建产物
+      - name: "24. 搜索并打包构建产物"
         if: success()
         run: |
-          echo "=== 步骤 25: 搜索并打包构建产物 ==="
+          echo "=== 步骤 24: 搜索并打包构建产物 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           cd ${{ env.BUILD_DIR }}
           
@@ -670,8 +661,8 @@ jobs:
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 26: 上传固件原始目录
-      - name: "26. 上传固件原始目录"
+      # 步骤 25: 上传固件原始目录
+      - name: "25. 上传固件原始目录"
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -680,8 +671,8 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 27: 上传配置文件
-      - name: "27. 上传配置文件"
+      # 步骤 26: 上传配置文件
+      - name: "26. 上传配置文件"
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -690,8 +681,8 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 28: 上传编译日志 - 分步骤上传
-      - name: "28. 上传编译日志 - 分步骤上传"
+      # 步骤 27: 上传编译日志
+      - name: "27. 上传编译日志"
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -704,11 +695,11 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
       
-      # 步骤 29: 执行错误分析 - 增强版
-      - name: "29. 执行错误分析 - 增强版"
+      # 步骤 28: 执行错误分析 - 增强版
+      - name: "28. 执行错误分析 - 增强版"
         if: always()
         run: |
-          echo "=== 步骤 29: 执行错误分析 - 增强版 ==="
+          echo "=== 步骤 28: 执行错误分析 - 增强版 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 检查错误分析脚本是否存在
@@ -754,17 +745,17 @@ jobs:
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 30: 编译后空间检查
-      - name: "30. 编译后空间检查"
+      # 步骤 29: 编译后空间检查
+      - name: "29. 编译后空间检查"
         if: always()
         run: |
-          echo "=== 步骤 30: 编译后空间检查 ==="
+          echo "=== 步骤 29: 编译后空间检查 ==="
           echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           firmware-config/scripts/build_firmware_main.sh post_build_space_check
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 31: 上传分步骤日志
-      - name: "31. 上传分步骤日志"
+      # 步骤 30: 上传分步骤日志
+      - name: "30. 上传分步骤日志"
         if: always()
         uses: actions/upload-artifact@v4
         with:
