@@ -30,15 +30,14 @@ on:
 env:
   BUILD_DIR: "/mnt/openwrt-build"
   REPO_ROOT: "${{ github.workspace }}"
-  ENABLE_STEP_LOGS: "true"  # 启用步骤日志记录
 
 jobs:
   build-firmware:
     runs-on: ubuntu-22.04
     
     steps:
-      # 步骤 1: 完整检出代码（修复版）
-      - name: "1. 完整检出代码（修复版）"
+      # 步骤 1: 完整检出代码
+      - name: "1. 完整检出代码"
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -51,27 +50,16 @@ jobs:
           echo "=== 步骤 2: 下载源代码和验证 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "工作流运行ID: ${{ github.run_id }}"
-          echo "工作流运行号: ${{ github.run_number }}"
-          echo "触发事件: ${{ github.event_name }}"
           echo "构建时间戳: ${{ github.run_id }}"
-          echo ""
           
-          # 显示工作区信息
           echo "📁 工作区目录: ${{ github.workspace }}"
           echo "📊 工作区大小: $(du -sh ${{ github.workspace }} | cut -f1)"
-          echo ""
           
-          # 显示当前目录内容
-          echo "📁 当前目录内容:"
-          ls -la
-          echo ""
-          
-          # 简单验证firmware-config目录
-          echo "🔍 简单验证 firmware-config 目录..."
+          echo "🔍 验证 firmware-config 目录..."
           if [ -d "firmware-config" ]; then
             echo "✅ firmware-config 目录存在"
-            echo "📊 目录内容:"
-            ls -la firmware-config/
+            echo "📊 脚本检查:"
+            ls -la firmware-config/scripts/
           else
             echo "❌ firmware-config 目录不存在！"
             exit 1
@@ -79,13 +67,21 @@ jobs:
           
           echo "✅ 步骤2完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 3: 修复权限问题
-      - name: "3. 修复权限问题"
+      # 步骤 3: 上传源代码Artifacts
+      - name: "3. 上传源代码Artifacts"
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-${{ github.event.inputs.device_name }}-${{ github.run_id }}
+          path: ${{ github.workspace }}
+          retention-days: 7
+          if-no-files-found: error
+      
+      # 步骤 4: 修复权限问题
+      - name: "4. 修复权限问题"
         run: |
-          echo "=== 步骤 3: 修复权限问题 ==="
+          echo "=== 步骤 4: 修复权限问题 ==="
           echo "🔧 修复所有脚本的执行权限..."
           
-          # 设置主脚本权限
           if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
             chmod +x firmware-config/scripts/build_firmware_main.sh
             echo "✅ 修复主脚本权限: firmware-config/scripts/build_firmware_main.sh"
@@ -94,7 +90,6 @@ jobs:
             exit 1
           fi
           
-          # 设置错误分析脚本权限
           if [ -f "firmware-config/scripts/error_analysis.sh" ]; then
             chmod +x firmware-config/scripts/error_analysis.sh
             echo "✅ 修复错误分析脚本权限: firmware-config/scripts/error_analysis.sh"
@@ -102,16 +97,12 @@ jobs:
           
           echo "✅ 权限修复完成"
       
-      # 步骤 4: 初始空间检查
-      - name: "4. 初始空间检查"
+      # 步骤 5: 初始空间检查
+      - name: "5. 初始空间检查"
         run: |
-          echo "=== 步骤 4: 初始磁盘空间检查 ==="
+          echo "=== 步骤 5: 初始磁盘空间检查 ==="
           echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          echo "📊 磁盘使用情况:"
-          df -h
-          
-          echo ""
           echo "📊 /mnt 分区详细信息:"
           df -h /mnt
           
@@ -122,23 +113,23 @@ jobs:
           if [ $AVAILABLE_GB -lt 50 ]; then
             echo "❌ 错误: /mnt 空间不足50G，当前只有${AVAILABLE_GB}G"
             exit 1
+          else
+            echo "✅ 初始空间检查通过 - ${AVAILABLE_GB}G 可用"
           fi
-          echo "✅ 初始空间检查通过"
       
-      # 步骤 5: 设置编译环境和构建目录
-      - name: "5. 设置编译环境和构建目录"
+      # 步骤 6: 设置编译环境和构建目录
+      - name: "6. 设置编译环境和构建目录"
         run: |
-          echo "=== 步骤 5: 设置编译环境和构建目录 ==="
+          echo "=== 步骤 6: 设置编译环境和构建目录 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          echo "🔄 步骤 5.1: 设置编译环境"
-          chmod +x firmware-config/scripts/build_firmware_main.sh
+          echo "🔄 步骤 6.1: 设置编译环境"
           firmware-config/scripts/build_firmware_main.sh setup_environment
           
-          echo "🔄 步骤 5.2: 创建构建目录"
+          echo "🔄 步骤 6.2: 创建构建目录"
           firmware-config/scripts/build_firmware_main.sh create_build_dir
           
-          echo "🔄 步骤 5.3: 初始化构建环境"
+          echo "🔄 步骤 6.3: 初始化构建环境"
           echo "设备: ${{ github.event.inputs.device_name }}"
           echo "版本: ${{ github.event.inputs.version_selection }}"
           echo "配置模式: ${{ github.event.inputs.config_mode }}"
@@ -146,178 +137,165 @@ jobs:
           
           echo "✅ 编译环境和构建目录设置完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 6: 下载OpenWrt官方SDK（独立步骤）
-      - name: "6. 下载OpenWrt官方SDK（独立步骤）"
+      # 步骤 7: 下载OpenWrt官方SDK
+      - name: "7. 下载OpenWrt官方SDK"
         run: |
-          echo "=== 步骤 6: 下载OpenWrt官方SDK（独立步骤）==="
-          echo "开始时间: $(date '+%Y-%m-d %H:%M:%S')"
+          echo "=== 步骤 7: 下载OpenWrt官方SDK ==="
+          echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🚀 开始下载OpenWrt官方SDK工具链..."
           
-          # 确保脚本有执行权限
-          chmod +x firmware-config/scripts/build_firmware_main.sh
-          
-          # 执行SDK下载
           firmware-config/scripts/build_firmware_main.sh initialize_compiler_env "${{ github.event.inputs.device_name }}"
           
           echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 7: 验证SDK下载结果（修复版）- 增强日志
-      - name: "7. 验证SDK下载结果（修复版）- 增强日志"
+      # 步骤 8: 验证SDK下载结果
+      - name: "8. 验证SDK下载结果"
         run: |
-          echo "=== 步骤 7: 验证SDK下载结果（修复版）- 增强日志 ==="
+          echo "=== 步骤 8: 验证SDK下载结果 ==="
           echo "验证时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           echo "🔍 检查SDK下载结果..."
           
-          # 显示所有可能的环境文件
-          echo "🔍 查找环境文件..."
-          find /mnt/openwrt-build -name "*.sh" -type f 2>/dev/null | head -5
-          
-          # 首先加载环境变量
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
             source /mnt/openwrt-build/build_env.sh
             echo "✅ 从环境文件加载变量: COMPILER_DIR=$COMPILER_DIR"
           else
-            echo "⚠️ 环境文件不存在: /mnt/openwrt-build/build_env.sh"
-            echo "🔍 手动搜索编译器目录..."
+            echo "⚠️ 环境文件不存在"
           fi
           
-          # 检查SDK目录
           if [ -d "/mnt/openwrt-build/sdk" ]; then
             echo "✅ SDK目录存在: /mnt/openwrt-build/sdk"
             echo "📊 SDK目录大小: $(du -sh /mnt/openwrt-build/sdk 2>/dev/null | cut -f1 || echo '未知')"
-            echo "📁 SDK目录内容:"
-            ls -la /mnt/openwrt-build/sdk/ 2>/dev/null | head -10 || echo "无法列出"
-          else
-            echo "❌ SDK目录不存在"
-          fi
-          
-          # 检查编译器目录
-          COMPILER_DIR_OVERRIDE="/mnt/openwrt-build/sdk/staging_dir/toolchain-arm_cortex-a7+neon-vfpv4_gcc-8.4.0_musl_eabi"
-          
-          if [ -d "$COMPILER_DIR_OVERRIDE" ]; then
-            echo "✅ 编译器目录存在: $COMPILER_DIR_OVERRIDE"
-            echo "📊 编译器目录大小: $(du -sh "$COMPILER_DIR_OVERRIDE" 2>/dev/null | cut -f1 || echo '未知')"
             
-            # 查找GCC编译器
-            echo "🔍 查找GCC编译器..."
-            GCC_FILE=$(find "$COMPILER_DIR_OVERRIDE" -type f -executable \
+            GCC_FILE=$(find "/mnt/openwrt-build/sdk" -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
               ! -name "*gcc-nm" \
               2>/dev/null | head -1)
             
-            if [ -n "$GCC_FILE" ]; then
-              echo "✅ 找到GCC编译器: $(basename "$GCC_FILE")"
-              echo "🔧 GCC版本: $("$GCC_FILE" --version 2>&1 | head -1)"
-              echo "🔧 完整路径: $GCC_FILE"
+            if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
+              echo "✅ 找到可执行GCC编译器: $(basename "$GCC_FILE")"
+              echo "🔧 GCC版本测试:"
+              "$GCC_FILE" --version 2>&1 | head -1
             else
-              echo "⚠️ 未找到真正的GCC编译器"
-              echo "🔍 查找所有gcc相关文件:"
-              find "$COMPILER_DIR_OVERRIDE" -name "*gcc*" -type f 2>/dev/null | head -10
+              echo "⚠️ 未找到可执行的GCC编译器"
             fi
-            
-            # 强制设置环境变量
-            echo "🔧 强制设置COMPILER_DIR环境变量"
-            export COMPILER_DIR="$COMPILER_DIR_OVERRIDE"
-            echo "COMPILER_DIR=$COMPILER_DIR" >> $GITHUB_ENV
-            echo "export COMPILER_DIR=\"$COMPILER_DIR\"" > /mnt/openwrt-build/build_env.sh
-            echo "✅ 已创建/更新环境文件"
           else
-            echo "❌ 编译器目录不存在: $COMPILER_DIR_OVERRIDE"
-            echo "🔍 搜索其他可能的编译器目录..."
-            find /mnt/openwrt-build -name "toolchain-*" -type d 2>/dev/null | head -5
+            echo "❌ SDK目录不存在"
+            echo "💡 将使用OpenWrt自动构建的编译器"
           fi
           
-          echo "✅ SDK验证完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ SDK验证完成"
       
-      # 步骤 8: 添加 TurboACC 支持
-      - name: "8. 添加 TurboACC 支持"
+      # 步骤 9: 添加 TurboACC 支持
+      - name: "9. 添加 TurboACC 支持"
         run: |
-          echo "=== 步骤 8: 添加 TurboACC 支持 ==="
+          echo "=== 步骤 9: 添加 TurboACC 支持 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           firmware-config/scripts/build_firmware_main.sh add_turboacc_support
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 9: 配置Feeds
-      - name: "9. 配置Feeds"
+      # 步骤 10: 配置Feeds
+      - name: "10. 配置Feeds"
         run: |
-          echo "=== 步骤 9: 配置Feeds ==="
+          echo "=== 步骤 10: 配置Feeds ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           firmware-config/scripts/build_firmware_main.sh configure_feeds
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 10: 安装 TurboACC 包
-      - name: "10. 安装 TurboACC 包"
+      # 步骤 11: 安装 TurboACC 包
+      - name: "11. 安装 TurboACC 包"
         if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
         run: |
-          echo "=== 步骤 10: 安装 TurboACC 包 ==="
+          echo "=== 步骤 11: 安装 TurboACC 包 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           firmware-config/scripts/build_firmware_main.sh install_turboacc_packages
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 11: 编译前空间检查
-      - name: "11. 编译前空间检查"
+      # 步骤 12: 编译前空间检查
+      - name: "12. 编译前空间检查"
         run: |
-          echo "=== 步骤 11: 编译前空间检查 ==="
+          echo "=== 步骤 12: 编译前空间检查 ==="
           echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           firmware-config/scripts/build_firmware_main.sh pre_build_space_check
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 12: 智能配置生成（USB完全修复加强版）
-      - name: "12. 智能配置生成（USB完全修复加强版）"
+      # 步骤 13: 智能配置生成
+      - name: "13. 智能配置生成"
         run: |
-          echo "=== 步骤 12: 智能配置生成 ==="
+          echo "=== 步骤 13: 智能配置生成 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🚨 USB 3.0加强：所有平台的关键USB驱动都已强制启用！"
           firmware-config/scripts/build_firmware_main.sh generate_config "${{ github.event.inputs.extra_packages }}"
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 13: 验证USB配置
-      - name: "13. 验证USB配置"
+      # 步骤 14: 验证USB配置
+      - name: "14. 验证USB配置"
         run: |
-          echo "=== 步骤 13: 验证USB配置 ==="
+          echo "=== 步骤 14: 验证USB配置 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           firmware-config/scripts/build_firmware_main.sh verify_usb_config
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 14: USB驱动完整性检查
-      - name: "14. USB驱动完整性检查"
+      # 步骤 15: USB驱动完整性检查
+      - name: "15. USB驱动完整性检查"
         run: |
-          echo "=== 步骤 14: USB驱动完整性检查 ==="
+          echo "=== 步骤 15: USB驱动完整性检查 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           firmware-config/scripts/build_firmware_main.sh check_usb_drivers_integrity
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 15: 应用配置并显示详情
-      - name: "15. 应用配置并显示详情"
+      # 步骤 16: 应用配置并显示详情
+      - name: "16. 应用配置并显示详情"
         run: |
-          echo "=== 步骤 15: 应用配置并显示详情 ==="
+          echo "=== 步骤 16: 应用配置并显示详情 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 先保存原始配置文件
-          if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
-            cp "${{ env.BUILD_DIR }}/.config" "${{ env.BUILD_DIR }}/.config.original"
+          if [ -f "/mnt/openwrt-build/.config" ]; then
+            cp "/mnt/openwrt-build/.config" "/mnt/openwrt-build/.config.original"
             echo "✅ 已备份原始配置文件"
           fi
           
-          # 应用配置
           firmware-config/scripts/build_firmware_main.sh apply_config
           
-          echo "✅ 配置详情检查完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "=== 最终配置状态检查 ==="
+          if [ -f "/mnt/openwrt-build/.config" ]; then
+            echo "✅ 配置文件存在"
+            echo "📊 文件大小: $(ls -lh "/mnt/openwrt-build/.config" | awk '{print $5}')"
+            
+            echo "🔧 关键配置检查:"
+            echo "1. 目标平台配置:"
+            grep "CONFIG_TARGET_" "/mnt/openwrt-build/.config" | head -5
+            
+            echo "2. USB 3.0驱动配置:"
+            grep "CONFIG_PACKAGE_kmod-usb-xhci" "/mnt/openwrt-build/.config"
+            
+            echo "3. 关键USB驱动状态:"
+            grep -E "CONFIG_PACKAGE_kmod-usb-core|CONFIG_PACKAGE_kmod-usb2|CONFIG_PACKAGE_kmod-usb3|CONFIG_PACKAGE_kmod-usb-storage" "/mnt/openwrt-build/.config"
+            
+            echo "4. 文件系统支持:"
+            grep "CONFIG_PACKAGE_kmod-fs-" "/mnt/openwrt-build/.config" | head -5
+            
+            echo "5. 插件配置统计:"
+            local enabled=$(grep -c "CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config")
+            local disabled=$(grep -c "# CONFIG_PACKAGE_.* is not set" "/mnt/openwrt-build/.config")
+            echo "   已启用插件: $enabled 个"
+            echo "   已禁用插件: $disabled 个"
+          fi
+          
+          echo "✅ 配置应用完成"
       
-      # 步骤 16: 检查并备份配置文件
-      - name: "16. 检查并备份配置文件"
+      # 步骤 17: 检查并备份配置文件
+      - name: "17. 检查并备份配置文件"
         run: |
-          echo "=== 步骤 16: 检查并备份配置文件 ==="
+          echo "=== 步骤 17: 检查并备份配置文件 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 检查配置文件
-          if [ -f "${{ env.BUILD_DIR }}/.config" ]; then
+          if [ -f "/mnt/openwrt-build/.config" ]; then
             echo "✅ .config 文件存在"
-            echo "📊 文件大小: $(ls -lh "${{ env.BUILD_DIR }}/.config" | awk '{print $5}')"
-            echo "📝 文件行数: $(wc -l < "${{ env.BUILD_DIR }}/.config")"
+            echo "📊 文件大小: $(ls -lh "/mnt/openwrt-build/.config" | awk '{print $5}')"
+            echo "📝 文件行数: $(wc -l < "/mnt/openwrt-build/.config")"
             
             # 确保备份目录存在
             mkdir -p firmware-config/config-backup
@@ -326,7 +304,7 @@ jobs:
             TIMESTAMP=$(date +%Y%m%d_%H%M%S)
             BACKUP_FILE="firmware-config/config-backup/config_${{ github.event.inputs.device_name }}_${TIMESTAMP}.config"
             
-            cp "${{ env.BUILD_DIR }}/.config" "$BACKUP_FILE"
+            cp "/mnt/openwrt-build/.config" "$BACKUP_FILE"
             echo "✅ 配置文件备份到仓库目录: $BACKUP_FILE"
             echo "📊 备份文件大小: $(ls -lh "$BACKUP_FILE" | awk '{print $5}')"
           else
@@ -334,159 +312,63 @@ jobs:
             exit 1
           fi
       
-      # 步骤 17: 修复网络环境
-      - name: "17. 修复网络环境"
+      # 步骤 18: 修复网络环境
+      - name: "18. 修复网络环境"
         run: |
-          echo "=== 步骤 17: 修复网络环境 ==="
+          echo "=== 步骤 18: 修复网络环境 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           firmware-config/scripts/build_firmware_main.sh fix_network
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 18: 下载依赖包（带重试）- 增强日志
-      - name: "18. 下载依赖包（带重试）- 增强日志"
+      # 步骤 19: 下载依赖包
+      - name: "19. 下载依赖包"
         run: |
-          echo "=== 步骤 18: 下载依赖包（带重试）- 增强日志 ==="
+          echo "=== 步骤 19: 下载依赖包 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 确保环境变量加载
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
             source /mnt/openwrt-build/build_env.sh
-            echo "✅ 加载环境变量: COMPILER_DIR=$COMPILER_DIR"
           fi
           
-          # 最多重试3次
-          for i in {1..3}; do
-            echo "🔁 下载依赖包 - 第 $i 次尝试"
-            
-            # 创建详细日志文件
-            LOG_FILE="/tmp/download_log_attempt_$i.txt"
-            
-            echo "=== 下载依赖包详细日志 - 第 $i 次尝试 ===" > $LOG_FILE
-            echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')" >> $LOG_FILE
-            
-            # 执行下载，记录详细日志
-            firmware-config/scripts/build_firmware_main.sh download_dependencies 2>&1 | tee -a $LOG_FILE
-            
-            DOWNLOAD_EXIT_CODE=${PIPESTATUS[0]}
-            
-            echo "退出代码: $DOWNLOAD_EXIT_CODE" >> $LOG_FILE
-            echo "结束时间: $(date '+%Y-%m-%d %H:%M:%S')" >> $LOG_FILE
-            
-            # 检查下载结果
-            dl_count=$(find ${{ env.BUILD_DIR }}/dl -type f 2>/dev/null | wc -l)
-            echo "📊 依赖包数量: $dl_count 个"
-            
-            # 分析日志中的错误
-            ERROR_COUNT=$(grep -c -i "error\|failed\|404\|not found" $LOG_FILE 2>/dev/null || echo "0")
-            echo "📊 下载错误数量: $ERROR_COUNT 个"
-            
-            if [ $DOWNLOAD_EXIT_CODE -eq 0 ] && [ $dl_count -gt 100 ] && [ $ERROR_COUNT -lt 10 ]; then
-              echo "✅ 依赖包下载成功"
-              
-              # 显示下载统计
-              echo "📈 下载统计:"
-              echo "  依赖包总数: $dl_count"
-              echo "  下载错误: $ERROR_COUNT"
-              
-              # 显示常见错误（如果有）
-              if [ $ERROR_COUNT -gt 0 ]; then
-                echo "⚠️ 下载过程中的错误:"
-                grep -i "error\|failed\|404\|not found" $LOG_FILE | head -5
-              fi
-              
-              break
-            else
-              echo "⚠️ 第 $i 次下载不完整或有错误，等待10秒后重试..."
-              echo "  退出代码: $DOWNLOAD_EXIT_CODE"
-              echo "  依赖包数量: $dl_count (期望>100)"
-              echo "  错误数量: $ERROR_COUNT"
-              
-              # 显示具体错误
-              if [ $ERROR_COUNT -gt 0 ]; then
-                echo "  具体错误:"
-                grep -i "error\|failed\|404\|not found" $LOG_FILE | head -3
-              fi
-              
-              sleep 10
-            fi
-          done
+          firmware-config/scripts/build_firmware_main.sh download_dependencies
           
-          # 最终检查
-          dl_count=$(find ${{ env.BUILD_DIR }}/dl -type f 2>/dev/null | wc -l)
-          echo "📊 最终依赖包数量: $dl_count 个"
+          echo "📊 依赖包统计:"
+          dl_count=$(find /mnt/openwrt-build/dl -type f 2>/dev/null | wc -l)
+          echo "  依赖包总数: $dl_count 个"
           
           if [ $dl_count -lt 50 ]; then
-            echo "❌ 依赖包数量不足，编译可能失败"
-            echo "💡 建议手动下载或检查网络连接"
-            
-            # 显示dl目录内容
-            echo "📁 dl目录内容:"
-            ls -la ${{ env.BUILD_DIR }}/dl/ 2>/dev/null | head -10
+            echo "⚠️ 依赖包数量较少，可能影响编译"
           else
-            echo "✅ 依赖包下载完成"
+            echo "✅ 依赖包充足"
           fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 19: 集成自定义文件
-      - name: "19. 集成自定义文件"
+      # 步骤 20: 集成自定义文件
+      - name: "20. 集成自定义文件"
         run: |
-          echo "=== 步骤 19: 集成自定义文件 ==="
+          echo "=== 步骤 20: 集成自定义文件 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           firmware-config/scripts/build_firmware_main.sh integrate_custom_files
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 20: 前置错误检查 - 增强日志
-      - name: "20. 前置错误检查 - 增强日志"
+      # 步骤 21: 前置错误检查
+      - name: "21. 前置错误检查"
         run: |
-          echo "=== 步骤 20: 前置错误检查 - 增强日志 ==="
+          echo "=== 步骤 21: 前置错误检查 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 确保环境变量加载
-          if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
-            source /mnt/openwrt-build/build_env.sh
-            echo "✅ 加载环境变量: COMPILER_DIR=$COMPILER_DIR"
-          fi
-          
-          # 详细检查环境
-          echo "🔍 详细环境检查:"
-          echo "  构建目录: ${{ env.BUILD_DIR }}"
-          echo "  设备: ${{ github.event.inputs.device_name }}"
-          echo "  版本: ${{ env.SELECTED_BRANCH }}"
-          echo "  配置模式: ${{ github.event.inputs.config_mode }}"
-          echo "  编译器目录: ${{ env.COMPILER_DIR }}"
-          
-          # 检查关键目录
-          echo "🔍 关键目录检查:"
-          for dir in "${{ env.BUILD_DIR }}" "${{ env.BUILD_DIR }}/dl" "${{ env.BUILD_DIR }}/feeds"; do
-            if [ -d "$dir" ]; then
-              echo "  ✅ $dir: 存在"
-            else
-              echo "  ❌ $dir: 不存在"
-            fi
-          done
-          
-          # 检查关键文件
-          echo "🔍 关键文件检查:"
-          for file in "${{ env.BUILD_DIR }}/.config" "${{ env.BUILD_DIR }}/Makefile" "${{ env.BUILD_DIR }}/feeds.conf.default"; do
-            if [ -f "$file" ]; then
-              echo "  ✅ $file: 存在"
-            else
-              echo "  ❌ $file: 不存在"
-            fi
-          done
-          
-          # 执行前置错误检查
           firmware-config/scripts/build_firmware_main.sh pre_build_error_check
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 21: 编译固件前的空间检查
-      - name: "21. 编译固件前的空间检查"
+      # 步骤 22: 编译固件前的空间检查
+      - name: "22. 编译固件前的空间检查"
         run: |
-          echo "=== 步骤 21: 编译固件前的空间检查 ==="
+          echo "=== 步骤 22: 编译固件前的空间检查 ==="
           echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          df -h
+          
+          df -h /mnt
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
           echo "/mnt 可用空间: ${AVAILABLE_GB}G"
@@ -500,20 +382,16 @@ jobs:
             echo "✅ 编译前空间充足"
           fi
       
-      # 步骤 22: 编译固件前显示SDK信息 - 修复版
-      - name: "22. 编译固件前显示SDK信息 - 修复版"
+      # 步骤 23: 编译固件前显示SDK信息
+      - name: "23. 编译固件前显示SDK信息"
         run: |
-          echo "=== 步骤 22: 编译固件前显示SDK信息 - 修复版 ==="
+          echo "=== 步骤 23: 编译固件前显示SDK信息 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🔧 使用OpenWrt官方SDK工具链..."
           
-          # 确保环境变量加载
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
             source /mnt/openwrt-build/build_env.sh
-            echo "✅ 从环境文件加载变量"
           fi
           
-          # 显示编译器信息
           echo "📌 编译器信息:"
           echo "  设备: ${{ github.event.inputs.device_name }}"
           echo "  版本: ${{ env.SELECTED_BRANCH }}"
@@ -522,9 +400,6 @@ jobs:
           
           if [ -n "${{ env.COMPILER_DIR }}" ] && [ -d "${{ env.COMPILER_DIR }}" ]; then
             echo "  ✅ SDK工具链已下载"
-            echo "🔍 查找GCC编译器版本:"
-            
-            # 正确获取GCC版本
             GCC_FILE=$(find "${{ env.COMPILER_DIR }}" -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
@@ -534,18 +409,7 @@ jobs:
             
             if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
               echo "  🔧 找到GCC编译器: $(basename "$GCC_FILE")"
-              echo "  📍 完整路径: $GCC_FILE"
-              
-              # 直接调用GCC获取版本
-              if "$GCC_FILE" --version 2>&1 | head -1; then
-                echo "  ✅ 成功获取GCC版本"
-              else
-                echo "  ❌ 无法获取GCC版本"
-              fi
-            else
-              echo "  ⚠️ 未找到可执行的GCC编译器"
-              echo "  🔍 查找所有gcc相关文件:"
-              find "${{ env.COMPILER_DIR }}" -name "*gcc*" -type f 2>/dev/null | head -5
+              "$GCC_FILE" --version 2>&1 | head -1
             fi
           else
             echo "  ℹ️ 未使用预下载SDK，将使用OpenWrt自动构建的编译器"
@@ -553,83 +417,34 @@ jobs:
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 23: 编译固件（启用详细日志输出）- 修复版
-      - name: "23. 编译固件（启用详细日志输出）- 修复版"
+      # 步骤 24: 编译固件
+      - name: "24. 编译固件"
         run: |
-          echo "=== 步骤 23: 编译固件（启用详细日志输出）- 修复版 ==="
+          echo "=== 步骤 24: 编译固件 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🚀 开始编译..."
           
-          # 确保环境变量加载
-          if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
-            source /mnt/openwrt-build/build_env.sh
-            echo "✅ 加载环境变量: COMPILER_DIR=$COMPILER_DIR"
-          fi
-          
-          # 创建日志目录
           mkdir -p /tmp/build-logs
-          
-          # 记录开始时间
           echo "编译开始时间: $(date '+%Y-%m-%d %H:%M:%S')" > /tmp/build-logs/compile_start.log
-          echo "工作流运行ID: ${{ github.run_id }}" >> /tmp/build-logs/compile_start.log
           echo "设备: ${{ github.event.inputs.device_name }}" >> /tmp/build-logs/compile_start.log
           echo "版本: ${{ env.SELECTED_BRANCH }}" >> /tmp/build-logs/compile_start.log
-          echo "编译器目录: ${{ env.COMPILER_DIR }}" >> /tmp/build-logs/compile_start.log
           
-          # 执行编译，同时输出到控制台和日志文件
-          echo "执行编译命令..."
+          firmware-config/scripts/build_firmware_main.sh build_firmware "true"
           
-          # 创建编译详细日志文件
-          COMPILE_LOG="/tmp/build-logs/compile_detailed.log"
-          echo "=== OpenWrt固件编译详细日志 ===" > $COMPILE_LOG
-          echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')" >> $COMPILE_LOG
-          echo "构建目录: ${{ env.BUILD_DIR }}" >> $COMPILE_LOG
-          echo "设备: ${{ github.event.inputs.device_name }}" >> $COMPILE_LOG
-          echo "版本: ${{ env.SELECTED_BRANCH }}" >> $COMPILE_LOG
-          echo "" >> $COMPILE_LOG
-          
-          # 开始编译，同时记录到详细日志和控制台
-          {
-            firmware-config/scripts/build_firmware_main.sh build_firmware "true"
-          } 2>&1 | tee -a $COMPILE_LOG
-          
-          BUILD_EXIT_CODE=${PIPESTATUS[0]}
-          
-          echo "编译退出代码: $BUILD_EXIT_CODE" >> $COMPILE_LOG
-          echo "编译结束时间: $(date '+%Y-%m-%d %H:%M:%S')" >> $COMPILE_LOG
-          
-          # 记录结束时间
           echo "编译结束时间: $(date '+%Y-%m-%d %H:%M:%S')" >> /tmp/build-logs/compile_start.log
-          echo "编译退出代码: $BUILD_EXIT_CODE" >> /tmp/build-logs/compile_start.log
           
-          echo "编译退出代码: $BUILD_EXIT_CODE"
-          
-          if [ $BUILD_EXIT_CODE -eq 0 ]; then
-            echo "✅ 编译完成，日志已保存，时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          else
-            echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
-            echo "📁 详细日志: $COMPILE_LOG"
-            
-            # 提取关键错误信息
-            echo "🚨 编译错误摘要:"
-            grep -i "error\|failed\|undefined reference\|No such file" $COMPILE_LOG | head -20
-            
-            exit $BUILD_EXIT_CODE
-          fi
+          echo "✅ 编译完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 24: 搜索并打包构建产物
-      - name: "24. 搜索并打包构建产物"
+      # 步骤 25: 检查构建产物
+      - name: "25. 检查构建产物"
         if: success()
         run: |
-          echo "=== 步骤 24: 搜索并打包构建产物 ==="
+          echo "=== 步骤 25: 检查构建产物 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          cd ${{ env.BUILD_DIR }}
+          cd /mnt/openwrt-build
           
-          # 检查并显示固件文件详情
           if [ -d "bin/targets" ]; then
             echo "✅ 找到固件目录"
             
-            # 统计固件文件
             FIRMWARE_COUNT=0
             TOTAL_SIZE=0
             
@@ -645,7 +460,7 @@ jobs:
                 echo "📁 文件 #$FIRMWARE_COUNT:"
                 echo "  名称: $(basename "$file")"
                 echo "  大小: $SIZE ($BYTES 字节)"
-                echo "  路径: $(echo "$file" | sed "s|${{ env.BUILD_DIR }}/||")"
+                echo "  路径: $(echo "$file" | sed "s|/mnt/openwrt-build/||")"
                 echo ""
             done
             
@@ -654,6 +469,9 @@ jobs:
             echo "  固件总数: $FIRMWARE_COUNT 个"
             echo "  总大小: $(numfmt --to=iec $TOTAL_SIZE)"
             
+            if [ $FIRMWARE_COUNT -eq 0 ]; then
+              echo "⚠️ 警告: 未找到任何固件文件"
+            fi
           else
             echo "❌ 未找到固件目录"
             echo "⚠️ bin/targets目录不存在"
@@ -661,18 +479,18 @@ jobs:
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 25: 上传固件原始目录
-      - name: "25. 上传固件原始目录"
+      # 步骤 26: 上传固件原始目录
+      - name: "26. 上传固件原始目录"
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
-          path: ${{ env.BUILD_DIR }}/bin/targets/
+          path: /mnt/openwrt-build/bin/targets/
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 26: 上传配置文件
-      - name: "26. 上传配置文件"
+      # 步骤 27: 上传配置文件
+      - name: "27. 上传配置文件"
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -681,66 +499,22 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 27: 上传编译日志
-      - name: "27. 上传编译日志"
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs-detailed-${{ github.event.inputs.device_name }}-${{ github.run_id }}
-          path: |
-            /tmp/build-logs/
-            ${{ env.BUILD_DIR }}/build.log
-            ${{ env.BUILD_DIR }}/download.log
-            ${{ env.BUILD_DIR }}/.config
-          retention-days: 7
-          if-no-files-found: warn
-      
-      # 步骤 28: 执行错误分析 - 增强版
-      - name: "28. 执行错误分析 - 增强版"
+      # 步骤 28: 执行错误分析
+      - name: "28. 执行错误分析"
         if: always()
         run: |
-          echo "=== 步骤 28: 执行错误分析 - 增强版 ==="
+          echo "=== 步骤 28: 执行错误分析 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 检查错误分析脚本是否存在
           if [ -f "firmware-config/scripts/error_analysis.sh" ]; then
-            echo "✅ 找到错误分析脚本"
             chmod +x firmware-config/scripts/error_analysis.sh
+            export BUILD_DIR="/mnt/openwrt-build"
             
-            # 设置详细日志输出
-            export ERROR_ANALYSIS_VERBOSE=1
-            export BUILD_DIR="${{ env.BUILD_DIR }}"
+            firmware-config/scripts/error_analysis.sh
             
-            # 执行错误分析，捕获详细输出
-            ANALYSIS_LOG="/tmp/error_analysis_detailed.log"
-            echo "=== 错误分析详细日志 ===" > $ANALYSIS_LOG
-            echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')" >> $ANALYSIS_LOG
-            echo "" >> $ANALYSIS_LOG
-            
-            firmware-config/scripts/error_analysis.sh 2>&1 | tee -a $ANALYSIS_LOG
-            
-            ANALYSIS_EXIT_CODE=${PIPESTATUS[0]}
-            
-            echo "" >> $ANALYSIS_LOG
-            echo "结束时间: $(date '+%Y-%m-%d %H:%M:%S')" >> $ANALYSIS_LOG
-            echo "退出代码: $ANALYSIS_EXIT_CODE" >> $ANALYSIS_LOG
-            
-            echo "✅ 错误分析完成，退出代码: $ANALYSIS_EXIT_CODE"
-            
-            # 上传错误分析日志
-            echo "📤 上传错误分析日志..."
-            cp $ANALYSIS_LOG /tmp/build-logs/error_analysis_detailed.log
-            
-            # 显示关键错误摘要
-            echo "🚨 关键错误摘要:"
-            if [ -f "/tmp/build-logs/error_analysis_detailed.log" ]; then
-              grep -A2 -B2 "❌\|🚨\|💥" /tmp/build-logs/error_analysis_detailed.log | head -20
-            fi
-            
+            echo "✅ 错误分析完成"
           else
             echo "⚠️ 错误分析脚本不存在"
-            echo "🔍 查找脚本文件..."
-            find . -name "error_analysis.sh" -type f 2>/dev/null
           fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
@@ -751,18 +525,16 @@ jobs:
         run: |
           echo "=== 步骤 29: 编译后空间检查 ==="
           echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          firmware-config/scripts/build_firmware_main.sh post_build_space_check
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-      
-      # 步骤 30: 上传分步骤日志
-      - name: "30. 上传分步骤日志"
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: step-logs-${{ github.event.inputs.device_name }}-${{ github.run_id }}
-          path: |
-            /tmp/build-logs/compile_detailed.log
-            /tmp/build-logs/error_analysis_detailed.log
-            /tmp/build-logs/compile_start.log
-          retention-days: 7
-          if-no-files-found: warn
+          
+          echo "📊 磁盘使用情况:"
+          df -h /mnt
+          
+          AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
+          AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+          echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+          
+          if [ $AVAILABLE_GB -lt 5 ]; then
+            echo "⚠️ 警告: 磁盘空间较低，建议清理"
+          else
+            echo "✅ 磁盘空间充足"
+          fi
