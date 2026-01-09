@@ -36,43 +36,143 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      # 步骤 1: 完整检出代码
-      - name: "1. 完整检出代码"
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: recursive
-          token: ${{ secrets.GITHUB_TOKEN }}
-      
-      # 步骤 2: 下载源代码和验证
-      - name: "2. 下载源代码和验证"
+      # 步骤 1: 使用Git Archive API下载源代码
+      - name: "1. 使用Git Archive API下载源代码"
         run: |
-          echo "=== 步骤 2: 下载源代码和验证 ==="
+          echo "=== 步骤 1: 使用Git Archive API下载源代码 ==="
+          echo "🔄 从GitHub API获取源代码压缩包"
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "工作流运行ID: ${{ github.run_id }}"
-          echo "构建时间戳: ${{ github.run_id }}"
+          
+          # 创建临时目录
+          mkdir -p /tmp/openwrt-source
+          cd /tmp/openwrt-source
+          
+          # 获取默认分支
+          echo "🔍 获取仓库默认分支..."
+          DEFAULT_BRANCH=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}" | jq -r '.default_branch')
+          echo "✅ 默认分支: $DEFAULT_BRANCH"
+          
+          # 使用Git Archive API下载压缩包
+          echo "📥 下载源代码压缩包..."
+          curl -s -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}/tarball/$DEFAULT_BRANCH" -o source.tar.gz
+          
+          if [ ! -f "source.tar.gz" ]; then
+            echo "❌ 下载源代码压缩包失败"
+            exit 1
+          fi
+          
+          echo "✅ 下载完成，文件大小: $(ls -lh source.tar.gz | awk '{print $5}')"
+          
+          # 解压压缩包
+          echo "📦 解压源代码..."
+          tar -xzf source.tar.gz --strip-components=1
+          
+          # 检查解压结果
+          echo "🔍 检查解压结果..."
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            echo "✅ 源代码解压成功"
+            echo "✅ 重要文件存在: firmware-config/scripts/build_firmware_main.sh"
+            
+            # 复制到工作区
+            echo "📁 复制文件到工作区..."
+            
+            # 确保工作区目录存在
+            mkdir -p ${{ github.workspace }}
+            
+            # 检查并删除编译器目录（如果有的话）
+            if [ -d "firmware-config/build-Compiler-file" ]; then
+              echo "⚠️ 发现编译器目录，排除不复制"
+              rm -rf firmware-config/build-Compiler-file
+            fi
+            
+            # 使用rsync复制所有文件，排除.git目录
+            rsync -av --exclude='.git' . ${{ github.workspace }}/
+            
+            # 确保脚本文件有执行权限
+            chmod +x ${{ github.workspace }}/firmware-config/scripts/*.sh 2>/dev/null || true
+            
+            echo "✅ 文件复制完成"
+            
+            # 保存源代码压缩包作为构建产物
+            mkdir -p /tmp/build-artifacts/source-archive
+            cp source.tar.gz /tmp/build-artifacts/source-archive/
+            echo "📦 源代码已保存到: /tmp/build-artifacts/source-archive/"
+          else
+            echo "❌ 源代码解压失败，重要文件缺失"
+            echo "📁 当前目录内容:"
+            ls -la
+            exit 1
+          fi
+          
+          # 清理临时文件
+          cd /tmp
+          rm -rf openwrt-source
+          echo "✅ Git Archive API下载完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
+      
+      # 步骤 2: 验证源代码结构
+      - name: "2. 验证源代码结构"
+        run: |
+          echo "=== 步骤 2: 验证源代码结构 ==="
+          echo "🕐 验证时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           echo "📁 工作区目录: ${{ github.workspace }}"
           echo "📊 工作区大小: $(du -sh ${{ github.workspace }} | cut -f1)"
           
-          echo "🔍 验证 firmware-config 目录..."
-          if [ -d "firmware-config" ]; then
+          echo "🔍 验证关键目录结构..."
+          
+          # 检查 firmware-config 目录
+          if [ -d "${{ github.workspace }}/firmware-config" ]; then
             echo "✅ firmware-config 目录存在"
-            echo "📊 脚本检查:"
-            ls -la firmware-config/scripts/
+            echo "📊 firmware-config 目录结构:"
+            find "${{ github.workspace }}/firmware-config" -maxdepth 2 -type d | sort
           else
             echo "❌ firmware-config 目录不存在！"
             exit 1
           fi
           
-          echo "✅ 步骤2完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          # 检查构建脚本
+          if [ -f "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" ]; then
+            echo "✅ 主构建脚本存在: firmware-config/scripts/build_firmware_main.sh"
+            echo "📏 脚本大小: $(ls -lh "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" | awk '{print $5}')"
+            echo "📝 脚本行数: $(wc -l < "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh")"
+            
+            # 检查脚本权限
+            if [ -x "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" ]; then
+              echo "🔧 脚本权限: 可执行"
+            else
+              echo "🔧 脚本权限: 不可执行，正在修复..."
+              chmod +x "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh"
+            fi
+          else
+            echo "❌ 主构建脚本不存在！"
+            exit 1
+          fi
+          
+          # 检查错误分析脚本
+          if [ -f "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh" ]; then
+            echo "✅ 错误分析脚本存在: firmware-config/scripts/error_analysis.sh"
+            chmod +x "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh" 2>/dev/null || true
+          else
+            echo "⚠️ 错误分析脚本不存在"
+          fi
+          
+          # 检查配置文件
+          echo "🔍 检查配置文件目录..."
+          if [ -d "${{ github.workspace }}/firmware-config/config-backup" ]; then
+            echo "✅ 配置文件备份目录存在"
+          else
+            echo "📁 创建配置文件备份目录..."
+            mkdir -p "${{ github.workspace }}/firmware-config/config-backup"
+          fi
+          
+          echo "✅ 源代码验证完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
       # 步骤 3: 上传源代码Artifacts
       - name: "3. 上传源代码Artifacts"
         uses: actions/upload-artifact@v4
         with:
           name: source-${{ github.event.inputs.device_name }}-${{ github.run_id }}
-          path: ${{ github.workspace }}
+          path: /tmp/build-artifacts/source-archive/
           retention-days: 7
           if-no-files-found: error
       
@@ -82,20 +182,22 @@ jobs:
           echo "=== 步骤 4: 修复权限问题 ==="
           echo "🔧 修复所有脚本的执行权限..."
           
-          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
-            chmod +x firmware-config/scripts/build_firmware_main.sh
+          if [ -f "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" ]; then
+            chmod +x "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh"
             echo "✅ 修复主脚本权限: firmware-config/scripts/build_firmware_main.sh"
           else
             echo "❌ 主脚本不存在: firmware-config/scripts/build_firmware_main.sh"
             exit 1
           fi
           
-          if [ -f "firmware-config/scripts/error_analysis.sh" ]; then
-            chmod +x firmware-config/scripts/error_analysis.sh
+          if [ -f "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh" ]; then
+            chmod +x "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh"
             echo "✅ 修复错误分析脚本权限: firmware-config/scripts/error_analysis.sh"
           fi
           
-          echo "✅ 权限修复完成"
+          # 修复其他脚本权限
+          find "${{ github.workspace }}/firmware-config/scripts" -name "*.sh" -exec chmod +x {} \;
+          echo "✅ 修复所有脚本权限完成"
       
       # 步骤 5: 初始空间检查
       - name: "5. 初始空间检查"
@@ -124,16 +226,16 @@ jobs:
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           echo "🔄 步骤 6.1: 设置编译环境"
-          firmware-config/scripts/build_firmware_main.sh setup_environment
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" setup_environment
           
           echo "🔄 步骤 6.2: 创建构建目录"
-          firmware-config/scripts/build_firmware_main.sh create_build_dir
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" create_build_dir
           
           echo "🔄 步骤 6.3: 初始化构建环境"
-          echo "设备: ${{ github.event.inputs.device_name }}"
-          echo "版本: ${{ github.event.inputs.version_selection }}"
-          echo "配置模式: ${{ github.event.inputs.config_mode }}"
-          firmware-config/scripts/build_firmware_main.sh initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}"
+          echo "📱 设备: ${{ github.event.inputs.device_name }}"
+          echo "🔄 版本: ${{ github.event.inputs.version_selection }}"
+          echo "⚙️ 配置模式: ${{ github.event.inputs.config_mode }}"
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}"
           
           echo "✅ 编译环境和构建目录设置完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
@@ -144,7 +246,7 @@ jobs:
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🚀 开始下载OpenWrt官方SDK工具链..."
           
-          firmware-config/scripts/build_firmware_main.sh initialize_compiler_env "${{ github.event.inputs.device_name }}"
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_compiler_env "${{ github.event.inputs.device_name }}"
           
           echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
@@ -193,7 +295,7 @@ jobs:
         run: |
           echo "=== 步骤 9: 添加 TurboACC 支持 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          firmware-config/scripts/build_firmware_main.sh add_turboacc_support
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" add_turboacc_support
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
       # 步骤 10: 配置Feeds
@@ -201,7 +303,7 @@ jobs:
         run: |
           echo "=== 步骤 10: 配置Feeds ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          firmware-config/scripts/build_firmware_main.sh configure_feeds
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" configure_feeds
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
       # 步骤 11: 安装 TurboACC 包
@@ -210,7 +312,7 @@ jobs:
         run: |
           echo "=== 步骤 11: 安装 TurboACC 包 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          firmware-config/scripts/build_firmware_main.sh install_turboacc_packages
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" install_turboacc_packages
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
       # 步骤 12: 编译前空间检查
@@ -218,7 +320,7 @@ jobs:
         run: |
           echo "=== 步骤 12: 编译前空间检查 ==="
           echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          firmware-config/scripts/build_firmware_main.sh pre_build_space_check
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_space_check
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
       # 步骤 13: 智能配置生成
@@ -226,7 +328,7 @@ jobs:
         run: |
           echo "=== 步骤 13: 智能配置生成 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          firmware-config/scripts/build_firmware_main.sh generate_config "${{ github.event.inputs.extra_packages }}"
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" generate_config "${{ github.event.inputs.extra_packages }}"
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
       # 步骤 14: 验证USB配置
@@ -234,7 +336,7 @@ jobs:
         run: |
           echo "=== 步骤 14: 验证USB配置 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          firmware-config/scripts/build_firmware_main.sh verify_usb_config
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" verify_usb_config
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
       # 步骤 15: USB驱动完整性检查
@@ -242,10 +344,10 @@ jobs:
         run: |
           echo "=== 步骤 15: USB驱动完整性检查 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          firmware-config/scripts/build_firmware_main.sh check_usb_drivers_integrity
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" check_usb_drivers_integrity
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 16: 应用配置并显示详情
+      # 步骤 16: 应用配置并显示详情（修复版）
       - name: "16. 应用配置并显示详情"
         run: |
           echo "=== 步骤 16: 应用配置并显示详情 ==="
@@ -256,7 +358,7 @@ jobs:
             echo "✅ 已备份原始配置文件"
           fi
           
-          firmware-config/scripts/build_firmware_main.sh apply_config
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" apply_config
           
           echo "=== 最终配置状态检查 ==="
           if [ -f "/mnt/openwrt-build/.config" ]; then
@@ -277,8 +379,8 @@ jobs:
             grep "CONFIG_PACKAGE_kmod-fs-" "/mnt/openwrt-build/.config" | head -5
             
             echo "5. 插件配置统计:"
-            local enabled=$(grep -c "CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config")
-            local disabled=$(grep -c "# CONFIG_PACKAGE_.* is not set" "/mnt/openwrt-build/.config")
+            enabled=$(grep -c "CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config")
+            disabled=$(grep -c "# CONFIG_PACKAGE_.* is not set" "/mnt/openwrt-build/.config")
             echo "   已启用插件: $enabled 个"
             echo "   已禁用插件: $disabled 个"
           fi
@@ -298,11 +400,11 @@ jobs:
             echo "📝 文件行数: $(wc -l < "/mnt/openwrt-build/.config")"
             
             # 确保备份目录存在
-            mkdir -p firmware-config/config-backup
+            mkdir -p "${{ github.workspace }}/firmware-config/config-backup"
             
             # 备份到仓库目录
             TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-            BACKUP_FILE="firmware-config/config-backup/config_${{ github.event.inputs.device_name }}_${TIMESTAMP}.config"
+            BACKUP_FILE="${{ github.workspace }}/firmware-config/config-backup/config_${{ github.event.inputs.device_name }}_${TIMESTAMP}.config"
             
             cp "/mnt/openwrt-build/.config" "$BACKUP_FILE"
             echo "✅ 配置文件备份到仓库目录: $BACKUP_FILE"
@@ -317,8 +419,8 @@ jobs:
         run: |
           echo "=== 步骤 18: 修复网络环境 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          firmware-config/scripts/build_firmware_main.sh fix_network
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" fix_network
+          echo "✅ 完成时间: $(date '+%Y-%m-d %H:%M:%S')"
       
       # 步骤 19: 下载依赖包
       - name: "19. 下载依赖包"
@@ -330,7 +432,7 @@ jobs:
             source /mnt/openwrt-build/build_env.sh
           fi
           
-          firmware-config/scripts/build_firmware_main.sh download_dependencies
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" download_dependencies
           
           echo "📊 依赖包统计:"
           dl_count=$(find /mnt/openwrt-build/dl -type f 2>/dev/null | wc -l)
@@ -349,7 +451,7 @@ jobs:
         run: |
           echo "=== 步骤 20: 集成自定义文件 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          firmware-config/scripts/build_firmware_main.sh integrate_custom_files
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
       # 步骤 21: 前置错误检查
@@ -358,7 +460,7 @@ jobs:
           echo "=== 步骤 21: 前置错误检查 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          firmware-config/scripts/build_firmware_main.sh pre_build_error_check
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_error_check
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
@@ -428,7 +530,7 @@ jobs:
           echo "设备: ${{ github.event.inputs.device_name }}" >> /tmp/build-logs/compile_start.log
           echo "版本: ${{ env.SELECTED_BRANCH }}" >> /tmp/build-logs/compile_start.log
           
-          firmware-config/scripts/build_firmware_main.sh build_firmware "true"
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" build_firmware "true"
           
           echo "编译结束时间: $(date '+%Y-%m-%d %H:%M:%S')" >> /tmp/build-logs/compile_start.log
           
@@ -506,11 +608,11 @@ jobs:
           echo "=== 步骤 28: 执行错误分析 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          if [ -f "firmware-config/scripts/error_analysis.sh" ]; then
-            chmod +x firmware-config/scripts/error_analysis.sh
+          if [ -f "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh" ]; then
+            chmod +x "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh"
             export BUILD_DIR="/mnt/openwrt-build"
             
-            firmware-config/scripts/error_analysis.sh
+            "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh"
             
             echo "✅ 错误分析完成"
           else
