@@ -45,10 +45,10 @@ jobs:
           submodules: recursive
           token: ${{ secrets.GITHUB_TOKEN }}
       
-      # 步骤 2: 验证源代码完整性
-      - name: "2. 验证源代码完整性"
+      # 步骤 2: 下载源代码和验证
+      - name: "2. 下载源代码和验证"
         run: |
-          echo "=== 步骤 2: 验证源代码完整性 ==="
+          echo "=== 步骤 2: 下载源代码和验证 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "工作流运行ID: ${{ github.run_id }}"
           echo "工作流运行号: ${{ github.run_number }}"
@@ -61,58 +61,21 @@ jobs:
           echo "📊 工作区大小: $(du -sh ${{ github.workspace }} | cut -f1)"
           echo ""
           
-          # 检查firmware-config目录
-          echo "🔍 检查 firmware-config 目录..."
+          # 显示当前目录内容
+          echo "📁 当前目录内容:"
+          ls -la
+          echo ""
+          
+          # 简单验证firmware-config目录
+          echo "🔍 简单验证 firmware-config 目录..."
           if [ -d "firmware-config" ]; then
             echo "✅ firmware-config 目录存在"
-            echo "📊 目录大小: $(du -sh firmware-config | cut -f1)"
-            
-            # 检查关键脚本文件
-            echo ""
-            echo "🔍 检查关键脚本文件..."
-            local key_scripts=(
-              "firmware-config/scripts/build_firmware_main.sh"
-              "firmware-config/scripts/error_analysis.sh"
-            )
-            
-            for script in "${key_scripts[@]}"; do
-              if [ -f "$script" ]; then
-                echo "✅ 脚本文件存在: $script ($(ls -lh "$script" | awk '{print $5}'))"
-                # 设置执行权限
-                chmod +x "$script"
-              else
-                echo "❌ 脚本文件缺失: $script"
-                exit 1
-              fi
-            done
-            
-            # 显示scripts目录内容
-            echo ""
-            echo "📁 scripts目录内容:"
-            find firmware-config/scripts -type f -name "*.sh" | sort
-            
+            echo "📊 目录内容:"
+            ls -la firmware-config/
           else
             echo "❌ firmware-config 目录不存在！"
-            echo "当前工作区内容:"
-            ls -la
             exit 1
           fi
-          
-          # 检查工作流文件
-          echo ""
-          echo "🔍 检查工作流文件..."
-          if [ -d ".github/workflows" ]; then
-            echo "✅ 工作流目录存在"
-            echo "📄 工作流文件:"
-            ls -la .github/workflows/
-          else
-            echo "⚠️ 工作流目录不存在，但可能不需要"
-          fi
-          
-          # 设置所有脚本的执行权限
-          echo ""
-          echo "🔧 设置所有脚本执行权限..."
-          find . -name "*.sh" -exec chmod +x {} \;
           
           echo "✅ 步骤2完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
@@ -131,18 +94,19 @@ jobs:
           echo "=== 步骤 4: 修复权限问题 ==="
           echo "🔧 修复所有脚本的执行权限..."
           
-          # 查找并修复所有脚本文件的权限
-          find firmware-config -type f -name "*.sh" -exec chmod +x {} \;
-          
-          # 修复主脚本权限
+          # 设置主脚本权限
           if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
             chmod +x firmware-config/scripts/build_firmware_main.sh
             echo "✅ 修复主脚本权限: firmware-config/scripts/build_firmware_main.sh"
           else
             echo "❌ 主脚本不存在: firmware-config/scripts/build_firmware_main.sh"
-            echo "列出firmware-config目录内容:"
-            find firmware-config -type f 2>/dev/null || echo "firmware-config目录不存在"
             exit 1
+          fi
+          
+          # 设置错误分析脚本权限
+          if [ -f "firmware-config/scripts/error_analysis.sh" ]; then
+            chmod +x firmware-config/scripts/error_analysis.sh
+            echo "✅ 修复错误分析脚本权限: firmware-config/scripts/error_analysis.sh"
           fi
           
           echo "✅ 权限修复完成"
@@ -226,8 +190,6 @@ jobs:
           if [ -d "/mnt/openwrt-build/sdk" ]; then
             echo "✅ SDK目录存在: /mnt/openwrt-build/sdk"
             echo "📊 SDK目录大小: $(du -sh /mnt/openwrt-build/sdk 2>/dev/null | cut -f1 || echo '未知')"
-            echo "📁 SDK目录内容:"
-            ls -la /mnt/openwrt-build/sdk/ 2>/dev/null || echo "无法列出SDK目录内容"
           else
             echo "❌ SDK目录不存在"
           fi
@@ -237,7 +199,7 @@ jobs:
             echo "✅ 编译器目录存在: $COMPILER_DIR"
             echo "📊 编译器目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
             
-            # 查找GCC编译器（不使用local关键字）
+            # 查找GCC编译器
             echo "🔍 查找GCC编译器..."
             GCC_FILE=$(find "$COMPILER_DIR" -type f -executable \
               -name "*gcc" \
@@ -251,17 +213,11 @@ jobs:
               echo "🔧 GCC版本: $("$GCC_FILE" --version 2>&1 | head -1)"
             else
               echo "⚠️ 未找到真正的GCC编译器"
-              echo "🔍 查找所有gcc相关文件:"
-              find "$COMPILER_DIR" -type f -name "*gcc*" 2>/dev/null | head -10
             fi
           else
             echo "❌ 编译器目录不存在或无效"
             echo "COMPILER_DIR: $COMPILER_DIR"
           fi
-          
-          # 检查是否在PATH中
-          echo "🔍 检查编译器PATH:"
-          echo "$PATH" | tr ':' '\n' | grep -i "gcc\|compiler\|sdk" || echo "未找到编译器路径"
           
           echo "✅ SDK验证完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
