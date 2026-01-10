@@ -109,11 +109,11 @@ jobs:
           rm -rf openwrt-source
           echo "✅ Git Archive API下载完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 2: 上传源代码Artifacts
+      # 步骤 2: 上传源代码Artifacts（修改文件名）
       - name: "2. 上传源代码Artifacts"
         uses: actions/upload-artifact@v4
         with:
-          name: source-${{ github.event.inputs.device_name }}-${{ github.run_id }}
+          name: source-${{ github.event.inputs.device_name }}-$(date +%Y%m%d_%H%M%S)
           path: /tmp/build-artifacts/source-archive/
           retention-days: 7
           if-no-files-found: error
