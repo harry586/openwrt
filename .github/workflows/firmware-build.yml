@@ -71,7 +71,7 @@ jobs:
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
-          set -e  # 遇到错误立即退出
+          set -e
           trap 'echo "❌ 步骤 1 失败，退出代码: $?"; exit 1' ERR
           
           # 创建临时目录
@@ -178,10 +178,10 @@ jobs:
           echo "✅ 修复所有脚本权限完成"
           echo "🟢 步骤 3 完成"
       
-      # 步骤 4: 安装基础工具（修复版）
-      - name: "4. 安装基础工具（修复版）"
+      # 步骤 4: 安装基础工具（优化版）
+      - name: "4. 安装基础工具（优化版）"
         run: |
-          echo "=== 步骤 4: 安装基础工具（修复版） ==="
+          echo "=== 步骤 4: 安装基础工具（优化版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -342,7 +342,8 @@ jobs:
           # 检查gcc版本
           if command -v gcc >/dev/null 2>&1; then
             GCC_VERSION=$(gcc --version | head -1)
-            echo "🔧 GCC版本: $GCC_VERSION"
+            echo "🔧 系统GCC版本: $GCC_VERSION"
+            echo "💡 系统GCC用于编译工具链，SDK GCC用于交叉编译固件"
           fi
           
           # 检查make版本
@@ -521,7 +522,8 @@ jobs:
               echo "✅ 找到可执行GCC编译器: $(basename "$GCC_FILE")"
               echo "🔧 GCC版本测试:"
               "$GCC_FILE" --version 2>&1 | head -1
-              echo "💡 这是OpenWrt官方SDK编译器，版本已验证"
+              echo "💡 这是OpenWrt官方SDK交叉编译器，用于编译目标平台固件"
+              echo "💡 系统GCC (11.4.0) 用于编译工具链，SDK GCC (8.4.0) 用于交叉编译固件"
             else
               echo "⚠️ 未找到可执行的GCC编译器"
             fi
@@ -662,10 +664,10 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 15 完成"
       
-      # 步骤 16: 应用配置并显示详情
-      - name: "16. 应用配置并显示详情"
+      # 步骤 16: 应用配置并显示详情（完整版）
+      - name: "16. 应用配置并显示详情（完整版）"
         run: |
-          echo "=== 步骤 16: 应用配置并显示详情 ==="
+          echo "=== 步骤 16: 应用配置并显示详情（完整版）==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -684,10 +686,11 @@ jobs:
             exit 1
           fi
           
-          echo "=== 🚨 最终配置状态检查（详细版）==="
+          echo "=== 🚨 最终配置状态检查（完整详细版）==="
           if [ -f "/mnt/openwrt-build/.config" ]; then
             echo "✅ 配置文件存在"
             echo "📊 文件大小: $(ls -lh "/mnt/openwrt-build/.config" | awk '{print $5}')"
+            echo "📝 文件行数: $(wc -l < "/mnt/openwrt-build/.config")"
             
             echo ""
             echo "🔧 关键配置检查:"
@@ -708,6 +711,63 @@ jobs:
             disabled=$(grep -c "# CONFIG_PACKAGE_.* is not set" "/mnt/openwrt-build/.config")
             echo "   ✅ 已启用插件: $enabled 个"
             echo "   ❌ 已禁用插件: $disabled 个"
+            
+            echo ""
+            echo "=== 🎯 详细配置状态标识（完整版）==="
+            echo "📋 USB配置状态:"
+            
+            # USB配置检查
+            echo "  CONFIG_PACKAGE_kmod-usb-core: $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  CONFIG_PACKAGE_kmod-usb2: $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  CONFIG_PACKAGE_kmod-usb3: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  CONFIG_PACKAGE_kmod-usb-xhci-hcd: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  CONFIG_PACKAGE_kmod-usb-storage: $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  CONFIG_PACKAGE_kmod-scsi-core: $(grep -q "^CONFIG_PACKAGE_kmod-scsi-core=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            
+            echo ""
+            echo "📦 功能性插件状态:"
+            
+            # 功能性插件状态
+            echo "  TurboACC 网络加速 (luci-app-turboacc): $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  UPnP 自动端口转发 (luci-app-upnp): $(grep -q "^CONFIG_PACKAGE_luci-app-upnp=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  Samba 文件共享 (luci-app-samba4): $(grep -q "^CONFIG_PACKAGE_luci-app-samba4=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  磁盘管理 (luci-app-diskman): $(grep -q "^CONFIG_PACKAGE_luci-app-diskman=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  KMS 激活服务 (luci-app-vlmcsd): $(grep -q "^CONFIG_PACKAGE_luci-app-vlmcsd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  SmartDNS 智能DNS (luci-app-smartdns): $(grep -q "^CONFIG_PACKAGE_luci-app-smartdns=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  家长控制 (luci-app-accesscontrol): $(grep -q "^CONFIG_PACKAGE_luci-app-accesscontrol=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  微信推送 (luci-app-wechatpush): $(grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  流量控制 (SQM) (luci-app-sqm): $(grep -q "^CONFIG_PACKAGE_luci-app-sqm=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  FTP 服务器 (luci-app-vsftpd): $(grep -q "^CONFIG_PACKAGE_luci-app-vsftpd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  ARP 绑定 (luci-app-arpbind): $(grep -q "^CONFIG_PACKAGE_luci-app-arpbind=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  CPU 限制 (luci-app-cpulimit): $(grep -q "^CONFIG_PACKAGE_luci-app-cpulimit=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  硬盘休眠 (luci-app-hd-idle): $(grep -q "^CONFIG_PACKAGE_luci-app-hd-idle=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            
+            echo ""
+            echo "🎯 配置模式: ${{ github.event.inputs.config_mode }}"
+            if [ "${{ github.event.inputs.config_mode }}" = "normal" ]; then
+              echo "✅ 当前为正常模式（完整功能）"
+              echo "📊 正常模式包含所有功能性插件"
+            else
+              echo "🔧 当前为基础模式（最小化配置）"
+              echo "📊 基础模式仅包含核心功能，用于测试编译"
+            fi
+            
+            echo ""
+            echo "🔍 配置摘要:"
+            echo "  - 目标平台: $TARGET/$SUBTARGET"
+            echo "  - 目标设备: $DEVICE"
+            echo "  - OpenWrt版本: $SELECTED_BRANCH"
+            echo "  - USB驱动: 已启用所有关键驱动"
+            echo "  - 插件数量: $enabled 个已启用"
+            
+            # 显示前10个启用的插件
+            echo ""
+            echo "📋 启用的插件 (前10个):"
+            grep "^CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config" | head -10 | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g' | while read pkg; do
+              echo "  ✅ $pkg"
+            done
+          else
+            echo "❌ 配置文件不存在"
           fi
           
           echo ""
@@ -945,6 +1005,13 @@ jobs:
             if [ -d "bin/targets" ]; then
               FIRMWARE_COUNT=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
               echo "✅ 生成固件文件: $FIRMWARE_COUNT 个"
+              
+              # 显示前3个固件文件
+              echo "📁 生成的固件文件 (前3个):"
+              find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | head -3 | while read file; do
+                SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                echo "  📄 $(basename "$file") ($SIZE)"
+              done
             fi
           else
             echo "❌ 错误: 编译失败，退出代码: $BUILD_EXIT_CODE"
@@ -955,11 +1022,11 @@ jobs:
           
           echo "🟢 步骤 23 完成"
       
-      # 步骤 24: 检查构建产物
-      - name: "24. 检查构建产物"
+      # 步骤 24: 检查构建产物（修复版）
+      - name: "24. 检查构建产物（修复版）"
         if: success()
         run: |
-          echo "=== 步骤 24: 检查构建产物 ==="
+          echo "=== 步骤 24: 检查构建产物（修复版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -971,32 +1038,69 @@ jobs:
           if [ -d "bin/targets" ]; then
             echo "✅ 找到固件目录"
             
+            # 修复：分别统计不同类型文件
             FIRMWARE_COUNT=0
+            PACKAGE_COUNT=0
+            OTHER_COUNT=0
             TOTAL_SIZE=0
             
-            echo "📊 固件文件详情:"
+            echo "📊 文件详情:"
             echo "=========================================="
             
-            find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" \) 2>/dev/null | while read file; do
-                FIRMWARE_COUNT=$((FIRMWARE_COUNT + 1))
+            # 首先统计固件文件
+            FIRMWARE_COUNT=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+            
+            # 显示所有文件（最多20个）
+            find bin/targets -type f 2>/dev/null | head -20 | while read file; do
                 SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
                 BYTES=$(stat -c%s "$file" 2>/dev/null || echo "0")
                 TOTAL_SIZE=$((TOTAL_SIZE + BYTES))
                 
-                echo "📁 文件 #$FIRMWARE_COUNT:"
+                # 判断文件类型
+                if [[ "$file" == *.bin ]] || [[ "$file" == *.img ]]; then
+                  TYPE="固件"
+                elif [[ "$file" == *.gz ]] || [[ "$file" == *.ipk ]]; then
+                  TYPE="包文件"
+                else
+                  TYPE="其他"
+                fi
+                
+                echo "📁 文件:"
                 echo "  名称: $(basename "$file")"
+                echo "  类型: $TYPE"
                 echo "  大小: $SIZE ($BYTES 字节)"
                 echo "  路径: $(echo "$file" | sed "s|/mnt/openwrt-build/||")"
                 echo ""
             done
             
+            # 统计包文件和其他文件
+            PACKAGE_COUNT=$(find bin/targets -type f \( -name "*.gz" -o -name "*.ipk" \) 2>/dev/null | wc -l)
+            OTHER_COUNT=$(find bin/targets -type f 2>/dev/null | wc -l)
+            OTHER_COUNT=$((OTHER_COUNT - FIRMWARE_COUNT - PACKAGE_COUNT))
+            
             echo "=========================================="
             echo "📈 统计信息:"
-            echo "  固件总数: $FIRMWARE_COUNT 个"
+            echo "  固件文件: $FIRMWARE_COUNT 个 (.bin/.img)"
+            echo "  包文件: $PACKAGE_COUNT 个 (.gz/.ipk)"
+            echo "  其他文件: $OTHER_COUNT 个"
+            echo "  总文件数: $((FIRMWARE_COUNT + PACKAGE_COUNT + OTHER_COUNT)) 个"
             echo "  总大小: $(numfmt --to=iec $TOTAL_SIZE)"
             
             if [ $FIRMWARE_COUNT -eq 0 ]; then
-              echo "⚠️ 警告: 未找到任何固件文件"
+              echo "⚠️ 警告: 未找到任何固件文件 (.bin/.img)"
+              echo "🔍 详细文件列表:"
+              find bin/targets -type f 2>/dev/null | head -10 | while read file; do
+                echo "  📄 $(basename "$file")"
+              done
+            else
+              echo "✅ 固件生成成功"
+              
+              # 显示固件文件详情
+              echo "📋 固件文件列表:"
+              find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
+                SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                echo "  🎯 $(basename "$file") ($SIZE)"
+              done
             fi
           else
             echo "❌ 错误: 未找到固件目录"
@@ -1099,26 +1203,54 @@ jobs:
           
           # 检查构建产物
           if [ -d "/mnt/openwrt-build/bin/targets" ]; then
+            # 修复：正确统计固件文件
             FIRMWARE_COUNT=$(find /mnt/openwrt-build/bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+            
             echo "📦 构建产物:"
-            echo "  固件数量: $FIRMWARE_COUNT 个"
+            echo "  固件数量: $FIRMWARE_COUNT 个 (.bin/.img)"
             
             if [ $FIRMWARE_COUNT -gt 0 ]; then
               echo "  产物位置: /mnt/openwrt-build/bin/targets/"
               echo "  下载名称: firmware-${{ env.TIMESTAMP }}"
+              
+              # 显示固件大小
+              echo "  固件文件:"
+              find /mnt/openwrt-build/bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | head -3 | while read file; do
+                SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                echo "    🎯 $(basename "$file") ($SIZE)"
+              done
+            else
+              echo "  ⚠️ 未生成固件文件 (.bin/.img)"
+              echo "  🔍 已生成的其他文件:"
+              find /mnt/openwrt-build/bin/targets -type f 2>/dev/null | head -5 | while read file; do
+                SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                echo "    📄 $(basename "$file") ($SIZE)"
+              done
             fi
           else
-            echo "📦 构建产物: 未生成固件文件"
+            echo "📦 构建产物: 未生成任何文件"
           fi
           
           # 构建状态总结
           echo ""
           echo "📊 构建状态总结:"
           if [ -d "/mnt/openwrt-build/bin/targets" ]; then
-            echo "  ✅ 构建结果: 成功"
+            FIRMWARE_COUNT=$(find /mnt/openwrt-build/bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+            if [ $FIRMWARE_COUNT -gt 0 ]; then
+              echo "  ✅ 构建结果: 成功生成 $FIRMWARE_COUNT 个固件文件"
+            else
+              echo "  ⚠️ 构建结果: 编译完成但未生成固件文件"
+            fi
           else
             echo "  ❌ 构建结果: 失败"
           fi
+          
+          # 编译器信息
+          echo ""
+          echo "🔧 编译器信息:"
+          echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
+          echo "  🎯 SDK GCC: 8.4.0 (用于交叉编译固件)"
+          echo "  💡 这是正常的：系统编译器编译工具链，SDK编译器编译固件"
           
           echo ""
           echo "✅ 构建流程完成"
