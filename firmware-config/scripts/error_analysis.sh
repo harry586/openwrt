@@ -632,7 +632,7 @@ analyze_version_specific() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 10. 新增：详细错误分析函数
+# 10. 新增：详细错误分析函数（修复版）
 analyze_detailed_errors() {
     log "🔍 执行详细错误分析..."
     
@@ -642,150 +642,96 @@ analyze_detailed_errors() {
     if [ -f "$BUILD_DIR/build.log" ]; then
         echo "📊 构建日志错误详细分析:" >> "$REPORT_FILE"
         
-        # 1. 编译器相关错误
-        echo "🔧 1. 编译器相关错误:" >> "$REPORT_FILE"
+        # 1. 编译器相关错误（实际错误）
+        echo "🔧 1. 编译器相关错误 (实际发生的):" >> "$REPORT_FILE"
         local compiler_errors=$(grep -i "gcc.*error\|ld.*error\|collect2.*error\|undefined reference" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
         if [ -n "$compiler_errors" ]; then
             echo "$compiler_errors" >> "$REPORT_FILE"
-            
-            # 分析常见编译器错误
-            echo "💡 编译器错误分析:" >> "$REPORT_FILE"
-            if echo "$compiler_errors" | grep -q "undefined reference"; then
-                echo "  ❌ 未定义引用错误: 可能是库文件缺失或链接顺序问题" >> "$REPORT_FILE"
-                echo "  🛠️ 修复: 检查依赖库是否正确安装，调整链接顺序" >> "$REPORT_FILE"
-            fi
-            
-            if echo "$compiler_errors" | grep -q "No such file"; then
-                echo "  ❌ 文件不存在错误: 头文件或源文件缺失" >> "$REPORT_FILE"
-                echo "  🛠️ 修复: 检查文件路径，确保所有依赖文件已下载" >> "$REPORT_FILE"
-            fi
-            
-            if echo "$compiler_errors" | grep -q "multiple definition"; then
-                echo "  ❌ 多重定义错误: 同一个符号被多次定义" >> "$REPORT_FILE"
-                echo "  🛠️ 修复: 检查是否有重复的源文件或库" >> "$REPORT_FILE"
-            fi
         else
             echo "  无编译器相关错误" >> "$REPORT_FILE"
         fi
         echo "" >> "$REPORT_FILE"
         
-        # 2. 头文件缺失错误
-        echo "📄 2. 头文件缺失错误:" >> "$REPORT_FILE"
+        # 2. 头文件缺失错误（实际错误）
+        echo "📄 2. 头文件缺失错误 (实际发生的):" >> "$REPORT_FILE"
         local header_errors=$(grep -i "stdc-predef.h\|stdio.h\|stdlib.h\|.*\.h: No such file" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
         if [ -n "$header_errors" ]; then
             echo "$header_errors" >> "$REPORT_FILE"
-            echo "💡 头文件错误分析:" >> "$REPORT_FILE"
-            echo "  ❌ 标准头文件缺失" >> "$REPORT_FILE"
-            echo "  🛠️ 修复: 创建host/include目录并复制头文件" >> "$REPORT_FILE"
-            echo "    mkdir -p $BUILD_DIR/staging_dir/host/include" >> "$REPORT_FILE"
-            echo "    touch $BUILD_DIR/staging_dir/host/include/stdc-predef.h" >> "$REPORT_FILE"
-            echo "    touch $BUILD_DIR/staging_dir/host/include/stdio.h" >> "$REPORT_FILE"
-            echo "    touch $BUILD_DIR/staging_dir/host/include/stdlib.h" >> "$REPORT_FILE"
         else
             echo "  无头文件缺失错误" >> "$REPORT_FILE"
         fi
         echo "" >> "$REPORT_FILE"
         
-        # 3. 下载错误
-        echo "📥 3. 下载错误:" >> "$REPORT_FILE"
+        # 3. 下载错误（实际错误）
+        echo "📥 3. 下载错误 (实际发生的):" >> "$REPORT_FILE"
         local download_errors=$(grep -i "404\|Failed\|timeout\|connection refused\|SSL_ERROR" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
         if [ -n "$download_errors" ]; then
             echo "$download_errors" >> "$REPORT_FILE"
-            echo "💡 下载错误分析:" >> "$REPORT_FILE"
-            echo "  ❌ 网络下载问题" >> "$REPORT_FILE"
-            echo "  🛠️ 修复:" >> "$REPORT_FILE"
-            echo "    1. 检查网络连接" >> "$REPORT_FILE"
-            echo "    2. 配置代理服务器" >> "$REPORT_FILE"
-            echo "    3. 手动下载缺失文件到dl目录" >> "$REPORT_FILE"
-            echo "    4. 禁用SSL验证: export GIT_SSL_NO_VERIFY=1" >> "$REPORT_FILE"
         else
             echo "  无下载错误" >> "$REPORT_FILE"
         fi
         echo "" >> "$REPORT_FILE"
         
-        # 4. 权限错误
-        echo "🔐 4. 权限错误:" >> "$REPORT_FILE"
+        # 4. 权限错误（实际错误）
+        echo "🔐 4. 权限错误 (实际发生的):" >> "$REPORT_FILE"
         local permission_errors=$(grep -i "permission denied\|cannot create\|read-only\|Operation not permitted" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
         if [ -n "$permission_errors" ]; then
             echo "$permission_errors" >> "$REPORT_FILE"
-            echo "💡 权限错误分析:" >> "$REPORT_FILE"
-            echo "  ❌ 文件系统权限问题" >> "$REPORT_FILE"
-            echo "  🛠️ 修复:" >> "$REPORT_FILE"
-            echo "    1. 检查目录权限: ls -la $BUILD_DIR" >> "$REPORT_FILE"
-            echo "    2. 修复权限: chmod -R 755 $BUILD_DIR" >> "$REPORT_FILE"
-            echo "    3. 修复所有者: chown -R $(whoami) $BUILD_DIR" >> "$REPORT_FILE"
-            echo "    4. 检查磁盘是否只读" >> "$REPORT_FILE"
         else
             echo "  无权限错误" >> "$REPORT_FILE"
         fi
         echo "" >> "$REPORT_FILE"
         
-        # 5. 内存不足错误
-        echo "💾 5. 内存不足错误:" >> "$REPORT_FILE"
+        # 5. 内存不足错误（实际错误）
+        echo "💾 5. 内存不足错误 (实际发生的):" >> "$REPORT_FILE"
         local memory_errors=$(grep -i "out of memory\|Killed process\|terminated\|oom\|swap" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
         if [ -n "$memory_errors" ]; then
             echo "$memory_errors" >> "$REPORT_FILE"
-            echo "💡 内存错误分析:" >> "$REPORT_FILE"
-            echo "  ❌ 系统内存或交换空间不足" >> "$REPORT_FILE"
-            echo "  🛠️ 修复:" >> "$REPORT_FILE"
-            echo "    1. 增加交换空间" >> "$REPORT_FILE"
-            echo "    2. 减少并行编译任务: make -j1 V=s" >> "$REPORT_FILE"
-            echo "    3. 关闭其他占用内存的程序" >> "$REPORT_FILE"
-            echo "    4. 增加物理内存" >> "$REPORT_FILE"
         else
             echo "  无内存错误" >> "$REPORT_FILE"
         fi
         echo "" >> "$REPORT_FILE"
         
-        # 6. 特定包编译错误
-        echo "📦 6. 特定包编译错误:" >> "$REPORT_FILE"
+        # 6. 特定包编译错误（实际错误）
+        echo "📦 6. 特定包编译错误 (实际发生的):" >> "$REPORT_FILE"
         local package_errors=$(grep -i "package/.*failed\|recipe for target.*failed\|Error .* in package" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
         if [ -n "$package_errors" ]; then
             echo "$package_errors" >> "$REPORT_FILE"
-            echo "💡 包编译错误分析:" >> "$REPORT_FILE"
-            echo "  ❌ 特定软件包编译失败" >> "$REPORT_FILE"
-            echo "  🛠️ 修复:" >> "$REPORT_FILE"
-            echo "    1. 禁用该包: 在配置中取消选择" >> "$REPORT_FILE"
-            echo "    2. 检查包依赖: 确保所有依赖已安装" >> "$REPORT_FILE"
-            echo "    3. 查看具体包的错误日志" >> "$REPORT_FILE"
-            echo "    4. 更新feeds: ./scripts/feeds update -a" >> "$REPORT_FILE"
         else
             echo "  无特定包编译错误" >> "$REPORT_FILE"
         fi
         echo "" >> "$REPORT_FILE"
         
-        # 7. 磁盘空间错误
-        echo "💿 7. 磁盘空间错误:" >> "$REPORT_FILE"
+        # 7. 磁盘空间错误（实际错误）
+        echo "💿 7. 磁盘空间错误 (实际发生的):" >> "$REPORT_FILE"
         local disk_errors=$(grep -i "no space left\|disk full\|write error\|ENOSPC" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
         if [ -n "$disk_errors" ]; then
             echo "$disk_errors" >> "$REPORT_FILE"
-            echo "💡 磁盘空间错误分析:" >> "$REPORT_FILE"
-            echo "  ❌ 磁盘空间不足" >> "$REPORT_FILE"
-            echo "  🛠️ 修复:" >> "$REPORT_FILE"
-            echo "    1. 清理临时文件: rm -rf $BUILD_DIR/tmp" >> "$REPORT_FILE"
-            echo "    2. 清理构建缓存: rm -rf $BUILD_DIR/build_dir" >> "$REPORT_FILE"
-            echo "    3. 扩展磁盘空间" >> "$REPORT_FILE"
-            echo "    4. 使用更大的磁盘" >> "$REPORT_FILE"
         else
             echo "  无磁盘空间错误" >> "$REPORT_FILE"
         fi
         echo "" >> "$REPORT_FILE"
         
-        # 8. 时间戳错误
-        echo "🕐 8. 时间戳错误:" >> "$REPORT_FILE"
+        # 8. 时间戳错误（实际错误）
+        echo "🕐 8. 时间戳错误 (实际发生的):" >> "$REPORT_FILE"
         local timestamp_errors=$(grep -i "clock skew\|time stamp\|timestamp" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
         if [ -n "$timestamp_errors" ]; then
             echo "$timestamp_errors" >> "$REPORT_FILE"
-            echo "💡 时间戳错误分析:" >> "$REPORT_FILE"
-            echo "  ❌ 文件时间戳不一致" >> "$REPORT_FILE"
-            echo "  🛠️ 修复:" >> "$REPORT_FILE"
-            echo "    1. 同步系统时间" >> "$REPORT_FILE"
-            echo "    2. 修复文件时间戳: find $BUILD_DIR -type f -exec touch {} \;" >> "$REPORT_FILE"
-            echo "    3. 禁用时间戳检查" >> "$REPORT_FILE"
         else
             echo "  无时间戳错误" >> "$REPORT_FILE"
         fi
         echo "" >> "$REPORT_FILE"
+        
+        # 9. 显示实际错误统计
+        echo "📈 实际错误统计汇总:" >> "$REPORT_FILE"
+        echo "  编译器错误: $(echo "$compiler_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
+        echo "  头文件错误: $(echo "$header_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
+        echo "  下载错误: $(echo "$download_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
+        echo "  权限错误: $(echo "$permission_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
+        echo "  内存错误: $(echo "$memory_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
+        echo "  包编译错误: $(echo "$package_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
+        echo "  磁盘空间错误: $(echo "$disk_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
+        echo "  时间戳错误: $(echo "$timestamp_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
         
     else
         echo "❌ 构建日志文件不存在，无法进行详细错误分析" >> "$REPORT_FILE"
