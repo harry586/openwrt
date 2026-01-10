@@ -421,10 +421,10 @@ jobs:
           echo "✅ 编译环境和构建目录设置完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 6 完成"
       
-      # 步骤 7: 下载OpenWrt官方SDK
-      - name: "7. 下载OpenWrt官方SDK"
+      # 步骤 7: 下载OpenWrt官方SDK（修复版）
+      - name: "7. 下载OpenWrt官方SDK（修复版）"
         run: |
-          echo "=== 步骤 7: 下载OpenWrt官方SDK ==="
+          echo "=== 步骤 7: 下载OpenWrt官方SDK（修复版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -433,10 +433,29 @@ jobs:
           
           echo "🚀 开始下载OpenWrt官方SDK工具链..."
           
-          # 先确保环境文件存在
+          # 先检查环境文件是否已经存在
           echo "🔍 检查环境文件..."
-          if [ ! -f "/mnt/openwrt-build/build_env.sh" ]; then
-            echo "⚠️ 环境文件不存在，手动创建基础环境变量"
+          if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
+            echo "✅ 环境文件已存在（由步骤6.3创建）"
+            echo "📊 环境文件内容摘要:"
+            head -15 /mnt/openwrt-build/build_env.sh
+            
+            # 加载现有环境变量
+            source /mnt/openwrt-build/build_env.sh
+            echo "✅ 从现有环境文件加载变量:"
+            echo "  SELECTED_BRANCH: $SELECTED_BRANCH"
+            echo "  TARGET: $TARGET"
+            echo "  SUBTARGET: $SUBTARGET"
+            echo "  DEVICE: $DEVICE"
+            echo "  CONFIG_MODE: $CONFIG_MODE"
+            echo "  REPO_ROOT: $REPO_ROOT"
+            echo ""
+            
+            echo "💡 使用步骤6.3已设置的环境变量进行SDK下载"
+          else
+            echo "⚠️ 环境文件不存在，可能是步骤6.3失败"
+            echo "📝 重新创建环境变量..."
+            
             # 根据设备设置基础环境变量
             DEVICE_NAME="${{ github.event.inputs.device_name }}"
             case "$DEVICE_NAME" in
@@ -463,7 +482,6 @@ jobs:
             esac
             
             # 创建环境文件
-            echo "📝 创建环境文件..."
             echo "#!/bin/bash" > /mnt/openwrt-build/build_env.sh
             echo "export SELECTED_REPO_URL=\"https://github.com/immortalwrt/immortalwrt.git\"" >> /mnt/openwrt-build/build_env.sh
             echo "export SELECTED_BRANCH=\"${{ github.event.inputs.version_selection == '23.05' && 'openwrt-23.05' || 'openwrt-21.02' }}\"" >> /mnt/openwrt-build/build_env.sh
@@ -478,6 +496,7 @@ jobs:
           fi
           
           # 执行SDK下载
+          echo "🔄 开始执行SDK下载..."
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_compiler_env "${{ github.event.inputs.device_name }}"
           
           SDK_EXIT_CODE=$?
