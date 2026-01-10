@@ -1,5 +1,5 @@
 # .github/workflows/firmware-build.yml
-name: OpenWrt 智能固件构建工作流（完整功能版 - 官方SDK版）
+name: OpenWrt 智能固件构建工作流（优化加速版）
 
 on:
   workflow_dispatch:
@@ -26,10 +26,17 @@ on:
         required: false
         type: string
         default: ""
+      enable_parallel:
+        description: "⚡ 启用并行优化"
+        required: false
+        type: choice
+        default: "true"
+        options: ["true", "false"]
 
 env:
   BUILD_DIR: "/mnt/openwrt-build"
   REPO_ROOT: "${{ github.workspace }}"
+  ENABLE_PARALLEL: "${{ github.event.inputs.enable_parallel }}"
 
 jobs:
   build-firmware:
@@ -109,11 +116,11 @@ jobs:
           rm -rf openwrt-source
           echo "✅ Git Archive API下载完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 2: 上传源代码Artifacts（修改文件名）
+      # 步骤 2: 上传源代码Artifacts（修复文件名）
       - name: "2. 上传源代码Artifacts"
         uses: actions/upload-artifact@v4
         with:
-          name: source-${{ github.event.inputs.device_name }}-$(date +%Y%m%d_%H%M%S)
+          name: source-${{ github.event.inputs.device_name }}-${{ github.run_number }}-${{ github.run_attempt }}
           path: /tmp/build-artifacts/source-archive/
           retention-days: 7
           if-no-files-found: error
@@ -454,29 +461,56 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" fix_network
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 18: 下载依赖包
-      - name: "18. 下载依赖包"
+      # 步骤 18: 并行下载依赖包（优化版）
+      - name: "18. 并行下载依赖包（优化版）"
         run: |
-          echo "=== 步骤 18: 下载依赖包 ==="
+          echo "=== 步骤 18: 并行下载依赖包（优化版）==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
             source /mnt/openwrt-build/build_env.sh
           fi
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" download_dependencies
+          cd /mnt/openwrt-build
           
-          echo "📊 依赖包统计:"
-          dl_count=$(find /mnt/openwrt-build/dl -type f 2>/dev/null | wc -l)
-          echo "  依赖包总数: $dl_count 个"
-          
-          if [ $dl_count -lt 50 ]; then
-            echo "⚠️ 依赖包数量较少，可能影响编译"
-          else
-            echo "✅ 依赖包充足"
+          echo "🔧 检查依赖包目录..."
+          if [ ! -d "dl" ]; then
+            mkdir -p dl
+            echo "✅ 创建依赖包目录: dl"
           fi
           
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "📊 当前依赖包数量: $(find dl -type f 2>/dev/null | wc -l) 个"
+          
+          # 根据是否启用并行优化选择下载方式
+          if [ "$ENABLE_PARALLEL" = "true" ]; then
+            echo "⚡ 启用并行下载优化"
+            echo "💡 使用 8 个并行任务下载依赖包..."
+            make -j8 download V=s 2>&1 | tee download.log || {
+              echo "⚠️ 并行下载失败，尝试单线程下载..."
+              make -j1 download V=s 2>&1 | tee download.log || {
+                echo "❌ 下载依赖包失败"
+                exit 1
+              }
+            }
+          else
+            echo "🔄 使用标准单线程下载"
+            make -j1 download V=s 2>&1 | tee download.log || {
+              echo "❌ 下载依赖包失败"
+              exit 1
+            }
+          fi
+          
+          # 检查下载结果
+          local downloaded_deps=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
+          echo "📊 下载后依赖包数量: $downloaded_deps 个"
+          
+          # 检查下载日志中的错误
+          if grep -q "ERROR\|Failed\|404" download.log 2>/dev/null; then
+            echo "⚠️ 下载过程中发现错误:"
+            grep -E "ERROR|Failed|404" download.log | head -5
+          fi
+          
+          echo "✅ 依赖包下载完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
       # 步骤 19: 集成自定义文件
       - name: "19. 集成自定义文件"
@@ -551,22 +585,105 @@ jobs:
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 23: 编译固件
-      - name: "23. 编译固件"
+      # 步骤 23: 编译固件（优化加速版）
+      - name: "23. 编译固件（优化加速版）"
         run: |
-          echo "=== 步骤 23: 编译固件 ==="
+          echo "=== 步骤 23: 编译固件（优化加速版）==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           mkdir -p /tmp/build-logs
           echo "编译开始时间: $(date '+%Y-%m-%d %H:%M:%S')" > /tmp/build-logs/compile_start.log
           echo "设备: ${{ github.event.inputs.device_name }}" >> /tmp/build-logs/compile_start.log
           echo "版本: ${{ env.SELECTED_BRANCH }}" >> /tmp/build-logs/compile_start.log
+          echo "并行优化: ${{ env.ENABLE_PARALLEL }}" >> /tmp/build-logs/compile_start.log
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" build_firmware "true"
+          cd /mnt/openwrt-build
+          
+          # 计算最佳并行任务数
+          CPU_CORES=$(nproc)
+          echo "🔧 系统信息:"
+          echo "  CPU核心数: $CPU_CORES"
+          
+          # 根据内存调整并行任务数
+          TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
+          echo "  内存大小: ${TOTAL_MEM}MB"
+          
+          if [ "$ENABLE_PARALLEL" = "true" ]; then
+            # 根据CPU核心数和内存计算最佳任务数
+            if [ $CPU_CORES -ge 4 ]; then
+              if [ $TOTAL_MEM -ge 8192 ]; then
+                # 8GB+ 内存，使用CPU核心数
+                MAKE_JOBS=$CPU_CORES
+                echo "⚡ 高配置：使用 $MAKE_JOBS 个并行任务"
+              elif [ $TOTAL_MEM -ge 4096 ]; then
+                # 4-8GB 内存，使用一半核心数
+                MAKE_JOBS=$((CPU_CORES / 2))
+                if [ $MAKE_JOBS -lt 2 ]; then
+                  MAKE_JOBS=2
+                fi
+                echo "⚡ 中配置：使用 $MAKE_JOBS 个并行任务"
+              else
+                # 小于4GB 内存，限制并行任务
+                MAKE_JOBS=2
+                echo "⚡ 低配置：使用 $MAKE_JOBS 个并行任务"
+              fi
+            else
+              # 少于4个核心，根据内存调整
+              if [ $TOTAL_MEM -ge 4096 ]; then
+                MAKE_JOBS=$CPU_CORES
+                echo "⚡ 使用 $MAKE_JOBS 个并行任务"
+              else
+                MAKE_JOBS=$((CPU_CORES / 2))
+                if [ $MAKE_JOBS -lt 1 ]; then
+                  MAKE_JOBS=1
+                fi
+                echo "⚡ 使用 $MAKE_JOBS 个并行任务"
+              fi
+            fi
+          else
+            MAKE_JOBS=1
+            echo "🔄 禁用并行优化，使用单线程编译"
+          fi
+          
+          echo "🚀 开始编译固件，使用 $MAKE_JOBS 个并行任务"
+          
+          # 设置编译环境变量
+          export FORCE_UNSAFE_CONFIGURE=1
+          
+          # 开始编译
+          time make -j$MAKE_JOBS V=s 2>&1 | tee build.log
+          BUILD_EXIT_CODE=${PIPESTATUS[0]}
           
           echo "编译结束时间: $(date '+%Y-%m-%d %H:%M:%S')" >> /tmp/build-logs/compile_start.log
+          echo "编译退出代码: $BUILD_EXIT_CODE" >> /tmp/build-logs/compile_start.log
           
-          echo "✅ 编译完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          # 编译结果分析
+          if [ $BUILD_EXIT_CODE -eq 0 ]; then
+            echo "✅ 固件编译成功"
+            
+            # 检查生成的固件
+            if [ -d "bin/targets" ]; then
+              local firmware_count=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+              echo "✅ 生成固件文件: $firmware_count 个"
+            fi
+          else
+            echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
+            
+            # 分析失败原因
+            if [ -f "build.log" ]; then
+              echo "=== 编译错误摘要 ==="
+              local error_count=$(grep -c -i "error" build.log 2>/dev/null || echo "0")
+              echo "发现 $error_count 个错误"
+              
+              if [ $error_count -gt 0 ]; then
+                echo "前5个错误:"
+                grep -i "error" build.log | head -5
+              fi
+            fi
+            exit $BUILD_EXIT_CODE
+          fi
+          
+          echo "✅ 编译完成，总时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
       # 步骤 24: 检查构建产物
       - name: "24. 检查构建产物"
@@ -618,7 +735,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
+          name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}-${{ github.run_number }}
           path: /mnt/openwrt-build/bin/targets/
           retention-days: 7
           if-no-files-found: error
