@@ -915,13 +915,75 @@ initialize_build_env() {
     done
 }
 
-# 初始化编译器环境（下载OpenWrt官方SDK）- 增强日志版
+# 初始化编译器环境（下载OpenWrt官方SDK）- 修复版
 initialize_compiler_env() {
     local device_name="$1"
-    log "=== 初始化编译器环境（下载OpenWrt官方SDK）- 增强日志版 ==="
+    log "=== 初始化编译器环境（下载OpenWrt官方SDK）- 修复版 ==="
     
-    # 首先加载环境变量
-    load_env
+    # 首先加载环境变量 - 修复检查逻辑
+    log "🔍 检查环境文件..."
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        log "✅ 从 $BUILD_DIR/build_env.sh 加载环境变量"
+        
+        # 显示关键环境变量
+        log "📋 当前环境变量:"
+        log "  SELECTED_BRANCH: $SELECTED_BRANCH"
+        log "  TARGET: $TARGET"
+        log "  SUBTARGET: $SUBTARGET"
+        log "  DEVICE: $DEVICE"
+        log "  CONFIG_MODE: $CONFIG_MODE"
+        log "  REPO_ROOT: $REPO_ROOT"
+        log "  COMPILER_DIR: $COMPILER_DIR"
+    else
+        log "⚠️ 环境文件不存在: $BUILD_DIR/build_env.sh"
+        log "💡 环境文件应该在步骤6.3中创建，但未找到"
+        
+        # 设置默认值
+        if [ -z "$SELECTED_BRANCH" ]; then
+            if [ "$device_name" = "ac42u" ] || [ "$device_name" = "acrh17" ]; then
+                SELECTED_BRANCH="openwrt-21.02"
+            else
+                SELECTED_BRANCH="openwrt-21.02"
+            fi
+            log "⚠️ SELECTED_BRANCH未设置，使用默认值: $SELECTED_BRANCH"
+        fi
+        
+        if [ -z "$TARGET" ]; then
+            case "$device_name" in
+                "ac42u"|"acrh17")
+                    TARGET="ipq40xx"
+                    SUBTARGET="generic"
+                    DEVICE="asus_rt-ac42u"
+                    ;;
+                "mi_router_4a_gigabit"|"r4ag")
+                    TARGET="ramips"
+                    SUBTARGET="mt76x8"
+                    DEVICE="xiaomi_mi-router-4a-gigabit"
+                    ;;
+                "mi_router_3g"|"r3g")
+                    TARGET="ramips"
+                    SUBTARGET="mt7621"
+                    DEVICE="xiaomi_mi-router-3g"
+                    ;;
+                *)
+                    TARGET="ipq40xx"
+                    SUBTARGET="generic"
+                    DEVICE="$device_name"
+                    ;;
+            esac
+            log "⚠️ 平台变量未设置，使用默认值: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE"
+        fi
+        
+        if [ -z "$CONFIG_MODE" ]; then
+            CONFIG_MODE="normal"
+            log "⚠️ CONFIG_MODE未设置，使用默认值: $CONFIG_MODE"
+        fi
+        
+        # 保存到环境文件
+        save_env
+        log "✅ 已创建环境文件: $BUILD_DIR/build_env.sh"
+    fi
     
     # 检查环境变量中的COMPILER_DIR
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
@@ -955,38 +1017,10 @@ initialize_compiler_env() {
         log "🔍 COMPILER_DIR未设置或目录不存在，将下载OpenWrt官方SDK"
     fi
     
-    # 根据设备确定平台
-    local target_platform=""
-    case "$device_name" in
-        "ac42u"|"acrh17")
-            target_platform="arm"
-            TARGET="ipq40xx"
-            SUBTARGET="generic"
-            log "目标平台: ARM (高通IPQ40xx)"
-            ;;
-        "mi_router_4a_gigabit"|"r4ag")
-            target_platform="mips"
-            TARGET="ramips"
-            SUBTARGET="mt76x8"
-            log "目标平台: MIPS (雷凌MT76x8)"
-            ;;
-        "mi_router_3g"|"r3g")
-            target_platform="mips"
-            TARGET="ramips"
-            SUBTARGET="mt7621"
-            log "目标平台: MIPS (雷凌MT7621)"
-            ;;
-        *)
-            target_platform="generic"
-            log "目标平台: 通用"
-            ;;
-    esac
-    
-    # 检查SELECTED_BRANCH是否存在，如果没有则设置默认值
-    if [ -z "$SELECTED_BRANCH" ]; then
-        log "⚠️ SELECTED_BRANCH未设置，使用默认值openwrt-21.02"
-        SELECTED_BRANCH="openwrt-21.02"
-    fi
+    # 根据设备确定平台（使用已设置的变量）
+    log "目标平台: $TARGET/$SUBTARGET"
+    log "目标设备: $DEVICE"
+    log "OpenWrt版本: $SELECTED_BRANCH"
     
     # 简化版本字符串（从openwrt-23.05转为23.05）
     local version_for_sdk=""
