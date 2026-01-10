@@ -37,6 +37,7 @@ env:
   BUILD_DIR: "/mnt/openwrt-build"
   REPO_ROOT: "${{ github.workspace }}"
   ENABLE_PARALLEL: "${{ github.event.inputs.enable_parallel }}"
+  TIMESTAMP: "${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$(date -u +'%Y%m%d%H%M%S')"
 
 jobs:
   build-firmware:
@@ -120,7 +121,7 @@ jobs:
       - name: "2. 上传源代码Artifacts"
         uses: actions/upload-artifact@v4
         with:
-          name: source-${{ github.event.inputs.device_name }}-${{ github.run_number }}-${{ github.run_attempt }}
+          name: source-${{ env.TIMESTAMP }}
           path: /tmp/build-artifacts/source-archive/
           retention-days: 7
           if-no-files-found: error
@@ -443,7 +444,7 @@ jobs:
             
             # 备份到仓库目录
             TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-            BACKUP_FILE="${{ github.workspace }}/firmware-config/config-backup/config_${{ github.event.inputs.device_name }}_${TIMESTAMP}.config"
+            BACKUP_FILE="${{ github.workspace }}/firmware-config/config-backup/config_${{ env.TIMESTAMP }}.config"
             
             cp "/mnt/openwrt-build/.config" "$BACKUP_FILE"
             echo "✅ 配置文件备份到仓库目录: $BACKUP_FILE"
@@ -461,14 +462,16 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" fix_network
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 18: 并行下载依赖包（优化版）
+      # 步骤 18: 并行下载依赖包（优化版）- 修复版
       - name: "18. 并行下载依赖包（优化版）"
         run: |
           echo "=== 步骤 18: 并行下载依赖包（优化版）==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
+          # 先加载环境变量
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
             source /mnt/openwrt-build/build_env.sh
+            echo "✅ 从环境文件加载变量"
           fi
           
           cd /mnt/openwrt-build
@@ -479,7 +482,9 @@ jobs:
             echo "✅ 创建依赖包目录: dl"
           fi
           
-          echo "📊 当前依赖包数量: $(find dl -type f 2>/dev/null | wc -l) 个"
+          # 使用普通变量而不是local变量（修复错误）
+          DEP_COUNT=$(find dl -type f 2>/dev/null | wc -l)
+          echo "📊 当前依赖包数量: $DEP_COUNT 个"
           
           # 根据是否启用并行优化选择下载方式
           if [ "$ENABLE_PARALLEL" = "true" ]; then
@@ -501,8 +506,8 @@ jobs:
           fi
           
           # 检查下载结果
-          local downloaded_deps=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
-          echo "📊 下载后依赖包数量: $downloaded_deps 个"
+          NEW_DEP_COUNT=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
+          echo "📊 下载后依赖包数量: $NEW_DEP_COUNT 个"
           
           # 检查下载日志中的错误
           if grep -q "ERROR\|Failed\|404" download.log 2>/dev/null; then
@@ -663,8 +668,8 @@ jobs:
             
             # 检查生成的固件
             if [ -d "bin/targets" ]; then
-              local firmware_count=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
-              echo "✅ 生成固件文件: $firmware_count 个"
+              FIRMWARE_COUNT=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+              echo "✅ 生成固件文件: $FIRMWARE_COUNT 个"
             fi
           else
             echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
@@ -672,10 +677,10 @@ jobs:
             # 分析失败原因
             if [ -f "build.log" ]; then
               echo "=== 编译错误摘要 ==="
-              local error_count=$(grep -c -i "error" build.log 2>/dev/null || echo "0")
-              echo "发现 $error_count 个错误"
+              ERROR_COUNT=$(grep -c -i "error" build.log 2>/dev/null || echo "0")
+              echo "发现 $ERROR_COUNT 个错误"
               
-              if [ $error_count -gt 0 ]; then
+              if [ $ERROR_COUNT -gt 0 ]; then
                 echo "前5个错误:"
                 grep -i "error" build.log | head -5
               fi
@@ -735,7 +740,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}-${{ github.run_number }}
+          name: firmware-${{ env.TIMESTAMP }}
           path: /mnt/openwrt-build/bin/targets/
           retention-days: 7
           if-no-files-found: error
@@ -745,7 +750,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: config-${{ github.event.inputs.device_name }}-${{ env.SELECTED_BRANCH }}-${{ github.event.inputs.config_mode }}
+          name: config-${{ env.TIMESTAMP }}
           path: ${{ github.workspace }}/firmware-config/config-backup/
           retention-days: 7
           if-no-files-found: error
