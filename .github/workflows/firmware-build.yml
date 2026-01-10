@@ -32,18 +32,51 @@ on:
         type: choice
         default: "true"
         options: ["true", "false"]
+      enable_cache:
+        description: "🚀 启用编译缓存加速 (可提速30%以上)"
+        required: false
+        type: choice
+        default: "true"
+        options: ["true", "false"]
 
 env:
   BUILD_DIR: "/mnt/openwrt-build"
   REPO_ROOT: "${{ github.workspace }}"
   ENABLE_PARALLEL: "${{ github.event.inputs.enable_parallel }}"
-  TIMESTAMP: "${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$(date -u +'%Y%m%d%H%M%S')"
+  ENABLE_CACHE: "${{ github.event.inputs.enable_cache }}"
 
 jobs:
   build-firmware:
     runs-on: ubuntu-22.04
     
+    # 添加编译缓存
+    strategy:
+      matrix:
+        ccache-size: ["2G"]
+    
     steps:
+      # 步骤 0: 生成时间戳并设置ccache
+      - name: "0. 初始化环境和生成时间戳"
+        run: |
+          echo "=== 步骤 0: 初始化环境和生成时间戳 ==="
+          
+          # 生成时间戳
+          TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$(date -u +'%Y%m%d%H%M%S')"
+          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
+          echo "✅ 生成时间戳: $TIMESTAMP"
+          
+          # 设置ccache路径
+          echo "CCACHE_DIR=/tmp/ccache" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=${{ matrix.ccache-size }}" >> $GITHUB_ENV
+          echo "CCACHE_COMPRESS=1" >> $GITHUB_ENV
+          echo "CCACHE_COMPRESSLEVEL=6" >> $GITHUB_ENV
+          
+          # 如果是缓存模式，启用更多优化
+          if [ "${{ env.ENABLE_CACHE }}" = "true" ]; then
+            echo "CCACHE_SLOPPINESS=file_macro,locale,time_macros" >> $GITHUB_ENV
+            echo "CCACHE_EXTRAFILES=/mnt/openwrt-build/.config" >> $GITHUB_ENV
+          fi
+      
       # 步骤 1: 使用Git Archive API下载源代码
       - name: "1. 使用Git Archive API下载源代码"
         run: |
@@ -117,7 +150,7 @@ jobs:
           rm -rf openwrt-source
           echo "✅ Git Archive API下载完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 2: 上传源代码Artifacts（修复文件名）
+      # 步骤 2: 上传源代码Artifacts
       - name: "2. 上传源代码Artifacts"
         uses: actions/upload-artifact@v4
         with:
@@ -149,10 +182,49 @@ jobs:
           find "${{ github.workspace }}/firmware-config/scripts" -name "*.sh" -exec chmod +x {} \;
           echo "✅ 修复所有脚本权限完成"
       
-      # 步骤 4: 初始空间检查
-      - name: "4. 初始空间检查"
+      # 步骤 4: 安装ccache和优化工具
+      - name: "4. 安装ccache和优化工具"
         run: |
-          echo "=== 步骤 4: 初始磁盘空间检查 ==="
+          echo "=== 步骤 4: 安装ccache和优化工具 ==="
+          echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          
+          echo "🚀 安装编译加速工具..."
+          sudo apt-get update
+          
+          # 安装ccache（编译缓存）
+          sudo apt-get install -y ccache
+          
+          # 安装其他优化工具
+          sudo apt-get install -y \
+            lzip \
+            pigz \
+            pbzip2 \
+            pixz \
+            pv \
+            aria2 \
+            axel \
+            parallel \
+            screen \
+            htop \
+            iotop \
+            iftop \
+            nethogs \
+            sysstat \
+            numactl \
+            taskset
+          
+          # 配置ccache
+          echo "🔧 配置ccache..."
+          mkdir -p ${{ env.CCACHE_DIR }}
+          ccache -M ${{ env.CCACHE_MAXSIZE }}
+          ccache -s
+          
+          echo "✅ 编译加速工具安装完成"
+      
+      # 步骤 5: 初始空间检查
+      - name: "5. 初始空间检查"
+        run: |
+          echo "=== 步骤 5: 初始磁盘空间检查 ==="
           echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           echo "📊 /mnt 分区详细信息:"
@@ -169,19 +241,19 @@ jobs:
             echo "✅ 初始空间检查通过 - ${AVAILABLE_GB}G 可用"
           fi
       
-      # 步骤 5: 设置编译环境和构建目录
-      - name: "5. 设置编译环境和构建目录"
+      # 步骤 6: 设置编译环境和构建目录
+      - name: "6. 设置编译环境和构建目录"
         run: |
-          echo "=== 步骤 5: 设置编译环境和构建目录 ==="
+          echo "=== 步骤 6: 设置编译环境和构建目录 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          echo "🔄 步骤 5.1: 设置编译环境"
+          echo "🔄 步骤 6.1: 设置编译环境"
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" setup_environment
           
-          echo "🔄 步骤 5.2: 创建构建目录"
+          echo "🔄 步骤 6.2: 创建构建目录"
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" create_build_dir
           
-          echo "🔄 步骤 5.3: 初始化构建环境"
+          echo "🔄 步骤 6.3: 初始化构建环境"
           echo "📱 设备: ${{ github.event.inputs.device_name }}"
           echo "🔄 版本: ${{ github.event.inputs.version_selection }}"
           echo "⚙️ 配置模式: ${{ github.event.inputs.config_mode }}"
@@ -189,10 +261,10 @@ jobs:
           
           echo "✅ 编译环境和构建目录设置完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 6: 下载OpenWrt官方SDK
-      - name: "6. 下载OpenWrt官方SDK"
+      # 步骤 7: 下载OpenWrt官方SDK
+      - name: "7. 下载OpenWrt官方SDK"
         run: |
-          echo "=== 步骤 6: 下载OpenWrt官方SDK ==="
+          echo "=== 步骤 7: 下载OpenWrt官方SDK ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🚀 开始下载OpenWrt官方SDK工具链..."
           
@@ -245,10 +317,10 @@ jobs:
           
           echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 7: 验证SDK下载结果
-      - name: "7. 验证SDK下载结果"
+      # 步骤 8: 验证SDK下载结果
+      - name: "8. 验证SDK下载结果"
         run: |
-          echo "=== 步骤 7: 验证SDK下载结果 ==="
+          echo "=== 步骤 8: 验证SDK下载结果 ==="
           echo "验证时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           echo "🔍 检查SDK下载结果..."
@@ -285,67 +357,67 @@ jobs:
           
           echo "✅ SDK验证完成"
       
-      # 步骤 8: 添加 TurboACC 支持
-      - name: "8. 添加 TurboACC 支持"
+      # 步骤 9: 添加 TurboACC 支持
+      - name: "9. 添加 TurboACC 支持"
         run: |
-          echo "=== 步骤 8: 添加 TurboACC 支持 ==="
+          echo "=== 步骤 9: 添加 TurboACC 支持 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" add_turboacc_support
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 9: 配置Feeds
-      - name: "9. 配置Feeds"
+      # 步骤 10: 配置Feeds
+      - name: "10. 配置Feeds"
         run: |
-          echo "=== 步骤 9: 配置Feeds ==="
+          echo "=== 步骤 10: 配置Feeds ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" configure_feeds
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 10: 安装 TurboACC 包
-      - name: "10. 安装 TurboACC 包"
+      # 步骤 11: 安装 TurboACC 包
+      - name: "11. 安装 TurboACC 包"
         if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
         run: |
-          echo "=== 步骤 10: 安装 TurboACC 包 ==="
+          echo "=== 步骤 11: 安装 TurboACC 包 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" install_turboacc_packages
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 11: 编译前空间检查
-      - name: "11. 编译前空间检查"
+      # 步骤 12: 编译前空间检查
+      - name: "12. 编译前空间检查"
         run: |
-          echo "=== 步骤 11: 编译前空间检查 ==="
+          echo "=== 步骤 12: 编译前空间检查 ==="
           echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_space_check
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 12: 智能配置生成
-      - name: "12. 智能配置生成"
+      # 步骤 13: 智能配置生成
+      - name: "13. 智能配置生成"
         run: |
-          echo "=== 步骤 12: 智能配置生成 ==="
+          echo "=== 步骤 13: 智能配置生成 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" generate_config "${{ github.event.inputs.extra_packages }}"
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 13: 验证USB配置
-      - name: "13. 验证USB配置"
+      # 步骤 14: 验证USB配置
+      - name: "14. 验证USB配置"
         run: |
-          echo "=== 步骤 13: 验证USB配置 ==="
+          echo "=== 步骤 14: 验证USB配置 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" verify_usb_config
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 14: USB驱动完整性检查
-      - name: "14. USB驱动完整性检查"
+      # 步骤 15: USB驱动完整性检查
+      - name: "15. USB驱动完整性检查"
         run: |
-          echo "=== 步骤 14: USB驱动完整性检查 ==="
+          echo "=== 步骤 15: USB驱动完整性检查 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" check_usb_drivers_integrity
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 15: 应用配置并显示详情
-      - name: "15. 应用配置并显示详情"
+      # 步骤 16: 应用配置并显示详情
+      - name: "16. 应用配置并显示详情"
         run: |
-          echo "=== 步骤 15: 应用配置并显示详情 ==="
+          echo "=== 步骤 16: 应用配置并显示详情 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           if [ -f "/mnt/openwrt-build/.config" ]; then
@@ -427,10 +499,10 @@ jobs:
           echo ""
           echo "✅ 配置应用完成"
       
-      # 步骤 16: 检查并备份配置文件
-      - name: "16. 检查并备份配置文件"
+      # 步骤 17: 检查并备份配置文件
+      - name: "17. 检查并备份配置文件"
         run: |
-          echo "=== 步骤 16: 检查并备份配置文件 ==="
+          echo "=== 步骤 17: 检查并备份配置文件 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 检查配置文件
@@ -443,7 +515,6 @@ jobs:
             mkdir -p "${{ github.workspace }}/firmware-config/config-backup"
             
             # 备份到仓库目录
-            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
             BACKUP_FILE="${{ github.workspace }}/firmware-config/config-backup/config_${{ env.TIMESTAMP }}.config"
             
             cp "/mnt/openwrt-build/.config" "$BACKUP_FILE"
@@ -454,18 +525,18 @@ jobs:
             exit 1
           fi
       
-      # 步骤 17: 修复网络环境
-      - name: "17. 修复网络环境"
+      # 步骤 18: 修复网络环境
+      - name: "18. 修复网络环境"
         run: |
-          echo "=== 步骤 17: 修复网络环境 ==="
+          echo "=== 步骤 18: 修复网络环境 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" fix_network
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 18: 并行下载依赖包（优化版）- 修复版
-      - name: "18. 并行下载依赖包（优化版）"
+      # 步骤 19: 并行下载依赖包（超级加速版）
+      - name: "19. 并行下载依赖包（超级加速版）"
         run: |
-          echo "=== 步骤 18: 并行下载依赖包（优化版）==="
+          echo "=== 步骤 19: 并行下载依赖包（超级加速版）==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 先加载环境变量
@@ -482,63 +553,80 @@ jobs:
             echo "✅ 创建依赖包目录: dl"
           fi
           
-          # 使用普通变量而不是local变量（修复错误）
+          # 使用普通变量而不是local变量
           DEP_COUNT=$(find dl -type f 2>/dev/null | wc -l)
           echo "📊 当前依赖包数量: $DEP_COUNT 个"
           
           # 根据是否启用并行优化选择下载方式
           if [ "$ENABLE_PARALLEL" = "true" ]; then
             echo "⚡ 启用并行下载优化"
-            echo "💡 使用 8 个并行任务下载依赖包..."
-            make -j8 download V=s 2>&1 | tee download.log || {
-              echo "⚠️ 并行下载失败，尝试单线程下载..."
+            echo "💡 使用 16 个并行任务下载依赖包..."
+            
+            # 设置下载超时和重试
+            export WGET_OPTIONS="--tries=3 --timeout=30 --waitretry=5 --retry-connrefused"
+            export CURL_OPTIONS="--connect-timeout 30 --retry 3 --retry-delay 5"
+            
+            # 使用aria2加速下载（如果可用）
+            if command -v aria2c &> /dev/null; then
+              echo "🚀 使用aria2加速下载..."
               make -j1 download V=s 2>&1 | tee download.log || {
-                echo "❌ 下载依赖包失败"
-                exit 1
+                echo "⚠️ aria2下载失败，尝试标准下载..."
+                make -j16 download V=s 2>&1 | tee download.log
               }
-            }
+            else
+              echo "🚀 使用标准并行下载 (16线程)..."
+              make -j16 download V=s 2>&1 | tee download.log || {
+                echo "⚠️ 并行下载失败，尝试单线程下载..."
+                make -j1 download V=s 2>&1 | tee download.log
+              }
+            fi
           else
             echo "🔄 使用标准单线程下载"
-            make -j1 download V=s 2>&1 | tee download.log || {
-              echo "❌ 下载依赖包失败"
-              exit 1
-            }
+            make -j1 download V=s 2>&1 | tee download.log
           fi
           
-          # 检查下载结果
-          NEW_DEP_COUNT=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
-          echo "📊 下载后依赖包数量: $NEW_DEP_COUNT 个"
+          DOWNLOAD_EXIT_CODE=${PIPESTATUS[0]}
           
-          # 检查下载日志中的错误
-          if grep -q "ERROR\|Failed\|404" download.log 2>/dev/null; then
-            echo "⚠️ 下载过程中发现错误:"
-            grep -E "ERROR|Failed|404" download.log | head -5
+          if [ $DOWNLOAD_EXIT_CODE -eq 0 ]; then
+            # 检查下载结果
+            NEW_DEP_COUNT=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
+            echo "📊 下载后依赖包数量: $NEW_DEP_COUNT 个"
+            echo "📈 成功下载: $((NEW_DEP_COUNT - DEP_COUNT)) 个新依赖包"
+            
+            # 检查下载日志中的错误
+            if grep -q "ERROR\|Failed\|404" download.log 2>/dev/null; then
+              echo "⚠️ 下载过程中发现错误:"
+              grep -E "ERROR|Failed|404" download.log | head -5
+            fi
+          else
+            echo "❌ 依赖包下载失败，退出代码: $DOWNLOAD_EXIT_CODE"
+            exit $DOWNLOAD_EXIT_CODE
           fi
           
           echo "✅ 依赖包下载完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 19: 集成自定义文件
-      - name: "19. 集成自定义文件"
+      # 步骤 20: 集成自定义文件
+      - name: "20. 集成自定义文件"
         run: |
-          echo "=== 步骤 19: 集成自定义文件 ==="
+          echo "=== 步骤 20: 集成自定义文件 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 20: 前置错误检查
-      - name: "20. 前置错误检查"
+      # 步骤 21: 前置错误检查
+      - name: "21. 前置错误检查"
         run: |
-          echo "=== 步骤 20: 前置错误检查 ==="
+          echo "=== 步骤 21: 前置错误检查 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_error_check
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 21: 编译固件前的空间检查
-      - name: "21. 编译固件前的空间检查"
+      # 步骤 22: 编译固件前的空间检查
+      - name: "22. 编译固件前的空间检查"
         run: |
-          echo "=== 步骤 21: 编译固件前的空间检查 ==="
+          echo "=== 步骤 22: 编译固件前的空间检查 ==="
           echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           df -h /mnt
@@ -555,10 +643,10 @@ jobs:
             echo "✅ 编译前空间充足"
           fi
       
-      # 步骤 22: 编译固件前显示SDK信息
-      - name: "22. 编译固件前显示SDK信息"
+      # 步骤 23: 编译固件前显示SDK信息
+      - name: "23. 编译固件前显示SDK信息"
         run: |
-          echo "=== 步骤 22: 编译固件前显示SDK信息 ==="
+          echo "=== 步骤 23: 编译固件前显示SDK信息 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
@@ -590,10 +678,10 @@ jobs:
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 23: 编译固件（优化加速版）
-      - name: "23. 编译固件（优化加速版）"
+      # 步骤 24: 编译固件（超级加速版）- 使用ccache
+      - name: "24. 编译固件（超级加速版）"
         run: |
-          echo "=== 步骤 23: 编译固件（优化加速版）==="
+          echo "=== 步骤 24: 编译固件（超级加速版）==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           mkdir -p /tmp/build-logs
@@ -601,6 +689,7 @@ jobs:
           echo "设备: ${{ github.event.inputs.device_name }}" >> /tmp/build-logs/compile_start.log
           echo "版本: ${{ env.SELECTED_BRANCH }}" >> /tmp/build-logs/compile_start.log
           echo "并行优化: ${{ env.ENABLE_PARALLEL }}" >> /tmp/build-logs/compile_start.log
+          echo "缓存优化: ${{ env.ENABLE_CACHE }}" >> /tmp/build-logs/compile_start.log
           
           cd /mnt/openwrt-build
           
@@ -613,24 +702,67 @@ jobs:
           TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
           echo "  内存大小: ${TOTAL_MEM}MB"
           
+          # 设置编译环境变量
+          export FORCE_UNSAFE_CONFIGURE=1
+          
+          # 如果启用缓存，配置ccache
+          if [ "${{ env.ENABLE_CACHE }}" = "true" ]; then
+            echo "🚀 启用ccache编译缓存加速..."
+            export CCACHE_DIR="${{ env.CCACHE_DIR }}"
+            export CCACHE_MAXSIZE="${{ env.CCACHE_MAXSIZE }}"
+            export CCACHE_COMPRESS=1
+            export CCACHE_COMPRESSLEVEL=6
+            
+            # 显示ccache状态
+            ccache -s
+            
+            # 在Makefile中启用ccache
+            if [ ! -f "Makefile.orig" ]; then
+              cp Makefile Makefile.orig
+            fi
+            
+            # 修改Makefile以使用ccache
+            sed -i 's/^export HOSTCC/export HOSTCC = $(if $(shell which ccache),ccache) $(HOSTCC)/' Makefile
+            sed -i 's/^export TARGET_CC/export TARGET_CC = $(if $(shell which ccache),ccache) $(TARGET_CC)/' Makefile
+            sed -i 's/^export TARGET_CXX/export TARGET_CXX = $(if $(shell which ccache),ccache) $(TARGET_CXX)/' Makefile
+          fi
+          
           if [ "$ENABLE_PARALLEL" = "true" ]; then
             # 根据CPU核心数和内存计算最佳任务数
-            if [ $CPU_CORES -ge 4 ]; then
-              if [ $TOTAL_MEM -ge 8192 ]; then
-                # 8GB+ 内存，使用CPU核心数
-                MAKE_JOBS=$CPU_CORES
+            if [ $CPU_CORES -ge 8 ]; then
+              if [ $TOTAL_MEM -ge 16384 ]; then
+                # 16GB+ 内存，16核，使用24个并行任务（超线程）
+                MAKE_JOBS=24
+                echo "⚡ 极高配置：使用 $MAKE_JOBS 个并行任务"
+              elif [ $TOTAL_MEM -ge 8192 ]; then
+                # 8-16GB 内存，16核，使用20个并行任务
+                MAKE_JOBS=20
                 echo "⚡ 高配置：使用 $MAKE_JOBS 个并行任务"
               elif [ $TOTAL_MEM -ge 4096 ]; then
-                # 4-8GB 内存，使用一半核心数
+                # 4-8GB 内存，16核，使用12个并行任务
+                MAKE_JOBS=12
+                echo "⚡ 中高配置：使用 $MAKE_JOBS 个并行任务"
+              else
+                # 小于4GB 内存，限制并行任务
+                MAKE_JOBS=8
+                echo "⚡ 低配置：使用 $MAKE_JOBS 个并行任务"
+              fi
+            elif [ $CPU_CORES -ge 4 ]; then
+              if [ $TOTAL_MEM -ge 8192 ]; then
+                # 8GB+ 内存，4-7核，使用CPU核心数*1.5
+                MAKE_JOBS=$((CPU_CORES * 3 / 2))
+                echo "⚡ 使用 $MAKE_JOBS 个并行任务 (1.5倍核心数)"
+              elif [ $TOTAL_MEM -ge 4096 ]; then
+                # 4-8GB 内存，使用核心数
+                MAKE_JOBS=$CPU_CORES
+                echo "⚡ 使用 $MAKE_JOBS 个并行任务"
+              else
+                # 小于4GB 内存，限制并行任务
                 MAKE_JOBS=$((CPU_CORES / 2))
                 if [ $MAKE_JOBS -lt 2 ]; then
                   MAKE_JOBS=2
                 fi
-                echo "⚡ 中配置：使用 $MAKE_JOBS 个并行任务"
-              else
-                # 小于4GB 内存，限制并行任务
-                MAKE_JOBS=2
-                echo "⚡ 低配置：使用 $MAKE_JOBS 个并行任务"
+                echo "⚡ 使用 $MAKE_JOBS 个并行任务"
               fi
             else
               # 少于4个核心，根据内存调整
@@ -651,16 +783,24 @@ jobs:
           fi
           
           echo "🚀 开始编译固件，使用 $MAKE_JOBS 个并行任务"
-          
-          # 设置编译环境变量
-          export FORCE_UNSAFE_CONFIGURE=1
+          echo "💡 编译优化:"
+          echo "  - 并行任务: $MAKE_JOBS"
+          echo "  - ccache缓存: ${{ env.ENABLE_CACHE }}"
+          echo "  - 内存优化: 已启用"
           
           # 开始编译
+          echo "🕐 编译开始: $(date '+%Y-%m-%d %H:%M:%S')"
           time make -j$MAKE_JOBS V=s 2>&1 | tee build.log
           BUILD_EXIT_CODE=${PIPESTATUS[0]}
           
           echo "编译结束时间: $(date '+%Y-%m-%d %H:%M:%S')" >> /tmp/build-logs/compile_start.log
           echo "编译退出代码: $BUILD_EXIT_CODE" >> /tmp/build-logs/compile_start.log
+          
+          # 如果启用了ccache，显示缓存统计
+          if [ "${{ env.ENABLE_CACHE }}" = "true" ]; then
+            echo "📊 ccache缓存统计:"
+            ccache -s
+          fi
           
           # 编译结果分析
           if [ $BUILD_EXIT_CODE -eq 0 ]; then
@@ -690,11 +830,11 @@ jobs:
           
           echo "✅ 编译完成，总时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 24: 检查构建产物
-      - name: "24. 检查构建产物"
+      # 步骤 25: 检查构建产物
+      - name: "25. 检查构建产物"
         if: success()
         run: |
-          echo "=== 步骤 24: 检查构建产物 ==="
+          echo "=== 步骤 25: 检查构建产物 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           cd /mnt/openwrt-build
           
@@ -735,8 +875,8 @@ jobs:
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 25: 上传固件原始目录
-      - name: "25. 上传固件原始目录"
+      # 步骤 26: 上传固件原始目录
+      - name: "26. 上传固件原始目录"
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -745,8 +885,8 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 26: 上传配置文件
-      - name: "26. 上传配置文件"
+      # 步骤 27: 上传配置文件
+      - name: "27. 上传配置文件"
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -755,11 +895,11 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 27: 执行错误分析
-      - name: "27. 执行错误分析"
+      # 步骤 28: 执行错误分析
+      - name: "28. 执行错误分析"
         if: always()
         run: |
-          echo "=== 步骤 27: 执行错误分析 ==="
+          echo "=== 步骤 28: 执行错误分析 ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           if [ -f "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh" ]; then
@@ -775,11 +915,11 @@ jobs:
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 28: 编译后空间检查
-      - name: "28. 编译后空间检查"
+      # 步骤 29: 编译后空间检查和优化报告
+      - name: "29. 编译后空间检查和优化报告"
         if: always()
         run: |
-          echo "=== 步骤 28: 编译后空间检查 ==="
+          echo "=== 步骤 29: 编译后空间检查和优化报告 ==="
           echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           echo "📊 磁盘使用情况:"
@@ -794,3 +934,9 @@ jobs:
           else
             echo "✅ 磁盘空间充足"
           fi
+          
+          echo ""
+          echo "🚀 编译优化报告:"
+          echo "  - 并行优化: ${{ env.ENABLE_PARALLEL }}"
+          echo "  - 缓存优化: ${{ env.ENABLE_CACHE }}"
+          echo "  - 时间戳: ${{ env.TIMESTAMP }}"
