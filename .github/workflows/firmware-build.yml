@@ -43,15 +43,15 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      # 步骤 0: 生成时间戳
-      - name: "0. 生成时间戳"
+      # 步骤 0: 生成时间戳（修复版）
+      - name: "0. 生成时间戳（修复版）"
         run: |
-          echo "=== 步骤 0: 生成时间戳 ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "=== 步骤 0: 生成时间戳（修复版） ==="
+          echo "🕐 开始时间（UTC）: $(date -u '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间（北京时间）: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
           
-          # 生成日期格式的时间戳（年月日）
-          BASE_DATE=$(date -u +'%Y%m%d')
-          TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$BASE_DATE"
+          # 使用北京时间（东八区）生成日期戳
+          TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$(TZ='Asia/Shanghai' date -u +'%Y%m%d')"
           
           echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
           
@@ -431,72 +431,21 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 7 失败，退出代码: $?"; exit 1' ERR
           
-          echo "🚀 开始下载OpenWrt官方SDK工具链..."
-          
-          # 先检查环境文件是否已经存在
           echo "🔍 检查环境文件..."
+          
+          # 先确认环境文件是否存在（确保看到步骤6.3的结果）
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
-            echo "✅ 环境文件已存在（由步骤6.3创建）"
-            echo "📊 环境文件内容摘要:"
-            head -15 /mnt/openwrt-build/build_env.sh
-            
-            # 加载现有环境变量
-            source /mnt/openwrt-build/build_env.sh
-            echo "✅ 从现有环境文件加载变量:"
-            echo "  SELECTED_BRANCH: $SELECTED_BRANCH"
-            echo "  TARGET: $TARGET"
-            echo "  SUBTARGET: $SUBTARGET"
-            echo "  DEVICE: $DEVICE"
-            echo "  CONFIG_MODE: $CONFIG_MODE"
-            echo "  REPO_ROOT: $REPO_ROOT"
-            echo ""
-            
-            echo "💡 使用步骤6.3已设置的环境变量进行SDK下载"
+            echo "✅ 环境文件存在（由步骤6.3创建）"
+            echo "📊 显示环境文件内容:"
+            cat "/mnt/openwrt-build/build_env.sh"
           else
-            echo "⚠️ 环境文件不存在，可能是步骤6.3失败"
-            echo "📝 重新创建环境变量..."
-            
-            # 根据设备设置基础环境变量
-            DEVICE_NAME="${{ github.event.inputs.device_name }}"
-            case "$DEVICE_NAME" in
-              "ac42u"|"acrh17")
-                TARGET="ipq40xx"
-                SUBTARGET="generic"
-                DEVICE="asus_rt-ac42u"
-                ;;
-              "mi_router_4a_gigabit"|"r4ag")
-                TARGET="ramips"
-                SUBTARGET="mt76x8"
-                DEVICE="xiaomi_mi-router-4a-gigabit"
-                ;;
-              "mi_router_3g"|"r3g")
-                TARGET="ramips"
-                SUBTARGET="mt7621"
-                DEVICE="xiaomi_mi-router-3g"
-                ;;
-              *)
-                TARGET="ipq40xx"
-                SUBTARGET="generic"
-                DEVICE="$DEVICE_NAME"
-                ;;
-            esac
-            
-            # 创建环境文件
-            echo "#!/bin/bash" > /mnt/openwrt-build/build_env.sh
-            echo "export SELECTED_REPO_URL=\"https://github.com/immortalwrt/immortalwrt.git\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export SELECTED_BRANCH=\"${{ github.event.inputs.version_selection == '23.05' && 'openwrt-23.05' || 'openwrt-21.02' }}\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export TARGET=\"$TARGET\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export SUBTARGET=\"$SUBTARGET\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export DEVICE=\"$DEVICE\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export CONFIG_MODE=\"${{ github.event.inputs.config_mode }}\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export REPO_ROOT=\"${{ github.workspace }}\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export COMPILER_DIR=\"\"" >> /mnt/openwrt-build/build_env.sh
-            chmod +x /mnt/openwrt-build/build_env.sh
-            echo "✅ 已创建环境文件"
+            echo "❌ 严重错误: 环境文件不存在！步骤6.3可能失败了"
+            echo "🔍 检查构建目录内容:"
+            ls -la /mnt/openwrt-build/ || echo "构建目录不存在"
+            exit 1
           fi
           
-          # 执行SDK下载
-          echo "🔄 开始执行SDK下载..."
+          echo "🚀 开始执行SDK下载..."
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_compiler_env "${{ github.event.inputs.device_name }}"
           
           SDK_EXIT_CODE=$?
