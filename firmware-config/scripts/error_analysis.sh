@@ -5,7 +5,9 @@ set -e
 BUILD_DIR="${BUILD_DIR:-/mnt/openwrt-build}"
 ANALYSIS_DIR="/tmp/error-analysis"
 REPORT_FILE="$ANALYSIS_DIR/report.txt"
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+
+# 使用北京时间生成时间戳
+TIMESTAMP=$(TZ='Asia/Shanghai' date +%Y%m%d_%H%M%S)
 BACKUP_FILE="/tmp/openwrt-error-analysis-$TIMESTAMP.txt"
 
 # 日志函数
@@ -78,9 +80,9 @@ init_report() {
     echo "==================================================" > "$REPORT_FILE"
     echo "        🚨 OpenWrt固件构建错误分析报告           " >> "$REPORT_FILE"
     echo "==================================================" >> "$REPORT_FILE"
-    echo "分析时间: $(date '+%Y-%m-%d %H:%M:%S')" >> "$REPORT_FILE"
+    echo "分析时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')" >> "$REPORT_FILE"
     echo "报告时间戳: $TIMESTAMP" >> "$REPORT_FILE"
-    echo "报告版本: 2.3.0" >> "$REPORT_FILE"
+    echo "报告版本: 2.4.0" >> "$REPORT_FILE"
     echo "构建目录: $BUILD_DIR" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
@@ -99,7 +101,7 @@ collect_system_info() {
     echo "  主机名: $(hostname)" >> "$REPORT_FILE"
     echo "  用户: $(whoami)" >> "$REPORT_FILE"
     echo "  终端: $TERM" >> "$REPORT_FILE"
-    echo "  分析时间: $(date '+%Y-%m-%d %H:%M:%S')" >> "$REPORT_FILE"
+    echo "  分析时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
     echo "📊 系统版本:" >> "$REPORT_FILE"
@@ -120,7 +122,8 @@ collect_system_info() {
     
     # 显示当前时间
     echo "🕐 当前时间:" >> "$REPORT_FILE"
-    echo "  系统时间: $(date)" >> "$REPORT_FILE"
+    echo "  系统时间（UTC）: $(date -u '+%Y-%m-%d %H:%M:%S')" >> "$REPORT_FILE"
+    echo "  系统时间（北京时间）: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')" >> "$REPORT_FILE"
     echo "  时间戳: $TIMESTAMP" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
 }
@@ -1151,7 +1154,7 @@ output_report() {
         
         # 显示时间信息
         echo "🕐 时间信息:"
-        echo "  分析时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "  分析时间（北京时间）: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
         echo "  报告时间戳: $TIMESTAMP"
         echo ""
         
@@ -1176,7 +1179,7 @@ output_report() {
 # 主执行函数
 main() {
     log "🚀 开始OpenWrt构建错误分析"
-    echo "分析开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "分析开始时间（北京时间）: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
     echo "构建目录: $BUILD_DIR"
     
     # 检查构建目录
