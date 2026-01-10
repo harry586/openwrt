@@ -1038,70 +1038,91 @@ jobs:
           if [ -d "bin/targets" ]; then
             echo "✅ 找到固件目录"
             
-            # 修复：分别统计不同类型文件
+            # 统计各种类型文件
             FIRMWARE_COUNT=0
             PACKAGE_COUNT=0
             OTHER_COUNT=0
-            TOTAL_SIZE=0
             
-            echo "📊 文件详情:"
-            echo "=========================================="
+            # 计算文件数量
+            echo "📊 正在统计文件..."
             
-            # 首先统计固件文件
+            # 统计固件文件（.bin和.img）
             FIRMWARE_COUNT=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
             
-            # 显示所有文件（最多20个）
-            find bin/targets -type f 2>/dev/null | head -20 | while read file; do
-                SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                BYTES=$(stat -c%s "$file" 2>/dev/null || echo "0")
-                TOTAL_SIZE=$((TOTAL_SIZE + BYTES))
-                
-                # 判断文件类型
-                if [[ "$file" == *.bin ]] || [[ "$file" == *.img ]]; then
-                  TYPE="固件"
-                elif [[ "$file" == *.gz ]] || [[ "$file" == *.ipk ]]; then
-                  TYPE="包文件"
-                else
-                  TYPE="其他"
-                fi
-                
-                echo "📁 文件:"
-                echo "  名称: $(basename "$file")"
-                echo "  类型: $TYPE"
-                echo "  大小: $SIZE ($BYTES 字节)"
-                echo "  路径: $(echo "$file" | sed "s|/mnt/openwrt-build/||")"
-                echo ""
-            done
-            
-            # 统计包文件和其他文件
+            # 统计包文件（.gz和.ipk）
             PACKAGE_COUNT=$(find bin/targets -type f \( -name "*.gz" -o -name "*.ipk" \) 2>/dev/null | wc -l)
+            
+            # 统计其他文件（排除上面两种类型）
             OTHER_COUNT=$(find bin/targets -type f 2>/dev/null | wc -l)
             OTHER_COUNT=$((OTHER_COUNT - FIRMWARE_COUNT - PACKAGE_COUNT))
             
             echo "=========================================="
-            echo "📈 统计信息:"
+            echo "📈 构建产物统计:"
             echo "  固件文件: $FIRMWARE_COUNT 个 (.bin/.img)"
             echo "  包文件: $PACKAGE_COUNT 个 (.gz/.ipk)"
             echo "  其他文件: $OTHER_COUNT 个"
             echo "  总文件数: $((FIRMWARE_COUNT + PACKAGE_COUNT + OTHER_COUNT)) 个"
-            echo "  总大小: $(numfmt --to=iec $TOTAL_SIZE)"
+            echo ""
             
-            if [ $FIRMWARE_COUNT -eq 0 ]; then
-              echo "⚠️ 警告: 未找到任何固件文件 (.bin/.img)"
-              echo "🔍 详细文件列表:"
-              find bin/targets -type f 2>/dev/null | head -10 | while read file; do
-                echo "  📄 $(basename "$file")"
-              done
-            else
-              echo "✅ 固件生成成功"
-              
-              # 显示固件文件详情
-              echo "📋 固件文件列表:"
+            # 显示所有固件文件的详细信息
+            if [ $FIRMWARE_COUNT -gt 0 ]; then
+              echo "📁 固件文件详细信息:"
+              echo "------------------------------------------"
               find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
                 SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                echo "  🎯 $(basename "$file") ($SIZE)"
+                FULL_SIZE=$(stat -c%s "$file" 2>/dev/null || echo "0")
+                FILE_NAME=$(basename "$file")
+                FILE_PATH=$(echo "$file" | sed "s|/mnt/openwrt-build/||")
+                
+                echo "🎯 文件: $FILE_NAME"
+                echo "  大小: $SIZE ($FULL_SIZE 字节)"
+                echo "  路径: $FILE_PATH"
+                
+                # 判断文件类型
+                if [[ "$FILE_NAME" == *factory* ]]; then
+                  echo "  类型: 🏭 工厂固件 (用于首次刷机)"
+                elif [[ "$FILE_NAME" == *sysupgrade* ]]; then
+                  echo "  类型: 🔄 系统升级固件 (用于已安装OpenWrt的设备)"
+                elif [[ "$FILE_NAME" == *initramfs* ]]; then
+                  echo "  类型: 🚀 内存启动固件 (用于测试和救援)"
+                else
+                  echo "  类型: 🔧 普通固件"
+                fi
+                
+                echo ""
+              done
+            else
+              echo "⚠️ 警告: 未找到任何固件文件 (.bin/.img)"
+              echo "🔍 目录内容 (前10个文件):"
+              find bin/targets -type f 2>/dev/null | head -10 | while read file; do
+                SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                echo "  📄 $(basename "$file") ($SIZE)"
               done
             fi
+            
+            # 计算总大小
+            echo "📏 大小统计:"
+            TOTAL_SIZE=0
+            find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
+              SIZE=$(stat -c%s "$file" 2>/dev/null || echo "0")
+              TOTAL_SIZE=$((TOTAL_SIZE + SIZE))
+            done
+            
+            if [ $TOTAL_SIZE -gt 0 ]; then
+              TOTAL_SIZE_MB=$((TOTAL_SIZE / 1024 / 1024))
+              echo "  固件总大小: ${TOTAL_SIZE_MB}MB"
+              
+              if [ $TOTAL_SIZE_MB -lt 5 ]; then
+                echo "  ⚠️ 警告: 固件文件可能太小"
+              elif [ $TOTAL_SIZE_MB -gt 100 ]; then
+                echo "  ⚠️ 警告: 固件文件可能太大"
+              else
+                echo "  ✅ 固件大小正常"
+              fi
+            fi
+            
+            echo "=========================================="
+            echo "✅ 构建产物检查完成"
           else
             echo "❌ 错误: 未找到固件目录"
             echo "⚠️ bin/targets目录不存在"
@@ -1213,14 +1234,34 @@ jobs:
               echo "  产物位置: /mnt/openwrt-build/bin/targets/"
               echo "  下载名称: firmware-${{ env.TIMESTAMP }}"
               
-              # 显示固件大小
-              echo "  固件文件:"
-              find /mnt/openwrt-build/bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | head -3 | while read file; do
+              # 显示所有固件文件信息
+              echo "  固件文件详情:"
+              find /mnt/openwrt-build/bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
                 SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                echo "    🎯 $(basename "$file") ($SIZE)"
+                FILE_NAME=$(basename "$file")
+                
+                if [[ "$FILE_NAME" == *factory* ]]; then
+                  TYPE="🏭 工厂固件"
+                elif [[ "$FILE_NAME" == *sysupgrade* ]]; then
+                  TYPE="🔄 升级固件"
+                elif [[ "$FILE_NAME" == *initramfs* ]]; then
+                  TYPE="🚀 内存固件"
+                else
+                  TYPE="🔧 普通固件"
+                fi
+                
+                echo "    🎯 $FILE_NAME ($SIZE) - $TYPE"
               done
+              
+              # 统计包文件
+              PACKAGE_COUNT=$(find /mnt/openwrt-build/bin/targets -type f \( -name "*.gz" -o -name "*.ipk" \) 2>/dev/null | wc -l)
+              OTHER_COUNT=$(find /mnt/openwrt-build/bin/targets -type f 2>/dev/null | wc -l)
+              OTHER_COUNT=$((OTHER_COUNT - FIRMWARE_COUNT - PACKAGE_COUNT))
+              
+              echo "  包文件数量: $PACKAGE_COUNT 个 (.gz/.ipk)"
+              echo "  其他文件数量: $OTHER_COUNT 个"
             else
-              echo "  ⚠️ 未生成固件文件 (.bin/.img)"
+              echo "  ⚠️ 构建结果: 编译完成但未生成固件文件"
               echo "  🔍 已生成的其他文件:"
               find /mnt/openwrt-build/bin/targets -type f 2>/dev/null | head -5 | while read file; do
                 SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
