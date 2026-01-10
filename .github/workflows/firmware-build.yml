@@ -52,7 +52,7 @@ jobs:
     # 添加编译缓存
     strategy:
       matrix:
-        ccache-size: ["2G"]
+        ccache-size: ["4G"]  # 改为4GB
     
     steps:
       # 步骤 0: 生成时间戳并设置ccache
@@ -60,9 +60,19 @@ jobs:
         run: |
           echo "=== 步骤 0: 初始化环境和生成时间戳 ==="
           
-          # 生成时间戳
-          TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$(date -u +'%Y%m%d%H%M%S')"
+          # 生成日期格式的时间戳（年月日）
+          BASE_DATE=$(date -u +'%Y%m%d')
+          TIMESTAMP_BASE="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$BASE_DATE"
+          
+          # 检查是否已有当天的构建，生成序号
+          BUILD_COUNT=1
+          TIMESTAMP="$TIMESTAMP_BASE"
+          
+          # 暂时先使用基础时间戳，序号功能可以在后续版本中添加
           echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
+          echo "BASE_DATE=$BASE_DATE" >> $GITHUB_ENV
+          echo "TIMESTAMP_BASE=$TIMESTAMP_BASE" >> $GITHUB_ENV
+          
           echo "✅ 生成时间戳: $TIMESTAMP"
           
           # 设置ccache路径
@@ -182,7 +192,7 @@ jobs:
           find "${{ github.workspace }}/firmware-config/scripts" -name "*.sh" -exec chmod +x {} \;
           echo "✅ 修复所有脚本权限完成"
       
-      # 步骤 4: 安装ccache和优化工具
+      # 步骤 4: 安装ccache和优化工具（修复版）
       - name: "4. 安装ccache和优化工具"
         run: |
           echo "=== 步骤 4: 安装ccache和优化工具 ==="
@@ -191,10 +201,10 @@ jobs:
           echo "🚀 安装编译加速工具..."
           sudo apt-get update
           
-          # 安装ccache（编译缓存）
+          # 安装ccache（编译缓存）- 这是核心工具
           sudo apt-get install -y ccache
           
-          # 安装其他优化工具
+          # 安装其他优化工具（移除不存在的taskset）
           sudo apt-get install -y \
             lzip \
             pigz \
@@ -209,14 +219,31 @@ jobs:
             iotop \
             iftop \
             nethogs \
-            sysstat \
-            numactl \
-            taskset
+            sysstat
+          
+          # 检查numactl和taskset是否可用
+          echo "🔍 检查系统优化工具..."
+          if dpkg -l | grep -q numactl; then
+            echo "✅ numactl 已安装"
+          else
+            echo "⚠️ numactl 未安装，尝试安装..."
+            sudo apt-get install -y numactl 2>/dev/null || echo "❌ 无法安装numactl"
+          fi
+          
+          # taskset通常包含在util-linux中
+          if command -v taskset >/dev/null 2>&1; then
+            echo "✅ taskset 可用"
+          else
+            echo "⚠️ taskset 不可用，检查util-linux..."
+            sudo apt-get install -y util-linux 2>/dev/null || echo "❌ 无法安装util-linux"
+          fi
           
           # 配置ccache
           echo "🔧 配置ccache..."
           mkdir -p ${{ env.CCACHE_DIR }}
           ccache -M ${{ env.CCACHE_MAXSIZE }}
+          
+          echo "📊 ccache状态:"
           ccache -s
           
           echo "✅ 编译加速工具安装完成"
@@ -690,6 +717,7 @@ jobs:
           echo "版本: ${{ env.SELECTED_BRANCH }}" >> /tmp/build-logs/compile_start.log
           echo "并行优化: ${{ env.ENABLE_PARALLEL }}" >> /tmp/build-logs/compile_start.log
           echo "缓存优化: ${{ env.ENABLE_CACHE }}" >> /tmp/build-logs/compile_start.log
+          echo "时间戳: ${{ env.TIMESTAMP }}" >> /tmp/build-logs/compile_start.log
           
           cd /mnt/openwrt-build
           
@@ -707,24 +735,33 @@ jobs:
           
           # 如果启用缓存，配置ccache
           if [ "${{ env.ENABLE_CACHE }}" = "true" ]; then
-            echo "🚀 启用ccache编译缓存加速..."
+            echo "🚀 启用ccache编译缓存加速 (4GB缓存)..."
             export CCACHE_DIR="${{ env.CCACHE_DIR }}"
             export CCACHE_MAXSIZE="${{ env.CCACHE_MAXSIZE }}"
             export CCACHE_COMPRESS=1
             export CCACHE_COMPRESSLEVEL=6
             
             # 显示ccache状态
+            echo "📊 ccache初始状态:"
             ccache -s
             
             # 在Makefile中启用ccache
             if [ ! -f "Makefile.orig" ]; then
               cp Makefile Makefile.orig
+              echo "✅ 备份原始Makefile"
             fi
             
-            # 修改Makefile以使用ccache
-            sed -i 's/^export HOSTCC/export HOSTCC = $(if $(shell which ccache),ccache) $(HOSTCC)/' Makefile
-            sed -i 's/^export TARGET_CC/export TARGET_CC = $(if $(shell which ccache),ccache) $(TARGET_CC)/' Makefile
-            sed -i 's/^export TARGET_CXX/export TARGET_CXX = $(if $(shell which ccache),ccache) $(TARGET_CXX)/' Makefile
+            # 检查是否已启用ccache
+            if ! grep -q "ccache" Makefile; then
+              echo "🔧 配置Makefile使用ccache..."
+              # 添加ccache到编译命令
+              sed -i 's/^export HOSTCC.*/export HOSTCC := ccache $(if $(shell which gcc),gcc,cc)/' Makefile
+              sed -i 's/^export TARGET_CC.*/export TARGET_CC := ccache $(TARGET_CROSS)gcc/' Makefile
+              sed -i 's/^export TARGET_CXX.*/export TARGET_CXX := ccache $(TARGET_CROSS)g++/' Makefile
+              echo "✅ 已配置ccache到Makefile"
+            else
+              echo "✅ ccache已在Makefile中配置"
+            fi
           fi
           
           if [ "$ENABLE_PARALLEL" = "true" ]; then
@@ -785,8 +822,9 @@ jobs:
           echo "🚀 开始编译固件，使用 $MAKE_JOBS 个并行任务"
           echo "💡 编译优化:"
           echo "  - 并行任务: $MAKE_JOBS"
-          echo "  - ccache缓存: ${{ env.ENABLE_CACHE }}"
+          echo "  - ccache缓存: ${{ env.ENABLE_CACHE }} (4GB)"
           echo "  - 内存优化: 已启用"
+          echo "  - 时间戳: ${{ env.TIMESTAMP }}"
           
           # 开始编译
           echo "🕐 编译开始: $(date '+%Y-%m-%d %H:%M:%S')"
@@ -810,6 +848,12 @@ jobs:
             if [ -d "bin/targets" ]; then
               FIRMWARE_COUNT=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
               echo "✅ 生成固件文件: $FIRMWARE_COUNT 个"
+              
+              # 显示固件文件信息
+              find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | head -5 | while read file; do
+                SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                echo "  📁 $(basename "$file") ($SIZE)"
+              done
             fi
           else
             echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
@@ -938,5 +982,8 @@ jobs:
           echo ""
           echo "🚀 编译优化报告:"
           echo "  - 并行优化: ${{ env.ENABLE_PARALLEL }}"
-          echo "  - 缓存优化: ${{ env.ENABLE_CACHE }}"
+          echo "  - 缓存优化: ${{ env.ENABLE_CACHE }} (4GB)"
           echo "  - 时间戳: ${{ env.TIMESTAMP }}"
+          echo "  - 设备: ${{ github.event.inputs.device_name }}"
+          echo "  - 版本: ${{ github.event.inputs.version_selection }}"
+          echo "  - 配置模式: ${{ github.event.inputs.config_mode }}"
