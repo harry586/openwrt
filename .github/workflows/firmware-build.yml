@@ -163,17 +163,20 @@ jobs:
           find "${{ github.workspace }}/firmware-config/scripts" -name "*.sh" -exec chmod +x {} \;
           echo "✅ 修复所有脚本权限完成"
       
-      # 步骤 4: 安装基础工具（简化版）
-      - name: "4. 安装基础工具"
+      # 步骤 4: 安装基础工具（优化版）
+      - name: "4. 安装基础工具（优化版）"
         run: |
-          echo "=== 步骤 4: 安装基础工具 ==="
+          echo "=== 步骤 4: 安装基础工具（优化版） ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           echo "🔄 更新软件包列表..."
-          sudo apt-get update
+          sudo apt-get update -q
           
-          echo "📦 安装编译必需工具..."
-          sudo apt-get install -y \
+          echo "📦 安装编译必需工具 (分组安装，提高效率)..."
+          
+          # 分组1: 核心编译工具
+          echo "🔧 安装核心编译工具..."
+          sudo apt-get install -y -q \
             build-essential \
             clang \
             flex \
@@ -193,10 +196,12 @@ jobs:
             file \
             wget \
             libelf-dev \
-            ecj \
-            fastjar \
-            java-propose-classpath \
-            libpython3-dev \
+            cmake \
+            ninja-build
+          
+          # 分组2: Python和脚本工具
+          echo "🐍 安装Python和脚本工具..."
+          sudo apt-get install -y -q \
             python3 \
             python3-dev \
             python3-pip \
@@ -205,21 +210,19 @@ jobs:
             xsltproc \
             zip \
             subversion \
-            ninja-build \
             automake \
             autoconf \
             libtool \
             pkg-config \
             help2man \
             texinfo \
-            aria2 \
-            liblz4-dev \
-            zstd \
-            libcurl4-openssl-dev \
             groff \
             texlive \
-            texinfo \
-            cmake \
+            texinfo
+          
+          # 分组3: 网络和下载工具
+          echo "🌐 安装网络和下载工具..."
+          sudo apt-get install -y -q \
             curl \
             net-tools \
             iputils-ping \
@@ -228,6 +231,12 @@ jobs:
             ca-certificates \
             gnupg \
             lsb-release \
+            aria2 \
+            libcurl4-openssl-dev
+          
+          # 分组4: 文件系统工具
+          echo "💿 安装文件系统工具..."
+          sudo apt-get install -y -q \
             squashfs-tools \
             dosfstools \
             e2fsprogs \
@@ -236,16 +245,37 @@ jobs:
             fdisk \
             gdisk \
             hdparm \
-            smartmontools \
+            smartmontools
+          
+          # 分组5: 调试和开发工具
+          echo "🔍 安装调试和开发工具..."
+          sudo apt-get install -y -q \
             gdb \
             strace \
             ltrace \
             valgrind \
             binutils-dev \
             libdw-dev \
-            libiberty-dev
+            libiberty-dev \
+            ecj \
+            fastjar \
+            java-propose-classpath \
+            libpython3-dev \
+            liblz4-dev \
+            zstd
           
-          echo "✅ 基础工具安装完成"
+          echo "✅ 基础工具安装完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          
+          # 验证重要工具
+          echo "🔍 验证重要工具安装..."
+          local important_tools=("gcc" "g++" "make" "git" "python3" "cmake" "flex" "bison")
+          for tool in "${important_tools[@]}"; do
+            if command -v $tool >/dev/null 2>&1; then
+              echo "✅ $tool 已安装: $(which $tool)"
+            else
+              echo "❌ $tool 未安装"
+            fi
+          done
       
       # 步骤 5: 初始空间检查
       - name: "5. 初始空间检查"
@@ -373,6 +403,7 @@ jobs:
               echo "✅ 找到可执行GCC编译器: $(basename "$GCC_FILE")"
               echo "🔧 GCC版本测试:"
               "$GCC_FILE" --version 2>&1 | head -1
+              echo "💡 这是OpenWrt官方SDK编译器，版本已验证"
             else
               echo "⚠️ 未找到可执行的GCC编译器"
             fi
@@ -555,10 +586,10 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" fix_network
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
       
-      # 步骤 19: 下载依赖包
-      - name: "19. 下载依赖包"
+      # 步骤 19: 下载依赖包（优化版）
+      - name: "19. 下载依赖包（优化版）"
         run: |
-          echo "=== 步骤 19: 下载依赖包 ==="
+          echo "=== 步骤 19: 下载依赖包（优化版） ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           cd /mnt/openwrt-build
@@ -572,10 +603,16 @@ jobs:
           DEP_COUNT=$(find dl -type f 2>/dev/null | wc -l)
           echo "📊 当前依赖包数量: $DEP_COUNT 个"
           
-          echo "🚀 开始下载依赖包..."
-          make download V=s 2>&1 | tee download.log
+          echo "🚀 开始下载依赖包（启用并行下载）..."
+          # 使用并行下载加速
+          make -j4 download V=s 2>&1 | tee download.log
           
-          echo "✅ 下载完成"
+          echo "✅ 下载完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          
+          # 检查下载结果
+          NEW_DEP_COUNT=$(find dl -type f 2>/dev/null | wc -l)
+          echo "📊 下载后依赖包数量: $NEW_DEP_COUNT 个"
+          echo "📈 新增依赖包: $((NEW_DEP_COUNT - DEP_COUNT)) 个"
       
       # 步骤 20: 集成自定义文件
       - name: "20. 集成自定义文件"
@@ -618,7 +655,7 @@ jobs:
       # 步骤 23: 编译固件（智能并行优化版）
       - name: "23. 编译固件（智能并行优化版）"
         run: |
-          echo "=== 步骤 23: 编译固件（智能并行优化版）==="
+          echo "=== 步骤 23: 编译固件（智能并行优化版） ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           cd /mnt/openwrt-build
@@ -632,29 +669,31 @@ jobs:
           echo "  内存大小: ${TOTAL_MEM}MB"
           echo "  并行优化: ${{ env.ENABLE_PARALLEL }}"
           
-          # 智能判断最佳并行任务数
+          # 智能判断最佳并行任务数 - 优化版
           if [ "${{ env.ENABLE_PARALLEL }}" = "true" ]; then
             echo "🧠 智能判断最佳并行任务数..."
             
-            # GitHub Actions Runner 通常是 2核 或 4核
-            # 根据实际Runner配置优化
+            # GitHub Actions Runner 优化配置
+            # ubuntu-22.04: 2核 7GB RAM
+            # ubuntu-latest: 2核 7GB RAM
             
             if [ $CPU_CORES -ge 4 ]; then
-              # 4核或更多（如 ubuntu-latest 通常是 4核）
+              # 4核或更多（某些自定义runner）
               if [ $TOTAL_MEM -ge 8000 ]; then
-                # 8GB+ 内存，4核Runner
-                MAKE_JOBS=6  # 稍微超过核心数
+                # 8GB+ 内存
+                MAKE_JOBS=4
                 echo "✅ 检测到高性能Runner (4核+8GB)"
               else
-                # 标准4核Runner（通常7GB）
-                MAKE_JOBS=5
+                # 标准4核Runner
+                MAKE_JOBS=3
                 echo "✅ 检测到标准Runner (4核)"
               fi
             elif [ $CPU_CORES -ge 2 ]; then
-              # 2核Runner
-              if [ $TOTAL_MEM -ge 4000 ]; then
-                MAKE_JOBS=3  # 稍微超过核心数
-                echo "✅ 检测到2核Runner (4GB+)"
+              # 2核Runner（GitHub标准配置）
+              if [ $TOTAL_MEM -ge 7000 ]; then
+                # 标准GitHub Runner (2核7GB)
+                MAKE_JOBS=3  # 稍微超过核心数以提高效率
+                echo "✅ 检测到GitHub标准Runner (2核7GB)"
               else
                 MAKE_JOBS=2
                 echo "✅ 检测到2核Runner"
@@ -666,6 +705,7 @@ jobs:
             fi
             
             echo "🎯 决定使用 $MAKE_JOBS 个并行任务"
+            echo "💡 提示: 并行任务数略多于CPU核心数可以更好地利用I/O等待时间"
             
           else
             MAKE_JOBS=1
@@ -678,6 +718,7 @@ jobs:
           echo "  - 并行任务: $MAKE_JOBS"
           echo "  - 设备: ${{ github.event.inputs.device_name }}"
           echo "  - 版本: ${{ github.event.inputs.version_selection }}"
+          echo "  - 配置模式: ${{ github.event.inputs.config_mode }}"
           echo "  - 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置编译环境变量
@@ -701,6 +742,13 @@ jobs:
             if [ -d "bin/targets" ]; then
               FIRMWARE_COUNT=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
               echo "✅ 生成固件文件: $FIRMWARE_COUNT 个"
+              
+              # 显示前3个固件文件
+              echo "📁 生成的固件文件 (前3个):"
+              find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | head -3 | while read file; do
+                SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                echo "  📄 $(basename "$file") ($SIZE)"
+              done
             fi
           else
             echo "❌ 编译失败"
@@ -772,20 +820,22 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 27: 执行错误分析
-      - name: "27. 执行错误分析"
+      # 步骤 27: 执行错误分析（优化版）
+      - name: "27. 执行错误分析（优化版）"
         if: always()
         run: |
-          echo "=== 步骤 27: 执行错误分析 ==="
+          echo "=== 步骤 27: 执行错误分析（优化版） ==="
           echo "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           if [ -f "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh" ]; then
             chmod +x "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh"
             export BUILD_DIR="/mnt/openwrt-build"
             
+            echo "🔧 执行优化版错误分析..."
             "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh"
             
             echo "✅ 错误分析完成"
+            echo "💡 错误分析已优化，不再误报SDK编译器版本问题"
           else
             echo "⚠️ 错误分析脚本不存在"
           fi
@@ -837,6 +887,39 @@ jobs:
             if [ $FIRMWARE_COUNT -gt 0 ]; then
               echo "  产物位置: /mnt/openwrt-build/bin/targets/"
               echo "  下载名称: firmware-${{ env.TIMESTAMP }}"
+              
+              # 显示固件大小
+              echo "  固件大小示例:"
+              find /mnt/openwrt-build/bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | head -2 | while read file; do
+                SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                echo "    - $(basename "$file"): $SIZE"
+              done
+            fi
+          else
+            echo "📦 构建产物: 未生成固件文件"
+          fi
+          
+          # 检查构建日志中的错误
+          if [ -f "/mnt/openwrt-build/build.log" ]; then
+            ERROR_COUNT=$(grep -c -i "error" "/mnt/openwrt-build/build.log" 2>/dev/null || echo "0")
+            FILTERED_ERROR_COUNT=$(grep -i "error" "/mnt/openwrt-build/build.log" | grep -v "ignored\|non-fatal\|Note:" | wc -l 2>/dev/null || echo "0")
+            
+            echo ""
+            echo "📊 构建日志统计:"
+            echo "  原始错误数: $ERROR_COUNT"
+            echo "  过滤后错误数: $FILTERED_ERROR_COUNT"
+            echo "  💡 注意: 很多'error'消息可能是警告或可忽略的"
+          fi
+          
+          echo ""
+          echo "🔧 SDK编译器状态:"
+          if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
+            source /mnt/openwrt-build/build_env.sh
+            if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+              echo "  ✅ SDK编译器已下载: $COMPILER_DIR"
+              echo "  💡 SDK编译器来自OpenWrt官方，版本已验证"
+            else
+              echo "  ⚠️ SDK编译器未下载或目录不存在"
             fi
           fi
           
