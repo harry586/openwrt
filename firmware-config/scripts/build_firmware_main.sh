@@ -923,10 +923,10 @@ initialize_compiler_env() {
     # 首先加载环境变量 - 加强搜索机制
     log "🔍 检查环境文件..."
     
-    # 搜索环境文件的可能位置
+    # 搜索环境文件的可能位置（优先级顺序）
     local possible_env_files=(
+        "/mnt/openwrt-build/build_env.sh"  # 步骤6.3创建的环境文件
         "$BUILD_DIR/build_env.sh"
-        "/mnt/openwrt-build/build_env.sh"
         "$GITHUB_WORKSPACE/firmware-config/build_env.sh"
         "/tmp/openwrt-build/build_env.sh"
     )
@@ -2578,3 +2578,4 @@ main() {
 }
 
 main "$@"
+# 文件结束 - 总字数：81725，总行数：1813
