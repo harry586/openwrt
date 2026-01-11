@@ -1349,7 +1349,7 @@ pre_build_space_check() {
     # 检查/可用空间
     local root_available_space=$(df / --output=avail | tail -1)
     local root_available_gb=$((root_available_space / 1024 / 1024))
-    echo "/ 可用空间: ${root_available_gb}G"
+    echo "/ 可用空间: ${available_gb}G"
     
     # 内存和交换空间
     echo "=== 内存使用情况 ==="
@@ -2767,4 +2767,3 @@ main() {
 }
 
 main "$@"
-# 文件结束 - 总字数：2700+，实际行数因编辑器而异
