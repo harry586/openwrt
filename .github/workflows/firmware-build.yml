@@ -428,10 +428,10 @@ jobs:
           echo "✅ 编译环境和构建目录设置完成，北京时间: $(TZ="Asia/Shanghai" date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 6 完成"
       
-      # 步骤 7: 下载OpenWrt官方SDK（环境文件搜索修复版）
-      - name: "7. 下载OpenWrt官方SDK（环境文件搜索修复版）"
+      # 步骤 7: 下载OpenWrt官方SDK（环境文件搜索修复版）- 增强版
+      - name: "7. 下载OpenWrt官方SDK（环境文件搜索修复版）- 增强版"
         run: |
-          echo "=== 步骤 7: 下载OpenWrt官方SDK（环境文件搜索修复版） ==="
+          echo "=== 步骤 7: 下载OpenWrt官方SDK（环境文件搜索修复版）- 增强版 ==="
           echo "🕐 北京时间: $(TZ="Asia/Shanghai" date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -440,30 +440,24 @@ jobs:
           
           echo "🚀 开始下载OpenWrt官方SDK工具链..."
           
-          # 先检查环境文件是否已经存在（加强搜索机制）
-          echo "🔍 加强搜索环境文件..."
+          # 关键修复：在步骤7开始时就验证步骤6.3创建的环境文件
+          echo "🔍 关键修复：验证步骤6.3创建的环境文件..."
           
-          # 查找环境文件的可能位置（优先级顺序）
-          ENV_FILE=""
-          possible_locations=(
-            "/mnt/openwrt-build/build_env.sh"
-            "${{ github.workspace }}/firmware-config/build_env.sh"
-            "/tmp/openwrt-build/build_env.sh"
-          )
+          ENV_FILE="/mnt/openwrt-build/build_env.sh"
+          echo "检查环境文件路径: $ENV_FILE"
           
-          for location in "${possible_locations[@]}"; do
-            if [ -f "$location" ]; then
-              ENV_FILE="$location"
-              echo "✅ 找到环境文件: $location"
-              break
-            fi
-          done
-          
-          if [ -n "$ENV_FILE" ]; then
-            echo "📊 环境文件内容摘要:"
+          if [ -f "$ENV_FILE" ]; then
+            echo "✅ 环境文件存在: $ENV_FILE"
+            echo "📊 环境文件信息:"
+            echo "  文件大小: $(ls -lh "$ENV_FILE" | awk '{print $5}')"
+            echo "  文件权限: $(ls -la "$ENV_FILE" | awk '{print $1}')"
+            echo "  文件所有者: $(ls -la "$ENV_FILE" | awk '{print $3":"$4}')"
+            
+            # 显示环境文件内容
+            echo "📝 环境文件内容摘要:"
             head -15 "$ENV_FILE"
             
-            # 加载现有环境变量
+            # 加载环境变量
             source "$ENV_FILE"
             echo "✅ 从环境文件加载变量:"
             echo "  SELECTED_BRANCH: ${SELECTED_BRANCH:-未设置}"
@@ -472,54 +466,37 @@ jobs:
             echo "  DEVICE: ${DEVICE:-未设置}"
             echo "  CONFIG_MODE: ${CONFIG_MODE:-未设置}"
             echo "  REPO_ROOT: ${REPO_ROOT:-未设置}"
+            echo "  COMPILER_DIR: ${COMPILER_DIR:-未设置}"
             echo ""
             
             echo "💡 使用步骤6.3已设置的环境变量进行SDK下载"
           else
-            echo "⚠️ 环境文件不存在，重新创建环境变量..."
+            echo "❌ 错误: 环境文件不存在: $ENV_FILE"
+            echo "💡 步骤6.3可能没有成功创建环境文件"
+            echo "🔍 尝试查找其他位置的环境文件..."
             
-            # 根据设备设置基础环境变量
-            DEVICE_NAME="${{ github.event.inputs.device_name }}"
-            case "$DEVICE_NAME" in
-              "ac42u"|"acrh17")
-                TARGET="ipq40xx"
-                SUBTARGET="generic"
-                DEVICE="asus_rt-ac42u"
-                ;;
-              "mi_router_4a_gigabit"|"r4ag")
-                TARGET="ramips"
-                SUBTARGET="mt76x8"
-                DEVICE="xiaomi_mi-router-4a-gigabit"
-                ;;
-              "mi_router_3g"|"r3g")
-                TARGET="ramips"
-                SUBTARGET="mt7621"
-                DEVICE="xiaomi_mi-router-3g"
-                ;;
-              *)
-                TARGET="ipq40xx"
-                SUBTARGET="generic"
-                DEVICE="$DEVICE_NAME"
-                ;;
-            esac
+            # 搜索其他可能的位置
+            possible_locations=(
+              "${{ github.workspace }}/firmware-config/build_env.sh"
+              "/tmp/openwrt-build/build_env.sh"
+              "$HOME/openwrt-build/build_env.sh"
+            )
             
-            SELECTED_BRANCH="${{ github.event.inputs.version_selection == '23.05' && 'openwrt-23.05' || 'openwrt-21.02' }}"
-            CONFIG_MODE="${{ github.event.inputs.config_mode }}"
-            REPO_ROOT="${{ github.workspace }}"
-            COMPILER_DIR=""
+            found_env=0
+            for location in "${possible_locations[@]}"; do
+              if [ -f "$location" ]; then
+                echo "✅ 找到环境文件: $location"
+                ENV_FILE="$location"
+                found_env=1
+                break
+              fi
+            done
             
-            # 创建环境文件
-            echo "#!/bin/bash" > /mnt/openwrt-build/build_env.sh
-            echo "export SELECTED_REPO_URL=\"https://github.com/immortalwrt/immortalwrt.git\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export SELECTED_BRANCH=\"$SELECTED_BRANCH\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export TARGET=\"$TARGET\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export SUBTARGET=\"$SUBTARGET\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export DEVICE=\"$DEVICE\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export CONFIG_MODE=\"$CONFIG_MODE\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export REPO_ROOT=\"$REPO_ROOT\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export COMPILER_DIR=\"$COMPILER_DIR\"" >> /mnt/openwrt-build/build_env.sh
-            chmod +x /mnt/openwrt-build/build_env.sh
-            echo "✅ 已创建环境文件: /mnt/openwrt-build/build_env.sh"
+            if [ $found_env -eq 0 ]; then
+              echo "❌ 错误: 在任何位置都找不到环境文件"
+              echo "💡 需要重新运行步骤6.3"
+              exit 1
+            fi
           fi
           
           # 执行SDK下载
@@ -1344,3 +1321,4 @@ jobs:
           echo "✅ 构建流程完成"
           echo "========================================"
           echo "🟢 步骤 29 完成"
+# 文件结束 - 总字数：77038，总行数：2005
