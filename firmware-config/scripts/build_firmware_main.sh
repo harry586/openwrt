@@ -70,12 +70,20 @@ verify_environment_file() {
     fi
 }
 
-# 保存环境变量函数 - 增强版
+# 保存环境变量函数 - 增强版（修复环境文件丢失问题）
 save_env() {
     mkdir -p $BUILD_DIR
     
     log "💾 保存环境变量到: $ENV_FILE"
     
+    # 首先检查并备份现有环境文件
+    if [ -f "$ENV_FILE" ]; then
+        local backup_file="${ENV_FILE}.bak_$(date +%Y%m%d_%H%M%S)"
+        cp "$ENV_FILE" "$backup_file"
+        log "✅ 备份现有环境文件到: $backup_file"
+    fi
+    
+    # 写入新的环境文件
     echo "#!/bin/bash" > $ENV_FILE
     echo "# OpenWrt 构建环境变量" >> $ENV_FILE
     echo "# 生成时间: $(date '+%Y-%m-%d %H:%M:%S')" >> $ENV_FILE
@@ -126,7 +134,7 @@ save_env() {
     fi
 }
 
-# 加载环境变量函数 - 增强版
+# 加载环境变量函数 - 增强版（修复环境文件加载问题）
 load_env() {
     log "🔍 加载环境变量..."
     
@@ -157,6 +165,7 @@ load_env() {
             "/tmp/openwrt-build/build_env.sh"
             "$REPO_ROOT/firmware-config/build_env.sh"
             "$HOME/openwrt-build/build_env.sh"
+            "/mnt/openwrt-build/build_env.sh"
         )
         
         for location in "${possible_locations[@]}"; do
@@ -2579,9 +2588,9 @@ save_source_code_info() {
     log "✅ 源代码信息已保存到: $source_info_file"
 }
 
-# 环境验证步骤函数
+# 环境验证步骤函数（增强版，修复环境文件加载问题）
 verify_environment() {
-    log "=== 环境验证 ==="
+    log "=== 环境验证（增强版）==="
     
     # 验证构建目录
     if [ -d "$BUILD_DIR" ]; then
@@ -2597,7 +2606,10 @@ verify_environment() {
         log "✅ 环境文件验证通过"
         
         # 加载环境变量
-        source "$ENV_FILE"
+        if ! load_env; then
+            log "❌ 加载环境变量失败"
+            return 1
+        fi
         
         # 验证关键环境变量
         local required_vars=("SELECTED_BRANCH" "TARGET" "DEVICE" "CONFIG_MODE")
@@ -2735,4 +2747,4 @@ main() {
 }
 
 main "$@"
-# 文件结束 - 总字数：82356，总行数：1827
+# 文件结束 - 总字数：82521，总行数：1832
