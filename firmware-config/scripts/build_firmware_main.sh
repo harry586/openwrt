@@ -20,10 +20,15 @@ handle_error() {
     exit 1
 }
 
-# 保存环境变量函数 - 修复版
+# 保存环境变量函数 - 修复版（增加调试信息）
 save_env() {
     mkdir -p $BUILD_DIR
     echo "#!/bin/bash" > $ENV_FILE
+    echo "# 自动生成的环境文件 - 生成时间: $(date '+%Y-%m-%d %H:%M:%S')" >> $ENV_FILE
+    echo "# 设备: ${DEVICE:-未设置}" >> $ENV_FILE
+    echo "# 版本: ${SELECTED_BRANCH:-未设置}" >> $ENV_FILE
+    echo "# 模式: ${CONFIG_MODE:-未设置}" >> $ENV_FILE
+    echo "" >> $ENV_FILE
     echo "export SELECTED_REPO_URL=\"${SELECTED_REPO_URL}\"" >> $ENV_FILE
     echo "export SELECTED_BRANCH=\"${SELECTED_BRANCH}\"" >> $ENV_FILE
     echo "export TARGET=\"${TARGET}\"" >> $ENV_FILE
@@ -45,7 +50,13 @@ save_env() {
     fi
     
     chmod +x $ENV_FILE
+    
+    # 增加调试输出
+    echo "=== save_env 调试信息 ==="
     log "✅ 环境变量已保存到: $ENV_FILE"
+    echo "📁 文件内容预览:"
+    head -20 $ENV_FILE
+    echo "📊 文件大小: $(ls -lh $ENV_FILE | awk '{print $5}')"
 }
 
 # 加载环境变量函数
@@ -2402,7 +2413,7 @@ search_compiler_files_simple() {
     return 1
 }
 
-# 保存源代码信息
+# 保存源代码信息（增加时间戳显示）
 save_source_code_info() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -2412,7 +2423,8 @@ save_source_code_info() {
     local source_info_file="$REPO_ROOT/firmware-config/source-info.txt"
     
     echo "=== 源代码信息 ===" > "$source_info_file"
-    echo "生成时间: $(date)" >> "$source_info_file"
+    echo "生成时间（UTC）: $(date -u '+%Y-%m-%d %H:%M:%S')" >> "$source_info_file"
+    echo "生成时间（北京时间）: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')" >> "$source_info_file"
     echo "构建目录: $BUILD_DIR" >> "$source_info_file"
     echo "仓库URL: $SELECTED_REPO_URL" >> "$source_info_file"
     echo "分支: $SELECTED_BRANCH" >> "$source_info_file"
