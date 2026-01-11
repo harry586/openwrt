@@ -915,7 +915,7 @@ initialize_build_env() {
     done
 }
 
-# 初始化编译器环境（下载OpenWrt官方SDK）- 修复版，加强环境文件搜索
+# 初始化编译器环境（下载OpenWrt官方SDK）- 修复版，加强环境文件搜索和回退逻辑
 initialize_compiler_env() {
     local device_name="$1"
     log "=== 初始化编译器环境（下载OpenWrt官方SDK）- 修复版 ==="
@@ -928,6 +928,7 @@ initialize_compiler_env() {
         "$BUILD_DIR/build_env.sh"
         "/mnt/openwrt-build/build_env.sh"
         "$GITHUB_WORKSPACE/firmware-config/build_env.sh"
+        "/tmp/openwrt-build/build_env.sh"
     )
     
     local found_env_file=""
@@ -954,75 +955,64 @@ initialize_compiler_env() {
         log "  REPO_ROOT: $REPO_ROOT"
         log "  COMPILER_DIR: $COMPILER_DIR"
     else
-        log "⚠️ 环境文件不存在，尝试搜索构建目录..."
+        log "⚠️ 环境文件不存在，基于设备名称和workflow输入设置环境变量..."
         
-        # 尝试从构建目录中获取信息
-        if [ -d "$BUILD_DIR" ]; then
-            log "🔍 搜索构建目录中的配置信息..."
-            
-            # 从当前目录或构建目录获取信息
-            local build_dir_path="$BUILD_DIR"
-            if [ -d "$build_dir_path" ]; then
-                # 尝试从构建目录的.config文件获取信息
-                if [ -f "$build_dir_path/.config" ]; then
-                    log "✅ 找到.config文件，从中提取信息"
-                    
-                    # 从.config中提取TARGET信息
-                    if grep -q "CONFIG_TARGET_ipq40xx=y" "$build_dir_path/.config"; then
-                        TARGET="ipq40xx"
-                        SUBTARGET="generic"
-                        log "📌 从.config提取: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
-                    elif grep -q "CONFIG_TARGET_ramips=y" "$build_dir_path/.config"; then
-                        if grep -q "CONFIG_TARGET_ramips_mt76x8=y" "$build_dir_path/.config"; then
-                            TARGET="ramips"
-                            SUBTARGET="mt76x8"
-                            log "📌 从.config提取: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
-                        elif grep -q "CONFIG_TARGET_ramips_mt7621=y" "$build_dir_path/.config"; then
-                            TARGET="ramips"
-                            SUBTARGET="mt7621"
-                            log "📌 从.config提取: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
-                        fi
-                    fi
-                fi
+        # 根据设备名称设置完整的环境变量（与步骤6.3和workflow输入保持一致）
+        case "$device_name" in
+            "ac42u"|"acrh17")
+                # 这里需要从workflow环境获取版本和模式，但脚本内无法直接访问
+                # 设置默认值，后续由调用者传入
+                SELECTED_BRANCH="openwrt-21.02"  # 默认值，实际应由workflow设置
+                TARGET="ipq40xx"
+                SUBTARGET="generic"
+                DEVICE="asus_rt-ac42u"
+                CONFIG_MODE="normal"  # 默认值
+                ;;
+            "mi_router_4a_gigabit"|"r4ag")
+                SELECTED_BRANCH="openwrt-21.02"  # 默认值
+                TARGET="ramips"
+                SUBTARGET="mt76x8"
+                DEVICE="xiaomi_mi-router-4a-gigabit"
+                CONFIG_MODE="normal"  # 默认值
+                ;;
+            "mi_router_3g"|"r3g")
+                SELECTED_BRANCH="openwrt-21.02"  # 默认值
+                TARGET="ramips"
+                SUBTARGET="mt7621"
+                DEVICE="xiaomi_mi-router-3g"
+                CONFIG_MODE="normal"  # 默认值
+                ;;
+            *)
+                SELECTED_BRANCH="openwrt-21.02"  # 默认值
+                TARGET="ipq40xx"
+                SUBTARGET="generic"
+                DEVICE="$device_name"
+                CONFIG_MODE="normal"  # 默认值
+                ;;
+        esac
+        
+        # 尝试从环境变量获取workflow设置的值（如果存在）
+        if [ -n "$GITHUB_EVENT_INPUTS_VERSION_SELECTION" ]; then
+            if [ "$GITHUB_EVENT_INPUTS_VERSION_SELECTION" = "23.05" ]; then
+                SELECTED_BRANCH="openwrt-23.05"
+            else
+                SELECTED_BRANCH="openwrt-21.02"
             fi
         fi
         
-        # 设置默认值
-        if [ -z "$SELECTED_BRANCH" ]; then
-            SELECTED_BRANCH="openwrt-21.02"
-            log "⚠️ SELECTED_BRANCH未设置，使用默认值: $SELECTED_BRANCH"
+        if [ -n "$GITHUB_EVENT_INPUTS_CONFIG_MODE" ]; then
+            CONFIG_MODE="$GITHUB_EVENT_INPUTS_CONFIG_MODE"
         fi
         
-        if [ -z "$TARGET" ]; then
-            case "$device_name" in
-                "ac42u"|"acrh17")
-                    TARGET="ipq40xx"
-                    SUBTARGET="generic"
-                    DEVICE="asus_rt-ac42u"
-                    ;;
-                "mi_router_4a_gigabit"|"r4ag")
-                    TARGET="ramips"
-                    SUBTARGET="mt76x8"
-                    DEVICE="xiaomi_mi-router-4a-gigabit"
-                    ;;
-                "mi_router_3g"|"r3g")
-                    TARGET="ramips"
-                    SUBTARGET="mt7621"
-                    DEVICE="xiaomi_mi-router-3g"
-                    ;;
-                *)
-                    TARGET="ipq40xx"
-                    SUBTARGET="generic"
-                    DEVICE="$device_name"
-                    ;;
-            esac
-            log "⚠️ 平台变量未设置，使用默认值: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE"
-        fi
+        REPO_ROOT="$BUILD_DIR/.."
+        COMPILER_DIR=""
         
-        if [ -z "$CONFIG_MODE" ]; then
-            CONFIG_MODE="normal"
-            log "⚠️ CONFIG_MODE未设置，使用默认值: $CONFIG_MODE"
-        fi
+        log "📋 基于设备名称设置的环境变量:"
+        log "  SELECTED_BRANCH: $SELECTED_BRANCH"
+        log "  TARGET: $TARGET"
+        log "  SUBTARGET: $SUBTARGET"
+        log "  DEVICE: $DEVICE"
+        log "  CONFIG_MODE: $CONFIG_MODE"
         
         # 保存到环境文件
         save_env
