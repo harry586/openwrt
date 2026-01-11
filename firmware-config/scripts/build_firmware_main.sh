@@ -915,16 +915,34 @@ initialize_build_env() {
     done
 }
 
-# 初始化编译器环境（下载OpenWrt官方SDK）- 修复版
+# 初始化编译器环境（下载OpenWrt官方SDK）- 修复版，加强环境文件搜索
 initialize_compiler_env() {
     local device_name="$1"
     log "=== 初始化编译器环境（下载OpenWrt官方SDK）- 修复版 ==="
     
-    # 首先加载环境变量 - 修复检查逻辑
+    # 首先加载环境变量 - 加强搜索机制
     log "🔍 检查环境文件..."
-    if [ -f "$BUILD_DIR/build_env.sh" ]; then
-        source "$BUILD_DIR/build_env.sh"
-        log "✅ 从 $BUILD_DIR/build_env.sh 加载环境变量"
+    
+    # 搜索环境文件的可能位置
+    local possible_env_files=(
+        "$BUILD_DIR/build_env.sh"
+        "/mnt/openwrt-build/build_env.sh"
+        "$GITHUB_WORKSPACE/firmware-config/build_env.sh"
+    )
+    
+    local found_env_file=""
+    
+    for env_file in "${possible_env_files[@]}"; do
+        if [ -f "$env_file" ]; then
+            found_env_file="$env_file"
+            log "✅ 找到环境文件: $env_file"
+            break
+        fi
+    done
+    
+    if [ -n "$found_env_file" ]; then
+        source "$found_env_file"
+        log "✅ 从 $found_env_file 加载环境变量"
         
         # 显示关键环境变量
         log "📋 当前环境变量:"
@@ -936,16 +954,42 @@ initialize_compiler_env() {
         log "  REPO_ROOT: $REPO_ROOT"
         log "  COMPILER_DIR: $COMPILER_DIR"
     else
-        log "⚠️ 环境文件不存在: $BUILD_DIR/build_env.sh"
-        log "💡 环境文件应该在步骤6.3中创建，但未找到"
+        log "⚠️ 环境文件不存在，尝试搜索构建目录..."
+        
+        # 尝试从构建目录中获取信息
+        if [ -d "$BUILD_DIR" ]; then
+            log "🔍 搜索构建目录中的配置信息..."
+            
+            # 从当前目录或构建目录获取信息
+            local build_dir_path="$BUILD_DIR"
+            if [ -d "$build_dir_path" ]; then
+                # 尝试从构建目录的.config文件获取信息
+                if [ -f "$build_dir_path/.config" ]; then
+                    log "✅ 找到.config文件，从中提取信息"
+                    
+                    # 从.config中提取TARGET信息
+                    if grep -q "CONFIG_TARGET_ipq40xx=y" "$build_dir_path/.config"; then
+                        TARGET="ipq40xx"
+                        SUBTARGET="generic"
+                        log "📌 从.config提取: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
+                    elif grep -q "CONFIG_TARGET_ramips=y" "$build_dir_path/.config"; then
+                        if grep -q "CONFIG_TARGET_ramips_mt76x8=y" "$build_dir_path/.config"; then
+                            TARGET="ramips"
+                            SUBTARGET="mt76x8"
+                            log "📌 从.config提取: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
+                        elif grep -q "CONFIG_TARGET_ramips_mt7621=y" "$build_dir_path/.config"; then
+                            TARGET="ramips"
+                            SUBTARGET="mt7621"
+                            log "📌 从.config提取: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
+                        fi
+                    fi
+                fi
+            fi
+        fi
         
         # 设置默认值
         if [ -z "$SELECTED_BRANCH" ]; then
-            if [ "$device_name" = "ac42u" ] || [ "$device_name" = "acrh17" ]; then
-                SELECTED_BRANCH="openwrt-21.02"
-            else
-                SELECTED_BRANCH="openwrt-21.02"
-            fi
+            SELECTED_BRANCH="openwrt-21.02"
             log "⚠️ SELECTED_BRANCH未设置，使用默认值: $SELECTED_BRANCH"
         fi
         
