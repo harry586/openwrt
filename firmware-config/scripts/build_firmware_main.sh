@@ -54,6 +54,7 @@ verify_environment_file() {
             "/tmp/openwrt-build/build_env.sh"
             "/home/runner/work/_temp/build_env.sh"
             "$REPO_ROOT/firmware-config/build_env.sh"
+            "$HOME/openwrt-build/build_env.sh"
         )
         
         log "🔍 搜索其他可能的环境文件位置..."
@@ -1017,6 +1018,34 @@ initialize_build_env() {
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
     
+    # 先克隆源码，再保存环境变量（修复环境文件丢失问题）
+    log "=== 克隆源码 ==="
+    log "仓库: $SELECTED_REPO_URL"
+    log "分支: $SELECTED_BRANCH"
+    
+    # 清理现有内容但不删除环境文件
+    log "清理现有内容..."
+    # 备份环境文件
+    local env_backup=""
+    if [ -f "build_env.sh" ]; then
+        env_backup=$(mktemp)
+        cp "build_env.sh" "$env_backup"
+        log "✅ 备份环境文件"
+    fi
+    
+    # 清理除环境文件外的其他内容
+    find . -maxdepth 1 ! -name "build_env.sh" ! -name "." -exec rm -rf {} + 2>/dev/null || true
+    
+    git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
+    log "✅ 源码克隆完成"
+    
+    # 恢复环境文件备份
+    if [ -n "$env_backup" ] && [ -f "$env_backup" ]; then
+        cp "$env_backup" "build_env.sh"
+        log "✅ 恢复环境文件备份"
+        rm -f "$env_backup"
+    fi
+    
     # 保存环境变量并验证
     if save_env; then
         log "✅ 环境变量已成功保存并验证"
@@ -1032,15 +1061,6 @@ initialize_build_env() {
     echo "DEVICE=$DEVICE" >> $GITHUB_ENV
     echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
     echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
-    
-    log "=== 克隆源码 ==="
-    log "仓库: $SELECTED_REPO_URL"
-    log "分支: $SELECTED_BRANCH"
-    
-    sudo rm -rf ./* ./.git* 2>/dev/null || true
-    
-    git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
-    log "✅ 源码克隆完成"
     
     # 检查克隆的文件
     local important_source_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
@@ -2747,4 +2767,4 @@ main() {
 }
 
 main "$@"
-# 文件结束 - 总字数：82521，总行数：1832
+# 文件结束 - 总字数：2700+，实际行数因编辑器而异
