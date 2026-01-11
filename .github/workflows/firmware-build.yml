@@ -443,30 +443,40 @@ jobs:
           # 先检查环境文件是否已经存在（加强搜索机制）
           echo "🔍 加强搜索环境文件..."
           
-          # 查找环境文件的可能位置
-          if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
-            echo "✅ 找到环境文件: /mnt/openwrt-build/build_env.sh"
+          # 查找环境文件的可能位置（优先级顺序）
+          ENV_FILE=""
+          possible_locations=(
+            "/mnt/openwrt-build/build_env.sh"
+            "${{ github.workspace }}/firmware-config/build_env.sh"
+            "/tmp/openwrt-build/build_env.sh"
+          )
+          
+          for location in "${possible_locations[@]}"; do
+            if [ -f "$location" ]; then
+              ENV_FILE="$location"
+              echo "✅ 找到环境文件: $location"
+              break
+            fi
+          done
+          
+          if [ -n "$ENV_FILE" ]; then
             echo "📊 环境文件内容摘要:"
-            head -15 /mnt/openwrt-build/build_env.sh
+            head -15 "$ENV_FILE"
             
             # 加载现有环境变量
-            source /mnt/openwrt-build/build_env.sh
+            source "$ENV_FILE"
             echo "✅ 从环境文件加载变量:"
-            echo "  SELECTED_BRANCH: $SELECTED_BRANCH"
-            echo "  TARGET: $TARGET"
-            echo "  SUBTARGET: $SUBTARGET"
-            echo "  DEVICE: $DEVICE"
-            echo "  CONFIG_MODE: $CONFIG_MODE"
-            echo "  REPO_ROOT: $REPO_ROOT"
+            echo "  SELECTED_BRANCH: ${SELECTED_BRANCH:-未设置}"
+            echo "  TARGET: ${TARGET:-未设置}"
+            echo "  SUBTARGET: ${SUBTARGET:-未设置}"
+            echo "  DEVICE: ${DEVICE:-未设置}"
+            echo "  CONFIG_MODE: ${CONFIG_MODE:-未设置}"
+            echo "  REPO_ROOT: ${REPO_ROOT:-未设置}"
             echo ""
             
             echo "💡 使用步骤6.3已设置的环境变量进行SDK下载"
-          elif [ -f "${{ github.workspace }}/firmware-config/build_env.sh" ]; then
-            echo "✅ 找到环境文件: ${{ github.workspace }}/firmware-config/build_env.sh"
-            source "${{ github.workspace }}/firmware-config/build_env.sh"
           else
-            echo "⚠️ 环境文件不存在，可能是步骤6.3失败"
-            echo "📝 重新创建环境变量..."
+            echo "⚠️ 环境文件不存在，重新创建环境变量..."
             
             # 根据设备设置基础环境变量
             DEVICE_NAME="${{ github.event.inputs.device_name }}"
@@ -493,18 +503,23 @@ jobs:
                 ;;
             esac
             
+            SELECTED_BRANCH="${{ github.event.inputs.version_selection == '23.05' && 'openwrt-23.05' || 'openwrt-21.02' }}"
+            CONFIG_MODE="${{ github.event.inputs.config_mode }}"
+            REPO_ROOT="${{ github.workspace }}"
+            COMPILER_DIR=""
+            
             # 创建环境文件
             echo "#!/bin/bash" > /mnt/openwrt-build/build_env.sh
             echo "export SELECTED_REPO_URL=\"https://github.com/immortalwrt/immortalwrt.git\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export SELECTED_BRANCH=\"${{ github.event.inputs.version_selection == '23.05' && 'openwrt-23.05' || 'openwrt-21.02' }}\"" >> /mnt/openwrt-build/build_env.sh
+            echo "export SELECTED_BRANCH=\"$SELECTED_BRANCH\"" >> /mnt/openwrt-build/build_env.sh
             echo "export TARGET=\"$TARGET\"" >> /mnt/openwrt-build/build_env.sh
             echo "export SUBTARGET=\"$SUBTARGET\"" >> /mnt/openwrt-build/build_env.sh
             echo "export DEVICE=\"$DEVICE\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export CONFIG_MODE=\"${{ github.event.inputs.config_mode }}\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export REPO_ROOT=\"${{ github.workspace }}\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export COMPILER_DIR=\"\"" >> /mnt/openwrt-build/build_env.sh
+            echo "export CONFIG_MODE=\"$CONFIG_MODE\"" >> /mnt/openwrt-build/build_env.sh
+            echo "export REPO_ROOT=\"$REPO_ROOT\"" >> /mnt/openwrt-build/build_env.sh
+            echo "export COMPILER_DIR=\"$COMPILER_DIR\"" >> /mnt/openwrt-build/build_env.sh
             chmod +x /mnt/openwrt-build/build_env.sh
-            echo "✅ 已创建环境文件"
+            echo "✅ 已创建环境文件: /mnt/openwrt-build/build_env.sh"
           fi
           
           # 执行SDK下载
