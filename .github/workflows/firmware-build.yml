@@ -381,10 +381,10 @@ jobs:
           
           echo "🟢 步骤 5 完成"
       
-      # 步骤 6: 设置编译环境和构建目录
-      - name: "6. 设置编译环境和构建目录"
+      # 步骤 6: 设置编译环境和构建目录（修复版）
+      - name: "6. 设置编译环境和构建目录（修复版）"
         run: |
-          echo "=== 步骤 6: 设置编译环境和构建目录 ==="
+          echo "=== 步骤 6: 设置编译环境和构建目录（修复版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -421,27 +421,61 @@ jobs:
           echo "✅ 编译环境和构建目录设置完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 6 完成"
       
-      # 步骤 7: 下载OpenWrt官方SDK（修复版）
-      - name: "7. 下载OpenWrt官方SDK（修复版）"
+      # 步骤 7: 验证环境文件创建
+      - name: "7. 验证环境文件创建"
         run: |
-          echo "=== 步骤 7: 下载OpenWrt官方SDK（修复版） ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "=== 步骤 7: 验证环境文件创建 ==="
+          echo "🕐 验证时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
           trap 'echo "❌ 步骤 7 失败，退出代码: $?"; exit 1' ERR
           
-          echo "🔍 检查环境文件..."
+          echo "🔍 检查步骤6.3创建的环境文件..."
           
-          # 先确认环境文件是否存在（确保看到步骤6.3的结果）
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
-            echo "✅ 环境文件存在（由步骤6.3创建）"
-            echo "📊 显示环境文件内容:"
+            echo "✅ 环境文件存在: /mnt/openwrt-build/build_env.sh"
+            echo "📊 文件大小: $(ls -lh "/mnt/openwrt-build/build_env.sh" | awk '{print $5}')"
+            
+            # 显示环境文件内容
+            echo "📝 环境文件内容预览:"
             cat "/mnt/openwrt-build/build_env.sh"
+            
+            # 验证关键环境变量
+            source "/mnt/openwrt-build/build_env.sh"
+            echo "✅ 已加载环境变量，验证关键变量:"
+            echo "  SELECTED_REPO_URL: $SELECTED_REPO_URL"
+            echo "  SELECTED_BRANCH: $SELECTED_BRANCH"
+            echo "  TARGET: $TARGET"
+            echo "  SUBTARGET: $SUBTARGET"
+            echo "  DEVICE: $DEVICE"
+            echo "  CONFIG_MODE: $CONFIG_MODE"
           else
             echo "❌ 严重错误: 环境文件不存在！步骤6.3可能失败了"
             echo "🔍 检查构建目录内容:"
             ls -la /mnt/openwrt-build/ || echo "构建目录不存在"
+            exit 1
+          fi
+          
+          echo "✅ 环境文件验证完成"
+          echo "🟢 步骤 7 完成"
+      
+      # 步骤 8: 下载OpenWrt官方SDK
+      - name: "8. 下载OpenWrt官方SDK"
+        run: |
+          echo "=== 步骤 8: 下载OpenWrt官方SDK ==="
+          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          
+          # 设置错误处理
+          set -e
+          trap 'echo "❌ 步骤 8 失败，退出代码: $?"; exit 1' ERR
+          
+          echo "🔍 检查环境文件..."
+          
+          if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
+            echo "✅ 环境文件存在（由步骤6.3和7验证）"
+          else
+            echo "❌ 严重错误: 环境文件不存在！无法继续"
             exit 1
           fi
           
@@ -455,16 +489,16 @@ jobs:
           fi
           
           echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 7 完成"
+          echo "🟢 步骤 8 完成"
       
-      # 步骤 8: 验证SDK下载结果
-      - name: "8. 验证SDK下载结果"
+      # 步骤 9: 验证SDK下载结果
+      - name: "9. 验证SDK下载结果"
         run: |
-          echo "=== 步骤 8: 验证SDK下载结果 ==="
+          echo "=== 步骤 9: 验证SDK下载结果 ==="
           echo "🕐 验证时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是验证
-          trap 'echo "⚠️ 步骤 8 验证过程中出现错误，继续执行..."' ERR
+          trap 'echo "⚠️ 步骤 9 验证过程中出现错误，继续执行..."' ERR
           
           echo "🔍 检查SDK下载结果..."
           
@@ -501,17 +535,17 @@ jobs:
           fi
           
           echo "✅ SDK验证完成"
-          echo "🟢 步骤 8 完成"
+          echo "🟢 步骤 9 完成"
       
-      # 步骤 9: 添加 TurboACC 支持
-      - name: "9. 添加 TurboACC 支持"
+      # 步骤 10: 添加 TurboACC 支持
+      - name: "10. 添加 TurboACC 支持"
         run: |
-          echo "=== 步骤 9: 添加 TurboACC 支持 ==="
+          echo "=== 步骤 10: 添加 TurboACC 支持 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 9 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 10 失败，退出代码: $?"; exit 1' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" add_turboacc_support
           
@@ -521,17 +555,17 @@ jobs:
           fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 9 完成"
+          echo "🟢 步骤 10 完成"
       
-      # 步骤 10: 配置Feeds
-      - name: "10. 配置Feeds"
+      # 步骤 11: 配置Feeds
+      - name: "11. 配置Feeds"
         run: |
-          echo "=== 步骤 10: 配置Feeds ==="
+          echo "=== 步骤 11: 配置Feeds ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 10 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 11 失败，退出代码: $?"; exit 1' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" configure_feeds
           
@@ -541,18 +575,18 @@ jobs:
           fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 10 完成"
+          echo "🟢 步骤 11 完成"
       
-      # 步骤 11: 安装 TurboACC 包
-      - name: "11. 安装 TurboACC 包"
+      # 步骤 12: 安装 TurboACC 包
+      - name: "12. 安装 TurboACC 包"
         if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
         run: |
-          echo "=== 步骤 11: 安装 TurboACC 包 ==="
+          echo "=== 步骤 12: 安装 TurboACC 包 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 11 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 12 失败，退出代码: $?"; exit 1' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" install_turboacc_packages
           
@@ -562,17 +596,17 @@ jobs:
           fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 11 完成"
+          echo "🟢 步骤 12 完成"
       
-      # 步骤 12: 编译前空间检查
-      - name: "12. 编译前空间检查"
+      # 步骤 13: 编译前空间检查
+      - name: "13. 编译前空间检查"
         run: |
-          echo "=== 步骤 12: 编译前空间检查 ==="
+          echo "=== 步骤 13: 编译前空间检查 ==="
           echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 12 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 13 失败，退出代码: $?"; exit 1' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_space_check
           
@@ -582,17 +616,17 @@ jobs:
           fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 12 完成"
+          echo "🟢 步骤 13 完成"
       
-      # 步骤 13: 智能配置生成
-      - name: "13. 智能配置生成"
+      # 步骤 14: 智能配置生成
+      - name: "14. 智能配置生成"
         run: |
-          echo "=== 步骤 13: 智能配置生成 ==="
+          echo "=== 步骤 14: 智能配置生成 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 13 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 14 失败，退出代码: $?"; exit 1' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" generate_config "${{ github.event.inputs.extra_packages }}"
           
@@ -602,45 +636,45 @@ jobs:
           fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 13 完成"
+          echo "🟢 步骤 14 完成"
       
-      # 步骤 14: 验证USB配置
-      - name: "14. 验证USB配置"
+      # 步骤 15: 验证USB配置
+      - name: "15. 验证USB配置"
         run: |
-          echo "=== 步骤 14: 验证USB配置 ==="
+          echo "=== 步骤 15: 验证USB配置 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是验证
-          trap 'echo "⚠️ 步骤 14 验证过程中出现错误，继续执行..."' ERR
+          trap 'echo "⚠️ 步骤 15 验证过程中出现错误，继续执行..."' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" verify_usb_config
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 14 完成"
+          echo "🟢 步骤 15 完成"
       
-      # 步骤 15: USB驱动完整性检查
-      - name: "15. USB驱动完整性检查"
+      # 步骤 16: USB驱动完整性检查
+      - name: "16. USB驱动完整性检查"
         run: |
-          echo "=== 步骤 15: USB驱动完整性检查 ==="
+          echo "=== 步骤 16: USB驱动完整性检查 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是检查
-          trap 'echo "⚠️ 步骤 15 检查过程中出现错误，继续执行..."' ERR
+          trap 'echo "⚠️ 步骤 16 检查过程中出现错误，继续执行..."' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" check_usb_drivers_integrity
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 15 完成"
+          echo "🟢 步骤 16 完成"
       
-      # 步骤 16: 应用配置并显示详情（完整版）
-      - name: "16. 应用配置并显示详情（完整版）"
+      # 步骤 17: 应用配置并显示详情（完整版）
+      - name: "17. 应用配置并显示详情（完整版）"
         run: |
-          echo "=== 步骤 16: 应用配置并显示详情（完整版）==="
+          echo "=== 步骤 17: 应用配置并显示详情（完整版）==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 16 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 17 失败，退出代码: $?"; exit 1' ERR
           
           if [ -f "/mnt/openwrt-build/.config" ]; then
             cp "/mnt/openwrt-build/.config" "/mnt/openwrt-build/.config.original"
@@ -740,17 +774,17 @@ jobs:
           
           echo ""
           echo "✅ 配置应用完成"
-          echo "🟢 步骤 16 完成"
+          echo "🟢 步骤 17 完成"
       
-      # 步骤 17: 检查并备份配置文件
-      - name: "17. 检查并备份配置文件"
+      # 步骤 18: 检查并备份配置文件
+      - name: "18. 检查并备份配置文件"
         run: |
-          echo "=== 步骤 17: 检查并备份配置文件 ==="
+          echo "=== 步骤 18: 检查并备份配置文件 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 17 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 18 失败，退出代码: $?"; exit 1' ERR
           
           # 检查配置文件
           if [ -f "/mnt/openwrt-build/.config" ]; then
@@ -772,31 +806,31 @@ jobs:
             exit 1
           fi
           
-          echo "🟢 步骤 17 完成"
+          echo "🟢 步骤 18 完成"
       
-      # 步骤 18: 修复网络环境
-      - name: "18. 修复网络环境"
+      # 步骤 19: 修复网络环境
+      - name: "19. 修复网络环境"
         run: |
-          echo "=== 步骤 18: 修复网络环境 ==="
+          echo "=== 步骤 19: 修复网络环境 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是尝试修复
-          trap 'echo "⚠️ 步骤 18 修复过程中出现错误，继续执行..."' ERR
+          trap 'echo "⚠️ 步骤 19 修复过程中出现错误，继续执行..."' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" fix_network
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 18 完成"
+          echo "🟢 步骤 19 完成"
       
-      # 步骤 19: 下载依赖包（优化版）
-      - name: "19. 下载依赖包（优化版）"
+      # 步骤 20: 下载依赖包（优化版）
+      - name: "20. 下载依赖包（优化版）"
         run: |
-          echo "=== 步骤 19: 下载依赖包（优化版） ==="
+          echo "=== 步骤 20: 下载依赖包（优化版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 19 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 20 失败，退出代码: $?"; exit 1' ERR
           
           cd /mnt/openwrt-build
           
@@ -827,31 +861,31 @@ jobs:
           echo "📊 下载后依赖包数量: $NEW_DEP_COUNT 个"
           echo "📈 新增依赖包: $((NEW_DEP_COUNT - DEP_COUNT)) 个"
           
-          echo "🟢 步骤 19 完成"
+          echo "🟢 步骤 20 完成"
       
-      # 步骤 20: 集成自定义文件
-      - name: "20. 集成自定义文件"
+      # 步骤 21: 集成自定义文件
+      - name: "21. 集成自定义文件"
         run: |
-          echo "=== 步骤 20: 集成自定义文件 ==="
+          echo "=== 步骤 21: 集成自定义文件 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是尝试集成
-          trap 'echo "⚠️ 步骤 20 集成过程中出现错误，继续执行..."' ERR
+          trap 'echo "⚠️ 步骤 21 集成过程中出现错误，继续执行..."' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 20 完成"
+          echo "🟢 步骤 21 完成"
       
-      # 步骤 21: 前置错误检查
-      - name: "21. 前置错误检查"
+      # 步骤 22: 前置错误检查
+      - name: "22. 前置错误检查"
         run: |
-          echo "=== 步骤 21: 前置错误检查 ==="
+          echo "=== 步骤 22: 前置错误检查 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 21 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 22 失败，退出代码: $?"; exit 1' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_error_check
           
@@ -862,17 +896,17 @@ jobs:
           fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 21 完成"
+          echo "🟢 步骤 22 完成"
       
-      # 步骤 22: 编译固件前的空间检查
-      - name: "22. 编译固件前的空间检查"
+      # 步骤 23: 编译固件前的空间检查
+      - name: "23. 编译固件前的空间检查"
         run: |
-          echo "=== 步骤 22: 编译固件前的空间检查 ==="
+          echo "=== 步骤 23: 编译固件前的空间检查 ==="
           echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 22 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 23 失败，退出代码: $?"; exit 1' ERR
           
           df -h /mnt
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
@@ -888,17 +922,17 @@ jobs:
             echo "✅ 编译前空间充足"
           fi
           
-          echo "🟢 步骤 22 完成"
+          echo "🟢 步骤 23 完成"
       
-      # 步骤 23: 编译固件（智能并行优化版）
-      - name: "23. 编译固件（智能并行优化版）"
+      # 步骤 24: 编译固件（智能并行优化版）
+      - name: "24. 编译固件（智能并行优化版）"
         run: |
-          echo "=== 步骤 23: 编译固件（智能并行优化版） ==="
+          echo "=== 步骤 24: 编译固件（智能并行优化版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 23 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 24 失败，退出代码: $?"; exit 1' ERR
           
           cd /mnt/openwrt-build
           
@@ -988,18 +1022,18 @@ jobs:
             exit $BUILD_EXIT_CODE
           fi
           
-          echo "🟢 步骤 23 完成"
+          echo "🟢 步骤 24 完成"
       
-      # 步骤 24: 检查构建产物（修复版）
-      - name: "24. 检查构建产物（修复版）"
+      # 步骤 25: 检查构建产物（修复版）
+      - name: "25. 检查构建产物（修复版）"
         if: success()
         run: |
-          echo "=== 步骤 24: 检查构建产物（修复版） ==="
+          echo "=== 步骤 25: 检查构建产物（修复版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 24 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 25 失败，退出代码: $?"; exit 1' ERR
           
           cd /mnt/openwrt-build
           
@@ -1098,10 +1132,10 @@ jobs:
           fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 24 完成"
+          echo "🟢 步骤 25 完成"
       
-      # 步骤 25: 上传固件原始目录
-      - name: "25. 上传固件原始目录"
+      # 步骤 26: 上传固件原始目录
+      - name: "26. 上传固件原始目录"
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -1110,8 +1144,8 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 26: 上传配置文件
-      - name: "26. 上传配置文件"
+      # 步骤 27: 上传配置文件
+      - name: "27. 上传配置文件"
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -1120,15 +1154,15 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 27: 执行错误分析（优化版）
-      - name: "27. 执行错误分析（优化版）"
+      # 步骤 28: 执行错误分析（优化版）
+      - name: "28. 执行错误分析（优化版）"
         if: always()
         run: |
-          echo "=== 步骤 27: 执行错误分析（优化版） ==="
+          echo "=== 步骤 28: 执行错误分析（优化版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，错误分析不应该影响构建状态
-          trap 'echo "⚠️ 步骤 27 错误分析过程中出现错误，继续执行..."' ERR
+          trap 'echo "⚠️ 步骤 28 错误分析过程中出现错误，继续执行..."' ERR
           
           if [ -f "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh" ]; then
             chmod +x "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh"
@@ -1144,17 +1178,17 @@ jobs:
           fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 27 完成"
+          echo "🟢 步骤 28 完成"
       
-      # 步骤 28: 编译后空间检查
-      - name: "28. 编译后空间检查"
+      # 步骤 29: 编译后空间检查
+      - name: "29. 编译后空间检查"
         if: always()
         run: |
-          echo "=== 步骤 28: 编译后空间检查 ==="
+          echo "=== 步骤 29: 编译后空间检查 ==="
           echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是检查
-          trap 'echo "⚠️ 步骤 28 检查过程中出现错误，继续执行..."' ERR
+          trap 'echo "⚠️ 步骤 29 检查过程中出现错误，继续执行..."' ERR
           
           echo "📊 磁盘使用情况:"
           df -h /mnt
@@ -1169,17 +1203,17 @@ jobs:
             echo "✅ 磁盘空间充足"
           fi
           
-          echo "🟢 步骤 28 完成"
+          echo "🟢 步骤 29 完成"
       
-      # 步骤 29: 编译后总结
-      - name: "29. 编译后总结"
+      # 步骤 30: 编译后总结
+      - name: "30. 编译后总结"
         if: always()
         run: |
-          echo "=== 步骤 29: 编译后总结 ==="
+          echo "=== 步骤 30: 编译后总结 ==="
           echo "🕐 总结时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，总结不应该失败
-          trap 'echo "⚠️ 步骤 29 总结过程中出现错误，继续执行..."' ERR
+          trap 'echo "⚠️ 步骤 30 总结过程中出现错误，继续执行..."' ERR
           
           echo "🚀 构建总结报告"
           echo "========================================"
@@ -1264,4 +1298,4 @@ jobs:
           echo ""
           echo "✅ 构建流程完成"
           echo "========================================"
-          echo "🟢 步骤 29 完成"
+          echo "🟢 步骤 30 完成"
