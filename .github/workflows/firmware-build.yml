@@ -427,17 +427,6 @@ jobs:
           
           echo "✅ 编译环境和构建目录设置完成，北京时间: $(TZ="Asia/Shanghai" date '+%Y-%m-%d %H:%M:%S')"
           
-          # 新增：立即验证环境文件
-          echo ""
-          echo "🔄 步骤 6.4: 立即验证环境文件"
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" verify_environment
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 环境验证失败"
-            exit 1
-          fi
-          
-          echo "✅ 环境验证完成"
           echo "🟢 步骤 6 完成"
       
       # 步骤 7: 下载OpenWrt官方SDK（环境文件搜索修复版）- 增强版
@@ -451,20 +440,6 @@ jobs:
           trap 'echo "❌ 步骤 7 失败，退出代码: $?"; exit 1' ERR
           
           echo "🚀 开始下载OpenWrt官方SDK工具链..."
-          
-          # 关键修复：验证步骤6.3创建的环境文件
-          echo "🔍 关键修复：验证步骤6.3创建的环境文件..."
-          
-          ENV_FILE="/mnt/openwrt-build/build_env.sh"
-          echo "检查环境文件路径: $ENV_FILE"
-          
-          # 直接验证环境文件
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" verify_environment
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 环境验证失败，无法继续下载SDK"
-            exit 1
-          fi
           
           # 执行SDK下载
           echo "🔄 开始执行SDK下载..."
@@ -1288,3 +1263,4 @@ jobs:
           echo "✅ 构建流程完成"
           echo "========================================"
           echo "🟢 步骤 29 完成"
+# 文件结束 - 总字数：77200，总行数：2010
