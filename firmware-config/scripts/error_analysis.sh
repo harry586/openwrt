@@ -29,10 +29,44 @@ print_subheader() {
     echo "" >> "$REPORT_FILE"
 }
 
+# 环境文件验证函数
+verify_env_file() {
+    local env_file="$1"
+    
+    if [ -f "$env_file" ]; then
+        log "✅ 环境文件存在: $env_file"
+        log "📊 文件信息:"
+        log "  文件大小: $(ls -lh "$env_file" | awk '{print $5}')"
+        log "  文件内容摘要:"
+        head -15 "$env_file" | while read line; do
+            log "    $line"
+        done
+        
+        # 检查关键变量
+        local required_vars=("SELECTED_BRANCH" "TARGET" "DEVICE")
+        for var in "${required_vars[@]}"; do
+            if grep -q "export $var=" "$env_file"; then
+                log "    ✅ $var: 已定义"
+            else
+                log "    ❌ $var: 未定义"
+                return 1
+            fi
+        done
+        
+        return 0
+    else
+        log "❌ 环境文件不存在: $env_file"
+        return 1
+    fi
+}
+
 # 从环境文件加载环境变量 - 增强版
 load_build_env() {
+    log "🔍 加载构建环境变量..."
+    
     local env_file="$BUILD_DIR/build_env.sh"
-    if [ -f "$env_file" ]; then
+    
+    if verify_env_file "$env_file"; then
         source "$env_file"
         log "✅ 从 $env_file 加载环境变量"
         
@@ -46,26 +80,40 @@ load_build_env() {
         echo "  CONFIG_MODE: $CONFIG_MODE" >> "$REPORT_FILE"
         echo "  REPO_ROOT: $REPO_ROOT" >> "$REPORT_FILE"
         echo "  COMPILER_DIR: $COMPILER_DIR" >> "$REPORT_FILE"
+        echo "  BUILD_DIR: $BUILD_DIR" >> "$REPORT_FILE"
         echo "" >> "$REPORT_FILE"
+        
+        return 0
     else
-        log "⚠️ 环境文件不存在: $env_file"
-        echo "⚠️ 环境文件不存在: $env_file" >> "$REPORT_FILE"
+        log "⚠️ 环境文件验证失败"
+        echo "⚠️ 环境文件验证失败" >> "$REPORT_FILE"
         
         # 尝试从其他位置加载
         log "🔍 尝试从其他位置加载环境变量..."
-        if [ -n "$GITHUB_ENV" ] && [ -f "$GITHUB_ENV" ]; then
-            echo "💡 从GitHub环境变量文件加载..." >> "$REPORT_FILE"
-            cat "$GITHUB_ENV" | grep -E "SELECTED|TARGET|DEVICE|COMPILER" >> "$REPORT_FILE"
-        fi
+        local possible_locations=(
+            "/mnt/openwrt-build/build_env.sh"
+            "/tmp/openwrt-build/build_env.sh"
+            "$HOME/openwrt-build/build_env.sh"
+        )
         
-        # 尝试手动查找编译器目录
-        echo "🔍 手动搜索编译器目录..." >> "$REPORT_FILE"
-        local found_compiler_dir=$(find "$BUILD_DIR" -name "toolchain-*" -type d 2>/dev/null | head -1)
-        if [ -n "$found_compiler_dir" ]; then
-            echo "  ✅ 找到编译器目录: $found_compiler_dir" >> "$REPORT_FILE"
-            COMPILER_DIR="$found_compiler_dir"
+        local found_env=0
+        for location in "${possible_locations[@]}"; do
+            if [ -f "$location" ]; then
+                log "✅ 找到环境文件: $location"
+                source "$location"
+                env_file="$location"
+                found_env=1
+                break
+            fi
+        done
+        
+        if [ $found_env -eq 1 ]; then
+            log "✅ 从 $env_file 加载环境变量"
+            return 0
         else
-            echo "  ❌ 未找到编译器目录" >> "$REPORT_FILE"
+            log "❌ 在任何位置都找不到环境文件"
+            echo "❌ 在任何位置都找不到环境文件" >> "$REPORT_FILE"
+            return 1
         fi
     fi
 }
@@ -80,12 +128,16 @@ init_report() {
     echo "==================================================" >> "$REPORT_FILE"
     echo "分析时间: $(date '+%Y-%m-%d %H:%M:%S')" >> "$REPORT_FILE"
     echo "报告时间戳: $TIMESTAMP" >> "$REPORT_FILE"
-    echo "报告版本: 2.3.0" >> "$REPORT_FILE"
+    echo "报告版本: 2.4.0" >> "$REPORT_FILE"
     echo "构建目录: $BUILD_DIR" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
     # 加载构建环境变量
-    load_build_env
+    if load_build_env; then
+        echo "✅ 环境变量加载成功" >> "$REPORT_FILE"
+    else
+        echo "❌ 环境变量加载失败" >> "$REPORT_FILE"
+    fi
 }
 
 # 2. 收集系统信息
@@ -1226,3 +1278,4 @@ if [ "$0" = "$BASH_SOURCE" ] || [ -z "$BASH_SOURCE" ]; then
     main
     exit $?
 fi
+# 文件结束 - 总字数：37525，总行数：1015
