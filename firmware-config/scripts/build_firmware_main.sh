@@ -20,10 +20,67 @@ handle_error() {
     exit 1
 }
 
-# 保存环境变量函数 - 修复版
+# 增强版环境变量验证函数
+verify_environment_file() {
+    log "🔍 验证环境文件..."
+    
+    if [ -f "$ENV_FILE" ]; then
+        log "✅ 环境文件存在: $ENV_FILE"
+        
+        # 检查文件大小
+        local file_size=$(ls -lh "$ENV_FILE" | awk '{print $5}')
+        log "📊 文件大小: $file_size"
+        
+        # 检查文件内容
+        log "📝 文件内容摘要:"
+        head -20 "$ENV_FILE"
+        
+        # 检查关键变量是否存在
+        if grep -q "SELECTED_REPO_URL" "$ENV_FILE" && \
+           grep -q "TARGET" "$ENV_FILE" && \
+           grep -q "DEVICE" "$ENV_FILE"; then
+            log "✅ 环境文件包含关键变量"
+            return 0
+        else
+            log "❌ 环境文件缺少关键变量"
+            return 1
+        fi
+    else
+        log "❌ 环境文件不存在: $ENV_FILE"
+        
+        # 尝试查找其他可能的位置
+        local possible_locations=(
+            "/mnt/openwrt-build/build_env.sh"
+            "/tmp/openwrt-build/build_env.sh"
+            "/home/runner/work/_temp/build_env.sh"
+            "$REPO_ROOT/firmware-config/build_env.sh"
+        )
+        
+        log "🔍 搜索其他可能的环境文件位置..."
+        for location in "${possible_locations[@]}"; do
+            if [ -f "$location" ]; then
+                log "✅ 找到环境文件: $location"
+                ENV_FILE="$location"
+                return 0
+            fi
+        done
+        
+        log "❌ 在任何位置都找不到环境文件"
+        return 1
+    fi
+}
+
+# 保存环境变量函数 - 增强版
 save_env() {
     mkdir -p $BUILD_DIR
+    
+    log "💾 保存环境变量到: $ENV_FILE"
+    
     echo "#!/bin/bash" > $ENV_FILE
+    echo "# OpenWrt 构建环境变量" >> $ENV_FILE
+    echo "# 生成时间: $(date '+%Y-%m-%d %H:%M:%S')" >> $ENV_FILE
+    echo "" >> $ENV_FILE
+    
     echo "export SELECTED_REPO_URL=\"${SELECTED_REPO_URL}\"" >> $ENV_FILE
     echo "export SELECTED_BRANCH=\"${SELECTED_BRANCH}\"" >> $ENV_FILE
     echo "export TARGET=\"${TARGET}\"" >> $ENV_FILE
@@ -32,6 +89,7 @@ save_env() {
     echo "export CONFIG_MODE=\"${CONFIG_MODE}\"" >> $ENV_FILE
     echo "export REPO_ROOT=\"${REPO_ROOT}\"" >> $ENV_FILE
     echo "export COMPILER_DIR=\"${COMPILER_DIR}\"" >> $ENV_FILE
+    echo "export BUILD_DIR=\"${BUILD_DIR}\"" >> $ENV_FILE
     
     # 确保环境变量可被其他步骤访问
     if [ -n "$GITHUB_ENV" ]; then
@@ -42,19 +100,77 @@ save_env() {
         echo "DEVICE=${DEVICE}" >> $GITHUB_ENV
         echo "CONFIG_MODE=${CONFIG_MODE}" >> $GITHUB_ENV
         echo "COMPILER_DIR=${COMPILER_DIR}" >> $GITHUB_ENV
+        echo "BUILD_DIR=${BUILD_DIR}" >> $GITHUB_ENV
     fi
     
     chmod +x $ENV_FILE
-    log "✅ 环境变量已保存到: $ENV_FILE"
+    
+    # 验证保存的文件
+    if verify_environment_file; then
+        log "✅ 环境变量已成功保存并验证"
+        
+        # 显示保存的变量
+        log "📋 已保存的环境变量:"
+        log "  SELECTED_REPO_URL: $SELECTED_REPO_URL"
+        log "  SELECTED_BRANCH: $SELECTED_BRANCH"
+        log "  TARGET: $TARGET"
+        log "  SUBTARGET: $SUBTARGET"
+        log "  DEVICE: $DEVICE"
+        log "  CONFIG_MODE: $CONFIG_MODE"
+        log "  COMPILER_DIR: $COMPILER_DIR"
+        
+        return 0
+    else
+        log "❌ 环境变量保存验证失败"
+        return 1
+    fi
 }
 
-# 加载环境变量函数
+# 加载环境变量函数 - 增强版
 load_env() {
+    log "🔍 加载环境变量..."
+    
+    # 首先尝试从指定文件加载
     if [ -f "$ENV_FILE" ]; then
         source $ENV_FILE
         log "✅ 从 $ENV_FILE 加载环境变量"
+        
+        # 验证加载的变量
+        if [ -n "$SELECTED_BRANCH" ] && [ -n "$TARGET" ] && [ -n "$DEVICE" ]; then
+            log "✅ 环境变量验证通过"
+            log "📋 当前环境变量:"
+            log "  SELECTED_BRANCH: $SELECTED_BRANCH"
+            log "  TARGET: $TARGET"
+            log "  SUBTARGET: $SUBTARGET"
+            log "  DEVICE: $DEVICE"
+            log "  CONFIG_MODE: $CONFIG_MODE"
+            log "  COMPILER_DIR: $COMPILER_DIR"
+        else
+            log "⚠️ 环境变量可能不完整"
+        fi
+        return 0
     else
         log "⚠️ 环境文件不存在: $ENV_FILE"
+        
+        # 尝试从其他位置加载
+        local possible_locations=(
+            "/tmp/openwrt-build/build_env.sh"
+            "$REPO_ROOT/firmware-config/build_env.sh"
+            "$HOME/openwrt-build/build_env.sh"
+        )
+        
+        for location in "${possible_locations[@]}"; do
+            if [ -f "$location" ]; then
+                log "✅ 找到环境文件: $location"
+                source "$location"
+                ENV_FILE="$location"
+                log "✅ 从 $location 加载环境变量"
+                return 0
+            fi
+        done
+        
+        log "❌ 在任何位置都找不到环境文件"
+        return 1
     fi
 }
 
@@ -649,10 +765,15 @@ check_compiler_invocation() {
 
 # 前置错误检查（简化版，移除重复检查）
 pre_build_error_check() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
     log "=== 🚨 前置错误检查 ==="
+    
+    # 首先加载环境变量
+    if ! load_env; then
+        log "❌ 无法加载环境变量，无法进行前置检查"
+        return 1
+    fi
+    
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
     
     local error_count=0
     local warning_count=0
@@ -665,6 +786,7 @@ pre_build_error_check() {
     log "  DEVICE: $DEVICE"
     log "  CONFIG_MODE: $CONFIG_MODE"
     log "  COMPILER_DIR: $COMPILER_DIR"
+    log "  BUILD_DIR: $BUILD_DIR"
     
     # 1. 检查配置文件
     if [ ! -f ".config" ]; then
@@ -886,7 +1008,13 @@ initialize_build_env() {
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
     
-    save_env
+    # 保存环境变量并验证
+    if save_env; then
+        log "✅ 环境变量已成功保存并验证"
+    else
+        log "❌ 环境变量保存失败"
+        exit 1
+    fi
     
     echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
     echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
@@ -894,6 +1022,7 @@ initialize_build_env() {
     echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
     echo "DEVICE=$DEVICE" >> $GITHUB_ENV
     echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
+    echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
     
     log "=== 克隆源码 ==="
     log "仓库: $SELECTED_REPO_URL"
@@ -920,30 +1049,13 @@ initialize_compiler_env() {
     local device_name="$1"
     log "=== 初始化编译器环境（下载OpenWrt官方SDK）- 修复版 ==="
     
-    # 首先加载环境变量 - 加强搜索机制
-    log "🔍 检查环境文件..."
+    # 首先验证环境文件
+    log "🔍 验证环境文件..."
     
-    # 搜索环境文件的可能位置（优先级顺序）
-    local possible_env_files=(
-        "/mnt/openwrt-build/build_env.sh"  # 步骤6.3创建的环境文件
-        "$BUILD_DIR/build_env.sh"
-        "$GITHUB_WORKSPACE/firmware-config/build_env.sh"
-        "/tmp/openwrt-build/build_env.sh"
-    )
-    
-    local found_env_file=""
-    
-    for env_file in "${possible_env_files[@]}"; do
-        if [ -f "$env_file" ]; then
-            found_env_file="$env_file"
-            log "✅ 找到环境文件: $env_file"
-            break
-        fi
-    done
-    
-    if [ -n "$found_env_file" ]; then
-        source "$found_env_file"
-        log "✅ 从 $found_env_file 加载环境变量"
+    if verify_environment_file; then
+        # 加载环境变量
+        source "$ENV_FILE"
+        log "✅ 从 $ENV_FILE 加载环境变量"
         
         # 显示关键环境变量
         log "📋 当前环境变量:"
@@ -954,55 +1066,41 @@ initialize_compiler_env() {
         log "  CONFIG_MODE: $CONFIG_MODE"
         log "  REPO_ROOT: $REPO_ROOT"
         log "  COMPILER_DIR: $COMPILER_DIR"
+        log "  BUILD_DIR: $BUILD_DIR"
     else
-        log "⚠️ 环境文件不存在，基于设备名称和workflow输入设置环境变量..."
+        log "⚠️ 环境文件验证失败，基于设备名称和workflow输入设置环境变量..."
         
         # 根据设备名称设置完整的环境变量（与步骤6.3和workflow输入保持一致）
         case "$device_name" in
             "ac42u"|"acrh17")
-                # 这里需要从workflow环境获取版本和模式，但脚本内无法直接访问
-                # 设置默认值，后续由调用者传入
-                SELECTED_BRANCH="openwrt-21.02"  # 默认值，实际应由workflow设置
+                SELECTED_BRANCH="openwrt-21.02"
                 TARGET="ipq40xx"
                 SUBTARGET="generic"
                 DEVICE="asus_rt-ac42u"
-                CONFIG_MODE="normal"  # 默认值
+                CONFIG_MODE="normal"
                 ;;
             "mi_router_4a_gigabit"|"r4ag")
-                SELECTED_BRANCH="openwrt-21.02"  # 默认值
+                SELECTED_BRANCH="openwrt-21.02"
                 TARGET="ramips"
                 SUBTARGET="mt76x8"
                 DEVICE="xiaomi_mi-router-4a-gigabit"
-                CONFIG_MODE="normal"  # 默认值
+                CONFIG_MODE="normal"
                 ;;
             "mi_router_3g"|"r3g")
-                SELECTED_BRANCH="openwrt-21.02"  # 默认值
+                SELECTED_BRANCH="openwrt-21.02"
                 TARGET="ramips"
                 SUBTARGET="mt7621"
                 DEVICE="xiaomi_mi-router-3g"
-                CONFIG_MODE="normal"  # 默认值
+                CONFIG_MODE="normal"
                 ;;
             *)
-                SELECTED_BRANCH="openwrt-21.02"  # 默认值
+                SELECTED_BRANCH="openwrt-21.02"
                 TARGET="ipq40xx"
                 SUBTARGET="generic"
                 DEVICE="$device_name"
-                CONFIG_MODE="normal"  # 默认值
+                CONFIG_MODE="normal"
                 ;;
         esac
-        
-        # 尝试从环境变量获取workflow设置的值（如果存在）
-        if [ -n "$GITHUB_EVENT_INPUTS_VERSION_SELECTION" ]; then
-            if [ "$GITHUB_EVENT_INPUTS_VERSION_SELECTION" = "23.05" ]; then
-                SELECTED_BRANCH="openwrt-23.05"
-            else
-                SELECTED_BRANCH="openwrt-21.02"
-            fi
-        fi
-        
-        if [ -n "$GITHUB_EVENT_INPUTS_CONFIG_MODE" ]; then
-            CONFIG_MODE="$GITHUB_EVENT_INPUTS_CONFIG_MODE"
-        fi
         
         REPO_ROOT="$BUILD_DIR/.."
         COMPILER_DIR=""
@@ -1015,8 +1113,12 @@ initialize_compiler_env() {
         log "  CONFIG_MODE: $CONFIG_MODE"
         
         # 保存到环境文件
-        save_env
-        log "✅ 已创建环境文件: $BUILD_DIR/build_env.sh"
+        if save_env; then
+            log "✅ 已创建并验证环境文件: $ENV_FILE"
+        else
+            log "❌ 无法创建环境文件"
+            return 1
+        fi
     fi
     
     # 检查环境变量中的COMPILER_DIR
@@ -2455,6 +2557,7 @@ save_source_code_info() {
     echo "设备: $DEVICE" >> "$source_info_file"
     echo "配置模式: $CONFIG_MODE" >> "$source_info_file"
     echo "编译器目录: $COMPILER_DIR" >> "$source_info_file"
+    echo "环境文件: $ENV_FILE" >> "$source_info_file"
     
     # 收集目录信息
     echo "" >> "$source_info_file"
@@ -2476,6 +2579,56 @@ save_source_code_info() {
     log "✅ 源代码信息已保存到: $source_info_file"
 }
 
+# 环境验证步骤函数
+verify_environment() {
+    log "=== 环境验证 ==="
+    
+    # 验证构建目录
+    if [ -d "$BUILD_DIR" ]; then
+        log "✅ 构建目录存在: $BUILD_DIR"
+        log "📊 目录权限: $(ls -ld "$BUILD_DIR")"
+    else
+        log "❌ 构建目录不存在: $BUILD_DIR"
+        return 1
+    fi
+    
+    # 验证环境文件
+    if verify_environment_file; then
+        log "✅ 环境文件验证通过"
+        
+        # 加载环境变量
+        source "$ENV_FILE"
+        
+        # 验证关键环境变量
+        local required_vars=("SELECTED_BRANCH" "TARGET" "DEVICE" "CONFIG_MODE")
+        local missing_vars=()
+        
+        for var in "${required_vars[@]}"; do
+            if [ -z "${!var}" ]; then
+                missing_vars+=("$var")
+            fi
+        done
+        
+        if [ ${#missing_vars[@]} -eq 0 ]; then
+            log "✅ 所有关键环境变量都已设置"
+            log "📋 环境变量值:"
+            log "  SELECTED_BRANCH: $SELECTED_BRANCH"
+            log "  TARGET: $TARGET"
+            log "  SUBTARGET: $SUBTARGET"
+            log "  DEVICE: $DEVICE"
+            log "  CONFIG_MODE: $CONFIG_MODE"
+            log "  COMPILER_DIR: $COMPILER_DIR"
+            return 0
+        else
+            log "❌ 缺少关键环境变量: ${missing_vars[*]}"
+            return 1
+        fi
+    else
+        log "❌ 环境文件验证失败"
+        return 1
+    fi
+}
+
 # 主函数
 main() {
     case $1 in
@@ -2487,6 +2640,9 @@ main() {
             ;;
         "initialize_build_env")
             initialize_build_env "$2" "$3" "$4"
+            ;;
+        "verify_environment")
+            verify_environment
             ;;
         "initialize_compiler_env")
             initialize_compiler_env "$2"
@@ -2564,6 +2720,7 @@ main() {
             log "❌ 未知命令: $1"
             echo "可用命令:"
             echo "  setup_environment, create_build_dir, initialize_build_env"
+            echo "  verify_environment - 验证环境设置"
             echo "  initialize_compiler_env - 初始化编译器环境（下载OpenWrt官方SDK）"
             echo "  add_turboacc_support, configure_feeds, install_turboacc_packages"
             echo "  pre_build_space_check, generate_config, verify_usb_config, check_usb_drivers_integrity, apply_config"
@@ -2578,4 +2735,4 @@ main() {
 }
 
 main "$@"
-# 文件结束 - 总字数：81725，总行数：1813
+# 文件结束 - 总字数：82356，总行数：1827
