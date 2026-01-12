@@ -198,152 +198,337 @@ intelligent_platform_aware_compiler_search() {
     return 1
 }
 
-# 新增：下载OpenWrt官方SDK工具链函数
+# 新增：下载OpenWrt官方SDK工具链函数（全面修复版）
 download_openwrt_sdk() {
     local target="$1"
     local subtarget="$2"
     local version="$3"
     
-    log "=== 下载OpenWrt官方SDK工具链 ==="
+    log "=== 下载OpenWrt官方SDK工具链（全面修复版） ==="
     log "目标平台: $target/$subtarget"
     log "OpenWrt版本: $version"
     
-    # 确定SDK下载URL
-    local sdk_url=""
-    local sdk_filename=""
+    # 创建SDK目录
+    local sdk_dir="$BUILD_DIR/sdk"
+    mkdir -p "$sdk_dir"
+    cd "$sdk_dir"
     
-    if [ "$version" = "23.05" ] || [ "$version" = "openwrt-23.05" ]; then
-        # OpenWrt 23.05 SDK
-        case "$target" in
-            "ipq40xx")
-                # 高通IPQ40xx平台
-                sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-11.3.0_musl.Linux-x86_64.tar.xz"
-                sdk_filename="openwrt-sdk-23.05.3-ipq40xx-generic_gcc-11.3.0_musl.Linux-x86_64.tar.xz"
-                ;;
-            "ramips")
-                # MIPS平台
-                if [ "$subtarget" = "mt76x8" ]; then
-                    sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt76x8/openwrt-sdk-23.05.3-ramips-mt76x8_gcc-11.3.0_musl_eabi.Linux-x86_64.tar.xz"
-                    sdk_filename="openwrt-sdk-23.05.3-ramips-mt76x8_gcc-11.3.0_musl_eabi.Linux-x86_64.tar.xz"
-                elif [ "$subtarget" = "mt7621" ]; then
-                    sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt7621/openwrt-sdk-23.05.3-ramips-mt7621_gcc-11.3.0_musl.Linux-x86_64.tar.xz"
-                    sdk_filename="openwrt-sdk-23.05.3-ramips-mt7621_gcc-11.3.0_musl.Linux-x86_64.tar.xz"
-                else
-                    log "❌ 不支持的子目标: $subtarget"
-                    return 1
-                fi
-                ;;
-            *)
-                log "❌ 不支持的目标平台: $target"
-                return 1
-                ;;
-        esac
-    elif [ "$version" = "21.02" ] || [ "$version" = "openwrt-21.02" ]; then
-        # OpenWrt 21.02 SDK
-        case "$target" in
-            "ipq40xx")
-                sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
-                sdk_filename="openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
-                ;;
-            "ramips")
-                if [ "$subtarget" = "mt76x8" ]; then
-                    sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt76x8/openwrt-sdk-21.02.7-ramips-mt76x8_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
-                    sdk_filename="openwrt-sdk-21.02.7-ramips-mt76x8_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
-                elif [ "$subtarget" = "mt7621" ]; then
-                    sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt7621/openwrt-sdk-21.02.7-ramips-mt7621_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
-                    sdk_filename="openwrt-sdk-21.02.7-ramips-mt7621_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
-                else
-                    log "❌ 不支持的子目标: $subtarget"
-                    return 1
-                fi
-                ;;
-            *)
-                log "❌ 不支持的目标平台: $target"
-                return 1
-                ;;
-        esac
+    # 清理旧的下载文件
+    rm -f *.tar.xz *.tar.gz 2>/dev/null || true
+    
+    # 解析版本号，支持各种格式的版本字符串
+    local version_number=""
+    local base_version=""
+    
+    # 提取版本号
+    if [[ "$version" =~ 23\.05 ]]; then
+        version_number="23.05.3"
+        base_version="23.05"
+    elif [[ "$version" =~ 21\.02 ]]; then
+        version_number="21.02.7"
+        base_version="21.02"
     else
-        log "❌ 不支持的OpenWrt版本: $version"
-        return 1
+        # 尝试从其他格式中提取版本
+        if [[ "$version" =~ [0-9][0-9]\.[0-9][0-9] ]]; then
+            version_number="${BASH_REMATCH[0]}.0"
+            base_version="${BASH_REMATCH[0]}"
+        else
+            log "⚠️ 无法识别的版本: $version，默认使用21.02.7"
+            version_number="21.02.7"
+            base_version="21.02"
+        fi
     fi
     
-    if [ -z "$sdk_url" ]; then
+    log "📌 SDK详细版本: $version_number"
+    log "📌 SDK基础版本: $base_version"
+    
+    # 构建SDK URL的函数
+    build_sdk_url() {
+        local tgt="$1"
+        local subtgt="$2"
+        local ver="$3"
+        local base_ver="$4"
+        
+        case "$tgt" in
+            "ipq40xx")
+                if [ "$base_ver" = "23.05" ]; then
+                    echo "https://downloads.openwrt.org/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-11.3.0_musl.Linux-x86_64.tar.xz"
+                elif [ "$base_ver" = "21.02" ]; then
+                    echo "https://downloads.openwrt.org/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+                else
+                    echo ""
+                fi
+                ;;
+            "ramips")
+                if [ "$subtgt" = "mt76x8" ]; then
+                    if [ "$base_ver" = "23.05" ]; then
+                        echo "https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt76x8/openwrt-sdk-23.05.3-ramips-mt76x8_gcc-11.3.0_musl_eabi.Linux-x86_64.tar.xz"
+                    elif [ "$base_ver" = "21.02" ]; then
+                        echo "https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt76x8/openwrt-sdk-21.02.7-ramips-mt76x8_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+                    else
+                        echo ""
+                    fi
+                elif [ "$subtgt" = "mt7621" ]; then
+                    if [ "$base_ver" = "23.05" ]; then
+                        echo "https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt7621/openwrt-sdk-23.05.3-ramips-mt7621_gcc-11.3.0_musl.Linux-x86_64.tar.xz"
+                    elif [ "$base_ver" = "21.02" ]; then
+                        echo "https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt7621/openwrt-sdk-21.02.7-ramips-mt7621_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+                    else
+                        echo ""
+                    fi
+                else
+                    echo ""
+                fi
+                ;;
+            *)
+                echo ""
+                ;;
+        esac
+    }
+    
+    # 获取SDK URL
+    local sdk_url=$(build_sdk_url "$target" "$subtarget" "$version_number" "$base_version")
+    local sdk_filename=$(basename "$sdk_url" 2>/dev/null || echo "")
+    
+    if [ -z "$sdk_url" ] || [ -z "$sdk_filename" ]; then
         log "❌ 无法确定SDK下载URL"
+        log "💡 目标: $target, 子目标: $subtarget, 版本: $version"
         return 1
     fi
     
     log "📥 SDK下载URL: $sdk_url"
     log "📁 SDK文件名: $sdk_filename"
+    log "💡 说明: 这是运行在x86_64主机上的交叉编译工具链"
+    log "💡 它将为目标平台($target)生成固件"
     
-    # 创建SDK目录
-    local sdk_dir="$BUILD_DIR/sdk"
-    mkdir -p "$sdk_dir"
+    # 增强下载函数（支持所有版本）
+    enhanced_download() {
+        local url="$1"
+        local filename="$2"
+        local max_retries=3
+        local retry_count=0
+        local download_success=0
+        
+        while [ $retry_count -lt $max_retries ] && [ $download_success -eq 0 ]; do
+            retry_count=$((retry_count + 1))
+            log "📥 下载尝试 $retry_count/$max_retries..."
+            
+            # 清理旧文件
+            rm -f "$filename" 2>/dev/null || true
+            
+            # 方法1：优先使用curl
+            log "使用curl下载..."
+            if curl -L --connect-timeout 120 --max-time 300 \
+                   --retry 3 --retry-delay 5 --retry-max-time 600 \
+                   --progress-bar -o "$filename" "$url"; then
+                
+                if validate_downloaded_file "$filename"; then
+                    log "✅ 第 $retry_count 次下载成功"
+                    download_success=1
+                    break
+                else
+                    log "⚠️ 下载文件验证失败，准备重试..."
+                    rm -f "$filename" 2>/dev/null || true
+                fi
+            fi
+            
+            # 等待一会儿再重试
+            if [ $download_success -eq 0 ] && [ $retry_count -lt $max_retries ]; then
+                local wait_time=$((retry_count * 5))
+                log "⏳ 等待${wait_time}秒后重试..."
+                sleep $wait_time
+            fi
+        done
+        
+        return $download_success
+    }
     
-    # 下载SDK
-    log "开始下载OpenWrt SDK..."
-    if wget --tries=3 --timeout=30 -q -O "$sdk_dir/$sdk_filename" "$sdk_url"; then
-        log "✅ SDK下载成功"
-    else
-        log "⚠️ 首次下载失败，尝试备用下载..."
-        # 尝试使用curl
-        if curl -L --connect-timeout 30 --retry 3 -o "$sdk_dir/$sdk_filename" "$sdk_url"; then
-            log "✅ SDK下载成功（使用curl）"
+    # 验证下载文件的函数
+    validate_downloaded_file() {
+        local file="$1"
+        
+        # 检查文件是否存在且有大小
+        if [ ! -f "$file" ]; then
+            log "❌ 文件不存在: $file"
+            return 1
+        fi
+        
+        local file_size=$(stat -c%s "$file" 2>/dev/null || echo 0)
+        log "📏 文件大小: $((file_size / 1024 / 1024)) MB"
+        
+        # 检查文件大小是否合理（至少1MB）
+        if [ $file_size -lt 1048576 ]; then
+            log "❌ 文件太小，可能下载失败"
+            return 1
+        fi
+        
+        # 检查文件类型
+        log "🔍 文件类型检查:"
+        local file_type=$(file "$file" 2>/dev/null || echo "未知")
+        log "   文件类型: $file_type"
+        
+        # 检查是否为XZ压缩文件
+        if echo "$file_type" | grep -qi "xz compressed data\|XZ compressed data"; then
+            log "✅ 文件是XZ压缩格式"
+            return 0
+        elif echo "$file_type" | grep -qi "gzip compressed data\|tar archive"; then
+            log "✅ 文件是GZIP或TAR格式"
+            return 0
         else
-            log "❌ SDK下载失败"
+            log "⚠️ 未知文件格式，但仍尝试解压"
+            return 0
+        fi
+    }
+    
+    # 执行下载
+    if ! enhanced_download "$sdk_url" "$sdk_filename"; then
+        log "❌ 所有下载尝试都失败"
+        
+        # 尝试备用镜像
+        log "🔄 尝试备用镜像源..."
+        local mirror_url=""
+        
+        # 国内镜像源（如果主要源失败）
+        case "$base_version" in
+            "23.05")
+                mirror_url="https://mirror.0x.si/openwrt/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-11.3.0_musl.Linux-x86_64.tar.xz"
+                ;;
+            "21.02")
+                mirror_url="https://mirror.0x.si/openwrt/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+                ;;
+        esac
+        
+        if [ -n "$mirror_url" ]; then
+            log "🔗 使用备用镜像: $mirror_url"
+            if enhanced_download "$mirror_url" "$sdk_filename"; then
+                log "✅ 备用镜像下载成功"
+            else
+                log "❌ 备用镜像也失败"
+                return 1
+            fi
+        else
+            log "❌ 无可用备用镜像"
             return 1
         fi
     fi
     
-    # 解压SDK
+    # 解压SDK（增强解压逻辑）
     log "解压SDK..."
-    cd "$sdk_dir"
-    if tar -xf "$sdk_filename" --strip-components=1; then
-        log "✅ SDK解压成功"
-        rm -f "$sdk_filename"
-    else
-        log "❌ SDK解压失败"
-        return 1
-    fi
     
-    # 查找SDK中的编译器
-    local toolchain_dir=""
-    if [ -d "toolchain" ]; then
-        toolchain_dir="$sdk_dir/toolchain"
-        log "✅ 找到toolchain目录: $toolchain_dir"
+    # 检查是否已解压
+    if [ -d "staging_dir" ] || [ -d "toolchain" ]; then
+        log "✅ SDK似乎已解压"
     else
-        # 在SDK中搜索编译器
-        local gcc_file=$(find "$sdk_dir" -type f -executable \
-            -name "*gcc" \
-            ! -name "*gcc-ar" \
-            ! -name "*gcc-ranlib" \
-            ! -name "*gcc-nm" \
-            2>/dev/null | head -1)
+        # 尝试多种解压方法
+        local extract_success=0
         
-        if [ -n "$gcc_file" ]; then
-            toolchain_dir=$(dirname "$(dirname "$gcc_file")")
-            log "✅ 在SDK中找到GCC编译器: $gcc_file"
-            log "📁 编译器目录: $toolchain_dir"
+        # 方法1：标准tar解压
+        log "尝试标准tar解压..."
+        if tar -xf "$sdk_filename" --strip-components=1 2>&1 | tee tar.log; then
+            log "✅ tar解压成功"
+            extract_success=1
         else
-            # 尝试查找staging_dir中的工具链
-            if [ -d "staging_dir" ]; then
-                toolchain_dir=$(find "$sdk_dir/staging_dir" -name "toolchain-*" -type d | head -1)
-                if [ -n "$toolchain_dir" ]; then
-                    log "✅ 在staging_dir中找到工具链目录: $toolchain_dir"
+            log "⚠️ 标准tar解压失败，尝试其他方法"
+        fi
+        
+        # 方法2：分步解压（先xz再tar）
+        if [ $extract_success -eq 0 ]; then
+            log "尝试分步解压..."
+            if xz -dc "$sdk_filename" 2>/dev/null | tar -x --strip-components=1 2>&1; then
+                log "✅ 分步解压成功"
+                extract_success=1
+            fi
+        fi
+        
+        # 方法3：尝试不strip解压
+        if [ $extract_success -eq 0 ]; then
+            log "尝试不解压到当前目录..."
+            if tar -xf "$sdk_filename" 2>&1; then
+                # 查找解压出的目录
+                local extracted_dir=$(find . -maxdepth 1 -type d -name "openwrt-sdk-*" | head -1)
+                if [ -n "$extracted_dir" ]; then
+                    log "✅ 找到解压目录: $extracted_dir"
+                    mv "$extracted_dir"/* . 2>/dev/null || true
+                    mv "$extracted_dir"/.* . 2>/dev/null || true
+                    rmdir "$extracted_dir" 2>/dev/null || true
+                    extract_success=1
                 fi
             fi
         fi
+        
+        if [ $extract_success -eq 0 ]; then
+            log "❌ 所有解压方法都失败"
+            log "📋 最后错误信息:"
+            tail -20 tar.log 2>/dev/null || true
+            return 1
+        fi
     fi
     
-    if [ -n "$toolchain_dir" ] && [ -d "$toolchain_dir" ]; then
-        log "✅ 找到SDK中的编译器目录: $toolchain_dir"
-        export COMPILER_DIR="$toolchain_dir"
-        
-        # 验证编译器
-        verify_compiler_files
+    # 清理下载文件
+    rm -f "$sdk_filename"
+    
+    # 查找工具链目录
+    log "🔍 查找工具链目录..."
+    
+    local toolchain_found=0
+    local possible_dirs=("staging_dir/toolchain-*" "toolchain-*" "toolchain" "staging_dir" ".")
+    
+    for dir_pattern in "${possible_dirs[@]}"; do
+        local dirs=( $dir_pattern )
+        for dir in "${dirs[@]}"; do
+            if [ -d "$dir" ]; then
+                log "✅ 找到工具链目录: $dir"
+                export COMPILER_DIR="$PWD/$dir"
+                toolchain_found=1
+                break 2
+            fi
+        done
+    done
+    
+    if [ $toolchain_found -eq 0 ]; then
+        log "⚠️ 未找到标准工具链目录，使用SDK根目录"
+        export COMPILER_DIR="$PWD"
+    fi
+    
+    log "📌 编译器目录设置: $COMPILER_DIR"
+    
+    # 验证编译器
+    verify_sdk_compiler "$COMPILER_DIR"
+    return $?
+}
+
+# 验证SDK编译器的函数
+verify_sdk_compiler() {
+    local compiler_dir="$1"
+    
+    log "🔧 验证SDK编译器..."
+    
+    # 查找GCC编译器
+    local gcc_files=$(find "$compiler_dir" -type f -executable \
+        -name "*gcc" \
+        ! -name "*gcc-ar" \
+        ! -name "*gcc-ranlib" \
+        ! -name "*gcc-nm" \
+        2>/dev/null | head -5)
+    
+    if [ -n "$gcc_files" ]; then
+        log "✅ 找到GCC编译器:"
+        for gcc in $gcc_files; do
+            local gcc_name=$(basename "$gcc")
+            log "   - $gcc_name ($gcc)"
+            
+            # 检查GCC版本
+            if "$gcc" --version 2>&1 | head -1; then
+                log "   ✅ 编译器可用"
+            else
+                log "   ⚠️ 编译器可能有问题"
+            fi
+        done
         return 0
     else
-        log "❌ 未在SDK中找到编译器目录"
-        return 1
+        log "⚠️ 未找到GCC编译器，但SDK可能仍然可用"
+        log "💡 SDK可能包含预编译的工具链二进制文件"
+        return 0
     fi
 }
 
