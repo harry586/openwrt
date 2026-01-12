@@ -462,10 +462,10 @@ jobs:
           echo "✅ SDK下载步骤完成，北京时间: $(TZ="Asia/Shanghai" date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 7 完成"
       
-      # 步骤 8: 验证SDK下载结果
-      - name: "8. 验证SDK下载结果"
+      # 步骤 8: 验证SDK下载结果（修复版）- 添加更多调试信息
+      - name: "8. 验证SDK下载结果（修复版）"
         run: |
-          echo "=== 步骤 8: 验证SDK下载结果 ==="
+          echo "=== 步骤 8: 验证SDK下载结果（修复版）==="
           echo "🕐 北京时间: $(TZ="Asia/Shanghai" date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是验证
@@ -493,8 +493,20 @@ jobs:
             if [ -d "/mnt/openwrt-build/sdk/staging_dir" ]; then
               echo "✅ staging_dir目录存在"
               echo "📊 staging_dir目录大小: $(du -sh /mnt/openwrt-build/sdk/staging_dir 2>/dev/null | cut -f1 || echo '未知')"
+              
+              # 查找工具链目录
+              echo "🔧 查找工具链目录:"
+              TOOLCHAIN_DIR=$(find /mnt/openwrt-build/sdk -type d -name "toolchain-*" 2>/dev/null | head -1)
+              if [ -n "$TOOLCHAIN_DIR" ]; then
+                echo "✅ 找到工具链目录: $TOOLCHAIN_DIR"
+                echo "📊 工具链目录大小: $(du -sh "$TOOLCHAIN_DIR" 2>/dev/null | cut -f1 || echo '未知')"
+              fi
             else
               echo "⚠️ staging_dir目录不存在，可能解压失败"
+              
+              # 检查是否有其他目录结构
+              echo "🔍 检查其他可能的目录结构:"
+              find /mnt/openwrt-build/sdk -maxdepth 2 -type d 2>/dev/null
             fi
             
             # 查找GCC编译器
@@ -511,15 +523,33 @@ jobs:
               echo "🔧 GCC版本测试:"
               "$GCC_FILE" --version 2>&1 | head -1
               echo "💡 这是OpenWrt官方SDK交叉编译器，用于编译目标平台固件"
-              echo "💡 系统GCC (11.4.0) 用于编译工具链，SDK GCC (8.4.0) 用于交叉编译固件"
+              echo "💡 系统GCC (11.4.0) 用于编译工具链，SDK GCC用于交叉编译固件"
+              
+              # 检查编译器的目标架构
+              echo "🎯 编译器目标架构检查:"
+              if echo "$("$GCC_FILE" -dumpmachine)" | grep -q "arm"; then
+                echo "✅ ARM架构编译器 (适用于高通IPQ40xx平台)"
+              elif echo "$("$GCC_FILE" -dumpmachine)" | grep -q "mips"; then
+                echo "✅ MIPS架构编译器 (适用于雷凌MT76xx平台)"
+              else
+                echo "⚠️ 未知架构: $("$GCC_FILE" -dumpmachine)"
+              fi
             else
               echo "⚠️ 未找到可执行的GCC编译器"
               echo "🔍 寻找其他工具链工具:"
               find "/mnt/openwrt-build/sdk" -type f -executable -name "*" 2>/dev/null | head -10
+              
+              # 检查是否有bin目录
+              echo "📁 检查bin目录:"
+              if [ -d "/mnt/openwrt-build/sdk/bin" ]; then
+                echo "✅ bin目录存在"
+                ls -la /mnt/openwrt-build/sdk/bin/ 2>/dev/null | head -10
+              fi
             fi
           else
             echo "❌ SDK目录不存在"
             echo "💡 将使用OpenWrt自动构建的编译器"
+            echo "📌 注意：这不会导致构建失败，但编译时间可能会更长"
           fi
           
           echo "✅ SDK验证完成"
