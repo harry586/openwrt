@@ -198,7 +198,7 @@ intelligent_platform_aware_compiler_search() {
     return 1
 }
 
-# 新增：下载OpenWrt官方SDK工具链函数（全面修复版）
+# 新增：下载OpenWrt官方SDK工具链函数（全面修复版）- 修复下载逻辑错误
 download_openwrt_sdk() {
     local target="$1"
     local subtarget="$2"
@@ -301,7 +301,7 @@ download_openwrt_sdk() {
     log "💡 说明: 这是运行在x86_64主机上的交叉编译工具链"
     log "💡 它将为目标平台($target)生成固件"
     
-    # 增强下载函数（支持所有版本）
+    # 修复版下载函数 - 修复逻辑错误
     enhanced_download() {
         local url="$1"
         local filename="$2"
@@ -325,11 +325,13 @@ download_openwrt_sdk() {
                 if validate_downloaded_file "$filename"; then
                     log "✅ 第 $retry_count 次下载成功"
                     download_success=1
-                    break
+                    return 0  # 修复：成功时直接返回
                 else
                     log "⚠️ 下载文件验证失败，准备重试..."
                     rm -f "$filename" 2>/dev/null || true
                 fi
+            else
+                log "❌ curl下载失败"
             fi
             
             # 等待一会儿再重试
@@ -340,7 +342,13 @@ download_openwrt_sdk() {
             fi
         done
         
-        return $download_success
+        # 修复：只有所有尝试都失败才返回失败
+        if [ $download_success -eq 0 ]; then
+            log "❌ 所有下载尝试都失败"
+            return 1
+        else
+            return 0
+        fi
     }
     
     # 验证下载文件的函数
@@ -380,12 +388,12 @@ download_openwrt_sdk() {
         fi
     }
     
-    # 执行下载
+    # 执行下载 - 修复逻辑错误
+    log "🚀 开始下载SDK..."
     if ! enhanced_download "$sdk_url" "$sdk_filename"; then
-        log "❌ 所有下载尝试都失败"
+        log "❌ 主镜像下载失败，尝试备用镜像源..."
         
         # 尝试备用镜像
-        log "🔄 尝试备用镜像源..."
         local mirror_url=""
         
         # 国内镜像源（如果主要源失败）
@@ -400,10 +408,23 @@ download_openwrt_sdk() {
         
         if [ -n "$mirror_url" ]; then
             log "🔗 使用备用镜像: $mirror_url"
-            if enhanced_download "$mirror_url" "$sdk_filename"; then
-                log "✅ 备用镜像下载成功"
+            local mirror_filename=$(basename "$mirror_url")
+            
+            # 清理旧文件
+            rm -f "$mirror_filename" 2>/dev/null || true
+            
+            if curl -L --connect-timeout 120 --max-time 300 \
+                   --progress-bar -o "$mirror_filename" "$mirror_url"; then
+                
+                if validate_downloaded_file "$mirror_filename"; then
+                    log "✅ 备用镜像下载成功"
+                    sdk_filename="$mirror_filename"
+                else
+                    log "❌ 备用镜像文件验证失败"
+                    return 1
+                fi
             else
-                log "❌ 备用镜像也失败"
+                log "❌ 备用镜像下载失败"
                 return 1
             fi
         else
@@ -412,60 +433,111 @@ download_openwrt_sdk() {
         fi
     fi
     
-    # 解压SDK（增强解压逻辑）
+    # 验证下载的文件确实存在
+    if [ ! -f "$sdk_filename" ]; then
+        log "❌ 错误: 下载的文件不存在: $sdk_filename"
+        log "📁 当前目录内容:"
+        ls -la
+        return 1
+    fi
+    
+    log "✅ SDK下载完成，文件: $sdk_filename"
+    log "📊 文件详细信息:"
+    ls -lh "$sdk_filename"
+    
+    # 解压SDK（修复解压逻辑）
     log "解压SDK..."
     
     # 检查是否已解压
     if [ -d "staging_dir" ] || [ -d "toolchain" ]; then
         log "✅ SDK似乎已解压"
     else
-        # 尝试多种解压方法
+        log "开始解压SDK文件..."
+        
+        # 显示文件信息
+        log "🔍 解压前检查:"
+        log "  文件: $sdk_filename"
+        log "  类型: $(file "$sdk_filename")"
+        log "  大小: $(ls -lh "$sdk_filename" | awk '{print $5}')"
+        
+        # 先尝试列出压缩包内容
+        log "📦 列出压缩包内容..."
+        if tar -tf "$sdk_filename" 2>&1 | head -10; then
+            log "✅ 可以读取压缩包内容"
+        else
+            log "❌ 无法读取压缩包内容"
+            return 1
+        fi
+        
+        # 尝试解压
         local extract_success=0
         
-        # 方法1：标准tar解压
-        log "尝试标准tar解压..."
-        if tar -xf "$sdk_filename" --strip-components=1 2>&1 | tee tar.log; then
-            log "✅ tar解压成功"
+        # 方法1：使用tar直接解压（推荐）
+        log "尝试方法1: 直接解压..."
+        if tar -xJf "$sdk_filename" --strip-components=1 2>&1; then
+            log "✅ tar直接解压成功"
             extract_success=1
         else
-            log "⚠️ 标准tar解压失败，尝试其他方法"
+            log "⚠️ tar直接解压失败，错误信息:"
+            tar -xJf "$sdk_filename" --strip-components=1 2>&1 | tail -5 || true
         fi
         
         # 方法2：分步解压（先xz再tar）
         if [ $extract_success -eq 0 ]; then
-            log "尝试分步解压..."
+            log "尝试方法2: 分步解压 (xz + tar)..."
             if xz -dc "$sdk_filename" 2>/dev/null | tar -x --strip-components=1 2>&1; then
                 log "✅ 分步解压成功"
                 extract_success=1
+            else
+                log "⚠️ 分步解压失败"
             fi
         fi
         
-        # 方法3：尝试不strip解压
+        # 方法3：不解压到当前目录
         if [ $extract_success -eq 0 ]; then
-            log "尝试不解压到当前目录..."
-            if tar -xf "$sdk_filename" 2>&1; then
+            log "尝试方法3: 不解压到当前目录..."
+            if tar -xJf "$sdk_filename" 2>&1; then
                 # 查找解压出的目录
-                local extracted_dir=$(find . -maxdepth 1 -type d -name "openwrt-sdk-*" | head -1)
+                local extracted_dir=$(find . -maxdepth 1 -type d -name "openwrt-sdk-*" 2>/dev/null | head -1)
                 if [ -n "$extracted_dir" ]; then
                     log "✅ 找到解压目录: $extracted_dir"
-                    mv "$extracted_dir"/* . 2>/dev/null || true
-                    mv "$extracted_dir"/.* . 2>/dev/null || true
+                    # 移动文件到当前目录
+                    find "$extracted_dir" -mindepth 1 -maxdepth 1 -exec mv {} . 2>/dev/null \;
+                    # 删除空目录
                     rmdir "$extracted_dir" 2>/dev/null || true
                     extract_success=1
+                else
+                    log "❌ 未找到解压目录"
                 fi
             fi
         fi
         
         if [ $extract_success -eq 0 ]; then
             log "❌ 所有解压方法都失败"
-            log "📋 最后错误信息:"
-            tail -20 tar.log 2>/dev/null || true
+            log "💡 最后错误信息:"
+            tar -xJf "$sdk_filename" --strip-components=1 2>&1 | tail -10
             return 1
         fi
     fi
     
+    # 检查解压结果
+    log "🔍 检查解压结果..."
+    if [ -d "staging_dir" ]; then
+        log "✅ staging_dir目录存在"
+        log "📊 staging_dir目录大小: $(du -sh staging_dir 2>/dev/null | cut -f1 || echo '未知')"
+    fi
+    
+    if [ -d "toolchain" ]; then
+        log "✅ toolchain目录存在"
+    fi
+    
+    # 查找所有重要目录
+    log "📁 当前目录结构:"
+    find . -maxdepth 2 -type d | sort
+    
     # 清理下载文件
-    rm -f "$sdk_filename"
+    rm -f "$sdk_filename" 2>/dev/null || true
+    log "✅ 清理下载文件"
     
     # 查找工具链目录
     log "🔍 查找工具链目录..."
@@ -480,6 +552,10 @@ download_openwrt_sdk() {
                 log "✅ 找到工具链目录: $dir"
                 export COMPILER_DIR="$PWD/$dir"
                 toolchain_found=1
+                
+                # 显示目录内容
+                log "📋 目录内容 (前10个):"
+                find "$dir" -maxdepth 1 -type f -executable 2>/dev/null | head -10
                 break 2
             fi
         done
@@ -491,6 +567,10 @@ download_openwrt_sdk() {
     fi
     
     log "📌 编译器目录设置: $COMPILER_DIR"
+    log "📊 编译器目录信息:"
+    log "  路径: $COMPILER_DIR"
+    log "  大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
+    log "  文件数量: $(find "$COMPILER_DIR" -type f 2>/dev/null | wc -l)"
     
     # 验证编译器
     verify_sdk_compiler "$COMPILER_DIR"
@@ -502,6 +582,12 @@ verify_sdk_compiler() {
     local compiler_dir="$1"
     
     log "🔧 验证SDK编译器..."
+    
+    # 首先检查目录是否存在
+    if [ ! -d "$compiler_dir" ]; then
+        log "❌ 编译器目录不存在: $compiler_dir"
+        return 1
+    fi
     
     # 查找GCC编译器
     local gcc_files=$(find "$compiler_dir" -type f -executable \
@@ -518,6 +604,7 @@ verify_sdk_compiler() {
             log "   - $gcc_name ($gcc)"
             
             # 检查GCC版本
+            log "   🔧 检查GCC版本..."
             if "$gcc" --version 2>&1 | head -1; then
                 log "   ✅ 编译器可用"
             else
@@ -528,6 +615,21 @@ verify_sdk_compiler() {
     else
         log "⚠️ 未找到GCC编译器，但SDK可能仍然可用"
         log "💡 SDK可能包含预编译的工具链二进制文件"
+        
+        # 检查是否有其他工具链工具
+        log "🔍 检查其他工具链工具..."
+        local tool_count=$(find "$compiler_dir" -type f -executable \
+            -name "*" \
+            2>/dev/null | wc -l)
+        
+        if [ $tool_count -gt 0 ]; then
+            log "✅ 找到 $tool_count 个可执行文件"
+            log "📋 工具列表 (前10个):"
+            find "$compiler_dir" -type f -executable -name "*" 2>/dev/null | head -10
+        else
+            log "❌ 未找到任何可执行文件"
+        fi
+        
         return 0
     fi
 }
