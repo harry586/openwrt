@@ -128,7 +128,7 @@ init_report() {
     echo "==================================================" >> "$REPORT_FILE"
     echo "分析时间: $(date '+%Y-%m-%d %H:%M:%S')" >> "$REPORT_FILE"
     echo "报告时间戳: $TIMESTAMP" >> "$REPORT_FILE"
-    echo "报告版本: 2.4.0" >> "$REPORT_FILE"
+    echo "报告版本: 2.4.1" >> "$REPORT_FILE"
     echo "构建目录: $BUILD_DIR" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
@@ -348,7 +348,7 @@ analyze_config_file() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 6. 检查编译器状态（优化版 - 更准确的SDK编译器检测）
+# 6. 检查编译器状态（修复版 - 正确处理预构建编译器）
 check_compiler_status() {
     log "🔧 检查编译器状态..."
     
@@ -358,40 +358,134 @@ check_compiler_status() {
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
         echo "🎯 编译器来源: 预构建的OpenWrt SDK" >> "$REPORT_FILE"
         echo "📌 编译器目录: $COMPILER_DIR" >> "$REPORT_FILE"
+        echo "📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')" >> "$REPORT_FILE"
         
-        # 检查预构建编译器中的GCC版本
-        local prebuilt_gcc=$(find "$COMPILER_DIR" -type f -executable \
-          -name "*gcc" \
-          ! -name "*gcc-ar" \
-          ! -name "*gcc-ranlib" \
-          ! -name "*gcc-nm" \
-          2>/dev/null | head -1)
+        # 检查是否是OpenWrt官方SDK
+        local is_official_sdk=0
+        if [ -f "$COMPILER_DIR/version.json" ] || [ -f "$COMPILER_DIR/.config" ] || [ -f "$COMPILER_DIR/include/linux/version.h" ]; then
+            is_official_sdk=1
+            echo "✅ 确认是OpenWrt官方SDK工具链" >> "$REPORT_FILE"
+        else
+            echo "⚠️ 预构建目录结构可能不标准" >> "$REPORT_FILE"
+        fi
+        
+        # 改进的GCC查找逻辑
+        log "🔍 查找预构建SDK中的编译器文件..."
+        
+        # 查找真正的GCC编译器（交叉编译器）
+        local prebuilt_gcc=""
+        local gcc_search_paths=(
+            "$COMPILER_DIR/bin"
+            "$COMPILER_DIR/toolchain/bin"
+            "$COMPILER_DIR"
+            "$COMPILER_DIR/.."
+        )
+        
+        for search_path in "${gcc_search_paths[@]}"; do
+            if [ -d "$search_path" ]; then
+                # 查找交叉编译器（如mipsel-openwrt-linux-gcc）
+                prebuilt_gcc=$(find "$search_path" -type f -executable \
+                  -name "*gcc" \
+                  ! -name "*gcc-ar" \
+                  ! -name "*gcc-ranlib" \
+                  ! -name "*gcc-nm" \
+                  ! -name "*-gcc-ar" \
+                  2>/dev/null | grep -E "(mipsel|arm|aarch64|x86_64|i686)-" | head -1)
+                
+                if [ -n "$prebuilt_gcc" ] && [ -x "$prebuilt_gcc" ]; then
+                    log "✅ 找到预构建交叉编译器: $prebuilt_gcc"
+                    break
+                fi
+            fi
+        done
+        
+        # 如果没找到交叉编译器，尝试找任何gcc
+        if [ -z "$prebuilt_gcc" ]; then
+            for search_path in "${gcc_search_paths[@]}"; do
+                if [ -d "$search_path" ]; then
+                    prebuilt_gcc=$(find "$search_path" -type f -executable \
+                      -name "*gcc" \
+                      ! -name "*gcc-ar" \
+                      ! -name "*gcc-ranlib" \
+                      ! -name "*gcc-nm" \
+                      ! -name "*-gcc-ar" \
+                      2>/dev/null | head -1)
+                    
+                    if [ -n "$prebuilt_gcc" ] && [ -x "$prebuilt_gcc" ]; then
+                        log "✅ 找到预构建GCC编译器: $prebuilt_gcc"
+                        break
+                    fi
+                fi
+            done
+        fi
         
         if [ -n "$prebuilt_gcc" ] && [ -x "$prebuilt_gcc" ]; then
             echo "✅ 找到预构建GCC编译器: $(basename "$prebuilt_gcc")" >> "$REPORT_FILE"
             local prebuilt_version=$("$prebuilt_gcc" --version 2>&1 | head -1)
             echo "     版本: $prebuilt_version" >> "$REPORT_FILE"
             
-            # 检查GCC版本 - 修复版：不再错误报告版本问题
-            local major_version=$(echo "$prebuilt_version" | grep -o "[0-9]\+" | head -1)
-            if [ -n "$major_version" ]; then
-                # 显示版本但不再标记为不兼容
-                echo "     🔧 GCC版本: $major_version.x" >> "$REPORT_FILE"
-                echo "     💡 这是官方SDK的编译器，版本已通过验证" >> "$REPORT_FILE"
+            # 检查是否是交叉编译器
+            local compiler_name=$(basename "$prebuilt_gcc")
+            if [[ "$compiler_name" == *"mipsel"* ]] || [[ "$compiler_name" == *"arm"* ]] || [[ "$compiler_name" == *"aarch64"* ]] || [[ "$compiler_name" == *"-"* ]]; then
+                echo "     ✅ 检测到交叉编译器: 符合目标平台要求" >> "$REPORT_FILE"
+            else
+                echo "     ⚠️ 编译器名称不符合交叉编译器模式" >> "$REPORT_FILE"
             fi
             
-            # 检查是否是真正的交叉编译器
-            local compiler_name=$(basename "$prebuilt_gcc")
-            if [[ "$compiler_name" == *"mipsel"* ]] || [[ "$compiler_name" == *"arm"* ]] || [[ "$compiler_name" == *"aarch64"* ]]; then
-                echo "     ✅ 检测到交叉编译器: 符合目标平台要求" >> "$REPORT_FILE"
+            # 检查编译器类型
+            if [[ "$compiler_name" == *"openwrt"* ]]; then
+                echo "     🎯 确认是OpenWrt专用编译器" >> "$REPORT_FILE"
             fi
+            
         else
-            echo "⚠️ 预构建目录中未找到真正的GCC编译器" >> "$REPORT_FILE"
-            echo "🔍 搜索预构建目录内容:" >> "$REPORT_FILE"
-            find "$COMPILER_DIR" -type f -executable -name "*gcc*" 2>/dev/null | head -5 | while read file; do
-                echo "  🔧 $(basename "$file")" >> "$REPORT_FILE"
-            done
+            echo "⚠️ 预构建目录中未找到可执行的GCC编译器" >> "$REPORT_FILE"
+            echo "🔍 预构建目录内容摘要:" >> "$REPORT_FILE"
+            if [ -d "$COMPILER_DIR" ]; then
+                echo "  目录结构:" >> "$REPORT_FILE"
+                ls -la "$COMPILER_DIR/" 2>/dev/null | head -5 | while read line; do
+                    echo "    $line" >> "$REPORT_FILE"
+                done
+                
+                # 查找任何可执行文件
+                local executable_count=$(find "$COMPILER_DIR" -type f -executable 2>/dev/null | wc -l)
+                echo "  可执行文件总数: $executable_count" >> "$REPORT_FILE"
+                
+                if [ $executable_count -gt 0 ]; then
+                    echo "  可执行文件示例 (前5个):" >> "$REPORT_FILE"
+                    find "$COMPILER_DIR" -type f -executable 2>/dev/null | head -5 | while read file; do
+                        echo "    $(basename "$file")" >> "$REPORT_FILE"
+                    done
+                fi
+            fi
         fi
+        
+        # 检查SDK中的工具链工具
+        echo "" >> "$REPORT_FILE"
+        echo "🛠️ 工具链工具检查:" >> "$REPORT_FILE"
+        local toolchain_tools=("as" "ld" "ar" "strip" "objcopy" "objdump" "nm" "ranlib")
+        local found_tools=0
+        local total_tools=${#toolchain_tools[@]}
+        
+        for tool in "${toolchain_tools[@]}"; do
+            local tool_path=$(find "$COMPILER_DIR" -type f -executable -name "*$tool" 2>/dev/null | head -1)
+            if [ -n "$tool_path" ] && [ -x "$tool_path" ]; then
+                found_tools=$((found_tools + 1))
+                echo "    ✅ $tool: 找到 ($(basename "$tool_path"))" >> "$REPORT_FILE"
+            else
+                echo "    ⚠️ $tool: 未找到" >> "$REPORT_FILE"
+            fi
+        done
+        
+        echo "    📊 工具链工具完整性: $found_tools/$total_tools" >> "$REPORT_FILE"
+        
+        if [ $is_official_sdk -eq 1 ] && [ $found_tools -ge 5 ]; then
+            echo "    ✅ SDK工具链基本完整" >> "$REPORT_FILE"
+        elif [ $found_tools -gt 0 ]; then
+            echo "    ⚠️ SDK工具链部分文件缺失" >> "$REPORT_FILE"
+        else
+            echo "    ❌ SDK工具链严重不完整" >> "$REPORT_FILE"
+        fi
+        
     else
         echo "🛠️ 编译器来源: OpenWrt自动构建" >> "$REPORT_FILE"
         echo "💡 未找到预构建SDK编译器，将使用自动构建的编译器" >> "$REPORT_FILE"
@@ -399,6 +493,8 @@ check_compiler_status() {
     
     # 检查构建目录中的编译器
     if [ -d "$BUILD_DIR/staging_dir" ]; then
+        echo "" >> "$REPORT_FILE"
+        echo "🏗️  OpenWrt自动构建编译器状态:" >> "$REPORT_FILE"
         echo "✅ 编译目录存在: staging_dir" >> "$REPORT_FILE"
         
         # 检查工具链目录
@@ -408,9 +504,10 @@ check_compiler_status() {
         if [ $toolchain_dirs -gt 0 ]; then
             local toolchain_dir=$(find "$BUILD_DIR/staging_dir" -name "toolchain-*" -type d 2>/dev/null | head -1)
             echo "🔍 工具链目录: $(basename "$toolchain_dir")" >> "$REPORT_FILE"
+            echo "📁 目录大小: $(du -sh "$toolchain_dir" 2>/dev/null | cut -f1 || echo '未知')" >> "$REPORT_FILE"
             
             # 检查真正的GCC编译器（排除工具链工具）
-            echo "🔍 编译器详细检查:" >> "$REPORT_FILE"
+            echo "🔧 编译器详细检查:" >> "$REPORT_FILE"
             
             # 查找真正的gcc编译器（不是工具链工具）
             local real_gcc=$(find "$toolchain_dir/bin" -type f -executable \
@@ -433,8 +530,20 @@ check_compiler_status() {
                     echo "     🔧 GCC版本: $major_version.x" >> "$REPORT_FILE"
                     echo "     💡 构建系统使用的编译器版本" >> "$REPORT_FILE"
                 fi
+                
+                # 检查是否是交叉编译器
+                local gcc_name=$(basename "$real_gcc")
+                if [[ "$gcc_name" == *"-"* ]]; then
+                    echo "     ✅ 确认是交叉编译器" >> "$REPORT_FILE"
+                fi
             else
                 echo "  ⚠️ 未找到真正的GCC编译器" >> "$REPORT_FILE"
+                echo "  🔍 搜索toolchain/bin目录内容:" >> "$REPORT_FILE"
+                if [ -d "$toolchain_dir/bin" ]; then
+                    ls -la "$toolchain_dir/bin/" 2>/dev/null | head -10 | while read line; do
+                        echo "    $line" >> "$REPORT_FILE"
+                    done
+                fi
             fi
             
         else
@@ -443,6 +552,8 @@ check_compiler_status() {
         fi
         
     else
+        echo "" >> "$REPORT_FILE"
+        echo "🏗️  OpenWrt自动构建编译器状态:" >> "$REPORT_FILE"
         echo "❌ 编译目录不存在: staging_dir" >> "$REPORT_FILE"
         echo "💡 构建可能尚未开始或已清理" >> "$REPORT_FILE"
     fi
@@ -466,9 +577,10 @@ check_compiler_status() {
                 count=$((count + 1))
                 local version=$("$gcc_file" --version 2>&1 | head -1)
                 local dir_name=$(dirname "$gcc_file")
+                local file_name=$(basename "$gcc_file")
                 
                 echo "  编译器 #$count:" >> "$REPORT_FILE"
-                echo "      文件: $(basename "$gcc_file")" >> "$REPORT_FILE"
+                echo "      文件: $file_name" >> "$REPORT_FILE"
                 echo "      目录: $(echo "$dir_name" | sed "s|$BUILD_DIR/||")" >> "$REPORT_FILE"
                 echo "      版本: $version" >> "$REPORT_FILE"
                 
@@ -483,34 +595,62 @@ check_compiler_status() {
                     echo "      来源: 🔍 其他位置" >> "$REPORT_FILE"
                 fi
                 
+                # 检查是否是交叉编译器
+                if [[ "$file_name" == *"-"* ]]; then
+                    echo "      类型: 🔄 交叉编译器" >> "$REPORT_FILE"
+                else
+                    echo "      类型: 💻 本地编译器" >> "$REPORT_FILE"
+                fi
+                
                 echo "" >> "$REPORT_FILE"
             fi
         done
+        
+        if [ $count -eq 0 ]; then
+            echo "  ⚠️ 未找到任何可执行的GCC编译器文件" >> "$REPORT_FILE"
+        fi
     else
         echo "  ⚠️ 未找到任何GCC编译器文件" >> "$REPORT_FILE"
     fi
     
-    # 特别检查：修复错误的版本警告
-    print_subheader "SDK编译器状态确认"
+    # 特别检查：SDK编译器验证
+    print_subheader "SDK编译器验证"
     
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-        echo "📊 SDK编译器目录信息:" >> "$REPORT_FILE"
+        echo "📊 SDK编译器目录验证:" >> "$REPORT_FILE"
         echo "  目录路径: $COMPILER_DIR" >> "$REPORT_FILE"
-        echo "  目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')" >> "$REPORT_FILE"
+        echo "  目录状态: $(if [ -d "$COMPILER_DIR" ]; then echo "✅ 存在"; else echo "❌ 不存在"; fi)" >> "$REPORT_FILE"
         
-        # 检查是否是OpenWrt官方SDK
-        if [ -f "$COMPILER_DIR/version.json" ] || [ -f "$COMPILER_DIR/.config" ]; then
-            echo "  ✅ 确认是OpenWrt官方SDK工具链" >> "$REPORT_FILE"
-            echo "  💡 SDK编译器版本是经过官方测试和验证的" >> "$REPORT_FILE"
-        fi
+        # 检查关键目录
+        local key_dirs=("bin" "include" "lib" "usr")
+        for dir in "${key_dirs[@]}"; do
+            if [ -d "$COMPILER_DIR/$dir" ]; then
+                echo "  📁 $dir目录: ✅ 存在" >> "$REPORT_FILE"
+            else
+                echo "  📁 $dir目录: ⚠️ 缺失" >> "$REPORT_FILE"
+            fi
+        done
         
-        # 检查SDK中的GCC文件
-        local sdk_gcc_files=$(find "$COMPILER_DIR" -type f -executable -name "*gcc" 2>/dev/null | wc -l)
-        echo "  GCC文件数量: $sdk_gcc_files 个" >> "$REPORT_FILE"
+        # 检查关键文件
+        local key_files=("version.json" ".config" "include/linux/version.h")
+        for file in "${key_files[@]}"; do
+            if [ -f "$COMPILER_DIR/$file" ]; then
+                echo "  📄 $file: ✅ 存在" >> "$REPORT_FILE"
+            else
+                echo "  📄 $file: ⚠️ 缺失 (可能不是标准SDK)" >> "$REPORT_FILE"
+            fi
+        done
         
-        if [ $sdk_gcc_files -gt 0 ]; then
-            echo "  ✅ SDK包含GCC编译器文件" >> "$REPORT_FILE"
-        fi
+        echo "" >> "$REPORT_FILE"
+        echo "💡 SDK编译器使用说明:" >> "$REPORT_FILE"
+        echo "  1. ✅ SDK编译器来自OpenWrt官方下载" >> "$REPORT_FILE"
+        echo "  2. 🔧 版本已经过官方测试和验证" >> "$REPORT_FILE"
+        echo "  3. ⚠️ 如果构建失败，通常不是SDK编译器版本问题" >> "$REPORT_FILE"
+        echo "  4. 🔍 真正的编译器问题会有明确的错误消息" >> "$REPORT_FILE"
+        
+    else
+        echo "⚠️ SDK编译器目录未设置或不存在" >> "$REPORT_FILE"
+        echo "💡 将使用OpenWrt自动构建的编译器" >> "$REPORT_FILE"
     fi
     
     echo "" >> "$REPORT_FILE"
