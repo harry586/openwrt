@@ -49,9 +49,15 @@ jobs:
           echo "=== 步骤 0: 生成时间戳 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 生成日期格式的时间戳（年月日）
+          # 生成日期格式的时间戳（年月日）- 使用北京日期
+          # 设置时区为北京（东八区）
+          export TZ='Asia/Shanghai'
           BASE_DATE=$(date -u +'%Y%m%d')
-          TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$BASE_DATE"
+          
+          # 获取当前北京日期
+          BEIJING_DATE=$(TZ='Asia/Shanghai' date +'%Y%m%d')
+          
+          TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$BEIJING_DATE"
           
           echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
           
@@ -61,6 +67,7 @@ jobs:
           echo "  版本: ${{ github.event.inputs.version_selection }}"
           echo "  模式: ${{ github.event.inputs.config_mode }}"
           echo "  并行优化: ${{ github.event.inputs.enable_parallel }}"
+          echo "  北京日期: $BEIJING_DATE"
           
           echo "🟢 步骤 0 完成"
       
