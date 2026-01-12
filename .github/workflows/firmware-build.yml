@@ -430,9 +430,9 @@ jobs:
           echo "🟢 步骤 6 完成"
       
       # 步骤 7: 下载OpenWrt官方SDK（环境文件搜索修复版）- 增强版
-      - name: "7. 下载OpenWrt官方SDK（环境文件搜索修复版）- 增强版"
+      - name: "7. 下载OpenWrt官方SDK（修复版）- 修复下载逻辑错误"
         run: |
-          echo "=== 步骤 7: 下载OpenWrt官方SDK（环境文件搜索修复版）- 增强版 ==="
+          echo "=== 步骤 7: 下载OpenWrt官方SDK（修复版）- 修复下载逻辑错误 ==="
           echo "🕐 北京时间: $(TZ="Asia/Shanghai" date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -440,15 +440,23 @@ jobs:
           trap 'echo "❌ 步骤 7 失败，退出代码: $?"; exit 1' ERR
           
           echo "🚀 开始下载OpenWrt官方SDK工具链..."
+          echo "💡 修复了下载逻辑错误，确保正确报告下载状态"
           
           # 执行SDK下载
-          echo "🔄 开始执行SDK下载..."
+          echo "🔄 开始执行修复版SDK下载..."
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_compiler_env "${{ github.event.inputs.device_name }}"
           
           SDK_EXIT_CODE=$?
-          if [ $SDK_EXIT_CODE -ne 0 ]; then
-            echo "⚠️ 警告: SDK下载可能有问题，退出代码: $SDK_EXIT_CODE"
+          
+          if [ $SDK_EXIT_CODE -eq 0 ]; then
+            echo "✅ SDK下载成功"
+            echo "📌 主镜像下载成功，未使用备用镜像"
+          elif [ $SDK_EXIT_CODE -eq 1 ]; then
+            echo "❌ SDK下载失败"
             echo "💡 将使用OpenWrt自动构建的编译器作为后备"
+          else
+            echo "⚠️ SDK下载返回未知状态: $SDK_EXIT_CODE"
+            echo "💡 将继续执行，使用后备方案"
           fi
           
           echo "✅ SDK下载步骤完成，北京时间: $(TZ="Asia/Shanghai" date '+%Y-%m-%d %H:%M:%S')"
@@ -476,6 +484,21 @@ jobs:
             echo "✅ SDK目录存在: /mnt/openwrt-build/sdk"
             echo "📊 SDK目录大小: $(du -sh /mnt/openwrt-build/sdk 2>/dev/null | cut -f1 || echo '未知')"
             
+            # 详细检查SDK目录内容
+            echo "📁 SDK目录内容:"
+            ls -la /mnt/openwrt-build/sdk/ 2>/dev/null || echo "无法列出目录内容"
+            
+            # 检查是否有解压的文件
+            echo "🔍 检查SDK解压情况:"
+            if [ -d "/mnt/openwrt-build/sdk/staging_dir" ]; then
+              echo "✅ staging_dir目录存在"
+              echo "📊 staging_dir目录大小: $(du -sh /mnt/openwrt-build/sdk/staging_dir 2>/dev/null | cut -f1 || echo '未知')"
+            else
+              echo "⚠️ staging_dir目录不存在，可能解压失败"
+            fi
+            
+            # 查找GCC编译器
+            echo "🔧 查找GCC编译器:"
             GCC_FILE=$(find "/mnt/openwrt-build/sdk" -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
@@ -491,6 +514,8 @@ jobs:
               echo "💡 系统GCC (11.4.0) 用于编译工具链，SDK GCC (8.4.0) 用于交叉编译固件"
             else
               echo "⚠️ 未找到可执行的GCC编译器"
+              echo "🔍 寻找其他工具链工具:"
+              find "/mnt/openwrt-build/sdk" -type f -executable -name "*" 2>/dev/null | head -10
             fi
           else
             echo "❌ SDK目录不存在"
