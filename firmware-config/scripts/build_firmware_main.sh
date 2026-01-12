@@ -198,7 +198,7 @@ intelligent_platform_aware_compiler_search() {
     return 1
 }
 
-# 新增：下载OpenWrt官方SDK工具链函数（全面修复版）- 修复下载逻辑错误
+# 新增：下载OpenWrt官方SDK工具链函数（全面修复版）- 修复下载逻辑错误和备用镜像
 download_openwrt_sdk() {
     local target="$1"
     local subtarget="$2"
@@ -301,13 +301,20 @@ download_openwrt_sdk() {
     log "💡 说明: 这是运行在x86_64主机上的交叉编译工具链"
     log "💡 它将为目标平台($target)生成固件"
     
-    # 修复版下载函数 - 修复逻辑错误
+    # 修复版下载函数 - 修复逻辑错误和备用镜像
     enhanced_download() {
         local url="$1"
         local filename="$2"
         local max_retries=3
         local retry_count=0
         local download_success=0
+        
+        # 先测试网络连接
+        log "🌐 测试网络连接..."
+        if ! curl -s --connect-timeout 10 --max-time 20 --head "https://downloads.openwrt.org" > /dev/null 2>&1; then
+            log "⚠️ 网络连接可能有问题，尝试使用备用镜像直接"
+            return 1
+        fi
         
         while [ $retry_count -lt $max_retries ] && [ $download_success -eq 0 ]; do
             retry_count=$((retry_count + 1))
@@ -362,11 +369,12 @@ download_openwrt_sdk() {
         fi
         
         local file_size=$(stat -c%s "$file" 2>/dev/null || echo 0)
-        log "📏 文件大小: $((file_size / 1024 / 1024)) MB"
+        local file_size_mb=$((file_size / 1024 / 1024))
+        log "📏 文件大小: $file_size_mb MB"
         
-        # 检查文件大小是否合理（至少1MB）
-        if [ $file_size -lt 1048576 ]; then
-            log "❌ 文件太小，可能下载失败"
+        # 检查文件大小是否合理（至少10MB）
+        if [ $file_size -lt 10485760 ]; then
+            log "❌ 文件太小 ($file_size_mb MB)，可能下载失败"
             return 1
         fi
         
@@ -388,47 +396,93 @@ download_openwrt_sdk() {
         fi
     }
     
-    # 执行下载 - 修复逻辑错误
+    # 执行下载 - 修复逻辑错误和备用镜像
     log "🚀 开始下载SDK..."
     if ! enhanced_download "$sdk_url" "$sdk_filename"; then
         log "❌ 主镜像下载失败，尝试备用镜像源..."
         
-        # 尝试备用镜像
-        local mirror_url=""
+        # 尝试备用镜像（使用可靠的镜像源）
+        local mirror_urls=()
         
-        # 国内镜像源（如果主要源失败）
-        case "$base_version" in
-            "23.05")
-                mirror_url="https://mirror.0x.si/openwrt/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-11.3.0_musl.Linux-x86_64.tar.xz"
-                ;;
-            "21.02")
-                mirror_url="https://mirror.0x.si/openwrt/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
-                ;;
-        esac
+        # 根据不同版本和平台构建备用镜像列表
+        if [ "$base_version" = "23.05" ]; then
+            case "$target" in
+                "ipq40xx")
+                    mirror_urls=(
+                        "https://mirrors.tuna.tsinghua.edu.cn/openwrt/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-11.3.0_musl.Linux-x86_64.tar.xz"
+                        "https://mirrors.ustc.edu.cn/openwrt/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-11.3.0_musl.Linux-x86_64.tar.xz"
+                        "https://mirror.sjtu.edu.cn/openwrt/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-11.3.0_musl.Linux-x86_64.tar.xz"
+                    )
+                    ;;
+                "ramips")
+                    if [ "$subtarget" = "mt76x8" ]; then
+                        mirror_urls=(
+                            "https://mirrors.tuna.tsinghua.edu.cn/openwrt/releases/23.05.3/targets/ramips/mt76x8/openwrt-sdk-23.05.3-ramips-mt76x8_gcc-11.3.0_musl_eabi.Linux-x86_64.tar.xz"
+                        )
+                    elif [ "$subtarget" = "mt7621" ]; then
+                        mirror_urls=(
+                            "https://mirrors.tuna.tsinghua.edu.cn/openwrt/releases/23.05.3/targets/ramips/mt7621/openwrt-sdk-23.05.3-ramips-mt7621_gcc-11.3.0_musl.Linux-x86_64.tar.xz"
+                        )
+                    fi
+                    ;;
+            esac
+        elif [ "$base_version" = "21.02" ]; then
+            case "$target" in
+                "ipq40xx")
+                    mirror_urls=(
+                        "https://mirrors.tuna.tsinghua.edu.cn/openwrt/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+                        "https://mirrors.ustc.edu.cn/openwrt/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+                        "https://mirror.sjtu.edu.cn/openwrt/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+                    )
+                    ;;
+                "ramips")
+                    if [ "$subtarget" = "mt76x8" ]; then
+                        mirror_urls=(
+                            "https://mirrors.tuna.tsinghua.edu.cn/openwrt/releases/21.02.7/targets/ramips/mt76x8/openwrt-sdk-21.02.7-ramips-mt76x8_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+                        )
+                    elif [ "$subtarget" = "mt7621" ]; then
+                        mirror_urls=(
+                            "https://mirrors.tuna.tsinghua.edu.cn/openwrt/releases/21.02.7/targets/ramips/mt7621/openwrt-sdk-21.02.7-ramips-mt7621_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+                        )
+                    fi
+                    ;;
+            esac
+        fi
         
-        if [ -n "$mirror_url" ]; then
-            log "🔗 使用备用镜像: $mirror_url"
+        if [ ${#mirror_urls[@]} -eq 0 ]; then
+            log "❌ 无可用备用镜像"
+            return 1
+        fi
+        
+        log "🔄 尝试 ${#mirror_urls[@]} 个备用镜像源..."
+        
+        local mirror_success=0
+        for mirror_url in "${mirror_urls[@]}"; do
+            log "🔗 尝试镜像: $(echo $mirror_url | awk -F'/' '{print $3}')"
             local mirror_filename=$(basename "$mirror_url")
             
             # 清理旧文件
             rm -f "$mirror_filename" 2>/dev/null || true
             
-            if curl -L --connect-timeout 120 --max-time 300 \
+            if curl -L --connect-timeout 60 --max-time 180 \
                    --progress-bar -o "$mirror_filename" "$mirror_url"; then
                 
                 if validate_downloaded_file "$mirror_filename"; then
                     log "✅ 备用镜像下载成功"
                     sdk_filename="$mirror_filename"
+                    mirror_success=1
+                    break
                 else
                     log "❌ 备用镜像文件验证失败"
-                    return 1
+                    rm -f "$mirror_filename" 2>/dev/null || true
                 fi
             else
                 log "❌ 备用镜像下载失败"
-                return 1
             fi
-        else
-            log "❌ 无可用备用镜像"
+        done
+        
+        if [ $mirror_success -eq 0 ]; then
+            log "❌ 所有备用镜像都下载失败"
             return 1
         fi
     fi
