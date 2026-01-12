@@ -29,44 +29,10 @@ print_subheader() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 环境文件验证函数
-verify_env_file() {
-    local env_file="$1"
-    
-    if [ -f "$env_file" ]; then
-        log "✅ 环境文件存在: $env_file"
-        log "📊 文件信息:"
-        log "  文件大小: $(ls -lh "$env_file" | awk '{print $5}')"
-        log "  文件内容摘要:"
-        head -15 "$env_file" | while read line; do
-            log "    $line"
-        done
-        
-        # 检查关键变量
-        local required_vars=("SELECTED_BRANCH" "TARGET" "DEVICE")
-        for var in "${required_vars[@]}"; do
-            if grep -q "export $var=" "$env_file"; then
-                log "    ✅ $var: 已定义"
-            else
-                log "    ❌ $var: 未定义"
-                return 1
-            fi
-        done
-        
-        return 0
-    else
-        log "❌ 环境文件不存在: $env_file"
-        return 1
-    fi
-}
-
 # 从环境文件加载环境变量 - 增强版
 load_build_env() {
-    log "🔍 加载构建环境变量..."
-    
     local env_file="$BUILD_DIR/build_env.sh"
-    
-    if verify_env_file "$env_file"; then
+    if [ -f "$env_file" ]; then
         source "$env_file"
         log "✅ 从 $env_file 加载环境变量"
         
@@ -80,40 +46,26 @@ load_build_env() {
         echo "  CONFIG_MODE: $CONFIG_MODE" >> "$REPORT_FILE"
         echo "  REPO_ROOT: $REPO_ROOT" >> "$REPORT_FILE"
         echo "  COMPILER_DIR: $COMPILER_DIR" >> "$REPORT_FILE"
-        echo "  BUILD_DIR: $BUILD_DIR" >> "$REPORT_FILE"
         echo "" >> "$REPORT_FILE"
-        
-        return 0
     else
-        log "⚠️ 环境文件验证失败"
-        echo "⚠️ 环境文件验证失败" >> "$REPORT_FILE"
+        log "⚠️ 环境文件不存在: $env_file"
+        echo "⚠️ 环境文件不存在: $env_file" >> "$REPORT_FILE"
         
         # 尝试从其他位置加载
         log "🔍 尝试从其他位置加载环境变量..."
-        local possible_locations=(
-            "/mnt/openwrt-build/build_env.sh"
-            "/tmp/openwrt-build/build_env.sh"
-            "$HOME/openwrt-build/build_env.sh"
-        )
+        if [ -n "$GITHUB_ENV" ] && [ -f "$GITHUB_ENV" ]; then
+            echo "💡 从GitHub环境变量文件加载..." >> "$REPORT_FILE"
+            cat "$GITHUB_ENV" | grep -E "SELECTED|TARGET|DEVICE|COMPILER" >> "$REPORT_FILE"
+        fi
         
-        local found_env=0
-        for location in "${possible_locations[@]}"; do
-            if [ -f "$location" ]; then
-                log "✅ 找到环境文件: $location"
-                source "$location"
-                env_file="$location"
-                found_env=1
-                break
-            fi
-        done
-        
-        if [ $found_env -eq 1 ]; then
-            log "✅ 从 $env_file 加载环境变量"
-            return 0
+        # 尝试手动查找编译器目录
+        echo "🔍 手动搜索编译器目录..." >> "$REPORT_FILE"
+        local found_compiler_dir=$(find "$BUILD_DIR" -name "toolchain-*" -type d 2>/dev/null | head -1)
+        if [ -n "$found_compiler_dir" ]; then
+            echo "  ✅ 找到编译器目录: $found_compiler_dir" >> "$REPORT_FILE"
+            COMPILER_DIR="$found_compiler_dir"
         else
-            log "❌ 在任何位置都找不到环境文件"
-            echo "❌ 在任何位置都找不到环境文件" >> "$REPORT_FILE"
-            return 1
+            echo "  ❌ 未找到编译器目录" >> "$REPORT_FILE"
         fi
     fi
 }
@@ -128,16 +80,12 @@ init_report() {
     echo "==================================================" >> "$REPORT_FILE"
     echo "分析时间: $(date '+%Y-%m-%d %H:%M:%S')" >> "$REPORT_FILE"
     echo "报告时间戳: $TIMESTAMP" >> "$REPORT_FILE"
-    echo "报告版本: 2.4.2 (修复版)" >> "$REPORT_FILE"
+    echo "报告版本: 2.3.0" >> "$REPORT_FILE"
     echo "构建目录: $BUILD_DIR" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
     # 加载构建环境变量
-    if load_build_env; then
-        echo "✅ 环境变量加载成功" >> "$REPORT_FILE"
-    else
-        echo "❌ 环境变量加载失败" >> "$REPORT_FILE"
-    fi
+    load_build_env
 }
 
 # 2. 收集系统信息
@@ -348,7 +296,7 @@ analyze_config_file() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 6. 检查编译器状态（修复版）
+# 6. 检查编译器状态（优化版 - 更准确的SDK编译器检测）
 check_compiler_status() {
     log "🔧 检查编译器状态..."
     
@@ -358,159 +306,40 @@ check_compiler_status() {
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
         echo "🎯 编译器来源: 预构建的OpenWrt SDK" >> "$REPORT_FILE"
         echo "📌 编译器目录: $COMPILER_DIR" >> "$REPORT_FILE"
-        echo "📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')" >> "$REPORT_FILE"
         
-        # 检查是否是OpenWrt官方SDK
-        local is_official_sdk=0
-        if [ -f "$COMPILER_DIR/version.json" ] || [ -f "$COMPILER_DIR/.config" ] || [ -f "$COMPILER_DIR/include/linux/version.h" ]; then
-            is_official_sdk=1
-            echo "✅ 确认是OpenWrt官方SDK工具链" >> "$REPORT_FILE"
-        else
-            echo "⚠️ 预构建目录结构可能不标准" >> "$REPORT_FILE"
-        fi
-        
-        # 智能GCC查找逻辑
-        log "🔍 智能查找预构建SDK中的编译器文件..."
-        
-        # 查找真正的GCC编译器（交叉编译器）
-        local prebuilt_gcc=""
-        local gcc_search_paths=(
-            "$COMPILER_DIR/bin"
-            "$COMPILER_DIR/toolchain/bin"
-            "$COMPILER_DIR"
-            "$COMPILER_DIR/.."
-        )
-        
-        for search_path in "${gcc_search_paths[@]}"; do
-            if [ -d "$search_path" ]; then
-                # 查找交叉编译器（如mipsel-openwrt-linux-gcc）
-                prebuilt_gcc=$(find "$search_path" -type f -executable \
-                  -name "*gcc" \
-                  ! -name "*gcc-ar" \
-                  ! -name "*gcc-ranlib" \
-                  ! -name "*gcc-nm" \
-                  ! -name "*-gcc-ar" \
-                  2>/dev/null | grep -E "(mipsel|arm|aarch64|x86_64|i686)-" | head -1)
-                
-                if [ -n "$prebuilt_gcc" ] && [ -x "$prebuilt_gcc" ]; then
-                    log "✅ 找到预构建交叉编译器: $prebuilt_gcc"
-                    break
-                fi
-            fi
-        done
-        
-        # 如果没找到交叉编译器，尝试找任何gcc
-        if [ -z "$prebuilt_gcc" ]; then
-            for search_path in "${gcc_search_paths[@]}"; do
-                if [ -d "$search_path" ]; then
-                    prebuilt_gcc=$(find "$search_path" -type f -executable \
-                      -name "*gcc" \
-                      ! -name "*gcc-ar" \
-                      ! -name "*gcc-ranlib" \
-                      ! -name "*gcc-nm" \
-                      ! -name "*-gcc-ar" \
-                      2>/dev/null | head -1)
-                    
-                    if [ -n "$prebuilt_gcc" ] && [ -x "$prebuilt_gcc" ]; then
-                        log "✅ 找到预构建GCC编译器: $prebuilt_gcc"
-                        break
-                    fi
-                fi
-            done
-        fi
+        # 检查预构建编译器中的GCC版本
+        local prebuilt_gcc=$(find "$COMPILER_DIR" -type f -executable \
+          -name "*gcc" \
+          ! -name "*gcc-ar" \
+          ! -name "*gcc-ranlib" \
+          ! -name "*gcc-nm" \
+          2>/dev/null | head -1)
         
         if [ -n "$prebuilt_gcc" ] && [ -x "$prebuilt_gcc" ]; then
             echo "✅ 找到预构建GCC编译器: $(basename "$prebuilt_gcc")" >> "$REPORT_FILE"
             local prebuilt_version=$("$prebuilt_gcc" --version 2>&1 | head -1)
             echo "     版本: $prebuilt_version" >> "$REPORT_FILE"
             
-            # 检查是否是交叉编译器
-            local compiler_name=$(basename "$prebuilt_gcc")
-            if [[ "$compiler_name" == *"mipsel"* ]] || [[ "$compiler_name" == *"arm"* ]] || [[ "$compiler_name" == *"aarch64"* ]] || [[ "$compiler_name" == *"-"* ]]; then
-                echo "     ✅ 检测到交叉编译器: 符合目标平台要求" >> "$REPORT_FILE"
-            else
-                echo "     ⚠️ 编译器名称不符合交叉编译器模式" >> "$REPORT_FILE"
-            fi
-            
-            # 检查编译器类型
-            if [[ "$compiler_name" == *"openwrt"* ]]; then
-                echo "     🎯 确认是OpenWrt专用编译器" >> "$REPORT_FILE"
-            fi
-            
-            # 简化编译器版本兼容性检查，避免误报
+            # 检查GCC版本 - 修复版：不再错误报告版本问题
             local major_version=$(echo "$prebuilt_version" | grep -o "[0-9]\+" | head -1)
             if [ -n "$major_version" ]; then
-                echo "     🔧 GCC主版本: $major_version.x" >> "$REPORT_FILE"
-                echo "     ✅ SDK编译器来自OpenWrt官方，版本已验证" >> "$REPORT_FILE"
+                # 显示版本但不再标记为不兼容
+                echo "     🔧 GCC版本: $major_version.x" >> "$REPORT_FILE"
+                echo "     💡 这是官方SDK的编译器，版本已通过验证" >> "$REPORT_FILE"
             fi
             
-        else
-            echo "⚠️ 预构建目录中未找到可执行的GCC编译器" >> "$REPORT_FILE"
-        fi
-        
-        # 检查SDK中的工具链工具
-        echo "" >> "$REPORT_FILE"
-        echo "🛠️ 工具链工具检查:" >> "$REPORT_FILE"
-        local toolchain_tools=("as" "ld" "ar" "strip" "objcopy" "objdump" "nm" "ranlib")
-        local found_tools=0
-        local total_tools=${#toolchain_tools[@]}
-        
-        for tool in "${toolchain_tools[@]}"; do
-            local tool_path=$(find "$COMPILER_DIR" -type f -executable -name "*$tool" 2>/dev/null | head -1)
-            if [ -n "$tool_path" ] && [ -x "$tool_path" ]; then
-                found_tools=$((found_tools + 1))
-                echo "    ✅ $tool: 找到 ($(basename "$tool_path"))" >> "$REPORT_FILE"
-            else
-                echo "    ⚠️ $tool: 未找到" >> "$REPORT_FILE"
-            fi
-        done
-        
-        echo "    📊 工具链工具完整性: $found_tools/$total_tools" >> "$REPORT_FILE"
-        
-        if [ $is_official_sdk -eq 1 ] && [ $found_tools -ge 5 ]; then
-            echo "    ✅ SDK工具链基本完整" >> "$REPORT_FILE"
-        elif [ $found_tools -gt 0 ]; then
-            echo "    ⚠️ SDK工具链部分文件缺失" >> "$REPORT_FILE"
-        else
-            echo "    ❌ SDK工具链严重不完整" >> "$REPORT_FILE"
-        fi
-        
-        # 添加SDK下载状态检查（修复点）
-        echo "" >> "$REPORT_FILE"
-        print_subheader "SDK下载状态分析"
-        
-        if [ -f "$BUILD_DIR/build.log" ]; then
-            # 检查SDK下载成功的标志
-            if grep -q "SDK下载成功" "$BUILD_DIR/build.log"; then
-                echo "✅ SDK下载成功" >> "$REPORT_FILE"
-            elif grep -q "SDK下载失败" "$BUILD_DIR/build.log"; then
-                echo "⚠️ SDK下载失败，但不会影响构建（使用自动构建编译器）" >> "$REPORT_FILE"
-            else
-                # 检查常见的下载错误
-                local sdk_errors=0
-                if grep -q "curl: (6)" "$BUILD_DIR/build.log"; then
-                    echo "⚠️ 发现curl DNS解析错误" >> "$REPORT_FILE"
-                    sdk_errors=$((sdk_errors + 1))
-                fi
-                
-                if grep -q "curl: (28)" "$BUILD_DIR/build.log"; then
-                    echo "⚠️ 发现curl超时错误" >> "$REPORT_FILE"
-                    sdk_errors=$((sdk_errors + 1))
-                fi
-                
-                if grep -q "文件太小" "$BUILD_DIR/build.log"; then
-                    echo "⚠️ 发现下载文件大小异常" >> "$REPORT_FILE"
-                    sdk_errors=$((sdk_errors + 1))
-                fi
-                
-                if [ $sdk_errors -eq 0 ]; then
-                    echo "ℹ️ 未检测到明显的SDK下载错误" >> "$REPORT_FILE"
-                fi
+            # 检查是否是真正的交叉编译器
+            local compiler_name=$(basename "$prebuilt_gcc")
+            if [[ "$compiler_name" == *"mipsel"* ]] || [[ "$compiler_name" == *"arm"* ]] || [[ "$compiler_name" == *"aarch64"* ]]; then
+                echo "     ✅ 检测到交叉编译器: 符合目标平台要求" >> "$REPORT_FILE"
             fi
         else
-            echo "ℹ️ 无构建日志，无法分析SDK下载状态" >> "$REPORT_FILE"
+            echo "⚠️ 预构建目录中未找到真正的GCC编译器" >> "$REPORT_FILE"
+            echo "🔍 搜索预构建目录内容:" >> "$REPORT_FILE"
+            find "$COMPILER_DIR" -type f -executable -name "*gcc*" 2>/dev/null | head -5 | while read file; do
+                echo "  🔧 $(basename "$file")" >> "$REPORT_FILE"
+            done
         fi
-        
     else
         echo "🛠️ 编译器来源: OpenWrt自动构建" >> "$REPORT_FILE"
         echo "💡 未找到预构建SDK编译器，将使用自动构建的编译器" >> "$REPORT_FILE"
@@ -518,8 +347,6 @@ check_compiler_status() {
     
     # 检查构建目录中的编译器
     if [ -d "$BUILD_DIR/staging_dir" ]; then
-        echo "" >> "$REPORT_FILE"
-        echo "🏗️  OpenWrt自动构建编译器状态:" >> "$REPORT_FILE"
         echo "✅ 编译目录存在: staging_dir" >> "$REPORT_FILE"
         
         # 检查工具链目录
@@ -529,10 +356,9 @@ check_compiler_status() {
         if [ $toolchain_dirs -gt 0 ]; then
             local toolchain_dir=$(find "$BUILD_DIR/staging_dir" -name "toolchain-*" -type d 2>/dev/null | head -1)
             echo "🔍 工具链目录: $(basename "$toolchain_dir")" >> "$REPORT_FILE"
-            echo "📁 目录大小: $(du -sh "$toolchain_dir" 2>/dev/null | cut -f1 || echo '未知')" >> "$REPORT_FILE"
             
             # 检查真正的GCC编译器（排除工具链工具）
-            echo "🔧 编译器详细检查:" >> "$REPORT_FILE"
+            echo "🔍 编译器详细检查:" >> "$REPORT_FILE"
             
             # 查找真正的gcc编译器（不是工具链工具）
             local real_gcc=$(find "$toolchain_dir/bin" -type f -executable \
@@ -555,20 +381,8 @@ check_compiler_status() {
                     echo "     🔧 GCC版本: $major_version.x" >> "$REPORT_FILE"
                     echo "     💡 构建系统使用的编译器版本" >> "$REPORT_FILE"
                 fi
-                
-                # 检查是否是交叉编译器
-                local gcc_name=$(basename "$real_gcc")
-                if [[ "$gcc_name" == *"-"* ]]; then
-                    echo "     ✅ 确认是交叉编译器" >> "$REPORT_FILE"
-                fi
             else
                 echo "  ⚠️ 未找到真正的GCC编译器" >> "$REPORT_FILE"
-                echo "  🔍 搜索toolchain/bin目录内容:" >> "$REPORT_FILE"
-                if [ -d "$toolchain_dir/bin" ]; then
-                    ls -la "$toolchain_dir/bin/" 2>/dev/null | head -10 | while read line; do
-                        echo "    $line" >> "$REPORT_FILE"
-                    done
-                fi
             fi
             
         else
@@ -577,14 +391,12 @@ check_compiler_status() {
         fi
         
     else
-        echo "" >> "$REPORT_FILE"
-        echo "🏗️  OpenWrt自动构建编译器状态:" >> "$REPORT_FILE"
         echo "❌ 编译目录不存在: staging_dir" >> "$REPORT_FILE"
         echo "💡 构建可能尚未开始或已清理" >> "$REPORT_FILE"
     fi
     
-    # 编译器版本详细检查 - 修复版：避免误报
-    print_subheader "编译器版本检查"
+    # 编译器版本详细检查 - 优化版：不再错误报告版本问题
+    print_subheader "编译器版本详细检查"
     
     # 查找所有可能的GCC编译器
     local all_gcc_files=$(find "$BUILD_DIR" -type f -executable \
@@ -602,10 +414,9 @@ check_compiler_status() {
                 count=$((count + 1))
                 local version=$("$gcc_file" --version 2>&1 | head -1)
                 local dir_name=$(dirname "$gcc_file")
-                local file_name=$(basename "$gcc_file")
                 
                 echo "  编译器 #$count:" >> "$REPORT_FILE"
-                echo "      文件: $file_name" >> "$REPORT_FILE"
+                echo "      文件: $(basename "$gcc_file")" >> "$REPORT_FILE"
                 echo "      目录: $(echo "$dir_name" | sed "s|$BUILD_DIR/||")" >> "$REPORT_FILE"
                 echo "      版本: $version" >> "$REPORT_FILE"
                 
@@ -620,27 +431,34 @@ check_compiler_status() {
                     echo "      来源: 🔍 其他位置" >> "$REPORT_FILE"
                 fi
                 
-                # 检查是否是交叉编译器
-                if [[ "$file_name" == *"-"* ]]; then
-                    echo "      类型: 🔄 交叉编译器" >> "$REPORT_FILE"
-                else
-                    echo "      类型: 💻 本地编译器" >> "$REPORT_FILE"
-                fi
-                
                 echo "" >> "$REPORT_FILE"
             fi
         done
-        
-        if [ $count -eq 0 ]; then
-            echo "  ⚠️ 未找到任何可执行的GCC编译器文件" >> "$REPORT_FILE"
-        fi
     else
         echo "  ⚠️ 未找到任何GCC编译器文件" >> "$REPORT_FILE"
     fi
     
-    # 检查GCC版本调用（修复点：不再误报）
-    if [ -f "$BUILD_DIR/build.log" ] && grep -q "gcc.*--version" "$BUILD_DIR/build.log"; then
-        echo "ℹ️ 检测到GCC版本检查，这是正常行为" >> "$REPORT_FILE"
+    # 特别检查：修复错误的版本警告
+    print_subheader "SDK编译器状态确认"
+    
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+        echo "📊 SDK编译器目录信息:" >> "$REPORT_FILE"
+        echo "  目录路径: $COMPILER_DIR" >> "$REPORT_FILE"
+        echo "  目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')" >> "$REPORT_FILE"
+        
+        # 检查是否是OpenWrt官方SDK
+        if [ -f "$COMPILER_DIR/version.json" ] || [ -f "$COMPILER_DIR/.config" ]; then
+            echo "  ✅ 确认是OpenWrt官方SDK工具链" >> "$REPORT_FILE"
+            echo "  💡 SDK编译器版本是经过官方测试和验证的" >> "$REPORT_FILE"
+        fi
+        
+        # 检查SDK中的GCC文件
+        local sdk_gcc_files=$(find "$COMPILER_DIR" -type f -executable -name "*gcc" 2>/dev/null | wc -l)
+        echo "  GCC文件数量: $sdk_gcc_files 个" >> "$REPORT_FILE"
+        
+        if [ $sdk_gcc_files -gt 0 ]; then
+            echo "  ✅ SDK包含GCC编译器文件" >> "$REPORT_FILE"
+        fi
     fi
     
     echo "" >> "$REPORT_FILE"
@@ -670,91 +488,89 @@ analyze_build_log() {
         echo "  行数: $log_lines" >> "$REPORT_FILE"
         echo "" >> "$REPORT_FILE"
         
-        # 修复版错误统计 - 更直接的方法
-        local total_error_count=$(grep -c -i "error:" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
-        local warning_count=$(grep -c -i "warning:" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
-        local fatal_error_count=$(grep -c -i "fatal error" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
+        # 错误统计 - 改进：排除警告性消息
+        local error_count=$(grep -c -i "error" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
+        local warning_count=$(grep -c -i "warning" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
+        local failed_count=$(grep -c -i "failed" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
+        
+        # 排除常见的非错误消息
+        local filtered_error_count=$(grep -i "error" "$BUILD_DIR/build.log" | grep -v "ignored\|non-fatal\|Note:" | wc -l 2>/dev/null || echo "0")
         
         echo "📈 错误统计:" >> "$REPORT_FILE"
-        echo "  编译错误数: $total_error_count" >> "$REPORT_FILE"
-        echo "  警告数量: $warning_count" >> "$REPORT_FILE"
-        echo "  致命错误数: $fatal_error_count" >> "$REPORT_FILE"
+        echo "  原始错误数: $error_count" >> "$REPORT_FILE"
+        echo "  过滤后错误数: $filtered_error_count" >> "$REPORT_FILE"
+        echo "  警告总数: $warning_count" >> "$REPORT_FILE"
+        echo "  失败总数: $failed_count" >> "$REPORT_FILE"
         echo "" >> "$REPORT_FILE"
         
-        if [ $total_error_count -gt 0 ]; then
-            print_subheader "编译错误摘要"
+        if [ $filtered_error_count -gt 0 ]; then
+            print_subheader "关键错误摘要"
             
-            echo "🔴 编译错误 (前10个):" >> "$REPORT_FILE"
-            grep -i "error:" "$BUILD_DIR/build.log" | tail -10 >> "$REPORT_FILE"
+            # 分类提取错误
+            echo "🔴 严重错误 (前10个):" >> "$REPORT_FILE"
+            grep -i "error" "$BUILD_DIR/build.log" | grep -v "ignored\|non-fatal\|Note:" | head -10 >> "$REPORT_FILE" || echo "  无严重错误" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
             
-            # 智能错误模式检测（简化版）
-            analyze_error_patterns
+            echo "🟡 Makefile错误:" >> "$REPORT_FILE"
+            grep -i "make.*error\|recipe for target.*failed" "$BUILD_DIR/build.log" | grep -v "ignored" | head -5 >> "$REPORT_FILE" || echo "  无Makefile错误" >> "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+            
+            echo "🔵 编译器错误:" >> "$REPORT_FILE"
+            grep -i "gcc.*error\|ld.*error\|collect2.*error" "$BUILD_DIR/build.log" | grep -v "ignored" | head -5 >> "$REPORT_FILE" || echo "  无编译器错误" >> "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+            
+            echo "🟣 文件缺失错误:" >> "$REPORT_FILE"
+            grep -i "no such file\|file not found\|cannot find" "$BUILD_DIR/build.log" | head -5 >> "$REPORT_FILE" || echo "  无文件缺失错误" >> "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+            
+            echo "🟠 依赖错误:" >> "$REPORT_FILE"
+            grep -i "depends on\|missing dependencies\|undefined reference" "$BUILD_DIR/build.log" | head -5 >> "$REPORT_FILE" || echo "  无依赖错误" >> "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+            
+            # 特定错误模式检查
+            print_subheader "特定错误模式检测"
+            
+            # 工具链错误
+            if grep -q "toolchain/Makefile.*93" "$BUILD_DIR/build.log" 2>/dev/null; then
+                echo "❌ 检测到 toolchain/Makefile:93 错误" >> "$REPORT_FILE"
+                echo "💡 这是常见的工具链构建错误" >> "$REPORT_FILE"
+                echo "🛠️ 修复方法: 创建stamp目录和标记文件" >> "$REPORT_FILE"
+                echo "" >> "$REPORT_FILE"
+            fi
+            
+            # GDB错误
+            if grep -q "_GL_ATTRIBUTE_FORMAT_PRINTF" "$BUILD_DIR/build.log" 2>/dev/null; then
+                echo "❌ 检测到 GDB _GL_ATTRIBUTE_FORMAT_PRINTF 错误" >> "$REPORT_FILE"
+                echo "💡 GDB源码中的宏定义错误" >> "$REPORT_FILE"
+                echo "🛠️ 修复方法: 修改gdbsupport/common-defs.h第111行" >> "$REPORT_FILE"
+                echo "" >> "$REPORT_FILE"
+            fi
+            
+            # 头文件错误
+            if grep -q "stdc-predef.h\|stdio.h\|stdlib.h" "$BUILD_DIR/build.log" 2>/dev/null; then
+                echo "❌ 检测到头文件缺失错误" >> "$REPORT_FILE"
+                echo "💡 缺少标准头文件" >> "$REPORT_FILE"
+                echo "🛠️ 修复方法: 创建host/include目录并复制头文件" >> "$REPORT_FILE"
+                echo "" >> "$REPORT_FILE"
+            fi
+            
+            # 编译器版本错误 - 改进：更准确的检测
+            if grep -q "requires gcc.*\|\`gcc.*\` version" "$BUILD_DIR/build.log" 2>/dev/null; then
+                echo "❌ 检测到真正的编译器版本错误" >> "$REPORT_FILE"
+                echo "💡 可能是GCC版本不匹配" >> "$REPORT_FILE"
+                grep -i "requires gcc\|gcc version" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
+                echo "" >> "$REPORT_FILE"
+            fi
             
         else
-            echo "✅ 构建日志中没有发现编译错误" >> "$REPORT_FILE"
-        fi
-        
-        if [ $fatal_error_count -gt 0 ]; then
-            print_subheader "致命错误"
-            echo "🚨 致命错误:" >> "$REPORT_FILE"
-            grep -i "fatal error" "$BUILD_DIR/build.log" | tail -5 >> "$REPORT_FILE"
-            echo "" >> "$REPORT_FILE"
+            echo "✅ 构建日志中没有发现真正严重的错误" >> "$REPORT_FILE"
+            echo "💡 注意：某些'error'消息可能是警告或可忽略的" >> "$REPORT_FILE"
         fi
         
     else
         echo "❌ 构建日志文件不存在: $BUILD_DIR/build.log" >> "$REPORT_FILE"
         echo "💡 构建可能尚未开始或日志被重定向" >> "$REPORT_FILE"
     fi
-    echo "" >> "$REPORT_FILE"
-}
-
-# 7.1 智能错误模式分析（修复版）
-analyze_error_patterns() {
-    echo "🔍 错误模式分析:" >> "$REPORT_FILE"
-    
-    # 1. 真正的编译器错误
-    local compiler_errors=$(grep -i "gcc.*error\|ld.*error\|collect2.*error" "$BUILD_DIR/build.log" | wc -l)
-    if [ $compiler_errors -gt 0 ]; then
-        echo "  ❌ 编译器错误: $compiler_errors 个" >> "$REPORT_FILE"
-    fi
-    
-    # 2. 未定义引用错误
-    local undefined_refs=$(grep -c "undefined reference" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
-    if [ $undefined_refs -gt 0 ]; then
-        echo "  ❌ 未定义引用: $undefined_refs 个" >> "$REPORT_FILE"
-    fi
-    
-    # 3. 文件缺失错误
-    local missing_files=$(grep -c "No such file\|File not found" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
-    if [ $missing_files -gt 0 ]; then
-        echo "  ❌ 文件缺失: $missing_files 个" >> "$REPORT_FILE"
-    fi
-    
-    # 4. 头文件错误
-    local header_errors=$(grep -c "fatal error.*\.h\|No such file.*\.h" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
-    if [ $header_errors -gt 0 ]; then
-        echo "  ❌ 头文件错误: $header_errors 个" >> "$REPORT_FILE"
-    fi
-    
-    # 5. 内存不足错误
-    local oom_errors=$(grep -c "out of memory\|Killed process\|OOM" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
-    if [ $oom_errors -gt 0 ]; then
-        echo "  ❌ 内存不足: $oom_errors 个" >> "$REPORT_FILE"
-    fi
-    
-    # 6. 磁盘空间错误
-    local disk_errors=$(grep -c "No space left\|disk full\|ENOSPC" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
-    if [ $disk_errors -gt 0 ]; then
-        echo "  ❌ 磁盘空间不足: $disk_errors 个" >> "$REPORT_FILE"
-    fi
-    
-    # 7. 网络错误
-    local network_errors=$(grep -c "Connection timed out\|Network is unreachable" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
-    if [ $network_errors -gt 0 ]; then
-        echo "  ❌ 网络连接问题: $network_errors 个" >> "$REPORT_FILE"
-    fi
-    
     echo "" >> "$REPORT_FILE"
 }
 
@@ -772,7 +588,7 @@ check_download_log() {
             return
         fi
         
-        # 下载错误统计
+        # 更准确的下载错误统计
         local download_errors=$(grep -c -i "error\|failed\|404\|not found\|timeout\|connection refused" "$BUILD_DIR/download.log" 2>/dev/null || echo "0")
         local total_downloads=$(grep -c "Downloading\|downloading" "$BUILD_DIR/download.log" 2>/dev/null || echo "0")
         
@@ -850,12 +666,11 @@ analyze_version_specific() {
             echo "💡 请参考官方文档获取版本特定信息" >> "$REPORT_FILE"
         fi
         
-        # SDK编译器智能信息（修复版）
-        print_subheader "SDK编译器智能分析"
+        # SDK编译器信息
+        print_subheader "SDK编译器版本信息"
         echo "🎯 SDK编译器来源: OpenWrt官方下载" >> "$REPORT_FILE"
         echo "🔧 SDK编译器已通过官方验证，无需担心版本兼容性问题" >> "$REPORT_FILE"
         echo "💡 如果构建成功，说明编译器版本完全兼容" >> "$REPORT_FILE"
-        echo "⚠️ SDK下载失败不会影响构建（系统会自动构建编译器）" >> "$REPORT_FILE"
         
     else
         echo "⚠️ 版本分支未设置" >> "$REPORT_FILE"
@@ -864,34 +679,7 @@ analyze_version_specific() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 10. 检查磁盘空间（新增函数）
-check_disk_space() {
-    log "💿 检查磁盘空间..."
-    
-    print_subheader "磁盘空间分析"
-    
-    AVAILABLE_SPACE=$(df "$BUILD_DIR" --output=avail 2>/dev/null | tail -1 || echo "0")
-    if [ "$AVAILABLE_SPACE" != "0" ]; then
-        AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-        log "$BUILD_DIR 可用空间: ${AVAILABLE_GB}G"
-        
-        echo "📊 磁盘空间状态:" >> "$REPORT_FILE"
-        echo "  可用空间: ${AVAILABLE_GB}G" >> "$REPORT_FILE"
-        
-        if [ $AVAILABLE_GB -lt 5 ]; then
-            echo "❌ 磁盘空间严重不足 (< 5G)" >> "$REPORT_FILE"
-        elif [ $AVAILABLE_GB -lt 10 ]; then
-            echo "⚠️ 磁盘空间较低 (< 10G)" >> "$REPORT_FILE"
-        else
-            echo "✅ 磁盘空间充足" >> "$REPORT_FILE"
-        fi
-    else
-        echo "⚠️ 无法获取磁盘空间信息" >> "$REPORT_FILE"
-    fi
-    echo "" >> "$REPORT_FILE"
-}
-
-# 11. 详细错误分析函数（修复版）
+# 10. 详细错误分析函数（优化版）
 analyze_detailed_errors() {
     log "🔍 执行详细错误分析..."
     
@@ -901,82 +689,120 @@ analyze_detailed_errors() {
     if [ -f "$BUILD_DIR/build.log" ]; then
         echo "📊 构建日志错误详细分析:" >> "$REPORT_FILE"
         
-        # 1. 编译器相关错误
-        echo "🔧 1. 编译器相关错误:" >> "$REPORT_FILE"
-        local compiler_errors=$(grep -i "gcc.*error\|ld.*error\|collect2.*error\|undefined reference" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
+        # 1. 编译器相关错误（实际错误）- 改进过滤
+        echo "🔧 1. 编译器相关错误 (真正的编译错误):" >> "$REPORT_FILE"
+        local compiler_errors=$(grep -i "gcc.*error\|ld.*error\|collect2.*error\|undefined reference" "$BUILD_DIR/build.log" 2>/dev/null | grep -v "ignored\|non-fatal" | head -10)
         if [ -n "$compiler_errors" ]; then
             echo "$compiler_errors" >> "$REPORT_FILE"
         else
-            echo "  无编译器错误" >> "$REPORT_FILE"
+            echo "  无真正的编译器错误" >> "$REPORT_FILE"
         fi
         echo "" >> "$REPORT_FILE"
         
-        # 2. 头文件缺失错误
-        echo "📄 2. 头文件缺失错误:" >> "$REPORT_FILE"
+        # 2. 头文件缺失错误（实际错误）
+        echo "📄 2. 头文件缺失错误 (实际发生的):" >> "$REPORT_FILE"
         local header_errors=$(grep -i "stdc-predef.h\|stdio.h\|stdlib.h\|.*\.h: No such file" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
         if [ -n "$header_errors" ]; then
             echo "$header_errors" >> "$REPORT_FILE"
         else
-            echo "  无头文件缺失错误" >> "$REPORT_FILE"
+            echo "  无真正的头文件缺失错误" >> "$REPORT_FILE"
         fi
         echo "" >> "$REPORT_FILE"
         
-        # 3. 下载错误
-        echo "📥 3. 下载错误:" >> "$REPORT_FILE"
+        # 3. 下载错误（实际错误）
+        echo "📥 3. 下载错误 (实际发生的):" >> "$REPORT_FILE"
         local download_errors=$(grep -i "404\|Failed to download\|timeout\|connection refused\|SSL_ERROR" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
         if [ -n "$download_errors" ]; then
             echo "$download_errors" >> "$REPORT_FILE"
         else
-            echo "  无下载错误" >> "$REPORT_FILE"
+            echo "  无真正的下载错误" >> "$REPORT_FILE"
         fi
         echo "" >> "$REPORT_FILE"
         
-        # 4. 内存不足错误
-        echo "💾 4. 内存不足错误:" >> "$REPORT_FILE"
+        # 4. 权限错误（实际错误）
+        echo "🔐 4. 权限错误 (实际发生的):" >> "$REPORT_FILE"
+        local permission_errors=$(grep -i "permission denied\|cannot create\|read-only\|Operation not permitted" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
+        if [ -n "$permission_errors" ]; then
+            echo "$permission_errors" >> "$REPORT_FILE"
+        else
+            echo "  无真正的权限错误" >> "$REPORT_FILE"
+        fi
+        echo "" >> "$REPORT_FILE"
+        
+        # 5. 内存不足错误（实际错误）
+        echo "💾 5. 内存不足错误 (实际发生的):" >> "$REPORT_FILE"
         local memory_errors=$(grep -i "out of memory\|Killed process\|terminated\|oom\|swap" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
         if [ -n "$memory_errors" ]; then
             echo "$memory_errors" >> "$REPORT_FILE"
         else
-            echo "  无内存错误" >> "$REPORT_FILE"
+            echo "  无真正的内存错误" >> "$REPORT_FILE"
         fi
         echo "" >> "$REPORT_FILE"
         
-        # 5. 特定包编译错误
-        echo "📦 5. 特定包编译错误:" >> "$REPORT_FILE"
-        local package_errors=$(grep -i "package/.*failed\|recipe for target.*failed\|Error .* in package" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
+        # 6. 特定包编译错误（实际错误）
+        echo "📦 6. 特定包编译错误 (实际发生的):" >> "$REPORT_FILE"
+        local package_errors=$(grep -i "package/.*failed\|recipe for target.*failed\|Error .* in package" "$BUILD_DIR/build.log" 2>/dev/null | grep -v "ignored" | head -10)
         if [ -n "$package_errors" ]; then
             echo "$package_errors" >> "$REPORT_FILE"
         else
-            echo "  无包编译错误" >> "$REPORT_FILE"
+            echo "  无真正的包编译错误" >> "$REPORT_FILE"
         fi
         echo "" >> "$REPORT_FILE"
         
-        # 6. 磁盘空间错误
-        echo "💿 6. 磁盘空间错误:" >> "$REPORT_FILE"
+        # 7. 磁盘空间错误（实际错误）
+        echo "💿 7. 磁盘空间错误 (实际发生的):" >> "$REPORT_FILE"
         local disk_errors=$(grep -i "no space left\|disk full\|write error\|ENOSPC" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
         if [ -n "$disk_errors" ]; then
             echo "$disk_errors" >> "$REPORT_FILE"
         else
-            echo "  无磁盘空间错误" >> "$REPORT_FILE"
+            echo "  无真正的磁盘空间错误" >> "$REPORT_FILE"
         fi
         echo "" >> "$REPORT_FILE"
         
-        # 7. 网络错误
-        echo "🌐 7. 网络连接错误:" >> "$REPORT_FILE"
-        local network_errors=$(grep -i "Connection timed out\|Network is unreachable" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
-        if [ -n "$network_errors" ]; then
-            echo "$network_errors" >> "$REPORT_FILE"
+        # 8. 时间戳错误（实际错误）
+        echo "🕐 8. 时间戳错误 (实际发生的):" >> "$REPORT_FILE"
+        local timestamp_errors=$(grep -i "clock skew\|time stamp\|timestamp" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
+        if [ -n "$timestamp_errors" ]; then
+            echo "$timestamp_errors" >> "$REPORT_FILE"
         else
-            echo "  无网络连接错误" >> "$REPORT_FILE"
+            echo "  无真正的时间戳错误" >> "$REPORT_FILE"
         fi
         echo "" >> "$REPORT_FILE"
+        
+        # 9. SDK编译器使用情况检查
+        echo "🎯 9. SDK编译器使用情况检查:" >> "$REPORT_FILE"
+        if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+            local sdk_usage_count=$(grep -c "$COMPILER_DIR" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
+            if [ $sdk_usage_count -gt 0 ]; then
+                echo "  ✅ SDK编译器被调用次数: $sdk_usage_count" >> "$REPORT_FILE"
+                echo "  💡 SDK编译器已成功集成到构建系统中" >> "$REPORT_FILE"
+            else
+                echo "  ⚠️ 未检测到SDK编译器调用" >> "$REPORT_FILE"
+                echo "  💡 可能使用了自动构建的编译器" >> "$REPORT_FILE"
+            fi
+        else
+            echo "  ℹ️ 未设置SDK编译器目录" >> "$REPORT_FILE"
+        fi
+        echo "" >> "$REPORT_FILE"
+        
+        # 显示实际错误统计
+        echo "📈 实际错误统计汇总 (过滤后):" >> "$REPORT_FILE"
+        echo "  编译器错误: $(echo "$compiler_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
+        echo "  头文件错误: $(echo "$header_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
+        echo "  下载错误: $(echo "$download_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
+        echo "  权限错误: $(echo "$permission_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
+        echo "  内存错误: $(echo "$memory_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
+        echo "  包编译错误: $(echo "$package_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
+        echo "  磁盘空间错误: $(echo "$disk_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
+        echo "  时间戳错误: $(echo "$timestamp_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
+        echo "  SDK编译器使用: $(if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ] && [ $sdk_usage_count -gt 0 ]; then echo "✅ 已使用"; else echo "⚠️ 未使用/未检测到"; fi)" >> "$REPORT_FILE"
         
     else
         echo "❌ 构建日志文件不存在，无法进行详细错误分析" >> "$REPORT_FILE"
     fi
 }
 
-# 12. 生成修复建议（修复版）
+# 11. 生成修复建议（优化版）
 generate_fix_suggestions() {
     log "💡 生成修复建议..."
     
@@ -990,102 +816,110 @@ generate_fix_suggestions() {
     echo "  4. 🚀 重新构建: make -j2 V=s 2>&1 | tee build.log" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
-    # 智能检查常见的文件缺失错误
+    # 检查常见的文件缺失错误
     if [ -f "$BUILD_DIR/build.log" ] && [ -s "$BUILD_DIR/build.log" ]; then
-        echo "🔍 针对性修复建议 (基于日志分析):" >> "$REPORT_FILE"
-        
-        # 智能检测错误类型并提供建议
         if grep -q "No such file or directory" "$BUILD_DIR/build.log"; then
-            echo "  📂 文件缺失错误修复:" >> "$REPORT_FILE"
-            echo "    💡 发现文件缺失错误，可能是编译过程中文件下载不完整" >> "$REPORT_FILE"
-            echo "    🛠️ 修复方法: 重新下载依赖包" >> "$REPORT_FILE"
-            echo "      cd $BUILD_DIR && make download -j4 V=s" >> "$REPORT_FILE"
+            echo "🔧 文件缺失错误修复:" >> "$REPORT_FILE"
+            echo "  💡 发现文件缺失错误，可能是编译过程中文件下载不完整" >> "$REPORT_FILE"
+            echo "  🛠️ 修复方法: 重新下载依赖包" >> "$REPORT_FILE"
+            echo "    cd $BUILD_DIR && make download -j4 V=s" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
         fi
         
         # 工具链错误
         if grep -q "toolchain/Makefile" "$BUILD_DIR/build.log" 2>/dev/null; then
-            echo "  🛠️ 工具链构建错误修复:" >> "$REPORT_FILE"
-            echo "    TOOLCHAIN_DIR=\$(find $BUILD_DIR/staging_dir -name 'toolchain-*' -type d | head -1)" >> "$REPORT_FILE"
-            echo "    mkdir -p \"\$TOOLCHAIN_DIR/stamp\"" >> "$REPORT_FILE"
-            echo "    echo '修复标记' > \"\$TOOLCHAIN_DIR/stamp/.toolchain_compile\"" >> "$REPORT_FILE"
-            echo "    echo '修复标记' > \"\$TOOLCHAIN_DIR/stamp/.binutils_installed\"" >> "$REPORT_FILE"
-            echo "    touch \"\$TOOLCHAIN_DIR/stamp/.gcc_initial\"" >> "$REPORT_FILE"
-            echo "    touch \"\$TOOLCHAIN_DIR/stamp/.gcc_final\"" >> "$REPORT_FILE"
-            echo "    make toolchain/install -j2 V=s" >> "$REPORT_FILE"
+            echo "🔧 工具链构建错误修复:" >> "$REPORT_FILE"
+            echo "  TOOLCHAIN_DIR=\$(find $BUILD_DIR/staging_dir -name 'toolchain-*' -type d | head -1)" >> "$REPORT_FILE"
+            echo "  mkdir -p \"\$TOOLCHAIN_DIR/stamp\"" >> "$REPORT_FILE"
+            echo "  echo '修复标记' > \"\$TOOLCHAIN_DIR/stamp/.toolchain_compile\"" >> "$REPORT_FILE"
+            echo "  echo '修复标记' > \"\$TOOLCHAIN_DIR/stamp/.binutils_installed\"" >> "$REPORT_FILE"
+            echo "  touch \"\$TOOLCHAIN_DIR/stamp/.gcc_initial\"" >> "$REPORT_FILE"
+            echo "  touch \"\$TOOLCHAIN_DIR/stamp/.gcc_final\"" >> "$REPORT_FILE"
+            echo "  make toolchain/install -j2 V=s" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
         fi
         
         # GDB错误
         if grep -q "_GL_ATTRIBUTE_FORMAT_PRINTF" "$BUILD_DIR/build.log" 2>/dev/null; then
-            echo "  🔧 GDB编译错误修复:" >> "$REPORT_FILE"
-            echo "    GDB_DIR=\$(find $BUILD_DIR/build_dir -name 'gdb-*' -type d | head -1)" >> "$REPORT_FILE"
-            echo "    cd \"\$GDB_DIR\"" >> "$REPORT_FILE"
-            echo "    sed -i '111s/#define ATTRIBUTE_PRINTF _GL_ATTRIBUTE_FORMAT_PRINTF/#define ATTRIBUTE_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))/' gdbsupport/common-defs.h" >> "$REPORT_FILE"
-            echo "    或者禁用GDB: echo '# CONFIG_PACKAGE_gdb is not set' >> $BUILD_DIR/.config" >> "$REPORT_FILE"
+            echo "🔧 GDB编译错误修复:" >> "$REPORT_FILE"
+            echo "  GDB_DIR=\$(find $BUILD_DIR/build_dir -name 'gdb-*' -type d | head -1)" >> "$REPORT_FILE"
+            echo "  cd \"\$GDB_DIR\"" >> "$REPORT_FILE"
+            echo "  sed -i '111s/#define ATTRIBUTE_PRINTF _GL_ATTRIBUTE_FORMAT_PRINTF/#define ATTRIBUTE_PRINTF(format_idx, arg_idx) __attribute__ ((__format__ (__printf__, format_idx, arg_idx)))/' gdbsupport/common-defs.h" >> "$REPORT_FILE"
+            echo "  或者禁用GDB: echo '# CONFIG_PACKAGE_gdb is not set' >> $BUILD_DIR/.config" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
         fi
         
         # 头文件错误
         if grep -q "stdc-predef.h\|stdio.h" "$BUILD_DIR/build.log" 2>/dev/null; then
-            echo "  🔧 头文件缺失修复:" >> "$REPORT_FILE"
-            echo "    mkdir -p $BUILD_DIR/staging_dir/host/include" >> "$REPORT_FILE"
-            echo "    cp /usr/include/stdc-predef.h $BUILD_DIR/staging_dir/host/include/ 2>/dev/null || true" >> "$REPORT_FILE"
-            echo "    echo '/* 最小头文件 */' > $BUILD_DIR/staging_dir/host/include/stdio.h" >> "$REPORT_FILE"
-            echo "    echo '#ifndef _STDIO_H' >> $BUILD_DIR/staging_dir/host/include/stdio.h" >> "$REPORT_FILE"
-            echo "    echo '#define _STDIO_H' >> $BUILD_DIR/staging_dir/host/include/stdio.h" >> "$REPORT_FILE"
-            echo "    echo '#endif' >> $BUILD_DIR/staging_dir/host/include/stdio.h" >> "$REPORT_FILE"
+            echo "🔧 头文件缺失修复:" >> "$REPORT_FILE"
+            echo "  mkdir -p $BUILD_DIR/staging_dir/host/include" >> "$REPORT_FILE"
+            echo "  cp /usr/include/stdc-predef.h $BUILD_DIR/staging_dir/host/include/ 2>/dev/null || true" >> "$REPORT_FILE"
+            echo "  echo '/* 最小头文件 */' > $BUILD_DIR/staging_dir/host/include/stdio.h" >> "$REPORT_FILE"
+            echo "  echo '#ifndef _STDIO_H' >> $BUILD_DIR/staging_dir/host/include/stdio.h" >> "$REPORT_FILE"
+            echo "  echo '#define _STDIO_H' >> $BUILD_DIR/staging_dir/host/include/stdio.h" >> "$REPORT_FILE"
+            echo "  echo '#endif' >> $BUILD_DIR/staging_dir/host/include/stdio.h" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
         fi
         
-        # SDK下载问题修复（修复点）
-        if grep -q "SDK下载失败" "$BUILD_DIR/build.log" 2>/dev/null; then
-            echo "  🔧 SDK下载问题修复:" >> "$REPORT_FILE"
-            echo "    💡 SDK下载失败不会影响构建" >> "$REPORT_FILE"
-            echo "    🛠️ 修复方法:" >> "$REPORT_FILE"
-            echo "      1. 系统会自动使用内置编译器构建" >> "$REPORT_FILE"
-            echo "      2. 无需手动干预，构建会继续" >> "$REPORT_FILE"
-            echo "      3. 如果确实需要SDK，可以手动下载" >> "$REPORT_FILE"
+        # 编译器版本错误 - 改进：只在真正检测到时显示
+        if grep -q "requires gcc.*\|\`gcc.*\` version" "$BUILD_DIR/build.log" 2>/dev/null; then
+            echo "🔧 真正的编译器版本错误修复:" >> "$REPORT_FILE"
+            echo "  💡 检测到真正的GCC版本兼容性问题" >> "$REPORT_FILE"
+            echo "  🛠️ 修复方法:" >> "$REPORT_FILE"
+            echo "    1. 检查当前GCC版本: gcc --version" >> "$REPORT_FILE"
+            echo "    2. 确保使用兼容的GCC版本" >> "$REPORT_FILE"
+            echo "    3. 检查预构建编译器的兼容性" >> "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+        else
+            echo "💡 编译器版本说明:" >> "$REPORT_FILE"
+            echo "  ✅ SDK编译器是OpenWrt官方提供的，版本已通过验证" >> "$REPORT_FILE"
+            echo "  💡 如果构建成功，说明编译器版本完全兼容" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
         fi
         
         # 内存不足错误
         if grep -q "out of memory\|Killed process" "$BUILD_DIR/build.log" 2>/dev/null; then
-            echo "  🔧 内存不足错误修复:" >> "$REPORT_FILE"
-            echo "    💡 检测到内存不足问题" >> "$REPORT_FILE"
-            echo "    🛠️ 修复方法:" >> "$REPORT_FILE"
-            echo "      1. 增加交换空间" >> "$REPORT_FILE"
-            echo "      2. 减少并行编译任务: make -j1 V=s" >> "$REPORT_FILE"
-            echo "      3. 关闭其他占用内存的程序" >> "$REPORT_FILE"
+            echo "🔧 内存不足错误修复:" >> "$REPORT_FILE"
+            echo "  💡 检测到内存不足问题" >> "$REPORT_FILE"
+            echo "  🛠️ 修复方法:" >> "$REPORT_FILE"
+            echo "    1. 增加交换空间:" >> "$REPORT_FILE"
+            echo "      sudo fallocate -l 4G /swapfile" >> "$REPORT_FILE"
+            echo "      sudo chmod 600 /swapfile" >> "$REPORT_FILE"
+            echo "      sudo mkswap /swapfile" >> "$REPORT_FILE"
+            echo "      sudo swapon /swapfile" >> "$REPORT_FILE"
+            echo "    2. 减少并行编译任务: make -j1 V=s" >> "$REPORT_FILE"
+            echo "    3. 关闭其他占用内存的程序" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
         fi
         
         # 磁盘空间错误
         if grep -q "no space left\|disk full" "$BUILD_DIR/build.log" 2>/dev/null; then
-            echo "  🔧 磁盘空间错误修复:" >> "$REPORT_FILE"
-            echo "    💡 检测到磁盘空间不足" >> "$REPORT_FILE"
-            echo "    🛠️ 修复方法:" >> "$REPORT_FILE"
-            echo "      1. 清理临时文件" >> "$REPORT_FILE"
-            echo "      2. 清理下载缓存" >> "$REPORT_FILE"
-            echo "      3. 扩展磁盘空间" >> "$REPORT_FILE"
+            echo "🔧 磁盘空间错误修复:" >> "$REPORT_FILE"
+            echo "  💡 检测到磁盘空间不足" >> "$REPORT_FILE"
+            echo "  🛠️ 修复方法:" >> "$REPORT_FILE"
+            echo "    1. 清理临时文件:" >> "$REPORT_FILE"
+            echo "      rm -rf $BUILD_DIR/tmp/*" >> "$REPORT_FILE"
+            echo "      rm -rf $BUILD_DIR/build_dir/*" >> "$REPORT_FILE"
+            echo "      rm -rf $BUILD_DIR/staging_dir/*" >> "$REPORT_FILE"
+            echo "    2. 清理下载缓存:" >> "$REPORT_FILE"
+            echo "      rm -rf $BUILD_DIR/dl/*.tar.*" >> "$REPORT_FILE"
+            echo "    3. 扩展磁盘空间" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
         fi
     fi
     
-    # SDK编译器智能优化建议（修复版）
-    print_subheader "SDK编译器智能优化建议"
-    echo "🎯 SDK编译器状态智能检查:" >> "$REPORT_FILE"
+    # SDK编译器优化建议
+    print_subheader "SDK编译器优化建议"
+    echo "🎯 SDK编译器状态检查:" >> "$REPORT_FILE"
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
         echo "  ✅ SDK编译器目录存在: $COMPILER_DIR" >> "$REPORT_FILE"
-        echo "  🔧 智能验证SDK编译器:" >> "$REPORT_FILE"
+        echo "  🔧 验证SDK编译器:" >> "$REPORT_FILE"
         echo "    1. 检查GCC文件: find \"$COMPILER_DIR\" -name \"*gcc\" -type f -executable" >> "$REPORT_FILE"
         echo "    2. 验证编译器版本: \"\$(find \"$COMPILER_DIR\" -name '*gcc' -type f -executable | head -1)\" --version" >> "$REPORT_FILE"
         echo "    3. 检查SDK完整性: ls -la \"$COMPILER_DIR\"" >> "$REPORT_FILE"
-        echo "    4. 智能提示: SDK编译器来自官方，版本已通过验证" >> "$REPORT_FILE"
     else
         echo "  ⚠️ SDK编译器目录未设置或不存在" >> "$REPORT_FILE"
-        echo "  💡 系统将使用自动构建的编译器" >> "$REPORT_FILE"
-        echo "  ℹ️ SDK下载失败不会导致构建失败" >> "$REPORT_FILE"
+        echo "  💡 建议重新下载SDK: firmware-config/scripts/build_firmware_main.sh initialize_compiler_env [设备名]" >> "$REPORT_FILE"
     fi
     echo "" >> "$REPORT_FILE"
     
@@ -1100,11 +934,12 @@ generate_fix_suggestions() {
     echo "🚀 快速修复命令:" >> "$REPORT_FILE"
     echo "  1. 一键清理重建: cd $BUILD_DIR && make clean && ./scripts/feeds update -a && ./scripts/feeds install -a && make defconfig && make -j2 V=s" >> "$REPORT_FILE"
     echo "  2. 仅重新编译: cd $BUILD_DIR && make -j1 V=s" >> "$REPORT_FILE"
-    echo "  3. 修复头文件: mkdir -p staging_dir/host/include && touch staging_dir/host/include/stdc-predef.h" >> "$REPORT_FILE"
+    echo "  3. 重新下载SDK: firmware-config/scripts/build_firmware_main.sh initialize_compiler_env [设备名]" >> "$REPORT_FILE"
+    echo "  4. 修复头文件: mkdir -p staging_dir/host/include && touch staging_dir/host/include/stdc-predef.h" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
 }
 
-# 13. 生成智能总结报告
+# 12. 生成总结报告
 generate_summary() {
     log "📋 生成分析总结..."
     
@@ -1125,8 +960,8 @@ generate_summary() {
     
     if [ -f "$BUILD_DIR/build.log" ] && [ -s "$BUILD_DIR/build.log" ]; then
         build_log_exists=1
-        error_count=$(grep -c -i "error:" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
-        warning_count=$(grep -c -i "warning:" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
+        error_count=$(grep -c -i "error" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
+        warning_count=$(grep -c -i "warning" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
     fi
     
     if [ -f "$BUILD_DIR/.config" ] && [ -s "$BUILD_DIR/.config" ]; then
@@ -1144,14 +979,14 @@ generate_summary() {
     echo "📊 构建状态概览:" >> "$REPORT_FILE"
     echo "  ✅ 构建目录: $(if [ -d "$BUILD_DIR" ]; then echo '存在'; else echo '缺失'; fi)" >> "$REPORT_FILE"
     echo "  ✅ 配置文件: $(if [ $config_exists -eq 1 ]; then echo '存在'; else echo '缺失'; fi)" >> "$REPORT_FILE"
-    echo "  ✅ 构建日志: $(if [ $build_log_exists -eq 1 ]; then echo "存在 (错误: $error_count, 警告: $warning_count)"; else echo '缺失'; fi)" >> "$REPORT_FILE"
+    echo "  ✅ 构建日志: $(if [ $build_log_exists -eq 1 ]; then echo "存在 (原始错误: $error_count, 警告: $warning_count)"; else echo '缺失'; fi)" >> "$REPORT_FILE"
     echo "  ✅ 编译目录: $(if [ $staging_dir_exists -eq 1 ]; then echo '存在'; else echo '缺失'; fi)" >> "$REPORT_FILE"
     echo "  ✅ 固件生成: $(if [ $firmware_exists -eq 1 ]; then echo '成功'; else echo '失败'; fi)" >> "$REPORT_FILE"
     echo "  ✅ SDK编译器: $(if [ $sdk_compiler_exists -eq 1 ]; then echo '已下载'; else echo '未下载'; fi)" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
-    # 编译器来源智能分析
-    print_subheader "编译器来源智能分析"
+    # 编译器来源分析
+    print_subheader "编译器来源分析"
     
     # 检查预构建编译器使用情况
     if [ $sdk_compiler_exists -eq 1 ]; then
@@ -1175,10 +1010,9 @@ generate_summary() {
     else
         echo "  🛠️ 编译器来源: OpenWrt自动构建" >> "$REPORT_FILE"
         echo "  💡 未使用预构建SDK编译器" >> "$REPORT_FILE"
-        echo "  ℹ️ SDK下载失败不会影响构建" >> "$REPORT_FILE"
     fi
     
-    # SDK编译器智能信息
+    # SDK编译器信息
     if [ -n "$SELECTED_BRANCH" ]; then
         echo "  📌 OpenWrt版本: $SELECTED_BRANCH" >> "$REPORT_FILE"
         if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
@@ -1187,12 +1021,11 @@ generate_summary() {
             echo "  🔧 SDK编译器版本: GCC 8.4.0 (官方验证)" >> "$REPORT_FILE"
         fi
         echo "  ✅ SDK编译器状态: 官方提供，版本已验证" >> "$REPORT_FILE"
-        echo "  ⚠️ SDK下载失败不会导致构建中止" >> "$REPORT_FILE"
     fi
     
-    # 智能状态评估
+    # 状态评估
     echo "" >> "$REPORT_FILE"
-    print_subheader "智能状态评估"
+    print_subheader "状态评估"
     
     if [ $firmware_exists -eq 1 ]; then
         echo "  🎉 状态: 构建成功！" >> "$REPORT_FILE"
@@ -1216,14 +1049,13 @@ generate_summary() {
     fi
     echo "" >> "$REPORT_FILE"
     
-    # 关于编译器版本的智能说明（修复版）
-    print_subheader "关于编译器版本的智能说明"
+    # 关于编译器版本的特别说明
+    print_subheader "关于编译器版本的特别说明"
     echo "🔧 重要提示:" >> "$REPORT_FILE"
     echo "  1. ✅ SDK编译器来自OpenWrt官方下载，版本已通过官方测试" >> "$REPORT_FILE"
     echo "  2. 💡 如果构建成功，说明编译器版本完全兼容" >> "$REPORT_FILE"
-    echo "  3. ⚠️ SDK下载失败不会影响构建（系统会自动构建编译器）" >> "$REPORT_FILE"
-    echo "  4. 🔍 GCC版本检查是正常行为，不是错误" >> "$REPORT_FILE"
-    echo "  5. 📊 本报告中的错误统计已优化，减少误报" >> "$REPORT_FILE"
+    echo "  3. ⚠️ 错误分析中的'版本错误'可能是误报，已在本版本中修复" >> "$REPORT_FILE"
+    echo "  4. 🔍 真正的编译器版本错误会有明确的错误消息" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
     # 下一步行动
@@ -1258,18 +1090,18 @@ generate_summary() {
     echo "" >> "$REPORT_FILE"
     
     echo "==================================================" >> "$REPORT_FILE"
-    echo "           🎯 智能分析完成 - 祝您构建顺利！     " >> "$REPORT_FILE"
+    echo "           🎯 分析完成 - 祝您构建顺利！         " >> "$REPORT_FILE"
     echo "==================================================" >> "$REPORT_FILE"
 }
 
-# 14. 输出报告并清理
+# 13. 输出报告并清理
 output_report() {
     log "📄 输出分析报告..."
     
     # 显示报告
     echo ""
     echo "=================================================="
-    echo "           OpenWrt构建错误智能分析报告           "
+    echo "           OpenWrt构建错误分析报告               "
     echo "=================================================="
     echo ""
     
@@ -1281,10 +1113,10 @@ output_report() {
         echo "... (完整报告请看下方或保存的文件) ..."
         echo ""
         
-        # 显示关键错误（如果有）- 智能过滤
+        # 显示关键错误（如果有）- 改进：过滤非关键错误
         if grep -q "❌" "$REPORT_FILE"; then
-            echo "🚨 发现的关键问题 (已优化过滤):"
-            grep "❌" "$REPORT_FILE" | head -10
+            echo "🚨 发现的关键问题:"
+            grep "❌" "$REPORT_FILE" | grep -v "版本错误\|编译器版本" | head -10
             echo ""
         fi
         
@@ -1295,15 +1127,13 @@ output_report() {
             echo ""
         fi
         
-        # 显示编译器相关信息 - 智能信息（修复版）
-        echo "🔧 编译器智能分析:"
+        # 显示编译器相关信息 - 改进：更准确的信息
+        echo "🔧 编译器信息:"
         if grep -q "预构建的OpenWrt SDK" "$REPORT_FILE"; then
             echo "  🎯 使用预构建的OpenWrt SDK编译器"
             echo "  ✅ SDK编译器来自官方，版本已验证"
-            echo "  ⚠️ SDK下载失败不会影响构建"
         elif grep -q "OpenWrt自动构建" "$REPORT_FILE"; then
             echo "  🛠️ 使用OpenWrt自动构建的编译器"
-            echo "  ℹ️ SDK下载失败时自动使用内置编译器"
         fi
         
         # 显示SDK版本信息
@@ -1311,20 +1141,13 @@ output_report() {
             grep "OpenWrt版本:" "$REPORT_FILE"
         fi
         
-        # 智能说明编译器版本（修复版）
+        # 特别说明编译器版本
         echo ""
-        echo "📌 关于编译器版本的智能说明:"
+        echo "📌 关于编译器版本的说明:"
         echo "  ✅ SDK编译器是OpenWrt官方提供的"
         echo "  🔧 版本已通过官方测试和验证"
         echo "  💡 如果构建成功，说明编译器完全兼容"
-        echo "  ⚠️ GCC版本检查是正常行为，不是错误"
-        echo "  ℹ️ SDK下载失败不会导致构建失败"
         echo ""
-        
-        # 显示构建状态
-        if grep -q "构建状态:" "$REPORT_FILE"; then
-            grep "构建状态:" "$REPORT_FILE"
-        fi
         
         # 显示时间信息
         echo "🕐 时间信息:"
@@ -1352,11 +1175,9 @@ output_report() {
 
 # 主执行函数
 main() {
-    log "🚀 开始OpenWrt构建错误智能分析"
+    log "🚀 开始OpenWrt构建错误分析"
     echo "分析开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "构建目录: $BUILD_DIR"
-    echo "版本: 2.4.2 (修复版)"
-    echo ""
     
     # 检查构建目录
     if [ ! -d "$BUILD_DIR" ]; then
@@ -1377,9 +1198,6 @@ main() {
     analyze_build_log
     check_download_log
     analyze_version_specific
-    
-    # 新增磁盘空间检查
-    check_disk_space
     
     # 详细错误分析
     analyze_detailed_errors
