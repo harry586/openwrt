@@ -91,17 +91,17 @@ download_openwrt_sdk() {
         case "$target" in
             "ipq40xx")
                 # 高通IPQ40xx平台 - 修复URL (使用正确的23.05.3版本)
-                sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-11.3.0_musl_eabi.Linux-x86_64.tar.xz"
+                sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
                 sdk_filename="openwrt-sdk-23.05.3-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
                 log "🔧 使用修复后的23.05.3 IPQ40xx SDK URL"
                 ;;
             "ramips")
                 # MIPS平台
                 if [ "$subtarget" = "mt76x8" ]; then
-                    sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt76x8/openwrt-sdk-23.05.3-ramips-mt76x8_gcc-11.3.0_musl_eabi.Linux-x86_64.tar.xz"
+                    sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt76x8/openwrt-sdk-23.05.3-ramips-mt76x8_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
                     sdk_filename="openwrt-sdk-23.05.3-ramips-mt76x8_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
                 elif [ "$subtarget" = "mt7621" ]; then
-                    sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt7621/openwrt-sdk-23.05.3-ramips-mt7621_gcc-11.3.0_musl.Linux-x86_64.tar.xz"
+                    sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt7621/openwrt-sdk-23.05.3-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
                     sdk_filename="openwrt-sdk-23.05.3-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
                 else
                     log "❌ 不支持的子目标: $subtarget"
