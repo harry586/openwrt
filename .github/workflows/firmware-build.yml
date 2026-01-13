@@ -49,15 +49,9 @@ jobs:
           echo "=== 步骤 0: 生成时间戳 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 生成日期格式的时间戳（年月日）- 使用北京日期
-          # 设置时区为北京（东八区）
-          export TZ='Asia/Shanghai'
+          # 生成日期格式的时间戳（年月日）
           BASE_DATE=$(date -u +'%Y%m%d')
-          
-          # 获取当前北京日期
-          BEIJING_DATE=$(TZ='Asia/Shanghai' date +'%Y%m%d')
-          
-          TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$BEIJING_DATE"
+          TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$BASE_DATE"
           
           echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
           
@@ -67,7 +61,6 @@ jobs:
           echo "  版本: ${{ github.event.inputs.version_selection }}"
           echo "  模式: ${{ github.event.inputs.config_mode }}"
           echo "  并行优化: ${{ github.event.inputs.enable_parallel }}"
-          echo "  北京日期: $BEIJING_DATE"
           
           echo "🟢 步骤 0 完成"
       
@@ -548,8 +541,22 @@ jobs:
               echo "✅ 找到可执行GCC编译器: $(basename "$GCC_FILE")"
               echo "🔧 GCC版本测试:"
               "$GCC_FILE" --version 2>&1 | head -1
+              
+              # 动态显示SDK GCC版本信息
+              SDK_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
+              MAJOR_VERSION=$(echo "$SDK_VERSION" | grep -o "[0-9]\+" | head -1)
+              
               echo "💡 这是OpenWrt官方SDK交叉编译器，用于编译目标平台固件"
-              echo "💡 系统GCC (11.4.0) 用于编译工具链，SDK GCC (8.4.0) 用于交叉编译固件"
+              
+              if [ "$MAJOR_VERSION" = "12" ]; then
+                echo "💡 SDK GCC版本: 12.3.0 (OpenWrt 23.05 SDK)"
+              elif [ "$MAJOR_VERSION" = "8" ]; then
+                echo "💡 SDK GCC版本: 8.4.0 (OpenWrt 21.02 SDK)"
+              else
+                echo "💡 SDK GCC版本: $MAJOR_VERSION.x"
+              fi
+              
+              echo "💡 系统GCC (11.4.0) 用于编译工具链，SDK GCC ($MAJOR_VERSION.x) 用于交叉编译固件"
             else
               echo "⚠️ 未找到可执行的GCC编译器"
             fi
@@ -1196,7 +1203,7 @@ jobs:
             "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh"
             
             echo "✅ 错误分析完成"
-            echo "💡 错误分析已优化，不再误报SDK编译器版本问题"
+            echo "💡 错误分析已优化，正确显示SDK编译器版本信息"
           else
             echo "⚠️ 错误分析脚本不存在"
           fi
@@ -1315,8 +1322,39 @@ jobs:
           # 编译器信息
           echo ""
           echo "🔧 编译器信息:"
-          echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
-          echo "  🎯 SDK GCC: 8.4.0 (用于交叉编译固件)"
+          
+          # 检查SDK编译器版本
+          if [ -d "/mnt/openwrt-build/sdk" ]; then
+            GCC_FILE=$(find "/mnt/openwrt-build/sdk" -type f -executable \
+              -name "*gcc" \
+              ! -name "*gcc-ar" \
+              ! -name "*gcc-ranlib" \
+              ! -name "*gcc-nm" \
+              2>/dev/null | head -1)
+            
+            if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
+              SDK_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
+              MAJOR_VERSION=$(echo "$SDK_VERSION" | grep -o "[0-9]\+" | head -1)
+              
+              if [ "$MAJOR_VERSION" = "12" ]; then
+                echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
+                echo "  🎯 SDK GCC: 12.3.0 (OpenWrt 23.05 SDK，用于交叉编译固件)"
+              elif [ "$MAJOR_VERSION" = "8" ]; then
+                echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
+                echo "  🎯 SDK GCC: 8.4.0 (OpenWrt 21.02 SDK，用于交叉编译固件)"
+              else
+                echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
+                echo "  🎯 SDK GCC: $MAJOR_VERSION.x (用于交叉编译固件)"
+              fi
+            else
+              echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
+              echo "  🎯 SDK GCC: 未检测到版本"
+            fi
+          else
+            echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
+            echo "  🎯 SDK GCC: 未下载SDK，使用自动构建的编译器"
+          fi
+          
           echo "  💡 这是正常的：系统编译器编译工具链，SDK编译器编译固件"
           
           echo ""
