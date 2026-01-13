@@ -320,12 +320,19 @@ check_compiler_status() {
             local prebuilt_version=$("$prebuilt_gcc" --version 2>&1 | head -1)
             echo "     版本: $prebuilt_version" >> "$REPORT_FILE"
             
-            # 检查GCC版本 - 修复版：不再错误报告版本问题
+            # 检查GCC版本 - 修复版：根据实际检测到的版本显示
             local major_version=$(echo "$prebuilt_version" | grep -o "[0-9]\+" | head -1)
             if [ -n "$major_version" ]; then
-                # 显示版本但不再标记为不兼容
-                echo "     🔧 GCC版本: $major_version.x" >> "$REPORT_FILE"
-                echo "     💡 这是官方SDK的编译器，版本已通过验证" >> "$REPORT_FILE"
+                echo "     🔧 SDK GCC版本: $major_version.x" >> "$REPORT_FILE"
+                
+                # 根据版本显示不同信息
+                if [ "$major_version" = "12" ]; then
+                    echo "     💡 OpenWrt 23.05 官方SDK使用 GCC 12.3.0" >> "$REPORT_FILE"
+                elif [ "$major_version" = "8" ]; then
+                    echo "     💡 OpenWrt 21.02 官方SDK使用 GCC 8.4.0" >> "$REPORT_FILE"
+                else
+                    echo "     💡 这是OpenWrt官方SDK交叉编译器，版本已通过验证" >> "$REPORT_FILE"
+                fi
             fi
             
             # 检查是否是真正的交叉编译器
@@ -376,11 +383,11 @@ check_compiler_status() {
                 echo "     版本: $version" >> "$REPORT_FILE"
                 
                 # 显示GCC版本但不标记兼容性问题
-local major_version=$(echo "$version" | grep -o "[0-9]\+" | head -1)
-if [ -n "$major_version" ]; then
-    echo "     🔧 GCC版本: $major_version.x" >> "$REPORT_FILE"
-    echo "     💡 构建系统使用的编译器版本" >> "$REPORT_FILE"
-fi
+                local major_version=$(echo "$version" | grep -o "[0-9]\+" | head -1)
+                if [ -n "$major_version" ]; then
+                    echo "     🔧 GCC版本: $major_version.x" >> "$REPORT_FILE"
+                    echo "     💡 构建系统使用的编译器版本" >> "$REPORT_FILE"
+                fi
             else
                 echo "  ⚠️ 未找到真正的GCC编译器" >> "$REPORT_FILE"
             fi
@@ -423,7 +430,14 @@ fi
                 # 检查是否来自预构建目录
                 if [ -n "$COMPILER_DIR" ] && [[ "$gcc_file" == *"$COMPILER_DIR"* ]]; then
                     echo "      来源: 🎯 预构建SDK" >> "$REPORT_FILE"
-                    echo "      状态: ✅ 官方SDK编译器，版本已验证" >> "$REPORT_FILE"
+                    local major_version=$(echo "$version" | grep -o "[0-9]\+" | head -1)
+                    if [ "$major_version" = "12" ]; then
+                        echo "      状态: ✅ OpenWrt 23.05 SDK (GCC 12.3.0)" >> "$REPORT_FILE"
+                    elif [ "$major_version" = "8" ]; then
+                        echo "      状态: ✅ OpenWrt 21.02 SDK (GCC 8.4.0)" >> "$REPORT_FILE"
+                    else
+                        echo "      状态: ✅ 官方SDK编译器，版本已验证" >> "$REPORT_FILE"
+                    fi
                 elif [[ "$gcc_file" == *"staging_dir"* ]]; then
                     echo "      来源: 🛠️ 自动构建" >> "$REPORT_FILE"
                     echo "      状态: ✅ 构建系统生成的编译器" >> "$REPORT_FILE"
@@ -449,7 +463,27 @@ fi
         # 检查是否是OpenWrt官方SDK
         if [ -f "$COMPILER_DIR/version.json" ] || [ -f "$COMPILER_DIR/.config" ]; then
             echo "  ✅ 确认是OpenWrt官方SDK工具链" >> "$REPORT_FILE"
-            echo "  💡 SDK编译器版本是经过官方测试和验证的" >> "$REPORT_FILE"
+            
+            # 获取SDK GCC版本信息
+            local sdk_gcc=$(find "$COMPILER_DIR" -type f -executable \
+              -name "*gcc" \
+              ! -name "*gcc-ar" \
+              ! -name "*gcc-ranlib" \
+              ! -name "*gcc-nm" \
+              2>/dev/null | head -1)
+            
+            if [ -n "$sdk_gcc" ] && [ -x "$sdk_gcc" ]; then
+                local sdk_version=$("$sdk_gcc" --version 2>&1 | head -1)
+                local major_version=$(echo "$sdk_version" | grep -o "[0-9]\+" | head -1)
+                
+                if [ "$major_version" = "12" ]; then
+                    echo "  💡 SDK编译器版本: GCC 12.3.0 (OpenWrt 23.05官方版本)" >> "$REPORT_FILE"
+                elif [ "$major_version" = "8" ]; then
+                    echo "  💡 SDK编译器版本: GCC 8.4.0 (OpenWrt 21.02官方版本)" >> "$REPORT_FILE"
+                else
+                    echo "  💡 SDK编译器版本是经过官方测试和验证的" >> "$REPORT_FILE"
+                fi
+            fi
         fi
         
         # 检查SDK中的GCC文件
@@ -629,7 +663,7 @@ analyze_version_specific() {
         
         if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             echo "🔧 OpenWrt 23.05 版本特性:" >> "$REPORT_FILE"
-            echo "  编译器: GCC 11.3.0" >> "$REPORT_FILE"
+            echo "  编译器: GCC 12.3.0" >> "$REPORT_FILE"
             echo "  内核: Linux 5.15" >> "$REPORT_FILE"
             echo "  musl: 1.2.3" >> "$REPORT_FILE"
             echo "  binutils: 2.38" >> "$REPORT_FILE"
@@ -669,7 +703,17 @@ analyze_version_specific() {
         # SDK编译器信息
         print_subheader "SDK编译器版本信息"
         echo "🎯 SDK编译器来源: OpenWrt官方下载" >> "$REPORT_FILE"
-        echo "🔧 SDK编译器已通过官方验证，无需担心版本兼容性问题" >> "$REPORT_FILE"
+        
+        # 根据版本显示不同的SDK编译器信息
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            echo "🔧 SDK编译器版本: GCC 12.3.0 (OpenWrt 23.05官方版本)" >> "$REPORT_FILE"
+        elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+            echo "🔧 SDK编译器版本: GCC 8.4.0 (OpenWrt 21.02官方版本)" >> "$REPORT_FILE"
+        else
+            echo "🔧 SDK编译器版本: 根据OpenWrt版本自动匹配" >> "$REPORT_FILE"
+        fi
+        
+        echo "✅ SDK编译器已通过官方验证，无需担心版本兼容性问题" >> "$REPORT_FILE"
         echo "💡 如果构建成功，说明编译器版本完全兼容" >> "$REPORT_FILE"
         
     else
@@ -776,8 +820,29 @@ analyze_detailed_errors() {
             if [ $sdk_usage_count -gt 0 ]; then
                 echo "  ✅ SDK编译器被调用次数: $sdk_usage_count" >> "$REPORT_FILE"
                 echo "  💡 SDK编译器已成功集成到构建系统中" >> "$REPORT_FILE"
+                
+                # 显示SDK编译器版本信息
+                local sdk_gcc=$(find "$COMPILER_DIR" -type f -executable \
+                  -name "*gcc" \
+                  ! -name "*gcc-ar" \
+                  ! -name "*gcc-ranlib" \
+                  ! -name "*gcc-nm" \
+                  2>/dev/null | head -1)
+                
+                if [ -n "$sdk_gcc" ] && [ -x "$sdk_gcc" ]; then
+                    local sdk_version=$("$sdk_gcc" --version 2>&1 | head -1)
+                    local major_version=$(echo "$sdk_version" | grep -o "[0-9]\+" | head -1)
+                    
+                    if [ "$major_version" = "12" ]; then
+                        echo "  🔧 使用的SDK编译器: GCC 12.3.0 (OpenWrt 23.05)" >> "$REPORT_FILE"
+                    elif [ "$major_version" = "8" ]; then
+                        echo "  🔧 使用的SDK编译器: GCC 8.4.0 (OpenWrt 21.02)" >> "$REPORT_FILE"
+                    else
+                        echo "  🔧 使用的SDK编译器: $sdk_version" >> "$REPORT_FILE"
+                    fi
+                fi
             else
-                echo "  ⚠️ 未检测到SDK编译器调用" >> "$REPORT_FILE"
+                echo "  🔄 构建中未使用预构建SDK编译器" >> "$REPORT_FILE"
                 echo "  💡 可能使用了自动构建的编译器" >> "$REPORT_FILE"
             fi
         else
@@ -873,6 +938,11 @@ generate_fix_suggestions() {
         else
             echo "💡 编译器版本说明:" >> "$REPORT_FILE"
             echo "  ✅ SDK编译器是OpenWrt官方提供的，版本已通过验证" >> "$REPORT_FILE"
+            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+                echo "  🔧 OpenWrt 23.05 SDK使用 GCC 12.3.0" >> "$REPORT_FILE"
+            elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+                echo "  🔧 OpenWrt 21.02 SDK使用 GCC 8.4.0" >> "$REPORT_FILE"
+            fi
             echo "  💡 如果构建成功，说明编译器版本完全兼容" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
         fi
@@ -917,6 +987,15 @@ generate_fix_suggestions() {
         echo "    1. 检查GCC文件: find \"$COMPILER_DIR\" -name \"*gcc\" -type f -executable" >> "$REPORT_FILE"
         echo "    2. 验证编译器版本: \"\$(find \"$COMPILER_DIR\" -name '*gcc' -type f -executable | head -1)\" --version" >> "$REPORT_FILE"
         echo "    3. 检查SDK完整性: ls -la \"$COMPILER_DIR\"" >> "$REPORT_FILE"
+        
+        # 根据版本显示SDK信息
+        if [ -n "$SELECTED_BRANCH" ]; then
+            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+                echo "  🔧 OpenWrt 23.05 SDK使用 GCC 12.3.0" >> "$REPORT_FILE"
+            elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+                echo "  🔧 OpenWrt 21.02 SDK使用 GCC 8.4.0" >> "$REPORT_FILE"
+            fi
+        fi
     else
         echo "  ⚠️ SDK编译器目录未设置或不存在" >> "$REPORT_FILE"
         echo "  💡 建议重新下载SDK: firmware-config/scripts/build_firmware_main.sh initialize_compiler_env [设备名]" >> "$REPORT_FILE"
@@ -993,6 +1072,27 @@ generate_summary() {
         echo "  🎯 编译器来源: 预构建的OpenWrt SDK" >> "$REPORT_FILE"
         echo "  📌 编译器目录: $COMPILER_DIR" >> "$REPORT_FILE"
         
+        # 显示SDK编译器版本
+        local sdk_gcc=$(find "$COMPILER_DIR" -type f -executable \
+          -name "*gcc" \
+          ! -name "*gcc-ar" \
+          ! -name "*gcc-ranlib" \
+          ! -name "*gcc-nm" \
+          2>/dev/null | head -1)
+        
+        if [ -n "$sdk_gcc" ] && [ -x "$sdk_gcc" ]; then
+            local sdk_version=$("$sdk_gcc" --version 2>&1 | head -1)
+            local major_version=$(echo "$sdk_version" | grep -o "[0-9]\+" | head -1)
+            
+            if [ "$major_version" = "12" ]; then
+                echo "  🔧 SDK编译器版本: GCC 12.3.0 (OpenWrt 23.05)" >> "$REPORT_FILE"
+            elif [ "$major_version" = "8" ]; then
+                echo "  🔧 SDK编译器版本: GCC 8.4.0 (OpenWrt 21.02)" >> "$REPORT_FILE"
+            else
+                echo "  🔧 SDK编译器版本: $sdk_version" >> "$REPORT_FILE"
+            fi
+        fi
+        
         # 检查是否实际使用了预构建编译器
         if [ $build_log_exists -eq 1 ]; then
             local prebuilt_calls=$(grep -c "$COMPILER_DIR" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
@@ -1016,7 +1116,7 @@ generate_summary() {
     if [ -n "$SELECTED_BRANCH" ]; then
         echo "  📌 OpenWrt版本: $SELECTED_BRANCH" >> "$REPORT_FILE"
         if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            echo "  🔧 SDK编译器版本: GCC 11.3.0 (官方验证)" >> "$REPORT_FILE"
+            echo "  🔧 SDK编译器版本: GCC 12.3.0 (官方验证)" >> "$REPORT_FILE"
         elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
             echo "  🔧 SDK编译器版本: GCC 8.4.0 (官方验证)" >> "$REPORT_FILE"
         fi
@@ -1053,8 +1153,10 @@ generate_summary() {
     print_subheader "关于编译器版本的特别说明"
     echo "🔧 重要提示:" >> "$REPORT_FILE"
     echo "  1. ✅ SDK编译器来自OpenWrt官方下载，版本已通过官方测试" >> "$REPORT_FILE"
-    echo "  2. 💡 如果构建成功，说明编译器版本完全兼容" >> "$REPORT_FILE"
-    echo "  3. ⚠️ 错误分析中的'版本错误'可能是误报，已在本版本中修复" >> "$REPORT_FILE"
+    echo "  2. 🔧 不同OpenWrt版本使用不同的GCC版本:" >> "$REPORT_FILE"
+    echo "     - OpenWrt 23.05: GCC 12.3.0" >> "$REPORT_FILE"
+    echo "     - OpenWrt 21.02: GCC 8.4.0" >> "$REPORT_FILE"
+    echo "  3. 💡 如果构建成功，说明编译器版本完全兼容" >> "$REPORT_FILE"
     echo "  4. 🔍 真正的编译器版本错误会有明确的错误消息" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
@@ -1131,6 +1233,16 @@ output_report() {
         echo "🔧 编译器信息:"
         if grep -q "预构建的OpenWrt SDK" "$REPORT_FILE"; then
             echo "  🎯 使用预构建的OpenWrt SDK编译器"
+            
+            # 显示SDK编译器版本
+            if grep -q "GCC 12.3.0" "$REPORT_FILE"; then
+                echo "  🔧 SDK编译器版本: GCC 12.3.0 (OpenWrt 23.05)"
+            elif grep -q "GCC 8.4.0" "$REPORT_FILE"; then
+                echo "  🔧 SDK编译器版本: GCC 8.4.0 (OpenWrt 21.02)"
+            else
+                echo "  🔧 SDK编译器版本: 根据OpenWrt版本自动匹配"
+            fi
+            
             echo "  ✅ SDK编译器来自官方，版本已验证"
         elif grep -q "OpenWrt自动构建" "$REPORT_FILE"; then
             echo "  🛠️ 使用OpenWrt自动构建的编译器"
@@ -1145,7 +1257,9 @@ output_report() {
         echo ""
         echo "📌 关于编译器版本的说明:"
         echo "  ✅ SDK编译器是OpenWrt官方提供的"
-        echo "  🔧 版本已通过官方测试和验证"
+        echo "  🔧 不同版本使用不同的GCC:"
+        echo "    - OpenWrt 23.05: GCC 12.3.0"
+        echo "    - OpenWrt 21.02: GCC 8.4.0"
         echo "  💡 如果构建成功，说明编译器完全兼容"
         echo ""
         
