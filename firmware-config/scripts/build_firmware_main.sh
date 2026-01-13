@@ -90,10 +90,10 @@ download_openwrt_sdk() {
         # OpenWrt 23.05 SDK - 修复URL
         case "$target" in
             "ipq40xx")
-                # 高通IPQ40xx平台 - 修复URL
+                # 高通IPQ40xx平台 - 修复URL (使用正确的23.05.3版本)
                 sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-11.3.0_musl_eabi.Linux-x86_64.tar.xz"
                 sdk_filename="openwrt-sdk-23.05.3-ipq40xx-generic_gcc-11.3.0_musl_eabi.Linux-x86_64.tar.xz"
-                log "🔧 使用修复后的23.05 IPQ40xx SDK URL"
+                log "🔧 使用修复后的23.05.3 IPQ40xx SDK URL"
                 ;;
             "ramips")
                 # MIPS平台
@@ -156,7 +156,8 @@ download_openwrt_sdk() {
     
     # 下载SDK
     log "开始下载OpenWrt SDK..."
-    log "使用修复后的URL下载: $(echo $sdk_url | sed 's/\/releases\/.*\/targets/\/releases\/[版本]\/targets/' )"
+    # 修复：移除错误的字符串替换
+    log "使用修复后的URL下载: $sdk_url"
     
     if wget --tries=3 --timeout=30 -q -O "$sdk_dir/$sdk_filename" "$sdk_url"; then
         log "✅ SDK下载成功"
