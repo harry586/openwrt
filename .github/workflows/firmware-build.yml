@@ -941,21 +941,39 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 20 完成"
       
-      # 步骤 21: 前置错误检查
-      - name: "21. 前置错误检查"
+      # 步骤 21: 前置错误检查（修复23.05 SDK验证）
+      - name: "21. 前置错误检查（修复23.05 SDK验证）"
         run: |
-          echo "=== 步骤 21: 前置错误检查 ==="
+          echo "=== 步骤 21: 前置错误检查（修复23.05 SDK验证）==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
           trap 'echo "❌ 步骤 21 失败，退出代码: $?"; exit 1' ERR
           
+          echo "🔍 检查当前环境..."
+          if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
+            source /mnt/openwrt-build/build_env.sh
+            echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET"
+          fi
+          
+          echo "🚀 执行前置错误检查（已修复23.05 SDK验证问题）..."
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_error_check
           
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 前置错误检查失败"
+          CHECK_EXIT_CODE=$?
+          if [ $CHECK_EXIT_CODE -ne 0 ]; then
+            echo "❌ 错误: 前置错误检查失败，退出代码: $CHECK_EXIT_CODE"
             echo "💡 请查看上方错误信息进行修复"
+            
+            # 如果是23.05版本，提供特殊提示
+            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+              echo ""
+              echo "🚨 23.05版本SDK验证问题修复提示:"
+              echo "💡 23.05 SDK使用GCC 12.3.0，已修复验证逻辑"
+              echo "📌 如果仍有问题，可能是SDK下载不完整"
+              echo "🔧 请检查步骤7的SDK下载日志"
+            fi
+            
             exit 1
           fi
           
@@ -1255,7 +1273,7 @@ jobs:
             fi
           fi
           
-          echo "✅ 完成时间: $(date '+%Y-%m-d %H:%M:%S')"
+          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 27 完成"
       
       # 步骤 28: 编译后空间检查
