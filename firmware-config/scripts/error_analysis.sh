@@ -376,11 +376,11 @@ check_compiler_status() {
                 echo "     版本: $version" >> "$REPORT_FILE"
                 
                 # 显示GCC版本但不标记兼容性问题
-                local major_version=$(echo "$version" | grep -o "[0-9]\+" | head -1)
-                if [ -n "$major_version" ]; then
-                    echo "     🔧 GCC版本: $major_version.x" >> "$REPORT_FILE"
-                    echo "     💡 构建系统使用的编译器版本" >> "$REPORT_FILE"
-                fi
+local major_version=$(echo "$version" | grep -o "[0-9]\+" | head -1)
+if [ -n "$major_version" ]; then
+    echo "     🔧 GCC版本: $major_version.x" >> "$REPORT_FILE"
+    echo "     💡 构建系统使用的编译器版本" >> "$REPORT_FILE"
+fi
             else
                 echo "  ⚠️ 未找到真正的GCC编译器" >> "$REPORT_FILE"
             fi
