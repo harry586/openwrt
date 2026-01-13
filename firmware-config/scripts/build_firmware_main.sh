@@ -72,7 +72,7 @@ intelligent_platform_aware_compiler_search() {
     return 1
 }
 
-# 新增：下载OpenWrt官方SDK工具链函数 - 修复版
+# 新增：下载OpenWrt官方SDK工具链函数
 download_openwrt_sdk() {
     local target="$1"
     local subtarget="$2"
@@ -87,13 +87,12 @@ download_openwrt_sdk() {
     local sdk_filename=""
     
     if [ "$version" = "23.05" ] || [ "$version" = "openwrt-23.05" ]; then
-        # OpenWrt 23.05 SDK - 修复URL
+        # OpenWrt 23.05 SDK - 修复GCC版本为12.3.0
         case "$target" in
             "ipq40xx")
-                # 高通IPQ40xx平台 - 修复URL (使用正确的23.05.3版本)
+                # 高通IPQ40xx平台
                 sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
                 sdk_filename="openwrt-sdk-23.05.3-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
-                log "🔧 使用修复后的23.05.3 IPQ40xx SDK URL"
                 ;;
             "ramips")
                 # MIPS平台
@@ -114,7 +113,7 @@ download_openwrt_sdk() {
                 ;;
         esac
     elif [ "$version" = "21.02" ] || [ "$version" = "openwrt-21.02" ]; then
-        # OpenWrt 21.02 SDK
+        # OpenWrt 21.02 SDK - GCC版本保持8.4.0
         case "$target" in
             "ipq40xx")
                 sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
@@ -156,9 +155,6 @@ download_openwrt_sdk() {
     
     # 下载SDK
     log "开始下载OpenWrt SDK..."
-    # 修复：移除错误的字符串替换
-    log "使用修复后的URL下载: $sdk_url"
-    
     if wget --tries=3 --timeout=30 -q -O "$sdk_dir/$sdk_filename" "$sdk_url"; then
         log "✅ SDK下载成功"
     else
@@ -168,8 +164,6 @@ download_openwrt_sdk() {
             log "✅ SDK下载成功（使用curl）"
         else
             log "❌ SDK下载失败"
-            log "URL: $sdk_url"
-            log "请检查URL是否正确，或手动下载后放置到: $sdk_dir/$sdk_filename"
             return 1
         fi
     fi
@@ -839,6 +833,7 @@ create_build_dir() {
     fi
 }
 
+# 初始化构建环境 - 调整顺序：先克隆源码再保存环境变量
 initialize_build_env() {
     local device_name=$1
     local version_selection=$2
@@ -855,6 +850,25 @@ initialize_build_env() {
         SELECTED_BRANCH="openwrt-21.02"
     fi
     log "✅ 版本选择完成: $SELECTED_BRANCH"
+    
+    log "=== 克隆源码 ==="
+    log "仓库: $SELECTED_REPO_URL"
+    log "分支: $SELECTED_BRANCH"
+    
+    sudo rm -rf ./* ./.git* 2>/dev/null || true
+    
+    git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
+    log "✅ 源码克隆完成"
+    
+    # 检查克隆的文件
+    local important_source_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
+    for file in "${important_source_files[@]}"; do
+        if [ -f "$file" ]; then
+            log "✅ 源码文件存在: $file"
+        else
+            log "❌ 源码文件缺失: $file"
+        fi
+    done
     
     log "=== 设备配置 ==="
     case "$device_name" in
@@ -892,27 +906,6 @@ initialize_build_env() {
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
     
-    # 调整顺序：先克隆源码，再保存环境变量
-    log "=== 克隆源码 ==="
-    log "仓库: $SELECTED_REPO_URL"
-    log "分支: $SELECTED_BRANCH"
-    
-    sudo rm -rf ./* ./.git* 2>/dev/null || true
-    
-    git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
-    log "✅ 源码克隆完成"
-    
-    # 检查克隆的文件
-    local important_source_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
-    for file in "${important_source_files[@]}"; do
-        if [ -f "$file" ]; then
-            log "✅ 源码文件存在: $file"
-        else
-            log "❌ 源码文件缺失: $file"
-        fi
-    done
-    
-    # 现在保存环境变量
     save_env
     
     echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
@@ -921,6 +914,8 @@ initialize_build_env() {
     echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
     echo "DEVICE=$DEVICE" >> $GITHUB_ENV
     echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
+    
+    log "✅ 构建环境初始化完成"
 }
 
 # 初始化编译器环境（下载OpenWrt官方SDK）- 修复版
@@ -1053,7 +1048,7 @@ initialize_compiler_env() {
     log "  目标: $TARGET"
     log "  子目标: $SUBTARGET"
     
-    # 下载OpenWrt官方SDK - 使用修复后的URL
+    # 下载OpenWrt官方SDK
     log "🚀 开始下载OpenWrt官方SDK..."
     if download_openwrt_sdk "$TARGET" "$SUBTARGET" "$version_for_sdk"; then
         log "🎉 OpenWrt SDK下载并设置成功"
