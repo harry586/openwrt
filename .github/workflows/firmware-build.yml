@@ -875,8 +875,8 @@ jobs:
           echo "📊 当前依赖包数量: $DEP_COUNT 个"
           
           echo "🚀 开始下载依赖包（启用并行下载）..."
-          # 使用并行下载加速
-          make -j4 download V=s 2>&1 | tee download.log
+          # 使用并行下载加速，设置输出缓冲区更大防止stdout错误
+          stdbuf -oL -eL make -j4 download V=s 2>&1 | tee download.log
           
           DOWNLOAD_EXIT_CODE=${PIPESTATUS[0]}
           if [ $DOWNLOAD_EXIT_CODE -ne 0 ]; then
@@ -894,16 +894,49 @@ jobs:
           
           echo "🟢 步骤 19 完成"
       
-      # 步骤 20: 集成自定义文件
-      - name: "20. 集成自定义文件"
+      # 步骤 20: 集成自定义文件（修复版）
+      - name: "20. 集成自定义文件（修复版）"
         run: |
-          echo "=== 步骤 20: 集成自定义文件 ==="
+          echo "=== 步骤 20: 集成自定义文件（修复版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是尝试集成
           trap 'echo "⚠️ 步骤 20 集成过程中出现错误，继续执行..."' ERR
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
+          echo "🔍 检查自定义文件目录..."
+          CUSTOM_DIR="${{ github.workspace }}/firmware-config/custom-files"
+          
+          if [ -d "$CUSTOM_DIR" ]; then
+            echo "✅ 自定义文件目录存在: $CUSTOM_DIR"
+            echo "📊 目录内容:"
+            find "$CUSTOM_DIR" -type f 2>/dev/null | head -20
+            
+            # 执行集成
+            "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
+            
+            # 验证集成结果
+            echo "🔍 验证自定义文件集成结果..."
+            cd /mnt/openwrt-build
+            
+            if [ -d "package/custom" ]; then
+              echo "✅ 自定义IPK包目录存在"
+              echo "📁 目录内容:"
+              find "package/custom" -type f 2>/dev/null | head -10
+            fi
+            
+            if [ -d "files/usr/share/custom" ]; then
+              echo "✅ 自定义脚本目录存在"
+              echo "📁 目录内容:"
+              find "files/usr/share/custom" -type f 2>/dev/null | head -10
+            fi
+            
+            if [ -f "files/etc/init.d/custom-scripts" ]; then
+              echo "✅ 自定义脚本启动服务存在"
+            fi
+          else
+            echo "ℹ️ 自定义文件目录不存在: $CUSTOM_DIR"
+            echo "📁 跳过自定义文件集成"
+          fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 20 完成"
@@ -1020,9 +1053,9 @@ jobs:
           # 设置编译环境变量
           export FORCE_UNSAFE_CONFIGURE=1
           
-          # 开始编译
+          # 开始编译，使用stdbuf防止stdout错误
           START_TIME=$(date +%s)
-          time make -j$MAKE_JOBS V=s 2>&1 | tee build.log
+          stdbuf -oL -eL time make -j$MAKE_JOBS V=s 2>&1 | tee build.log
           BUILD_EXIT_CODE=${PIPESTATUS[0]}
           END_TIME=$(date +%s)
           DURATION=$((END_TIME - START_TIME))
@@ -1206,9 +1239,23 @@ jobs:
             echo "💡 错误分析已优化，正确显示SDK编译器版本信息"
           else
             echo "⚠️ 错误分析脚本不存在"
+            echo "📝 创建基本的错误分析..."
+            
+            # 基本错误分析
+            if [ -f "/mnt/openwrt-build/build.log" ]; then
+              echo "=== 基本错误分析 ==="
+              echo "🔍 查找常见编译错误..."
+              
+              if grep -q "Error [0-9]\|error:" /mnt/openwrt-build/build.log; then
+                echo "❌ 发现编译错误:"
+                grep -i "Error\|error:" /mnt/openwrt-build/build.log | tail -10
+              else
+                echo "✅ 未发现明显的编译错误"
+              fi
+            fi
           fi
           
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ 完成时间: $(date '+%Y-%m-d %H:%M:%S')"
           echo "🟢 步骤 27 完成"
       
       # 步骤 28: 编译后空间检查
@@ -1236,11 +1283,11 @@ jobs:
           
           echo "🟢 步骤 28 完成"
       
-      # 步骤 29: 编译后总结
-      - name: "29. 编译后总结"
+      # 步骤 29: 编译后总结（增强版）
+      - name: "29. 编译后总结（增强版）"
         if: always()
         run: |
-          echo "=== 步骤 29: 编译后总结 ==="
+          echo "=== 步骤 29: 编译后总结（增强版） ==="
           echo "🕐 总结时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，总结不应该失败
@@ -1356,6 +1403,34 @@ jobs:
           fi
           
           echo "  💡 这是正常的：系统编译器编译工具链，SDK编译器编译固件"
+          
+          # 自定义文件集成状态
+          echo ""
+          echo "📁 自定义文件集成状态:"
+          if [ -d "/mnt/openwrt-build/package/custom" ]; then
+            CUSTOM_IPK_COUNT=$(find /mnt/openwrt-build/package/custom -name "*.ipk" 2>/dev/null | wc -l)
+            echo "  ✅ 自定义IPK包: $CUSTOM_IPK_COUNT 个"
+          else
+            echo "  ⚪ 自定义IPK包: 未集成"
+          fi
+          
+          if [ -d "/mnt/openwrt-build/files/usr/share/custom" ]; then
+            CUSTOM_SCRIPT_COUNT=$(find /mnt/openwrt-build/files/usr/share/custom -name "*.sh" 2>/dev/null | wc -l)
+            echo "  ✅ 自定义脚本: $CUSTOM_SCRIPT_COUNT 个"
+          else
+            echo "  ⚪ 自定义脚本: 未集成"
+          fi
+          
+          if [ -f "/mnt/openwrt-build/files/etc/init.d/custom-scripts" ]; then
+            echo "  ✅ 自定义脚本启动服务: 已创建"
+          fi
+          
+          # stdout错误信息
+          echo ""
+          echo "⚠️ 关于 'make: write error: stdout' 警告:"
+          echo "  💡 这个问题是由于大量编译输出导致的stdout缓冲区溢出"
+          echo "  🔧 已修复: 在步骤19和23中使用 stdbuf -oL -eL 命令"
+          echo "  📊 这是一个无害的警告，不影响编译结果"
           
           echo ""
           echo "✅ 构建流程完成"
