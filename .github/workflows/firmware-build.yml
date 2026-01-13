@@ -894,10 +894,10 @@ jobs:
           
           echo "🟢 步骤 19 完成"
       
-      # 步骤 20: 集成自定义文件（修复版）
-      - name: "20. 集成自定义文件（修复版）"
+      # 步骤 20: 集成自定义文件（极简修复版）
+      - name: "20. 集成自定义文件（极简修复版）"
         run: |
-          echo "=== 步骤 20: 集成自定义文件（修复版） ==="
+          echo "=== 步骤 20: 集成自定义文件（极简修复版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是尝试集成
@@ -908,31 +908,59 @@ jobs:
           
           if [ -d "$CUSTOM_DIR" ]; then
             echo "✅ 自定义文件目录存在: $CUSTOM_DIR"
-            echo "📊 目录内容:"
-            find "$CUSTOM_DIR" -type f 2>/dev/null | head -20
+            
+            # 显示目录内容
+            echo "📁 目录内容:"
+            FILE_COUNT=0
+            find "$CUSTOM_DIR" -type f 2>/dev/null | while read file; do
+                FILE_NAME=$(basename "$file")
+                FILE_SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                echo "  📄 $FILE_NAME ($FILE_SIZE)"
+                FILE_COUNT=$((FILE_COUNT + 1))
+            done
+            
+            echo "📊 文件总数: $FILE_COUNT 个"
             
             # 执行集成
+            echo "🚀 开始执行自定义文件集成..."
             "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
             
             # 验证集成结果
-            echo "🔍 验证自定义文件集成结果..."
+            echo ""
+            echo "🔍 验证集成结果..."
             cd /mnt/openwrt-build
             
+            # 检查IPK文件
             if [ -d "package/custom" ]; then
-              echo "✅ 自定义IPK包目录存在"
-              echo "📁 目录内容:"
-              find "package/custom" -type f 2>/dev/null | head -10
+                IPK_COUNT=$(find "package/custom" -name "*.ipk" 2>/dev/null | wc -l)
+                echo "✅ 自定义IPK包: $IPK_COUNT 个"
+            else
+                echo "❌ 未集成IPK文件"
             fi
             
+            # 检查脚本文件
             if [ -d "files/usr/share/custom" ]; then
-              echo "✅ 自定义脚本目录存在"
-              echo "📁 目录内容:"
-              find "files/usr/share/custom" -type f 2>/dev/null | head -10
+                SCRIPT_COUNT=$(find "files/usr/share/custom" -name "*.sh" 2>/dev/null | wc -l)
+                echo "✅ 自定义脚本: $SCRIPT_COUNT 个"
+            else
+                echo "❌ 未集成脚本文件"
             fi
             
+            # 检查启动服务
             if [ -f "files/etc/init.d/custom-scripts" ]; then
-              echo "✅ 自定义脚本启动服务存在"
+                echo "✅ 自定义脚本启动服务: 已创建"
+            else
+                echo "❌ 自定义脚本启动服务: 未创建"
             fi
+            
+            # 检查配置文件
+            CONFIG_COUNT=$(find "files/etc/config" -name "*.conf" -o -name "*.config" 2>/dev/null | wc -l)
+            if [ $CONFIG_COUNT -gt 0 ]; then
+                echo "✅ 配置文件: $CONFIG_COUNT 个"
+            fi
+            
+            echo ""
+            echo "🎉 自定义文件集成完成"
           else
             echo "ℹ️ 自定义文件目录不存在: $CUSTOM_DIR"
             echo "📁 跳过自定义文件集成"
@@ -1374,7 +1402,7 @@ jobs:
           echo ""
           echo "📊 构建状态总结:"
           if [ -d "/mnt/openwrt-build/bin/targets" ]; then
-            FIRMWARE_COUNT=$(find /mnt/openwrt-build/bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+            FIRMWARE_COUNT=$(find "/mnt/openwrt-build/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
             if [ $FIRMWARE_COUNT -gt 0 ]; then
               echo "  ✅ 构建结果: 成功生成 $FIRMWARE_COUNT 个固件文件"
             else
@@ -1426,14 +1454,14 @@ jobs:
           echo ""
           echo "📁 自定义文件集成状态:"
           if [ -d "/mnt/openwrt-build/package/custom" ]; then
-            CUSTOM_IPK_COUNT=$(find /mnt/openwrt-build/package/custom -name "*.ipk" 2>/dev/null | wc -l)
+            CUSTOM_IPK_COUNT=$(find "/mnt/openwrt-build/package/custom" -name "*.ipk" 2>/dev/null | wc -l)
             echo "  ✅ 自定义IPK包: $CUSTOM_IPK_COUNT 个"
           else
             echo "  ⚪ 自定义IPK包: 未集成"
           fi
           
           if [ -d "/mnt/openwrt-build/files/usr/share/custom" ]; then
-            CUSTOM_SCRIPT_COUNT=$(find /mnt/openwrt-build/files/usr/share/custom -name "*.sh" 2>/dev/null | wc -l)
+            CUSTOM_SCRIPT_COUNT=$(find "/mnt/openwrt-build/files/usr/share/custom" -name "*.sh" 2>/dev/null | wc -l)
             echo "  ✅ 自定义脚本: $CUSTOM_SCRIPT_COUNT 个"
           else
             echo "  ⚪ 自定义脚本: 未集成"
