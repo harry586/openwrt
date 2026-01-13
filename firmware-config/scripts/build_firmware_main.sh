@@ -1499,6 +1499,10 @@ generate_config() {
             echo "$plugin" >> .config
         done
         
+        # 为所有版本添加上网时间控制插件
+        echo "CONFIG_PACKAGE_luci-app-accesscontrol=y" >> .config
+        log "✅ 已添加上网时间控制插件"
+        
         if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
             echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y" >> .config
@@ -1966,12 +1970,12 @@ download_dependencies() {
     log "✅ 依赖包下载完成"
 }
 
-# 集成自定义文件函数（修复版）- 确保21.02和23.05都能正确集成
+# 集成自定义文件函数（极简修复版）- 所有文件适用于所有版本
 integrate_custom_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 集成自定义文件（修复版） ==="
+    log "=== 集成自定义文件（极简修复版） ==="
     
     local custom_dir="$REPO_ROOT/firmware-config/custom-files"
     
@@ -1982,33 +1986,46 @@ integrate_custom_files() {
     fi
     
     log "自定义文件目录: $custom_dir"
-    log "📊 目录内容:"
-    find "$custom_dir" -type f 2>/dev/null | head -20
+    log "OpenWrt版本: $SELECTED_BRANCH"
     
     local ipk_count=0
     local script_count=0
     local config_count=0
+    local other_count=0
     
-    # 1. 集成IPK文件到package目录 - 确保21.02和23.05都能使用
+    # 1. 显示目录内容
     echo ""
-    log "🔧 步骤1: 集成IPK文件到package目录"
-    if find "$custom_dir" -name "*.ipk" -type f 2>/dev/null | grep -q .; then
+    log "📁 目录内容:"
+    find "$custom_dir" -type f 2>/dev/null | while read file; do
+        local file_name=$(basename "$file")
+        local file_size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+        log "  📄 $file_name ($file_size)"
+    done
+    
+    # 2. 集成IPK文件 - 所有IPK文件都适用
+    echo ""
+    log "🔧 步骤1: 集成IPK文件"
+    
+    # 查找所有IPK文件
+    local ipk_files=$(find "$custom_dir" -name "*.ipk" -type f 2>/dev/null)
+    
+    if [ -n "$ipk_files" ]; then
         # 创建自定义包目录
         local custom_package_dir="package/custom"
         mkdir -p "$custom_package_dir"
         log "✅ 创建自定义包目录: $custom_package_dir"
         
         # 复制所有IPK文件
-        while IFS= read -r -d '' ipk; do
+        while IFS= read -r ipk; do
             local ipk_name=$(basename "$ipk")
             log "📦 复制IPK文件: $ipk_name"
             cp "$ipk" "$custom_package_dir/"
             ipk_count=$((ipk_count + 1))
-        done < <(find "$custom_dir" -name "*.ipk" -type f -print0 2>/dev/null)
+        done <<< "$ipk_files"
         
         log "✅ 复制IPK文件完成: $ipk_count 个"
         
-        # 创建自定义包的Makefile - 通用版本，适用于21.02和23.05
+        # 创建简单的Makefile
         log "📝 创建自定义包Makefile..."
         cat > "$custom_package_dir/Makefile" << 'EOF'
 include $(TOPDIR)/rules.mk
@@ -2056,27 +2073,31 @@ EOF
         log "ℹ️ 未找到IPK文件，跳过IPK集成"
     fi
     
-    # 2. 集成脚本文件到files目录 - 确保21.02和23.05都能使用
+    # 3. 集成脚本文件 - 所有脚本文件都适用
     echo ""
-    log "🔧 步骤2: 集成脚本文件到files目录"
-    if find "$custom_dir" -name "*.sh" -type f 2>/dev/null | grep -q .; then
+    log "🔧 步骤2: 集成脚本文件"
+    
+    # 查找所有脚本文件
+    local script_files=$(find "$custom_dir" -name "*.sh" -type f 2>/dev/null)
+    
+    if [ -n "$script_files" ]; then
         # 创建自定义脚本目录
         local custom_script_dir="files/usr/share/custom"
         mkdir -p "$custom_script_dir"
         log "✅ 创建自定义脚本目录: $custom_script_dir"
         
         # 复制所有脚本文件
-        while IFS= read -r -d '' script; do
+        while IFS= read -r script; do
             local script_name=$(basename "$script")
             log "📜 复制脚本文件: $script_name"
             cp "$script" "$custom_script_dir/"
             chmod +x "$custom_script_dir/$script_name"
             script_count=$((script_count + 1))
-        done < <(find "$custom_dir" -name "*.sh" -type f -print0 2>/dev/null)
+        done <<< "$script_files"
         
         log "✅ 复制脚本文件完成: $script_count 个"
         
-        # 创建自定义脚本启动服务 - 通用版本
+        # 创建简单的启动服务
         log "🚀 创建自定义脚本启动服务..."
         local initd_dir="files/etc/init.d"
         mkdir -p "$initd_dir"
@@ -2108,91 +2129,66 @@ EOF
         log "ℹ️ 未找到脚本文件，跳过脚本集成"
     fi
     
-    # 3. 集成配置文件到files目录 - 确保21.02和23.05都能使用
+    # 4. 集成其他文件到files目录
     echo ""
-    log "🔧 步骤3: 集成配置文件到files目录"
-    local config_extensions=("*.conf" "*.config" "*.json" "*.txt" "*.yaml" "*.yml")
+    log "🔧 步骤3: 集成其他文件"
     
-    for ext in "${config_extensions[@]}"; do
-        if find "$custom_dir" -name "$ext" -type f 2>/dev/null | grep -q .; then
-            while IFS= read -r -d '' file; do
-                local file_name=$(basename "$file")
-                local relative_path=$(echo "$file" | sed "s|^$custom_dir/||")
-                local target_dir="files/$(dirname "$relative_path")"
-                
+    # 查找所有文件（排除IPK和脚本文件）
+    local other_files=$(find "$custom_dir" -type f \( ! -name "*.ipk" ! -name "*.sh" \) 2>/dev/null)
+    
+    if [ -n "$other_files" ]; then
+        # 直接复制到files目录
+        while IFS= read -r file; do
+            local file_name=$(basename "$file")
+            
+            # 如果是配置文件，复制到files/etc/config/
+            if [[ "$file_name" == *.conf ]] || [[ "$file_name" == *.config ]]; then
+                local target_dir="files/etc/config"
                 mkdir -p "$target_dir"
                 cp "$file" "$target_dir/"
-                log "📄 复制配置文件: $relative_path -> $target_dir/"
+                log "📄 复制配置文件: $file_name -> $target_dir/"
                 config_count=$((config_count + 1))
-            done < <(find "$custom_dir" -name "$ext" -type f -print0 2>/dev/null)
-        fi
-    done
+            else
+                # 其他文件复制到files根目录
+                cp "$file" "files/"
+                log "📁 复制其他文件: $file_name -> files/"
+                other_count=$((other_count + 1))
+            fi
+        done <<< "$other_files"
+        
+        log "✅ 复制其他文件完成: $((config_count + other_count)) 个"
+    else
+        log "ℹ️ 未找到其他文件"
+    fi
     
-    # 4. 集成其他文件（如rootfs覆盖文件）
+    # 5. 确保自定义文件被包含在固件中
     echo ""
-    log "🔧 步骤4: 集成rootfs覆盖文件"
-    if [ -d "$custom_dir/root" ]; then
-        log "📁 发现root目录，复制到files目录..."
-        cp -r "$custom_dir/root/." "files/" 2>/dev/null || true
-        log "✅ root目录复制完成"
-    fi
+    log "🔧 步骤4: 确保自定义文件被包含在固件中"
     
-    # 5. 验证集成结果
-    echo ""
-    log "🔍 验证自定义文件集成结果:"
-    
-    if [ $ipk_count -gt 0 ]; then
-        log "✅ IPK文件: $ipk_count 个"
-        if [ -d "package/custom" ]; then
-            log "📁 目录内容:"
-            find "package/custom" -type f -name "*.ipk" 2>/dev/null | while read ipk; do
-                log "   📦 $(basename "$ipk")"
-            done
-        fi
-    fi
-    
-    if [ $script_count -gt 0 ]; then
-        log "✅ 脚本文件: $script_count 个"
-        if [ -d "files/usr/share/custom" ]; then
-            log "📁 目录内容:"
-            find "files/usr/share/custom" -type f -name "*.sh" 2>/dev/null | while read script; do
-                log "   📜 $(basename "$script")"
-            done
-        fi
-    fi
-    
-    if [ $config_count -gt 0 ]; then
-        log "✅ 配置文件: $config_count 个"
-    fi
-    
-    if [ -f "files/etc/init.d/custom-scripts" ]; then
-        log "✅ 自定义脚本启动服务: 已创建"
-    fi
-    
-    # 6. 确保自定义文件被包含在固件中
-    log "🔧 步骤5: 确保自定义文件被包含在固件中"
-    if [ -d "package/custom" ]; then
-        # 运行 feeds update 和 install 以确保自定义包被识别
+    if [ -d "package/custom" ] && [ $ipk_count -gt 0 ]; then
         log "🔄 更新feeds以包含自定义包..."
         ./scripts/feeds update -a 2>/dev/null || true
         ./scripts/feeds install custom-packages 2>/dev/null || true
+        log "✅ 自定义包已添加到构建系统"
     fi
     
-    # 7. 显示最终统计
+    # 6. 显示最终统计
     echo ""
     log "📊 自定义文件集成统计:"
     log "  📦 IPK文件: $ipk_count 个"
     log "  📜 脚本文件: $script_count 个"
     log "  📄 配置文件: $config_count 个"
-    log "  📁 Root文件: $(if [ -d "$custom_dir/root" ]; then echo "有"; else echo "无"; fi)"
+    log "  📁 其他文件: $other_count 个"
+    log "  🚀 启动服务: $(if [ -f "files/etc/init.d/custom-scripts" ]; then echo "✅ 已创建"; else echo "❌ 未创建"; fi)"
     
-    if [ $ipk_count -eq 0 ] && [ $script_count -eq 0 ] && [ $config_count -eq 0 ] && [ ! -d "$custom_dir/root" ]; then
-        log "⚠️ 警告: 自定义文件目录存在但为空或未找到支持的文件"
-        log "💡 支持的文件类型:"
-        log "  - IPK文件: *.ipk (复制到 package/custom/)"
-        log "  - 脚本文件: *.sh (复制到 files/usr/share/custom/)"
-        log "  - 配置文件: *.conf, *.config, *.json, *.txt, *.yaml, *.yml"
-        log "  - Root文件: root/ 目录 (复制到 files/)"
+    if [ $ipk_count -eq 0 ] && [ $script_count -eq 0 ] && [ $config_count -eq 0 ] && [ $other_count -eq 0 ]; then
+        log "⚠️ 警告: 自定义文件目录为空"
+        log "💡 支持的文件夹结构:"
+        log "  firmware-config/custom-files/"
+        log "  ├── *.ipk          # IPK包文件"
+        log "  ├── *.sh           # 脚本文件"
+        log "  ├── *.conf         # 配置文件"
+        log "  └── 其他文件       # 其他任何文件"
     else
         log "🎉 自定义文件集成完成"
         log "📌 自定义文件将在固件中生效"
