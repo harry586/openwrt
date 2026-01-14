@@ -505,7 +505,7 @@ jobs:
             echo "💡 将使用OpenWrt自动构建的编译器作为后备"
           fi
           
-          echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m%d %H:%M:%S')"
           echo "🟢 步骤 7 完成"
       
       # 步骤 8: 验证SDK下载结果
@@ -894,10 +894,10 @@ jobs:
           
           echo "🟢 步骤 19 完成"
       
-      # 步骤 20: 集成自定义文件（极简修复版）
-      - name: "20. 集成自定义文件（极简修复版）"
+      # 步骤 20: 集成自定义文件（极简修复版）- 改为第一次开机运行
+      - name: "20. 集成自定义文件（极简修复版）- 第一次开机运行"
         run: |
-          echo "=== 步骤 20: 集成自定义文件（极简修复版） ==="
+          echo "=== 步骤 20: 集成自定义文件（极简修复版）- 第一次开机运行 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是尝试集成
@@ -930,37 +930,34 @@ jobs:
             echo "🔍 验证集成结果..."
             cd /mnt/openwrt-build
             
-            # 检查IPK文件
-            if [ -d "package/custom" ]; then
-                IPK_COUNT=$(find "package/custom" -name "*.ipk" 2>/dev/null | wc -l)
-                echo "✅ 自定义IPK包: $IPK_COUNT 个"
+            # 检查自定义文件目录
+            if [ -d "files/etc/custom-files" ]; then
+                echo "✅ 自定义文件已复制到: files/etc/custom-files"
+                
+                # 统计IPK和脚本文件
+                IPK_COUNT=$(find "files/etc/custom-files" -name "*.ipk" 2>/dev/null | wc -l)
+                SCRIPT_COUNT=$(find "files/etc/custom-files" -name "*.sh" 2>/dev/null | wc -l)
+                OTHER_COUNT=$(find "files/etc/custom-files" -type f 2>/dev/null | wc -l)
+                OTHER_COUNT=$((OTHER_COUNT - IPK_COUNT - SCRIPT_COUNT))
+                
+                echo "📊 文件统计:"
+                echo "  📦 IPK文件: $IPK_COUNT 个"
+                echo "  📜 脚本文件: $SCRIPT_COUNT 个"
+                echo "  📁 其他文件: $OTHER_COUNT 个"
+                
+                # 检查启动脚本
+                if [ -f "files/etc/uci-defaults/99-custom-files" ]; then
+                    echo "✅ 第一次开机启动脚本: files/etc/uci-defaults/99-custom-files"
+                    echo "📝 脚本内容预览:"
+                    head -20 "files/etc/uci-defaults/99-custom-files"
+                fi
             else
-                echo "❌ 未集成IPK文件"
-            fi
-            
-            # 检查脚本文件
-            if [ -d "files/usr/share/custom" ]; then
-                SCRIPT_COUNT=$(find "files/usr/share/custom" -name "*.sh" 2>/dev/null | wc -l)
-                echo "✅ 自定义脚本: $SCRIPT_COUNT 个"
-            else
-                echo "❌ 未集成脚本文件"
-            fi
-            
-            # 检查启动服务
-            if [ -f "files/etc/init.d/custom-scripts" ]; then
-                echo "✅ 自定义脚本启动服务: 已创建"
-            else
-                echo "❌ 自定义脚本启动服务: 未创建"
-            fi
-            
-            # 检查配置文件
-            CONFIG_COUNT=$(find "files/etc/config" -name "*.conf" -o -name "*.config" 2>/dev/null | wc -l)
-            if [ $CONFIG_COUNT -gt 0 ]; then
-                echo "✅ 配置文件: $CONFIG_COUNT 个"
+                echo "❌ 未找到自定义文件目录"
             fi
             
             echo ""
             echo "🎉 自定义文件集成完成"
+            echo "💡 自定义文件将在第一次开机时自动安装和运行"
           else
             echo "ℹ️ 自定义文件目录不存在: $CUSTOM_DIR"
             echo "📁 跳过自定义文件集成"
@@ -1319,7 +1316,7 @@ jobs:
           
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-          echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+          echo "/mnt 可用空间: ${available_gb}G"
           
           if [ $AVAILABLE_GB -lt 5 ]; then
             echo "⚠️ 警告: 磁盘空间较低，建议清理"
@@ -1453,22 +1450,20 @@ jobs:
           # 自定义文件集成状态
           echo ""
           echo "📁 自定义文件集成状态:"
-          if [ -d "/mnt/openwrt-build/package/custom" ]; then
-            CUSTOM_IPK_COUNT=$(find "/mnt/openwrt-build/package/custom" -name "*.ipk" 2>/dev/null | wc -l)
+          if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
+            CUSTOM_IPK_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -name "*.ipk" 2>/dev/null | wc -l)
+            CUSTOM_SCRIPT_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -name "*.sh" 2>/dev/null | wc -l)
+            
             echo "  ✅ 自定义IPK包: $CUSTOM_IPK_COUNT 个"
-          else
-            echo "  ⚪ 自定义IPK包: 未集成"
-          fi
-          
-          if [ -d "/mnt/openwrt-build/files/usr/share/custom" ]; then
-            CUSTOM_SCRIPT_COUNT=$(find "/mnt/openwrt-build/files/usr/share/custom" -name "*.sh" 2>/dev/null | wc -l)
             echo "  ✅ 自定义脚本: $CUSTOM_SCRIPT_COUNT 个"
+            echo "  📌 位置: /etc/custom-files/"
+            
+            if [ -f "/mnt/openwrt-build/files/etc/uci-defaults/99-custom-files" ]; then
+              echo "  ✅ 第一次开机安装脚本: 已创建"
+              echo "  💡 自定义文件将在第一次开机时自动安装"
+            fi
           else
-            echo "  ⚪ 自定义脚本: 未集成"
-          fi
-          
-          if [ -f "/mnt/openwrt-build/files/etc/init.d/custom-scripts" ]; then
-            echo "  ✅ 自定义脚本启动服务: 已创建"
+            echo "  ⚪ 自定义文件: 未集成"
           fi
           
           # stdout错误信息
