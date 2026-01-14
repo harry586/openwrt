@@ -1970,12 +1970,12 @@ download_dependencies() {
     log "✅ 依赖包下载完成"
 }
 
-# 集成自定义文件函数（极简修复版）- 所有文件适用于所有版本
+# 集成自定义文件函数（极简修复版）- 改为第一次开机运行
 integrate_custom_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 集成自定义文件（极简修复版） ==="
+    log "=== 集成自定义文件（极简修复版）- 第一次开机运行 ==="
     
     local custom_dir="$REPO_ROOT/firmware-config/custom-files"
     
@@ -2002,186 +2002,171 @@ integrate_custom_files() {
         log "  📄 $file_name ($file_size)"
     done
     
-    # 2. 集成IPK文件 - 所有IPK文件都适用
+    # 2. 创建自定义文件目录
     echo ""
-    log "🔧 步骤1: 集成IPK文件"
+    log "🔧 步骤1: 创建自定义文件目录"
     
-    # 查找所有IPK文件
-    local ipk_files=$(find "$custom_dir" -name "*.ipk" -type f 2>/dev/null)
+    local custom_files_dir="files/etc/custom-files"
+    mkdir -p "$custom_files_dir"
+    log "✅ 创建自定义文件目录: $custom_files_dir"
     
-    if [ -n "$ipk_files" ]; then
-        # 创建自定义包目录
-        local custom_package_dir="package/custom"
-        mkdir -p "$custom_package_dir"
-        log "✅ 创建自定义包目录: $custom_package_dir"
+    # 3. 复制所有文件到自定义目录
+    echo ""
+    log "🔧 步骤2: 复制所有自定义文件"
+    
+    # 复制所有文件
+    cp -r "$custom_dir"/* "$custom_files_dir/" 2>/dev/null || true
+    
+    # 统计文件数量
+    if [ -d "$custom_files_dir" ]; then
+        ipk_count=$(find "$custom_files_dir" -name "*.ipk" 2>/dev/null | wc -l)
+        script_count=$(find "$custom_files_dir" -name "*.sh" 2>/dev/null | wc -l)
+        other_count=$(find "$custom_files_dir" -type f 2>/dev/null | wc -l)
+        other_count=$((other_count - ipk_count - script_count))
         
-        # 复制所有IPK文件
-        while IFS= read -r ipk; do
-            local ipk_name=$(basename "$ipk")
-            log "📦 复制IPK文件: $ipk_name"
-            cp "$ipk" "$custom_package_dir/"
-            ipk_count=$((ipk_count + 1))
-        done <<< "$ipk_files"
-        
-        log "✅ 复制IPK文件完成: $ipk_count 个"
-        
-        # 创建简单的Makefile
-        log "📝 创建自定义包Makefile..."
-        cat > "$custom_package_dir/Makefile" << 'EOF'
-include $(TOPDIR)/rules.mk
-
-PKG_NAME:=custom-packages
-PKG_VERSION:=1.0
-PKG_RELEASE:=1
-
-PKG_MAINTAINER:=Custom Build
-PKG_LICENSE:=GPL-2.0
-
-include $(INCLUDE_DIR)/package.mk
-
-define Package/custom-packages
-  SECTION:=custom
-  CATEGORY:=Custom
-  TITLE:=Custom Packages Collection
-  DEPENDS:=
-endef
-
-define Package/custom-packages/description
-  This package contains custom IPK files.
-endef
-
-define Build/Compile
-  true
-endef
-
-define Package/custom-packages/install
-  true
-endef
-
-$(eval $(call BuildPackage,custom-packages))
-EOF
-        log "✅ 自定义包Makefile创建完成"
-        
-        # 在配置中添加自定义包
-        log "⚙️ 在配置中启用自定义包..."
-        if [ -f ".config" ]; then
-            echo "# 自定义包" >> .config
-            echo "CONFIG_PACKAGE_custom-packages=y" >> .config
-            log "✅ 已添加自定义包到配置"
-        fi
-    else
-        log "ℹ️ 未找到IPK文件，跳过IPK集成"
+        log "📊 文件统计:"
+        log "  📦 IPK文件: $ipk_count 个"
+        log "  📜 脚本文件: $script_count 个"
+        log "  📁 其他文件: $other_count 个"
+        log "  📌 位置: $custom_files_dir"
     fi
     
-    # 3. 集成脚本文件 - 所有脚本文件都适用
+    # 4. 创建第一次开机运行的安装脚本
     echo ""
-    log "🔧 步骤2: 集成脚本文件"
+    log "🔧 步骤3: 创建第一次开机安装脚本"
     
-    # 查找所有脚本文件
-    local script_files=$(find "$custom_dir" -name "*.sh" -type f 2>/dev/null)
+    local first_boot_dir="files/etc/uci-defaults"
+    mkdir -p "$first_boot_dir"
     
-    if [ -n "$script_files" ]; then
-        # 创建自定义脚本目录
-        local custom_script_dir="files/usr/share/custom"
-        mkdir -p "$custom_script_dir"
-        log "✅ 创建自定义脚本目录: $custom_script_dir"
-        
-        # 复制所有脚本文件
-        while IFS= read -r script; do
-            local script_name=$(basename "$script")
-            log "📜 复制脚本文件: $script_name"
-            cp "$script" "$custom_script_dir/"
-            chmod +x "$custom_script_dir/$script_name"
-            script_count=$((script_count + 1))
-        done <<< "$script_files"
-        
-        log "✅ 复制脚本文件完成: $script_count 个"
-        
-        # 创建简单的启动服务
-        log "🚀 创建自定义脚本启动服务..."
-        local initd_dir="files/etc/init.d"
-        mkdir -p "$initd_dir"
-        
-        cat > "$initd_dir/custom-scripts" << 'EOF'
-#!/bin/sh /etc/rc.common
+    # 创建第一次开机运行的脚本
+    local first_boot_script="$first_boot_dir/99-custom-files"
+    cat > "$first_boot_script" << 'EOF'
+#!/bin/sh
 
-START=99
-STOP=10
+LOG_FILE="/tmp/custom-files-install.log"
+CUSTOM_DIR="/etc/custom-files"
 
-start() {
-    echo "Starting custom scripts..."
-    for script in /usr/share/custom/*.sh; do
-        if [ -x "$script" ]; then
-            echo "Running: $(basename "$script")"
-            sh "$script" &
+echo "=== 第一次开机：自定义文件安装脚本 ===" > $LOG_FILE
+echo "开始时间: $(date)" >> $LOG_FILE
+echo "" >> $LOG_FILE
+
+# 检查自定义文件目录是否存在
+if [ -d "$CUSTOM_DIR" ]; then
+    echo "✅ 找到自定义文件目录: $CUSTOM_DIR" >> $LOG_FILE
+    
+    # 1. 安装IPK文件
+    IPK_COUNT=0
+    if [ -f "$CUSTOM_DIR"/*.ipk 2>/dev/null ]; then
+        echo "📦 开始安装IPK包..." >> $LOG_FILE
+        for ipk in $CUSTOM_DIR/*.ipk; do
+            if [ -f "$ipk" ]; then
+                IPK_NAME=$(basename "$ipk")
+                echo "  正在安装: $IPK_NAME" >> $LOG_FILE
+                opkg install "$ipk" >> $LOG_FILE 2>&1
+                if [ $? -eq 0 ]; then
+                    echo "  ✅ $IPK_NAME 安装成功" >> $LOG_FILE
+                    IPK_COUNT=$((IPK_COUNT + 1))
+                else
+                    echo "  ❌ $IPK_NAME 安装失败" >> $LOG_FILE
+                fi
+            fi
+        done
+        echo "📊 IPK包安装完成: $IPK_COUNT 个" >> $LOG_FILE
+    else
+        echo "ℹ️ 未找到IPK文件" >> $LOG_FILE
+    fi
+    
+    # 2. 运行脚本文件
+    SCRIPT_COUNT=0
+    if [ -f "$CUSTOM_DIR"/*.sh 2>/dev/null ]; then
+        echo "📜 开始运行脚本文件..." >> $LOG_FILE
+        for script in $CUSTOM_DIR/*.sh; do
+            if [ -f "$script" ] && [ -x "$script" ]; then
+                SCRIPT_NAME=$(basename "$script")
+                echo "  正在运行: $SCRIPT_NAME" >> $LOG_FILE
+                sh "$script" >> $LOG_FILE 2>&1
+                if [ $? -eq 0 ]; then
+                    echo "  ✅ $SCRIPT_NAME 运行成功" >> $LOG_FILE
+                    SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
+                else
+                    echo "  ⚠️ $SCRIPT_NAME 运行返回非零状态" >> $LOG_FILE
+                fi
+            fi
+        done
+        echo "📊 脚本运行完成: $SCRIPT_COUNT 个" >> $LOG_FILE
+    else
+        echo "ℹ️ 未找到脚本文件" >> $LOG_FILE
+    fi
+    
+    # 3. 复制其他文件到特定位置
+    OTHER_COUNT=0
+    echo "📁 处理其他文件..." >> $LOG_FILE
+    
+    # 复制配置文件到/etc/config/
+    for config in $CUSTOM_DIR/*.conf $CUSTOM_DIR/*.config; do
+        if [ -f "$config" ]; then
+            CONFIG_NAME=$(basename "$config")
+            echo "  复制配置文件: $CONFIG_NAME -> /etc/config/" >> $LOG_FILE
+            cp "$config" /etc/config/ 2>/dev/null || true
+            OTHER_COUNT=$((OTHER_COUNT + 1))
         fi
     done
-}
+    
+    # 复制其他文件到根目录
+    for other_file in $(find "$CUSTOM_DIR" -type f ! -name "*.ipk" ! -name "*.sh" ! -name "*.conf" ! -name "*.config" 2>/dev/null); do
+        if [ -f "$other_file" ]; then
+            FILE_NAME=$(basename "$other_file")
+            echo "  复制文件: $FILE_NAME -> /tmp/" >> $LOG_FILE
+            cp "$other_file" /tmp/ 2>/dev/null || true
+            OTHER_COUNT=$((OTHER_COUNT + 1))
+        fi
+    done
+    
+    echo "📊 其他文件处理完成: $OTHER_COUNT 个" >> $LOG_FILE
+    
+    # 4. 安装完成，清理标记
+    echo "" >> $LOG_FILE
+    echo "✅ 自定义文件安装完成" >> $LOG_FILE
+    echo "总计安装:" >> $LOG_FILE
+    echo "  📦 IPK包: $IPK_COUNT 个" >> $LOG_FILE
+    echo "  📜 脚本: $SCRIPT_COUNT 个" >> $LOG_FILE
+    echo "  📁 其他文件: $OTHER_COUNT 个" >> $LOG_FILE
+    echo "结束时间: $(date)" >> $LOG_FILE
+    
+    # 创建完成标记文件
+    touch /etc/custom-files-installed
+    echo "✅ 已创建安装完成标记: /etc/custom-files-installed" >> $LOG_FILE
+    
+else
+    echo "❌ 自定义文件目录不存在: $CUSTOM_DIR" >> $LOG_FILE
+fi
 
-stop() {
-    echo "Stopping custom scripts..."
-    pkill -f "sh /usr/share/custom/"
-}
+echo "" >> $LOG_FILE
+echo "=== 自定义文件安装脚本执行完成 ===" >> $LOG_FILE
+
+# 日志文件位置提示
+echo "📋 安装日志保存在: $LOG_FILE"
+
+exit 0
 EOF
-        chmod +x "$initd_dir/custom-scripts"
-        log "✅ 自定义脚本启动服务创建完成"
-    else
-        log "ℹ️ 未找到脚本文件，跳过脚本集成"
-    fi
     
-    # 4. 集成其他文件到files目录
-    echo ""
-    log "🔧 步骤3: 集成其他文件"
+    # 设置脚本权限
+    chmod +x "$first_boot_script"
+    log "✅ 创建第一次开机安装脚本: $first_boot_script"
+    log "📝 脚本内容预览:"
+    head -30 "$first_boot_script"
     
-    # 查找所有文件（排除IPK和脚本文件）
-    local other_files=$(find "$custom_dir" -type f \( ! -name "*.ipk" ! -name "*.sh" \) 2>/dev/null)
-    
-    if [ -n "$other_files" ]; then
-        # 直接复制到files目录
-        while IFS= read -r file; do
-            local file_name=$(basename "$file")
-            
-            # 如果是配置文件，复制到files/etc/config/
-            if [[ "$file_name" == *.conf ]] || [[ "$file_name" == *.config ]]; then
-                local target_dir="files/etc/config"
-                mkdir -p "$target_dir"
-                cp "$file" "$target_dir/"
-                log "📄 复制配置文件: $file_name -> $target_dir/"
-                config_count=$((config_count + 1))
-            else
-                # 其他文件复制到files根目录
-                cp "$file" "files/"
-                log "📁 复制其他文件: $file_name -> files/"
-                other_count=$((other_count + 1))
-            fi
-        done <<< "$other_files"
-        
-        log "✅ 复制其他文件完成: $((config_count + other_count)) 个"
-    else
-        log "ℹ️ 未找到其他文件"
-    fi
-    
-    # 5. 确保自定义文件被包含在固件中
-    echo ""
-    log "🔧 步骤4: 确保自定义文件被包含在固件中"
-    
-    if [ -d "package/custom" ] && [ $ipk_count -gt 0 ]; then
-        log "🔄 更新feeds以包含自定义包..."
-        ./scripts/feeds update -a 2>/dev/null || true
-        ./scripts/feeds install custom-packages 2>/dev/null || true
-        log "✅ 自定义包已添加到构建系统"
-    fi
-    
-    # 6. 显示最终统计
+    # 5. 显示最终统计
     echo ""
     log "📊 自定义文件集成统计:"
     log "  📦 IPK文件: $ipk_count 个"
     log "  📜 脚本文件: $script_count 个"
-    log "  📄 配置文件: $config_count 个"
     log "  📁 其他文件: $other_count 个"
-    log "  🚀 启动服务: $(if [ -f "files/etc/init.d/custom-scripts" ]; then echo "✅ 已创建"; else echo "❌ 未创建"; fi)"
+    log "  🚀 第一次开机安装脚本: 已创建"
+    log "  📍 自定义文件位置: /etc/custom-files/"
+    log "  💡 安装方式: 第一次开机自动安装"
     
-    if [ $ipk_count -eq 0 ] && [ $script_count -eq 0 ] && [ $config_count -eq 0 ] && [ $other_count -eq 0 ]; then
+    if [ $ipk_count -eq 0 ] && [ $script_count -eq 0 ] && [ $other_count -eq 0 ]; then
         log "⚠️ 警告: 自定义文件目录为空"
         log "💡 支持的文件夹结构:"
         log "  firmware-config/custom-files/"
@@ -2191,7 +2176,7 @@ EOF
         log "  └── 其他文件       # 其他任何文件"
     else
         log "🎉 自定义文件集成完成"
-        log "📌 自定义文件将在固件中生效"
+        log "📌 自定义文件将在第一次开机时自动安装和运行"
     fi
 }
 
@@ -2449,7 +2434,7 @@ build_firmware() {
 post_build_space_check() {
     log "=== 编译后空间检查 ==="
     
-    echo "=== 磁盘使用情况 ==="
+    log "=== 磁盘使用情况 ==="
     df -h
     
     # 构建目录空间
