@@ -772,7 +772,7 @@ jobs:
             echo "  流量控制 (SQM) (luci-app-sqm): $(grep -q "^CONFIG_PACKAGE_luci-app-sqm=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  FTP 服务器 (luci-app-vsftpd): $(grep -q "^CONFIG_PACKAGE_luci-app-vsftpd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  ARP 绑定 (luci-app-arpbind): $(grep -q "^CONFIG_PACKAGE_luci-app-arpbind=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CPU 限制 (luci-app-cpulimit): $(grap -q "^CONFIG_PACKAGE_luci-app-cpulimit=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  CPU 限制 (luci-app-cpulimit): $(grep -q "^CONFIG_PACKAGE_luci-app-cpulimit=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  硬盘休眠 (luci-app-hd-idle): $(grep -q "^CONFIG_PACKAGE_luci-app-hd-idle=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             
             echo ""
@@ -1000,10 +1000,10 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 20 完成"
       
-      # 步骤 21: 前置错误检查（修复23.05 SDK验证）
+      # 步骤 21: 前置错误检查（修复23.05 SDK验证）- 关键修复
       - name: "21. 前置错误检查（修复23.05 SDK验证）"
         run: |
-          echo "=== 步骤 21: 前置错误检查（修复23.05 SDK验证）==="
+          echo "=== 步骤 21: 前置错误检查（修复23.05 SDK验证） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -1028,9 +1028,9 @@ jobs:
             if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
               echo ""
               echo "🚨 23.05版本SDK验证问题修复提示:"
-              echo "💡 23.05 SDK使用GCC 12.3.0，已修复验证逻辑"
-              echo "📌 如果仍有问题，可能是SDK下载不完整"
-              echo "🔧 请检查步骤7的SDK下载日志"
+              echo "💡 23.05 SDK使用GCC 12.3.0，已放宽验证条件"
+              echo "📌 只需要有GCC编译器文件即可，不要求特定目录结构"
+              echo "🔧 如果仍有问题，请检查步骤7的SDK下载是否完整"
             fi
             
             exit 1
