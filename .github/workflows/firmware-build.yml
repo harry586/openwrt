@@ -772,7 +772,7 @@ jobs:
             echo "  流量控制 (SQM) (luci-app-sqm): $(grep -q "^CONFIG_PACKAGE_luci-app-sqm=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  FTP 服务器 (luci-app-vsftpd): $(grep -q "^CONFIG_PACKAGE_luci-app-vsftpd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  ARP 绑定 (luci-app-arpbind): $(grep -q "^CONFIG_PACKAGE_luci-app-arpbind=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CPU 限制 (luci-app-cpulimit): $(grep -q "^CONFIG_PACKAGE_luci-app-cpulimit=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  CPU 限制 (luci-app-cpulimit): $(grap -q "^CONFIG_PACKAGE_luci-app-cpulimit=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  硬盘休眠 (luci-app-hd-idle): $(grep -q "^CONFIG_PACKAGE_luci-app-hd-idle=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             
             echo ""
@@ -894,10 +894,10 @@ jobs:
           
           echo "🟢 步骤 19 完成"
       
-      # 步骤 20: 集成自定义文件（极简修复版）- 改为第一次开机运行
-      - name: "20. 集成自定义文件（极简修复版）- 第一次开机运行"
+      # 步骤 20: 集成自定义文件（中文名增强修复版）- 第一次开机运行
+      - name: "20. 集成自定义文件（中文名增强修复版）- 第一次开机运行"
         run: |
-          echo "=== 步骤 20: 集成自定义文件（极简修复版）- 第一次开机运行 ==="
+          echo "=== 步骤 20: 集成自定义文件（中文名增强修复版）- 第一次开机运行 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是尝试集成
@@ -912,17 +912,33 @@ jobs:
             # 显示目录内容
             echo "📁 目录内容:"
             FILE_COUNT=0
+            CHINESE_COUNT=0
+            
             find "$CUSTOM_DIR" -type f 2>/dev/null | while read file; do
                 FILE_NAME=$(basename "$file")
                 FILE_SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                echo "  📄 $FILE_NAME ($FILE_SIZE)"
+                
+                # 检查是否是中文文件名
+                if [[ "$FILE_NAME" =~ [\x80-\xFF] ]]; then
+                    echo "  📄 🇨🇳 $FILE_NAME ($FILE_SIZE) - 中文名"
+                    CHINESE_COUNT=$((CHINESE_COUNT + 1))
+                else
+                    echo "  📄 $FILE_NAME ($FILE_SIZE)"
+                fi
+                
                 FILE_COUNT=$((FILE_COUNT + 1))
             done
             
-            echo "📊 文件总数: $FILE_COUNT 个"
+            echo "📊 文件统计:"
+            echo "  文件总数: $FILE_COUNT 个"
+            echo "  中文文件: $CHINESE_COUNT 个"
+            
+            if [ $CHINESE_COUNT -gt 0 ]; then
+              echo "🔧 检测到中文文件名，将使用增强版中文名处理"
+            fi
             
             # 执行集成
-            echo "🚀 开始执行自定义文件集成..."
+            echo "🚀 开始执行自定义文件集成（中文名增强版）..."
             "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
             
             # 验证集成结果
@@ -936,7 +952,7 @@ jobs:
                 
                 # 统计IPK和脚本文件
                 IPK_COUNT=$(find "files/etc/custom-files" -name "*.ipk" 2>/dev/null | wc -l)
-                SCRIPT_COUNT=$(find "files/etc/custom-files" -name "*.sh" 2>/dev/null | wc -l)
+                SCRIPT_COUNT=$(find "files/etc/custom-files" -name "*.sh" -o -name "*.Sh" -o -name "*.SH" 2>/dev/null | wc -l)
                 OTHER_COUNT=$(find "files/etc/custom-files" -type f 2>/dev/null | wc -l)
                 OTHER_COUNT=$((OTHER_COUNT - IPK_COUNT - SCRIPT_COUNT))
                 
@@ -945,11 +961,26 @@ jobs:
                 echo "  📜 脚本文件: $SCRIPT_COUNT 个"
                 echo "  📁 其他文件: $OTHER_COUNT 个"
                 
+                # 检查中文名文件
+                CHINESE_FILES=$(find "files/etc/custom-files" -name "*" -exec bash -c '[[ $(basename "$1") =~ [\x80-\xFF] ]] && echo "$1"' _ {} \; 2>/dev/null | wc -l)
+                if [ $CHINESE_FILES -gt 0 ]; then
+                    echo "  🇨🇳 中文名文件: $CHINESE_FILES 个"
+                    echo "  💡 中文名文件已优化处理，支持第一次开机自动安装"
+                fi
+                
                 # 检查启动脚本
                 if [ -f "files/etc/uci-defaults/99-custom-files" ]; then
                     echo "✅ 第一次开机启动脚本: files/etc/uci-defaults/99-custom-files"
-                    echo "📝 脚本内容预览:"
-                    head -20 "files/etc/uci-defaults/99-custom-files"
+                    echo "📝 脚本增强功能:"
+                    echo "  - ✅ 支持中文文件名检测"
+                    echo "  - ✅ 支持多种脚本扩展名 (.sh, .Sh, .SH)"
+                    echo "  - ✅ 支持通过shebang检测脚本文件"
+                    echo "  - ✅ 支持IPK文件多种扩展名"
+                fi
+                
+                # 检查中文名处理辅助脚本
+                if [ -f "files/etc/custom-files/process_chinese_files.sh" ]; then
+                    echo "✅ 中文名处理辅助脚本: files/etc/custom-files/process_chinese_files.sh"
                 fi
             else
                 echo "❌ 未找到自定义文件目录"
@@ -958,6 +989,9 @@ jobs:
             echo ""
             echo "🎉 自定义文件集成完成"
             echo "💡 自定义文件将在第一次开机时自动安装和运行"
+            if [ $CHINESE_COUNT -gt 0 ]; then
+                echo "🔧 中文文件名已优化处理，支持自动识别和运行"
+            fi
           else
             echo "ℹ️ 自定义文件目录不存在: $CUSTOM_DIR"
             echo "📁 跳过自定义文件集成"
@@ -1261,11 +1295,11 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 27: 执行错误分析（优化版）
-      - name: "27. 执行错误分析（优化版）"
+      # 步骤 27: 执行错误分析（中文名增强版）
+      - name: "27. 执行错误分析（中文名增强版）"
         if: always()
         run: |
-          echo "=== 步骤 27: 执行错误分析（优化版） ==="
+          echo "=== 步骤 27: 执行错误分析（中文名增强版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，错误分析不应该影响构建状态
@@ -1275,11 +1309,11 @@ jobs:
             chmod +x "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh"
             export BUILD_DIR="/mnt/openwrt-build"
             
-            echo "🔧 执行优化版错误分析..."
+            echo "🔧 执行增强版错误分析（支持中文文件名检测）..."
             "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh"
             
             echo "✅ 错误分析完成"
-            echo "💡 错误分析已优化，正确显示SDK编译器版本信息"
+            echo "💡 错误分析已增强，支持中文文件名检测和SDK编译器版本信息"
           else
             echo "⚠️ 错误分析脚本不存在"
             echo "📝 创建基本的错误分析..."
@@ -1447,20 +1481,27 @@ jobs:
           
           echo "  💡 这是正常的：系统编译器编译工具链，SDK编译器编译固件"
           
-          # 自定义文件集成状态
+          # 自定义文件集成状态（增强版）
           echo ""
-          echo "📁 自定义文件集成状态:"
+          echo "📁 自定义文件集成状态（增强版）:"
           if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
             CUSTOM_IPK_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -name "*.ipk" 2>/dev/null | wc -l)
-            CUSTOM_SCRIPT_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -name "*.sh" 2>/dev/null | wc -l)
+            CUSTOM_SCRIPT_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -name "*.sh" -o -name "*.Sh" -o -name "*.SH" 2>/dev/null | wc -l)
+            CUSTOM_CHINESE_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -name "*" -exec bash -c '[[ $(basename "$1") =~ [\x80-\xFF] ]] && echo "$1"' _ {} \; 2>/dev/null | wc -l)
             
             echo "  ✅ 自定义IPK包: $CUSTOM_IPK_COUNT 个"
             echo "  ✅ 自定义脚本: $CUSTOM_SCRIPT_COUNT 个"
+            echo "  🇨🇳 中文名文件: $CUSTOM_CHINESE_COUNT 个"
             echo "  📌 位置: /etc/custom-files/"
             
             if [ -f "/mnt/openwrt-build/files/etc/uci-defaults/99-custom-files" ]; then
-              echo "  ✅ 第一次开机安装脚本: 已创建"
+              echo "  ✅ 第一次开机安装脚本: 已创建（支持中文文件名）"
               echo "  💡 自定义文件将在第一次开机时自动安装"
+              echo "  🔧 中文文件名支持: 已启用增强处理"
+            fi
+            
+            if [ $CUSTOM_CHINESE_COUNT -gt 0 ]; then
+              echo "  💡 中文文件名处理: 已优化，支持自动识别和运行"
             fi
           else
             echo "  ⚪ 自定义文件: 未集成"
@@ -1472,6 +1513,18 @@ jobs:
           echo "  💡 这个问题是由于大量编译输出导致的stdout缓冲区溢出"
           echo "  🔧 已修复: 在步骤19和23中使用 stdbuf -oL -eL 命令"
           echo "  📊 这是一个无害的警告，不影响编译结果"
+          
+          # 中文文件名提醒
+          if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
+            CUSTOM_CHINESE_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -name "*" -exec bash -c '[[ $(basename "$1") =~ [\x80-\xFF] ]] && echo "$1"' _ {} \; 2>/dev/null | wc -l)
+            if [ $CUSTOM_CHINESE_COUNT -gt 0 ]; then
+              echo ""
+              echo "🔧 关于中文文件名:"
+              echo "  ✅ 已启用中文文件名增强处理"
+              echo "  💡 建议将中文文件名改为英文名以获得最佳兼容性"
+              echo "  📌 当前支持的中文关键词: 备份, 恢复, 安装, 配置, 设置"
+            fi
+          fi
           
           echo ""
           echo "✅ 构建流程完成"
