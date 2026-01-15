@@ -27,7 +27,7 @@ save_env() {
     echo "export SELECTED_REPO_URL=\"${SELECTED_REPO_URL}\"" >> $ENV_FILE
     echo "export SELECTED_BRANCH=\"${SELECTED_BRANCH}\"" >> $ENV_FILE
     echo "export TARGET=\"${TARGET}\"" >> $ENV_FILE
-    echo "export SUBTARGET=\"${SUBTARGET}\"" >> $ENVARGET
+    echo "export SUBTARGET=\"${SUBTARGET}\"" >> $SUBTARGET
     echo "export DEVICE=\"${DEVICE}\"" >> $ENV_FILE
     echo "export CONFIG_MODE=\"${CONFIG_MODE}\"" >> $ENV_FILE
     echo "export REPO_ROOT=\"${REPO_ROOT}\"" >> $ENV_FILE
