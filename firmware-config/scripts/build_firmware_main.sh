@@ -1970,12 +1970,12 @@ download_dependencies() {
     log "✅ 依赖包下载完成"
 }
 
-# 集成自定义文件函数（极简修复版）- 改为第一次开机运行
+# 集成自定义文件函数（中文名增强修复版）- 改为第一次开机运行
 integrate_custom_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 集成自定义文件（极简修复版）- 第一次开机运行 ==="
+    log "=== 集成自定义文件（中文名增强修复版）- 第一次开机运行 ==="
     
     local custom_dir="$REPO_ROOT/firmware-config/custom-files"
     
@@ -2012,15 +2012,101 @@ integrate_custom_files() {
     
     # 3. 复制所有文件到自定义目录
     echo ""
-    log "🔧 步骤2: 复制所有自定义文件"
+    log "🔧 步骤2: 复制所有自定义文件（支持中文文件名）"
     
-    # 复制所有文件
-    cp -r "$custom_dir"/* "$custom_files_dir/" 2>/dev/null || true
+    # 检查是否有iconv命令用于处理中文文件名
+    if command -v iconv >/dev/null 2>&1; then
+        log "✅ 系统支持 iconv 命令，可以处理中文文件名"
+    else
+        log "⚠️ 系统不支持 iconv 命令，中文文件名处理受限"
+    fi
     
-    # 统计文件数量
+    # 复制所有文件并处理中文名
+    local copied_count=0
+    local chinese_count=0
+    local renamed_count=0
+    
+    find "$custom_dir" -type f 2>/dev/null | while read src_file; do
+        local src_name=$(basename "$src_file")
+        local dst_name="$src_name"
+        
+        # 检查是否是中文文件名
+        if [[ "$src_name" =~ [\x80-\xFF] ]]; then
+            chinese_count=$((chinese_count + 1))
+            log "  发现中文文件名: $src_name"
+            
+            # 尝试转换为拼音或英文名
+            local new_name=""
+            if command -v iconv >/dev/null 2>&1; then
+                # 尝试转换为ASCII近似字符
+                new_name=$(echo "$src_name" | iconv -f utf-8 -t ascii//TRANSLIT 2>/dev/null || echo "$src_name")
+                new_name=$(echo "$new_name" | tr ' ' '_' | tr -cd 'A-Za-z0-9._-')
+            else
+                # 简单处理：替换中文为拼音关键词
+                if [[ "$src_name" == *备份* ]]; then
+                    new_name="backup"
+                elif [[ "$src_name" == *恢复* ]]; then
+                    new_name="restore"
+                elif [[ "$src_name" == *安装* ]]; then
+                    new_name="install"
+                elif [[ "$src_name" == *配置* ]]; then
+                    new_name="config"
+                elif [[ "$src_name" == *设置* ]]; then
+                    new_name="setup"
+                else
+                    new_name="file_$chinese_count"
+                fi
+                
+                # 保留扩展名
+                local ext=""
+                if [[ "$src_name" == *.* ]]; then
+                    ext=".${src_name##*.}"
+                fi
+                new_name="${new_name}${ext}"
+            fi
+            
+            if [ "$new_name" != "$src_name" ] && [ -n "$new_name" ]; then
+                dst_name="$new_name"
+                renamed_count=$((renamed_count + 1))
+                log "    重命名为: $dst_name"
+            fi
+        fi
+        
+        # 复制文件
+        cp "$src_file" "$custom_files_dir/$dst_name" 2>/dev/null || log "⚠️ 复制文件失败: $src_name"
+        copied_count=$((copied_count + 1))
+        
+        # 确保脚本文件有执行权限
+        if [[ "$dst_name" == *.sh ]] || [[ "$dst_name" == *.Sh ]] || [[ "$dst_name" == *.SH ]]; then
+            chmod +x "$custom_files_dir/$dst_name" 2>/dev/null || true
+        fi
+    done
+    
+    log "✅ 文件复制完成: $copied_count 个文件"
+    log "📊 中文文件名统计: $chinese_count 个中文文件，$renamed_count 个已重命名"
+    
+    # 4. 创建中文名文件映射表
+    if [ $chinese_count -gt 0 ]; then
+        echo ""
+        log "🔧 步骤3: 创建中文文件名映射表"
+        
+        local mapping_file="$custom_files_dir/file_mapping.txt"
+        echo "# 中文文件名映射表" > "$mapping_file"
+        echo "# 生成时间: $(date)" >> "$mapping_file"
+        echo "" >> "$mapping_file"
+        
+        find "$custom_files_dir" -type f -name "*" | while read file; do
+            local name=$(basename "$file")
+            echo "$name" >> "$mapping_file"
+        done
+        
+        log "✅ 创建文件名映射表: $mapping_file"
+    fi
+    
+    # 5. 统计文件数量
     if [ -d "$custom_files_dir" ]; then
         ipk_count=$(find "$custom_files_dir" -name "*.ipk" 2>/dev/null | wc -l)
-        script_count=$(find "$custom_files_dir" -name "*.sh" 2>/dev/null | wc -l)
+        script_count=$(find "$custom_files_dir" -name "*.sh" -o -name "*.Sh" -o -name "*.SH" 2>/dev/null | wc -l)
         other_count=$(find "$custom_files_dir" -type f 2>/dev/null | wc -l)
         other_count=$((other_count - ipk_count - script_count))
         
@@ -2028,12 +2114,12 @@ integrate_custom_files() {
         log "  📦 IPK文件: $ipk_count 个"
         log "  📜 脚本文件: $script_count 个"
         log "  📁 其他文件: $other_count 个"
-        log "  📌 位置: $custom_files_dir"
+        log "  📍 位置: $custom_files_dir"
     fi
     
-    # 4. 创建第一次开机运行的安装脚本
+    # 6. 创建第一次开机运行的安装脚本（增强版，支持中文名）
     echo ""
-    log "🔧 步骤3: 创建第一次开机安装脚本"
+    log "🔧 步骤4: 创建第一次开机安装脚本（支持中文文件名）"
     
     local first_boot_dir="files/etc/uci-defaults"
     mkdir -p "$first_boot_dir"
@@ -2046,19 +2132,31 @@ integrate_custom_files() {
 LOG_FILE="/tmp/custom-files-install.log"
 CUSTOM_DIR="/etc/custom-files"
 
-echo "=== 第一次开机：自定义文件安装脚本 ===" > $LOG_FILE
+echo "=== 第一次开机：自定义文件安装脚本（支持中文文件名）===" > $LOG_FILE
 echo "开始时间: $(date)" >> $LOG_FILE
 echo "" >> $LOG_FILE
 
 # 检查自定义文件目录是否存在
 if [ -d "$CUSTOM_DIR" ]; then
     echo "✅ 找到自定义文件目录: $CUSTOM_DIR" >> $LOG_FILE
+    echo "🔍 目录内容:" >> $LOG_FILE
+    ls -la "$CUSTOM_DIR" >> $LOG_FILE
     
-    # 1. 安装IPK文件
+    # 1. 安装IPK文件（支持各种扩展名）
     IPK_COUNT=0
-    if [ -f "$CUSTOM_DIR"/*.ipk 2>/dev/null ]; then
+    echo "📦 开始查找IPK包..." >> $LOG_FILE
+    
+    # 查找所有可能的IPK文件
+    for ipk in $CUSTOM_DIR/*.ipk $CUSTOM_DIR/*.IPK $CUSTOM_DIR/*.Ipk; do
+        if [ -f "$ipk" ]; then
+            IPK_NAME=$(basename "$ipk")
+            echo "  找到IPK文件: $IPK_NAME" >> $LOG_FILE
+        fi
+    done
+    
+    if ls $CUSTOM_DIR/*.ipk $CUSTOM_DIR/*.IPK $CUSTOM_DIR/*.Ipk 2>/dev/null; then
         echo "📦 开始安装IPK包..." >> $LOG_FILE
-        for ipk in $CUSTOM_DIR/*.ipk; do
+        for ipk in $CUSTOM_DIR/*.ipk $CUSTOM_DIR/*.IPK $CUSTOM_DIR/*.Ipk; do
             if [ -f "$ipk" ]; then
                 IPK_NAME=$(basename "$ipk")
                 echo "  正在安装: $IPK_NAME" >> $LOG_FILE
@@ -2067,7 +2165,8 @@ if [ -d "$CUSTOM_DIR" ]; then
                     echo "  ✅ $IPK_NAME 安装成功" >> $LOG_FILE
                     IPK_COUNT=$((IPK_COUNT + 1))
                 else
-                    echo "  ❌ $IPK_NAME 安装失败" >> $LOG_FILE
+                    echo "  ⚠️ $IPK_NAME 安装失败，错误信息:" >> $LOG_FILE
+                    tail -5 $LOG_FILE >> $LOG_FILE 2>&1
                 fi
             fi
         done
@@ -2076,48 +2175,114 @@ if [ -d "$CUSTOM_DIR" ]; then
         echo "ℹ️ 未找到IPK文件" >> $LOG_FILE
     fi
     
-    # 2. 运行脚本文件
+    # 2. 运行脚本文件（支持各种扩展名和中文名）
     SCRIPT_COUNT=0
-    if [ -f "$CUSTOM_DIR"/*.sh 2>/dev/null ]; then
-        echo "📜 开始运行脚本文件..." >> $LOG_FILE
-        for script in $CUSTOM_DIR/*.sh; do
-            if [ -f "$script" ] && [ -x "$script" ]; then
-                SCRIPT_NAME=$(basename "$script")
-                echo "  正在运行: $SCRIPT_NAME" >> $LOG_FILE
-                sh "$script" >> $LOG_FILE 2>&1
-                if [ $? -eq 0 ]; then
-                    echo "  ✅ $SCRIPT_NAME 运行成功" >> $LOG_FILE
+    echo "📜 开始查找脚本文件..." >> $LOG_FILE
+    
+    # 先列出所有文件，然后筛选出脚本文件
+    echo "🔍 所有文件列表:" >> $LOG_FILE
+    for file in $CUSTOM_DIR/*; do
+        if [ -f "$file" ]; then
+            echo "  $(basename "$file")" >> $LOG_FILE
+        fi
+    done
+    
+    echo "📜 开始运行脚本文件..." >> $LOG_FILE
+    
+    # 方法1：查找以.sh, .Sh, .SH结尾的文件
+    for script in $CUSTOM_DIR/*.sh $CUSTOM_DIR/*.Sh $CUSTOM_DIR/*.SH; do
+        if [ -f "$script" ]; then
+            SCRIPT_NAME=$(basename "$script")
+            echo "  运行标准脚本: $SCRIPT_NAME" >> $LOG_FILE
+            
+            # 确保有执行权限
+            chmod +x "$script" 2>/dev/null
+            
+            # 运行脚本
+            echo "=== 开始执行 $SCRIPT_NAME ===" >> $LOG_FILE
+            sh "$script" >> $LOG_FILE 2>&1
+            RUN_RESULT=$?
+            echo "=== $SCRIPT_NAME 执行结束，返回代码: $RUN_RESULT ===" >> $LOG_FILE
+            
+            if [ $RUN_RESULT -eq 0 ]; then
+                echo "  ✅ $SCRIPT_NAME 运行成功" >> $LOG_FILE
+                SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
+            else
+                echo "  ⚠️ $SCRIPT_NAME 运行返回非零状态: $RUN_RESULT" >> $LOG_FILE
+            fi
+        fi
+    done
+    
+    # 方法2：查找可能包含中文名的脚本文件
+    echo "🔍 查找可能的中文名脚本文件..." >> $LOG_FILE
+    
+    # 检查文件内容是否包含shebang
+    for file in $CUSTOM_DIR/*; do
+        if [ -f "$file" ] && [ ! -d "$file" ]; then
+            FILE_NAME=$(basename "$file")
+            
+            # 跳过已处理的.sh文件
+            if [[ "$FILE_NAME" == *.sh ]] || [[ "$FILE_NAME" == *.Sh ]] || [[ "$FILE_NAME" == *.SH ]]; then
+                continue
+            fi
+            
+            # 检查文件前2个字节是否是shebang
+            if head -c 2 "$file" | grep -q "^#!" 2>/dev/null; then
+                echo "  发现脚本文件(通过shebang检测): $FILE_NAME" >> $LOG_FILE
+                
+                # 确保有执行权限
+                chmod +x "$file" 2>/dev/null
+                
+                echo "=== 开始执行 $FILE_NAME ===" >> $LOG_FILE
+                sh "$file" >> $LOG_FILE 2>&1
+                RUN_RESULT=$?
+                echo "=== $FILE_NAME 执行结束，返回代码: $RUN_RESULT ===" >> $LOG_FILE
+                
+                if [ $RUN_RESULT -eq 0 ]; then
+                    echo "  ✅ $FILE_NAME 运行成功" >> $LOG_FILE
                     SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
                 else
-                    echo "  ⚠️ $SCRIPT_NAME 运行返回非零状态" >> $LOG_FILE
+                    echo "  ⚠️ $FILE_NAME 运行返回非零状态: $RUN_RESULT" >> $LOG_FILE
                 fi
             fi
-        done
-        echo "📊 脚本运行完成: $SCRIPT_COUNT 个" >> $LOG_FILE
-    else
-        echo "ℹ️ 未找到脚本文件" >> $LOG_FILE
-    fi
+        fi
+    done
+    
+    echo "📊 脚本运行完成: $SCRIPT_COUNT 个" >> $LOG_FILE
     
     # 3. 复制其他文件到特定位置
     OTHER_COUNT=0
     echo "📁 处理其他文件..." >> $LOG_FILE
     
     # 复制配置文件到/etc/config/
-    for config in $CUSTOM_DIR/*.conf $CUSTOM_DIR/*.config; do
+    for config in $CUSTOM_DIR/*.conf $CUSTOM_DIR/*.config $CUSTOM_DIR/*.CONF; do
         if [ -f "$config" ]; then
             CONFIG_NAME=$(basename "$config")
             echo "  复制配置文件: $CONFIG_NAME -> /etc/config/" >> $LOG_FILE
-            cp "$config" /etc/config/ 2>/dev/null || true
+            cp "$config" /etc/config/ 2>/dev/null || echo "  ⚠️ 复制失败: $CONFIG_NAME" >> $LOG_FILE
             OTHER_COUNT=$((OTHER_COUNT + 1))
         fi
     done
     
     # 复制其他文件到根目录
-    for other_file in $(find "$CUSTOM_DIR" -type f ! -name "*.ipk" ! -name "*.sh" ! -name "*.conf" ! -name "*.config" 2>/dev/null); do
+    for other_file in $CUSTOM_DIR/*; do
         if [ -f "$other_file" ]; then
             FILE_NAME=$(basename "$other_file")
+            
+            # 跳过已处理的文件类型
+            if [[ "$FILE_NAME" == *.ipk ]] || [[ "$FILE_NAME" == *.IPK ]] || [[ "$FILE_NAME" == *.Ipk ]] || \
+               [[ "$FILE_NAME" == *.sh ]] || [[ "$FILE_NAME" == *.Sh ]] || [[ "$FILE_NAME" == *.SH ]] || \
+               [[ "$FILE_NAME" == *.conf ]] || [[ "$FILE_NAME" == *.config ]] || [[ "$FILE_NAME" == *.CONF ]]; then
+                continue
+            fi
+            
+            # 检查是否是脚本文件（通过内容判断）
+            if head -c 2 "$other_file" | grep -q "^#!" 2>/dev/null; then
+                continue  # 已经在脚本处理阶段处理过了
+            fi
+            
             echo "  复制文件: $FILE_NAME -> /tmp/" >> $LOG_FILE
-            cp "$other_file" /tmp/ 2>/dev/null || true
+            cp "$other_file" /tmp/ 2>/dev/null || echo "  ⚠️ 复制失败: $FILE_NAME" >> $LOG_FILE
             OTHER_COUNT=$((OTHER_COUNT + 1))
         fi
     done
@@ -2154,14 +2319,83 @@ EOF
     chmod +x "$first_boot_script"
     log "✅ 创建第一次开机安装脚本: $first_boot_script"
     log "📝 脚本内容预览:"
-    head -30 "$first_boot_script"
+    head -40 "$first_boot_script"
     
-    # 5. 显示最终统计
+    # 7. 创建专门的中文名处理脚本
+    if [ $chinese_count -gt 0 ]; then
+        echo ""
+        log "🔧 步骤5: 创建中文名处理辅助脚本"
+        
+        local chinese_helper="$custom_files_dir/process_chinese_files.sh"
+        cat > "$chinese_helper" << 'EOF'
+#!/bin/sh
+# 中文文件名处理辅助脚本
+
+echo "=== 中文文件名处理脚本 ==="
+echo "开始处理中文文件名..."
+
+CUSTOM_DIR="/etc/custom-files"
+LOG_FILE="/tmp/chinese-files-process.log"
+
+echo "处理时间: $(date)" > $LOG_FILE
+echo "" >> $LOG_FILE
+
+# 查找所有文件
+echo "🔍 查找所有文件..." >> $LOG_FILE
+ls -la $CUSTOM_DIR/ >> $LOG_FILE
+
+echo "" >> $LOG_FILE
+echo "📋 文件名列表:" >> $LOG_FILE
+for file in $CUSTOM_DIR/*; do
+    if [ -f "$file" ]; then
+        FILE_NAME=$(basename "$file")
+        echo "  $FILE_NAME" >> $LOG_FILE
+    fi
+done
+
+echo "" >> $LOG_FILE
+echo "✅ 中文文件名处理完成" >> $LOG_FILE
+echo "日志文件: $LOG_FILE"
+
+# 尝试运行可能的中文名脚本
+echo "🔍 尝试运行可能的中文名脚本..." >> $LOG_FILE
+
+# 查找包含"备份"的文件
+for file in $CUSTOM_DIR/*备份*; do
+    if [ -f "$file" ]; then
+        echo "  尝试运行备份脚本: $(basename "$file")" >> $LOG_FILE
+        chmod +x "$file" 2>/dev/null
+        sh "$file" >> $LOG_FILE 2>&1
+        echo "  运行结果: $?" >> $LOG_FILE
+    fi
+done
+
+# 查找包含"安装"的文件
+for file in $CUSTOM_DIR/*安装*; do
+    if [ -f "$file" ]; then
+        echo "  尝试运行安装脚本: $(basename "$file")" >> $LOG_FILE
+        chmod +x "$file" 2>/dev/null
+        sh "$file" >> $LOG_FILE 2>&1
+        echo "  运行结果: $?" >> $LOG_FILE
+    fi
+done
+
+echo "✅ 脚本执行尝试完成" >> $LOG_FILE
+
+exit 0
+EOF
+        
+        chmod +x "$chinese_helper"
+        log "✅ 创建中文名处理辅助脚本: $chinese_helper"
+    fi
+    
+    # 8. 显示最终统计
     echo ""
     log "📊 自定义文件集成统计:"
     log "  📦 IPK文件: $ipk_count 个"
     log "  📜 脚本文件: $script_count 个"
     log "  📁 其他文件: $other_count 个"
+    log "  🇨🇳 中文文件: $chinese_count 个，$renamed_count 个已重命名"
     log "  🚀 第一次开机安装脚本: 已创建"
     log "  📍 自定义文件位置: /etc/custom-files/"
     log "  💡 安装方式: 第一次开机自动安装"
@@ -2171,12 +2405,13 @@ EOF
         log "💡 支持的文件夹结构:"
         log "  firmware-config/custom-files/"
         log "  ├── *.ipk          # IPK包文件"
-        log "  ├── *.sh           # 脚本文件"
+        log "  ├── *.sh           # 脚本文件（支持中文名）"
         log "  ├── *.conf         # 配置文件"
         log "  └── 其他文件       # 其他任何文件"
     else
         log "🎉 自定义文件集成完成"
         log "📌 自定义文件将在第一次开机时自动安装和运行"
+        log "🔧 中文文件名已优化处理"
     fi
 }
 
