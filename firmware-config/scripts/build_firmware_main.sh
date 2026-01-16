@@ -2107,17 +2107,51 @@ integrate_custom_files() {
     # 1. 显示目录内容
     echo ""
     log "📁 目录内容:"
-    find "$custom_dir" -type f 2>/dev/null | head -20 | while read file; do
-        local file_name=$(basename "$file")
-        local file_size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+    
+    # 先获取文件列表
+    local file_list=$(find "$custom_dir" -type f 2>/dev/null | head -20)
+    
+    if [ -z "$file_list" ]; then
+        log "ℹ️ 目录为空"
+    else
+        local total_files=0
+        local chinese_files=0
         
-        # 检测是否是中文文件名
-        if detect_chinese_characters "$file_name"; then
-            log "  📄 🇨🇳 $file_name ($file_size) - 中文名"
-        else
-            log "  📄 $file_name ($file_size)"
-        fi
-    done
+        while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            total_files=$((total_files + 1))
+            
+            local file_name=$(basename "$file")
+            local file_size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+            
+            # 检测是否是中文文件名
+            if detect_chinese_characters "$file_name"; then
+                log "  📄 🇨🇳 $file_name ($file_size) - 中文名"
+                chinese_files=$((chinese_files + 1))
+            else
+                log "  📄 $file_name ($file_size)"
+            fi
+            
+            # 文件类型统计
+            if [[ "$file_name" == *.ipk ]] || [[ "$file_name" == *.IPK ]] || [[ "$file_name" == *.Ipk ]]; then
+                ipk_count=$((ipk_count + 1))
+            elif [[ "$file_name" == *.sh ]] || [[ "$file_name" == *.Sh ]] || [[ "$file_name" == *.SH ]]; then
+                script_count=$((script_count + 1))
+            elif [[ "$file_name" == *.conf ]] || [[ "$file_name" == *.config ]] || [[ "$file_name" == *.CONF ]]; then
+                config_count=$((config_count + 1))
+            else
+                other_count=$((other_count + 1))
+            fi
+        done <<< "$file_list"
+        
+        log "📊 文件统计:"
+        log "  文件总数: $total_files 个"
+        log "  中文文件: $chinese_files 个"
+        log "  IPK文件: $ipk_count 个"
+        log "  脚本文件: $script_count 个"
+        log "  配置文件: $config_count 个"
+        log "  其他文件: $other_count 个"
+    fi
     
     # 2. 创建自定义文件目录
     echo ""
@@ -2143,8 +2177,8 @@ integrate_custom_files() {
     local chinese_count=0
     local renamed_count=0
     
-    # 使用 find 命令获取文件列表
-    while IFS= read -r src_file; do
+    # 使用 find 命令获取所有文件
+    find "$custom_dir" -type f 2>/dev/null | while read src_file; do
         [ -z "$src_file" ] && continue
         
         local src_name=$(basename "$src_file")
@@ -2241,10 +2275,19 @@ integrate_custom_files() {
         else
             log "⚠️ 复制文件失败: $src_name"
         fi
-    done < <(find "$custom_dir" -type f 2>/dev/null | head -50)  # 限制最多处理50个文件
+    done
     
     log "✅ 文件复制完成: $copied_count 个文件"
     log "📊 中文文件名统计: $chinese_count 个中文文件，$renamed_count 个已重命名"
+    
+    # 重新统计复制后的文件
+    if [ -d "$custom_files_dir" ]; then
+        ipk_count=$(find "$custom_files_dir" -name "*.ipk" 2>/dev/null | wc -l)
+        script_count=$(find "$custom_files_dir" -name "*.sh" -o -name "*.Sh" -o -name "*.SH" 2>/dev/null | wc -l)
+        config_count=$(find "$custom_files_dir" -name "*.conf" -o -name "*.config" -o -name "*.CONF" 2>/dev/null | wc -l)
+        other_count=$(find "$custom_files_dir" -type f 2>/dev/null | wc -l)
+        other_count=$((other_count - ipk_count - script_count - config_count))
+    fi
     
     # 4. 创建中文名文件映射表
     if [ $chinese_count -gt 0 ]; then
@@ -2269,16 +2312,24 @@ integrate_custom_files() {
     
     # 5. 统计文件数量
     if [ -d "$custom_files_dir" ]; then
-        ipk_count=$(find "$custom_files_dir" -name "*.ipk" 2>/dev/null | wc -l)
-        script_count=$(find "$custom_files_dir" -name "*.sh" -o -name "*.Sh" -o -name "*.SH" 2>/dev/null | wc -l)
-        other_count=$(find "$custom_files_dir" -type f 2>/dev/null | wc -l)
-        other_count=$((other_count - ipk_count - script_count))
-        
-        log "📊 文件统计:"
+        log "📊 复制后文件统计:"
         log "  📦 IPK文件: $ipk_count 个"
         log "  📜 脚本文件: $script_count 个"
+        log "  ⚙️ 配置文件: $config_count 个"
         log "  📁 其他文件: $other_count 个"
+        log "  总文件数: $((ipk_count + script_count + config_count + other_count)) 个"
         log "  📍 位置: $custom_files_dir"
+    fi
+    
+    # 显示具体的文件名
+    if [ $((ipk_count + script_count + config_count + other_count)) -gt 0 ]; then
+        echo ""
+        log "📋 具体文件名列表:"
+        find "$custom_files_dir" -type f 2>/dev/null | head -20 | while read file; do
+            local name=$(basename "$file")
+            local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+            log "  📄 $name ($size)"
+        done
     fi
     
     # 6. 创建第一次开机运行的安装脚本（增强版，支持中文名）
@@ -2558,13 +2609,14 @@ EOF
     log "📊 自定义文件集成统计:"
     log "  📦 IPK文件: $ipk_count 个"
     log "  📜 脚本文件: $script_count 个"
+    log "  ⚙️ 配置文件: $config_count 个"
     log "  📁 其他文件: $other_count 个"
     log "  🇨🇳 中文文件: $chinese_count 个，$renamed_count 个已重命名"
     log "  🚀 第一次开机安装脚本: 已创建"
     log "  📍 自定义文件位置: /etc/custom-files/"
     log "  💡 安装方式: 第一次开机自动安装"
     
-    if [ $ipk_count -eq 0 ] && [ $script_count -eq 0 ] && [ $other_count -eq 0 ]; then
+    if [ $((ipk_count + script_count + config_count + other_count)) -eq 0 ]; then
         log "⚠️ 警告: 自定义文件目录为空"
         log "💡 支持的文件夹结构:"
         log "  firmware-config/custom-files/"
