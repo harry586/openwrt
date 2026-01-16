@@ -926,8 +926,6 @@ jobs:
             
             # 显示目录内容
             echo "📁 目录内容:"
-            FILE_COUNT=0
-            CHINESE_COUNT=0
             
             # 使用精确的中文检测函数
             detect_chinese_file() {
@@ -943,24 +941,53 @@ jobs:
               return 1
             }
             
-            find "$CUSTOM_DIR" -type f 2>/dev/null | head -20 | while read file; do
-                FILE_NAME=$(basename "$file")
-                FILE_SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                
-                # 检查是否是中文文件名
-                if detect_chinese_file "$FILE_NAME"; then
-                    echo "  📄 🇨🇳 $FILE_NAME ($FILE_SIZE) - 中文名"
-                    CHINESE_COUNT=$((CHINESE_COUNT + 1))
-                else
-                    echo "  📄 $FILE_NAME ($FILE_SIZE)"
-                fi
-                
-                FILE_COUNT=$((FILE_COUNT + 1))
-            done
+            # 获取文件列表
+            FILE_LIST=$(find "$CUSTOM_DIR" -type f 2>/dev/null | head -20)
+            TOTAL_FILES=0
+            CHINESE_COUNT=0
+            IPK_COUNT=0
+            SCRIPT_COUNT=0
+            CONFIG_COUNT=0
+            OTHER_COUNT=0
             
-            echo "📊 文件统计:"
-            echo "  文件总数: $FILE_COUNT 个"
-            echo "  中文文件: $CHINESE_COUNT 个"
+            if [ -z "$FILE_LIST" ]; then
+                echo "ℹ️ 目录为空"
+            else
+                while IFS= read -r file; do
+                    [ -z "$file" ] && continue
+                    TOTAL_FILES=$((TOTAL_FILES + 1))
+                    
+                    FILE_NAME=$(basename "$file")
+                    FILE_SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                    
+                    # 检测是否是中文文件名
+                    if detect_chinese_file "$FILE_NAME"; then
+                        echo "  📄 🇨🇳 $FILE_NAME ($FILE_SIZE) - 中文名"
+                        CHINESE_COUNT=$((CHINESE_COUNT + 1))
+                    else
+                        echo "  📄 $FILE_NAME ($FILE_SIZE)"
+                    fi
+                    
+                    # 文件类型统计
+                    if [[ "$FILE_NAME" == *.ipk ]] || [[ "$FILE_NAME" == *.IPK ]] || [[ "$FILE_NAME" == *.Ipk ]]; then
+                        IPK_COUNT=$((IPK_COUNT + 1))
+                    elif [[ "$FILE_NAME" == *.sh ]] || [[ "$FILE_NAME" == *.Sh ]] || [[ "$FILE_NAME" == *.SH ]]; then
+                        SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
+                    elif [[ "$FILE_NAME" == *.conf ]] || [[ "$FILE_NAME" == *.config ]] || [[ "$FILE_NAME" == *.CONF ]]; then
+                        CONFIG_COUNT=$((CONFIG_COUNT + 1))
+                    else
+                        OTHER_COUNT=$((OTHER_COUNT + 1))
+                    fi
+                done <<< "$FILE_LIST"
+                
+                echo "📊 文件统计:"
+                echo "  文件总数: $TOTAL_FILES 个"
+                echo "  中文文件: $CHINESE_COUNT 个"
+                echo "  📦 IPK文件: $IPK_COUNT 个"
+                echo "  📜 脚本文件: $SCRIPT_COUNT 个"
+                echo "  ⚙️ 配置文件: $CONFIG_COUNT 个"
+                echo "  📁 其他文件: $OTHER_COUNT 个"
+            fi
             
             if [ $CHINESE_COUNT -gt 0 ]; then
               echo "🔧 检测到中文文件名，将使用增强版中文名处理"
@@ -980,15 +1007,29 @@ jobs:
                 echo "✅ 自定义文件已复制到: files/etc/custom-files"
                 
                 # 统计IPK和脚本文件
-                IPK_COUNT=$(find "files/etc/custom-files" -name "*.ipk" 2>/dev/null | wc -l)
-                SCRIPT_COUNT=$(find "files/etc/custom-files" -name "*.sh" -o -name "*.Sh" -o -name "*.SH" 2>/dev/null | wc -l)
-                OTHER_COUNT=$(find "files/etc/custom-files" -type f 2>/dev/null | wc -l)
-                OTHER_COUNT=$((OTHER_COUNT - IPK_COUNT - SCRIPT_COUNT))
+                FINAL_IPK_COUNT=$(find "files/etc/custom-files" -name "*.ipk" 2>/dev/null | wc -l)
+                FINAL_SCRIPT_COUNT=$(find "files/etc/custom-files" -name "*.sh" -o -name "*.Sh" -o -name "*.SH" 2>/dev/null | wc -l)
+                FINAL_CONFIG_COUNT=$(find "files/etc/custom-files" -name "*.conf" -o -name "*.config" -o -name "*.CONF" 2>/dev/null | wc -l)
+                FINAL_OTHER_COUNT=$(find "files/etc/custom-files" -type f 2>/dev/null | wc -l)
+                FINAL_OTHER_COUNT=$((FINAL_OTHER_COUNT - FINAL_IPK_COUNT - FINAL_SCRIPT_COUNT - FINAL_CONFIG_COUNT))
+                FINAL_TOTAL=$((FINAL_IPK_COUNT + FINAL_SCRIPT_COUNT + FINAL_CONFIG_COUNT + FINAL_OTHER_COUNT))
                 
-                echo "📊 文件统计:"
-                echo "  📦 IPK文件: $IPK_COUNT 个"
-                echo "  📜 脚本文件: $SCRIPT_COUNT 个"
-                echo "  📁 其他文件: $OTHER_COUNT 个"
+                echo "📊 复制后文件统计:"
+                echo "  📦 IPK文件: $FINAL_IPK_COUNT 个"
+                echo "  📜 脚本文件: $FINAL_SCRIPT_COUNT 个"
+                echo "  ⚙️ 配置文件: $FINAL_CONFIG_COUNT 个"
+                echo "  📁 其他文件: $FINAL_OTHER_COUNT 个"
+                echo "  总文件数: $FINAL_TOTAL 个"
+                
+                # 显示具体的文件名
+                if [ $FINAL_TOTAL -gt 0 ]; then
+                    echo "📋 具体文件名列表:"
+                    find "files/etc/custom-files" -type f 2>/dev/null | head -20 | while read file; do
+                        local filename=$(basename "$file")
+                        local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                        echo "  📄 $filename ($size)"
+                    done
+                fi
                 
                 # 检查中文名文件（使用精确检测）
                 CHINESE_FILES=0
@@ -1528,6 +1569,9 @@ jobs:
           if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
             CUSTOM_IPK_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -name "*.ipk" 2>/dev/null | wc -l)
             CUSTOM_SCRIPT_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -name "*.sh" -o -name "*.Sh" -o -name "*.SH" 2>/dev/null | wc -l)
+            CUSTOM_CONFIG_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -name "*.conf" -o -name "*.config" -o -name "*.CONF" 2>/dev/null | wc -l)
+            CUSTOM_OTHER_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | wc -l)
+            CUSTOM_OTHER_COUNT=$((CUSTOM_OTHER_COUNT - CUSTOM_IPK_COUNT - CUSTOM_SCRIPT_COUNT - CUSTOM_CONFIG_COUNT))
             
             # 精确统计中文名文件
             CUSTOM_CHINESE_COUNT=0
@@ -1542,6 +1586,9 @@ jobs:
             
             echo "  ✅ 自定义IPK包: $CUSTOM_IPK_COUNT 个"
             echo "  ✅ 自定义脚本: $CUSTOM_SCRIPT_COUNT 个"
+            echo "  ⚙️ 配置文件: $CUSTOM_CONFIG_COUNT 个"
+            echo "  📁 其他文件: $CUSTOM_OTHER_COUNT 个"
+            echo "  总文件数: $((CUSTOM_IPK_COUNT + CUSTOM_SCRIPT_COUNT + CUSTOM_CONFIG_COUNT + CUSTOM_OTHER_COUNT)) 个"
             echo "  🇨🇳 中文名文件: $CUSTOM_CHINESE_COUNT 个"
             echo "  📌 位置: /etc/custom-files/"
             
@@ -1553,6 +1600,16 @@ jobs:
             
             if [ $CUSTOM_CHINESE_COUNT -gt 0 ]; then
               echo "  💡 中文文件名处理: 已优化，支持自动识别和运行"
+            fi
+            
+            # 显示具体的文件名
+            if [ $((CUSTOM_IPK_COUNT + CUSTOM_SCRIPT_COUNT + CUSTOM_CONFIG_COUNT + CUSTOM_OTHER_COUNT)) -gt 0 ]; then
+              echo "  📋 具体文件名:"
+              find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | head -10 | while read file; do
+                local name=$(basename "$file")
+                local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                echo "    📄 $name ($size)"
+              done
             fi
           else
             echo "  ⚪ 自定义文件: 未集成"
