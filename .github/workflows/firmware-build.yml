@@ -909,7 +909,7 @@ jobs:
           
           echo "🟢 步骤 19 完成"
       
-      # 步骤 20: 集成自定义文件（中文名增强修复版）- 第一次开机运行
+      # 步骤 20: 集成自定义文件（中文名增强修复版）- 第一次开机运行 - FIXED
       - name: "20. 集成自定义文件（中文名增强修复版）- 第一次开机运行"
         run: |
           echo "=== 步骤 20: 集成自定义文件（中文名增强修复版）- 第一次开机运行 ==="
@@ -927,7 +927,7 @@ jobs:
             # 显示目录内容
             echo "📁 目录内容:"
             
-            # 使用精确的中文检测函数
+            # 定义中文文件检测函数
             detect_chinese_file() {
               local filename="$1"
               # 检测中文字符的正则表达式
@@ -943,6 +943,8 @@ jobs:
             
             # 获取文件列表
             FILE_LIST=$(find "$CUSTOM_DIR" -type f 2>/dev/null | head -20)
+            
+            # 定义统计变量
             TOTAL_FILES=0
             CHINESE_COUNT=0
             IPK_COUNT=0
@@ -1025,8 +1027,8 @@ jobs:
                 if [ $FINAL_TOTAL -gt 0 ]; then
                     echo "📋 具体文件名列表:"
                     find "files/etc/custom-files" -type f 2>/dev/null | head -20 | while read file; do
-                        local filename=$(basename "$file")
-                        local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                        filename=$(basename "$file")
+                        size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
                         echo "  📄 $filename ($size)"
                     done
                 fi
@@ -1034,7 +1036,7 @@ jobs:
                 # 检查中文名文件（使用精确检测）
                 CHINESE_FILES=0
                 find "files/etc/custom-files" -type f 2>/dev/null | while read file; do
-                  local filename=$(basename "$file")
+                  filename=$(basename "$file")
                   if echo "$filename" | grep -q -P '[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}]'; then
                     CHINESE_FILES=$((CHINESE_FILES + 1))
                   elif echo "$filename" | grep -q -E "备份|恢复|安装|配置|设置|脚本|文件|固件|插件|网络|系统|路由|无线"; then
@@ -1576,7 +1578,7 @@ jobs:
             # 精确统计中文名文件
             CUSTOM_CHINESE_COUNT=0
             find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
-              local filename=$(basename "$file")
+              filename=$(basename "$file")
               if echo "$filename" | grep -q -P '[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}]'; then
                 CUSTOM_CHINESE_COUNT=$((CUSTOM_CHINESE_COUNT + 1))
               elif echo "$filename" | grep -q -E "备份|恢复|安装|配置|设置|脚本|文件|固件|插件|网络|系统|路由|无线"; then
@@ -1606,8 +1608,8 @@ jobs:
             if [ $((CUSTOM_IPK_COUNT + CUSTOM_SCRIPT_COUNT + CUSTOM_CONFIG_COUNT + CUSTOM_OTHER_COUNT)) -gt 0 ]; then
               echo "  📋 具体文件名:"
               find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | head -10 | while read file; do
-                local name=$(basename "$file")
-                local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                name=$(basename "$file")
+                size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
                 echo "    📄 $name ($size)"
               done
             fi
@@ -1627,7 +1629,7 @@ jobs:
             # 精确统计中文名文件
             CUSTOM_CHINESE_COUNT=0
             find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
-              local filename=$(basename "$file")
+              filename=$(basename "$file")
               if echo "$filename" | grep -q -P '[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}]'; then
                 CUSTOM_CHINESE_COUNT=$((CUSTOM_CHINESE_COUNT + 1))
               elif echo "$filename" | grep -q -E "备份|恢复|安装|配置|设置|脚本|文件|固件|插件|网络|系统|路由|无线"; then
