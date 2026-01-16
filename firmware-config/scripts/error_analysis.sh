@@ -116,7 +116,7 @@ init_report() {
     echo "==================================================" >> "$REPORT_FILE"
     echo "分析时间: $(date '+%Y-%m-%d %H:%M:%S')" >> "$REPORT_FILE"
     echo "报告时间戳: $TIMESTAMP" >> "$REPORT_FILE"
-    echo "报告版本: 3.1.0" >> "$REPORT_FILE"
+    echo "报告版本: 3.2.0" >> "$REPORT_FILE"
     echo "构建目录: $BUILD_DIR" >> "$REPORT_FILE"
     echo "SDK目录: $SDK_DIR" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
@@ -147,7 +147,7 @@ collect_system_info() {
     fi
     echo "" >> "$REPORT_FILE"
     
-    echo "⚙️  构建参数:" >> "$REPORT_FILE"
+    echo "⚙️ 构建参数:" >> "$REPORT_FILE"
     echo "  设备: ${DEVICE:-未设置}" >> "$REPORT_FILE"
     echo "  目标平台: ${TARGET:-未设置}" >> "$REPORT_FILE"
     echo "  子目标: ${SUBTARGET:-未设置}" >> "$REPORT_FILE"
@@ -188,7 +188,7 @@ check_system_resources() {
     echo "  运行时间: $(uptime -p 2>/dev/null || uptime)" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
-    echo "🌡️  系统温度 (如果可用):" >> "$REPORT_FILE"
+    echo "🌡️ 系统温度 (如果可用):" >> "$REPORT_FILE"
     if command -v sensors >/dev/null 2>&1; then
         sensors 2>/dev/null | grep -E "Core|temp" | head -5 >> "$REPORT_FILE" || echo "  未检测到温度传感器" >> "$REPORT_FILE"
     else
@@ -236,12 +236,12 @@ check_build_result() {
         
         # 检查是否有build_dir目录
         if [ -d "$BUILD_DIR/build_dir" ]; then
-            echo "⚠️  build_dir目录存在，编译可能正在进行中" >> "$REPORT_FILE"
+            echo "⚠️ build_dir目录存在，编译可能正在进行中" >> "$REPORT_FILE"
         fi
         
         # 检查是否有staging_dir目录
         if [ -d "$BUILD_DIR/staging_dir" ]; then
-            echo "ℹ️  staging_dir目录存在，编译器已构建" >> "$REPORT_FILE"
+            echo "ℹ️ staging_dir目录存在，编译器已构建" >> "$REPORT_FILE"
         fi
     fi
     echo "" >> "$REPORT_FILE"
@@ -1038,7 +1038,7 @@ check_custom_files_integration() {
         echo "📊 自定义文件统计:" >> "$REPORT_FILE"
         echo "  📦 IPK文件: $ipk_count 个" >> "$REPORT_FILE"
         echo "  📜 脚本文件: $script_count 个" >> "$REPORT_FILE"
-        echo "  ⚙️  配置文件: $config_count 个" >> "$REPORT_FILE"
+        echo "  ⚙️ 配置文件: $config_count 个" >> "$REPORT_FILE"
         echo "  📄 其他文件: $other_count 个" >> "$REPORT_FILE"
         echo "  🇨🇳 中文名文件: $chinese_count 个" >> "$REPORT_FILE"
         echo "  📁 总文件数: $total_count 个" >> "$REPORT_FILE"
@@ -1102,7 +1102,7 @@ check_custom_files_integration() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 14. 分析编译器相关错误（增强版）
+# 14. 分析编译器相关错误（增强版）- 修复语法错误
 analyze_compiler_errors() {
     log_step "分析编译器相关错误"
     
@@ -1160,17 +1160,29 @@ analyze_compiler_errors() {
         echo "💡 使用自动构建的编译器" >> "$REPORT_FILE"
     fi
     
-    # 检查编译器错误
-    if grep -q "$COMPILER_DIR" "$BUILD_DIR/build.log" 2>/dev/null && grep -q "error\|failed" "$BUILD_DIR/build.log" 2>/dev/null; then
-        echo "⚠️ 发现预构建编译器相关错误" >> "$REPORT_FILE"
-        grep "$COMPILER_DIR" "$BUILD_DIR/build.log" | grep -i "error\|failed" | head -5 >> "$REPORT_FILE"
+    # 检查编译器错误 - 修复语法错误
+    echo "🔍 编译器错误检查:" >> "$REPORT_FILE"
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+        if grep -q "$COMPILER_DIR" "$BUILD_DIR/build.log" 2>/dev/null && grep -q "error\|failed" "$BUILD_DIR/build.log" 2>/dev/null; then
+            echo "⚠️ 发现预构建编译器相关错误" >> "$REPORT_FILE"
+            grep "$COMPILER_DIR" "$BUILD_DIR/build.log" | grep -i "error\|failed" | head -5 >> "$REPORT_FILE"
+        else
+            echo "✅ 未发现预构建编译器相关错误" >> "$REPORT_FILE"
+        fi
     fi
     
     # 检查dummy-tools相关错误
-    if grep -q "dummy-tools" "$BUILD_DIR/build.log" 2>/dev/null && grep -q "error\|failed" "$BUILD_DIR/build.log" 2>/dev/null; then
-        echo "⚠️ 发现dummy-tools相关错误" >> "$REPORT_FILE"
-        grep "dummy-tools" "$BUILD_DIR/build.log" | grep -i "error\|failed" | head -3 >> "$REPORT_FILE"
-        echo "💡 dummy-tools是OpenWrt构建系统的占位符，不是真正的编译器" >> "$REPORT_FILE"
+    echo "🔍 dummy-tools检查:" >> "$REPORT_FILE"
+    if grep -q "dummy-tools" "$BUILD_DIR/build.log" 2>/dev/null; then
+        if grep -q "dummy-tools" "$BUILD_DIR/build.log" 2>/dev/null && grep -q "error\|failed" "$BUILD_DIR/build.log" 2>/dev/null; then
+            echo "⚠️ 发现dummy-tools相关错误" >> "$REPORT_FILE"
+            grep "dummy-tools" "$BUILD_DIR/build.log" | grep -i "error\|failed" | head -3 >> "$REPORT_FILE"
+            echo "💡 dummy-tools是OpenWrt构建系统的占位符，不是真正的编译器" >> "$REPORT_FILE"
+        else
+            echo "✅ dummy-tools未产生错误" >> "$REPORT_FILE"
+        fi
+    else
+        echo "ℹ️ 未检测到dummy-tools相关日志" >> "$REPORT_FILE"
     fi
     echo "" >> "$REPORT_FILE"
 }
@@ -1358,7 +1370,7 @@ generate_error_report() {
     
     echo "=== OpenWrt 构建错误报告 ===" > "$report_file"
     echo "生成时间: $(date)" >> "$report_file"
-    echo "构建目录: $BUILD_DIR" >> "$REPORT_FILE"
+    echo "构建目录: $BUILD_DIR" >> "$report_file"
     echo "报告时间戳: $TIMESTAMP" >> "$report_file"
     echo "" >> "$report_file"
     
@@ -1462,7 +1474,7 @@ generate_error_report() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 20. 详细错误分析函数（优化版）
+# 20. 详细错误分析函数（优化版）- 修复语法错误
 analyze_detailed_errors() {
     log_step "执行详细错误分析"
     
@@ -1588,19 +1600,20 @@ analyze_detailed_errors() {
         else
             echo "  ℹ️ 未设置SDK编译器目录" >> "$REPORT_FILE"
         fi
+        
         echo "" >> "$REPORT_FILE"
         
         # 显示实际错误统计
         echo "📈 实际错误统计汇总 (过滤后):" >> "$REPORT_FILE"
-        echo "  编译器错误: $(echo "$compiler_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
-        echo "  头文件错误: $(echo "$header_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
-        echo "  下载错误: $(echo "$download_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
-        echo "  权限错误: $(echo "$permission_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
-        echo "  内存错误: $(echo "$memory_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
-        echo "  包编译错误: $(echo "$package_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
-        echo "  磁盘空间错误: $(echo "$disk_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
-        echo "  时间戳错误: $(echo "$timestamp_errors" | wc -l 2>/dev/null || echo "0") 个" >> "$REPORT_FILE"
-        echo "  SDK编译器使用: $(if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ] && [ $sdk_usage_count -gt 0 ]; then echo "✅ 已使用"; else echo "⚠️ 未使用/未检测到"; fi)" >> "$REPORT_FILE"
+        echo "  编译器错误: $(echo "$compiler_errors" | wc -l 2>/dev/null)" >> "$REPORT_FILE"
+        echo "  头文件错误: $(echo "$header_errors" | wc -l 2>/dev/null)" >> "$REPORT_FILE"
+        echo "  下载错误: $(echo "$download_errors" | wc -l 2>/dev/null)" >> "$REPORT_FILE"
+        echo "  权限错误: $(echo "$permission_errors" | wc -l 2>/dev/null)" >> "$REPORT_FILE"
+        echo "  内存错误: $(echo "$memory_errors" | wc -l 2>/dev/null)" >> "$REPORT_FILE"
+        echo "  包编译错误: $(echo "$package_errors" | wc -l 2>/dev/null)" >> "$REPORT_FILE"
+        echo "  磁盘空间错误: $(echo "$disk_errors" | wc -l 2>/dev/null)" >> "$REPORT_FILE"
+        echo "  时间戳错误: $(echo "$timestamp_errors" | wc -l 2>/dev/null)" >> "$REPORT_FILE"
+        echo "  SDK编译器使用: $([ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ] && [ $sdk_usage_count -gt 0 ] && echo "✅ 已使用" || echo "⚠️ 未使用/未检测到")" >> "$REPORT_FILE"
         
     else
         echo "❌ 构建日志文件不存在，无法进行详细错误分析" >> "$REPORT_FILE"
@@ -1795,7 +1808,7 @@ generate_fix_suggestions() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 22. 生成总结报告（增强版）
+# 22. 生成总结报告（增强版）- 修复语法错误
 generate_summary() {
     log_step "生成分析总结"
     
@@ -1843,14 +1856,14 @@ generate_summary() {
     fi
     
     echo "📊 构建状态概览:" >> "$REPORT_FILE"
-    echo "  ✅ 构建目录: $(if [ -d "$BUILD_DIR" ]; then echo '存在'; else echo '缺失'; fi)" >> "$REPORT_FILE"
-    echo "  ✅ 配置文件: $(if [ $config_exists -eq 1 ]; then echo '存在'; else echo '缺失'; fi)" >> "$REPORT_FILE"
-    echo "  ✅ 构建日志: $(if [ $build_log_exists -eq 1 ]; then echo "存在 (原始错误: $error_count, 警告: $warning_count)"; else echo '缺失'; fi)" >> "$REPORT_FILE"
-    echo "  ✅ 编译目录: $(if [ $staging_dir_exists -eq 1 ]; then echo '存在'; else echo '缺失'; fi)" >> "$REPORT_FILE"
-    echo "  ✅ 固件生成: $(if [ $firmware_exists -eq 1 ]; then echo '成功'; else echo '失败'; fi)" >> "$REPORT_FILE"
-    echo "  ✅ SDK编译器: $(if [ $sdk_compiler_exists -eq 1 ]; then echo '已下载'; else echo '未下载'; fi)" >> "$REPORT_FILE"
-    echo "  ✅ SDK目录: $(if [ $sdk_dir_exists -eq 1 ]; then echo '存在'; else echo '缺失'; fi)" >> "$REPORT_FILE"
-    echo "  ✅ 自定义文件: $(if [ $custom_files_exists -eq 1 ]; then echo '已集成'; else echo '未集成'; fi)" >> "$REPORT_FILE"
+    echo "  ✅ 构建目录: $([ -d "$BUILD_DIR" ] && echo '存在' || echo '缺失')" >> "$REPORT_FILE"
+    echo "  ✅ 配置文件: $([ $config_exists -eq 1 ] && echo '存在' || echo '缺失')" >> "$REPORT_FILE"
+    echo "  ✅ 构建日志: $([ $build_log_exists -eq 1 ] && echo "存在 (原始错误: $error_count, 警告: $warning_count)" || echo '缺失')" >> "$REPORT_FILE"
+    echo "  ✅ 编译目录: $([ $staging_dir_exists -eq 1 ] && echo '存在' || echo '缺失')" >> "$REPORT_FILE"
+    echo "  ✅ 固件生成: $([ $firmware_exists -eq 1 ] && echo '成功' || echo '失败')" >> "$REPORT_FILE"
+    echo "  ✅ SDK编译器: $([ $sdk_compiler_exists -eq 1 ] && echo '已下载' || echo '未下载')" >> "$REPORT_FILE"
+    echo "  ✅ SDK目录: $([ $sdk_dir_exists -eq 1 ] && echo '存在' || echo '缺失')" >> "$REPORT_FILE"
+    echo "  ✅ 自定义文件: $([ $custom_files_exists -eq 1 ] && echo '已集成' || echo '未集成')" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
     # 编译器来源分析
@@ -1948,10 +1961,10 @@ generate_summary() {
         echo "  ⏳ 状态: 构建可能尚未开始或正在进行" >> "$REPORT_FILE"
         echo "  💡 建议: 开始编译或等待编译完成" >> "$REPORT_FILE"
     elif [ $error_count -lt 5 ]; then
-        echo "  ⚠️  状态: 轻微问题" >> "$REPORT_FILE"
+        echo "  ⚠️ 状态: 轻微问题" >> "$REPORT_FILE"
         echo "  💡 建议: 小问题，容易修复" >> "$REPORT_FILE"
     elif [ $error_count -lt 20 ]; then
-        echo "  ⚠️  状态: 中等问题" >> "$REPORT_FILE"
+        echo "  ⚠️ 状态: 中等问题" >> "$REPORT_FILE"
         echo "  💡 建议: 需要一些修复工作" >> "$REPORT_FILE"
     elif [ $error_count -lt 100 ]; then
         echo "  🚨 状态: 严重问题" >> "$REPORT_FILE"
