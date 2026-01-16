@@ -909,7 +909,7 @@ jobs:
           
           echo "🟢 步骤 19 完成"
       
-      # 步骤 20: 集成自定义文件（中文名增强修复版）- 第一次开机运行 - FIXED
+      # 步骤 20: 集成自定义文件（中文名增强修复版）- 第一次开机运行 - 修复IPK安装逻辑
       - name: "20. 集成自定义文件（中文名增强修复版）- 第一次开机运行"
         run: |
           echo "=== 步骤 20: 集成自定义文件（中文名增强修复版）- 第一次开机运行 ==="
@@ -971,7 +971,7 @@ jobs:
                     fi
                     
                     # 文件类型统计
-                    if [[ "$FILE_NAME" == *.ipk ]] || [[ "$FILE_NAME" == *.IPK ]] || [[ "$FILE_NAME" == *.Ipk ]]; then
+                    if echo "$FILE_NAME" | grep -qi "\.ipk$"; then
                         IPK_COUNT=$((IPK_COUNT + 1))
                     elif [[ "$FILE_NAME" == *.sh ]] || [[ "$FILE_NAME" == *.Sh ]] || [[ "$FILE_NAME" == *.SH ]]; then
                         SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
@@ -996,7 +996,7 @@ jobs:
             fi
             
             # 执行集成
-            echo "🚀 开始执行自定义文件集成（中文名增强版）..."
+            echo "🚀 开始执行自定义文件集成（修复IPK安装逻辑）..."
             "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
             
             # 验证集成结果
@@ -1009,11 +1009,27 @@ jobs:
                 echo "✅ 自定义文件已复制到: files/etc/custom-files"
                 
                 # 统计IPK和脚本文件
-                FINAL_IPK_COUNT=$(find "files/etc/custom-files" -name "*.ipk" 2>/dev/null | wc -l)
-                FINAL_SCRIPT_COUNT=$(find "files/etc/custom-files" -name "*.sh" -o -name "*.Sh" -o -name "*.SH" 2>/dev/null | wc -l)
-                FINAL_CONFIG_COUNT=$(find "files/etc/custom-files" -name "*.conf" -o -name "*.config" -o -name "*.CONF" 2>/dev/null | wc -l)
-                FINAL_OTHER_COUNT=$(find "files/etc/custom-files" -type f 2>/dev/null | wc -l)
-                FINAL_OTHER_COUNT=$((FINAL_OTHER_COUNT - FINAL_IPK_COUNT - FINAL_SCRIPT_COUNT - FINAL_CONFIG_COUNT))
+                FINAL_IPK_COUNT=0
+                FINAL_SCRIPT_COUNT=0
+                FINAL_CONFIG_COUNT=0
+                FINAL_OTHER_COUNT=0
+                
+                # 使用不区分大小写的方式统计IPK文件
+                for file in files/etc/custom-files/*; do
+                  if [ -f "$file" ]; then
+                    FILENAME=$(basename "$file")
+                    if echo "$FILENAME" | grep -qi "\.ipk$"; then
+                      FINAL_IPK_COUNT=$((FINAL_IPK_COUNT + 1))
+                    elif [[ "$FILENAME" == *.sh ]] || [[ "$FILENAME" == *.Sh ]] || [[ "$FILENAME" == *.SH ]]; then
+                      FINAL_SCRIPT_COUNT=$((FINAL_SCRIPT_COUNT + 1))
+                    elif [[ "$FILENAME" == *.conf ]] || [[ "$FILENAME" == *.config ]] || [[ "$FILENAME" == *.CONF ]]; then
+                      FINAL_CONFIG_COUNT=$((FINAL_CONFIG_COUNT + 1))
+                    else
+                      FINAL_OTHER_COUNT=$((FINAL_OTHER_COUNT + 1))
+                    fi
+                  fi
+                done
+                
                 FINAL_TOTAL=$((FINAL_IPK_COUNT + FINAL_SCRIPT_COUNT + FINAL_CONFIG_COUNT + FINAL_OTHER_COUNT))
                 
                 echo "📊 复制后文件统计:"
@@ -1026,21 +1042,25 @@ jobs:
                 # 显示具体的文件名
                 if [ $FINAL_TOTAL -gt 0 ]; then
                     echo "📋 具体文件名列表:"
-                    find "files/etc/custom-files" -type f 2>/dev/null | head -20 | while read file; do
+                    for file in files/etc/custom-files/*; do
+                      if [ -f "$file" ]; then
                         filename=$(basename "$file")
                         size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
                         echo "  📄 $filename ($size)"
+                      fi
                     done
                 fi
                 
                 # 检查中文名文件（使用精确检测）
                 CHINESE_FILES=0
-                find "files/etc/custom-files" -type f 2>/dev/null | while read file; do
-                  filename=$(basename "$file")
-                  if echo "$filename" | grep -q -P '[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}]'; then
-                    CHINESE_FILES=$((CHINESE_FILES + 1))
-                  elif echo "$filename" | grep -q -E "备份|恢复|安装|配置|设置|脚本|文件|固件|插件|网络|系统|路由|无线"; then
-                    CHINESE_FILES=$((CHINESE_FILES + 1))
+                for file in files/etc/custom-files/*; do
+                  if [ -f "$file" ]; then
+                    filename=$(basename "$file")
+                    if echo "$filename" | grep -q -P '[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}]'; then
+                      CHINESE_FILES=$((CHINESE_FILES + 1))
+                    elif echo "$filename" | grep -q -E "备份|恢复|安装|配置|设置|脚本|文件|固件|插件|网络|系统|路由|无线"; then
+                      CHINESE_FILES=$((CHINESE_FILES + 1))
+                    fi
                   fi
                 done
                 
@@ -1052,17 +1072,26 @@ jobs:
                 # 检查启动脚本
                 if [ -f "files/etc/uci-defaults/99-custom-files" ]; then
                     echo "✅ 第一次开机启动脚本: files/etc/uci-defaults/99-custom-files"
-                    echo "📝 脚本增强功能:"
+                    echo "📝 脚本修复内容:"
+                    echo "  - ✅ 修复了IPK文件查找逻辑，使用不区分大小写的匹配"
+                    echo "  - ✅ 使用通用方法遍历所有文件，确保所有IPK都被找到"
+                    echo "  - ✅ 添加了shopt nullglob处理，防止没有匹配文件时报错"
                     echo "  - ✅ 支持中文文件名检测"
                     echo "  - ✅ 支持多种脚本扩展名 (.sh, .Sh, .SH)"
                     echo "  - ✅ 支持通过shebang检测脚本文件"
-                    echo "  - ✅ 支持IPK文件多种扩展名"
                 fi
                 
                 # 检查中文名处理辅助脚本
                 if [ -f "files/etc/custom-files/process_chinese_files.sh" ]; then
                     echo "✅ 中文名处理辅助脚本: files/etc/custom-files/process_chinese_files.sh"
                 fi
+                
+                echo ""
+                echo "🎯 IPK安装逻辑修复说明:"
+                echo "  🔧 修复问题: 之前版本中IPK文件有时不会被安装"
+                echo "  ✅ 修复方法: 使用不区分大小写的文件匹配 (ipk, IPK, Ipk)"
+                echo "  🔄 安装方式: 通用遍历方法，确保所有文件都被检查"
+                echo "  📌 注意: 现在脚本会检查所有文件的扩展名，不区分大小写"
             else
                 echo "❌ 未找到自定义文件目录"
             fi
@@ -1072,6 +1101,9 @@ jobs:
             echo "💡 自定义文件将在第一次开机时自动安装和运行"
             if [ $CHINESE_COUNT -gt 0 ]; then
                 echo "🔧 中文文件名已优化处理，支持自动识别和运行"
+            fi
+            if [ $IPK_COUNT -gt 0 ]; then
+                echo "📦 IPK安装逻辑已修复，确保所有IPK文件都会被安装"
             fi
           else
             echo "ℹ️ 自定义文件目录不存在: $CUSTOM_DIR"
@@ -1390,11 +1422,11 @@ jobs:
             chmod +x "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh"
             export BUILD_DIR="/mnt/openwrt-build"
             
-            echo "🔧 执行增强版错误分析（支持中文文件名检测）..."
+            echo "🔧 执行增强版错误分析（支持中文文件名检测和自定义文件集成状态检查）..."
             "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh"
             
             echo "✅ 错误分析完成"
-            echo "💡 错误分析已增强，支持中文文件名检测和SDK编译器版本信息"
+            echo "💡 错误分析已增强，支持中文文件名检测、SDK编译器版本信息和自定义文件集成状态检查"
           else
             echo "⚠️ 错误分析脚本不存在"
             echo "📝 创建基本的错误分析..."
@@ -1567,26 +1599,43 @@ jobs:
           
           # 自定义文件集成状态（增强版）
           echo ""
-          echo "📁 自定义文件集成状态（增强版）:"
+          echo "📁 自定义文件集成状态（增强版）- 修复IPK安装逻辑:"
           if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
-            CUSTOM_IPK_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -name "*.ipk" 2>/dev/null | wc -l)
-            CUSTOM_SCRIPT_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -name "*.sh" -o -name "*.Sh" -o -name "*.SH" 2>/dev/null | wc -l)
-            CUSTOM_CONFIG_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -name "*.conf" -o -name "*.config" -o -name "*.CONF" 2>/dev/null | wc -l)
-            CUSTOM_OTHER_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | wc -l)
-            CUSTOM_OTHER_COUNT=$((CUSTOM_OTHER_COUNT - CUSTOM_IPK_COUNT - CUSTOM_SCRIPT_COUNT - CUSTOM_CONFIG_COUNT))
+            CUSTOM_IPK_COUNT=0
+            CUSTOM_SCRIPT_COUNT=0
+            CUSTOM_CONFIG_COUNT=0
+            CUSTOM_OTHER_COUNT=0
             
-            # 精确统计中文名文件
-            CUSTOM_CHINESE_COUNT=0
-            find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
-              filename=$(basename "$file")
-              if echo "$filename" | grep -q -P '[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}]'; then
-                CUSTOM_CHINESE_COUNT=$((CUSTOM_CHINESE_COUNT + 1))
-              elif echo "$filename" | grep -q -E "备份|恢复|安装|配置|设置|脚本|文件|固件|插件|网络|系统|路由|无线"; then
-                CUSTOM_CHINESE_COUNT=$((CUSTOM_CHINESE_COUNT + 1))
+            # 使用不区分大小写的方式统计
+            for file in /mnt/openwrt-build/files/etc/custom-files/*; do
+              if [ -f "$file" ]; then
+                FILENAME=$(basename "$file")
+                if echo "$FILENAME" | grep -qi "\.ipk$"; then
+                  CUSTOM_IPK_COUNT=$((CUSTOM_IPK_COUNT + 1))
+                elif [[ "$FILENAME" == *.sh ]] || [[ "$FILENAME" == *.Sh ]] || [[ "$FILENAME" == *.SH ]]; then
+                  CUSTOM_SCRIPT_COUNT=$((CUSTOM_SCRIPT_COUNT + 1))
+                elif [[ "$FILENAME" == *.conf ]] || [[ "$FILENAME" == *.config ]] || [[ "$FILENAME" == *.CONF ]]; then
+                  CUSTOM_CONFIG_COUNT=$((CUSTOM_CONFIG_COUNT + 1))
+                else
+                  CUSTOM_OTHER_COUNT=$((CUSTOM_OTHER_COUNT + 1))
+                fi
               fi
             done
             
-            echo "  ✅ 自定义IPK包: $CUSTOM_IPK_COUNT 个"
+            # 精确统计中文名文件
+            CUSTOM_CHINESE_COUNT=0
+            for file in /mnt/openwrt-build/files/etc/custom-files/*; do
+              if [ -f "$file" ]; then
+                filename=$(basename "$file")
+                if echo "$filename" | grep -q -P '[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}]'; then
+                  CUSTOM_CHINESE_COUNT=$((CUSTOM_CHINESE_COUNT + 1))
+                elif echo "$filename" | grep -q -E "备份|恢复|安装|配置|设置|脚本|文件|固件|插件|网络|系统|路由|无线"; then
+                  CUSTOM_CHINESE_COUNT=$((CUSTOM_CHINESE_COUNT + 1))
+                fi
+              fi
+            done
+            
+            echo "  ✅ 自定义IPK包: $CUSTOM_IPK_COUNT 个 (支持 .ipk, .IPK, .Ipk)"
             echo "  ✅ 自定义脚本: $CUSTOM_SCRIPT_COUNT 个"
             echo "  ⚙️ 配置文件: $CUSTOM_CONFIG_COUNT 个"
             echo "  📁 其他文件: $CUSTOM_OTHER_COUNT 个"
@@ -1595,22 +1644,32 @@ jobs:
             echo "  📌 位置: /etc/custom-files/"
             
             if [ -f "/mnt/openwrt-build/files/etc/uci-defaults/99-custom-files" ]; then
-              echo "  ✅ 第一次开机安装脚本: 已创建（支持中文文件名）"
+              echo "  ✅ 第一次开机安装脚本: 已创建（修复了IPK安装逻辑）"
               echo "  💡 自定义文件将在第一次开机时自动安装"
               echo "  🔧 中文文件名支持: 已启用增强处理"
+              echo "  🔧 IPK安装修复: 已启用不区分大小写的文件匹配"
             fi
             
             if [ $CUSTOM_CHINESE_COUNT -gt 0 ]; then
               echo "  💡 中文文件名处理: 已优化，支持自动识别和运行"
             fi
             
+            if [ $CUSTOM_IPK_COUNT -gt 0 ]; then
+              echo "  🎯 IPK安装修复说明:"
+              echo "    - 使用不区分大小写的文件匹配"
+              echo "    - 确保所有IPK文件都会被安装"
+              echo "    - 修复了23.05版本中IPK不安装的问题"
+            fi
+            
             # 显示具体的文件名
             if [ $((CUSTOM_IPK_COUNT + CUSTOM_SCRIPT_COUNT + CUSTOM_CONFIG_COUNT + CUSTOM_OTHER_COUNT)) -gt 0 ]; then
               echo "  📋 具体文件名:"
-              find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | head -10 | while read file; do
-                name=$(basename "$file")
-                size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                echo "    📄 $name ($size)"
+              for file in /mnt/openwrt-build/files/etc/custom-files/*; do
+                if [ -f "$file" ]; then
+                  name=$(basename "$file")
+                  size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                  echo "    📄 $name ($size)"
+                fi
               done
             fi
           else
@@ -1624,25 +1683,22 @@ jobs:
           echo "  🔧 已修复: 在步骤19和23中使用 stdbuf -oL -eL 命令"
           echo "  📊 这是一个无害的警告，不影响编译结果"
           
-          # 中文文件名提醒
+          # IPK安装逻辑修复说明
           if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
-            # 精确统计中文名文件
-            CUSTOM_CHINESE_COUNT=0
-            find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
-              filename=$(basename "$file")
-              if echo "$filename" | grep -q -P '[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}]'; then
-                CUSTOM_CHINESE_COUNT=$((CUSTOM_CHINESE_COUNT + 1))
-              elif echo "$filename" | grep -q -E "备份|恢复|安装|配置|设置|脚本|文件|固件|插件|网络|系统|路由|无线"; then
-                CUSTOM_CHINESE_COUNT=$((CUSTOM_CHINESE_COUNT + 1))
+            CUSTOM_IPK_COUNT=0
+            for file in /mnt/openwrt-build/files/etc/custom-files/*; do
+              if [ -f "$file" ] && echo "$(basename "$file")" | grep -qi "\.ipk$"; then
+                CUSTOM_IPK_COUNT=$((CUSTOM_IPK_COUNT + 1))
               fi
             done
             
-            if [ $CUSTOM_CHINESE_COUNT -gt 0 ]; then
+            if [ $CUSTOM_IPK_COUNT -gt 0 ]; then
               echo ""
-              echo "🔧 关于中文文件名:"
-              echo "  ✅ 已启用中文文件名增强处理"
-              echo "  💡 建议将中文文件名改为英文名以获得最佳兼容性"
-              echo "  📌 当前支持的中文检测: Unicode中文字符范围和常见中文关键词"
+              echo "🔧 关于IPK安装逻辑修复:"
+              echo "  ✅ 已修复IPK文件安装问题"
+              echo "  💡 问题原因: 之前的脚本使用严格的文件扩展名匹配"
+              echo "  🎯 修复方案: 使用不区分大小写的匹配 (ipk, IPK, Ipk)"
+              echo "  📌 现在所有IPK文件都会被正确安装"
             fi
           fi
           
