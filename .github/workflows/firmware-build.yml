@@ -449,6 +449,7 @@ jobs:
             echo "  DEVICE: $DEVICE"
             echo "  CONFIG_MODE: $CONFIG_MODE"
             echo "  REPO_ROOT: $REPO_ROOT"
+            echo "  COMPILER_DIR: $COMPILER_DIR"
             echo ""
             
             echo "💡 使用步骤6.3已设置的环境变量进行SDK下载"
@@ -530,11 +531,14 @@ jobs:
             echo "✅ SDK目录存在: /mnt/openwrt-build/sdk"
             echo "📊 SDK目录大小: $(du -sh /mnt/openwrt-build/sdk 2>/dev/null | cut -f1 || echo '未知')"
             
+            # 查找真正的GCC，排除虚假编译器
             GCC_FILE=$(find "/mnt/openwrt-build/sdk" -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
               ! -name "*gcc-nm" \
+              ! -path "*dummy-tools*" \
+              ! -path "*scripts*" \
               2>/dev/null | head -1)
             
             if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
@@ -558,7 +562,18 @@ jobs:
               
               echo "💡 系统GCC (11.4.0) 用于编译工具链，SDK GCC ($MAJOR_VERSION.x) 用于交叉编译固件"
             else
-              echo "⚠️ 未找到可执行的GCC编译器"
+              echo "⚠️ 未找到可执行的GCC编译器（可能是虚假的dummy-tools）"
+              
+              # 检查是否有虚假的编译器
+              DUMMY_GCC=$(find "/mnt/openwrt-build/sdk" -type f -executable \
+                -name "*gcc" \
+                -path "*dummy-tools*" \
+                2>/dev/null | head -1)
+              
+              if [ -n "$DUMMY_GCC" ]; then
+                echo "⚠️ 检测到虚假的dummy-tools编译器: $DUMMY_GCC"
+                echo "💡 这是OpenWrt构建系统的占位符，不是真正的编译器"
+              fi
             fi
           else
             echo "❌ SDK目录不存在"
@@ -914,12 +929,26 @@ jobs:
             FILE_COUNT=0
             CHINESE_COUNT=0
             
-            find "$CUSTOM_DIR" -type f 2>/dev/null | while read file; do
+            # 使用精确的中文检测函数
+            detect_chinese_file() {
+              local filename="$1"
+              # 检测中文字符的正则表达式
+              if echo "$filename" | grep -q -P '[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}]'; then
+                return 0
+              fi
+              # 检测常见中文关键词
+              if echo "$filename" | grep -q -E "备份|恢复|安装|配置|设置|脚本|文件|固件|插件|网络|系统|路由|无线"; then
+                return 0
+              fi
+              return 1
+            }
+            
+            find "$CUSTOM_DIR" -type f 2>/dev/null | head -20 | while read file; do
                 FILE_NAME=$(basename "$file")
                 FILE_SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
                 
                 # 检查是否是中文文件名
-                if [[ "$FILE_NAME" =~ [\x80-\xFF] ]]; then
+                if detect_chinese_file "$FILE_NAME"; then
                     echo "  📄 🇨🇳 $FILE_NAME ($FILE_SIZE) - 中文名"
                     CHINESE_COUNT=$((CHINESE_COUNT + 1))
                 else
@@ -961,8 +990,17 @@ jobs:
                 echo "  📜 脚本文件: $SCRIPT_COUNT 个"
                 echo "  📁 其他文件: $OTHER_COUNT 个"
                 
-                # 检查中文名文件
-                CHINESE_FILES=$(find "files/etc/custom-files" -name "*" -exec bash -c '[[ $(basename "$1") =~ [\x80-\xFF] ]] && echo "$1"' _ {} \; 2>/dev/null | wc -l)
+                # 检查中文名文件（使用精确检测）
+                CHINESE_FILES=0
+                find "files/etc/custom-files" -type f 2>/dev/null | while read file; do
+                  local filename=$(basename "$file")
+                  if echo "$filename" | grep -q -P '[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}]'; then
+                    CHINESE_FILES=$((CHINESE_FILES + 1))
+                  elif echo "$filename" | grep -q -E "备份|恢复|安装|配置|设置|脚本|文件|固件|插件|网络|系统|路由|无线"; then
+                    CHINESE_FILES=$((CHINESE_FILES + 1))
+                  fi
+                done
+                
                 if [ $CHINESE_FILES -gt 0 ]; then
                     echo "  🇨🇳 中文名文件: $CHINESE_FILES 个"
                     echo "  💡 中文名文件已优化处理，支持第一次开机自动安装"
@@ -1030,7 +1068,7 @@ jobs:
               echo "🚨 23.05版本SDK验证问题修复提示:"
               echo "💡 23.05 SDK使用GCC 12.3.0，已放宽验证条件"
               echo "📌 只需要有GCC编译器文件即可，不要求特定目录结构"
-              echo "🔧 如果仍有问题，请检查步骤7的SDK下载是否完整"
+              echo "🔧 已排除虚假的dummy-tools编译器检测"
             fi
             
             exit 1
@@ -1350,7 +1388,7 @@ jobs:
           
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-          echo "/mnt 可用空间: ${available_gb}G"
+          echo "/mnt 可用空间: ${AVAILABLE_GB}G"
           
           if [ $AVAILABLE_GB -lt 5 ]; then
             echo "⚠️ 警告: 磁盘空间较低，建议清理"
@@ -1449,11 +1487,14 @@ jobs:
           
           # 检查SDK编译器版本
           if [ -d "/mnt/openwrt-build/sdk" ]; then
+            # 查找真正的GCC，排除虚假编译器
             GCC_FILE=$(find "/mnt/openwrt-build/sdk" -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
               ! -name "*gcc-nm" \
+              ! -path "*dummy-tools*" \
+              ! -path "*scripts*" \
               2>/dev/null | head -1)
             
             if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
@@ -1472,7 +1513,7 @@ jobs:
               fi
             else
               echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
-              echo "  🎯 SDK GCC: 未检测到版本"
+              echo "  🎯 SDK GCC: 未检测到版本（可能检测到虚假的dummy-tools编译器）"
             fi
           else
             echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
@@ -1487,7 +1528,17 @@ jobs:
           if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
             CUSTOM_IPK_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -name "*.ipk" 2>/dev/null | wc -l)
             CUSTOM_SCRIPT_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -name "*.sh" -o -name "*.Sh" -o -name "*.SH" 2>/dev/null | wc -l)
-            CUSTOM_CHINESE_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -name "*" -exec bash -c '[[ $(basename "$1") =~ [\x80-\xFF] ]] && echo "$1"' _ {} \; 2>/dev/null | wc -l)
+            
+            # 精确统计中文名文件
+            CUSTOM_CHINESE_COUNT=0
+            find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
+              local filename=$(basename "$file")
+              if echo "$filename" | grep -q -P '[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}]'; then
+                CUSTOM_CHINESE_COUNT=$((CUSTOM_CHINESE_COUNT + 1))
+              elif echo "$filename" | grep -q -E "备份|恢复|安装|配置|设置|脚本|文件|固件|插件|网络|系统|路由|无线"; then
+                CUSTOM_CHINESE_COUNT=$((CUSTOM_CHINESE_COUNT + 1))
+              fi
+            done
             
             echo "  ✅ 自定义IPK包: $CUSTOM_IPK_COUNT 个"
             echo "  ✅ 自定义脚本: $CUSTOM_SCRIPT_COUNT 个"
@@ -1516,13 +1567,23 @@ jobs:
           
           # 中文文件名提醒
           if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
-            CUSTOM_CHINESE_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -name "*" -exec bash -c '[[ $(basename "$1") =~ [\x80-\xFF] ]] && echo "$1"' _ {} \; 2>/dev/null | wc -l)
+            # 精确统计中文名文件
+            CUSTOM_CHINESE_COUNT=0
+            find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
+              local filename=$(basename "$file")
+              if echo "$filename" | grep -q -P '[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}]'; then
+                CUSTOM_CHINESE_COUNT=$((CUSTOM_CHINESE_COUNT + 1))
+              elif echo "$filename" | grep -q -E "备份|恢复|安装|配置|设置|脚本|文件|固件|插件|网络|系统|路由|无线"; then
+                CUSTOM_CHINESE_COUNT=$((CUSTOM_CHINESE_COUNT + 1))
+              fi
+            done
+            
             if [ $CUSTOM_CHINESE_COUNT -gt 0 ]; then
               echo ""
               echo "🔧 关于中文文件名:"
               echo "  ✅ 已启用中文文件名增强处理"
               echo "  💡 建议将中文文件名改为英文名以获得最佳兼容性"
-              echo "  📌 当前支持的中文关键词: 备份, 恢复, 安装, 配置, 设置"
+              echo "  📌 当前支持的中文检测: Unicode中文字符范围和常见中文关键词"
             fi
           fi
           
