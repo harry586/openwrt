@@ -27,7 +27,7 @@ save_env() {
     echo "export SELECTED_REPO_URL=\"${SELECTED_REPO_URL}\"" >> $ENV_FILE
     echo "export SELECTED_BRANCH=\"${SELECTED_BRANCH}\"" >> $ENV_FILE
     echo "export TARGET=\"${TARGET}\"" >> $ENV_FILE
-    echo "export SUBTARGET=\"${SUBTARGET}\"" >> $SUBTARGET
+    echo "export SUBTARGET=\"${SUBTARGET}\"" >> $ENV_FILE
     echo "export DEVICE=\"${DEVICE}\"" >> $ENV_FILE
     echo "export CONFIG_MODE=\"${CONFIG_MODE}\"" >> $ENV_FILE
     echo "export REPO_ROOT=\"${REPO_ROOT}\"" >> $ENV_FILE
@@ -185,12 +185,14 @@ download_openwrt_sdk() {
         toolchain_dir="$sdk_dir/toolchain"
         log "✅ 找到toolchain目录: $toolchain_dir"
     else
-        # 在SDK中搜索编译器
+        # 在SDK中搜索编译器，排除虚假的dummy-tools
         local gcc_file=$(find "$sdk_dir" -type f -executable \
             -name "*gcc" \
             ! -name "*gcc-ar" \
             ! -name "*gcc-ranlib" \
             ! -name "*gcc-nm" \
+            ! -path "*dummy-tools*" \
+            ! -path "*scripts*" \
             2>/dev/null | head -1)
         
         if [ -n "$gcc_file" ]; then
@@ -234,6 +236,12 @@ check_gcc_version() {
     local version_output=$("$gcc_path" --version 2>&1)
     
     if echo "$version_output" | grep -qi "gcc"; then
+        # 检查是否是虚假的dummy-tools编译器
+        if echo "$version_output" | grep -qi "dummy-tools"; then
+            log "⚠️ 虚假的GCC编译器: scripts/dummy-tools/gcc"
+            return 1
+        fi
+        
         local full_version=$(echo "$version_output" | head -1)
         local compiler_name=$(basename "$gcc_path")
         log "✅ 找到GCC编译器: $compiler_name"
@@ -313,33 +321,39 @@ verify_compiler_files() {
     log "  路径: $compiler_dir"
     log "  大小: $(du -sh "$compiler_dir" 2>/dev/null | cut -f1 || echo '未知')"
     
-    # 查找真正的GCC编译器（排除工具链工具）- 修复查找逻辑
+    # 查找真正的GCC编译器（排除工具链工具和虚假编译器）- 修复查找逻辑
     log "⚙️ 可执行编译器检查:"
     local gcc_executable=""
     
-    # 首先尝试在bin目录中查找
+    # 首先尝试在bin目录中查找，排除dummy-tools
     if [ -d "$compiler_dir/bin" ]; then
         gcc_executable=$(find "$compiler_dir/bin" -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
           ! -name "*gcc-nm" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
           2>/dev/null | head -1)
     fi
     
-    # 如果没有找到，在整个目录中搜索
+    # 如果没有找到，在整个目录中搜索，排除dummy-tools
     if [ -z "$gcc_executable" ]; then
         gcc_executable=$(find "$compiler_dir" -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
           ! -name "*gcc-nm" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
           2>/dev/null | head -1)
     fi
     
     local gpp_executable=$(find "$compiler_dir" -type f -executable \
       -name "*g++" \
       ! -name "*g++-*" \
+      ! -path "*dummy-tools*" \
+      ! -path "*scripts*" \
       2>/dev/null | head -1)
     
     local gcc_version_valid=0
@@ -348,57 +362,84 @@ verify_compiler_files() {
         local executable_name=$(basename "$gcc_executable")
         log "  ✅ 找到可执行GCC: $executable_name"
         
-        # 使用专门的版本检查函数
-        if check_gcc_version "$gcc_executable" "11"; then
-            gcc_version_valid=1
-            log "     🎯 GCC 8-15.x 版本兼容验证成功"
-        else
-            log "     ⚠️ GCC版本检查警告"
+        # 检查是否是虚假的dummy-tools编译器
+        local version_output=$("$gcc_executable" --version 2>&1)
+        if echo "$version_output" | grep -qi "dummy-tools"; then
+            log "     ⚠️ 虚假的GCC编译器: scripts/dummy-tools/gcc"
+            log "     🔍 继续查找真正的GCC编译器..."
             
-            # 显示实际版本信息
-            local version=$("$gcc_executable" --version 2>&1 | head -1)
-            log "     实际版本: $version"
+            # 继续查找排除这个虚假的
+            gcc_executable=$(find "$compiler_dir" -type f -executable \
+              -name "*gcc" \
+              ! -name "*gcc-ar" \
+              ! -name "*gcc-ranlib" \
+              ! -name "*gcc-nm" \
+              ! -path "*dummy-tools*" \
+              ! -path "*scripts*" \
+              ! -path "$(dirname "$gcc_executable")" \
+              2>/dev/null | head -1)
             
-            # 检查主要版本
-            local major_version=$(echo "$version" | grep -o "[0-9]\+" | head -1)
-            if [ -n "$major_version" ]; then
-                if [ "$major_version" -ge 8 ] && [ "$major_version" -le 15 ]; then
-                    log "     ✅ GCC $major_version.x 可以兼容使用"
-                    gcc_version_valid=1
-                elif echo "$version" | grep -qi "12.3.0"; then
-                    # 特殊处理OpenWrt 23.05 SDK的GCC 12.3.0
-                    log "     🎯 检测到OpenWrt 23.05 SDK GCC 12.3.0，自动兼容"
-                    gcc_version_valid=1
-                fi
+            if [ -n "$gcc_executable" ]; then
+                executable_name=$(basename "$gcc_executable")
+                log "     ✅ 找到新的GCC编译器: $executable_name"
             fi
         fi
         
-        # 检查平台匹配
-        local gcc_name=$(basename "$gcc_executable")
-        if [ "$target_platform" = "arm" ]; then
-            if [[ "$gcc_name" == *arm* ]] || [[ "$gcc_name" == *aarch64* ]]; then
-                log "     🎯 编译器平台匹配: ARM"
-            elif echo "$gcc_name" | grep -qi "gcc"; then
-                # 对于SDK中的GCC，检查是否是交叉编译器
-                log "     🔄 编译器名称: $gcc_name (可能是通用交叉编译器)"
+        if [ -n "$gcc_executable" ]; then
+            # 使用专门的版本检查函数
+            if check_gcc_version "$gcc_executable" "11"; then
+                gcc_version_valid=1
+                log "     🎯 GCC 8-15.x 版本兼容验证成功"
             else
-                log "     ⚠️ 编译器平台不匹配: $gcc_name (期望: ARM)"
+                log "     ⚠️ GCC版本检查警告"
+                
+                # 显示实际版本信息
+                local version=$("$gcc_executable" --version 2>&1 | head -1)
+                log "     实际版本: $version"
+                
+                # 检查主要版本
+                local major_version=$(echo "$version" | grep -o "[0-9]\+" | head -1)
+                if [ -n "$major_version" ]; then
+                    if [ "$major_version" -ge 8 ] && [ "$major_version" -le 15 ]; then
+                        log "     ✅ GCC $major_version.x 可以兼容使用"
+                        gcc_version_valid=1
+                    elif echo "$version" | grep -qi "12.3.0"; then
+                        # 特殊处理OpenWrt 23.05 SDK的GCC 12.3.0
+                        log "     🎯 检测到OpenWrt 23.05 SDK GCC 12.3.0，自动兼容"
+                        gcc_version_valid=1
+                    fi
+                fi
             fi
-        elif [ "$target_platform" = "mips" ]; then
-            if [[ "$gcc_name" == *mips* ]] || [[ "$gcc_name" == *mipsel* ]]; then
-                log "     🎯 编译器平台匹配: MIPS"
-            elif echo "$gcc_name" | grep -qi "gcc"; then
-                log "     🔄 编译器名称: $gcc_name (可能是通用交叉编译器)"
-            else
-                log "     ⚠️ 编译器平台不匹配: $gcc_name (期望: MIPS)"
+            
+            # 检查平台匹配
+            local gcc_name=$(basename "$gcc_executable")
+            if [ "$target_platform" = "arm" ]; then
+                if [[ "$gcc_name" == *arm* ]] || [[ "$gcc_name" == *aarch64* ]]; then
+                    log "     🎯 编译器平台匹配: ARM"
+                elif echo "$gcc_name" | grep -qi "gcc"; then
+                    # 对于SDK中的GCC，检查是否是交叉编译器
+                    log "     🔄 编译器名称: $gcc_name (可能是通用交叉编译器)"
+                else
+                    log "     ⚠️ 编译器平台不匹配: $gcc_name (期望: ARM)"
+                fi
+            elif [ "$target_platform" = "mips" ]; then
+                if [[ "$gcc_name" == *mips* ]] || [[ "$gcc_name" == *mipsel* ]]; then
+                    log "     🎯 编译器平台匹配: MIPS"
+                elif echo "$gcc_name" | grep -qi "gcc"; then
+                    log "     🔄 编译器名称: $gcc_name (可能是通用交叉编译器)"
+                else
+                    log "     ⚠️ 编译器平台不匹配: $gcc_name (期望: MIPS)"
+                fi
             fi
         fi
     else
         log "  🔍 未找到真正的GCC编译器，查找工具链工具..."
         
-        # 查找工具链工具
+        # 查找工具链工具，排除dummy-tools
         local toolchain_tools=$(find "$compiler_dir" -type f -executable \
           -name "*gcc*" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
           2>/dev/null | head -5)
         
         if [ -n "$toolchain_tools" ]; then
@@ -423,13 +464,16 @@ verify_compiler_files() {
         log "  ✅ 找到可执行G++: $(basename "$gpp_executable")"
     fi
     
-    # 检查必要的工具链（递归搜索）
+    # 检查必要的工具链（递归搜索），排除dummy-tools
     log "🔨 工具链完整性检查:"
     local required_tools=("as" "ld" "ar" "strip" "objcopy" "objdump" "nm" "ranlib")
     local tool_found_count=0
     
     for tool in "${required_tools[@]}"; do
-        local tool_executable=$(find "$compiler_dir" -type f -executable -name "*${tool}*" 2>/dev/null | head -1)
+        local tool_executable=$(find "$compiler_dir" -type f -executable -name "*${tool}*" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
+          2>/dev/null | head -1)
         if [ -n "$tool_executable" ]; then
             log "  ✅ $tool: 找到 ($(basename "$tool_executable"))"
             tool_found_count=$((tool_found_count + 1))
@@ -520,12 +564,14 @@ check_compiler_invocation() {
         if [ -d "$BUILD_DIR/staging_dir" ]; then
             log "📁 检查 staging_dir 中的编译器..."
             
-            # 查找真正的GCC编译器（排除工具链工具）
+            # 查找真正的GCC编译器（排除工具链工具和虚假编译器）
             local used_compiler=$(find "$BUILD_DIR/staging_dir" -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
               ! -name "*gcc-nm" \
+              ! -path "*dummy-tools*" \
+              ! -path "*scripts*" \
               2>/dev/null | head -1)
             
             if [ -n "$used_compiler" ]; then
@@ -563,6 +609,8 @@ check_compiler_invocation() {
                       ! -name "*gcc-ar" \
                       ! -name "*gcc-ranlib" \
                       ! -name "*gcc-nm" \
+                      ! -path "*dummy-tools*" \
+                      ! -path "*scripts*" \
                       2>/dev/null | head -1)
                     
                     if [ -n "$sdk_gcc" ]; then
@@ -636,12 +684,14 @@ check_compiler_invocation() {
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
         log "  📌 预构建编译器目录: $COMPILER_DIR"
         
-        # 检查预构建编译器中的GCC版本
+        # 检查预构建编译器中的GCC版本，排除虚假编译器
         local prebuilt_gcc=$(find "$COMPILER_DIR" -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
           ! -name "*gcc-nm" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
           2>/dev/null | head -1)
         
         if [ -n "$prebuilt_gcc" ]; then
@@ -661,6 +711,8 @@ check_compiler_invocation() {
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
           ! -name "*gcc-nm" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
           2>/dev/null | head -1)
         
         if [ -n "$used_gcc" ]; then
@@ -781,12 +833,14 @@ pre_build_error_check() {
         log "✅ 预构建编译器目录存在: $COMPILER_DIR"
         log "📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
         
-        # 放宽检查：只需要有编译器文件，不要求特定目录结构
+        # 放宽检查：只需要有编译器文件，不要求特定目录结构，排除虚假编译器
         local gcc_files=$(find "$COMPILER_DIR" -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
           ! -name "*gcc-nm" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
           2>/dev/null | wc -l)
         
         if [ $gcc_files -gt 0 ]; then
@@ -798,6 +852,8 @@ pre_build_error_check() {
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
               ! -name "*gcc-nm" \
+              ! -path "*dummy-tools*" \
+              ! -path "*scripts*" \
               2>/dev/null | head -1)
             
             if [ -n "$first_gcc" ]; then
@@ -808,6 +864,23 @@ pre_build_error_check() {
                     local sdk_version=$("$first_gcc" --version 2>&1 | head -1)
                     if echo "$sdk_version" | grep -qi "12.3.0"; then
                         log "🎯 确认是OpenWrt 23.05 SDK GCC 12.3.0"
+                    elif echo "$sdk_version" | grep -qi "dummy-tools"; then
+                        log "⚠️ 检测到虚假的dummy-tools编译器，继续查找..."
+                        # 查找其他GCC
+                        local real_gcc=$(find "$COMPILER_DIR" -type f -executable \
+                          -name "*gcc" \
+                          ! -name "*gcc-ar" \
+                          ! -name "*gcc-ranlib" \
+                          ! -name "*gcc-nm" \
+                          ! -path "*dummy-tools*" \
+                          ! -path "*scripts*" \
+                          ! -path "$(dirname "$first_gcc")" \
+                          2>/dev/null | head -1)
+                        
+                        if [ -n "$real_gcc" ]; then
+                            log "✅ 找到真正的GCC: $(basename "$real_gcc")"
+                            log "🔧 版本: $("$real_gcc" --version 2>&1 | head -1)"
+                        fi
                     else
                         log "⚠️ 23.05 SDK GCC版本不是预期的12.3.0"
                         log "💡 可能不是官方的23.05 SDK，但可以继续尝试"
@@ -819,7 +892,10 @@ pre_build_error_check() {
             warning_count=$((warning_count + 1))
             
             # 检查是否有工具链工具
-            local toolchain_tools=$(find "$COMPILER_DIR" -type f -executable -name "*gcc*" 2>/dev/null | wc -l)
+            local toolchain_tools=$(find "$COMPILER_DIR" -type f -executable -name "*gcc*" \
+              ! -path "*dummy-tools*" \
+              ! -path "*scripts*" \
+              2>/dev/null | wc -l)
             if [ $toolchain_tools -gt 0 ]; then
                 log "📊 找到 $toolchain_tools 个工具链工具"
                 log "💡 有工具链工具但没有真正的GCC编译器"
@@ -1087,6 +1163,8 @@ initialize_compiler_env() {
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
           ! -name "*gcc-nm" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
           2>/dev/null | head -3)
         
         if [ -n "$gcc_files" ]; then
@@ -1148,12 +1226,14 @@ initialize_compiler_env() {
             log "  目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
             log "  文件数量: $(find "$COMPILER_DIR" -type f 2>/dev/null | wc -l)"
             
-            # 查找GCC编译器
+            # 查找GCC编译器，排除虚假编译器
             local gcc_file=$(find "$COMPILER_DIR" -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
               ! -name "*gcc-nm" \
+              ! -path "*dummy-tools*" \
+              ! -path "*scripts*" \
               2>/dev/null | head -1)
             
             if [ -n "$gcc_file" ]; then
@@ -1976,6 +2056,31 @@ download_dependencies() {
     log "✅ 依赖包下载完成"
 }
 
+# 精确检测中文字符的函数
+detect_chinese_characters() {
+    local text="$1"
+    
+    # 方法1: 使用Unicode范围检测中文字符
+    # 中文字符范围: \u4e00-\u9fff (常用汉字)
+    # 扩展A区: \u3400-\u4dbf
+    if echo "$text" | grep -q -P '[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}]'; then
+        return 0  # 包含中文
+    fi
+    
+    # 方法2: 检测常见中文标点符号
+    if echo "$text" | grep -q -P '[\x{3000}-\x{303f}\x{ff00}-\x{ffef}]'; then
+        return 0  # 包含中文标点
+    fi
+    
+    # 方法3: 检查是否是常见的中文关键词
+    local chinese_keywords="备份|恢复|安装|配置|设置|脚本|文件|固件|插件|网络|系统|路由|无线"
+    if echo "$text" | grep -q -E "$chinese_keywords"; then
+        return 0  # 包含中文关键词
+    fi
+    
+    return 1  # 不包含中文
+}
+
 # 集成自定义文件函数（中文名增强修复版）- 改为第一次开机运行
 integrate_custom_files() {
     load_env
@@ -2002,10 +2107,16 @@ integrate_custom_files() {
     # 1. 显示目录内容
     echo ""
     log "📁 目录内容:"
-    find "$custom_dir" -type f 2>/dev/null | while read file; do
+    find "$custom_dir" -type f 2>/dev/null | head -20 | while read file; do
         local file_name=$(basename "$file")
         local file_size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-        log "  📄 $file_name ($file_size)"
+        
+        # 检测是否是中文文件名
+        if detect_chinese_characters "$file_name"; then
+            log "  📄 🇨🇳 $file_name ($file_size) - 中文名"
+        else
+            log "  📄 $file_name ($file_size)"
+        fi
     done
     
     # 2. 创建自定义文件目录
@@ -2018,7 +2129,7 @@ integrate_custom_files() {
     
     # 3. 复制所有文件到自定义目录
     echo ""
-    log "🔧 步骤2: 复制所有自定义文件（支持中文文件名）"
+    log "🔧 步骤2: 复制所有自定义文件（增强中文文件名处理）"
     
     # 检查是否有iconv命令用于处理中文文件名
     if command -v iconv >/dev/null 2>&1; then
@@ -2027,66 +2138,110 @@ integrate_custom_files() {
         log "⚠️ 系统不支持 iconv 命令，中文文件名处理受限"
     fi
     
-    # 复制所有文件并处理中文名
+    # 初始化计数变量
     local copied_count=0
     local chinese_count=0
     local renamed_count=0
     
-    find "$custom_dir" -type f 2>/dev/null | while read src_file; do
+    # 使用 find 命令获取文件列表
+    while IFS= read -r src_file; do
+        [ -z "$src_file" ] && continue
+        
         local src_name=$(basename "$src_file")
         local dst_name="$src_name"
         
-        # 检查是否是中文文件名
-        if [[ "$src_name" =~ [\x80-\xFF] ]]; then
+        # 检测是否包含中文字符
+        local is_chinese=0
+        
+        if detect_chinese_characters "$src_name"; then
+            is_chinese=1
             chinese_count=$((chinese_count + 1))
             log "  发现中文文件名: $src_name"
             
-            # 尝试转换为拼音或英文名
-            local new_name=""
-            if command -v iconv >/dev/null 2>&1; then
-                # 尝试转换为ASCII近似字符
-                new_name=$(echo "$src_name" | iconv -f utf-8 -t ascii//TRANSLIT 2>/dev/null || echo "$src_name")
-                new_name=$(echo "$new_name" | tr ' ' '_' | tr -cd 'A-Za-z0-9._-')
-            else
-                # 简单处理：替换中文为拼音关键词
-                if [[ "$src_name" == *备份* ]]; then
-                    new_name="backup"
-                elif [[ "$src_name" == *恢复* ]]; then
-                    new_name="restore"
-                elif [[ "$src_name" == *安装* ]]; then
-                    new_name="install"
-                elif [[ "$src_name" == *配置* ]]; then
-                    new_name="config"
-                elif [[ "$src_name" == *设置* ]]; then
-                    new_name="setup"
-                else
-                    new_name="file_$chinese_count"
-                fi
-                
-                # 保留扩展名
-                local ext=""
-                if [[ "$src_name" == *.* ]]; then
-                    ext=".${src_name##*.}"
-                fi
-                new_name="${new_name}${ext}"
+            # 提取文件名和扩展名
+            local base_name="${src_name%.*}"
+            local extension="${src_name##*.}"
+            
+            # 如果是扩展名和文件名相同的情况（无扩展名）
+            if [ "$base_name" = "$src_name" ]; then
+                base_name="$src_name"
+                extension=""
             fi
             
-            if [ "$new_name" != "$src_name" ] && [ -n "$new_name" ]; then
-                dst_name="$new_name"
+            # 生成英文名（使用多种策略）
+            local new_name=""
+            
+            # 策略1: 使用常见关键词替换
+            case "$base_name" in
+                *备份*|*backup*|*Backup*)
+                    new_name="backup"
+                    ;;
+                *恢复*|*restore*|*Restore*)
+                    new_name="restore"
+                    ;;
+                *安装*|*install*|*Install*)
+                    new_name="install"
+                    ;;
+                *配置*|*config*|*Config*)
+                    new_name="config"
+                    ;;
+                *设置*|*setup*|*Setup*)
+                    new_name="setup"
+                    ;;
+                *脚本*|*script*|*Script*)
+                    new_name="script"
+                    ;;
+                *文件*|*file*|*File*)
+                    new_name="file"
+                    ;;
+                *)
+                    # 策略2: 转换为拼音或使用hash
+                    if command -v iconv >/dev/null 2>&1; then
+                        new_name=$(echo "$base_name" | iconv -f utf-8 -t ascii//TRANSLIT 2>/dev/null || echo "file")
+                        new_name=$(echo "$new_name" | sed 's/[^A-Za-z0-9._-]/_/g' | tr '[:upper:]' '[:lower:]')
+                    else
+                        # 策略3: 使用时间戳和序号
+                        new_name="chinese_file_${chinese_count}"
+                    fi
+                    ;;
+            esac
+            
+            # 重新添加扩展名
+            if [ -n "$extension" ] && [ "$extension" != "$src_name" ]; then
+                new_name="${new_name}.${extension}"
+            fi
+            
+            # 确保新名称有效且不重复
+            if [ -n "$new_name" ] && [ "$new_name" != "$src_name" ]; then
+                # 检查是否已存在同名文件
+                local counter=1
+                local final_name="$new_name"
+                while [ -f "$custom_files_dir/$final_name" ]; do
+                    if [ -n "$extension" ] && [ "$extension" != "$src_name" ]; then
+                        final_name="${new_name%.*}_${counter}.${extension}"
+                    else
+                        final_name="${new_name}_${counter}"
+                    fi
+                    counter=$((counter + 1))
+                done
+                
+                dst_name="$final_name"
                 renamed_count=$((renamed_count + 1))
                 log "    重命名为: $dst_name"
             fi
         fi
         
         # 复制文件
-        cp "$src_file" "$custom_files_dir/$dst_name" 2>/dev/null || log "⚠️ 复制文件失败: $src_name"
-        copied_count=$((copied_count + 1))
-        
-        # 确保脚本文件有执行权限
-        if [[ "$dst_name" == *.sh ]] || [[ "$dst_name" == *.Sh ]] || [[ "$dst_name" == *.SH ]]; then
-            chmod +x "$custom_files_dir/$dst_name" 2>/dev/null || true
+        if cp "$src_file" "$custom_files_dir/$dst_name" 2>/dev/null; then
+            copied_count=$((copied_count + 1))
+            # 确保脚本文件有执行权限
+            if [[ "$dst_name" == *.sh ]] || [[ "$dst_name" == *.Sh ]] || [[ "$dst_name" == *.SH ]]; then
+                chmod +x "$custom_files_dir/$dst_name" 2>/dev/null || true
+            fi
+        else
+            log "⚠️ 复制文件失败: $src_name"
         fi
-    done
+    done < <(find "$custom_dir" -type f 2>/dev/null | head -50)  # 限制最多处理50个文件
     
     log "✅ 文件复制完成: $copied_count 个文件"
     log "📊 中文文件名统计: $chinese_count 个中文文件，$renamed_count 个已重命名"
@@ -2099,10 +2254,13 @@ integrate_custom_files() {
         local mapping_file="$custom_files_dir/file_mapping.txt"
         echo "# 中文文件名映射表" > "$mapping_file"
         echo "# 生成时间: $(date)" >> "$mapping_file"
+        echo "# 原始文件名 -> 新文件名" >> "$mapping_file"
         echo "" >> "$mapping_file"
         
-        find "$custom_files_dir" -type f -name "*" | while read file; do
+        # 重新遍历文件以生成映射表
+        find "$custom_files_dir" -type f -name "*" 2>/dev/null | while read file; do
             local name=$(basename "$file")
+            # 尝试找出原始中文名（如果有重命名记录）
             echo "$name" >> "$mapping_file"
         done
         
@@ -2421,49 +2579,6 @@ EOF
     fi
 }
 
-pre_build_space_check() {
-    log "=== 编译前空间检查 ==="
-    
-    echo "当前目录: $(pwd)"
-    echo "构建目录: $BUILD_DIR"
-    
-    # 详细磁盘信息
-    echo "=== 磁盘使用情况 ==="
-    df -h
-    
-    # 构建目录空间
-    local build_dir_usage=$(du -sh $BUILD_DIR 2>/dev/null | cut -f1) || echo "无法获取构建目录大小"
-    echo "构建目录大小: $build_dir_usage"
-    
-    # 检查/mnt可用空间
-    local available_space=$(df /mnt --output=avail | tail -1)
-    local available_gb=$((available_space / 1024 / 1024))
-    echo "/mnt 可用空间: ${available_gb}G"
-    
-    # 检查/可用空间
-    local root_available_space=$(df / --output=avail | tail -1)
-    local root_available_gb=$((root_available_space / 1024 / 1024))
-    echo "/ 可用空间: ${root_available_gb}G"
-    
-    # 内存和交换空间
-    echo "=== 内存使用情况 ==="
-    free -h
-    
-    # CPU信息
-    echo "=== CPU信息 ==="
-    echo "CPU核心数: $(nproc)"
-    
-    # 编译所需空间估算
-    local estimated_space=15  # 估计需要15GB
-    if [ $available_gb -lt $estimated_space ]; then
-        log "⚠️ 警告: 可用空间(${available_gb}G)可能不足，建议至少${estimated_space}G"
-    else
-        log "✅ 磁盘空间充足: ${available_gb}G 可用"
-    fi
-    
-    log "✅ 空间检查完成"
-}
-
 build_firmware() {
     local enable_cache=$1
     load_env
@@ -2521,12 +2636,14 @@ build_firmware() {
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
         log "  预构建编译器目录: $COMPILER_DIR"
         
-        # 检查预构建编译器是否会被调用
+        # 检查预构建编译器是否会被调用，排除虚假编译器
         local prebuilt_gcc=$(find "$COMPILER_DIR" -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
           ! -name "*gcc-nm" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
           2>/dev/null | head -1)
         
         if [ -n "$prebuilt_gcc" ]; then
@@ -2550,7 +2667,10 @@ build_firmware() {
             log "  🔧 已将预构建编译器目录添加到PATH"
         else
             log "  ⚠️ 未找到真正的GCC编译器，只有工具链工具"
-            local toolchain_tools=$(find "$COMPILER_DIR" -type f -executable -name "*gcc*" 2>/dev/null | head -5)
+            local toolchain_tools=$(find "$COMPILER_DIR" -type f -executable -name "*gcc*" \
+              ! -path "*dummy-tools*" \
+              ! -path "*scripts*" \
+              2>/dev/null | head -5)
             if [ -n "$toolchain_tools" ]; then
                 log "  找到的工具链工具:"
                 while read tool; do
@@ -2640,6 +2760,8 @@ build_firmware() {
                       ! -name "*gcc-ar" \
                       ! -name "*gcc-ranlib" \
                       ! -name "*gcc-nm" \
+                      ! -path "*dummy-tools*" \
+                      ! -path "*scripts*" \
                       2>/dev/null | head -10
                 fi
             fi
