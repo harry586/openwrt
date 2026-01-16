@@ -2081,7 +2081,7 @@ detect_chinese_characters() {
     return 1  # 不包含中文
 }
 
-# 集成自定义文件函数（中文名增强修复版）- 改为第一次开机运行
+# 集成自定义文件函数（中文名增强修复版）- 修复IPK安装逻辑
 integrate_custom_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -2332,14 +2332,14 @@ integrate_custom_files() {
         done
     fi
     
-    # 6. 创建第一次开机运行的安装脚本（增强版，支持中文名）
+    # 6. 创建第一次开机运行的安装脚本（修复版，修复IPK安装逻辑）
     echo ""
-    log "🔧 步骤4: 创建第一次开机安装脚本（支持中文文件名）"
+    log "🔧 步骤4: 创建第一次开机安装脚本（修复IPK安装逻辑）"
     
     local first_boot_dir="files/etc/uci-defaults"
     mkdir -p "$first_boot_dir"
     
-    # 创建第一次开机运行的脚本
+    # 创建第一次开机运行的脚本 - 修复IPK安装逻辑
     local first_boot_script="$first_boot_dir/99-custom-files"
     cat > "$first_boot_script" << 'EOF'
 #!/bin/sh
@@ -2347,7 +2347,7 @@ integrate_custom_files() {
 LOG_FILE="/tmp/custom-files-install.log"
 CUSTOM_DIR="/etc/custom-files"
 
-echo "=== 第一次开机：自定义文件安装脚本（支持中文文件名）===" > $LOG_FILE
+echo "=== 第一次开机：自定义文件安装脚本（修复IPK安装逻辑）===" > $LOG_FILE
 echo "开始时间: $(date)" >> $LOG_FILE
 echo "" >> $LOG_FILE
 
@@ -2357,51 +2357,66 @@ if [ -d "$CUSTOM_DIR" ]; then
     echo "🔍 目录内容:" >> $LOG_FILE
     ls -la "$CUSTOM_DIR" >> $LOG_FILE
     
-    # 1. 安装IPK文件（支持各种扩展名）
+    # 1. 安装IPK文件（修复版 - 确保所有IPK文件都被安装）
     IPK_COUNT=0
     echo "📦 开始查找IPK包..." >> $LOG_FILE
     
+    # 修复：使用shopt启用nullglob，防止没有匹配文件时报错
+    old_nullglob=$(shopt -p nullglob)
+    shopt -s nullglob
+    
     # 查找所有可能的IPK文件
-    for ipk in $CUSTOM_DIR/*.ipk $CUSTOM_DIR/*.IPK $CUSTOM_DIR/*.Ipk; do
+    echo "🔍 查找 .ipk 文件..." >> $LOG_FILE
+    for ipk in $CUSTOM_DIR/*.ipk; do
         if [ -f "$ipk" ]; then
             IPK_NAME=$(basename "$ipk")
             echo "  找到IPK文件: $IPK_NAME" >> $LOG_FILE
         fi
     done
     
-    if ls $CUSTOM_DIR/*.ipk $CUSTOM_DIR/*.IPK $CUSTOM_DIR/*.Ipk 2>/dev/null; then
-        echo "📦 开始安装IPK包..." >> $LOG_FILE
-        for ipk in $CUSTOM_DIR/*.ipk $CUSTOM_DIR/*.IPK $CUSTOM_DIR/*.Ipk; do
-            if [ -f "$ipk" ]; then
-                IPK_NAME=$(basename "$ipk")
-                echo "  正在安装: $IPK_NAME" >> $LOG_FILE
-                opkg install "$ipk" >> $LOG_FILE 2>&1
-                if [ $? -eq 0 ]; then
-                    echo "  ✅ $IPK_NAME 安装成功" >> $LOG_FILE
-                    IPK_COUNT=$((IPK_COUNT + 1))
-                else
-                    echo "  ⚠️ $IPK_NAME 安装失败，错误信息:" >> $LOG_FILE
-                    tail -5 $LOG_FILE >> $LOG_FILE 2>&1
-                fi
-            fi
-        done
-        echo "📊 IPK包安装完成: $IPK_COUNT 个" >> $LOG_FILE
-    else
-        echo "ℹ️ 未找到IPK文件" >> $LOG_FILE
-    fi
-    
-    # 2. 运行脚本文件（支持各种扩展名和中文名）
-    SCRIPT_COUNT=0
-    echo "📜 开始查找脚本文件..." >> $LOG_FILE
-    
-    # 先列出所有文件，然后筛选出脚本文件
-    echo "🔍 所有文件列表:" >> $LOG_FILE
-    for file in $CUSTOM_DIR/*; do
-        if [ -f "$file" ]; then
-            echo "  $(basename "$file")" >> $LOG_FILE
+    echo "🔍 查找 .IPK 文件..." >> $LOG_FILE
+    for ipk in $CUSTOM_DIR/*.IPK; do
+        if [ -f "$ipk" ]; then
+            IPK_NAME=$(basename "$ipk")
+            echo "  找到IPK文件: $IPK_NAME" >> $LOG_FILE
         fi
     done
     
+    echo "🔍 查找 .Ipk 文件..." >> $LOG_FILE
+    for ipk in $CUSTOM_DIR/*.Ipk; do
+        if [ -f "$ipk" ]; then
+            IPK_NAME=$(basename "$ipk")
+            echo "  找到IPK文件: $IPK_NAME" >> $LOG_FILE
+        fi
+    done
+    
+    # 修复：使用更通用的方法查找IPK文件
+    echo "📦 开始安装IPK包（通用方法）..." >> $LOG_FILE
+    for file in $CUSTOM_DIR/*; do
+        if [ -f "$file" ]; then
+            FILE_NAME=$(basename "$file")
+            # 检查是否是IPK文件（不区分大小写）
+            if echo "$FILE_NAME" | grep -qi "\.ipk$"; then
+                echo "  正在安装: $FILE_NAME" >> $LOG_FILE
+                opkg install "$file" >> $LOG_FILE 2>&1
+                if [ $? -eq 0 ]; then
+                    echo "  ✅ $FILE_NAME 安装成功" >> $LOG_FILE
+                    IPK_COUNT=$((IPK_COUNT + 1))
+                else
+                    echo "  ⚠️ $FILE_NAME 安装失败，错误信息:" >> $LOG_FILE
+                    tail -5 $LOG_FILE >> $LOG_FILE 2>&1
+                fi
+            fi
+        fi
+    done
+    
+    # 恢复nullglob设置
+    eval "$old_nullglob"
+    
+    echo "📊 IPK包安装完成: $IPK_COUNT 个" >> $LOG_FILE
+    
+    # 2. 运行脚本文件（支持各种扩展名和中文名）
+    SCRIPT_COUNT=0
     echo "📜 开始运行脚本文件..." >> $LOG_FILE
     
     # 方法1：查找以.sh, .Sh, .SH结尾的文件
@@ -2436,7 +2451,11 @@ if [ -d "$CUSTOM_DIR" ]; then
         if [ -f "$file" ] && [ ! -d "$file" ]; then
             FILE_NAME=$(basename "$file")
             
-            # 跳过已处理的.sh文件
+            # 跳过已处理的.sh文件和IPK文件
+            if echo "$FILE_NAME" | grep -qi "\.ipk$"; then
+                continue
+            fi
+            
             if [[ "$FILE_NAME" == *.sh ]] || [[ "$FILE_NAME" == *.Sh ]] || [[ "$FILE_NAME" == *.SH ]]; then
                 continue
             fi
@@ -2485,8 +2504,11 @@ if [ -d "$CUSTOM_DIR" ]; then
             FILE_NAME=$(basename "$other_file")
             
             # 跳过已处理的文件类型
-            if [[ "$FILE_NAME" == *.ipk ]] || [[ "$FILE_NAME" == *.IPK ]] || [[ "$FILE_NAME" == *.Ipk ]] || \
-               [[ "$FILE_NAME" == *.sh ]] || [[ "$FILE_NAME" == *.Sh ]] || [[ "$FILE_NAME" == *.SH ]] || \
+            if echo "$FILE_NAME" | grep -qi "\.ipk$"; then
+                continue
+            fi
+            
+            if [[ "$FILE_NAME" == *.sh ]] || [[ "$FILE_NAME" == *.Sh ]] || [[ "$FILE_NAME" == *.SH ]] || \
                [[ "$FILE_NAME" == *.conf ]] || [[ "$FILE_NAME" == *.config ]] || [[ "$FILE_NAME" == *.CONF ]]; then
                 continue
             fi
@@ -2533,8 +2555,10 @@ EOF
     # 设置脚本权限
     chmod +x "$first_boot_script"
     log "✅ 创建第一次开机安装脚本: $first_boot_script"
-    log "📝 脚本内容预览:"
-    head -40 "$first_boot_script"
+    log "📝 脚本关键修复内容:"
+    log "  1. ✅ 修复了IPK文件查找逻辑，使用不区分大小写的匹配"
+    log "  2. ✅ 使用通用方法遍历所有文件，确保所有IPK都被找到"
+    log "  3. ✅ 添加了shopt nullglob处理，防止没有匹配文件时报错"
     
     # 7. 创建专门的中文名处理脚本
     if [ $chinese_count -gt 0 ]; then
@@ -2612,7 +2636,7 @@ EOF
     log "  ⚙️ 配置文件: $config_count 个"
     log "  📁 其他文件: $other_count 个"
     log "  🇨🇳 中文文件: $chinese_count 个，$renamed_count 个已重命名"
-    log "  🚀 第一次开机安装脚本: 已创建"
+    log "  🚀 第一次开机安装脚本: 已创建（修复了IPK安装逻辑）"
     log "  📍 自定义文件位置: /etc/custom-files/"
     log "  💡 安装方式: 第一次开机自动安装"
     
@@ -2628,6 +2652,7 @@ EOF
         log "🎉 自定义文件集成完成"
         log "📌 自定义文件将在第一次开机时自动安装和运行"
         log "🔧 中文文件名已优化处理"
+        log "🔧 IPK安装逻辑已修复，确保所有IPK文件都会被安装"
     fi
 }
 
