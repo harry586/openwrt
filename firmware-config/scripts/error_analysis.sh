@@ -524,7 +524,33 @@ check_compiler_status() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 7. 分析构建日志（增强版）
+# 7. 检查构建日志文件（新增）
+check_build_log_file() {
+    log "📋 检查构建日志文件..."
+    
+    print_subheader "构建日志文件检查"
+    
+    if [ ! -f "$BUILD_DIR/build.log" ]; then
+        echo "❌ 编译日志文件不存在: $BUILD_DIR/build.log" >> "$REPORT_FILE"
+        echo "💡 请确保编译已经执行，并生成了 build.log 文件" >> "$REPORT_FILE"
+        return 1
+    fi
+    
+    local log_size=$(ls -lh "$BUILD_DIR/build.log" | awk '{print $5}')
+    local line_count=$(wc -l < "$BUILD_DIR/build.log")
+    
+    echo "📏 编译日志大小: $log_size" >> "$REPORT_FILE"
+    echo "📊 编译日志行数: $line_count" >> "$REPORT_FILE"
+    
+    if [ $line_count -lt 100 ]; then
+        echo "⚠️ 编译日志行数较少，可能编译未正常执行" >> "$REPORT_FILE"
+    fi
+    
+    echo "" >> "$REPORT_FILE"
+    return 0
+}
+
+# 8. 分析构建日志（增强版）
 analyze_build_log() {
     log "📝 分析构建日志..."
     
@@ -634,7 +660,7 @@ analyze_build_log() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 8. 检查下载日志
+# 9. 检查下载日志
 check_download_log() {
     log "📥 检查下载日志..."
     
@@ -677,7 +703,7 @@ check_download_log() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 9. 版本特定分析
+# 10. 版本特定分析
 analyze_version_specific() {
     log "🔍 分析版本特定问题..."
     
@@ -749,7 +775,7 @@ analyze_version_specific() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 10. 分析常见错误模式（新增）
+# 11. 分析常见错误模式（新增）
 analyze_common_error_patterns() {
     log "🔍 分析常见错误模式..."
     
@@ -828,7 +854,7 @@ analyze_common_error_patterns() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 11. 检查SDK状态（新增）
+# 12. 检查SDK状态（新增）
 check_sdk_status() {
     log "🔧 检查SDK状态..."
     
@@ -883,7 +909,7 @@ check_sdk_status() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 12. 检查自定义文件集成问题（新增）
+# 13. 检查自定义文件集成问题（新增）
 check_custom_files_integration() {
     log "📂 检查自定义文件集成..."
     
@@ -922,7 +948,7 @@ check_custom_files_integration() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 13. 分析编译器相关错误（新增）
+# 14. 分析编译器相关错误（新增）
 analyze_compiler_errors() {
     log "🔧 分析编译器相关错误..."
     
@@ -987,33 +1013,200 @@ analyze_compiler_errors() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 14. 检查构建日志文件（新增）
-check_build_log_file() {
-    log "📋 检查构建日志文件..."
+# 15. 检查磁盘空间（新增）
+check_disk_space_usage() {
+    log "💿 检查磁盘空间..."
     
-    print_subheader "构建日志文件检查"
+    print_subheader "磁盘空间检查"
     
-    if [ ! -f "$BUILD_DIR/build.log" ]; then
-        echo "❌ 编译日志文件不存在: $BUILD_DIR/build.log" >> "$REPORT_FILE"
-        echo "💡 请确保编译已经执行，并生成了 build.log 文件" >> "$REPORT_FILE"
-        return 1
+    echo "磁盘使用情况:" >> "$REPORT_FILE"
+    df -h /mnt >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
+    
+    local available_space=$(df /mnt --output=avail | tail -1)
+    local available_gb=$((available_space / 1024 / 1024))
+    
+    echo "/mnt 可用空间: ${available_gb}G" >> "$REPORT_FILE"
+    
+    if [ $available_gb -lt 5 ]; then
+        echo "⚠️ 磁盘空间较低，建议清理" >> "$REPORT_FILE"
+    elif [ $available_gb -lt 10 ]; then
+        echo "✅ 磁盘空间正常" >> "$REPORT_FILE"
+    else
+        echo "✅ 磁盘空间充足" >> "$REPORT_FILE"
     fi
+    echo "" >> "$REPORT_FILE"
+}
+
+# 16. 检查环境变量（新增）
+check_environment_variables() {
+    log "⚙️ 检查环境变量..."
     
-    local log_size=$(ls -lh "$BUILD_DIR/build.log" | awk '{print $5}')
-    local line_count=$(wc -l < "$BUILD_DIR/build.log")
+    print_subheader "环境变量检查"
     
-    echo "📏 编译日志大小: $log_size" >> "$REPORT_FILE"
-    echo "📊 编译日志行数: $line_count" >> "$REPORT_FILE"
+    local env_file="$BUILD_DIR/build_env.sh"
     
-    if [ $line_count -lt 100 ]; then
-        echo "⚠️ 编译日志行数较少，可能编译未正常执行" >> "$REPORT_FILE"
+    if [ -f "$env_file" ]; then
+        echo "✅ 环境文件存在: $env_file" >> "$REPORT_FILE"
+        
+        # 显示关键环境变量
+        echo "📌 关键环境变量:" >> "$REPORT_FILE"
+        grep -E "SELECTED_BRANCH|TARGET|SUBTARGET|DEVICE|CONFIG_MODE|COMPILER_DIR" "$env_file" | head -10 >> "$REPORT_FILE"
+        
+        # 加载环境变量
+        source "$env_file" 2>/dev/null
+        
+        if [ -n "$SELECTED_BRANCH" ]; then
+            echo "📌 OpenWrt版本: $SELECTED_BRANCH" >> "$REPORT_FILE"
+        fi
+        
+        if [ -n "$TARGET" ] && [ -n "$SUBTARGET" ]; then
+            echo "🎯 目标平台: $TARGET/$SUBTARGET" >> "$REPORT_FILE"
+        fi
+        
+        if [ -n "$DEVICE" ]; then
+            echo "📱 目标设备: $DEVICE" >> "$REPORT_FILE"
+        fi
+        
+        if [ -n "$CONFIG_MODE" ]; then
+            echo "⚙️ 配置模式: $CONFIG_MODE" >> "$REPORT_FILE"
+        fi
+        
+        if [ -n "$COMPILER_DIR" ]; then
+            echo "🔧 编译器目录: $COMPILER_DIR" >> "$REPORT_FILE"
+        fi
+    else
+        echo "⚠️ 环境文件不存在: $env_file" >> "$REPORT_FILE"
+    fi
+    echo "" >> "$REPORT_FILE"
+}
+
+# 17. 检查构建产物（新增）
+check_build_artifacts() {
+    log "📦 检查构建产物..."
+    
+    print_subheader "构建产物检查"
+    
+    local artifacts_dir="$BUILD_DIR/bin/targets"
+    
+    if [ -d "$artifacts_dir" ]; then
+        echo "✅ 构建产物目录存在: $artifacts_dir" >> "$REPORT_FILE"
+        
+        # 统计固件文件
+        local firmware_count=$(find "$artifacts_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+        local package_count=$(find "$artifacts_dir" -type f \( -name "*.gz" -o -name "*.ipk" \) 2>/dev/null | wc -l)
+        local total_count=$(find "$artifacts_dir" -type f 2>/dev/null | wc -l)
+        
+        echo "📊 构建产物统计:" >> "$REPORT_FILE"
+        echo "  🎯 固件文件: $firmware_count 个 (.bin/.img)" >> "$REPORT_FILE"
+        echo "  📦 包文件: $package_count 个 (.gz/.ipk)" >> "$REPORT_FILE"
+        echo "  📁 总文件数: $total_count 个" >> "$REPORT_FILE"
+        
+        if [ $firmware_count -gt 0 ]; then
+            echo "✅ 成功生成 $firmware_count 个固件文件" >> "$REPORT_FILE"
+            
+            # 显示固件文件
+            echo "📄 生成的固件文件:" >> "$REPORT_FILE"
+            find "$artifacts_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | head -5 | while read file; do
+                local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                echo "  📁 $(basename "$file") ($size)" >> "$REPORT_FILE"
+            done
+        else
+            echo "⚠️ 未生成固件文件 (.bin/.img)" >> "$REPORT_FILE"
+            
+            # 显示其他文件
+            if [ $total_count -gt 0 ]; then
+                echo "📄 其他生成的文件:" >> "$REPORT_FILE"
+                find "$artifacts_dir" -type f 2>/dev/null | head -10 | while read file; do
+                    local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                    echo "  📄 $(basename "$file") ($size)" >> "$REPORT_FILE"
+                done
+            fi
+        fi
+    else
+        echo "❌ 构建产物目录不存在" >> "$REPORT_FILE"
+        echo "💡 编译可能未成功完成" >> "$REPORT_FILE"
+    fi
+    echo "" >> "$REPORT_FILE"
+}
+
+# 18. 生成错误报告（新增）
+generate_error_report() {
+    log "📋 生成错误报告..."
+    
+    print_subheader "错误报告生成"
+    
+    local report_file="/tmp/openwrt-build-error-report.txt"
+    
+    echo "=== OpenWrt 构建错误报告 ===" > "$report_file"
+    echo "生成时间: $(date)" >> "$report_file"
+    echo "构建目录: $BUILD_DIR" >> "$report_file"
+    echo "" >> "$report_file"
+    
+    # 环境信息
+    echo "=== 环境信息 ===" >> "$report_file"
+    uname -a >> "$report_file"
+    echo "" >> "$report_file"
+    
+    # 磁盘空间
+    echo "=== 磁盘空间 ===" >> "$report_file"
+    df -h /mnt >> "$report_file"
+    echo "" >> "$report_file"
+    
+    # 错误摘要
+    echo "=== 错误摘要 ===" >> "$report_file"
+    if [ -f "$BUILD_DIR/build.log" ]; then
+        grep -i "Error\|error:" "$BUILD_DIR/build.log" | tail -20 >> "$report_file"
+    else
+        echo "无构建日志文件" >> "$report_file"
+    fi
+    echo "" >> "$report_file"
+    
+    # 警告摘要
+    echo "=== 警告摘要 ===" >> "$report_file"
+    if [ -f "$BUILD_DIR/build.log" ]; then
+        grep -i "Warning\|warning:" "$BUILD_DIR/build.log" | tail -20 >> "$report_file"
+    else
+        echo "无构建日志文件" >> "$report_file"
+    fi
+    echo "" >> "$report_file"
+    
+    # SDK状态
+    echo "=== SDK状态 ===" >> "$report_file"
+    if [ -d "$SDK_DIR" ]; then
+        echo "SDK目录: $SDK_DIR" >> "$report_file"
+        echo "SDK大小: $(du -sh "$SDK_DIR" 2>/dev/null | cut -f1 || echo '未知')" >> "$report_file"
+        
+        local gcc_file=$(find "$SDK_DIR" -type f -executable -name "*gcc" 2>/dev/null | head -1)
+        if [ -n "$gcc_file" ]; then
+            echo "GCC编译器: $gcc_file" >> "$report_file"
+            "$gcc_file" --version 2>&1 | head -1 >> "$report_file"
+        fi
+    else
+        echo "SDK目录不存在" >> "$report_file"
+    fi
+    echo "" >> "$report_file"
+    
+    # 构建产物
+    echo "=== 构建产物 ===" >> "$report_file"
+    if [ -d "$BUILD_DIR/bin/targets" ]; then
+        find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
+            echo "$(basename "$file")" >> "$report_file"
+        done
+    else
+        echo "无构建产物" >> "$report_file"
     fi
     
     echo "" >> "$REPORT_FILE"
-    return 0
+    echo "📄 错误报告已生成: $report_file" >> "$REPORT_FILE"
+    echo "报告文件内容预览:" >> "$REPORT_FILE"
+    head -30 "$report_file" | while read line; do
+        echo "  $line" >> "$REPORT_FILE"
+    done
+    echo "" >> "$REPORT_FILE"
 }
 
-# 15. 详细错误分析函数（优化版）
+# 19. 详细错误分析函数（优化版）
 analyze_detailed_errors() {
     log "🔍 执行详细错误分析..."
     
@@ -1158,7 +1351,7 @@ analyze_detailed_errors() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 16. 生成修复建议（优化版）
+# 20. 生成修复建议（优化版）
 generate_fix_suggestions() {
     log "💡 生成修复建议..."
     
@@ -1306,199 +1499,6 @@ generate_fix_suggestions() {
     echo "  2. 仅重新编译: cd $BUILD_DIR && make -j1 V=s" >> "$REPORT_FILE"
     echo "  3. 重新下载SDK: firmware-config/scripts/build_firmware_main.sh initialize_compiler_env [设备名]" >> "$REPORT_FILE"
     echo "  4. 修复头文件: mkdir -p staging_dir/host/include && touch staging_dir/host/include/stdc-predef.h" >> "$REPORT_FILE"
-    echo "" >> "$REPORT_FILE"
-}
-
-# 17. 检查磁盘空间（新增）
-check_disk_space_usage() {
-    log "💿 检查磁盘空间..."
-    
-    print_subheader "磁盘空间检查"
-    
-    echo "磁盘使用情况:" >> "$REPORT_FILE"
-    df -h /mnt >> "$REPORT_FILE"
-    echo "" >> "$REPORT_FILE"
-    
-    local available_space=$(df /mnt --output=avail | tail -1)
-    local available_gb=$((available_space / 1024 / 1024))
-    
-    echo "/mnt 可用空间: ${available_gb}G" >> "$REPORT_FILE"
-    
-    if [ $available_gb -lt 5 ]; then
-        echo "⚠️ 磁盘空间较低，建议清理" >> "$REPORT_FILE"
-    elif [ $available_gb -lt 10 ]; then
-        echo "✅ 磁盘空间正常" >> "$REPORT_FILE"
-    else
-        echo "✅ 磁盘空间充足" >> "$REPORT_FILE"
-    fi
-    echo "" >> "$REPORT_FILE"
-}
-
-# 18. 检查环境变量（新增）
-check_environment_variables() {
-    log "⚙️ 检查环境变量..."
-    
-    print_subheader "环境变量检查"
-    
-    local env_file="$BUILD_DIR/build_env.sh"
-    
-    if [ -f "$env_file" ]; then
-        echo "✅ 环境文件存在: $env_file" >> "$REPORT_FILE"
-        
-        # 显示关键环境变量
-        echo "📌 关键环境变量:" >> "$REPORT_FILE"
-        grep -E "SELECTED_BRANCH|TARGET|SUBTARGET|DEVICE|CONFIG_MODE|COMPILER_DIR" "$env_file" | head -10 >> "$REPORT_FILE"
-        
-        # 加载环境变量
-        source "$env_file" 2>/dev/null
-        
-        if [ -n "$SELECTED_BRANCH" ]; then
-            echo "📌 OpenWrt版本: $SELECTED_BRANCH" >> "$REPORT_FILE"
-        fi
-        
-        if [ -n "$TARGET" ] && [ -n "$SUBTARGET" ]; then
-            echo "🎯 目标平台: $TARGET/$SUBTARGET" >> "$REPORT_FILE"
-        fi
-        
-        if [ -n "$DEVICE" ]; then
-            echo "📱 目标设备: $DEVICE" >> "$REPORT_FILE"
-        fi
-        
-        if [ -n "$CONFIG_MODE" ]; then
-            echo "⚙️ 配置模式: $CONFIG_MODE" >> "$REPORT_FILE"
-        fi
-        
-        if [ -n "$COMPILER_DIR" ]; then
-            echo "🔧 编译器目录: $COMPILER_DIR" >> "$REPORT_FILE"
-        fi
-    else
-        echo "⚠️ 环境文件不存在: $env_file" >> "$REPORT_FILE"
-    fi
-    echo "" >> "$REPORT_FILE"
-}
-
-# 19. 检查构建产物（新增）
-check_build_artifacts() {
-    log "📦 检查构建产物..."
-    
-    print_subheader "构建产物检查"
-    
-    local artifacts_dir="$BUILD_DIR/bin/targets"
-    
-    if [ -d "$artifacts_dir" ]; then
-        echo "✅ 构建产物目录存在: $artifacts_dir" >> "$REPORT_FILE"
-        
-        # 统计固件文件
-        local firmware_count=$(find "$artifacts_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
-        local package_count=$(find "$artifacts_dir" -type f \( -name "*.gz" -o -name "*.ipk" \) 2>/dev/null | wc -l)
-        local total_count=$(find "$artifacts_dir" -type f 2>/dev/null | wc -l)
-        
-        echo "📊 构建产物统计:" >> "$REPORT_FILE"
-        echo "  🎯 固件文件: $firmware_count 个 (.bin/.img)" >> "$REPORT_FILE"
-        echo "  📦 包文件: $package_count 个 (.gz/.ipk)" >> "$REPORT_FILE"
-        echo "  📁 总文件数: $total_count 个" >> "$REPORT_FILE"
-        
-        if [ $firmware_count -gt 0 ]; then
-            echo "✅ 成功生成 $firmware_count 个固件文件" >> "$REPORT_FILE"
-            
-            # 显示固件文件
-            echo "📄 生成的固件文件:" >> "$REPORT_FILE"
-            find "$artifacts_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | head -5 | while read file; do
-                local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                echo "  📁 $(basename "$file") ($size)" >> "$REPORT_FILE"
-            done
-        else
-            echo "⚠️ 未生成固件文件 (.bin/.img)" >> "$REPORT_FILE"
-            
-            # 显示其他文件
-            if [ $total_count -gt 0 ]; then
-                echo "📄 其他生成的文件:" >> "$REPORT_FILE"
-                find "$artifacts_dir" -type f 2>/dev/null | head -10 | while read file; do
-                    local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                    echo "  📄 $(basename "$file") ($size)" >> "$REPORT_FILE"
-                done
-            fi
-        fi
-    else
-        echo "❌ 构建产物目录不存在" >> "$REPORT_FILE"
-        echo "💡 编译可能未成功完成" >> "$REPORT_FILE"
-    fi
-    echo "" >> "$REPORT_FILE"
-}
-
-# 20. 生成错误报告（新增）
-generate_error_report() {
-    log "📋 生成错误报告..."
-    
-    print_subheader "错误报告生成"
-    
-    local report_file="/tmp/openwrt-build-error-report.txt"
-    
-    echo "=== OpenWrt 构建错误报告 ===" > "$report_file"
-    echo "生成时间: $(date)" >> "$report_file"
-    echo "构建目录: $BUILD_DIR" >> "$report_file"
-    echo "" >> "$report_file"
-    
-    # 环境信息
-    echo "=== 环境信息 ===" >> "$report_file"
-    uname -a >> "$report_file"
-    echo "" >> "$report_file"
-    
-    # 磁盘空间
-    echo "=== 磁盘空间 ===" >> "$report_file"
-    df -h /mnt >> "$report_file"
-    echo "" >> "$report_file"
-    
-    # 错误摘要
-    echo "=== 错误摘要 ===" >> "$report_file"
-    if [ -f "$BUILD_DIR/build.log" ]; then
-        grep -i "Error\|error:" "$BUILD_DIR/build.log" | tail -20 >> "$report_file"
-    else
-        echo "无构建日志文件" >> "$report_file"
-    fi
-    echo "" >> "$report_file"
-    
-    # 警告摘要
-    echo "=== 警告摘要 ===" >> "$report_file"
-    if [ -f "$BUILD_DIR/build.log" ]; then
-        grep -i "Warning\|warning:" "$BUILD_DIR/build.log" | tail -20 >> "$report_file"
-    else
-        echo "无构建日志文件" >> "$report_file"
-    fi
-    echo "" >> "$report_file"
-    
-    # SDK状态
-    echo "=== SDK状态 ===" >> "$report_file"
-    if [ -d "$SDK_DIR" ]; then
-        echo "SDK目录: $SDK_DIR" >> "$report_file"
-        echo "SDK大小: $(du -sh "$SDK_DIR" 2>/dev/null | cut -f1 || echo '未知')" >> "$report_file"
-        
-        local gcc_file=$(find "$SDK_DIR" -type f -executable -name "*gcc" 2>/dev/null | head -1)
-        if [ -n "$gcc_file" ]; then
-            echo "GCC编译器: $gcc_file" >> "$report_file"
-            "$gcc_file" --version 2>&1 | head -1 >> "$report_file"
-        fi
-    else
-        echo "SDK目录不存在" >> "$report_file"
-    fi
-    echo "" >> "$report_file"
-    
-    # 构建产物
-    echo "=== 构建产物 ===" >> "$report_file"
-    if [ -d "$BUILD_DIR/bin/targets" ]; then
-        find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
-            echo "$(basename "$file")" >> "$report_file"
-        done
-    else
-        echo "无构建产物" >> "$report_file"
-    fi
-    
-    echo "" >> "$REPORT_FILE"
-    echo "📄 错误报告已生成: $report_file" >> "$REPORT_FILE"
-    echo "报告文件内容预览:" >> "$REPORT_FILE"
-    head -30 "$report_file" | while read line; do
-        echo "  $line" >> "$REPORT_FILE"
-    done
     echo "" >> "$REPORT_FILE"
 }
 
