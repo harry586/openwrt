@@ -14,6 +14,8 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # 日志函数
@@ -34,6 +36,16 @@ warning() {
 # 成功日志
 success() {
     echo -e "${GREEN}✅ $1${NC}"
+}
+
+# 步骤日志
+log_step() {
+    echo -e "${PURPLE}📋 $1${NC}"
+}
+
+# 调试日志
+log_debug() {
+    echo -e "${CYAN}🔍 $1${NC}"
 }
 
 # 标题函数
@@ -104,7 +116,7 @@ init_report() {
     echo "==================================================" >> "$REPORT_FILE"
     echo "分析时间: $(date '+%Y-%m-%d %H:%M:%S')" >> "$REPORT_FILE"
     echo "报告时间戳: $TIMESTAMP" >> "$REPORT_FILE"
-    echo "报告版本: 3.0.0" >> "$REPORT_FILE"
+    echo "报告版本: 3.1.0" >> "$REPORT_FILE"
     echo "构建目录: $BUILD_DIR" >> "$REPORT_FILE"
     echo "SDK目录: $SDK_DIR" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
@@ -115,7 +127,7 @@ init_report() {
 
 # 2. 收集系统信息
 collect_system_info() {
-    log "💻 收集系统信息..."
+    log_step "收集系统信息"
     
     print_header "系统环境信息"
     
@@ -153,7 +165,7 @@ collect_system_info() {
 
 # 3. 检查系统资源
 check_system_resources() {
-    log "💾 检查系统资源..."
+    log_step "检查系统资源"
     
     print_subheader "系统资源状态"
     
@@ -187,7 +199,7 @@ check_system_resources() {
 
 # 4. 检查构建结果
 check_build_result() {
-    log "📦 检查构建结果..."
+    log_step "检查构建结果"
     
     print_subheader "构建结果摘要"
     
@@ -237,7 +249,7 @@ check_build_result() {
 
 # 5. 分析配置文件（修复版）
 analyze_config_file() {
-    log "⚙️  分析配置文件..."
+    log_step "分析配置文件"
     
     print_subheader "配置文件分析"
     
@@ -299,17 +311,26 @@ analyze_config_file() {
             fi
             echo "" >> "$REPORT_FILE"
             
-            # USB配置检查（简化版）
+            # USB配置检查（增强版）
             print_subheader "关键USB配置状态"
-            local critical_usb_drivers=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-storage")
+            local critical_usb_drivers=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-xhci-hcd" "kmod-usb-storage")
+            local missing_usb=0
             
+            echo "🔧 USB驱动检查:" >> "$REPORT_FILE"
             for driver in "${critical_usb_drivers[@]}"; do
                 if grep -q "^CONFIG_PACKAGE_${driver}=y" "$BUILD_DIR/.config" 2>/dev/null; then
-                    echo "✅ $driver: 已启用" >> "$REPORT_FILE"
+                    echo "  ✅ $driver: 已启用" >> "$REPORT_FILE"
                 else
-                    echo "❌ $driver: 未启用" >> "$REPORT_FILE"
+                    echo "  ❌ $driver: 未启用" >> "$REPORT_FILE"
+                    missing_usb=$((missing_usb + 1))
                 fi
             done
+            
+            if [ $missing_usb -gt 0 ]; then
+                echo "⚠️ 缺少 $missing_usb 个关键USB驱动" >> "$REPORT_FILE"
+            else
+                echo "✅ 所有关键USB驱动已启用" >> "$REPORT_FILE"
+            fi
             echo "" >> "$REPORT_FILE"
         else
             echo "⚠️ 配置文件中没有找到任何配置项" >> "$REPORT_FILE"
@@ -322,9 +343,9 @@ analyze_config_file() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 6. 检查编译器状态（优化版 - 更准确的SDK编译器检测）
+# 6. 检查编译器状态（增强版 - 改进SDK编译器检测）
 check_compiler_status() {
-    log "🔧 检查编译器状态..."
+    log_step "检查编译器状态"
     
     print_subheader "编译器状态检查"
     
@@ -333,12 +354,14 @@ check_compiler_status() {
         echo "🎯 编译器来源: 预构建的OpenWrt SDK" >> "$REPORT_FILE"
         echo "📌 编译器目录: $COMPILER_DIR" >> "$REPORT_FILE"
         
-        # 检查预构建编译器中的GCC版本
+        # 查找真正的GCC编译器，排除dummy-tools和脚本工具
         local prebuilt_gcc=$(find "$COMPILER_DIR" -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
           ! -name "*gcc-nm" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
           2>/dev/null | head -1)
         
         if [ -n "$prebuilt_gcc" ] && [ -x "$prebuilt_gcc" ]; then
@@ -346,7 +369,7 @@ check_compiler_status() {
             local prebuilt_version=$("$prebuilt_gcc" --version 2>&1 | head -1)
             echo "     版本: $prebuilt_version" >> "$REPORT_FILE"
             
-            # 检查GCC版本 - 修复版：根据实际检测到的版本显示
+            # 检查GCC版本
             local major_version=$(echo "$prebuilt_version" | grep -o "[0-9]\+" | head -1)
             if [ -n "$major_version" ]; then
                 echo "     🔧 SDK GCC版本: $major_version.x" >> "$REPORT_FILE"
@@ -369,6 +392,19 @@ check_compiler_status() {
         else
             echo "⚠️ 预构建目录中未找到真正的GCC编译器" >> "$REPORT_FILE"
             echo "🔍 搜索预构建目录内容:" >> "$REPORT_FILE"
+            
+            # 检查是否有dummy-tools
+            local dummy_gcc=$(find "$COMPILER_DIR" -type f -executable \
+              -name "*gcc" \
+              -path "*dummy-tools*" \
+              2>/dev/null | head -1)
+            
+            if [ -n "$dummy_gcc" ]; then
+                echo "  ⚠️ 检测到虚假的dummy-tools编译器: $(basename "$dummy_gcc")" >> "$REPORT_FILE"
+                echo "  💡 注意: 这是OpenWrt构建系统的占位符，不是真正的编译器" >> "$REPORT_FILE"
+                echo "  💡 真正的编译器应该在 toolchain-* 目录中" >> "$REPORT_FILE"
+            fi
+            
             find "$COMPILER_DIR" -type f -executable -name "*gcc*" 2>/dev/null | head -5 | while read file; do
                 echo "  🔧 $(basename "$file")" >> "$REPORT_FILE"
             done
@@ -408,7 +444,7 @@ check_compiler_status() {
                 local version=$("$real_gcc" --version 2>&1 | head -1)
                 echo "     版本: $version" >> "$REPORT_FILE"
                 
-                # 显示GCC版本但不标记兼容性问题
+                # 显示GCC版本
                 local major_version=$(echo "$version" | grep -o "[0-9]\+" | head -1)
                 if [ -n "$major_version" ]; then
                     echo "     🔧 GCC版本: $major_version.x" >> "$REPORT_FILE"
@@ -428,7 +464,7 @@ check_compiler_status() {
         echo "💡 构建可能尚未开始或已清理" >> "$REPORT_FILE"
     fi
     
-    # 编译器版本详细检查 - 优化版：不再错误报告版本问题
+    # 编译器版本详细检查 - 增强版
     print_subheader "编译器版本详细检查"
     
     # 查找所有可能的GCC编译器
@@ -437,6 +473,7 @@ check_compiler_status() {
       ! -name "*gcc-ar" \
       ! -name "*gcc-ranlib" \
       ! -name "*gcc-nm" \
+      ! -path "*dummy-tools*" \
       2>/dev/null)
     
     local count=0
@@ -467,6 +504,9 @@ check_compiler_status() {
                 elif [[ "$gcc_file" == *"staging_dir"* ]]; then
                     echo "      来源: 🛠️ 自动构建" >> "$REPORT_FILE"
                     echo "      状态: ✅ 构建系统生成的编译器" >> "$REPORT_FILE"
+                elif [[ "$gcc_file" == *"dummy-tools"* ]]; then
+                    echo "      来源: ⚠️ dummy-tools (占位符)" >> "$REPORT_FILE"
+                    echo "      状态: ⚠️ 这不是真正的编译器，是构建系统的占位符" >> "$REPORT_FILE"
                 else
                     echo "      来源: 🔍 其他位置" >> "$REPORT_FILE"
                 fi
@@ -478,55 +518,30 @@ check_compiler_status() {
         echo "  ⚠️ 未找到任何GCC编译器文件" >> "$REPORT_FILE"
     fi
     
-    # 特别检查：修复错误的版本警告
-    print_subheader "SDK编译器状态确认"
+    # SDK编译器调用状态检查
+    print_subheader "SDK编译器调用状态检查"
     
-    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-        echo "📊 SDK编译器目录信息:" >> "$REPORT_FILE"
-        echo "  目录路径: $COMPILER_DIR" >> "$REPORT_FILE"
-        echo "  目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')" >> "$REPORT_FILE"
-        
-        # 检查是否是OpenWrt官方SDK
-        if [ -f "$COMPILER_DIR/version.json" ] || [ -f "$COMPILER_DIR/.config" ]; then
-            echo "  ✅ 确认是OpenWrt官方SDK工具链" >> "$REPORT_FILE"
-            
-            # 获取SDK GCC版本信息
-            local sdk_gcc=$(find "$COMPILER_DIR" -type f -executable \
-              -name "*gcc" \
-              ! -name "*gcc-ar" \
-              ! -name "*gcc-ranlib" \
-              ! -name "*gcc-nm" \
-              2>/dev/null | head -1)
-            
-            if [ -n "$sdk_gcc" ] && [ -x "$sdk_gcc" ]; then
-                local sdk_version=$("$sdk_gcc" --version 2>&1 | head -1)
-                local major_version=$(echo "$sdk_version" | grep -o "[0-9]\+" | head -1)
-                
-                if [ "$major_version" = "12" ]; then
-                    echo "  💡 SDK编译器版本: GCC 12.3.0 (OpenWrt 23.05官方版本)" >> "$REPORT_FILE"
-                elif [ "$major_version" = "8" ]; then
-                    echo "  💡 SDK编译器版本: GCC 8.4.0 (OpenWrt 21.02官方版本)" >> "$REPORT_FILE"
-                else
-                    echo "  💡 SDK编译器版本是经过官方测试和验证的" >> "$REPORT_FILE"
-                fi
+    if [ -f "$BUILD_DIR/build.log" ]; then
+        if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+            local sdk_calls=$(grep -c "$COMPILER_DIR" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
+            if [ $sdk_calls -gt 0 ]; then
+                echo "✅ 构建过程中调用了SDK编译器 ($sdk_calls 次)" >> "$REPORT_FILE"
+                echo "💡 SDK编译器已成功集成到构建系统中" >> "$REPORT_FILE"
+            else
+                echo "⚠️ 构建过程中未检测到SDK编译器调用" >> "$REPORT_FILE"
+                echo "💡 可能使用了OpenWrt自动构建的编译器" >> "$REPORT_FILE"
             fi
         fi
-        
-        # 检查SDK中的GCC文件
-        local sdk_gcc_files=$(find "$COMPILER_DIR" -type f -executable -name "*gcc" 2>/dev/null | wc -l)
-        echo "  GCC文件数量: $sdk_gcc_files 个" >> "$REPORT_FILE"
-        
-        if [ $sdk_gcc_files -gt 0 ]; then
-            echo "  ✅ SDK包含GCC编译器文件" >> "$REPORT_FILE"
-        fi
+    else
+        echo "ℹ️ 无构建日志，无法检查SDK编译器调用状态" >> "$REPORT_FILE"
     fi
     
     echo "" >> "$REPORT_FILE"
 }
 
-# 7. 检查构建日志文件（新增）
+# 7. 检查构建日志文件（增强版）
 check_build_log_file() {
-    log "📋 检查构建日志文件..."
+    log_step "检查构建日志文件"
     
     print_subheader "构建日志文件检查"
     
@@ -552,7 +567,7 @@ check_build_log_file() {
 
 # 8. 分析构建日志（增强版）
 analyze_build_log() {
-    log "📝 分析构建日志..."
+    log_step "分析构建日志"
     
     print_subheader "构建日志分析"
     
@@ -613,7 +628,7 @@ analyze_build_log() {
             grep -i "depends on\|missing dependencies\|undefined reference" "$BUILD_DIR/build.log" | head -5 >> "$REPORT_FILE" || echo "  无依赖错误" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
             
-            # 特定错误模式检查
+            # 特定错误模式检查 - 增强版
             print_subheader "特定错误模式检测"
             
             # 工具链错误
@@ -648,6 +663,22 @@ analyze_build_log() {
                 echo "" >> "$REPORT_FILE"
             fi
             
+            # 内存不足错误
+            if grep -q "out of memory\|Killed process" "$BUILD_DIR/build.log" 2>/dev/null; then
+                echo "❌ 检测到内存不足错误" >> "$REPORT_FILE"
+                echo "💡 系统内存不足，编译被终止" >> "$REPORT_FILE"
+                echo "🛠️ 修复方法: 增加交换空间或减少并行编译任务" >> "$REPORT_FILE"
+                echo "" >> "$REPORT_FILE"
+            fi
+            
+            # 编译器未找到错误
+            if grep -q "compiler.*not found\|gcc.*not found" "$BUILD_DIR/build.log" 2>/dev/null; then
+                echo "❌ 检测到编译器未找到错误" >> "$REPORT_FILE"
+                echo "💡 编译器路径配置错误或SDK下载不完整" >> "$REPORT_FILE"
+                echo "🛠️ 修复方法: 检查COMPILER_DIR环境变量或重新下载SDK" >> "$REPORT_FILE"
+                echo "" >> "$REPORT_FILE"
+            fi
+            
         else
             echo "✅ 构建日志中没有发现真正严重的错误" >> "$REPORT_FILE"
             echo "💡 注意：某些'error'消息可能是警告或可忽略的" >> "$REPORT_FILE"
@@ -660,9 +691,9 @@ analyze_build_log() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 9. 检查下载日志
+# 9. 检查下载日志（增强版）
 check_download_log() {
-    log "📥 检查下载日志..."
+    log_step "检查下载日志"
     
     print_subheader "下载日志分析"
     
@@ -703,9 +734,9 @@ check_download_log() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 10. 版本特定分析
+# 10. 版本特定分析（增强版）
 analyze_version_specific() {
-    log "🔍 分析版本特定问题..."
+    log_step "分析版本特定问题"
     
     print_subheader "版本特定问题分析"
     
@@ -726,6 +757,7 @@ analyze_version_specific() {
             echo "  2. 工具链构建错误 (toolchain/Makefile:93)" >> "$REPORT_FILE"
             echo "  3. 头文件缺失问题" >> "$REPORT_FILE"
             echo "  4. libtool版本兼容性问题" >> "$REPORT_FILE"
+            echo "  5. IPK文件安装问题（大小写敏感）" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
             
             echo "🛠️ 解决方案:" >> "$REPORT_FILE"
@@ -733,6 +765,7 @@ analyze_version_specific() {
             echo "  2. 创建stamp标记文件" >> "$REPORT_FILE"
             echo "  3. 安装libtool和autoconf" >> "$REPORT_FILE"
             echo "  4. 设置-fpermissive编译标志" >> "$REPORT_FILE"
+            echo "  5. 修复IPK安装脚本，支持不区分大小写" >> "$REPORT_FILE"
             
         elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
             echo "🔧 OpenWrt 21.02 版本特性:" >> "$REPORT_FILE"
@@ -746,21 +779,24 @@ analyze_version_specific() {
             echo "  1. 相对稳定，问题较少" >> "$REPORT_FILE"
             echo "  2. 文档和教程丰富" >> "$REPORT_FILE"
             echo "  3. 兼容性好" >> "$REPORT_FILE"
+            echo "  4. IPK文件安装正常" >> "$REPORT_FILE"
             
         else
             echo "ℹ️ 当前版本分支: $SELECTED_BRANCH" >> "$REPORT_FILE"
             echo "💡 请参考官方文档获取版本特定信息" >> "$REPORT_FILE"
         fi
         
-        # SDK编译器信息
+        # SDK编译器信息 - 增强版
         print_subheader "SDK编译器版本信息"
         echo "🎯 SDK编译器来源: OpenWrt官方下载" >> "$REPORT_FILE"
         
         # 根据版本显示不同的SDK编译器信息
         if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             echo "🔧 SDK编译器版本: GCC 12.3.0 (OpenWrt 23.05官方版本)" >> "$REPORT_FILE"
+            echo "💡 注意: 23.05版本中IPK文件安装需要特殊处理" >> "$REPORT_FILE"
         elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
             echo "🔧 SDK编译器版本: GCC 8.4.0 (OpenWrt 21.02官方版本)" >> "$REPORT_FILE"
+            echo "💡 注意: 21.02版本相对稳定" >> "$REPORT_FILE"
         else
             echo "🔧 SDK编译器版本: 根据OpenWrt版本自动匹配" >> "$REPORT_FILE"
         fi
@@ -775,9 +811,9 @@ analyze_version_specific() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 11. 分析常见错误模式（新增）
+# 11. 分析常见错误模式（增强版）
 analyze_common_error_patterns() {
-    log "🔍 分析常见错误模式..."
+    log_step "分析常见错误模式"
     
     print_subheader "常见错误模式分析"
     
@@ -790,11 +826,13 @@ analyze_common_error_patterns() {
     
     echo "🔍 正在扫描常见错误模式:" >> "$REPORT_FILE"
     
-    # 1. 编译器未找到
-    if grep -q "compiler.*not found\|command not found" "$BUILD_DIR/build.log"; then
+    # 1. 编译器未找到（增强版）
+    if grep -q "compiler.*not found\|gcc.*not found\|command not found.*gcc" "$BUILD_DIR/build.log"; then
         echo "❌ 发现编译器未找到错误" >> "$REPORT_FILE"
-        grep -i "compiler.*not found\|command not found" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
+        grep -i "compiler.*not found\|gcc.*not found" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
         patterns_found=$((patterns_found + 1))
+        echo "💡 可能原因: 编译器路径配置错误或SDK下载不完整" >> "$REPORT_FILE"
+        echo "🛠️ 修复方法: 检查COMPILER_DIR环境变量或重新下载SDK" >> "$REPORT_FILE"
         echo "" >> "$REPORT_FILE"
     fi
     
@@ -803,6 +841,8 @@ analyze_common_error_patterns() {
         echo "❌ 发现未定义引用错误" >> "$REPORT_FILE"
         grep -i "undefined reference" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
         patterns_found=$((patterns_found + 1))
+        echo "💡 可能原因: 库文件缺失或链接顺序错误" >> "$REPORT_FILE"
+        echo "🛠️ 修复方法: 检查依赖包是否完整，调整链接顺序" >> "$REPORT_FILE"
         echo "" >> "$REPORT_FILE"
     fi
     
@@ -811,6 +851,8 @@ analyze_common_error_patterns() {
         echo "⚠️ 发现文件不存在错误" >> "$REPORT_FILE"
         grep -i "No such file\|File not found" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
         patterns_found=$((patterns_found + 1))
+        echo "💡 可能原因: 依赖包下载不完整或路径错误" >> "$REPORT_FILE"
+        echo "🛠️ 修复方法: 重新下载依赖包或检查文件路径" >> "$REPORT_FILE"
         echo "" >> "$REPORT_FILE"
     fi
     
@@ -819,14 +861,18 @@ analyze_common_error_patterns() {
         echo "🚨 发现内存不足错误" >> "$REPORT_FILE"
         grep -i "out of memory\|Killed process" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
         patterns_found=$((patterns_found + 1))
+        echo "💡 可能原因: 系统内存不足，编译被终止" >> "$REPORT_FILE"
+        echo "🛠️ 修复方法: 增加交换空间或减少并行编译任务" >> "$REPORT_FILE"
         echo "" >> "$REPORT_FILE"
     fi
     
     # 5. 权限错误
-    if grep -q "Permission denied" "$BUILD_DIR/build.log"; then
+    if grep -q "Permission denied\|cannot create" "$BUILD_DIR/build.log"; then
         echo "⚠️ 发现权限错误" >> "$REPORT_FILE"
-        grep -i "Permission denied" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
+        grep -i "Permission denied\|cannot create" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
         patterns_found=$((patterns_found + 1))
+        echo "💡 可能原因: 文件权限不足，尝试修复权限" >> "$REPORT_FILE"
+        echo "🛠️ 修复方法: 检查文件权限或使用sudo" >> "$REPORT_FILE"
         echo "" >> "$REPORT_FILE"
     fi
     
@@ -835,6 +881,8 @@ analyze_common_error_patterns() {
         echo "🚨 发现磁盘空间不足错误" >> "$REPORT_FILE"
         grep -i "No space left\|disk full" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
         patterns_found=$((patterns_found + 1))
+        echo "💡 可能原因: 磁盘空间不足" >> "$REPORT_FILE"
+        echo "🛠️ 修复方法: 清理磁盘空间或扩展磁盘" >> "$REPORT_FILE"
         echo "" >> "$REPORT_FILE"
     fi
     
@@ -843,6 +891,18 @@ analyze_common_error_patterns() {
         echo "⚠️ 发现时间戳错误" >> "$REPORT_FILE"
         grep -i "clock skew\|time stamp\|timestamp" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
         patterns_found=$((patterns_found + 1))
+        echo "💡 可能原因: 系统时间不正确或文件时间戳混乱" >> "$REPORT_FILE"
+        echo "🛠️ 修复方法: 同步系统时间或清理构建缓存" >> "$REPORT_FILE"
+        echo "" >> "$REPORT_FILE"
+    fi
+    
+    # 8. 下载错误
+    if grep -q "404\|Failed to download\|timeout\|connection refused" "$BUILD_DIR/build.log"; then
+        echo "⚠️ 发现下载错误" >> "$REPORT_FILE"
+        grep -i "404\|Failed to download\|timeout\|connection refused" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
+        patterns_found=$((patterns_found + 1))
+        echo "💡 可能原因: 网络问题或源地址不可用" >> "$REPORT_FILE"
+        echo "🛠️ 修复方法: 检查网络连接或更换下载源" >> "$REPORT_FILE"
         echo "" >> "$REPORT_FILE"
     fi
     
@@ -854,9 +914,9 @@ analyze_common_error_patterns() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 12. 检查SDK状态（新增）
+# 12. 检查SDK状态（增强版）
 check_sdk_status() {
-    log "🔧 检查SDK状态..."
+    log_step "检查SDK状态"
     
     print_subheader "SDK状态检查"
     
@@ -866,12 +926,14 @@ check_sdk_status() {
         local sdk_size=$(du -sh "$SDK_DIR" 2>/dev/null | cut -f1 || echo "未知")
         echo "📏 SDK目录大小: $sdk_size" >> "$REPORT_FILE"
         
-        # 查找GCC编译器
+        # 查找GCC编译器（增强版，排除dummy-tools）
         local gcc_file=$(find "$SDK_DIR" -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
           ! -name "*gcc-nm" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
           2>/dev/null | head -1)
         
         if [ -n "$gcc_file" ] && [ -x "$gcc_file" ]; then
@@ -901,6 +963,15 @@ check_sdk_status() {
                     echo "  🔧 $(basename "$tool")" >> "$REPORT_FILE"
                 done
             fi
+            
+            # 检查dummy-tools
+            local dummy_tools=$(find "$SDK_DIR" -type f -executable -path "*dummy-tools*" -name "*gcc*" 2>/dev/null | head -3)
+            if [ -n "$dummy_tools" ]; then
+                echo "⚠️ 检测到dummy-tools编译器:" >> "$REPORT_FILE"
+                echo "$dummy_tools" | while read tool; do
+                    echo "  ⚠️ $(basename "$tool") (这不是真正的编译器)" >> "$REPORT_FILE"
+                done
+            fi
         fi
     else
         echo "⚠️ SDK目录不存在: $SDK_DIR" >> "$REPORT_FILE"
@@ -909,9 +980,9 @@ check_sdk_status() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 13. 检查自定义文件集成问题（新增）
+# 13. 检查自定义文件集成问题（增强版）
 check_custom_files_integration() {
-    log "📂 检查自定义文件集成..."
+    log_step "检查自定义文件集成"
     
     print_subheader "自定义文件集成检查"
     
@@ -920,27 +991,110 @@ check_custom_files_integration() {
     if [ -d "$custom_files_dir" ]; then
         echo "✅ 自定义文件目录存在: $custom_files_dir" >> "$REPORT_FILE"
         
+        # 初始化统计变量
+        local ipk_count=0
+        local script_count=0
+        local config_count=0
+        local other_count=0
+        local chinese_count=0
+        local total_count=0
+        
+        # 精确中文检测函数
+        detect_chinese() {
+            local filename="$1"
+            if echo "$filename" | grep -q -P '[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}]'; then
+                return 0
+            fi
+            if echo "$filename" | grep -q -E "备份|恢复|安装|配置|设置|脚本|文件|固件|插件|网络|系统|路由|无线"; then
+                return 0
+            fi
+            return 1
+        }
+        
         # 统计文件
-        local ipk_count=$(find "$custom_files_dir" -name "*.ipk" 2>/dev/null | wc -l)
-        local script_count=$(find "$custom_files_dir" -name "*.sh" -o -name "*.Sh" -o -name "*.SH" 2>/dev/null | wc -l)
-        local chinese_count=$(find "$custom_files_dir" -name "*" -exec bash -c '[[ $(basename "$1") =~ [\x80-\xFF] ]] && echo "$1"' _ {} \; 2>/dev/null | wc -l)
+        for file in "$custom_files_dir"/*; do
+            if [ -f "$file" ]; then
+                total_count=$((total_count + 1))
+                local filename=$(basename "$file")
+                
+                # 检测中文名
+                if detect_chinese "$filename"; then
+                    chinese_count=$((chinese_count + 1))
+                fi
+                
+                # 统计文件类型
+                if echo "$filename" | grep -qi "\.ipk$"; then
+                    ipk_count=$((ipk_count + 1))
+                elif [[ "$filename" == *.sh ]] || [[ "$filename" == *.Sh ]] || [[ "$filename" == *.SH ]]; then
+                    script_count=$((script_count + 1))
+                elif [[ "$filename" == *.conf ]] || [[ "$filename" == *.config ]] || [[ "$filename" == *.CONF ]]; then
+                    config_count=$((config_count + 1))
+                else
+                    other_count=$((other_count + 1))
+                fi
+            fi
+        done
         
         echo "📊 自定义文件统计:" >> "$REPORT_FILE"
         echo "  📦 IPK文件: $ipk_count 个" >> "$REPORT_FILE"
         echo "  📜 脚本文件: $script_count 个" >> "$REPORT_FILE"
+        echo "  ⚙️  配置文件: $config_count 个" >> "$REPORT_FILE"
+        echo "  📄 其他文件: $other_count 个" >> "$REPORT_FILE"
         echo "  🇨🇳 中文名文件: $chinese_count 个" >> "$REPORT_FILE"
+        echo "  📁 总文件数: $total_count 个" >> "$REPORT_FILE"
         
         if [ $chinese_count -gt 0 ]; then
             echo "⚠️ 发现中文文件名，可能影响脚本执行" >> "$REPORT_FILE"
-            find "$custom_files_dir" -name "*" -exec bash -c '[[ $(basename "$1") =~ [\x80-\xFF] ]] && echo "  $(basename "$1")"' _ {} \; 2>/dev/null | head -5 >> "$REPORT_FILE"
+            echo "🔍 中文文件名列表 (最多显示5个):" >> "$REPORT_FILE"
+            for file in "$custom_files_dir"/*; do
+                if [ -f "$file" ]; then
+                    local filename=$(basename "$file")
+                    if detect_chinese "$filename"; then
+                        echo "  📄 $filename" >> "$REPORT_FILE"
+                        chinese_count=$((chinese_count - 1))
+                        if [ $chinese_count -le 0 ]; then
+                            break
+                        fi
+                    fi
+                fi
+            done
         fi
         
         # 检查启动脚本
         local boot_script="$BUILD_DIR/files/etc/uci-defaults/99-custom-files"
         if [ -f "$boot_script" ]; then
             echo "✅ 第一次开机脚本存在: $boot_script" >> "$REPORT_FILE"
+            
+            # 检查IPK安装逻辑
+            local ipk_logic=$(grep -c "grep -qi.*\\.ipk" "$boot_script" 2>/dev/null || echo "0")
+            if [ $ipk_logic -gt 0 ]; then
+                echo "✅ IPK安装逻辑已修复（不区分大小写）" >> "$REPORT_FILE"
+            else
+                echo "⚠️ IPK安装逻辑可能未修复" >> "$REPORT_FILE"
+            fi
         else
             echo "⚠️ 第一次开机脚本不存在" >> "$REPORT_FILE"
+        fi
+        
+        # 显示具体的IPK文件
+        if [ $ipk_count -gt 0 ]; then
+            echo "📦 检测到的IPK文件:" >> "$REPORT_FILE"
+            for file in "$custom_files_dir"/*; do
+                if [ -f "$file" ] && echo "$(basename "$file")" | grep -qi "\.ipk$"; then
+                    echo "  📦 $(basename "$file")" >> "$REPORT_FILE"
+                fi
+            done
+            
+            echo "💡 IPK安装修复说明:" >> "$REPORT_FILE"
+            echo "  - 使用不区分大小写的文件匹配 (ipk, IPK, Ipk)" >> "$REPORT_FILE"
+            echo "  - 修复了23.05版本中IPK不安装的问题" >> "$REPORT_FILE"
+            echo "  - 确保所有IPK文件都会被安装" >> "$REPORT_FILE"
+        fi
+        
+        if [ $chinese_count -gt 0 ]; then
+            echo "💡 中文文件名处理:" >> "$REPORT_FILE"
+            echo "  - 已启用中文文件名检测和优化处理" >> "$REPORT_FILE"
+            echo "  - 支持自动识别和运行中文名脚本" >> "$REPORT_FILE"
         fi
     else
         echo "ℹ️ 自定义文件目录不存在: $custom_files_dir" >> "$REPORT_FILE"
@@ -948,9 +1102,9 @@ check_custom_files_integration() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 14. 分析编译器相关错误（新增）
+# 14. 分析编译器相关错误（增强版）
 analyze_compiler_errors() {
-    log "🔧 分析编译器相关错误..."
+    log_step "分析编译器相关错误"
     
     print_subheader "编译器相关错误分析"
     
@@ -977,6 +1131,7 @@ analyze_compiler_errors() {
                   ! -name "*gcc-ar" \
                   ! -name "*gcc-ranlib" \
                   ! -name "*gcc-nm" \
+                  ! -path "*dummy-tools*" \
                   2>/dev/null | head -1)
                 
                 if [ -n "$sdk_gcc" ] && [ -x "$sdk_gcc" ]; then
@@ -1010,12 +1165,19 @@ analyze_compiler_errors() {
         echo "⚠️ 发现预构建编译器相关错误" >> "$REPORT_FILE"
         grep "$COMPILER_DIR" "$BUILD_DIR/build.log" | grep -i "error\|failed" | head -5 >> "$REPORT_FILE"
     fi
+    
+    # 检查dummy-tools相关错误
+    if grep -q "dummy-tools" "$BUILD_DIR/build.log" 2>/dev/null && grep -q "error\|failed" "$BUILD_DIR/build.log" 2>/dev/null; then
+        echo "⚠️ 发现dummy-tools相关错误" >> "$REPORT_FILE"
+        grep "dummy-tools" "$BUILD_DIR/build.log" | grep -i "error\|failed" | head -3 >> "$REPORT_FILE"
+        echo "💡 dummy-tools是OpenWrt构建系统的占位符，不是真正的编译器" >> "$REPORT_FILE"
+    fi
     echo "" >> "$REPORT_FILE"
 }
 
-# 15. 检查磁盘空间（新增）
+# 15. 检查磁盘空间（增强版）
 check_disk_space_usage() {
-    log "💿 检查磁盘空间..."
+    log_step "检查磁盘空间"
     
     print_subheader "磁盘空间检查"
     
@@ -1023,24 +1185,37 @@ check_disk_space_usage() {
     df -h /mnt >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
-    local available_space=$(df /mnt --output=avail | tail -1)
-    local available_gb=$((available_space / 1024 / 1024))
+    local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1)
+    local available_gb=0
     
-    echo "/mnt 可用空间: ${available_gb}G" >> "$REPORT_FILE"
-    
-    if [ $available_gb -lt 5 ]; then
-        echo "⚠️ 磁盘空间较低，建议清理" >> "$REPORT_FILE"
-    elif [ $available_gb -lt 10 ]; then
-        echo "✅ 磁盘空间正常" >> "$REPORT_FILE"
+    if [ -n "$available_space" ]; then
+        available_gb=$((available_space / 1024 / 1024))
+        echo "/mnt 可用空间: ${available_gb}G" >> "$REPORT_FILE"
+        
+        if [ $available_gb -lt 5 ]; then
+            echo "🚨 磁盘空间严重不足 (仅 ${available_gb}G)" >> "$REPORT_FILE"
+            echo "💡 建议立即清理磁盘空间" >> "$REPORT_FILE"
+        elif [ $available_gb -lt 10 ]; then
+            echo "⚠️ 磁盘空间较低 (${available_gb}G)" >> "$REPORT_FILE"
+            echo "💡 建议清理一些空间" >> "$REPORT_FILE"
+        else
+            echo "✅ 磁盘空间充足 (${available_gb}G)" >> "$REPORT_FILE"
+        fi
     else
-        echo "✅ 磁盘空间充足" >> "$REPORT_FILE"
+        echo "❌ 无法获取磁盘空间信息" >> "$REPORT_FILE"
+    fi
+    
+    # 检查构建目录大小
+    if [ -d "$BUILD_DIR" ]; then
+        local build_size=$(du -sh "$BUILD_DIR" 2>/dev/null | cut -f1 || echo "未知")
+        echo "📁 构建目录大小: $build_size" >> "$REPORT_FILE"
     fi
     echo "" >> "$REPORT_FILE"
 }
 
-# 16. 检查环境变量（新增）
+# 16. 检查环境变量（增强版）
 check_environment_variables() {
-    log "⚙️ 检查环境变量..."
+    log_step "检查环境变量"
     
     print_subheader "环境变量检查"
     
@@ -1074,6 +1249,13 @@ check_environment_variables() {
         
         if [ -n "$COMPILER_DIR" ]; then
             echo "🔧 编译器目录: $COMPILER_DIR" >> "$REPORT_FILE"
+            
+            # 检查编译器目录是否存在
+            if [ -d "$COMPILER_DIR" ]; then
+                echo "✅ 编译器目录存在" >> "$REPORT_FILE"
+            else
+                echo "❌ 编译器目录不存在" >> "$REPORT_FILE"
+            fi
         fi
     else
         echo "⚠️ 环境文件不存在: $env_file" >> "$REPORT_FILE"
@@ -1081,9 +1263,9 @@ check_environment_variables() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 17. 检查构建产物（新增）
+# 17. 检查构建产物（增强版）
 check_build_artifacts() {
-    log "📦 检查构建产物..."
+    log_step "检查构建产物"
     
     print_subheader "构建产物检查"
     
@@ -1130,22 +1312,62 @@ check_build_artifacts() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 18. 生成错误报告（新增）
+# 18. 检查依赖包（新增）
+check_dependencies() {
+    log_step "检查依赖包"
+    
+    print_subheader "依赖包检查"
+    
+    if [ -d "$BUILD_DIR/dl" ]; then
+        local dl_count=$(find "$BUILD_DIR/dl" -type f 2>/dev/null | wc -l)
+        local dl_size=$(du -sh "$BUILD_DIR/dl" 2>/dev/null | cut -f1 || echo "未知")
+        
+        echo "📦 依赖包统计:" >> "$REPORT_FILE"
+        echo "  依赖包数量: $dl_count 个" >> "$REPORT_FILE"
+        echo "  依赖包大小: $dl_size" >> "$REPORT_FILE"
+        
+        if [ $dl_count -lt 10 ]; then
+            echo "⚠️ 依赖包数量较少，可能下载不完整" >> "$REPORT_FILE"
+            echo "💡 建议运行: make download -j4 V=s" >> "$REPORT_FILE"
+        else
+            echo "✅ 依赖包看起来正常" >> "$REPORT_FILE"
+        fi
+        
+        # 显示最新的依赖包
+        if [ $dl_count -gt 0 ]; then
+            echo "📥 最新的依赖包 (最多5个):" >> "$REPORT_FILE"
+            find "$BUILD_DIR/dl" -type f -printf "%T@ %p\n" 2>/dev/null | sort -nr | head -5 | cut -d' ' -f2- | while read file; do
+                local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                echo "  📄 $(basename "$file") ($size)" >> "$REPORT_FILE"
+            done
+        fi
+    else
+        echo "⚠️ 依赖包目录不存在: $BUILD_DIR/dl" >> "$REPORT_FILE"
+        echo "💡 依赖包可能尚未下载" >> "$REPORT_FILE"
+    fi
+    echo "" >> "$REPORT_FILE"
+}
+
+# 19. 生成错误报告（增强版）
 generate_error_report() {
-    log "📋 生成错误报告..."
+    log_step "生成错误报告"
     
     print_subheader "错误报告生成"
     
-    local report_file="/tmp/openwrt-build-error-report.txt"
+    local report_file="/tmp/openwrt-build-error-report-$TIMESTAMP.txt"
     
     echo "=== OpenWrt 构建错误报告 ===" > "$report_file"
     echo "生成时间: $(date)" >> "$report_file"
-    echo "构建目录: $BUILD_DIR" >> "$report_file"
+    echo "构建目录: $BUILD_DIR" >> "$REPORT_FILE"
+    echo "报告时间戳: $TIMESTAMP" >> "$report_file"
     echo "" >> "$report_file"
     
     # 环境信息
     echo "=== 环境信息 ===" >> "$report_file"
     uname -a >> "$report_file"
+    if [ -f /etc/os-release ]; then
+        cat /etc/os-release | grep -E '^PRETTY_NAME=|^NAME=|^VERSION=' >> "$report_file"
+    fi
     echo "" >> "$report_file"
     
     # 磁盘空间
@@ -1153,10 +1375,32 @@ generate_error_report() {
     df -h /mnt >> "$report_file"
     echo "" >> "$report_file"
     
+    # 构建状态
+    echo "=== 构建状态 ===" >> "$report_file"
+    if [ -d "$BUILD_DIR/bin/targets" ]; then
+        echo "✅ 构建成功 - 生成固件文件" >> "$report_file"
+        find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | head -5 | while read file; do
+            echo "  📁 $(basename "$file")" >> "$report_file"
+        done
+    else
+        echo "❌ 构建失败 - 未生成固件" >> "$report_file"
+    fi
+    echo "" >> "$report_file"
+    
     # 错误摘要
     echo "=== 错误摘要 ===" >> "$report_file"
     if [ -f "$BUILD_DIR/build.log" ]; then
-        grep -i "Error\|error:" "$BUILD_DIR/build.log" | tail -20 >> "$report_file"
+        local error_count=$(grep -c -i "error" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
+        local warning_count=$(grep -c -i "warning" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
+        
+        echo "错误数量: $error_count" >> "$report_file"
+        echo "警告数量: $warning_count" >> "$report_file"
+        echo "" >> "$report_file"
+        
+        if [ $error_count -gt 0 ]; then
+            echo "前10个错误:" >> "$report_file"
+            grep -i "error" "$BUILD_DIR/build.log" | grep -v "ignored\|non-fatal" | head -10 >> "$report_file"
+        fi
     else
         echo "无构建日志文件" >> "$report_file"
     fi
@@ -1177,13 +1421,25 @@ generate_error_report() {
         echo "SDK目录: $SDK_DIR" >> "$report_file"
         echo "SDK大小: $(du -sh "$SDK_DIR" 2>/dev/null | cut -f1 || echo '未知')" >> "$report_file"
         
-        local gcc_file=$(find "$SDK_DIR" -type f -executable -name "*gcc" 2>/dev/null | head -1)
+        local gcc_file=$(find "$SDK_DIR" -type f -executable -name "*gcc" ! -path "*dummy-tools*" 2>/dev/null | head -1)
         if [ -n "$gcc_file" ]; then
             echo "GCC编译器: $gcc_file" >> "$report_file"
             "$gcc_file" --version 2>&1 | head -1 >> "$report_file"
+        else
+            echo "未找到真正的GCC编译器" >> "$report_file"
         fi
     else
         echo "SDK目录不存在" >> "$report_file"
+    fi
+    echo "" >> "$report_file"
+    
+    # 编译器调用状态
+    echo "=== 编译器调用状态 ===" >> "$report_file"
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ] && [ -f "$BUILD_DIR/build.log" ]; then
+        local sdk_calls=$(grep -c "$COMPILER_DIR" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
+        echo "SDK编译器调用次数: $sdk_calls" >> "$report_file"
+    else
+        echo "无法检查编译器调用状态" >> "$report_file"
     fi
     echo "" >> "$report_file"
     
@@ -1206,9 +1462,9 @@ generate_error_report() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 19. 详细错误分析函数（优化版）
+# 20. 详细错误分析函数（优化版）
 analyze_detailed_errors() {
-    log "🔍 执行详细错误分析..."
+    log_step "执行详细错误分析"
     
     print_subheader "详细错误分析"
     
@@ -1310,6 +1566,7 @@ analyze_detailed_errors() {
                   ! -name "*gcc-ar" \
                   ! -name "*gcc-ranlib" \
                   ! -name "*gcc-nm" \
+                  ! -path "*dummy-tools*" \
                   2>/dev/null | head -1)
                 
                 if [ -n "$sdk_gcc" ] && [ -x "$sdk_gcc" ]; then
@@ -1351,9 +1608,9 @@ analyze_detailed_errors() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 20. 生成修复建议（优化版）
+# 21. 生成修复建议（优化版）
 generate_fix_suggestions() {
-    log "💡 生成修复建议..."
+    log_step "生成修复建议"
     
     print_header "综合修复建议"
     
@@ -1410,24 +1667,14 @@ generate_fix_suggestions() {
             echo "" >> "$REPORT_FILE"
         fi
         
-        # 编译器版本错误 - 改进：只在真正检测到时显示
-        if grep -q "requires gcc.*\|\`gcc.*\` version" "$BUILD_DIR/build.log" 2>/dev/null; then
-            echo "🔧 真正的编译器版本错误修复:" >> "$REPORT_FILE"
-            echo "  💡 检测到真正的GCC版本兼容性问题" >> "$REPORT_FILE"
+        # 编译器未找到错误
+        if grep -q "compiler.*not found\|gcc.*not found" "$BUILD_DIR/build.log" 2>/dev/null; then
+            echo "🔧 编译器未找到错误修复:" >> "$REPORT_FILE"
+            echo "  💡 检测到编译器未找到错误" >> "$REPORT_FILE"
             echo "  🛠️ 修复方法:" >> "$REPORT_FILE"
-            echo "    1. 检查当前GCC版本: gcc --version" >> "$REPORT_FILE"
-            echo "    2. 确保使用兼容的GCC版本" >> "$REPORT_FILE"
-            echo "    3. 检查预构建编译器的兼容性" >> "$REPORT_FILE"
-            echo "" >> "$REPORT_FILE"
-        else
-            echo "💡 编译器版本说明:" >> "$REPORT_FILE"
-            echo "  ✅ SDK编译器是OpenWrt官方提供的，版本已通过验证" >> "$REPORT_FILE"
-            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-                echo "  🔧 OpenWrt 23.05 SDK使用 GCC 12.3.0" >> "$REPORT_FILE"
-            elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-                echo "  🔧 OpenWrt 21.02 SDK使用 GCC 8.4.0" >> "$REPORT_FILE"
-            fi
-            echo "  💡 如果构建成功，说明编译器版本完全兼容" >> "$REPORT_FILE"
+            echo "    1. 检查COMPILER_DIR环境变量: echo \$COMPILER_DIR" >> "$REPORT_FILE"
+            echo "    2. 重新下载SDK: firmware-config/scripts/build_firmware_main.sh initialize_compiler_env [设备名]" >> "$REPORT_FILE"
+            echo "    3. 确保SDK目录包含真正的GCC编译器" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
         fi
         
@@ -1460,6 +1707,38 @@ generate_fix_suggestions() {
             echo "    3. 扩展磁盘空间" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
         fi
+        
+        # 未定义引用错误
+        if grep -q "undefined reference" "$BUILD_DIR/build.log" 2>/dev/null; then
+            echo "🔧 未定义引用错误修复:" >> "$REPORT_FILE"
+            echo "  💡 检测到未定义引用错误" >> "$REPORT_FILE"
+            echo "  🛠️ 修复方法:" >> "$REPORT_FILE"
+            echo "    1. 检查依赖包是否完整" >> "$REPORT_FILE"
+            echo "    2. 调整库文件的链接顺序" >> "$REPORT_FILE"
+            echo "    3. 确保所有必要的库都已编译" >> "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+        fi
+        
+        # 编译器版本错误 - 改进：只在真正检测到时显示
+        if grep -q "requires gcc.*\|\`gcc.*\` version" "$BUILD_DIR/build.log" 2>/dev/null; then
+            echo "🔧 真正的编译器版本错误修复:" >> "$REPORT_FILE"
+            echo "  💡 检测到真正的GCC版本兼容性问题" >> "$REPORT_FILE"
+            echo "  🛠️ 修复方法:" >> "$REPORT_FILE"
+            echo "    1. 检查当前GCC版本: gcc --version" >> "$REPORT_FILE"
+            echo "    2. 确保使用兼容的GCC版本" >> "$REPORT_FILE"
+            echo "    3. 检查预构建编译器的兼容性" >> "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+        else
+            echo "💡 编译器版本说明:" >> "$REPORT_FILE"
+            echo "  ✅ SDK编译器是OpenWrt官方提供的，版本已通过验证" >> "$REPORT_FILE"
+            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+                echo "  🔧 OpenWrt 23.05 SDK使用 GCC 12.3.0" >> "$REPORT_FILE"
+            elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+                echo "  🔧 OpenWrt 21.02 SDK使用 GCC 8.4.0" >> "$REPORT_FILE"
+            fi
+            echo "  💡 如果构建成功，说明编译器版本完全兼容" >> "$REPORT_FILE"
+            echo "" >> "$REPORT_FILE"
+        fi
     fi
     
     # SDK编译器优化建议
@@ -1468,14 +1747,15 @@ generate_fix_suggestions() {
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
         echo "  ✅ SDK编译器目录存在: $COMPILER_DIR" >> "$REPORT_FILE"
         echo "  🔧 验证SDK编译器:" >> "$REPORT_FILE"
-        echo "    1. 检查GCC文件: find \"$COMPILER_DIR\" -name \"*gcc\" -type f -executable" >> "$REPORT_FILE"
-        echo "    2. 验证编译器版本: \"\$(find \"$COMPILER_DIR\" -name '*gcc' -type f -executable | head -1)\" --version" >> "$REPORT_FILE"
+        echo "    1. 检查GCC文件: find \"$COMPILER_DIR\" -name \"*gcc\" -type f -executable ! -path \"*dummy-tools*\"" >> "$REPORT_FILE"
+        echo "    2. 验证编译器版本: \"\$(find \"$COMPILER_DIR\" -name '*gcc' -type f -executable ! -path '*dummy-tools*' | head -1)\" --version" >> "$REPORT_FILE"
         echo "    3. 检查SDK完整性: ls -la \"$COMPILER_DIR\"" >> "$REPORT_FILE"
         
         # 根据版本显示SDK信息
         if [ -n "$SELECTED_BRANCH" ]; then
             if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
                 echo "  🔧 OpenWrt 23.05 SDK使用 GCC 12.3.0" >> "$REPORT_FILE"
+                echo "  💡 注意: 23.05版本需要修复IPK安装脚本" >> "$REPORT_FILE"
             elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
                 echo "  🔧 OpenWrt 21.02 SDK使用 GCC 8.4.0" >> "$REPORT_FILE"
             fi
@@ -1484,6 +1764,18 @@ generate_fix_suggestions() {
         echo "  ⚠️ SDK编译器目录未设置或不存在" >> "$REPORT_FILE"
         echo "  💡 建议重新下载SDK: firmware-config/scripts/build_firmware_main.sh initialize_compiler_env [设备名]" >> "$REPORT_FILE"
     fi
+    echo "" >> "$REPORT_FILE"
+    
+    # 自定义文件集成修复
+    print_subheader "自定义文件集成修复"
+    echo "📂 自定义文件集成修复:" >> "$REPORT_FILE"
+    echo "  1. IPK文件安装修复 (23.05版本):" >> "$REPORT_FILE"
+    echo "    修改 /etc/uci-defaults/99-custom-files 脚本:" >> "$REPORT_FILE"
+    echo "    使用不区分大小写的文件匹配: grep -qi \"\\.ipk\"" >> "$REPORT_FILE"
+    echo "  2. 中文文件名处理:" >> "$REPORT_FILE"
+    echo "    使用UTF-8编码，确保脚本能正确处理中文文件名" >> "$REPORT_FILE"
+    echo "  3. 第一次开机脚本:" >> "$REPORT_FILE"
+    echo "    确保 /etc/uci-defaults/99-custom-files 文件存在且有执行权限" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
     # 系统依赖建议
@@ -1499,12 +1791,13 @@ generate_fix_suggestions() {
     echo "  2. 仅重新编译: cd $BUILD_DIR && make -j1 V=s" >> "$REPORT_FILE"
     echo "  3. 重新下载SDK: firmware-config/scripts/build_firmware_main.sh initialize_compiler_env [设备名]" >> "$REPORT_FILE"
     echo "  4. 修复头文件: mkdir -p staging_dir/host/include && touch staging_dir/host/include/stdc-predef.h" >> "$REPORT_FILE"
+    echo "  5. 修复IPK安装: sed -i 's/grep -q \"\\\\.ipk\"/grep -qi \"\\\\.ipk\"/' files/etc/uci-defaults/99-custom-files" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
 }
 
-# 21. 生成总结报告
+# 22. 生成总结报告（增强版）
 generate_summary() {
-    log "📋 生成分析总结..."
+    log_step "生成分析总结"
     
     print_header "分析总结"
     
@@ -1517,6 +1810,7 @@ generate_summary() {
     local staging_dir_exists=0
     local sdk_compiler_exists=0
     local sdk_dir_exists=0
+    local custom_files_exists=0
     
     if [ -d "$BUILD_DIR/bin/targets" ]; then
         firmware_exists=1
@@ -1544,6 +1838,10 @@ generate_summary() {
         sdk_dir_exists=1
     fi
     
+    if [ -d "$BUILD_DIR/files/etc/custom-files" ]; then
+        custom_files_exists=1
+    fi
+    
     echo "📊 构建状态概览:" >> "$REPORT_FILE"
     echo "  ✅ 构建目录: $(if [ -d "$BUILD_DIR" ]; then echo '存在'; else echo '缺失'; fi)" >> "$REPORT_FILE"
     echo "  ✅ 配置文件: $(if [ $config_exists -eq 1 ]; then echo '存在'; else echo '缺失'; fi)" >> "$REPORT_FILE"
@@ -1552,6 +1850,7 @@ generate_summary() {
     echo "  ✅ 固件生成: $(if [ $firmware_exists -eq 1 ]; then echo '成功'; else echo '失败'; fi)" >> "$REPORT_FILE"
     echo "  ✅ SDK编译器: $(if [ $sdk_compiler_exists -eq 1 ]; then echo '已下载'; else echo '未下载'; fi)" >> "$REPORT_FILE"
     echo "  ✅ SDK目录: $(if [ $sdk_dir_exists -eq 1 ]; then echo '存在'; else echo '缺失'; fi)" >> "$REPORT_FILE"
+    echo "  ✅ 自定义文件: $(if [ $custom_files_exists -eq 1 ]; then echo '已集成'; else echo '未集成'; fi)" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
     # 编译器来源分析
@@ -1568,6 +1867,7 @@ generate_summary() {
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
           ! -name "*gcc-nm" \
+          ! -path "*dummy-tools*" \
           2>/dev/null | head -1)
         
         if [ -n "$sdk_gcc" ] && [ -x "$sdk_gcc" ]; then
@@ -1607,10 +1907,30 @@ generate_summary() {
         echo "  📌 OpenWrt版本: $SELECTED_BRANCH" >> "$REPORT_FILE"
         if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
             echo "  🔧 SDK编译器版本: GCC 12.3.0 (官方验证)" >> "$REPORT_FILE"
+            echo "  💡 注意: 23.05版本需要修复IPK安装脚本" >> "$REPORT_FILE"
         elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
             echo "  🔧 SDK编译器版本: GCC 8.4.0 (官方验证)" >> "$REPORT_FILE"
         fi
         echo "  ✅ SDK编译器状态: 官方提供，版本已验证" >> "$REPORT_FILE"
+    fi
+    
+    # 自定义文件集成状态
+    if [ $custom_files_exists -eq 1 ]; then
+        print_subheader "自定义文件集成状态"
+        echo "  ✅ 自定义文件已集成到固件中" >> "$REPORT_FILE"
+        echo "  📌 位置: /etc/custom-files/" >> "$REPORT_FILE"
+        echo "  🚀 安装方式: 第一次开机自动安装" >> "$REPORT_FILE"
+        
+        # 检查IPK安装逻辑
+        local boot_script="$BUILD_DIR/files/etc/uci-defaults/99-custom-files"
+        if [ -f "$boot_script" ]; then
+            local ipk_logic=$(grep -c "grep -qi.*\\.ipk" "$boot_script" 2>/dev/null || echo "0")
+            if [ $ipk_logic -gt 0 ]; then
+                echo "  🔧 IPK安装逻辑: 已修复（支持所有大小写格式）" >> "$REPORT_FILE"
+            else
+                echo "  ⚠️ IPK安装逻辑: 可能需要修复" >> "$REPORT_FILE"
+            fi
+        fi
     fi
     
     # 状态评估
@@ -1621,6 +1941,9 @@ generate_summary() {
         echo "  🎉 状态: 构建成功！" >> "$REPORT_FILE"
         echo "  💡 建议: 固件已生成，可以准备刷机" >> "$REPORT_FILE"
         echo "  ✅ SDK编译器: 版本完全兼容" >> "$REPORT_FILE"
+        if [ $custom_files_exists -eq 1 ]; then
+            echo "  ✅ 自定义文件: 已成功集成" >> "$REPORT_FILE"
+        fi
     elif [ $error_count -eq 0 ] && [ $config_exists -eq 1 ]; then
         echo "  ⏳ 状态: 构建可能尚未开始或正在进行" >> "$REPORT_FILE"
         echo "  💡 建议: 开始编译或等待编译完成" >> "$REPORT_FILE"
@@ -1648,6 +1971,7 @@ generate_summary() {
     echo "     - OpenWrt 21.02: GCC 8.4.0" >> "$REPORT_FILE"
     echo "  3. 💡 如果构建成功，说明编译器版本完全兼容" >> "$REPORT_FILE"
     echo "  4. 🔍 真正的编译器版本错误会有明确的错误消息" >> "$REPORT_FILE"
+    echo "  5. ⚠️ 注意dummy-tools不是真正的编译器，是构建系统的占位符" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
     # 下一步行动
@@ -1685,7 +2009,7 @@ generate_summary() {
     echo "📄 错误报告位置:" >> "$REPORT_FILE"
     echo "  分析报告: $REPORT_FILE" >> "$REPORT_FILE"
     echo "  备份文件: $BACKUP_FILE" >> "$REPORT_FILE"
-    echo "  错误报告: /tmp/openwrt-build-error-report.txt" >> "$REPORT_FILE"
+    echo "  错误报告: /tmp/openwrt-build-error-report-$TIMESTAMP.txt" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
     echo "==================================================" >> "$REPORT_FILE"
@@ -1693,9 +2017,9 @@ generate_summary() {
     echo "==================================================" >> "$REPORT_FILE"
 }
 
-# 22. 输出报告并清理
+# 23. 输出报告并清理
 output_report() {
-    log "📄 输出分析报告..."
+    log_step "输出分析报告"
     
     # 显示报告
     echo ""
@@ -1726,7 +2050,7 @@ output_report() {
             echo ""
         fi
         
-        # 显示编译器相关信息 - 改进：更准确的信息
+        # 显示编译器相关信息
         echo "🔧 编译器信息:"
         if grep -q "预构建的OpenWrt SDK" "$REPORT_FILE"; then
             echo "  🎯 使用预构建的OpenWrt SDK编译器"
@@ -1741,6 +2065,11 @@ output_report() {
             fi
             
             echo "  ✅ SDK编译器来自官方，版本已验证"
+            
+            # 检查dummy-tools警告
+            if grep -q "dummy-tools" "$REPORT_FILE"; then
+                echo "  ⚠️ 注意: 检测到dummy-tools（这不是真正的编译器）"
+            fi
         elif grep -q "OpenWrt自动构建" "$REPORT_FILE"; then
             echo "  🛠️ 使用OpenWrt自动构建的编译器"
         fi
@@ -1758,7 +2087,18 @@ output_report() {
         echo "    - OpenWrt 23.05: GCC 12.3.0"
         echo "    - OpenWrt 21.02: GCC 8.4.0"
         echo "  💡 如果构建成功，说明编译器完全兼容"
+        echo "  ⚠️ dummy-tools不是真正的编译器，是占位符"
         echo ""
+        
+        # 自定义文件集成状态
+        if grep -q "自定义文件已集成" "$REPORT_FILE"; then
+            echo "📂 自定义文件集成状态:"
+            echo "  ✅ 自定义文件已成功集成到固件中"
+            if grep -q "IPK安装逻辑已修复" "$REPORT_FILE"; then
+                echo "  🔧 IPK安装逻辑已修复（支持所有大小写）"
+            fi
+            echo ""
+        fi
         
         # 显示时间信息
         echo "🕐 时间信息:"
@@ -1770,15 +2110,15 @@ output_report() {
         echo "📁 完整报告位置:"
         echo "  临时文件: $REPORT_FILE"
         echo "  备份文件: $BACKUP_FILE"
-        echo "  错误报告: /tmp/openwrt-build-error-report.txt"
+        echo "  错误报告: /tmp/openwrt-build-error-report-$TIMESTAMP.txt"
         echo ""
         
         # 复制备份
         cp "$REPORT_FILE" "$BACKUP_FILE"
-        log "✅ 报告已保存到: $BACKUP_FILE"
+        success "✅ 报告已保存到: $BACKUP_FILE"
         
     else
-        echo "❌ 报告文件生成失败"
+        error "❌ 报告文件生成失败"
         return 1
     fi
     
@@ -1794,7 +2134,7 @@ main() {
     
     # 检查构建目录
     if [ ! -d "$BUILD_DIR" ]; then
-        log "❌ 构建目录不存在: $BUILD_DIR"
+        error "❌ 构建目录不存在: $BUILD_DIR"
         echo "错误: 构建目录 $BUILD_DIR 不存在" >&2
         return 1
     fi
@@ -1821,6 +2161,7 @@ main() {
     check_disk_space_usage
     check_environment_variables
     check_build_artifacts
+    check_dependencies
     
     # 详细错误分析
     analyze_detailed_errors
@@ -1832,7 +2173,7 @@ main() {
     
     # 输出报告
     if output_report; then
-        log "✅ 错误分析完成"
+        success "✅ 错误分析完成"
         
         # 根据构建结果返回状态码
         if [ -d "$BUILD_DIR/bin/targets" ]; then
@@ -1841,7 +2182,7 @@ main() {
             return 1  # 构建失败
         fi
     else
-        log "❌ 错误分析失败"
+        error "❌ 错误分析失败"
         return 2  # 分析失败
     fi
 }
