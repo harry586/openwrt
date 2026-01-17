@@ -1408,55 +1408,15 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 27: 执行错误分析（中文名增强版）
-      - name: "27. 执行错误分析（中文名增强版）"
+      # 步骤 27: 编译后空间检查
+      - name: "27. 编译后空间检查"
         if: always()
         run: |
-          echo "=== 步骤 27: 执行错误分析（中文名增强版） ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          
-          # 设置错误处理 - 这里不退出，错误分析不应该影响构建状态
-          trap 'echo "⚠️ 步骤 27 错误分析过程中出现错误，继续执行..."' ERR
-          
-          if [ -f "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh" ]; then
-            chmod +x "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh"
-            export BUILD_DIR="/mnt/openwrt-build"
-            
-            echo "🔧 执行增强版错误分析（支持中文文件名检测和自定义文件集成状态检查）..."
-            "${{ github.workspace }}/firmware-config/scripts/error_analysis.sh"
-            
-            echo "✅ 错误分析完成"
-            echo "💡 错误分析已增强，支持中文文件名检测、SDK编译器版本信息和自定义文件集成状态检查"
-          else
-            echo "⚠️ 错误分析脚本不存在"
-            echo "📝 创建基本的错误分析..."
-            
-            # 基本错误分析
-            if [ -f "/mnt/openwrt-build/build.log" ]; then
-              echo "=== 基本错误分析 ==="
-              echo "🔍 查找常见编译错误..."
-              
-              if grep -q "Error [0-9]\|error:" /mnt/openwrt-build/build.log; then
-                echo "❌ 发现编译错误:"
-                grep -i "Error\|error:" /mnt/openwrt-build/build.log | tail -10
-              else
-                echo "✅ 未发现明显的编译错误"
-              fi
-            fi
-          fi
-          
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 27 完成"
-      
-      # 步骤 28: 编译后空间检查
-      - name: "28. 编译后空间检查"
-        if: always()
-        run: |
-          echo "=== 步骤 28: 编译后空间检查 ==="
+          echo "=== 步骤 27: 编译后空间检查 ==="
           echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是检查
-          trap 'echo "⚠️ 步骤 28 检查过程中出现错误，继续执行..."' ERR
+          trap 'echo "⚠️ 步骤 27 检查过程中出现错误，继续执行..."' ERR
           
           echo "📊 磁盘使用情况:"
           df -h /mnt
@@ -1471,17 +1431,17 @@ jobs:
             echo "✅ 磁盘空间充足"
           fi
           
-          echo "🟢 步骤 28 完成"
+          echo "🟢 步骤 27 完成"
       
-      # 步骤 29: 编译后总结（增强版）
-      - name: "29. 编译后总结（增强版）"
+      # 步骤 28: 编译后总结（增强版）
+      - name: "28. 编译后总结（增强版）"
         if: always()
         run: |
-          echo "=== 步骤 29: 编译后总结（增强版） ==="
+          echo "=== 步骤 28: 编译后总结（增强版） ==="
           echo "🕐 总结时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，总结不应该失败
-          trap 'echo "⚠️ 步骤 29 总结过程中出现错误，继续执行..."' ERR
+          trap 'echo "⚠️ 步骤 28 总结过程中出现错误，继续执行..."' ERR
           
           echo "🚀 构建总结报告"
           echo "========================================"
@@ -1705,4 +1665,4 @@ jobs:
           echo ""
           echo "✅ 构建流程完成"
           echo "========================================"
-          echo "🟢 步骤 29 完成"
+          echo "🟢 步骤 28 完成"
