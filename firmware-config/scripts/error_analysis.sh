@@ -343,7 +343,7 @@ analyze_config_file() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 6. 检查编译器状态（增强版 - 改进SDK编译器检测）
+# 6. 检查编译器状态（增强版 - 改进SDK编译器检测）- 修复语法错误
 check_compiler_status() {
     log_step "检查编译器状态"
     
@@ -565,7 +565,7 @@ check_build_log_file() {
     return 0
 }
 
-# 8. 分析构建日志（增强版）
+# 8. 分析构建日志（增强版）- 修复"编译器未找到"误报
 analyze_build_log() {
     log_step "分析构建日志"
     
@@ -609,26 +609,36 @@ analyze_build_log() {
             
             # 分类提取错误
             echo "🔴 严重错误 (前10个):" >> "$REPORT_FILE"
-            grep -i "error" "$BUILD_DIR/build.log" | grep -v "ignored\|non-fatal\|Note:" | head -10 >> "$REPORT_FILE" || echo "  无严重错误" >> "$REPORT_FILE"
+            grep -i "error" "$BUILD_DIR/build.log" | grep -v "ignored\|non-fatal\|Note:" | head -10 2>/dev/null | while read line; do
+                echo "  $line" >> "$REPORT_FILE"
+            done || echo "  无严重错误" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
             
             echo "🟡 Makefile错误:" >> "$REPORT_FILE"
-            grep -i "make.*error\|recipe for target.*failed" "$BUILD_DIR/build.log" | grep -v "ignored" | head -5 >> "$REPORT_FILE" || echo "  无Makefile错误" >> "$REPORT_FILE"
+            grep -i "make.*error\|recipe for target.*failed" "$BUILD_DIR/build.log" | grep -v "ignored" | head -5 2>/dev/null | while read line; do
+                echo "  $line" >> "$REPORT_FILE"
+            done || echo "  无Makefile错误" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
             
             echo "🔵 编译器错误:" >> "$REPORT_FILE"
-            grep -i "gcc.*error\|ld.*error\|collect2.*error" "$BUILD_DIR/build.log" | grep -v "ignored" | head -5 >> "$REPORT_FILE" || echo "  无编译器错误" >> "$REPORT_FILE"
+            grep -i "gcc.*error\|ld.*error\|collect2.*error" "$BUILD_DIR/build.log" | grep -v "ignored" | head -5 2>/dev/null | while read line; do
+                echo "  $line" >> "$REPORT_FILE"
+            done || echo "  无编译器错误" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
             
             echo "🟣 文件缺失错误:" >> "$REPORT_FILE"
-            grep -i "no such file\|file not found\|cannot find" "$BUILD_DIR/build.log" | head -5 >> "$REPORT_FILE" || echo "  无文件缺失错误" >> "$REPORT_FILE"
+            grep -i "no such file\|file not found\|cannot find" "$BUILD_DIR/build.log" | head -5 2>/dev/null | while read line; do
+                echo "  $line" >> "$REPORT_FILE"
+            done || echo "  无文件缺失错误" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
             
             echo "🟠 依赖错误:" >> "$REPORT_FILE"
-            grep -i "depends on\|missing dependencies\|undefined reference" "$BUILD_DIR/build.log" | head -5 >> "$REPORT_FILE" || echo "  无依赖错误" >> "$REPORT_FILE"
+            grep -i "depends on\|missing dependencies\|undefined reference" "$BUILD_DIR/build.log" | head -5 2>/dev/null | while read line; do
+                echo "  $line" >> "$REPORT_FILE"
+            done || echo "  无依赖错误" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
             
-            # 特定错误模式检查 - 增强版
+            # 特定错误模式检查 - 增强版，修复误报问题
             print_subheader "特定错误模式检测"
             
             # 工具链错误
@@ -647,34 +657,39 @@ analyze_build_log() {
                 echo "" >> "$REPORT_FILE"
             fi
             
-            # 头文件错误
-            if grep -q "stdc-predef.h\|stdio.h\|stdlib.h" "$BUILD_DIR/build.log" 2>/dev/null; then
+            # 头文件错误（真正的错误，不是版本信息）
+            if grep -q "stdc-predef.h: No such file\|stdio.h: No such file\|stdlib.h: No such file" "$BUILD_DIR/build.log" 2>/dev/null; then
                 echo "❌ 检测到头文件缺失错误" >> "$REPORT_FILE"
                 echo "💡 缺少标准头文件" >> "$REPORT_FILE"
                 echo "🛠️ 修复方法: 创建host/include目录并复制头文件" >> "$REPORT_FILE"
                 echo "" >> "$REPORT_FILE"
             fi
             
-            # 编译器版本错误 - 改进：更准确的检测
-            if grep -q "requires gcc.*\|\`gcc.*\` version" "$BUILD_DIR/build.log" 2>/dev/null; then
+            # 真正的编译器版本错误 - 改进：更准确的检测
+            if grep -q "requires gcc.*or later\|requires.*gcc.*but.*is\|incompatible.*gcc.*version" "$BUILD_DIR/build.log" 2>/dev/null; then
                 echo "❌ 检测到真正的编译器版本错误" >> "$REPORT_FILE"
                 echo "💡 可能是GCC版本不匹配" >> "$REPORT_FILE"
-                grep -i "requires gcc\|gcc version" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
+                grep -i "requires gcc\|incompatible.*gcc" "$BUILD_DIR/build.log" | head -3 2>/dev/null | while read line; do
+                    echo "  $line" >> "$REPORT_FILE"
+                done
                 echo "" >> "$REPORT_FILE"
             fi
             
             # 内存不足错误
-            if grep -q "out of memory\|Killed process" "$BUILD_DIR/build.log" 2>/dev/null; then
+            if grep -q "out of memory\|Killed process\|terminated.*memory\|oom" "$BUILD_DIR/build.log" 2>/dev/null; then
                 echo "❌ 检测到内存不足错误" >> "$REPORT_FILE"
                 echo "💡 系统内存不足，编译被终止" >> "$REPORT_FILE"
                 echo "🛠️ 修复方法: 增加交换空间或减少并行编译任务" >> "$REPORT_FILE"
                 echo "" >> "$REPORT_FILE"
             fi
             
-            # 编译器未找到错误
-            if grep -q "compiler.*not found\|gcc.*not found" "$BUILD_DIR/build.log" 2>/dev/null; then
+            # 真正的编译器未找到错误（不是版本检查）
+            if grep -q "gcc: command not found\|compiler.*not found.*in.*path\|cannot find.*gcc" "$BUILD_DIR/build.log" 2>/dev/null; then
                 echo "❌ 检测到编译器未找到错误" >> "$REPORT_FILE"
                 echo "💡 编译器路径配置错误或SDK下载不完整" >> "$REPORT_FILE"
+                grep -i "command not found\|cannot find.*gcc" "$BUILD_DIR/build.log" | head -3 2>/dev/null | while read line; do
+                    echo "  $line" >> "$REPORT_FILE"
+                done
                 echo "🛠️ 修复方法: 检查COMPILER_DIR环境变量或重新下载SDK" >> "$REPORT_FILE"
                 echo "" >> "$REPORT_FILE"
             fi
@@ -712,7 +727,9 @@ check_download_log() {
         if [ $download_errors -gt 0 ]; then
             echo "⚠️ 下载警告: $download_errors 个（共 $total_downloads 次下载）" >> "$REPORT_FILE"
             echo "📄 下载错误详情 (前5个):" >> "$REPORT_FILE"
-            grep -i "error\|failed\|404\|not found\|timeout\|connection refused" "$BUILD_DIR/download.log" | head -5 >> "$REPORT_FILE"
+            grep -i "error\|failed\|404\|not found\|timeout\|connection refused" "$BUILD_DIR/download.log" | head -5 2>/dev/null | while read line; do
+                echo "  $line" >> "$REPORT_FILE"
+            done
             echo "" >> "$REPORT_FILE"
             
             echo "💡 下载问题解决方案:" >> "$REPORT_FILE"
@@ -811,7 +828,7 @@ analyze_version_specific() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 11. 分析常见错误模式（增强版）
+# 11. 分析常见错误模式（增强版）- 修复误报
 analyze_common_error_patterns() {
     log_step "分析常见错误模式"
     
@@ -826,10 +843,12 @@ analyze_common_error_patterns() {
     
     echo "🔍 正在扫描常见错误模式:" >> "$REPORT_FILE"
     
-    # 1. 编译器未找到（增强版）
-    if grep -q "compiler.*not found\|gcc.*not found\|command not found.*gcc" "$BUILD_DIR/build.log"; then
-        echo "❌ 发现编译器未找到错误" >> "$REPORT_FILE"
-        grep -i "compiler.*not found\|gcc.*not found" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
+    # 1. 真正的编译器未找到错误
+    if grep -q "gcc: command not found\|compiler.*not found.*in.*path\|cannot find.*gcc" "$BUILD_DIR/build.log" 2>/dev/null; then
+        echo "❌ 发现真正的编译器未找到错误" >> "$REPORT_FILE"
+        grep -i "command not found\|cannot find.*gcc" "$BUILD_DIR/build.log" | head -3 2>/dev/null | while read line; do
+            echo "  $line" >> "$REPORT_FILE"
+        done
         patterns_found=$((patterns_found + 1))
         echo "💡 可能原因: 编译器路径配置错误或SDK下载不完整" >> "$REPORT_FILE"
         echo "🛠️ 修复方法: 检查COMPILER_DIR环境变量或重新下载SDK" >> "$REPORT_FILE"
@@ -837,9 +856,11 @@ analyze_common_error_patterns() {
     fi
     
     # 2. 未定义引用
-    if grep -q "undefined reference" "$BUILD_DIR/build.log"; then
+    if grep -q "undefined reference" "$BUILD_DIR/build.log" 2>/dev/null; then
         echo "❌ 发现未定义引用错误" >> "$REPORT_FILE"
-        grep -i "undefined reference" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
+        grep -i "undefined reference" "$BUILD_DIR/build.log" | head -3 2>/dev/null | while read line; do
+            echo "  $line" >> "$REPORT_FILE"
+        done
         patterns_found=$((patterns_found + 1))
         echo "💡 可能原因: 库文件缺失或链接顺序错误" >> "$REPORT_FILE"
         echo "🛠️ 修复方法: 检查依赖包是否完整，调整链接顺序" >> "$REPORT_FILE"
@@ -847,9 +868,11 @@ analyze_common_error_patterns() {
     fi
     
     # 3. 文件不存在
-    if grep -q "No such file\|File not found" "$BUILD_DIR/build.log"; then
+    if grep -q "No such file.*or directory\|File not found" "$BUILD_DIR/build.log" 2>/dev/null; then
         echo "⚠️ 发现文件不存在错误" >> "$REPORT_FILE"
-        grep -i "No such file\|File not found" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
+        grep -i "No such file.*or directory\|File not found" "$BUILD_DIR/build.log" | head -3 2>/dev/null | while read line; do
+            echo "  $line" >> "$REPORT_FILE"
+        done
         patterns_found=$((patterns_found + 1))
         echo "💡 可能原因: 依赖包下载不完整或路径错误" >> "$REPORT_FILE"
         echo "🛠️ 修复方法: 重新下载依赖包或检查文件路径" >> "$REPORT_FILE"
@@ -857,9 +880,11 @@ analyze_common_error_patterns() {
     fi
     
     # 4. 内存不足
-    if grep -q "out of memory\|Killed process" "$BUILD_DIR/build.log"; then
+    if grep -q "out of memory\|Killed process\|terminated.*memory\|oom" "$BUILD_DIR/build.log" 2>/dev/null; then
         echo "🚨 发现内存不足错误" >> "$REPORT_FILE"
-        grep -i "out of memory\|Killed process" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
+        grep -i "out of memory\|Killed process" "$BUILD_DIR/build.log" | head -3 2>/dev/null | while read line; do
+            echo "  $line" >> "$REPORT_FILE"
+        done
         patterns_found=$((patterns_found + 1))
         echo "💡 可能原因: 系统内存不足，编译被终止" >> "$REPORT_FILE"
         echo "🛠️ 修复方法: 增加交换空间或减少并行编译任务" >> "$REPORT_FILE"
@@ -867,9 +892,11 @@ analyze_common_error_patterns() {
     fi
     
     # 5. 权限错误
-    if grep -q "Permission denied\|cannot create" "$BUILD_DIR/build.log"; then
+    if grep -q "Permission denied\|cannot create\|Operation not permitted" "$BUILD_DIR/build.log" 2>/dev/null; then
         echo "⚠️ 发现权限错误" >> "$REPORT_FILE"
-        grep -i "Permission denied\|cannot create" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
+        grep -i "Permission denied\|cannot create" "$BUILD_DIR/build.log" | head -3 2>/dev/null | while read line; do
+            echo "  $line" >> "$REPORT_FILE"
+        done
         patterns_found=$((patterns_found + 1))
         echo "💡 可能原因: 文件权限不足，尝试修复权限" >> "$REPORT_FILE"
         echo "🛠️ 修复方法: 检查文件权限或使用sudo" >> "$REPORT_FILE"
@@ -877,9 +904,11 @@ analyze_common_error_patterns() {
     fi
     
     # 6. 磁盘空间不足
-    if grep -q "No space left\|disk full" "$BUILD_DIR/build.log"; then
+    if grep -q "No space left\|disk full\|write error.*ENOSPC" "$BUILD_DIR/build.log" 2>/dev/null; then
         echo "🚨 发现磁盘空间不足错误" >> "$REPORT_FILE"
-        grep -i "No space left\|disk full" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
+        grep -i "No space left\|disk full" "$BUILD_DIR/build.log" | head -3 2>/dev/null | while read line; do
+            echo "  $line" >> "$REPORT_FILE"
+        done
         patterns_found=$((patterns_found + 1))
         echo "💡 可能原因: 磁盘空间不足" >> "$REPORT_FILE"
         echo "🛠️ 修复方法: 清理磁盘空间或扩展磁盘" >> "$REPORT_FILE"
@@ -887,9 +916,11 @@ analyze_common_error_patterns() {
     fi
     
     # 7. 时间戳错误
-    if grep -q "clock skew\|time stamp\|timestamp" "$BUILD_DIR/build.log"; then
+    if grep -q "clock skew\|time stamp.*in the future" "$BUILD_DIR/build.log" 2>/dev/null; then
         echo "⚠️ 发现时间戳错误" >> "$REPORT_FILE"
-        grep -i "clock skew\|time stamp\|timestamp" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
+        grep -i "clock skew\|time stamp.*in the future" "$BUILD_DIR/build.log" | head -3 2>/dev/null | while read line; do
+            echo "  $line" >> "$REPORT_FILE"
+        done
         patterns_found=$((patterns_found + 1))
         echo "💡 可能原因: 系统时间不正确或文件时间戳混乱" >> "$REPORT_FILE"
         echo "🛠️ 修复方法: 同步系统时间或清理构建缓存" >> "$REPORT_FILE"
@@ -897,9 +928,11 @@ analyze_common_error_patterns() {
     fi
     
     # 8. 下载错误
-    if grep -q "404\|Failed to download\|timeout\|connection refused" "$BUILD_DIR/build.log"; then
+    if grep -q "404\|Failed to download\|timeout\|connection refused" "$BUILD_DIR/build.log" 2>/dev/null; then
         echo "⚠️ 发现下载错误" >> "$REPORT_FILE"
-        grep -i "404\|Failed to download\|timeout\|connection refused" "$BUILD_DIR/build.log" | head -3 >> "$REPORT_FILE"
+        grep -i "404\|Failed to download\|timeout\|connection refused" "$BUILD_DIR/build.log" | head -3 2>/dev/null | while read line; do
+            echo "  $line" >> "$REPORT_FILE"
+        done
         patterns_found=$((patterns_found + 1))
         echo "💡 可能原因: 网络问题或源地址不可用" >> "$REPORT_FILE"
         echo "🛠️ 修复方法: 检查网络连接或更换下载源" >> "$REPORT_FILE"
@@ -1103,7 +1136,7 @@ check_custom_files_integration() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 14. 分析编译器相关错误（增强版）- 修复语法错误
+# 14. 分析编译器相关错误（增强版）- 修复语法错误和误报
 analyze_compiler_errors() {
     log_step "分析编译器相关错误"
     
@@ -1164,10 +1197,12 @@ analyze_compiler_errors() {
     # 检查编译器错误 - 修复语法错误
     echo "🔍 编译器错误检查:" >> "$REPORT_FILE"
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-        local prebuilt_errors=$(grep "$COMPILER_DIR" "$BUILD_DIR/build.log" 2>/dev/null | grep -i "error\|failed" | head -5)
+        local prebuilt_errors=$(grep "$COMPILER_DIR" "$BUILD_DIR/build.log" 2>/dev/null | grep -i "error\|failed" | head -5 2>/dev/null)
         if [ -n "$prebuilt_errors" ]; then
             echo "⚠️ 发现预构建编译器相关错误" >> "$REPORT_FILE"
-            echo "$prebuilt_errors" >> "$REPORT_FILE"
+            echo "$prebuilt_errors" | while read line; do
+                echo "  $line" >> "$REPORT_FILE"
+            done
         else
             echo "✅ 未发现预构建编译器相关错误" >> "$REPORT_FILE"
         fi
@@ -1175,10 +1210,12 @@ analyze_compiler_errors() {
     
     # 检查dummy-tools相关错误
     echo "🔍 dummy-tools检查:" >> "$REPORT_FILE"
-    local dummy_errors=$(grep "dummy-tools" "$BUILD_DIR/build.log" 2>/dev/null | grep -i "error\|failed" | head -3)
+    local dummy_errors=$(grep "dummy-tools" "$BUILD_DIR/build.log" 2>/dev/null | grep -i "error\|failed" | head -3 2>/dev/null)
     if [ -n "$dummy_errors" ]; then
         echo "⚠️ 发现dummy-tools相关错误" >> "$REPORT_FILE"
-        echo "$dummy_errors" >> "$REPORT_FILE"
+        echo "$dummy_errors" | while read line; do
+            echo "  $line" >> "$REPORT_FILE"
+        done
         echo "💡 dummy-tools是OpenWrt构建系统的占位符，不是真正的编译器" >> "$REPORT_FILE"
     else
         if grep -q "dummy-tools" "$BUILD_DIR/build.log" 2>/dev/null; then
@@ -1197,7 +1234,7 @@ check_disk_space_usage() {
     print_subheader "磁盘空间检查"
     
     echo "磁盘使用情况:" >> "$REPORT_FILE"
-    df -h /mnt >> "$REPORT_FILE"
+    df -h /mnt 2>/dev/null >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
     
     local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1)
@@ -1241,7 +1278,9 @@ check_environment_variables() {
         
         # 显示关键环境变量
         echo "📌 关键环境变量:" >> "$REPORT_FILE"
-        grep -E "SELECTED_BRANCH|TARGET|SUBTARGET|DEVICE|CONFIG_MODE|COMPILER_DIR" "$env_file" | head -10 >> "$REPORT_FILE"
+        grep -E "SELECTED_BRANCH|TARGET|SUBTARGET|DEVICE|CONFIG_MODE|COMPILER_DIR" "$env_file" | head -10 2>/dev/null | while read line; do
+            echo "  $line" >> "$REPORT_FILE"
+        done
         
         # 加载环境变量
         source "$env_file" 2>/dev/null
@@ -1387,7 +1426,7 @@ generate_error_report() {
     
     # 磁盘空间
     echo "=== 磁盘空间 ===" >> "$report_file"
-    df -h /mnt >> "$report_file"
+    df -h /mnt 2>/dev/null >> "$report_file"
     echo "" >> "$report_file"
     
     # 构建状态
@@ -1414,7 +1453,9 @@ generate_error_report() {
         
         if [ $error_count -gt 0 ]; then
             echo "前10个错误:" >> "$report_file"
-            grep -i "error" "$BUILD_DIR/build.log" | grep -v "ignored\|non-fatal" | head -10 >> "$report_file"
+            grep -i "error" "$BUILD_DIR/build.log" | grep -v "ignored\|non-fatal" | head -10 2>/dev/null | while read line; do
+                echo "  $line" >> "$report_file"
+            done
         fi
     else
         echo "无构建日志文件" >> "$report_file"
@@ -1424,7 +1465,9 @@ generate_error_report() {
     # 警告摘要
     echo "=== 警告摘要 ===" >> "$report_file"
     if [ -f "$BUILD_DIR/build.log" ]; then
-        grep -i "Warning\|warning:" "$BUILD_DIR/build.log" | tail -20 >> "$report_file"
+        grep -i "Warning\|warning:" "$BUILD_DIR/build.log" | tail -20 2>/dev/null | while read line; do
+            echo "  $line" >> "$report_file"
+        done
     else
         echo "无构建日志文件" >> "$report_file"
     fi
@@ -1471,13 +1514,13 @@ generate_error_report() {
     echo "" >> "$REPORT_FILE"
     echo "📄 错误报告已生成: $report_file" >> "$REPORT_FILE"
     echo "报告文件内容预览:" >> "$REPORT_FILE"
-    head -30 "$report_file" | while read line; do
+    head -30 "$report_file" 2>/dev/null | while read line; do
         echo "  $line" >> "$REPORT_FILE"
     done
     echo "" >> "$REPORT_FILE"
 }
 
-# 20. 详细错误分析函数（优化版）- 修复语法错误
+# 20. 详细错误分析函数（优化版）- 修复语法错误和误报
 analyze_detailed_errors() {
     log_step "执行详细错误分析"
     
@@ -1489,9 +1532,11 @@ analyze_detailed_errors() {
         
         # 1. 编译器相关错误（实际错误）- 改进过滤
         echo "🔧 1. 编译器相关错误 (真正的编译错误):" >> "$REPORT_FILE"
-        local compiler_errors=$(grep -i "gcc.*error\|ld.*error\|collect2.*error\|undefined reference" "$BUILD_DIR/build.log" 2>/dev/null | grep -v "ignored\|non-fatal" | head -10)
+        local compiler_errors=$(grep -i "gcc.*error\|ld.*error\|collect2.*error\|undefined reference" "$BUILD_DIR/build.log" 2>/dev/null | grep -v "ignored\|non-fatal" | head -10 2>/dev/null)
         if [ -n "$compiler_errors" ]; then
-            echo "$compiler_errors" >> "$REPORT_FILE"
+            echo "$compiler_errors" | while read line; do
+                echo "  $line" >> "$REPORT_FILE"
+            done
         else
             echo "  无真正的编译器错误" >> "$REPORT_FILE"
         fi
@@ -1499,9 +1544,11 @@ analyze_detailed_errors() {
         
         # 2. 头文件缺失错误（实际错误）
         echo "📄 2. 头文件缺失错误 (实际发生的):" >> "$REPORT_FILE"
-        local header_errors=$(grep -i "stdc-predef.h\|stdio.h\|stdlib.h\|.*\.h: No such file" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
+        local header_errors=$(grep -i "stdc-predef.h.*No such file\|stdio.h.*No such file\|stdlib.h.*No such file\|.*\.h: No such file" "$BUILD_DIR/build.log" 2>/dev/null | head -10 2>/dev/null)
         if [ -n "$header_errors" ]; then
-            echo "$header_errors" >> "$REPORT_FILE"
+            echo "$header_errors" | while read line; do
+                echo "  $line" >> "$REPORT_FILE"
+            done
         else
             echo "  无真正的头文件缺失错误" >> "$REPORT_FILE"
         fi
@@ -1509,9 +1556,11 @@ analyze_detailed_errors() {
         
         # 3. 下载错误（实际错误）
         echo "📥 3. 下载错误 (实际发生的):" >> "$REPORT_FILE"
-        local download_errors=$(grep -i "404\|Failed to download\|timeout\|connection refused\|SSL_ERROR" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
+        local download_errors=$(grep -i "404\|Failed to download\|timeout\|connection refused\|SSL_ERROR" "$BUILD_DIR/build.log" 2>/dev/null | head -10 2>/dev/null)
         if [ -n "$download_errors" ]; then
-            echo "$download_errors" >> "$REPORT_FILE"
+            echo "$download_errors" | while read line; do
+                echo "  $line" >> "$REPORT_FILE"
+            done
         else
             echo "  无真正的下载错误" >> "$REPORT_FILE"
         fi
@@ -1519,9 +1568,11 @@ analyze_detailed_errors() {
         
         # 4. 权限错误（实际错误）
         echo "🔐 4. 权限错误 (实际发生的):" >> "$REPORT_FILE"
-        local permission_errors=$(grep -i "permission denied\|cannot create\|read-only\|Operation not permitted" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
+        local permission_errors=$(grep -i "permission denied\|cannot create\|read-only\|Operation not permitted" "$BUILD_DIR/build.log" 2>/dev/null | head -10 2>/dev/null)
         if [ -n "$permission_errors" ]; then
-            echo "$permission_errors" >> "$REPORT_FILE"
+            echo "$permission_errors" | while read line; do
+                echo "  $line" >> "$REPORT_FILE"
+            done
         else
             echo "  无真正的权限错误" >> "$REPORT_FILE"
         fi
@@ -1529,9 +1580,11 @@ analyze_detailed_errors() {
         
         # 5. 内存不足错误（实际错误）
         echo "💾 5. 内存不足错误 (实际发生的):" >> "$REPORT_FILE"
-        local memory_errors=$(grep -i "out of memory\|Killed process\|terminated\|oom\|swap" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
+        local memory_errors=$(grep -i "out of memory\|Killed process\|terminated\|oom\|swap" "$BUILD_DIR/build.log" 2>/dev/null | head -10 2>/dev/null)
         if [ -n "$memory_errors" ]; then
-            echo "$memory_errors" >> "$REPORT_FILE"
+            echo "$memory_errors" | while read line; do
+                echo "  $line" >> "$REPORT_FILE"
+            done
         else
             echo "  无真正的内存错误" >> "$REPORT_FILE"
         fi
@@ -1539,9 +1592,11 @@ analyze_detailed_errors() {
         
         # 6. 特定包编译错误（实际错误）
         echo "📦 6. 特定包编译错误 (实际发生的):" >> "$REPORT_FILE"
-        local package_errors=$(grep -i "package/.*failed\|recipe for target.*failed\|Error .* in package" "$BUILD_DIR/build.log" 2>/dev/null | grep -v "ignored" | head -10)
+        local package_errors=$(grep -i "package/.*failed\|recipe for target.*failed\|Error .* in package" "$BUILD_DIR/build.log" 2>/dev/null | grep -v "ignored" | head -10 2>/dev/null)
         if [ -n "$package_errors" ]; then
-            echo "$package_errors" >> "$REPORT_FILE"
+            echo "$package_errors" | while read line; do
+                echo "  $line" >> "$REPORT_FILE"
+            done
         else
             echo "  无真正的包编译错误" >> "$REPORT_FILE"
         fi
@@ -1549,9 +1604,11 @@ analyze_detailed_errors() {
         
         # 7. 磁盘空间错误（实际错误）
         echo "💿 7. 磁盘空间错误 (实际发生的):" >> "$REPORT_FILE"
-        local disk_errors=$(grep -i "no space left\|disk full\|write error\|ENOSPC" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
+        local disk_errors=$(grep -i "no space left\|disk full\|write error\|ENOSPC" "$BUILD_DIR/build.log" 2>/dev/null | head -10 2>/dev/null)
         if [ -n "$disk_errors" ]; then
-            echo "$disk_errors" >> "$REPORT_FILE"
+            echo "$disk_errors" | while read line; do
+                echo "  $line" >> "$REPORT_FILE"
+            done
         else
             echo "  无真正的磁盘空间错误" >> "$REPORT_FILE"
         fi
@@ -1559,9 +1616,11 @@ analyze_detailed_errors() {
         
         # 8. 时间戳错误（实际错误）
         echo "🕐 8. 时间戳错误 (实际发生的):" >> "$REPORT_FILE"
-        local timestamp_errors=$(grep -i "clock skew\|time stamp\|timestamp" "$BUILD_DIR/build.log" 2>/dev/null | head -10)
+        local timestamp_errors=$(grep -i "clock skew\|time stamp\|timestamp" "$BUILD_DIR/build.log" 2>/dev/null | head -10 2>/dev/null)
         if [ -n "$timestamp_errors" ]; then
-            echo "$timestamp_errors" >> "$REPORT_FILE"
+            echo "$timestamp_errors" | while read line; do
+                echo "  $line" >> "$REPORT_FILE"
+            done
         else
             echo "  无真正的时间戳错误" >> "$REPORT_FILE"
         fi
@@ -1649,7 +1708,7 @@ generate_fix_suggestions() {
     
     # 检查常见的文件缺失错误
     if [ -f "$BUILD_DIR/build.log" ] && [ -s "$BUILD_DIR/build.log" ]; then
-        if grep -q "No such file or directory" "$BUILD_DIR/build.log"; then
+        if grep -q "No such file or directory" "$BUILD_DIR/build.log" 2>/dev/null; then
             echo "🔧 文件缺失错误修复:" >> "$REPORT_FILE"
             echo "  💡 发现文件缺失错误，可能是编译过程中文件下载不完整" >> "$REPORT_FILE"
             echo "  🛠️ 修复方法: 重新下载依赖包" >> "$REPORT_FILE"
@@ -1692,8 +1751,8 @@ generate_fix_suggestions() {
             echo "" >> "$REPORT_FILE"
         fi
         
-        # 编译器未找到错误
-        if grep -q "compiler.*not found\|gcc.*not found" "$BUILD_DIR/build.log" 2>/dev/null; then
+        # 真正的编译器未找到错误
+        if grep -q "gcc: command not found\|compiler.*not found.*in.*path\|cannot find.*gcc" "$BUILD_DIR/build.log" 2>/dev/null; then
             echo "🔧 编译器未找到错误修复:" >> "$REPORT_FILE"
             echo "  💡 检测到编译器未找到错误" >> "$REPORT_FILE"
             echo "  🛠️ 修复方法:" >> "$REPORT_FILE"
@@ -1744,8 +1803,8 @@ generate_fix_suggestions() {
             echo "" >> "$REPORT_FILE"
         fi
         
-        # 编译器版本错误 - 改进：只在真正检测到时显示
-        if grep -q "requires gcc.*\|\`gcc.*\` version" "$BUILD_DIR/build.log" 2>/dev/null; then
+        # 真正的编译器版本错误
+        if grep -q "requires gcc.*or later\|requires.*gcc.*but.*is\|incompatible.*gcc.*version" "$BUILD_DIR/build.log" 2>/dev/null; then
             echo "🔧 真正的编译器版本错误修复:" >> "$REPORT_FILE"
             echo "  💡 检测到真正的GCC版本兼容性问题" >> "$REPORT_FILE"
             echo "  🛠️ 修复方法:" >> "$REPORT_FILE"
@@ -1756,10 +1815,12 @@ generate_fix_suggestions() {
         else
             echo "💡 编译器版本说明:" >> "$REPORT_FILE"
             echo "  ✅ SDK编译器是OpenWrt官方提供的，版本已通过验证" >> "$REPORT_FILE"
-            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-                echo "  🔧 OpenWrt 23.05 SDK使用 GCC 12.3.0" >> "$REPORT_FILE"
-            elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-                echo "  🔧 OpenWrt 21.02 SDK使用 GCC 8.4.0" >> "$REPORT_FILE"
+            if [ -n "$SELECTED_BRANCH" ]; then
+                if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+                    echo "  🔧 OpenWrt 23.05 SDK使用 GCC 12.3.0" >> "$REPORT_FILE"
+                elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+                    echo "  🔧 OpenWrt 21.02 SDK使用 GCC 8.4.0" >> "$REPORT_FILE"
+                fi
             fi
             echo "  💡 如果构建成功，说明编译器版本完全兼容" >> "$REPORT_FILE"
             echo "" >> "$REPORT_FILE"
@@ -2056,34 +2117,34 @@ output_report() {
     # 显示关键信息
     if [ -f "$REPORT_FILE" ]; then
         # 显示报告头
-        head -20 "$REPORT_FILE"
+        head -20 "$REPORT_FILE" 2>/dev/null
         echo ""
         echo "... (完整报告请看下方或保存的文件) ..."
         echo ""
         
         # 显示关键错误（如果有）- 改进：过滤非关键错误
-        if grep -q "❌" "$REPORT_FILE"; then
+        if grep -q "❌" "$REPORT_FILE" 2>/dev/null; then
             echo "🚨 发现的关键问题:"
-            grep "❌" "$REPORT_FILE" | grep -v "版本错误\|编译器版本" | head -10
+            grep "❌" "$REPORT_FILE" 2>/dev/null | grep -v "版本错误\|编译器版本" | head -10
             echo ""
         fi
         
         # 显示修复建议
-        if grep -q "💡" "$REPORT_FILE"; then
+        if grep -q "💡" "$REPORT_FILE" 2>/dev/null; then
             echo "💡 修复建议摘要:"
-            grep "💡" "$REPORT_FILE" | grep -v "musl是\|缺少标准头文件\|可能是GCC版本不匹配" | head -5
+            grep "💡" "$REPORT_FILE" 2>/dev/null | grep -v "musl是\|缺少标准头文件\|可能是GCC版本不匹配" | head -5
             echo ""
         fi
         
         # 显示编译器相关信息
         echo "🔧 编译器信息:"
-        if grep -q "预构建的OpenWrt SDK" "$REPORT_FILE"; then
+        if grep -q "预构建的OpenWrt SDK" "$REPORT_FILE" 2>/dev/null; then
             echo "  🎯 使用预构建的OpenWrt SDK编译器"
             
             # 显示SDK编译器版本
-            if grep -q "GCC 12.3.0" "$REPORT_FILE"; then
+            if grep -q "GCC 12.3.0" "$REPORT_FILE" 2>/dev/null; then
                 echo "  🔧 SDK编译器版本: GCC 12.3.0 (OpenWrt 23.05)"
-            elif grep -q "GCC 8.4.0" "$REPORT_FILE"; then
+            elif grep -q "GCC 8.4.0" "$REPORT_FILE" 2>/dev/null; then
                 echo "  🔧 SDK编译器版本: GCC 8.4.0 (OpenWrt 21.02)"
             else
                 echo "  🔧 SDK编译器版本: 根据OpenWrt版本自动匹配"
@@ -2092,16 +2153,16 @@ output_report() {
             echo "  ✅ SDK编译器来自官方，版本已验证"
             
             # 检查dummy-tools警告
-            if grep -q "dummy-tools" "$REPORT_FILE"; then
+            if grep -q "dummy-tools" "$REPORT_FILE" 2>/dev/null; then
                 echo "  ⚠️ 注意: 检测到dummy-tools（这不是真正的编译器）"
             fi
-        elif grep -q "OpenWrt自动构建" "$REPORT_FILE"; then
+        elif grep -q "OpenWrt自动构建" "$REPORT_FILE" 2>/dev/null; then
             echo "  🛠️ 使用OpenWrt自动构建的编译器"
         fi
         
         # 显示SDK版本信息
-        if grep -q "OpenWrt版本:" "$REPORT_FILE"; then
-            grep "OpenWrt版本:" "$REPORT_FILE"
+        if grep -q "OpenWrt版本:" "$REPORT_FILE" 2>/dev/null; then
+            grep "OpenWrt版本:" "$REPORT_FILE" 2>/dev/null
         fi
         
         # 特别说明编译器版本
@@ -2116,10 +2177,10 @@ output_report() {
         echo ""
         
         # 自定义文件集成状态
-        if grep -q "自定义文件已集成" "$REPORT_FILE"; then
+        if grep -q "自定义文件已集成" "$REPORT_FILE" 2>/dev/null; then
             echo "📂 自定义文件集成状态:"
             echo "  ✅ 自定义文件已成功集成到固件中"
-            if grep -q "IPK安装逻辑已修复" "$REPORT_FILE"; then
+            if grep -q "IPK安装逻辑已修复" "$REPORT_FILE" 2>/dev/null; then
                 echo "  🔧 IPK安装逻辑已修复（支持所有大小写）"
             fi
             echo ""
@@ -2139,7 +2200,7 @@ output_report() {
         echo ""
         
         # 复制备份
-        cp "$REPORT_FILE" "$BACKUP_FILE"
+        cp "$REPORT_FILE" "$BACKUP_FILE" 2>/dev/null
         success "✅ 报告已保存到: $BACKUP_FILE"
         
     else
