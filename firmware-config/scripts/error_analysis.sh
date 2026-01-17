@@ -980,7 +980,7 @@ check_sdk_status() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 13. 检查自定义文件集成问题（增强版）
+# 13. 检查自定义文件集成问题（增强版）- 修复语法错误
 check_custom_files_integration() {
     log_step "检查自定义文件集成"
     
@@ -1046,13 +1046,14 @@ check_custom_files_integration() {
         if [ $chinese_count -gt 0 ]; then
             echo "⚠️ 发现中文文件名，可能影响脚本执行" >> "$REPORT_FILE"
             echo "🔍 中文文件名列表 (最多显示5个):" >> "$REPORT_FILE"
+            local displayed=0
             for file in "$custom_files_dir"/*; do
                 if [ -f "$file" ]; then
                     local filename=$(basename "$file")
                     if detect_chinese "$filename"; then
                         echo "  📄 $filename" >> "$REPORT_FILE"
-                        chinese_count=$((chinese_count - 1))
-                        if [ $chinese_count -le 0 ]; then
+                        displayed=$((displayed + 1))
+                        if [ $displayed -ge 5 ]; then
                             break
                         fi
                     fi
@@ -1163,9 +1164,10 @@ analyze_compiler_errors() {
     # 检查编译器错误 - 修复语法错误
     echo "🔍 编译器错误检查:" >> "$REPORT_FILE"
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-        if grep -q "$COMPILER_DIR" "$BUILD_DIR/build.log" 2>/dev/null && grep -q "error\|failed" "$BUILD_DIR/build.log" 2>/dev/null; then
+        local prebuilt_errors=$(grep "$COMPILER_DIR" "$BUILD_DIR/build.log" 2>/dev/null | grep -i "error\|failed" | head -5)
+        if [ -n "$prebuilt_errors" ]; then
             echo "⚠️ 发现预构建编译器相关错误" >> "$REPORT_FILE"
-            grep "$COMPILER_DIR" "$BUILD_DIR/build.log" | grep -i "error\|failed" | head -5 >> "$REPORT_FILE"
+            echo "$prebuilt_errors" >> "$REPORT_FILE"
         else
             echo "✅ 未发现预构建编译器相关错误" >> "$REPORT_FILE"
         fi
@@ -1173,16 +1175,17 @@ analyze_compiler_errors() {
     
     # 检查dummy-tools相关错误
     echo "🔍 dummy-tools检查:" >> "$REPORT_FILE"
-    if grep -q "dummy-tools" "$BUILD_DIR/build.log" 2>/dev/null; then
-        if grep -q "dummy-tools" "$BUILD_DIR/build.log" 2>/dev/null && grep -q "error\|failed" "$BUILD_DIR/build.log" 2>/dev/null; then
-            echo "⚠️ 发现dummy-tools相关错误" >> "$REPORT_FILE"
-            grep "dummy-tools" "$BUILD_DIR/build.log" | grep -i "error\|failed" | head -3 >> "$REPORT_FILE"
-            echo "💡 dummy-tools是OpenWrt构建系统的占位符，不是真正的编译器" >> "$REPORT_FILE"
-        else
-            echo "✅ dummy-tools未产生错误" >> "$REPORT_FILE"
-        fi
+    local dummy_errors=$(grep "dummy-tools" "$BUILD_DIR/build.log" 2>/dev/null | grep -i "error\|failed" | head -3)
+    if [ -n "$dummy_errors" ]; then
+        echo "⚠️ 发现dummy-tools相关错误" >> "$REPORT_FILE"
+        echo "$dummy_errors" >> "$REPORT_FILE"
+        echo "💡 dummy-tools是OpenWrt构建系统的占位符，不是真正的编译器" >> "$REPORT_FILE"
     else
-        echo "ℹ️ 未检测到dummy-tools相关日志" >> "$REPORT_FILE"
+        if grep -q "dummy-tools" "$BUILD_DIR/build.log" 2>/dev/null; then
+            echo "✅ dummy-tools未产生错误" >> "$REPORT_FILE"
+        else
+            echo "ℹ️ 未检测到dummy-tools相关日志" >> "$REPORT_FILE"
+        fi
     fi
     echo "" >> "$REPORT_FILE"
 }
@@ -1613,7 +1616,16 @@ analyze_detailed_errors() {
         echo "  包编译错误: $(echo "$package_errors" | wc -l 2>/dev/null)" >> "$REPORT_FILE"
         echo "  磁盘空间错误: $(echo "$disk_errors" | wc -l 2>/dev/null)" >> "$REPORT_FILE"
         echo "  时间戳错误: $(echo "$timestamp_errors" | wc -l 2>/dev/null)" >> "$REPORT_FILE"
-        echo "  SDK编译器使用: $([ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ] && [ $sdk_usage_count -gt 0 ] && echo "✅ 已使用" || echo "⚠️ 未使用/未检测到")" >> "$REPORT_FILE"
+        
+        if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+            if [ $sdk_usage_count -gt 0 ]; then
+                echo "  SDK编译器使用: ✅ 已使用" >> "$REPORT_FILE"
+            else
+                echo "  SDK编译器使用: ⚠️ 未使用/未检测到" >> "$REPORT_FILE"
+            fi
+        else
+            echo "  SDK编译器使用: ⚠️ 未设置/未检测到" >> "$REPORT_FILE"
+        fi
         
     else
         echo "❌ 构建日志文件不存在，无法进行详细错误分析" >> "$REPORT_FILE"
