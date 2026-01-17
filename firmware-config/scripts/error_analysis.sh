@@ -116,7 +116,7 @@ init_report() {
     echo "==================================================" >> "$REPORT_FILE"
     echo "分析时间: $(date '+%Y-%m-%d %H:%M:%S')" >> "$REPORT_FILE"
     echo "报告时间戳: $TIMESTAMP" >> "$REPORT_FILE"
-    echo "报告版本: 3.2.0" >> "$REPORT_FILE"
+    echo "报告版本: 3.2.1" >> "$REPORT_FILE"
     echo "构建目录: $BUILD_DIR" >> "$REPORT_FILE"
     echo "SDK目录: $SDK_DIR" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
@@ -343,7 +343,7 @@ analyze_config_file() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 6. 检查编译器状态（增强版 - 改进SDK编译器检测）- 修复语法错误
+# 6. 检查编译器状态（增强版 - 修复语法错误）
 check_compiler_status() {
     log_step "检查编译器状态"
     
@@ -355,6 +355,7 @@ check_compiler_status() {
         echo "📌 编译器目录: $COMPILER_DIR" >> "$REPORT_FILE"
         
         # 查找真正的GCC编译器，排除dummy-tools和脚本工具
+        # 修复第527行: 使用 head -1 确保只获取一个结果
         local prebuilt_gcc=$(find "$COMPILER_DIR" -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
@@ -364,7 +365,7 @@ check_compiler_status() {
           ! -path "*scripts*" \
           2>/dev/null | head -1)
         
-        if [ -n "$prebuilt_gcc" ] && [ -x "$prebuilt_gcc" ]; then
+        if [ -n "$prebuilt_gcc" ] && [ -f "$prebuilt_gcc" ]; then
             echo "✅ 找到预构建GCC编译器: $(basename "$prebuilt_gcc")" >> "$REPORT_FILE"
             local prebuilt_version=$("$prebuilt_gcc" --version 2>&1 | head -1)
             echo "     版本: $prebuilt_version" >> "$REPORT_FILE"
@@ -438,7 +439,7 @@ check_compiler_status() {
               ! -name "*-gcc-ar" \
               2>/dev/null | head -1)
             
-            if [ -n "$real_gcc" ] && [ -x "$real_gcc" ]; then
+            if [ -n "$real_gcc" ] && [ -f "$real_gcc" ]; then
                 echo "  ✅ 找到真正的GCC编译器: $(basename "$real_gcc")" >> "$REPORT_FILE"
                 
                 local version=$("$real_gcc" --version 2>&1 | head -1)
@@ -474,13 +475,13 @@ check_compiler_status() {
       ! -name "*gcc-ranlib" \
       ! -name "*gcc-nm" \
       ! -path "*dummy-tools*" \
-      2>/dev/null)
+      2>/dev/null | head -10)
     
     local count=0
     if [ -n "$all_gcc_files" ]; then
         echo "🔍 找到的编译器文件:" >> "$REPORT_FILE"
-        echo "$all_gcc_files" | head -5 | while read gcc_file; do
-            if [ -x "$gcc_file" ]; then
+        echo "$all_gcc_files" | while read gcc_file; do
+            if [ -f "$gcc_file" ] && [ -x "$gcc_file" ]; then
                 count=$((count + 1))
                 local version=$("$gcc_file" --version 2>&1 | head -1)
                 local dir_name=$(dirname "$gcc_file")
@@ -969,7 +970,7 @@ check_sdk_status() {
           ! -path "*scripts*" \
           2>/dev/null | head -1)
         
-        if [ -n "$gcc_file" ] && [ -x "$gcc_file" ]; then
+        if [ -n "$gcc_file" ] && [ -f "$gcc_file" ]; then
             echo "✅ 找到SDK GCC编译器: $(basename "$gcc_file")" >> "$REPORT_FILE"
             
             # 显示GCC版本
@@ -1168,7 +1169,7 @@ analyze_compiler_errors() {
                   ! -path "*dummy-tools*" \
                   2>/dev/null | head -1)
                 
-                if [ -n "$sdk_gcc" ] && [ -x "$sdk_gcc" ]; then
+                if [ -n "$sdk_gcc" ] && [ -f "$sdk_gcc" ]; then
                     local sdk_version=$("$sdk_gcc" --version 2>&1 | head -1)
                     echo "  SDK GCC版本: $sdk_version" >> "$REPORT_FILE"
                     
@@ -1194,7 +1195,7 @@ analyze_compiler_errors() {
         echo "💡 使用自动构建的编译器" >> "$REPORT_FILE"
     fi
     
-    # 检查编译器错误 - 修复语法错误
+    # 检查编译器错误 - 修复第1157行语法错误
     echo "🔍 编译器错误检查:" >> "$REPORT_FILE"
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
         local prebuilt_errors=$(grep "$COMPILER_DIR" "$BUILD_DIR/build.log" 2>/dev/null | grep -i "error\|failed" | head -5 2>/dev/null)
@@ -1643,7 +1644,7 @@ analyze_detailed_errors() {
                   ! -path "*dummy-tools*" \
                   2>/dev/null | head -1)
                 
-                if [ -n "$sdk_gcc" ] && [ -x "$sdk_gcc" ]; then
+                if [ -n "$sdk_gcc" ] && [ -f "$sdk_gcc" ]; then
                     local sdk_version=$("$sdk_gcc" --version 2>&1 | head -1)
                     local major_version=$(echo "$sdk_version" | grep -o "[0-9]\+" | head -1)
                     
@@ -1814,7 +1815,7 @@ generate_fix_suggestions() {
             echo "" >> "$REPORT_FILE"
         else
             echo "💡 编译器版本说明:" >> "$REPORT_FILE"
-            echo "  ✅ SDK编译器是OpenWrt官方提供的，版本已通过验证" >> "$REPORT_FILE"
+            echo "  ✅ SDK编译器来自OpenWrt官方下载，版本已通过验证" >> "$REPORT_FILE"
             if [ -n "$SELECTED_BRANCH" ]; then
                 if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
                     echo "  🔧 OpenWrt 23.05 SDK使用 GCC 12.3.0" >> "$REPORT_FILE"
@@ -1881,7 +1882,7 @@ generate_fix_suggestions() {
     echo "" >> "$REPORT_FILE"
 }
 
-# 22. 生成总结报告（增强版）- 修复语法错误
+# 22. 生成总结报告（增强版）- 修复第1633、1680、1975行语法错误
 generate_summary() {
     log_step "生成分析总结"
     
@@ -1902,14 +1903,18 @@ generate_summary() {
         firmware_exists=1
     fi
     
-    if [ -f "$BUILD_DIR/build.log" ] && [ -s "$BUILD_DIR/build.log" ]; then
-        build_log_exists=1
-        error_count=$(grep -c -i "error" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
-        warning_count=$(grep -c -i "warning" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
+    if [ -f "$BUILD_DIR/build.log" ]; then
+        if [ -s "$BUILD_DIR/build.log" ]; then
+            build_log_exists=1
+            error_count=$(grep -c -i "error" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
+            warning_count=$(grep -c -i "warning" "$BUILD_DIR/build.log" 2>/dev/null || echo "0")
+        fi
     fi
     
-    if [ -f "$BUILD_DIR/.config" ] && [ -s "$BUILD_DIR/.config" ]; then
-        config_exists=1
+    if [ -f "$BUILD_DIR/.config" ]; then
+        if [ -s "$BUILD_DIR/.config" ]; then
+            config_exists=1
+        fi
     fi
     
     if [ -d "$BUILD_DIR/staging_dir" ]; then
@@ -1956,7 +1961,7 @@ generate_summary() {
           ! -path "*dummy-tools*" \
           2>/dev/null | head -1)
         
-        if [ -n "$sdk_gcc" ] && [ -x "$sdk_gcc" ]; then
+        if [ -n "$sdk_gcc" ] && [ -f "$sdk_gcc" ]; then
             local sdk_version=$("$sdk_gcc" --version 2>&1 | head -1)
             local major_version=$(echo "$sdk_version" | grep -o "[0-9]\+" | head -1)
             
