@@ -1398,7 +1398,7 @@ generate_error_report() {
             echo "  📁 $(basename "$file")" >> "$report_file"
         done
     else
-        echo "❌ 构建失败 - 未生成固件" >> "$report_file"
+        echo "❌ 构建失败 - 未生成固件" >> "$report_FILE"
     fi
     echo "" >> "$report_file"
     
