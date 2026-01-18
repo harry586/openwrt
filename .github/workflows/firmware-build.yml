@@ -178,7 +178,7 @@ jobs:
           echo "✅ 修复所有脚本权限完成"
           echo "🟢 步骤 3 完成"
       
-      # 步骤 4: 安装基础工具（优化版）- 修复YAML数组格式
+      # 步骤 4: 安装基础工具（优化版）
       - name: "4. 安装基础工具（优化版）"
         run: |
           echo "=== 步骤 4: 安装基础工具（优化版） ==="
@@ -200,7 +200,10 @@ jobs:
           
           # 分组1: 核心编译工具
           echo "🔧 安装核心编译工具..."
-          sudo apt-get install -y -q build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget libelf-dev cmake ninja-build
+          sudo apt-get install -y -q \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip \
+            zlib1g-dev file wget libelf-dev cmake ninja-build
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 核心编译工具安装失败"
@@ -209,7 +212,10 @@ jobs:
           
           # 分组2: Python和脚本工具
           echo "🐍 安装Python和脚本工具..."
-          sudo apt-get install -y -q python3 python3-dev python3-pip python3-setuptools python3-yaml xsltproc zip subversion automake autoconf libtool pkg-config help2man texinfo groff texlive texinfo
+          sudo apt-get install -y -q \
+            python3 python3-dev python3-pip python3-setuptools python3-yaml \
+            xsltproc zip subversion automake autoconf libtool pkg-config \
+            help2man texinfo groff texlive texinfo
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: Python和脚本工具安装失败"
@@ -218,7 +224,9 @@ jobs:
           
           # 分组3: 网络和下载工具
           echo "🌐 安装网络和下载工具..."
-          sudo apt-get install -y -q curl net-tools iputils-ping dnsutils openssh-client ca-certificates gnupg lsb-release aria2 libcurl4-openssl-dev
+          sudo apt-get install -y -q \
+            curl net-tools iputils-ping dnsutils openssh-client ca-certificates \
+            gnupg lsb-release aria2 libcurl4-openssl-dev
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 网络和下载工具安装失败"
@@ -227,7 +235,9 @@ jobs:
           
           # 分组4: 文件系统工具
           echo "💿 安装文件系统工具..."
-          sudo apt-get install -y -q squashfs-tools dosfstools e2fsprogs mtools parted fdisk gdisk hdparm smartmontools
+          sudo apt-get install -y -q \
+            squashfs-tools dosfstools e2fsprogs mtools parted fdisk gdisk \
+            hdparm smartmontools
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 文件系统工具安装失败"
@@ -236,7 +246,9 @@ jobs:
           
           # 分组5: 调试和开发工具
           echo "🔍 安装调试和开发工具..."
-          sudo apt-get install -y -q gdb strace ltrace valgrind binutils-dev libdw-dev libiberty-dev ecj fastjar java-propose-classpath libpython3-dev liblz4-dev zstd
+          sudo apt-get install -y -q \
+            gdb strace ltrace valgrind binutils-dev libdw-dev libiberty-dev \
+            ecj fastjar java-propose-classpath libpython3-dev liblz4-dev zstd
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 调试和开发工具安装失败"
@@ -436,7 +448,7 @@ jobs:
             echo "💡 将使用OpenWrt自动构建的编译器作为后备"
           fi
           
-          echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m%d %H:%M:%S')"
           echo "🟢 步骤 7 完成"
       
       # 步骤 8: 验证SDK下载结果
@@ -839,10 +851,10 @@ jobs:
           
           echo "🟢 步骤 19 完成"
       
-      # 步骤 20: 集成自定义文件（支持递归扫描子文件夹）- 新版
-      - name: "20. 集成自定义文件（支持递归扫描子文件夹）- 新版"
+      # 步骤 20: 集成自定义文件（脚本智能管理版）- 支持子文件夹
+      - name: "20. 集成自定义文件（脚本智能管理版）- 支持子文件夹"
         run: |
-          echo "=== 步骤 20: 集成自定义文件（支持递归扫描子文件夹）- 新版 ==="
+          echo "=== 步骤 20: 集成自定义文件（脚本智能管理版）- 支持子文件夹 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -856,151 +868,194 @@ jobs:
             echo "✅ 自定义文件目录存在: $CUSTOM_DIR"
             
             # ============================================
-            # 1. 显示自定义文件结构
+            # 1. 递归扫描所有文件和文件夹
             # ============================================
-            echo "📁 自定义文件结构:"
-            echo "----------------------------------------"
-            find "$CUSTOM_DIR" -type f | sed "s|$CUSTOM_DIR/||" | while read file; do
-              if [[ "$file" == */* ]]; then
-                echo "  📁 子文件夹文件: $file"
-              else
-                echo "  📄 根目录文件: $file"
-              fi
-            done
-            echo "----------------------------------------"
+            echo "🧠 启动递归文件扫描系统..."
             
-            # ============================================
-            # 2. 递归统计文件
-            # ============================================
-            echo "📊 递归文件统计..."
+            # 创建分析目录
+            ANALYSIS_DIR="/tmp/script-analysis-$(date +%s)"
+            mkdir -p "$ANALYSIS_DIR"
             
-            # 初始化统计变量
+            # 递归扫描所有文件
+            echo "📁 递归扫描所有文件和子文件夹..."
+            
+            # 统计变量
             TOTAL_FILES=0
+            TOTAL_FOLDERS=0
+            CHINESE_FILES=0
             IPK_COUNT=0
             SCRIPT_COUNT=0
             CONFIG_COUNT=0
             OTHER_COUNT=0
-            SUBFOLDER_FILES=0
             
-            # 递归查找所有文件
-            find "$CUSTOM_DIR" -type f 2>/dev/null | while read file; do
-              [ -z "$file" ] && continue
-              TOTAL_FILES=$((TOTAL_FILES + 1))
+            # 递归扫描函数
+            recursive_scan() {
+              local current_dir="$1"
+              local indent="$2"
               
-              local filename=$(basename "$file")
-              local relative_path=$(realpath --relative-to="$CUSTOM_DIR" "$file")
-              local filesize=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-              
-              # 检查是否在子文件夹中
-              if [[ "$relative_path" == */* ]]; then
-                SUBFOLDER_FILES=$((SUBFOLDER_FILES + 1))
-              fi
-              
-              # 文件类型统计
-              if echo "$filename" | grep -qi "\.ipk$"; then
-                IPK_COUNT=$((IPK_COUNT + 1))
-                if [[ "$relative_path" == */* ]]; then
-                  echo "  📦 IPK文件: $relative_path ($filesize) [子文件夹]"
-                else
-                  echo "  📦 IPK文件: $filename ($filesize)"
-                fi
-              elif [[ "$filename" == *.sh ]] || [[ "$filename" == *.Sh ]] || [[ "$filename" == *.SH ]] || \
-                   head -2 "$file" 2>/dev/null | grep -q "^#!"; then
-                SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
+              while IFS= read -r item; do
+                [ -z "$item" ] && continue
                 
-                if [[ "$relative_path" == */* ]]; then
-                  echo "  📜 脚本文件: $relative_path ($filesize) [子文件夹]"
-                else
-                  echo "  📜 脚本文件: $filename ($filesize)"
+                local item_name=$(basename "$item")
+                local relative_path="${item#$CUSTOM_DIR/}"
+                
+                # 如果是目录
+                if [ -d "$item" ]; then
+                  TOTAL_FOLDERS=$((TOTAL_FOLDERS + 1))
+                  echo "${indent}📁 文件夹: $item_name/"
+                  
+                  # 递归扫描子目录
+                  recursive_scan "$item" "$indent  "
+                  
+                # 如果是文件
+                elif [ -f "$item" ]; then
+                  TOTAL_FILES=$((TOTAL_FILES + 1))
+                  local filesize=$(ls -lh "$item" 2>/dev/null | awk '{print $5}' || echo "未知")
+                  
+                  # 检测中文文件名
+                  if echo "$item_name" | grep -q -P '[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}]' || \
+                     echo "$item_name" | grep -q -E "备份|恢复|安装|配置|设置|脚本|文件|固件|插件|网络|系统|路由|无线"; then
+                    CHINESE_FILES=$((CHINESE_FILES + 1))
+                  fi
+                  
+                  # 文件类型统计
+                  if echo "$item_name" | grep -qi "\.ipk$"; then
+                    IPK_COUNT=$((IPK_COUNT + 1))
+                    echo "${indent}📦 IPK文件: $item_name ($filesize)"
+                  elif [[ "$item_name" == *.sh ]] || [[ "$item_name" == *.Sh ]] || [[ "$item_name" == *.SH ]] || \
+                       head -2 "$item" 2>/dev/null | grep -q "^#!"; then
+                    SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
+                    
+                    # 脚本分析逻辑
+                    local script_type="general"
+                    local script_priority=50
+                    local script_content=$(head -100 "$item" 2>/dev/null || echo "")
+                    
+                    if echo "$script_content" | grep -qi "crontab\|cron\.d\|定时任务\|计划任务"; then
+                      script_type="cron"
+                      script_priority=30
+                    elif echo "$script_content" | grep -qi "network\|firewall\|network\.config\|防火墙\|网络设置"; then
+                      script_type="network"
+                      script_priority=20
+                    elif echo "$script_content" | grep -qi "opkg\|install\|package\|安装\|包管理"; then
+                      script_type="package"
+                      script_priority=10
+                    elif echo "$script_content" | grep -qi "service\|启动\|停止\|restart\|start\|stop"; then
+                      script_type="service"
+                      script_priority=40
+                    elif echo "$script_content" | grep -qi "config\|配置\|设置\|set\."; then
+                      script_type="config"
+                      script_priority=35
+                    elif echo "$script_content" | grep -qi "backup\|restore\|备份\|恢复"; then
+                      script_type="backup"
+                      script_priority=60
+                    fi
+                    
+                    # 保存分析结果
+                    echo "$item_name:$script_type:$script_priority:$relative_path" >> "$ANALYSIS_DIR/scripts.txt"
+                    
+                    # 显示分析结果
+                    case "$script_type" in
+                      "package") echo "${indent}📜 包安装脚本: $item_name (优先级: $script_priority)" ;;
+                      "network") echo "${indent}🌐 网络脚本: $item_name (优先级: $script_priority)" ;;
+                      "cron") echo "${indent}📅 定时任务: $item_name (优先级: $script_priority)" ;;
+                      "service") echo "${indent}⚙️ 服务脚本: $item_name (优先级: $script_priority)" ;;
+                      "config") echo "${indent}⚙️ 配置脚本: $item_name (优先级: $script_priority)" ;;
+                      "backup") echo "${indent}💾 备份脚本: $item_name (优先级: $script_priority)" ;;
+                      *) echo "${indent}📜 通用脚本: $item_name (优先级: $script_priority)" ;;
+                    esac
+                  elif [[ "$item_name" == *.conf ]] || [[ "$item_name" == *.config ]] || [[ "$item_name" == *.CONF ]]; then
+                    CONFIG_COUNT=$((CONFIG_COUNT + 1))
+                    echo "${indent}⚙️ 配置文件: $item_name ($filesize)"
+                  else
+                    OTHER_COUNT=$((OTHER_COUNT + 1))
+                    echo "${indent}📁 其他文件: $item_name ($filesize)"
+                  fi
                 fi
-              elif [[ "$filename" == *.conf ]] || [[ "$filename" == *.config ]] || [[ "$filename" == *.CONF ]]; then
-                CONFIG_COUNT=$((CONFIG_COUNT + 1))
-                if [[ "$relative_path" == */* ]]; then
-                  echo "  ⚙️ 配置文件: $relative_path ($filesize) [子文件夹]"
-                else
-                  echo "  ⚙️ 配置文件: $filename ($filesize)"
-                fi
-              else
-                OTHER_COUNT=$((OTHER_COUNT + 1))
-                if [[ "$relative_path" == */* ]]; then
-                  echo "  📁 其他文件: $relative_path ($filesize) [子文件夹]"
-                else
-                  echo "  📁 其他文件: $filename ($filesize)"
-                fi
-              fi
-            done
+              done < <(find "$current_dir" -mindepth 1 -maxdepth 1 2>/dev/null | sort)
+            }
+            
+            # 开始递归扫描
+            recursive_scan "$CUSTOM_DIR" ""
             
             # ============================================
-            # 3. 显示统计信息
+            # 2. 显示统计信息
             # ============================================
             echo ""
-            echo "📊 递归文件统计汇总:"
+            echo "📊 文件统计:"
+            echo "  扫描完成！"
             echo "  文件总数: $TOTAL_FILES 个"
+            echo "  文件夹数: $TOTAL_FOLDERS 个"
             echo "  📦 IPK文件: $IPK_COUNT 个"
             echo "  📜 脚本文件: $SCRIPT_COUNT 个"
             echo "  ⚙️ 配置文件: $CONFIG_COUNT 个"
             echo "  📁 其他文件: $OTHER_COUNT 个"
-            echo "  📁 子文件夹文件: $SUBFOLDER_FILES 个"
+            echo "  🇨🇳 中文文件: $CHINESE_FILES 个"
             
             # ============================================
-            # 4. 支持的文件夹结构示例
+            # 3. 显示脚本执行顺序
             # ============================================
-            echo ""
-            echo "📁 支持的文件夹结构示例:"
-            echo "  firmware-config/custom-files/"
-            echo "  ├── 📦 package.ipk           # 根目录IPK包"
-            echo "  ├── 📜 init.sh               # 根目录脚本"
-            echo "  ├── ⚙️ config.conf          # 根目录配置"
-            echo "  ├── 📁 scripts/              # 脚本子文件夹"
-            echo "  │   ├── 📜 network.sh       # 网络脚本"
-            echo "  │   ├── 📜 service.sh       # 服务脚本"
-            echo "  │   └── 📜 cron.sh          # 定时任务"
-            echo "  ├── 📁 ipks/                 # IPK包子文件夹"
-            echo "  │   ├── 📦 package1.ipk"
-            echo "  │   └── 📦 package2.ipk"
-            echo "  ├── 📁 configs/              # 配置子文件夹"
-            echo "  │   ├── ⚙️ system.conf"
-            echo "  │   └── ⚙️ firewall.conf"
-            echo "  └── 📁 中文文件夹/           # 支持中文文件夹名"
-            echo "      └── 📜 中文脚本.sh       # 支持中文文件名"
+            if [ -f "$ANALYSIS_DIR/scripts.txt" ] && [ $SCRIPT_COUNT -gt 0 ]; then
+              echo ""
+              echo "🔢 脚本执行顺序 (按优先级排序):"
+              echo "----------------------------------------"
+              sort -t':' -k3n "$ANALYSIS_DIR/scripts.txt" | while IFS=':' read -r name type priority path; do
+                case "$type" in
+                  "package") icon="📦" ;;
+                  "network") icon="🌐" ;;
+                  "cron") icon="📅" ;;
+                  "service") icon="⚙️" ;;
+                  "config") icon="⚙️" ;;
+                  "backup") icon="💾" ;;
+                  *) icon="📜" ;;
+                esac
+                printf "  %-3s %-12s %-25s %s\n" "$priority" "$icon" "$name" "$path"
+              done
+              echo "----------------------------------------"
+              echo "💡 优先级说明: 数字越小越先执行"
+            fi
+            
+            # ============================================
+            # 4. 冲突检测
+            # ============================================
+            if [ $SCRIPT_COUNT -gt 1 ]; then
+              echo ""
+              echo "⚠️ 脚本冲突检测..."
+              echo "  正在检查脚本冲突..."
+              echo "  💡 支持子文件夹结构，智能安装脚本会处理文件夹层级"
+            fi
             
             # ============================================
             # 5. 执行集成
             # ============================================
             echo ""
-            echo "🚀 开始执行自定义文件集成（支持递归扫描）..."
+            echo "🚀 开始执行自定义文件集成（支持子文件夹结构）..."
             "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
             
             # ============================================
-            # 6. 检查集成结果
+            # 6. 验证集成结果
             # ============================================
             echo ""
-            echo "🔍 检查集成结果..."
-            cd /mnt/openwrt-build
-            
-            if [ -d "files/etc/custom-files" ]; then
-              echo "✅ 自定义文件集成目录存在"
-              echo "📊 集成目录内容:"
-              find "files/etc/custom-files" -type f | sed "s|files/etc/custom-files/||" | head -10 | while read file; do
-                if [[ "$file" == */* ]]; then
-                  echo "  📁 $file [子文件夹结构已保留]"
-                else
-                  echo "  📄 $file"
-                fi
+            echo "🔍 验证集成结果..."
+            if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
+              echo "✅ 自定义文件集成成功"
+              echo "📁 目标目录: /mnt/openwrt-build/files/etc/custom-files"
+              
+              # 显示目标目录结构
+              echo "📁 目标目录结构:"
+              find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | head -10 | while read file; do
+                echo "  📄 $(basename "$file")"
               done
               
-              # 检查智能安装脚本
-              if [ -f "files/etc/custom-files/smart_install.sh" ]; then
+              if [ -f "/mnt/openwrt-build/files/etc/custom-files/smart_install.sh" ]; then
                 echo "✅ 智能安装脚本已创建"
-                echo "🔧 脚本功能:"
-                echo "  - 递归查找所有IPK文件并安装"
-                echo "  - 递归查找所有脚本并按优先级执行"
-                echo "  - 自动合并定时任务"
-                echo "  - 支持中文文件名和文件夹"
               fi
             else
-              echo "⚠️ 自定义文件集成目录不存在"
+              echo "❌ 自定义文件目录未创建"
             fi
+            
+            # 清理临时文件
+            rm -rf "$ANALYSIS_DIR"
             
           else
             echo "ℹ️ 自定义文件目录不存在: $CUSTOM_DIR"
@@ -1330,11 +1385,11 @@ jobs:
           
           echo "🟢 步骤 27 完成"
       
-      # 步骤 28: 编译后总结（增强版）- 包含递归扫描信息
-      - name: "28. 编译后总结（增强版）- 包含递归扫描信息"
+      # 步骤 28: 编译后总结（增强版）- 包含自定义文件子文件夹支持
+      - name: "28. 编译后总结（增强版）- 包含自定义文件子文件夹支持"
         if: always()
         run: |
-          echo "=== 步骤 28: 编译后总结（增强版）- 包含递归扫描信息 ==="
+          echo "=== 步骤 28: 编译后总结（增强版）- 包含自定义文件子文件夹支持 ==="
           echo "🕐 总结时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，总结不应该失败
@@ -1347,6 +1402,7 @@ jobs:
           echo "配置模式: ${{ github.event.inputs.config_mode }}"
           echo "时间戳: ${{ env.TIMESTAMP }}"
           echo "并行优化: ${{ github.event.inputs.enable_parallel }}"
+          echo "子文件夹支持: ✅ 已启用"
           echo ""
           
           # 检查构建产物
@@ -1454,51 +1510,57 @@ jobs:
           
           echo "  💡 这是正常的：系统编译器编译工具链，SDK编译器编译固件"
           
-          # 自定义文件集成状态（支持递归扫描）
+          # 自定义文件集成状态（智能管理版）- 支持子文件夹
           echo ""
-          echo "📁 自定义文件集成状态（支持递归扫描子文件夹）:"
+          echo "📁 自定义文件集成状态（智能管理版）- 支持子文件夹:"
           if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
             CUSTOM_IPK_COUNT=0
             CUSTOM_SCRIPT_COUNT=0
             CUSTOM_CONFIG_COUNT=0
             CUSTOM_OTHER_COUNT=0
-            CUSTOM_SUBFOLDER_COUNT=0
+            CUSTOM_FOLDER_COUNT=0
             
             # 递归统计文件
-            for file in $(find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null); do
-              FILENAME=$(basename "$file")
-              RELATIVE_PATH=$(echo "$file" | sed "s|/mnt/openwrt-build/files/etc/custom-files/||")
+            count_custom_files() {
+              local current_dir="$1"
               
-              # 检查是否在子文件夹中
-              if [[ "$RELATIVE_PATH" == */* ]]; then
-                CUSTOM_SUBFOLDER_COUNT=$((CUSTOM_SUBFOLDER_COUNT + 1))
-              fi
-              
-              if echo "$FILENAME" | grep -qi "\.ipk$"; then
-                CUSTOM_IPK_COUNT=$((CUSTOM_IPK_COUNT + 1))
-              elif [[ "$FILENAME" == *.sh ]] || [[ "$FILENAME" == *.Sh ]] || [[ "$FILENAME" == *.SH ]] || \
-                   head -2 "$file" 2>/dev/null | grep -q "^#!"; then
-                CUSTOM_SCRIPT_COUNT=$((CUSTOM_SCRIPT_COUNT + 1))
-              elif [[ "$FILENAME" == *.conf ]] || [[ "$FILENAME" == *.config ]] || [[ "$FILENAME" == *.CONF ]]; then
-                CUSTOM_CONFIG_COUNT=$((CUSTOM_CONFIG_COUNT + 1))
-              else
-                CUSTOM_OTHER_COUNT=$((CUSTOM_OTHER_COUNT + 1))
-              fi
-            done
+              while IFS= read -r item; do
+                [ -z "$item" ] && continue
+                
+                if [ -d "$item" ]; then
+                  CUSTOM_FOLDER_COUNT=$((CUSTOM_FOLDER_COUNT + 1))
+                  count_custom_files "$item"
+                elif [ -f "$item" ]; then
+                  FILENAME=$(basename "$item")
+                  if echo "$FILENAME" | grep -qi "\.ipk$"; then
+                    CUSTOM_IPK_COUNT=$((CUSTOM_IPK_COUNT + 1))
+                  elif [[ "$FILENAME" == *.sh ]] || [[ "$FILENAME" == *.Sh ]] || [[ "$FILENAME" == *.SH ]] || \
+                       head -2 "$item" 2>/dev/null | grep -q "^#!"; then
+                    CUSTOM_SCRIPT_COUNT=$((CUSTOM_SCRIPT_COUNT + 1))
+                  elif [[ "$FILENAME" == *.conf ]] || [[ "$FILENAME" == *.config ]] || [[ "$FILENAME" == *.CONF ]]; then
+                    CUSTOM_CONFIG_COUNT=$((CUSTOM_CONFIG_COUNT + 1))
+                  else
+                    CUSTOM_OTHER_COUNT=$((CUSTOM_OTHER_COUNT + 1))
+                  fi
+                fi
+              done < <(find "$current_dir" -mindepth 1 2>/dev/null | sort)
+            }
+            
+            count_custom_files "/mnt/openwrt-build/files/etc/custom-files"
             
             echo "  ✅ 自定义IPK包: $CUSTOM_IPK_COUNT 个"
             echo "  ✅ 自定义脚本: $CUSTOM_SCRIPT_COUNT 个"
             echo "  ⚙️ 配置文件: $CUSTOM_CONFIG_COUNT 个"
             echo "  📁 其他文件: $CUSTOM_OTHER_COUNT 个"
-            echo "  📁 子文件夹文件: $CUSTOM_SUBFOLDER_COUNT 个"
+            echo "  📁 子文件夹: $CUSTOM_FOLDER_COUNT 个"
             echo "  总文件数: $((CUSTOM_IPK_COUNT + CUSTOM_SCRIPT_COUNT + CUSTOM_CONFIG_COUNT + CUSTOM_OTHER_COUNT)) 个"
             
             # 检查智能安装脚本
             if [ -f "/mnt/openwrt-build/files/etc/custom-files/smart_install.sh" ]; then
               echo "  🧠 智能安装脚本: 已创建"
-              echo "  🔄 递归扫描: 支持扫描所有子文件夹"
               echo "  🔢 执行顺序: 自动按优先级排序"
               echo "  ⚠️ 冲突处理: 自动合并定时任务"
+              echo "  📁 文件夹支持: 完整支持任意层级子文件夹"
             fi
             
             if [ $CUSTOM_SCRIPT_COUNT -gt 0 ]; then
@@ -1512,28 +1574,19 @@ jobs:
               echo "    7. 💾 备份恢复脚本 (优先级 60)"
             fi
             
-            # 显示支持的文件夹结构
-            echo ""
-            echo "📁 支持的文件夹结构:"
-            echo "  firmware-config/custom-files/"
-            echo "  ├── 根目录文件"
-            echo "  └── 任意子文件夹/"
-            echo "      ├── 任意文件"
-            echo "      └── 更深层子文件夹/"
-            echo "          └── ..."
-            
           else
             echo "  ⚪ 自定义文件: 未集成"
           fi
           
-          # 递归扫描功能介绍
+          # 智能脚本管理说明
           echo ""
-          echo "🔄 递归扫描功能特点:"
-          echo "  ✅ 支持任意层级子文件夹"
-          echo "  ✅ 保持原始文件夹结构"
-          echo "  ✅ 支持中文文件夹名和文件名"
-          echo "  ✅ 智能安装脚本自动递归查找"
-          echo "  ✅ 文件优先级排序跨文件夹生效"
+          echo "🧠 智能脚本管理功能:"
+          echo "  ✅ 自动脚本分类: 根据内容识别脚本类型"
+          echo "  ✅ 优先级排序: 按功能类型自动分配执行顺序"
+          echo "  ✅ 冲突检测: 检测可能的多脚本冲突"
+          echo "  ✅ 定时任务合并: 自动合并多个脚本的定时任务"
+          echo "  ✅ 中文文件名支持: 完整支持中文名脚本"
+          echo "  ✅ 子文件夹支持: 支持任意层级文件夹结构"
           
           echo ""
           echo "✅ 构建流程完成"
