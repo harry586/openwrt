@@ -2190,19 +2190,18 @@ integrate_custom_files() {
     local analysis_dir="/tmp/script-analysis-$(date +%s)"
     mkdir -p "$analysis_dir"
     
-    # 定义统计变量（使用普通变量，不使用local，避免作用域问题）
-    # 注意：这些变量将在函数内使用，但需要在函数外部可见
-    ipk_count=0
-    script_count=0
-    config_count=0
-    other_count=0
-    chinese_count=0
-    copied_count=0
-    folder_count=0
+    # 定义统计变量（使用全局变量）
+    INTEGRATE_IPK_COUNT=0
+    INTEGRATE_SCRIPT_COUNT=0
+    INTEGRATE_CONFIG_COUNT=0
+    INTEGRATE_OTHER_COUNT=0
+    INTEGRATE_CHINESE_COUNT=0
+    INTEGRATE_COPIED_COUNT=0
+    INTEGRATE_FOLDER_COUNT=0
+    INTEGRATE_TOTAL_FILES=0
     
-    # 3. 创建递归复制函数，支持子文件夹结构 - 修复：确保所有文件都被复制
-    # 使用普通变量而不是局部变量，避免统计问题
-    recursive_copy_files() {
+    # 3. 创建递归复制函数，支持子文件夹结构 - 修复：避免使用local统计变量
+    recursive_copy_files_fixed() {
         local src_dir="$1"
         local dst_dir="$2"
         local relative_path="${3:-}"
@@ -2210,7 +2209,7 @@ integrate_custom_files() {
         # 确保目标目录存在
         mkdir -p "$dst_dir"
         
-        # 遍历源目录中的所有文件和子目录 - 修复：使用正确的find命令
+        # 使用while循环处理find输出，避免子shell问题
         find "$src_dir" -mindepth 1 -maxdepth 1 2>/dev/null | while IFS= read -r src_item; do
             [ -z "$src_item" ] && continue
             
@@ -2219,11 +2218,11 @@ integrate_custom_files() {
             
             # 如果是目录，递归处理
             if [ -d "$src_item" ]; then
-                folder_count=$((folder_count + 1))
+                INTEGRATE_FOLDER_COUNT=$((INTEGRATE_FOLDER_COUNT + 1))
                 log "  发现子文件夹: $relative_path$src_name/"
                 
                 # 递归处理子文件夹
-                recursive_copy_files "$src_item" "$dst_dir/$src_name" "$relative_path$src_name/"
+                recursive_copy_files_fixed "$src_item" "$dst_dir/$src_name" "$relative_path$src_name/"
                 continue
             fi
             
@@ -2242,33 +2241,33 @@ integrate_custom_files() {
             
             # 检测中文文件名
             if detect_chinese_characters "$src_name"; then
-                chinese_count=$((chinese_count + 1))
+                INTEGRATE_CHINESE_COUNT=$((INTEGRATE_CHINESE_COUNT + 1))
                 log "    发现中文文件名: $relative_path$src_name"
             fi
             
             # 文件类型统计
             if echo "$src_name" | grep -qi "\.ipk$"; then
-                ipk_count=$((ipk_count + 1))
-                dst_name="package_${ipk_count}.ipk"
+                INTEGRATE_IPK_COUNT=$((INTEGRATE_IPK_COUNT + 1))
+                dst_name="package_${INTEGRATE_IPK_COUNT}.ipk"
                 log "    📦 IPK文件: $relative_path$src_name -> $dst_name"
             elif [[ "$src_name" == *.sh ]] || [[ "$src_name" == *.Sh ]] || [[ "$src_name" == *.SH ]] || \
                  head -2 "$src_item" 2>/dev/null | grep -q "^#!"; then
-                script_count=$((script_count + 1))
+                INTEGRATE_SCRIPT_COUNT=$((INTEGRATE_SCRIPT_COUNT + 1))
                 
                 # 分析脚本并获取优先级
                 local analysis_result=$(analyze_script "$src_item")
                 local script_type=$(echo "$analysis_result" | cut -d':' -f2)
                 local priority=$(echo "$analysis_result" | cut -d':' -f3)
                 
-                # 根据优先级重命名脚本 - 修复：确保重命名正确
+                # 根据优先级重命名脚本
                 case "$script_type" in
-                    "package") dst_name="10_package_${script_count}.sh" ;;
-                    "network") dst_name="20_network_${script_count}.sh" ;;
-                    "cron") dst_name="30_cron_${script_count}.sh" ;;
-                    "config") dst_name="35_config_${script_count}.sh" ;;
-                    "service") dst_name="40_service_${script_count}.sh" ;;
-                    "backup") dst_name="60_backup_${script_count}.sh" ;;
-                    *) dst_name="50_general_${script_count}.sh" ;;
+                    "package") dst_name="10_package_${INTEGRATE_SCRIPT_COUNT}.sh" ;;
+                    "network") dst_name="20_network_${INTEGRATE_SCRIPT_COUNT}.sh" ;;
+                    "cron") dst_name="30_cron_${INTEGRATE_SCRIPT_COUNT}.sh" ;;
+                    "config") dst_name="35_config_${INTEGRATE_SCRIPT_COUNT}.sh" ;;
+                    "service") dst_name="40_service_${INTEGRATE_SCRIPT_COUNT}.sh" ;;
+                    "backup") dst_name="60_backup_${INTEGRATE_SCRIPT_COUNT}.sh" ;;
+                    *) dst_name="50_general_${INTEGRATE_SCRIPT_COUNT}.sh" ;;
                 esac
                 
                 log "    📜 脚本文件: $relative_path$src_name -> $dst_name (类型: $script_type, 优先级: $priority)"
@@ -2276,16 +2275,17 @@ integrate_custom_files() {
                 # 保存分析结果
                 echo "$analysis_result:$relative_path$src_name" >> "$analysis_dir/scripts.txt"
             elif [[ "$src_name" == *.conf ]] || [[ "$src_name" == *.config ]] || [[ "$src_name" == *.CONF ]]; then
-                config_count=$((config_count + 1))
+                INTEGRATE_CONFIG_COUNT=$((INTEGRATE_CONFIG_COUNT + 1))
                 log "    ⚙️ 配置文件: $relative_path$src_name"
             else
-                other_count=$((other_count + 1))
+                INTEGRATE_OTHER_COUNT=$((INTEGRATE_OTHER_COUNT + 1))
                 log "    📁 其他文件: $relative_path$src_name"
             fi
             
-            # 复制文件 - 修复：确保复制成功
+            # 复制文件
             if cp "$src_item" "$full_dst_path" 2>/dev/null; then
-                copied_count=$((copied_count + 1))
+                INTEGRATE_COPIED_COUNT=$((INTEGRATE_COPIED_COUNT + 1))
+                INTEGRATE_TOTAL_FILES=$((INTEGRATE_TOTAL_FILES + 1))
                 # 确保脚本文件有执行权限
                 if [[ "$dst_name" == *.sh ]] || head -2 "$full_dst_path" 2>/dev/null | grep -q "^#!"; then
                     chmod +x "$full_dst_path" 2>/dev/null || true
@@ -2298,17 +2298,17 @@ integrate_custom_files() {
     
     # 4. 复制所有文件并进行分析
     log "🔧 步骤2: 递归复制所有自定义文件并进行分析"
-    recursive_copy_files "$custom_dir" "$custom_files_dir"
+    recursive_copy_files_fixed "$custom_dir" "$custom_files_dir"
     
     # 5. 显示统计信息
     log "📊 文件统计:"
-    log "  📦 IPK文件: $ipk_count 个"
-    log "  📜 脚本文件: $script_count 个"
-    log "  ⚙️ 配置文件: $config_count 个"
-    log "  📁 其他文件: $other_count 个"
-    log "  📁 子文件夹: $folder_count 个"
-    log "  🇨🇳 中文文件: $chinese_count 个"
-    log "  📋 总复制文件: $copied_count 个"
+    log "  📦 IPK文件: $INTEGRATE_IPK_COUNT 个"
+    log "  📜 脚本文件: $INTEGRATE_SCRIPT_COUNT 个"
+    log "  ⚙️ 配置文件: $INTEGRATE_CONFIG_COUNT 个"
+    log "  📁 其他文件: $INTEGRATE_OTHER_COUNT 个"
+    log "  📁 子文件夹: $INTEGRATE_FOLDER_COUNT 个"
+    log "  🇨🇳 中文文件: $INTEGRATE_CHINESE_COUNT 个"
+    log "  📋 总复制文件: $INTEGRATE_COPIED_COUNT 个"
     
     # 6. 创建智能安装脚本 - 修复：确保脚本能正确执行所有文件
     log "🔧 步骤3: 创建智能安装脚本"
@@ -2443,7 +2443,7 @@ install_ipk_packages
 echo "" >> $LOG_FILE
 echo "2. 执行脚本 (按优先级排序)..." >> $LOG_FILE
 
-# 收集所有脚本并排序 - 修复：确保所有脚本都被收集
+# 收集所有脚本并排序
 SCRIPT_LIST_FILE="/tmp/script_list.txt"
 rm -f "$SCRIPT_LIST_FILE"
 
@@ -2544,7 +2544,7 @@ EOF
     log "✅ 更新第一次开机脚本: $first_boot_script"
     
     # 8. 显示脚本执行顺序
-    if [ -f "$analysis_dir/scripts.txt" ] && [ $script_count -gt 0 ]; then
+    if [ -f "$analysis_dir/scripts.txt" ] && [ $INTEGRATE_SCRIPT_COUNT -gt 0 ]; then
         log ""
         log "🔢 脚本执行顺序 (按优先级排序):"
         echo "----------------------------------------"
@@ -2569,7 +2569,7 @@ EOF
     local actual_file_count=$(find "$custom_files_dir" -type f 2>/dev/null | wc -l)
     log "📊 目标目录文件数量: $actual_file_count 个"
     
-    if [ $actual_file_count -ge $copied_count ]; then
+    if [ $actual_file_count -ge $INTEGRATE_COPIED_COUNT ]; then
         log "✅ 文件复制验证通过"
         
         # 显示所有复制文件的列表
@@ -2584,19 +2584,19 @@ EOF
             log "  ... 还有 $((actual_file_count - 20)) 个文件"
         fi
     else
-        log "⚠️ 警告: 复制的文件数量 ($actual_file_count) 少于预期 ($copied_count)"
+        log "⚠️ 警告: 复制的文件数量 ($actual_file_count) 少于预期 ($INTEGRATE_COPIED_COUNT)"
     fi
     
     # 10. 显示最终统计
     log ""
     log "🎉 自定义文件集成完成（智能脚本管理版）"
     log "📊 集成统计:"
-    log "  📦 IPK文件: $ipk_count 个"
-    log "  📜 脚本文件: $script_count 个 (已按优先级排序)"
-    log "  ⚙️ 配置文件: $config_count 个"
-    log "  📁 其他文件: $other_count 个"
-    log "  📁 子文件夹: $folder_count 个"
-    log "  🇨🇳 中文文件: $chinese_count 个"
+    log "  📦 IPK文件: $INTEGRATE_IPK_COUNT 个"
+    log "  📜 脚本文件: $INTEGRATE_SCRIPT_COUNT 个 (已按优先级排序)"
+    log "  ⚙️ 配置文件: $INTEGRATE_CONFIG_COUNT 个"
+    log "  📁 其他文件: $INTEGRATE_OTHER_COUNT 个"
+    log "  📁 子文件夹: $INTEGRATE_FOLDER_COUNT 个"
+    log "  🇨🇳 中文文件: $INTEGRATE_CHINESE_COUNT 个"
     log "  🧠 智能安装脚本: 已创建 (smart_install.sh)"
     log "  🔢 执行顺序: 自动按优先级排序执行"
     log "  ⚠️ 冲突处理: 自动合并定时任务"
@@ -2608,7 +2608,7 @@ EOF
     # 清理临时文件
     rm -rf "$analysis_dir"
     
-    if [ $copied_count -eq 0 ]; then
+    if [ $INTEGRATE_COPIED_COUNT -eq 0 ]; then
         log "⚠️ 警告: 自定义文件目录为空"
         log "💡 支持的文件夹结构:"
         log "  firmware-config/custom-files/"
