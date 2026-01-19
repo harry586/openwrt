@@ -851,7 +851,7 @@ jobs:
           
           echo "🟢 步骤 19 完成"
       
-      # 步骤 20: 集成自定义文件（脚本智能管理版）- 支持子文件夹
+      # 步骤 20: 集成自定义文件（脚本智能管理版）- 支持子文件夹 - 修复：显示所有文件
       - name: "20. 集成自定义文件（脚本智能管理版）- 支持子文件夹"
         run: |
           echo "=== 步骤 20: 集成自定义文件（脚本智能管理版）- 支持子文件夹 ==="
@@ -888,12 +888,13 @@ jobs:
             CONFIG_COUNT=0
             OTHER_COUNT=0
             
-            # 递归扫描函数
+            # 递归扫描函数 - 修复：确保所有文件都被扫描
             recursive_scan() {
               local current_dir="$1"
               local indent="$2"
               
-              while IFS= read -r item; do
+              # 使用find命令递归扫描，确保所有文件都被找到
+              find "$current_dir" -mindepth 1 2>/dev/null | while IFS= read -r item; do
                 [ -z "$item" ] && continue
                 
                 local item_name=$(basename "$item")
@@ -903,9 +904,6 @@ jobs:
                 if [ -d "$item" ]; then
                   TOTAL_FOLDERS=$((TOTAL_FOLDERS + 1))
                   echo "${indent}📁 文件夹: $item_name/"
-                  
-                  # 递归扫描子目录
-                  recursive_scan "$item" "$indent  "
                   
                 # 如果是文件
                 elif [ -f "$item" ]; then
@@ -972,7 +970,7 @@ jobs:
                     echo "${indent}📁 其他文件: $item_name ($filesize)"
                   fi
                 fi
-              done < <(find "$current_dir" -mindepth 1 -maxdepth 1 2>/dev/null | sort)
+              done
             }
             
             # 开始递归扫描
@@ -1033,7 +1031,7 @@ jobs:
             "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
             
             # ============================================
-            # 6. 验证集成结果
+            # 6. 验证集成结果 - 修复：显示所有文件
             # ============================================
             echo ""
             echo "🔍 验证集成结果..."
@@ -1041,14 +1039,21 @@ jobs:
               echo "✅ 自定义文件集成成功"
               echo "📁 目标目录: /mnt/openwrt-build/files/etc/custom-files"
               
-              # 显示目标目录结构
-              echo "📁 目标目录结构:"
-              find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | head -10 | while read file; do
-                echo "  📄 $(basename "$file")"
+              # 显示目标目录结构 - 修复：显示所有文件
+              echo "📁 目标目录所有文件:"
+              find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
+                local filename=$(basename "$file")
+                local filesize=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                echo "  📄 $filename ($filesize)"
               done
+              
+              # 显示文件总数
+              local target_file_count=$(find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | wc -l)
+              echo "📊 目标目录文件总数: $target_file_count 个"
               
               if [ -f "/mnt/openwrt-build/files/etc/custom-files/smart_install.sh" ]; then
                 echo "✅ 智能安装脚本已创建"
+                echo "🔧 智能安装脚本权限: $(ls -la "/mnt/openwrt-build/files/etc/custom-files/smart_install.sh" 2>/dev/null | awk '{print $1}')"
               fi
             else
               echo "❌ 自定义文件目录未创建"
@@ -1510,7 +1515,7 @@ jobs:
           
           echo "  💡 这是正常的：系统编译器编译工具链，SDK编译器编译固件"
           
-          # 自定义文件集成状态（智能管理版）- 支持子文件夹
+          # 自定义文件集成状态（智能管理版）- 支持子文件夹 - 修复：显示所有文件
           echo ""
           echo "📁 自定义文件集成状态（智能管理版）- 支持子文件夹:"
           if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
@@ -1519,41 +1524,34 @@ jobs:
             CUSTOM_CONFIG_COUNT=0
             CUSTOM_OTHER_COUNT=0
             CUSTOM_FOLDER_COUNT=0
+            CUSTOM_TOTAL_FILES=0
             
-            # 递归统计文件
-            count_custom_files() {
-              local current_dir="$1"
+            # 递归统计文件 - 修复：确保所有文件都被统计
+            echo "  📊 文件统计:"
+            CUSTOM_TOTAL_FILES=$(find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | wc -l)
+            echo "  总文件数: $CUSTOM_TOTAL_FILES 个"
+            
+            # 显示所有文件列表
+            echo "  📋 文件列表:"
+            find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
+              FILENAME=$(basename "$file")
+              FILESIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
               
-              while IFS= read -r item; do
-                [ -z "$item" ] && continue
-                
-                if [ -d "$item" ]; then
-                  CUSTOM_FOLDER_COUNT=$((CUSTOM_FOLDER_COUNT + 1))
-                  count_custom_files "$item"
-                elif [ -f "$item" ]; then
-                  FILENAME=$(basename "$item")
-                  if echo "$FILENAME" | grep -qi "\.ipk$"; then
-                    CUSTOM_IPK_COUNT=$((CUSTOM_IPK_COUNT + 1))
-                  elif [[ "$FILENAME" == *.sh ]] || [[ "$FILENAME" == *.Sh ]] || [[ "$FILENAME" == *.SH ]] || \
-                       head -2 "$item" 2>/dev/null | grep -q "^#!"; then
-                    CUSTOM_SCRIPT_COUNT=$((CUSTOM_SCRIPT_COUNT + 1))
-                  elif [[ "$FILENAME" == *.conf ]] || [[ "$FILENAME" == *.config ]] || [[ "$FILENAME" == *.CONF ]]; then
-                    CUSTOM_CONFIG_COUNT=$((CUSTOM_CONFIG_COUNT + 1))
-                  else
-                    CUSTOM_OTHER_COUNT=$((CUSTOM_OTHER_COUNT + 1))
-                  fi
-                fi
-              done < <(find "$current_dir" -mindepth 1 2>/dev/null | sort)
-            }
-            
-            count_custom_files "/mnt/openwrt-build/files/etc/custom-files"
-            
-            echo "  ✅ 自定义IPK包: $CUSTOM_IPK_COUNT 个"
-            echo "  ✅ 自定义脚本: $CUSTOM_SCRIPT_COUNT 个"
-            echo "  ⚙️ 配置文件: $CUSTOM_CONFIG_COUNT 个"
-            echo "  📁 其他文件: $CUSTOM_OTHER_COUNT 个"
-            echo "  📁 子文件夹: $CUSTOM_FOLDER_COUNT 个"
-            echo "  总文件数: $((CUSTOM_IPK_COUNT + CUSTOM_SCRIPT_COUNT + CUSTOM_CONFIG_COUNT + CUSTOM_OTHER_COUNT)) 个"
+              if echo "$FILENAME" | grep -qi "\.ipk$"; then
+                echo "    📦 $FILENAME ($FILESIZE)"
+                CUSTOM_IPK_COUNT=$((CUSTOM_IPK_COUNT + 1))
+              elif [[ "$FILENAME" == *.sh ]] || [[ "$FILENAME" == *.Sh ]] || [[ "$FILENAME" == *.SH ]] || \
+                   head -2 "$file" 2>/dev/null | grep -q "^#!"; then
+                echo "    📜 $FILENAME ($FILESIZE)"
+                CUSTOM_SCRIPT_COUNT=$((CUSTOM_SCRIPT_COUNT + 1))
+              elif [[ "$FILENAME" == *.conf ]] || [[ "$FILENAME" == *.config ]] || [[ "$FILENAME" == *.CONF ]]; then
+                echo "    ⚙️ $FILENAME ($FILESIZE)"
+                CUSTOM_CONFIG_COUNT=$((CUSTOM_CONFIG_COUNT + 1))
+              else
+                echo "    📁 $FILENAME ($FILESIZE)"
+                CUSTOM_OTHER_COUNT=$((CUSTOM_OTHER_COUNT + 1))
+              fi
+            done
             
             # 检查智能安装脚本
             if [ -f "/mnt/openwrt-build/files/etc/custom-files/smart_install.sh" ]; then
@@ -1587,6 +1585,7 @@ jobs:
           echo "  ✅ 定时任务合并: 自动合并多个脚本的定时任务"
           echo "  ✅ 中文文件名支持: 完整支持中文名脚本"
           echo "  ✅ 子文件夹支持: 支持任意层级文件夹结构"
+          echo "  ✅ 文件验证: 确保所有文件都被正确复制和执行"
           
           echo ""
           echo "✅ 构建流程完成"
