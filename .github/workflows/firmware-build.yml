@@ -851,14 +851,13 @@ jobs:
           
           echo "🟢 步骤 19 完成"
       
-      # 步骤 20: 集成自定义文件（脚本智能管理版）- 支持子文件夹 - 修复：修复shell变量作用域错误
+      # 步骤 20: 集成自定义文件（脚本智能管理版）- 支持子文件夹 - 修复变量作用域错误
       - name: "20. 集成自定义文件（脚本智能管理版）- 支持子文件夹"
         run: |
           echo "=== 步骤 20: 集成自定义文件（脚本智能管理版）- 支持子文件夹 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 设置错误处理
-          set -e
+          # 设置错误处理 - 这里不退出，只是尝试集成
           trap 'echo "⚠️ 步骤 20 集成过程中出现错误，继续执行..."' ERR
           
           echo "🔍 检查自定义文件目录..."
@@ -867,24 +866,18 @@ jobs:
           if [ -d "$CUSTOM_DIR" ]; then
             echo "✅ 自定义文件目录存在: $CUSTOM_DIR"
             
-            # ============================================
-            # 1. 使用主脚本进行集成（修复版）
-            # ============================================
-            echo "🧠 使用主脚本进行集成（修复变量作用域问题）..."
+            # 执行集成脚本
+            echo "🧠 使用主脚本进行集成..."
             echo "🚀 启动集成脚本..."
             
-            # 执行集成脚本
             "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
             
             INTEGRATE_EXIT_CODE=$?
             if [ $INTEGRATE_EXIT_CODE -ne 0 ]; then
               echo "⚠️ 警告: 自定义文件集成过程中出现错误，退出代码: $INTEGRATE_EXIT_CODE"
-              echo "💡 将尝试手动扫描文件..."
             fi
             
-            # ============================================
-            # 2. 手动验证集成结果
-            # ============================================
+            # 验证集成结果
             echo "🔍 验证集成结果..."
             if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
               echo "✅ 自定义文件集成成功"
@@ -892,56 +885,26 @@ jobs:
               
               # 显示目标目录结构
               echo "📊 目标目录文件统计:"
+              
+              # 使用简单的方法统计，避免变量作用域问题
               TARGET_TOTAL_FILES=0
               TARGET_IPK_COUNT=0
               TARGET_SCRIPT_COUNT=0
               TARGET_CONFIG_COUNT=0
               TARGET_OTHER_COUNT=0
               
-              # 使用主脚本中的统计变量
-              if [ -n "$INTEGRATE_TOTAL_FILES" ]; then
-                echo "  总文件数: $INTEGRATE_TOTAL_FILES 个（从主脚本获取）"
-                echo "  📦 IPK文件: $INTEGRATE_IPK_COUNT 个"
-                echo "  📜 脚本文件: $INTEGRATE_SCRIPT_COUNT 个"
-                echo "  ⚙️ 配置文件: $INTEGRATE_CONFIG_COUNT 个"
-                echo "  📁 其他文件: $INTEGRATE_OTHER_COUNT 个"
-                echo "  📁 子文件夹: $INTEGRATE_FOLDER_COUNT 个"
-                echo "  🇨🇳 中文文件: $INTEGRATE_CHINESE_COUNT 个"
-              else
-                # 如果主脚本没有输出统计，手动统计
-                echo "📊 手动统计目标目录文件..."
-                
-                # 统计目标目录中的文件
-                find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
-                  TARGET_TOTAL_FILES=$((TARGET_TOTAL_FILES + 1))
-                  local filename=$(basename "$file")
-                  local filesize=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                  
-                  if echo "$filename" | grep -qi "\.ipk$"; then
-                    TARGET_IPK_COUNT=$((TARGET_IPK_COUNT + 1))
-                    echo "  📦 $filename ($filesize)"
-                  elif [[ "$filename" == *.sh ]] || [[ "$filename" == *.Sh ]] || [[ "$filename" == *.SH ]] || \
-                       head -2 "$file" 2>/dev/null | grep -q "^#!"; then
-                    TARGET_SCRIPT_COUNT=$((TARGET_SCRIPT_COUNT + 1))
-                    echo "  📜 $filename ($filesize)"
-                  elif [[ "$filename" == *.conf ]] || [[ "$filename" == *.config ]] || [[ "$filename" == *.CONF ]]; then
-                    TARGET_CONFIG_COUNT=$((TARGET_CONFIG_COUNT + 1))
-                    echo "  ⚙️ $filename ($filesize)"
-                  else
-                    TARGET_OTHER_COUNT=$((TARGET_OTHER_COUNT + 1))
-                    echo "  📁 $filename ($filesize)"
-                  fi
-                done
-                
-                # 显示统计结果
-                echo ""
-                echo "📈 目标目录统计汇总:"
-                echo "  总文件数: $TARGET_TOTAL_FILES 个"
-                echo "  📦 IPK文件: $TARGET_IPK_COUNT 个"
-                echo "  📜 脚本文件: $TARGET_SCRIPT_COUNT 个"
-                echo "  ⚙️ 配置文件: $TARGET_CONFIG_COUNT 个"
-                echo "  📁 其他文件: $TARGET_OTHER_COUNT 个"
-              fi
+              # 直接使用find和wc统计，避免复杂的管道和循环
+              TARGET_TOTAL_FILES=$(find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | wc -l)
+              TARGET_IPK_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -type f -iname "*.ipk" 2>/dev/null | wc -l)
+              TARGET_SCRIPT_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -type f \( -iname "*.sh" -o -executable \) 2>/dev/null | wc -l)
+              TARGET_CONFIG_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -type f \( -iname "*.conf" -o -iname "*.config" \) 2>/dev/null | wc -l)
+              TARGET_OTHER_COUNT=$((TARGET_TOTAL_FILES - TARGET_IPK_COUNT - TARGET_SCRIPT_COUNT - TARGET_CONFIG_COUNT))
+              
+              echo "  总文件数: $TARGET_TOTAL_FILES 个"
+              echo "  📦 IPK文件: $TARGET_IPK_COUNT 个"
+              echo "  📜 脚本文件: $TARGET_SCRIPT_COUNT 个"
+              echo "  ⚙️ 配置文件: $TARGET_CONFIG_COUNT 个"
+              echo "  📁 其他文件: $TARGET_OTHER_COUNT 个"
               
               if [ -f "/mnt/openwrt-build/files/etc/custom-files/smart_install.sh" ]; then
                 echo "✅ 智能安装脚本已创建"
@@ -967,32 +930,13 @@ jobs:
                 fi
               done
               
-              local total_files=$(find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | wc -l)
-              if [ $total_files -gt 10 ]; then
-                echo "  ... 还有 $((total_files - 10)) 个文件"
+              if [ $TARGET_TOTAL_FILES -gt 10 ]; then
+                echo "  ... 还有 $((TARGET_TOTAL_FILES - 10)) 个文件"
               fi
               
             else
               echo "❌ 自定义文件目录未创建"
               echo "💡 检查主脚本执行情况..."
-              
-              # 简单扫描自定义文件目录
-              echo "📁 简单扫描自定义文件目录:"
-              if [ -d "$CUSTOM_DIR" ]; then
-                local custom_file_count=$(find "$CUSTOM_DIR" -type f 2>/dev/null | wc -l)
-                local custom_folder_count=$(find "$CUSTOM_DIR" -type d 2>/dev/null | wc -l)
-                echo "  源目录文件数: $custom_file_count 个"
-                echo "  源目录文件夹数: $((custom_folder_count - 1)) 个"
-                
-                if [ $custom_file_count -gt 0 ]; then
-                  echo "  文件列表 (前5个):"
-                  find "$CUSTOM_DIR" -type f 2>/dev/null | head -5 | while read file; do
-                    FILENAME=$(basename "$file")
-                    FILESIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                    echo "  📄 $FILENAME ($FILESIZE)"
-                  done
-                fi
-              fi
             fi
             
           else
@@ -1452,32 +1396,14 @@ jobs:
           echo ""
           echo "📁 自定义文件集成状态（智能管理版）- 支持子文件夹:"
           if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
-            # 统计目标目录中的文件
-            CUSTOM_TOTAL_FILES=0
-            CUSTOM_IPK_COUNT=0
-            CUSTOM_SCRIPT_COUNT=0
-            CUSTOM_CONFIG_COUNT=0
-            CUSTOM_OTHER_COUNT=0
+            # 使用简单统计方法
+            CUSTOM_TOTAL_FILES=$(find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | wc -l)
+            CUSTOM_IPK_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -type f -iname "*.ipk" 2>/dev/null | wc -l)
+            CUSTOM_SCRIPT_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -type f \( -iname "*.sh" -o -executable \) 2>/dev/null | wc -l)
+            CUSTOM_CONFIG_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -type f \( -iname "*.conf" -o -iname "*.config" \) 2>/dev/null | wc -l)
+            CUSTOM_OTHER_COUNT=$((CUSTOM_TOTAL_FILES - CUSTOM_IPK_COUNT - CUSTOM_SCRIPT_COUNT - CUSTOM_CONFIG_COUNT))
             
             echo "  📊 文件统计:"
-            
-            # 统计目标目录中的文件
-            find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
-              CUSTOM_TOTAL_FILES=$((CUSTOM_TOTAL_FILES + 1))
-              local filename=$(basename "$file")
-              
-              if echo "$filename" | grep -qi "\.ipk$"; then
-                CUSTOM_IPK_COUNT=$((CUSTOM_IPK_COUNT + 1))
-              elif [[ "$filename" == *.sh ]] || [[ "$filename" == *.Sh ]] || [[ "$filename" == *.SH ]] || \
-                   head -2 "$file" 2>/dev/null | grep -q "^#!"; then
-                CUSTOM_SCRIPT_COUNT=$((CUSTOM_SCRIPT_COUNT + 1))
-              elif [[ "$filename" == *.conf ]] || [[ "$filename" == *.config ]] || [[ "$filename" == *.CONF ]]; then
-                CUSTOM_CONFIG_COUNT=$((CUSTOM_CONFIG_COUNT + 1))
-              else
-                CUSTOM_OTHER_COUNT=$((CUSTOM_OTHER_COUNT + 1))
-              fi
-            done
-            
             echo "  总文件数: $CUSTOM_TOTAL_FILES 个"
             echo "  📦 IPK文件: $CUSTOM_IPK_COUNT 个"
             echo "  📜 脚本文件: $CUSTOM_SCRIPT_COUNT 个"
