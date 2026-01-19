@@ -868,178 +868,29 @@ jobs:
             echo "✅ 自定义文件目录存在: $CUSTOM_DIR"
             
             # ============================================
-            # 1. 递归扫描所有文件和文件夹
+            # 1. 使用主脚本进行集成（修复版）
             # ============================================
-            echo "🧠 启动递归文件扫描系统..."
+            echo "🧠 使用主脚本进行集成（修复变量作用域问题）..."
+            echo "🚀 启动集成脚本..."
             
-            # 创建分析目录
-            ANALYSIS_DIR="/tmp/script-analysis-$(date +%s)"
-            mkdir -p "$ANALYSIS_DIR"
-            
-            # 递归扫描所有文件
-            echo "📁 递归扫描所有文件和子文件夹..."
-            
-            # 初始化统计变量（使用普通变量，不使用local）
-            TOTAL_FILES=0
-            TOTAL_FOLDERS=0
-            CHINESE_FILES=0
-            IPK_COUNT=0
-            SCRIPT_COUNT=0
-            CONFIG_COUNT=0
-            OTHER_COUNT=0
-            
-            # 递归扫描函数 - 修复：使用普通变量，避免local作用域问题
-            recursive_scan() {
-              local current_dir="$1"
-              local indent="$2"
-              
-              # 使用find命令递归扫描，确保所有文件都被找到
-              find "$current_dir" -mindepth 1 2>/dev/null | while IFS= read -r item; do
-                [ -z "$item" ] && continue
-                
-                local item_name=$(basename "$item")
-                local relative_path="${item#$CUSTOM_DIR/}"
-                
-                # 如果是目录
-                if [ -d "$item" ]; then
-                  TOTAL_FOLDERS=$((TOTAL_FOLDERS + 1))
-                  echo "${indent}📁 文件夹: $item_name/"
-                  
-                # 如果是文件
-                elif [ -f "$item" ]; then
-                  TOTAL_FILES=$((TOTAL_FILES + 1))
-                  local filesize=$(ls -lh "$item" 2>/dev/null | awk '{print $5}' || echo "未知")
-                  
-                  # 检测中文文件名
-                  if echo "$item_name" | grep -q -P '[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}]' || \
-                     echo "$item_name" | grep -q -E "备份|恢复|安装|配置|设置|脚本|文件|固件|插件|网络|系统|路由|无线"; then
-                    CHINESE_FILES=$((CHINESE_FILES + 1))
-                  fi
-                  
-                  # 文件类型统计
-                  if echo "$item_name" | grep -qi "\.ipk$"; then
-                    IPK_COUNT=$((IPK_COUNT + 1))
-                    echo "${indent}📦 IPK文件: $item_name ($filesize)"
-                  elif [[ "$item_name" == *.sh ]] || [[ "$item_name" == *.Sh ]] || [[ "$item_name" == *.SH ]] || \
-                       head -2 "$item" 2>/dev/null | grep -q "^#!"; then
-                    SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
-                    
-                    # 脚本分析逻辑
-                    local script_type="general"
-                    local script_priority=50
-                    local script_content=$(head -100 "$item" 2>/dev/null || echo "")
-                    
-                    if echo "$script_content" | grep -qi "crontab\|cron\.d\|定时任务\|计划任务"; then
-                      script_type="cron"
-                      script_priority=30
-                    elif echo "$script_content" | grep -qi "network\|firewall\|network\.config\|防火墙\|网络设置"; then
-                      script_type="network"
-                      script_priority=20
-                    elif echo "$script_content" | grep -qi "opkg\|install\|package\|安装\|包管理"; then
-                      script_type="package"
-                      script_priority=10
-                    elif echo "$script_content" | grep -qi "service\|启动\|停止\|restart\|start\|stop"; then
-                      script_type="service"
-                      script_priority=40
-                    elif echo "$script_content" | grep -qi "config\|配置\|设置\|set\."; then
-                      script_type="config"
-                      script_priority=35
-                    elif echo "$script_content" | grep -qi "backup\|restore\|备份\|恢复"; then
-                      script_type="backup"
-                      script_priority=60
-                    fi
-                    
-                    # 保存分析结果
-                    echo "$item_name:$script_type:$script_priority:$relative_path" >> "$ANALYSIS_DIR/scripts.txt"
-                    
-                    # 显示分析结果
-                    case "$script_type" in
-                      "package") echo "${indent}📜 包安装脚本: $item_name (优先级: $script_priority)" ;;
-                      "network") echo "${indent}🌐 网络脚本: $item_name (优先级: $script_priority)" ;;
-                      "cron") echo "${indent}📅 定时任务: $item_name (优先级: $script_priority)" ;;
-                      "service") echo "${indent}⚙️ 服务脚本: $item_name (优先级: $script_priority)" ;;
-                      "config") echo "${indent}⚙️ 配置脚本: $item_name (优先级: $script_priority)" ;;
-                      "backup") echo "${indent}💾 备份脚本: $item_name (优先级: $script_priority)" ;;
-                      *) echo "${indent}📜 通用脚本: $item_name (优先级: $script_priority)" ;;
-                    esac
-                  elif [[ "$item_name" == *.conf ]] || [[ "$item_name" == *.config ]] || [[ "$item_name" == *.CONF ]]; then
-                    CONFIG_COUNT=$((CONFIG_COUNT + 1))
-                    echo "${indent}⚙️ 配置文件: $item_name ($filesize)"
-                  else
-                    OTHER_COUNT=$((OTHER_COUNT + 1))
-                    echo "${indent}📁 其他文件: $item_name ($filesize)"
-                  fi
-                fi
-              done
-            }
-            
-            # 开始递归扫描
-            recursive_scan "$CUSTOM_DIR" ""
-            
-            # ============================================
-            # 2. 显示统计信息
-            # ============================================
-            echo ""
-            echo "📊 文件统计:"
-            echo "  扫描完成！"
-            echo "  文件总数: $TOTAL_FILES 个"
-            echo "  文件夹数: $TOTAL_FOLDERS 个"
-            echo "  📦 IPK文件: $IPK_COUNT 个"
-            echo "  📜 脚本文件: $SCRIPT_COUNT 个"
-            echo "  ⚙️ 配置文件: $CONFIG_COUNT 个"
-            echo "  📁 其他文件: $OTHER_COUNT 个"
-            echo "  🇨🇳 中文文件: $CHINESE_FILES 个"
-            
-            # ============================================
-            # 3. 显示脚本执行顺序
-            # ============================================
-            if [ -f "$ANALYSIS_DIR/scripts.txt" ] && [ $SCRIPT_COUNT -gt 0 ]; then
-              echo ""
-              echo "🔢 脚本执行顺序 (按优先级排序):"
-              echo "----------------------------------------"
-              sort -t':' -k3n "$ANALYSIS_DIR/scripts.txt" | while IFS=':' read -r name type priority path; do
-                case "$type" in
-                  "package") icon="📦" ;;
-                  "network") icon="🌐" ;;
-                  "cron") icon="📅" ;;
-                  "service") icon="⚙️" ;;
-                  "config") icon="⚙️" ;;
-                  "backup") icon="💾" ;;
-                  *) icon="📜" ;;
-                esac
-                printf "  %-3s %-12s %-25s %s\n" "$priority" "$icon" "$name" "$path"
-              done
-              echo "----------------------------------------"
-              echo "💡 优先级说明: 数字越小越先执行"
-            fi
-            
-            # ============================================
-            # 4. 冲突检测
-            # ============================================
-            if [ $SCRIPT_COUNT -gt 1 ]; then
-              echo ""
-              echo "⚠️ 脚本冲突检测..."
-              echo "  正在检查脚本冲突..."
-              echo "  💡 支持子文件夹结构，智能安装脚本会处理文件夹层级"
-            fi
-            
-            # ============================================
-            # 5. 执行集成
-            # ============================================
-            echo ""
-            echo "🚀 开始执行自定义文件集成（支持子文件夹结构）..."
+            # 执行集成脚本
             "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
             
+            INTEGRATE_EXIT_CODE=$?
+            if [ $INTEGRATE_EXIT_CODE -ne 0 ]; then
+              echo "⚠️ 警告: 自定义文件集成过程中出现错误，退出代码: $INTEGRATE_EXIT_CODE"
+              echo "💡 将尝试手动扫描文件..."
+            fi
+            
             # ============================================
-            # 6. 验证集成结果 - 修复：正确统计文件
+            # 2. 手动验证集成结果
             # ============================================
-            echo ""
             echo "🔍 验证集成结果..."
             if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
               echo "✅ 自定义文件集成成功"
               echo "📁 目标目录: /mnt/openwrt-build/files/etc/custom-files"
               
-              # 显示目标目录结构 - 修复：正确统计和显示
+              # 显示目标目录结构
               echo "📊 目标目录文件统计:"
               TARGET_TOTAL_FILES=0
               TARGET_IPK_COUNT=0
@@ -1047,47 +898,102 @@ jobs:
               TARGET_CONFIG_COUNT=0
               TARGET_OTHER_COUNT=0
               
-              # 统计目标目录中的文件
-              find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
-                TARGET_TOTAL_FILES=$((TARGET_TOTAL_FILES + 1))
-                local filename=$(basename "$file")
-                local filesize=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+              # 使用主脚本中的统计变量
+              if [ -n "$INTEGRATE_TOTAL_FILES" ]; then
+                echo "  总文件数: $INTEGRATE_TOTAL_FILES 个（从主脚本获取）"
+                echo "  📦 IPK文件: $INTEGRATE_IPK_COUNT 个"
+                echo "  📜 脚本文件: $INTEGRATE_SCRIPT_COUNT 个"
+                echo "  ⚙️ 配置文件: $INTEGRATE_CONFIG_COUNT 个"
+                echo "  📁 其他文件: $INTEGRATE_OTHER_COUNT 个"
+                echo "  📁 子文件夹: $INTEGRATE_FOLDER_COUNT 个"
+                echo "  🇨🇳 中文文件: $INTEGRATE_CHINESE_COUNT 个"
+              else
+                # 如果主脚本没有输出统计，手动统计
+                echo "📊 手动统计目标目录文件..."
                 
-                if echo "$filename" | grep -qi "\.ipk$"; then
-                  TARGET_IPK_COUNT=$((TARGET_IPK_COUNT + 1))
-                  echo "  📦 $filename ($filesize)"
-                elif [[ "$filename" == *.sh ]] || [[ "$filename" == *.Sh ]] || [[ "$filename" == *.SH ]] || \
-                     head -2 "$file" 2>/dev/null | grep -q "^#!"; then
-                  TARGET_SCRIPT_COUNT=$((TARGET_SCRIPT_COUNT + 1))
-                  echo "  📜 $filename ($filesize)"
-                elif [[ "$filename" == *.conf ]] || [[ "$filename" == *.config ]] || [[ "$filename" == *.CONF ]]; then
-                  TARGET_CONFIG_COUNT=$((TARGET_CONFIG_COUNT + 1))
-                  echo "  ⚙️ $filename ($filesize)"
-                else
-                  TARGET_OTHER_COUNT=$((TARGET_OTHER_COUNT + 1))
-                  echo "  📁 $filename ($filesize)"
-                fi
-              done
-              
-              # 显示统计结果
-              echo ""
-              echo "📈 目标目录统计汇总:"
-              echo "  总文件数: $TARGET_TOTAL_FILES 个"
-              echo "  📦 IPK文件: $TARGET_IPK_COUNT 个"
-              echo "  📜 脚本文件: $TARGET_SCRIPT_COUNT 个"
-              echo "  ⚙️ 配置文件: $TARGET_CONFIG_COUNT 个"
-              echo "  📁 其他文件: $TARGET_OTHER_COUNT 个"
+                # 统计目标目录中的文件
+                find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
+                  TARGET_TOTAL_FILES=$((TARGET_TOTAL_FILES + 1))
+                  local filename=$(basename "$file")
+                  local filesize=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                  
+                  if echo "$filename" | grep -qi "\.ipk$"; then
+                    TARGET_IPK_COUNT=$((TARGET_IPK_COUNT + 1))
+                    echo "  📦 $filename ($filesize)"
+                  elif [[ "$filename" == *.sh ]] || [[ "$filename" == *.Sh ]] || [[ "$filename" == *.SH ]] || \
+                       head -2 "$file" 2>/dev/null | grep -q "^#!"; then
+                    TARGET_SCRIPT_COUNT=$((TARGET_SCRIPT_COUNT + 1))
+                    echo "  📜 $filename ($filesize)"
+                  elif [[ "$filename" == *.conf ]] || [[ "$filename" == *.config ]] || [[ "$filename" == *.CONF ]]; then
+                    TARGET_CONFIG_COUNT=$((TARGET_CONFIG_COUNT + 1))
+                    echo "  ⚙️ $filename ($filesize)"
+                  else
+                    TARGET_OTHER_COUNT=$((TARGET_OTHER_COUNT + 1))
+                    echo "  📁 $filename ($filesize)"
+                  fi
+                done
+                
+                # 显示统计结果
+                echo ""
+                echo "📈 目标目录统计汇总:"
+                echo "  总文件数: $TARGET_TOTAL_FILES 个"
+                echo "  📦 IPK文件: $TARGET_IPK_COUNT 个"
+                echo "  📜 脚本文件: $TARGET_SCRIPT_COUNT 个"
+                echo "  ⚙️ 配置文件: $TARGET_CONFIG_COUNT 个"
+                echo "  📁 其他文件: $TARGET_OTHER_COUNT 个"
+              fi
               
               if [ -f "/mnt/openwrt-build/files/etc/custom-files/smart_install.sh" ]; then
                 echo "✅ 智能安装脚本已创建"
                 echo "🔧 智能安装脚本权限: $(ls -la "/mnt/openwrt-build/files/etc/custom-files/smart_install.sh" 2>/dev/null | awk '{print $1}')"
               fi
+              
+              # 显示文件列表（前10个）
+              echo ""
+              echo "📋 文件列表 (前10个):"
+              find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | head -10 | while read file; do
+                FILENAME=$(basename "$file")
+                FILESIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                
+                if echo "$FILENAME" | grep -qi "\.ipk$"; then
+                  echo "  📦 $FILENAME ($FILESIZE)"
+                elif [[ "$FILENAME" == *.sh ]] || [[ "$FILENAME" == *.Sh ]] || [[ "$FILENAME" == *.SH ]] || \
+                     head -2 "$file" 2>/dev/null | grep -q "^#!"; then
+                  echo "  📜 $FILENAME ($FILESIZE)"
+                elif [[ "$FILENAME" == *.conf ]] || [[ "$FILENAME" == *.config ]] || [[ "$FILENAME" == *.CONF ]]; then
+                  echo "  ⚙️ $FILENAME ($FILESIZE)"
+                else
+                  echo "  📁 $FILENAME ($FILESIZE)"
+                fi
+              done
+              
+              local total_files=$(find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | wc -l)
+              if [ $total_files -gt 10 ]; then
+                echo "  ... 还有 $((total_files - 10)) 个文件"
+              fi
+              
             else
               echo "❌ 自定义文件目录未创建"
+              echo "💡 检查主脚本执行情况..."
+              
+              # 简单扫描自定义文件目录
+              echo "📁 简单扫描自定义文件目录:"
+              if [ -d "$CUSTOM_DIR" ]; then
+                local custom_file_count=$(find "$CUSTOM_DIR" -type f 2>/dev/null | wc -l)
+                local custom_folder_count=$(find "$CUSTOM_DIR" -type d 2>/dev/null | wc -l)
+                echo "  源目录文件数: $custom_file_count 个"
+                echo "  源目录文件夹数: $((custom_folder_count - 1)) 个"
+                
+                if [ $custom_file_count -gt 0 ]; then
+                  echo "  文件列表 (前5个):"
+                  find "$CUSTOM_DIR" -type f 2>/dev/null | head -5 | while read file; do
+                    FILENAME=$(basename "$file")
+                    FILESIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                    echo "  📄 $FILENAME ($FILESIZE)"
+                  done
+                fi
+              fi
             fi
-            
-            # 清理临时文件
-            rm -rf "$ANALYSIS_DIR"
             
           else
             echo "ℹ️ 自定义文件目录不存在: $CUSTOM_DIR"
@@ -1542,11 +1448,11 @@ jobs:
           
           echo "  💡 这是正常的：系统编译器编译工具链，SDK编译器编译固件"
           
-          # 自定义文件集成状态（智能管理版）- 支持子文件夹 - 修复：正确统计和显示
+          # 自定义文件集成状态（智能管理版）- 支持子文件夹
           echo ""
           echo "📁 自定义文件集成状态（智能管理版）- 支持子文件夹:"
           if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
-            # 初始化统计变量
+            # 统计目标目录中的文件
             CUSTOM_TOTAL_FILES=0
             CUSTOM_IPK_COUNT=0
             CUSTOM_SCRIPT_COUNT=0
