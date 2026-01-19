@@ -2081,76 +2081,73 @@ detect_chinese_characters() {
     return 1  # 不包含中文
 }
 
-# 脚本智能分析函数
+# 脚本分析函数
 analyze_script() {
-    local script_path="$1"
-    local script_name=$(basename "$script_path")
+    local script="$1"
+    local script_name=$(basename "$script")
     
-    log "   分析脚本: $script_name"
-    
-    # 初始化变量
-    local script_type="unknown"
+    # 默认类型和优先级
+    local script_type="misc"
     local priority=50
-    local conflicts=""
-    local dependencies=""
     
-    # 读取脚本前100行
-    local script_head=$(head -100 "$script_path" 2>/dev/null || echo "")
+    # 读取脚本内容（前50行通常足够判断）
+    local content=$(head -50 "$script" 2>/dev/null)
     
-    # 判断脚本类型
-    if echo "$script_head" | grep -qi "crontab\|cron\.d\|定时任务\|计划任务"; then
-        script_type="cron"
-        priority=30
-        conflicts="crontabs/root"
-        log "     📅 分类: 定时任务脚本 (优先级: $priority)"
-    elif echo "$script_head" | grep -qi "network\|firewall\|network\.config\|防火墙\|网络设置"; then
-        script_type="network"
-        priority=20
-        conflicts="config/network;config/firewall"
-        log "🌐 分类: 网络配置脚本 (优先级: $priority)"
-    elif echo "$script_head" | grep -qi "opkg\|install\|package\|安装\|包管理"; then
-        script_type="package"
-        priority=10
-        log "📦 分类: 包安装脚本 (优先级: $priority)"
-    elif echo "$script_head" | grep -qi "service\|启动\|停止\|restart\|start\|stop"; then
-        script_type="service"
-        priority=40
-        log "⚙️ 分类: 服务管理脚本 (优先级: $priority)"
-    elif echo "$script_head" | grep -qi "config\|配置\|设置\|set\."; then
-        script_type="config"
-        priority=35
-        log "⚙️ 分类: 配置文件脚本 (优先级: $priority)"
-    elif echo "$script_head" | grep -qi "backup\|restore\|备份\|恢复"; then
-        script_type="backup"
-        priority=60
-        log "💾 分类: 备份恢复脚本 (优先级: $priority)"
-    else
-        script_type="general"
-        priority=50
-        log "📄 分类: 通用脚本 (优先级: $priority)"
+    # 根据文件名判断
+    case "$script_name" in
+        *package*|*install*|*opkg*|*安装*|*包管理*)
+            script_type="package"
+            priority=10
+            ;;
+        *network*|*firewall*|*网络*|*防火墙*)
+            script_type="network"
+            priority=20
+            ;;
+        *cron*|*crontab*|*定时*|*计划任务*)
+            script_type="cron"
+            priority=30
+            ;;
+        *config*|*配置*|*设置*)
+            script_type="config"
+            priority=35
+            ;;
+        *service*|*启动*|*停止*|*restart*)
+            script_type="service"
+            priority=40
+            ;;
+        *backup*|*restore*|*备份*|*恢复*)
+            script_type="backup"
+            priority=60
+            ;;
+    esac
+    
+    # 如果文件名无法判断，尝试从内容判断
+    if [ "$script_type" = "misc" ]; then
+        if echo "$content" | grep -qi "opkg\|install\|package\|安装\|包管理"; then
+            script_type="package"
+            priority=10
+        elif echo "$content" | grep -qi "network\|firewall\|网络设置\|防火墙"; then
+            script_type="network"
+            priority=20
+        elif echo "$content" | grep -qi "crontab\|cron\|定时任务\|计划任务"; then
+            script_type="cron"
+            priority=30
+        elif echo "$content" | grep -qi "config\|配置\|设置"; then
+            script_type="config"
+            priority=35
+        elif echo "$content" | grep -qi "service\|启动\|停止\|restart"; then
+            script_type="service"
+            priority=40
+        elif echo "$content" | grep -qi "backup\|restore\|备份\|恢复"; then
+            script_type="backup"
+            priority=60
+        fi
     fi
     
-    # 检测冲突文件
-    if echo "$script_head" | grep -q "/etc/crontabs/root"; then
-        conflicts="${conflicts};crontabs/root"
-        log "⚠️ 冲突: 修改 /etc/crontabs/root"
-    fi
-    
-    if echo "$script_head" | grep -q "/etc/config/network"; then
-        conflicts="${conflicts};config/network"
-        log "⚠️ 冲突: 修改 /etc/config/network"
-    fi
-    
-    if echo "$script_head" | grep -q "/etc/config/firewall"; then
-        conflicts="${conflicts};config/firewall"
-        log "⚠️ 冲突: 修改 /etc/config/firewall"
-    fi
-    
-    # 返回结果
-    echo "$script_name:$script_type:$priority:$conflicts:$dependencies"
+    echo "$script_name:$script_type:$priority"
 }
 
-# 集成自定义文件函数（智能脚本管理版）- 修复IPK安装逻辑，支持子文件夹 - 修复脚本执行问题和统计变量问题
+# 集成自定义文件函数（智能脚本管理版）- 修复统计和文件名问题
 integrate_custom_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -2162,17 +2159,6 @@ integrate_custom_files() {
     if [ ! -d "$custom_dir" ]; then
         log "ℹ️ 自定义文件目录不存在: $custom_dir"
         log "💡 如需集成自定义文件，请在 firmware-config/custom-files/ 目录中添加文件"
-        log "📁 支持文件夹结构:"
-        log "  firmware-config/custom-files/"
-        log "  ├── 子文件夹1/"
-        log "  │   ├── 脚本1.sh"
-        log "  │   └── 配置文件.conf"
-        log "  ├── 子文件夹2/"
-        log "  │   ├── 脚本2.sh"
-        log "  │   └── 软件包.ipk"
-        log "  └── 直接文件/"
-        log "      ├── 直接脚本.sh"
-        log "      └── 直接配置.conf"
         return 0
     fi
     
@@ -2190,18 +2176,18 @@ integrate_custom_files() {
     local analysis_dir="/tmp/script-analysis-$(date +%s)"
     mkdir -p "$analysis_dir"
     
-    # 定义统计变量
-    declare -i integrate_ipk_count=0
-    declare -i integrate_script_count=0
-    declare -i integrate_config_count=0
-    declare -i integrate_other_count=0
-    declare -i integrate_chinese_count=0
-    declare -i integrate_copied_count=0
-    declare -i integrate_folder_count=0
-    declare -i integrate_total_files=0
+    # 3. 全局统计变量（不使用local，避免作用域问题）
+    integrate_ipk_count=0
+    integrate_script_count=0
+    integrate_config_count=0
+    integrate_other_count=0
+    integrate_chinese_count=0
+    integrate_copied_count=0
+    integrate_folder_count=0
+    integrate_total_files=0
     
-    # 3. 创建递归复制函数，支持子文件夹结构 - 修复：避免使用local统计变量
-    recursive_copy_files_fixed() {
+    # 4. 创建递归复制函数，支持子文件夹和中文文件名
+    recursive_copy_files() {
         local src_dir="$1"
         local dst_dir="$2"
         local relative_path="${3:-}"
@@ -2209,27 +2195,27 @@ integrate_custom_files() {
         # 确保目标目录存在
         mkdir -p "$dst_dir"
         
-        # 使用while循环处理find输出，避免子shell问题
-        find "$src_dir" -mindepth 1 -maxdepth 1 2>/dev/null | while IFS= read -r src_item; do
-            [ -z "$src_item" ] && continue
+        # 处理当前目录下的所有项
+        for src_item in "$src_dir"/*; do
+            [ ! -e "$src_item" ] && continue  # 跳过空目录
             
             local src_name=$(basename "$src_item")
             local dst_name="$src_name"
             
             # 如果是目录，递归处理
             if [ -d "$src_item" ]; then
-                integrate_folder_count+=1
+                integrate_folder_count=$((integrate_folder_count + 1))
                 log "  发现子文件夹: $relative_path$src_name/"
                 
                 # 递归处理子文件夹
-                recursive_copy_files_fixed "$src_item" "$dst_dir/$src_name" "$relative_path$src_name/"
+                recursive_copy_files "$src_item" "$dst_dir/$src_name" "$relative_path$src_name/"
                 continue
             fi
             
             # 处理文件
             local full_dst_path="$dst_dir/$dst_name"
             
-            # 如果文件名冲突，添加前缀
+            # 如果文件名冲突，添加前缀（保留原文件名）
             if [ -f "$full_dst_path" ]; then
                 local counter=1
                 while [ -f "${dst_dir}/${counter}_${dst_name}" ]; do
@@ -2241,51 +2227,56 @@ integrate_custom_files() {
             
             # 检测中文文件名
             if detect_chinese_characters "$src_name"; then
-                integrate_chinese_count+=1
+                integrate_chinese_count=$((integrate_chinese_count + 1))
                 log "    发现中文文件名: $relative_path$src_name"
             fi
             
-            # 文件类型统计
+            # 文件类型统计和智能重命名（添加数字前缀）
             if echo "$src_name" | grep -qi "\.ipk$"; then
-                integrate_ipk_count+=1
-                dst_name="package_${integrate_ipk_count}.ipk"
-                log "    📦 IPK文件: $relative_path$src_name -> $dst_name"
+                integrate_ipk_count=$((integrate_ipk_count + 1))
+                # IPK文件保持原文件名
+                log "    📦 IPK文件: $relative_path$src_name"
             elif [[ "$src_name" == *.sh ]] || [[ "$src_name" == *.Sh ]] || [[ "$src_name" == *.SH ]] || \
                  head -2 "$src_item" 2>/dev/null | grep -q "^#!"; then
-                integrate_script_count+=1
+                integrate_script_count=$((integrate_script_count + 1))
                 
                 # 分析脚本并获取优先级
                 local analysis_result=$(analyze_script "$src_item")
                 local script_type=$(echo "$analysis_result" | cut -d':' -f2)
                 local priority=$(echo "$analysis_result" | cut -d':' -f3)
                 
-                # 根据优先级重命名脚本
+                # 根据优先级添加数字前缀，保留原文件名
                 case "$script_type" in
-                    "package") dst_name="10_package_${integrate_script_count}.sh" ;;
-                    "network") dst_name="20_network_${integrate_script_count}.sh" ;;
-                    "cron") dst_name="30_cron_${integrate_script_count}.sh" ;;
-                    "config") dst_name="35_config_${integrate_script_count}.sh" ;;
-                    "service") dst_name="40_service_${integrate_script_count}.sh" ;;
-                    "backup") dst_name="60_backup_${integrate_script_count}.sh" ;;
-                    *) dst_name="50_general_${integrate_script_count}.sh" ;;
+                    "package") prefix="10_" ;;
+                    "network") prefix="20_" ;;
+                    "cron") prefix="30_" ;;
+                    "config") prefix="35_" ;;
+                    "service") prefix="40_" ;;
+                    "backup") prefix="60_" ;;
+                    *) prefix="50_" ;;
                 esac
+                
+                # 添加数字前缀，保留原文件名（包括中文）
+                dst_name="${prefix}${src_name}"
                 
                 log "    📜 脚本文件: $relative_path$src_name -> $dst_name (类型: $script_type, 优先级: $priority)"
                 
                 # 保存分析结果
                 echo "$analysis_result:$relative_path$src_name" >> "$analysis_dir/scripts.txt"
             elif [[ "$src_name" == *.conf ]] || [[ "$src_name" == *.config ]] || [[ "$src_name" == *.CONF ]]; then
-                integrate_config_count+=1
-                log "    ⚙️ 配置文件: $relative_path$src_name"
+                integrate_config_count=$((integrate_config_count + 1))
+                # 配置文件保持原文件名
+                log "    ⚙️ 配置文件: $relative路径$src_name"
             else
-                integrate_other_count+=1
-                log "    📁 其他文件: $relative_path$src_name"
+                integrate_other_count=$((integrate_other_count + 1))
+                # 其他文件保持原文件名
+                log "    📁 其他文件: $relative路径$src_name"
             fi
             
-            # 复制文件
+            # 复制文件（保留原文件名）
             if cp "$src_item" "$full_dst_path" 2>/dev/null; then
-                integrate_copied_count+=1
-                integrate_total_files+=1
+                integrate_copied_count=$((integrate_copied_count + 1))
+                integrate_total_files=$((integrate_total_files + 1))
                 # 确保脚本文件有执行权限
                 if [[ "$dst_name" == *.sh ]] || head -2 "$full_dst_path" 2>/dev/null | grep -q "^#!"; then
                     chmod +x "$full_dst_path" 2>/dev/null || true
@@ -2296,11 +2287,11 @@ integrate_custom_files() {
         done
     }
     
-    # 4. 复制所有文件并进行分析
+    # 5. 复制所有文件并进行分析
     log "🔧 步骤2: 递归复制所有自定义文件并进行分析"
-    recursive_copy_files_fixed "$custom_dir" "$custom_files_dir"
+    recursive_copy_files "$custom_dir" "$custom_files_dir" ""
     
-    # 5. 显示统计信息
+    # 6. 显示统计信息
     log "📊 文件统计:"
     log "  📦 IPK文件: $integrate_ipk_count 个"
     log "  📜 脚本文件: $integrate_script_count 个"
@@ -2310,7 +2301,7 @@ integrate_custom_files() {
     log "  🇨🇳 中文文件: $integrate_chinese_count 个"
     log "  📋 总复制文件: $integrate_copied_count 个"
     
-    # 6. 创建智能安装脚本 - 修复：确保脚本能正确执行所有文件
+    # 7. 创建智能安装脚本
     log "🔧 步骤3: 创建智能安装脚本"
     
     local smart_script="$custom_files_dir/smart_install.sh"
@@ -2318,7 +2309,7 @@ integrate_custom_files() {
 #!/bin/sh
 # 智能脚本安装管理器
 # 自动按优先级执行脚本，避免冲突
-# 支持子文件夹结构
+# 支持子文件夹结构和中文文件名
 
 LOG_FILE="/tmp/smart-install.log"
 CUSTOM_DIR="/etc/custom-files"
@@ -2326,6 +2317,39 @@ CUSTOM_DIR="/etc/custom-files"
 echo "=== 智能脚本安装管理器 ===" > $LOG_FILE
 echo "开始时间: $(date)" >> $LOG_FILE
 echo "" >> $LOG_FILE
+
+# 获取脚本优先级
+get_script_priority() {
+    local script="$1"
+    local priority=50  # 默认优先级
+    
+    # 从脚本文件名前缀判断优先级（数字前缀）
+    local basename=$(basename "$script")
+    
+    # 检查是否有数字前缀（如 "10_中文脚本.sh"）
+    if [[ "$basename" =~ ^([0-9]+)_ ]]; then
+        priority="${BASH_REMATCH[1]}"
+    else
+        # 从脚本内容判断类型
+        local content=$(head -20 "$script" 2>/dev/null)
+        
+        if echo "$content" | grep -qi "opkg\|install\|package\|安装\|包管理"; then
+            priority=10
+        elif echo "$content" | grep -qi "network\|firewall\|网络设置\|防火墙"; then
+            priority=20
+        elif echo "$content" | grep -qi "crontab\|cron\|定时任务\|计划任务"; then
+            priority=30
+        elif echo "$content" | grep -qi "config\|配置\|设置"; then
+            priority=35
+        elif echo "$content" | grep -qi "service\|启动\|停止\|restart"; then
+            priority=40
+        elif echo "$content" | grep -qi "backup\|restore\|备份\|恢复"; then
+            priority=60
+        fi
+    fi
+    
+    echo $priority
+}
 
 # 安装IPK包
 install_ipk_packages() {
@@ -2335,7 +2359,7 @@ install_ipk_packages() {
     local ipk_count=0
     local success_count=0
     
-    # 递归查找所有IPK文件
+    # 查找所有IPK文件
     find "$CUSTOM_DIR" -type f -iname "*.ipk" 2>/dev/null | while read ipk_file; do
         ipk_count=$((ipk_count + 1))
         local filename=$(basename "$ipk_file")
@@ -2366,11 +2390,13 @@ execute_script() {
     # 确保有执行权限
     chmod +x "$script" 2>/dev/null
     
-    # 切换到脚本所在目录（如果是子文件夹中的脚本）
+    # 切换到脚本所在目录
     local script_dir=$(dirname "$script")
     cd "$script_dir" 2>/dev/null || cd /
     
-    # 执行脚本
+    # 执行脚本（支持中文路径和文件名）
+    LANG=zh_CN.UTF-8
+    LC_ALL=zh_CN.UTF-8
     sh "$script" >> $LOG_FILE 2>&1
     local exit_code=$?
     
@@ -2384,56 +2410,6 @@ execute_script() {
         echo "⚠️ $script_name 执行失败 (代码: $exit_code)" >> $LOG_FILE
         return 1
     fi
-}
-
-# 合并定时任务
-merge_crontabs() {
-    echo "" >> $LOG_FILE
-    echo "=== 合并定时任务 ===" >> $LOG_FILE
-    
-    if [ -f "/etc/crontabs/root" ]; then
-        echo "原始定时任务:" >> $LOG_FILE
-        cat "/etc/crontabs/root" >> $LOG_FILE 2>/dev/null || true
-        
-        # 去重并排序
-        sort -u "/etc/crontabs/root" -o "/etc/crontabs/root.tmp" 2>/dev/null && \
-        mv "/etc/crontabs/root.tmp" "/etc/crontabs/root" 2>/dev/null || true
-        
-        echo "" >> $LOG_FILE
-        echo "合并后的定时任务:" >> $LOG_FILE
-        cat "/etc/crontabs/root" >> $LOG_FILE 2>/dev/null || true
-    fi
-}
-
-# 获取脚本优先级
-get_script_priority() {
-    local script="$1"
-    local priority=50  # 默认优先级
-    
-    # 从脚本文件名前缀判断优先级
-    local basename=$(basename "$script")
-    if [[ "$basename" =~ ^([0-9]+)_ ]]; then
-        priority="${BASH_REMATCH[1]}"
-    else
-        # 从脚本内容判断类型
-        local content=$(head -20 "$script" 2>/dev/null)
-        
-        if echo "$content" | grep -qi "opkg\|install\|package\|安装\|包管理"; then
-            priority=10
-        elif echo "$content" | grep -qi "network\|firewall\|网络设置\|防火墙"; then
-            priority=20
-        elif echo "$content" | grep -qi "crontab\|cron\|定时任务\|计划任务"; then
-            priority=30
-        elif echo "$content" | grep -qi "config\|配置\|设置"; then
-            priority=35
-        elif echo "$content" | grep -qi "service\|启动\|停止\|restart"; then
-            priority=40
-        elif echo "$content" | grep -qi "backup\|restore\|备份\|恢复"; then
-            priority=60
-        fi
-    fi
-    
-    echo $priority
 }
 
 # 主安装流程
@@ -2468,10 +2444,6 @@ if [ -f "$SCRIPT_LIST_FILE" ]; then
 fi
 
 echo "" >> $LOG_FILE
-echo "3. 合并定时任务..." >> $LOG_FILE
-merge_crontabs
-
-echo "" >> $LOG_FILE
 echo "=== 智能安装完成 ===" >> $LOG_FILE
 echo "结束时间: $(date)" >> $LOG_FILE
 echo "安装日志: $LOG_FILE"
@@ -2487,7 +2459,7 @@ EOF
     chmod +x "$smart_script"
     log "✅ 创建智能安装脚本: $smart_script"
     
-    # 7. 修改第一次开机脚本，使用智能安装器
+    # 8. 修改第一次开机脚本
     log "🔧 步骤4: 更新第一次开机脚本"
     
     local first_boot_dir="files/etc/uci-defaults"
@@ -2512,10 +2484,17 @@ if [ -d "$CUSTOM_DIR" ]; then
     FILE_COUNT=$(find "$CUSTOM_DIR" -type f ! -name "smart_install.sh" 2>/dev/null | wc -l)
     echo "📁 自定义文件数量: $FILE_COUNT 个" >> $LOG_FILE
     
+    # 显示所有文件列表
+    echo "📋 文件列表:" >> $LOG_FILE
+    find "$CUSTOM_DIR" -type f 2>/dev/null | sort | while read file; do
+        local filename=$(basename "$file")
+        local filesize=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+        echo "  📄 $filename ($filesize)" >> $LOG_FILE
+    done
+    
     # 使用智能安装管理器
     echo "🚀 启动智能安装管理器..." >> $LOG_FILE
     
-    # 确保脚本可执行
     if [ -x "$CUSTOM_DIR/smart_install.sh" ]; then
         echo "✅ 智能安装脚本可执行" >> $LOG_FILE
         "$CUSTOM_DIR/smart_install.sh"
@@ -2543,27 +2522,6 @@ EOF
     chmod +x "$first_boot_script"
     log "✅ 更新第一次开机脚本: $first_boot_script"
     
-    # 8. 显示脚本执行顺序
-    if [ -f "$analysis_dir/scripts.txt" ] && [ $integrate_script_count -gt 0 ]; then
-        log ""
-        log "🔢 脚本执行顺序 (按优先级排序):"
-        echo "----------------------------------------"
-        sort -t':' -k3n "$analysis_dir/scripts.txt" | while IFS=':' read -r name type priority conflicts deps original_path; do
-            case "$type" in
-                "package") icon="📦" ;;
-                "network") icon="🌐" ;;
-                "cron") icon="📅" ;;
-                "service") icon="⚙️" ;;
-                "config") icon="⚙️" ;;
-                "backup") icon="💾" ;;
-                *) icon="📜" ;;
-            esac
-            printf "  %-3s %-12s %-30s %s\n" "$priority" "$icon" "$name" "$original_path"
-        done
-        echo "----------------------------------------"
-        log "💡 优先级说明: 数字越小越先执行"
-    fi
-    
     # 9. 验证所有文件都被正确复制
     log "🔍 步骤5: 验证文件复制结果"
     local actual_file_count=$(find "$custom_files_dir" -type f 2>/dev/null | wc -l)
@@ -2573,16 +2531,13 @@ EOF
         log "✅ 文件复制验证通过"
         
         # 显示所有复制文件的列表
-        log "📋 复制的文件列表:"
-        find "$custom_files_dir" -type f 2>/dev/null | while read file; do
+        log "📋 复制的所有文件列表:"
+        find "$custom_files_dir" -type f 2>/dev/null | sort | while read file; do
             local filename=$(basename "$file")
             local filesize=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-            log "  📄 $filename ($filesize)"
-        done | head -20
-        
-        if [ $actual_file_count -gt 20 ]; then
-            log "  ... 还有 $((actual_file_count - 20)) 个文件"
-        fi
+            local filepath=$(echo "$file" | sed "s|^$custom_files_dir/||")
+            log "  📄 $filepath ($filesize)"
+        done
     else
         log "⚠️ 警告: 复制的文件数量 ($actual_file_count) 少于预期 ($integrate_copied_count)"
     fi
@@ -2598,8 +2553,7 @@ EOF
     log "  📁 子文件夹: $integrate_folder_count 个"
     log "  🇨🇳 中文文件: $integrate_chinese_count 个"
     log "  🧠 智能安装脚本: 已创建 (smart_install.sh)"
-    log "  🔢 执行顺序: 自动按优先级排序执行"
-    log "  ⚠️ 冲突处理: 自动合并定时任务"
+    log "  🔢 执行顺序: 按数字前缀排序 (10→20→30→35→40→50→60)"
     log "  📁 文件夹结构: 支持任意层级子文件夹"
     log "  📍 自定义文件位置: /etc/custom-files/"
     log "  🚀 安装方式: 第一次开机自动智能安装"
@@ -2610,17 +2564,195 @@ EOF
     
     if [ $integrate_copied_count -eq 0 ]; then
         log "⚠️ 警告: 自定义文件目录为空"
-        log "💡 支持的文件夹结构:"
-        log "  firmware-config/custom-files/"
-        log "  ├── 子文件夹1/"
-        log "  │   ├── 脚本1.sh"
-        log "  │   └── 配置文件.conf"
-        log "  ├── 子文件夹2/"
-        log "  │   ├── 脚本2.sh"
-        log "  │   └── 软件包.ipk"
-        log "  └── 直接文件/"
-        log "      ├── 直接脚本.sh"
-        log "      └── 直接配置.conf"
+        log "💡 支持的文件: .sh脚本、.ipk包、.conf配置文件等"
+    fi
+}
+
+pre_build_error_check() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 🚨 前置错误检查（修复23.05 SDK验证）==="
+    
+    local error_count=0
+    local warning_count=0
+    
+    # 显示当前环境变量
+    log "当前环境变量:"
+    log "  SELECTED_BRANCH: $SELECTED_BRANCH"
+    log "  TARGET: $TARGET"
+    log "  SUBTARGET: $SUBTARGET"
+    log "  DEVICE: $DEVICE"
+    log "  CONFIG_MODE: $CONFIG_MODE"
+    log "  COMPILER_DIR: $COMPILER_DIR"
+    
+    # 1. 检查配置文件
+    if [ ! -f ".config" ]; then
+        log "❌ 错误: .config 文件不存在"
+        error_count=$((error_count + 1))
+    else
+        log "✅ .config 文件存在"
+    fi
+    
+    # 2. 检查feeds
+    if [ ! -d "feeds" ]; then
+        log "❌ 错误: feeds 目录不存在"
+        error_count=$((error_count + 1))
+    else
+        log "✅ feeds 目录存在"
+    fi
+    
+    # 3. 检查依赖包
+    if [ ! -d "dl" ]; then
+        log "⚠️ 警告: dl 目录不存在，可能需要下载依赖"
+        warning_count=$((warning_count + 1))
+    else
+        local dl_count=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
+        log "✅ 依赖包数量: $dl_count 个"
+    fi
+    
+    # 4. 检查编译器状态
+    if [ -d "staging_dir" ]; then
+        local compiler_count=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" 2>/dev/null | wc -l)
+        if [ $compiler_count -eq 0 ]; then
+            log "ℹ️ 未找到已构建的编译器"
+            log "📌 已下载SDK编译器，无需自动构建"
+        else
+            log "✅ 已检测到编译器: $compiler_count 个"
+        fi
+    else
+        log "ℹ️ staging_dir目录不存在"
+        log "📌 将使用下载的SDK编译器进行构建"
+    fi
+    
+    # 5. 检查关键文件
+    local critical_files=("Makefile" "rules.mk" "Config.in" "feeds.conf.default")
+    for file in "${critical_files[@]}"; do
+        if [ -f "$file" ]; then
+            log "✅ 关键文件存在: $file"
+        else
+            log "❌ 错误: 关键文件不存在: $file"
+            error_count=$((error_count + 1))
+        fi
+    done
+    
+    # 6. 检查磁盘空间
+    local available_space=$(df /mnt --output=avail | tail -1)
+    local available_gb=$((available_space / 1024 / 1024))
+    log "磁盘可用空间: ${available_gb}G"
+    
+    if [ $available_gb -lt 10 ]; then
+        log "❌ 错误: 磁盘空间不足 (需要至少10G，当前${available_gb}G)"
+        error_count=$((error_count + 1))
+    elif [ $available_gb -lt 20 ]; then
+        log "⚠️ 警告: 磁盘空间较低 (建议至少20G，当前${available_gb}G)"
+        warning_count=$((warning_count + 1))
+    fi
+    
+    # 7. 检查内存
+    local total_mem=$(free -m | awk '/^Mem:/{print $2}')
+    log "系统内存: ${total_mem}MB"
+    
+    if [ $total_mem -lt 1024 ]; then
+        log "⚠️ 警告: 内存较低 (建议至少1GB)"
+        warning_count=$((warning_count + 1))
+    fi
+    
+    # 8. 检查预构建编译器文件 - 关键修复：简化23.05验证逻辑
+    log "🔧 检查预构建编译器文件..."
+    
+    # 简化验证逻辑，只做基本检查
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+        log "✅ 预构建编译器目录存在: $COMPILER_DIR"
+        log "📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
+        
+        # 放宽检查：只需要有编译器文件，不要求特定目录结构，排除虚假编译器
+        local gcc_files=$(find "$COMPILER_DIR" -type f -executable \
+          -name "*gcc" \
+          ! -name "*gcc-ar" \
+          ! -name "*gcc-ranlib" \
+          ! -name "*gcc-nm" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
+          2>/dev/null | wc -l)
+        
+        if [ $gcc_files -gt 0 ]; then
+            log "✅ 找到 $gcc_files 个GCC编译器文件"
+            
+            # 显示第一个GCC的版本信息
+            local first_gcc=$(find "$COMPILER_DIR" -type f -executable \
+              -name "*gcc" \
+              ! -name "*gcc-ar" \
+              ! -name "*gcc-ranlib" \
+              ! -name "*gcc-nm" \
+              ! -path "*dummy-tools*" \
+              ! -path "*scripts*" \
+              2>/dev/null | head -1)
+            
+            if [ -n "$first_gcc" ]; then
+                log "🔧 第一个GCC版本: $("$first_gcc" --version 2>&1 | head -1)"
+                
+                # 对于23.05 SDK的特殊处理
+                if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+                    local sdk_version=$("$first_gcc" --version 2>&1 | head -1)
+                    if echo "$sdk_version" | grep -qi "12.3.0"; then
+                        log "🎯 确认是OpenWrt 23.05 SDK GCC 12.3.0"
+                    elif echo "$sdk_version" | grep -qi "dummy-tools"; then
+                        log "⚠️ 检测到虚假的dummy-tools编译器，继续查找..."
+                        # 查找其他GCC
+                        local real_gcc=$(find "$COMPILER_DIR" -type f -executable \
+                          -name "*gcc" \
+                          ! -name "*gcc-ar" \
+                          ! -name "*gcc-ranlib" \
+                          ! -name "*gcc-nm" \
+                          ! -path "*dummy-tools*" \
+                          ! -path "*scripts*" \
+                          ! -path "$(dirname "$first_gcc")" \
+                          2>/dev/null | head -1)
+                        
+                        if [ -n "$real_gcc" ]; then
+                            log "✅ 找到真正的GCC: $(basename "$real_gcc")"
+                            log "🔧 版本: $("$real_gcc" --version 2>&1 | head -1)"
+                        fi
+                    else
+                        log "⚠️ 23.05 SDK GCC版本不是预期的12.3.0"
+                        log "💡 可能不是官方的23.05 SDK，但可以继续尝试"
+                    fi
+                fi
+            fi
+        else
+            log "⚠️ 警告: 预构建编译器目录中未找到真正的GCC编译器"
+            warning_count=$((warning_count + 1))
+            
+            # 检查是否有工具链工具
+            local toolchain_tools=$(find "$COMPILER_DIR" -type f -executable -name "*gcc*" \
+              ! -path "*dummy-tools*" \
+              ! -path "*scripts*" \
+              2>/dev/null | wc -l)
+            if [ $toolchain_tools -gt 0 ]; then
+                log "📊 找到 $toolchain_tools 个工具链工具"
+                log "💡 有工具链工具但没有真正的GCC编译器"
+            fi
+        fi
+    else
+        log "ℹ️ 未设置预构建编译器目录或目录不存在"
+        log "💡 将使用OpenWrt自动构建的编译器"
+    fi
+    
+    # 9. 检查编译器调用状态（使用增强版）
+    check_compiler_invocation
+    
+    # 总结
+    if [ $error_count -eq 0 ]; then
+        if [ $warning_count -eq 0 ]; then
+            log "✅ 前置检查通过，可以开始编译"
+        else
+            log "⚠️ 前置检查通过，但有 $warning_count 个警告，建议修复"
+        fi
+        return 0
+    else
+        log "❌ 前置检查发现 $error_count 个错误，$warning_count 个警告，请修复后再编译"
+        return 1
     fi
 }
 
