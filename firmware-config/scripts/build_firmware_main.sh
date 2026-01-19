@@ -2150,7 +2150,7 @@ analyze_script() {
     echo "$script_name:$script_type:$priority:$conflicts:$dependencies"
 }
 
-# 集成自定义文件函数（智能脚本管理版）- 修复IPK安装逻辑，支持子文件夹 - 修复脚本执行问题
+# 集成自定义文件函数（智能脚本管理版）- 修复IPK安装逻辑，支持子文件夹 - 修复脚本执行问题和统计变量问题
 integrate_custom_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -2190,16 +2190,18 @@ integrate_custom_files() {
     local analysis_dir="/tmp/script-analysis-$(date +%s)"
     mkdir -p "$analysis_dir"
     
-    # 定义统计变量
-    local ipk_count=0
-    local script_count=0
-    local config_count=0
-    local other_count=0
-    local chinese_count=0
-    local copied_count=0
-    local folder_count=0
+    # 定义统计变量（使用普通变量，不使用local，避免作用域问题）
+    # 注意：这些变量将在函数内使用，但需要在函数外部可见
+    ipk_count=0
+    script_count=0
+    config_count=0
+    other_count=0
+    chinese_count=0
+    copied_count=0
+    folder_count=0
     
     # 3. 创建递归复制函数，支持子文件夹结构 - 修复：确保所有文件都被复制
+    # 使用普通变量而不是局部变量，避免统计问题
     recursive_copy_files() {
         local src_dir="$1"
         local dst_dir="$2"
