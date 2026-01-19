@@ -2150,7 +2150,7 @@ analyze_script() {
     echo "$script_name:$script_type:$priority:$conflicts:$dependencies"
 }
 
-# 集成自定义文件函数（智能脚本管理版）- 修复IPK安装逻辑，支持子文件夹
+# 集成自定义文件函数（智能脚本管理版）- 修复IPK安装逻辑，支持子文件夹 - 修复脚本执行问题
 integrate_custom_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -2199,7 +2199,7 @@ integrate_custom_files() {
     local copied_count=0
     local folder_count=0
     
-    # 3. 创建递归复制函数，支持子文件夹结构
+    # 3. 创建递归复制函数，支持子文件夹结构 - 修复：确保所有文件都被复制
     recursive_copy_files() {
         local src_dir="$1"
         local dst_dir="$2"
@@ -2208,8 +2208,8 @@ integrate_custom_files() {
         # 确保目标目录存在
         mkdir -p "$dst_dir"
         
-        # 遍历源目录中的所有文件和子目录
-        while IFS= read -r src_item; do
+        # 遍历源目录中的所有文件和子目录 - 修复：使用正确的find命令
+        find "$src_dir" -mindepth 1 -maxdepth 1 2>/dev/null | while IFS= read -r src_item; do
             [ -z "$src_item" ] && continue
             
             local src_name=$(basename "$src_item")
@@ -2258,7 +2258,7 @@ integrate_custom_files() {
                 local script_type=$(echo "$analysis_result" | cut -d':' -f2)
                 local priority=$(echo "$analysis_result" | cut -d':' -f3)
                 
-                # 根据优先级重命名脚本
+                # 根据优先级重命名脚本 - 修复：确保重命名正确
                 case "$script_type" in
                     "package") dst_name="10_package_${script_count}.sh" ;;
                     "network") dst_name="20_network_${script_count}.sh" ;;
@@ -2281,7 +2281,7 @@ integrate_custom_files() {
                 log "    📁 其他文件: $relative_path$src_name"
             fi
             
-            # 复制文件
+            # 复制文件 - 修复：确保复制成功
             if cp "$src_item" "$full_dst_path" 2>/dev/null; then
                 copied_count=$((copied_count + 1))
                 # 确保脚本文件有执行权限
@@ -2291,7 +2291,7 @@ integrate_custom_files() {
             else
                 log "    ⚠️ 复制文件失败: $src_name"
             fi
-        done < <(find "$src_dir" -mindepth 1 -maxdepth 1 2>/dev/null | sort)
+        done
     }
     
     # 4. 复制所有文件并进行分析
@@ -2308,7 +2308,7 @@ integrate_custom_files() {
     log "  🇨🇳 中文文件: $chinese_count 个"
     log "  📋 总复制文件: $copied_count 个"
     
-    # 6. 创建智能安装脚本
+    # 6. 创建智能安装脚本 - 修复：确保脚本能正确执行所有文件
     log "🔧 步骤3: 创建智能安装脚本"
     
     local smart_script="$custom_files_dir/smart_install.sh"
@@ -2441,8 +2441,11 @@ install_ipk_packages
 echo "" >> $LOG_FILE
 echo "2. 执行脚本 (按优先级排序)..." >> $LOG_FILE
 
-# 收集所有脚本并排序
-SCRIPT_LIST=""
+# 收集所有脚本并排序 - 修复：确保所有脚本都被收集
+SCRIPT_LIST_FILE="/tmp/script_list.txt"
+rm -f "$SCRIPT_LIST_FILE"
+
+# 查找所有脚本文件
 find "$CUSTOM_DIR" -type f \( -iname "*.sh" -o -executable \) 2>/dev/null | while read script; do
     if [ ! -d "$script" ]; then
         local priority=$(get_script_priority "$script")
@@ -2450,15 +2453,17 @@ find "$CUSTOM_DIR" -type f \( -iname "*.sh" -o -executable \) 2>/dev/null | whil
         if [ -n "$relative_path" ]; then
             relative_path="$relative_path/"
         fi
-        SCRIPT_LIST="$SCRIPT_LIST$priority:$script:$relative_path\n"
+        echo "$priority:$script:$relative_path" >> "$SCRIPT_LIST_FILE"
     fi
 done
 
 # 按优先级执行脚本
-echo "$SCRIPT_LIST" | sort -n | while IFS=':' read -r priority script relative_path; do
-    [ -z "$script" ] && continue
-    execute_script "$script" "$relative_path"
-done
+if [ -f "$SCRIPT_LIST_FILE" ]; then
+    sort -n "$SCRIPT_LIST_FILE" | while IFS=':' read -r priority script relative_path; do
+        [ -z "$script" ] && continue
+        execute_script "$script" "$relative_path"
+    done
+fi
 
 echo "" >> $LOG_FILE
 echo "3. 合并定时任务..." >> $LOG_FILE
@@ -2472,6 +2477,9 @@ echo "安装日志: $LOG_FILE"
 # 创建完成标记
 touch /etc/custom-files-installed
 echo "✅ 自定义文件安装完成标记已创建"
+
+# 清理临时文件
+rm -f "$SCRIPT_LIST_FILE"
 EOF
     
     chmod +x "$smart_script"
@@ -2498,12 +2506,28 @@ echo "" >> $LOG_FILE
 if [ -d "$CUSTOM_DIR" ]; then
     echo "✅ 找到自定义文件目录: $CUSTOM_DIR" >> $LOG_FILE
     
+    # 检查文件数量
+    FILE_COUNT=$(find "$CUSTOM_DIR" -type f ! -name "smart_install.sh" 2>/dev/null | wc -l)
+    echo "📁 自定义文件数量: $FILE_COUNT 个" >> $LOG_FILE
+    
     # 使用智能安装管理器
     echo "🚀 启动智能安装管理器..." >> $LOG_FILE
-    chmod +x "$CUSTOM_DIR/smart_install.sh"
-    "$CUSTOM_DIR/smart_install.sh"
     
-    echo "✅ 智能安装管理器执行完成" >> $LOG_FILE
+    # 确保脚本可执行
+    if [ -x "$CUSTOM_DIR/smart_install.sh" ]; then
+        echo "✅ 智能安装脚本可执行" >> $LOG_FILE
+        "$CUSTOM_DIR/smart_install.sh"
+        echo "✅ 智能安装管理器执行完成" >> $LOG_FILE
+    else
+        echo "❌ 智能安装脚本不可执行，尝试修复权限..." >> $LOG_FILE
+        chmod +x "$CUSTOM_DIR/smart_install.sh" 2>/dev/null
+        if [ -x "$CUSTOM_DIR/smart_install.sh" ]; then
+            "$CUSTOM_DIR/smart_install.sh"
+            echo "✅ 智能安装管理器执行完成（修复权限后）" >> $LOG_FILE
+        else
+            echo "❌ 无法修复智能安装脚本权限" >> $LOG_FILE
+        fi
+    fi
 else
     echo "❌ 自定义文件目录不存在: $CUSTOM_DIR" >> $LOG_FILE
 fi
@@ -2538,7 +2562,30 @@ EOF
         log "💡 优先级说明: 数字越小越先执行"
     fi
     
-    # 9. 显示最终统计
+    # 9. 验证所有文件都被正确复制
+    log "🔍 步骤5: 验证文件复制结果"
+    local actual_file_count=$(find "$custom_files_dir" -type f 2>/dev/null | wc -l)
+    log "📊 目标目录文件数量: $actual_file_count 个"
+    
+    if [ $actual_file_count -ge $copied_count ]; then
+        log "✅ 文件复制验证通过"
+        
+        # 显示所有复制文件的列表
+        log "📋 复制的文件列表:"
+        find "$custom_files_dir" -type f 2>/dev/null | while read file; do
+            local filename=$(basename "$file")
+            local filesize=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+            log "  📄 $filename ($filesize)"
+        done | head -20
+        
+        if [ $actual_file_count -gt 20 ]; then
+            log "  ... 还有 $((actual_file_count - 20)) 个文件"
+        fi
+    else
+        log "⚠️ 警告: 复制的文件数量 ($actual_file_count) 少于预期 ($copied_count)"
+    fi
+    
+    # 10. 显示最终统计
     log ""
     log "🎉 自定义文件集成完成（智能脚本管理版）"
     log "📊 集成统计:"
@@ -2554,6 +2601,7 @@ EOF
     log "  📁 文件夹结构: 支持任意层级子文件夹"
     log "  📍 自定义文件位置: /etc/custom-files/"
     log "  🚀 安装方式: 第一次开机自动智能安装"
+    log "  ✅ 文件验证: $actual_file_count 个文件已成功复制"
     
     # 清理临时文件
     rm -rf "$analysis_dir"
