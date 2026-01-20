@@ -4,6 +4,7 @@ set -e
 BUILD_DIR="/mnt/openwrt-build"
 ENV_FILE="$BUILD_DIR/build_env.sh"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+CUSTOM_STATS_FILE="$BUILD_DIR/custom_files_stats.txt"
 
 # 确保有日志目录
 mkdir -p /tmp/build-logs
@@ -33,6 +34,19 @@ save_env() {
     echo "export REPO_ROOT=\"${REPO_ROOT}\"" >> $ENV_FILE
     echo "export COMPILER_DIR=\"${COMPILER_DIR}\"" >> $ENV_FILE
     
+    # 保存自定义文件统计信息（如果存在）
+    if [ -f "$CUSTOM_STATS_FILE" ]; then
+        source "$CUSTOM_STATS_FILE"
+        echo "export CUSTOM_IPK_COUNT=\"${CUSTOM_IPK_COUNT}\"" >> $ENV_FILE
+        echo "export CUSTOM_SCRIPT_COUNT=\"${CUSTOM_SCRIPT_COUNT}\"" >> $ENV_FILE
+        echo "export CUSTOM_CONFIG_COUNT=\"${CUSTOM_CONFIG_COUNT}\"" >> $ENV_FILE
+        echo "export CUSTOM_OTHER_COUNT=\"${CUSTOM_OTHER_COUNT}\"" >> $ENV_FILE
+        echo "export CUSTOM_CHINESE_COUNT=\"${CUSTOM_CHINESE_COUNT}\"" >> $ENV_FILE
+        echo "export CUSTOM_PRIORITY_SCRIPT_COUNT=\"${CUSTOM_PRIORITY_SCRIPT_COUNT}\"" >> $ENV_FILE
+        echo "export CUSTOM_TOTAL_FILES=\"${CUSTOM_TOTAL_FILES}\"" >> $ENV_FILE
+        echo "export CUSTOM_FILES_INTEGRATED=\"${CUSTOM_FILES_INTEGRATED}\"" >> $ENV_FILE
+    fi
+    
     # 确保环境变量可被其他步骤访问
     if [ -n "$GITHUB_ENV" ]; then
         echo "SELECTED_REPO_URL=${SELECTED_REPO_URL}" >> $GITHUB_ENV
@@ -42,10 +56,48 @@ save_env() {
         echo "DEVICE=${DEVICE}" >> $GITHUB_ENV
         echo "CONFIG_MODE=${CONFIG_MODE}" >> $GITHUB_ENV
         echo "COMPILER_DIR=${COMPILER_DIR}" >> $GITHUB_ENV
+        echo "CUSTOM_FILES_INTEGRATED=true" >> $GITHUB_ENV
+        
+        if [ -f "$CUSTOM_STATS_FILE" ]; then
+            source "$CUSTOM_STATS_FILE"
+            echo "CUSTOM_IPK_COUNT=${CUSTOM_IPK_COUNT}" >> $GITHUB_ENV
+            echo "CUSTOM_SCRIPT_COUNT=${CUSTOM_SCRIPT_COUNT}" >> $GITHUB_ENV
+            echo "CUSTOM_CONFIG_COUNT=${CUSTOM_CONFIG_COUNT}" >> $GITHUB_ENV
+            echo "CUSTOM_OTHER_COUNT=${CUSTOM_OTHER_COUNT}" >> $GITHUB_ENV
+            echo "CUSTOM_CHINESE_COUNT=${CUSTOM_CHINESE_COUNT}" >> $GITHUB_ENV
+            echo "CUSTOM_PRIORITY_SCRIPT_COUNT=${CUSTOM_PRIORITY_SCRIPT_COUNT}" >> $GITHUB_ENV
+            echo "CUSTOM_TOTAL_FILES=${CUSTOM_TOTAL_FILES}" >> $GITHUB_ENV
+        fi
     fi
     
     chmod +x $ENV_FILE
     log "✅ 环境变量已保存到: $ENV_FILE"
+}
+
+# 保存自定义文件统计信息到文件
+save_custom_stats() {
+    cat > "$CUSTOM_STATS_FILE" << EOF
+CUSTOM_IPK_COUNT="$integrate_ipk_count"
+CUSTOM_SCRIPT_COUNT="$integrate_script_count"
+CUSTOM_CONFIG_COUNT="$integrate_config_count"
+CUSTOM_OTHER_COUNT="$integrate_other_count"
+CUSTOM_CHINESE_COUNT="$integrate_chinese_count"
+CUSTOM_PRIORITY_SCRIPT_COUNT="$integrate_priority_script_count"
+CUSTOM_TOTAL_FILES="$integrate_total_files"
+CUSTOM_FILES_INTEGRATED="true"
+EOF
+    
+    log "✅ 自定义文件统计信息已保存到: $CUSTOM_STATS_FILE"
+    
+    # 同时保存到环境变量
+    export CUSTOM_IPK_COUNT="$integrate_ipk_count"
+    export CUSTOM_SCRIPT_COUNT="$integrate_script_count"
+    export CUSTOM_CONFIG_COUNT="$integrate_config_count"
+    export CUSTOM_OTHER_COUNT="$integrate_other_count"
+    export CUSTOM_CHINESE_COUNT="$integrate_chinese_count"
+    export CUSTOM_PRIORITY_SCRIPT_COUNT="$integrate_priority_script_count"
+    export CUSTOM_TOTAL_FILES="$integrate_total_files"
+    export CUSTOM_FILES_INTEGRATED="true"
 }
 
 # 加载环境变量函数
@@ -53,6 +105,14 @@ load_env() {
     if [ -f "$ENV_FILE" ]; then
         source $ENV_FILE
         log "✅ 从 $ENV_FILE 加载环境变量"
+        
+        # 显示关键环境变量
+        if [ -n "$CUSTOM_FILES_INTEGRATED" ] && [ "$CUSTOM_FILES_INTEGRATED" = "true" ]; then
+            log "📊 已加载自定义文件统计信息:"
+            log "  IPK文件: ${CUSTOM_IPK_COUNT:-0} 个"
+            log "  脚本文件: ${CUSTOM_SCRIPT_COUNT:-0} 个"
+            log "  总文件数: ${CUSTOM_TOTAL_FILES:-0} 个"
+        fi
     else
         log "⚠️ 环境文件不存在: $ENV_FILE"
     fi
@@ -2185,6 +2245,7 @@ integrate_custom_files() {
     integrate_copied_count=0
     integrate_folder_count=0
     integrate_total_files=0
+    integrate_priority_script_count=0  # 新增：统计优先级脚本数量
     
     # 4. 创建递归复制函数，支持子文件夹和中文文件名
     recursive_copy_files() {
@@ -2258,6 +2319,7 @@ integrate_custom_files() {
                 
                 # 添加数字前缀，保留原文件名（包括中文）
                 dst_name="${prefix}${src_name}"
+                integrate_priority_script_count=$((integrate_priority_script_count + 1))
                 
                 log "    📜 脚本文件: $relative_path$src_name -> $dst_name (类型: $script_type, 优先级: $priority)"
                 
@@ -2291,32 +2353,46 @@ integrate_custom_files() {
     log "🔧 步骤2: 递归复制所有自定义文件并进行分析"
     recursive_copy_files "$custom_dir" "$custom_files_dir" ""
     
-    # 6. 显示统计信息
+    # 6. 保存统计信息到文件和环境变量
+    log "📊 保存自定义文件统计信息..."
+    save_custom_stats
+    
+    # 7. 显示统计信息
     log "📊 文件统计:"
     log "  📦 IPK文件: $integrate_ipk_count 个"
     log "  📜 脚本文件: $integrate_script_count 个"
+    log "    其中 $integrate_priority_script_count 个已按优先级排序"
     log "  ⚙️ 配置文件: $integrate_config_count 个"
     log "  📁 其他文件: $integrate_other_count 个"
     log "  📁 子文件夹: $integrate_folder_count 个"
     log "  🇨🇳 中文文件: $integrate_chinese_count 个"
     log "  📋 总复制文件: $integrate_copied_count 个"
+    log "  💾 统计信息已保存到: $CUSTOM_STATS_FILE"
     
-    # 7. 创建智能安装脚本
-    log "🔧 步骤3: 创建智能安装脚本"
+    # 8. 创建智能安装脚本（增强版，确保IPK安装）
+    log "🔧 步骤3: 创建智能安装脚本（增强版）"
     
     local smart_script="$custom_files_dir/smart_install.sh"
     cat > "$smart_script" << 'EOF'
 #!/bin/sh
-# 智能脚本安装管理器
-# 自动按优先级执行脚本，避免冲突
+# 智能脚本安装管理器 - 增强版
+# 自动按优先级执行脚本，确保IPK安装
 # 支持子文件夹结构和中文文件名
 
 LOG_FILE="/tmp/smart-install.log"
 CUSTOM_DIR="/etc/custom-files"
+INSTALL_MARKER="/etc/custom-files-installed"
 
-echo "=== 智能脚本安装管理器 ===" > $LOG_FILE
+echo "=== 智能脚本安装管理器 - 增强版 ===" > $LOG_FILE
 echo "开始时间: $(date)" >> $LOG_FILE
 echo "" >> $LOG_FILE
+
+# 检查是否已经安装过
+if [ -f "$INSTALL_MARKER" ]; then
+    echo "ℹ️ 检测到已安装标记，跳过重复安装" >> $LOG_FILE
+    echo "📌 如需重新安装，请删除 $INSTALL_MARKER 文件" >> $LOG_FILE
+    exit 0
+fi
 
 # 获取脚本优先级
 get_script_priority() {
@@ -2351,32 +2427,55 @@ get_script_priority() {
     echo $priority
 }
 
-# 安装IPK包
+# 安装IPK包（增强版）
 install_ipk_packages() {
     echo "" >> $LOG_FILE
-    echo "=== 安装IPK包 ===" >> $LOG_FILE
+    echo "=== 安装IPK包（增强版） ===" >> $LOG_FILE
     
     local ipk_count=0
     local success_count=0
     
-    # 查找所有IPK文件
-    find "$CUSTOM_DIR" -type f -iname "*.ipk" 2>/dev/null | while read ipk_file; do
-        ipk_count=$((ipk_count + 1))
-        local filename=$(basename "$ipk_file")
-        echo "安装IPK: $filename" >> $LOG_FILE
-        opkg install "$ipk_file" >> $LOG_FILE 2>&1
-        if [ $? -eq 0 ]; then
-            success_count=$((success_count + 1))
-            echo "✅ $filename 安装成功" >> $LOG_FILE
-        else
-            echo "⚠️ $filename 安装失败" >> $LOG_FILE
+    # 查找所有IPK文件（支持中文文件名，不区分大小写）
+    find "$CUSTOM_DIR" -type f 2>/dev/null | while read file; do
+        local filename=$(basename "$file")
+        # 不区分大小写检查IPK文件
+        if echo "$filename" | grep -qi "\.ipk$"; then
+            ipk_count=$((ipk_count + 1))
+            echo "安装IPK: $filename" >> $LOG_FILE
+            echo "完整路径: $file" >> $LOG_FILE
+            
+            # 检查文件大小
+            local filesize=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+            echo "文件大小: $filesize" >> $LOG_FILE
+            
+            # 使用绝对路径安装
+            if opkg install "$file" >> $LOG_FILE 2>&1; then
+                success_count=$((success_count + 1))
+                echo "✅ $filename 安装成功" >> $LOG_FILE
+            else
+                echo "⚠️ $filename 安装失败，尝试修复..." >> $LOG_FILE
+                
+                # 尝试清理缓存后重新安装
+                opkg update >> $LOG_FILE 2>&1
+                opkg install --force-reinstall "$file" >> $LOG_FILE 2>&1
+                if [ $? -eq 0 ]; then
+                    success_count=$((success_count + 1))
+                    echo "✅ $filename 修复安装成功" >> $LOG_FILE
+                else
+                    echo "❌ $filename 安装失败" >> $LOG_FILE
+                fi
+            fi
         fi
     done
     
     echo "IPK安装统计: $success_count/$ipk_count 成功" >> $LOG_FILE
+    
+    if [ $ipk_count -eq 0 ]; then
+        echo "ℹ️ 未找到IPK文件" >> $LOG_FILE
+    fi
 }
 
-# 执行单个脚本
+# 执行单个脚本（增强版）
 execute_script() {
     local script="$1"
     local script_name=$(basename "$script")
@@ -2388,15 +2487,27 @@ execute_script() {
     echo "开始时间: $(date)" >> $LOG_FILE
     
     # 确保有执行权限
-    chmod +x "$script" 2>/dev/null
+    chmod +x "$script" 2>/dev/null || {
+        echo "⚠️ 无法设置执行权限: $script_name" >> $LOG_FILE
+        return 1
+    }
+    
+    # 检查脚本是否可执行
+    if [ ! -x "$script" ]; then
+        echo "❌ 脚本不可执行: $script_name" >> $LOG_FILE
+        return 1
+    fi
     
     # 切换到脚本所在目录
     local script_dir=$(dirname "$script")
     cd "$script_dir" 2>/dev/null || cd /
     
+    # 设置中文环境，支持中文文件名
+    export LANG=zh_CN.UTF-8
+    export LC_ALL=zh_CN.UTF-8
+    
     # 执行脚本（支持中文路径和文件名）
-    LANG=zh_CN.UTF-8
-    LC_ALL=zh_CN.UTF-8
+    echo "执行命令: sh \"$script\"" >> $LOG_FILE
     sh "$script" >> $LOG_FILE 2>&1
     local exit_code=$?
     
@@ -2408,6 +2519,9 @@ execute_script() {
         return 0
     else
         echo "⚠️ $script_name 执行失败 (代码: $exit_code)" >> $LOG_FILE
+        # 显示最后5行错误信息
+        echo "最后5行输出:" >> $LOG_FILE
+        tail -5 "$LOG_FILE" >> $LOG_FILE
         return 1
     fi
 }
@@ -2423,24 +2537,37 @@ echo "2. 执行脚本 (按优先级排序)..." >> $LOG_FILE
 SCRIPT_LIST_FILE="/tmp/script_list.txt"
 rm -f "$SCRIPT_LIST_FILE"
 
-# 查找所有脚本文件
-find "$CUSTOM_DIR" -type f \( -iname "*.sh" -o -executable \) 2>/dev/null | while read script; do
+# 查找所有脚本文件（支持中文文件名）
+find "$CUSTOM_DIR" -type f 2>/dev/null | while read script; do
     if [ ! -d "$script" ]; then
-        local priority=$(get_script_priority "$script")
-        local relative_path=$(dirname "$script" | sed "s|$CUSTOM_DIR||" | sed "s|^/||")
-        if [ -n "$relative_path" ]; then
-            relative_path="$relative_path/"
+        local filename=$(basename "$script")
+        # 检查是否是脚本文件（支持多种扩展名）
+        if [[ "$filename" == *.sh ]] || [[ "$filename" == *.Sh ]] || [[ "$filename" == *.SH ]] || \
+           head -2 "$script" 2>/dev/null | grep -q "^#!"; then
+            local priority=$(get_script_priority "$script")
+            local relative_path=$(dirname "$script" | sed "s|$CUSTOM_DIR||" | sed "s|^/||")
+            if [ -n "$relative_path" ]; then
+                relative_path="$relative_path/"
+            fi
+            echo "$priority:$script:$relative_path" >> "$SCRIPT_LIST_FILE"
         fi
-        echo "$priority:$script:$relative_path" >> "$SCRIPT_LIST_FILE"
     fi
 done
 
 # 按优先级执行脚本
 if [ -f "$SCRIPT_LIST_FILE" ]; then
+    local script_count=0
+    local success_count=0
     sort -n "$SCRIPT_LIST_FILE" | while IFS=':' read -r priority script relative_path; do
         [ -z "$script" ] && continue
-        execute_script "$script" "$relative_path"
+        script_count=$((script_count + 1))
+        execute_script "$script" "$relative_path" && success_count=$((success_count + 1))
     done
+    
+    echo "" >> $LOG_FILE
+    echo "脚本执行统计: $success_count/$script_count 成功" >> $LOG_FILE
+else
+    echo "ℹ️ 未找到脚本文件" >> $LOG_FILE
 fi
 
 echo "" >> $LOG_FILE
@@ -2449,18 +2576,31 @@ echo "结束时间: $(date)" >> $LOG_FILE
 echo "安装日志: $LOG_FILE"
 
 # 创建完成标记
-touch /etc/custom-files-installed
-echo "✅ 自定义文件安装完成标记已创建"
+touch "$INSTALL_MARKER"
+echo "✅ 自定义文件安装完成标记已创建: $INSTALL_MARKER"
+
+# 显示安装结果
+echo "" >> $LOG_FILE
+echo "📊 安装结果:" >> $LOG_FILE
+echo "  IPK文件: 已安装" >> $LOG_FILE
+echo "  脚本文件: 已执行" >> $LOG_FILE
+echo "  完成标记: 已创建" >> $LOG_FILE
 
 # 清理临时文件
 rm -f "$SCRIPT_LIST_FILE"
+
+# 显示最终信息
+echo ""
+echo "智能安装管理器执行完成"
+echo "📝 详细日志请查看: $LOG_FILE"
+exit 0
 EOF
     
     chmod +x "$smart_script"
     log "✅ 创建智能安装脚本: $smart_script"
     
-    # 8. 修改第一次开机脚本
-    log "🔧 步骤4: 更新第一次开机脚本"
+    # 9. 修改第一次开机脚本（增强版）
+    log "🔧 步骤4: 更新第一次开机脚本（增强版）"
     
     local first_boot_dir="files/etc/uci-defaults"
     mkdir -p "$first_boot_dir"
@@ -2471,8 +2611,9 @@ EOF
 
 LOG_FILE="/tmp/custom-files-install.log"
 CUSTOM_DIR="/etc/custom-files"
+SMART_SCRIPT="$CUSTOM_DIR/smart_install.sh"
 
-echo "=== 第一次开机：自定义文件安装脚本（智能管理版）===" > $LOG_FILE
+echo "=== 第一次开机：自定义文件安装脚本（智能管理增强版）===" > $LOG_FILE
 echo "开始时间: $(date)" >> $LOG_FILE
 echo "" >> $LOG_FILE
 
@@ -2493,28 +2634,90 @@ if [ -d "$CUSTOM_DIR" ]; then
     done
     
     # 使用智能安装管理器
-    echo "🚀 启动智能安装管理器..." >> $LOG_FILE
+    echo "🚀 启动智能安装管理器（增强版）..." >> $LOG_FILE
     
-    if [ -x "$CUSTOM_DIR/smart_install.sh" ]; then
-        echo "✅ 智能安装脚本可执行" >> $LOG_FILE
-        "$CUSTOM_DIR/smart_install.sh"
-        echo "✅ 智能安装管理器执行完成" >> $LOG_FILE
-    else
-        echo "❌ 智能安装脚本不可执行，尝试修复权限..." >> $LOG_FILE
-        chmod +x "$CUSTOM_DIR/smart_install.sh" 2>/dev/null
-        if [ -x "$CUSTOM_DIR/smart_install.sh" ]; then
-            "$CUSTOM_DIR/smart_install.sh"
-            echo "✅ 智能安装管理器执行完成（修复权限后）" >> $LOG_FILE
+    if [ -f "$SMART_SCRIPT" ]; then
+        echo "✅ 找到智能安装脚本: $SMART_SCRIPT" >> $LOG_FILE
+        
+        # 检查执行权限
+        if [ ! -x "$SMART_SCRIPT" ]; then
+            echo "⚠️ 智能安装脚本不可执行，修复权限..." >> $LOG_FILE
+            chmod +x "$SMART_SCRIPT" 2>/dev/null
+        fi
+        
+        if [ -x "$SMART_SCRIPT" ]; then
+            echo "✅ 智能安装脚本可执行，开始执行..." >> $LOG_FILE
+            
+            # 设置中文环境变量，确保中文文件名正确处理
+            export LANG=zh_CN.UTF-8
+            export LC_ALL=zh_CN.UTF-8
+            
+            # 执行智能安装脚本
+            sh "$SMART_SCRIPT"
+            
+            INSTALL_RESULT=$?
+            if [ $INSTALL_RESULT -eq 0 ]; then
+                echo "✅ 智能安装管理器执行成功" >> $LOG_FILE
+                echo "📌 安装结果请查看: /tmp/smart-install.log" >> $LOG_FILE
+            else
+                echo "⚠️ 智能安装管理器执行失败，退出代码: $INSTALL_RESULT" >> $LOG_FILE
+                echo "📌 错误信息请查看: /tmp/smart-install.log" >> $LOG_FILE
+            fi
         else
             echo "❌ 无法修复智能安装脚本权限" >> $LOG_FILE
+            echo "⚠️ 尝试手动执行脚本..." >> $LOG_FILE
+            
+            # 尝试直接执行脚本
+            export LANG=zh_CN.UTF-8
+            export LC_ALL=zh_CN.UTF-8
+            cd "$CUSTOM_DIR"
+            
+            # 查找并执行所有脚本
+            for script in "$CUSTOM_DIR"/*.sh; do
+                if [ -f "$script" ]; then
+                    echo "执行脚本: $(basename "$script")" >> $LOG_FILE
+                    chmod +x "$script" 2>/dev/null
+                    sh "$script" >> $LOG_FILE 2>&1
+                fi
+            done
         fi
+    else
+        echo "❌ 未找到智能安装脚本" >> $LOG_FILE
+        echo "⚠️ 尝试手动处理文件..." >> $LOG_FILE
+        
+        # 手动处理文件
+        export LANG=zh_CN.UTF-8
+        export LC_ALL=zh_CN.UTF-8
+        cd "$CUSTOM_DIR"
+        
+        # 处理IPK文件
+        for file in "$CUSTOM_DIR"/*.ipk "$CUSTOM_DIR"/*.IPK; do
+            if [ -f "$file" ]; then
+                echo "安装IPK: $(basename "$file")" >> $LOG_FILE
+                opkg install "$file" >> $LOG_FILE 2>&1
+            fi
+        done
+        
+        # 执行脚本文件
+        for script in "$CUSTOM_DIR"/*.sh; do
+            if [ -f "$script" ]; then
+                echo "执行脚本: $(basename "$script")" >> $LOG_FILE
+                chmod +x "$script" 2>/dev/null
+                sh "$script" >> $LOG_FILE 2>&1
+            fi
+        done
     fi
 else
     echo "❌ 自定义文件目录不存在: $CUSTOM_DIR" >> $LOG_FILE
+    echo "📌 跳过自定义文件安装" >> $LOG_FILE
 fi
 
 echo "" >> $LOG_FILE
 echo "=== 自定义文件安装脚本执行完成 ===" >> $LOG_FILE
+echo "结束时间: $(date)" >> $LOG_FILE
+
+# 确保标记文件存在
+touch /etc/custom-files-installed 2>/dev/null || true
 
 exit 0
 EOF
@@ -2522,7 +2725,7 @@ EOF
     chmod +x "$first_boot_script"
     log "✅ 更新第一次开机脚本: $first_boot_script"
     
-    # 9. 验证所有文件都被正确复制
+    # 10. 验证所有文件都被正确复制
     log "🔍 步骤5: 验证文件复制结果"
     local actual_file_count=$(find "$custom_files_dir" -type f 2>/dev/null | wc -l)
     log "📊 目标目录文件数量: $actual_file_count 个"
@@ -2542,12 +2745,13 @@ EOF
         log "⚠️ 警告: 复制的文件数量 ($actual_file_count) 少于预期 ($integrate_copied_count)"
     fi
     
-    # 10. 显示最终统计
+    # 11. 显示最终统计
     log ""
     log "🎉 自定义文件集成完成（智能脚本管理版）"
     log "📊 集成统计:"
     log "  📦 IPK文件: $integrate_ipk_count 个"
-    log "  📜 脚本文件: $integrate_script_count 个 (已按优先级排序)"
+    log "  📜 脚本文件: $integrate_script_count 个"
+    log "    其中 $integrate_priority_script_count 个已按优先级排序"
     log "  ⚙️ 配置文件: $integrate_config_count 个"
     log "  📁 其他文件: $integrate_other_count 个"
     log "  📁 子文件夹: $integrate_folder_count 个"
@@ -2558,8 +2762,9 @@ EOF
     log "  📍 自定义文件位置: /etc/custom-files/"
     log "  🚀 安装方式: 第一次开机自动智能安装"
     log "  ✅ 文件验证: $actual_file_count 个文件已成功复制"
+    log "  💾 统计保存: 已保存到环境变量和文件"
     
-    # 清理临时文件
+    # 12. 清理临时文件
     rm -rf "$analysis_dir"
     
     if [ $integrate_copied_count -eq 0 ]; then
@@ -3142,6 +3347,22 @@ save_source_code_info() {
     echo "配置模式: $CONFIG_MODE" >> "$source_info_file"
     echo "编译器目录: $COMPILER_DIR" >> "$source_info_file"
     
+    # 收集自定义文件统计信息
+    echo "" >> "$source_info_file"
+    echo "=== 自定义文件统计 ===" >> "$source_info_file"
+    if [ -n "$CUSTOM_FILES_INTEGRATED" ] && [ "$CUSTOM_FILES_INTEGRATED" = "true" ]; then
+        echo "IPK文件: ${CUSTOM_IPK_COUNT:-0} 个" >> "$source_info_file"
+        echo "脚本文件: ${CUSTOM_SCRIPT_COUNT:-0} 个" >> "$source_info_file"
+        echo "配置文件: ${CUSTOM_CONFIG_COUNT:-0} 个" >> "$source_info_file"
+        echo "其他文件: ${CUSTOM_OTHER_COUNT:-0} 个" >> "$source_info_file"
+        echo "中文文件: ${CUSTOM_CHINESE_COUNT:-0} 个" >> "$source_info_file"
+        echo "优先级脚本: ${CUSTOM_PRIORITY_SCRIPT_COUNT:-0} 个" >> "$source_info_file"
+        echo "总文件数: ${CUSTOM_TOTAL_FILES:-0} 个" >> "$source_info_file"
+        echo "集成状态: 已集成" >> "$source_info_file"
+    else
+        echo "自定义文件: 未集成" >> "$source_info_file"
+    fi
+    
     # 收集目录信息
     echo "" >> "$source_info_file"
     echo "=== 目录结构 ===" >> "$source_info_file"
@@ -3160,6 +3381,145 @@ save_source_code_info() {
     done
     
     log "✅ 源代码信息已保存到: $source_info_file"
+}
+
+# 检查自定义文件集成结果的函数
+check_custom_files_integration() {
+    load_env
+    log "=== 检查自定义文件集成结果 ==="
+    
+    local custom_dir="files/etc/custom-files"
+    
+    if [ -d "$custom_dir" ]; then
+        log "✅ 自定义文件目录存在: $custom_dir"
+        
+        # 统计文件
+        local ipk_count=0
+        local script_count=0
+        local config_count=0
+        local other_count=0
+        local chinese_count=0
+        local priority_script_count=0
+        local total_files=0
+        
+        # 使用不区分大小写的方式统计
+        find "$custom_dir" -type f 2>/dev/null | while read file; do
+            FILENAME=$(basename "$file")
+            total_files=$((total_files + 1))
+            
+            if echo "$FILENAME" | grep -qi "\.ipk$"; then
+                ipk_count=$((ipk_count + 1))
+            elif [[ "$FILENAME" == *.sh ]] || [[ "$FILENAME" == *.Sh ]] || [[ "$FILENAME" == *.SH ]] || \
+                 head -2 "$file" 2>/dev/null | grep -q "^#!"; then
+                script_count=$((script_count + 1))
+                
+                # 检查是否有数字前缀（优先级）
+                if [[ "$FILENAME" =~ ^([0-9]+)_ ]]; then
+                    priority_script_count=$((priority_script_count + 1))
+                fi
+            elif [[ "$FILENAME" == *.conf ]] || [[ "$FILENAME" == *.config ]] || [[ "$FILENAME" == *.CONF ]]; then
+                config_count=$((config_count + 1))
+            else
+                other_count=$((other_count + 1))
+            fi
+            
+            # 精确统计中文名文件
+            if detect_chinese_characters "$FILENAME"; then
+                chinese_count=$((chinese_count + 1))
+            elif echo "$FILENAME" | grep -q -E "备份|恢复|安装|配置|设置|脚本|文件|固件|插件|网络|系统|路由|无线"; then
+                chinese_count=$((chinese_count + 1))
+            fi
+        done
+        
+        log "📊 自定义文件统计（实时检查）:"
+        log "  📦 IPK文件: $ipk_count 个"
+        log "  📜 脚本文件: $script_count 个"
+        log "    其中 $priority_script_count 个已按优先级排序"
+        log "  ⚙️ 配置文件: $config_count 个"
+        log "  📁 其他文件: $other_count 个"
+        log "  总文件数: $total_files 个"
+        log "  🇨🇳 中文名文件: $chinese_count 个"
+        
+        # 与保存的统计信息对比
+        if [ -n "$CUSTOM_IPK_COUNT" ] && [ -n "$CUSTOM_SCRIPT_COUNT" ]; then
+            log "📊 与保存的统计信息对比:"
+            log "  IPK文件: 实时 $ipk_count 个 vs 保存 ${CUSTOM_IPK_COUNT} 个"
+            log "  脚本文件: 实时 $script_count 个 vs 保存 ${CUSTOM_SCRIPT_COUNT} 个"
+            log "  总文件数: 实时 $total_files 个 vs 保存 ${CUSTOM_TOTAL_FILES} 个"
+            
+            if [ $ipk_count -eq $CUSTOM_IPK_COUNT ] && [ $script_count -eq $CUSTOM_SCRIPT_COUNT ]; then
+                log "✅ 统计信息匹配"
+            else
+                log "⚠️ 统计信息不匹配，可能文件复制有问题"
+            fi
+        fi
+        
+        # 显示所有文件
+        log "📋 所有自定义文件列表:"
+        find "$custom_dir" -type f 2>/dev/null | sort | while read file; do
+            FILENAME=$(basename "$file")
+            FILESIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+            FILEPATH=$(echo "$file" | sed "s|$custom_dir/||")
+            
+            # 显示文件类型图标和优先级
+            if echo "$FILENAME" | grep -qi "\.ipk$"; then
+                log "  📦 $FILEPATH ($FILESIZE)"
+            elif [[ "$FILENAME" == *.sh ]] || [[ "$FILENAME" == *.Sh ]] || [[ "$FILENAME" == *.SH ]] || \
+                 head -2 "$file" 2>/dev/null | grep -q "^#!"; then
+                # 检查是否有数字前缀（优先级）
+                if [[ "$FILENAME" =~ ^([0-9]+)_ ]]; then
+                    PRIORITY="${BASH_REMATCH[1]}"
+                    ORIGINAL_NAME=$(echo "$FILENAME" | sed "s/^[0-9]*_//")
+                    log "  📜 $FILEPATH ($FILESIZE) [优先级: $PRIORITY] (原名: $ORIGINAL_NAME)"
+                else
+                    log "  📜 $FILEPATH ($FILESIZE)"
+                fi
+            elif [[ "$FILENAME" == *.conf ]] || [[ "$FILENAME" == *.config ]] || [[ "$FILENAME" == *.CONF ]]; then
+                log "  ⚙️ $FILEPATH ($FILESIZE)"
+            else
+                log "  📁 $FILEPATH ($FILESIZE)"
+            fi
+        done
+        
+        # 检查智能安装脚本
+        if [ -f "$custom_dir/smart_install.sh" ]; then
+            log "✅ 智能安装脚本存在: $custom_dir/smart_install.sh"
+            
+            # 检查权限
+            if [ -x "$custom_dir/smart_install.sh" ]; then
+                log "✅ 智能安装脚本可执行"
+            else
+                log "⚠️ 智能安装脚本不可执行，尝试修复..."
+                chmod +x "$custom_dir/smart_install.sh" 2>/dev/null
+                if [ -x "$custom_dir/smart_install.sh" ]; then
+                    log "✅ 权限修复成功"
+                else
+                    log "❌ 权限修复失败"
+                fi
+            fi
+        else
+            log "❌ 智能安装脚本不存在"
+        fi
+        
+        # 检查第一次开机脚本
+        local first_boot_script="files/etc/uci-defaults/99-custom-files"
+        if [ -f "$first_boot_script" ]; then
+            log "✅ 第一次开机脚本存在: $first_boot_script"
+            
+            if [ -x "$first_boot_script" ]; then
+                log "✅ 第一次开机脚本可执行"
+            else
+                log "⚠️ 第一次开机脚本不可执行"
+            fi
+        else
+            log "❌ 第一次开机脚本不存在"
+        fi
+        
+        return 0
+    else
+        log "❌ 自定义文件目录不存在: $custom_dir"
+        return 1
+    fi
 }
 
 # 主函数
@@ -3246,6 +3606,9 @@ main() {
         "intelligent_platform_aware_compiler_search")
             intelligent_platform_aware_compiler_search "$2" "$3" "$4"
             ;;
+        "check_custom_files_integration")
+            check_custom_files_integration
+            ;;
         *)
             log "❌ 未知命令: $1"
             echo "可用命令:"
@@ -3258,6 +3621,7 @@ main() {
             echo "  check_firmware_files, cleanup, save_source_code_info, verify_compiler_files"
             echo "  check_compiler_invocation, search_compiler_files, universal_compiler_search"
             echo "  search_compiler_files_simple, intelligent_platform_aware_compiler_search"
+            echo "  check_custom_files_integration - 检查自定义文件集成结果"
             exit 1
             ;;
     esac
