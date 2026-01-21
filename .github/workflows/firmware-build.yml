@@ -909,14 +909,15 @@ jobs:
           
           echo "🟢 步骤 19 完成"
       
-      # 步骤 20: 集成自定义文件（智能脚本管理版）- 智能脚本管理【修改：增强错误处理和调试信息】
+      # 步骤 20: 集成自定义文件（智能脚本管理增强版）- 智能脚本管理【修复环境变量传递问题】
       - name: "20. 集成自定义文件（智能脚本管理增强版）- 智能脚本管理"
         run: |
           echo "=== 步骤 20: 集成自定义文件（智能脚本管理增强版）- 智能脚本管理 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 设置错误处理 - 这里不退出，只是尝试集成
-          trap 'echo "⚠️ 步骤 20 集成过程中出现错误，继续执行..."' ERR
+          # 设置错误处理
+          set -e
+          trap 'echo "❌ 步骤 20 失败，退出代码: $?"; exit 1' ERR
           
           echo "🔍 检查自定义文件目录..."
           CUSTOM_DIR="${{ github.workspace }}/firmware-config/custom-files"
@@ -943,11 +944,17 @@ jobs:
             # 执行集成
             echo "🚀 开始执行自定义文件集成（智能脚本管理增强版）..."
             echo "💡 增强特性:"
-            echo "  - 改进的错误处理机制"
-            echo "  - 增强的调试信息输出"
-            echo "  - 修复环境变量统计问题"
+            echo "  - 修复的环境变量传递问题"
+            echo "  - 增强的统计信息保存"
             echo "  - 确保智能安装脚本正确生成"
             
+            # 先清理旧的统计文件，确保从新开始
+            if [ -f "/mnt/openwrt-build/custom_files_stats.txt" ]; then
+              rm -f "/mnt/openwrt-build/custom_files_stats.txt"
+              echo "🧹 清理旧的统计文件"
+            fi
+            
+            # 执行集成脚本
             "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
             
             # 验证集成结果
@@ -1024,26 +1031,36 @@ jobs:
                 echo "🔍 运行自定义文件集成检查..."
                 "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" check_custom_files_integration
                 
-                # 额外验证：检查环境变量是否正确保存
+                # 关键修复：立即重新加载和导出环境变量
                 echo ""
-                echo "🔍 检查环境变量保存情况..."
+                echo "🔧 关键修复：重新加载和导出环境变量..."
                 if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
                   source /mnt/openwrt-build/build_env.sh
-                  if [ -n "$CUSTOM_FILES_INTEGRATED" ] && [ "$CUSTOM_FILES_INTEGRATED" = "true" ]; then
-                    echo "✅ 环境变量 CUSTOM_FILES_INTEGRATED 已正确保存"
-                    echo "📊 保存的统计信息:"
-                    echo "  CUSTOM_IPK_COUNT: ${CUSTOM_IPK_COUNT:-未设置}"
-                    echo "  CUSTOM_SCRIPT_COUNT: ${CUSTOM_SCRIPT_COUNT:-未设置}"
-                    echo "  CUSTOM_TOTAL_FILES: ${CUSTOM_TOTAL_FILES:-未设置}"
-                  else
-                    echo "⚠️ 警告: 环境变量 CUSTOM_FILES_INTEGRATED 未正确保存"
-                    echo "💡 尝试重新保存..."
-                    echo 'export CUSTOM_FILES_INTEGRATED="true"' >> /mnt/openwrt-build/build_env.sh
-                    echo 'export CUSTOM_IPK_COUNT="1"' >> /mnt/openwrt-build/build_env.sh
-                    echo 'export CUSTOM_SCRIPT_COUNT="18"' >> /mnt/openwrt-build/build_env.sh
-                    echo 'export CUSTOM_TOTAL_FILES="19"' >> /mnt/openwrt-build/build_env.sh
-                    echo "✅ 已重新保存环境变量"
+                  
+                  # 导出到GitHub Actions环境
+                  if [ -n "$CUSTOM_IPK_COUNT" ]; then
+                    echo "CUSTOM_IPK_COUNT=$CUSTOM_IPK_COUNT" >> $GITHUB_ENV
+                    echo "📊 导出 CUSTOM_IPK_COUNT=$CUSTOM_IPK_COUNT"
                   fi
+                  
+                  if [ -n "$CUSTOM_SCRIPT_COUNT" ]; then
+                    echo "CUSTOM_SCRIPT_COUNT=$CUSTOM_SCRIPT_COUNT" >> $GITHUB_ENV
+                    echo "📊 导出 CUSTOM_SCRIPT_COUNT=$CUSTOM_SCRIPT_COUNT"
+                  fi
+                  
+                  if [ -n "$CUSTOM_TOTAL_FILES" ]; then
+                    echo "CUSTOM_TOTAL_FILES=$CUSTOM_TOTAL_FILES" >> $GITHUB_ENV
+                    echo "📊 导出 CUSTOM_TOTAL_FILES=$CUSTOM_TOTAL_FILES"
+                  fi
+                  
+                  if [ -n "$CUSTOM_FILES_INTEGRATED" ]; then
+                    echo "CUSTOM_FILES_INTEGRATED=$CUSTOM_FILES_INTEGRATED" >> $GITHUB_ENV
+                    echo "📊 导出 CUSTOM_FILES_INTEGRATED=$CUSTOM_FILES_INTEGRATED"
+                  fi
+                  
+                  echo "✅ 环境变量已重新导出到GitHub Actions"
+                else
+                  echo "⚠️ 环境文件不存在，无法导出变量"
                 fi
                 
             else
@@ -1388,10 +1405,10 @@ jobs:
           echo "🟢 步骤 27 完成"
       
       # 步骤 28: 编译后总结（增强版）- 修复自定义文件统计问题
-      - name: "28. 编译后总结（增强版）- 修复自定义文件执行问题"
+      - name: "28. 编译后总结（增强版）- 修复自定义文件统计问题"
         if: always()
         run: |
-          echo "=== 步骤 28: 编译后总结（增强版）- 修复自定义文件执行问题 ==="
+          echo "=== 步骤 28: 编译后总结（增强版）- 修复自定义文件统计问题 ==="
           echo "🕐 总结时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，总结不应该失败
