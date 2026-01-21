@@ -2502,7 +2502,7 @@ execute_script() {
     local script_dir=$(dirname "$script")
     cd "$script_dir" 2>/dev/null || cd /
     
-    # 设置中文环境，支持中文文件名
+    # 设置中文环境变量，支持中文文件名
     export LANG=zh_CN.UTF-8
     export LC_ALL=zh_CN.UTF-8
     
