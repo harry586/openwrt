@@ -1290,13 +1290,13 @@ jobs:
                 
                 # 判断文件类型
                 if [[ "$FILE_NAME" == *factory* ]]; then
-                  echo "  类型: 🏭 工厂固件 (用于首次刷机)"
+                  TYPE="🏭 工厂固件 (用于首次刷机)"
                 elif [[ "$FILE_NAME" == *sysupgrade* ]]; then
-                  echo "  类型: 🔄 系统升级固件 (用于已安装OpenWrt的设备)"
+                  TYPE="🔄 系统升级固件 (用于已安装OpenWrt的设备)"
                 elif [[ "$FILE_NAME" == *initramfs* ]]; then
-                  echo "  类型: 🚀 内存启动固件 (用于测试和救援)"
+                  TYPE="🚀 内存启动固件 (用于测试和救援)"
                 else
-                  echo "  类型: 🔧 普通固件"
+                  TYPE="🔧 普通固件"
                 fi
                 
                 echo ""
