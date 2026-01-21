@@ -2236,7 +2236,7 @@ integrate_custom_files() {
     local analysis_dir="/tmp/script-analysis-$(date +%s)"
     mkdir -p "$analysis_dir"
     
-    # 3. 全局统计变量（不使用local，避免作用域问题）
+    # 3. 全局统计变量（修复作用域问题）
     integrate_ipk_count=0
     integrate_script_count=0
     integrate_config_count=0
@@ -2369,7 +2369,7 @@ integrate_custom_files() {
     log "  📋 总复制文件: $integrate_copied_count 个"
     log "  💾 统计信息已保存到: $CUSTOM_STATS_FILE"
     
-    # 8. 创建智能安装脚本（增强版，确保IPK安装）
+    # 8. 创建智能安装脚本（增强版，确保IPK安装）- 修复bash语法兼容性
     log "🔧 步骤3: 创建智能安装脚本（增强版）"
     
     local smart_script="$custom_files_dir/smart_install.sh"
@@ -2403,8 +2403,8 @@ get_script_priority() {
     local basename=$(basename "$script")
     
     # 检查是否有数字前缀（如 "10_中文脚本.sh"）
-    if [[ "$basename" =~ ^([0-9]+)_ ]]; then
-        priority="${BASH_REMATCH[1]}"
+    if echo "$basename" | grep -q "^[0-9]\+_"; then
+        priority=$(echo "$basename" | grep -o "^[0-9]\+")
     else
         # 从脚本内容判断类型
         local content=$(head -20 "$script" 2>/dev/null)
@@ -2599,7 +2599,7 @@ EOF
     chmod +x "$smart_script"
     log "✅ 创建智能安装脚本: $smart_script"
     
-    # 9. 修改第一次开机脚本（增强版）
+    # 9. 修改第一次开机脚本（增强版）- 修复执行逻辑
     log "🔧 步骤4: 更新第一次开机脚本（增强版）"
     
     local first_boot_dir="files/etc/uci-defaults"
@@ -2612,10 +2612,18 @@ EOF
 LOG_FILE="/tmp/custom-files-install.log"
 CUSTOM_DIR="/etc/custom-files"
 SMART_SCRIPT="$CUSTOM_DIR/smart_install.sh"
+INSTALL_MARKER="/etc/custom-files-installed"
 
 echo "=== 第一次开机：自定义文件安装脚本（智能管理增强版）===" > $LOG_FILE
 echo "开始时间: $(date)" >> $LOG_FILE
 echo "" >> $LOG_FILE
+
+# 检查是否已经安装过
+if [ -f "$INSTALL_MARKER" ]; then
+    echo "ℹ️ 检测到已安装标记，跳过重复安装" >> $LOG_FILE
+    echo "📌 如需重新安装，请删除 $INSTALL_MARKER 文件" >> $LOG_FILE
+    exit 0
+fi
 
 # 检查自定义文件目录是否存在
 if [ -d "$CUSTOM_DIR" ]; then
@@ -2707,6 +2715,10 @@ if [ -d "$CUSTOM_DIR" ]; then
             fi
         done
     fi
+    
+    # 创建安装标记
+    touch "$INSTALL_MARKER" 2>/dev/null
+    echo "✅ 已创建安装标记: $INSTALL_MARKER" >> $LOG_FILE
 else
     echo "❌ 自定义文件目录不存在: $CUSTOM_DIR" >> $LOG_FILE
     echo "📌 跳过自定义文件安装" >> $LOG_FILE
@@ -2715,9 +2727,6 @@ fi
 echo "" >> $LOG_FILE
 echo "=== 自定义文件安装脚本执行完成 ===" >> $LOG_FILE
 echo "结束时间: $(date)" >> $LOG_FILE
-
-# 确保标记文件存在
-touch /etc/custom-files-installed 2>/dev/null || true
 
 exit 0
 EOF
@@ -2770,194 +2779,6 @@ EOF
     if [ $integrate_copied_count -eq 0 ]; then
         log "⚠️ 警告: 自定义文件目录为空"
         log "💡 支持的文件: .sh脚本、.ipk包、.conf配置文件等"
-    fi
-}
-
-pre_build_error_check() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 🚨 前置错误检查（修复23.05 SDK验证）==="
-    
-    local error_count=0
-    local warning_count=0
-    
-    # 显示当前环境变量
-    log "当前环境变量:"
-    log "  SELECTED_BRANCH: $SELECTED_BRANCH"
-    log "  TARGET: $TARGET"
-    log "  SUBTARGET: $SUBTARGET"
-    log "  DEVICE: $DEVICE"
-    log "  CONFIG_MODE: $CONFIG_MODE"
-    log "  COMPILER_DIR: $COMPILER_DIR"
-    
-    # 1. 检查配置文件
-    if [ ! -f ".config" ]; then
-        log "❌ 错误: .config 文件不存在"
-        error_count=$((error_count + 1))
-    else
-        log "✅ .config 文件存在"
-    fi
-    
-    # 2. 检查feeds
-    if [ ! -d "feeds" ]; then
-        log "❌ 错误: feeds 目录不存在"
-        error_count=$((error_count + 1))
-    else
-        log "✅ feeds 目录存在"
-    fi
-    
-    # 3. 检查依赖包
-    if [ ! -d "dl" ]; then
-        log "⚠️ 警告: dl 目录不存在，可能需要下载依赖"
-        warning_count=$((warning_count + 1))
-    else
-        local dl_count=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
-        log "✅ 依赖包数量: $dl_count 个"
-    fi
-    
-    # 4. 检查编译器状态
-    if [ -d "staging_dir" ]; then
-        local compiler_count=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" 2>/dev/null | wc -l)
-        if [ $compiler_count -eq 0 ]; then
-            log "ℹ️ 未找到已构建的编译器"
-            log "📌 已下载SDK编译器，无需自动构建"
-        else
-            log "✅ 已检测到编译器: $compiler_count 个"
-        fi
-    else
-        log "ℹ️ staging_dir目录不存在"
-        log "📌 将使用下载的SDK编译器进行构建"
-    fi
-    
-    # 5. 检查关键文件
-    local critical_files=("Makefile" "rules.mk" "Config.in" "feeds.conf.default")
-    for file in "${critical_files[@]}"; do
-        if [ -f "$file" ]; then
-            log "✅ 关键文件存在: $file"
-        else
-            log "❌ 错误: 关键文件不存在: $file"
-            error_count=$((error_count + 1))
-        fi
-    done
-    
-    # 6. 检查磁盘空间
-    local available_space=$(df /mnt --output=avail | tail -1)
-    local available_gb=$((available_space / 1024 / 1024))
-    log "磁盘可用空间: ${available_gb}G"
-    
-    if [ $available_gb -lt 10 ]; then
-        log "❌ 错误: 磁盘空间不足 (需要至少10G，当前${available_gb}G)"
-        error_count=$((error_count + 1))
-    elif [ $available_gb -lt 20 ]; then
-        log "⚠️ 警告: 磁盘空间较低 (建议至少20G，当前${available_gb}G)"
-        warning_count=$((warning_count + 1))
-    fi
-    
-    # 7. 检查内存
-    local total_mem=$(free -m | awk '/^Mem:/{print $2}')
-    log "系统内存: ${total_mem}MB"
-    
-    if [ $total_mem -lt 1024 ]; then
-        log "⚠️ 警告: 内存较低 (建议至少1GB)"
-        warning_count=$((warning_count + 1))
-    fi
-    
-    # 8. 检查预构建编译器文件 - 关键修复：简化23.05验证逻辑
-    log "🔧 检查预构建编译器文件..."
-    
-    # 简化验证逻辑，只做基本检查
-    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-        log "✅ 预构建编译器目录存在: $COMPILER_DIR"
-        log "📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
-        
-        # 放宽检查：只需要有编译器文件，不要求特定目录结构，排除虚假编译器
-        local gcc_files=$(find "$COMPILER_DIR" -type f -executable \
-          -name "*gcc" \
-          ! -name "*gcc-ar" \
-          ! -name "*gcc-ranlib" \
-          ! -name "*gcc-nm" \
-          ! -path "*dummy-tools*" \
-          ! -path "*scripts*" \
-          2>/dev/null | wc -l)
-        
-        if [ $gcc_files -gt 0 ]; then
-            log "✅ 找到 $gcc_files 个GCC编译器文件"
-            
-            # 显示第一个GCC的版本信息
-            local first_gcc=$(find "$COMPILER_DIR" -type f -executable \
-              -name "*gcc" \
-              ! -name "*gcc-ar" \
-              ! -name "*gcc-ranlib" \
-              ! -name "*gcc-nm" \
-              ! -path "*dummy-tools*" \
-              ! -path "*scripts*" \
-              2>/dev/null | head -1)
-            
-            if [ -n "$first_gcc" ]; then
-                log "🔧 第一个GCC版本: $("$first_gcc" --version 2>&1 | head -1)"
-                
-                # 对于23.05 SDK的特殊处理
-                if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-                    local sdk_version=$("$first_gcc" --version 2>&1 | head -1)
-                    if echo "$sdk_version" | grep -qi "12.3.0"; then
-                        log "🎯 确认是OpenWrt 23.05 SDK GCC 12.3.0"
-                    elif echo "$sdk_version" | grep -qi "dummy-tools"; then
-                        log "⚠️ 检测到虚假的dummy-tools编译器，继续查找..."
-                        # 查找其他GCC
-                        local real_gcc=$(find "$COMPILER_DIR" -type f -executable \
-                          -name "*gcc" \
-                          ! -name "*gcc-ar" \
-                          ! -name "*gcc-ranlib" \
-                          ! -name "*gcc-nm" \
-                          ! -path "*dummy-tools*" \
-                          ! -path "*scripts*" \
-                          ! -path "$(dirname "$first_gcc")" \
-                          2>/dev/null | head -1)
-                        
-                        if [ -n "$real_gcc" ]; then
-                            log "✅ 找到真正的GCC: $(basename "$real_gcc")"
-                            log "🔧 版本: $("$real_gcc" --version 2>&1 | head -1)"
-                        fi
-                    else
-                        log "⚠️ 23.05 SDK GCC版本不是预期的12.3.0"
-                        log "💡 可能不是官方的23.05 SDK，但可以继续尝试"
-                    fi
-                fi
-            fi
-        else
-            log "⚠️ 警告: 预构建编译器目录中未找到真正的GCC编译器"
-            warning_count=$((warning_count + 1))
-            
-            # 检查是否有工具链工具
-            local toolchain_tools=$(find "$COMPILER_DIR" -type f -executable -name "*gcc*" \
-              ! -path "*dummy-tools*" \
-              ! -path "*scripts*" \
-              2>/dev/null | wc -l)
-            if [ $toolchain_tools -gt 0 ]; then
-                log "📊 找到 $toolchain_tools 个工具链工具"
-                log "💡 有工具链工具但没有真正的GCC编译器"
-            fi
-        fi
-    else
-        log "ℹ️ 未设置预构建编译器目录或目录不存在"
-        log "💡 将使用OpenWrt自动构建的编译器"
-    fi
-    
-    # 9. 检查编译器调用状态（使用增强版）
-    check_compiler_invocation
-    
-    # 总结
-    if [ $error_count -eq 0 ]; then
-        if [ $warning_count -eq 0 ]; then
-            log "✅ 前置检查通过，可以开始编译"
-        else
-            log "⚠️ 前置检查通过，但有 $warning_count 个警告，建议修复"
-        fi
-        return 0
-    else
-        log "❌ 前置检查发现 $error_count 个错误，$warning_count 个警告，请修复后再编译"
-        return 1
     fi
 }
 
@@ -3383,7 +3204,7 @@ save_source_code_info() {
     log "✅ 源代码信息已保存到: $source_info_file"
 }
 
-# 检查自定义文件集成结果的函数
+# 检查自定义文件集成结果的函数 - 修复统计显示问题
 check_custom_files_integration() {
     load_env
     log "=== 检查自定义文件集成结果 ==="
@@ -3393,7 +3214,7 @@ check_custom_files_integration() {
     if [ -d "$custom_dir" ]; then
         log "✅ 自定义文件目录存在: $custom_dir"
         
-        # 统计文件
+        # 重新统计文件
         local ipk_count=0
         local script_count=0
         local config_count=0
@@ -3402,8 +3223,8 @@ check_custom_files_integration() {
         local priority_script_count=0
         local total_files=0
         
-        # 使用不区分大小写的方式统计
-        find "$custom_dir" -type f 2>/dev/null | while read file; do
+        # 使用find命令遍历所有文件
+        while IFS= read -r file; do
             FILENAME=$(basename "$file")
             total_files=$((total_files + 1))
             
@@ -3414,7 +3235,7 @@ check_custom_files_integration() {
                 script_count=$((script_count + 1))
                 
                 # 检查是否有数字前缀（优先级）
-                if [[ "$FILENAME" =~ ^([0-9]+)_ ]]; then
+                if echo "$FILENAME" | grep -q "^[0-9]\+_"; then
                     priority_script_count=$((priority_script_count + 1))
                 fi
             elif [[ "$FILENAME" == *.conf ]] || [[ "$FILENAME" == *.config ]] || [[ "$FILENAME" == *.CONF ]]; then
@@ -3429,7 +3250,7 @@ check_custom_files_integration() {
             elif echo "$FILENAME" | grep -q -E "备份|恢复|安装|配置|设置|脚本|文件|固件|插件|网络|系统|路由|无线"; then
                 chinese_count=$((chinese_count + 1))
             fi
-        done
+        done < <(find "$custom_dir" -type f 2>/dev/null)
         
         log "📊 自定义文件统计（实时检查）:"
         log "  📦 IPK文件: $ipk_count 个"
@@ -3456,7 +3277,7 @@ check_custom_files_integration() {
         
         # 显示所有文件
         log "📋 所有自定义文件列表:"
-        find "$custom_dir" -type f 2>/dev/null | sort | while read file; do
+        while IFS= read -r file; do
             FILENAME=$(basename "$file")
             FILESIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
             FILEPATH=$(echo "$file" | sed "s|$custom_dir/||")
@@ -3467,8 +3288,8 @@ check_custom_files_integration() {
             elif [[ "$FILENAME" == *.sh ]] || [[ "$FILENAME" == *.Sh ]] || [[ "$FILENAME" == *.SH ]] || \
                  head -2 "$file" 2>/dev/null | grep -q "^#!"; then
                 # 检查是否有数字前缀（优先级）
-                if [[ "$FILENAME" =~ ^([0-9]+)_ ]]; then
-                    PRIORITY="${BASH_REMATCH[1]}"
+                if echo "$FILENAME" | grep -q "^[0-9]\+_"; then
+                    PRIORITY=$(echo "$FILENAME" | grep -o "^[0-9]\+")
                     ORIGINAL_NAME=$(echo "$FILENAME" | sed "s/^[0-9]*_//")
                     log "  📜 $FILEPATH ($FILESIZE) [优先级: $PRIORITY] (原名: $ORIGINAL_NAME)"
                 else
@@ -3479,7 +3300,7 @@ check_custom_files_integration() {
             else
                 log "  📁 $FILEPATH ($FILESIZE)"
             fi
-        done
+        done < <(find "$custom_dir" -type f 2>/dev/null | sort)
         
         # 检查智能安装脚本
         if [ -f "$custom_dir/smart_install.sh" ]; then
