@@ -21,7 +21,7 @@ handle_error() {
     exit 1
 }
 
-# 保存环境变量函数 - 修复版
+# 保存环境变量函数 - 修复版，添加全局变量导出
 save_env() {
     mkdir -p $BUILD_DIR
     echo "#!/bin/bash" > $ENV_FILE
@@ -34,20 +34,33 @@ save_env() {
     echo "export REPO_ROOT=\"${REPO_ROOT}\"" >> $ENV_FILE
     echo "export COMPILER_DIR=\"${COMPILER_DIR}\"" >> $ENV_FILE
     
-    # 保存自定义文件统计信息（如果存在）
+    # 保存自定义文件统计信息（如果存在）- 修复：使用全局变量
     if [ -f "$CUSTOM_STATS_FILE" ]; then
-        source "$CUSTOM_STATS_FILE"
-        echo "export CUSTOM_IPK_COUNT=\"${CUSTOM_IPK_COUNT}\"" >> $ENV_FILE
-        echo "export CUSTOM_SCRIPT_COUNT=\"${CUSTOM_SCRIPT_COUNT}\"" >> $ENV_FILE
-        echo "export CUSTOM_CONFIG_COUNT=\"${CUSTOM_CONFIG_COUNT}\"" >> $ENV_FILE
-        echo "export CUSTOM_OTHER_COUNT=\"${CUSTOM_OTHER_COUNT}\"" >> $ENV_FILE
-        echo "export CUSTOM_CHINESE_COUNT=\"${CUSTOM_CHINESE_COUNT}\"" >> $ENV_FILE
-        echo "export CUSTOM_PRIORITY_SCRIPT_COUNT=\"${CUSTOM_PRIORITY_SCRIPT_COUNT}\"" >> $ENV_FILE
-        echo "export CUSTOM_TOTAL_FILES=\"${CUSTOM_TOTAL_FILES}\"" >> $ENV_FILE
-        echo "export CUSTOM_FILES_INTEGRATED=\"${CUSTOM_FILES_INTEGRATED}\"" >> $ENV_FILE
+        # 重新加载最新的统计文件
+        source "$CUSTOM_STATS_FILE" 2>/dev/null || true
+        
+        # 导出到环境文件
+        echo "export CUSTOM_IPK_COUNT=\"${CUSTOM_IPK_COUNT:-0}\"" >> $ENV_FILE
+        echo "export CUSTOM_SCRIPT_COUNT=\"${CUSTOM_SCRIPT_COUNT:-0}\"" >> $ENV_FILE
+        echo "export CUSTOM_CONFIG_COUNT=\"${CUSTOM_CONFIG_COUNT:-0}\"" >> $ENV_FILE
+        echo "export CUSTOM_OTHER_COUNT=\"${CUSTOM_OTHER_COUNT:-0}\"" >> $ENV_FILE
+        echo "export CUSTOM_CHINESE_COUNT=\"${CUSTOM_CHINESE_COUNT:-0}\"" >> $ENV_FILE
+        echo "export CUSTOM_PRIORITY_SCRIPT_COUNT=\"${CUSTOM_PRIORITY_SCRIPT_COUNT:-0}\"" >> $ENV_FILE
+        echo "export CUSTOM_TOTAL_FILES=\"${CUSTOM_TOTAL_FILES:-0}\"" >> $ENV_FILE
+        echo "export CUSTOM_FILES_INTEGRATED=\"${CUSTOM_FILES_INTEGRATED:-false}\"" >> $ENV_FILE
+    else
+        # 如果没有统计文件，设置默认值
+        echo "export CUSTOM_IPK_COUNT=\"0\"" >> $ENV_FILE
+        echo "export CUSTOM_SCRIPT_COUNT=\"0\"" >> $ENV_FILE
+        echo "export CUSTOM_CONFIG_COUNT=\"0\"" >> $ENV_FILE
+        echo "export CUSTOM_OTHER_COUNT=\"0\"" >> $ENV_FILE
+        echo "export CUSTOM_CHINESE_COUNT=\"0\"" >> $ENV_FILE
+        echo "export CUSTOM_PRIORITY_SCRIPT_COUNT=\"0\"" >> $ENV_FILE
+        echo "export CUSTOM_TOTAL_FILES=\"0\"" >> $ENV_FILE
+        echo "export CUSTOM_FILES_INTEGRATED=\"false\"" >> $ENV_FILE
     fi
     
-    # 确保环境变量可被其他步骤访问
+    # 确保环境变量可被其他步骤访问 - 修复：直接导出到当前环境
     if [ -n "$GITHUB_ENV" ]; then
         echo "SELECTED_REPO_URL=${SELECTED_REPO_URL}" >> $GITHUB_ENV
         echo "SELECTED_BRANCH=${SELECTED_BRANCH}" >> $GITHUB_ENV
@@ -56,25 +69,61 @@ save_env() {
         echo "DEVICE=${DEVICE}" >> $GITHUB_ENV
         echo "CONFIG_MODE=${CONFIG_MODE}" >> $GITHUB_ENV
         echo "COMPILER_DIR=${COMPILER_DIR}" >> $GITHUB_ENV
-        echo "CUSTOM_FILES_INTEGRATED=true" >> $GITHUB_ENV
         
+        # 从环境文件重新读取最新的统计信息
         if [ -f "$CUSTOM_STATS_FILE" ]; then
-            source "$CUSTOM_STATS_FILE"
-            echo "CUSTOM_IPK_COUNT=${CUSTOM_IPK_COUNT}" >> $GITHUB_ENV
-            echo "CUSTOM_SCRIPT_COUNT=${CUSTOM_SCRIPT_COUNT}" >> $GITHUB_ENV
-            echo "CUSTOM_CONFIG_COUNT=${CUSTOM_CONFIG_COUNT}" >> $GITHUB_ENV
-            echo "CUSTOM_OTHER_COUNT=${CUSTOM_OTHER_COUNT}" >> $GITHUB_ENV
-            echo "CUSTOM_CHINESE_COUNT=${CUSTOM_CHINESE_COUNT}" >> $GITHUB_ENV
-            echo "CUSTOM_PRIORITY_SCRIPT_COUNT=${CUSTOM_PRIORITY_SCRIPT_COUNT}" >> $GITHUB_ENV
-            echo "CUSTOM_TOTAL_FILES=${CUSTOM_TOTAL_FILES}" >> $GITHUB_ENV
+            source "$CUSTOM_STATS_FILE" 2>/dev/null || true
+            echo "CUSTOM_IPK_COUNT=${CUSTOM_IPK_COUNT:-0}" >> $GITHUB_ENV
+            echo "CUSTOM_SCRIPT_COUNT=${CUSTOM_SCRIPT_COUNT:-0}" >> $GITHUB_ENV
+            echo "CUSTOM_CONFIG_COUNT=${CUSTOM_CONFIG_COUNT:-0}" >> $GITHUB_ENV
+            echo "CUSTOM_OTHER_COUNT=${CUSTOM_OTHER_COUNT:-0}" >> $GITHUB_ENV
+            echo "CUSTOM_CHINESE_COUNT=${CUSTOM_CHINESE_COUNT:-0}" >> $GITHUB_ENV
+            echo "CUSTOM_PRIORITY_SCRIPT_COUNT=${CUSTOM_PRIORITY_SCRIPT_COUNT:-0}" >> $GITHUB_ENV
+            echo "CUSTOM_TOTAL_FILES=${CUSTOM_TOTAL_FILES:-0}" >> $GITHUB_ENV
+            echo "CUSTOM_FILES_INTEGRATED=${CUSTOM_FILES_INTEGRATED:-false}" >> $GITHUB_ENV
+        else
+            echo "CUSTOM_FILES_INTEGRATED=false" >> $GITHUB_ENV
         fi
+    fi
+    
+    # 导出到当前shell环境（修复关键问题）
+    export SELECTED_REPO_URL="${SELECTED_REPO_URL}"
+    export SELECTED_BRANCH="${SELECTED_BRANCH}"
+    export TARGET="${TARGET}"
+    export SUBTARGET="${SUBTARGET}"
+    export DEVICE="${DEVICE}"
+    export CONFIG_MODE="${CONFIG_MODE}"
+    export REPO_ROOT="${REPO_ROOT}"
+    export COMPILER_DIR="${COMPILER_DIR}"
+    
+    # 导出自定义文件统计
+    if [ -f "$CUSTOM_STATS_FILE" ]; then
+        source "$CUSTOM_STATS_FILE" 2>/dev/null || true
+        export CUSTOM_IPK_COUNT="${CUSTOM_IPK_COUNT:-0}"
+        export CUSTOM_SCRIPT_COUNT="${CUSTOM_SCRIPT_COUNT:-0}"
+        export CUSTOM_CONFIG_COUNT="${CUSTOM_CONFIG_COUNT:-0}"
+        export CUSTOM_OTHER_COUNT="${CUSTOM_OTHER_COUNT:-0}"
+        export CUSTOM_CHINESE_COUNT="${CUSTOM_CHINESE_COUNT:-0}"
+        export CUSTOM_PRIORITY_SCRIPT_COUNT="${CUSTOM_PRIORITY_SCRIPT_COUNT:-0}"
+        export CUSTOM_TOTAL_FILES="${CUSTOM_TOTAL_FILES:-0}"
+        export CUSTOM_FILES_INTEGRATED="${CUSTOM_FILES_INTEGRATED:-false}"
+    else
+        export CUSTOM_IPK_COUNT="0"
+        export CUSTOM_SCRIPT_COUNT="0"
+        export CUSTOM_CONFIG_COUNT="0"
+        export CUSTOM_OTHER_COUNT="0"
+        export CUSTOM_CHINESE_COUNT="0"
+        export CUSTOM_PRIORITY_SCRIPT_COUNT="0"
+        export CUSTOM_TOTAL_FILES="0"
+        export CUSTOM_FILES_INTEGRATED="false"
     fi
     
     chmod +x $ENV_FILE
     log "✅ 环境变量已保存到: $ENV_FILE"
+    log "📊 当前环境中的自定义文件统计: IPK=${CUSTOM_IPK_COUNT}, 脚本=${CUSTOM_SCRIPT_COUNT}, 总数=${CUSTOM_TOTAL_FILES}"
 }
 
-# 保存自定义文件统计信息到文件
+# 保存自定义文件统计信息到文件 - 修复：添加全局变量同步
 save_custom_stats() {
     cat > "$CUSTOM_STATS_FILE" << EOF
 CUSTOM_IPK_COUNT="$integrate_ipk_count"
@@ -89,7 +138,7 @@ EOF
     
     log "✅ 自定义文件统计信息已保存到: $CUSTOM_STATS_FILE"
     
-    # 同时保存到环境变量
+    # 同时保存到环境变量 - 修复：立即导出到当前环境
     export CUSTOM_IPK_COUNT="$integrate_ipk_count"
     export CUSTOM_SCRIPT_COUNT="$integrate_script_count"
     export CUSTOM_CONFIG_COUNT="$integrate_config_count"
@@ -98,20 +147,35 @@ EOF
     export CUSTOM_PRIORITY_SCRIPT_COUNT="$integrate_priority_script_count"
     export CUSTOM_TOTAL_FILES="$integrate_total_files"
     export CUSTOM_FILES_INTEGRATED="true"
+    
+    log "📊 已导出到当前环境: IPK=$CUSTOM_IPK_COUNT, 脚本=$CUSTOM_SCRIPT_COUNT, 总数=$CUSTOM_TOTAL_FILES"
+    
+    # 立即更新环境文件
+    save_env
 }
 
-# 加载环境变量函数
+# 加载环境变量函数 - 修复：添加详细日志
 load_env() {
     if [ -f "$ENV_FILE" ]; then
         source $ENV_FILE
         log "✅ 从 $ENV_FILE 加载环境变量"
         
         # 显示关键环境变量
-        if [ -n "$CUSTOM_FILES_INTEGRATED" ] && [ "$CUSTOM_FILES_INTEGRATED" = "true" ]; then
+        log "📋 关键环境变量:"
+        log "  SELECTED_BRANCH: $SELECTED_BRANCH"
+        log "  TARGET: $TARGET"
+        log "  SUBTARGET: $SUBTARGET"
+        log "  DEVICE: $DEVICE"
+        log "  CONFIG_MODE: $CONFIG_MODE"
+        
+        if [ -n "$CUSTOM_FILES_INTEGRATED" ]; then
             log "📊 已加载自定义文件统计信息:"
             log "  IPK文件: ${CUSTOM_IPK_COUNT:-0} 个"
             log "  脚本文件: ${CUSTOM_SCRIPT_COUNT:-0} 个"
             log "  总文件数: ${CUSTOM_TOTAL_FILES:-0} 个"
+            log "  集成状态: ${CUSTOM_FILES_INTEGRATED}"
+        else
+            log "📊 自定义文件统计: 未集成"
         fi
     else
         log "⚠️ 环境文件不存在: $ENV_FILE"
@@ -2353,7 +2417,7 @@ integrate_custom_files() {
     log "🔧 步骤2: 递归复制所有自定义文件并进行分析"
     recursive_copy_files "$custom_dir" "$custom_files_dir" ""
     
-    # 6. 保存统计信息到文件和环境变量
+    # 6. 保存统计信息到文件和环境变量 - 修复：立即保存并导出
     log "📊 保存自定义文件统计信息..."
     save_custom_stats
     
@@ -2576,7 +2640,7 @@ echo "结束时间: $(date)" >> $LOG_FILE
 echo "安装日志: $LOG_FILE"
 
 # 创建完成标记
-touch "$INSTALL_MARKER"
+touch "$INSTALL_MARKER" 2>/dev/null
 echo "✅ 自定义文件安装完成标记已创建: $INSTALL_MARKER"
 
 # 显示安装结果
