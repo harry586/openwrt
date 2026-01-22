@@ -3407,6 +3407,38 @@ check_custom_files_integration() {
     fi
 }
 
+# 新增：增强的环境变量同步函数
+sync_custom_stats_to_github_env() {
+    log "=== 同步自定义文件统计到GitHub环境变量 ==="
+    
+    if [ -f "$CUSTOM_STATS_FILE" ]; then
+        source "$CUSTOM_STATS_FILE" 2>/dev/null || true
+        
+        # 同步到GitHub Actions环境变量
+        if [ -n "$GITHUB_ENV" ]; then
+            echo "CUSTOM_IPK_COUNT=${CUSTOM_IPK_COUNT:-0}" >> $GITHUB_ENV
+            echo "CUSTOM_SCRIPT_COUNT=${CUSTOM_SCRIPT_COUNT:-0}" >> $GITHUB_ENV
+            echo "CUSTOM_CONFIG_COUNT=${CUSTOM_CONFIG_COUNT:-0}" >> $GITHUB_ENV
+            echo "CUSTOM_OTHER_COUNT=${CUSTOM_OTHER_COUNT:-0}" >> $GITHUB_ENV
+            echo "CUSTOM_CHINESE_COUNT=${CUSTOM_CHINESE_COUNT:-0}" >> $GITHUB_ENV
+            echo "CUSTOM_PRIORITY_SCRIPT_COUNT=${CUSTOM_PRIORITY_SCRIPT_COUNT:-0}" >> $GITHUB_ENV
+            echo "CUSTOM_TOTAL_FILES=${CUSTOM_TOTAL_FILES:-0}" >> $GITHUB_ENV
+            echo "CUSTOM_FILES_INTEGRATED=${CUSTOM_FILES_INTEGRATED:-false}" >> $GITHUB_ENV
+            
+            log "✅ 自定义文件统计已同步到GitHub环境变量"
+            log "📊 同步统计: IPK=${CUSTOM_IPK_COUNT}, 脚本=${CUSTOM_SCRIPT_COUNT}, 总数=${CUSTOM_TOTAL_FILES}"
+        else
+            log "⚠️ GITHUB_ENV未设置，无法同步到GitHub环境变量"
+        fi
+    else
+        log "ℹ️ 自定义统计文件不存在，设置默认值"
+        
+        if [ -n "$GITHUB_ENV" ]; then
+            echo "CUSTOM_FILES_INTEGRATED=false" >> $GITHUB_ENV
+        fi
+    fi
+}
+
 # 主函数
 main() {
     case $1 in
@@ -3454,6 +3486,8 @@ main() {
             ;;
         "integrate_custom_files")
             integrate_custom_files
+            # 集成后同步统计信息到GitHub环境变量
+            sync_custom_stats_to_github_env
             ;;
         "pre_build_error_check")
             pre_build_error_check
@@ -3494,6 +3528,9 @@ main() {
         "check_custom_files_integration")
             check_custom_files_integration
             ;;
+        "sync_custom_stats_to_github_env")
+            sync_custom_stats_to_github_env
+            ;;
         *)
             log "❌ 未知命令: $1"
             echo "可用命令:"
@@ -3507,6 +3544,7 @@ main() {
             echo "  check_compiler_invocation, search_compiler_files, universal_compiler_search"
             echo "  search_compiler_files_simple, intelligent_platform_aware_compiler_search"
             echo "  check_custom_files_integration - 检查自定义文件集成结果"
+            echo "  sync_custom_stats_to_github_env - 同步自定义文件统计到GitHub环境变量"
             exit 1
             ;;
     esac
