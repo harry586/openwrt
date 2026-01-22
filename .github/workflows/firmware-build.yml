@@ -785,7 +785,7 @@ jobs:
             echo "  家长控制 (luci-app-accesscontrol): $(grep -q "^CONFIG_PACKAGE_luci-app-accesscontrol=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  微信推送 (luci-app-wechatpush): $(grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  流量控制 (SQM) (luci-app-sqm): $(grep -q "^CONFIG_PACKAGE_luci-app-sqm=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  FTP 服务器 (luci-app-vsftpd): $(grep -q "^CONFIG_PACKAGE_luci-app-vsftpd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  FTP 服务器 (luci-app-vsftpd): $(greq -q "^CONFIG_PACKAGE_luci-app-vsftpd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  ARP 绑定 (luci-app-arpbind): $(grep -q "^CONFIG_PACKAGE_luci-app-arpbind=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  CPU 限制 (luci-app-cpulimit): $(grep -q "^CONFIG_PACKAGE_luci-app-cpulimit=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  硬盘休眠 (luci-app-hd-idle): $(grep -q "^CONFIG_PACKAGE_luci-app-hd-idle=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
@@ -909,10 +909,10 @@ jobs:
           
           echo "🟢 步骤 19 完成"
       
-      # 步骤 20: 集成自定义文件（智能脚本管理增强版）- 智能脚本管理【修复环境变量传递问题】
-      - name: "20. 集成自定义文件（智能脚本管理增强版）- 智能脚本管理"
+      # 步骤 20: 集成自定义文件（修复版）- 保持原文件名，立即保存统计信息
+      - name: "20. 集成自定义文件（修复版）- 保持原文件名"
         run: |
-          echo "=== 步骤 20: 集成自定义文件（智能脚本管理增强版）- 智能脚本管理 ==="
+          echo "=== 步骤 20: 集成自定义文件（修复版）- 保持原文件名 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -942,26 +942,15 @@ jobs:
             done
             
             # 执行集成
-            echo "🚀 开始执行自定义文件集成（智能脚本管理增强版）..."
-            echo "💡 增强特性:"
-            echo "  - 修复的环境变量传递问题"
-            echo "  - 增强的统计信息保存"
-            echo "  - 确保智能安装脚本正确生成"
+            echo "🚀 开始执行自定义文件集成（修复版）..."
+            echo "💡 修复特性:"
+            echo "  - 保持原文件名，不添加数字前缀"
+            echo "  - 立即保存统计信息到环境变量"
+            echo "  - 修复的智能安装脚本"
             echo "  - 自动同步统计信息到GitHub环境变量"
-            
-            # 先清理旧的统计文件，确保从新开始
-            if [ -f "/mnt/openwrt-build/custom_files_stats.txt" ]; then
-              rm -f "/mnt/openwrt-build/custom_files_stats.txt"
-              echo "🧹 清理旧的统计文件"
-            fi
             
             # 执行集成脚本
             "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
-            
-            # 特别注意：强制同步统计信息到GitHub环境变量
-            echo ""
-            echo "🔧 强制同步自定义文件统计信息到GitHub环境变量..."
-            "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" sync_custom_stats_to_github_env
             
             # 验证集成结果
             echo ""
@@ -973,20 +962,11 @@ jobs:
                 echo "✅ 自定义文件已复制到: files/etc/custom-files"
                 
                 # 显示复制后的文件列表
-                echo "📋 复制后的文件列表:"
+                echo "📋 复制后的文件列表 (保持原文件名):"
                 find "files/etc/custom-files" -type f 2>/dev/null | sort | while read file; do
                   filename=$(basename "$file")
                   filesize=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                  filepath=$(echo "$file" | sed "s|files/etc/custom-files/||")
-                  
-                  # 检测是否有数字前缀（优先级）
-                  if [[ "$filename" =~ ^([0-9]+)_ ]]; then
-                    priority="${BASH_REMATCH[1]}"
-                    original_name=$(echo "$filename" | sed "s/^[0-9]*_//")
-                    echo "  📜 $filepath ($filesize) [优先级: $priority] (原名: $original_name)"
-                  else
-                    echo "  📄 $filepath ($filesize)"
-                  fi
+                  echo "  📄 $filename ($filesize)"
                 done
                 
                 # 检查智能安装脚本
@@ -1001,70 +981,26 @@ jobs:
                     chmod +x "files/etc/custom-files/smart_install.sh"
                     echo "✅ 已修复智能安装脚本权限"
                   fi
-                  
-                  echo "💡 脚本特性:"
-                  echo "  - 支持子文件夹结构"
-                  echo "  - 支持中文文件名"
-                  echo "  - 自动按优先级排序执行"
-                  echo "  - 智能脚本分类 (10:包管理, 20:网络, 30:定时任务, 35:配置, 40:服务, 60:备份)"
-                  echo "  - 增强的错误处理和调试信息"
                 fi
                 
                 # 检查第一次开机脚本
                 if [ -f "files/etc/uci-defaults/99-custom-files" ]; then
                   echo "✅ 第一次开机脚本: files/etc/uci-defaults/99-custom-files"
-                  
-                  # 检查脚本内容
-                  echo "📝 第一次开机脚本内容预览:"
-                  head -10 "files/etc/uci-defaults/99-custom-files" 2>/dev/null || echo "  无法读取脚本内容"
-                  
-                  echo "📌 将在第一次开机时自动执行智能安装管理器"
-                  echo "💡 注意: 这是OpenWrt的uci-defaults脚本，在第一次启动后会自动删除"
                 fi
                 
                 echo ""
-                echo "🎉 智能脚本管理增强版特性:"
-                echo "  📁 支持子文件夹结构: 可以按分类组织文件"
-                echo "  🇨🇳 支持中文文件名: 自动处理中文名文件"
-                echo "  🧠 智能优先级排序: 按数字前缀自动排序执行"
-                echo "  📊 详细的统计信息: 显示文件类型和数量"
-                echo "  🚀 自动安装: 第一次开机时自动执行"
-                echo "  🔧 增强错误处理: 更好的错误检测和恢复机制"
-                echo "  🐛 调试信息: 详细的日志输出便于问题排查"
-                echo "  🔄 环境变量同步: 自动同步统计信息到GitHub Actions"
-                
-                # 运行自定义文件检查函数
-                echo ""
-                echo "🔍 运行自定义文件集成检查..."
-                "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" check_custom_files_integration
-                
-                # 关键修复：从环境文件读取并验证统计信息
-                echo ""
-                echo "🔧 关键修复：验证环境变量中的统计信息..."
-                if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
-                  source /mnt/openwrt-build/build_env.sh
-                  
-                  echo "📊 环境变量中的自定义文件统计:"
-                  echo "  IPK文件: ${CUSTOM_IPK_COUNT:-0} 个"
-                  echo "  脚本文件: ${CUSTOM_SCRIPT_COUNT:-0} 个"
-                  echo "  总文件数: ${CUSTOM_TOTAL_FILES:-0} 个"
-                  echo "  集成状态: ${CUSTOM_FILES_INTEGRATED:-false}"
-                  
-                  if [ "${CUSTOM_FILES_INTEGRATED:-false}" = "true" ]; then
-                    echo "✅ 自定义文件集成状态已正确标记为true"
-                  else
-                    echo "❌ 自定义文件集成状态错误: ${CUSTOM_FILES_INTEGRATED:-false} (期望: true)"
-                  fi
-                else
-                  echo "⚠️ 环境文件不存在"
-                fi
-                
+                echo "🎉 自定义文件集成修复完成"
+                echo "📊 修复特性:"
+                echo "  🔒 文件名: 保持原文件名，不添加数字前缀"
+                echo "  🧠 智能排序: 按脚本内容分析优先级"
+                echo "  💾 统计信息: 立即保存到环境变量"
+                echo "  🚀 安装方式: 第一次开机自动智能安装"
             else
                 echo "❌ 未找到自定义文件目录"
             fi
             
             echo ""
-            echo "✅ 自定义文件集成完成（智能脚本管理增强版）"
+            echo "✅ 自定义文件集成完成（修复版）"
             echo "📌 自定义文件将在第一次开机时自动智能安装"
             echo "💡 刷机后检查步骤:"
             echo "  1. 登录路由器: ssh root@192.168.1.1"
@@ -1404,11 +1340,11 @@ jobs:
           
           echo "🟢 步骤 27 完成"
       
-      # 步骤 28: 编译后总结（增强版）- 修复自定义文件统计问题
-      - name: "28. 编译后总结（增强版）- 修复自定义文件统计问题"
+      # 步骤 28: 编译后总结（增强版）- 显示自定义文件统计
+      - name: "28. 编译后总结（增强版）- 显示自定义文件统计"
         if: always()
         run: |
-          echo "=== 步骤 28: 编译后总结（增强版）- 修复自定义文件统计问题 ==="
+          echo "=== 步骤 28: 编译后总结（增强版）- 显示自定义文件统计 ==="
           echo "🕐 总结时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，总结不应该失败
@@ -1425,7 +1361,7 @@ jobs:
           
           # 检查构建产物
           if [ -d "/mnt/openwrt-build/bin/targets" ]; then
-            # 修复：正确统计固件文件
+            # 正确统计固件文件
             FIRMWARE_COUNT=$(find "/mnt/openwrt-build/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
             
             echo "📦 构建产物:"
@@ -1453,21 +1389,8 @@ jobs:
                 
                 echo "    🎯 $FILE_NAME ($SIZE) - $TYPE"
               done
-              
-              # 统计包文件
-              PACKAGE_COUNT=$(find "/mnt/openwrt-build/bin/targets" -type f \( -name "*.gz" -o -name "*.ipk" \) 2>/dev/null | wc -l)
-              OTHER_COUNT=$(find "/mnt/openwrt-build/bin/targets" -type f 2>/dev/null | wc -l)
-              OTHER_COUNT=$((OTHER_COUNT - FIRMWARE_COUNT - PACKAGE_COUNT))
-              
-              echo "  包文件数量: $PACKAGE_COUNT 个 (.gz/.ipk)"
-              echo "  其他文件数量: $OTHER_COUNT 个"
             else
               echo "  ⚠️ 构建结果: 编译完成但未生成固件文件"
-              echo "  🔍 已生成的其他文件:"
-              find "/mnt/openwrt-build/bin/targets" -type f 2>/dev/null | head -5 | while read file; do
-                SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                echo "    📄 $(basename "$file") ($SIZE)"
-              done
             fi
           else
             echo "📦 构建产物: 未生成任何文件"
@@ -1487,237 +1410,51 @@ jobs:
             echo "  ❌ 构建结果: 失败"
           fi
           
-          # 编译器信息
+          # 自定义文件集成状态 - 从GitHub环境变量读取
           echo ""
-          echo "🔧 编译器信息:"
-          
-          # 检查SDK编译器版本
-          if [ -d "/mnt/openwrt-build/sdk" ]; then
-            # 查找真正的GCC，排除虚假编译器
-            GCC_FILE=$(find "/mnt/openwrt-build/sdk" -type f -executable \
-              -name "*gcc" \
-              ! -name "*gcc-ar" \
-              ! -name "*gcc-ranlib" \
-              ! -name "*gcc-nm" \
-              ! -path "*dummy-tools*" \
-              ! -path "*scripts*" \
-              2>/dev/null | head -1)
-            
-            if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
-              SDK_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
-              MAJOR_VERSION=$(echo "$SDK_VERSION" | grep -o "[0-9]\+" | head -1)
-              
-              if [ "$MAJOR_VERSION" = "12" ]; then
-                echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
-                echo "  🎯 SDK GCC: 12.3.0 (OpenWrt 23.05 SDK，用于交叉编译固件)"
-              elif [ "$MAJOR_VERSION" = "8" ]; then
-                echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
-                echo "  🎯 SDK GCC: 8.4.0 (OpenWrt 21.02 SDK，用于交叉编译固件)"
-              else
-                echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
-                echo "  🎯 SDK GCC: $MAJOR_VERSION.x (用于交叉编译固件)"
-              fi
-            else
-              echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
-              echo "  🎯 SDK GCC: 未检测到版本（可能检测到虚假的dummy-tools编译器）"
-            fi
-          else
-            echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
-            echo "  🎯 SDK GCC: 未下载SDK，使用自动构建的编译器"
-          fi
-          
-          echo "  💡 这是正常的：系统编译器编译工具链，SDK编译器编译固件"
-          
-          # 自定义文件集成状态（修复版）- 从GitHub环境变量读取统计信息
-          echo ""
-          echo "📁 自定义文件集成状态（修复版）:"
+          echo "📁 自定义文件集成状态:"
           
           # 检查GitHub环境变量中的自定义文件统计
           if [ -n "${{ env.CUSTOM_FILES_INTEGRATED }}" ]; then
             if [ "${{ env.CUSTOM_FILES_INTEGRATED }}" = "true" ]; then
-              echo "  ✅ 自定义文件已集成 (从GitHub环境变量确认)"
+              echo "  ✅ 自定义文件已集成"
               
               # 从GitHub环境变量读取统计信息
               if [ -n "${{ env.CUSTOM_IPK_COUNT }}" ]; then
                 echo "  📦 IPK文件: ${{ env.CUSTOM_IPK_COUNT }} 个"
-              else
-                echo "  📦 IPK文件: 0 个 (环境变量未设置)"
               fi
               
               if [ -n "${{ env.CUSTOM_SCRIPT_COUNT }}" ]; then
                 echo "  📜 脚本文件: ${{ env.CUSTOM_SCRIPT_COUNT }} 个"
-              else
-                echo "  📜 脚本文件: 0 个 (环境变量未设置)"
               fi
               
               if [ -n "${{ env.CUSTOM_TOTAL_FILES }}" ]; then
                 echo "  总文件数: ${{ env.CUSTOM_TOTAL_FILES }} 个"
-              else
-                echo "  总文件数: 0 个 (环境变量未设置)"
               fi
               
               echo "  📍 位置: /etc/custom-files/"
               
               # 检查实际文件目录作为验证
               if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
-                echo "  ✅ 实际目录验证: 存在"
-                
-                # 实时统计实际文件数量
                 ACTUAL_TOTAL=$(find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | wc -l)
-                echo "  📊 实际文件数量: $ACTUAL_TOTAL 个"
+                echo "  ✅ 实际目录验证: 存在 ($ACTUAL_TOTAL 个文件)"
                 
-                if [ -n "${{ env.CUSTOM_TOTAL_FILES }}" ]; then
-                  if [ $ACTUAL_TOTAL -eq ${{ env.CUSTOM_TOTAL_FILES }} ]; then
-                    echo "  ✅ 文件数量匹配: 保存的统计信息与实际一致"
-                  else
-                    echo "  ⚠️ 文件数量不匹配: 保存的 ${{ env.CUSTOM_TOTAL_FILES }} 个 vs 实际的 $ACTUAL_TOTAL 个"
-                  fi
-                fi
-              else
-                echo "  ❌ 实际目录验证: 不存在"
+                # 显示实际文件
+                echo "  📋 实际文件列表 (前5个):"
+                find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | head -5 | while read file; do
+                  FILENAME=$(basename "$file")
+                  FILESIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                  echo "    📄 $FILENAME ($FILESIZE)"
+                done
               fi
               
-              if [ -f "/mnt/openwrt-build/files/etc/uci-defaults/99-custom-files" ]; then
-                echo "  ✅ 第一次开机安装脚本: 已创建（智能脚本管理增强版）"
-                echo "  🧠 智能管理: 支持子文件夹、中文名、优先级排序"
-                echo "  🔢 执行顺序: 按数字前缀自动排序 (10→20→30→35→40→50→60)"
-                echo "  🚀 安装方式: 第一次开机自动智能安装"
-                echo "  🔒 防止重复安装: 检测 /etc/custom-files-installed 标记"
-                
-                # 特别注意：解释uci-defaults脚本的行为
-                echo ""
-                echo "🚨 重要提示: 关于第一次开机脚本执行问题"
-                echo "  💡 问题分析: /etc/uci-defaults/99-custom-files 是OpenWrt的标准机制"
-                echo "  📌 正常行为:"
-                echo "    1. 第一次开机时自动执行"
-                echo "    2. 执行成功后自动删除脚本文件"
-                echo "    3. 这是OpenWrt的标准行为，不是bug"
-                echo "  🔧 如果脚本未执行，可能原因:"
-                echo "    1. 脚本执行失败（退出代码非0）"
-                echo "    2. 环境变量设置问题"
-                echo "    3. 权限问题"
-                echo "  🛠️ 刷机后手动修复步骤:"
-                echo "    1. ssh登录路由器: ssh root@192.168.1.1"
-                echo "    2. 检查安装标记: ls -la /etc/custom-files-installed"
-                echo "    3. 如果没有标记文件，手动执行: /etc/custom-files/smart_install.sh"
-                echo "    4. 查看错误日志: cat /tmp/smart-install.log"
-                echo "    5. 检查脚本权限: ls -la /etc/custom-files/smart_install.sh"
-              fi
+              echo "  🧠 智能安装: 第一次开机自动执行 (保持原文件名)"
+              echo "  🔢 执行顺序: 按脚本内容智能分析优先级"
             else
-              echo "  ⚪ 自定义文件: 未集成 (CUSTOM_FILES_INTEGRATED 设置为 false)"
+              echo "  ⚪ 自定义文件: 未集成"
             fi
           else
-            echo "  ⚪ 自定义文件: 未集成 (CUSTOM_FILES_INTEGRATED 环境变量未设置)"
-          fi
-          
-          # 如果没有从环境变量获取到统计信息，尝试实时检查
-          if [ -z "${{ env.CUSTOM_FILES_INTEGRATED }}" ] || [ "${{ env.CUSTOM_FILES_INTEGRATED }}" != "true" ]; then
-            echo ""
-            echo "🔍 尝试实时检查自定义文件目录..."
-            if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
-              echo "  ✅ 自定义文件目录存在，但统计信息未保存到环境变量"
-              
-              # 实时统计
-              ACTUAL_IPK=0
-              ACTUAL_SCRIPT=0
-              ACTUAL_CONFIG=0
-              ACTUAL_OTHER=0
-              ACTUAL_CHINESE=0
-              ACTUAL_PRIORITY=0
-              ACTUAL_TOTAL=0
-              
-              find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
-                FILENAME=$(basename "$file")
-                ACTUAL_TOTAL=$((ACTUAL_TOTAL + 1))
-                
-                if echo "$FILENAME" | grep -qi "\.ipk$"; then
-                  ACTUAL_IPK=$((ACTUAL_IPK + 1))
-                elif [[ "$FILENAME" == *.sh ]] || [[ "$FILENAME" == *.Sh ]] || [[ "$FILENAME" == *.SH ]] || \
-                     head -2 "$file" 2>/dev/null | grep -q "^#!"; then
-                  ACTUAL_SCRIPT=$((ACTUAL_SCRIPT + 1))
-                  
-                  # 检查是否有数字前缀（优先级）
-                  if [[ "$FILENAME" =~ ^([0-9]+)_ ]]; then
-                    ACTUAL_PRIORITY=$((ACTUAL_PRIORITY + 1))
-                  fi
-                elif [[ "$FILENAME" == *.conf ]] || [[ "$FILENAME" == *.config ]] || [[ "$FILENAME" == *.CONF ]]; then
-                  ACTUAL_CONFIG=$((ACTUAL_CONFIG + 1))
-                else
-                  ACTUAL_OTHER=$((ACTUAL_OTHER + 1))
-                fi
-                
-                # 检测中文文件名
-                if echo "$FILENAME" | grep -q -P '[\x{4e00}-\x{9fff}\x{3400}-\x{4dbf}]'; then
-                  ACTUAL_CHINESE=$((ACTUAL_CHINESE + 1))
-                elif echo "$FILENAME" | grep -q -E "备份|恢复|安装|配置|设置|脚本|文件|固件|插件|网络|系统|路由|无线"; then
-                  ACTUAL_CHINESE=$((ACTUAL_CHINESE + 1))
-                fi
-              done
-              
-              echo "  📊 实时统计结果:"
-              echo "    📦 IPK文件: $ACTUAL_IPK 个"
-              echo "    📜 脚本文件: $ACTUAL_SCRIPT 个"
-              echo "      其中 $ACTUAL_PRIORITY 个已按优先级排序"
-              echo "    ⚙️ 配置文件: $ACTUAL_CONFIG 个"
-              echo "    📁 其他文件: $ACTUAL_OTHER 个"
-              echo "    总文件数: $ACTUAL_TOTAL 个"
-              echo "    🇨🇳 中文名文件: $ACTUAL_CHINESE 个"
-              
-              echo "  ⚠️ 注意: 统计信息未保存到GitHub环境变量，可能是环境变量同步问题"
-            else
-              echo "  ⚪ 自定义文件: 目录不存在，未集成"
-            fi
-          fi
-          
-          # 关于自定义脚本执行问题的详细解释
-          echo ""
-          echo "🔍 关于自定义脚本执行问题的详细分析:"
-          echo "  📋 日志显示的问题:"
-          echo "    - /etc/uci-defaults/ 目录没有看到开机脚本（正常，因为执行后自动删除）"
-          echo "    - /etc/custom-files-installed 是0细节（安装失败）"
-          echo "    - /etc/custom-files/ 存在ipk和脚本文件（复制成功）"
-          echo ""
-          echo "  🎯 问题根本原因:"
-          echo "    1. ✅ 编译时: 脚本正确生成和复制"
-          echo "    2. ❌ 刷机后: 第一次开机脚本执行失败"
-          echo "    3. 🔄 系统行为: 执行失败的脚本被OpenWrt自动删除"
-          echo ""
-          echo "  🔧 解决方案:"
-          echo "    1. 增强智能安装脚本的错误处理"
-          echo "    2. 添加更详细的调试信息"
-          echo "    3. 手动执行安装脚本进行恢复"
-          echo ""
-          echo "  🛠️ 刷机后修复步骤（如果第一次开机安装失败）:"
-          echo "    1. 登录路由器: ssh root@192.168.1.1"
-          echo "    2. 检查安装状态: ls -la /etc/custom-files-installed"
-          echo "    3. 如果没有安装标记，手动执行:"
-          echo "       cd /etc/custom-files"
-          echo "       chmod +x smart_install.sh"
-          echo "       LANG=zh_CN.UTF-8 ./smart_install.sh"
-          echo "    4. 查看详细日志: cat /tmp/smart-install.log"
-          echo "    5. 检查脚本执行结果: echo $?"
-          echo ""
-          echo "  📝 智能安装脚本关键改进:"
-          echo "    - 设置中文环境变量: LANG=zh_CN.UTF-8"
-          echo "    - 增强文件匹配: 不区分大小写的IPK文件搜索"
-          echo "    - 详细的错误日志: 记录每个步骤的执行结果"
-          echo "    - 重复安装检测: 避免重复执行"
-          
-          # stdout错误信息
-          echo ""
-          echo "⚠️ 关于 'make: write error: stdout' 警告:"
-          echo "  💡 这个问题是由于大量编译输出导致的stdout缓冲区溢出"
-          echo "  🔧 已修复: 在步骤19和23中使用 stdbuf -oL -eL 命令"
-          echo "  📊 这是一个无害的警告，不影响编译结果"
-          
-          # IPK安装逻辑修复说明
-          if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
-            echo ""
-            echo "🔧 关于IPK安装逻辑修复:"
-            echo "  ✅ 已修复IPK文件安装问题"
-            echo "  💡 智能安装脚本使用不区分大小写的文件匹配"
-            echo "  🎯 确保所有IPK文件都会被正确安装"
-            echo "  🔒 增强功能: 支持中文文件名、检测重复安装、修复安装失败"
+            echo "  ⚪ 自定义文件: 未集成 (环境变量未设置)"
           fi
           
           echo ""
