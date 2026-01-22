@@ -2329,12 +2329,12 @@ analyze_script() {
     echo "$script_name:$script_type:$priority"
 }
 
-# 集成自定义文件函数（智能脚本管理修复版）- 修复文件名修改和统计问题
+# 集成自定义文件函数（修复IPK安装失败处理和脚本查找逻辑）- 修复关键问题
 integrate_custom_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 集成自定义文件（智能脚本管理修复版）- 不修改文件名，修复统计 ==="
+    log "=== 集成自定义文件（修复IPK安装失败处理和脚本查找逻辑）==="
     
     local custom_dir="$REPO_ROOT/firmware-config/custom-files"
     
@@ -2376,7 +2376,7 @@ integrate_custom_files() {
     local integrate_copied_count=0
     local integrate_folder_count=0
     local integrate_total_files=0
-    local integrate_priority_script_count=0  # 新增：统计优先级脚本数量
+    local integrate_priority_script_count=0
     
     # 4. 创建递归复制函数，支持子文件夹和中文文件名，不修改文件名
     recursive_copy_files() {
@@ -2512,14 +2512,14 @@ EOF
     log "  📋 总复制文件: $integrate_copied_count 个"
     log "  💾 统计信息已保存到: $CUSTOM_STATS_FILE"
     
-    # 8. 创建智能安装脚本（修复版，不依赖文件名前缀）- 修复bash语法兼容性
-    log "🔧 步骤3: 创建智能安装脚本（修复版）"
+    # 8. 创建修复版智能安装脚本（关键修复：IPK安装失败不中断，增强脚本查找逻辑）
+    log "🔧 步骤3: 创建修复版智能安装脚本（关键修复IPK安装失败处理和脚本查找逻辑）"
     
     local smart_script="$custom_files_dir/smart_install.sh"
     cat > "$smart_script" << 'EOF'
 #!/bin/sh
 # 智能脚本安装管理器 - 修复版
-# 自动按优先级执行脚本，确保IPK安装
+# 修复IPK安装失败不中断，增强脚本查找逻辑
 # 支持子文件夹结构和中文文件名，不依赖文件名前缀
 
 LOG_FILE="/tmp/smart-install.log"
@@ -2528,6 +2528,10 @@ INSTALL_MARKER="/etc/custom-files-installed"
 
 echo "=== 智能脚本安装管理器 - 修复版 ===" > $LOG_FILE
 echo "开始时间: $(date)" >> $LOG_FILE
+echo "修复特性:" >> $LOG_FILE
+echo "1. IPK安装失败不中断执行" >> $LOG_FILE
+echo "2. 增强脚本查找逻辑" >> $LOG_FILE
+echo "3. 详细错误记录" >> $LOG_FILE
 echo "" >> $LOG_FILE
 
 # 检查是否已经安装过
@@ -2562,13 +2566,14 @@ get_script_priority() {
     echo $priority
 }
 
-# 安装IPK包（增强版）
+# 修复版：安装IPK包（安装失败不中断，继续执行）
 install_ipk_packages() {
     echo "" >> $LOG_FILE
-    echo "=== 安装IPK包（增强版） ===" >> $LOG_FILE
+    echo "=== 安装IPK包（修复版：失败不中断） ===" >> $LOG_FILE
     
     local ipk_count=0
     local success_count=0
+    local failed_count=0
     
     # 查找所有IPK文件（支持中文文件名，不区分大小写）
     find "$CUSTOM_DIR" -type f 2>/dev/null | while read file; do
@@ -2576,7 +2581,8 @@ install_ipk_packages() {
         # 不区分大小写检查IPK文件
         if echo "$filename" | grep -qi "\.ipk$"; then
             ipk_count=$((ipk_count + 1))
-            echo "安装IPK: $filename" >> $LOG_FILE
+            echo "" >> $LOG_FILE
+            echo "📦 处理IPK [$ipk_count]: $filename" >> $LOG_FILE
             echo "完整路径: $file" >> $LOG_FILE
             
             # 检查文件大小
@@ -2584,41 +2590,111 @@ install_ipk_packages() {
             echo "文件大小: $filesize" >> $LOG_FILE
             
             # 使用绝对路径安装
-            if opkg install "$file" >> $LOG_FILE 2>&1; then
+            echo "执行: opkg install \"$file\"" >> $LOG_FILE
+            opkg install "$file" >> $LOG_FILE 2>&1
+            local install_result=$?
+            
+            if [ $install_result -eq 0 ]; then
                 success_count=$((success_count + 1))
                 echo "✅ $filename 安装成功" >> $LOG_FILE
             else
-                echo "⚠️ $filename 安装失败，尝试修复..." >> $LOG_FILE
+                failed_count=$((failed_count + 1))
+                echo "⚠️ $filename 安装失败 (退出代码: $install_result)" >> $LOG_FILE
+                echo "💡 安装失败不影响继续执行其他任务" >> $LOG_FILE
                 
-                # 尝试清理缓存后重新安装
-                opkg update >> $LOG_FILE 2>&1
-                opkg install --force-reinstall "$file" >> $LOG_FILE 2>&1
-                if [ $? -eq 0 ]; then
-                    success_count=$((success_count + 1))
-                    echo "✅ $filename 修复安装成功" >> $LOG_FILE
-                else
-                    echo "❌ $filename 安装失败" >> $LOG_FILE
-                fi
+                # 显示错误信息但不中断
+                echo "错误信息:" >> $LOG_FILE
+                tail -5 $LOG_FILE | grep -E "error|Error|ERROR|failed|Failed|FAILED" | head -3 >> $LOG_FILE 2>/dev/null || true
             fi
         fi
     done
     
-    echo "IPK安装统计: $success_count/$ipk_count 成功" >> $LOG_FILE
+    echo "" >> $LOG_FILE
+    echo "📊 IPK安装统计:" >> $LOG_FILE
+    echo "  总IPK文件: $ipk_count 个" >> $LOG_FILE
+    echo "  成功安装: $success_count 个" >> $LOG_FILE
+    echo "  安装失败: $failed_count 个" >> $LOG_FILE
     
     if [ $ipk_count -eq 0 ]; then
         echo "ℹ️ 未找到IPK文件" >> $LOG_FILE
     fi
+    
+    # 返回0表示继续执行（即使有失败）
+    return 0
 }
 
-# 执行单个脚本（增强版）
-execute_script() {
-    local script="$1"
-    local script_name=$(basename "$script")
-    local relative_path="$2"
+# 增强版脚本查找和执行
+find_and_execute_scripts() {
+    echo "" >> $LOG_FILE
+    echo "=== 查找和执行脚本（增强版） ===" >> $LOG_FILE
+    
+    local script_count=0
+    local success_count=0
+    local failed_count=0
+    
+    # 查找所有脚本文件（增强查找逻辑）
+    echo "🔍 查找脚本文件..." >> $LOG_FILE
+    
+    # 方法1：查找所有.sh文件
+    for script in $(find "$CUSTOM_DIR" -name "*.sh" -o -name "*.Sh" -o -name "*.SH" 2>/dev/null); do
+        if [ -f "$script" ]; then
+            script_count=$((script_count + 1))
+            echo "" >> $LOG_FILE
+            echo "📜 找到脚本 [$script_count]: $(basename "$script")" >> $LOG_FILE
+            echo "路径: $script" >> $LOG_FILE
+            
+            execute_script_safely "$script"
+            if [ $? -eq 0 ]; then
+                success_count=$((success_count + 1))
+            else
+                failed_count=$((failed_count + 1))
+            fi
+        fi
+    done
+    
+    # 方法2：查找其他可执行文件（包含shebang）
+    echo "" >> $LOG_FILE
+    echo "🔍 查找其他可执行文件..." >> $LOG_FILE
+    
+    find "$CUSTOM_DIR" -type f 2>/dev/null | while read file; do
+        # 跳过已处理的.sh文件
+        if echo "$file" | grep -q "\.sh$"; then
+            continue
+        fi
+        
+        # 检查是否有shebang
+        if head -1 "$file" 2>/dev/null | grep -q "^#!"; then
+            script_count=$((script_count + 1))
+            echo "" >> $LOG_FILE
+            echo "📜 找到可执行文件 [$script_count]: $(basename "$file")" >> $LOG_FILE
+            echo "路径: $file" >> $LOG_FILE
+            
+            execute_script_safely "$file"
+            if [ $? -eq 0 ]; then
+                success_count=$((success_count + 1))
+            else
+                failed_count=$((failed_count + 1))
+            fi
+        fi
+    done
     
     echo "" >> $LOG_FILE
-    echo "=== 执行脚本: $script_name ===" >> $LOG_FILE
-    echo "路径: $relative_path" >> $LOG_FILE
+    echo "📊 脚本执行统计:" >> $LOG_FILE
+    echo "  找到脚本: $script_count 个" >> $LOG_FILE
+    echo "  执行成功: $success_count 个" >> $LOG_FILE
+    echo "  执行失败: $failed_count 个" >> $LOG_FILE
+    
+    if [ $script_count -eq 0 ]; then
+        echo "ℹ️ 未找到脚本文件" >> $LOG_FILE
+    fi
+}
+
+# 安全执行单个脚本
+execute_script_safely() {
+    local script="$1"
+    local script_name=$(basename "$script")
+    
+    echo "执行脚本: $script_name" >> $LOG_FILE
     echo "开始时间: $(date)" >> $LOG_FILE
     
     # 确保有执行权限
@@ -2635,6 +2711,7 @@ execute_script() {
     
     # 切换到脚本所在目录
     local script_dir=$(dirname "$script")
+    local original_dir=$(pwd)
     cd "$script_dir" 2>/dev/null || cd /
     
     # 设置中文环境变量，支持中文文件名
@@ -2646,6 +2723,9 @@ execute_script() {
     sh "$script" >> $LOG_FILE 2>&1
     local exit_code=$?
     
+    # 返回原目录
+    cd "$original_dir" 2>/dev/null
+    
     echo "结束时间: $(date)" >> $LOG_FILE
     echo "退出代码: $exit_code" >> $LOG_FILE
     
@@ -2654,89 +2734,50 @@ execute_script() {
         return 0
     else
         echo "⚠️ $script_name 执行失败 (代码: $exit_code)" >> $LOG_FILE
-        # 显示最后5行错误信息
-        echo "最后5行输出:" >> $LOG_FILE
-        tail -5 "$LOG_FILE" >> $LOG_FILE
+        # 显示最后3行错误信息
+        echo "最后3行输出:" >> $LOG_FILE
+        tail -3 $LOG_FILE >> $LOG_FILE
         return 1
     fi
 }
 
 # 主安装流程
-echo "1. 安装IPK包..." >> $LOG_FILE
+echo "1. 安装IPK包（修复版：失败不中断）..." >> $LOG_FILE
 install_ipk_packages
 
 echo "" >> $LOG_FILE
-echo "2. 执行脚本 (按优先级排序)..." >> $LOG_FILE
+echo "2. 查找和执行脚本（增强查找逻辑）..." >> $LOG_FILE
+find_and_execute_scripts
 
-# 收集所有脚本并排序
-SCRIPT_LIST_FILE="/tmp/script_list.txt"
-rm -f "$SCRIPT_LIST_FILE"
-
-# 查找所有脚本文件（支持中文文件名）
-find "$CUSTOM_DIR" -type f 2>/dev/null | while read script; do
-    if [ ! -d "$script" ]; then
-        local filename=$(basename "$script")
-        # 检查是否是脚本文件（支持多种扩展名）
-        if [[ "$filename" == *.sh ]] || [[ "$filename" == *.Sh ]] || [[ "$filename" == *.SH ]] || \
-           head -2 "$script" 2>/dev/null | grep -q "^#!"; then
-            local priority=$(get_script_priority "$script")
-            local relative_path=$(dirname "$script" | sed "s|$CUSTOM_DIR||" | sed "s|^/||")
-            if [ -n "$relative_path" ]; then
-                relative_path="$relative_path/"
-            fi
-            echo "$priority:$script:$relative_path" >> "$SCRIPT_LIST_FILE"
-        fi
-    fi
-done
-
-# 按优先级执行脚本
-if [ -f "$SCRIPT_LIST_FILE" ]; then
-    local script_count=0
-    local success_count=0
-    
-    # 读取并按优先级排序
-    sort -n "$SCRIPT_LIST_FILE" | while IFS=':' read -r priority script relative_path; do
-        [ -z "$script" ] && continue
-        script_count=$((script_count + 1))
-        execute_script "$script" "$relative_path" && success_count=$((success_count + 1))
-    done
-    
-    echo "" >> $LOG_FILE
-    echo "脚本执行统计: $success_count/$script_count 成功" >> $LOG_FILE
+# 创建安装标记
+echo "" >> $LOG_FILE
+echo "3. 创建安装完成标记..." >> $LOG_FILE
+touch "$INSTALL_MARKER" 2>/dev/null
+if [ -f "$INSTALL_MARKER" ]; then
+    echo "✅ 安装标记已创建: $INSTALL_MARKER" >> $LOG_FILE
 else
-    echo "ℹ️ 未找到脚本文件" >> $LOG_FILE
+    echo "⚠️ 无法创建安装标记" >> $LOG_FILE
 fi
 
 echo "" >> $LOG_FILE
 echo "=== 智能安装完成 ===" >> $LOG_FILE
 echo "结束时间: $(date)" >> $LOG_FILE
-echo "安装日志: $LOG_FILE"
+echo "安装日志: $LOG_FILE" >> $LOG_FILE
 
-# 创建完成标记
-touch "$INSTALL_MARKER" 2>/dev/null
-echo "✅ 自定义文件安装完成标记已创建: $INSTALL_MARKER"
-
-# 显示安装结果
-echo "" >> $LOG_FILE
-echo "📊 安装结果:" >> $LOG_FILE
-echo "  IPK文件: 已安装" >> $LOG_FILE
-echo "  脚本文件: 已执行" >> $LOG_FILE
-echo "  完成标记: 已创建" >> $LOG_FILE
-
-# 清理临时文件
-rm -f "$SCRIPT_LIST_FILE"
-
-# 显示最终信息
 echo ""
 echo "智能安装管理器执行完成"
 echo "📝 详细日志请查看: $LOG_FILE"
+echo "📊 统计信息:"
+echo "  IPK文件: 已尝试安装（失败不影响后续）"
+echo "  脚本文件: 已执行"
+echo "  完成标记: 已创建"
 exit 0
 EOF
     
     chmod +x "$smart_script"
-    log "✅ 创建智能安装脚本: $smart_script"
+    log "✅ 创建修复版智能安装脚本: $smart_script"
     
-    # 9. 修改第一次开机脚本（修复版）- 修复执行逻辑
+    # 9. 修改第一次开机脚本（修复版）
     log "🔧 步骤4: 更新第一次开机脚本（修复版）"
     
     local first_boot_dir="files/etc/uci-defaults"
@@ -2751,8 +2792,11 @@ CUSTOM_DIR="/etc/custom-files"
 SMART_SCRIPT="$CUSTOM_DIR/smart_install.sh"
 INSTALL_MARKER="/etc/custom-files-installed"
 
-echo "=== 第一次开机：自定义文件安装脚本（智能管理修复版）===" > $LOG_FILE
+echo "=== 第一次开机：自定义文件安装脚本（修复版）===" > $LOG_FILE
 echo "开始时间: $(date)" >> $LOG_FILE
+echo "修复特性:" >> $LOG_FILE
+echo "1. IPK安装失败不中断执行" >> $LOG_FILE
+echo "2. 增强脚本查找逻辑" >> $LOG_FILE
 echo "" >> $LOG_FILE
 
 # 检查是否已经安装过
@@ -2767,7 +2811,7 @@ if [ -d "$CUSTOM_DIR" ]; then
     echo "✅ 找到自定义文件目录: $CUSTOM_DIR" >> $LOG_FILE
     
     # 检查文件数量
-    FILE_COUNT=$(find "$CUSTOM_DIR" -type f ! -name "smart_install.sh" 2>/dev/null | wc -l)
+    FILE_COUNT=$(find "$CUSTOM_DIR" -type f 2>/dev/null | wc -l)
     echo "📁 自定义文件数量: $FILE_COUNT 个" >> $LOG_FILE
     
     # 显示所有文件列表
@@ -2810,45 +2854,51 @@ if [ -d "$CUSTOM_DIR" ]; then
             fi
         else
             echo "❌ 无法修复智能安装脚本权限" >> $LOG_FILE
-            echo "⚠️ 尝试手动执行脚本..." >> $LOG_FILE
+            echo "⚠️ 尝试直接执行脚本..." >> $LOG_FILE
             
-            # 尝试直接执行脚本
+            # 尝试直接处理文件
             export LANG=zh_CN.UTF-8
             export LC_ALL=zh_CN.UTF-8
-            cd "$CUSTOM_DIR"
             
-            # 查找并执行所有脚本
-            for script in "$CUSTOM_DIR"/*.sh; do
+            # 处理IPK文件（失败不中断）
+            for file in "$CUSTOM_DIR"/*.ipk "$CUSTOM_DIR"/*.IPK 2>/dev/null; do
+                if [ -f "$file" ]; then
+                    echo "安装IPK: $(basename "$file")" >> $LOG_FILE
+                    opkg install "$file" >> $LOG_FILE 2>&1 || echo "⚠️ IPK安装失败，继续执行..." >> $LOG_FILE
+                fi
+            done
+            
+            # 执行脚本文件
+            for script in "$CUSTOM_DIR"/*.sh 2>/dev/null; do
                 if [ -f "$script" ]; then
                     echo "执行脚本: $(basename "$script")" >> $LOG_FILE
                     chmod +x "$script" 2>/dev/null
-                    sh "$script" >> $LOG_FILE 2>&1
+                    sh "$script" >> $LOG_FILE 2>&1 || echo "⚠️ 脚本执行失败，继续执行..." >> $LOG_FILE
                 fi
             done
         fi
     else
         echo "❌ 未找到智能安装脚本" >> $LOG_FILE
-        echo "⚠️ 尝试手动处理文件..." >> $LOG_FILE
+        echo "⚠️ 尝试手动处理文件（失败不中断）..." >> $LOG_FILE
         
         # 手动处理文件
         export LANG=zh_CN.UTF-8
         export LC_ALL=zh_CN.UTF-8
-        cd "$CUSTOM_DIR"
         
-        # 处理IPK文件
-        for file in "$CUSTOM_DIR"/*.ipk "$CUSTOM_DIR"/*.IPK; do
+        # 处理IPK文件（失败不中断）
+        for file in "$CUSTOM_DIR"/*.ipk "$CUSTOM_DIR"/*.IPK 2>/dev/null; do
             if [ -f "$file" ]; then
                 echo "安装IPK: $(basename "$file")" >> $LOG_FILE
-                opkg install "$file" >> $LOG_FILE 2>&1
+                opkg install "$file" >> $LOG_FILE 2>&1 || echo "⚠️ IPK安装失败，继续执行..." >> $LOG_FILE
             fi
         done
         
         # 执行脚本文件
-        for script in "$CUSTOM_DIR"/*.sh; do
+        for script in "$CUSTOM_DIR"/*.sh 2>/dev/null; do
             if [ -f "$script" ]; then
                 echo "执行脚本: $(basename "$script")" >> $LOG_FILE
                 chmod +x "$script" 2>/dev/null
-                sh "$script" >> $LOG_FILE 2>&1
+                sh "$script" >> $LOG_FILE 2>&1 || echo "⚠️ 脚本执行失败，继续执行..." >> $LOG_FILE
             fi
         done
     fi
@@ -2871,7 +2921,7 @@ EOF
     chmod +x "$first_boot_script"
     log "✅ 更新第一次开机脚本: $first_boot_script"
     
-    # 10. 简单验证文件复制结果（不重复验证）
+    # 10. 验证文件复制结果
     log "🔍 步骤5: 验证文件复制结果"
     local actual_file_count=$(find "$custom_files_dir" -type f 2>/dev/null | wc -l)
     log "📊 目标目录文件数量: $actual_file_count 个"
@@ -2884,7 +2934,7 @@ EOF
     
     # 11. 显示最终统计
     log ""
-    log "🎉 自定义文件集成完成（智能脚本管理修复版）"
+    log "🎉 自定义文件集成修复完成"
     log "📊 集成统计:"
     log "  📦 IPK文件: $integrate_ipk_count 个"
     log "  📜 脚本文件: $integrate_script_count 个"
@@ -2893,13 +2943,15 @@ EOF
     log "  📁 其他文件: $integrate_other_count 个"
     log "  📁 子文件夹: $integrate_folder_count 个"
     log "  🇨🇳 中文文件: $integrate_chinese_count 个"
-    log "  🧠 智能安装脚本: 已创建 (smart_install.sh)"
-    log "  🔢 执行顺序: 按脚本内容智能排序 (10:包管理→20:网络→30:定时→35:配置→40:服务→50:其他→60:备份)"
+    log "  🧠 智能安装脚本: 已创建修复版 (smart_install.sh)"
+    log "  🔧 修复特性:"
+    log "    - IPK安装失败不中断执行"
+    log "    - 增强脚本查找逻辑"
+    log "    - 详细错误记录"
     log "  📁 文件夹结构: 支持任意层级子文件夹"
     log "  📍 自定义文件位置: /etc/custom-files/"
     log "  🚀 安装方式: 第一次开机自动智能安装"
     log "  🔒 文件名策略: 保持原文件名，不添加数字前缀"
-    log "  💾 统计保存: 已立即保存到环境变量和文件"
     
     if [ $integrate_copied_count -eq 0 ]; then
         log "⚠️ 警告: 自定义文件目录为空"
