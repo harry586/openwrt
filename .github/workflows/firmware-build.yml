@@ -947,6 +947,7 @@ jobs:
             echo "  - 修复的环境变量传递问题"
             echo "  - 增强的统计信息保存"
             echo "  - 确保智能安装脚本正确生成"
+            echo "  - 自动同步统计信息到GitHub环境变量"
             
             # 先清理旧的统计文件，确保从新开始
             if [ -f "/mnt/openwrt-build/custom_files_stats.txt" ]; then
@@ -956,6 +957,11 @@ jobs:
             
             # 执行集成脚本
             "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
+            
+            # 特别注意：强制同步统计信息到GitHub环境变量
+            echo ""
+            echo "🔧 强制同步自定义文件统计信息到GitHub环境变量..."
+            "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" sync_custom_stats_to_github_env
             
             # 验证集成结果
             echo ""
@@ -1025,42 +1031,32 @@ jobs:
                 echo "  🚀 自动安装: 第一次开机时自动执行"
                 echo "  🔧 增强错误处理: 更好的错误检测和恢复机制"
                 echo "  🐛 调试信息: 详细的日志输出便于问题排查"
+                echo "  🔄 环境变量同步: 自动同步统计信息到GitHub Actions"
                 
                 # 运行自定义文件检查函数
                 echo ""
                 echo "🔍 运行自定义文件集成检查..."
                 "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" check_custom_files_integration
                 
-                # 关键修复：立即重新加载和导出环境变量
+                # 关键修复：从环境文件读取并验证统计信息
                 echo ""
-                echo "🔧 关键修复：重新加载和导出环境变量..."
+                echo "🔧 关键修复：验证环境变量中的统计信息..."
                 if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
                   source /mnt/openwrt-build/build_env.sh
                   
-                  # 导出到GitHub Actions环境
-                  if [ -n "$CUSTOM_IPK_COUNT" ]; then
-                    echo "CUSTOM_IPK_COUNT=$CUSTOM_IPK_COUNT" >> $GITHUB_ENV
-                    echo "📊 导出 CUSTOM_IPK_COUNT=$CUSTOM_IPK_COUNT"
-                  fi
+                  echo "📊 环境变量中的自定义文件统计:"
+                  echo "  IPK文件: ${CUSTOM_IPK_COUNT:-0} 个"
+                  echo "  脚本文件: ${CUSTOM_SCRIPT_COUNT:-0} 个"
+                  echo "  总文件数: ${CUSTOM_TOTAL_FILES:-0} 个"
+                  echo "  集成状态: ${CUSTOM_FILES_INTEGRATED:-false}"
                   
-                  if [ -n "$CUSTOM_SCRIPT_COUNT" ]; then
-                    echo "CUSTOM_SCRIPT_COUNT=$CUSTOM_SCRIPT_COUNT" >> $GITHUB_ENV
-                    echo "📊 导出 CUSTOM_SCRIPT_COUNT=$CUSTOM_SCRIPT_COUNT"
+                  if [ "${CUSTOM_FILES_INTEGRATED:-false}" = "true" ]; then
+                    echo "✅ 自定义文件集成状态已正确标记为true"
+                  else
+                    echo "❌ 自定义文件集成状态错误: ${CUSTOM_FILES_INTEGRATED:-false} (期望: true)"
                   fi
-                  
-                  if [ -n "$CUSTOM_TOTAL_FILES" ]; then
-                    echo "CUSTOM_TOTAL_FILES=$CUSTOM_TOTAL_FILES" >> $GITHUB_ENV
-                    echo "📊 导出 CUSTOM_TOTAL_FILES=$CUSTOM_TOTAL_FILES"
-                  fi
-                  
-                  if [ -n "$CUSTOM_FILES_INTEGRATED" ]; then
-                    echo "CUSTOM_FILES_INTEGRATED=$CUSTOM_FILES_INTEGRATED" >> $GITHUB_ENV
-                    echo "📊 导出 CUSTOM_FILES_INTEGRATED=$CUSTOM_FILES_INTEGRATED"
-                  fi
-                  
-                  echo "✅ 环境变量已重新导出到GitHub Actions"
                 else
-                  echo "⚠️ 环境文件不存在，无法导出变量"
+                  echo "⚠️ 环境文件不存在"
                 fi
                 
             else
@@ -1079,6 +1075,10 @@ jobs:
           else
             echo "ℹ️ 自定义文件目录不存在: $CUSTOM_DIR"
             echo "📁 跳过自定义文件集成"
+            
+            # 即使没有自定义文件，也设置默认值
+            echo "CUSTOM_FILES_INTEGRATED=false" >> $GITHUB_ENV
+            echo "📌 已设置默认值: CUSTOM_FILES_INTEGRATED=false"
           fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
@@ -1528,24 +1528,34 @@ jobs:
           
           echo "  💡 这是正常的：系统编译器编译工具链，SDK编译器编译固件"
           
-          # 自定义文件集成状态（修复版）- 从环境变量读取统计信息
+          # 自定义文件集成状态（修复版）- 从GitHub环境变量读取统计信息
           echo ""
           echo "📁 自定义文件集成状态（修复版）:"
           
-          # 先检查环境文件
-          if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
-            # 从环境文件加载自定义文件统计信息
-            source /mnt/openwrt-build/build_env.sh
-            
-            if [ -n "$CUSTOM_FILES_INTEGRATED" ] && [ "$CUSTOM_FILES_INTEGRATED" = "true" ]; then
-              echo "  ✅ 自定义文件已集成"
-              echo "  📦 IPK文件: ${CUSTOM_IPK_COUNT:-0} 个"
-              echo "  📜 脚本文件: ${CUSTOM_SCRIPT_COUNT:-0} 个"
-              echo "    其中 ${CUSTOM_PRIORITY_SCRIPT_COUNT:-0} 个已按优先级排序"
-              echo "  ⚙️ 配置文件: ${CUSTOM_CONFIG_COUNT:-0} 个"
-              echo "  📁 其他文件: ${CUSTOM_OTHER_COUNT:-0} 个"
-              echo "  总文件数: ${CUSTOM_TOTAL_FILES:-0} 个"
-              echo "  🇨🇳 中文名文件: ${CUSTOM_CHINESE_COUNT:-0} 个"
+          # 检查GitHub环境变量中的自定义文件统计
+          if [ -n "${{ env.CUSTOM_FILES_INTEGRATED }}" ]; then
+            if [ "${{ env.CUSTOM_FILES_INTEGRATED }}" = "true" ]; then
+              echo "  ✅ 自定义文件已集成 (从GitHub环境变量确认)"
+              
+              # 从GitHub环境变量读取统计信息
+              if [ -n "${{ env.CUSTOM_IPK_COUNT }}" ]; then
+                echo "  📦 IPK文件: ${{ env.CUSTOM_IPK_COUNT }} 个"
+              else
+                echo "  📦 IPK文件: 0 个 (环境变量未设置)"
+              fi
+              
+              if [ -n "${{ env.CUSTOM_SCRIPT_COUNT }}" ]; then
+                echo "  📜 脚本文件: ${{ env.CUSTOM_SCRIPT_COUNT }} 个"
+              else
+                echo "  📜 脚本文件: 0 个 (环境变量未设置)"
+              fi
+              
+              if [ -n "${{ env.CUSTOM_TOTAL_FILES }}" ]; then
+                echo "  总文件数: ${{ env.CUSTOM_TOTAL_FILES }} 个"
+              else
+                echo "  总文件数: 0 个 (环境变量未设置)"
+              fi
+              
               echo "  📍 位置: /etc/custom-files/"
               
               # 检查实际文件目录作为验证
@@ -1556,10 +1566,12 @@ jobs:
                 ACTUAL_TOTAL=$(find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | wc -l)
                 echo "  📊 实际文件数量: $ACTUAL_TOTAL 个"
                 
-                if [ $ACTUAL_TOTAL -eq ${CUSTOM_TOTAL_FILES:-0} ]; then
-                  echo "  ✅ 文件数量匹配: 保存的统计信息与实际一致"
-                else
-                  echo "  ⚠️ 文件数量不匹配: 保存的 ${CUSTOM_TOTAL_FILES:-0} 个 vs 实际的 $ACTUAL_TOTAL 个"
+                if [ -n "${{ env.CUSTOM_TOTAL_FILES }}" ]; then
+                  if [ $ACTUAL_TOTAL -eq ${{ env.CUSTOM_TOTAL_FILES }} ]; then
+                    echo "  ✅ 文件数量匹配: 保存的统计信息与实际一致"
+                  else
+                    echo "  ⚠️ 文件数量不匹配: 保存的 ${{ env.CUSTOM_TOTAL_FILES }} 个 vs 实际的 $ACTUAL_TOTAL 个"
+                  fi
                 fi
               else
                 echo "  ❌ 实际目录验证: 不存在"
@@ -1592,18 +1604,18 @@ jobs:
                 echo "    5. 检查脚本权限: ls -la /etc/custom-files/smart_install.sh"
               fi
             else
-              echo "  ⚪ 自定义文件: 未集成 (CUSTOM_FILES_INTEGRATED 未设置或为 false)"
+              echo "  ⚪ 自定义文件: 未集成 (CUSTOM_FILES_INTEGRATED 设置为 false)"
             fi
           else
-            echo "  ⚪ 自定义文件: 未集成 (环境文件不存在)"
+            echo "  ⚪ 自定义文件: 未集成 (CUSTOM_FILES_INTEGRATED 环境变量未设置)"
           fi
           
           # 如果没有从环境变量获取到统计信息，尝试实时检查
-          if [ -z "$CUSTOM_FILES_INTEGRATED" ] || [ "$CUSTOM_FILES_INTEGRATED" != "true" ]; then
+          if [ -z "${{ env.CUSTOM_FILES_INTEGRATED }}" ] || [ "${{ env.CUSTOM_FILES_INTEGRATED }}" != "true" ]; then
             echo ""
             echo "🔍 尝试实时检查自定义文件目录..."
             if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
-              echo "  ✅ 自定义文件目录存在，但统计信息未保存"
+              echo "  ✅ 自定义文件目录存在，但统计信息未保存到环境变量"
               
               # 实时统计
               ACTUAL_IPK=0
@@ -1651,7 +1663,7 @@ jobs:
               echo "    总文件数: $ACTUAL_TOTAL 个"
               echo "    🇨🇳 中文名文件: $ACTUAL_CHINESE 个"
               
-              echo "  ⚠️ 注意: 统计信息未保存到环境变量，建议检查 integrate_custom_files 函数"
+              echo "  ⚠️ 注意: 统计信息未保存到GitHub环境变量，可能是环境变量同步问题"
             else
               echo "  ⚪ 自定义文件: 目录不存在，未集成"
             fi
