@@ -34,7 +34,7 @@ save_env() {
     echo "export REPO_ROOT=\"${REPO_ROOT}\"" >> $ENV_FILE
     echo "export COMPILER_DIR=\"${COMPILER_DIR}\"" >> $ENV_FILE
     
-    # 保存自定义文件统计信息（如果存在）- 修复：使用全局变量
+    # 保存自定义文件统计信息（如果存在）- 仅在集成步骤后保存
     if [ -f "$CUSTOM_STATS_FILE" ]; then
         # 重新加载最新的统计文件
         source "$CUSTOM_STATS_FILE" 2>/dev/null || true
@@ -120,7 +120,11 @@ save_env() {
     
     chmod +x $ENV_FILE
     log "✅ 环境变量已保存到: $ENV_FILE"
-    log "📊 当前环境中的自定义文件统计: IPK=${CUSTOM_IPK_COUNT}, 脚本=${CUSTOM_SCRIPT_COUNT}, 总数=${CUSTOM_TOTAL_FILES}"
+    
+    # 只在集成步骤后显示统计信息
+    if [ -f "$CUSTOM_STATS_FILE" ] && [ "$1" = "with_stats" ]; then
+        log "📊 当前环境中的自定义文件统计: IPK=${CUSTOM_IPK_COUNT}, 脚本=${CUSTOM_SCRIPT_COUNT}, 总数=${CUSTOM_TOTAL_FILES}"
+    fi
 }
 
 # 保存自定义文件统计信息到文件 - 修复：添加全局变量同步
@@ -151,7 +155,7 @@ EOF
     log "📊 已导出到当前环境: IPK=$CUSTOM_IPK_COUNT, 脚本=$CUSTOM_SCRIPT_COUNT, 总数=$CUSTOM_TOTAL_FILES"
     
     # 立即更新环境文件
-    save_env
+    save_env "with_stats"
 }
 
 # 加载环境变量函数 - 修复：添加详细日志
@@ -168,14 +172,13 @@ load_env() {
         log "  DEVICE: $DEVICE"
         log "  CONFIG_MODE: $CONFIG_MODE"
         
-        if [ -n "$CUSTOM_FILES_INTEGRATED" ]; then
+        # 只在需要时显示自定义文件统计
+        if [ "$1" = "show_stats" ] && [ -n "$CUSTOM_FILES_INTEGRATED" ]; then
             log "📊 已加载自定义文件统计信息:"
             log "  IPK文件: ${CUSTOM_IPK_COUNT:-0} 个"
             log "  脚本文件: ${CUSTOM_SCRIPT_COUNT:-0} 个"
             log "  总文件数: ${CUSTOM_TOTAL_FILES:-0} 个"
             log "  集成状态: ${CUSTOM_FILES_INTEGRATED}"
-        else
-            log "📊 自定义文件统计: 未集成"
         fi
     else
         log "⚠️ 环境文件不存在: $ENV_FILE"
@@ -1145,8 +1148,63 @@ initialize_build_env() {
     
     sudo rm -rf ./* ./.git* 2>/dev/null || true
     
-    git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
-    log "✅ 源码克隆完成"
+    # 修复克隆源码的GitHub 500错误问题
+    log "🔧 修复克隆源码，设置Git重试和超时..."
+    
+    # 设置Git配置以应对GitHub 500错误
+    git config --global http.postBuffer 524288000
+    git config --global http.lowSpeedLimit 0
+    git config --global http.lowSpeedTime 999999
+    git config --global core.compression 0
+    git config --global core.looseCompression 0
+    git config --global http.sslVerify false
+    
+    # 设置环境变量
+    export GIT_SSL_NO_VERIFY=1
+    export PYTHONHTTPSVERIFY=0
+    export CURL_SSL_NO_VERIFY=1
+    
+    # 尝试克隆，增加重试次数
+    local clone_attempt=1
+    local max_attempts=3
+    local clone_success=false
+    
+    while [ $clone_attempt -le $max_attempts ]; do
+        log "尝试克隆第 $clone_attempt 次..."
+        
+        if timeout 300 git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" .; then
+            clone_success=true
+            break
+        else
+            log "⚠️ 克隆尝试 $clone_attempt 失败，等待10秒后重试..."
+            sleep 10
+            # 清理部分下载的文件
+            rm -rf .git* 2>/dev/null || true
+            rm -rf * 2>/dev/null || true
+            clone_attempt=$((clone_attempt + 1))
+        fi
+    done
+    
+    if [ "$clone_success" = false ]; then
+        log "❌ 克隆源码失败，尝试备用方案..."
+        
+        # 尝试使用wget下载tar包
+        log "尝试使用wget下载源码tar包..."
+        
+        local repo_name=$(basename "$SELECTED_REPO_URL" .git)
+        local tar_url="${SELECTED_REPO_URL%.git}/archive/refs/heads/$SELECTED_BRANCH.tar.gz"
+        
+        if wget --tries=3 --timeout=30 -q -O source.tar.gz "$tar_url"; then
+            log "✅ 下载源码tar包成功"
+            tar -xzf source.tar.gz --strip-components=1
+            rm -f source.tar.gz
+            log "✅ 源码解压成功"
+        else
+            handle_error "克隆源码失败，所有尝试都失败"
+        fi
+    fi
+    
+    log "✅ 源码获取完成"
     
     # 检查克隆的文件
     local important_source_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
@@ -2440,7 +2498,7 @@ EOF
     log "📊 已导出到当前环境: IPK=$CUSTOM_IPK_COUNT, 脚本=$CUSTOM_SCRIPT_COUNT, 总数=$CUSTOM_TOTAL_FILES"
     
     # 立即更新环境文件
-    save_env
+    save_env "with_stats"
     
     # 7. 显示统计信息
     log "📊 文件统计:"
