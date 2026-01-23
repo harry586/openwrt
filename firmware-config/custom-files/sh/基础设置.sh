@@ -144,8 +144,6 @@ echo "设置备份与升级配置..."
 UPGRADE_CONTENT="
 # 自定义保留文件和目录（追加内容）
 /overlay
-/etc/config
-/root/.ssh
 "
 
 if [ "$RUNTIME_MODE" = "true" ]; then
