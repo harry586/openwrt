@@ -1,8 +1,8 @@
 #!/bin/bash
 # =============================================
 # OpenWrt DIY 脚本 - 双重模式：编译集成 + 运行时安装
-# 基础系统配置设置脚本
-# 功能：主机名、密码、SSH密钥、计划任务、升级配置、静态路由、无线设置
+# 基础系统配置设置脚本（修复版）
+# 功能：主机名、密码、计划任务、升级配置、静态路由
 # =============================================
 
 # 检测运行环境
@@ -82,27 +82,7 @@ EOF
     fi
 fi
 
-# ==================== 3. 设置SSH密钥 ====================
-echo "设置SSH密钥..."
-SSH_KEY="ssh-rsa AAAAB3NzaC1yc2EAAAABJQAAAQEAgR6/T2s7aX5w/JXCFh/X+7VWh0ovMxl8F4W0HLpIdPgnNUcfzgsvjDPCqIZ3Qws6WaWq+03or8AN06Mrh6JIa6+hV0e7DipnTyWg8khRftwxj4bSBURJ8cFg6DdpW62eoJwPu8zgTX0risI33HrZkGC3rN3pGErES5L3S5tsb24XSRRTPijzJu3Tj56bPK0i2hf2RuK5N6qOW+GiqwD1bMGVwfnwhBuozNyutBsYM6VVUf3hoEiiy4e1Z4TAyUC1YExAo+3TjCgRp6F58UgF+l2e855bqU+9IL2TFOfWnhwT2hoJ795WSdgXYg98V6ZUS+irL7Hc4GrJN1D8LQ6DGw== openwrt-15.05.1-ramips-mt7620-y1"
-
-if [ "$RUNTIME_MODE" = "true" ]; then
-    # 运行时：创建authorized_keys文件
-    mkdir -p /root/.ssh
-    echo "$SSH_KEY" > /root/.ssh/authorized_keys
-    chmod 600 /root/.ssh/authorized_keys
-    chmod 700 /root/.ssh
-    echo "SSH密钥已添加到root用户的authorized_keys"
-else
-    # 编译时：集成到固件
-    mkdir -p "${INSTALL_DIR}root/.ssh"
-    echo "$SSH_KEY" > "${INSTALL_DIR}root/.ssh/authorized_keys"
-    chmod 600 "${INSTALL_DIR}root/.ssh/authorized_keys"
-    chmod 700 "${INSTALL_DIR}root/.ssh"
-    echo "SSH密钥已集成到固件"
-fi
-
-# ==================== 4. 设置自定义计划任务 ====================
+# ==================== 3. 设置自定义计划任务 ====================
 echo "设置自定义计划任务..."
 CRON_CONTENT="# =================================================================
 # 文件格式说明
@@ -159,20 +139,26 @@ else
     echo "计划任务已集成到固件"
 fi
 
-# ==================== 5. 设置备份与升级配置 ====================
+# ==================== 4. 设置备份与升级配置 ====================
 echo "设置备份与升级配置..."
-UPGRADE_CONTENT="## This file contains files and directories that should
-## be preserved during an upgrade.
-
-# /etc/example.conf
-# /etc/openvpn/
-
-/overlay"
+UPGRADE_CONTENT="
+# 自定义保留文件和目录（追加内容）
+/overlay
+/etc/config
+/root/.ssh
+"
 
 if [ "$RUNTIME_MODE" = "true" ]; then
-    # 运行时：修改sysupgrade.conf
-    echo "$UPGRADE_CONTENT" > /etc/sysupgrade.conf
-    echo "升级配置已设置：/overlay 将被保留"
+    # 运行时：追加到sysupgrade.conf
+    if [ -f "/etc/sysupgrade.conf" ]; then
+        # 备份原配置
+        cp /etc/sysupgrade.conf /etc/sysupgrade.conf.backup.$(date +%Y%m%d%H%M%S)
+        echo "升级配置已备份"
+    fi
+    
+    # 追加自定义配置
+    echo "$UPGRADE_CONTENT" >> /etc/sysupgrade.conf
+    echo "升级配置已追加：/overlay 将被保留"
 else
     # 编译时：集成到固件
     mkdir -p "${INSTALL_DIR}etc"
@@ -180,7 +166,7 @@ else
     echo "升级配置已集成到固件"
 fi
 
-# ==================== 6. 设置静态路由 ====================
+# ==================== 5. 设置静态路由 ====================
 echo "设置静态路由..."
 ROUTE_CONFIG="config route
 	option interface 'lan'
@@ -191,9 +177,19 @@ ROUTE_CONFIG="config route
 if [ "$RUNTIME_MODE" = "true" ]; then
     # 运行时：添加到网络配置
     # 检查是否已存在相同路由
-    if ! uci show network | grep -q "network.route.*target='192.168.7.0'"; then
+    route_exists=false
+    for route in $(uci show network | grep "network.route" | cut -d= -f1); do
+        target=$(uci get ${route}.target 2>/dev/null)
+        gateway=$(uci get ${route}.gateway 2>/dev/null)
+        if [ "$target" = "192.168.7.0" ] && [ "$gateway" = "192.168.5.100" ]; then
+            route_exists=true
+            break
+        fi
+    done
+    
+    if [ "$route_exists" = "false" ]; then
         # 添加新路由
-        uci add network route
+        uci add network route >/dev/null 2>&1
         uci set network.@route[-1].interface='lan'
         uci set network.@route[-1].target='192.168.7.0'
         uci set network.@route[-1].netmask='255.255.255.0'
@@ -202,7 +198,7 @@ if [ "$RUNTIME_MODE" = "true" ]; then
         echo "静态路由已添加到网络配置"
         
         # 尝试重启网络（如果当前不是编译环境）
-        /etc/init.d/network restart 2>/dev/null || true
+        /etc/init.d/network restart >/dev/null 2>&1 || true
     else
         echo "相同静态路由已存在，跳过"
     fi
@@ -210,99 +206,18 @@ else
     # 编译时：需要更复杂的处理，因为network配置结构复杂
     # 创建路由配置文件片段
     mkdir -p "${INSTALL_DIR}etc/config"
-    # 注意：实际network配置需要更完整的处理
-    # 这里只创建路由配置片段，需要手动合并
     echo "$ROUTE_CONFIG" > "${INSTALL_DIR}etc/config/route-neptune"
     echo "静态路由配置片段已创建，请手动合并到network配置"
 fi
 
-# ==================== 7. 设置无线网络 ====================
-echo "设置无线网络..."
-
-# 创建无线配置函数
-create_wireless_config() {
-    local dest="$1"
-    cat > "$dest" << 'EOF'
-config wifi-device 'radio0'
-	option type 'mac80211'
-	option channel 'auto'
-	option hwmode '11a'
-	option path 'pci0000:00/0000:00:00.0'
-	option htmode 'VHT80'
-	option disabled '0'
-
-config wifi-iface 'default_radio0'
-	option device 'radio0'
-	option network 'lan'
-	option mode 'ap'
-	option ssid 'Neptune_5GH'
-	option encryption 'psk2'
-	option key 'harry586'
-	option ieee80211r '0'
-	option wpa_disable_eapol_key_retries '1'
-
-config wifi-device 'radio1'
-	option type 'mac80211'
-	option channel 'auto'
-	option hwmode '11g'
-	option path 'platform/1e100000.pcie/pci0001:00/0001:00:00.0/0002:00:00.0'
-	option htmode 'HT40'
-	option disabled '0'
-
-config wifi-iface 'default_radio1'
-	option device 'radio1'
-	option network 'lan'
-	option mode 'ap'
-	option ssid 'Neptune_2.4GH'
-	option encryption 'psk2'
-	option key 'harry586'
-	option ieee80211r '0'
-	option wpa_disable_eapol_key_retries '1'
-EOF
-}
-
-if [ "$RUNTIME_MODE" = "true" ]; then
-    # 运行时：配置无线
-    create_wireless_config "/tmp/wireless-neptune"
-    
-    # 尝试应用配置
-    if [ -f /etc/config/wireless ]; then
-        # 备份原配置
-        cp /etc/config/wireless /etc/config/wireless.backup.$(date +%s)
-        
-        # 应用新配置
-        mv /tmp/wireless-neptune /etc/config/wireless
-        
-        # 重启无线
-        wifi reload 2>/dev/null || {
-            wifi down 2>/dev/null
-            sleep 2
-            wifi up 2>/dev/null
-        }
-        
-        echo "无线网络已配置："
-        echo "  - SSID(5GHz): Neptune_5GH, 密码: harry586"
-        echo "  - SSID(2.4GHz): Neptune_2.4GH, 密码: harry586"
-        echo "  - 加密: WPA2-PSK (强安全性)"
-        echo "  - 加密方式: 强制 CCMP（AES）"
-    else
-        echo "警告：/etc/config/wireless 不存在，无线配置未应用"
-    fi
-else
-    # 编译时：集成到固件
-    mkdir -p "${INSTALL_DIR}etc/config"
-    create_wireless_config "${INSTALL_DIR}etc/config/wireless"
-    echo "无线网络配置已集成到固件"
-fi
-
-# ==================== 8. 创建一键启用脚本 ====================
+# ==================== 6. 创建一键启用脚本 ====================
 echo "创建一键启用脚本..."
 
 create_enable_script() {
     local dest="$1"
     cat > "$dest" << 'EOF'
 #!/bin/sh
-# 基础系统配置一键启用脚本
+# 基础系统配置一键启用脚本（修复版）
 
 echo "正在启用基础系统配置..."
 echo "================================"
@@ -315,55 +230,43 @@ if [ -f /etc/config/system ]; then
 fi
 
 # 2. 设置密码（如果未设置）
-if ! grep -q '^root:\$' /etc/shadow 2>/dev/null; then
+if ! grep -q '^root:\$' /etc/shadow 2>/dev/null || grep -q '^root::' /etc/shadow 2>/dev/null; then
     echo -e "harry586586\nharry586586" | passwd root 2>/dev/null && echo "✓ 密码已设置"
 fi
 
-# 3. 确保SSH密钥已安装
-if [ ! -d /root/.ssh ]; then
-    mkdir -p /root/.ssh
-    chmod 700 /root/.ssh
-fi
-
-SSH_KEY="ssh-rsa AAAAB3NzaC1yc2EAAAABJQAAAQEAgR6/T2s7aX5w/JXCFh/X+7VWh0ovMxl8F4W0HLpIdPgnNUcfzgsvjDPCqIZ3Qws6WaWq+03or8AN06Mrh6JIa6+hV0e7DipnTyWg8khRftwxj4bSBURJ8cFg6DdpW62eoJwPu8zgTX0risI33HrZkGC3rN3pGErES5L3S5tsb24XSRRTPijzJu3Tj56bPK0i2hf2RuK5N6qOW+GiqwD1bMGVwfnwhBuozNyutBsYM6VVUf3hoEiiy4e1Z4TAyUC1YExAo+3TjCgRp6F58UgF+l2e855bqU+9IL2TFOfWnhwT2hoJ795WSdgXYg98V6ZUS+irL7Hc4GrJN1D8LQ6DGw== openwrt-15.05.1-ramips-mt7620-y1"
-if ! grep -q "$SSH_KEY" /root/.ssh/authorized_keys 2>/dev/null; then
-    echo "$SSH_KEY" >> /root/.ssh/authorized_keys
-    chmod 600 /root/.ssh/authorized_keys
-    echo "✓ SSH密钥已添加"
-fi
-
-# 4. 启用计划任务
+# 3. 启用计划任务
 if [ -f /etc/crontabs/root ]; then
     /etc/init.d/cron enable 2>/dev/null || true
     /etc/init.d/cron restart 2>/dev/null || true
     echo "✓ 计划任务已启用"
 fi
 
-# 5. 设置升级配置
-echo "/overlay" > /etc/sysupgrade.conf
-echo "✓ 升级配置已设置（保留/overlay）"
+# 4. 设置升级配置（追加方式）
+if ! grep -q "^/overlay$" /etc/sysupgrade.conf 2>/dev/null; then
+    echo "/overlay" >> /etc/sysupgrade.conf
+    echo "✓ 升级配置已设置（保留/overlay）"
+fi
 
-# 6. 添加静态路由（如果不存在）
-if ! uci show network | grep -q "network.route.*target='192.168.7.0'" 2>/dev/null; then
+# 5. 添加静态路由（如果不存在）
+route_exists=false
+for route in $(uci show network 2>/dev/null | grep "network.route" | cut -d= -f1); do
+    target=$(uci get ${route}.target 2>/dev/null)
+    gateway=$(uci get ${route}.gateway 2>/dev/null)
+    if [ "$target" = "192.168.7.0" ] && [ "$gateway" = "192.168.5.100" ]; then
+        route_exists=true
+        break
+    fi
+done
+
+if [ "$route_exists" = "false" ]; then
     uci add network route 2>/dev/null && {
         uci set network.@route[-1].interface='lan'
         uci set network.@route[-1].target='192.168.7.0'
         uci set network.@route[-1].netmask='255.255.255.0'
         uci set network.@route[-1].gateway='192.168.5.100'
         uci commit network 2>/dev/null
-        echo "✓ 静态路由已添加"
+        echo "✓ 静态路由已添加: 192.168.7.0/24 via 192.168.5.100"
     }
-fi
-
-# 7. 配置无线网络
-if [ -f /etc/config/wireless ]; then
-    # 重启无线使配置生效
-    wifi reload 2>/dev/null || {
-        wifi down 2>/dev/null
-        sleep 2
-        wifi up 2>/dev/null
-    }
-    echo "✓ 无线网络已配置"
 fi
 
 echo "================================"
@@ -372,13 +275,12 @@ echo ""
 echo "【配置摘要】:"
 echo "  ✓ 主机名: Neptune"
 echo "  ✓ 管理员密码: 已设置"
-echo "  ✓ SSH密钥: 已添加"
 echo "  ✓ 计划任务: 已启用"
 echo "  ✓ 升级保留: /overlay"
 echo "  ✓ 静态路由: 192.168.7.0/24 via 192.168.5.100"
-echo "  ✓ 无线网络: Neptune_5GH / Neptune_2.4GH"
 echo ""
 echo "建议重启系统使所有配置生效"
+echo "重启命令: reboot"
 echo "================================"
 EOF
     chmod +x "$dest"
@@ -397,10 +299,35 @@ else
     echo "一键启用脚本已集成到固件"
 fi
 
-# ==================== 9. 总结信息 ====================
+# ==================== 7. 创建无线配置说明 ====================
 echo ""
 echo "=========================================="
-echo "基础系统配置设置完成"
+echo "无线配置说明"
+echo "=========================================="
+echo "由于无线配置与硬件相关且容易出错，建议:"
+echo "1. 刷机后通过Web界面手动配置无线"
+echo "2. 或使用以下命令手动设置:"
+echo ""
+echo "设置5GHz无线:"
+echo "  uci set wireless.radio0.channel='auto'"
+echo "  uci set wireless.radio0.htmode='VHT80'"
+echo "  uci set wireless.default_radio0.ssid='Neptune_5GH'"
+echo "  uci set wireless.default_radio0.key='harry586'"
+echo "  uci commit wireless"
+echo "  wifi reload"
+echo ""
+echo "设置2.4GHz无线:"
+echo "  uci set wireless.radio1.channel='auto'"
+echo "  uci set wireless.radio1.htmode='HT40'"
+echo "  uci set wireless.default_radio1.ssid='Neptune_2.4GH'"
+echo "  uci set wireless.default_radio1.key='harry586'"
+echo "  uci commit wireless"
+echo "  wifi reload"
+
+# ==================== 8. 总结信息 ====================
+echo ""
+echo "=========================================="
+echo "基础系统配置设置完成（修复版）"
 echo "=========================================="
 
 if [ "$RUNTIME_MODE" = "true" ]; then
@@ -409,16 +336,14 @@ if [ "$RUNTIME_MODE" = "true" ]; then
     echo "【已配置】:"
     echo "  ✓ 主机名: Neptune"
     echo "  ✓ 管理员密码: harry586586"
-    echo "  ✓ SSH密钥: 已添加"
     echo "  ✓ 计划任务: 已设置"
-    echo "  ✓ 升级配置: 保留/overlay"
-    echo "  ✓ 静态路由: 192.168.7.0/24 → 192.168.5.100"
-    echo "  ✓ 无线网络: Neptune_5GH / Neptune_2.4GH"
+    echo "  ✓ 升级配置: 保留/overlay（追加方式）"
+    echo "  ✓ 静态路由: 192.168.7.0/24 → 192.168.5.100（去重）"
     echo ""
     echo "【注意事项】:"
-    echo "  1. 部分配置需要重启服务或系统才能完全生效"
+    echo "  1. 无线配置因硬件差异需要手动配置"
     echo "  2. 静态路由需要确保网关192.168.5.100可达"
-    echo "  3. 无线配置需要硬件支持5GHz和2.4GHz"
+    echo "  3. 建议重启系统使所有配置生效"
     echo ""
     echo "【后续操作】:"
     echo "  运行 /usr/bin/enable-basic-config 可重新应用配置"
@@ -429,20 +354,16 @@ else
     echo "【已集成】:"
     echo "  ✓ 主机名配置"
     echo "  ✓ 密码哈希（需要openssl支持）"
-    echo "  ✓ SSH密钥文件"
     echo "  ✓ 计划任务配置"
     echo "  ✓ 升级保留配置"
     echo "  ✓ 静态路由配置片段"
-    echo "  ✓ 无线网络配置"
     echo "  ✓ 一键启用脚本"
     echo ""
     echo "【固件特性】:"
     echo "  刷入此固件后，系统将:"
     echo "  1. 主机名自动设置为Neptune"
     echo "  2. 密码已预设为harry586586"
-    echo "  3. SSH密钥已预配置"
-    echo "  4. 无线网络自动配置"
-    echo "  5. 支持一键应用所有配置"
+    echo "  3. 支持一键应用所有配置"
     echo ""
     echo "【使用说明】:"
     echo "  刷机后运行: /usr/bin/enable-basic-config"
