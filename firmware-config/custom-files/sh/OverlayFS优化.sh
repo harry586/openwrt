@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================
 # OpenWrt DIY 脚本 - 双重模式：编译集成 + 运行时安装
-# OverlayFS文件系统优化脚本
+# OverlayFS文件系统优化脚本（添加使用说明）
 # =============================================
 
 # 检测运行环境
@@ -96,13 +96,97 @@ tmpfs /var/tmp tmpfs rw,nosuid,nodev,noatime,size=64M,mode=1777 0 0
 tmpfs /var/log tmpfs rw,nosuid,nodev,noatime,size=32M,mode=755 0 0
 EOF
 
-    # 创建overlay清理脚本
+    # 创建overlay清理脚本（添加使用说明）
     cat > "${prefix}/usr/sbin/overlay-cleanup" << 'EOF'
 #!/bin/sh
+# =============================================
 # OverlayFS清理和优化脚本
+# =============================================
 
 LOG_FILE="/var/log/overlay-cleanup.log"
 BACKUP_DIR="/tmp/overlay-backup"
+
+# 显示使用说明
+show_usage() {
+    echo ""
+    echo "=========================================="
+    echo "OverlayFS优化工具 - 使用说明"
+    echo "=========================================="
+    echo ""
+    echo "📖 什么是OverlayFS？"
+    echo "  OverlayFS是OpenWrt的根文件系统，它将只读的基础系统"
+    echo "  和可写的上层目录合并，所有修改都保存在上层目录中。"
+    echo ""
+    echo "🔧 常用功能："
+    echo "  1. overlay-cleanup status    - 查看overlay使用情况"
+    echo "  2. overlay-cleanup clean     - 清理临时文件"
+    echo "  3. overlay-cleanup optimize  - 优化挂载参数"
+    echo "  4. overlay-cleanup monitor   - 实时监控模式"
+    echo "  5. overlay-cleanup all       - 执行所有优化"
+    echo ""
+    echo "💡 使用建议："
+    echo "  - 定期运行 'overlay-cleanup clean' 清理临时文件"
+    echo "  - 空间不足时运行 'overlay-cleanup compress' 压缩日志"
+    echo "  - 系统变慢时运行 'overlay-cleanup optimize' 优化参数"
+    echo "  - 安装大量软件后运行 'overlay-cleanup status' 查看空间"
+    echo ""
+    echo "⚠️  注意事项："
+    echo "  - 'overlay-cleanup reset' 会删除所有自定义配置"
+    echo "  - 操作前建议备份重要配置"
+    echo "  - 监控模式按 Ctrl+C 退出"
+    echo ""
+    echo "📊 查看详细帮助： overlay-cleanup help"
+    echo "=========================================="
+}
+
+# 显示详细帮助
+show_help() {
+    echo ""
+    echo "=========================================="
+    echo "OverlayFS优化工具 - 详细帮助"
+    echo "=========================================="
+    echo ""
+    echo "📋 命令列表："
+    echo "  clean     - 清理临时文件（日志、缓存等）"
+    echo "  compress  - 压缩overlay数据（压缩大日志文件）"
+    echo "  status    - 显示overlay使用情况（磁盘、inode等）"
+    echo "  optimize  - 优化挂载参数和目录结构"
+    echo "  fix       - 修复损坏的软链接"
+    echo "  reset     - 重置overlay（危险！删除所有配置）"
+    echo "  all       - 执行所有优化（clean+optimize+fix）"
+    echo "  monitor   - 持续监控模式（5秒刷新）"
+    echo "  help      - 显示此帮助信息"
+    echo "  usage     - 显示使用说明"
+    echo ""
+    echo "📝 使用示例："
+    echo "  1. 查看当前overlay状态："
+    echo "     overlay-cleanup status"
+    echo ""
+    echo "  2. 清理临时文件并优化："
+    echo "     overlay-cleanup all"
+    echo ""
+    echo "  3. 定期清理计划（添加到cron）："
+    echo "     0 3 * * * overlay-cleanup clean"
+    echo "     0 4 * * 0 overlay-cleanup optimize"
+    echo ""
+    echo "🔍 常见问题："
+    echo "  Q: overlay空间满了怎么办？"
+    echo "  A: 运行 'overlay-cleanup clean' 和 'overlay-cleanup compress'"
+    echo ""
+    echo "  Q: 系统变慢了怎么办？"
+    echo "  A: 运行 'overlay-cleanup optimize' 优化挂载参数"
+    echo ""
+    echo "  Q: 如何查看哪些文件占用空间？"
+    echo "  A: 运行 'du -sh /overlay/upper/* | sort -hr'"
+    echo ""
+    echo "  Q: 如何备份当前配置？"
+    echo "  A: 运行 'tar -czf /tmp/overlay-backup.tar.gz /overlay/upper/etc'"
+    echo ""
+    echo "📞 更多信息："
+    echo "  - OpenWrt Wiki: https://openwrt.org/docs/techref/overlay"
+    echo "  - OverlayFS文档: https://www.kernel.org/doc/html/latest/filesystems/overlayfs.html"
+    echo "=========================================="
+}
 
 # 记录日志
 log() {
@@ -234,22 +318,26 @@ compress_overlay_data() {
 
 # 检查overlay使用情况
 check_overlay_usage() {
+    echo ""
+    echo "========================================"
     echo "OverlayFS使用情况报告"
-    echo "========================"
+    echo "========================================"
     
     # 检查挂载点
-    echo "挂载状态:"
+    echo "📌 挂载状态:"
     mount | grep -E "(overlay|/overlay)" || echo "未找到overlay挂载"
     echo ""
     
     # 检查磁盘使用
-    echo "磁盘使用情况:"
+    echo "💾 磁盘使用情况:"
     df -h /overlay 2>/dev/null || echo "无法获取/overlay使用情况"
     echo ""
     
     # 检查上层目录大小
-    echo "上层目录大小:"
+    echo "📁 上层目录大小:"
     if [ -d "/overlay/upper" ]; then
+        du -sh /overlay/upper 2>/dev/null
+        echo "前10个大目录:"
         du -sh /overlay/upper/* 2>/dev/null | sort -hr | head -10
     else
         echo "上层目录不存在"
@@ -257,22 +345,65 @@ check_overlay_usage() {
     echo ""
     
     # 检查inode使用
-    echo "Inode使用情况:"
+    echo "🔢 Inode使用情况:"
     df -i /overlay 2>/dev/null || echo "无法获取inode信息"
     echo ""
     
     # 检查文件数量
-    echo "文件数量统计:"
+    echo "📊 文件数量统计:"
     if [ -d "/overlay/upper" ]; then
         find /overlay/upper -type f | wc -l | awk '{print "文件数: "$1}'
         find /overlay/upper -type d | wc -l | awk '{print "目录数: "$1}'
         find /overlay/upper -type l | wc -l | awk '{print "链接数: "$1}'
     fi
+    echo ""
+    
+    # 使用建议
+    echo "💡 使用建议:"
+    local usage=$(df /overlay 2>/dev/null | awk 'NR==2 {print $5}' | sed 's/%//')
+    if [ -n "$usage" ]; then
+        if [ "$usage" -gt 90 ]; then
+            echo "  ⚠️  空间严重不足 (${usage}%)，建议:"
+            echo "    1. 运行: overlay-cleanup clean"
+            echo "    2. 运行: overlay-cleanup compress"
+            echo "    3. 删除不需要的软件包"
+        elif [ "$usage" -gt 70 ]; then
+            echo "  ⚠️  空间紧张 (${usage}%)，建议:"
+            echo "    1. 运行: overlay-cleanup clean"
+            echo "    2. 考虑清理日志文件"
+        else
+            echo "  ✅ 空间充足 (${usage}%)"
+        fi
+    fi
+    echo "========================================"
 }
 
 # 重置overlay（危险操作）
 reset_overlay() {
-    echo "⚠️  警告：此操作将重置overlay，所有自定义配置和安装的软件将丢失！"
+    echo ""
+    echo "========================================"
+    echo "⚠️  OverlayFS重置工具"
+    echo "========================================"
+    echo ""
+    echo "警告：此操作将重置overlay，所有自定义配置和安装的软件将丢失！"
+    echo ""
+    echo "影响范围："
+    echo "  ✗ 所有安装的软件包"
+    echo "  ✗ 自定义配置文件"
+    echo "  ✗ 系统设置"
+    echo "  ✗ 用户数据"
+    echo ""
+    echo "保留内容："
+    echo "  ✓ 网络配置（如果已备份）"
+    echo "  ✓ 无线配置（如果已备份）"
+    echo "  ✓ 防火墙配置（如果已备份）"
+    echo ""
+    echo "操作步骤："
+    echo "  1. 备份当前配置"
+    echo "  2. 卸载overlay"
+    echo "  3. 清理overlay目录"
+    echo "  4. 重新挂载"
+    echo "  5. 恢复配置"
     echo ""
     read -p "确定要重置overlay吗？(输入'RESET'确认): " confirm
     
@@ -296,8 +427,13 @@ reset_overlay() {
         # 恢复配置
         cp -r /tmp/overlay-reset-backup/config/* /etc/config/ 2>/dev/null || true
         
-        echo "overlay重置完成，需要重启系统"
-        echo "重启命令: reboot"
+        echo ""
+        echo "✅ overlay重置完成"
+        echo ""
+        echo "下一步操作："
+        echo "  1. 重启系统: reboot"
+        echo "  2. 重新安装需要的软件包"
+        echo "  3. 恢复其他配置"
     else
         echo "操作已取消"
     fi
@@ -360,7 +496,12 @@ case "$1" in
         ;;
     monitor)
         # 监控模式
-        echo "启动overlay监控模式，按Ctrl+C退出..."
+        echo ""
+        echo "========================================"
+        echo "OverlayFS实时监控模式"
+        echo "========================================"
+        echo "按 Ctrl+C 退出监控"
+        echo ""
         while true; do
             clear
             check_overlay_usage
@@ -369,17 +510,39 @@ case "$1" in
             sleep 5
         done
         ;;
+    help)
+        show_help
+        ;;
+    usage)
+        show_usage
+        ;;
     *)
+        echo ""
+        echo "========================================"
         echo "OverlayFS优化工具"
-        echo "用法: $0 {clean|compress|status|optimize|fix|reset|all|monitor}"
-        echo "  clean    - 清理临时文件"
-        echo "  compress - 压缩overlay数据"
-        echo "  status   - 显示使用情况"
-        echo "  optimize - 优化挂载参数和结构"
-        echo "  fix      - 修复损坏链接"
-        echo "  reset    - 重置overlay（危险）"
-        echo "  all      - 执行所有优化"
-        echo "  monitor  - 持续监控模式"
+        echo "========================================"
+        echo ""
+        echo "基本用法: overlay-cleanup [命令]"
+        echo ""
+        echo "命令列表:"
+        echo "  clean     - 清理临时文件"
+        echo "  compress  - 压缩overlay数据"
+        echo "  status    - 显示使用情况"
+        echo "  optimize  - 优化挂载参数和结构"
+        echo "  fix       - 修复损坏链接"
+        echo "  reset     - 重置overlay（危险）"
+        echo "  all       - 执行所有优化"
+        echo "  monitor   - 持续监控模式"
+        echo "  help      - 显示详细帮助"
+        echo "  usage     - 显示使用说明"
+        echo ""
+        echo "示例:"
+        echo "  overlay-cleanup status    # 查看状态"
+        echo "  overlay-cleanup all       # 执行所有优化"
+        echo "  overlay-cleanup monitor   # 实时监控"
+        echo ""
+        echo "获取详细帮助: overlay-cleanup help"
+        echo "========================================"
         exit 1
         ;;
 esac
@@ -409,7 +572,7 @@ start_service() {
     fi
     
     # 优化挂载参数
-    /usr/sbin/overlay-cleanup optimize
+    /usr/sbin/overlay-cleanup optimize >/dev/null 2>&1 || true
     
     # 启动定期清理任务
     setup_cron_jobs
@@ -522,22 +685,39 @@ function fix_links()
 end
 EOF
 
-    # Web界面
+    # Web界面（添加使用说明）
     cat > "${prefix}/usr/lib/lua/luci/view/admin_system/overlayfs_optimize.htm" << 'EOF'
 <%+header%>
 <div class="cbi-map">
     <h2 name="content"><%:OverlayFS文件系统优化%></h2>
     
-    <!-- 信息提示 -->
+    <!-- 使用说明卡片 -->
     <div class="alert-message" style="background: #e8f4fd; color: #0c5460; border: 1px solid #bee5eb; padding: 15px; margin-bottom: 20px; border-radius: 6px;">
-        <h4 style="margin-top: 0;">💾 OverlayFS优化</h4>
-        <p style="margin-bottom: 10px;">OverlayFS是OpenWrt的根文件系统，优化它可以提升系统性能和稳定性。</p>
-        <ul style="margin: 0; padding-left: 20px;">
-            <li><strong>性能优化：</strong>优化挂载参数，提升文件操作速度</li>
-            <li><strong>空间管理：</strong>定期清理临时文件，释放存储空间</li>
-            <li><strong>稳定性：</strong>修复损坏的链接和文件</li>
-            <li><strong>监控：</strong>实时监控overlay使用情况</li>
-        </ul>
+        <h4 style="margin-top: 0;">📚 OverlayFS优化 - 使用说明</h4>
+        <p style="margin-bottom: 10px;"><b>什么是OverlayFS？</b> 它是OpenWrt的根文件系统，将只读的基础系统和可写的上层目录合并。</p>
+        
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin: 10px 0;">
+            <div style="background: white; padding: 10px; border-radius: 4px; border-left: 4px solid #4CAF50;">
+                <div style="font-weight: 600; color: #2c3e50;">💾 空间管理</div>
+                <div style="font-size: 12px; color: #7f8c8d;">清理临时文件，释放存储空间</div>
+            </div>
+            <div style="background: white; padding: 10px; border-radius: 4px; border-left: 4px solid #2196F3;">
+                <div style="font-weight: 600; color: #2c3e50;">⚡ 性能优化</div>
+                <div style="font-size: 12px; color: #7f8c8d;">优化挂载参数，提升文件操作速度</div>
+            </div>
+            <div style="background: white; padding: 10px; border-radius: 4px; border-left: 4px solid #FF9800;">
+                <div style="font-weight: 600; color: #2c3e50;">🔧 系统维护</div>
+                <div style="font-size: 12px; color: #7f8c8d;">修复损坏链接，监控使用情况</div>
+            </div>
+        </div>
+        
+        <p style="margin: 10px 0 5px 0; font-weight: 600;">💡 使用建议：</p>
+        <ol style="margin: 0 0 10px 0; padding-left: 20px; font-size: 13px;">
+            <li>定期点击"立即清理"按钮</li>
+            <li>空间不足时使用"压缩数据"</li>
+            <li>系统变慢时使用"优化配置"</li>
+            <li>随时查看"状态"了解使用情况</li>
+        </ol>
     </div>
     
     <!-- 状态显示 -->
@@ -556,67 +736,105 @@ EOF
             <button id="clean-now" class="btn-secondary" style="padding: 10px 20px;">
                 <i class="icon icon-trash"></i> 立即清理
             </button>
+            <button id="show-help" class="btn-neutral" style="padding: 10px 20px;">
+                <i class="icon icon-question-circle"></i> 使用帮助
+            </button>
         </div>
     </div>
     
     <!-- 优化操作 -->
     <div class="cbi-section" style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
         <h3 style="margin-top: 0; color: #2c3e50;"><%:优化操作%></h3>
-        <div class="cbi-value">
-            <label class="cbi-value-title" style="font-weight: 600; color: #34495e;"><%:一键优化%></label>
-            <div class="cbi-value-field">
-                <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-                    <button id="optimize-now" class="btn-success" style="padding: 10px 20px;">
-                        <i class="icon icon-cogs"></i> 优化配置
-                    </button>
-                    <button id="compress-now" class="btn-warning" style="padding: 10px 20px;">
-                        <i class="icon icon-compress"></i> 压缩数据
-                    </button>
-                    <button id="fix-links" class="btn-info" style="padding: 10px 20px;">
-                        <i class="icon icon-chain-broken"></i> 修复链接
-                    </button>
-                    <button id="advanced-opt" class="btn-neutral" style="padding: 10px 20px;">
-                        <i class="icon icon-magic"></i> 高级优化
-                    </button>
-                </div>
-                <p style="margin-top: 10px; color: #7f8c8d; font-size: 12px;">
-                    优化操作可能需要一些时间，请勿在操作期间断电或重启
-                </p>
+        
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 20px;">
+            <div style="background: white; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #e1e8ed;">
+                <div style="font-size: 24px; color: #28a745; margin-bottom: 8px;">🗑️</div>
+                <div style="font-weight: 600; margin-bottom: 5px;">清理临时文件</div>
+                <div style="font-size: 12px; color: #7f8c8d; margin-bottom: 10px;">释放存储空间</div>
+                <button class="btn-sm btn-success" onclick="performAction('clean')" style="width: 100%;">执行清理</button>
             </div>
+            
+            <div style="background: white; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #e1e8ed;">
+                <div style="font-size: 24px; color: #2196F3; margin-bottom: 8px;">⚡</div>
+                <div style="font-weight: 600; margin-bottom: 5px;">优化配置</div>
+                <div style="font-size: 12px; color: #7f8c8d; margin-bottom: 10px;">提升系统性能</div>
+                <button class="btn-sm btn-primary" onclick="performAction('optimize')" style="width: 100%;">执行优化</button>
+            </div>
+            
+            <div style="background: white; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #e1e8ed;">
+                <div style="font-size: 24px; color: #FF9800; margin-bottom: 8px;">🗜️</div>
+                <div style="font-weight: 600; margin-bottom: 5px;">压缩数据</div>
+                <div style="font-size: 12px; color: #7f8c8d; margin-bottom: 10px;">压缩大日志文件</div>
+                <button class="btn-sm btn-warning" onclick="performAction('compress')" style="width: 100%;">执行压缩</button>
+            </div>
+            
+            <div style="background: white; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #e1e8ed;">
+                <div style="font-size: 24px; color: #17a2b8; margin-bottom: 8px;">🔗</div>
+                <div style="font-weight: 600; margin-bottom: 5px;">修复链接</div>
+                <div style="font-size: 12px; color: #7f8c8d; margin-bottom: 10px;">修复损坏的链接</div>
+                <button class="btn-sm btn-info" onclick="performAction('fix')" style="width: 100%;">执行修复</button>
+            </div>
+        </div>
+        
+        <!-- 一键优化 -->
+        <div style="text-align: center; margin-top: 20px;">
+            <button id="all-in-one" class="btn-success" style="padding: 12px 30px; font-size: 16px;">
+                <i class="icon icon-magic"></i> 一键全面优化
+            </button>
+            <p style="margin-top: 10px; color: #7f8c8d; font-size: 12px;">
+                执行所有优化操作：清理 + 优化 + 修复
+            </p>
         </div>
     </div>
     
     <!-- 高级选项 -->
-    <div class="cbi-section" style="background: #f8f9fa; padding: 20px; border-radius: 8px;">
+    <div class="cbi-section" style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
         <h3 style="margin-top: 0; color: #2c3e50;"><%:高级选项%></h3>
-        <div class="cbi-value">
-            <label class="cbi-value-title" style="font-weight: 600; color: #34495e;"><%:危险操作%></label>
+        
+        <div class="cbi-value" style="margin-bottom: 15px;">
+            <label class="cbi-value-title" style="font-weight: 600; color: #34495e;"><%:监控模式%></label>
             <div class="cbi-value-field">
-                <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-                    <button id="reset-overlay" class="btn-danger" style="padding: 10px 20px;">
-                        <i class="icon icon-warning"></i> 重置Overlay
-                    </button>
-                    <button id="monitor-mode" class="btn-secondary" style="padding: 10px 20px;">
-                        <i class="icon icon-desktop"></i> 监控模式
-                    </button>
-                </div>
-                <p style="margin-top: 10px; color: #e74c3c; font-size: 12px;">
-                    ⚠️ 重置Overlay会删除所有自定义配置和安装的软件，请谨慎操作！
+                <button id="monitor-mode" class="btn-info" style="padding: 10px 20px;">
+                    <i class="icon icon-desktop"></i> 启动监控模式
+                </button>
+                <p style="margin-top: 5px; color: #7f8c8d; font-size: 12px;">
+                    实时监控overlay使用情况，5秒刷新一次
                 </p>
             </div>
         </div>
         
-        <!-- 配置参数 -->
-        <div class="cbi-value" style="margin-top: 20px;">
-            <label class="cbi-value-title" style="font-weight: 600; color: #34495e;"><%:挂载参数%></label>
+        <div class="cbi-value" style="margin-bottom: 15px;">
+            <label class="cbi-value-title" style="font-weight: 600; color: #34495e;"><%:危险操作%></label>
             <div class="cbi-value-field">
-                <div style="padding: 15px; background: white; border-radius: 6px; border: 1px solid #e1e8ed; font-family: monospace; font-size: 12px;">
-                    <div style="margin-bottom: 8px;"><strong>当前参数：</strong></div>
-                    <div id="mount-params" style="color: #34495e;">加载中...</div>
-                </div>
-                <button id="reload-params" class="btn-neutral" style="margin-top: 10px; padding: 8px 16px;">
-                    <i class="icon icon-redo"></i> 重载参数
+                <button id="reset-overlay" class="btn-danger" style="padding: 10px 20px;">
+                    <i class="icon icon-warning"></i> 重置Overlay
                 </button>
+                <p style="margin-top: 5px; color: #e74c3c; font-size: 12px;">
+                    ⚠️ 危险！将删除所有自定义配置和安装的软件
+                </p>
+            </div>
+        </div>
+        
+        <!-- 命令行参考 -->
+        <div class="cbi-value">
+            <label class="cbi-value-title" style="font-weight: 600; color: #34495e;"><%:命令行参考%></label>
+            <div class="cbi-value-field">
+                <div style="background: #2c3e50; color: white; padding: 12px; border-radius: 6px; font-family: monospace; font-size: 13px;">
+                    <p style="margin: 5px 0; color: #95a5a6;"># 查看状态</p>
+                    <code style="display: block; background: #34495e; padding: 8px; border-radius: 4px; margin: 5px 0 15px 0;">
+                        overlay-cleanup status
+                    </code>
+                    
+                    <p style="margin: 5px 0; color: #95a5a6;"># 一键优化</p>
+                    <code style="display: block; background: #34495e; padding: 8px; border-radius: 4px; margin: 5px 0 15px 0;">
+                        overlay-cleanup all
+                    </code>
+                    
+                    <p style="margin: 5px 0; color: #95a5a6;"># 获取帮助</p>
+                    <code style="display: block; background: #34495e; padding: 8px; border-radius: 4px; margin: 5px 0 0 0;">
+                        overlay-cleanup help
+                    </code>
+                </div>
             </div>
         </div>
     </div>
@@ -647,11 +865,6 @@ function showStatus(message, type) {
             textColor = '#856404';
             borderColor = '#ffeaa7';
             break;
-        case 'danger':
-            bgColor = '#f8d7da';
-            textColor = '#721c24';
-            borderColor = '#f5c6cb';
-            break;
         default:
             bgColor = '#d1ecf1';
             textColor = '#0c5460';
@@ -674,216 +887,76 @@ function loadOverlayStatus() {
     xhr.onreadystatechange = function() {
         if (xhr.readyState === 4) {
             if (xhr.status === 200) {
-                // 将纯文本转换为格式化显示
-                var lines = xhr.responseText.split('\n');
-                var html = '';
-                
-                lines.forEach(function(line) {
-                    if (line.trim() === '') return;
-                    
-                    if (line.includes('======')) {
-                        html += '<div style="font-weight: 600; color: #2c3e50; margin: 10px 0 5px 0; border-bottom: 1px solid #e1e8ed; padding-bottom: 3px;">' + line + '</div>';
-                    } else if (line.includes(':')) {
-                        var parts = line.split(':');
-                        var key = parts[0];
-                        var value = parts.slice(1).join(':');
-                        
-                        html += '<div style="margin: 3px 0; padding: 2px 0;">';
-                        html += '<span style="color: #34495e; font-weight: 500;">' + key + ':</span>';
-                        html += '<span style="color: #2c3e50; margin-left: 8px;">' + value + '</span>';
-                        html += '</div>';
-                    } else {
-                        html += '<div style="color: #7f8c8d; margin: 5px 0;">' + line + '</div>';
-                    }
-                });
-                
-                statusDiv.innerHTML = html;
+                // 简单格式化显示
+                statusDiv.innerHTML = '<pre style="margin: 0; white-space: pre-wrap; font-family: monospace; font-size: 12px; line-height: 1.4;">' + xhr.responseText + '</pre>';
             } else {
-                statusDiv.innerHTML = '<div class="alert-message error">加载状态失败</div>';
+                statusDiv.innerHTML = '<div style="color: #e74c3c; padding: 20px; text-align: center;">加载状态失败</div>';
             }
         }
     };
     xhr.send();
 }
 
-// 加载挂载参数
-function loadMountParams() {
-    var paramsDiv = document.getElementById('mount-params');
-    
-    // 获取挂载信息
-    var xhr = new XMLHttpRequest();
-    xhr.open('GET', '/cgi-bin/luci/admin/system/overlayfs-optimize/status', true);
-    xhr.onreadystatechange = function() {
-        if (xhr.readyState === 4 && xhr.status === 200) {
-            var lines = xhr.responseText.split('\n');
-            var mountLine = lines.find(function(line) {
-                return line.includes('on /overlay type overlay');
-            });
-            
-            if (mountLine) {
-                // 提取参数部分
-                var params = mountLine.match(/\((.*)\)/);
-                if (params && params[1]) {
-                    paramsDiv.innerHTML = params[1].replace(/,/g, ', ');
-                } else {
-                    paramsDiv.innerHTML = '无法解析参数';
-                }
-            } else {
-                paramsDiv.innerHTML = '未找到overlay挂载信息';
-            }
-        }
+// 执行操作
+function performAction(action) {
+    var actionNames = {
+        'clean': '清理临时文件',
+        'optimize': '优化配置',
+        'compress': '压缩数据',
+        'fix': '修复链接'
     };
-    xhr.send();
+    
+    var confirmMessages = {
+        'clean': '确定要清理OverlayFS临时文件吗？\n这将释放存储空间。',
+        'optimize': '确定要优化OverlayFS配置吗？\n这将提升系统性能。',
+        'compress': '确定要压缩OverlayFS数据吗？\n这可能需要一些时间。',
+        'fix': '确定要检查并修复损坏的链接吗？'
+    };
+    
+    if (confirm(confirmMessages[action])) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', '<%=luci.dispatcher.build_url("admin/system/overlayfs-optimize/")%>' + action, true);
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4 && xhr.status === 200) {
+                try {
+                    var data = JSON.parse(xhr.responseText);
+                    if (data.success) {
+                        showStatus('✅ ' + actionNames[action] + ' 完成', 'success');
+                        setTimeout(loadOverlayStatus, 2000);
+                    }
+                } catch (e) {
+                    showStatus('操作失败: ' + e.message, 'error');
+                }
+            }
+        };
+        xhr.send();
+    }
 }
 
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
-    // 加载初始状态
     loadOverlayStatus();
-    loadMountParams();
     
     // 刷新状态按钮
     document.getElementById('refresh-status').addEventListener('click', function() {
         loadOverlayStatus();
-        loadMountParams();
         showStatus('状态已刷新', 'info');
-    });
-    
-    // 重载参数按钮
-    document.getElementById('reload-params').addEventListener('click', function() {
-        loadMountParams();
-        showStatus('参数已重载', 'info');
     });
     
     // 立即清理按钮
     document.getElementById('clean-now').addEventListener('click', function() {
-        if (confirm('确定要立即清理OverlayFS临时文件吗？')) {
-            var btn = this;
-            var originalText = btn.innerHTML;
-            btn.innerHTML = '<i class="icon icon-spinner icon-spin"></i> 清理中...';
-            btn.disabled = true;
-            
-            var xhr = new XMLHttpRequest();
-            xhr.open('GET', '<%=luci.dispatcher.build_url("admin/system/overlayfs-optimize/clean")%>', true);
-            xhr.onreadystatechange = function() {
-                if (xhr.readyState === 4 && xhr.status === 200) {
-                    try {
-                        var data = JSON.parse(xhr.responseText);
-                        if (data.success) {
-                            showStatus('OverlayFS清理完成', 'success');
-                            setTimeout(function() {
-                                loadOverlayStatus();
-                            }, 2000);
-                        }
-                    } catch (e) {
-                        showStatus('清理失败: ' + e.message, 'error');
-                    }
-                    btn.disabled = false;
-                    btn.innerHTML = originalText;
-                }
-            };
-            xhr.send();
-        }
+        performAction('clean');
     });
     
-    // 优化配置按钮
-    document.getElementById('optimize-now').addEventListener('click', function() {
-        if (confirm('确定要优化OverlayFS配置吗？')) {
-            var btn = this;
-            var originalText = btn.innerHTML;
-            btn.innerHTML = '<i class="icon icon-spinner icon-spin"></i> 优化中...';
-            btn.disabled = true;
-            
-            var xhr = new XMLHttpRequest();
-            xhr.open('GET', '<%=luci.dispatcher.build_url("admin/system/overlayfs-optimize/optimize")%>', true);
-            xhr.onreadystatechange = function() {
-                if (xhr.readyState === 4 && xhr.status === 200) {
-                    try {
-                        var data = JSON.parse(xhr.responseText);
-                        if (data.success) {
-                            showStatus('OverlayFS优化完成', 'success');
-                            setTimeout(function() {
-                                loadOverlayStatus();
-                                loadMountParams();
-                            }, 2000);
-                        }
-                    } catch (e) {
-                        showStatus('优化失败: ' + e.message, 'error');
-                    }
-                    btn.disabled = false;
-                    btn.innerHTML = originalText;
-                }
-            };
-            xhr.send();
-        }
+    // 使用帮助按钮
+    document.getElementById('show-help').addEventListener('click', function() {
+        showStatus('📚 使用帮助：<br>1. 定期清理临时文件<br>2. 空间不足时压缩数据<br>3. 系统变慢时优化配置<br>4. 随时查看状态了解使用情况', 'info');
     });
     
-    // 压缩数据按钮
-    document.getElementById('compress-now').addEventListener('click', function() {
-        if (confirm('确定要压缩OverlayFS数据吗？这可能需要一些时间。')) {
-            var btn = this;
-            var originalText = btn.innerHTML;
-            btn.innerHTML = '<i class="icon icon-spinner icon-spin"></i> 压缩中...';
-            btn.disabled = true;
-            
-            var xhr = new XMLHttpRequest();
-            xhr.open('GET', '<%=luci.dispatcher.build_url("admin/system/overlayfs-optimize/compress")%>', true);
-            xhr.onreadystatechange = function() {
-                if (xhr.readyState === 4 && xhr.status === 200) {
-                    try {
-                        var data = JSON.parse(xhr.responseText);
-                        if (data.success) {
-                            showStatus('OverlayFS压缩完成', 'success');
-                            setTimeout(function() {
-                                loadOverlayStatus();
-                            }, 3000);
-                        }
-                    } catch (e) {
-                        showStatus('压缩失败: ' + e.message, 'error');
-                    }
-                    btn.disabled = false;
-                    btn.innerHTML = originalText;
-                }
-            };
-            xhr.send();
-        }
-    });
-    
-    // 修复链接按钮
-    document.getElementById('fix-links').addEventListener('click', function() {
-        if (confirm('确定要检查并修复损坏的链接吗？')) {
-            var btn = this;
-            var originalText = btn.innerHTML;
-            btn.innerHTML = '<i class="icon icon-spinner icon-spin"></i> 修复中...';
-            btn.disabled = true;
-            
-            var xhr = new XMLHttpRequest();
-            xhr.open('GET', '<%=luci.dispatcher.build_url("admin/system/overlayfs-optimize/fix")%>', true);
-            xhr.onreadystatechange = function() {
-                if (xhr.readyState === 4 && xhr.status === 200) {
-                    try {
-                        var data = JSON.parse(xhr.responseText);
-                        if (data.success) {
-                            showStatus('链接修复完成', 'success');
-                            setTimeout(function() {
-                                loadOverlayStatus();
-                            }, 2000);
-                        }
-                    } catch (e) {
-                        showStatus('修复失败: ' + e.message, 'error');
-                    }
-                    btn.disabled = false;
-                    btn.innerHTML = originalText;
-                }
-            };
-            xhr.send();
-        }
-    });
-    
-    // 高级优化按钮
-    document.getElementById('advanced-opt').addEventListener('click', function() {
-        if (confirm('执行高级优化操作，包括所有优化步骤。确定继续吗？')) {
-            showStatus('正在执行高级优化，请稍候...', 'info');
+    // 一键全面优化按钮
+    document.getElementById('all-in-one').addEventListener('click', function() {
+        if (confirm('执行全面优化操作，包括：\n1. 清理临时文件\n2. 优化配置\n3. 修复损坏链接\n\n确定继续吗？')) {
+            showStatus('正在执行全面优化，请稍候...', 'info');
             
             // 顺序执行所有优化
             var steps = ['clean', 'optimize', 'fix'];
@@ -891,9 +964,8 @@ document.addEventListener('DOMContentLoaded', function() {
             
             function executeNextStep() {
                 if (currentStep >= steps.length) {
-                    showStatus('高级优化完成', 'success');
+                    showStatus('✅ 全面优化完成', 'success');
                     loadOverlayStatus();
-                    loadMountParams();
                     return;
                 }
                 
@@ -913,26 +985,20 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
+    // 监控模式按钮
+    document.getElementById('monitor-mode').addEventListener('click', function() {
+        showStatus('监控模式需要在终端执行: overlay-cleanup monitor<br>按 Ctrl+C 退出监控', 'info');
+    });
+    
     // 重置Overlay按钮（危险操作）
     document.getElementById('reset-overlay').addEventListener('click', function() {
         var confirmText = prompt('⚠️  危险操作！这将删除所有自定义配置和安装的软件。\n请输入"RESET"确认：');
         
         if (confirmText === 'RESET') {
-            showStatus('正在重置Overlay，请勿断电或重启...', 'danger');
-            
-            // 这里应该调用后端的重置接口
-            // 由于是危险操作，实际应用中需要更完善的保护
-            setTimeout(function() {
-                showStatus('重置操作需要在终端执行，请使用命令: overlay-cleanup reset', 'warning');
-            }, 1000);
+            showStatus('重置操作需要在终端执行，请使用命令: overlay-cleanup reset', 'warning');
         } else {
             showStatus('操作已取消', 'info');
         }
-    });
-    
-    // 监控模式按钮
-    document.getElementById('monitor-mode').addEventListener('click', function() {
-        showStatus('监控模式需要在终端执行: overlay-cleanup monitor', 'info');
     });
 });
 
@@ -1000,10 +1066,14 @@ style.textContent = `
     color: white;
 }
 
+.btn-sm {
+    padding: 6px 12px;
+    font-size: 12px;
+}
+
 .btn-primary:hover, .btn-secondary:hover, .btn-success:hover, .btn-warning:hover, .btn-info:hover, .btn-neutral:hover, .btn-danger:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
     opacity: 0.9;
+    transform: translateY(-1px);
 }
 `;
 document.head.appendChild(style);
@@ -1029,12 +1099,18 @@ if [ "$RUNTIME_MODE" = "true" ]; then
         sysctl -p /etc/sysctl.d/99-overlayfs-optimization.conf 2>/dev/null || true
     fi
     
-    # 优化fstab配置
+    # 优化fstab配置（追加方式）
     if [ -f "/etc/fstab" ] && [ -f "/etc/fstab.overlay" ]; then
         # 备份原配置
         cp /etc/fstab /etc/fstab.backup.$(date +%Y%m%d%H%M%S)
-        # 合并配置
-        cat /etc/fstab.overlay >> /etc/fstab
+        # 检查是否已存在overlay配置
+        if ! grep -q "overlay.*/overlay" /etc/fstab; then
+            # 追加配置
+            cat /etc/fstab.overlay >> /etc/fstab
+            echo "fstab优化配置已追加"
+        else
+            echo "fstab中已存在overlay配置，跳过"
+        fi
     fi
     
     # 重启LuCI使新页面生效
@@ -1043,22 +1119,35 @@ if [ "$RUNTIME_MODE" = "true" ]; then
     fi
     
     # 创建计划任务
-    echo "# OverlayFS优化任务" >> /etc/crontabs/root
-    echo "0 3 * * * /usr/sbin/overlay-cleanup clean >/dev/null 2>&1" >> /etc/crontabs/root
-    echo "30 3 * * 0 /usr/sbin/overlay-cleanup optimize >/dev/null 2>&1" >> /etc/crontabs/root
+    if ! grep -q "overlay-cleanup" /etc/crontabs/root 2>/dev/null; then
+        echo "# OverlayFS优化任务" >> /etc/crontabs/root
+        echo "0 3 * * * /usr/sbin/overlay-cleanup clean >/dev/null 2>&1" >> /etc/crontabs/root
+        echo "30 3 * * 0 /usr/sbin/overlay-cleanup optimize >/dev/null 2>&1" >> /etc/crontabs/root
+        /etc/init.d/cron restart 2>/dev/null || true
+    fi
     
-    /etc/init.d/cron restart 2>/dev/null || true
-    
-    echo "✓ OverlayFS文件系统优化已应用"
     echo ""
-    echo "【访问方式】:"
-    echo "   LuCI界面 → 系统 → OverlayFS优化"
+    echo "========================================"
+    echo "✓ OverlayFS文件系统优化已安装"
+    echo "========================================"
     echo ""
-    echo "【手动操作】:"
-    echo "   查看状态: overlay-cleanup status"
-    echo "   清理文件: overlay-cleanup clean"
-    echo "   优化配置: overlay-cleanup optimize"
-    echo "   监控模式: overlay-cleanup monitor"
+    echo "📖 使用说明："
+    echo "  1. 查看状态：overlay-cleanup status"
+    echo "  2. 清理文件：overlay-cleanup clean"
+    echo "  3. 优化配置：overlay-cleanup optimize"
+    echo "  4. 实时监控：overlay-cleanup monitor"
+    echo "  5. 获取帮助：overlay-cleanup help"
+    echo ""
+    echo "🌐 Web界面："
+    echo "  LuCI → 系统 → OverlayFS优化"
+    echo ""
+    echo "⏰ 计划任务："
+    echo "  已设置：每天3点自动清理临时文件"
+    echo "          每周日3:30自动优化配置"
+    echo ""
+    echo "💡 建议："
+    echo "  首次使用建议运行：overlay-cleanup all"
+    echo "========================================"
 else
     create_overlayfs_web_interface "$INSTALL_DIR"
     echo "✓ OverlayFS文件系统优化已集成到固件"
