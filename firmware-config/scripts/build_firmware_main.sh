@@ -814,6 +814,8 @@ pre_build_error_check() {
     elif [ $available_gb -lt 20 ]; then
         log "⚠️ 警告: 磁盘空间较低 (建议至少20G，当前${available_gb}G)"
         warning_count=$((warning_count + 1))
+    else
+        log "✅ 编译前空间充足"
     fi
     
     # 7. 检查内存
@@ -2218,14 +2220,14 @@ integrate_custom_files() {
     
     log "✅ 文件复制完成: $copied_count 个文件已复制，$skip_count 个文件跳过"
     
-    # 创建第一次开机运行的安装脚本（增强版）
+    # 创建第一次开机运行的安装脚本（增强版）- 修复统计变量作用域
     echo ""
-    log "🔧 步骤3: 创建第一次开机安装脚本（增强版）"
+    log "🔧 步骤3: 创建第一次开机安装脚本（增强版）- 修复统计变量作用域"
     
     local first_boot_dir="files/etc/uci-defaults"
     mkdir -p "$first_boot_dir"
     
-    # 创建第一次开机运行的脚本 - 增强版
+    # 创建第一次开机运行的脚本 - 增强版，修复统计变量作用域问题
     local first_boot_script="$first_boot_dir/99-custom-files"
     cat > "$first_boot_script" << 'EOF'
 #!/bin/sh
@@ -2234,7 +2236,7 @@ LOG_FILE="/tmp/custom-files-install.log"
 CUSTOM_DIR="/etc/custom-files"
 
 echo "==================================================" > $LOG_FILE
-echo "      自定义文件安装脚本（增强版）" >> $LOG_FILE
+echo "      自定义文件安装脚本（增强版）- 修复统计变量作用域" >> $LOG_FILE
 echo "      开始时间: $(date)" >> $LOG_FILE
 echo "==================================================" >> $LOG_FILE
 echo "" >> $LOG_FILE
@@ -2251,15 +2253,18 @@ if [ -d "$CUSTOM_DIR" ]; then
     done
     echo "" >> $LOG_FILE
     
-    # 1. 安装IPK文件（增强版）
+    # 1. 安装IPK文件（增强版）- 修复：使用临时文件确保变量作用域
     IPK_COUNT=0
     IPK_SUCCESS=0
     IPK_FAILED=0
     
     echo "📦 开始安装IPK包..." >> $LOG_FILE
     
-    # 递归查找所有IPK文件
-    find "$CUSTOM_DIR" -type f 2>/dev/null | while read file; do
+    # 使用临时文件来存储文件列表，确保while循环在当前shell中运行
+    FILE_LIST=$(mktemp)
+    find "$CUSTOM_DIR" -type f 2>/dev/null > "$FILE_LIST"
+    
+    while IFS= read -r file; do
         file_name=$(basename "$file")
         
         # 检查是否是IPK文件（不区分大小写）
@@ -2286,7 +2291,9 @@ if [ -d "$CUSTOM_DIR" ]; then
             echo "      结束时间: $(date '+%H:%M:%S')" >> $LOG_FILE
             echo "" >> $LOG_FILE
         fi
-    done
+    done < "$FILE_LIST"
+    
+    rm -f "$FILE_LIST"
     
     echo "📊 IPK包安装统计:" >> $LOG_FILE
     echo "  尝试安装: $IPK_COUNT 个" >> $LOG_FILE
@@ -2294,15 +2301,18 @@ if [ -d "$CUSTOM_DIR" ]; then
     echo "  失败: $IPK_FAILED 个" >> $LOG_FILE
     echo "" >> $LOG_FILE
     
-    # 2. 运行脚本文件（增强版）
+    # 2. 运行脚本文件（增强版）- 修复：使用临时文件确保变量作用域
     SCRIPT_COUNT=0
     SCRIPT_SUCCESS=0
     SCRIPT_FAILED=0
     
     echo "📜 开始运行脚本文件..." >> $LOG_FILE
     
-    # 递归查找所有脚本文件
-    find "$CUSTOM_DIR" -type f 2>/dev/null | while read file; do
+    # 使用临时文件来存储文件列表
+    FILE_LIST=$(mktemp)
+    find "$CUSTOM_DIR" -type f 2>/dev/null > "$FILE_LIST"
+    
+    while IFS= read -r file; do
         file_name=$(basename "$file")
         
         # 检查是否是脚本文件（不区分大小写）
@@ -2333,7 +2343,9 @@ if [ -d "$CUSTOM_DIR" ]; then
             echo "      结束时间: $(date '+%H:%M:%S')" >> $LOG_FILE
             echo "" >> $LOG_FILE
         fi
-    done
+    done < "$FILE_LIST"
+    
+    rm -f "$FILE_LIST"
     
     echo "📊 脚本运行统计:" >> $LOG_FILE
     echo "  尝试运行: $SCRIPT_COUNT 个" >> $LOG_FILE
@@ -2341,15 +2353,18 @@ if [ -d "$CUSTOM_DIR" ]; then
     echo "  失败: $SCRIPT_FAILED 个" >> $LOG_FILE
     echo "" >> $LOG_FILE
     
-    # 3. 复制其他文件到特定位置
+    # 3. 复制其他文件到特定位置 - 修复：使用临时文件确保变量作用域
     OTHER_COUNT=0
     OTHER_SUCCESS=0
     OTHER_FAILED=0
     
     echo "📁 处理其他文件..." >> $LOG_FILE
     
-    # 递归处理所有其他文件
-    find "$CUSTOM_DIR" -type f 2>/dev/null | while read file; do
+    # 使用临时文件来存储文件列表
+    FILE_LIST=$(mktemp)
+    find "$CUSTOM_DIR" -type f 2>/dev/null > "$FILE_LIST"
+    
+    while IFS= read -r file; do
         file_name=$(basename "$file")
         
         # 跳过已处理的文件类型
@@ -2390,7 +2405,9 @@ if [ -d "$CUSTOM_DIR" ]; then
         fi
         
         echo "" >> $LOG_FILE
-    done
+    done < "$FILE_LIST"
+    
+    rm -f "$FILE_LIST"
     
     echo "📊 其他文件处理统计:" >> $LOG_FILE
     echo "  尝试处理: $OTHER_COUNT 个" >> $LOG_FILE
@@ -2447,6 +2464,7 @@ EOF
     log "  3. ✅ IPK安装错误不退出，继续下一个"
     log "  4. ✅ 详细日志记录每个文件的处理结果"
     log "  5. ✅ 分类统计和成功率计算"
+    log "  6. ✅ 修复统计变量作用域问题"
     
     # 创建文件名检查脚本
     echo ""
@@ -2474,8 +2492,11 @@ ENGLISH_COUNT=0
 NON_ENGLISH_COUNT=0
 TOTAL_FILES=0
 
-# 递归查找所有文件
-find "$CUSTOM_DIR" -type f 2>/dev/null | while read file; do
+# 使用临时文件确保变量作用域
+FILE_LIST=$(mktemp)
+find "$CUSTOM_DIR" -type f 2>/dev/null > "$FILE_LIST"
+
+while IFS= read -r file; do
     TOTAL_FILES=$((TOTAL_FILES + 1))
     file_name=$(basename "$file")
     rel_path="${file#$CUSTOM_DIR/}"
@@ -2488,7 +2509,9 @@ find "$CUSTOM_DIR" -type f 2>/dev/null | while read file; do
         NON_ENGLISH_COUNT=$((NON_ENGLISH_COUNT + 1))
         echo "⚠️ $rel_path (非英文文件名)"
     fi
-done
+done < "$FILE_LIST"
+
+rm -f "$FILE_LIST"
 
 echo ""
 echo "📊 检查结果:"
