@@ -13,8 +13,8 @@
 │   ├── scripts/
 │   │   └── build_firmware_main.sh
 │   └── custom-files/        # 自定义文件
-│       ├── *.ipk           # 自定义IPK包
-│       └── *.sh            # 自定义脚本
+│        ├── *.ipk           # 自定义IPK包
+│        └── *.sh            # 自定义脚本
 └── README.md			#说明文档
 
 ```
