@@ -2067,73 +2067,6 @@ is_english_filename() {
     fi
 }
 
-# 生成英文文件名建议
-generate_english_filename() {
-    local original_name="$1"
-    local base_name="${original_name%.*}"
-    local extension="${original_name##*.}"
-    
-    # 如果是扩展名和文件名相同的情况（无扩展名）
-    if [ "$base_name" = "$original_name" ]; then
-        base_name="$original_name"
-        extension=""
-    fi
-    
-    # 根据常见中文关键词生成英文名
-    case "$base_name" in
-        *备份*|*backup*|*Backup*)
-            new_name="backup"
-            ;;
-        *恢复*|*restore*|*Restore*)
-            new_name="restore"
-            ;;
-        *安装*|*install*|*Install*)
-            new_name="install"
-            ;;
-        *配置*|*config*|*Config*)
-            new_name="config"
-            ;;
-        *设置*|*setup*|*Setup*)
-            new_name="setup"
-            ;;
-        *脚本*|*script*|*Script*)
-            new_name="script"
-            ;;
-        *文件*|*file*|*File*)
-            new_name="file"
-            ;;
-        *固件*|*firmware*|*Firmware*)
-            new_name="firmware"
-            ;;
-        *插件*|*plugin*|*Plugin*)
-            new_name="plugin"
-            ;;
-        *网络*|*network*|*Network*)
-            new_name="network"
-            ;;
-        *系统*|*system*|*System*)
-            new_name="system"
-            ;;
-        *路由*|*router*|*Router*)
-            new_name="router"
-            ;;
-        *无线*|*wireless*|*Wireless*)
-            new_name="wireless"
-            ;;
-        *)
-            # 使用时间戳和序号
-            new_name="custom_file_$(date +%s)"
-            ;;
-    esac
-    
-    # 重新添加扩展名
-    if [ -n "$extension" ] && [ "$extension" != "$original_name" ]; then
-        new_name="${new_name}.${extension}"
-    fi
-    
-    echo "$new_name"
-}
-
 # 递归查找所有自定义文件函数
 recursive_find_custom_files() {
     local base_dir="$1"
@@ -2235,16 +2168,11 @@ integrate_custom_files() {
     log "  ✅ 英文文件名: $english_count 个"
     log "  ⚠️ 非英文文件名: $non_english_count 个"
     
-    # 文件名建议提示
+    # 文件名建议提示 - 简化版本
     if [ $non_english_count -gt 0 ]; then
         echo ""
         log "💡 文件名建议:"
-        log "  为了更好的兼容性，建议使用英文文件名"
-        log "  常见的文件名转换建议:"
-        log "  中文名          -> 英文名"
-        log "  '备份.sh'      -> 'backup.sh'"
-        log "  '安装脚本.sh'  -> 'install.sh'"
-        log "  '配置文件.conf' -> 'config.conf'"
+        log "  为了更好的兼容性，方便复制、运行，建议使用英文文件名"
         log "  当前系统会自动处理非英文文件名，但英文名有更好的兼容性"
     fi
     
@@ -2572,13 +2500,7 @@ echo ""
 if [ $NON_ENGLISH_COUNT -gt 0 ]; then
     echo "💡 建议:"
     echo "  为了更好的兼容性，建议将非英文文件名改为英文"
-    echo "  常见的中文文件名可以改为:"
-    echo "    backup.sh      (备份脚本)"
-    echo "    install.sh     (安装脚本)"
-    echo "    config.conf    (配置文件)"
-    echo "    firmware.bin   (固件文件)"
-    echo ""
-    echo "⚠️ 注意: 当前系统支持非英文文件名，但英文名有更好的兼容性"
+    echo "  英文名更方便复制和运行"
 else
     echo "🎉 所有文件名都是英文，兼容性良好！"
 fi
@@ -2608,7 +2530,7 @@ EOF
         log "💡 文件名兼容性提示:"
         log "  当前有 $non_english_count 个文件使用非英文文件名"
         log "  建议改为英文文件名以获得更好的兼容性"
-        log "  系统会自动处理非英文文件，但英文名更可靠"
+        log "  系统会自动处理非英文文件，但英文名更方便复制和运行"
     fi
     
     if [ $file_count -eq 0 ]; then
@@ -2624,6 +2546,20 @@ EOF
         log "📌 自定义文件将在第一次开机时自动安装和运行"
         log "🔧 增强功能: 递归查找、保持原文件名、错误不退出、详细日志"
     fi
+    
+    # 保存自定义文件统计到文件，供其他步骤使用
+    CUSTOM_FILE_STATS="/tmp/custom_file_stats.txt"
+    cat > "$CUSTOM_FILE_STATS" << EOF
+CUSTOM_FILE_TOTAL=$file_count
+CUSTOM_IPK_COUNT=$ipk_count
+CUSTOM_SCRIPT_COUNT=$script_count
+CUSTOM_CONFIG_COUNT=$config_count
+CUSTOM_OTHER_COUNT=$other_count
+CUSTOM_ENGLISH_COUNT=$english_count
+CUSTOM_NON_ENGLISH_COUNT=$non_english_count
+EOF
+    
+    log "✅ 自定义文件统计已保存到: $CUSTOM_FILE_STATS"
 }
 
 build_firmware() {
