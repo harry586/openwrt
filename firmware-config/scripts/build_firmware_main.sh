@@ -2078,7 +2078,7 @@ recursive_find_custom_files() {
     find "$base_dir" -type f -maxdepth "$max_depth" 2>/dev/null | sort
 }
 
-# SSH连接测试函数
+# SSH连接测试函数（修复版）- 使用OpenWrt BusyBox兼容命令
 test_ssh_connection() {
     local log_file="$1"
     local test_name="$2"
@@ -2108,11 +2108,12 @@ test_ssh_connection() {
         fi
     fi
     
-    # 方式3: 检查SSH服务状态
+    # 方式3: 检查SSH服务状态 - 使用OpenWrt兼容命令
     if [ $ssh_ok -eq 0 ]; then
-        if ps aux | grep -q "[s]shd"; then
+        # 在OpenWrt中，使用ps | grep而不是ps aux
+        if ps | grep -q "[d]ropbear\|[s]shd"; then
             ssh_ok=1
-            echo "      ✅ SSH服务正在运行" >> "$log_file"
+            echo "      ✅ SSH服务正在运行 (dropbear/sshd)" >> "$log_file"
         else
             ssh_errors="${ssh_errors}SSH服务未运行; "
         fi
@@ -2130,12 +2131,12 @@ test_ssh_connection() {
     echo "      结束时间: $(date '+%H:%M:%S')" >> "$log_file"
 }
 
-# 集成自定义文件函数（增强版）- 递归查找、详细日志、保持原文件名、SSH测试
+# 集成自定义文件函数（增强版）- 递归查找、详细日志、保持原文件名、SSH测试（修复版）
 integrate_custom_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 集成自定义文件（增强版）- 带SSH测试 ==="
+    log "=== 集成自定义文件（增强版）- 带SSH测试（修复版） ==="
     
     local custom_dir="$REPO_ROOT/firmware-config/custom-files"
     
@@ -2272,9 +2273,9 @@ integrate_custom_files() {
     
     log "✅ 文件复制完成: $copied_count 个文件已复制，$skip_count 个文件跳过"
     
-    # 创建第一次开机运行的安装脚本（增强版）- 带SSH测试，日志存到/root/logs
+    # 创建第一次开机运行的安装脚本（增强版）- 带SSH测试，日志存到/root/logs（修复版）
     echo ""
-    log "🔧 步骤3: 创建第一次开机安装脚本（增强版）- 带SSH测试，日志存到/root/logs"
+    log "🔧 步骤3: 创建第一次开机安装脚本（增强版）- 带SSH测试（修复版），日志存到/root/logs"
     
     local first_boot_dir="files/etc/uci-defaults"
     mkdir -p "$first_boot_dir"
@@ -2290,7 +2291,7 @@ mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/custom-files-install-$(date +%Y%m%d_%H%M%S).log"
 
 echo "==================================================" > $LOG_FILE
-echo "      自定义文件安装脚本（增强版）- 带SSH测试" >> $LOG_FILE
+echo "      自定义文件安装脚本（增强版）- 带SSH测试（修复版）" >> $LOG_FILE
 echo "      开始时间: $(date)" >> $LOG_FILE
 echo "      日志文件: $LOG_FILE" >> $LOG_FILE
 echo "==================================================" >> $LOG_FILE
@@ -2301,9 +2302,9 @@ echo "🔌 初始SSH连接测试..." >> $LOG_FILE
 test_ssh_initial() {
     echo "  🕐 开始时间: $(date '+%H:%M:%S')" >> $LOG_FILE
     
-    # 检查SSH服务是否运行
-    if ps aux | grep -q "[s]shd"; then
-        echo "  ✅ SSH服务正在运行" >> $LOG_FILE
+    # 检查SSH服务是否运行 - 使用OpenWrt兼容命令
+    if ps | grep -q "[d]ropbear\|[s]shd"; then
+        echo "  ✅ SSH服务正在运行 (dropbear/sshd)" >> $LOG_FILE
         SSH_SERVICE_RUNNING=1
     else
         echo "  ⚠️ SSH服务未运行" >> $LOG_FILE
@@ -2320,7 +2321,7 @@ test_ssh_initial() {
     fi
 }
 
-# 安装后SSH测试
+# 安装后SSH测试（修复版）- 使用OpenWrt兼容命令
 test_ssh_after_install() {
     local test_name="$1"
     echo "  🔌 安装后SSH测试 [$test_name]..." >> $LOG_FILE
@@ -2342,11 +2343,11 @@ test_ssh_after_install() {
         fi
     fi
     
-    # 方式3: 检查服务状态
+    # 方式3: 检查服务状态 - 使用OpenWrt兼容命令
     if [ $ssh_ok -eq 0 ]; then
-        if ps aux | grep -q "[s]shd"; then
+        if ps | grep -q "[d]ropbear\|[s]shd"; then
             ssh_ok=1
-            echo "      ✅ SSH服务正在运行" >> $LOG_FILE
+            echo "      ✅ SSH服务正在运行 (dropbear/sshd)" >> $LOG_FILE
         fi
     fi
     
@@ -2650,7 +2651,7 @@ EOF
     log "  3. ✅ IPK安装错误不退出，继续下一个"
     log "  4. ✅ 详细日志记录每个文件的处理结果"
     log "  5. ✅ 分类统计和成功率计算"
-    log "  6. ✅ SSH连接测试（每安装一个IPK/脚本都测试）"
+    log "  6. ✅ SSH连接测试（修复版，使用OpenWrt兼容命令）"
     log "  7. ✅ 日志存储到 /root/logs/ 目录（重启不丢失）"
     log "  8. ✅ SSH连接质量评估"
     
@@ -2723,15 +2724,15 @@ EOF
     chmod +x "$name_check_script"
     log "✅ 创建文件名检查脚本: $name_check_script"
     
-    # 创建SSH测试脚本
+    # 创建SSH测试脚本（修复版）- 使用OpenWrt兼容命令
     echo ""
-    log "🔧 步骤5: 创建SSH测试脚本"
+    log "🔧 步骤5: 创建SSH测试脚本（修复版）- 使用OpenWrt兼容命令"
     
     local ssh_test_script="$custom_files_dir/test_ssh.sh"
     cat > "$ssh_test_script" << 'EOF'
 #!/bin/sh
 
-echo "=== SSH连接测试脚本 ==="
+echo "=== SSH连接测试脚本（修复版）==="
 echo "测试时间: $(date)"
 echo ""
 
@@ -2764,10 +2765,11 @@ test_ssh_connection() {
     echo "" | tee -a "$LOG_FILE"
 }
 
-# 检查SSH服务状态
+# 检查SSH服务状态 - 使用OpenWrt兼容命令
 echo "🔍 检查SSH服务状态..." | tee -a "$LOG_FILE"
-if ps aux | grep -q "[s]shd"; then
-    echo "✅ SSH服务正在运行" | tee -a "$LOG_FILE"
+# 在OpenWrt中，使用ps | grep而不是ps aux
+if ps | grep -q "[d]ropbear\|[s]shd"; then
+    echo "✅ SSH服务正在运行 (dropbear/sshd)" | tee -a "$LOG_FILE"
     SSH_SERVICE_RUNNING=1
 else
     echo "❌ SSH服务未运行" | tee -a "$LOG_FILE"
@@ -2791,14 +2793,20 @@ if test_ssh_connection "127.0.0.1" "127.0.0.1"; then
     SUCCESS_TESTS=$((SUCCESS_TESTS + 1))
 fi
 
-# 检查SSH端口
+# 检查SSH端口 - 使用netstat -ln
 echo "🔍 检查SSH端口监听..." | tee -a "$LOG_FILE"
-if netstat -tln | grep -q ":22 "; then
+if netstat -ln 2>/dev/null | grep -q ":22 "; then
     echo "✅ SSH端口22正在监听" | tee -a "$LOG_FILE"
     SSH_PORT_LISTENING=1
 else
-    echo "❌ SSH端口22未监听" | tee -a "$LOG_FILE"
-    SSH_PORT_LISTENING=0
+    # 尝试其他格式
+    if netstat -ln 2>/dev/null | grep -q "0.0.0.0:22"; then
+        echo "✅ SSH端口22正在监听 (0.0.0.0:22)" | tee -a "$LOG_FILE"
+        SSH_PORT_LISTENING=1
+    else
+        echo "❌ SSH端口22未监听" | tee -a "$LOG_FILE"
+        SSH_PORT_LISTENING=0
+    fi
 fi
 echo "" | tee -a "$LOG_FILE"
 
@@ -2823,10 +2831,11 @@ echo "" | tee -a "$LOG_FILE"
 # 建议
 if [ $SUCCESS_TESTS -lt $TOTAL_TESTS ]; then
     echo "💡 建议检查:" | tee -a "$LOG_FILE"
-    echo "  1. SSH服务是否安装: opkg list-installed | grep ssh" | tee -a "$LOG_FILE"
+    echo "  1. SSH服务是否安装: opkg list-installed | grep dropbear" | tee -a "$LOG_FILE"
     echo "  2. SSH配置: /etc/config/dropbear" | tee -a "$LOG_FILE"
-    echo "  3. 防火墙设置" | tee -a "$LOG_FILE"
-    echo "  4. SSH密钥权限" | tee -a "$LOG_FILE"
+    echo "  3. 防火墙设置: /etc/config/firewall" | tee -a "$LOG_FILE"
+    echo "  4. 确保密码已设置或密钥已配置" | tee -a "$LOG_FILE"
+    echo "  5. 尝试重启SSH服务: /etc/init.d/dropbear restart" | tee -a "$LOG_FILE"
 fi
 
 echo "" | tee -a "$LOG_FILE"
@@ -2835,7 +2844,7 @@ echo "📝 详细日志: $LOG_FILE" | tee -a "$LOG_FILE"
 EOF
     
     chmod +x "$ssh_test_script"
-    log "✅ 创建SSH测试脚本: $ssh_test_script"
+    log "✅ 创建SSH测试脚本（修复版）: $ssh_test_script"
     
     # 显示最终统计
     echo ""
@@ -2847,8 +2856,8 @@ EOF
     log "  总文件数: $file_count 个"
     log "  ✅ 英文文件名: $english_count 个"
     log "  ⚠️ 非英文文件名: $non_english_count 个"
-    log "  🚀 第一次开机安装脚本: 已创建（带SSH测试）"
-    log "  🔌 SSH测试脚本: 已创建"
+    log "  🚀 第一次开机安装脚本: 已创建（带SSH测试修复版）"
+    log "  🔌 SSH测试脚本: 已创建（修复版，使用OpenWrt兼容命令）"
     log "  📍 自定义文件位置: /etc/custom-files/"
     log "  📁 日志位置: /root/logs/（重启不丢失）"
     log "  💡 安装方式: 第一次开机自动安装，每步都测试SSH"
@@ -2871,7 +2880,7 @@ EOF
     else
         log "🎉 自定义文件集成完成"
         log "📌 自定义文件将在第一次开机时自动安装和运行"
-        log "🔧 增强功能: SSH测试、持久化日志、错误不退出、详细统计"
+        log "🔧 增强功能: SSH测试（修复版）、持久化日志、错误不退出、详细统计"
     fi
     
     # 保存自定义文件统计到文件，供其他步骤使用
