@@ -2056,11 +2056,11 @@ download_dependencies() {
     log "✅ 依赖包下载完成"
 }
 
-# 检测是否为英文文件名（只包含ASCII字符）
+# 检测是否为英文文件名（只包含ASCII字符）- 修复版
 is_english_filename() {
     local filename="$1"
     # 检查是否只包含ASCII字符（字母、数字、下划线、连字符、点）
-    if [[ "$filename" =~ ^[a-zA-Z0-9_\-\.]+$ ]]; then
+    if [[ "$filename" =~ ^[a-zA-Z0-9_.\-]+$ ]]; then
         return 0  # 英文文件名
     else
         return 1  # 非英文文件名
@@ -2127,7 +2127,7 @@ integrate_custom_files() {
         local file_size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
         local file_type=$(file -b --mime-type "$file" 2>/dev/null | cut -d'/' -f1 || echo "未知")
         
-        # 检查是否为英文文件名
+        # 检查是否为英文文件名 - 使用修复版检测
         if is_english_filename "$file_name"; then
             local name_status="✅ 英文"
             english_count=$((english_count + 1))
@@ -2480,8 +2480,8 @@ find "$CUSTOM_DIR" -type f 2>/dev/null | while read file; do
     file_name=$(basename "$file")
     rel_path="${file#$CUSTOM_DIR/}"
     
-    # 检查是否只包含ASCII字符
-    if echo "$file_name" | grep -q '^[a-zA-Z0-9_\-\.]*$'; then
+    # 检查是否只包含ASCII字符 - 修复正则表达式
+    if echo "$file_name" | grep -q '^[a-zA-Z0-9_.\-]*$'; then
         ENGLISH_COUNT=$((ENGLISH_COUNT + 1))
         echo "✅ $rel_path"
     else
@@ -2777,10 +2777,11 @@ build_firmware() {
     save_env
 }
 
+# 编译后空间检查 - 修复磁盘空间检查函数
 post_build_space_check() {
     log "=== 编译后空间检查 ==="
     
-    log "=== 磁盘使用情况 ==="
+    echo "=== 磁盘使用情况 ==="
     df -h
     
     # 构建目录空间
@@ -2793,8 +2794,8 @@ post_build_space_check() {
         echo "固件文件总大小: $firmware_size"
     fi
     
-    # 检查可用空间
-    local available_space=$(df /mnt --output=avail | tail -1)
+    # 检查可用空间 - 修复：使用正确的df选项
+    local available_space=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
     local available_gb=$((available_space / 1024 / 1024))
     log "/mnt 可用空间: ${available_gb}G"
     
