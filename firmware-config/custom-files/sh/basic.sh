@@ -2,7 +2,7 @@
 # =============================================
 # OpenWrt DIY 脚本 - 双重模式：编译集成 + 运行时安装
 # 基础系统配置设置脚本（修复版）
-# 功能：主机名、密码、计划任务、升级配置、静态路由
+# 功能：主机名、计划任务、升级配置、静态路由
 # =============================================
 
 # 检测运行环境
@@ -46,45 +46,11 @@ EOF
     echo "主机名配置已集成到固件"
 fi
 
-# ==================== 2. 设置路由器密码 ====================
-echo "设置路由器密码..."
-if [ "$RUNTIME_MODE" = "true" ]; then
-    # 运行时：设置密码
-    echo -e "harry586586\nharry586586" | passwd root 2>/dev/null || {
-        # 如果passwd命令不可用，修改shadow文件
-        local password_hash=$(openssl passwd -1 "harry586586" 2>/dev/null)
-        if [ -n "$password_hash" ]; then
-            sed -i "s|^root:[^:]*:|root:${password_hash}:|" /etc/shadow
-            echo "密码已通过修改shadow文件设置"
-        else
-            echo "警告：无法生成密码哈希，请手动设置密码"
-        fi
-    }
-    echo "密码已设置为: harry586586"
-else
-    # 编译时：设置shadow文件
-    mkdir -p "${INSTALL_DIR}etc"
-    # 生成密码哈希（需要编译环境有openssl）
-    local password_hash=$(openssl passwd -1 "harry586586" 2>/dev/null)
-    if [ -n "$password_hash" ]; then
-        cat > "${INSTALL_DIR}etc/shadow" << EOF
-root:${password_hash}:0:0:99999:7:::
-daemon:*:0:0:99999:7:::
-ftp:*:0:0:99999:7:::
-network:*:0:0:99999:7:::
-nobody:*:0:0:99999:7:::
-EOF
-        echo "密码哈希已集成到固件"
-    else
-        echo "注意：编译环境缺少openssl，请刷入固件后手动设置密码"
-        # 创建空shadow文件
-        touch "${INSTALL_DIR}etc/shadow"
-    fi
-fi
-
-# ==================== 3. 设置自定义计划任务 ====================
-echo "设置自定义计划任务..."
+# ==================== 2. 设置自定义计划任务（追加方式） ====================
+echo "设置自定义计划任务（追加方式）..."
 CRON_CONTENT="# =================================================================
+# OpenWrt 自定义计划任务
+# =================================================================
 # 文件格式说明
 #  ——分钟 (0 - 59)
 # |  ——小时 (0 - 23)
@@ -100,51 +66,43 @@ CRON_CONTENT="# ================================================================
 # openwrt-网络-接口-lan-修改-高级设置-克隆mac
 # =================================================================
 
-# 每天凌晨3点清理内存缓存
-0 3 * * * /usr/bin/freemem >/dev/null 2>&1
-
 # 每30分钟同步时间（如果网络可用）
 */30 * * * * /usr/sbin/ntpd -q -n -p ntp.aliyun.com >/dev/null 2>&1
 
 # 每天凌晨4点重启无线服务（提高稳定性）
 0 4 * * * wifi down && sleep 5 && wifi up >/dev/null 2>&1
 
-# 每小时检查并重启崩溃的服务
-0 * * * * /etc/init.d/watchdog restart >/dev/null 2>&1
-
 # 每周日凌晨2点清理临时文件
 0 2 * * 0 rm -rf /tmp/luci-* /tmp/upload/* >/dev/null 2>&1"
 
 if [ "$RUNTIME_MODE" = "true" ]; then
-    # 运行时：添加到crontab
-    echo "$CRON_CONTENT" > /etc/crontabs/root
-    # 确保freemem脚本存在
-    if [ ! -f /usr/bin/freemem ]; then
-        cat > /usr/bin/freemem << 'EOF'
-#!/bin/sh
-sync
-echo 1 > /proc/sys/vm/drop_caches 2>/dev/null
-echo 2 > /proc/sys/vm/drop_caches 2>/dev/null  
-echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
-logger "定时内存缓存清理完成"
-EOF
-        chmod +x /usr/bin/freemem
+    # 运行时：追加到crontab
+    if [ -f "/etc/crontabs/root" ]; then
+        # 备份原配置
+        cp /etc/crontabs/root /etc/crontabs/root.backup.$(date +%Y%m%d%H%M%S)
+        echo "计划任务已备份"
     fi
+    
+    # 追加自定义配置
+    echo "$CRON_CONTENT" >> /etc/crontabs/root
     /etc/init.d/cron restart 2>/dev/null || true
-    echo "计划任务已设置并启用"
+    echo "计划任务已追加并启用"
 else
     # 编译时：集成到固件
     mkdir -p "${INSTALL_DIR}etc/crontabs"
-    echo "$CRON_CONTENT" > "${INSTALL_DIR}etc/crontabs/root"
-    echo "计划任务已集成到固件"
+    # 创建包含自定义计划任务的文件，实际使用时会追加到系统计划任务
+    echo "$CRON_CONTENT" > "${INSTALL_DIR}etc/crontabs/custom-cron"
+    echo "自定义计划任务已集成到固件，需手动追加使用"
 fi
 
-# ==================== 4. 设置备份与升级配置 ====================
+# ==================== 3. 设置备份与升级配置（追加方式） ====================
 echo "设置备份与升级配置..."
 UPGRADE_CONTENT="
-# 自定义保留文件和目录（追加内容）
-/overlay
-"
+# =================================================================
+# OpenWrt 自定义升级保留配置
+# =================================================================
+# 自定义保留文件和目录
+/overlay"
 
 if [ "$RUNTIME_MODE" = "true" ]; then
     # 运行时：追加到sysupgrade.conf
@@ -164,7 +122,7 @@ else
     echo "升级配置已集成到固件"
 fi
 
-# ==================== 5. 设置静态路由 ====================
+# ==================== 4. 设置静态路由 ====================
 echo "设置静态路由..."
 ROUTE_CONFIG="config route
 	option interface 'lan'
@@ -201,14 +159,13 @@ if [ "$RUNTIME_MODE" = "true" ]; then
         echo "相同静态路由已存在，跳过"
     fi
 else
-    # 编译时：需要更复杂的处理，因为network配置结构复杂
-    # 创建路由配置文件片段
+    # 编译时：创建路由配置文件片段
     mkdir -p "${INSTALL_DIR}etc/config"
     echo "$ROUTE_CONFIG" > "${INSTALL_DIR}etc/config/route-neptune"
     echo "静态路由配置片段已创建，请手动合并到network配置"
 fi
 
-# ==================== 6. 创建一键启用脚本 ====================
+# ==================== 5. 创建一键启用脚本 ====================
 echo "创建一键启用脚本..."
 
 create_enable_script() {
@@ -227,25 +184,29 @@ if [ -f /etc/config/system ]; then
     echo "✓ 主机名已设置为: Neptune"
 fi
 
-# 2. 设置密码（如果未设置）
-if ! grep -q '^root:\$' /etc/shadow 2>/dev/null || grep -q '^root::' /etc/shadow 2>/dev/null; then
-    echo -e "harry586586\nharry586586" | passwd root 2>/dev/null && echo "✓ 密码已设置"
-fi
-
-# 3. 启用计划任务
-if [ -f /etc/crontabs/root ]; then
+# 2. 追加自定义计划任务（避免重复）
+if [ -f /etc/crontabs/custom-cron ]; then
+    # 检查是否已经追加过
+    if ! grep -q "OpenWrt 自定义计划任务" /etc/crontabs/root 2>/dev/null; then
+        cat /etc/crontabs/custom-cron >> /etc/crontabs/root
+        echo "✓ 自定义计划任务已追加"
+    else
+        echo "✓ 自定义计划任务已存在，跳过追加"
+    fi
     /etc/init.d/cron enable 2>/dev/null || true
     /etc/init.d/cron restart 2>/dev/null || true
-    echo "✓ 计划任务已启用"
+    echo "✓ 计划任务服务已启用"
 fi
 
-# 4. 设置升级配置（追加方式）
+# 3. 追加升级配置（避免重复）
 if ! grep -q "^/overlay$" /etc/sysupgrade.conf 2>/dev/null; then
     echo "/overlay" >> /etc/sysupgrade.conf
-    echo "✓ 升级配置已设置（保留/overlay）"
+    echo "✓ 升级配置已追加（保留/overlay）"
+else
+    echo "✓ 升级配置已存在，跳过追加"
 fi
 
-# 5. 添加静态路由（如果不存在）
+# 4. 添加静态路由（如果不存在）
 route_exists=false
 for route in $(uci show network 2>/dev/null | grep "network.route" | cut -d= -f1); do
     target=$(uci get ${route}.target 2>/dev/null)
@@ -272,9 +233,8 @@ echo "基础系统配置启用完成！"
 echo ""
 echo "【配置摘要】:"
 echo "  ✓ 主机名: Neptune"
-echo "  ✓ 管理员密码: 已设置"
-echo "  ✓ 计划任务: 已启用"
-echo "  ✓ 升级保留: /overlay"
+echo "  ✓ 计划任务: 已追加自定义任务"
+echo "  ✓ 升级保留: /overlay（追加方式）"
 echo "  ✓ 静态路由: 192.168.7.0/24 via 192.168.5.100"
 echo ""
 echo "建议重启系统使所有配置生效"
@@ -297,7 +257,7 @@ else
     echo "一键启用脚本已集成到固件"
 fi
 
-# ==================== 7. 创建无线配置说明 ====================
+# ==================== 6. 创建无线配置说明 ====================
 echo ""
 echo "=========================================="
 echo "无线配置说明"
@@ -322,7 +282,7 @@ echo "  uci set wireless.default_radio1.key='harry586'"
 echo "  uci commit wireless"
 echo "  wifi reload"
 
-# ==================== 8. 总结信息 ====================
+# ==================== 7. 总结信息 ====================
 echo ""
 echo "=========================================="
 echo "基础系统配置设置完成（修复版）"
@@ -333,8 +293,7 @@ if [ "$RUNTIME_MODE" = "true" ]; then
     echo ""
     echo "【已配置】:"
     echo "  ✓ 主机名: Neptune"
-    echo "  ✓ 管理员密码: harry586586"
-    echo "  ✓ 计划任务: 已设置"
+    echo "  ✓ 计划任务: 已追加（不覆盖原有任务）"
     echo "  ✓ 升级配置: 保留/overlay（追加方式）"
     echo "  ✓ 静态路由: 192.168.7.0/24 → 192.168.5.100（去重）"
     echo ""
@@ -351,8 +310,7 @@ else
     echo ""
     echo "【已集成】:"
     echo "  ✓ 主机名配置"
-    echo "  ✓ 密码哈希（需要openssl支持）"
-    echo "  ✓ 计划任务配置"
+    echo "  ✓ 自定义计划任务（需手动追加）"
     echo "  ✓ 升级保留配置"
     echo "  ✓ 静态路由配置片段"
     echo "  ✓ 一键启用脚本"
@@ -360,8 +318,7 @@ else
     echo "【固件特性】:"
     echo "  刷入此固件后，系统将:"
     echo "  1. 主机名自动设置为Neptune"
-    echo "  2. 密码已预设为harry586586"
-    echo "  3. 支持一键应用所有配置"
+    echo "  2. 支持一键应用所有配置"
     echo ""
     echo "【使用说明】:"
     echo "  刷机后运行: /usr/bin/enable-basic-config"
