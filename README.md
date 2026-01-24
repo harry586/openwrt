@@ -6,15 +6,15 @@
 ```
 
 仓库根目录/
-├── .github/			#github隐藏目录
-│   └── workflows/				#工作流目录
-│        └── firmware-build.yml			#构建-工作流文件
-├── firmware-config/		#构建相关目录
+├── .github/  #github隐藏目录
+│   └── workflows/  #工作流目录
+│        └── firmware-build.yml  #构建-工作流文件
+├── firmware-config/  #构建相关目录
 │   ├── scripts/
 │   │   └── build_firmware_main.sh
-│   └── custom-files/        # 自定义文件
-│        ├── *.ipk           # 自定义IPK包
-│        └── *.sh            # 自定义脚本
+│   └── custom-files/ # 自定义文件夹
+│        ├── *.ipk    # 自定义IPK包（英文）
+│        └── *.sh     # 自定义脚本（英文）
 └── README.md			#说明文档
 
 ```
