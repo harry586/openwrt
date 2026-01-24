@@ -1007,20 +1007,12 @@ jobs:
               echo "  ✅ 英文文件名: $ENGLISH_COUNT 个"
               echo "  ⚠️ 非英文文件名: $NON_ENGLISH_COUNT 个"
               
-              # 文件名建议
+              # 文件名建议 - 简化版本
               if [ $NON_ENGLISH_COUNT -gt 0 ]; then
                 echo ""
                 echo "💡 文件名兼容性建议:"
-                echo "  为了更好的兼容性，建议使用英文文件名"
-                echo "  常见的文件名转换建议:"
-                echo "  中文名          -> 英文名"
-                echo "  '备份.sh'      -> 'backup.sh'"
-                echo "  '安装脚本.sh'  -> 'install.sh'"
-                echo "  '配置文件.conf' -> 'config.conf'"
-                echo "  '固件文件.bin'  -> 'firmware.bin'"
-                echo ""
-                echo "⚠️ 注意: 当前系统会自动处理非英文文件名，但英文名有更好的兼容性"
-                echo "💡 系统提供了文件名检查脚本: /etc/custom-files/check_filenames.sh"
+                echo "  为了更好的兼容性，方便复制、运行，建议使用英文文件名"
+                echo "  当前系统会自动处理非英文文件名，但英文名有更好的兼容性"
               fi
               
               echo ""
@@ -1550,41 +1542,11 @@ jobs:
           echo ""
           echo "📁 自定义文件集成状态（增强版）:"
           
-          if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
-            # 递归统计文件
-            CUSTOM_IPK_COUNT=0
-            CUSTOM_SCRIPT_COUNT=0
-            CUSTOM_CONFIG_COUNT=0
-            CUSTOM_OTHER_COUNT=0
-            CUSTOM_ENGLISH_COUNT=0
-            CUSTOM_NON_ENGLISH_COUNT=0
-            
-            # 使用find递归查找
-            find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
-              file_name=$(basename "$file")
-              
-              # 检查是否为英文文件名
-              if [[ "$file_name" =~ ^[a-zA-Z0-9_\-\.]+$ ]]; then
-                CUSTOM_ENGLISH_COUNT=$((CUSTOM_ENGLISH_COUNT + 1))
-              else
-                CUSTOM_NON_ENGLISH_COUNT=$((CUSTOM_NON_ENGLISH_COUNT + 1))
-              fi
-              
-              # 文件类型统计
-              if [[ "$file_name" =~ \.ipk$ ]] || [[ "$file_name" =~ \.IPK$ ]] || [[ "$file_name" =~ \.Ipk$ ]]; then
-                CUSTOM_IPK_COUNT=$((CUSTOM_IPK_COUNT + 1))
-              elif [[ "$file_name" =~ \.sh$ ]] || [[ "$file_name" =~ \.Sh$ ]] || [[ "$file_name" =~ \.SH$ ]]; then
-                CUSTOM_SCRIPT_COUNT=$((CUSTOM_SCRIPT_COUNT + 1))
-              elif [[ "$file_name" =~ \.conf$ ]] || [[ "$file_name" =~ \.config$ ]] || [[ "$file_name" =~ \.CONF$ ]]; then
-                CUSTOM_CONFIG_COUNT=$((CUSTOM_CONFIG_COUNT + 1))
-              else
-                CUSTOM_OTHER_COUNT=$((CUSTOM_OTHER_COUNT + 1))
-              fi
-            done
-            
-            TOTAL_CUSTOM_FILES=$((CUSTOM_IPK_COUNT + CUSTOM_SCRIPT_COUNT + CUSTOM_CONFIG_COUNT + CUSTOM_OTHER_COUNT))
-            
-            echo "  ✅ 自定义文件总数: $TOTAL_CUSTOM_FILES 个"
+          # 尝试从统计文件读取自定义文件信息
+          CUSTOM_STATS_FILE="/tmp/custom_file_stats.txt"
+          if [ -f "$CUSTOM_STATS_FILE" ]; then
+            source "$CUSTOM_STATS_FILE"
+            echo "  ✅ 自定义文件总数: $CUSTOM_FILE_TOTAL 个"
             echo "  📦 IPK包: $CUSTOM_IPK_COUNT 个"
             echo "  📜 脚本: $CUSTOM_SCRIPT_COUNT 个"
             echo "  ⚙️ 配置文件: $CUSTOM_CONFIG_COUNT 个"
@@ -1600,7 +1562,7 @@ jobs:
               echo "  📊 详细日志: 记录每个文件的处理结果"
             fi
             
-            if [ $CUSTOM_NON_ENGLISH_COUNT -gt 0 ]; then
+            if [ "$CUSTOM_NON_ENGLISH_COUNT" -gt 0 ]; then
               echo ""
               echo "💡 文件名兼容性提示:"
               echo "  当前有 $CUSTOM_NON_ENGLISH_COUNT 个文件使用非英文文件名"
@@ -1609,7 +1571,7 @@ jobs:
             fi
             
             # 显示部分文件示例
-            if [ $TOTAL_CUSTOM_FILES -gt 0 ]; then
+            if [ "$CUSTOM_FILE_TOTAL" -gt 0 ] && [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
               echo ""
               echo "📋 文件示例 (前5个):"
               find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | head -5 | while read file; do
@@ -1627,21 +1589,92 @@ jobs:
             echo "  📊 详细日志: 记录每个文件的处理结果和统计信息"
             
           else
-            echo "  ⚪ 自定义文件: 未集成"
+            # 如果统计文件不存在，尝试从目录统计
+            if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
+              # 重新统计
+              CUSTOM_IPK_COUNT=0
+              CUSTOM_SCRIPT_COUNT=0
+              CUSTOM_CONFIG_COUNT=0
+              CUSTOM_OTHER_COUNT=0
+              CUSTOM_ENGLISH_COUNT=0
+              CUSTOM_NON_ENGLISH_COUNT=0
+              
+              find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
+                file_name=$(basename "$file")
+                
+                # 检查是否为英文文件名
+                if [[ "$file_name" =~ ^[a-zA-Z0-9_\-\.]+$ ]]; then
+                  CUSTOM_ENGLISH_COUNT=$((CUSTOM_ENGLISH_COUNT + 1))
+                else
+                  CUSTOM_NON_ENGLISH_COUNT=$((CUSTOM_NON_ENGLISH_COUNT + 1))
+                fi
+                
+                # 文件类型统计
+                if [[ "$file_name" =~ \.ipk$ ]] || [[ "$file_name" =~ \.IPK$ ]] || [[ "$file_name" =~ \.Ipk$ ]]; then
+                  CUSTOM_IPK_COUNT=$((CUSTOM_IPK_COUNT + 1))
+                elif [[ "$file_name" =~ \.sh$ ]] || [[ "$file_name" =~ \.Sh$ ]] || [[ "$file_name" =~ \.SH$ ]]; then
+                  CUSTOM_SCRIPT_COUNT=$((CUSTOM_SCRIPT_COUNT + 1))
+                elif [[ "$file_name" =~ \.conf$ ]] || [[ "$file_name" =~ \.config$ ]] || [[ "$file_name" =~ \.CONF$ ]]; then
+                  CUSTOM_CONFIG_COUNT=$((CUSTOM_CONFIG_COUNT + 1))
+                else
+                  CUSTOM_OTHER_COUNT=$((CUSTOM_OTHER_COUNT + 1))
+                fi
+              done
+              
+              TOTAL_CUSTOM_FILES=$((CUSTOM_IPK_COUNT + CUSTOM_SCRIPT_COUNT + CUSTOM_CONFIG_COUNT + CUSTOM_OTHER_COUNT))
+              
+              echo "  ✅ 自定义文件总数: $TOTAL_CUSTOM_FILES 个"
+              echo "  📦 IPK包: $CUSTOM_IPK_COUNT 个"
+              echo "  📜 脚本: $CUSTOM_SCRIPT_COUNT 个"
+              echo "  ⚙️ 配置文件: $CUSTOM_CONFIG_COUNT 个"
+              echo "  📁 其他文件: $CUSTOM_OTHER_COUNT 个"
+              echo "  ✅ 英文文件名: $CUSTOM_ENGLISH_COUNT 个"
+              echo "  ⚠️ 非英文文件名: $CUSTOM_NON_ENGLISH_COUNT 个"
+              echo "  📌 位置: /etc/custom-files/"
+              
+              if [ -f "/mnt/openwrt-build/files/etc/uci-defaults/99-custom-files" ]; then
+                echo "  ✅ 第一次开机安装脚本: 已创建（增强版）"
+                echo "  💡 安装顺序: IPK包 → 脚本文件 → 其他文件"
+                echo "  🔧 错误处理: 单个文件失败不影响其他文件"
+                echo "  📊 详细日志: 记录每个文件的处理结果"
+              fi
+              
+              if [ $CUSTOM_NON_ENGLISH_COUNT -gt 0 ]; then
+                echo ""
+                echo "💡 文件名兼容性提示:"
+                echo "  当前有 $CUSTOM_NON_ENGLISH_COUNT 个文件使用非英文文件名"
+                echo "  建议改为英文文件名以获得更好的兼容性"
+                echo "  可以在固件启动后运行: /etc/custom-files/check_filenames.sh"
+              fi
+              
+              # 显示部分文件示例
+              if [ $TOTAL_CUSTOM_FILES -gt 0 ]; then
+                echo ""
+                echo "📋 文件示例 (前5个):"
+                find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | head -5 | while read file; do
+                  rel_path="${file#/mnt/openwrt-build/files/etc/custom-files/}"
+                  size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                  echo "    📄 $rel_path ($size)"
+                done
+              fi
+              
+              echo ""
+              echo "🎯 增强功能说明:"
+              echo "  🔧 递归查找: 支持自定义目录下的所有子目录"
+              echo "  📝 保持原文件名: 不自动重命名，保持用户设置的文件名"
+              echo "  🔄 错误不退出: IPK安装失败继续安装下一个"
+              echo "  📊 详细日志: 记录每个文件的处理结果和统计信息"
+              
+            else
+              echo "  ⚪ 自定义文件: 未集成"
+            fi
           fi
           
-          # 文件名兼容性建议
+          # 文件名兼容性建议 - 简化版本
           echo ""
           echo "💡 文件名兼容性建议:"
-          echo "  为了更好的兼容性，建议自定义文件使用英文文件名"
-          echo "  常见的文件名转换建议:"
-          echo "    backup.sh      (备份脚本)"
-          echo "    install.sh     (安装脚本)"
-          echo "    config.conf    (配置文件)"
-          echo "    firmware.bin   (固件文件)"
-          echo "    plugin.ipk     (插件包)"
-          echo ""
-          echo "⚠️ 注意: 当前系统支持非英文文件名，但英文名有更好的兼容性"
+          echo "  为了更好的兼容性，方便复制、运行，建议自定义文件使用英文文件名"
+          echo "  当前系统支持非英文文件名，但英文名有更好的兼容性"
           
           echo ""
           echo "✅ 构建流程完成"
