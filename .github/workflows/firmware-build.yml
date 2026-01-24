@@ -368,7 +368,7 @@ jobs:
           echo "📊 /mnt 分区详细信息:"
           df -h /mnt
           
-          AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
+          AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
           echo "/mnt 可用空间: ${AVAILABLE_GB}G"
           
@@ -927,10 +927,10 @@ jobs:
             # 递归查找所有文件
             echo "📁 递归查找所有自定义文件..."
             
-            # 定义英文文件名检查函数
+            # 定义英文文件名检查函数 - 修复正则表达式
             is_english_name() {
               local filename="$1"
-              if [[ "$filename" =~ ^[a-zA-Z0-9_\-\.]+$ ]]; then
+              if [[ "$filename" =~ ^[a-zA-Z0-9_.\-]+$ ]]; then
                 return 0  # 英文文件名
               else
                 return 1  # 非英文文件名
@@ -966,7 +966,7 @@ jobs:
                 FILE_NAME=$(basename "$file")
                 FILE_SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
                 
-                # 检查是否为英文文件名
+                # 检查是否为英文文件名 - 使用修复版检测
                 if is_english_name "$FILE_NAME"; then
                   NAME_STATUS="✅ 英文"
                   ENGLISH_COUNT=$((ENGLISH_COUNT + 1))
@@ -1032,9 +1032,9 @@ jobs:
                 FINAL_FILES=$(find "files/etc/custom-files" -type f 2>/dev/null | wc -l)
                 echo "📊 复制后文件总数: $FINAL_FILES 个"
                 
-                # 显示目录结构
+                # 显示目录结构 - 显示所有文件
                 if [ $FINAL_FILES -gt 0 ]; then
-                  echo "📁 复制后的目录结构:"
+                  echo "📁 复制后的所有文件列表:"
                   find "files/etc/custom-files" -type f 2>/dev/null | while read file; do
                     REL_PATH="${file#files/etc/custom-files/}"
                     FILE_SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
@@ -1144,7 +1144,7 @@ jobs:
           trap 'echo "❌ 步骤 22 失败，退出代码: $?"; exit 1' ERR
           
           df -h /mnt
-          AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1)
+          AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
           echo "/mnt 可用空间: ${AVAILABLE_GB}G"
           
@@ -1389,11 +1389,11 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 27: 编译后空间检查
-      - name: "27. 编译后空间检查"
+      # 步骤 27: 编译后空间检查（修复版）
+      - name: "27. 编译后空间检查（修复版）"
         if: always()
         run: |
-          echo "=== 步骤 27: 编译后空间检查 ==="
+          echo "=== 步骤 27: 编译后空间检查（修复版） ==="
           echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是检查
@@ -1402,7 +1402,8 @@ jobs:
           echo "📊 磁盘使用情况:"
           df -h /mnt
           
-          AVAILABLE_SPACE=$(df /mnt --output=avill | tail -1)
+          # 修复：使用正确的df选项获取可用空间
+          AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
           echo "/mnt 可用空间: ${AVAILABLE_GB}G"
           
@@ -1570,11 +1571,11 @@ jobs:
               echo "  可以在固件启动后运行: /etc/custom-files/check_filenames.sh"
             fi
             
-            # 显示部分文件示例
+            # 显示所有文件示例，不只前5个
             if [ "$CUSTOM_FILE_TOTAL" -gt 0 ] && [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
               echo ""
-              echo "📋 文件示例 (前5个):"
-              find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | head -5 | while read file; do
+              echo "📋 所有文件列表:"
+              find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
                 rel_path="${file#/mnt/openwrt-build/files/etc/custom-files/}"
                 size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
                 echo "    📄 $rel_path ($size)"
@@ -1602,8 +1603,8 @@ jobs:
               find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
                 file_name=$(basename "$file")
                 
-                # 检查是否为英文文件名
-                if [[ "$file_name" =~ ^[a-zA-Z0-9_\-\.]+$ ]]; then
+                # 检查是否为英文文件名 - 使用修复版检测
+                if [[ "$file_name" =~ ^[a-zA-Z0-9_.\-]+$ ]]; then
                   CUSTOM_ENGLISH_COUNT=$((CUSTOM_ENGLISH_COUNT + 1))
                 else
                   CUSTOM_NON_ENGLISH_COUNT=$((CUSTOM_NON_ENGLISH_COUNT + 1))
@@ -1647,11 +1648,11 @@ jobs:
                 echo "  可以在固件启动后运行: /etc/custom-files/check_filenames.sh"
               fi
               
-              # 显示部分文件示例
+              # 显示所有文件，不只前5个
               if [ $TOTAL_CUSTOM_FILES -gt 0 ]; then
                 echo ""
-                echo "📋 文件示例 (前5个):"
-                find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | head -5 | while read file; do
+                echo "📋 所有文件列表:"
+                find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
                   rel_path="${file#/mnt/openwrt-build/files/etc/custom-files/}"
                   size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
                   echo "    📄 $rel_path ($size)"
