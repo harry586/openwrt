@@ -89,80 +89,9 @@ EOF
 # 临时文件系统优化
 tmpfs /tmp tmpfs rw,nosuid,nodev,noatime,size=128M,mode=1777 0 0
 tmpfs /var/lock tmpfs rw,nosuid,nodev,noatime,size=16M,mode=1777 0 0
-tmpfs /var/run tmpfs rw,nosuid,nodev,noatime,size=16M,mode=755 0 0
-tmpfs /var/tmp tmpfs rw,nosuid,nodev,noatime,size=64M,mode=1777 0 0
-
-# 日志目录使用tmpfs（减少写入）
-tmpfs /var/log tmpfs rw,nosuid,nodev,noatime,size=32M,mode=755 0 0
-EOF
-
-    # 创建overlay清理脚本（简化版）
-    cat > "${prefix}/usr/sbin/overlay-cleanup" << 'EOF'
-#!/bin/sh
-# =============================================
-# OverlayFS清理和优化脚本（简化版）
-# =============================================
-
-LOG_FILE="/var/log/overlay-cleanup.log"
-
-# 显示使用说明
-show_usage() {
-    echo ""
-    echo "=========================================="
-    echo "OverlayFS优化工具 - 使用说明"
-    echo "=========================================="
-    echo ""
-    echo "📖 什么是OverlayFS？"
-    echo "  OverlayFS是OpenWrt的根文件系统，它将只读的基础系统"
-    echo "  和可写的上层目录合并，所有修改都保存在上层目录中。"
-    echo ""
-    echo "🔧 常用功能："
-    echo "  1. overlay-cleanup status    - 查看overlay使用情况"
-    echo "  2. overlay-cleanup clean     - 清理临时文件"
-    echo "  3. overlay-cleanup optimize  - 优化挂载参数"
-    echo "  4. overlay-cleanup all       - 执行所有优化"
-    echo "  5. overlay-cleanup schedule  - 配置定时任务"
-    echo ""
-    echo "💡 使用建议："
-    echo "  - 定期运行 'overlay-cleanup clean' 清理临时文件"
-    echo "  - 空间不足时运行 'overlay-cleanup all' 全面优化"
-    echo "  - 使用 'overlay-cleanup schedule' 配置自动清理"
-    echo ""
-    echo "📊 查看状态： overlay-cleanup status"
-    echo "=========================================="
-}
-
-# 记录日志
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
-    echo "$1"
-}
-
-# 清理overlay临时文件
-clean_temporary_files() {
-    log "开始清理overlay临时文件..."
-    
-    # 清理/tmp目录
-    find /tmp -type f -atime +1 -delete 2>/dev/null || true
-    find /tmp -type d -empty -mtime +7 -delete 2>/dev/null || true
-    log "清理 /tmp 目录完成"
-    
-    # 清理overlay工作目录
-    if [ -d "/overlay/work/work" ]; then
-        find /overlay/work/work -type f -name "*.tmp" -delete 2>/dev/null || true
-        find /overlay/work/work -type f -name "*.temp" -delete 2>/dev/null || true
-        log "清理 overlay work 目录完成"
+tmpfs /var/run tmpfs rw,nosuid,nodev,noatime,size=16M,mode=755 2>/dev/null || true
+        log "清理日志文件完成"
     fi
-    
-    # 清理软件包缓存
-    if [ -d "/overlay/upper/var/opkg-lists" ]; then
-        rm -rf /overlay/upper/var/opkg-lists/* 2>/dev/null || true
-        log "清理 opkg 缓存完成"
-    fi
-    
-    # 清理日志文件（保留最近3天）
-    find /var/log -name "*.log" -mtime +3 -delete 2>/dev/null || true
-    log "清理日志文件完成"
 }
 
 # 优化overlay目录结构
@@ -312,40 +241,37 @@ show_current_schedule() {
     echo ""
     
     if [ -f "/etc/crontabs/root" ]; then
+        echo "📅 所有定时任务:"
+        cat /etc/crontabs/root 2>/dev/null | sed 's/^/  /'
+        echo ""
+        
+        echo "🔧 OverlayFS相关任务:"
         local overlay_jobs=$(grep -n "overlay-cleanup" /etc/crontabs/root 2>/dev/null || true)
         if [ -n "$overlay_jobs" ]; then
-            echo "$overlay_jobs"
+            echo "$overlay_jobs" | sed 's/^/  /'
         else
-            echo "未找到overlay-cleanup定时任务"
+            echo "  未找到overlay-cleanup定时任务"
         fi
     else
         echo "/etc/crontabs/root 文件不存在"
+        echo "请确保cron服务已安装并运行"
     fi
     
-    # 显示所有定时任务
     echo ""
-    echo "所有定时任务:"
-    if [ -f "/etc/crontabs/root" ]; then
-        cat /etc/crontabs/root 2>/dev/null | sed 's/^/  /'
-    else
-        echo "  /etc/crontabs/root 文件不存在"
-    fi
-    echo ""
-    
     echo "💡 配置示例："
-    echo "  overlay-cleanup schedule 3 0 daily     # 每天3:00执行"
-    echo "  overlay-cleanup schedule 4 30 weekly   # 每周日4:30执行"
-    echo "  overlay-cleanup schedule 5 0 monthly   # 每月1号5:00执行"
+    echo "  overlay-cleanup schedule clean 3 0 daily     # 每天3:00清理"
+    echo "  overlay-cleanup schedule full 4 0 weekly     # 每周日4:00全面优化"
+    echo "  overlay-cleanup schedule auto                # 设置默认任务"
     echo "========================================"
 }
 
-# 配置定时任务
-configure_schedule() {
+# 配置清理任务
+configure_clean_task() {
     local hour="$1"
     local minute="$2"
     local frequency="$3"
     
-    log "配置定时任务..."
+    log "配置清理定时任务..."
     
     # 确保crontabs目录存在
     mkdir -p /etc/crontabs 2>/dev/null || true
@@ -354,23 +280,17 @@ configure_schedule() {
     if [ ! -f "/etc/crontabs/root" ]; then
         touch /etc/crontabs/root
         chmod 644 /etc/crontabs/root
+        echo "# DO NOT EDIT THIS FILE - edit the master and reinstall." > /etc/crontabs/root
+        echo "# (/tmp/crontab_root installed on $(date))" >> /etc/crontabs/root
+        echo "# Copyright (C) 2001-#$(date +%Y) OpenWrt" >> /etc/crontabs/root
     fi
     
-    # 清理现有overlay-cleanup计划任务
+    # 创建临时文件
+    local temp_file="/tmp/crontab_root.$$"
+    # 先复制现有的crontab，然后删除所有overlay-cleanup clean任务
     if [ -f "/etc/crontabs/root" ]; then
-        # 创建临时文件
-        local temp_file="/tmp/crontab_root.$$"
-        grep -v "overlay-cleanup" /etc/crontabs/root > "$temp_file" 2>/dev/null || true
-        
-        # 如果文件为空，添加默认注释
-        if [ ! -s "$temp_file" ]; then
-            echo "# DO NOT EDIT THIS FILE - edit the master and reinstall." > "$temp_file"
-            echo "# (/tmp/crontab_root installed on $(date))" >> "$temp_file"
-            echo "# Copyright (C) 2001-#$(date +%Y) OpenWrt" >> "$temp_file"
-        fi
+        grep -v "overlay-cleanup clean" /etc/crontabs/root > "$temp_file" 2>/dev/null || true
     else
-        # 创建新文件
-        local temp_file="/tmp/crontab_root.$$"
         echo "# DO NOT EDIT THIS FILE - edit the master and reinstall." > "$temp_file"
         echo "# (/tmp/crontab_root installed on $(date))" >> "$temp_file"
         echo "# Copyright (C) 2001-#$(date +%Y) OpenWrt" >> "$temp_file"
@@ -378,24 +298,24 @@ configure_schedule() {
     
     case "$frequency" in
         daily)
-            # 每天执行
-            echo "$minute $hour * * * /usr/sbin/overlay-cleanup all >/dev/null 2>&1" >> "$temp_file"
-            log "已设置每天 $hour:$minute 执行全面优化"
+            # 每天执行清理
+            echo "$minute $hour * * * /usr/sbin/overlay-cleanup clean >/dev/null 2>&1" >> "$temp_file"
+            log "已设置清理任务: 每天 $hour:$minute 执行"
             ;;
         weekly)
             # 每周执行（周日）
-            echo "$minute $hour * * 0 /usr/sbin/overlay-cleanup all >/dev/null 2>&1" >> "$temp_file"
-            log "已设置每周日 $hour:$minute 执行全面优化"
+            echo "$minute $hour * * 0 /usr/sbin/overlay-cleanup clean >/dev/null 2>&1" >> "$temp_file"
+            log "已设置清理任务: 每周日 $hour:$minute 执行"
             ;;
         monthly)
             # 每月1号执行
-            echo "$minute $hour 1 * * /usr/sbin/overlay-cleanup all >/dev/null 2>&1" >> "$temp_file"
-            log "已设置每月1号 $hour:$minute 执行全面优化"
+            echo "$minute $hour 1 * * /usr/sbin/overlay-cleanup clean >/dev/null 2>&1" >> "$temp_file"
+            log "已设置清理任务: 每月1号 $hour:$minute 执行"
             ;;
         *)
             # 自定义cron表达式
-            echo "$frequency /usr/sbin/overlay-cleanup all >/dev/null 2>&1" >> "$temp_file"
-            log "已设置自定义计划: $frequency"
+            echo "$frequency /usr/sbin/overlay-cleanup clean >/dev/null 2>&1" >> "$temp_file"
+            log "已设置自定义清理计划: $frequency"
             ;;
     esac
     
@@ -414,8 +334,128 @@ configure_schedule() {
         log "crond服务重启完成"
     fi
     
-    log "定时任务配置完成"
-    show_current_schedule
+    log "清理定时任务配置完成"
+}
+
+# 配置全面优化任务
+configure_full_task() {
+    local hour="$1"
+    local minute="$2"
+    local frequency="$3"
+    
+    log "配置全面优化定时任务..."
+    
+    # 确保crontabs目录存在
+    mkdir -p /etc/crontabs 2>/dev/null || true
+    
+    # 如果crontabs/root文件不存在，创建它
+    if [ ! -f "/etc/crontabs/root" ]; then
+        touch /etc/crontabs/root
+        chmod 644 /etc/crontabs/root
+        echo "# DO NOT EDIT THIS FILE - edit the master and reinstall." > /etc/crontabs/root
+        echo "# (/tmp/crontab_root installed on $(date))" >> /etc/crontabs/root
+        echo "# Copyright (C) 2001-#$(date +%Y) OpenWrt" >> /etc/crontabs/root
+    fi
+    
+    # 创建临时文件
+    local temp_file="/tmp/crontab_root.$$"
+    # 先复制现有的crontab，然后删除所有overlay-cleanup all任务
+    if [ -f "/etc/crontabs/root" ]; then
+        grep -v "overlay-cleanup all" /etc/crontabs/root > "$temp_file" 2>/dev/null || true
+    else
+        echo "# DO NOT EDIT THIS FILE - edit the master and reinstall." > "$temp_file"
+        echo "# (/tmp/crontab_root installed on $(date))" >> "$temp_file"
+        echo "# Copyright (C) 2001-#$(date +%Y) OpenWrt" >> "$temp_file"
+    fi
+    
+    case "$frequency" in
+        daily)
+            # 每天执行全面优化
+            echo "$minute $hour * * * /usr/sbin/overlay-cleanup all >/dev/null 2>&1" >> "$temp_file"
+            log "已设置全面优化任务: 每天 $hour:$minute 执行"
+            ;;
+        weekly)
+            # 每周执行（周日）
+            echo "$minute $hour * * 0 /usr/sbin/overlay-cleanup all >/dev/null 2>&1" >> "$temp_file"
+            log "已设置全面优化任务: 每周日 $hour:$minute 执行"
+            ;;
+        monthly)
+            # 每月1号执行
+            echo "$minute $hour 1 * * /usr/sbin/overlay-cleanup all >/dev/null 2>&1" >> "$temp_file"
+            log "已设置全面优化任务: 每月1号 $hour:$minute 执行"
+            ;;
+        *)
+            # 自定义cron表达式
+            echo "$frequency /usr/sbin/overlay-cleanup all >/dev/null 2>&1" >> "$temp_file"
+            log "已设置自定义全面优化计划: $frequency"
+            ;;
+    esac
+    
+    # 安装新的crontab
+    if [ -f "$temp_file" ]; then
+        mv "$temp_file" /etc/crontabs/root
+        chmod 644 /etc/crontabs/root
+    fi
+    
+    # 重启cron服务
+    if [ -f "/etc/init.d/cron" ]; then
+        /etc/init.d/cron restart 2>/dev/null || /etc/init.d/cron reload 2>/dev/null || true
+        log "cron服务重启完成"
+    elif [ -f "/etc/init.d/crond" ]; then
+        /etc/init.d/crond restart 2>/dev/null || true
+        log "crond服务重启完成"
+    fi
+    
+    log "全面优化定时任务配置完成"
+}
+
+# 配置自动默认任务
+configure_auto_schedule() {
+    log "配置默认定时任务..."
+    
+    # 删除所有overlay-cleanup任务
+    if [ -f "/etc/crontabs/root" ]; then
+        local temp_file="/tmp/crontab_root.$$"
+        grep -v "overlay-cleanup" /etc/crontabs/root > "$temp_file" 2>/dev/null || true
+        
+        # 如果文件为空，添加头部
+        if [ ! -s "$temp_file" ]; then
+            echo "# DO NOT EDIT THIS FILE - edit the master and reinstall." > "$temp_file"
+            echo "# (/tmp/crontab_root installed on $(date))" >> "$temp_file"
+            echo "# Copyright (C) 2001-#$(date +%Y) OpenWrt" >> "$temp_file"
+        fi
+        
+        # 添加默认任务
+        echo "# OverlayFS定时任务" >> "$temp_file"
+        echo "0 3 * * * /usr/sbin/overlay-cleanup clean >/dev/null 2>&1" >> "$temp_file"
+        echo "0 4 * * 0 /usr/sbin/overlay-cleanup all >/dev/null 2>&1" >> "$temp_file"
+        
+        mv "$temp_file" /etc/crontabs/root
+        chmod 644 /etc/crontabs/root
+    else
+        # 创建新文件
+        mkdir -p /etc/crontabs 2>/dev/null || true
+        echo "# DO NOT EDIT THIS FILE - edit the master and reinstall." > /etc/crontabs/root
+        echo "# (/tmp/crontab_root installed on $(date))" >> /etc/crontabs/root
+        echo "# Copyright (C) 2001-#$(date +%Y) OpenWrt" >> /etc/crontabs/root
+        echo "# OverlayFS定时任务" >> /etc/crontabs/root
+        echo "0 3 * * * /usr/sbin/overlay-cleanup clean >/dev/null 2>&1" >> /etc/crontabs/root
+        echo "0 4 * * 0 /usr/sbin/overlay-cleanup all >/dev/null 2>&1" >> /etc/crontabs/root
+    fi
+    
+    # 重启cron服务
+    if [ -f "/etc/init.d/cron" ]; then
+        /etc/init.d/cron restart 2>/dev/null || /etc/init.d/cron reload 2>/dev/null || true
+        log "cron服务重启完成"
+    elif [ -f "/etc/init.d/crond" ]; then
+        /etc/init.d/crond restart 2>/dev/null || true
+        log "crond服务重启完成"
+    fi
+    
+    log "默认定时任务配置完成"
+    echo "✅ 已设置默认定时任务："
+    echo "   - 每天 3:00 自动清理临时文件"
+    echo "   - 每周日 4:00 自动全面优化"
 }
 
 # 主函数
@@ -446,11 +486,44 @@ case "$1" in
         echo "✅ OverlayFS全面优化完成"
         ;;
     schedule)
-        if [ -n "$2" ] && [ -n "$3" ] && [ -n "$4" ]; then
-            configure_schedule "$2" "$3" "$4"
-        else
-            show_current_schedule
-        fi
+        case "$2" in
+            clean)
+                if [ -n "$3" ] && [ -n "$4" ] && [ -n "$5" ]; then
+                    configure_clean_task "$3" "$4" "$5"
+                else
+                    echo "用法: overlay-cleanup schedule clean <时> <分> <频率>"
+                    echo "频率: daily, weekly, monthly"
+                    echo "示例: overlay-cleanup schedule clean 3 0 daily"
+                fi
+                ;;
+            full)
+                if [ -n "$3" ] && [ -n "$4" ] && [ -n "$5" ]; then
+                    configure_full_task "$3" "$4" "$5"
+                else
+                    echo "用法: overlay-cleanup schedule full <时> <分> <频率>"
+                    echo "频率: daily, weekly, monthly"
+                    echo "示例: overlay-cleanup schedule full 4 0 weekly"
+                fi
+                ;;
+            auto)
+                configure_auto_schedule
+                ;;
+            *)
+                show_current_schedule
+                echo ""
+                echo "🔧 定时任务配置命令:"
+                echo "  overlay-cleanup schedule clean <时> <分> <频率>   # 设置清理任务"
+                echo "  overlay-cleanup schedule full <时> <分> <频率>   # 设置全面优化任务"
+                echo "  overlay-cleanup schedule auto                    # 设置默认任务"
+                echo ""
+                echo "📅 频率选项: daily, weekly, monthly"
+                echo ""
+                echo "💡 示例:"
+                echo "  overlay-cleanup schedule clean 3 0 daily     # 每天3:00清理"
+                echo "  overlay-cleanup schedule full 4 0 weekly     # 每周日4:00全面优化"
+                echo "  overlay-cleanup schedule auto                # 设置默认任务"
+                ;;
+        esac
         ;;
     help|usage)
         show_usage
@@ -458,7 +531,7 @@ case "$1" in
     *)
         echo ""
         echo "========================================"
-        echo "OverlayFS优化工具（简化版）"
+        echo "OverlayFS优化工具"
         echo "========================================"
         echo ""
         echo "基本用法: overlay-cleanup [命令]"
@@ -473,13 +546,17 @@ case "$1" in
         echo "  help      - 显示使用说明"
         echo ""
         echo "定时任务配置:"
-        echo "  overlay-cleanup schedule <时> <分> <频率>"
+        echo "  overlay-cleanup schedule clean <时> <分> <频率>"
+        echo "  overlay-cleanup schedule full <时> <分> <频率>"
+        echo "  overlay-cleanup schedule auto"
         echo "  频率可选: daily, weekly, monthly"
         echo ""
         echo "示例:"
-        echo "  overlay-cleanup status    # 查看状态"
-        echo "  overlay-cleanup all       # 全面优化"
-        echo "  overlay-cleanup schedule 3 0 daily  # 每天3点执行"
+        echo "  overlay-cleanup status                      # 查看状态"
+        echo "  overlay-cleanup all                         # 全面优化"
+        echo "  overlay-cleanup schedule clean 3 0 daily    # 每天3点清理"
+        echo "  overlay-cleanup schedule full 4 0 weekly    # 每周日4点全面优化"
+        echo "  overlay-cleanup schedule auto               # 设置默认任务"
         echo "========================================"
         exit 1
         ;;
@@ -512,39 +589,11 @@ start_service() {
     # 优化挂载参数
     /usr/sbin/overlay-cleanup optimize >/dev/null 2>&1 || true
     
-    # 设置默认定时任务（如果未设置）
-    if [ -f "/etc/crontabs/root" ]; then
-        if ! grep -q "overlay-cleanup" /etc/crontabs/root 2>/dev/null; then
-            # 每天凌晨3点执行清理
-            echo "0 3 * * * /usr/sbin/overlay-cleanup clean >/dev/null 2>&1" >> /etc/crontabs/root
-            # 每周日凌晨4点执行全面优化
-            echo "0 4 * * 0 /usr/sbin/overlay-cleanup all >/dev/null 2>&1" >> /etc/crontabs/root
-            
-            # 重启cron服务
-            if [ -f "/etc/init.d/cron" ]; then
-                /etc/init.d/cron restart >/dev/null 2>&1 || /etc/init.d/cron reload >/dev/null 2>&1 || true
-            elif [ -f "/etc/init.d/crond" ]; then
-                /etc/init.d/crond restart >/dev/null 2>&1 || true
-            fi
-            
-            echo "已设置默认定时任务"
-        fi
-    else
-        # 创建crontabs目录和文件
-        mkdir -p /etc/crontabs 2>/dev/null || true
-        echo "# DO NOT EDIT THIS FILE - edit the master and reinstall." > /etc/crontabs/root
-        echo "# (/tmp/crontab_root installed on $(date))" >> /etc/crontabs/root
-        echo "# Copyright (C) 2001-#$(date +%Y) OpenWrt" >> /etc/crontabs/root
-        echo "0 3 * * * /usr/sbin/overlay-cleanup clean >/dev/null 2>&1" >> /etc/crontabs/root
-        echo "0 4 * * 0 /usr/sbin/overlay-cleanup all >/dev/null 2>&1" >> /etc/crontabs/root
-        chmod 644 /etc/crontabs/root
-        
-        # 重启cron服务
-        if [ -f "/etc/init.d/cron" ]; then
-            /etc/init.d/cron restart >/dev/null 2>&1 || true
-        fi
-        
-        echo "已创建crontab文件并设置默认定时任务"
+    # 设置默认的定时任务（如果未设置）
+    if [ ! -f "/etc/crontabs/root" ] || ! grep -q "overlay-cleanup" /etc/crontabs/root 2>/dev/null; then
+        echo "设置默认的定时任务..."
+        /usr/sbin/overlay-cleanup schedule auto >/dev/null 2>&1 || true
+        echo "已设置默认定时任务"
     fi
     
     # 记录启动日志
@@ -581,6 +630,7 @@ function index()
     entry({"admin", "system", "overlayfs-optimize", "all"}, call("optimize_all")).leaf = true
     entry({"admin", "system", "overlayfs-optimize", "schedule"}, call("set_schedule")).leaf = true
     entry({"admin", "system", "overlayfs-optimize", "get_schedule"}, call("get_schedule")).leaf = true
+    entry({"admin", "system", "overlayfs-optimize", "auto_schedule"}, call("auto_schedule")).leaf = true
 end
 
 function get_status()
@@ -644,19 +694,30 @@ function set_schedule()
     local http = require "luci.http"
     local sys = require "luci.sys"
     
+    local task_type = luci.http.formvalue("task_type")
     local hour = luci.http.formvalue("hour")
     local minute = luci.http.formvalue("minute")
     local frequency = luci.http.formvalue("frequency")
     
-    if hour and minute and frequency then
-        local result = sys.exec("/usr/sbin/overlay-cleanup schedule " .. hour .. " " .. minute .. " " .. frequency .. " 2>&1")
+    if task_type and hour and minute and frequency then
+        local result = sys.exec("/usr/sbin/overlay-cleanup schedule " .. task_type .. " " .. hour .. " " .. minute .. " " .. frequency .. " 2>&1")
         
         http.prepare_content("application/json")
-        http.write_json({success = true, message = "定时任务设置完成: " .. hour .. ":" .. minute .. " " .. frequency})
+        http.write_json({success = true, message = "定时任务设置完成"})
     else
         http.prepare_content("application/json")
         http.write_json({success = false, message = "参数错误"})
     end
+end
+
+function auto_schedule()
+    local http = require "luci.http"
+    local sys = require "luci.sys"
+    
+    local result = sys.exec("/usr/sbin/overlay-cleanup schedule auto 2>&1")
+    
+    http.prepare_content("application/json")
+    http.write_json({success = true, message = "已设置默认定时任务"})
 end
 EOF
 
@@ -748,29 +809,55 @@ EOF
     <div class="cbi-section" style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
         <h3 style="margin-top: 0; color: #2c3e50;"><%:定时任务配置%></h3>
         
-        <div class="cbi-value" style="margin-bottom: 15px;">
-            <label class="cbi-value-title" style="font-weight: 600; color: #34495e; width: 120px;"><%:执行时间%></label>
+        <!-- 默认任务按钮 -->
+        <div style="margin-bottom: 20px; text-align: center;">
+            <button id="auto-schedule" class="btn-warning" style="padding: 10px 20px;">
+                <i class="icon icon-bolt"></i> 设置默认定时任务
+            </button>
+            <p style="margin-top: 8px; color: #7f8c8d; font-size: 12px;">
+                设置默认任务：每天3:00清理 + 每周日4:00全面优化
+            </p>
+        </div>
+        
+        <!-- 清理任务配置 -->
+        <div class="cbi-value" style="margin-bottom: 15px; background: white; padding: 15px; border-radius: 6px;">
+            <div style="font-weight: 600; color: #34495e; margin-bottom: 10px; display: flex; align-items: center;">
+                <span style="background: #28a745; color: white; padding: 3px 8px; border-radius: 12px; font-size: 12px; margin-right: 8px;">清理</span>
+                清理临时文件任务
+            </div>
             <div class="cbi-value-field" style="display: flex; gap: 10px; align-items: center;">
-                <input type="number" id="schedule-hour" min="0" max="23" value="3" style="width: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                <input type="number" id="clean-hour" min="0" max="23" value="3" style="width: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
                 <span>:</span>
-                <input type="number" id="schedule-minute" min="0" max="59" value="0" style="width: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-                <select id="schedule-frequency" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                <input type="number" id="clean-minute" min="0" max="59" value="0" style="width: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                <select id="clean-frequency" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
                     <option value="daily">每天</option>
                     <option value="weekly">每周</option>
                     <option value="monthly">每月</option>
                 </select>
+                <button id="set-clean-schedule" class="btn-sm btn-success" style="padding: 8px 15px;">
+                    <i class="icon icon-clock-o"></i> 设置清理任务
+                </button>
             </div>
         </div>
         
-        <div class="cbi-value">
-            <label class="cbi-value-title" style="font-weight: 600; color: #34495e; width: 120px;"><%:操作%></label>
-            <div class="cbi-value-field">
-                <button id="set-schedule" class="btn-primary" style="padding: 10px 20px;">
-                    <i class="icon icon-clock-o"></i> 设置定时任务
+        <!-- 全面优化任务配置 -->
+        <div class="cbi-value" style="margin-bottom: 15px; background: white; padding: 15px; border-radius: 6px;">
+            <div style="font-weight: 600; color: #34495e; margin-bottom: 10px; display: flex; align-items: center;">
+                <span style="background: #2196F3; color: white; padding: 3px 8px; border-radius: 12px; font-size: 12px; margin-right: 8px;">优化</span>
+                全面优化任务
+            </div>
+            <div class="cbi-value-field" style="display: flex; gap: 10px; align-items: center;">
+                <input type="number" id="full-hour" min="0" max="23" value="4" style="width: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                <span>:</span>
+                <input type="number" id="full-minute" min="0" max="59" value="0" style="width: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                <select id="full-frequency" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    <option value="daily">每天</option>
+                    <option value="weekly" selected>每周</option>
+                    <option value="monthly">每月</option>
+                </select>
+                <button id="set-full-schedule" class="btn-sm btn-primary" style="padding: 8px 15px;">
+                    <i class="icon icon-clock-o"></i> 设置优化任务
                 </button>
-                <p style="margin-top: 10px; color: #7f8c8d; font-size: 12px;">
-                    设置后系统会在指定时间自动执行全面优化
-                </p>
             </div>
         </div>
         
@@ -914,6 +1001,54 @@ function performAction(action) {
     }
 }
 
+// 设置定时任务
+function setSchedule(taskType, hour, minute, frequency) {
+    var taskNames = {
+        'clean': '清理任务',
+        'full': '全面优化任务'
+    };
+    
+    var frequencyNames = {
+        'daily': '每天',
+        'weekly': '每周',
+        'monthly': '每月'
+    };
+    
+    if (confirm('确定要设置' + taskNames[taskType] + '吗？\n\n' + 
+               '时间: ' + hour + ':' + minute + '\n' +
+               '频率: ' + frequencyNames[frequency] + '\n')) {
+        
+        showStatus('正在设置定时任务，请稍候...', 'info');
+        
+        var formData = new FormData();
+        formData.append('task_type', taskType);
+        formData.append('hour', hour);
+        formData.append('minute', minute);
+        formData.append('frequency', frequency);
+        
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '<%=luci.dispatcher.build_url("admin/system/overlayfs-optimize/schedule")%>', true);
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4 && xhr.status === 200) {
+                try {
+                    var data = JSON.parse(xhr.responseText);
+                    if (data.success) {
+                        showStatus('✅ ' + taskNames[taskType] + ' 设置成功', 'success');
+                        setTimeout(loadCurrentSchedule, 1000);
+                    } else {
+                        showStatus('❌ 设置失败: ' + data.message, 'error');
+                    }
+                } catch (e) {
+                    showStatus('设置失败: ' + e.message, 'error');
+                }
+            } else if (xhr.readyState === 4) {
+                showStatus('网络请求失败: HTTP ' + xhr.status, 'error');
+            }
+        };
+        xhr.send(formData);
+    }
+}
+
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', function() {
     loadOverlayStatus();
@@ -934,6 +1069,71 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('refresh-schedule').addEventListener('click', function() {
         loadCurrentSchedule();
         showStatus('定时任务已刷新', 'info');
+    });
+    
+    // 设置默认定时任务按钮
+    document.getElementById('auto-schedule').addEventListener('click', function() {
+        if (confirm('确定要设置默认定时任务吗？\n\n' +
+                   '这将设置：\n' +
+                   '1. 每天 3:00 自动清理临时文件\n' +
+                   '2. 每周日 4:00 自动全面优化\n\n' +
+                   '注意：这会覆盖现有的定时任务设置。')) {
+            
+            var btn = this;
+            var originalText = btn.innerHTML;
+            btn.innerHTML = '<i class="icon icon-spinner icon-spin"></i> 设置中...';
+            btn.disabled = true;
+            
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', '<%=luci.dispatcher.build_url("admin/system/overlayfs-optimize/auto_schedule")%>', true);
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === 4 && xhr.status === 200) {
+                    try {
+                        var data = JSON.parse(xhr.responseText);
+                        if (data.success) {
+                            showStatus('✅ 默认定时任务设置成功: ' + data.message, 'success');
+                            setTimeout(function() {
+                                loadCurrentSchedule();
+                                // 更新输入框的值
+                                document.getElementById('clean-hour').value = 3;
+                                document.getElementById('clean-minute').value = 0;
+                                document.getElementById('clean-frequency').value = 'daily';
+                                document.getElementById('full-hour').value = 4;
+                                document.getElementById('full-minute').value = 0;
+                                document.getElementById('full-frequency').value = 'weekly';
+                            }, 1000);
+                        } else {
+                            showStatus('❌ 设置失败: ' + data.message, 'error');
+                        }
+                    } catch (e) {
+                        showStatus('设置失败: ' + e.message, 'error');
+                    }
+                    btn.disabled = false;
+                    btn.innerHTML = originalText;
+                } else if (xhr.readyState === 4) {
+                    showStatus('网络请求失败: HTTP ' + xhr.status, 'error');
+                    btn.disabled = false;
+                    btn.innerHTML = originalText;
+                }
+            };
+            xhr.send();
+        }
+    });
+    
+    // 设置清理任务按钮
+    document.getElementById('set-clean-schedule').addEventListener('click', function() {
+        var hour = document.getElementById('clean-hour').value;
+        var minute = document.getElementById('clean-minute').value;
+        var frequency = document.getElementById('clean-frequency').value;
+        setSchedule('clean', hour, minute, frequency);
+    });
+    
+    // 设置全面优化任务按钮
+    document.getElementById('set-full-schedule').addEventListener('click', function() {
+        var hour = document.getElementById('full-hour').value;
+        var minute = document.getElementById('full-minute').value;
+        var frequency = document.getElementById('full-frequency').value;
+        setSchedule('full', hour, minute, frequency);
     });
     
     // 一键全面优化按钮
@@ -966,60 +1166,6 @@ document.addEventListener('DOMContentLoaded', function() {
             xhr.send();
         }
     });
-    
-    // 设置定时任务按钮
-    document.getElementById('set-schedule').addEventListener('click', function() {
-        var hour = document.getElementById('schedule-hour').value;
-        var minute = document.getElementById('schedule-minute').value;
-        var frequency = document.getElementById('schedule-frequency').value;
-        
-        var frequencyNames = {
-            'daily': '每天',
-            'weekly': '每周',
-            'monthly': '每月'
-        };
-        
-        if (confirm('确定要设置定时任务吗？\n\n' + 
-                   '时间: ' + hour + ':' + minute + '\n' +
-                   '频率: ' + frequencyNames[frequency] + '\n\n' +
-                   '系统将在指定时间自动执行全面优化。')) {
-            
-            var btn = this;
-            var originalText = btn.innerHTML;
-            btn.innerHTML = '<i class="icon icon-spinner icon-spin"></i> 设置中...';
-            btn.disabled = true;
-            
-            var formData = new FormData();
-            formData.append('hour', hour);
-            formData.append('minute', minute);
-            formData.append('frequency', frequency);
-            
-            var xhr = new XMLHttpRequest();
-            xhr.open('POST', '<%=luci.dispatcher.build_url("admin/system/overlayfs-optimize/schedule")%>', true);
-            xhr.onreadystatechange = function() {
-                if (xhr.readyState === 4 && xhr.status === 200) {
-                    try {
-                        var data = JSON.parse(xhr.responseText);
-                        if (data.success) {
-                            showStatus('✅ ' + data.message, 'success');
-                            setTimeout(loadCurrentSchedule, 1000);
-                        } else {
-                            showStatus('❌ 设置失败: ' + data.message, 'error');
-                        }
-                    } catch (e) {
-                        showStatus('设置失败: ' + e.message, 'error');
-                    }
-                    btn.disabled = false;
-                    btn.innerHTML = originalText;
-                } else if (xhr.readyState === 4) {
-                    showStatus('网络请求失败: HTTP ' + xhr.status, 'error');
-                    btn.disabled = false;
-                    btn.innerHTML = originalText;
-                }
-            };
-            xhr.send(formData);
-        }
-    });
 });
 
 // 添加CSS样式
@@ -1040,7 +1186,7 @@ style.textContent = `
     100% { transform: rotate(360deg); }
 }
 
-.btn-primary, .btn-secondary, .btn-success, .btn-info, .btn-sm {
+.btn-primary, .btn-secondary, .btn-success, .btn-info, .btn-sm, .btn-warning {
     padding: 8px 16px;
     border: none;
     border-radius: 6px;
@@ -1071,6 +1217,11 @@ style.textContent = `
     color: white;
 }
 
+.btn-warning {
+    background: #ffc107;
+    color: #212529;
+}
+
 .btn-sm {
     padding: 6px 12px;
     font-size: 12px;
@@ -1078,7 +1229,7 @@ style.textContent = `
     color: white;
 }
 
-.btn-primary:hover, .btn-secondary:hover, .btn-success:hover, .btn-info:hover, .btn-sm:hover {
+.btn-primary:hover, .btn-secondary:hover, .btn-success:hover, .btn-info:hover, .btn-sm:hover, .btn-warning:hover {
     opacity: 0.9;
     transform: translateY(-1px);
 }
@@ -1141,9 +1292,11 @@ if [ "$RUNTIME_MODE" = "true" ]; then
     echo "🌐 Web界面："
     echo "  LuCI → 系统 → OverlayFS优化"
     echo ""
-    echo "⏰ 默认计划任务："
-    echo "  已设置：每天3:00自动清理临时文件"
-    echo "          每周日4:00自动全面优化"
+    echo "⏰ 定时任务命令："
+    echo "  设置清理任务：overlay-cleanup schedule clean <时> <分> <频率>"
+    echo "  设置优化任务：overlay-cleanup schedule full <时> <分> <频率>"
+    echo "  设置默认任务：overlay-cleanup schedule auto"
+    echo "  频率选项：daily, weekly, monthly"
     echo ""
     echo "💡 建议："
     echo "  首次使用建议运行：overlay-cleanup all"
