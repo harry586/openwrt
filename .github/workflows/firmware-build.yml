@@ -909,10 +909,10 @@ jobs:
           
           echo "🟢 步骤 19 完成"
       
-      # 步骤 20: 集成自定义文件（增强版）- 带SSH测试，日志存到/root/logs
-      - name: "20. 集成自定义文件（增强版）- 带SSH测试（修复版）"
+      # 步骤 20: 集成自定义文件（增强版）
+      - name: "20. 集成自定义文件（增强版）"
         run: |
-          echo "=== 步骤 20: 集成自定义文件（增强版）- 带SSH测试（修复版），日志存到/root/logs ==="
+          echo "=== 步骤 20: 集成自定义文件（增强版）==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是尝试集成
@@ -1016,7 +1016,7 @@ jobs:
               fi
               
               echo ""
-              echo "🚀 开始执行自定义文件集成（增强版）- 带SSH测试（修复版），日志存到/root/logs..."
+              echo "🚀 开始执行自定义文件集成（增强版）..."
               "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
               
               # 验证集成结果
@@ -1051,20 +1051,12 @@ jobs:
                   echo "  - ✅ IPK安装错误不退出，继续下一个"
                   echo "  - ✅ 详细日志记录每个文件的处理结果"
                   echo "  - ✅ 分类统计和成功率计算"
-                  echo "  - ✅ SSH连接测试（修复版，使用OpenWrt兼容命令）"
                   echo "  - ✅ 日志存储到 /root/logs/ 目录（重启不丢失）"
-                  echo "  - ✅ SSH连接质量评估"
                 fi
                 
                 # 检查文件名检查脚本
                 if [ -f "files/etc/custom-files/check_filenames.sh" ]; then
                   echo "✅ 文件名检查脚本: files/etc/custom-files/check_filenames.sh"
-                fi
-                
-                # 检查SSH测试脚本
-                if [ -f "files/etc/custom-files/test_ssh.sh" ]; then
-                  echo "✅ SSH测试脚本（修复版）: files/etc/custom-files/test_ssh.sh"
-                  echo "  💡 修复内容: 使用OpenWrt兼容命令 (ps | grep 替代 ps aux)"
                 fi
                 
                 echo ""
@@ -1073,9 +1065,7 @@ jobs:
                 echo "  📝 保持原文件名: 不自动重命名，保持用户设置的文件名"
                 echo "  🔄 错误不退出: IPK安装失败继续安装下一个"
                 echo "  📊 详细日志: 记录每个文件的处理结果和统计信息"
-                echo "  🔌 SSH测试（修复版）: 使用OpenWrt兼容命令，确保在路由器环境正常工作"
                 echo "  📁 持久日志: 日志存储在 /root/logs/（重启不丢失）"
-                echo "  📈 质量评估: SSH连接质量评估报告"
                 
                 if [ $NON_ENGLISH_COUNT -gt 0 ]; then
                   echo ""
@@ -1096,7 +1086,6 @@ jobs:
             echo "💡 自定义文件将在第一次开机时自动安装和运行"
             echo "📌 安装顺序: IPK包 → 脚本文件 → 其他文件"
             echo "🔧 错误处理: 单个文件安装失败不会影响其他文件"
-            echo "🔌 SSH测试（修复版）: 使用OpenWrt兼容命令，确保在路由器环境正常工作"
             echo "📁 日志位置: /root/logs/（重启不丢失）"
             
           else
@@ -1428,11 +1417,11 @@ jobs:
           
           echo "🟢 步骤 27 完成"
       
-      # 步骤 28: 编译后总结（增强版）- 更新SSH测试和日志位置信息
-      - name: "28. 编译后总结（增强版）- 更新SSH测试和日志位置信息（修复版）"
+      # 步骤 28: 编译后总结（增强版）- 无SSH测试相关信息
+      - name: "28. 编译后总结（增强版）- 无SSH测试"
         if: always()
         run: |
-          echo "=== 步骤 28: 编译后总结（增强版）- 更新SSH测试和日志位置信息（修复版） ==="
+          echo "=== 步骤 28: 编译后总结（增强版）- 无SSH测试 ==="
           echo "🕐 总结时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，总结不应该失败
@@ -1552,9 +1541,9 @@ jobs:
           
           echo "  💡 这是正常的：系统编译器编译工具链，SDK编译器编译固件"
           
-          # 自定义文件集成状态（增强版）- 更新SSH测试和日志位置信息（修复版）
+          # 自定义文件集成状态（增强版）- 无SSH测试相关信息
           echo ""
-          echo "📁 自定义文件集成状态（增强版）- 带SSH测试（修复版），日志存到/root/logs:"
+          echo "📁 自定义文件集成状态（增强版）:"
           
           # 尝试从统计文件读取自定义文件信息
           CUSTOM_STATS_FILE="/tmp/custom_file_stats.txt"
@@ -1575,13 +1564,6 @@ jobs:
               echo "  💡 安装顺序: IPK包 → 脚本文件 → 其他文件"
               echo "  🔧 错误处理: 单个文件失败不影响其他文件"
               echo "  📊 详细日志: 记录每个文件的处理结果"
-              echo "  🔌 SSH测试（修复版）: 使用OpenWrt兼容命令 (ps | grep 替代 ps aux)"
-              echo "  📈 SSH质量评估: 自动评估SSH连接质量"
-            fi
-            
-            if [ -f "/mnt/openwrt-build/files/etc/custom-files/test_ssh.sh" ]; then
-              echo "  🔌 SSH测试脚本（修复版）: 已创建，位置: /etc/custom-files/test_ssh.sh"
-              echo "  💡 修复内容: 使用OpenWrt兼容命令，确保在路由器环境正常工作"
             fi
             
             if [ "$CUSTOM_NON_ENGLISH_COUNT" -gt 0 ]; then
@@ -1609,9 +1591,7 @@ jobs:
             echo "  📝 保持原文件名: 不自动重命名，保持用户设置的文件名"
             echo "  🔄 错误不退出: IPK安装失败继续安装下一个"
             echo "  📊 详细日志: 记录每个文件的处理结果和统计信息"
-            echo "  🔌 SSH测试（修复版）: 使用OpenWrt兼容命令，确保在路由器环境正常工作"
             echo "  📁 持久日志: 日志存储在 /root/logs/（重启不丢失）"
-            echo "  📈 质量评估: SSH连接质量评估报告"
             
           else
             # 如果统计文件不存在，尝试从目录统计
@@ -1663,13 +1643,6 @@ jobs:
                 echo "  💡 安装顺序: IPK包 → 脚本文件 → 其他文件"
                 echo "  🔧 错误处理: 单个文件失败不影响其他文件"
                 echo "  📊 详细日志: 记录每个文件的处理结果"
-                echo "  🔌 SSH测试（修复版）: 使用OpenWrt兼容命令 (ps | grep 替代 ps aux)"
-                echo "  📈 SSH质量评估: 自动评估SSH连接质量"
-              fi
-              
-              if [ -f "/mnt/openwrt-build/files/etc/custom-files/test_ssh.sh" ]; then
-                echo "  🔌 SSH测试脚本（修复版）: 已创建，位置: /etc/custom-files/test_ssh.sh"
-                echo "  💡 修复内容: 使用OpenWrt兼容命令，确保在路由器环境正常工作"
               fi
               
               if [ $CUSTOM_NON_ENGLISH_COUNT -gt 0 ]; then
@@ -1697,9 +1670,7 @@ jobs:
               echo "  📝 保持原文件名: 不自动重命名，保持用户设置的文件名"
               echo "  🔄 错误不退出: IPK安装失败继续安装下一个"
               echo "  📊 详细日志: 记录每个文件的处理结果和统计信息"
-              echo "  🔌 SSH测试（修复版）: 使用OpenWrt兼容命令，确保在路由器环境正常工作"
               echo "  📁 持久日志: 日志存储在 /root/logs/（重启不丢失）"
-              echo "  📈 质量评估: SSH连接质量评估报告"
               
             else
               echo "  ⚪ 自定义文件: 未集成"
@@ -1711,19 +1682,6 @@ jobs:
           echo "💡 文件名兼容性建议:"
           echo "  为了更好的兼容性，方便复制、运行，建议自定义文件使用英文文件名"
           echo "  当前系统支持非英文文件名，但英文名有更好的兼容性"
-          
-          echo ""
-          echo "🔌 SSH测试说明（修复版）:"
-          echo "  自定义文件安装过程中会测试SSH连接，确保系统功能正常"
-          echo "  使用OpenWrt兼容命令 (ps | grep 替代 ps aux)"
-          echo "  测试结果保存到: /root/logs/ 目录"
-          echo "  可以在固件启动后运行: /etc/custom-files/test_ssh.sh"
-          
-          echo ""
-          echo "🔄 SSH/SCP问题解决:"
-          echo "  刷机后SSH可以直接进但SCP不行，变更管理密码后都可以进的问题已修复"
-          echo "  原因: 旧版本SSH测试脚本使用了不兼容的ps aux命令"
-          echo "  解决方案: 使用OpenWrt兼容命令 (ps | grep) 检测SSH服务状态"
           
           echo ""
           echo "✅ 构建流程完成"
