@@ -2078,65 +2078,12 @@ recursive_find_custom_files() {
     find "$base_dir" -type f -maxdepth "$max_depth" 2>/dev/null | sort
 }
 
-# SSH连接测试函数（修复版）- 使用OpenWrt BusyBox兼容命令
-test_ssh_connection() {
-    local log_file="$1"
-    local test_name="$2"
-    
-    echo "  🔌 测试SSH连接 [$test_name]..." >> "$log_file"
-    echo "      开始时间: $(date '+%H:%M:%S')" >> "$log_file"
-    
-    # 尝试多种SSH连接方式
-    local ssh_ok=0
-    local ssh_errors=""
-    
-    # 方式1: 测试localhost SSH连接
-    if timeout 5 ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no localhost "echo SSH-test-OK" 2>/dev/null; then
-        ssh_ok=1
-        echo "      ✅ SSH连接正常 (localhost)" >> "$log_file"
-    else
-        ssh_errors="${ssh_errors}localhost连接失败; "
-    fi
-    
-    # 方式2: 测试127.0.0.1 SSH连接
-    if [ $ssh_ok -eq 0 ]; then
-        if timeout 5 ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no 127.0.0.1 "echo SSH-test-OK" 2>/dev/null; then
-            ssh_ok=1
-            echo "      ✅ SSH连接正常 (127.0.0.1)" >> "$log_file"
-        else
-            ssh_errors="${ssh_errors}127.0.0.1连接失败; "
-        fi
-    fi
-    
-    # 方式3: 检查SSH服务状态 - 使用OpenWrt兼容命令
-    if [ $ssh_ok -eq 0 ]; then
-        # 在OpenWrt中，使用ps | grep而不是ps aux
-        if ps | grep -q "[d]ropbear\|[s]shd"; then
-            ssh_ok=1
-            echo "      ✅ SSH服务正在运行 (dropbear/sshd)" >> "$log_file"
-        else
-            ssh_errors="${ssh_errors}SSH服务未运行; "
-        fi
-    fi
-    
-    if [ $ssh_ok -eq 1 ]; then
-        echo "      ✅ SSH测试通过" >> "$log_file"
-        return 0
-    else
-        echo "      ⚠️ SSH连接测试失败: $ssh_errors" >> "$log_file"
-        echo "      💡 建议检查: 1) SSH服务是否安装 2) 防火墙设置 3) SSH配置" >> "$log_file"
-        return 1
-    fi
-    
-    echo "      结束时间: $(date '+%H:%M:%S')" >> "$log_file"
-}
-
-# 集成自定义文件函数（增强版）- 递归查找、详细日志、保持原文件名、SSH测试（修复版）
+# 集成自定义文件函数（增强版）- 递归查找、详细日志、保持原文件名
 integrate_custom_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 集成自定义文件（增强版）- 带SSH测试（修复版） ==="
+    log "=== 集成自定义文件（增强版）==="
     
     local custom_dir="$REPO_ROOT/firmware-config/custom-files"
     
@@ -2273,14 +2220,14 @@ integrate_custom_files() {
     
     log "✅ 文件复制完成: $copied_count 个文件已复制，$skip_count 个文件跳过"
     
-    # 创建第一次开机运行的安装脚本（增强版）- 带SSH测试，日志存到/root/logs（修复版）
+    # 创建第一次开机运行的安装脚本（增强版）- 无SSH测试
     echo ""
-    log "🔧 步骤3: 创建第一次开机安装脚本（增强版）- 带SSH测试（修复版），日志存到/root/logs"
+    log "🔧 步骤3: 创建第一次开机安装脚本（增强版）- 无SSH测试"
     
     local first_boot_dir="files/etc/uci-defaults"
     mkdir -p "$first_boot_dir"
     
-    # 创建第一次开机运行的脚本 - 增强版，带SSH测试，日志存到/root/logs
+    # 创建第一次开机运行的脚本 - 增强版，无SSH测试
     local first_boot_script="$first_boot_dir/99-custom-files"
     cat > "$first_boot_script" << 'EOF'
 #!/bin/sh
@@ -2291,80 +2238,11 @@ mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/custom-files-install-$(date +%Y%m%d_%H%M%S).log"
 
 echo "==================================================" > $LOG_FILE
-echo "      自定义文件安装脚本（增强版）- 带SSH测试（修复版）" >> $LOG_FILE
+echo "      自定义文件安装脚本（增强版）" >> $LOG_FILE
 echo "      开始时间: $(date)" >> $LOG_FILE
 echo "      日志文件: $LOG_FILE" >> $LOG_FILE
 echo "==================================================" >> $LOG_FILE
 echo "" >> $LOG_FILE
-
-# 测试初始SSH连接
-echo "🔌 初始SSH连接测试..." >> $LOG_FILE
-test_ssh_initial() {
-    echo "  🕐 开始时间: $(date '+%H:%M:%S')" >> $LOG_FILE
-    
-    # 检查SSH服务是否运行 - 使用OpenWrt兼容命令
-    if ps | grep -q "[d]ropbear\|[s]shd"; then
-        echo "  ✅ SSH服务正在运行 (dropbear/sshd)" >> $LOG_FILE
-        SSH_SERVICE_RUNNING=1
-    else
-        echo "  ⚠️ SSH服务未运行" >> $LOG_FILE
-        SSH_SERVICE_RUNNING=0
-    fi
-    
-    # 尝试连接
-    if timeout 5 ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no localhost "echo SSH-INITIAL-TEST" 2>/dev/null; then
-        echo "  ✅ 初始SSH连接测试通过" >> $LOG_FILE
-        return 0
-    else
-        echo "  ⚠️ 初始SSH连接测试失败" >> $LOG_FILE
-        return 1
-    fi
-}
-
-# 安装后SSH测试（修复版）- 使用OpenWrt兼容命令
-test_ssh_after_install() {
-    local test_name="$1"
-    echo "  🔌 安装后SSH测试 [$test_name]..." >> $LOG_FILE
-    echo "      开始时间: $(date '+%H:%M:%S')" >> $LOG_FILE
-    
-    local ssh_ok=0
-    
-    # 方式1: 测试localhost
-    if timeout 5 ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no localhost "echo SSH-TEST-AFTER-$test_name" 2>/dev/null; then
-        ssh_ok=1
-        echo "      ✅ SSH连接正常 (localhost)" >> $LOG_FILE
-    fi
-    
-    # 方式2: 测试127.0.0.1
-    if [ $ssh_ok -eq 0 ]; then
-        if timeout 5 ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no 127.0.0.1 "echo SSH-TEST-AFTER-$test_name" 2>/dev/null; then
-            ssh_ok=1
-            echo "      ✅ SSH连接正常 (127.0.0.1)" >> $LOG_FILE
-        fi
-    fi
-    
-    # 方式3: 检查服务状态 - 使用OpenWrt兼容命令
-    if [ $ssh_ok -eq 0 ]; then
-        if ps | grep -q "[d]ropbear\|[s]shd"; then
-            ssh_ok=1
-            echo "      ✅ SSH服务正在运行 (dropbear/sshd)" >> $LOG_FILE
-        fi
-    fi
-    
-    if [ $ssh_ok -eq 1 ]; then
-        echo "      ✅ SSH测试通过 [$test_name]" >> $LOG_FILE
-        return 0
-    else
-        echo "      ⚠️ SSH测试失败 [$test_name]" >> $LOG_FILE
-        echo "      💡 建议检查SSH服务和配置" >> $LOG_FILE
-        return 1
-    fi
-    
-    echo "      结束时间: $(date '+%H:%M:%S')" >> $LOG_FILE
-}
-
-# 执行初始SSH测试
-test_ssh_initial
 
 CUSTOM_DIR="/etc/custom-files"
 
@@ -2379,14 +2257,12 @@ if [ -d "$CUSTOM_DIR" ]; then
     done
     echo "" >> $LOG_FILE
     
-    # 1. 安装IPK文件（增强版）- 带SSH测试
+    # 1. 安装IPK文件（增强版）
     IPK_COUNT=0
     IPK_SUCCESS=0
     IPK_FAILED=0
-    IPK_SSH_TESTS=0
-    IPK_SSH_SUCCESS=0
     
-    echo "📦 开始安装IPK包（安装后测试SSH）..." >> $LOG_FILE
+    echo "📦 开始安装IPK包..." >> $LOG_FILE
     
     # 使用临时文件来存储文件列表，确保while循环在当前shell中运行
     FILE_LIST=$(mktemp)
@@ -2407,12 +2283,6 @@ if [ -d "$CUSTOM_DIR" ]; then
             if opkg install "$file" >> $LOG_FILE 2>&1; then
                 echo "      ✅ 安装成功" >> $LOG_FILE
                 IPK_SUCCESS=$((IPK_SUCCESS + 1))
-                
-                # 安装后测试SSH
-                IPK_SSH_TESTS=$((IPK_SSH_TESTS + 1))
-                if test_ssh_after_install "IPK-$IPK_COUNT"; then
-                    IPK_SSH_SUCCESS=$((IPK_SSH_SUCCESS + 1))
-                fi
             else
                 echo "      ❌ 安装失败，继续下一个..." >> $LOG_FILE
                 IPK_FAILED=$((IPK_FAILED + 1))
@@ -2433,17 +2303,14 @@ if [ -d "$CUSTOM_DIR" ]; then
     echo "  尝试安装: $IPK_COUNT 个" >> $LOG_FILE
     echo "  成功: $IPK_SUCCESS 个" >> $LOG_FILE
     echo "  失败: $IPK_FAILED 个" >> $LOG_FILE
-    echo "  SSH测试: $IPK_SSH_SUCCESS/$IPK_SSH_TESTS 通过" >> $LOG_FILE
     echo "" >> $LOG_FILE
     
-    # 2. 运行脚本文件（增强版）- 带SSH测试
+    # 2. 运行脚本文件（增强版）
     SCRIPT_COUNT=0
     SCRIPT_SUCCESS=0
     SCRIPT_FAILED=0
-    SCRIPT_SSH_TESTS=0
-    SCRIPT_SSH_SUCCESS=0
     
-    echo "📜 开始运行脚本文件（运行后测试SSH）..." >> $LOG_FILE
+    echo "📜 开始运行脚本文件..." >> $LOG_FILE
     
     # 使用临时文件来存储文件列表
     FILE_LIST=$(mktemp)
@@ -2467,12 +2334,6 @@ if [ -d "$CUSTOM_DIR" ]; then
             if sh "$file" >> $LOG_FILE 2>&1; then
                 echo "      ✅ 运行成功" >> $LOG_FILE
                 SCRIPT_SUCCESS=$((SCRIPT_SUCCESS + 1))
-                
-                # 运行后测试SSH
-                SCRIPT_SSH_TESTS=$((SCRIPT_SSH_TESTS + 1))
-                if test_ssh_after_install "SCRIPT-$SCRIPT_COUNT"; then
-                    SCRIPT_SSH_SUCCESS=$((SCRIPT_SSH_SUCCESS + 1))
-                fi
             else
                 local exit_code=$?
                 echo "      ❌ 运行失败，退出代码: $exit_code" >> $LOG_FILE
@@ -2494,17 +2355,14 @@ if [ -d "$CUSTOM_DIR" ]; then
     echo "  尝试运行: $SCRIPT_COUNT 个" >> $LOG_FILE
     echo "  成功: $SCRIPT_SUCCESS 个" >> $LOG_FILE
     echo "  失败: $SCRIPT_FAILED 个" >> $LOG_FILE
-    echo "  SSH测试: $SCRIPT_SSH_SUCCESS/$SCRIPT_SSH_TESTS 通过" >> $LOG_FILE
     echo "" >> $LOG_FILE
     
-    # 3. 复制其他文件到特定位置 - 带SSH测试
+    # 3. 复制其他文件到特定位置
     OTHER_COUNT=0
     OTHER_SUCCESS=0
     OTHER_FAILED=0
-    OTHER_SSH_TESTS=0
-    OTHER_SSH_SUCCESS=0
     
-    echo "📁 处理其他文件（处理后测试SSH）..." >> $LOG_FILE
+    echo "📁 处理其他文件..." >> $LOG_FILE
     
     # 使用临时文件来存储文件列表
     FILE_LIST=$(mktemp)
@@ -2550,30 +2408,15 @@ if [ -d "$CUSTOM_DIR" ]; then
             fi
         fi
         
-        # 处理后测试SSH（每5个文件测试一次）
-        if [ $((OTHER_COUNT % 5)) -eq 0 ]; then
-            OTHER_SSH_TESTS=$((OTHER_SSH_TESTS + 1))
-            if test_ssh_after_install "OTHER-$OTHER_COUNT"; then
-                OTHER_SSH_SUCCESS=$((OTHER_SSH_SUCCESS + 1))
-            fi
-        fi
-        
         echo "" >> $LOG_FILE
     done < "$FILE_LIST"
     
     rm -f "$FILE_LIST"
     
-    # 最后再测试一次SSH
-    OTHER_SSH_TESTS=$((OTHER_SSH_TESTS + 1))
-    if test_ssh_after_install "FINAL"; then
-        OTHER_SSH_SUCCESS=$((OTHER_SSH_SUCCESS + 1))
-    fi
-    
     echo "📊 其他文件处理统计:" >> $LOG_FILE
     echo "  尝试处理: $OTHER_COUNT 个" >> $LOG_FILE
     echo "  成功: $OTHER_SUCCESS 个" >> $LOG_FILE
     echo "  失败: $OTHER_FAILED 个" >> $LOG_FILE
-    echo "  SSH测试: $OTHER_SSH_SUCCESS/$OTHER_SSH_TESTS 通过" >> $LOG_FILE
     echo "" >> $LOG_FILE
     
     # 4. 安装完成总结
@@ -2587,39 +2430,18 @@ if [ -d "$CUSTOM_DIR" ]; then
     TOTAL_FILES=$((IPK_COUNT + SCRIPT_COUNT + OTHER_COUNT))
     TOTAL_SUCCESS=$((IPK_SUCCESS + SCRIPT_SUCCESS + OTHER_SUCCESS))
     TOTAL_FAILED=$((IPK_FAILED + SCRIPT_FAILED + OTHER_FAILED))
-    TOTAL_SSH_TESTS=$((IPK_SSH_TESTS + SCRIPT_SSH_TESTS + OTHER_SSH_TESTS))
-    TOTAL_SSH_SUCCESS=$((IPK_SSH_SUCCESS + SCRIPT_SSH_SUCCESS + OTHER_SSH_SUCCESS))
     
     echo "📈 总体统计:" >> $LOG_FILE
     echo "  总文件数: $TOTAL_FILES 个" >> $LOG_FILE
     echo "  成功处理: $TOTAL_SUCCESS 个" >> $LOG_FILE
     echo "  失败处理: $TOTAL_FAILED 个" >> $LOG_FILE
     echo "  成功率: $((TOTAL_SUCCESS * 100 / (TOTAL_SUCCESS + TOTAL_FAILED)))%" >> $LOG_FILE
-    echo "  SSH测试: $TOTAL_SSH_SUCCESS/$TOTAL_SSH_TESTS 通过" >> $LOG_FILE
     echo "" >> $LOG_FILE
     
     echo "📋 详细分类统计:" >> $LOG_FILE
-    echo "  📦 IPK包: $IPK_SUCCESS/$IPK_COUNT 成功, SSH: $IPK_SSH_SUCCESS/$IPK_SSH_TESTS" >> $LOG_FILE
-    echo "  📜 脚本: $SCRIPT_SUCCESS/$SCRIPT_COUNT 成功, SSH: $SCRIPT_SSH_SUCCESS/$SCRIPT_SSH_TESTS" >> $LOG_FILE
-    echo "  📁 其他文件: $OTHER_SUCCESS/$OTHER_COUNT 成功, SSH: $OTHER_SSH_SUCCESS/$OTHER_SSH_TESTS" >> $LOG_FILE
-    echo "" >> $LOG_FILE
-    
-    # SSH连接质量评估
-    echo "🔌 SSH连接质量评估:" >> $LOG_FILE
-    if [ $TOTAL_SSH_TESTS -gt 0 ]; then
-        SSH_SUCCESS_RATE=$((TOTAL_SSH_SUCCESS * 100 / TOTAL_SSH_TESTS))
-        echo "  SSH成功率: $SSH_SUCCESS_RATE%" >> $LOG_FILE
-        
-        if [ $SSH_SUCCESS_RATE -ge 90 ]; then
-            echo "  🎉 SSH连接质量: 优秀" >> $LOG_FILE
-        elif [ $SSH_SUCCESS_RATE -ge 70 ]; then
-            echo "  ✅ SSH连接质量: 良好" >> $LOG_FILE
-        elif [ $SSH_SUCCESS_RATE -ge 50 ]; then
-            echo "  ⚠️ SSH连接质量: 一般" >> $LOG_FILE
-        else
-            echo "  ❌ SSH连接质量: 较差，建议检查SSH配置" >> $LOG_FILE
-        fi
-    fi
+    echo "  📦 IPK包: $IPK_SUCCESS/$IPK_COUNT 成功" >> $LOG_FILE
+    echo "  📜 脚本: $SCRIPT_SUCCESS/$SCRIPT_COUNT 成功" >> $LOG_FILE
+    echo "  📁 其他文件: $OTHER_SUCCESS/$OTHER_COUNT 成功" >> $LOG_FILE
     echo "" >> $LOG_FILE
     
     # 创建完成标记文件
@@ -2651,9 +2473,7 @@ EOF
     log "  3. ✅ IPK安装错误不退出，继续下一个"
     log "  4. ✅ 详细日志记录每个文件的处理结果"
     log "  5. ✅ 分类统计和成功率计算"
-    log "  6. ✅ SSH连接测试（修复版，使用OpenWrt兼容命令）"
-    log "  7. ✅ 日志存储到 /root/logs/ 目录（重启不丢失）"
-    log "  8. ✅ SSH连接质量评估"
+    log "  6. ✅ 日志存储到 /root/logs/ 目录（重启不丢失）"
     
     # 创建文件名检查脚本
     echo ""
@@ -2724,128 +2544,6 @@ EOF
     chmod +x "$name_check_script"
     log "✅ 创建文件名检查脚本: $name_check_script"
     
-    # 创建SSH测试脚本（修复版）- 使用OpenWrt兼容命令
-    echo ""
-    log "🔧 步骤5: 创建SSH测试脚本（修复版）- 使用OpenWrt兼容命令"
-    
-    local ssh_test_script="$custom_files_dir/test_ssh.sh"
-    cat > "$ssh_test_script" << 'EOF'
-#!/bin/sh
-
-echo "=== SSH连接测试脚本（修复版）==="
-echo "测试时间: $(date)"
-echo ""
-
-# 创建日志目录
-LOG_DIR="/root/logs"
-mkdir -p "$LOG_DIR"
-LOG_FILE="$LOG_DIR/ssh-test-$(date +%Y%m%d_%H%M%S).log"
-
-echo "日志文件: $LOG_FILE"
-echo ""
-
-# 测试SSH连接的函数
-test_ssh_connection() {
-    local test_name="$1"
-    local host="$2"
-    
-    echo "🔌 测试 [$test_name]: $host" | tee -a "$LOG_FILE"
-    echo "  开始时间: $(date '+%H:%M:%S')" | tee -a "$LOG_FILE"
-    
-    # 测试连接
-    if timeout 5 ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no "$host" "echo SSH-TEST-OK-$(date +%s)" 2>/dev/null; then
-        echo "  ✅ 连接成功" | tee -a "$LOG_FILE"
-        return 0
-    else
-        echo "  ❌ 连接失败" | tee -a "$LOG_FILE"
-        return 1
-    fi
-    
-    echo "  结束时间: $(date '+%H:%M:%S')" | tee -a "$LOG_FILE"
-    echo "" | tee -a "$LOG_FILE"
-}
-
-# 检查SSH服务状态 - 使用OpenWrt兼容命令
-echo "🔍 检查SSH服务状态..." | tee -a "$LOG_FILE"
-# 在OpenWrt中，使用ps | grep而不是ps aux
-if ps | grep -q "[d]ropbear\|[s]shd"; then
-    echo "✅ SSH服务正在运行 (dropbear/sshd)" | tee -a "$LOG_FILE"
-    SSH_SERVICE_RUNNING=1
-else
-    echo "❌ SSH服务未运行" | tee -a "$LOG_FILE"
-    SSH_SERVICE_RUNNING=0
-fi
-echo "" | tee -a "$LOG_FILE"
-
-# 测试多个目标
-TOTAL_TESTS=0
-SUCCESS_TESTS=0
-
-# 测试localhost
-TOTAL_TESTS=$((TOTAL_TESTS + 1))
-if test_ssh_connection "localhost" "localhost"; then
-    SUCCESS_TESTS=$((SUCCESS_TESTS + 1))
-fi
-
-# 测试127.0.0.1
-TOTAL_TESTS=$((TOTAL_TESTS + 1))
-if test_ssh_connection "127.0.0.1" "127.0.0.1"; then
-    SUCCESS_TESTS=$((SUCCESS_TESTS + 1))
-fi
-
-# 检查SSH端口 - 使用netstat -ln
-echo "🔍 检查SSH端口监听..." | tee -a "$LOG_FILE"
-if netstat -ln 2>/dev/null | grep -q ":22 "; then
-    echo "✅ SSH端口22正在监听" | tee -a "$LOG_FILE"
-    SSH_PORT_LISTENING=1
-else
-    # 尝试其他格式
-    if netstat -ln 2>/dev/null | grep -q "0.0.0.0:22"; then
-        echo "✅ SSH端口22正在监听 (0.0.0.0:22)" | tee -a "$LOG_FILE"
-        SSH_PORT_LISTENING=1
-    else
-        echo "❌ SSH端口22未监听" | tee -a "$LOG_FILE"
-        SSH_PORT_LISTENING=0
-    fi
-fi
-echo "" | tee -a "$LOG_FILE"
-
-# 统计结果
-echo "📊 测试统计:" | tee -a "$LOG_FILE"
-echo "  总测试次数: $TOTAL_TESTS" | tee -a "$LOG_FILE"
-echo "  成功次数: $SUCCESS_TESTS" | tee -a "$LOG_FILE"
-echo "  失败次数: $((TOTAL_TESTS - SUCCESS_TESTS))" | tee -a "$LOG_FILE"
-echo "  成功率: $((SUCCESS_TESTS * 100 / TOTAL_TESTS))%" | tee -a "$LOG_FILE"
-echo "" | tee -a "$LOG_FILE"
-
-# 连接质量评估
-if [ $SUCCESS_TESTS -eq $TOTAL_TESTS ]; then
-    echo "🎉 SSH连接质量: 优秀" | tee -a "$LOG_FILE"
-elif [ $SUCCESS_TESTS -ge $((TOTAL_TESTS / 2)) ]; then
-    echo "✅ SSH连接质量: 良好" | tee -a "$LOG_FILE"
-else
-    echo "⚠️ SSH连接质量: 较差" | tee -a "$LOG_FILE"
-fi
-echo "" | tee -a "$LOG_FILE"
-
-# 建议
-if [ $SUCCESS_TESTS -lt $TOTAL_TESTS ]; then
-    echo "💡 建议检查:" | tee -a "$LOG_FILE"
-    echo "  1. SSH服务是否安装: opkg list-installed | grep dropbear" | tee -a "$LOG_FILE"
-    echo "  2. SSH配置: /etc/config/dropbear" | tee -a "$LOG_FILE"
-    echo "  3. 防火墙设置: /etc/config/firewall" | tee -a "$LOG_FILE"
-    echo "  4. 确保密码已设置或密钥已配置" | tee -a "$LOG_FILE"
-    echo "  5. 尝试重启SSH服务: /etc/init.d/dropbear restart" | tee -a "$LOG_FILE"
-fi
-
-echo "" | tee -a "$LOG_FILE"
-echo "✅ SSH测试完成" | tee -a "$LOG_FILE"
-echo "📝 详细日志: $LOG_FILE" | tee -a "$LOG_FILE"
-EOF
-    
-    chmod +x "$ssh_test_script"
-    log "✅ 创建SSH测试脚本（修复版）: $ssh_test_script"
-    
     # 显示最终统计
     echo ""
     log "📊 自定义文件集成统计:"
@@ -2856,11 +2554,10 @@ EOF
     log "  总文件数: $file_count 个"
     log "  ✅ 英文文件名: $english_count 个"
     log "  ⚠️ 非英文文件名: $non_english_count 个"
-    log "  🚀 第一次开机安装脚本: 已创建（带SSH测试修复版）"
-    log "  🔌 SSH测试脚本: 已创建（修复版，使用OpenWrt兼容命令）"
+    log "  🚀 第一次开机安装脚本: 已创建（增强版）"
     log "  📍 自定义文件位置: /etc/custom-files/"
     log "  📁 日志位置: /root/logs/（重启不丢失）"
-    log "  💡 安装方式: 第一次开机自动安装，每步都测试SSH"
+    log "  💡 安装方式: 第一次开机自动安装"
     
     if [ $non_english_count -gt 0 ]; then
         log "💡 文件名兼容性提示:"
@@ -2880,7 +2577,7 @@ EOF
     else
         log "🎉 自定义文件集成完成"
         log "📌 自定义文件将在第一次开机时自动安装和运行"
-        log "🔧 增强功能: SSH测试（修复版）、持久化日志、错误不退出、详细统计"
+        log "🔧 增强功能: 持久化日志、错误不退出、详细统计"
     fi
     
     # 保存自定义文件统计到文件，供其他步骤使用
