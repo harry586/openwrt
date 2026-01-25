@@ -10,10 +10,9 @@ echo "停止Samba服务..."
 killall smbd nmbd 2>/dev/null
 sleep 2
 
-# 2. 备份原配置
-if [ -f /etc/samba/smb.conf ]; then
-    cp /etc/samba/smb.conf /etc/samba/smb.conf.bak.$(date +%s)
-fi
+# 2. 删除原配置文件
+echo "删除原配置文件..."
+rm -f /etc/samba/smb.conf 2>/dev/null
 
 # 3. 创建增强版配置
 cat > /etc/samba/smb.conf << 'EOF'
@@ -178,6 +177,8 @@ cat > /etc/samba/smb.conf << 'EOF'
     # 适用于家庭内网文件共享
 EOF
 
+echo "✓ 配置文件已创建"
+
 # 4. 设置目录权限（只读）
 echo "设置共享目录权限..."
 mkdir -p /mnt/sda1
@@ -227,8 +228,8 @@ MT管理器: 地址填路由器IP，用户密码留空
 
 四、配置文件位置
 ----------------
-主配置: /etc/samba/smb.conf
-备份配置: /etc/samba/smb.conf.bak.*
+主配置: /etc/samba/smb.conf (只读)
+备份配置: 无（配置文件直接被替换）
 
 五、管理命令
 ------------
@@ -271,7 +272,12 @@ else
     sleep 2
 fi
 
-# 8. 显示配置摘要
+# 8. 设置配置文件为只读权限
+echo "设置配置文件为只读权限..."
+chmod 444 /etc/samba/smb.conf 2>/dev/null || true
+echo "✓ 配置文件已设为只读"
+
+# 9. 显示配置摘要
 echo ""
 echo "=== 配置完成 ==="
 echo ""
@@ -279,12 +285,14 @@ echo "配置摘要:"
 echo "  访问方式: 匿名只读"
 echo "  共享名称: sda1"
 echo "  共享路径: /mnt/sda1"
+echo "  配置权限: /etc/samba/smb.conf (只读)"
 echo ""
 echo "增强功能:"
 echo "  ✓ 文件过滤 (.exe/.dll/.tmp等)"
 echo "  ✓ 性能优化 (TCP优化、缓存、异步IO)"
 echo "  ✓ 协议兼容 (SMB1/SMB2/SMB3)"
 echo "  ✓ 安全设置 (只读权限，防止误操作)"
+echo "  ✓ 配置保护 (配置文件设为只读)"
 echo ""
 echo "说明文件: /mnt/sda1/README_Samba配置说明.txt"
 echo ""
