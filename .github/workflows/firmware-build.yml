@@ -5,12 +5,18 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: "📱 设备名称 (如: ac42u)"
+        description: "📱 设备名称 (如: ac42u, wndr3800)"
         required: true
         default: "ac42u"
         type: string
+      source_selection:
+        description: "🔄 源代码选择"
+        required: true
+        type: choice
+        default: "openwrt"
+        options: ["openwrt", "lede"]
       version_selection:
-        description: "🔄 版本选择"
+        description: "🔄 版本选择 (OpenWrt版本)"
         required: true
         type: choice
         default: "21.02"
@@ -51,13 +57,14 @@ jobs:
           
           # 生成日期格式的时间戳（年月日）
           BASE_DATE=$(date -u +'%Y%m%d')
-          TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$BASE_DATE"
+          TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.source_selection }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$BASE_DATE"
           
           echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
           
           echo "✅ 生成时间戳: $TIMESTAMP"
           echo "📋 构建配置:"
           echo "  设备: ${{ github.event.inputs.device_name }}"
+          echo "  源代码: ${{ github.event.inputs.source_selection }}"
           echo "  版本: ${{ github.event.inputs.version_selection }}"
           echo "  模式: ${{ github.event.inputs.config_mode }}"
           echo "  并行优化: ${{ github.event.inputs.enable_parallel }}"
@@ -409,9 +416,10 @@ jobs:
           
           echo "🔄 步骤 6.3: 初始化构建环境"
           echo "📱 设备: ${{ github.event.inputs.device_name }}"
+          echo "🔄 源代码: ${{ github.event.inputs.source_selection }}"
           echo "🔄 版本: ${{ github.event.inputs.version_selection }}"
           echo "⚙️ 配置模式: ${{ github.event.inputs.config_mode }}"
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}"
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.source_selection }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}"
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 初始化构建环境失败"
@@ -443,6 +451,7 @@ jobs:
             # 加载现有环境变量
             source /mnt/openwrt-build/build_env.sh
             echo "✅ 从现有环境文件加载变量:"
+            echo "  SELECTED_REPO_URL: $SELECTED_REPO_URL"
             echo "  SELECTED_BRANCH: $SELECTED_BRANCH"
             echo "  TARGET: $TARGET"
             echo "  SUBTARGET: $SUBTARGET"
@@ -475,6 +484,11 @@ jobs:
                 SUBTARGET="mt7621"
                 DEVICE="xiaomi_mi-router-3g"
                 ;;
+              "wndr3800")
+                TARGET="ath79"
+                SUBTARGET="generic"
+                DEVICE="netgear_wndr3800"
+                ;;
               *)
                 TARGET="ipq40xx"
                 SUBTARGET="generic"
@@ -484,8 +498,8 @@ jobs:
             
             # 创建环境文件
             echo "#!/bin/bash" > /mnt/openwrt-build/build_env.sh
-            echo "export SELECTED_REPO_URL=\"https://github.com/immortalwrt/immortalwrt.git\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export SELECTED_BRANCH=\"${{ github.event.inputs.version_selection == '23.05' && 'openwrt-23.05' || 'openwrt-21.02' }}\"" >> /mnt/openwrt-build/build_env.sh
+            echo "export SELECTED_REPO_URL=\"${{ github.event.inputs.source_selection == 'lede' && 'https://github.com/coolsnowwolf/lede.git' || 'https://github.com/immortalwrt/immortalwrt.git' }}\"" >> /mnt/openwrt-build/build_env.sh
+            echo "export SELECTED_BRANCH=\"${{ github.event.inputs.source_selection == 'lede' && 'master' || (github.event.inputs.version_selection == '23.05' && 'openwrt-23.05' || 'openwrt-21.02') }}\"" >> /mnt/openwrt-build/build_env.sh
             echo "export TARGET=\"$TARGET\"" >> /mnt/openwrt-build/build_env.sh
             echo "export SUBTARGET=\"$SUBTARGET\"" >> /mnt/openwrt-build/build_env.sh
             echo "export DEVICE=\"$DEVICE\"" >> /mnt/openwrt-build/build_env.sh
@@ -523,6 +537,8 @@ jobs:
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
             source /mnt/openwrt-build/build_env.sh
             echo "✅ 从环境文件加载变量: COMPILER_DIR=$COMPILER_DIR"
+            echo "✅ 源代码选择: $SELECTED_REPO_URL"
+            echo "✅ 分支: $SELECTED_BRANCH"
           else
             echo "⚠️ 环境文件不存在"
           fi
@@ -625,7 +641,7 @@ jobs:
       
       # 步骤 11: 安装 TurboACC 包
       - name: "11. 安装 TurboACC 包"
-        if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
+        if: env.SELECTED_BRANCH != 'master' && github.event.inputs.config_mode == 'normal'
         run: |
           echo "=== 步骤 11: 安装 TurboACC 包 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
@@ -804,7 +820,8 @@ jobs:
             echo "🔍 配置摘要:"
             echo "  - 目标平台: $TARGET/$SUBTARGET"
             echo "  - 目标设备: $DEVICE"
-            echo "  - OpenWrt版本: $SELECTED_BRANCH"
+            echo "  - 源代码: $SELECTED_REPO_URL"
+            echo "  - 分支: $SELECTED_BRANCH"
             echo "  - USB驱动: 已启用所有关键驱动"
             echo "  - 插件数量: $enabled 个已启用"
             
@@ -1109,7 +1126,7 @@ jobs:
           echo "🔍 检查当前环境..."
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
             source /mnt/openwrt-build/build_env.sh
-            echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET"
+            echo "✅ 加载环境变量: SELECTED_REPO_URL=$SELECTED_REPO_URL, SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET"
           fi
           
           echo "🚀 执行前置错误检查（已修复23.05 SDK验证问题）..."
@@ -1181,6 +1198,8 @@ jobs:
           echo "  CPU核心数: $CPU_CORES"
           echo "  内存大小: ${TOTAL_MEM}MB"
           echo "  并行优化: ${{ env.ENABLE_PARALLEL }}"
+          echo "  源代码: $SELECTED_REPO_URL"
+          echo "  分支: $SELECTED_BRANCH"
           
           # 智能判断最佳并行任务数 - 优化版
           if [ "${{ env.ENABLE_PARALLEL }}" = "true" ]; then
@@ -1219,6 +1238,7 @@ jobs:
           echo "💡 编译配置:"
           echo "  - 并行任务: $MAKE_JOBS"
           echo "  - 设备: ${{ github.event.inputs.device_name }}"
+          echo "  - 源代码: ${{ github.event.inputs.source_selection }}"
           echo "  - 版本: ${{ github.event.inputs.version_selection }}"
           echo "  - 配置模式: ${{ github.event.inputs.config_mode }}"
           echo "  - 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
@@ -1430,6 +1450,7 @@ jobs:
           echo "🚀 构建总结报告"
           echo "========================================"
           echo "设备: ${{ github.event.inputs.device_name }}"
+          echo "源代码: ${{ github.event.inputs.source_selection }}"
           echo "版本: ${{ github.event.inputs.version_selection }}"
           echo "配置模式: ${{ github.event.inputs.config_mode }}"
           echo "时间戳: ${{ env.TIMESTAMP }}"
