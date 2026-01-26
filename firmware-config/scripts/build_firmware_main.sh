@@ -107,6 +107,11 @@ download_openwrt_sdk() {
                     return 1
                 fi
                 ;;
+            "ath79")
+                # Atheros ath79平台 (WNDR3800使用)
+                sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ath79/generic/openwrt-sdk-23.05.3-ath79-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
+                sdk_filename="openwrt-sdk-23.05.3-ath79-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
+                ;;
             *)
                 log "❌ 不支持的目标平台: $target"
                 return 1
@@ -130,6 +135,11 @@ download_openwrt_sdk() {
                     log "❌ 不支持的子目标: $subtarget"
                     return 1
                 fi
+                ;;
+            "ath79")
+                # Atheros ath79平台 (WNDR3800使用)
+                sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ath79/generic/openwrt-sdk-21.02.7-ath79-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+                sdk_filename="openwrt-sdk-21.02.7-ath79-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
                 ;;
             *)
                 log "❌ 不支持的目标平台: $target"
@@ -297,6 +307,12 @@ verify_compiler_files() {
             target_platform="mips"
             target_suffix="mipsel_24kc"
             log "目标平台: MIPS (雷凌MT76xx)"
+            log "目标架构: $target_suffix"
+            ;;
+        "ath79")
+            target_platform="mips"
+            target_suffix="mips_24kc"
+            log "目标平台: MIPS (Atheros ath79)"
             log "目标架构: $target_suffix"
             ;;
         *)
@@ -746,6 +762,7 @@ pre_build_error_check() {
     
     # 显示当前环境变量
     log "当前环境变量:"
+    log "  SELECTED_REPO_URL: $SELECTED_REPO_URL"
     log "  SELECTED_BRANCH: $SELECTED_BRANCH"
     log "  TARGET: $TARGET"
     log "  SUBTARGET: $SUBTARGET"
@@ -1002,18 +1019,25 @@ create_build_dir() {
 # 初始化构建环境 - 调整顺序：先克隆源码再保存环境变量
 initialize_build_env() {
     local device_name=$1
-    local version_selection=$2
-    local config_mode=$3
+    local source_selection=$2
+    local version_selection=$3
+    local config_mode=$4
     
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 版本选择 ==="
-    if [ "$version_selection" = "23.05" ]; then
-        SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-        SELECTED_BRANCH="openwrt-23.05"
+    log "=== 源代码选择 ==="
+    if [ "$source_selection" = "lede" ]; then
+        SELECTED_REPO_URL="https://github.com/coolsnowwolf/lede.git"
+        SELECTED_BRANCH="master"
+        log "✅ 选择LEDE源代码"
     else
         SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-        SELECTED_BRANCH="openwrt-21.02"
+        if [ "$version_selection" = "23.05" ]; then
+            SELECTED_BRANCH="openwrt-23.05"
+        else
+            SELECTED_BRANCH="openwrt-21.02"
+        fi
+        log "✅ 选择OpenWrt源代码"
     fi
     log "✅ 版本选择完成: $SELECTED_BRANCH"
     
@@ -1057,6 +1081,13 @@ initialize_build_env() {
             DEVICE="xiaomi_mi-router-3g"
             log "🔧 检测到雷凌MT7621平台设备: $device_name"
             ;;
+        "wndr3800")
+            TARGET="ath79"
+            SUBTARGET="generic"
+            DEVICE="netgear_wndr3800"
+            log "🔧 检测到Netgear WNDR3800设备: $device_name"
+            log "🔧 Atheros ath79平台，使用MIPS架构"
+            ;;
         *)
             TARGET="ipq40xx"
             SUBTARGET="generic"
@@ -1071,6 +1102,8 @@ initialize_build_env() {
     log "子目标: $SUBTARGET"
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
+    log "仓库URL: $SELECTED_REPO_URL"
+    log "分支: $SELECTED_BRANCH"
     
     save_env
     
@@ -1097,6 +1130,7 @@ initialize_compiler_env() {
         
         # 显示关键环境变量
         log "📋 当前环境变量:"
+        log "  SELECTED_REPO_URL: $SELECTED_REPO_URL"
         log "  SELECTED_BRANCH: $SELECTED_BRANCH"
         log "  TARGET: $TARGET"
         log "  SUBTARGET: $SUBTARGET"
@@ -1110,11 +1144,7 @@ initialize_compiler_env() {
         
         # 设置默认值
         if [ -z "$SELECTED_BRANCH" ]; then
-            if [ "$device_name" = "ac42u" ] || [ "$device_name" = "acrh17" ]; then
-                SELECTED_BRANCH="openwrt-21.02"
-            else
-                SELECTED_BRANCH="openwrt-21.02"
-            fi
+            SELECTED_BRANCH="master"
             log "⚠️ SELECTED_BRANCH未设置，使用默认值: $SELECTED_BRANCH"
         fi
         
@@ -1134,6 +1164,11 @@ initialize_compiler_env() {
                     TARGET="ramips"
                     SUBTARGET="mt7621"
                     DEVICE="xiaomi_mi-router-3g"
+                    ;;
+                "wndr3800")
+                    TARGET="ath79"
+                    SUBTARGET="generic"
+                    DEVICE="netgear_wndr3800"
                     ;;
                 *)
                     TARGET="ipq40xx"
@@ -1199,9 +1234,13 @@ initialize_compiler_env() {
         version_for_sdk="23.05"
     elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
         version_for_sdk="21.02"
+    elif [ "$SELECTED_BRANCH" = "master" ]; then
+        # LEDE使用最新的稳定版本
+        version_for_sdk="23.05"
+        log "📌 LEDE使用最新的OpenWrt 23.05 SDK"
     else
         # 尝试提取版本号
-        version_for_sdk=$(echo "$SELECTED_BRANCH" | grep -o "[0-9][0-9]\.[0-9][0-9]" || echo "21.02")
+        version_for_sdk=$(echo "$SELECTED_BRANCH" | grep -o "[0-9][0-9]\.[0-9][0-9]" || echo "23.05")
         log "⚠️ 无法识别的版本分支，尝试使用: $version_for_sdk"
     fi
     
@@ -1294,11 +1333,23 @@ configure_feeds() {
         FEEDS_BRANCH="openwrt-21.02"
     fi
     
-    echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf.default
-    echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
-    
-    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] && [ "$CONFIG_MODE" = "normal" ]; then
-        echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+    # 对于LEDE，使用LEDE的feeds配置
+    if [ "$SELECTED_REPO_URL" = "https://github.com/coolsnowwolf/lede.git" ]; then
+        log "🔧 使用LEDE的feeds配置"
+        # LEDE使用自己的feeds配置，不需要额外修改
+        cat > feeds.conf.default << 'EOF'
+src-git packages https://github.com/coolsnowwolf/packages
+src-git luci https://github.com/coolsnowwolf/luci
+src-git routing https://github.com/coolsnowwolf/routing
+src-git telephony https://github.com/coolsnowwolf/telephony
+EOF
+    else
+        echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf.default
+        echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
+        
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] && [ "$CONFIG_MODE" = "normal" ]; then
+            echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+        fi
     fi
     
     log "=== 更新Feeds ==="
@@ -1384,7 +1435,8 @@ generate_config() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
     log "=== 智能配置生成系统（USB完全修复通用版）==="
-    log "版本: $SELECTED_BRANCH"
+    log "源代码: $SELECTED_REPO_URL"
+    log "分支: $SELECTED_BRANCH"
     log "目标: $TARGET"
     log "子目标: $SUBTARGET"
     log "设备: $DEVICE"
@@ -1491,6 +1543,19 @@ generate_config() {
         fi
     fi
     
+    if [ "$TARGET" = "ath79" ]; then
+        log "🚨 关键修复：Atheros ath79 平台USB控制器驱动"
+        echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+        # ath79平台通常不需要xhci和dwc3
+        echo "# CONFIG_PACKAGE_kmod-usb-xhci-hcd is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb-dwc3 is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb-dwc3-qcom is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-phy-qcom-dwc3 is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb-xhci-mtk is not set" >> .config
+        log "✅ 已启用Atheros ath79平台的USB驱动"
+    fi
+    
     echo "# 🟢 USB 存储驱动 - 核心功能" >> .config
     echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
     echo "CONFIG_PACKAGE_kmod-usb-storage-extras=y" >> .config
@@ -1550,6 +1615,131 @@ generate_config() {
     echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
     echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
     
+    # WNDR3800专用配置
+    if [ "$DEVICE" = "netgear_wndr3800" ]; then
+        log "🔧 应用WNDR3800专用配置（基于3800config.txt）"
+        
+        # 文件系统配置
+        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=128" >> .config
+        
+        # 内核版本
+        echo "CONFIG_LINUX_5_15=y" >> .config
+        echo "CONFIG_KERNEL_BUILD_USER=\"OpenWrt\"" >> .config
+        echo "CONFIG_KERNEL_BUILD_DOMAIN=\"openwrt.org\"" >> .config
+        
+        # 基础系统包
+        echo "CONFIG_PACKAGE_ca-bundle=y" >> .config
+        echo "CONFIG_PACKAGE_logd=y" >> .config
+        echo "CONFIG_PACKAGE_bash=y" >> .config
+        echo "CONFIG_PACKAGE_htop=y" >> .config
+        echo "CONFIG_PACKAGE_nano=y" >> .config
+        echo "CONFIG_PACKAGE_curl=y" >> .config
+        echo "CONFIG_PACKAGE_cronie=y" >> .config
+        echo "CONFIG_PACKAGE_cronie-anacron=y" >> .config
+        echo "CONFIG_PACKAGE_ip-full=y" >> .config
+        
+        # IPv6支持
+        echo "CONFIG_PACKAGE_ipv6helper=y" >> .config
+        echo "CONFIG_PACKAGE_odhcp6c=y" >> .config
+        echo "CONFIG_PACKAGE_odhcpd-ipv6only=y" >> .config
+        
+        # 存储和文件系统支持
+        echo "CONFIG_PACKAGE_blkid=y" >> .config
+        echo "CONFIG_PACKAGE_lsblk=y" >> .config
+        echo "CONFIG_PACKAGE_e2fsprogs=y" >> .config
+        echo "CONFIG_PACKAGE_fdisk=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-fs-f2fs=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nls-iso8859-15=y" >> .config
+        
+        # 无线网络
+        echo "CONFIG_PACKAGE_kmod-ath=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ath9k=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ath9k-common=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-cfg80211=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-mac80211=y" >> .config
+        echo "CONFIG_PACKAGE_wpad-openssl=y" >> .config
+        
+        # 网络功能
+        echo "CONFIG_PACKAGE_kmod-ipt-conntrack=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-core=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-nat=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-conntrack=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nf-nat=y" >> .config
+        
+        # LuCI Web管理界面
+        echo "CONFIG_PACKAGE_luci=y" >> .config
+        echo "CONFIG_PACKAGE_luci-base=y" >> .config
+        echo "CONFIG_PACKAGE_luci-compat=y" >> .config
+        echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> .config
+        echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
+        echo "CONFIG_PACKAGE_luci-proto-ipv6=y" >> .config
+        echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
+        
+        # LuCI应用程序（插件）
+        echo "CONFIG_PACKAGE_luci-app-automount=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-diskman=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-samba=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-hd-idle=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-parentcontrol=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-vlmcsd=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> .config
+        
+        # 网络服务后台程序
+        echo "CONFIG_PACKAGE_uhttpd=y" >> .config
+        echo "CONFIG_PACKAGE_uhttpd-mod-ubus=y" >> .config
+        echo "CONFIG_PACKAGE_miniupnpd=y" >> .config
+        echo "CONFIG_PACKAGE_samba36-server=y" >> .config
+        echo "CONFIG_PACKAGE_vsftpd-alt=y" >> .config
+        echo "CONFIG_PACKAGE_hd-idle=y" >> .config
+        echo "CONFIG_PACKAGE_sqm-scripts=y" >> .config
+        echo "CONFIG_PACKAGE_vlmcsd=y" >> .config
+        echo "CONFIG_PACKAGE_smartdns=y" >> .config
+        
+        # 中文语言包
+        echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-samba-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-automount-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-hd-idle-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-parentcontrol-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-vlmcsd-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y" >> .config
+        
+        # 禁用DDNS相关组件
+        echo "# CONFIG_PACKAGE_ddns-scripts is not set" >> .config
+        echo "# CONFIG_PACKAGE_ddns-scripts-cloudflare is not set" >> .config
+        echo "# CONFIG_PACKAGE_ddns-scripts-freedns is not set" >> .config
+        echo "# CONFIG_PACKAGE_ddns-scripts-godaddy is not set" >> .config
+        echo "# CONFIG_PACKAGE_ddns-scripts-noip is not set" >> .config
+        echo "# CONFIG_PACKAGE_ddns-scripts-services is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-ddns is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-i18n-ddns-zh-cn is not set" >> .config
+        
+        # 删除不需要的插件
+        echo "# CONFIG_PACKAGE_luci-app-accesscontrol is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-nlbwmon is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-wol is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-autoreboot is not set" >> .config
+        
+        # 可选网络功能
+        echo "CONFIG_PACKAGE_iptables-mod-fullconenat=y" >> .config
+        echo "CONFIG_PACKAGE_tcp-bbr=y" >> .config
+        
+        # 编译设置
+        echo "CONFIG_SIGNED_PACKAGES=y" >> .config
+        echo "CONFIG_STRIP_KERNEL_EXPORTS=y" >> .config
+        echo "# CONFIG_DEBUG=y is not set" >> .config
+        echo "# CONFIG_STRIP=y is not set" >> .config
+        
+        log "✅ WNDR3800专用配置已应用"
+    fi
+    
     if [ "$CONFIG_MODE" = "base" ]; then
         log "🔧 使用基础模式 (最小化，用于测试编译)"
         echo "# CONFIG_PACKAGE_luci-app-turboacc is not set" >> .config
@@ -1591,7 +1781,7 @@ generate_config() {
         echo "CONFIG_PACKAGE_luci-app-accesscontrol=y" >> .config
         log "✅ 已添加上网时间控制插件"
         
-        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ] || [ "$SELECTED_BRANCH" = "master" ]; then
             echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> .config
@@ -1660,6 +1850,10 @@ verify_usb_config() {
         echo "  🔧 检测到雷凌平台，检查专用驱动:"
         echo "  - kmod-usb-ohci-pci:" $(grep "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
         echo "  - kmod-usb2-pci:" $(grep "CONFIG_PACKAGE_kmod-usb2-pci=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    elif [ "$TARGET" = "ath79" ]; then
+        echo "  🔧 检测到Atheros ath79平台，检查专用驱动:"
+        echo "  - kmod-usb-ohci:" $(grep "CONFIG_PACKAGE_kmod-usb-ohci=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+        echo "  - kmod-usb2:" $(grep "CONFIG_PACKAGE_kmod-usb2=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
     fi
     
     echo "5. 🟢 USB存储:"
@@ -1710,15 +1904,17 @@ check_usb_drivers_integrity() {
     local required_drivers=(
         "kmod-usb-core"
         "kmod-usb2"
-        "kmod-usb3"
-        "kmod-usb-xhci-hcd"
         "kmod-usb-storage"
         "kmod-scsi-core"
     )
     
     # 根据平台添加专用驱动
     if [ "$TARGET" = "ipq40xx" ]; then
-        required_drivers+=("kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3")
+        required_drivers+=("kmod-usb-dwc3" "kmod-usb3")
+    elif [ "$TARGET" = "ramips" ]; then
+        required_drivers+=("kmod-usb-ohci")
+    elif [ "$TARGET" = "ath79" ]; then
+        required_drivers+=("kmod-usb-ohci")
     fi
     
     # 检查所有必需驱动
@@ -1805,6 +2001,17 @@ apply_config() {
         echo "  雷凌MT76xx平台专用驱动:"
         local mtk_drivers=("kmod-usb-ohci-pci" "kmod-usb2-pci" "kmod-usb-xhci-mtk")
         for driver in "${mtk_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "    ✅ $driver"
+            else
+                echo "    ❌ $driver - 缺失！"
+                missing_usb=$((missing_usb + 1))
+            fi
+        done
+    elif [ "$TARGET" = "ath79" ]; then
+        echo "  Atheros ath79平台专用驱动:"
+        local ath79_drivers=("kmod-usb-ohci" "kmod-usb2")
+        for driver in "${ath79_drivers[@]}"; do
             if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
                 echo "    ✅ $driver"
             else
@@ -1966,6 +2173,16 @@ apply_config() {
         echo "# CONFIG_PACKAGE_kmod-usb-dwc3-qcom is not set" >> .config
         echo "# CONFIG_PACKAGE_kmod-phy-qcom-dwc3 is not set" >> .config
         echo "# CONFIG_PACKAGE_kmod-usb-dwc3-of-simple is not set" >> .config
+    elif [ "$TARGET" = "ath79" ]; then
+        echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb-xhci-hcd is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb-xhci-pci is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb-dwc3 is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb-dwc3-qcom is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-phy-qcom-dwc3 is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb-xhci-mtk is not set" >> .config
     fi
     
     # 其他关键USB驱动
@@ -2606,7 +2823,8 @@ build_firmware() {
     log "📋 编译信息:"
     log "  构建目录: $BUILD_DIR"
     log "  设备: $DEVICE"
-    log "  版本: $SELECTED_BRANCH"
+    log "  源代码: $SELECTED_REPO_URL"
+    log "  分支: $SELECTED_BRANCH"
     log "  配置模式: $CONFIG_MODE"
     log "  编译器目录: $COMPILER_DIR"
     log "  启用缓存: $enable_cache"
@@ -3012,7 +3230,7 @@ main() {
             create_build_dir
             ;;
         "initialize_build_env")
-            initialize_build_env "$2" "$3" "$4"
+            initialize_build_env "$2" "$3" "$4" "$5"
             ;;
         "initialize_compiler_env")
             initialize_compiler_env "$2"
