@@ -814,8 +814,8 @@ jobs:
                 echo "  🚨 检测到vsftpd包冲突，正在自动修复..."
                 # 自动修复代码
                 sed -i 's/CONFIG_PACKAGE_vsftpd-alt=y/# CONFIG_PACKAGE_vsftpd-alt is not set/g' "/mnt/openwrt-build/.config"
+                sed -i 's/CONFIG_PACKAGE_luci-app-vsftpd-alt=y/# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set/g' "/mnt/openwrt-build/.config"
                 echo "CONFIG_PACKAGE_vsftpd=y" >> "/mnt/openwrt-build/.config"
-                echo "# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set" >> "/mnt/openwrt-build/.config"
                 echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> "/mnt/openwrt-build/.config"
                 echo "✅ 已自动修复vsftpd冲突"
               fi
@@ -1270,7 +1270,7 @@ jobs:
           
           echo "🟢 步骤 22 完成"
       
-      # 步骤 23: 编译固件（智能并行优化版）
+      # 步骤 23: 编译固件（智能并行优化版）- 修复vsftpd冲突
       - name: "23. 编译固件（智能并行优化版）- 修复vsftpd冲突"
         run: |
           echo "=== 步骤 23: 编译固件（智能并行优化版）- 修复vsftpd冲突 ==="
@@ -1293,32 +1293,48 @@ jobs:
           echo "  源代码: $SELECTED_REPO_URL"
           echo "  分支: $SELECTED_BRANCH"
           
-          # 🚨 编译前最终vsftpd冲突检查
+          # 🚨 编译前最终vsftpd冲突深度检查
           echo ""
-          echo "🚨 编译前最终vsftpd冲突检查:"
+          echo "🚨 编译前最终vsftpd冲突深度检查:"
           if [ -f ".config" ]; then
-            VSFTPD_ALT_COUNT=$(grep -c "^CONFIG_PACKAGE_vsftpd-alt=y" .config)
-            VSFTPD_COUNT=$(grep -c "^CONFIG_PACKAGE_vsftpd=y" .config)
+            # 检查所有可能的vsftpd相关配置
+            VSFTPD_CONFIGS=$(grep -E "^CONFIG_PACKAGE_(vsftpd|luci-app-vsftpd)" .config)
+            VSFTPD_ALT_CONFIGS=$(grep -E "^CONFIG_PACKAGE_(vsftpd-alt|luci-app-vsftpd-alt)" .config)
             
-            echo "  标准vsftpd状态: $([ $VSFTPD_COUNT -gt 0 ] && echo "✅ 已启用" || echo "❌ 未启用")"
-            echo "  替代版vsftpd-alt状态: $([ $VSFTPD_ALT_COUNT -gt 0 ] && echo "❌ 已启用（需要修复）" || echo "✅ 已禁用（正常）")"
+            echo "  🔍 当前vsftpd相关配置:"
+            echo "$VSFTPD_CONFIGS" | while read config; do
+                echo "    $(echo $config | sed 's/=/ = /')"
+            done
             
-            if [ $VSFTPD_ALT_COUNT -gt 0 ]; then
-              echo "  🚨 发现vsftpd-alt被启用，执行最终修复..."
-              sed -i 's/CONFIG_PACKAGE_vsftpd-alt=y/# CONFIG_PACKAGE_vsftpd-alt is not set/g' .config
-              sed -i 's/CONFIG_PACKAGE_luci-app-vsftpd-alt=y/# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set/g' .config
-              
-              # 确保标准vsftpd被启用
-              if [ $VSFTPD_COUNT -eq 0 ]; then
+            if [ -n "$VSFTPD_ALT_CONFIGS" ]; then
+                echo "  🚨 发现vsftpd-alt配置，执行最终清理..."
+                
+                # 使用sed清理所有相关行
+                sed -i '/^CONFIG_PACKAGE_vsftpd-alt/d' .config
+                sed -i '/^CONFIG_PACKAGE_luci-app-vsftpd-alt/d' .config
+                
+                # 添加明确的禁用注释
+                echo "# 🚨 最终清理: 完全禁用vsftpd-alt" >> .config
+                echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+                echo "# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set" >> .config
+                echo "# CONFIG_PACKAGE_luci-i18n-vsftpd-alt-zh-cn is not set" >> .config
+                
+                echo "  ✅ vsftpd-alt已完全清理"
+            fi
+            
+            # 确保vsftpd被启用
+            if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
                 echo "  🔧 启用标准vsftpd..."
                 echo "CONFIG_PACKAGE_vsftpd=y" >> .config
                 echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
-              fi
-              
-              echo "  ✅ 最终修复完成"
-            else
-              echo "  ✅ vsftpd配置正常，无冲突"
+                echo "  ✅ 标准vsftpd已启用"
             fi
+            
+            echo "  🎯 最终vsftpd配置状态:"
+            grep -E "^CONFIG_PACKAGE_(vsftpd|luci-app-vsftpd)" .config | while read config; do
+                echo "    ✅ $(echo $config | sed 's/=/ = /')"
+            done
+            
           else
             echo "  ⚠️ 配置文件不存在"
           fi
@@ -1436,26 +1452,46 @@ jobs:
             PACKAGE_COUNT=0
             OTHER_COUNT=0
             
-            # 计算文件数量
+            # 使用更可靠的方法统计
             echo "📊 正在统计文件..."
             
-            # 统计固件文件（.bin和.img）
-            FIRMWARE_COUNT=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+            # 遍历所有文件进行分类统计
+            find bin/targets -type f 2>/dev/null | while read file; do
+                FILE_NAME=$(basename "$file")
+                
+                # 检查文件类型
+                if [[ "$FILE_NAME" == *.bin ]] || [[ "$FILE_NAME" == *.img ]]; then
+                    FIRMWARE_COUNT=$((FIRMWARE_COUNT + 1))
+                elif [[ "$FILE_NAME" == *.gz ]] || [[ "$FILE_NAME" == *.ipk ]]; then
+                    PACKAGE_COUNT=$((PACKAGE_COUNT + 1))
+                else
+                    OTHER_COUNT=$((OTHER_COUNT + 1))
+                fi
+            done
             
-            # 统计包文件（.gz和.ipk）
-            PACKAGE_COUNT=$(find bin/targets -type f \( -name "*.gz" -o -name "*.ipk" \) 2>/dev/null | wc -l)
-            
-            # 统计其他文件（排除上面两种类型）
-            OTHER_COUNT=$(find bin/targets -type f 2>/dev/null | wc -l)
-            OTHER_COUNT=$((OTHER_COUNT - FIRMWARE_COUNT - PACKAGE_COUNT))
+            # 验证统计
+            TOTAL_FILES=$(find bin/targets -type f 2>/dev/null | wc -l)
+            CALC_TOTAL=$((FIRMWARE_COUNT + PACKAGE_COUNT + OTHER_COUNT))
             
             echo "=========================================="
             echo "📈 构建产物统计:"
             echo "  固件文件: $FIRMWARE_COUNT 个 (.bin/.img)"
             echo "  包文件: $PACKAGE_COUNT 个 (.gz/.ipk)"
             echo "  其他文件: $OTHER_COUNT 个"
-            echo "  总文件数: $((FIRMWARE_COUNT + PACKAGE_COUNT + OTHER_COUNT)) 个"
+            echo "  统计验证: 总数=$CALC_TOTAL, 实际总数=$TOTAL_FILES"
             echo ""
+            
+            # 验证统计结果
+            if [ $CALC_TOTAL -eq $TOTAL_FILES ]; then
+                echo "  ✅ 统计验证通过"
+            else
+                echo "  ⚠️ 统计验证不匹配，使用实际总数: $TOTAL_FILES"
+                # 如果验证失败，重新统计
+                FIRMWARE_COUNT=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+                PACKAGE_COUNT=$(find bin/targets -type f \( -name "*.gz" -o -name "*.ipk" \) 2>/dev/null | wc -l)
+                OTHER_COUNT=$((TOTAL_FILES - FIRMWARE_COUNT - PACKAGE_COUNT))
+                echo "  🔄 重新统计结果: 固件=$FIRMWARE_COUNT, 包=$PACKAGE_COUNT, 其他=$OTHER_COUNT"
+            fi
             
             # 显示所有固件文件的详细信息
             if [ $FIRMWARE_COUNT -gt 0 ]; then
@@ -1482,6 +1518,7 @@ jobs:
                   TYPE="🔧 普通固件"
                 fi
                 
+                echo "  类型: $TYPE"
                 echo ""
               done
             else
@@ -1558,12 +1595,12 @@ jobs:
           echo "📊 磁盘使用情况:"
           df -h /mnt
           
-          # 修复：使用正确的df选项获取可用空间
+          # 修复：直接使用echo而不是log函数
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-          log "/mnt 可用空间: ${available_gb}G"
+          echo "/mnt 可用空间: ${AVAILABLE_GB}G"
           
-          if [ $available_gb -lt 5 ]; then
+          if [ $AVAILABLE_GB -lt 5 ]; then
             echo "⚠️ 警告: 磁盘空间较低，建议清理"
           else
             echo "✅ 磁盘空间充足"
