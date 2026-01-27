@@ -1480,24 +1480,48 @@ smart_samba_selection() {
     log "📊 选择结果: $([ $use_samba36 -eq 1 ] && echo "samba36-server" || echo "samba4-server")"
 }
 
-# 新增：vsftpd冲突修复函数
+# 新增：vsftpd冲突修复函数（增强版）- 完全禁用vsftpd-alt
 fix_vsftpd_conflict() {
-    log "=== 修复vsftpd冲突 ==="
+    log "=== 🚨 修复vsftpd冲突（增强版）- 完全禁用vsftpd-alt ==="
     
-    # 确保vsftpd-alt被禁用，使用标准vsftpd
+    # 1. 完全禁用vsftpd-alt及其相关包
+    echo "# 🚫 完全禁用vsftpd-alt（修复包冲突）" >> .config
     echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
-    echo "CONFIG_PACKAGE_vsftpd=y" >> .config
-    
-    # 移除luci-app-vsftpd-alt（如果存在）
     echo "# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set" >> .config
+    
+    # 2. 确保标准vsftpd被启用
+    echo "# ✅ 启用标准vsftpd" >> .config
+    echo "CONFIG_PACKAGE_vsftpd=y" >> .config
     echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
     
-    # 设置中文语言包
+    # 3. 设置中文语言包
     if [ "$SELECTED_BRANCH" = "openwrt-21.02" ] || [ "$SELECTED_BRANCH" = "master" ]; then
         echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> .config
+        log "🔧 21.02/LEDE版本：已添加vsftpd中文语言包"
+    elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+        echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> .config
+        log "🔧 23.05版本：已添加vsftpd中文语言包"
     fi
     
-    log "✅ vsftpd冲突修复完成（使用标准vsftpd）"
+    # 4. WNDR3800专用配置
+    if [ "$DEVICE" = "netgear_wndr3800" ]; then
+        log "🔧 WNDR3800设备：确保使用标准vsftpd"
+        echo "# 🎯 WNDR3800设备专用配置" >> .config
+        echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
+        
+        # WNDR3800需要中文语言包
+        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ] || [ "$SELECTED_BRANCH" = "master" ]; then
+            echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> .config
+        fi
+    fi
+    
+    log "✅ vsftpd冲突修复完成（完全禁用vsftpd-alt，使用标准vsftpd）"
+    log "📌 修复详情："
+    log "  🚫 已禁用：vsftpd-alt, luci-app-vsftpd-alt"
+    log "  ✅ 已启用：vsftpd, luci-app-vsftpd"
+    log "  🌐 已添加：vsftpd中文语言包"
 }
 
 generate_config() {
@@ -1811,11 +1835,12 @@ generate_config() {
         log "✅ WNDR3800专用配置已应用"
     fi
     
+    # vsftpd冲突修复（必须在智能Samba选择之前）
+    log "🔧 执行vsftpd冲突修复..."
+    fix_vsftpd_conflict
+    
     # 智能Samba版本选择
     smart_samba_selection
-    
-    # vsftpd冲突修复
-    fix_vsftpd_conflict
     
     if [ "$CONFIG_MODE" = "base" ]; then
         log "🔧 使用基础模式 (最小化，用于测试编译)"
@@ -2163,56 +2188,38 @@ apply_config() {
         done
     fi
     
-    # 7. 修复缺失的关键USB驱动
-    if [ $missing_usb -gt 0 ]; then
-        echo ""
-        echo "🚨 修复缺失的关键USB驱动:"
-        
-        # 确保kmod-usb-xhci-hcd启用
-        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
-            echo "  修复: 启用 kmod-usb-xhci-hcd"
-            sed -i 's/^# CONFIG_PACKAGE_kmod-usb-xhci-hcd is not set$/CONFIG_PACKAGE_kmod-usb-xhci-hcd=y/' .config
-            if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
-                echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
-            fi
-            echo "  ✅ 已修复 kmod-usb-xhci-hcd"
-        fi
-        
-        # 确保kmod-usb-xhci-pci启用
-        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-pci=y" .config; then
-            echo "  修复: 启用 kmod-usb-xhci-pci"
-            echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
-            echo "  ✅ 已修复 kmod-usb-xhci-pci"
-        fi
-        
-        # 确保kmod-usb-xhci-plat-hcd启用
-        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" .config; then
-            echo "  修复: 启用 kmod-usb-xhci-plat-hcd"
-            echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config
-            echo "  ✅ 已修复 kmod-usb-xhci-plat-hcd"
-        fi
-        
-        # 确保kmod-usb-ohci-pci启用
-        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-ohci-pci=y" .config; then
-            echo "  修复: 启用 kmod-usb-ohci-pci"
-            echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
-            echo "  ✅ 已修复 kmod-usb-ohci-pci"
-        fi
-        
-        # 确保kmod-usb-dwc3-of-simple启用（如果是高通平台）
-        if [ "$TARGET" = "ipq40xx" ] && ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" .config; then
-            echo "  修复: 启用 kmod-usb-dwc3-of-simple"
-            echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
-            echo "  ✅ 已修复 kmod-usb-dwc3-of-simple"
-        fi
-        
-        # 确保kmod-usb-xhci-mtk启用（如果是雷凌平台）
-        if [ "$TARGET" = "ramips" ] && { [ "$SUBTARGET" = "mt76x8" ] || [ "$SUBTARGET" = "mt7621" ]; } && ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config; then
-            echo "  修复: 启用 kmod-usb-xhci-mtk"
-            echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
-            echo "  ✅ 已修复 kmod-usb-xhci-mtk"
-        fi
+    # 7. 🚨 强制修复vsftpd冲突（关键修复）
+    echo ""
+    echo "🚨 强制修复vsftpd包冲突:"
+    
+    # 确保vsftpd-alt完全被禁用
+    echo "  修复: 完全禁用 vsftpd-alt"
+    sed -i 's/CONFIG_PACKAGE_vsftpd-alt=y/# CONFIG_PACKAGE_vsftpd-alt is not set/g' .config
+    sed -i 's/CONFIG_PACKAGE_luci-app-vsftpd-alt=y/# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set/g' .config
+    
+    # 确保标准vsftpd被启用
+    echo "  修复: 启用标准 vsftpd"
+    sed -i 's/# CONFIG_PACKAGE_vsftpd is not set/CONFIG_PACKAGE_vsftpd=y/g' .config
+    sed -i 's/# CONFIG_PACKAGE_luci-app-vsftpd is not set/CONFIG_PACKAGE_luci-app-vsftpd=y/g' .config
+    
+    # 额外确保配置正确
+    echo "# 🚫 完全禁用vsftpd-alt（修复包冲突）" >> .config
+    echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+    echo "# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set" >> .config
+    echo "# ✅ 启用标准vsftpd" >> .config
+    echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
+    
+    # 对于WNDR3800的特殊修复
+    if [ "$DEVICE" = "netgear_wndr3800" ]; then
+        echo "  🎯 WNDR3800设备专用修复"
+        echo "# 🎯 WNDR3800设备专用配置" >> .config
+        echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
     fi
+    
+    echo "  ✅ vsftpd冲突修复完成"
     
     # 版本特定的配置修复 - 添加vsftpd修复
     if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
@@ -2221,18 +2228,6 @@ apply_config() {
         sed -i 's/CONFIG_PACKAGE_ntfs-3g-utils=y/# CONFIG_PACKAGE_ntfs-3g-utils is not set/g' .config
         sed -i 's/CONFIG_PACKAGE_ntfs3-mount=y/# CONFIG_PACKAGE_ntfs3-mount is not set/g' .config
         log "✅ NTFS配置修复完成"
-    fi
-    
-    # 修复vsftpd包冲突问题
-    log "🔧 修复vsftpd包冲突问题..."
-    sed -i 's/CONFIG_PACKAGE_vsftpd-alt=y/# CONFIG_PACKAGE_vsftpd-alt is not set/g' .config
-    sed -i 's/# CONFIG_PACKAGE_vsftpd is not set/CONFIG_PACKAGE_vsftpd=y/g' .config
-    
-    # 对于WNDR3800的特殊修复
-    if [ "$DEVICE" = "netgear_wndr3800" ]; then
-        log "🔧 WNDR3800: 确保使用标准vsftpd"
-        echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
-        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
     fi
     
     log "🔄 运行 make defconfig..."
@@ -2272,9 +2267,12 @@ apply_config() {
     echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
     echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
     
-    # 强制修复vsftpd冲突（在运行defconfig后再次修复）
+    # 🚨 强制修复vsftpd冲突（在运行defconfig后再次修复）
     log "🔧 强制修复vsftpd冲突..."
+    echo "# 🚫 完全禁用vsftpd-alt（最终修复）" >> .config
     echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+    echo "# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set" >> .config
+    echo "# ✅ 启用标准vsftpd（最终修复）" >> .config
     echo "CONFIG_PACKAGE_vsftpd=y" >> .config
     echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
     
