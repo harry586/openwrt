@@ -2202,13 +2202,57 @@ apply_config() {
     sed -i 's/# CONFIG_PACKAGE_vsftpd is not set/CONFIG_PACKAGE_vsftpd=y/g' .config
     sed -i 's/# CONFIG_PACKAGE_luci-app-vsftpd is not set/CONFIG_PACKAGE_luci-app-vsftpd=y/g' .config
     
-    # 额外确保配置正确
-    echo "# 🚫 完全禁用vsftpd-alt（修复包冲突）" >> .config
-    echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
-    echo "# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set" >> .config
-    echo "# ✅ 启用标准vsftpd" >> .config
-    echo "CONFIG_PACKAGE_vsftpd=y" >> .config
-    echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
+    # 🚨 额外深度修复vsftpd冲突
+    echo ""
+    echo "🚨 深度修复vsftpd冲突（最终检查）..."
+    
+    # 检查当前状态
+    VSFTPD_ALT_ENABLED=$(grep -c "^CONFIG_PACKAGE_vsftpd-alt=y" .config)
+    VSFTPD_ENABLED=$(grep -c "^CONFIG_PACKAGE_vsftpd=y" .config)
+    
+    echo "  当前状态: vsftpd=$VSFTPD_ENABLED, vsftpd-alt=$VSFTPD_ALT_ENABLED"
+    
+    # 如果vsftpd-alt被启用，强制修复
+    if [ $VSFTPD_ALT_ENABLED -gt 0 ]; then
+        echo "  🚨 发现冲突: vsftpd-alt被启用，执行强制修复..."
+        
+        # 方法1：直接删除vsftpd-alt相关配置
+        sed -i '/^CONFIG_PACKAGE_vsftpd-alt=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_luci-app-vsftpd-alt=y/d' .config
+        
+        # 方法2：确保禁用注释存在
+        echo "# 🚫 完全禁用vsftpd-alt（深度修复）" >> .config
+        echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set" >> .config
+    fi
+    
+    # 确保vsftpd被启用
+    if [ $VSFTPD_ENABLED -eq 0 ]; then
+        echo "  🔧 启用标准vsftpd..."
+        echo "# ✅ 启用标准vsftpd" >> .config
+        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
+        
+        # 根据版本添加语言包
+        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ] || [ "$SELECTED_BRANCH" = "master" ]; then
+            echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> .config
+        elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> .config
+        fi
+    fi
+    
+    # 最终检查
+    echo "  🔍 最终检查..."
+    VSFTPD_ALT_FINAL=$(grep -c "^CONFIG_PACKAGE_vsftpd-alt=y" .config)
+    VSFTPD_FINAL=$(grep -c "^CONFIG_PACKAGE_vsftpd=y" .config)
+    
+    echo "  修复后状态: vsftpd=$VSFTPD_FINAL, vsftpd-alt=$VSFTPD_ALT_FINAL"
+    
+    if [ $VSFTPD_ALT_FINAL -eq 0 ] && [ $VSFTPD_FINAL -gt 0 ]; then
+        echo "  ✅ vsftpd冲突修复成功"
+    else
+        echo "  ⚠️ vsftpd冲突可能未完全修复"
+    fi
     
     # 对于WNDR3800的特殊修复
     if [ "$DEVICE" = "netgear_wndr3800" ]; then
@@ -3133,9 +3177,9 @@ post_build_space_check() {
     fi
     
     # 检查可用空间 - 修复：使用正确的df选项
-    local available_space=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
+    local available_space=$(df /mnt --output=avail | tail -1)
     local available_gb=$((available_space / 1024 / 1024))
-    log "/mnt 可用空间: ${available_gb}G"
+    echo "/mnt 可用空间: ${available_gb}G"
     
     if [ $available_gb -lt 5 ]; then
         log "⚠️ 警告: 磁盘空间较低，建议清理"
