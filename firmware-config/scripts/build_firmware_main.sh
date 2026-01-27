@@ -1429,6 +1429,77 @@ pre_build_space_check() {
     log "✅ 空间检查完成"
 }
 
+# 新增：智能Samba版本选择函数
+smart_samba_selection() {
+    load_env
+    log "=== 智能Samba版本选择 ==="
+    
+    # 判断是否使用samba36
+    local use_samba36=0
+    
+    # 规则1：仅LEDE源码使用samba36
+    if [ "$SELECTED_REPO_URL" = "https://github.com/coolsnowwolf/lede.git" ]; then
+        log "🔧 LEDE源码，使用samba36-server"
+        use_samba36=1
+    # 规则2：仅wndr3800设备使用samba36
+    elif [ "$DEVICE" = "netgear_wndr3800" ]; then
+        log "🔧 WNDR3800设备（老机器），使用samba36-server"
+        use_samba36=1
+    else
+        log "🔧 使用samba4-server"
+        use_samba36=0
+    fi
+    
+    if [ $use_samba36 -eq 1 ]; then
+        echo "# CONFIG_PACKAGE_samba4-server is not set" >> .config
+        echo "# CONFIG_PACKAGE_samba4-libs is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-samba4 is not set" >> .config
+        
+        echo "CONFIG_PACKAGE_samba36-server=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-samba=y" >> .config
+        
+        # 为LEDE或21.02版本添加中文语言包
+        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ] || [ "$SELECTED_REPO_URL" = "https://github.com/coolsnowwolf/lede.git" ]; then
+            echo "CONFIG_PACKAGE_luci-i18n-samba-zh-cn=y" >> .config
+        fi
+    else
+        echo "# CONFIG_PACKAGE_samba36-server is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-samba is not set" >> .config
+        
+        echo "CONFIG_PACKAGE_samba4-server=y" >> .config
+        echo "CONFIG_PACKAGE_samba4-libs=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-samba4=y" >> .config
+        
+        # 为23.05版本添加中文语言包
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            echo "CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y" >> .config
+        fi
+    fi
+    
+    log "✅ Samba版本选择完成"
+    log "📊 选择结果: $([ $use_samba36 -eq 1 ] && echo "samba36-server" || echo "samba4-server")"
+}
+
+# 新增：vsftpd冲突修复函数
+fix_vsftpd_conflict() {
+    log "=== 修复vsftpd冲突 ==="
+    
+    # 确保vsftpd-alt被禁用，使用标准vsftpd
+    echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+    echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+    
+    # 移除luci-app-vsftpd-alt（如果存在）
+    echo "# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set" >> .config
+    echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
+    
+    # 设置中文语言包
+    if [ "$SELECTED_BRANCH" = "openwrt-21.02" ] || [ "$SELECTED_BRANCH" = "master" ]; then
+        echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> .config
+    fi
+    
+    log "✅ vsftpd冲突修复完成（使用标准vsftpd）"
+}
+
 generate_config() {
     local extra_packages=$1
     load_env
@@ -1740,6 +1811,12 @@ generate_config() {
         log "✅ WNDR3800专用配置已应用"
     fi
     
+    # 智能Samba版本选择
+    smart_samba_selection
+    
+    # vsftpd冲突修复
+    fix_vsftpd_conflict
+    
     if [ "$CONFIG_MODE" = "base" ]; then
         log "🔧 使用基础模式 (最小化，用于测试编译)"
         echo "# CONFIG_PACKAGE_luci-app-turboacc is not set" >> .config
@@ -1755,12 +1832,8 @@ generate_config() {
           "CONFIG_PACKAGE_kmod-fast-classifier=y"
           "CONFIG_PACKAGE_luci-app-upnp=y"
           "CONFIG_PACKAGE_miniupnpd=y"
-          "CONFIG_PACKAGE_vsftpd=y"  # 使用标准vsftpd
-          "CONFIG_PACKAGE_luci-app-vsftpd=y"
           "CONFIG_PACKAGE_luci-app-arpbind=y"
           "CONFIG_PACKAGE_luci-app-cpulimit=y"
-          "CONFIG_PACKAGE_samba4-server=y"
-          "CONFIG_PACKAGE_luci-app-samba4=y"
           "CONFIG_PACKAGE_luci-app-wechatpush=y"
           "CONFIG_PACKAGE_sqm-scripts=y"
           "CONFIG_PACKAGE_luci-app-sqm=y"
@@ -1784,10 +1857,8 @@ generate_config() {
         if [ "$SELECTED_BRANCH" = "openwrt-21.02" ] || [ "$SELECTED_BRANCH" = "master" ]; then
             echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-arpbind-zh-cn=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-cpulimit-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-hd-idle-zh-cn=y" >> .config
@@ -2201,7 +2272,8 @@ apply_config() {
     echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
     echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
     
-    # 确保使用标准vsftpd
+    # 强制修复vsftpd冲突（在运行defconfig后再次修复）
+    log "🔧 强制修复vsftpd冲突..."
     echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
     echo "CONFIG_PACKAGE_vsftpd=y" >> .config
     echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
