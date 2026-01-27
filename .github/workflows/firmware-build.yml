@@ -728,10 +728,10 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 15 完成"
       
-      # 步骤 16: 应用配置并显示详情（完整版）
-      - name: "16. 应用配置并显示详情（完整版）"
+      # 步骤 16: 应用配置并显示详情（完整版）- 增强vsftpd冲突检查
+      - name: "16. 应用配置并显示详情（完整版）- 增强vsftpd冲突检查"
         run: |
-          echo "=== 步骤 16: 应用配置并显示详情（完整版）==="
+          echo "=== 步骤 16: 应用配置并显示详情（完整版）- 增强vsftpd冲突检查 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -808,12 +808,44 @@ jobs:
             if grep -q "^CONFIG_PACKAGE_vsftpd=y" "/mnt/openwrt-build/.config"; then
               echo "  ✅ vsftpd（标准版）: 已启用"
               if grep -q "^# CONFIG_PACKAGE_vsftpd-alt is not set" "/mnt/openwrt-build/.config"; then
-                echo "  ✅ vsftpd-alt（替代版）: 已禁用"
+                echo "  ✅ vsftpd-alt（替代版）: 已禁用（无冲突）"
               else
                 echo "  ⚠️ vsftpd-alt: 仍被启用，需要修复冲突"
+                echo "  🚨 检测到vsftpd包冲突，正在自动修复..."
+                # 自动修复代码
+                sed -i 's/CONFIG_PACKAGE_vsftpd-alt=y/# CONFIG_PACKAGE_vsftpd-alt is not set/g' "/mnt/openwrt-build/.config"
+                echo "CONFIG_PACKAGE_vsftpd=y" >> "/mnt/openwrt-build/.config"
+                echo "# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set" >> "/mnt/openwrt-build/.config"
+                echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> "/mnt/openwrt-build/.config"
+                echo "✅ 已自动修复vsftpd冲突"
               fi
             else
               echo "  ❌ vsftpd: 未启用"
+              echo "  🔧 自动启用标准vsftpd..."
+              echo "CONFIG_PACKAGE_vsftpd=y" >> "/mnt/openwrt-build/.config"
+              echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> "/mnt/openwrt-build/.config"
+              echo "✅ 已启用标准vsftpd"
+            fi
+            
+            # 🚨 额外检查vsftpd冲突
+            echo ""
+            echo "🚨 vsftpd冲突状态深度检查:"
+            echo "  标准vsftpd状态: $(grep -q "^CONFIG_PACKAGE_vsftpd=y" "/mnt/openwrt-build/.config" && echo "✅ 已启用" || echo "❌ 未启用")"
+            echo "  替代版vsftpd-alt状态: $(grep -q "^CONFIG_PACKAGE_vsftpd-alt=y" "/mnt/openwrt-build/.config" && echo "❌ 已启用（冲突！）" || echo "✅ 已禁用（正常）")"
+            echo "  vsftpd语言包状态: $(grep -q "^CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" "/mnt/openwrt-build/.config" && echo "✅ 已启用" || echo "⚠️ 未启用")"
+            
+            # 如果发现vsftpd-alt被启用，强制修复
+            if grep -q "^CONFIG_PACKAGE_vsftpd-alt=y" "/mnt/openwrt-build/.config"; then
+              echo "  🚨 发现vsftpd-alt被启用，执行强制修复..."
+              sed -i 's/CONFIG_PACKAGE_vsftpd-alt=y/# CONFIG_PACKAGE_vsftpd-alt is not set/g' "/mnt/openwrt-build/.config"
+              sed -i 's/CONFIG_PACKAGE_luci-app-vsftpd-alt=y/# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set/g' "/mnt/openwrt-build/.config"
+              echo "# 🚫 强制禁用vsftpd-alt（修复冲突）" >> "/mnt/openwrt-build/.config"
+              echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> "/mnt/openwrt-build/.config"
+              echo "# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set" >> "/mnt/openwrt-build/.config"
+              echo "# ✅ 强制启用标准vsftpd" >> "/mnt/openwrt-build/.config"
+              echo "CONFIG_PACKAGE_vsftpd=y" >> "/mnt/openwrt-build/.config"
+              echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> "/mnt/openwrt-build/.config"
+              echo "  ✅ 已强制修复vsftpd冲突"
             fi
             
             echo ""
@@ -867,6 +899,28 @@ jobs:
               echo "  💡 使用samba4-server（其他设备和源码）"
             else
               echo "  ❌ Samba: 未启用"
+            fi
+            
+            # 🚨 最终vsftpd冲突检查
+            echo ""
+            echo "🚨 最终vsftpd冲突检查结果:"
+            VSFTPD_ALT_ENABLED=$(grep -c "^CONFIG_PACKAGE_vsftpd-alt=y" "/mnt/openwrt-build/.config")
+            VSFTPD_ENABLED=$(grep -c "^CONFIG_PACKAGE_vsftpd=y" "/mnt/openwrt-build/.config")
+            
+            if [ $VSFTPD_ALT_ENABLED -eq 0 ] && [ $VSFTPD_ENABLED -gt 0 ]; then
+              echo "  ✅ 无冲突: 已完全禁用vsftpd-alt，启用标准vsftpd"
+              echo "  💡 编译将正常进行，不会出现包冲突错误"
+            elif [ $VSFTPD_ALT_ENABLED -gt 0 ]; then
+              echo "  ❌ 冲突: vsftpd-alt仍被启用"
+              echo "  🔧 执行最终修复..."
+              echo "# 🚫 最终修复：完全禁用vsftpd-alt" >> "/mnt/openwrt-build/.config"
+              echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> "/mnt/openwrt-build/.config"
+              echo "# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set" >> "/mnt/openwrt-build/.config"
+              echo "CONFIG_PACKAGE_vsftpd=y" >> "/mnt/openwrt-build/.config"
+              echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> "/mnt/openwrt-build/.config"
+              echo "  ✅ 最终修复完成"
+            else
+              echo "  ⚠️ 警告: vsftpd未启用"
             fi
             
           else
@@ -1217,9 +1271,9 @@ jobs:
           echo "🟢 步骤 22 完成"
       
       # 步骤 23: 编译固件（智能并行优化版）
-      - name: "23. 编译固件（智能并行优化版）"
+      - name: "23. 编译固件（智能并行优化版）- 修复vsftpd冲突"
         run: |
-          echo "=== 步骤 23: 编译固件（智能并行优化版） ==="
+          echo "=== 步骤 23: 编译固件（智能并行优化版）- 修复vsftpd冲突 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -1238,6 +1292,36 @@ jobs:
           echo "  并行优化: ${{ env.ENABLE_PARALLEL }}"
           echo "  源代码: $SELECTED_REPO_URL"
           echo "  分支: $SELECTED_BRANCH"
+          
+          # 🚨 编译前最终vsftpd冲突检查
+          echo ""
+          echo "🚨 编译前最终vsftpd冲突检查:"
+          if [ -f ".config" ]; then
+            VSFTPD_ALT_COUNT=$(grep -c "^CONFIG_PACKAGE_vsftpd-alt=y" .config)
+            VSFTPD_COUNT=$(grep -c "^CONFIG_PACKAGE_vsftpd=y" .config)
+            
+            echo "  标准vsftpd状态: $([ $VSFTPD_COUNT -gt 0 ] && echo "✅ 已启用" || echo "❌ 未启用")"
+            echo "  替代版vsftpd-alt状态: $([ $VSFTPD_ALT_COUNT -gt 0 ] && echo "❌ 已启用（需要修复）" || echo "✅ 已禁用（正常）")"
+            
+            if [ $VSFTPD_ALT_COUNT -gt 0 ]; then
+              echo "  🚨 发现vsftpd-alt被启用，执行最终修复..."
+              sed -i 's/CONFIG_PACKAGE_vsftpd-alt=y/# CONFIG_PACKAGE_vsftpd-alt is not set/g' .config
+              sed -i 's/CONFIG_PACKAGE_luci-app-vsftpd-alt=y/# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set/g' .config
+              
+              # 确保标准vsftpd被启用
+              if [ $VSFTPD_COUNT -eq 0 ]; then
+                echo "  🔧 启用标准vsftpd..."
+                echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+                echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
+              fi
+              
+              echo "  ✅ 最终修复完成"
+            else
+              echo "  ✅ vsftpd配置正常，无冲突"
+            fi
+          else
+            echo "  ⚠️ 配置文件不存在"
+          fi
           
           # 智能判断最佳并行任务数 - 优化版
           if [ "${{ env.ENABLE_PARALLEL }}" = "true" ]; then
@@ -1280,6 +1364,7 @@ jobs:
           echo "  - 版本: ${{ github.event.inputs.version_selection }}"
           echo "  - 配置模式: ${{ github.event.inputs.config_mode }}"
           echo "  - 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "  - 🎯 vsftpd冲突已修复: 完全禁用vsftpd-alt，使用标准vsftpd"
           
           # 设置编译环境变量
           export FORCE_UNSAFE_CONFIGURE=1
@@ -1314,6 +1399,17 @@ jobs:
             echo "❌ 错误: 编译失败，退出代码: $BUILD_EXIT_CODE"
             echo "🔍 编译日志中的错误摘要:"
             grep -i "error\|failed" build.log | tail -20 || true
+            
+            # 检查是否是vsftpd冲突错误
+            if grep -q "vsftpd.*already provided by package.*vsftpd-alt" build.log; then
+              echo ""
+              echo "🚨 检测到vsftpd冲突错误:"
+              echo "💡 建议:"
+              echo "  1. 确保vsftpd-alt完全被禁用"
+              echo "  2. 确保标准vsftpd被启用"
+              echo "  3. 重新运行构建工作流"
+            fi
+            
             exit $BUILD_EXIT_CODE
           fi
           
@@ -1465,7 +1561,7 @@ jobs:
           # 修复：使用正确的df选项获取可用空间
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-          echo "/mnt 可用空间: ${available_gb}G"
+          log "/mnt 可用空间: ${available_gb}G"
           
           if [ $available_gb -lt 5 ]; then
             echo "⚠️ 警告: 磁盘空间较低，建议清理"
@@ -1613,6 +1709,14 @@ jobs:
             echo "  🔧 其他设备和源码: 使用 samba4-server"
             echo "  💡 新版本samba4功能更强大，支持更好"
           fi
+          
+          # vsftpd冲突修复总结
+          echo ""
+          echo "📁 vsftpd冲突修复总结:"
+          echo "  ✅ 冲突修复: 完全禁用vsftpd-alt"
+          echo "  ✅ 启用版本: 标准vsftpd (稳定版)"
+          echo "  ✅ 中文支持: 已添加vsftpd中文语言包"
+          echo "  💡 修复效果: 解决了包冲突，确保编译成功"
           
           # 自定义文件集成状态（增强版）- 无SSH测试相关信息
           echo ""
