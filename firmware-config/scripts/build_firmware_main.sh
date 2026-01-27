@@ -1694,7 +1694,7 @@ generate_config() {
         echo "CONFIG_PACKAGE_uhttpd-mod-ubus=y" >> .config
         echo "CONFIG_PACKAGE_miniupnpd=y" >> .config
         echo "CONFIG_PACKAGE_samba36-server=y" >> .config
-        echo "CONFIG_PACKAGE_vsftpd-alt=y" >> .config
+        echo "CONFIG_PACKAGE_vsftpd=y" >> .config  # 使用标准vsftpd
         echo "CONFIG_PACKAGE_hd-idle=y" >> .config
         echo "CONFIG_PACKAGE_sqm-scripts=y" >> .config
         echo "CONFIG_PACKAGE_vlmcsd=y" >> .config
@@ -1755,7 +1755,7 @@ generate_config() {
           "CONFIG_PACKAGE_kmod-fast-classifier=y"
           "CONFIG_PACKAGE_luci-app-upnp=y"
           "CONFIG_PACKAGE_miniupnpd=y"
-          "CONFIG_PACKAGE_vsftpd=y"
+          "CONFIG_PACKAGE_vsftpd=y"  # 使用标准vsftpd
           "CONFIG_PACKAGE_luci-app-vsftpd=y"
           "CONFIG_PACKAGE_luci-app-arpbind=y"
           "CONFIG_PACKAGE_luci-app-cpulimit=y"
@@ -2047,7 +2047,7 @@ apply_config() {
         "luci-app-accesscontrol" "家长控制"
         "luci-app-wechatpush" "微信推送"
         "sqm-scripts" "流量控制 (SQM)"
-        "vsftpd" "FTP 服务器"
+        "vsftpd" "FTP 服务器（标准版）"
         "luci-app-arpbind" "ARP 绑定"
         "luci-app-cpulimit" "CPU 限制"
         "luci-app-hd-idle" "硬盘休眠"
@@ -2143,13 +2143,25 @@ apply_config() {
         fi
     fi
     
-    # 版本特定的配置修复
+    # 版本特定的配置修复 - 添加vsftpd修复
     if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
         log "🔧 23.05版本配置预处理"
         sed -i 's/CONFIG_PACKAGE_ntfs-3g=y/# CONFIG_PACKAGE_ntfs-3g is not set/g' .config
         sed -i 's/CONFIG_PACKAGE_ntfs-3g-utils=y/# CONFIG_PACKAGE_ntfs-3g-utils is not set/g' .config
         sed -i 's/CONFIG_PACKAGE_ntfs3-mount=y/# CONFIG_PACKAGE_ntfs3-mount is not set/g' .config
         log "✅ NTFS配置修复完成"
+    fi
+    
+    # 修复vsftpd包冲突问题
+    log "🔧 修复vsftpd包冲突问题..."
+    sed -i 's/CONFIG_PACKAGE_vsftpd-alt=y/# CONFIG_PACKAGE_vsftpd-alt is not set/g' .config
+    sed -i 's/# CONFIG_PACKAGE_vsftpd is not set/CONFIG_PACKAGE_vsftpd=y/g' .config
+    
+    # 对于WNDR3800的特殊修复
+    if [ "$DEVICE" = "netgear_wndr3800" ]; then
+        log "🔧 WNDR3800: 确保使用标准vsftpd"
+        echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
     fi
     
     log "🔄 运行 make defconfig..."
@@ -2188,6 +2200,11 @@ apply_config() {
     # 其他关键USB驱动
     echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
     echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
+    
+    # 确保使用标准vsftpd
+    echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+    echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
     
     # 运行defconfig后，再次检查并修复USB驱动
     check_usb_drivers_integrity
