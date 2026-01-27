@@ -22,7 +22,7 @@ on:
         default: "21.02"
         options: ["23.05", "21.02"]
       config_mode:
-        description: "⚙️ 配置模式选择 - 🟣 基础模式 - 最小化配置，用于测试编译。🟠 正常模式 - 完整功能配置：✅ TurboACC 网络加速 ✅ UPnP 自动端口转发 ✅ Samba 文件共享 ✅ 磁盘管理 ✅ KMS 激活服务 ✅ SmartDNS 智能DNS ✅ 家长控制 ✅ 微信推送 ✅ 流量控制 (SQM) ✅ FTP 服务器 ✅ ARP 绑定 ✅ CPU 限制 ✅ 硬盘休眠"
+        description: "⚙️ 配置模式选择 - 🟣 基础模式 - 最小化配置，用于测试编译。🟠 正常模式 - 完整功能配置：✅ TurboACC 网络加速 ✅ UPnP 自动端口转发 ✅ Samba 文件共享 ✅ 磁盘管理 ✅ KMS 激活服务 ✅ SmartDNS 智能DNS ✅ 家长控制 ✅ 微信推送 ✅ 流量控制 (SQM) ✅ FTP 服务器 (vsftpd标准版) ✅ ARP 绑定 ✅ CPU 限制 ✅ 硬盘休眠"
         required: true
         type: choice
         default: "normal"
@@ -801,7 +801,7 @@ jobs:
             echo "  家长控制 (luci-app-accesscontrol): $(grep -q "^CONFIG_PACKAGE_luci-app-accesscontrol=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  微信推送 (luci-app-wechatpush): $(grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  流量控制 (SQM) (luci-app-sqm): $(grep -q "^CONFIG_PACKAGE_luci-app-sqm=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  FTP 服务器 (luci-app-vsftpd): $(grep -q "^CONFIG_PACKAGE_luci-app-vsftpd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  FTP 服务器 (vsftpd标准版) (luci-app-vsftpd): $(grep -q "^CONFIG_PACKAGE_luci-app-vsftpd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  ARP 绑定 (luci-app-arpbind): $(grep -q "^CONFIG_PACKAGE_luci-app-arpbind=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  CPU 限制 (luci-app-cpulimit): $(grep -q "^CONFIG_PACKAGE_luci-app-cpulimit=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  硬盘休眠 (luci-app-hd-idle): $(grep -q "^CONFIG_PACKAGE_luci-app-hd-idle=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
@@ -810,7 +810,7 @@ jobs:
             echo "🎯 配置模式: ${{ github.event.inputs.config_mode }}"
             if [ "${{ github.event.inputs.config_mode }}" = "normal" ]; then
               echo "✅ 当前为正常模式（完整功能）"
-              echo "📊 正常模式包含所有功能性插件"
+              echo "📊 正常模式包含所有功能性插件，包括 vsftpd 标准版FTP服务器"
             else
               echo "🔧 当前为基础模式（最小化配置）"
               echo "📊 基础模式仅包含核心功能，用于测试编译"
@@ -824,6 +824,7 @@ jobs:
             echo "  - 分支: $SELECTED_BRANCH"
             echo "  - USB驱动: 已启用所有关键驱动"
             echo "  - 插件数量: $enabled 个已启用"
+            echo "  - FTP服务器: vsftpd（标准版）已启用"
             
             # 显示前10个启用的插件
             echo ""
@@ -831,6 +832,18 @@ jobs:
             grep "^CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config" | head -10 | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g' | while read pkg; do
               echo "  ✅ $pkg"
             done
+            
+            # 检查vsftpd状态
+            echo ""
+            echo "🔍 FTP服务器配置状态:"
+            if grep -q "^CONFIG_PACKAGE_vsftpd=y" "/mnt/openwrt-build/.config"; then
+              echo "  ✅ vsftpd（标准版）: 已启用"
+              if grep -q "^# CONFIG_PACKAGE_vsftpd-alt is not set" "/mnt/openwrt-build/.config"; then
+                echo "  ✅ vsftpd-alt（替代版）: 已禁用"
+              fi
+            else
+              echo "  ❌ vsftpd: 未启用"
+            fi
           else
             echo "❌ 配置文件不存在"
           fi
