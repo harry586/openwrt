@@ -789,22 +789,32 @@ jobs:
             echo "  CONFIG_PACKAGE_kmod-scsi-core: $(grep -q "^CONFIG_PACKAGE_kmod-scsi-core=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             
             echo ""
-            echo "📦 功能性插件状态:"
+            echo "📋 Samba版本选择状态:"
+            # 检查Samba版本选择
+            if [ "${{ github.event.inputs.source_selection }}" = "lede" ]; then
+              echo "  🎯 LEDE源码: 使用 samba36-server"
+              grep -q "^CONFIG_PACKAGE_samba36-server=y" "/mnt/openwrt-build/.config" && echo "  ✅ samba36-server: 已启用" || echo "  ❌ samba36-server: 未启用"
+            elif [ "${{ github.event.inputs.device_name }}" = "wndr3800" ]; then
+              echo "  🎯 WNDR3800设备（老机器）: 使用 samba36-server"
+              grep -q "^CONFIG_PACKAGE_samba36-server=y" "/mnt/openwrt-build/.config" && echo "  ✅ samba36-server: 已启用" || echo "  ❌ samba36-server: 未启用"
+            else
+              echo "  🎯 其他设备和源码: 使用 samba4-server"
+              grep -q "^CONFIG_PACKAGE_samba4-server=y" "/mnt/openwrt-build/.config" && echo "  ✅ samba4-server: 已启用" || echo "  ❌ samba4-server: 未启用"
+              grep -q "^CONFIG_PACKAGE_samba4-libs=y" "/mnt/openwrt-build/.config" && echo "  ✅ samba4-libs: 已启用" || echo "  ❌ samba4-libs: 未启用"
+            fi
             
-            # 功能性插件状态
-            echo "  TurboACC 网络加速 (luci-app-turboacc): $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  UPnP 自动端口转发 (luci-app-upnp): $(grep -q "^CONFIG_PACKAGE_luci-app-upnp=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  Samba 文件共享 (luci-app-samba4): $(grep -q "^CONFIG_PACKAGE_luci-app-samba4=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  磁盘管理 (luci-app-diskman): $(grep -q "^CONFIG_PACKAGE_luci-app-diskman=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  KMS 激活服务 (luci-app-vlmcsd): $(grep -q "^CONFIG_PACKAGE_luci-app-vlmcsd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  SmartDNS 智能DNS (luci-app-smartdns): $(grep -q "^CONFIG_PACKAGE_luci-app-smartdns=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  家长控制 (luci-app-accesscontrol): $(grep -q "^CONFIG_PACKAGE_luci-app-accesscontrol=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  微信推送 (luci-app-wechatpush): $(grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  流量控制 (SQM) (luci-app-sqm): $(grep -q "^CONFIG_PACKAGE_luci-app-sqm=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  FTP 服务器 (vsftpd标准版) (luci-app-vsftpd): $(grep -q "^CONFIG_PACKAGE_luci-app-vsftpd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  ARP 绑定 (luci-app-arpbind): $(grep -q "^CONFIG_PACKAGE_luci-app-arpbind=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CPU 限制 (luci-app-cpulimit): $(grep -q "^CONFIG_PACKAGE_luci-app-cpulimit=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  硬盘休眠 (luci-app-hd-idle): $(grep -q "^CONFIG_PACKAGE_luci-app-hd-idle=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo ""
+            echo "📋 FTP服务器配置状态:"
+            if grep -q "^CONFIG_PACKAGE_vsftpd=y" "/mnt/openwrt-build/.config"; then
+              echo "  ✅ vsftpd（标准版）: 已启用"
+              if grep -q "^# CONFIG_PACKAGE_vsftpd-alt is not set" "/mnt/openwrt-build/.config"; then
+                echo "  ✅ vsftpd-alt（替代版）: 已禁用"
+              else
+                echo "  ⚠️ vsftpd-alt: 仍被启用，需要修复冲突"
+              fi
+            else
+              echo "  ❌ vsftpd: 未启用"
+            fi
             
             echo ""
             echo "🎯 配置模式: ${{ github.event.inputs.config_mode }}"
@@ -844,6 +854,21 @@ jobs:
             else
               echo "  ❌ vsftpd: 未启用"
             fi
+            
+            # 检查Samba状态
+            echo ""
+            echo "🔍 Samba配置状态:"
+            if grep -q "^CONFIG_PACKAGE_samba36-server=y" "/mnt/openwrt-build/.config"; then
+              echo "  ✅ samba36-server: 已启用"
+              echo "  💡 使用samba36-server（LEDE源码或WNDR3800设备）"
+            elif grep -q "^CONFIG_PACKAGE_samba4-server=y" "/mnt/openwrt-build/.config"; then
+              echo "  ✅ samba4-server: 已启用"
+              echo "  ✅ samba4-libs: $(grep -q "^CONFIG_PACKAGE_samba4-libs=y" "/mnt/openwrt-build/.config" && echo "已启用" || echo "未启用")"
+              echo "  💡 使用samba4-server（其他设备和源码）"
+            else
+              echo "  ❌ Samba: 未启用"
+            fi
+            
           else
             echo "❌ 配置文件不存在"
           fi
@@ -1352,13 +1377,13 @@ jobs:
                 
                 # 判断文件类型
                 if [[ "$FILE_NAME" == *factory* ]]; then
-                  echo "  类型: 🏭 工厂固件 (用于首次刷机)"
+                  TYPE="🏭 工厂固件 (用于首次刷机)"
                 elif [[ "$FILE_NAME" == *sysupgrade* ]]; then
-                  echo "  类型: 🔄 系统升级固件 (用于已安装OpenWrt的设备)"
+                  TYPE="🔄 系统升级固件 (用于已安装OpenWrt的设备)"
                 elif [[ "$FILE_NAME" == *initramfs* ]]; then
-                  echo "  类型: 🚀 内存启动固件 (用于测试和救援)"
+                  TYPE="🚀 内存启动固件 (用于测试和救援)"
                 else
-                  echo "  类型: 🔧 普通固件"
+                  TYPE="🔧 普通固件"
                 fi
                 
                 echo ""
@@ -1440,9 +1465,9 @@ jobs:
           # 修复：使用正确的df选项获取可用空间
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-          echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+          echo "/mnt 可用空间: ${available_gb}G"
           
-          if [ $AVAILABLE_GB -lt 5 ]; then
+          if [ $available_gb -lt 5 ]; then
             echo "⚠️ 警告: 磁盘空间较低，建议清理"
           else
             echo "✅ 磁盘空间充足"
@@ -1574,6 +1599,20 @@ jobs:
           fi
           
           echo "  💡 这是正常的：系统编译器编译工具链，SDK编译器编译固件"
+          
+          # Samba版本选择总结
+          echo ""
+          echo "💽 Samba版本选择总结:"
+          if [ "${{ github.event.inputs.source_selection }}" = "lede" ]; then
+            echo "  🔧 LEDE源码: 使用 samba36-server"
+            echo "  💡 LEDE源码对samba4支持有限，使用samba36更稳定"
+          elif [ "${{ github.event.inputs.device_name }}" = "wndr3800" ]; then
+            echo "  🔧 WNDR3800设备（老机器）: 使用 samba36-server"
+            echo "  💡 老设备性能有限，使用samba36更轻量"
+          else
+            echo "  🔧 其他设备和源码: 使用 samba4-server"
+            echo "  💡 新版本samba4功能更强大，支持更好"
+          fi
           
           # 自定义文件集成状态（增强版）- 无SSH测试相关信息
           echo ""
