@@ -2041,11 +2041,12 @@ check_usb_drivers_integrity() {
     fi
 }
 
+# 应用配置并显示详情 - 修复版（主要修复点）
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 应用配置并显示详情 ==="
+    log "=== 应用配置并显示详情（修复版） ==="
     
     if [ ! -f ".config" ]; then
         log "❌ 错误: .config 文件不存在，无法应用配置"
@@ -2188,9 +2189,9 @@ apply_config() {
         done
     fi
     
-    # 7. 🚨 强制修复vsftpd冲突（关键修复）
+    # 7. 🚨 强制修复vsftpd冲突（关键修复）- 修复版
     echo ""
-    echo "🚨 强制修复vsftpd包冲突:"
+    echo "🚨 强制修复vsftpd包冲突（修复版）:"
     
     # 确保vsftpd-alt完全被禁用
     echo "  修复: 完全禁用 vsftpd-alt"
@@ -2202,34 +2203,18 @@ apply_config() {
     sed -i 's/# CONFIG_PACKAGE_vsftpd is not set/CONFIG_PACKAGE_vsftpd=y/g' .config
     sed -i 's/# CONFIG_PACKAGE_luci-app-vsftpd is not set/CONFIG_PACKAGE_luci-app-vsftpd=y/g' .config
     
-    # 🚨 额外深度修复vsftpd冲突
+    # 🚨 简化vsftpd冲突修复 - 直接强制处理
     echo ""
-    echo "🚨 深度修复vsftpd冲突（最终检查）..."
+    echo "🚨 简化vsftpd冲突修复（直接强制处理）..."
     
-    # 检查当前状态
-    VSFTPD_ALT_ENABLED=$(grep -c "^CONFIG_PACKAGE_vsftpd-alt=y" .config)
-    VSFTPD_ENABLED=$(grep -c "^CONFIG_PACKAGE_vsftpd=y" .config)
+    # 1. 删除所有vsftpd-alt相关的配置行
+    sed -i '/^CONFIG_PACKAGE_vsftpd-alt/d' .config
+    sed -i '/^CONFIG_PACKAGE_luci-app-vsftpd-alt/d' .config
+    sed -i '/^CONFIG_PACKAGE_luci-i18n-vsftpd-alt/d' .config
     
-    echo "  当前状态: vsftpd=$VSFTPD_ENABLED, vsftpd-alt=$VSFTPD_ALT_ENABLED"
-    
-    # 如果vsftpd-alt被启用，强制修复
-    if [ $VSFTPD_ALT_ENABLED -gt 0 ]; then
-        echo "  🚨 发现冲突: vsftpd-alt被启用，执行强制修复..."
-        
-        # 方法1：直接删除vsftpd-alt相关配置
-        sed -i '/^CONFIG_PACKAGE_vsftpd-alt=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_luci-app-vsftpd-alt=y/d' .config
-        
-        # 方法2：确保禁用注释存在
-        echo "# 🚫 完全禁用vsftpd-alt（深度修复）" >> .config
-        echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set" >> .config
-    fi
-    
-    # 确保vsftpd被启用
-    if [ $VSFTPD_ENABLED -eq 0 ]; then
-        echo "  🔧 启用标准vsftpd..."
-        echo "# ✅ 启用标准vsftpd" >> .config
+    # 2. 确保标准vsftpd被启用
+    if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
+        echo "# ✅ 启用标准vsftpd（强制修复）" >> .config
         echo "CONFIG_PACKAGE_vsftpd=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
         
@@ -2241,29 +2226,13 @@ apply_config() {
         fi
     fi
     
-    # 最终检查
-    echo "  🔍 最终检查..."
-    VSFTPD_ALT_FINAL=$(grep -c "^CONFIG_PACKAGE_vsftpd-alt=y" .config)
-    VSFTPD_FINAL=$(grep -c "^CONFIG_PACKAGE_vsftpd=y" .config)
+    # 3. 添加明确的禁用注释
+    echo "# 🚫 完全禁用vsftpd-alt（避免包冲突）" >> .config
+    echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+    echo "# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set" >> .config
+    echo "# CONFIG_PACKAGE_luci-i18n-vsftpd-alt-zh-cn is not set" >> .config
     
-    echo "  修复后状态: vsftpd=$VSFTPD_FINAL, vsftpd-alt=$VSFTPD_ALT_FINAL"
-    
-    if [ $VSFTPD_ALT_FINAL -eq 0 ] && [ $VSFTPD_FINAL -gt 0 ]; then
-        echo "  ✅ vsftpd冲突修复成功"
-    else
-        echo "  ⚠️ vsftpd冲突可能未完全修复"
-    fi
-    
-    # 对于WNDR3800的特殊修复
-    if [ "$DEVICE" = "netgear_wndr3800" ]; then
-        echo "  🎯 WNDR3800设备专用修复"
-        echo "# 🎯 WNDR3800设备专用配置" >> .config
-        echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
-        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
-    fi
-    
-    echo "  ✅ vsftpd冲突修复完成"
+    echo "✅ vsftpd冲突修复完成（简化版）"
     
     # 版本特定的配置修复 - 添加vsftpd修复
     if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
@@ -2312,13 +2281,24 @@ apply_config() {
     echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
     
     # 🚨 强制修复vsftpd冲突（在运行defconfig后再次修复）
-    log "🔧 强制修复vsftpd冲突..."
+    log "🔧 强制修复vsftpd冲突（最终修复）..."
     echo "# 🚫 完全禁用vsftpd-alt（最终修复）" >> .config
     echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
     echo "# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set" >> .config
+    echo "# CONFIG_PACKAGE_luci-i18n-vsftpd-alt-zh-cn is not set" >> .config
+    
     echo "# ✅ 启用标准vsftpd（最终修复）" >> .config
-    echo "CONFIG_PACKAGE_vsftpd=y" >> .config
-    echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
+    if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
+        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
+        
+        # 根据版本添加语言包
+        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ] || [ "$SELECTED_BRANCH" = "master" ]; then
+            echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> .config
+        elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> .config
+        fi
+    fi
     
     # 运行defconfig后，再次检查并修复USB驱动
     check_usb_drivers_integrity
