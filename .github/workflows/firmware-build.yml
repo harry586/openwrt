@@ -728,10 +728,10 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 15 完成"
       
-      # 步骤 16: 应用配置并显示详情（完整版）- 增强vsftpd冲突检查
-      - name: "16. 应用配置并显示详情（完整版）- 增强vsftpd冲突检查"
+      # 步骤 16: 应用配置并显示详情（完整版）- 修复vsftpd冲突检测
+      - name: "16. 应用配置并显示详情（完整版）- 修复vsftpd冲突检测"
         run: |
-          echo "=== 步骤 16: 应用配置并显示详情（完整版）- 增强vsftpd冲突检查 ==="
+          echo "=== 步骤 16: 应用配置并显示详情（完整版）- 修复vsftpd冲突检测 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -901,9 +901,9 @@ jobs:
               echo "  ❌ Samba: 未启用"
             fi
             
-            # 🚨 最终vsftpd冲突检查与修复 - 强力修复版
+            # 🚨 最终vsftpd冲突检查与修复 - 彻底修复版
             echo ""
-            echo "🚨 最终vsftpd冲突检查与修复:"
+            echo "🚨 最终vsftpd冲突检查与修复 - 彻底修复版:"
             
             CONFIG_FILE="/mnt/openwrt-build/.config"
             if [ ! -f "$CONFIG_FILE" ]; then
@@ -911,92 +911,125 @@ jobs:
               exit 1
             fi
             
-            # 检查当前状态 - 使用更严格的检查
-            echo "🔍 检查当前配置状态:"
+            # 备份原始配置
+            CONFIG_BACKUP="${CONFIG_FILE}.vsftpd-backup"
+            cp "$CONFIG_FILE" "$CONFIG_BACKUP"
+            echo "✅ 配置文件已备份到: $CONFIG_BACKUP"
+            
+            # 检查当前状态 - 显示所有相关行
+            echo "🔍 检查当前配置状态（显示所有相关行）:"
+            
+            # 查找所有vsftpd相关行
+            ALL_VSFTPD_LINES=$(grep -n "vsftpd" "$CONFIG_FILE")
+            if [ -n "$ALL_VSFTPD_LINES" ]; then
+              echo "找到以下vsftpd相关配置行:"
+              echo "$ALL_VSFTPD_LINES"
+            else
+              echo "未找到vsftpd相关配置"
+            fi
+            
+            # 统计数量
             VSFTPD_ALT_COUNT=$(grep -c "^CONFIG_PACKAGE_vsftpd-alt=y" "$CONFIG_FILE" 2>/dev/null || echo "0")
-            VSFTPD_ALT_DISABLED_COUNT=$(grep -c "^# CONFIG_PACKAGE_vsftpd-alt is not set" "$CONFIG_FILE" 2>/dev/null || echo "0")
             VSFTPD_COUNT=$(grep -c "^CONFIG_PACKAGE_vsftpd=y" "$CONFIG_FILE" 2>/dev/null || echo "0")
             
-            # 同时检查所有可能的vsftpd相关配置
-            echo "详细配置状态:"
-            grep -E "vsftpd" "$CONFIG_FILE" | grep -v "^#" | head -10
-            
             echo "  vsftpd-alt启用数: $VSFTPD_ALT_COUNT"
-            echo "  vsftpd-alt禁用数: $VSFTPD_ALT_DISABLED_COUNT"
             echo "  vsftpd启用数: $VSFTPD_COUNT"
             
-            # 强力修复：无论状态如何，都确保vsftpd-alt被禁用，vsftpd被启用
-            echo "🔧 执行强力修复（无论当前状态）..."
-            
-            # 1. 备份原始配置
-            cp "$CONFIG_FILE" "${CONFIG_FILE}.backup"
-            echo "✅ 配置文件已备份"
-            
-            # 2. 移除所有vsftpd-alt相关配置（包括启用和禁用状态）
-            sed -i '/^CONFIG_PACKAGE_vsftpd-alt/d' "$CONFIG_FILE"
-            sed -i '/^CONFIG_PACKAGE_luci-app-vsftpd-alt/d' "$CONFIG_FILE"
-            sed -i '/^CONFIG_PACKAGE_luci-i18n-vsftpd-alt-zh-cn/d' "$CONFIG_FILE"
-            
-            # 3. 确保标准vsftpd配置存在
-            sed -i '/^CONFIG_PACKAGE_vsftpd/d' "$CONFIG_FILE"
-            sed -i '/^CONFIG_PACKAGE_luci-app-vsftpd/d' "$CONFIG_FILE"
-            sed -i '/^CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn/d' "$CONFIG_FILE"
-            
-            # 4. 添加明确的配置（放在文件末尾）
-            echo "" >> "$CONFIG_FILE"
-            echo "# ====== 强力修复vsftpd冲突 ======" >> "$CONFIG_FILE"
-            echo "# 🚫 强制禁用vsftpd-alt（修复包冲突）" >> "$CONFIG_FILE"
-            echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> "$CONFIG_FILE"
-            echo "# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set" >> "$CONFIG_FILE"
-            echo "# CONFIG_PACKAGE_luci-i18n-vsftpd-alt-zh-cn is not set" >> "$CONFIG_FILE"
-            echo "# ✅ 强制启用标准vsftpd" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_vsftpd=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> "$CONFIG_FILE"
-            echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> "$CONFIG_FILE"
-            echo "# ====== 修复完成 ======" >> "$CONFIG_FILE"
-            
-            echo "✅ 修复操作完成"
-            
-            # 等待文件写入完成
-            sync
-            sleep 1
-            
-            # 验证修复结果
-            echo "🔍 验证修复结果..."
-            
-            # 重新检查
-            VSFTPD_ALT_COUNT_AFTER=$(grep -c "^CONFIG_PACKAGE_vsftpd-alt=y" "$CONFIG_FILE" 2>/dev/null || echo "0")
-            VSFTPD_COUNT_AFTER=$(grep -c "^CONFIG_PACKAGE_vsftpd=y" "$CONFIG_FILE" 2>/dev/null || echo "0")
-            
-            echo "  修复后检查:"
-            echo "  vsftpd-alt启用数: $VSFTPD_ALT_COUNT_AFTER"
-            echo "  vsftpd启用数: $VSFTPD_COUNT_AFTER"
-            
-            # 显示最终配置状态
-            echo "  最终配置状态:"
-            grep -E "^CONFIG_PACKAGE_(vsftpd|luci-app-vsftpd)" "$CONFIG_FILE" || echo "  未找到vsftpd配置"
-            
-            # 判断修复是否成功
-            if [ "$VSFTPD_ALT_COUNT_AFTER" -eq 0 ] && [ "$VSFTPD_COUNT_AFTER" -gt 0 ]; then
-              echo "✅ 修复成功: vsftpd-alt已完全禁用，标准vsftpd已启用"
-              echo "💡 编译将正常进行，不会出现包冲突错误"
-            elif [ "$VSFTPD_ALT_COUNT_AFTER" -eq 0 ] && [ "$VSFTPD_COUNT_AFTER" -eq 0 ]; then
-              echo "❌ 修复失败: vsftpd未启用"
-              echo "🔧 再次强制启用标准vsftpd..."
+            # 如果发现任何冲突，执行彻底修复
+            if [ "$VSFTPD_ALT_COUNT" -gt 0 ] || [ "$VSFTPD_COUNT" -eq 0 ]; then
+              echo "🔧 执行彻底修复..."
+              
+              # 1. 创建一个临时文件来清理配置
+              TEMP_FILE="${CONFIG_FILE}.temp"
+              > "$TEMP_FILE"
+              
+              # 2. 逐行处理配置文件，移除所有vsftpd相关行
+              echo "正在清理配置文件..."
+              LINE_NUMBER=0
+              while IFS= read -r line; do
+                LINE_NUMBER=$((LINE_NUMBER + 1))
+                
+                # 跳过空行和注释行
+                if [[ -z "$line" ]] || [[ "$line" =~ ^\s*# ]]; then
+                  echo "$line" >> "$TEMP_FILE"
+                  continue
+                fi
+                
+                # 检查是否包含vsftpd相关配置
+                if [[ "$line" =~ vsftpd ]]; then
+                  echo "# 🚫 已移除冲突行: $line" >> "$TEMP_FILE"
+                  continue
+                fi
+                
+                # 保留其他行
+                echo "$line" >> "$TEMP_FILE"
+              done < "$CONFIG_FILE"
+              
+              # 3. 替换原文件
+              mv "$TEMP_FILE" "$CONFIG_FILE"
+              
+              # 4. 添加正确的配置
+              echo "" >> "$CONFIG_FILE"
+              echo "# ====== vsftpd冲突彻底修复 ======" >> "$CONFIG_FILE"
+              echo "# 🚫 完全禁用vsftpd-alt（解决包冲突）" >> "$CONFIG_FILE"
+              echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> "$CONFIG_FILE"
+              echo "# CONFIG_PACKAGE_luci-app-vsftpd-alt is not set" >> "$CONFIG_FILE"
+              echo "# CONFIG_PACKAGE_luci-i18n-vsftpd-alt-zh-cn is not set" >> "$CONFIG_FILE"
+              echo "# ✅ 启用标准vsftpd（最终修复）" >> "$CONFIG_FILE"
               echo "CONFIG_PACKAGE_vsftpd=y" >> "$CONFIG_FILE"
               echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> "$CONFIG_FILE"
               echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> "$CONFIG_FILE"
-              echo "✅ 已再次启用标准vsftpd"
+              echo "# ====== 修复完成 ======" >> "$CONFIG_FILE"
+              
+              echo "✅ 彻底修复完成"
+              
+              # 等待文件写入完成
+              sync
+              sleep 1
+              
+              # 验证修复结果
+              echo "🔍 验证修复结果..."
+              
+              # 重新检查
+              VSFTPD_ALT_COUNT_AFTER=$(grep -c "^CONFIG_PACKAGE_vsftpd-alt=y" "$CONFIG_FILE" 2>/dev/null || echo "0")
+              VSFTPD_COUNT_AFTER=$(grep -c "^CONFIG_PACKAGE_vsftpd=y" "$CONFIG_FILE" 2>/dev/null || echo "0")
+              
+              echo "  修复后检查:"
+              echo "  vsftpd-alt启用数: $VSFTPD_ALT_COUNT_AFTER"
+              echo "  vsftpd启用数: $VSFTPD_COUNT_AFTER"
+              
+              # 显示最终配置状态
+              echo "  最终配置状态（最后20行）:"
+              tail -20 "$CONFIG_FILE"
+              
+              # 判断修复是否成功
+              if [ "$VSFTPD_ALT_COUNT_AFTER" -eq 0 ] && [ "$VSFTPD_COUNT_AFTER" -gt 0 ]; then
+                echo "✅ 修复成功: vsftpd-alt已完全禁用，标准vsftpd已启用"
+                echo "💡 编译将正常进行，不会出现包冲突错误"
+              else
+                echo "❌ 修复失败: vsftpd配置仍然有问题"
+                echo "🔍 查看相关配置行:"
+                grep -n "vsftpd" "$CONFIG_FILE" || echo "未找到vsftpd配置"
+                echo ""
+                echo "💡 建议:"
+                echo "  1. 检查备份文件: $CONFIG_BACKUP"
+                echo "  2. 手动编辑配置文件修复冲突"
+                echo "  3. 重新运行构建流程"
+                exit 1
+              fi
             else
-              echo "❌ 修复失败: vsftpd-alt仍然被启用（$VSFTPD_ALT_COUNT_AFTER处）"
-              echo "🔍 查看相关配置行:"
-              grep -n "vsftpd" "$CONFIG_FILE" | head -20
-              echo ""
-              echo "💡 建议:"
-              echo "  1. 检查配置文件中是否有重复的vsftpd-alt配置"
-              echo "  2. 手动编辑配置文件修复冲突"
-              echo "  3. 重新运行构建流程"
-              exit 1
+              # 没有冲突的情况
+              if [ "$VSFTPD_COUNT" -gt 0 ]; then
+                echo "✅ 无冲突: vsftpd-alt已禁用，标准vsftpd已启用"
+              else
+                echo "⚠️ 警告: vsftpd未启用"
+                echo "🔧 自动启用标准vsftpd..."
+                echo "# 自动启用标准vsftpd" >> "$CONFIG_FILE"
+                echo "CONFIG_PACKAGE_vsftpd=y" >> "$CONFIG_FILE"
+                echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> "$CONFIG_FILE"
+                echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> "$CONFIG_FILE"
+                echo "✅ 已启用标准vsftpd"
+              fi
             fi
             
             # 最终状态确认
@@ -1007,12 +1040,14 @@ jobs:
             
             if [ "$FINAL_VSFTPD_ALT" -eq 0 ] && [ "$FINAL_VSFTPD" -gt 0 ]; then
               echo "✅ 最终状态: 通过 - 无vsftpd冲突"
+              echo "📊 配置文件大小: $(ls -lh "$CONFIG_FILE" | awk '{print $5}')"
+              echo "📝 配置文件行数: $(wc -l < "$CONFIG_FILE")"
             else
               echo "❌ 最终状态: 失败 - 仍然存在vsftpd冲突或配置错误"
               echo "  vsftpd-alt状态: $FINAL_VSFTPD_ALT"
               echo "  vsftpd状态: $FINAL_VSFTPD"
-              echo "🔍 配置文件最后20行:"
-              tail -20 "$CONFIG_FILE"
+              echo "🔍 配置文件vsftpd相关行:"
+              grep -n "vsftpd" "$CONFIG_FILE" || echo "未找到vsftpd配置"
               exit 1
             fi
             
