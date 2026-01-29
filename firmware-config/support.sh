@@ -70,7 +70,7 @@ get_sdk_url() {
                 fi
                 ;;
             "ath79")
-                # ath79通用SDK（如果有的话）
+                # ath79通用SDK
                 echo "https://downloads.openwrt.org/releases/23.05.6/targets/ath79/generic/openwrt-sdk-23.05.6-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
                 ;;
             "mediatek")
@@ -92,12 +92,17 @@ get_sdk_url() {
                 fi
                 ;;
             "ath79")
-                # ath79通用SDK（如果有的话）
+                # ath79通用SDK
                 echo "https://downloads.openwrt.org/releases/21.02.7/targets/ath79/generic/openwrt-sdk-21.02.7-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
                 ;;
             "mediatek")
-                # 21.02可能不支持MT7981，留空或使用其他版本
-                echo ""
+                # 对于 MT7981 设备，如果 21.02 没有官方SDK，使用相近的
+                if [ "$subtarget" = "mt7981" ] || [ "$subtarget" = "filogic" ]; then
+                    # 使用 ramips/mt7621 作为替代（需要验证兼容性）
+                    echo "https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt7621/openwrt-sdk-21.02.7-ramips-mt7621_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+                else
+                    echo ""
+                fi
                 ;;
         esac
     fi
