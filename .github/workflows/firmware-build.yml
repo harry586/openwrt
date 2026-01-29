@@ -882,21 +882,55 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 15 完成"
       
-      # 步骤 16: 应用配置并显示详情（完整版）
-      - name: "16. 应用配置并显示详情（完整版）"
+      # 步骤 16: 应用配置并显示详情（完整版）- 修复版
+      - name: "16. 应用配置并显示详情（完整版）- 修复版"
         run: |
-          echo "=== 步骤 16: 应用配置并显示详情（完整版）==="
+          echo "=== 步骤 16: 应用配置并显示详情（完整版）- 修复版 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
           trap 'echo "❌ 步骤 16 失败，退出代码: $?"; exit 1' ERR
           
+          echo "🔍 步骤 16.1: 检查配置文件..."
           if [ -f "/mnt/openwrt-build/.config" ]; then
+            # 备份原始配置文件
             cp "/mnt/openwrt-build/.config" "/mnt/openwrt-build/.config.original"
-            echo "✅ 已备份原始配置文件"
+            echo "✅ 已备份原始配置文件: /mnt/openwrt-build/.config.original"
+            
+            # 显示备份文件信息
+            ORIGINAL_SIZE=$(ls -lh "/mnt/openwrt-build/.config.original" | awk '{print $5}')
+            ORIGINAL_LINES=$(wc -l < "/mnt/openwrt-build/.config.original")
+            echo "📊 原始配置文件:"
+            echo "  大小: $ORIGINAL_SIZE"
+            echo "  行数: $ORIGINAL_LINES"
+          else
+            echo "❌ 错误: .config 文件不存在"
+            exit 1
           fi
           
+          echo ""
+          echo "🔍 步骤 16.2: 验证配置语法..."
+          cd /mnt/openwrt-build
+          
+          # 先运行配置语法验证
+          if "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" validate_config_syntax; then
+            echo "✅ 配置语法验证通过"
+          else
+            echo "⚠️ 配置语法有问题，尝试自动修复..."
+            # 尝试修复常见问题
+            make defconfig 2>&1 | tee /tmp/defconfig_fix.log
+            if [ $? -eq 0 ]; then
+              echo "✅ defconfig 修复成功"
+            else
+              echo "❌ defconfig 修复失败"
+              echo "defconfig 错误日志:"
+              cat /tmp/defconfig_fix.log | tail -20
+            fi
+          fi
+          
+          echo ""
+          echo "🚀 步骤 16.3: 应用配置（已修复defconfig问题）..."
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" apply_config
           
           if [ $? -ne 0 ]; then
@@ -904,11 +938,12 @@ jobs:
             exit 1
           fi
           
+          echo ""
           echo "=== 🚨 最终配置状态检查（完整详细版）==="
           if [ -f "/mnt/openwrt-build/.config" ]; then
-            echo "✅ 配置文件存在"
-            echo "📊 文件大小: $(ls -lh "/mnt/openwrt-build/.config" | awk '{print $5}')"
-            echo "📝 文件行数: $(wc -l < "/mnt/openwrt-build/.config")"
+            echo "✅ 最终配置文件存在"
+            echo "📊 最终文件大小: $(ls -lh "/mnt/openwrt-build/.config" | awk '{print $5}')"
+            echo "📝 最终文件行数: $(wc -l < "/mnt/openwrt-build/.config")"
             
             echo ""
             echo "🔧 关键配置检查:"
@@ -950,7 +985,7 @@ jobs:
             echo "  UPnP 自动端口转发 (luci-app-upnp): $(grep -q "^CONFIG_PACKAGE_luci-app-upnp=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  Samba 文件共享 (luci-app-samba4): $(grep -q "^CONFIG_PACKAGE_luci-app-samba4=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  磁盘管理 (luci-app-diskman): $(grep -q "^CONFIG_PACKAGE_luci-app-diskman=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  KMS 激活服务 (luci-app-vlmcsd): $(grep -q "^CONFIG_PACKAGE_luci-app-vlmcsd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  KMS 激活服务 (luci-app-vlmcsd): $(greq -q "^CONFIG_PACKAGE_luci-app-vlmcsd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  SmartDNS 智能DNS (luci-app-smartdns): $(grep -q "^CONFIG_PACKAGE_luci-app-smartdns=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  家长控制 (luci-app-accesscontrol): $(grep -q "^CONFIG_PACKAGE_luci-app-accesscontrol=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  微信推送 (luci-app-wechatpush): $(grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
@@ -1584,7 +1619,7 @@ jobs:
           # 修复：使用正确的df选项获取可用空间
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-          echo "/mnt 可用空间: ${available_gb}G"
+          echo "/mnt 可用空间: ${AVAILABLE_GB}G"
           
           if [ $AVAILABLE_GB -lt 5 ]; then
             echo "⚠️ 警告: 磁盘空间较低，建议清理"
