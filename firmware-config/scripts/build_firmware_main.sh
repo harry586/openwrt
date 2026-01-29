@@ -36,6 +36,7 @@ save_env() {
     echo "export COMPILER_DIR=\"${COMPILER_DIR}\"" >> $ENV_FILE
     echo "export DEVICE_NAME=\"${DEVICE_NAME}\"" >> $ENV_FILE
     echo "export PLATFORM=\"${PLATFORM}\"" >> $ENV_FILE
+    echo "export SOURCE_REPO=\"${SOURCE_REPO}\"" >> $ENV_FILE
     
     # 确保环境变量可被其他步骤访问
     if [ -n "$GITHUB_ENV" ]; then
@@ -48,6 +49,7 @@ save_env() {
         echo "COMPILER_DIR=${COMPILER_DIR}" >> $GITHUB_ENV
         echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
         echo "PLATFORM=${PLATFORM}" >> $GITHUB_ENV
+        echo "SOURCE_REPO=${SOURCE_REPO}" >> $GITHUB_ENV
     fi
     
     chmod +x $ENV_FILE
@@ -832,6 +834,7 @@ pre_build_error_check() {
     log "  COMPILER_DIR: $COMPILER_DIR"
     log "  DEVICE_NAME: $DEVICE_NAME"
     log "  PLATFORM: $PLATFORM"
+    log "  SOURCE_REPO: $SOURCE_REPO"
     
     # 1. 检查配置文件
     if [ ! -f ".config" ]; then
@@ -1084,18 +1087,49 @@ initialize_build_env() {
     local device_name=$1
     local version_selection=$2
     local config_mode=$3
+    local source_repo=${4:-"immortalwrt"}  # 添加第四个参数，默认immortalwrt
     
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
     log "=== 版本选择 ==="
+    log "源代码仓库: $source_repo"
+    
+    # 根据仓库选择不同的URL
+    case "$source_repo" in
+        "immortalwrt")
+            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+            ;;
+        "openwrt-official")
+            SELECTED_REPO_URL="https://github.com/openwrt/openwrt.git"
+            ;;
+        "lede")
+            SELECTED_REPO_URL="https://github.com/coolsnowwolf/lede.git"
+            ;;
+        "openwrt-cc")
+            SELECTED_REPO_URL="https://github.com/project-openwrt/openwrt.git"
+            ;;
+        *)
+            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+            source_repo="immortalwrt"
+            ;;
+    esac
+    
+    # 根据版本选择分支
     if [ "$version_selection" = "23.05" ]; then
-        SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
         SELECTED_BRANCH="openwrt-23.05"
     else
-        SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
         SELECTED_BRANCH="openwrt-21.02"
     fi
-    log "✅ 版本选择完成: $SELECTED_BRANCH"
+    
+    # 对于特定仓库的分支调整
+    if [ "$source_repo" = "lede" ]; then
+        SELECTED_BRANCH="master"  # LEDE通常使用master分支
+    fi
+    
+    # 设置SOURCE_REPO环境变量
+    SOURCE_REPO="$source_repo"
+    
+    log "✅ 版本选择完成: $SELECTED_BRANCH (仓库: $source_repo)"
     
     log "=== 克隆源码 ==="
     log "仓库: $SELECTED_REPO_URL"
@@ -1180,6 +1214,7 @@ initialize_build_env() {
     echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
     echo "DEVICE_NAME=$DEVICE_NAME" >> $GITHUB_ENV
     echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
+    echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
     
     log "✅ 构建环境初始化完成"
 }
@@ -1206,6 +1241,7 @@ initialize_compiler_env() {
         log "  COMPILER_DIR: $COMPILER_DIR"
         log "  DEVICE_NAME: $DEVICE_NAME"
         log "  PLATFORM: $PLATFORM"
+        log "  SOURCE_REPO: $SOURCE_REPO"
     else
         log "⚠️ 环境文件不存在: $BUILD_DIR/build_env.sh"
         log "💡 环境文件应该在步骤6.3中创建，但未找到"
@@ -1214,6 +1250,11 @@ initialize_compiler_env() {
         if [ -z "$SELECTED_BRANCH" ]; then
             SELECTED_BRANCH="openwrt-21.02"
             log "⚠️ SELECTED_BRANCH未设置，使用默认值: $SELECTED_BRANCH"
+        fi
+        
+        if [ -z "$SOURCE_REPO" ]; then
+            SOURCE_REPO="immortalwrt"
+            log "⚠️ SOURCE_REPO未设置，使用默认值: $SOURCE_REPO"
         fi
         
         if [ -z "$TARGET" ]; then
@@ -1294,6 +1335,7 @@ initialize_compiler_env() {
     log "目标设备: $DEVICE"
     log "OpenWrt版本: $SELECTED_BRANCH"
     log "平台类型: $PLATFORM"
+    log "源代码仓库: $SOURCE_REPO"
     
     # 简化版本字符串（从openwrt-23.05转为23.05）
     local version_for_sdk=""
@@ -1318,6 +1360,7 @@ initialize_compiler_env() {
     log "  目标: $TARGET"
     log "  子目标: $SUBTARGET"
     log "  平台: $PLATFORM"
+    log "  源代码仓库: $SOURCE_REPO"
     
     # 下载OpenWrt官方SDK
     log "🚀 开始下载OpenWrt官方SDK..."
@@ -1360,7 +1403,8 @@ initialize_compiler_env() {
         export COMPILER_DIR=""
         save_env
         
-        return 1
+        # 不返回错误，继续执行
+        return 0
     fi
 }
 
@@ -1495,6 +1539,7 @@ generate_config() {
     log "设备: $DEVICE"
     log "平台: $PLATFORM"
     log "配置模式: $CONFIG_MODE"
+    log "源代码仓库: $SOURCE_REPO"
     
     rm -f .config .config.old
     
@@ -2099,6 +2144,7 @@ integrate_custom_files() {
     
     log "自定义文件目录: $custom_dir"
     log "OpenWrt版本: $SELECTED_BRANCH"
+    log "源代码仓库: $SOURCE_REPO"
     
     # 递归查找所有自定义文件
     log "🔍 递归查找所有自定义文件..."
@@ -2226,12 +2272,12 @@ integrate_custom_files() {
     
     # 创建第一次开机运行的安装脚本（增强版）- 无SSH测试
     echo ""
-    log "🔧 步骤3: 创建第一次开机安装脚本（增强版）- 无SSH测试"
+    log "🔧 步骤3: 创建第一次开机安装脚本（增强版）"
     
     local first_boot_dir="files/etc/uci-defaults"
     mkdir -p "$first_boot_dir"
     
-    # 创建第一次开机运行的脚本 - 增强版，无SSH测试
+    # 创建第一次开机运行的脚本 - 增强版
     local first_boot_script="$first_boot_dir/99-custom-files"
     cat > "$first_boot_script" << 'EOF'
 #!/bin/sh
@@ -2614,6 +2660,7 @@ build_firmware() {
     log "  配置模式: $CONFIG_MODE"
     log "  编译器目录: $COMPILER_DIR"
     log "  平台: $PLATFORM"
+    log "  源代码仓库: $SOURCE_REPO"
     log "  启用缓存: $enable_cache"
     
     # 编译前最终检查
@@ -2988,6 +3035,7 @@ save_source_code_info() {
     echo "编译器目录: $COMPILER_DIR" >> "$source_info_file"
     echo "设备名称: $DEVICE_NAME" >> "$source_info_file"
     echo "平台: $PLATFORM" >> "$source_info_file"
+    echo "源代码仓库: $SOURCE_REPO" >> "$source_info_file"
     
     # 收集目录信息
     echo "" >> "$source_info_file"
@@ -3019,7 +3067,7 @@ main() {
             create_build_dir
             ;;
         "initialize_build_env")
-            initialize_build_env "$2" "$3" "$4"
+            initialize_build_env "$2" "$3" "$4" "$5"
             ;;
         "initialize_compiler_env")
             initialize_compiler_env "$2"
