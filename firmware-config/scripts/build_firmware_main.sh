@@ -17,8 +17,21 @@ log() {
 handle_error() {
     log "❌ 错误发生在: $1"
     log "详细错误信息:"
-    echo "最后50行日志:"
-    tail -50 /tmp/build-logs/*.log 2>/dev/null || echo "无日志文件"
+    echo "最后100行构建日志:"
+    tail -100 /tmp/build-logs/*.log 2>/dev/null || echo "无日志文件"
+    
+    # 检查defconfig日志
+    if [ -f "/tmp/defconfig.log" ]; then
+        echo "defconfig 错误日志:"
+        cat /tmp/defconfig.log
+    fi
+    
+    # 检查.config文件
+    if [ -f ".config" ]; then
+        echo ".config 最后50行:"
+        tail -50 .config
+    fi
+    
     exit 1
 }
 
@@ -1772,6 +1785,107 @@ check_usb_drivers_integrity() {
     fi
 }
 
+# ============ 新增：配置语法验证函数 ============
+validate_config_syntax() {
+    log "=== 🔍 验证.config文件语法 ==="
+    
+    if [ ! -f ".config" ]; then
+        log "❌ 错误: .config 文件不存在"
+        return 1
+    fi
+    
+    local error_count=0
+    local warning_count=0
+    
+    log "1. 检查文件基本信息..."
+    local config_size=$(ls -lh ".config" | awk '{print $5}')
+    local config_lines=$(wc -l < ".config")
+    log "  文件大小: $config_size"
+    log "  行数: $config_lines"
+    
+    log "2. 检查空行和注释..."
+    local blank_lines=$(grep -c "^[[:space:]]*$" .config)
+    if [ $blank_lines -gt 0 ]; then
+        log "  ⚠️ 发现 $blank_lines 个空行，但可以继续"
+        warning_count=$((warning_count + 1))
+    fi
+    
+    log "3. 检查无效配置（包含空格）..."
+    local invalid_lines=$(grep -n "CONFIG_[^=]*[[:space:]]" .config)
+    if [ -n "$invalid_lines" ]; then
+        log "❌ 发现无效配置行（配置名包含空格）:"
+        echo "$invalid_lines" | head -5
+        error_count=$((error_count + 1))
+    fi
+    
+    log "4. 检查重复配置项..."
+    local duplicates=$(awk -F'=' '/^CONFIG_/ {print $1}' .config | sort | uniq -d)
+    if [ -n "$duplicates" ]; then
+        log "❌ 发现重复配置项:"
+        echo "$duplicates"
+        error_count=$((error_count + 1))
+        
+        # 修复重复配置
+        log "🔄 正在修复重复配置..."
+        awk -F'=' '!seen[$1]++' .config > .config.tmp && mv .config.tmp .config
+        log "✅ 重复配置已修复"
+    fi
+    
+    log "5. 检查配置冲突（同一配置既有=y又有is not set）..."
+    local config_names=$(awk -F'[ =]' '/^CONFIG_/ {print $2}' .config | sort | uniq)
+    local conflict_count=0
+    
+    for config in $config_names; do
+        local enabled_count=$(grep -c "^CONFIG_${config}=y" .config)
+        local disabled_count=$(grep -c "^# CONFIG_${config} is not set" .config)
+        
+        if [ $enabled_count -gt 0 ] && [ $disabled_count -gt 0 ]; then
+            log "❌ 配置冲突: $config 同时启用和禁用"
+            conflict_count=$((conflict_count + 1))
+            error_count=$((error_count + 1))
+            
+            # 修复冲突：保留启用的配置，删除禁用的配置
+            log "  🔧 修复冲突: 保留 CONFIG_${config}=y，删除禁用的配置"
+            sed -i "/^# CONFIG_${config} is not set/d" .config
+        fi
+    done
+    
+    log "6. 检查配置语法正确性..."
+    local syntax_errors=0
+    while IFS= read -r line; do
+        # 跳过空行和注释
+        if [[ "$line" =~ ^[[:space:]]*$ ]] || [[ "$line" =~ ^# ]]; then
+            continue
+        fi
+        
+        # 检查配置行格式
+        if [[ "$line" =~ ^CONFIG_[A-Za-z0-9_]+= ]]; then
+            # 启用配置，格式正确
+            continue
+        elif [[ "$line" =~ ^#\ CONFIG_[A-Za-z0-9_]+\ is\ not\ set ]]; then
+            # 禁用配置，格式正确
+            continue
+        else
+            log "  ⚠️ 语法警告: 非标准配置行: $line"
+            warning_count=$((warning_count + 1))
+        fi
+    done < .config
+    
+    # 总结
+    if [ $error_count -eq 0 ]; then
+        if [ $warning_count -eq 0 ]; then
+            log "✅ 配置语法验证通过，无错误和警告"
+        else
+            log "⚠️ 配置语法验证通过，但有 $warning_count 个警告"
+        fi
+        return 0
+    else
+        log "❌ 配置语法验证发现 $error_count 个错误，$warning_count 个警告"
+        return 1
+    fi
+}
+
+# ============ 修复：apply_config 函数 ============
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -1787,249 +1901,187 @@ apply_config() {
     log "配置文件大小: $(ls -lh .config | awk '{print $5}')"
     log "配置行数: $(wc -l < .config)"
     
-    # 显示详细配置状态
-    echo ""
-    echo "=== 详细配置状态 ==="
+    # 先备份原始配置文件
+    if [ -f ".config" ]; then
+        cp ".config" ".config.backup.$(date +%Y%m%d_%H%M%S)"
+        log "✅ 已备份原始配置文件"
+    fi
     
-    # 1. 关键USB配置状态
-    echo "🔧 关键USB配置状态:"
+    # 步骤1: 验证配置语法
+    log "🔍 步骤1: 验证配置语法..."
+    if validate_config_syntax; then
+        log "✅ 配置语法验证通过"
+    else
+        log "⚠️ 配置语法有问题，尝试自动修复..."
+        # 尝试修复常见问题
+        make defconfig 2>&1 | tee /tmp/defconfig_fix.log
+        if [ $? -eq 0 ]; then
+            log "✅ defconfig 修复成功"
+        else
+            log "❌ defconfig 修复失败"
+            log "defconfig 错误日志:"
+            cat /tmp/defconfig_fix.log
+        fi
+    fi
+    
+    # 步骤2: 清理重复配置和冲突配置
+    log "🔧 步骤2: 清理重复和冲突配置..."
+    
+    # 清理重复的USB配置
+    local usb_configs=(
+        "kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-xhci-hcd"
+        "kmod-usb-xhci-pci" "kmod-usb-xhci-plat-hcd" "kmod-usb-ohci-pci"
+        "kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3"
+        "kmod-usb-dwc3-of-simple" "kmod-usb-xhci-mtk" "kmod-usb2-ath79"
+    )
+    
+    for config in "${usb_configs[@]}"; do
+        # 删除重复的启用配置
+        local enabled_count=$(grep -c "^CONFIG_PACKAGE_${config}=y" .config)
+        if [ $enabled_count -gt 1 ]; then
+            log "🔄 清理重复的启用配置: $config ($enabled_count 次)"
+            awk -v cfg="CONFIG_PACKAGE_${config}=y" '$0 == cfg && !seen[cfg]++' .config > .config.tmp && mv .config.tmp .config
+        fi
+        
+        # 删除重复的禁用配置
+        local disabled_count=$(grep -c "^# CONFIG_PACKAGE_${config} is not set" .config)
+        if [ $disabled_count -gt 1 ]; then
+            log "🔄 清理重复的禁用配置: $config ($disabled_count 次)"
+            awk -v cfg="# CONFIG_PACKAGE_${config} is not set" '$0 == cfg && !seen[cfg]++' .config > .config.tmp && mv .config.tmp .config
+        fi
+        
+        # 解决冲突：如果既有启用又有禁用，保留启用
+        if [ $enabled_count -gt 0 ] && [ $disabled_count -gt 0 ]; then
+            log "🔄 解决配置冲突: $config (保留启用，删除禁用)"
+            sed -i "/^# CONFIG_PACKAGE_${config} is not set/d" .config
+        fi
+    done
+    
+    # 步骤3: 运行 make defconfig (使用改进的错误处理)
+    log "🔄 步骤3: 运行 make defconfig..."
+    
+    # 清除旧的defconfig日志
+    rm -f /tmp/defconfig.log
+    
+    # 运行defconfig并捕获详细日志
+    if ! make defconfig 2>&1 | tee /tmp/defconfig.log; then
+        log "❌ make defconfig 失败"
+        log "详细错误信息:"
+        cat /tmp/defconfig.log
+        
+        # 尝试分析错误原因
+        if grep -q "invalid option" /tmp/defconfig.log; then
+            log "💡 错误分析: 发现无效配置选项"
+            log "🔧 尝试修复: 删除无效配置后重试..."
+            
+            # 提取无效配置
+            grep "invalid option" /tmp/defconfig.log | while read line; do
+                invalid_config=$(echo "$line" | grep -o "CONFIG_[A-Za-z0-9_]*")
+                if [ -n "$invalid_config" ]; then
+                    log "  删除无效配置: $invalid_config"
+                    sed -i "/^${invalid_config}=/d" .config
+                    sed -i "/^# ${invalid_config} is not set/d" .config
+                fi
+            done
+            
+            # 再次尝试defconfig
+            log "🔄 重新运行 make defconfig..."
+            if make defconfig 2>&1 | tee /tmp/defconfig_retry.log; then
+                log "✅ defconfig 修复成功"
+            else
+                log "❌ defconfig 仍然失败"
+                log "第二次尝试的错误日志:"
+                cat /tmp/defconfig_retry.log
+                handle_error "应用配置失败"
+            fi
+        else
+            handle_error "应用配置失败"
+        fi
+    else
+        log "✅ make defconfig 成功"
+    fi
+    
+    # 步骤4: 强制启用关键USB驱动（防止defconfig删除）
+    log "🔧 步骤4: 确保关键USB驱动被启用..."
+    
+    # 定义关键USB驱动
     local critical_usb_drivers=(
-        "kmod-usb-core" "kmod-usb2" "kmod-usb3" 
-        "kmod-usb-ehci" "kmod-usb-ohci" "kmod-usb-xhci-hcd"
-        "kmod-usb-storage" "kmod-usb-storage-uas" "kmod-usb-storage-extras"
-        "kmod-scsi-core" "kmod-scsi-generic"
+        "CONFIG_PACKAGE_kmod-usb-core=y"
+        "CONFIG_PACKAGE_kmod-usb2=y"
+        "CONFIG_PACKAGE_kmod-usb3=y"
+        "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
+        "CONFIG_PACKAGE_kmod-usb-xhci-pci=y"
+        "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y"
+        "CONFIG_PACKAGE_kmod-usb-ohci-pci=y"
+        "CONFIG_PACKAGE_kmod-usb-dwc3=y"
+        "CONFIG_PACKAGE_kmod-usb-storage=y"
+        "CONFIG_PACKAGE_kmod-scsi-core=y"
     )
     
-    local missing_usb=0
+    # 平台专用驱动
+    if [ "$PLATFORM" = "ipq40xx" ]; then
+        critical_usb_drivers+=(
+            "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y"
+            "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y"
+            "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y"
+        )
+    elif [ "$PLATFORM" = "ramips" ]; then
+        critical_usb_drivers+=(
+            "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y"
+        )
+    elif [ "$PLATFORM" = "ath79" ]; then
+        critical_usb_drivers+=(
+            "CONFIG_PACKAGE_kmod-usb2-ath79=y"
+        )
+    fi
+    
+    # 添加或确保关键驱动
     for driver in "${critical_usb_drivers[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-            echo "  ✅ $driver"
+        local config_name=$(echo "$driver" | cut -d'=' -f1)
+        if ! grep -q "^${config_name}=y" .config; then
+            # 删除可能的禁用配置
+            sed -i "/^# ${config_name} is not set/d" .config
+            # 添加启用配置
+            echo "$driver" >> .config
+            log "✅ 已添加: $config_name"
         else
-            echo "  ❌ $driver - 缺失！"
-            missing_usb=$((missing_usb + 1))
+            log "ℹ️ 已存在: $config_name"
         fi
     done
     
-    # 2. 平台专用驱动检查
-    echo ""
-    echo "🔧 平台专用USB驱动状态:"
-    if [ "$PLATFORM" = "ipq40xx" ]; then
-        echo "  高通IPQ40xx平台专用驱动:"
-        local qcom_drivers=("kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3-of-simple")
-        for driver in "${qcom_drivers[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-                echo "    ✅ $driver"
-            else
-                echo "    ❌ $driver - 缺失！"
-                missing_usb=$((missing_usb + 1))
-            fi
-        done
-    elif [ "$PLATFORM" = "ramips" ]; then
-        echo "  雷凌MT76xx平台专用驱动:"
-        local mtk_drivers=("kmod-usb-ohci-pci" "kmod-usb2-pci" "kmod-usb-xhci-mtk")
-        for driver in "${mtk_drivers[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-                echo "    ✅ $driver"
-            else
-                echo "    ❌ $driver - 缺失！"
-                missing_usb=$((missing_usb + 1))
-            fi
-        done
-    elif [ "$PLATFORM" = "ath79" ]; then
-        echo "  ath79平台专用驱动:"
-        local ath79_drivers=("kmod-usb2-ath79")
-        for driver in "${ath79_drivers[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-                echo "    ✅ $driver"
-            else
-                echo "    ❌ $driver - 缺失！"
-                missing_usb=$((missing_usb + 1))
-            fi
-        done
+    # 步骤5: 再次验证配置
+    log "🔍 步骤5: 最终配置验证..."
+    validate_config_syntax
+    
+    # 步骤6: 运行defconfig确保配置一致
+    log "🔄 步骤6: 最终运行 make defconfig..."
+    if make defconfig 2>&1 | tee /tmp/final_defconfig.log; then
+        log "✅ 最终 defconfig 成功"
+    else
+        log "⚠️ 最终 defconfig 有警告，但继续执行"
+        cat /tmp/final_defconfig.log | tail -20
     fi
     
-    # 3. 文件系统支持检查
-    echo ""
-    echo "🔧 文件系统支持状态:"
-    local fs_drivers=("kmod-fs-ext4" "kmod-fs-vfat" "kmod-fs-exfat" "kmod-fs-ntfs3")
-    for driver in "${fs_drivers[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-            echo "  ✅ $driver"
-        else
-            echo "  ❌ $driver - 缺失！"
-        fi
-    done
-    
-    # 4. 功能性插件状态
-    echo ""
-    echo "🚀 功能性插件状态:"
-    
-    local functional_plugins=(
-        "luci-app-turboacc" "TurboACC 网络加速"
-        "luci-app-upnp" "UPnP 自动端口转发"
-        "samba4-server" "Samba 文件共享"
-        "luci-app-diskman" "磁盘管理"
-        "vlmcsd" "KMS 激活服务"
-        "smartdns" "SmartDNS 智能DNS"
-        "luci-app-accesscontrol" "家长控制"
-        "luci-app-wechatpush" "微信推送"
-        "sqm-scripts" "流量控制 (SQM)"
-        "vsftpd" "FTP 服务器"
-        "luci-app-arpbind" "ARP 绑定"
-        "luci-app-cpulimit" "CPU 限制"
-        "luci-app-hd-idle" "硬盘休眠"
-    )
-    
-    for i in $(seq 0 2 $((${#functional_plugins[@]} - 1))); do
-        local plugin="${functional_plugins[$i]}"
-        local desc="${functional_plugins[$((i + 1))]}"
-        
-        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
-            echo "  ✅ $desc ($plugin)"
-        elif grep -q "^# CONFIG_PACKAGE_${plugin} is not set" .config; then
-            echo "  ❌ $desc ($plugin) - 已禁用"
-        else
-            echo "  ⚪ $desc ($plugin) - 未配置"
-        fi
-    done
-    
-    # 5. 统计信息
-    echo ""
-    echo "📊 配置统计信息:"
-    local enabled_count=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
-    local disabled_count=$(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)
-    echo "  ✅ 已启用插件: $enabled_count 个"
-    echo "  ❌ 已禁用插件: $disabled_count 个"
-    
-    # 6. 显示具体被禁用的插件（最多20个）
-    if [ $disabled_count -gt 0 ]; then
-        echo ""
-        echo "📋 具体被禁用的插件:"
-        local count=0
-        grep "^# CONFIG_PACKAGE_.* is not set$" .config | while read line; do
-            if [ $count -lt 20 ]; then
-                local pkg_name=$(echo $line | sed 's/# CONFIG_PACKAGE_//;s/ is not set//')
-                echo "  ❌ $pkg_name"
-                count=$((count + 1))
-            else
-                local remaining=$((disabled_count - 20))
-                echo "  ... 还有 $remaining 个被禁用的插件"
-                break
-            fi
-        done
-    fi
-    
-    # 7. 修复缺失的关键USB驱动
-    if [ $missing_usb -gt 0 ]; then
-        echo ""
-        echo "🚨 修复缺失的关键USB驱动:"
-        
-        # 确保kmod-usb-xhci-hcd启用
-        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
-            echo "  修复: 启用 kmod-usb-xhci-hcd"
-            sed -i 's/^# CONFIG_PACKAGE_kmod-usb-xhci-hcd is not set$/CONFIG_PACKAGE_kmod-usb-xhci-hcd=y/' .config
-            if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
-                echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
-            fi
-            echo "  ✅ 已修复 kmod-usb-xhci-hcd"
-        fi
-        
-        # 确保kmod-usb-xhci-pci启用
-        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-pci=y" .config; then
-            echo "  修复: 启用 kmod-usb-xhci-pci"
-            echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
-            echo "  ✅ 已修复 kmod-usb-xhci-pci"
-        fi
-        
-        # 确保kmod-usb-xhci-plat-hcd启用
-        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" .config; then
-            echo "  修复: 启用 kmod-usb-xhci-plat-hcd"
-            echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config
-            echo "  ✅ 已修复 kmod-usb-xhci-plat-hcd"
-        fi
-        
-        # 确保kmod-usb-ohci-pci启用
-        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-ohci-pci=y" .config; then
-            echo "  修复: 启用 kmod-usb-ohci-pci"
-            echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
-            echo "  ✅ 已修复 kmod-usb-ohci-pci"
-        fi
-        
-        # 确保kmod-usb-dwc3-of-simple启用（如果是高通平台）
-        if [ "$PLATFORM" = "ipq40xx" ] && ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" .config; then
-            echo "  修复: 启用 kmod-usb-dwc3-of-simple"
-            echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
-            echo "  ✅ 已修复 kmod-usb-dwc3-of-simple"
-        fi
-        
-        # 确保kmod-usb-xhci-mtk启用（如果是雷凌平台）
-        if [ "$PLATFORM" = "ramips" ] && ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config; then
-            echo "  修复: 启用 kmod-usb-xhci-mtk"
-            echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
-            echo "  ✅ 已修复 kmod-usb-xhci-mtk"
-        fi
-        
-        # 确保kmod-usb2-ath79启用（如果是ath79平台）
-        if [ "$PLATFORM" = "ath79" ] && ! grep -q "^CONFIG_PACKAGE_kmod-usb2-ath79=y" .config; then
-            echo "  修复: 启用 kmod-usb2-ath79"
-            echo "CONFIG_PACKAGE_kmod-usb2-ath79=y" >> .config
-            echo "  ✅ 已修复 kmod-usb2-ath79"
-        fi
-    fi
-    
-    # 版本特定的配置修复
-    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-        log "🔧 23.05版本配置预处理"
-        sed -i 's/CONFIG_PACKAGE_ntfs-3g=y/# CONFIG_PACKAGE_ntfs-3g is not set/g' .config
-        sed -i 's/CONFIG_PACKAGE_ntfs-3g-utils=y/# CONFIG_PACKAGE_ntfs-3g-utils is not set/g' .config
-        sed -i 's/CONFIG_PACKAGE_ntfs3-mount=y/# CONFIG_PACKAGE_ntfs3-mount is not set/g' .config
-        log "✅ NTFS配置修复完成"
-    fi
-    
-    log "🔄 运行 make defconfig..."
-    make defconfig || handle_error "应用配置失败"
-    
-    log "🚨 强制启用关键USB驱动（防止defconfig删除）"
-    # 确保 USB 3.0 关键驱动被启用
-    echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
-    
-    # 根据平台启用专用驱动
-    if [ "$PLATFORM" = "ipq40xx" ]; then
-        echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
-        echo "# CONFIG_PACKAGE_kmod-usb-xhci-mtk is not set" >> .config
-        echo "# CONFIG_PACKAGE_kmod-usb2-ath79 is not set" >> .config
-    elif [ "$PLATFORM" = "ramips" ]; then
-        echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
-        echo "# CONFIG_PACKAGE_kmod-usb-dwc3-qcom is not set" >> .config
-        echo "# CONFIG_PACKAGE_kmod-phy-qcom-dwc3 is not set" >> .config
-        echo "# CONFIG_PACKAGE_kmod-usb-dwc3-of-simple is not set" >> .config
-        echo "# CONFIG_PACKAGE_kmod-usb2-ath79 is not set" >> .config
-    elif [ "$PLATFORM" = "ath79" ]; then
-        echo "CONFIG_PACKAGE_kmod-usb2-ath79=y" >> .config
-        echo "# CONFIG_PACKAGE_kmod-usb-dwc3-qcom is not set" >> .config
-        echo "# CONFIG_PACKAGE_kmod-phy-qcom-dwc3 is not set" >> .config
-        echo "# CONFIG_PACKAGE_kmod-usb-dwc3-of-simple is not set" >> .config
-        echo "# CONFIG_PACKAGE_kmod-usb-xhci-mtk is not set" >> .config
-    fi
-    
-    # 其他关键USB驱动
-    echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
-    
-    # 运行defconfig后，再次检查并修复USB驱动
-    check_usb_drivers_integrity
-    
-    # 最终检查
-    echo ""
-    echo "=== 最终配置检查 ==="
+    # 步骤7: 显示最终配置状态
+    log "📊 步骤7: 显示最终配置状态..."
     local final_enabled=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
     local final_disabled=$(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)
-    echo "✅ 最终状态: 已启用 $final_enabled 个, 已禁用 $final_disabled 个"
+    log "✅ 最终状态: 已启用 $final_enabled 个, 已禁用 $final_disabled 个"
+    
+    # 显示关键配置状态
+    log "🔧 关键配置状态:"
+    echo "1. USB核心: $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" .config && echo "✅" || echo "❌")"
+    echo "2. USB 3.0: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo "✅" || echo "❌")"
+    echo "3. USB存储: $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" .config && echo "✅" || echo "❌")"
+    
+    # 根据平台显示专用驱动
+    if [ "$PLATFORM" = "ipq40xx" ]; then
+        echo "4. 高通USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo "✅" || echo "❌")"
+    elif [ "$PLATFORM" = "ramips" ]; then
+        echo "4. 雷凌USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config && echo "✅" || echo "❌")"
+    elif [ "$PLATFORM" = "ath79" ]; then
+        echo "4. ath79 USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb2-ath79=y" .config && echo "✅" || echo "❌")"
+    fi
     
     log "✅ 配置应用完成"
     log "最终配置文件: .config"
@@ -3108,6 +3160,9 @@ main() {
         "pre_build_error_check")
             pre_build_error_check
             ;;
+        "validate_config_syntax")
+            validate_config_syntax
+            ;;
         "build_firmware")
             build_firmware "$2"
             ;;
@@ -3149,7 +3204,7 @@ main() {
             echo "  add_turboacc_support, configure_feeds, install_turboacc_packages"
             echo "  pre_build_space_check, generate_config, verify_usb_config, check_usb_drivers_integrity, apply_config"
             echo "  fix_network, download_dependencies, integrate_custom_files"
-            echo "  pre_build_error_check, build_firmware, post_build_space_check"
+            echo "  pre_build_error_check, validate_config_syntax, build_firmware, post_build_space_check"
             echo "  check_firmware_files, cleanup, save_source_code_info, verify_compiler_files"
             echo "  check_compiler_invocation, search_compiler_files, universal_compiler_search"
             echo "  search_compiler_files_simple, intelligent_platform_aware_compiler_search"
