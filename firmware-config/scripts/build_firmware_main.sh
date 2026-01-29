@@ -4,7 +4,8 @@ set -e
 BUILD_DIR="/mnt/openwrt-build"
 ENV_FILE="$BUILD_DIR/build_env.sh"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SUPPORT_DIR="$REPO_ROOT/firmware-config/scripts/support"
+# 修复：SUPPORT_DIR 应该指向 firmware-config 目录本身
+SUPPORT_DIR="$REPO_ROOT/firmware-config"
 
 # 确保有日志目录
 mkdir -p /tmp/build-logs
@@ -65,12 +66,14 @@ load_env() {
 
 # 加载设备支持脚本
 load_device_support() {
-    if [ -f "$SUPPORT_DIR/support.sh" ]; then
-        source "$SUPPORT_DIR/support.sh"
-        log "✅ 加载设备支持脚本: $SUPPORT_DIR/support.sh"
+    # 修复：support.sh 在 firmware-config 根目录下
+    local support_file="$SUPPORT_DIR/support.sh"
+    if [ -f "$support_file" ]; then
+        source "$support_file"
+        log "✅ 加载设备支持脚本: $support_file"
         return 0
     else
-        log "⚠️ 设备支持脚本不存在: $SUPPORT_DIR/support.sh"
+        log "⚠️ 设备支持脚本不存在: $support_file"
         return 1
     fi
 }
@@ -78,6 +81,7 @@ load_device_support() {
 # 加载配置模板
 load_config_template() {
     local template_name="$1"
+    # 修复：配置文件在 firmware-config/config/ 目录下
     local template_file="$SUPPORT_DIR/config/${template_name}.config"
     
     if [ -f "$template_file" ]; then
@@ -1317,7 +1321,7 @@ initialize_compiler_env() {
     
     # 下载OpenWrt官方SDK
     log "🚀 开始下载OpenWrt官方SDK..."
-    if download_openwrt_sdk "$TARGET" "$SUBTARGET" "$version_for_sdk"; then
+    if download_openwrt_sdk "$TARGET" "$subtarget" "$version_for_sdk"; then
         log "🎉 OpenWrt SDK下载并设置成功"
         log "📌 编译器目录: $COMPILER_DIR"
         
@@ -1535,6 +1539,7 @@ generate_config() {
     
     # 5. 加载设备特殊配置（如果有）
     log "🎯 检查设备特殊配置..."
+    # 修复：设备配置文件在 firmware-config/config/ 目录下
     local device_config_file="$SUPPORT_DIR/config/${DEVICE_NAME}.config"
     if [ -f "$device_config_file" ]; then
         log "✅ 加载设备特殊配置: $DEVICE_NAME"
