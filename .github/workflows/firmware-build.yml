@@ -21,6 +21,16 @@ on:
         type: choice
         default: "normal"
         options: ["base", "normal"]
+      source_repo:
+        description: "📦 源代码仓库选择 - 🔄 ImmortalWrt (默认) 🏢 OpenWrt官方 ⚡ LEDE (国内优化) 🚀 OpenWrt CC (老版本)"
+        required: true
+        type: choice
+        default: "immortalwrt"
+        options:
+          - "immortalwrt"
+          - "openwrt-official"
+          - "lede"
+          - "openwrt-cc"
       extra_packages:
         description: "额外安装插件 - 格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。"
         required: false
@@ -51,7 +61,7 @@ jobs:
           
           # 生成日期格式的时间戳（年月日）
           BASE_DATE=$(date -u +'%Y%m%d')
-          TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$BASE_DATE"
+          TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-${{ github.event.inputs.source_repo }}-$BASE_DATE"
           
           echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
           
@@ -60,6 +70,7 @@ jobs:
           echo "  设备: ${{ github.event.inputs.device_name }}"
           echo "  版本: ${{ github.event.inputs.version_selection }}"
           echo "  模式: ${{ github.event.inputs.config_mode }}"
+          echo "  源代码仓库: ${{ github.event.inputs.source_repo }}"
           echo "  并行优化: ${{ github.event.inputs.enable_parallel }}"
           
           echo "🟢 步骤 0 完成"
@@ -411,6 +422,7 @@ jobs:
           echo "📱 设备: ${{ github.event.inputs.device_name }}"
           echo "🔄 版本: ${{ github.event.inputs.version_selection }}"
           echo "⚙️ 配置模式: ${{ github.event.inputs.config_mode }}"
+          echo "📦 源代码仓库: ${{ github.event.inputs.source_repo }}"
           
           # 检查设备支持系统
           SUPPORT_DIR="${{ github.workspace }}/firmware-config"
@@ -434,7 +446,7 @@ jobs:
             echo "💡 将使用内置设备配置"
           fi
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}"
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}" "${{ github.event.inputs.source_repo }}"
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 初始化构建环境失败"
@@ -450,9 +462,8 @@ jobs:
           echo "=== 步骤 7: 下载OpenWrt官方SDK（修复版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 设置错误处理
-          set -e
-          trap 'echo "❌ 步骤 7 失败，退出代码: $?"; exit 1' ERR
+          # 设置错误处理 - 这里不退出，SDK下载失败可以继续
+          trap 'echo "⚠️ SDK下载失败，将使用自动构建编译器，继续执行..."' ERR
           
           echo "🚀 开始下载OpenWrt官方SDK工具链..."
           
@@ -475,6 +486,7 @@ jobs:
             echo "  COMPILER_DIR: $COMPILER_DIR"
             echo "  DEVICE_NAME: $DEVICE_NAME"
             echo "  PLATFORM: $PLATFORM"
+            echo "  SOURCE_REPO: $SOURCE_REPO"
             echo ""
             
             echo "💡 使用步骤6.3已设置的环境变量进行SDK下载"
@@ -541,21 +553,20 @@ jobs:
             echo "export COMPILER_DIR=\"\"" >> /mnt/openwrt-build/build_env.sh
             echo "export DEVICE_NAME=\"${{ github.event.inputs.device_name }}\"" >> /mnt/openwrt-build/build_env.sh
             echo "export PLATFORM=\"$PLATFORM\"" >> /mnt/openwrt-build/build_env.sh
+            echo "export SOURCE_REPO=\"${{ github.event.inputs.source_repo }}\"" >> /mnt/openwrt-build/build_env.sh
             chmod +x /mnt/openwrt-build/build_env.sh
             echo "✅ 已创建环境文件"
           fi
           
-          # 执行SDK下载
+          # 执行SDK下载，允许失败
           echo "🔄 开始执行SDK下载..."
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_compiler_env "${{ github.event.inputs.device_name }}"
-          
-          SDK_EXIT_CODE=$?
-          if [ $SDK_EXIT_CODE -ne 0 ]; then
-            echo "⚠️ 警告: SDK下载可能有问题，退出代码: $SDK_EXIT_CODE"
-            echo "💡 将使用OpenWrt自动构建的编译器作为后备"
+          if "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_compiler_env "${{ github.event.inputs.device_name }}"; then
+            echo "✅ SDK下载成功或使用后备方案"
+          else
+            echo "⚠️ SDK下载失败，将使用OpenWrt自动构建的编译器"
           fi
           
-          echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m%d %H:%M:%S')"
+          echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 7 完成"
       
       # 步骤 8: 验证SDK下载结果
@@ -571,7 +582,7 @@ jobs:
           
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
             source /mnt/openwrt-build/build_env.sh
-            echo "✅ 从环境文件加载变量: COMPILER_DIR=$COMPILER_DIR"
+            echo "✅ 从环境文件加载变量: COMPILER_DIR=$COMPILER_DIR, SOURCE_REPO=$SOURCE_REPO"
           else
             echo "⚠️ 环境文件不存在"
           fi
@@ -748,6 +759,7 @@ jobs:
             echo "  子目标: $SUBTARGET"
             echo "  设备: $DEVICE"
             echo "  平台类型: $PLATFORM"
+            echo "  源代码仓库: ${{ github.event.inputs.source_repo }}"
           else
             echo "⚠️ 设备支持脚本不存在: $SUPPORT_DIR/support.sh"
           fi
@@ -965,6 +977,7 @@ jobs:
             echo "  - 目标设备: $DEVICE"
             echo "  - OpenWrt版本: $SELECTED_BRANCH"
             echo "  - 平台类型: $PLATFORM"
+            echo "  - 源代码仓库: $SOURCE_REPO"
             echo "  - USB驱动: 已启用所有关键驱动"
             echo "  - 插件数量: $enabled 个已启用"
             
@@ -1269,7 +1282,7 @@ jobs:
           echo "🔍 检查当前环境..."
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
             source /mnt/openwrt-build/build_env.sh
-            echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET, PLATFORM=$PLATFORM"
+            echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET, PLATFORM=$PLATFORM, SOURCE_REPO=$SOURCE_REPO"
           fi
           
           echo "🚀 执行前置错误检查（已修复23.05 SDK验证问题）..."
@@ -1341,6 +1354,7 @@ jobs:
           echo "  CPU核心数: $CPU_CORES"
           echo "  内存大小: ${TOTAL_MEM}MB"
           echo "  并行优化: ${{ env.ENABLE_PARALLEL }}"
+          echo "  源代码仓库: $SOURCE_REPO"
           
           # 智能判断最佳并行任务数 - 优化版
           if [ "${{ env.ENABLE_PARALLEL }}" = "true" ]; then
@@ -1381,6 +1395,7 @@ jobs:
           echo "  - 设备: ${{ github.event.inputs.device_name }}"
           echo "  - 版本: ${{ github.event.inputs.version_selection }}"
           echo "  - 配置模式: ${{ github.event.inputs.config_mode }}"
+          echo "  - 源代码仓库: ${{ github.event.inputs.source_repo }}"
           echo "  - 平台类型: $PLATFORM"
           echo "  - 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
@@ -1480,15 +1495,16 @@ jobs:
                 
                 # 判断文件类型
                 if [[ "$FILE_NAME" == *factory* ]]; then
-                  echo "  类型: 🏭 工厂固件 (用于首次刷机)"
+                  TYPE="🏭 工厂固件"
                 elif [[ "$FILE_NAME" == *sysupgrade* ]]; then
-                  echo "  类型: 🔄 系统升级固件 (用于已安装OpenWrt的设备)"
+                  TYPE="🔄 升级固件"
                 elif [[ "$FILE_NAME" == *initramfs* ]]; then
-                  echo "  类型: 🚀 内存启动固件 (用于测试和救援)"
+                  TYPE="🚀 内存固件"
                 else
-                  echo "  类型: 🔧 普通固件"
+                  TYPE="🔧 普通固件"
                 fi
                 
+                echo "  类型: $TYPE"
                 echo ""
               done
             else
@@ -1568,7 +1584,7 @@ jobs:
           # 修复：使用正确的df选项获取可用空间
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-          echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+          echo "/mnt 可用空间: ${available_gb}G"
           
           if [ $AVAILABLE_GB -lt 5 ]; then
             echo "⚠️ 警告: 磁盘空间较低，建议清理"
@@ -1578,11 +1594,11 @@ jobs:
           
           echo "🟢 步骤 27 完成"
       
-      # 步骤 28: 编译后总结（增强版）- 无SSH测试相关信息
-      - name: "28. 编译后总结（增强版）- 无SSH测试"
+      # 步骤 28: 编译后总结（增强版）
+      - name: "28. 编译后总结（增强版）"
         if: always()
         run: |
-          echo "=== 步骤 28: 编译后总结（增强版）- 无SSH测试 ==="
+          echo "=== 步骤 28: 编译后总结（增强版） ==="
           echo "🕐 总结时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，总结不应该失败
@@ -1593,6 +1609,7 @@ jobs:
           echo "设备: ${{ github.event.inputs.device_name }}"
           echo "版本: ${{ github.event.inputs.version_selection }}"
           echo "配置模式: ${{ github.event.inputs.config_mode }}"
+          echo "源代码仓库: ${{ github.event.inputs.source_repo }}"
           echo "时间戳: ${{ env.TIMESTAMP }}"
           echo "并行优化: ${{ github.event.inputs.enable_parallel }}"
           echo ""
@@ -1803,6 +1820,13 @@ jobs:
           echo "  2. 添加设备配置: 在 firmware-config/config/ 目录下创建 设备名.config"
           echo "  3. 添加通用配置: 编辑 base.config, normal.config, usb-generic.config"
           echo "  4. 重新运行工作流选择新设备即可"
+          
+          echo ""
+          echo "📦 源代码仓库选择说明:"
+          echo "  🔄 ImmortalWrt: 官方分支，稳定可靠"
+          echo "  🏢 OpenWrt官方: 上游代码，最新特性"
+          echo "  ⚡ LEDE: 国内优化版，更适合中国用户"
+          echo "  🚀 OpenWrt CC: 老版本兼容，适合旧设备"
           
           echo ""
           echo "✅ 构建流程完成"
