@@ -1,6 +1,7 @@
 #!/bin/bash
 set -e
 
+#【build_firmware_main.sh-01】文件头：变量定义和日志函数
 BUILD_DIR="/mnt/openwrt-build"
 ENV_FILE="$BUILD_DIR/build_env.sh"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -14,6 +15,7 @@ log() {
     echo "【$(date '+%Y-%m-%d %H:%M:%S')】$1"
 }
 
+#【build_firmware_main.sh-02】错误处理函数
 handle_error() {
     log "❌ 错误发生在: $1"
     log "详细错误信息:"
@@ -35,7 +37,7 @@ handle_error() {
     exit 1
 }
 
-# 保存环境变量函数 - 修复版
+#【build_firmware_main.sh-03】环境变量函数
 save_env() {
     mkdir -p $BUILD_DIR
     echo "#!/bin/bash" > $ENV_FILE
@@ -79,7 +81,7 @@ load_env() {
     fi
 }
 
-# 加载设备支持脚本
+#【build_firmware_main.sh-04】设备支持函数
 load_device_support() {
     # 修复：support.sh 在 firmware-config 根目录下
     local support_file="$SUPPORT_DIR/support.sh"
@@ -109,7 +111,7 @@ load_config_template() {
     fi
 }
 
-# 加载USB配置
+#【build_firmware_main.sh-05】USB配置函数
 load_usb_config() {
     local platform="$1"
     local version="$2"
@@ -155,7 +157,7 @@ load_usb_config() {
     fi
 }
 
-# 智能平台感知的编译器搜索（两步搜索法） - 修改为下载SDK
+#【build_firmware_main.sh-06】编译器搜索函数
 intelligent_platform_aware_compiler_search() {
     local search_root="${1:-/tmp}"
     local target_platform="$2"
@@ -169,7 +171,7 @@ intelligent_platform_aware_compiler_search() {
     return 1
 }
 
-# 新增：下载OpenWrt官方SDK工具链函数
+#【build_firmware_main.sh-07】SDK下载函数
 download_openwrt_sdk() {
     local target="$1"
     local subtarget="$2"
@@ -310,7 +312,7 @@ download_openwrt_sdk() {
     fi
 }
 
-# 专门的GCC版本检查函数（放宽版本要求，修复23.05 SDK验证）
+#【build_firmware_main.sh-08】GCC版本检查函数
 check_gcc_version() {
     local gcc_path="$1"
     local target_version="${2:-11}"
@@ -366,7 +368,7 @@ check_gcc_version() {
     fi
 }
 
-# 验证预构建编译器文件（使用两步搜索法）- 修复23.05验证逻辑
+#【build_firmware_main.sh-09】编译器验证函数
 verify_compiler_files() {
     log "=== 验证预构建编译器文件 ==="
     
@@ -626,7 +628,7 @@ verify_compiler_files() {
     fi
 }
 
-# 检查编译器调用状态（增强版）
+#【build_firmware_main.sh-10】编译器调用状态检查
 check_compiler_invocation() {
     log "=== 检查编译器调用状态（增强版）==="
     
@@ -827,7 +829,7 @@ check_compiler_invocation() {
     log "✅ 编译器调用状态检查完成"
 }
 
-# 前置错误检查（修复23.05 SDK验证问题） - 关键修复
+#【build_firmware_main.sh-11】前置错误检查函数
 pre_build_error_check() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -1021,6 +1023,7 @@ pre_build_error_check() {
     fi
 }
 
+#【build_firmware_main.sh-12】环境设置函数
 setup_environment() {
     log "=== 安装编译依赖包 ==="
     sudo apt-get update || handle_error "apt-get update失败"
@@ -1095,7 +1098,7 @@ create_build_dir() {
     fi
 }
 
-# 初始化构建环境 - 使用设备支持脚本（修复版：简化源代码仓库选择）
+#【build_firmware_main.sh-13】构建环境初始化函数
 initialize_build_env() {
     local device_name=$1
     local version_selection=$2
@@ -1224,7 +1227,7 @@ initialize_build_env() {
     log "✅ 构建环境初始化完成"
 }
 
-# 初始化编译器环境（下载OpenWrt官方SDK）- 修复版
+#【build_firmware_main.sh-14】编译器环境初始化函数
 initialize_compiler_env() {
     local device_name="$1"
     log "=== 初始化编译器环境（下载OpenWrt官方SDK）- 修复版 ==="
@@ -1413,6 +1416,7 @@ initialize_compiler_env() {
     fi
 }
 
+#【build_firmware_main.sh-15】TurboACC支持函数
 add_turboacc_support() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -1434,6 +1438,7 @@ add_turboacc_support() {
     fi
 }
 
+#【build_firmware_main.sh-16】Feeds配置函数
 configure_feeds() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -1487,6 +1492,7 @@ install_turboacc_packages() {
     log "✅ TurboACC 包安装完成"
 }
 
+#【build_firmware_main.sh-17】构建前空间检查
 pre_build_space_check() {
     log "=== 编译前空间检查 ==="
     
@@ -1530,7 +1536,7 @@ pre_build_space_check() {
     log "✅ 空间检查完成"
 }
 
-# 智能配置生成系统（重构版）- 修复配置生成逻辑
+#【build_firmware_main.sh-18】智能配置生成函数
 generate_config() {
     local extra_packages=$1
     load_env
@@ -1698,6 +1704,7 @@ generate_config() {
     log "✅ 智能配置生成完成"
 }
 
+#【build_firmware_main.sh-19】USB配置验证函数
 verify_usb_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -1817,7 +1824,7 @@ check_usb_drivers_integrity() {
     fi
 }
 
-# ============ 修复：配置语法验证函数（增强版） ============
+#【build_firmware_main.sh-20】配置语法验证函数
 validate_config_syntax() {
     log "=== 🔍 验证.config文件语法（增强版）==="
     
@@ -1958,7 +1965,7 @@ validate_config_syntax() {
     fi
 }
 
-# ============ 修复：apply_config 函数（增强版） ============
+#【build_firmware_main.sh-21】配置应用函数
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -2178,6 +2185,7 @@ apply_config() {
     log "最终配置大小: $(ls -lh .config | awk '{print $5}')"
 }
 
+#【build_firmware_main.sh-22】网络修复函数
 fix_network() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
@@ -2211,6 +2219,7 @@ fix_network() {
     log "✅ 网络环境修复完成"
 }
 
+#【build_firmware_main.sh-23】依赖下载函数
 download_dependencies() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
@@ -2249,7 +2258,7 @@ download_dependencies() {
     log "✅ 依赖包下载完成"
 }
 
-# 检测是否为英文文件名（只包含ASCII字符）- 修复版
+#【build_firmware_main.sh-24】文件名检测函数
 is_english_filename() {
     local filename="$1"
     # 检查是否只包含ASCII字符（字母、数字、下划线、连字符、点）
@@ -2260,7 +2269,7 @@ is_english_filename() {
     fi
 }
 
-# 递归查找所有自定义文件函数
+#【build_firmware_main.sh-25】自定义文件查找函数
 recursive_find_custom_files() {
     local base_dir="$1"
     local max_depth="${2:-10}"  # 默认最大深度10
@@ -2269,7 +2278,7 @@ recursive_find_custom_files() {
     find "$base_dir" -type f -maxdepth "$max_depth" 2>/dev/null | sort
 }
 
-# 集成自定义文件函数（增强版）- 递归查找、详细日志、保持原文件名
+#【build_firmware_main.sh-26】自定义文件集成函数
 integrate_custom_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -2785,6 +2794,7 @@ EOF
     log "✅ 自定义文件统计已保存到: $CUSTOM_FILE_STATS"
 }
 
+#【build_firmware_main.sh-27】固件构建函数
 build_firmware() {
     local enable_cache=$1
     load_env
@@ -3002,7 +3012,7 @@ build_firmware() {
     save_env
 }
 
-# 编译后空间检查 - 修复磁盘空间检查函数
+#【build_firmware_main.sh-28】构建后空间检查
 post_build_space_check() {
     log "=== 编译后空间检查 ==="
     
@@ -3033,6 +3043,7 @@ post_build_space_check() {
     log "✅ 空间检查完成"
 }
 
+#【build_firmware_main.sh-29】固件文件检查
 check_firmware_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -3083,6 +3094,7 @@ check_firmware_files() {
     fi
 }
 
+#【build_firmware_main.sh-30】清理函数
 cleanup() {
     log "=== 清理构建目录 ==="
     
@@ -3114,7 +3126,7 @@ cleanup() {
     fi
 }
 
-# 搜索编译器文件函数
+#【build_firmware_main.sh-31】编译器搜索函数
 search_compiler_files() {
     local search_root="${1:-/tmp}"
     local target_platform="$2"
@@ -3132,7 +3144,7 @@ search_compiler_files() {
     return 1
 }
 
-# 通用编译器搜索函数
+#【build_firmware_main.sh-32】通用编译器搜索函数
 universal_compiler_search() {
     local search_root="${1:-/tmp}"
     local device_name="${2:-unknown}"
@@ -3143,7 +3155,7 @@ universal_compiler_search() {
     return 1
 }
 
-# 简单编译器文件搜索
+#【build_firmware_main.sh-33】简单编译器搜索函数
 search_compiler_files_simple() {
     local search_root="${1:-/tmp}"
     local target_platform="${2:-generic}"
@@ -3154,7 +3166,7 @@ search_compiler_files_simple() {
     return 1
 }
 
-# 保存源代码信息
+#【build_firmware_main.sh-34】源代码信息保存函数
 save_source_code_info() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -3197,7 +3209,7 @@ save_source_code_info() {
     log "✅ 源代码信息已保存到: $source_info_file"
 }
 
-# 主函数
+#【build_firmware_main.sh-35】主函数
 main() {
     case $1 in
         "setup_environment")
