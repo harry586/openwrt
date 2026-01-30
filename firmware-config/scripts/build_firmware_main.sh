@@ -2412,248 +2412,250 @@ integrate_custom_files() {
     
     log "✅ 文件复制完成: $copied_count 个文件已复制，$skip_count 个文件跳过"
     
-    # 创建第一次开机运行的安装脚本（增强版）- 无SSH测试
+    # 创建第一次开机运行的安装脚本（增强版）- 修复heredoc语法错误
     echo ""
     log "🔧 步骤3: 创建第一次开机安装脚本（增强版）"
     
     local first_boot_dir="files/etc/uci-defaults"
     mkdir -p "$first_boot_dir"
     
-    # 创建第一次开机运行的脚本 - 增强版（使用echo命令代替heredoc）
+    # 使用cat命令创建脚本，避免heredoc语法错误
     local first_boot_script="$first_boot_dir/99-custom-files"
-    echo '#!/bin/sh' > "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '# 创建日志目录' >> "$first_boot_script"
-    echo 'LOG_DIR="/root/logs"' >> "$first_boot_script"
-    echo 'mkdir -p "$LOG_DIR"' >> "$first_boot_script"
-    echo 'LOG_FILE="$LOG_DIR/custom-files-install-$(date +%Y%m%d_%H%M%S).log"' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo 'echo "==================================================" > $LOG_FILE' >> "$first_boot_script"
-    echo 'echo "      自定义文件安装脚本（增强版）" >> $LOG_FILE' >> "$first_boot_script"
-    echo 'echo "      开始时间: $(date)" >> $LOG_FILE' >> "$first_boot_script"
-    echo 'echo "      日志文件: $LOG_FILE" >> $LOG_FILE' >> "$first_boot_script"
-    echo 'echo "==================================================" >> $LOG_FILE' >> "$first_boot_script"
-    echo 'echo "" >> $LOG_FILE' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo 'CUSTOM_DIR="/etc/custom-files"' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo 'if [ -d "$CUSTOM_DIR" ]; then' >> "$first_boot_script"
-    echo '    echo "✅ 找到自定义文件目录: $CUSTOM_DIR" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "📊 目录结构:" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    find "$CUSTOM_DIR" -type f 2>/dev/null | sort | while read file; do' >> "$first_boot_script"
-    echo '        file_name=$(basename "$file")' >> "$first_boot_script"
-    echo '        file_size=$(ls -lh "$file" 2>/dev/null | awk '\''{print $5}'\'' || echo "未知")' >> "$first_boot_script"
-    echo '        rel_path="${file#$CUSTOM_DIR/}"' >> "$first_boot_script"
-    echo '        echo "  📄 $rel_path ($file_size)" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    done' >> "$first_boot_script"
-    echo '    echo "" >> $LOG_FILE' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    # 1. 安装IPK文件（增强版）' >> "$first_boot_script"
-    echo '    IPK_COUNT=0' >> "$first_boot_script"
-    echo '    IPK_SUCCESS=0' >> "$first_boot_script"
-    echo '    IPK_FAILED=0' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    echo "📦 开始安装IPK包..." >> $LOG_FILE' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    # 使用临时文件来存储文件列表，确保while循环在当前shell中运行' >> "$first_boot_script"
-    echo '    FILE_LIST=$(mktemp)' >> "$first_boot_script"
-    echo '    find "$CUSTOM_DIR" -type f 2>/dev/null > "$FILE_LIST"' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    while IFS= read -r file; do' >> "$first_boot_script"
-    echo '        file_name=$(basename "$file")' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '        # 检查是否是IPK文件（不区分大小写）' >> "$first_boot_script"
-    echo '        if echo "$file_name" | grep -qi "\.ipk$"; then' >> "$first_boot_script"
-    echo '            IPK_COUNT=$((IPK_COUNT + 1))' >> "$first_boot_script"
-    echo '            rel_path="${file#$CUSTOM_DIR/}"' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '            echo "  🔧 正在安装 [$IPK_COUNT]: $rel_path" >> $LOG_FILE' >> "$first_boot_script"
-    echo '            echo "      开始时间: $(date '\''+%H:%M:%S'\'')" >> $LOG_FILE' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '            # 安装IPK包，错误不退出' >> "$first_boot_script"
-    echo '            if opkg install "$file" >> $LOG_FILE 2>&1; then' >> "$first_boot_script"
-    echo '                echo "      ✅ 安装成功" >> $LOG_FILE' >> "$first_boot_script"
-    echo '                IPK_SUCCESS=$((IPK_SUCCESS + 1))' >> "$first_boot_script"
-    echo '            else' >> "$first_boot_script"
-    echo '                echo "      ❌ 安装失败，继续下一个..." >> $LOG_FILE' >> "$first_boot_script"
-    echo '                IPK_FAILED=$((IPK_FAILED + 1))' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '                # 记录详细错误信息' >> "$first_boot_script"
-    echo '                echo "      错误信息:" >> $LOG_FILE' >> "$first_boot_script"
-    echo '                tail -5 $LOG_FILE >> $LOG_FILE 2>&1' >> "$first_boot_script"
-    echo '            fi' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '            echo "      结束时间: $(date '\''+%H:%M:%S'\'')" >> $LOG_FILE' >> "$first_boot_script"
-    echo '            echo "" >> $LOG_FILE' >> "$first_boot_script"
-    echo '        fi' >> "$first_boot_script"
-    echo '    done < "$FILE_LIST"' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    rm -f "$FILE_LIST"' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    echo "📊 IPK包安装统计:" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  尝试安装: $IPK_COUNT 个" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  成功: $IPK_SUCCESS 个" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  失败: $IPK_FAILED 个" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "" >> $LOG_FILE' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    # 2. 运行脚本文件（增强版）' >> "$first_boot_script"
-    echo '    SCRIPT_COUNT=0' >> "$first_boot_script"
-    echo '    SCRIPT_SUCCESS=0' >> "$first_boot_script"
-    echo '    SCRIPT_FAILED=0' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    echo "📜 开始运行脚本文件..." >> $LOG_FILE' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    # 使用临时文件来存储文件列表' >> "$first_boot_script"
-    echo '    FILE_LIST=$(mktemp)' >> "$first_boot_script"
-    echo '    find "$CUSTOM_DIR" -type f 2>/dev/null > "$FILE_LIST"' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    while IFS= read -r file; do' >> "$first_boot_script"
-    echo '        file_name=$(basename "$file")' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '        # 检查是否是脚本文件（不区分大小写）' >> "$first_boot_script"
-    echo '        if echo "$file_name" | grep -qi "\.sh$"; then' >> "$first_boot_script"
-    echo '            SCRIPT_COUNT=$((SCRIPT_COUNT + 1))' >> "$first_boot_script"
-    echo '            rel_path="${file#$CUSTOM_DIR/}"' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '            echo "  🚀 正在运行 [$SCRIPT_COUNT]: $rel_path" >> $LOG_FILE' >> "$first_boot_script"
-    echo '            echo "      开始时间: $(date '\''+%H:%M:%S'\'')" >> $LOG_FILE' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '            # 确保有执行权限' >> "$first_boot_script"
-    echo '            chmod +x "$file" 2>/dev/null' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '            # 运行脚本，错误不退出' >> "$first_boot_script"
-    echo '            if sh "$file" >> $LOG_FILE 2>&1; then' >> "$first_boot_script"
-    echo '                echo "      ✅ 运行成功" >> $LOG_FILE' >> "$first_boot_script"
-    echo '                SCRIPT_SUCCESS=$((SCRIPT_SUCCESS + 1))' >> "$first_boot_script"
-    else
-            local exit_code=$?' >> "$first_boot_script"
-    echo '                echo "      ❌ 运行失败，退出代码: $exit_code" >> $LOG_FILE' >> "$first_boot_script"
-    echo '                SCRIPT_FAILED=$((SCRIPT_FAILED + 1))' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '                # 记录详细错误信息' >> "$first_boot_script"
-    echo '                echo "      错误信息:" >> $LOG_FILE' >> "$first_boot_script"
-    echo '                tail -5 $LOG_FILE >> $LOG_FILE 2>&1' >> "$first_boot_script"
-    echo '            fi' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '            echo "      结束时间: $(date '\''+%H:%M:%S'\'')" >> $LOG_FILE' >> "$first_boot_script"
-    echo '            echo "" >> $LOG_FILE' >> "$first_boot_script"
-    echo '        fi' >> "$first_boot_script"
-    echo '    done < "$FILE_LIST"' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    rm -f "$FILE_LIST"' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    echo "📊 脚本运行统计:" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  尝试运行: $SCRIPT_COUNT 个" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  成功: $SCRIPT_SUCCESS 个" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  失败: $SCRIPT_FAILED 个" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "" >> $LOG_FILE' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    # 3. 复制其他文件到特定位置' >> "$first_boot_script"
-    echo '    OTHER_COUNT=0' >> "$first_boot_script"
-    echo '    OTHER_SUCCESS=0' >> "$first_boot_script"
-    echo '    OTHER_FAILED=0' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    echo "📁 处理其他文件..." >> $LOG_FILE' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    # 使用临时文件来存储文件列表' >> "$first_boot_script"
-    echo '    FILE_LIST=$(mktemp)' >> "$first_boot_script"
-    echo '    find "$CUSTOM_DIR" -type f 2>/dev/null > "$FILE_LIST"' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    while IFS= read -r file; do' >> "$first_boot_script"
-    echo '        file_name=$(basename "$file")' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '        # 跳过已处理的文件类型' >> "$first_boot_script"
-    echo '        if echo "$file_name" | grep -qi "\.ipk$"; then' >> "$first_boot_script"
-    echo '            continue  # 已经在IPK处理阶段处理过了' >> "$first_boot_script"
-    echo '        fi' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '        if echo "$file_name" | grep -qi "\.sh$"; then' >> "$first_boot_script"
-    echo '            continue  # 已经在脚本处理阶段处理过了' >> "$first_boot_script"
-    echo '        fi' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '        OTHER_COUNT=$((OTHER_COUNT + 1))' >> "$first_boot_script"
-    echo '        rel_path="${file#$CUSTOM_DIR/}"' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '        echo "  📋 正在处理 [$OTHER_COUNT]: $rel_path" >> $LOG_FILE' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '        # 根据文件类型处理' >> "$first_boot_script"
-    echo '        if echo "$file_name" | grep -qi "\.conf$"; then' >> "$first_boot_script"
-    echo '            # 配置文件复制到/etc/config/' >> "$first_boot_script"
-    echo '            echo "      类型: 配置文件" >> $LOG_FILE' >> "$first_boot_script"
-    echo '            if cp "$file" "/etc/config/$file_name" 2>/dev/null; then' >> "$first_boot_script"
-    echo '                echo "      ✅ 复制到 /etc/config/" >> $LOG_FILE' >> "$first_boot_script"
-    echo '                OTHER_SUCCESS=$((OTHER_SUCCESS + 1))' >> "$first_boot_script"
-    echo '            else' >> "$first_boot_script"
-    echo '                echo "      ❌ 复制失败" >> $LOG_FILE' >> "$first_boot_script"
-    echo '                OTHER_FAILED=$((OTHER_FAILED + 1))' >> "$first_boot_script"
-    echo '            fi' >> "$first_boot_script"
-    echo '        else' >> "$first_boot_script"
-    echo '            # 其他文件复制到/tmp/' >> "$first_boot_script"
-    echo '            echo "      类型: 其他文件" >> $LOG_FILE' >> "$first_boot_script"
-    echo '            if cp "$file" "/tmp/$file_name" 2>/dev/null; then' >> "$first_boot_script"
-    echo '                echo "      ✅ 复制到 /tmp/" >> $LOG_FILE' >> "$first_boot_script"
-    echo '                OTHER_SUCCESS=$((OTHER_SUCCESS + 1))' >> "$first_boot_script"
-    echo '            else' >> "$first_boot_script"
-    echo '                echo "      ❌ 复制失败" >> $LOG_FILE' >> "$first_boot_script"
-    echo '                OTHER_FAILED=$((OTHER_FAILED + 1))' >> "$first_boot_script"
-    echo '            fi' >> "$first_boot_script"
-    echo '        fi' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '        echo "" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    done < "$FILE_LIST"' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    rm -f "$FILE_LIST"' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    echo "📊 其他文件处理统计:" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  尝试处理: $OTHER_COUNT 个" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  成功: $OTHER_SUCCESS 个" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  失败: $OTHER_FAILED 个" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "" >> $LOG_FILE' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    # 4. 安装完成总结' >> "$first_boot_script"
-    echo '    echo "==================================================" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "      自定义文件安装完成" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "      结束时间: $(date)" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "      日志文件: $LOG_FILE" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "==================================================" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "" >> $LOG_FILE' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    TOTAL_FILES=$((IPK_COUNT + SCRIPT_COUNT + OTHER_COUNT))' >> "$first_boot_script"
-    echo '    TOTAL_SUCCESS=$((IPK_SUCCESS + SCRIPT_SUCCESS + OTHER_SUCCESS))' >> "$first_boot_script"
-    echo '    TOTAL_FAILED=$((IPK_FAILED + SCRIPT_FAILED + OTHER_FAILED))' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    echo "📈 总体统计:" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  总文件数: $TOTAL_FILES 个" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  成功处理: $TOTAL_SUCCESS 个" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  失败处理: $TOTAL_FAILED 个" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  成功率: $((TOTAL_SUCCESS * 100 / (TOTAL_SUCCESS + TOTAL_FAILED)))%" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "" >> $LOG_FILE' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    echo "📋 详细分类统计:" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  📦 IPK包: $IPK_SUCCESS/$IPK_COUNT 成功" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  📜 脚本: $SCRIPT_SUCCESS/$SCRIPT_COUNT 成功" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  📁 其他文件: $OTHER_SUCCESS/$OTHER_COUNT 成功" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "" >> $LOG_FILE' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    # 创建完成标记文件' >> "$first_boot_script"
-    echo '    touch /etc/custom-files-installed' >> "$first_boot_script"
-    echo '    echo "✅ 已创建安装完成标记: /etc/custom-files-installed" >> $LOG_FILE' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo '    echo "📝 重要信息:" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  安装日志位置: $LOG_FILE" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  日志目录: /root/logs/" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  下次启动不会再次安装（已有标记文件）" >> $LOG_FILE' >> "$first_boot_script"
-    echo '    echo "  如需重新安装，请删除: /etc/custom-files-installed" >> $LOG_FILE' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo 'else' >> "$first_boot_script"
-    echo '    echo "❌ 自定义文件目录不存在: $CUSTOM_DIR" >> $LOG_FILE' >> "$first_boot_script"
-    echo 'fi' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo 'echo "" >> $LOG_FILE' >> "$first_boot_script"
-    echo 'echo "=== 自定义文件安装脚本执行完成 ===" >> $LOG_FILE' >> "$first_boot_script"
-    echo '' >> "$first_boot_script"
-    echo 'exit 0' >> "$first_boot_script"
-    
+    cat > "$first_boot_script" << 'EOF'
+#!/bin/sh
+
+# 创建日志目录
+LOG_DIR="/root/logs"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/custom-files-install-$(date +%Y%m%d_%H%M%S).log"
+
+echo "==================================================" > $LOG_FILE
+echo "      自定义文件安装脚本（增强版）" >> $LOG_FILE
+echo "      开始时间: $(date)" >> $LOG_FILE
+echo "      日志文件: $LOG_FILE" >> $LOG_FILE
+echo "==================================================" >> $LOG_FILE
+echo "" >> $LOG_FILE
+
+CUSTOM_DIR="/etc/custom-files"
+
+if [ -d "$CUSTOM_DIR" ]; then
+    echo "✅ 找到自定义文件目录: $CUSTOM_DIR" >> $LOG_FILE
+    echo "📊 目录结构:" >> $LOG_FILE
+    find "$CUSTOM_DIR" -type f 2>/dev/null | sort | while read file; do
+        file_name=$(basename "$file")
+        file_size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+        rel_path="${file#$CUSTOM_DIR/}"
+        echo "  📄 $rel_path ($file_size)" >> $LOG_FILE
+    done
+    echo "" >> $LOG_FILE
+
+    # 1. 安装IPK文件（增强版）
+    IPK_COUNT=0
+    IPK_SUCCESS=0
+    IPK_FAILED=0
+
+    echo "📦 开始安装IPK包..." >> $LOG_FILE
+
+    # 使用临时文件来存储文件列表
+    FILE_LIST=$(mktemp)
+    find "$CUSTOM_DIR" -type f 2>/dev/null > "$FILE_LIST"
+
+    while IFS= read -r file; do
+        file_name=$(basename "$file")
+
+        # 检查是否是IPK文件（不区分大小写）
+        if echo "$file_name" | grep -qi "\.ipk$"; then
+            IPK_COUNT=$((IPK_COUNT + 1))
+            rel_path="${file#$CUSTOM_DIR/}"
+
+            echo "  🔧 正在安装 [$IPK_COUNT]: $rel_path" >> $LOG_FILE
+            echo "      开始时间: $(date '+%H:%M:%S')" >> $LOG_FILE
+
+            # 安装IPK包，错误不退出
+            if opkg install "$file" >> $LOG_FILE 2>&1; then
+                echo "      ✅ 安装成功" >> $LOG_FILE
+                IPK_SUCCESS=$((IPK_SUCCESS + 1))
+            else
+                echo "      ❌ 安装失败，继续下一个..." >> $LOG_FILE
+                IPK_FAILED=$((IPK_FAILED + 1))
+
+                # 记录详细错误信息
+                echo "      错误信息:" >> $LOG_FILE
+                tail -5 $LOG_FILE >> $LOG_FILE 2>&1
+            fi
+
+            echo "      结束时间: $(date '+%H:%M:%S')" >> $LOG_FILE
+            echo "" >> $LOG_FILE
+        fi
+    done < "$FILE_LIST"
+
+    rm -f "$FILE_LIST"
+
+    echo "📊 IPK包安装统计:" >> $LOG_FILE
+    echo "  尝试安装: $IPK_COUNT 个" >> $LOG_FILE
+    echo "  成功: $IPK_SUCCESS 个" >> $LOG_FILE
+    echo "  失败: $IPK_FAILED 个" >> $LOG_FILE
+    echo "" >> $LOG_FILE
+
+    # 2. 运行脚本文件（增强版）
+    SCRIPT_COUNT=0
+    SCRIPT_SUCCESS=0
+    SCRIPT_FAILED=0
+
+    echo "📜 开始运行脚本文件..." >> $LOG_FILE
+
+    # 使用临时文件来存储文件列表
+    FILE_LIST=$(mktemp)
+    find "$CUSTOM_DIR" -type f 2>/dev/null > "$FILE_LIST"
+
+    while IFS= read -r file; do
+        file_name=$(basename "$file")
+
+        # 检查是否是脚本文件（不区分大小写）
+        if echo "$file_name" | grep -qi "\.sh$"; then
+            SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
+            rel_path="${file#$CUSTOM_DIR/}"
+
+            echo "  🚀 正在运行 [$SCRIPT_COUNT]: $rel_path" >> $LOG_FILE
+            echo "      开始时间: $(date '+%H:%M:%S')" >> $LOG_FILE
+
+            # 确保有执行权限
+            chmod +x "$file" 2>/dev/null
+
+            # 运行脚本，错误不退出
+            if sh "$file" >> $LOG_FILE 2>&1; then
+                echo "      ✅ 运行成功" >> $LOG_FILE
+                SCRIPT_SUCCESS=$((SCRIPT_SUCCESS + 1))
+            else
+                exit_code=$?
+                echo "      ❌ 运行失败，退出代码: $exit_code" >> $LOG_FILE
+                SCRIPT_FAILED=$((SCRIPT_FAILED + 1))
+
+                # 记录详细错误信息
+                echo "      错误信息:" >> $LOG_FILE
+                tail -5 $LOG_FILE >> $LOG_FILE 2>&1
+            fi
+
+            echo "      结束时间: $(date '+%H:%M:%S')" >> $LOG_FILE
+            echo "" >> $LOG_FILE
+        fi
+    done < "$FILE_LIST"
+
+    rm -f "$FILE_LIST"
+
+    echo "📊 脚本运行统计:" >> $LOG_FILE
+    echo "  尝试运行: $SCRIPT_COUNT 个" >> $LOG_FILE
+    echo "  成功: $SCRIPT_SUCCESS 个" >> $LOG_FILE
+    echo "  失败: $SCRIPT_FAILED 个" >> $LOG_FILE
+    echo "" >> $LOG_FILE
+
+    # 3. 复制其他文件到特定位置
+    OTHER_COUNT=0
+    OTHER_SUCCESS=0
+    OTHER_FAILED=0
+
+    echo "📁 处理其他文件..." >> $LOG_FILE
+
+    # 使用临时文件来存储文件列表
+    FILE_LIST=$(mktemp)
+    find "$CUSTOM_DIR" -type f 2>/dev/null > "$FILE_LIST"
+
+    while IFS= read -r file; do
+        file_name=$(basename "$file")
+
+        # 跳过已处理的文件类型
+        if echo "$file_name" | grep -qi "\.ipk$"; then
+            continue  # 已经在IPK处理阶段处理过了
+        fi
+
+        if echo "$file_name" | grep -qi "\.sh$"; then
+            continue  # 已经在脚本处理阶段处理过了
+        fi
+
+        OTHER_COUNT=$((OTHER_COUNT + 1))
+        rel_path="${file#$CUSTOM_DIR/}"
+
+        echo "  📋 正在处理 [$OTHER_COUNT]: $rel_path" >> $LOG_FILE
+
+        # 根据文件类型处理
+        if echo "$file_name" | grep -qi "\.conf$"; then
+            # 配置文件复制到/etc/config/
+            echo "      类型: 配置文件" >> $LOG_FILE
+            if cp "$file" "/etc/config/$file_name" 2>/dev/null; then
+                echo "      ✅ 复制到 /etc/config/" >> $LOG_FILE
+                OTHER_SUCCESS=$((OTHER_SUCCESS + 1))
+            else
+                echo "      ❌ 复制失败" >> $LOG_FILE
+                OTHER_FAILED=$((OTHER_FAILED + 1))
+            fi
+        else
+            # 其他文件复制到/tmp/
+            echo "      类型: 其他文件" >> $LOG_FILE
+            if cp "$file" "/tmp/$file_name" 2>/dev/null; then
+                echo "      ✅ 复制到 /tmp/" >> $LOG_FILE
+                OTHER_SUCCESS=$((OTHER_SUCCESS + 1))
+            else
+                echo "      ❌ 复制失败" >> $LOG_FILE
+                OTHER_FAILED=$((OTHER_FAILED + 1))
+            fi
+        fi
+
+        echo "" >> $LOG_FILE
+    done < "$FILE_LIST"
+
+    rm -f "$FILE_LIST"
+
+    echo "📊 其他文件处理统计:" >> $LOG_FILE
+    echo "  尝试处理: $OTHER_COUNT 个" >> $LOG_FILE
+    echo "  成功: $OTHER_SUCCESS 个" >> $LOG_FILE
+    echo "  失败: $OTHER_FAILED 个" >> $LOG_FILE
+    echo "" >> $LOG_FILE
+
+    # 4. 安装完成总结
+    echo "==================================================" >> $LOG_FILE
+    echo "      自定义文件安装完成" >> $LOG_FILE
+    echo "      结束时间: $(date)" >> $LOG_FILE
+    echo "      日志文件: $LOG_FILE" >> $LOG_FILE
+    echo "==================================================" >> $LOG_FILE
+    echo "" >> $LOG_FILE
+
+    TOTAL_FILES=$((IPK_COUNT + SCRIPT_COUNT + OTHER_COUNT))
+    TOTAL_SUCCESS=$((IPK_SUCCESS + SCRIPT_SUCCESS + OTHER_SUCCESS))
+    TOTAL_FAILED=$((IPK_FAILED + SCRIPT_FAILED + OTHER_FAILED))
+
+    echo "📈 总体统计:" >> $LOG_FILE
+    echo "  总文件数: $TOTAL_FILES 个" >> $LOG_FILE
+    echo "  成功处理: $TOTAL_SUCCESS 个" >> $LOG_FILE
+    echo "  失败处理: $TOTAL_FAILED 个" >> $LOG_FILE
+    echo "  成功率: $((TOTAL_SUCCESS * 100 / (TOTAL_SUCCESS + TOTAL_FAILED)))%" >> $LOG_FILE
+    echo "" >> $LOG_FILE
+
+    echo "📋 详细分类统计:" >> $LOG_FILE
+    echo "  📦 IPK包: $IPK_SUCCESS/$IPK_COUNT 成功" >> $LOG_FILE
+    echo "  📜 脚本: $SCRIPT_SUCCESS/$SCRIPT_COUNT 成功" >> $LOG_FILE
+    echo "  📁 其他文件: $OTHER_SUCCESS/$OTHER_COUNT 成功" >> $LOG_FILE
+    echo "" >> $LOG_FILE
+
+    # 创建完成标记文件
+    touch /etc/custom-files-installed
+    echo "✅ 已创建安装完成标记: /etc/custom-files-installed" >> $LOG_FILE
+
+    echo "📝 重要信息:" >> $LOG_FILE
+    echo "  安装日志位置: $LOG_FILE" >> $LOG_FILE
+    echo "  日志目录: /root/logs/" >> $LOG_FILE
+    echo "  下次启动不会再次安装（已有标记文件）" >> $LOG_FILE
+    echo "  如需重新安装，请删除: /etc/custom-files-installed" >> $LOG_FILE
+
+else
+    echo "❌ 自定义文件目录不存在: $CUSTOM_DIR" >> $LOG_FILE
+fi
+
+echo "" >> $LOG_FILE
+echo "=== 自定义文件安装脚本执行完成 ===" >> $LOG_FILE
+
+exit 0
+EOF
+
     # 设置脚本权限
     chmod +x "$first_boot_script"
     log "✅ 创建第一次开机安装脚本: $first_boot_script"
@@ -2665,70 +2667,72 @@ integrate_custom_files() {
     log "  5. ✅ 分类统计和成功率计算"
     log "  6. ✅ 日志存储到 /root/logs/ 目录（重启不丢失）"
     
-    # 创建文件名检查脚本（使用echo命令代替heredoc）
+    # 创建文件名检查脚本（使用cat命令代替heredoc）
     echo ""
     log "🔧 步骤4: 创建文件名检查脚本"
     
     local name_check_script="$custom_files_dir/check_filenames.sh"
-    echo '#!/bin/sh' > "$name_check_script"
-    echo '' >> "$name_check_script"
-    echo 'echo "=== 文件名检查脚本 ==="' >> "$name_check_script"
-    echo 'echo "检查时间: $(date)"' >> "$name_check_script"
-    echo 'echo ""' >> "$name_check_script"
-    echo '' >> "$name_check_script"
-    echo 'CUSTOM_DIR="/etc/custom-files"' >> "$name_check_script"
-    echo '' >> "$name_check_script"
-    echo 'if [ ! -d "$CUSTOM_DIR" ]; then' >> "$name_check_script"
-    echo '    echo "❌ 自定义文件目录不存在: $CUSTOM_DIR"' >> "$name_check_script"
-    echo '    exit 1' >> "$name_check_script"
-    echo 'fi' >> "$name_check_script"
-    echo '' >> "$name_check_script"
-    echo 'echo "🔍 正在检查文件名兼容性..."' >> "$name_check_script"
-    echo 'echo ""' >> "$name_check_script"
-    echo '' >> "$name_check_script"
-    echo 'ENGLISH_COUNT=0' >> "$name_check_script"
-    echo 'NON_ENGLISH_COUNT=0' >> "$name_check_script"
-    echo 'TOTAL_FILES=0' >> "$name_check_script"
-    echo '' >> "$name_check_script"
-    echo '# 使用临时文件确保变量作用域' >> "$name_check_script"
-    echo 'FILE_LIST=$(mktemp)' >> "$name_check_script"
-    echo 'find "$CUSTOM_DIR" -type f 2>/dev/null > "$FILE_LIST"' >> "$name_check_script"
-    echo '' >> "$name_check_script"
-    echo 'while IFS= read -r file; do' >> "$name_check_script"
-    echo '    TOTAL_FILES=$((TOTAL_FILES + 1))' >> "$name_check_script"
-    echo '    file_name=$(basename "$file")' >> "$name_check_script"
-    echo '    rel_path="${file#$CUSTOM_DIR/}"' >> "$name_check_script"
-    echo '' >> "$name_check_script"
-    echo '    # 检查是否只包含ASCII字符 - 修复正则表达式' >> "$name_check_script"
-    echo '    if echo "$file_name" | grep -q '\''^[a-zA-Z0-9_.\-]*$'\''; then' >> "$name_check_script"
-    echo '        ENGLISH_COUNT=$((ENGLISH_COUNT + 1))' >> "$name_check_script"
-    echo '        echo "✅ $rel_path"' >> "$name_check_script"
-    echo '    else' >> "$name_check_script"
-    echo '        NON_ENGLISH_COUNT=$((NON_ENGLISH_COUNT + 1))' >> "$name_check_script"
-    echo '        echo "⚠️ $rel_path (非英文文件名)"' >> "$name_check_script"
-    echo '    fi' >> "$name_check_script"
-    echo 'done < "$FILE_LIST"' >> "$name_check_script"
-    echo '' >> "$name_check_script"
-    echo 'rm -f "$FILE_LIST"' >> "$name_check_script"
-    echo '' >> "$name_check_script"
-    echo 'echo ""' >> "$name_check_script"
-    echo 'echo "📊 检查结果:"' >> "$name_check_script"
-    echo 'echo "  总文件数: $TOTAL_FILES 个"' >> "$name_check_script"
-    echo 'echo "  英文文件名: $ENGLISH_COUNT 个"' >> "$name_check_script"
-    echo 'echo "  非英文文件名: $NON_ENGLISH_COUNT 个"' >> "$name_check_script"
-    echo 'echo ""' >> "$name_check_script"
-    echo '' >> "$name_check_script"
-    echo 'if [ $NON_ENGLISH_COUNT -gt 0 ]; then' >> "$name_check_script"
-    echo '    echo "💡 建议:"' >> "$name_check_script"
-    echo '    echo "  为了更好的兼容性，建议将非英文文件名改为英文"' >> "$name_check_script"
-    echo '    echo "  英文名更方便复制和运行"' >> "$name_check_script"
-    echo 'else' >> "$name_check_script"
-    echo '    echo "🎉 所有文件名都是英文，兼容性良好！"' >> "$name_check_script"
-    echo 'fi' >> "$name_check_script"
-    echo '' >> "$name_check_script"
-    echo 'echo ""' >> "$name_check_script"
-    echo 'echo "✅ 文件名检查完成"' >> "$name_check_script"
-    
+    cat > "$name_check_script" << 'EOF'
+#!/bin/sh
+
+echo "=== 文件名检查脚本 ==="
+echo "检查时间: $(date)"
+echo ""
+
+CUSTOM_DIR="/etc/custom-files"
+
+if [ ! -d "$CUSTOM_DIR" ]; then
+    echo "❌ 自定义文件目录不存在: $CUSTOM_DIR"
+    exit 1
+fi
+
+echo "🔍 正在检查文件名兼容性..."
+echo ""
+
+ENGLISH_COUNT=0
+NON_ENGLISH_COUNT=0
+TOTAL_FILES=0
+
+# 使用临时文件确保变量作用域
+FILE_LIST=$(mktemp)
+find "$CUSTOM_DIR" -type f 2>/dev/null > "$FILE_LIST"
+
+while IFS= read -r file; do
+    TOTAL_FILES=$((TOTAL_FILES + 1))
+    file_name=$(basename "$file")
+    rel_path="${file#$CUSTOM_DIR/}"
+
+    # 检查是否只包含ASCII字符 - 修复正则表达式
+    if echo "$file_name" | grep -q '^[a-zA-Z0-9_.\-]*$'; then
+        ENGLISH_COUNT=$((ENGLISH_COUNT + 1))
+        echo "✅ $rel_path"
+    else
+        NON_ENGLISH_COUNT=$((NON_ENGLISH_COUNT + 1))
+        echo "⚠️ $rel_path (非英文文件名)"
+    fi
+done < "$FILE_LIST"
+
+rm -f "$FILE_LIST"
+
+echo ""
+echo "📊 检查结果:"
+echo "  总文件数: $TOTAL_FILES 个"
+echo "  英文文件名: $ENGLISH_COUNT 个"
+echo "  非英文文件名: $NON_ENGLISH_COUNT 个"
+echo ""
+
+if [ $NON_ENGLISH_COUNT -gt 0 ]; then
+    echo "💡 建议:"
+    echo "  为了更好的兼容性，建议将非英文文件名改为英文"
+    echo "  英文名更方便复制和运行"
+else
+    echo "🎉 所有文件名都是英文，兼容性良好！"
+fi
+
+echo ""
+echo "✅ 文件名检查完成"
+EOF
+
     chmod +x "$name_check_script"
     log "✅ 创建文件名检查脚本: $name_check_script"
     
