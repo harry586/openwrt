@@ -1,0 +1,409 @@
+# .github/workflows/firmware-build-fix.yml
+name: 自动修复系统性标识工作流
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_files:
+        description: "要修复的目标文件（用逗号分隔）"
+        required: false
+        default: "all"
+        type: string
+      dry_run:
+        description: "仅预览不执行修改"
+        required: false
+        default: "false"
+        type: choice
+        options: ["true", "false"]
+
+jobs:
+  fix-systematic-ids:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: "1. 检出代码"
+        uses: actions/checkout@v4
+        
+      - name: "2. 安装依赖工具"
+        run: |
+          echo "安装文本处理工具..."
+          sudo apt-get update
+          sudo apt-get install -y tree grep sed awk findutils
+          
+      - name: "3. 运行修改意见脚本"
+        run: |
+          echo "=== 运行修改意见脚本 ==="
+          echo "目标文件: ${{ github.event.inputs.target_files }}"
+          echo "预览模式: ${{ github.event.inputs.dry_run }}"
+          
+          # 创建修改意见脚本
+          cat > /tmp/modification_script.sh << 'EOF'
+          #!/bin/bash
+          # 修改意见脚本 - 自动根据系统性标识修复文件
+          #【modification-script-01】脚本开始
+          
+          set -e
+          
+          TARGET_FILES="$1"
+          DRY_RUN="$2"
+          REPO_ROOT="$GITHUB_WORKSPACE"
+          
+          echo "当前目录: $(pwd)"
+          echo "仓库根目录: $REPO_ROOT"
+          
+          #【modification-script-02】函数定义开始
+          
+          # 模糊搜索文件
+          fuzzy_find_file() {
+            local pattern="$1"
+            local search_dir="${2:-.}"
+            
+            # 多种搜索策略
+            local found_files=""
+            
+            # 1. 直接查找
+            if [ -f "$pattern" ]; then
+              echo "$pattern"
+              return 0
+            fi
+            
+            # 2. 使用find查找
+            found_files=$(find "$search_dir" -type f -name "*$(basename "$pattern")*" 2>/dev/null | head -5)
+            if [ -n "$found_files" ]; then
+              echo "$found_files" | head -1
+              return 0
+            fi
+            
+            # 3. 查找包含标识的文件
+            found_files=$(find "$search_dir" -type f -exec grep -l "#【$pattern" {} \; 2>/dev/null | head -5)
+            if [ -n "$found_files" ]; then
+              echo "$found_files" | head -1
+              return 0
+            fi
+            
+            # 4. 递归查找
+            found_files=$(find "$search_dir" -type f -exec grep -l "$(echo "$pattern" | sed 's/\./\\./g')" {} \; 2>/dev/null | head -5)
+            if [ -n "$found_files" ]; then
+              echo "$found_files" | head -1
+              return 0
+            fi
+            
+            echo ""
+            return 1
+          }
+          
+          # 提取文件名前缀
+          extract_file_prefix() {
+            local file_path="$1"
+            local filename=$(basename "$file_path")
+            echo "${filename%.*}" | sed 's/[^a-zA-Z0-9_-]//g'
+          }
+          
+          # 修复单个文件的系统性标识
+          fix_systematic_ids_in_file() {
+            local file_path="$1"
+            local dry_run="$2"
+            
+            echo ""
+            echo "=== 处理文件: $file_path ==="
+            
+            if [ ! -f "$file_path" ]; then
+              echo "❌ 文件不存在: $file_path"
+              return 1
+            fi
+            
+            local file_prefix=$(extract_file_prefix "$file_path")
+            echo "文件前缀: $file_prefix"
+            
+            # 备份原文件
+            local backup_file="${file_path}.backup_$(date +%Y%m%d_%H%M%S)"
+            cp "$file_path" "$backup_file"
+            echo "✅ 备份文件: $backup_file"
+            
+            # 分析文件内容
+            local total_lines=$(wc -l < "$file_path")
+            echo "文件行数: $total_lines"
+            
+            # 查找现有的系统性标识
+            local existing_ids=$(grep -n "#【" "$file_path" | head -10)
+            if [ -n "$existing_ids" ]; then
+              echo "📋 现有标识:"
+              echo "$existing_ids" | while read line; do
+                echo "  $line"
+              done
+            else
+              echo "ℹ️ 未找到现有系统性标识"
+            fi
+            
+            # 检查是否需要修复
+            local needs_fix=false
+            
+            # 检查是否包含工作流步骤但没有标识
+            if [[ "$file_path" == *workflow* ]] || [[ "$file_path" == *yml ]] || [[ "$file_path" == *yaml ]]; then
+              local step_count=$(grep -c "^[[:space:]]*- name:" "$file_path")
+              local id_count=$(grep -c "#【${file_prefix}-" "$file_path")
+              
+              if [ $step_count -gt 0 ] && [ $id_count -lt $step_count ]; then
+                needs_fix=true
+                echo "🔧 需要修复: 有 $step_count 个步骤但只有 $id_count 个标识"
+              fi
+            fi
+            
+            # 检查shell脚本
+            if [[ "$file_path" == *.sh ]]; then
+              local section_count=$(grep -c "^# ==" "$file_path")
+              local id_count=$(grep -c "#【${file_prefix}-" "$file_path")
+              
+              if [ $section_count -gt 0 ] && [ $id_count -lt $section_count ]; then
+                needs_fix=true
+                echo "🔧 需要修复: 有 $section_count 个部分但只有 $id_count 个标识"
+              fi
+            fi
+            
+            if [ "$needs_fix" = "false" ]; then
+              echo "✅ 文件标识完整，无需修复"
+              return 0
+            fi
+            
+            # 执行修复
+            if [ "$dry_run" = "true" ]; then
+              echo "🔍 预览模式 - 显示建议的修改:"
+              # 这里可以显示建议的修改
+              return 0
+            fi
+            
+            echo "🚀 开始修复系统性标识..."
+            
+            # 根据文件类型使用不同的修复策略
+            if [[ "$file_path" == *workflow* ]] || [[ "$file_path" == *yml ]] || [[ "$file_path" == *yaml ]]; then
+              fix_yaml_file "$file_path" "$file_prefix"
+            elif [[ "$file_path" == *.sh ]]; then
+              fix_shell_file "$file_path" "$file_prefix"
+            else
+              echo "⚠️ 未知文件类型，使用通用修复"
+              fix_generic_file "$file_path" "$file_prefix"
+            fi
+            
+            # 验证修复结果
+            local new_id_count=$(grep -c "#【${file_prefix}-" "$file_path")
+            echo "✅ 修复完成，现有标识数: $new_id_count"
+            
+            # 显示差异
+            echo "📊 文件差异摘要:"
+            diff -u "$backup_file" "$file_path" | head -20 || true
+          }
+          
+          # 修复YAML文件
+          fix_yaml_file() {
+            local file_path="$1"
+            local prefix="$2"
+            
+            local temp_file="${file_path}.tmp"
+            cp "$file_path" "$temp_file"
+            
+            local step_number=0
+            
+            # 读取文件并添加标识
+            while IFS= read -r line; do
+              # 检测步骤开始
+              if [[ "$line" =~ ^[[:space:]]*-[[:space:]]*name:[[:space:]]*[\"\'0-9] ]]; then
+                step_number=$((step_number + 1))
+                printf "      #【%s-%02d】\n" "$prefix" "$step_number" >> "$file_path.new"
+              fi
+              
+              echo "$line" >> "$file_path.new"
+            done < "$temp_file"
+            
+            mv "$file_path.new" "$file_path"
+            rm -f "$temp_file"
+            
+            echo "✅ 添加了 $step_number 个步骤标识"
+          }
+          
+          # 修复Shell文件
+          fix_shell_file() {
+            local file_path="$1"
+            local prefix="$2"
+            
+            local temp_file="${file_path}.tmp"
+            cp "$file_path" "$temp_file"
+            
+            local section_number=0
+            
+            # 读取文件并添加标识
+            while IFS= read -r line; do
+              # 检测主要章节开始
+              if [[ "$line" =~ ^#[[:space:]]*={10,} ]] || [[ "$line" =~ ^#[[:space:]]*-{10,} ]]; then
+                section_number=$((section_number + 1))
+                printf "#【%s-%02d】%s\n" "$prefix" "$section_number" "${line#\#}" >> "$file_path.new"
+                continue
+              fi
+              
+              # 检测函数定义
+              if [[ "$line" =~ ^[a-zA-Z_][a-zA-Z0-9_]*\(\)[[:space:]]*\{?$ ]] || [[ "$line" =~ ^function[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]* ]]; then
+                section_number=$((section_number + 1))
+                printf "#【%s-%02d】%s\n" "$prefix" "$section_number" "$line" >> "$file_path.new"
+                echo "$line" >> "$file_path.new"
+                continue
+              fi
+              
+              echo "$line" >> "$file_path.new"
+            done < "$temp_file"
+            
+            mv "$file_path.new" "$file_path"
+            rm -f "$temp_file"
+            
+            echo "✅ 添加了 $section_number 个章节标识"
+          }
+          
+          # 通用文件修复
+          fix_generic_file() {
+            local file_path="$1"
+            local prefix="$2"
+            
+            echo "⚠️ 通用修复未实现"
+          }
+          
+          #【modification-script-03】主逻辑开始
+          
+          main() {
+            echo "=== 开始处理文件 ==="
+            
+            # 确定要处理的文件
+            local files_to_process=""
+            
+            if [ "$TARGET_FILES" = "all" ] || [ -z "$TARGET_FILES" ]; then
+              echo "🔍 搜索所有包含系统性标识的文件..."
+              
+              # 查找所有可能包含系统性标识的文件
+              files_to_process=$(find "$REPO_ROOT" -type f \( \
+                -name "*.yml" -o \
+                -name "*.yaml" -o \
+                -name "*.sh" -o \
+                -name "*.md" \) \
+                -exec grep -l "#【" {} \; 2>/dev/null | sort | uniq)
+              
+              # 添加已知文件
+              known_files=".github/workflows/firmware-build.yml firmware-config/scripts/build_firmware_main.sh firmware-config/support.sh"
+              for known_file in $known_files; do
+                if [ -f "$REPO_ROOT/$known_file" ] && ! echo "$files_to_process" | grep -q "$known_file"; then
+                  files_to_process="$files_to_process
+$REPO_ROOT/$known_file"
+                fi
+              done
+              
+            else
+              # 处理指定的文件
+              IFS=',' read -ra file_list <<< "$TARGET_FILES"
+              for file_pattern in "${file_list[@]}"; do
+                found_file=$(fuzzy_find_file "$file_pattern" "$REPO_ROOT")
+                if [ -n "$found_file" ]; then
+                  files_to_process="$files_to_process
+$found_file"
+                else
+                  echo "⚠️ 未找到文件: $file_pattern"
+                fi
+              done
+            fi
+            
+            # 去重和排序
+            files_to_process=$(echo "$files_to_process" | sed '/^$/d' | sort | uniq)
+            
+            local file_count=$(echo "$files_to_process" | wc -l)
+            echo "📊 找到 $file_count 个文件需要处理"
+            
+            if [ $file_count -eq 0 ]; then
+              echo "✅ 没有找到需要处理的文件"
+              return 0
+            fi
+            
+            # 处理每个文件
+            local processed=0
+            local skipped=0
+            local failed=0
+            
+            echo "$files_to_process" | while read file_path; do
+              if [ -n "$file_path" ] && [ -f "$file_path" ]; then
+                if fix_systematic_ids_in_file "$file_path" "$DRY_RUN"; then
+                  processed=$((processed + 1))
+                else
+                  failed=$((failed + 1))
+                fi
+              else
+                skipped=$((skipped + 1))
+              fi
+            done
+            
+            echo ""
+            echo "=== 处理结果 ==="
+            echo "✅ 成功处理: $processed 个文件"
+            echo "⚠️ 跳过处理: $skipped 个文件"
+            echo "❌ 处理失败: $failed 个文件"
+            
+            if [ "$DRY_RUN" = "true" ]; then
+              echo ""
+              echo "💡 这是预览模式，没有实际修改文件"
+              echo "   要实际修改，请设置 dry_run=false"
+            fi
+            
+            return $((failed > 0))
+          }
+          
+          # 运行主函数
+          main
+          EOF
+          
+          # 给脚本执行权限
+          chmod +x /tmp/modification_script.sh
+          
+          # 执行脚本
+          /tmp/modification_script.sh "${{ github.event.inputs.target_files }}" "${{ github.event.inputs.dry_run }}"
+          
+      - name: "4. 生成修改报告"
+        if: always()
+        run: |
+          echo "=== 修改报告 ==="
+          echo "生成时间: $(date)"
+          echo "仓库: ${{ github.repository }}"
+          echo "触发者: ${{ github.actor }}"
+          echo ""
+          
+          # 查找修改过的文件
+          echo "📁 修改过的文件:"
+          find . -name "*.backup_*" -type f | while read backup; do
+            original_file="${backup%.backup_*}"
+            echo "  📄 $original_file"
+            echo "    备份: $(basename "$backup")"
+          done
+          
+          echo ""
+          echo "🔍 包含系统性标识的文件统计:"
+          find . -type f -exec grep -l "#【" {} \; 2>/dev/null | while read file; do
+            id_count=$(grep -c "#【" "$file")
+            echo "  📊 $file: $id_count 个标识"
+          done
+          
+      - name: "5. 提交修改"
+        if: github.event.inputs.dry_run == 'false' && success()
+        run: |
+          echo "=== 提交修改 ==="
+          
+          # 配置Git
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # 检查是否有修改
+          if git diff --quiet; then
+            echo "✅ 没有需要提交的修改"
+          else
+            echo "📝 检测到修改，准备提交..."
+            
+            # 添加修改的文件
+            git add -A
+            
+            # 提交修改
+            git commit -m "fix: 自动修复系统性标识 [skip ci]"
+            
+            # 推送修改
+            git push
+            echo "✅ 修改已提交并推送"
+          fi
