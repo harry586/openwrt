@@ -5,11 +5,10 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: "📱 设备名称 (从 support.sh 动态读取)"
+        description: "📱 设备名称 (从 support.sh 动态读取支持的设备) - 支持: acrh17, cmcc_rax3000m, netgear_3800"
         required: true
-        type: choice
-        default: "ac42u"
-        options: ["ac42u", "acrh17", "mi_router_4a_gigabit", "r4ag", "mi_router_3g", "r3g", "netgear_3800"]
+        type: string
+        default: "acrh17"
       version_selection:
         description: "🔄 版本选择"
         required: true
@@ -319,33 +318,30 @@ jobs:
           
           echo "🟢 步骤 5 完成"
       
-      # 步骤 6: 动态读取设备列表并设置编译环境
-      - name: "6. 动态读取设备列表并设置编译环境"
+      # 步骤 6: 动态读取设备列表并设置编译环境（修复版 - 完全动态验证）
+      - name: "6. 动态读取设备列表并设置编译环境（修复版）"
         run: |
-          echo "=== 步骤 6: 动态读取设备列表并设置编译环境 ==="
+          echo "=== 步骤 6: 动态读取设备列表并设置编译环境（修复版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
           trap 'echo "❌ 步骤 6 失败，退出代码: $?"; exit 1' ERR
           
-          echo "🔍 步骤 6.1: 从support.sh动态读取设备列表..."
+          echo "🔍 步骤 6.1: 从support.sh动态读取设备列表并验证..."
           SUPPORT_DIR="${{ github.workspace }}/firmware-config"
           SUPPORT_FILE="$SUPPORT_DIR/support.sh"
           
           if [ -f "$SUPPORT_FILE" ]; then
             echo "✅ 设备支持脚本存在: $SUPPORT_FILE"
             
-            # 尝试从support.sh获取所有设备
-            echo "📋 尝试从support.sh读取设备列表..."
-            
-            # 临时source support.sh来检查函数
-            source "$SUPPORT_FILE" || true
+            # 加载support.sh
+            source "$SUPPORT_FILE"
             
             if command -v get_all_devices >/dev/null 2>&1; then
               ALL_DEVICES=$(get_all_devices)
               echo "✅ 从support.sh读取设备列表成功"
-              echo "📱 支持的设备: $ALL_DEVICES"
+              echo "📱 当前支持的设备: $ALL_DEVICES"
               
               # 将设备列表转换为数组
               IFS=' ' read -ra DEVICE_ARRAY <<< "$ALL_DEVICES"
@@ -353,6 +349,8 @@ jobs:
               # 验证选择的设备是否在列表中
               SELECTED_DEVICE="${{ github.event.inputs.device_name }}"
               DEVICE_VALID=false
+              
+              echo "🔍 验证设备: '$SELECTED_DEVICE'"
               
               for device in "${DEVICE_ARRAY[@]}"; do
                 if [ "$device" = "$SELECTED_DEVICE" ]; then
@@ -362,19 +360,57 @@ jobs:
               done
               
               if [ "$DEVICE_VALID" = false ]; then
-                echo "⚠️ 警告: 选择的设备 '$SELECTED_DEVICE' 不在支持列表中"
-                echo "💡 支持列表: $ALL_DEVICES"
-                echo "🔄 将尝试使用默认设备支持"
+                echo "❌ 错误: 选择的设备 '$SELECTED_DEVICE' 不在支持列表中"
+                echo "💡 支持的设备列表: $ALL_DEVICES"
+                echo "📋 设备详细信息:"
+                for device in "${DEVICE_ARRAY[@]}"; do
+                  if command -v get_device_description >/dev/null 2>&1; then
+                    DESC=$(get_device_description "$device")
+                    echo "  - $device: $DESC"
+                  fi
+                done
+                echo ""
+                echo "🔄 请重新运行工作流并输入支持的设备名称"
+                exit 1
               else
                 echo "✅ 选择的设备 '$SELECTED_DEVICE' 在支持列表中"
+                
+                # 获取设备详细信息
+                if command -v get_device_description >/dev/null 2>&1; then
+                  DEVICE_DESC=$(get_device_description "$SELECTED_DEVICE")
+                  echo "🎯 设备描述: $DEVICE_DESC"
+                fi
+                
+                if command -v get_device_config >/dev/null 2>&1; then
+                  DEVICE_CONFIG=$(get_device_config "$SELECTED_DEVICE")
+                  echo "🔧 设备配置: $DEVICE_CONFIG"
+                fi
+                
+                # 检查设备特性
+                if command -v check_usb_support >/dev/null 2>&1; then
+                  USB_SUPPORT=$(check_usb_support "$SELECTED_DEVICE")
+                  echo "🔌 USB支持: $USB_SUPPORT"
+                fi
+                
+                if command -v check_5g_wifi_support >/dev/null 2>&1; then
+                  WIFI_5G_SUPPORT=$(check_5g_wifi_support "$SELECTED_DEVICE")
+                  echo "📶 5G WiFi支持: $WIFI_5G_SUPPORT"
+                fi
+                
+                if command -v get_device_build_hints >/dev/null 2>&1; then
+                  echo "💡 设备构建提示:"
+                  get_device_build_hints "$SELECTED_DEVICE"
+                fi
               fi
             else
-              echo "⚠️ 警告: support.sh中未找到get_all_devices函数"
-              echo "💡 将使用内置设备支持"
+              echo "❌ 错误: support.sh中未找到get_all_devices函数"
+              echo "💡 请检查support.sh文件是否正确"
+              exit 1
             fi
           else
-            echo "⚠️ 警告: 设备支持脚本不存在: $SUPPORT_FILE"
-            echo "💡 将使用内置设备支持"
+            echo "❌ 错误: 设备支持脚本不存在: $SUPPORT_FILE"
+            echo "💡 请确保firmware-config/support.sh文件存在"
+            exit 1
           fi
           
           echo ""
@@ -394,33 +430,11 @@ jobs:
             exit 1
           fi
           
-          echo "🔄 步骤 6.4: 初始化构建环境（使用设备支持系统）"
+          echo "🔄 步骤 6.4: 初始化构建环境（完全依赖设备支持系统）"
           echo "📱 设备: ${{ github.event.inputs.device_name }}"
           echo "🔄 版本: ${{ github.event.inputs.version_selection }}"
           echo "⚙️ 配置模式: ${{ github.event.inputs.config_mode }}"
           echo "📦 源代码仓库: ${{ github.event.inputs.source_repo }}"
-          
-          # 检查设备支持系统
-          SUPPORT_DIR="${{ github.workspace }}/firmware-config"
-          if [ -f "$SUPPORT_DIR/support.sh" ]; then
-            echo "✅ 设备支持系统存在: $SUPPORT_DIR/support.sh"
-            source "$SUPPORT_DIR/support.sh"
-            
-            # 获取设备描述
-            if command -v get_device_description >/dev/null 2>&1; then
-              DEVICE_DESC=$(get_device_description "${{ github.event.inputs.device_name }}")
-              echo "🎯 设备描述: $DEVICE_DESC"
-            fi
-            
-            # 获取设备配置
-            if command -v get_device_config >/dev/null 2>&1; then
-              DEVICE_CONFIG=$(get_device_config "${{ github.event.inputs.device_name }}")
-              echo "🔧 设备配置: $DEVICE_CONFIG"
-            fi
-          else
-            echo "⚠️ 设备支持脚本不存在: $SUPPORT_DIR/support.sh"
-            echo "💡 将使用内置设备配置"
-          fi
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}" "${{ github.event.inputs.source_repo }}"
           
@@ -481,40 +495,8 @@ jobs:
               PLATFORM=$(echo $DEVICE_CONFIG | awk '{print $4}')
               echo "✅ 从设备支持系统获取配置: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE, PLATFORM=$PLATFORM"
             else
-              # 默认配置
-              case "${{ github.event.inputs.device_name }}" in
-                "ac42u"|"acrh17")
-                  TARGET="ipq40xx"
-                  SUBTARGET="generic"
-                  DEVICE="asus_rt-ac42u"
-                  PLATFORM="ipq40xx"
-                  ;;
-                "mi_router_4a_gigabit"|"r4ag")
-                  TARGET="ramips"
-                  SUBTARGET="mt76x8"
-                  DEVICE="xiaomi_mi-router-4a-gigabit"
-                  PLATFORM="ramips"
-                  ;;
-                "mi_router_3g"|"r3g")
-                  TARGET="ramips"
-                  SUBTARGET="mt7621"
-                  DEVICE="xiaomi_mi-router-3g"
-                  PLATFORM="ramips"
-                  ;;
-                "netgear_3800")
-                  TARGET="ath79"
-                  SUBTARGET="generic"
-                  DEVICE="netgear_wndr3800"
-                  PLATFORM="ath79"
-                  ;;
-                *)
-                  TARGET="ipq40xx"
-                  SUBTARGET="generic"
-                  DEVICE="${{ github.event.inputs.device_name }}"
-                  PLATFORM="generic"
-                  ;;
-              esac
-              echo "⚠️ 使用内置设备配置"
+              echo "❌ 错误: 设备支持脚本不存在"
+              exit 1
             fi
             
             # 创建环境文件
@@ -815,6 +797,8 @@ jobs:
               echo "    🎯 目标平台: ipq40xx (高通平台)"
             elif grep -q "^CONFIG_TARGET_ramips=y" "/mnt/openwrt-build/.config"; then
               echo "    🎯 目标平台: ramips (雷凌平台)"
+            elif grep -q "^CONFIG_TARGET_mediatek=y" "/mnt/openwrt-build/.config"; then
+              echo "    🎯 目标平台: mediatek (联发科平台)"
             fi
             
             # 检查USB配置
