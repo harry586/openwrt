@@ -13,7 +13,7 @@ on:
         type: boolean
 
 jobs:
-  自动修复:
+  auto-fix:
     runs-on: ubuntu-latest
     
     steps:
@@ -37,7 +37,7 @@ jobs:
           echo ""
           
       - name: 解析修复方案文件
-        id: 解析修复
+        id: parse_fixes  # 步骤ID必须用英文
         run: |
           echo "=== 解析修复方案文件 ==="
           
@@ -70,12 +70,12 @@ jobs:
           echo "  - 新函数/步骤: $(grep -c "^#【.*-新函数】\|^#【.*-新步骤】" "$修复文件") 个"
           
           # 保存解析结果供后续步骤使用
-          echo "标识数量=$(grep -c "^#【" "$修复文件")" >> $GITHUB_OUTPUT
-          echo "脚本修复数量=$(grep -c "^#【build_firmware_main.sh-" "$修复文件")" >> $GITHUB_OUTPUT
-          echo "工作流修复数量=$(grep -c "^#【firmware-build.yml-" "$修复文件")" >> $GITHUB_OUTPUT
+          echo "identifiers_count=$(grep -c "^#【" "$修复文件")" >> $GITHUB_OUTPUT
+          echo "script_fixes_count=$(grep -c "^#【build_firmware_main.sh-" "$修复文件")" >> $GITHUB_OUTPUT
+          echo "workflow_fixes_count=$(grep -c "^#【firmware-build.yml-" "$修复文件")" >> $GITHUB_OUTPUT
           
       - name: 处理脚本文件修复 (build_firmware_main.sh)
-        if: steps.解析修复.outputs.脚本修复数量 != '0'
+        if: steps.parse_fixes.outputs.script_fixes_count != '0'
         run: |
           echo "=== 处理脚本文件修复 ==="
           
@@ -202,7 +202,7 @@ jobs:
           fi
           
       - name: 处理工作流文件修复 (firmware-build.yml)
-        if: steps.解析修复.outputs.工作流修复数量 != '0'
+        if: steps.parse_fixes.outputs.workflow_fixes_count != '0'
         run: |
           echo "=== 处理工作流文件修复 ==="
           
@@ -354,9 +354,9 @@ jobs:
           echo ""
           
           echo "📊 修复处理摘要:"
-          echo "  - 解析的标识数量: ${{ steps.解析修复.outputs.标识数量 }}"
-          echo "  - 脚本修复数量: ${{ steps.解析修复.outputs.脚本修复数量 }}"
-          echo "  - 工作流修复数量: ${{ steps.解析修复.outputs.工作流修复数量 }}"
+          echo "  - 解析的标识数量: ${{ steps.parse_fixes.outputs.identifiers_count }}"
+          echo "  - 脚本修复数量: ${{ steps.parse_fixes.outputs.script_fixes_count }}"
+          echo "  - 工作流修复数量: ${{ steps.parse_fixes.outputs.workflow_fixes_count }}"
           echo ""
           
           # 显示备份文件
@@ -376,9 +376,9 @@ jobs:
           echo "**状态:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**处理摘要:**" >> $GITHUB_STEP_SUMMARY
-          echo "- 解析修复标识: ${{ steps.解析修复.outputs.标识数量 }} 个" >> $GITHUB_STEP_SUMMARY
-          echo "- 脚本修复: ${{ steps.解析修复.outputs.脚本修复数量 }} 个" >> $GITHUB_STEP_SUMMARY
-          echo "- 工作流修复: ${{ steps.解析修复.outputs.工作流修复数量 }} 个" >> $GITHUB_STEP_SUMMARY
+          echo "- 解析修复标识: ${{ steps.parse_fixes.outputs.identifiers_count }} 个" >> $GITHUB_STEP_SUMMARY
+          echo "- 脚本修复: ${{ steps.parse_fixes.outputs.script_fixes_count }} 个" >> $GITHUB_STEP_SUMMARY
+          echo "- 工作流修复: ${{ steps.parse_fixes.outputs.workflow_fixes_count }} 个" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [[ "${{ inputs.dry_run }}" == "true" ]]; then
