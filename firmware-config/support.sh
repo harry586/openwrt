@@ -6,7 +6,7 @@
 
 # 获取所有支持的设备列表
 get_all_devices() {
-    echo "ac42u acrh17 mi_router_4a_gigabit mi_router_3g netgear_3800"
+    echo "acrh17 cmcc_rax3000m netgear_3800"
 }
 
 # 获取设备配置
@@ -14,17 +14,11 @@ get_device_config() {
     local device_name="$1"
     
     case "$device_name" in
-        "ac42u")
-            echo "ipq40xx generic asus_rt-ac42u ipq40xx"
-            ;;
-        "acrh17")
+        "ac42u"|"acrh17")
             echo "ipq40xx generic asus_rt-acrh17 ipq40xx"
             ;;
-        "mi_router_4a_gigabit"|"r4ag")
-            echo "ramips mt76x8 xiaomi_mi-router-4a-gigabit ramips"
-            ;;
-        "mi_router_3g"|"r3g")
-            echo "ramips mt7621 xiaomi_mi-router-3g ramips"
+        "cmcc_rax3000m")
+            echo "mediatek mt7981 DEVICE_cmcc_rax3000m mt7981"
             ;;
         "netgear_3800")
             echo "ath79 generic netgear_wndr3800 ath79"
@@ -40,17 +34,11 @@ get_device_description() {
     local device_name="$1"
     
     case "$device_name" in
-        "ac42u")
-            echo "ASUS RT-AC42U (高通IPQ40xx平台, 双频无线)"
+        "ac42u"|"acrh17")
+            echo "ASUS RT-ACRH17/AC42U (高通IPQ40xx平台, 四核1.4GHz)"
             ;;
-        "acrh17")
-            echo "ASUS RT-ACRH17 (高通IPQ40xx平台, 四核1.4GHz)"
-            ;;
-        "mi_router_4a_gigabit"|"r4ag")
-            echo "小米路由器4A千兆版 (MT7628/MT7688平台, 128MB内存)"
-            ;;
-        "mi_router_3g"|"r3g")
-            echo "小米路由器3G (MT7621平台, 256MB内存, USB接口)"
+        "cmcc_rax3000m")
+            echo "中国移动 RAX3000M (联发科MT7981平台, 512MB内存, WiFi 6)"
             ;;
         "netgear_3800")
             echo "Netgear WNDR3800 (ath79平台, 680MHz, 128MB内存)"
@@ -84,11 +72,8 @@ check_device_special_config() {
         "ac42u"|"acrh17")
             echo "高通IPQ40xx平台需要专用USB驱动和无线驱动"
             ;;
-        "mi_router_4a_gigabit"|"r4ag")
-            echo "MT76x8平台需要MT76无线驱动"
-            ;;
-        "mi_router_3g"|"r3g")
-            echo "MT7621平台需要专用USB和PCIe驱动"
+        "cmcc_rax3000m")
+            echo "联发科MT7981平台需要mt7915e/mt7916无线驱动"
             ;;
         "netgear_3800")
             echo "ath79平台需要专用网络和USB驱动"
@@ -109,8 +94,8 @@ get_platform_usb_drivers() {
         "ipq40xx")
             echo "kmod-usb-dwc3 kmod-usb-dwc3-qcom kmod-phy-qcom-dwc3"
             ;;
-        "ramips")
-            echo "kmod-usb-xhci-mtk"
+        "mt7981")
+            echo "kmod-usb-xhci-mtk kmod-usb3"
             ;;
         "ath79")
             echo "kmod-usb2-ath79"
@@ -129,8 +114,8 @@ get_platform_network_drivers() {
         "ipq40xx")
             echo "kmod-ath10k kmod-ath10k-ct"
             ;;
-        "ramips")
-            echo "kmod-mt76 kmod-mt76-core"
+        "mt7981")
+            echo "kmod-mt7915e kmod-mt7916"
             ;;
         "ath79")
             echo "kmod-ath9k"
@@ -151,11 +136,8 @@ get_recommended_config_mode() {
         "ac42u"|"acrh17")
             echo "normal"  # 高性能设备建议完整功能
             ;;
-        "mi_router_4a_gigabit"|"r4ag")
-            echo "normal"  # 中等性能设备建议正常模式
-            ;;
-        "mi_router_3g"|"r3g")
-            echo "normal"  # 带USB接口的设备建议完整功能
+        "cmcc_rax3000m")
+            echo "normal"  # 高性能MT7981平台建议完整功能
             ;;
         "netgear_3800")
             echo "normal"  # 传统设备建议正常模式
@@ -173,11 +155,14 @@ check_usb_support() {
     local device_name="$1"
     
     case "$device_name" in
-        "ac42u"|"acrh17"|"mi_router_3g"|"r3g"|"netgear_3800")
+        "ac42u"|"acrh17"|"netgear_3800")
             echo "yes"  # 这些设备有USB接口
             ;;
+        "cmcc_rax3000m")
+            echo "no"   # RAX3000M没有USB接口
+            ;;
         *)
-            echo "no"   # 其他设备可能没有USB
+            echo "no"
             ;;
     esac
 }
@@ -187,11 +172,11 @@ check_5g_wifi_support() {
     local device_name="$1"
     
     case "$device_name" in
-        "ac42u"|"acrh17"|"mi_router_3g"|"r3g")
+        "ac42u"|"acrh17"|"cmcc_rax3000m")
             echo "yes"  # 这些设备支持5G WiFi
             ;;
         *)
-            echo "no"   # 其他设备可能不支持
+            echo "no"
             ;;
     esac
 }
@@ -207,13 +192,10 @@ get_device_build_hints() {
             echo "🔧 提示: 高通IPQ40xx平台需要大量内存，建议至少2GB RAM进行编译"
             echo "📶 提示: 此设备支持5G WiFi，确保已启用ath10k驱动"
             ;;
-        "mi_router_4a_gigabit"|"r4ag")
-            echo "🔧 提示: MT76x8平台资源有限，建议使用基础模式或精简配置"
-            echo "💾 提示: 此设备只有128MB内存，避免安装过多插件"
-            ;;
-        "mi_router_3g"|"r3g")
-            echo "🔧 提示: MT7621平台性能较好，适合安装完整功能"
-            echo "🔌 提示: 此设备有USB接口，确保已启用USB相关驱动"
+        "cmcc_rax3000m")
+            echo "🔧 提示: 联发科MT7981平台为64位ARM架构，性能强劲"
+            echo "📶 提示: 此设备支持WiFi 6，确保已启用mt7915e/mt7916驱动"
+            echo "💾 提示: 512MB大内存，适合安装大量插件"
             ;;
         "netgear_3800")
             echo "🔧 提示: ath79平台编译较简单，适合初学者"
@@ -232,11 +214,9 @@ show_all_devices() {
     echo ""
     echo "📱 支持的设备列表:"
     echo "=================="
-    echo "1. ac42u       - ASUS RT-AC42U (高通IPQ40xx, 双频)"
-    echo "2. acrh17      - ASUS RT-ACRH17 (高通IPQ40xx, 四核)"
-    echo "3. r4ag        - 小米路由器4A千兆版 (MT7628, 千兆)"
-    echo "4. r3g         - 小米路由器3G (MT7621, USB接口)"
-    echo "5. netgear_3800 - Netgear WNDR3800 (ath79, 经典)"
+    echo "1. acrh17|ac42u  - ASUS RT-ACRH17/AC42U (高通IPQ40xx, 四核1.4GHz)"
+    echo "2. cmcc_rax3000m - 中国移动RAX3000M (MT7981, WiFi 6, 512MB)"
+    echo "3. netgear_3800  - Netgear WNDR3800 (ath79, 680MHz, 128MB)"
     echo ""
     echo "💡 使用方法:"
     echo "  在构建工作流中选择设备名称即可"
@@ -248,7 +228,7 @@ test_support_functions() {
     echo "🧪 设备支持系统测试:"
     echo "=================="
     
-    local test_devices="ac42u r4ag r3g netgear_3800 unknown"
+    local test_devices="acrh17 cmcc_rax3000m netgear_3800 ac42u unknown"
     
     for device in $test_devices; do
         echo ""
@@ -267,7 +247,7 @@ test_support_functions() {
 
 # 如果直接运行此脚本，显示帮助信息
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    echo "设备支持系统 v1.0"
+    echo "设备支持系统 v1.1"
     echo "使用方法:"
     echo "  source support.sh"
     echo "  然后调用相关函数"
