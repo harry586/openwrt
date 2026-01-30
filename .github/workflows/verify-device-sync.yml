@@ -1,0 +1,138 @@
+# .github/workflows/verify-device-sync.yml
+name: 验证设备列表同步
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'firmware-config/support.sh'
+      - '.github/workflows/firmware-build.yml'
+  pull_request:
+    paths:
+      - 'firmware-config/support.sh'
+      - '.github/workflows/firmware-build.yml'
+  workflow_dispatch:
+
+jobs:
+  verify-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        
+      - name: 验证设备列表同步
+        run: |
+          echo "🔍 验证 support.sh 和 firmware-build.yml 的设备列表同步状态..."
+          echo ""
+          
+          # 检查文件是否存在
+          if [ ! -f "firmware-config/support.sh" ]; then
+            echo "❌ 错误: 未找到 firmware-config/support.sh"
+            exit 1
+          fi
+          
+          if [ ! -f ".github/workflows/firmware-build.yml" ]; then
+            echo "❌ 错误: 未找到 .github/workflows/firmware-build.yml"
+            exit 1
+          fi
+          
+          # 从 support.sh 读取设备
+          echo "📖 从 support.sh 读取设备列表..."
+          source firmware-config/support.sh
+          
+          if ! command -v get_all_devices >/dev/null 2>&1; then
+            echo "❌ 错误: support.sh 中没有 get_all_devices 函数"
+            exit 1
+          fi
+          
+          SUPPORT_DEVICES=$(get_all_devices)
+          echo "✅ support.sh 中的设备: $SUPPORT_DEVICES"
+          echo ""
+          
+          # 从 workflow.yml 读取设备
+          echo "📖 从 workflow.yml 读取设备列表..."
+          WORKFLOW_DEVICES=$(grep -A 50 "device_name:" .github/workflows/firmware-build.yml | 
+                            grep -E '^\s*-\s*"' | 
+                            sed 's/^\s*-\s*"\(.*\)"/\1/' | 
+                            tr '\n' ' ' | 
+                            sed 's/ $//')
+          
+          echo "✅ workflow.yml 中的设备: $WORKFLOW_DEVICES"
+          echo ""
+          
+          # 标准化比较（排序后比较）
+          SUPPORT_SORTED=$(echo "$SUPPORT_DEVICES" | tr ' ' '\n' | sort | tr '\n' ' ')
+          WORKFLOW_SORTED=$(echo "$WORKFLOW_DEVICES" | tr ' ' '\n' | sort | tr '\n' ' ')
+          
+          echo "📊 标准化比较:"
+          echo "  support.sh (排序后): $SUPPORT_SORTED"
+          echo "  workflow.yml (排序后): $WORKFLOW_SORTED"
+          echo ""
+          
+          # 比较两个列表
+          if [ "$SUPPORT_SORTED" = "$WORKFLOW_SORTED" ]; then
+            echo "🎉 设备列表同步成功！"
+            echo ""
+            echo "✅ 验证通过"
+          else
+            echo "❌ 错误: 设备列表不同步！"
+            echo ""
+            echo "📊 差异分析:"
+            echo "  只在 support.sh 中:"
+            for device in $SUPPORT_DEVICES; do
+              if ! echo " $WORKFLOW_DEVICES " | grep -q " $device "; then
+                echo "    - $device"
+              fi
+            done
+            
+            echo ""
+            echo "  只在 workflow.yml 中:"
+            for device in $WORKFLOW_DEVICES; do
+              if ! echo " $SUPPORT_DEVICES " | grep -q " $device "; then
+                echo "    - $device"
+              fi
+            done
+            
+            echo ""
+            echo "🔧 修复方法:"
+            echo "  1. 运行同步脚本自动修复:"
+            echo "     ./firmware-config/scripts/sync-device-list.sh"
+            echo ""
+            echo "  2. 或者手动编辑 .github/workflows/firmware-build.yml"
+            echo "     在 device_name 的 options 部分更新设备列表"
+            echo ""
+            echo "  3. 提交修复后的文件"
+            echo ""
+            echo "⚠️ 注意: 如果不修复，固件构建工作流可能无法正常工作"
+            exit 1
+          fi
+          
+      - name: 显示同步状态
+        if: success()
+        run: |
+          echo "📋 同步状态报告"
+          echo "================"
+          echo "✅ 设备列表同步验证通过"
+          echo ""
+          echo "🔧 支持的设备:"
+          source firmware-config/support.sh
+          DEVICES=$(get_all_devices)
+          COUNT=$(echo $DEVICES | wc -w)
+          echo "  设备数量: $COUNT 个"
+          for device in $DEVICES; do
+            DESC=$(get_device_description "$device" 2>/dev/null || echo "无描述")
+            echo "  - $device: $DESC"
+          done
+          
+      - name: 自动修复（可选）
+        if: failure()
+        run: |
+          echo "🔄 尝试自动修复..."
+          if [ -x "firmware-config/scripts/sync-device-list.sh" ]; then
+            ./firmware-config/scripts/sync-device-list.sh
+            echo ""
+            echo "✅ 自动修复完成"
+            echo "📋 请提交更新后的 .github/workflows/firmware-build.yml 文件"
+          else
+            echo "❌ 找不到同步脚本: firmware-config/scripts/sync-device-list.sh"
+          fi
