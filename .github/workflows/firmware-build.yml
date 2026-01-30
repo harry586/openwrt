@@ -8,9 +8,8 @@ on:
         description: "📱 设备名称 (从 support.sh 动态读取)"
         required: true
         type: choice
-        # 选项将在步骤中动态设置
         default: "ac42u"
-        type: string
+        options: ["ac42u", "acrh17", "mi_router_4a_gigabit", "r4ag", "mi_router_3g", "r3g", "netgear_3800"]
       version_selection:
         description: "🔄 版本选择"
         required: true
@@ -28,9 +27,7 @@ on:
         required: true
         type: choice
         default: "immortalwrt"
-        options:
-          - "immortalwrt"
-          - "lede"
+        options: ["immortalwrt", "lede"]
       extra_packages:
         description: "额外安装插件 - 格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。"
         required: false
