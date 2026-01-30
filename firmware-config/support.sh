@@ -1,8 +1,10 @@
 #!/bin/bash
 # firmware-config/support.sh
 # 设备支持系统配置文件
+#【support.sh-01】设备支持系统配置文件 v1.1
 
 # ==================== 设备配置函数 ====================
+#【support.sh-02】设备配置函数部分开始
 
 # 获取所有支持的设备列表
 get_all_devices() {
@@ -50,6 +52,7 @@ get_device_description() {
 }
 
 # ==================== SDK下载函数 ====================
+#【support.sh-03】SDK下载函数部分开始
 
 # 获取SDK下载URL（可选）
 get_sdk_url() {
@@ -63,6 +66,7 @@ get_sdk_url() {
 }
 
 # ==================== 设备特定配置检查 ====================
+#【support.sh-04】设备特定配置检查部分开始
 
 # 检查设备是否需要特殊配置
 check_device_special_config() {
@@ -85,6 +89,7 @@ check_device_special_config() {
 }
 
 # ==================== 平台特性函数 ====================
+#【support.sh-05】平台特性函数部分开始
 
 # 获取平台USB驱动配置
 get_platform_usb_drivers() {
@@ -127,6 +132,7 @@ get_platform_network_drivers() {
 }
 
 # ==================== 构建配置函数 ====================
+#【support.sh-06】构建配置函数部分开始
 
 # 获取推荐的配置模式
 get_recommended_config_mode() {
@@ -149,6 +155,7 @@ get_recommended_config_mode() {
 }
 
 # ==================== 固件特性检查 ====================
+#【support.sh-07】固件特性检查部分开始
 
 # 检查设备是否支持USB
 check_usb_support() {
@@ -182,6 +189,7 @@ check_5g_wifi_support() {
 }
 
 # ==================== 设备特定提示 ====================
+#【support.sh-08】设备特定提示部分开始
 
 # 获取设备构建提示
 get_device_build_hints() {
@@ -208,6 +216,7 @@ get_device_build_hints() {
 }
 
 # ==================== 帮助函数 ====================
+#【support.sh-09】帮助函数部分开始
 
 # 显示所有支持的设备
 show_all_devices() {
@@ -244,6 +253,7 @@ test_support_functions() {
 }
 
 # ==================== 主函数 ====================
+#【support.sh-10】主函数部分开始
 
 # 如果直接运行此脚本，显示帮助信息
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
