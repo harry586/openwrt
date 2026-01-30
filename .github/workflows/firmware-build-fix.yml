@@ -1,4 +1,4 @@
-name: Auto Fix Firmware Build Files
+name: 自动修复固件构建文件
 
 on:
   push:
@@ -7,259 +7,368 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Dry run (只显示修改计划，不实际修改)'
+        description: '干运行（只显示修改计划，不实际修改）'
         required: false
         default: 'false'
         type: boolean
 
 jobs:
-  auto-fix:
+  自动修复:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout repository
+      - name: 检出代码仓库
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
           
-      - name: Setup environment
+      - name: 设置环境
         run: |
           echo "=== 自动修复系统初始化 ==="
           echo "📅 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 创建必要的目录
-          mkdir -p tmp_fixes
-          mkdir -p backup_files
+          mkdir -p 临时修复文件
+          mkdir -p 备份文件
           
           # 显示当前文件状态
           echo "📂 仓库内容:"
           ls -la
           echo ""
           
-      - name: Parse fix.txt file
-        id: parse_fixes
+      - name: 解析修复方案文件
+        id: 解析修复
         run: |
           echo "=== 解析修复方案文件 ==="
           
-          FIX_FILE="firmware-config/fix.txt"
+          修复文件="firmware-config/fix.txt"
           
-          if [ ! -f "$FIX_FILE" ]; then
-            echo "❌ 错误: 修复文件不存在: $FIX_FILE"
+          if [ ! -f "$修复文件" ]; then
+            echo "❌ 错误: 修复文件不存在: $修复文件"
             exit 1
           fi
           
-          echo "📄 修复文件: $FIX_FILE"
-          echo "📊 文件大小: $(wc -l < "$FIX_FILE") 行"
+          echo "📄 修复文件: $修复文件"
+          echo "📊 文件大小: $(wc -l < "$修复文件") 行"
           
           # 提取所有系统性标识
           echo "🔍 提取系统性标识..."
-          grep -n "^#【" "$FIX_FILE" | while read line; do
-            line_num=$(echo "$line" | cut -d: -f1)
-            identifier=$(echo "$line" | cut -d: -f2- | sed 's/^#【\(.*\)】/\1/')
-            echo "📌 标识 [$line_num]: $identifier"
-          done
+          标识行号=1
+          while IFS= read -r 行内容; do
+            if [[ "$行内容" =~ ^#【([^】]+)】 ]]; then
+              标识="${BASH_REMATCH[1]}"
+              echo "📌 标识 [$标识行号]: $标识"
+            fi
+            标识行号=$((标识行号 + 1))
+          done < "$修复文件" | head -20
           
           # 统计不同类型的修复
           echo ""
           echo "📈 修复内容统计:"
-          echo "  - 脚本函数修复: $(grep -c "^#【build_firmware_main.sh-" "$FIX_FILE") 个"
-          echo "  - 工作流步骤修复: $(grep -c "^#【firmware-build.yml-" "$FIX_FILE") 个"
-          echo "  - 新函数/步骤: $(grep -c "^#【.*-新函数】\|^#【.*-新步骤】" "$FIX_FILE") 个"
+          echo "  - 脚本函数修复: $(grep -c "^#【build_firmware_main.sh-" "$修复文件") 个"
+          echo "  - 工作流步骤修复: $(grep -c "^#【firmware-build.yml-" "$修复文件") 个"
+          echo "  - 新函数/步骤: $(grep -c "^#【.*-新函数】\|^#【.*-新步骤】" "$修复文件") 个"
           
           # 保存解析结果供后续步骤使用
-          echo "IDENTIFIERS_COUNT=$(grep -c "^#【" "$FIX_FILE")" >> $GITHUB_OUTPUT
-          echo "SCRIPT_FIXES_COUNT=$(grep -c "^#【build_firmware_main.sh-" "$FIX_FILE")" >> $GITHUB_OUTPUT
-          echo "WORKFLOW_FIXES_COUNT=$(grep -c "^#【firmware-build.yml-" "$FIX_FILE")" >> $GITHUB_OUTPUT
+          echo "标识数量=$(grep -c "^#【" "$修复文件")" >> $GITHUB_OUTPUT
+          echo "脚本修复数量=$(grep -c "^#【build_firmware_main.sh-" "$修复文件")" >> $GITHUB_OUTPUT
+          echo "工作流修复数量=$(grep -c "^#【firmware-build.yml-" "$修复文件")" >> $GITHUB_OUTPUT
           
-      - name: Process script file fixes (build_firmware_main.sh)
-        if: steps.parse_fixes.outputs.SCRIPT_FIXES_COUNT != '0'
+      - name: 处理脚本文件修复 (build_firmware_main.sh)
+        if: steps.解析修复.outputs.脚本修复数量 != '0'
         run: |
           echo "=== 处理脚本文件修复 ==="
           
-          FIX_FILE="firmware-config/fix.txt"
-          TARGET_SCRIPT="firmware-config/scripts/build_firmware_main.sh"
-          BACKUP_FILE="backup_files/build_firmware_main.sh.backup.$(date +%Y%m%d_%H%M%S)"
+          修复文件="firmware-config/fix.txt"
+          目标脚本="firmware-config/scripts/build_firmware_main.sh"
+          备份文件="备份文件/build_firmware_main.sh.备份.$(date +%Y%m%d_%H%M%S)"
           
-          if [ ! -f "$TARGET_SCRIPT" ]; then
-            echo "❌ 目标脚本不存在: $TARGET_SCRIPT"
+          if [ ! -f "$目标脚本" ]; then
+            echo "❌ 目标脚本不存在: $目标脚本"
             exit 1
           fi
           
           # 备份原文件
-          cp "$TARGET_SCRIPT" "$BACKUP_FILE"
-          echo "✅ 已备份原文件到: $BACKUP_FILE"
+          cp "$目标脚本" "$备份文件"
+          echo "✅ 已备份原文件到: $备份文件"
           
           # 创建临时工作文件
-          TEMP_SCRIPT="tmp_fixes/build_firmware_main.sh.tmp"
-          cp "$TARGET_SCRIPT" "$TEMP_SCRIPT"
+          临时脚本="临时修复文件/build_firmware_main.sh.临时"
+          cp "$目标脚本" "$临时脚本"
           
           # 处理所有脚本相关的修复
           echo "🔧 处理脚本修复..."
           
           # 获取所有脚本相关的标识
-          grep -n "^#【build_firmware_main.sh-" "$FIX_FILE" | while read fix_line; do
-            line_num=$(echo "$fix_line" | cut -d: -f1)
-            identifier=$(echo "$fix_line" | cut -d: -f2- | sed 's/^#【\(.*\)】/\1/')
-            name_part=$(echo "$identifier" | cut -d'-' -f2-)
+          行号=0
+          while IFS= read -r 行内容; do
+            行号=$((行号 + 1))
             
-            echo "📌 处理修复: $identifier"
-            
-            # 提取修复内容（从当前行到下一个标识或文件结束）
-            awk -v start_line="$line_num" '
-              NR == start_line {in_fix=1}
-              in_fix && /^#【/ && NR != start_line {exit}
-              in_fix {print}
-            ' "$FIX_FILE" > "tmp_fixes/current_fix.txt"
-            
-            # 提取函数名或修复描述
-            if echo "$identifier" | grep -q "函数"; then
-              # 函数修复
-              func_name=$(echo "$name_part" | sed 's/】.*//')
-              echo "  🎯 目标函数: $func_name"
+            if [[ "$行内容" =~ ^#【build_firmware_main.sh-([^】]+)】 ]]; then
+              标识="${BASH_REMATCH[0]}"
+              标识内容="${BASH_REMATCH[1]}"
               
-              # 在目标脚本中查找函数
-              if grep -n "^${func_name}()" "$TEMP_SCRIPT"; then
-                echo "  ✅ 找到现有函数，将进行替换"
-                # 这里需要实现实际的替换逻辑
+              echo "📌 处理修复 [$行号]: $标识"
+              
+              # 提取修复内容（从当前行到下一个标识或文件结束）
+              开始行=$行号
+              修复内容=""
+              当前行号=$行号
+              
+              while IFS= read -r 内容行; do
+                if [ $当前行号 -eq $开始行 ]; then
+                  # 跳过标识行
+                  :
+                elif [[ "$内容行" =~ ^#【 ]] && [ $当前行号 -ne $开始行 ]; then
+                  break
+                else
+                  修复内容+="$内容行"$'\n'
+                fi
+                当前行号=$((当前行号 + 1))
+              done < <(tail -n +$开始行 "$修复文件")
+              
+              # 保存修复内容到临时文件
+              echo "$修复内容" > "临时修复文件/当前修复.txt"
+              
+              # 提取函数名（从修复内容中查找函数定义）
+              函数名=$(echo "$修复内容" | grep -m1 "^[a-zA-Z_][a-zA-Z0-9_]*()" | sed 's/().*//')
+              
+              if [ -n "$函数名" ]; then
+                echo "  🎯 目标函数: $函数名"
+                
+                # 在目标脚本中查找函数
+                if grep -n "^${函数名}()" "$临时脚本" >/dev/null; then
+                  echo "  ✅ 找到现有函数，将进行替换"
+                  
+                  # 获取函数在脚本中的位置
+                  函数开始行=$(grep -n "^${函数名}()" "$临时脚本" | cut -d: -f1)
+                  if [ -n "$函数开始行" ]; then
+                    # 找到函数结束位置（下一个函数定义或文件结束）
+                    总行数=$(wc -l < "$临时脚本")
+                    函数结束行=$总行数
+                    
+                    # 查找下一个函数定义
+                    for ((i=函数开始行+1; i<=总行数; i++)); do
+                      当前行内容=$(sed -n "${i}p" "$临时脚本")
+                      if [[ "$当前行内容" =~ ^[a-zA-Z_][a-zA-Z0-9_]*\(\) ]]; then
+                        函数结束行=$((i-1))
+                        break
+                      fi
+                    done
+                    
+                    # 替换函数
+                    echo "  🔄 替换函数 $函数名 (行 $函数开始行-$函数结束行)"
+                    
+                    # 创建新脚本文件
+                    {
+                      # 函数之前的部分
+                      head -n $((函数开始行-1)) "$临时脚本"
+                      # 新的函数内容
+                      echo "$修复内容"
+                      # 函数之后的部分
+                      tail -n +$((函数结束行+1)) "$临时脚本"
+                    } > "临时修复文件/新脚本.txt"
+                    
+                    mv "临时修复文件/新脚本.txt" "$临时脚本"
+                  fi
+                else
+                  echo "  ➕ 未找到函数，将作为新函数添加到文件末尾"
+                  
+                  # 添加到文件末尾
+                  echo "" >> "$临时脚本"
+                  echo "$修复内容" >> "$临时脚本"
+                fi
               else
-                echo "  ➕ 未找到函数，将作为新函数添加"
-                # 这里需要实现添加新函数的逻辑
+                echo "  ⚠️ 未找到函数定义，可能是函数修复描述"
+                echo "  🔍 标识内容: $标识内容"
               fi
-            else
-              # 其他修复
-              echo "  🔨 修复类型: $name_part"
+              
+              # 显示修复内容预览
+              echo "  📋 修复内容预览:"
+              echo "$修复内容" | head -8 | sed 's/^/    /'
+              echo ""
             fi
-            
-            # 显示修复内容预览
-            echo "  📋 修复内容预览:"
-            head -10 "tmp_fixes/current_fix.txt" | sed 's/^/    /'
-            echo ""
-          done
+          done < "$修复文件"
           
           # 如果是dry run，不实际修改
           if [[ "${{ inputs.dry_run }}" == "true" ]]; then
             echo "🔍 Dry run模式 - 显示修改计划"
             echo "📊 将修改以下内容:"
-            diff -u "$TARGET_SCRIPT" "$TEMP_SCRIPT" | head -50 || true
+            diff -u "$目标脚本" "$临时脚本" | head -100 || true
           else
             # 实际应用修改
-            mv "$TEMP_SCRIPT" "$TARGET_SCRIPT"
-            echo "✅ 已应用修复到: $TARGET_SCRIPT"
+            mv "$临时脚本" "$目标脚本"
+            echo "✅ 已应用修复到: $目标脚本"
           fi
           
-      - name: Process workflow file fixes (firmware-build.yml)
-        if: steps.parse_fixes.outputs.WORKFLOW_FIXES_COUNT != '0'
+      - name: 处理工作流文件修复 (firmware-build.yml)
+        if: steps.解析修复.outputs.工作流修复数量 != '0'
         run: |
           echo "=== 处理工作流文件修复 ==="
           
-          FIX_FILE="firmware-config/fix.txt"
-          TARGET_WORKFLOW=".github/workflows/firmware-build.yml"
-          BACKUP_FILE="backup_files/firmware-build.yml.backup.$(date +%Y%m%d_%H%M%S)"
+          修复文件="firmware-config/fix.txt"
+          目标工作流=".github/workflows/firmware-build.yml"
+          备份文件="备份文件/firmware-build.yml.备份.$(date +%Y%m%d_%H%M%S)"
           
-          if [ ! -f "$TARGET_WORKFLOW" ]; then
-            echo "❌ 目标工作流不存在: $TARGET_WORKFLOW"
+          if [ ! -f "$目标工作流" ]; then
+            echo "❌ 目标工作流不存在: $目标工作流"
             exit 1
           fi
           
           # 备份原文件
-          cp "$TARGET_WORKFLOW" "$BACKUP_FILE"
-          echo "✅ 已备份原文件到: $BACKUP_FILE"
+          cp "$目标工作流" "$备份文件"
+          echo "✅ 已备份原文件到: $备份文件"
           
           # 创建临时工作文件
-          TEMP_WORKFLOW="tmp_fixes/firmware-build.yml.tmp"
-          cp "$TARGET_WORKFLOW" "$TEMP_WORKFLOW"
+          临时工作流="临时修复文件/firmware-build.yml.临时"
+          cp "$目标工作流" "$临时工作流"
           
           echo "🔧 处理工作流步骤修复..."
           
-          # 获取所有工作流相关的标识并排序
-          grep -n "^#【firmware-build.yml-" "$FIX_FILE" | sort -t'-' -k3 -n | while read fix_line; do
-            line_num=$(echo "$fix_line" | cut -d: -f1)
-            identifier=$(echo "$fix_line" | cut -d: -f2- | sed 's/^#【\(.*\)】/\1/')
-            step_num=$(echo "$identifier" | grep -o '[0-9]\+')
+          # 解析修复文件中的工作流步骤
+          行号=0
+          修复块=""
+          在修复块中=false
+          
+          while IFS= read -r 行内容; do
+            行号=$((行号 + 1))
             
-            echo "📌 处理修复: $identifier (步骤 $step_num)"
-            
-            # 提取修复内容
-            awk -v start_line="$line_num" '
-              NR == start_line {in_fix=1}
-              in_fix && /^#【/ && NR != start_line {exit}
-              in_fix {print}
-            ' "$FIX_FILE" > "tmp_fixes/workflow_fix.txt"
-            
-            # 移除标识行
-            sed -i '1d' "tmp_fixes/workflow_fix.txt"
-            
-            # 确定步骤位置
-            if [[ "$step_num" =~ ^[0-9]+$ ]]; then
-              echo "  🔍 查找步骤 $step_num..."
-              
-              # 在工作流中查找步骤
-              step_pattern="- name: \"$step_num\\. "
-              if grep -n "$step_pattern" "$TEMP_WORKFLOW"; then
-                echo "  ✅ 找到现有步骤，将进行替换"
-                # 这里需要实现替换逻辑
-              else
-                echo "  🔍 未找到步骤 $step_num，尝试查找近似位置"
-                
-                # 尝试插入到合适位置
-                if [[ $step_num -lt 22 ]]; then
-                  echo "  ➕ 将在步骤21之后插入新步骤"
-                  # 这里需要实现插入逻辑
-                elif [[ $step_num -gt 22 ]]; then
-                  echo "  ➕ 将在步骤22之后插入新步骤"
-                  # 这里需要实现插入逻辑
-                fi
+            # 检查是否是工作流修复标识
+            if [[ "$行内容" =~ ^#【firmware-build.yml-([^】]+)】 ]]; then
+              if [ "$在修复块中" = true ]; then
+                # 处理前一个修复块
+                echo "处理修复块..."
               fi
-            elif echo "$identifier" | grep -q "新步骤"; then
-              echo "  ➕ 新步骤添加"
-              # 这里需要实现新步骤添加逻辑
+              
+              # 开始新的修复块
+              在修复块中=true
+              标识="${BASH_REMATCH[0]}"
+              标识内容="${BASH_REMATCH[1]}"
+              
+              echo "📌 发现修复标识 [$行号]: $标识"
+              修复块=""
+            elif [ "$在修复块中" = true ] && [[ "$行内容" =~ ^#【 ]]; then
+              # 新的标识开始，结束当前修复块
+              在修复块中=false
+            elif [ "$在修复块中" = true ]; then
+              # 添加到修复块
+              修复块+="$行内容"$'\n'
             fi
-            
-            # 显示修复内容预览
-            echo "  📋 修复内容预览:"
-            head -5 "tmp_fixes/workflow_fix.txt" | sed 's/^/    /'
-            echo ""
-          done
+          done < "$修复文件"
           
           # 如果是dry run，不实际修改
           if [[ "${{ inputs.dry_run }}" == "true" ]]; then
-            echo "🔍 Dry run模式 - 显示修改计划"
-            echo "📊 将修改以下内容:"
-            diff -u "$TARGET_WORKFLOW" "$TEMP_WORKFLOW" | head -50 || true
+            echo "🔍 Dry run模式 - 工作流修复预览"
+            echo "📊 工作流修复处理逻辑已准备"
+            echo "💡 实际替换逻辑需要根据步骤号定位并替换"
           else
+            # 这里实现实际的工作流文件修复逻辑
+            echo "🔄 应用工作流修复..."
+            
+            # 简单实现：对于已知的步骤，可以直接替换
+            # 步骤 21 的修复
+            if grep -q "^#【firmware-build.yml-21】" "$修复文件"; then
+              echo "🔧 应用步骤 21 的修复"
+              # 提取步骤21的修复内容
+              sed -n '/^#【firmware-build.yml-21】/,/^#【/p' "$修复文件" | sed '1d;/^#【/d' > "临时修复文件/步骤21修复.txt"
+              
+              # 在工作流中查找步骤21
+              步骤21开始=$(grep -n 'name: "21\.' "$临时工作流" | head -1 | cut -d: -f1)
+              if [ -n "$步骤21开始" ]; then
+                echo "✅ 找到步骤 21 在行 $步骤21开始"
+                
+                # 找到步骤结束（下一个步骤开始或文件结束）
+                总行数=$(wc -l < "$临时工作流")
+                步骤结束=$总行数
+                
+                for ((i=步骤21开始+1; i<=总行数; i++)); do
+                  当前行内容=$(sed -n "${i}p" "$临时工作流")
+                  if [[ "$当前行内容" =~ ^[[:space:]]*-[[:space:]]*name:[[:space:]]*\"[0-9] ]]; then
+                    步骤结束=$((i-1))
+                    break
+                  fi
+                done
+                
+                echo "🔧 替换步骤 21 (行 $步骤21开始-$步骤结束)"
+                
+                # 创建新工作流文件
+                {
+                  # 步骤21之前的部分
+                  head -n $((步骤21开始-1)) "$临时工作流"
+                  # 新的步骤21内容
+                  cat "临时修复文件/步骤21修复.txt"
+                  # 步骤21之后的部分
+                  tail -n +$((步骤结束+1)) "$临时工作流"
+                } > "临时修复文件/新工作流.txt"
+                
+                mv "临时修复文件/新工作流.txt" "$临时工作流"
+              fi
+            fi
+            
+            # 步骤 22.5 的修复
+            if grep -q "^#【firmware-build.yml-新步骤】" "$修复文件"; then
+              echo "🔧 添加新步骤 22.5"
+              # 提取新步骤内容
+              sed -n '/^#【firmware-build.yml-新步骤】/,/^#【/p' "$修复文件" | sed '1d;/^#【/d' > "临时修复文件/新步骤.txt"
+              
+              # 在步骤22之后插入新步骤
+              步骤22结束=$(grep -n 'name: "22\.' "$临时工作流" | head -1 | cut -d: -f1)
+              if [ -n "$步骤22结束" ]; then
+                # 找到步骤22的结束
+                总行数=$(wc -l < "$临时工作流")
+                步骤22实际结束=$总行数
+                
+                for ((i=步骤22结束+1; i<=总行数; i++)); do
+                  当前行内容=$(sed -n "${i}p" "$临时工作流")
+                  if [[ "$当前行内容" =~ ^[[:space:]]*-[[:space:]]*name:[[:space:]]*\"[0-9] ]]; then
+                    步骤22实际结束=$((i-1))
+                    break
+                  fi
+                done
+                
+                echo "🔧 在步骤22后插入新步骤 (在行 $步骤22实际结束 之后)"
+                
+                # 创建新工作流文件
+                {
+                  # 步骤22及之前的部分
+                  head -n $步骤22实际结束 "$临时工作流"
+                  # 新步骤
+                  cat "临时修复文件/新步骤.txt"
+                  # 步骤22之后的部分
+                  tail -n +$((步骤22实际结束+1)) "$临时工作流"
+                } > "临时修复文件/新工作流2.txt"
+                
+                mv "临时修复文件/新工作流2.txt" "$临时工作流"
+              fi
+            fi
+            
             # 实际应用修改
-            mv "$TEMP_WORKFLOW" "$TARGET_WORKFLOW"
-            echo "✅ 已应用修复到: $TARGET_WORKFLOW"
+            mv "$临时工作流" "$目标工作流"
+            echo "✅ 已应用修复到: $目标工作流"
           fi
           
-      - name: Generate fix report
+      - name: 生成修复报告
         run: |
           echo "=== 修复报告 ==="
           echo "📅 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo ""
           
           echo "📊 修复处理摘要:"
-          echo "  - 解析的标识数量: ${{ steps.parse_fixes.outputs.IDENTIFIERS_COUNT }}"
-          echo "  - 脚本修复数量: ${{ steps.parse_fixes.outputs.SCRIPT_FIXES_COUNT }}"
-          echo "  - 工作流修复数量: ${{ steps.parse_fixes.outputs.WORKFLOW_FIXES_COUNT }}"
+          echo "  - 解析的标识数量: ${{ steps.解析修复.outputs.标识数量 }}"
+          echo "  - 脚本修复数量: ${{ steps.解析修复.outputs.脚本修复数量 }}"
+          echo "  - 工作流修复数量: ${{ steps.解析修复.outputs.工作流修复数量 }}"
           echo ""
           
           # 显示备份文件
           echo "📁 备份文件:"
-          ls -la backup_files/ 2>/dev/null || echo "  无备份文件"
+          ls -la 备份文件/ 2>/dev/null || echo "  无备份文件"
           echo ""
           
           # 显示临时文件
           echo "📁 临时文件:"
-          ls -la tmp_fixes/ 2>/dev/null || echo "  无临时文件"
+          ls -la 临时修复文件/ 2>/dev/null || echo "  无临时文件"
           
-      - name: Cleanup temporary files
-        if: always()
-        run: |
-          echo "🧹 清理临时文件..."
-          rm -rf tmp_fixes
-          
-      - name: Create summary
+      - name: 创建总结报告
         if: always()
         run: |
           echo "### 自动修复完成报告" >> $GITHUB_STEP_SUMMARY
@@ -267,9 +376,9 @@ jobs:
           echo "**状态:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**处理摘要:**" >> $GITHUB_STEP_SUMMARY
-          echo "- 解析修复标识: ${{ steps.parse_fixes.outputs.IDENTIFIERS_COUNT }} 个" >> $GITHUB_STEP_SUMMARY
-          echo "- 脚本修复: ${{ steps.parse_fixes.outputs.SCRIPT_FIXES_COUNT }} 个" >> $GITHUB_STEP_SUMMARY
-          echo "- 工作流修复: ${{ steps.parse_fixes.outputs.WORKFLOW_FIXES_COUNT }} 个" >> $GITHUB_STEP_SUMMARY
+          echo "- 解析修复标识: ${{ steps.解析修复.outputs.标识数量 }} 个" >> $GITHUB_STEP_SUMMARY
+          echo "- 脚本修复: ${{ steps.解析修复.outputs.脚本修复数量 }} 个" >> $GITHUB_STEP_SUMMARY
+          echo "- 工作流修复: ${{ steps.解析修复.outputs.工作流修复数量 }} 个" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [[ "${{ inputs.dry_run }}" == "true" ]]; then
@@ -282,8 +391,13 @@ jobs:
             echo "文件已根据修复方案进行更新。" >> $GITHUB_STEP_SUMMARY
           fi
           
-      - name: Commit changes (if not dry run)
-        if: github.event_name == 'workflow_dispatch' && inputs.dry_run == false
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**修复的文件:**" >> $GITHUB_STEP_SUMMARY
+          echo "- firmware-config/scripts/build_firmware_main.sh" >> $GITHUB_STEP_SUMMARY
+          echo "- .github/workflows/firmware-build.yml" >> $GITHUB_STEP_SUMMARY
+          
+      - name: 提交更改 (如果不是干运行)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run == false && job.status == 'success'
         run: |
           echo "=== 提交更改 ==="
           
