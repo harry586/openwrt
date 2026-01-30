@@ -5,8 +5,10 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: "📱 设备名称 (如: ac42u)"
+        description: "📱 设备名称 (从 support.sh 动态读取)"
         required: true
+        type: choice
+        # 选项将在步骤中动态设置
         default: "ac42u"
         type: string
       version_selection:
@@ -22,15 +24,13 @@ on:
         default: "normal"
         options: ["base", "normal"]
       source_repo:
-        description: "📦 源代码仓库选择 - 🔄 ImmortalWrt (默认) 🏢 OpenWrt官方 ⚡ LEDE (国内优化) 🚀 OpenWrt CC (老版本)"
+        description: "📦 源代码仓库选择 - 🔄 ImmortalWrt (默认) ⚡ LEDE (国内优化)"
         required: true
         type: choice
         default: "immortalwrt"
         options:
           - "immortalwrt"
-          - "openwrt-official"
           - "lede"
-          - "openwrt-cc"
       extra_packages:
         description: "额外安装插件 - 格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。"
         required: false
@@ -392,17 +392,66 @@ jobs:
           
           echo "🟢 步骤 5 完成"
       
-      # 步骤 6: 设置编译环境和构建目录
-      - name: "6. 设置编译环境和构建目录"
+      # 步骤 6: 动态读取设备列表并设置编译环境
+      - name: "6. 动态读取设备列表并设置编译环境"
         run: |
-          echo "=== 步骤 6: 设置编译环境和构建目录 ==="
+          echo "=== 步骤 6: 动态读取设备列表并设置编译环境 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
           trap 'echo "❌ 步骤 6 失败，退出代码: $?"; exit 1' ERR
           
-          echo "🔄 步骤 6.1: 设置编译环境"
+          echo "🔍 步骤 6.1: 从support.sh动态读取设备列表..."
+          SUPPORT_DIR="${{ github.workspace }}/firmware-config"
+          SUPPORT_FILE="$SUPPORT_DIR/support.sh"
+          
+          if [ -f "$SUPPORT_FILE" ]; then
+            echo "✅ 设备支持脚本存在: $SUPPORT_FILE"
+            
+            # 尝试从support.sh获取所有设备
+            echo "📋 尝试从support.sh读取设备列表..."
+            
+            # 临时source support.sh来检查函数
+            source "$SUPPORT_FILE" || true
+            
+            if command -v get_all_devices >/dev/null 2>&1; then
+              ALL_DEVICES=$(get_all_devices)
+              echo "✅ 从support.sh读取设备列表成功"
+              echo "📱 支持的设备: $ALL_DEVICES"
+              
+              # 将设备列表转换为数组
+              IFS=' ' read -ra DEVICE_ARRAY <<< "$ALL_DEVICES"
+              
+              # 验证选择的设备是否在列表中
+              SELECTED_DEVICE="${{ github.event.inputs.device_name }}"
+              DEVICE_VALID=false
+              
+              for device in "${DEVICE_ARRAY[@]}"; do
+                if [ "$device" = "$SELECTED_DEVICE" ]; then
+                  DEVICE_VALID=true
+                  break
+                fi
+              done
+              
+              if [ "$DEVICE_VALID" = false ]; then
+                echo "⚠️ 警告: 选择的设备 '$SELECTED_DEVICE' 不在支持列表中"
+                echo "💡 支持列表: $ALL_DEVICES"
+                echo "🔄 将尝试使用默认设备支持"
+              else
+                echo "✅ 选择的设备 '$SELECTED_DEVICE' 在支持列表中"
+              fi
+            else
+              echo "⚠️ 警告: support.sh中未找到get_all_devices函数"
+              echo "💡 将使用内置设备支持"
+            fi
+          else
+            echo "⚠️ 警告: 设备支持脚本不存在: $SUPPORT_FILE"
+            echo "💡 将使用内置设备支持"
+          fi
+          
+          echo ""
+          echo "🔄 步骤 6.2: 设置编译环境"
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" setup_environment
           
           if [ $? -ne 0 ]; then
@@ -410,7 +459,7 @@ jobs:
             exit 1
           fi
           
-          echo "🔄 步骤 6.2: 创建构建目录"
+          echo "🔄 步骤 6.3: 创建构建目录"
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" create_build_dir
           
           if [ $? -ne 0 ]; then
@@ -418,7 +467,7 @@ jobs:
             exit 1
           fi
           
-          echo "🔄 步骤 6.3: 初始化构建环境（使用设备支持系统）"
+          echo "🔄 步骤 6.4: 初始化构建环境（使用设备支持系统）"
           echo "📱 设备: ${{ github.event.inputs.device_name }}"
           echo "🔄 版本: ${{ github.event.inputs.version_selection }}"
           echo "⚙️ 配置模式: ${{ github.event.inputs.config_mode }}"
@@ -470,7 +519,7 @@ jobs:
           # 先检查环境文件是否已经存在
           echo "🔍 检查环境文件..."
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
-            echo "✅ 环境文件已存在（由步骤6.3创建）"
+            echo "✅ 环境文件已存在（由步骤6.4创建）"
             echo "📊 环境文件内容摘要:"
             head -15 /mnt/openwrt-build/build_env.sh
             
@@ -489,9 +538,9 @@ jobs:
             echo "  SOURCE_REPO: $SOURCE_REPO"
             echo ""
             
-            echo "💡 使用步骤6.3已设置的环境变量进行SDK下载"
+            echo "💡 使用步骤6.4已设置的环境变量进行SDK下载"
           else
-            echo "⚠️ 环境文件不存在，可能是步骤6.3失败"
+            echo "⚠️ 环境文件不存在，可能是步骤6.4失败"
             echo "📝 重新创建环境变量..."
             
             # 使用设备支持系统获取配置
@@ -985,7 +1034,7 @@ jobs:
             echo "  UPnP 自动端口转发 (luci-app-upnp): $(grep -q "^CONFIG_PACKAGE_luci-app-upnp=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  Samba 文件共享 (luci-app-samba4): $(grep -q "^CONFIG_PACKAGE_luci-app-samba4=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  磁盘管理 (luci-app-diskman): $(grep -q "^CONFIG_PACKAGE_luci-app-diskman=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  KMS 激活服务 (luci-app-vlmcsd): $(greq -q "^CONFIG_PACKAGE_luci-app-vlmcsd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  KMS 激活服务 (luci-app-vlmcsd): $(grep -q "^CONFIG_PACKAGE_luci-app-vlmcsd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  SmartDNS 智能DNS (luci-app-smartdns): $(grep -q "^CONFIG_PACKAGE_luci-app-smartdns=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  家长控制 (luci-app-accesscontrol): $(grep -q "^CONFIG_PACKAGE_luci-app-accesscontrol=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  微信推送 (luci-app-wechatpush): $(grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
@@ -1859,9 +1908,7 @@ jobs:
           echo ""
           echo "📦 源代码仓库选择说明:"
           echo "  🔄 ImmortalWrt: 官方分支，稳定可靠"
-          echo "  🏢 OpenWrt官方: 上游代码，最新特性"
           echo "  ⚡ LEDE: 国内优化版，更适合中国用户"
-          echo "  🚀 OpenWrt CC: 老版本兼容，适合旧设备"
           
           echo ""
           echo "✅ 构建流程完成"
