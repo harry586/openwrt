@@ -27,29 +27,67 @@ jobs:
           echo "=== 自动修复系统初始化 ==="
           echo "📅 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 创建必要的目录
-          mkdir -p 临时修复文件
-          mkdir -p 备份文件
-          
-          # 显示当前文件状态
+          # 显示当前工作目录和仓库结构
+          echo "📂 当前工作目录: $(pwd)"
           echo "📂 仓库内容:"
           ls -la
+          
+          # 检查fix.txt文件是否存在
+          echo "🔍 检查修复文件..."
+          if [ -f "firmware-config/fix.txt" ]; then
+            echo "✅ 找到修复文件: firmware-config/fix.txt"
+            echo "📊 文件大小: $(wc -l < firmware-config/fix.txt) 行"
+          else
+            echo "❌ 修复文件不存在: firmware-config/fix.txt"
+            echo "📂 firmware-config 目录内容:"
+            ls -la firmware-config/ 2>/dev/null || echo "  firmware-config 目录不存在"
+          fi
+          
           echo ""
           
       - name: 解析修复方案文件
-        id: parse_fixes  # 步骤ID必须用英文
+        id: parse_fixes
         run: |
           echo "=== 解析修复方案文件 ==="
           
+          # 设置工作目录到仓库根目录
+          cd ${{ github.workspace }}
+          
+          echo "📂 当前工作目录: $(pwd)"
+          echo "📂 GitHub 工作空间: ${{ github.workspace }}"
+          
+          # 检查文件是否存在
           修复文件="firmware-config/fix.txt"
           
           if [ ! -f "$修复文件" ]; then
             echo "❌ 错误: 修复文件不存在: $修复文件"
-            exit 1
+            echo "📂 尝试查找文件..."
+            
+            # 尝试不同的路径
+            if [ -f "fix.txt" ]; then
+              修复文件="fix.txt"
+              echo "✅ 在根目录找到修复文件: $修复文件"
+            elif [ -f "./fix.txt" ]; then
+              修复文件="./fix.txt"
+              echo "✅ 在当前目录找到修复文件: $修复文件"
+            else
+              echo "❌ 在以下位置均未找到修复文件:"
+              echo "  1. firmware-config/fix.txt"
+              echo "  2. fix.txt"
+              echo "  3. ./fix.txt"
+              echo "📂 当前目录内容:"
+              ls -la
+              exit 1
+            fi
           fi
           
           echo "📄 修复文件: $修复文件"
           echo "📊 文件大小: $(wc -l < "$修复文件") 行"
+          
+          # 显示文件前几行
+          echo "📋 文件前10行:"
+          head -10 "$修复文件"
+          echo ""
           
           # 提取所有系统性标识
           echo "🔍 提取系统性标识..."
@@ -79,20 +117,50 @@ jobs:
         run: |
           echo "=== 处理脚本文件修复 ==="
           
+          # 设置工作目录
+          cd ${{ github.workspace }}
+          
           修复文件="firmware-config/fix.txt"
           目标脚本="firmware-config/scripts/build_firmware_main.sh"
           备份文件="备份文件/build_firmware_main.sh.备份.$(date +%Y%m%d_%H%M%S)"
           
-          if [ ! -f "$目标脚本" ]; then
-            echo "❌ 目标脚本不存在: $目标脚本"
-            exit 1
+          # 检查文件是否存在
+          if [ ! -f "$修复文件" ]; then
+            # 尝试使用上一步找到的路径
+            修复文件=$(find . -name "fix.txt" -type f | head -1)
+            if [ -z "$修复文件" ]; then
+              echo "❌ 错误: 修复文件不存在"
+              exit 1
+            fi
           fi
+          
+          if [ ! -f "$目标脚本" ]; then
+            echo "❌ 错误: 目标脚本不存在: $目标脚本"
+            echo "📂 尝试查找脚本文件..."
+            
+            # 尝试查找脚本文件
+            if [ -f "scripts/build_firmware_main.sh" ]; then
+              目标脚本="scripts/build_firmware_main.sh"
+              echo "✅ 找到脚本文件: $目标脚本"
+            else
+              目标脚本=$(find . -name "build_firmware_main.sh" -type f | head -1)
+              if [ -z "$目标脚本" ]; then
+                echo "❌ 无法找到 build_firmware_main.sh 文件"
+                exit 1
+              fi
+              echo "✅ 找到脚本文件: $目标脚本"
+            fi
+          fi
+          
+          # 创建备份目录
+          mkdir -p "备份文件"
           
           # 备份原文件
           cp "$目标脚本" "$备份文件"
           echo "✅ 已备份原文件到: $备份文件"
           
           # 创建临时工作文件
+          mkdir -p "临时修复文件"
           临时脚本="临时修复文件/build_firmware_main.sh.临时"
           cp "$目标脚本" "$临时脚本"
           
@@ -206,20 +274,43 @@ jobs:
         run: |
           echo "=== 处理工作流文件修复 ==="
           
+          # 设置工作目录
+          cd ${{ github.workspace }}
+          
           修复文件="firmware-config/fix.txt"
           目标工作流=".github/workflows/firmware-build.yml"
           备份文件="备份文件/firmware-build.yml.备份.$(date +%Y%m%d_%H%M%S)"
           
-          if [ ! -f "$目标工作流" ]; then
-            echo "❌ 目标工作流不存在: $目标工作流"
-            exit 1
+          # 检查文件是否存在
+          if [ ! -f "$修复文件" ]; then
+            修复文件=$(find . -name "fix.txt" -type f | head -1)
+            if [ -z "$修复文件" ]; then
+              echo "❌ 错误: 修复文件不存在"
+              exit 1
+            fi
           fi
+          
+          if [ ! -f "$目标工作流" ]; then
+            echo "❌ 错误: 目标工作流不存在: $目标工作流"
+            
+            # 尝试查找工作流文件
+            目标工作流=$(find . -name "firmware-build.yml" -type f | head -1)
+            if [ -z "$目标工作流" ]; then
+              echo "❌ 无法找到 firmware-build.yml 文件"
+              exit 1
+            fi
+            echo "✅ 找到工作流文件: $目标工作流"
+          fi
+          
+          # 创建备份目录
+          mkdir -p "备份文件"
           
           # 备份原文件
           cp "$目标工作流" "$备份文件"
           echo "✅ 已备份原文件到: $备份文件"
           
           # 创建临时工作文件
+          mkdir -p "临时修复文件"
           临时工作流="临时修复文件/firmware-build.yml.临时"
           cp "$目标工作流" "$临时工作流"
           
