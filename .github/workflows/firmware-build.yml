@@ -5,10 +5,14 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: "📱 设备名称 (从 support.sh 动态读取支持的设备) - 支持: acrh17, cmcc_rax3000m, netgear_3800"
+        description: "📱 设备名称 (自动从 support.sh 同步) - 当前支持: acrh17, cmcc_rax3000m, netgear_3800"
         required: true
-        type: string
+        type: choice
         default: "acrh17"
+        options:
+          - "acrh17"
+          - "cmcc_rax3000m"
+          - "netgear_3800"
       version_selection:
         description: "🔄 版本选择"
         required: true
@@ -49,13 +53,73 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      # 步骤 0: 生成时间戳
-      - name: "0. 生成时间戳"
+      # 步骤 0: 生成时间戳和设备同步检查
+      - name: "0. 生成时间戳和设备同步检查"
         run: |
-          echo "=== 步骤 0: 生成时间戳 ==="
+          echo "=== 步骤 0: 生成时间戳和设备同步检查 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 生成日期格式的时间戳（年月日）
+          # 设备同步检查
+          echo "🔍 检查设备列表同步状态..."
+          SUPPORT_FILE="${{ github.workspace }}/firmware-config/support.sh"
+          
+          if [ -f "$SUPPORT_FILE" ]; then
+            echo "✅ 找到设备支持文件: $SUPPORT_FILE"
+            source "$SUPPORT_FILE" 2>/dev/null || true
+            
+            if command -v get_all_devices >/dev/null 2>&1; then
+              SUPPORTED_DEVICES=$(get_all_devices)
+              echo "📱 support.sh 中支持的设备: $SUPPORTED_DEVICES"
+              
+              SELECTED_DEVICE="${{ github.event.inputs.device_name }}"
+              echo "🎯 当前选择的设备: $SELECTED_DEVICE"
+              
+              # 检查设备是否在support.sh中
+              DEVICE_IN_SUPPORT=false
+              for device in $SUPPORTED_DEVICES; do
+                if [ "$device" = "$SELECTED_DEVICE" ]; then
+                  DEVICE_IN_SUPPORT=true
+                  break
+                fi
+              done
+              
+              if [ "$DEVICE_IN_SUPPORT" = false ]; then
+                echo "⚠️ 警告: 选择的设备 '$SELECTED_DEVICE' 不在 support.sh 的支持列表中"
+                echo "💡 可能的原因:"
+                echo "  1. support.sh 已更新但 workflow.yml 未同步"
+                echo "  2. 设备名称不匹配"
+                echo ""
+                echo "📋 support.sh 支持的设备:"
+                for device in $SUPPORTED_DEVICES; do
+                  if command -v get_device_description >/dev/null 2>&1; then
+                    DESC=$(get_device_description "$device" 2>/dev/null || echo "无描述")
+                    echo "  - $device: $DESC"
+                  else
+                    echo "  - $device"
+                  fi
+                done
+                echo ""
+                echo "🔧 修复方法:"
+                echo "  运行同步脚本: ./firmware-config/scripts/sync-device-list.sh"
+                echo "  然后提交更新后的 workflow.yml"
+                echo ""
+                echo "❌ 构建终止: 设备不支持"
+                exit 1
+              else
+                echo "✅ 设备 '$SELECTED_DEVICE' 在 support.sh 中支持"
+                if command -v get_device_description >/dev/null 2>&1; then
+                  DEVICE_DESC=$(get_device_description "$SELECTED_DEVICE" 2>/dev/null || echo "无描述")
+                  echo "📝 设备描述: $DEVICE_DESC"
+                fi
+              fi
+            else
+              echo "⚠️ 无法从 support.sh 读取设备列表函数"
+            fi
+          else
+            echo "⚠️ 未找到设备支持文件: $SUPPORT_FILE"
+          fi
+          
+          # 生成时间戳
           BASE_DATE=$(date -u +'%Y%m%d')
           TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-${{ github.event.inputs.source_repo }}-$BASE_DATE"
           
@@ -318,17 +382,17 @@ jobs:
           
           echo "🟢 步骤 5 完成"
       
-      # 步骤 6: 动态读取设备列表并设置编译环境（修复版 - 完全动态验证）
-      - name: "6. 动态读取设备列表并设置编译环境（修复版）"
+      # 步骤 6: 动态读取设备列表并设置编译环境
+      - name: "6. 动态读取设备列表并设置编译环境"
         run: |
-          echo "=== 步骤 6: 动态读取设备列表并设置编译环境（修复版） ==="
+          echo "=== 步骤 6: 动态读取设备列表并设置编译环境 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
           trap 'echo "❌ 步骤 6 失败，退出代码: $?"; exit 1' ERR
           
-          echo "🔍 步骤 6.1: 从support.sh动态读取设备列表并验证..."
+          echo "🔍 步骤 6.1: 从support.sh读取设备信息..."
           SUPPORT_DIR="${{ github.workspace }}/firmware-config"
           SUPPORT_FILE="$SUPPORT_DIR/support.sh"
           
@@ -338,79 +402,19 @@ jobs:
             # 加载support.sh
             source "$SUPPORT_FILE"
             
-            if command -v get_all_devices >/dev/null 2>&1; then
-              ALL_DEVICES=$(get_all_devices)
-              echo "✅ 从support.sh读取设备列表成功"
-              echo "📱 当前支持的设备: $ALL_DEVICES"
-              
-              # 将设备列表转换为数组
-              IFS=' ' read -ra DEVICE_ARRAY <<< "$ALL_DEVICES"
-              
-              # 验证选择的设备是否在列表中
-              SELECTED_DEVICE="${{ github.event.inputs.device_name }}"
-              DEVICE_VALID=false
-              
-              echo "🔍 验证设备: '$SELECTED_DEVICE'"
-              
-              for device in "${DEVICE_ARRAY[@]}"; do
-                if [ "$device" = "$SELECTED_DEVICE" ]; then
-                  DEVICE_VALID=true
-                  break
-                fi
-              done
-              
-              if [ "$DEVICE_VALID" = false ]; then
-                echo "❌ 错误: 选择的设备 '$SELECTED_DEVICE' 不在支持列表中"
-                echo "💡 支持的设备列表: $ALL_DEVICES"
-                echo "📋 设备详细信息:"
-                for device in "${DEVICE_ARRAY[@]}"; do
-                  if command -v get_device_description >/dev/null 2>&1; then
-                    DESC=$(get_device_description "$device")
-                    echo "  - $device: $DESC"
-                  fi
-                done
-                echo ""
-                echo "🔄 请重新运行工作流并输入支持的设备名称"
-                exit 1
-              else
-                echo "✅ 选择的设备 '$SELECTED_DEVICE' 在支持列表中"
-                
-                # 获取设备详细信息
-                if command -v get_device_description >/dev/null 2>&1; then
-                  DEVICE_DESC=$(get_device_description "$SELECTED_DEVICE")
-                  echo "🎯 设备描述: $DEVICE_DESC"
-                fi
-                
-                if command -v get_device_config >/dev/null 2>&1; then
-                  DEVICE_CONFIG=$(get_device_config "$SELECTED_DEVICE")
-                  echo "🔧 设备配置: $DEVICE_CONFIG"
-                fi
-                
-                # 检查设备特性
-                if command -v check_usb_support >/dev/null 2>&1; then
-                  USB_SUPPORT=$(check_usb_support "$SELECTED_DEVICE")
-                  echo "🔌 USB支持: $USB_SUPPORT"
-                fi
-                
-                if command -v check_5g_wifi_support >/dev/null 2>&1; then
-                  WIFI_5G_SUPPORT=$(check_5g_wifi_support "$SELECTED_DEVICE")
-                  echo "📶 5G WiFi支持: $WIFI_5G_SUPPORT"
-                fi
-                
-                if command -v get_device_build_hints >/dev/null 2>&1; then
-                  echo "💡 设备构建提示:"
-                  get_device_build_hints "$SELECTED_DEVICE"
-                fi
-              fi
-            else
-              echo "❌ 错误: support.sh中未找到get_all_devices函数"
-              echo "💡 请检查support.sh文件是否正确"
-              exit 1
+            # 获取设备配置
+            if command -v get_device_config >/dev/null 2>&1; then
+              DEVICE_CONFIG=$(get_device_config "${{ github.event.inputs.device_name }}")
+              echo "✅ 获取设备配置: $DEVICE_CONFIG"
+            fi
+            
+            # 获取设备描述
+            if command -v get_device_description >/dev/null 2>&1; then
+              DEVICE_DESC=$(get_device_description "${{ github.event.inputs.device_name }}")
+              echo "📝 设备描述: $DEVICE_DESC"
             fi
           else
-            echo "❌ 错误: 设备支持脚本不存在: $SUPPORT_FILE"
-            echo "💡 请确保firmware-config/support.sh文件存在"
-            exit 1
+            echo "⚠️ 警告: 设备支持脚本不存在: $SUPPORT_FILE"
           fi
           
           echo ""
@@ -430,7 +434,7 @@ jobs:
             exit 1
           fi
           
-          echo "🔄 步骤 6.4: 初始化构建环境（完全依赖设备支持系统）"
+          echo "🔄 步骤 6.4: 初始化构建环境"
           echo "📱 设备: ${{ github.event.inputs.device_name }}"
           echo "🔄 版本: ${{ github.event.inputs.version_selection }}"
           echo "⚙️ 配置模式: ${{ github.event.inputs.config_mode }}"
