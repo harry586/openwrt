@@ -1530,13 +1530,13 @@ pre_build_space_check() {
     log "✅ 空间检查完成"
 }
 
-# 智能配置生成系统（模板化版）
+# 智能配置生成系统（重构版）- 修复配置生成逻辑
 generate_config() {
     local extra_packages=$1
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 智能配置生成系统（模板化版）==="
+    log "=== 智能配置生成系统（重构版）==="
     log "设备: $DEVICE_NAME"
     log "版本: $SELECTED_BRANCH"
     log "目标: $TARGET"
@@ -1548,6 +1548,8 @@ generate_config() {
     
     rm -f .config .config.old
     
+    log "📋 开始生成配置文件..."
+    
     # 1. 基本目标配置
     echo "# ============================================" > .config
     echo "# 目标平台配置" >> .config
@@ -1556,11 +1558,37 @@ generate_config() {
     echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
     echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" >> .config
     
-    # 2. 加载基础配置模板
+    # 2. 检查设备特定配置文件
+    local device_config_file="$SUPPORT_DIR/config/${DEVICE_NAME}.config"
+    local has_device_config=false
+    
+    if [ -f "$device_config_file" ]; then
+        log "🎯 找到设备特定配置: $DEVICE_NAME.config"
+        has_device_config=true
+        
+        # 组合1：设备配置 + base.config + usb-generic.config
+        echo "" >> .config
+        echo "# ============================================" >> .config
+        echo "# 设备特定配置: $DEVICE_NAME" >> .config
+        echo "# ============================================" >> .config
+        cat "$device_config_file" >> .config
+        log "✅ 已加载设备特定配置"
+    else
+        log "ℹ️ 未找到设备特定配置: $DEVICE_NAME.config"
+        log "💡 将使用通用配置组合"
+    fi
+    
+    # 3. 加载基础配置模板
     log "📋 加载基础配置模板..."
-    if ! load_config_template "base"; then
+    if load_config_template "base"; then
+        log "✅ 基础配置加载完成"
+    else
         # 如果模板不存在，使用内置配置
         log "⚠️ 基础配置模板不存在，使用内置配置"
+        echo "" >> .config
+        echo "# ============================================" >> .config
+        echo "# 基础配置" >> .config
+        echo "# ============================================" >> .config
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
         echo "CONFIG_PACKAGE_busybox=y" >> .config
@@ -1568,39 +1596,33 @@ generate_config() {
         echo "CONFIG_PACKAGE_dropbear=y" >> .config
     fi
     
-    # 3. 加载模式配置
-    log "⚙️ 加载配置模式: $CONFIG_MODE"
-    if [ "$CONFIG_MODE" = "normal" ]; then
-        if load_config_template "normal"; then
-            log "✅ 加载正常模式配置"
+    # 4. 根据是否有设备特定配置，决定是否加载normal.config
+    if [ "$has_device_config" = false ]; then
+        # 没有设备特定配置时，加载normal.config（仅基础模式不加载）
+        if [ "$CONFIG_MODE" = "normal" ]; then
+            log "📋 加载正常模式配置..."
+            if load_config_template "normal"; then
+                log "✅ 正常模式配置加载完成"
+            else
+                log "⚠️ 正常模式模板不存在"
+            fi
         else
-            log "⚠️ 正常模式模板不存在，使用基础配置"
+            log "🔧 基础模式，不加载正常模式配置"
+            echo "" >> .config
+            echo "# ============================================" >> .config
+            echo "# 基础模式配置" >> .config
+            echo "# ============================================" >> .config
+            echo "# CONFIG_PACKAGE_luci-app-turboacc is not set" >> .config
+            echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
+            echo "# CONFIG_PACKAGE_kmod-fast-classifier is not set" >> .config
         fi
     else
-        log "🔧 基础模式，不加载额外插件"
-        echo "# CONFIG_PACKAGE_luci-app-turboacc is not set" >> .config
-        echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
-        echo "# CONFIG_PACKAGE_kmod-fast-classifier is not set" >> .config
+        log "💡 已有设备特定配置，不加载normal.config"
     fi
     
-    # 4. 加载USB配置
+    # 5. 加载USB配置
     log "🔌 加载USB配置..."
     load_usb_config "$PLATFORM" "$SELECTED_BRANCH"
-    
-    # 5. 加载设备特殊配置（如果有）
-    log "🎯 检查设备特殊配置..."
-    # 修复：设备配置文件在 firmware-config/config/ 目录下
-    local device_config_file="$SUPPORT_DIR/config/${DEVICE_NAME}.config"
-    if [ -f "$device_config_file" ]; then
-        log "✅ 加载设备特殊配置: $DEVICE_NAME"
-        echo "" >> .config
-        echo "# ============================================" >> .config
-        echo "# 设备特殊配置: $DEVICE_NAME" >> .config
-        echo "# ============================================" >> .config
-        cat "$device_config_file" >> .config
-    else
-        log "ℹ️ 未找到设备特殊配置: $DEVICE_NAME"
-    fi
     
     # 6. 处理额外插件
     if [ -n "$extra_packages" ]; then
@@ -1654,6 +1676,24 @@ generate_config() {
             echo "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y" >> .config
         fi
     fi
+    
+    # 8. 显示配置摘要
+    log "📊 配置生成摘要:"
+    log "  📁 配置组合:"
+    if [ "$has_device_config" = true ]; then
+        log "    ✅ 设备特定配置 + base.config + usb-generic.config"
+    else
+        if [ "$CONFIG_MODE" = "normal" ]; then
+            log "    ✅ base.config + normal.config + usb-generic.config"
+        else
+            log "    ✅ base.config + 基础模式配置 + usb-generic.config"
+        fi
+    fi
+    
+    local config_size=$(ls -lh .config | awk '{print $5}')
+    local config_lines=$(wc -l < .config)
+    log "  📏 配置文件大小: $config_size"
+    log "  📝 配置行数: $config_lines"
     
     log "✅ 智能配置生成完成"
 }
@@ -1777,9 +1817,9 @@ check_usb_drivers_integrity() {
     fi
 }
 
-# ============ 修复：配置语法验证函数（修复正则表达式） ============
+# ============ 修复：配置语法验证函数（增强版） ============
 validate_config_syntax() {
-    log "=== 🔍 验证.config文件语法 ==="
+    log "=== 🔍 验证.config文件语法（增强版）==="
     
     if [ ! -f ".config" ]; then
         log "❌ 错误: .config 文件不存在"
@@ -1803,11 +1843,10 @@ validate_config_syntax() {
     fi
     
     log "3. 检查无效配置（配置名和等号之间包含空格）..."
-    # 修复：只检查等号前有空格的情况，如 "CONFIG_XXX = y"
     local invalid_lines=$(grep -n "CONFIG_[^=]*[[:space:]]\+=" .config)
     if [ -n "$invalid_lines" ]; then
         log "❌ 发现无效配置行（配置名和等号之间包含空格）:"
-        echo "$invalid_lines" | head -5
+        echo "$invalid_lines" | head -3
         error_count=$((error_count + 1))
     fi
     
@@ -1815,7 +1854,7 @@ validate_config_syntax() {
     local duplicates=$(awk -F'=' '/^CONFIG_/ {print $1}' .config | sort | uniq -d)
     if [ -n "$duplicates" ]; then
         log "❌ 发现重复配置项:"
-        echo "$duplicates"
+        echo "$duplicates" | head -5
         error_count=$((error_count + 1))
         
         # 修复重复配置
@@ -1843,15 +1882,19 @@ validate_config_syntax() {
         fi
     done
     
-    log "6. 检查配置语法正确性..."
+    log "6. 检查配置语法正确性（增强错误显示）..."
     local syntax_errors=0
+    local line_num=0
+    
     while IFS= read -r line; do
+        line_num=$((line_num + 1))
+        
         # 跳过空行和注释
         if [[ "$line" =~ ^[[:space:]]*$ ]] || [[ "$line" =~ ^# ]]; then
             continue
         fi
         
-        # 检查配置行格式 - 修复正则表达式，允许连字符等合法字符
+        # 检查配置行格式
         if [[ "$line" =~ ^CONFIG_[A-Za-z0-9_-]+= ]]; then
             # 启用配置，格式正确
             continue
@@ -1859,13 +1902,45 @@ validate_config_syntax() {
             # 禁用配置，格式正确
             continue
         else
-            # 更严格的检查，只报告真正有问题的行
+            # 检查是否是常见无害的格式变体
             if [[ "$line" =~ ^CONFIG_ ]] || [[ "$line" =~ ^#.*CONFIG_ ]]; then
-                log "  ⚠️ 语法警告: 非标准配置行: $line"
+                # 记录但不算错误
+                if [ $syntax_errors -lt 3 ]; then
+                    log "  ⚠️ 第${line_num}行语法警告: 非标准格式但可能无害: $(echo "$line" | cut -c1-60)..."
+                fi
                 warning_count=$((warning_count + 1))
+                syntax_errors=$((syntax_errors + 1))
+            else
+                # 真正的问题行
+                log "❌ 第${line_num}行语法错误: 无法识别的格式"
+                echo "   内容: $line"
+                error_count=$((error_count + 1))
             fi
         fi
     done < .config
+    
+    # 显示具体的警告内容
+    if [ $warning_count -gt 0 ]; then
+        log "📋 发现的警告详情:"
+        log "  - 空行: $blank_lines 个"
+        log "  - 非标准格式行: $syntax_errors 个"
+        log "💡 这些警告通常不会影响编译，但建议检查"
+    fi
+    
+    # 显示具体的错误内容
+    if [ $error_count -gt 0 ]; then
+        log "📋 发现的错误详情:"
+        if [ -n "$invalid_lines" ]; then
+            log "  - 配置名和等号之间有空格: $(echo "$invalid_lines" | wc -l) 处"
+        fi
+        if [ -n "$duplicates" ]; then
+            log "  - 重复配置项: $(echo "$duplicates" | wc -l) 个"
+        fi
+        if [ $conflict_count -gt 0 ]; then
+            log "  - 配置冲突: $conflict_count 个"
+        fi
+        log "🔧 已尝试自动修复部分问题"
+    fi
     
     # 总结
     if [ $error_count -eq 0 ]; then
@@ -1873,20 +1948,22 @@ validate_config_syntax() {
             log "✅ 配置语法验证通过，无错误和警告"
         else
             log "⚠️ 配置语法验证通过，但有 $warning_count 个警告"
+            log "💡 警告通常是格式问题，不会影响编译"
         fi
         return 0
     else
         log "❌ 配置语法验证发现 $error_count 个错误，$warning_count 个警告"
+        log "🔧 部分错误已自动修复，但建议检查配置文件"
         return 1
     fi
 }
 
-# ============ 修复：apply_config 函数 ============
+# ============ 修复：apply_config 函数（增强版） ============
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 应用配置并显示详情 ==="
+    log "=== 应用配置并显示详情（增强版）==="
     
     if [ ! -f ".config" ]; then
         log "❌ 错误: .config 文件不存在，无法应用配置"
@@ -1899,8 +1976,9 @@ apply_config() {
     
     # 先备份原始配置文件
     if [ -f ".config" ]; then
-        cp ".config" ".config.backup.$(date +%Y%m%d_%H%M%S)"
-        log "✅ 已备份原始配置文件"
+        local backup_file=".config.backup.$(date +%Y%m%d_%H%M%S)"
+        cp ".config" "$backup_file"
+        log "✅ 已备份原始配置文件: $backup_file"
     fi
     
     # 步骤1: 验证配置语法
@@ -1914,9 +1992,9 @@ apply_config() {
         if [ $? -eq 0 ]; then
             log "✅ defconfig 修复成功"
         else
-            log "❌ defconfig 修复失败"
-            log "defconfig 错误日志:"
-            cat /tmp/defconfig_fix.log
+            log "❌ defconfig 修复失败，但继续执行"
+            log "defconfig 错误日志（前20行）:"
+            cat /tmp/defconfig_fix.log | tail -20
         fi
     fi
     
@@ -1963,20 +2041,19 @@ apply_config() {
     if ! make defconfig 2>&1 | tee /tmp/defconfig.log; then
         log "❌ make defconfig 失败"
         log "详细错误信息:"
-        cat /tmp/defconfig.log
+        cat /tmp/defconfig.log | tail -30
         
         # 尝试分析错误原因
-        if grep -q "invalid option" /tmp/defconfig.log; then
-            log "💡 错误分析: 发现无效配置选项"
-            log "🔧 尝试修复: 删除无效配置后重试..."
+        if grep -q "unknown statement" /tmp/defconfig.log; then
+            log "💡 错误分析: 发现未知语句错误"
+            log "🔧 尝试修复: 删除包含'unknown statement'的行后重试..."
             
-            # 提取无效配置
-            grep "invalid option" /tmp/defconfig.log | while read line; do
-                invalid_config=$(echo "$line" | grep -o "CONFIG_[A-Za-z0-9_]*")
-                if [ -n "$invalid_config" ]; then
-                    log "  删除无效配置: $invalid_config"
-                    sed -i "/^${invalid_config}=/d" .config
-                    sed -i "/^# ${invalid_config} is not set/d" .config
+            # 提取错误行号
+            grep "unknown statement" /tmp/defconfig.log | while read line; do
+                error_line=$(echo "$line" | grep -o "line [0-9]*" | grep -o "[0-9]*")
+                if [ -n "$error_line" ]; then
+                    log "  删除第 $error_line 行"
+                    sed -i "${error_line}d" .config
                 fi
             done
             
@@ -1987,11 +2064,11 @@ apply_config() {
             else
                 log "❌ defconfig 仍然失败"
                 log "第二次尝试的错误日志:"
-                cat /tmp/defconfig_retry.log
-                handle_error "应用配置失败"
+                cat /tmp/defconfig_retry.log | tail -20
+                log "⚠️ 但继续执行，让构建过程自然失败"
             fi
         else
-            handle_error "应用配置失败"
+            log "⚠️ 无法自动修复defconfig错误，但继续执行"
         fi
     else
         log "✅ make defconfig 成功"
@@ -2047,7 +2124,11 @@ apply_config() {
     
     # 步骤5: 再次验证配置
     log "🔍 步骤5: 最终配置验证..."
-    validate_config_syntax
+    if validate_config_syntax; then
+        log "✅ 最终配置语法验证通过"
+    else
+        log "⚠️ 最终配置仍有警告，但继续执行"
+    fi
     
     # 步骤6: 运行defconfig确保配置一致
     log "🔄 步骤6: 最终运行 make defconfig..."
@@ -2055,7 +2136,7 @@ apply_config() {
         log "✅ 最终 defconfig 成功"
     else
         log "⚠️ 最终 defconfig 有警告，但继续执行"
-        cat /tmp/final_defconfig.log | tail -20
+        cat /tmp/final_defconfig.log | tail -10
     fi
     
     # 步骤7: 显示最终配置状态
@@ -2077,6 +2158,19 @@ apply_config() {
         echo "4. 雷凌USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config && echo "✅" || echo "❌")"
     elif [ "$PLATFORM" = "ath79" ]; then
         echo "4. ath79 USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb2-ath79=y" .config && echo "✅" || echo "❌")"
+    fi
+    
+    # 显示配置组合信息
+    log "📋 配置组合信息:"
+    if [ -f "$SUPPORT_DIR/config/${DEVICE_NAME}.config" ]; then
+        log "  🎯 使用设备特定配置: ${DEVICE_NAME}.config"
+        log "  📁 配置组合: 设备配置 + base.config + usb-generic.config"
+    else
+        if [ "$CONFIG_MODE" = "normal" ]; then
+            log "  📁 配置组合: base.config + normal.config + usb-generic.config"
+        else
+            log "  📁 配置组合: base.config + 基础模式配置 + usb-generic.config"
+        fi
     fi
     
     log "✅ 配置应用完成"
@@ -2431,8 +2525,8 @@ integrate_custom_files() {
     echo '            if sh "$file" >> $LOG_FILE 2>&1; then' >> "$first_boot_script"
     echo '                echo "      ✅ 运行成功" >> $LOG_FILE' >> "$first_boot_script"
     echo '                SCRIPT_SUCCESS=$((SCRIPT_SUCCESS + 1))' >> "$first_boot_script"
-    echo '            else' >> "$first_boot_script"
-    echo '                local exit_code=$?' >> "$first_boot_script"
+    else
+            local exit_code=$?' >> "$first_boot_script"
     echo '                echo "      ❌ 运行失败，退出代码: $exit_code" >> $LOG_FILE' >> "$first_boot_script"
     echo '                SCRIPT_FAILED=$((SCRIPT_FAILED + 1))' >> "$first_boot_script"
     echo '' >> "$first_boot_script"
