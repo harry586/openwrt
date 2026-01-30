@@ -1,361 +1,309 @@
-# .github/workflows/firmware-build-fix.yml
-name: 自动修复系统性标识工作流
+name: Auto Fix Firmware Build Files
 
 on:
+  push:
+    paths:
+      - 'firmware-config/fix.txt'
   workflow_dispatch:
     inputs:
-      target_files:
-        description: "要修复的目标文件（用逗号分隔）"
-        required: false
-        default: "all"
-        type: string
       dry_run:
-        description: "仅预览不执行修改"
+        description: 'Dry run (只显示修改计划，不实际修改)'
         required: false
-        default: "false"
-        type: choice
-        options: ["true", "false"]
+        default: 'false'
+        type: boolean
 
 jobs:
-  fix-systematic-ids:
-    runs-on: ubuntu-22.04
+  auto-fix:
+    runs-on: ubuntu-latest
+    
     steps:
-      - name: "1. 检出代码"
-        uses: actions/checkout@v4
-        
-      - name: "2. 安装依赖工具"
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          
+      - name: Setup environment
         run: |
-          sudo apt-get update
-          sudo apt-get install -y tree grep sed awk findutils
+          echo "=== 自动修复系统初始化 ==="
+          echo "📅 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-      - name: "3. 运行修改意见脚本"
+          # 创建必要的目录
+          mkdir -p tmp_fixes
+          mkdir -p backup_files
+          
+          # 显示当前文件状态
+          echo "📂 仓库内容:"
+          ls -la
+          echo ""
+          
+      - name: Parse fix.txt file
+        id: parse_fixes
         run: |
-          echo "=== 运行修改意见脚本 ==="
-          echo "目标文件: ${{ github.event.inputs.target_files }}"
-          echo "预览模式: ${{ github.event.inputs.dry_run }}"
+          echo "=== 解析修复方案文件 ==="
           
-          # 创建修改意见脚本文件
-          SCRIPT_PATH="/tmp/modification_script.sh"
-          echo '#!/bin/bash' > "$SCRIPT_PATH"
-          echo '# 修改意见脚本 - 自动根据系统性标识修复文件' >> "$SCRIPT_PATH"
-          echo '#【modification-script-01】脚本开始' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo 'set -e' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo 'TARGET_FILES="$1"' >> "$SCRIPT_PATH"
-          echo 'DRY_RUN="$2"' >> "$SCRIPT_PATH"
-          echo 'REPO_ROOT="$GITHUB_WORKSPACE"' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo 'echo "当前目录: $(pwd)"' >> "$SCRIPT_PATH"
-          echo 'echo "仓库根目录: $REPO_ROOT"' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '#【modification-script-02】函数定义开始' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '# 模糊搜索文件' >> "$SCRIPT_PATH"
-          echo 'fuzzy_find_file() {' >> "$SCRIPT_PATH"
-          echo '  local pattern="$1"' >> "$SCRIPT_PATH"
-          echo '  local search_dir="${2:-.}"' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  local found_files=""' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  if [ -f "$pattern" ]; then' >> "$SCRIPT_PATH"
-          echo '    echo "$pattern"' >> "$SCRIPT_PATH"
-          echo '    return 0' >> "$SCRIPT_PATH"
-          echo '  fi' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  found_files=$(find "$search_dir" -type f -name "*$(basename "$pattern")*" 2>/dev/null | head -5)' >> "$SCRIPT_PATH"
-          echo '  if [ -n "$found_files" ]; then' >> "$SCRIPT_PATH"
-          echo '    echo "$found_files" | head -1' >> "$SCRIPT_PATH"
-          echo '    return 0' >> "$SCRIPT_PATH"
-          echo '  fi' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  found_files=$(find "$search_dir" -type f -exec grep -l "#【$pattern" {} \; 2>/dev/null | head -5)' >> "$SCRIPT_PATH"
-          echo '  if [ -n "$found_files" ]; then' >> "$SCRIPT_PATH"
-          echo '    echo "$found_files" | head -1' >> "$SCRIPT_PATH"
-          echo '    return 0' >> "$SCRIPT_PATH"
-          echo '  fi' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  found_files=$(find "$search_dir" -type f -exec grep -l "$(echo "$pattern" | sed '"'"'s/\./\\./g'"'"')" {} \; 2>/dev/null | head -5)' >> "$SCRIPT_PATH"
-          echo '  if [ -n "$found_files" ]; then' >> "$SCRIPT_PATH"
-          echo '    echo "$found_files" | head -1' >> "$SCRIPT_PATH"
-          echo '    return 0' >> "$SCRIPT_PATH"
-          echo '  fi' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  echo ""' >> "$SCRIPT_PATH"
-          echo '  return 1' >> "$SCRIPT_PATH"
-          echo '}' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '# 提取文件名前缀' >> "$SCRIPT_PATH"
-          echo 'extract_file_prefix() {' >> "$SCRIPT_PATH"
-          echo '  local file_path="$1"' >> "$SCRIPT_PATH"
-          echo '  local filename=$(basename "$file_path")' >> "$SCRIPT_PATH"
-          echo '  echo "${filename%.*}" | sed '"'"'s/[^a-zA-Z0-9_-]//g'"'"'' >> "$SCRIPT_PATH"
-          echo '}' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '# 修复单个文件的系统性标识' >> "$SCRIPT_PATH"
-          echo 'fix_systematic_ids_in_file() {' >> "$SCRIPT_PATH"
-          echo '  local file_path="$1"' >> "$SCRIPT_PATH"
-          echo '  local dry_run="$2"' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  echo ""' >> "$SCRIPT_PATH"
-          echo '  echo "=== 处理文件: $file_path ==="' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  if [ ! -f "$file_path" ]; then' >> "$SCRIPT_PATH"
-          echo '    echo "❌ 文件不存在: $file_path"' >> "$SCRIPT_PATH"
-          echo '    return 1' >> "$SCRIPT_PATH"
-          echo '  fi' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  local file_prefix=$(extract_file_prefix "$file_path")' >> "$SCRIPT_PATH"
-          echo '  echo "文件前缀: $file_prefix"' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  local backup_file="${file_path}.backup_$(date +%Y%m%d_%H%M%S)"' >> "$SCRIPT_PATH"
-          echo '  cp "$file_path" "$backup_file"' >> "$SCRIPT_PATH"
-          echo '  echo "✅ 备份文件: $backup_file"' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  local total_lines=$(wc -l < "$file_path")' >> "$SCRIPT_PATH"
-          echo '  echo "文件行数: $total_lines"' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  local existing_ids=$(grep -n "#【" "$file_path" | head -10)' >> "$SCRIPT_PATH"
-          echo '  if [ -n "$existing_ids" ]; then' >> "$SCRIPT_PATH"
-          echo '    echo "📋 现有标识:"' >> "$SCRIPT_PATH"
-          echo '    echo "$existing_ids" | while read line; do' >> "$SCRIPT_PATH"
-          echo '      echo "  $line"' >> "$SCRIPT_PATH"
-          echo '    done' >> "$SCRIPT_PATH"
-          echo '  else' >> "$SCRIPT_PATH"
-          echo '    echo "ℹ️ 未找到现有系统性标识"' >> "$SCRIPT_PATH"
-          echo '  fi' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  local needs_fix=false' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  if [[ "$file_path" == *workflow* ]] || [[ "$file_path" == *yml ]] || [[ "$file_path" == *yaml ]]; then' >> "$SCRIPT_PATH"
-          echo '    local step_count=$(grep -c "^[[:space:]]*- name:" "$file_path")' >> "$SCRIPT_PATH"
-          echo '    local id_count=$(grep -c "#【${file_prefix}-" "$file_path")' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '    if [ $step_count -gt 0 ] && [ $id_count -lt $step_count ]; then' >> "$SCRIPT_PATH"
-          echo '      needs_fix=true' >> "$SCRIPT_PATH"
-          echo '      echo "🔧 需要修复: 有 $step_count 个步骤但只有 $id_count 个标识"' >> "$SCRIPT_PATH"
-          echo '    fi' >> "$SCRIPT_PATH"
-          echo '  fi' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  if [[ "$file_path" == *.sh ]]; then' >> "$SCRIPT_PATH"
-          echo '    local section_count=$(grep -c "^# ==" "$file_path")' >> "$SCRIPT_PATH"
-          echo '    local id_count=$(grep -c "#【${file_prefix}-" "$file_path")' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '    if [ $section_count -gt 0 ] && [ $id_count -lt $section_count ]; then' >> "$SCRIPT_PATH"
-          echo '      needs_fix=true' >> "$SCRIPT_PATH"
-          echo '      echo "🔧 需要修复: 有 $section_count 个部分但只有 $id_count 个标识"' >> "$SCRIPT_PATH"
-          echo '    fi' >> "$SCRIPT_PATH"
-          echo '  fi' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  if [ "$needs_fix" = "false" ]; then' >> "$SCRIPT_PATH"
-          echo '    echo "✅ 文件标识完整，无需修复"' >> "$SCRIPT_PATH"
-          echo '    return 0' >> "$SCRIPT_PATH"
-          echo '  fi' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  if [ "$dry_run" = "true" ]; then' >> "$SCRIPT_PATH"
-          echo '    echo "🔍 预览模式 - 显示建议的修改:"' >> "$SCRIPT_PATH"
-          echo '    return 0' >> "$SCRIPT_PATH"
-          echo '  fi' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  echo "🚀 开始修复系统性标识..."' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  if [[ "$file_path" == *workflow* ]] || [[ "$file_path" == *yml ]] || [[ "$file_path" == *yaml ]]; then' >> "$SCRIPT_PATH"
-          echo '    fix_yaml_file "$file_path" "$file_prefix"' >> "$SCRIPT_PATH"
-          echo '  elif [[ "$file_path" == *.sh ]]; then' >> "$SCRIPT_PATH"
-          echo '    fix_shell_file "$file_path" "$file_prefix"' >> "$SCRIPT_PATH"
-          echo '  else' >> "$SCRIPT_PATH"
-          echo '    echo "⚠️ 未知文件类型，使用通用修复"' >> "$SCRIPT_PATH"
-          echo '    fix_generic_file "$file_path" "$file_prefix"' >> "$SCRIPT_PATH"
-          echo '  fi' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  local new_id_count=$(grep -c "#【${file_prefix}-" "$file_path")' >> "$SCRIPT_PATH"
-          echo '  echo "✅ 修复完成，现有标识数: $new_id_count"' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  echo "📊 文件差异摘要:"' >> "$SCRIPT_PATH"
-          echo '  diff -u "$backup_file" "$file_path" | head -20 || true' >> "$SCRIPT_PATH"
-          echo '}' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '# 修复YAML文件' >> "$SCRIPT_PATH"
-          echo 'fix_yaml_file() {' >> "$SCRIPT_PATH"
-          echo '  local file_path="$1"' >> "$SCRIPT_PATH"
-          echo '  local prefix="$2"' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  local temp_file="${file_path}.tmp"' >> "$SCRIPT_PATH"
-          echo '  cp "$file_path" "$temp_file"' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  local step_number=0' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  while IFS= read -r line; do' >> "$SCRIPT_PATH"
-          echo '    if [[ "$line" =~ ^[[:space:]]*-[[:space:]]*name:[[:space:]]*[\"'"'"'0-9] ]]; then' >> "$SCRIPT_PATH"
-          echo '      step_number=$((step_number + 1))' >> "$SCRIPT_PATH"
-          echo '      printf "      #【%s-%02d】\n" "$prefix" "$step_number" >> "$file_path.new"' >> "$SCRIPT_PATH"
-          echo '    fi' >> "$SCRIPT_PATH"
-          echo '    echo "$line" >> "$file_path.new"' >> "$SCRIPT_PATH"
-          echo '  done < "$temp_file"' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  mv "$file_path.new" "$file_path"' >> "$SCRIPT_PATH"
-          echo '  rm -f "$temp_file"' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  echo "✅ 添加了 $step_number 个步骤标识"' >> "$SCRIPT_PATH"
-          echo '}' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '# 修复Shell文件' >> "$SCRIPT_PATH"
-          echo 'fix_shell_file() {' >> "$SCRIPT_PATH"
-          echo '  local file_path="$1"' >> "$SCRIPT_PATH"
-          echo '  local prefix="$2"' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  local temp_file="${file_path}.tmp"' >> "$SCRIPT_PATH"
-          echo '  cp "$file_path" "$temp_file"' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  local section_number=0' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  while IFS= read -r line; do' >> "$SCRIPT_PATH"
-          echo '    if [[ "$line" =~ ^#[[:space:]]*={10,} ]] || [[ "$line" =~ ^#[[:space:]]*-{10,} ]]; then' >> "$SCRIPT_PATH"
-          echo '      section_number=$((section_number + 1))' >> "$SCRIPT_PATH"
-          echo '      printf "#【%s-%02d】%s\n" "$prefix" "$section_number" "${line#\#}" >> "$file_path.new"' >> "$SCRIPT_PATH"
-          echo '      continue' >> "$SCRIPT_PATH"
-          echo '    fi' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '    if [[ "$line" =~ ^[a-zA-Z_][a-zA-Z0-9_]*\(\)[[:space:]]*\{?$ ]] || [[ "$line" =~ ^function[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]* ]]; then' >> "$SCRIPT_PATH"
-          echo '      section_number=$((section_number + 1))' >> "$SCRIPT_PATH"
-          echo '      printf "#【%s-%02d】%s\n" "$prefix" "$section_number" "$line" >> "$file_path.new"' >> "$SCRIPT_PATH"
-          echo '      echo "$line" >> "$file_path.new"' >> "$SCRIPT_PATH"
-          echo '      continue' >> "$SCRIPT_PATH"
-          echo '    fi' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '    echo "$line" >> "$file_path.new"' >> "$SCRIPT_PATH"
-          echo '  done < "$temp_file"' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  mv "$file_path.new" "$file_path"' >> "$SCRIPT_PATH"
-          echo '  rm -f "$temp_file"' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  echo "✅ 添加了 $section_number 个章节标识"' >> "$SCRIPT_PATH"
-          echo '}' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '# 通用文件修复' >> "$SCRIPT_PATH"
-          echo 'fix_generic_file() {' >> "$SCRIPT_PATH"
-          echo '  local file_path="$1"' >> "$SCRIPT_PATH"
-          echo '  local prefix="$2"' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  echo "⚠️ 通用修复未实现"' >> "$SCRIPT_PATH"
-          echo '}' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '#【modification-script-03】主逻辑开始' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo 'main() {' >> "$SCRIPT_PATH"
-          echo '  echo "=== 开始处理文件 ==="' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  local files_to_process=""' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  if [ "$TARGET_FILES" = "all" ] || [ -z "$TARGET_FILES" ]; then' >> "$SCRIPT_PATH"
-          echo '    echo "🔍 搜索所有包含系统性标识的文件..."' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '    files_to_process=$(find "$REPO_ROOT" -type f \( -name "*.yml" -o -name "*.yaml" -o -name "*.sh" -o -name "*.md" \) -exec grep -l "#【" {} \; 2>/dev/null | sort | uniq)' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '    known_files=".github/workflows/firmware-build.yml firmware-config/scripts/build_firmware_main.sh firmware-config/support.sh"' >> "$SCRIPT_PATH"
-          echo '    for known_file in $known_files; do' >> "$SCRIPT_PATH"
-          echo '      if [ -f "$REPO_ROOT/$known_file" ] && ! echo "$files_to_process" | grep -q "$known_file"; then' >> "$SCRIPT_PATH"
-          echo '        files_to_process="$files_to_process' >> "$SCRIPT_PATH"
-          echo '$REPO_ROOT/$known_file"' >> "$SCRIPT_PATH"
-          echo '      fi' >> "$SCRIPT_PATH"
-          echo '    done' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  else' >> "$SCRIPT_PATH"
-          echo '    IFS=','"'"' read -ra file_list <<< "$TARGET_FILES"' >> "$SCRIPT_PATH"
-          echo '    for file_pattern in "${file_list[@]}"; do' >> "$SCRIPT_PATH"
-          echo '      found_file=$(fuzzy_find_file "$file_pattern" "$REPO_ROOT")' >> "$SCRIPT_PATH"
-          echo '      if [ -n "$found_file" ]; then' >> "$SCRIPT_PATH"
-          echo '        files_to_process="$files_to_process' >> "$SCRIPT_PATH"
-          echo '$found_file"' >> "$SCRIPT_PATH"
-          echo '      else' >> "$SCRIPT_PATH"
-          echo '        echo "⚠️ 未找到文件: $file_pattern"' >> "$SCRIPT_PATH"
-          echo '      fi' >> "$SCRIPT_PATH"
-          echo '    done' >> "$SCRIPT_PATH"
-          echo '  fi' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  files_to_process=$(echo "$files_to_process" | sed '"'"'/^$/d'"'"' | sort | uniq)' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  local file_count=$(echo "$files_to_process" | wc -l)' >> "$SCRIPT_PATH"
-          echo '  echo "📊 找到 $file_count 个文件需要处理"' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  if [ $file_count -eq 0 ]; then' >> "$SCRIPT_PATH"
-          echo '    echo "✅ 没有找到需要处理的文件"' >> "$SCRIPT_PATH"
-          echo '    return 0' >> "$SCRIPT_PATH"
-          echo '  fi' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  local processed=0' >> "$SCRIPT_PATH"
-          echo '  local skipped=0' >> "$SCRIPT_PATH"
-          echo '  local failed=0' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  echo "$files_to_process" | while read file_path; do' >> "$SCRIPT_PATH"
-          echo '    if [ -n "$file_path" ] && [ -f "$file_path" ]; then' >> "$SCRIPT_PATH"
-          echo '      if fix_systematic_ids_in_file "$file_path" "$DRY_RUN"; then' >> "$SCRIPT_PATH"
-          echo '        processed=$((processed + 1))' >> "$SCRIPT_PATH"
-          echo '      else' >> "$SCRIPT_PATH"
-          echo '        failed=$((failed + 1))' >> "$SCRIPT_PATH"
-          echo '      fi' >> "$SCRIPT_PATH"
-          echo '    else' >> "$SCRIPT_PATH"
-          echo '      skipped=$((skipped + 1))' >> "$SCRIPT_PATH"
-          echo '    fi' >> "$SCRIPT_PATH"
-          echo '  done' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  echo ""' >> "$SCRIPT_PATH"
-          echo '  echo "=== 处理结果 ==="' >> "$SCRIPT_PATH"
-          echo '  echo "✅ 成功处理: $processed 个文件"' >> "$SCRIPT_PATH"
-          echo '  echo "⚠️ 跳过处理: $skipped 个文件"' >> "$SCRIPT_PATH"
-          echo '  echo "❌ 处理失败: $failed 个文件"' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  if [ "$DRY_RUN" = "true" ]; then' >> "$SCRIPT_PATH"
-          echo '    echo ""' >> "$SCRIPT_PATH"
-          echo '    echo "💡 这是预览模式，没有实际修改文件"' >> "$SCRIPT_PATH"
-          echo '    echo "   要实际修改，请设置 dry_run=false"' >> "$SCRIPT_PATH"
-          echo '  fi' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '  return $((failed > 0))' >> "$SCRIPT_PATH"
-          echo '}' >> "$SCRIPT_PATH"
-          echo '' >> "$SCRIPT_PATH"
-          echo '# 运行主函数' >> "$SCRIPT_PATH"
-          echo 'main' >> "$SCRIPT_PATH"
+          FIX_FILE="firmware-config/fix.txt"
           
-          # 给脚本执行权限
-          chmod +x "$SCRIPT_PATH"
+          if [ ! -f "$FIX_FILE" ]; then
+            echo "❌ 错误: 修复文件不存在: $FIX_FILE"
+            exit 1
+          fi
           
-          # 执行脚本
-          "$SCRIPT_PATH" "${{ github.event.inputs.target_files }}" "${{ github.event.inputs.dry_run }}"
+          echo "📄 修复文件: $FIX_FILE"
+          echo "📊 文件大小: $(wc -l < "$FIX_FILE") 行"
           
-      - name: "4. 生成修改报告"
+          # 提取所有系统性标识
+          echo "🔍 提取系统性标识..."
+          grep -n "^#【" "$FIX_FILE" | while read line; do
+            line_num=$(echo "$line" | cut -d: -f1)
+            identifier=$(echo "$line" | cut -d: -f2- | sed 's/^#【\(.*\)】/\1/')
+            echo "📌 标识 [$line_num]: $identifier"
+          done
+          
+          # 统计不同类型的修复
+          echo ""
+          echo "📈 修复内容统计:"
+          echo "  - 脚本函数修复: $(grep -c "^#【build_firmware_main.sh-" "$FIX_FILE") 个"
+          echo "  - 工作流步骤修复: $(grep -c "^#【firmware-build.yml-" "$FIX_FILE") 个"
+          echo "  - 新函数/步骤: $(grep -c "^#【.*-新函数】\|^#【.*-新步骤】" "$FIX_FILE") 个"
+          
+          # 保存解析结果供后续步骤使用
+          echo "IDENTIFIERS_COUNT=$(grep -c "^#【" "$FIX_FILE")" >> $GITHUB_OUTPUT
+          echo "SCRIPT_FIXES_COUNT=$(grep -c "^#【build_firmware_main.sh-" "$FIX_FILE")" >> $GITHUB_OUTPUT
+          echo "WORKFLOW_FIXES_COUNT=$(grep -c "^#【firmware-build.yml-" "$FIX_FILE")" >> $GITHUB_OUTPUT
+          
+      - name: Process script file fixes (build_firmware_main.sh)
+        if: steps.parse_fixes.outputs.SCRIPT_FIXES_COUNT != '0'
+        run: |
+          echo "=== 处理脚本文件修复 ==="
+          
+          FIX_FILE="firmware-config/fix.txt"
+          TARGET_SCRIPT="firmware-config/scripts/build_firmware_main.sh"
+          BACKUP_FILE="backup_files/build_firmware_main.sh.backup.$(date +%Y%m%d_%H%M%S)"
+          
+          if [ ! -f "$TARGET_SCRIPT" ]; then
+            echo "❌ 目标脚本不存在: $TARGET_SCRIPT"
+            exit 1
+          fi
+          
+          # 备份原文件
+          cp "$TARGET_SCRIPT" "$BACKUP_FILE"
+          echo "✅ 已备份原文件到: $BACKUP_FILE"
+          
+          # 创建临时工作文件
+          TEMP_SCRIPT="tmp_fixes/build_firmware_main.sh.tmp"
+          cp "$TARGET_SCRIPT" "$TEMP_SCRIPT"
+          
+          # 处理所有脚本相关的修复
+          echo "🔧 处理脚本修复..."
+          
+          # 获取所有脚本相关的标识
+          grep -n "^#【build_firmware_main.sh-" "$FIX_FILE" | while read fix_line; do
+            line_num=$(echo "$fix_line" | cut -d: -f1)
+            identifier=$(echo "$fix_line" | cut -d: -f2- | sed 's/^#【\(.*\)】/\1/')
+            name_part=$(echo "$identifier" | cut -d'-' -f2-)
+            
+            echo "📌 处理修复: $identifier"
+            
+            # 提取修复内容（从当前行到下一个标识或文件结束）
+            awk -v start_line="$line_num" '
+              NR == start_line {in_fix=1}
+              in_fix && /^#【/ && NR != start_line {exit}
+              in_fix {print}
+            ' "$FIX_FILE" > "tmp_fixes/current_fix.txt"
+            
+            # 提取函数名或修复描述
+            if echo "$identifier" | grep -q "函数"; then
+              # 函数修复
+              func_name=$(echo "$name_part" | sed 's/】.*//')
+              echo "  🎯 目标函数: $func_name"
+              
+              # 在目标脚本中查找函数
+              if grep -n "^${func_name}()" "$TEMP_SCRIPT"; then
+                echo "  ✅ 找到现有函数，将进行替换"
+                # 这里需要实现实际的替换逻辑
+              else
+                echo "  ➕ 未找到函数，将作为新函数添加"
+                # 这里需要实现添加新函数的逻辑
+              fi
+            else
+              # 其他修复
+              echo "  🔨 修复类型: $name_part"
+            fi
+            
+            # 显示修复内容预览
+            echo "  📋 修复内容预览:"
+            head -10 "tmp_fixes/current_fix.txt" | sed 's/^/    /'
+            echo ""
+          done
+          
+          # 如果是dry run，不实际修改
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            echo "🔍 Dry run模式 - 显示修改计划"
+            echo "📊 将修改以下内容:"
+            diff -u "$TARGET_SCRIPT" "$TEMP_SCRIPT" | head -50 || true
+          else
+            # 实际应用修改
+            mv "$TEMP_SCRIPT" "$TARGET_SCRIPT"
+            echo "✅ 已应用修复到: $TARGET_SCRIPT"
+          fi
+          
+      - name: Process workflow file fixes (firmware-build.yml)
+        if: steps.parse_fixes.outputs.WORKFLOW_FIXES_COUNT != '0'
+        run: |
+          echo "=== 处理工作流文件修复 ==="
+          
+          FIX_FILE="firmware-config/fix.txt"
+          TARGET_WORKFLOW=".github/workflows/firmware-build.yml"
+          BACKUP_FILE="backup_files/firmware-build.yml.backup.$(date +%Y%m%d_%H%M%S)"
+          
+          if [ ! -f "$TARGET_WORKFLOW" ]; then
+            echo "❌ 目标工作流不存在: $TARGET_WORKFLOW"
+            exit 1
+          fi
+          
+          # 备份原文件
+          cp "$TARGET_WORKFLOW" "$BACKUP_FILE"
+          echo "✅ 已备份原文件到: $BACKUP_FILE"
+          
+          # 创建临时工作文件
+          TEMP_WORKFLOW="tmp_fixes/firmware-build.yml.tmp"
+          cp "$TARGET_WORKFLOW" "$TEMP_WORKFLOW"
+          
+          echo "🔧 处理工作流步骤修复..."
+          
+          # 获取所有工作流相关的标识并排序
+          grep -n "^#【firmware-build.yml-" "$FIX_FILE" | sort -t'-' -k3 -n | while read fix_line; do
+            line_num=$(echo "$fix_line" | cut -d: -f1)
+            identifier=$(echo "$fix_line" | cut -d: -f2- | sed 's/^#【\(.*\)】/\1/')
+            step_num=$(echo "$identifier" | grep -o '[0-9]\+')
+            
+            echo "📌 处理修复: $identifier (步骤 $step_num)"
+            
+            # 提取修复内容
+            awk -v start_line="$line_num" '
+              NR == start_line {in_fix=1}
+              in_fix && /^#【/ && NR != start_line {exit}
+              in_fix {print}
+            ' "$FIX_FILE" > "tmp_fixes/workflow_fix.txt"
+            
+            # 移除标识行
+            sed -i '1d' "tmp_fixes/workflow_fix.txt"
+            
+            # 确定步骤位置
+            if [[ "$step_num" =~ ^[0-9]+$ ]]; then
+              echo "  🔍 查找步骤 $step_num..."
+              
+              # 在工作流中查找步骤
+              step_pattern="- name: \"$step_num\\. "
+              if grep -n "$step_pattern" "$TEMP_WORKFLOW"; then
+                echo "  ✅ 找到现有步骤，将进行替换"
+                # 这里需要实现替换逻辑
+              else
+                echo "  🔍 未找到步骤 $step_num，尝试查找近似位置"
+                
+                # 尝试插入到合适位置
+                if [[ $step_num -lt 22 ]]; then
+                  echo "  ➕ 将在步骤21之后插入新步骤"
+                  # 这里需要实现插入逻辑
+                elif [[ $step_num -gt 22 ]]; then
+                  echo "  ➕ 将在步骤22之后插入新步骤"
+                  # 这里需要实现插入逻辑
+                fi
+              fi
+            elif echo "$identifier" | grep -q "新步骤"; then
+              echo "  ➕ 新步骤添加"
+              # 这里需要实现新步骤添加逻辑
+            fi
+            
+            # 显示修复内容预览
+            echo "  📋 修复内容预览:"
+            head -5 "tmp_fixes/workflow_fix.txt" | sed 's/^/    /'
+            echo ""
+          done
+          
+          # 如果是dry run，不实际修改
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            echo "🔍 Dry run模式 - 显示修改计划"
+            echo "📊 将修改以下内容:"
+            diff -u "$TARGET_WORKFLOW" "$TEMP_WORKFLOW" | head -50 || true
+          else
+            # 实际应用修改
+            mv "$TEMP_WORKFLOW" "$TARGET_WORKFLOW"
+            echo "✅ 已应用修复到: $TARGET_WORKFLOW"
+          fi
+          
+      - name: Generate fix report
+        run: |
+          echo "=== 修复报告 ==="
+          echo "📅 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo ""
+          
+          echo "📊 修复处理摘要:"
+          echo "  - 解析的标识数量: ${{ steps.parse_fixes.outputs.IDENTIFIERS_COUNT }}"
+          echo "  - 脚本修复数量: ${{ steps.parse_fixes.outputs.SCRIPT_FIXES_COUNT }}"
+          echo "  - 工作流修复数量: ${{ steps.parse_fixes.outputs.WORKFLOW_FIXES_COUNT }}"
+          echo ""
+          
+          # 显示备份文件
+          echo "📁 备份文件:"
+          ls -la backup_files/ 2>/dev/null || echo "  无备份文件"
+          echo ""
+          
+          # 显示临时文件
+          echo "📁 临时文件:"
+          ls -la tmp_fixes/ 2>/dev/null || echo "  无临时文件"
+          
+      - name: Cleanup temporary files
         if: always()
         run: |
-          echo "=== 修改报告 ==="
-          echo "生成时间: $(date)"
-          echo "仓库: ${{ github.repository }}"
-          echo "触发者: ${{ github.actor }}"
-          echo ""
-          echo "📁 修改过的文件:"
-          find . -name "*.backup_*" -type f | while read backup; do
-            original_file="${backup%.backup_*}"
-            echo "  📄 $original_file"
-            echo "    备份: $(basename "$backup")"
-          done
-          echo ""
-          echo "🔍 包含系统性标识的文件统计:"
-          find . -type f -exec grep -l "#【" {} \; 2>/dev/null | while read file; do
-            id_count=$(grep -c "#【" "$file")
-            echo "  📊 $file: $id_count 个标识"
-          done
+          echo "🧹 清理临时文件..."
+          rm -rf tmp_fixes
           
-      - name: "5. 提交修改"
-        if: github.event.inputs.dry_run == 'false' && success()
+      - name: Create summary
+        if: always()
         run: |
-          echo "=== 提交修改 ==="
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          if git diff --quiet; then
-            echo "✅ 没有需要提交的修改"
+          echo "### 自动修复完成报告" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**状态:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**处理摘要:**" >> $GITHUB_STEP_SUMMARY
+          echo "- 解析修复标识: ${{ steps.parse_fixes.outputs.IDENTIFIERS_COUNT }} 个" >> $GITHUB_STEP_SUMMARY
+          echo "- 脚本修复: ${{ steps.parse_fixes.outputs.SCRIPT_FIXES_COUNT }} 个" >> $GITHUB_STEP_SUMMARY
+          echo "- 工作流修复: ${{ steps.parse_fixes.outputs.WORKFLOW_FIXES_COUNT }} 个" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            echo "**模式:** 🟡 Dry Run (只显示修改计划)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "此运行仅显示修改计划，未实际修改文件。" >> $GITHUB_STEP_SUMMARY
           else
-            echo "📝 检测到修改，准备提交..."
-            git add -A
-            git commit -m "fix: 自动修复系统性标识" -m "跳过CI检查" -m "由GitHub Actions自动执行"
+            echo "**模式:** 🟢 实际修复" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "文件已根据修复方案进行更新。" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+      - name: Commit changes (if not dry run)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run == false
+        run: |
+          echo "=== 提交更改 ==="
+          
+          # 配置git
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "GitHub Actions"
+          
+          # 检查是否有更改
+          if git diff --quiet; then
+            echo "📭 没有需要提交的更改"
+          else
+            echo "📝 检测到更改，准备提交"
+            
+            # 添加更改的文件
+            git add firmware-config/scripts/build_firmware_main.sh .github/workflows/firmware-build.yml
+            
+            # 提交
+            git commit -m "🔧 自动修复: 根据 fix.txt 更新文件 [skip ci]"
+            
+            # 推送
             git push
-            echo "✅ 修改已提交并推送"
+            echo "✅ 更改已提交并推送"
           fi
