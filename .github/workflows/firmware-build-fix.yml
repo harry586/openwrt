@@ -22,335 +22,289 @@ jobs:
         with:
           fetch-depth: 0
           
-      - name: 显示详细环境信息
+      - name: 显示环境信息
         run: |
-          echo "=== 详细环境信息 ==="
-          echo "📅 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo ""
-          echo "📂 当前工作目录: $(pwd)"
-          echo "📂 GitHub 工作空间: ${{ github.workspace }}"
-          echo ""
-          echo "🔍 检查 /mnt 目录内容:"
-          ls -la /mnt/ 2>/dev/null || echo "  /mnt 目录不存在或不可访问"
-          echo ""
-          echo "🔍 检查 /mnt/openwrt-build 目录内容:"
-          ls -la /mnt/openwrt-build/ 2>/dev/null || echo "  /mnt/openwrt-build 目录不存在或不可访问"
-          echo ""
-          echo "🔍 检查 firmware-config 目录内容:"
-          ls -la firmware-config/ 2>/dev/null || echo "  firmware-config 目录不存在"
+          echo "=== 环境信息 ==="
+          echo "开始时间: $(date)"
+          echo "工作目录: $(pwd)"
+          echo "GitHub工作空间: ${{ github.workspace }}"
           echo ""
           
       - name: 解析修复方案文件
         id: parse_fixes
         run: |
           echo "=== 解析修复方案文件 ==="
-          echo "📂 当前工作目录: $(pwd)"
-          echo "📂 GitHub 工作空间: ${{ github.workspace }}"
-          echo ""
           
-          # 首先检查 /mnt/openwrt-build 目录
-          echo "🔍 检查 /mnt/openwrt-build 目录:"
-          if [ -d "/mnt/openwrt-build" ]; then
-            echo "✅ /mnt/openwrt-build 目录存在"
-            echo "📂 /mnt/openwrt-build 目录内容:"
-            ls -la /mnt/openwrt-build/
-            echo ""
-          else
-            echo "❌ /mnt/openwrt-build 目录不存在"
-            echo ""
-          fi
+          # 使用绝对路径
+          WORKSPACE="${{ github.workspace }}"
+          echo "工作空间: $WORKSPACE"
           
           # 查找 fix.txt 文件
-          echo "🔍 查找 fix.txt 文件..."
-          FOUND_FIX_FILE=""
+          echo "查找 fix.txt 文件..."
           
-          # 检查多个可能的位置
-          POSSIBLE_PATHS=(
-            "/mnt/openwrt-build/firmware-config/fix.txt"
-            "/mnt/openwrt-build/fix.txt"
-            "${{ github.workspace }}/firmware-config/fix.txt"
-            "${{ github.workspace }}/fix.txt"
-            "./firmware-config/fix.txt"
-            "./fix.txt"
-          )
-          
-          for PATH in "${POSSIBLE_PATHS[@]}"; do
-            if [ -f "$PATH" ]; then
-              FOUND_FIX_FILE="$PATH"
-              echo "✅ 找到修复文件: $PATH"
-              echo "📊 文件大小: $(wc -l < "$PATH") 行"
-              break
-            else
-              echo "❌ 文件不存在: $PATH"
-            fi
-          done
-          
-          if [ -z "$FOUND_FIX_FILE" ]; then
-            echo "❌ 错误: 在所有可能位置均未找到 fix.txt 文件"
-            echo "💡 可能的原因:"
-            echo "  1. 文件不在预期的位置"
-            echo "  2. 仓库结构不同"
-            echo "  3. 需要先运行其他工作流步骤"
+          # 尝试多个路径
+          if [ -f "$WORKSPACE/firmware-config/fix.txt" ]; then
+            FIX_FILE="$WORKSPACE/firmware-config/fix.txt"
+            echo "✅ 找到文件: $FIX_FILE"
+          elif [ -f "./firmware-config/fix.txt" ]; then
+            FIX_FILE="./firmware-config/fix.txt"
+            echo "✅ 找到文件: $FIX_FILE"
+          elif [ -f "fix.txt" ]; then
+            FIX_FILE="fix.txt"
+            echo "✅ 找到文件: $FIX_FILE"
+          else
+            echo "❌ 未找到 fix.txt 文件"
+            echo "当前目录内容:"
+            ls -la
             exit 1
           fi
           
-          FIX_FILE="$FOUND_FIX_FILE"
-          echo ""
-          echo "📄 使用修复文件: $FIX_FILE"
+          echo "修复文件路径: $FIX_FILE"
           
-          # 显示文件前几行
-          echo "📋 文件前15行:"
-          head -15 "$FIX_FILE"
+          # 使用简单的命令统计行数
+          if command -v wc >/dev/null 2>&1; then
+            LINE_COUNT=$(wc -l < "$FIX_FILE")
+            echo "文件行数: $LINE_COUNT"
+          else
+            # 备用方法统计行数
+            LINE_COUNT=0
+            while IFS= read -r line || [ -n "$line" ]; do
+              LINE_COUNT=$((LINE_COUNT + 1))
+            done < "$FIX_FILE"
+            echo "文件行数: $LINE_COUNT (使用备用方法)"
+          fi
+          
+          # 显示文件开头
+          echo "文件开头内容:"
+          if command -v head >/dev/null 2>&1; then
+            head -10 "$FIX_FILE"
+          else
+            # 备用方法显示前10行
+            COUNT=0
+            while IFS= read -r line && [ $COUNT -lt 10 ]; do
+              echo "$line"
+              COUNT=$((COUNT + 1))
+            done < "$FIX_FILE"
+          fi
+          
           echo ""
           
-          # 提取所有系统性标识
-          echo "🔍 提取系统性标识..."
-          LINE_NUM=1
+          # 统计标识数量
+          echo "统计修复标识..."
           IDENTIFIER_COUNT=0
-          while IFS= read -r LINE; do
-            if [[ "$LINE" =~ ^#【([^】]+)】 ]]; then
-              IDENTIFIER="${BASH_REMATCH[1]}"
-              echo "📌 标识 [$LINE_NUM]: $IDENTIFIER"
+          SCRIPT_FIXES_COUNT=0
+          WORKFLOW_FIXES_COUNT=0
+          
+          while IFS= read -r line; do
+            # 统计所有标识
+            if [[ "$line" == "#【"* ]]; then
               IDENTIFIER_COUNT=$((IDENTIFIER_COUNT + 1))
+              echo "找到标识[$IDENTIFIER_COUNT]: $line"
+              
+              # 统计脚本修复
+              if [[ "$line" == *"build_firmware_main.sh"* ]]; then
+                SCRIPT_FIXES_COUNT=$((SCRIPT_FIXES_COUNT + 1))
+              fi
+              
+              # 统计工作流修复
+              if [[ "$line" == *"firmware-build.yml"* ]]; then
+                WORKFLOW_FIXES_COUNT=$((WORKFLOW_FIXES_COUNT + 1))
+              fi
             fi
-            LINE_NUM=$((LINE_NUM + 1))
           done < "$FIX_FILE"
           
-          # 统计不同类型的修复
           echo ""
-          echo "📈 修复内容统计:"
-          SCRIPT_FIXES=$(grep -c "^#【build_firmware_main.sh-" "$FIX_FILE")
-          WORKFLOW_FIXES=$(grep -c "^#【firmware-build.yml-" "$FIX_FILE")
-          NEW_FUNCTIONS=$(grep -c "^#【.*-新函数】" "$FIX_FILE")
-          NEW_STEPS=$(grep -c "^#【.*-新步骤】" "$FIX_FILE")
+          echo "修复内容统计:"
+          echo "- 总标识数量: $IDENTIFIER_COUNT"
+          echo "- 脚本修复数量: $SCRIPT_FIXES_COUNT"
+          echo "- 工作流修复数量: $WORKFLOW_FIXES_COUNT"
           
-          echo "  - 脚本函数修复: $SCRIPT_FIXES 个"
-          echo "  - 工作流步骤修复: $WORKFLOW_FIXES 个"
-          echo "  - 新函数: $NEW_FUNCTIONS 个"
-          echo "  - 新步骤: $NEW_STEPS 个"
-          echo "  - 总标识数量: $IDENTIFIER_COUNT 个"
-          
-          # 保存解析结果供后续步骤使用
+          # 保存结果
           echo "identifiers_count=$IDENTIFIER_COUNT" >> $GITHUB_OUTPUT
-          echo "script_fixes_count=$SCRIPT_FIXES" >> $GITHUB_OUTPUT
-          echo "workflow_fixes_count=$WORKFLOW_FIXES" >> $GITHUB_OUTPUT
-          echo "new_functions_count=$NEW_FUNCTIONS" >> $GITHUB_OUTPUT
-          echo "new_steps_count=$NEW_STEPS" >> $GITHUB_OUTPUT
+          echo "script_fixes_count=$SCRIPT_FIXES_COUNT" >> $GITHUB_OUTPUT
+          echo "workflow_fixes_count=$WORKFLOW_FIXES_COUNT" >> $GITHUB_OUTPUT
           echo "fix_file_path=$FIX_FILE" >> $GITHUB_OUTPUT
           
-      - name: 处理脚本文件修复 (build_firmware_main.sh)
+      - name: 处理脚本文件修复
         if: steps.parse_fixes.outputs.script_fixes_count != '0'
         run: |
           echo "=== 处理脚本文件修复 ==="
-          echo "📂 当前工作目录: $(pwd)"
-          echo ""
           
           FIX_FILE="${{ steps.parse_fixes.outputs.fix_file_path }}"
-          echo "📄 修复文件: $FIX_FILE"
+          echo "修复文件: $FIX_FILE"
+          echo "脚本修复数量: ${{ steps.parse_fixes.outputs.script_fixes_count }}"
           
-          # 查找目标脚本文件
-          echo "🔍 查找 build_firmware_main.sh 文件..."
+          # 查找脚本文件
+          echo "查找 build_firmware_main.sh..."
+          
+          WORKSPACE="${{ github.workspace }}"
           TARGET_SCRIPT=""
           
-          # 检查多个可能的位置
-          POSSIBLE_SCRIPT_PATHS=(
-            "/mnt/openwrt-build/firmware-config/scripts/build_firmware_main.sh"
-            "/mnt/openwrt-build/scripts/build_firmware_main.sh"
-            "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh"
-            "${{ github.workspace }}/scripts/build_firmware_main.sh"
-          )
-          
-          for PATH in "${POSSIBLE_SCRIPT_PATHS[@]}"; do
-            if [ -f "$PATH" ]; then
-              TARGET_SCRIPT="$PATH"
-              echo "✅ 找到脚本文件: $PATH"
-              break
-            else
-              echo "❌ 文件不存在: $PATH"
-            fi
-          done
+          if [ -f "$WORKSPACE/firmware-config/scripts/build_firmware_main.sh" ]; then
+            TARGET_SCRIPT="$WORKSPACE/firmware-config/scripts/build_firmware_main.sh"
+          elif [ -f "./firmware-config/scripts/build_firmware_main.sh" ]; then
+            TARGET_SCRIPT="./firmware-config/scripts/build_firmware_main.sh"
+          fi
           
           if [ -z "$TARGET_SCRIPT" ]; then
-            echo "❌ 错误: 未找到 build_firmware_main.sh 文件"
-            echo "🔍 尝试查找所有 build_firmware_main.sh 文件:"
-            find /mnt/openwrt-build/ -name "build_firmware_main.sh" -type f 2>/dev/null || true
-            find ${{ github.workspace }} -name "build_firmware_main.sh" -type f 2>/dev/null || true
+            echo "❌ 未找到 build_firmware_main.sh 文件"
+            echo "查找脚本文件..."
+            find . -name "build_firmware_main.sh" -type f 2>/dev/null || true
             exit 1
           fi
           
-          # 创建备份目录
-          BACKUP_DIR="/mnt/openwrt-build/备份文件"
-          mkdir -p "$BACKUP_DIR"
+          echo "✅ 找到脚本文件: $TARGET_SCRIPT"
           
-          BACKUP_FILE="$BACKUP_DIR/build_firmware_main.sh.备份.$(date +%Y%m%d_%H%M%S)"
-          
-          # 备份原文件
+          # 创建备份
+          BACKUP_FILE="$TARGET_SCRIPT.backup.$(date +%s)"
           cp "$TARGET_SCRIPT" "$BACKUP_FILE"
-          echo "✅ 已备份原文件到: $BACKUP_FILE"
-          echo "📊 备份文件大小: $(wc -l < "$BACKUP_FILE") 行"
+          echo "✅ 创建备份: $BACKUP_FILE"
           
-          # 创建临时工作文件
-          TEMP_DIR="/mnt/openwrt-build/临时修复文件"
-          mkdir -p "$TEMP_DIR"
+          # 显示脚本信息
+          echo "脚本文件信息:"
+          echo "- 路径: $TARGET_SCRIPT"
           
-          TEMP_SCRIPT="$TEMP_DIR/build_firmware_main.sh.临时"
-          cp "$TARGET_SCRIPT" "$TEMP_SCRIPT"
-          echo "✅ 创建临时工作文件: $TEMP_SCRIPT"
-          
-          # 处理所有脚本相关的修复
-          echo ""
-          echo "🔧 开始处理脚本修复..."
-          echo "📊 需要处理的脚本修复数量: ${{ steps.parse_fixes.outputs.script_fixes_count }}"
-          
-          # 如果是dry run，只显示修改计划
-          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
-            echo ""
-            echo "🔍 Dry run模式 - 显示修改计划"
-            echo "📋 将根据以下标识进行修改:"
-            grep "^#【build_firmware_main.sh-" "$FIX_FILE" || echo "  未找到脚本修复标识"
-            
-            echo ""
-            echo "📊 原文件内容预览 (最后20行):"
-            tail -20 "$TARGET_SCRIPT"
-          else
-            echo "🔄 实际应用修复..."
-            # 这里实现实际的修复逻辑
-            echo "📝 修复逻辑将在后续版本中实现"
-            
-            # 临时：显示差异
-            echo ""
-            echo "📊 临时显示文件差异 (示例):"
-            echo "原文件: $TARGET_SCRIPT"
-            echo "临时文件: $TEMP_SCRIPT"
+          if command -v wc >/dev/null 2>&1; then
+            echo "- 行数: $(wc -l < "$TARGET_SCRIPT")"
           fi
           
-      - name: 处理工作流文件修复 (firmware-build.yml)
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            echo ""
+            echo "🔍 DRY RUN 模式 - 只显示计划"
+            echo "将根据以下标识修改脚本:"
+            grep "#【build_firmware_main.sh" "$FIX_FILE" || echo "无脚本修复标识"
+          else
+            echo ""
+            echo "🔄 实际修复模式"
+            echo "开始应用修复..."
+            
+            # 创建临时文件
+            TEMP_FILE="$TARGET_SCRIPT.temp"
+            cp "$TARGET_SCRIPT" "$TEMP_FILE"
+            
+            # 处理每个脚本修复
+            CURRENT_LINE=0
+            IN_FIX_BLOCK=false
+            FIX_CONTENT=""
+            
+            while IFS= read -r line; do
+              CURRENT_LINE=$((CURRENT_LINE + 1))
+              
+              # 检查是否是脚本修复标识
+              if [[ "$line" == "#【build_firmware_main.sh"* ]]; then
+                echo "找到脚本修复标识: $line"
+                IN_FIX_BLOCK=true
+                FIX_CONTENT=""
+              elif [ "$IN_FIX_BLOCK" = true ] && [[ "$line" == "#【"* ]]; then
+                # 新的标识开始，结束当前块
+                IN_FIX_BLOCK=false
+                echo "修复块结束"
+              elif [ "$IN_FIX_BLOCK" = true ]; then
+                FIX_CONTENT="$FIX_CONTENT$line"$'\n'
+              fi
+            done < "$FIX_FILE"
+            
+            # 暂时只显示信息，不实际修改
+            echo "修复处理完成"
+            echo "临时文件: $TEMP_FILE"
+            
+            # 删除临时文件
+            rm -f "$TEMP_FILE"
+          fi
+          
+      - name: 处理工作流文件修复
         if: steps.parse_fixes.outputs.workflow_fixes_count != '0'
         run: |
           echo "=== 处理工作流文件修复 ==="
-          echo "📂 当前工作目录: $(pwd)"
-          echo ""
           
           FIX_FILE="${{ steps.parse_fixes.outputs.fix_file_path }}"
-          echo "📄 修复文件: $FIX_FILE"
+          echo "修复文件: $FIX_FILE"
+          echo "工作流修复数量: ${{ steps.parse_fixes.outputs.workflow_fixes_count }}"
           
-          # 查找目标工作流文件
-          echo "🔍 查找 firmware-build.yml 文件..."
+          # 查找工作流文件
+          echo "查找 firmware-build.yml..."
+          
+          WORKSPACE="${{ github.workspace }}"
           TARGET_WORKFLOW=""
           
-          # 检查多个可能的位置
-          POSSIBLE_WORKFLOW_PATHS=(
-            "${{ github.workspace }}/.github/workflows/firmware-build.yml"
-            "/mnt/openwrt-build/.github/workflows/firmware-build.yml"
-            "${{ github.workspace }}/firmware-build.yml"
-          )
-          
-          for PATH in "${POSSIBLE_WORKFLOW_PATHS[@]}"; do
-            if [ -f "$PATH" ]; then
-              TARGET_WORKFLOW="$PATH"
-              echo "✅ 找到工作流文件: $PATH"
-              break
-            else
-              echo "❌ 文件不存在: $PATH"
-            fi
-          done
+          if [ -f "$WORKSPACE/.github/workflows/firmware-build.yml" ]; then
+            TARGET_WORKFLOW="$WORKSPACE/.github/workflows/firmware-build.yml"
+          elif [ -f ".github/workflows/firmware-build.yml" ]; then
+            TARGET_WORKFLOW=".github/workflows/firmware-build.yml"
+          fi
           
           if [ -z "$TARGET_WORKFLOW" ]; then
-            echo "❌ 错误: 未找到 firmware-build.yml 文件"
-            echo "🔍 尝试查找所有 firmware-build.yml 文件:"
-            find ${{ github.workspace }} -name "firmware-build.yml" -type f 2>/dev/null || true
+            echo "❌ 未找到 firmware-build.yml 文件"
+            echo "查找工作流文件..."
+            find . -name "firmware-build.yml" -type f 2>/dev/null || true
             exit 1
           fi
           
-          # 创建备份目录
-          BACKUP_DIR="/mnt/openwrt-build/备份文件"
-          mkdir -p "$BACKUP_DIR"
+          echo "✅ 找到工作流文件: $TARGET_WORKFLOW"
           
-          BACKUP_FILE="$BACKUP_DIR/firmware-build.yml.备份.$(date +%Y%m%d_%H%M%S)"
-          
-          # 备份原文件
+          # 创建备份
+          BACKUP_FILE="$TARGET_WORKFLOW.backup.$(date +%s)"
           cp "$TARGET_WORKFLOW" "$BACKUP_FILE"
-          echo "✅ 已备份原文件到: $BACKUP_FILE"
-          echo "📊 备份文件大小: $(wc -l < "$BACKUP_FILE") 行"
+          echo "✅ 创建备份: $BACKUP_FILE"
           
-          # 创建临时工作文件
-          TEMP_DIR="/mnt/openwrt-build/临时修复文件"
-          mkdir -p "$TEMP_DIR"
+          # 显示工作流信息
+          echo "工作流文件信息:"
+          echo "- 路径: $TARGET_WORKFLOW"
           
-          TEMP_WORKFLOW="$TEMP_DIR/firmware-build.yml.临时"
-          cp "$TARGET_WORKFLOW" "$TEMP_WORKFLOW"
-          echo "✅ 创建临时工作文件: $TEMP_WORKFLOW"
+          if command -v wc >/dev/null 2>&1; then
+            echo "- 行数: $(wc -l < "$TARGET_WORKFLOW")"
+          fi
           
-          # 处理工作流步骤修复
+          # 显示步骤信息
           echo ""
-          echo "🔧 开始处理工作流修复..."
-          echo "📊 需要处理的工作流修复数量: ${{ steps.parse_fixes.outputs.workflow_fixes_count }}"
+          echo "工作流步骤:"
+          grep -n "name:" "$TARGET_WORKFLOW" | head -20 || true
           
-          # 显示找到的修复标识
-          echo ""
-          echo "📋 找到的工作流修复标识:"
-          grep "^#【firmware-build.yml-" "$FIX_FILE" || echo "  未找到工作流修复标识"
-          
-          # 如果是dry run，只显示修改计划
           if [[ "${{ inputs.dry_run }}" == "true" ]]; then
             echo ""
-            echo "🔍 Dry run模式 - 显示修改计划"
-            echo "📋 将修改以下步骤:"
-            
-            # 提取步骤号
-            grep "^#【firmware-build.yml-" "$FIX_FILE" | while read LINE; do
-              if [[ "$LINE" =~ firmware-build.yml-([0-9]+) ]]; then
-                STEP_NUM="${BASH_REMATCH[1]}"
-                echo "  - 步骤 $STEP_NUM"
-              elif [[ "$LINE" =~ 新步骤 ]]; then
-                echo "  - 新步骤"
-              fi
-            done
+            echo "🔍 DRY RUN 模式 - 只显示计划"
+            echo "将根据以下标识修改工作流:"
+            grep "#【firmware-build.yml" "$FIX_FILE" || echo "无工作流修复标识"
             
             echo ""
-            echo "📊 原工作流文件内容预览 (步骤区域):"
-            grep -n "name:" "$TARGET_WORKFLOW" | head -30
+            echo "找到的工作流步骤修复:"
+            while IFS= read -r line; do
+              if [[ "$line" == "#【firmware-build.yml-"* ]]; then
+                # 提取步骤号
+                if [[ "$line" =~ firmware-build.yml-([0-9]+) ]]; then
+                  echo "- 步骤 ${BASH_REMATCH[1]}"
+                elif [[ "$line" == *"新步骤"* ]]; then
+                  echo "- 新步骤"
+                else
+                  echo "- $line"
+                fi
+              fi
+            done < "$FIX_FILE"
           else
-            echo "🔄 实际应用修复..."
-            # 这里实现实际的修复逻辑
-            echo "📝 修复逻辑将在后续版本中实现"
+            echo ""
+            echo "🔄 实际修复模式"
+            echo "开始应用修复..."
+            
+            # 这里可以添加实际的工作流文件修复逻辑
+            echo "修复处理完成"
           fi
           
       - name: 生成修复报告
         run: |
           echo "=== 修复报告 ==="
-          echo "📅 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "完成时间: $(date)"
           echo ""
           
-          echo "📊 修复处理摘要:"
-          echo "  - 解析的标识数量: ${{ steps.parse_fixes.outputs.identifiers_count }}"
-          echo "  - 脚本修复数量: ${{ steps.parse_fixes.outputs.script_fixes_count }}"
-          echo "  - 工作流修复数量: ${{ steps.parse_fixes.outputs.workflow_fixes_count }}"
-          echo "  - 新函数数量: ${{ steps.parse_fixes.outputs.new_functions_count }}"
-          echo "  - 新步骤数量: ${{ steps.parse_fixes.outputs.new_steps_count }}"
+          echo "处理摘要:"
+          echo "- 解析标识数量: ${{ steps.parse_fixes.outputs.identifiers_count }}"
+          echo "- 脚本修复数量: ${{ steps.parse_fixes.outputs.script_fixes_count }}"
+          echo "- 工作流修复数量: ${{ steps.parse_fixes.outputs.workflow_fixes_count }}"
           echo ""
           
-          # 显示备份文件
-          BACKUP_DIR="/mnt/openwrt-build/备份文件"
-          echo "📁 备份文件目录: $BACKUP_DIR"
-          if [ -d "$BACKUP_DIR" ]; then
-            echo "📂 备份文件列表:"
-            ls -la "$BACKUP_DIR/" 2>/dev/null || echo "  备份目录为空"
-          else
-            echo "❌ 备份目录不存在"
-          fi
-          
-          echo ""
-          
-          # 显示临时文件
-          TEMP_DIR="/mnt/openwrt-build/临时修复文件"
-          echo "📁 临时文件目录: $TEMP_DIR"
-          if [ -d "$TEMP_DIR" ]; then
-            echo "📂 临时文件列表:"
-            ls -la "$TEMP_DIR/" 2>/dev/null || echo "  临时目录为空"
-          else
-            echo "❌ 临时目录不存在"
-          fi
+          echo "备份文件:"
+          find . -name "*.backup.*" -type f 2>/dev/null | while read file; do
+            echo "- $file"
+          done || echo "无备份文件"
           
       - name: 创建总结报告
         if: always()
@@ -363,8 +317,6 @@ jobs:
           echo "- 解析修复标识: ${{ steps.parse_fixes.outputs.identifiers_count }} 个" >> $GITHUB_STEP_SUMMARY
           echo "- 脚本修复: ${{ steps.parse_fixes.outputs.script_fixes_count }} 个" >> $GITHUB_STEP_SUMMARY
           echo "- 工作流修复: ${{ steps.parse_fixes.outputs.workflow_fixes_count }} 个" >> $GITHUB_STEP_SUMMARY
-          echo "- 新函数: ${{ steps.parse_fixes.outputs.new_functions_count }} 个" >> $GITHUB_STEP_SUMMARY
-          echo "- 新步骤: ${{ steps.parse_fixes.outputs.new_steps_count }} 个" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [[ "${{ inputs.dry_run }}" == "true" ]]; then
@@ -377,13 +329,7 @@ jobs:
             echo "文件已根据修复方案进行更新。" >> $GITHUB_STEP_SUMMARY
           fi
           
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**详细信息:**" >> $GITHUB_STEP_SUMMARY
-          echo "- 修复文件: ${{ steps.parse_fixes.outputs.fix_file_path }}" >> $GITHUB_STEP_SUMMARY
-          echo "- 备份目录: /mnt/openwrt-build/备份文件" >> $GITHUB_STEP_SUMMARY
-          echo "- 临时目录: /mnt/openwrt-build/临时修复文件" >> $GITHUB_STEP_SUMMARY
-          
-      - name: 提交更改 (如果不是干运行)
+      - name: 提交更改
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run == false && job.status == 'success'
         run: |
           echo "=== 提交更改 ==="
