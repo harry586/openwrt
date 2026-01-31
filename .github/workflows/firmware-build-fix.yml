@@ -97,11 +97,18 @@ jobs:
             exit 0
           fi
           
-          # 2. 解析修复指令（支持多种格式）
+          # 2. 解析修复指令（简化版，避免复杂的正则表达式）
           echo "🔧 解析修复指令..."
           
           # 存储修改过的文件列表
           MODIFIED_FILES=""
+          
+          # 使用更简单的解析方法
+          CURRENT_FILE=""
+          SKIP_NEXT_LINES=0
+          APPEND_CONTENT=""
+          CREATE_FILE=""
+          FILE_CONTENT=""
           
           # 逐行处理修复指令
           LINE_NUM=0
@@ -109,30 +116,51 @@ jobs:
             ((LINE_NUM++))
             
             # 跳过空行和注释
-            [[ -z "$LINE" ]] && continue
-            [[ "$LINE" =~ ^[[:space:]]*# ]] && continue
-            
+            if [[ -z "$LINE" ]] || [[ "$LINE" =~ ^[[:space:]]*# ]]; then
+              continue
+            fi
+          
             echo "  指令 $LINE_NUM: $LINE"
+            
+            # 处理之前积累的内容
+            if [ $SKIP_NEXT_LINES -gt 0 ]; then
+              SKIP_NEXT_LINES=$((SKIP_NEXT_LINES-1))
+              continue
+            fi
+            
+            # 处理append积累的内容
+            if [ -n "$APPEND_CONTENT" ]; then
+              APPEND_CONTENT="${APPEND_CONTENT}${LINE}"$'\n'
+              continue
+            fi
+            
+            # 处理create积累的内容
+            if [ -n "$CREATE_FILE" ]; then
+              FILE_CONTENT="${FILE_CONTENT}${LINE}"$'\n'
+              continue
+            fi
             
             # 支持的命令格式:
             # file:path/to/file => 要修改的文件
-            # replace:pattern=>replacement => 文本替换
+            # replace:pattern##replacement => 文本替换
             # append:path/to/file => 追加内容
             # delete:path/to/file => 删除文件
-            # create:path/to/file content... => 创建文件
+            # create:path/to/file => 创建文件
             
+            # 检查是否以file:开头
             if [[ "$LINE" =~ ^file:[[:space:]]*(.+) ]]; then
               # 设置当前操作的文件
               CURRENT_FILE="${BASH_REMATCH[1]}"
               echo "    目标文件: $CURRENT_FILE"
               
-            elif [[ "$LINE" =~ ^replace:[[:space:]]*([^=]+)[[:space:]]*==>[[:space:]]*(.+) ]] && [ -n "$CURRENT_FILE" ]; then
-              # 文本替换 - 使用 ==> 作为分隔符
+            # 检查是否以replace:开头 - 使用##作为分隔符
+            elif [[ "$LINE" =~ ^replace:[[:space:]]*(.+)[[:space:]]*##[[:space:]]*(.+) ]] && [ -n "$CURRENT_FILE" ]; then
+              # 文本替换 - 使用##作为分隔符
               PATTERN="${BASH_REMATCH[1]}"
               REPLACEMENT="${BASH_REMATCH[2]}"
               
               if [ -f "$CURRENT_FILE" ]; then
-                echo "    替换: '$PATTERN' ==> '$REPLACEMENT'"
+                echo "    替换: '$PATTERN' => '$REPLACEMENT'"
                 # 直接替换，不生成临时文件
                 sed -i "s|$PATTERN|$REPLACEMENT|g" "$CURRENT_FILE"
                 
@@ -144,58 +172,29 @@ jobs:
                 echo "    ⚠️ 文件不存在: $CURRENT_FILE"
               fi
               
-            elif [[ "$LINE" =~ ^replace:[[:space:]]*([^:]+):([^:]+) ]] && [ -n "$CURRENT_FILE" ]; then
-              # 备用格式: replace:pattern:replacement
-              PATTERN="${BASH_REMATCH[1]}"
-              REPLACEMENT="${BASH_REMATCH[2]}"
-              
-              if [ -f "$CURRENT_FILE" ]; then
-                echo "    替换: '$PATTERN' => '$REPLACEMENT'"
-                sed -i "s|$PATTERN|$REPLACEMENT|g" "$CURRENT_FILE"
-                
-                if [[ ! " $MODIFIED_FILES " =~ " $CURRENT_FILE " ]]; then
-                  MODIFIED_FILES="$MODIFIED_FILES $CURRENT_FILE"
-                fi
-              fi
-              
+            # 检查是否以append:开头
             elif [[ "$LINE" =~ ^append:[[:space:]]*(.+) ]] && [ -n "$CURRENT_FILE" ]; then
-              # 追加内容（下一行开始的内容）
-              if [ -f "$CURRENT_FILE" ]; then
-                echo "    追加内容到: $CURRENT_FILE"
-                # 读取后续行直到遇到下一个命令
-                APPEND_CONTENT=""
-                while IFS= read -r NEXT_LINE || [ -n "$NEXT_LINE" ]; do
-                  [[ "$NEXT_LINE" =~ ^[a-z]+: ]] && break
-                  APPEND_CONTENT="${APPEND_CONTENT}${NEXT_LINE}"$'\n'
-                done
-                
-                echo "$APPEND_CONTENT" >> "$CURRENT_FILE"
-                
-                if [[ ! " $MODIFIED_FILES " =~ " $CURRENT_FILE " ]]; then
-                  MODIFIED_FILES="$MODIFIED_FILES $CURRENT_FILE"
-                fi
+              # 追加内容
+              APPEND_FILE="${BASH_REMATCH[1]}"
+              if [ -n "$APPEND_FILE" ]; then
+                CURRENT_FILE="$APPEND_FILE"
               fi
               
+              if [ -f "$CURRENT_FILE" ]; then
+                echo "    准备追加内容到: $CURRENT_FILE"
+                APPEND_CONTENT=""
+                SKIP_NEXT_LINES=0
+              fi
+              
+            # 检查是否以create:开头
             elif [[ "$LINE" =~ ^create:[[:space:]]*(.+) ]]; then
               # 创建文件
               CREATE_FILE="${BASH_REMATCH[1]}"
-              echo "    创建文件: $CREATE_FILE"
-              
-              # 读取文件内容（直到下一个命令）
+              echo "    准备创建文件: $CREATE_FILE"
               FILE_CONTENT=""
-              while IFS= read -r NEXT_LINE || [ -n "$NEXT_LINE" ]; do
-                [[ "$NEXT_LINE" =~ ^[a-z]+: ]] && break
-                FILE_CONTENT="${FILE_CONTENT}${NEXT_LINE}"$'\n'
-              done
+              SKIP_NEXT_LINES=0
               
-              # 创建目录
-              mkdir -p "$(dirname "$CREATE_FILE")"
-              echo -n "$FILE_CONTENT" > "$CREATE_FILE"
-              
-              if [[ ! " $MODIFIED_FILES " =~ " $CREATE_FILE " ]]; then
-                MODIFIED_FILES="$MODIFIED_FILES $CREATE_FILE"
-              fi
-              
+            # 检查是否以delete:开头
             elif [[ "$LINE" =~ ^delete:[[:space:]]*(.+) ]]; then
               # 删除文件
               DELETE_FILE="${BASH_REMATCH[1]}"
@@ -203,11 +202,85 @@ jobs:
               
               if [ -f "$DELETE_FILE" ]; then
                 rm -f "$DELETE_FILE"
-                MODIFIED_FILES="$MODIFIED_FILES $DELETE_FILE"
+                if [[ ! " $MODIFIED_FILES " =~ " $DELETE_FILE " ]]; then
+                  MODIFIED_FILES="$MODIFIED_FILES $DELETE_FILE"
+                fi
+              fi
+              
+            # 处理累积的append内容
+            elif [ -n "$APPEND_CONTENT" ]; then
+              # 检查是否是新的命令
+              if [[ "$LINE" =~ ^[a-z]+: ]]; then
+                # 是新的命令，处理之前的append内容
+                echo "    追加内容到: $CURRENT_FILE"
+                echo -n "$APPEND_CONTENT" >> "$CURRENT_FILE"
+                
+                if [[ ! " $MODIFIED_FILES " =~ " $CURRENT_FILE " ]]; then
+                  MODIFIED_FILES="$MODIFIED_FILES $CURRENT_FILE"
+                fi
+                
+                # 重置状态
+                APPEND_CONTENT=""
+                
+                # 重新处理当前行
+                ((LINE_NUM--))
+                continue
+              else
+                # 继续积累内容
+                APPEND_CONTENT="${APPEND_CONTENT}${LINE}"$'\n'
+              fi
+              
+            # 处理累积的create内容
+            elif [ -n "$CREATE_FILE" ]; then
+              # 检查是否是新的命令
+              if [[ "$LINE" =~ ^[a-z]+: ]]; then
+                # 是新的命令，处理之前的create内容
+                echo "    创建文件: $CREATE_FILE"
+                
+                # 创建目录
+                mkdir -p "$(dirname "$CREATE_FILE")"
+                echo -n "$FILE_CONTENT" > "$CREATE_FILE"
+                
+                if [[ ! " $MODIFIED_FILES " =~ " $CREATE_FILE " ]]; then
+                  MODIFIED_FILES="$MODIFIED_FILES $CREATE_FILE"
+                fi
+                
+                # 重置状态
+                CREATE_FILE=""
+                FILE_CONTENT=""
+                
+                # 重新处理当前行
+                ((LINE_NUM--))
+                continue
+              else
+                # 继续积累内容
+                FILE_CONTENT="${FILE_CONTENT}${LINE}"$'\n'
               fi
             fi
             
           done < "$FIX_FILE"
+          
+          # 处理最后可能累积的内容
+          if [ -n "$APPEND_CONTENT" ] && [ -n "$CURRENT_FILE" ] && [ -f "$CURRENT_FILE" ]; then
+            echo "    追加内容到: $CURRENT_FILE"
+            echo -n "$APPEND_CONTENT" >> "$CURRENT_FILE"
+            
+            if [[ ! " $MODIFIED_FILES " =~ " $CURRENT_FILE " ]]; then
+              MODIFIED_FILES="$MODIFIED_FILES $CURRENT_FILE"
+            fi
+          fi
+          
+          if [ -n "$CREATE_FILE" ] && [ -n "$FILE_CONTENT" ]; then
+            echo "    创建文件: $CREATE_FILE"
+            
+            # 创建目录
+            mkdir -p "$(dirname "$CREATE_FILE")"
+            echo -n "$FILE_CONTENT" > "$CREATE_FILE"
+            
+            if [[ ! " $MODIFIED_FILES " =~ " $CREATE_FILE " ]]; then
+              MODIFIED_FILES="$MODIFIED_FILES $CREATE_FILE"
+            fi
+          fi
           
           # 3. 如果有修改，提交并推送
           if [ -n "$MODIFIED_FILES" ]; then
