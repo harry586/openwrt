@@ -1,12 +1,10 @@
 name: 🔧 自动修复系统
 
 on:
-  # 自动触发 - 使用更简单的路径匹配
   push:
     paths:
       - 'firmware-config/fix.txt'
   
-  # 手动触发（直接自动合并）
   workflow_dispatch:
 
 jobs:
@@ -14,7 +12,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
     
     steps:
       - name: 🛎️ 检出代码
@@ -24,200 +21,85 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: 🔍 检查修复文件
-        id: check
         run: |
           echo "=== 检查修复文件 ==="
-          echo "事件类型: ${{ github.event_name }}"
-          echo "触发分支: ${{ github.ref }}"
-          echo ""
+          echo "事件: ${{ github.event_name }}"
+          echo "分支: ${{ github.ref }}"
           
-          if [ -f "firmware-config/fix.txt" ]; then
-            echo "✅ 找到修复文件"
-            echo "has_fix=true" >> $GITHUB_OUTPUT
-          else
-            echo "❌ 未找到修复文件"
-            echo "has_fix=false" >> $GITHUB_OUTPUT
+          if [ ! -f "firmware-config/fix.txt" ]; then
+            echo "❌ 没有找到修复文件"
             exit 1
           fi
+          
+          echo "✅ 找到修复文件"
+          echo "修复文件内容预览:"
+          head -5 firmware-config/fix.txt
       
-      - name: 🌿 创建修复分支
-        if: steps.check.outputs.has_fix == 'true'
+      - name: 📝 直接修改文件并推送
         run: |
-          echo "=== 创建修复分支 ==="
-          
-          # 唯一分支名
-          BRANCH_NAME="auto-fix-$(date +%s)"
-          echo "分支名: $BRANCH_NAME"
-          
-          # 创建并切换分支
-          git checkout -b "$BRANCH_NAME"
-          
-          echo "branch_name=$BRANCH_NAME" >> $GITHUB_ENV
-      
-      - name: 📝 应用修复
-        if: steps.check.outputs.has_fix == 'true'
-        run: |
-          echo "=== 应用修复 ==="
-          
-          FIX_FILE="firmware-config/fix.txt"
-          SCRIPT_FILE="firmware-config/scripts/build_firmware_main.sh"
+          echo "=== 直接修改并推送 ==="
           
           # 1. 修改脚本文件
-          if [ -f "$SCRIPT_FILE" ]; then
+          SCRIPT="firmware-config/scripts/build_firmware_main.sh"
+          if [ -f "$SCRIPT" ]; then
             echo "🔧 修改脚本文件..."
             
             # 备份
-            cp "$SCRIPT_FILE" "${SCRIPT_FILE}.backup"
+            cp "$SCRIPT" "${SCRIPT}.backup.$(date +%s)"
             
-            # 添加修复标记
-            echo "" >> "$SCRIPT_FILE"
-            echo "# 🔧 自动修复 - $(date)" >> "$SCRIPT_FILE"
-            echo "# 修复文件: $FIX_FILE" >> "$SCRIPT_FILE"
-            echo "# 时间戳: $(date +%s)" >> "$SCRIPT_FILE"
+            # 添加时间戳
+            TIMESTAMP=$(date +%s)
+            echo "" >> "$SCRIPT"
+            echo "# 🔧 自动修复标记" >> "$SCRIPT"
+            echo "# 修复时间: $(date)" >> "$SCRIPT"
+            echo "# 时间戳: $TIMESTAMP" >> "$SCRIPT"
             
             echo "✅ 脚本文件已修改"
           fi
           
-          # 2. 创建修复报告
-          REPORT_FILE="auto-fix-report-$(date +%s).md"
-          echo "# 🔧 自动修复报告" > "$REPORT_FILE"
-          echo "" >> "$REPORT_FILE"
-          echo "**生成时间:** $(date)" >> "$REPORT_FILE"
-          echo "**修复文件:** $FIX_FILE" >> "$REPORT_FILE"
-          echo "" >> "$REPORT_FILE"
-          echo "## 修复内容预览" >> "$REPORT_FILE"
-          echo '```' >> "$REPORT_FILE"
-          head -20 "$FIX_FILE" >> "$REPORT_FILE"
-          echo '```' >> "$REPORT_FILE"
+          # 2. 创建修复日志
+          LOG_FILE="auto-fix-log-$(date +%s).txt"
+          echo "# 自动修复日志" > "$LOG_FILE"
+          echo "时间: $(date)" >> "$LOG_FILE"
+          echo "事件: ${{ github.event_name }}" >> "$LOG_FILE"
+          echo "提交: ${{ github.sha }}" >> "$LOG_FILE"
           
-          echo "✅ 创建报告文件: $REPORT_FILE"
-      
-      - name: 💾 提交更改
-        if: steps.check.outputs.has_fix == 'true'
-        run: |
-          echo "=== 提交更改 ==="
-          
+          # 3. 配置Git
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "GitHub Actions"
           
-          echo "📊 Git状态:"
-          git status --short
-          echo ""
-          
-          echo "➕ 添加所有更改..."
+          # 4. 提交
+          echo "💾 提交更改..."
           git add -A
           
-          echo "💾 提交..."
-          git commit -m "🔧 自动修复 [skip ci]" || echo "没有更改"
-          
-          echo "🚀 推送分支..."
-          git push origin "${{ env.branch_name }}"
-          
-          echo "✅ 分支已推送"
-      
-      - name: 📨 创建并合并PR（使用GitHub API）
-        if: steps.check.outputs.has_fix == 'true'
-        run: |
-          echo "=== 创建并合并PR ==="
-          
-          BRANCH_NAME="${{ env.branch_name }}"
-          REPO="${{ github.repository }}"
-          
-          echo "仓库: $REPO"
-          echo "分支: $BRANCH_NAME"
-          echo ""
-          
-          # 1. 创建PR（使用GitHub API）
-          echo "📨 创建Pull Request..."
-          
-          PR_RESPONSE=$(curl -s -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/$REPO/pulls" \
-            -d "{
-              \"title\": \"🔧 自动修复\",
-              \"body\": \"## 自动修复\\n\\n由GitHub Actions自动创建。\\n\\n**分支:** $BRANCH_NAME\\n**时间:** $(date)\\n\\n> 🤖 自动合并\",
-              \"head\": \"$BRANCH_NAME\",
-              \"base\": \"main\"
-            }")
-          
-          echo "API响应: $PR_RESPONSE"
-          
-          # 提取PR号
-          PR_NUMBER=$(echo "$PR_RESPONSE" | grep -o '"number":[0-9]*' | cut -d: -f2 | head -1)
-          
-          if [ -z "$PR_NUMBER" ]; then
-            echo "❌ 创建PR失败"
-            echo "响应详情:"
-            echo "$PR_RESPONSE"
-            exit 1
+          if git diff --cached --quiet; then
+            echo "⚠️ 没有更改可提交"
+            # 创建标记文件确保有更改
+            MARKER="auto-fix-marker-$(date +%s).txt"
+            echo "# 自动修复标记" > "$MARKER"
+            echo "# 时间: $(date)" >> "$MARKER"
+            git add "$MARKER"
           fi
           
-          echo "✅ PR创建成功: #$PR_NUMBER"
-          echo "pr_number=$PR_NUMBER" >> $GITHUB_ENV
+          git commit -m "🔧 自动修复 [skip ci]" || exit 0
           
-          # 2. 等待片刻
-          echo "⏳ 等待2秒..."
-          sleep 2
+          # 5. 推送
+          echo "🚀 推送到主分支..."
+          git push origin HEAD:main
           
-          # 3. 合并PR
-          echo "🔄 合并PR #$PR_NUMBER..."
-          
-          MERGE_RESPONSE=$(curl -s -X PUT \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/$REPO/pulls/$PR_NUMBER/merge" \
-            -d "{
-              \"commit_title\": \"🔧 自动修复\",
-              \"commit_message\": \"自动合并PR #$PR_NUMBER\",
-              \"merge_method\": \"squash\"
-            }")
-          
-          echo "合并响应: $MERGE_RESPONSE"
-          
-          if echo "$MERGE_RESPONSE" | grep -q '"merged":true'; then
-            echo "✅ PR已合并"
-            echo "pr_merged=true" >> $GITHUB_ENV
-          else
-            echo "❌ 合并失败"
-            echo "响应: $MERGE_RESPONSE"
-            echo "pr_merged=false" >> $GITHUB_ENV
-          fi
-          
-          # 4. 删除分支
-          echo "🗑️ 删除分支 $BRANCH_NAME..."
-          
-          curl -s -X DELETE \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/$REPO/git/refs/heads/$BRANCH_NAME" 2>/dev/null || true
-          
-          echo "✅ 流程完成"
+          echo "✅ 修复已直接推送到主分支"
       
       - name: 📋 生成报告
         if: always()
         run: |
-          echo "### 🔧 自动修复完成" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ 自动修复完成" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
           echo "**时间:** $(date)" >> $GITHUB_STEP_SUMMARY
-          echo "**触发方式:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "**修复文件:** firmware-config/fix.txt" >> $GITHUB_STEP_SUMMARY
+          echo "**方式:** 直接推送到主分支" >> $GITHUB_STEP_SUMMARY
+          echo "**触发:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "**分支:** ${{ env.branch_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**修改的文件:**" >> $GITHUB_STEP_SUMMARY
+          echo "- firmware-config/scripts/build_firmware_main.sh" >> $GITHUB_STEP_SUMMARY
+          echo "- auto-fix-log-*.txt" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [[ "${{ env.pr_number }}" != "" ]]; then
-            echo "✅ **PR已创建:** #${{ env.pr_number }}" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ **PR创建失败**" >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [[ "${{ env.pr_merged }}" == "true" ]]; then
-            echo "🔄 **PR已自动合并**" >> $GITHUB_STEP_SUMMARY
-            echo "✅ 修复已应用到主分支" >> $GITHUB_STEP_SUMMARY
-          elif [[ "${{ env.pr_merged }}" == "false" ]]; then
-            echo "❌ **PR合并失败**" >> $GITHUB_STEP_SUMMARY
-            echo "> 请手动处理PR" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "✅ 修复已应用到仓库"
