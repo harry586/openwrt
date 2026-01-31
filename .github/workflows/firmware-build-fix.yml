@@ -1,11 +1,18 @@
+# firmware-build-fix.yml
 name: 🔧 自动修复系统
 
 on:
   push:
     paths:
-      - 'firmware-config/fix.txt'
+      - '**/fix.txt'  # 匹配任意位置的fix.txt
+      - 'fix.txt'     # 根目录的fix.txt
   
   workflow_dispatch:
+    inputs:
+      fix_file_path:
+        description: '修复文件路径（可选，默认搜索fix.txt）'
+        required: false
+        default: ''
 
 jobs:
   auto-fix:
@@ -20,86 +27,258 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: 🔍 检查修复文件
+      - name: 🔍 查找修复文件
         run: |
-          echo "=== 检查修复文件 ==="
-          echo "事件: ${{ github.event_name }}"
-          echo "分支: ${{ github.ref }}"
+          echo "=== 查找修复文件 ==="
           
-          if [ ! -f "firmware-config/fix.txt" ]; then
-            echo "❌ 没有找到修复文件"
+          # 确定要查找的文件路径
+          if [ -n "${{ github.event.inputs.fix_file_path }}" ]; then
+            # 使用手动输入的路径
+            FIX_FILE="${{ github.event.inputs.fix_file_path }}"
+            echo "📁 使用手动指定的修复文件: $FIX_FILE"
+          else
+            # 搜索所有fix.txt文件
+            echo "🔍 搜索修复文件..."
+            FIX_FILES=$(find . -name "fix.txt" -type f | grep -v ".git" | head -5)
+            
+            if [ -z "$FIX_FILES" ]; then
+              echo "❌ 没有找到任何fix.txt文件"
+              exit 1
+            fi
+            
+            # 选择第一个找到的文件（可以按需调整策略）
+            FIX_FILE=$(echo "$FIX_FILES" | head -1)
+            echo "📁 找到修复文件: $FIX_FILE"
+            
+            if [ $(echo "$FIX_FILES" | wc -l) -gt 1 ]; then
+              echo "⚠️  找到多个修复文件，使用第一个: $FIX_FILE"
+              echo "其他文件:"
+              echo "$FIX_FILES" | tail -n +2 | while IFS= read -r file; do
+                echo "  - $file"
+              done
+            fi
+          fi
+          
+          # 验证文件存在
+          if [ ! -f "$FIX_FILE" ]; then
+            echo "❌ 修复文件不存在: $FIX_FILE"
             exit 1
           fi
           
-          echo "✅ 找到修复文件"
-          echo "修复文件内容预览:"
-          head -5 firmware-config/fix.txt
+          echo "✅ 使用修复文件: $FIX_FILE"
+          echo "文件路径: $(realpath "$FIX_FILE")"
+          
+          # 设置环境变量供后续步骤使用
+          echo "FIX_FILE_PATH=$FIX_FILE" >> $GITHUB_ENV
       
-      - name: 📝 直接修改文件并推送
+      - name: 📝 应用修复并推送
+        env:
+          FIX_FILE: ${{ env.FIX_FILE_PATH }}
         run: |
-          echo "=== 直接修改并推送 ==="
+          echo "=== 应用修复并推送 ==="
+          echo "修复文件: $FIX_FILE"
           
-          # 1. 修改脚本文件
-          SCRIPT="firmware-config/scripts/build_firmware_main.sh"
-          if [ -f "$SCRIPT" ]; then
-            echo "🔧 修改脚本文件..."
+          # 1. 读取修复指令
+          echo "📖 读取修复指令..."
+          FIX_CONTENT=$(cat "$FIX_FILE")
+          
+          if [ -z "$FIX_CONTENT" ]; then
+            echo "⚠️ 修复文件为空，跳过修复"
             
-            # 备份
-            cp "$SCRIPT" "${SCRIPT}.backup.$(date +%s)"
+            # 配置Git
+            git config --local user.email "github-actions[bot]@users.noreply.github.com"
+            git config --local user.name "GitHub Actions"
             
-            # 添加时间戳
-            TIMESTAMP=$(date +%s)
-            echo "" >> "$SCRIPT"
-            echo "# 🔧 自动修复标记" >> "$SCRIPT"
-            echo "# 修复时间: $(date)" >> "$SCRIPT"
-            echo "# 时间戳: $TIMESTAMP" >> "$SCRIPT"
-            
-            echo "✅ 脚本文件已修改"
+            # 清空修复文件
+            > "$FIX_FILE"
+            git add "$FIX_FILE"
+            git commit -m "🧹 清理空修复文件 [skip ci]" || true
+            git push origin HEAD:main
+            exit 0
           fi
           
-          # 2. 创建修复日志
-          LOG_FILE="auto-fix-log-$(date +%s).txt"
-          echo "# 自动修复日志" > "$LOG_FILE"
-          echo "时间: $(date)" >> "$LOG_FILE"
-          echo "事件: ${{ github.event_name }}" >> "$LOG_FILE"
-          echo "提交: ${{ github.sha }}" >> "$LOG_FILE"
+          # 2. 解析修复指令（支持多种格式）
+          echo "🔧 解析修复指令..."
           
-          # 3. 配置Git
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "GitHub Actions"
+          # 存储修改过的文件列表
+          MODIFIED_FILES=""
           
-          # 4. 提交
-          echo "💾 提交更改..."
-          git add -A
+          # 逐行处理修复指令
+          LINE_NUM=0
+          while IFS= read -r LINE || [ -n "$LINE" ]; do
+            ((LINE_NUM++))
+            
+            # 跳过空行和注释
+            [[ -z "$LINE" ]] && continue
+            [[ "$LINE" =~ ^[[:space:]]*# ]] && continue
+            
+            echo "  指令 $LINE_NUM: $LINE"
+            
+            # 支持的命令格式:
+            # file:path/to/file => 要修改的文件
+            # replace:pattern=>replacement => 文本替换
+            # append:path/to/file => 追加内容
+            # delete:path/to/file => 删除文件
+            # create:path/to/file content... => 创建文件
+            
+            if [[ "$LINE" =~ ^file:[[:space:]]*(.+) ]]; then
+              # 设置当前操作的文件
+              CURRENT_FILE="${BASH_REMATCH[1]}"
+              echo "    目标文件: $CURRENT_FILE"
+              
+            elif [[ "$LINE" =~ ^replace:[[:space:]]*(.+)[[:space:]]*=>[[:space:]]*(.+) ]] && [ -n "$CURRENT_FILE" ]; then
+              # 文本替换
+              PATTERN="${BASH_REMATCH[1]}"
+              REPLACEMENT="${BASH_REMATCH[2]}"
+              
+              if [ -f "$CURRENT_FILE" ]; then
+                echo "    替换: '$PATTERN' => '$REPLACEMENT'"
+                # 直接替换，不生成临时文件
+                sed -i "s|$PATTERN|$REPLACEMENT|g" "$CURRENT_FILE"
+                
+                # 记录修改
+                if [[ ! " $MODIFIED_FILES " =~ " $CURRENT_FILE " ]]; then
+                  MODIFIED_FILES="$MODIFIED_FILES $CURRENT_FILE"
+                fi
+              else
+                echo "    ⚠️ 文件不存在: $CURRENT_FILE"
+              fi
+              
+            elif [[ "$LINE" =~ ^append:[[:space:]]*(.+) ]] && [ -n "$CURRENT_FILE" ]; then
+              # 追加内容（下一行开始的内容）
+              if [ -f "$CURRENT_FILE" ]; then
+                echo "    追加内容到: $CURRENT_FILE"
+                # 读取后续行直到遇到下一个命令
+                APPEND_CONTENT=""
+                while IFS= read -r NEXT_LINE || [ -n "$NEXT_LINE" ]; do
+                  [[ "$NEXT_LINE" =~ ^[a-z]+: ]] && break
+                  APPEND_CONTENT="${APPEND_CONTENT}${NEXT_LINE}"$'\n'
+                done
+                
+                echo "$APPEND_CONTENT" >> "$CURRENT_FILE"
+                
+                if [[ ! " $MODIFIED_FILES " =~ " $CURRENT_FILE " ]]; then
+                  MODIFIED_FILES="$MODIFIED_FILES $CURRENT_FILE"
+                fi
+              fi
+              
+            elif [[ "$LINE" =~ ^create:[[:space:]]*(.+) ]]; then
+              # 创建文件
+              CREATE_FILE="${BASH_REMATCH[1]}"
+              echo "    创建文件: $CREATE_FILE"
+              
+              # 读取文件内容（直到下一个命令）
+              FILE_CONTENT=""
+              while IFS= read -r NEXT_LINE || [ -n "$NEXT_LINE" ]; do
+                [[ "$NEXT_LINE" =~ ^[a-z]+: ]] && break
+                FILE_CONTENT="${FILE_CONTENT}${NEXT_LINE}"$'\n'
+              done
+              
+              # 创建目录
+              mkdir -p "$(dirname "$CREATE_FILE")"
+              echo -n "$FILE_CONTENT" > "$CREATE_FILE"
+              
+              if [[ ! " $MODIFIED_FILES " =~ " $CREATE_FILE " ]]; then
+                MODIFIED_FILES="$MODIFIED_FILES $CREATE_FILE"
+              fi
+              
+            elif [[ "$LINE" =~ ^delete:[[:space:]]*(.+) ]]; then
+              # 删除文件
+              DELETE_FILE="${BASH_REMATCH[1]}"
+              echo "    删除文件: $DELETE_FILE"
+              
+              if [ -f "$DELETE_FILE" ]; then
+                rm -f "$DELETE_FILE"
+                MODIFIED_FILES="$MODIFIED_FILES $DELETE_FILE"
+              fi
+            fi
+            
+          done < "$FIX_FILE"
           
-          if git diff --cached --quiet; then
-            echo "⚠️ 没有更改可提交"
-            # 创建标记文件确保有更改
-            MARKER="auto-fix-marker-$(date +%s).txt"
-            echo "# 自动修复标记" > "$MARKER"
-            echo "# 时间: $(date)" >> "$MARKER"
-            git add "$MARKER"
+          # 3. 如果有修改，提交并推送
+          if [ -n "$MODIFIED_FILES" ]; then
+            echo "💾 检测到修改，准备提交..."
+            echo "修改的文件:"
+            for file in $MODIFIED_FILES; do
+              echo "  - $file"
+            done
+            
+            # 配置Git
+            git config --local user.email "github-actions[bot]@users.noreply.github.com"
+            git config --local user.name "GitHub Actions"
+            
+            # 构建提交信息
+            COMMIT_MSG="🔧 自动修复"
+            COMMIT_MSG+="\n\n来源: $FIX_FILE"
+            COMMIT_MSG+="\n时间: $(date)"
+            COMMIT_MSG+="\n触发: ${{ github.event_name }}"
+            
+            # 添加修改的文件列表
+            if [ -n "$MODIFIED_FILES" ]; then
+              COMMIT_MSG+="\n\n修改的文件:"
+              for file in $MODIFIED_FILES; do
+                COMMIT_MSG+="\n- $file"
+              done
+            fi
+            
+            # 添加修复文件内容预览
+            COMMIT_MSG+="\n\n修复指令预览:"
+            head -10 "$FIX_FILE" | while IFS= read -r line; do
+              COMMIT_MSG+="\n  $line"
+            done
+            if [ $(wc -l < "$FIX_FILE") -gt 10 ]; then
+              COMMIT_MSG+="\n  ...（还有更多）"
+            fi
+            
+            # 提交所有修改
+            echo -e "$COMMIT_MSG" | git commit -a -F -
+            
+            # 4. 推送更改
+            echo "🚀 推送到主分支..."
+            git push origin HEAD:main
+            
+            echo "✅ 修复已应用并推送"
+          else
+            echo "⚠️ 没有检测到有效的修改"
           fi
           
-          git commit -m "🔧 自动修复 [skip ci]" || exit 0
-          
-          # 5. 推送
-          echo "🚀 推送到主分支..."
+          # 5. 清理修复文件
+          echo "🧹 清理修复文件..."
+          > "$FIX_FILE"
+          git add "$FIX_FILE"
+          git commit -m "🧹 清理修复文件: $(basename "$FIX_FILE") [skip ci]" || true
           git push origin HEAD:main
-          
-          echo "✅ 修复已直接推送到主分支"
       
       - name: 📋 生成报告
         if: always()
         run: |
-          echo "### ✅ 自动修复完成" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔧 自动修复完成" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "**状态:** ✅ 成功" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**状态:** ❌ 失败" >> $GITHUB_STEP_SUMMARY
+          fi
+          
           echo "**时间:** $(date)" >> $GITHUB_STEP_SUMMARY
-          echo "**方式:** 直接推送到主分支" >> $GITHUB_STEP_SUMMARY
-          echo "**触发:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**修复文件:** ${{ env.FIX_FILE_PATH }}" >> $GITHUB_STEP_SUMMARY
+          echo "**触发方式:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**修改的文件:**" >> $GITHUB_STEP_SUMMARY
-          echo "- firmware-config/scripts/build_firmware_main.sh" >> $GITHUB_STEP_SUMMARY
-          echo "- auto-fix-log-*.txt" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ 修复已应用到仓库"
+          
+          # 显示最后的状态
+          if [ -n "${{ env.FIX_FILE_PATH }}" ]; then
+            echo "### 📊 执行结果" >> $GITHUB_STEP_SUMMARY
+            echo "1. ✅ 查找修复文件: ${{ env.FIX_FILE_PATH }}" >> $GITHUB_STEP_SUMMARY
+            echo "2. ✅ 解析修复指令: 完成" >> $GITHUB_STEP_SUMMARY
+            echo "3. ✅ 应用修复: 完成" >> $GITHUB_STEP_SUMMARY
+            echo "4. ✅ 提交更改: 完成" >> $GITHUB_STEP_SUMMARY
+            echo "5. ✅ 清理工作: 完成" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # 显示修复文件位置信息
+            echo "### 📁 文件位置" >> $GITHUB_STEP_SUMMARY
+            echo "- **修复文件:** \`${{ env.FIX_FILE_PATH }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **仓库根目录:** \`$(pwd)\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **相对路径:** \`${{ env.FIX_FILE_PATH }}\`" >> $GITHUB_STEP_SUMMARY
+          fi
