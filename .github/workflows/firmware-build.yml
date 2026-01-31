@@ -1,3 +1,4 @@
+#【firmware-build.yml-完整修复版】
 # .github/workflows/firmware-build.yml
 name: OpenWrt 智能固件构建工作流
 
@@ -53,70 +54,99 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      # 步骤 0: 生成时间戳和设备同步检查
+      # 步骤 0: 生成时间戳和设备同步检查 - 修复版
       - name: "0. 生成时间戳和设备同步检查"
         run: |
           echo "=== 步骤 0: 生成时间戳和设备同步检查 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
+          # 显示当前目录结构
+          echo "📁 当前工作区目录结构:"
+          ls -la "${{ github.workspace }}/"
+          
+          # 检查firmware-config目录
+          echo "📁 firmware-config目录内容:"
+          ls -la "${{ github.workspace }}/firmware-config/" 2>/dev/null || echo "firmware-config目录不存在"
+          
           # 设备同步检查
           echo "🔍 检查设备列表同步状态..."
-          SUPPORT_FILE="${{ github.workspace }}/firmware-config/support.sh"
           
-          if [ -f "$SUPPORT_FILE" ]; then
-            echo "✅ 找到设备支持文件: $SUPPORT_FILE"
-            source "$SUPPORT_FILE" 2>/dev/null || true
+          # 尝试多个可能的support.sh路径
+          SUPPORT_PATHS=(
+            "${{ github.workspace }}/support.sh"
+            "${{ github.workspace }}/firmware-config/support.sh"
+            "${{ github.workspace }}/firmware-config/../support.sh"
+          )
+          
+          SUPPORT_FILE=""
+          for path in "${SUPPORT_PATHS[@]}"; do
+            if [ -f "$path" ]; then
+              SUPPORT_FILE="$path"
+              echo "✅ 找到设备支持文件: $SUPPORT_FILE"
+              break
+            fi
+          done
+          
+          if [ -z "$SUPPORT_FILE" ]; then
+            echo "❌ 错误: 未找到设备支持文件 support.sh"
+            echo "📁 搜索了以下路径:"
+            for path in "${SUPPORT_PATHS[@]}"; do
+              echo "  - $path"
+            done
+            echo "❌ 构建终止: 缺少设备支持文件"
+            exit 1
+          fi
+          
+          source "$SUPPORT_FILE" 2>/dev/null || true
+          
+          if command -v get_all_devices >/dev/null 2>&1; then
+            SUPPORTED_DEVICES=$(get_all_devices)
+            echo "📱 support.sh 中支持的设备: $SUPPORTED_DEVICES"
             
-            if command -v get_all_devices >/dev/null 2>&1; then
-              SUPPORTED_DEVICES=$(get_all_devices)
-              echo "📱 support.sh 中支持的设备: $SUPPORTED_DEVICES"
-              
-              SELECTED_DEVICE="${{ github.event.inputs.device_name }}"
-              echo "🎯 当前选择的设备: $SELECTED_DEVICE"
-              
-              # 检查设备是否在support.sh中
-              DEVICE_IN_SUPPORT=false
+            SELECTED_DEVICE="${{ github.event.inputs.device_name }}"
+            echo "🎯 当前选择的设备: $SELECTED_DEVICE"
+            
+            # 检查设备是否在support.sh中
+            DEVICE_IN_SUPPORT=false
+            for device in $SUPPORTED_DEVICES; do
+              if [ "$device" = "$SELECTED_DEVICE" ]; then
+                DEVICE_IN_SUPPORT=true
+                break
+              fi
+            done
+            
+            if [ "$DEVICE_IN_SUPPORT" = false ]; then
+              echo "⚠️ 警告: 选择的设备 '$SELECTED_DEVICE' 不在 support.sh 的支持列表中"
+              echo "💡 可能的原因:"
+              echo "  1. support.sh 已更新但 workflow.yml 未同步"
+              echo "  2. 设备名称不匹配"
+              echo ""
+              echo "📋 support.sh 支持的设备:"
               for device in $SUPPORTED_DEVICES; do
-                if [ "$device" = "$SELECTED_DEVICE" ]; then
-                  DEVICE_IN_SUPPORT=true
-                  break
+                if command -v get_device_description >/dev/null 2>&1; then
+                  DESC=$(get_device_description "$device" 2>/dev/null || echo "无描述")
+                  echo "  - $device: $DESC"
+                else
+                  echo "  - $device"
                 fi
               done
-              
-              if [ "$DEVICE_IN_SUPPORT" = false ]; then
-                echo "⚠️ 警告: 选择的设备 '$SELECTED_DEVICE' 不在 support.sh 的支持列表中"
-                echo "💡 可能的原因:"
-                echo "  1. support.sh 已更新但 workflow.yml 未同步"
-                echo "  2. 设备名称不匹配"
-                echo ""
-                echo "📋 support.sh 支持的设备:"
-                for device in $SUPPORTED_DEVICES; do
-                  if command -v get_device_description >/dev/null 2>&1; then
-                    DESC=$(get_device_description "$device" 2>/dev/null || echo "无描述")
-                    echo "  - $device: $DESC"
-                  else
-                    echo "  - $device"
-                  fi
-                done
-                echo ""
-                echo "🔧 修复方法:"
-                echo "  运行同步脚本: ./firmware-config/scripts/sync-device-list.sh"
-                echo "  然后提交更新后的 workflow.yml"
-                echo ""
-                echo "❌ 构建终止: 设备不支持"
-                exit 1
-              else
-                echo "✅ 设备 '$SELECTED_DEVICE' 在 support.sh 中支持"
-                if command -v get_device_description >/dev/null 2>&1; then
-                  DEVICE_DESC=$(get_device_description "$SELECTED_DEVICE" 2>/dev/null || echo "无描述")
-                  echo "📝 设备描述: $DEVICE_DESC"
-                fi
-              fi
+              echo ""
+              echo "🔧 修复方法:"
+              echo "  运行同步脚本: ./firmware-config/scripts/sync-device-list.sh"
+              echo "  然后提交更新后的 workflow.yml"
+              echo ""
+              echo "❌ 构建终止: 设备不支持"
+              exit 1
             else
-              echo "⚠️ 无法从 support.sh 读取设备列表函数"
+              echo "✅ 设备 '$SELECTED_DEVICE' 在 support.sh 中支持"
+              if command -v get_device_description >/dev/null 2>&1; then
+                DEVICE_DESC=$(get_device_description "$SELECTED_DEVICE" 2>/dev/null || echo "无描述")
+                echo "📝 设备描述: $DEVICE_DESC"
+              fi
             fi
           else
-            echo "⚠️ 未找到设备支持文件: $SUPPORT_FILE"
+            echo "⚠️ 无法从 support.sh 读取设备列表函数"
+            echo "💡 跳过设备同步检查，继续构建"
           fi
           
           # 生成时间戳
@@ -360,6 +390,32 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" generate_config "${{ github.event.inputs.extra_packages }}"
           
           echo "🟢 步骤 13 完成"
+      
+      # 步骤 13.5: 调试：检查USB 3.0配置状态
+      - name: "13.5. 调试：检查USB 3.0配置状态"
+        run: |
+          echo "=== 调试：检查USB 3.0配置状态 ==="
+          echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          
+          if [ -f "/mnt/openwrt-build/.config" ]; then
+            echo "🔍 检查.config文件中的USB 3.0配置:"
+            echo "1. kmod-usb3: $(grep -c "CONFIG_PACKAGE_kmod-usb3=y" /mnt/openwrt-build/.config || echo "0")"
+            echo "2. kmod-usb-xhci-hcd: $(grep -c "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" /mnt/openwrt-build/.config || echo "0")"
+            echo "3. kmod-usb-xhci-pci: $(grep -c "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" /mnt/openwrt-build/.config || echo "0")"
+            echo "4. kmod-usb-xhci-plat-hcd: $(grep -c "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" /mnt/openwrt-build/.config || echo "0")"
+            echo "5. 所有USB相关配置统计:"
+            grep -i "usb" /mnt/openwrt-build/.config | grep "=y" | wc -l || echo "0"
+            
+            # 显示具体的USB 3.0配置
+            echo "📋 USB 3.0具体配置:"
+            grep -E "CONFIG_PACKAGE_kmod-usb3|CONFIG_PACKAGE_kmod-usb-xhci" /mnt/openwrt-build/.config | grep "=y" | head -10 || echo "未找到USB 3.0配置"
+            
+            # 显示版本信息
+            echo "📋 构建版本: $SELECTED_BRANCH"
+            echo "📋 构建模式: $CONFIG_MODE"
+          else
+            echo "❌ .config文件不存在"
+          fi
       
       # 步骤 14: 验证USB配置（调用大脚本）
       - name: "14. 验证USB配置（调用大脚本）"
