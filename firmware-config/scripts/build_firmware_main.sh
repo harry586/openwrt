@@ -21,16 +21,20 @@ log() {
 
 #【build_firmware_main.sh-02】错误处理函数
 #【build_firmware_main.sh-02】错误处理函数
+#【build_firmware_main.sh-02】错误处理函数
 handle_error() {
     log "❌ 错误发生在: $1"
     log "详细错误信息:"
+    echo "最后100行构建日志:"
     tail -100 /tmp/build-logs/*.log 2>/dev/null || echo "无日志文件"
     
+    # 检查defconfig日志
     if [ -f "/tmp/defconfig.log" ]; then
         echo "defconfig 错误日志:"
         cat "/tmp/defconfig.log"
     fi
     
+    # 检查.config文件
     if [ -f ".config" ]; then
         echo ".config 最后50行:"
         tail -50 .config
@@ -39,7 +43,6 @@ handle_error() {
     exit 1
 }
 
-#【build_firmware_main.sh-03】环境变量函数
 save_env() {
     mkdir -p $BUILD_DIR
     echo "#!/bin/bash" > $ENV_FILE
@@ -3631,4 +3634,139 @@ fi
 # 正常退出
 exit 0
 
+
+
+# ============ 自动修复追加函数: BUILD_DIR="/mnt/openwrt-build" ============
+#【build_firmware_main.sh-01】文件头：变量定义和日志函数
+BUILD_DIR="/mnt/openwrt-build"
+ENV_FILE="$BUILD_DIR/build_env.sh"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# 修复：SUPPORT_DIR 应该指向 firmware-config 目录本身
+SUPPORT_DIR="$REPO_ROOT/firmware-config"
+
+# 确保有日志目录
+mkdir -p /tmp/build-logs
+
+log() {
+    echo "【$(date '+%Y-%m-%d %H:%M:%S')】$1"
+}
+
+
+# ============ 自动修复追加函数: # 参考firmware-build-fix.yml的搜索逻辑 ============
+#【build_firmware_main.sh-03】智能文件搜索函数
+# 参考firmware-build-fix.yml的搜索逻辑
+
+smart_file_search() {
+    local filename="$1"
+    local found_file=""
+    
+    log "🔍 开始智能搜索文件: $filename"
+    
+    # 1. 首先在常见位置查找
+    local common_paths=(
+        "firmware-config/scripts/$filename"
+        "scripts/$filename"
+        "$filename"
+        "./$filename"
+        "../$filename"
+    )
+    
+    for path in "${common_paths[@]}"; do
+        if [ -f "$path" ]; then
+            found_file="$path"
+            log "✅ 在常见位置找到: $found_file"
+            break
+        fi
+    done
+    
+    # 2. 如果没有找到，使用find命令全目录搜索
+    if [ -z "$found_file" ]; then
+        log "🔍 开始全目录搜索 $filename..."
+        found_file=$(find . -name "$filename" -type f ! -path "./.git/*" | head -1)
+        
+        if [ -n "$found_file" ]; then
+            log "✅ 在全目录搜索中找到: $found_file"
+        else
+            log "❌ 错误: 未找到 $filename 文件"
+            log "请确保文件存在于以下位置之一:"
+            log "- firmware-config/scripts/$filename"
+            log "- scripts/$filename"
+            log "- $filename"
+            log "当前目录: $(pwd)"
+            log "目录内容:"
+            ls -la
+            return 1
+        fi
+    fi
+    
+    echo "$found_file"
+    return 0
+}
+
+
+# ============ 自动修复追加函数: # 这个函数应该在脚本开头调用 ============
+#【build_firmware_main.sh-04】修复脚本换行符问题
+# 这个函数应该在脚本开头调用
+
+fix_line_endings() {
+    local script_file="${BASH_SOURCE[0]}"
+    
+    # 检查文件是否有Windows换行符
+    if file "$script_file" | grep -q "CRLF"; then
+        log "⚠️ 检测到Windows换行符，正在修复..."
+        
+        # 备份原文件
+        local backup_file="${script_file}.bak"
+        cp "$script_file" "$backup_file"
+        
+        # 使用sed清除\r字符
+        sed -i 's/\r$//' "$script_file"
+        
+        # 验证修复
+        if file "$script_file" | grep -q "CRLF"; then
+            log "❌ 修复失败，恢复备份"
+            cp "$backup_file" "$script_file"
+        else
+            log "✅ 换行符修复完成"
+            rm -f "$backup_file"
+        fi
+    fi
+}
+
+# 在脚本开头调用修复函数
+fix_line_endings
+
+#!/bin/bash
+# ==============================
+# 【紧急修复】Windows换行符问题
+# ==============================
+# 修复错误：syntax error near unexpected token $'{\r''
+
+# 方法1：立即清除\r字符
+if [ -n "$BASH_SOURCE" ]; then
+    # 读取脚本内容，过滤掉\r
+    SCRIPT_CONTENT=$(cat "${BASH_SOURCE[0]}" | tr -d '\r')
+    # 重新执行脚本
+    eval "$SCRIPT_CONTENT"
+    exit $?
+fi
+
+# 如果上面的方法失败，继续正常执行
+set -e
+
+# 方法2：检查并修复函数定义
+check_syntax() {
+    # 检查第24行附近的问题
+    local line_num=24
+    local problem_line=$(sed -n "${line_num}p" "${BASH_SOURCE[0]}" 2>/dev/null)
+    
+    if echo "$problem_line" | grep -q $'\r'; then
+        log "🔧 修复第${line_num}行的换行符问题"
+        # 修复这一行
+        sed -i "${line_num}s/\r$//" "${BASH_SOURCE[0]}"
+    fi
+}
+
+# 执行语法检查
+check_syntax
 
