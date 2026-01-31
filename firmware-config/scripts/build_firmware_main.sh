@@ -1,4 +1,5 @@
 #!/bin/bash
+sed -i 's/\r//g' "$0" && exec bash "$0" "$@"
 set -e
 
 # ==============================
@@ -3769,4 +3770,5 @@ check_syntax() {
 
 # 执行语法检查
 check_syntax
+
 
