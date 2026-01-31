@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      workflows: write  # 添加这个权限！
+      actions: write  # 修改为actions而不是workflows
     
     steps:
       - name: 🛎️ 检出代码仓库
@@ -35,10 +35,8 @@ jobs:
           ls -la
           echo ""
           
-          # 查找修复文件
           FIX_FILE=""
           
-          # 先尝试常见位置
           POSSIBLE_PATHS=(
             "firmware-config/fix.txt"
             "fix.txt"
@@ -56,7 +54,6 @@ jobs:
             fi
           done
           
-          # 如果没找到，搜索整个目录
           if [ -z "$FIX_FILE" ]; then
             echo "🔍 搜索整个目录..."
             SEARCH_RESULT=$(find . -name "fix.txt" -o -name "fix.md" 2>/dev/null | grep -v ".git" | head -1)
@@ -76,7 +73,6 @@ jobs:
             grep -n "^#【" "$FIX_FILE" || echo "未找到修复标识"
             echo ""
             
-            # 统计
             TOTAL_FIXES=$(grep -c "^#【" "$FIX_FILE")
             WORKFLOW_FIXES=$(grep -c "^#【firmware-build.yml" "$FIX_FILE")
             SCRIPT_FIXES=$(grep -c "^#【build_firmware_main.sh" "$FIX_FILE")
@@ -87,7 +83,6 @@ jobs:
             echo "- 脚本修复: $SCRIPT_FIXES"
             echo ""
             
-            # 显示修复内容摘要
             echo "📄 修复内容摘要（前200字符）:"
             head -c 200 "$FIX_FILE"
             echo "..."
@@ -102,12 +97,10 @@ jobs:
           else
             echo "❌ 未找到修复文件"
             
-            # 手动触发时创建示例文件
             if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
               echo ""
               echo "⚠️ 手动触发模式：创建示例修复文件"
               
-              # 创建示例fix.txt
               echo "#【firmware-build.yml-21】" > fix.txt
               echo "# 示例修复：添加一个新步骤" >> fix.txt
               echo "- name: \"示例步骤\"" >> fix.txt
@@ -152,7 +145,6 @@ jobs:
           MODIFIED_FILES=""
           BACKUP_FILES=""
           
-          # 处理工作流文件
           if [ "${{ steps.find_fixes.outputs.workflow_fixes }}" != "0" ]; then
             echo "🔧 处理工作流文件..."
             WORKFLOW_FILE=".github/workflows/firmware-build.yml"
@@ -161,16 +153,13 @@ jobs:
               echo "✅ 找到工作流文件: $WORKFLOW_FILE"
               echo "📄 原始文件修改时间: $(stat -c %y "$WORKFLOW_FILE" 2>/dev/null || echo "未知")"
               
-              # 创建备份
               BACKUP_FILE="${WORKFLOW_FILE}.backup.$(date +%s)"
               cp "$WORKFLOW_FILE" "$BACKUP_FILE"
               BACKUP_FILES="${BACKUP_FILES}$BACKUP_FILE,"
               echo "📦 创建备份: $BACKUP_FILE"
               
-              # 记录原始文件大小
               ORIGINAL_SIZE=$(wc -l < "$WORKFLOW_FILE")
               
-              # 在工作流文件末尾添加修复标记
               echo "" >> "$WORKFLOW_FILE"
               echo "# ===== 自动修复开始 =====" >> "$WORKFLOW_FILE"
               echo "# 修复时间: $(date)" >> "$WORKFLOW_FILE"
@@ -180,7 +169,6 @@ jobs:
               echo "# 脚本修复: ${{ steps.find_fixes.outputs.script_fixes }}" >> "$WORKFLOW_FILE"
               echo "# ===== 自动修复结束 =====" >> "$WORKFLOW_FILE"
               
-              # 检查是否真的修改了
               NEW_SIZE=$(wc -l < "$WORKFLOW_FILE")
               if [ "$NEW_SIZE" -gt "$ORIGINAL_SIZE" ]; then
                 MODIFIED_FILES="${MODIFIED_FILES}$WORKFLOW_FILE,"
@@ -194,7 +182,6 @@ jobs:
             echo ""
           fi
           
-          # 处理脚本文件
           if [ "${{ steps.find_fixes.outputs.script_fixes }}" != "0" ]; then
             echo "🔧 处理脚本文件..."
             SCRIPT_FILE="firmware-config/scripts/build_firmware_main.sh"
@@ -203,16 +190,13 @@ jobs:
               echo "✅ 找到脚本文件: $SCRIPT_FILE"
               echo "📄 原始文件修改时间: $(stat -c %y "$SCRIPT_FILE" 2>/dev/null || echo "未知")"
               
-              # 创建备份
               BACKUP_FILE="${SCRIPT_FILE}.backup.$(date +%s)"
               cp "$SCRIPT_FILE" "$BACKUP_FILE"
               BACKUP_FILES="${BACKUP_FILES}$BACKUP_FILE,"
               echo "📦 创建备份: $BACKUP_FILE"
               
-              # 记录原始文件大小
               ORIGINAL_SIZE=$(wc -l < "$SCRIPT_FILE")
               
-              # 在脚本文件末尾添加修复标记
               echo "" >> "$SCRIPT_FILE"
               echo "# ===== 自动修复开始 =====" >> "$SCRIPT_FILE"
               echo "# 修复时间: $(date)" >> "$SCRIPT_FILE"
@@ -221,7 +205,6 @@ jobs:
               echo "# 脚本修复: ${{ steps.find_fixes.outputs.script_fixes }}" >> "$SCRIPT_FILE"
               echo "# ===== 自动修复结束 =====" >> "$SCRIPT_FILE"
               
-              # 检查是否真的修改了
               NEW_SIZE=$(wc -l < "$SCRIPT_FILE")
               if [ "$NEW_SIZE" -gt "$ORIGINAL_SIZE" ]; then
                 MODIFIED_FILES="${MODIFIED_FILES}$SCRIPT_FILE,"
@@ -235,7 +218,6 @@ jobs:
             echo ""
           fi
           
-          # 如果没有修改任何文件，添加一个测试文件
           if [ -z "$MODIFIED_FILES" ]; then
             echo "⚠️ 没有修改任何现有文件，创建测试文件..."
             TIMESTAMP=$(date +%s)
@@ -252,7 +234,6 @@ jobs:
             echo "✅ 创建测试文件: $TEST_FILE"
           fi
           
-          # 输出结果
           if [ -n "$MODIFIED_FILES" ]; then
             echo "modified_files=${MODIFIED_FILES%,}" >> $GITHUB_OUTPUT
             echo "backup_files=${BACKUP_FILES%,}" >> $GITHUB_OUTPUT
@@ -283,7 +264,6 @@ jobs:
           echo "📝 具体修改的文件:"
           echo "-----------------"
           
-          # 显示修改的文件
           MODIFIED_FILES="${{ steps.modify_files.outputs.modified_files }}"
           IFS=',' read -ra FILES <<< "$MODIFIED_FILES"
           
@@ -320,13 +300,11 @@ jobs:
           echo "=== 💾 自动提交更改 ==="
           echo ""
           
-          # 配置Git
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "GitHub Actions"
           echo "🎯 Git配置完成"
           echo ""
           
-          # 显示Git状态
           echo "📊 Git详细状态:"
           echo "---------------"
           git status
@@ -335,7 +313,6 @@ jobs:
           echo "➕ 添加所有更改到暂存区..."
           echo "-------------------------"
           
-          # 显示要添加的具体文件
           echo "📝 将要添加的文件:"
           git status --porcelain | while read line; do
             status=$(echo "$line" | cut -c1-2)
@@ -343,10 +320,8 @@ jobs:
             echo "  $status $file"
           done
           
-          # 添加所有更改
           git add -A
           
-          # 统计添加的文件
           ADDED_COUNT=$(git status --porcelain | wc -l)
           echo ""
           echo "✅ 已添加 $ADDED_COUNT 个文件的更改"
@@ -357,7 +332,6 @@ jobs:
             exit 0
           fi
           
-          # 生成提交信息
           COMMIT_MSG="🔧 自动修复"
           
           if [ "${{ steps.find_fixes.outputs.workflow_fixes }}" != "0" ]; then
@@ -375,7 +349,6 @@ jobs:
           echo "$COMMIT_MSG"
           echo ""
           
-          # 提交
           echo "💾 提交更改..."
           echo "--------------"
           git commit -m "$COMMIT_MSG"
@@ -386,14 +359,11 @@ jobs:
           git log -1 --pretty=fuller
           echo ""
           
-          # 推送
           echo "🚀 推送到仓库..."
           echo "---------------"
           
-          # 设置推送选项
           git config --local push.default current
           
-          # 尝试推送
           if git push; then
             echo ""
             echo "✅ 推送成功!"
