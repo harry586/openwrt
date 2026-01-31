@@ -1,0 +1,170 @@
+# 自动创建的文件 - Sat Jan 31 01:18:35 UTC 2026
+# 步骤 7: 下载OpenWrt官方SDK（修复版）- 环境变量修复
+- name: "7. 下载OpenWrt官方SDK（环境变量修复版）"
+  run: |
+    echo "=== 步骤 7: 下载OpenWrt官方SDK（环境变量修复版） ==="
+    echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+    
+    # 设置错误处理 - 这里不退出，SDK下载失败可以继续
+    trap 'echo "⚠️ SDK下载失败，将使用自动构建编译器，继续执行..."' ERR
+    
+    echo "🚀 开始下载OpenWrt官方SDK工具链..."
+    
+    # 先检查环境文件是否已经存在
+    echo "🔍 检查环境文件..."
+    if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
+      echo "✅ 环境文件已存在（由步骤6.4创建）"
+      echo "📊 环境文件内容摘要:"
+      head -20 /mnt/openwrt-build/build_env.sh
+      
+      # 加载现有环境变量
+      source /mnt/openwrt-build/build_env.sh
+      echo "✅ 从现有环境文件加载变量:"
+      echo "  SELECTED_BRANCH: $SELECTED_BRANCH"
+      echo "  TARGET: $TARGET"
+      echo "  SUBTARGET: $SUBTARGET"
+      echo "  DEVICE: $DEVICE"
+      echo "  CONFIG_MODE: $CONFIG_MODE"
+      echo "  REPO_ROOT: $REPO_ROOT"
+      echo "  COMPILER_DIR: $COMPILER_DIR"
+      echo "  DEVICE_NAME: $DEVICE_NAME"
+      echo "  PLATFORM: $PLATFORM"
+      echo "  SOURCE_REPO: $SOURCE_REPO"
+      echo ""
+      
+      echo "💡 使用步骤6.4已设置的环境变量进行SDK下载"
+    else
+      echo "⚠️ 环境文件不存在，可能是步骤6.4失败"
+      echo "📝 重新创建环境变量..."
+      
+      # 使用设备支持系统获取配置
+      SUPPORT_DIR="${{ github.workspace }}/firmware-config"
+      if [ -f "$SUPPORT_DIR/support.sh" ]; then
+        source "$SUPPORT_DIR/support.sh"
+        
+        # 获取设备配置
+        if command -v get_device_config >/dev/null 2>&1; then
+          DEVICE_CONFIG=$(get_device_config "${{ github.event.inputs.device_name }}")
+          if [ -n "$DEVICE_CONFIG" ]; then
+            TARGET=$(echo $DEVICE_CONFIG | awk '{print $1}')
+            SUBTARGET=$(echo $DEVICE_CONFIG | awk '{print $2}')
+            DEVICE=$(echo $DEVICE_CONFIG | awk '{print $3}')
+            PLATFORM=$(echo $DEVICE_CONFIG | awk '{print $4}')
+            echo "✅ 从设备支持系统获取配置: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE, PLATFORM=$PLATFORM"
+          else
+            echo "❌ 错误: 无法获取设备配置"
+            exit 1
+          fi
+        else
+          echo "❌ 错误: get_device_config 函数不存在"
+          exit 1
+        fi
+      else
+        echo "❌ 错误: 设备支持脚本不存在"
+        exit 1
+      fi
+      
+      # 设置版本分支
+      if [ "${{ github.event.inputs.version_selection }}" = "23.05" ]; then
+        SELECTED_BRANCH="openwrt-23.05"
+      else
+        SELECTED_BRANCH="openwrt-21.02"
+      fi
+      
+      # 设置源代码仓库
+      SOURCE_REPO="${{ github.event.inputs.source_repo }}"
+      
+      # 创建环境文件
+      ENV_FILE="/mnt/openwrt-build/build_env.sh"
+      echo "#!/bin/bash" > "$ENV_FILE"
+      echo "export SELECTED_REPO_URL=\"https://github.com/immortalwrt/immortalwrt.git\"" >> "$ENV_FILE"
+      echo "export SELECTED_BRANCH=\"$SELECTED_BRANCH\"" >> "$ENV_FILE"
+      echo "export TARGET=\"$TARGET\"" >> "$ENV_FILE"
+      echo "export SUBTARGET=\"$SUBTARGET\"" >> "$ENV_FILE"
+      echo "export DEVICE=\"$DEVICE\"" >> "$ENV_FILE"
+      echo "export CONFIG_MODE=\"${{ github.event.inputs.config_mode }}\"" >> "$ENV_FILE"
+      echo "export REPO_ROOT=\"${{ github.workspace }}\"" >> "$ENV_FILE"
+      echo "export COMPILER_DIR=\"\"" >> "$ENV_FILE"
+      echo "export DEVICE_NAME=\"${{ github.event.inputs.device_name }}\"" >> "$ENV_FILE"
+      echo "export PLATFORM=\"$PLATFORM\"" >> "$ENV_FILE"
+      echo "export SOURCE_REPO=\"$SOURCE_REPO\"" >> "$ENV_FILE"
+      
+      # 如果设置了GITHUB_ENV，也导出到GitHub Actions环境
+      if [ -n "$GITHUB_ENV" ]; then
+        echo "TARGET=$TARGET" >> $GITHUB_ENV
+        echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
+        echo "DEVICE=$DEVICE" >> $GITHUB_ENV
+        echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
+        echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
+        echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+      fi
+      
+      chmod +x "$ENV_FILE"
+      echo "✅ 已创建环境文件"
+      
+      # 重新加载环境变量
+      source "$ENV_FILE"
+    fi
+    
+    # 关键检查：确保TARGET变量不为空
+    echo ""
+    echo "🔍 关键变量检查:"
+    echo "  TARGET: $TARGET"
+    echo "  SUBTARGET: $SUBTARGET"
+    echo "  DEVICE: $DEVICE"
+    echo "  PLATFORM: $PLATFORM"
+    
+    if [ -z "$TARGET" ]; then
+      echo "❌ 错误: TARGET 变量为空，无法继续"
+      exit 1
+    fi
+    
+    if [ -z "$SUBTARGET" ]; then
+      echo "⚠️ 警告: SUBTARGET 变量为空，使用默认值 'generic'"
+      export SUBTARGET="generic"
+    fi
+    
+    if [ -z "$DEVICE" ]; then
+      echo "⚠️ 警告: DEVICE 变量为空，使用设备名称作为默认值"
+      export DEVICE="${{ github.event.inputs.device_name }}"
+    fi
+    
+    if [ -z "$PLATFORM" ]; then
+      echo "⚠️ 警告: PLATFORM 变量为空，使用TARGET作为默认值"
+      export PLATFORM="$TARGET"
+    fi
+    
+    # 更新环境文件
+    save_env() {
+      local env_file="$1"
+      echo "#!/bin/bash" > "$env_file"
+      echo "export SELECTED_REPO_URL=\"$SELECTED_REPO_URL\"" >> "$env_file"
+      echo "export SELECTED_BRANCH=\"$SELECTED_BRANCH\"" >> "$env_file"
+      echo "export TARGET=\"$TARGET\"" >> "$env_file"
+      echo "export SUBTARGET=\"$SUBTARGET\"" >> "$env_file"
+      echo "export DEVICE=\"$DEVICE\"" >> "$env_file"
+      echo "export CONFIG_MODE=\"$CONFIG_MODE\"" >> "$env_file"
+      echo "export REPO_ROOT=\"$REPO_ROOT\"" >> "$env_file"
+      echo "export COMPILER_DIR=\"$COMPILER_DIR\"" >> "$env_file"
+      echo "export DEVICE_NAME=\"$DEVICE_NAME\"" >> "$env_file"
+      echo "export PLATFORM=\"$PLATFORM\"" >> "$env_file"
+      echo "export SOURCE_REPO=\"$SOURCE_REPO\"" >> "$env_file"
+      chmod +x "$env_file"
+    }
+    
+    # 更新环境文件
+    save_env "/mnt/openwrt-build/build_env.sh"
+    echo "✅ 更新环境文件完成"
+    
+    # 执行SDK下载，允许失败
+    echo "🔄 开始执行SDK下载..."
+    if "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_compiler_env "${{ github.event.inputs.device_name }}"; then
+      echo "✅ SDK下载成功或使用后备方案"
+    else
+      echo "⚠️ SDK下载失败，将使用OpenWrt自动构建的编译器"
+    fi
+    
+    echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "🟢 步骤 7 完成"
+
+
