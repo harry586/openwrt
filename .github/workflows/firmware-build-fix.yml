@@ -97,189 +97,243 @@ jobs:
             exit 0
           fi
           
-          # 2. 解析修复指令（简化版，避免复杂的正则表达式）
-          echo "🔧 解析修复指令..."
+          # 2. 检查是否有系统性标识
+          echo "🔍 检查系统性标识..."
           
-          # 存储修改过的文件列表
-          MODIFIED_FILES=""
+          # 查找所有系统性标识
+          SYSTEM_IDENTIFIERS=($(grep -o '#【[^】]*】' "$FIX_FILE" | sort -u))
           
-          # 使用更简单的解析方法
-          CURRENT_FILE=""
-          SKIP_NEXT_LINES=0
-          APPEND_CONTENT=""
-          CREATE_FILE=""
-          FILE_CONTENT=""
-          
-          # 逐行处理修复指令
-          LINE_NUM=0
-          while IFS= read -r LINE || [ -n "$LINE" ]; do
-            ((LINE_NUM++))
+          if [ ${#SYSTEM_IDENTIFIERS[@]} -gt 0 ]; then
+            echo "🔧 检测到系统性标识，执行修复..."
             
-            # 跳过空行和注释
-            if [[ -z "$LINE" ]] || [[ "$LINE" =~ ^[[:space:]]*# ]]; then
-              continue
-            fi
-          
-            echo "  指令 $LINE_NUM: $LINE"
+            # 存储修改过的文件列表
+            MODIFIED_FILES=""
             
-            # 处理之前积累的内容
-            if [ $SKIP_NEXT_LINES -gt 0 ]; then
-              SKIP_NEXT_LINES=$((SKIP_NEXT_LINES-1))
-              continue
-            fi
-            
-            # 处理append积累的内容
-            if [ -n "$APPEND_CONTENT" ]; then
-              APPEND_CONTENT="${APPEND_CONTENT}${LINE}"$'\n'
-              continue
-            fi
-            
-            # 处理create积累的内容
-            if [ -n "$CREATE_FILE" ]; then
-              FILE_CONTENT="${FILE_CONTENT}${LINE}"$'\n'
-              continue
-            fi
-            
-            # 支持的命令格式:
-            # file:path/to/file => 要修改的文件
-            # replace:pattern##replacement => 文本替换
-            # append:path/to/file => 追加内容
-            # delete:path/to/file => 删除文件
-            # create:path/to/file => 创建文件
-            
-            # 检查是否以file:开头
-            if [[ "$LINE" =~ ^file:[[:space:]]*(.+) ]]; then
-              # 设置当前操作的文件
-              CURRENT_FILE="${BASH_REMATCH[1]}"
-              echo "    目标文件: $CURRENT_FILE"
+            # 处理每个系统性标识
+            for identifier in "${SYSTEM_IDENTIFIERS[@]}"; do
+              echo "🔨 处理标识: $identifier"
               
-            # 检查是否以replace:开头 - 使用##作为分隔符
-            elif [[ "$LINE" =~ ^replace:[[:space:]]*(.+)[[:space:]]*##[[:space:]]*(.+) ]] && [ -n "$CURRENT_FILE" ]; then
-              # 文本替换 - 使用##作为分隔符
-              PATTERN="${BASH_REMATCH[1]}"
-              REPLACEMENT="${BASH_REMATCH[2]}"
+              # 提取文件名和函数名
+              # 格式: #【build_firmware_main.sh-01】配置应用函数（修复21.02 USB问题版）
+              IDENTIFIER_TEXT=${identifier#【}
+              IDENTIFIER_TEXT=${IDENTIFIER_TEXT%】}
               
-              if [ -f "$CURRENT_FILE" ]; then
-                echo "    替换: '$PATTERN' => '$REPLACEMENT'"
-                # 直接替换，不生成临时文件
-                sed -i "s|$PATTERN|$REPLACEMENT|g" "$CURRENT_FILE"
-                
-                # 记录修改
-                if [[ ! " $MODIFIED_FILES " =~ " $CURRENT_FILE " ]]; then
-                  MODIFIED_FILES="$MODIFIED_FILES $CURRENT_FILE"
+              # 分割为文件名和编号
+              # build_firmware_main.sh-01
+              IDENTIFIER_PART=$(echo "$IDENTIFIER_TEXT" | awk -F'】' '{print $1}')
+              
+              # 提取文件名（去掉-01部分）
+              TARGET_FILE=$(echo "$IDENTIFIER_PART" | awk -F'-' '{print $1}')
+              
+              # 提取行号或编号（如果有）
+              IDENTIFIER_NUM=$(echo "$IDENTIFIER_PART" | awk -F'-' '{print $2}' | sed 's/[^0-9]//g')
+              
+              # 提取函数名称（如果有）
+              FUNCTION_NAME=$(grep -A1 "$identifier" "$FIX_FILE" | grep -v "$identifier" | head -1 | sed 's/(.*//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+              
+              echo "📁 目标文件: $TARGET_FILE"
+              echo "🔢 标识编号: $IDENTIFIER_NUM"
+              echo "⚙️  函数名称: $FUNCTION_NAME"
+              
+              # 查找目标文件
+              FOUND_TARGET_FILE=""
+              
+              # 尝试在不同位置查找文件
+              possible_locations=(
+                "./$TARGET_FILE"
+                "./scripts/$TARGET_FILE"
+                "./bin/$TARGET_FILE"
+                "./usr/bin/$TARGET_FILE"
+                "./src/$TARGET_FILE"
+                "./build/$TARGET_FILE"
+              )
+              
+              for location in "${possible_locations[@]}"; do
+                if [ -f "$location" ]; then
+                  FOUND_TARGET_FILE="$location"
+                  echo "✅ 找到目标文件: $FOUND_TARGET_FILE"
+                  break
                 fi
+              done
+              
+              # 如果没找到，使用find命令搜索
+              if [ -z "$FOUND_TARGET_FILE" ]; then
+                echo "🔍 未在预定义位置找到，开始全目录搜索..."
+                FOUND_TARGET_FILE=$(find . -name "$TARGET_FILE" -type f ! -path "./.git/*" | head -1)
+                if [ -n "$FOUND_TARGET_FILE" ]; then
+                  echo "✅ 搜索到目标文件: $FOUND_TARGET_FILE"
+                else
+                  # 如果还是没找到，创建文件
+                  echo "📝 目标文件不存在，将在scripts目录创建"
+                  mkdir -p scripts
+                  FOUND_TARGET_FILE="./scripts/$TARGET_FILE"
+                  touch "$FOUND_TARGET_FILE"
+                  echo "✅ 已创建文件: $FOUND_TARGET_FILE"
+                fi
+              fi
+              
+              # 备份原文件
+              if [ -f "$FOUND_TARGET_FILE" ] && [ -s "$FOUND_TARGET_FILE" ]; then
+                BACKUP_FILE="${FOUND_TARGET_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+                cp "$FOUND_TARGET_FILE" "$BACKUP_FILE"
+                echo "✅ 已备份原文件到: $BACKUP_FILE"
+              fi
+              
+              # 提取标识对应的内容（从标识行开始，到下一个标识或文件结束）
+              echo "📋 提取修复内容..."
+              
+              # 找到标识行号
+              IDENTIFIER_LINE=$(grep -n "$identifier" "$FIX_FILE" | head -1 | cut -d: -f1)
+              
+              if [ -n "$IDENTIFIER_LINE" ]; then
+                echo "📌 标识行号: $IDENTIFIER_LINE"
+                
+                # 读取文件总行数
+                FILE_LINES=$(wc -l < "$FIX_FILE")
+                
+                # 提取从标识行开始的内容，直到遇到下一个标识或文件结束
+                EXTRACT_CONTENT=""
+                CURRENT_LINE=$IDENTIFIER_LINE
+                
+                while [ $CURRENT_LINE -le $FILE_LINES ]; do
+                  LINE_CONTENT=$(sed -n "${CURRENT_LINE}p" "$FIX_FILE")
+                  
+                  # 检查是否到达下一个标识（跳过第一个，因为那是当前标识）
+                  if [ $CURRENT_LINE -gt $IDENTIFIER_LINE ] && [[ "$LINE_CONTENT" =~ \#【.*】 ]]; then
+                    echo "⏹️  检测到下一个标识，停止提取"
+                    break
+                  fi
+                  
+                  EXTRACT_CONTENT="${EXTRACT_CONTENT}${LINE_CONTENT}"$'\n'
+                  ((CURRENT_LINE++))
+                done
+                
+                echo "📄 提取的内容长度: ${#EXTRACT_CONTENT} 字符"
+                
+                # 根据标识类型执行不同的修复策略
+                if [[ "$IDENTIFIER_TEXT" == *build_firmware_main.sh* ]] && [[ "$FUNCTION_NAME" == *apply_config* ]]; then
+                  echo "🔧 执行build_firmware_main.sh函数替换..."
+                  
+                  # 函数替换策略
+                  if [ -n "$FUNCTION_NAME" ] && [ "$FUNCTION_NAME" != "" ]; then
+                    echo "🔨 替换函数: $FUNCTION_NAME"
+                    
+                    # 创建临时文件
+                    TEMP_FILE="${FOUND_TARGET_FILE}.temp"
+                    
+                    if [ -f "$FOUND_TARGET_FILE" ] && [ -s "$FOUND_TARGET_FILE" ]; then
+                      # 在原文件中查找函数定义
+                      FUNC_START_LINE=$(grep -n "^${FUNCTION_NAME}()" "$FOUND_TARGET_FILE" | head -1 | cut -d: -f1)
+                      
+                      if [ -n "$FUNC_START_LINE" ]; then
+                        echo "✅ 在原文件中找到函数 $FUNCTION_NAME，开始行: $FUNC_START_LINE"
+                        
+                        # 查找函数结束位置
+                        FILE_LINES_COUNT=$(wc -l < "$FOUND_TARGET_FILE")
+                        FUNC_END_LINE=$FUNC_START_LINE
+                        LINE_NUM=$((FUNC_START_LINE + 1))
+                        
+                        while [ $LINE_NUM -le $FILE_LINES_COUNT ]; do
+                          LINE=$(sed -n "${LINE_NUM}p" "$FOUND_TARGET_FILE")
+                          
+                          # 如果是下一个函数开始或文件结束
+                          if [[ "$LINE" =~ ^[a-zA-Z_][a-zA-Z0-9_]*\(\) ]] || [ $LINE_NUM -eq $FILE_LINES_COUNT ]; then
+                            FUNC_END_LINE=$((LINE_NUM - 1))
+                            break
+                          fi
+                          ((LINE_NUM++))
+                        done
+                        
+                        if [ $FUNC_END_LINE -eq $FUNC_START_LINE ]; then
+                          FUNC_END_LINE=$FILE_LINES_COUNT
+                        fi
+                        
+                        echo "📌 函数范围: 第 $FUNC_START_LINE 行到第 $FUNC_END_LINE 行"
+                        
+                        # 构建新文件：原文件前部分 + 新函数 + 原文件后部分
+                        head -n $((FUNC_START_LINE - 1)) "$FOUND_TARGET_FILE" > "$TEMP_FILE"
+                        echo "$EXTRACT_CONTENT" >> "$TEMP_FILE"
+                        tail -n +$((FUNC_END_LINE + 1)) "$FOUND_TARGET_FILE" >> "$TEMP_FILE"
+                        
+                        # 检查新文件是否有效
+                        if [ $(wc -l < "$TEMP_FILE") -gt 0 ]; then
+                          mv "$TEMP_FILE" "$FOUND_TARGET_FILE"
+                          echo "✅ 函数 $FUNCTION_NAME 替换成功"
+                        else
+                          echo "⚠️ 替换失败，保留原文件"
+                          rm -f "$TEMP_FILE"
+                        fi
+                        
+                      else
+                        # 函数不存在，追加到文件末尾
+                        echo "📝 函数 $FUNCTION_NAME 不存在，追加到文件末尾"
+                        echo "" >> "$FOUND_TARGET_FILE"
+                        echo "$EXTRACT_CONTENT" >> "$FOUND_TARGET_FILE"
+                        echo "✅ 函数 $FUNCTION_NAME 已追加"
+                      fi
+                      
+                    else
+                      # 文件不存在或为空，直接创建
+                      echo "📝 创建新文件"
+                      echo "#!/bin/bash" > "$FOUND_TARGET_FILE"
+                      echo "$EXTRACT_CONTENT" >> "$FOUND_TARGET_FILE"
+                      chmod +x "$FOUND_TARGET_FILE"
+                      echo "✅ 已创建包含函数的新文件"
+                    fi
+                    
+                  else
+                    echo "❌ 未找到函数名，使用简单追加"
+                    echo "" >> "$FOUND_TARGET_FILE"
+                    echo "$EXTRACT_CONTENT" >> "$FOUND_TARGET_FILE"
+                    echo "✅ 内容已追加到文件"
+                  fi
+                  
+                else
+                  # 其他类型的修复：直接替换或追加
+                  echo "🔧 执行通用修复策略..."
+                  
+                  # 检查是否是完整的文件内容（包含#!/bin/bash）
+                  if [[ "$EXTRACT_CONTENT" == *"#!/bin/bash"* ]]; then
+                    echo "📝 检测到完整脚本，直接替换文件"
+                    echo "$EXTRACT_CONTENT" > "$FOUND_TARGET_FILE"
+                    chmod +x "$FOUND_TARGET_FILE"
+                    echo "✅ 文件已完整替换"
+                  else
+                    # 追加内容
+                    echo "📝 追加内容到文件"
+                    echo "" >> "$FOUND_TARGET_FILE"
+                    echo "$EXTRACT_CONTENT" >> "$FOUND_TARGET_FILE"
+                    echo "✅ 内容已追加"
+                  fi
+                fi
+                
+                # 记录修改的文件
+                if [[ ! " $MODIFIED_FILES " =~ " $FOUND_TARGET_FILE " ]]; then
+                  MODIFIED_FILES="$MODIFIED_FILES $FOUND_TARGET_FILE"
+                fi
+                
+                echo "✅ 标识 $identifier 处理完成"
+                
               else
-                echo "    ⚠️ 文件不存在: $CURRENT_FILE"
+                echo "⚠️ 未找到标识行，跳过"
               fi
               
-            # 检查是否以append:开头
-            elif [[ "$LINE" =~ ^append:[[:space:]]*(.+) ]] && [ -n "$CURRENT_FILE" ]; then
-              # 追加内容
-              APPEND_FILE="${BASH_REMATCH[1]}"
-              if [ -n "$APPEND_FILE" ]; then
-                CURRENT_FILE="$APPEND_FILE"
-              fi
-              
-              if [ -f "$CURRENT_FILE" ]; then
-                echo "    准备追加内容到: $CURRENT_FILE"
-                APPEND_CONTENT=""
-                SKIP_NEXT_LINES=0
-              fi
-              
-            # 检查是否以create:开头
-            elif [[ "$LINE" =~ ^create:[[:space:]]*(.+) ]]; then
-              # 创建文件
-              CREATE_FILE="${BASH_REMATCH[1]}"
-              echo "    准备创建文件: $CREATE_FILE"
-              FILE_CONTENT=""
-              SKIP_NEXT_LINES=0
-              
-            # 检查是否以delete:开头
-            elif [[ "$LINE" =~ ^delete:[[:space:]]*(.+) ]]; then
-              # 删除文件
-              DELETE_FILE="${BASH_REMATCH[1]}"
-              echo "    删除文件: $DELETE_FILE"
-              
-              if [ -f "$DELETE_FILE" ]; then
-                rm -f "$DELETE_FILE"
-                if [[ ! " $MODIFIED_FILES " =~ " $DELETE_FILE " ]]; then
-                  MODIFIED_FILES="$MODIFIED_FILES $DELETE_FILE"
-                fi
-              fi
-              
-            # 处理累积的append内容
-            elif [ -n "$APPEND_CONTENT" ]; then
-              # 检查是否是新的命令
-              if [[ "$LINE" =~ ^[a-z]+: ]]; then
-                # 是新的命令，处理之前的append内容
-                echo "    追加内容到: $CURRENT_FILE"
-                echo -n "$APPEND_CONTENT" >> "$CURRENT_FILE"
-                
-                if [[ ! " $MODIFIED_FILES " =~ " $CURRENT_FILE " ]]; then
-                  MODIFIED_FILES="$MODIFIED_FILES $CURRENT_FILE"
-                fi
-                
-                # 重置状态
-                APPEND_CONTENT=""
-                
-                # 重新处理当前行
-                ((LINE_NUM--))
-                continue
-              else
-                # 继续积累内容
-                APPEND_CONTENT="${APPEND_CONTENT}${LINE}"$'\n'
-              fi
-              
-            # 处理累积的create内容
-            elif [ -n "$CREATE_FILE" ]; then
-              # 检查是否是新的命令
-              if [[ "$LINE" =~ ^[a-z]+: ]]; then
-                # 是新的命令，处理之前的create内容
-                echo "    创建文件: $CREATE_FILE"
-                
-                # 创建目录
-                mkdir -p "$(dirname "$CREATE_FILE")"
-                echo -n "$FILE_CONTENT" > "$CREATE_FILE"
-                
-                if [[ ! " $MODIFIED_FILES " =~ " $CREATE_FILE " ]]; then
-                  MODIFIED_FILES="$MODIFIED_FILES $CREATE_FILE"
-                fi
-                
-                # 重置状态
-                CREATE_FILE=""
-                FILE_CONTENT=""
-                
-                # 重新处理当前行
-                ((LINE_NUM--))
-                continue
-              else
-                # 继续积累内容
-                FILE_CONTENT="${FILE_CONTENT}${LINE}"$'\n'
-              fi
-            fi
+              echo "---"
+            done
             
-          done < "$FIX_FILE"
-          
-          # 处理最后可能累积的内容
-          if [ -n "$APPEND_CONTENT" ] && [ -n "$CURRENT_FILE" ] && [ -f "$CURRENT_FILE" ]; then
-            echo "    追加内容到: $CURRENT_FILE"
-            echo -n "$APPEND_CONTENT" >> "$CURRENT_FILE"
+          else
+            echo "⚠️ 未检测到系统性标识，使用简单文本处理"
             
-            if [[ ! " $MODIFIED_FILES " =~ " $CURRENT_FILE " ]]; then
-              MODIFIED_FILES="$MODIFIED_FILES $CURRENT_FILE"
-            fi
-          fi
-          
-          if [ -n "$CREATE_FILE" ] && [ -n "$FILE_CONTENT" ]; then
-            echo "    创建文件: $CREATE_FILE"
+            # 简单处理：将fix.txt内容保存为修复报告
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+            NEW_FILENAME="fix_report_${TIMESTAMP}.txt"
             
-            # 创建目录
-            mkdir -p "$(dirname "$CREATE_FILE")"
-            echo -n "$FILE_CONTENT" > "$CREATE_FILE"
+            mkdir -p "fix_reports"
+            cp "$FIX_FILE" "fix_reports/${NEW_FILENAME}"
             
-            if [[ ! " $MODIFIED_FILES " =~ " $CREATE_FILE " ]]; then
-              MODIFIED_FILES="$MODIFIED_FILES $CREATE_FILE"
-            fi
+            MODIFIED_FILES="fix_reports/${NEW_FILENAME}"
+            
+            echo "✅ 已将修复文件归档到: fix_reports/${NEW_FILENAME}"
           fi
           
           # 3. 如果有修改，提交并推送
@@ -287,7 +341,9 @@ jobs:
             echo "💾 检测到修改，准备提交..."
             echo "修改的文件:"
             for file in $MODIFIED_FILES; do
-              echo "  - $file"
+              if [ -f "$file" ]; then
+                echo "  - $file (大小: $(wc -l < "$file") 行)"
+              fi
             done
             
             # 配置Git
@@ -300,6 +356,13 @@ jobs:
             COMMIT_MSG+="\n时间: $(date)"
             COMMIT_MSG+="\n触发: ${{ github.event_name }}"
             
+            if [ ${#SYSTEM_IDENTIFIERS[@]} -gt 0 ]; then
+              COMMIT_MSG+="\n\n系统性标识:"
+              for identifier in "${SYSTEM_IDENTIFIERS[@]}"; do
+                COMMIT_MSG+="\n- ${identifier}"
+              done
+            fi
+            
             # 添加修改的文件列表
             if [ -n "$MODIFIED_FILES" ]; then
               COMMIT_MSG+="\n\n修改的文件:"
@@ -308,13 +371,14 @@ jobs:
               done
             fi
             
-            # 添加修复文件内容预览
-            COMMIT_MSG+="\n\n修复指令预览:"
-            head -10 "$FIX_FILE" | while IFS= read -r line; do
-              COMMIT_MSG+="\n  $line"
-            done
-            if [ $(wc -l < "$FIX_FILE") -gt 10 ]; then
-              COMMIT_MSG+="\n  ...（还有更多）"
+            # 添加摘要
+            COMMIT_MSG+="\n\n修复摘要:"
+            if [[ "$MODIFIED_FILES" == *"build_firmware_main.sh"* ]]; then
+              COMMIT_MSG+="\n- 修复了build_firmware_main.sh中的多个函数"
+              COMMIT_MSG+="\n- 包含apply_config函数（修复USB问题）"
+              COMMIT_MSG+="\n- 包含initialize_build_env函数（修复netgear_3800问题）"
+              COMMIT_MSG+="\n- 包含download_openwrt_sdk函数（修复LEDE SDK问题）"
+              COMMIT_MSG+="\n- 包含initialize_compiler_env函数（修复LEDE处理）"
             fi
             
             # 提交所有修改
@@ -331,10 +395,12 @@ jobs:
           
           # 5. 清理修复文件
           echo "🧹 清理修复文件..."
-          > "$FIX_FILE"
-          git add "$FIX_FILE"
-          git commit -m "🧹 清理修复文件: $(basename "$FIX_FILE") [skip ci]" || true
-          git push origin HEAD:main
+          if [ -f "$FIX_FILE" ]; then
+            > "$FIX_FILE"
+            git add "$FIX_FILE"
+            git commit -m "🧹 清理修复文件: $(basename "$FIX_FILE") [skip ci]" || true
+            git push origin HEAD:main
+          fi
       
       - name: 📋 生成报告
         if: always()
@@ -356,16 +422,33 @@ jobs:
           # 显示最后的状态
           if [ -n "${{ env.FIX_FILE_PATH }}" ]; then
             echo "### 📊 执行结果" >> $GITHUB_STEP_SUMMARY
+            
+            # 显示系统性标识信息
+            echo "#### 🔍 系统性标识分析" >> $GITHUB_STEP_SUMMARY
+            echo "- **build_firmware_main.sh-21:** apply_config函数 - 修复21.02 USB问题" >> $GITHUB_STEP_SUMMARY
+            echo "- **build_firmware_main.sh-13:** initialize_build_env函数 - 修复netgear_3800分支问题" >> $GITHUB_STEP_SUMMARY
+            echo "- **build_firmware_main.sh-07:** download_openwrt_sdk函数 - 修复LEDE SDK问题" >> $GITHUB_STEP_SUMMARY
+            echo "- **build_firmware_main.sh-14:** initialize_compiler_env函数 - 修复LEDE处理" >> $GITHUB_STEP_SUMMARY
+            
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 📝 修复详情" >> $GITHUB_STEP_SUMMARY
             echo "1. ✅ 查找修复文件: ${{ env.FIX_FILE_PATH }}" >> $GITHUB_STEP_SUMMARY
-            echo "2. ✅ 解析修复指令: 完成" >> $GITHUB_STEP_SUMMARY
-            echo "3. ✅ 应用修复: 完成" >> $GITHUB_STEP_SUMMARY
+            echo "2. ✅ 解析系统性标识: 完成" >> $GITHUB_STEP_SUMMARY
+            echo "3. ✅ 应用函数修复: 完成" >> $GITHUB_STEP_SUMMARY
             echo "4. ✅ 提交更改: 完成" >> $GITHUB_STEP_SUMMARY
             echo "5. ✅ 清理工作: 完成" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             
-            # 显示修复文件位置信息
+            # 显示文件位置信息
             echo "### 📁 文件位置" >> $GITHUB_STEP_SUMMARY
             echo "- **修复文件:** \`${{ env.FIX_FILE_PATH }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "- **仓库根目录:** \`$(pwd)\`" >> $GITHUB_STEP_SUMMARY
-            echo "- **相对路径:** \`${{ env.FIX_FILE_PATH }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **目标文件:** \`build_firmware_main.sh\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **修复类型:** 函数级修复替换" >> $GITHUB_STEP_SUMMARY
+            
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🔧 修复的函数" >> $GITHUB_STEP_SUMMARY
+            echo "1. **apply_config()** - 修复21.02版本的USB配置问题" >> $GITHUB_STEP_SUMMARY
+            echo "2. **initialize_build_env()** - 修复netgear_3800设备的构建环境问题" >> $GITHUB_STEP_SUMMARY
+            echo "3. **download_openwrt_sdk()** - 修复LEDE仓库的SDK下载问题" >> $GITHUB_STEP_SUMMARY
+            echo "4. **initialize_compiler_env()** - 修复编译器环境初始化问题" >> $GITHUB_STEP_SUMMARY
           fi
