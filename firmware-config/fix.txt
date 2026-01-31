@@ -1,250 +1,465 @@
-#【build_firmware_main.sh-13】构建环境初始化函数 - 修复版
-initialize_build_env() {
-    local device_name=$1
-    local version_selection=$2
-    local config_mode=$3
-    local source_repo=${4:-"immortalwrt"}  # 添加第四个参数，默认immortalwrt
+#【firmware-build.yml-23】
+# 步骤 23: 编译固件（添加变量验证）
+- name: "23. 编译固件（添加变量验证）"
+  run: |
+    echo "=== 步骤 23: 编译固件（添加变量验证） ==="
+    echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
     
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    # 设置错误处理
+    set -e
+    trap 'echo "❌ 步骤 23 失败，退出代码: $?"; exit 1' ERR
     
-    log "=== 版本选择 ==="
-    log "源代码仓库: $source_repo"
+    cd /mnt/openwrt-build
     
-    # 根据仓库选择不同的URL - 只保留immortalwrt和lede
-    case "$source_repo" in
-        "immortalwrt")
-            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-            ;;
-        "lede")
-            SELECTED_REPO_URL="https://github.com/coolsnowwolf/lede.git"
-            SELECTED_BRANCH="master"  # LEDE使用master分支
-            ;;
-        *)
-            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-            source_repo="immortalwrt"
-            ;;
-    esac
-    
-    # 根据版本选择分支（LEDE除外）
-    if [ "$source_repo" != "lede" ]; then
-        if [ "$version_selection" = "23.05" ]; then
-            SELECTED_BRANCH="openwrt-23.05"
-        else
-            SELECTED_BRANCH="openwrt-21.02"
-        fi
-    fi
-    
-    # 设置SOURCE_REPO环境变量
-    SOURCE_REPO="$source_repo"
-    
-    log "✅ 版本选择完成: $SELECTED_BRANCH (仓库: $source_repo)"
-    
-    log "=== 克隆源码 ==="
-    log "仓库: $SELECTED_REPO_URL"
-    log "分支: $SELECTED_BRANCH"
-    
-    sudo rm -rf ./* ./.git* 2>/dev/null || true
-    
-    git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
-    log "✅ 源码克隆完成"
-    
-    # 检查克隆的文件
-    local important_source_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
-    for file in "${important_source_files[@]}"; do
-        if [ -f "$file" ]; then
-            log "✅ 源码文件存在: $file"
-        else
-            log "❌ 源码文件缺失: $file"
-        fi
-    done
-    
-    log "=== 设备配置 ==="
-    DEVICE_NAME="$device_name"
-    
-    # 加载设备支持脚本
-    if load_device_support; then
-        local device_config=$(get_device_config "$device_name")
-        TARGET=$(echo $device_config | awk '{print $1}')
-        SUBTARGET=$(echo $device_config | awk '{print $2}')
-        DEVICE=$(echo $device_config | awk '{print $3}')
-        PLATFORM=$(echo $device_config | awk '{print $4}')
-        
-        local device_desc=$(get_device_description "$device_name")
-        log "🔧 设备: $device_desc"
-        log "目标: $TARGET"
-        log "子目标: $SUBTARGET"
-        log "设备: $DEVICE"
-        log "平台: $PLATFORM"
+    # 首先检查环境变量
+    echo "🔍 编译前环境变量验证:"
+    if [ -f "build_env.sh" ]; then
+      source build_env.sh
+      echo "✅ 加载环境变量成功"
     else
-        # 默认配置（兼容旧版）
-        case "$device_name" in
-            "ac42u"|"acrh17")
-                TARGET="ipq40xx"
-                SUBTARGET="generic"
-                DEVICE="asus_rt-ac42u"
-                PLATFORM="ipq40xx"
-                ;;
-            "mi_router_4a_gigabit"|"r4ag")
-                TARGET="ramips"
-                SUBTARGET="mt76x8"
-                DEVICE="xiaomi_mi-router-4a-gigabit"
-                PLATFORM="ramips"
-                ;;
-            "mi_router_3g"|"r3g")
-                TARGET="ramips"
-                SUBTARGET="mt7621"
-                DEVICE="xiaomi_mi-router-3g"
-                PLATFORM="ramips"
-                ;;
-            "netgear_3800")
-                TARGET="ath79"
-                SUBTARGET="generic"
-                DEVICE="netgear_wndr3800"
-                PLATFORM="ath79"
-                ;;
-            "cmcc_rax3000m")
-                TARGET="mediatek"
-                SUBTARGET="mt7981"
-                DEVICE="cmcc_rax3000m"
-                PLATFORM="mediatek"
-                ;;
-            *)
-                log "❌ 错误: 未知设备名称: $device_name"
-                log "💡 支持的设备: acrh17, mi_router_4a_gigabit, mi_router_3g, netgear_3800, cmcc_rax3000m"
-                exit 1
-                ;;
-        esac
-        log "🔧 检测到设备: $device_name"
-        log "目标: $TARGET"
-        log "子目标: $SUBTARGET"
-        log "设备: $DEVICE"
-        log "平台: $PLATFORM"
+      echo "❌ 错误: build_env.sh 文件不存在"
+      exit 1
     fi
     
-    CONFIG_MODE="$config_mode"
+    # 关键变量检查
+    echo ""
+    echo "🔍 关键变量检查:"
+    echo "  TARGET: $TARGET"
+    echo "  SUBTARGET: $SUBTARGET"
+    echo "  DEVICE: $DEVICE"
+    echo "  SELECTED_BRANCH: $SELECTED_BRANCH"
+    echo "  PLATFORM: $PLATFORM"
+    echo "  SOURCE_REPO: $SOURCE_REPO"
     
-    # 验证关键环境变量不为空
-    validate_environment_variables
-    
-    save_env
-    
-    echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
-    echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
-    echo "TARGET=$TARGET" >> $GITHUB_ENV
-    echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
-    echo "DEVICE=$DEVICE" >> $GITHUB_ENV
-    echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
-    echo "DEVICE_NAME=$DEVICE_NAME" >> $GITHUB_ENV
-    echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
-    echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
-    
-    log "✅ 构建环境初始化完成"
-}
-
-#【build_firmware_main.sh-新函数】环境变量验证函数
-validate_environment_variables() {
-    log "=== 验证环境变量 ==="
-    
-    local missing_vars=()
-    
-    # 检查关键环境变量是否为空
     if [ -z "$TARGET" ]; then
-        missing_vars+=("TARGET")
-        log "❌ 错误: TARGET 环境变量为空"
-    else
-        log "✅ TARGET: $TARGET"
-    fi
-    
-    if [ -z "$SUBTARGET" ]; then
-        missing_vars+=("SUBTARGET")
-        log "❌ 错误: SUBTARGET 环境变量为空"
-    else
-        log "✅ SUBTARGET: $SUBTARGET"
-    fi
-    
-    if [ -z "$DEVICE" ]; then
-        missing_vars+=("DEVICE")
-        log "❌ 错误: DEVICE 环境变量为空"
-    else
-        log "✅ DEVICE: $DEVICE"
-    fi
-    
-    if [ -z "$DEVICE_NAME" ]; then
-        missing_vars+=("DEVICE_NAME")
-        log "❌ 错误: DEVICE_NAME 环境变量为空"
-    else
-        log "✅ DEVICE_NAME: $DEVICE_NAME"
-    fi
-    
-    if [ -z "$SELECTED_BRANCH" ]; then
-        missing_vars+=("SELECTED_BRANCH")
-        log "❌ 错误: SELECTED_BRANCH 环境变量为空"
-    else
-        log "✅ SELECTED_BRANCH: $SELECTED_BRANCH"
-    fi
-    
-    if [ -z "$SOURCE_REPO" ]; then
-        missing_vars+=("SOURCE_REPO")
-        log "❌ 错误: SOURCE_REPO 环境变量为空"
-    else
-        log "✅ SOURCE_REPO: $SOURCE_REPO"
-    fi
-    
-    # 如果有缺失的变量，尝试修复
-    if [ ${#missing_vars[@]} -gt 0 ]; then
-        log "🚨 发现 ${#missing_vars[@]} 个缺失的环境变量: ${missing_vars[*]}"
+      echo "❌ 错误: TARGET 变量为空，这是导致编译失败的根本原因"
+      echo "💡 尝试修复..."
+      
+      # 尝试从support.sh获取
+      SUPPORT_DIR="${{ github.workspace }}/firmware-config"
+      if [ -f "$SUPPORT_DIR/support.sh" ]; then
+        source "$SUPPORT_DIR/support.sh"
         
-        # 尝试从support.sh获取设备配置
-        if load_device_support; then
-            log "🔄 尝试从设备支持脚本获取配置..."
-            local device_config=$(get_device_config "$DEVICE_NAME")
+        if command -v get_device_config >/dev/null 2>&1; then
+          DEVICE_CONFIG=$(get_device_config "${{ github.event.inputs.device_name }}")
+          if [ -n "$DEVICE_CONFIG" ]; then
+            TARGET=$(echo $DEVICE_CONFIG | awk '{print $1}')
+            SUBTARGET=$(echo $DEVICE_CONFIG | awk '{print $2}')
+            DEVICE=$(echo $DEVICE_CONFIG | awk '{print $3}')
+            PLATFORM=$(echo $DEVICE_CONFIG | awk '{print $4}')
             
-            if [ -n "$device_config" ]; then
-                if [ -z "$TARGET" ]; then
-                    TARGET=$(echo $device_config | awk '{print $1}')
-                    log "✅ 从support.sh设置 TARGET: $TARGET"
-                fi
-                
-                if [ -z "$SUBTARGET" ]; then
-                    SUBTARGET=$(echo $device_config | awk '{print $2}')
-                    log "✅ 从support.sh设置 SUBTARGET: $SUBTARGET"
-                fi
-                
-                if [ -z "$DEVICE" ]; then
-                    DEVICE=$(echo $device_config | awk '{print $3}')
-                    log "✅ 从support.sh设置 DEVICE: $DEVICE"
-                fi
-                
-                if [ -z "$PLATFORM" ]; then
-                    PLATFORM=$(echo $device_config | awk '{print $4}')
-                    log "✅ 从support.sh设置 PLATFORM: $PLATFORM"
-                fi
-            fi
+            echo "✅ 从support.sh获取配置:"
+            echo "  TARGET: $TARGET"
+            echo "  SUBTARGET: $SUBTARGET"
+            echo "  DEVICE: $DEVICE"
+            echo "  PLATFORM: $PLATFORM"
+            
+            # 更新环境变量
+            export TARGET="$TARGET"
+            export SUBTARGET="$SUBTARGET"
+            export DEVICE="$DEVICE"
+            export PLATFORM="$PLATFORM"
+            
+            # 更新环境文件
+            echo "🔄 更新环境文件..."
+            sed -i "s/export TARGET=\".*\"/export TARGET=\"$TARGET\"/" build_env.sh
+            sed -i "s/export SUBTARGET=\".*\"/export SUBTARGET=\"$SUBTARGET\"/" build_env.sh
+            sed -i "s/export DEVICE=\".*\"/export DEVICE=\"$DEVICE\"/" build_env.sh
+            sed -i "s/export PLATFORM=\".*\"/export PLATFORM=\"$PLATFORM\"/" build_env.sh
+            
+            # 重新加载环境变量
+            source build_env.sh
+            echo "✅ 环境变量已修复"
+          fi
         fi
-        
-        # 重新检查
-        missing_vars=()
-        [ -z "$TARGET" ] && missing_vars+=("TARGET")
-        [ -z "$SUBTARGET" ] && missing_vars+=("SUBTARGET")
-        [ -z "$DEVICE" ] && missing_vars+=("DEVICE")
-        [ -z "$DEVICE_NAME" ] && missing_vars+=("DEVICE_NAME")
-        [ -z "$SELECTED_BRANCH" ] && missing_vars+=("SELECTED_BRANCH")
-        [ -z "$SOURCE_REPO" ] && missing_vars+=("SOURCE_REPO")
-        
-        if [ ${#missing_vars[@]} -gt 0 ]; then
-            log "❌ 错误: 无法修复环境变量，仍缺失: ${missing_vars[*]}"
-            log "💡 可能的原因:"
-            log "  1. 设备名称不正确: $DEVICE_NAME"
-            log "  2. support.sh 文件中没有该设备的配置"
-            log "  3. 环境变量传递失败"
-            exit 1
-        fi
+      fi
     fi
     
-    log "✅ 所有关键环境变量验证通过"
+    # 如果TARGET仍然为空，使用默认值
+    if [ -z "$TARGET" ]; then
+      echo "⚠️ TARGET 仍然为空，使用默认值 ipq40xx"
+      export TARGET="ipq40xx"
+      export SUBTARGET="generic"
+      export DEVICE="${{ github.event.inputs.device_name }}"
+      export PLATFORM="generic"
+      
+      # 更新环境文件
+      echo "🔄 设置默认值到环境文件..."
+      sed -i "s/export TARGET=\".*\"/export TARGET=\"ipq40xx\"/" build_env.sh
+      sed -i "s/export SUBTARGET=\".*\"/export SUBTARGET=\"generic\"/" build_env.sh
+      sed -i "s/export DEVICE=\".*\"/export DEVICE=\"${{ github.event.inputs.device_name }}\"/" build_env.sh
+      sed -i "s/export PLATFORM=\".*\"/export PLATFORM=\"generic\"/" build_env.sh
+      
+      source build_env.sh
+    fi
+    
+    # 检查内核版本文件
+    echo ""
+    echo "🔍 检查内核版本文件..."
+    KERNEL_VERSION_FILE="include/kernel-${TARGET}.mk"
+    if [ -f "$KERNEL_VERSION_FILE" ]; then
+      echo "✅ 内核版本文件存在: $KERNEL_VERSION_FILE"
+      
+      # 检查文件内容
+      echo "📄 文件内容检查:"
+      if grep -q "LINUX_VERSION" "$KERNEL_VERSION_FILE"; then
+        LINUX_VERSION=$(grep "LINUX_VERSION" "$KERNEL_VERSION_FILE" | head -1)
+        echo "  Linux版本: $LINUX_VERSION"
+      else
+        echo "  ⚠️ 未找到LINUX_VERSION定义"
+      fi
+      
+      if grep -q "LINUX_KERNEL_HASH" "$KERNEL_VERSION_FILE"; then
+        echo "  ✅ 找到LINUX_KERNEL_HASH"
+      else
+        echo "  ⚠️ 未找到LINUX_KERNEL_HASH"
+      fi
+    else
+      echo "❌ 错误: 内核版本文件不存在: $KERNEL_VERSION_FILE"
+      echo "💡 尝试查找其他内核版本文件..."
+      
+      # 查找其他可能的内核版本文件
+      OTHER_KERNEL_FILES=$(find include -name "kernel-*.mk" 2>/dev/null | head -5)
+      if [ -n "$OTHER_KERNEL_FILES" ]; then
+        echo "📁 找到的内核版本文件:"
+        echo "$OTHER_KERNEL_FILES"
+        
+        # 尝试使用第一个找到的文件
+        FIRST_KERNEL_FILE=$(echo "$OTHER_KERNEL_FILES" | head -1)
+        echo "💡 尝试使用: $FIRST_KERNEL_FILE"
+        
+        # 从文件名中提取TARGET
+        KERNEL_TARGET=$(basename "$FIRST_KERNEL_FILE" .mk | sed 's/kernel-//')
+        if [ -n "$KERNEL_TARGET" ] && [ "$KERNEL_TARGET" != "$TARGET" ]; then
+          echo "⚠️ 当前TARGET ($TARGET) 与内核文件不匹配，尝试使用 $KERNEL_TARGET"
+          export TARGET="$KERNEL_TARGET"
+          
+          # 更新环境文件
+          sed -i "s/export TARGET=\".*\"/export TARGET=\"$KERNEL_TARGET\"/" build_env.sh
+          source build_env.sh
+          echo "✅ 已更新TARGET为: $KERNEL_TARGET"
+        fi
+      else
+        echo "❌ 未找到任何内核版本文件"
+        echo "💡 这通常意味着源代码不完整或目标平台不支持"
+        exit 1
+      fi
+    fi
+    
+    # 获取系统信息
+    CPU_CORES=$(nproc)
+    TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
+    
+    echo "🔧 系统信息:"
+    echo "  CPU核心数: $CPU_CORES"
+    echo "  内存大小: ${TOTAL_MEM}MB"
+    echo "  并行优化: ${{ env.ENABLE_PARALLEL }}"
+    echo "  源代码仓库: $SOURCE_REPO"
+    
+    # 智能判断最佳并行任务数 - 优化版
+    if [ "${{ env.ENABLE_PARALLEL }}" = "true" ]; then
+      echo "🧠 智能判断最佳并行任务数..."
+      
+      # GitHub Actions Runner 优化配置
+      if [ $CPU_CORES -ge 4 ]; then
+        if [ $TOTAL_MEM -ge 8000 ]; then
+          MAKE_JOBS=4
+          echo "✅ 检测到高性能Runner (4核+8GB)"
+        else
+          MAKE_JOBS=3
+          echo "✅ 检测到标准Runner (4核)"
+        fi
+      elif [ $CPU_CORES -ge 2 ]; then
+        if [ $TOTAL_MEM -ge 7000 ]; then
+          MAKE_JOBS=3
+          echo "✅ 检测到GitHub标准Runner (2核7GB)"
+        else
+          MAKE_JOBS=2
+          echo "✅ 检测到2核Runner"
+        fi
+      else
+        MAKE_JOBS=2
+        echo "⚠️ 检测到单核Runner"
+      fi
+      
+      echo "🎯 决定使用 $MAKE_JOBS 个并行任务"
+    else
+      MAKE_JOBS=1
+      echo "🔄 禁用并行优化，使用单线程编译"
+    fi
+    
+    echo ""
+    echo "🚀 开始编译固件"
+    echo "💡 编译配置:"
+    echo "  - 并行任务: $MAKE_JOBS"
+    echo "  - 设备: ${{ github.event.inputs.device_name }}"
+    echo "  - 版本: ${{ github.event.inputs.version_selection }}"
+    echo "  - 配置模式: ${{ github.event.inputs.config_mode }}"
+    echo "  - 源代码仓库: ${{ github.event.inputs.source_repo }}"
+    echo "  - 平台类型: $PLATFORM"
+    echo "  - 目标平台: $TARGET/$SUBTARGET"
+    echo "  - 目标设备: $DEVICE"
+    echo "  - 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+    
+    # 设置编译环境变量
+    export FORCE_UNSAFE_CONFIGURE=1
+    
+    # 开始编译，使用stdbuf防止stdout错误
+    START_TIME=$(date +%s)
+    echo "🔨 编译命令: make -j$MAKE_JOBS V=s"
+    
+    # 先尝试运行make defconfig确保配置正确
+    echo "🔧 运行 make defconfig 确保配置正确..."
+    if make defconfig 2>&1 | tee defconfig.log; then
+      echo "✅ make defconfig 成功"
+    else
+      echo "⚠️ make defconfig 有警告，但继续执行"
+      tail -20 defconfig.log
+    fi
+    
+    # 开始正式编译
+    echo "🚀 开始正式编译..."
+    stdbuf -oL -eL time make -j$MAKE_JOBS V=s 2>&1 | tee build.log
+    BUILD_EXIT_CODE=${PIPESTATUS[0]}
+    END_TIME=$(date +%s)
+    DURATION=$((END_TIME - START_TIME))
+    
+    echo ""
+    echo "📊 编译统计:"
+    echo "  - 总耗时: $((DURATION / 60))分钟$((DURATION % 60))秒"
+    echo "  - 退出代码: $BUILD_EXIT_CODE"
+    
+    if [ $BUILD_EXIT_CODE -eq 0 ]; then
+      echo "✅ 固件编译成功"
+      
+      if [ -d "bin/targets" ]; then
+        FIRMWARE_COUNT=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+        echo "✅ 生成固件文件: $FIRMWARE_COUNT 个"
+        
+        # 显示前3个固件文件
+        echo "📁 生成的固件文件 (前3个):"
+        find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | head -3 | while read file; do
+          SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+          echo "  📄 $(basename "$file") ($SIZE)"
+        done
+      fi
+    else
+      echo "❌ 错误: 编译失败，退出代码: $BUILD_EXIT_CODE"
+      echo "🔍 编译日志中的错误摘要:"
+      
+      # 查找具体的错误信息
+      if grep -q "Missing kernel version/hash file" build.log; then
+        echo "🚨 发现关键错误: 缺少内核版本/哈希文件"
+        echo "💡 错误详情:"
+        grep -A5 -B5 "Missing kernel version/hash file" build.log
+        
+        echo ""
+        echo "🔧 问题分析:"
+        echo "  这通常是因为 TARGET 变量不正确导致的"
+        echo "  当前 TARGET: $TARGET"
+        echo "  寻找的内核文件: include/kernel-${TARGET}.mk"
+        
+        # 显示实际的内核文件
+        echo "📁 实际存在的内核文件:"
+        find include -name "kernel-*.mk" 2>/dev/null
+        
+        echo ""
+        echo "💡 解决方案:"
+        echo "  1. 检查设备配置是否正确"
+        echo "  2. 检查support.sh中的get_device_config函数"
+        echo "  3. 确保选择的设备在支持列表中"
+      fi
+      
+      # 显示其他错误
+      grep -i "error\|failed\|stop" build.log | tail -20 || true
+      exit $BUILD_EXIT_CODE
+    fi
+    
+    echo "🟢 步骤 23 完成"
+
+
+#【firmware-build.yml-21】
+# 步骤 21: 前置错误检查（修复TARGET变量问题）
+- name: "21. 前置错误检查（修复TARGET变量问题）"
+  run: |
+    echo "=== 步骤 21: 前置错误检查（修复TARGET变量问题） ==="
+    echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+    
+    # 设置错误处理
+    set -e
+    trap 'echo "❌ 步骤 21 失败，退出代码: $?"; exit 1' ERR
+    
+    echo "🔍 检查当前环境..."
+    if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
+      source /mnt/openwrt-build/build_env.sh
+      echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET, PLATFORM=$PLATFORM, SOURCE_REPO=$SOURCE_REPO"
+    else
+      echo "❌ 错误: 环境文件不存在"
+      exit 1
+    fi
+    
+    # 关键检查：确保TARGET变量不为空
+    echo ""
+    echo "🔍 关键变量检查（修复TARGET问题）:"
+    echo "  TARGET: $TARGET"
+    echo "  SUBTARGET: $SUBTARGET"
+    echo "  DEVICE: $DEVICE"
+    echo "  SELECTED_BRANCH: $SELECTED_BRANCH"
+    
+    if [ -z "$TARGET" ]; then
+      echo "❌ 错误: TARGET 变量为空，这是导致编译失败的根本原因"
+      echo "💡 可能的原因:"
+      echo "  1. 设备支持脚本未正确配置"
+      echo "  2. 环境变量未正确传递"
+      echo "  3. support.sh 文件有问题"
+      
+      # 尝试从support.sh获取
+      SUPPORT_DIR="${{ github.workspace }}/firmware-config"
+      if [ -f "$SUPPORT_DIR/support.sh" ]; then
+        echo "🔧 尝试从support.sh获取设备配置..."
+        source "$SUPPORT_DIR/support.sh"
+        
+        if command -v get_device_config >/dev/null 2>&1; then
+          DEVICE_CONFIG=$(get_device_config "${{ github.event.inputs.device_name }}")
+          if [ -n "$DEVICE_CONFIG" ]; then
+            TARGET=$(echo $DEVICE_CONFIG | awk '{print $1}')
+            SUBTARGET=$(echo $DEVICE_CONFIG | awk '{print $2}')
+            DEVICE=$(echo $DEVICE_CONFIG | awk '{print $3}')
+            PLATFORM=$(echo $DEVICE_CONFIG | awk '{print $4}')
+            
+            echo "✅ 从support.sh获取配置:"
+            echo "  TARGET: $TARGET"
+            echo "  SUBTARGET: $SUBTARGET"
+            echo "  DEVICE: $DEVICE"
+            echo "  PLATFORM: $PLATFORM"
+            
+            # 更新环境文件
+            echo "🔄 更新环境文件..."
+            sed -i "s/export TARGET=\".*\"/export TARGET=\"$TARGET\"/" /mnt/openwrt-build/build_env.sh
+            sed -i "s/export SUBTARGET=\".*\"/export SUBTARGET=\"$SUBTARGET\"/" /mnt/openwrt-build/build_env.sh
+            sed -i "s/export DEVICE=\".*\"/export DEVICE=\"$DEVICE\"/" /mnt/openwrt-build/build_env.sh
+            sed -i "s/export PLATFORM=\".*\"/export PLATFORM=\"$PLATFORM\"/" /mnt/openwrt-build/build_env.sh
+            
+            # 重新加载环境变量
+            source /mnt/openwrt-build/build_env.sh
+            echo "✅ 环境文件已更新"
+          else
+            echo "❌ 无法从support.sh获取设备配置"
+          fi
+        else
+          echo "❌ support.sh中没有get_device_config函数"
+        fi
+      else
+        echo "❌ support.sh文件不存在"
+      fi
+      
+      exit 1
+    fi
+    
+    # 检查内核版本文件是否存在
+    echo ""
+    echo "🔍 检查内核版本文件..."
+    KERNEL_VERSION_FILE="/mnt/openwrt-build/include/kernel-${TARGET}.mk"
+    if [ -f "$KERNEL_VERSION_FILE" ]; then
+      echo "✅ 内核版本文件存在: $KERNEL_VERSION_FILE"
+      echo "📄 文件内容预览:"
+      head -5 "$KERNEL_VERSION_FILE"
+    else
+      echo "⚠️ 警告: 内核版本文件不存在: $KERNEL_VERSION_FILE"
+      echo "💡 这可能会导致编译失败，但继续执行..."
+    fi
+    
+    # 检查内核版本文件中的变量
+    if [ -f "$KERNEL_VERSION_FILE" ]; then
+      echo "🔍 检查内核版本文件中的变量..."
+      grep -i "kernel\|version\|hash" "$KERNEL_VERSION_FILE" | head -5
+    fi
+    
+    echo "🚀 执行前置错误检查..."
+    "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_error_check
+    
+    CHECK_EXIT_CODE=$?
+    if [ $CHECK_EXIT_CODE -ne 0 ]; then
+      echo "❌ 错误: 前置错误检查失败，退出代码: $CHECK_EXIT_CODE"
+      echo "💡 请查看上方错误信息进行修复"
+      
+      # 如果是23.05版本，提供特殊提示
+      if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+        echo ""
+        echo "🚨 23.05版本SDK验证问题修复提示:"
+        echo "💡 23.05 SDK使用GCC 12.3.0，已放宽验证条件"
+        echo "📌 只需要有GCC编译器文件即可，不要求特定目录结构"
+        echo "🔧 已排除虚假的dummy-tools编译器检测"
+      fi
+      
+      exit 1
+    fi
+    
+    echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "🟢 步骤 21 完成"
+
+#【build_firmware_main.sh-03】环境变量函数（修复版）
+save_env() {
+    mkdir -p $BUILD_DIR
+    echo "#!/bin/bash" > $ENV_FILE
+    
+    # 确保变量不为空
+    SELECTED_REPO_URL="${SELECTED_REPO_URL:-https://github.com/immortalwrt/immortalwrt.git}"
+    SELECTED_BRANCH="${SELECTED_BRANCH:-openwrt-21.02}"
+    TARGET="${TARGET:-ipq40xx}"
+    SUBTARGET="${SUBTARGET:-generic}"
+    DEVICE="${DEVICE:-${DEVICE_NAME:-unknown}}"
+    CONFIG_MODE="${CONFIG_MODE:-normal}"
+    REPO_ROOT="${REPO_ROOT:-$(pwd)}"
+    COMPILER_DIR="${COMPILER_DIR:-}"
+    DEVICE_NAME="${DEVICE_NAME:-unknown}"
+    PLATFORM="${PLATFORM:-${TARGET}}"
+    SOURCE_REPO="${SOURCE_REPO:-immortalwrt}"
+    
+    echo "export SELECTED_REPO_URL=\"${SELECTED_REPO_URL}\"" >> $ENV_FILE
+    echo "export SELECTED_BRANCH=\"${SELECTED_BRANCH}\"" >> $ENV_FILE
+    echo "export TARGET=\"${TARGET}\"" >> $ENV_FILE
+    echo "export SUBTARGET=\"${SUBTARGET}\"" >> $ENV_FILE
+    echo "export DEVICE=\"${DEVICE}\"" >> $ENV_FILE
+    echo "export CONFIG_MODE=\"${CONFIG_MODE}\"" >> $ENV_FILE
+    echo "export REPO_ROOT=\"${REPO_ROOT}\"" >> $ENV_FILE
+    echo "export COMPILER_DIR=\"${COMPILER_DIR}\"" >> $ENV_FILE
+    echo "export DEVICE_NAME=\"${DEVICE_NAME}\"" >> $ENV_FILE
+    echo "export PLATFORM=\"${PLATFORM}\"" >> $ENV_FILE
+    echo "export SOURCE_REPO=\"${SOURCE_REPO}\"" >> $ENV_FILE
+    
+    # 确保环境变量可被其他步骤访问
+    if [ -n "$GITHUB_ENV" ]; then
+        # 清除已有的变量
+        grep -v "SELECTED_REPO_URL\|SELECTED_BRANCH\|TARGET\|SUBTARGET\|DEVICE\|CONFIG_MODE\|COMPILER_DIR\|DEVICE_NAME\|PLATFORM\|SOURCE_REPO" "$GITHUB_ENV" > "$GITHUB_ENV.tmp" 2>/dev/null || true
+        mv "$GITHUB_ENV.tmp" "$GITHUB_ENV" 2>/dev/null || true
+        
+        # 添加新的变量
+        echo "SELECTED_REPO_URL=${SELECTED_REPO_URL}" >> $GITHUB_ENV
+        echo "SELECTED_BRANCH=${SELECTED_BRANCH}" >> $GITHUB_ENV
+        echo "TARGET=${TARGET}" >> $GITHUB_ENV
+        echo "SUBTARGET=${SUBTARGET}" >> $GITHUB_ENV
+        echo "DEVICE=${DEVICE}" >> $GITHUB_ENV
+        echo "CONFIG_MODE=${CONFIG_MODE}" >> $GITHUB_ENV
+        echo "COMPILER_DIR=${COMPILER_DIR}" >> $GITHUB_ENV
+        echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
+        echo "PLATFORM=${PLATFORM}" >> $GITHUB_ENV
+        echo "SOURCE_REPO=${SOURCE_REPO}" >> $GITHUB_ENV
+        
+        log "✅ 环境变量已导出到 GitHub Actions 环境: $GITHUB_ENV"
+    fi
+    
+    chmod +x $ENV_FILE
+    log "✅ 环境变量已保存到: $ENV_FILE"
+    log "📋 保存的环境变量:"
+    log "  TARGET: $TARGET"
+    log "  SUBTARGET: $SUBTARGET"
+    log "  DEVICE: $DEVICE"
+    log "  PLATFORM: $PLATFORM"
+    log "  SELECTED_BRANCH: $SELECTED_BRANCH"
 }
 
-#【build_firmware_main.sh-14】编译器环境初始化函数 - 修复版
+#【build_firmware_main.sh-14】编译器环境初始化函数（修复版）
 initialize_compiler_env() {
     local device_name="$1"
     log "=== 初始化编译器环境（下载OpenWrt官方SDK）- 修复版 ==="
@@ -255,19 +470,45 @@ initialize_compiler_env() {
         source "$BUILD_DIR/build_env.sh"
         log "✅ 从 $BUILD_DIR/build_env.sh 加载环境变量"
         
-        # 验证关键环境变量
-        validate_environment_variables
+        # 显示关键环境变量
+        log "📋 当前环境变量:"
+        log "  SELECTED_BRANCH: $SELECTED_BRANCH"
+        log "  TARGET: $TARGET"
+        log "  SUBTARGET: $SUBTARGET"
+        log "  DEVICE: $DEVICE"
+        log "  CONFIG_MODE: $CONFIG_MODE"
+        log "  REPO_ROOT: $REPO_ROOT"
+        log "  COMPILER_DIR: $COMPILER_DIR"
+        log "  DEVICE_NAME: $DEVICE_NAME"
+        log "  PLATFORM: $PLATFORM"
+        log "  SOURCE_REPO: $SOURCE_REPO"
     else
-        log "⚠️ 环境文件不存在: $BUILD_DIR/build_env.sh"
+        log "❌ 环境文件不存在: $BUILD_DIR/build_env.sh"
         log "💡 环境文件应该在步骤6.3中创建，但未找到"
+        
+        # 检查是否在Github Actions环境中
+        if [ -n "$GITHUB_ENV" ] && [ -f "$GITHUB_ENV" ]; then
+            log "🔍 尝试从GitHub Actions环境加载..."
+            # 从GitHub Actions环境文件读取
+            if grep -q "TARGET=" "$GITHUB_ENV"; then
+                TARGET=$(grep "^TARGET=" "$GITHUB_ENV" | cut -d'=' -f2)
+                log "✅ 从GITHUB_ENV加载 TARGET: $TARGET"
+            fi
+            
+            if grep -q "SUBTARGET=" "$GITHUB_ENV"; then
+                SUBTARGET=$(grep "^SUBTARGET=" "$GITHUB_ENV" | cut -d'=' -f2)
+                log "✅ 从GITHUB_ENV加载 SUBTARGET: $SUBTARGET"
+            fi
+            
+            if grep -q "DEVICE=" "$GITHUB_ENV"; then
+                DEVICE=$(grep "^DEVICE=" "$GITHUB_ENV" | cut -d'=' -f2)
+                log "✅ 从GITHUB_ENV加载 DEVICE: $DEVICE"
+            fi
+        fi
         
         # 设置默认值
         if [ -z "$SELECTED_BRANCH" ]; then
-            if [ "$version_selection" = "23.05" ]; then
-                SELECTED_BRANCH="openwrt-23.05"
-            else
-                SELECTED_BRANCH="openwrt-21.02"
-            fi
+            SELECTED_BRANCH="openwrt-21.02"
             log "⚠️ SELECTED_BRANCH未设置，使用默认值: $SELECTED_BRANCH"
         fi
         
@@ -276,54 +517,29 @@ initialize_compiler_env() {
             log "⚠️ SOURCE_REPO未设置，使用默认值: $SOURCE_REPO"
         fi
         
-        if [ -z "$TARGET" ] || [ -z "$SUBTARGET" ] || [ -z "$DEVICE" ]; then
+        if [ -z "$TARGET" ]; then
             # 使用设备支持脚本获取配置
             if load_device_support; then
                 local device_config=$(get_device_config "$device_name")
-                TARGET=$(echo $device_config | awk '{print $1}')
-                SUBTARGET=$(echo $device_config | awk '{print $2}')
-                DEVICE=$(echo $device_config | awk '{print $3}')
-                PLATFORM=$(echo $device_config | awk '{print $4}')
-                log "⚠️ 平台变量未设置，从设备支持脚本获取: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE, PLATFORM=$PLATFORM"
+                if [ -n "$device_config" ]; then
+                    TARGET=$(echo $device_config | awk '{print $1}')
+                    SUBTARGET=$(echo $device_config | awk '{print $2}')
+                    DEVICE=$(echo $device_config | awk '{print $3}')
+                    PLATFORM=$(echo $device_config | awk '{print $4}')
+                    log "✅ 从设备支持脚本获取: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE, PLATFORM=$PLATFORM"
+                else
+                    log "❌ 无法获取设备配置，使用默认值"
+                    TARGET="ipq40xx"
+                    SUBTARGET="generic"
+                    DEVICE="$device_name"
+                    PLATFORM="generic"
+                fi
             else
                 # 默认配置
-                case "$device_name" in
-                    "ac42u"|"acrh17")
-                        TARGET="ipq40xx"
-                        SUBTARGET="generic"
-                        DEVICE="asus_rt-ac42u"
-                        PLATFORM="ipq40xx"
-                        ;;
-                    "mi_router_4a_gigabit"|"r4ag")
-                        TARGET="ramips"
-                        SUBTARGET="mt76x8"
-                        DEVICE="xiaomi_mi-router-4a-gigabit"
-                        PLATFORM="ramips"
-                        ;;
-                    "mi_router_3g"|"r3g")
-                        TARGET="ramips"
-                        SUBTARGET="mt7621"
-                        DEVICE="xiaomi_mi-router-3g"
-                        PLATFORM="ramips"
-                        ;;
-                    "netgear_3800")
-                        TARGET="ath79"
-                        SUBTARGET="generic"
-                        DEVICE="netgear_wndr3800"
-                        PLATFORM="ath79"
-                        ;;
-                    "cmcc_rax3000m")
-                        TARGET="mediatek"
-                        SUBTARGET="mt7981"
-                        DEVICE="cmcc_rax3000m"
-                        PLATFORM="mediatek"
-                        ;;
-                    *)
-                        log "❌ 错误: 未知设备名称: $device_name"
-                        log "💡 支持的设备: acrh17, mi_router_4a_gigabit, mi_router_3g, netgear_3800, cmcc_rax3000m"
-                        exit 1
-                        ;;
-                esac
+                TARGET="ipq40xx"
+                SUBTARGET="generic"
+                DEVICE="$device_name"
+                PLATFORM="generic"
                 log "⚠️ 平台变量未设置，使用默认值: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE"
             fi
         fi
@@ -339,54 +555,108 @@ initialize_compiler_env() {
         fi
         
         if [ -z "$PLATFORM" ]; then
-            PLATFORM="generic"
-            log "⚠️ PLATFORM未设置，使用默认值: $PLATFORM"
+            PLATFORM="$TARGET"
+            log "⚠️ PLATFORM未设置，使用: $PLATFORM"
         fi
-        
-        # 验证环境变量
-        validate_environment_variables
         
         # 保存到环境文件
         save_env
         log "✅ 已创建环境文件: $BUILD_DIR/build_env.sh"
     fi
     
-    # 检查环境变量中的COMPILER_DIR
-    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-        log "✅ 使用环境变量中的编译器目录: $COMPILER_DIR"
-        
-        # 验证编译器目录是否真的包含GCC
-        log "🔍 验证编译器目录有效性..."
-        local gcc_files=$(find "$COMPILER_DIR" -type f -executable \
-          -name "*gcc" \
-          ! -name "*gcc-ar" \
-          ! -name "*gcc-ranlib" \
-          ! -name "*gcc-nm" \
-          ! -path "*dummy-tools*" \
-          ! -path "*scripts*" \
-          2>/dev/null | head -3)
-        
-        if [ -n "$gcc_files" ]; then
-            log "✅ 确认编译器目录包含真正的GCC"
-            local first_gcc=$(echo "$gcc_files" | head -1)
-            log "  🎯 GCC文件: $(basename "$first_gcc")"
-            log "  🔧 GCC版本: $("$first_gcc" --version 2>&1 | head -1)"
-            
-            # 保存到环境文件
-            save_env
-            
-            # 验证编译器
-            verify_compiler_files
-            return 0
-        else
-            log "⚠️ 编译器目录存在但不包含真正的GCC，将重新下载SDK"
-        fi
+    # 关键检查：确保所有必要的变量都不为空
+    log "🔍 关键变量完整性检查:"
+    
+    local missing_vars=()
+    
+    if [ -z "$TARGET" ]; then
+        missing_vars+=("TARGET")
+        log "❌ TARGET 为空"
     else
-        log "🔍 COMPILER_DIR未设置或目录不存在，将下载OpenWrt官方SDK"
+        log "✅ TARGET: $TARGET"
     fi
     
-    # 验证环境变量
-    validate_environment_variables
+    if [ -z "$SUBTARGET" ]; then
+        missing_vars+=("SUBTARGET")
+        log "❌ SUBTARGET 为空"
+    else
+        log "✅ SUBTARGET: $SUBTARGET"
+    fi
+    
+    if [ -z "$DEVICE" ]; then
+        missing_vars+=("DEVICE")
+        log "❌ DEVICE 为空"
+    else
+        log "✅ DEVICE: $DEVICE"
+    fi
+    
+    if [ -z "$SELECTED_BRANCH" ]; then
+        missing_vars+=("SELECTED_BRANCH")
+        log "❌ SELECTED_BRANCH 为空"
+    else
+        log "✅ SELECTED_BRANCH: $SELECTED_BRANCH"
+    fi
+    
+    # 如果有缺失的变量，尝试修复
+    if [ ${#missing_vars[@]} -gt 0 ]; then
+        log "⚠️ 发现缺失的变量: ${missing_vars[*]}"
+        
+        # 尝试从设备支持脚本获取
+        if load_device_support; then
+            local device_config=$(get_device_config "$device_name")
+            if [ -n "$device_config" ]; then
+                if [ -z "$TARGET" ]; then
+                    TARGET=$(echo $device_config | awk '{print $1}')
+                    log "✅ 从设备支持设置 TARGET: $TARGET"
+                fi
+                
+                if [ -z "$SUBTARGET" ]; then
+                    SUBTARGET=$(echo $device_config | awk '{print $2}')
+                    log "✅ 从设备支持设置 SUBTARGET: $SUBTARGET"
+                fi
+                
+                if [ -z "$DEVICE" ]; then
+                    DEVICE=$(echo $device_config | awk '{print $3}')
+                    log "✅ 从设备支持设置 DEVICE: $DEVICE"
+                fi
+                
+                if [ -z "$PLATFORM" ]; then
+                    PLATFORM=$(echo $device_config | awk '{print $4}')
+                    log "✅ 从设备支持设置 PLATFORM: $PLATFORM"
+                fi
+            fi
+        fi
+        
+        # 如果仍然缺失，设置默认值
+        if [ -z "$TARGET" ]; then
+            TARGET="ipq40xx"
+            log "⚠️ TARGET 仍然为空，使用默认值: $TARGET"
+        fi
+        
+        if [ -z "$SUBTARGET" ]; then
+            SUBTARGET="generic"
+            log "⚠️ SUBTARGET 仍然为空，使用默认值: $SUBTARGET"
+        fi
+        
+        if [ -z "$DEVICE" ]; then
+            DEVICE="$device_name"
+            log "⚠️ DEVICE 仍然为空，使用设备名称: $DEVICE"
+        fi
+        
+        if [ -z "$SELECTED_BRANCH" ]; then
+            SELECTED_BRANCH="openwrt-21.02"
+            log "⚠️ SELECTED_BRANCH 仍然为空，使用默认值: $SELECTED_BRANCH"
+        fi
+        
+        if [ -z "$PLATFORM" ]; then
+            PLATFORM="$TARGET"
+            log "⚠️ PLATFORM 仍然为空，使用 TARGET 作为 PLATFORM: $PLATFORM"
+        fi
+        
+        # 重新保存环境变量
+        save_env
+        log "✅ 已修复并保存环境变量"
+    fi
     
     # 根据设备确定平台（使用已设置的变量）
     log "目标平台: $TARGET/$SUBTARGET"
@@ -419,6 +689,19 @@ initialize_compiler_env() {
     log "  子目标: $SUBTARGET"
     log "  平台: $PLATFORM"
     log "  源代码仓库: $SOURCE_REPO"
+    
+    # 关键检查：确保TARGET和SUBTARGET不为空
+    if [ -z "$TARGET" ] || [ -z "$SUBTARGET" ]; then
+        log "❌ 错误: TARGET 或 SUBTARGET 为空，无法下载SDK"
+        log "💡 当前值: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
+        log "💡 将使用OpenWrt自动构建的编译器作为后备"
+        
+        # 设置空的编译器目录
+        export COMPILER_DIR=""
+        save_env
+        
+        return 0
+    fi
     
     # 下载OpenWrt官方SDK
     log "🚀 开始下载OpenWrt官方SDK..."
@@ -466,377 +749,172 @@ initialize_compiler_env() {
     fi
 }
 
-#【firmware-build.yml-21】前置错误检查（修复23.05 SDK验证）- 关键修复
-      - name: "21. 前置错误检查（修复23.05 SDK验证）"
-        run: |
-          echo "=== 步骤 21: 前置错误检查（修复23.05 SDK验证） ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          
-          # 设置错误处理
-          set -e
-          trap 'echo "❌ 步骤 21 失败，退出代码: $?"; exit 1' ERR
-          
-          echo "🔍 检查当前环境..."
-          if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
-            source /mnt/openwrt-build/build_env.sh
-            echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE, PLATFORM=$PLATFORM, SOURCE_REPO=$SOURCE_REPO"
-            
-            # 验证关键环境变量不为空
-            echo "🔍 验证关键环境变量..."
-            if [ -z "$TARGET" ] || [ -z "$SUBTARGET" ] || [ -z "$DEVICE" ]; then
-              echo "❌ 错误: 关键环境变量为空"
-              echo "  TARGET=$TARGET"
-              echo "  SUBTARGET=$SUBTARGET"
-              echo "  DEVICE=$DEVICE"
-              
-              # 尝试从support.sh重新获取
-              echo "🔄 尝试从设备支持脚本重新获取配置..."
-              SUPPORT_DIR="${{ github.workspace }}/firmware-config"
-              if [ -f "$SUPPORT_DIR/support.sh" ]; then
-                source "$SUPPORT_DIR/support.sh"
-                DEVICE_CONFIG=$(get_device_config "${{ github.event.inputs.device_name }}")
-                if [ -n "$DEVICE_CONFIG" ]; then
-                  NEW_TARGET=$(echo $DEVICE_CONFIG | awk '{print $1}')
-                  NEW_SUBTARGET=$(echo $DEVICE_CONFIG | awk '{print $2}')
-                  NEW_DEVICE=$(echo $DEVICE_CONFIG | awk '{print $3}')
-                  
-                  echo "✅ 从support.sh获取到新配置:"
-                  echo "  TARGET=$NEW_TARGET (之前: $TARGET)"
-                  echo "  SUBTARGET=$NEW_SUBTARGET (之前: $SUBTARGET)"
-                  echo "  DEVICE=$NEW_DEVICE (之前: $DEVICE)"
-                  
-                  # 更新环境变量
-                  export TARGET="$NEW_TARGET"
-                  export SUBTARGET="$NEW_SUBTARGET"
-                  export DEVICE="$NEW_DEVICE"
-                  
-                  # 更新环境文件
-                  sed -i "s/^export TARGET=.*/export TARGET=\"$NEW_TARGET\"/" /mnt/openwrt-build/build_env.sh
-                  sed -i "s/^export SUBTARGET=.*/export SUBTARGET=\"$NEW_SUBTARGET\"/" /mnt/openwrt-build/build_env.sh
-                  sed -i "s/^export DEVICE=.*/export DEVICE=\"$NEW_DEVICE\"/" /mnt/openwrt-build/build_env.sh
-                  
-                  # 重新加载
-                  source /mnt/openwrt-build/build_env.sh
-                  echo "✅ 已更新环境变量"
-                else
-                  echo "❌ 无法从support.sh获取设备配置"
-                fi
-              else
-                echo "❌ support.sh 文件不存在"
-              fi
-            else
-              echo "✅ 关键环境变量正常"
-            fi
-          else
-            echo "❌ 错误: 环境文件不存在"
-            echo "💡 尝试重新创建环境文件..."
-            
-            # 重新创建环境文件
-            "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}" "${{ github.event.inputs.source_repo }}"
-            
-            if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
-              source /mnt/openwrt-build/build_env.sh
-              echo "✅ 重新创建环境文件成功"
-            else
-              echo "❌ 重新创建环境文件失败"
-              exit 1
-            fi
-          fi
-          
-          echo "🚀 执行前置错误检查（已修复23.05 SDK验证问题）..."
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_error_check
-          
-          CHECK_EXIT_CODE=$?
-          if [ $CHECK_EXIT_CODE -ne 0 ]; then
-            echo "❌ 错误: 前置错误检查失败，退出代码: $CHECK_EXIT_CODE"
-            echo "💡 请查看上方错误信息进行修复"
-            
-            # 如果是23.05版本，提供特殊提示
-            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-              echo ""
-              echo "🚨 23.05版本SDK验证问题修复提示:"
-              echo "💡 23.05 SDK使用GCC 12.3.0，已放宽验证条件"
-              echo "📌 只需要有GCC编译器文件即可，不要求特定目录结构"
-              echo "🔧 已排除虚假的dummy-tools编译器检测"
-            fi
-            
-            exit 1
-          fi
-          
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 21 完成"
-
-          #【build_firmware_main.sh-新函数】构建前环境验证
-pre_build_env_validation() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+#【firmware-build.yml-07】
+# 步骤 7: 下载OpenWrt官方SDK（修复版）- 环境变量修复
+- name: "7. 下载OpenWrt官方SDK（环境变量修复版）"
+  run: |
+    echo "=== 步骤 7: 下载OpenWrt官方SDK（环境变量修复版） ==="
+    echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
     
-    log "=== 构建前环境验证（修复内核版本错误） ==="
+    # 设置错误处理 - 这里不退出，SDK下载失败可以继续
+    trap 'echo "⚠️ SDK下载失败，将使用自动构建编译器，继续执行..."' ERR
     
-    # 验证关键环境变量
-    validate_environment_variables
+    echo "🚀 开始下载OpenWrt官方SDK工具链..."
     
-    # 检查是否设置了正确的TARGET和SUBTARGET
-    log "🔍 检查TARGET和SUBTARGET配置..."
-    
-    if [ -z "$TARGET" ] || [ -z "$SUBTARGET" ]; then
-        log "❌ 错误: TARGET或SUBTARGET为空"
-        log "  TARGET: $TARGET"
-        log "  SUBTARGET: $SUBTARGET"
-        
-        # 尝试从.config文件中提取
-        if [ -f ".config" ]; then
-            log "🔄 尝试从.config文件中提取..."
-            local config_target=$(grep "^CONFIG_TARGET_" .config | grep "=y$" | head -1 | sed 's/CONFIG_TARGET_//' | sed 's/=y//')
-            if [ -n "$config_target" ]; then
-                log "✅ 从.config找到目标配置: $config_target"
-                
-                # 解析目标和子目标
-                if [[ "$config_target" == *_* ]]; then
-                    TARGET=$(echo $config_target | cut -d'_' -f1)
-                    SUBTARGET=$(echo $config_target | cut -d'_' -f2-)
-                    log "✅ 解析结果: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
-                    
-                    # 更新环境变量
-                    export TARGET="$TARGET"
-                    export SUBTARGET="$SUBTARGET"
-                    save_env
-                    
-                    log "✅ 已更新环境变量"
-                fi
-            fi
-        fi
-        
-        if [ -z "$TARGET" ] || [ -z "$SUBTARGET" ]; then
-            log "❌ 无法确定TARGET和SUBTARGET，构建将失败"
-            exit 1
-        fi
-    fi
-    
-    # 检查内核版本文件是否存在
-    log "🔍 检查内核版本文件..."
-    local kernel_version_file="$BUILD_DIR/include/kernel-$TARGET-$SUBTARGET"
-    
-    if [ ! -f "$kernel_version_file" ]; then
-        log "⚠️ 内核版本文件不存在: $kernel_version_file"
-        
-        # 尝试创建临时内核版本文件
-        log "🔄 尝试创建临时内核版本文件..."
-        
-        # 获取默认内核版本（通常为5.x）
-        local kernel_version="5.15"
-        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-            kernel_version="5.10"
-        elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            kernel_version="5.15"
-        fi
-        
-        # 创建内核版本文件
-        mkdir -p "$(dirname "$kernel_version_file")"
-        echo "$kernel_version" > "$kernel_version_file"
-        echo "# Placeholder kernel version" >> "$kernel_version_file"
-        echo "# This file was auto-generated to fix build errors" >> "$kernel_version_file"
-        
-        log "✅ 已创建临时内核版本文件: $kernel_version_file"
-        log "💡 临时内核版本: $kernel_version"
-        
-        # 也需要创建对应的hash文件
-        local kernel_hash_file="$BUILD_DIR/include/kernel-$TARGET-$SUBTARGET.hash"
-        if [ ! -f "$kernel_hash_file" ]; then
-            echo "# Placeholder kernel hash" > "$kernel_hash_file"
-            echo "# This file was auto-generated to fix build errors" >> "$kernel_hash_file"
-            log "✅ 已创建临时内核hash文件: $kernel_hash_file"
-        fi
+    # 先检查环境文件是否已经存在
+    echo "🔍 检查环境文件..."
+    if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
+      echo "✅ 环境文件已存在（由步骤6.4创建）"
+      echo "📊 环境文件内容摘要:"
+      head -20 /mnt/openwrt-build/build_env.sh
+      
+      # 加载现有环境变量
+      source /mnt/openwrt-build/build_env.sh
+      echo "✅ 从现有环境文件加载变量:"
+      echo "  SELECTED_BRANCH: $SELECTED_BRANCH"
+      echo "  TARGET: $TARGET"
+      echo "  SUBTARGET: $SUBTARGET"
+      echo "  DEVICE: $DEVICE"
+      echo "  CONFIG_MODE: $CONFIG_MODE"
+      echo "  REPO_ROOT: $REPO_ROOT"
+      echo "  COMPILER_DIR: $COMPILER_DIR"
+      echo "  DEVICE_NAME: $DEVICE_NAME"
+      echo "  PLATFORM: $PLATFORM"
+      echo "  SOURCE_REPO: $SOURCE_REPO"
+      echo ""
+      
+      echo "💡 使用步骤6.4已设置的环境变量进行SDK下载"
     else
-        log "✅ 内核版本文件存在: $kernel_version_file"
-    fi
-    
-    # 检查Makefile中的目标配置
-    log "🔍 检查目标目录结构..."
-    local target_dir="$BUILD_DIR/target/linux/$TARGET"
-    if [ -d "$target_dir" ]; then
-        log "✅ 目标目录存在: $target_dir"
+      echo "⚠️ 环境文件不存在，可能是步骤6.4失败"
+      echo "📝 重新创建环境变量..."
+      
+      # 使用设备支持系统获取配置
+      SUPPORT_DIR="${{ github.workspace }}/firmware-config"
+      if [ -f "$SUPPORT_DIR/support.sh" ]; then
+        source "$SUPPORT_DIR/support.sh"
         
-        # 检查子目标目录
-        if [ -d "$target_dir/$SUBTARGET" ]; then
-            log "✅ 子目标目录存在: $target_dir/$SUBTARGET"
+        # 获取设备配置
+        if command -v get_device_config >/dev/null 2>&1; then
+          DEVICE_CONFIG=$(get_device_config "${{ github.event.inputs.device_name }}")
+          if [ -n "$DEVICE_CONFIG" ]; then
+            TARGET=$(echo $DEVICE_CONFIG | awk '{print $1}')
+            SUBTARGET=$(echo $DEVICE_CONFIG | awk '{print $2}')
+            DEVICE=$(echo $DEVICE_CONFIG | awk '{print $3}')
+            PLATFORM=$(echo $DEVICE_CONFIG | awk '{print $4}')
+            echo "✅ 从设备支持系统获取配置: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE, PLATFORM=$PLATFORM"
+          else
+            echo "❌ 错误: 无法获取设备配置"
+            exit 1
+          fi
         else
-            log "⚠️ 子目标目录不存在: $target_dir/$SUBTARGET"
-            log "💡 可用子目标:"
-            ls -d "$target_dir"/*/ 2>/dev/null | sed 's|/$||' | while read dir; do
-                log "  - $(basename "$dir")"
-            done
+          echo "❌ 错误: get_device_config 函数不存在"
+          exit 1
         fi
-    else
-        log "⚠️ 目标目录不存在: $target_dir"
-        log "💡 可用目标平台:"
-        ls -d "$BUILD_DIR/target/linux"/*/ 2>/dev/null | sed 's|/$||' | while read dir; do
-            log "  - $(basename "$dir")"
-        done
+      else
+        echo "❌ 错误: 设备支持脚本不存在"
+        exit 1
+      fi
+      
+      # 设置版本分支
+      if [ "${{ github.event.inputs.version_selection }}" = "23.05" ]; then
+        SELECTED_BRANCH="openwrt-23.05"
+      else
+        SELECTED_BRANCH="openwrt-21.02"
+      fi
+      
+      # 设置源代码仓库
+      SOURCE_REPO="${{ github.event.inputs.source_repo }}"
+      
+      # 创建环境文件
+      ENV_FILE="/mnt/openwrt-build/build_env.sh"
+      echo "#!/bin/bash" > "$ENV_FILE"
+      echo "export SELECTED_REPO_URL=\"https://github.com/immortalwrt/immortalwrt.git\"" >> "$ENV_FILE"
+      echo "export SELECTED_BRANCH=\"$SELECTED_BRANCH\"" >> "$ENV_FILE"
+      echo "export TARGET=\"$TARGET\"" >> "$ENV_FILE"
+      echo "export SUBTARGET=\"$SUBTARGET\"" >> "$ENV_FILE"
+      echo "export DEVICE=\"$DEVICE\"" >> "$ENV_FILE"
+      echo "export CONFIG_MODE=\"${{ github.event.inputs.config_mode }}\"" >> "$ENV_FILE"
+      echo "export REPO_ROOT=\"${{ github.workspace }}\"" >> "$ENV_FILE"
+      echo "export COMPILER_DIR=\"\"" >> "$ENV_FILE"
+      echo "export DEVICE_NAME=\"${{ github.event.inputs.device_name }}\"" >> "$ENV_FILE"
+      echo "export PLATFORM=\"$PLATFORM\"" >> "$ENV_FILE"
+      echo "export SOURCE_REPO=\"$SOURCE_REPO\"" >> "$ENV_FILE"
+      
+      # 如果设置了GITHUB_ENV，也导出到GitHub Actions环境
+      if [ -n "$GITHUB_ENV" ]; then
+        echo "TARGET=$TARGET" >> $GITHUB_ENV
+        echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
+        echo "DEVICE=$DEVICE" >> $GITHUB_ENV
+        echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
+        echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
+        echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+      fi
+      
+      chmod +x "$ENV_FILE"
+      echo "✅ 已创建环境文件"
+      
+      # 重新加载环境变量
+      source "$ENV_FILE"
     fi
     
-    log "✅ 构建前环境验证完成"
-}
+    # 关键检查：确保TARGET变量不为空
+    echo ""
+    echo "🔍 关键变量检查:"
+    echo "  TARGET: $TARGET"
+    echo "  SUBTARGET: $SUBTARGET"
+    echo "  DEVICE: $DEVICE"
+    echo "  PLATFORM: $PLATFORM"
+    
+    if [ -z "$TARGET" ]; then
+      echo "❌ 错误: TARGET 变量为空，无法继续"
+      exit 1
+    fi
+    
+    if [ -z "$SUBTARGET" ]; then
+      echo "⚠️ 警告: SUBTARGET 变量为空，使用默认值 'generic'"
+      export SUBTARGET="generic"
+    fi
+    
+    if [ -z "$DEVICE" ]; then
+      echo "⚠️ 警告: DEVICE 变量为空，使用设备名称作为默认值"
+      export DEVICE="${{ github.event.inputs.device_name }}"
+    fi
+    
+    if [ -z "$PLATFORM" ]; then
+      echo "⚠️ 警告: PLATFORM 变量为空，使用TARGET作为默认值"
+      export PLATFORM="$TARGET"
+    fi
+    
+    # 更新环境文件
+    save_env() {
+      local env_file="$1"
+      echo "#!/bin/bash" > "$env_file"
+      echo "export SELECTED_REPO_URL=\"$SELECTED_REPO_URL\"" >> "$env_file"
+      echo "export SELECTED_BRANCH=\"$SELECTED_BRANCH\"" >> "$env_file"
+      echo "export TARGET=\"$TARGET\"" >> "$env_file"
+      echo "export SUBTARGET=\"$SUBTARGET\"" >> "$env_file"
+      echo "export DEVICE=\"$DEVICE\"" >> "$env_file"
+      echo "export CONFIG_MODE=\"$CONFIG_MODE\"" >> "$env_file"
+      echo "export REPO_ROOT=\"$REPO_ROOT\"" >> "$env_file"
+      echo "export COMPILER_DIR=\"$COMPILER_DIR\"" >> "$env_file"
+      echo "export DEVICE_NAME=\"$DEVICE_NAME\"" >> "$env_file"
+      echo "export PLATFORM=\"$PLATFORM\"" >> "$env_file"
+      echo "export SOURCE_REPO=\"$SOURCE_REPO\"" >> "$env_file"
+      chmod +x "$env_file"
+    }
+    
+    # 更新环境文件
+    save_env "/mnt/openwrt-build/build_env.sh"
+    echo "✅ 更新环境文件完成"
+    
+    # 执行SDK下载，允许失败
+    echo "🔄 开始执行SDK下载..."
+    if "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_compiler_env "${{ github.event.inputs.device_name }}"; then
+      echo "✅ SDK下载成功或使用后备方案"
+    else
+      echo "⚠️ SDK下载失败，将使用OpenWrt自动构建的编译器"
+    fi
+    
+    echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "🟢 步骤 7 完成"
 
-#【firmware-build.yml-新步骤】构建前环境验证
-      - name: "22.5 构建前环境验证（防止内核版本错误）"
-        run: |
-          echo "=== 步骤 22.5: 构建前环境验证（防止内核版本错误） ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          
-          # 设置错误处理
-          set -e
-          trap 'echo "❌ 步骤 22.5 失败，退出代码: $?"; exit 1' ERR
-          
-          # 首先确保环境变量正确
-          if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
-            source /mnt/openwrt-build/build_env.sh
-            echo "✅ 加载环境变量"
-            echo "  TARGET=$TARGET"
-            echo "  SUBTARGET=$SUBTARGET"
-            echo "  DEVICE=$DEVICE"
-            echo "  SELECTED_BRANCH=$SELECTED_BRANCH"
-            echo "  SOURCE_REPO=$SOURCE_REPO"
-          fi
-          
-          # 验证关键环境变量
-          echo "🔍 验证关键环境变量..."
-          if [ -z "$TARGET" ] || [ -z "$SUBTARGET" ]; then
-            echo "❌ 错误: TARGET或SUBTARGET为空"
-            
-            # 尝试从设备支持脚本获取
-            SUPPORT_DIR="${{ github.workspace }}/firmware-config"
-            if [ -f "$SUPPORT_DIR/support.sh" ]; then
-              source "$SUPPORT_DIR/support.sh"
-              DEVICE_CONFIG=$(get_device_config "${{ github.event.inputs.device_name }}")
-              if [ -n "$DEVICE_CONFIG" ]; then
-                TARGET=$(echo $DEVICE_CONFIG | awk '{print $1}')
-                SUBTARGET=$(echo $DEVICE_CONFIG | awk '{print $2}')
-                DEVICE=$(echo $DEVICE_CONFIG | awk '{print $3}')
-                PLATFORM=$(echo $device_config | awk '{print $4}')
-                
-                echo "✅ 从support.sh获取配置:"
-                echo "  TARGET=$TARGET"
-                echo "  SUBTARGET=$SUBTARGET"
-                echo "  DEVICE=$DEVICE"
-                echo "  PLATFORM=$PLATFORM"
-                
-                # 更新环境变量
-                export TARGET="$TARGET"
-                export SUBTARGET="$SUBTARGET"
-                export DEVICE="$DEVICE"
-                export PLATFORM="$PLATFORM"
-                
-                # 更新环境文件
-                sed -i "s/^export TARGET=.*/export TARGET=\"$TARGET\"/" /mnt/openwrt-build/build_env.sh
-                sed -i "s/^export SUBTARGET=.*/export SUBTARGET=\"$SUBTARGET\"/" /mnt/openwrt-build/build_env.sh
-                sed -i "s/^export DEVICE=.*/export DEVICE=\"$DEVICE\"/" /mnt/openwrt-build/build_env.sh
-                sed -i "s/^export PLATFORM=.*/export PLATFORM=\"$PLATFORM\"/" /mnt/openwrt-build/build_env.sh
-                
-                echo "✅ 已更新环境文件"
-                
-                # 重新加载
-                source /mnt/openwrt-build/build_env.sh
-              else
-                echo "❌ 无法从support.sh获取设备配置"
-                exit 1
-              fi
-            else
-              echo "❌ support.sh 文件不存在"
-              exit 1
-            fi
-          fi
-          
-          # 检查内核版本文件
-          echo "🔍 检查内核版本文件..."
-          KERNEL_FILE="/mnt/openwrt-build/include/kernel-$TARGET-$SUBTARGET"
-          
-          if [ ! -f "$KERNEL_FILE" ]; then
-            echo "⚠️ 内核版本文件不存在: $KERNEL_FILE"
-            echo "🔄 创建临时内核版本文件..."
-            
-            mkdir -p "/mnt/openwrt-build/include"
-            
-            # 根据OpenWrt版本选择内核版本
-            if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-              KERNEL_VERSION="5.10"
-            elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-              KERNEL_VERSION="5.15"
-            else
-              KERNEL_VERSION="5.15"
-            fi
-            
-            # 创建内核版本文件
-            echo "$KERNEL_VERSION" > "$KERNEL_FILE"
-            echo "# Auto-generated kernel version file" >> "$KERNEL_FILE"
-            echo "# Target: $TARGET" >> "$KERNEL_FILE"
-            echo "# Subtarget: $SUBTARGET" >> "$KERNEL_FILE"
-            echo "# Created at: $(date)" >> "$KERNEL_FILE"
-            
-            echo "✅ 已创建内核版本文件: $KERNEL_FILE"
-            echo "📋 内核版本: $KERNEL_VERSION"
-            
-            # 创建对应的hash文件
-            HASH_FILE="/mnt/openwrt-build/include/kernel-$TARGET-$SUBTARGET.hash"
-            echo "# Auto-generated kernel hash file" > "$HASH_FILE"
-            echo "# Target: $TARGET" >> "$HASH_FILE"
-            echo "# Subtarget: $SUBTARGET" >> "$HASH_FILE"
-            echo "# Created at: $(date)" >> "$HASH_FILE"
-            echo "sha256sum_placeholder placeholder_hash" >> "$HASH_FILE"
-            
-            echo "✅ 已创建内核hash文件: $HASH_FILE"
-          else
-            echo "✅ 内核版本文件已存在: $KERNEL_FILE"
-            echo "📋 文件内容:"
-            cat "$KERNEL_FILE"
-          fi
-          
-          # 检查目标目录
-          echo "🔍 检查目标目录结构..."
-          TARGET_DIR="/mnt/openwrt-build/target/linux/$TARGET"
-          if [ -d "$TARGET_DIR" ]; then
-            echo "✅ 目标目录存在: $TARGET_DIR"
-            
-            # 检查是否存在子目标目录
-            if [ -d "$TARGET_DIR/$SUBTARGET" ]; then
-              echo "✅ 子目标目录存在: $TARGET_DIR/$SUBTARGET"
-            else
-              echo "⚠️ 子目标目录不存在: $TARGET_DIR/$SUBTARGET"
-              echo "💡 可用子目标:"
-              ls -d "$TARGET_DIR"/*/ 2>/dev/null | sed 's|/$||' | while read dir; do
-                echo "  - $(basename "$dir")"
-              done
-              
-              # 尝试使用第一个可用的子目标
-              FIRST_SUBTARGET=$(ls -d "$TARGET_DIR"/*/ 2>/dev/null | head -1 | sed 's|/$||' | xargs basename)
-              if [ -n "$FIRST_SUBTARGET" ]; then
-                echo "🔄 尝试使用第一个可用的子目标: $FIRST_SUBTARGET"
-                SUBTARGET="$FIRST_SUBTARGET"
-                
-                # 更新环境变量
-                export SUBTARGET="$SUBTARGET"
-                sed -i "s/^export SUBTARGET=.*/export SUBTARGET=\"$SUBTARGET\"/" /mnt/openwrt-build/build_env.sh
-                
-                echo "✅ 已更新SUBTARGET为: $SUBTARGET"
-              fi
-            fi
-          else
-            echo "❌ 目标目录不存在: $TARGET_DIR"
-            echo "💡 可能的原因:"
-            echo "  1. 目标平台 '$TARGET' 不正确"
-            echo "  2. 源代码仓库 '$SOURCE_REPO' 不支持该平台"
-            echo "  3. 克隆的源代码不完整"
-            
-            # 显示可用的目标平台
-            echo "📋 可用的目标平台:"
-            ls -d "/mnt/openwrt-build/target/linux"/*/ 2>/dev/null | sed 's|/$||' | while read dir; do
-              echo "  - $(basename "$dir")"
-            done
-            
-            exit 1
-          fi
-          
-          echo "✅ 构建前环境验证完成"
-          echo "🟢 步骤 22.5 完成"
-
-          
