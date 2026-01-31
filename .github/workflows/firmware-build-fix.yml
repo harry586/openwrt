@@ -1,10 +1,10 @@
 name: 🔧 全自动修复系统
 
 on:
-  # 简化触发条件，使用通配符
   push:
     paths:
-      - '**/fix*'  # 匹配所有fix文件
+      - '**/fix.txt'
+      - '**/fix.md'
       - '**/fixes/**'
   
   workflow_dispatch:
@@ -12,173 +12,253 @@ on:
 jobs:
   auto-fix-and-commit:
     runs-on: ubuntu-latest
+    # 最小但必要的权限
     permissions:
       contents: write
-      actions: write
     
     steps:
-      - name: 🛎️ 检出代码仓库
+      - name: 🛎️ 检出代码仓库（使用完整权限）
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+          # 关键配置：允许推送回同一个分支
+          persist-credentials: true
       
-      - name: 🔍 检查是否有fix文件
-        id: check_fix
+      - name: 🔍 查找并显示修复文件
+        id: find_fix
         run: |
-          echo "=== 🔍 检查fix文件 ==="
+          echo "=== 🔍 查找修复文件 ==="
+          echo "事件类型: ${{ github.event_name }}"
+          echo "触发分支: ${{ github.ref }}"
+          echo "工作目录: $(pwd)"
+          echo ""
           
-          # 查找所有可能的fix文件
-          FIND_CMD="find . -type f \( -name 'fix.txt' -o -name 'fix.md' -o -name '*fix*.txt' -o -name '*fix*.md' \) -not -path './.git/*'"
-          echo "执行查找: $FIND_CMD"
+          echo "📁 当前目录结构:"
+          find . -name "*.txt" -o -name "*.md" | grep -v ".git" | head -10
+          echo ""
           
-          FIX_FILES=$(eval $FIND_CMD)
-          
-          if [ -z "$FIX_FILES" ]; then
-            echo "❌ 未找到任何fix文件"
-            echo "has_fix_file=false" >> $GITHUB_OUTPUT
+          # 优先查找 firmware-config/fix.txt
+          if [ -f "firmware-config/fix.txt" ]; then
+            FIX_FILE="firmware-config/fix.txt"
+            echo "✅ 找到修复文件: $FIX_FILE"
+          elif [ -f "fix.txt" ]; then
+            FIX_FILE="fix.txt"
+            echo "✅ 找到修复文件: $FIX_FILE"
+          else
+            echo "❌ 未找到修复文件"
             exit 1
           fi
           
-          echo "✅ 找到fix文件:"
-          echo "$FIX_FILES"
-          
-          # 取第一个文件
-          MAIN_FIX=$(echo "$FIX_FILES" | head -1)
-          echo "主修复文件: $MAIN_FIX"
-          
-          # 统计修复标识
-          TOTAL_FIXES=$(grep -c "^#【" "$MAIN_FIX" 2>/dev/null || echo "0")
-          WORKFLOW_FIXES=$(grep -c "^#【firmware-build.yml" "$MAIN_FIX" 2>/dev/null || echo "0")
-          SCRIPT_FIXES=$(grep -c "^#【build_firmware_main.sh" "$MAIN_FIX" 2>/dev/null || echo "0")
-          
+          # 显示修复内容
           echo ""
+          echo "📄 修复文件内容（前20行）:"
+          head -20 "$FIX_FILE"
+          echo ""
+          
+          # 统计
+          TOTAL=$(grep -c "^#【" "$FIX_FILE" 2>/dev/null || echo "0")
+          WF=$(grep -c "^#【firmware-build.yml" "$FIX_FILE" 2>/dev/null || echo "0")
+          SH=$(grep -c "^#【build_firmware_main.sh" "$FIX_FILE" 2>/dev/null || echo "0")
+          
           echo "📊 修复统计:"
-          echo "- 总修复标识: $TOTAL_FIXES"
-          echo "- 工作流修复: $WORKFLOW_FIXES"
-          echo "- 脚本修复: $SCRIPT_FIXES"
+          echo "- 总标识: $TOTAL"
+          echo "- 工作流修复: $WF"
+          echo "- 脚本修复: $SH"
           
           # 输出
-          echo "fix_file=$MAIN_FIX" >> $GITHUB_OUTPUT
-          echo "total_fixes=$TOTAL_FIXES" >> $GITHUB_OUTPUT
-          echo "workflow_fixes=$WORKFLOW_FIXES" >> $GITHUB_OUTPUT
-          echo "script_fixes=$SCRIPT_FIXES" >> $GITHUB_OUTPUT
-          echo "has_fix_file=true" >> $GITHUB_OUTPUT
+          echo "fix_file=$FIX_FILE" >> $GITHUB_OUTPUT
+          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          echo "workflow=$WF" >> $GITHUB_OUTPUT
+          echo "script=$SH" >> $GITHUB_OUTPUT
       
-      - name: 📝 修改目标文件
-        id: modify_files
+      - name: 📝 修改工作流文件（如果存在修复）
+        id: fix_workflow
+        if: steps.find_fix.outputs.workflow != '0'
         run: |
-          echo "=== 📝 修改目标文件 ==="
+          echo "=== 📝 修改工作流文件 ==="
           
-          FIX_FILE="${{ steps.check_fix.outputs.fix_file }}"
-          echo "修复文件: $FIX_FILE"
+          WORKFLOW=".github/workflows/firmware-build.yml"
+          echo "目标工作流: $WORKFLOW"
           
-          MODIFIED_FILES=""
-          
-          # 1. 修改工作流文件
-          WORKFLOW_FILE=".github/workflows/firmware-build.yml"
-          if [ -f "$WORKFLOW_FILE" ] && [ "${{ steps.check_fix.outputs.workflow_fixes }}" != "0" ]; then
-            echo ""
-            echo "🔧 修改工作流文件: $WORKFLOW_FILE"
-            
-            # 备份
-            BACKUP="${WORKFLOW_FILE}.backup.$(date +%s)"
-            cp "$WORKFLOW_FILE" "$BACKUP"
-            echo "📦 备份: $BACKUP"
-            
-            # 添加修复标记
-            TIMESTAMP=$(date +%s)
-            echo "" >> "$WORKFLOW_FILE"
-            echo "# 🔧 自动修复标记" >> "$WORKFLOW_FILE"
-            echo "# 时间: $(date)" >> "$WORKFLOW_FILE"
-            echo "# 修复文件: $FIX_FILE" >> "$WORKFLOW_FILE"
-            echo "# 修复标识数: ${{ steps.check_fix.outputs.total_fixes }}" >> "$WORKFLOW_FILE"
-            echo "# 唯一标识: $TIMESTAMP" >> "$WORKFLOW_FILE"
-            
-            MODIFIED_FILES="$WORKFLOW_FILE"
-            echo "✅ 工作流文件已修改"
+          if [ ! -f "$WORKFLOW" ]; then
+            echo "❌ 工作流文件不存在"
+            exit 1
           fi
           
-          # 2. 修改脚本文件
-          SCRIPT_FILE="firmware-config/scripts/build_firmware_main.sh"
-          if [ -f "$SCRIPT_FILE" ] && [ "${{ steps.check_fix.outputs.script_fixes }}" != "0" ]; then
-            echo ""
-            echo "🔧 修改脚本文件: $SCRIPT_FILE"
-            
-            # 备份
-            BACKUP="${SCRIPT_FILE}.backup.$(date +%s)"
-            cp "$SCRIPT_FILE" "$BACKUP"
-            echo "📦 备份: $BACKUP"
-            
-            # 添加修复标记
-            TIMESTAMP=$(date +%s)
-            echo "" >> "$SCRIPT_FILE"
-            echo "# 🔧 自动修复标记" >> "$SCRIPT_FILE"
-            echo "# 时间: $(date)" >> "$SCRIPT_FILE"
-            echo "# 修复文件: $FIX_FILE" >> "$SCRIPT_FILE"
-            echo "# 修复标识数: ${{ steps.check_fix.outputs.total_fixes }}" >> "$SCRIPT_FILE"
-            echo "# 唯一标识: $TIMESTAMP" >> "$SCRIPT_FILE"
-            
-            MODIFIED_FILES="${MODIFIED_FILES},$SCRIPT_FILE"
-            echo "✅ 脚本文件已修改"
-          fi
+          # 显示原始信息
+          echo "📄 原始文件信息:"
+          echo "- 大小: $(wc -l < "$WORKFLOW") 行"
+          echo "- 修改时间: $(stat -c %y "$WORKFLOW" 2>/dev/null || echo "未知")"
+          echo ""
           
-          # 3. 如果没有修改任何文件，创建测试文件
-          if [ -z "$MODIFIED_FILES" ]; then
-            echo ""
-            echo "⚠️ 没有修改目标文件，创建测试文件..."
-            TEST_FILE="auto-fix-test-$(date +%s).txt"
-            echo "# 自动修复测试" > "$TEST_FILE"
-            echo "# 时间: $(date)" >> "$TEST_FILE"
-            echo "# 修复文件: $FIX_FILE" >> "$TEST_FILE"
-            
-            MODIFIED_FILES="$TEST_FILE"
-            echo "✅ 创建测试文件: $TEST_FILE"
-          fi
+          # 创建临时文件
+          TEMP_FILE="${WORKFLOW}.temp"
+          cp "$WORKFLOW" "$TEMP_FILE"
           
-          # 输出
-          if [ -n "$MODIFIED_FILES" ]; then
-            echo "modified_files=${MODIFIED_FILES#,}" >> $GITHUB_OUTPUT
+          # 在文件开头添加注释（不是修改步骤内容）
+          TIMESTAMP=$(date +%s)
+          HEADER="# 🔧 自动修复标记 - 时间戳: $TIMESTAMP"
+          
+          # 如果文件没有这个标记，添加它
+          if ! grep -q "🔧 自动修复标记" "$TEMP_FILE"; then
+            # 在文件开头添加
+            echo "$HEADER" > "${TEMP_FILE}.new"
+            echo "# 修复时间: $(date)" >> "${TEMP_FILE}.new"
+            echo "# 修复文件: ${{ steps.find_fix.outputs.fix_file }}" >> "${TEMP_FILE}.new"
+            echo "" >> "${TEMP_FILE}.new"
+            cat "$TEMP_FILE" >> "${TEMP_FILE}.new"
+            mv "${TEMP_FILE}.new" "$TEMP_FILE"
+            
+            echo "✅ 添加了修复标记"
           else
-            echo "modified_files=none" >> $GITHUB_OUTPUT
+            echo "⚠️ 修复标记已存在，更新它"
+            # 更新已有的标记
+            sed -i "1s/.*/$HEADER/" "$TEMP_FILE"
           fi
+          
+          # 比较差异
+          if diff -u "$WORKFLOW" "$TEMP_FILE"; then
+            echo "⚠️ 没有差异，不更新文件"
+          else
+            echo "✅ 发现差异，更新工作流文件"
+            mv "$TEMP_FILE" "$WORKFLOW"
+            echo "workflow_modified=true" >> $GITHUB_OUTPUT
+          fi
+          
+          rm -f "$TEMP_FILE" "${TEMP_FILE}.new" 2>/dev/null || true
       
-      - name: 💾 提交更改
-        id: commit
-        if: steps.modify_files.outputs.modified_files != 'none'
+      - name: 📝 修改脚本文件（如果存在修复）
+        id: fix_script
+        if: steps.find_fix.outputs.script != '0'
         run: |
-          echo "=== 💾 提交更改 ==="
+          echo "=== 📝 修改脚本文件 ==="
           
-          # 配置git
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "GitHub Actions"
+          SCRIPT="firmware-config/scripts/build_firmware_main.sh"
+          echo "目标脚本: $SCRIPT"
           
-          echo "📊 当前Git状态:"
+          if [ ! -f "$SCRIPT" ]; then
+            echo "❌ 脚本文件不存在"
+            exit 1
+          fi
+          
+          # 显示原始信息
+          echo "📄 原始文件信息:"
+          echo "- 大小: $(wc -l < "$SCRIPT") 行"
+          echo "- 修改时间: $(stat -c %y "$SCRIPT" 2>/dev/null || echo "未知")"
+          echo ""
+          
+          # 创建备份
+          BACKUP="${SCRIPT}.backup.$(date +%s)"
+          cp "$SCRIPT" "$BACKUP"
+          echo "📦 创建备份: $BACKUP"
+          
+          # 在文件末尾添加时间戳
+          TIMESTAMP=$(date +%s)
+          echo "" >> "$SCRIPT"
+          echo "# 🔧 自动修复 - $(date)" >> "$SCRIPT"
+          echo "# 时间戳: $TIMESTAMP" >> "$SCRIPT"
+          
+          echo "✅ 脚本文件已修改"
+          echo "script_modified=true" >> $GITHUB_OUTPUT
+      
+      - name: 🔍 显示Git状态
+        if: always()
+        run: |
+          echo "=== 🔍 Git状态 ==="
+          echo ""
+          
+          echo "📊 状态简略:"
           git status --short
           echo ""
           
-          echo "➕ 添加所有更改..."
-          git add -A
+          echo "📝 修改的文件:"
+          git diff --name-only 2>/dev/null || echo "无差异"
+          echo ""
           
+          echo "📋 具体更改:"
+          git diff --stat 2>/dev/null || echo "无更改统计"
+      
+      - name: 💾 提交更改（如果有修改）
+        id: commit
+        if: |
+          steps.fix_workflow.outputs.workflow_modified == 'true' ||
+          steps.fix_script.outputs.script_modified == 'true'
+        run: |
+          echo "=== 💾 提交更改 ==="
+          echo ""
+          
+          # 配置Git
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          echo "🎯 Git配置完成"
+          echo ""
+          
+          echo "📊 当前状态:"
+          git status
+          echo ""
+          
+          # 只添加特定的文件，不添加备份文件
+          echo "➕ 添加修改的文件..."
+          FILES_TO_ADD=""
+          
+          if [ "${{ steps.fix_workflow.outputs.workflow_modified }}" = "true" ]; then
+            git add ".github/workflows/firmware-build.yml"
+            echo "✅ 添加工作流文件"
+          fi
+          
+          if [ "${{ steps.fix_script.outputs.script_modified }}" = "true" ]; then
+            git add "firmware-config/scripts/build_firmware_main.sh"
+            echo "✅ 添加脚本文件"
+          fi
+          
+          echo ""
+          
+          # 检查是否有可提交的内容
+          if git diff --cached --quiet; then
+            echo "⚠️ 没有需要提交的更改"
+            exit 0
+          fi
+          
+          # 提交
           echo "💾 提交更改..."
-          COMMIT_MSG="🔧 自动修复 - "
+          COMMIT_MSG="🔧 自动修复"
           
-          if [ "${{ steps.check_fix.outputs.workflow_fixes }}" != "0" ]; then
-            COMMIT_MSG="${COMMIT_MSG}工作流(${{ steps.check_fix.outputs.workflow_fixes }}) "
+          if [ "${{ steps.find_fix.outputs.workflow }}" != "0" ]; then
+            COMMIT_MSG="${COMMIT_MSG} - 工作流"
           fi
           
-          if [ "${{ steps.check_fix.outputs.script_fixes }}" != "0" ]; then
-            COMMIT_MSG="${COMMIT_MSG}脚本(${{ steps.check_fix.outputs.script_fixes }}) "
+          if [ "${{ steps.find_fix.outputs.script }}" != "0" ]; then
+            COMMIT_MSG="${COMMIT_MSG} - 脚本"
           fi
           
-          COMMIT_MSG="${COMMIT_MSG}[skip ci]"
+          COMMIT_MSG="${COMMIT_MSG} [skip ci]"
           
+          echo "📋 提交信息: $COMMIT_MSG"
           git commit -m "$COMMIT_MSG"
           
-          echo "🚀 推送到仓库..."
-          git push
+          echo ""
+          echo "📄 提交详情:"
+          git log -1 --oneline
+          echo ""
           
-          echo "✅ 提交完成!"
+          # 推送 - 使用简单的方式
+          echo "🚀 推送到仓库..."
+          echo "当前分支: $(git branch --show-current)"
+          
+          # 尝试推送，如果失败显示错误但不退出
+          if git push origin HEAD; then
+            echo "✅ 推送成功"
+          else
+            echo "❌ 推送失败，错误信息:"
+            git push origin HEAD 2>&1 || true
+            echo ""
+            echo "💡 尝试使用不同的推送方式..."
+            
+            # 尝试其他推送方式
+            git push origin HEAD:$(git branch --show-current) 2>&1 || echo "推送失败"
+          fi
       
       - name: 📋 生成报告
         if: always()
@@ -186,33 +266,32 @@ jobs:
           echo "### 🔧 自动修复报告" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          echo "#### 📅 基本信息" >> $GITHUB_STEP_SUMMARY
-          echo "- **触发时间:** $(date)" >> $GITHUB_STEP_SUMMARY
-          echo "- **触发方式:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **修复文件:** \`${{ steps.check_fix.outputs.fix_file }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**时间:** $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "**触发方式:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**修复文件:** ${{ steps.find_fix.outputs.fix_file }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          echo "#### 📊 修复统计" >> $GITHUB_STEP_SUMMARY
-          echo "- **总修复标识:** ${{ steps.check_fix.outputs.total_fixes }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **工作流修复:** ${{ steps.check_fix.outputs.workflow_fixes }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **脚本修复:** ${{ steps.check_fix.outputs.script_fixes }}" >> $GITHUB_STEP_SUMMARY
+          echo "**修复统计:**" >> $GITHUB_STEP_SUMMARY
+          echo "- 总标识: ${{ steps.find_fix.outputs.total }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 工作流修复: ${{ steps.find_fix.outputs.workflow }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 脚本修复: ${{ steps.find_fix.outputs.script }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          echo "#### 📝 修改文件" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ steps.modify_files.outputs.modified_files }}" != "none" ]; then
-            echo "✅ **已修改文件:**" >> $GITHUB_STEP_SUMMARY
-            IFS=',' read -ra FILES <<< "${{ steps.modify_files.outputs.modified_files }}"
-            for file in "${FILES[@]}"; do
-              echo "- \`$file\`" >> $GITHUB_STEP_SUMMARY
-            done
-          else
-            echo "📭 **无文件被修改**" >> $GITHUB_STEP_SUMMARY
+          echo "**修改状态:**" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.fix_workflow.outputs.workflow_modified }}" = "true" ]; then
+            echo "- ✅ 工作流文件已修改" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ steps.fix_script.outputs.script_modified }}" = "true" ]; then
+            echo "- ✅ 脚本文件已修改" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ steps.fix_workflow.outputs.workflow_modified }}" != "true" ] && [ "${{ steps.fix_script.outputs.script_modified }}" != "true" ]; then
+            echo "- 📭 无文件被修改" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          echo "#### 📤 提交状态" >> $GITHUB_STEP_SUMMARY
+          echo "**提交状态:**" >> $GITHUB_STEP_SUMMARY
           if [[ "${{ steps.commit.outcome }}" == "success" ]]; then
-            echo "✅ **已提交并推送**" >> $GITHUB_STEP_SUMMARY
+            echo "✅ 已提交更改" >> $GITHUB_STEP_SUMMARY
           else
-            echo "❌ **提交失败或跳过**" >> $GITHUB_STEP_SUMMARY
+            echo "📭 未提交或提交失败" >> $GITHUB_STEP_SUMMARY
           fi
