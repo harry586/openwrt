@@ -4,15 +4,9 @@ name: 🔧 自动修复系统
 on:
   push:
     paths:
-      - '**/fix.txt'  # 匹配任意位置的fix.txt
-      - 'fix.txt'     # 根目录的fix.txt
+      - 'fix.txt'
   
   workflow_dispatch:
-    inputs:
-      fix_file_path:
-        description: '修复文件路径（可选，默认搜索fix.txt）'
-        required: false
-        default: ''
 
 jobs:
   auto-fix:
@@ -27,385 +21,279 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: 🔍 查找修复文件
+      - name: 🔍 检查修复文件
         run: |
-          echo "=== 查找修复文件 ==="
+          echo "=== 检查修复文件 ==="
           
-          # 确定要查找的文件路径
-          if [ -n "${{ github.event.inputs.fix_file_path }}" ]; then
-            # 使用手动输入的路径
-            FIX_FILE="${{ github.event.inputs.fix_file_path }}"
-            echo "📁 使用手动指定的修复文件: $FIX_FILE"
-          else
-            # 搜索所有fix.txt文件
-            echo "🔍 搜索修复文件..."
-            FIX_FILES=$(find . -name "fix.txt" -type f | grep -v ".git" | head -5)
-            
-            if [ -z "$FIX_FILES" ]; then
-              echo "❌ 没有找到任何fix.txt文件"
-              exit 1
-            fi
-            
-            # 选择第一个找到的文件（可以按需调整策略）
-            FIX_FILE=$(echo "$FIX_FILES" | head -1)
-            echo "📁 找到修复文件: $FIX_FILE"
-            
-            if [ $(echo "$FIX_FILES" | wc -l) -gt 1 ]; then
-              echo "⚠️  找到多个修复文件，使用第一个: $FIX_FILE"
-              echo "其他文件:"
-              echo "$FIX_FILES" | tail -n +2 | while IFS= read -r file; do
-                echo "  - $file"
-              done
-            fi
-          fi
-          
-          # 验证文件存在
-          if [ ! -f "$FIX_FILE" ]; then
-            echo "❌ 修复文件不存在: $FIX_FILE"
+          if [ ! -f "fix.txt" ]; then
+            echo "❌ 没有找到修复文件 fix.txt"
             exit 1
           fi
           
-          echo "✅ 使用修复文件: $FIX_FILE"
-          echo "文件路径: $(realpath "$FIX_FILE")"
+          echo "✅ 找到修复文件 fix.txt"
+          echo "修复文件大小: $(wc -l < fix.txt) 行"
+          echo "修复文件内容预览:"
+          head -3 fix.txt
           
-          # 设置环境变量供后续步骤使用
-          echo "FIX_FILE_PATH=$FIX_FILE" >> $GITHUB_ENV
+          # 检查是否有系统性标识
+          if grep -q "#【" fix.txt; then
+            echo "🔧 检测到系统性标识"
+            echo "找到的标识:"
+            grep -o "#【[^】]*】" fix.txt
+          else
+            echo "⚠️ 没有检测到系统性标识"
+          fi
       
-      - name: 📝 应用修复并推送
-        env:
-          FIX_FILE: ${{ env.FIX_FILE_PATH }}
+      - name: 📝 解析并应用修复
         run: |
-          echo "=== 应用修复并推送 ==="
-          echo "修复文件: $FIX_FILE"
+          echo "=== 解析并应用修复 ==="
           
-          # 1. 读取修复指令
-          echo "📖 读取修复指令..."
-          FIX_CONTENT=$(cat "$FIX_FILE")
+          # 1. 查找目标文件
+          TARGET_FILE=""
           
-          if [ -z "$FIX_CONTENT" ]; then
-            echo "⚠️ 修复文件为空，跳过修复"
-            
-            # 配置Git
-            git config --local user.email "github-actions[bot]@users.noreply.github.com"
-            git config --local user.name "GitHub Actions"
-            
-            # 清空修复文件
-            > "$FIX_FILE"
-            git add "$FIX_FILE"
-            git commit -m "🧹 清理空修复文件 [skip ci]" || true
-            git push origin HEAD:main
-            exit 0
+          # 首先尝试在常见位置查找 build_firmware_main.sh
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            TARGET_FILE="firmware-config/scripts/build_firmware_main.sh"
+          elif [ -f "scripts/build_firmware_main.sh" ]; then
+            TARGET_FILE="scripts/build_firmware_main.sh"
+          elif [ -f "build_firmware_main.sh" ]; then
+            TARGET_FILE="build_firmware_main.sh"
+          else
+            # 使用find命令搜索
+            echo "🔍 开始全目录搜索 build_firmware_main.sh..."
+            TARGET_FILE=$(find . -name "build_firmware_main.sh" -type f ! -path "./.git/*" | head -1)
           fi
           
-          # 2. 检查是否有系统性标识
-          echo "🔍 检查系统性标识..."
+          if [ -z "$TARGET_FILE" ]; then
+            echo "❌ 错误: 未找到 build_firmware_main.sh 文件"
+            echo "请确保文件存在于以下位置之一:"
+            echo "- firmware-config/scripts/build_firmware_main.sh"
+            echo "- scripts/build_firmware_main.sh" 
+            echo "- build_firmware_main.sh"
+            exit 1
+          fi
           
-          # 查找所有系统性标识
-          SYSTEM_IDENTIFIERS=($(grep -o '#【[^】]*】' "$FIX_FILE" | sort -u))
+          echo "✅ 找到目标文件: $TARGET_FILE"
           
-          if [ ${#SYSTEM_IDENTIFIERS[@]} -gt 0 ]; then
-            echo "🔧 检测到系统性标识，执行修复..."
+          # 2. 备份原文件
+          BACKUP_FILE="${TARGET_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+          cp "$TARGET_FILE" "$BACKUP_FILE"
+          echo "✅ 已备份原文件到: $BACKUP_FILE"
+          
+          # 3. 读取修复内容
+          echo "📖 读取修复内容..."
+          FIX_CONTENT=$(cat fix.txt)
+          
+          # 4. 提取所有函数并替换
+          echo "🔧 开始应用函数修复..."
+          
+          # 查找所有函数标识
+          FUNCTION_LINES=$(grep -n "#【build_firmware_main.sh-" fix.txt || true)
+          
+          if [ -z "$FUNCTION_LINES" ]; then
+            echo "⚠️ 修复文件中没有找到函数标识"
+            echo "💡 尝试将整个文件追加到目标文件末尾"
+            echo "" >> "$TARGET_FILE"
+            echo "# ============ 自动修复内容 ============" >> "$TARGET_FILE"
+            echo "# 修复时间: $(date)" >> "$TARGET_FILE"
+            echo "# 来源: fix.txt" >> "$TARGET_FILE"
+            cat fix.txt >> "$TARGET_FILE"
+            echo "# ============ 修复结束 ============" >> "$TARGET_FILE"
+          else
+            echo "📋 找到的函数标识:"
+            echo "$FUNCTION_LINES"
             
-            # 存储修改过的文件列表
-            MODIFIED_FILES=""
-            
-            # 处理每个系统性标识
-            for identifier in "${SYSTEM_IDENTIFIERS[@]}"; do
-              echo "🔨 处理标识: $identifier"
+            # 处理每个函数
+            echo "$FUNCTION_LINES" | while IFS= read -r line_info; do
+              # 提取行号
+              LINE_NUM=$(echo "$line_info" | cut -d: -f1)
               
-              # 提取文件名和函数名
-              # 格式: #【build_firmware_main.sh-01】配置应用函数（修复21.02 USB问题版）
-              IDENTIFIER_TEXT=${identifier#【}
-              IDENTIFIER_TEXT=${IDENTIFIER_TEXT%】}
+              # 提取完整标识
+              IDENTIFIER=$(echo "$line_info" | cut -d: -f2-)
               
-              # 分割为文件名和编号
-              # build_firmware_main.sh-01
-              IDENTIFIER_PART=$(echo "$IDENTIFIER_TEXT" | awk -F'】' '{print $1}')
+              # 提取函数名（从标识后的行获取）
+              NEXT_LINE=$((LINE_NUM + 1))
+              FUNC_LINE=$(sed -n "${NEXT_LINE}p" fix.txt)
               
-              # 提取文件名（去掉-01部分）
-              TARGET_FILE=$(echo "$IDENTIFIER_PART" | awk -F'-' '{print $1}')
+              # 从函数行提取函数名（例如 "download_openwrt_sdk() {"）
+              FUNC_NAME=$(echo "$FUNC_LINE" | sed 's/(.*//' | sed 's/[[:space:]]*$//')
               
-              # 提取行号或编号（如果有）
-              IDENTIFIER_NUM=$(echo "$IDENTIFIER_PART" | awk -F'-' '{print $2}' | sed 's/[^0-9]//g')
-              
-              # 提取函数名称（如果有）
-              FUNCTION_NAME=$(grep -A1 "$identifier" "$FIX_FILE" | grep -v "$identifier" | head -1 | sed 's/(.*//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
-              
-              echo "📁 目标文件: $TARGET_FILE"
-              echo "🔢 标识编号: $IDENTIFIER_NUM"
-              echo "⚙️  函数名称: $FUNCTION_NAME"
-              
-              # 查找目标文件
-              FOUND_TARGET_FILE=""
-              
-              # 尝试在不同位置查找文件
-              possible_locations=(
-                "./$TARGET_FILE"
-                "./scripts/$TARGET_FILE"
-                "./bin/$TARGET_FILE"
-                "./usr/bin/$TARGET_FILE"
-                "./src/$TARGET_FILE"
-                "./build/$TARGET_FILE"
-              )
-              
-              for location in "${possible_locations[@]}"; do
-                if [ -f "$location" ]; then
-                  FOUND_TARGET_FILE="$location"
-                  echo "✅ 找到目标文件: $FOUND_TARGET_FILE"
-                  break
-                fi
-              done
-              
-              # 如果没找到，使用find命令搜索
-              if [ -z "$FOUND_TARGET_FILE" ]; then
-                echo "🔍 未在预定义位置找到，开始全目录搜索..."
-                FOUND_TARGET_FILE=$(find . -name "$TARGET_FILE" -type f ! -path "./.git/*" | head -1)
-                if [ -n "$FOUND_TARGET_FILE" ]; then
-                  echo "✅ 搜索到目标文件: $FOUND_TARGET_FILE"
-                else
-                  # 如果还是没找到，创建文件
-                  echo "📝 目标文件不存在，将在scripts目录创建"
-                  mkdir -p scripts
-                  FOUND_TARGET_FILE="./scripts/$TARGET_FILE"
-                  touch "$FOUND_TARGET_FILE"
-                  echo "✅ 已创建文件: $FOUND_TARGET_FILE"
-                fi
-              fi
-              
-              # 备份原文件
-              if [ -f "$FOUND_TARGET_FILE" ] && [ -s "$FOUND_TARGET_FILE" ]; then
-                BACKUP_FILE="${FOUND_TARGET_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
-                cp "$FOUND_TARGET_FILE" "$BACKUP_FILE"
-                echo "✅ 已备份原文件到: $BACKUP_FILE"
-              fi
-              
-              # 提取标识对应的内容（从标识行开始，到下一个标识或文件结束）
-              echo "📋 提取修复内容..."
-              
-              # 找到标识行号
-              IDENTIFIER_LINE=$(grep -n "$identifier" "$FIX_FILE" | head -1 | cut -d: -f1)
-              
-              if [ -n "$IDENTIFIER_LINE" ]; then
-                echo "📌 标识行号: $IDENTIFIER_LINE"
+              if [ -n "$FUNC_NAME" ]; then
+                echo "🔨 处理函数: $FUNC_NAME (标识: $IDENTIFIER)"
                 
-                # 读取文件总行数
-                FILE_LINES=$(wc -l < "$FIX_FILE")
+                # 提取函数的开始和结束位置
+                FUNC_START=$LINE_NUM
+                FUNC_END=""
                 
-                # 提取从标识行开始的内容，直到遇到下一个标识或文件结束
-                EXTRACT_CONTENT=""
-                CURRENT_LINE=$IDENTIFIER_LINE
+                # 从函数开始行查找函数结束（遇到下一个标识或文件结束）
+                TOTAL_LINES=$(wc -l < fix.txt)
+                CURRENT_LINE=$FUNC_START
                 
-                while [ $CURRENT_LINE -le $FILE_LINES ]; do
-                  LINE_CONTENT=$(sed -n "${CURRENT_LINE}p" "$FIX_FILE")
-                  
-                  # 检查是否到达下一个标识（跳过第一个，因为那是当前标识）
-                  if [ $CURRENT_LINE -gt $IDENTIFIER_LINE ] && [[ "$LINE_CONTENT" =~ \#【.*】 ]]; then
-                    echo "⏹️  检测到下一个标识，停止提取"
-                    break
+                while [ $CURRENT_LINE -le $TOTAL_LINES ]; do
+                  # 如果是下一个函数标识（但不是当前这个）
+                  if [ $CURRENT_LINE -gt $FUNC_START ]; then
+                    LINE_CONTENT=$(sed -n "${CURRENT_LINE}p" fix.txt)
+                    if [[ "$LINE_CONTENT" =~ "#【build_firmware_main.sh-" ]]; then
+                      FUNC_END=$((CURRENT_LINE - 1))
+                      break
+                    fi
                   fi
-                  
-                  EXTRACT_CONTENT="${EXTRACT_CONTENT}${LINE_CONTENT}"$'\n'
                   ((CURRENT_LINE++))
                 done
                 
-                echo "📄 提取的内容长度: ${#EXTRACT_CONTENT} 字符"
+                if [ -z "$FUNC_END" ]; then
+                  FUNC_END=$TOTAL_LINES
+                fi
                 
-                # 根据标识类型执行不同的修复策略
-                if [[ "$IDENTIFIER_TEXT" == *build_firmware_main.sh* ]] && [[ "$FUNCTION_NAME" == *apply_config* ]]; then
-                  echo "🔧 执行build_firmware_main.sh函数替换..."
+                echo "📌 函数范围: 第 $FUNC_START 行到第 $FUNC_END 行"
+                
+                # 提取函数内容
+                FUNC_CONTENT=$(sed -n "${FUNC_START},${FUNC_END}p" fix.txt)
+                
+                # 在原文件中查找该函数
+                echo "🔍 在原文件中查找函数 $FUNC_NAME..."
+                ORIG_FUNC_LINE=$(grep -n "^${FUNC_NAME}()" "$TARGET_FILE" | head -1 | cut -d: -f1)
+                
+                if [ -n "$ORIG_FUNC_LINE" ]; then
+                  echo "✅ 找到原函数，开始行: $ORIG_FUNC_LINE"
                   
-                  # 函数替换策略
-                  if [ -n "$FUNCTION_NAME" ] && [ "$FUNCTION_NAME" != "" ]; then
-                    echo "🔨 替换函数: $FUNCTION_NAME"
+                  # 查找原函数的结束位置
+                  ORIG_FILE_LINES=$(wc -l < "$TARGET_FILE")
+                  ORIG_FUNC_END=$ORIG_FUNC_LINE
+                  ORIG_CURRENT_LINE=$((ORIG_FUNC_LINE + 1))
+                  
+                  while [ $ORIG_CURRENT_LINE -le $ORIG_FILE_LINES ]; do
+                    ORIG_LINE_CONTENT=$(sed -n "${ORIG_CURRENT_LINE}p" "$TARGET_FILE")
                     
-                    # 创建临时文件
-                    TEMP_FILE="${FOUND_TARGET_FILE}.temp"
-                    
-                    if [ -f "$FOUND_TARGET_FILE" ] && [ -s "$FOUND_TARGET_FILE" ]; then
-                      # 在原文件中查找函数定义
-                      FUNC_START_LINE=$(grep -n "^${FUNCTION_NAME}()" "$FOUND_TARGET_FILE" | head -1 | cut -d: -f1)
-                      
-                      if [ -n "$FUNC_START_LINE" ]; then
-                        echo "✅ 在原文件中找到函数 $FUNCTION_NAME，开始行: $FUNC_START_LINE"
-                        
-                        # 查找函数结束位置
-                        FILE_LINES_COUNT=$(wc -l < "$FOUND_TARGET_FILE")
-                        FUNC_END_LINE=$FUNC_START_LINE
-                        LINE_NUM=$((FUNC_START_LINE + 1))
-                        
-                        while [ $LINE_NUM -le $FILE_LINES_COUNT ]; do
-                          LINE=$(sed -n "${LINE_NUM}p" "$FOUND_TARGET_FILE")
-                          
-                          # 如果是下一个函数开始或文件结束
-                          if [[ "$LINE" =~ ^[a-zA-Z_][a-zA-Z0-9_]*\(\) ]] || [ $LINE_NUM -eq $FILE_LINES_COUNT ]; then
-                            FUNC_END_LINE=$((LINE_NUM - 1))
-                            break
-                          fi
-                          ((LINE_NUM++))
-                        done
-                        
-                        if [ $FUNC_END_LINE -eq $FUNC_START_LINE ]; then
-                          FUNC_END_LINE=$FILE_LINES_COUNT
-                        fi
-                        
-                        echo "📌 函数范围: 第 $FUNC_START_LINE 行到第 $FUNC_END_LINE 行"
-                        
-                        # 构建新文件：原文件前部分 + 新函数 + 原文件后部分
-                        head -n $((FUNC_START_LINE - 1)) "$FOUND_TARGET_FILE" > "$TEMP_FILE"
-                        echo "$EXTRACT_CONTENT" >> "$TEMP_FILE"
-                        tail -n +$((FUNC_END_LINE + 1)) "$FOUND_TARGET_FILE" >> "$TEMP_FILE"
-                        
-                        # 检查新文件是否有效
-                        if [ $(wc -l < "$TEMP_FILE") -gt 0 ]; then
-                          mv "$TEMP_FILE" "$FOUND_TARGET_FILE"
-                          echo "✅ 函数 $FUNCTION_NAME 替换成功"
-                        else
-                          echo "⚠️ 替换失败，保留原文件"
-                          rm -f "$TEMP_FILE"
-                        fi
-                        
-                      else
-                        # 函数不存在，追加到文件末尾
-                        echo "📝 函数 $FUNCTION_NAME 不存在，追加到文件末尾"
-                        echo "" >> "$FOUND_TARGET_FILE"
-                        echo "$EXTRACT_CONTENT" >> "$FOUND_TARGET_FILE"
-                        echo "✅ 函数 $FUNCTION_NAME 已追加"
-                      fi
-                      
-                    else
-                      # 文件不存在或为空，直接创建
-                      echo "📝 创建新文件"
-                      echo "#!/bin/bash" > "$FOUND_TARGET_FILE"
-                      echo "$EXTRACT_CONTENT" >> "$FOUND_TARGET_FILE"
-                      chmod +x "$FOUND_TARGET_FILE"
-                      echo "✅ 已创建包含函数的新文件"
+                    # 如果找到下一个函数定义或文件结束
+                    if [[ "$ORIG_LINE_CONTENT" =~ ^[a-zA-Z_][a-zA-Z0-9_]*\(\) ]] || [ $ORIG_CURRENT_LINE -eq $ORIG_FILE_LINES ]; then
+                      ORIG_FUNC_END=$((ORIG_CURRENT_LINE - 1))
+                      break
                     fi
-                    
+                    ((ORIG_CURRENT_LINE++))
+                  done
+                  
+                  if [ $ORIG_FUNC_END -eq $ORIG_FUNC_LINE ]; then
+                    ORIG_FUNC_END=$ORIG_FILE_LINES
+                  fi
+                  
+                  echo "📌 原函数范围: 第 $ORIG_FUNC_LINE 行到第 $ORIG_FUNC_END 行"
+                  
+                  # 创建临时文件进行替换
+                  TEMP_FILE="${TARGET_FILE}.temp"
+                  
+                  # 原文件前部分 + 新函数内容 + 原文件后部分
+                  head -n $((ORIG_FUNC_LINE - 1)) "$TARGET_FILE" > "$TEMP_FILE"
+                  echo "$FUNC_CONTENT" >> "$TEMP_FILE"
+                  tail -n +$((ORIG_FUNC_END + 1)) "$TARGET_FILE" >> "$TEMP_FILE"
+                  
+                  # 验证替换结果
+                  if [ $(wc -l < "$TEMP_FILE") -gt 10 ]; then
+                    mv "$TEMP_FILE" "$TARGET_FILE"
+                    echo "✅ 函数 $FUNC_NAME 替换成功"
                   else
-                    echo "❌ 未找到函数名，使用简单追加"
-                    echo "" >> "$FOUND_TARGET_FILE"
-                    echo "$EXTRACT_CONTENT" >> "$FOUND_TARGET_FILE"
-                    echo "✅ 内容已追加到文件"
+                    echo "⚠️ 替换后文件太小，可能有错误，跳过此函数"
+                    rm -f "$TEMP_FILE"
                   fi
                   
                 else
-                  # 其他类型的修复：直接替换或追加
-                  echo "🔧 执行通用修复策略..."
-                  
-                  # 检查是否是完整的文件内容（包含#!/bin/bash）
-                  if [[ "$EXTRACT_CONTENT" == *"#!/bin/bash"* ]]; then
-                    echo "📝 检测到完整脚本，直接替换文件"
-                    echo "$EXTRACT_CONTENT" > "$FOUND_TARGET_FILE"
-                    chmod +x "$FOUND_TARGET_FILE"
-                    echo "✅ 文件已完整替换"
-                  else
-                    # 追加内容
-                    echo "📝 追加内容到文件"
-                    echo "" >> "$FOUND_TARGET_FILE"
-                    echo "$EXTRACT_CONTENT" >> "$FOUND_TARGET_FILE"
-                    echo "✅ 内容已追加"
-                  fi
+                  echo "⚠️ 在原文件中未找到函数 $FUNC_NAME，追加到文件末尾"
+                  echo "" >> "$TARGET_FILE"
+                  echo "# ============ 自动修复追加函数: $FUNC_NAME ============" >> "$TARGET_FILE"
+                  echo "$FUNC_CONTENT" >> "$TARGET_FILE"
+                  echo "✅ 函数 $FUNC_NAME 已追加"
                 fi
-                
-                # 记录修改的文件
-                if [[ ! " $MODIFIED_FILES " =~ " $FOUND_TARGET_FILE " ]]; then
-                  MODIFIED_FILES="$MODIFIED_FILES $FOUND_TARGET_FILE"
-                fi
-                
-                echo "✅ 标识 $identifier 处理完成"
                 
               else
-                echo "⚠️ 未找到标识行，跳过"
+                echo "⚠️ 无法提取函数名，跳过此行: $IDENTIFIER"
               fi
+            done
+          fi
+          
+          echo "✅ 所有修复处理完成"
+          
+          # 5. 创建修复日志
+          LOG_FILE="auto-fix-log-$(date +%Y%m%d_%H%M%S).txt"
+          echo "# 自动修复日志" > "$LOG_FILE"
+          echo "时间: $(date)" >> "$LOG_FILE"
+          echo "目标文件: $TARGET_FILE" >> "$LOG_FILE"
+          echo "备份文件: $BACKUP_FILE" >> "$LOG_FILE"
+          echo "修复文件: fix.txt" >> "$LOG_FILE"
+          
+          if [ -n "$FUNCTION_LINES" ]; then
+            echo "" >> "$LOG_FILE"
+            echo "# 修复的函数:" >> "$LOG_FILE"
+            echo "$FUNCTION_LINES" | while IFS= read -r line; do
+              ID=$(echo "$line" | cut -d: -f2-)
+              echo "- $ID" >> "$LOG_FILE"
+            done
+          fi
+      
+      - name: 📤 提交并推送修改
+        run: |
+          echo "=== 提交并推送修改 ==="
+          
+          # 配置Git
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "GitHub Actions"
+          
+          # 检查是否有更改
+          if git diff --quiet; then
+            echo "⚠️ 没有检测到文件更改"
+            # 为了确保有提交，创建一个标记文件
+            MARKER="auto-fix-marker-$(date +%s).txt"
+            echo "# 自动修复标记" > "$MARKER"
+            echo "# 时间: $(date)" >> "$MARKER"
+            echo "# 文件: fix.txt 已处理" >> "$MARKER"
+            git add "$MARKER"
+          else
+            echo "💾 检测到文件更改，准备提交..."
+            git add -A
+          fi
+          
+          # 提交
+          COMMIT_MSG="🔧 自动修复"
+          COMMIT_MSG+="\n\n来源: fix.txt"
+          COMMIT_MSG+="\n时间: $(date)"
+          COMMIT_MSG+="\n事件: ${{ github.event_name }}"
+          
+          # 添加修复的函数列表
+          if [ -f "fix.txt" ] && grep -q "#【build_firmware_main.sh-" fix.txt; then
+            COMMIT_MSG+="\n\n修复的函数:"
+            grep "#【build_firmware_main.sh-" fix.txt | while IFS= read -r identifier; do
+              # 提取函数名
+              LINE_NUM=$(grep -n "$identifier" fix.txt | cut -d: -f1)
+              NEXT_LINE=$((LINE_NUM + 1))
+              FUNC_LINE=$(sed -n "${NEXT_LINE}p" fix.txt 2>/dev/null || true)
+              FUNC_NAME=$(echo "$FUNC_LINE" | sed 's/(.*//' | sed 's/[[:space:]]*$//' 2>/dev/null || true)
               
-              echo "---"
-            done
-            
-          else
-            echo "⚠️ 未检测到系统性标识，使用简单文本处理"
-            
-            # 简单处理：将fix.txt内容保存为修复报告
-            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-            NEW_FILENAME="fix_report_${TIMESTAMP}.txt"
-            
-            mkdir -p "fix_reports"
-            cp "$FIX_FILE" "fix_reports/${NEW_FILENAME}"
-            
-            MODIFIED_FILES="fix_reports/${NEW_FILENAME}"
-            
-            echo "✅ 已将修复文件归档到: fix_reports/${NEW_FILENAME}"
-          fi
-          
-          # 3. 如果有修改，提交并推送
-          if [ -n "$MODIFIED_FILES" ]; then
-            echo "💾 检测到修改，准备提交..."
-            echo "修改的文件:"
-            for file in $MODIFIED_FILES; do
-              if [ -f "$file" ]; then
-                echo "  - $file (大小: $(wc -l < "$file") 行)"
+              if [ -n "$FUNC_NAME" ]; then
+                COMMIT_MSG+="\n- $FUNC_NAME"
+              else
+                COMMIT_MSG+="\n- $(echo "$identifier" | sed 's/#【//' | sed 's/】//')"
               fi
             done
-            
-            # 配置Git
-            git config --local user.email "github-actions[bot]@users.noreply.github.com"
-            git config --local user.name "GitHub Actions"
-            
-            # 构建提交信息
-            COMMIT_MSG="🔧 自动修复"
-            COMMIT_MSG+="\n\n来源: $FIX_FILE"
-            COMMIT_MSG+="\n时间: $(date)"
-            COMMIT_MSG+="\n触发: ${{ github.event_name }}"
-            
-            if [ ${#SYSTEM_IDENTIFIERS[@]} -gt 0 ]; then
-              COMMIT_MSG+="\n\n系统性标识:"
-              for identifier in "${SYSTEM_IDENTIFIERS[@]}"; do
-                COMMIT_MSG+="\n- ${identifier}"
-              done
-            fi
-            
-            # 添加修改的文件列表
-            if [ -n "$MODIFIED_FILES" ]; then
-              COMMIT_MSG+="\n\n修改的文件:"
-              for file in $MODIFIED_FILES; do
-                COMMIT_MSG+="\n- $file"
-              done
-            fi
-            
-            # 添加摘要
-            COMMIT_MSG+="\n\n修复摘要:"
-            if [[ "$MODIFIED_FILES" == *"build_firmware_main.sh"* ]]; then
-              COMMIT_MSG+="\n- 修复了build_firmware_main.sh中的多个函数"
-              COMMIT_MSG+="\n- 包含apply_config函数（修复USB问题）"
-              COMMIT_MSG+="\n- 包含initialize_build_env函数（修复netgear_3800问题）"
-              COMMIT_MSG+="\n- 包含download_openwrt_sdk函数（修复LEDE SDK问题）"
-              COMMIT_MSG+="\n- 包含initialize_compiler_env函数（修复LEDE处理）"
-            fi
-            
-            # 提交所有修改
-            echo -e "$COMMIT_MSG" | git commit -a -F -
-            
-            # 4. 推送更改
-            echo "🚀 推送到主分支..."
-            git push origin HEAD:main
-            
-            echo "✅ 修复已应用并推送"
-          else
-            echo "⚠️ 没有检测到有效的修改"
           fi
           
-          # 5. 清理修复文件
-          echo "🧹 清理修复文件..."
-          if [ -f "$FIX_FILE" ]; then
-            > "$FIX_FILE"
-            git add "$FIX_FILE"
-            git commit -m "🧹 清理修复文件: $(basename "$FIX_FILE") [skip ci]" || true
-            git push origin HEAD:main
-          fi
+          echo -e "$COMMIT_MSG" | git commit -F -
+          
+          # 推送
+          echo "🚀 推送到主分支..."
+          git push origin HEAD:main
+          
+          echo "✅ 修复已应用并推送到主分支"
+          
+          # 清理fix.txt文件
+          echo "🧹 清理fix.txt文件..."
+          > fix.txt
+          git add fix.txt
+          git commit -m "🧹 清理修复文件 [skip ci]" || true
+          git push origin HEAD:main
       
       - name: 📋 生成报告
         if: always()
         run: |
-          echo "## 🔧 自动修复完成" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔧 自动修复完成" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ "${{ job.status }}" = "success" ]; then
@@ -415,40 +303,29 @@ jobs:
           fi
           
           echo "**时间:** $(date)" >> $GITHUB_STEP_SUMMARY
-          echo "**修复文件:** ${{ env.FIX_FILE_PATH }}" >> $GITHUB_STEP_SUMMARY
-          echo "**触发方式:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**触发:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          # 显示最后的状态
-          if [ -n "${{ env.FIX_FILE_PATH }}" ]; then
-            echo "### 📊 执行结果" >> $GITHUB_STEP_SUMMARY
+          # 显示修复的函数信息
+          if [ -f "fix.txt" ]; then
+            echo "**修复文件:** fix.txt ($(wc -l < fix.txt) 行)" >> $GITHUB_STEP_SUMMARY
             
-            # 显示系统性标识信息
-            echo "#### 🔍 系统性标识分析" >> $GITHUB_STEP_SUMMARY
-            echo "- **build_firmware_main.sh-21:** apply_config函数 - 修复21.02 USB问题" >> $GITHUB_STEP_SUMMARY
-            echo "- **build_firmware_main.sh-13:** initialize_build_env函数 - 修复netgear_3800分支问题" >> $GITHUB_STEP_SUMMARY
-            echo "- **build_firmware_main.sh-07:** download_openwrt_sdk函数 - 修复LEDE SDK问题" >> $GITHUB_STEP_SUMMARY
-            echo "- **build_firmware_main.sh-14:** initialize_compiler_env函数 - 修复LEDE处理" >> $GITHUB_STEP_SUMMARY
-            
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### 📝 修复详情" >> $GITHUB_STEP_SUMMARY
-            echo "1. ✅ 查找修复文件: ${{ env.FIX_FILE_PATH }}" >> $GITHUB_STEP_SUMMARY
-            echo "2. ✅ 解析系统性标识: 完成" >> $GITHUB_STEP_SUMMARY
-            echo "3. ✅ 应用函数修复: 完成" >> $GITHUB_STEP_SUMMARY
-            echo "4. ✅ 提交更改: 完成" >> $GITHUB_STEP_SUMMARY
-            echo "5. ✅ 清理工作: 完成" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            
-            # 显示文件位置信息
-            echo "### 📁 文件位置" >> $GITHUB_STEP_SUMMARY
-            echo "- **修复文件:** \`${{ env.FIX_FILE_PATH }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "- **目标文件:** \`build_firmware_main.sh\`" >> $GITHUB_STEP_SUMMARY
-            echo "- **修复类型:** 函数级修复替换" >> $GITHUB_STEP_SUMMARY
-            
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### 🔧 修复的函数" >> $GITHUB_STEP_SUMMARY
-            echo "1. **apply_config()** - 修复21.02版本的USB配置问题" >> $GITHUB_STEP_SUMMARY
-            echo "2. **initialize_build_env()** - 修复netgear_3800设备的构建环境问题" >> $GITHUB_STEP_SUMMARY
-            echo "3. **download_openwrt_sdk()** - 修复LEDE仓库的SDK下载问题" >> $GITHUB_STEP_SUMMARY
-            echo "4. **initialize_compiler_env()** - 修复编译器环境初始化问题" >> $GITHUB_STEP_SUMMARY
+            # 显示找到的函数标识
+            if grep -q "#【" fix.txt; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "**修复的函数:**" >> $GITHUB_STEP_SUMMARY
+              grep "#【build_firmware_main.sh-" fix.txt | while IFS= read -r identifier; do
+                # 清理标识格式
+                CLEAN_ID=$(echo "$identifier" | sed 's/#【//' | sed 's/】//')
+                echo "- $CLEAN_ID" >> $GITHUB_STEP_SUMMARY
+              done
+            fi
           fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**处理流程:**" >> $GITHUB_STEP_SUMMARY
+          echo "1. ✅ 检查修复文件" >> $GITHUB_STEP_SUMMARY
+          echo "2. ✅ 解析系统性标识" >> $GITHUB_STEP_SUMMARY
+          echo "3. ✅ 查找并修改目标文件" >> $GITHUB_STEP_SUMMARY
+          echo "4. ✅ 提交并推送更改" >> $GITHUB_STEP_SUMMARY
+          echo "5. ✅ 清理修复文件" >> $GITHUB_STEP_SUMMARY
