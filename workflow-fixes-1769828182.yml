@@ -1,0 +1,154 @@
+# 🔧 工作流修复文件
+# 生成时间: Sat Jan 31 02:56:22 UTC 2026
+# 来源: firmware-config/fix.txt
+
+#【firmware-build.yml-23】
+# 步骤 23: 编译固件（添加变量验证）
+- name: "23. 编译固件（添加变量验证）"
+  run: |
+    echo "=== 步骤 23: 编译固件（添加变量验证） ==="
+    echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+    
+    # 设置错误处理
+    set -e
+    trap 'echo "❌ 步骤 23 失败，退出代码: $?"; exit 1' ERR
+    
+    cd /mnt/openwrt-build
+    
+    # 首先检查环境变量
+    echo "🔍 编译前环境变量验证:"
+    if [ -f "build_env.sh" ]; then
+      source build_env.sh
+      echo "✅ 加载环境变量成功"
+    else
+      echo "❌ 错误: build_env.sh 文件不存在"
+      exit 1
+    fi
+    
+    # 关键变量检查
+    echo ""
+    echo "🔍 关键变量检查:"
+    echo "  TARGET: $TARGET"
+    echo "  SUBTARGET: $SUBTARGET"
+    echo "  DEVICE: $DEVICE"
+    echo "  SELECTED_BRANCH: $SELECTED_BRANCH"
+    echo "  PLATFORM: $PLATFORM"
+    echo "  SOURCE_REPO: $SOURCE_REPO"
+    
+    if [ -z "$TARGET" ]; then
+      echo "❌ 错误: TARGET 变量为空，这是导致编译失败的根本原因"
+      echo "💡 尝试修复..."
+      
+      # 尝试从support.sh获取
+      SUPPORT_DIR="${{ github.workspace }}/firmware-config"
+      if [ -f "$SUPPORT_DIR/support.sh" ]; then
+        source "$SUPPORT_DIR/support.sh"
+        
+        if command -v get_device_config >/dev/null 2>&1; then
+          DEVICE_CONFIG=$(get_device_config "${{ github.event.inputs.device_name }}")
+          if [ -n "$DEVICE_CONFIG" ]; then
+            TARGET=$(echo $DEVICE_CONFIG | awk '{print $1}')
+            SUBTARGET=$(echo $DEVICE_CONFIG | awk '{print $2}')
+            DEVICE=$(echo $DEVICE_CONFIG | awk '{print $3}')
+            PLATFORM=$(echo $DEVICE_CONFIG | awk '{print $4}')
+            
+            echo "✅ 从support.sh获取配置:"
+            echo "  TARGET: $TARGET"
+            echo "  SUBTARGET: $SUBTARGET"
+            echo "  DEVICE: $DEVICE"
+            echo "  PLATFORM: $PLATFORM"
+            
+            # 更新环境变量
+            export TARGET="$TARGET"
+            export SUBTARGET="$SUBTARGET"
+            export DEVICE="$DEVICE"
+            export PLATFORM="$PLATFORM"
+            
+            # 更新环境文件
+            echo "🔄 更新环境文件..."
+            sed -i "s/export TARGET=\".*\"/export TARGET=\"$TARGET\"/" build_env.sh
+            sed -i "s/export SUBTARGET=\".*\"/export SUBTARGET=\"$SUBTARGET\"/" build_env.sh
+            sed -i "s/export DEVICE=\".*\"/export DEVICE=\"$DEVICE\"/" build_env.sh
+            sed -i "s/export PLATFORM=\".*\"/export PLATFORM=\"$PLATFORM\"/" build_env.sh
+            
+            # 重新加载环境变量
+            source build_env.sh
+            echo "✅ 环境变量已修复"
+          fi
+        fi
+      fi
+    fi
+    
+    # 如果TARGET仍然为空，使用默认值
+    if [ -z "$TARGET" ]; then
+      echo "⚠️ TARGET 仍然为空，使用默认值 ipq40xx"
+      export TARGET="ipq40xx"
+      export SUBTARGET="generic"
+      export DEVICE="${{ github.event.inputs.device_name }}"
+      export PLATFORM="generic"
+      
+      # 更新环境文件
+      echo "🔄 设置默认值到环境文件..."
+      sed -i "s/export TARGET=\".*\"/export TARGET=\"ipq40xx\"/" build_env.sh
+      sed -i "s/export SUBTARGET=\".*\"/export SUBTARGET=\"generic\"/" build_env.sh
+      sed -i "s/export DEVICE=\".*\"/export DEVICE=\"${{ github.event.inputs.device_name }}\"/" build_env.sh
+      sed -i "s/export PLATFORM=\".*\"/export PLATFORM=\"generic\"/" build_env.sh
+      
+      source build_env.sh
+    fi
+    
+    # 检查内核版本文件
+    echo ""
+    echo "🔍 检查内核版本文件..."
+    KERNEL_VERSION_FILE="include/kernel-${TARGET}.mk"
+    if [ -f "$KERNEL_VERSION_FILE" ]; then
+      echo "✅ 内核版本文件存在: $KERNEL_VERSION_FILE"
+--
+#【firmware-build.yml-21】
+# 步骤 21: 前置错误检查（修复TARGET变量问题）
+- name: "21. 前置错误检查（修复TARGET变量问题）"
+  run: |
+    echo "=== 步骤 21: 前置错误检查（修复TARGET变量问题） ==="
+    echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+    
+    # 设置错误处理
+    set -e
+    trap 'echo "❌ 步骤 21 失败，退出代码: $?"; exit 1' ERR
+    
+    echo "🔍 检查当前环境..."
+    if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
+      source /mnt/openwrt-build/build_env.sh
+      echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET, PLATFORM=$PLATFORM, SOURCE_REPO=$SOURCE_REPO"
+    else
+      echo "❌ 错误: 环境文件不存在"
+      exit 1
+    fi
+    
+    # 关键检查：确保TARGET变量不为空
+    echo ""
+    echo "🔍 关键变量检查（修复TARGET问题）:"
+    echo "  TARGET: $TARGET"
+    echo "  SUBTARGET: $SUBTARGET"
+    echo "  DEVICE: $DEVICE"
+    echo "  SELECTED_BRANCH: $SELECTED_BRANCH"
+    
+    if [ -z "$TARGET" ]; then
+      echo "❌ 错误: TARGET 变量为空，这是导致编译失败的根本原因"
+      echo "💡 可能的原因:"
+      echo "  1. 设备支持脚本未正确配置"
+      echo "  2. 环境变量未正确传递"
+      echo "  3. support.sh 文件有问题"
+      
+      # 尝试从support.sh获取
+      SUPPORT_DIR="${{ github.workspace }}/firmware-config"
+      if [ -f "$SUPPORT_DIR/support.sh" ]; then
+        echo "🔧 尝试从support.sh获取设备配置..."
+        source "$SUPPORT_DIR/support.sh"
+        
+        if command -v get_device_config >/dev/null 2>&1; then
+          DEVICE_CONFIG=$(get_device_config "${{ github.event.inputs.device_name }}")
+          if [ -n "$DEVICE_CONFIG" ]; then
+            TARGET=$(echo $DEVICE_CONFIG | awk '{print $1}')
+            SUBTARGET=$(echo $DEVICE_CONFIG | awk '{print $2}')
+            DEVICE=$(echo $DEVICE_CONFIG | awk '{print $3}')
+            PLATFORM=$(echo $DEVICE_CONFIG | awk '{print $4}')
