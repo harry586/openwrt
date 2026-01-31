@@ -126,13 +126,13 @@ jobs:
               CURRENT_FILE="${BASH_REMATCH[1]}"
               echo "    目标文件: $CURRENT_FILE"
               
-            elif [[ "$LINE" =~ ^replace:[[:space:]]*(.+)[[:space:]]*=>[[:space:]]*(.+) ]] && [ -n "$CURRENT_FILE" ]; then
-              # 文本替换
+            elif [[ "$LINE" =~ ^replace:[[:space:]]*([^=]+)[[:space:]]*==>[[:space:]]*(.+) ]] && [ -n "$CURRENT_FILE" ]; then
+              # 文本替换 - 使用 ==> 作为分隔符
               PATTERN="${BASH_REMATCH[1]}"
               REPLACEMENT="${BASH_REMATCH[2]}"
               
               if [ -f "$CURRENT_FILE" ]; then
-                echo "    替换: '$PATTERN' => '$REPLACEMENT'"
+                echo "    替换: '$PATTERN' ==> '$REPLACEMENT'"
                 # 直接替换，不生成临时文件
                 sed -i "s|$PATTERN|$REPLACEMENT|g" "$CURRENT_FILE"
                 
@@ -142,6 +142,20 @@ jobs:
                 fi
               else
                 echo "    ⚠️ 文件不存在: $CURRENT_FILE"
+              fi
+              
+            elif [[ "$LINE" =~ ^replace:[[:space:]]*([^:]+):([^:]+) ]] && [ -n "$CURRENT_FILE" ]; then
+              # 备用格式: replace:pattern:replacement
+              PATTERN="${BASH_REMATCH[1]}"
+              REPLACEMENT="${BASH_REMATCH[2]}"
+              
+              if [ -f "$CURRENT_FILE" ]; then
+                echo "    替换: '$PATTERN' => '$REPLACEMENT'"
+                sed -i "s|$PATTERN|$REPLACEMENT|g" "$CURRENT_FILE"
+                
+                if [[ ! " $MODIFIED_FILES " =~ " $CURRENT_FILE " ]]; then
+                  MODIFIED_FILES="$MODIFIED_FILES $CURRENT_FILE"
+                fi
               fi
               
             elif [[ "$LINE" =~ ^append:[[:space:]]*(.+) ]] && [ -n "$CURRENT_FILE" ]; then
