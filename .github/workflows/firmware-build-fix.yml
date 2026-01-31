@@ -37,7 +37,6 @@ jobs:
         run: |
           echo "=== 分析修复文件 ==="
           
-          # 查找修复文件
           if [ -f "firmware-config/fix.txt" ]; then
             FIX_FILE="firmware-config/fix.txt"
           elif [ -f "fix.txt" ]; then
@@ -50,7 +49,6 @@ jobs:
           
           echo "✅ 修复文件: $FIX_FILE"
           
-          # 统计各种修复
           TOTAL_FIXES=$(grep -c "^#【" "$FIX_FILE" 2>/dev/null || echo "0")
           SCRIPT_FIXES=$(grep -c "^#【build_firmware_main.sh" "$FIX_FILE" 2>/dev/null || echo "0")
           WORKFLOW_FIXES=$(grep -c "^#【firmware-build.yml" "$FIX_FILE" 2>/dev/null || echo "0")
@@ -76,23 +74,22 @@ jobs:
     runs-on: ubuntu-latest
     needs: analyze-fixes
     if: needs.analyze-fixes.outputs.has_fixes == 'true'
+    # 关键：需要pull-requests权限
     permissions:
       contents: write
       pull-requests: write
     
     steps:
-      - name: 🛎️ 检出代码到新分支
+      - name: 🛎️ 检出代码
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-          ref: main
       
       - name: 🌿 创建修复分支
         run: |
           echo "=== 创建修复分支 ==="
           
-          # 生成唯一分支名
           TIMESTAMP=$(date +%Y%m%d-%H%M%S)
           BRANCH_NAME="auto-fix/$TIMESTAMP"
           
@@ -117,15 +114,12 @@ jobs:
           
           echo "📄 修改脚本文件: $SCRIPT_FILE"
           
-          # 创建备份
+          # 备份
           BACKUP_FILE="${SCRIPT_FILE}.backup.$(date +%s)"
           cp "$SCRIPT_FILE" "$BACKUP_FILE"
           echo "📦 创建备份: $BACKUP_FILE"
           
-          # 提取脚本修复内容并应用
-          echo "🔍 提取修复内容..."
-          
-          # 查找所有脚本修复块
+          # 提取并应用修复
           LINE_NUMBER=0
           IN_SCRIPT_BLOCK=false
           SCRIPT_FIX_CONTENT=""
@@ -137,18 +131,16 @@ jobs:
             if [[ "$line" =~ ^#【build_firmware_main.sh ]]; then
               IN_SCRIPT_BLOCK=true
               SCRIPT_FIX_CONTENT=""
-              echo "🎯 找到脚本修复块 (第 $LINE_NUMBER 行)"
+              echo "🎯 找到脚本修复块"
               SCRIPT_BLOCK_COUNT=$((SCRIPT_BLOCK_COUNT + 1))
               
             elif [[ "$line" =~ ^#【end】 ]] || [[ "$line" =~ ^#【结束】 ]]; then
               if [ "$IN_SCRIPT_BLOCK" = true ]; then
-                # 应用这个修复块
                 echo "🔄 应用脚本修复块 #$SCRIPT_BLOCK_COUNT"
                 
-                # 在脚本文件末尾添加修复内容
                 echo "" >> "$SCRIPT_FILE"
                 echo "# ===== 自动修复块 #$SCRIPT_BLOCK_COUNT =====" >> "$SCRIPT_FILE"
-                echo "# 来源: $FIX_FILE (第 $LINE_NUMBER 行附近)" >> "$SCRIPT_FILE"
+                echo "# 来源: $FIX_FILE" >> "$SCRIPT_FILE"
                 echo "# 时间: $(date)" >> "$SCRIPT_FILE"
                 echo "$SCRIPT_FIX_CONTENT" >> "$SCRIPT_FILE"
                 
@@ -160,11 +152,11 @@ jobs:
             fi
           done < "$FIX_FILE"
           
-          # 处理最后一个未结束的块
+          # 处理最后一个块
           if [ "$IN_SCRIPT_BLOCK" = true ] && [ -n "$SCRIPT_FIX_CONTENT" ]; then
             echo "🔄 应用最后一个脚本修复块"
             echo "" >> "$SCRIPT_FILE"
-            echo "# ===== 自动修复块 #$((SCRIPT_BLOCK_COUNT + 1)) =====" >> "$SCRIPT_FILE"
+            echo "# ===== 自动修复块 #$SCRIPT_BLOCK_COUNT =====" >> "$SCRIPT_FILE"
             echo "# 来源: $FIX_FILE" >> "$SCRIPT_FILE"
             echo "# 时间: $(date)" >> "$SCRIPT_FILE"
             echo "$SCRIPT_FIX_CONTENT" >> "$SCRIPT_FILE"
@@ -173,7 +165,7 @@ jobs:
           echo "✅ 应用了 $SCRIPT_BLOCK_COUNT 个脚本修复块"
           echo "script_modified=true" >> $GITHUB_ENV
       
-      - name: 🔧 创建工作流修复文件（新文件，不修改原文件）
+      - name: 🔧 创建工作流修复文件
         if: needs.analyze-fixes.outputs.workflow_fixes != '0'
         run: |
           echo "=== 创建工作流修复文件 ==="
@@ -181,18 +173,15 @@ jobs:
           FIX_FILE="${{ needs.analyze-fixes.outputs.fix_file }}"
           TIMESTAMP=$(date +%s)
           
-          # 创建新的工作流修复文件
           WORKFLOW_FIX_FILE="workflow-fixes-${TIMESTAMP}.yml"
           
           echo "# 🔧 工作流修复文件" > "$WORKFLOW_FIX_FILE"
           echo "# 生成时间: $(date)" >> "$WORKFLOW_FIX_FILE"
           echo "# 来源: $FIX_FILE" >> "$WORKFLOW_FIX_FILE"
-          echo "# 修复标识数: ${{ needs.analyze-fixes.outputs.workflow_fixes }}" >> "$WORKFLOW_FIX_FILE"
           echo "" >> "$WORKFLOW_FIX_FILE"
           
           # 提取工作流修复内容
-          echo "# 提取的工作流修复内容:" >> "$WORKFLOW_FIX_FILE"
-          grep -A 50 "^#【firmware-build.yml" "$FIX_FILE" | head -100 >> "$WORKFLOW_FIX_FILE"
+          grep -A 100 "^#【firmware-build.yml" "$FIX_FILE" | head -150 >> "$WORKFLOW_FIX_FILE"
           
           echo "✅ 创建工作流修复文件: $WORKFLOW_FIX_FILE"
           echo "workflow_fix_file=$WORKFLOW_FIX_FILE" >> $GITHUB_ENV
@@ -208,22 +197,27 @@ jobs:
           git status --short
           echo ""
           
-          echo "➕ 添加更改的文件..."
+          echo "➕ 添加更改..."
           
-          # 添加脚本文件
+          # 确保有文件可提交
           if [ -n "${{ env.script_modified }}" ]; then
             git add "firmware-config/scripts/build_firmware_main.sh"
             echo "✅ 添加脚本文件"
           fi
           
-          # 添加工作流修复文件
           if [ -n "${{ env.workflow_fix_file }}" ]; then
             git add "${{ env.workflow_fix_file }}"
             echo "✅ 添加工作流修复文件"
           fi
           
-          # 添加备份文件（可选）
-          git add "*.backup.*" 2>/dev/null || true
+          # 如果没有文件可添加，创建标记文件
+          if [ -z "${{ env.script_modified }}" ] && [ -z "${{ env.workflow_fix_file }}" ]; then
+            echo "⚠️ 没有文件修改，创建标记文件"
+            MARKER_FILE="auto-fix-marker-$(date +%s).txt"
+            echo "# 自动修复标记" > "$MARKER_FILE"
+            echo "# 时间: $(date)" >> "$MARKER_FILE"
+            git add "$MARKER_FILE"
+          fi
           
           echo ""
           echo "💾 提交更改..."
@@ -238,83 +232,89 @@ jobs:
             COMMIT_MSG="${COMMIT_MSG} - 工作流(${{ needs.analyze-fixes.outputs.workflow_fixes }})"
           fi
           
-          COMMIT_MSG="${COMMIT_MSG}"
-          
-          git commit -m "$COMMIT_MSG" || echo "⚠️ 没有更改可提交"
+          git commit -m "$COMMIT_MSG" || exit 0
           
           echo "🚀 推送分支..."
           git push origin "${{ env.branch_name }}"
           
           echo "✅ 分支已推送: ${{ env.branch_name }}"
       
-      - name: 📨 创建Pull Request
+      - name: 📨 创建Pull Request（简化版）
         id: create-pr
-        uses: peter-evans/create-pull-request@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          branch: ${{ env.branch_name }}
-          base: main
-          title: "🔧 自动修复"
-          body: |
-            ## 自动修复提交
-            
-            **修复统计:**
-            - 总修复标识: ${{ needs.analyze-fixes.outputs.total_fixes }} 个
-            - 脚本修复: ${{ needs.analyze-fixes.outputs.script_fixes }} 个
-            - 工作流修复: ${{ needs.analyze-fixes.outputs.workflow_fixes }} 个
-            
-            **修复文件:** `${{ needs.analyze-fixes.outputs.fix_file }}`
-            
-            **修改的文件:**
-            ${{ needs.analyze-fixes.outputs.script_fixes != '0' && '- `firmware-config/scripts/build_firmware_main.sh`' || '' }}
-            ${{ needs.analyze-fixes.outputs.workflow_fixes != '0' && '- `workflow-fixes-*.yml` (新文件)' || '' }}
-            
-            ---
-            
-            > 🤖 此PR由GitHub Actions自动创建
-            > 📅 创建时间: $(date)
-            
-            <!-- 自动合并标记 -->
-            ${{ github.event.inputs.auto_merge == 'true' && 'automerge' || '' }}
-          labels: |
-            automated-pr
-            fix
-            ${{ github.event.inputs.auto_merge == 'true' && 'automerge' || '' }}
-          delete-branch: true
-      
-      - name: 🔄 自动合并PR
-        if: github.event.inputs.auto_merge == 'true' && steps.create-pr.outputs.pull-request-number != ''
+        run: |
+          echo "=== 创建Pull Request ==="
+          
+          # 使用GitHub CLI创建PR
+          PR_TITLE="🔧 自动修复"
+          PR_BODY="## 自动修复
+          
+          **修复统计:**
+          - 总修复标识: ${{ needs.analyze-fixes.outputs.total_fixes }} 个
+          - 脚本修复: ${{ needs.analyze-fixes.outputs.script_fixes }} 个
+          - 工作流修复: ${{ needs.analyze-fixes.outputs.workflow_fixes }} 个
+          
+          **修复文件:** \`${{ needs.analyze-fixes.outputs.fix_file }}\`
+          
+          > 自动创建于 $(date)"
+          
+          echo "创建PR: $PR_TITLE"
+          echo "从分支: ${{ env.branch_name }} 到 main"
+          
+          # 创建PR
+          PR_RESULT=$(gh pr create \
+            --title "$PR_TITLE" \
+            --body "$PR_BODY" \
+            --base main \
+            --head "${{ env.branch_name }}" \
+            --label "automated-pr,fix" 2>&1)
+          
+          echo "PR创建结果: $PR_RESULT"
+          
+          # 提取PR号
+          if [[ "$PR_RESULT" =~ pull\/([0-9]+) ]]; then
+            PR_NUMBER="${BASH_REMATCH[1]}"
+            echo "✅ PR创建成功: #$PR_NUMBER"
+            echo "pr_number=$PR_NUMBER" >> $GITHUB_ENV
+            echo "pr_url=https://github.com/${{ github.repository }}/pull/$PR_NUMBER" >> $GITHUB_ENV
+          else
+            echo "❌ PR创建失败"
+            echo "错误详情: $PR_RESULT"
+            echo "pr_number=0" >> $GITHUB_ENV
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: 🔄 自动合并PR
+        if: |
+          (github.event.inputs.auto_merge == 'true' || github.event_name == 'push') &&
+          env.pr_number != '0'
         run: |
           echo "=== 自动合并PR ==="
           
-          PR_NUMBER="${{ steps.create-pr.outputs.pull-request-number }}"
-          echo "PR号: $PR_NUMBER"
+          echo "PR号: ${{ env.pr_number }}"
+          echo "等待3秒..."
+          sleep 3
           
-          # 等待几秒让GitHub更新状态
-          sleep 5
+          echo "🔄 合并PR..."
           
-          # 检查PR状态
-          echo "🔍 检查PR状态..."
-          PR_STATUS=$(gh pr view $PR_NUMBER --json mergeable,state --jq '.mergeable + ":" + .state' 2>/dev/null || echo "unknown:unknown")
+          # 合并PR
+          MERGE_RESULT=$(gh pr merge "${{ env.pr_number }}" \
+            --squash \
+            --delete-branch \
+            --body "✅ 自动合并完成" 2>&1)
           
-          echo "PR状态: $PR_STATUS"
+          echo "合并结果: $MERGE_RESULT"
           
-          # 如果PR可合并且是打开的，尝试合并
-          if [[ "$PR_STATUS" == *"MERGEABLE:OPEN"* ]]; then
-            echo "🔄 开始自动合并..."
-            
-            # 尝试合并
-            if gh pr merge $PR_NUMBER --squash --delete-branch; then
-              echo "✅ PR已自动合并"
-            else
-              echo "❌ 自动合并失败"
-            fi
+          if [[ "$MERGE_RESULT" == *"Merged pull request"* ]] || [[ "$MERGE_RESULT" == *"already merged"* ]]; then
+            echo "✅ PR已合并"
+            echo "pr_merged=true" >> $GITHUB_ENV
           else
-            echo "⚠️ PR不可合并或已关闭，跳过合并"
-            echo "状态详情: $PR_STATUS"
+            echo "❌ 合并失败"
+            echo "错误: $MERGE_RESULT"
+            echo "pr_merged=false" >> $GITHUB_ENV
           fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: 📋 生成报告
         if: always()
@@ -349,23 +349,23 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           
           echo "#### 📨 PR状态" >> $GITHUB_STEP_SUMMARY
-          if [[ "${{ steps.create-pr.outputs.pull-request-number }}" != "" ]]; then
+          if [[ "${{ env.pr_number }}" != "0" ]]; then
             echo "✅ **Pull Request已创建**" >> $GITHUB_STEP_SUMMARY
-            echo "- **PR号:** #${{ steps.create-pr.outputs.pull-request-number }}" >> $GITHUB_STEP_SUMMARY
-            echo "- **PR链接:** [${{ env.branch_name }} → main](${{ steps.create-pr.outputs.pull-request-url }})" >> $GITHUB_STEP_SUMMARY
+            echo "- **PR号:** #${{ env.pr_number }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **PR链接:** [${{ env.branch_name }} → main](${{ env.pr_url }})" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             
-            if [[ "${{ github.event.inputs.auto_merge }}" == "true" ]]; then
-              echo "🔄 **自动合并已启用**" >> $GITHUB_STEP_SUMMARY
-              if [[ "${{ job.status }}" == "success" ]]; then
-                echo "✅ **PR已自动合并**" >> $GITHUB_STEP_SUMMARY
-              else
-                echo "⏳ **等待合并或合并失败**" >> $GITHUB_STEP_SUMMARY
-              fi
+            if [[ "${{ env.pr_merged }}" == "true" ]]; then
+              echo "🔄 **PR已自动合并**" >> $GITHUB_STEP_SUMMARY
+              echo "✅ 修复已应用到主分支" >> $GITHUB_STEP_SUMMARY
+            elif [[ "${{ github.event.inputs.auto_merge }}" == "true" ]]; then
+              echo "⏳ **等待合并中...**" >> $GITHUB_STEP_SUMMARY
+              echo "> 请检查PR状态或稍后查看" >> $GITHUB_STEP_SUMMARY
             else
               echo "👁️ **需要手动合并**" >> $GITHUB_STEP_SUMMARY
               echo "> 请前往PR页面查看并合并更改" >> $GITHUB_STEP_SUMMARY
             fi
           else
             echo "❌ **PR创建失败**" >> $GITHUB_STEP_SUMMARY
+            echo "> 可能原因：权限不足或分支已存在" >> $GITHUB_STEP_SUMMARY
           fi
