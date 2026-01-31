@@ -1,8 +1,6 @@
-#【firmware-build.yml】
 # .github/workflows/firmware-build.yml
 name: OpenWrt 智能固件构建工作流
 
-#【firmware-build.yml-on】
 on:
   workflow_dispatch:
     inputs:
@@ -45,19 +43,16 @@ on:
         default: "true"
         options: ["true", "false"]
 
-#【firmware-build.yml-env】
 env:
   BUILD_DIR: "/mnt/openwrt-build"
   REPO_ROOT: "${{ github.workspace }}"
   ENABLE_PARALLEL: "${{ github.event.inputs.enable_parallel }}"
 
-#【firmware-build.yml-jobs】
 jobs:
   build-firmware:
     runs-on: ubuntu-22.04
     
     steps:
-      #【firmware-build.yml-00】
       # 步骤 0: 生成时间戳和设备同步检查
       - name: "0. 生成时间戳和设备同步检查"
         run: |
@@ -140,7 +135,6 @@ jobs:
           
           echo "🟢 步骤 0 完成"
       
-      #【firmware-build.yml-01】
       # 步骤 1: 使用Git Archive API下载源代码
       - name: "1. 使用Git Archive API下载源代码"
         run: |
@@ -216,7 +210,6 @@ jobs:
           echo "✅ Git Archive API下载完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 1 完成"
       
-      #【firmware-build.yml-02】
       # 步骤 2: 上传源代码Artifacts
       - name: "2. 上传源代码Artifacts"
         uses: actions/upload-artifact@v4
@@ -226,7 +219,6 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      #【firmware-build.yml-03】
       # 步骤 3: 修复权限问题
       - name: "3. 修复权限问题"
         run: |
@@ -257,195 +249,36 @@ jobs:
           echo "✅ 修复所有脚本权限完成"
           echo "🟢 步骤 3 完成"
       
-      #【firmware-build.yml-04】
-      # 步骤 4: 安装基础工具（优化版）
-      - name: "4. 安装基础工具（优化版）"
+      # 步骤 4: 安装基础工具（调用大脚本）
+      - name: "4. 安装基础工具（调用大脚本）"
         run: |
-          echo "=== 步骤 4: 安装基础工具（优化版） ==="
+          echo "=== 步骤 4: 安装基础工具（调用大脚本） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 设置错误处理
-          set -e
-          trap 'echo "❌ 步骤 4 失败，退出代码: $?"; exit 1' ERR
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" setup_environment
           
-          echo "🔄 更新软件包列表..."
-          sudo apt-get update -q
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: apt-get update 失败"
-            exit 1
-          fi
-          
-          echo "📦 安装编译必需工具 (分组安装，提高效率)..."
-          
-          # 分组1: 核心编译工具
-          echo "🔧 安装核心编译工具..."
-          sudo apt-get install -y -q build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget libelf-dev cmake ninja-build
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 核心编译工具安装失败"
-            exit 1
-          fi
-          
-          # 分组2: Python和脚本工具
-          echo "🐍 安装Python和脚本工具..."
-          sudo apt-get install -y -q python3 python3-dev python3-pip python3-setuptools python3-yaml xsltproc zip subversion automake autoconf libtool pkg-config help2man texinfo groff texlive texinfo
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: Python和脚本工具安装失败"
-            exit 1
-          fi
-          
-          # 分组3: 网络和下载工具
-          echo "🌐 安装网络和下载工具..."
-          sudo apt-get install -y -q curl net-tools iputils-ping dnsutils openssh-client ca-certificates gnupg lsb-release aria2 libcurl4-openssl-dev
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 网络和下载工具安装失败"
-            exit 1
-          fi
-          
-          # 分组4: 文件系统工具
-          echo "💿 安装文件系统工具..."
-          sudo apt-get install -y -q squashfs-tools dosfstools e2fsprogs mtools parted fdisk gdisk hdparm smartmontools
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 文件系统工具安装失败"
-            exit 1
-          fi
-          
-          # 分组5: 调试和开发工具
-          echo "🔍 安装调试和开发工具..."
-          sudo apt-get install -y -q gdb strace ltrace valgrind binutils-dev libdw-dev libiberty-dev ecj fastjar java-propose-classpath libpython3-dev liblz4-dev zstd
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 调试和开发工具安装失败"
-            exit 1
-          fi
-          
-          echo "✅ 基础工具安装完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          
-          # 验证重要工具
-          echo "🔍 验证重要工具安装..."
-          echo "📋 检查以下重要工具是否安装成功:"
-          
-          # 定义要检查的工具数组
-          tools_to_check=("gcc" "g++" "make" "git" "python3" "cmake" "flex" "bison")
-          missing_tools=()
-          
-          # 检查每个工具
-          for tool in "${tools_to_check[@]}"; do
-            if command -v $tool >/dev/null 2>&1; then
-              echo "✅ $tool 已安装: $(which $tool)"
-            else
-              echo "❌ $tool 未安装"
-              missing_tools+=("$tool")
-            fi
-          done
-          
-          if [ ${#missing_tools[@]} -gt 0 ]; then
-            echo "❌ 错误: 以下重要工具缺失: ${missing_tools[*]}"
-            exit 1
-          fi
-          
-          echo "🔍 额外检查:"
-          # 检查gcc版本
-          if command -v gcc >/dev/null 2>&1; then
-            GCC_VERSION=$(gcc --version | head -1)
-            echo "🔧 系统GCC版本: $GCC_VERSION"
-            echo "💡 系统GCC用于编译工具链，SDK GCC用于交叉编译固件"
-          fi
-          
-          # 检查make版本
-          if command -v make >/dev/null 2>&1; then
-            MAKE_VERSION=$(make --version | head -1)
-            echo "🔨 Make版本: $MAKE_VERSION"
-          fi
-          
-          echo "✅ 工具验证完成"
           echo "🟢 步骤 4 完成"
       
-      #【firmware-build.yml-05】
-      # 步骤 5: 初始空间检查
-      - name: "5. 初始空间检查"
+      # 步骤 5: 初始空间检查（调用大脚本）
+      - name: "5. 初始空间检查（调用大脚本）"
         run: |
-          echo "=== 步骤 5: 初始磁盘空间检查 ==="
+          echo "=== 步骤 5: 初始空间检查（调用大脚本） ==="
           echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 设置错误处理
-          set -e
-          trap 'echo "❌ 步骤 5 失败，退出代码: $?"; exit 1' ERR
-          
-          echo "📊 /mnt 分区详细信息:"
-          df -h /mnt
-          
-          AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
-          AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-          echo "/mnt 可用空间: ${AVAILABLE_GB}G"
-          
-          if [ $AVAILABLE_GB -lt 50 ]; then
-            echo "❌ 错误: /mnt 空间不足50G，当前只有${AVAILABLE_GB}G"
-            exit 1
-          else
-            echo "✅ 初始空间检查通过 - ${AVAILABLE_GB}G 可用"
-          fi
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_space_check
           
           echo "🟢 步骤 5 完成"
       
-      #【firmware-build.yml-06】
-      # 步骤 6: 动态读取设备列表并设置编译环境
-      - name: "6. 动态读取设备列表并设置编译环境"
+      # 步骤 6: 动态读取设备列表并设置编译环境（调用大脚本）
+      - name: "6. 动态读取设备列表并设置编译环境（调用大脚本）"
         run: |
-          echo "=== 步骤 6: 动态读取设备列表并设置编译环境 ==="
+          echo "=== 步骤 6: 动态读取设备列表并设置编译环境（调用大脚本） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 设置错误处理
-          set -e
-          trap 'echo "❌ 步骤 6 失败，退出代码: $?"; exit 1' ERR
-          
-          echo "🔍 步骤 6.1: 从support.sh读取设备信息..."
-          SUPPORT_DIR="${{ github.workspace }}/firmware-config"
-          SUPPORT_FILE="$SUPPORT_DIR/support.sh"
-          
-          if [ -f "$SUPPORT_FILE" ]; then
-            echo "✅ 设备支持脚本存在: $SUPPORT_FILE"
-            
-            # 加载support.sh
-            source "$SUPPORT_FILE"
-            
-            # 获取设备配置
-            if command -v get_device_config >/dev/null 2>&1; then
-              DEVICE_CONFIG=$(get_device_config "${{ github.event.inputs.device_name }}")
-              echo "✅ 获取设备配置: $DEVICE_CONFIG"
-            fi
-            
-            # 获取设备描述
-            if command -v get_device_description >/dev/null 2>&1; then
-              DEVICE_DESC=$(get_device_description "${{ github.event.inputs.device_name }}")
-              echo "📝 设备描述: $DEVICE_DESC"
-            fi
-          else
-            echo "⚠️ 警告: 设备支持脚本不存在: $SUPPORT_FILE"
-          fi
-          
-          echo ""
-          echo "🔄 步骤 6.2: 设置编译环境"
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" setup_environment
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 设置编译环境失败"
-            exit 1
-          fi
-          
-          echo "🔄 步骤 6.3: 创建构建目录"
+          # 创建构建目录
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" create_build_dir
           
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 创建构建目录失败"
-            exit 1
-          fi
-          
-          echo "🔄 步骤 6.4: 初始化构建环境"
+          # 初始化构建环境
           echo "📱 设备: ${{ github.event.inputs.device_name }}"
           echo "🔄 版本: ${{ github.event.inputs.version_selection }}"
           echo "⚙️ 配置模式: ${{ github.event.inputs.config_mode }}"
@@ -453,569 +286,111 @@ jobs:
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}" "${{ github.event.inputs.source_repo }}"
           
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 初始化构建环境失败"
-            exit 1
-          fi
-          
-          echo "✅ 编译环境和构建目录设置完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 6 完成"
       
-      #【firmware-build.yml-07】
-      # 步骤 7: 下载OpenWrt官方SDK（修复版）
-      - name: "7. 下载OpenWrt官方SDK（修复版）"
+      # 步骤 7: 下载OpenWrt官方SDK（调用大脚本）
+      - name: "7. 下载OpenWrt官方SDK（调用大脚本）"
         run: |
-          echo "=== 步骤 7: 下载OpenWrt官方SDK（修复版） ==="
+          echo "=== 步骤 7: 下载OpenWrt官方SDK（调用大脚本） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 设置错误处理 - 这里不退出，SDK下载失败可以继续
-          trap 'echo "⚠️ SDK下载失败，将使用自动构建编译器，继续执行..."' ERR
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_compiler_env "${{ github.event.inputs.device_name }}"
           
-          echo "🚀 开始下载OpenWrt官方SDK工具链..."
-          
-          # 先检查环境文件是否已经存在
-          echo "🔍 检查环境文件..."
-          if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
-            echo "✅ 环境文件已存在（由步骤6.4创建）"
-            echo "📊 环境文件内容摘要:"
-            head -15 /mnt/openwrt-build/build_env.sh
-            
-            # 加载现有环境变量
-            source /mnt/openwrt-build/build_env.sh
-            echo "✅ 从现有环境文件加载变量:"
-            echo "  SELECTED_BRANCH: $SELECTED_BRANCH"
-            echo "  TARGET: $TARGET"
-            echo "  SUBTARGET: $SUBTARGET"
-            echo "  DEVICE: $DEVICE"
-            echo "  CONFIG_MODE: $CONFIG_MODE"
-            echo "  REPO_ROOT: $REPO_ROOT"
-            echo "  COMPILER_DIR: $COMPILER_DIR"
-            echo "  DEVICE_NAME: $DEVICE_NAME"
-            echo "  PLATFORM: $PLATFORM"
-            echo "  SOURCE_REPO: $SOURCE_REPO"
-            echo ""
-            
-            echo "💡 使用步骤6.4已设置的环境变量进行SDK下载"
-          else
-            echo "⚠️ 环境文件不存在，可能是步骤6.4失败"
-            echo "📝 重新创建环境变量..."
-            
-            # 使用设备支持系统获取配置
-            SUPPORT_DIR="${{ github.workspace }}/firmware-config"
-            if [ -f "$SUPPORT_DIR/support.sh" ]; then
-              source "$SUPPORT_DIR/support.sh"
-              DEVICE_CONFIG=$(get_device_config "${{ github.event.inputs.device_name }}")
-              TARGET=$(echo $DEVICE_CONFIG | awk '{print $1}')
-              SUBTARGET=$(echo $DEVICE_CONFIG | awk '{print $2}')
-              DEVICE=$(echo $DEVICE_CONFIG | awk '{print $3}')
-              PLATFORM=$(echo $DEVICE_CONFIG | awk '{print $4}')
-              echo "✅ 从设备支持系统获取配置: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE, PLATFORM=$PLATFORM"
-            else
-              echo "❌ 错误: 设备支持脚本不存在"
-              exit 1
-            fi
-            
-            # 创建环境文件
-            echo "#!/bin/bash" > /mnt/openwrt-build/build_env.sh
-            echo "export SELECTED_REPO_URL=\"https://github.com/immortalwrt/immortalwrt.git\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export SELECTED_BRANCH=\"${{ github.event.inputs.version_selection == '23.05' && 'openwrt-23.05' || 'openwrt-21.02' }}\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export TARGET=\"$TARGET\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export SUBTARGET=\"$SUBTARGET\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export DEVICE=\"$DEVICE\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export CONFIG_MODE=\"${{ github.event.inputs.config_mode }}\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export REPO_ROOT=\"${{ github.workspace }}\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export COMPILER_DIR=\"\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export DEVICE_NAME=\"${{ github.event.inputs.device_name }}\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export PLATFORM=\"$PLATFORM\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export SOURCE_REPO=\"${{ github.event.inputs.source_repo }}\"" >> /mnt/openwrt-build/build_env.sh
-            chmod +x /mnt/openwrt-build/build_env.sh
-            echo "✅ 已创建环境文件"
-          fi
-          
-          # 执行SDK下载，允许失败
-          echo "🔄 开始执行SDK下载..."
-          if "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_compiler_env "${{ github.event.inputs.device_name }}"; then
-            echo "✅ SDK下载成功或使用后备方案"
-          else
-            echo "⚠️ SDK下载失败，将使用OpenWrt自动构建的编译器"
-          fi
-          
-          echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 7 完成"
       
-      #【firmware-build.yml-08】
-      # 步骤 8: 验证SDK下载结果
-      - name: "8. 验证SDK下载结果"
+      # 步骤 8: 验证SDK下载结果（调用大脚本）
+      - name: "8. 验证SDK下载结果（调用大脚本）"
         run: |
-          echo "=== 步骤 8: 验证SDK下载结果 ==="
+          echo "=== 步骤 8: 验证SDK下载结果（调用大脚本） ==="
           echo "🕐 验证时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 设置错误处理 - 这里不退出，只是验证
-          trap 'echo "⚠️ 步骤 8 验证过程中出现错误，继续执行..."' ERR
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" verify_compiler_files
           
-          echo "🔍 检查SDK下载结果..."
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" check_compiler_invocation
           
-          if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
-            source /mnt/openwrt-build/build_env.sh
-            echo "✅ 从环境文件加载变量: COMPILER_DIR=$COMPILER_DIR, SOURCE_REPO=$SOURCE_REPO"
-          else
-            echo "⚠️ 环境文件不存在"
-          fi
-          
-          if [ -d "/mnt/openwrt-build/sdk" ]; then
-            echo "✅ SDK目录存在: /mnt/openwrt-build/sdk"
-            echo "📊 SDK目录大小: $(du -sh /mnt/openwrt-build/sdk 2>/dev/null | cut -f1 || echo '未知')"
-            
-            # 查找真正的GCC，排除虚假编译器
-            GCC_FILE=$(find "/mnt/openwrt-build/sdk" -type f -executable \
-              -name "*gcc" \
-              ! -name "*gcc-ar" \
-              ! -name "*gcc-ranlib" \
-              ! -name "*gcc-nm" \
-              ! -path "*dummy-tools*" \
-              ! -path "*scripts*" \
-              2>/dev/null | head -1)
-            
-            if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
-              echo "✅ 找到可执行GCC编译器: $(basename "$GCC_FILE")"
-              echo "🔧 GCC版本测试:"
-              "$GCC_FILE" --version 2>&1 | head -1
-              
-              # 动态显示SDK GCC版本信息
-              SDK_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
-              MAJOR_VERSION=$(echo "$SDK_VERSION" | grep -o "[0-9]\+" | head -1)
-              
-              echo "💡 这是OpenWrt官方SDK交叉编译器，用于编译目标平台固件"
-              
-              if [ "$MAJOR_VERSION" = "12" ]; then
-                echo "💡 SDK GCC版本: 12.3.0 (OpenWrt 23.05 SDK)"
-              elif [ "$MAJOR_VERSION" = "8" ]; then
-                echo "💡 SDK GCC版本: 8.4.0 (OpenWrt 21.02 SDK)"
-              else
-                echo "💡 SDK GCC版本: $MAJOR_VERSION.x"
-              fi
-              
-              echo "💡 系统GCC (11.4.0) 用于编译工具链，SDK GCC ($MAJOR_VERSION.x) 用于交叉编译固件"
-            else
-              echo "⚠️ 未找到可执行的GCC编译器（可能是虚假的dummy-tools）"
-              
-              # 检查是否有虚假的编译器
-              DUMMY_GCC=$(find "/mnt/openwrt-build/sdk" -type f -executable \
-                -name "*gcc" \
-                -path "*dummy-tools*" \
-                2>/dev/null | head -1)
-              
-              if [ -n "$DUMMY_GCC" ]; then
-                echo "⚠️ 检测到虚假的dummy-tools编译器: $DUMMY_GCC"
-                echo "💡 这是OpenWrt构建系统的占位符，不是真正的编译器"
-              fi
-            fi
-          else
-            echo "❌ SDK目录不存在"
-            echo "💡 将使用OpenWrt自动构建的编译器"
-          fi
-          
-          echo "✅ SDK验证完成"
           echo "🟢 步骤 8 完成"
       
-      #【firmware-build.yml-09】
-      # 步骤 9: 添加 TurboACC 支持
-      - name: "9. 添加 TurboACC 支持"
+      # 步骤 9: 添加 TurboACC 支持（调用大脚本）
+      - name: "9. 添加 TurboACC 支持（调用大脚本）"
         run: |
-          echo "=== 步骤 9: 添加 TurboACC 支持 ==="
+          echo "=== 步骤 9: 添加 TurboACC 支持（调用大脚本） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          
-          # 设置错误处理
-          set -e
-          trap 'echo "❌ 步骤 9 失败，退出代码: $?"; exit 1' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" add_turboacc_support
           
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 添加TurboACC支持失败"
-            exit 1
-          fi
-          
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 9 完成"
       
-      #【firmware-build.yml-10】
-      # 步骤 10: 配置Feeds
-      - name: "10. 配置Feeds"
+      # 步骤 10: 配置Feeds（调用大脚本）
+      - name: "10. 配置Feeds（调用大脚本）"
         run: |
-          echo "=== 步骤 10: 配置Feeds ==="
+          echo "=== 步骤 10: 配置Feeds（调用大脚本） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          
-          # 设置错误处理
-          set -e
-          trap 'echo "❌ 步骤 10 失败，退出代码: $?"; exit 1' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" configure_feeds
           
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 配置Feeds失败"
-            exit 1
-          fi
-          
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 10 完成"
       
-      #【firmware-build.yml-11】
-      # 步骤 11: 安装 TurboACC 包
-      - name: "11. 安装 TurboACC 包"
+      # 步骤 11: 安装 TurboACC 包（调用大脚本）
+      - name: "11. 安装 TurboACC 包（调用大脚本）"
         if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
         run: |
-          echo "=== 步骤 11: 安装 TurboACC 包 ==="
+          echo "=== 步骤 11: 安装 TurboACC 包（调用大脚本） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          
-          # 设置错误处理
-          set -e
-          trap 'echo "❌ 步骤 11 失败，退出代码: $?"; exit 1' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" install_turboacc_packages
           
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 安装TurboACC包失败"
-            exit 1
-          fi
-          
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 11 完成"
       
-      #【firmware-build.yml-12】
-      # 步骤 12: 编译前空间检查
-      - name: "12. 编译前空间检查"
+      # 步骤 12: 编译前空间检查（调用大脚本）
+      - name: "12. 编译前空间检查（调用大脚本）"
         run: |
-          echo "=== 步骤 12: 编译前空间检查 ==="
+          echo "=== 步骤 12: 编译前空间检查（调用大脚本） ==="
           echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          
-          # 设置错误处理
-          set -e
-          trap 'echo "❌ 步骤 12 失败，退出代码: $?"; exit 1' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_space_check
           
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 编译前空间检查失败"
-            exit 1
-          fi
-          
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 12 完成"
       
-      #【firmware-build.yml-13】
-      # 步骤 13: 智能配置生成（使用设备支持系统）
-      - name: "13. 智能配置生成（使用设备支持系统）"
+      # 步骤 13: 智能配置生成（使用设备支持系统）（调用大脚本）
+      - name: "13. 智能配置生成（使用设备支持系统）（调用大脚本）"
         run: |
-          echo "=== 步骤 13: 智能配置生成（使用设备支持系统）==="
+          echo "=== 步骤 13: 智能配置生成（使用设备支持系统）（调用大脚本） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 设置错误处理
-          set -e
-          trap 'echo "❌ 步骤 13 失败，退出代码: $?"; exit 1' ERR
-          
-          # 检查设备支持系统
-          SUPPORT_DIR="${{ github.workspace }}/firmware-config"
-          CONFIG_DIR="$SUPPORT_DIR/config"
-          
-          echo "🔍 检查设备支持系统..."
-          if [ -f "$SUPPORT_DIR/support.sh" ]; then
-            echo "✅ 设备支持脚本存在: $SUPPORT_DIR/support.sh"
-            source "$SUPPORT_DIR/support.sh"
-            
-            # 获取设备描述
-            DEVICE_DESC=$(get_device_description "${{ github.event.inputs.device_name }}")
-            echo "🎯 设备描述: $DEVICE_DESC"
-            
-            # 获取设备配置
-            DEVICE_CONFIG=$(get_device_config "${{ github.event.inputs.device_name }}")
-            TARGET=$(echo $DEVICE_CONFIG | awk '{print $1}')
-            SUBTARGET=$(echo $DEVICE_CONFIG | awk '{print $2}')
-            DEVICE=$(echo $DEVICE_CONFIG | awk '{print $3}')
-            PLATFORM=$(echo $DEVICE_CONFIG | awk '{print $4}')
-            
-            echo "🔧 设备配置详情:"
-            echo "  目标平台: $TARGET"
-            echo "  子目标: $SUBTARGET"
-            echo "  设备: $DEVICE"
-            echo "  平台类型: $PLATFORM"
-            echo "  源代码仓库: ${{ github.event.inputs.source_repo }}"
-          else
-            echo "⚠️ 设备支持脚本不存在: $SUPPORT_DIR/support.sh"
-          fi
-          
-          # 检查配置模板
-          echo "📋 检查配置模板..."
-          if [ -d "$CONFIG_DIR" ]; then
-            echo "✅ 配置模板目录存在: $CONFIG_DIR"
-            echo "📁 可用配置模板:"
-            find "$CONFIG_DIR" -name "*.config" -exec basename {} \; | sort
-            
-            # 检查基础配置
-            if [ -f "$CONFIG_DIR/base.config" ]; then
-              echo "✅ 基础配置模板存在"
-            else
-              echo "❌ 基础配置模板不存在: $CONFIG_DIR/base.config"
-            fi
-            
-            # 检查模式配置
-            if [ -f "$CONFIG_DIR/${{ github.event.inputs.config_mode }}.config" ]; then
-              echo "✅ 模式配置模板存在: ${{ github.event.inputs.config_mode }}.config"
-            else
-              echo "❌ 模式配置模板不存在: $CONFIG_DIR/${{ github.event.inputs.config_mode }}.config"
-            fi
-            
-            # 检查设备特殊配置
-            DEVICE_CONFIG_FILE="$CONFIG_DIR/${{ github.event.inputs.device_name }}.config"
-            if [ -f "$DEVICE_CONFIG_FILE" ]; then
-              echo "🎯 设备特殊配置存在: ${{ github.event.inputs.device_name }}.config"
-              echo "📄 配置文件大小: $(ls -lh "$DEVICE_CONFIG_FILE" | awk '{print $5}')"
-            else
-              echo "ℹ️ 设备特殊配置不存在: ${{ github.event.inputs.device_name }}.config"
-              echo "💡 将使用通用配置"
-            fi
-            
-            # 检查USB配置
-            USB_CONFIG_FILE="$CONFIG_DIR/usb-generic.config"
-            if [ -f "$USB_CONFIG_FILE" ]; then
-              echo "🔌 USB通用配置存在: usb-generic.config"
-            else
-              echo "❌ USB通用配置不存在: usb-generic.config"
-            fi
-          else
-            echo "⚠️ 配置模板目录不存在: $CONFIG_DIR"
-            echo "💡 将使用内置配置生成"
-          fi
-          
-          echo "🚀 开始生成配置..."
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" generate_config "${{ github.event.inputs.extra_packages }}"
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 智能配置生成失败"
-            exit 1
-          fi
-          
-          echo "✅ 配置生成完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          
-          # 显示配置摘要
-          echo "📊 配置生成摘要:"
-          if [ -f "/mnt/openwrt-build/.config" ]; then
-            CONFIG_SIZE=$(ls -lh "/mnt/openwrt-build/.config" | awk '{print $5}')
-            CONFIG_LINES=$(wc -l < "/mnt/openwrt-build/.config")
-            ENABLED_COUNT=$(grep -c "^CONFIG_PACKAGE_.*=y$" "/mnt/openwrt-build/.config")
-            DISABLED_COUNT=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" "/mnt/openwrt-build/.config")
-            
-            echo "  📄 配置文件: /mnt/openwrt-build/.config"
-            echo "  📏 文件大小: $CONFIG_SIZE"
-            echo "  📝 配置行数: $CONFIG_LINES"
-            echo "  ✅ 已启用插件: $ENABLED_COUNT 个"
-            echo "  ❌ 已禁用插件: $DISABLED_COUNT 个"
-            
-            # 显示关键配置
-            echo "  🔧 关键配置检查:"
-            if grep -q "^CONFIG_TARGET_ath79=y" "/mnt/openwrt-build/.config"; then
-              echo "    🎯 目标平台: ath79 (Netgear WNDR3800)"
-            elif grep -q "^CONFIG_TARGET_ipq40xx=y" "/mnt/openwrt-build/.config"; then
-              echo "    🎯 目标平台: ipq40xx (高通平台)"
-            elif grep -q "^CONFIG_TARGET_ramips=y" "/mnt/openwrt-build/.config"; then
-              echo "    🎯 目标平台: ramips (雷凌平台)"
-            elif grep -q "^CONFIG_TARGET_mediatek=y" "/mnt/openwrt-build/.config"; then
-              echo "    🎯 目标平台: mediatek (联发科平台)"
-            fi
-            
-            # 检查USB配置
-            USB_DRIVERS=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-xhci-hcd" "kmod-usb-storage")
-            USB_ENABLED=0
-            for driver in "${USB_DRIVERS[@]}"; do
-              if grep -q "^CONFIG_PACKAGE_${driver}=y" "/mnt/openwrt-build/.config"; then
-                USB_ENABLED=$((USB_ENABLED + 1))
-              fi
-            done
-            echo "    🔌 USB驱动: $USB_ENABLED/${#USB_DRIVERS[@]} 个已启用"
-          fi
           
           echo "🟢 步骤 13 完成"
       
-      #【firmware-build.yml-14】
-      # 步骤 14: 验证USB配置
-      - name: "14. 验证USB配置"
+      # 步骤 14: 验证USB配置（调用大脚本）
+      - name: "14. 验证USB配置（调用大脚本）"
         run: |
-          echo "=== 步骤 14: 验证USB配置 ==="
+          echo "=== 步骤 14: 验证USB配置（调用大脚本） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          
-          # 设置错误处理 - 这里不退出，只是验证
-          trap 'echo "⚠️ 步骤 14 验证过程中出现错误，继续执行..."' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" verify_usb_config
           
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 14 完成"
       
-      #【firmware-build.yml-15】
-      # 步骤 15: USB驱动完整性检查
-      - name: "15. USB驱动完整性检查"
+      # 步骤 15: USB驱动完整性检查（调用大脚本）
+      - name: "15. USB驱动完整性检查（调用大脚本）"
         run: |
-          echo "=== 步骤 15: USB驱动完整性检查 ==="
+          echo "=== 步骤 15: USB驱动完整性检查（调用大脚本） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          
-          # 设置错误处理 - 这里不退出，只是检查
-          trap 'echo "⚠️ 步骤 15 检查过程中出现错误，继续执行..."' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" check_usb_drivers_integrity
           
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 15 完成"
       
-      #【firmware-build.yml-16】
-      # 步骤 16: 应用配置并显示详情（完整版）- 修复版
-      - name: "16. 应用配置并显示详情（完整版）- 修复版"
+      # 步骤 16: 应用配置并显示详情（完整版）- 修复版（调用大脚本）
+      - name: "16. 应用配置并显示详情（完整版）- 修复版（调用大脚本）"
         run: |
-          echo "=== 步骤 16: 应用配置并显示详情（完整版）- 修复版 ==="
+          echo "=== 步骤 16: 应用配置并显示详情（完整版）- 修复版（调用大脚本） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 设置错误处理
-          set -e
-          trap 'echo "❌ 步骤 16 失败，退出代码: $?"; exit 1' ERR
-          
-          echo "🔍 步骤 16.1: 检查配置文件..."
-          if [ -f "/mnt/openwrt-build/.config" ]; then
-            # 备份原始配置文件
-            cp "/mnt/openwrt-build/.config" "/mnt/openwrt-build/.config.original"
-            echo "✅ 已备份原始配置文件: /mnt/openwrt-build/.config.original"
-            
-            # 显示备份文件信息
-            ORIGINAL_SIZE=$(ls -lh "/mnt/openwrt-build/.config.original" | awk '{print $5}')
-            ORIGINAL_LINES=$(wc -l < "/mnt/openwrt-build/.config.original")
-            echo "📊 原始配置文件:"
-            echo "  大小: $ORIGINAL_SIZE"
-            echo "  行数: $ORIGINAL_LINES"
-          else
-            echo "❌ 错误: .config 文件不存在"
-            exit 1
-          fi
-          
-          echo ""
-          echo "🔍 步骤 16.2: 验证配置语法..."
-          cd /mnt/openwrt-build
-          
-          # 先运行配置语法验证
-          if "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" validate_config_syntax; then
-            echo "✅ 配置语法验证通过"
-          else
-            echo "⚠️ 配置语法有问题，尝试自动修复..."
-            # 尝试修复常见问题
-            make defconfig 2>&1 | tee /tmp/defconfig_fix.log
-            if [ $? -eq 0 ]; then
-              echo "✅ defconfig 修复成功"
-            else
-              echo "❌ defconfig 修复失败"
-              echo "defconfig 错误日志:"
-              cat /tmp/defconfig_fix.log | tail -20
-            fi
-          fi
-          
-          echo ""
-          echo "🚀 步骤 16.3: 应用配置（已修复defconfig问题）..."
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" apply_config
           
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 应用配置失败"
-            exit 1
-          fi
-          
-          echo ""
-          echo "=== 🚨 最终配置状态检查（完整详细版）==="
-          if [ -f "/mnt/openwrt-build/.config" ]; then
-            echo "✅ 最终配置文件存在"
-            echo "📊 最终文件大小: $(ls -lh "/mnt/openwrt-build/.config" | awk '{print $5}')"
-            echo "📝 最终文件行数: $(wc -l < "/mnt/openwrt-build/.config")"
-            
-            echo ""
-            echo "🔧 关键配置检查:"
-            echo "1. ✅ 目标平台配置:"
-            grep "CONFIG_TARGET_" "/mnt/openwrt-build/.config" | head -5
-            
-            echo ""
-            echo "2. ✅ USB 3.0驱动配置:"
-            grep "CONFIG_PACKAGE_kmod-usb-xhci" "/mnt/openwrt-build/.config"
-            
-            echo ""
-            echo "3. ✅ 关键USB驱动状态:"
-            grep -E "CONFIG_PACKAGE_kmod-usb-core|CONFIG_PACKAGE_kmod-usb2|CONFIG_PACKAGE_kmod-usb3|CONFIG_PACKAGE_kmod-usb-storage" "/mnt/openwrt-build/.config"
-            
-            echo ""
-            echo "4. ✅ 插件配置统计:"
-            enabled=$(grep -c "CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config")
-            disabled=$(grep -c "# CONFIG_PACKAGE_.* is not set" "/mnt/openwrt-build/.config")
-            echo "   ✅ 已启用插件: $enabled 个"
-            echo "   ❌ 已禁用插件: $disabled 个"
-            
-            echo ""
-            echo "=== 🎯 详细配置状态标识（完整版）==="
-            echo "📋 USB配置状态:"
-            
-            # USB配置检查
-            echo "  CONFIG_PACKAGE_kmod-usb-core: $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-usb2: $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-usb3: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-usb-xhci-hcd: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-usb-storage: $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-scsi-core: $(grep -q "^CONFIG_PACKAGE_kmod-scsi-core=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            
-            echo ""
-            echo "📦 功能性插件状态:"
-            
-            # 功能性插件状态
-            echo "  TurboACC 网络加速 (luci-app-turboacc): $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  UPnP 自动端口转发 (luci-app-upnp): $(grep -q "^CONFIG_PACKAGE_luci-app-upnp=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  Samba 文件共享 (luci-app-samba4): $(grep -q "^CONFIG_PACKAGE_luci-app-samba4=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  磁盘管理 (luci-app-diskman): $(grep -q "^CONFIG_PACKAGE_luci-app-diskman=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  KMS 激活服务 (luci-app-vlmcsd): $(grep -q "^CONFIG_PACKAGE_luci-app-vlmcsd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  SmartDNS 智能DNS (luci-app-smartdns): $(grep -q "^CONFIG_PACKAGE_luci-app-smartdns=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  家长控制 (luci-app-accesscontrol): $(grep -q "^CONFIG_PACKAGE_luci-app-accesscontrol=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  微信推送 (luci-app-wechatpush): $(grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  流量控制 (SQM) (luci-app-sqm): $(grep -q "^CONFIG_PACKAGE_luci-app-sqm=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  FTP 服务器 (luci-app-vsftpd): $(grep -q "^CONFIG_PACKAGE_luci-app-vsftpd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  ARP 绑定 (luci-app-arpbind): $(grep -q "^CONFIG_PACKAGE_luci-app-arpbind=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CPU 限制 (luci-app-cpulimit): $(grep -q "^CONFIG_PACKAGE_luci-app-cpulimit=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  硬盘休眠 (luci-app-hd-idle): $(grep -q "^CONFIG_PACKAGE_luci-app-hd-idle=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            
-            echo ""
-            echo "🎯 配置模式: ${{ github.event.inputs.config_mode }}"
-            if [ "${{ github.event.inputs.config_mode }}" = "normal" ]; then
-              echo "✅ 当前为正常模式（完整功能）"
-              echo "📊 正常模式包含所有功能性插件"
-            else
-              echo "🔧 当前为基础模式（最小化配置）"
-              echo "📊 基础模式仅包含核心功能，用于测试编译"
-            fi
-            
-            echo ""
-            echo "🔍 配置摘要:"
-            echo "  - 设备名称: ${{ github.event.inputs.device_name }}"
-            echo "  - 目标平台: $TARGET/$SUBTARGET"
-            echo "  - 目标设备: $DEVICE"
-            echo "  - OpenWrt版本: $SELECTED_BRANCH"
-            echo "  - 平台类型: $PLATFORM"
-            echo "  - 源代码仓库: $SOURCE_REPO"
-            echo "  - USB驱动: 已启用所有关键驱动"
-            echo "  - 插件数量: $enabled 个已启用"
-            
-            # 显示前10个启用的插件
-            echo ""
-            echo "📋 启用的插件 (前10个):"
-            grep "^CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config" | head -10 | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g' | while read pkg; do
-              echo "  ✅ $pkg"
-            done
-          else
-            echo "❌ 配置文件不存在"
-          fi
-          
-          echo ""
-          echo "✅ 配置应用完成"
           echo "🟢 步骤 16 完成"
       
-      #【firmware-build.yml-17】
       # 步骤 17: 检查并备份配置文件
       - name: "17. 检查并备份配置文件"
         run: |
@@ -1048,535 +423,78 @@ jobs:
           
           echo "🟢 步骤 17 完成"
       
-      #【firmware-build.yml-18】
-      # 步骤 18: 修复网络环境
-      - name: "18. 修复网络环境"
+      # 步骤 18: 修复网络环境（调用大脚本）
+      - name: "18. 修复网络环境（调用大脚本）"
         run: |
-          echo "=== 步骤 18: 修复网络环境 ==="
+          echo "=== 步骤 18: 修复网络环境（调用大脚本） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          
-          # 设置错误处理 - 这里不退出，只是尝试修复
-          trap 'echo "⚠️ 步骤 18 修复过程中出现错误，继续执行..."' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" fix_network
           
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 18 完成"
       
-      #【firmware-build.yml-19】
-      # 步骤 19: 下载依赖包（优化版）
-      - name: "19. 下载依赖包（优化版）"
+      # 步骤 19: 下载依赖包（优化版）（调用大脚本）
+      - name: "19. 下载依赖包（优化版）（调用大脚本）"
         run: |
-          echo "=== 步骤 19: 下载依赖包（优化版） ==="
+          echo "=== 步骤 19: 下载依赖包（优化版）（调用大脚本） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 设置错误处理
-          set -e
-          trap 'echo "❌ 步骤 19 失败，退出代码: $?"; exit 1' ERR
-          
-          cd /mnt/openwrt-build
-          
-          echo "🔧 检查依赖包目录..."
-          if [ ! -d "dl" ]; then
-            mkdir -p dl
-            echo "✅ 创建依赖包目录: dl"
-          fi
-          
-          DEP_COUNT=$(find dl -type f 2>/dev/null | wc -l)
-          echo "📊 当前依赖包数量: $DEP_COUNT 个"
-          
-          echo "🚀 开始下载依赖包（启用并行下载）..."
-          # 使用并行下载加速，设置输出缓冲区更大防止stdout错误
-          stdbuf -oL -eL make -j4 download V=s 2>&1 | tee download.log
-          
-          DOWNLOAD_EXIT_CODE=${PIPESTATUS[0]}
-          if [ $DOWNLOAD_EXIT_CODE -ne 0 ]; then
-            echo "⚠️ 警告: 依赖包下载过程中出现错误，退出代码: $DOWNLOAD_EXIT_CODE"
-            echo "💡 查看下载日志中的错误信息:"
-            grep -i "error\|failed\|404\|not found" download.log | head -10 || true
-          fi
-          
-          echo "✅ 下载完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          
-          # 检查下载结果
-          NEW_DEP_COUNT=$(find dl -type f 2>/dev/null | wc -l)
-          echo "📊 下载后依赖包数量: $NEW_DEP_COUNT 个"
-          echo "📈 新增依赖包: $((NEW_DEP_COUNT - DEP_COUNT)) 个"
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" download_dependencies
           
           echo "🟢 步骤 19 完成"
       
-      #【firmware-build.yml-20】
-      # 步骤 20: 集成自定义文件（增强版）
-      - name: "20. 集成自定义文件（增强版）"
+      # 步骤 20: 集成自定义文件（增强版）（调用大脚本）
+      - name: "20. 集成自定义文件（增强版）（调用大脚本）"
         run: |
-          echo "=== 步骤 20: 集成自定义文件（增强版）==="
+          echo "=== 步骤 20: 集成自定义文件（增强版）（调用大脚本） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 设置错误处理 - 这里不退出，只是尝试集成
-          trap 'echo "⚠️ 步骤 20 集成过程中出现错误，继续执行..."' ERR
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
           
-          echo "🔍 检查自定义文件目录..."
-          CUSTOM_DIR="${{ github.workspace }}/firmware-config/custom-files"
-          
-          if [ -d "$CUSTOM_DIR" ]; then
-            echo "✅ 自定义文件目录存在: $CUSTOM_DIR"
-            
-            # 递归查找所有文件
-            echo "📁 递归查找所有自定义文件..."
-            
-            # 定义英文文件名检查函数 - 修复正则表达式
-            is_english_name() {
-              local filename="$1"
-              if [[ "$filename" =~ ^[a-zA-Z0-9_.\-]+$ ]]; then
-                return 0  # 英文文件名
-              else
-                return 1  # 非英文文件名
-              fi
-            }
-            
-            # 递归查找所有文件
-            ALL_FILES=$(find "$CUSTOM_DIR" -type f 2>/dev/null | sort)
-            FILE_COUNT=$(echo "$ALL_FILES" | wc -l)
-            
-            if [ $FILE_COUNT -eq 0 ]; then
-              echo "ℹ️ 目录为空"
-            else
-              echo "📊 找到 $FILE_COUNT 个自定义文件"
-              
-              # 分类统计
-              IPK_COUNT=0
-              SCRIPT_COUNT=0
-              CONFIG_COUNT=0
-              OTHER_COUNT=0
-              ENGLISH_COUNT=0
-              NON_ENGLISH_COUNT=0
-              
-              # 详细显示所有文件
-              echo ""
-              echo "📋 详细文件列表:"
-              echo "================================================"
-              
-              while IFS= read -r file; do
-                [ -z "$file" ] && continue
-                
-                REL_PATH="${file#$CUSTOM_DIR/}"
-                FILE_NAME=$(basename "$file")
-                FILE_SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                
-                # 检查是否为英文文件名 - 使用修复版检测
-                if is_english_name "$FILE_NAME"; then
-                  NAME_STATUS="✅ 英文"
-                  ENGLISH_COUNT=$((ENGLISH_COUNT + 1))
-                else
-                  NAME_STATUS="⚠️ 非英文"
-                  NON_ENGLISH_COUNT=$((NON_ENGLISH_COUNT + 1))
-                fi
-                
-                # 文件类型统计
-                if [[ "$FILE_NAME" =~ \.ipk$ ]] || [[ "$FILE_NAME" =~ \.IPK$ ]] || [[ "$FILE_NAME" =~ \.Ipk$ ]]; then
-                  TYPE_DESC="📦 IPK包"
-                  IPK_COUNT=$((IPK_COUNT + 1))
-                elif [[ "$FILE_NAME" =~ \.sh$ ]] || [[ "$FILE_NAME" =~ \.Sh$ ]] || [[ "$FILE_NAME" =~ \.SH$ ]]; then
-                  TYPE_DESC="📜 脚本"
-                  SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
-                elif [[ "$FILE_NAME" =~ \.conf$ ]] || [[ "$FILE_NAME" =~ \.config$ ]] || [[ "$FILE_NAME" =~ \.CONF$ ]]; then
-                  TYPE_DESC="⚙️ 配置"
-                  CONFIG_COUNT=$((CONFIG_COUNT + 1))
-                else
-                  TYPE_DESC="📁 其他"
-                  OTHER_COUNT=$((OTHER_COUNT + 1))
-                fi
-                
-                printf "%-45s %-8s %-12s %s\n" "$REL_PATH" "$FILE_SIZE" "$TYPE_DESC" "$NAME_STATUS"
-                
-              done <<< "$ALL_FILES"
-              
-              echo "================================================"
-              
-              # 统计信息
-              echo ""
-              echo "📊 文件统计:"
-              echo "  文件总数: $FILE_COUNT 个"
-              echo "  📦 IPK文件: $IPK_COUNT 个"
-              echo "  📜 脚本文件: $SCRIPT_COUNT 个"
-              echo "  ⚙️ 配置文件: $CONFIG_COUNT 个"
-              echo "  📁 其他文件: $OTHER_COUNT 个"
-              echo "  ✅ 英文文件名: $ENGLISH_COUNT 个"
-              echo "  ⚠️ 非英文文件名: $NON_ENGLISH_COUNT 个"
-              
-              # 文件名建议 - 简化版本
-              if [ $NON_ENGLISH_COUNT -gt 0 ]; then
-                echo ""
-                echo "💡 文件名兼容性建议:"
-                echo "  为了更好的兼容性，方便复制、运行，建议使用英文文件名"
-                echo "  当前系统会自动处理非英文文件名，但英文名有更好的兼容性"
-              fi
-              
-              echo ""
-              echo "🚀 开始执行自定义文件集成（增强版）..."
-              "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
-              
-              # 验证集成结果
-              echo ""
-              echo "🔍 验证集成结果..."
-              cd /mnt/openwrt-build
-              
-              # 检查自定义文件目录
-              if [ -d "files/etc/custom-files" ]; then
-                echo "✅ 自定义文件已复制到: files/etc/custom-files"
-                
-                # 统计复制后的文件
-                FINAL_FILES=$(find "files/etc/custom-files" -type f 2>/dev/null | wc -l)
-                echo "📊 复制后文件总数: $FINAL_FILES 个"
-                
-                # 显示目录结构 - 显示所有文件
-                if [ $FINAL_FILES -gt 0 ]; then
-                  echo "📁 复制后的所有文件列表:"
-                  find "files/etc/custom-files" -type f 2>/dev/null | while read file; do
-                    REL_PATH="${file#files/etc/custom-files/}"
-                    FILE_SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                    echo "  📄 $REL_PATH ($FILE_SIZE)"
-                  done
-                fi
-                
-                # 检查启动脚本
-                if [ -f "files/etc/uci-defaults/99-custom-files" ]; then
-                  echo "✅ 第一次开机启动脚本: files/etc/uci-defaults/99-custom-files"
-                  echo "📝 脚本增强功能:"
-                  echo "  - ✅ 递归查找所有自定义文件"
-                  echo "  - ✅ 保持原文件名"
-                  echo "  - ✅ IPK安装错误不退出，继续下一个"
-                  echo "  - ✅ 详细日志记录每个文件的处理结果"
-                  echo "  - ✅ 分类统计和成功率计算"
-                  echo "  - ✅ 日志存储到 /root/logs/ 目录（重启不丢失）"
-                fi
-                
-                # 检查文件名检查脚本
-                if [ -f "files/etc/custom-files/check_filenames.sh" ]; then
-                  echo "✅ 文件名检查脚本: files/etc/custom-files/check_filenames.sh"
-                fi
-                
-                echo ""
-                echo "🎯 增强版功能说明:"
-                echo "  🔧 递归查找: 支持自定义目录下的所有子目录"
-                echo "  📝 保持原文件名: 不自动重命名，保持用户设置的文件名"
-                echo "  🔄 错误不退出: IPK安装失败继续安装下一个"
-                echo "  📊 详细日志: 记录每个文件的处理结果和统计信息"
-                echo "  📁 持久日志: 日志存储在 /root/logs/（重启不丢失）"
-                
-                if [ $NON_ENGLISH_COUNT -gt 0 ]; then
-                  echo ""
-                  echo "⚠️ 文件名兼容性提醒:"
-                  echo "  当前有 $NON_ENGLISH_COUNT 个文件使用非英文文件名"
-                  echo "  系统会自动处理，但建议改为英文文件名"
-                  echo "  可以在固件启动后运行: /etc/custom-files/check_filenames.sh"
-                fi
-                
-              else
-                echo "❌ 未找到自定义文件目录"
-              fi
-              
-            fi
-            
-            echo ""
-            echo "🎉 自定义文件集成完成"
-            echo "💡 自定义文件将在第一次开机时自动安装和运行"
-            echo "📌 安装顺序: IPK包 → 脚本文件 → 其他文件"
-            echo "🔧 错误处理: 单个文件安装失败不会影响其他文件"
-            echo "📁 日志位置: /root/logs/（重启不丢失）"
-            
-          else
-            echo "ℹ️ 自定义文件目录不存在: $CUSTOM_DIR"
-            echo "📁 跳过自定义文件集成"
-          fi
-          
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 20 完成"
       
-      #【firmware-build.yml-21】
-      # 步骤 21: 前置错误检查（修复23.05 SDK验证）- 关键修复
-      - name: "21. 前置错误检查（修复23.05 SDK验证）"
+      # 步骤 21: 前置错误检查（修复23.05 SDK验证）（调用大脚本）
+      - name: "21. 前置错误检查（修复23.05 SDK验证）（调用大脚本）"
         run: |
-          echo "=== 步骤 21: 前置错误检查（修复23.05 SDK验证） ==="
+          echo "=== 步骤 21: 前置错误检查（修复23.05 SDK验证）（调用大脚本） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 设置错误处理
-          set -e
-          trap 'echo "❌ 步骤 21 失败，退出代码: $?"; exit 1' ERR
-          
-          echo "🔍 检查当前环境..."
-          if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
-            source /mnt/openwrt-build/build_env.sh
-            echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET, PLATFORM=$PLATFORM, SOURCE_REPO=$SOURCE_REPO"
-          fi
-          
-          echo "🚀 执行前置错误检查（已修复23.05 SDK验证问题）..."
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_error_check
           
-          CHECK_EXIT_CODE=$?
-          if [ $CHECK_EXIT_CODE -ne 0 ]; then
-            echo "❌ 错误: 前置错误检查失败，退出代码: $CHECK_EXIT_CODE"
-            echo "💡 请查看上方错误信息进行修复"
-            
-            # 如果是23.05版本，提供特殊提示
-            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-              echo ""
-              echo "🚨 23.05版本SDK验证问题修复提示:"
-              echo "💡 23.05 SDK使用GCC 12.3.0，已放宽验证条件"
-              echo "📌 只需要有GCC编译器文件即可，不要求特定目录结构"
-              echo "🔧 已排除虚假的dummy-tools编译器检测"
-            fi
-            
-            exit 1
-          fi
-          
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 21 完成"
       
-      #【firmware-build.yml-22】
-      # 步骤 22: 编译固件前的空间检查
-      - name: "22. 编译固件前的空间检查"
+      # 步骤 22: 编译固件前的空间检查（调用大脚本）
+      - name: "22. 编译固件前的空间检查（调用大脚本）"
         run: |
-          echo "=== 步骤 22: 编译固件前的空间检查 ==="
+          echo "=== 步骤 22: 编译固件前的空间检查（调用大脚本） ==="
           echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 设置错误处理
-          set -e
-          trap 'echo "❌ 步骤 22 失败，退出代码: $?"; exit 1' ERR
-          
-          df -h /mnt
-          AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
-          AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-          echo "/mnt 可用空间: ${AVAILABLE_GB}G"
-          
-          if [ $AVAILABLE_GB -lt 10 ]; then
-            echo "❌ 错误: 编译前空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
-            exit 1
-          elif [ $AVAILABLE_GB -lt 20 ]; then
-            echo "⚠️ 警告: 编译前空间较低 (建议至少20G，当前${AVAILABLE_GB}G)"
-          else
-            echo "✅ 编译前空间充足"
-          fi
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_space_check
           
           echo "🟢 步骤 22 完成"
       
-      #【firmware-build.yml-23】
-      # 步骤 23: 编译固件（智能并行优化版）
-      - name: "23. 编译固件（智能并行优化版）"
+      # 步骤 23: 编译固件（智能并行优化版）（调用大脚本）
+      - name: "23. 编译固件（智能并行优化版）（调用大脚本）"
         run: |
-          echo "=== 步骤 23: 编译固件（智能并行优化版） ==="
+          echo "=== 步骤 23: 编译固件（智能并行优化版）（调用大脚本） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 设置错误处理
-          set -e
-          trap 'echo "❌ 步骤 23 失败，退出代码: $?"; exit 1' ERR
-          
-          cd /mnt/openwrt-build
-          
-          # 获取系统信息
-          CPU_CORES=$(nproc)
-          TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
-          
-          echo "🔧 系统信息:"
-          echo "  CPU核心数: $CPU_CORES"
-          echo "  内存大小: ${TOTAL_MEM}MB"
-          echo "  并行优化: ${{ env.ENABLE_PARALLEL }}"
-          echo "  源代码仓库: $SOURCE_REPO"
-          
-          # 智能判断最佳并行任务数 - 优化版
-          if [ "${{ env.ENABLE_PARALLEL }}" = "true" ]; then
-            echo "🧠 智能判断最佳并行任务数..."
-            
-            # GitHub Actions Runner 优化配置
-            if [ $CPU_CORES -ge 4 ]; then
-              if [ $TOTAL_MEM -ge 8000 ]; then
-                MAKE_JOBS=4
-                echo "✅ 检测到高性能Runner (4核+8GB)"
-              else
-                MAKE_JOBS=3
-                echo "✅ 检测到标准Runner (4核)"
-              fi
-            elif [ $CPU_CORES -ge 2 ]; then
-              if [ $TOTAL_MEM -ge 7000 ]; then
-                MAKE_JOBS=3
-                echo "✅ 检测到GitHub标准Runner (2核7GB)"
-              else
-                MAKE_JOBS=2
-                echo "✅ 检测到2核Runner"
-              fi
-            else
-              MAKE_JOBS=2
-              echo "⚠️ 检测到单核Runner"
-            fi
-            
-            echo "🎯 决定使用 $MAKE_JOBS 个并行任务"
-          else
-            MAKE_JOBS=1
-            echo "🔄 禁用并行优化，使用单线程编译"
-          fi
-          
-          echo ""
-          echo "🚀 开始编译固件"
-          echo "💡 编译配置:"
-          echo "  - 并行任务: $MAKE_JOBS"
-          echo "  - 设备: ${{ github.event.inputs.device_name }}"
-          echo "  - 版本: ${{ github.event.inputs.version_selection }}"
-          echo "  - 配置模式: ${{ github.event.inputs.config_mode }}"
-          echo "  - 源代码仓库: ${{ github.event.inputs.source_repo }}"
-          echo "  - 平台类型: $PLATFORM"
-          echo "  - 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          
-          # 设置编译环境变量
-          export FORCE_UNSAFE_CONFIGURE=1
-          
-          # 开始编译，使用stdbuf防止stdout错误
-          START_TIME=$(date +%s)
-          stdbuf -oL -eL time make -j$MAKE_JOBS V=s 2>&1 | tee build.log
-          BUILD_EXIT_CODE=${PIPESTATUS[0]}
-          END_TIME=$(date +%s)
-          DURATION=$((END_TIME - START_TIME))
-          
-          echo ""
-          echo "📊 编译统计:"
-          echo "  - 总耗时: $((DURATION / 60))分钟$((DURATION % 60))秒"
-          echo "  - 退出代码: $BUILD_EXIT_CODE"
-          
-          if [ $BUILD_EXIT_CODE -eq 0 ]; then
-            echo "✅ 固件编译成功"
-            
-            if [ -d "bin/targets" ]; then
-              FIRMWARE_COUNT=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
-              echo "✅ 生成固件文件: $FIRMWARE_COUNT 个"
-              
-              # 显示前3个固件文件
-              echo "📁 生成的固件文件 (前3个):"
-              find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | head -3 | while read file; do
-                SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                echo "  📄 $(basename "$file") ($SIZE)"
-              done
-            fi
-          else
-            echo "❌ 错误: 编译失败，退出代码: $BUILD_EXIT_CODE"
-            echo "🔍 编译日志中的错误摘要:"
-            grep -i "error\|failed" build.log | tail -20 || true
-            exit $BUILD_EXIT_CODE
-          fi
+          # 启用缓存
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" build_firmware "true"
           
           echo "🟢 步骤 23 完成"
       
-      #【firmware-build.yml-24】
-      # 步骤 24: 检查构建产物（修复版）
-      - name: "24. 检查构建产物（修复版）"
+      # 步骤 24: 检查构建产物（修复版）（调用大脚本）
+      - name: "24. 检查构建产物（修复版）（调用大脚本）"
         if: success()
         run: |
-          echo "=== 步骤 24: 检查构建产物（修复版） ==="
+          echo "=== 步骤 24: 检查构建产物（修复版）（调用大脚本） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 设置错误处理
-          set -e
-          trap 'echo "❌ 步骤 24 失败，退出代码: $?"; exit 1' ERR
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" check_firmware_files
           
-          cd /mnt/openwrt-build
-          
-          if [ -d "bin/targets" ]; then
-            echo "✅ 找到固件目录"
-            
-            # 统计各种类型文件
-            FIRMWARE_COUNT=0
-            PACKAGE_COUNT=0
-            OTHER_COUNT=0
-            
-            # 计算文件数量
-            echo "📊 正在统计文件..."
-            
-            # 统计固件文件（.bin和.img）
-            FIRMWARE_COUNT=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
-            
-            # 统计包文件（.gz和.ipk）
-            PACKAGE_COUNT=$(find bin/targets -type f \( -name "*.gz" -o -name "*.ipk" \) 2>/dev/null | wc -l)
-            
-            # 统计其他文件（排除上面两种类型）
-            OTHER_COUNT=$(find bin/targets -type f 2>/dev/null | wc -l)
-            OTHER_COUNT=$((OTHER_COUNT - FIRMWARE_COUNT - PACKAGE_COUNT))
-            
-            echo "=========================================="
-            echo "📈 构建产物统计:"
-            echo "  固件文件: $FIRMWARE_COUNT 个 (.bin/.img)"
-            echo "  包文件: $PACKAGE_COUNT 个 (.gz/.ipk)"
-            echo "  其他文件: $OTHER_COUNT 个"
-            echo "  总文件数: $((FIRMWARE_COUNT + PACKAGE_COUNT + OTHER_COUNT)) 个"
-            echo ""
-            
-            # 显示所有固件文件的详细信息
-            if [ $FIRMWARE_COUNT -gt 0 ]; then
-              echo "📁 固件文件详细信息:"
-              echo "------------------------------------------"
-              find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
-                SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                FULL_SIZE=$(stat -c%s "$file" 2>/dev/null || echo "0")
-                FILE_NAME=$(basename "$file")
-                FILE_PATH=$(echo "$file" | sed "s|/mnt/openwrt-build/||")
-                
-                echo "🎯 文件: $FILE_NAME"
-                echo "  大小: $SIZE ($FULL_SIZE 字节)"
-                echo "  路径: $FILE_PATH"
-                
-                # 判断文件类型
-                if [[ "$FILE_NAME" == *factory* ]]; then
-                  TYPE="🏭 工厂固件"
-                elif [[ "$FILE_NAME" == *sysupgrade* ]]; then
-                  TYPE="🔄 升级固件"
-                elif [[ "$FILE_NAME" == *initramfs* ]]; then
-                  TYPE="🚀 内存固件"
-                else
-                  TYPE="🔧 普通固件"
-                fi
-                
-                echo "  类型: $TYPE"
-                echo ""
-              done
-            else
-              echo "⚠️ 警告: 未找到任何固件文件 (.bin/.img)"
-              echo "🔍 目录内容 (前10个文件):"
-              find bin/targets -type f 2>/dev/null | head -10 | while read file; do
-                SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                echo "  📄 $(basename "$file") ($SIZE)"
-              done
-            fi
-            
-            # 计算总大小
-            echo "📏 大小统计:"
-            TOTAL_SIZE=0
-            find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
-              SIZE=$(stat -c%s "$file" 2>/dev/null || echo "0")
-              TOTAL_SIZE=$((TOTAL_SIZE + SIZE))
-            done
-            
-            if [ $TOTAL_SIZE -gt 0 ]; then
-              TOTAL_SIZE_MB=$((TOTAL_SIZE / 1024 / 1024))
-              echo "  固件总大小: ${TOTAL_SIZE_MB}MB"
-              
-              if [ $TOTAL_SIZE_MB -lt 5 ]; then
-                echo "  ⚠️ 警告: 固件文件可能太小"
-              elif [ $TOTAL_SIZE_MB -gt 100 ]; then
-                echo "  ⚠️ 警告: 固件文件可能太大"
-              else
-                echo "  ✅ 固件大小正常"
-              fi
-            fi
-            
-            echo "=========================================="
-            echo "✅ 构建产物检查完成"
-          else
-            echo "❌ 错误: 未找到固件目录"
-            echo "⚠️ bin/targets目录不存在"
-            exit 1
-          fi
-          
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 24 完成"
       
-      #【firmware-build.yml-25】
       # 步骤 25: 上传固件原始目录
       - name: "25. 上传固件原始目录"
         if: success()
@@ -1587,7 +505,6 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      #【firmware-build.yml-26】
       # 步骤 26: 上传配置文件
       - name: "26. 上传配置文件"
         if: always()
@@ -1598,34 +515,17 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      #【firmware-build.yml-27】
-      # 步骤 27: 编译后空间检查（修复版）
-      - name: "27. 编译后空间检查（修复版）"
+      # 步骤 27: 编译后空间检查（修复版）（调用大脚本）
+      - name: "27. 编译后空间检查（修复版）（调用大脚本）"
         if: always()
         run: |
-          echo "=== 步骤 27: 编译后空间检查（修复版） ==="
+          echo "=== 步骤 27: 编译后空间检查（修复版）（调用大脚本） ==="
           echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 设置错误处理 - 这里不退出，只是检查
-          trap 'echo "⚠️ 步骤 27 检查过程中出现错误，继续执行..."' ERR
-          
-          echo "📊 磁盘使用情况:"
-          df -h /mnt
-          
-          # 修复：使用正确的df选项获取可用空间
-          AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
-          AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-          echo "/mnt 可用空间: ${AVAILABLE_GB}G"
-          
-          if [ $AVAILABLE_GB -lt 5 ]; then
-            echo "⚠️ 警告: 磁盘空间较低，建议清理"
-          else
-            echo "✅ 磁盘空间充足"
-          fi
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" post_build_space_check
           
           echo "🟢 步骤 27 完成"
       
-      #【firmware-build.yml-28】
       # 步骤 28: 编译后总结（增强版）
       - name: "28. 编译后总结（增强版）"
         if: always()
@@ -1710,155 +610,6 @@ jobs:
             echo "  ❌ 构建结果: 失败"
           fi
           
-          # 设备支持系统状态
-          echo ""
-          echo "🔧 设备支持系统状态:"
-          SUPPORT_DIR="${{ github.workspace }}/firmware-config"
-          if [ -f "$SUPPORT_DIR/support.sh" ]; then
-            echo "  ✅ 设备支持脚本: 存在"
-            source "$SUPPORT_DIR/support.sh"
-            
-            if command -v get_device_description >/dev/null 2>&1; then
-              DEVICE_DESC=$(get_device_description "${{ github.event.inputs.device_name }}")
-              echo "  🎯 设备描述: $DEVICE_DESC"
-            fi
-            
-            # 检查配置模板
-            CONFIG_DIR="$SUPPORT_DIR/config"
-            if [ -d "$CONFIG_DIR" ]; then
-              CONFIG_FILES=$(find "$CONFIG_DIR" -name "*.config" | wc -l)
-              echo "  📋 配置模板: $CONFIG_FILES 个"
-              
-              # 检查使用的配置模板
-              if [ -f "$CONFIG_DIR/base.config" ]; then
-                echo "  ✅ 基础配置模板: 存在"
-              fi
-              
-              if [ -f "$CONFIG_DIR/${{ github.event.inputs.config_mode }}.config" ]; then
-                echo "  ✅ 模式配置模板 (${{ github.event.inputs.config_mode }}): 存在"
-              fi
-              
-              DEVICE_CONFIG_FILE="$CONFIG_DIR/${{ github.event.inputs.device_name }}.config"
-              if [ -f "$DEVICE_CONFIG_FILE" ]; then
-                echo "  🎯 设备特殊配置: 存在 (${{ github.event.inputs.device_name }}.config)"
-              else
-                echo "  ℹ️ 设备特殊配置: 未找到，使用通用配置"
-              fi
-            else
-              echo "  ⚠️ 配置模板目录: 不存在"
-            fi
-          else
-            echo "  ⚠️ 设备支持脚本: 不存在，使用内置配置"
-          fi
-          
-          # 编译器信息
-          echo ""
-          echo "🔧 编译器信息:"
-          
-          # 检查SDK编译器版本
-          if [ -d "/mnt/openwrt-build/sdk" ]; then
-            # 查找真正的GCC，排除虚假编译器
-            GCC_FILE=$(find "/mnt/openwrt-build/sdk" -type f -executable \
-              -name "*gcc" \
-              ! -name "*gcc-ar" \
-              ! -name "*gcc-ranlib" \
-              ! -name "*gcc-nm" \
-              ! -path "*dummy-tools*" \
-              ! -path "*scripts*" \
-              2>/dev/null | head -1)
-            
-            if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
-              SDK_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
-              MAJOR_VERSION=$(echo "$SDK_VERSION" | grep -o "[0-9]\+" | head -1)
-              
-              if [ "$MAJOR_VERSION" = "12" ]; then
-                echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
-                echo "  🎯 SDK GCC: 12.3.0 (OpenWrt 23.05 SDK，用于交叉编译固件)"
-              elif [ "$MAJOR_VERSION" = "8" ]; then
-                echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
-                echo "  🎯 SDK GCC: 8.4.0 (OpenWrt 21.02 SDK，用于交叉编译固件)"
-              else
-                echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
-                echo "  🎯 SDK GCC: $MAJOR_VERSION.x (用于交叉编译固件)"
-              fi
-            else
-              echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
-              echo "  🎯 SDK GCC: 未检测到版本（可能检测到虚假的dummy-tools编译器）"
-            fi
-          else
-            echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
-            echo "  🎯 SDK GCC: 未下载SDK，使用自动构建的编译器"
-          fi
-          
-          echo "  💡 这是正常的：系统编译器编译工具链，SDK编译器编译固件"
-          
-          # 自定义文件集成状态（增强版）
-          echo ""
-          echo "📁 自定义文件集成状态（增强版）:"
-          
-          # 尝试从统计文件读取自定义文件信息
-          CUSTOM_STATS_FILE="/tmp/custom_file_stats.txt"
-          if [ -f "$CUSTOM_STATS_FILE" ]; then
-            source "$CUSTOM_STATS_FILE"
-            echo "  ✅ 自定义文件总数: $CUSTOM_FILE_TOTAL 个"
-            echo "  📦 IPK包: $CUSTOM_IPK_COUNT 个"
-            echo "  📜 脚本: $CUSTOM_SCRIPT_COUNT 个"
-            echo "  ⚙️ 配置文件: $CUSTOM_CONFIG_COUNT 个"
-            echo "  📁 其他文件: $CUSTOM_OTHER_COUNT 个"
-            echo "  ✅ 英文文件名: $CUSTOM_ENGLISH_COUNT 个"
-            echo "  ⚠️ 非英文文件名: $CUSTOM_NON_ENGLISH_COUNT 个"
-            echo "  📌 位置: /etc/custom-files/"
-            echo "  📁 日志位置: /root/logs/（重启不丢失）"
-            
-            if [ -f "/mnt/openwrt-build/files/etc/uci-defaults/99-custom-files" ]; then
-              echo "  ✅ 第一次开机安装脚本: 已创建（增强版）"
-              echo "  💡 安装顺序: IPK包 → 脚本文件 → 其他文件"
-              echo "  🔧 错误处理: 单个文件失败不影响其他文件"
-              echo "  📊 详细日志: 记录每个文件的处理结果"
-            fi
-            
-            if [ "$CUSTOM_NON_ENGLISH_COUNT" -gt 0 ]; then
-              echo ""
-              echo "💡 文件名兼容性提示:"
-              echo "  当前有 $CUSTOM_NON_ENGLISH_COUNT 个文件使用非英文文件名"
-              echo "  建议改为英文文件名以获得更好的兼容性"
-              echo "  可以在固件启动后运行: /etc/custom-files/check_filenames.sh"
-            fi
-          else
-            # 如果统计文件不存在，检查目录
-            if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
-              CUSTOM_FILES_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | wc -l)
-              if [ $CUSTOM_FILES_COUNT -gt 0 ]; then
-                echo "  ✅ 自定义文件已集成: $CUSTOM_FILES_COUNT 个文件"
-                echo "  📌 位置: /etc/custom-files/"
-              else
-                echo "  ⚪ 自定义文件: 未集成"
-              fi
-            else
-              echo "  ⚪ 自定义文件: 未集成"
-            fi
-          fi
-          
-          # 文件名兼容性建议
-          echo ""
-          echo "💡 文件名兼容性建议:"
-          echo "  为了更好的兼容性，方便复制、运行，建议自定义文件使用英文文件名"
-          echo "  当前系统支持非英文文件名，但英文名有更好的兼容性"
-          
-          # 设备支持系统使用说明
-          echo ""
-          echo "📚 设备支持系统使用说明:"
-          echo "  1. 添加新设备: 编辑 firmware-config/support.sh"
-          echo "  2. 添加设备配置: 在 firmware-config/config/ 目录下创建 设备名.config"
-          echo "  3. 添加通用配置: 编辑 base.config, normal.config, usb-generic.config"
-          echo "  4. 重新运行工作流选择新设备即可"
-          
-          echo ""
-          echo "📦 源代码仓库选择说明:"
-          echo "  🔄 ImmortalWrt: 官方分支，稳定可靠"
-          echo "  ⚡ LEDE: 国内优化版，更适合中国用户"
-          
-          echo ""
           echo "✅ 构建流程完成"
           echo "========================================"
           echo "🟢 步骤 28 完成"
