@@ -20,19 +20,17 @@ log() {
 }
 
 #【build_firmware_main.sh-02】错误处理函数
+#【build_firmware_main.sh-02】错误处理函数
 handle_error() {
     log "❌ 错误发生在: $1"
     log "详细错误信息:"
-    echo "最后100行构建日志:"
     tail -100 /tmp/build-logs/*.log 2>/dev/null || echo "无日志文件"
     
-    # 检查defconfig日志
     if [ -f "/tmp/defconfig.log" ]; then
         echo "defconfig 错误日志:"
         cat "/tmp/defconfig.log"
     fi
     
-    # 检查.config文件
     if [ -f ".config" ]; then
         echo ".config 最后50行:"
         tail -50 .config
@@ -40,10 +38,6 @@ handle_error() {
     
     exit 1
 }
-
-# ==============================
-# 【环境变量管理】函数区域
-# ==============================
 
 #【build_firmware_main.sh-03】环境变量函数
 save_env() {
@@ -61,7 +55,6 @@ save_env() {
     echo "export PLATFORM=\"${PLATFORM}\"" >> $ENV_FILE
     echo "export SOURCE_REPO=\"${SOURCE_REPO}\"" >> $ENV_FILE
     
-    # 确保环境变量可被其他步骤访问
     if [ -n "$GITHUB_ENV" ]; then
         echo "SELECTED_REPO_URL=${SELECTED_REPO_URL}" >> $GITHUB_ENV
         echo "SELECTED_BRANCH=${SELECTED_BRANCH}" >> $GITHUB_ENV
@@ -79,7 +72,15 @@ save_env() {
     log "✅ 环境变量已保存到: $ENV_FILE"
 }
 
-# 加载环境变量函数
+load_env() {
+    if [ -f "$ENV_FILE" ]; then
+        source $ENV_FILE
+        log "✅ 从 $ENV_FILE 加载环境变量"
+    else
+        log "⚠️ 环境文件不存在: $ENV_FILE"
+    fi
+}
+
 load_env() {
     if [ -f "$ENV_FILE" ]; then
         source $ENV_FILE
@@ -3509,9 +3510,9 @@ save_source_code_info() {
 # ==============================
 
 #【build_firmware_main.sh-35】主函数
+#【build_firmware_main.sh-04】主函数
 main() {
     case $1 in
-        # 环境设置相关
         "setup_environment")
             setup_environment
             ;;
@@ -3521,8 +3522,6 @@ main() {
         "initialize_build_env")
             initialize_build_env "$2" "$3" "$4" "$5"
             ;;
-        
-        # SDK和编译器相关
         "initialize_compiler_env")
             initialize_compiler_env "$2"
             ;;
@@ -3532,8 +3531,6 @@ main() {
         "check_compiler_invocation")
             check_compiler_invocation
             ;;
-        
-        # TurboACC和Feeds相关
         "add_turboacc_support")
             add_turboacc_support
             ;;
@@ -3543,16 +3540,12 @@ main() {
         "install_turboacc_packages")
             install_turboacc_packages
             ;;
-        
-        # 空间检查相关
         "pre_build_space_check")
             pre_build_space_check
             ;;
         "post_build_space_check")
             post_build_space_check
             ;;
-        
-        # 配置相关
         "generate_config")
             generate_config "$2"
             ;;
@@ -3568,42 +3561,30 @@ main() {
         "apply_config")
             apply_config
             ;;
-        
-        # 网络和依赖
         "fix_network")
             fix_network
             ;;
         "download_dependencies")
             download_dependencies
             ;;
-        
-        # 自定义文件
         "integrate_custom_files")
             integrate_custom_files
             ;;
-        
-        # 错误检查和构建
         "pre_build_error_check")
             pre_build_error_check
             ;;
         "build_firmware")
             build_firmware "$2"
             ;;
-        
-        # 构建后检查
         "check_firmware_files")
             check_firmware_files
             ;;
-        
-        # 清理和备份
         "cleanup")
             cleanup
             ;;
         "save_source_code_info")
             save_source_code_info
             ;;
-        
-        # 编译器搜索（已废弃，保持兼容性）
         "search_compiler_files")
             search_compiler_files "$2" "$3"
             ;;
@@ -3616,12 +3597,11 @@ main() {
         "intelligent_platform_aware_compiler_search")
             intelligent_platform_aware_compiler_search "$2" "$3" "$4"
             ;;
-        
         *)
             log "❌ 未知命令: $1"
             echo "可用命令:"
             echo "  setup_environment, create_build_dir, initialize_build_env"
-            echo "  initialize_compiler_env - 初始化编译器环境（下载OpenWrt官方SDK）"
+            echo "  initialize_compiler_env - 初始化编译器环境"
             echo "  add_turboacc_support, configure_feeds, install_turboacc_packages"
             echo "  pre_build_space_check, generate_config, verify_usb_config, check_usb_drivers_integrity, apply_config"
             echo "  fix_network, download_dependencies, integrate_custom_files"
@@ -3634,8 +3614,21 @@ main() {
     esac
 }
 
-main "$@"
+log() {
+    echo "【$(date '+%Y-%m-%d %H:%M:%S')】$1"
+}
 
-# 🔧 自动修复标记
-# 修复时间: Sat Jan 31 16:47:26 UTC 2026
-# 时间戳: 1769878046
+
+# ============ 自动修复追加函数: # 修复第3642行的语法错误：添加main函数调用和正确的文件结尾 ============
+#【build_firmware_main.sh-05】关键修复 - 确保文件正确结束
+# 修复第3642行的语法错误：添加main函数调用和正确的文件结尾
+
+# 只有脚本被直接执行时才调用main
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    main "$@"
+fi
+
+# 正常退出
+exit 0
+
+
