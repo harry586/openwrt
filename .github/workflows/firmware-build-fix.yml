@@ -1,297 +1,371 @@
-name: 🔧 全自动修复系统
+name: 🔧 自动修复系统（PR + 自动合并）
 
 on:
   push:
     paths:
-      - '**/fix.txt'
-      - '**/fix.md'
-      - '**/fixes/**'
+      - 'firmware-config/fix.txt'
+      - 'fix.txt'
+      - '.github/workflows/auto-fix.yml'
   
   workflow_dispatch:
+    inputs:
+      auto_merge:
+        description: '自动合并PR'
+        required: false
+        default: true
+        type: boolean
 
 jobs:
-  auto-fix-and-commit:
+  analyze-fixes:
     runs-on: ubuntu-latest
-    # 最小但必要的权限
-    permissions:
-      contents: write
+    outputs:
+      has_fixes: ${{ steps.analyze.outputs.has_fixes }}
+      total_fixes: ${{ steps.analyze.outputs.total_fixes }}
+      script_fixes: ${{ steps.analyze.outputs.script_fixes }}
+      workflow_fixes: ${{ steps.analyze.outputs.workflow_fixes }}
+      fix_file: ${{ steps.analyze.outputs.fix_file }}
     
     steps:
-      - name: 🛎️ 检出代码仓库（使用完整权限）
+      - name: 🛎️ 检出代码
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-          # 关键配置：允许推送回同一个分支
-          persist-credentials: true
       
-      - name: 🔍 查找并显示修复文件
-        id: find_fix
+      - name: 🔍 分析修复文件
+        id: analyze
         run: |
-          echo "=== 🔍 查找修复文件 ==="
-          echo "事件类型: ${{ github.event_name }}"
-          echo "触发分支: ${{ github.ref }}"
-          echo "工作目录: $(pwd)"
-          echo ""
+          echo "=== 分析修复文件 ==="
           
-          echo "📁 当前目录结构:"
-          find . -name "*.txt" -o -name "*.md" | grep -v ".git" | head -10
-          echo ""
-          
-          # 优先查找 firmware-config/fix.txt
+          # 查找修复文件
           if [ -f "firmware-config/fix.txt" ]; then
             FIX_FILE="firmware-config/fix.txt"
-            echo "✅ 找到修复文件: $FIX_FILE"
           elif [ -f "fix.txt" ]; then
             FIX_FILE="fix.txt"
-            echo "✅ 找到修复文件: $FIX_FILE"
           else
             echo "❌ 未找到修复文件"
-            exit 1
+            echo "has_fixes=false" >> $GITHUB_OUTPUT
+            exit 0
           fi
           
-          # 显示修复内容
-          echo ""
-          echo "📄 修复文件内容（前20行）:"
-          head -20 "$FIX_FILE"
-          echo ""
+          echo "✅ 修复文件: $FIX_FILE"
           
-          # 统计
-          TOTAL=$(grep -c "^#【" "$FIX_FILE" 2>/dev/null || echo "0")
-          WF=$(grep -c "^#【firmware-build.yml" "$FIX_FILE" 2>/dev/null || echo "0")
-          SH=$(grep -c "^#【build_firmware_main.sh" "$FIX_FILE" 2>/dev/null || echo "0")
+          # 统计各种修复
+          TOTAL_FIXES=$(grep -c "^#【" "$FIX_FILE" 2>/dev/null || echo "0")
+          SCRIPT_FIXES=$(grep -c "^#【build_firmware_main.sh" "$FIX_FILE" 2>/dev/null || echo "0")
+          WORKFLOW_FIXES=$(grep -c "^#【firmware-build.yml" "$FIX_FILE" 2>/dev/null || echo "0")
           
           echo "📊 修复统计:"
-          echo "- 总标识: $TOTAL"
-          echo "- 工作流修复: $WF"
-          echo "- 脚本修复: $SH"
+          echo "- 总修复标识: $TOTAL_FIXES"
+          echo "- 脚本修复: $SCRIPT_FIXES"
+          echo "- 工作流修复: $WORKFLOW_FIXES"
           
-          # 输出
+          if [ "$TOTAL_FIXES" -eq "0" ]; then
+            echo "⚠️ 修复文件中没有找到修复标识"
+            echo "has_fixes=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "has_fixes=true" >> $GITHUB_OUTPUT
+          echo "total_fixes=$TOTAL_FIXES" >> $GITHUB_OUTPUT
+          echo "script_fixes=$SCRIPT_FIXES" >> $GITHUB_OUTPUT
+          echo "workflow_fixes=$WORKFLOW_FIXES" >> $GITHUB_OUTPUT
           echo "fix_file=$FIX_FILE" >> $GITHUB_OUTPUT
-          echo "total=$TOTAL" >> $GITHUB_OUTPUT
-          echo "workflow=$WF" >> $GITHUB_OUTPUT
-          echo "script=$SH" >> $GITHUB_OUTPUT
+
+  apply-fixes-and-pr:
+    runs-on: ubuntu-latest
+    needs: analyze-fixes
+    if: needs.analyze-fixes.outputs.has_fixes == 'true'
+    permissions:
+      contents: write
+      pull-requests: write
+    
+    steps:
+      - name: 🛎️ 检出代码到新分支
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: main
       
-      - name: 📝 修改工作流文件（如果存在修复）
-        id: fix_workflow
-        if: steps.find_fix.outputs.workflow != '0'
+      - name: 🌿 创建修复分支
         run: |
-          echo "=== 📝 修改工作流文件 ==="
+          echo "=== 创建修复分支 ==="
           
-          WORKFLOW=".github/workflows/firmware-build.yml"
-          echo "目标工作流: $WORKFLOW"
+          # 生成唯一分支名
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          BRANCH_NAME="auto-fix/$TIMESTAMP"
           
-          if [ ! -f "$WORKFLOW" ]; then
-            echo "❌ 工作流文件不存在"
+          echo "创建分支: $BRANCH_NAME"
+          git checkout -b "$BRANCH_NAME"
+          
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_ENV
+          echo "✅ 已切换到分支: $BRANCH_NAME"
+      
+      - name: 🔧 应用脚本修复
+        if: needs.analyze-fixes.outputs.script_fixes != '0'
+        run: |
+          echo "=== 应用脚本修复 ==="
+          
+          SCRIPT_FILE="firmware-config/scripts/build_firmware_main.sh"
+          FIX_FILE="${{ needs.analyze-fixes.outputs.fix_file }}"
+          
+          if [ ! -f "$SCRIPT_FILE" ]; then
+            echo "❌ 脚本文件不存在: $SCRIPT_FILE"
             exit 1
           fi
           
-          # 显示原始信息
-          echo "📄 原始文件信息:"
-          echo "- 大小: $(wc -l < "$WORKFLOW") 行"
-          echo "- 修改时间: $(stat -c %y "$WORKFLOW" 2>/dev/null || echo "未知")"
-          echo ""
-          
-          # 创建临时文件
-          TEMP_FILE="${WORKFLOW}.temp"
-          cp "$WORKFLOW" "$TEMP_FILE"
-          
-          # 在文件开头添加注释（不是修改步骤内容）
-          TIMESTAMP=$(date +%s)
-          HEADER="# 🔧 自动修复标记 - 时间戳: $TIMESTAMP"
-          
-          # 如果文件没有这个标记，添加它
-          if ! grep -q "🔧 自动修复标记" "$TEMP_FILE"; then
-            # 在文件开头添加
-            echo "$HEADER" > "${TEMP_FILE}.new"
-            echo "# 修复时间: $(date)" >> "${TEMP_FILE}.new"
-            echo "# 修复文件: ${{ steps.find_fix.outputs.fix_file }}" >> "${TEMP_FILE}.new"
-            echo "" >> "${TEMP_FILE}.new"
-            cat "$TEMP_FILE" >> "${TEMP_FILE}.new"
-            mv "${TEMP_FILE}.new" "$TEMP_FILE"
-            
-            echo "✅ 添加了修复标记"
-          else
-            echo "⚠️ 修复标记已存在，更新它"
-            # 更新已有的标记
-            sed -i "1s/.*/$HEADER/" "$TEMP_FILE"
-          fi
-          
-          # 比较差异
-          if diff -u "$WORKFLOW" "$TEMP_FILE"; then
-            echo "⚠️ 没有差异，不更新文件"
-          else
-            echo "✅ 发现差异，更新工作流文件"
-            mv "$TEMP_FILE" "$WORKFLOW"
-            echo "workflow_modified=true" >> $GITHUB_OUTPUT
-          fi
-          
-          rm -f "$TEMP_FILE" "${TEMP_FILE}.new" 2>/dev/null || true
-      
-      - name: 📝 修改脚本文件（如果存在修复）
-        id: fix_script
-        if: steps.find_fix.outputs.script != '0'
-        run: |
-          echo "=== 📝 修改脚本文件 ==="
-          
-          SCRIPT="firmware-config/scripts/build_firmware_main.sh"
-          echo "目标脚本: $SCRIPT"
-          
-          if [ ! -f "$SCRIPT" ]; then
-            echo "❌ 脚本文件不存在"
-            exit 1
-          fi
-          
-          # 显示原始信息
-          echo "📄 原始文件信息:"
-          echo "- 大小: $(wc -l < "$SCRIPT") 行"
-          echo "- 修改时间: $(stat -c %y "$SCRIPT" 2>/dev/null || echo "未知")"
-          echo ""
+          echo "📄 修改脚本文件: $SCRIPT_FILE"
           
           # 创建备份
-          BACKUP="${SCRIPT}.backup.$(date +%s)"
-          cp "$SCRIPT" "$BACKUP"
-          echo "📦 创建备份: $BACKUP"
+          BACKUP_FILE="${SCRIPT_FILE}.backup.$(date +%s)"
+          cp "$SCRIPT_FILE" "$BACKUP_FILE"
+          echo "📦 创建备份: $BACKUP_FILE"
           
-          # 在文件末尾添加时间戳
-          TIMESTAMP=$(date +%s)
-          echo "" >> "$SCRIPT"
-          echo "# 🔧 自动修复 - $(date)" >> "$SCRIPT"
-          echo "# 时间戳: $TIMESTAMP" >> "$SCRIPT"
+          # 提取脚本修复内容并应用
+          echo "🔍 提取修复内容..."
           
-          echo "✅ 脚本文件已修改"
-          echo "script_modified=true" >> $GITHUB_OUTPUT
+          # 查找所有脚本修复块
+          LINE_NUMBER=0
+          IN_SCRIPT_BLOCK=false
+          SCRIPT_FIX_CONTENT=""
+          SCRIPT_BLOCK_COUNT=0
+          
+          while IFS= read -r line; do
+            LINE_NUMBER=$((LINE_NUMBER + 1))
+            
+            if [[ "$line" =~ ^#【build_firmware_main.sh ]]; then
+              IN_SCRIPT_BLOCK=true
+              SCRIPT_FIX_CONTENT=""
+              echo "🎯 找到脚本修复块 (第 $LINE_NUMBER 行)"
+              SCRIPT_BLOCK_COUNT=$((SCRIPT_BLOCK_COUNT + 1))
+              
+            elif [[ "$line" =~ ^#【end】 ]] || [[ "$line" =~ ^#【结束】 ]]; then
+              if [ "$IN_SCRIPT_BLOCK" = true ]; then
+                # 应用这个修复块
+                echo "🔄 应用脚本修复块 #$SCRIPT_BLOCK_COUNT"
+                
+                # 在脚本文件末尾添加修复内容
+                echo "" >> "$SCRIPT_FILE"
+                echo "# ===== 自动修复块 #$SCRIPT_BLOCK_COUNT =====" >> "$SCRIPT_FILE"
+                echo "# 来源: $FIX_FILE (第 $LINE_NUMBER 行附近)" >> "$SCRIPT_FILE"
+                echo "# 时间: $(date)" >> "$SCRIPT_FILE"
+                echo "$SCRIPT_FIX_CONTENT" >> "$SCRIPT_FILE"
+                
+                IN_SCRIPT_BLOCK=false
+              fi
+              
+            elif [ "$IN_SCRIPT_BLOCK" = true ]; then
+              SCRIPT_FIX_CONTENT="${SCRIPT_FIX_CONTENT}${line}"$'\n'
+            fi
+          done < "$FIX_FILE"
+          
+          # 处理最后一个未结束的块
+          if [ "$IN_SCRIPT_BLOCK" = true ] && [ -n "$SCRIPT_FIX_CONTENT" ]; then
+            echo "🔄 应用最后一个脚本修复块"
+            echo "" >> "$SCRIPT_FILE"
+            echo "# ===== 自动修复块 #$((SCRIPT_BLOCK_COUNT + 1)) =====" >> "$SCRIPT_FILE"
+            echo "# 来源: $FIX_FILE" >> "$SCRIPT_FILE"
+            echo "# 时间: $(date)" >> "$SCRIPT_FILE"
+            echo "$SCRIPT_FIX_CONTENT" >> "$SCRIPT_FILE"
+          fi
+          
+          echo "✅ 应用了 $SCRIPT_BLOCK_COUNT 个脚本修复块"
+          echo "script_modified=true" >> $GITHUB_ENV
       
-      - name: 🔍 显示Git状态
-        if: always()
+      - name: 🔧 创建工作流修复文件（新文件，不修改原文件）
+        if: needs.analyze-fixes.outputs.workflow_fixes != '0'
         run: |
-          echo "=== 🔍 Git状态 ==="
-          echo ""
+          echo "=== 创建工作流修复文件 ==="
           
-          echo "📊 状态简略:"
+          FIX_FILE="${{ needs.analyze-fixes.outputs.fix_file }}"
+          TIMESTAMP=$(date +%s)
+          
+          # 创建新的工作流修复文件
+          WORKFLOW_FIX_FILE="workflow-fixes-${TIMESTAMP}.yml"
+          
+          echo "# 🔧 工作流修复文件" > "$WORKFLOW_FIX_FILE"
+          echo "# 生成时间: $(date)" >> "$WORKFLOW_FIX_FILE"
+          echo "# 来源: $FIX_FILE" >> "$WORKFLOW_FIX_FILE"
+          echo "# 修复标识数: ${{ needs.analyze-fixes.outputs.workflow_fixes }}" >> "$WORKFLOW_FIX_FILE"
+          echo "" >> "$WORKFLOW_FIX_FILE"
+          
+          # 提取工作流修复内容
+          echo "# 提取的工作流修复内容:" >> "$WORKFLOW_FIX_FILE"
+          grep -A 50 "^#【firmware-build.yml" "$FIX_FILE" | head -100 >> "$WORKFLOW_FIX_FILE"
+          
+          echo "✅ 创建工作流修复文件: $WORKFLOW_FIX_FILE"
+          echo "workflow_fix_file=$WORKFLOW_FIX_FILE" >> $GITHUB_ENV
+      
+      - name: 💾 提交更改
+        run: |
+          echo "=== 提交更改 ==="
+          
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "GitHub Actions"
+          
+          echo "📊 Git状态:"
           git status --short
           echo ""
           
-          echo "📝 修改的文件:"
-          git diff --name-only 2>/dev/null || echo "无差异"
-          echo ""
+          echo "➕ 添加更改的文件..."
           
-          echo "📋 具体更改:"
-          git diff --stat 2>/dev/null || echo "无更改统计"
-      
-      - name: 💾 提交更改（如果有修改）
-        id: commit
-        if: |
-          steps.fix_workflow.outputs.workflow_modified == 'true' ||
-          steps.fix_script.outputs.script_modified == 'true'
-        run: |
-          echo "=== 💾 提交更改 ==="
-          echo ""
-          
-          # 配置Git
-          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          
-          echo "🎯 Git配置完成"
-          echo ""
-          
-          echo "📊 当前状态:"
-          git status
-          echo ""
-          
-          # 只添加特定的文件，不添加备份文件
-          echo "➕ 添加修改的文件..."
-          FILES_TO_ADD=""
-          
-          if [ "${{ steps.fix_workflow.outputs.workflow_modified }}" = "true" ]; then
-            git add ".github/workflows/firmware-build.yml"
-            echo "✅ 添加工作流文件"
-          fi
-          
-          if [ "${{ steps.fix_script.outputs.script_modified }}" = "true" ]; then
+          # 添加脚本文件
+          if [ -n "${{ env.script_modified }}" ]; then
             git add "firmware-config/scripts/build_firmware_main.sh"
             echo "✅ 添加脚本文件"
           fi
           
-          echo ""
-          
-          # 检查是否有可提交的内容
-          if git diff --cached --quiet; then
-            echo "⚠️ 没有需要提交的更改"
-            exit 0
+          # 添加工作流修复文件
+          if [ -n "${{ env.workflow_fix_file }}" ]; then
+            git add "${{ env.workflow_fix_file }}"
+            echo "✅ 添加工作流修复文件"
           fi
           
-          # 提交
+          # 添加备份文件（可选）
+          git add "*.backup.*" 2>/dev/null || true
+          
+          echo ""
           echo "💾 提交更改..."
+          
           COMMIT_MSG="🔧 自动修复"
           
-          if [ "${{ steps.find_fix.outputs.workflow }}" != "0" ]; then
-            COMMIT_MSG="${COMMIT_MSG} - 工作流"
+          if [ "${{ needs.analyze-fixes.outputs.script_fixes }}" != "0" ]; then
+            COMMIT_MSG="${COMMIT_MSG} - 脚本(${{ needs.analyze-fixes.outputs.script_fixes }})"
           fi
           
-          if [ "${{ steps.find_fix.outputs.script }}" != "0" ]; then
-            COMMIT_MSG="${COMMIT_MSG} - 脚本"
+          if [ "${{ needs.analyze-fixes.outputs.workflow_fixes }}" != "0" ]; then
+            COMMIT_MSG="${COMMIT_MSG} - 工作流(${{ needs.analyze-fixes.outputs.workflow_fixes }})"
           fi
           
-          COMMIT_MSG="${COMMIT_MSG} [skip ci]"
+          COMMIT_MSG="${COMMIT_MSG}"
           
-          echo "📋 提交信息: $COMMIT_MSG"
-          git commit -m "$COMMIT_MSG"
+          git commit -m "$COMMIT_MSG" || echo "⚠️ 没有更改可提交"
           
-          echo ""
-          echo "📄 提交详情:"
-          git log -1 --oneline
-          echo ""
+          echo "🚀 推送分支..."
+          git push origin "${{ env.branch_name }}"
           
-          # 推送 - 使用简单的方式
-          echo "🚀 推送到仓库..."
-          echo "当前分支: $(git branch --show-current)"
-          
-          # 尝试推送，如果失败显示错误但不退出
-          if git push origin HEAD; then
-            echo "✅ 推送成功"
-          else
-            echo "❌ 推送失败，错误信息:"
-            git push origin HEAD 2>&1 || true
-            echo ""
-            echo "💡 尝试使用不同的推送方式..."
+          echo "✅ 分支已推送: ${{ env.branch_name }}"
+      
+      - name: 📨 创建Pull Request
+        id: create-pr
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ env.branch_name }}
+          base: main
+          title: "🔧 自动修复"
+          body: |
+            ## 自动修复提交
             
-            # 尝试其他推送方式
-            git push origin HEAD:$(git branch --show-current) 2>&1 || echo "推送失败"
+            **修复统计:**
+            - 总修复标识: ${{ needs.analyze-fixes.outputs.total_fixes }} 个
+            - 脚本修复: ${{ needs.analyze-fixes.outputs.script_fixes }} 个
+            - 工作流修复: ${{ needs.analyze-fixes.outputs.workflow_fixes }} 个
+            
+            **修复文件:** `${{ needs.analyze-fixes.outputs.fix_file }}`
+            
+            **修改的文件:**
+            ${{ needs.analyze-fixes.outputs.script_fixes != '0' && '- `firmware-config/scripts/build_firmware_main.sh`' || '' }}
+            ${{ needs.analyze-fixes.outputs.workflow_fixes != '0' && '- `workflow-fixes-*.yml` (新文件)' || '' }}
+            
+            ---
+            
+            > 🤖 此PR由GitHub Actions自动创建
+            > 📅 创建时间: $(date)
+            
+            <!-- 自动合并标记 -->
+            ${{ github.event.inputs.auto_merge == 'true' && 'automerge' || '' }}
+          labels: |
+            automated-pr
+            fix
+            ${{ github.event.inputs.auto_merge == 'true' && 'automerge' || '' }}
+          delete-branch: true
+      
+      - name: 🔄 自动合并PR
+        if: github.event.inputs.auto_merge == 'true' && steps.create-pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "=== 自动合并PR ==="
+          
+          PR_NUMBER="${{ steps.create-pr.outputs.pull-request-number }}"
+          echo "PR号: $PR_NUMBER"
+          
+          # 等待几秒让GitHub更新状态
+          sleep 5
+          
+          # 检查PR状态
+          echo "🔍 检查PR状态..."
+          PR_STATUS=$(gh pr view $PR_NUMBER --json mergeable,state --jq '.mergeable + ":" + .state' 2>/dev/null || echo "unknown:unknown")
+          
+          echo "PR状态: $PR_STATUS"
+          
+          # 如果PR可合并且是打开的，尝试合并
+          if [[ "$PR_STATUS" == *"MERGEABLE:OPEN"* ]]; then
+            echo "🔄 开始自动合并..."
+            
+            # 尝试合并
+            if gh pr merge $PR_NUMBER --squash --delete-branch; then
+              echo "✅ PR已自动合并"
+            else
+              echo "❌ 自动合并失败"
+            fi
+          else
+            echo "⚠️ PR不可合并或已关闭，跳过合并"
+            echo "状态详情: $PR_STATUS"
           fi
       
       - name: 📋 生成报告
         if: always()
         run: |
-          echo "### 🔧 自动修复报告" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔧 自动修复系统报告" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          echo "**时间:** $(date)" >> $GITHUB_STEP_SUMMARY
-          echo "**触发方式:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "**修复文件:** ${{ steps.find_fix.outputs.fix_file }}" >> $GITHUB_STEP_SUMMARY
+          echo "#### 📅 基本信息" >> $GITHUB_STEP_SUMMARY
+          echo "- **执行时间:** $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "- **触发方式:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **修复文件:** \`${{ needs.analyze-fixes.outputs.fix_file }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          echo "**修复统计:**" >> $GITHUB_STEP_SUMMARY
-          echo "- 总标识: ${{ steps.find_fix.outputs.total }}" >> $GITHUB_STEP_SUMMARY
-          echo "- 工作流修复: ${{ steps.find_fix.outputs.workflow }}" >> $GITHUB_STEP_SUMMARY
-          echo "- 脚本修复: ${{ steps.find_fix.outputs.script }}" >> $GITHUB_STEP_SUMMARY
+          echo "#### 📊 修复统计" >> $GITHUB_STEP_SUMMARY
+          echo "- **总修复标识:** ${{ needs.analyze-fixes.outputs.total_fixes }} 个" >> $GITHUB_STEP_SUMMARY
+          echo "- **脚本修复:** ${{ needs.analyze-fixes.outputs.script_fixes }} 个" >> $GITHUB_STEP_SUMMARY
+          echo "- **工作流修复:** ${{ needs.analyze-fixes.outputs.workflow_fixes }} 个" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          echo "**修改状态:**" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ steps.fix_workflow.outputs.workflow_modified }}" = "true" ]; then
-            echo "- ✅ 工作流文件已修改" >> $GITHUB_STEP_SUMMARY
+          echo "#### 🌿 分支信息" >> $GITHUB_STEP_SUMMARY
+          echo "- **修复分支:** \`${{ env.branch_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "#### 📝 修改内容" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ env.script_modified }}" ]; then
+            echo "- ✅ **脚本文件已修改:** \`firmware-config/scripts/build_firmware_main.sh\`" >> $GITHUB_STEP_SUMMARY
           fi
-          if [ "${{ steps.fix_script.outputs.script_modified }}" = "true" ]; then
-            echo "- ✅ 脚本文件已修改" >> $GITHUB_STEP_SUMMARY
-          fi
-          if [ "${{ steps.fix_workflow.outputs.workflow_modified }}" != "true" ] && [ "${{ steps.fix_script.outputs.script_modified }}" != "true" ]; then
-            echo "- 📭 无文件被修改" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -n "${{ env.workflow_fix_file }}" ]; then
+            echo "- 📄 **创建工作流修复文件:** \`${{ env.workflow_fix_file }}\`" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          echo "**提交状态:**" >> $GITHUB_STEP_SUMMARY
-          if [[ "${{ steps.commit.outcome }}" == "success" ]]; then
-            echo "✅ 已提交更改" >> $GITHUB_STEP_SUMMARY
+          echo "#### 📨 PR状态" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ steps.create-pr.outputs.pull-request-number }}" != "" ]]; then
+            echo "✅ **Pull Request已创建**" >> $GITHUB_STEP_SUMMARY
+            echo "- **PR号:** #${{ steps.create-pr.outputs.pull-request-number }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **PR链接:** [${{ env.branch_name }} → main](${{ steps.create-pr.outputs.pull-request-url }})" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            if [[ "${{ github.event.inputs.auto_merge }}" == "true" ]]; then
+              echo "🔄 **自动合并已启用**" >> $GITHUB_STEP_SUMMARY
+              if [[ "${{ job.status }}" == "success" ]]; then
+                echo "✅ **PR已自动合并**" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "⏳ **等待合并或合并失败**" >> $GITHUB_STEP_SUMMARY
+              fi
+            else
+              echo "👁️ **需要手动合并**" >> $GITHUB_STEP_SUMMARY
+              echo "> 请前往PR页面查看并合并更改" >> $GITHUB_STEP_SUMMARY
+            fi
           else
-            echo "📭 未提交或提交失败" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **PR创建失败**" >> $GITHUB_STEP_SUMMARY
           fi
