@@ -5,8 +5,18 @@ on:
   push:
     paths:
       - 'fix.txt'
+      - '.github/workflows/firmware-build-fix.yml'
   
   workflow_dispatch:
+    inputs:
+      action:
+        description: "🔧 选择操作类型"
+        required: false
+        default: "apply"
+        type: choice
+        options:
+          - "apply"
+          - "restore"
 
 jobs:
   auto-fix:
@@ -21,7 +31,27 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
       
+      - name: 🔍 检查操作类型
+        run: |
+          echo "=== 检查操作类型 ==="
+          echo "触发事件: ${{ github.event_name }}"
+          echo "操作类型: ${{ github.event.inputs.action || 'apply' }}"
+          
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ "${{ github.event.inputs.action }}" = "restore" ]; then
+              echo "🔄 执行恢复操作"
+              echo "ACTION_TYPE=restore" >> $GITHUB_ENV
+            else
+              echo "🔧 执行修复操作"
+              echo "ACTION_TYPE=apply" >> $GITHUB_ENV
+            fi
+          else
+            echo "🔧 执行修复操作（push触发）"
+            echo "ACTION_TYPE=apply" >> $GITHUB_ENV
+          fi
+      
       - name: 🔍 检查修复文件
+        if: env.ACTION_TYPE == 'apply'
         run: |
           echo "=== 检查修复文件 ==="
           
@@ -42,31 +72,100 @@ jobs:
             echo "⚠️ 没有检测到系统性标识"
           fi
       
+      - name: 📁 备份目标文件
+        if: env.ACTION_TYPE == 'apply'
+        run: |
+          echo "=== 备份目标文件 ==="
+          
+          # 查找目标文件
+          TARGET_FILE=""
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            TARGET_FILE="firmware-config/scripts/build_firmware_main.sh"
+          elif [ -f "scripts/build_firmware_main.sh" ]; then
+            TARGET_FILE="scripts/build_firmware_main.sh"
+          elif [ -f "build_firmware_main.sh" ]; then
+            TARGET_FILE="build_firmware_main.sh"
+          else
+            TARGET_FILE=$(find . -name "build_firmware_main.sh" -type f ! -path "./.git/*" | head -1)
+          fi
+          
+          if [ -z "$TARGET_FILE" ]; then
+            echo "❌ 未找到目标文件"
+            exit 1
+          fi
+          
+          echo "✅ 目标文件: $TARGET_FILE"
+          
+          # 备份文件路径
+          BACKUP_DIR=".github/backups"
+          BACKUP_FILE="$BACKUP_DIR/build_firmware_main.sh.back"
+          
+          # 创建备份目录
+          mkdir -p "$BACKUP_DIR"
+          
+          # 备份当前文件（覆盖旧的备份）
+          cp "$TARGET_FILE" "$BACKUP_FILE"
+          
+          echo "✅ 已备份到: $BACKUP_FILE"
+          echo "📊 备份文件大小: $(wc -l < "$BACKUP_FILE") 行"
+          echo "📝 备份说明: 有且仅有一个备份文件，每次修复前自动覆盖"
+      
+      - name: 🔄 恢复备份文件
+        if: env.ACTION_TYPE == 'restore'
+        run: |
+          echo "=== 恢复备份文件 ==="
+          
+          # 备份文件路径
+          BACKUP_FILE=".github/backups/build_firmware_main.sh.back"
+          
+          if [ ! -f "$BACKUP_FILE" ]; then
+            echo "❌ 未找到备份文件: $BACKUP_FILE"
+            echo "💡 请先执行一次修复操作以创建备份"
+            exit 1
+          fi
+          
+          echo "✅ 找到备份文件: $BACKUP_FILE"
+          echo "📊 备份文件大小: $(wc -l < "$BACKUP_FILE") 行"
+          
+          # 查找目标文件
+          TARGET_FILE=""
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            TARGET_FILE="firmware-config/scripts/build_firmware_main.sh"
+          elif [ -f "scripts/build_firmware_main.sh" ]; then
+            TARGET_FILE="scripts/build_firmware_main.sh"
+          elif [ -f "build_firmware_main.sh" ]; then
+            TARGET_FILE="build_firmware_main.sh"
+          else
+            TARGET_FILE=$(find . -name "build_firmware_main.sh" -type f ! -path "./.git/*" | head -1)
+          fi
+          
+          if [ -z "$TARGET_FILE" ]; then
+            echo "❌ 未找到目标文件"
+            exit 1
+          fi
+          
+          echo "✅ 目标文件: $TARGET_FILE"
+          
+          # 备份当前文件（以防万一）
+          cp "$TARGET_FILE" "/tmp/build_firmware_main.sh.pre_restore"
+          
+          # 恢复备份
+          cp "$BACKUP_FILE" "$TARGET_FILE"
+          
+          echo "✅ 已恢复备份"
+          echo "🔄 恢复说明: 已将 $BACKUP_FILE 恢复到 $TARGET_FILE"
+          
+          # 显示恢复前后差异
+          echo "📋 恢复前后差异:"
+          diff -u "/tmp/build_firmware_main.sh.pre_restore" "$TARGET_FILE" | head -20 || true
+      
       - name: 📝 解析并应用修复
+        if: env.ACTION_TYPE == 'apply'
         run: |
           echo "=== 解析并应用修复 ==="
           
-          # 0. 先修复可能的文件格式问题
-          echo "🔧 步骤0: 修复文件格式（换行符问题）"
-          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
-            echo "🔍 找到 build_firmware_main.sh，检查并修复格式..."
-            # 备份原文件（仅用于对比）
-            cp "firmware-config/scripts/build_firmware_main.sh" "/tmp/build_firmware_main.sh.original"
-            
-            # 修复 Windows 换行符 (^M)
-            sed -i 's/\r$//' "firmware-config/scripts/build_firmware_main.sh"
-            
-            # 检查是否有变化
-            if diff -q "firmware-config/scripts/build_firmware_main.sh" "/tmp/build_firmware_main.sh.original" >/dev/null; then
-              echo "✅ 文件格式正常，无需修复"
-            else
-              echo "✅ 已修复文件格式（清除 Windows 换行符）"
-            fi
-            
-            rm -f "/tmp/build_firmware_main.sh.original"
-          fi
-          
-          # 1. 查找目标文件
+          # 1. 先查找目标文件
+          echo "🔍 步骤1: 查找目标文件"
           TARGET_FILE=""
           
           # 首先尝试在常见位置查找 build_firmware_main.sh
@@ -93,20 +192,37 @@ jobs:
           
           echo "✅ 找到目标文件: $TARGET_FILE"
           
-          # 2. 备份原文件（仅保留在临时目录，不提交）
-          BACKUP_FILE="/tmp/$(basename "$TARGET_FILE").backup.$(date +%Y%m%d_%H%M%S)"
-          cp "$TARGET_FILE" "$BACKUP_FILE"
-          echo "✅ 已在临时目录备份原文件: $BACKUP_FILE"
+          # 2. 修复目标文件的格式问题
+          echo "🔧 步骤2: 修复目标文件格式（换行符问题）"
+          cp "$TARGET_FILE" "/tmp/$(basename "$TARGET_FILE").original"
           
-          # 3. 读取修复内容
-          echo "📖 读取修复内容..."
+          # 修复 Windows 换行符 (^M)
+          sed -i 's/\r$//' "$TARGET_FILE"
+          
+          # 检查是否有变化
+          if diff -q "$TARGET_FILE" "/tmp/$(basename "$TARGET_FILE").original" >/dev/null; then
+            echo "✅ 文件格式正常，无需修复"
+          else
+            echo "✅ 已修复文件格式（清除 Windows 换行符）"
+          fi
+          
+          rm -f "/tmp/$(basename "$TARGET_FILE").original"
+          
+          # 3. 备份原文件到临时目录
+          echo "📁 步骤3: 创建临时备份"
+          TEMP_BACKUP="/tmp/$(basename "$TARGET_FILE").temp_backup.$(date +%Y%m%d_%H%M%S)"
+          cp "$TARGET_FILE" "$TEMP_BACKUP"
+          echo "✅ 临时备份: $TEMP_BACKUP"
+          
+          # 4. 读取修复内容
+          echo "📖 步骤4: 读取修复内容..."
           FIX_CONTENT=$(cat fix.txt)
           
-          # 4. 提取所有系统性标识及其对应的内容块
-          echo "🔧 开始解析系统性标识..."
+          # 5. 提取所有系统性标识及其对应的内容块
+          echo "🔧 步骤5: 解析系统性标识..."
           
-          # 查找所有系统性标识行号 - 修复正则表达式
-          IDENTIFIER_LINES=$(grep -n "#【" fix.txt || true)
+          # 查找所有系统性标识行号 - 提取纯标识部分
+          IDENTIFIER_LINES=$(grep -n "#【[^】]*】" fix.txt | sed 's/:.*#【/:#【/' || true)
           
           if [ -z "$IDENTIFIER_LINES" ]; then
             echo "⚠️ 修复文件中没有找到系统性标识"
@@ -127,18 +243,26 @@ jobs:
           # 处理每个系统性标识
           TOTAL_FIX_LINES=$(wc -l < fix.txt)
           
-          # 将标识行号转换为数组 - 修复数组处理
+          # 将标识行号转换为数组
           IFS=$'\n' read -d '' -r -a IDENTIFIER_ARRAY <<< "$IDENTIFIER_LINES" || true
           
           for i in "${!IDENTIFIER_ARRAY[@]}"; do
             CURRENT_LINE_INFO="${IDENTIFIER_ARRAY[$i]}"
             LINE_NUM=$(echo "$CURRENT_LINE_INFO" | cut -d: -f1)
-            IDENTIFIER=$(echo "$CURRENT_LINE_INFO" | cut -d: -f2- | sed 's/^[[:space:]]*//')
+            FULL_IDENTIFIER=$(echo "$CURRENT_LINE_INFO" | cut -d: -f2-)
             
-            echo "🔨 处理标识: $IDENTIFIER (第 $LINE_NUM 行)"
+            # 提取纯标识（到第一个空格或行尾）
+            PURE_IDENTIFIER=$(echo "$FULL_IDENTIFIER" | grep -o "#【[^ 】]*】" | head -1)
+            
+            if [ -z "$PURE_IDENTIFIER" ]; then
+              echo "⚠️ 无法提取纯标识: $FULL_IDENTIFIER"
+              continue
+            fi
+            
+            echo "🔨 处理标识: $PURE_IDENTIFIER (第 $LINE_NUM 行)"
             
             # 提取标识名称（去掉 #【】）
-            ID_NAME=$(echo "$IDENTIFIER" | sed 's/#【//' | sed 's/】//')
+            ID_NAME=$(echo "$PURE_IDENTIFIER" | sed 's/#【//' | sed 's/】//')
             
             # 提取该标识对应的内容块范围
             BLOCK_START=$LINE_NUM
@@ -159,57 +283,34 @@ jobs:
             # 提取整个内容块（包含标识行）
             BLOCK_CONTENT=$(sed -n "${BLOCK_START},${BLOCK_END}p" fix.txt)
             
-            # 在目标文件中查找该标识 - 修复搜索逻辑
-            echo "🔍 在目标文件中查找标识: $IDENTIFIER"
+            # 在目标文件中查找该标识
+            echo "🔍 在目标文件中查找标识: $PURE_IDENTIFIER"
             
-            # 转义标识中的特殊字符用于搜索
-            ESCAPED_IDENTIFIER=$(echo "$IDENTIFIER" | sed 's/[][\.*^$]/\\&/g')
+            # 转义标识中的特殊字符
+            ESCAPED_IDENTIFIER=$(echo "$PURE_IDENTIFIER" | sed 's/[][\.*^$]/\\&/g')
             
-            # 搜索标识，支持标识行前后可能有空格的情况
-            TARGET_LINE_NUM=$(grep -n "^\s*${ESCAPED_IDENTIFIER}" "$TARGET_FILE" | head -1 | cut -d: -f1)
+            # 搜索标识
+            TARGET_LINE_NUM=$(grep -n "^\s*$ESCAPED_IDENTIFIER" "$TARGET_FILE" | head -1 | cut -d: -f1)
             
             if [ -n "$TARGET_LINE_NUM" ]; then
               echo "✅ 在目标文件第 $TARGET_LINE_NUM 行找到标识"
               
-              # 在目标文件中找到标识对应的内容块范围
-              TARGET_TOTAL_LINES=$(wc -l < "$TARGET_FILE")
-              TARGET_BLOCK_START=$TARGET_LINE_NUM
-              TARGET_BLOCK_END=""
-              
-              # 从标识行开始查找，直到下一个标识或文件结束
-              CURRENT_SEARCH=$((TARGET_LINE_NUM + 1))
-              
-              while [ $CURRENT_SEARCH -le $TARGET_TOTAL_LINES ]; do
-                LINE_CONTENT=$(sed -n "${CURRENT_SEARCH}p" "$TARGET_FILE")
-                
-                # 如果遇到下一个系统性标识（以 #【 开头）
-                if [[ "$LINE_CONTENT" =~ ^[[:space:]]*#【 ]]; then
-                  TARGET_BLOCK_END=$((CURRENT_SEARCH - 1))
-                  break
-                fi
-                
-                # 如果到达文件末尾
-                if [ $CURRENT_SEARCH -eq $TARGET_TOTAL_LINES ]; then
-                  TARGET_BLOCK_END=$CURRENT_SEARCH
-                  break
-                fi
-                
-                ((CURRENT_SEARCH++))
-              done
-              
-              if [ -z "$TARGET_BLOCK_END" ]; then
-                TARGET_BLOCK_END=$TARGET_TOTAL_LINES
-              fi
-              
-              echo "📌 目标文件中原内容块范围: 第 $TARGET_BLOCK_START 行到第 $TARGET_BLOCK_END 行"
-              
               # 创建临时文件进行替换
               TEMP_FILE="/tmp/$(basename "$TARGET_FILE").temp.$$"
               
-              # 替换内容块：原文件前部分 + 新内容块 + 原文件后部分
-              head -n $((TARGET_BLOCK_START - 1)) "$TARGET_FILE" > "$TEMP_FILE"
-              echo "$BLOCK_CONTENT" >> "$TEMP_FILE"
-              tail -n +$((TARGET_BLOCK_END + 1)) "$TARGET_FILE" >> "$TEMP_FILE"
+              # 先备份替换前的行
+              sed -n "${TARGET_LINE_NUM}p" "$TARGET_FILE" > "/tmp/original_line.txt"
+              
+              # 执行替换：找到该行，替换为整个内容块
+              awk -v line_num="$TARGET_LINE_NUM" -v block_content="$BLOCK_CONTENT" '
+                NR == line_num {
+                  print block_content
+                  next
+                }
+                NR != line_num {
+                  print
+                }
+              ' "$TARGET_FILE" > "$TEMP_FILE"
               
               # 验证替换结果
               if [ $(wc -l < "$TEMP_FILE") -gt 10 ]; then
@@ -221,7 +322,7 @@ jobs:
               fi
               
             else
-              echo "⚠️ 在目标文件中未找到标识 $IDENTIFIER"
+              echo "⚠️ 在目标文件中未找到标识 $PURE_IDENTIFIER"
               echo "💡 尝试追加到文件末尾"
               
               # 检查是否整个文件追加过
@@ -247,80 +348,39 @@ jobs:
           
           echo "✅ 所有修复处理完成"
       
-      - name: 🔧 提交前再次修复文件格式（双重保险）
+      - name: 🔧 提交前再次修复文件格式
+        if: env.ACTION_TYPE == 'apply'
         run: |
-          echo "=== 提交前再次修复文件格式（双重保险）==="
+          echo "=== 提交前再次修复文件格式 ==="
           
-          # 查找所有可能的目标文件
-          FILES_TO_FIX=()
-          
+          # 查找目标文件
           if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
-            FILES_TO_FIX+=("firmware-config/scripts/build_firmware_main.sh")
+            TARGET_FILE="firmware-config/scripts/build_firmware_main.sh"
+          elif [ -f "scripts/build_firmware_main.sh" ]; then
+            TARGET_FILE="scripts/build_firmware_main.sh"
+          elif [ -f "build_firmware_main.sh" ]; then
+            TARGET_FILE="build_firmware_main.sh"
+          else
+            TARGET_FILE=$(find . -name "build_firmware_main.sh" -type f ! -path "./.git/*" | head -1)
           fi
           
-          if [ -f "fix.txt" ]; then
-            FILES_TO_FIX+=("fix.txt")
-          fi
-          
-          if [ ${#FILES_TO_FIX[@]} -eq 0 ]; then
+          if [ -z "$TARGET_FILE" ]; then
             echo "ℹ️ 没有需要修复格式的文件"
             exit 0
           fi
           
-          echo "🔧 将修复以下文件的格式:"
-          for file in "${FILES_TO_FIX[@]}"; do
-            echo "  - $file"
-          done
+          echo "🔧 修复文件格式: $TARGET_FILE"
           
-          # 修复每个文件的格式
-          for file in "${FILES_TO_FIX[@]}"; do
-            echo ""
-            echo "🔄 修复文件: $file"
-            
-            # 备份原文件
-            BACKUP_FILE="/tmp/$(basename "$file").pre_commit_backup"
-            cp "$file" "$BACKUP_FILE"
-            
-            # 执行格式修复
-            if command -v dos2unix >/dev/null 2>&1; then
-              # 使用 dos2unix 工具（如果有）
-              dos2unix "$file" 2>/dev/null || true
-            else
-              # 使用 sed 修复换行符
-              sed -i 's/\r$//' "$file"
-            fi
-            
-            # 确保文件以换行符结尾
-            if [ -s "$file" ] && ! tail -c1 "$file" | read -r _; then
-              echo "" >> "$file"
-              echo "✅ 添加文件结束换行符"
-            fi
-            
-            # 检查是否有变化
-            if diff -q "$file" "$BACKUP_FILE" >/dev/null; then
-              echo "✅ 文件格式正常，无需修复"
-            else
-              echo "✅ 已修复文件格式（清除 Windows 换行符）"
-            fi
-            
-            # 显示文件信息
-            echo "📊 文件信息:"
-            echo "  大小: $(wc -l < "$file") 行"
-            
-            # 检查是否有 ^M 字符
-            if grep -q $'\r' "$file" 2>/dev/null; then
-              echo "⚠️ 警告: 文件中仍包含 Windows 换行符"
-              # 强制修复
-              tr -d '\r' < "$file" > "${file}.fixed"
-              mv "${file}.fixed" "$file"
-              echo "🔧 已强制修复"
-            fi
-            
-            rm -f "$BACKUP_FILE"
-          done
+          # 修复换行符
+          sed -i 's/\r$//' "$TARGET_FILE"
           
-          echo ""
-          echo "✅ 所有文件格式修复完成"
+          # 确保文件以换行符结尾
+          if [ -s "$TARGET_FILE" ] && ! tail -c1 "$TARGET_FILE" | read -r _; then
+            echo "" >> "$TARGET_FILE"
+            echo "✅ 添加文件结束换行符"
+          fi
+          
+          echo "✅ 文件格式修复完成"
       
       - name: 📤 提交并推送修改
         run: |
@@ -330,43 +390,41 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "GitHub Actions"
           
-          # 检查是否有更改
-          if git diff --quiet; then
-            echo "⚠️ 没有检测到文件更改"
-            echo "💡 已应用修复但文件内容无变化，仅清理修复文件"
+          # 根据操作类型设置提交信息
+          if [ "$ACTION_TYPE" = "restore" ]; then
+            COMMIT_MSG="🔄 恢复备份"
+            COMMIT_MSG+="\n\n来源: .github/backups/build_firmware_main.sh.back"
+            COMMIT_MSG+="\n时间: $(date)"
+            COMMIT_MSG+="\n操作: 手动恢复"
           else
-            echo "💾 检测到文件更改，准备提交..."
+            # 检查是否有更改
+            if git diff --quiet; then
+              echo "⚠️ 没有检测到文件更改"
+              echo "💡 已应用修复但文件内容无变化，仅清理修复文件"
+            else
+              echo "💾 检测到文件更改，准备提交..."
+              
+              # 显示更改的文件
+              echo "📋 更改的文件:"
+              git status --short
+              
+              # 添加更改
+              git add -A
+            fi
             
-            # 显示更改的文件
-            echo "📋 更改的文件:"
-            git status --short
+            COMMIT_MSG="🔧 自动修复"
+            COMMIT_MSG+="\n\n来源: fix.txt"
+            COMMIT_MSG+="\n时间: $(date)"
+            COMMIT_MSG+="\n事件: ${{ github.event_name }}"
             
-            # 添加更改
-            git add -A
-            
-            # 显示具体差异
-            echo "📝 具体差异:"
-            git diff --stat
-          fi
-          
-          # 提交
-          COMMIT_MSG="🔧 自动修复"
-          COMMIT_MSG+="\n\n来源: fix.txt"
-          COMMIT_MSG+="\n时间: $(date)"
-          COMMIT_MSG+="\n事件: ${{ github.event_name }}"
-          
-          # 添加修复的标识列表
-          if [ -f "fix.txt" ] && grep -q "#【" fix.txt; then
-            COMMIT_MSG+="\n\n修复的内容块:"
-            grep "#【" fix.txt | while IFS= read -r identifier; do
-              ID_NAME=$(echo "$identifier" | sed 's/#【//' | sed 's/】//')
-              COMMIT_MSG+="\n- $ID_NAME"
-            done
-          fi
-          
-          # 添加格式修复信息
-          if ls -1 /tmp/*.pre_commit_backup 2>/dev/null | grep -q .; then
-            COMMIT_MSG+="\n\n格式修复: ✅ 已修复 Windows 换行符问题"
+            # 添加修复的标识列表
+            if [ -f "fix.txt" ] && grep -q "#【" fix.txt; then
+              COMMIT_MSG+="\n\n修复的内容块:"
+              grep -o "#【[^】]*】" fix.txt | while IFS= read -r identifier; do
+                ID_NAME=$(echo "$identifier" | sed 's/#【//' | sed 's/】//')
+                COMMIT_MSG+="\n- $ID_NAME"
+              done
+            fi
           fi
           
           echo -e "$COMMIT_MSG" | git commit -F - || {
@@ -388,21 +446,12 @@ jobs:
             git push origin HEAD:main
           }
           
-          echo "✅ 修复已应用并推送到主分支"
-          
-          # 清理fix.txt文件（无论是否有更改都执行）
-          echo "🧹 清理fix.txt文件..."
-          if [ -f "fix.txt" ]; then
-            > fix.txt
-            git add fix.txt
-            git commit -m "🧹 清理修复文件 [skip ci]" || true
-            git push origin HEAD:main
-          fi
+          echo "✅ 操作完成并推送到主分支"
       
       - name: 📋 生成报告
         if: always()
         run: |
-          echo "### 🔧 自动修复完成" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔧 自动修复系统报告" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ "${{ job.status }}" = "success" ]; then
@@ -411,30 +460,35 @@ jobs:
             echo "**状态:** ❌ 失败" >> $GITHUB_STEP_SUMMARY
           fi
           
+          echo "**操作类型:** $ACTION_TYPE" >> $GITHUB_STEP_SUMMARY
           echo "**时间:** $(date)" >> $GITHUB_STEP_SUMMARY
           echo "**触发:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          # 显示修复的标识信息
-          if [ -f "fix.txt" ] && grep -q "#【" fix.txt; then
-            echo "**修复的内容块:**" >> $GITHUB_STEP_SUMMARY
-            grep "#【" fix.txt | while IFS= read -r identifier; do
-              ID_NAME=$(echo "$identifier" | sed 's/#【//' | sed 's/】//')
-              echo "- $ID_NAME" >> $GITHUB_STEP_SUMMARY
-            done
+          if [ "$ACTION_TYPE" = "restore" ]; then
+            echo "**操作详情:**" >> $GITHUB_STEP_SUMMARY
+            echo "- 🔄 恢复备份文件" >> $GITHUB_STEP_SUMMARY
+            echo "- 📁 备份位置: .github/backups/build_firmware_main.sh.back" >> $GITHUB_STEP_SUMMARY
+            echo "- 💡 下次修复时会覆盖此备份" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**操作详情:**" >> $GITHUB_STEP_SUMMARY
+            echo "- 🔧 应用修复" >> $GITHUB_STEP_SUMMARY
+            echo "- 📁 已创建备份: .github/backups/build_firmware_main.sh.back" >> $GITHUB_STEP_SUMMARY
+            echo "- 💡 如需恢复，请点击「🔄 恢复备份」按钮" >> $GITHUB_STEP_SUMMARY
+            
+            # 显示修复的标识信息
+            if [ -f "fix.txt" ] && grep -q "#【" fix.txt; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "**修复的内容块:**" >> $GITHUB_STEP_SUMMARY
+              grep -o "#【[^】]*】" fix.txt | while IFS= read -r identifier; do
+                ID_NAME=$(echo "$identifier" | sed 's/#【//' | sed 's/】//')
+                echo "- $ID_NAME" >> $GITHUB_STEP_SUMMARY
+              done
+            fi
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**处理流程:**" >> $GITHUB_STEP_SUMMARY
-          echo "1. ✅ 检查修复文件" >> $GITHUB_STEP_SUMMARY
-          echo "2. ✅ 修复文件格式（首次）" >> $GITHUB_STEP_SUMMARY
-          echo "3. ✅ 解析系统性标识" >> $GITHUB_STEP_SUMMARY
-          echo "4. ✅ 查找并替换内容块" >> $GITHUB_STEP_SUMMARY
-          echo "5. ✅ 提交前再次修复文件格式（双重保险）" >> $GITHUB_STEP_SUMMARY
-          echo "6. ✅ 提交并推送更改" >> $GITHUB_STEP_SUMMARY
-          echo "7. ✅ 清理修复文件" >> $GITHUB_STEP_SUMMARY
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**文件格式修复:**" >> $GITHUB_STEP_SUMMARY
-          echo "- 已修复 Windows 换行符 (^M)" >> $GITHUB_STEP_SUMMARY
-          echo "- 双重保险机制确保格式正确" >> $GITHUB_STEP_SUMMARY
+          echo "**使用说明:**" >> $GITHUB_STEP_SUMMARY
+          echo "1. **🔧 应用修复**: 将 fix.txt 中的修复应用到 build_firmware_main.sh" >> $GITHUB_STEP_SUMMARY
+          echo "2. **🔄 恢复备份**: 恢复上次修复前的状态" >> $GITHUB_STEP_SUMMARY
+          echo "3. **💾 备份策略**: 有且仅有一个备份文件，每次修复前自动覆盖" >> $GITHUB_STEP_SUMMARY
