@@ -246,7 +246,8 @@ jobs:
           # 将标识行号转换为数组
           IFS=$'\n' read -d '' -r -a IDENTIFIER_ARRAY <<< "$IDENTIFIER_LINES" || true
           
-          for i in "${!IDENTIFIER_ARRAY[@]}"; do
+          # 处理顺序：从后往前，避免行号变化影响前面的替换
+          for i in $(seq $((${#IDENTIFIER_ARRAY[@]} - 1)) -1 0); do
             CURRENT_LINE_INFO="${IDENTIFIER_ARRAY[$i]}"
             LINE_NUM=$(echo "$CURRENT_LINE_INFO" | cut -d: -f1)
             FULL_IDENTIFIER=$(echo "$CURRENT_LINE_INFO" | cut -d: -f2-)
@@ -286,39 +287,43 @@ jobs:
             # 在目标文件中查找该标识
             echo "🔍 在目标文件中查找标识: $PURE_IDENTIFIER"
             
-            # 转义标识中的特殊字符
+            # 转义标识中的特殊字符（用于 grep 搜索）
             ESCAPED_IDENTIFIER=$(echo "$PURE_IDENTIFIER" | sed 's/[][\.*^$]/\\&/g')
             
-            # 搜索标识
+            # 搜索标识（精确匹配标识行）
             TARGET_LINE_NUM=$(grep -n "^\s*$ESCAPED_IDENTIFIER" "$TARGET_FILE" | head -1 | cut -d: -f1)
             
             if [ -n "$TARGET_LINE_NUM" ]; then
               echo "✅ 在目标文件第 $TARGET_LINE_NUM 行找到标识"
               
-              # 创建临时文件进行替换
-              TEMP_FILE="/tmp/$(basename "$TARGET_FILE").temp.$$"
+              # 创建新的临时文件用于输出
+              NEW_FILE="/tmp/$(basename "$TARGET_FILE").new.$$"
               
-              # 先备份替换前的行
-              sed -n "${TARGET_LINE_NUM}p" "$TARGET_FILE" > "/tmp/original_line.txt"
+              # 使用可靠的方法逐行处理
+              LINE_COUNT=0
+              BLOCK_INSERTED=false
               
-              # 执行替换：找到该行，替换为整个内容块
-              awk -v line_num="$TARGET_LINE_NUM" -v block_content="$BLOCK_CONTENT" '
-                NR == line_num {
-                  print block_content
-                  next
-                }
-                NR != line_num {
-                  print
-                }
-              ' "$TARGET_FILE" > "$TEMP_FILE"
+              # 读取原文件并创建新文件
+              while IFS= read -r line || [ -n "$line" ]; do
+                LINE_COUNT=$((LINE_COUNT + 1))
+                
+                if [ "$LINE_COUNT" -eq "$TARGET_LINE_NUM" ] && [ "$BLOCK_INSERTED" = "false" ]; then
+                  # 替换当前行为整个内容块
+                  echo "$BLOCK_CONTENT"
+                  BLOCK_INSERTED=true
+                elif [ "$LINE_COUNT" -ne "$TARGET_LINE_NUM" ]; then
+                  # 保持原行
+                  echo "$line"
+                fi
+              done < "$TARGET_FILE" > "$NEW_FILE"
               
               # 验证替换结果
-              if [ $(wc -l < "$TEMP_FILE") -gt 10 ]; then
-                mv "$TEMP_FILE" "$TARGET_FILE"
+              if [ $(wc -l < "$NEW_FILE") -gt 10 ]; then
+                mv "$NEW_FILE" "$TARGET_FILE"
                 echo "✅ 内容块替换成功 (标识: $ID_NAME)"
               else
                 echo "⚠️ 替换后文件太小，可能有错误，跳过此内容块"
-                rm -f "$TEMP_FILE"
+                rm -f "$NEW_FILE"
               fi
               
             else
