@@ -5,7 +5,43 @@ set -e
 # 【系统初始化】文件头和全局定义
 # ==============================
 
-#【build_firmware_main.sh-01】文件头：变量定义和日志函数（终极修复版）
+#【build_firmware_main.sh-01】文件头：变量定义和日志函数（最简修复）
+#!/bin/bash
+set -e
+
+BUILD_DIR="/mnt/openwrt-build"
+ENV_FILE="$BUILD_DIR/build_env.sh"
+
+# ========== 与 firmware-build.yml 保持一致的路径逻辑 ==========
+# 优先使用 GitHub Actions 工作区
+if [ -n "$GITHUB_WORKSPACE" ]; then
+    REPO_ROOT="$GITHUB_WORKSPACE"
+else
+    # 回退方案：使用当前工作目录
+    REPO_ROOT="$(pwd)"
+fi
+
+# 支持目录路径 - 与 firmware-build.yml 保持一致
+SUPPORT_DIR="$REPO_ROOT/firmware-config"
+
+log() {
+    echo "【$(date '+%Y-%m-%d %H:%M:%S')】$1"
+}
+
+# 在日志中显示路径信息
+log "🚀 启动构建脚本"
+log "📁 路径配置:"
+log "  REPO_ROOT: $REPO_ROOT"
+log "  SUPPORT_DIR: $SUPPORT_DIR"
+log "  SUPPORT_DIR 存在: $([ -d "$SUPPORT_DIR" ] && echo '✅ 是' || echo '❌ 否')"
+
+if [ -d "$SUPPORT_DIR" ]; then
+    log "📁 SUPPORT_DIR 内容:"
+    ls -la "$SUPPORT_DIR/" | head -10
+fi
+
+# 确保有日志目录
+mkdir -p /tmp/build-logs
 #!/bin/bash
 set -e
 
