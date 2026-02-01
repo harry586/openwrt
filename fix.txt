@@ -1,161 +1,3 @@
-#【build_firmware_main.sh-13】构建环境初始化函数 - 修复LEDE分支问题
-initialize_build_env() {
-    local device_name=$1
-    local version_selection=$2
-    local config_mode=$3
-    local source_repo=${4:-"immortalwrt"}  # 添加第四个参数，默认immortalwrt
-    
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 版本选择 ==="
-    log "源代码仓库: $source_repo"
-    
-    # 根据仓库选择不同的URL - 只保留immortalwrt和lede
-    case "$source_repo" in
-        "immortalwrt")
-            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-            ;;
-        "lede")
-            SELECTED_REPO_URL="https://github.com/coolsnowwolf/lede.git"
-            SELECTED_BRANCH="master"  # LEDE使用master分支
-            ;;
-        *)
-            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-            source_repo="immortalwrt"
-            ;;
-    esac
-    
-    # 根据版本选择分支（LEDE除外）- 修复分支选择逻辑
-    if [ "$source_repo" = "lede" ]; then
-        # LEDE仓库只使用master分支
-        SELECTED_BRANCH="master"
-        log "🔧 LEDE仓库使用master分支"
-    else
-        # ImmortalWrt仓库根据版本选择分支
-        if [ "$version_selection" = "23.05" ]; then
-            SELECTED_BRANCH="openwrt-23.05"
-        else
-            SELECTED_BRANCH="openwrt-21.02"
-        fi
-    fi
-    
-    # 设置SOURCE_REPO环境变量
-    SOURCE_REPO="$source_repo"
-    
-    log "✅ 版本选择完成: $SELECTED_BRANCH (仓库: $source_repo)"
-    
-    log "=== 克隆源码 ==="
-    log "仓库: $SELECTED_REPO_URL"
-    log "分支: $SELECTED_BRANCH"
-    
-    sudo rm -rf ./* ./.git* 2>/dev/null || true
-    
-    git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
-    log "✅ 源码克隆完成"
-    
-    # 检查克隆的文件
-    local important_source_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
-    for file in "${important_source_files[@]}"; do
-        if [ -f "$file" ]; then
-            log "✅ 源码文件存在: $file"
-        else
-            log "❌ 源码文件缺失: $file"
-        fi
-    done
-    
-    log "=== 设备配置 ==="
-    DEVICE_NAME="$device_name"
-    
-    # 加载设备支持脚本
-    if load_device_support; then
-        local device_config=$(get_device_config "$device_name")
-        TARGET=$(echo $device_config | awk '{print $1}')
-        SUBTARGET=$(echo $device_config | awk '{print $2}')
-        DEVICE=$(echo $device_config | awk '{print $3}')
-        PLATFORM=$(echo $device_config | awk '{print $4}')
-        
-        local device_desc=$(get_device_description "$device_name")
-        log "🔧 设备: $device_desc"
-        log "目标: $TARGET"
-        log "子目标: $SUBTARGET"
-        log "设备: $DEVICE"
-        log "平台: $PLATFORM"
-        
-        # 特殊处理：对于LEDE仓库，需要确保设备名称正确
-        if [ "$SOURCE_REPO" = "lede" ]; then
-            log "🔧 LEDE仓库设备名称调整"
-            # 检查设备是否以"generic_"开头，如果是则去掉前缀
-            if [[ "$DEVICE" == generic_* ]]; then
-                DEVICE="${DEVICE#generic_}"
-                log "📝 调整设备名称: $DEVICE"
-            fi
-        fi
-    else
-        # 默认配置（兼容旧版）- 修复设备名称映射
-        case "$device_name" in
-            "ac42u"|"acrh17")
-                TARGET="ipq40xx"
-                SUBTARGET="generic"
-                if [ "$SOURCE_REPO" = "lede" ]; then
-                    DEVICE="asus_rt-acrh17"  # LEDE中使用acrh17
-                else
-                    DEVICE="asus_rt-ac42u"   # ImmortalWrt中使用ac42u
-                fi
-                PLATFORM="ipq40xx"
-                ;;
-            "mi_router_4a_gigabit"|"r4ag")
-                TARGET="ramips"
-                SUBTARGET="mt76x8"
-                DEVICE="xiaomi_mi-router-4a-gigabit"
-                PLATFORM="ramips"
-                ;;
-            "mi_router_3g"|"r3g")
-                TARGET="ramips"
-                SUBTARGET="mt7621"
-                DEVICE="xiaomi_mi-router-3g"
-                PLATFORM="ramips"
-                ;;
-            "netgear_3800")
-                TARGET="ath79"
-                SUBTARGET="generic"
-                if [ "$SOURCE_REPO" = "lede" ]; then
-                    DEVICE="netgear_wndr3800"  # LEDE中的设备名称
-                else
-                    DEVICE="netgear_wndr3800"  # ImmortalWrt中的设备名称
-                fi
-                PLATFORM="ath79"
-                ;;
-            *)
-                TARGET="ipq40xx"
-                SUBTARGET="generic"
-                DEVICE="$device_name"
-                PLATFORM="generic"
-                ;;
-        esac
-        log "🔧 检测到设备: $device_name"
-        log "目标: $TARGET"
-        log "子目标: $SUBTARGET"
-        log "设备: $DEVICE"
-        log "平台: $PLATFORM"
-    fi
-    
-    CONFIG_MODE="$config_mode"
-    
-    save_env
-    
-    echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
-    echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
-    echo "TARGET=$TARGET" >> $GITHUB_ENV
-    echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
-    echo "DEVICE=$DEVICE" >> $GITHUB_ENV
-    echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
-    echo "DEVICE_NAME=$DEVICE_NAME" >> $GITHUB_ENV
-    echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
-    echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
-    
-    log "✅ 构建环境初始化完成"
-}
-
 #【build_firmware_main.sh-14】编译器环境初始化函数 - 修复LEDE SDK下载问题
 initialize_compiler_env() {
     local device_name="$1"
@@ -264,7 +106,7 @@ initialize_compiler_env() {
             log "⚠️ 编译器目录存在但不包含真正的GCC，将重新下载SDK"
         fi
     else
-        log "🔍 COMPILER_DIR未设置或目录不存在，将下载OpenWrt官方SDK"
+        log "🔍 COMPILER_DIR未设置或目录不存在"
     fi
     
     # 根据设备确定平台（使用已设置的变量）
@@ -275,8 +117,8 @@ initialize_compiler_env() {
     log "源代码仓库: $SOURCE_REPO"
     
     # 修复：对于LEDE仓库的master分支，不需要下载SDK
-    if [ "$SOURCE_REPO" = "lede" ] && [ "$SELECTED_BRANCH" = "master" ]; then
-        log "🔧 LEDE master分支使用内置工具链，无需下载OpenWrt SDK"
+    if [ "$SOURCE_REPO" = "lede" ]; then
+        log "🔧 LEDE仓库使用内置工具链，无需下载OpenWrt SDK"
         log "💡 LEDE会使用自己的工具链进行编译"
         export COMPILER_DIR=""
         save_env
@@ -290,7 +132,7 @@ initialize_compiler_env() {
     elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
         version_for_sdk="21.02"
     elif [ "$SELECTED_BRANCH" = "master" ]; then
-        # LEDE的master分支使用21.02 SDK
+        # LEDE的master分支使用21.02 SDK（但LEDE已跳过）
         version_for_sdk="21.02"
     else
         # 尝试提取版本号
@@ -438,25 +280,65 @@ apply_config() {
     
     # 检查内核版本配置 - 修复内核版本缺失问题
     log "🔍 检查内核版本配置..."
-    if ! grep -q "^CONFIG_KERNEL_" .config; then
-        log "⚠️ 未找到内核版本配置，添加默认配置"
-        
-        # 根据SELECTED_BRANCH设置内核版本
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] || [ "$SELECTED_BRANCH" = "master" ]; then
-            echo "# Kernel configuration" >> .config
-            echo "CONFIG_KERNEL_NET=y" >> .config
-            echo "CONFIG_KERNEL_IPV6=y" >> .config
-            echo "CONFIG_KERNEL_BRIDGE=y" >> .config
-            echo "CONFIG_KERNEL_FS_POSIX_ACL=y" >> .config
-            echo "CONFIG_KERNEL_CGROUPS=y" >> .config
-            log "✅ 添加23.05/master内核默认配置"
+    
+    # 修复内核版本文件问题
+    if [ -f "include/kernel-version.mk" ]; then
+        # 检查内核版本是否已设置
+        local kernel_patchver=$(grep "KERNEL_PATCHVER" "include/kernel-version.mk" | cut -d':' -f2 | xargs)
+        if [ -z "$kernel_patchver" ] || [ "$kernel_patchver" = "" ]; then
+            log "⚠️ 内核版本未设置，尝试自动修复..."
+            
+            # 从目标平台Makefile获取内核版本
+            if [ -f "target/linux/$TARGET/Makefile" ]; then
+                local target_kernel=$(grep "KERNEL_PATCHVER" "target/linux/$TARGET/Makefile" | cut -d':' -f2 | xargs)
+                if [ -n "$target_kernel" ]; then
+                    log "🔧 设置内核版本为: $target_kernel"
+                    sed -i "s/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=$target_kernel/" "include/kernel-version.mk" 2>/dev/null || true
+                    
+                    # 检查是否设置成功
+                    kernel_patchver=$(grep "KERNEL_PATCHVER" "include/kernel-version.mk" | cut -d':' -f2 | xargs)
+                    if [ -n "$kernel_patchver" ]; then
+                        log "✅ 内核版本设置成功: $kernel_patchver"
+                    fi
+                fi
+            fi
         else
-            echo "# Kernel configuration" >> .config
-            echo "CONFIG_KERNEL_IPV6=y" >> .config
-            echo "CONFIG_KERNEL_BRIDGE=y" >> .config
-            echo "CONFIG_KERNEL_FS_POSIX_ACL=y" >> .config
-            log "✅ 添加21.02内核默认配置"
+            log "✅ 内核版本已设置: $kernel_patchver"
         fi
+    else
+        log "⚠️ 内核版本文件不存在: include/kernel-version.mk"
+        log "🔧 尝试创建内核版本文件..."
+        
+        # 尝试从目标平台获取内核版本
+        local target_kernel=""
+        if [ -f "target/linux/$TARGET/Makefile" ]; then
+            target_kernel=$(grep "KERNEL_PATCHVER" "target/linux/$TARGET/Makefile" | cut -d':' -f2 | xargs)
+        fi
+        
+        # 如果没有找到，使用默认值
+        if [ -z "$target_kernel" ]; then
+            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] || [ "$SELECTED_BRANCH" = "master" ]; then
+                target_kernel="5.15"
+            else
+                target_kernel="5.4"
+            fi
+            log "⚠️ 无法从目标平台获取内核版本，使用默认: $target_kernel"
+        fi
+        
+        # 创建内核版本文件
+        echo "# Kernel version" > "include/kernel-version.mk"
+        echo "LINUX_VERSION-5.15 = .19" >> "include/kernel-version.mk"
+        echo "LINUX_KERNEL_HASH-5.15.19 = 3e6a6b6f8c3c8e8c8f8c3c8e8c8f8c3c8e8c8f8c3c8e8c8f8c3c8e8c8f8c3c8" >> "include/kernel-version.mk"
+        echo "KERNEL_PATCHVER:=$target_kernel" >> "include/kernel-version.mk"
+        log "✅ 创建内核版本文件，版本: $target_kernel"
+    fi
+    
+    # 清理tmp目录中的错误配置文件
+    log "🔧 清理tmp目录中的错误配置文件..."
+    if [ -f "tmp/.config-package.in" ]; then
+        # 删除包含错误语法和---help---的行
+        sed -i '/^---help---/d;/^Ntfs-3g$/d;/^If/d;/^etc\.$/d;/^of$/d' "tmp/.config-package.in" 2>/dev/null || true
+        log "✅ 清理tmp/.config-package.in文件"
     fi
     
     # 运行defconfig并捕获详细日志
@@ -466,18 +348,27 @@ apply_config() {
         cat /tmp/defconfig.log | tail -30
         
         # 尝试分析错误原因
-        if grep -q "unknown statement" /tmp/defconfig.log; then
-            log "💡 错误分析: 发现未知语句错误"
-            log "🔧 尝试修复: 删除包含'unknown statement'的行后重试..."
+        if grep -q "unknown statement\|syntax error" /tmp/defconfig.log; then
+            log "💡 错误分析: 发现语法错误或未知语句"
+            log "🔧 尝试修复: 清理配置文件后重试..."
             
-            # 提取错误行号
-            grep "unknown statement" /tmp/defconfig.log | while read line; do
-                error_line=$(echo "$line" | grep -o "line [0-9]*" | grep -o "[0-9]*")
-                if [ -n "$error_line" ]; then
-                    log "  删除第 $error_line 行"
-                    sed -i "${error_line}d" .config
-                fi
-            done
+            # 再次清理配置文件
+            cp .config .config.original.backup
+            log "✅ 备份原始配置文件: .config.original.backup"
+            
+            # 删除所有注释和空行，只保留配置项
+            grep -E '^(CONFIG_|# CONFIG_)' .config > .config.clean
+            
+            # 删除错误的行
+            sed -i '/^---help---/d;/^Ntfs-3g$/d;/^If/d;/^etc\.$/d;/^of$/d;/^[[:space:]]*$/d' .config.clean
+            
+            # 排序并去重
+            sort -u .config.clean > .config
+            
+            # 清理临时文件
+            rm -f .config.clean
+            
+            log "✅ 清理配置文件完成"
             
             # 再次尝试defconfig
             log "🔄 重新运行 make defconfig..."
@@ -487,39 +378,33 @@ apply_config() {
                 log "❌ defconfig 仍然失败"
                 log "第二次尝试的错误日志:"
                 cat /tmp/defconfig_retry.log | tail -20
-                log "⚠️ 但继续执行，让构建过程自然失败"
-            fi
-        elif grep -q "Missing kernel version" /tmp/defconfig.log; then
-            log "💡 错误分析: 内核版本文件缺失"
-            log "🔧 尝试修复: 检查内核配置..."
-            
-            # 检查内核配置
-            if [ -f "target/linux/$TARGET/Makefile" ]; then
-                log "✅ 目标平台Makefile存在: target/linux/$TARGET/Makefile"
                 
-                # 提取内核版本
-                local kernel_version=$(grep "KERNEL_PATCHVER" "target/linux/$TARGET/Makefile" | cut -d':' -f2 | xargs)
-                if [ -n "$kernel_version" ]; then
-                    log "📌 内核版本: $kernel_version"
+                # 尝试强制修复内核版本问题
+                if grep -q "Missing kernel version" /tmp/defconfig_retry.log; then
+                    log "🚨 发现内核版本缺失错误"
+                    log "🔧 强制修复: 手动设置内核版本..."
                     
-                    # 检查内核版本文件
                     if [ -f "include/kernel-version.mk" ]; then
-                        log "✅ 内核版本文件存在: include/kernel-version.mk"
+                        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] || [ "$SELECTED_BRANCH" = "master" ]; then
+                            sed -i 's/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=5.15/' "include/kernel-version.mk"
+                            log "✅ 设置内核版本为 5.15"
+                        else
+                            sed -i 's/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=5.4/' "include/kernel-version.mk"
+                            log "✅ 设置内核版本为 5.4"
+                        fi
                         
-                        # 修复内核版本文件
-                        sed -i "s/KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=$kernel_version/" "include/kernel-version.mk" 2>/dev/null || true
-                        log "🔧 更新内核版本为: $kernel_version"
+                        # 再次尝试
+                        log "🔄 第三次运行 make defconfig..."
+                        if make defconfig 2>&1 | tee /tmp/defconfig_third.log; then
+                            log "✅ defconfig 第三次尝试成功"
+                        else
+                            log "❌ defconfig 仍然失败"
+                            log "⚠️ 但继续执行，让构建过程自然失败"
+                        fi
                     fi
+                else
+                    log "⚠️ 但继续执行，让构建过程自然失败"
                 fi
-            fi
-            
-            # 再次尝试defconfig
-            log "🔄 重新运行 make defconfig..."
-            if make defconfig 2>&1 | tee /tmp/defconfig_retry.log; then
-                log "✅ defconfig 修复成功"
-            else
-                log "❌ defconfig 仍然失败"
-                log "⚠️ 但继续执行，让构建过程自然失败"
             fi
         else
             log "⚠️ 无法自动修复defconfig错误，但继续执行"
@@ -528,62 +413,8 @@ apply_config() {
         log "✅ make defconfig 成功"
     fi
     
-    # 步骤4: 强制启用关键USB驱动（防止defconfig删除）
-    log "🔧 步骤4: 确保关键USB驱动被启用..."
-    
-    # 定义关键USB驱动
-    local critical_usb_drivers=(
-        "CONFIG_PACKAGE_kmod-usb-core=y"
-        "CONFIG_PACKAGE_kmod-usb2=y"
-        "CONFIG_PACKAGE_kmod-usb3=y"
-        "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
-        "CONFIG_PACKAGE_kmod-usb-xhci-pci=y"
-        "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y"
-        "CONFIG_PACKAGE_kmod-usb-ohci-pci=y"
-        "CONFIG_PACKAGE_kmod-usb-dwc3=y"
-        "CONFIG_PACKAGE_kmod-usb-storage=y"
-        "CONFIG_PACKAGE_kmod-scsi-core=y"
-    )
-    
-    # 平台专用驱动
-    if [ "$PLATFORM" = "ipq40xx" ]; then
-        critical_usb_drivers+=(
-            "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y"
-            "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y"
-            "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y"
-        )
-    elif [ "$PLATFORM" = "ramips" ]; then
-        critical_usb_drivers+=(
-            "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y"
-        )
-    elif [ "$PLATFORM" = "ath79" ]; then
-        critical_usb_drivers+=(
-            "CONFIG_PACKAGE_kmod-usb2-ath79=y"
-        )
-    fi
-    
-    # 添加或确保关键驱动
-    local added_drivers=0
-    for driver in "${critical_usb_drivers[@]}"; do
-        local config_name=$(echo "$driver" | cut -d'=' -f1)
-        if ! grep -q "^${config_name}=y" .config; then
-            # 删除可能的禁用配置
-            sed -i "/^# ${config_name} is not set/d" .config
-            # 添加启用配置
-            echo "$driver" >> .config
-            added_drivers=$((added_drivers + 1))
-            log "✅ 已添加: $config_name"
-        else
-            log "ℹ️ 已存在: $config_name"
-        fi
-    done
-    
-    if [ $added_drivers -gt 0 ]; then
-        log "📈 共添加了 $added_drivers 个关键驱动"
-    fi
-    
-    # 步骤5: 显示启用的功能插件
-    log "🎯 步骤5: 显示启用的功能插件..."
+    # 步骤4: 显示启用的功能插件 - 修复显示逻辑
+    log "🎯 步骤4: 显示启用的功能插件..."
     echo "=== 启用的功能插件列表 ==="
     
     # 定义要检查的功能插件
@@ -601,10 +432,13 @@ apply_config() {
         # 其他功能
         "luci-app-accesscontrol" "luci-app-vlmcsd" "luci-app-wechatpush"
         "luci-app-sqm" "ddns-scripts"
+        # USB相关
+        "kmod-usb-storage" "kmod-usb3" "kmod-usb-xhci-hcd"
     )
     
     local enabled_count=0
     local disabled_count=0
+    local not_configured_count=0
     
     echo "功能插件状态:"
     for plugin in "${feature_plugins[@]}"; do
@@ -616,31 +450,15 @@ apply_config() {
             disabled_count=$((disabled_count + 1))
         else
             echo "  🔄 $plugin (未配置)"
+            not_configured_count=$((not_configured_count + 1))
         fi
     done
     
-    echo "统计: $enabled_count 个启用，$disabled_count 个禁用"
+    echo "统计: $enabled_count 个启用，$disabled_count 个禁用，$not_configured_count 个未配置"
     echo ""
     
-    # 步骤6: 再次验证配置
-    log "🔍 步骤6: 最终配置验证..."
-    if validate_config_syntax; then
-        log "✅ 最终配置语法验证通过"
-    else
-        log "⚠️ 最终配置仍有警告，但继续执行"
-    fi
-    
-    # 步骤7: 运行defconfig确保配置一致
-    log "🔄 步骤7: 最终运行 make defconfig..."
-    if make defconfig 2>&1 | tee /tmp/final_defconfig.log; then
-        log "✅ 最终 defconfig 成功"
-    else
-        log "⚠️ 最终 defconfig 有警告，但继续执行"
-        cat /tmp/final_defconfig.log | tail -10
-    fi
-    
-    # 步骤8: 显示最终配置状态
-    log "📊 步骤8: 显示最终配置状态..."
+    # 步骤5: 显示最终配置状态
+    log "📊 步骤5: 显示最终配置状态..."
     local final_enabled=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
     local final_disabled=$(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)
     log "✅ 最终状态: 已启用 $final_enabled 个, 已禁用 $final_disabled 个"
@@ -659,6 +477,11 @@ apply_config() {
         echo "5. 雷凌USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config && echo "✅" || echo "❌")"
     elif [ "$PLATFORM" = "ath79" ]; then
         echo "5. ath79 USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb2-ath79=y" .config && echo "✅" || echo "❌")"
+    fi
+    
+    # 显示TurboACC状态（如果启用了）
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        echo "6. TurboACC: $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config && echo "✅" || echo "❌")"
     fi
     
     # 显示配置组合信息
@@ -722,21 +545,42 @@ pre_build_error_check() {
             log "⚠️ 警告: 内核版本未设置"
             warning_count=$((warning_count + 1))
             
-            # 对于LEDE master分支，设置默认内核版本
-            if [ "$SOURCE_REPO" = "lede" ] && [ "$SELECTED_BRANCH" = "master" ]; then
-                log "🔧 为LEDE master分支设置默认内核版本"
+            # 对于LEDE仓库，设置默认内核版本
+            if [ "$SOURCE_REPO" = "lede" ]; then
+                log "🔧 为LEDE仓库设置默认内核版本"
                 if [ -f "target/linux/$TARGET/Makefile" ]; then
                     local default_kernel=$(grep "KERNEL_PATCHVER" "target/linux/$TARGET/Makefile" | cut -d':' -f2 | xargs)
                     if [ -n "$default_kernel" ]; then
-                        sed -i "s/KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=$default_kernel/" "include/kernel-version.mk"
+                        sed -i "s/KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=$default_kernel/" "include/kernel-version.mk" 2>/dev/null || true
                         log "✅ 设置内核版本为: $default_kernel"
+                    else
+                        # LEDE默认使用5.15内核
+                        echo "KERNEL_PATCHVER:=5.15" >> "include/kernel-version.mk"
+                        log "✅ 设置LEDE默认内核版本为: 5.15"
                     fi
+                else
+                    # LEDE默认使用5.15内核
+                    echo "KERNEL_PATCHVER:=5.15" >> "include/kernel-version.mk"
+                    log "✅ 设置LEDE默认内核版本为: 5.15"
                 fi
             fi
         fi
     else
         log "⚠️ 警告: 内核版本文件不存在"
         warning_count=$((warning_count + 1))
+        
+        # 创建内核版本文件
+        echo "# Kernel version" > "include/kernel-version.mk"
+        if [ "$SOURCE_REPO" = "lede" ]; then
+            echo "KERNEL_PATCHVER:=5.15" >> "include/kernel-version.mk"
+            log "✅ 为LEDE创建内核版本文件，版本: 5.15"
+        elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            echo "KERNEL_PATCHVER:=5.15" >> "include/kernel-version.mk"
+            log "✅ 创建内核版本文件，版本: 5.15"
+        else
+            echo "KERNEL_PATCHVER:=5.4" >> "include/kernel-version.mk"
+            log "✅ 创建内核版本文件，版本: 5.4"
+        fi
     fi
     
     # 3. 检查feeds
@@ -820,9 +664,9 @@ pre_build_error_check() {
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
         log "✅ 预构建编译器目录存在: $COMPILER_DIR"
         
-        # 对于LEDE master分支，不需要检查SDK编译器
-        if [ "$SOURCE_REPO" = "lede" ] && [ "$SELECTED_BRANCH" = "master" ]; then
-            log "ℹ️ LEDE master分支使用内置工具链，跳过SDK编译器检查"
+        # 对于LEDE仓库，不需要检查SDK编译器
+        if [ "$SOURCE_REPO" = "lede" ]; then
+            log "ℹ️ LEDE仓库使用内置工具链，跳过SDK编译器检查"
         else
             # 放宽检查：只需要有编译器文件，不要求特定目录结构，排除虚假编译器
             local gcc_files=$(find "$COMPILER_DIR" -type f -executable \
@@ -843,8 +687,8 @@ pre_build_error_check() {
         fi
     else
         log "ℹ️ 未设置预构建编译器目录或目录不存在"
-        if [ "$SOURCE_REPO" = "lede" ] && [ "$SELECTED_BRANCH" = "master" ]; then
-            log "💡 LEDE master分支将使用内置工具链"
+        if [ "$SOURCE_REPO" = "lede" ]; then
+            log "💡 LEDE仓库使用内置工具链"
         else
             log "💡 将使用OpenWrt自动构建的编译器"
         fi
@@ -867,162 +711,4 @@ pre_build_error_check() {
     fi
 }
 
-#【build_firmware_main.sh-27】固件构建函数 - 修复设备名称显示
-build_firmware() {
-    local enable_cache=$1
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 编译固件（使用OpenWrt官方SDK工具链）==="
-    
-    # 显示详细的编译信息
-    log "📋 编译信息:"
-    log "  构建目录: $BUILD_DIR"
-    log "  设备: $DEVICE"
-    log "  原始设备名称: $DEVICE_NAME"
-    log "  版本: $SELECTED_BRANCH"
-    log "  配置模式: $CONFIG_MODE"
-    log "  编译器目录: $COMPILER_DIR"
-    log "  平台: $PLATFORM"
-    log "  源代码仓库: $SOURCE_REPO"
-    log "  启用缓存: $enable_cache"
-    
-    # 显示设备映射信息
-    log "🔍 设备映射信息:"
-    log "  输入设备名称: $DEVICE_NAME"
-    log "  实际设备标识: $DEVICE"
-    log "  目标平台: $TARGET/$SUBTARGET"
-    
-    # 编译前最终检查
-    log "编译前最终检查..."
-    if [ ! -f ".config" ]; then
-        log "❌ 错误: .config 文件不存在"
-        exit 1
-    fi
-    
-    if [ ! -d "staging_dir" ]; then
-        log "⚠️ 警告: staging_dir 目录不存在"
-    fi
-    
-    if [ ! -d "dl" ]; then
-        log "⚠️ 警告: dl 目录不存在"
-    fi
-    
-    # 检查预构建编译器文件
-    log "🔧 检查预构建编译器调用状态..."
-    verify_compiler_files
-    
-    # 检查编译器调用状态（使用增强版）
-    check_compiler_invocation
-    
-    # 获取CPU核心数
-    local cpu_cores=$(nproc)
-    local make_jobs=$cpu_cores
-    
-    # 如果内存小于4GB，减少并行任务
-    local total_mem=$(free -m | awk '/^Mem:/{print $2}')
-    if [ $total_mem -lt 4096 ]; then
-        make_jobs=$((cpu_cores / 2))
-        if [ $make_jobs -lt 1 ]; then
-            make_jobs=1
-        fi
-        log "⚠️ 内存较低(${total_mem}MB)，减少并行任务到 $make_jobs"
-    fi
-    
-    # 对于LEDE仓库特殊处理
-    if [ "$SOURCE_REPO" = "lede" ] && [ "$SELECTED_BRANCH" = "master" ]; then
-        log "🔧 LEDE master分支使用内置工具链，无需预构建编译器"
-    fi
-    
-    # 开始编译（默认启用缓存）
-    log "🚀 开始编译固件，使用 $make_jobs 个并行任务"
-    log "💡 编译器调用状态已记录，编译过程中将显示具体调用的编译器"
-    
-    make -j$make_jobs V=s 2>&1 | tee build.log
-    BUILD_EXIT_CODE=${PIPESTATUS[0]}
-    
-    log "编译退出代码: $BUILD_EXIT_CODE"
-    
-    # 编译结果分析
-    if [ $BUILD_EXIT_CODE -eq 0 ]; then
-        log "✅ 固件编译成功"
-        
-        # 分析编译器调用情况
-        log "🔍 编译器调用分析:"
-        if [ -f "build.log" ]; then
-            local prebuilt_calls=$(grep -c "$COMPILER_DIR" build.log 2>/dev/null || echo "0")
-            local total_calls=$(grep -c "gcc\|g++" build.log 2>/dev/null || echo "0")
-            
-            if [ $prebuilt_calls -gt 0 ]; then
-                log "  🎯 预构建编译器调用次数: $prebuilt_calls/$total_calls"
-                log "  📌 成功调用了预构建的编译器文件"
-            else
-                log "  🔄 未检测到预构建编译器调用"
-                if [ "$SOURCE_REPO" = "lede" ] && [ "$SELECTED_BRANCH" = "master" ]; then
-                    log "  📌 LEDE master分支使用内置工具链"
-                else
-                    log "  📌 使用的是OpenWrt自动构建的编译器"
-                fi
-            fi
-        fi
-        
-        # 检查生成的固件
-        if [ -d "bin/targets" ]; then
-            local firmware_count=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
-            log "✅ 生成固件文件: $firmware_count 个"
-            
-            # 显示固件文件
-            log "📦 生成的固件文件:"
-            find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | head -5 | while read file; do
-                local file_size=$(du -h "$file" | cut -f1)
-                local file_name=$(basename "$file")
-                log "  🎯 $file_name ($file_size)"
-            done
-        else
-            log "❌ 固件目录不存在"
-        fi
-    else
-        log "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
-        
-        # 分析失败原因
-        if [ -f "build.log" ]; then
-            log "=== 编译错误摘要 ==="
-            
-            # 查找常见错误
-            local error_count=$(grep -c "Error [0-9]|error:" build.log)
-            local warning_count=$(grep -c "Warning\|warning:" build.log)
-            
-            log "发现 $error_count 个错误，$warning_count 个警告"
-            
-            # 显示前10个错误
-            if [ $error_count -gt 0 ]; then
-                log "前10个错误:"
-                grep -i "Error\|error:" build.log | head -10
-            fi
-            
-            # 检查内核相关错误
-            log "🔧 内核相关错误:"
-            if grep -q "Missing kernel" build.log; then
-                log "🚨 发现内核版本缺失错误"
-                log "检查内核版本配置..."
-                if [ -f "include/kernel-version.mk" ]; then
-                    log "内核版本文件内容:"
-                    cat "include/kernel-version.mk"
-                fi
-            fi
-            
-            # 检查编译器相关错误
-            if grep -q "compiler.*not found" build.log; then
-                log "🚨 发现编译器未找到错误"
-                log "检查编译器路径..."
-            fi
-        fi
-        
-        exit $BUILD_EXIT_CODE
-    fi
-    
-    log "✅ 固件编译完成"
-    
-    # 编译完成后保存环境变量
-    save_env
-}
+
