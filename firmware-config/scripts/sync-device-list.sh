@@ -50,35 +50,6 @@ echo "📱 支持的设备: $DEVICES"
 # 转换为数组
 IFS=' ' read -ra DEVICE_ARRAY <<< "$DEVICES"
 
-# 构建sed命令的模式空间内容
-echo "🔄 构建设备选项..."
-SED_COMMAND="/device_name:/,/^[[:space:]]*[^[:space:]#-]/ {"
-
-# 添加options行的处理
-SED_COMMAND+="
-    /options:/ {
-        :start_options
-        n
-        /^[[:space:]]*- \"/ {
-            b start_options
-        }
-        :insert_options
-    }
-"
-
-# 为每个设备添加插入命令
-for device in "${DEVICE_ARRAY[@]}"; do
-    SED_COMMAND+="
-        i\\
-          - \"$device\"
-    "
-done
-
-SED_COMMAND+="
-        b insert_options
-    }
-}"
-
 # 使用awk直接处理，不生成中间文件
 echo "✏️ 直接更新 $WORKFLOW_FILE..."
 {
@@ -86,6 +57,7 @@ echo "✏️ 直接更新 $WORKFLOW_FILE..."
     BEGIN {
         split(devices, device_list, " ")
         device_count = length(device_list)
+        updated = 0
     }
     
     /device_name:/ {
@@ -100,6 +72,7 @@ echo "✏️ 直接更新 $WORKFLOW_FILE..."
         for (i = 1; i <= device_count; i++) {
             printf "          - \"%s\"\n", device_list[i]
         }
+        updated = 1
         next
     }
     
@@ -118,6 +91,12 @@ echo "✏️ 直接更新 $WORKFLOW_FILE..."
     
     {
         print $0
+    }
+    
+    END {
+        if (!updated) {
+            print "❌ 警告: 未找到 device_name 的 options 部分" > "/dev/stderr"
+        }
     }
     ' "$WORKFLOW_FILE" > "${WORKFLOW_FILE}.new"
     
@@ -140,6 +119,7 @@ done
 echo ""
 echo "📊 同步统计:"
 echo "  - 支持设备数量: ${#DEVICE_ARRAY[@]} 个"
+echo "  - 主要设备: ac42u (acrh17为别名)"
 echo "  - 更新方式: 直接内存处理+原子替换"
 echo ""
 
@@ -196,4 +176,17 @@ else
     exit 1
 fi
 
+# 显示设备描述
+echo ""
+echo "📱 设备详细信息:"
+if source "$SUPPORT_FILE" 2>/dev/null; then
+    if command -v get_device_description >/dev/null 2>&1; then
+        for device in "${DEVICE_ARRAY[@]}"; do
+            DESC=$(get_device_description "$device" 2>/dev/null || echo "无描述")
+            echo "  - $device: $DESC"
+        done
+    fi
+fi
+
+echo ""
 echo "💡 请提交更新后的 workflow.yml 文件"
