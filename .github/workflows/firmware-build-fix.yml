@@ -82,14 +82,14 @@ jobs:
           echo "📖 读取修复内容..."
           FIX_CONTENT=$(cat fix.txt)
           
-          # 4. 提取所有函数并替换
-          echo "🔧 开始应用函数修复..."
+          # 4. 提取所有系统性标识及其对应的内容块
+          echo "🔧 开始解析系统性标识..."
           
-          # 查找所有函数标识
-          FUNCTION_LINES=$(grep -n "#【build_firmware_main.sh-" fix.txt || true)
+          # 查找所有系统性标识行号
+          IDENTIFIER_LINES=$(grep -n "#【" fix.txt || true)
           
-          if [ -z "$FUNCTION_LINES" ]; then
-            echo "⚠️ 修复文件中没有找到函数标识"
+          if [ -z "$IDENTIFIER_LINES" ]; then
+            echo "⚠️ 修复文件中没有找到系统性标识"
             echo "💡 尝试将整个文件追加到目标文件末尾"
             echo "" >> "$TARGET_FILE"
             echo "# ============ 自动修复内容 ============" >> "$TARGET_FILE"
@@ -97,115 +97,129 @@ jobs:
             echo "# 来源: fix.txt" >> "$TARGET_FILE"
             cat fix.txt >> "$TARGET_FILE"
             echo "# ============ 修复结束 ============" >> "$TARGET_FILE"
-          else
-            echo "📋 找到的函数标识:"
-            echo "$FUNCTION_LINES"
+            echo "✅ 已将整个修复文件追加到目标文件"
+            exit 0
+          fi
+          
+          echo "📋 找到的系统性标识:"
+          echo "$IDENTIFIER_LINES"
+          
+          # 处理每个系统性标识
+          TOTAL_FIX_LINES=$(wc -l < fix.txt)
+          
+          # 将标识行号转换为数组
+          IFS=$'\n' read -d '' -r -a IDENTIFIER_ARRAY <<< "$IDENTIFIER_LINES"
+          
+          for i in "${!IDENTIFIER_ARRAY[@]}"; do
+            CURRENT_LINE_INFO="${IDENTIFIER_ARRAY[$i]}"
+            LINE_NUM=$(echo "$CURRENT_LINE_INFO" | cut -d: -f1)
+            IDENTIFIER=$(echo "$CURRENT_LINE_INFO" | cut -d: -f2- | sed 's/^[[:space:]]*//')
             
-            # 处理每个函数
-            echo "$FUNCTION_LINES" | while IFS= read -r line_info; do
-              # 提取行号
-              LINE_NUM=$(echo "$line_info" | cut -d: -f1)
+            echo "🔨 处理标识: $IDENTIFIER (第 $LINE_NUM 行)"
+            
+            # 提取标识名称（去掉 #【】）
+            ID_NAME=$(echo "$IDENTIFIER" | sed 's/#【//' | sed 's/】//')
+            
+            # 提取该标识对应的内容块范围
+            BLOCK_START=$LINE_NUM
+            
+            # 确定内容块结束位置（下一个标识的开始，或者文件结束）
+            if [ $((i + 1)) -lt ${#IDENTIFIER_ARRAY[@]} ]; then
+              # 有下一个标识
+              NEXT_LINE_INFO="${IDENTIFIER_ARRAY[$((i + 1))]}"
+              NEXT_LINE_NUM=$(echo "$NEXT_LINE_INFO" | cut -d: -f1)
+              BLOCK_END=$((NEXT_LINE_NUM - 1))
+            else
+              # 最后一个标识，到文件结束
+              BLOCK_END=$TOTAL_FIX_LINES
+            fi
+            
+            echo "📌 内容块范围: 第 $BLOCK_START 行到第 $BLOCK_END 行"
+            
+            # 提取整个内容块（包含标识行）
+            BLOCK_CONTENT=$(sed -n "${BLOCK_START},${BLOCK_END}p" fix.txt)
+            
+            # 在目标文件中查找该标识
+            echo "🔍 在目标文件中查找标识: $IDENTIFIER"
+            
+            # 搜索标识，支持标识行前后可能有空格的情况
+            TARGET_LINE_NUM=$(grep -n "^\s*${IDENTIFIER}" "$TARGET_FILE" | head -1 | cut -d: -f1)
+            
+            if [ -n "$TARGET_LINE_NUM" ]; then
+              echo "✅ 在目标文件第 $TARGET_LINE_NUM 行找到标识"
               
-              # 提取完整标识
-              IDENTIFIER=$(echo "$line_info" | cut -d: -f2-)
+              # 在目标文件中找到标识对应的内容块范围
+              TARGET_TOTAL_LINES=$(wc -l < "$TARGET_FILE")
+              TARGET_BLOCK_START=$TARGET_LINE_NUM
+              TARGET_BLOCK_END=""
               
-              # 提取函数名（从标识后的行获取）
-              NEXT_LINE=$((LINE_NUM + 1))
-              FUNC_LINE=$(sed -n "${NEXT_LINE}p" fix.txt)
+              # 从标识行开始查找，直到下一个标识或文件结束
+              CURRENT_SEARCH=$((TARGET_LINE_NUM + 1))
               
-              # 从函数行提取函数名（例如 "download_openwrt_sdk() {"）
-              FUNC_NAME=$(echo "$FUNC_LINE" | sed 's/(.*//' | sed 's/[[:space:]]*$//')
-              
-              if [ -n "$FUNC_NAME" ]; then
-                echo "🔨 处理函数: $FUNC_NAME (标识: $IDENTIFIER)"
+              while [ $CURRENT_SEARCH -le $TARGET_TOTAL_LINES ]; do
+                LINE_CONTENT=$(sed -n "${CURRENT_SEARCH}p" "$TARGET_FILE")
                 
-                # 提取函数的开始和结束位置
-                FUNC_START=$LINE_NUM
-                FUNC_END=""
-                
-                # 从函数开始行查找函数结束（遇到下一个标识或文件结束）
-                TOTAL_LINES=$(wc -l < fix.txt)
-                CURRENT_LINE=$FUNC_START
-                
-                while [ $CURRENT_LINE -le $TOTAL_LINES ]; do
-                  # 如果是下一个函数标识（但不是当前这个）
-                  if [ $CURRENT_LINE -gt $FUNC_START ]; then
-                    LINE_CONTENT=$(sed -n "${CURRENT_LINE}p" fix.txt)
-                    if [[ "$LINE_CONTENT" =~ "#【build_firmware_main.sh-" ]]; then
-                      FUNC_END=$((CURRENT_LINE - 1))
-                      break
-                    fi
-                  fi
-                  ((CURRENT_LINE++))
-                done
-                
-                if [ -z "$FUNC_END" ]; then
-                  FUNC_END=$TOTAL_LINES
+                # 如果遇到下一个系统性标识（以 #【 开头）
+                if [[ "$LINE_CONTENT" =~ ^[[:space:]]*#【 ]]; then
+                  TARGET_BLOCK_END=$((CURRENT_SEARCH - 1))
+                  break
                 fi
                 
-                echo "📌 函数范围: 第 $FUNC_START 行到第 $FUNC_END 行"
-                
-                # 提取函数内容
-                FUNC_CONTENT=$(sed -n "${FUNC_START},${FUNC_END}p" fix.txt)
-                
-                # 在原文件中查找该函数
-                echo "🔍 在原文件中查找函数 $FUNC_NAME..."
-                ORIG_FUNC_LINE=$(grep -n "^${FUNC_NAME}()" "$TARGET_FILE" | head -1 | cut -d: -f1)
-                
-                if [ -n "$ORIG_FUNC_LINE" ]; then
-                  echo "✅ 找到原函数，开始行: $ORIG_FUNC_LINE"
-                  
-                  # 查找原函数的结束位置
-                  ORIG_FILE_LINES=$(wc -l < "$TARGET_FILE")
-                  ORIG_FUNC_END=$ORIG_FUNC_LINE
-                  ORIG_CURRENT_LINE=$((ORIG_FUNC_LINE + 1))
-                  
-                  while [ $ORIG_CURRENT_LINE -le $ORIG_FILE_LINES ]; do
-                    ORIG_LINE_CONTENT=$(sed -n "${ORIG_CURRENT_LINE}p" "$TARGET_FILE")
-                    
-                    # 如果找到下一个函数定义或文件结束
-                    if [[ "$ORIG_LINE_CONTENT" =~ ^[a-zA-Z_][a-zA-Z0-9_]*\(\) ]] || [ $ORIG_CURRENT_LINE -eq $ORIG_FILE_LINES ]; then
-                      ORIG_FUNC_END=$((ORIG_CURRENT_LINE - 1))
-                      break
-                    fi
-                    ((ORIG_CURRENT_LINE++))
-                  done
-                  
-                  if [ $ORIG_FUNC_END -eq $ORIG_FUNC_LINE ]; then
-                    ORIG_FUNC_END=$ORIG_FILE_LINES
-                  fi
-                  
-                  echo "📌 原函数范围: 第 $ORIG_FUNC_LINE 行到第 $ORIG_FUNC_END 行"
-                  
-                  # 创建临时文件进行替换
-                  TEMP_FILE="/tmp/$(basename "$TARGET_FILE").temp"
-                  
-                  # 原文件前部分 + 新函数内容 + 原文件后部分
-                  head -n $((ORIG_FUNC_LINE - 1)) "$TARGET_FILE" > "$TEMP_FILE"
-                  echo "$FUNC_CONTENT" >> "$TEMP_FILE"
-                  tail -n +$((ORIG_FUNC_END + 1)) "$TARGET_FILE" >> "$TEMP_FILE"
-                  
-                  # 验证替换结果
-                  if [ $(wc -l < "$TEMP_FILE") -gt 10 ]; then
-                    mv "$TEMP_FILE" "$TARGET_FILE"
-                    echo "✅ 函数 $FUNC_NAME 替换成功"
-                  else
-                    echo "⚠️ 替换后文件太小，可能有错误，跳过此函数"
-                    rm -f "$TEMP_FILE"
-                  fi
-                  
-                else
-                  echo "⚠️ 在原文件中未找到函数 $FUNC_NAME，追加到文件末尾"
-                  echo "" >> "$TARGET_FILE"
-                  echo "# ============ 自动修复追加函数: $FUNC_NAME ============" >> "$TARGET_FILE"
-                  echo "$FUNC_CONTENT" >> "$TARGET_FILE"
-                  echo "✅ 函数 $FUNC_NAME 已追加"
+                # 如果到达文件末尾
+                if [ $CURRENT_SEARCH -eq $TARGET_TOTAL_LINES ]; then
+                  TARGET_BLOCK_END=$CURRENT_SEARCH
+                  break
                 fi
                 
-              else
-                echo "⚠️ 无法提取函数名，跳过此行: $IDENTIFIER"
+                ((CURRENT_SEARCH++))
+              done
+              
+              if [ -z "$TARGET_BLOCK_END" ]; then
+                TARGET_BLOCK_END=$TARGET_TOTAL_LINES
               fi
-            done
+              
+              echo "📌 目标文件中原内容块范围: 第 $TARGET_BLOCK_START 行到第 $TARGET_BLOCK_END 行"
+              
+              # 创建临时文件进行替换
+              TEMP_FILE="/tmp/$(basename "$TARGET_FILE").temp.$$"
+              
+              # 替换内容块：原文件前部分 + 新内容块 + 原文件后部分
+              head -n $((TARGET_BLOCK_START - 1)) "$TARGET_FILE" > "$TEMP_FILE"
+              echo "$BLOCK_CONTENT" >> "$TEMP_FILE"
+              tail -n +$((TARGET_BLOCK_END + 1)) "$TARGET_FILE" >> "$TEMP_FILE"
+              
+              # 验证替换结果
+              if [ $(wc -l < "$TEMP_FILE") -gt 10 ]; then
+                mv "$TEMP_FILE" "$TARGET_FILE"
+                echo "✅ 内容块替换成功 (标识: $ID_NAME)"
+              else
+                echo "⚠️ 替换后文件太小，可能有错误，跳过此内容块"
+                rm -f "$TEMP_FILE"
+              fi
+              
+            else
+              echo "⚠️ 在目标文件中未找到标识 $IDENTIFIER"
+              echo "💡 尝试追加到文件末尾"
+              
+              # 检查是否整个文件追加过
+              if ! tail -n 5 "$TARGET_FILE" | grep -q "# ============ 自动修复内容 ============"; then
+                echo "" >> "$TARGET_FILE"
+                echo "# ============ 自动修复内容 ============" >> "$TARGET_FILE"
+                echo "# 修复时间: $(date)" >> "$TARGET_FILE"
+                echo "# 来源: fix.txt" >> "$TARGET_FILE"
+              fi
+              
+              echo "$BLOCK_CONTENT" >> "$TARGET_FILE"
+              echo "✅ 内容块已追加到文件末尾 (标识: $ID_NAME)"
+            fi
+            
+            echo "---"
+          done
+          
+          # 如果文件末尾有自动修复标记，添加结束标记
+          if tail -n 1 "$TARGET_FILE" | grep -q "#【"; then
+            echo "" >> "$TARGET_FILE"
+            echo "# ============ 修复结束 ============" >> "$TARGET_FILE"
           fi
           
           echo "✅ 所有修复处理完成"
@@ -239,21 +253,12 @@ jobs:
           COMMIT_MSG+="\n时间: $(date)"
           COMMIT_MSG+="\n事件: ${{ github.event_name }}"
           
-          # 添加修复的函数列表
-          if [ -f "fix.txt" ] && grep -q "#【build_firmware_main.sh-" fix.txt; then
-            COMMIT_MSG+="\n\n修复的函数:"
-            grep "#【build_firmware_main.sh-" fix.txt | while IFS= read -r identifier; do
-              # 提取函数名
-              LINE_NUM=$(grep -n "$identifier" fix.txt | cut -d: -f1)
-              NEXT_LINE=$((LINE_NUM + 1))
-              FUNC_LINE=$(sed -n "${NEXT_LINE}p" fix.txt 2>/dev/null || true)
-              FUNC_NAME=$(echo "$FUNC_LINE" | sed 's/(.*//' | sed 's/[[:space:]]*$//' 2>/dev/null || true)
-              
-              if [ -n "$FUNC_NAME" ]; then
-                COMMIT_MSG+="\n- $FUNC_NAME"
-              else
-                COMMIT_MSG+="\n- $(echo "$identifier" | sed 's/#【//' | sed 's/】//')"
-              fi
+          # 添加修复的标识列表
+          if [ -f "fix.txt" ] && grep -q "#【" fix.txt; then
+            COMMIT_MSG+="\n\n修复的内容块:"
+            grep "#【" fix.txt | while IFS= read -r identifier; do
+              ID_NAME=$(echo "$identifier" | sed 's/#【//' | sed 's/】//')
+              COMMIT_MSG+="\n- $ID_NAME"
             done
           fi
           
@@ -288,23 +293,12 @@ jobs:
           echo "**触发:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          # 显示修复的函数信息
+          # 显示修复的标识信息
           if [ -f "fix.txt" ] && grep -q "#【" fix.txt; then
-            echo "**修复的函数:**" >> $GITHUB_STEP_SUMMARY
-            grep "#【build_firmware_main.sh-" fix.txt | while IFS= read -r identifier; do
-              # 清理标识格式
-              CLEAN_ID=$(echo "$identifier" | sed 's/#【//' | sed 's/】//')
-              # 提取函数名
-              LINE_NUM=$(grep -n "$identifier" fix.txt | cut -d: -f1)
-              NEXT_LINE=$((LINE_NUM + 1))
-              FUNC_LINE=$(sed -n "${NEXT_LINE}p" fix.txt 2>/dev/null || true)
-              FUNC_NAME=$(echo "$FUNC_LINE" | sed 's/(.*//' | sed 's/[[:space:]]*$//' 2>/dev/null || true)
-              
-              if [ -n "$FUNC_NAME" ]; then
-                echo "- $FUNC_NAME ($CLEAN_ID)" >> $GITHUB_STEP_SUMMARY
-              else
-                echo "- $CLEAN_ID" >> $GITHUB_STEP_SUMMARY
-              fi
+            echo "**修复的内容块:**" >> $GITHUB_STEP_SUMMARY
+            grep "#【" fix.txt | while IFS= read -r identifier; do
+              ID_NAME=$(echo "$identifier" | sed 's/#【//' | sed 's/】//')
+              echo "- $ID_NAME" >> $GITHUB_STEP_SUMMARY
             done
           fi
           
@@ -312,6 +306,6 @@ jobs:
           echo "**处理流程:**" >> $GITHUB_STEP_SUMMARY
           echo "1. ✅ 检查修复文件" >> $GITHUB_STEP_SUMMARY
           echo "2. ✅ 解析系统性标识" >> $GITHUB_STEP_SUMMARY
-          echo "3. ✅ 查找并修改目标文件" >> $GITHUB_STEP_SUMMARY
+          echo "3. ✅ 查找并替换内容块" >> $GITHUB_STEP_SUMMARY
           echo "4. ✅ 提交并推送更改" >> $GITHUB_STEP_SUMMARY
           echo "5. ✅ 清理修复文件" >> $GITHUB_STEP_SUMMARY
