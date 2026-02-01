@@ -119,9 +119,19 @@ jobs:
           DEVICES=$(get_all_devices)
           COUNT=$(echo $DEVICES | wc -w)
           echo "  设备数量: $COUNT 个"
+          echo "  主设备名称: ac42u (acrh17为别名)"
           for device in $DEVICES; do
             DESC=$(get_device_description "$device" 2>/dev/null || echo "无描述")
-            echo "  - $device: $DESC"
+            if command -v get_device_real_name >/dev/null 2>&1; then
+              REAL_NAME=$(get_device_real_name "$device" 2>/dev/null || echo "$device")
+              if [ "$REAL_NAME" != "$device" ]; then
+                echo "  - $device (别名, 实际: $REAL_NAME): $DESC"
+              else
+                echo "  - $device: $DESC"
+              fi
+            else
+              echo "  - $device: $DESC"
+            fi
           done
           
       - name: 自动修复（可选）
