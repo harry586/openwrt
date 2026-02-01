@@ -5,12 +5,12 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: "📱 设备名称 (自动从 support.sh 同步) - 当前支持: acrh17, cmcc_rax3000m, netgear_3800"
+        description: "📱 设备名称 (自动从 support.sh 同步) - 当前支持: ac42u, cmcc_rax3000m, netgear_3800"
         required: true
         type: choice
-        default: "acrh17"
+        default: "ac42u"
         options:
-          - "acrh17"
+          - "ac42u"
           - "cmcc_rax3000m"
           - "netgear_3800"
       version_selection:
@@ -150,6 +150,22 @@ jobs:
                     fi
                   done
                   
+                  # 检查别名
+                  if [ "$DEVICE_IN_SUPPORT" = false ] && command -v get_device_real_name >/dev/null 2>&1; then
+                    REAL_NAME=$(get_device_real_name "$SELECTED_DEVICE")
+                    if [ "$REAL_NAME" != "$SELECTED_DEVICE" ]; then
+                      echo "🔀 检测到设备别名: $SELECTED_DEVICE -> $REAL_NAME"
+                      
+                      for device in "${DEVICE_ARRAY[@]}"; do
+                        if [ "$device" = "$REAL_NAME" ]; then
+                          DEVICE_IN_SUPPORT=true
+                          REAL_DEVICE="$REAL_NAME"
+                          break
+                        fi
+                      done
+                    fi
+                  fi
+                  
                   if [ "$DEVICE_IN_SUPPORT" = false ]; then
                     echo "❌ 错误: 选择的设备 '$SELECTED_DEVICE' 不在 support.sh 的支持列表中"
                     echo ""
@@ -166,10 +182,24 @@ jobs:
                     echo "❌ 构建终止: 设备不支持"
                     exit 1
                   else
-                    echo "✅ 设备 '$SELECTED_DEVICE' 在 support.sh 中支持"
+                    REAL_DEVICE="${REAL_DEVICE:-$SELECTED_DEVICE}"
+                    echo "✅ 设备 '$SELECTED_DEVICE' (实际: $REAL_DEVICE) 在 support.sh 中支持"
+                    
+                    # 设置实际设备名称到环境变量
+                    echo "REAL_DEVICE_NAME=$REAL_DEVICE" >> $GITHUB_ENV
+                    
                     if command -v get_device_description >/dev/null 2>&1; then
-                      DEVICE_DESC=$(get_device_description "$SELECTED_DEVICE" 2>/dev/null || echo "无描述")
+                      DEVICE_DESC=$(get_device_description "$REAL_DEVICE" 2>/dev/null || echo "无描述")
                       echo "📝 设备描述: $DEVICE_DESC"
+                    fi
+                    
+                    # 获取预期固件名称
+                    if command -v get_device_firmware_name >/dev/null 2>&1; then
+                      EXPECTED_FIRMWARE=$(get_device_firmware_name "$REAL_DEVICE" "${{ github.event.inputs.version_selection }}" 2>/dev/null || echo "")
+                      if [ -n "$EXPECTED_FIRMWARE" ]; then
+                        echo "📦 预期固件名称: $EXPECTED_FIRMWARE"
+                        echo "EXPECTED_FIRMWARE=$EXPECTED_FIRMWARE" >> $GITHUB_ENV
+                      fi
                     fi
                   fi
                 else
@@ -297,7 +327,11 @@ jobs:
           echo "⚙️ 配置模式: ${{ github.event.inputs.config_mode }}"
           echo "📦 源代码仓库: ${{ github.event.inputs.source_repo }}"
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}" "${{ github.event.inputs.source_repo }}"
+          # 使用实际设备名称（如果有的话）
+          DEVICE_TO_USE="${REAL_DEVICE_NAME:-${{ github.event.inputs.device_name }}}"
+          echo "🎯 实际使用的设备名称: $DEVICE_TO_USE"
+          
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_build_env "$DEVICE_TO_USE" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}" "${{ github.event.inputs.source_repo }}"
           
           echo "🟢 步骤 6 完成"
 
@@ -307,7 +341,9 @@ jobs:
           echo "=== 步骤 7: 下载OpenWrt官方SDK（调用大脚本）==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_compiler_env "${{ github.event.inputs.device_name }}"
+          DEVICE_TO_USE="${REAL_DEVICE_NAME:-${{ github.event.inputs.device_name }}}"
+          
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_compiler_env "$DEVICE_TO_USE"
           
           echo "🟢 步骤 7 完成"
 
@@ -370,7 +406,9 @@ jobs:
           echo "=== 步骤 13: 智能配置生成（使用设备支持系统）（调用大脚本）==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" generate_config "${{ github.event.inputs.extra_packages }}"
+          DEVICE_TO_USE="${REAL_DEVICE_NAME:-${{ github.event.inputs.device_name }}}"
+          
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" generate_config "$DEVICE_TO_USE" "${{ github.event.inputs.extra_packages }}"
           
           echo "🟢 步骤 13 完成"
 
@@ -380,7 +418,9 @@ jobs:
           echo "=== 步骤 14: 验证USB配置（调用大脚本）==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" verify_usb_config
+          DEVICE_TO_USE="${REAL_DEVICE_NAME:-${{ github.event.inputs.device_name }}}"
+          
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" verify_usb_config "$DEVICE_TO_USE"
           
           echo "🟢 步骤 14 完成"
 
@@ -529,14 +569,70 @@ jobs:
           
           echo "🟢 步骤 23 完成"
 
-      #【firmware-build.yml-25】步骤 24: 检查构建产物（调用大脚本）
-      - name: "24. 检查构建产物（调用大脚本）"
+      #【firmware-build.yml-25】步骤 24: 检查构建产物并验证固件名称（调用大脚本）
+      - name: "24. 检查构建产物并验证固件名称（调用大脚本）"
         if: success()
         run: |
-          echo "=== 步骤 24: 检查构建产物（调用大脚本）==="
+          echo "=== 步骤 24: 检查构建产物并验证固件名称（调用大脚本）==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" check_firmware_files
+          
+          # 额外检查：验证固件名称是否符合预期
+          echo ""
+          echo "🔍 验证固件名称是否符合预期..."
+          
+          DEVICE_TO_USE="${REAL_DEVICE_NAME:-${{ github.event.inputs.device_name }}}"
+          echo "📱 设备: $DEVICE_TO_USE"
+          
+          # 检查固件文件
+          if [ -d "/mnt/openwrt-build/bin/targets" ]; then
+            # 查找所有固件文件
+            FIRMWARE_FILES=$(find "/mnt/openwrt-build/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
+            FIRMWARE_COUNT=$(echo "$FIRMWARE_FILES" | grep -c .)
+            
+            if [ $FIRMWARE_COUNT -gt 0 ]; then
+              echo "✅ 找到 $FIRMWARE_COUNT 个固件文件"
+              
+              # 检查预期的固件名称
+              if [ -n "$EXPECTED_FIRMWARE" ]; then
+                echo "📦 预期固件名称: $EXPECTED_FIRMWARE"
+                
+                # 检查是否有匹配的文件
+                FOUND_EXPECTED=false
+                while IFS= read -r firmware; do
+                  FILENAME=$(basename "$firmware")
+                  if [ "$FILENAME" = "$EXPECTED_FIRMWARE" ]; then
+                    FOUND_EXPECTED=true
+                    echo "🎯 找到预期的固件文件: $FILENAME"
+                    echo "📊 文件大小: $(ls -lh "$firmware" | awk '{print $5}')"
+                    echo "📁 路径: $firmware"
+                  fi
+                done <<< "$FIRMWARE_FILES"
+                
+                if [ "$FOUND_EXPECTED" = false ]; then
+                  echo "⚠️ 警告: 未找到预期的固件文件: $EXPECTED_FIRMWARE"
+                  echo "📋 实际生成的固件文件:"
+                  while IFS= read -r firmware; do
+                    FILENAME=$(basename "$firmware")
+                    SIZE=$(ls -lh "$firmware" 2>/dev/null | awk '{print $5}' || echo "未知")
+                    echo "  - $FILENAME ($SIZE)"
+                  done <<< "$FIRMWARE_FILES"
+                fi
+              else
+                echo "📋 生成的固件文件:"
+                while IFS= read -r firmware; do
+                  FILENAME=$(basename "$firmware")
+                  SIZE=$(ls -lh "$firmware" 2>/dev/null | awk '{print $5}' || echo "未知")
+                  echo "  - $FILENAME ($SIZE)"
+                done <<< "$FIRMWARE_FILES"
+              fi
+            else
+              echo "⚠️ 未找到固件文件"
+            fi
+          else
+            echo "❌ 错误: 构建产物目录不存在"
+          fi
           
           echo "🟢 步骤 24 完成"
 
@@ -581,6 +677,7 @@ jobs:
           echo "🚀 构建总结报告"
           echo "========================================"
           echo "设备: ${{ github.event.inputs.device_name }}"
+          echo "实际设备: ${REAL_DEVICE_NAME:-${{ github.event.inputs.device_name }}}"
           echo "版本: ${{ github.event.inputs.version_selection }}"
           echo "配置模式: ${{ github.event.inputs.config_mode }}"
           echo "源代码仓库: ${{ github.event.inputs.source_repo }}"
@@ -616,6 +713,12 @@ jobs:
                   TYPE="🔧 普通固件"
                 fi
                 
+                # 检查是否为预期固件
+                DEVICE_TO_USE="${REAL_DEVICE_NAME:-${{ github.event.inputs.device_name }}}"
+                if [ -n "$EXPECTED_FIRMWARE" ] && [ "$FILE_NAME" = "$EXPECTED_FIRMWARE" ]; then
+                  TYPE="$TYPE 🎯"
+                fi
+                
                 echo "    🎯 $FILE_NAME ($SIZE) - $TYPE"
               done
             else
@@ -637,6 +740,19 @@ jobs:
             fi
           else
             echo "  ❌ 构建结果: 失败"
+          fi
+          
+          # 设备信息
+          if [ -f "${{ github.workspace }}/firmware-config/support.sh" ]; then
+            source "${{ github.workspace }}/firmware-config/support.sh" 2>/dev/null || true
+            if command -v get_device_description >/dev/null 2>&1; then
+              DEVICE_TO_USE="${REAL_DEVICE_NAME:-${{ github.event.inputs.device_name }}}"
+              DEVICE_DESC=$(get_device_description "$DEVICE_TO_USE" 2>/dev/null || echo "无描述")
+              echo ""
+              echo "📱 设备信息:"
+              echo "  名称: $DEVICE_TO_USE"
+              echo "  描述: $DEVICE_DESC"
+            fi
           fi
           
           echo "✅ 构建流程完成"
