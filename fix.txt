@@ -1,216 +1,51 @@
-#【build_firmware_main.sh-01】文件头：变量定义和日志函数
+#【build_firmware_main.sh-01】文件头：变量定义和日志函数（终极修复版）
 #!/bin/bash
 set -e
 
 BUILD_DIR="/mnt/openwrt-build"
 ENV_FILE="$BUILD_DIR/build_env.sh"
 
-# 修复：使用绝对路径获取仓库根目录
+# ========== 修复：智能获取仓库根目录 ==========
+# 方法1: 优先使用 GitHub Actions 的工作区
 if [ -n "$GITHUB_WORKSPACE" ]; then
     REPO_ROOT="$GITHUB_WORKSPACE"
+    log "✅ 使用 GitHub Workspace: $REPO_ROOT"
+# 方法2: 检查环境变量
+elif [ -n "$REPO_ROOT" ]; then
+    log "✅ 使用现有 REPO_ROOT 环境变量: $REPO_ROOT"
+# 方法3: 使用工作流中的 BUILD_DIR
+elif [ -n "$BUILD_DIR" ] && [ -d "$BUILD_DIR/../.." ]; then
+    REPO_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
+    log "✅ 从 BUILD_DIR 推导 REPO_ROOT: $REPO_ROOT"
+# 方法4: 使用脚本相对路径（最后的手段）
 else
-    REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    # 注意：这里需要根据脚本的实际位置调整
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    
+    # 尝试不同的相对路径
+    if [ -d "$SCRIPT_DIR/../../firmware-config" ]; then
+        REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+        log "✅ 使用脚本相对路径 (方法A): $REPO_ROOT"
+    elif [ -d "$SCRIPT_DIR/../firmware-config" ]; then
+        REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+        log "✅ 使用脚本相对路径 (方法B): $REPO_ROOT"
+    elif [ -d "$SCRIPT_DIR/firmware-config" ]; then
+        REPO_ROOT="$SCRIPT_DIR"
+        log "✅ 使用脚本相对路径 (方法C): $REPO_ROOT"
+    else
+        log "❌ 无法确定仓库根目录"
+        log "📁 脚本位置: $SCRIPT_DIR"
+        log "📁 当前目录: $(pwd)"
+        log "📁 目录内容:"
+        ls -la
+        exit 1
+    fi
 fi
 
 # 修复：SUPPORT_DIR 应该指向 firmware-config 目录
 SUPPORT_DIR="$REPO_ROOT/firmware-config"
 
-# 确保有日志目录
-mkdir -p /tmp/build-logs
-
-log() {
-    echo "【$(date '+%Y-%m-%d %H:%M:%S')】$1"
-}
-
-# 调试函数：显示目录结构
-debug_dirs() {
-    log "🔍 调试目录结构:"
-    log "  仓库根目录: $REPO_ROOT"
-    log "  支持目录: $SUPPORT_DIR"
-    if [ -d "$REPO_ROOT" ]; then
-        log "  📁 REPO_ROOT 存在"
-        log "  目录内容 (前10个):"
-        ls -la "$REPO_ROOT" | head -20
-    else
-        log "  ❌ REPO_ROOT 不存在"
-    fi
-    
-    if [ -d "$SUPPORT_DIR" ]; then
-        log "  📁 SUPPORT_DIR 存在"
-        log "  目录内容 (前10个):"
-        ls -la "$SUPPORT_DIR" | head -10
-    else
-        log "  ❌ SUPPORT_DIR 不存在"
-    fi
-}
-
-#【build_firmware_main.sh-04】设备支持函数（修复版）
-load_device_support() {
-    log "🔧 加载设备支持脚本..."
-    
-    # 显示调试信息
-    debug_dirs
-    
-    local support_file="$SUPPORT_DIR/support.sh"
-    log "📁 检查支持文件: $support_file"
-    
-    if [ -f "$support_file" ]; then
-        log "✅ 找到设备支持脚本"
-        
-        # 显示文件信息
-        log "📊 文件信息:"
-        ls -lh "$support_file"
-        
-        # 测试能否读取函数
-        log "🧪 测试脚本功能..."
-        if source "$support_file" 2>/dev/null; then
-            log "✅ 成功加载设备支持脚本"
-            
-            # 测试关键函数是否存在
-            if command -v get_device_config >/dev/null 2>&1; then
-                log "✅ 找到 get_device_config 函数"
-            else
-                log "⚠️ 未找到 get_device_config 函数"
-            fi
-            
-            if command -v get_device_description >/dev/null 2>&1; then
-                log "✅ 找到 get_device_description 函数"
-            else
-                log "⚠️ 未找到 get_device_description 函数"
-            fi
-            
-            if command -v get_all_devices >/dev/null 2>&1; then
-                log "✅ 找到 get_all_devices 函数"
-                local all_devices=$(get_all_devices 2>/dev/null || echo "无法获取设备列表")
-                log "📱 支持的设备: $all_devices"
-            else
-                log "⚠️ 未找到 get_all_devices 函数"
-            fi
-            
-            return 0
-        else
-            log "❌ 无法加载设备支持脚本"
-            return 1
-        fi
-    else
-        log "❌ 设备支持脚本不存在"
-        log "💡 尝试在以下位置查找:"
-        find "$REPO_ROOT" -name "support.sh" -type f 2>/dev/null | head -5
-        return 1
-    fi
-}
-
-#【build_firmware_main.sh-35】主函数（添加调试参数）
-main() {
-    case $1 in
-        # 新增调试命令
-        "debug_dirs")
-            debug_dirs
-            ;;
-        "debug_load_device")
-            load_device_support
-            ;;
-            
-        # 其他原有命令保持不变
-        "setup_environment")
-            setup_environment
-            ;;
-        "create_build_dir")
-            create_build_dir
-            ;;
-        "initialize_build_env")
-            initialize_build_env "$2" "$3" "$4" "$5"
-            ;;
-        "initialize_compiler_env")
-            initialize_compiler_env "$2"
-            ;;
-        "verify_compiler_files")
-            verify_compiler_files
-            ;;
-        "check_compiler_invocation")
-            check_compiler_invocation
-            ;;
-        "add_turboacc_support")
-            add_turboacc_support
-            ;;
-        "configure_feeds")
-            configure_feeds
-            ;;
-        "install_turboacc_packages")
-            install_turboacc_packages
-            ;;
-        "pre_build_space_check")
-            pre_build_space_check
-            ;;
-        "post_build_space_check")
-            post_build_space_check
-            ;;
-        "generate_config")
-            generate_config "$2"
-            ;;
-        "verify_usb_config")
-            verify_usb_config
-            ;;
-        "check_usb_drivers_integrity")
-            check_usb_drivers_integrity
-            ;;
-        "validate_config_syntax")
-            validate_config_syntax
-            ;;
-        "apply_config")
-            apply_config
-            ;;
-        "fix_network")
-            fix_network
-            ;;
-        "download_dependencies")
-            download_dependencies
-            ;;
-        "integrate_custom_files")
-            integrate_custom_files
-            ;;
-        "pre_build_error_check")
-            pre_build_error_check
-            ;;
-        "build_firmware")
-            build_firmware "$2"
-            ;;
-        "check_firmware_files")
-            check_firmware_files
-            ;;
-        "cleanup")
-            cleanup
-            ;;
-        "save_source_code_info")
-            save_source_code_info
-            ;;
-        "search_compiler_files")
-            search_compiler_files "$2" "$3"
-            ;;
-        "universal_compiler_search")
-            universal_compiler_search "$2" "$3"
-            ;;
-        "search_compiler_files_simple")
-            search_compiler_files_simple "$2" "$3"
-            ;;
-        "intelligent_platform_aware_compiler_search")
-            intelligent_platform_aware_compiler_search "$2" "$3" "$4"
-            ;;
-        *)
-            log "❌ 未知命令: $1"
-            echo "可用命令:"
-            echo "  debug_dirs - 调试目录结构"
-            echo "  debug_load_device - 调试设备支持加载"
-            echo "  setup_environment, create_build_dir, initialize_build_env"
-            echo "  initialize_compiler_env - 初始化编译器环境（下载OpenWrt官方SDK）"
-            echo "  add_turboacc_support, configure_feeds, install_turboacc_packages"
-            echo "  pre_build_space_check, generate_config, verify_usb_config, check_usb_drivers_integrity, apply_config"
-            echo "  fix_network, download_dependencies, integrate_custom_files"
-            echo "  pre_build_error_check, validate_config_syntax, build_firmware, post_build_space_check"
-            echo "  check_firmware_files, cleanup, save_source_code_info, verify_compiler_files"
-            echo "  check_compiler_invocation, search_compiler_files, universal_compiler_search"
-            echo "  search_compiler_files_simple, intelligent_platform_aware_compiler_search"
-            exit 1
-            ;;
-    esac
-}
+log "📁 最终路径设置:"
+log "  REPO_ROOT: $REPO_ROOT"
+log "  SUPPORT_DIR: $SUPPORT_DIR"
+log "  当前目录: $(pwd)"
