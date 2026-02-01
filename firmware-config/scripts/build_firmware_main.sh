@@ -210,7 +210,189 @@ create_build_dir() {
 # 【构建环境初始化】函数区域（工作流步骤6.4）
 # ==============================
 
-#【build_firmware_main.sh-13】构建环境初始化函数 - 修复LEDE分支问题
+#【build_firmware_main.sh-13】构建环境初始化函数 - 修复LEDE分支问题和设备名称映射
+initialize_build_env() {
+    local device_name=$1
+    local version_selection=$2
+    local config_mode=$3
+    local source_repo=${4:-"immortalwrt"}  # 添加第四个参数，默认immortalwrt
+    
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 版本选择 ==="
+    log "源代码仓库: $source_repo"
+    
+    # 根据仓库选择不同的URL - 只保留immortalwrt和lede
+    case "$source_repo" in
+        "immortalwrt")
+            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+            ;;
+        "lede")
+            SELECTED_REPO_URL="https://github.com/coolsnowwolf/lede.git"
+            SELECTED_BRANCH="master"  # LEDE使用master分支
+            ;;
+        *)
+            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+            source_repo="immortalwrt"
+            ;;
+    esac
+    
+    # 根据版本选择分支（LEDE除外）- 修复分支选择逻辑
+    if [ "$source_repo" = "lede" ]; then
+        # LEDE仓库只使用master分支
+        SELECTED_BRANCH="master"
+        log "🔧 LEDE仓库使用master分支"
+    else
+        # ImmortalWrt仓库根据版本选择分支
+        if [ "$version_selection" = "23.05" ]; then
+            SELECTED_BRANCH="openwrt-23.05"
+        else
+            SELECTED_BRANCH="openwrt-21.02"
+        fi
+    fi
+    
+    # 设置SOURCE_REPO环境变量
+    SOURCE_REPO="$source_repo"
+    
+    log "✅ 版本选择完成: $SELECTED_BRANCH (仓库: $source_repo)"
+    
+    log "=== 克隆源码 ==="
+    log "仓库: $SELECTED_REPO_URL"
+    log "分支: $SELECTED_BRANCH"
+    
+    sudo rm -rf ./* ./.git* 2>/dev/null || true
+    
+    git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
+    log "✅ 源码克隆完成"
+    
+    # 检查克隆的文件
+    local important_source_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
+    for file in "${important_source_files[@]}"; do
+        if [ -f "$file" ]; then
+            log "✅ 源码文件存在: $file"
+        else
+            log "❌ 源码文件缺失: $file"
+        fi
+    done
+    
+    log "=== 设备配置 ==="
+    DEVICE_NAME="$device_name"
+    
+    # 加载设备支持脚本
+    if load_device_support; then
+        local device_config=$(get_device_config "$device_name")
+        TARGET=$(echo $device_config | awk '{print $1}')
+        SUBTARGET=$(echo $device_config | awk '{print $2}')
+        DEVICE=$(echo $device_config | awk '{print $3}')
+        PLATFORM=$(echo $device_config | awk '{print $4}')
+        
+        local device_desc=$(get_device_description "$device_name")
+        log "🔧 设备: $device_desc"
+        log "目标: $TARGET"
+        log "子目标: $SUBTARGET"
+        log "设备: $DEVICE"
+        log "平台: $PLATFORM"
+        
+        # 特殊处理：对于LEDE仓库，需要确保设备名称正确
+        if [ "$SOURCE_REPO" = "lede" ]; then
+            log "🔧 LEDE仓库设备名称调整"
+            # 检查设备是否以"generic_"开头，如果是则去掉前缀
+            if [[ "$DEVICE" == generic_* ]]; then
+                DEVICE="${DEVICE#generic_}"
+                log "📝 调整设备名称: $DEVICE"
+            fi
+        fi
+    else
+        # 默认配置（兼容旧版）- 修复设备名称映射，添加mt7981支持
+        case "$device_name" in
+            "ac42u"|"acrh17")
+                TARGET="ipq40xx"
+                SUBTARGET="generic"
+                if [ "$SOURCE_REPO" = "lede" ]; then
+                    DEVICE="asus_rt-acrh17"  # LEDE中使用acrh17
+                else
+                    DEVICE="asus_rt-ac42u"   # ImmortalWrt中使用ac42u
+                fi
+                PLATFORM="ipq40xx"
+                ;;
+            "mi_router_4a_gigabit"|"r4ag")
+                TARGET="ramips"
+                SUBTARGET="mt76x8"
+                DEVICE="xiaomi_mi-router-4a-gigabit"
+                PLATFORM="ramips"
+                ;;
+            "mi_router_3g"|"r3g")
+                TARGET="ramips"
+                SUBTARGET="mt7621"
+                DEVICE="xiaomi_mi-router-3g"
+                PLATFORM="ramips"
+                ;;
+            "netgear_3800")
+                TARGET="ath79"
+                SUBTARGET="generic"
+                if [ "$SOURCE_REPO" = "lede" ]; then
+                    DEVICE="netgear_wndr3800"  # LEDE中的设备名称
+                else
+                    DEVICE="netgear_wndr3800"  # ImmortalWrt中的设备名称
+                fi
+                PLATFORM="ath79"
+                ;;
+            "cmcc_rax3000m"|"rax3000m")
+                TARGET="mediatek"
+                SUBTARGET="mt7981"
+                DEVICE="cmcc_rax3000m"
+                PLATFORM="mediatek"
+                log "🔧 检测到MT7981平台设备: $device_name"
+                ;;
+            *)
+                # 尝试根据设备名称猜测平台
+                if [[ "$device_name" == *mt7981* ]] || [[ "$device_name" == *rax3000m* ]]; then
+                    TARGET="mediatek"
+                    SUBTARGET="mt7981"
+                    DEVICE="$device_name"
+                    PLATFORM="mediatek"
+                    log "🔧 猜测为MT7981平台设备: $device_name"
+                elif [[ "$device_name" == *ipq* ]] || [[ "$device_name" == *ipq40xx* ]]; then
+                    TARGET="ipq40xx"
+                    SUBTARGET="generic"
+                    DEVICE="$device_name"
+                    PLATFORM="ipq40xx"
+                elif [[ "$device_name" == *mt76* ]] || [[ "$device_name" == *ramips* ]]; then
+                    TARGET="ramips"
+                    SUBTARGET="mt76x8"
+                    DEVICE="$device_name"
+                    PLATFORM="ramips"
+                else
+                    TARGET="ipq40xx"
+                    SUBTARGET="generic"
+                    DEVICE="$device_name"
+                    PLATFORM="generic"
+                fi
+                ;;
+        esac
+        log "🔧 检测到设备: $device_name"
+        log "目标: $TARGET"
+        log "子目标: $SUBTARGET"
+        log "设备: $DEVICE"
+        log "平台: $PLATFORM"
+    fi
+    
+    CONFIG_MODE="$config_mode"
+    
+    save_env
+    
+    echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
+    echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
+    echo "TARGET=$TARGET" >> $GITHUB_ENV
+    echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
+    echo "DEVICE=$DEVICE" >> $GITHUB_ENV
+    echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
+    echo "DEVICE_NAME=$DEVICE_NAME" >> $GITHUB_ENV
+    echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
+    echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+    
+    log "✅ 构建环境初始化完成"
+}
 initialize_build_env() {
     local device_name=$1
     local version_selection=$2
@@ -1089,7 +1271,162 @@ initialize_compiler_env() {
     fi
 }
 
-#【build_firmware_main.sh-07】SDK下载函数
+#【build_firmware_main.sh-07】SDK下载函数 - 修复URL错误
+download_openwrt_sdk() {
+    local target="$1"
+    local subtarget="$2"
+    local version="$3"
+    
+    log "=== 下载OpenWrt官方SDK工具链 ==="
+    log "目标平台: $target/$subtarget"
+    log "OpenWrt版本: $version"
+    
+    # 确定SDK下载URL
+    local sdk_url=""
+    local sdk_filename=""
+    
+    # 加载设备支持脚本获取SDK URL
+    if load_device_support; then
+        sdk_url=$(get_sdk_url "$target" "$subtarget" "$version")
+    fi
+    
+    if [ -z "$sdk_url" ]; then
+        # 如果支持脚本没有提供URL，使用内置配置 - 修复URL错误
+        if [ "$version" = "23.05" ] || [ "$version" = "openwrt-23.05" ]; then
+            # OpenWrt 23.05 SDK - 修复GCC版本为12.3.0并修正URL
+            case "$target" in
+                "ipq40xx")
+                    sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
+                    ;;
+                "ramips")
+                    if [ "$subtarget" = "mt76x8" ]; then
+                        # 修复：ramips/mt76x8平台使用_musl而非_musl_eabi
+                        sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt76x8/openwrt-sdk-23.05.3-ramips-mt76x8_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+                    elif [ "$subtarget" = "mt7621" ]; then
+                        sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt7621/openwrt-sdk-23.05.3-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+                    elif [ "$subtarget" = "mt7981" ]; then
+                        # 添加mediatek mt7981支持（如cmcc_rax3000m）
+                        log "🔧 检测到MT7981平台，尝试查找相关SDK"
+                        # 注意：23.05.3可能没有mt7981的SDK，使用mt7622作为替代
+                        sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/mediatek/mt7622/openwrt-sdk-23.05.3-mediatek-mt7622_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+                    fi
+                    ;;
+                "ath79")
+                    # 修复：ath79平台的URL保持正确
+                    sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ath79/generic/openwrt-sdk-23.05.3-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+                    ;;
+                "mediatek")
+                    # 添加mediatek平台支持
+                    sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/mediatek/mt7981/openwrt-sdk-23.05.3-mediatek-mt7981_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+                    ;;
+            esac
+        elif [ "$version" = "21.02" ] || [ "$version" = "openwrt-21.02" ]; then
+            # OpenWrt 21.02 SDK - GCC版本保持8.4.0并修正URL
+            case "$target" in
+                "ipq40xx")
+                    # 修复：添加https前缀
+                    sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+                    ;;
+                "ramips")
+                    if [ "$subtarget" = "mt76x8" ]; then
+                        # 修复：ramips/mt76x8平台使用_musl而非_musl_eabi
+                        sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt76x8/openwrt-sdk-21.02.7-ramips-mt76x8_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+                    elif [ "$subtarget" = "mt7621" ]; then
+                        sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt7621/openwrt-sdk-21.02.7-ramips-mt7621_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+                    fi
+                    ;;
+                "ath79")
+                    sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ath79/generic/openwrt-sdk-21.02.7-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+                    ;;
+            esac
+        fi
+    fi
+    
+    if [ -z "$sdk_url" ]; then
+        log "❌ 无法确定SDK下载URL"
+        log "🔍 尝试的平台: $target/$subtarget, 版本: $version"
+        return 1
+    fi
+    
+    sdk_filename=$(basename "$sdk_url")
+    log "📥 SDK下载URL: $sdk_url"
+    log "📁 SDK文件名: $sdk_filename"
+    
+    # 创建SDK目录
+    local sdk_dir="$BUILD_DIR/sdk"
+    mkdir -p "$sdk_dir"
+    
+    # 下载SDK
+    log "开始下载OpenWrt SDK..."
+    if wget --tries=3 --timeout=30 -q -O "$sdk_dir/$sdk_filename" "$sdk_url"; then
+        log "✅ SDK下载成功"
+    else
+        log "⚠️ 首次下载失败，尝试备用下载..."
+        # 尝试使用curl
+        if curl -L --connect-timeout 30 --retry 3 -o "$sdk_dir/$sdk_filename" "$sdk_url"; then
+            log "✅ SDK下载成功（使用curl）"
+        else
+            log "❌ SDK下载失败"
+            log "💡 可能是URL不正确或网络问题，URL: $sdk_url"
+            return 1
+        fi
+    fi
+    
+    # 解压SDK
+    log "解压SDK..."
+    cd "$sdk_dir"
+    if tar -xf "$sdk_filename" --strip-components=1; then
+        log "✅ SDK解压成功"
+        rm -f "$sdk_filename"
+    else
+        log "❌ SDK解压失败"
+        return 1
+    fi
+    
+    # 查找SDK中的编译器
+    local toolchain_dir=""
+    if [ -d "toolchain" ]; then
+        toolchain_dir="$sdk_dir/toolchain"
+        log "✅ 找到toolchain目录: $toolchain_dir"
+    else
+        # 在SDK中搜索编译器，排除虚假的dummy-tools
+        local gcc_file=$(find "$sdk_dir" -type f -executable \
+            -name "*gcc" \
+            ! -name "*gcc-ar" \
+            ! -name "*gcc-ranlib" \
+            ! -name "*gcc-nm" \
+            ! -path "*dummy-tools*" \
+            ! -path "*scripts*" \
+            2>/dev/null | head -1)
+        
+        if [ -n "$gcc_file" ]; then
+            toolchain_dir=$(dirname "$(dirname "$gcc_file")")
+            log "✅ 在SDK中找到GCC编译器: $gcc_file"
+            log "📁 编译器目录: $toolchain_dir"
+        else
+            # 尝试查找staging_dir中的工具链
+            if [ -d "staging_dir" ]; then
+                toolchain_dir=$(find "$sdk_dir/staging_dir" -name "toolchain-*" -type d | head -1)
+                if [ -n "$toolchain_dir" ]; then
+                    log "✅ 在staging_dir中找到工具链目录: $toolchain_dir"
+                fi
+            fi
+        fi
+    fi
+    
+    if [ -n "$toolchain_dir" ] && [ -d "$toolchain_dir" ]; then
+        log "✅ 找到SDK中的编译器目录: $toolchain_dir"
+        export COMPILER_DIR="$toolchain_dir"
+        
+        # 验证编译器
+        verify_compiler_files
+        return 0
+    else
+        log "❌ 未在SDK中找到编译器目录"
+        return 1
+    fi
+}
+
 download_openwrt_sdk() {
     local target="$1"
     local subtarget="$2"

@@ -608,6 +608,206 @@ initialize_compiler_env() {
             log "⚠️ 编译器目录存在但不包含真正的GCC，将重新下载SDK"
         fi
     else
+        log "🔍 COMPILER_DIR未设置或目录不存在"
+    fi
+    
+    # 根据设备确定平台（使用已设置的变量）
+    log "目标平台: $TARGET/$SUBTARGET"
+    log "目标设备: $DEVICE"
+    log "OpenWrt版本: $SELECTED_BRANCH"
+    log "平台类型: $PLATFORM"
+    log "源代码仓库: $SOURCE_REPO"
+    
+    # 修复：对于LEDE仓库的master分支，不需要下载SDK
+    if [ "$SOURCE_REPO" = "lede" ]; then
+        log "🔧 LEDE仓库使用内置工具链，无需下载OpenWrt SDK"
+        log "💡 LEDE会使用自己的工具链进行编译"
+        export COMPILER_DIR=""
+        save_env
+        return 0
+    fi
+    
+    # 简化版本字符串（从openwrt-23.05转为23.05）
+    local version_for_sdk=""
+    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+        version_for_sdk="23.05"
+    elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+        version_for_sdk="21.02"
+    elif [ "$SELECTED_BRANCH" = "master" ]; then
+        # LEDE的master分支使用21.02 SDK（但LEDE已跳过）
+        version_for_sdk="21.02"
+    else
+        # 尝试提取版本号
+        version_for_sdk=$(echo "$SELECTED_BRANCH" | grep -o "[0-9][0-9]\.[0-9][0-9]" || echo "21.02")
+        log "⚠️ 无法识别的版本分支，尝试使用: $version_for_sdk"
+    fi
+    
+    log "📌 SDK版本: $version_for_sdk"
+    log "📌 目标平台: $TARGET/$SUBTARGET"
+    
+    # 详细显示SDK下载信息
+    log "🔍 SDK下载详细信息:"
+    log "  设备: $device_name"
+    log "  OpenWrt版本: $SELECTED_BRANCH"
+    log "  SDK版本: $version_for_sdk"
+    log "  目标: $TARGET"
+    log "  子目标: $SUBTARGET"
+    log "  平台: $PLATFORM"
+    log "  源代码仓库: $SOURCE_REPO"
+    
+    # 下载OpenWrt官方SDK
+    log "🚀 开始下载OpenWrt官方SDK..."
+    if download_openwrt_sdk "$TARGET" "$SUBTARGET" "$version_for_sdk"; then
+        log "🎉 OpenWrt SDK下载并设置成功"
+        log "📌 编译器目录: $COMPILER_DIR"
+        
+        # 显示SDK目录信息
+        if [ -d "$COMPILER_DIR" ]; then
+            log "📊 SDK目录信息:"
+            log "  目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
+            log "  文件数量: $(find "$COMPILER_DIR" -type f 2>/dev/null | wc -l)"
+            
+            # 查找GCC编译器，排除虚假编译器
+            local gcc_file=$(find "$COMPILER_DIR" -type f -executable \
+              -name "*gcc" \
+              ! -name "*gcc-ar" \
+              ! -name "*gcc-ranlib" \
+              ! -name "*gcc-nm" \
+              ! -path "*dummy-tools*" \
+              ! -path "*scripts*" \
+              2>/dev/null | head -1)
+            
+            if [ -n "$gcc_file" ]; then
+                log "✅ 找到SDK中的GCC编译器: $(basename "$gcc_file")"
+                log "  🔧 完整路径: $gcc_file"
+                log "  📋 版本信息: $("$gcc_file" --version 2>&1 | head -1)"
+            fi
+        fi
+        
+        # 保存到环境文件
+        save_env
+        
+        return 0
+    else
+        log "❌ OpenWrt SDK下载失败"
+        log "💡 将使用OpenWrt自动构建的编译器作为后备"
+        
+        # 设置空的编译器目录
+        export COMPILER_DIR=""
+        save_env
+        
+        # 不返回错误，继续执行
+        return 0
+    fi
+}
+
+initialize_compiler_env() {
+    local device_name="$1"
+    log "=== 初始化编译器环境（下载OpenWrt官方SDK）- 修复版 ==="
+    
+    # 首先加载环境变量 - 修复检查逻辑
+    log "🔍 检查环境文件..."
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        log "✅ 从 $BUILD_DIR/build_env.sh 加载环境变量"
+        
+        # 显示关键环境变量
+        log "📋 当前环境变量:"
+        log "  SELECTED_BRANCH: $SELECTED_BRANCH"
+        log "  TARGET: $TARGET"
+        log "  SUBTARGET: $SUBTARGET"
+        log "  DEVICE: $DEVICE"
+        log "  CONFIG_MODE: $CONFIG_MODE"
+        log "  REPO_ROOT: $REPO_ROOT"
+        log "  COMPILER_DIR: $COMPILER_DIR"
+        log "  DEVICE_NAME: $DEVICE_NAME"
+        log "  PLATFORM: $PLATFORM"
+        log "  SOURCE_REPO: $SOURCE_REPO"
+    else
+        log "⚠️ 环境文件不存在: $BUILD_DIR/build_env.sh"
+        log "💡 环境文件应该在步骤6.3中创建，但未找到"
+        
+        # 设置默认值
+        if [ -z "$SELECTED_BRANCH" ]; then
+            SELECTED_BRANCH="openwrt-21.02"
+            log "⚠️ SELECTED_BRANCH未设置，使用默认值: $SELECTED_BRANCH"
+        fi
+        
+        if [ -z "$SOURCE_REPO" ]; then
+            SOURCE_REPO="immortalwrt"
+            log "⚠️ SOURCE_REPO未设置，使用默认值: $SOURCE_REPO"
+        fi
+        
+        if [ -z "$TARGET" ]; then
+            # 使用设备支持脚本获取配置
+            if load_device_support; then
+                local device_config=$(get_device_config "$device_name")
+                TARGET=$(echo $device_config | awk '{print $1}')
+                SUBTARGET=$(echo $device_config | awk '{print $2}')
+                DEVICE=$(echo $device_config | awk '{print $3}')
+                PLATFORM=$(echo $device_config | awk '{print $4}')
+                log "⚠️ 平台变量未设置，从设备支持脚本获取: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE, PLATFORM=$PLATFORM"
+            else
+                # 默认配置
+                TARGET="ipq40xx"
+                SUBTARGET="generic"
+                DEVICE="$device_name"
+                PLATFORM="generic"
+                log "⚠️ 平台变量未设置，使用默认值: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE"
+            fi
+        fi
+        
+        if [ -z "$CONFIG_MODE" ]; then
+            CONFIG_MODE="normal"
+            log "⚠️ CONFIG_MODE未设置，使用默认值: $CONFIG_MODE"
+        fi
+        
+        if [ -z "$DEVICE_NAME" ]; then
+            DEVICE_NAME="$device_name"
+            log "⚠️ DEVICE_NAME未设置，使用: $DEVICE_NAME"
+        fi
+        
+        if [ -z "$PLATFORM" ]; then
+            PLATFORM="generic"
+            log "⚠️ PLATFORM未设置，使用默认值: $PLATFORM"
+        fi
+        
+        # 保存到环境文件
+        save_env
+        log "✅ 已创建环境文件: $BUILD_DIR/build_env.sh"
+    fi
+    
+    # 检查环境变量中的COMPILER_DIR
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+        log "✅ 使用环境变量中的编译器目录: $COMPILER_DIR"
+        
+        # 验证编译器目录是否真的包含GCC
+        log "🔍 验证编译器目录有效性..."
+        local gcc_files=$(find "$COMPILER_DIR" -type f -executable \
+          -name "*gcc" \
+          ! -name "*gcc-ar" \
+          ! -name "*gcc-ranlib" \
+          ! -name "*gcc-nm" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
+          2>/dev/null | head -3)
+        
+        if [ -n "$gcc_files" ]; then
+            log "✅ 确认编译器目录包含真正的GCC"
+            local first_gcc=$(echo "$gcc_files" | head -1)
+            log "  🎯 GCC文件: $(basename "$first_gcc")"
+            log "  🔧 GCC版本: $("$first_gcc" --version 2>&1 | head -1)"
+            
+            # 保存到环境变量
+            save_env
+            
+            # 验证编译器
+            verify_compiler_files
+            return 0
+        else
+            log "⚠️ 编译器目录存在但不包含真正的GCC，将重新下载SDK"
+        fi
+    else
         log "🔍 COMPILER_DIR未设置或目录不存在，将下载OpenWrt官方SDK"
     fi
     
@@ -1681,6 +1881,308 @@ validate_config_syntax() {
 # ==============================
 
 #【build_firmware_main.sh-21】配置应用函数 - 修复内核版本问题并增强显示
+apply_config() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 应用配置并显示详情（增强版）==="
+    
+    if [ ! -f ".config" ]; then
+        log "❌ 错误: .config 文件不存在，无法应用配置"
+        return 1
+    fi
+    
+    log "📋 配置详情:"
+    log "配置文件大小: $(ls -lh .config | awk '{print $5}')"
+    log "配置行数: $(wc -l < .config)"
+    
+    # 先备份原始配置文件
+    if [ -f ".config" ]; then
+        local backup_file=".config.backup.$(date +%Y%m%d_%H%M%S)"
+        cp ".config" "$backup_file"
+        log "✅ 已备份原始配置文件: $backup_file"
+    fi
+    
+    # 步骤1: 验证配置语法
+    log "🔍 步骤1: 验证配置语法..."
+    if validate_config_syntax; then
+        log "✅ 配置语法验证通过"
+    else
+        log "⚠️ 配置语法有问题，尝试自动修复..."
+        # 尝试修复常见问题
+        make defconfig 2>&1 | tee /tmp/defconfig_fix.log
+        if [ $? -eq 0 ]; then
+            log "✅ defconfig 修复成功"
+        else
+            log "❌ defconfig 修复失败，但继续执行"
+            log "defconfig 错误日志（前20行）:"
+            cat /tmp/defconfig_fix.log | tail -20
+        fi
+    fi
+    
+    # 步骤2: 清理重复配置和冲突配置
+    log "🔧 步骤2: 清理重复和冲突配置..."
+    
+    # 清理重复的USB配置
+    local usb_configs=(
+        "kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-xhci-hcd"
+        "kmod-usb-xhci-pci" "kmod-usb-xhci-plat-hcd" "kmod-usb-ohci-pci"
+        "kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3"
+        "kmod-usb-dwc3-of-simple" "kmod-usb-xhci-mtk" "kmod-usb2-ath79"
+    )
+    
+    for config in "${usb_configs[@]}"; do
+        # 删除重复的启用配置
+        local enabled_count=$(grep -c "^CONFIG_PACKAGE_${config}=y" .config)
+        if [ $enabled_count -gt 1 ]; then
+            log "🔄 清理重复的启用配置: $config ($enabled_count 次)"
+            awk -v cfg="CONFIG_PACKAGE_${config}=y" '$0 == cfg && !seen[cfg]++' .config > .config.tmp && mv .config.tmp .config
+        fi
+        
+        # 删除重复的禁用配置
+        local disabled_count=$(grep -c "^# CONFIG_PACKAGE_${config} is not set" .config)
+        if [ $disabled_count -gt 1 ]; then
+            log "🔄 清理重复的禁用配置: $config ($disabled_count 次)"
+            awk -v cfg="# CONFIG_PACKAGE_${config} is not set" '$0 == cfg && !seen[cfg]++' .config > .config.tmp && mv .config.tmp .config
+        fi
+        
+        # 解决冲突：如果既有启用又有禁用，保留启用
+        if [ $enabled_count -gt 0 ] && [ $disabled_count -gt 0 ]; then
+            log "🔄 解决配置冲突: $config (保留启用，删除禁用)"
+            sed -i "/^# CONFIG_PACKAGE_${config} is not set/d" .config
+        fi
+    done
+    
+    # 步骤3: 运行 make defconfig (使用改进的错误处理)
+    log "🔄 步骤3: 运行 make defconfig..."
+    
+    # 清除旧的defconfig日志
+    rm -f /tmp/defconfig.log
+    
+    # 检查内核版本配置 - 修复内核版本缺失问题
+    log "🔍 检查内核版本配置..."
+    
+    # 修复内核版本文件问题
+    if [ -f "include/kernel-version.mk" ]; then
+        # 检查内核版本是否已设置
+        local kernel_patchver=$(grep "KERNEL_PATCHVER" "include/kernel-version.mk" | cut -d':' -f2 | xargs)
+        if [ -z "$kernel_patchver" ] || [ "$kernel_patchver" = "" ]; then
+            log "⚠️ 内核版本未设置，尝试自动修复..."
+            
+            # 从目标平台Makefile获取内核版本
+            if [ -f "target/linux/$TARGET/Makefile" ]; then
+                local target_kernel=$(grep "KERNEL_PATCHVER" "target/linux/$TARGET/Makefile" | cut -d':' -f2 | xargs)
+                if [ -n "$target_kernel" ]; then
+                    log "🔧 设置内核版本为: $target_kernel"
+                    sed -i "s/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=$target_kernel/" "include/kernel-version.mk" 2>/dev/null || true
+                    
+                    # 检查是否设置成功
+                    kernel_patchver=$(grep "KERNEL_PATCHVER" "include/kernel-version.mk" | cut -d':' -f2 | xargs)
+                    if [ -n "$kernel_patchver" ]; then
+                        log "✅ 内核版本设置成功: $kernel_patchver"
+                    fi
+                fi
+            fi
+        else
+            log "✅ 内核版本已设置: $kernel_patchver"
+        fi
+    else
+        log "⚠️ 内核版本文件不存在: include/kernel-version.mk"
+        log "🔧 尝试创建内核版本文件..."
+        
+        # 尝试从目标平台获取内核版本
+        local target_kernel=""
+        if [ -f "target/linux/$TARGET/Makefile" ]; then
+            target_kernel=$(grep "KERNEL_PATCHVER" "target/linux/$TARGET/Makefile" | cut -d':' -f2 | xargs)
+        fi
+        
+        # 如果没有找到，使用默认值
+        if [ -z "$target_kernel" ]; then
+            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] || [ "$SELECTED_BRANCH" = "master" ]; then
+                target_kernel="5.15"
+            else
+                target_kernel="5.4"
+            fi
+            log "⚠️ 无法从目标平台获取内核版本，使用默认: $target_kernel"
+        fi
+        
+        # 创建内核版本文件
+        echo "# Kernel version" > "include/kernel-version.mk"
+        echo "LINUX_VERSION-5.15 = .19" >> "include/kernel-version.mk"
+        echo "LINUX_KERNEL_HASH-5.15.19 = 3e6a6b6f8c3c8e8c8f8c3c8e8c8f8c3c8e8c8f8c3c8e8c8f8c3c8e8c8f8c3c8" >> "include/kernel-version.mk"
+        echo "KERNEL_PATCHVER:=$target_kernel" >> "include/kernel-version.mk"
+        log "✅ 创建内核版本文件，版本: $target_kernel"
+    fi
+    
+    # 清理tmp目录中的错误配置文件
+    log "🔧 清理tmp目录中的错误配置文件..."
+    if [ -f "tmp/.config-package.in" ]; then
+        # 删除包含错误语法和---help---的行
+        sed -i '/^---help---/d;/^Ntfs-3g$/d;/^If/d;/^etc\.$/d;/^of$/d' "tmp/.config-package.in" 2>/dev/null || true
+        log "✅ 清理tmp/.config-package.in文件"
+    fi
+    
+    # 运行defconfig并捕获详细日志
+    if ! make defconfig 2>&1 | tee /tmp/defconfig.log; then
+        log "❌ make defconfig 失败"
+        log "详细错误信息:"
+        cat /tmp/defconfig.log | tail -30
+        
+        # 尝试分析错误原因
+        if grep -q "unknown statement\|syntax error" /tmp/defconfig.log; then
+            log "💡 错误分析: 发现语法错误或未知语句"
+            log "🔧 尝试修复: 清理配置文件后重试..."
+            
+            # 再次清理配置文件
+            cp .config .config.original.backup
+            log "✅ 备份原始配置文件: .config.original.backup"
+            
+            # 删除所有注释和空行，只保留配置项
+            grep -E '^(CONFIG_|# CONFIG_)' .config > .config.clean
+            
+            # 删除错误的行
+            sed -i '/^---help---/d;/^Ntfs-3g$/d;/^If/d;/^etc\.$/d;/^of$/d;/^[[:space:]]*$/d' .config.clean
+            
+            # 排序并去重
+            sort -u .config.clean > .config
+            
+            # 清理临时文件
+            rm -f .config.clean
+            
+            log "✅ 清理配置文件完成"
+            
+            # 再次尝试defconfig
+            log "🔄 重新运行 make defconfig..."
+            if make defconfig 2>&1 | tee /tmp/defconfig_retry.log; then
+                log "✅ defconfig 修复成功"
+            else
+                log "❌ defconfig 仍然失败"
+                log "第二次尝试的错误日志:"
+                cat /tmp/defconfig_retry.log | tail -20
+                
+                # 尝试强制修复内核版本问题
+                if grep -q "Missing kernel version" /tmp/defconfig_retry.log; then
+                    log "🚨 发现内核版本缺失错误"
+                    log "🔧 强制修复: 手动设置内核版本..."
+                    
+                    if [ -f "include/kernel-version.mk" ]; then
+                        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] || [ "$SELECTED_BRANCH" = "master" ]; then
+                            sed -i 's/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=5.15/' "include/kernel-version.mk"
+                            log "✅ 设置内核版本为 5.15"
+                        else
+                            sed -i 's/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=5.4/' "include/kernel-version.mk"
+                            log "✅ 设置内核版本为 5.4"
+                        fi
+                        
+                        # 再次尝试
+                        log "🔄 第三次运行 make defconfig..."
+                        if make defconfig 2>&1 | tee /tmp/defconfig_third.log; then
+                            log "✅ defconfig 第三次尝试成功"
+                        else
+                            log "❌ defconfig 仍然失败"
+                            log "⚠️ 但继续执行，让构建过程自然失败"
+                        fi
+                    fi
+                else
+                    log "⚠️ 但继续执行，让构建过程自然失败"
+                fi
+            fi
+        else
+            log "⚠️ 无法自动修复defconfig错误，但继续执行"
+        fi
+    else
+        log "✅ make defconfig 成功"
+    fi
+    
+    # 步骤4: 显示启用的功能插件 - 修复显示逻辑
+    log "🎯 步骤4: 显示启用的功能插件..."
+    echo "=== 启用的功能插件列表 ==="
+    
+    # 定义要检查的功能插件
+    local feature_plugins=(
+        # 网络加速
+        "luci-app-turboacc" "kmod-shortcut-fe" "kmod-fast-classifier"
+        # 文件共享
+        "luci-app-samba4" "samba4-server"
+        # 网络服务
+        "luci-app-upnp" "luci-app-vsftpd" "luci-app-arpbind"
+        # 系统工具
+        "luci-app-diskman" "luci-app-cpulimit" "luci-app-hd-idle"
+        # DNS相关
+        "luci-app-smartdns" "smartdns"
+        # 其他功能
+        "luci-app-accesscontrol" "luci-app-vlmcsd" "luci-app-wechatpush"
+        "luci-app-sqm" "ddns-scripts"
+        # USB相关
+        "kmod-usb-storage" "kmod-usb3" "kmod-usb-xhci-hcd"
+    )
+    
+    local enabled_count=0
+    local disabled_count=0
+    local not_configured_count=0
+    
+    echo "功能插件状态:"
+    for plugin in "${feature_plugins[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
+            echo "  ✅ $plugin"
+            enabled_count=$((enabled_count + 1))
+        elif grep -q "^# CONFIG_PACKAGE_${plugin} is not set" .config; then
+            echo "  ❌ $plugin (已禁用)"
+            disabled_count=$((disabled_count + 1))
+        else
+            echo "  🔄 $plugin (未配置)"
+            not_configured_count=$((not_configured_count + 1))
+        fi
+    done
+    
+    echo "统计: $enabled_count 个启用，$disabled_count 个禁用，$not_configured_count 个未配置"
+    echo ""
+    
+    # 步骤5: 显示最终配置状态
+    log "📊 步骤5: 显示最终配置状态..."
+    local final_enabled=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
+    local final_disabled=$(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)
+    log "✅ 最终状态: 已启用 $final_enabled 个, 已禁用 $final_disabled 个"
+    
+    # 显示关键配置状态
+    log "🔧 关键配置状态:"
+    echo "1. USB核心: $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" .config && echo "✅" || echo "❌")"
+    echo "2. USB 3.0: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config && echo "✅" || echo "❌")"
+    echo "3. USB xHCI: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo "✅" || echo "❌")"
+    echo "4. USB存储: $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" .config && echo "✅" || echo "❌")"
+    
+    # 根据平台显示专用驱动
+    if [ "$PLATFORM" = "ipq40xx" ]; then
+        echo "5. 高通USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo "✅" || echo "❌")"
+    elif [ "$PLATFORM" = "ramips" ]; then
+        echo "5. 雷凌USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config && echo "✅" || echo "❌")"
+    elif [ "$PLATFORM" = "ath79" ]; then
+        echo "5. ath79 USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb2-ath79=y" .config && echo "✅" || echo "❌")"
+    fi
+    
+    # 显示TurboACC状态（如果启用了）
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        echo "6. TurboACC: $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config && echo "✅" || echo "❌")"
+    fi
+    
+    # 显示配置组合信息
+    log "📋 配置组合信息:"
+    if [ -f "$SUPPORT_DIR/config/${DEVICE_NAME}.config" ]; then
+        log "  🎯 使用设备特定配置: ${DEVICE_NAME}.config"
+        log "  📁 配置组合: 设备配置 + base.config + usb-generic.config"
+    else
+        if [ "$CONFIG_MODE" = "normal" ]; then
+            log "  📁 配置组合: base.config + normal.config + usb-generic.config"
+        else
+            log "  📁 配置组合: base.config + 基础模式配置 + usb-generic.config"
+        fi
+    fi
+    
+    log "✅ 配置应用完成"
+    log "最终配置文件: .config"
+    log "最终配置大小: $(ls -lh .config | awk '{print $5}')"
+}
+
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -2847,6 +3349,215 @@ EOF
 # ==============================
 
 #【build_firmware_main.sh-11】前置错误检查函数 - 修复LEDE分支检查
+pre_build_error_check() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 🚨 前置错误检查（修复LEDE分支检查）==="
+    
+    local error_count=0
+    local warning_count=0
+    
+    # 显示当前环境变量
+    log "当前环境变量:"
+    log "  SELECTED_BRANCH: $SELECTED_BRANCH"
+    log "  TARGET: $TARGET"
+    log "  SUBTARGET: $SUBTARGET"
+    log "  DEVICE: $DEVICE"
+    log "  CONFIG_MODE: $CONFIG_MODE"
+    log "  COMPILER_DIR: $COMPILER_DIR"
+    log "  DEVICE_NAME: $DEVICE_NAME"
+    log "  PLATFORM: $PLATFORM"
+    log "  SOURCE_REPO: $SOURCE_REPO"
+    
+    # 1. 检查配置文件
+    if [ ! -f ".config" ]; then
+        log "❌ 错误: .config 文件不存在"
+        error_count=$((error_count + 1))
+    else
+        log "✅ .config 文件存在"
+    fi
+    
+    # 2. 检查内核版本文件 - 修复LEDE内核问题
+    log "🔍 检查内核版本文件..."
+    if [ -f "include/kernel-version.mk" ]; then
+        log "✅ 内核版本文件存在: include/kernel-version.mk"
+        
+        # 检查内核版本是否设置
+        local kernel_patchver=$(grep "KERNEL_PATCHVER" "include/kernel-version.mk" | cut -d':' -f2 | xargs)
+        if [ -n "$kernel_patchver" ] && [ "$kernel_patchver" != "" ]; then
+            log "📌 内核版本: $kernel_patchver"
+        else
+            log "⚠️ 警告: 内核版本未设置"
+            warning_count=$((warning_count + 1))
+            
+            # 对于LEDE仓库，设置默认内核版本
+            if [ "$SOURCE_REPO" = "lede" ]; then
+                log "🔧 为LEDE仓库设置默认内核版本"
+                if [ -f "target/linux/$TARGET/Makefile" ]; then
+                    local default_kernel=$(grep "KERNEL_PATCHVER" "target/linux/$TARGET/Makefile" | cut -d':' -f2 | xargs)
+                    if [ -n "$default_kernel" ]; then
+                        sed -i "s/KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=$default_kernel/" "include/kernel-version.mk" 2>/dev/null || true
+                        log "✅ 设置内核版本为: $default_kernel"
+                    else
+                        # LEDE默认使用5.15内核
+                        echo "KERNEL_PATCHVER:=5.15" >> "include/kernel-version.mk"
+                        log "✅ 设置LEDE默认内核版本为: 5.15"
+                    fi
+                else
+                    # LEDE默认使用5.15内核
+                    echo "KERNEL_PATCHVER:=5.15" >> "include/kernel-version.mk"
+                    log "✅ 设置LEDE默认内核版本为: 5.15"
+                fi
+            fi
+        fi
+    else
+        log "⚠️ 警告: 内核版本文件不存在"
+        warning_count=$((warning_count + 1))
+        
+        # 创建内核版本文件
+        echo "# Kernel version" > "include/kernel-version.mk"
+        if [ "$SOURCE_REPO" = "lede" ]; then
+            echo "KERNEL_PATCHVER:=5.15" >> "include/kernel-version.mk"
+            log "✅ 为LEDE创建内核版本文件，版本: 5.15"
+        elif [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            echo "KERNEL_PATCHVER:=5.15" >> "include/kernel-version.mk"
+            log "✅ 创建内核版本文件，版本: 5.15"
+        else
+            echo "KERNEL_PATCHVER:=5.4" >> "include/kernel-version.mk"
+            log "✅ 创建内核版本文件，版本: 5.4"
+        fi
+    fi
+    
+    # 3. 检查feeds
+    if [ ! -d "feeds" ]; then
+        log "❌ 错误: feeds 目录不存在"
+        error_count=$((error_count + 1))
+    else
+        log "✅ feeds 目录存在"
+    fi
+    
+    # 4. 检查依赖包
+    if [ ! -d "dl" ]; then
+        log "⚠️ 警告: dl 目录不存在，可能需要下载依赖"
+        warning_count=$((warning_count + 1))
+    else
+        local dl_count=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
+        log "✅ 依赖包数量: $dl_count 个"
+    fi
+    
+    # 5. 检查编译器状态
+    if [ -d "staging_dir" ]; then
+        local compiler_count=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" 2>/dev/null | wc -l)
+        if [ $compiler_count -eq 0 ]; then
+            log "ℹ️ 未找到已构建的编译器"
+            log "📌 将使用下载的SDK编译器或内置工具链"
+        else
+            log "✅ 已检测到编译器: $compiler_count 个"
+        fi
+    else
+        log "ℹ️ staging_dir目录不存在"
+        log "📌 将使用下载的SDK编译器或内置工具链进行构建"
+    fi
+    
+    # 6. 检查关键文件
+    local critical_files=("Makefile" "rules.mk" "Config.in" "feeds.conf.default")
+    for file in "${critical_files[@]}"; do
+        if [ -f "$file" ]; then
+            log "✅ 关键文件存在: $file"
+        else
+            log "❌ 错误: 关键文件不存在: $file"
+            error_count=$((error_count + 1))
+        fi
+    done
+    
+    # 7. 检查内核Makefile
+    log "🔍 检查内核Makefile..."
+    if [ -f "target/linux/$TARGET/Makefile" ]; then
+        log "✅ 目标平台Makefile存在: target/linux/$TARGET/Makefile"
+        
+        # 检查内核版本配置
+        local kernel_config=$(grep "KERNEL_PATCHVER" "target/linux/$TARGET/Makefile")
+        if [ -n "$kernel_config" ]; then
+            log "📌 内核版本配置: $kernel_config"
+        else
+            log "⚠️ 警告: 内核版本配置未找到"
+            warning_count=$((warning_count + 1))
+        fi
+    else
+        log "❌ 错误: 目标平台Makefile不存在: target/linux/$TARGET/Makefile"
+        error_count=$((error_count + 1))
+    fi
+    
+    # 8. 检查磁盘空间
+    local available_space=$(df /mnt --output=avail | tail -1)
+    local available_gb=$((available_space / 1024 / 1024))
+    log "磁盘可用空间: ${available_gb}G"
+    
+    if [ $available_gb -lt 10 ]; then
+        log "❌ 错误: 磁盘空间不足 (需要至少10G，当前${available_gb}G)"
+        error_count=$((error_count + 1))
+    elif [ $available_gb -lt 20 ]; then
+        log "⚠️ 警告: 磁盘空间较低 (建议至少20G，当前${available_gb}G)"
+        warning_count=$((warning_count + 1))
+    else
+        log "✅ 编译前空间充足"
+    fi
+    
+    # 9. 检查预构建编译器文件 - 对于LEDE分支特殊处理
+    log "🔧 检查预构建编译器文件..."
+    
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+        log "✅ 预构建编译器目录存在: $COMPILER_DIR"
+        
+        # 对于LEDE仓库，不需要检查SDK编译器
+        if [ "$SOURCE_REPO" = "lede" ]; then
+            log "ℹ️ LEDE仓库使用内置工具链，跳过SDK编译器检查"
+        else
+            # 放宽检查：只需要有编译器文件，不要求特定目录结构，排除虚假编译器
+            local gcc_files=$(find "$COMPILER_DIR" -type f -executable \
+              -name "*gcc" \
+              ! -name "*gcc-ar" \
+              ! -name "*gcc-ranlib" \
+              ! -name "*gcc-nm" \
+              ! -path "*dummy-tools*" \
+              ! -path "*scripts*" \
+              2>/dev/null | wc -l)
+            
+            if [ $gcc_files -gt 0 ]; then
+                log "✅ 找到 $gcc_files 个GCC编译器文件"
+            else
+                log "⚠️ 警告: 预构建编译器目录中未找到真正的GCC编译器"
+                warning_count=$((warning_count + 1))
+            fi
+        fi
+    else
+        log "ℹ️ 未设置预构建编译器目录或目录不存在"
+        if [ "$SOURCE_REPO" = "lede" ]; then
+            log "💡 LEDE仓库使用内置工具链"
+        else
+            log "💡 将使用OpenWrt自动构建的编译器"
+        fi
+    fi
+    
+    # 10. 检查编译器调用状态（使用增强版）
+    check_compiler_invocation
+    
+    # 总结
+    if [ $error_count -eq 0 ]; then
+        if [ $warning_count -eq 0 ]; then
+            log "✅ 前置检查通过，可以开始编译"
+        else
+            log "⚠️ 前置检查通过，但有 $warning_count 个警告，建议修复"
+        fi
+        return 0
+    else
+        log "❌ 前置检查发现 $error_count 个错误，$warning_count 个警告，请修复后再编译"
+        return 1
+    fi
+}
+
+
 pre_build_error_check() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
