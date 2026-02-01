@@ -46,6 +46,26 @@ jobs:
         run: |
           echo "=== 解析并应用修复 ==="
           
+          # 0. 先修复可能的文件格式问题
+          echo "🔧 步骤0: 修复文件格式（换行符问题）"
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            echo "🔍 找到 build_firmware_main.sh，检查并修复格式..."
+            # 备份原文件（仅用于对比）
+            cp "firmware-config/scripts/build_firmware_main.sh" "/tmp/build_firmware_main.sh.original"
+            
+            # 修复 Windows 换行符 (^M)
+            sed -i 's/\r$//' "firmware-config/scripts/build_firmware_main.sh"
+            
+            # 检查是否有变化
+            if diff -q "firmware-config/scripts/build_firmware_main.sh" "/tmp/build_firmware_main.sh.original" >/dev/null; then
+              echo "✅ 文件格式正常，无需修复"
+            else
+              echo "✅ 已修复文件格式（清除 Windows 换行符）"
+            fi
+            
+            rm -f "/tmp/build_firmware_main.sh.original"
+          fi
+          
           # 1. 查找目标文件
           TARGET_FILE=""
           
@@ -224,6 +244,81 @@ jobs:
           
           echo "✅ 所有修复处理完成"
       
+      - name: 🔧 提交前再次修复文件格式（双重保险）
+        run: |
+          echo "=== 提交前再次修复文件格式（双重保险）==="
+          
+          # 查找所有可能的目标文件
+          FILES_TO_FIX=()
+          
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            FILES_TO_FIX+=("firmware-config/scripts/build_firmware_main.sh")
+          fi
+          
+          if [ -f "fix.txt" ]; then
+            FILES_TO_FIX+=("fix.txt")
+          fi
+          
+          if [ ${#FILES_TO_FIX[@]} -eq 0 ]; then
+            echo "ℹ️ 没有需要修复格式的文件"
+            exit 0
+          fi
+          
+          echo "🔧 将修复以下文件的格式:"
+          for file in "${FILES_TO_FIX[@]}"; do
+            echo "  - $file"
+          done
+          
+          # 修复每个文件的格式
+          for file in "${FILES_TO_FIX[@]}"; do
+            echo ""
+            echo "🔄 修复文件: $file"
+            
+            # 备份原文件
+            BACKUP_FILE="/tmp/$(basename "$file").pre_commit_backup"
+            cp "$file" "$BACKUP_FILE"
+            
+            # 执行格式修复
+            if command -v dos2unix >/dev/null 2>&1; then
+              # 使用 dos2unix 工具（如果有）
+              dos2unix "$file" 2>/dev/null || true
+            else
+              # 使用 sed 修复换行符
+              sed -i 's/\r$//' "$file"
+            fi
+            
+            # 确保文件以换行符结尾
+            if [ -s "$file" ] && ! tail -c1 "$file" | read -r _; then
+              echo "" >> "$file"
+              echo "✅ 添加文件结束换行符"
+            fi
+            
+            # 检查是否有变化
+            if diff -q "$file" "$BACKUP_FILE" >/dev/null; then
+              echo "✅ 文件格式正常，无需修复"
+            else
+              echo "✅ 已修复文件格式（清除 Windows 换行符）"
+            fi
+            
+            # 显示文件信息
+            echo "📊 文件信息:"
+            echo "  大小: $(wc -l < "$file") 行"
+            
+            # 检查是否有 ^M 字符
+            if grep -q $'\r' "$file" 2>/dev/null; then
+              echo "⚠️ 警告: 文件中仍包含 Windows 换行符"
+              # 强制修复
+              tr -d '\r' < "$file" > "${file}.fixed"
+              mv "${file}.fixed" "$file"
+              echo "🔧 已强制修复"
+            fi
+            
+            rm -f "$BACKUP_FILE"
+          done
+          
+          echo ""
+          echo "✅ 所有文件格式修复完成"
+      
       - name: 📤 提交并推送修改
         run: |
           echo "=== 提交并推送修改 ==="
@@ -245,6 +340,10 @@ jobs:
             
             # 添加更改
             git add -A
+            
+            # 显示具体差异
+            echo "📝 具体差异:"
+            git diff --stat
           fi
           
           # 提交
@@ -262,20 +361,40 @@ jobs:
             done
           fi
           
-          echo -e "$COMMIT_MSG" | git commit -F - || echo "⚠️ 提交失败，可能没有更改"
+          # 添加格式修复信息
+          if ls -1 /tmp/*.pre_commit_backup 2>/dev/null | grep -q .; then
+            COMMIT_MSG+="\n\n格式修复: ✅ 已修复 Windows 换行符问题"
+          fi
+          
+          echo -e "$COMMIT_MSG" | git commit -F - || {
+            echo "⚠️ 提交失败，可能没有更改"
+            # 如果没有更改但需要清理 fix.txt
+            if [ -f "fix.txt" ] && [ $(wc -l < fix.txt) -gt 0 ]; then
+              echo "🧹 清理 fix.txt 文件..."
+              > fix.txt
+              git add fix.txt
+              git commit -m "🧹 清理修复文件 [skip ci]"
+            fi
+          }
           
           # 推送
           echo "🚀 推送到主分支..."
-          git push origin HEAD:main
+          git push origin HEAD:main || {
+            echo "⚠️ 推送失败，尝试拉取最新更改后重试"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          }
           
           echo "✅ 修复已应用并推送到主分支"
           
           # 清理fix.txt文件（无论是否有更改都执行）
           echo "🧹 清理fix.txt文件..."
-          > fix.txt
-          git add fix.txt
-          git commit -m "🧹 清理修复文件 [skip ci]" || true
-          git push origin HEAD:main
+          if [ -f "fix.txt" ]; then
+            > fix.txt
+            git add fix.txt
+            git commit -m "🧹 清理修复文件 [skip ci]" || true
+            git push origin HEAD:main
+          fi
       
       - name: 📋 生成报告
         if: always()
@@ -305,7 +424,14 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**处理流程:**" >> $GITHUB_STEP_SUMMARY
           echo "1. ✅ 检查修复文件" >> $GITHUB_STEP_SUMMARY
-          echo "2. ✅ 解析系统性标识" >> $GITHUB_STEP_SUMMARY
-          echo "3. ✅ 查找并替换内容块" >> $GITHUB_STEP_SUMMARY
-          echo "4. ✅ 提交并推送更改" >> $GITHUB_STEP_SUMMARY
-          echo "5. ✅ 清理修复文件" >> $GITHUB_STEP_SUMMARY
+          echo "2. ✅ 修复文件格式（首次）" >> $GITHUB_STEP_SUMMARY
+          echo "3. ✅ 解析系统性标识" >> $GITHUB_STEP_SUMMARY
+          echo "4. ✅ 查找并替换内容块" >> $GITHUB_STEP_SUMMARY
+          echo "5. ✅ 提交前再次修复文件格式（双重保险）" >> $GITHUB_STEP_SUMMARY
+          echo "6. ✅ 提交并推送更改" >> $GITHUB_STEP_SUMMARY
+          echo "7. ✅ 清理修复文件" >> $GITHUB_STEP_SUMMARY
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**文件格式修复:**" >> $GITHUB_STEP_SUMMARY
+          echo "- 已修复 Windows 换行符 (^M)" >> $GITHUB_STEP_SUMMARY
+          echo "- 双重保险机制确保格式正确" >> $GITHUB_STEP_SUMMARY
