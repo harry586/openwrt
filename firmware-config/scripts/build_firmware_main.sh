@@ -20,8 +20,6 @@ log() {
 }
 
 #【build_firmware_main.sh-02】错误处理函数
-#【build_firmware_main.sh-02】错误处理函数
-#【build_firmware_main.sh-02】错误处理函数
 handle_error() {
     log "❌ 错误发生在: $1"
     log "详细错误信息:"
@@ -43,6 +41,11 @@ handle_error() {
     exit 1
 }
 
+# ==============================
+# 【环境变量管理】函数区域
+# ==============================
+
+#【build_firmware_main.sh-03】环境变量函数
 save_env() {
     mkdir -p $BUILD_DIR
     echo "#!/bin/bash" > $ENV_FILE
@@ -58,6 +61,7 @@ save_env() {
     echo "export PLATFORM=\"${PLATFORM}\"" >> $ENV_FILE
     echo "export SOURCE_REPO=\"${SOURCE_REPO}\"" >> $ENV_FILE
     
+    # 确保环境变量可被其他步骤访问
     if [ -n "$GITHUB_ENV" ]; then
         echo "SELECTED_REPO_URL=${SELECTED_REPO_URL}" >> $GITHUB_ENV
         echo "SELECTED_BRANCH=${SELECTED_BRANCH}" >> $GITHUB_ENV
@@ -75,15 +79,7 @@ save_env() {
     log "✅ 环境变量已保存到: $ENV_FILE"
 }
 
-load_env() {
-    if [ -f "$ENV_FILE" ]; then
-        source $ENV_FILE
-        log "✅ 从 $ENV_FILE 加载环境变量"
-    else
-        log "⚠️ 环境文件不存在: $ENV_FILE"
-    fi
-}
-
+# 加载环境变量函数
 load_env() {
     if [ -f "$ENV_FILE" ]; then
         source $ENV_FILE
@@ -215,7 +211,6 @@ create_build_dir() {
 # ==============================
 
 #【build_firmware_main.sh-13】构建环境初始化函数
-#【build_firmware_main.sh-13】构建环境初始化函数（修复netgear_3800分支问题）
 initialize_build_env() {
     local device_name=$1
     local version_selection=$2
@@ -226,18 +221,8 @@ initialize_build_env() {
     
     log "=== 版本选择 ==="
     log "源代码仓库: $source_repo"
-    log "设备名称: $device_name"
-    log "请求版本: $version_selection"
     
-    # 特别处理netgear_3800设备
-    if [ "$device_name" = "netgear_3800" ] || [ "$device_name" = "wndr3800" ]; then
-        log "🔧 检测到netgear_3800设备，强制使用LEDE仓库"
-        source_repo="lede"
-        version_selection="master"
-        log "✅ netgear_3800使用LEDE master分支"
-    fi
-    
-    # 根据仓库选择不同的URL
+    # 根据仓库选择不同的URL - 只保留immortalwrt和lede
     case "$source_repo" in
         "immortalwrt")
             SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
@@ -323,13 +308,6 @@ initialize_build_env() {
                 DEVICE="xiaomi_mi-router-3g"
                 PLATFORM="ramips"
                 ;;
-            "netgear_3800"|"wndr3800")
-                TARGET="ath79"
-                SUBTARGET="generic"
-                DEVICE="netgear_wndr3800"
-                PLATFORM="ath79"
-                log "📌 netgear_3800使用ath79平台"
-                ;;
             *)
                 TARGET="ipq40xx"
                 SUBTARGET="generic"
@@ -360,12 +338,17 @@ initialize_build_env() {
     
     log "✅ 构建环境初始化完成"
 }
-#【build_firmware_main.sh-14】编译器环境初始化函数（修复LEDE处理）
+
+# ==============================
+# 【SDK下载和编译器】函数区域（工作流步骤7-8）
+# ==============================
+
+#【build_firmware_main.sh-14】编译器环境初始化函数
 initialize_compiler_env() {
     local device_name="$1"
-    log "=== 初始化编译器环境（修复LEDE处理）==="
+    log "=== 初始化编译器环境（下载OpenWrt官方SDK）- 修复版 ==="
     
-    # 首先加载环境变量
+    # 首先加载环境变量 - 修复检查逻辑
     log "🔍 检查环境文件..."
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
@@ -468,21 +451,15 @@ initialize_compiler_env() {
             log "⚠️ 编译器目录存在但不包含真正的GCC，将重新下载SDK"
         fi
     else
-        log "🔍 COMPILER_DIR未设置或目录不存在"
+        log "🔍 COMPILER_DIR未设置或目录不存在，将下载OpenWrt官方SDK"
     fi
     
-    # 如果是LEDE仓库，不下载SDK
-    if [ "$SOURCE_REPO" = "lede" ] || [ "$SELECTED_BRANCH" = "master" ]; then
-        log "🔧 检测到LEDE仓库或master分支"
-        log "💡 LEDE使用源码自带的工具链，无需下载SDK"
-        
-        # 设置空的编译器目录
-        export COMPILER_DIR=""
-        save_env
-        
-        log "✅ LEDE编译器环境设置完成"
-        return 0
-    fi
+    # 根据设备确定平台（使用已设置的变量）
+    log "目标平台: $TARGET/$SUBTARGET"
+    log "目标设备: $DEVICE"
+    log "OpenWrt版本: $SELECTED_BRANCH"
+    log "平台类型: $PLATFORM"
+    log "源代码仓库: $SOURCE_REPO"
     
     # 简化版本字符串（从openwrt-23.05转为23.05）
     local version_for_sdk=""
@@ -511,7 +488,7 @@ initialize_compiler_env() {
     
     # 下载OpenWrt官方SDK
     log "🚀 开始下载OpenWrt官方SDK..."
-    if download_openwrt_sdk "$TARGET" "$SUBTARGET" "$version_for_sdk"; then
+    if download_openwrt_sdk "$TARGET" "$subtarget" "$version_for_sdk"; then
         log "🎉 OpenWrt SDK下载并设置成功"
         log "📌 编译器目录: $COMPILER_DIR"
         
@@ -553,6 +530,9 @@ initialize_compiler_env() {
         # 不返回错误，继续执行
         return 0
     fi
+}
+
+#【build_firmware_main.sh-07】SDK下载函数
 download_openwrt_sdk() {
     local target="$1"
     local subtarget="$2"
@@ -561,23 +541,6 @@ download_openwrt_sdk() {
     log "=== 下载OpenWrt官方SDK工具链 ==="
     log "目标平台: $target/$subtarget"
     log "OpenWrt版本: $version"
-    
-    # 如果是LEDE仓库（master分支），不下载SDK，使用源码自带的编译器
-    if [ "$version" = "master" ] || [ "$SOURCE_REPO" = "lede" ]; then
-        log "🔧 检测到LEDE仓库或master分支，不使用预下载SDK"
-        log "💡 LEDE使用源码自带的工具链，无需额外下载SDK"
-        
-        # 设置空的编译器目录，让OpenWrt使用自动构建的编译器
-        export COMPILER_DIR=""
-        
-        # 创建临时的编译器目录结构
-        if [ ! -d "staging_dir" ]; then
-            mkdir -p staging_dir
-            log "✅ 创建staging_dir目录供LEDE使用"
-        fi
-        
-        return 0
-    fi
     
     # 确定SDK下载URL
     local sdk_url=""
@@ -591,7 +554,7 @@ download_openwrt_sdk() {
     if [ -z "$sdk_url" ]; then
         # 如果支持脚本没有提供URL，使用内置配置
         if [ "$version" = "23.05" ] || [ "$version" = "openwrt-23.05" ]; then
-            # OpenWrt 23.05 SDK
+            # OpenWrt 23.05 SDK - 修复GCC版本为12.3.0
             case "$target" in
                 "ipq40xx")
                     sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
@@ -604,13 +567,11 @@ download_openwrt_sdk() {
                     fi
                     ;;
                 "ath79")
-                    # ath79平台23.05 SDK
                     sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ath79/generic/openwrt-sdk-23.05.3-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-                    log "✅ 设置ath79平台23.05 SDK URL"
                     ;;
             esac
         elif [ "$version" = "21.02" ] || [ "$version" = "openwrt-21.02" ]; then
-            # OpenWrt 21.02 SDK
+            # OpenWrt 21.02 SDK - GCC版本保持8.4.0
             case "$target" in
                 "ipq40xx")
                     sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
@@ -623,34 +584,7 @@ download_openwrt_sdk() {
                     fi
                     ;;
                 "ath79")
-                    # ath79平台21.02 SDK
                     sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ath79/generic/openwrt-sdk-21.02.7-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
-                    log "✅ 设置ath79平台21.02 SDK URL"
-                    ;;
-            esac
-        elif [ "$version" = "snapshots" ]; then
-            # snapshot版本（特殊处理）
-            log "🔧 检测到snapshot版本，使用最新的SDK"
-            case "$target" in
-                "ath79")
-                    # ath79 snapshot SDK - 使用最新的zst压缩格式
-                    sdk_url="https://downloads.openwrt.org/snapshots/targets/ath79/generic/openwrt-sdk-ath79-generic_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
-                    log "✅ 设置ath79平台snapshot SDK URL (zst格式)"
-                    ;;
-                "ipq40xx")
-                    sdk_url="https://downloads.openwrt.org/snapshots/targets/ipq40xx/generic/openwrt-sdk-ipq40xx-generic_gcc-14.3.0_musl_eabi.Linux-x86_64.tar.zst"
-                    ;;
-                "ramips")
-                    if [ "$subtarget" = "mt76x8" ]; then
-                        sdk_url="https://downloads.openwrt.org/snapshots/targets/ramips/mt76x8/openwrt-sdk-ramips-mt76x8_gcc-14.3.0_musl_eabi.Linux-x86_64.tar.zst"
-                    elif [ "$subtarget" = "mt7621" ]; then
-                        sdk_url="https://downloads.openwrt.org/snapshots/targets/ramips/mt7621/openwrt-sdk-ramips-mt7621_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
-                    fi
-                    ;;
-                *)
-                    # 其他平台尝试通用格式
-                    sdk_url="https://downloads.openwrt.org/snapshots/targets/$target/generic/openwrt-sdk-$target-generic_gcc-14.3.0_musl.Linux-x86_64.tar.zst"
-                    log "⚠️ 尝试通用snapshot SDK URL: $sdk_url"
                     ;;
             esac
         fi
@@ -658,8 +592,6 @@ download_openwrt_sdk() {
     
     if [ -z "$sdk_url" ]; then
         log "❌ 无法确定SDK下载URL"
-        log "💡 目标: $target, 子目标: $subtarget, 版本: $version"
-        log "💡 将使用OpenWrt自动构建的编译器作为后备"
         return 1
     fi
     
@@ -670,38 +602,6 @@ download_openwrt_sdk() {
     # 创建SDK目录
     local sdk_dir="$BUILD_DIR/sdk"
     mkdir -p "$sdk_dir"
-    
-    # 检查是否支持zst格式
-    local can_handle_zst=false
-    if command -v zstd >/dev/null 2>&1 || command -v unzstd >/dev/null 2>&1; then
-        can_handle_zst=true
-    fi
-    
-    # 如果是zst格式但系统不支持，尝试寻找xz格式
-    if [[ "$sdk_filename" == *.zst ]] && [ "$can_handle_zst" = false ]; then
-        log "⚠️ 系统不支持zst格式，尝试寻找xz格式的SDK"
-        
-        # 尝试转换URL到xz格式
-        local xz_url=$(echo "$sdk_url" | sed 's/\.tar\.zst$/\.tar\.xz/')
-        local xz_filename=$(echo "$sdk_filename" | sed 's/\.tar\.zst$/\.tar\.xz/')
-        
-        # 检查xz格式的URL是否有效
-        if curl -I -L --connect-timeout 5 "$xz_url" 2>/dev/null | grep -q "200 OK"; then
-            sdk_url="$xz_url"
-            sdk_filename="$xz_filename"
-            log "✅ 找到xz格式SDK: $sdk_url"
-        else
-            log "❌ 未找到xz格式SDK，尝试安装zstd工具"
-            sudo apt-get install -y zstd
-            if command -v zstd >/dev/null 2>&1; then
-                can_handle_zst=true
-                log "✅ 已安装zstd工具"
-            else
-                log "❌ 无法处理zst格式，跳过SDK下载"
-                return 1
-            fi
-        fi
-    fi
     
     # 下载SDK
     log "开始下载OpenWrt SDK..."
@@ -714,7 +614,6 @@ download_openwrt_sdk() {
             log "✅ SDK下载成功（使用curl）"
         else
             log "❌ SDK下载失败"
-            log "💡 将使用OpenWrt自动构建的编译器"
             return 1
         fi
     fi
@@ -722,38 +621,13 @@ download_openwrt_sdk() {
     # 解压SDK
     log "解压SDK..."
     cd "$sdk_dir"
-    
-    # 根据文件格式使用不同的解压命令
-    if [[ "$sdk_filename" == *.tar.zst ]]; then
-        if command -v zstd >/dev/null 2>&1; then
-            if tar -I zstd -xf "$sdk_filename" --strip-components=1; then
-                log "✅ SDK解压成功 (zst格式)"
-            else
-                log "❌ SDK解压失败 (zst格式)"
-                return 1
-            fi
-        elif command -v unzstd >/dev/null 2>&1; then
-            if unzstd -c "$sdk_filename" | tar -xf - --strip-components=1; then
-                log "✅ SDK解压成功 (zst格式)"
-            else
-                log "❌ SDK解压失败 (zst格式)"
-                return 1
-            fi
-        else
-            log "❌ 没有zstd解压工具"
-            return 1
-        fi
+    if tar -xf "$sdk_filename" --strip-components=1; then
+        log "✅ SDK解压成功"
+        rm -f "$sdk_filename"
     else
-        # 默认使用tar解压
-        if tar -xf "$sdk_filename" --strip-components=1; then
-            log "✅ SDK解压成功"
-        else
-            log "❌ SDK解压失败"
-            return 1
-        fi
+        log "❌ SDK解压失败"
+        return 1
     fi
-    
-    rm -f "$sdk_filename"
     
     # 查找SDK中的编译器
     local toolchain_dir=""
@@ -795,10 +669,15 @@ download_openwrt_sdk() {
         return 0
     else
         log "❌ 未在SDK中找到编译器目录"
-        log "💡 将使用OpenWrt自动构建的编译器"
         return 1
     fi
 }
+
+# ==============================
+# 【TurboACC支持】函数区域（工作流步骤9-11）
+# ==============================
+
+#【build_firmware_main.sh-15】TurboACC支持函数
 add_turboacc_support() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -1445,12 +1324,11 @@ validate_config_syntax() {
 # ==============================
 
 #【build_firmware_main.sh-21】配置应用函数
-#【build_firmware_main.sh-21】配置应用函数（修复21.02 USB问题版）
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 应用配置并显示详情（修复21.02 USB问题版）==="
+    log "=== 应用配置并显示详情（增强版）==="
     
     if [ ! -f ".config" ]; then
         log "❌ 错误: .config 文件不存在，无法应用配置"
@@ -1491,10 +1369,9 @@ apply_config() {
     # 清理重复的USB配置
     local usb_configs=(
         "kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-xhci-hcd"
-        "kmod-usb-xhci-pci" "kmod-usb-xhci-plat-hcd" "kmod-usb-ohci"
-        "kmod-usb-ohci-pci" "kmod-usb-dwc3" "kmod-usb-dwc3-qcom"
-        "kmod-phy-qcom-dwc3" "kmod-usb-dwc3-of-simple" "kmod-usb-xhci-mtk"
-        "kmod-usb2-ath79"
+        "kmod-usb-xhci-pci" "kmod-usb-xhci-plat-hcd" "kmod-usb-ohci-pci"
+        "kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3"
+        "kmod-usb-dwc3-of-simple" "kmod-usb-xhci-mtk" "kmod-usb2-ath79"
     )
     
     for config in "${usb_configs[@]}"; do
@@ -1519,7 +1396,7 @@ apply_config() {
         fi
     done
     
-    # 步骤3: 运行 make defconfig
+    # 步骤3: 运行 make defconfig (使用改进的错误处理)
     log "🔄 步骤3: 运行 make defconfig..."
     
     # 清除旧的defconfig日志
@@ -1562,47 +1439,29 @@ apply_config() {
         log "✅ make defconfig 成功"
     fi
     
-    # 步骤4: 确保关键USB驱动被启用（特别修复21.02版本）
-    log "🔧 步骤4: 确保关键USB驱动被启用（特别修复21.02版本）..."
+    # 步骤4: 强制启用关键USB驱动（防止defconfig删除）
+    log "🔧 步骤4: 确保关键USB驱动被启用..."
     
-    # 定义关键USB驱动（基础列表）
+    # 定义关键USB驱动
     local critical_usb_drivers=(
         "CONFIG_PACKAGE_kmod-usb-core=y"
         "CONFIG_PACKAGE_kmod-usb2=y"
+        "CONFIG_PACKAGE_kmod-usb3=y"
+        "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
+        "CONFIG_PACKAGE_kmod-usb-xhci-pci=y"
+        "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y"
+        "CONFIG_PACKAGE_kmod-usb-ohci-pci=y"
+        "CONFIG_PACKAGE_kmod-usb-dwc3=y"
         "CONFIG_PACKAGE_kmod-usb-storage=y"
         "CONFIG_PACKAGE_kmod-scsi-core=y"
     )
     
-    # 根据版本添加不同的USB 3.0驱动
-    if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-        log "🔧 21.02版本USB驱动特殊处理..."
-        # 21.02版本需要这些驱动
-        critical_usb_drivers+=(
-            "CONFIG_PACKAGE_kmod-usb3=y"
-            "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
-            "CONFIG_PACKAGE_kmod-usb-xhci-pci=y"
-            "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y"
-            "CONFIG_PACKAGE_kmod-usb-ohci=y"
-            "CONFIG_PACKAGE_kmod-usb-ohci-pci=y"
-        )
-    else
-        # 23.05版本
-        critical_usb_drivers+=(
-            "CONFIG_PACKAGE_kmod-usb3=y"
-            "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
-            "CONFIG_PACKAGE_kmod-usb-xhci-pci=y"
-            "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y"
-        )
-    fi
-    
-    # 根据平台添加专用驱动
+    # 平台专用驱动
     if [ "$PLATFORM" = "ipq40xx" ]; then
-        log "🔧 添加高通IPQ40xx平台专用USB驱动..."
         critical_usb_drivers+=(
             "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y"
             "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y"
             "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y"
-            "CONFIG_PACKAGE_kmod-usb-dwc3=y"
         )
     elif [ "$PLATFORM" = "ramips" ]; then
         critical_usb_drivers+=(
@@ -1615,7 +1474,6 @@ apply_config() {
     fi
     
     # 添加或确保关键驱动
-    log "📋 检查和添加关键USB驱动..."
     for driver in "${critical_usb_drivers[@]}"; do
         local config_name=$(echo "$driver" | cut -d'=' -f1)
         if ! grep -q "^${config_name}=y" .config; then
@@ -1628,22 +1486,6 @@ apply_config() {
             log "ℹ️ 已存在: $config_name"
         fi
     done
-    
-    # 特别处理21.02版本的USB EHCI驱动冲突问题
-    if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-        log "🔧 特别处理21.02版本USB EHCI驱动..."
-        
-        # 确保kmod-usb-ehci被启用（如果存在）
-        if grep -q "^CONFIG_PACKAGE_kmod-usb-ehci" .config; then
-            # 删除禁用的配置
-            sed -i "/^# CONFIG_PACKAGE_kmod-usb-ehci is not set/d" .config
-            # 确保启用的配置存在
-            if ! grep -q "^CONFIG_PACKAGE_kmod-usb-ehci=y" .config; then
-                echo "CONFIG_PACKAGE_kmod-usb-ehci=y" >> .config
-                log "✅ 已添加21.02专用: CONFIG_PACKAGE_kmod-usb-ehci"
-            fi
-        fi
-    fi
     
     # 步骤5: 再次验证配置
     log "🔍 步骤5: 最终配置验证..."
@@ -1668,33 +1510,19 @@ apply_config() {
     local final_disabled=$(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)
     log "✅ 最终状态: 已启用 $final_enabled 个, 已禁用 $final_disabled 个"
     
-    # 显示关键配置状态（特别修复版本）
-    log "🔧 关键配置状态（修复版）:"
-    
-    # 基础USB驱动检查
+    # 显示关键配置状态
+    log "🔧 关键配置状态:"
     echo "1. USB核心: $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" .config && echo "✅" || echo "❌")"
-    echo "2. USB 2.0: $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config && echo "✅" || echo "❌")"
-    
-    # USB 3.0驱动检查（根据版本不同）
-    if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-        echo "3. USB 3.0 (kmod-usb3): $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config && echo "✅" || echo "❌")"
-        echo "4. USB xHCI (kmod-usb-xhci-hcd): $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo "✅" || echo "❌")"
-        echo "5. USB OHCI (kmod-usb-ohci): $(grep -q "^CONFIG_PACKAGE_kmod-usb-ohci=y" .config && echo "✅" || echo "❌")"
-    else
-        echo "3. USB 3.0: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config && echo "✅" || echo "❌")"
-        echo "4. USB xHCI: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo "✅" || echo "❌")"
-    fi
-    
-    echo "6. USB存储: $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" .config && echo "✅" || echo "❌")"
-    echo "7. SCSI核心: $(grep -q "^CONFIG_PACKAGE_kmod-scsi-core=y" .config && echo "✅" || echo "❌")"
+    echo "2. USB 3.0: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo "✅" || echo "❌")"
+    echo "3. USB存储: $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" .config && echo "✅" || echo "❌")"
     
     # 根据平台显示专用驱动
     if [ "$PLATFORM" = "ipq40xx" ]; then
-        echo "8. 高通USB DWC3: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo "✅" || echo "❌")"
+        echo "4. 高通USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo "✅" || echo "❌")"
     elif [ "$PLATFORM" = "ramips" ]; then
-        echo "8. 雷凌USB xHCI: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config && echo "✅" || echo "❌")"
+        echo "4. 雷凌USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config && echo "✅" || echo "❌")"
     elif [ "$PLATFORM" = "ath79" ]; then
-        echo "8. ath79 USB 2.0: $(grep -q "^CONFIG_PACKAGE_kmod-usb2-ath79=y" .config && echo "✅" || echo "❌")"
+        echo "4. ath79 USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb2-ath79=y" .config && echo "✅" || echo "❌")"
     fi
     
     # 显示配置组合信息
@@ -1710,51 +1538,16 @@ apply_config() {
         fi
     fi
     
-    log "📌 版本信息: $SELECTED_BRANCH"
-    log "📌 平台信息: $PLATFORM"
-    
-    # 最终验证：特别检查21.02版本的USB 3.0
-    if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-        log "🔍 21.02版本USB配置最终验证:"
-        
-        local missing_drivers=()
-        local required_21_02_drivers=(
-            "kmod-usb-core"
-            "kmod-usb2"
-            "kmod-usb3"
-            "kmod-usb-xhci-hcd"
-            "kmod-usb-ohci"
-            "kmod-usb-storage"
-            "kmod-scsi-core"
-        )
-        
-        for driver in "${required_21_02_drivers[@]}"; do
-            if ! grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-                missing_drivers+=("$driver")
-            fi
-        done
-        
-        if [ ${#missing_drivers[@]} -eq 0 ]; then
-            log "🎉 21.02版本所有必需USB驱动都已启用"
-        else
-            log "⚠️ 21.02版本缺失驱动: ${missing_drivers[*]}"
-            log "🔧 尝试修复..."
-            
-            for driver in "${missing_drivers[@]}"; do
-                echo "CONFIG_PACKAGE_${driver}=y" >> .config
-                log "✅ 已修复添加: $driver"
-            done
-            
-            # 重新运行defconfig
-            make defconfig
-            log "✅ 21.02版本USB驱动修复完成"
-        fi
-    fi
-    
     log "✅ 配置应用完成"
     log "最终配置文件: .config"
     log "最终配置大小: $(ls -lh .config | awk '{print $5}')"
 }
+
+# ==============================
+# 【网络修复】函数区域（工作流步骤18）
+# ==============================
+
+#【build_firmware_main.sh-22】网络修复函数
 fix_network() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
@@ -3513,9 +3306,9 @@ save_source_code_info() {
 # ==============================
 
 #【build_firmware_main.sh-35】主函数
-#【build_firmware_main.sh-04】主函数
 main() {
     case $1 in
+        # 环境设置相关
         "setup_environment")
             setup_environment
             ;;
@@ -3525,6 +3318,8 @@ main() {
         "initialize_build_env")
             initialize_build_env "$2" "$3" "$4" "$5"
             ;;
+        
+        # SDK和编译器相关
         "initialize_compiler_env")
             initialize_compiler_env "$2"
             ;;
@@ -3534,6 +3329,8 @@ main() {
         "check_compiler_invocation")
             check_compiler_invocation
             ;;
+        
+        # TurboACC和Feeds相关
         "add_turboacc_support")
             add_turboacc_support
             ;;
@@ -3543,12 +3340,16 @@ main() {
         "install_turboacc_packages")
             install_turboacc_packages
             ;;
+        
+        # 空间检查相关
         "pre_build_space_check")
             pre_build_space_check
             ;;
         "post_build_space_check")
             post_build_space_check
             ;;
+        
+        # 配置相关
         "generate_config")
             generate_config "$2"
             ;;
@@ -3564,30 +3365,42 @@ main() {
         "apply_config")
             apply_config
             ;;
+        
+        # 网络和依赖
         "fix_network")
             fix_network
             ;;
         "download_dependencies")
             download_dependencies
             ;;
+        
+        # 自定义文件
         "integrate_custom_files")
             integrate_custom_files
             ;;
+        
+        # 错误检查和构建
         "pre_build_error_check")
             pre_build_error_check
             ;;
         "build_firmware")
             build_firmware "$2"
             ;;
+        
+        # 构建后检查
         "check_firmware_files")
             check_firmware_files
             ;;
+        
+        # 清理和备份
         "cleanup")
             cleanup
             ;;
         "save_source_code_info")
             save_source_code_info
             ;;
+        
+        # 编译器搜索（已废弃，保持兼容性）
         "search_compiler_files")
             search_compiler_files "$2" "$3"
             ;;
@@ -3600,11 +3413,12 @@ main() {
         "intelligent_platform_aware_compiler_search")
             intelligent_platform_aware_compiler_search "$2" "$3" "$4"
             ;;
+        
         *)
             log "❌ 未知命令: $1"
             echo "可用命令:"
             echo "  setup_environment, create_build_dir, initialize_build_env"
-            echo "  initialize_compiler_env - 初始化编译器环境"
+            echo "  initialize_compiler_env - 初始化编译器环境（下载OpenWrt官方SDK）"
             echo "  add_turboacc_support, configure_feeds, install_turboacc_packages"
             echo "  pre_build_space_check, generate_config, verify_usb_config, check_usb_drivers_integrity, apply_config"
             echo "  fix_network, download_dependencies, integrate_custom_files"
@@ -3617,305 +3431,5 @@ main() {
     esac
 }
 
-log() {
-    echo "【$(date '+%Y-%m-%d %H:%M:%S')】$1"
-}
+main "$@"
 
-
-# ============ 自动修复追加函数: # 修复第3642行的语法错误：添加main函数调用和正确的文件结尾 ============
-#【build_firmware_main.sh-05】关键修复 - 确保文件正确结束
-# 修复第3642行的语法错误：添加main函数调用和正确的文件结尾
-
-# 只有脚本被直接执行时才调用main
-if [ "${BASH_SOURCE[0]}" = "$0" ]; then
-    main "$@"
-fi
-
-# 正常退出
-exit 0
-
-
-
-# ============ 自动修复追加函数: BUILD_DIR="/mnt/openwrt-build" ============
-#【build_firmware_main.sh-01】文件头：变量定义和日志函数
-BUILD_DIR="/mnt/openwrt-build"
-ENV_FILE="$BUILD_DIR/build_env.sh"
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-# 修复：SUPPORT_DIR 应该指向 firmware-config 目录本身
-SUPPORT_DIR="$REPO_ROOT/firmware-config"
-
-# 确保有日志目录
-mkdir -p /tmp/build-logs
-
-log() {
-    echo "【$(date '+%Y-%m-%d %H:%M:%S')】$1"
-}
-
-
-# ============ 自动修复追加函数: # 参考firmware-build-fix.yml的搜索逻辑 ============
-#【build_firmware_main.sh-03】智能文件搜索函数
-# 参考firmware-build-fix.yml的搜索逻辑
-
-smart_file_search() {
-    local filename="$1"
-    local found_file=""
-    
-    log "🔍 开始智能搜索文件: $filename"
-    
-    # 1. 首先在常见位置查找
-    local common_paths=(
-        "firmware-config/scripts/$filename"
-        "scripts/$filename"
-        "$filename"
-        "./$filename"
-        "../$filename"
-    )
-    
-    for path in "${common_paths[@]}"; do
-        if [ -f "$path" ]; then
-            found_file="$path"
-            log "✅ 在常见位置找到: $found_file"
-            break
-        fi
-    done
-    
-    # 2. 如果没有找到，使用find命令全目录搜索
-    if [ -z "$found_file" ]; then
-        log "🔍 开始全目录搜索 $filename..."
-        found_file=$(find . -name "$filename" -type f ! -path "./.git/*" | head -1)
-        
-        if [ -n "$found_file" ]; then
-            log "✅ 在全目录搜索中找到: $found_file"
-        else
-            log "❌ 错误: 未找到 $filename 文件"
-            log "请确保文件存在于以下位置之一:"
-            log "- firmware-config/scripts/$filename"
-            log "- scripts/$filename"
-            log "- $filename"
-            log "当前目录: $(pwd)"
-            log "目录内容:"
-            ls -la
-            return 1
-        fi
-    fi
-    
-    echo "$found_file"
-    return 0
-}
-
-
-# ============ 自动修复追加函数: # 这个函数应该在脚本开头调用 ============
-#【build_firmware_main.sh-04】修复脚本换行符问题
-# 这个函数应该在脚本开头调用
-
-fix_line_endings() {
-    local script_file="${BASH_SOURCE[0]}"
-    
-    # 检查文件是否有Windows换行符
-    if file "$script_file" | grep -q "CRLF"; then
-        log "⚠️ 检测到Windows换行符，正在修复..."
-        
-        # 备份原文件
-        local backup_file="${script_file}.bak"
-        cp "$script_file" "$backup_file"
-        
-        # 使用sed清除\r字符
-        sed -i 's/\r$//' "$script_file"
-        
-        # 验证修复
-        if file "$script_file" | grep -q "CRLF"; then
-            log "❌ 修复失败，恢复备份"
-            cp "$backup_file" "$script_file"
-        else
-            log "✅ 换行符修复完成"
-            rm -f "$backup_file"
-        fi
-    fi
-}
-
-# 在脚本开头调用修复函数
-fix_line_endings
-
-#!/bin/bash
-# ==============================
-# 【紧急修复】Windows换行符问题
-# ==============================
-# 修复错误：syntax error near unexpected token $'{\r''
-
-# 方法1：立即清除\r字符
-if [ -n "$BASH_SOURCE" ]; then
-    # 读取脚本内容，过滤掉\r
-    SCRIPT_CONTENT=$(cat "${BASH_SOURCE[0]}" | tr -d '\r')
-    # 重新执行脚本
-    eval "$SCRIPT_CONTENT"
-    exit $?
-fi
-
-# 如果上面的方法失败，继续正常执行
-set -e
-
-# 方法2：检查并修复函数定义
-check_syntax() {
-    # 检查第24行附近的问题
-    local line_num=24
-    local problem_line=$(sed -n "${line_num}p" "${BASH_SOURCE[0]}" 2>/dev/null)
-    
-    if echo "$problem_line" | grep -q $'\r'; then
-        log "🔧 修复第${line_num}行的换行符问题"
-        # 修复这一行
-        sed -i "${line_num}s/\r$//" "${BASH_SOURCE[0]}"
-    fi
-}
-
-# 执行语法检查
-check_syntax
-
-
-
-
-# ============ 自动修复追加函数: # 修复第25行错误：syntax error near unexpected token $'{\r'' ============
-#【build_firmware_main.sh-01】紧急修复：清除Windows换行符
-# 修复第25行错误：syntax error near unexpected token $'{\r''
-# 原因：handle_error() { 这行有\r字符
-
-# 方法1：立即清除整个文件的\r字符
-if [ -f "${BASH_SOURCE[0]}" ]; then
-    echo "🔧 正在修复Windows换行符..."
-    # 使用sed清除所有\r字符
-    sed -i 's/\r$//' "${BASH_SOURCE[0]}"
-    echo "✅ 修复完成，重新执行脚本..."
-    # 重新执行修复后的脚本
-    exec bash "${BASH_SOURCE[0]}" "$@"
-fi
-
-# 如果上面的方法生效，下面的代码不会执行
-# 继续原脚本内容...
-
-
-# ============ 自动修复追加函数: # 特别注意：函数定义的大括号{不能有\r字符 ============
-#【build_firmware_main.sh-02】修复handle_error函数定义
-# 特别注意：函数定义的大括号{不能有\r字符
-handle_error() {
-    log "❌ 错误发生在: $1"
-    log "详细错误信息:"
-    echo "最后100行构建日志:"
-    tail -100 /tmp/build-logs/*.log 2>/dev/null || echo "无日志文件"
-    
-    # 检查defconfig日志
-    if [ -f "/tmp/defconfig.log" ]; then
-        echo "defconfig 错误日志:"
-        cat "/tmp/defconfig.log"
-    fi
-    
-    # 检查.config文件
-    if [ -f ".config" ]; then
-        echo ".config 最后50行:"
-        tail -50 .config
-    fi
-    
-    exit 1
-}
-
-
-# ============ 自动修复追加函数: # 修复第25行：handle_error ============
-#【build_firmware_main.sh-03】精确修复第25行
-# 修复第25行：handle_error() { 这行的换行符问题
-
-# 在脚本开头添加这个函数来修复特定行
-fix_specific_line() {
-    local line_num=25
-    local script_file="${BASH_SOURCE[0]}"
-    
-    # 检查第25行是否有\r
-    if sed -n "${line_num}p" "$script_file" | grep -q $'\r'; then
-        echo "⚠️ 检测到第${line_num}行有Windows换行符，正在修复..."
-        
-        # 备份文件
-        cp "$script_file" "${script_file}.bak"
-        
-        # 修复第25行
-        sed -i "${line_num}s/\r$//" "$script_file"
-        
-        # 检查修复结果
-        if sed -n "${line_num}p" "$script_file" | grep -q $'\r'; then
-            echo "❌ 修复失败，恢复备份"
-            cp "${script_file}.bak" "$script_file"
-        else
-            echo "✅ 第${line_num}行修复成功"
-            rm -f "${script_file}.bak"
-            
-            # 重新执行修复后的脚本
-            echo "🔄 重新执行修复后的脚本..."
-            exec bash "$script_file" "$@"
-        fi
-    fi
-}
-
-# 调用修复函数
-fix_specific_line
-
-
-# ============ 自动修复追加函数: #!/bin/bash ============
-#【build_firmware_main.sh-04】完整紧急修复脚本
-#!/bin/bash
-
-# ==============================
-# 【第一步】检查和修复Windows换行符
-# ==============================
-SCRIPT_FILE="${BASH_SOURCE[0]}"
-HAS_WINDOWS_LINES=false
-
-# 检查文件是否有Windows换行符
-if file "$SCRIPT_FILE" | grep -q "CRLF" || file "$SCRIPT_FILE" | grep -q "with CRLF"; then
-    echo "❌ 检测到Windows换行符（CRLF），正在修复..."
-    HAS_WINDOWS_LINES=true
-    
-    # 备份原文件
-    BACKUP_FILE="${SCRIPT_FILE}.windows_backup"
-    cp "$SCRIPT_FILE" "$BACKUP_FILE"
-    echo "✅ 已备份到: $BACKUP_FILE"
-    
-    # 方法1：使用tr命令
-    echo "方法1: 使用tr命令清除\r字符..."
-    tr -d '\r' < "$BACKUP_FILE" > "$SCRIPT_FILE"
-    
-    # 验证修复
-    if file "$SCRIPT_FILE" | grep -q "CRLF"; then
-        echo "方法1失败，尝试方法2..."
-        # 方法2：使用sed命令
-        sed -i 's/\r$//' "$SCRIPT_FILE"
-    fi
-    
-    # 最终验证
-    if file "$SCRIPT_FILE" | grep -q "CRLF"; then
-        echo "❌ 修复失败，使用原文件"
-        cp "$BACKUP_FILE" "$SCRIPT_FILE"
-    else
-        echo "✅ 修复成功，清除Windows换行符"
-        rm -f "$BACKUP_FILE"
-    fi
-fi
-
-# ==============================
-# 【第二步】重新执行修复后的脚本
-# ==============================
-if [ "$HAS_WINDOWS_LINES" = true ]; then
-    echo "🔄 重新执行修复后的脚本..."
-    exec bash "$SCRIPT_FILE" "$@"
-fi
-
-# ==============================
-# 【第三步】原脚本内容从这里开始
-# ==============================
-set -e
-
-echo "✅ 脚本开始执行，第25行应该已经修复..."
-
-
-# ============ 自动修复追加函数: # 确保这行没有\r字符：handle_error ============
-#【build_firmware_main.sh-05】修复的handle_error函数
-# 确保这行没有\r字符：handle_error() {
-handle_error() {
-    echo "❌ 错误发生在: $1"
-    # ... 函数内容
-}
