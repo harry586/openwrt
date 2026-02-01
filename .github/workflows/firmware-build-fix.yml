@@ -105,7 +105,7 @@ jobs:
           # 4. 提取所有系统性标识及其对应的内容块
           echo "🔧 开始解析系统性标识..."
           
-          # 查找所有系统性标识行号
+          # 查找所有系统性标识行号 - 修复正则表达式
           IDENTIFIER_LINES=$(grep -n "#【" fix.txt || true)
           
           if [ -z "$IDENTIFIER_LINES" ]; then
@@ -127,8 +127,8 @@ jobs:
           # 处理每个系统性标识
           TOTAL_FIX_LINES=$(wc -l < fix.txt)
           
-          # 将标识行号转换为数组
-          IFS=$'\n' read -d '' -r -a IDENTIFIER_ARRAY <<< "$IDENTIFIER_LINES"
+          # 将标识行号转换为数组 - 修复数组处理
+          IFS=$'\n' read -d '' -r -a IDENTIFIER_ARRAY <<< "$IDENTIFIER_LINES" || true
           
           for i in "${!IDENTIFIER_ARRAY[@]}"; do
             CURRENT_LINE_INFO="${IDENTIFIER_ARRAY[$i]}"
@@ -159,11 +159,14 @@ jobs:
             # 提取整个内容块（包含标识行）
             BLOCK_CONTENT=$(sed -n "${BLOCK_START},${BLOCK_END}p" fix.txt)
             
-            # 在目标文件中查找该标识
+            # 在目标文件中查找该标识 - 修复搜索逻辑
             echo "🔍 在目标文件中查找标识: $IDENTIFIER"
             
+            # 转义标识中的特殊字符用于搜索
+            ESCAPED_IDENTIFIER=$(echo "$IDENTIFIER" | sed 's/[][\.*^$]/\\&/g')
+            
             # 搜索标识，支持标识行前后可能有空格的情况
-            TARGET_LINE_NUM=$(grep -n "^\s*${IDENTIFIER}" "$TARGET_FILE" | head -1 | cut -d: -f1)
+            TARGET_LINE_NUM=$(grep -n "^\s*${ESCAPED_IDENTIFIER}" "$TARGET_FILE" | head -1 | cut -d: -f1)
             
             if [ -n "$TARGET_LINE_NUM" ]; then
               echo "✅ 在目标文件第 $TARGET_LINE_NUM 行找到标识"
