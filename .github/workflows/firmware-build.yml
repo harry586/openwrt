@@ -1,4 +1,3 @@
-#【firmware-build.yml】
 # .github/workflows/firmware-build.yml
 name: OpenWrt 智能固件构建工作流
 
@@ -54,65 +53,169 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      #【firmware-build.yml-01】步骤 0: 生成时间戳和设备同步检查 - 修复版
-      - name: "0. 生成时间戳和设备同步检查（修复版）"
+      #【firmware-build.yml-01】步骤 0: 生成时间戳和设备同步检查 - 终极修复版
+      - name: "0. 生成时间戳和设备同步检查（终极修复版）"
         run: |
-          echo "=== 步骤 0: 生成时间戳和设备同步检查（修复版）==="
+          echo "=== 步骤 0: 生成时间戳和设备同步检查（终极修复版）==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 等待文件复制完成
           echo "⏳ 等待文件复制完成..."
-          sleep 3
+          sleep 5
           
-          # 显示工作区内容
-          echo "📁 工作区根目录内容:"
-          ls -la "${{ github.workspace }}/" 2>/dev/null || echo "工作区目录可能不存在"
+          # 显示详细的环境信息
+          echo "📊 环境信息:"
+          echo "  工作区: ${{ github.workspace }}"
+          echo "  当前目录: $(pwd)"
+          echo "  用户: $(whoami)"
           
-          # 智能搜索设备支持文件
-          echo "🔍 智能搜索设备支持文件..."
+          # 显示完整的目录结构
+          echo "📁 当前目录结构:"
+          ls -la
+          echo ""
+          echo "📁 父目录结构:"
+          ls -la ../
+          echo ""
+          
+          # 终极搜索设备支持文件
+          echo "🔍 终极搜索设备支持文件 support.sh..."
+          echo ""
           
           WORKSPACE="${{ github.workspace }}"
+          CURRENT_DIR=$(pwd)
           SUPPORT_FILE=""
+          FOUND_COUNT=0
           
-          # 方法1: 检查预设路径
-          if [ -f "$WORKSPACE/firmware-config/support.sh" ]; then
-            SUPPORT_FILE="$WORKSPACE/firmware-config/support.sh"
-            echo "✅ 找到设备支持文件 (方法1): $SUPPORT_FILE"
-          # 方法2: 在当前目录查找
-          elif [ -f "./firmware-config/support.sh" ]; then
-            SUPPORT_FILE="./firmware-config/support.sh"
-            echo "✅ 找到设备支持文件 (方法2): $SUPPORT_FILE"
-          # 方法3: 查找所有 support.sh 文件
-          else
-            echo "🔍 开始深度搜索 support.sh 文件..."
-            FOUND_FILES=$(find . -name "support.sh" -type f 2>/dev/null | head -5)
+          # 创建搜索路径数组
+          declare -a SEARCH_PATHS
+          
+          # 方法1: 标准工作区路径
+          SEARCH_PATHS+=("$WORKSPACE/firmware-config/support.sh")
+          SEARCH_PATHS+=("$WORKSPACE/../firmware-config/support.sh")
+          SEARCH_PATHS+=("$WORKSPACE/../../firmware-config/support.sh")
+          
+          # 方法2: 相对路径（从当前目录）
+          SEARCH_PATHS+=("./firmware-config/support.sh")
+          SEARCH_PATHS+=("../firmware-config/support.sh")
+          SEARCH_PATHS+=("../../firmware-config/support.sh")
+          SEARCH_PATHS+=("../../../firmware-config/support.sh")
+          
+          # 方法3: 绝对路径（GitHub Actions 典型路径）
+          REPO_NAME=$(basename "${{ github.repository }}")
+          SEARCH_PATHS+=("/home/runner/work/$REPO_NAME/$REPO_NAME/firmware-config/support.sh")
+          SEARCH_PATHS+=("/home/runner/work/openwrt/openwrt/firmware-config/support.sh")
+          
+          # 方法4: 临时目录
+          SEARCH_PATHS+=("/tmp/firmware-config/support.sh")
+          SEARCH_PATHS+=("/mnt/firmware-config/support.sh")
+          
+          echo "📋 基础搜索路径:"
+          for path in "${SEARCH_PATHS[@]}"; do
+            if [ -f "$path" ]; then
+              echo "  ✅ $path"
+              SUPPORT_FILE="$path"
+              FOUND_COUNT=$((FOUND_COUNT + 1))
+            else
+              echo "  ❌ $path"
+            fi
+          done
+          
+          # 如果基础搜索没找到，进行深度搜索
+          if [ $FOUND_COUNT -eq 0 ]; then
+            echo ""
+            echo "🔍 基础搜索未找到，开始深度递归搜索..."
             
-            if [ -n "$FOUND_FILES" ]; then
-              echo "📄 找到的文件:"
-              echo "$FOUND_FILES"
-              
-              # 优先选择包含 firmware-config 的路径
-              FIRMWARE_FILE=$(echo "$FOUND_FILES" | grep "firmware-config" | head -1)
-              if [ -n "$FIRMWARE_FILE" ]; then
-                SUPPORT_FILE="$FIRMWARE_FILE"
-                echo "✅ 选择 firmware-config 目录下的文件: $SUPPORT_FILE"
+            # 深度搜索方案 A: 在当前目录递归搜索
+            echo "📁 深度搜索A: 当前目录递归搜索 (深度5)"
+            FOUND_A=$(find . -maxdepth 5 -type f -name "support.sh" 2>/dev/null)
+            if [ -n "$FOUND_A" ]; then
+              echo "✅ 找到文件:"
+              echo "$FOUND_A" | while read file; do
+                echo "  📍 $file"
+                if [ -z "$SUPPORT_FILE" ]; then
+                  SUPPORT_FILE="$file"
+                fi
+                FOUND_COUNT=$((FOUND_COUNT + 1))
+              done
+            else
+              echo "❌ 深度搜索A: 未找到"
+            fi
+            
+            # 深度搜索方案 B: 在工作区递归搜索
+            echo ""
+            echo "📁 深度搜索B: 工作区目录递归搜索"
+            if [ -d "$WORKSPACE" ]; then
+              FOUND_B=$(find "$WORKSPACE" -maxdepth 5 -type f -name "support.sh" 2>/dev/null)
+              if [ -n "$FOUND_B" ]; then
+                echo "✅ 找到文件:"
+                echo "$FOUND_B" | while read file; do
+                  echo "  📍 $file"
+                  if [ -z "$SUPPORT_FILE" ]; then
+                    SUPPORT_FILE="$file"
+                  fi
+                  FOUND_COUNT=$((FOUND_COUNT + 1))
+                done
               else
-                SUPPORT_FILE=$(echo "$FOUND_FILES" | head -1)
-                echo "✅ 选择第一个找到的文件: $SUPPORT_FILE"
+                echo "❌ 深度搜索B: 未找到"
               fi
+            fi
+            
+            # 深度搜索方案 C: 在整个用户工作目录搜索
+            echo ""
+            echo "📁 深度搜索C: /home/runner/work 目录搜索"
+            if [ -d "/home/runner/work" ]; then
+              FOUND_C=$(find /home/runner/work -maxdepth 4 -type f -name "support.sh" 2>/dev/null | head -20)
+              if [ -n "$FOUND_C" ]; then
+                echo "✅ 找到文件 (显示前20个):"
+                echo "$FOUND_C" | while read file; do
+                  echo "  📍 $file"
+                  if [ -z "$SUPPORT_FILE" ]; then
+                    SUPPORT_FILE="$file"
+                  fi
+                  FOUND_COUNT=$((FOUND_COUNT + 1))
+                done
+              else
+                echo "❌ 深度搜索C: 未找到"
+              fi
+            fi
+            
+            # 深度搜索方案 D: 查找所有可能的配置文件
+            echo ""
+            echo "📁 深度搜索D: 查找所有可能的配置文件"
+            FOUND_D=$(find /home/runner -maxdepth 6 -type f -name "*.sh" 2>/dev/null | grep -i "support\|config" | head -15)
+            if [ -n "$FOUND_D" ]; then
+              echo "✅ 找到可能的配置文件:"
+              echo "$FOUND_D" | while read file; do
+                echo "  📍 $file"
+                if [[ "$file" == *"support.sh"* ]] && [ -z "$SUPPORT_FILE" ]; then
+                  SUPPORT_FILE="$file"
+                fi
+              done
+            else
+              echo "❌ 深度搜索D: 未找到"
             fi
           fi
           
+          echo ""
+          echo "📊 搜索结果汇总:"
+          echo "  总找到文件数: $FOUND_COUNT"
+          echo "  选择的文件: ${SUPPORT_FILE:-未找到}"
+          
+          # 检查并处理找到的文件
           if [ -f "$SUPPORT_FILE" ]; then
-            echo "✅ 设备支持文件存在: $SUPPORT_FILE"
+            echo "✅ 找到设备支持文件: $SUPPORT_FILE"
             echo "📄 文件大小: $(ls -lh "$SUPPORT_FILE" | awk '{print $5}')"
+            echo "📄 文件内容预览 (前10行):"
+            head -10 "$SUPPORT_FILE" || echo "无法读取文件内容"
             
             # 尝试加载设备列表
+            echo ""
+            echo "🧪 测试加载设备支持脚本..."
             if source "$SUPPORT_FILE" 2>/dev/null; then
               echo "✅ 成功加载设备支持脚本"
               
               if command -v get_all_devices >/dev/null 2>&1; then
-                SUPPORTED_DEVICES=$(get_all_devices)
+                SUPPORTED_DEVICES=$(get_all_devices 2>/dev/null || echo "无法执行get_all_devices")
                 echo "📱 support.sh 中支持的设备: $SUPPORTED_DEVICES"
                 
                 SELECTED_DEVICE="${{ github.event.inputs.device_name }}"
@@ -120,7 +223,8 @@ jobs:
                 
                 # 检查设备是否在support.sh中
                 DEVICE_IN_SUPPORT=false
-                for device in $SUPPORTED_DEVICES; do
+                IFS=' ' read -ra DEVICE_ARRAY <<< "$SUPPORTED_DEVICES"
+                for device in "${DEVICE_ARRAY[@]}"; do
                   if [ "$device" = "$SELECTED_DEVICE" ]; then
                     DEVICE_IN_SUPPORT=true
                     break
@@ -131,7 +235,7 @@ jobs:
                   echo "❌ 错误: 选择的设备 '$SELECTED_DEVICE' 不在 support.sh 的支持列表中"
                   echo ""
                   echo "📋 support.sh 支持的设备:"
-                  for device in $SUPPORTED_DEVICES; do
+                  for device in "${DEVICE_ARRAY[@]}"; do
                     if command -v get_device_description >/dev/null 2>&1; then
                       DESC=$(get_device_description "$device" 2>/dev/null || echo "无描述")
                       echo "  - $device: $DESC"
@@ -159,7 +263,19 @@ jobs:
             fi
           else
             echo "⚠️ 警告: 无法找到设备支持文件 support.sh"
-            echo "💡 跳过设备同步检查，直接使用选择的设备: ${{ github.event.inputs.device_name }}"
+            echo "💡 调试信息:"
+            echo "  当前目录: $CURRENT_DIR"
+            echo "  工作区: $WORKSPACE"
+            echo "  Repo名称: $REPO_NAME"
+            echo ""
+            echo "💡 可能的原因:"
+            echo "  1. 步骤1的Git Archive API下载可能失败了"
+            echo "  2. 文件路径不正确"
+            echo "  3. 权限问题"
+            echo ""
+            echo "🔧 临时解决方案:"
+            echo "  将使用默认设备: ${{ github.event.inputs.device_name }}"
+            echo "  跳过设备同步检查"
           fi
           
           # 生成时间戳
@@ -221,8 +337,11 @@ jobs:
             # 确保support.sh也被复制了
             if [ -f "firmware-config/support.sh" ]; then
               echo "✅ 设备支持文件存在: firmware-config/support.sh"
+              echo "📄 文件大小: $(ls -lh firmware-config/support.sh | awk '{print $5}')"
             else
               echo "⚠️ 警告: firmware-config/support.sh 不存在"
+              echo "📁 firmware-config 目录内容:"
+              ls -la firmware-config/ 2>/dev/null || echo "firmware-config 目录不存在"
             fi
             
             # 复制到工作区
@@ -259,7 +378,7 @@ jobs:
           rm -rf openwrt-source
           echo "✅ Git Archive API下载完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 1 完成"
-      
+
       #【firmware-build.yml-03】步骤 2: 上传源代码Artifacts
       - name: "2. 上传源代码Artifacts"
         uses: actions/upload-artifact@v4
@@ -268,7 +387,7 @@ jobs:
           path: /tmp/build-artifacts/source-archive/
           retention-days: 7
           if-no-files-found: error
-      
+
       #【firmware-build.yml-04】步骤 3: 修复权限问题
       - name: "3. 修复权限问题"
         run: |
@@ -301,7 +420,7 @@ jobs:
           find "${{ github.workspace }}/firmware-config/scripts" -name "*.sh" -exec chmod +x {} \;
           echo "✅ 修复所有脚本权限完成"
           echo "🟢 步骤 3 完成"
-      
+
       #【firmware-build.yml-05】步骤 4: 安装基础工具（调用大脚本）
       - name: "4. 安装基础工具（调用大脚本）"
         run: |
@@ -311,7 +430,7 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" setup_environment
           
           echo "🟢 步骤 4 完成"
-      
+
       #【firmware-build.yml-06】步骤 5: 初始空间检查（调用大脚本）
       - name: "5. 初始空间检查（调用大脚本）"
         run: |
@@ -321,7 +440,7 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_space_check
           
           echo "🟢 步骤 5 完成"
-      
+
       #【firmware-build.yml-07】步骤 6: 动态读取设备列表并设置编译环境（调用大脚本）
       - name: "6. 动态读取设备列表并设置编译环境（调用大脚本）"
         run: |
@@ -340,7 +459,7 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}" "${{ github.event.inputs.source_repo }}"
           
           echo "🟢 步骤 6 完成"
-      
+
       #【firmware-build.yml-08】步骤 7: 下载OpenWrt官方SDK（调用大脚本）
       - name: "7. 下载OpenWrt官方SDK（调用大脚本）"
         run: |
@@ -350,7 +469,7 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_compiler_env "${{ github.event.inputs.device_name }}"
           
           echo "🟢 步骤 7 完成"
-      
+
       #【firmware-build.yml-09】步骤 8: 验证SDK下载结果（调用大脚本）
       - name: "8. 验证SDK下载结果（调用大脚本）"
         run: |
@@ -362,7 +481,7 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" check_compiler_invocation
           
           echo "🟢 步骤 8 完成"
-      
+
       #【firmware-build.yml-10】步骤 9: 添加 TurboACC 支持（调用大脚本）
       - name: "9. 添加 TurboACC 支持（调用大脚本）"
         run: |
@@ -372,7 +491,7 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" add_turboacc_support
           
           echo "🟢 步骤 9 完成"
-      
+
       #【firmware-build.yml-11】步骤 10: 配置Feeds（调用大脚本）
       - name: "10. 配置Feeds（调用大脚本）"
         run: |
@@ -382,7 +501,7 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" configure_feeds
           
           echo "🟢 步骤 10 完成"
-      
+
       #【firmware-build.yml-12】步骤 11: 安装 TurboACC 包（调用大脚本）
       - name: "11. 安装 TurboACC 包（调用大脚本）"
         if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
@@ -393,17 +512,17 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" install_turboacc_packages
           
           echo "🟢 步骤 11 完成"
-      
+
       #【firmware-build.yml-13】步骤 12: 编译前空间检查（调用大脚本）
       - name: "12. 编译前空间检查（调用大脚本）"
         run: |
           echo "=== 步骤 12: 编译前空间检查（调用大脚本）==="
-          echo "🕐 检查时间: $(date '+%Y-%m-d %H:%M:%S')"
+          echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_space_check
           
           echo "🟢 步骤 12 完成"
-      
+
       #【firmware-build.yml-14】步骤 13: 智能配置生成（使用设备支持系统）（调用大脚本）
       - name: "13. 智能配置生成（使用设备支持系统）（调用大脚本）"
         run: |
@@ -413,7 +532,7 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" generate_config "${{ github.event.inputs.extra_packages }}"
           
           echo "🟢 步骤 13 完成"
-      
+
       #【firmware-build.yml-15】步骤 14: 验证USB配置（调用大脚本）
       - name: "14. 验证USB配置（调用大脚本）"
         run: |
@@ -423,7 +542,7 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" verify_usb_config
           
           echo "🟢 步骤 14 完成"
-      
+
       #【firmware-build.yml-16】步骤 15: USB驱动完整性检查（调用大脚本）
       - name: "15. USB驱动完整性检查（调用大脚本）"
         run: |
@@ -433,7 +552,7 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" check_usb_drivers_integrity
           
           echo "🟢 步骤 15 完成"
-      
+
       #【firmware-build.yml-17】步骤 16: 应用配置并显示详情（调用大脚本）
       - name: "16. 应用配置并显示详情（调用大脚本）"
         run: |
@@ -475,7 +594,7 @@ jobs:
           fi
           
           echo "🟢 步骤 16 完成"
-      
+
       #【firmware-build.yml-18】步骤 17: 检查并备份配置文件
       - name: "17. 检查并备份配置文件"
         run: |
@@ -507,7 +626,7 @@ jobs:
           fi
           
           echo "🟢 步骤 17 完成"
-      
+
       #【firmware-build.yml-19】步骤 18: 修复网络环境（调用大脚本）
       - name: "18. 修复网络环境（调用大脚本）"
         run: |
@@ -517,7 +636,7 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" fix_network
           
           echo "🟢 步骤 18 完成"
-      
+
       #【firmware-build.yml-20】步骤 19: 下载依赖包（优化版）（调用大脚本）
       - name: "19. 下载依赖包（优化版）（调用大脚本）"
         run: |
@@ -527,7 +646,7 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" download_dependencies
           
           echo "🟢 步骤 19 完成"
-      
+
       #【firmware-build.yml-21】步骤 20: 集成自定义文件（增强版）（调用大脚本）
       - name: "20. 集成自定义文件（增强版）（调用大脚本）"
         run: |
@@ -537,7 +656,7 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
           
           echo "🟢 步骤 20 完成"
-      
+
       #【firmware-build.yml-22】步骤 21: 前置错误检查（修复版）（调用大脚本）
       - name: "21. 前置错误检查（修复版）（调用大脚本）"
         run: |
@@ -547,7 +666,7 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_error_check
           
           echo "🟢 步骤 21 完成"
-      
+
       #【firmware-build.yml-23】步骤 22: 编译固件前的空间检查（调用大脚本）
       - name: "22. 编译固件前的空间检查（调用大脚本）"
         run: |
@@ -557,7 +676,7 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_space_check
           
           echo "🟢 步骤 22 完成"
-      
+
       #【firmware-build.yml-24】步骤 23: 编译固件（智能并行优化版）（调用大脚本）
       - name: "23. 编译固件（智能并行优化版）（调用大脚本）"
         run: |
@@ -568,7 +687,7 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" build_firmware "true"
           
           echo "🟢 步骤 23 完成"
-      
+
       #【firmware-build.yml-25】步骤 24: 检查构建产物（调用大脚本）
       - name: "24. 检查构建产物（调用大脚本）"
         if: success()
@@ -579,7 +698,7 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" check_firmware_files
           
           echo "🟢 步骤 24 完成"
-      
+
       #【firmware-build.yml-26】步骤 25: 上传固件原始目录
       - name: "25. 上传固件原始目录"
         if: success()
@@ -589,7 +708,7 @@ jobs:
           path: /mnt/openwrt-build/bin/targets/
           retention-days: 7
           if-no-files-found: error
-      
+
       #【firmware-build.yml-27】步骤 26: 上传配置文件
       - name: "26. 上传配置文件"
         if: always()
@@ -599,7 +718,7 @@ jobs:
           path: ${{ github.workspace }}/firmware-config/config-backup/
           retention-days: 7
           if-no-files-found: error
-      
+
       #【firmware-build.yml-28】步骤 27: 编译后空间检查（调用大脚本）
       - name: "27. 编译后空间检查（调用大脚本）"
         if: always()
@@ -610,7 +729,7 @@ jobs:
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" post_build_space_check
           
           echo "🟢 步骤 27 完成"
-      
+
       #【firmware-build.yml-29】步骤 28: 编译后总结
       - name: "28. 编译后总结"
         if: always()
