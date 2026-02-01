@@ -306,6 +306,196 @@ initialize_build_env() {
         # 默认配置（兼容旧版）- 修复设备名称映射，添加mt7981支持
         case "$device_name" in
             "ac42u"|"acrh17")
+                # acrh17设为ac42u的别名，主要使用ac42u
+                TARGET="ipq40xx"
+                SUBTARGET="generic"
+                if [ "$device_name" = "acrh17" ]; then
+                    log "🔧 检测到acrh17别名，自动转换为ac42u"
+                    DEVICE_NAME="ac42u"  # 统一使用ac42u作为设备名称
+                fi
+                
+                if [ "$SOURCE_REPO" = "lede" ]; then
+                    DEVICE="asus_rt-acrh17"  # LEDE中使用acrh17
+                else
+                    DEVICE="asus_rt-ac42u"   # ImmortalWrt中使用ac42u
+                fi
+                PLATFORM="ipq40xx"
+                log "📝 华硕设备: 主要名称ac42u，别名acrh17"
+                ;;
+            "mi_router_4a_gigabit"|"r4ag")
+                TARGET="ramips"
+                SUBTARGET="mt76x8"
+                DEVICE="xiaomi_mi-router-4a-gigabit"
+                PLATFORM="ramips"
+                ;;
+            "mi_router_3g"|"r3g")
+                TARGET="ramips"
+                SUBTARGET="mt7621"
+                DEVICE="xiaomi_mi-router-3g"
+                PLATFORM="ramips"
+                ;;
+            "netgear_3800")
+                TARGET="ath79"
+                SUBTARGET="generic"
+                if [ "$SOURCE_REPO" = "lede" ]; then
+                    DEVICE="netgear_wndr3800"  # LEDE中的设备名称
+                else
+                    DEVICE="netgear_wndr3800"  # ImmortalWrt中的设备名称
+                fi
+                PLATFORM="ath79"
+                ;;
+            "cmcc_rax3000m"|"rax3000m")
+                TARGET="mediatek"
+                SUBTARGET="mt7981"
+                DEVICE="cmcc_rax3000m"
+                PLATFORM="mediatek"
+                log "🔧 检测到MT7981平台设备: $device_name"
+                ;;
+            *)
+                # 尝试根据设备名称猜测平台
+                if [[ "$device_name" == *mt7981* ]] || [[ "$device_name" == *rax3000m* ]]; then
+                    TARGET="mediatek"
+                    SUBTARGET="mt7981"
+                    DEVICE="$device_name"
+                    PLATFORM="mediatek"
+                    log "🔧 猜测为MT7981平台设备: $device_name"
+                elif [[ "$device_name" == *ipq* ]] || [[ "$device_name" == *ipq40xx* ]]; then
+                    TARGET="ipq40xx"
+                    SUBTARGET="generic"
+                    DEVICE="$device_name"
+                    PLATFORM="ipq40xx"
+                elif [[ "$device_name" == *mt76* ]] || [[ "$device_name" == *ramips* ]]; then
+                    TARGET="ramips"
+                    SUBTARGET="mt76x8"
+                    DEVICE="$device_name"
+                    PLATFORM="ramips"
+                else
+                    TARGET="ipq40xx"
+                    SUBTARGET="generic"
+                    DEVICE="$device_name"
+                    PLATFORM="generic"
+                fi
+                ;;
+        esac
+        log "🔧 检测到设备: $device_name"
+        log "📝 标准化设备名称: $DEVICE_NAME"
+        log "目标: $TARGET"
+        log "子目标: $SUBTARGET"
+        log "设备: $DEVICE"
+        log "平台: $PLATFORM"
+    fi
+    
+    CONFIG_MODE="$config_mode"
+    
+    save_env
+    
+    echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
+    echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
+    echo "TARGET=$TARGET" >> $GITHUB_ENV
+    echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
+    echo "DEVICE=$DEVICE" >> $GITHUB_ENV
+    echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
+    echo "DEVICE_NAME=$DEVICE_NAME" >> $GITHUB_ENV
+    echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
+    echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+    
+    log "✅ 构建环境初始化完成"
+}
+initialize_build_env() {
+    local device_name=$1
+    local version_selection=$2
+    local config_mode=$3
+    local source_repo=${4:-"immortalwrt"}  # 添加第四个参数，默认immortalwrt
+    
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 版本选择 ==="
+    log "源代码仓库: $source_repo"
+    
+    # 根据仓库选择不同的URL - 只保留immortalwrt和lede
+    case "$source_repo" in
+        "immortalwrt")
+            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+            ;;
+        "lede")
+            SELECTED_REPO_URL="https://github.com/coolsnowwolf/lede.git"
+            SELECTED_BRANCH="master"  # LEDE使用master分支
+            ;;
+        *)
+            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+            source_repo="immortalwrt"
+            ;;
+    esac
+    
+    # 根据版本选择分支（LEDE除外）- 修复分支选择逻辑
+    if [ "$source_repo" = "lede" ]; then
+        # LEDE仓库只使用master分支
+        SELECTED_BRANCH="master"
+        log "🔧 LEDE仓库使用master分支"
+    else
+        # ImmortalWrt仓库根据版本选择分支
+        if [ "$version_selection" = "23.05" ]; then
+            SELECTED_BRANCH="openwrt-23.05"
+        else
+            SELECTED_BRANCH="openwrt-21.02"
+        fi
+    fi
+    
+    # 设置SOURCE_REPO环境变量
+    SOURCE_REPO="$source_repo"
+    
+    log "✅ 版本选择完成: $SELECTED_BRANCH (仓库: $source_repo)"
+    
+    log "=== 克隆源码 ==="
+    log "仓库: $SELECTED_REPO_URL"
+    log "分支: $SELECTED_BRANCH"
+    
+    sudo rm -rf ./* ./.git* 2>/dev/null || true
+    
+    git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
+    log "✅ 源码克隆完成"
+    
+    # 检查克隆的文件
+    local important_source_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
+    for file in "${important_source_files[@]}"; do
+        if [ -f "$file" ]; then
+            log "✅ 源码文件存在: $file"
+        else
+            log "❌ 源码文件缺失: $file"
+        fi
+    done
+    
+    log "=== 设备配置 ==="
+    DEVICE_NAME="$device_name"
+    
+    # 加载设备支持脚本
+    if load_device_support; then
+        local device_config=$(get_device_config "$device_name")
+        TARGET=$(echo $device_config | awk '{print $1}')
+        SUBTARGET=$(echo $device_config | awk '{print $2}')
+        DEVICE=$(echo $device_config | awk '{print $3}')
+        PLATFORM=$(echo $device_config | awk '{print $4}')
+        
+        local device_desc=$(get_device_description "$device_name")
+        log "🔧 设备: $device_desc"
+        log "目标: $TARGET"
+        log "子目标: $SUBTARGET"
+        log "设备: $DEVICE"
+        log "平台: $PLATFORM"
+        
+        # 特殊处理：对于LEDE仓库，需要确保设备名称正确
+        if [ "$SOURCE_REPO" = "lede" ]; then
+            log "🔧 LEDE仓库设备名称调整"
+            # 检查设备是否以"generic_"开头，如果是则去掉前缀
+            if [[ "$DEVICE" == generic_* ]]; then
+                DEVICE="${DEVICE#generic_}"
+                log "📝 调整设备名称: $DEVICE"
+            fi
+        fi
+    else
+        # 默认配置（兼容旧版）- 修复设备名称映射，添加mt7981支持
+        case "$device_name" in
+            "ac42u"|"acrh17")
                 TARGET="ipq40xx"
                 SUBTARGET="generic"
                 if [ "$SOURCE_REPO" = "lede" ]; then
