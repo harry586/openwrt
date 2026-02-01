@@ -224,7 +224,125 @@ load_env() {
 # 【设备支持系统】函数区域
 # ==============================
 
-#【build_firmware_main.sh-04】设备支持函数（修复版）
+#【build_firmware_main.sh-04】设备支持函数（添加模糊搜索版）
+load_device_support() {
+    log "🔧 加载设备支持脚本（增强版）..."
+    
+    # 方法1：使用预设路径
+    local support_file="$SUPPORT_DIR/support.sh"
+    log "📁 检查预设路径: $support_file"
+    
+    if [ -f "$support_file" ]; then
+        log "✅ 在预设路径找到设备支持脚本"
+        return _load_support_file "$support_file"
+    fi
+    
+    log "⚠️ 预设路径未找到，开始模糊搜索..."
+    
+    # 方法2：在仓库根目录递归搜索
+    log "🔍 在仓库根目录递归搜索 support.sh..."
+    local found_files=$(find "$REPO_ROOT" -type f -name "support.sh" 2>/dev/null | head -5)
+    
+    if [ -n "$found_files" ]; then
+        log "✅ 找到可能的 support.sh 文件:"
+        echo "$found_files" | while read file; do
+            log "  📍 $file"
+        done
+        
+        # 优先选择包含 firmware-config 路径的
+        local firmware_config_file=$(echo "$found_files" | grep "firmware-config" | head -1)
+        if [ -n "$firmware_config_file" ]; then
+            log "🎯 选择 firmware-config 目录下的文件: $firmware_config_file"
+            return _load_support_file "$firmware_config_file"
+        fi
+        
+        # 选择第一个找到的文件
+        local first_file=$(echo "$found_files" | head -1)
+        log "🎯 选择第一个找到的文件: $first_file"
+        return _load_support_file "$first_file"
+    fi
+    
+    # 方法3：在当前目录和父目录搜索
+    log "🔍 在当前目录和父目录搜索..."
+    local current_dir=$(pwd)
+    local max_depth=5
+    local depth=0
+    
+    while [ "$current_dir" != "/" ] && [ $depth -lt $max_depth ]; do
+        depth=$((depth + 1))
+        local test_file="$current_dir/firmware-config/support.sh"
+        
+        if [ -f "$test_file" ]; then
+            log "✅ 在父目录 $current_dir 找到: $test_file"
+            return _load_support_file "$test_file"
+        fi
+        
+        # 检查当前目录
+        local test_file2="$current_dir/support.sh"
+        if [ -f "$test_file2" ]; then
+            log "✅ 在当前目录 $current_dir 找到: $test_file2"
+            return _load_support_file "$test_file2"
+        fi
+        
+        current_dir=$(dirname "$current_dir")
+    done
+    
+    # 方法4：在常见位置搜索
+    log "🔍 在常见位置搜索..."
+    local common_locations=(
+        "/home/runner/work/openwrt/openwrt/firmware-config/support.sh"
+        "/mnt/firmware-config/support.sh"
+        "/tmp/firmware-config/support.sh"
+        "./firmware-config/support.sh"
+        "../firmware-config/support.sh"
+        "../../firmware-config/support.sh"
+    )
+    
+    for location in "${common_locations[@]}"; do
+        if [ -f "$location" ]; then
+            log "✅ 在常见位置找到: $location"
+            return _load_support_file "$location"
+        fi
+    done
+    
+    # 方法5：使用 find 命令全局搜索
+    log "🔍 全局搜索 support.sh（可能需要时间）..."
+    local global_found=$(find / -type f -name "support.sh" 2>/dev/null | grep -v "/proc|/sys" | head -3)
+    
+    if [ -n "$global_found" ]; then
+        log "🌍 全局搜索找到的文件:"
+        echo "$global_found" | while read file; do
+            log "  📍 $file"
+        done
+        
+        # 优先选择包含 openwrt 或 firmware 的路径
+        local openwrt_file=$(echo "$global_found" | grep -i "openwrt" | head -1)
+        if [ -n "$openwrt_file" ]; then
+            log "🎯 选择 openwrt 相关文件: $openwrt_file"
+            return _load_support_file "$openwrt_file"
+        fi
+        
+        local firmware_file=$(echo "$global_found" | grep -i "firmware" | head -1)
+        if [ -n "$firmware_file" ]; then
+            log "🎯 选择 firmware 相关文件: $firmware_file"
+            return _load_support_file "$firmware_file"
+        fi
+    fi
+    
+    # 所有方法都失败
+    log "❌ 所有搜索方法都失败，无法找到 support.sh"
+    log "📊 调试信息:"
+    log "  当前目录: $(pwd)"
+    log "  REPO_ROOT: $REPO_ROOT"
+    log "  SUPPORT_DIR: $SUPPORT_DIR"
+    log "  GITHUB_WORKSPACE: ${GITHUB_WORKSPACE:-未设置}"
+    
+    log "📁 当前目录结构:"
+    find . -maxdepth 3 -type d 2>/dev/null | head -20
+    
+    return 1
+}
+
 load_device_support() {
     log "🔧 加载设备支持脚本..."
     
@@ -3491,7 +3609,27 @@ save_source_code_info() {
 # 【主函数】区域
 # ==============================
 
-#【build_firmware_main.sh-35】主函数（添加调试参数）
+#【build_firmware_main.sh-35】主函数（添加调试命令）
+main() {
+    case $1 in
+        # 新增调试命令
+        "debug_find_support")
+            debug_find_support
+            ;;
+        "debug_load_device")
+            load_device_support
+            ;;
+        "debug_env")
+            log "环境变量:"
+            env | grep -E "(GITHUB|REPO|SUPPORT|BUILD)" | sort
+            ;;
+            
+        # 其他原有命令...
+        *)
+            # ... 原有代码 ...
+            ;;
+    esac
+}
 main() {
     case $1 in
         # 新增调试命令
@@ -3731,4 +3869,120 @@ main() {
 }
 
 main "$@"
+
+
+# ============ 自动修复内容 ============
+# 修复时间: Sun Feb  1 04:44:56 UTC 2026
+# 来源: fix.txt
+#【build_firmware_main.sh-04a】辅助函数：加载支持文件
+_load_support_file() {
+    local support_file="$1"
+    
+    log "📂 加载支持文件: $support_file"
+    
+    # 显示文件信息
+    log "📊 文件信息:"
+    ls -lh "$support_file"
+    
+    # 测试文件内容
+    log "📄 文件前5行:"
+    head -5 "$support_file"
+    
+    # 加载文件
+    if source "$support_file" 2>/dev/null; then
+        log "✅ 成功加载设备支持脚本"
+        
+        # 验证关键函数
+        local has_functions=true
+        
+        if ! command -v get_device_config >/dev/null 2>&1; then
+            log "⚠️ 未找到 get_device_config 函数"
+            has_functions=false
+        fi
+        
+        if ! command -v get_device_description >/dev/null 2>&1; then
+            log "⚠️ 未找到 get_device_description 函数"
+            has_functions=false
+        fi
+        
+        if ! command -v get_all_devices >/dev/null 2>&1; then
+            log "⚠️ 未找到 get_all_devices 函数"
+            has_functions=false
+        fi
+        
+        if [ "$has_functions" = true ]; then
+            log "🎉 所有必需函数都存在"
+            
+            # 测试获取设备列表
+            if command -v get_all_devices >/dev/null 2>&1; then
+                local all_devices
+                if all_devices=$(get_all_devices 2>/dev/null); then
+                    log "📱 支持的设备: $all_devices"
+                else
+                    log "⚠️ 无法执行 get_all_devices 函数"
+                fi
+            fi
+            
+            return 0
+        else
+            log "❌ 支持文件缺少必需函数"
+            return 1
+        fi
+    else
+        log "❌ 无法加载支持文件（可能是语法错误或权限问题）"
+        return 1
+    fi
+}
+
+
+# ============ 自动修复内容 ============
+# 修复时间: Sun Feb  1 04:44:56 UTC 2026
+# 来源: fix.txt
+#【build_firmware_main.sh-04b】调试函数：显示所有可能的路径
+debug_find_support() {
+    log "🔍 调试：查找所有可能的 support.sh 文件"
+    
+    log "1. 从当前目录开始搜索:"
+    find . -name "support.sh" -type f 2>/dev/null | head -10
+    
+    log "2. 从仓库根目录搜索:"
+    if [ -d "$REPO_ROOT" ]; then
+        find "$REPO_ROOT" -name "support.sh" -type f 2>/dev/null | head -10
+    fi
+    
+    log "3. 搜索所有包含 firmware-config 的目录:"
+    find / -type d -name "firmware-config" 2>/dev/null | grep -v "/proc\|/sys" | head -5 | while read dir; do
+        log "  📁 $dir"
+        if [ -f "$dir/support.sh" ]; then
+            log "    ✅ 包含 support.sh"
+        else
+            log "    ❌ 不包含 support.sh"
+        fi
+    done
+    
+    log "4. 检查常见路径:"
+    local check_paths=(
+        "$(pwd)/firmware-config/support.sh"
+        "$(pwd)/../firmware-config/support.sh"
+        "$(pwd)/../../firmware-config/support.sh"
+        "/home/runner/work/openwrt/openwrt/firmware-config/support.sh"
+        "/mnt/openwrt-build/../firmware-config/support.sh"
+        "$GITHUB_WORKSPACE/firmware-config/support.sh"
+        "$REPO_ROOT/firmware-config/support.sh"
+    )
+    
+    for path in "${check_paths[@]}"; do
+        if [ -f "$path" ]; then
+            log "  ✅ $path"
+        else
+            log "  ❌ $path"
+        fi
+    done
+    
+    log "5. 环境变量:"
+    log "  GITHUB_WORKSPACE: ${GITHUB_WORKSPACE:-未设置}"
+    log "  REPO_ROOT: $REPO_ROOT"
+    log "  SUPPORT_DIR: $SUPPORT_DIR"
+    log "  PWD: $(pwd)"
+}
 
