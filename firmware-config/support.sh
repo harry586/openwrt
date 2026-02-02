@@ -1,7 +1,7 @@
 #!/bin/bash
 # firmware-config/support.sh
 # 设备支持系统配置文件
-#【support.sh-01】设备支持系统配置文件 v1.2
+#【support.sh-01】设备支持系统配置文件 v1.3
 
 # ==================== 设备配置函数 ====================
 #【support.sh-02】设备配置函数部分开始
@@ -20,7 +20,7 @@ get_device_config() {
             echo "ipq40xx generic asus_rt-ac42u ipq40xx"
             ;;
         "cmcc_rax3000m")
-            echo "mediatek mt7981 DEVICE_cmcc_rax3000m mt7981"
+            echo "mediatek mt7981 cmcc_rax3000m mt7981"  # 修正：使用cmcc_rax3000m作为设备标识
             ;;
         "netgear_3800")
             echo "ath79 generic netgear_wndr3800 ath79"
@@ -331,11 +331,12 @@ test_support_functions() {
 
 # 如果直接运行此脚本，显示帮助信息
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    echo "设备支持系统 v1.2"
+    echo "设备支持系统 v1.3"
     echo "=================="
     echo "🔧 主要更新:"
     echo "  - 主设备名称为 ac42u"
     echo "  - acrh17 设为别名"
+    echo "  - 修正 cmcc_rax3000m 的配置映射"
     echo "  - 修复固件名称生成"
     echo ""
     show_all_devices
