@@ -624,7 +624,7 @@ jobs:
                 while IFS= read -r firmware; do
                   FILENAME=$(basename "$firmware")
                   SIZE=$(ls -lh "$firmware" 2>/dev/null | awk '{print $5}' || echo "未知")
-                  echo "  - $FILENAME ($SIZE)"
+                    echo "  - $FILENAME ($SIZE)"
                 done <<< "$FIRMWARE_FILES"
               fi
             else
