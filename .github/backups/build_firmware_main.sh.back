@@ -210,7 +210,228 @@ create_build_dir() {
 # 【构建环境初始化】函数区域（工作流步骤6.4）
 # ==============================
 
-#【build_firmware_main.sh-13】构建环境初始化函数 - 修复LEDE分支问题和设备名称映射
+#【build_firmware_main.sh-13】构建环境初始化函数 - 修复cmcc设备名称映射
+initialize_build_env() {
+    local device_name=$1
+    local version_selection=$2
+    local config_mode=$3
+    local source_repo=${4:-"immortalwrt"}  # 添加第四个参数，默认immortalwrt
+    
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 版本选择 ==="
+    log "源代码仓库: $source_repo"
+    
+    # 根据仓库选择不同的URL - 只保留immortalwrt和lede
+    case "$source_repo" in
+        "immortalwrt")
+            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+            ;;
+        "lede")
+            SELECTED_REPO_URL="https://github.com/coolsnowwolf/lede.git"
+            SELECTED_BRANCH="master"  # LEDE使用master分支
+            ;;
+        *)
+            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+            source_repo="immortalwrt"
+            ;;
+    esac
+    
+    # 根据版本选择分支（LEDE除外）- 修复分支选择逻辑
+    if [ "$source_repo" = "lede" ]; then
+        # LEDE仓库只使用master分支
+        SELECTED_BRANCH="master"
+        log "🔧 LEDE仓库使用master分支"
+    else
+        # ImmortalWrt仓库根据版本选择分支
+        if [ "$version_selection" = "23.05" ]; then
+            SELECTED_BRANCH="openwrt-23.05"
+        else
+            SELECTED_BRANCH="openwrt-21.02"
+        fi
+    fi
+    
+    # 设置SOURCE_REPO环境变量
+    SOURCE_REPO="$source_repo"
+    
+    log "✅ 版本选择完成: $SELECTED_BRANCH (仓库: $source_repo)"
+    
+    log "=== 克隆源码 ==="
+    log "仓库: $SELECTED_REPO_URL"
+    log "分支: $SELECTED_BRANCH"
+    
+    sudo rm -rf ./* ./.git* 2>/dev/null || true
+    
+    git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
+    log "✅ 源码克隆完成"
+    
+    # 检查克隆的文件
+    local important_source_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
+    for file in "${important_source_files[@]}"; do
+        if [ -f "$file" ]; then
+            log "✅ 源码文件存在: $file"
+        else
+            log "❌ 源码文件缺失: $file"
+        fi
+    done
+    
+    log "=== 设备配置 ==="
+    DEVICE_NAME="$device_name"
+    
+    # 加载设备支持脚本
+    if load_device_support; then
+        local device_config=$(get_device_config "$device_name")
+        TARGET=$(echo $device_config | awk '{print $1}')
+        SUBTARGET=$(echo $device_config | awk '{print $2}')
+        DEVICE=$(echo $device_config | awk '{print $3}')
+        PLATFORM=$(echo $device_config | awk '{print $4}')
+        
+        local device_desc=$(get_device_description "$device_name")
+        log "🔧 设备: $device_desc"
+        log "目标: $TARGET"
+        log "子目标: $SUBTARGET"
+        log "设备: $DEVICE"
+        log "平台: $PLATFORM"
+        
+        # 特殊处理：对于LEDE仓库，需要确保设备名称正确
+        if [ "$SOURCE_REPO" = "lede" ]; then
+            log "🔧 LEDE仓库设备名称调整"
+            # 检查设备是否以"generic_"开头，如果是则去掉前缀
+            if [[ "$DEVICE" == generic_* ]]; then
+                DEVICE="${DEVICE#generic_}"
+                log "📝 调整设备名称: $DEVICE"
+            fi
+        fi
+    else
+        # 默认配置（兼容旧版）- 修复设备名称映射，添加mt7981支持
+        case "$device_name" in
+            "ac42u"|"acrh17")
+                # acrh17设为ac42u的别名，主要使用ac42u
+                TARGET="ipq40xx"
+                SUBTARGET="generic"
+                if [ "$device_name" = "acrh17" ]; then
+                    log "🔧 检测到acrh17别名，自动转换为ac42u"
+                    DEVICE_NAME="ac42u"  # 统一使用ac42u作为设备名称
+                fi
+                
+                if [ "$SOURCE_REPO" = "lede" ]; then
+                    DEVICE="asus_rt-acrh17"  # LEDE中使用acrh17
+                else
+                    DEVICE="asus_rt-ac42u"   # ImmortalWrt中使用ac42u
+                fi
+                PLATFORM="ipq40xx"
+                log "📝 华硕设备: 主要名称ac42u，别名acrh17"
+                ;;
+            "mi_router_4a_gigabit"|"r4ag")
+                TARGET="ramips"
+                SUBTARGET="mt76x8"
+                DEVICE="xiaomi_mi-router-4a-gigabit"
+                PLATFORM="ramips"
+                ;;
+            "mi_router_3g"|"r3g")
+                TARGET="ramips"
+                SUBTARGET="mt7621"
+                DEVICE="xiaomi_mi-router-3g"
+                PLATFORM="ramips"
+                ;;
+            "netgear_3800")
+                TARGET="ath79"
+                SUBTARGET="generic"
+                if [ "$SOURCE_REPO" = "lede" ]; then
+                    DEVICE="netgear_wndr3800"  # LEDE中的设备名称
+                else
+                    DEVICE="netgear_wndr3800"  # ImmortalWrt中的设备名称
+                fi
+                PLATFORM="ath79"
+                ;;
+            "cmcc_rax3000m"|"rax3000m")
+                TARGET="mediatek"
+                SUBTARGET="mt7981"
+                # 修复：确保设备名称正确
+                if [ "$SOURCE_REPO" = "lede" ]; then
+                    DEVICE="cmcc_rax3000m"  # LEDE中的设备名称
+                else
+                    DEVICE="cmcc_rax3000m"  # ImmortalWrt中的设备名称
+                fi
+                PLATFORM="mediatek"
+                log "🔧 检测到MT7981平台设备: $device_name"
+                # 修复：确保DEVICE_NAME是标准名称
+                DEVICE_NAME="cmcc_rax3000m"
+                ;;
+            *)
+                # 尝试根据设备名称猜测平台
+                if [[ "$device_name" == *mt7981* ]] || [[ "$device_name" == *rax3000m* ]] || [[ "$device_name" == *cmcc* ]]; then
+                    TARGET="mediatek"
+                    SUBTARGET="mt7981"
+                    DEVICE="cmcc_rax3000m"
+                    DEVICE_NAME="cmcc_rax3000m"
+                    PLATFORM="mediatek"
+                    log "🔧 猜测为MT7981平台设备: $device_name"
+                elif [[ "$device_name" == *ipq* ]] || [[ "$device_name" == *ipq40xx* ]]; then
+                    TARGET="ipq40xx"
+                    SUBTARGET="generic"
+                    DEVICE="$device_name"
+                    PLATFORM="ipq40xx"
+                elif [[ "$device_name" == *mt76* ]] || [[ "$device_name" == *ramips* ]]; then
+                    TARGET="ramips"
+                    SUBTARGET="mt76x8"
+                    DEVICE="$device_name"
+                    PLATFORM="ramips"
+                else
+                    TARGET="ipq40xx"
+                    SUBTARGET="generic"
+                    DEVICE="$device_name"
+                    PLATFORM="generic"
+                fi
+                ;;
+        esac
+        log "🔧 检测到设备: $device_name"
+        log "📝 标准化设备名称: $DEVICE_NAME"
+        log "目标: $TARGET"
+        log "子目标: $SUBTARGET"
+        log "设备: $DEVICE"
+        log "平台: $PLATFORM"
+    fi
+    
+    # 修复：确保cmcc_rax3000m的设备名称正确
+    if [[ "$DEVICE_NAME" == *cmcc* ]] || [[ "$DEVICE_NAME" == *rax3000m* ]]; then
+        log "🔧 修复CMCC RAX3000M设备名称..."
+        if [ "$TARGET" != "mediatek" ] || [ "$SUBTARGET" != "mt7981" ]; then
+            log "⚠️ CMCC RAX3000M平台配置不正确，自动修正"
+            TARGET="mediatek"
+            SUBTARGET="mt7981"
+            DEVICE="cmcc_rax3000m"
+            DEVICE_NAME="cmcc_rax3000m"
+            PLATFORM="mediatek"
+        fi
+    fi
+    
+    CONFIG_MODE="$config_mode"
+    
+    save_env
+    
+    echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
+    echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
+    echo "TARGET=$TARGET" >> $GITHUB_ENV
+    echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
+    echo "DEVICE=$DEVICE" >> $GITHUB_ENV
+    echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
+    echo "DEVICE_NAME=$DEVICE_NAME" >> $GITHUB_ENV
+    echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
+    echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+    
+    # 额外验证cmcc设备配置
+    if [[ "$DEVICE_NAME" == *cmcc* ]] || [[ "$DEVICE_NAME" == *rax3000m* ]]; then
+        log "🎯 CMCC RAX3000M配置验证:"
+        log "  设备名称: $DEVICE_NAME"
+        log "  目标平台: $TARGET/$SUBTARGET"
+        log "  设备标识: $DEVICE"
+        log "  预期固件名: immortalwrt-mediatek-mt7981-cmcc_rax3000m"
+    fi
+    
+    log "✅ 构建环境初始化完成"
+}
+
 initialize_build_env() {
     local device_name=$1
     local version_selection=$2
@@ -875,6 +1096,207 @@ initialize_build_env() {
 #【build_firmware_main.sh-14】编译器环境初始化函数 - 修复LEDE SDK下载问题
 initialize_compiler_env() {
     local device_name="$1"
+    log "=== 初始化编译器环境（下载OpenWrt官方SDK）- 修复LEDE问题 ==="
+    
+    # 首先加载环境变量 - 修复检查逻辑
+    log "🔍 检查环境文件..."
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        log "✅ 从 $BUILD_DIR/build_env.sh 加载环境变量"
+        
+        # 显示关键环境变量
+        log "📋 当前环境变量:"
+        log "  SELECTED_BRANCH: $SELECTED_BRANCH"
+        log "  TARGET: $TARGET"
+        log "  SUBTARGET: $SUBTARGET"
+        log "  DEVICE: $DEVICE"
+        log "  CONFIG_MODE: $CONFIG_MODE"
+        log "  REPO_ROOT: $REPO_ROOT"
+        log "  COMPILER_DIR: $COMPILER_DIR"
+        log "  DEVICE_NAME: $DEVICE_NAME"
+        log "  PLATFORM: $PLATFORM"
+        log "  SOURCE_REPO: $SOURCE_REPO"
+    else
+        log "⚠️ 环境文件不存在: $BUILD_DIR/build_env.sh"
+        log "💡 环境文件应该在步骤6.3中创建，但未找到"
+        
+        # 设置默认值
+        if [ -z "$SELECTED_BRANCH" ]; then
+            SELECTED_BRANCH="openwrt-21.02"
+            log "⚠️ SELECTED_BRANCH未设置，使用默认值: $SELECTED_BRANCH"
+        fi
+        
+        if [ -z "$SOURCE_REPO" ]; then
+            SOURCE_REPO="immortalwrt"
+            log "⚠️ SOURCE_REPO未设置，使用默认值: $SOURCE_REPO"
+        fi
+        
+        if [ -z "$TARGET" ]; then
+            # 使用设备支持脚本获取配置
+            if load_device_support; then
+                local device_config=$(get_device_config "$device_name")
+                TARGET=$(echo $device_config | awk '{print $1}')
+                SUBTARGET=$(echo $device_config | awk '{print $2}')
+                DEVICE=$(echo $device_config | awk '{print $3}')
+                PLATFORM=$(echo $device_config | awk '{print $4}')
+                log "⚠️ 平台变量未设置，从设备支持脚本获取: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE, PLATFORM=$PLATFORM"
+            else
+                # 默认配置
+                TARGET="ipq40xx"
+                SUBTARGET="generic"
+                DEVICE="$device_name"
+                PLATFORM="generic"
+                log "⚠️ 平台变量未设置，使用默认值: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE"
+            fi
+        fi
+        
+        if [ -z "$CONFIG_MODE" ]; then
+            CONFIG_MODE="normal"
+            log "⚠️ CONFIG_MODE未设置，使用默认值: $CONFIG_MODE"
+        fi
+        
+        if [ -z "$DEVICE_NAME" ]; then
+            DEVICE_NAME="$device_name"
+            log "⚠️ DEVICE_NAME未设置，使用: $DEVICE_NAME"
+        fi
+        
+        if [ -z "$PLATFORM" ]; then
+            PLATFORM="generic"
+            log "⚠️ PLATFORM未设置，使用默认值: $PLATFORM"
+        fi
+        
+        # 保存到环境文件
+        save_env
+        log "✅ 已创建环境文件: $BUILD_DIR/build_env.sh"
+    fi
+    
+    # 检查环境变量中的COMPILER_DIR
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+        log "✅ 使用环境变量中的编译器目录: $COMPILER_DIR"
+        
+        # 验证编译器目录是否真的包含GCC
+        log "🔍 验证编译器目录有效性..."
+        local gcc_files=$(find "$COMPILER_DIR" -type f -executable \
+          -name "*gcc" \
+          ! -name "*gcc-ar" \
+          ! -name "*gcc-ranlib" \
+          ! -name "*gcc-nm" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
+          2>/dev/null | head -3)
+        
+        if [ -n "$gcc_files" ]; then
+            log "✅ 确认编译器目录包含真正的GCC"
+            local first_gcc=$(echo "$gcc_files" | head -1)
+            log "  🎯 GCC文件: $(basename "$first_gcc")"
+            log "  🔧 GCC版本: $("$first_gcc" --version 2>&1 | head -1)"
+            
+            # 保存到环境变量
+            save_env
+            
+            # 验证编译器
+            verify_compiler_files
+            return 0
+        else
+            log "⚠️ 编译器目录存在但不包含真正的GCC，将重新下载SDK"
+        fi
+    else
+        log "🔍 COMPILER_DIR未设置或目录不存在"
+    fi
+    
+    # 根据设备确定平台（使用已设置的变量）
+    log "目标平台: $TARGET/$SUBTARGET"
+    log "目标设备: $DEVICE"
+    log "OpenWrt版本: $SELECTED_BRANCH"
+    log "平台类型: $PLATFORM"
+    log "源代码仓库: $SOURCE_REPO"
+    
+    # 修复：对于LEDE仓库，不需要下载SDK
+    if [ "$SOURCE_REPO" = "lede" ]; then
+        log "🔧 LEDE仓库使用内置工具链，无需下载OpenWrt SDK"
+        log "💡 LEDE会使用自己的工具链进行编译"
+        export COMPILER_DIR=""
+        save_env
+        return 0
+    fi
+    
+    # 简化版本字符串（从openwrt-23.05转为23.05）
+    local version_for_sdk=""
+    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+        version_for_sdk="23.05"
+    elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+        version_for_sdk="21.02"
+    elif [ "$SELECTED_BRANCH" = "master" ]; then
+        # 修复：对于非LEDE仓库的master分支，使用21.02 SDK
+        version_for_sdk="21.02"
+        log "🔧 master分支使用21.02 SDK"
+    else
+        # 尝试提取版本号
+        version_for_sdk=$(echo "$SELECTED_BRANCH" | grep -o "[0-9][0-9]\.[0-9][0-9]" || echo "21.02")
+        log "⚠️ 无法识别的版本分支，尝试使用: $version_for_sdk"
+    fi
+    
+    log "📌 SDK版本: $version_for_sdk"
+    log "📌 目标平台: $TARGET/$SUBTARGET"
+    
+    # 详细显示SDK下载信息
+    log "🔍 SDK下载详细信息:"
+    log "  设备: $device_name"
+    log "  OpenWrt版本: $SELECTED_BRANCH"
+    log "  SDK版本: $version_for_sdk"
+    log "  目标: $TARGET"
+    log "  子目标: $SUBTARGET"
+    log "  平台: $PLATFORM"
+    log "  源代码仓库: $SOURCE_REPO"
+    
+    # 下载OpenWrt官方SDK
+    log "🚀 开始下载OpenWrt官方SDK..."
+    if download_openwrt_sdk "$TARGET" "$SUBTARGET" "$version_for_sdk"; then
+        log "🎉 OpenWrt SDK下载并设置成功"
+        log "📌 编译器目录: $COMPILER_DIR"
+        
+        # 显示SDK目录信息
+        if [ -d "$COMPILER_DIR" ]; then
+            log "📊 SDK目录信息:"
+            log "  目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
+            log "  文件数量: $(find "$COMPILER_DIR" -type f 2>/dev/null | wc -l)"
+            
+            # 查找GCC编译器，排除虚假编译器
+            local gcc_file=$(find "$COMPILER_DIR" -type f -executable \
+              -name "*gcc" \
+              ! -name "*gcc-ar" \
+              ! -name "*gcc-ranlib" \
+              ! -name "*gcc-nm" \
+              ! -path "*dummy-tools*" \
+              ! -path "*scripts*" \
+              2>/dev/null | head -1)
+            
+            if [ -n "$gcc_file" ]; then
+                log "✅ 找到SDK中的GCC编译器: $(basename "$gcc_file")"
+                log "  🔧 完整路径: $gcc_file"
+                log "  📋 版本信息: $("$gcc_file" --version 2>&1 | head -1)"
+            fi
+        fi
+        
+        # 保存到环境文件
+        save_env
+        
+        return 0
+    else
+        log "❌ OpenWrt SDK下载失败"
+        log "💡 将使用OpenWrt自动构建的编译器作为后备"
+        
+        # 设置空的编译器目录
+        export COMPILER_DIR=""
+        save_env
+        
+        # 不返回错误，继续执行
+        return 0
+    fi
+}
+
+initialize_compiler_env() {
+    local device_name="$1"
     log "=== 初始化编译器环境（下载OpenWrt官方SDK）- 修复版 ==="
     
     # 首先加载环境变量 - 修复检查逻辑
@@ -1461,7 +1883,175 @@ initialize_compiler_env() {
     fi
 }
 
-#【build_firmware_main.sh-07】SDK下载函数 - 修复URL错误
+#【build_firmware_main.sh-07】SDK下载函数 - 修复ath79平台URL
+download_openwrt_sdk() {
+    local target="$1"
+    local subtarget="$2"
+    local version="$3"
+    
+    log "=== 下载OpenWrt官方SDK工具链 ==="
+    log "目标平台: $target/$subtarget"
+    log "OpenWrt版本: $version"
+    
+    # 确定SDK下载URL
+    local sdk_url=""
+    local sdk_filename=""
+    
+    # 加载设备支持脚本获取SDK URL
+    if load_device_support; then
+        sdk_url=$(get_sdk_url "$target" "$subtarget" "$version")
+    fi
+    
+    if [ -z "$sdk_url" ]; then
+        # 如果支持脚本没有提供URL，使用内置配置 - 修复URL错误
+        if [ "$version" = "23.05" ] || [ "$version" = "openwrt-23.05" ]; then
+            # OpenWrt 23.05 SDK - 修复GCC版本为12.3.0并修正URL
+            case "$target" in
+                "ipq40xx")
+                    sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
+                    ;;
+                "ramips")
+                    if [ "$subtarget" = "mt76x8" ]; then
+                        # 修复：ramips/mt76x8平台使用_musl而非_musl_eabi
+                        sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt76x8/openwrt-sdk-23.05.3-ramips-mt76x8_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+                    elif [ "$subtarget" = "mt7621" ]; then
+                        sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt7621/openwrt-sdk-23.05.3-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+                    elif [ "$subtarget" = "mt7981" ]; then
+                        # 添加mediatek mt7981支持（如cmcc_rax3000m）
+                        log "🔧 检测到MT7981平台，使用mt7981 SDK"
+                        sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/mediatek/mt7981/openwrt-sdk-23.05.3-mediatek-mt7981_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+                    fi
+                    ;;
+                "ath79")
+                    # 修复：ath79平台的URL - 使用generic子目标
+                    sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ath79/generic/openwrt-sdk-23.05.3-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+                    log "✅ 使用ath79/generic SDK"
+                    ;;
+                "mediatek")
+                    # 添加mediatek平台支持
+                    if [ "$subtarget" = "mt7981" ]; then
+                        sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/mediatek/mt7981/openwrt-sdk-23.05.3-mediatek-mt7981_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+                    elif [ "$subtarget" = "mt7622" ]; then
+                        sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/mediatek/mt7622/openwrt-sdk-23.05.3-mediatek-mt7622_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+                    fi
+                    ;;
+            esac
+        elif [ "$version" = "21.02" ] || [ "$version" = "openwrt-21.02" ]; then
+            # OpenWrt 21.02 SDK - GCC版本保持8.4.0并修正URL
+            case "$target" in
+                "ipq40xx")
+                    # 修复：添加https前缀
+                    sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+                    ;;
+                "ramips")
+                    if [ "$subtarget" = "mt76x8" ]; then
+                        # 修复：ramips/mt76x8平台使用_musl而非_musl_eabi
+                        sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt76x8/openwrt-sdk-21.02.7-ramips-mt76x8_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+                    elif [ "$subtarget" = "mt7621" ]; then
+                        sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt7621/openwrt-sdk-21.02.7-ramips-mt7621_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+                    fi
+                    ;;
+                "ath79")
+                    # 修复：ath79平台的URL
+                    sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ath79/generic/openwrt-sdk-21.02.7-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+                    log "✅ 使用ath79/generic SDK (21.02)"
+                    ;;
+                "mediatek")
+                    # 21.02可能没有mediatek SDK，使用ramips作为后备
+                    log "⚠️ 21.02版本可能没有mediatek SDK，尝试使用ramips SDK"
+                    sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt7621/openwrt-sdk-21.02.7-ramips-mt7621_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+                    ;;
+            esac
+        fi
+    fi
+    
+    if [ -z "$sdk_url" ]; then
+        log "❌ 无法确定SDK下载URL"
+        log "🔍 尝试的平台: $target/$subtarget, 版本: $version"
+        log "💡 可能的URL格式:"
+        log "  https://downloads.openwrt.org/releases/[版本]/targets/[target]/[subtarget]/openwrt-sdk-[版本]-[target]-[subtarget]_gcc-[GCC版本]_musl.Linux-x86_64.tar.xz"
+        return 1
+    fi
+    
+    sdk_filename=$(basename "$sdk_url")
+    log "📥 SDK下载URL: $sdk_url"
+    log "📁 SDK文件名: $sdk_filename"
+    
+    # 创建SDK目录
+    local sdk_dir="$BUILD_DIR/sdk"
+    mkdir -p "$sdk_dir"
+    
+    # 下载SDK
+    log "开始下载OpenWrt SDK..."
+    if wget --tries=3 --timeout=30 -q -O "$sdk_dir/$sdk_filename" "$sdk_url"; then
+        log "✅ SDK下载成功"
+    else
+        log "⚠️ 首次下载失败，尝试备用下载..."
+        # 尝试使用curl
+        if curl -L --connect-timeout 30 --retry 3 -o "$sdk_dir/$sdk_filename" "$sdk_url"; then
+            log "✅ SDK下载成功（使用curl）"
+        else
+            log "❌ SDK下载失败"
+            log "💡 可能是URL不正确或网络问题，URL: $sdk_url"
+            return 1
+        fi
+    fi
+    
+    # 解压SDK
+    log "解压SDK..."
+    cd "$sdk_dir"
+    if tar -xf "$sdk_filename" --strip-components=1; then
+        log "✅ SDK解压成功"
+        rm -f "$sdk_filename"
+    else
+        log "❌ SDK解压失败"
+        return 1
+    fi
+    
+    # 查找SDK中的编译器
+    local toolchain_dir=""
+    if [ -d "toolchain" ]; then
+        toolchain_dir="$sdk_dir/toolchain"
+        log "✅ 找到toolchain目录: $toolchain_dir"
+    else
+        # 在SDK中搜索编译器，排除虚假的dummy-tools
+        local gcc_file=$(find "$sdk_dir" -type f -executable \
+            -name "*gcc" \
+            ! -name "*gcc-ar" \
+            ! -name "*gcc-ranlib" \
+            ! -name "*gcc-nm" \
+            ! -path "*dummy-tools*" \
+            ! -path "*scripts*" \
+            2>/dev/null | head -1)
+        
+        if [ -n "$gcc_file" ]; then
+            toolchain_dir=$(dirname "$(dirname "$gcc_file")")
+            log "✅ 在SDK中找到GCC编译器: $gcc_file"
+            log "📁 编译器目录: $toolchain_dir"
+        else
+            # 尝试查找staging_dir中的工具链
+            if [ -d "staging_dir" ]; then
+                toolchain_dir=$(find "$sdk_dir/staging_dir" -name "toolchain-*" -type d | head -1)
+                if [ -n "$toolchain_dir" ]; then
+                    log "✅ 在staging_dir中找到工具链目录: $toolchain_dir"
+                fi
+            fi
+        fi
+    fi
+    
+    if [ -n "$toolchain_dir" ] && [ -d "$toolchain_dir" ]; then
+        log "✅ 找到SDK中的编译器目录: $toolchain_dir"
+        export COMPILER_DIR="$toolchain_dir"
+        
+        # 验证编译器
+        verify_compiler_files
+        return 0
+    else
+        log "❌ 未在SDK中找到编译器目录"
+        return 1
+    fi
+}
+
 download_openwrt_sdk() {
     local target="$1"
     local subtarget="$2"
@@ -2407,7 +2997,462 @@ validate_config_syntax() {
 # 【配置应用】函数区域（工作流步骤16.3-16.7）
 # ==============================
 
-#【build_firmware_main.sh-21】配置应用函数 - 修复内核版本问题并增强显示
+#【build_firmware_main.sh-21】配置应用函数 - 修复USB配置强制启用逻辑
+apply_config() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 应用配置并显示详情（增强版）==="
+    
+    if [ ! -f ".config" ]; then
+        log "❌ 错误: .config 文件不存在，无法应用配置"
+        return 1
+    fi
+    
+    log "📋 配置详情:"
+    log "配置文件大小: $(ls -lh .config | awk '{print $5}')"
+    log "配置行数: $(wc -l < .config)"
+    
+    # 先备份原始配置文件
+    if [ -f ".config" ]; then
+        local backup_file=".config.backup.$(date +%Y%m%d_%H%M%S)"
+        cp ".config" "$backup_file"
+        log "✅ 已备份原始配置文件: $backup_file"
+    fi
+    
+    # 步骤1: 验证配置语法
+    log "🔍 步骤1: 验证配置语法..."
+    if validate_config_syntax; then
+        log "✅ 配置语法验证通过"
+    else
+        log "⚠️ 配置语法有问题，尝试自动修复..."
+        # 尝试修复常见问题
+        make defconfig 2>&1 | tee /tmp/defconfig_fix.log
+        if [ $? -eq 0 ]; then
+            log "✅ defconfig 修复成功"
+        else
+            log "❌ defconfig 修复失败，但继续执行"
+            log "defconfig 错误日志（前20行）:"
+            cat /tmp/defconfig_fix.log | tail -20
+        fi
+    fi
+    
+    # 步骤2: 清理重复配置和冲突配置
+    log "🔧 步骤2: 清理重复和冲突配置..."
+    
+    # 清理重复的USB配置
+    local usb_configs=(
+        "kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-xhci-hcd"
+        "kmod-usb-xhci-pci" "kmod-usb-xhci-plat-hcd" "kmod-usb-ohci-pci"
+        "kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3"
+        "kmod-usb-dwc3-of-simple" "kmod-usb-xhci-mtk" "kmod-usb2-ath79"
+    )
+    
+    for config in "${usb_configs[@]}"; do
+        # 删除重复的启用配置
+        local enabled_count=$(grep -c "^CONFIG_PACKAGE_${config}=y" .config)
+        if [ $enabled_count -gt 1 ]; then
+            log "🔄 清理重复的启用配置: $config ($enabled_count 次)"
+            awk -v cfg="CONFIG_PACKAGE_${config}=y" '$0 == cfg && !seen[cfg]++' .config > .config.tmp && mv .config.tmp .config
+        fi
+        
+        # 删除重复的禁用配置
+        local disabled_count=$(grep -c "^# CONFIG_PACKAGE_${config} is not set" .config)
+        if [ $disabled_count -gt 1 ]; then
+            log "🔄 清理重复的禁用配置: $config ($disabled_count 次)"
+            awk -v cfg="# CONFIG_PACKAGE_${config} is not set" '$0 == cfg && !seen[cfg]++' .config > .config.tmp && mv .config.tmp .config
+        fi
+        
+        # 解决冲突：如果既有启用又有禁用，保留启用
+        if [ $enabled_count -gt 0 ] && [ $disabled_count -gt 0 ]; then
+            log "🔄 解决配置冲突: $config (保留启用，删除禁用)"
+            sed -i "/^# CONFIG_PACKAGE_${config} is not set/d" .config
+        fi
+    done
+    
+    # 步骤3: 运行 make defconfig (使用改进的错误处理)
+    log "🔄 步骤3: 运行 make defconfig..."
+    
+    # 清除旧的defconfig日志
+    rm -f /tmp/defconfig.log
+    
+    # 检查内核版本配置 - 修复内核版本缺失问题
+    log "🔍 检查内核版本配置..."
+    
+    # 修复内核版本文件问题
+    if [ -f "include/kernel-version.mk" ]; then
+        # 检查内核版本是否已设置
+        local kernel_patchver=$(grep "KERNEL_PATCHVER" "include/kernel-version.mk" | cut -d':' -f2 | xargs)
+        if [ -z "$kernel_patchver" ] || [ "$kernel_patchver" = "" ]; then
+            log "⚠️ 内核版本未设置，尝试自动修复..."
+            
+            # 从目标平台Makefile获取内核版本
+            if [ -f "target/linux/$TARGET/Makefile" ]; then
+                local target_kernel=$(grep "KERNEL_PATCHVER" "target/linux/$TARGET/Makefile" | cut -d':' -f2 | xargs)
+                if [ -n "$target_kernel" ]; then
+                    log "🔧 设置内核版本为: $target_kernel"
+                    sed -i "s/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=$target_kernel/" "include/kernel-version.mk" 2>/dev/null || true
+                    
+                    # 检查是否设置成功
+                    kernel_patchver=$(grep "KERNEL_PATCHVER" "include/kernel-version.mk" | cut -d':' -f2 | xargs)
+                    if [ -n "$kernel_patchver" ]; then
+                        log "✅ 内核版本设置成功: $kernel_patchver"
+                    fi
+                fi
+            fi
+        else
+            log "✅ 内核版本已设置: $kernel_patchver"
+        fi
+    else
+        log "⚠️ 内核版本文件不存在: include/kernel-version.mk"
+        log "🔧 尝试创建内核版本文件..."
+        
+        # 尝试从目标平台获取内核版本
+        local target_kernel=""
+        if [ -f "target/linux/$TARGET/Makefile" ]; then
+            target_kernel=$(grep "KERNEL_PATCHVER" "target/linux/$TARGET/Makefile" | cut -d':' -f2 | xargs)
+        fi
+        
+        # 如果没有找到，使用默认值
+        if [ -z "$target_kernel" ]; then
+            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] || [ "$SELECTED_BRANCH" = "master" ]; then
+                target_kernel="5.15"
+            else
+                target_kernel="5.4"
+            fi
+            log "⚠️ 无法从目标平台获取内核版本，使用默认: $target_kernel"
+        fi
+        
+        # 创建内核版本文件
+        echo "# Kernel version" > "include/kernel-version.mk"
+        echo "LINUX_VERSION-5.15 = .19" >> "include/kernel-version.mk"
+        echo "LINUX_KERNEL_HASH-5.15.19 = 3e6a6b6f8c3c8e8c8f8c3c8e8c8f8c3c8e8c8f8c3c8e8c8f8c3c8e8c8f8c3c8" >> "include/kernel-version.mk"
+        echo "KERNEL_PATCHVER:=$target_kernel" >> "include/kernel-version.mk"
+        log "✅ 创建内核版本文件，版本: $target_kernel"
+    fi
+    
+    # 清理tmp目录中的错误配置文件
+    log "🔧 清理tmp目录中的错误配置文件..."
+    if [ -f "tmp/.config-package.in" ]; then
+        # 删除包含错误语法和---help---的行
+        sed -i '/^---help---/d;/^Ntfs-3g$/d;/^If/d;/^etc\.$/d;/^of$/d' "tmp/.config-package.in" 2>/dev/null || true
+        log "✅ 清理tmp/.config-package.in文件"
+    fi
+    
+    # 运行defconfig并捕获详细日志
+    if ! make defconfig 2>&1 | tee /tmp/defconfig.log; then
+        log "❌ make defconfig 失败"
+        log "详细错误信息:"
+        cat /tmp/defconfig.log | tail -30
+        
+        # 尝试分析错误原因
+        if grep -q "unknown statement\|syntax error" /tmp/defconfig.log; then
+            log "💡 错误分析: 发现语法错误或未知语句"
+            log "🔧 尝试修复: 清理配置文件后重试..."
+            
+            # 再次清理配置文件
+            cp .config .config.original.backup
+            log "✅ 备份原始配置文件: .config.original.backup"
+            
+            # 删除所有注释和空行，只保留配置项
+            grep -E '^(CONFIG_|# CONFIG_)' .config > .config.clean
+            
+            # 删除错误的行
+            sed -i '/^---help---/d;/^Ntfs-3g$/d;/^If/d;/^etc\.$/d;/^of$/d;/^[[:space:]]*$/d' .config.clean
+            
+            # 排序并去重
+            sort -u .config.clean > .config
+            
+            # 清理临时文件
+            rm -f .config.clean
+            
+            log "✅ 清理配置文件完成"
+            
+            # 再次尝试defconfig
+            log "🔄 重新运行 make defconfig..."
+            if make defconfig 2>&1 | tee /tmp/defconfig_retry.log; then
+                log "✅ defconfig 修复成功"
+            else
+                log "❌ defconfig 仍然失败"
+                log "第二次尝试的错误日志:"
+                cat /tmp/defconfig_retry.log | tail -20
+                
+                # 尝试强制修复内核版本问题
+                if grep -q "Missing kernel version" /tmp/defconfig_retry.log; then
+                    log "🚨 发现内核版本缺失错误"
+                    log "🔧 强制修复: 手动设置内核版本..."
+                    
+                    if [ -f "include/kernel-version.mk" ]; then
+                        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] || [ "$SELECTED_BRANCH" = "master" ]; then
+                            sed -i 's/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=5.15/' "include/kernel-version.mk"
+                            log "✅ 设置内核版本为 5.15"
+                        else
+                            sed -i 's/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=5.4/' "include/kernel-version.mk"
+                            log "✅ 设置内核版本为 5.4"
+                        fi
+                        
+                        # 再次尝试
+                        log "🔄 第三次运行 make defconfig..."
+                        if make defconfig 2>&1 | tee /tmp/defconfig_third.log; then
+                            log "✅ defconfig 第三次尝试成功"
+                        else
+                            log "❌ defconfig 仍然失败"
+                            log "⚠️ 但继续执行，让构建过程自然失败"
+                        fi
+                    fi
+                else
+                    log "⚠️ 但继续执行，让构建过程自然失败"
+                fi
+            fi
+        else
+            log "⚠️ 无法自动修复defconfig错误，但继续执行"
+        fi
+    else
+        log "✅ make defconfig 成功"
+    fi
+    
+    # 步骤4: 强制启用关键USB驱动（防止defconfig删除）- 修复版
+    log "🔧 步骤4: 确保关键USB驱动被启用（修复版）..."
+    
+    # 定义关键USB驱动 - 修复：确保USB 3.0驱动被启用
+    local critical_usb_drivers=(
+        "CONFIG_PACKAGE_kmod-usb-core=y"
+        "CONFIG_PACKAGE_kmod-usb2=y"
+        "CONFIG_PACKAGE_kmod-usb3=y"
+        "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
+        "CONFIG_PACKAGE_kmod-usb-xhci-pci=y"
+        "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y"
+        "CONFIG_PACKAGE_kmod-usb-ohci=y"
+        "CONFIG_PACKAGE_kmod-usb-ohci-pci=y"
+        "CONFIG_PACKAGE_kmod-usb-dwc3=y"
+        "CONFIG_PACKAGE_kmod-usb-storage=y"
+        "CONFIG_PACKAGE_kmod-scsi-core=y"
+        "CONFIG_PACKAGE_kmod-scsi-generic=y"
+    )
+    
+    # 平台专用驱动 - 修复：确保所有平台的专用驱动都被正确添加
+    if [ "$PLATFORM" = "ipq40xx" ]; then
+        critical_usb_drivers+=(
+            "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y"
+            "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y"
+            "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y"
+        )
+    elif [ "$PLATFORM" = "ramips" ]; then
+        critical_usb_drivers+=(
+            "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y"
+            "CONFIG_PACKAGE_kmod-usb-ohci=y"
+        )
+    elif [ "$PLATFORM" = "ath79" ]; then
+        critical_usb_drivers+=(
+            "CONFIG_PACKAGE_kmod-usb2-ath79=y"
+            "CONFIG_PACKAGE_kmod-usb-ohci=y"
+        )
+    elif [ "$PLATFORM" = "mediatek" ]; then
+        # MT7981平台专用驱动
+        critical_usb_drivers+=(
+            "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y"
+        )
+    fi
+    
+    # 添加或确保关键驱动 - 修复逻辑
+    local added_drivers=0
+    local skipped_drivers=0
+    for driver in "${critical_usb_drivers[@]}"; do
+        local config_name=$(echo "$driver" | cut -d'=' -f1)
+        local config_value=$(echo "$driver" | cut -d'=' -f2)
+        
+        # 检查是否已经存在启用配置
+        if grep -q "^${config_name}=${config_value}" .config; then
+            log "ℹ️ 已存在: $config_name"
+            skipped_drivers=$((skipped_drivers + 1))
+            continue
+        fi
+        
+        # 检查是否有禁用配置
+        if grep -q "^# ${config_name} is not set" .config; then
+            log "🔄 删除禁用配置: $config_name"
+            sed -i "/^# ${config_name} is not set/d" .config
+        fi
+        
+        # 添加启用配置
+        echo "$driver" >> .config
+        added_drivers=$((added_drivers + 1))
+        log "✅ 已添加: $config_name"
+    done
+    
+    log "📈 USB驱动修复统计: 添加了 $added_drivers 个驱动，跳过了 $skipped_drivers 个已有驱动"
+    
+    # 步骤5: 修复后验证USB配置
+    log "🔍 步骤5: 修复后验证USB配置..."
+    
+    echo "=== USB配置验证（修复后）==="
+    echo "1. USB核心: $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" .config && echo "✅" || echo "❌")"
+    echo "2. USB 2.0: $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config && echo "✅" || echo "❌")"
+    echo "3. USB 3.0: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config && echo "✅" || echo "❌")"
+    echo "4. USB xHCI: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo "✅" || echo "❌")"
+    echo "5. USB存储: $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" .config && echo "✅" || echo "❌")"
+    
+    # 根据平台验证专用驱动
+    if [ "$PLATFORM" = "ipq40xx" ]; then
+        echo "6. 高通USB 3.0: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo "✅" || echo "❌")"
+    elif [ "$PLATFORM" = "ramips" ]; then
+        echo "6. 雷凌USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config && echo "✅" || echo "❌")"
+    elif [ "$PLATFORM" = "ath79" ]; then
+        echo "6. ath79 USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb2-ath79=y" .config && echo "✅" || echo "❌")"
+    elif [ "$PLATFORM" = "mediatek" ]; then
+        echo "6. MediaTek USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config && echo "✅" || echo "❌")"
+    fi
+    
+    # 步骤6: 显示启用的功能插件 - 修复显示逻辑
+    log "🎯 步骤6: 显示启用的功能插件..."
+    echo "=== 启用的功能插件列表 ==="
+    
+    # 定义要检查的功能插件
+    local feature_plugins=(
+        # 网络加速
+        "luci-app-turboacc" "kmod-shortcut-fe" "kmod-fast-classifier"
+        # 文件共享
+        "luci-app-samba4" "samba4-server"
+        # 网络服务
+        "luci-app-upnp" "luci-app-vsftpd" "luci-app-arpbind"
+        # 系统工具
+        "luci-app-diskman" "luci-app-cpulimit" "luci-app-hd-idle"
+        # DNS相关
+        "luci-app-smartdns" "smartdns"
+        # 其他功能
+        "luci-app-accesscontrol" "luci-app-vlmcsd" "luci-app-wechatpush"
+        "luci-app-sqm" "ddns-scripts"
+        # USB相关
+        "kmod-usb-storage" "kmod-usb3" "kmod-usb-xhci-hcd"
+    )
+    
+    local enabled_count=0
+    local disabled_count=0
+    local not_configured_count=0
+    
+    echo "功能插件状态:"
+    for plugin in "${feature_plugins[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
+            echo "  ✅ $plugin"
+            enabled_count=$((enabled_count + 1))
+        elif grep -q "^# CONFIG_PACKAGE_${plugin} is not set" .config; then
+            echo "  ❌ $plugin (已禁用)"
+            disabled_count=$((disabled_count + 1))
+        else
+            echo "  🔄 $plugin (未配置)"
+            not_configured_count=$((not_configured_count + 1))
+        fi
+    done
+    
+    echo "统计: $enabled_count 个启用，$disabled_count 个禁用，$not_configured_count 个未配置"
+    echo ""
+    
+    # 步骤7: 再次验证配置
+    log "🔍 步骤7: 最终配置验证..."
+    if validate_config_syntax; then
+        log "✅ 最终配置语法验证通过"
+    else
+        log "⚠️ 最终配置仍有警告，但继续执行"
+    fi
+    
+    # 步骤8: 运行defconfig确保配置一致
+    log "🔄 步骤8: 最终运行 make defconfig..."
+    if make defconfig 2>&1 | tee /tmp/final_defconfig.log; then
+        log "✅ 最终 defconfig 成功"
+    else
+        log "⚠️ 最终 defconfig 有警告，但继续执行"
+        cat /tmp/final_defconfig.log | tail -10
+    fi
+    
+    # 步骤9: 显示最终配置状态
+    log "📊 步骤9: 显示最终配置状态..."
+    local final_enabled=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
+    local final_disabled=$(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)
+    log "✅ 最终状态: 已启用 $final_enabled 个, 已禁用 $final_disabled 个"
+    
+    # 显示关键配置状态 - 修复：确保显示与检查一致
+    log "🔧 关键配置状态:"
+    echo "1. USB核心: $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" .config && echo "✅" || echo "❌")"
+    echo "2. USB 3.0: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config && echo "✅" || echo "❌")"
+    echo "3. USB xHCI: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo "✅" || echo "❌")"
+    echo "4. USB存储: $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" .config && echo "✅" || echo "❌")"
+    
+    # 根据平台显示专用驱动
+    if [ "$PLATFORM" = "ipq40xx" ]; then
+        echo "5. 高通USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo "✅" || echo "❌")"
+    elif [ "$PLATFORM" = "ramips" ]; then
+        echo "5. 雷凌USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config && echo "✅" || echo "❌")"
+    elif [ "$PLATFORM" = "ath79" ]; then
+        echo "5. ath79 USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb2-ath79=y" .config && echo "✅" || echo "❌")"
+    elif [ "$PLATFORM" = "mediatek" ]; then
+        echo "5. MediaTek USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config && echo "✅" || echo "❌")"
+    fi
+    
+    # 显示TurboACC状态（如果启用了）
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        echo "6. TurboACC: $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config && echo "✅" || echo "❌")"
+    fi
+    
+    # 步骤10: USB配置一致性检查
+    log "🔍 步骤10: USB配置一致性检查..."
+    
+    # 检查配置文件中所有USB相关配置
+    local usb_configs=$(grep -c "CONFIG_PACKAGE_kmod-usb" .config)
+    local enabled_usb=$(grep -c "CONFIG_PACKAGE_kmod-usb.*=y" .config)
+    local disabled_usb=$(grep -c "# CONFIG_PACKAGE_kmod-usb.* is not set" .config)
+    
+    log "📊 USB配置统计:"
+    log "  总USB配置项: $usb_configs"
+    log "  已启用: $enabled_usb"
+    log "  已禁用: $disabled_usb"
+    
+    # 确保关键USB驱动都有启用标志
+    local critical_usb_check=(
+        "kmod-usb-core"
+        "kmod-usb2"
+        "kmod-usb3"
+        "kmod-usb-xhci-hcd"
+        "kmod-usb-storage"
+    )
+    
+    local missing_critical=0
+    for driver in "${critical_usb_check[@]}"; do
+        if ! grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            log "❌ 缺少关键USB驱动: $driver"
+            missing_critical=$((missing_critical + 1))
+        fi
+    done
+    
+    if [ $missing_critical -eq 0 ]; then
+        log "✅ 所有关键USB驱动都已启用"
+    else
+        log "⚠️ 缺少 $missing_critical 个关键USB驱动，尝试修复..."
+        # 重新添加缺失的驱动
+        for driver in "${critical_usb_check[@]}"; do
+            if ! grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "CONFIG_PACKAGE_${driver}=y" >> .config
+                log "🔄 添加缺失驱动: $driver"
+            fi
+        done
+    fi
+    
+    # 显示配置组合信息
+    log "📋 配置组合信息:"
+    if [ -f "$SUPPORT_DIR/config/${DEVICE_NAME}.config" ]; then
+        log "  🎯 使用设备特定配置: ${DEVICE_NAME}.config"
+        log "  📁 配置组合: 设备配置 + base.config + usb-generic.config"
+    else
+        if [ "$CONFIG_MODE" = "normal" ]; then
+            log "  📁 配置组合: base.config + normal.config + usb-generic.config"
+        else
+            log "  📁 配置组合: base.config + 基础模式配置 + usb-generic.config"
+        fi
+    fi
+    
+    log "✅ 配置应用完成"
+    log "最终配置文件: .config"
+    log "最终配置大小: $(ls -lh .config | awk '{print $5}')"
+}
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
