@@ -5,14 +5,10 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: "📱 设备名称 (自动从 support.sh 同步) - 当前支持: ac42u, cmcc_rax3000m, netgear_3800"
+        description: "📱 设备名称 (如: ac42u)"
         required: true
-        type: choice
         default: "ac42u"
-        options:
-          - "ac42u"
-          - "cmcc_rax3000m"
-          - "netgear_3800"
+        type: string
       version_selection:
         description: "🔄 版本选择"
         required: true
@@ -25,12 +21,6 @@ on:
         type: choice
         default: "normal"
         options: ["base", "normal"]
-      source_repo:
-        description: "📦 源代码仓库选择 - 🔄 ImmortalWrt (默认) ⚡ LEDE (国内优化)"
-        required: true
-        type: choice
-        default: "immortalwrt"
-        options: ["immortalwrt", "lede"]
       extra_packages:
         description: "额外安装插件 - 格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。"
         required: false
@@ -53,75 +43,15 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      # 步骤 0: 生成时间戳和设备同步检查
-      - name: "0. 生成时间戳和设备同步检查"
+      # 步骤 0: 生成时间戳
+      - name: "0. 生成时间戳"
         run: |
-          echo "=== 步骤 0: 生成时间戳和设备同步检查 ==="
+          echo "=== 步骤 0: 生成时间戳 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 设备同步检查
-          echo "🔍 检查设备列表同步状态..."
-          SUPPORT_FILE="${{ github.workspace }}/firmware-config/support.sh"
-          
-          if [ -f "$SUPPORT_FILE" ]; then
-            echo "✅ 找到设备支持文件: $SUPPORT_FILE"
-            source "$SUPPORT_FILE" 2>/dev/null || true
-            
-            if command -v get_all_devices >/dev/null 2>&1; then
-              SUPPORTED_DEVICES=$(get_all_devices)
-              echo "📱 support.sh 中支持的设备: $SUPPORTED_DEVICES"
-              
-              SELECTED_DEVICE="${{ github.event.inputs.device_name }}"
-              echo "🎯 当前选择的设备: $SELECTED_DEVICE"
-              
-              # 检查设备是否在support.sh中
-              DEVICE_IN_SUPPORT=false
-              for device in $SUPPORTED_DEVICES; do
-                if [ "$device" = "$SELECTED_DEVICE" ]; then
-                  DEVICE_IN_SUPPORT=true
-                  break
-                fi
-              done
-              
-              if [ "$DEVICE_IN_SUPPORT" = false ]; then
-                echo "⚠️ 警告: 选择的设备 '$SELECTED_DEVICE' 不在 support.sh 的支持列表中"
-                echo "💡 可能的原因:"
-                echo "  1. support.sh 已更新但 workflow.yml 未同步"
-                echo "  2. 设备名称不匹配"
-                echo ""
-                echo "📋 support.sh 支持的设备:"
-                for device in $SUPPORTED_DEVICES; do
-                  if command -v get_device_description >/dev/null 2>&1; then
-                    DESC=$(get_device_description "$device" 2>/dev/null || echo "无描述")
-                    echo "  - $device: $DESC"
-                  else
-                    echo "  - $device"
-                  fi
-                done
-                echo ""
-                echo "🔧 修复方法:"
-                echo "  运行同步脚本: ./firmware-config/scripts/sync-device-list.sh"
-                echo "  然后提交更新后的 workflow.yml"
-                echo ""
-                echo "❌ 构建终止: 设备不支持"
-                exit 1
-              else
-                echo "✅ 设备 '$SELECTED_DEVICE' 在 support.sh 中支持"
-                if command -v get_device_description >/dev/null 2>&1; then
-                  DEVICE_DESC=$(get_device_description "$SELECTED_DEVICE" 2>/dev/null || echo "无描述")
-                  echo "📝 设备描述: $DEVICE_DESC"
-                fi
-              fi
-            else
-              echo "⚠️ 无法从 support.sh 读取设备列表函数"
-            fi
-          else
-            echo "⚠️ 未找到设备支持文件: $SUPPORT_FILE"
-          fi
-          
-          # 生成时间戳
+          # 生成日期格式的时间戳（年月日）
           BASE_DATE=$(date -u +'%Y%m%d')
-          TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-${{ github.event.inputs.source_repo }}-$BASE_DATE"
+          TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$BASE_DATE"
           
           echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
           
@@ -130,7 +60,6 @@ jobs:
           echo "  设备: ${{ github.event.inputs.device_name }}"
           echo "  版本: ${{ github.event.inputs.version_selection }}"
           echo "  模式: ${{ github.event.inputs.config_mode }}"
-          echo "  源代码仓库: ${{ github.event.inputs.source_repo }}"
           echo "  并行优化: ${{ github.event.inputs.enable_parallel }}"
           
           echo "🟢 步骤 0 完成"
@@ -271,7 +200,28 @@ jobs:
           
           # 分组1: 核心编译工具
           echo "🔧 安装核心编译工具..."
-          sudo apt-get install -y -q build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget libelf-dev cmake ninja-build
+          sudo apt-get install -y -q \
+            build-essential \
+            clang \
+            flex \
+            bison \
+            g++ \
+            gawk \
+            gcc-multilib \
+            g++-multilib \
+            gettext \
+            git \
+            libncurses5-dev \
+            libssl-dev \
+            python3-distutils \
+            rsync \
+            unzip \
+            zlib1g-dev \
+            file \
+            wget \
+            libelf-dev \
+            cmake \
+            ninja-build
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 核心编译工具安装失败"
@@ -280,7 +230,24 @@ jobs:
           
           # 分组2: Python和脚本工具
           echo "🐍 安装Python和脚本工具..."
-          sudo apt-get install -y -q python3 python3-dev python3-pip python3-setuptools python3-yaml xsltproc zip subversion automake autoconf libtool pkg-config help2man texinfo groff texlive texinfo
+          sudo apt-get install -y -q \
+            python3 \
+            python3-dev \
+            python3-pip \
+            python3-setuptools \
+            python3-yaml \
+            xsltproc \
+            zip \
+            subversion \
+            automake \
+            autoconf \
+            libtool \
+            pkg-config \
+            help2man \
+            texinfo \
+            groff \
+            texlive \
+            texinfo
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: Python和脚本工具安装失败"
@@ -289,7 +256,17 @@ jobs:
           
           # 分组3: 网络和下载工具
           echo "🌐 安装网络和下载工具..."
-          sudo apt-get install -y -q curl net-tools iputils-ping dnsutils openssh-client ca-certificates gnupg lsb-release aria2 libcurl4-openssl-dev
+          sudo apt-get install -y -q \
+            curl \
+            net-tools \
+            iputils-ping \
+            dnsutils \
+            openssh-client \
+            ca-certificates \
+            gnupg \
+            lsb-release \
+            aria2 \
+            libcurl4-openssl-dev
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 网络和下载工具安装失败"
@@ -298,7 +275,16 @@ jobs:
           
           # 分组4: 文件系统工具
           echo "💿 安装文件系统工具..."
-          sudo apt-get install -y -q squashfs-tools dosfstools e2fsprogs mtools parted fdisk gdisk hdparm smartmontools
+          sudo apt-get install -y -q \
+            squashfs-tools \
+            dosfstools \
+            e2fsprogs \
+            mtools \
+            parted \
+            fdisk \
+            gdisk \
+            hdparm \
+            smartmontools
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 文件系统工具安装失败"
@@ -307,7 +293,20 @@ jobs:
           
           # 分组5: 调试和开发工具
           echo "🔍 安装调试和开发工具..."
-          sudo apt-get install -y -q gdb strace ltrace valgrind binutils-dev libdw-dev libiberty-dev ecj fastjar java-propose-classpath libpython3-dev liblz4-dev zstd
+          sudo apt-get install -y -q \
+            gdb \
+            strace \
+            ltrace \
+            valgrind \
+            binutils-dev \
+            libdw-dev \
+            libiberty-dev \
+            ecj \
+            fastjar \
+            java-propose-classpath \
+            libpython3-dev \
+            liblz4-dev \
+            zstd
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 调试和开发工具安装失败"
@@ -382,43 +381,17 @@ jobs:
           
           echo "🟢 步骤 5 完成"
       
-      # 步骤 6: 动态读取设备列表并设置编译环境
-      - name: "6. 动态读取设备列表并设置编译环境"
+      # 步骤 6: 设置编译环境和构建目录
+      - name: "6. 设置编译环境和构建目录"
         run: |
-          echo "=== 步骤 6: 动态读取设备列表并设置编译环境 ==="
+          echo "=== 步骤 6: 设置编译环境和构建目录 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
           trap 'echo "❌ 步骤 6 失败，退出代码: $?"; exit 1' ERR
           
-          echo "🔍 步骤 6.1: 从support.sh读取设备信息..."
-          SUPPORT_DIR="${{ github.workspace }}/firmware-config"
-          SUPPORT_FILE="$SUPPORT_DIR/support.sh"
-          
-          if [ -f "$SUPPORT_FILE" ]; then
-            echo "✅ 设备支持脚本存在: $SUPPORT_FILE"
-            
-            # 加载support.sh
-            source "$SUPPORT_FILE"
-            
-            # 获取设备配置
-            if command -v get_device_config >/dev/null 2>&1; then
-              DEVICE_CONFIG=$(get_device_config "${{ github.event.inputs.device_name }}")
-              echo "✅ 获取设备配置: $DEVICE_CONFIG"
-            fi
-            
-            # 获取设备描述
-            if command -v get_device_description >/dev/null 2>&1; then
-              DEVICE_DESC=$(get_device_description "${{ github.event.inputs.device_name }}")
-              echo "📝 设备描述: $DEVICE_DESC"
-            fi
-          else
-            echo "⚠️ 警告: 设备支持脚本不存在: $SUPPORT_FILE"
-          fi
-          
-          echo ""
-          echo "🔄 步骤 6.2: 设置编译环境"
+          echo "🔄 步骤 6.1: 设置编译环境"
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" setup_environment
           
           if [ $? -ne 0 ]; then
@@ -426,7 +399,7 @@ jobs:
             exit 1
           fi
           
-          echo "🔄 步骤 6.3: 创建构建目录"
+          echo "🔄 步骤 6.2: 创建构建目录"
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" create_build_dir
           
           if [ $? -ne 0 ]; then
@@ -434,13 +407,34 @@ jobs:
             exit 1
           fi
           
-          echo "🔄 步骤 6.4: 初始化构建环境"
+          echo "🔄 步骤 6.3: 初始化构建环境（使用设备支持系统）"
           echo "📱 设备: ${{ github.event.inputs.device_name }}"
           echo "🔄 版本: ${{ github.event.inputs.version_selection }}"
           echo "⚙️ 配置模式: ${{ github.event.inputs.config_mode }}"
-          echo "📦 源代码仓库: ${{ github.event.inputs.source_repo }}"
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}" "${{ github.event.inputs.source_repo }}"
+          # 检查设备支持系统
+          SUPPORT_DIR="${{ github.workspace }}/firmware-config"
+          if [ -f "$SUPPORT_DIR/support.sh" ]; then
+            echo "✅ 设备支持系统存在: $SUPPORT_DIR/support.sh"
+            source "$SUPPORT_DIR/support.sh"
+            
+            # 获取设备描述
+            if command -v get_device_description >/dev/null 2>&1; then
+              DEVICE_DESC=$(get_device_description "${{ github.event.inputs.device_name }}")
+              echo "🎯 设备描述: $DEVICE_DESC"
+            fi
+            
+            # 获取设备配置
+            if command -v get_device_config >/dev/null 2>&1; then
+              DEVICE_CONFIG=$(get_device_config "${{ github.event.inputs.device_name }}")
+              echo "🔧 设备配置: $DEVICE_CONFIG"
+            fi
+          else
+            echo "⚠️ 设备支持脚本不存在: $SUPPORT_DIR/support.sh"
+            echo "💡 将使用内置设备配置"
+          fi
+          
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}"
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 初始化构建环境失败"
@@ -456,15 +450,16 @@ jobs:
           echo "=== 步骤 7: 下载OpenWrt官方SDK（修复版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 设置错误处理 - 这里不退出，SDK下载失败可以继续
-          trap 'echo "⚠️ SDK下载失败，将使用自动构建编译器，继续执行..."' ERR
+          # 设置错误处理
+          set -e
+          trap 'echo "❌ 步骤 7 失败，退出代码: $?"; exit 1' ERR
           
           echo "🚀 开始下载OpenWrt官方SDK工具链..."
           
           # 先检查环境文件是否已经存在
           echo "🔍 检查环境文件..."
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
-            echo "✅ 环境文件已存在（由步骤6.4创建）"
+            echo "✅ 环境文件已存在（由步骤6.3创建）"
             echo "📊 环境文件内容摘要:"
             head -15 /mnt/openwrt-build/build_env.sh
             
@@ -480,12 +475,11 @@ jobs:
             echo "  COMPILER_DIR: $COMPILER_DIR"
             echo "  DEVICE_NAME: $DEVICE_NAME"
             echo "  PLATFORM: $PLATFORM"
-            echo "  SOURCE_REPO: $SOURCE_REPO"
             echo ""
             
-            echo "💡 使用步骤6.4已设置的环境变量进行SDK下载"
+            echo "💡 使用步骤6.3已设置的环境变量进行SDK下载"
           else
-            echo "⚠️ 环境文件不存在，可能是步骤6.4失败"
+            echo "⚠️ 环境文件不存在，可能是步骤6.3失败"
             echo "📝 重新创建环境变量..."
             
             # 使用设备支持系统获取配置
@@ -499,8 +493,40 @@ jobs:
               PLATFORM=$(echo $DEVICE_CONFIG | awk '{print $4}')
               echo "✅ 从设备支持系统获取配置: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE, PLATFORM=$PLATFORM"
             else
-              echo "❌ 错误: 设备支持脚本不存在"
-              exit 1
+              # 默认配置
+              case "${{ github.event.inputs.device_name }}" in
+                "ac42u"|"acrh17")
+                  TARGET="ipq40xx"
+                  SUBTARGET="generic"
+                  DEVICE="asus_rt-ac42u"
+                  PLATFORM="ipq40xx"
+                  ;;
+                "mi_router_4a_gigabit"|"r4ag")
+                  TARGET="ramips"
+                  SUBTARGET="mt76x8"
+                  DEVICE="xiaomi_mi-router-4a-gigabit"
+                  PLATFORM="ramips"
+                  ;;
+                "mi_router_3g"|"r3g")
+                  TARGET="ramips"
+                  SUBTARGET="mt7621"
+                  DEVICE="xiaomi_mi-router-3g"
+                  PLATFORM="ramips"
+                  ;;
+                "netgear_3800")
+                  TARGET="ath79"
+                  SUBTARGET="generic"
+                  DEVICE="netgear_wndr3800"
+                  PLATFORM="ath79"
+                  ;;
+                *)
+                  TARGET="ipq40xx"
+                  SUBTARGET="generic"
+                  DEVICE="${{ github.event.inputs.device_name }}"
+                  PLATFORM="generic"
+                  ;;
+              esac
+              echo "⚠️ 使用内置设备配置"
             fi
             
             # 创建环境文件
@@ -515,20 +541,21 @@ jobs:
             echo "export COMPILER_DIR=\"\"" >> /mnt/openwrt-build/build_env.sh
             echo "export DEVICE_NAME=\"${{ github.event.inputs.device_name }}\"" >> /mnt/openwrt-build/build_env.sh
             echo "export PLATFORM=\"$PLATFORM\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export SOURCE_REPO=\"${{ github.event.inputs.source_repo }}\"" >> /mnt/openwrt-build/build_env.sh
             chmod +x /mnt/openwrt-build/build_env.sh
             echo "✅ 已创建环境文件"
           fi
           
-          # 执行SDK下载，允许失败
+          # 执行SDK下载
           echo "🔄 开始执行SDK下载..."
-          if "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_compiler_env "${{ github.event.inputs.device_name }}"; then
-            echo "✅ SDK下载成功或使用后备方案"
-          else
-            echo "⚠️ SDK下载失败，将使用OpenWrt自动构建的编译器"
+          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_compiler_env "${{ github.event.inputs.device_name }}"
+          
+          SDK_EXIT_CODE=$?
+          if [ $SDK_EXIT_CODE -ne 0 ]; then
+            echo "⚠️ 警告: SDK下载可能有问题，退出代码: $SDK_EXIT_CODE"
+            echo "💡 将使用OpenWrt自动构建的编译器作为后备"
           fi
           
-          echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m%d %H:%M:%S')"
           echo "🟢 步骤 7 完成"
       
       # 步骤 8: 验证SDK下载结果
@@ -544,7 +571,7 @@ jobs:
           
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
             source /mnt/openwrt-build/build_env.sh
-            echo "✅ 从环境文件加载变量: COMPILER_DIR=$COMPILER_DIR, SOURCE_REPO=$SOURCE_REPO"
+            echo "✅ 从环境文件加载变量: COMPILER_DIR=$COMPILER_DIR"
           else
             echo "⚠️ 环境文件不存在"
           fi
@@ -721,7 +748,6 @@ jobs:
             echo "  子目标: $SUBTARGET"
             echo "  设备: $DEVICE"
             echo "  平台类型: $PLATFORM"
-            echo "  源代码仓库: ${{ github.event.inputs.source_repo }}"
           else
             echo "⚠️ 设备支持脚本不存在: $SUPPORT_DIR/support.sh"
           fi
@@ -801,8 +827,6 @@ jobs:
               echo "    🎯 目标平台: ipq40xx (高通平台)"
             elif grep -q "^CONFIG_TARGET_ramips=y" "/mnt/openwrt-build/.config"; then
               echo "    🎯 目标平台: ramips (雷凌平台)"
-            elif grep -q "^CONFIG_TARGET_mediatek=y" "/mnt/openwrt-build/.config"; then
-              echo "    🎯 目标平台: mediatek (联发科平台)"
             fi
             
             # 检查USB配置
@@ -846,55 +870,21 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 15 完成"
       
-      # 步骤 16: 应用配置并显示详情（完整版）- 修复版
-      - name: "16. 应用配置并显示详情（完整版）- 修复版"
+      # 步骤 16: 应用配置并显示详情（完整版）
+      - name: "16. 应用配置并显示详情（完整版）"
         run: |
-          echo "=== 步骤 16: 应用配置并显示详情（完整版）- 修复版 ==="
+          echo "=== 步骤 16: 应用配置并显示详情（完整版）==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
           trap 'echo "❌ 步骤 16 失败，退出代码: $?"; exit 1' ERR
           
-          echo "🔍 步骤 16.1: 检查配置文件..."
           if [ -f "/mnt/openwrt-build/.config" ]; then
-            # 备份原始配置文件
             cp "/mnt/openwrt-build/.config" "/mnt/openwrt-build/.config.original"
-            echo "✅ 已备份原始配置文件: /mnt/openwrt-build/.config.original"
-            
-            # 显示备份文件信息
-            ORIGINAL_SIZE=$(ls -lh "/mnt/openwrt-build/.config.original" | awk '{print $5}')
-            ORIGINAL_LINES=$(wc -l < "/mnt/openwrt-build/.config.original")
-            echo "📊 原始配置文件:"
-            echo "  大小: $ORIGINAL_SIZE"
-            echo "  行数: $ORIGINAL_LINES"
-          else
-            echo "❌ 错误: .config 文件不存在"
-            exit 1
+            echo "✅ 已备份原始配置文件"
           fi
           
-          echo ""
-          echo "🔍 步骤 16.2: 验证配置语法..."
-          cd /mnt/openwrt-build
-          
-          # 先运行配置语法验证
-          if "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" validate_config_syntax; then
-            echo "✅ 配置语法验证通过"
-          else
-            echo "⚠️ 配置语法有问题，尝试自动修复..."
-            # 尝试修复常见问题
-            make defconfig 2>&1 | tee /tmp/defconfig_fix.log
-            if [ $? -eq 0 ]; then
-              echo "✅ defconfig 修复成功"
-            else
-              echo "❌ defconfig 修复失败"
-              echo "defconfig 错误日志:"
-              cat /tmp/defconfig_fix.log | tail -20
-            fi
-          fi
-          
-          echo ""
-          echo "🚀 步骤 16.3: 应用配置（已修复defconfig问题）..."
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" apply_config
           
           if [ $? -ne 0 ]; then
@@ -902,12 +892,11 @@ jobs:
             exit 1
           fi
           
-          echo ""
           echo "=== 🚨 最终配置状态检查（完整详细版）==="
           if [ -f "/mnt/openwrt-build/.config" ]; then
-            echo "✅ 最终配置文件存在"
-            echo "📊 最终文件大小: $(ls -lh "/mnt/openwrt-build/.config" | awk '{print $5}')"
-            echo "📝 最终文件行数: $(wc -l < "/mnt/openwrt-build/.config")"
+            echo "✅ 配置文件存在"
+            echo "📊 文件大小: $(ls -lh "/mnt/openwrt-build/.config" | awk '{print $5}')"
+            echo "📝 文件行数: $(wc -l < "/mnt/openwrt-build/.config")"
             
             echo ""
             echo "🔧 关键配置检查:"
@@ -976,7 +965,6 @@ jobs:
             echo "  - 目标设备: $DEVICE"
             echo "  - OpenWrt版本: $SELECTED_BRANCH"
             echo "  - 平台类型: $PLATFORM"
-            echo "  - 源代码仓库: $SOURCE_REPO"
             echo "  - USB驱动: 已启用所有关键驱动"
             echo "  - 插件数量: $enabled 个已启用"
             
@@ -1281,7 +1269,7 @@ jobs:
           echo "🔍 检查当前环境..."
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
             source /mnt/openwrt-build/build_env.sh
-            echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET, PLATFORM=$PLATFORM, SOURCE_REPO=$SOURCE_REPO"
+            echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET, PLATFORM=$PLATFORM"
           fi
           
           echo "🚀 执行前置错误检查（已修复23.05 SDK验证问题）..."
@@ -1353,7 +1341,6 @@ jobs:
           echo "  CPU核心数: $CPU_CORES"
           echo "  内存大小: ${TOTAL_MEM}MB"
           echo "  并行优化: ${{ env.ENABLE_PARALLEL }}"
-          echo "  源代码仓库: $SOURCE_REPO"
           
           # 智能判断最佳并行任务数 - 优化版
           if [ "${{ env.ENABLE_PARALLEL }}" = "true" ]; then
@@ -1394,7 +1381,6 @@ jobs:
           echo "  - 设备: ${{ github.event.inputs.device_name }}"
           echo "  - 版本: ${{ github.event.inputs.version_selection }}"
           echo "  - 配置模式: ${{ github.event.inputs.config_mode }}"
-          echo "  - 源代码仓库: ${{ github.event.inputs.source_repo }}"
           echo "  - 平台类型: $PLATFORM"
           echo "  - 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
@@ -1494,16 +1480,15 @@ jobs:
                 
                 # 判断文件类型
                 if [[ "$FILE_NAME" == *factory* ]]; then
-                  TYPE="🏭 工厂固件"
+                  echo "  类型: 🏭 工厂固件 (用于首次刷机)"
                 elif [[ "$FILE_NAME" == *sysupgrade* ]]; then
-                  TYPE="🔄 升级固件"
+                  echo "  类型: 🔄 系统升级固件 (用于已安装OpenWrt的设备)"
                 elif [[ "$FILE_NAME" == *initramfs* ]]; then
-                  TYPE="🚀 内存固件"
+                  echo "  类型: 🚀 内存启动固件 (用于测试和救援)"
                 else
-                  TYPE="🔧 普通固件"
+                  echo "  类型: 🔧 普通固件"
                 fi
                 
-                echo "  类型: $TYPE"
                 echo ""
               done
             else
@@ -1593,11 +1578,11 @@ jobs:
           
           echo "🟢 步骤 27 完成"
       
-      # 步骤 28: 编译后总结（增强版）
-      - name: "28. 编译后总结（增强版）"
+      # 步骤 28: 编译后总结（增强版）- 无SSH测试相关信息
+      - name: "28. 编译后总结（增强版）- 无SSH测试"
         if: always()
         run: |
-          echo "=== 步骤 28: 编译后总结（增强版） ==="
+          echo "=== 步骤 28: 编译后总结（增强版）- 无SSH测试 ==="
           echo "🕐 总结时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，总结不应该失败
@@ -1608,7 +1593,6 @@ jobs:
           echo "设备: ${{ github.event.inputs.device_name }}"
           echo "版本: ${{ github.event.inputs.version_selection }}"
           echo "配置模式: ${{ github.event.inputs.config_mode }}"
-          echo "源代码仓库: ${{ github.event.inputs.source_repo }}"
           echo "时间戳: ${{ env.TIMESTAMP }}"
           echo "并行优化: ${{ github.event.inputs.enable_parallel }}"
           echo ""
@@ -1819,11 +1803,6 @@ jobs:
           echo "  2. 添加设备配置: 在 firmware-config/config/ 目录下创建 设备名.config"
           echo "  3. 添加通用配置: 编辑 base.config, normal.config, usb-generic.config"
           echo "  4. 重新运行工作流选择新设备即可"
-          
-          echo ""
-          echo "📦 源代码仓库选择说明:"
-          echo "  🔄 ImmortalWrt: 官方分支，稳定可靠"
-          echo "  ⚡ LEDE: 国内优化版，更适合中国用户"
           
           echo ""
           echo "✅ 构建流程完成"
