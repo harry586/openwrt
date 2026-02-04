@@ -17,21 +17,8 @@ log() {
 handle_error() {
     log "❌ 错误发生在: $1"
     log "详细错误信息:"
-    echo "最后100行构建日志:"
-    tail -100 /tmp/build-logs/*.log 2>/dev/null || echo "无日志文件"
-    
-    # 检查defconfig日志
-    if [ -f "/tmp/defconfig.log" ]; then
-        echo "defconfig 错误日志:"
-        cat /tmp/defconfig.log
-    fi
-    
-    # 检查.config文件
-    if [ -f ".config" ]; then
-        echo ".config 最后50行:"
-        tail -50 .config
-    fi
-    
+    echo "最后50行日志:"
+    tail -50 /tmp/build-logs/*.log 2>/dev/null || echo "无日志文件"
     exit 1
 }
 
@@ -49,7 +36,6 @@ save_env() {
     echo "export COMPILER_DIR=\"${COMPILER_DIR}\"" >> $ENV_FILE
     echo "export DEVICE_NAME=\"${DEVICE_NAME}\"" >> $ENV_FILE
     echo "export PLATFORM=\"${PLATFORM}\"" >> $ENV_FILE
-    echo "export SOURCE_REPO=\"${SOURCE_REPO}\"" >> $ENV_FILE
     
     # 确保环境变量可被其他步骤访问
     if [ -n "$GITHUB_ENV" ]; then
@@ -62,7 +48,6 @@ save_env() {
         echo "COMPILER_DIR=${COMPILER_DIR}" >> $GITHUB_ENV
         echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
         echo "PLATFORM=${PLATFORM}" >> $GITHUB_ENV
-        echo "SOURCE_REPO=${SOURCE_REPO}" >> $GITHUB_ENV
     fi
     
     chmod +x $ENV_FILE
@@ -847,7 +832,6 @@ pre_build_error_check() {
     log "  COMPILER_DIR: $COMPILER_DIR"
     log "  DEVICE_NAME: $DEVICE_NAME"
     log "  PLATFORM: $PLATFORM"
-    log "  SOURCE_REPO: $SOURCE_REPO"
     
     # 1. 检查配置文件
     if [ ! -f ".config" ]; then
@@ -1095,46 +1079,23 @@ create_build_dir() {
     fi
 }
 
-# 初始化构建环境 - 使用设备支持脚本（修复版：简化源代码仓库选择）
+# 初始化构建环境 - 使用设备支持脚本
 initialize_build_env() {
     local device_name=$1
     local version_selection=$2
     local config_mode=$3
-    local source_repo=${4:-"immortalwrt"}  # 添加第四个参数，默认immortalwrt
     
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
     log "=== 版本选择 ==="
-    log "源代码仓库: $source_repo"
-    
-    # 根据仓库选择不同的URL - 只保留immortalwrt和lede
-    case "$source_repo" in
-        "immortalwrt")
-            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-            ;;
-        "lede")
-            SELECTED_REPO_URL="https://github.com/coolsnowwolf/lede.git"
-            SELECTED_BRANCH="master"  # LEDE使用master分支
-            ;;
-        *)
-            SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-            source_repo="immortalwrt"
-            ;;
-    esac
-    
-    # 根据版本选择分支（LEDE除外）
-    if [ "$source_repo" != "lede" ]; then
-        if [ "$version_selection" = "23.05" ]; then
-            SELECTED_BRANCH="openwrt-23.05"
-        else
-            SELECTED_BRANCH="openwrt-21.02"
-        fi
+    if [ "$version_selection" = "23.05" ]; then
+        SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+        SELECTED_BRANCH="openwrt-23.05"
+    else
+        SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+        SELECTED_BRANCH="openwrt-21.02"
     fi
-    
-    # 设置SOURCE_REPO环境变量
-    SOURCE_REPO="$source_repo"
-    
-    log "✅ 版本选择完成: $SELECTED_BRANCH (仓库: $source_repo)"
+    log "✅ 版本选择完成: $SELECTED_BRANCH"
     
     log "=== 克隆源码 ==="
     log "仓库: $SELECTED_REPO_URL"
@@ -1219,7 +1180,6 @@ initialize_build_env() {
     echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
     echo "DEVICE_NAME=$DEVICE_NAME" >> $GITHUB_ENV
     echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
-    echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
     
     log "✅ 构建环境初始化完成"
 }
@@ -1246,7 +1206,6 @@ initialize_compiler_env() {
         log "  COMPILER_DIR: $COMPILER_DIR"
         log "  DEVICE_NAME: $DEVICE_NAME"
         log "  PLATFORM: $PLATFORM"
-        log "  SOURCE_REPO: $SOURCE_REPO"
     else
         log "⚠️ 环境文件不存在: $BUILD_DIR/build_env.sh"
         log "💡 环境文件应该在步骤6.3中创建，但未找到"
@@ -1255,11 +1214,6 @@ initialize_compiler_env() {
         if [ -z "$SELECTED_BRANCH" ]; then
             SELECTED_BRANCH="openwrt-21.02"
             log "⚠️ SELECTED_BRANCH未设置，使用默认值: $SELECTED_BRANCH"
-        fi
-        
-        if [ -z "$SOURCE_REPO" ]; then
-            SOURCE_REPO="immortalwrt"
-            log "⚠️ SOURCE_REPO未设置，使用默认值: $SOURCE_REPO"
         fi
         
         if [ -z "$TARGET" ]; then
@@ -1340,7 +1294,6 @@ initialize_compiler_env() {
     log "目标设备: $DEVICE"
     log "OpenWrt版本: $SELECTED_BRANCH"
     log "平台类型: $PLATFORM"
-    log "源代码仓库: $SOURCE_REPO"
     
     # 简化版本字符串（从openwrt-23.05转为23.05）
     local version_for_sdk=""
@@ -1365,7 +1318,6 @@ initialize_compiler_env() {
     log "  目标: $TARGET"
     log "  子目标: $SUBTARGET"
     log "  平台: $PLATFORM"
-    log "  源代码仓库: $SOURCE_REPO"
     
     # 下载OpenWrt官方SDK
     log "🚀 开始下载OpenWrt官方SDK..."
@@ -1408,8 +1360,7 @@ initialize_compiler_env() {
         export COMPILER_DIR=""
         save_env
         
-        # 不返回错误，继续执行
-        return 0
+        return 1
     fi
 }
 
@@ -1530,13 +1481,13 @@ pre_build_space_check() {
     log "✅ 空间检查完成"
 }
 
-# 智能配置生成系统（重构版）- 修复配置生成逻辑
+# 智能配置生成系统（模板化版）
 generate_config() {
     local extra_packages=$1
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 智能配置生成系统（重构版）==="
+    log "=== 智能配置生成系统（模板化版）==="
     log "设备: $DEVICE_NAME"
     log "版本: $SELECTED_BRANCH"
     log "目标: $TARGET"
@@ -1544,11 +1495,8 @@ generate_config() {
     log "设备: $DEVICE"
     log "平台: $PLATFORM"
     log "配置模式: $CONFIG_MODE"
-    log "源代码仓库: $SOURCE_REPO"
     
     rm -f .config .config.old
-    
-    log "📋 开始生成配置文件..."
     
     # 1. 基本目标配置
     echo "# ============================================" > .config
@@ -1558,37 +1506,11 @@ generate_config() {
     echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
     echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" >> .config
     
-    # 2. 检查设备特定配置文件
-    local device_config_file="$SUPPORT_DIR/config/${DEVICE_NAME}.config"
-    local has_device_config=false
-    
-    if [ -f "$device_config_file" ]; then
-        log "🎯 找到设备特定配置: $DEVICE_NAME.config"
-        has_device_config=true
-        
-        # 组合1：设备配置 + base.config + usb-generic.config
-        echo "" >> .config
-        echo "# ============================================" >> .config
-        echo "# 设备特定配置: $DEVICE_NAME" >> .config
-        echo "# ============================================" >> .config
-        cat "$device_config_file" >> .config
-        log "✅ 已加载设备特定配置"
-    else
-        log "ℹ️ 未找到设备特定配置: $DEVICE_NAME.config"
-        log "💡 将使用通用配置组合"
-    fi
-    
-    # 3. 加载基础配置模板
+    # 2. 加载基础配置模板
     log "📋 加载基础配置模板..."
-    if load_config_template "base"; then
-        log "✅ 基础配置加载完成"
-    else
+    if ! load_config_template "base"; then
         # 如果模板不存在，使用内置配置
         log "⚠️ 基础配置模板不存在，使用内置配置"
-        echo "" >> .config
-        echo "# ============================================" >> .config
-        echo "# 基础配置" >> .config
-        echo "# ============================================" >> .config
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
         echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
         echo "CONFIG_PACKAGE_busybox=y" >> .config
@@ -1596,33 +1518,39 @@ generate_config() {
         echo "CONFIG_PACKAGE_dropbear=y" >> .config
     fi
     
-    # 4. 根据是否有设备特定配置，决定是否加载normal.config
-    if [ "$has_device_config" = false ]; then
-        # 没有设备特定配置时，加载normal.config（仅基础模式不加载）
-        if [ "$CONFIG_MODE" = "normal" ]; then
-            log "📋 加载正常模式配置..."
-            if load_config_template "normal"; then
-                log "✅ 正常模式配置加载完成"
-            else
-                log "⚠️ 正常模式模板不存在"
-            fi
+    # 3. 加载模式配置
+    log "⚙️ 加载配置模式: $CONFIG_MODE"
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        if load_config_template "normal"; then
+            log "✅ 加载正常模式配置"
         else
-            log "🔧 基础模式，不加载正常模式配置"
-            echo "" >> .config
-            echo "# ============================================" >> .config
-            echo "# 基础模式配置" >> .config
-            echo "# ============================================" >> .config
-            echo "# CONFIG_PACKAGE_luci-app-turboacc is not set" >> .config
-            echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
-            echo "# CONFIG_PACKAGE_kmod-fast-classifier is not set" >> .config
+            log "⚠️ 正常模式模板不存在，使用基础配置"
         fi
     else
-        log "💡 已有设备特定配置，不加载normal.config"
+        log "🔧 基础模式，不加载额外插件"
+        echo "# CONFIG_PACKAGE_luci-app-turboacc is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-fast-classifier is not set" >> .config
     fi
     
-    # 5. 加载USB配置
+    # 4. 加载USB配置
     log "🔌 加载USB配置..."
     load_usb_config "$PLATFORM" "$SELECTED_BRANCH"
+    
+    # 5. 加载设备特殊配置（如果有）
+    log "🎯 检查设备特殊配置..."
+    # 修复：设备配置文件在 firmware-config/config/ 目录下
+    local device_config_file="$SUPPORT_DIR/config/${DEVICE_NAME}.config"
+    if [ -f "$device_config_file" ]; then
+        log "✅ 加载设备特殊配置: $DEVICE_NAME"
+        echo "" >> .config
+        echo "# ============================================" >> .config
+        echo "# 设备特殊配置: $DEVICE_NAME" >> .config
+        echo "# ============================================" >> .config
+        cat "$device_config_file" >> .config
+    else
+        log "ℹ️ 未找到设备特殊配置: $DEVICE_NAME"
+    fi
     
     # 6. 处理额外插件
     if [ -n "$extra_packages" ]; then
@@ -1676,24 +1604,6 @@ generate_config() {
             echo "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y" >> .config
         fi
     fi
-    
-    # 8. 显示配置摘要
-    log "📊 配置生成摘要:"
-    log "  📁 配置组合:"
-    if [ "$has_device_config" = true ]; then
-        log "    ✅ 设备特定配置 + base.config + usb-generic.config"
-    else
-        if [ "$CONFIG_MODE" = "normal" ]; then
-            log "    ✅ base.config + normal.config + usb-generic.config"
-        else
-            log "    ✅ base.config + 基础模式配置 + usb-generic.config"
-        fi
-    fi
-    
-    local config_size=$(ls -lh .config | awk '{print $5}')
-    local config_lines=$(wc -l < .config)
-    log "  📏 配置文件大小: $config_size"
-    log "  📝 配置行数: $config_lines"
     
     log "✅ 智能配置生成完成"
 }
@@ -1817,153 +1727,11 @@ check_usb_drivers_integrity() {
     fi
 }
 
-# ============ 修复：配置语法验证函数（增强版） ============
-validate_config_syntax() {
-    log "=== 🔍 验证.config文件语法（增强版）==="
-    
-    if [ ! -f ".config" ]; then
-        log "❌ 错误: .config 文件不存在"
-        return 1
-    fi
-    
-    local error_count=0
-    local warning_count=0
-    
-    log "1. 检查文件基本信息..."
-    local config_size=$(ls -lh ".config" | awk '{print $5}')
-    local config_lines=$(wc -l < ".config")
-    log "  文件大小: $config_size"
-    log "  行数: $config_lines"
-    
-    log "2. 检查空行和注释..."
-    local blank_lines=$(grep -c "^[[:space:]]*$" .config)
-    if [ $blank_lines -gt 0 ]; then
-        log "  ⚠️ 发现 $blank_lines 个空行，但可以继续"
-        warning_count=$((warning_count + 1))
-    fi
-    
-    log "3. 检查无效配置（配置名和等号之间包含空格）..."
-    local invalid_lines=$(grep -n "CONFIG_[^=]*[[:space:]]\+=" .config)
-    if [ -n "$invalid_lines" ]; then
-        log "❌ 发现无效配置行（配置名和等号之间包含空格）:"
-        echo "$invalid_lines" | head -3
-        error_count=$((error_count + 1))
-    fi
-    
-    log "4. 检查重复配置项..."
-    local duplicates=$(awk -F'=' '/^CONFIG_/ {print $1}' .config | sort | uniq -d)
-    if [ -n "$duplicates" ]; then
-        log "❌ 发现重复配置项:"
-        echo "$duplicates" | head -5
-        error_count=$((error_count + 1))
-        
-        # 修复重复配置
-        log "🔄 正在修复重复配置..."
-        awk -F'=' '!seen[$1]++' .config > .config.tmp && mv .config.tmp .config
-        log "✅ 重复配置已修复"
-    fi
-    
-    log "5. 检查配置冲突（同一配置既有=y又有is not set）..."
-    local config_names=$(awk -F'[ =]' '/^CONFIG_/ {print $2}' .config | sort | uniq)
-    local conflict_count=0
-    
-    for config in $config_names; do
-        local enabled_count=$(grep -c "^CONFIG_${config}=y" .config)
-        local disabled_count=$(grep -c "^# CONFIG_${config} is not set" .config)
-        
-        if [ $enabled_count -gt 0 ] && [ $disabled_count -gt 0 ]; then
-            log "❌ 配置冲突: $config 同时启用和禁用"
-            conflict_count=$((conflict_count + 1))
-            error_count=$((error_count + 1))
-            
-            # 修复冲突：保留启用的配置，删除禁用的配置
-            log "  🔧 修复冲突: 保留 CONFIG_${config}=y，删除禁用的配置"
-            sed -i "/^# CONFIG_${config} is not set/d" .config
-        fi
-    done
-    
-    log "6. 检查配置语法正确性（增强错误显示）..."
-    local syntax_errors=0
-    local line_num=0
-    
-    while IFS= read -r line; do
-        line_num=$((line_num + 1))
-        
-        # 跳过空行和注释
-        if [[ "$line" =~ ^[[:space:]]*$ ]] || [[ "$line" =~ ^# ]]; then
-            continue
-        fi
-        
-        # 检查配置行格式
-        if [[ "$line" =~ ^CONFIG_[A-Za-z0-9_-]+= ]]; then
-            # 启用配置，格式正确
-            continue
-        elif [[ "$line" =~ ^#\ CONFIG_[A-Za-z0-9_-]+\ is\ not\ set ]]; then
-            # 禁用配置，格式正确
-            continue
-        else
-            # 检查是否是常见无害的格式变体
-            if [[ "$line" =~ ^CONFIG_ ]] || [[ "$line" =~ ^#.*CONFIG_ ]]; then
-                # 记录但不算错误
-                if [ $syntax_errors -lt 3 ]; then
-                    log "  ⚠️ 第${line_num}行语法警告: 非标准格式但可能无害: $(echo "$line" | cut -c1-60)..."
-                fi
-                warning_count=$((warning_count + 1))
-                syntax_errors=$((syntax_errors + 1))
-            else
-                # 真正的问题行
-                log "❌ 第${line_num}行语法错误: 无法识别的格式"
-                echo "   内容: $line"
-                error_count=$((error_count + 1))
-            fi
-        fi
-    done < .config
-    
-    # 显示具体的警告内容
-    if [ $warning_count -gt 0 ]; then
-        log "📋 发现的警告详情:"
-        log "  - 空行: $blank_lines 个"
-        log "  - 非标准格式行: $syntax_errors 个"
-        log "💡 这些警告通常不会影响编译，但建议检查"
-    fi
-    
-    # 显示具体的错误内容
-    if [ $error_count -gt 0 ]; then
-        log "📋 发现的错误详情:"
-        if [ -n "$invalid_lines" ]; then
-            log "  - 配置名和等号之间有空格: $(echo "$invalid_lines" | wc -l) 处"
-        fi
-        if [ -n "$duplicates" ]; then
-            log "  - 重复配置项: $(echo "$duplicates" | wc -l) 个"
-        fi
-        if [ $conflict_count -gt 0 ]; then
-            log "  - 配置冲突: $conflict_count 个"
-        fi
-        log "🔧 已尝试自动修复部分问题"
-    fi
-    
-    # 总结
-    if [ $error_count -eq 0 ]; then
-        if [ $warning_count -eq 0 ]; then
-            log "✅ 配置语法验证通过，无错误和警告"
-        else
-            log "⚠️ 配置语法验证通过，但有 $warning_count 个警告"
-            log "💡 警告通常是格式问题，不会影响编译"
-        fi
-        return 0
-    else
-        log "❌ 配置语法验证发现 $error_count 个错误，$warning_count 个警告"
-        log "🔧 部分错误已自动修复，但建议检查配置文件"
-        return 1
-    fi
-}
-
-# ============ 修复：apply_config 函数（增强版） ============
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 应用配置并显示详情（增强版）==="
+    log "=== 应用配置并显示详情 ==="
     
     if [ ! -f ".config" ]; then
         log "❌ 错误: .config 文件不存在，无法应用配置"
@@ -1974,204 +1742,249 @@ apply_config() {
     log "配置文件大小: $(ls -lh .config | awk '{print $5}')"
     log "配置行数: $(wc -l < .config)"
     
-    # 先备份原始配置文件
-    if [ -f ".config" ]; then
-        local backup_file=".config.backup.$(date +%Y%m%d_%H%M%S)"
-        cp ".config" "$backup_file"
-        log "✅ 已备份原始配置文件: $backup_file"
-    fi
+    # 显示详细配置状态
+    echo ""
+    echo "=== 详细配置状态 ==="
     
-    # 步骤1: 验证配置语法
-    log "🔍 步骤1: 验证配置语法..."
-    if validate_config_syntax; then
-        log "✅ 配置语法验证通过"
-    else
-        log "⚠️ 配置语法有问题，尝试自动修复..."
-        # 尝试修复常见问题
-        make defconfig 2>&1 | tee /tmp/defconfig_fix.log
-        if [ $? -eq 0 ]; then
-            log "✅ defconfig 修复成功"
-        else
-            log "❌ defconfig 修复失败，但继续执行"
-            log "defconfig 错误日志（前20行）:"
-            cat /tmp/defconfig_fix.log | tail -20
-        fi
-    fi
-    
-    # 步骤2: 清理重复配置和冲突配置
-    log "🔧 步骤2: 清理重复和冲突配置..."
-    
-    # 清理重复的USB配置
-    local usb_configs=(
-        "kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-xhci-hcd"
-        "kmod-usb-xhci-pci" "kmod-usb-xhci-plat-hcd" "kmod-usb-ohci-pci"
-        "kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3"
-        "kmod-usb-dwc3-of-simple" "kmod-usb-xhci-mtk" "kmod-usb2-ath79"
-    )
-    
-    for config in "${usb_configs[@]}"; do
-        # 删除重复的启用配置
-        local enabled_count=$(grep -c "^CONFIG_PACKAGE_${config}=y" .config)
-        if [ $enabled_count -gt 1 ]; then
-            log "🔄 清理重复的启用配置: $config ($enabled_count 次)"
-            awk -v cfg="CONFIG_PACKAGE_${config}=y" '$0 == cfg && !seen[cfg]++' .config > .config.tmp && mv .config.tmp .config
-        fi
-        
-        # 删除重复的禁用配置
-        local disabled_count=$(grep -c "^# CONFIG_PACKAGE_${config} is not set" .config)
-        if [ $disabled_count -gt 1 ]; then
-            log "🔄 清理重复的禁用配置: $config ($disabled_count 次)"
-            awk -v cfg="# CONFIG_PACKAGE_${config} is not set" '$0 == cfg && !seen[cfg]++' .config > .config.tmp && mv .config.tmp .config
-        fi
-        
-        # 解决冲突：如果既有启用又有禁用，保留启用
-        if [ $enabled_count -gt 0 ] && [ $disabled_count -gt 0 ]; then
-            log "🔄 解决配置冲突: $config (保留启用，删除禁用)"
-            sed -i "/^# CONFIG_PACKAGE_${config} is not set/d" .config
-        fi
-    done
-    
-    # 步骤3: 运行 make defconfig (使用改进的错误处理)
-    log "🔄 步骤3: 运行 make defconfig..."
-    
-    # 清除旧的defconfig日志
-    rm -f /tmp/defconfig.log
-    
-    # 运行defconfig并捕获详细日志
-    if ! make defconfig 2>&1 | tee /tmp/defconfig.log; then
-        log "❌ make defconfig 失败"
-        log "详细错误信息:"
-        cat /tmp/defconfig.log | tail -30
-        
-        # 尝试分析错误原因
-        if grep -q "unknown statement" /tmp/defconfig.log; then
-            log "💡 错误分析: 发现未知语句错误"
-            log "🔧 尝试修复: 删除包含'unknown statement'的行后重试..."
-            
-            # 提取错误行号
-            grep "unknown statement" /tmp/defconfig.log | while read line; do
-                error_line=$(echo "$line" | grep -o "line [0-9]*" | grep -o "[0-9]*")
-                if [ -n "$error_line" ]; then
-                    log "  删除第 $error_line 行"
-                    sed -i "${error_line}d" .config
-                fi
-            done
-            
-            # 再次尝试defconfig
-            log "🔄 重新运行 make defconfig..."
-            if make defconfig 2>&1 | tee /tmp/defconfig_retry.log; then
-                log "✅ defconfig 修复成功"
-            else
-                log "❌ defconfig 仍然失败"
-                log "第二次尝试的错误日志:"
-                cat /tmp/defconfig_retry.log | tail -20
-                log "⚠️ 但继续执行，让构建过程自然失败"
-            fi
-        else
-            log "⚠️ 无法自动修复defconfig错误，但继续执行"
-        fi
-    else
-        log "✅ make defconfig 成功"
-    fi
-    
-    # 步骤4: 强制启用关键USB驱动（防止defconfig删除）
-    log "🔧 步骤4: 确保关键USB驱动被启用..."
-    
-    # 定义关键USB驱动
+    # 1. 关键USB配置状态
+    echo "🔧 关键USB配置状态:"
     local critical_usb_drivers=(
-        "CONFIG_PACKAGE_kmod-usb-core=y"
-        "CONFIG_PACKAGE_kmod-usb2=y"
-        "CONFIG_PACKAGE_kmod-usb3=y"
-        "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
-        "CONFIG_PACKAGE_kmod-usb-xhci-pci=y"
-        "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y"
-        "CONFIG_PACKAGE_kmod-usb-ohci-pci=y"
-        "CONFIG_PACKAGE_kmod-usb-dwc3=y"
-        "CONFIG_PACKAGE_kmod-usb-storage=y"
-        "CONFIG_PACKAGE_kmod-scsi-core=y"
+        "kmod-usb-core" "kmod-usb2" "kmod-usb3" 
+        "kmod-usb-ehci" "kmod-usb-ohci" "kmod-usb-xhci-hcd"
+        "kmod-usb-storage" "kmod-usb-storage-uas" "kmod-usb-storage-extras"
+        "kmod-scsi-core" "kmod-scsi-generic"
     )
     
-    # 平台专用驱动
-    if [ "$PLATFORM" = "ipq40xx" ]; then
-        critical_usb_drivers+=(
-            "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y"
-            "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y"
-            "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y"
-        )
-    elif [ "$PLATFORM" = "ramips" ]; then
-        critical_usb_drivers+=(
-            "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y"
-        )
-    elif [ "$PLATFORM" = "ath79" ]; then
-        critical_usb_drivers+=(
-            "CONFIG_PACKAGE_kmod-usb2-ath79=y"
-        )
-    fi
-    
-    # 添加或确保关键驱动
+    local missing_usb=0
     for driver in "${critical_usb_drivers[@]}"; do
-        local config_name=$(echo "$driver" | cut -d'=' -f1)
-        if ! grep -q "^${config_name}=y" .config; then
-            # 删除可能的禁用配置
-            sed -i "/^# ${config_name} is not set/d" .config
-            # 添加启用配置
-            echo "$driver" >> .config
-            log "✅ 已添加: $config_name"
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            echo "  ✅ $driver"
         else
-            log "ℹ️ 已存在: $config_name"
+            echo "  ❌ $driver - 缺失！"
+            missing_usb=$((missing_usb + 1))
         fi
     done
     
-    # 步骤5: 再次验证配置
-    log "🔍 步骤5: 最终配置验证..."
-    if validate_config_syntax; then
-        log "✅ 最终配置语法验证通过"
-    else
-        log "⚠️ 最终配置仍有警告，但继续执行"
+    # 2. 平台专用驱动检查
+    echo ""
+    echo "🔧 平台专用USB驱动状态:"
+    if [ "$PLATFORM" = "ipq40xx" ]; then
+        echo "  高通IPQ40xx平台专用驱动:"
+        local qcom_drivers=("kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3-of-simple")
+        for driver in "${qcom_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "    ✅ $driver"
+            else
+                echo "    ❌ $driver - 缺失！"
+                missing_usb=$((missing_usb + 1))
+            fi
+        done
+    elif [ "$PLATFORM" = "ramips" ]; then
+        echo "  雷凌MT76xx平台专用驱动:"
+        local mtk_drivers=("kmod-usb-ohci-pci" "kmod-usb2-pci" "kmod-usb-xhci-mtk")
+        for driver in "${mtk_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "    ✅ $driver"
+            else
+                echo "    ❌ $driver - 缺失！"
+                missing_usb=$((missing_usb + 1))
+            fi
+        done
+    elif [ "$PLATFORM" = "ath79" ]; then
+        echo "  ath79平台专用驱动:"
+        local ath79_drivers=("kmod-usb2-ath79")
+        for driver in "${ath79_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "    ✅ $driver"
+            else
+                echo "    ❌ $driver - 缺失！"
+                missing_usb=$((missing_usb + 1))
+            fi
+        done
     fi
     
-    # 步骤6: 运行defconfig确保配置一致
-    log "🔄 步骤6: 最终运行 make defconfig..."
-    if make defconfig 2>&1 | tee /tmp/final_defconfig.log; then
-        log "✅ 最终 defconfig 成功"
-    else
-        log "⚠️ 最终 defconfig 有警告，但继续执行"
-        cat /tmp/final_defconfig.log | tail -10
+    # 3. 文件系统支持检查
+    echo ""
+    echo "🔧 文件系统支持状态:"
+    local fs_drivers=("kmod-fs-ext4" "kmod-fs-vfat" "kmod-fs-exfat" "kmod-fs-ntfs3")
+    for driver in "${fs_drivers[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            echo "  ✅ $driver"
+        else
+            echo "  ❌ $driver - 缺失！"
+        fi
+    done
+    
+    # 4. 功能性插件状态
+    echo ""
+    echo "🚀 功能性插件状态:"
+    
+    local functional_plugins=(
+        "luci-app-turboacc" "TurboACC 网络加速"
+        "luci-app-upnp" "UPnP 自动端口转发"
+        "samba4-server" "Samba 文件共享"
+        "luci-app-diskman" "磁盘管理"
+        "vlmcsd" "KMS 激活服务"
+        "smartdns" "SmartDNS 智能DNS"
+        "luci-app-accesscontrol" "家长控制"
+        "luci-app-wechatpush" "微信推送"
+        "sqm-scripts" "流量控制 (SQM)"
+        "vsftpd" "FTP 服务器"
+        "luci-app-arpbind" "ARP 绑定"
+        "luci-app-cpulimit" "CPU 限制"
+        "luci-app-hd-idle" "硬盘休眠"
+    )
+    
+    for i in $(seq 0 2 $((${#functional_plugins[@]} - 1))); do
+        local plugin="${functional_plugins[$i]}"
+        local desc="${functional_plugins[$((i + 1))]}"
+        
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
+            echo "  ✅ $desc ($plugin)"
+        elif grep -q "^# CONFIG_PACKAGE_${plugin} is not set" .config; then
+            echo "  ❌ $desc ($plugin) - 已禁用"
+        else
+            echo "  ⚪ $desc ($plugin) - 未配置"
+        fi
+    done
+    
+    # 5. 统计信息
+    echo ""
+    echo "📊 配置统计信息:"
+    local enabled_count=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
+    local disabled_count=$(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)
+    echo "  ✅ 已启用插件: $enabled_count 个"
+    echo "  ❌ 已禁用插件: $disabled_count 个"
+    
+    # 6. 显示具体被禁用的插件（最多20个）
+    if [ $disabled_count -gt 0 ]; then
+        echo ""
+        echo "📋 具体被禁用的插件:"
+        local count=0
+        grep "^# CONFIG_PACKAGE_.* is not set$" .config | while read line; do
+            if [ $count -lt 20 ]; then
+                local pkg_name=$(echo $line | sed 's/# CONFIG_PACKAGE_//;s/ is not set//')
+                echo "  ❌ $pkg_name"
+                count=$((count + 1))
+            else
+                local remaining=$((disabled_count - 20))
+                echo "  ... 还有 $remaining 个被禁用的插件"
+                break
+            fi
+        done
     fi
     
-    # 步骤7: 显示最终配置状态
-    log "📊 步骤7: 显示最终配置状态..."
+    # 7. 修复缺失的关键USB驱动
+    if [ $missing_usb -gt 0 ]; then
+        echo ""
+        echo "🚨 修复缺失的关键USB驱动:"
+        
+        # 确保kmod-usb-xhci-hcd启用
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
+            echo "  修复: 启用 kmod-usb-xhci-hcd"
+            sed -i 's/^# CONFIG_PACKAGE_kmod-usb-xhci-hcd is not set$/CONFIG_PACKAGE_kmod-usb-xhci-hcd=y/' .config
+            if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
+                echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+            fi
+            echo "  ✅ 已修复 kmod-usb-xhci-hcd"
+        fi
+        
+        # 确保kmod-usb-xhci-pci启用
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-pci=y" .config; then
+            echo "  修复: 启用 kmod-usb-xhci-pci"
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
+            echo "  ✅ 已修复 kmod-usb-xhci-pci"
+        fi
+        
+        # 确保kmod-usb-xhci-plat-hcd启用
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" .config; then
+            echo "  修复: 启用 kmod-usb-xhci-plat-hcd"
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config
+            echo "  ✅ 已修复 kmod-usb-xhci-plat-hcd"
+        fi
+        
+        # 确保kmod-usb-ohci-pci启用
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-ohci-pci=y" .config; then
+            echo "  修复: 启用 kmod-usb-ohci-pci"
+            echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
+            echo "  ✅ 已修复 kmod-usb-ohci-pci"
+        fi
+        
+        # 确保kmod-usb-dwc3-of-simple启用（如果是高通平台）
+        if [ "$PLATFORM" = "ipq40xx" ] && ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" .config; then
+            echo "  修复: 启用 kmod-usb-dwc3-of-simple"
+            echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
+            echo "  ✅ 已修复 kmod-usb-dwc3-of-simple"
+        fi
+        
+        # 确保kmod-usb-xhci-mtk启用（如果是雷凌平台）
+        if [ "$PLATFORM" = "ramips" ] && ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config; then
+            echo "  修复: 启用 kmod-usb-xhci-mtk"
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
+            echo "  ✅ 已修复 kmod-usb-xhci-mtk"
+        fi
+        
+        # 确保kmod-usb2-ath79启用（如果是ath79平台）
+        if [ "$PLATFORM" = "ath79" ] && ! grep -q "^CONFIG_PACKAGE_kmod-usb2-ath79=y" .config; then
+            echo "  修复: 启用 kmod-usb2-ath79"
+            echo "CONFIG_PACKAGE_kmod-usb2-ath79=y" >> .config
+            echo "  ✅ 已修复 kmod-usb2-ath79"
+        fi
+    fi
+    
+    # 版本特定的配置修复
+    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+        log "🔧 23.05版本配置预处理"
+        sed -i 's/CONFIG_PACKAGE_ntfs-3g=y/# CONFIG_PACKAGE_ntfs-3g is not set/g' .config
+        sed -i 's/CONFIG_PACKAGE_ntfs-3g-utils=y/# CONFIG_PACKAGE_ntfs-3g-utils is not set/g' .config
+        sed -i 's/CONFIG_PACKAGE_ntfs3-mount=y/# CONFIG_PACKAGE_ntfs3-mount is not set/g' .config
+        log "✅ NTFS配置修复完成"
+    fi
+    
+    log "🔄 运行 make defconfig..."
+    make defconfig || handle_error "应用配置失败"
+    
+    log "🚨 强制启用关键USB驱动（防止defconfig删除）"
+    # 确保 USB 3.0 关键驱动被启用
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
+    
+    # 根据平台启用专用驱动
+    if [ "$PLATFORM" = "ipq40xx" ]; then
+        echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb-xhci-mtk is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb2-ath79 is not set" >> .config
+    elif [ "$PLATFORM" = "ramips" ]; then
+        echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb-dwc3-qcom is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-phy-qcom-dwc3 is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb-dwc3-of-simple is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb2-ath79 is not set" >> .config
+    elif [ "$PLATFORM" = "ath79" ]; then
+        echo "CONFIG_PACKAGE_kmod-usb2-ath79=y" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb-dwc3-qcom is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-phy-qcom-dwc3 is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb-dwc3-of-simple is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-usb-xhci-mtk is not set" >> .config
+    fi
+    
+    # 其他关键USB驱动
+    echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
+    
+    # 运行defconfig后，再次检查并修复USB驱动
+    check_usb_drivers_integrity
+    
+    # 最终检查
+    echo ""
+    echo "=== 最终配置检查 ==="
     local final_enabled=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
     local final_disabled=$(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)
-    log "✅ 最终状态: 已启用 $final_enabled 个, 已禁用 $final_disabled 个"
-    
-    # 显示关键配置状态
-    log "🔧 关键配置状态:"
-    echo "1. USB核心: $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" .config && echo "✅" || echo "❌")"
-    echo "2. USB 3.0: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo "✅" || echo "❌")"
-    echo "3. USB存储: $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" .config && echo "✅" || echo "❌")"
-    
-    # 根据平台显示专用驱动
-    if [ "$PLATFORM" = "ipq40xx" ]; then
-        echo "4. 高通USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo "✅" || echo "❌")"
-    elif [ "$PLATFORM" = "ramips" ]; then
-        echo "4. 雷凌USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config && echo "✅" || echo "❌")"
-    elif [ "$PLATFORM" = "ath79" ]; then
-        echo "4. ath79 USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb2-ath79=y" .config && echo "✅" || echo "❌")"
-    fi
-    
-    # 显示配置组合信息
-    log "📋 配置组合信息:"
-    if [ -f "$SUPPORT_DIR/config/${DEVICE_NAME}.config" ]; then
-        log "  🎯 使用设备特定配置: ${DEVICE_NAME}.config"
-        log "  📁 配置组合: 设备配置 + base.config + usb-generic.config"
-    else
-        if [ "$CONFIG_MODE" = "normal" ]; then
-            log "  📁 配置组合: base.config + normal.config + usb-generic.config"
-        else
-            log "  📁 配置组合: base.config + 基础模式配置 + usb-generic.config"
-        fi
-    fi
+    echo "✅ 最终状态: 已启用 $final_enabled 个, 已禁用 $final_disabled 个"
     
     log "✅ 配置应用完成"
     log "最终配置文件: .config"
@@ -2286,7 +2099,6 @@ integrate_custom_files() {
     
     log "自定义文件目录: $custom_dir"
     log "OpenWrt版本: $SELECTED_BRANCH"
-    log "源代码仓库: $SOURCE_REPO"
     
     # 递归查找所有自定义文件
     log "🔍 递归查找所有自定义文件..."
@@ -2412,14 +2224,14 @@ integrate_custom_files() {
     
     log "✅ 文件复制完成: $copied_count 个文件已复制，$skip_count 个文件跳过"
     
-    # 创建第一次开机运行的安装脚本（增强版）- 修复heredoc语法错误
+    # 创建第一次开机运行的安装脚本（增强版）- 无SSH测试
     echo ""
-    log "🔧 步骤3: 创建第一次开机安装脚本（增强版）"
+    log "🔧 步骤3: 创建第一次开机安装脚本（增强版）- 无SSH测试"
     
     local first_boot_dir="files/etc/uci-defaults"
     mkdir -p "$first_boot_dir"
     
-    # 使用cat命令创建脚本，避免heredoc语法错误
+    # 创建第一次开机运行的脚本 - 增强版，无SSH测试
     local first_boot_script="$first_boot_dir/99-custom-files"
     cat > "$first_boot_script" << 'EOF'
 #!/bin/sh
@@ -2448,29 +2260,29 @@ if [ -d "$CUSTOM_DIR" ]; then
         echo "  📄 $rel_path ($file_size)" >> $LOG_FILE
     done
     echo "" >> $LOG_FILE
-
+    
     # 1. 安装IPK文件（增强版）
     IPK_COUNT=0
     IPK_SUCCESS=0
     IPK_FAILED=0
-
+    
     echo "📦 开始安装IPK包..." >> $LOG_FILE
-
-    # 使用临时文件来存储文件列表
+    
+    # 使用临时文件来存储文件列表，确保while循环在当前shell中运行
     FILE_LIST=$(mktemp)
     find "$CUSTOM_DIR" -type f 2>/dev/null > "$FILE_LIST"
-
+    
     while IFS= read -r file; do
         file_name=$(basename "$file")
-
+        
         # 检查是否是IPK文件（不区分大小写）
         if echo "$file_name" | grep -qi "\.ipk$"; then
             IPK_COUNT=$((IPK_COUNT + 1))
             rel_path="${file#$CUSTOM_DIR/}"
-
+            
             echo "  🔧 正在安装 [$IPK_COUNT]: $rel_path" >> $LOG_FILE
             echo "      开始时间: $(date '+%H:%M:%S')" >> $LOG_FILE
-
+            
             # 安装IPK包，错误不退出
             if opkg install "$file" >> $LOG_FILE 2>&1; then
                 echo "      ✅ 安装成功" >> $LOG_FILE
@@ -2478,105 +2290,105 @@ if [ -d "$CUSTOM_DIR" ]; then
             else
                 echo "      ❌ 安装失败，继续下一个..." >> $LOG_FILE
                 IPK_FAILED=$((IPK_FAILED + 1))
-
+                
                 # 记录详细错误信息
                 echo "      错误信息:" >> $LOG_FILE
                 tail -5 $LOG_FILE >> $LOG_FILE 2>&1
             fi
-
+            
             echo "      结束时间: $(date '+%H:%M:%S')" >> $LOG_FILE
             echo "" >> $LOG_FILE
         fi
     done < "$FILE_LIST"
-
+    
     rm -f "$FILE_LIST"
-
+    
     echo "📊 IPK包安装统计:" >> $LOG_FILE
     echo "  尝试安装: $IPK_COUNT 个" >> $LOG_FILE
     echo "  成功: $IPK_SUCCESS 个" >> $LOG_FILE
     echo "  失败: $IPK_FAILED 个" >> $LOG_FILE
     echo "" >> $LOG_FILE
-
+    
     # 2. 运行脚本文件（增强版）
     SCRIPT_COUNT=0
     SCRIPT_SUCCESS=0
     SCRIPT_FAILED=0
-
+    
     echo "📜 开始运行脚本文件..." >> $LOG_FILE
-
+    
     # 使用临时文件来存储文件列表
     FILE_LIST=$(mktemp)
     find "$CUSTOM_DIR" -type f 2>/dev/null > "$FILE_LIST"
-
+    
     while IFS= read -r file; do
         file_name=$(basename "$file")
-
+        
         # 检查是否是脚本文件（不区分大小写）
         if echo "$file_name" | grep -qi "\.sh$"; then
             SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
             rel_path="${file#$CUSTOM_DIR/}"
-
+            
             echo "  🚀 正在运行 [$SCRIPT_COUNT]: $rel_path" >> $LOG_FILE
             echo "      开始时间: $(date '+%H:%M:%S')" >> $LOG_FILE
-
+            
             # 确保有执行权限
             chmod +x "$file" 2>/dev/null
-
+            
             # 运行脚本，错误不退出
             if sh "$file" >> $LOG_FILE 2>&1; then
                 echo "      ✅ 运行成功" >> $LOG_FILE
                 SCRIPT_SUCCESS=$((SCRIPT_SUCCESS + 1))
             else
-                exit_code=$?
+                local exit_code=$?
                 echo "      ❌ 运行失败，退出代码: $exit_code" >> $LOG_FILE
                 SCRIPT_FAILED=$((SCRIPT_FAILED + 1))
-
+                
                 # 记录详细错误信息
                 echo "      错误信息:" >> $LOG_FILE
                 tail -5 $LOG_FILE >> $LOG_FILE 2>&1
             fi
-
+            
             echo "      结束时间: $(date '+%H:%M:%S')" >> $LOG_FILE
             echo "" >> $LOG_FILE
         fi
     done < "$FILE_LIST"
-
+    
     rm -f "$FILE_LIST"
-
+    
     echo "📊 脚本运行统计:" >> $LOG_FILE
     echo "  尝试运行: $SCRIPT_COUNT 个" >> $LOG_FILE
     echo "  成功: $SCRIPT_SUCCESS 个" >> $LOG_FILE
     echo "  失败: $SCRIPT_FAILED 个" >> $LOG_FILE
     echo "" >> $LOG_FILE
-
+    
     # 3. 复制其他文件到特定位置
     OTHER_COUNT=0
     OTHER_SUCCESS=0
     OTHER_FAILED=0
-
+    
     echo "📁 处理其他文件..." >> $LOG_FILE
-
+    
     # 使用临时文件来存储文件列表
     FILE_LIST=$(mktemp)
     find "$CUSTOM_DIR" -type f 2>/dev/null > "$FILE_LIST"
-
+    
     while IFS= read -r file; do
         file_name=$(basename "$file")
-
+        
         # 跳过已处理的文件类型
         if echo "$file_name" | grep -qi "\.ipk$"; then
             continue  # 已经在IPK处理阶段处理过了
         fi
-
+        
         if echo "$file_name" | grep -qi "\.sh$"; then
             continue  # 已经在脚本处理阶段处理过了
         fi
-
+        
         OTHER_COUNT=$((OTHER_COUNT + 1))
         rel_path="${file#$CUSTOM_DIR/}"
-
+        
         echo "  📋 正在处理 [$OTHER_COUNT]: $rel_path" >> $LOG_FILE
-
+        
         # 根据文件类型处理
         if echo "$file_name" | grep -qi "\.conf$"; then
             # 配置文件复制到/etc/config/
@@ -2599,18 +2411,18 @@ if [ -d "$CUSTOM_DIR" ]; then
                 OTHER_FAILED=$((OTHER_FAILED + 1))
             fi
         fi
-
+        
         echo "" >> $LOG_FILE
     done < "$FILE_LIST"
-
+    
     rm -f "$FILE_LIST"
-
+    
     echo "📊 其他文件处理统计:" >> $LOG_FILE
     echo "  尝试处理: $OTHER_COUNT 个" >> $LOG_FILE
     echo "  成功: $OTHER_SUCCESS 个" >> $LOG_FILE
     echo "  失败: $OTHER_FAILED 个" >> $LOG_FILE
     echo "" >> $LOG_FILE
-
+    
     # 4. 安装完成总结
     echo "==================================================" >> $LOG_FILE
     echo "      自定义文件安装完成" >> $LOG_FILE
@@ -2618,34 +2430,34 @@ if [ -d "$CUSTOM_DIR" ]; then
     echo "      日志文件: $LOG_FILE" >> $LOG_FILE
     echo "==================================================" >> $LOG_FILE
     echo "" >> $LOG_FILE
-
+    
     TOTAL_FILES=$((IPK_COUNT + SCRIPT_COUNT + OTHER_COUNT))
     TOTAL_SUCCESS=$((IPK_SUCCESS + SCRIPT_SUCCESS + OTHER_SUCCESS))
     TOTAL_FAILED=$((IPK_FAILED + SCRIPT_FAILED + OTHER_FAILED))
-
+    
     echo "📈 总体统计:" >> $LOG_FILE
     echo "  总文件数: $TOTAL_FILES 个" >> $LOG_FILE
     echo "  成功处理: $TOTAL_SUCCESS 个" >> $LOG_FILE
     echo "  失败处理: $TOTAL_FAILED 个" >> $LOG_FILE
     echo "  成功率: $((TOTAL_SUCCESS * 100 / (TOTAL_SUCCESS + TOTAL_FAILED)))%" >> $LOG_FILE
     echo "" >> $LOG_FILE
-
+    
     echo "📋 详细分类统计:" >> $LOG_FILE
     echo "  📦 IPK包: $IPK_SUCCESS/$IPK_COUNT 成功" >> $LOG_FILE
     echo "  📜 脚本: $SCRIPT_SUCCESS/$SCRIPT_COUNT 成功" >> $LOG_FILE
     echo "  📁 其他文件: $OTHER_SUCCESS/$OTHER_COUNT 成功" >> $LOG_FILE
     echo "" >> $LOG_FILE
-
+    
     # 创建完成标记文件
     touch /etc/custom-files-installed
     echo "✅ 已创建安装完成标记: /etc/custom-files-installed" >> $LOG_FILE
-
+    
     echo "📝 重要信息:" >> $LOG_FILE
     echo "  安装日志位置: $LOG_FILE" >> $LOG_FILE
     echo "  日志目录: /root/logs/" >> $LOG_FILE
     echo "  下次启动不会再次安装（已有标记文件）" >> $LOG_FILE
     echo "  如需重新安装，请删除: /etc/custom-files-installed" >> $LOG_FILE
-
+    
 else
     echo "❌ 自定义文件目录不存在: $CUSTOM_DIR" >> $LOG_FILE
 fi
@@ -2655,7 +2467,7 @@ echo "=== 自定义文件安装脚本执行完成 ===" >> $LOG_FILE
 
 exit 0
 EOF
-
+    
     # 设置脚本权限
     chmod +x "$first_boot_script"
     log "✅ 创建第一次开机安装脚本: $first_boot_script"
@@ -2667,7 +2479,7 @@ EOF
     log "  5. ✅ 分类统计和成功率计算"
     log "  6. ✅ 日志存储到 /root/logs/ 目录（重启不丢失）"
     
-    # 创建文件名检查脚本（使用cat命令代替heredoc）
+    # 创建文件名检查脚本
     echo ""
     log "🔧 步骤4: 创建文件名检查脚本"
     
@@ -2701,7 +2513,7 @@ while IFS= read -r file; do
     TOTAL_FILES=$((TOTAL_FILES + 1))
     file_name=$(basename "$file")
     rel_path="${file#$CUSTOM_DIR/}"
-
+    
     # 检查是否只包含ASCII字符 - 修复正则表达式
     if echo "$file_name" | grep -q '^[a-zA-Z0-9_.\-]*$'; then
         ENGLISH_COUNT=$((ENGLISH_COUNT + 1))
@@ -2732,7 +2544,7 @@ fi
 echo ""
 echo "✅ 文件名检查完成"
 EOF
-
+    
     chmod +x "$name_check_script"
     log "✅ 创建文件名检查脚本: $name_check_script"
     
@@ -2774,13 +2586,15 @@ EOF
     
     # 保存自定义文件统计到文件，供其他步骤使用
     CUSTOM_FILE_STATS="/tmp/custom_file_stats.txt"
-    echo "CUSTOM_FILE_TOTAL=$file_count" > "$CUSTOM_FILE_STATS"
-    echo "CUSTOM_IPK_COUNT=$ipk_count" >> "$CUSTOM_FILE_STATS"
-    echo "CUSTOM_SCRIPT_COUNT=$script_count" >> "$CUSTOM_FILE_STATS"
-    echo "CUSTOM_CONFIG_COUNT=$config_count" >> "$CUSTOM_FILE_STATS"
-    echo "CUSTOM_OTHER_COUNT=$other_count" >> "$CUSTOM_FILE_STATS"
-    echo "CUSTOM_ENGLISH_COUNT=$english_count" >> "$CUSTOM_FILE_STATS"
-    echo "CUSTOM_NON_ENGLISH_COUNT=$non_english_count" >> "$CUSTOM_FILE_STATS"
+    cat > "$CUSTOM_FILE_STATS" << EOF
+CUSTOM_FILE_TOTAL=$file_count
+CUSTOM_IPK_COUNT=$ipk_count
+CUSTOM_SCRIPT_COUNT=$script_count
+CUSTOM_CONFIG_COUNT=$config_count
+CUSTOM_OTHER_COUNT=$other_count
+CUSTOM_ENGLISH_COUNT=$english_count
+CUSTOM_NON_ENGLISH_COUNT=$non_english_count
+EOF
     
     log "✅ 自定义文件统计已保存到: $CUSTOM_FILE_STATS"
 }
@@ -2800,7 +2614,6 @@ build_firmware() {
     log "  配置模式: $CONFIG_MODE"
     log "  编译器目录: $COMPILER_DIR"
     log "  平台: $PLATFORM"
-    log "  源代码仓库: $SOURCE_REPO"
     log "  启用缓存: $enable_cache"
     
     # 编译前最终检查
@@ -3175,7 +2988,6 @@ save_source_code_info() {
     echo "编译器目录: $COMPILER_DIR" >> "$source_info_file"
     echo "设备名称: $DEVICE_NAME" >> "$source_info_file"
     echo "平台: $PLATFORM" >> "$source_info_file"
-    echo "源代码仓库: $SOURCE_REPO" >> "$source_info_file"
     
     # 收集目录信息
     echo "" >> "$source_info_file"
@@ -3207,7 +3019,7 @@ main() {
             create_build_dir
             ;;
         "initialize_build_env")
-            initialize_build_env "$2" "$3" "$4" "$5"
+            initialize_build_env "$2" "$3" "$4"
             ;;
         "initialize_compiler_env")
             initialize_compiler_env "$2"
@@ -3247,9 +3059,6 @@ main() {
             ;;
         "pre_build_error_check")
             pre_build_error_check
-            ;;
-        "validate_config_syntax")
-            validate_config_syntax
             ;;
         "build_firmware")
             build_firmware "$2"
@@ -3292,7 +3101,7 @@ main() {
             echo "  add_turboacc_support, configure_feeds, install_turboacc_packages"
             echo "  pre_build_space_check, generate_config, verify_usb_config, check_usb_drivers_integrity, apply_config"
             echo "  fix_network, download_dependencies, integrate_custom_files"
-            echo "  pre_build_error_check, validate_config_syntax, build_firmware, post_build_space_check"
+            echo "  pre_build_error_check, build_firmware, post_build_space_check"
             echo "  check_firmware_files, cleanup, save_source_code_info, verify_compiler_files"
             echo "  check_compiler_invocation, search_compiler_files, universal_compiler_search"
             echo "  search_compiler_files_simple, intelligent_platform_aware_compiler_search"
