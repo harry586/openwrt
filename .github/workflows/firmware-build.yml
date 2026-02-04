@@ -8,7 +8,7 @@ on:
         description: "📱 设备名称 (自动从 support.sh 同步) - 当前支持: ac42u, cmcc_rax3000m, netgear_3800"
         required: true
         type: choice
-        default: "ac42u"
+        default: ""
         options:
           - "ac42u"
           - "cmcc_rax3000m"
