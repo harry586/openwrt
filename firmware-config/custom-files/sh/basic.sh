@@ -2,7 +2,7 @@
 # =============================================
 # OpenWrt DIY 脚本 - 双重模式：编译集成 + 运行时安装
 # 基础系统配置设置脚本（完整版）
-# 功能：主机名、IP地址、计划任务、升级配置、静态路由
+# 功能：主机名、IP地址、DNS、计划任务、升级配置、静态路由
 # =============================================
 
 # 检测运行环境
@@ -55,6 +55,7 @@ LAN_CONFIG="config interface 'lan'
 	option ipaddr '192.168.10.1'
 	option netmask '255.255.255.0'
 	option ip6assign '60'
+	option dns '127.0.0.1'
 
 config dhcp 'lan'
 	option interface 'lan'
@@ -78,10 +79,19 @@ if [ "$RUNTIME_MODE" = "true" ]; then
         uci set network.lan.ipaddr='192.168.10.1'
         uci set network.lan.netmask='255.255.255.0'
         
-        # 移除DNS设置（保持为空）
-        uci delete network.lan.dns 2>/dev/null || true
+        # 设置LAN DNS为127.0.0.1
+        uci delete network.lan.dns 2>/dev/null
+        uci set network.lan.dns='127.0.0.1'
         
         uci commit network
+        
+        # 设置WAN DNS为127.0.0.1（如果WAN接口存在）
+        if uci get network.wan >/dev/null 2>&1; then
+            uci delete network.wan.dns 2>/dev/null
+            uci set network.wan.dns='127.0.0.1'
+            uci commit network
+            echo "WAN DNS已设置为: 127.0.0.1"
+        fi
         
         # 修改DHCP配置
         if uci get dhcp.lan >/dev/null 2>&1; then
@@ -92,6 +102,7 @@ if [ "$RUNTIME_MODE" = "true" ]; then
         fi
         
         echo "LAN IP地址已设置为: 192.168.10.1"
+        echo "LAN DNS已设置为: 127.0.0.1"
         echo "注意：需要重启网络或重启系统才能生效"
         echo "重启网络命令: /etc/init.d/network restart"
     else
@@ -121,15 +132,18 @@ config interface 'lan'
 	option ipaddr '192.168.10.1'
 	option netmask '255.255.255.0'
 	option ip6assign '60'
+	option dns '127.0.0.1'
 
 config interface 'wan'
 	option ifname 'eth1'
 	option proto 'dhcp'
+	option dns '127.0.0.1'
 
 config interface 'wan6'
 	option ifname 'eth1'
 	option proto 'dhcpv6'
 EOF
+    echo "DNS配置已集成到固件：LAN和WAN均使用127.0.0.1"
 fi
 
 # ==================== 3. 设置自定义计划任务（追加方式） ====================
@@ -277,14 +291,24 @@ if uci get network.lan >/dev/null 2>&1; then
         uci set network.lan.ipaddr='192.168.10.1'
         uci set network.lan.netmask='255.255.255.0'
         
-        # 移除DNS设置（保持为空）
-        uci delete network.lan.dns 2>/dev/null || true
+        # 设置LAN DNS为127.0.0.1
+        uci delete network.lan.dns 2>/dev/null
+        uci set network.lan.dns='127.0.0.1'
         
         uci commit network
         echo "✓ LAN IP地址已设置为: 192.168.10.1/24"
+        echo "✓ LAN DNS已设置为: 127.0.0.1"
         echo "  注意：需要重启网络使IP更改生效"
     else
         echo "✓ LAN IP地址已经是192.168.10.1"
+    fi
+    
+    # 设置WAN DNS为127.0.0.1
+    if uci get network.wan >/dev/null 2>&1; then
+        uci delete network.wan.dns 2>/dev/null
+        uci set network.wan.dns='127.0.0.1'
+        uci commit network
+        echo "✓ WAN DNS已设置为: 127.0.0.1"
     fi
     
     # 配置DHCP
@@ -347,8 +371,9 @@ echo ""
 echo "【配置摘要】:"
 echo "  ✓ 主机名: Neptune"
 echo "  ✓ LAN IP地址: 192.168.10.1/24"
+echo "  ✓ LAN DNS: 127.0.0.1（指向路由器自身）"
+echo "  ✓ WAN DNS: 127.0.0.1（指向路由器自身）"
 echo "  ✓ DHCP范围: 192.168.10.100-250"
-echo "  ✓ DNS: 未设置（使用上游DNS）"
 echo "  ✓ 计划任务: 已追加自定义任务"
 echo "  ✓ 升级保留: /overlay（追加方式）"
 echo "  ✓ 静态路由: 192.168.7.0/24 via 192.168.5.100"
@@ -358,6 +383,10 @@ echo "  IP地址更改后需要重启网络或重启系统"
 echo "  重启网络命令: /etc/init.d/network restart"
 echo "  重启系统命令: reboot"
 echo "  访问地址: http://192.168.10.1"
+echo ""
+echo "【DNS配置说明】:"
+echo "  DNS设置为127.0.0.1表示使用路由器自身的DNS服务"
+echo "  需要确保已安装并配置dnsmasq或DNS相关服务"
 echo "================================"
 EOF
     chmod +x "$dest"
@@ -415,17 +444,19 @@ if [ "$RUNTIME_MODE" = "true" ]; then
     echo "【已配置】:"
     echo "  ✓ 主机名: Neptune"
     echo "  ✓ LAN IP地址: 192.168.10.1/24"
+    echo "  ✓ LAN DNS: 127.0.0.1"
+    echo "  ✓ WAN DNS: 127.0.0.1"
     echo "  ✓ DHCP服务: 已配置（100-250）"
     echo "  ✓ 计划任务: 已追加（不覆盖原有任务）"
     echo "  ✓ 升级配置: 保留/overlay（追加方式）"
     echo "  ✓ 静态路由: 192.168.7.0/24 → 192.168.5.100（去重）"
-    echo "  ✓ DNS设置: 未设置（使用上游DNS）"
     echo ""
     echo "【注意事项】:"
     echo "  1. IP地址更改需要重启网络或系统才能生效"
-    echo "  2. 无线配置因硬件差异需要手动配置"
-    echo "  3. 静态路由需要确保网关192.168.5.100可达"
-    echo "  4. 重启后访问地址: http://192.168.10.1"
+    echo "  2. DNS设置为127.0.0.1需要路由器上有DNS服务"
+    echo "  3. 无线配置因硬件差异需要手动配置"
+    echo "  4. 静态路由需要确保网关192.168.5.100可达"
+    echo "  5. 重启后访问地址: http://192.168.10.1"
     echo ""
     echo "【网络重启命令】:"
     echo "  /etc/init.d/network restart"
@@ -439,6 +470,8 @@ else
     echo "【已集成】:"
     echo "  ✓ 主机名配置"
     echo "  ✓ LAN IP地址配置（192.168.10.1）"
+    echo "  ✓ LAN DNS配置（127.0.0.1）"
+    echo "  ✓ WAN DNS配置（127.0.0.1）"
     echo "  ✓ DHCP服务配置"
     echo "  ✓ 自定义计划任务（需手动追加）"
     echo "  ✓ 升级保留配置"
@@ -450,7 +483,7 @@ else
     echo "  1. 默认IP地址: 192.168.10.1"
     echo "  2. 主机名自动设置为Neptune"
     echo "  3. DHCP服务自动开启（100-250）"
-    echo "  4. DNS为空（使用上游DNS）"
+    echo "  4. DNS指向路由器自身（127.0.0.1）"
     echo ""
     echo "【首次访问】:"
     echo "  刷机后访问: http://192.168.10.1"
