@@ -5,10 +5,14 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: "📱 设备名称 (如: ac42u)"
+        description: "📱 设备名称 (自动从 support.sh 同步) - 当前支持: ac42u, cmcc_rax3000m, netgear_3800"
         required: true
+        type: choice
         default: "ac42u"
-        type: string
+        options:
+          - "ac42u"
+          - "cmcc_rax3000m"
+          - "netgear_3800"
       version_selection:
         description: "🔄 版本选择"
         required: true
@@ -21,6 +25,12 @@ on:
         type: choice
         default: "normal"
         options: ["base", "normal"]
+      source_repo:
+        description: "📦 源代码仓库选择 - 🔄 ImmortalWrt (默认) ⚡ LEDE (国内优化)"
+        required: true
+        type: choice
+        default: "immortalwrt"
+        options: ["immortalwrt", "lede"]
       extra_packages:
         description: "额外安装插件 - 格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。"
         required: false
