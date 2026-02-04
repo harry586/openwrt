@@ -5,12 +5,12 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: "📱 设备名称 (自动从 support.sh 同步) - 当前支持: acrh17, cmcc_rax3000m, netgear_3800"
+        description: "📱 设备名称 (自动从 support.sh 同步) - 当前支持: ac42u, cmcc_rax3000m, netgear_3800"
         required: true
         type: choice
-        default: "acrh17"
+        default: "ac42u"
         options:
-          - "acrh17"
+          - "ac42u"
           - "cmcc_rax3000m"
           - "netgear_3800"
       version_selection:
