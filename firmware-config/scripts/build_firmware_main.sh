@@ -1,47 +1,29 @@
 #!/bin/bash
 set -e
 
-# ==============================================================================
-# OpenWrt/ImmortalWrt 固件构建系统
-# 
-# 主要功能：
-# 1. 自动化编译 OpenWrt/ImmortalWrt 固件
-# 2. 支持多种设备（路由器）
-# 3. 集成自定义文件和配置
-# 4. 下载和使用官方SDK工具链
-# 5. 详细的日志和错误处理
-# ==============================================================================
-
-#【build_firmware_main.sh-01】文件头：变量定义和日志函数
-# 全局变量定义
 BUILD_DIR="/mnt/openwrt-build"
 ENV_FILE="$BUILD_DIR/build_env.sh"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# 修复：SUPPORT_DIR 应该指向 firmware-config 目录本身
 SUPPORT_DIR="$REPO_ROOT/firmware-config"
 
 # 确保有日志目录
 mkdir -p /tmp/build-logs
 
-# 日志函数：输出带时间戳的日志信息
 log() {
     echo "【$(date '+%Y-%m-%d %H:%M:%S')】$1"
 }
 
-#【build_firmware_main.sh-02】错误处理函数
-# 处理构建过程中的错误，显示详细错误信息
 handle_error() {
-    local error_location="$1"
-    log "❌ 错误发生在: $error_location"
+    log "❌ 错误发生在: $1"
     log "详细错误信息:"
-    
-    # 显示最后100行构建日志
     echo "最后100行构建日志:"
     tail -100 /tmp/build-logs/*.log 2>/dev/null || echo "无日志文件"
     
     # 检查defconfig日志
     if [ -f "/tmp/defconfig.log" ]; then
         echo "defconfig 错误日志:"
-        cat "/tmp/defconfig.log"
+        cat /tmp/defconfig.log
     fi
     
     # 检查.config文件
@@ -53,58 +35,53 @@ handle_error() {
     exit 1
 }
 
-#【build_firmware_main.sh-03】环境变量管理函数
-# 加载环境变量函数
-load_env() {
-    if [ -f "$ENV_FILE" ]; then
-        source "$ENV_FILE"
-        log "✅ 从 $ENV_FILE 加载环境变量"
-    fi
-}
-
-# 保存环境变量到文件
+# 保存环境变量函数 - 修复版
 save_env() {
     mkdir -p $BUILD_DIR
+    echo "#!/bin/bash" > $ENV_FILE
+    echo "export SELECTED_REPO_URL=\"${SELECTED_REPO_URL}\"" >> $ENV_FILE
+    echo "export SELECTED_BRANCH=\"${SELECTED_BRANCH}\"" >> $ENV_FILE
+    echo "export TARGET=\"${TARGET}\"" >> $ENV_FILE
+    echo "export SUBTARGET=\"${SUBTARGET}\"" >> $ENV_FILE
+    echo "export DEVICE=\"${DEVICE}\"" >> $ENV_FILE
+    echo "export CONFIG_MODE=\"${CONFIG_MODE}\"" >> $ENV_FILE
+    echo "export REPO_ROOT=\"${REPO_ROOT}\"" >> $ENV_FILE
+    echo "export COMPILER_DIR=\"${COMPILER_DIR}\"" >> $ENV_FILE
+    echo "export DEVICE_NAME=\"${DEVICE_NAME}\"" >> $ENV_FILE
+    echo "export PLATFORM=\"${PLATFORM}\"" >> $ENV_FILE
+    echo "export SOURCE_REPO=\"${SOURCE_REPO}\"" >> $ENV_FILE
     
-    # 创建环境文件
-    {
-        echo "#!/bin/bash"
-        echo "export SELECTED_REPO_URL=\"${SELECTED_REPO_URL}\""
-        echo "export SELECTED_BRANCH=\"${SELECTED_BRANCH}\""
-        echo "export TARGET=\"${TARGET}\""
-        echo "export SUBTARGET=\"${SUBTARGET}\""
-        echo "export DEVICE=\"${DEVICE}\""
-        echo "export CONFIG_MODE=\"${CONFIG_MODE}\""
-        echo "export REPO_ROOT=\"${REPO_ROOT}\""
-        echo "export COMPILER_DIR=\"${COMPILER_DIR}\""
-        echo "export DEVICE_NAME=\"${DEVICE_NAME}\""
-        echo "export PLATFORM=\"${PLATFORM}\""
-        echo "export SOURCE_REPO=\"${SOURCE_REPO}\""
-    } > $ENV_FILE
-    
-    # 保存到GitHub环境变量
+    # 确保环境变量可被其他步骤访问
     if [ -n "$GITHUB_ENV" ]; then
-        {
-            echo "SELECTED_REPO_URL=${SELECTED_REPO_URL}"
-            echo "SELECTED_BRANCH=${SELECTED_BRANCH}"
-            echo "TARGET=${TARGET}"
-            echo "SUBTARGET=${SUBTARGET}"
-            echo "DEVICE=${DEVICE}"
-            echo "CONFIG_MODE=${CONFIG_MODE}"
-            echo "COMPILER_DIR=${COMPILER_DIR}"
-            echo "DEVICE_NAME=${DEVICE_NAME}"
-            echo "PLATFORM=${PLATFORM}"
-            echo "SOURCE_REPO=${SOURCE_REPO}"
-        } >> $GITHUB_ENV
+        echo "SELECTED_REPO_URL=${SELECTED_REPO_URL}" >> $GITHUB_ENV
+        echo "SELECTED_BRANCH=${SELECTED_BRANCH}" >> $GITHUB_ENV
+        echo "TARGET=${TARGET}" >> $GITHUB_ENV
+        echo "SUBTARGET=${SUBTARGET}" >> $GITHUB_ENV
+        echo "DEVICE=${DEVICE}" >> $GITHUB_ENV
+        echo "CONFIG_MODE=${CONFIG_MODE}" >> $GITHUB_ENV
+        echo "COMPILER_DIR=${COMPILER_DIR}" >> $GITHUB_ENV
+        echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
+        echo "PLATFORM=${PLATFORM}" >> $GITHUB_ENV
+        echo "SOURCE_REPO=${SOURCE_REPO}" >> $GITHUB_ENV
     fi
     
     chmod +x $ENV_FILE
     log "✅ 环境变量已保存到: $ENV_FILE"
 }
 
-#【build_firmware_main.sh-04】设备支持系统函数
+# 加载环境变量函数
+load_env() {
+    if [ -f "$ENV_FILE" ]; then
+        source $ENV_FILE
+        log "✅ 从 $ENV_FILE 加载环境变量"
+    else
+        log "⚠️ 环境文件不存在: $ENV_FILE"
+    fi
+}
+
 # 加载设备支持脚本
 load_device_support() {
+    # 修复：support.sh 在 firmware-config 根目录下
     local support_file="$SUPPORT_DIR/support.sh"
     if [ -f "$support_file" ]; then
         source "$support_file"
@@ -119,6 +96,7 @@ load_device_support() {
 # 加载配置模板
 load_config_template() {
     local template_name="$1"
+    # 修复：配置文件在 firmware-config/config/ 目录下
     local template_file="$SUPPORT_DIR/config/${template_name}.config"
     
     if [ -f "$template_file" ]; then
@@ -131,8 +109,7 @@ load_config_template() {
     fi
 }
 
-#【build_firmware_main.sh-05】USB配置函数
-# 根据平台和版本加载USB配置
+# 加载USB配置
 load_usb_config() {
     local platform="$1"
     local version="$2"
@@ -162,10 +139,6 @@ load_usb_config() {
             echo "CONFIG_PACKAGE_kmod-usb2-ath79=y" >> .config
             log "✅ 添加ath79平台专用USB驱动"
             ;;
-        "mediatek")
-            echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
-            log "✅ 添加mediatek平台专用USB驱动"
-            ;;
     esac
     
     # 版本特定的NTFS配置
@@ -182,7 +155,7 @@ load_usb_config() {
     fi
 }
 
-#【build_firmware_main.sh-06】编译器搜索函数（已废弃，保持兼容性）
+# 智能平台感知的编译器搜索（两步搜索法） - 修改为下载SDK
 intelligent_platform_aware_compiler_search() {
     local search_root="${1:-/tmp}"
     local target_platform="$2"
@@ -196,7 +169,7 @@ intelligent_platform_aware_compiler_search() {
     return 1
 }
 
-#【build_firmware_main.sh-07】SDK下载函数 - 修复MT7981平台URL
+# 新增：下载OpenWrt官方SDK工具链函数
 download_openwrt_sdk() {
     local target="$1"
     local subtarget="$2"
@@ -206,6 +179,7 @@ download_openwrt_sdk() {
     log "目标平台: $target/$subtarget"
     log "OpenWrt版本: $version"
     
+    # 确定SDK下载URL
     local sdk_url=""
     local sdk_filename=""
     
@@ -214,66 +188,40 @@ download_openwrt_sdk() {
         sdk_url=$(get_sdk_url "$target" "$subtarget" "$version")
     fi
     
-    # 如果支持脚本没有提供URL，使用内置配置
     if [ -z "$sdk_url" ]; then
-        # 根据版本选择不同的SDK URL
+        # 如果支持脚本没有提供URL，使用内置配置
         if [ "$version" = "23.05" ] || [ "$version" = "openwrt-23.05" ]; then
-            # OpenWrt 23.05 SDK
+            # OpenWrt 23.05 SDK - 修复GCC版本为12.3.0
             case "$target" in
                 "ipq40xx")
                     sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
                     ;;
                 "ramips")
                     if [ "$subtarget" = "mt76x8" ]; then
-                        sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt76x8/openwrt-sdk-23.05.3-ramips-mt76x8_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+                        sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt76x8/openwrt-sdk-23.05.3-ramips-mt76x8_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
                     elif [ "$subtarget" = "mt7621" ]; then
                         sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt7621/openwrt-sdk-23.05.3-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-                    elif [ "$subtarget" = "mt7981" ]; then
-                        sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/mediatek/mt7981/openwrt-sdk-23.05.3-mediatek-mt7981_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-                        log "✅ 使用MT7981 23.05 SDK"
                     fi
                     ;;
                 "ath79")
                     sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ath79/generic/openwrt-sdk-23.05.3-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-                    log "✅ 使用ath79/generic SDK"
-                    ;;
-                "mediatek")
-                    if [ "$subtarget" = "mt7981" ]; then
-                        sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/mediatek/mt7981/openwrt-sdk-23.05.3-mediatek-mt7981_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-                        log "✅ 使用mediatek/mt7981 SDK"
-                    elif [ "$subtarget" = "mt7622" ]; then
-                        sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/mediatek/mt7622/openwrt-sdk-23.05.3-mediatek-mt7622_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-                    else
-                        sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/mediatek/mt7981/openwrt-sdk-23.05.3-mediatek-mt7981_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-                        log "✅ mediatek平台默认使用mt7981 SDK"
-                    fi
                     ;;
             esac
         elif [ "$version" = "21.02" ] || [ "$version" = "openwrt-21.02" ]; then
-            # OpenWrt 21.02 SDK
+            # OpenWrt 21.02 SDK - GCC版本保持8.4.0
             case "$target" in
                 "ipq40xx")
                     sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
                     ;;
                 "ramips")
                     if [ "$subtarget" = "mt76x8" ]; then
-                        sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt76x8/openwrt-sdk-21.02.7-ramips-mt76x8_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+                        sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt76x8/openwrt-sdk-21.02.7-ramips-mt76x8_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
                     elif [ "$subtarget" = "mt7621" ]; then
                         sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt7621/openwrt-sdk-21.02.7-ramips-mt7621_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
                     fi
                     ;;
                 "ath79")
                     sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ath79/generic/openwrt-sdk-21.02.7-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
-                    log "✅ 使用ath79/generic SDK (21.02)"
-                    ;;
-                "mediatek")
-                    if [ "$subtarget" = "mt7981" ]; then
-                        log "⚠️ 21.02版本可能没有mt7981 SDK，尝试使用mt7622 SDK"
-                        sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/mediatek/mt7622/openwrt-sdk-21.02.7-mediatek-mt7622_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
-                    else
-                        log "⚠️ 21.02版本可能没有mediatek SDK，尝试使用ramips SDK"
-                        sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt7621/openwrt-sdk-21.02.7-ramips-mt7621_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
-                    fi
                     ;;
             esac
         fi
@@ -281,7 +229,6 @@ download_openwrt_sdk() {
     
     if [ -z "$sdk_url" ]; then
         log "❌ 无法确定SDK下载URL"
-        log "🔍 尝试的平台: $target/$subtarget, 版本: $version"
         return 1
     fi
     
@@ -299,11 +246,11 @@ download_openwrt_sdk() {
         log "✅ SDK下载成功"
     else
         log "⚠️ 首次下载失败，尝试备用下载..."
+        # 尝试使用curl
         if curl -L --connect-timeout 30 --retry 3 -o "$sdk_dir/$sdk_filename" "$sdk_url"; then
             log "✅ SDK下载成功（使用curl）"
         else
             log "❌ SDK下载失败"
-            log "💡 可能是URL不正确或网络问题，URL: $sdk_url"
             return 1
         fi
     fi
@@ -354,6 +301,7 @@ download_openwrt_sdk() {
         log "✅ 找到SDK中的编译器目录: $toolchain_dir"
         export COMPILER_DIR="$toolchain_dir"
         
+        # 验证编译器
         verify_compiler_files
         return 0
     else
@@ -362,7 +310,7 @@ download_openwrt_sdk() {
     fi
 }
 
-#【build_firmware_main.sh-08】GCC版本检查函数
+# 专门的GCC版本检查函数（放宽版本要求，修复23.05 SDK验证）
 check_gcc_version() {
     local gcc_path="$1"
     local target_version="${2:-11}"
@@ -418,7 +366,7 @@ check_gcc_version() {
     fi
 }
 
-#【build_firmware_main.sh-09】编译器验证函数
+# 验证预构建编译器文件（使用两步搜索法）- 修复23.05验证逻辑
 verify_compiler_files() {
     log "=== 验证预构建编译器文件 ==="
     
@@ -466,7 +414,7 @@ verify_compiler_files() {
     log "  路径: $compiler_dir"
     log "  大小: $(du -sh "$compiler_dir" 2>/dev/null | cut -f1 || echo '未知')"
     
-    # 查找真正的GCC编译器（排除工具链工具和虚假编译器）
+    # 查找真正的GCC编译器（排除工具链工具和虚假编译器）- 修复查找逻辑
     log "⚙️ 可执行编译器检查:"
     local gcc_executable=""
     
@@ -633,7 +581,7 @@ verify_compiler_files() {
     log "  GCC兼容版本: $([ $gcc_version_valid -eq 1 ] && echo "是" || echo "否")"
     log "  工具链工具: $tool_found_count/${#required_tools[@]} 找到"
     
-    # 评估是否可用（放宽版本要求）
+    # 评估是否可用（放宽版本要求）- 修复23.05评估逻辑
     if [ -n "$gcc_executable" ] && [ $gcc_version_valid -eq 1 ] && [ $tool_found_count -ge 5 ]; then
         log "🎉 预构建编译器文件完整，GCC版本兼容"
         log "📌 编译器目录: $compiler_dir"
@@ -678,7 +626,7 @@ verify_compiler_files() {
     fi
 }
 
-#【build_firmware_main.sh-10】编译器调用状态检查
+# 检查编译器调用状态（增强版）
 check_compiler_invocation() {
     log "=== 检查编译器调用状态（增强版）==="
     
@@ -879,12 +827,12 @@ check_compiler_invocation() {
     log "✅ 编译器调用状态检查完成"
 }
 
-#【build_firmware_main.sh-11】前置错误检查函数
+# 前置错误检查（修复23.05 SDK验证问题） - 关键修复
 pre_build_error_check() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 🚨 前置错误检查（修复LEDE分支检查）==="
+    log "=== 🚨 前置错误检查（修复23.05 SDK验证）==="
     
     local error_count=0
     local warning_count=0
@@ -909,34 +857,7 @@ pre_build_error_check() {
         log "✅ .config 文件存在"
     fi
     
-    # 2. 检查内核版本文件
-    log "🔍 检查内核版本配置..."
-    if ! grep -q "^CONFIG_KERNEL_" .config; then
-        log "⚠️ 未找到内核版本配置，添加默认配置"
-        
-        # 根据SELECTED_BRANCH设置内核版本
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] || [ "$SELECTED_BRANCH" = "master" ]; then
-            {
-                echo "# Kernel configuration"
-                echo "CONFIG_KERNEL_NET=y"
-                echo "CONFIG_KERNEL_IPV6=y"
-                echo "CONFIG_KERNEL_BRIDGE=y"
-                echo "CONFIG_KERNEL_FS_POSIX_ACL=y"
-                echo "CONFIG_KERNEL_CGROUPS=y"
-            } >> .config
-            log "✅ 添加23.05/master内核默认配置"
-        else
-            {
-                echo "# Kernel configuration"
-                echo "CONFIG_KERNEL_IPV6=y"
-                echo "CONFIG_KERNEL_BRIDGE=y"
-                echo "CONFIG_KERNEL_FS_POSIX_ACL=y"
-            } >> .config
-            log "✅ 添加21.02内核默认配置"
-        fi
-    fi
-    
-    # 3. 检查feeds
+    # 2. 检查feeds
     if [ ! -d "feeds" ]; then
         log "❌ 错误: feeds 目录不存在"
         error_count=$((error_count + 1))
@@ -944,7 +865,7 @@ pre_build_error_check() {
         log "✅ feeds 目录存在"
     fi
     
-    # 4. 检查依赖包
+    # 3. 检查依赖包
     if [ ! -d "dl" ]; then
         log "⚠️ 警告: dl 目录不存在，可能需要下载依赖"
         warning_count=$((warning_count + 1))
@@ -953,21 +874,21 @@ pre_build_error_check() {
         log "✅ 依赖包数量: $dl_count 个"
     fi
     
-    # 5. 检查编译器状态
+    # 4. 检查编译器状态
     if [ -d "staging_dir" ]; then
         local compiler_count=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" 2>/dev/null | wc -l)
         if [ $compiler_count -eq 0 ]; then
             log "ℹ️ 未找到已构建的编译器"
-            log "📌 将使用下载的SDK编译器或内置工具链"
+            log "📌 已下载SDK编译器，无需自动构建"
         else
             log "✅ 已检测到编译器: $compiler_count 个"
         fi
     else
         log "ℹ️ staging_dir目录不存在"
-        log "📌 将使用下载的SDK编译器或内置工具链进行构建"
+        log "📌 将使用下载的SDK编译器进行构建"
     fi
     
-    # 6. 检查关键文件
+    # 5. 检查关键文件
     local critical_files=("Makefile" "rules.mk" "Config.in" "feeds.conf.default")
     for file in "${critical_files[@]}"; do
         if [ -f "$file" ]; then
@@ -978,25 +899,7 @@ pre_build_error_check() {
         fi
     done
     
-    # 7. 检查内核Makefile
-    log "🔍 检查内核Makefile..."
-    if [ -f "target/linux/$TARGET/Makefile" ]; then
-        log "✅ 目标平台Makefile存在: target/linux/$TARGET/Makefile"
-        
-        # 检查内核版本配置
-        local kernel_config=$(grep "KERNEL_PATCHVER" "target/linux/$TARGET/Makefile")
-        if [ -n "$kernel_config" ]; then
-            log "📌 内核版本配置: $kernel_config"
-        else
-            log "⚠️ 警告: 内核版本配置未找到"
-            warning_count=$((warning_count + 1))
-        fi
-    else
-        log "❌ 错误: 目标平台Makefile不存在: target/linux/$TARGET/Makefile"
-        error_count=$((error_count + 1))
-    fi
-    
-    # 8. 检查磁盘空间
+    # 6. 检查磁盘空间
     local available_space=$(df /mnt --output=avail | tail -1)
     local available_gb=$((available_space / 1024 / 1024))
     log "磁盘可用空间: ${available_gb}G"
@@ -1011,7 +914,7 @@ pre_build_error_check() {
         log "✅ 编译前空间充足"
     fi
     
-    # 9. 检查内存
+    # 7. 检查内存
     local total_mem=$(free -m | awk '/^Mem:/{print $2}')
     log "系统内存: ${total_mem}MB"
     
@@ -1020,12 +923,15 @@ pre_build_error_check() {
         warning_count=$((warning_count + 1))
     fi
     
-    # 10. 检查预构建编译器文件
+    # 8. 检查预构建编译器文件 - 关键修复：简化23.05验证逻辑
     log "🔧 检查预构建编译器文件..."
+    
+    # 简化验证逻辑，只做基本检查
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
         log "✅ 预构建编译器目录存在: $COMPILER_DIR"
+        log "📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
         
-        # 查找真正的GCC编译器
+        # 放宽检查：只需要有编译器文件，不要求特定目录结构，排除虚假编译器
         local gcc_files=$(find "$COMPILER_DIR" -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
@@ -1037,16 +943,68 @@ pre_build_error_check() {
         
         if [ $gcc_files -gt 0 ]; then
             log "✅ 找到 $gcc_files 个GCC编译器文件"
+            
+            # 显示第一个GCC的版本信息
+            local first_gcc=$(find "$COMPILER_DIR" -type f -executable \
+              -name "*gcc" \
+              ! -name "*gcc-ar" \
+              ! -name "*gcc-ranlib" \
+              ! -name "*gcc-nm" \
+              ! -path "*dummy-tools*" \
+              ! -path "*scripts*" \
+              2>/dev/null | head -1)
+            
+            if [ -n "$first_gcc" ]; then
+                log "🔧 第一个GCC版本: $("$first_gcc" --version 2>&1 | head -1)"
+                
+                # 对于23.05 SDK的特殊处理
+                if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+                    local sdk_version=$("$first_gcc" --version 2>&1 | head -1)
+                    if echo "$sdk_version" | grep -qi "12.3.0"; then
+                        log "🎯 确认是OpenWrt 23.05 SDK GCC 12.3.0"
+                    elif echo "$sdk_version" | grep -qi "dummy-tools"; then
+                        log "⚠️ 检测到虚假的dummy-tools编译器，继续查找..."
+                        # 查找其他GCC
+                        local real_gcc=$(find "$COMPILER_DIR" -type f -executable \
+                          -name "*gcc" \
+                          ! -name "*gcc-ar" \
+                          ! -name "*gcc-ranlib" \
+                          ! -name "*gcc-nm" \
+                          ! -path "*dummy-tools*" \
+                          ! -path "*scripts*" \
+                          ! -path "$(dirname "$first_gcc")" \
+                          2>/dev/null | head -1)
+                        
+                        if [ -n "$real_gcc" ]; then
+                            log "✅ 找到真正的GCC: $(basename "$real_gcc")"
+                            log "🔧 版本: $("$real_gcc" --version 2>&1 | head -1)"
+                        fi
+                    else
+                        log "⚠️ 23.05 SDK GCC版本不是预期的12.3.0"
+                        log "💡 可能不是官方的23.05 SDK，但可以继续尝试"
+                    fi
+                fi
+            fi
         else
             log "⚠️ 警告: 预构建编译器目录中未找到真正的GCC编译器"
             warning_count=$((warning_count + 1))
+            
+            # 检查是否有工具链工具
+            local toolchain_tools=$(find "$COMPILER_DIR" -type f -executable -name "*gcc*" \
+              ! -path "*dummy-tools*" \
+              ! -path "*scripts*" \
+              2>/dev/null | wc -l)
+            if [ $toolchain_tools -gt 0 ]; then
+                log "📊 找到 $toolchain_tools 个工具链工具"
+                log "💡 有工具链工具但没有真正的GCC编译器"
+            fi
         fi
     else
         log "ℹ️ 未设置预构建编译器目录或目录不存在"
         log "💡 将使用OpenWrt自动构建的编译器"
     fi
     
-    # 11. 检查编译器调用状态
+    # 9. 检查编译器调用状态（使用增强版）
     check_compiler_invocation
     
     # 总结
@@ -1063,7 +1021,6 @@ pre_build_error_check() {
     fi
 }
 
-#【build_firmware_main.sh-12】环境设置函数
 setup_environment() {
     log "=== 安装编译依赖包 ==="
     sudo apt-get update || handle_error "apt-get update失败"
@@ -1123,26 +1080,41 @@ setup_environment() {
     log "✅ 编译环境设置完成"
 }
 
-#【build_firmware_main.sh-13】构建环境初始化函数
+create_build_dir() {
+    log "=== 创建构建目录 ==="
+    sudo mkdir -p $BUILD_DIR || handle_error "创建构建目录失败"
+    sudo chown -R $USER:$USER $BUILD_DIR || handle_error "修改目录所有者失败"
+    sudo chmod -R 755 $BUILD_DIR || handle_error "修改目录权限失败"
+    
+    # 检查目录权限
+    if [ -w "$BUILD_DIR" ]; then
+        log "✅ 构建目录创建完成: $BUILD_DIR"
+    else
+        log "❌ 构建目录权限错误"
+        exit 1
+    fi
+}
+
+# 初始化构建环境 - 使用设备支持脚本（修复版：简化源代码仓库选择）
 initialize_build_env() {
     local device_name=$1
     local version_selection=$2
     local config_mode=$3
-    local source_repo=${4:-"immortalwrt"}
+    local source_repo=${4:-"immortalwrt"}  # 添加第四个参数，默认immortalwrt
     
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
     log "=== 版本选择 ==="
     log "源代码仓库: $source_repo"
     
-    # 根据仓库选择不同的URL
+    # 根据仓库选择不同的URL - 只保留immortalwrt和lede
     case "$source_repo" in
         "immortalwrt")
             SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
             ;;
         "lede")
             SELECTED_REPO_URL="https://github.com/coolsnowwolf/lede.git"
-            SELECTED_BRANCH="master"
+            SELECTED_BRANCH="master"  # LEDE使用master分支
             ;;
         *)
             SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
@@ -1151,10 +1123,7 @@ initialize_build_env() {
     esac
     
     # 根据版本选择分支（LEDE除外）
-    if [ "$source_repo" = "lede" ]; then
-        SELECTED_BRANCH="master"
-        log "🔧 LEDE仓库使用master分支"
-    else
+    if [ "$source_repo" != "lede" ]; then
         if [ "$version_selection" = "23.05" ]; then
             SELECTED_BRANCH="openwrt-23.05"
         else
@@ -1162,6 +1131,7 @@ initialize_build_env() {
         fi
     fi
     
+    # 设置SOURCE_REPO环境变量
     SOURCE_REPO="$source_repo"
     
     log "✅ 版本选择完成: $SELECTED_BRANCH (仓库: $source_repo)"
@@ -1170,7 +1140,7 @@ initialize_build_env() {
     log "仓库: $SELECTED_REPO_URL"
     log "分支: $SELECTED_BRANCH"
     
-    sudo rm -rf ./* ./.git* 2>/dev/null
+    sudo rm -rf ./* ./.git* 2>/dev/null || true
     
     git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
     log "✅ 源码克隆完成"
@@ -1202,33 +1172,14 @@ initialize_build_env() {
         log "子目标: $SUBTARGET"
         log "设备: $DEVICE"
         log "平台: $PLATFORM"
-        
-        # LEDE仓库设备名称调整
-        if [ "$SOURCE_REPO" = "lede" ]; then
-            log "🔧 LEDE仓库设备名称调整"
-            if [[ "$DEVICE" == generic_* ]]; then
-                DEVICE="${DEVICE#generic_}"
-                log "📝 调整设备名称: $DEVICE"
-            fi
-        fi
     else
         # 默认配置（兼容旧版）
         case "$device_name" in
             "ac42u"|"acrh17")
                 TARGET="ipq40xx"
                 SUBTARGET="generic"
-                if [ "$device_name" = "acrh17" ]; then
-                    log "🔧 检测到acrh17别名，自动转换为ac42u"
-                    DEVICE_NAME="ac42u"
-                fi
-                
-                if [ "$SOURCE_REPO" = "lede" ]; then
-                    DEVICE="asus_rt-acrh17"
-                else
-                    DEVICE="asus_rt-ac42u"
-                fi
+                DEVICE="asus_rt-ac42u"
                 PLATFORM="ipq40xx"
-                log "📝 华硕设备: 主要名称ac42u，别名acrh17"
                 ;;
             "mi_router_4a_gigabit"|"r4ag")
                 TARGET="ramips"
@@ -1242,147 +1193,43 @@ initialize_build_env() {
                 DEVICE="xiaomi_mi-router-3g"
                 PLATFORM="ramips"
                 ;;
-            "netgear_3800")
-                TARGET="ath79"
-                SUBTARGET="generic"
-                DEVICE="netgear_wndr3800"
-                PLATFORM="ath79"
-                log "📝 Netgear WNDR3800设备配置完成"
-                ;;
-            "cmcc_rax3000m"|"rax3000m")
-                TARGET="mediatek"
-                SUBTARGET="mt7981"
-                DEVICE="cmcc_rax3000m"
-                PLATFORM="mediatek"
-                DEVICE_NAME="cmcc_rax3000m"
-                log "🔧 检测到MT7981平台设备: $device_name"
-                log "📝 已配置为: mediatek/mt7981/cmcc_rax3000m"
-                ;;
             *)
-                if [[ "$device_name" == *mt7981* ]] || [[ "$device_name" == *rax3000m* ]] || [[ "$device_name" == *cmcc* ]]; then
-                    TARGET="mediatek"
-                    SUBTARGET="mt7981"
-                    DEVICE="cmcc_rax3000m"
-                    DEVICE_NAME="cmcc_rax3000m"
-                    PLATFORM="mediatek"
-                    log "🔧 猜测为MT7981平台设备: $device_name"
-                elif [[ "$device_name" == *ipq* ]] || [[ "$device_name" == *ipq40xx* ]]; then
-                    TARGET="ipq40xx"
-                    SUBTARGET="generic"
-                    DEVICE="$device_name"
-                    PLATFORM="ipq40xx"
-                elif [[ "$device_name" == *mt76* ]] || [[ "$device_name" == *ramips* ]]; then
-                    TARGET="ramips"
-                    SUBTARGET="mt76x8"
-                    DEVICE="$device_name"
-                    PLATFORM="ramips"
-                elif [[ "$device_name" == *ath79* ]]; then
-                    TARGET="ath79"
-                    SUBTARGET="generic"
-                    DEVICE="$device_name"
-                    PLATFORM="ath79"
-                else
-                    TARGET="ipq40xx"
-                    SUBTARGET="generic"
-                    DEVICE="$device_name"
-                    PLATFORM="generic"
-                fi
+                TARGET="ipq40xx"
+                SUBTARGET="generic"
+                DEVICE="$device_name"
+                PLATFORM="generic"
                 ;;
         esac
         log "🔧 检测到设备: $device_name"
-        log "📝 标准化设备名称: $DEVICE_NAME"
         log "目标: $TARGET"
         log "子目标: $SUBTARGET"
         log "设备: $DEVICE"
         log "平台: $PLATFORM"
     fi
     
-    # 验证CMCC RAX3000M设备配置
-    if [[ "$DEVICE_NAME" == *cmcc* ]] || [[ "$DEVICE_NAME" == *rax3000m* ]]; then
-        log "🔧 验证CMCC RAX3000M设备配置..."
-        if [ "$TARGET" != "mediatek" ] || [ "$SUBTARGET" != "mt7981" ]; then
-            log "⚠️ CMCC RAX3000M平台配置不正确，自动修正"
-            TARGET="mediatek"
-            SUBTARGET="mt7981"
-            DEVICE="cmcc_rax3000m"
-            DEVICE_NAME="cmcc_rax3000m"
-            PLATFORM="mediatek"
-            log "✅ 已修正为: mediatek/mt7981/cmcc_rax3000m"
-        fi
-    fi
-    
     CONFIG_MODE="$config_mode"
     
-    # 修复内核版本文件以防止编译错误
-    log "🔧 修复内核版本文件以防止编译错误..."
-    local kernel_version_file="include/kernel-version.mk"
-    
-    if [ ! -f "$kernel_version_file" ]; then
-        mkdir -p "include"
-        echo "# Kernel version" > "$kernel_version_file"
-        log "✅ 创建内核版本文件: $kernel_version_file"
-    fi
-    
-    local kernel_patchver=$(grep "^KERNEL_PATCHVER:=" "$kernel_version_file" | cut -d':' -f2 | xargs)
-    
-    if [ -z "$kernel_patchver" ] || [ "$kernel_patchver" = "" ]; then
-        log "⚠️ 内核版本未设置，尝试自动修复..."
-        
-        local target_kernel=""
-        if [ -f "target/linux/$TARGET/Makefile" ]; then
-            target_kernel=$(grep "KERNEL_PATCHVER" "target/linux/$TARGET/Makefile" | cut -d':' -f2 | xargs)
-        fi
-        
-        if [ -n "$target_kernel" ]; then
-            echo "KERNEL_PATCHVER:=$target_kernel" >> "$kernel_version_file"
-            log "✅ 从目标平台设置内核版本: $target_kernel"
-        else
-            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] || [ "$SELECTED_BRANCH" = "master" ]; then
-                echo "KERNEL_PATCHVER:=5.15" >> "$kernel_version_file"
-                log "✅ 设置默认内核版本: 5.15"
-            else
-                echo "KERNEL_PATCHVER:=5.4" >> "$kernel_version_file"
-                log "✅ 设置默认内核版本: 5.4"
-            fi
-        fi
-    fi
-    
-    # 保存环境变量
     save_env
     
-    # 设置GitHub环境变量
-    if [ -n "$GITHUB_ENV" ]; then
-        {
-            echo "SELECTED_REPO_URL=$SELECTED_REPO_URL"
-            echo "SELECTED_BRANCH=$SELECTED_BRANCH"
-            echo "TARGET=$TARGET"
-            echo "SUBTARGET=$SUBTARGET"
-            echo "DEVICE=$DEVICE"
-            echo "CONFIG_MODE=$CONFIG_MODE"
-            echo "DEVICE_NAME=$DEVICE_NAME"
-            echo "PLATFORM=$PLATFORM"
-            echo "SOURCE_REPO=$SOURCE_REPO"
-        } >> $GITHUB_ENV
-    fi
-    
-    # CMCC RAX3000M配置验证
-    if [[ "$DEVICE_NAME" == *cmcc* ]] || [[ "$DEVICE_NAME" == *rax3000m* ]]; then
-        log "🎯 CMCC RAX3000M配置验证:"
-        log "  设备名称: $DEVICE_NAME"
-        log "  目标平台: $TARGET/$SUBTARGET"
-        log "  设备标识: $DEVICE"
-        log "  预期固件名: immortalwrt-mediatek-mt7981-cmcc_rax3000m"
-    fi
+    echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
+    echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
+    echo "TARGET=$TARGET" >> $GITHUB_ENV
+    echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
+    echo "DEVICE=$DEVICE" >> $GITHUB_ENV
+    echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
+    echo "DEVICE_NAME=$DEVICE_NAME" >> $GITHUB_ENV
+    echo "PLATFORM=$PLATFORM" >> $GITHUB_ENV
+    echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
     
     log "✅ 构建环境初始化完成"
 }
 
-#【build_firmware_main.sh-14】编译器环境初始化函数
+# 初始化编译器环境（下载OpenWrt官方SDK）- 修复版
 initialize_compiler_env() {
     local device_name="$1"
-    log "=== 初始化编译器环境（下载OpenWrt官方SDK）==="
+    log "=== 初始化编译器环境（下载OpenWrt官方SDK）- 修复版 ==="
     
-    # 首先加载环境变量
+    # 首先加载环境变量 - 修复检查逻辑
     log "🔍 检查环境文件..."
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
@@ -1395,9 +1242,14 @@ initialize_compiler_env() {
         log "  SUBTARGET: $SUBTARGET"
         log "  DEVICE: $DEVICE"
         log "  CONFIG_MODE: $CONFIG_MODE"
+        log "  REPO_ROOT: $REPO_ROOT"
+        log "  COMPILER_DIR: $COMPILER_DIR"
+        log "  DEVICE_NAME: $DEVICE_NAME"
+        log "  PLATFORM: $PLATFORM"
         log "  SOURCE_REPO: $SOURCE_REPO"
     else
         log "⚠️ 环境文件不存在: $BUILD_DIR/build_env.sh"
+        log "💡 环境文件应该在步骤6.3中创建，但未找到"
         
         # 设置默认值
         if [ -z "$SELECTED_BRANCH" ]; then
@@ -1418,14 +1270,14 @@ initialize_compiler_env() {
                 SUBTARGET=$(echo $device_config | awk '{print $2}')
                 DEVICE=$(echo $device_config | awk '{print $3}')
                 PLATFORM=$(echo $device_config | awk '{print $4}')
-                log "⚠️ 平台变量未设置，从设备支持脚本获取"
+                log "⚠️ 平台变量未设置，从设备支持脚本获取: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE, PLATFORM=$PLATFORM"
             else
                 # 默认配置
                 TARGET="ipq40xx"
                 SUBTARGET="generic"
                 DEVICE="$device_name"
                 PLATFORM="generic"
-                log "⚠️ 平台变量未设置，使用默认值"
+                log "⚠️ 平台变量未设置，使用默认值: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE"
             fi
         fi
         
@@ -1470,7 +1322,7 @@ initialize_compiler_env() {
             log "  🎯 GCC文件: $(basename "$first_gcc")"
             log "  🔧 GCC版本: $("$first_gcc" --version 2>&1 | head -1)"
             
-            # 保存到环境变量
+            # 保存到环境文件
             save_env
             
             # 验证编译器
@@ -1480,24 +1332,15 @@ initialize_compiler_env() {
             log "⚠️ 编译器目录存在但不包含真正的GCC，将重新下载SDK"
         fi
     else
-        log "🔍 COMPILER_DIR未设置或目录不存在"
+        log "🔍 COMPILER_DIR未设置或目录不存在，将下载OpenWrt官方SDK"
     fi
     
-    # 显示设备配置信息
+    # 根据设备确定平台（使用已设置的变量）
     log "目标平台: $TARGET/$SUBTARGET"
     log "目标设备: $DEVICE"
     log "OpenWrt版本: $SELECTED_BRANCH"
     log "平台类型: $PLATFORM"
     log "源代码仓库: $SOURCE_REPO"
-    
-    # 对于LEDE仓库，不需要下载SDK
-    if [ "$SOURCE_REPO" = "lede" ]; then
-        log "🔧 LEDE仓库使用内置工具链，无需下载OpenWrt SDK"
-        log "💡 LEDE会使用自己的工具链进行编译"
-        export COMPILER_DIR=""
-        save_env
-        return 0
-    fi
     
     # 简化版本字符串（从openwrt-23.05转为23.05）
     local version_for_sdk=""
@@ -1505,10 +1348,8 @@ initialize_compiler_env() {
         version_for_sdk="23.05"
     elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
         version_for_sdk="21.02"
-    elif [ "$SELECTED_BRANCH" = "master" ]; then
-        version_for_sdk="21.02"
-        log "🔧 master分支使用21.02 SDK"
     else
+        # 尝试提取版本号
         version_for_sdk=$(echo "$SELECTED_BRANCH" | grep -o "[0-9][0-9]\.[0-9][0-9]" || echo "21.02")
         log "⚠️ 无法识别的版本分支，尝试使用: $version_for_sdk"
     fi
@@ -1528,7 +1369,7 @@ initialize_compiler_env() {
     
     # 下载OpenWrt官方SDK
     log "🚀 开始下载OpenWrt官方SDK..."
-    if download_openwrt_sdk "$TARGET" "$SUBTARGET" "$version_for_sdk"; then
+    if download_openwrt_sdk "$TARGET" "$subtarget" "$version_for_sdk"; then
         log "🎉 OpenWrt SDK下载并设置成功"
         log "📌 编译器目录: $COMPILER_DIR"
         
@@ -1567,11 +1408,11 @@ initialize_compiler_env() {
         export COMPILER_DIR=""
         save_env
         
+        # 不返回错误，继续执行
         return 0
     fi
 }
 
-#【build_firmware_main.sh-15】TurboACC支持函数
 add_turboacc_support() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -1593,7 +1434,6 @@ add_turboacc_support() {
     fi
 }
 
-#【build_firmware_main.sh-16】Feeds配置函数
 configure_feeds() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -1632,7 +1472,21 @@ configure_feeds() {
     log "✅ Feeds配置完成"
 }
 
-#【build_firmware_main.sh-17】构建前空间检查
+install_turboacc_packages() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 安装 TurboACC 包 ==="
+    
+    ./scripts/feeds update turboacc || handle_error "更新turboacc feed失败"
+    
+    ./scripts/feeds install -p turboacc luci-app-turboacc || handle_error "安装luci-app-turboacc失败"
+    ./scripts/feeds install -p turboacc kmod-shortcut-fe || handle_error "安装kmod-shortcut-fe失败"
+    ./scripts/feeds install -p turboacc kmod-fast-classifier || handle_error "安装kmod-fast-classifier失败"
+    
+    log "✅ TurboACC 包安装完成"
+}
+
 pre_build_space_check() {
     log "=== 编译前空间检查 ==="
     
@@ -1676,7 +1530,7 @@ pre_build_space_check() {
     log "✅ 空间检查完成"
 }
 
-#【build_firmware_main.sh-18】智能配置生成函数
+# 智能配置生成系统（重构版）- 修复配置生成逻辑
 generate_config() {
     local extra_packages=$1
     load_env
@@ -1844,7 +1698,6 @@ generate_config() {
     log "✅ 智能配置生成完成"
 }
 
-#【build_firmware_main.sh-19】USB配置验证函数
 verify_usb_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -1911,7 +1764,60 @@ verify_usb_config() {
     fi
 }
 
-#【build_firmware_main.sh-20】配置语法验证函数
+check_usb_drivers_integrity() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 🚨 USB驱动完整性检查 ==="
+    
+    local missing_drivers=()
+    local required_drivers=(
+        "kmod-usb-core"
+        "kmod-usb2"
+        "kmod-usb3"
+        "kmod-usb-xhci-hcd"
+        "kmod-usb-storage"
+        "kmod-scsi-core"
+    )
+    
+    # 根据平台添加专用驱动
+    if [ "$PLATFORM" = "ipq40xx" ]; then
+        required_drivers+=("kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3")
+    elif [ "$PLATFORM" = "ramips" ]; then
+        required_drivers+=("kmod-usb-xhci-mtk")
+    elif [ "$PLATFORM" = "ath79" ]; then
+        required_drivers+=("kmod-usb2-ath79")
+    fi
+    
+    # 检查所有必需驱动
+    for driver in "${required_drivers[@]}"; do
+        if ! grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            log "❌ 缺失驱动: $driver"
+            missing_drivers+=("$driver")
+        else
+            log "✅ 驱动存在: $driver"
+        fi
+    done
+    
+    # 如果有缺失驱动，尝试修复
+    if [ ${#missing_drivers[@]} -gt 0 ]; then
+        log "🚨 发现 ${#missing_drivers[@]} 个缺失的USB驱动"
+        log "正在尝试修复..."
+        
+        for driver in "${missing_drivers[@]}"; do
+            echo "CONFIG_PACKAGE_${driver}=y" >> .config
+            log "✅ 已添加: $driver"
+        done
+        
+        # 重新运行defconfig
+        make defconfig
+        log "✅ USB驱动修复完成"
+    else
+        log "🎉 所有必需USB驱动都已启用"
+    fi
+}
+
+# ============ 修复：配置语法验证函数（增强版） ============
 validate_config_syntax() {
     log "=== 🔍 验证.config文件语法（增强版）==="
     
@@ -2052,7 +1958,7 @@ validate_config_syntax() {
     fi
 }
 
-#【build_firmware_main.sh-21】配置应用函数
+# ============ 修复：apply_config 函数（增强版） ============
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -2131,71 +2037,6 @@ apply_config() {
     # 清除旧的defconfig日志
     rm -f /tmp/defconfig.log
     
-    # 检查内核版本配置 - 修复内核版本缺失问题
-    log "🔍 检查内核版本配置..."
-    
-    # 修复内核版本文件问题
-    if [ -f "include/kernel-version.mk" ]; then
-        # 检查内核版本是否已设置
-        local kernel_patchver=$(grep "KERNEL_PATCHVER" "include/kernel-version.mk" | cut -d':' -f2 | xargs)
-        if [ -z "$kernel_patchver" ] || [ "$kernel_patchver" = "" ]; then
-            log "⚠️ 内核版本未设置，尝试自动修复..."
-            
-            # 从目标平台Makefile获取内核版本
-            if [ -f "target/linux/$TARGET/Makefile" ]; then
-                local target_kernel=$(grep "KERNEL_PATCHVER" "target/linux/$TARGET/Makefile" | cut -d':' -f2 | xargs)
-                if [ -n "$target_kernel" ]; then
-                    log "🔧 设置内核版本为: $target_kernel"
-                    sed -i "s/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=$target_kernel/" "include/kernel-version.mk" 2>/dev/null || true
-                    
-                    # 检查是否设置成功
-                    kernel_patchver=$(grep "KERNEL_PATCHVER" "include/kernel-version.mk" | cut -d':' -f2 | xargs)
-                    if [ -n "$kernel_patchver" ]; then
-                        log "✅ 内核版本设置成功: $kernel_patchver"
-                    fi
-                fi
-            fi
-        else
-            log "✅ 内核版本已设置: $kernel_patchver"
-        fi
-    else
-        log "⚠️ 内核版本文件不存在: include/kernel-version.mk"
-        log "🔧 尝试创建内核版本文件..."
-        
-        # 尝试从目标平台获取内核版本
-        local target_kernel=""
-        if [ -f "target/linux/$TARGET/Makefile" ]; then
-            target_kernel=$(grep "KERNEL_PATCHVER" "target/linux/$TARGET/Makefile" | cut -d':' -f2 | xargs)
-        fi
-        
-        # 如果没有找到，使用默认值
-        if [ -z "$target_kernel" ]; then
-            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] || [ "$SELECTED_BRANCH" = "master" ]; then
-                target_kernel="5.15"
-            else
-                target_kernel="5.4"
-            fi
-            log "⚠️ 无法从目标平台获取内核版本，使用默认: $target_kernel"
-        fi
-        
-        # 创建内核版本文件
-        {
-            echo "# Kernel version"
-            echo "LINUX_VERSION-5.15 = .19"
-            echo "LINUX_KERNEL_HASH-5.15.19 = 3e6a6b6f8c3c8e8c8f8c3c8e8c8f8c3c8e8c8f8c3c8e8c8f8c3c8e8c8f8c3c8"
-            echo "KERNEL_PATCHVER:=$target_kernel"
-        } > "include/kernel-version.mk"
-        log "✅ 创建内核版本文件，版本: $target_kernel"
-    fi
-    
-    # 清理tmp目录中的错误配置文件
-    log "🔧 清理tmp目录中的错误配置文件..."
-    if [ -f "tmp/.config-package.in" ]; then
-        # 删除包含错误语法和---help---的行
-        sed -i '/^---help---/d;/^Ntfs-3g$/d;/^If/d;/^etc\.$/d;/^of$/d' "tmp/.config-package.in" 2>/dev/null || true
-        log "✅ 清理tmp/.config-package.in文件"
-    fi
-    
     # 运行defconfig并捕获详细日志
     if ! make defconfig 2>&1 | tee /tmp/defconfig.log; then
         log "❌ make defconfig 失败"
@@ -2203,27 +2044,18 @@ apply_config() {
         cat /tmp/defconfig.log | tail -30
         
         # 尝试分析错误原因
-        if grep -q "unknown statement\|syntax error" /tmp/defconfig.log; then
-            log "💡 错误分析: 发现语法错误或未知语句"
-            log "🔧 尝试修复: 清理配置文件后重试..."
+        if grep -q "unknown statement" /tmp/defconfig.log; then
+            log "💡 错误分析: 发现未知语句错误"
+            log "🔧 尝试修复: 删除包含'unknown statement'的行后重试..."
             
-            # 再次清理配置文件
-            cp .config .config.original.backup
-            log "✅ 备份原始配置文件: .config.original.backup"
-            
-            # 删除所有注释和空行，只保留配置项
-            grep -E '^(CONFIG_|# CONFIG_)' .config > .config.clean
-            
-            # 删除错误的行
-            sed -i '/^---help---/d;/^Ntfs-3g$/d;/^If/d;/^etc\.$/d;/^of$/d;/^[[:space:]]*$/d' .config.clean
-            
-            # 排序并去重
-            sort -u .config.clean > .config
-            
-            # 清理临时文件
-            rm -f .config.clean
-            
-            log "✅ 清理配置文件完成"
+            # 提取错误行号
+            grep "unknown statement" /tmp/defconfig.log | while read line; do
+                error_line=$(echo "$line" | grep -o "line [0-9]*" | grep -o "[0-9]*")
+                if [ -n "$error_line" ]; then
+                    log "  删除第 $error_line 行"
+                    sed -i "${error_line}d" .config
+                fi
+            done
             
             # 再次尝试defconfig
             log "🔄 重新运行 make defconfig..."
@@ -2233,33 +2065,7 @@ apply_config() {
                 log "❌ defconfig 仍然失败"
                 log "第二次尝试的错误日志:"
                 cat /tmp/defconfig_retry.log | tail -20
-                
-                # 尝试强制修复内核版本问题
-                if grep -q "Missing kernel version" /tmp/defconfig_retry.log; then
-                    log "🚨 发现内核版本缺失错误"
-                    log "🔧 强制修复: 手动设置内核版本..."
-                    
-                    if [ -f "include/kernel-version.mk" ]; then
-                        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] || [ "$SELECTED_BRANCH" = "master" ]; then
-                            sed -i 's/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=5.15/' "include/kernel-version.mk"
-                            log "✅ 设置内核版本为 5.15"
-                        else
-                            sed -i 's/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=5.4/' "include/kernel-version.mk"
-                            log "✅ 设置内核版本为 5.4"
-                        fi
-                        
-                        # 再次尝试
-                        log "🔄 第三次运行 make defconfig..."
-                        if make defconfig 2>&1 | tee /tmp/defconfig_third.log; then
-                            log "✅ defconfig 第三次尝试成功"
-                        else
-                            log "❌ defconfig 仍然失败"
-                            log "⚠️ 但继续执行，让构建过程自然失败"
-                        fi
-                    fi
-                else
-                    log "⚠️ 但继续执行，让构建过程自然失败"
-                fi
+                log "⚠️ 但继续执行，让构建过程自然失败"
             fi
         else
             log "⚠️ 无法自动修复defconfig错误，但继续执行"
@@ -2268,10 +2074,10 @@ apply_config() {
         log "✅ make defconfig 成功"
     fi
     
-    # 步骤4: 强制启用关键USB驱动（防止defconfig删除）- 修复版
-    log "🔧 步骤4: 确保关键USB驱动被启用（修复版）..."
+    # 步骤4: 强制启用关键USB驱动（防止defconfig删除）
+    log "🔧 步骤4: 确保关键USB驱动被启用..."
     
-    # 定义关键USB驱动 - 修复：确保USB 3.0驱动被启用
+    # 定义关键USB驱动
     local critical_usb_drivers=(
         "CONFIG_PACKAGE_kmod-usb-core=y"
         "CONFIG_PACKAGE_kmod-usb2=y"
@@ -2279,15 +2085,13 @@ apply_config() {
         "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
         "CONFIG_PACKAGE_kmod-usb-xhci-pci=y"
         "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y"
-        "CONFIG_PACKAGE_kmod-usb-ohci=y"
         "CONFIG_PACKAGE_kmod-usb-ohci-pci=y"
         "CONFIG_PACKAGE_kmod-usb-dwc3=y"
         "CONFIG_PACKAGE_kmod-usb-storage=y"
         "CONFIG_PACKAGE_kmod-scsi-core=y"
-        "CONFIG_PACKAGE_kmod-scsi-generic=y"
     )
     
-    # 平台专用驱动 - 修复：确保所有平台的专用驱动都被正确添加
+    # 平台专用驱动
     if [ "$PLATFORM" = "ipq40xx" ]; then
         critical_usb_drivers+=(
             "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y"
@@ -2297,123 +2101,37 @@ apply_config() {
     elif [ "$PLATFORM" = "ramips" ]; then
         critical_usb_drivers+=(
             "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y"
-            "CONFIG_PACKAGE_kmod-usb-ohci=y"
         )
     elif [ "$PLATFORM" = "ath79" ]; then
         critical_usb_drivers+=(
             "CONFIG_PACKAGE_kmod-usb2-ath79=y"
-            "CONFIG_PACKAGE_kmod-usb-ohci=y"
-        )
-    elif [ "$PLATFORM" = "mediatek" ]; then
-        # MT7981平台专用驱动
-        critical_usb_drivers+=(
-            "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y"
         )
     fi
     
-    # 添加或确保关键驱动 - 修复逻辑
-    local added_drivers=0
-    local skipped_drivers=0
+    # 添加或确保关键驱动
     for driver in "${critical_usb_drivers[@]}"; do
         local config_name=$(echo "$driver" | cut -d'=' -f1)
-        local config_value=$(echo "$driver" | cut -d'=' -f2)
-        
-        # 检查是否已经存在启用配置
-        if grep -q "^${config_name}=${config_value}" .config; then
-            log "ℹ️ 已存在: $config_name"
-            skipped_drivers=$((skipped_drivers + 1))
-            continue
-        fi
-        
-        # 检查是否有禁用配置
-        if grep -q "^# ${config_name} is not set" .config; then
-            log "🔄 删除禁用配置: $config_name"
+        if ! grep -q "^${config_name}=y" .config; then
+            # 删除可能的禁用配置
             sed -i "/^# ${config_name} is not set/d" .config
-        fi
-        
-        # 添加启用配置
-        echo "$driver" >> .config
-        added_drivers=$((added_drivers + 1))
-        log "✅ 已添加: $config_name"
-    done
-    
-    log "📈 USB驱动修复统计: 添加了 $added_drivers 个驱动，跳过了 $skipped_drivers 个已有驱动"
-    
-    # 步骤5: 修复后验证USB配置
-    log "🔍 步骤5: 修复后验证USB配置..."
-    
-    echo "=== USB配置验证（修复后）==="
-    echo "1. USB核心: $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" .config && echo "✅" || echo "❌")"
-    echo "2. USB 2.0: $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config && echo "✅" || echo "❌")"
-    echo "3. USB 3.0: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config && echo "✅" || echo "❌")"
-    echo "4. USB xHCI: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo "✅" || echo "❌")"
-    echo "5. USB存储: $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" .config && echo "✅" || echo "❌")"
-    
-    # 根据平台验证专用驱动
-    if [ "$PLATFORM" = "ipq40xx" ]; then
-        echo "6. 高通USB 3.0: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo "✅" || echo "❌")"
-    elif [ "$PLATFORM" = "ramips" ]; then
-        echo "6. 雷凌USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config && echo "✅" || echo "❌")"
-    elif [ "$PLATFORM" = "ath79" ]; then
-        echo "6. ath79 USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb2-ath79=y" .config && echo "✅" || echo "❌")"
-    elif [ "$PLATFORM" = "mediatek" ]; then
-        echo "6. MediaTek USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config && echo "✅" || echo "❌")"
-    fi
-    
-    # 步骤6: 显示启用的功能插件 - 修复显示逻辑
-    log "🎯 步骤6: 显示启用的功能插件..."
-    echo "=== 启用的功能插件列表 ==="
-    
-    # 定义要检查的功能插件
-    local feature_plugins=(
-        # 网络加速
-        "luci-app-turboacc" "kmod-shortcut-fe" "kmod-fast-classifier"
-        # 文件共享
-        "luci-app-samba4" "samba4-server"
-        # 网络服务
-        "luci-app-upnp" "luci-app-vsftpd" "luci-app-arpbind"
-        # 系统工具
-        "luci-app-diskman" "luci-app-cpulimit" "luci-app-hd-idle"
-        # DNS相关
-        "luci-app-smartdns" "smartdns"
-        # 其他功能
-        "luci-app-accesscontrol" "luci-app-vlmcsd" "luci-app-wechatpush"
-        "luci-app-sqm" "ddns-scripts"
-        # USB相关
-        "kmod-usb-storage" "kmod-usb3" "kmod-usb-xhci-hcd"
-    )
-    
-    local enabled_count=0
-    local disabled_count=0
-    local not_configured_count=0
-    
-    echo "功能插件状态:"
-    for plugin in "${feature_plugins[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
-            echo "  ✅ $plugin"
-            enabled_count=$((enabled_count + 1))
-        elif grep -q "^# CONFIG_PACKAGE_${plugin} is not set" .config; then
-            echo "  ❌ $plugin (已禁用)"
-            disabled_count=$((disabled_count + 1))
+            # 添加启用配置
+            echo "$driver" >> .config
+            log "✅ 已添加: $config_name"
         else
-            echo "  🔄 $plugin (未配置)"
-            not_configured_count=$((not_configured_count + 1))
+            log "ℹ️ 已存在: $config_name"
         fi
     done
     
-    echo "统计: $enabled_count 个启用，$disabled_count 个禁用，$not_configured_count 个未配置"
-    echo ""
-    
-    # 步骤7: 再次验证配置
-    log "🔍 步骤7: 最终配置验证..."
+    # 步骤5: 再次验证配置
+    log "🔍 步骤5: 最终配置验证..."
     if validate_config_syntax; then
         log "✅ 最终配置语法验证通过"
     else
         log "⚠️ 最终配置仍有警告，但继续执行"
     fi
     
-    # 步骤8: 运行defconfig确保配置一致
-    log "🔄 步骤8: 最终运行 make defconfig..."
+    # 步骤6: 运行defconfig确保配置一致
+    log "🔄 步骤6: 最终运行 make defconfig..."
     if make defconfig 2>&1 | tee /tmp/final_defconfig.log; then
         log "✅ 最终 defconfig 成功"
     else
@@ -2421,8 +2139,8 @@ apply_config() {
         cat /tmp/final_defconfig.log | tail -10
     fi
     
-    # 步骤9: 显示最终配置状态
-    log "📊 步骤9: 显示最终配置状态..."
+    # 步骤7: 显示最终配置状态
+    log "📊 步骤7: 显示最终配置状态..."
     local final_enabled=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
     local final_disabled=$(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)
     log "✅ 最终状态: 已启用 $final_enabled 个, 已禁用 $final_disabled 个"
@@ -2430,67 +2148,16 @@ apply_config() {
     # 显示关键配置状态
     log "🔧 关键配置状态:"
     echo "1. USB核心: $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" .config && echo "✅" || echo "❌")"
-    echo "2. USB 3.0: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config && echo "✅" || echo "❌")"
-    echo "3. USB xHCI: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo "✅" || echo "❌")"
-    echo "4. USB存储: $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" .config && echo "✅" || echo "❌")"
+    echo "2. USB 3.0: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo "✅" || echo "❌")"
+    echo "3. USB存储: $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" .config && echo "✅" || echo "❌")"
     
     # 根据平台显示专用驱动
     if [ "$PLATFORM" = "ipq40xx" ]; then
-        echo "5. 高通USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo "✅" || echo "❌")"
+        echo "4. 高通USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo "✅" || echo "❌")"
     elif [ "$PLATFORM" = "ramips" ]; then
-        echo "5. 雷凌USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config && echo "✅" || echo "❌")"
+        echo "4. 雷凌USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config && echo "✅" || echo "❌")"
     elif [ "$PLATFORM" = "ath79" ]; then
-        echo "5. ath79 USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb2-ath79=y" .config && echo "✅" || echo "❌")"
-    elif [ "$PLATFORM" = "mediatek" ]; then
-        echo "5. MediaTek USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config && echo "✅" || echo "❌")"
-    fi
-    
-    # 显示TurboACC状态（如果启用了）
-    if [ "$CONFIG_MODE" = "normal" ]; then
-        echo "6. TurboACC: $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config && echo "✅" || echo "❌")"
-    fi
-    
-    # 步骤10: USB配置一致性检查
-    log "🔍 步骤10: USB配置一致性检查..."
-    
-    # 检查配置文件中所有USB相关配置
-    local usb_configs=$(grep -c "CONFIG_PACKAGE_kmod-usb" .config)
-    local enabled_usb=$(grep -c "CONFIG_PACKAGE_kmod-usb.*=y" .config)
-    local disabled_usb=$(grep -c "# CONFIG_PACKAGE_kmod-usb.* is not set" .config)
-    
-    log "📊 USB配置统计:"
-    log "  总USB配置项: $usb_configs"
-    log "  已启用: $enabled_usb"
-    log "  已禁用: $disabled_usb"
-    
-    # 确保关键USB驱动都有启用标志
-    local critical_usb_check=(
-        "kmod-usb-core"
-        "kmod-usb2"
-        "kmod-usb3"
-        "kmod-usb-xhci-hcd"
-        "kmod-usb-storage"
-    )
-    
-    local missing_critical=0
-    for driver in "${critical_usb_check[@]}"; do
-        if ! grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-            log "❌ 缺少关键USB驱动: $driver"
-            missing_critical=$((missing_critical + 1))
-        fi
-    done
-    
-    if [ $missing_critical -eq 0 ]; then
-        log "✅ 所有关键USB驱动都已启用"
-    else
-        log "⚠️ 缺少 $missing_critical 个关键USB驱动，尝试修复..."
-        # 重新添加缺失的驱动
-        for driver in "${critical_usb_check[@]}"; do
-            if ! grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-                echo "CONFIG_PACKAGE_${driver}=y" >> .config
-                log "🔄 添加缺失驱动: $driver"
-            fi
-        done
+        echo "4. ath79 USB: $(grep -q "^CONFIG_PACKAGE_kmod-usb2-ath79=y" .config && echo "✅" || echo "❌")"
     fi
     
     # 显示配置组合信息
@@ -2511,7 +2178,6 @@ apply_config() {
     log "最终配置大小: $(ls -lh .config | awk '{print $5}')"
 }
 
-#【build_firmware_main.sh-22】网络修复函数
 fix_network() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
@@ -2545,7 +2211,6 @@ fix_network() {
     log "✅ 网络环境修复完成"
 }
 
-#【build_firmware_main.sh-23】依赖下载函数
 download_dependencies() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
@@ -2584,7 +2249,7 @@ download_dependencies() {
     log "✅ 依赖包下载完成"
 }
 
-#【build_firmware_main.sh-24】文件名检测函数
+# 检测是否为英文文件名（只包含ASCII字符）- 修复版
 is_english_filename() {
     local filename="$1"
     # 检查是否只包含ASCII字符（字母、数字、下划线、连字符、点）
@@ -2595,7 +2260,7 @@ is_english_filename() {
     fi
 }
 
-#【build_firmware_main.sh-25】自定义文件查找函数
+# 递归查找所有自定义文件函数
 recursive_find_custom_files() {
     local base_dir="$1"
     local max_depth="${2:-10}"  # 默认最大深度10
@@ -2604,7 +2269,7 @@ recursive_find_custom_files() {
     find "$base_dir" -type f -maxdepth "$max_depth" 2>/dev/null | sort
 }
 
-#【build_firmware_main.sh-26】自定义文件集成函数
+# 集成自定义文件函数（增强版）- 递归查找、详细日志、保持原文件名
 integrate_custom_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -2656,7 +2321,7 @@ integrate_custom_files() {
         local file_size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
         local file_type=$(file -b --mime-type "$file" 2>/dev/null | cut -d'/' -f1 || echo "未知")
         
-        # 检查是否为英文文件名
+        # 检查是否为英文文件名 - 使用修复版检测
         if is_english_filename "$file_name"; then
             local name_status="✅ 英文"
             english_count=$((english_count + 1))
@@ -2697,7 +2362,7 @@ integrate_custom_files() {
     log "  ✅ 英文文件名: $english_count 个"
     log "  ⚠️ 非英文文件名: $non_english_count 个"
     
-    # 文件名建议提示
+    # 文件名建议提示 - 简化版本
     if [ $non_english_count -gt 0 ]; then
         echo ""
         log "💡 文件名建议:"
@@ -2747,7 +2412,7 @@ integrate_custom_files() {
     
     log "✅ 文件复制完成: $copied_count 个文件已复制，$skip_count 个文件跳过"
     
-    # 创建第一次开机运行的安装脚本（增强版）
+    # 创建第一次开机运行的安装脚本（增强版）- 修复heredoc语法错误
     echo ""
     log "🔧 步骤3: 创建第一次开机安装脚本（增强版）"
     
@@ -2907,28 +2572,35 @@ if [ -d "$CUSTOM_DIR" ]; then
             continue  # 已经在脚本处理阶段处理过了
         fi
 
-        # 检查是否是配置文件
-        if echo "$file_name" | grep -qi "\.conf$" || echo "$file_name" | grep -qi "\.config$"; then
-            OTHER_COUNT=$((OTHER_COUNT + 1))
-            rel_path="${file#$CUSTOM_DIR/}"
-            
-            echo "  📝 复制配置文件 [$OTHER_COUNT]: $rel_path" >> $LOG_FILE
-            
-            # 这里可以根据文件名决定复制到哪里
-            if echo "$file_name" | grep -qi "network"; then
-                dest_path="/etc/config/network.custom"
-                echo "      复制到: $dest_path" >> $LOG_FILE
-                cp "$file" "$dest_path" 2>&1 | tee -a $LOG_FILE
+        OTHER_COUNT=$((OTHER_COUNT + 1))
+        rel_path="${file#$CUSTOM_DIR/}"
+
+        echo "  📋 正在处理 [$OTHER_COUNT]: $rel_path" >> $LOG_FILE
+
+        # 根据文件类型处理
+        if echo "$file_name" | grep -qi "\.conf$"; then
+            # 配置文件复制到/etc/config/
+            echo "      类型: 配置文件" >> $LOG_FILE
+            if cp "$file" "/etc/config/$file_name" 2>/dev/null; then
+                echo "      ✅ 复制到 /etc/config/" >> $LOG_FILE
                 OTHER_SUCCESS=$((OTHER_SUCCESS + 1))
             else
-                echo "      保持原位置: $rel_path" >> $LOG_FILE
-                OTHER_SUCCESS=$((OTHER_SUCCESS + 1))
+                echo "      ❌ 复制失败" >> $LOG_FILE
+                OTHER_FAILED=$((OTHER_FAILED + 1))
             fi
         else
-            # 其他文件保持原位置
-            OTHER_COUNT=$((OTHER_COUNT + 1))
-            OTHER_SUCCESS=$((OTHER_SUCCESS + 1))
+            # 其他文件复制到/tmp/
+            echo "      类型: 其他文件" >> $LOG_FILE
+            if cp "$file" "/tmp/$file_name" 2>/dev/null; then
+                echo "      ✅ 复制到 /tmp/" >> $LOG_FILE
+                OTHER_SUCCESS=$((OTHER_SUCCESS + 1))
+            else
+                echo "      ❌ 复制失败" >> $LOG_FILE
+                OTHER_FAILED=$((OTHER_FAILED + 1))
+            fi
         fi
+
+        echo "" >> $LOG_FILE
     done < "$FILE_LIST"
 
     rm -f "$FILE_LIST"
@@ -2939,462 +2611,694 @@ if [ -d "$CUSTOM_DIR" ]; then
     echo "  失败: $OTHER_FAILED 个" >> $LOG_FILE
     echo "" >> $LOG_FILE
 
-    # 总结
-    echo "🎉 自定义文件安装完成" >> $LOG_FILE
-    echo "📊 总安装统计:" >> $LOG_FILE
-    echo "  IPK包: $IPK_SUCCESS/$IPK_COUNT 成功" >> $LOG_FILE
-    echo "  脚本: $SCRIPT_SUCCESS/$SCRIPT_COUNT 成功" >> $LOG_FILE
-    echo "  其他文件: $OTHER_SUCCESS/$OTHER_COUNT 成功" >> $LOG_FILE
+    # 4. 安装完成总结
+    echo "==================================================" >> $LOG_FILE
+    echo "      自定义文件安装完成" >> $LOG_FILE
+    echo "      结束时间: $(date)" >> $LOG_FILE
+    echo "      日志文件: $LOG_FILE" >> $LOG_FILE
+    echo "==================================================" >> $LOG_FILE
     echo "" >> $LOG_FILE
-    echo "🕐 完成时间: $(date)" >> $LOG_FILE
 
-    echo "自定义文件安装完成，详情查看: $LOG_FILE"
+    TOTAL_FILES=$((IPK_COUNT + SCRIPT_COUNT + OTHER_COUNT))
+    TOTAL_SUCCESS=$((IPK_SUCCESS + SCRIPT_SUCCESS + OTHER_SUCCESS))
+    TOTAL_FAILED=$((IPK_FAILED + SCRIPT_FAILED + OTHER_FAILED))
+
+    echo "📈 总体统计:" >> $LOG_FILE
+    echo "  总文件数: $TOTAL_FILES 个" >> $LOG_FILE
+    echo "  成功处理: $TOTAL_SUCCESS 个" >> $LOG_FILE
+    echo "  失败处理: $TOTAL_FAILED 个" >> $LOG_FILE
+    echo "  成功率: $((TOTAL_SUCCESS * 100 / (TOTAL_SUCCESS + TOTAL_FAILED)))%" >> $LOG_FILE
+    echo "" >> $LOG_FILE
+
+    echo "📋 详细分类统计:" >> $LOG_FILE
+    echo "  📦 IPK包: $IPK_SUCCESS/$IPK_COUNT 成功" >> $LOG_FILE
+    echo "  📜 脚本: $SCRIPT_SUCCESS/$SCRIPT_COUNT 成功" >> $LOG_FILE
+    echo "  📁 其他文件: $OTHER_SUCCESS/$OTHER_COUNT 成功" >> $LOG_FILE
+    echo "" >> $LOG_FILE
+
+    # 创建完成标记文件
+    touch /etc/custom-files-installed
+    echo "✅ 已创建安装完成标记: /etc/custom-files-installed" >> $LOG_FILE
+
+    echo "📝 重要信息:" >> $LOG_FILE
+    echo "  安装日志位置: $LOG_FILE" >> $LOG_FILE
+    echo "  日志目录: /root/logs/" >> $LOG_FILE
+    echo "  下次启动不会再次安装（已有标记文件）" >> $LOG_FILE
+    echo "  如需重新安装，请删除: /etc/custom-files-installed" >> $LOG_FILE
+
 else
     echo "❌ 自定义文件目录不存在: $CUSTOM_DIR" >> $LOG_FILE
-    echo "自定义文件目录不存在，跳过安装"
 fi
 
-# 确保脚本在第一次运行后删除
-rm -f /etc/uci-defaults/99-custom-files
+echo "" >> $LOG_FILE
+echo "=== 自定义文件安装脚本执行完成 ===" >> $LOG_FILE
+
+exit 0
 EOF
-    
-    # 确保脚本有执行权限
+
+    # 设置脚本权限
     chmod +x "$first_boot_script"
     log "✅ 创建第一次开机安装脚本: $first_boot_script"
+    log "📝 脚本增强功能:"
+    log "  1. ✅ 递归查找所有自定义文件"
+    log "  2. ✅ 保持原文件名"
+    log "  3. ✅ IPK安装错误不退出，继续下一个"
+    log "  4. ✅ 详细日志记录每个文件的处理结果"
+    log "  5. ✅ 分类统计和成功率计算"
+    log "  6. ✅ 日志存储到 /root/logs/ 目录（重启不丢失）"
     
-    # 显示自定义文件集成总结
+    # 创建文件名检查脚本（使用cat命令代替heredoc）
     echo ""
-    log "🎉 自定义文件集成完成"
-    log "📊 集成统计:"
-    log "  总共处理文件: $file_count 个"
-    log "  已复制到固件: $copied_count 个"
-    log "  英文文件名: $english_count 个"
-    log "  非英文文件名: $non_english_count 个"
-    log "  第一次开机安装脚本已创建"
-    log "  IPK包将自动安装"
-    log "  脚本文件将自动运行"
-    log "  配置文件将自动复制到系统"
+    log "🔧 步骤4: 创建文件名检查脚本"
     
-    # 验证文件复制
-    local verify_count=$(find "$custom_files_dir" -type f 2>/dev/null | wc -l)
-    log "✅ 验证完成: $verify_count 个文件已成功集成到固件中"
-}
+    local name_check_script="$custom_files_dir/check_filenames.sh"
+    cat > "$name_check_script" << 'EOF'
+#!/bin/sh
 
-#【build_firmware_main.sh-27】创建构建目录函数（新增）
-create_build_dir() {
-    log "=== 创建构建目录 ==="
-    
-    # 确保构建目录存在
-    if [ ! -d "$BUILD_DIR" ]; then
-        log "🔧 创建构建目录: $BUILD_DIR"
-        mkdir -p "$BUILD_DIR"
-        log "✅ 构建目录创建成功"
+echo "=== 文件名检查脚本 ==="
+echo "检查时间: $(date)"
+echo ""
+
+CUSTOM_DIR="/etc/custom-files"
+
+if [ ! -d "$CUSTOM_DIR" ]; then
+    echo "❌ 自定义文件目录不存在: $CUSTOM_DIR"
+    exit 1
+fi
+
+echo "🔍 正在检查文件名兼容性..."
+echo ""
+
+ENGLISH_COUNT=0
+NON_ENGLISH_COUNT=0
+TOTAL_FILES=0
+
+# 使用临时文件确保变量作用域
+FILE_LIST=$(mktemp)
+find "$CUSTOM_DIR" -type f 2>/dev/null > "$FILE_LIST"
+
+while IFS= read -r file; do
+    TOTAL_FILES=$((TOTAL_FILES + 1))
+    file_name=$(basename "$file")
+    rel_path="${file#$CUSTOM_DIR/}"
+
+    # 检查是否只包含ASCII字符 - 修复正则表达式
+    if echo "$file_name" | grep -q '^[a-zA-Z0-9_.\-]*$'; then
+        ENGLISH_COUNT=$((ENGLISH_COUNT + 1))
+        echo "✅ $rel_path"
     else
-        log "✅ 构建目录已存在: $BUILD_DIR"
+        NON_ENGLISH_COUNT=$((NON_ENGLISH_COUNT + 1))
+        echo "⚠️ $rel_path (非英文文件名)"
+    fi
+done < "$FILE_LIST"
+
+rm -f "$FILE_LIST"
+
+echo ""
+echo "📊 检查结果:"
+echo "  总文件数: $TOTAL_FILES 个"
+echo "  英文文件名: $ENGLISH_COUNT 个"
+echo "  非英文文件名: $NON_ENGLISH_COUNT 个"
+echo ""
+
+if [ $NON_ENGLISH_COUNT -gt 0 ]; then
+    echo "💡 建议:"
+    echo "  为了更好的兼容性，建议将非英文文件名改为英文"
+    echo "  英文名更方便复制和运行"
+else
+    echo "🎉 所有文件名都是英文，兼容性良好！"
+fi
+
+echo ""
+echo "✅ 文件名检查完成"
+EOF
+
+    chmod +x "$name_check_script"
+    log "✅ 创建文件名检查脚本: $name_check_script"
+    
+    # 显示最终统计
+    echo ""
+    log "📊 自定义文件集成统计:"
+    log "  📦 IPK文件: $ipk_count 个"
+    log "  📜 脚本文件: $script_count 个"
+    log "  ⚙️ 配置文件: $config_count 个"
+    log "  📁 其他文件: $other_count 个"
+    log "  总文件数: $file_count 个"
+    log "  ✅ 英文文件名: $english_count 个"
+    log "  ⚠️ 非英文文件名: $non_english_count 个"
+    log "  🚀 第一次开机安装脚本: 已创建（增强版）"
+    log "  📍 自定义文件位置: /etc/custom-files/"
+    log "  📁 日志位置: /root/logs/（重启不丢失）"
+    log "  💡 安装方式: 第一次开机自动安装"
+    
+    if [ $non_english_count -gt 0 ]; then
+        log "💡 文件名兼容性提示:"
+        log "  当前有 $non_english_count 个文件使用非英文文件名"
+        log "  建议改为英文文件名以获得更好的兼容性"
+        log "  系统会自动处理非英文文件，但英文名更方便复制和运行"
     fi
     
-    # 设置构建目录权限
-    log "🔧 设置构建目录权限..."
-    chmod 755 "$BUILD_DIR"
+    if [ $file_count -eq 0 ]; then
+        log "⚠️ 警告: 自定义文件目录为空"
+        log "💡 支持的文件夹结构:"
+        log "  firmware-config/custom-files/"
+        log "  ├── *.ipk          # IPK包文件"
+        log "  ├── *.sh           # 脚本文件"
+        log "  ├── *.conf         # 配置文件"
+        log "  └── 其他文件       # 其他任何文件"
+    else
+        log "🎉 自定义文件集成完成"
+        log "📌 自定义文件将在第一次开机时自动安装和运行"
+        log "🔧 增强功能: 持久化日志、错误不退出、详细统计"
+    fi
     
-    # 检查目录空间
-    log "📊 检查目录空间..."
-    local dir_space=$(df -h "$BUILD_DIR" | tail -1 | awk '{print $4}')
-    log "  目录可用空间: $dir_space"
+    # 保存自定义文件统计到文件，供其他步骤使用
+    CUSTOM_FILE_STATS="/tmp/custom_file_stats.txt"
+    echo "CUSTOM_FILE_TOTAL=$file_count" > "$CUSTOM_FILE_STATS"
+    echo "CUSTOM_IPK_COUNT=$ipk_count" >> "$CUSTOM_FILE_STATS"
+    echo "CUSTOM_SCRIPT_COUNT=$script_count" >> "$CUSTOM_FILE_STATS"
+    echo "CUSTOM_CONFIG_COUNT=$config_count" >> "$CUSTOM_FILE_STATS"
+    echo "CUSTOM_OTHER_COUNT=$other_count" >> "$CUSTOM_FILE_STATS"
+    echo "CUSTOM_ENGLISH_COUNT=$english_count" >> "$CUSTOM_FILE_STATS"
+    echo "CUSTOM_NON_ENGLISH_COUNT=$non_english_count" >> "$CUSTOM_FILE_STATS"
     
-    log "✅ 构建目录准备完成"
+    log "✅ 自定义文件统计已保存到: $CUSTOM_FILE_STATS"
 }
 
-#【build_firmware_main.sh-28】编译函数
-compile_firmware() {
+build_firmware() {
+    local enable_cache=$1
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 🚀 开始编译固件 ==="
-    log "设备: $DEVICE_NAME"
-    log "目标: $TARGET/$SUBTARGET/$DEVICE"
-    log "版本: $SELECTED_BRANCH"
-    log "配置模式: $CONFIG_MODE"
-    log "源代码仓库: $SOURCE_REPO"
+    log "=== 编译固件（使用OpenWrt官方SDK工具链）==="
     
-    # 显示编译前的关键信息
-    log "📋 编译前信息:"
-    log "  当前目录: $(pwd)"
-    log "  磁盘空间: $(df -h . | tail -1 | awk '{print $4}') 可用"
-    log "  内存: $(free -m | awk '/^Mem:/{print $2}') MB"
-    log "  CPU核心数: $(nproc)"
+    # 显示详细的编译信息
+    log "📋 编译信息:"
+    log "  构建目录: $BUILD_DIR"
+    log "  设备: $DEVICE"
+    log "  版本: $SELECTED_BRANCH"
+    log "  配置模式: $CONFIG_MODE"
+    log "  编译器目录: $COMPILER_DIR"
+    log "  平台: $PLATFORM"
+    log "  源代码仓库: $SOURCE_REPO"
+    log "  启用缓存: $enable_cache"
     
-    # 检查关键配置
-    log "🔍 检查关键配置..."
+    # 编译前最终检查
+    log "编译前最终检查..."
     if [ ! -f ".config" ]; then
-        log "❌ 错误: .config 文件不存在，无法编译"
-        return 1
-    fi
-    
-    log "✅ .config 文件存在，配置行数: $(wc -l < .config)"
-    
-    # 显示启用的主要功能
-    log "🎯 启用的主要功能:"
-    local major_features=(
-        "luci-app-turboacc"
-        "luci-app-samba4"
-        "luci-app-upnp"
-        "kmod-usb-core"
-        "kmod-usb3"
-        "kmod-usb-xhci-hcd"
-        "kmod-usb-storage"
-    )
-    
-    for feature in "${major_features[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${feature}=y" .config; then
-            log "  ✅ $feature: 已启用"
-        else
-            log "  🔄 $feature: 未启用"
-        fi
-    done
-    
-    # 根据CPU核心数设置编译线程数
-    local cpu_cores=$(nproc)
-    local compile_threads=$((cpu_cores + 1))
-    if [ $compile_threads -gt 16 ]; then
-        compile_threads=16
-    fi
-    
-    log "⚙️ 编译设置:"
-    log "  CPU核心数: $cpu_cores"
-    log "  编译线程数: $compile_threads"
-    log "  详细输出: 是"
-    log "  下载重试: 自动重试"
-    
-    # 设置编译环境
-    log "🔧 设置编译环境..."
-    
-    # 设置语言环境
-    export LANG=en_US.UTF-8
-    export LC_ALL=en_US.UTF-8
-    
-    # 设置编译器选项
-    export FORCE_UNSAFE_CONFIGURE=1
-    export BUILD_LOG=1
-    
-    # 创建构建日志目录
-    local build_log_dir="/tmp/build-logs"
-    mkdir -p "$build_log_dir"
-    local timestamp=$(date +%Y%m%d_%H%M%S)
-    local log_file="$build_log_dir/build_${DEVICE_NAME}_${timestamp}.log"
-    
-    log "📝 开始编译，日志文件: $log_file"
-    log "⏳ 编译开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-    
-    # 开始编译（使用重试机制）
-    local compile_attempts=0
-    local max_attempts=2
-    local compile_success=false
-    
-    while [ $compile_attempts -lt $max_attempts ] && [ "$compile_success" = false ]; do
-        compile_attempts=$((compile_attempts + 1))
-        log "🔄 编译尝试: 第 $compile_attempts 次"
-        
-        # 清理旧的编译日志
-        rm -f "$log_file"
-        
-        # 开始编译，捕获详细输出
-        if make -j$compile_threads V=s 2>&1 | tee "$log_file"; then
-            compile_success=true
-            log "✅ 编译成功 (第 $compile_attempts 次尝试)"
-        else
-            log "⚠️ 编译失败 (第 $compile_attempts 次尝试)"
-            
-            if [ $compile_attempts -lt $max_attempts ]; then
-                log "🔄 准备重新编译..."
-                
-                # 分析失败原因
-                if grep -q "Error 2\|No rule to make target" "$log_file"; then
-                    log "🔧 分析: 可能是目标配置问题，检查设备配置"
-                elif grep -q "Connection refused\|timed out" "$log_file"; then
-                    log "🔧 分析: 可能是网络问题，重试中..."
-                fi
-                
-                # 等待一小段时间后重试
-                sleep 5
-            fi
-        fi
-    done
-    
-    if [ "$compile_success" = true ]; then
-        # 检查编译结果
-        log "🔍 检查编译结果..."
-        
-        local bin_dir="bin/targets/$TARGET/$SUBTARGET"
-        if [ -d "$bin_dir" ]; then
-            log "✅ 编译目录存在: $bin_dir"
-            
-            # 查找固件文件
-            local firmware_files=$(find "$bin_dir" -name "*.bin" -o -name "*.img" -o -name "*.gz" 2>/dev/null | sort)
-            local firmware_count=$(echo "$firmware_files" | wc -l)
-            
-            if [ $firmware_count -gt 0 ]; then
-                log "🎉 编译成功! 找到 $firmware_count 个固件文件"
-                
-                echo "固件文件列表:"
-                echo "----------------------------------------------------------------"
-                while IFS= read -r file; do
-                    [ -z "$file" ] && continue
-                    local file_name=$(basename "$file")
-                    local file_size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                    local file_type=$(file -b "$file" 2>/dev/null | cut -c1-40 || echo "未知")
-                    printf "%-60s %-10s %s\n" "$file_name" "$file_size" "$file_type"
-                done <<< "$firmware_files"
-                echo "----------------------------------------------------------------"
-                
-                # 显示最重要的固件文件
-                local main_firmware=$(echo "$firmware_files" | grep -E "squashfs-sysupgrade|factory|sysupgrade" | head -1)
-                if [ -n "$main_firmware" ]; then
-                    log "🎯 主要固件文件: $(basename "$main_firmware")"
-                    log "   路径: $main_firmware"
-                    log "   大小: $(ls -lh "$main_firmware" | awk '{print $5}')"
-                fi
-                
-                # 创建固件信息文件
-                local info_file="$bin_dir/firmware_info.txt"
-                {
-                    echo "固件构建信息"
-                    echo "=============="
-                    echo "设备名称: $DEVICE_NAME"
-                    echo "目标平台: $TARGET/$SUBTARGET/$DEVICE"
-                    echo "OpenWrt版本: $SELECTED_BRANCH"
-                    echo "源代码仓库: $SOURCE_REPO"
-                    echo "配置模式: $CONFIG_MODE"
-                    echo "编译时间: $(date '+%Y-%m-%d %H:%M:%S')"
-                    echo ""
-                    echo "固件文件列表:"
-                    echo "--------------"
-                } > "$info_file"
-                
-                while IFS= read -r file; do
-                    [ -z "$file" ] && continue
-                    local file_name=$(basename "$file")
-                    local file_size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                    echo "- $file_name ($file_size)" >> "$info_file"
-                done <<< "$firmware_files"
-                
-                log "📄 固件信息已保存到: $info_file"
-                
-                # 计算编译时间
-                local end_time=$(date +%s)
-                local compile_time=$((end_time - ${START_TIME:-$(date +%s)}))
-                local minutes=$((compile_time / 60))
-                local seconds=$((compile_time % 60))
-                
-                log "⏱️ 编译总用时: ${minutes}分${seconds}秒"
-                log "🎉 固件编译完成!"
-                
-                return 0
-            else
-                log "⚠️ 编译目录存在，但未找到固件文件"
-                log "🔍 检查目录内容:"
-                find "$bin_dir" -type f 2>/dev/null | head -10 | while read item; do
-                    log "  📄 $(basename "$item")"
-                done
-                return 1
-            fi
-        else
-            log "❌ 编译目录不存在: $bin_dir"
-            log "🔍 检查整个构建目录..."
-            find bin -type d 2>/dev/null | while read dir; do
-                log "  📁 $dir"
-            done
-            return 1
-        fi
-    else
-        log "❌ 编译失败 (尝试了 $max_attempts 次)"
-        log "📝 请检查构建日志: $log_file"
-        
-        # 显示日志中的错误
-        if [ -f "$log_file" ]; then
-            log "🔍 构建日志中的错误 (最后20行):"
-            tail -20 "$log_file" | while read line; do
-                log "  $line"
-            done
-        fi
-        
-        return 1
-    fi
-}
-
-#【build_firmware_main.sh-29】清理函数
-clean_build() {
-    log "=== 清理构建环境 ==="
-    
-    # 询问是否清理
-    read -p "是否清理构建目录? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        log "🧹 清理构建目录: $BUILD_DIR"
-        
-        # 保留配置文件
-        if [ -f "$BUILD_DIR/.config" ]; then
-            cp "$BUILD_DIR/.config" "/tmp/config.backup"
-            log "✅ 配置文件已备份到: /tmp/config.backup"
-        fi
-        
-        # 保留下载的依赖包
-        if [ -d "$BUILD_DIR/dl" ]; then
-            log "💾 保留依赖包目录: $BUILD_DIR/dl"
-        fi
-        
-        # 清理其他目录
-        cd $BUILD_DIR
-        rm -rf tmp staging_dir feeds build_dir logs
-        make clean
-        
-        log "✅ 清理完成"
-        
-        # 恢复配置文件
-        if [ -f "/tmp/config.backup" ]; then
-            cp "/tmp/config.backup" "$BUILD_DIR/.config"
-            log "✅ 配置文件已恢复"
-        fi
-    else
-        log "ℹ️ 跳过清理"
-    fi
-}
-
-#【build_firmware_main.sh-30】主函数
-main() {
-    # 记录开始时间
-    START_TIME=$(date +%s)
-    
-    log "🚀 OpenWrt/ImmortalWrt 固件构建系统启动"
-    log "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-    
-    # 解析参数
-    local device_name=""
-    local version_selection="21.02"
-    local config_mode="normal"
-    local source_repo="immortalwrt"
-    local extra_packages=""
-    
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            --device)
-                device_name="$2"
-                shift 2
-                ;;
-            --version)
-                version_selection="$2"
-                shift 2
-                ;;
-            --mode)
-                config_mode="$2"
-                shift 2
-                ;;
-            --repo)
-                source_repo="$2"
-                shift 2
-                ;;
-            --extra)
-                extra_packages="$2"
-                shift 2
-                ;;
-            --help)
-                echo "用法: $0 [选项]"
-                echo ""
-                echo "选项:"
-                echo "  --device <名称>    设备名称 (如: ac42u, r4ag, cmcc_rax3000m)"
-                echo "  --version <版本>   OpenWrt版本 (21.02 或 23.05，默认: 21.02)"
-                echo "  --mode <模式>      配置模式 (normal 或 basic，默认: normal)"
-                echo "  --repo <仓库>      源代码仓库 (immortalwrt 或 lede，默认: immortalwrt)"
-                echo "  --extra <插件>     额外插件，分号分隔 (如: +luci-app-ddns;-luci-app-upnp)"
-                echo "  --help             显示此帮助信息"
-                echo ""
-                echo "示例:"
-                echo "  $0 --device ac42u --version 23.05 --mode normal"
-                echo "  $0 --device r4ag --version 21.02 --mode basic"
-                echo "  $0 --device cmcc_rax3000m --version 23.05 --repo immortalwrt"
-                exit 0
-                ;;
-            *)
-                echo "❌ 未知选项: $1"
-                echo "💡 使用 --help 查看帮助"
-                exit 1
-                ;;
-        esac
-    done
-    
-    # 检查必要参数
-    if [ -z "$device_name" ]; then
-        echo "❌ 错误: 必须指定设备名称"
-        echo "💡 使用 --device 参数指定设备"
+        log "❌ 错误: .config 文件不存在"
         exit 1
     fi
     
-    log "📋 构建参数:"
-    log "  设备名称: $device_name"
-    log "  版本选择: $version_selection"
-    log "  配置模式: $config_mode"
-    log "  源代码仓库: $source_repo"
-    log "  额外插件: ${extra_packages:-无}"
+    if [ ! -d "staging_dir" ]; then
+        log "⚠️ 警告: staging_dir 目录不存在"
+    fi
     
-    # 步骤1: 创建构建目录
-    create_build_dir
+    if [ ! -d "dl" ]; then
+        log "⚠️ 警告: dl 目录不存在"
+    fi
     
-    # 步骤2: 设置环境
-    setup_environment
+    # 检查预构建编译器文件
+    log "🔧 检查预构建编译器调用状态..."
+    verify_compiler_files
     
-    # 步骤3: 修复网络
-    fix_network
+    # 检查编译器调用状态（使用增强版）
+    check_compiler_invocation
     
-    # 步骤4: 初始化构建环境
-    initialize_build_env "$device_name" "$version_selection" "$config_mode" "$source_repo"
+    # 获取CPU核心数
+    local cpu_cores=$(nproc)
+    local make_jobs=$cpu_cores
     
-    # 步骤5: 初始化编译器环境
-    initialize_compiler_env "$device_name"
+    # 如果内存小于4GB，减少并行任务
+    local total_mem=$(free -m | awk '/^Mem:/{print $2}')
+    if [ $total_mem -lt 4096 ]; then
+        make_jobs=$((cpu_cores / 2))
+        if [ $make_jobs -lt 1 ]; then
+            make_jobs=1
+        fi
+        log "⚠️ 内存较低(${total_mem}MB)，减少并行任务到 $make_jobs"
+    fi
     
-    # 步骤6: 配置feeds
-    configure_feeds
+    # 记录编译器调用信息
+    log "📝 编译器调用信息:"
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+        log "  预构建编译器目录: $COMPILER_DIR"
+        
+        # 检查预构建编译器是否会被调用，排除虚假编译器
+        local prebuilt_gcc=$(find "$COMPILER_DIR" -type f -executable \
+          -name "*gcc" \
+          ! -name "*gcc-ar" \
+          ! -name "*gcc-ranlib" \
+          ! -name "*gcc-nm" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
+          2>/dev/null | head -1)
+        
+        if [ -n "$prebuilt_gcc" ]; then
+            log "  ✅ 找到预构建GCC编译器: $(basename "$prebuilt_gcc")"
+            log "     路径: $(dirname "$prebuilt_gcc")"
+            
+            # 检查GCC版本
+            local version=$("$prebuilt_gcc" --version 2>&1 | head -1)
+            log "     GCC版本: $version"
+            
+            # 检查版本兼容性
+            local major_version=$(echo "$version" | grep -o "[0-9]\+" | head -1)
+            if [ -n "$major_version" ] && [ "$major_version" -ge 8 ] && [ "$major_version" -le 15 ]; then
+                log "  ✅ GCC $major_version.x 版本兼容"
+            else
+                log "  ⚠️ 编译器版本可能不兼容"
+            fi
+            
+            # 添加到PATH环境变量（尝试让OpenWrt使用预构建编译器）
+            export PATH="$COMPILER_DIR/bin:$COMPILER_DIR:$PATH"
+            log "  🔧 已将预构建编译器目录添加到PATH"
+        else
+            log "  ⚠️ 未找到真正的GCC编译器，只有工具链工具"
+            local toolchain_tools=$(find "$COMPILER_DIR" -type f -executable -name "*gcc*" \
+              ! -path "*dummy-tools*" \
+              ! -path "*scripts*" \
+              2>/dev/null | head -5)
+            if [ -n "$toolchain_tools" ]; then
+                log "  找到的工具链工具:"
+                while read tool; do
+                    local tool_name=$(basename "$tool")
+                    log "    🔧 $tool_name"
+                done <<< "$toolchain_tools"
+            fi
+        fi
+    else
+        log "  ℹ️ 未设置预构建编译器目录，将使用OpenWrt自动构建的编译器"
+    fi
     
-    # 步骤7: 生成配置
-    generate_config "$extra_packages"
+    # 开始编译（默认启用缓存）
+    log "🚀 开始编译固件，使用 $make_jobs 个并行任务"
+    log "💡 编译器调用状态已记录，编译过程中将显示具体调用的编译器"
     
-    # 步骤8: 验证配置
-    verify_usb_config
-    validate_config_syntax
+    make -j$make_jobs V=s 2>&1 | tee build.log
+    BUILD_EXIT_CODE=${PIPESTATUS[0]}
     
-    # 步骤9: 应用配置
-    apply_config
+    log "编译退出代码: $BUILD_EXIT_CODE"
     
-    # 步骤10: 前置错误检查
-    pre_build_error_check
+    # 编译结果分析
+    if [ $BUILD_EXIT_CODE -eq 0 ]; then
+        log "✅ 固件编译成功"
+        
+        # 分析编译器调用情况
+        log "🔍 编译器调用分析:"
+        if [ -f "build.log" ]; then
+            local prebuilt_calls=$(grep -c "$COMPILER_DIR" build.log 2>/dev/null || echo "0")
+            local total_calls=$(grep -c "gcc\|g++" build.log 2>/dev/null || echo "0")
+            
+            if [ $prebuilt_calls -gt 0 ]; then
+                log "  🎯 预构建编译器调用次数: $prebuilt_calls/$total_calls"
+                log "  📌 成功调用了预构建的编译器文件"
+                
+                # 检查GCC版本调用
+                if grep -q "$COMPILER_DIR" build.log 2>/dev/null; then
+                    grep "$COMPILER_DIR" build.log | grep "gcc" | head -2 | while read line; do
+                        log "     示例调用: $(echo "$line" | tr -s ' ' | cut -c1-80)"
+                    done
+                fi
+            else
+                log "  🔄 未检测到预构建编译器调用"
+                log "  📌 使用的是OpenWrt自动构建的编译器"
+            fi
+        fi
+        
+        # 检查生成的固件
+        if [ -d "bin/targets" ]; then
+            local firmware_count=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+            log "✅ 生成固件文件: $firmware_count 个"
+            
+            # 显示固件文件
+            find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | head -5 | while read file; do
+                log "固件: $file ($(du -h "$file" | cut -f1))"
+            done
+        else
+            log "❌ 固件目录不存在"
+        fi
+    else
+        log "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
+        
+        # 分析失败原因
+        if [ -f "build.log" ]; then
+            log "=== 编译错误摘要 ==="
+            
+            # 查找常见错误
+            local error_count=$(grep -c "Error [0-9]|error:" build.log)
+            local warning_count=$(grep -c "Warning\|warning:" build.log)
+            
+            log "发现 $error_count 个错误，$warning_count 个警告"
+            
+            # 显示前10个错误
+            if [ $error_count -gt 0 ]; then
+                log "前10个错误:"
+                grep -i "Error\|error:" build.log | head -10
+            fi
+            
+            # 检查编译器相关错误
+            log "🔧 编译器相关错误:"
+            if grep -q "compiler.*not found" build.log; then
+                log "🚨 发现编译器未找到错误"
+                log "检查编译器路径..."
+                if [ -d "staging_dir" ]; then
+                    find staging_dir -type f -executable \
+                      -name "*gcc" \
+                      ! -name "*gcc-ar" \
+                      ! -name "*gcc-ranlib" \
+                      ! -name "*gcc-nm" \
+                      ! -path "*dummy-tools*" \
+                      ! -path "*scripts*" \
+                      2>/dev/null | head -10
+                fi
+            fi
+            
+            if grep -q "$COMPILER_DIR" build.log | grep -i "error\|failed" 2>/dev/null; then
+                log "⚠️ 发现预构建编译器相关错误"
+                log "建议检查预构建编译器的完整性和兼容性"
+            fi
+            
+            # 检查常见错误类型
+            if grep -q "undefined reference" build.log; then
+                log "⚠️ 发现未定义引用错误"
+            fi
+            
+            if grep -q "No such file" build.log; then
+                log "⚠️ 发现文件不存在错误"
+            fi
+            
+            if grep -q "out of memory\|Killed process" build.log; then
+                log "⚠️ 可能是内存不足导致编译失败"
+            fi
+        fi
+        
+        exit $BUILD_EXIT_CODE
+    fi
     
-    # 步骤11: 下载依赖
-    download_dependencies
+    log "✅ 固件编译完成"
     
-    # 步骤12: 集成自定义文件
-    integrate_custom_files
-    
-    # 步骤13: 编译前空间检查
-    pre_build_space_check
-    
-    # 步骤14: 编译固件
-    compile_firmware
-    
-    # 步骤15: 清理（可选）
-    # clean_build
-    
-    # 记录结束时间
-    local end_time=$(date +%s)
-    local total_time=$((end_time - START_TIME))
-    local minutes=$((total_time / 60))
-    local seconds=$((total_time % 60))
-    
-    log "🏁 构建完成!"
-    log "⏱️ 总用时: ${minutes}分${seconds}秒"
-    log "🕐 结束时间: $(date '+%Y-%m-%d %H:%M:%S')"
-    log "🎉 固件构建流程完成"
+    # 编译完成后保存环境变量
+    save_env
 }
 
-# 如果直接运行脚本，调用主函数
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi
+# 编译后空间检查 - 修复磁盘空间检查函数
+post_build_space_check() {
+    log "=== 编译后空间检查 ==="
+    
+    echo "=== 磁盘使用情况 ==="
+    df -h
+    
+    # 构建目录空间
+    local build_dir_usage=$(du -sh $BUILD_DIR 2>/dev/null | cut -f1) || echo "无法获取构建目录大小"
+    echo "构建目录大小: $build_dir_usage"
+    
+    # 固件文件大小
+    if [ -d "$BUILD_DIR/bin/targets" ]; then
+        local firmware_size=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) -exec du -ch {} + 2>/dev/null | tail -1 | cut -f1)
+        echo "固件文件总大小: $firmware_size"
+    fi
+    
+    # 检查可用空间 - 修复：使用正确的df选项
+    local available_space=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
+    local available_gb=$((available_space / 1024 / 1024))
+    log "/mnt 可用空间: ${available_gb}G"
+    
+    if [ $available_gb -lt 5 ]; then
+        log "⚠️ 警告: 磁盘空间较低，建议清理"
+    else
+        log "✅ 磁盘空间充足"
+    fi
+    
+    log "✅ 空间检查完成"
+}
+
+check_firmware_files() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 固件文件检查 ==="
+    
+    if [ -d "bin/targets" ]; then
+        log "✅ 固件目录存在"
+        
+        # 统计固件文件
+        local firmware_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+        local all_files=$(find bin/targets -type f 2>/dev/null | wc -l)
+        
+        log "固件文件: $firmware_files 个"
+        log "所有文件: $all_files 个"
+        
+        # 显示固件文件详情
+        echo "=== 生成的固件文件 ==="
+        find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) -exec ls -lh {} \;
+        
+        # 检查文件大小
+        local total_size=0
+        while read size; do
+            total_size=$((total_size + size))
+        done < <(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) -exec stat -c%s {} \; 2>/dev/null)
+        
+        if [ $total_size -gt 0 ]; then
+            local total_size_mb=$((total_size / 1024 / 1024))
+            log "固件总大小: ${total_size_mb}MB"
+            
+            # 检查固件大小是否合理
+            if [ $total_size_mb -lt 5 ]; then
+                log "⚠️ 警告: 固件文件可能太小"
+            elif [ $total_size_mb -gt 100 ]; then
+                log "⚠️ 警告: 固件文件可能太大"
+            else
+                log "✅ 固件大小正常"
+            fi
+        fi
+        
+        # 检查目标目录结构
+        echo "=== 目标目录结构 ==="
+        find bin/targets -maxdepth 3 -type d | sort
+        
+    else
+        log "❌ 固件目录不存在"
+        exit 1
+    fi
+}
+
+cleanup() {
+    log "=== 清理构建目录 ==="
+    
+    if [ -d "$BUILD_DIR" ]; then
+        log "检查是否有需要保留的文件..."
+        
+        # 如果.config文件存在，先备份
+        if [ -f "$BUILD_DIR/.config" ]; then
+            log "备份配置文件..."
+            mkdir -p /tmp/openwrt_backup
+            local backup_file="/tmp/openwrt_backup/config_$(date +%Y%m%d_%H%M%S).config"
+            cp "$BUILD_DIR/.config" "$backup_file"
+            log "✅ 配置文件备份到: $backup_file"
+        fi
+        
+        # 如果build.log存在，备份
+        if [ -f "$BUILD_DIR/build.log" ]; then
+            log "备份编译日志..."
+            mkdir -p /tmp/openwrt_backup
+            cp "$BUILD_DIR/build.log" "/tmp/openwrt_backup/build_$(date +%Y%m%d_%H%M%S).log"
+        fi
+        
+        # 清理构建目录
+        log "清理构建目录: $BUILD_DIR"
+        sudo rm -rf $BUILD_DIR || log "⚠️ 清理构建目录失败"
+        log "✅ 构建目录已清理"
+    else
+        log "ℹ️ 构建目录不存在，无需清理"
+    fi
+}
+
+# 搜索编译器文件函数
+search_compiler_files() {
+    local search_root="${1:-/tmp}"
+    local target_platform="$2"
+    
+    log "=== 搜索编译器文件 ==="
+    log "搜索根目录: $search_root"
+    log "目标平台: $target_platform"
+    
+    if [ ! -d "$search_root" ]; then
+        log "❌ 搜索根目录不存在: $search_root"
+        return 1
+    fi
+    
+    log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
+    return 1
+}
+
+# 通用编译器搜索函数
+universal_compiler_search() {
+    local search_root="${1:-/tmp}"
+    local device_name="${2:-unknown}"
+    
+    log "=== 通用编译器搜索 ==="
+    
+    log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
+    return 1
+}
+
+# 简单编译器文件搜索
+search_compiler_files_simple() {
+    local search_root="${1:-/tmp}"
+    local target_platform="${2:-generic}"
+    
+    log "=== 简单编译器文件搜索 ==="
+    
+    log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
+    return 1
+}
+
+# 保存源代码信息
+save_source_code_info() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 保存源代码信息 ==="
+    
+    local source_info_file="$REPO_ROOT/firmware-config/source-info.txt"
+    
+    echo "=== 源代码信息 ===" > "$source_info_file"
+    echo "生成时间: $(date)" >> "$source_info_file"
+    echo "构建目录: $BUILD_DIR" >> "$source_info_file"
+    echo "仓库URL: $SELECTED_REPO_URL" >> "$source_info_file"
+    echo "分支: $SELECTED_BRANCH" >> "$source_info_file"
+    echo "目标: $TARGET" >> "$source_info_file"
+    echo "子目标: $SUBTARGET" >> "$source_info_file"
+    echo "设备: $DEVICE" >> "$source_info_file"
+    echo "配置模式: $CONFIG_MODE" >> "$source_info_file"
+    echo "编译器目录: $COMPILER_DIR" >> "$source_info_file"
+    echo "设备名称: $DEVICE_NAME" >> "$source_info_file"
+    echo "平台: $PLATFORM" >> "$source_info_file"
+    echo "源代码仓库: $SOURCE_REPO" >> "$source_info_file"
+    
+    # 收集目录信息
+    echo "" >> "$source_info_file"
+    echo "=== 目录结构 ===" >> "$source_info_file"
+    find . -maxdepth 2 -type d | sort >> "$source_info_file"
+    
+    # 收集关键文件信息
+    echo "" >> "$source_info_file"
+    echo "=== 关键文件 ===" >> "$source_info_file"
+    local key_files=("Makefile" "feeds.conf.default" ".config" "rules.mk" "Config.in")
+    for file in "${key_files[@]}"; do
+        if [ -f "$file" ]; then
+            echo "$file: 存在 ($(ls -lh "$file" | awk '{print $5}'))" >> "$source_info_file"
+        else
+            echo "$file: 不存在" >> "$source_info_file"
+        fi
+    done
+    
+    log "✅ 源代码信息已保存到: $source_info_file"
+}
+
+# 主函数
+main() {
+    case $1 in
+        "setup_environment")
+            setup_environment
+            ;;
+        "create_build_dir")
+            create_build_dir
+            ;;
+        "initialize_build_env")
+            initialize_build_env "$2" "$3" "$4" "$5"
+            ;;
+        "initialize_compiler_env")
+            initialize_compiler_env "$2"
+            ;;
+        "add_turboacc_support")
+            add_turboacc_support
+            ;;
+        "configure_feeds")
+            configure_feeds
+            ;;
+        "install_turboacc_packages")
+            install_turboacc_packages
+            ;;
+        "pre_build_space_check")
+            pre_build_space_check
+            ;;
+        "generate_config")
+            generate_config "$2"
+            ;;
+        "verify_usb_config")
+            verify_usb_config
+            ;;
+        "check_usb_drivers_integrity")
+            check_usb_drivers_integrity
+            ;;
+        "apply_config")
+            apply_config
+            ;;
+        "fix_network")
+            fix_network
+            ;;
+        "download_dependencies")
+            download_dependencies
+            ;;
+        "integrate_custom_files")
+            integrate_custom_files
+            ;;
+        "pre_build_error_check")
+            pre_build_error_check
+            ;;
+        "validate_config_syntax")
+            validate_config_syntax
+            ;;
+        "build_firmware")
+            build_firmware "$2"
+            ;;
+        "post_build_space_check")
+            post_build_space_check
+            ;;
+        "check_firmware_files")
+            check_firmware_files
+            ;;
+        "cleanup")
+            cleanup
+            ;;
+        "save_source_code_info")
+            save_source_code_info
+            ;;
+        "verify_compiler_files")
+            verify_compiler_files
+            ;;
+        "check_compiler_invocation")
+            check_compiler_invocation
+            ;;
+        "search_compiler_files")
+            search_compiler_files "$2" "$3"
+            ;;
+        "universal_compiler_search")
+            universal_compiler_search "$2" "$3"
+            ;;
+        "search_compiler_files_simple")
+            search_compiler_files_simple "$2" "$3"
+            ;;
+        "intelligent_platform_aware_compiler_search")
+            intelligent_platform_aware_compiler_search "$2" "$3" "$4"
+            ;;
+        *)
+            log "❌ 未知命令: $1"
+            echo "可用命令:"
+            echo "  setup_environment, create_build_dir, initialize_build_env"
+            echo "  initialize_compiler_env - 初始化编译器环境（下载OpenWrt官方SDK）"
+            echo "  add_turboacc_support, configure_feeds, install_turboacc_packages"
+            echo "  pre_build_space_check, generate_config, verify_usb_config, check_usb_drivers_integrity, apply_config"
+            echo "  fix_network, download_dependencies, integrate_custom_files"
+            echo "  pre_build_error_check, validate_config_syntax, build_firmware, post_build_space_check"
+            echo "  check_firmware_files, cleanup, save_source_code_info, verify_compiler_files"
+            echo "  check_compiler_invocation, search_compiler_files, universal_compiler_search"
+            echo "  search_compiler_files_simple, intelligent_platform_aware_compiler_search"
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
