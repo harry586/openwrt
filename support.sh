@@ -1,6 +1,6 @@
 #!/bin/bash
 # /support.sh
-# 设备支持系统配置文件 v2.5 - 极简竖排格式
+# 设备支持系统配置文件 v2.6 - 修正SDK URL
 
 # ==================== 配置文件路径 ====================
 CONFIG_BASE_DIR="firmware-config/config"
@@ -41,15 +41,15 @@ declare -A DEVICES=(
 declare -A SDK_URLS=(
     # OpenWrt 23.05 SDK
     [ipq40xx-generic-23.05]="https://downloads.openwrt.org/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
-    [mediatek-mt7981-23.05]="https://downloads.openwrt.org/releases/23.05.3/targets/mediatek/mt7981/openwrt-sdk-23.05.3-mediatek-mt7981_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+    [mediatek-filogic-23.05]="https://archive.openwrt.org/releases/23.05.3/targets/mediatek/filogic/openwrt-sdk-23.05.3-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
     [ramips-mt7621-23.05]="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt7621/openwrt-sdk-23.05.3-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-    [ramips-mt76x8-23.05]="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt76x8/openwrt-sdk-23.05.3-ramips-mt76x8_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
+    [ramips-mt76x8-23.05]="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt76x8/openwrt-sdk-23.05.3-ramips-mt76x8_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
     [ath79-generic-23.05]="https://downloads.openwrt.org/releases/23.05.3/targets/ath79/generic/openwrt-sdk-23.05.3-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
     
     # OpenWrt 21.02 SDK
     [ipq40xx-generic-21.02]="https://downloads.openwrt.org/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
     [ramips-mt7621-21.02]="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt7621/openwrt-sdk-21.02.7-ramips-mt7621_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
-    [ramips-mt76x8-21.02]="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt76x8/openwrt-sdk-21.02.7-ramips-mt76x8_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+    [ramips-mt76x8-21.02]="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt76x8/openwrt-sdk-21.02.7-ramips-mt76x8_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
     [ath79-generic-21.02]="https://downloads.openwrt.org/releases/21.02.7/targets/ath79/generic/openwrt-sdk-21.02.7-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
 )
 
@@ -79,22 +79,29 @@ process_device_info() {
     # 根据平台自动设置子平台
     local subtarget="generic"
     case "$platform" in
-        "ipq40xx") subtarget="generic" ;;
+        "ipq40xx") 
+            subtarget="generic"
+            ;;
         "mediatek") 
-            if [[ "$device_model" == *mt7981* ]]; then
-                subtarget="mt7981"
+            # 对于mediatek平台，大部分mt7981设备使用filogic子平台
+            if [[ "$device_model" == *mt7981* ]] || [[ "$device_model" == *rax3000m* ]] || [[ "$device_model" == *filogic* ]]; then
+                subtarget="filogic"
             else
                 subtarget="generic"
             fi
             ;;
         "ramips") 
-            if [[ "$device_model" == *mt7621* ]]; then
+            if [[ "$device_model" == *mt7621* ]] || [[ "$display_name" == *7621* ]]; then
                 subtarget="mt7621"
-            else
+            elif [[ "$device_model" == *mt76x8* ]] || [[ "$display_name" == *76x8* ]]; then
                 subtarget="mt76x8"
+            else
+                subtarget="generic"
             fi
             ;;
-        "ath79") subtarget="generic" ;;
+        "ath79") 
+            subtarget="generic"
+            ;;
     esac
     
     # SDK版本默认为23.05
@@ -158,8 +165,9 @@ get_device_description() {
     
     local display_name=$(get_device_field "$device_name" "display_name")
     local platform=$(get_device_field "$device_name" "platform")
+    local subtarget=$(get_device_field "$device_name" "subtarget")
     
-    echo "$display_name ($platform平台)"
+    echo "$display_name ($platform/$subtarget平台)"
 }
 
 # 获取设备固件名称
@@ -400,16 +408,16 @@ show_all_devices() {
     echo "=================="
     echo ""
     
-    printf "%-15s %-30s %-15s %-25s\n" \
-        "设备代码" "显示名称" "平台" "设备型号"
-    echo "----------------------------------------------------------------"
+    printf "%-15s %-30s %-15s %-15s %-25s\n" \
+        "设备代码" "显示名称" "平台" "子平台" "设备型号"
+    echo "----------------------------------------------------------------------------------------"
     
     for device in $(get_all_devices); do
         local info=$(get_device_info "$device")
         if [ -n "$info" ]; then
             IFS='|' read -r display_name platform subtarget device_model sdk_version <<< "$info"
-            printf "%-15s %-30s %-15s %-25s\n" \
-                "$device" "$display_name" "$platform" "$device_model"
+            printf "%-15s %-30s %-15s %-15s %-25s\n" \
+                "$device" "$display_name" "$platform" "$subtarget" "$device_model"
         fi
     done
     
@@ -417,6 +425,7 @@ show_all_devices() {
     echo "💡 使用方法:"
     echo "  1. 在构建工作流中选择设备代码即可"
     echo "  2. 添加新设备只需复制示例格式，填写三行信息"
+    echo "  3. 对于mediatek平台，mt7981设备会自动使用filogic子平台"
 }
 
 # ==================== 测试函数 ====================
@@ -434,12 +443,18 @@ test_support_functions() {
             echo "  🖥️  平台: $platform"
             echo "  🎯 子平台: $subtarget"
             echo "  📟 设备型号: $device_model"
-            echo "  ⚙️  SDK版本: $sdk_version"
             echo "  🔗 23.05 SDK URL: $(get_sdk_url "$device" "23.05")"
             echo "  🔗 21.02 SDK URL: $(get_sdk_url "$device" "21.02")"
         else
             echo "  ❌ 设备信息获取失败"
         fi
+    done
+    
+    echo ""
+    echo "📚 SDK URL 数据库:"
+    echo "=================="
+    for key in "${!SDK_URLS[@]}"; do
+        echo "  $key"
     done
     
     echo ""
@@ -449,13 +464,13 @@ test_support_functions() {
 # ==================== 主函数 ====================
 # 如果直接运行此脚本，显示帮助信息
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    echo "设备支持系统 v2.5 - 极简竖排格式"
+    echo "设备支持系统 v2.6 - 修正SDK URL"
     echo "=================================="
     echo "🔧 主要特性:"
+    echo "  - 修正SDK URL地址（移除_eabi后缀）"
+    echo "  - 添加mediatek filogic子平台支持"
     echo "  - 极简竖排格式，只需填写三行信息"
     echo "  - 自动生成子平台和SDK信息"
-    echo "  - 完整的SDK URL数据库"
-    echo "  - 自动配置合并"
     echo ""
     
     case "${1:-}" in
@@ -490,6 +505,10 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
             echo "  \"显示名称\""
             echo "  \"平台\""
             echo "  \"设备型号\""
+            echo ""
+            echo "💡 注意:"
+            echo "  1. 对于mediatek mt7981设备，会自动使用filogic子平台"
+            echo "  2. SDK URL已修正，移除了错误的_eabi后缀"
             ;;
     esac
 fi
