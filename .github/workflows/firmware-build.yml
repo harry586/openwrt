@@ -495,13 +495,30 @@ jobs:
             exit 1
           fi
           
+          # 添加文件完整性验证
+          echo "🔍 验证步骤6文件完整性..."
+          if [ -f "$BUILD_DIR/support.sh" ]; then
+            echo "✅ 确认 support.sh 存在于构建目录: $BUILD_DIR/support.sh"
+            ls -la "$BUILD_DIR/support.sh"
+          else
+            echo "❌ 警告: support.sh 不在构建目录"
+            echo "📁 构建目录内容:"
+            ls -la "$BUILD_DIR/" 2>/dev/null || echo "无法访问构建目录"
+          fi
+          
+          if [ -f "$BUILD_DIR/firmware-config/scripts/build_firmware_main.sh" ]; then
+            echo "✅ 确认 build_firmware_main.sh 存在于构建目录"
+          else
+            echo "❌ 警告: build_firmware_main.sh 不在构建目录"
+          fi
+          
           echo "✅ 编译环境和构建目录设置完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 6 完成"
       
-      # 步骤 7: 下载OpenWrt官方SDK（修复版）
-      - name: "7. 下载OpenWrt官方SDK（修复版）"
+      # 步骤 7: 下载OpenWrt官方SDK（修复版）- 修复support.sh路径问题
+      - name: "7. 下载OpenWrt官方SDK（修复版）- 修复support.sh路径问题"
         run: |
-          echo "=== 步骤 7: 下载OpenWrt官方SDK（修复版） ==="
+          echo "=== 步骤 7: 下载OpenWrt官方SDK（修复版）- 修复support.sh路径问题 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -513,11 +530,56 @@ jobs:
           BUILD_DIR="${{ env.BUILD_DIR }}"
           echo "📌 使用构建目录: $BUILD_DIR"
           
-          # 检查 support.sh 是否存在
-          if [ ! -f "$BUILD_DIR/support.sh" ]; then
-            echo "❌ 错误: support.sh 文件不存在"
+          # 详细检查 support.sh 文件的位置
+          echo "🔍 详细检查 support.sh 文件..."
+          echo "📁 查找所有可能的 support.sh 文件位置:"
+          
+          # 检查多个可能的位置
+          POSSIBLE_PATHS=(
+            "$BUILD_DIR/support.sh"
+            "/mnt/openwrt-build/support.sh" 
+            "${{ github.workspace }}/support.sh"
+            "/tmp/openwrt-build/support.sh"
+          )
+          
+          FOUND_PATH=""
+          for path in "${POSSIBLE_PATHS[@]}"; do
+            if [ -f "$path" ]; then
+              FOUND_PATH="$path"
+              echo "✅ 找到 support.sh: $path"
+              echo "📊 文件大小: $(ls -lh "$path" | awk '{print $5}')"
+              break
+            else
+              echo "❌ 未找到: $path"
+            fi
+          done
+          
+          if [ -z "$FOUND_PATH" ]; then
+            echo "❌ 错误: 在所有可能位置都找不到 support.sh 文件"
+            echo "📁 检查构建目录内容:"
+            ls -la "$BUILD_DIR/" 2>/dev/null || echo "无法访问构建目录"
             exit 1
           fi
+          
+          echo "✅ 确认使用 support.sh: $FOUND_PATH"
+          
+          # 如果找到的路径不是构建目录，复制到构建目录
+          if [ "$FOUND_PATH" != "$BUILD_DIR/support.sh" ]; then
+            echo "🔄 复制 support.sh 到构建目录..."
+            cp "$FOUND_PATH" "$BUILD_DIR/support.sh"
+            chmod +x "$BUILD_DIR/support.sh"
+            echo "✅ 已复制 support.sh 到: $BUILD_DIR/support.sh"
+          fi
+          
+          # 验证文件完整性
+          if [ ! -f "$BUILD_DIR/support.sh" ]; then
+            echo "❌ 错误: 复制后仍然找不到 support.sh"
+            exit 1
+          fi
+          
+          echo "📋 验证 support.sh 功能..."
+          source "$BUILD_DIR/support.sh"
+          echo "✅ support.sh 加载成功"
           
           # 先检查环境文件是否已经存在
           echo "🔍 检查环境文件..."
