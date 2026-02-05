@@ -64,10 +64,10 @@ jobs:
           
           echo "🟢 步骤 0 完成"
       
-      # 步骤 1: 使用Git Archive API下载源代码
-      - name: "1. 使用Git Archive API下载源代码"
+      # 步骤 1: 使用Git Archive API下载源代码（修复版）
+      - name: "1. 使用Git Archive API下载源代码（修复版）"
         run: |
-          echo "=== 步骤 1: 使用Git Archive API下载源代码 ==="
+          echo "=== 步骤 1: 使用Git Archive API下载源代码（修复版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -100,38 +100,57 @@ jobs:
           
           # 检查解压结果
           echo "🔍 检查解压结果..."
-          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
-            echo "✅ 源代码解压成功"
-            echo "✅ 重要文件存在: firmware-config/scripts/build_firmware_main.sh"
-            
-            # 复制到工作区
-            echo "📁 复制文件到工作区..."
-            mkdir -p ${{ github.workspace }}
-            
-            # 检查并删除编译器目录（如果有的话）
-            if [ -d "firmware-config/build-Compiler-file" ]; then
-              echo "⚠️ 发现编译器目录，排除不复制"
-              rm -rf firmware-config/build-Compiler-file
+          
+          # 必须存在的文件
+          REQUIRED_FILES=("firmware-config/scripts/build_firmware_main.sh" "support.sh")
+          for file in "${REQUIRED_FILES[@]}"; do
+            if [ -f "$file" ]; then
+              echo "✅ 关键文件存在: $file"
+            else
+              echo "❌ 错误: 关键文件不存在: $file"
+              echo "📁 当前目录内容:"
+              ls -la
+              exit 1
             fi
-            
-            # 使用rsync复制所有文件，排除.git目录
-            rsync -av --exclude='.git' . ${{ github.workspace }}/
-            
-            # 确保脚本文件有执行权限
-            chmod +x ${{ github.workspace }}/firmware-config/scripts/*.sh 2>/dev/null || true
-            
-            echo "✅ 文件复制完成"
-            
-            # 保存源代码压缩包作为构建产物
-            mkdir -p /tmp/build-artifacts/source-archive
-            cp source.tar.gz /tmp/build-artifacts/source-archive/
-            echo "📦 源代码已保存到: /tmp/build-artifacts/source-archive/"
+          done
+          
+          echo "📁 复制文件到多个位置..."
+          
+          # 1. 复制到 GitHub 工作区（保持原有逻辑）
+          echo "🔧 复制到 GitHub 工作区..."
+          mkdir -p ${{ github.workspace }}
+          cp -r ./* ${{ github.workspace }}/ 2>/dev/null || true
+          echo "✅ GitHub 工作区复制完成"
+          
+          # 2. 关键文件复制到 /mnt/openwrt-build 目录
+          echo "🔧 复制关键文件到构建目录..."
+          mkdir -p /mnt/openwrt-build
+          
+          # 复制 support.sh 到构建目录
+          if [ -f "support.sh" ]; then
+            cp support.sh /mnt/openwrt-build/
+            chmod +x /mnt/openwrt-build/support.sh
+            echo "✅ support.sh 已复制到 /mnt/openwrt-build/"
           else
-            echo "❌ 错误: 源代码解压失败，重要文件缺失"
-            echo "📁 当前目录内容:"
-            ls -la
+            echo "❌ 错误: support.sh 不存在"
             exit 1
           fi
+          
+          # 复制 build_firmware_main.sh 到构建目录
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            mkdir -p /mnt/openwrt-build/firmware-config/scripts
+            cp firmware-config/scripts/build_firmware_main.sh /mnt/openwrt-build/firmware-config/scripts/
+            chmod +x /mnt/openwrt-build/firmware-config/scripts/build_firmware_main.sh
+            echo "✅ build_firmware_main.sh 已复制到 /mnt/openwrt-build/firmware-config/scripts/"
+          else
+            echo "❌ 错误: build_firmware_main.sh 不存在"
+            exit 1
+          fi
+          
+          # 保存源代码压缩包作为构建产物
+          mkdir -p /tmp/build-artifacts/source-archive
+          cp source.tar.gz /tmp/build-artifacts/source-archive/
+          echo "📦 源代码已保存到: /tmp/build-artifacts/source-archive/"
           
           # 清理临时文件
           cd /tmp
@@ -381,18 +400,35 @@ jobs:
           
           echo "🟢 步骤 5 完成"
       
-      # 步骤 6: 设置编译环境和构建目录
-      - name: "6. 设置编译环境和构建目录"
+      # 步骤 6: 设置编译环境和构建目录（修复版）
+      - name: "6. 设置编译环境和构建目录（修复版）"
         run: |
-          echo "=== 步骤 6: 设置编译环境和构建目录 ==="
+          echo "=== 步骤 6: 设置编译环境和构建目录（修复版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
           trap 'echo "❌ 步骤 6 失败，退出代码: $?"; exit 1' ERR
           
+          # 验证关键文件在构建目录中存在
+          echo "🔍 验证构建目录中的文件..."
+          if [ -f "/mnt/openwrt-build/support.sh" ]; then
+            echo "✅ support.sh 存在于构建目录"
+          else
+            echo "❌ 错误: support.sh 不存在于构建目录"
+            exit 1
+          fi
+          
+          if [ -f "/mnt/openwrt-build/firmware-config/scripts/build_firmware_main.sh" ]; then
+            echo "✅ build_firmware_main.sh 存在于构建目录"
+          else
+            echo "❌ 错误: build_firmware_main.sh 不存在于构建目录"
+            exit 1
+          fi
+          
           echo "🔄 步骤 6.1: 设置编译环境"
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" setup_environment
+          cd /mnt/openwrt-build
+          ./firmware-config/scripts/build_firmware_main.sh setup_environment
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 设置编译环境失败"
@@ -400,7 +436,7 @@ jobs:
           fi
           
           echo "🔄 步骤 6.2: 创建构建目录"
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" create_build_dir
+          ./firmware-config/scripts/build_firmware_main.sh create_build_dir
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 创建构建目录失败"
@@ -411,7 +447,8 @@ jobs:
           echo "📱 设备: ${{ github.event.inputs.device_name }}"
           echo "🔄 版本: ${{ github.event.inputs.version_selection }}"
           echo "⚙️ 配置模式: ${{ github.event.inputs.config_mode }}"
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}"
+          
+          ./firmware-config/scripts/build_firmware_main.sh initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}"
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 初始化构建环境失败"
@@ -434,7 +471,7 @@ jobs:
           echo "🚀 开始下载OpenWrt官方SDK工具链..."
           
           # 检查 support.sh 是否存在
-          if [ ! -f "${{ github.workspace }}/support.sh" ]; then
+          if [ ! -f "/mnt/openwrt-build/support.sh" ]; then
             echo "❌ 错误: support.sh 文件不存在"
             exit 1
           fi
@@ -456,6 +493,7 @@ jobs:
             echo "  CONFIG_MODE: $CONFIG_MODE"
             echo "  REPO_ROOT: $REPO_ROOT"
             echo "  COMPILER_DIR: $COMPILER_DIR"
+            echo "  DEVICE_NAME: $DEVICE_NAME"
             echo ""
             
             echo "💡 使用步骤6.3已设置的环境变量进行SDK下载"
@@ -464,7 +502,7 @@ jobs:
             echo "📝 重新创建环境变量..."
             
             # 使用 support.sh 获取设备配置
-            source "${{ github.workspace }}/support.sh"
+            source "/mnt/openwrt-build/support.sh"
             DEVICE_NAME="${{ github.event.inputs.device_name }}"
             DEVICE_CONFIG=$(get_device_config "$DEVICE_NAME")
             
@@ -496,7 +534,8 @@ jobs:
           
           # 执行SDK下载
           echo "🔄 开始执行SDK下载..."
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_compiler_env "${{ github.event.inputs.device_name }}"
+          cd /mnt/openwrt-build
+          ./firmware-config/scripts/build_firmware_main.sh initialize_compiler_env "${{ github.event.inputs.device_name }}"
           
           SDK_EXIT_CODE=$?
           if [ $SDK_EXIT_CODE -ne 0 ]; then
@@ -504,7 +543,7 @@ jobs:
             echo "💡 将使用OpenWrt自动构建的编译器作为后备"
           fi
           
-          echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m%d %H:%M:%S')"
+          echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 7 完成"
       
       # 步骤 8: 验证SDK下载结果
@@ -591,7 +630,8 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 9 失败，退出代码: $?"; exit 1' ERR
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" add_turboacc_support
+          cd /mnt/openwrt-build
+          ./firmware-config/scripts/build_firmware_main.sh add_turboacc_support
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 添加TurboACC支持失败"
@@ -611,7 +651,8 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 10 失败，退出代码: $?"; exit 1' ERR
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" configure_feeds
+          cd /mnt/openwrt-build
+          ./firmware-config/scripts/build_firmware_main.sh configure_feeds
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 配置Feeds失败"
@@ -632,7 +673,8 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 11 失败，退出代码: $?"; exit 1' ERR
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" install_turboacc_packages
+          cd /mnt/openwrt-build
+          ./firmware-config/scripts/build_firmware_main.sh install_turboacc_packages
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 安装TurboACC包失败"
@@ -652,7 +694,8 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 12 失败，退出代码: $?"; exit 1' ERR
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_space_check
+          cd /mnt/openwrt-build
+          ./firmware-config/scripts/build_firmware_main.sh pre_build_space_check
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 编译前空间检查失败"
@@ -673,12 +716,13 @@ jobs:
           trap 'echo "❌ 步骤 13 失败，退出代码: $?"; exit 1' ERR
           
           # 检查 support.sh 是否存在
-          if [ ! -f "${{ github.workspace }}/support.sh" ]; then
+          if [ ! -f "/mnt/openwrt-build/support.sh" ]; then
             echo "❌ 错误: support.sh 文件不存在"
             exit 1
           fi
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" generate_config "${{ github.event.inputs.extra_packages }}"
+          cd /mnt/openwrt-build
+          ./firmware-config/scripts/build_firmware_main.sh generate_config "${{ github.event.inputs.extra_packages }}"
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 智能配置生成失败"
@@ -697,7 +741,8 @@ jobs:
           # 设置错误处理 - 这里不退出，只是验证
           trap 'echo "⚠️ 步骤 14 验证过程中出现错误，继续执行..."' ERR
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" verify_usb_config
+          cd /mnt/openwrt-build
+          ./firmware-config/scripts/build_firmware_main.sh verify_usb_config
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 14 完成"
@@ -711,7 +756,8 @@ jobs:
           # 设置错误处理 - 这里不退出，只是检查
           trap 'echo "⚠️ 步骤 15 检查过程中出现错误，继续执行..."' ERR
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" check_usb_drivers_integrity
+          cd /mnt/openwrt-build
+          ./firmware-config/scripts/build_firmware_main.sh check_usb_drivers_integrity
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 15 完成"
@@ -726,12 +772,14 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 16 失败，退出代码: $?"; exit 1' ERR
           
-          if [ -f "/mnt/openwrt-build/.config" ]; then
-            cp "/mnt/openwrt-build/.config" "/mnt/openwrt-build/.config.original"
+          cd /mnt/openwrt-build
+          
+          if [ -f ".config" ]; then
+            cp ".config" ".config.original"
             echo "✅ 已备份原始配置文件"
           fi
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" apply_config
+          ./firmware-config/scripts/build_firmware_main.sh apply_config
           
           if [ $? -ne 0 ]; then
             echo "❌ 错误: 应用配置失败"
@@ -739,28 +787,28 @@ jobs:
           fi
           
           echo "=== 🚨 最终配置状态检查（完整详细版）==="
-          if [ -f "/mnt/openwrt-build/.config" ]; then
+          if [ -f ".config" ]; then
             echo "✅ 配置文件存在"
-            echo "📊 文件大小: $(ls -lh "/mnt/openwrt-build/.config" | awk '{print $5}')"
-            echo "📝 文件行数: $(wc -l < "/mnt/openwrt-build/.config")"
+            echo "📊 文件大小: $(ls -lh ".config" | awk '{print $5}')"
+            echo "📝 文件行数: $(wc -l < ".config")"
             
             echo ""
             echo "🔧 关键配置检查:"
             echo "1. ✅ 目标平台配置:"
-            grep "CONFIG_TARGET_" "/mnt/openwrt-build/.config" | head -5
+            grep "CONFIG_TARGET_" ".config" | head -5
             
             echo ""
             echo "2. ✅ USB 3.0驱动配置:"
-            grep "CONFIG_PACKAGE_kmod-usb-xhci" "/mnt/openwrt-build/.config"
+            grep "CONFIG_PACKAGE_kmod-usb-xhci" ".config"
             
             echo ""
             echo "3. ✅ 关键USB驱动状态:"
-            grep -E "CONFIG_PACKAGE_kmod-usb-core|CONFIG_PACKAGE_kmod-usb2|CONFIG_PACKAGE_kmod-usb3|CONFIG_PACKAGE_kmod-usb-storage" "/mnt/openwrt-build/.config"
+            grep -E "CONFIG_PACKAGE_kmod-usb-core|CONFIG_PACKAGE_kmod-usb2|CONFIG_PACKAGE_kmod-usb3|CONFIG_PACKAGE_kmod-usb-storage" ".config"
             
             echo ""
             echo "4. ✅ 插件配置统计:"
-            enabled=$(grep -c "CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config")
-            disabled=$(grep -c "# CONFIG_PACKAGE_.* is not set" "/mnt/openwrt-build/.config")
+            enabled=$(grep -c "CONFIG_PACKAGE_.*=y" ".config")
+            disabled=$(grep -c "# CONFIG_PACKAGE_.* is not set" ".config")
             echo "   ✅ 已启用插件: $enabled 个"
             echo "   ❌ 已禁用插件: $disabled 个"
           else
@@ -781,11 +829,13 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 17 失败，退出代码: $?"; exit 1' ERR
           
+          cd /mnt/openwrt-build
+          
           # 检查配置文件
-          if [ -f "/mnt/openwrt-build/.config" ]; then
+          if [ -f ".config" ]; then
             echo "✅ .config 文件存在"
-            echo "📊 文件大小: $(ls -lh "/mnt/openwrt-build/.config" | awk '{print $5}')"
-            echo "📝 文件行数: $(wc -l < "/mnt/openwrt-build/.config")"
+            echo "📊 文件大小: $(ls -lh ".config" | awk '{print $5}')"
+            echo "📝 文件行数: $(wc -l < ".config")"
             
             # 确保备份目录存在
             mkdir -p "${{ github.workspace }}/firmware-config/config-backup"
@@ -793,7 +843,7 @@ jobs:
             # 备份到仓库目录
             BACKUP_FILE="${{ github.workspace }}/firmware-config/config-backup/config_${{ env.TIMESTAMP }}.config"
             
-            cp "/mnt/openwrt-build/.config" "$BACKUP_FILE"
+            cp ".config" "$BACKUP_FILE"
             echo "✅ 配置文件备份到仓库目录: $BACKUP_FILE"
             echo "📊 备份文件大小: $(ls -lh "$BACKUP_FILE" | awk '{print $5}')"
           else
@@ -812,7 +862,8 @@ jobs:
           # 设置错误处理 - 这里不退出，只是尝试修复
           trap 'echo "⚠️ 步骤 18 修复过程中出现错误，继续执行..."' ERR
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" fix_network
+          cd /mnt/openwrt-build
+          ./firmware-config/scripts/build_firmware_main.sh fix_network
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 18 完成"
@@ -966,12 +1017,12 @@ jobs:
               
               echo ""
               echo "🚀 开始执行自定义文件集成（增强版）..."
-              "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" integrate_custom_files
+              cd /mnt/openwrt-build
+              ./firmware-config/scripts/build_firmware_main.sh integrate_custom_files
               
               # 验证集成结果
               echo ""
               echo "🔍 验证集成结果..."
-              cd /mnt/openwrt-build
               
               # 检查自定义文件目录
               if [ -d "files/etc/custom-files" ]; then
@@ -1062,7 +1113,8 @@ jobs:
           fi
           
           echo "🚀 执行前置错误检查（已修复23.05 SDK验证问题）..."
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_error_check
+          cd /mnt/openwrt-build
+          ./firmware-config/scripts/build_firmware_main.sh pre_build_error_check
           
           CHECK_EXIT_CODE=$?
           if [ $CHECK_EXIT_CODE -ne 0 ]; then
