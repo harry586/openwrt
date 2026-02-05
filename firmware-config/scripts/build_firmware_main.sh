@@ -5,15 +5,36 @@ BUILD_DIR="/mnt/openwrt-build"
 ENV_FILE="$BUILD_DIR/build_env.sh"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-# 检查 support.sh 是否存在
-if [ ! -f "/support.sh" ]; then
-    echo "❌ 错误: /support.sh 文件不存在"
-    echo "请确保 support.sh 文件位于根目录"
+# 检查 support.sh 是否存在 - 简化查找逻辑
+echo "🔍 查找 support.sh 文件..."
+echo "当前目录: $(pwd)"
+echo "目录内容:"
+ls -la
+
+if [ -f "./support.sh" ]; then
+    echo "✅ 在当前目录找到 support.sh"
+    SUPPORT_FILE="./support.sh"
+elif [ -f "/mnt/openwrt-build/support.sh" ]; then
+    echo "✅ 在构建目录找到 support.sh"
+    SUPPORT_FILE="/mnt/openwrt-build/support.sh"
+elif [ -f "support.sh" ]; then
+    echo "✅ 找到 support.sh"
+    SUPPORT_FILE="support.sh"
+else
+    echo "❌ 错误: 无法找到 support.sh 文件"
+    echo "当前目录: $(pwd)"
+    echo "目录内容:"
+    ls -la
+    echo ""
+    echo "尝试在 /mnt/openwrt-build 中查找:"
+    ls -la /mnt/openwrt-build/ 2>/dev/null || echo "目录不存在"
     exit 1
 fi
 
+echo "✅ 使用 support.sh 文件: $SUPPORT_FILE"
+
 # 加载 support.sh
-source "/support.sh"
+source "$SUPPORT_FILE"
 
 # 确保有日志目录
 mkdir -p /tmp/build-logs
