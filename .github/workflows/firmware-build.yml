@@ -64,10 +64,10 @@ jobs:
           
           echo "🟢 步骤 0 完成"
       
-      # 步骤 1: 使用Git Archive API下载源代码（修复版）
-      - name: "1. 使用Git Archive API下载源代码（修复版）"
+      # 步骤 1: 使用Git Archive API下载源代码（修复权限版）
+      - name: "1. 使用Git Archive API下载源代码（修复权限版）"
         run: |
-          echo "=== 步骤 1: 使用Git Archive API下载源代码（修复版） ==="
+          echo "=== 步骤 1: 使用Git Archive API下载源代码（修复权限版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -122,15 +122,30 @@ jobs:
           cp -r ./* ${{ github.workspace }}/ 2>/dev/null || true
           echo "✅ GitHub 工作区复制完成"
           
-          # 2. 关键文件复制到 /mnt/openwrt-build 目录
-          echo "🔧 复制关键文件到构建目录..."
-          mkdir -p /mnt/openwrt-build
+          # 2. 关键文件复制到构建目录 - 使用备用方案
+          echo "🔧 准备复制关键文件到构建目录..."
+          
+          # 首先尝试在 /mnt 下创建目录，如果失败则使用 /tmp
+          if sudo mkdir -p /mnt/openwrt-build 2>/dev/null; then
+            echo "✅ 使用 sudo 在 /mnt 创建构建目录成功"
+            sudo chmod 777 /mnt/openwrt-build
+            BUILD_DIR="/mnt/openwrt-build"
+          else
+            echo "⚠️ 无法在 /mnt 下创建目录，将使用 /tmp 目录"
+            BUILD_DIR="/tmp/openwrt-build"
+            mkdir -p "$BUILD_DIR"
+            echo "📌 使用备用构建目录: $BUILD_DIR"
+          fi
+          
+          # 更新环境变量
+          echo "BUILD_DIR=$BUILD_DIR" >> $GITHUB_ENV
+          echo "📌 最终构建目录: $BUILD_DIR"
           
           # 复制 support.sh 到构建目录
           if [ -f "support.sh" ]; then
-            cp support.sh /mnt/openwrt-build/
-            chmod +x /mnt/openwrt-build/support.sh
-            echo "✅ support.sh 已复制到 /mnt/openwrt-build/"
+            cp support.sh "$BUILD_DIR/"
+            chmod +x "$BUILD_DIR/support.sh"
+            echo "✅ support.sh 已复制到 $BUILD_DIR/"
           else
             echo "❌ 错误: support.sh 不存在"
             exit 1
@@ -138,10 +153,10 @@ jobs:
           
           # 复制 build_firmware_main.sh 到构建目录
           if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
-            mkdir -p /mnt/openwrt-build/firmware-config/scripts
-            cp firmware-config/scripts/build_firmware_main.sh /mnt/openwrt-build/firmware-config/scripts/
-            chmod +x /mnt/openwrt-build/firmware-config/scripts/build_firmware_main.sh
-            echo "✅ build_firmware_main.sh 已复制到 /mnt/openwrt-build/firmware-config/scripts/"
+            mkdir -p "$BUILD_DIR/firmware-config/scripts"
+            cp firmware-config/scripts/build_firmware_main.sh "$BUILD_DIR/firmware-config/scripts/"
+            chmod +x "$BUILD_DIR/firmware-config/scripts/build_firmware_main.sh"
+            echo "✅ build_firmware_main.sh 已复制到 $BUILD_DIR/firmware-config/scripts/"
           else
             echo "❌ 错误: build_firmware_main.sh 不存在"
             exit 1
@@ -384,18 +399,40 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 5 失败，退出代码: $?"; exit 1' ERR
           
-          echo "📊 /mnt 分区详细信息:"
-          df -h /mnt
+          echo "📊 磁盘使用情况:"
+          df -h
           
-          AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
-          AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-          echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+          # 检查构建目录所在分区的空间
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          echo "🔍 检查构建目录: $BUILD_DIR"
           
-          if [ $AVAILABLE_GB -lt 50 ]; then
-            echo "❌ 错误: /mnt 空间不足50G，当前只有${AVAILABLE_GB}G"
-            exit 1
+          # 确定构建目录所在的分区
+          if [ -d "$BUILD_DIR" ]; then
+            PARTITION=$(df "$BUILD_DIR" | tail -1 | awk '{print $6}')
+            echo "📌 构建目录所在分区: $PARTITION"
+            
+            AVAILABLE_SPACE=$(df "$PARTITION" --output=avail | tail -1 | awk '{print $1}')
+            AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+            echo "$PARTITION 可用空间: ${AVAILABLE_GB}G"
+            
+            if [ $AVAILABLE_GB -lt 50 ]; then
+              echo "❌ 错误: $PARTITION 空间不足50G，当前只有${AVAILABLE_GB}G"
+              exit 1
+            else
+              echo "✅ 初始空间检查通过 - ${AVAILABLE_GB}G 可用"
+            fi
           else
-            echo "✅ 初始空间检查通过 - ${AVAILABLE_GB}G 可用"
+            echo "⚠️ 构建目录不存在，检查根分区..."
+            AVAILABLE_SPACE=$(df / --output=avail | tail -1 | awk '{print $1}')
+            AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+            echo "/ 可用空间: ${AVAILABLE_GB}G"
+            
+            if [ $AVAILABLE_GB -lt 50 ]; then
+              echo "❌ 错误: 根分区空间不足50G，当前只有${AVAILABLE_GB}G"
+              exit 1
+            else
+              echo "✅ 初始空间检查通过 - ${AVAILABLE_GB}G 可用"
+            fi
           fi
           
           echo "🟢 步骤 5 完成"
@@ -410,16 +447,19 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 6 失败，退出代码: $?"; exit 1' ERR
           
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          echo "📌 使用构建目录: $BUILD_DIR"
+          
           # 验证关键文件在构建目录中存在
           echo "🔍 验证构建目录中的文件..."
-          if [ -f "/mnt/openwrt-build/support.sh" ]; then
+          if [ -f "$BUILD_DIR/support.sh" ]; then
             echo "✅ support.sh 存在于构建目录"
           else
             echo "❌ 错误: support.sh 不存在于构建目录"
             exit 1
           fi
           
-          if [ -f "/mnt/openwrt-build/firmware-config/scripts/build_firmware_main.sh" ]; then
+          if [ -f "$BUILD_DIR/firmware-config/scripts/build_firmware_main.sh" ]; then
             echo "✅ build_firmware_main.sh 存在于构建目录"
           else
             echo "❌ 错误: build_firmware_main.sh 不存在于构建目录"
@@ -427,7 +467,7 @@ jobs:
           fi
           
           echo "🔄 步骤 6.1: 设置编译环境"
-          cd /mnt/openwrt-build
+          cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh setup_environment
           
           if [ $? -ne 0 ]; then
@@ -461,7 +501,7 @@ jobs:
       # 步骤 7: 下载OpenWrt官方SDK（修复版）
       - name: "7. 下载OpenWrt官方SDK（修复版）"
         run: |
-          echo "=== 步骤 7: 下载OpenWrt官方SDK（修复版）==="
+          echo "=== 步骤 7: 下载OpenWrt官方SDK（修复版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -470,21 +510,24 @@ jobs:
           
           echo "🚀 开始下载OpenWrt官方SDK工具链..."
           
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          echo "📌 使用构建目录: $BUILD_DIR"
+          
           # 检查 support.sh 是否存在
-          if [ ! -f "/mnt/openwrt-build/support.sh" ]; then
+          if [ ! -f "$BUILD_DIR/support.sh" ]; then
             echo "❌ 错误: support.sh 文件不存在"
             exit 1
           fi
           
           # 先检查环境文件是否已经存在
           echo "🔍 检查环境文件..."
-          if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
+          if [ -f "$BUILD_DIR/build_env.sh" ]; then
             echo "✅ 环境文件已存在（由步骤6.3创建）"
             echo "📊 环境文件内容摘要:"
-            head -15 /mnt/openwrt-build/build_env.sh
+            head -15 "$BUILD_DIR/build_env.sh"
             
             # 加载现有环境变量
-            source /mnt/openwrt-build/build_env.sh
+            source "$BUILD_DIR/build_env.sh"
             echo "✅ 从现有环境文件加载变量:"
             echo "  SELECTED_BRANCH: $SELECTED_BRANCH"
             echo "  TARGET: $TARGET"
@@ -502,7 +545,7 @@ jobs:
             echo "📝 重新创建环境变量..."
             
             # 使用 support.sh 获取设备配置
-            source "/mnt/openwrt-build/support.sh"
+            source "$BUILD_DIR/support.sh"
             DEVICE_NAME="${{ github.event.inputs.device_name }}"
             DEVICE_CONFIG=$(get_device_config "$DEVICE_NAME")
             
@@ -518,23 +561,23 @@ jobs:
             echo "✅ 从 support.sh 获取设备配置: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE"
             
             # 创建环境文件
-            echo "#!/bin/bash" > /mnt/openwrt-build/build_env.sh
-            echo "export SELECTED_REPO_URL=\"https://github.com/immortalwrt/immortalwrt.git\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export SELECTED_BRANCH=\"${{ github.event.inputs.version_selection == '23.05' && 'openwrt-23.05' || 'openwrt-21.02' }}\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export TARGET=\"$TARGET\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export SUBTARGET=\"$SUBTARGET\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export DEVICE=\"$DEVICE\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export CONFIG_MODE=\"${{ github.event.inputs.config_mode }}\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export REPO_ROOT=\"${{ github.workspace }}\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export COMPILER_DIR=\"\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export DEVICE_NAME=\"$DEVICE_NAME\"" >> /mnt/openwrt-build/build_env.sh
-            chmod +x /mnt/openwrt-build/build_env.sh
+            echo "#!/bin/bash" > "$BUILD_DIR/build_env.sh"
+            echo "export SELECTED_REPO_URL=\"https://github.com/immortalwrt/immortalwrt.git\"" >> "$BUILD_DIR/build_env.sh"
+            echo "export SELECTED_BRANCH=\"${{ github.event.inputs.version_selection == '23.05' && 'openwrt-23.05' || 'openwrt-21.02' }}\"" >> "$BUILD_DIR/build_env.sh"
+            echo "export TARGET=\"$TARGET\"" >> "$BUILD_DIR/build_env.sh"
+            echo "export SUBTARGET=\"$SUBTARGET\"" >> "$BUILD_DIR/build_env.sh"
+            echo "export DEVICE=\"$DEVICE\"" >> "$BUILD_DIR/build_env.sh"
+            echo "export CONFIG_MODE=\"${{ github.event.inputs.config_mode }}\"" >> "$BUILD_DIR/build_env.sh"
+            echo "export REPO_ROOT=\"${{ github.workspace }}\"" >> "$BUILD_DIR/build_env.sh"
+            echo "export COMPILER_DIR=\"\"" >> "$BUILD_DIR/build_env.sh"
+            echo "export DEVICE_NAME=\"$DEVICE_NAME\"" >> "$BUILD_DIR/build_env.sh"
+            chmod +x "$BUILD_DIR/build_env.sh"
             echo "✅ 已创建环境文件"
           fi
           
           # 执行SDK下载
           echo "🔄 开始执行SDK下载..."
-          cd /mnt/openwrt-build
+          cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh initialize_compiler_env "${{ github.event.inputs.device_name }}"
           
           SDK_EXIT_CODE=$?
@@ -557,19 +600,21 @@ jobs:
           
           echo "🔍 检查SDK下载结果..."
           
-          if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
-            source /mnt/openwrt-build/build_env.sh
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          
+          if [ -f "$BUILD_DIR/build_env.sh" ]; then
+            source "$BUILD_DIR/build_env.sh"
             echo "✅ 从环境文件加载变量: COMPILER_DIR=$COMPILER_DIR"
           else
             echo "⚠️ 环境文件不存在"
           fi
           
-          if [ -d "/mnt/openwrt-build/sdk" ]; then
-            echo "✅ SDK目录存在: /mnt/openwrt-build/sdk"
-            echo "📊 SDK目录大小: $(du -sh /mnt/openwrt-build/sdk 2>/dev/null | cut -f1 || echo '未知')"
+          if [ -d "$BUILD_DIR/sdk" ]; then
+            echo "✅ SDK目录存在: $BUILD_DIR/sdk"
+            echo "📊 SDK目录大小: $(du -sh "$BUILD_DIR/sdk" 2>/dev/null | cut -f1 || echo '未知')"
             
             # 查找真正的GCC，排除虚假编译器
-            GCC_FILE=$(find "/mnt/openwrt-build/sdk" -type f -executable \
+            GCC_FILE=$(find "$BUILD_DIR/sdk" -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
@@ -602,7 +647,7 @@ jobs:
               echo "⚠️ 未找到可执行的GCC编译器（可能是虚假的dummy-tools）"
               
               # 检查是否有虚假的编译器
-              DUMMY_GCC=$(find "/mnt/openwrt-build/sdk" -type f -executable \
+              DUMMY_GCC=$(find "$BUILD_DIR/sdk" -type f -executable \
                 -name "*gcc" \
                 -path "*dummy-tools*" \
                 2>/dev/null | head -1)
@@ -630,7 +675,8 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 9 失败，退出代码: $?"; exit 1' ERR
           
-          cd /mnt/openwrt-build
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh add_turboacc_support
           
           if [ $? -ne 0 ]; then
@@ -651,7 +697,8 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 10 失败，退出代码: $?"; exit 1' ERR
           
-          cd /mnt/openwrt-build
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh configure_feeds
           
           if [ $? -ne 0 ]; then
@@ -673,7 +720,8 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 11 失败，退出代码: $?"; exit 1' ERR
           
-          cd /mnt/openwrt-build
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh install_turboacc_packages
           
           if [ $? -ne 0 ]; then
@@ -694,7 +742,8 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 12 失败，退出代码: $?"; exit 1' ERR
           
-          cd /mnt/openwrt-build
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh pre_build_space_check
           
           if [ $? -ne 0 ]; then
@@ -715,13 +764,15 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 13 失败，退出代码: $?"; exit 1' ERR
           
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          
           # 检查 support.sh 是否存在
-          if [ ! -f "/mnt/openwrt-build/support.sh" ]; then
+          if [ ! -f "$BUILD_DIR/support.sh" ]; then
             echo "❌ 错误: support.sh 文件不存在"
             exit 1
           fi
           
-          cd /mnt/openwrt-build
+          cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh generate_config "${{ github.event.inputs.extra_packages }}"
           
           if [ $? -ne 0 ]; then
@@ -741,7 +792,8 @@ jobs:
           # 设置错误处理 - 这里不退出，只是验证
           trap 'echo "⚠️ 步骤 14 验证过程中出现错误，继续执行..."' ERR
           
-          cd /mnt/openwrt-build
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh verify_usb_config
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
@@ -756,7 +808,8 @@ jobs:
           # 设置错误处理 - 这里不退出，只是检查
           trap 'echo "⚠️ 步骤 15 检查过程中出现错误，继续执行..."' ERR
           
-          cd /mnt/openwrt-build
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh check_usb_drivers_integrity
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
@@ -772,7 +825,8 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 16 失败，退出代码: $?"; exit 1' ERR
           
-          cd /mnt/openwrt-build
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          cd "$BUILD_DIR"
           
           if [ -f ".config" ]; then
             cp ".config" ".config.original"
@@ -829,7 +883,8 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 17 失败，退出代码: $?"; exit 1' ERR
           
-          cd /mnt/openwrt-build
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          cd "$BUILD_DIR"
           
           # 检查配置文件
           if [ -f ".config" ]; then
@@ -862,7 +917,8 @@ jobs:
           # 设置错误处理 - 这里不退出，只是尝试修复
           trap 'echo "⚠️ 步骤 18 修复过程中出现错误，继续执行..."' ERR
           
-          cd /mnt/openwrt-build
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh fix_network
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
@@ -878,7 +934,8 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 19 失败，退出代码: $?"; exit 1' ERR
           
-          cd /mnt/openwrt-build
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          cd "$BUILD_DIR"
           
           echo "🔧 检查依赖包目录..."
           if [ ! -d "dl" ]; then
@@ -1017,7 +1074,8 @@ jobs:
               
               echo ""
               echo "🚀 开始执行自定义文件集成（增强版）..."
-              cd /mnt/openwrt-build
+              BUILD_DIR="${{ env.BUILD_DIR }}"
+              cd "$BUILD_DIR"
               ./firmware-config/scripts/build_firmware_main.sh integrate_custom_files
               
               # 验证集成结果
@@ -1107,13 +1165,15 @@ jobs:
           trap 'echo "❌ 步骤 21 失败，退出代码: $?"; exit 1' ERR
           
           echo "🔍 检查当前环境..."
-          if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
-            source /mnt/openwrt-build/build_env.sh
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          
+          if [ -f "$BUILD_DIR/build_env.sh" ]; then
+            source "$BUILD_DIR/build_env.sh"
             echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET"
           fi
           
           echo "🚀 执行前置错误检查（已修复23.05 SDK验证问题）..."
-          cd /mnt/openwrt-build
+          cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh pre_build_error_check
           
           CHECK_EXIT_CODE=$?
@@ -1146,18 +1206,38 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 22 失败，退出代码: $?"; exit 1' ERR
           
-          df -h /mnt
-          AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
-          AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-          echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+          df -h
+          BUILD_DIR="${{ env.BUILD_DIR }}"
           
-          if [ $AVAILABLE_GB -lt 10 ]; then
-            echo "❌ 错误: 编译前空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
-            exit 1
-          elif [ $AVAILABLE_GB -lt 20 ]; then
-            echo "⚠️ 警告: 编译前空间较低 (建议至少20G，当前${AVAILABLE_GB}G)"
+          # 检查构建目录所在分区的空间
+          if [ -d "$BUILD_DIR" ]; then
+            PARTITION=$(df "$BUILD_DIR" | tail -1 | awk '{print $6}')
+            AVAILABLE_SPACE=$(df "$PARTITION" --output=avail | tail -1 | awk '{print $1}')
+            AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+            echo "$PARTITION 可用空间: ${AVAILABLE_GB}G"
+            
+            if [ $AVAILABLE_GB -lt 10 ]; then
+              echo "❌ 错误: 编译前空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
+              exit 1
+            elif [ $AVAILABLE_GB -lt 20 ]; then
+              echo "⚠️ 警告: 编译前空间较低 (建议至少20G，当前${AVAILABLE_GB}G)"
+            else
+              echo "✅ 编译前空间充足"
+            fi
           else
-            echo "✅ 编译前空间充足"
+            echo "⚠️ 构建目录不存在，检查根分区..."
+            AVAILABLE_SPACE=$(df / --output=avail | tail -1 | awk '{print $1}')
+            AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+            echo "/ 可用空间: ${AVAILABLE_GB}G"
+            
+            if [ $AVAILABLE_GB -lt 10 ]; then
+              echo "❌ 错误: 编译前空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
+              exit 1
+            elif [ $AVAILABLE_GB -lt 20 ]; then
+              echo "⚠️ 警告: 编译前空间较低 (建议至少20G，当前${AVAILABLE_GB}G)"
+            else
+              echo "✅ 编译前空间充足"
+            fi
           fi
           
           echo "🟢 步骤 22 完成"
@@ -1172,7 +1252,8 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 23 失败，退出代码: $?"; exit 1' ERR
           
-          cd /mnt/openwrt-build
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          cd "$BUILD_DIR"
           
           # 获取系统信息
           CPU_CORES=$(nproc)
@@ -1273,7 +1354,8 @@ jobs:
           set -e
           trap 'echo "❌ 步骤 24 失败，退出代码: $?"; exit 1' ERR
           
-          cd /mnt/openwrt-build
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          cd "$BUILD_DIR"
           
           if [ -d "bin/targets" ]; then
             echo "✅ 找到固件目录"
@@ -1312,7 +1394,7 @@ jobs:
                 SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
                 FULL_SIZE=$(stat -c%s "$file" 2>/dev/null || echo "0")
                 FILE_NAME=$(basename "$file")
-                FILE_PATH=$(echo "$file" | sed "s|/mnt/openwrt-build/||")
+                FILE_PATH=$(echo "$file" | sed "s|$BUILD_DIR/||")
                 
                 echo "🎯 文件: $FILE_NAME"
                 echo "  大小: $SIZE ($FULL_SIZE 字节)"
@@ -1378,7 +1460,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: firmware-${{ env.TIMESTAMP }}
-          path: /mnt/openwrt-build/bin/targets/
+          path: ${{ env.BUILD_DIR }}/bin/targets/
           retention-days: 7
           if-no-files-found: error
       
@@ -1403,17 +1485,33 @@ jobs:
           trap 'echo "⚠️ 步骤 27 检查过程中出现错误，继续执行..."' ERR
           
           echo "📊 磁盘使用情况:"
-          df -h /mnt
+          df -h
           
-          # 修复：使用正确的df选项获取可用空间
-          AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
-          AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-          echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+          BUILD_DIR="${{ env.BUILD_DIR }}"
           
-          if [ $AVAILABLE_GB -lt 5 ]; then
-            echo "⚠️ 警告: 磁盘空间较低，建议清理"
+          # 检查构建目录所在分区的空间
+          if [ -d "$BUILD_DIR" ]; then
+            PARTITION=$(df "$BUILD_DIR" | tail -1 | awk '{print $6}')
+            AVAILABLE_SPACE=$(df "$PARTITION" --output=avail | tail -1 | awk '{print $1}')
+            AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+            echo "$PARTITION 可用空间: ${AVAILABLE_GB}G"
+            
+            if [ $AVAILABLE_GB -lt 5 ]; then
+              echo "⚠️ 警告: 磁盘空间较低，建议清理"
+            else
+              echo "✅ 磁盘空间充足"
+            fi
           else
-            echo "✅ 磁盘空间充足"
+            echo "⚠️ 构建目录不存在，检查根分区..."
+            AVAILABLE_SPACE=$(df / --output=avail | tail -1 | awk '{print $1}')
+            AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+            echo "/ 可用空间: ${AVAILABLE_GB}G"
+            
+            if [ $AVAILABLE_GB -lt 5 ]; then
+              echo "⚠️ 警告: 磁盘空间较低，建议清理"
+            else
+              echo "✅ 磁盘空间充足"
+            fi
           fi
           
           echo "🟢 步骤 27 完成"
@@ -1437,21 +1535,24 @@ jobs:
           echo "并行优化: ${{ github.event.inputs.enable_parallel }}"
           echo ""
           
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          echo "📌 构建目录: $BUILD_DIR"
+          
           # 检查构建产物
-          if [ -d "/mnt/openwrt-build/bin/targets" ]; then
-            # 修复：正确统计固件文件
-            FIRMWARE_COUNT=$(find "/mnt/openwrt-build/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+          if [ -d "$BUILD_DIR/bin/targets" ]; then
+            # 正确统计固件文件
+            FIRMWARE_COUNT=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
             
             echo "📦 构建产物:"
             echo "  固件数量: $FIRMWARE_COUNT 个 (.bin/.img)"
             
             if [ $FIRMWARE_COUNT -gt 0 ]; then
-              echo "  产物位置: /mnt/openwrt-build/bin/targets/"
+              echo "  产物位置: $BUILD_DIR/bin/targets/"
               echo "  下载名称: firmware-${{ env.TIMESTAMP }}"
               
               # 显示所有固件文件信息
               echo "  固件文件详情:"
-              find "/mnt/openwrt-build/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
+              find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
                 SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
                 FILE_NAME=$(basename "$file")
                 
@@ -1469,8 +1570,8 @@ jobs:
               done
               
               # 统计包文件
-              PACKAGE_COUNT=$(find "/mnt/openwrt-build/bin/targets" -type f \( -name "*.gz" -o -name "*.ipk" \) 2>/dev/null | wc -l)
-              OTHER_COUNT=$(find "/mnt/openwrt-build/bin/targets" -type f 2>/dev/null | wc -l)
+              PACKAGE_COUNT=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.gz" -o -name "*.ipk" \) 2>/dev/null | wc -l)
+              OTHER_COUNT=$(find "$BUILD_DIR/bin/targets" -type f 2>/dev/null | wc -l)
               OTHER_COUNT=$((OTHER_COUNT - FIRMWARE_COUNT - PACKAGE_COUNT))
               
               echo "  包文件数量: $PACKAGE_COUNT 个 (.gz/.ipk)"
@@ -1478,7 +1579,7 @@ jobs:
             else
               echo "  ⚠️ 构建结果: 编译完成但未生成固件文件"
               echo "  🔍 已生成的其他文件:"
-              find "/mnt/openwrt-build/bin/targets" -type f 2>/dev/null | head -5 | while read file; do
+              find "$BUILD_DIR/bin/targets" -type f 2>/dev/null | head -5 | while read file; do
                 SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
                 echo "    📄 $(basename "$file") ($SIZE)"
               done
@@ -1490,8 +1591,8 @@ jobs:
           # 构建状态总结
           echo ""
           echo "📊 构建状态总结:"
-          if [ -d "/mnt/openwrt-build/bin/targets" ]; then
-            FIRMWARE_COUNT=$(find "/mnt/openwrt-build/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+          if [ -d "$BUILD_DIR/bin/targets" ]; then
+            FIRMWARE_COUNT=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
             if [ $FIRMWARE_COUNT -gt 0 ]; then
               echo "  ✅ 构建结果: 成功生成 $FIRMWARE_COUNT 个固件文件"
             else
@@ -1506,9 +1607,9 @@ jobs:
           echo "🔧 编译器信息:"
           
           # 检查SDK编译器版本
-          if [ -d "/mnt/openwrt-build/sdk" ]; then
+          if [ -d "$BUILD_DIR/sdk" ]; then
             # 查找真正的GCC，排除虚假编译器
-            GCC_FILE=$(find "/mnt/openwrt-build/sdk" -type f -executable \
+            GCC_FILE=$(find "$BUILD_DIR/sdk" -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
@@ -1542,15 +1643,45 @@ jobs:
           
           echo "  💡 这是正常的：系统编译器编译工具链，SDK编译器编译固件"
           
-          # 自定义文件集成状态（增强版）- 无SSH测试相关信息
+          # 自定义文件集成状态（增强版）
           echo ""
           echo "📁 自定义文件集成状态（增强版）:"
           
-          # 尝试从统计文件读取自定义文件信息
-          CUSTOM_STATS_FILE="/tmp/custom_file_stats.txt"
-          if [ -f "$CUSTOM_STATS_FILE" ]; then
-            source "$CUSTOM_STATS_FILE"
-            echo "  ✅ 自定义文件总数: $CUSTOM_FILE_TOTAL 个"
+          # 检查自定义文件目录
+          if [ -d "$BUILD_DIR/files/etc/custom-files" ]; then
+            # 重新统计
+            CUSTOM_IPK_COUNT=0
+            CUSTOM_SCRIPT_COUNT=0
+            CUSTOM_CONFIG_COUNT=0
+            CUSTOM_OTHER_COUNT=0
+            CUSTOM_ENGLISH_COUNT=0
+            CUSTOM_NON_ENGLISH_COUNT=0
+            
+            find "$BUILD_DIR/files/etc/custom-files" -type f 2>/dev/null | while read file; do
+              file_name=$(basename "$file")
+              
+              # 检查是否为英文文件名 - 使用修复版检测
+              if [[ "$file_name" =~ ^[a-zA-Z0-9_.\-]+$ ]]; then
+                CUSTOM_ENGLISH_COUNT=$((CUSTOM_ENGLISH_COUNT + 1))
+              else
+                CUSTOM_NON_ENGLISH_COUNT=$((CUSTOM_NON_ENGLISH_COUNT + 1))
+              fi
+              
+              # 文件类型统计
+              if [[ "$file_name" =~ \.ipk$ ]] || [[ "$file_name" =~ \.IPK$ ]] || [[ "$file_name" =~ \.Ipk$ ]]; then
+                CUSTOM_IPK_COUNT=$((CUSTOM_IPK_COUNT + 1))
+              elif [[ "$file_name" =~ \.sh$ ]] || [[ "$file_name" =~ \.Sh$ ]] || [[ "$file_name" =~ \.SH$ ]]; then
+                CUSTOM_SCRIPT_COUNT=$((CUSTOM_SCRIPT_COUNT + 1))
+              elif [[ "$file_name" =~ \.conf$ ]] || [[ "$file_name" =~ \.config$ ]] || [[ "$file_name" =~ \.CONF$ ]]; then
+                CUSTOM_CONFIG_COUNT=$((CUSTOM_CONFIG_COUNT + 1))
+              else
+                CUSTOM_OTHER_COUNT=$((CUSTOM_OTHER_COUNT + 1))
+              fi
+            done
+            
+            TOTAL_CUSTOM_FILES=$((CUSTOM_IPK_COUNT + CUSTOM_SCRIPT_COUNT + CUSTOM_CONFIG_COUNT + CUSTOM_OTHER_COUNT))
+            
+            echo "  ✅ 自定义文件总数: $TOTAL_CUSTOM_FILES 个"
             echo "  📦 IPK包: $CUSTOM_IPK_COUNT 个"
             echo "  📜 脚本: $CUSTOM_SCRIPT_COUNT 个"
             echo "  ⚙️ 配置文件: $CUSTOM_CONFIG_COUNT 个"
@@ -1560,14 +1691,14 @@ jobs:
             echo "  📌 位置: /etc/custom-files/"
             echo "  📁 日志位置: /root/logs/（重启不丢失）"
             
-            if [ -f "/mnt/openwrt-build/files/etc/uci-defaults/99-custom-files" ]; then
+            if [ -f "$BUILD_DIR/files/etc/uci-defaults/99-custom-files" ]; then
               echo "  ✅ 第一次开机安装脚本: 已创建（增强版）"
               echo "  💡 安装顺序: IPK包 → 脚本文件 → 其他文件"
               echo "  🔧 错误处理: 单个文件失败不影响其他文件"
               echo "  📊 详细日志: 记录每个文件的处理结果"
             fi
             
-            if [ "$CUSTOM_NON_ENGLISH_COUNT" -gt 0 ]; then
+            if [ $CUSTOM_NON_ENGLISH_COUNT -gt 0 ]; then
               echo ""
               echo "💡 文件名兼容性提示:"
               echo "  当前有 $CUSTOM_NON_ENGLISH_COUNT 个文件使用非英文文件名"
@@ -1575,12 +1706,12 @@ jobs:
               echo "  可以在固件启动后运行: /etc/custom-files/check_filenames.sh"
             fi
             
-            # 显示所有文件示例，不只前5个
-            if [ "$CUSTOM_FILE_TOTAL" -gt 0 ] && [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
+            # 显示所有文件，不只前5个
+            if [ $TOTAL_CUSTOM_FILES -gt 0 ]; then
               echo ""
               echo "📋 所有文件列表:"
-              find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
-                rel_path="${file#/mnt/openwrt-build/files/etc/custom-files/}"
+              find "$BUILD_DIR/files/etc/custom-files" -type f 2>/dev/null | while read file; do
+                rel_path="${file#$BUILD_DIR/files/etc/custom-files/}"
                 size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
                 echo "    📄 $rel_path ($size)"
               done
@@ -1595,87 +1726,7 @@ jobs:
             echo "  📁 持久日志: 日志存储在 /root/logs/（重启不丢失）"
             
           else
-            # 如果统计文件不存在，尝试从目录统计
-            if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
-              # 重新统计
-              CUSTOM_IPK_COUNT=0
-              CUSTOM_SCRIPT_COUNT=0
-              CUSTOM_CONFIG_COUNT=0
-              CUSTOM_OTHER_COUNT=0
-              CUSTOM_ENGLISH_COUNT=0
-              CUSTOM_NON_ENGLISH_COUNT=0
-              
-              find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
-                file_name=$(basename "$file")
-                
-                # 检查是否为英文文件名 - 使用修复版检测
-                if [[ "$file_name" =~ ^[a-zA-Z0-9_.\-]+$ ]]; then
-                  CUSTOM_ENGLISH_COUNT=$((CUSTOM_ENGLISH_COUNT + 1))
-                else
-                  CUSTOM_NON_ENGLISH_COUNT=$((CUSTOM_NON_ENGLISH_COUNT + 1))
-                fi
-                
-                # 文件类型统计
-                if [[ "$file_name" =~ \.ipk$ ]] || [[ "$file_name" =~ \.IPK$ ]] || [[ "$file_name" =~ \.Ipk$ ]]; then
-                  CUSTOM_IPK_COUNT=$((CUSTOM_IPK_COUNT + 1))
-                elif [[ "$file_name" =~ \.sh$ ]] || [[ "$file_name" =~ \.Sh$ ]] || [[ "$file_name" =~ \.SH$ ]]; then
-                  CUSTOM_SCRIPT_COUNT=$((CUSTOM_SCRIPT_COUNT + 1))
-                elif [[ "$file_name" =~ \.conf$ ]] || [[ "$file_name" =~ \.config$ ]] || [[ "$file_name" =~ \.CONF$ ]]; then
-                  CUSTOM_CONFIG_COUNT=$((CUSTOM_CONFIG_COUNT + 1))
-                else
-                  CUSTOM_OTHER_COUNT=$((CUSTOM_OTHER_COUNT + 1))
-                fi
-              done
-              
-              TOTAL_CUSTOM_FILES=$((CUSTOM_IPK_COUNT + CUSTOM_SCRIPT_COUNT + CUSTOM_CONFIG_COUNT + CUSTOM_OTHER_COUNT))
-              
-              echo "  ✅ 自定义文件总数: $TOTAL_CUSTOM_FILES 个"
-              echo "  📦 IPK包: $CUSTOM_IPK_COUNT 个"
-              echo "  📜 脚本: $CUSTOM_SCRIPT_COUNT 个"
-              echo "  ⚙️ 配置文件: $CUSTOM_CONFIG_COUNT 个"
-              echo "  📁 其他文件: $CUSTOM_OTHER_COUNT 个"
-              echo "  ✅ 英文文件名: $CUSTOM_ENGLISH_COUNT 个"
-              echo "  ⚠️ 非英文文件名: $CUSTOM_NON_ENGLISH_COUNT 个"
-              echo "  📌 位置: /etc/custom-files/"
-              echo "  📁 日志位置: /root/logs/（重启不丢失）"
-              
-              if [ -f "/mnt/openwrt-build/files/etc/uci-defaults/99-custom-files" ]; then
-                echo "  ✅ 第一次开机安装脚本: 已创建（增强版）"
-                echo "  💡 安装顺序: IPK包 → 脚本文件 → 其他文件"
-                echo "  🔧 错误处理: 单个文件失败不影响其他文件"
-                echo "  📊 详细日志: 记录每个文件的处理结果"
-              fi
-              
-              if [ $CUSTOM_NON_ENGLISH_COUNT -gt 0 ]; then
-                echo ""
-                echo "💡 文件名兼容性提示:"
-                echo "  当前有 $CUSTOM_NON_ENGLISH_COUNT 个文件使用非英文文件名"
-                echo "  建议改为英文文件名以获得更好的兼容性"
-                echo "  可以在固件启动后运行: /etc/custom-files/check_filenames.sh"
-              fi
-              
-              # 显示所有文件，不只前5个
-              if [ $TOTAL_CUSTOM_FILES -gt 0 ]; then
-                echo ""
-                echo "📋 所有文件列表:"
-                find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
-                  rel_path="${file#/mnt/openwrt-build/files/etc/custom-files/}"
-                  size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                  echo "    📄 $rel_path ($size)"
-                done
-              fi
-              
-              echo ""
-              echo "🎯 增强功能说明:"
-              echo "  🔧 递归查找: 支持自定义目录下的所有子目录"
-              echo "  📝 保持原文件名: 不自动重命名，保持用户设置的文件名"
-              echo "  🔄 错误不退出: IPK安装失败继续安装下一个"
-              echo "  📊 详细日志: 记录每个文件的处理结果和统计信息"
-              echo "  📁 持久日志: 日志存储在 /root/logs/（重启不丢失）"
-              
-            else
-              echo "  ⚪ 自定义文件: 未集成"
-            fi
+            echo "  ⚪ 自定义文件: 未集成"
           fi
           
           # 文件名兼容性建议 - 简化版本
