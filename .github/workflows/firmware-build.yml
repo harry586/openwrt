@@ -5,14 +5,10 @@ on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: "📱 设备名称 (自动从 support.sh 同步) - 当前支持: ac42u, cmcc_rax3000m, netgear_3800"
+        description: "📱 设备名称 (自动从 support.sh 同步设备列表)"
         required: true
-        type: choice
-        default: ""
-        options:
-          - "ac42u"
-          - "cmcc_rax3000m"
-          - "netgear_3800"
+        default: "ac42u"
+        type: string
       version_selection:
         description: "🔄 版本选择"
         required: true
@@ -25,12 +21,6 @@ on:
         type: choice
         default: "normal"
         options: ["base", "normal"]
-      source_repo:
-        description: "📦 源代码仓库选择 - 🔄 ImmortalWrt (默认) ⚡ LEDE (国内优化)"
-        required: true
-        type: choice
-        default: "immortalwrt"
-        options: ["immortalwrt", "lede"]
       extra_packages:
         description: "额外安装插件 - 格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。"
         required: false
@@ -417,33 +407,10 @@ jobs:
             exit 1
           fi
           
-          echo "🔄 步骤 6.3: 初始化构建环境（使用设备支持系统）"
+          echo "🔄 步骤 6.3: 初始化构建环境"
           echo "📱 设备: ${{ github.event.inputs.device_name }}"
           echo "🔄 版本: ${{ github.event.inputs.version_selection }}"
           echo "⚙️ 配置模式: ${{ github.event.inputs.config_mode }}"
-          
-          # 检查设备支持系统
-          SUPPORT_DIR="${{ github.workspace }}/firmware-config"
-          if [ -f "$SUPPORT_DIR/support.sh" ]; then
-            echo "✅ 设备支持系统存在: $SUPPORT_DIR/support.sh"
-            source "$SUPPORT_DIR/support.sh"
-            
-            # 获取设备描述
-            if command -v get_device_description >/dev/null 2>&1; then
-              DEVICE_DESC=$(get_device_description "${{ github.event.inputs.device_name }}")
-              echo "🎯 设备描述: $DEVICE_DESC"
-            fi
-            
-            # 获取设备配置
-            if command -v get_device_config >/dev/null 2>&1; then
-              DEVICE_CONFIG=$(get_device_config "${{ github.event.inputs.device_name }}")
-              echo "🔧 设备配置: $DEVICE_CONFIG"
-            fi
-          else
-            echo "⚠️ 设备支持脚本不存在: $SUPPORT_DIR/support.sh"
-            echo "💡 将使用内置设备配置"
-          fi
-          
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}"
           
           if [ $? -ne 0 ]; then
@@ -457,7 +424,7 @@ jobs:
       # 步骤 7: 下载OpenWrt官方SDK（修复版）
       - name: "7. 下载OpenWrt官方SDK（修复版）"
         run: |
-          echo "=== 步骤 7: 下载OpenWrt官方SDK（修复版） ==="
+          echo "=== 步骤 7: 下载OpenWrt官方SDK（修复版）==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -465,6 +432,12 @@ jobs:
           trap 'echo "❌ 步骤 7 失败，退出代码: $?"; exit 1' ERR
           
           echo "🚀 开始下载OpenWrt官方SDK工具链..."
+          
+          # 检查 support.sh 是否存在
+          if [ ! -f "${{ github.workspace }}/support.sh" ]; then
+            echo "❌ 错误: support.sh 文件不存在"
+            exit 1
+          fi
           
           # 先检查环境文件是否已经存在
           echo "🔍 检查环境文件..."
@@ -483,61 +456,28 @@ jobs:
             echo "  CONFIG_MODE: $CONFIG_MODE"
             echo "  REPO_ROOT: $REPO_ROOT"
             echo "  COMPILER_DIR: $COMPILER_DIR"
-            echo "  DEVICE_NAME: $DEVICE_NAME"
-            echo "  PLATFORM: $PLATFORM"
             echo ""
             
             echo "💡 使用步骤6.3已设置的环境变量进行SDK下载"
           else
-            echo "⚠️ 环境文件不存在，可能是步骤6.3失败"
+            echo "❌ 错误: 环境文件不存在，可能是步骤6.3失败"
             echo "📝 重新创建环境变量..."
             
-            # 使用设备支持系统获取配置
-            SUPPORT_DIR="${{ github.workspace }}/firmware-config"
-            if [ -f "$SUPPORT_DIR/support.sh" ]; then
-              source "$SUPPORT_DIR/support.sh"
-              DEVICE_CONFIG=$(get_device_config "${{ github.event.inputs.device_name }}")
-              TARGET=$(echo $DEVICE_CONFIG | awk '{print $1}')
-              SUBTARGET=$(echo $DEVICE_CONFIG | awk '{print $2}')
-              DEVICE=$(echo $DEVICE_CONFIG | awk '{print $3}')
-              PLATFORM=$(echo $DEVICE_CONFIG | awk '{print $4}')
-              echo "✅ 从设备支持系统获取配置: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE, PLATFORM=$PLATFORM"
-            else
-              # 默认配置
-              case "${{ github.event.inputs.device_name }}" in
-                "ac42u"|"acrh17")
-                  TARGET="ipq40xx"
-                  SUBTARGET="generic"
-                  DEVICE="asus_rt-ac42u"
-                  PLATFORM="ipq40xx"
-                  ;;
-                "mi_router_4a_gigabit"|"r4ag")
-                  TARGET="ramips"
-                  SUBTARGET="mt76x8"
-                  DEVICE="xiaomi_mi-router-4a-gigabit"
-                  PLATFORM="ramips"
-                  ;;
-                "mi_router_3g"|"r3g")
-                  TARGET="ramips"
-                  SUBTARGET="mt7621"
-                  DEVICE="xiaomi_mi-router-3g"
-                  PLATFORM="ramips"
-                  ;;
-                "netgear_3800")
-                  TARGET="ath79"
-                  SUBTARGET="generic"
-                  DEVICE="netgear_wndr3800"
-                  PLATFORM="ath79"
-                  ;;
-                *)
-                  TARGET="ipq40xx"
-                  SUBTARGET="generic"
-                  DEVICE="${{ github.event.inputs.device_name }}"
-                  PLATFORM="generic"
-                  ;;
-              esac
-              echo "⚠️ 使用内置设备配置"
+            # 使用 support.sh 获取设备配置
+            source "${{ github.workspace }}/support.sh"
+            DEVICE_NAME="${{ github.event.inputs.device_name }}"
+            DEVICE_CONFIG=$(get_device_config "$DEVICE_NAME")
+            
+            if [ -z "$DEVICE_CONFIG" ]; then
+              echo "❌ 错误: 设备 '$DEVICE_NAME' 未在 support.sh 中定义"
+              exit 1
             fi
+            
+            TARGET=$(echo "$DEVICE_CONFIG" | awk '{print $1}')
+            SUBTARGET=$(echo "$DEVICE_CONFIG" | awk '{print $2}')
+            DEVICE=$(echo "$DEVICE_CONFIG" | awk '{print $3}')
+            
+            echo "✅ 从 support.sh 获取设备配置: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE"
             
             # 创建环境文件
             echo "#!/bin/bash" > /mnt/openwrt-build/build_env.sh
@@ -549,8 +489,7 @@ jobs:
             echo "export CONFIG_MODE=\"${{ github.event.inputs.config_mode }}\"" >> /mnt/openwrt-build/build_env.sh
             echo "export REPO_ROOT=\"${{ github.workspace }}\"" >> /mnt/openwrt-build/build_env.sh
             echo "export COMPILER_DIR=\"\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export DEVICE_NAME=\"${{ github.event.inputs.device_name }}\"" >> /mnt/openwrt-build/build_env.sh
-            echo "export PLATFORM=\"$PLATFORM\"" >> /mnt/openwrt-build/build_env.sh
+            echo "export DEVICE_NAME=\"$DEVICE_NAME\"" >> /mnt/openwrt-build/build_env.sh
             chmod +x /mnt/openwrt-build/build_env.sh
             echo "✅ 已创建环境文件"
           fi
@@ -723,89 +662,22 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 12 完成"
       
-      # 步骤 13: 智能配置生成（使用设备支持系统）
-      - name: "13. 智能配置生成（使用设备支持系统）"
+      # 步骤 13: 智能配置生成
+      - name: "13. 智能配置生成"
         run: |
-          echo "=== 步骤 13: 智能配置生成（使用设备支持系统）==="
+          echo "=== 步骤 13: 智能配置生成 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
           trap 'echo "❌ 步骤 13 失败，退出代码: $?"; exit 1' ERR
           
-          # 检查设备支持系统
-          SUPPORT_DIR="${{ github.workspace }}/firmware-config"
-          CONFIG_DIR="$SUPPORT_DIR/config"
-          
-          echo "🔍 检查设备支持系统..."
-          if [ -f "$SUPPORT_DIR/support.sh" ]; then
-            echo "✅ 设备支持脚本存在: $SUPPORT_DIR/support.sh"
-            source "$SUPPORT_DIR/support.sh"
-            
-            # 获取设备描述
-            DEVICE_DESC=$(get_device_description "${{ github.event.inputs.device_name }}")
-            echo "🎯 设备描述: $DEVICE_DESC"
-            
-            # 获取设备配置
-            DEVICE_CONFIG=$(get_device_config "${{ github.event.inputs.device_name }}")
-            TARGET=$(echo $DEVICE_CONFIG | awk '{print $1}')
-            SUBTARGET=$(echo $DEVICE_CONFIG | awk '{print $2}')
-            DEVICE=$(echo $DEVICE_CONFIG | awk '{print $3}')
-            PLATFORM=$(echo $DEVICE_CONFIG | awk '{print $4}')
-            
-            echo "🔧 设备配置详情:"
-            echo "  目标平台: $TARGET"
-            echo "  子目标: $SUBTARGET"
-            echo "  设备: $DEVICE"
-            echo "  平台类型: $PLATFORM"
-          else
-            echo "⚠️ 设备支持脚本不存在: $SUPPORT_DIR/support.sh"
+          # 检查 support.sh 是否存在
+          if [ ! -f "${{ github.workspace }}/support.sh" ]; then
+            echo "❌ 错误: support.sh 文件不存在"
+            exit 1
           fi
           
-          # 检查配置模板
-          echo "📋 检查配置模板..."
-          if [ -d "$CONFIG_DIR" ]; then
-            echo "✅ 配置模板目录存在: $CONFIG_DIR"
-            echo "📁 可用配置模板:"
-            find "$CONFIG_DIR" -name "*.config" -exec basename {} \; | sort
-            
-            # 检查基础配置
-            if [ -f "$CONFIG_DIR/base.config" ]; then
-              echo "✅ 基础配置模板存在"
-            else
-              echo "❌ 基础配置模板不存在: $CONFIG_DIR/base.config"
-            fi
-            
-            # 检查模式配置
-            if [ -f "$CONFIG_DIR/${{ github.event.inputs.config_mode }}.config" ]; then
-              echo "✅ 模式配置模板存在: ${{ github.event.inputs.config_mode }}.config"
-            else
-              echo "❌ 模式配置模板不存在: $CONFIG_DIR/${{ github.event.inputs.config_mode }}.config"
-            fi
-            
-            # 检查设备特殊配置
-            DEVICE_CONFIG_FILE="$CONFIG_DIR/${{ github.event.inputs.device_name }}.config"
-            if [ -f "$DEVICE_CONFIG_FILE" ]; then
-              echo "🎯 设备特殊配置存在: ${{ github.event.inputs.device_name }}.config"
-              echo "📄 配置文件大小: $(ls -lh "$DEVICE_CONFIG_FILE" | awk '{print $5}')"
-            else
-              echo "ℹ️ 设备特殊配置不存在: ${{ github.event.inputs.device_name }}.config"
-              echo "💡 将使用通用配置"
-            fi
-            
-            # 检查USB配置
-            USB_CONFIG_FILE="$CONFIG_DIR/usb-generic.config"
-            if [ -f "$USB_CONFIG_FILE" ]; then
-              echo "🔌 USB通用配置存在: usb-generic.config"
-            else
-              echo "❌ USB通用配置不存在: usb-generic.config"
-            fi
-          else
-            echo "⚠️ 配置模板目录不存在: $CONFIG_DIR"
-            echo "💡 将使用内置配置生成"
-          fi
-          
-          echo "🚀 开始生成配置..."
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" generate_config "${{ github.event.inputs.extra_packages }}"
           
           if [ $? -ne 0 ]; then
@@ -813,43 +685,7 @@ jobs:
             exit 1
           fi
           
-          echo "✅ 配置生成完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          
-          # 显示配置摘要
-          echo "📊 配置生成摘要:"
-          if [ -f "/mnt/openwrt-build/.config" ]; then
-            CONFIG_SIZE=$(ls -lh "/mnt/openwrt-build/.config" | awk '{print $5}')
-            CONFIG_LINES=$(wc -l < "/mnt/openwrt-build/.config")
-            ENABLED_COUNT=$(grep -c "^CONFIG_PACKAGE_.*=y$" "/mnt/openwrt-build/.config")
-            DISABLED_COUNT=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" "/mnt/openwrt-build/.config")
-            
-            echo "  📄 配置文件: /mnt/openwrt-build/.config"
-            echo "  📏 文件大小: $CONFIG_SIZE"
-            echo "  📝 配置行数: $CONFIG_LINES"
-            echo "  ✅ 已启用插件: $ENABLED_COUNT 个"
-            echo "  ❌ 已禁用插件: $DISABLED_COUNT 个"
-            
-            # 显示关键配置
-            echo "  🔧 关键配置检查:"
-            if grep -q "^CONFIG_TARGET_ath79=y" "/mnt/openwrt-build/.config"; then
-              echo "    🎯 目标平台: ath79 (Netgear WNDR3800)"
-            elif grep -q "^CONFIG_TARGET_ipq40xx=y" "/mnt/openwrt-build/.config"; then
-              echo "    🎯 目标平台: ipq40xx (高通平台)"
-            elif grep -q "^CONFIG_TARGET_ramips=y" "/mnt/openwrt-build/.config"; then
-              echo "    🎯 目标平台: ramips (雷凌平台)"
-            fi
-            
-            # 检查USB配置
-            USB_DRIVERS=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-xhci-hcd" "kmod-usb-storage")
-            USB_ENABLED=0
-            for driver in "${USB_DRIVERS[@]}"; do
-              if grep -q "^CONFIG_PACKAGE_${driver}=y" "/mnt/openwrt-build/.config"; then
-                USB_ENABLED=$((USB_ENABLED + 1))
-              fi
-            done
-            echo "    🔌 USB驱动: $USB_ENABLED/${#USB_DRIVERS[@]} 个已启用"
-          fi
-          
+          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 13 完成"
       
       # 步骤 14: 验证USB配置
@@ -927,63 +763,6 @@ jobs:
             disabled=$(grep -c "# CONFIG_PACKAGE_.* is not set" "/mnt/openwrt-build/.config")
             echo "   ✅ 已启用插件: $enabled 个"
             echo "   ❌ 已禁用插件: $disabled 个"
-            
-            echo ""
-            echo "=== 🎯 详细配置状态标识（完整版）==="
-            echo "📋 USB配置状态:"
-            
-            # USB配置检查
-            echo "  CONFIG_PACKAGE_kmod-usb-core: $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-usb2: $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-usb3: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-usb-xhci-hcd: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-usb-storage: $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-scsi-core: $(grep -q "^CONFIG_PACKAGE_kmod-scsi-core=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            
-            echo ""
-            echo "📦 功能性插件状态:"
-            
-            # 功能性插件状态
-            echo "  TurboACC 网络加速 (luci-app-turboacc): $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  UPnP 自动端口转发 (luci-app-upnp): $(grep -q "^CONFIG_PACKAGE_luci-app-upnp=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  Samba 文件共享 (luci-app-samba4): $(grep -q "^CONFIG_PACKAGE_luci-app-samba4=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  磁盘管理 (luci-app-diskman): $(grep -q "^CONFIG_PACKAGE_luci-app-diskman=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  KMS 激活服务 (luci-app-vlmcsd): $(grep -q "^CONFIG_PACKAGE_luci-app-vlmcsd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  SmartDNS 智能DNS (luci-app-smartdns): $(grep -q "^CONFIG_PACKAGE_luci-app-smartdns=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  家长控制 (luci-app-accesscontrol): $(grep -q "^CONFIG_PACKAGE_luci-app-accesscontrol=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  微信推送 (luci-app-wechatpush): $(grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  流量控制 (SQM) (luci-app-sqm): $(grep -q "^CONFIG_PACKAGE_luci-app-sqm=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  FTP 服务器 (luci-app-vsftpd): $(grep -q "^CONFIG_PACKAGE_luci-app-vsftpd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  ARP 绑定 (luci-app-arpbind): $(grep -q "^CONFIG_PACKAGE_luci-app-arpbind=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CPU 限制 (luci-app-cpulimit): $(grep -q "^CONFIG_PACKAGE_luci-app-cpulimit=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  硬盘休眠 (luci-app-hd-idle): $(grep -q "^CONFIG_PACKAGE_luci-app-hd-idle=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            
-            echo ""
-            echo "🎯 配置模式: ${{ github.event.inputs.config_mode }}"
-            if [ "${{ github.event.inputs.config_mode }}" = "normal" ]; then
-              echo "✅ 当前为正常模式（完整功能）"
-              echo "📊 正常模式包含所有功能性插件"
-            else
-              echo "🔧 当前为基础模式（最小化配置）"
-              echo "📊 基础模式仅包含核心功能，用于测试编译"
-            fi
-            
-            echo ""
-            echo "🔍 配置摘要:"
-            echo "  - 设备名称: ${{ github.event.inputs.device_name }}"
-            echo "  - 目标平台: $TARGET/$SUBTARGET"
-            echo "  - 目标设备: $DEVICE"
-            echo "  - OpenWrt版本: $SELECTED_BRANCH"
-            echo "  - 平台类型: $PLATFORM"
-            echo "  - USB驱动: 已启用所有关键驱动"
-            echo "  - 插件数量: $enabled 个已启用"
-            
-            # 显示前10个启用的插件
-            echo ""
-            echo "📋 启用的插件 (前10个):"
-            grep "^CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config" | head -10 | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g' | while read pkg; do
-              echo "  ✅ $pkg"
-            done
           else
             echo "❌ 配置文件不存在"
           fi
@@ -1279,7 +1058,7 @@ jobs:
           echo "🔍 检查当前环境..."
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
             source /mnt/openwrt-build/build_env.sh
-            echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET, PLATFORM=$PLATFORM"
+            echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET"
           fi
           
           echo "🚀 执行前置错误检查（已修复23.05 SDK验证问题）..."
@@ -1391,7 +1170,6 @@ jobs:
           echo "  - 设备: ${{ github.event.inputs.device_name }}"
           echo "  - 版本: ${{ github.event.inputs.version_selection }}"
           echo "  - 配置模式: ${{ github.event.inputs.config_mode }}"
-          echo "  - 平台类型: $PLATFORM"
           echo "  - 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置编译环境变量
@@ -1588,7 +1366,7 @@ jobs:
           
           echo "🟢 步骤 27 完成"
       
-      # 步骤 28: 编译后总结（增强版）- 无SSH测试相关信息
+      # 步骤 28: 编译后总结（增强版）- 无SSH测试
       - name: "28. 编译后总结（增强版）- 无SSH测试"
         if: always()
         run: |
@@ -1671,47 +1449,6 @@ jobs:
             echo "  ❌ 构建结果: 失败"
           fi
           
-          # 设备支持系统状态
-          echo ""
-          echo "🔧 设备支持系统状态:"
-          SUPPORT_DIR="${{ github.workspace }}/firmware-config"
-          if [ -f "$SUPPORT_DIR/support.sh" ]; then
-            echo "  ✅ 设备支持脚本: 存在"
-            source "$SUPPORT_DIR/support.sh"
-            
-            if command -v get_device_description >/dev/null 2>&1; then
-              DEVICE_DESC=$(get_device_description "${{ github.event.inputs.device_name }}")
-              echo "  🎯 设备描述: $DEVICE_DESC"
-            fi
-            
-            # 检查配置模板
-            CONFIG_DIR="$SUPPORT_DIR/config"
-            if [ -d "$CONFIG_DIR" ]; then
-              CONFIG_FILES=$(find "$CONFIG_DIR" -name "*.config" | wc -l)
-              echo "  📋 配置模板: $CONFIG_FILES 个"
-              
-              # 检查使用的配置模板
-              if [ -f "$CONFIG_DIR/base.config" ]; then
-                echo "  ✅ 基础配置模板: 存在"
-              fi
-              
-              if [ -f "$CONFIG_DIR/${{ github.event.inputs.config_mode }}.config" ]; then
-                echo "  ✅ 模式配置模板 (${{ github.event.inputs.config_mode }}): 存在"
-              fi
-              
-              DEVICE_CONFIG_FILE="$CONFIG_DIR/${{ github.event.inputs.device_name }}.config"
-              if [ -f "$DEVICE_CONFIG_FILE" ]; then
-                echo "  🎯 设备特殊配置: 存在 (${{ github.event.inputs.device_name }}.config)"
-              else
-                echo "  ℹ️ 设备特殊配置: 未找到，使用通用配置"
-              fi
-            else
-              echo "  ⚠️ 配置模板目录: 不存在"
-            fi
-          else
-            echo "  ⚠️ 设备支持脚本: 不存在，使用内置配置"
-          fi
-          
           # 编译器信息
           echo ""
           echo "🔧 编译器信息:"
@@ -1753,7 +1490,7 @@ jobs:
           
           echo "  💡 这是正常的：系统编译器编译工具链，SDK编译器编译固件"
           
-          # 自定义文件集成状态（增强版）
+          # 自定义文件集成状态（增强版）- 无SSH测试相关信息
           echo ""
           echo "📁 自定义文件集成状态（增强版）:"
           
@@ -1785,34 +1522,115 @@ jobs:
               echo "  建议改为英文文件名以获得更好的兼容性"
               echo "  可以在固件启动后运行: /etc/custom-files/check_filenames.sh"
             fi
+            
+            # 显示所有文件示例，不只前5个
+            if [ "$CUSTOM_FILE_TOTAL" -gt 0 ] && [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
+              echo ""
+              echo "📋 所有文件列表:"
+              find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
+                rel_path="${file#/mnt/openwrt-build/files/etc/custom-files/}"
+                size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                echo "    📄 $rel_path ($size)"
+              done
+            fi
+            
+            echo ""
+            echo "🎯 增强功能说明:"
+            echo "  🔧 递归查找: 支持自定义目录下的所有子目录"
+            echo "  📝 保持原文件名: 不自动重命名，保持用户设置的文件名"
+            echo "  🔄 错误不退出: IPK安装失败继续安装下一个"
+            echo "  📊 详细日志: 记录每个文件的处理结果和统计信息"
+            echo "  📁 持久日志: 日志存储在 /root/logs/（重启不丢失）"
+            
           else
-            # 如果统计文件不存在，检查目录
+            # 如果统计文件不存在，尝试从目录统计
             if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
-              CUSTOM_FILES_COUNT=$(find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | wc -l)
-              if [ $CUSTOM_FILES_COUNT -gt 0 ]; then
-                echo "  ✅ 自定义文件已集成: $CUSTOM_FILES_COUNT 个文件"
-                echo "  📌 位置: /etc/custom-files/"
-              else
-                echo "  ⚪ 自定义文件: 未集成"
+              # 重新统计
+              CUSTOM_IPK_COUNT=0
+              CUSTOM_SCRIPT_COUNT=0
+              CUSTOM_CONFIG_COUNT=0
+              CUSTOM_OTHER_COUNT=0
+              CUSTOM_ENGLISH_COUNT=0
+              CUSTOM_NON_ENGLISH_COUNT=0
+              
+              find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
+                file_name=$(basename "$file")
+                
+                # 检查是否为英文文件名 - 使用修复版检测
+                if [[ "$file_name" =~ ^[a-zA-Z0-9_.\-]+$ ]]; then
+                  CUSTOM_ENGLISH_COUNT=$((CUSTOM_ENGLISH_COUNT + 1))
+                else
+                  CUSTOM_NON_ENGLISH_COUNT=$((CUSTOM_NON_ENGLISH_COUNT + 1))
+                fi
+                
+                # 文件类型统计
+                if [[ "$file_name" =~ \.ipk$ ]] || [[ "$file_name" =~ \.IPK$ ]] || [[ "$file_name" =~ \.Ipk$ ]]; then
+                  CUSTOM_IPK_COUNT=$((CUSTOM_IPK_COUNT + 1))
+                elif [[ "$file_name" =~ \.sh$ ]] || [[ "$file_name" =~ \.Sh$ ]] || [[ "$file_name" =~ \.SH$ ]]; then
+                  CUSTOM_SCRIPT_COUNT=$((CUSTOM_SCRIPT_COUNT + 1))
+                elif [[ "$file_name" =~ \.conf$ ]] || [[ "$file_name" =~ \.config$ ]] || [[ "$file_name" =~ \.CONF$ ]]; then
+                  CUSTOM_CONFIG_COUNT=$((CUSTOM_CONFIG_COUNT + 1))
+                else
+                  CUSTOM_OTHER_COUNT=$((CUSTOM_OTHER_COUNT + 1))
+                fi
+              done
+              
+              TOTAL_CUSTOM_FILES=$((CUSTOM_IPK_COUNT + CUSTOM_SCRIPT_COUNT + CUSTOM_CONFIG_COUNT + CUSTOM_OTHER_COUNT))
+              
+              echo "  ✅ 自定义文件总数: $TOTAL_CUSTOM_FILES 个"
+              echo "  📦 IPK包: $CUSTOM_IPK_COUNT 个"
+              echo "  📜 脚本: $CUSTOM_SCRIPT_COUNT 个"
+              echo "  ⚙️ 配置文件: $CUSTOM_CONFIG_COUNT 个"
+              echo "  📁 其他文件: $CUSTOM_OTHER_COUNT 个"
+              echo "  ✅ 英文文件名: $CUSTOM_ENGLISH_COUNT 个"
+              echo "  ⚠️ 非英文文件名: $CUSTOM_NON_ENGLISH_COUNT 个"
+              echo "  📌 位置: /etc/custom-files/"
+              echo "  📁 日志位置: /root/logs/（重启不丢失）"
+              
+              if [ -f "/mnt/openwrt-build/files/etc/uci-defaults/99-custom-files" ]; then
+                echo "  ✅ 第一次开机安装脚本: 已创建（增强版）"
+                echo "  💡 安装顺序: IPK包 → 脚本文件 → 其他文件"
+                echo "  🔧 错误处理: 单个文件失败不影响其他文件"
+                echo "  📊 详细日志: 记录每个文件的处理结果"
               fi
+              
+              if [ $CUSTOM_NON_ENGLISH_COUNT -gt 0 ]; then
+                echo ""
+                echo "💡 文件名兼容性提示:"
+                echo "  当前有 $CUSTOM_NON_ENGLISH_COUNT 个文件使用非英文文件名"
+                echo "  建议改为英文文件名以获得更好的兼容性"
+                echo "  可以在固件启动后运行: /etc/custom-files/check_filenames.sh"
+              fi
+              
+              # 显示所有文件，不只前5个
+              if [ $TOTAL_CUSTOM_FILES -gt 0 ]; then
+                echo ""
+                echo "📋 所有文件列表:"
+                find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
+                  rel_path="${file#/mnt/openwrt-build/files/etc/custom-files/}"
+                  size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                  echo "    📄 $rel_path ($size)"
+                done
+              fi
+              
+              echo ""
+              echo "🎯 增强功能说明:"
+              echo "  🔧 递归查找: 支持自定义目录下的所有子目录"
+              echo "  📝 保持原文件名: 不自动重命名，保持用户设置的文件名"
+              echo "  🔄 错误不退出: IPK安装失败继续安装下一个"
+              echo "  📊 详细日志: 记录每个文件的处理结果和统计信息"
+              echo "  📁 持久日志: 日志存储在 /root/logs/（重启不丢失）"
+              
             else
               echo "  ⚪ 自定义文件: 未集成"
             fi
           fi
           
-          # 文件名兼容性建议
+          # 文件名兼容性建议 - 简化版本
           echo ""
           echo "💡 文件名兼容性建议:"
           echo "  为了更好的兼容性，方便复制、运行，建议自定义文件使用英文文件名"
           echo "  当前系统支持非英文文件名，但英文名有更好的兼容性"
-          
-          # 设备支持系统使用说明
-          echo ""
-          echo "📚 设备支持系统使用说明:"
-          echo "  1. 添加新设备: 编辑 firmware-config/support.sh"
-          echo "  2. 添加设备配置: 在 firmware-config/config/ 目录下创建 设备名.config"
-          echo "  3. 添加通用配置: 编辑 base.config, normal.config, usb-generic.config"
-          echo "  4. 重新运行工作流选择新设备即可"
           
           echo ""
           echo "✅ 构建流程完成"
