@@ -311,6 +311,9 @@
                         <option value="">正在加载设备列表...</option>
                     </select>
                     <div class="device-grid" id="deviceGrid"></div>
+                    <small id="deviceSource" style="color: var(--text-light); display: block; margin-top: 5px;">
+                        设备来源: 加载中...
+                    </small>
                 </div>
                 
                 <div class="form-group">
@@ -318,7 +321,6 @@
                     <select id="version" name="version" required>
                         <option value="21.02">21.02 - 稳定版</option>
                         <option value="23.05" selected>23.05 - 新版</option>
-                        <option value="snapshot">Snapshot - 开发版</option>
                     </select>
                 </div>
                 
@@ -327,26 +329,16 @@
                     <select id="mode" name="mode" required>
                         <option value="base">🟣 基础模式 - 最小化配置</option>
                         <option value="normal" selected>🟠 正常模式 - 完整功能</option>
-                        <option value="custom">🔵 自定义模式 - 高级配置</option>
                     </select>
                 </div>
                 
                 <div class="form-group">
                     <label>📦 额外插件 (可选)</label>
                     <input type="text" id="packages" name="packages" 
-                           placeholder="例如: luci-app-ddns luci-app-upnp">
+                           placeholder="例如: +luci-app-ddns;-luci-app-upnp">
                     <small style="color: var(--text-light); display: block; margin-top: 5px;">
-                        输入插件名称，用空格分隔。前缀+表示添加，-表示移除
+                        格式: +插件名;-插件名 用分号;分隔
                     </small>
-                </div>
-                
-                <div class="form-group">
-                    <div class="checkbox-group">
-                        <input type="checkbox" id="parallel" name="parallel" checked>
-                        <label for="parallel" style="margin-bottom: 0;">
-                            ⚡ 启用智能并行优化
-                        </label>
-                    </div>
                 </div>
                 
                 <button type="submit" class="btn" id="submitBtn" disabled>
@@ -377,15 +369,19 @@
         
         <div class="info-box">
             <h3>📝 使用说明</h3>
-            <p>1. 选择设备和配置模式</p>
+            <p>1. 选择设备</p>
             <p>2. 点击"开始构建"按钮</p>
-            <p>3. 等待GitHub Actions完成构建</p>
+            <p>3. 跳转到GitHub Actions页面手动触发</p>
             <p>4. 在Actions页面下载生成的固件</p>
         </div>
         
         <div class="info-box">
-            <h3>🎯 正常模式包含的功能</h3>
-            <p>TurboACC网络加速、Samba文件共享、磁盘管理、SmartDNS智能DNS、家长控制、微信推送、流量控制、FTP服务器等完整功能。</p>
+            <h3>🎯 支持设备</h3>
+            <p id="deviceCount">正在加载设备列表...</p>
+            <div id="deviceList" style="margin-top: 10px;"></div>
+            <small id="deviceListSource" style="color: var(--text-light); display: block; margin-top: 10px;">
+                设备列表来源: 加载中...
+            </small>
         </div>
         
         <footer>
@@ -396,19 +392,14 @@
     </div>
 
     <script>
-        // =============== 配置 ===============
-        const CONFIG = {
-            DEVICES_API: 'devices.json',  // 设备列表API
-            WORKFLOW_FILE: 'firmware-build.yml'
-        };
-        
         // =============== 状态管理 ===============
         let state = {
             devices: [],
-            isLoading: false,
-            lastBuildId: null,
-            repoOwner: '',
-            repoName: ''
+            githubConfig: {
+                repoOwner: '',
+                repoName: ''
+            },
+            deviceSource: 'unknown' // 记录设备列表来源
         };
         
         // =============== DOM元素 ===============
@@ -422,7 +413,11 @@
             statusCard: document.getElementById('statusCard'),
             actionsLink: document.getElementById('actionsLink'),
             githubRepoLink: document.getElementById('githubRepoLink'),
-            githubDocsLink: document.getElementById('githubDocsLink')
+            githubDocsLink: document.getElementById('githubDocsLink'),
+            deviceCount: document.getElementById('deviceCount'),
+            deviceList: document.getElementById('deviceList'),
+            deviceSource: document.getElementById('deviceSource'),
+            deviceListSource: document.getElementById('deviceListSource')
         };
         
         // =============== 初始化 ===============
@@ -431,11 +426,8 @@
         });
         
         async function init() {
-            // 自动检测GitHub仓库信息
-            await detectGitHubRepo();
-            
-            // 更新GitHub链接
-            updateGitHubLinks();
+            // 自动检测GitHub仓库
+            detectGitHubRepo();
             
             // 加载设备列表
             await loadDevices();
@@ -448,91 +440,31 @@
         }
         
         // =============== 自动检测GitHub仓库 ===============
-        async function detectGitHubRepo() {
-            try {
-                // 从GitHub Pages自动检测仓库
-                if (window.location.hostname.endsWith('.github.io')) {
-                    const parts = window.location.hostname.split('.');
-                    if (parts.length >= 2) {
-                        state.repoOwner = parts[0]; // GitHub用户名
-                        
-                        // 获取仓库名（从路径获取第一个非空部分）
-                        const pathParts = window.location.pathname.split('/').filter(p => p);
-                        state.repoName = pathParts[0] || 'openwrt';
-                        
-                        console.log('检测到的GitHub仓库:', state.repoOwner + '/' + state.repoName);
-                        return;
-                    }
-                }
+        function detectGitHubRepo() {
+            const hostname = window.location.hostname;
+            
+            // GitHub Pages 格式: username.github.io/repo-name
+            if (hostname.endsWith('.github.io')) {
+                const username = hostname.split('.')[0];
+                const repoName = window.location.pathname.split('/')[1] || 'openwrt';
                 
-                // 如果无法自动检测，尝试从页面URL获取
-                const urlParams = new URLSearchParams(window.location.search);
-                const repoParam = urlParams.get('repo');
-                if (repoParam && repoParam.includes('/')) {
-                    const [owner, name] = repoParam.split('/');
-                    state.repoOwner = owner;
-                    state.repoName = name;
-                    console.log('从URL参数获取GitHub仓库:', repoParam);
-                    return;
-                }
+                state.githubConfig = {
+                    repoOwner: username,
+                    repoName: repoName
+                };
                 
-                // 最后尝试从当前页面读取仓库信息
-                await fetchGitHubInfoFromPage();
-                
-            } catch (error) {
-                console.warn('无法自动检测GitHub仓库:', error);
-                // 设置默认值（将提示用户手动设置）
-                state.repoOwner = '';
-                state.repoName = '';
-            }
-        }
-        
-        async function fetchGitHubInfoFromPage() {
-            try {
-                // 尝试获取页面上的GitHub链接
-                const links = document.querySelectorAll('a[href*="github.com"]');
-                for (const link of links) {
-                    const url = new URL(link.href, window.location.origin);
-                    if (url.hostname === 'github.com') {
-                        const pathParts = url.pathname.split('/').filter(p => p);
-                        if (pathParts.length >= 2) {
-                            state.repoOwner = pathParts[0];
-                            state.repoName = pathParts[1];
-                            console.log('从页面链接获取GitHub仓库:', state.repoOwner + '/' + state.repoName);
-                            return;
-                        }
-                    }
-                }
-            } catch (error) {
-                console.warn('从页面获取GitHub信息失败:', error);
+                updateGitHubLinks();
             }
         }
         
         // =============== 更新GitHub链接 ===============
         function updateGitHubLinks() {
-            if (state.repoOwner && state.repoName) {
-                const baseUrl = `https://github.com/${state.repoOwner}/${state.repoName}`;
+            if (state.githubConfig.repoOwner && state.githubConfig.repoName) {
+                const baseUrl = `https://github.com/${state.githubConfig.repoOwner}/${state.githubConfig.repoName}`;
                 
-                // 更新仓库链接
                 elements.githubRepoLink.href = baseUrl;
-                
-                // 更新文档链接
                 elements.githubDocsLink.href = `${baseUrl}/blob/main/README.md`;
-                
-                // 更新状态卡片的Actions链接
                 elements.actionsLink.href = `${baseUrl}/actions`;
-                
-                console.log('GitHub链接已更新:', {
-                    repo: elements.githubRepoLink.href,
-                    docs: elements.githubDocsLink.href,
-                    actions: elements.actionsLink.href
-                });
-            } else {
-                // 显示错误提示
-                showAlert('⚠️ 无法自动检测GitHub仓库信息，请手动设置仓库地址。在URL中添加 ?repo=用户名/仓库名', 'warning');
-                elements.githubRepoLink.href = '#';
-                elements.githubDocsLink.href = '#';
-                elements.actionsLink.href = '#';
             }
         }
         
@@ -541,102 +473,143 @@
             try {
                 showAlert('正在加载设备列表...', 'warning');
                 
-                // 尝试从多个来源获取设备列表
+                // 尝试从多个位置加载设备列表
                 let devices = [];
+                let source = '';
                 
-                // 1. 尝试从API获取设备列表
+                // 1. 尝试从当前目录加载support.sh
                 try {
-                    const apiResponse = await fetch(CONFIG.DEVICES_API);
-                    if (apiResponse.ok) {
-                        const data = await apiResponse.json();
-                        if (Array.isArray(data.devices)) {
-                            devices = data.devices;
-                            console.log('从API加载设备列表:', devices.length, '个设备');
-                        }
+                    console.log('尝试从本地加载support.sh...');
+                    const response = await fetch('support.sh');
+                    if (response.ok) {
+                        const content = await response.text();
+                        devices = extractDevicesFromSupport(content);
+                        source = '本地 support.sh 文件';
+                        console.log('从本地加载设备列表成功:', devices.length, '个设备');
+                    } else {
+                        console.log('本地support.sh加载失败:', response.status);
                     }
-                } catch (apiError) {
-                    console.log('API加载失败:', apiError);
+                } catch (e) {
+                    console.log('本地加载失败:', e);
                 }
                 
-                // 2. 如果API失败，尝试从support.sh获取
-                if (devices.length === 0 && state.repoOwner && state.repoName) {
+                // 2. 尝试从GitHub raw加载（如果配置了GitHub仓库）
+                if (devices.length === 0 && state.githubConfig.repoOwner) {
                     try {
-                        const supportResponse = await fetch(
-                            `https://raw.githubusercontent.com/${state.repoOwner}/${state.repoName}/main/support.sh`
+                        console.log('尝试从GitHub加载support.sh...');
+                        const response = await fetch(
+                            `https://raw.githubusercontent.com/${state.githubConfig.repoOwner}/${state.githubConfig.repoName}/main/support.sh`
                         );
-                        if (supportResponse.ok) {
-                            const content = await supportResponse.text();
+                        if (response.ok) {
+                            const content = await response.text();
                             devices = extractDevicesFromSupport(content);
-                            console.log('从support.sh加载设备列表:', devices.length, '个设备');
+                            source = 'GitHub 仓库同步';
+                            console.log('从GitHub加载设备列表成功:', devices.length, '个设备');
+                        } else {
+                            console.log('GitHub加载失败:', response.status);
                         }
-                    } catch (supportError) {
-                        console.log('support.sh加载失败:', supportError);
+                    } catch (e) {
+                        console.log('GitHub加载失败:', e);
                     }
                 }
                 
-                // 3. 如果都失败，显示错误
+                // 3. 如果都失败，使用默认设备列表
                 if (devices.length === 0) {
-                    throw new Error('无法加载设备列表');
+                    devices = ['ac42u', 'acrh17', 'ax6s', 'ax6', '360t7', 'wr30u'];
+                    source = '默认设备列表';
+                    console.log('使用默认设备列表:', devices.length, '个设备');
                 }
                 
+                // 更新状态
                 state.devices = devices;
-                updateDeviceUI();
-                hideAlert();
+                state.deviceSource = source;
                 
-                // 刷新页面时自动重新加载
-                setupAutoRefresh();
+                // 更新UI
+                updateDeviceUI();
+                updateDeviceInfo();
+                hideAlert();
                 
             } catch (error) {
                 console.error('加载设备列表失败:', error);
+                showAlert(`❌ 设备列表加载失败: ${error.message}`, 'error');
                 state.devices = [];
+                state.deviceSource = '加载失败';
                 updateDeviceUI();
-                showAlert(`❌ 设备列表加载失败: ${error.message}。请刷新页面重试。`, 'error');
-                elements.submitBtn.disabled = true;
             }
         }
         
+        // =============== 从support.sh提取设备列表 ===============
         function extractDevicesFromSupport(content) {
             const devices = new Set();
             
-            // 从support.sh中提取设备名
-            const patterns = [
-                /DEVICES\["([^"]+)"\]/g,
-                /get_device_config\s*\(\s*["']([^"']+)["']/g,
-                /["']([a-zA-Z0-9_\-]+)["']/g
-            ];
+            // 提取 DEVICES["设备名"] 格式
+            const pattern = /DEVICES\["([^"]+)"\]/g;
+            let match;
             
-            // 查找设备定义行
-            const lines = content.split('\n');
-            for (const line of lines) {
-                if (line.includes('DEVICES[') || line.includes('device_name=')) {
-                    patterns.forEach(pattern => {
-                        let match;
-                        while ((match = pattern.exec(line)) !== null) {
-                            if (match[1] && match[1].length > 2 && !match[1].startsWith('CONFIG_')) {
-                                devices.add(match[1].trim());
-                            }
-                        }
-                    });
+            while ((match = pattern.exec(content)) !== null) {
+                if (match[1] && match[1].length > 2) {
+                    devices.add(match[1].trim());
                 }
+            }
+            
+            // 提取 list_devices 函数中的设备
+            const lines = content.split('\n');
+            let inListFunction = false;
+            
+            for (const line of lines) {
+                if (line.includes('list_devices()')) {
+                    inListFunction = true;
+                    continue;
+                }
+                if (inListFunction && line.includes('echo "')) {
+                    const deviceMatch = line.match(/echo "([^"]+)"/);
+                    if (deviceMatch) {
+                        devices.add(deviceMatch[1].trim());
+                    }
+                }
+                if (inListFunction && line.includes('}')) {
+                    break;
+                }
+            }
+            
+            // 如果没有找到设备，尝试其他模式
+            if (devices.size === 0) {
+                // 尝试提取其他格式的设备名
+                const otherPatterns = [
+                    /"([a-zA-Z0-9_\-]+)"/g,
+                    /device_name=(["'])(.*?)\1/g
+                ];
+                
+                otherPatterns.forEach(pattern => {
+                    let match;
+                    while ((match = pattern.exec(content)) !== null) {
+                        const device = match[1] || match[2];
+                        if (device && device.length > 2 && !device.startsWith('CONFIG_')) {
+                            devices.add(device.trim());
+                        }
+                    }
+                });
             }
             
             return Array.from(devices).sort();
         }
         
+        // =============== 更新设备UI ===============
         function updateDeviceUI() {
-            // 清空现有选项
+            // 清空现有内容
             elements.deviceSelect.innerHTML = '<option value="">请选择设备</option>';
             elements.deviceGrid.innerHTML = '';
             
+            // 更新设备来源显示
+            elements.deviceSource.textContent = `设备来源: ${state.deviceSource}`;
+            
             if (state.devices.length === 0) {
-                const option = document.createElement('option');
-                option.value = '';
-                option.textContent = '未找到支持的设备';
-                elements.deviceSelect.appendChild(option);
+                elements.deviceSelect.innerHTML = '<option value="">未找到设备</option>';
+                elements.submitBtn.disabled = true;
                 return;
             }
             
-            // 更新下拉选择
+            // 填充下拉菜单
             state.devices.forEach(device => {
                 const option = document.createElement('option');
                 option.value = device;
@@ -644,7 +617,7 @@
                 elements.deviceSelect.appendChild(option);
             });
             
-            // 更新设备网格
+            // 填充设备网格
             state.devices.forEach(device => {
                 const tag = document.createElement('div');
                 tag.className = 'device-tag';
@@ -652,10 +625,7 @@
                 tag.title = `点击选择 ${device}`;
                 tag.addEventListener('click', () => {
                     elements.deviceSelect.value = device;
-                    // 更新选中状态
-                    document.querySelectorAll('.device-tag').forEach(t => 
-                        t.classList.remove('selected'));
-                    tag.classList.add('selected');
+                    updateDeviceSelection(device);
                 });
                 elements.deviceGrid.appendChild(tag);
             });
@@ -664,116 +634,52 @@
             elements.submitBtn.disabled = false;
         }
         
-        // =============== 自动刷新机制 ===============
-        function setupAutoRefresh() {
-            // 监听页面可见性变化
-            document.addEventListener('visibilitychange', () => {
-                if (!document.hidden) {
-                    // 页面重新可见时，检查是否需要刷新设备列表
-                    refreshDevicesIfNeeded();
-                }
+        // =============== 更新设备信息显示 ===============
+        function updateDeviceInfo() {
+            elements.deviceCount.textContent = `当前支持 ${state.devices.length} 个设备`;
+            elements.deviceListSource.textContent = `设备列表来源: ${state.deviceSource}`;
+            
+            // 显示设备列表
+            let deviceListHtml = '<div style="display: flex; flex-wrap: wrap; gap: 5px;">';
+            state.devices.forEach(device => {
+                deviceListHtml += `<span style="background: var(--bg); padding: 4px 8px; border-radius: 4px; font-family: monospace;">${device}</span>`;
             });
+            deviceListHtml += '</div>';
             
-            // 监听页面获取焦点事件
-            window.addEventListener('focus', refreshDevicesIfNeeded);
-            
-            // 每5分钟自动刷新一次设备列表
-            setInterval(refreshDevicesIfNeeded, 5 * 60 * 1000);
+            elements.deviceList.innerHTML = deviceListHtml;
         }
         
-        async function refreshDevicesIfNeeded() {
-            if (state.isLoading) return;
-            
-            try {
-                console.log('检查设备列表更新...');
-                // 这里可以添加逻辑检查设备列表是否需要更新
-                // 例如：比较时间戳或版本号
-            } catch (error) {
-                console.log('设备列表更新检查失败:', error);
-            }
+        // =============== 更新设备选中状态 ===============
+        function updateDeviceSelection(selectedDevice) {
+            document.querySelectorAll('.device-tag').forEach(tag => {
+                tag.classList.toggle('selected', tag.textContent === selectedDevice);
+            });
         }
         
         // =============== 表单事件处理 ===============
         function setupFormEvents() {
-            // 表单提交
             elements.buildForm.addEventListener('submit', handleSubmit);
-            
-            // 设备选择变化时更新标签选中状态
             elements.deviceSelect.addEventListener('change', function() {
-                const selectedDevice = this.value;
-                document.querySelectorAll('.device-tag').forEach(tag => {
-                    tag.classList.toggle('selected', tag.textContent === selectedDevice);
-                });
+                updateDeviceSelection(this.value);
             });
-            
-            // 监听输入变化，实时验证
-            elements.buildForm.addEventListener('input', validateFormInRealTime);
-        }
-        
-        function validateFormInRealTime() {
-            const device = elements.deviceSelect.value;
-            const isValid = device && state.devices.includes(device);
-            elements.submitBtn.disabled = !isValid;
         }
         
         // =============== 处理表单提交 ===============
         async function handleSubmit(event) {
             event.preventDefault();
             
-            if (state.isLoading) return;
-            
-            // 检查GitHub仓库信息
-            if (!state.repoOwner || !state.repoName) {
-                showAlert('❌ 请先设置GitHub仓库信息。在URL中添加 ?repo=用户名/仓库名', 'error');
-                return;
-            }
-            
             const formData = {
                 device: elements.deviceSelect.value,
                 version: document.getElementById('version').value,
                 mode: document.getElementById('mode').value,
-                packages: document.getElementById('packages').value.trim(),
-                parallel: document.getElementById('parallel').checked
+                packages: document.getElementById('packages').value.trim()
             };
             
             // 验证表单
             if (!validateForm(formData)) return;
             
-            // 开始提交
-            state.isLoading = true;
-            updateUIState(true);
-            
-            try {
-                const result = await triggerWorkflow(formData);
-                
-                if (result.success) {
-                    showSuccess(result);
-                    
-                    // 更新状态卡片
-                    elements.actionsLink.href = result.html_url;
-                    elements.statusCard.classList.add('show');
-                    
-                    // 3秒后自动跳转到Actions页面
-                    setTimeout(() => {
-                        if (result.html_url && result.html_url !== '#') {
-                            window.open(result.html_url, '_blank');
-                        }
-                    }, 3000);
-                    
-                    // 3分钟后重置表单
-                    setTimeout(() => {
-                        resetForm();
-                    }, 180000);
-                    
-                } else {
-                    throw new Error(result.message);
-                }
-                
-            } catch (error) {
-                showAlert(`❌ 提交失败: ${error.message}`, 'error');
-                state.isLoading = false;
-                updateUIState(false);
-            }
+            // 跳转到GitHub Actions页面
+            redirectToGitHubActions(formData);
         }
         
         function validateForm(data) {
@@ -790,54 +696,24 @@
             return true;
         }
         
-        // =============== 触发GitHub工作流 ===============
-        async function triggerWorkflow(data) {
-            if (!state.repoOwner || !state.repoName) {
-                throw new Error('未设置GitHub仓库信息');
+        // =============== 跳转到GitHub Actions ===============
+        function redirectToGitHubActions(data) {
+            // 如果配置了GitHub仓库，直接跳转到Actions页面
+            if (state.githubConfig.repoOwner && state.githubConfig.repoName) {
+                const actionsUrl = `https://github.com/${state.githubConfig.repoOwner}/${state.githubConfig.repoName}/actions`;
+                
+                showAlert(`✅ 正在跳转到GitHub Actions页面... (设备: ${data.device})`, 'success');
+                elements.actionsLink.href = actionsUrl;
+                elements.statusCard.classList.add('show');
+                
+                // 2秒后跳转
+                setTimeout(() => {
+                    window.open(actionsUrl, '_blank');
+                }, 2000);
+            } else {
+                // 如果没有配置仓库，显示错误
+                showAlert('❌ 无法跳转，未检测到GitHub仓库配置', 'error');
             }
-            
-            // 生成GitHub Actions手动触发链接
-            const actionsUrl = generateManualTriggerUrl(data);
-            
-            return {
-                success: true,
-                html_url: actionsUrl,
-                message: '请点击链接手动触发构建'
-            };
-        }
-        
-        function generateManualTriggerUrl(data) {
-            // 构建GitHub Actions手动触发页面的URL
-            const baseUrl = `https://github.com/${state.repoOwner}/${state.repoName}/actions/workflows/${CONFIG.WORKFLOW_FILE}`;
-            const params = new URLSearchParams();
-            
-            // 添加工作流输入参数
-            params.append('manual', 'true');
-            
-            // 添加设备信息
-            if (data.device) {
-                params.append('inputs.device_name', data.device);
-            }
-            
-            // 添加版本信息
-            if (data.version) {
-                params.append('inputs.version_selection', data.version);
-            }
-            
-            // 添加配置模式
-            if (data.mode) {
-                params.append('inputs.config_mode', data.mode);
-            }
-            
-            // 添加额外包
-            if (data.packages) {
-                params.append('inputs.extra_packages', data.packages);
-            }
-            
-            // 添加并行优化选项
-            params.append('inputs.enable_parallel', data.parallel ? 'true' : 'false');
-            
-            return `${baseUrl}?${params.toString()}`;
         }
         
         // =============== UI辅助函数 ===============
@@ -858,49 +734,17 @@
             elements.alert.style.display = 'none';
         }
         
-        function showSuccess(result) {
-            showAlert(`✅ ${result.message}`, 'success');
-        }
-        
-        function updateUIState(isLoading) {
-            elements.submitBtn.disabled = isLoading;
-            elements.loading.style.display = isLoading ? 'block' : 'none';
-            elements.submitBtn.innerHTML = isLoading ? 
-                '<span>⏳</span> 提交中...' : 
-                '<span>🚀</span> 开始构建固件';
-        }
-        
-        function resetForm() {
-            elements.buildForm.reset();
-            document.getElementById('parallel').checked = true;
-            elements.statusCard.classList.remove('show');
-            document.querySelectorAll('.device-tag').forEach(tag => 
-                tag.classList.remove('selected'));
-            state.isLoading = false;
-            updateUIState(false);
-        }
-        
         // =============== URL参数处理 ===============
         function checkUrlParams() {
             const params = new URLSearchParams(window.location.search);
             
-            // 设置仓库参数
-            const repoParam = params.get('repo');
-            if (repoParam && repoParam.includes('/')) {
-                const [owner, name] = repoParam.split('/');
-                state.repoOwner = owner;
-                state.repoName = name;
-                updateGitHubLinks();
-            }
-            
             // 设置设备参数
             if (params.has('device')) {
                 const device = params.get('device');
-                // 延迟设置，等待设备列表加载完成
                 setTimeout(() => {
                     if (state.devices.includes(device)) {
                         elements.deviceSelect.value = device;
-                        elements.deviceSelect.dispatchEvent(new Event('change'));
+                        updateDeviceSelection(device);
                     }
                 }, 500);
             }
@@ -908,19 +752,13 @@
             // 设置版本参数
             if (params.has('version')) {
                 const version = params.get('version');
-                const versionSelect = document.getElementById('version');
-                if (Array.from(versionSelect.options).some(opt => opt.value === version)) {
-                    versionSelect.value = version;
-                }
+                document.getElementById('version').value = version;
             }
             
             // 设置模式参数
             if (params.has('mode')) {
                 const mode = params.get('mode');
-                const modeSelect = document.getElementById('mode');
-                if (Array.from(modeSelect.options).some(opt => opt.value === mode)) {
-                    modeSelect.value = mode;
-                }
+                document.getElementById('mode').value = mode;
             }
         }
     </script>
