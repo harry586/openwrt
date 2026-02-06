@@ -1,6 +1,13 @@
 # .github/workflows/firmware-build.yml
 name: OpenWrt 智能固件构建工作流
 
+# 关键：添加权限设置
+permissions:
+  contents: write    # 允许写入仓库（上传Artifacts）
+  actions: write     # 允许触发工作流（如果需要递归触发）
+  checks: write      # 允许创建检查状态
+  deployments: write # 允许创建部署状态
+
 on:
   workflow_dispatch:
     inputs:
