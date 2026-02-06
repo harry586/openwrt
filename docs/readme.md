@@ -3,10 +3,11 @@
 ## 使用方法
 
 1. 访问 https://YOUR_USERNAME.github.io/YOUR_REPO/
-2. 选择设备和配置
-3. 点击"开始构建"
-4. 等待GitHub Actions完成
-5. 在Actions页面下载固件
+2. 访问https://harry586.github.io/openwrt/
+3. 选择设备和配置
+4. 点击"开始构建"
+5. 等待GitHub Actions完成
+6. 在Actions页面下载固件
 
 ## 支持的设备
 
