@@ -1,7 +1,7 @@
 # .github/workflows/firmware-build.yml
 name: OpenWrt 智能固件构建工作流
 
-# 关键：添加权限设置
+# 关键：添加权限设置以便能够被网页触发
 permissions:
   contents: write    # 允许写入仓库（上传Artifacts）
   actions: write     # 允许触发工作流（如果需要递归触发）
@@ -20,14 +20,14 @@ on:
         description: "🔄 版本选择"
         required: true
         type: choice
-        default: "21.02"
+        default: "23.05"
         options: ["23.05", "21.02"]
       config_mode:
-        description: "⚙️ 配置模式选择 - 🟣 基础模式 - 最小化配置，用于测试编译。🟠 正常模式 - 完整功能配置：✅ TurboACC 网络加速 ✅ UPnP 自动端口转发 ✅ Samba 文件共享 ✅ 磁盘管理 ✅ KMS 激活服务 ✅ SmartDNS 智能DNS ✅ 家长控制 ✅ 微信推送 ✅ 流量控制 (SQM) ✅ FTP 服务器 ✅ ARP 绑定 ✅ CPU 限制 ✅ 硬盘休眠"
+        description: "⚙️ 配置模式选择 - 🟣 基础模式 - 最小化配置，用于测试编译。🟠 正常模式 - 完整功能配置"
         required: true
         type: choice
         default: "normal"
-        options: ["base", "normal"]
+        options: ["base", "normal", "full"]
       extra_packages:
         description: "额外安装插件 - 格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。"
         required: false
@@ -39,47 +39,125 @@ on:
         type: choice
         default: "true"
         options: ["true", "false"]
+      # 添加新的输入参数用于网页自动触发
+      build_source:
+        description: "构建来源"
+        required: false
+        type: string
+        default: "manual"
+      build_timestamp:
+        description: "构建时间戳"
+        required: false
+        type: string
+        default: ""
 
 env:
   BUILD_DIR: "/mnt/openwrt-build"
   REPO_ROOT: "${{ github.workspace }}"
   ENABLE_PARALLEL: "${{ github.event.inputs.enable_parallel }}"
+  BUILD_SOURCE: "${{ github.event.inputs.build_source }}"
+  BUILD_TIMESTAMP: "${{ github.event.inputs.build_timestamp }}"
 
 jobs:
   build-firmware:
     runs-on: ubuntu-22.04
     
+    # 添加输出，供其他步骤使用
+    outputs:
+      build_id: ${{ steps.generate-build-id.outputs.build_id }}
+      build_status: ${{ steps.final-summary.outputs.build_status }}
+    
     steps:
-      # 步骤 0: 生成时间戳
-      - name: "0. 生成时间戳"
+      # 步骤 0: 生成构建ID和时间戳
+      - name: "0. 生成构建ID和时间戳"
+        id: generate-build-id
         run: |
-          echo "=== 步骤 0: 生成时间戳 ==="
+          echo "=== 步骤 0: 生成构建ID和时间戳 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 生成日期格式的时间戳（年月日）
-          BASE_DATE=$(date -u +'%Y%m%d')
-          TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$BASE_DATE"
+          # 如果有网页传递的时间戳，使用它
+          if [ -n "${{ env.BUILD_TIMESTAMP }}" ] && [ "${{ env.BUILD_TIMESTAMP }}" != "" ]; then
+            TIMESTAMP="${{ env.BUILD_TIMESTAMP }}"
+            echo "✅ 使用网页传递的时间戳: $TIMESTAMP"
+          else
+            # 生成新的时间戳
+            BASE_DATE=$(date -u +'%Y%m%d')
+            TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$BASE_DATE-$(date +%H%M%S)"
+          fi
           
+          # 生成唯一的构建ID
+          BUILD_ID="build_${TIMESTAMP}_$(openssl rand -hex 4)"
+          echo "BUILD_ID=$BUILD_ID" >> $GITHUB_ENV
           echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
           
-          echo "✅ 生成时间戳: $TIMESTAMP"
+          # 设置步骤输出
+          echo "build_id=$BUILD_ID" >> $GITHUB_OUTPUT
+          
+          echo "✅ 生成构建ID: $BUILD_ID"
           echo "📋 构建配置:"
           echo "  设备: ${{ github.event.inputs.device_name }}"
           echo "  版本: ${{ github.event.inputs.version_selection }}"
           echo "  模式: ${{ github.event.inputs.config_mode }}"
-          echo "  并行优化: ${{ github.event.inputs.enable_parallel }}"
+          echo "  并行优化: ${{ env.ENABLE_PARALLEL }}"
+          echo "  构建来源: ${{ env.BUILD_SOURCE }}"
           
           echo "🟢 步骤 0 完成"
       
-      # 步骤 1: 使用Git Archive API下载源代码（修复权限版）
-      - name: "1. 使用Git Archive API下载源代码（修复权限版）"
+      # 步骤 1: 显示构建来源信息
+      - name: "1. 显示构建来源信息"
         run: |
-          echo "=== 步骤 1: 使用Git Archive API下载源代码（修复权限版） ==="
+          echo "=== 步骤 1: 显示构建来源信息 ==="
+          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          
+          echo "📱 构建信息面板"
+          echo "========================================"
+          echo "🎯 构建ID: ${{ env.BUILD_ID }}"
+          echo "📱 设备: ${{ github.event.inputs.device_name }}"
+          echo "🔄 版本: ${{ github.event.inputs.version_selection }}"
+          echo "⚙️ 模式: ${{ github.event.inputs.config_mode }}"
+          echo "📦 额外插件: ${{ github.event.inputs.extra_packages }}"
+          echo "⚡ 并行优化: ${{ env.ENABLE_PARALLEL }}"
+          
+          if [ "${{ env.BUILD_SOURCE }}" = "web" ]; then
+            echo "🌐 构建来源: 🎨 网页自动触发"
+            echo "💡 这是通过网页界面自动触发的构建"
+          else
+            echo "🌐 构建来源: 👆 手动触发"
+            echo "💡 这是在GitHub Actions页面手动触发的构建"
+          fi
+          
+          echo "📅 时间戳: ${{ env.TIMESTAMP }}"
+          echo "========================================"
+          
+          # 创建构建信息文件，用于后续步骤和网页显示
+          mkdir -p /tmp/build-info
+          echo "{
+            \"build_id\": \"${{ env.BUILD_ID }}\",
+            \"device\": \"${{ github.event.inputs.device_name }}\",
+            \"version\": \"${{ github.event.inputs.version_selection }}\",
+            \"mode\": \"${{ github.event.inputs.config_mode }}\",
+            \"packages\": \"${{ github.event.inputs.extra_packages }}\",
+            \"parallel\": \"${{ env.ENABLE_PARALLEL }}\",
+            \"source\": \"${{ env.BUILD_SOURCE }}\",
+            \"timestamp\": \"${{ env.TIMESTAMP }}\",
+            \"start_time\": \"$(date -u +'%Y-%m-%dT%H:%M:%SZ')\",
+            \"workflow_url\": \"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\",
+            \"commit_sha\": \"${{ github.sha }}\",
+            \"repository\": \"${{ github.repository }}\"
+          }" > /tmp/build-info/build-info.json
+          
+          echo "✅ 构建信息已保存"
+          echo "🟢 步骤 1 完成"
+      
+      # 步骤 2: 使用Git Archive API下载源代码（修复权限版）
+      - name: "2. 使用Git Archive API下载源代码（修复权限版）"
+        run: |
+          echo "=== 步骤 2: 使用Git Archive API下载源代码（修复权限版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 1 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 2 失败，退出代码: $?"; exit 1' ERR
           
           # 创建临时目录
           mkdir -p /tmp/openwrt-source
@@ -178,10 +256,10 @@ jobs:
           cd /tmp
           rm -rf openwrt-source
           echo "✅ Git Archive API下载完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 1 完成"
+          echo "🟢 步骤 2 完成"
       
-      # 步骤 2: 上传源代码Artifacts
-      - name: "2. 上传源代码Artifacts"
+      # 步骤 3: 上传源代码Artifacts
+      - name: "3. 上传源代码Artifacts"
         uses: actions/upload-artifact@v4
         with:
           name: source-${{ env.TIMESTAMP }}
@@ -189,15 +267,15 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 3: 修复权限问题
-      - name: "3. 修复权限问题"
+      # 步骤 4: 修复权限问题
+      - name: "4. 修复权限问题"
         run: |
-          echo "=== 步骤 3: 修复权限问题 ==="
+          echo "=== 步骤 4: 修复权限问题 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 3 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 4 失败，退出代码: $?"; exit 1' ERR
           
           echo "🔧 修复所有脚本的执行权限..."
           
@@ -217,17 +295,17 @@ jobs:
           # 修复其他脚本权限
           find "${{ github.workspace }}/firmware-config/scripts" -name "*.sh" -exec chmod +x {} \;
           echo "✅ 修复所有脚本权限完成"
-          echo "🟢 步骤 3 完成"
+          echo "🟢 步骤 4 完成"
       
-      # 步骤 4: 安装基础工具（优化版）
-      - name: "4. 安装基础工具（优化版）"
+      # 步骤 5: 安装基础工具（优化版）
+      - name: "5. 安装基础工具（优化版）"
         run: |
-          echo "=== 步骤 4: 安装基础工具（优化版） ==="
+          echo "=== 步骤 5: 安装基础工具（优化版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 4 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 5 失败，退出代码: $?"; exit 1' ERR
           
           echo "🔄 更新软件包列表..."
           sudo apt-get update -q
@@ -394,17 +472,17 @@ jobs:
           fi
           
           echo "✅ 工具验证完成"
-          echo "🟢 步骤 4 完成"
+          echo "🟢 步骤 5 完成"
       
-      # 步骤 5: 初始空间检查
-      - name: "5. 初始空间检查"
+      # 步骤 6: 初始空间检查
+      - name: "6. 初始空间检查"
         run: |
-          echo "=== 步骤 5: 初始磁盘空间检查 ==="
+          echo "=== 步骤 6: 初始磁盘空间检查 ==="
           echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 5 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 6 失败，退出代码: $?"; exit 1' ERR
           
           echo "📊 磁盘使用情况:"
           df -h
@@ -442,17 +520,17 @@ jobs:
             fi
           fi
           
-          echo "🟢 步骤 5 完成"
+          echo "🟢 步骤 6 完成"
       
-      # 步骤 6: 设置编译环境和构建目录（修复版）
-      - name: "6. 设置编译环境和构建目录（修复版）"
+      # 步骤 7: 设置编译环境和构建目录（修复版）
+      - name: "7. 设置编译环境和构建目录（修复版）"
         run: |
-          echo "=== 步骤 6: 设置编译环境和构建目录（修复版） ==="
+          echo "=== 步骤 7: 设置编译环境和构建目录（修复版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 6 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 7 失败，退出代码: $?"; exit 1' ERR
           
           BUILD_DIR="${{ env.BUILD_DIR }}"
           echo "📌 使用构建目录: $BUILD_DIR"
@@ -473,7 +551,7 @@ jobs:
             exit 1
           fi
           
-          echo "🔄 步骤 6.1: 设置编译环境"
+          echo "🔄 步骤 7.1: 设置编译环境"
           cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh setup_environment
           
@@ -482,7 +560,7 @@ jobs:
             exit 1
           fi
           
-          echo "🔄 步骤 6.2: 创建构建目录"
+          echo "🔄 步骤 7.2: 创建构建目录"
           ./firmware-config/scripts/build_firmware_main.sh create_build_dir
           
           if [ $? -ne 0 ]; then
@@ -490,7 +568,7 @@ jobs:
             exit 1
           fi
           
-          echo "🔄 步骤 6.3: 初始化构建环境"
+          echo "🔄 步骤 7.3: 初始化构建环境"
           echo "📱 设备: ${{ github.event.inputs.device_name }}"
           echo "🔄 版本: ${{ github.event.inputs.version_selection }}"
           echo "⚙️ 配置模式: ${{ github.event.inputs.config_mode }}"
@@ -502,28 +580,25 @@ jobs:
             exit 1
           fi
           
-          # 注意：步骤6.3会清空构建目录并克隆源码，所以support.sh会被删除
-          # 这是正常行为，后续步骤会重新复制需要的文件
-          
           echo "✅ 编译环境和构建目录设置完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 6 完成"
+          echo "🟢 步骤 7 完成"
       
-      # 步骤 7: 下载OpenWrt官方SDK（修复版）- 重新复制支持文件
-      - name: "7. 下载OpenWrt官方SDK（修复版）- 重新复制支持文件"
+      # 步骤 8: 下载OpenWrt官方SDK（修复版）- 重新复制支持文件
+      - name: "8. 下载OpenWrt官方SDK（修复版）- 重新复制支持文件"
         run: |
-          echo "=== 步骤 7: 下载OpenWrt官方SDK（修复版）- 重新复制支持文件 ==="
+          echo "=== 步骤 8: 下载OpenWrt官方SDK（修复版）- 重新复制支持文件 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 7 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 8 失败，退出代码: $?"; exit 1' ERR
           
           echo "🚀 开始下载OpenWrt官方SDK工具链..."
           
           BUILD_DIR="${{ env.BUILD_DIR }}"
           echo "📌 使用构建目录: $BUILD_DIR"
           
-          # 步骤6.3会清空构建目录，这里需要重新复制支持文件
+          # 步骤7.3会清空构建目录，这里需要重新复制支持文件
           echo "🔧 重新复制支持文件到构建目录..."
           
           # 1. 复制 support.sh
@@ -570,7 +645,7 @@ jobs:
           # 检查环境文件是否已经存在
           echo "🔍 检查环境文件..."
           if [ -f "$BUILD_DIR/build_env.sh" ]; then
-            echo "✅ 环境文件已存在（由步骤6.3创建）"
+            echo "✅ 环境文件已存在（由步骤7.3创建）"
             
             # 加载现有环境变量
             source "$BUILD_DIR/build_env.sh"
@@ -584,9 +659,9 @@ jobs:
             echo "  DEVICE_NAME: $DEVICE_NAME"
             echo ""
             
-            echo "💡 使用步骤6.3已设置的环境变量进行SDK下载"
+            echo "💡 使用步骤7.3已设置的环境变量进行SDK下载"
           else
-            echo "❌ 错误: 环境文件不存在，可能是步骤6.3失败"
+            echo "❌ 错误: 环境文件不存在，可能是步骤7.3失败"
             exit 1
           fi
           
@@ -602,16 +677,16 @@ jobs:
           fi
           
           echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 7 完成"
+          echo "🟢 步骤 8 完成"
       
-      # 步骤 8: 验证SDK下载结果
-      - name: "8. 验证SDK下载结果"
+      # 步骤 9: 验证SDK下载结果
+      - name: "9. 验证SDK下载结果"
         run: |
-          echo "=== 步骤 8: 验证SDK下载结果 ==="
+          echo "=== 步骤 9: 验证SDK下载结果 ==="
           echo "🕐 验证时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是验证
-          trap 'echo "⚠️ 步骤 8 验证过程中出现错误，继续执行..."' ERR
+          trap 'echo "⚠️ 步骤 9 验证过程中出现错误，继续执行..."' ERR
           
           echo "🔍 检查SDK下载结果..."
           
@@ -678,17 +753,17 @@ jobs:
           fi
           
           echo "✅ SDK验证完成"
-          echo "🟢 步骤 8 完成"
+          echo "🟢 步骤 9 完成"
       
-      # 步骤 9: 添加 TurboACC 支持
-      - name: "9. 添加 TurboACC 支持"
+      # 步骤 10: 添加 TurboACC 支持
+      - name: "10. 添加 TurboACC 支持"
         run: |
-          echo "=== 步骤 9: 添加 TurboACC 支持 ==="
+          echo "=== 步骤 10: 添加 TurboACC 支持 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 9 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 10 失败，退出代码: $?"; exit 1' ERR
           
           BUILD_DIR="${{ env.BUILD_DIR }}"
           cd "$BUILD_DIR"
@@ -700,17 +775,17 @@ jobs:
           fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 9 完成"
+          echo "🟢 步骤 10 完成"
       
-      # 步骤 10: 配置Feeds
-      - name: "10. 配置Feeds"
+      # 步骤 11: 配置Feeds
+      - name: "11. 配置Feeds"
         run: |
-          echo "=== 步骤 10: 配置Feeds ==="
+          echo "=== 步骤 11: 配置Feeds ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 10 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 11 失败，退出代码: $?"; exit 1' ERR
           
           BUILD_DIR="${{ env.BUILD_DIR }}"
           cd "$BUILD_DIR"
@@ -722,18 +797,18 @@ jobs:
           fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 10 完成"
+          echo "🟢 步骤 11 完成"
       
-      # 步骤 11: 安装 TurboACC 包
-      - name: "11. 安装 TurboACC 包"
+      # 步骤 12: 安装 TurboACC 包
+      - name: "12. 安装 TurboACC 包"
         if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
         run: |
-          echo "=== 步骤 11: 安装 TurboACC 包 ==="
+          echo "=== 步骤 12: 安装 TurboACC 包 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 11 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 12 失败，退出代码: $?"; exit 1' ERR
           
           BUILD_DIR="${{ env.BUILD_DIR }}"
           cd "$BUILD_DIR"
@@ -745,17 +820,17 @@ jobs:
           fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 11 完成"
+          echo "🟢 步骤 12 完成"
       
-      # 步骤 12: 编译前空间检查
-      - name: "12. 编译前空间检查"
+      # 步骤 13: 编译前空间检查
+      - name: "13. 编译前空间检查"
         run: |
-          echo "=== 步骤 12: 编译前空间检查 ==="
+          echo "=== 步骤 13: 编译前空间检查 ==="
           echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 12 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 13 失败，退出代码: $?"; exit 1' ERR
           
           BUILD_DIR="${{ env.BUILD_DIR }}"
           cd "$BUILD_DIR"
@@ -767,17 +842,17 @@ jobs:
           fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 12 完成"
+          echo "🟢 步骤 13 完成"
       
-      # 步骤 13: 智能配置生成 - 重新复制支持文件
-      - name: "13. 智能配置生成 - 重新复制支持文件"
+      # 步骤 14: 智能配置生成 - 重新复制支持文件
+      - name: "14. 智能配置生成 - 重新复制支持文件"
         run: |
-          echo "=== 步骤 13: 智能配置生成 - 重新复制支持文件 ==="
+          echo "=== 步骤 14: 智能配置生成 - 重新复制支持文件 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 13 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 14 失败，退出代码: $?"; exit 1' ERR
           
           BUILD_DIR="${{ env.BUILD_DIR }}"
           
@@ -803,49 +878,49 @@ jobs:
           fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 13 完成"
+          echo "🟢 步骤 14 完成"
       
-      # 步骤 14: 验证USB配置
-      - name: "14. 验证USB配置"
+      # 步骤 15: 验证USB配置
+      - name: "15. 验证USB配置"
         run: |
-          echo "=== 步骤 14: 验证USB配置 ==="
+          echo "=== 步骤 15: 验证USB配置 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是验证
-          trap 'echo "⚠️ 步骤 14 验证过程中出现错误，继续执行..."' ERR
+          trap 'echo "⚠️ 步骤 15 验证过程中出现错误，继续执行..."' ERR
           
           BUILD_DIR="${{ env.BUILD_DIR }}"
           cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh verify_usb_config
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 14 完成"
+          echo "🟢 步骤 15 完成"
       
-      # 步骤 15: USB驱动完整性检查
-      - name: "15. USB驱动完整性检查"
+      # 步骤 16: USB驱动完整性检查
+      - name: "16. USB驱动完整性检查"
         run: |
-          echo "=== 步骤 15: USB驱动完整性检查 ==="
+          echo "=== 步骤 16: USB驱动完整性检查 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是检查
-          trap 'echo "⚠️ 步骤 15 检查过程中出现错误，继续执行..."' ERR
+          trap 'echo "⚠️ 步骤 16 检查过程中出现错误，继续执行..."' ERR
           
           BUILD_DIR="${{ env.BUILD_DIR }}"
           cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh check_usb_drivers_integrity
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 15 完成"
+          echo "🟢 步骤 16 完成"
       
-      # 步骤 16: 应用配置并显示详情（完整版）
-      - name: "16. 应用配置并显示详情（完整版）"
+      # 步骤 17: 应用配置并显示详情（完整版）
+      - name: "17. 应用配置并显示详情（完整版）"
         run: |
-          echo "=== 步骤 16: 应用配置并显示详情（完整版）==="
+          echo "=== 步骤 17: 应用配置并显示详情（完整版）==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 16 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 17 失败，退出代码: $?"; exit 1' ERR
           
           BUILD_DIR="${{ env.BUILD_DIR }}"
           cd "$BUILD_DIR"
@@ -893,17 +968,17 @@ jobs:
           
           echo ""
           echo "✅ 配置应用完成"
-          echo "🟢 步骤 16 完成"
+          echo "🟢 步骤 17 完成"
       
-      # 步骤 17: 检查并备份配置文件
-      - name: "17. 检查并备份配置文件"
+      # 步骤 18: 检查并备份配置文件
+      - name: "18. 检查并备份配置文件"
         run: |
-          echo "=== 步骤 17: 检查并备份配置文件 ==="
+          echo "=== 步骤 18: 检查并备份配置文件 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 17 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 18 失败，退出代码: $?"; exit 1' ERR
           
           BUILD_DIR="${{ env.BUILD_DIR }}"
           cd "$BUILD_DIR"
@@ -928,33 +1003,33 @@ jobs:
             exit 1
           fi
           
-          echo "🟢 步骤 17 完成"
+          echo "🟢 步骤 18 完成"
       
-      # 步骤 18: 修复网络环境
-      - name: "18. 修复网络环境"
+      # 步骤 19: 修复网络环境
+      - name: "19. 修复网络环境"
         run: |
-          echo "=== 步骤 18: 修复网络环境 ==="
+          echo "=== 步骤 19: 修复网络环境 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是尝试修复
-          trap 'echo "⚠️ 步骤 18 修复过程中出现错误，继续执行..."' ERR
+          trap 'echo "⚠️ 步骤 19 修复过程中出现错误，继续执行..."' ERR
           
           BUILD_DIR="${{ env.BUILD_DIR }}"
           cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh fix_network
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 18 完成"
+          echo "🟢 步骤 19 完成"
       
-      # 步骤 19: 下载依赖包（优化版）
-      - name: "19. 下载依赖包（优化版）"
+      # 步骤 20: 下载依赖包（优化版）
+      - name: "20. 下载依赖包（优化版）"
         run: |
-          echo "=== 步骤 19: 下载依赖包（优化版） ==="
+          echo "=== 步骤 20: 下载依赖包（优化版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 19 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 20 失败，退出代码: $?"; exit 1' ERR
           
           BUILD_DIR="${{ env.BUILD_DIR }}"
           cd "$BUILD_DIR"
@@ -986,16 +1061,16 @@ jobs:
           echo "📊 下载后依赖包数量: $NEW_DEP_COUNT 个"
           echo "📈 新增依赖包: $((NEW_DEP_COUNT - DEP_COUNT)) 个"
           
-          echo "🟢 步骤 19 完成"
+          echo "🟢 步骤 20 完成"
       
-      # 步骤 20: 集成自定义文件（增强版）
-      - name: "20. 集成自定义文件（增强版）"
+      # 步骤 21: 集成自定义文件（增强版）
+      - name: "21. 集成自定义文件（增强版）"
         run: |
-          echo "=== 步骤 20: 集成自定义文件（增强版）==="
+          echo "=== 步骤 21: 集成自定义文件（增强版）==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是尝试集成
-          trap 'echo "⚠️ 步骤 20 集成过程中出现错误，继续执行..."' ERR
+          trap 'echo "⚠️ 步骤 21 集成过程中出现错误，继续执行..."' ERR
           
           echo "🔍 检查自定义文件目录..."
           CUSTOM_DIR="${{ github.workspace }}/firmware-config/custom-files"
@@ -1174,17 +1249,17 @@ jobs:
           fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 20 完成"
+          echo "🟢 步骤 21 完成"
       
-      # 步骤 21: 前置错误检查（修复23.05 SDK验证）- 关键修复
-      - name: "21. 前置错误检查（修复23.05 SDK验证）"
+      # 步骤 22: 前置错误检查（修复23.05 SDK验证）- 关键修复
+      - name: "22. 前置错误检查（修复23.05 SDK验证）"
         run: |
-          echo "=== 步骤 21: 前置错误检查（修复23.05 SDK验证） ==="
+          echo "=== 步骤 22: 前置错误检查（修复23.05 SDK验证） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 21 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 22 失败，退出代码: $?"; exit 1' ERR
           
           echo "🔍 检查当前环境..."
           BUILD_DIR="${{ env.BUILD_DIR }}"
@@ -1216,17 +1291,17 @@ jobs:
           fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 21 完成"
+          echo "🟢 步骤 22 完成"
       
-      # 步骤 22: 编译固件前的空间检查
-      - name: "22. 编译固件前的空间检查"
+      # 步骤 23: 编译固件前的空间检查
+      - name: "23. 编译固件前的空间检查"
         run: |
-          echo "=== 步骤 22: 编译固件前的空间检查 ==="
+          echo "=== 步骤 23: 编译固件前的空间检查 ==="
           echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 22 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 23 失败，退出代码: $?"; exit 1' ERR
           
           df -h
           BUILD_DIR="${{ env.BUILD_DIR }}"
@@ -1262,17 +1337,17 @@ jobs:
             fi
           fi
           
-          echo "🟢 步骤 22 完成"
+          echo "🟢 步骤 23 完成"
       
-      # 步骤 23: 编译固件（智能并行优化版）
-      - name: "23. 编译固件（智能并行优化版）"
+      # 步骤 24: 编译固件（智能并行优化版）
+      - name: "24. 编译固件（智能并行优化版）"
         run: |
-          echo "=== 步骤 23: 编译固件（智能并行优化版） ==="
+          echo "=== 步骤 24: 编译固件（智能并行优化版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 23 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 24 失败，退出代码: $?"; exit 1' ERR
           
           BUILD_DIR="${{ env.BUILD_DIR }}"
           cd "$BUILD_DIR"
@@ -1363,18 +1438,18 @@ jobs:
             exit $BUILD_EXIT_CODE
           fi
           
-          echo "🟢 步骤 23 完成"
+          echo "🟢 步骤 24 完成"
       
-      # 步骤 24: 检查构建产物（修复版）
-      - name: "24. 检查构建产物（修复版）"
+      # 步骤 25: 检查构建产物（修复版）
+      - name: "25. 检查构建产物（修复版）"
         if: success()
         run: |
-          echo "=== 步骤 24: 检查构建产物（修复版） ==="
+          echo "=== 步骤 25: 检查构建产物（修复版） ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
-          trap 'echo "❌ 步骤 24 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤 25 失败，退出代码: $?"; exit 1' ERR
           
           BUILD_DIR="${{ env.BUILD_DIR }}"
           cd "$BUILD_DIR"
@@ -1474,10 +1549,10 @@ jobs:
           fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "🟢 步骤 24 完成"
+          echo "🟢 步骤 25 完成"
       
-      # 步骤 25: 上传固件原始目录
-      - name: "25. 上传固件原始目录"
+      # 步骤 26: 上传固件原始目录
+      - name: "26. 上传固件原始目录"
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -1486,8 +1561,8 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 26: 上传配置文件
-      - name: "26. 上传配置文件"
+      # 步骤 27: 上传配置文件
+      - name: "27. 上传配置文件"
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -1496,15 +1571,15 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 27: 编译后空间检查（修复版）
-      - name: "27. 编译后空间检查（修复版）"
+      # 步骤 28: 编译后空间检查（修复版）
+      - name: "28. 编译后空间检查（修复版）"
         if: always()
         run: |
-          echo "=== 步骤 27: 编译后空间检查（修复版） ==="
+          echo "=== 步骤 28: 编译后空间检查（修复版） ==="
           echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是检查
-          trap 'echo "⚠️ 步骤 27 检查过程中出现错误，继续执行..."' ERR
+          trap 'echo "⚠️ 步骤 28 检查过程中出现错误，继续执行..."' ERR
           
           echo "📊 磁盘使用情况:"
           df -h
@@ -1536,17 +1611,18 @@ jobs:
             fi
           fi
           
-          echo "🟢 步骤 27 完成"
+          echo "🟢 步骤 28 完成"
       
-      # 步骤 28: 编译后总结（增强版）- 无SSH测试
-      - name: "28. 编译后总结（增强版）- 无SSH测试"
+      # 步骤 29: 编译后总结（增强版）- 无SSH测试
+      - name: "29. 编译后总结（增强版）- 无SSH测试"
+        id: final-summary
         if: always()
         run: |
-          echo "=== 步骤 28: 编译后总结（增强版）- 无SSH测试 ==="
+          echo "=== 步骤 29: 编译后总结（增强版）- 无SSH测试 ==="
           echo "🕐 总结时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，总结不应该失败
-          trap 'echo "⚠️ 步骤 28 总结过程中出现错误，继续执行..."' ERR
+          trap 'echo "⚠️ 步骤 29 总结过程中出现错误，继续执行..."' ERR
           
           echo "🚀 构建总结报告"
           echo "========================================"
@@ -1555,6 +1631,8 @@ jobs:
           echo "配置模式: ${{ github.event.inputs.config_mode }}"
           echo "时间戳: ${{ env.TIMESTAMP }}"
           echo "并行优化: ${{ github.event.inputs.enable_parallel }}"
+          echo "构建来源: ${{ env.BUILD_SOURCE }}"
+          echo "构建ID: ${{ env.BUILD_ID }}"
           echo ""
           
           BUILD_DIR="${{ env.BUILD_DIR }}"
@@ -1571,6 +1649,10 @@ jobs:
             if [ $FIRMWARE_COUNT -gt 0 ]; then
               echo "  产物位置: $BUILD_DIR/bin/targets/"
               echo "  下载名称: firmware-${{ env.TIMESTAMP }}"
+              echo "  构建状态: ✅ 成功"
+              
+              # 设置步骤输出
+              echo "build_status=success" >> $GITHUB_OUTPUT
               
               # 显示所有固件文件信息
               echo "  固件文件详情:"
@@ -1590,24 +1672,14 @@ jobs:
                 
                 echo "    🎯 $FILE_NAME ($SIZE) - $TYPE"
               done
-              
-              # 统计包文件
-              PACKAGE_COUNT=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.gz" -o -name "*.ipk" \) 2>/dev/null | wc -l)
-              OTHER_COUNT=$(find "$BUILD_DIR/bin/targets" -type f 2>/dev/null | wc -l)
-              OTHER_COUNT=$((OTHER_COUNT - FIRMWARE_COUNT - PACKAGE_COUNT))
-              
-              echo "  包文件数量: $PACKAGE_COUNT 个 (.gz/.ipk)"
-              echo "  其他文件数量: $OTHER_COUNT 个"
             else
-              echo "  ⚠️ 构建结果: 编译完成但未生成固件文件"
-              echo "  🔍 已生成的其他文件:"
-              find "$BUILD_DIR/bin/targets" -type f 2>/dev/null | head -5 | while read file; do
-                SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                echo "    📄 $(basename "$file") ($SIZE)"
-              done
+              echo "  构建状态: ⚠️ 编译完成但未生成固件文件"
+              echo "build_status=warning" >> $GITHUB_OUTPUT
             fi
           else
             echo "📦 构建产物: 未生成任何文件"
+            echo "  构建状态: ❌ 失败"
+            echo "build_status=failed" >> $GITHUB_OUTPUT
           fi
           
           # 构建状态总结
@@ -1624,140 +1696,113 @@ jobs:
             echo "  ❌ 构建结果: 失败"
           fi
           
-          # 编译器信息
+          # 构建完成时间
           echo ""
-          echo "🔧 编译器信息:"
-          
-          # 检查SDK编译器版本
-          if [ -d "$BUILD_DIR/sdk" ]; then
-            # 查找真正的GCC，排除虚假编译器
-            GCC_FILE=$(find "$BUILD_DIR/sdk" -type f -executable \
-              -name "*gcc" \
-              ! -name "*gcc-ar" \
-              ! -name "*gcc-ranlib" \
-              ! -name "*gcc-nm" \
-              ! -path "*dummy-tools*" \
-              ! -path "*scripts*" \
-              2>/dev/null | head -1)
-            
-            if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
-              SDK_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
-              MAJOR_VERSION=$(echo "$SDK_VERSION" | grep -o "[0-9]\+" | head -1)
-              
-              if [ "$MAJOR_VERSION" = "12" ]; then
-                echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
-                echo "  🎯 SDK GCC: 12.3.0 (OpenWrt 23.05 SDK，用于交叉编译固件)"
-              elif [ "$MAJOR_VERSION" = "8" ]; then
-                echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
-                echo "  🎯 SDK GCC: 8.4.0 (OpenWrt 21.02 SDK，用于交叉编译固件)"
-              else
-                echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
-                echo "  🎯 SDK GCC: $MAJOR_VERSION.x (用于交叉编译固件)"
-              fi
-            else
-              echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
-              echo "  🎯 SDK GCC: 未检测到版本（可能检测到虚假的dummy-tools编译器）"
-            fi
-          else
-            echo "  🖥️ 系统GCC: 11.4.0 (用于编译工具链)"
-            echo "  🎯 SDK GCC: 未下载SDK，使用自动构建的编译器"
-          fi
-          
-          echo "  💡 这是正常的：系统编译器编译工具链，SDK编译器编译固件"
-          
-          # 自定义文件集成状态（增强版）
-          echo ""
-          echo "📁 自定义文件集成状态（增强版）:"
-          
-          # 检查自定义文件目录
-          if [ -d "$BUILD_DIR/files/etc/custom-files" ]; then
-            # 重新统计
-            CUSTOM_IPK_COUNT=0
-            CUSTOM_SCRIPT_COUNT=0
-            CUSTOM_CONFIG_COUNT=0
-            CUSTOM_OTHER_COUNT=0
-            CUSTOM_ENGLISH_COUNT=0
-            CUSTOM_NON_ENGLISH_COUNT=0
-            
-            find "$BUILD_DIR/files/etc/custom-files" -type f 2>/dev/null | while read file; do
-              file_name=$(basename "$file")
-              
-              # 检查是否为英文文件名 - 使用修复版检测
-              if [[ "$file_name" =~ ^[a-zA-Z0-9_.\-]+$ ]]; then
-                CUSTOM_ENGLISH_COUNT=$((CUSTOM_ENGLISH_COUNT + 1))
-              else
-                CUSTOM_NON_ENGLISH_COUNT=$((CUSTOM_NON_ENGLISH_COUNT + 1))
-              fi
-              
-              # 文件类型统计
-              if [[ "$file_name" =~ \.ipk$ ]] || [[ "$file_name" =~ \.IPK$ ]] || [[ "$file_name" =~ \.Ipk$ ]]; then
-                CUSTOM_IPK_COUNT=$((CUSTOM_IPK_COUNT + 1))
-              elif [[ "$file_name" =~ \.sh$ ]] || [[ "$file_name" =~ \.Sh$ ]] || [[ "$file_name" =~ \.SH$ ]]; then
-                CUSTOM_SCRIPT_COUNT=$((CUSTOM_SCRIPT_COUNT + 1))
-              elif [[ "$file_name" =~ \.conf$ ]] || [[ "$file_name" =~ \.config$ ]] || [[ "$file_name" =~ \.CONF$ ]]; then
-                CUSTOM_CONFIG_COUNT=$((CUSTOM_CONFIG_COUNT + 1))
-              else
-                CUSTOM_OTHER_COUNT=$((CUSTOM_OTHER_COUNT + 1))
-              fi
-            done
-            
-            TOTAL_CUSTOM_FILES=$((CUSTOM_IPK_COUNT + CUSTOM_SCRIPT_COUNT + CUSTOM_CONFIG_COUNT + CUSTOM_OTHER_COUNT))
-            
-            echo "  ✅ 自定义文件总数: $TOTAL_CUSTOM_FILES 个"
-            echo "  📦 IPK包: $CUSTOM_IPK_COUNT 个"
-            echo "  📜 脚本: $CUSTOM_SCRIPT_COUNT 个"
-            echo "  ⚙️ 配置文件: $CUSTOM_CONFIG_COUNT 个"
-            echo "  📁 其他文件: $CUSTOM_OTHER_COUNT 个"
-            echo "  ✅ 英文文件名: $CUSTOM_ENGLISH_COUNT 个"
-            echo "  ⚠️ 非英文文件名: $CUSTOM_NON_ENGLISH_COUNT 个"
-            echo "  📌 位置: /etc/custom-files/"
-            echo "  📁 日志位置: /root/logs/（重启不丢失）"
-            
-            if [ -f "$BUILD_DIR/files/etc/uci-defaults/99-custom-files" ]; then
-              echo "  ✅ 第一次开机安装脚本: 已创建（增强版）"
-              echo "  💡 安装顺序: IPK包 → 脚本文件 → 其他文件"
-              echo "  🔧 错误处理: 单个文件失败不影响其他文件"
-              echo "  📊 详细日志: 记录每个文件的处理结果"
-            fi
-            
-            if [ $CUSTOM_NON_ENGLISH_COUNT -gt 0 ]; then
-              echo ""
-              echo "💡 文件名兼容性提示:"
-              echo "  当前有 $CUSTOM_NON_ENGLISH_COUNT 个文件使用非英文文件名"
-              echo "  建议改为英文文件名以获得更好的兼容性"
-              echo "  可以在固件启动后运行: /etc/custom-files/check_filenames.sh"
-            fi
-            
-            # 显示所有文件，不只前5个
-            if [ $TOTAL_CUSTOM_FILES -gt 0 ]; then
-              echo ""
-              echo "📋 所有文件列表:"
-              find "$BUILD_DIR/files/etc/custom-files" -type f 2>/dev/null | while read file; do
-                rel_path="${file#$BUILD_DIR/files/etc/custom-files/}"
-                size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                echo "    📄 $rel_path ($size)"
-              done
-            fi
-            
-            echo ""
-            echo "🎯 增强功能说明:"
-            echo "  🔧 递归查找: 支持自定义目录下的所有子目录"
-            echo "  📝 保持原文件名: 不自动重命名，保持用户设置的文件名"
-            echo "  🔄 错误不退出: IPK安装失败继续安装下一个"
-            echo "  📊 详细日志: 记录每个文件的处理结果和统计信息"
-            echo "  📁 持久日志: 日志存储在 /root/logs/（重启不丢失）"
-            
-          else
-            echo "  ⚪ 自定义文件: 未集成"
-          fi
-          
-          # 文件名兼容性建议 - 简化版本
-          echo ""
-          echo "💡 文件名兼容性建议:"
-          echo "  为了更好的兼容性，方便复制、运行，建议自定义文件使用英文文件名"
-          echo "  当前系统支持非英文文件名，但英文名有更好的兼容性"
-          
+          echo "📅 构建时间线:"
+          echo "  开始时间: $(date -d @${{ github.run_started_at }} '+%Y-%m-%d %H:%M:%S')"
+          echo "  结束时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo ""
           echo "✅ 构建流程完成"
           echo "========================================"
-          echo "🟢 步骤 28 完成"
+          echo "🟢 步骤 29 完成"
+      
+      # 步骤 30: 创建构建状态文件（用于网页显示）
+      - name: "30. 创建构建状态文件"
+        if: always()
+        run: |
+          echo "=== 步骤 30: 创建构建状态文件 ==="
+          echo "🕐 创建时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          
+          # 创建构建状态目录
+          mkdir -p /tmp/build-status
+          
+          # 构建状态信息
+          BUILD_STATUS="{
+            \"build_id\": \"${{ env.BUILD_ID }}\",
+            \"workflow_id\": \"${{ github.run_id }}\",
+            \"workflow_number\": \"${{ github.run_number }}\",
+            \"repository\": \"${{ github.repository }}\",
+            \"device\": \"${{ github.event.inputs.device_name }}\",
+            \"version\": \"${{ github.event.inputs.version_selection }}\",
+            \"mode\": \"${{ github.event.inputs.config_mode }}\",
+            \"source\": \"${{ env.BUILD_SOURCE }}\",
+            \"status\": \"${{ job.status }}\",
+            \"timestamp\": \"${{ env.TIMESTAMP }}\",
+            \"start_time\": \"$(date -d @${{ github.run_started_at }} '+%Y-%m-%dT%H:%M:%SZ')\",
+            \"end_time\": \"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\",
+            \"workflow_url\": \"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\",
+            \"artifacts_url\": \"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\",
+            \"firmware_count\": 0,
+            \"firmware_files\": []
+          }"
+          
+          # 检查是否有固件文件
+          BUILD_DIR="${{ env.BUILD_DIR }}"
+          if [ -d "$BUILD_DIR/bin/targets" ]; then
+            FIRMWARE_COUNT=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+            
+            # 更新状态信息
+            BUILD_STATUS=$(echo "$BUILD_STATUS" | jq --arg count "$FIRMWARE_COUNT" '.firmware_count = ($count | tonumber)')
+            
+            # 添加固件文件信息
+            if [ $FIRMWARE_COUNT -gt 0 ]; then
+              FIRMWARE_FILES_JSON="[]"
+              find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
+                SIZE=$(stat -c%s "$file" 2>/dev/null || echo "0")
+                FILE_NAME=$(basename "$file")
+                REL_PATH=$(echo "$file" | sed "s|$BUILD_DIR/||")
+                
+                FILE_INFO="{
+                  \"name\": \"$FILE_NAME\",
+                  \"size\": $SIZE,
+                  \"path\": \"$REL_PATH\"
+                }"
+                
+                FIRMWARE_FILES_JSON=$(echo "$FIRMWARE_FILES_JSON" | jq --argjson info "$FILE_INFO" '. += [$info]')
+              done
+              
+              BUILD_STATUS=$(echo "$BUILD_STATUS" | jq --argjson files "$FIRMWARE_FILES_JSON" '.firmware_files = $files')
+            fi
+          fi
+          
+          # 保存状态文件
+          echo "$BUILD_STATUS" > /tmp/build-status/status.json
+          
+          # 格式化输出
+          echo "📄 构建状态文件已创建:"
+          echo "$BUILD_STATUS" | jq .
+          
+          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🟢 步骤 30 完成"
+      
+      # 步骤 31: 上传构建状态文件
+      - name: "31. 上传构建状态文件"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-status-${{ env.TIMESTAMP }}
+          path: /tmp/build-status/
+          retention-days: 7
+          if-no-files-found: error
+
+  # 新增：构建结果通知（可选）
+  notify:
+    name: "📢 构建结果通知"
+    needs: build-firmware
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: "显示构建结果"
+        run: |
+          echo "=== 📢 构建结果通知 ==="
+          echo "构建ID: ${{ needs.build-firmware.outputs.build_id }}"
+          echo "构建状态: ${{ needs.build-firmware.outputs.build_status }}"
+          echo "工作流运行: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          
+          if [ "${{ needs.build-firmware.outputs.build_status }}" = "success" ]; then
+            echo "🎉 构建成功！可以下载固件了。"
+          elif [ "${{ needs.build-firmware.outputs.build_status }}" = "warning" ]; then
+            echo "⚠️ 构建完成但可能有警告，请检查日志。"
+          else
+            echo "❌ 构建失败，请查看详细日志。"
+          fi
