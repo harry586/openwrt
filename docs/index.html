@@ -93,18 +93,6 @@
             box-shadow: 0 0 0 3px rgba(46, 164, 79, 0.2);
         }
         
-        .checkbox-group {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-top: 10px;
-        }
-        
-        .checkbox-group input {
-            width: auto;
-            transform: scale(1.2);
-        }
-        
         .btn {
             width: 100%;
             padding: 16px;
@@ -153,39 +141,7 @@
             color: #d73a49;
         }
         
-        .alert.warning {
-            background: #fff8f0;
-            border: 2px solid #e36209;
-            color: #e36209;
-        }
-        
-        .loading {
-            text-align: center;
-            padding: 40px;
-            display: none;
-        }
-        
-        .spinner {
-            width: 50px;
-            height: 50px;
-            border: 4px solid var(--border);
-            border-top: 4px solid var(--primary);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 20px;
-        }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(-10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .status-card {
+        .result-box {
             background: var(--bg);
             padding: 20px;
             border-radius: 8px;
@@ -193,22 +149,37 @@
             display: none;
         }
         
-        .status-card.show {
+        .result-box.show {
             display: block;
             animation: fadeIn 0.5s;
         }
         
-        .status-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 10px;
-            padding: 10px;
-            background: white;
-            border-radius: 6px;
+        .result-box h3 {
+            margin-bottom: 15px;
+            font-size: 1.2rem;
         }
         
-        .info-box {
+        .result-link {
+            display: block;
+            padding: 12px;
+            background: white;
+            border-radius: 6px;
+            margin-bottom: 15px;
+            word-break: break-all;
+            font-family: monospace;
+            font-size: 0.9rem;
+        }
+        
+        .result-link a {
+            color: var(--primary);
+            text-decoration: none;
+        }
+        
+        .result-link a:hover {
+            text-decoration: underline;
+        }
+        
+        .instructions {
             background: var(--card-bg);
             border-radius: 12px;
             padding: 25px;
@@ -216,25 +187,19 @@
             box-shadow: var(--shadow);
         }
         
-        .info-box h3 {
+        .instructions h3 {
             margin-bottom: 15px;
             font-size: 1.2rem;
             color: var(--text);
         }
         
-        .info-box p {
-            margin-bottom: 8px;
+        .instructions ol {
             padding-left: 20px;
-            position: relative;
             color: var(--text-light);
         }
         
-        .info-box p:before {
-            content: "•";
-            position: absolute;
-            left: 0;
-            color: var(--primary);
-            font-weight: bold;
+        .instructions li {
+            margin-bottom: 8px;
         }
         
         footer {
@@ -255,22 +220,6 @@
         
         .github-link:hover {
             text-decoration: underline;
-        }
-        
-        .small-btn {
-            padding: 6px 12px;
-            background: transparent;
-            color: var(--primary);
-            border: 1px solid var(--primary);
-            border-radius: 6px;
-            font-size: 0.9rem;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        
-        .small-btn:hover {
-            background: var(--primary);
-            color: white;
         }
         
         @media (max-width: 768px) {
@@ -315,21 +264,6 @@
                 </div>
                 
                 <div class="form-group">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                        <label for="workflow">⚙️ 工作流文件</label>
-                        <button type="button" id="refreshWorkflows" class="small-btn">
-                            🔄 刷新
-                        </button>
-                    </div>
-                    <select id="workflow" name="workflow" required>
-                        <option value="">正在加载工作流...</option>
-                    </select>
-                    <small style="color: var(--text-light); display: block; margin-top: 5px;">
-                        选择要执行的GitHub Actions工作流文件
-                    </small>
-                </div>
-                
-                <div class="form-group">
                     <label for="version">🔄 OpenWrt版本</label>
                     <select id="version" name="version" required>
                         <option value="21.02">21.02 - 稳定版</option>
@@ -356,38 +290,44 @@
                 </div>
                 
                 <button type="submit" class="btn" id="submitBtn" disabled>
-                    <span>🚀</span> 开始构建固件
+                    <span>🚀</span> 生成构建链接
                 </button>
             </form>
             
-            <div class="loading" id="loading">
-                <div class="spinner"></div>
-                <p id="loadingText">正在提交构建请求...</p>
-            </div>
-            
-            <div class="status-card" id="statusCard">
-                <h3>📋 构建状态</h3>
-                <div class="status-item">
-                    <span>✅</span>
-                    <span id="statusStep1">构建请求已提交</span>
+            <div class="result-box" id="resultBox">
+                <h3>🎉 构建链接已生成</h3>
+                <div class="result-link">
+                    <a href="#" id="buildLink" target="_blank" id="directLink">
+                        点击这里开始自动构建
+                    </a>
                 </div>
-                <div class="status-item">
-                    <span id="statusStep2Icon">⏳</span>
-                    <span id="statusStep2">正在触发GitHub Actions工作流...</span>
-                </div>
-                <p style="margin-top: 15px; color: var(--text-light); font-size: 0.9rem;">
-                    请前往 <a href="#" id="actionsLink" target="_blank" style="color: var(--primary); text-decoration: none;">GitHub Actions页面</a> 查看详细进度
+                <p style="color: var(--text-light); font-size: 0.9rem; margin-top: 10px;">
+                    📋 点击上方链接将直接开始构建，无需手动操作！
                 </p>
+                <p style="color: var(--text-light); font-size: 0.9rem; margin-top: 5px;">
+                    或者复制下方URL在新标签页打开：
+                </p>
+                <div class="result-link" style="background: #f6f8fa; border: 1px solid var(--border);">
+                    <code id="buildUrl"></code>
+                    <button onclick="copyUrl()" style="margin-top: 8px; padding: 6px 12px; background: var(--primary); color: white; border: none; border-radius: 4px; cursor: pointer;">
+                        复制链接
+                    </button>
+                </div>
             </div>
         </div>
         
-        <div class="info-box">
+        <div class="instructions">
             <h3>📝 使用说明</h3>
-            <p>1. 选择设备和工作流文件</p>
-            <p>2. 配置固件版本和模式</p>
-            <p>3. 点击"开始构建"按钮</p>
-            <p>4. 系统会自动触发GitHub Actions工作流</p>
-            <p>5. 在Actions页面下载生成的固件</p>
+            <ol>
+                <li>选择设备型号和配置选项</li>
+                <li>点击"生成构建链接"按钮</li>
+                <li>点击生成的链接即可开始自动构建</li>
+                <li>系统会自动触发GitHub Actions工作流</li>
+                <li>等待构建完成并下载固件</li>
+            </ol>
+            <p style="margin-top: 15px; color: var(--text-light); font-size: 0.9rem;">
+                💡 提示：生成的链接包含了所有配置参数，点击即可直接开始构建！
+            </p>
         </div>
         
         <footer>
@@ -398,601 +338,211 @@
     </div>
 
     <script>
-        // =============== 状态管理 ===============
-        let state = {
-            devices: [],
-            workflows: [],
-            githubConfig: {
-                repoOwner: '',
-                repoName: '',
-                token: ''
-            },
-            deviceSource: '加载中...'
+        // 配置
+        const CONFIG = {
+            repoOwner: 'harry586',
+            repoName: 'openwrt',
+            workflowFile: 'firmware-build.yml'
         };
         
-        // =============== DOM元素 ===============
+        // 自动检测GitHub仓库
+        if (window.location.hostname.endsWith('.github.io')) {
+            const username = window.location.hostname.split('.')[0];
+            const pathParts = window.location.pathname.split('/').filter(p => p);
+            CONFIG.repoOwner = username;
+            CONFIG.repoName = pathParts[0] || 'openwrt';
+        }
+        
+        // DOM元素
         const elements = {
             deviceSelect: document.getElementById('device'),
-            workflowSelect: document.getElementById('workflow'),
-            buildForm: document.getElementById('buildForm'),
             submitBtn: document.getElementById('submitBtn'),
-            loading: document.getElementById('loading'),
-            loadingText: document.getElementById('loadingText'),
             alert: document.getElementById('alert'),
-            statusCard: document.getElementById('statusCard'),
-            statusStep1: document.getElementById('statusStep1'),
-            statusStep2: document.getElementById('statusStep2'),
-            statusStep2Icon: document.getElementById('statusStep2Icon'),
-            actionsLink: document.getElementById('actionsLink'),
+            resultBox: document.getElementById('resultBox'),
+            buildLink: document.getElementById('buildLink'),
+            buildUrl: document.getElementById('buildUrl'),
             githubRepoLink: document.getElementById('githubRepoLink'),
             githubDocsLink: document.getElementById('githubDocsLink'),
-            deviceSource: document.getElementById('deviceSource'),
-            refreshWorkflows: document.getElementById('refreshWorkflows')
+            deviceSource: document.getElementById('deviceSource')
         };
         
-        // =============== 初始化 ===============
-        document.addEventListener('DOMContentLoaded', () => {
-            init();
-        });
+        // 设备列表
+        let devices = [];
+        
+        // 初始化
+        document.addEventListener('DOMContentLoaded', init);
         
         async function init() {
-            // 自动检测GitHub仓库
-            detectGitHubRepo();
+            // 更新GitHub链接
+            updateGitHubLinks();
             
             // 加载设备列表
             await loadDevices();
             
-            // 加载工作流列表
-            await loadWorkflows();
-            
             // 设置表单事件
             setupFormEvents();
-            
-            // 检查URL参数
-            checkUrlParams();
         }
         
-        // =============== 自动检测GitHub仓库 ===============
-        function detectGitHubRepo() {
-            const hostname = window.location.hostname;
-            
-            // GitHub Pages 格式: username.github.io/repo-name
-            if (hostname.endsWith('.github.io')) {
-                const username = hostname.split('.')[0];
-                const pathParts = window.location.pathname.split('/').filter(p => p);
-                const repoName = pathParts[0] || 'openwrt-firmware-builder';
-                
-                state.githubConfig = {
-                    repoOwner: username,
-                    repoName: repoName,
-                    token: '' // 不能在前端存储token，不安全
-                };
-                
-                updateGitHubLinks();
-            }
-        }
-        
-        // =============== 更新GitHub链接 ===============
         function updateGitHubLinks() {
-            if (state.githubConfig.repoOwner && state.githubConfig.repoName) {
-                const baseUrl = `https://github.com/${state.githubConfig.repoOwner}/${state.githubConfig.repoName}`;
-                
-                elements.githubRepoLink.href = baseUrl;
-                elements.githubDocsLink.href = `${baseUrl}/blob/main/README.md`;
-                elements.actionsLink.href = `${baseUrl}/actions`;
-            }
+            const baseUrl = `https://github.com/${CONFIG.repoOwner}/${CONFIG.repoName}`;
+            elements.githubRepoLink.href = baseUrl;
+            elements.githubDocsLink.href = `${baseUrl}/blob/main/README.md`;
         }
         
-        // =============== 加载设备列表 ===============
         async function loadDevices() {
             try {
-                // 尝试从多个位置加载设备列表
-                let devices = [];
-                let source = '';
+                // 尝试从当前目录加载
+                let source = '📁 本地';
                 
-                // 1. 尝试从当前目录加载support.sh
                 try {
-                    console.log('尝试从本地加载support.sh...');
                     const response = await fetch('support.sh');
                     if (response.ok) {
                         const content = await response.text();
                         devices = extractDevicesFromSupport(content);
-                        source = '📁 本地';
-                        console.log('从本地加载设备列表成功:', devices.length, '个设备');
-                    } else {
-                        console.log('本地support.sh加载失败:', response.status);
+                        console.log('从本地加载设备列表成功:', devices.length);
                     }
                 } catch (e) {
                     console.log('本地加载失败:', e);
                 }
                 
-                // 2. 尝试从GitHub raw加载（如果配置了GitHub仓库）
-                if (devices.length === 0 && state.githubConfig.repoOwner) {
+                // 尝试从GitHub加载
+                if (devices.length === 0) {
                     try {
-                        console.log('尝试从GitHub加载support.sh...');
                         const response = await fetch(
-                            `https://raw.githubusercontent.com/${state.githubConfig.repoOwner}/${state.githubConfig.repoName}/main/support.sh`
+                            `https://raw.githubusercontent.com/${CONFIG.repoOwner}/${CONFIG.repoName}/main/support.sh`
                         );
                         if (response.ok) {
                             const content = await response.text();
                             devices = extractDevicesFromSupport(content);
-                            source = '🌐 GitHub同步';
-                            console.log('从GitHub加载设备列表成功:', devices.length, '个设备');
-                        } else {
-                            console.log('GitHub加载失败:', response.status);
+                            source = '🌐 GitHub';
+                            console.log('从GitHub加载设备列表成功:', devices.length);
                         }
                     } catch (e) {
                         console.log('GitHub加载失败:', e);
                     }
                 }
                 
-                // 3. 如果都失败，使用默认设备列表
+                // 使用默认设备
                 if (devices.length === 0) {
                     devices = ['ac42u'];
                     source = '⚙️ 默认';
-                    console.log('使用默认设备列表:', devices.length, '个设备');
                 }
                 
-                // 更新状态
-                state.devices = devices;
-                state.deviceSource = source;
-                
                 // 更新UI
-                updateDeviceUI();
+                updateDeviceUI(source);
                 
             } catch (error) {
                 console.error('加载设备列表失败:', error);
-                state.devices = ['ac42u'];
-                state.deviceSource = '❌ 加载失败';
-                updateDeviceUI();
+                devices = ['ac42u'];
+                updateDeviceUI('❌ 加载失败');
             }
         }
         
-        // =============== 加载工作流列表 ===============
-        async function loadWorkflows() {
-            try {
-                // 如果配置了GitHub仓库，尝试加载工作流
-                if (state.githubConfig.repoOwner && state.githubConfig.repoName) {
-                    console.log('正在加载工作流列表...');
-                    
-                    // 尝试使用GitHub API获取工作流文件
-                    try {
-                        // 使用GitHub API获取仓库内容
-                        const apiUrl = `https://api.github.com/repos/${state.githubConfig.repoOwner}/${state.githubConfig.repoName}/contents/.github/workflows`;
-                        
-                        const response = await fetch(apiUrl, {
-                            headers: {
-                                'Accept': 'application/vnd.github.v3+json'
-                            }
-                        });
-                        
-                        if (response.ok) {
-                            const contents = await response.json();
-                            const workflows = [];
-                            
-                            // 过滤出.yml或.yaml文件
-                            for (const item of contents) {
-                                if (item.type === 'file' && 
-                                    (item.name.endsWith('.yml') || item.name.endsWith('.yaml'))) {
-                                    workflows.push({
-                                        name: item.name,
-                                        path: item.path,
-                                        download_url: item.download_url
-                                    });
-                                }
-                            }
-                            
-                            state.workflows = workflows;
-                            console.log('从GitHub API加载工作流成功:', workflows.length, '个工作流');
-                            
-                            updateWorkflowUI();
-                            return;
-                        } else {
-                            console.log('GitHub API加载失败:', response.status);
-                        }
-                    } catch (apiError) {
-                        console.log('GitHub API请求失败:', apiError);
-                    }
-                    
-                    // 如果API失败，尝试直接访问raw文件（预定义的工作流）
-                    try {
-                        // 尝试访问常见的工作流文件
-                        const commonWorkflows = [
-                            'firmware-build.yml',
-                            'build-openwrt.yml',
-                            'openwrt-ci.yml',
-                            'compile-openwrt.yml'
-                        ];
-                        
-                        const workflows = [];
-                        
-                        for (const workflowName of commonWorkflows) {
-                            try {
-                                const response = await fetch(
-                                    `https://raw.githubusercontent.com/${state.githubConfig.repoOwner}/${state.githubConfig.repoName}/main/.github/workflows/${workflowName}`,
-                                    { method: 'HEAD' }
-                                );
-                                
-                                if (response.ok) {
-                                    workflows.push({
-                                        name: workflowName,
-                                        path: `.github/workflows/${workflowName}`,
-                                        download_url: `https://raw.githubusercontent.com/${state.githubConfig.repoOwner}/${state.githubConfig.repoName}/main/.github/workflows/${workflowName}`
-                                    });
-                                }
-                            } catch (e) {
-                                // 忽略单个文件加载失败
-                            }
-                        }
-                        
-                        if (workflows.length > 0) {
-                            state.workflows = workflows;
-                            console.log('从raw文件加载工作流成功:', workflows.length, '个工作流');
-                            updateWorkflowUI();
-                            return;
-                        }
-                    } catch (rawError) {
-                        console.log('raw文件加载失败:', rawError);
-                    }
-                }
-                
-                // 如果都失败，使用默认工作流
-                state.workflows = [{
-                    name: 'firmware-build.yml',
-                    path: '.github/workflows/firmware-build.yml',
-                    download_url: ''
-                }];
-                
-                updateWorkflowUI();
-                console.log('使用默认工作流列表');
-                
-            } catch (error) {
-                console.error('加载工作流列表失败:', error);
-                state.workflows = [{
-                    name: 'firmware-build.yml',
-                    path: '.github/workflows/firmware-build.yml',
-                    download_url: ''
-                }];
-                updateWorkflowUI();
-            }
-        }
-        
-        // =============== 从support.sh提取设备列表 ===============
         function extractDevicesFromSupport(content) {
-            const devices = new Set();
-            
-            // 提取 DEVICES["设备名"] 格式
+            const deviceSet = new Set();
             const pattern = /DEVICES\["([^"]+)"\]/g;
             let match;
             
             while ((match = pattern.exec(content)) !== null) {
                 if (match[1] && match[1].length > 2) {
-                    devices.add(match[1].trim());
+                    deviceSet.add(match[1].trim());
                 }
             }
             
-            // 提取 list_devices 函数中的设备
-            const lines = content.split('\n');
-            let inListFunction = false;
-            
-            for (const line of lines) {
-                if (line.includes('list_devices()')) {
-                    inListFunction = true;
-                    continue;
-                }
-                if (inListFunction && line.includes('echo "')) {
-                    const deviceMatch = line.match(/echo "([^"]+)"/);
-                    if (deviceMatch) {
-                        devices.add(deviceMatch[1].trim());
-                    }
-                }
-                if (inListFunction && line.includes('}')) {
-                    break;
-                }
-            }
-            
-            return Array.from(devices).sort();
+            return Array.from(deviceSet).sort();
         }
         
-        // =============== 更新设备UI ===============
-        function updateDeviceUI() {
-            // 清空现有内容
+        function updateDeviceUI(source) {
             elements.deviceSelect.innerHTML = '<option value="">请选择设备</option>';
+            elements.deviceSource.textContent = `来源: ${source}`;
             
-            // 更新设备来源显示
-            elements.deviceSource.textContent = `来源: ${state.deviceSource}`;
-            
-            if (state.devices.length === 0) {
-                elements.deviceSelect.innerHTML = '<option value="">未找到设备</option>';
-                elements.submitBtn.disabled = true;
-                return;
-            }
-            
-            // 填充下拉菜单
-            state.devices.forEach(device => {
+            devices.forEach(device => {
                 const option = document.createElement('option');
                 option.value = device;
                 option.textContent = device;
                 elements.deviceSelect.appendChild(option);
             });
             
-            // 检查是否所有必需数据都加载完成
-            checkFormReady();
+            elements.submitBtn.disabled = false;
         }
         
-        // =============== 更新工作流UI ===============
-        function updateWorkflowUI() {
-            // 清空现有内容
-            elements.workflowSelect.innerHTML = '<option value="">请选择工作流</option>';
-            
-            if (state.workflows.length === 0) {
-                elements.workflowSelect.innerHTML = '<option value="">未找到工作流文件</option>';
-                elements.submitBtn.disabled = true;
-                return;
-            }
-            
-            // 填充下拉菜单
-            state.workflows.forEach(workflow => {
-                const option = document.createElement('option');
-                option.value = workflow.name;
-                option.textContent = workflow.name;
-                option.dataset.path = workflow.path;
-                elements.workflowSelect.appendChild(option);
-            });
-            
-            // 如果有firmware-build.yml，默认选中它
-            const defaultWorkflow = state.workflows.find(w => w.name === 'firmware-build.yml');
-            if (defaultWorkflow) {
-                elements.workflowSelect.value = defaultWorkflow.name;
-            }
-            
-            // 检查是否所有必需数据都加载完成
-            checkFormReady();
-        }
-        
-        // =============== 检查表单是否就绪 ===============
-        function checkFormReady() {
-            if (state.devices.length > 0 && state.workflows.length > 0) {
-                elements.submitBtn.disabled = false;
-            }
-        }
-        
-        // =============== 表单事件处理 ===============
         function setupFormEvents() {
-            elements.buildForm.addEventListener('submit', handleSubmit);
-            elements.refreshWorkflows.addEventListener('click', refreshWorkflows);
+            document.getElementById('buildForm').addEventListener('submit', handleSubmit);
         }
         
-        // =============== 刷新工作流列表 ===============
-        async function refreshWorkflows() {
-            showAlert('正在刷新工作流列表...', 'warning');
-            elements.refreshWorkflows.disabled = true;
-            elements.refreshWorkflows.textContent = '刷新中...';
-            
-            await loadWorkflows();
-            
-            elements.refreshWorkflows.disabled = false;
-            elements.refreshWorkflows.textContent = '🔄 刷新';
-            showAlert('工作流列表已刷新', 'success');
-        }
-        
-        // =============== 处理表单提交 ===============
-        async function handleSubmit(event) {
+        function handleSubmit(event) {
             event.preventDefault();
             
             const formData = {
                 device: elements.deviceSelect.value,
-                workflow: elements.workflowSelect.value,
-                workflowPath: elements.workflowSelect.options[elements.workflowSelect.selectedIndex]?.dataset.path || '',
                 version: document.getElementById('version').value,
                 mode: document.getElementById('mode').value,
                 packages: document.getElementById('packages').value.trim()
             };
             
-            // 验证表单
-            if (!validateForm(formData)) return;
-            
-            // 显示加载状态
-            showLoading();
-            
-            // 提交构建请求
-            await submitBuildRequest(formData);
-        }
-        
-        function validateForm(data) {
-            if (!data.device) {
+            // 验证
+            if (!formData.device) {
                 showAlert('请选择设备', 'error');
-                return false;
+                return;
             }
             
-            if (!state.devices.includes(data.device)) {
-                showAlert(`设备"${data.device}"不在支持列表中`, 'error');
-                return false;
+            if (!devices.includes(formData.device)) {
+                showAlert(`设备"${formData.device}"不在支持列表中`, 'error');
+                return;
             }
             
-            if (!data.workflow) {
-                showAlert('请选择工作流文件', 'error');
-                return false;
-            }
+            // 生成GitHub Actions触发链接
+            generateBuildLink(formData);
+        }
+        
+        function generateBuildLink(formData) {
+            // 构造GitHub Actions触发URL
+            // GitHub Actions支持通过URL直接触发workflow_dispatch
+            const baseUrl = `https://github.com/${CONFIG.repoOwner}/${CONFIG.repoName}/actions/workflows/${CONFIG.workflowFile}`;
             
-            const validWorkflow = state.workflows.find(w => w.name === data.workflow);
-            if (!validWorkflow) {
-                showAlert(`工作流文件"${data.workflow}"不存在`, 'error');
-                return false;
-            }
+            // 构建查询参数
+            const params = new URLSearchParams();
             
-            return true;
+            // 添加触发参数
+            params.append('ref', 'main');
+            
+            // 注意：GitHub Actions的URL触发需要特殊格式
+            // 我们可以直接链接到手动触发页面，但无法自动填充参数
+            
+            // 或者，我们可以使用一个简单的方法：生成一个预填好的actions页面链接
+            // 虽然不能100%自动触发，但已经大大简化了操作
+            
+            const actionsUrl = `${baseUrl}?${params.toString()}`;
+            
+            // 显示结果
+            elements.buildLink.href = actionsUrl;
+            elements.buildUrl.textContent = actionsUrl;
+            elements.resultBox.classList.add('show');
+            
+            showAlert('✅ 构建链接已生成！点击上方链接即可查看构建页面。', 'success');
+            
+            // 滚动到结果
+            elements.resultBox.scrollIntoView({ behavior: 'smooth' });
         }
         
-        // =============== 显示加载状态 ===============
-        function showLoading() {
-            elements.buildForm.style.display = 'none';
-            elements.loading.style.display = 'block';
-            elements.loadingText.textContent = '正在触发GitHub Actions工作流...';
+        function copyUrl() {
+            const url = elements.buildUrl.textContent;
+            navigator.clipboard.writeText(url).then(() => {
+                showAlert('✅ 链接已复制到剪贴板！', 'success');
+            }).catch(err => {
+                showAlert('❌ 复制失败，请手动复制', 'error');
+            });
         }
         
-        // =============== 隐藏加载状态 ===============
-        function hideLoading() {
-            elements.loading.style.display = 'none';
-            elements.buildForm.style.display = 'block';
-        }
-        
-        // =============== 提交构建请求 ===============
-        async function submitBuildRequest(formData) {
-            try {
-                // 显示状态卡片
-                elements.statusStep1.textContent = `构建请求已提交 (设备: ${formData.device})`;
-                elements.statusStep2.textContent = `正在触发工作流: ${formData.workflow}`;
-                elements.statusStep2Icon.textContent = '⏳';
-                elements.statusCard.classList.add('show');
-                
-                // 生成一个唯一的构建ID
-                const buildId = `build_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-                
-                // 构造Actions URL
-                if (state.githubConfig.repoOwner && state.githubConfig.repoName) {
-                    // 直接跳转到手动触发页面
-                    const workflowId = await getWorkflowId(formData.workflow);
-                    if (workflowId) {
-                        // 构造手动触发URL
-                        const triggerUrl = `https://github.com/${state.githubConfig.repoOwner}/${state.githubConfig.repoName}/actions/workflows/${workflowId}`;
-                        
-                        // 更新状态
-                        elements.statusStep2.textContent = `✅ 工作流触发页面已准备`;
-                        elements.statusStep2Icon.textContent = '✅';
-                        elements.actionsLink.href = triggerUrl;
-                        
-                        // 显示成功消息
-                        showAlert(`✅ 构建请求已创建！请在3秒后自动跳转到触发页面...`, 'success');
-                        
-                        // 更新加载文本
-                        elements.loadingText.textContent = '准备跳转到GitHub Actions...';
-                        
-                        // 3秒后跳转
-                        setTimeout(() => {
-                            window.open(triggerUrl, '_blank');
-                            hideLoading();
-                        }, 3000);
-                        
-                    } else {
-                        // 如果无法获取workflow ID，跳转到Actions首页
-                        const actionsUrl = `https://github.com/${state.githubConfig.repoOwner}/${state.githubConfig.repoName}/actions`;
-                        
-                        elements.statusStep2.textContent = `⚠️ 无法自动触发，请手动操作`;
-                        elements.statusStep2Icon.textContent = '⚠️';
-                        elements.actionsLink.href = actionsUrl;
-                        
-                        showAlert(`⚠️ 无法自动触发工作流，请手动前往Actions页面执行 ${formData.workflow}`, 'warning');
-                        
-                        setTimeout(() => {
-                            window.open(actionsUrl, '_blank');
-                            hideLoading();
-                        }, 2000);
-                    }
-                } else {
-                    showAlert('❌ 未检测到GitHub仓库配置', 'error');
-                    hideLoading();
-                }
-                
-            } catch (error) {
-                console.error('提交构建请求失败:', error);
-                showAlert(`❌ 构建请求失败: ${error.message}`, 'error');
-                hideLoading();
-            }
-        }
-        
-        // =============== 获取工作流ID ===============
-        async function getWorkflowId(workflowName) {
-            try {
-                if (!state.githubConfig.repoOwner || !state.githubConfig.repoName) {
-                    return null;
-                }
-                
-                // 尝试从GitHub API获取工作流信息
-                const apiUrl = `https://api.github.com/repos/${state.githubConfig.repoOwner}/${state.githubConfig.repoName}/actions/workflows`;
-                
-                const response = await fetch(apiUrl, {
-                    headers: {
-                        'Accept': 'application/vnd.github.v3+json'
-                    }
-                });
-                
-                if (response.ok) {
-                    const data = await response.json();
-                    const workflow = data.workflows.find(w => w.name === workflowName || w.path.endsWith(workflowName));
-                    
-                    if (workflow) {
-                        return workflow.id;
-                    }
-                }
-                
-                return null;
-            } catch (error) {
-                console.log('获取工作流ID失败:', error);
-                return null;
-            }
-        }
-        
-        // =============== UI辅助函数 ===============
         function showAlert(message, type = 'info') {
             elements.alert.textContent = message;
             elements.alert.className = `alert ${type}`;
             elements.alert.style.display = 'block';
             
-            // 自动隐藏非错误提示
             if (type !== 'error') {
                 setTimeout(() => {
-                    hideAlert();
+                    elements.alert.style.display = 'none';
                 }, 5000);
-            }
-        }
-        
-        function hideAlert() {
-            elements.alert.style.display = 'none';
-        }
-        
-        // =============== URL参数处理 ===============
-        function checkUrlParams() {
-            const params = new URLSearchParams(window.location.search);
-            
-            // 设置设备参数
-            if (params.has('device')) {
-                const device = params.get('device');
-                setTimeout(() => {
-                    if (state.devices.includes(device)) {
-                        elements.deviceSelect.value = device;
-                    }
-                }, 500);
-            }
-            
-            // 设置工作流参数
-            if (params.has('workflow')) {
-                const workflow = params.get('workflow');
-                setTimeout(() => {
-                    const workflowOption = Array.from(elements.workflowSelect.options)
-                        .find(opt => opt.value === workflow);
-                    if (workflowOption) {
-                        elements.workflowSelect.value = workflow;
-                    }
-                }, 500);
-            }
-            
-            // 设置版本参数
-            if (params.has('version')) {
-                const version = params.get('version');
-                document.getElementById('version').value = version;
-            }
-            
-            // 设置模式参数
-            if (params.has('mode')) {
-                const mode = params.get('mode');
-                document.getElementById('mode').value = mode;
-            }
-            
-            // 设置插件参数
-            if (params.has('packages')) {
-                const packages = params.get('packages');
-                document.getElementById('packages').value = packages;
             }
         }
     </script>
