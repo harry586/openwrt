@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenWrt固件构建器 - 配置生成器</title>
+    <title>OpenWrt固件构建器 - 快速启动</title>
     <style>
         :root {
             --primary: #2ea44f;
@@ -121,15 +121,6 @@
             cursor: not-allowed;
         }
         
-        .btn.copy-btn {
-            background: #0366d6;
-            margin-top: 10px;
-        }
-        
-        .btn.copy-btn:hover {
-            background: #0256b9;
-        }
-        
         .alert {
             padding: 16px;
             border-radius: 8px;
@@ -199,94 +190,103 @@
             text-decoration: underline;
         }
         
-        .params-display {
-            background: #f6f8fa;
-            border: 2px solid var(--border);
-            border-radius: 8px;
-            padding: 20px;
-            margin: 20px 0;
-            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-            font-size: 0.9rem;
-            line-height: 1.5;
-            white-space: pre-wrap;
-            word-break: break-all;
-        }
-        
-        .param-item {
-            margin-bottom: 8px;
-            padding: 8px;
-            background: white;
-            border-radius: 4px;
-            border-left: 4px solid var(--primary);
-        }
-        
-        .param-label {
-            font-weight: 600;
-            color: var(--text);
-            margin-right: 10px;
-        }
-        
-        .param-value {
-            color: var(--text-light);
-        }
-        
-        .copy-hint {
+        .loading {
             text-align: center;
-            color: var(--text-light);
-            font-size: 0.9rem;
-            margin-top: 10px;
-            font-style: italic;
+            padding: 40px;
+            display: none;
         }
         
-        .steps {
-            background: var(--card-bg);
-            border-radius: 12px;
-            padding: 25px;
-            margin-bottom: 30px;
-            box-shadow: var(--shadow);
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid var(--border);
+            border-top: 4px solid var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .step-indicator {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 30px 0;
+            position: relative;
+        }
+        
+        .step-indicator::before {
+            content: '';
+            position: absolute;
+            top: 15px;
+            left: 50px;
+            right: 50px;
+            height: 2px;
+            background: var(--border);
+            z-index: 1;
         }
         
         .step {
             display: flex;
-            align-items: flex-start;
-            margin-bottom: 20px;
-            padding-bottom: 20px;
-            border-bottom: 1px solid var(--border);
-        }
-        
-        .step:last-child {
-            border-bottom: none;
-            margin-bottom: 0;
-            padding-bottom: 0;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+            z-index: 2;
+            background: var(--bg);
+            padding: 0 10px;
         }
         
         .step-number {
             width: 32px;
             height: 32px;
-            background: var(--primary);
-            color: white;
+            background: var(--border);
+            color: var(--text-light);
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             font-weight: bold;
-            margin-right: 15px;
-            flex-shrink: 0;
+            margin-bottom: 8px;
+            transition: all 0.3s;
         }
         
-        .step-content {
-            flex: 1;
+        .step.active .step-number {
+            background: var(--primary);
+            color: white;
         }
         
-        .step-title {
-            font-weight: 600;
-            margin-bottom: 5px;
-            color: var(--text);
-        }
-        
-        .step-description {
+        .step-text {
+            font-size: 0.85rem;
             color: var(--text-light);
-            font-size: 0.95rem;
+            text-align: center;
+        }
+        
+        .step.active .step-text {
+            color: var(--text);
+            font-weight: 600;
+        }
+        
+        .checkbox-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            user-select: none;
+        }
+        
+        .checkbox-container input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
         }
         
         @media (max-width: 768px) {
@@ -302,12 +302,13 @@
                 font-size: 2rem;
             }
             
-            .step {
+            .step-indicator {
                 flex-direction: column;
+                gap: 20px;
             }
             
-            .step-number {
-                margin-bottom: 10px;
+            .step-indicator::before {
+                display: none;
             }
         }
     </style>
@@ -316,7 +317,7 @@
     <div class="container">
         <header>
             <h1>🚀 OpenWrt固件构建器</h1>
-            <p class="subtitle">一键生成构建参数，快速开始固件编译</p>
+            <p class="subtitle">一键启动GitHub Actions构建固件</p>
             <a href="#" id="githubRepoLink" class="github-link" target="_blank">
                 <span>🐙</span> 查看GitHub仓库
             </a>
@@ -324,6 +325,21 @@
         
         <div class="card">
             <div id="alert" class="alert"></div>
+            
+            <div class="step-indicator">
+                <div class="step active">
+                    <div class="step-number">1</div>
+                    <div class="step-text">填写配置</div>
+                </div>
+                <div class="step">
+                    <div class="step-number">2</div>
+                    <div class="step-text">准备启动</div>
+                </div>
+                <div class="step">
+                    <div class="step-number">3</div>
+                    <div class="step-text">开始构建</div>
+                </div>
+            </div>
             
             <form id="configForm">
                 <div class="form-group">
@@ -364,91 +380,36 @@
                 </div>
                 
                 <div class="form-group">
-                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                        <input type="checkbox" id="enableParallel" checked style="width: auto;">
-                        ⚡ 启用智能并行优化
+                    <label class="checkbox-container">
+                        <input type="checkbox" id="enableParallel" checked>
+                        <span>⚡ 启用智能并行优化</span>
                     </label>
                 </div>
                 
-                <button type="button" class="btn" id="generateBtn">
-                    <span>🔧</span> <strong>生成构建参数</strong>
+                <button type="button" class="btn" id="startBtn">
+                    <span>🚀</span> <strong>立即启动构建</strong>
                 </button>
             </form>
             
-            <div id="paramsSection" style="display: none;">
-                <h3>📋 生成的构建参数</h3>
-                <div class="params-display" id="paramsDisplay">
-                    <!-- 参数将在这里显示 -->
-                </div>
-                
-                <div class="copy-hint">💡 复制下方所有参数，然后在GitHub Actions页面粘贴</div>
-                
-                <button type="button" class="btn copy-btn" id="copyAllBtn">
-                    <span>📋</span> <strong>复制所有参数</strong>
-                </button>
-                
-                <button type="button" class="btn" id="openActionsBtn" style="margin-top: 10px;">
-                    <span>🚀</span> <strong>打开GitHub Actions页面</strong>
-                </button>
-            </div>
-        </div>
-        
-        <div class="steps">
-            <h3>📝 使用步骤</h3>
-            
-            <div class="step">
-                <div class="step-number">1</div>
-                <div class="step-content">
-                    <div class="step-title">填写构建配置</div>
-                    <div class="step-description">选择设备型号、OpenWrt版本、配置模式等参数</div>
-                </div>
-            </div>
-            
-            <div class="step">
-                <div class="step-number">2</div>
-                <div class="step-content">
-                    <div class="step-title">生成构建参数</div>
-                    <div class="step-description">点击"生成构建参数"按钮，系统会生成所有需要的参数</div>
-                </div>
-            </div>
-            
-            <div class="step">
-                <div class="step-number">3</div>
-                <div class="step-content">
-                    <div class="step-title">复制参数</div>
-                    <div class="step-description">点击"复制所有参数"按钮，复制生成的参数到剪贴板</div>
-                </div>
-            </div>
-            
-            <div class="step">
-                <div class="step-number">4</div>
-                <div class="step-content">
-                    <div class="step-title">打开GitHub Actions</div>
-                    <div class="step-description">点击"打开GitHub Actions页面"按钮</div>
-                </div>
-            </div>
-            
-            <div class="step">
-                <div class="step-number">5</div>
-                <div class="step-content">
-                    <div class="step-title">手动触发构建</div>
-                    <div class="step-description">在GitHub Actions页面：<br>
-                        1. 点击"Run workflow"按钮<br>
-                        2. 粘贴复制的参数到对应字段<br>
-                        3. 点击"Run workflow"开始构建</div>
-                </div>
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p id="loadingText">正在准备启动构建...</p>
             </div>
         </div>
         
         <div class="instructions">
-            <h3>💡 重要提示</h3>
-            <ul style="color: var(--text-light); padding-left: 20px;">
-                <li>GitHub Actions的安全限制，无法自动填写参数</li>
-                <li>需要手动复制参数并粘贴到GitHub页面</li>
-                <li>构建过程需要30-60分钟，请耐心等待</li>
-                <li>构建完成后，固件可以在Actions页面的Artifacts中下载</li>
-                <li>如果遇到问题，请查看仓库的README文档</li>
-            </ul>
+            <h3>📝 使用说明</h3>
+            <ol>
+                <li><strong>选择设备型号</strong> - 从列表中选择要构建的设备</li>
+                <li><strong>选择OpenWrt版本</strong> - 21.02稳定版或23.05新版</li>
+                <li><strong>选择配置模式</strong> - 基础模式或正常模式</li>
+                <li><strong>填写额外插件</strong> - 可选，按需添加或移除插件</li>
+                <li><strong>点击"立即启动构建"按钮</strong> - 自动复制参数并打开GitHub页面</li>
+                <li><strong>在GitHub页面</strong> - 点击"Run workflow"开始构建</li>
+            </ol>
+            <p style="margin-top: 15px; color: var(--text-light); font-size: 0.9rem;">
+                💡 提示：系统会自动复制所有参数，您只需在GitHub页面点击"Run workflow"即可
+            </p>
         </div>
         
         <footer>
@@ -477,12 +438,11 @@
         // DOM元素
         const elements = {
             deviceSelect: document.getElementById('device'),
-            generateBtn: document.getElementById('generateBtn'),
+            startBtn: document.getElementById('startBtn'),
             alert: document.getElementById('alert'),
-            paramsSection: document.getElementById('paramsSection'),
-            paramsDisplay: document.getElementById('paramsDisplay'),
-            copyAllBtn: document.getElementById('copyAllBtn'),
-            openActionsBtn: document.getElementById('openActionsBtn'),
+            loading: document.getElementById('loading'),
+            loadingText: document.getElementById('loadingText'),
+            steps: document.querySelectorAll('.step'),
             githubRepoLink: document.getElementById('githubRepoLink'),
             githubDocsLink: document.getElementById('githubDocsLink'),
             deviceSource: document.getElementById('deviceSource')
@@ -511,9 +471,6 @@
             
             elements.githubRepoLink.href = baseUrl;
             elements.githubDocsLink.href = actionsUrl;
-            elements.openActionsBtn.onclick = () => {
-                window.open(actionsUrl, '_blank', 'noopener,noreferrer');
-            };
         }
         
         async function loadDevices() {
@@ -588,15 +545,26 @@
                 elements.deviceSelect.appendChild(option);
             });
             
-            elements.generateBtn.disabled = false;
+            elements.startBtn.disabled = false;
         }
         
         function setupEventListeners() {
-            elements.generateBtn.addEventListener('click', generateParams);
-            elements.copyAllBtn.addEventListener('click', copyAllParams);
+            elements.startBtn.addEventListener('click', startBuildProcess);
         }
         
-        function generateParams() {
+        function updateStep(stepNumber) {
+            // 重置所有步骤
+            elements.steps.forEach(step => {
+                step.classList.remove('active');
+            });
+            
+            // 激活当前步骤
+            if (stepNumber <= elements.steps.length) {
+                elements.steps[stepNumber - 1].classList.add('active');
+            }
+        }
+        
+        async function startBuildProcess() {
             const formData = {
                 device: elements.deviceSelect.value,
                 version: document.getElementById('version').value,
@@ -616,114 +584,167 @@
                 return;
             }
             
-            // 生成参数显示
-            displayParams(formData);
-            
-            // 显示参数区域
-            elements.paramsSection.style.display = 'block';
-            
-            // 滚动到参数区域
-            elements.paramsSection.scrollIntoView({ behavior: 'smooth' });
-            
-            showAlert('✅ 构建参数已生成！请复制参数并粘贴到GitHub Actions页面', 'success');
+            // 开始流程
+            await executeBuildProcess(formData);
         }
         
-        function displayParams(formData) {
-            // 生成会话ID
-            const sessionId = `web_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-            
-            // 构建参数对象
-            const params = {
-                '📱 device_name': formData.device,
-                '🔄 version_selection': formData.version,
-                '⚙️ config_mode': formData.mode,
-                '📦 extra_packages': formData.packages || '(空)',
-                '⚡ enable_parallel': formData.enableParallel,
-                '🌐 web_trigger': 'true',
-                '🔑 web_session_id': sessionId
-            };
-            
-            // 生成显示内容
-            let html = '';
-            for (const [label, value] of Object.entries(params)) {
-                html += `
-                    <div class="param-item">
-                        <span class="param-label">${label}:</span>
-                        <span class="param-value"><strong>${value}</strong></span>
-                    </div>
-                `;
-            }
-            
-            // 添加使用说明
-            html += `
-                <div style="margin-top: 20px; padding: 15px; background: #fff8f0; border-radius: 6px; border-left: 4px solid #e36209;">
-                    <strong>💡 使用说明：</strong><br>
-                    1. 点击"复制所有参数"按钮<br>
-                    2. 点击"打开GitHub Actions页面"按钮<br>
-                    3. 点击"Run workflow"按钮<br>
-                    4. 将复制的参数粘贴到对应字段中<br>
-                    5. 点击"Run workflow"开始构建
-                </div>
-            `;
-            
-            elements.paramsDisplay.innerHTML = html;
-            
-            // 保存参数用于复制
-            elements.paramsDisplay.dataset.params = JSON.stringify({
-                device_name: formData.device,
-                version_selection: formData.version,
-                config_mode: formData.mode,
-                extra_packages: formData.packages || '',
-                enable_parallel: formData.enableParallel,
-                web_trigger: 'true',
-                web_session_id: sessionId
-            });
-        }
-        
-        function copyAllParams() {
+        async function executeBuildProcess(formData) {
             try {
-                const params = JSON.parse(elements.paramsDisplay.dataset.params || '{}');
+                // 步骤1: 准备参数
+                updateStep(1);
+                showLoading('正在准备构建参数...');
                 
-                // 生成易读的文本格式
-                let textToCopy = `OpenWrt固件构建参数\n`;
-                textToCopy += `生成时间: ${new Date().toLocaleString()}\n\n`;
+                // 生成会话ID
+                const sessionId = `web_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
                 
-                // 添加参数
-                textToCopy += `📱 设备名称: ${params.device_name}\n`;
-                textToCopy += `🔄 版本选择: ${params.version_selection}\n`;
-                textToCopy += `⚙️ 配置模式: ${params.config_mode}\n`;
-                textToCopy += `📦 额外插件: ${params.extra_packages || '(空)'}\n`;
-                textToCopy += `⚡ 启用并行: ${params.enable_parallel}\n`;
-                textToCopy += `🌐 网页触发: ${params.web_trigger}\n`;
-                textToCopy += `🔑 会话ID: ${params.web_session_id}\n\n`;
+                // 构建参数对象
+                const params = {
+                    device_name: formData.device,
+                    version_selection: formData.version,
+                    config_mode: formData.mode,
+                    extra_packages: formData.packages || '',
+                    enable_parallel: formData.enableParallel,
+                    web_session_id: sessionId
+                };
                 
-                textToCopy += `💡 提示：请在GitHub Actions页面的对应字段中粘贴这些值`;
+                // 步骤2: 复制参数到剪贴板
+                updateStep(2);
+                showLoading('正在复制构建参数到剪贴板...');
                 
-                // 复制到剪贴板
-                navigator.clipboard.writeText(textToCopy).then(() => {
-                    // 临时改变按钮文本显示复制成功
-                    const originalText = elements.copyAllBtn.innerHTML;
-                    elements.copyAllBtn.innerHTML = '<span>✅</span> <strong>已复制到剪贴板</strong>';
+                // 生成易读的参数文本
+                const paramsText = generateParamsText(params);
+                
+                // 尝试复制到剪贴板
+                let copySuccess = false;
+                try {
+                    await navigator.clipboard.writeText(paramsText);
+                    copySuccess = true;
+                } catch (copyError) {
+                    console.warn('Clipboard API失败:', copyError);
                     
-                    showAlert('✅ 所有参数已复制到剪贴板！', 'success');
+                    // 尝试使用document.execCommand作为备用方案
+                    try {
+                        const textArea = document.createElement('textarea');
+                        textArea.value = paramsText;
+                        textArea.style.position = 'fixed';
+                        textArea.style.opacity = '0';
+                        document.body.appendChild(textArea);
+                        textArea.select();
+                        const execSuccess = document.execCommand('copy');
+                        document.body.removeChild(textArea);
+                        
+                        if (execSuccess) {
+                            copySuccess = true;
+                        } else {
+                            throw new Error('document.execCommand也失败了');
+                        }
+                    } catch (execError) {
+                        console.error('备用复制方案也失败:', execError);
+                    }
+                }
+                
+                if (!copySuccess) {
+                    // 如果复制失败，继续执行，但显示警告
+                    showAlert('⚠️ 无法自动复制参数，请手动记录以下参数:', 'warning');
                     
-                    // 3秒后恢复原状
+                    // 临时显示参数
+                    const tempAlert = document.createElement('div');
+                    tempAlert.className = 'alert info';
+                    tempAlert.innerHTML = `
+                        <strong>📋 构建参数：</strong><br>
+                        <div style="font-family: monospace; font-size: 0.9rem; margin-top: 10px; padding: 10px; background: white; border-radius: 4px;">
+                            ${paramsText.replace(/\n/g, '<br>')}
+                        </div>
+                        <div style="margin-top: 10px;">请手动记录这些参数</div>
+                    `;
+                    elements.alert.parentNode.insertBefore(tempAlert, elements.alert.nextSibling);
+                    
+                    // 5秒后移除临时显示
                     setTimeout(() => {
-                        elements.copyAllBtn.innerHTML = originalText;
-                    }, 3000);
-                }).catch(err => {
-                    console.error('复制失败:', err);
-                    showAlert('❌ 复制失败，请手动选择并复制参数', 'error');
-                });
+                        if (tempAlert.parentNode) {
+                            tempAlert.parentNode.removeChild(tempAlert);
+                        }
+                    }, 10000);
+                } else {
+                    showAlert('✅ 构建参数已复制到剪贴板', 'success');
+                }
+                
+                // 短暂延迟，让用户看到提示
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                
+                // 步骤3: 打开GitHub Actions页面
+                updateStep(3);
+                showLoading('正在打开GitHub Actions页面...');
+                
+                const actionsUrl = `https://github.com/${CONFIG.repoOwner}/${CONFIG.repoName}/actions/workflows/${CONFIG.workflowFile}`;
+                
+                // 显示最终提示
+                if (copySuccess) {
+                    showAlert('✅ 参数已复制！正在打开GitHub页面...', 'success');
+                } else {
+                    showAlert('⚠️ 请手动记录参数！正在打开GitHub页面...', 'warning');
+                }
+                
+                // 打开GitHub页面
+                setTimeout(() => {
+                    window.open(actionsUrl, '_blank', 'noopener,noreferrer');
+                    
+                    // 显示最终完成提示
+                    setTimeout(() => {
+                        hideLoading();
+                        showAlert('🎉 已打开GitHub Actions页面！<br>请点击"Run workflow"按钮，粘贴复制的参数开始构建。', 'success');
+                        
+                        // 重置表单（可选）
+                        setTimeout(() => {
+                            // 重置步骤指示器
+                            updateStep(1);
+                            
+                            // 清空表单
+                            document.getElementById('configForm').reset();
+                            document.getElementById('enableParallel').checked = true;
+                            
+                            // 隐藏alert
+                            elements.alert.style.display = 'none';
+                        }, 5000);
+                    }, 1000);
+                }, 1000);
                 
             } catch (error) {
-                console.error('复制参数失败:', error);
-                showAlert('❌ 复制参数失败，请刷新页面重试', 'error');
+                console.error('启动构建过程失败:', error);
+                showAlert(`❌ 启动失败: ${error.message}`, 'error');
+                hideLoading();
+                updateStep(1);
             }
+        }
+        
+        function generateParamsText(params) {
+            let text = '';
+            text += '=== OpenWrt固件构建参数 ===\n\n';
+            text += '请在GitHub Actions页面填写以下参数：\n\n';
+            text += `📱 设备名称 (device_name): ${params.device_name}\n`;
+            text += `🔄 版本选择 (version_selection): ${params.version_selection}\n`;
+            text += `⚙️ 配置模式 (config_mode): ${params.config_mode}\n`;
+            text += `📦 额外插件 (extra_packages): ${params.extra_packages || '(空)'}\n`;
+            text += `⚡ 启用并行 (enable_parallel): ${params.enable_parallel}\n`;
+            text += `🔑 会话ID (web_session_id): ${params.web_session_id}\n\n`;
+            text += '💡 提示：复制后请在GitHub页面粘贴到对应字段中';
+            
+            return text;
+        }
+        
+        function showLoading(text) {
+            elements.loadingText.textContent = text;
+            elements.loading.style.display = 'block';
+            document.getElementById('configForm').style.display = 'none';
+        }
+        
+        function hideLoading() {
+            elements.loading.style.display = 'none';
+            document.getElementById('configForm').style.display = 'block';
         }
         
         function showAlert(message, type = 'info') {
-            elements.alert.textContent = message;
+            elements.alert.innerHTML = message;
             elements.alert.className = `alert ${type}`;
             elements.alert.style.display = 'block';
             
@@ -731,8 +752,11 @@
             if (type !== 'error') {
                 setTimeout(() => {
                     elements.alert.style.display = 'none';
-                }, 5000);
+                }, 8000);
             }
+            
+            // 滚动到顶部
+            elements.alert.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
     </script>
 </body>
