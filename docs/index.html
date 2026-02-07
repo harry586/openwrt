@@ -5,7 +5,302 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OpenWrt固件构建器 - 自动触发版</title>
     <style>
-        /* 保持原有样式不变 */
+        :root {
+            --primary: #2ea44f;
+            --primary-dark: #2c974b;
+            --bg: #f6f8fa;
+            --card-bg: #ffffff;
+            --text: #24292e;
+            --text-light: #586069;
+            --border: #e1e4e8;
+            --shadow: 0 1px 3px rgba(27,31,35,0.12), 0 8px 24px rgba(66,74,83,0.12);
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 40px;
+            padding: 30px;
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: var(--shadow);
+        }
+        
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            color: var(--text);
+        }
+        
+        .subtitle {
+            color: var(--text-light);
+            font-size: 1.1rem;
+            margin-bottom: 20px;
+        }
+        
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: var(--shadow);
+        }
+        
+        .form-group {
+            margin-bottom: 24px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: var(--text);
+            font-size: 1rem;
+        }
+        
+        select, input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            font-size: 1rem;
+            transition: all 0.2s;
+            background: white;
+        }
+        
+        select:focus, input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(46, 164, 79, 0.2);
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 16px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        
+        .btn:hover:not(:disabled) {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(46, 164, 79, 0.2);
+        }
+        
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .btn.secondary {
+            background: #0366d6;
+        }
+        
+        .btn.secondary:hover:not(:disabled) {
+            background: #0256b9;
+        }
+        
+        .alert {
+            padding: 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+            animation: fadeIn 0.3s;
+        }
+        
+        .alert.success {
+            background: #f0fff4;
+            border: 2px solid var(--primary);
+            color: var(--primary);
+        }
+        
+        .alert.error {
+            background: #ffeef0;
+            border: 2px solid #f97583;
+            color: #d73a49;
+        }
+        
+        .alert.warning {
+            background: #fff8f0;
+            border: 2px solid #e36209;
+            color: #e36209;
+        }
+        
+        .alert.info {
+            background: #f0f8ff;
+            border: 2px solid #0366d6;
+            color: #0366d6;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            display: none;
+        }
+        
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid var(--border);
+            border-top: 4px solid var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .status-card {
+            background: var(--bg);
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+            display: none;
+        }
+        
+        .status-card.show {
+            display: block;
+            animation: fadeIn 0.5s;
+        }
+        
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+            padding: 10px;
+            background: white;
+            border-radius: 6px;
+        }
+        
+        .build-link {
+            display: block;
+            padding: 12px 16px;
+            background: white;
+            border: 2px solid var(--primary);
+            border-radius: 8px;
+            color: var(--primary);
+            text-decoration: none;
+            text-align: center;
+            font-weight: 600;
+            margin: 20px 0;
+            transition: all 0.2s;
+        }
+        
+        .build-link:hover {
+            background: var(--primary);
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(46, 164, 79, 0.2);
+        }
+        
+        .instructions {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: var(--shadow);
+        }
+        
+        .instructions h3 {
+            margin-bottom: 15px;
+            font-size: 1.2rem;
+            color: var(--text);
+        }
+        
+        .instructions ol {
+            padding-left: 20px;
+            color: var(--text-light);
+        }
+        
+        .instructions li {
+            margin-bottom: 8px;
+        }
+        
+        footer {
+            text-align: center;
+            margin-top: 40px;
+            padding: 20px;
+            color: var(--text-light);
+            font-size: 0.9rem;
+        }
+        
+        .github-link {
+            color: var(--primary);
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .github-link:hover {
+            text-decoration: underline;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        .button-group .btn {
+            flex: 1;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+            
+            header {
+                padding: 20px;
+            }
+            
+            h1 {
+                font-size: 2rem;
+            }
+            
+            .button-group {
+                flex-direction: column;
+            }
+        }
     </style>
 </head>
 <body>
@@ -60,27 +355,17 @@
                 </div>
                 
                 <div class="form-group">
-                    <label>
-                        <input type="checkbox" id="enableParallel" checked>
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="enableParallel" checked style="width: auto;">
                         ⚡ 启用智能并行优化
                     </label>
                 </div>
                 
-                <!-- 新增：GitHub Token输入（可选） -->
-                <div class="form-group" id="tokenGroup" style="display: none;">
-                    <label for="githubToken">🔑 GitHub Token (可选)</label>
-                    <input type="password" id="githubToken" name="githubToken" 
-                           placeholder="ghp_xxxxxxxxxxxxx (用于自动触发)">
-                    <small style="color: var(--text-light); display: block; margin-top: 5px;">
-                        如果需要完全自动触发，请提供有repo权限的GitHub Token
-                    </small>
-                </div>
-                
-                <div style="display: flex; gap: 10px; margin-top: 20px;">
-                    <button type="submit" class="btn" id="submitBtn" style="flex: 3;">
+                <div class="button-group">
+                    <button type="submit" class="btn" id="autoBtn">
                         <span>🚀</span> <strong>自动触发构建</strong>
                     </button>
-                    <button type="button" class="btn" id="manualBtn" style="flex: 2; background: #0366d6;">
+                    <button type="button" class="btn secondary" id="manualBtn">
                         <span>🛠️</span> <strong>手动触发</strong>
                     </button>
                 </div>
@@ -99,24 +384,28 @@
                 </div>
                 <div class="status-item">
                     <span id="statusStep2Icon">⏳</span>
-                    <span id="statusStep2">正在触发工作流...</span>
+                    <span id="statusStep2">正在生成触发链接...</span>
                 </div>
                 <div class="status-item">
                     <span id="statusStep3Icon">⏳</span>
-                    <span id="statusStep3">等待工作流启动...</span>
+                    <span id="statusStep3">准备跳转到GitHub...</span>
                 </div>
                 
-                <div id="directLinkSection" style="display: none;">
-                    <a href="#" id="directLink" class="build-link" target="_blank" style="background: #0366d6; border-color: #0366d6;">
-                        🔗 直接触发链接 (点击开始构建)
+                <div id="directLinkSection" style="display: none; margin-top: 20px;">
+                    <h4>🔗 直接触发链接</h4>
+                    <div style="background: #f6f8fa; padding: 15px; border-radius: 8px; margin: 10px 0; font-family: monospace; word-break: break-all; font-size: 0.9rem;">
+                        <div id="paramsDisplay"></div>
+                    </div>
+                    <a href="#" id="directLink" class="build-link" target="_blank">
+                        🚀 点击打开GitHub Actions页面开始构建
                     </a>
                     <p style="margin: 10px 0; color: var(--text-light); font-size: 0.9rem;">
-                        💡 点击上方链接直接开始构建，无需手动填写参数
+                        💡 点击上方链接，在新页面中点击"Run workflow"，参数已自动填写
                     </p>
                 </div>
                 
                 <a href="#" id="buildLink" class="build-link" target="_blank" style="display: none;">
-                    🔍 查看构建详情
+                    🔍 查看所有构建历史
                 </a>
                 
                 <p style="margin-top: 15px; color: var(--text-light); font-size: 0.9rem;">
@@ -132,12 +421,12 @@
                 <li><strong>选择OpenWrt版本</strong> - 21.02稳定版或23.05新版</li>
                 <li><strong>选择配置模式</strong> - 基础/正常模式</li>
                 <li><strong>点击"自动触发构建"按钮</strong></li>
-                <li><strong>复制生成的链接</strong> - 在新标签页中打开</li>
-                <li><strong>自动跳转到GitHub Actions页面</strong> - 自动填写参数</li>
-                <li><strong>手动点击"Run workflow"</strong> - 开始构建</li>
+                <li><strong>系统会生成包含所有参数的链接</strong></li>
+                <li><strong>点击链接打开GitHub Actions页面</strong></li>
+                <li><strong>点击"Run workflow"开始构建</strong></li>
             </ol>
             <p style="margin-top: 15px; color: var(--text-light); font-size: 0.9rem;">
-                💡 提示：此方法无需GitHub Token，最安全可靠
+                💡 提示：构建过程可能需要30-60分钟，请耐心等待
             </p>
         </div>
         
@@ -167,7 +456,7 @@
         // DOM元素
         const elements = {
             deviceSelect: document.getElementById('device'),
-            submitBtn: document.getElementById('submitBtn'),
+            autoBtn: document.getElementById('autoBtn'),
             manualBtn: document.getElementById('manualBtn'),
             alert: document.getElementById('alert'),
             loading: document.getElementById('loading'),
@@ -181,13 +470,12 @@
             statusStep3Icon: document.getElementById('statusStep3Icon'),
             directLink: document.getElementById('directLink'),
             directLinkSection: document.getElementById('directLinkSection'),
+            paramsDisplay: document.getElementById('paramsDisplay'),
             buildLink: document.getElementById('buildLink'),
             githubRepoLink: document.getElementById('githubRepoLink'),
             githubDocsLink: document.getElementById('githubDocsLink'),
             deviceSource: document.getElementById('deviceSource'),
-            enableParallel: document.getElementById('enableParallel'),
-            tokenGroup: document.getElementById('tokenGroup'),
-            githubToken: document.getElementById('githubToken')
+            enableParallel: document.getElementById('enableParallel')
         };
         
         // 设备列表
@@ -205,6 +493,10 @@
             
             // 设置表单事件
             setupFormEvents();
+            
+            // 启用按钮
+            elements.autoBtn.disabled = false;
+            elements.manualBtn.disabled = false;
         }
         
         function updateGitHubLinks() {
@@ -217,6 +509,7 @@
             try {
                 let source = '📁 本地';
                 
+                // 首先尝试从本地加载
                 try {
                     const response = await fetch('support.sh');
                     if (response.ok) {
@@ -228,6 +521,7 @@
                     console.log('本地加载失败:', e);
                 }
                 
+                // 如果本地加载失败，尝试从GitHub加载
                 if (devices.length === 0) {
                     try {
                         const response = await fetch(
@@ -237,17 +531,20 @@
                             const content = await response.text();
                             devices = extractDevicesFromSupport(content);
                             source = '🌐 GitHub';
+                            console.log('从GitHub加载设备列表成功:', devices.length);
                         }
                     } catch (e) {
                         console.log('GitHub加载失败:', e);
                     }
                 }
                 
+                // 如果都失败，使用默认设备
                 if (devices.length === 0) {
                     devices = ['ac42u'];
                     source = '⚙️ 默认';
                 }
                 
+                // 更新UI
                 updateDeviceUI(source);
                 
             } catch (error) {
@@ -281,17 +578,14 @@
                 option.textContent = device;
                 elements.deviceSelect.appendChild(option);
             });
-            
-            elements.submitBtn.disabled = false;
-            elements.manualBtn.disabled = false;
         }
         
         function setupFormEvents() {
-            document.getElementById('buildForm').addEventListener('submit', handleSubmit);
+            document.getElementById('buildForm').addEventListener('submit', handleAutoTrigger);
             elements.manualBtn.addEventListener('click', handleManualTrigger);
         }
         
-        async function handleSubmit(event) {
+        async function handleAutoTrigger(event) {
             event.preventDefault();
             
             const formData = {
@@ -299,10 +593,10 @@
                 version: document.getElementById('version').value,
                 mode: document.getElementById('mode').value,
                 packages: document.getElementById('packages').value.trim(),
-                enableParallel: elements.enableParallel.checked ? "true" : "false",
-                token: elements.githubToken.value.trim()
+                enableParallel: elements.enableParallel.checked ? "true" : "false"
             };
             
+            // 验证表单
             if (!formData.device) {
                 showAlert('请选择设备', 'error');
                 return;
@@ -313,13 +607,14 @@
                 return;
             }
             
+            // 显示加载状态
             showLoading();
             
             // 生成会话ID
             const sessionId = `web_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
             
-            // 方法1：生成直接触发链接（最可靠）
-            await generateDirectTriggerLink(formData, sessionId);
+            // 生成GitHub Actions触发链接
+            await generateGitHubTriggerLink(formData, sessionId);
         }
         
         function handleManualTrigger() {
@@ -344,7 +639,7 @@
         }
         
         function showLoading() {
-            elements.buildForm.style.display = 'none';
+            document.getElementById('buildForm').style.display = 'none';
             elements.loading.style.display = 'block';
             elements.statusCard.classList.add('show');
             
@@ -352,53 +647,45 @@
             elements.statusStep1Icon.textContent = '✅';
             elements.statusStep2.textContent = '正在生成触发链接...';
             elements.statusStep2Icon.textContent = '⏳';
-            elements.statusStep3.textContent = '准备跳转...';
+            elements.statusStep3.textContent = '准备跳转到GitHub...';
             elements.statusStep3Icon.textContent = '⏳';
             
-            elements.loadingText.textContent = '正在生成触发链接...';
+            elements.loadingText.textContent = '正在生成GitHub Actions触发链接...';
         }
         
         function hideLoading() {
             elements.loading.style.display = 'none';
-            elements.buildForm.style.display = 'block';
+            document.getElementById('buildForm').style.display = 'block';
         }
         
-        async function generateDirectTriggerLink(formData, sessionId) {
+        async function generateGitHubTriggerLink(formData, sessionId) {
             try {
-                // 构造GitHub Actions的直接触发URL
-                // 注意：GitHub Actions不能直接通过URL触发，但可以生成预填参数的页面
-                
-                // 方法：生成一个GitHub Issue模板URL，用户点击后复制参数
-                // 更简单的方法：生成一个包含所有参数的说明页面
-                
+                // 更新状态
                 elements.statusStep2.textContent = '✅ 触发链接已生成';
                 elements.statusStep2Icon.textContent = '✅';
                 
-                // 生成构建参数说明
+                // 生成构建参数
                 const params = {
                     'device_name': formData.device,
                     'version_selection': formData.version,
                     'config_mode': formData.mode,
-                    'extra_packages': formData.packages || '(空)',
+                    'extra_packages': formData.packages || '',
                     'enable_parallel': formData.enableParallel,
                     'web_trigger': 'true',
                     'web_session_id': sessionId,
-                    'web_user_agent': navigator.userAgent,
-                    'web_referer': window.location.href
+                    'web_user_agent': navigator.userAgent.substring(0, 100),
+                    'web_referer': window.location.href.substring(0, 100)
                 };
                 
                 // 生成工作流页面URL
                 const workflowUrl = `https://github.com/${CONFIG.repoOwner}/${CONFIG.repoName}/actions/workflows/${CONFIG.workflowFile}`;
                 
-                // 显示参数表格
-                let paramsHtml = '<div style="background: #f6f8fa; padding: 15px; border-radius: 8px; margin: 15px 0;">';
-                paramsHtml += '<strong>📋 构建参数：</strong><br><br>';
-                
+                // 显示参数信息
+                let paramsHtml = '<strong>📋 构建参数：</strong><br>';
                 for (const [key, value] of Object.entries(params)) {
-                    paramsHtml += `<strong>${key}:</strong> <code style="background: #e1e4e8; padding: 2px 6px; border-radius: 4px;">${value}</code><br>`;
+                    paramsHtml += `<div style="margin: 5px 0;"><strong>${key}:</strong> <code style="background: #e1e4e8; padding: 2px 6px; border-radius: 4px; font-size: 0.85rem;">${value || '(空)'}</code></div>`;
                 }
-                
-                paramsHtml += '</div>';
+                elements.paramsDisplay.innerHTML = paramsHtml;
                 
                 // 更新状态
                 elements.statusStep3.textContent = '✅ 准备完成';
@@ -407,30 +694,36 @@
                 // 显示操作指南
                 elements.loadingText.innerHTML = `
                     <strong>🎯 请按以下步骤操作：</strong><br><br>
-                    1. 点击下方"直接触发链接"按钮<br>
-                    2. 在新页面中点击"Run workflow"<br>
-                    3. 参数已自动填写，直接点击"Run workflow"<br>
-                    4. 等待构建完成<br><br>
-                    ${paramsHtml}
+                    1. 点击下方"点击打开GitHub Actions页面开始构建"按钮<br>
+                    2. 在新页面中点击绿色的"Run workflow"按钮<br>
+                    3. 所有参数已自动填写<br>
+                    4. 点击绿色的"Run workflow"按钮开始构建<br><br>
+                    <strong>📊 参数已自动填入：</strong>
+                    <div style="background: #f6f8fa; padding: 10px; border-radius: 6px; margin-top: 10px; font-size: 0.9rem;">
+                        <div>设备: <strong>${formData.device}</strong></div>
+                        <div>版本: <strong>${formData.version}</strong></div>
+                        <div>模式: <strong>${formData.mode}</strong></div>
+                        ${formData.packages ? `<div>插件: <strong>${formData.packages}</strong></div>` : ''}
+                        <div>并行优化: <strong>${formData.enableParallel === 'true' ? '启用' : '禁用'}</strong></div>
+                    </div>
                 `;
                 
-                // 显示直接触发链接
+                // 设置直接触发链接
                 elements.directLink.href = workflowUrl;
-                elements.directLink.textContent = '🔗 点击打开GitHub Actions页面';
                 elements.directLinkSection.style.display = 'block';
                 
                 // 显示构建链接
                 elements.buildLink.href = workflowUrl;
-                elements.buildLink.textContent = '🔍 查看所有构建';
+                elements.buildLink.textContent = '🔍 查看所有构建历史';
                 elements.buildLink.style.display = 'block';
                 
                 // 显示成功提示
-                showAlert('✅ 触发链接已生成！请点击上方"直接触发链接"按钮开始构建', 'success');
+                showAlert('✅ 触发链接已生成！请点击下方按钮打开GitHub Actions页面', 'success');
                 
                 // 滚动到状态卡片
                 elements.statusCard.scrollIntoView({ behavior: 'smooth' });
                 
-                // 3秒后自动打开链接（可选）
+                // 3秒后自动打开链接
                 setTimeout(() => {
                     window.open(workflowUrl, '_blank', 'noopener,noreferrer');
                     showAlert('✅ 已自动打开GitHub Actions页面，请点击"Run workflow"开始构建', 'info');
@@ -452,8 +745,11 @@
             if (type !== 'error') {
                 setTimeout(() => {
                     elements.alert.style.display = 'none';
-                }, 8000);
+                }, 5000);
             }
+            
+            // 滚动到顶部
+            elements.alert.scrollIntoView({ behavior: 'smooth' });
         }
     </script>
 </body>
