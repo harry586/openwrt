@@ -23,7 +23,7 @@ on:
         default: "21.02"
         options: ["23.05", "21.02"]
       config_mode:
-        description: "⚙️ 配置模式选择 - 🟣 基础模式 - 最小化配置，用于测试编译。🟠 正常模式 - 完整功能配置：✅ TurboACC 网络加速 ✅ UPnP 自动端口转发 ✅ Samba 文件共享 ✅ 磁盘管理 ✅ KMS 激活服务 ✅ SmartDNS 智能DNS ✅ 家长控制 ✅ 微信推送 ✅ 流量控制 (SQM) ✅ FTP 服务器 ✅ ARP 绑定 ✅ CPU 限制 ✅ 硬盘休眠"
+        description: "⚙️ 配置模式选择 - 🟣 基础模式 - 最小化配置，用于测试编译。🟠 正常模式 - 完整功能配置"
         required: true
         type: choice
         default: "normal"
@@ -39,7 +39,7 @@ on:
         type: choice
         default: "true"
         options: ["true", "false"]
-      # ============ 新增：网页触发参数 ============
+      # ============ 网页触发参数 ============
       web_trigger:
         description: "🌐 网页触发标识 (true/false)"
         required: false
@@ -65,7 +65,7 @@ env:
   BUILD_DIR: "/mnt/openwrt-build"
   REPO_ROOT: "${{ github.workspace }}"
   ENABLE_PARALLEL: "${{ github.event.inputs.enable_parallel }}"
-  # ============ 新增：网页触发环境变量 ============
+  # ============ 网页触发环境变量 ============
   IS_WEB_TRIGGER: "${{ github.event.inputs.web_trigger }}"
   WEB_SESSION_ID: "${{ github.event.inputs.web_session_id }}"
   WEB_USER_AGENT: "${{ github.event.inputs.web_user_agent }}"
@@ -76,7 +76,7 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      # ============ 新增步骤：网页触发信息显示 ============
+      # ============ 网页触发信息显示 ============
       - name: "🌐 显示触发来源信息"
         run: |
           echo "=================================================="
@@ -118,7 +118,7 @@ jobs:
           echo "🔗 工作流URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           echo "=================================================="
       
-      # 步骤 0: 生成时间戳 (保持原有，但添加网页支持)
+      # 步骤 0: 生成时间戳
       - name: "0. 生成时间戳"
         run: |
           echo "=== 步骤 0: 生成时间戳 ==="
@@ -152,10 +152,10 @@ jobs:
           
           echo "🟢 步骤 0 完成"
       
-      # 步骤 1: 使用Git Archive API下载源代码（修复权限版）
-      - name: "1. 使用Git Archive API下载源代码（修复权限版）"
+      # 步骤 1: 使用Git Archive API下载源代码
+      - name: "1. 使用Git Archive API下载源代码"
         run: |
-          echo "=== 步骤 1: 使用Git Archive API下载源代码（修复权限版） ==="
+          echo "=== 步骤 1: 使用Git Archive API下载源代码 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -204,13 +204,13 @@ jobs:
           
           echo "📁 复制文件到多个位置..."
           
-          # 1. 复制到 GitHub 工作区（保持原有逻辑）
+          # 1. 复制到 GitHub 工作区
           echo "🔧 复制到 GitHub 工作区..."
           mkdir -p ${{ github.workspace }}
           cp -r ./* ${{ github.workspace }}/ 2>/dev/null || true
           echo "✅ GitHub 工作区复制完成"
           
-          # 2. 关键文件复制到构建目录 - 使用备用方案
+          # 2. 关键文件复制到构建目录
           echo "🔧 准备复制关键文件到构建目录..."
           
           # 首先尝试在 /mnt 下创建目录，如果失败则使用 /tmp
@@ -300,10 +300,10 @@ jobs:
           echo "✅ 修复所有脚本权限完成"
           echo "🟢 步骤 3 完成"
       
-      # 步骤 4: 安装基础工具（优化版）
-      - name: "4. 安装基础工具（优化版）"
+      # 步骤 4: 安装基础工具
+      - name: "4. 安装基础工具"
         run: |
-          echo "=== 步骤 4: 安装基础工具（优化版） ==="
+          echo "=== 步骤 4: 安装基础工具 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -313,15 +313,7 @@ jobs:
           echo "🔄 更新软件包列表..."
           sudo apt-get update -q
           
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: apt-get update 失败"
-            exit 1
-          fi
-          
-          echo "📦 安装编译必需工具 (分组安装，提高效率)..."
-          
-          # 分组1: 核心编译工具
-          echo "🔧 安装核心编译工具..."
+          echo "📦 安装编译必需工具..."
           sudo apt-get install -y -q \
             build-essential \
             clang \
@@ -343,16 +335,7 @@ jobs:
             wget \
             libelf-dev \
             cmake \
-            ninja-build
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 核心编译工具安装失败"
-            exit 1
-          fi
-          
-          # 分组2: Python和脚本工具
-          echo "🐍 安装Python和脚本工具..."
-          sudo apt-get install -y -q \
+            ninja-build \
             python3 \
             python3-dev \
             python3-pip \
@@ -369,16 +352,7 @@ jobs:
             texinfo \
             groff \
             texlive \
-            texinfo
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: Python和脚本工具安装失败"
-            exit 1
-          fi
-          
-          # 分组3: 网络和下载工具
-          echo "🌐 安装网络和下载工具..."
-          sudo apt-get install -y -q \
+            texinfo \
             curl \
             net-tools \
             iputils-ping \
@@ -388,16 +362,7 @@ jobs:
             gnupg \
             lsb-release \
             aria2 \
-            libcurl4-openssl-dev
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 网络和下载工具安装失败"
-            exit 1
-          fi
-          
-          # 分组4: 文件系统工具
-          echo "💿 安装文件系统工具..."
-          sudo apt-get install -y -q \
+            libcurl4-openssl-dev \
             squashfs-tools \
             dosfstools \
             e2fsprogs \
@@ -408,73 +373,7 @@ jobs:
             hdparm \
             smartmontools
           
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 文件系统工具安装失败"
-            exit 1
-          fi
-          
-          # 分组5: 调试和开发工具
-          echo "🔍 安装调试和开发工具..."
-          sudo apt-get install -y -q \
-            gdb \
-            strace \
-            ltrace \
-            valgrind \
-            binutils-dev \
-            libdw-dev \
-            libiberty-dev \
-            ecj \
-            fastjar \
-            java-propose-classpath \
-            libpython3-dev \
-            liblz4-dev \
-            zstd
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 调试和开发工具安装失败"
-            exit 1
-          fi
-          
           echo "✅ 基础工具安装完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          
-          # 验证重要工具
-          echo "🔍 验证重要工具安装..."
-          echo "📋 检查以下重要工具是否安装成功:"
-          
-          # 定义要检查的工具数组
-          tools_to_check=("gcc" "g++" "make" "git" "python3" "cmake" "flex" "bison")
-          missing_tools=()
-          
-          # 检查每个工具
-          for tool in "${tools_to_check[@]}"; do
-            if command -v $tool >/dev/null 2>&1; then
-              echo "✅ $tool 已安装: $(which $tool)"
-            else
-              echo "❌ $tool 未安装"
-              missing_tools+=("$tool")
-            fi
-          done
-          
-          if [ ${#missing_tools[@]} -gt 0 ]; then
-            echo "❌ 错误: 以下重要工具缺失: ${missing_tools[*]}"
-            exit 1
-          fi
-          
-          echo "🔍 额外检查:"
-          # 检查gcc版本
-          if command -v gcc >/dev/null 2>&1; then
-            GCC_VERSION=$(gcc --version | head -1)
-            echo "🔧 系统GCC版本: $GCC_VERSION"
-            echo "💡 系统GCC用于编译工具链，SDK GCC用于交叉编译固件"
-          fi
-          
-          # 检查make版本
-          if command -v make >/dev/null 2>&1; then
-            MAKE_VERSION=$(make --version | head -1)
-            echo "🔨 Make版本: $MAKE_VERSION"
-          fi
-          
-          echo "✅ 工具验证完成"
           echo "🟢 步骤 4 完成"
       
       # 步骤 5: 初始空间检查
@@ -525,10 +424,10 @@ jobs:
           
           echo "🟢 步骤 5 完成"
       
-      # 步骤 6: 设置编译环境和构建目录（修复版）
-      - name: "6. 设置编译环境和构建目录（修复版）"
+      # 步骤 6: 设置编译环境和构建目录
+      - name: "6. 设置编译环境和构建目录"
         run: |
-          echo "=== 步骤 6: 设置编译环境和构建目录（修复版） ==="
+          echo "=== 步骤 6: 设置编译环境和构建目录 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -558,18 +457,8 @@ jobs:
           cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh setup_environment
           
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 设置编译环境失败"
-            exit 1
-          fi
-          
           echo "🔄 步骤 6.2: 创建构建目录"
           ./firmware-config/scripts/build_firmware_main.sh create_build_dir
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 创建构建目录失败"
-            exit 1
-          fi
           
           echo "🔄 步骤 6.3: 初始化构建环境"
           echo "📱 设备: ${{ github.event.inputs.device_name }}"
@@ -578,21 +467,16 @@ jobs:
           
           ./firmware-config/scripts/build_firmware_main.sh initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}"
           
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 初始化构建环境失败"
-            exit 1
-          fi
-          
           # 注意：步骤6.3会清空构建目录并克隆源码，所以support.sh会被删除
           # 这是正常行为，后续步骤会重新复制需要的文件
           
           echo "✅ 编译环境和构建目录设置完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 6 完成"
       
-      # 步骤 7: 下载OpenWrt官方SDK（修复版）- 重新复制支持文件
-      - name: "7. 下载OpenWrt官方SDK（修复版）- 重新复制支持文件"
+      # 步骤 7: 下载OpenWrt官方SDK
+      - name: "7. 下载OpenWrt官方SDK"
         run: |
-          echo "=== 步骤 7: 下载OpenWrt官方SDK（修复版）- 重新复制支持文件 ==="
+          echo "=== 步骤 7: 下载OpenWrt官方SDK ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -775,11 +659,6 @@ jobs:
           cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh add_turboacc_support
           
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 添加TurboACC支持失败"
-            exit 1
-          fi
-          
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 9 完成"
       
@@ -796,11 +675,6 @@ jobs:
           BUILD_DIR="${{ env.BUILD_DIR }}"
           cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh configure_feeds
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 配置Feeds失败"
-            exit 1
-          fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-d %H:%M:%S')"
           echo "🟢 步骤 10 完成"
@@ -820,11 +694,6 @@ jobs:
           cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh install_turboacc_packages
           
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 安装TurboACC包失败"
-            exit 1
-          fi
-          
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 11 完成"
       
@@ -842,18 +711,13 @@ jobs:
           cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh pre_build_space_check
           
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 编译前空间检查失败"
-            exit 1
-          fi
-          
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 12 完成"
       
-      # 步骤 13: 智能配置生成 - 重新复制支持文件
-      - name: "13. 智能配置生成 - 重新复制支持文件"
+      # 步骤 13: 智能配置生成
+      - name: "13. 智能配置生成"
         run: |
-          echo "=== 步骤 13: 智能配置生成 - 重新复制支持文件 ==="
+          echo "=== 步骤 13: 智能配置生成 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -877,11 +741,6 @@ jobs:
           
           cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh generate_config "${{ github.event.inputs.extra_packages }}"
-          
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 智能配置生成失败"
-            exit 1
-          fi
           
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 13 完成"
@@ -918,10 +777,10 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 15 完成"
       
-      # 步骤 16: 应用配置并显示详情（完整版）
-      - name: "16. 应用配置并显示详情（完整版）"
+      # 步骤 16: 应用配置并显示详情
+      - name: "16. 应用配置并显示详情"
         run: |
-          echo "=== 步骤 16: 应用配置并显示详情（完整版）==="
+          echo "=== 步骤 16: 应用配置并显示详情 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -938,12 +797,7 @@ jobs:
           
           ./firmware-config/scripts/build_firmware_main.sh apply_config
           
-          if [ $? -ne 0 ]; then
-            echo "❌ 错误: 应用配置失败"
-            exit 1
-          fi
-          
-          echo "=== 🚨 最终配置状态检查（完整详细版）==="
+          echo "=== 最终配置状态检查 ==="
           if [ -f ".config" ]; then
             echo "✅ 配置文件存在"
             echo "📊 文件大小: $(ls -lh ".config" | awk '{print $5}')"
@@ -1027,10 +881,10 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 18 完成"
       
-      # 步骤 19: 下载依赖包（优化版）
-      - name: "19. 下载依赖包（优化版）"
+      # 步骤 19: 下载依赖包
+      - name: "19. 下载依赖包"
         run: |
-          echo "=== 步骤 19: 下载依赖包（优化版） ==="
+          echo "=== 步骤 19: 下载依赖包 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -1050,8 +904,8 @@ jobs:
           echo "📊 当前依赖包数量: $DEP_COUNT 个"
           
           echo "🚀 开始下载依赖包（启用并行下载）..."
-          # 使用并行下载加速，设置输出缓冲区更大防止stdout错误
-          stdbuf -oL -eL make -j4 download V=s 2>&1 | tee download.log
+          # 使用并行下载加速
+          make -j4 download V=s 2>&1 | tee download.log
           
           DOWNLOAD_EXIT_CODE=${PIPESTATUS[0]}
           if [ $DOWNLOAD_EXIT_CODE -ne 0 ]; then
@@ -1069,10 +923,10 @@ jobs:
           
           echo "🟢 步骤 19 完成"
       
-      # 步骤 20: 集成自定义文件（增强版）
-      - name: "20. 集成自定义文件（增强版）"
+      # 步骤 20: 集成自定义文件
+      - name: "20. 集成自定义文件"
         run: |
-          echo "=== 步骤 20: 集成自定义文件（增强版）==="
+          echo "=== 步骤 20: 集成自定义文件 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是尝试集成
@@ -1084,171 +938,13 @@ jobs:
           if [ -d "$CUSTOM_DIR" ]; then
             echo "✅ 自定义文件目录存在: $CUSTOM_DIR"
             
-            # 递归查找所有文件
-            echo "📁 递归查找所有自定义文件..."
-            
-            # 定义英文文件名检查函数 - 修复正则表达式
-            is_english_name() {
-              local filename="$1"
-              if [[ "$filename" =~ ^[a-zA-Z0-9_.\-]+$ ]]; then
-                return 0  # 英文文件名
-              else
-                return 1  # 非英文文件名
-              fi
-            }
-            
-            # 递归查找所有文件
-            ALL_FILES=$(find "$CUSTOM_DIR" -type f 2>/dev/null | sort)
-            FILE_COUNT=$(echo "$ALL_FILES" | wc -l)
-            
-            if [ $FILE_COUNT -eq 0 ]; then
-              echo "ℹ️ 目录为空"
-            else
-              echo "📊 找到 $FILE_COUNT 个自定义文件"
-              
-              # 分类统计
-              IPK_COUNT=0
-              SCRIPT_COUNT=0
-              CONFIG_COUNT=0
-              OTHER_COUNT=0
-              ENGLISH_COUNT=0
-              NON_ENGLISH_COUNT=0
-              
-              # 详细显示所有文件
-              echo ""
-              echo "📋 详细文件列表:"
-              echo "================================================"
-              
-              while IFS= read -r file; do
-                [ -z "$file" ] && continue
-                
-                REL_PATH="${file#$CUSTOM_DIR/}"
-                FILE_NAME=$(basename "$file")
-                FILE_SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                
-                # 检查是否为英文文件名 - 使用修复版检测
-                if is_english_name "$FILE_NAME"; then
-                  NAME_STATUS="✅ 英文"
-                  ENGLISH_COUNT=$((ENGLISH_COUNT + 1))
-                else
-                  NAME_STATUS="⚠️ 非英文"
-                  NON_ENGLISH_COUNT=$((NON_ENGLISH_COUNT + 1))
-                fi
-                
-                # 文件类型统计
-                if [[ "$FILE_NAME" =~ \.ipk$ ]] || [[ "$FILE_NAME" =~ \.IPK$ ]] || [[ "$FILE_NAME" =~ \.Ipk$ ]]; then
-                  TYPE_DESC="📦 IPK包"
-                  IPK_COUNT=$((IPK_COUNT + 1))
-                elif [[ "$FILE_NAME" =~ \.sh$ ]] || [[ "$FILE_NAME" =~ \.Sh$ ]] || [[ "$FILE_NAME" =~ \.SH$ ]]; then
-                  TYPE_DESC="📜 脚本"
-                  SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
-                elif [[ "$FILE_NAME" =~ \.conf$ ]] || [[ "$FILE_NAME" =~ \.config$ ]] || [[ "$FILE_NAME" =~ \.CONF$ ]]; then
-                  TYPE_DESC="⚙️ 配置"
-                  CONFIG_COUNT=$((CONFIG_COUNT + 1))
-                else
-                  TYPE_DESC="📁 其他"
-                  OTHER_COUNT=$((OTHER_COUNT + 1))
-                fi
-                
-                printf "%-45s %-8s %-12s %s\n" "$REL_PATH" "$FILE_SIZE" "$TYPE_DESC" "$NAME_STATUS"
-                
-              done <<< "$ALL_FILES"
-              
-              echo "================================================"
-              
-              # 统计信息
-              echo ""
-              echo "📊 文件统计:"
-              echo "  文件总数: $FILE_COUNT 个"
-              echo "  📦 IPK文件: $IPK_COUNT 个"
-              echo "  📜 脚本文件: $SCRIPT_COUNT 个"
-              echo "  ⚙️ 配置文件: $CONFIG_COUNT 个"
-              echo "  📁 其他文件: $OTHER_COUNT 个"
-              echo "  ✅ 英文文件名: $ENGLISH_COUNT 个"
-              echo "  ⚠️ 非英文文件名: $NON_ENGLISH_COUNT 个"
-              
-              # 文件名建议 - 简化版本
-              if [ $NON_ENGLISH_COUNT -gt 0 ]; then
-                echo ""
-                echo "💡 文件名兼容性建议:"
-                echo "  为了更好的兼容性，方便复制、运行，建议使用英文文件名"
-                echo "  当前系统会自动处理非英文文件名，但英文名有更好的兼容性"
-              fi
-              
-              echo ""
-              echo "🚀 开始执行自定义文件集成（增强版）..."
-              BUILD_DIR="${{ env.BUILD_DIR }}"
-              cd "$BUILD_DIR"
-              ./firmware-config/scripts/build_firmware_main.sh integrate_custom_files
-              
-              # 验证集成结果
-              echo ""
-              echo "🔍 验证集成结果..."
-              
-              # 检查自定义文件目录
-              if [ -d "files/etc/custom-files" ]; then
-                echo "✅ 自定义文件已复制到: files/etc/custom-files"
-                
-                # 统计复制后的文件
-                FINAL_FILES=$(find "files/etc/custom-files" -type f 2>/dev/null | wc -l)
-                echo "📊 复制后文件总数: $FINAL_FILES 个"
-                
-                # 显示目录结构 - 显示所有文件
-                if [ $FINAL_FILES -gt 0 ]; then
-                  echo "📁 复制后的所有文件列表:"
-                  find "files/etc/custom-files" -type f 2>/dev/null | while read file; do
-                    REL_PATH="${file#files/etc/custom-files/}"
-                    FILE_SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                    echo "  📄 $REL_PATH ($FILE_SIZE)"
-                  done
-                fi
-                
-                # 检查启动脚本
-                if [ -f "files/etc/uci-defaults/99-custom-files" ]; then
-                  echo "✅ 第一次开机启动脚本: files/etc/uci-defaults/99-custom-files"
-                  echo "📝 脚本增强功能:"
-                  echo "  - ✅ 递归查找所有自定义文件"
-                  echo "  - ✅ 保持原文件名"
-                  echo "  - ✅ IPK安装错误不退出，继续下一个"
-                  echo "  - ✅ 详细日志记录每个文件的处理结果"
-                  echo "  - ✅ 分类统计和成功率计算"
-                  echo "  - ✅ 日志存储到 /root/logs/ 目录（重启不丢失）"
-                fi
-                
-                # 检查文件名检查脚本
-                if [ -f "files/etc/custom-files/check_filenames.sh" ]; then
-                  echo "✅ 文件名检查脚本: files/etc/custom-files/check_filenames.sh"
-                fi
-                
-                echo ""
-                echo "🎯 增强版功能说明:"
-                echo "  🔧 递归查找: 支持自定义目录下的所有子目录"
-                echo "  📝 保持原文件名: 不自动重命名，保持用户设置的文件名"
-                echo "  🔄 错误不退出: IPK安装失败继续安装下一个"
-                echo "  📊 详细日志: 记录每个文件的处理结果和统计信息"
-                echo "  📁 持久日志: 日志存储在 /root/logs/（重启不丢失）"
-                
-                if [ $NON_ENGLISH_COUNT -gt 0 ]; then
-                  echo ""
-                  echo "⚠️ 文件名兼容性提醒:"
-                  echo "  当前有 $NON_ENGLISH_COUNT 个文件使用非英文文件名"
-                  echo "  系统会自动处理，但建议改为英文文件名"
-                  echo "  可以在固件启动后运行: /etc/custom-files/check_filenames.sh"
-                fi
-                
-              else
-                echo "❌ 未找到自定义文件目录"
-              fi
-              
-            fi
+            BUILD_DIR="${{ env.BUILD_DIR }}"
+            cd "$BUILD_DIR"
+            ./firmware-config/scripts/build_firmware_main.sh integrate_custom_files
             
             echo ""
             echo "🎉 自定义文件集成完成"
             echo "💡 自定义文件将在第一次开机时自动安装和运行"
-            echo "📌 安装顺序: IPK包 → 脚本文件 → 其他文件"
-            echo "🔧 错误处理: 单个文件安装失败不会影响其他文件"
-            echo "📁 日志位置: /root/logs/（重启不丢失）"
-            
           else
             echo "ℹ️ 自定义文件目录不存在: $CUSTOM_DIR"
             echo "📁 跳过自定义文件集成"
@@ -1257,10 +953,10 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 20 完成"
       
-      # 步骤 21: 前置错误检查（修复23.05 SDK验证）- 关键修复
-      - name: "21. 前置错误检查（修复23.05 SDK验证）"
+      # 步骤 21: 前置错误检查
+      - name: "21. 前置错误检查"
         run: |
-          echo "=== 步骤 21: 前置错误检查（修复23.05 SDK验证） ==="
+          echo "=== 步骤 21: 前置错误检查 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -1275,7 +971,7 @@ jobs:
             echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET"
           fi
           
-          echo "🚀 执行前置错误检查（已修复23.05 SDK验证问题）..."
+          echo "🚀 执行前置错误检查..."
           cd "$BUILD_DIR"
           ./firmware-config/scripts/build_firmware_main.sh pre_build_error_check
           
@@ -1345,10 +1041,10 @@ jobs:
           
           echo "🟢 步骤 22 完成"
       
-      # 步骤 23: 编译固件（智能并行优化版）
-      - name: "23. 编译固件（智能并行优化版）"
+      # 步骤 23: 编译固件
+      - name: "23. 编译固件"
         run: |
-          echo "=== 步骤 23: 编译固件（智能并行优化版） ==="
+          echo "=== 步骤 23: 编译固件 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -1367,7 +1063,7 @@ jobs:
           echo "  内存大小: ${TOTAL_MEM}MB"
           echo "  并行优化: ${{ env.ENABLE_PARALLEL }}"
           
-          # 智能判断最佳并行任务数 - 优化版
+          # 智能判断最佳并行任务数
           if [ "${{ env.ENABLE_PARALLEL }}" = "true" ]; then
             echo "🧠 智能判断最佳并行任务数..."
             
@@ -1411,9 +1107,9 @@ jobs:
           # 设置编译环境变量
           export FORCE_UNSAFE_CONFIGURE=1
           
-          # 开始编译，使用stdbuf防止stdout错误
+          # 开始编译
           START_TIME=$(date +%s)
-          stdbuf -oL -eL time make -j$MAKE_JOBS V=s 2>&1 | tee build.log
+          time make -j$MAKE_JOBS V=s 2>&1 | tee build.log
           BUILD_EXIT_CODE=${PIPESTATUS[0]}
           END_TIME=$(date +%s)
           DURATION=$((END_TIME - START_TIME))
@@ -1446,11 +1142,11 @@ jobs:
           
           echo "🟢 步骤 23 完成"
       
-      # 步骤 24: 检查构建产物（修复版）
-      - name: "24. 检查构建产物（修复版）"
+      # 步骤 24: 检查构建产物
+      - name: "24. 检查构建产物"
         if: success()
         run: |
-          echo "=== 步骤 24: 检查构建产物（修复版） ==="
+          echo "=== 步骤 24: 检查构建产物 ==="
           echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -1577,11 +1273,11 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 27: 编译后空间检查（修复版）
-      - name: "27. 编译后空间检查（修复版）"
+      # 步骤 27: 编译后空间检查
+      - name: "27. 编译后空间检查"
         if: always()
         run: |
-          echo "=== 步骤 27: 编译后空间检查（修复版） ==="
+          echo "=== 步骤 27: 编译后空间检查 ==="
           echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是检查
@@ -1619,7 +1315,7 @@ jobs:
           
           echo "🟢 步骤 27 完成"
       
-      # ============ 新增步骤：网页构建总结 ============
+      # 步骤 28: 网页构建总结
       - name: "28. 网页构建总结"
         if: always()
         run: |
