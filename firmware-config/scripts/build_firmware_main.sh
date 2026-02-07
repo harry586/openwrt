@@ -5,37 +5,6 @@ BUILD_DIR="/mnt/openwrt-build"
 ENV_FILE="$BUILD_DIR/build_env.sh"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-# 检查 support.sh 是否存在 - 简化查找逻辑
-echo "🔍 查找 support.sh 文件..."
-echo "当前目录: $(pwd)"
-echo "目录内容:"
-ls -la
-
-if [ -f "./support.sh" ]; then
-    echo "✅ 在当前目录找到 support.sh"
-    SUPPORT_FILE="./support.sh"
-elif [ -f "/mnt/openwrt-build/support.sh" ]; then
-    echo "✅ 在构建目录找到 support.sh"
-    SUPPORT_FILE="/mnt/openwrt-build/support.sh"
-elif [ -f "support.sh" ]; then
-    echo "✅ 找到 support.sh"
-    SUPPORT_FILE="support.sh"
-else
-    echo "❌ 错误: 无法找到 support.sh 文件"
-    echo "当前目录: $(pwd)"
-    echo "目录内容:"
-    ls -la
-    echo ""
-    echo "尝试在 /mnt/openwrt-build 中查找:"
-    ls -la /mnt/openwrt-build/ 2>/dev/null || echo "目录不存在"
-    exit 1
-fi
-
-echo "✅ 使用 support.sh 文件: $SUPPORT_FILE"
-
-# 加载 support.sh
-source "$SUPPORT_FILE"
-
 # 确保有日志目录
 mkdir -p /tmp/build-logs
 
@@ -55,20 +24,6 @@ handle_error() {
 save_env() {
     mkdir -p $BUILD_DIR
     echo "#!/bin/bash" > $ENV_FILE
-    
-    # 从 support.sh 获取设备信息
-    if [ -n "$DEVICE_NAME" ]; then
-        DEVICE_INFO=$(get_device_config "$DEVICE_NAME")
-        if [ -n "$DEVICE_INFO" ]; then
-            TARGET=$(echo "$DEVICE_INFO" | awk '{print $1}')
-            SUBTARGET=$(echo "$DEVICE_INFO" | awk '{print $2}')
-            DEVICE=$(echo "$DEVICE_INFO" | awk '{print $3}')
-        else
-            log "❌ 错误: 设备 '$DEVICE_NAME' 未在 support.sh 中定义"
-            exit 1
-        fi
-    fi
-    
     echo "export SELECTED_REPO_URL=\"${SELECTED_REPO_URL}\"" >> $ENV_FILE
     echo "export SELECTED_BRANCH=\"${SELECTED_BRANCH}\"" >> $ENV_FILE
     echo "export TARGET=\"${TARGET}\"" >> $ENV_FILE
@@ -77,7 +32,6 @@ save_env() {
     echo "export CONFIG_MODE=\"${CONFIG_MODE}\"" >> $ENV_FILE
     echo "export REPO_ROOT=\"${REPO_ROOT}\"" >> $ENV_FILE
     echo "export COMPILER_DIR=\"${COMPILER_DIR}\"" >> $ENV_FILE
-    echo "export DEVICE_NAME=\"${DEVICE_NAME}\"" >> $ENV_FILE
     
     # 确保环境变量可被其他步骤访问
     if [ -n "$GITHUB_ENV" ]; then
@@ -88,7 +42,6 @@ save_env() {
         echo "DEVICE=${DEVICE}" >> $GITHUB_ENV
         echo "CONFIG_MODE=${CONFIG_MODE}" >> $GITHUB_ENV
         echo "COMPILER_DIR=${COMPILER_DIR}" >> $GITHUB_ENV
-        echo "DEVICE_NAME=${DEVICE_NAME}" >> $GITHUB_ENV
     fi
     
     chmod +x $ENV_FILE
@@ -129,26 +82,67 @@ download_openwrt_sdk() {
     log "目标平台: $target/$subtarget"
     log "OpenWrt版本: $version"
     
-    # 从 support.sh 获取SDK URL
+    # 确定SDK下载URL
     local sdk_url=""
     local sdk_filename=""
     
-    if [ -n "$DEVICE_NAME" ]; then
-        sdk_url=$(get_sdk_url "$DEVICE_NAME" "$version")
-        if [ -z "$sdk_url" ]; then
-            log "❌ 错误: 无法从 support.sh 获取设备 '$DEVICE_NAME' 的SDK URL"
-            return 1
-        fi
-        
-        sdk_filename=$(basename "$sdk_url")
-        log "✅ 从 support.sh 获取到SDK URL"
+    if [ "$version" = "23.05" ] || [ "$version" = "openwrt-23.05" ]; then
+        # OpenWrt 23.05 SDK - 修复GCC版本为12.3.0
+        case "$target" in
+            "ipq40xx")
+                # 高通IPQ40xx平台
+                sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
+                sdk_filename="openwrt-sdk-23.05.3-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
+                ;;
+            "ramips")
+                # MIPS平台
+                if [ "$subtarget" = "mt76x8" ]; then
+                    sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt76x8/openwrt-sdk-23.05.3-ramips-mt76x8_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
+                    sdk_filename="openwrt-sdk-23.05.3-ramips-mt76x8_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
+                elif [ "$subtarget" = "mt7621" ]; then
+                    sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt7621/openwrt-sdk-23.05.3-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+                    sdk_filename="openwrt-sdk-23.05.3-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+                else
+                    log "❌ 不支持的子目标: $subtarget"
+                    return 1
+                fi
+                ;;
+            *)
+                log "❌ 不支持的目标平台: $target"
+                return 1
+                ;;
+        esac
+    elif [ "$version" = "21.02" ] || [ "$version" = "openwrt-21.02" ]; then
+        # OpenWrt 21.02 SDK - GCC版本保持8.4.0
+        case "$target" in
+            "ipq40xx")
+                sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+                sdk_filename="openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+                ;;
+            "ramips")
+                if [ "$subtarget" = "mt76x8" ]; then
+                    sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt76x8/openwrt-sdk-21.02.7-ramips-mt76x8_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+                    sdk_filename="openwrt-sdk-21.02.7-ramips-mt76x8_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+                elif [ "$subtarget" = "mt7621" ]; then
+                    sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt7621/openwrt-sdk-21.02.7-ramips-mt7621_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+                    sdk_filename="openwrt-sdk-21.02.7-ramips-mt7621_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+                else
+                    log "❌ 不支持的子目标: $subtarget"
+                    return 1
+                fi
+                ;;
+            *)
+                log "❌ 不支持的目标平台: $target"
+                return 1
+                ;;
+        esac
     else
-        log "❌ 错误: DEVICE_NAME 未设置"
+        log "❌ 不支持的OpenWrt版本: $version"
         return 1
     fi
     
     if [ -z "$sdk_url" ]; then
-        log "❌ 错误: 无法确定SDK下载URL"
+        log "❌ 无法确定SDK下载URL"
         return 1
     fi
     
@@ -758,7 +752,6 @@ pre_build_error_check() {
     log "  DEVICE: $DEVICE"
     log "  CONFIG_MODE: $CONFIG_MODE"
     log "  COMPILER_DIR: $COMPILER_DIR"
-    log "  DEVICE_NAME: $DEVICE_NAME"
     
     # 1. 检查配置文件
     if [ ! -f ".config" ]; then
@@ -1006,7 +999,7 @@ create_build_dir() {
     fi
 }
 
-# 初始化构建环境 - 完全依赖 support.sh
+# 初始化构建环境 - 调整顺序：先克隆源码再保存环境变量
 initialize_build_env() {
     local device_name=$1
     local version_selection=$2
@@ -1044,22 +1037,33 @@ initialize_build_env() {
     done
     
     log "=== 设备配置 ==="
-    
-    # 保存设备名称
-    export DEVICE_NAME="$device_name"
-    
-    # 从 support.sh 获取设备配置
-    DEVICE_CONFIG=$(get_device_config "$device_name")
-    if [ -z "$DEVICE_CONFIG" ]; then
-        log "❌ 错误: 设备 '$device_name' 未在 support.sh 中定义"
-        exit 1
-    fi
-    
-    TARGET=$(echo "$DEVICE_CONFIG" | awk '{print $1}')
-    SUBTARGET=$(echo "$DEVICE_CONFIG" | awk '{print $2}')
-    DEVICE=$(echo "$DEVICE_CONFIG" | awk '{print $3}')
-    
-    log "✅ 从 support.sh 获取设备配置: $device_name -> $TARGET/$SUBTARGET/$DEVICE"
+    case "$device_name" in
+        "ac42u"|"acrh17")
+            TARGET="ipq40xx"
+            SUBTARGET="generic"
+            DEVICE="asus_rt-ac42u"
+            log "🔧 检测到高通IPQ40xx平台设备: $device_name"
+            log "🔧 该设备支持USB 3.0，将启用所有USB 3.0相关驱动"
+            ;;
+        "mi_router_4a_gigabit"|"r4ag")
+            TARGET="ramips"
+            SUBTARGET="mt76x8"
+            DEVICE="xiaomi_mi-router-4a-gigabit"
+            log "🔧 检测到雷凌MT76x8平台设备: $device_name"
+            ;;
+        "mi_router_3g"|"r3g")
+            TARGET="ramips"
+            SUBTARGET="mt7621"
+            DEVICE="xiaomi_mi-router-3g"
+            log "🔧 检测到雷凌MT7621平台设备: $device_name"
+            ;;
+        *)
+            TARGET="ipq40xx"
+            SUBTARGET="generic"
+            DEVICE="$device_name"
+            log "🔧 未知设备，默认为高通IPQ40xx平台"
+            ;;
+    esac
     
     CONFIG_MODE="$config_mode"
     
@@ -1067,7 +1071,6 @@ initialize_build_env() {
     log "子目标: $SUBTARGET"
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
-    log "设备名称: $DEVICE_NAME"
     
     save_env
     
@@ -1077,7 +1080,6 @@ initialize_build_env() {
     echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
     echo "DEVICE=$DEVICE" >> $GITHUB_ENV
     echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
-    echo "DEVICE_NAME=$DEVICE_NAME" >> $GITHUB_ENV
     
     log "✅ 构建环境初始化完成"
 }
@@ -1102,7 +1104,6 @@ initialize_compiler_env() {
         log "  CONFIG_MODE: $CONFIG_MODE"
         log "  REPO_ROOT: $REPO_ROOT"
         log "  COMPILER_DIR: $COMPILER_DIR"
-        log "  DEVICE_NAME: $DEVICE_NAME"
     else
         log "⚠️ 环境文件不存在: $BUILD_DIR/build_env.sh"
         log "💡 环境文件应该在步骤6.3中创建，但未找到"
@@ -1117,19 +1118,31 @@ initialize_compiler_env() {
             log "⚠️ SELECTED_BRANCH未设置，使用默认值: $SELECTED_BRANCH"
         fi
         
-        # 从 support.sh 获取设备配置
-        DEVICE_CONFIG=$(get_device_config "$device_name")
-        if [ -z "$DEVICE_CONFIG" ]; then
-            log "❌ 错误: 设备 '$device_name' 未在 support.sh 中定义"
-            exit 1
+        if [ -z "$TARGET" ]; then
+            case "$device_name" in
+                "ac42u"|"acrh17")
+                    TARGET="ipq40xx"
+                    SUBTARGET="generic"
+                    DEVICE="asus_rt-ac42u"
+                    ;;
+                "mi_router_4a_gigabit"|"r4ag")
+                    TARGET="ramips"
+                    SUBTARGET="mt76x8"
+                    DEVICE="xiaomi_mi-router-4a-gigabit"
+                    ;;
+                "mi_router_3g"|"r3g")
+                    TARGET="ramips"
+                    SUBTARGET="mt7621"
+                    DEVICE="xiaomi_mi-router-3g"
+                    ;;
+                *)
+                    TARGET="ipq40xx"
+                    SUBTARGET="generic"
+                    DEVICE="$device_name"
+                    ;;
+            esac
+            log "⚠️ 平台变量未设置，使用默认值: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE"
         fi
-        
-        TARGET=$(echo "$DEVICE_CONFIG" | awk '{print $1}')
-        SUBTARGET=$(echo "$DEVICE_CONFIG" | awk '{print $2}')
-        DEVICE=$(echo "$DEVICE_CONFIG" | awk '{print $3}')
-        export DEVICE_NAME="$device_name"
-        
-        log "⚠️ 平台变量未设置，从 support.sh 获取: TARGET=$TARGET, SUBTARGET=$SUBTARGET, DEVICE=$DEVICE"
         
         if [ -z "$CONFIG_MODE" ]; then
             CONFIG_MODE="normal"
@@ -1179,7 +1192,6 @@ initialize_compiler_env() {
     log "目标平台: $TARGET/$SUBTARGET"
     log "目标设备: $DEVICE"
     log "OpenWrt版本: $SELECTED_BRANCH"
-    log "设备名称: $DEVICE_NAME"
     
     # 简化版本字符串（从openwrt-23.05转为23.05）
     local version_for_sdk=""
@@ -1203,13 +1215,6 @@ initialize_compiler_env() {
     log "  SDK版本: $version_for_sdk"
     log "  目标: $TARGET"
     log "  子目标: $SUBTARGET"
-    
-    # 从 support.sh 获取SDK URL
-    local sdk_url=$(get_sdk_url "$DEVICE_NAME" "$version_for_sdk")
-    if [ -z "$sdk_url" ]; then
-        log "❌ 错误: 无法从 support.sh 获取设备 '$DEVICE_NAME' 的SDK URL"
-        return 1
-    fi
     
     # 下载OpenWrt官方SDK
     log "🚀 开始下载OpenWrt官方SDK..."
@@ -1373,40 +1378,260 @@ pre_build_space_check() {
     log "✅ 空间检查完成"
 }
 
-# 智能配置生成系统 - 完全依赖 support.sh
 generate_config() {
     local extra_packages=$1
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 智能配置生成系统（完全依赖 support.sh）==="
+    log "=== 智能配置生成系统（USB完全修复通用版）==="
     log "版本: $SELECTED_BRANCH"
     log "目标: $TARGET"
     log "子目标: $SUBTARGET"
     log "设备: $DEVICE"
-    log "设备名称: $DEVICE_NAME"
     log "配置模式: $CONFIG_MODE"
     
     rm -f .config .config.old
     
-    # 使用 support.sh 生成配置
-    if [ -z "$DEVICE_NAME" ]; then
-        log "❌ 错误: DEVICE_NAME 未设置"
-        exit 1
+    echo "CONFIG_TARGET_${TARGET}=y" > .config
+    echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
+    echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" >> .config
+    echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+    echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
+    
+    echo "CONFIG_PACKAGE_busybox=y" >> .config
+    echo "CONFIG_PACKAGE_base-files=y" >> .config
+    echo "CONFIG_PACKAGE_dropbear=y" >> .config
+    echo "CONFIG_PACKAGE_firewall=y" >> .config
+    echo "CONFIG_PACKAGE_fstools=y" >> .config
+    echo "CONFIG_PACKAGE_libc=y" >> .config
+    echo "CONFIG_PACKAGE_libgcc=y" >> .config
+    echo "CONFIG_PACKAGE_mtd=y" >> .config
+    echo "CONFIG_PACKAGE_netifd=y" >> .config
+    echo "CONFIG_PACKAGE_opkg=y" >> .config
+    echo "CONFIG_PACKAGE_procd=y" >> .config
+    echo "CONFIG_PACKAGE_ubox=y" >> .config
+    echo "CONFIG_PACKAGE_ubus=y" >> .config
+    echo "CONFIG_PACKAGE_ubusd=y" >> .config
+    echo "CONFIG_PACKAGE_uci=y" >> .config
+    echo "CONFIG_PACKAGE_uclient-fetch=y" >> .config
+    echo "CONFIG_PACKAGE_usign=y" >> .config
+    
+    echo "# CONFIG_PACKAGE_dnsmasq is not set" >> .config
+    echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+    echo "CONFIG_PACKAGE_dnsmasq_full_dhcp=y" >> .config
+    echo "CONFIG_PACKAGE_dnsmasq_full_dhcpv6=y" >> .config
+    echo "CONFIG_PACKAGE_dnsmasq_full_dnssec=y" >> .config
+    echo "CONFIG_PACKAGE_dnsmasq_full_ipset=y" >> .config
+    echo "CONFIG_PACKAGE_dnsmasq_full_conntrack=y" >> .config
+    
+    echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
+    echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+    echo "CONFIG_PACKAGE_ath10k-firmware-qca988x=y" >> .config
+    echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
+    
+    echo "CONFIG_PACKAGE_iptables=y" >> .config
+    echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> .config
+    echo "CONFIG_PACKAGE_iptables-mod-ipopt=y" >> .config
+    echo "CONFIG_PACKAGE_ip6tables=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-ip6tables=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-ipt-nat6=y" >> .config
+    
+    # 添加常用网络插件
+    echo "CONFIG_PACKAGE_bridge=y" >> .config
+    echo "CONFIG_PACKAGE_blockd=y" >> .config
+    echo "# CONFIG_PACKAGE_busybox-selinux is not set" >> .config
+    echo "# CONFIG_PACKAGE_attendedsysupgrade-common is not set" >> .config
+    echo "# CONFIG_PACKAGE_auc is not set" >> .config
+    
+    log "=== 🚨 USB 完全修复通用配置 - 开始 ==="
+    
+    echo "# 🟢 USB 核心驱动 - 基础必须" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-core=y" >> .config
+    
+    echo "# 🟢 USB 主机控制器驱动 - 通用支持" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-ehci=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-uhci=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
+    
+    echo "# 🟢 USB 3.0扩展主机控制器接口驱动 - 支持USB 3.0高速数据传输" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config
+    
+    echo "# 🟡 平台专用USB控制器驱动 - 根据平台启用" >> .config
+    log "🔍 检测平台类型: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
+    
+    if [ "$TARGET" = "ipq40xx" ]; then
+        log "🚨 关键修复：IPQ40xx 专用USB控制器驱动（高通平台，支持USB 3.0）"
+        echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+        # 高通平台通常不需要MTK驱动，但保留以防万一
+        echo "# CONFIG_PACKAGE_kmod-usb-xhci-mtk is not set" >> .config
+        log "✅ 已启用所有高通IPQ40xx平台的USB驱动"
     fi
     
-    # 生成配置
-    generate_merged_config "$DEVICE_NAME" "$CONFIG_MODE" "$extra_packages" ".config"
+    if [ "$TARGET" = "ramips" ]; then
+        if [ "$SUBTARGET" = "mt76x8" ] || [ "$SUBTARGET" = "mt7621" ]; then
+            log "🚨 关键修复：MT76xx/雷凌 平台USB控制器驱动"
+            echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
+            # 雷凌平台通常不需要高通专用驱动
+            echo "# CONFIG_PACKAGE_kmod-usb-dwc3-qcom is not set" >> .config
+            echo "# CONFIG_PACKAGE_kmod-phy-qcom-dwc3 is not set" >> .config
+            log "✅ 已启用雷凌MT76xx平台的USB驱动"
+        fi
+    fi
     
-    if [ $? -ne 0 ]; then
-        log "❌ 配置生成失败"
-        exit 1
+    echo "# 🟢 USB 存储驱动 - 核心功能" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-storage-extras=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config
+    
+    echo "# 🟢 SCSI 支持 - 硬盘和U盘必需" >> .config
+    echo "CONFIG_PACKAGE_kmod-scsi-core=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-scsi-generic=y" >> .config
+    
+    echo "# 🟢 文件系统支持 - 完整文件系统兼容" >> .config
+    echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-fs-exfat=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-fs-autofs4=y" >> .config
+    
+    echo "# 🟢 USB大容量存储额外驱动" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-storage-extras=y" >> .config
+    
+    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+        log "🔧 23.05版本NTFS配置优化"
+        echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
+        echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
+        echo "# CONFIG_PACKAGE_ntfs-3g is not set" >> .config
+        echo "# CONFIG_PACKAGE_ntfs-3g-utils is not set" >> .config
+        echo "# CONFIG_PACKAGE_ntfs3-mount is not set" >> .config
+    else
+        log "🔧 21.02版本NTFS配置"
+        echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
+        echo "# CONFIG_PACKAGE_kmod-fs-ntfs is not set" >> .config
+        echo "CONFIG_PACKAGE_ntfs3-mount=y" >> .config
+    fi
+    
+    echo "# 🟢 编码支持 - 多语言文件名兼容" >> .config
+    echo "CONFIG_PACKAGE_kmod-nls-utf8=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-nls-cp437=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-nls-iso8859-1=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-nls-cp936=y" >> .config
+    
+    echo "# 🟢 自动挂载工具 - 即插即用支持" >> .config
+    echo "CONFIG_PACKAGE_block-mount=y" >> .config
+    echo "CONFIG_PACKAGE_automount=y" >> .config
+    
+    echo "# 🟢 USB 工具和热插拔支持 - 设备管理" >> .config
+    echo "CONFIG_PACKAGE_usbutils=y" >> .config
+    echo "CONFIG_PACKAGE_lsusb=y" >> .config
+    echo "CONFIG_PACKAGE_udev=y" >> .config
+    
+    echo "# 🟢 USB串口支持 - 扩展功能" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-serial=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-serial-ftdi=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-serial-pl2303=y" >> .config
+    
+    log "=== 🚨 USB 完全修复通用配置 - 完成 ==="
+    
+    echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y" >> .config
+    
+    if [ "$CONFIG_MODE" = "base" ]; then
+        log "🔧 使用基础模式 (最小化，用于测试编译)"
+        echo "# CONFIG_PACKAGE_luci-app-turboacc is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-fast-classifier is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn is not set" >> .config
+    else
+        log "🔧 使用正常模式 (完整功能)"
+        
+        NORMAL_PLUGINS=(
+          "CONFIG_PACKAGE_luci-app-turboacc=y"
+          "CONFIG_PACKAGE_kmod-shortcut-fe=y"
+          "CONFIG_PACKAGE_kmod-fast-classifier=y"
+          "CONFIG_PACKAGE_luci-app-upnp=y"
+          "CONFIG_PACKAGE_miniupnpd=y"
+          "CONFIG_PACKAGE_vsftpd=y"
+          "CONFIG_PACKAGE_luci-app-vsftpd=y"
+          "CONFIG_PACKAGE_luci-app-arpbind=y"
+          "CONFIG_PACKAGE_luci-app-cpulimit=y"
+          "CONFIG_PACKAGE_samba4-server=y"
+          "CONFIG_PACKAGE_luci-app-samba4=y"
+          "CONFIG_PACKAGE_luci-app-wechatpush=y"
+          "CONFIG_PACKAGE_sqm-scripts=y"
+          "CONFIG_PACKAGE_luci-app-sqm=y"
+          "CONFIG_PACKAGE_luci-app-hd-idle=y"
+          "CONFIG_PACKAGE_luci-app-diskman=y"
+          "CONFIG_PACKAGE_luci-app-accesscontrol=y"
+          "CONFIG_PACKAGE_vlmcsd=y"
+          "CONFIG_PACKAGE_luci-app-vlmcsd=y"
+          "CONFIG_PACKAGE_smartdns=y"
+          "CONFIG_PACKAGE_luci-app-smartdns=y"
+        )
+        
+        for plugin in "${NORMAL_PLUGINS[@]}"; do
+            echo "$plugin" >> .config
+        done
+        
+        # 为所有版本添加上网时间控制插件
+        echo "CONFIG_PACKAGE_luci-app-accesscontrol=y" >> .config
+        log "✅ 已添加上网时间控制插件"
+        
+        if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+            echo "CONFIG_PACKAGE_luci-i18n-turboacc-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-arpbind-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-cpulimit-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-hd-idle-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-accesscontrol-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-vlmcsd-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y" >> .config
+        fi
+    fi
+    
+    # 处理额外插件
+    if [ -n "$extra_packages" ]; then
+        log "🔧 处理额外安装插件: $extra_packages"
+        IFS=';' read -ra EXTRA_PKGS <<< "$extra_packages"
+        for pkg_cmd in "${EXTRA_PKGS[@]}"; do
+            if [ -n "$pkg_cmd" ]; then
+                pkg_cmd_clean=$(echo "$pkg_cmd" | xargs)
+                if [[ "$pkg_cmd_clean" == +* ]]; then
+                    pkg_name="${pkg_cmd_clean:1}"
+                    log "启用插件: $pkg_name"
+                    echo "CONFIG_PACKAGE_${pkg_name}=y" >> .config
+                elif [[ "$pkg_cmd_clean" == -* ]]; then
+                    pkg_name="${pkg_cmd_clean:1}"
+                    log "禁用插件: $pkg_name"
+                    echo "# CONFIG_PACKAGE_${pkg_name} is not set" >> .config
+                else
+                    log "启用插件: $pkg_cmd_clean"
+                    echo "CONFIG_PACKAGE_${pkg_cmd_clean}=y" >> .config
+                fi
+            fi
+        done
     fi
     
     log "✅ 智能配置生成完成"
-    
-    # 验证USB配置
-    verify_usb_config
 }
 
 verify_usb_config() {
@@ -2384,7 +2609,6 @@ build_firmware() {
     log "  版本: $SELECTED_BRANCH"
     log "  配置模式: $CONFIG_MODE"
     log "  编译器目录: $COMPILER_DIR"
-    log "  设备名称: $DEVICE_NAME"
     log "  启用缓存: $enable_cache"
     
     # 编译前最终检查
@@ -2757,7 +2981,6 @@ save_source_code_info() {
     echo "设备: $DEVICE" >> "$source_info_file"
     echo "配置模式: $CONFIG_MODE" >> "$source_info_file"
     echo "编译器目录: $COMPILER_DIR" >> "$source_info_file"
-    echo "设备名称: $DEVICE_NAME" >> "$source_info_file"
     
     # 收集目录信息
     echo "" >> "$source_info_file"
