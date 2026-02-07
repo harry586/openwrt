@@ -1,39 +1,40 @@
 # .github/workflows/firmware-build.yml
 name: OpenWrt 智能固件构建工作流
 
+# 关键：添加权限设置
 permissions:
-  contents: write
-  actions: write
-  checks: write
-  deployments: write
+  contents: write    # 允许写入仓库（上传Artifacts）
+  actions: write     # 允许触发工作流（如果需要递归触发）
+  checks: write      # 允许创建检查状态
+  deployments: write # 允许创建部署状态
 
 on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: "📱 设备名称"
+        description: "📱 设备名称 (自动从 support.sh 同步设备列表)"
         required: true
         default: "ac42u"
         type: string
       version_selection:
-        description: "🔄 OpenWrt版本"
+        description: "🔄 版本选择"
         required: true
         type: choice
-        default: "23.05"
+        default: "21.02"
         options: ["23.05", "21.02"]
       config_mode:
-        description: "⚙️ 配置模式 - 基础模式(最小配置) / 正常模式(完整功能)"
+        description: "⚙️ 配置模式选择 - 🟣 基础模式 - 最小化配置，用于测试编译。🟠 正常模式 - 完整功能配置"
         required: true
         type: choice
         default: "normal"
         options: ["base", "normal"]
       extra_packages:
-        description: "📦 额外插件 (格式: +插件名;-插件名 用分号分隔)"
+        description: "📦 额外安装插件 - 格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。"
         required: false
         type: string
         default: ""
       enable_parallel:
-        description: "⚡ 启用智能并行优化"
+        description: "⚡ 启用智能并行优化 (自动判断最佳任务数)"
         required: false
         type: choice
         default: "true"
@@ -55,6 +56,7 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
+      # ============ 显示构建参数 ============
       - name: "📋 显示构建参数"
         run: |
           echo "=================================================="
@@ -69,7 +71,7 @@ jobs:
           echo "🔑 会话ID: ${{ env.WEB_SESSION_ID }}"
           echo ""
           
-          # 生成构建ID
+          # 生成唯一构建ID
           TIMESTAMP="$(date -u +'%Y%m%d_%H%M%S')"
           BUILD_ID="build_${TIMESTAMP}_$(openssl rand -hex 4)"
           echo "BUILD_ID=$BUILD_ID" >> $GITHUB_ENV
@@ -80,6 +82,7 @@ jobs:
           echo "🔗 工作流URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           echo "=================================================="
       
+      # 步骤 0: 生成时间戳
       - name: "0. 生成时间戳"
         run: |
           echo "=== 步骤 0: 生成时间戳 ==="
@@ -107,6 +110,7 @@ jobs:
           
           echo "🟢 步骤 0 完成"
       
+      # 步骤 1: 使用Git Archive API下载源代码
       - name: "1. 使用Git Archive API下载源代码"
         run: |
           echo "=== 步骤 1: 使用Git Archive API下载源代码 ==="
@@ -215,6 +219,7 @@ jobs:
           echo "✅ Git Archive API下载完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 1 完成"
       
+      # 步骤 2: 上传源代码Artifacts
       - name: "2. 上传源代码Artifacts"
         uses: actions/upload-artifact@v4
         with:
@@ -223,6 +228,7 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
+      # 步骤 3: 修复权限问题
       - name: "3. 修复权限问题"
         run: |
           echo "=== 步骤 3: 修复权限问题 ==="
@@ -252,6 +258,7 @@ jobs:
           echo "✅ 修复所有脚本权限完成"
           echo "🟢 步骤 3 完成"
       
+      # 步骤 4: 安装基础工具
       - name: "4. 安装基础工具"
         run: |
           echo "=== 步骤 4: 安装基础工具 ==="
@@ -327,6 +334,7 @@ jobs:
           echo "✅ 基础工具安装完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 4 完成"
       
+      # 步骤 5: 初始空间检查
       - name: "5. 初始空间检查"
         run: |
           echo "=== 步骤 5: 初始磁盘空间检查 ==="
@@ -374,6 +382,7 @@ jobs:
           
           echo "🟢 步骤 5 完成"
       
+      # 步骤 6: 设置编译环境和构建目录
       - name: "6. 设置编译环境和构建目录"
         run: |
           echo "=== 步骤 6: 设置编译环境和构建目录 ==="
@@ -419,6 +428,7 @@ jobs:
           echo "✅ 编译环境和构建目录设置完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 6 完成"
       
+      # 步骤 7: 下载OpenWrt官方SDK
       - name: "7. 下载OpenWrt官方SDK"
         run: |
           echo "=== 步骤 7: 下载OpenWrt官方SDK ==="
@@ -514,6 +524,7 @@ jobs:
           echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 7 完成"
       
+      # 步骤 8: 验证SDK下载结果
       - name: "8. 验证SDK下载结果"
         run: |
           echo "=== 步骤 8: 验证SDK下载结果 ==="
@@ -587,6 +598,7 @@ jobs:
           echo "✅ SDK验证完成"
           echo "🟢 步骤 8 完成"
       
+      # 步骤 9: 添加 TurboACC 支持
       - name: "9. 添加 TurboACC 支持"
         run: |
           echo "=== 步骤 9: 添加 TurboACC 支持 ==="
@@ -603,6 +615,7 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 9 完成"
       
+      # 步骤 10: 配置Feeds
       - name: "10. 配置Feeds"
         run: |
           echo "=== 步骤 10: 配置Feeds ==="
@@ -619,6 +632,7 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-d %H:%M:%S')"
           echo "🟢 步骤 10 完成"
       
+      # 步骤 11: 安装 TurboACC 包
       - name: "11. 安装 TurboACC 包"
         if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
         run: |
@@ -636,6 +650,7 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 11 完成"
       
+      # 步骤 12: 编译前空间检查
       - name: "12. 编译前空间检查"
         run: |
           echo "=== 步骤 12: 编译前空间检查 ==="
@@ -652,6 +667,7 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 12 完成"
       
+      # 步骤 13: 智能配置生成
       - name: "13. 智能配置生成"
         run: |
           echo "=== 步骤 13: 智能配置生成 ==="
@@ -682,6 +698,7 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 13 完成"
       
+      # 步骤 14: 验证USB配置
       - name: "14. 验证USB配置"
         run: |
           echo "=== 步骤 14: 验证USB配置 ==="
@@ -697,6 +714,7 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 14 完成"
       
+      # 步骤 15: USB驱动完整性检查
       - name: "15. USB驱动完整性检查"
         run: |
           echo "=== 步骤 15: USB驱动完整性检查 ==="
@@ -712,6 +730,7 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 15 完成"
       
+      # 步骤 16: 应用配置并显示详情
       - name: "16. 应用配置并显示详情"
         run: |
           echo "=== 步骤 16: 应用配置并显示详情 ==="
@@ -764,6 +783,7 @@ jobs:
           echo "✅ 配置应用完成"
           echo "🟢 步骤 16 完成"
       
+      # 步骤 17: 检查并备份配置文件
       - name: "17. 检查并备份配置文件"
         run: |
           echo "=== 步骤 17: 检查并备份配置文件 ==="
@@ -798,6 +818,7 @@ jobs:
           
           echo "🟢 步骤 17 完成"
       
+      # 步骤 18: 修复网络环境
       - name: "18. 修复网络环境"
         run: |
           echo "=== 步骤 18: 修复网络环境 ==="
@@ -813,6 +834,7 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 18 完成"
       
+      # 步骤 19: 下载依赖包
       - name: "19. 下载依赖包"
         run: |
           echo "=== 步骤 19: 下载依赖包 ==="
@@ -853,6 +875,7 @@ jobs:
           
           echo "🟢 步骤 19 完成"
       
+      # 步骤 20: 集成自定义文件
       - name: "20. 集成自定义文件"
         run: |
           echo "=== 步骤 20: 集成自定义文件 ==="
@@ -882,6 +905,7 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 20 完成"
       
+      # 步骤 21: 前置错误检查
       - name: "21. 前置错误检查"
         run: |
           echo "=== 步骤 21: 前置错误检查 ==="
@@ -922,6 +946,7 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 21 完成"
       
+      # 步骤 22: 编译固件前的空间检查
       - name: "22. 编译固件前的空间检查"
         run: |
           echo "=== 步骤 22: 编译固件前的空间检查 ==="
@@ -967,6 +992,7 @@ jobs:
           
           echo "🟢 步骤 22 完成"
       
+      # 步骤 23: 编译固件
       - name: "23. 编译固件"
         run: |
           echo "=== 步骤 23: 编译固件 ==="
@@ -1066,6 +1092,7 @@ jobs:
           
           echo "🟢 步骤 23 完成"
       
+      # 步骤 24: 检查构建产物
       - name: "24. 检查构建产物"
         if: success()
         run: |
@@ -1176,6 +1203,7 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 24 完成"
       
+      # 步骤 25: 上传固件原始目录
       - name: "25. 上传固件原始目录"
         if: success()
         uses: actions/upload-artifact@v4
@@ -1185,6 +1213,7 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
+      # 步骤 26: 上传配置文件
       - name: "26. 上传配置文件"
         if: always()
         uses: actions/upload-artifact@v4
@@ -1194,6 +1223,7 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
+      # 步骤 27: 编译后空间检查
       - name: "27. 编译后空间检查"
         if: always()
         run: |
@@ -1235,6 +1265,7 @@ jobs:
           
           echo "🟢 步骤 27 完成"
       
+      # 步骤 28: 构建总结
       - name: "28. 构建总结"
         if: always()
         run: |
