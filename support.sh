@@ -1,3 +1,4 @@
+#【support.sh-01】
 #!/bin/bash
 
 # support.sh - 设备支持管理脚本
@@ -49,7 +50,9 @@ warn() {
 success() {
     echo -e "${GREEN}✅ $1${NC}"
 }
+#【support.sh-01】
 
+#【support.sh-02】
 # 检查构建主脚本是否存在
 check_build_main_script() {
     if [ ! -f "$BUILD_MAIN_SCRIPT" ]; then
@@ -127,7 +130,9 @@ get_device_platform() {
     
     echo "${DEVICES[$device_name]}"
 }
+#【support.sh-02】
 
+#【support.sh-03】
 # 应用设备专用配置
 apply_device_config() {
     local device_name="$1"
@@ -213,7 +218,9 @@ apply_generic_config() {
         error "通用配置文件不存在: $generic_config"
     fi
 }
+#【support.sh-03】
 
+#【support.sh-04】
 # 初始化编译器环境（调用主脚本）
 initialize_compiler() {
     local device_name="$1"
@@ -293,7 +300,9 @@ check_usb_drivers_integrity() {
     
     success "USB驱动完整性检查完成"
 }
+#【support.sh-04】
 
+#【support.sh-05】
 # 显示配置文件信息
 show_config_info() {
     local device_name="$1"
@@ -403,7 +412,9 @@ save_source_info() {
     
     success "源代码信息保存完成"
 }
+#【support.sh-05】
 
+#【support.sh-06】
 # 搜索编译器文件（调用主脚本）
 search_compiler_files() {
     local search_root="${1:-/tmp}"
@@ -496,7 +507,9 @@ search_compiler_files_simple() {
         return 1
     fi
 }
+#【support.sh-06】
 
+#【support.sh-07】
 # 前置错误检查（调用主脚本）
 pre_build_error_check() {
     log "前置错误检查..."
@@ -584,7 +597,9 @@ full_config_process() {
     
     success "完整配置流程完成"
 }
+#【support.sh-07】
 
+#【support.sh-08】
 # 显示帮助信息
 show_help() {
     echo "📱 设备支持管理脚本 (support.sh)"
@@ -614,6 +629,7 @@ show_help() {
     echo "  save-source-info <构建目录>"
     echo "                           保存源代码信息"
     echo "  pre-build-check           前置错误检查"
+    echo "  apply-config             应用配置"
     echo ""
     echo "编译器搜索命令 (调用主脚本):"
     echo "  search-compiler [搜索根目录] [目标平台]"
@@ -747,3 +763,4 @@ main() {
 
 # 运行主函数
 main "$@"
+#【support.sh-08】
