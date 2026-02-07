@@ -1,62 +1,45 @@
 # .github/workflows/firmware-build.yml
 name: OpenWrt 智能固件构建工作流
 
-# 关键：添加权限设置
 permissions:
-  contents: write    # 允许写入仓库（上传Artifacts）
-  actions: write     # 允许触发工作流（如果需要递归触发）
-  checks: write      # 允许创建检查状态
-  deployments: write # 允许创建部署状态
+  contents: write
+  actions: write
+  checks: write
+  deployments: write
 
 on:
   workflow_dispatch:
     inputs:
       device_name:
-        description: "📱 设备名称 (自动从 support.sh 同步设备列表)"
+        description: "📱 设备名称"
         required: true
         default: "ac42u"
         type: string
       version_selection:
-        description: "🔄 版本选择"
+        description: "🔄 OpenWrt版本"
         required: true
         type: choice
-        default: "21.02"
+        default: "23.05"
         options: ["23.05", "21.02"]
       config_mode:
-        description: "⚙️ 配置模式选择 - 🟣 基础模式 - 最小化配置，用于测试编译。🟠 正常模式 - 完整功能配置"
+        description: "⚙️ 配置模式 - 基础模式(最小配置) / 正常模式(完整功能)"
         required: true
         type: choice
         default: "normal"
         options: ["base", "normal"]
       extra_packages:
-        description: "额外安装插件 - 格式：用分号;分隔。启用插件：+插件名。禁用插件：-插件名。"
+        description: "📦 额外插件 (格式: +插件名;-插件名 用分号分隔)"
         required: false
         type: string
         default: ""
       enable_parallel:
-        description: "⚡ 启用智能并行优化 (自动判断最佳任务数)"
+        description: "⚡ 启用智能并行优化"
         required: false
         type: choice
         default: "true"
         options: ["true", "false"]
-      # ============ 网页触发参数 ============
-      web_trigger:
-        description: "🌐 网页触发标识 (true/false)"
-        required: false
-        type: string
-        default: "false"
       web_session_id:
         description: "🔑 网页会话ID (用于跟踪)"
-        required: false
-        type: string
-        default: ""
-      web_user_agent:
-        description: "👤 用户代理信息"
-        required: false
-        type: string
-        default: ""
-      web_referer:
-        description: "📎 来源页面"
         required: false
         type: string
         default: ""
@@ -65,19 +48,14 @@ env:
   BUILD_DIR: "/mnt/openwrt-build"
   REPO_ROOT: "${{ github.workspace }}"
   ENABLE_PARALLEL: "${{ github.event.inputs.enable_parallel }}"
-  # ============ 网页触发环境变量 ============
-  IS_WEB_TRIGGER: "${{ github.event.inputs.web_trigger }}"
   WEB_SESSION_ID: "${{ github.event.inputs.web_session_id }}"
-  WEB_USER_AGENT: "${{ github.event.inputs.web_user_agent }}"
-  WEB_REFERER: "${{ github.event.inputs.web_referer }}"
 
 jobs:
   build-firmware:
     runs-on: ubuntu-22.04
     
     steps:
-      # ============ 网页触发信息显示 ============
-      - name: "🌐 显示触发来源信息"
+      - name: "📋 显示构建参数"
         run: |
           echo "=================================================="
           echo "🎯 OpenWrt 固件构建工作流"
@@ -88,26 +66,10 @@ jobs:
           echo "⚙️ 模式: ${{ github.event.inputs.config_mode }}"
           echo "📦 插件: ${{ github.event.inputs.extra_packages }}"
           echo "⚡ 并行: ${{ github.event.inputs.enable_parallel }}"
+          echo "🔑 会话ID: ${{ env.WEB_SESSION_ID }}"
           echo ""
           
-          if [ "${{ env.IS_WEB_TRIGGER }}" = "true" ]; then
-            echo "🌐 触发来源: 🎨 网页自动触发"
-            echo "🔑 会话ID: ${{ env.WEB_SESSION_ID }}"
-            if [ -n "${{ env.WEB_USER_AGENT }}" ]; then
-              echo "👤 用户代理: ${{ env.WEB_USER_AGENT }}"
-            fi
-            if [ -n "${{ env.WEB_REFERER }}" ]; then
-              echo "📎 来源页面: ${{ env.WEB_REFERER }}"
-            fi
-            echo ""
-            echo "💡 这是通过网页界面自动触发的构建"
-          else
-            echo "🌐 触发来源: 👆 GitHub手动触发"
-            echo ""
-            echo "💡 这是在GitHub Actions页面手动触发的构建"
-          fi
-          
-          # 生成唯一构建ID
+          # 生成构建ID
           TIMESTAMP="$(date -u +'%Y%m%d_%H%M%S')"
           BUILD_ID="build_${TIMESTAMP}_$(openssl rand -hex 4)"
           echo "BUILD_ID=$BUILD_ID" >> $GITHUB_ENV
@@ -118,7 +80,6 @@ jobs:
           echo "🔗 工作流URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           echo "=================================================="
       
-      # 步骤 0: 生成时间戳
       - name: "0. 生成时间戳"
         run: |
           echo "=== 步骤 0: 生成时间戳 ==="
@@ -128,8 +89,8 @@ jobs:
           BASE_DATE=$(date -u +'%Y%m%d')
           
           # 如果已经生成了构建ID，使用它
-          if [ -n "${{ env.BUILD_ID }}" ]; then
-            TIMESTAMP="${{ env.BUILD_ID }}"
+          if [ -n "$BUILD_ID" ]; then
+            TIMESTAMP="$BUILD_ID"
           else
             TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$BASE_DATE"
           fi
@@ -142,17 +103,10 @@ jobs:
           echo "  版本: ${{ github.event.inputs.version_selection }}"
           echo "  模式: ${{ github.event.inputs.config_mode }}"
           echo "  并行优化: ${{ github.event.inputs.enable_parallel }}"
-          
-          # 添加网页触发信息
-          if [ "${{ env.IS_WEB_TRIGGER }}" = "true" ]; then
-            echo "  触发方式: 🌐 网页自动触发"
-          else
-            echo "  触发方式: 👆 手动触发"
-          fi
+          echo "  会话ID: ${{ env.WEB_SESSION_ID }}"
           
           echo "🟢 步骤 0 完成"
       
-      # 步骤 1: 使用Git Archive API下载源代码
       - name: "1. 使用Git Archive API下载源代码"
         run: |
           echo "=== 步骤 1: 使用Git Archive API下载源代码 ==="
@@ -261,7 +215,6 @@ jobs:
           echo "✅ Git Archive API下载完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 1 完成"
       
-      # 步骤 2: 上传源代码Artifacts
       - name: "2. 上传源代码Artifacts"
         uses: actions/upload-artifact@v4
         with:
@@ -270,7 +223,6 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 3: 修复权限问题
       - name: "3. 修复权限问题"
         run: |
           echo "=== 步骤 3: 修复权限问题 ==="
@@ -300,7 +252,6 @@ jobs:
           echo "✅ 修复所有脚本权限完成"
           echo "🟢 步骤 3 完成"
       
-      # 步骤 4: 安装基础工具
       - name: "4. 安装基础工具"
         run: |
           echo "=== 步骤 4: 安装基础工具 ==="
@@ -376,7 +327,6 @@ jobs:
           echo "✅ 基础工具安装完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 4 完成"
       
-      # 步骤 5: 初始空间检查
       - name: "5. 初始空间检查"
         run: |
           echo "=== 步骤 5: 初始磁盘空间检查 ==="
@@ -424,7 +374,6 @@ jobs:
           
           echo "🟢 步骤 5 完成"
       
-      # 步骤 6: 设置编译环境和构建目录
       - name: "6. 设置编译环境和构建目录"
         run: |
           echo "=== 步骤 6: 设置编译环境和构建目录 ==="
@@ -467,13 +416,9 @@ jobs:
           
           ./firmware-config/scripts/build_firmware_main.sh initialize_build_env "${{ github.event.inputs.device_name }}" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}"
           
-          # 注意：步骤6.3会清空构建目录并克隆源码，所以support.sh会被删除
-          # 这是正常行为，后续步骤会重新复制需要的文件
-          
           echo "✅ 编译环境和构建目录设置完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 6 完成"
       
-      # 步骤 7: 下载OpenWrt官方SDK
       - name: "7. 下载OpenWrt官方SDK"
         run: |
           echo "=== 步骤 7: 下载OpenWrt官方SDK ==="
@@ -488,7 +433,7 @@ jobs:
           BUILD_DIR="${{ env.BUILD_DIR }}"
           echo "📌 使用构建目录: $BUILD_DIR"
           
-          # 步骤6.3会清空构建目录，这里需要重新复制支持文件
+          # 重新复制支持文件到构建目录
           echo "🔧 重新复制支持文件到构建目录..."
           
           # 1. 复制 support.sh
@@ -569,7 +514,6 @@ jobs:
           echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 7 完成"
       
-      # 步骤 8: 验证SDK下载结果
       - name: "8. 验证SDK下载结果"
         run: |
           echo "=== 步骤 8: 验证SDK下载结果 ==="
@@ -621,8 +565,6 @@ jobs:
               else
                 echo "💡 SDK GCC版本: $MAJOR_VERSION.x"
               fi
-              
-              echo "💡 系统GCC (11.4.0) 用于编译工具链，SDK GCC ($MAJOR_VERSION.x) 用于交叉编译固件"
             else
               echo "⚠️ 未找到可执行的GCC编译器（可能是虚假的dummy-tools）"
               
@@ -645,7 +587,6 @@ jobs:
           echo "✅ SDK验证完成"
           echo "🟢 步骤 8 完成"
       
-      # 步骤 9: 添加 TurboACC 支持
       - name: "9. 添加 TurboACC 支持"
         run: |
           echo "=== 步骤 9: 添加 TurboACC 支持 ==="
@@ -662,7 +603,6 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 9 完成"
       
-      # 步骤 10: 配置Feeds
       - name: "10. 配置Feeds"
         run: |
           echo "=== 步骤 10: 配置Feeds ==="
@@ -679,7 +619,6 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-d %H:%M:%S')"
           echo "🟢 步骤 10 完成"
       
-      # 步骤 11: 安装 TurboACC 包
       - name: "11. 安装 TurboACC 包"
         if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
         run: |
@@ -697,7 +636,6 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 11 完成"
       
-      # 步骤 12: 编译前空间检查
       - name: "12. 编译前空间检查"
         run: |
           echo "=== 步骤 12: 编译前空间检查 ==="
@@ -714,7 +652,6 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 12 完成"
       
-      # 步骤 13: 智能配置生成
       - name: "13. 智能配置生成"
         run: |
           echo "=== 步骤 13: 智能配置生成 ==="
@@ -726,7 +663,7 @@ jobs:
           
           BUILD_DIR="${{ env.BUILD_DIR }}"
           
-          # 重新复制 support.sh 到构建目录（可能被之前的步骤覆盖）
+          # 重新复制 support.sh 到构建目录
           echo "🔧 重新复制 support.sh..."
           SOURCE_SUPPORT="${{ github.workspace }}/support.sh"
           
@@ -745,7 +682,6 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 13 完成"
       
-      # 步骤 14: 验证USB配置
       - name: "14. 验证USB配置"
         run: |
           echo "=== 步骤 14: 验证USB配置 ==="
@@ -761,7 +697,6 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 14 完成"
       
-      # 步骤 15: USB驱动完整性检查
       - name: "15. USB驱动完整性检查"
         run: |
           echo "=== 步骤 15: USB驱动完整性检查 ==="
@@ -777,7 +712,6 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 15 完成"
       
-      # 步骤 16: 应用配置并显示详情
       - name: "16. 应用配置并显示详情"
         run: |
           echo "=== 步骤 16: 应用配置并显示详情 ==="
@@ -830,7 +764,6 @@ jobs:
           echo "✅ 配置应用完成"
           echo "🟢 步骤 16 完成"
       
-      # 步骤 17: 检查并备份配置文件
       - name: "17. 检查并备份配置文件"
         run: |
           echo "=== 步骤 17: 检查并备份配置文件 ==="
@@ -865,7 +798,6 @@ jobs:
           
           echo "🟢 步骤 17 完成"
       
-      # 步骤 18: 修复网络环境
       - name: "18. 修复网络环境"
         run: |
           echo "=== 步骤 18: 修复网络环境 ==="
@@ -881,7 +813,6 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 18 完成"
       
-      # 步骤 19: 下载依赖包
       - name: "19. 下载依赖包"
         run: |
           echo "=== 步骤 19: 下载依赖包 ==="
@@ -903,8 +834,7 @@ jobs:
           DEP_COUNT=$(find dl -type f 2>/dev/null | wc -l)
           echo "📊 当前依赖包数量: $DEP_COUNT 个"
           
-          echo "🚀 开始下载依赖包（启用并行下载）..."
-          # 使用并行下载加速
+          echo "🚀 开始下载依赖包..."
           make -j4 download V=s 2>&1 | tee download.log
           
           DOWNLOAD_EXIT_CODE=${PIPESTATUS[0]}
@@ -923,7 +853,6 @@ jobs:
           
           echo "🟢 步骤 19 完成"
       
-      # 步骤 20: 集成自定义文件
       - name: "20. 集成自定义文件"
         run: |
           echo "=== 步骤 20: 集成自定义文件 ==="
@@ -953,7 +882,6 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 20 完成"
       
-      # 步骤 21: 前置错误检查
       - name: "21. 前置错误检查"
         run: |
           echo "=== 步骤 21: 前置错误检查 ==="
@@ -980,7 +908,6 @@ jobs:
             echo "❌ 错误: 前置错误检查失败，退出代码: $CHECK_EXIT_CODE"
             echo "💡 请查看上方错误信息进行修复"
             
-            # 如果是23.05版本，提供特殊提示
             if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
               echo ""
               echo "🚨 23.05版本SDK验证问题修复提示:"
@@ -995,7 +922,6 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 21 完成"
       
-      # 步骤 22: 编译固件前的空间检查
       - name: "22. 编译固件前的空间检查"
         run: |
           echo "=== 步骤 22: 编译固件前的空间检查 ==="
@@ -1041,7 +967,6 @@ jobs:
           
           echo "🟢 步骤 22 完成"
       
-      # 步骤 23: 编译固件
       - name: "23. 编译固件"
         run: |
           echo "=== 步骤 23: 编译固件 ==="
@@ -1067,7 +992,6 @@ jobs:
           if [ "${{ env.ENABLE_PARALLEL }}" = "true" ]; then
             echo "🧠 智能判断最佳并行任务数..."
             
-            # GitHub Actions Runner 优化配置
             if [ $CPU_CORES -ge 4 ]; then
               if [ $TOTAL_MEM -ge 8000 ]; then
                 MAKE_JOBS=4
@@ -1142,7 +1066,6 @@ jobs:
           
           echo "🟢 步骤 23 完成"
       
-      # 步骤 24: 检查构建产物
       - name: "24. 检查构建产物"
         if: success()
         run: |
@@ -1253,7 +1176,6 @@ jobs:
           echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 24 完成"
       
-      # 步骤 25: 上传固件原始目录
       - name: "25. 上传固件原始目录"
         if: success()
         uses: actions/upload-artifact@v4
@@ -1263,7 +1185,6 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 26: 上传配置文件
       - name: "26. 上传配置文件"
         if: always()
         uses: actions/upload-artifact@v4
@@ -1273,7 +1194,6 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       
-      # 步骤 27: 编译后空间检查
       - name: "27. 编译后空间检查"
         if: always()
         run: |
@@ -1315,11 +1235,10 @@ jobs:
           
           echo "🟢 步骤 27 完成"
       
-      # 步骤 28: 网页构建总结
-      - name: "28. 网页构建总结"
+      - name: "28. 构建总结"
         if: always()
         run: |
-          echo "=== 步骤 28: 网页构建总结 ==="
+          echo "=== 步骤 28: 构建总结 ==="
           echo "🕐 总结时间: $(date '+%Y-%m-%d %H:%M:%S')"
           
           echo ""
@@ -1361,13 +1280,10 @@ jobs:
           echo "🔗 构建详情:"
           echo "  https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           
-          if [ "${{ env.IS_WEB_TRIGGER }}" = "true" ]; then
+          if [ -n "${{ env.WEB_SESSION_ID }}" ]; then
             echo ""
             echo "🌐 网页触发信息:"
             echo "  会话ID: ${{ env.WEB_SESSION_ID }}"
-            if [ -n "${{ env.WEB_REFERER }}" ]; then
-              echo "  来源页面: ${{ env.WEB_REFERER }}"
-            fi
           fi
           
           echo ""
