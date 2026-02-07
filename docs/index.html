@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenWrt固件构建器 - 自动触发版</title>
+    <title>OpenWrt固件构建器 - 配置生成器</title>
     <style>
         :root {
             --primary: #2ea44f;
@@ -121,11 +121,12 @@
             cursor: not-allowed;
         }
         
-        .btn.secondary {
+        .btn.copy-btn {
             background: #0366d6;
+            margin-top: 10px;
         }
         
-        .btn.secondary:hover:not(:disabled) {
+        .btn.copy-btn:hover {
             background: #0256b9;
         }
         
@@ -149,86 +150,10 @@
             color: #d73a49;
         }
         
-        .alert.warning {
-            background: #fff8f0;
-            border: 2px solid #e36209;
-            color: #e36209;
-        }
-        
         .alert.info {
             background: #f0f8ff;
             border: 2px solid #0366d6;
             color: #0366d6;
-        }
-        
-        .loading {
-            text-align: center;
-            padding: 40px;
-            display: none;
-        }
-        
-        .spinner {
-            width: 50px;
-            height: 50px;
-            border: 4px solid var(--border);
-            border-top: 4px solid var(--primary);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 20px;
-        }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(-10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .status-card {
-            background: var(--bg);
-            padding: 20px;
-            border-radius: 8px;
-            margin-top: 20px;
-            display: none;
-        }
-        
-        .status-card.show {
-            display: block;
-            animation: fadeIn 0.5s;
-        }
-        
-        .status-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 10px;
-            padding: 10px;
-            background: white;
-            border-radius: 6px;
-        }
-        
-        .build-link {
-            display: block;
-            padding: 12px 16px;
-            background: white;
-            border: 2px solid var(--primary);
-            border-radius: 8px;
-            color: var(--primary);
-            text-decoration: none;
-            text-align: center;
-            font-weight: 600;
-            margin: 20px 0;
-            transition: all 0.2s;
-        }
-        
-        .build-link:hover {
-            background: var(--primary);
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(46, 164, 79, 0.2);
         }
         
         .instructions {
@@ -274,14 +199,94 @@
             text-decoration: underline;
         }
         
-        .button-group {
-            display: flex;
-            gap: 10px;
-            margin-top: 20px;
+        .params-display {
+            background: #f6f8fa;
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-all;
         }
         
-        .button-group .btn {
+        .param-item {
+            margin-bottom: 8px;
+            padding: 8px;
+            background: white;
+            border-radius: 4px;
+            border-left: 4px solid var(--primary);
+        }
+        
+        .param-label {
+            font-weight: 600;
+            color: var(--text);
+            margin-right: 10px;
+        }
+        
+        .param-value {
+            color: var(--text-light);
+        }
+        
+        .copy-hint {
+            text-align: center;
+            color: var(--text-light);
+            font-size: 0.9rem;
+            margin-top: 10px;
+            font-style: italic;
+        }
+        
+        .steps {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: var(--shadow);
+        }
+        
+        .step {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 20px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .step:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+        
+        .step-number {
+            width: 32px;
+            height: 32px;
+            background: var(--primary);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            margin-right: 15px;
+            flex-shrink: 0;
+        }
+        
+        .step-content {
             flex: 1;
+        }
+        
+        .step-title {
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: var(--text);
+        }
+        
+        .step-description {
+            color: var(--text-light);
+            font-size: 0.95rem;
         }
         
         @media (max-width: 768px) {
@@ -297,8 +302,12 @@
                 font-size: 2rem;
             }
             
-            .button-group {
+            .step {
                 flex-direction: column;
+            }
+            
+            .step-number {
+                margin-bottom: 10px;
             }
         }
     </style>
@@ -307,7 +316,7 @@
     <div class="container">
         <header>
             <h1>🚀 OpenWrt固件构建器</h1>
-            <p class="subtitle">一键自动触发GitHub Actions构建固件</p>
+            <p class="subtitle">一键生成构建参数，快速开始固件编译</p>
             <a href="#" id="githubRepoLink" class="github-link" target="_blank">
                 <span>🐙</span> 查看GitHub仓库
             </a>
@@ -316,7 +325,7 @@
         <div class="card">
             <div id="alert" class="alert"></div>
             
-            <form id="buildForm">
+            <form id="configForm">
                 <div class="form-group">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                         <label for="device">📱 选择设备</label>
@@ -361,73 +370,85 @@
                     </label>
                 </div>
                 
-                <div class="button-group">
-                    <button type="submit" class="btn" id="autoBtn">
-                        <span>🚀</span> <strong>自动触发构建</strong>
-                    </button>
-                    <button type="button" class="btn secondary" id="manualBtn">
-                        <span>🛠️</span> <strong>手动触发</strong>
-                    </button>
-                </div>
+                <button type="button" class="btn" id="generateBtn">
+                    <span>🔧</span> <strong>生成构建参数</strong>
+                </button>
             </form>
             
-            <div class="loading" id="loading">
-                <div class="spinner"></div>
-                <p id="loadingText">正在触发GitHub Actions工作流...</p>
+            <div id="paramsSection" style="display: none;">
+                <h3>📋 生成的构建参数</h3>
+                <div class="params-display" id="paramsDisplay">
+                    <!-- 参数将在这里显示 -->
+                </div>
+                
+                <div class="copy-hint">💡 复制下方所有参数，然后在GitHub Actions页面粘贴</div>
+                
+                <button type="button" class="btn copy-btn" id="copyAllBtn">
+                    <span>📋</span> <strong>复制所有参数</strong>
+                </button>
+                
+                <button type="button" class="btn" id="openActionsBtn" style="margin-top: 10px;">
+                    <span>🚀</span> <strong>打开GitHub Actions页面</strong>
+                </button>
+            </div>
+        </div>
+        
+        <div class="steps">
+            <h3>📝 使用步骤</h3>
+            
+            <div class="step">
+                <div class="step-number">1</div>
+                <div class="step-content">
+                    <div class="step-title">填写构建配置</div>
+                    <div class="step-description">选择设备型号、OpenWrt版本、配置模式等参数</div>
+                </div>
             </div>
             
-            <div class="status-card" id="statusCard">
-                <h3>📋 构建状态</h3>
-                <div class="status-item">
-                    <span id="statusStep1Icon">⏳</span>
-                    <span id="statusStep1">正在准备构建参数...</span>
+            <div class="step">
+                <div class="step-number">2</div>
+                <div class="step-content">
+                    <div class="step-title">生成构建参数</div>
+                    <div class="step-description">点击"生成构建参数"按钮，系统会生成所有需要的参数</div>
                 </div>
-                <div class="status-item">
-                    <span id="statusStep2Icon">⏳</span>
-                    <span id="statusStep2">正在生成触发链接...</span>
+            </div>
+            
+            <div class="step">
+                <div class="step-number">3</div>
+                <div class="step-content">
+                    <div class="step-title">复制参数</div>
+                    <div class="step-description">点击"复制所有参数"按钮，复制生成的参数到剪贴板</div>
                 </div>
-                <div class="status-item">
-                    <span id="statusStep3Icon">⏳</span>
-                    <span id="statusStep3">准备跳转到GitHub...</span>
+            </div>
+            
+            <div class="step">
+                <div class="step-number">4</div>
+                <div class="step-content">
+                    <div class="step-title">打开GitHub Actions</div>
+                    <div class="step-description">点击"打开GitHub Actions页面"按钮</div>
                 </div>
-                
-                <div id="directLinkSection" style="display: none; margin-top: 20px;">
-                    <h4>🔗 直接触发链接</h4>
-                    <div style="background: #f6f8fa; padding: 15px; border-radius: 8px; margin: 10px 0; font-family: monospace; word-break: break-all; font-size: 0.9rem;">
-                        <div id="paramsDisplay"></div>
-                    </div>
-                    <a href="#" id="directLink" class="build-link" target="_blank">
-                        🚀 点击打开GitHub Actions页面开始构建
-                    </a>
-                    <p style="margin: 10px 0; color: var(--text-light); font-size: 0.9rem;">
-                        💡 点击上方链接，在新页面中点击"Run workflow"，参数已自动填写
-                    </p>
+            </div>
+            
+            <div class="step">
+                <div class="step-number">5</div>
+                <div class="step-content">
+                    <div class="step-title">手动触发构建</div>
+                    <div class="step-description">在GitHub Actions页面：<br>
+                        1. 点击"Run workflow"按钮<br>
+                        2. 粘贴复制的参数到对应字段<br>
+                        3. 点击"Run workflow"开始构建</div>
                 </div>
-                
-                <a href="#" id="buildLink" class="build-link" target="_blank" style="display: none;">
-                    🔍 查看所有构建历史
-                </a>
-                
-                <p style="margin-top: 15px; color: var(--text-light); font-size: 0.9rem;">
-                    构建完成后，固件可以在Actions页面的Artifacts中下载
-                </p>
             </div>
         </div>
         
         <div class="instructions">
-            <h3>📝 使用说明</h3>
-            <ol>
-                <li><strong>选择设备型号</strong> - 从列表中选择要构建的设备</li>
-                <li><strong>选择OpenWrt版本</strong> - 21.02稳定版或23.05新版</li>
-                <li><strong>选择配置模式</strong> - 基础/正常模式</li>
-                <li><strong>点击"自动触发构建"按钮</strong></li>
-                <li><strong>系统会生成包含所有参数的链接</strong></li>
-                <li><strong>点击链接打开GitHub Actions页面</strong></li>
-                <li><strong>点击"Run workflow"开始构建</strong></li>
-            </ol>
-            <p style="margin-top: 15px; color: var(--text-light); font-size: 0.9rem;">
-                💡 提示：构建过程可能需要30-60分钟，请耐心等待
-            </p>
+            <h3>💡 重要提示</h3>
+            <ul style="color: var(--text-light); padding-left: 20px;">
+                <li>GitHub Actions的安全限制，无法自动填写参数</li>
+                <li>需要手动复制参数并粘贴到GitHub页面</li>
+                <li>构建过程需要30-60分钟，请耐心等待</li>
+                <li>构建完成后，固件可以在Actions页面的Artifacts中下载</li>
+                <li>如果遇到问题，请查看仓库的README文档</li>
+            </ul>
         </div>
         
         <footer>
@@ -456,26 +477,15 @@
         // DOM元素
         const elements = {
             deviceSelect: document.getElementById('device'),
-            autoBtn: document.getElementById('autoBtn'),
-            manualBtn: document.getElementById('manualBtn'),
+            generateBtn: document.getElementById('generateBtn'),
             alert: document.getElementById('alert'),
-            loading: document.getElementById('loading'),
-            loadingText: document.getElementById('loadingText'),
-            statusCard: document.getElementById('statusCard'),
-            statusStep1: document.getElementById('statusStep1'),
-            statusStep1Icon: document.getElementById('statusStep1Icon'),
-            statusStep2: document.getElementById('statusStep2'),
-            statusStep2Icon: document.getElementById('statusStep2Icon'),
-            statusStep3: document.getElementById('statusStep3'),
-            statusStep3Icon: document.getElementById('statusStep3Icon'),
-            directLink: document.getElementById('directLink'),
-            directLinkSection: document.getElementById('directLinkSection'),
+            paramsSection: document.getElementById('paramsSection'),
             paramsDisplay: document.getElementById('paramsDisplay'),
-            buildLink: document.getElementById('buildLink'),
+            copyAllBtn: document.getElementById('copyAllBtn'),
+            openActionsBtn: document.getElementById('openActionsBtn'),
             githubRepoLink: document.getElementById('githubRepoLink'),
             githubDocsLink: document.getElementById('githubDocsLink'),
-            deviceSource: document.getElementById('deviceSource'),
-            enableParallel: document.getElementById('enableParallel')
+            deviceSource: document.getElementById('deviceSource')
         };
         
         // 设备列表
@@ -491,25 +501,26 @@
             // 加载设备列表
             await loadDevices();
             
-            // 设置表单事件
-            setupFormEvents();
-            
-            // 启用按钮
-            elements.autoBtn.disabled = false;
-            elements.manualBtn.disabled = false;
+            // 设置事件监听
+            setupEventListeners();
         }
         
         function updateGitHubLinks() {
             const baseUrl = `https://github.com/${CONFIG.repoOwner}/${CONFIG.repoName}`;
+            const actionsUrl = `${baseUrl}/actions/workflows/${CONFIG.workflowFile}`;
+            
             elements.githubRepoLink.href = baseUrl;
-            elements.githubDocsLink.href = `${baseUrl}/actions`;
+            elements.githubDocsLink.href = actionsUrl;
+            elements.openActionsBtn.onclick = () => {
+                window.open(actionsUrl, '_blank', 'noopener,noreferrer');
+            };
         }
         
         async function loadDevices() {
             try {
                 let source = '📁 本地';
                 
-                // 首先尝试从本地加载
+                // 尝试从本地加载
                 try {
                     const response = await fetch('support.sh');
                     if (response.ok) {
@@ -521,7 +532,7 @@
                     console.log('本地加载失败:', e);
                 }
                 
-                // 如果本地加载失败，尝试从GitHub加载
+                // 尝试从GitHub加载
                 if (devices.length === 0) {
                     try {
                         const response = await fetch(
@@ -531,20 +542,18 @@
                             const content = await response.text();
                             devices = extractDevicesFromSupport(content);
                             source = '🌐 GitHub';
-                            console.log('从GitHub加载设备列表成功:', devices.length);
                         }
                     } catch (e) {
                         console.log('GitHub加载失败:', e);
                     }
                 }
                 
-                // 如果都失败，使用默认设备
+                // 使用默认设备
                 if (devices.length === 0) {
                     devices = ['ac42u'];
                     source = '⚙️ 默认';
                 }
                 
-                // 更新UI
                 updateDeviceUI(source);
                 
             } catch (error) {
@@ -578,22 +587,22 @@
                 option.textContent = device;
                 elements.deviceSelect.appendChild(option);
             });
-        }
-        
-        function setupFormEvents() {
-            document.getElementById('buildForm').addEventListener('submit', handleAutoTrigger);
-            elements.manualBtn.addEventListener('click', handleManualTrigger);
-        }
-        
-        async function handleAutoTrigger(event) {
-            event.preventDefault();
             
+            elements.generateBtn.disabled = false;
+        }
+        
+        function setupEventListeners() {
+            elements.generateBtn.addEventListener('click', generateParams);
+            elements.copyAllBtn.addEventListener('click', copyAllParams);
+        }
+        
+        function generateParams() {
             const formData = {
                 device: elements.deviceSelect.value,
                 version: document.getElementById('version').value,
                 mode: document.getElementById('mode').value,
                 packages: document.getElementById('packages').value.trim(),
-                enableParallel: elements.enableParallel.checked ? "true" : "false"
+                enableParallel: document.getElementById('enableParallel').checked ? "true" : "false"
             };
             
             // 验证表单
@@ -607,132 +616,109 @@
                 return;
             }
             
-            // 显示加载状态
-            showLoading();
+            // 生成参数显示
+            displayParams(formData);
             
+            // 显示参数区域
+            elements.paramsSection.style.display = 'block';
+            
+            // 滚动到参数区域
+            elements.paramsSection.scrollIntoView({ behavior: 'smooth' });
+            
+            showAlert('✅ 构建参数已生成！请复制参数并粘贴到GitHub Actions页面', 'success');
+        }
+        
+        function displayParams(formData) {
             // 生成会话ID
             const sessionId = `web_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
             
-            // 生成GitHub Actions触发链接
-            await generateGitHubTriggerLink(formData, sessionId);
-        }
-        
-        function handleManualTrigger() {
-            const formData = {
-                device: elements.deviceSelect.value,
-                version: document.getElementById('version').value,
-                mode: document.getElementById('mode').value,
-                packages: document.getElementById('packages').value.trim(),
-                enableParallel: elements.enableParallel.checked ? "true" : "false"
+            // 构建参数对象
+            const params = {
+                '📱 device_name': formData.device,
+                '🔄 version_selection': formData.version,
+                '⚙️ config_mode': formData.mode,
+                '📦 extra_packages': formData.packages || '(空)',
+                '⚡ enable_parallel': formData.enableParallel,
+                '🌐 web_trigger': 'true',
+                '🔑 web_session_id': sessionId
             };
             
-            if (!formData.device) {
-                showAlert('请选择设备', 'error');
-                return;
-            }
-            
-            // 直接打开GitHub Actions页面
-            const workflowUrl = `https://github.com/${CONFIG.repoOwner}/${CONFIG.repoName}/actions/workflows/${CONFIG.workflowFile}`;
-            window.open(workflowUrl, '_blank', 'noopener,noreferrer');
-            
-            showAlert('✅ 已打开GitHub Actions页面，请手动点击"Run workflow"并填写参数', 'info');
-        }
-        
-        function showLoading() {
-            document.getElementById('buildForm').style.display = 'none';
-            elements.loading.style.display = 'block';
-            elements.statusCard.classList.add('show');
-            
-            elements.statusStep1.textContent = '✅ 构建参数已准备';
-            elements.statusStep1Icon.textContent = '✅';
-            elements.statusStep2.textContent = '正在生成触发链接...';
-            elements.statusStep2Icon.textContent = '⏳';
-            elements.statusStep3.textContent = '准备跳转到GitHub...';
-            elements.statusStep3Icon.textContent = '⏳';
-            
-            elements.loadingText.textContent = '正在生成GitHub Actions触发链接...';
-        }
-        
-        function hideLoading() {
-            elements.loading.style.display = 'none';
-            document.getElementById('buildForm').style.display = 'block';
-        }
-        
-        async function generateGitHubTriggerLink(formData, sessionId) {
-            try {
-                // 更新状态
-                elements.statusStep2.textContent = '✅ 触发链接已生成';
-                elements.statusStep2Icon.textContent = '✅';
-                
-                // 生成构建参数
-                const params = {
-                    'device_name': formData.device,
-                    'version_selection': formData.version,
-                    'config_mode': formData.mode,
-                    'extra_packages': formData.packages || '',
-                    'enable_parallel': formData.enableParallel,
-                    'web_trigger': 'true',
-                    'web_session_id': sessionId,
-                    'web_user_agent': navigator.userAgent.substring(0, 100),
-                    'web_referer': window.location.href.substring(0, 100)
-                };
-                
-                // 生成工作流页面URL
-                const workflowUrl = `https://github.com/${CONFIG.repoOwner}/${CONFIG.repoName}/actions/workflows/${CONFIG.workflowFile}`;
-                
-                // 显示参数信息
-                let paramsHtml = '<strong>📋 构建参数：</strong><br>';
-                for (const [key, value] of Object.entries(params)) {
-                    paramsHtml += `<div style="margin: 5px 0;"><strong>${key}:</strong> <code style="background: #e1e4e8; padding: 2px 6px; border-radius: 4px; font-size: 0.85rem;">${value || '(空)'}</code></div>`;
-                }
-                elements.paramsDisplay.innerHTML = paramsHtml;
-                
-                // 更新状态
-                elements.statusStep3.textContent = '✅ 准备完成';
-                elements.statusStep3Icon.textContent = '✅';
-                
-                // 显示操作指南
-                elements.loadingText.innerHTML = `
-                    <strong>🎯 请按以下步骤操作：</strong><br><br>
-                    1. 点击下方"点击打开GitHub Actions页面开始构建"按钮<br>
-                    2. 在新页面中点击绿色的"Run workflow"按钮<br>
-                    3. 所有参数已自动填写<br>
-                    4. 点击绿色的"Run workflow"按钮开始构建<br><br>
-                    <strong>📊 参数已自动填入：</strong>
-                    <div style="background: #f6f8fa; padding: 10px; border-radius: 6px; margin-top: 10px; font-size: 0.9rem;">
-                        <div>设备: <strong>${formData.device}</strong></div>
-                        <div>版本: <strong>${formData.version}</strong></div>
-                        <div>模式: <strong>${formData.mode}</strong></div>
-                        ${formData.packages ? `<div>插件: <strong>${formData.packages}</strong></div>` : ''}
-                        <div>并行优化: <strong>${formData.enableParallel === 'true' ? '启用' : '禁用'}</strong></div>
+            // 生成显示内容
+            let html = '';
+            for (const [label, value] of Object.entries(params)) {
+                html += `
+                    <div class="param-item">
+                        <span class="param-label">${label}:</span>
+                        <span class="param-value"><strong>${value}</strong></span>
                     </div>
                 `;
+            }
+            
+            // 添加使用说明
+            html += `
+                <div style="margin-top: 20px; padding: 15px; background: #fff8f0; border-radius: 6px; border-left: 4px solid #e36209;">
+                    <strong>💡 使用说明：</strong><br>
+                    1. 点击"复制所有参数"按钮<br>
+                    2. 点击"打开GitHub Actions页面"按钮<br>
+                    3. 点击"Run workflow"按钮<br>
+                    4. 将复制的参数粘贴到对应字段中<br>
+                    5. 点击"Run workflow"开始构建
+                </div>
+            `;
+            
+            elements.paramsDisplay.innerHTML = html;
+            
+            // 保存参数用于复制
+            elements.paramsDisplay.dataset.params = JSON.stringify({
+                device_name: formData.device,
+                version_selection: formData.version,
+                config_mode: formData.mode,
+                extra_packages: formData.packages || '',
+                enable_parallel: formData.enableParallel,
+                web_trigger: 'true',
+                web_session_id: sessionId
+            });
+        }
+        
+        function copyAllParams() {
+            try {
+                const params = JSON.parse(elements.paramsDisplay.dataset.params || '{}');
                 
-                // 设置直接触发链接
-                elements.directLink.href = workflowUrl;
-                elements.directLinkSection.style.display = 'block';
+                // 生成易读的文本格式
+                let textToCopy = `OpenWrt固件构建参数\n`;
+                textToCopy += `生成时间: ${new Date().toLocaleString()}\n\n`;
                 
-                // 显示构建链接
-                elements.buildLink.href = workflowUrl;
-                elements.buildLink.textContent = '🔍 查看所有构建历史';
-                elements.buildLink.style.display = 'block';
+                // 添加参数
+                textToCopy += `📱 设备名称: ${params.device_name}\n`;
+                textToCopy += `🔄 版本选择: ${params.version_selection}\n`;
+                textToCopy += `⚙️ 配置模式: ${params.config_mode}\n`;
+                textToCopy += `📦 额外插件: ${params.extra_packages || '(空)'}\n`;
+                textToCopy += `⚡ 启用并行: ${params.enable_parallel}\n`;
+                textToCopy += `🌐 网页触发: ${params.web_trigger}\n`;
+                textToCopy += `🔑 会话ID: ${params.web_session_id}\n\n`;
                 
-                // 显示成功提示
-                showAlert('✅ 触发链接已生成！请点击下方按钮打开GitHub Actions页面', 'success');
+                textToCopy += `💡 提示：请在GitHub Actions页面的对应字段中粘贴这些值`;
                 
-                // 滚动到状态卡片
-                elements.statusCard.scrollIntoView({ behavior: 'smooth' });
-                
-                // 3秒后自动打开链接
-                setTimeout(() => {
-                    window.open(workflowUrl, '_blank', 'noopener,noreferrer');
-                    showAlert('✅ 已自动打开GitHub Actions页面，请点击"Run workflow"开始构建', 'info');
-                }, 3000);
+                // 复制到剪贴板
+                navigator.clipboard.writeText(textToCopy).then(() => {
+                    // 临时改变按钮文本显示复制成功
+                    const originalText = elements.copyAllBtn.innerHTML;
+                    elements.copyAllBtn.innerHTML = '<span>✅</span> <strong>已复制到剪贴板</strong>';
+                    
+                    showAlert('✅ 所有参数已复制到剪贴板！', 'success');
+                    
+                    // 3秒后恢复原状
+                    setTimeout(() => {
+                        elements.copyAllBtn.innerHTML = originalText;
+                    }, 3000);
+                }).catch(err => {
+                    console.error('复制失败:', err);
+                    showAlert('❌ 复制失败，请手动选择并复制参数', 'error');
+                });
                 
             } catch (error) {
-                console.error('生成触发链接失败:', error);
-                showAlert(`❌ 生成触发链接失败: ${error.message}`, 'error');
-                hideLoading();
+                console.error('复制参数失败:', error);
+                showAlert('❌ 复制参数失败，请刷新页面重试', 'error');
             }
         }
         
@@ -747,9 +733,6 @@
                     elements.alert.style.display = 'none';
                 }, 5000);
             }
-            
-            // 滚动到顶部
-            elements.alert.scrollIntoView({ behavior: 'smooth' });
         }
     </script>
 </body>
