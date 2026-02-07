@@ -185,50 +185,6 @@
             to { opacity: 1; transform: translateY(0); }
         }
         
-        .device-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-            gap: 10px;
-            margin-top: 10px;
-        }
-        
-        .device-tag {
-            padding: 10px;
-            background: var(--bg);
-            border-radius: 6px;
-            text-align: center;
-            font-family: 'Courier New', monospace;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-            border: 2px solid transparent;
-        }
-        
-        .device-tag:hover {
-            background: var(--primary);
-            color: white;
-            transform: translateY(-2px);
-        }
-        
-        .device-tag.selected {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary-dark);
-        }
-        
-        .info-box {
-            background: var(--bg);
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            border-left: 4px solid var(--primary);
-        }
-        
-        .info-box h3 {
-            margin-bottom: 10px;
-            color: var(--text);
-        }
-        
         .status-card {
             background: var(--bg);
             padding: 20px;
@@ -284,10 +240,6 @@
             h1 {
                 font-size: 2rem;
             }
-            
-            .device-grid {
-                grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-            }
         }
     </style>
 </head>
@@ -306,19 +258,19 @@
             
             <form id="buildForm">
                 <div class="form-group">
-                    <label>📱 选择设备</label>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <label for="device">📱 选择设备</label>
+                        <small id="deviceSource" style="color: var(--text-light); font-size: 0.9rem;">
+                            来源: 加载中...
+                        </small>
+                    </div>
                     <select id="device" name="device" required>
                         <option value="">正在加载设备列表...</option>
                     </select>
-                    <div class="device-grid" id="deviceGrid"></div>
-                    <div id="deviceSourceInfo" style="margin-top: 10px; padding: 8px; background: var(--bg); border-radius: 6px; display: none;">
-                        <small style="color: var(--primary); font-weight: 600;">📊 设备列表来源:</small>
-                        <small id="deviceSource" style="color: var(--text-light); margin-left: 5px;">加载中...</small>
-                    </div>
                 </div>
                 
                 <div class="form-group">
-                    <label>🔄 OpenWrt版本</label>
+                    <label for="version">🔄 OpenWrt版本</label>
                     <select id="version" name="version" required>
                         <option value="21.02">21.02 - 稳定版</option>
                         <option value="23.05" selected>23.05 - 新版</option>
@@ -326,7 +278,7 @@
                 </div>
                 
                 <div class="form-group">
-                    <label>⚙️ 配置模式</label>
+                    <label for="mode">⚙️ 配置模式</label>
                     <select id="mode" name="mode" required>
                         <option value="base">🟣 基础模式 - 最小化配置</option>
                         <option value="normal" selected>🟠 正常模式 - 完整功能</option>
@@ -334,7 +286,7 @@
                 </div>
                 
                 <div class="form-group">
-                    <label>📦 额外插件 (可选)</label>
+                    <label for="packages">📦 额外插件 (可选)</label>
                     <input type="text" id="packages" name="packages" 
                            placeholder="例如: +luci-app-ddns;-luci-app-upnp">
                     <small style="color: var(--text-light); display: block; margin-top: 5px;">
@@ -376,11 +328,6 @@
             <p>4. 在Actions页面下载生成的固件</p>
         </div>
         
-        <div class="info-box">
-            <h3>🎯 支持设备</h3>
-            <div id="deviceList" style="margin-top: 10px;"></div>
-        </div>
-        
         <footer>
             <p>© 2024 OpenWrt固件构建器 | 基于GitHub Actions自动构建 | 
                 <a href="#" id="githubDocsLink" class="github-link">查看文档</a>
@@ -402,7 +349,6 @@
         // =============== DOM元素 ===============
         const elements = {
             deviceSelect: document.getElementById('device'),
-            deviceGrid: document.getElementById('deviceGrid'),
             buildForm: document.getElementById('buildForm'),
             submitBtn: document.getElementById('submitBtn'),
             loading: document.getElementById('loading'),
@@ -411,9 +357,7 @@
             actionsLink: document.getElementById('actionsLink'),
             githubRepoLink: document.getElementById('githubRepoLink'),
             githubDocsLink: document.getElementById('githubDocsLink'),
-            deviceList: document.getElementById('deviceList'),
-            deviceSource: document.getElementById('deviceSource'),
-            deviceSourceInfo: document.getElementById('deviceSourceInfo')
+            deviceSource: document.getElementById('deviceSource')
         };
         
         // =============== 初始化 ===============
@@ -467,8 +411,6 @@
         // =============== 加载设备列表 ===============
         async function loadDevices() {
             try {
-                showAlert('正在加载设备列表...', 'warning');
-                
                 // 尝试从多个位置加载设备列表
                 let devices = [];
                 let source = '';
@@ -480,7 +422,7 @@
                     if (response.ok) {
                         const content = await response.text();
                         devices = extractDevicesFromSupport(content);
-                        source = '📁 本地 support.sh 文件';
+                        source = '📁 本地';
                         console.log('从本地加载设备列表成功:', devices.length, '个设备');
                     } else {
                         console.log('本地support.sh加载失败:', response.status);
@@ -499,7 +441,7 @@
                         if (response.ok) {
                             const content = await response.text();
                             devices = extractDevicesFromSupport(content);
-                            source = '🌐 GitHub 仓库同步';
+                            source = '🌐 GitHub同步';
                             console.log('从GitHub加载设备列表成功:', devices.length, '个设备');
                         } else {
                             console.log('GitHub加载失败:', response.status);
@@ -512,7 +454,7 @@
                 // 3. 如果都失败，使用默认设备列表（只有一个ac42u）
                 if (devices.length === 0) {
                     devices = ['ac42u'];
-                    source = '⚙️ 默认设备 (仅ac42u)';
+                    source = '⚙️ 默认';
                     console.log('使用默认设备列表:', devices.length, '个设备');
                 }
                 
@@ -522,21 +464,12 @@
                 
                 // 更新UI
                 updateDeviceUI();
-                updateDeviceInfo();
-                hideAlert();
-                
-                // 显示设备来源信息
-                elements.deviceSourceInfo.style.display = 'block';
-                elements.deviceSource.textContent = source;
                 
             } catch (error) {
                 console.error('加载设备列表失败:', error);
-                showAlert(`❌ 设备列表加载失败: ${error.message}`, 'error');
                 state.devices = ['ac42u'];
-                state.deviceSource = '❌ 加载失败，使用默认设备';
+                state.deviceSource = '❌ 加载失败';
                 updateDeviceUI();
-                elements.deviceSourceInfo.style.display = 'block';
-                elements.deviceSource.textContent = state.deviceSource;
             }
         }
         
@@ -574,25 +507,6 @@
                 }
             }
             
-            // 如果没有找到设备，尝试其他模式
-            if (devices.size === 0) {
-                // 尝试提取其他格式的设备名
-                const otherPatterns = [
-                    /"([a-zA-Z0-9_\-]+)"/g,
-                    /device_name=(["'])(.*?)\1/g
-                ];
-                
-                otherPatterns.forEach(pattern => {
-                    let match;
-                    while ((match = pattern.exec(content)) !== null) {
-                        const device = match[1] || match[2];
-                        if (device && device.length > 2 && !device.startsWith('CONFIG_')) {
-                            devices.add(device.trim());
-                        }
-                    }
-                });
-            }
-            
             return Array.from(devices).sort();
         }
         
@@ -600,7 +514,9 @@
         function updateDeviceUI() {
             // 清空现有内容
             elements.deviceSelect.innerHTML = '<option value="">请选择设备</option>';
-            elements.deviceGrid.innerHTML = '';
+            
+            // 更新设备来源显示
+            elements.deviceSource.textContent = `来源: ${state.deviceSource}`;
             
             if (state.devices.length === 0) {
                 elements.deviceSelect.innerHTML = '<option value="">未找到设备</option>';
@@ -616,48 +532,13 @@
                 elements.deviceSelect.appendChild(option);
             });
             
-            // 填充设备网格
-            state.devices.forEach(device => {
-                const tag = document.createElement('div');
-                tag.className = 'device-tag';
-                tag.textContent = device;
-                tag.title = `点击选择 ${device}`;
-                tag.addEventListener('click', () => {
-                    elements.deviceSelect.value = device;
-                    updateDeviceSelection(device);
-                });
-                elements.deviceGrid.appendChild(tag);
-            });
-            
             // 启用提交按钮
             elements.submitBtn.disabled = false;
-        }
-        
-        // =============== 更新设备信息显示 ===============
-        function updateDeviceInfo() {
-            // 显示设备列表
-            let deviceListHtml = '<div style="display: flex; flex-wrap: wrap; gap: 5px;">';
-            state.devices.forEach(device => {
-                deviceListHtml += `<span style="background: var(--bg); padding: 4px 8px; border-radius: 4px; font-family: monospace;">${device}</span>`;
-            });
-            deviceListHtml += '</div>';
-            
-            elements.deviceList.innerHTML = deviceListHtml;
-        }
-        
-        // =============== 更新设备选中状态 ===============
-        function updateDeviceSelection(selectedDevice) {
-            document.querySelectorAll('.device-tag').forEach(tag => {
-                tag.classList.toggle('selected', tag.textContent === selectedDevice);
-            });
         }
         
         // =============== 表单事件处理 ===============
         function setupFormEvents() {
             elements.buildForm.addEventListener('submit', handleSubmit);
-            elements.deviceSelect.addEventListener('change', function() {
-                updateDeviceSelection(this.value);
-            });
         }
         
         // =============== 处理表单提交 ===============
@@ -740,7 +621,6 @@
                 setTimeout(() => {
                     if (state.devices.includes(device)) {
                         elements.deviceSelect.value = device;
-                        updateDeviceSelection(device);
                     }
                 }, 500);
             }
