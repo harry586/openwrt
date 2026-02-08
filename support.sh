@@ -2,7 +2,7 @@
 
 # support.sh - 设备支持管理脚本
 # 位置: 根目录 /support.sh
-# 版本: 3.0.1 (修复版 - 添加get-sdk-info函数)
+# 版本: 3.0.2 (修复版 - 修复get-sdk-info返回格式)
 # 功能: 管理支持的设备列表、配置文件、工具链下载
 # 特点: 无硬编码，通过调用现有脚本和配置文件实现
 
@@ -26,7 +26,7 @@ DEVICES["cmcc_rax3000m"]="mediatek mt7981"
 DEVICES["netgear_3800"]="ath79 generic"
 
 # OpenWrt官方SDK下载信息
-# 格式: SDK_INFO["目标/子目标/版本"]="SDK_URL|SDK_FILE|SDK_DIR"
+# 格式: SDK_INFO["目标/子目标/版本"]="SDK_URL"
 declare -A SDK_INFO
 
 # 初始化SDK信息
@@ -49,13 +49,13 @@ init_sdk_info() {
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033{1;33m'
+YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# 日志函数
+# 日志函数（重定向到stderr，避免污染get-sdk-info输出）
 log() {
-    echo -e "${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1"
+    echo -e "${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1" >&2
 }
 
 error() {
@@ -68,11 +68,9 @@ warn() {
 }
 
 success() {
-    echo -e "${GREEN}✅ $1${NC}"
+    echo -e "${GREEN}✅ $1${NC}" >&2
 }
-#【support.sh-01】
 
-#【support.sh-02】
 # 检查构建主脚本是否存在
 check_build_main_script() {
     if [ ! -f "$BUILD_MAIN_SCRIPT" ]; then
@@ -151,7 +149,7 @@ get_device_platform() {
     echo "${DEVICES[$device_name]}"
 }
 
-# 获取SDK下载信息函数 - 新增功能
+# 获取SDK下载信息函数 - 修复版
 get_sdk_info() {
     local target="$1"
     local subtarget="$2"
@@ -160,40 +158,45 @@ get_sdk_info() {
     # 初始化SDK信息
     init_sdk_info
     
-    log "获取SDK信息: 目标=$target, 子目标=$subtarget, 版本=$version"
-    
     # 首先尝试精确匹配
     local sdk_key="$target/$subtarget/$version"
-    if [ -n "${SDK_INFO[$sdk_key]}" ]; then
-        log "✅ 找到精确匹配的SDK: $sdk_key"
-        echo "${SDK_INFO[$sdk_key]}"
+    if [ -n "${SDK_INFO[$sdk_key]}" ] && [ -n "${SDK_INFO[$sdk_key]}" ]; then
+        local sdk_url="${SDK_INFO[$sdk_key]}"
+        local sdk_file=$(basename "$sdk_url")
+        local sdk_dir=$(echo "$sdk_file" | sed 's/\.tar\.xz$//' | sed 's/\.tar\.gz$//')
+        
+        # 返回格式: "SDK_URL|SDK_FILE|SDK_DIR"
+        echo "${sdk_url}|${sdk_file}|${sdk_dir}"
         return 0
     fi
     
     # 尝试通用匹配（只使用目标和版本）
     local generic_key="$target/generic/$version"
-    if [ -n "${SDK_INFO[$generic_key]}" ]; then
-        log "⚠️ 使用通用目标匹配: $generic_key"
-        echo "${SDK_INFO[$generic_key]}"
+    if [ -n "${SDK_INFO[$generic_key]}" ] && [ -n "${SDK_INFO[$generic_key]}" ]; then
+        local sdk_url="${SDK_INFO[$generic_key]}"
+        local sdk_file=$(basename "$sdk_url")
+        local sdk_dir=$(echo "$sdk_file" | sed 's/\.tar\.xz$//' | sed 's/\.tar\.gz$//')
+        
+        echo "${sdk_url}|${sdk_file}|${sdk_dir}"
         return 0
     fi
     
     # 尝试更通用的匹配
     local fallback_key="generic/$version"
-    if [ -n "${SDK_INFO[$fallback_key]}" ]; then
-        log "⚠️ 使用通用SDK: $fallback_key"
-        echo "${SDK_INFO[$fallback_key]}"
+    if [ -n "${SDK_INFO[$fallback_key]}" ] && [ -n "${SDK_INFO[$fallback_key]}" ]; then
+        local sdk_url="${SDK_INFO[$fallback_key]}"
+        local sdk_file=$(basename "$sdk_url")
+        local sdk_dir=$(echo "$sdk_file" | sed 's/\.tar\.xz$//' | sed 's/\.tar\.gz$//')
+        
+        echo "${sdk_url}|${sdk_file}|${sdk_dir}"
         return 0
     fi
     
     # 如果没有找到，返回错误
-    log "❌ 未找到匹配的SDK: $sdk_key"
     echo ""
     return 1
 }
-#【support.sh-02】
 
-#【support.sh-03】
 # 应用设备专用配置
 apply_device_config() {
     local device_name="$1"
@@ -279,9 +282,7 @@ apply_generic_config() {
         error "通用配置文件不存在: $generic_config"
     fi
 }
-#【support.sh-03】
 
-#【support.sh-04】
 # 初始化编译器环境（调用主脚本）
 initialize_compiler() {
     local device_name="$1"
@@ -361,9 +362,7 @@ check_usb_drivers_integrity() {
     
     success "USB驱动完整性检查完成"
 }
-#【support.sh-04】
 
-#【support.sh-05】
 # 显示配置文件信息
 show_config_info() {
     local device_name="$1"
@@ -473,9 +472,7 @@ save_source_info() {
     
     success "源代码信息保存完成"
 }
-#【support.sh-05】
 
-#【support.sh-06】
 # 搜索编译器文件（调用主脚本）
 search_compiler_files() {
     local search_root="${1:-/tmp}"
@@ -568,9 +565,7 @@ search_compiler_files_simple() {
         return 1
     fi
 }
-#【support.sh-06】
 
-#【support.sh-07】
 # 前置错误检查（调用主脚本）
 pre_build_error_check() {
     log "前置错误检查..."
@@ -658,9 +653,7 @@ full_config_process() {
     
     success "完整配置流程完成"
 }
-#【support.sh-07】
 
-#【support.sh-08】
 # 显示帮助信息
 show_help() {
     echo "📱 设备支持管理脚本 (support.sh)"
@@ -707,7 +700,7 @@ show_help() {
     echo ""
     echo "配置文件位置:"
     echo "  USB通用配置: firmware-config/config/usb-generic.config"
-    echo "  正常模式: firmware-config/config/normal.config"
+    echo " 正常模式: firmware-config/config/normal.config"
     echo "  基础模式: firmware-config/config/base.config"
     echo "  设备配置: firmware-config/config/devices/[设备名].config"
     echo ""
