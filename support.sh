@@ -32,18 +32,18 @@ declare -A SDK_INFO
 # 初始化SDK信息
 init_sdk_info() {
     # OpenWrt 21.02 SDK
-    SDK_INFO["ipq40xx/generic/21.02"]="https://downloads.openwrt.org/releases/21.02.10/targets/ipq40xx/generic/openwrt-sdk-21.02.10-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64"
-    SDK_INFO["mediatek/mt7981/21.02"]="https://downloads.openwrt.org/releases/21.02.10/targets/mediatek/mt7622/openwrt-sdk-21.02.10-mediatek-mt7622_gcc-8.4.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-mediatek-mt7622_gcc-8.4.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-mediatek-mt7622_gcc-8.4.0_musl.Linux-x86_64"
-    SDK_INFO["ath79/generic/21.02"]="https://downloads.openwrt.org/releases/21.02.10/targets/ath79/generic/openwrt-sdk-21.02.10-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-ath79-generic_gcc-8.4.0_musl.Linux-x86_64"
+    SDK_INFO["ipq40xx/generic/21.02"]="https://downloads.openwrt.org/releases/21.02.10/targets/ipq40xx/generic/openwrt-sdk-21.02.10-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+    SDK_INFO["mediatek/mt7981/21.02"]="https://downloads.openwrt.org/releases/21.02.10/targets/mediatek/mt7622/openwrt-sdk-21.02.10-mediatek-mt7622_gcc-8.4.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-mediatek-mt7622_gcc-8.4.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-mediatek-mt7622_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+    SDK_INFO["ath79/generic/21.02"]="https://downloads.openwrt.org/releases/21.02.10/targets/ath79/generic/openwrt-sdk-21.02.10-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
     
     # OpenWrt 23.05 SDK
-    SDK_INFO["ipq40xx/generic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/ipq40xx/generic/openwrt-sdk-23.05.5-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64"
-    SDK_INFO["mediatek/mt7981/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/mediatek/filogic/openwrt-sdk-23.05.5-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64"
-    SDK_INFO["ath79/generic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/ath79/generic/openwrt-sdk-23.05.5-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-ath79-generic_gcc-12.3.0_musl.Linux-x86_64"
+    SDK_INFO["ipq40xx/generic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/ipq40xx/generic/openwrt-sdk-23.05.5-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
+    SDK_INFO["mediatek/mt7981/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/mediatek/filogic/openwrt-sdk-23.05.5-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+    SDK_INFO["ath79/generic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/ath79/generic/openwrt-sdk-23.05.5-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
     
     # 通用SDK（如果找不到精确匹配）
-    SDK_INFO["generic/21.02"]="https://downloads.openwrt.org/releases/21.02.10/targets/x86/64/openwrt-sdk-21.02.10-x86-64_gcc-8.4.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-x86-64_gcc-8.4.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-x86-64_gcc-8.4.0_musl.Linux-x86_64"
-    SDK_INFO["generic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/x86/64/openwrt-sdk-23.05.5-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-x86-64_gcc-12.3.0_musl.Linux-x86_64"
+    SDK_INFO["generic/21.02"]="https://downloads.openwrt.org/releases/21.02.10/targets/x86/64/openwrt-sdk-21.02.10-x86-64_gcc-8.4.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-x86-64_gcc-8.4.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-x86-64_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+    SDK_INFO["generic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/x86/64/openwrt-sdk-23.05.5-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
 }
 
 # 颜色定义
