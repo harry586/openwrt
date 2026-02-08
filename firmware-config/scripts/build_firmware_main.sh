@@ -225,7 +225,7 @@ initialize_build_env() {
 #【build_firmware_main.sh-06】
 
 #【build_firmware_main.sh-07】
-# 下载OpenWrt官方SDK函数 - 删除硬编码URL，通过support.sh获取
+# 下载OpenWrt官方SDK函数 - 修复版：支持从support.sh获取信息
 download_openwrt_sdk() {
     local target="$1"
     local subtarget="$2"
@@ -248,12 +248,142 @@ download_openwrt_sdk() {
     fi
     
     log "🔍 通过support.sh获取SDK信息..."
-    # 这里需要通过support.sh的接口获取SDK URL
-    # 由于support.sh没有SDK下载功能，这里直接报错
     
-    log "❌ SDK下载功能未实现"
-    log "💡 需要在support.sh中添加SDK下载功能"
-    return 1
+    # 调用support.sh获取SDK下载信息
+    local sdk_info
+    if sdk_info=$("$SUPPORT_SCRIPT" get-sdk-info "$target" "$subtarget" "$version" 2>/dev/null); then
+        # 解析SDK信息：格式为 "SDK_URL|SDK_FILE|SDK_DIR"
+        local sdk_url=$(echo "$sdk_info" | cut -d'|' -f1)
+        local sdk_file=$(echo "$sdk_info" | cut -d'|' -f2)
+        local sdk_dir=$(echo "$sdk_info" | cut -d'|' -f3)
+        
+        if [ -z "$sdk_url" ] || [ -z "$sdk_file" ]; then
+            log "❌ 无法从support.sh获取有效的SDK信息"
+            log "💡 请检查support.sh中的get-sdk-info函数"
+            return 1
+        fi
+        
+        log "📥 SDK下载信息:"
+        log "  URL: $sdk_url"
+        log "  文件: $sdk_file"
+        log "  目录: $sdk_dir"
+        
+        # 创建SDK下载目录
+        local sdk_download_dir="$BUILD_DIR/sdk-download"
+        mkdir -p "$sdk_download_dir"
+        
+        # 下载SDK文件
+        log "🚀 开始下载SDK文件..."
+        if wget -q --show-progress -O "$sdk_download_dir/$sdk_file" "$sdk_url"; then
+            log "✅ SDK文件下载成功: $sdk_file"
+            
+            # 解压SDK文件
+            log "📦 解压SDK文件..."
+            if tar -xf "$sdk_download_dir/$sdk_file" -C "$BUILD_DIR"; then
+                log "✅ SDK文件解压成功"
+                
+                # 设置COMPILER_DIR环境变量
+                if [ -n "$sdk_dir" ] && [ -d "$BUILD_DIR/$sdk_dir" ]; then
+                    COMPILER_DIR="$BUILD_DIR/$sdk_dir"
+                    log "✅ SDK目录设置: $COMPILER_DIR"
+                    
+                    # 验证SDK文件
+                    if verify_sdk_files "$COMPILER_DIR"; then
+                        log "🎉 SDK下载、解压和验证完成"
+                        return 0
+                    else
+                        log "❌ SDK文件验证失败"
+                        return 1
+                    fi
+                else
+                    # 如果sdk_dir未指定，尝试自动检测
+                    log "🔍 自动检测SDK目录..."
+                    local detected_sdk_dir=$(find "$BUILD_DIR" -maxdepth 2 -type d -name "*sdk*" | head -1)
+                    if [ -n "$detected_sdk_dir" ] && [ -d "$detected_sdk_dir" ]; then
+                        COMPILER_DIR="$detected_sdk_dir"
+                        log "✅ 自动检测到SDK目录: $COMPILER_DIR"
+                        
+                        if verify_sdk_files "$COMPILER_DIR"; then
+                            log "🎉 SDK下载、解压和验证完成"
+                            return 0
+                        else
+                            log "❌ SDK文件验证失败"
+                            return 1
+                        fi
+                    else
+                        log "❌ 无法找到SDK目录"
+                        return 1
+                    fi
+                fi
+            else
+                log "❌ SDK文件解压失败"
+                return 1
+            fi
+        else
+            log "❌ SDK文件下载失败"
+            return 1
+        fi
+    else
+        log "❌ support.sh未提供SDK下载功能"
+        log "💡 需要修改support.sh，添加get-sdk-info函数"
+        return 1
+    fi
+}
+
+# 验证SDK文件函数
+verify_sdk_files() {
+    local sdk_dir="$1"
+    
+    log "🔍 验证SDK文件完整性..."
+    
+    if [ ! -d "$sdk_dir" ]; then
+        log "❌ SDK目录不存在: $sdk_dir"
+        return 1
+    fi
+    
+    log "✅ SDK目录存在: $sdk_dir"
+    log "📊 目录大小: $(du -sh "$sdk_dir" 2>/dev/null | cut -f1 || echo '未知')"
+    
+    # 查找GCC编译器，排除虚假编译器
+    local gcc_files=$(find "$sdk_dir" -type f -executable \
+      -name "*gcc" \
+      ! -name "*gcc-ar" \
+      ! -name "*gcc-ranlib" \
+      ! -name "*gcc-nm" \
+      ! -path "*dummy-tools*" \
+      ! -path "*scripts*" \
+      2>/dev/null | wc -l)
+    
+    if [ $gcc_files -gt 0 ]; then
+        log "✅ 找到 $gcc_files 个GCC编译器文件"
+        
+        # 显示第一个GCC的版本信息
+        local first_gcc=$(find "$sdk_dir" -type f -executable \
+          -name "*gcc" \
+          ! -name "*gcc-ar" \
+          ! -name "*gcc-ranlib" \
+          ! -name "*gcc-nm" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
+          2>/dev/null | head -1)
+        
+        if [ -n "$first_gcc" ] && [ -x "$first_gcc" ]; then
+            local gcc_version=$("$first_gcc" --version 2>&1 | head -1)
+            log "🔧 GCC版本: $gcc_version"
+            
+            # 检查是否是dummy-tools
+            if echo "$gcc_version" | grep -qi "dummy-tools"; then
+                log "❌ 检测到虚假的dummy-tools编译器"
+                return 1
+            fi
+            
+            log "✅ SDK验证通过"
+            return 0
+        fi
+    else
+        log "❌ 未找到真正的GCC编译器文件"
+        return 1
+    fi
 }
 #【build_firmware_main.sh-07】
 
@@ -1813,7 +1943,7 @@ verify_compiler_files() {
         else
             log "  ❌ 未找到任何GCC相关可执行文件"
         fi
-    fi
+    done
     
     if [ -n "$gpp_executable" ]; then
         log "  ✅ 找到可执行G++: $(basename "$gpp_executable")"
