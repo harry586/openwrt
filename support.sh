@@ -2,7 +2,7 @@
 
 # support.sh - 设备支持管理脚本
 # 位置: 根目录 /support.sh
-# 版本: 3.0.2 (修复版 - 修复get-sdk-info返回格式)
+# 版本: 3.0.3 (修复版 - 修复SDK目录检测)
 # 功能: 管理支持的设备列表、配置文件、工具链下载
 # 特点: 无硬编码，通过调用现有脚本和配置文件实现
 
@@ -149,7 +149,7 @@ get_device_platform() {
     echo "${DEVICES[$device_name]}"
 }
 
-# 获取SDK下载信息函数 - 修复版
+# 获取SDK下载信息函数 - 修复版（返回空目录名，由主脚本自动检测）
 get_sdk_info() {
     local target="$1"
     local subtarget="$2"
@@ -163,10 +163,9 @@ get_sdk_info() {
     if [ -n "${SDK_INFO[$sdk_key]}" ] && [ -n "${SDK_INFO[$sdk_key]}" ]; then
         local sdk_url="${SDK_INFO[$sdk_key]}"
         local sdk_file=$(basename "$sdk_url")
-        local sdk_dir=$(echo "$sdk_file" | sed 's/\.tar\.xz$//' | sed 's/\.tar\.gz$//')
         
-        # 返回格式: "SDK_URL|SDK_FILE|SDK_DIR"
-        echo "${sdk_url}|${sdk_file}|${sdk_dir}"
+        # 返回格式: "SDK_URL|SDK_FILE|" （目录名为空，由build脚本自动检测）
+        echo "${sdk_url}|${sdk_file}|"
         return 0
     fi
     
@@ -175,9 +174,8 @@ get_sdk_info() {
     if [ -n "${SDK_INFO[$generic_key]}" ] && [ -n "${SDK_INFO[$generic_key]}" ]; then
         local sdk_url="${SDK_INFO[$generic_key]}"
         local sdk_file=$(basename "$sdk_url")
-        local sdk_dir=$(echo "$sdk_file" | sed 's/\.tar\.xz$//' | sed 's/\.tar\.gz$//')
         
-        echo "${sdk_url}|${sdk_file}|${sdk_dir}"
+        echo "${sdk_url}|${sdk_file}|"
         return 0
     fi
     
@@ -186,9 +184,8 @@ get_sdk_info() {
     if [ -n "${SDK_INFO[$fallback_key]}" ] && [ -n "${SDK_INFO[$fallback_key]}" ]; then
         local sdk_url="${SDK_INFO[$fallback_key]}"
         local sdk_file=$(basename "$sdk_url")
-        local sdk_dir=$(echo "$sdk_file" | sed 's/\.tar\.xz$//' | sed 's/\.tar\.gz$//')
         
-        echo "${sdk_url}|${sdk_file}|${sdk_dir}"
+        echo "${sdk_url}|${sdk_file}|"
         return 0
     fi
     
@@ -577,7 +574,7 @@ pre_build_error_check() {
     
     local exit_code=$?
     
-    if [ $exit_code -eq 0 ]; then
+    if [ exit_code -eq 0 ]; then
         success "前置错误检查通过"
         return 0
     else
@@ -700,7 +697,7 @@ show_help() {
     echo ""
     echo "配置文件位置:"
     echo "  USB通用配置: firmware-config/config/usb-generic.config"
-    echo " 正常模式: firmware-config/config/normal.config"
+    echo "  正常模式: firmware-config/config/normal.config"
     echo "  基础模式: firmware-config/config/base.config"
     echo "  设备配置: firmware-config/config/devices/[设备名].config"
     echo ""
