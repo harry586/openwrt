@@ -1,4 +1,3 @@
-#【support.sh-01】
 #!/bin/bash
 
 # support.sh - 设备支持管理脚本
