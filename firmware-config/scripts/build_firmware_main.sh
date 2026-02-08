@@ -753,7 +753,7 @@ verify_usb_config() {
     echo "7. 🟢 文件系统支持:"
     echo "  - NTFS3:" $(grep "CONFIG_PACKAGE_kmod-fs-ntfs3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
     echo "  - ext4:" $(grep "CONFIG_PACKAGE_kmod-fs-ext4=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
-    echo "  - vfat:" $(grep "CONFIG_PACKAGE_kmod-fs-vfat=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    echo "  - vfat:" $(greq "CONFIG_PACKAGE_kmod-fs-vfat=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
     
     log "=== 🚨 USB配置验证完成 ==="
     
@@ -1943,7 +1943,7 @@ verify_compiler_files() {
         else
             log "  ❌ 未找到任何GCC相关可执行文件"
         fi
-    done
+    fi
     
     if [ -n "$gpp_executable" ]; then
         log "  ✅ 找到可执行G++: $(basename "$gpp_executable")"
