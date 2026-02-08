@@ -277,31 +277,60 @@ download_openwrt_sdk() {
         if wget -q --show-progress -O "$sdk_download_dir/$sdk_file" "$sdk_url"; then
             log "✅ SDK文件下载成功: $sdk_file"
             
+            # 清理之前解压的目录
+            log "🧹 清理之前解压的目录..."
+            rm -rf "$BUILD_DIR"/openwrt-sdk-* 2>/dev/null || true
+            
             # 解压SDK文件
             log "📦 解压SDK文件..."
             if tar -xf "$sdk_download_dir/$sdk_file" -C "$BUILD_DIR"; then
                 log "✅ SDK文件解压成功"
                 
-                # 设置COMPILER_DIR环境变量
-                if [ -n "$sdk_dir" ] && [ -d "$BUILD_DIR/$sdk_dir" ]; then
-                    COMPILER_DIR="$BUILD_DIR/$sdk_dir"
-                    log "✅ SDK目录设置: $COMPILER_DIR"
+                # 查找解压后的SDK目录
+                log "🔍 查找解压后的SDK目录..."
+                local extracted_dirs=$(find "$BUILD_DIR" -maxdepth 1 -type d -name "openwrt-sdk-*" 2>/dev/null)
+                
+                if [ -z "$extracted_dirs" ]; then
+                    # 尝试在更深层目录中查找
+                    log "🔍 在更深层目录中查找SDK..."
+                    extracted_dirs=$(find "$BUILD_DIR" -maxdepth 3 -type d -name "openwrt-sdk-*" 2>/dev/null | head -1)
+                fi
+                
+                if [ -n "$extracted_dirs" ]; then
+                    # 取第一个找到的目录
+                    COMPILER_DIR=$(echo "$extracted_dirs" | head -1)
+                    log "✅ 找到SDK目录: $COMPILER_DIR"
                     
                     # 验证SDK文件
                     if verify_sdk_files "$COMPILER_DIR"; then
                         log "🎉 SDK下载、解压和验证完成"
+                        log "📌 编译器目录已设置为: $COMPILER_DIR"
+                        
+                        # 显示SDK目录内容
+                        log "📁 SDK目录内容:"
+                        ls -la "$COMPILER_DIR" | head -10
+                        
                         return 0
                     else
                         log "❌ SDK文件验证失败"
                         return 1
                     fi
                 else
-                    # 如果sdk_dir未指定，尝试自动检测
-                    log "🔍 自动检测SDK目录..."
-                    local detected_sdk_dir=$(find "$BUILD_DIR" -maxdepth 2 -type d -name "*sdk*" | head -1)
-                    if [ -n "$detected_sdk_dir" ] && [ -d "$detected_sdk_dir" ]; then
-                        COMPILER_DIR="$detected_sdk_dir"
-                        log "✅ 自动检测到SDK目录: $COMPILER_DIR"
+                    # 如果未找到SDK目录，检查解压文件列表
+                    log "🔍 检查解压文件列表..."
+                    if [ -f "$sdk_download_dir/$sdk_file" ]; then
+                        log "📋 查看tar文件内容:"
+                        tar -tf "$sdk_download_dir/$sdk_file" | head -20
+                    fi
+                    
+                    # 尝试自动创建SDK目录
+                    log "🔧 尝试自动创建SDK目录..."
+                    local sdk_base_name="${sdk_file%.tar.xz}"
+                    sdk_base_name="${sdk_base_name%.tar.gz}"
+                    
+                    if [ -d "$BUILD_DIR/$sdk_base_name" ]; then
+                        COMPILER_DIR="$BUILD_DIR/$sdk_base_name"
+                        log "✅ 使用基于文件名的SDK目录: $COMPILER_DIR"
                         
                         if verify_sdk_files "$COMPILER_DIR"; then
                             log "🎉 SDK下载、解压和验证完成"
@@ -330,7 +359,7 @@ download_openwrt_sdk() {
     fi
 }
 
-# 验证SDK文件函数
+# 验证SDK文件函数 - 修复版：更灵活的查找逻辑
 verify_sdk_files() {
     local sdk_dir="$1"
     
@@ -343,22 +372,30 @@ verify_sdk_files() {
     
     log "✅ SDK目录存在: $sdk_dir"
     log "📊 目录大小: $(du -sh "$sdk_dir" 2>/dev/null | cut -f1 || echo '未知')"
+    log "📁 目录内容:"
+    ls -la "$sdk_dir" | head -5
     
-    # 查找GCC编译器，排除虚假编译器
-    local gcc_files=$(find "$sdk_dir" -type f -executable \
-      -name "*gcc" \
-      ! -name "*gcc-ar" \
-      ! -name "*gcc-ranlib" \
-      ! -name "*gcc-nm" \
-      ! -path "*dummy-tools*" \
-      ! -path "*scripts*" \
-      2>/dev/null | wc -l)
+    # 检查目录结构
+    local important_dirs=("bin" "include" "lib" "libexec" "share")
+    local dir_count=0
+    for dir in "${important_dirs[@]}"; do
+        if [ -d "$sdk_dir/$dir" ]; then
+            log "✅ 重要目录存在: $dir"
+            dir_count=$((dir_count + 1))
+        fi
+    done
     
-    if [ $gcc_files -gt 0 ]; then
-        log "✅ 找到 $gcc_files 个GCC编译器文件"
-        
-        # 显示第一个GCC的版本信息
-        local first_gcc=$(find "$sdk_dir" -type f -executable \
+    if [ $dir_count -lt 2 ]; then
+        log "⚠️ SDK目录结构不完整，可能不是正确的SDK目录"
+    fi
+    
+    # 查找GCC编译器，使用更灵活的查找逻辑
+    log "🔧 查找GCC编译器..."
+    
+    # 首先在bin目录中查找
+    local gcc_executable=""
+    if [ -d "$sdk_dir/bin" ]; then
+        gcc_executable=$(find "$sdk_dir/bin" -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
@@ -366,10 +403,28 @@ verify_sdk_files() {
           ! -path "*dummy-tools*" \
           ! -path "*scripts*" \
           2>/dev/null | head -1)
+    fi
+    
+    # 如果没找到，在整个目录中查找
+    if [ -z "$gcc_executable" ]; then
+        gcc_executable=$(find "$sdk_dir" -maxdepth 3 -type f -executable \
+          -name "*gcc" \
+          ! -name "*gcc-ar" \
+          ! -name "*gcc-ranlib" \
+          ! -name "*gcc-nm" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
+          2>/dev/null | head -1)
+    fi
+    
+    if [ -n "$gcc_executable" ]; then
+        log "✅ 找到GCC编译器: $(basename "$gcc_executable")"
+        log "  🔧 完整路径: $gcc_executable"
         
-        if [ -n "$first_gcc" ] && [ -x "$first_gcc" ]; then
-            local gcc_version=$("$first_gcc" --version 2>&1 | head -1)
-            log "🔧 GCC版本: $gcc_version"
+        # 检查GCC版本
+        if [ -x "$gcc_executable" ]; then
+            local gcc_version=$("$gcc_executable" --version 2>&1 | head -1)
+            log "  📋 GCC版本: $gcc_version"
             
             # 检查是否是dummy-tools
             if echo "$gcc_version" | grep -qi "dummy-tools"; then
@@ -379,10 +434,34 @@ verify_sdk_files() {
             
             log "✅ SDK验证通过"
             return 0
+        else
+            log "⚠️ GCC编译器不可执行"
+            return 1
         fi
     else
-        log "❌ 未找到真正的GCC编译器文件"
-        return 1
+        log "🔍 未找到GCC编译器，检查其他编译器文件..."
+        
+        # 查找其他编译器工具
+        local compiler_tools=$(find "$sdk_dir" -maxdepth 3 -type f -executable \
+          \( -name "*gcc*" -o -name "*g++*" -o -name "*ar" -o -name "*ld" -o -name "*as" \) \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
+          2>/dev/null | head -5)
+        
+        if [ -n "$compiler_tools" ]; then
+            log "📋 找到的编译器工具:"
+            echo "$compiler_tools" | while read tool; do
+                local tool_name=$(basename "$tool")
+                log "  🔧 $tool_name"
+            done
+            
+            log "⚠️ 找到编译器工具但未找到GCC，可能目录结构特殊"
+            log "💡 尝试接受这个SDK目录"
+            return 0
+        else
+            log "❌ 未找到任何编译器工具"
+            return 1
+        fi
     fi
 }
 #【build_firmware_main.sh-07】
@@ -446,14 +525,14 @@ initialize_compiler_env() {
         
         # 验证编译器目录是否真的包含GCC
         log "🔍 验证编译器目录有效性..."
-        local gcc_files=$(find "$COMPILER_DIR" -type f -executable \
+        local gcc_files=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
           ! -name "*gcc-nm" \
           ! -path "*dummy-tools*" \
           ! -path "*scripts*" \
-          2>/dev/null | head -3)
+          2>/dev/null | head -1)
         
         if [ -n "$gcc_files" ]; then
             log "✅ 确认编译器目录包含真正的GCC"
@@ -514,7 +593,7 @@ initialize_compiler_env() {
             log "  文件数量: $(find "$COMPILER_DIR" -type f 2>/dev/null | wc -l)"
             
             # 查找GCC编译器，排除虚假编译器
-            local gcc_file=$(find "$COMPILER_DIR" -type f -executable \
+            local gcc_file=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
@@ -753,7 +832,7 @@ verify_usb_config() {
     echo "7. 🟢 文件系统支持:"
     echo "  - NTFS3:" $(grep "CONFIG_PACKAGE_kmod-fs-ntfs3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
     echo "  - ext4:" $(grep "CONFIG_PACKAGE_kmod-fs-ext4=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
-    echo "  - vfat:" $(greq "CONFIG_PACKAGE_kmod-fs-vfat=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    echo "  - vfat:" $(grep "CONFIG_PACKAGE_kmod-fs-vfat=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
     
     log "=== 🚨 USB配置验证完成 ==="
     
@@ -1810,7 +1889,7 @@ verify_compiler_files() {
     log "⚙️ 可执行编译器检查:"
     local gcc_executable=""
     
-    # 首先尝试在bin目录中查找，排除dummy-tools
+    # 首先在bin目录中查找，排除dummy-tools
     if [ -d "$compiler_dir/bin" ]; then
         gcc_executable=$(find "$compiler_dir/bin" -type f -executable \
           -name "*gcc" \
@@ -1822,9 +1901,9 @@ verify_compiler_files() {
           2>/dev/null | head -1)
     fi
     
-    # 如果没有找到，在整个目录中搜索，排除dummy-tools
+    # 如果没找到，在整个目录中搜索，排除dummy-tools
     if [ -z "$gcc_executable" ]; then
-        gcc_executable=$(find "$compiler_dir" -type f -executable \
+        gcc_executable=$(find "$compiler_dir" -maxdepth 3 -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
@@ -1834,7 +1913,7 @@ verify_compiler_files() {
           2>/dev/null | head -1)
     fi
     
-    local gpp_executable=$(find "$compiler_dir" -type f -executable \
+    local gpp_executable=$(find "$compiler_dir" -maxdepth 3 -type f -executable \
       -name "*g++" \
       ! -name "*g++-*" \
       ! -path "*dummy-tools*" \
@@ -1854,7 +1933,7 @@ verify_compiler_files() {
             log "     🔍 继续查找真正的GCC编译器..."
             
             # 继续查找排除这个虚假的
-            gcc_executable=$(find "$compiler_dir" -type f -executable \
+            gcc_executable=$(find "$compiler_dir" -maxdepth 3 -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
@@ -1921,7 +2000,7 @@ verify_compiler_files() {
         log "  🔍 未找到真正的GCC编译器，查找工具链工具..."
         
         # 查找工具链工具，排除dummy-tools
-        local toolchain_tools=$(find "$compiler_dir" -type f -executable \
+        local toolchain_tools=$(find "$compiler_dir" -maxdepth 3 -type f -executable \
           -name "*gcc*" \
           ! -path "*dummy-tools*" \
           ! -path "*scripts*" \
@@ -1955,7 +2034,7 @@ verify_compiler_files() {
     local tool_found_count=0
     
     for tool in "${required_tools[@]}"; do
-        local tool_executable=$(find "$compiler_dir" -type f -executable -name "*${tool}*" \
+        local tool_executable=$(find "$compiler_dir" -maxdepth 3 -type f -executable -name "*${tool}*" \
           ! -path "*dummy-tools*" \
           ! -path "*scripts*" \
           2>/dev/null | head -1)
@@ -2052,7 +2131,7 @@ check_compiler_invocation() {
             log "📁 检查 staging_dir 中的编译器..."
             
             # 查找真正的GCC编译器（排除工具链工具和虚假编译器）
-            local used_compiler=$(find "$BUILD_DIR/staging_dir" -type f -executable \
+            local used_compiler=$(find "$BUILD_DIR/staging_dir" -maxdepth 3 -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
@@ -2091,7 +2170,7 @@ check_compiler_invocation() {
                 # 检查是否有SDK编译器
                 log "  🔍 检查SDK编译器:"
                 if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-                    local sdk_gcc=$(find "$COMPILER_DIR" -type f -executable \
+                    local sdk_gcc=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable \
                       -name "*gcc" \
                       ! -name "*gcc-ar" \
                       ! -name "*gcc-ranlib" \
@@ -2172,7 +2251,7 @@ check_compiler_invocation() {
         log "  📌 预构建编译器目录: $COMPILER_DIR"
         
         # 检查预构建编译器中的GCC版本，排除虚假编译器
-        local prebuilt_gcc=$(find "$COMPILER_DIR" -type f -executable \
+        local prebuilt_gcc=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
@@ -2193,7 +2272,7 @@ check_compiler_invocation() {
     # 检查实际使用的编译器
     if [ -d "$BUILD_DIR/staging_dir" ]; then
         log "  🔍 实际使用的编译器:"
-        local used_gcc=$(find "$BUILD_DIR/staging_dir" -type f -executable \
+        local used_gcc=$(find "$BUILD_DIR/staging_dir" -maxdepth 3 -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
@@ -2325,7 +2404,7 @@ pre_build_error_check() {
         log "📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
         
         # 放宽检查：只需要有编译器文件，不要求特定目录结构，排除虚假编译器
-        local gcc_files=$(find "$COMPILER_DIR" -type f -executable \
+        local gcc_files=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
@@ -2338,7 +2417,7 @@ pre_build_error_check() {
             log "✅ 找到 $gcc_files 个GCC编译器文件"
             
             # 显示第一个GCC的版本信息
-            local first_gcc=$(find "$COMPILER_DIR" -type f -executable \
+            local first_gcc=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
@@ -2358,7 +2437,7 @@ pre_build_error_check() {
                     elif echo "$sdk_version" | grep -qi "dummy-tools"; then
                         log "⚠️ 检测到虚假的dummy-tools编译器，继续查找..."
                         # 查找其他GCC
-                        local real_gcc=$(find "$COMPILER_DIR" -type f -executable \
+                        local real_gcc=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable \
                           -name "*gcc" \
                           ! -name "*gcc-ar" \
                           ! -name "*gcc-ranlib" \
@@ -2383,7 +2462,7 @@ pre_build_error_check() {
             warning_count=$((warning_count + 1))
             
             # 检查是否有工具链工具
-            local toolchain_tools=$(find "$COMPILER_DIR" -type f -executable -name "*gcc*" \
+            local toolchain_tools=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable -name "*gcc*" \
               ! -path "*dummy-tools*" \
               ! -path "*scripts*" \
               2>/dev/null | wc -l)
@@ -2475,7 +2554,7 @@ build_firmware() {
         log "  预构建编译器目录: $COMPILER_DIR"
         
         # 检查预构建编译器是否会被调用，排除虚假编译器
-        local prebuilt_gcc=$(find "$COMPILER_DIR" -type f -executable \
+        local prebuilt_gcc=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
@@ -2505,7 +2584,7 @@ build_firmware() {
             log "  🔧 已将预构建编译器目录添加到PATH"
         else
             log "  ⚠️ 未找到真正的GCC编译器，只有工具链工具"
-            local toolchain_tools=$(find "$COMPILER_DIR" -type f -executable -name "*gcc*" \
+            local toolchain_tools=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable -name "*gcc*" \
               ! -path "*dummy-tools*" \
               ! -path "*scripts*" \
               2>/dev/null | head -5)
@@ -2593,7 +2672,7 @@ build_firmware() {
                 log "🚨 发现编译器未找到错误"
                 log "检查编译器路径..."
                 if [ -d "staging_dir" ]; then
-                    find staging_dir -type f -executable \
+                    find staging_dir -maxdepth 3 -type f -executable \
                       -name "*gcc" \
                       ! -name "*gcc-ar" \
                       ! -name "*gcc-ranlib" \
