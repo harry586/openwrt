@@ -286,29 +286,51 @@ download_openwrt_sdk() {
             if tar -xf "$sdk_download_dir/$sdk_file" -C "$BUILD_DIR"; then
                 log "✅ SDK文件解压成功"
                 
-                # 查找解压后的SDK目录
+                # 查找解压后的SDK目录 - 修复：更灵活的查找逻辑
                 log "🔍 查找解压后的SDK目录..."
-                local extracted_dirs=$(find "$BUILD_DIR" -maxdepth 1 -type d -name "openwrt-sdk-*" 2>/dev/null)
                 
-                if [ -z "$extracted_dirs" ]; then
-                    # 尝试在更深层目录中查找
-                    log "🔍 在更深层目录中查找SDK..."
-                    extracted_dirs=$(find "$BUILD_DIR" -maxdepth 3 -type d -name "openwrt-sdk-*" 2>/dev/null | head -1)
+                # 首先尝试按预期的目录名查找
+                local extracted_dir=""
+                if [ -n "$sdk_dir" ] && [ -d "$BUILD_DIR/$sdk_dir" ]; then
+                    extracted_dir="$BUILD_DIR/$sdk_dir"
                 fi
                 
-                if [ -n "$extracted_dirs" ]; then
-                    # 取第一个找到的目录
-                    COMPILER_DIR=$(echo "$extracted_dirs" | head -1)
+                # 如果没找到，查找包含"openwrt-sdk"的目录
+                if [ -z "$extracted_dir" ]; then
+                    extracted_dir=$(find "$BUILD_DIR" -maxdepth 2 -type d -name "openwrt-sdk-*" 2>/dev/null | head -1)
+                fi
+                
+                # 如果还没找到，查找包含"sdk"的目录
+                if [ -z "$extracted_dir" ]; then
+                    extracted_dir=$(find "$BUILD_DIR" -maxdepth 2 -type d -name "*sdk*" 2>/dev/null | head -1)
+                fi
+                
+                # 如果还是没找到，使用基于文件名的目录
+                if [ -z "$extracted_dir" ]; then
+                    local sdk_base_name="${sdk_file%.tar.xz}"
+                    sdk_base_name="${sdk_base_name%.tar.gz}"
+                    sdk_base_name="${sdk_base_name%.tar.bz2}"
+                    
+                    if [ -d "$BUILD_DIR/$sdk_base_name" ]; then
+                        extracted_dir="$BUILD_DIR/$sdk_base_name"
+                    fi
+                fi
+                
+                if [ -n "$extracted_dir" ] && [ -d "$extracted_dir" ]; then
+                    COMPILER_DIR="$extracted_dir"
                     log "✅ 找到SDK目录: $COMPILER_DIR"
                     
-                    # 验证SDK文件
-                    if verify_sdk_files "$COMPILER_DIR"; then
+                    # 显示SDK目录内容
+                    log "📁 SDK目录内容概览:"
+                    ls -la "$COMPILER_DIR" | head -20
+                    
+                    # 验证SDK文件 - 使用修复版的验证函数
+                    if verify_sdk_files_v2 "$COMPILER_DIR"; then
                         log "🎉 SDK下载、解压和验证完成"
                         log "📌 编译器目录已设置为: $COMPILER_DIR"
                         
-                        # 显示SDK目录内容
-                        log "📁 SDK目录内容:"
-                        ls -la "$COMPILER_DIR" | head -10
+                        # 保存环境变量
+                        save_env
                         
                         return 0
                     else
@@ -320,29 +342,11 @@ download_openwrt_sdk() {
                     log "🔍 检查解压文件列表..."
                     if [ -f "$sdk_download_dir/$sdk_file" ]; then
                         log "📋 查看tar文件内容:"
-                        tar -tf "$sdk_download_dir/$sdk_file" | head -20
+                        tar -tf "$sdk_download_dir/$sdk_file" | head -30
                     fi
                     
-                    # 尝试自动创建SDK目录
-                    log "🔧 尝试自动创建SDK目录..."
-                    local sdk_base_name="${sdk_file%.tar.xz}"
-                    sdk_base_name="${sdk_base_name%.tar.gz}"
-                    
-                    if [ -d "$BUILD_DIR/$sdk_base_name" ]; then
-                        COMPILER_DIR="$BUILD_DIR/$sdk_base_name"
-                        log "✅ 使用基于文件名的SDK目录: $COMPILER_DIR"
-                        
-                        if verify_sdk_files "$COMPILER_DIR"; then
-                            log "🎉 SDK下载、解压和验证完成"
-                            return 0
-                        else
-                            log "❌ SDK文件验证失败"
-                            return 1
-                        fi
-                    else
-                        log "❌ 无法找到SDK目录"
-                        return 1
-                    fi
+                    log "❌ 无法找到SDK目录"
+                    return 1
                 fi
             else
                 log "❌ SDK文件解压失败"
@@ -359,11 +363,11 @@ download_openwrt_sdk() {
     fi
 }
 
-# 验证SDK文件函数 - 修复版：更灵活的查找逻辑
-verify_sdk_files() {
+# 验证SDK文件函数V2 - 修复版：适配不同的SDK目录结构
+verify_sdk_files_v2() {
     local sdk_dir="$1"
     
-    log "🔍 验证SDK文件完整性..."
+    log "=== 验证SDK文件完整性V2 ==="
     
     if [ ! -d "$sdk_dir" ]; then
         log "❌ SDK目录不存在: $sdk_dir"
@@ -372,97 +376,156 @@ verify_sdk_files() {
     
     log "✅ SDK目录存在: $sdk_dir"
     log "📊 目录大小: $(du -sh "$sdk_dir" 2>/dev/null | cut -f1 || echo '未知')"
-    log "📁 目录内容:"
-    ls -la "$sdk_dir" | head -5
     
-    # 检查目录结构
-    local important_dirs=("bin" "include" "lib" "libexec" "share")
-    local dir_count=0
-    for dir in "${important_dirs[@]}"; do
+    # 检查目录结构 - 修复：检查更广泛的目录结构
+    log "📁 检查SDK目录结构..."
+    
+    # OpenWrt SDK可能的目录结构
+    local possible_dirs=("staging_dir" "toolchain" "bin" "include" "lib" "usr" "scripts" "build_dir")
+    local found_dirs=0
+    
+    for dir in "${possible_dirs[@]}"; do
         if [ -d "$sdk_dir/$dir" ]; then
-            log "✅ 重要目录存在: $dir"
-            dir_count=$((dir_count + 1))
+            log "✅ 目录存在: $dir"
+            found_dirs=$((found_dirs + 1))
+            
+            # 如果找到toolchain或staging_dir，检查其中的编译器
+            if [ "$dir" = "toolchain" ] || [ "$dir" = "staging_dir" ]; then
+                log "🔍 检查 $dir 目录中的编译器..."
+                local toolchain_path=""
+                
+                # 在toolchain目录中查找编译器
+                if [ "$dir" = "toolchain" ]; then
+                    toolchain_path="$sdk_dir/toolchain"
+                elif [ "$dir" = "staging_dir" ]; then
+                    # 在staging_dir中查找toolchain目录
+                    toolchain_path=$(find "$sdk_dir/staging_dir" -maxdepth 2 -type d -name "toolchain-*" 2>/dev/null | head -1)
+                fi
+                
+                if [ -n "$toolchain_path" ] && [ -d "$toolchain_path" ]; then
+                    log "🔧 找到工具链目录: $toolchain_path"
+                    
+                    # 在工具链目录中查找GCC编译器
+                    local gcc_executable=$(find "$toolchain_path" -type f -executable \
+                      -name "*gcc" \
+                      ! -name "*gcc-ar" \
+                      ! -name "*gcc-ranlib" \
+                      ! -name "*gcc-nm" \
+                      2>/dev/null | head -1)
+                    
+                    if [ -n "$gcc_executable" ]; then
+                        log "🎯 找到GCC编译器: $(basename "$gcc_executable")"
+                        log "  🔧 完整路径: $gcc_executable"
+                        
+                        # 检查GCC版本
+                        if [ -x "$gcc_executable" ]; then
+                            local gcc_version=$("$gcc_executable" --version 2>&1 | head -1)
+                            log "  📋 GCC版本: $gcc_version"
+                            
+                            # 检查是否是dummy-tools
+                            if echo "$gcc_version" | grep -qi "dummy-tools"; then
+                                log "⚠️ 检测到虚假的dummy-tools编译器，继续查找..."
+                            else
+                                log "✅ 找到真正的GCC编译器"
+                                return 0
+                            fi
+                        fi
+                    else
+                        log "⚠️ 在工具链目录中未找到GCC编译器"
+                    fi
+                fi
+            fi
         fi
     done
     
-    if [ $dir_count -lt 2 ]; then
-        log "⚠️ SDK目录结构不完整，可能不是正确的SDK目录"
-    fi
+    # 如果在常规目录中没找到编译器，在整个SDK目录中搜索
+    log "🔍 在整个SDK目录中搜索编译器..."
     
-    # 查找GCC编译器，使用更灵活的查找逻辑
-    log "🔧 查找GCC编译器..."
+    # 查找所有GCC编译器文件
+    local all_gcc_files=$(find "$sdk_dir" -type f -executable \
+      -name "*gcc" \
+      ! -name "*gcc-ar" \
+      ! -name "*gcc-ranlib" \
+      ! -name "*gcc-nm" \
+      2>/dev/null)
     
-    # 首先在bin目录中查找
-    local gcc_executable=""
-    if [ -d "$sdk_dir/bin" ]; then
-        gcc_executable=$(find "$sdk_dir/bin" -type f -executable \
-          -name "*gcc" \
-          ! -name "*gcc-ar" \
-          ! -name "*gcc-ranlib" \
-          ! -name "*gcc-nm" \
-          ! -path "*dummy-tools*" \
-          ! -path "*scripts*" \
-          2>/dev/null | head -1)
-    fi
-    
-    # 如果没找到，在整个目录中查找
-    if [ -z "$gcc_executable" ]; then
-        gcc_executable=$(find "$sdk_dir" -maxdepth 3 -type f -executable \
-          -name "*gcc" \
-          ! -name "*gcc-ar" \
-          ! -name "*gcc-ranlib" \
-          ! -name "*gcc-nm" \
-          ! -path "*dummy-tools*" \
-          ! -path "*scripts*" \
-          2>/dev/null | head -1)
-    fi
-    
-    if [ -n "$gcc_executable" ]; then
-        log "✅ 找到GCC编译器: $(basename "$gcc_executable")"
-        log "  🔧 完整路径: $gcc_executable"
-        
-        # 检查GCC版本
-        if [ -x "$gcc_executable" ]; then
-            local gcc_version=$("$gcc_executable" --version 2>&1 | head -1)
-            log "  📋 GCC版本: $gcc_version"
+    if [ -n "$all_gcc_files" ]; then
+        log "📋 找到的GCC文件:"
+        local gcc_count=0
+        while IFS= read -r gcc_file; do
+            gcc_count=$((gcc_count + 1))
+            local rel_path="${gcc_file#$sdk_dir/}"
             
-            # 检查是否是dummy-tools
-            if echo "$gcc_version" | grep -qi "dummy-tools"; then
-                log "❌ 检测到虚假的dummy-tools编译器"
-                return 1
+            # 检查是否是虚假编译器
+            if echo "$rel_path" | grep -q "dummy-tools\|scripts"; then
+                log "  ⚠️ 跳过虚假编译器: $rel_path"
+                continue
             fi
             
-            log "✅ SDK验证通过"
+            log "  ✅ 找到GCC: $rel_path"
+            
+            # 检查版本
+            if [ -x "$gcc_file" ]; then
+                local version=$("$gcc_file" --version 2>&1 | head -1)
+                log "     版本: $version"
+                
+                if ! echo "$version" | grep -qi "dummy-tools"; then
+                    log "🎯 找到真正的GCC编译器"
+                    return 0
+                fi
+            fi
+            
+            # 只显示前5个
+            if [ $gcc_count -ge 5 ]; then
+                log "  ... 还有更多GCC文件未显示"
+                break
+            fi
+        done <<< "$all_gcc_files"
+    else
+        log "⚠️ 在整个SDK目录中未找到GCC编译器"
+    fi
+    
+    # 查找其他编译器工具
+    log "🔧 查找其他编译器工具..."
+    local compiler_tools=$(find "$sdk_dir" -maxdepth 3 -type f -executable \
+      \( -name "*gcc*" -o -name "*g++*" -o -name "*ar" -o -name "*ld" -o -name "*as" \) \
+      2>/dev/null | head -10)
+    
+    if [ -n "$compiler_tools" ]; then
+        log "📋 找到的编译器工具:"
+        while read tool; do
+            local rel_path="${tool#$sdk_dir/}"
+            local tool_name=$(basename "$tool")
+            
+            # 检查是否是虚假工具
+            if echo "$rel_path" | grep -q "dummy-tools\|scripts"; then
+                log "  ⚠️ 跳过虚假工具: $rel_path"
+                continue
+            fi
+            
+            log "  🔧 $tool_name ($rel_path)"
+        done <<< "$compiler_tools"
+        
+        log "⚠️ 找到编译器工具但未验证GCC，可能目录结构特殊"
+        log "💡 尝试接受这个SDK目录"
+        
+        # 如果找到了足够的目录，就认为SDK有效
+        if [ $found_dirs -ge 3 ]; then
+            log "✅ SDK目录结构基本完整（找到 $found_dirs 个关键目录）"
             return 0
         else
-            log "⚠️ GCC编译器不可执行"
+            log "❌ SDK目录结构不完整（只找到 $found_dirs 个关键目录）"
             return 1
         fi
     else
-        log "🔍 未找到GCC编译器，检查其他编译器文件..."
-        
-        # 查找其他编译器工具
-        local compiler_tools=$(find "$sdk_dir" -maxdepth 3 -type f -executable \
-          \( -name "*gcc*" -o -name "*g++*" -o -name "*ar" -o -name "*ld" -o -name "*as" \) \
-          ! -path "*dummy-tools*" \
-          ! -path "*scripts*" \
-          2>/dev/null | head -5)
-        
-        if [ -n "$compiler_tools" ]; then
-            log "📋 找到的编译器工具:"
-            echo "$compiler_tools" | while read tool; do
-                local tool_name=$(basename "$tool")
-                log "  🔧 $tool_name"
-            done
-            
-            log "⚠️ 找到编译器工具但未找到GCC，可能目录结构特殊"
-            log "💡 尝试接受这个SDK目录"
-            return 0
-        else
-            log "❌ 未找到任何编译器工具"
-            return 1
-        fi
+        log "❌ 未找到任何编译器工具"
+        return 1
     fi
+}
+
+# 旧版本的验证函数（保持兼容性）
+verify_sdk_files() {
+    verify_sdk_files_v2 "$1"
 }
 #【build_firmware_main.sh-07】
 
