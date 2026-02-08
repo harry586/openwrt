@@ -31,9 +31,8 @@ on:
       enable_parallel:
         description: "⚡ 启用智能并行优化 (自动判断最佳任务数)"
         required: false
-        type: choice
-        default: "true"
-        options: ["true", "false"]
+        type: boolean
+        default: true
 
 env:
   BUILD_DIR: "/mnt/openwrt-build"
@@ -48,17 +47,21 @@ jobs:
 #【firmware-build.yml-02】
     
     steps:
-      # 步骤 0: 生成时间戳
+      # 步骤 0: 生成时间戳 - 修复时区问题
       - name: "0. 生成时间戳"
         run: |
           echo "=== 步骤 0: 生成时间戳 ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          
+          # 生成时间戳（修复时区问题，使用UTC时间）
+          START_TIME=$(date -u +'%Y-%m-%d %H:%M:%S')
+          echo "🕐 开始时间: $START_TIME"
           
           # 生成日期格式的时间戳（年月日）
           BASE_DATE=$(date -u +'%Y%m%d')
           TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$BASE_DATE"
           
           echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
+          echo "START_TIME=$START_TIME" >> $GITHUB_ENV
           
           echo "✅ 生成时间戳: $TIMESTAMP"
           echo "📋 构建配置:"
@@ -75,7 +78,7 @@ jobs:
       - name: "1. 使用Git Archive API下载源代码"
         run: |
           echo "=== 步骤 1: 使用Git Archive API下载源代码 ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
@@ -143,7 +146,7 @@ jobs:
           # 清理临时文件
           cd /tmp
           rm -rf openwrt-source
-          echo "✅ Git Archive API下载完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ Git Archive API下载完成，时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 1 完成"
 #【firmware-build.yml-03】
 
@@ -163,7 +166,7 @@ jobs:
       - name: "3. 修复权限问题"
         run: |
           echo "=== 步骤 3: 修复权限问题 ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
@@ -195,7 +198,7 @@ jobs:
       - name: "4. 安装基础工具（优化版）"
         run: |
           echo "=== 步骤 4: 安装基础工具（优化版） ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
@@ -326,7 +329,7 @@ jobs:
             exit 1
           fi
           
-          echo "✅ 基础工具安装完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ 基础工具安装完成，时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 验证重要工具
           echo "🔍 验证重要工具安装..."
@@ -374,7 +377,7 @@ jobs:
       - name: "5. 初始空间检查"
         run: |
           echo "=== 步骤 5: 初始磁盘空间检查 ==="
-          echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 检查时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
@@ -402,7 +405,7 @@ jobs:
       - name: "6. 设置编译环境和构建目录"
         run: |
           echo "=== 步骤 6: 设置编译环境和构建目录 ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
@@ -435,7 +438,7 @@ jobs:
             exit 1
           fi
           
-          echo "✅ 编译环境和构建目录设置完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ 编译环境和构建目录设置完成，时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 6 完成"
 #【firmware-build.yml-08】
 
@@ -444,7 +447,7 @@ jobs:
       - name: "7. 下载OpenWrt官方SDK（修复版）"
         run: |
           echo "=== 步骤 7: 下载OpenWrt官方SDK（修复版） ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
@@ -525,7 +528,7 @@ jobs:
             echo "💡 将使用OpenWrt自动构建的编译器作为后备"
           fi
           
-          echo "✅ SDK下载步骤完成，时间: $(date '+%Y-%m%d %H:%M:%S')"
+          echo "✅ SDK下载步骤完成，时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 7 完成"
 #【firmware-build.yml-09】
 
@@ -534,7 +537,7 @@ jobs:
       - name: "8. 验证SDK下载结果"
         run: |
           echo "=== 步骤 8: 验证SDK下载结果 ==="
-          echo "🕐 验证时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 验证时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是验证
           trap 'echo "⚠️ 步骤 8 验证过程中出现错误，继续执行..."' ERR
@@ -606,11 +609,11 @@ jobs:
 #【firmware-build.yml-10】
 
 #【firmware-build.yml-11】
-      # 步骤 9: 添加 TurboACC 支持
+      # 步骤 9: 添加 TurboACC 支持 - 修复版：所有版本都添加
       - name: "9. 添加 TurboACC 支持"
         run: |
           echo "=== 步骤 9: 添加 TurboACC 支持 ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
@@ -623,16 +626,16 @@ jobs:
             exit 1
           fi
           
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ 完成时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 9 完成"
 #【firmware-build.yml-11】
 
 #【firmware-build.yml-12】
-      # 步骤 10: 配置Feeds
+      # 步骤 10: 配置Feeds - 修复版：统一处理TurboACC
       - name: "10. 配置Feeds"
         run: |
           echo "=== 步骤 10: 配置Feeds ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
@@ -645,17 +648,17 @@ jobs:
             exit 1
           fi
           
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ 完成时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 10 完成"
 #【firmware-build.yml-12】
 
 #【firmware-build.yml-13】
-      # 步骤 11: 安装 TurboACC 包
+      # 步骤 11: 安装 TurboACC 包 - 修复版：正常模式都安装
       - name: "11. 安装 TurboACC 包"
-        if: env.SELECTED_BRANCH == 'openwrt-23.05' && github.event.inputs.config_mode == 'normal'
+        if: github.event.inputs.config_mode == 'normal'
         run: |
           echo "=== 步骤 11: 安装 TurboACC 包 ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
@@ -668,7 +671,7 @@ jobs:
             exit 1
           fi
           
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ 完成时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 11 完成"
 #【firmware-build.yml-13】
 
@@ -677,7 +680,7 @@ jobs:
       - name: "12. 编译前空间检查"
         run: |
           echo "=== 步骤 12: 编译前空间检查 ==="
-          echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 检查时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
@@ -690,7 +693,7 @@ jobs:
             exit 1
           fi
           
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ 完成时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 12 完成"
 #【firmware-build.yml-14】
 
@@ -699,7 +702,7 @@ jobs:
       - name: "13. 智能配置生成"
         run: |
           echo "=== 步骤 13: 智能配置生成 ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
@@ -712,7 +715,7 @@ jobs:
             exit 1
           fi
           
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ 完成时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 13 完成"
 #【firmware-build.yml-15】
 
@@ -721,14 +724,14 @@ jobs:
       - name: "14. 验证USB配置"
         run: |
           echo "=== 步骤 14: 验证USB配置 ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是验证
           trap 'echo "⚠️ 步骤 14 验证过程中出现错误，继续执行..."' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" verify_usb_config
           
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ 完成时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 14 完成"
 #【firmware-build.yml-16】
 
@@ -737,14 +740,14 @@ jobs:
       - name: "15. USB驱动完整性检查"
         run: |
           echo "=== 步骤 15: USB驱动完整性检查 ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是检查
           trap 'echo "⚠️ 步骤 15 检查过程中出现错误，继续执行..."' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" check_usb_drivers_integrity
           
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ 完成时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 15 完成"
 #【firmware-build.yml-17】
 
@@ -753,7 +756,7 @@ jobs:
       - name: "16. 应用配置并显示详情（完整版）"
         run: |
           echo "=== 步骤 16: 应用配置并显示详情（完整版）==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
@@ -865,7 +868,7 @@ jobs:
       - name: "17. 检查并备份配置文件"
         run: |
           echo "=== 步骤 17: 检查并备份配置文件 ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
@@ -899,14 +902,14 @@ jobs:
       - name: "18. 修复网络环境"
         run: |
           echo "=== 步骤 18: 修复网络环境 ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是尝试修复
           trap 'echo "⚠️ 步骤 18 修复过程中出现错误，继续执行..."' ERR
           
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" fix_network
           
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ 完成时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 18 完成"
 #【firmware-build.yml-20】
 
@@ -915,7 +918,7 @@ jobs:
       - name: "19. 下载依赖包（优化版）"
         run: |
           echo "=== 步骤 19: 下载依赖包（优化版） ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
@@ -943,7 +946,7 @@ jobs:
             grep -i "error\|failed\|404\|not found" download.log | head -10 || true
           fi
           
-          echo "✅ 下载完成，时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ 下载完成，时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 检查下载结果
           NEW_DEP_COUNT=$(find dl -type f 2>/dev/null | wc -l)
@@ -958,7 +961,7 @@ jobs:
       - name: "20. 集成自定义文件（增强版）"
         run: |
           echo "=== 步骤 20: 集成自定义文件（增强版）==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是尝试集成
           trap 'echo "⚠️ 步骤 20 集成过程中出现错误，继续执行..."' ERR
@@ -1138,7 +1141,7 @@ jobs:
             echo "📁 跳过自定义文件集成"
           fi
           
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ 完成时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 20 完成"
 #【firmware-build.yml-22】
 
@@ -1147,7 +1150,7 @@ jobs:
       - name: "21. 前置错误检查（修复23.05 SDK验证）"
         run: |
           echo "=== 步骤 21: 前置错误检查（修复23.05 SDK验证） ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
@@ -1179,7 +1182,7 @@ jobs:
             exit 1
           fi
           
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ 完成时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 21 完成"
 #【firmware-build.yml-23】
 
@@ -1188,7 +1191,7 @@ jobs:
       - name: "22. 编译固件前的空间检查"
         run: |
           echo "=== 步骤 22: 编译固件前的空间检查 ==="
-          echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 检查时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
@@ -1216,7 +1219,7 @@ jobs:
       - name: "23. 编译固件（智能并行优化版）"
         run: |
           echo "=== 步骤 23: 编译固件（智能并行优化版） ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
@@ -1272,7 +1275,7 @@ jobs:
           echo "  - 设备: ${{ github.event.inputs.device_name }}"
           echo "  - 版本: ${{ github.event.inputs.version_selection }}"
           echo "  - 配置模式: ${{ github.event.inputs.config_mode }}"
-          echo "  - 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "  - 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置编译环境变量
           export FORCE_UNSAFE_CONFIGURE=1
@@ -1319,7 +1322,7 @@ jobs:
         if: success()
         run: |
           echo "=== 步骤 24: 检查构建产物（修复版） ==="
-          echo "🕐 开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
@@ -1421,7 +1424,7 @@ jobs:
             exit 1
           fi
           
-          echo "✅ 完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "✅ 完成时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 24 完成"
 #【firmware-build.yml-26】
 
@@ -1455,7 +1458,7 @@ jobs:
         if: always()
         run: |
           echo "=== 步骤 27: 编译后空间检查（修复版） ==="
-          echo "🕐 检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 检查时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是检查
           trap 'echo "⚠️ 步骤 27 检查过程中出现错误，继续执行..."' ERR
@@ -1483,7 +1486,7 @@ jobs:
         if: always()
         run: |
           echo "=== 步骤 28: 编译后总结（增强版） ==="
-          echo "🕐 总结时间: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "🕐 总结时间: $(date -u +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，总结不应该失败
           trap 'echo "⚠️ 步骤 28 总结过程中出现错误，继续执行..."' ERR
