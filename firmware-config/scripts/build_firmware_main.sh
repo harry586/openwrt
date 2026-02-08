@@ -193,16 +193,12 @@ initialize_build_env() {
             DEVICE="$device_name"
             log "✅ 从support.sh获取平台信息: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
         else
-            log "⚠️ 无法从support.sh获取平台信息，使用默认值"
-            TARGET="ipq40xx"
-            SUBTARGET="generic"
-            DEVICE="$device_name"
+            log "❌ 无法从support.sh获取平台信息"
+            handle_error "获取平台信息失败"
         fi
     else
-        log "⚠️ support.sh不存在，使用默认配置"
-        TARGET="ipq40xx"
-        SUBTARGET="generic"
-        DEVICE="$device_name"
+        log "❌ support.sh不存在"
+        handle_error "support.sh脚本缺失"
     fi
     
     log "🔧 设备: $device_name"
@@ -229,7 +225,7 @@ initialize_build_env() {
 #【build_firmware_main.sh-06】
 
 #【build_firmware_main.sh-07】
-# 下载OpenWrt官方SDK函数 - 调用support.sh版本
+# 下载OpenWrt官方SDK函数 - 删除硬编码URL，通过support.sh获取
 download_openwrt_sdk() {
     local target="$1"
     local subtarget="$2"
@@ -239,182 +235,25 @@ download_openwrt_sdk() {
     log "目标平台: $target/$subtarget"
     log "OpenWrt版本: $version"
     
-    # 调用support.sh的SDK下载功能
-    if [ -f "$SUPPORT_SCRIPT" ]; then
-        log "🔍 尝试通过support.sh获取SDK信息..."
-        # 这里假设support.sh有获取SDK URL的功能
-        # 如果没有，使用下面的硬编码作为后备
-    fi
-    
-    # 确定SDK下载URL（作为后备）
-    local sdk_url=""
-    local sdk_filename=""
-    
-    if [ "$version" = "23.05" ] || [ "$version" = "openwrt-23.05" ]; then
-        # OpenWrt 23.05 SDK - 修复GCC版本为12.3.0
-        case "$target" in
-            "ipq40xx")
-                # 高通IPQ40xx平台
-                sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
-                sdk_filename="openwrt-sdk-23.05.3-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
-                ;;
-            "ramips")
-                # MIPS平台
-                if [ "$subtarget" = "mt76x8" ]; then
-                    sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt76x8/openwrt-sdk-23.05.3-ramips-mt76x8_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
-                    sdk_filename="openwrt-sdk-23.05.3-ramips-mt76x8_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
-                elif [ "$subtarget" = "mt7621" ]; then
-                    sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt7621/openwrt-sdk-23.05.3-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-                    sdk_filename="openwrt-sdk-23.05.3-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-                else
-                    log "❌ 不支持的子目标: $subtarget"
-                    return 1
-                fi
-                ;;
-            "mediatek")
-                # 联发科平台
-                if [ "$subtarget" = "mt7981" ]; then
-                    sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/mediatek/mt7981/openwrt-sdk-23.05.3-mediatek-mt7981_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-                    sdk_filename="openwrt-sdk-23.05.3-mediatek-mt7981_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-                else
-                    log "❌ 不支持的子目标: $subtarget"
-                    return 1
-                fi
-                ;;
-            "ath79")
-                # 高通ATH79平台
-                sdk_url="https://downloads.openwrt.org/releases/23.05.3/targets/ath79/generic/openwrt-sdk-23.05.3-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-                sdk_filename="openwrt-sdk-23.05.3-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-                ;;
-            *)
-                log "❌ 不支持的目标平台: $target"
-                return 1
-                ;;
-        esac
-    elif [ "$version" = "21.02" ] || [ "$version" = "openwrt-21.02" ]; then
-        # OpenWrt 21.02 SDK - GCC版本保持8.4.0
-        case "$target" in
-            "ipq40xx")
-                sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
-                sdk_filename="openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
-                ;;
-            "ramips")
-                if [ "$subtarget" = "mt76x8" ]; then
-                    sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt76x8/openwrt-sdk-21.02.7-ramips-mt76x8_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
-                    sdk_filename="openwrt-sdk-21.02.7-ramips-mt76x8_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
-                elif [ "$subtarget" = "mt7621" ]; then
-                    sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ramips/mt7621/openwrt-sdk-21.02.7-ramips-mt7621_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
-                    sdk_filename="openwrt-sdk-21.02.7-ramips-mt7621_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
-                else
-                    log "❌ 不支持的子目标: $subtarget"
-                    return 1
-                fi
-                ;;
-            "mediatek")
-                # 联发科平台
-                if [ "$subtarget" = "mt7981" ]; then
-                    sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/mediatek/mt7981/openwrt-sdk-21.02.7-mediatek-mt7981_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
-                    sdk_filename="openwrt-sdk-21.02.7-mediatek-mt7981_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
-                else
-                    log "❌ 不支持的子目标: $subtarget"
-                    return 1
-                fi
-                ;;
-            "ath79")
-                # 高通ATH79平台
-                sdk_url="https://downloads.openwrt.org/releases/21.02.7/targets/ath79/generic/openwrt-sdk-21.02.7-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
-                sdk_filename="openwrt-sdk-21.02.7-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
-                ;;
-            *)
-                log "❌ 不支持的目标平台: $target"
-                return 1
-                ;;
-        esac
-    else
-        log "❌ 不支持的OpenWrt版本: $version"
+    # 检查support.sh是否存在
+    if [ ! -f "$SUPPORT_SCRIPT" ]; then
+        log "❌ support.sh不存在，无法获取SDK信息"
         return 1
     fi
     
-    if [ -z "$sdk_url" ]; then
-        log "❌ 无法确定SDK下载URL"
-        return 1
+    # 确保support.sh有执行权限
+    if [ ! -x "$SUPPORT_SCRIPT" ]; then
+        chmod +x "$SUPPORT_SCRIPT"
+        log "✅ 已添加support.sh执行权限"
     fi
     
-    log "📥 SDK下载URL: $sdk_url"
-    log "📁 SDK文件名: $sdk_filename"
+    log "🔍 通过support.sh获取SDK信息..."
+    # 这里需要通过support.sh的接口获取SDK URL
+    # 由于support.sh没有SDK下载功能，这里直接报错
     
-    # 创建SDK目录
-    local sdk_dir="$BUILD_DIR/sdk"
-    mkdir -p "$sdk_dir"
-    
-    # 下载SDK
-    log "开始下载OpenWrt SDK..."
-    if wget --tries=3 --timeout=30 -q -O "$sdk_dir/$sdk_filename" "$sdk_url"; then
-        log "✅ SDK下载成功"
-    else
-        log "⚠️ 首次下载失败，尝试备用下载..."
-        # 尝试使用curl
-        if curl -L --connect-timeout 30 --retry 3 -o "$sdk_dir/$sdk_filename" "$sdk_url"; then
-            log "✅ SDK下载成功（使用curl）"
-        else
-            log "❌ SDK下载失败"
-            return 1
-        fi
-    fi
-    
-    # 解压SDK
-    log "解压SDK..."
-    cd "$sdk_dir"
-    if tar -xf "$sdk_filename" --strip-components=1; then
-        log "✅ SDK解压成功"
-        rm -f "$sdk_filename"
-    else
-        log "❌ SDK解压失败"
-        return 1
-    fi
-    
-    # 查找SDK中的编译器
-    local toolchain_dir=""
-    if [ -d "toolchain" ]; then
-        toolchain_dir="$sdk_dir/toolchain"
-        log "✅ 找到toolchain目录: $toolchain_dir"
-    else
-        # 在SDK中搜索编译器，排除虚假的dummy-tools
-        local gcc_file=$(find "$sdk_dir" -type f -executable \
-            -name "*gcc" \
-            ! -name "*gcc-ar" \
-            ! -name "*gcc-ranlib" \
-            ! -name "*gcc-nm" \
-            ! -path "*dummy-tools*" \
-            ! -path "*scripts*" \
-            2>/dev/null | head -1)
-        
-        if [ -n "$gcc_file" ]; then
-            toolchain_dir=$(dirname "$(dirname "$gcc_file")")
-            log "✅ 在SDK中找到GCC编译器: $gcc_file"
-            log "📁 编译器目录: $toolchain_dir"
-        else
-            # 尝试查找staging_dir中的工具链
-            if [ -d "staging_dir" ]; then
-                toolchain_dir=$(find "$sdk_dir/staging_dir" -name "toolchain-*" -type d | head -1)
-                if [ -n "$toolchain_dir" ]; then
-                    log "✅ 在staging_dir中找到工具链目录: $toolchain_dir"
-                fi
-            fi
-        fi
-    fi
-    
-    if [ -n "$toolchain_dir" ] && [ -d "$toolchain_dir" ]; then
-        log "✅ 找到SDK中的编译器目录: $toolchain_dir"
-        export COMPILER_DIR="$toolchain_dir"
-        
-        # 验证编译器
-        verify_compiler_files
-        return 0
-    else
-        log "❌ 未在SDK中找到编译器目录"
-        return 1
-    fi
+    log "❌ SDK下载功能未实现"
+    log "💡 需要在support.sh中添加SDK下载功能"
+    return 1
 }
 #【build_firmware_main.sh-07】
 
@@ -440,7 +279,7 @@ initialize_compiler_env() {
         log "  REPO_ROOT: $REPO_ROOT"
         log "  COMPILER_DIR: $COMPILER_DIR"
     else
-        log "⚠️ 环境文件不存在: $BUILD_DIR/build_env.sh"
+        log "❌ 环境文件不存在: $BUILD_DIR/build_env.sh"
         log "💡 环境文件应该在步骤6.3中创建，但未找到"
         
         # 调用support.sh获取设备信息
@@ -453,16 +292,12 @@ initialize_compiler_env() {
                 DEVICE="$device_name"
                 log "✅ 从support.sh获取平台信息: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
             else
-                log "⚠️ 无法从support.sh获取平台信息，使用默认值"
-                TARGET="ipq40xx"
-                SUBTARGET="generic"
-                DEVICE="$device_name"
+                log "❌ 无法从support.sh获取平台信息"
+                return 1
             fi
         else
-            log "⚠️ support.sh不存在，使用默认值"
-            TARGET="ipq40xx"
-            SUBTARGET="generic"
-            DEVICE="$device_name"
+            log "❌ support.sh不存在"
+            return 1
         fi
         
         if [ -z "$CONFIG_MODE" ]; then
@@ -521,9 +356,8 @@ initialize_compiler_env() {
     elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
         version_for_sdk="21.02"
     else
-        # 尝试提取版本号
-        version_for_sdk=$(echo "$SELECTED_BRANCH" | grep -o "[0-9][0-9]\.[0-9][0-9]" || echo "21.02")
-        log "⚠️ 无法识别的版本分支，尝试使用: $version_for_sdk"
+        log "❌ 不支持的OpenWrt版本: $SELECTED_BRANCH"
+        return 1
     fi
     
     log "📌 SDK版本: $version_for_sdk"
@@ -572,12 +406,6 @@ initialize_compiler_env() {
         return 0
     else
         log "❌ OpenWrt SDK下载失败"
-        log "💡 将使用OpenWrt自动构建的编译器作为后备"
-        
-        # 设置空的编译器目录
-        export COMPILER_DIR=""
-        save_env
-        
         return 1
     fi
 }
@@ -746,66 +574,13 @@ generate_config() {
             log "✅ 通过support.sh完成配置生成"
             return 0
         else
-            log "⚠️ support.sh配置失败，使用后备配置"
+            log "❌ support.sh配置失败"
+            handle_error "support.sh配置失败"
         fi
     else
-        log "⚠️ support.sh不存在，使用后备配置"
+        log "❌ support.sh不存在"
+        handle_error "support.sh脚本缺失"
     fi
-    
-    # 后备配置：直接应用配置文件
-    CONFIG_DIR="$REPO_ROOT/firmware-config/config"
-    
-    # 应用USB通用配置
-    if [ -f "$CONFIG_DIR/usb-generic.config" ]; then
-        log "📄 应用USB通用配置..."
-        cat "$CONFIG_DIR/usb-generic.config" >> .config
-        log "✅ USB通用配置已应用"
-    else
-        log "❌ USB通用配置文件不存在: $CONFIG_DIR/usb-generic.config"
-    fi
-    
-    # 应用模式配置
-    if [ -f "$CONFIG_DIR/$CONFIG_MODE.config" ]; then
-        log "📄 应用$CONFIG_MODE模式配置..."
-        cat "$CONFIG_DIR/$CONFIG_MODE.config" >> .config
-        log "✅ $CONFIG_MODE模式配置已应用"
-    else
-        log "❌ 模式配置文件不存在: $CONFIG_DIR/$CONFIG_MODE.config"
-    fi
-    
-    # 应用设备专用配置
-    if [ -f "$CONFIG_DIR/devices/$DEVICE.config" ]; then
-        log "📄 应用$DEVICE设备专用配置..."
-        cat "$CONFIG_DIR/devices/$DEVICE.config" >> .config
-        log "✅ $DEVICE设备专用配置已应用"
-    else
-        log "ℹ️ 设备专用配置文件不存在，使用通用配置: $CONFIG_DIR/devices/$DEVICE.config"
-    fi
-    
-    # 处理额外插件
-    if [ -n "$extra_packages" ]; then
-        log "🔧 处理额外安装插件: $extra_packages"
-        IFS=';' read -ra EXTRA_PKGS <<< "$extra_packages"
-        for pkg_cmd in "${EXTRA_PKGS[@]}"; do
-            if [ -n "$pkg_cmd" ]; then
-                pkg_cmd_clean=$(echo "$pkg_cmd" | xargs)
-                if [[ "$pkg_cmd_clean" == +* ]]; then
-                    pkg_name="${pkg_cmd_clean:1}"
-                    log "启用插件: $pkg_name"
-                    echo "CONFIG_PACKAGE_${pkg_name}=y" >> .config
-                elif [[ "$pkg_cmd_clean" == -* ]]; then
-                    pkg_name="${pkg_cmd_clean:1}"
-                    log "禁用插件: $pkg_name"
-                    echo "# CONFIG_PACKAGE_${pkg_name} is not set" >> .config
-                else
-                    log "启用插件: $pkg_cmd_clean"
-                    echo "CONFIG_PACKAGE_${pkg_cmd_clean}=y" >> .config
-                fi
-            fi
-        done
-    fi
-    
-    log "✅ 智能配置生成完成"
 }
 #【build_firmware_main.sh-13】
 
@@ -2038,7 +1813,7 @@ verify_compiler_files() {
         else
             log "  ❌ 未找到任何GCC相关可执行文件"
         fi
-    fi
+    done
     
     if [ -n "$gpp_executable" ]; then
         log "  ✅ 找到可执行G++: $(basename "$gpp_executable")"
