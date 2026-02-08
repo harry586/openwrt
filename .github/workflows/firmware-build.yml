@@ -47,14 +47,18 @@ jobs:
 #【firmware-build.yml-02】
     
     steps:
-      # 步骤 0: 生成时间戳 - 简化版，直接使用系统时间
-      - name: "0. 生成时间戳"
+      # 步骤 0: 生成时间戳 - 修复版：添加UTC+8时区
+      - name: "0. 生成时间戳（UTC+8时区）"
         run: |
-          echo "=== 步骤 0: 生成时间戳 ==="
+          echo "=== 步骤 0: 生成时间戳（UTC+8时区） ==="
           
-          # 直接使用系统时间，避免复杂的检查
+          # 设置时区为UTC+8（北京时间）
+          echo "设置时区为UTC+8..."
+          sudo timedatectl set-timezone Asia/Shanghai 2>/dev/null || true
+          
+          # 生成时间戳（使用修复后的实际时间）
           START_TIME=$(date +'%Y-%m-%d %H:%M:%S')
-          echo "🕐 开始时间: $START_TIME"
+          echo "🕐 修复后的开始时间: $START_TIME"
           
           # 生成精确到秒的时间戳
           TIMESTAMP_LOCAL=$(date +'%Y%m%d_%H%M%S')
