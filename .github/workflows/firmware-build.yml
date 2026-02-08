@@ -18,7 +18,7 @@ on:
         default: "21.02"
         options: ["23.05", "21.02"]
       config_mode:
-        description: "⚙️ 配置模式选择 - 🟣 基础模式 - 最小化配置，用于测试编译。🟠 正常模式 - 完整功能配置：✅ TurboACC 网络加速 ✅ UPnP 自动端口转发 ✅ Samba 文件共享 ✅ 磁盘管理 ✅ KMS 激活服务 ✅ SmartDNS 智能DNS ✅ 家长控制 ✅ 微信推送 ✅ 流量控制 (SQM) ✅ FTP 服务器 ✅ ARP 绑定 ✅ CPU 限制 ✅ 硬盘休眠"
+        description: "⚙️ 配置模式选择 - 🟣 基础模式 - 最小化配置，用于测试编译。🟠 正常模式 - 完整功能配置：✅ TurboACC 网络加速 ✅ UPnP 自动端口转发 ✅ Samba 文件共享 ✅ 磁盘管理 ✅ KMS 激活服务 ✅ SmartDNS 智能DNS ✅ 家长控制 ✅ 微信推送 ✅ 流量控制 (SQM) ✅ FTP 服务器 ✅ ARP 绑定 ✅ CPU 限制 ✅ 硬盘休眠 ✅ TCP BBR拥塞控制"
         required: true
         type: choice
         default: "normal"
@@ -47,7 +47,7 @@ jobs:
 #【firmware-build.yml-02】
     
     steps:
-      # 步骤 0: 生成时间戳 - 修复时区问题
+      # 步骤 0: 生成时间戳 - 修复时区问题，添加精确到秒的时间戳
       - name: "0. 生成时间戳"
         run: |
           echo "=== 步骤 0: 生成时间戳 ==="
@@ -56,14 +56,23 @@ jobs:
           START_TIME=$(date -u +'%Y-%m-%d %H:%M:%S')
           echo "🕐 开始时间: $START_TIME"
           
-          # 生成日期格式的时间戳（年月日）
+          # 生成精确到秒的时间戳（年月日时分秒）
+          TIMESTAMP_UTC=$(date -u +'%Y%m%d_%H%M%S')
           BASE_DATE=$(date -u +'%Y%m%d')
-          TIMESTAMP="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$BASE_DATE"
           
-          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
+          # 多个时间戳格式
+          TIMESTAMP_SEC="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$TIMESTAMP_UTC"
+          TIMESTAMP_DAY="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$BASE_DATE"
+          
+          echo "TIMESTAMP_SEC=$TIMESTAMP_SEC" >> $GITHUB_ENV
+          echo "TIMESTAMP_DAY=$TIMESTAMP_DAY" >> $GITHUB_ENV
           echo "START_TIME=$START_TIME" >> $GITHUB_ENV
+          echo "BASE_DATE=$BASE_DATE" >> $GITHUB_ENV
           
-          echo "✅ 生成时间戳: $TIMESTAMP"
+          echo "✅ 生成时间戳:"
+          echo "  精确到秒: $TIMESTAMP_SEC"
+          echo "  仅到日: $TIMESTAMP_DAY"
+          echo "  开始时间: $START_TIME"
           echo "📋 构建配置:"
           echo "  设备: ${{ github.event.inputs.device_name }}"
           echo "  版本: ${{ github.event.inputs.version_selection }}"
@@ -151,11 +160,11 @@ jobs:
 #【firmware-build.yml-03】
 
 #【firmware-build.yml-04】
-      # 步骤 2: 上传源代码Artifacts
+      # 步骤 2: 上传源代码Artifacts（使用精确到秒的时间戳）
       - name: "2. 上传源代码Artifacts"
         uses: actions/upload-artifact@v4
         with:
-          name: source-${{ env.TIMESTAMP }}
+          name: source-${{ env.TIMESTAMP_SEC }}
           path: /tmp/build-artifacts/source-archive/
           retention-days: 7
           if-no-files-found: error
@@ -479,30 +488,27 @@ jobs:
             echo "⚠️ 环境文件不存在，可能是步骤6.3失败"
             echo "📝 重新创建环境变量..."
             
-            # 根据设备设置基础环境变量
-            DEVICE_NAME="${{ github.event.inputs.device_name }}"
-            case "$DEVICE_NAME" in
-              "ac42u"|"acrh17")
+            # 调用support.sh获取设备信息
+            if [ -f "${{ github.workspace }}/support.sh" ]; then
+              echo "🔍 调用support.sh获取设备信息..."
+              PLATFORM_INFO=$("${{ github.workspace }}/support.sh" get-platform "${{ github.event.inputs.device_name }}")
+              if [ -n "$PLATFORM_INFO" ]; then
+                TARGET=$(echo "$PLATFORM_INFO" | awk '{print $1}')
+                SUBTARGET=$(echo "$PLATFORM_INFO" | awk '{print $2}')
+                DEVICE="${{ github.event.inputs.device_name }}"
+                echo "✅ 从support.sh获取平台信息: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
+              else
+                echo "⚠️ 无法从support.sh获取平台信息，使用默认值"
                 TARGET="ipq40xx"
                 SUBTARGET="generic"
-                DEVICE="asus_rt-ac42u"
-                ;;
-              "cmcc_rax3000m")
-                TARGET="mediatek"
-                SUBTARGET="mt7981"
-                DEVICE="cmcc_rax3000m"
-                ;;
-              "netgear_3800")
-                TARGET="ath79"
-                SUBTARGET="generic"
-                DEVICE="netgear_3800"
-                ;;
-              *)
-                TARGET="ipq40xx"
-                SUBTARGET="generic"
-                DEVICE="$DEVICE_NAME"
-                ;;
-            esac
+                DEVICE="${{ github.event.inputs.device_name }}"
+              fi
+            else
+              echo "⚠️ support.sh不存在，使用默认值"
+              TARGET="ipq40xx"
+              SUBTARGET="generic"
+              DEVICE="${{ github.event.inputs.device_name }}"
+            fi
             
             # 创建环境文件
             echo "#!/bin/bash" > /mnt/openwrt-build/build_env.sh
@@ -790,11 +796,15 @@ jobs:
             grep "CONFIG_PACKAGE_kmod-usb-xhci" "/mnt/openwrt-build/.config"
             
             echo ""
-            echo "3. ✅ 关键USB驱动状态:"
+            echo "3. ✅ TCP BBR拥塞控制算法配置:"
+            grep -E "CONFIG_PACKAGE_kmod-tcp-bbr|CONFIG_DEFAULT_TCP_CONG|CONFIG_PACKAGE_tcp-bbr" "/mnt/openwrt-build/.config"
+            
+            echo ""
+            echo "4. ✅ 关键USB驱动状态:"
             grep -E "CONFIG_PACKAGE_kmod-usb-core|CONFIG_PACKAGE_kmod-usb2|CONFIG_PACKAGE_kmod-usb3|CONFIG_PACKAGE_kmod-usb-storage" "/mnt/openwrt-build/.config"
             
             echo ""
-            echo "4. ✅ 插件配置统计:"
+            echo "5. ✅ 插件配置统计:"
             enabled=$(grep -c "CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config")
             disabled=$(grep -c "# CONFIG_PACKAGE_.* is not set" "/mnt/openwrt-build/.config")
             echo "   ✅ 已启用插件: $enabled 个"
@@ -817,6 +827,7 @@ jobs:
             
             # 功能性插件状态
             echo "  TurboACC 网络加速 (luci-app-turboacc): $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            echo "  TCP BBR拥塞控制算法 (kmod-tcp-bbr): $(grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  UPnP 自动端口转发 (luci-app-upnp): $(grep -q "^CONFIG_PACKAGE_luci-app-upnp=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  Samba 文件共享 (luci-app-samba4): $(grep -q "^CONFIG_PACKAGE_luci-app-samba4=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
             echo "  磁盘管理 (luci-app-diskman): $(grep -q "^CONFIG_PACKAGE_luci-app-diskman=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
@@ -834,7 +845,7 @@ jobs:
             echo "🎯 配置模式: ${{ github.event.inputs.config_mode }}"
             if [ "${{ github.event.inputs.config_mode }}" = "normal" ]; then
               echo "✅ 当前为正常模式（完整功能）"
-              echo "📊 正常模式包含所有功能性插件"
+              echo "📊 正常模式包含所有功能性插件，包括TCP BBR拥塞控制算法"
             else
               echo "🔧 当前为基础模式（最小化配置）"
               echo "📊 基础模式仅包含核心功能，用于测试编译"
@@ -846,6 +857,7 @@ jobs:
             echo "  - 目标设备: $DEVICE"
             echo "  - OpenWrt版本: $SELECTED_BRANCH"
             echo "  - USB驱动: 已启用所有关键驱动"
+            echo "  - TCP BBR: 已启用拥塞控制算法"
             echo "  - 插件数量: $enabled 个已启用"
             
             # 显示前10个启用的插件
@@ -883,8 +895,8 @@ jobs:
             # 确保备份目录存在
             mkdir -p "${{ github.workspace }}/firmware-config/config-backup"
             
-            # 备份到仓库目录
-            BACKUP_FILE="${{ github.workspace }}/firmware-config/config-backup/config_${{ env.TIMESTAMP }}.config"
+            # 备份到仓库目录 - 使用精确到秒的时间戳
+            BACKUP_FILE="${{ github.workspace }}/firmware-config/config-backup/config_${{ env.TIMESTAMP_SEC }}.config"
             
             cp "/mnt/openwrt-build/.config" "$BACKUP_FILE"
             echo "✅ 配置文件备份到仓库目录: $BACKUP_FILE"
@@ -1429,24 +1441,24 @@ jobs:
 #【firmware-build.yml-26】
 
 #【firmware-build.yml-27】
-      # 步骤 25: 上传固件原始目录
+      # 步骤 25: 上传固件原始目录（使用精确到秒的时间戳）
       - name: "25. 上传固件原始目录"
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-${{ env.TIMESTAMP }}
+          name: firmware-${{ env.TIMESTAMP_SEC }}
           path: /mnt/openwrt-build/bin/targets/
           retention-days: 7
           if-no-files-found: error
 #【firmware-build.yml-27】
 
 #【firmware-build.yml-28】
-      # 步骤 26: 上传配置文件
+      # 步骤 26: 上传配置文件（使用精确到秒的时间戳）
       - name: "26. 上传配置文件"
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: config-${{ env.TIMESTAMP }}
+          name: config-${{ env.TIMESTAMP_SEC }}
           path: ${{ github.workspace }}/firmware-config/config-backup/
           retention-days: 7
           if-no-files-found: error
@@ -1496,7 +1508,8 @@ jobs:
           echo "设备: ${{ github.event.inputs.device_name }}"
           echo "版本: ${{ github.event.inputs.version_selection }}"
           echo "配置模式: ${{ github.event.inputs.config_mode }}"
-          echo "时间戳: ${{ env.TIMESTAMP }}"
+          echo "时间戳（精确到秒）: ${{ env.TIMESTAMP_SEC }}"
+          echo "时间戳（仅到日）: ${{ env.TIMESTAMP_DAY }}"
           echo "并行优化: ${{ github.event.inputs.enable_parallel }}"
           echo ""
           
@@ -1510,7 +1523,7 @@ jobs:
             
             if [ $FIRMWARE_COUNT -gt 0 ]; then
               echo "  产物位置: /mnt/openwrt-build/bin/targets/"
-              echo "  下载名称: firmware-${{ env.TIMESTAMP }}"
+              echo "  下载名称: firmware-${{ env.TIMESTAMP_SEC }}"
               
               # 显示所有固件文件信息
               echo "  固件文件详情:"
@@ -1557,6 +1570,7 @@ jobs:
             FIRMWARE_COUNT=$(find "/mnt/openwrt-build/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
             if [ $FIRMWARE_COUNT -gt 0 ]; then
               echo "  ✅ 构建结果: 成功生成 $FIRMWARE_COUNT 个固件文件"
+              echo "  📁 Artifact名称: firmware-${{ env.TIMESTAMP_SEC }}"
             else
               echo "  ⚠️ 构建结果: 编译完成但未生成固件文件"
             fi
@@ -1749,6 +1763,7 @@ jobs:
           
           echo ""
           echo "✅ 构建流程完成"
+          echo "📁 所有Artifact使用精确到秒的时间戳命名: ${{ env.TIMESTAMP_SEC }}"
           echo "========================================"
           echo "🟢 步骤 28 完成"
 #【firmware-build.yml-30】
