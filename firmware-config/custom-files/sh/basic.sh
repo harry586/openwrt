@@ -87,10 +87,13 @@ if [ "$RUNTIME_MODE" = "true" ]; then
         
         # 设置WAN DNS为127.0.0.1（如果WAN接口存在）
         if uci get network.wan >/dev/null 2>&1; then
+            # 首先禁用自动获取DNS
+            uci set network.wan.peerdns='0'
+            # 然后设置自定义DNS
             uci delete network.wan.dns 2>/dev/null
             uci set network.wan.dns='127.0.0.1'
             uci commit network
-            echo "WAN DNS已设置为: 127.0.0.1"
+            echo "WAN DNS已设置为: 127.0.0.1，并禁用自动获取DNS"
         fi
         
         # 修改DHCP配置
@@ -137,13 +140,14 @@ config interface 'lan'
 config interface 'wan'
 	option ifname 'eth1'
 	option proto 'dhcp'
-	option dns '127.0.0.1'
+	option peerdns '0'  # 禁用自动获取DNS
+	option dns '127.0.0.1'  # 设置自定义DNS
 
 config interface 'wan6'
 	option ifname 'eth1'
 	option proto 'dhcpv6'
 EOF
-    echo "DNS配置已集成到固件：LAN和WAN均使用127.0.0.1"
+    echo "DNS配置已集成到固件：LAN和WAN均使用127.0.0.1，且WAN禁用自动获取DNS"
 fi
 
 # ==================== 3. 设置自定义计划任务（追加方式） ====================
@@ -303,12 +307,15 @@ if uci get network.lan >/dev/null 2>&1; then
         echo "✓ LAN IP地址已经是192.168.10.1"
     fi
     
-    # 设置WAN DNS为127.0.0.1
+    # 设置WAN DNS为127.0.0.1并禁用自动获取
     if uci get network.wan >/dev/null 2>&1; then
+        # 禁用自动获取DNS
+        uci set network.wan.peerdns='0'
+        # 设置自定义DNS
         uci delete network.wan.dns 2>/dev/null
         uci set network.wan.dns='127.0.0.1'
         uci commit network
-        echo "✓ WAN DNS已设置为: 127.0.0.1"
+        echo "✓ WAN DNS已设置为: 127.0.0.1，且禁用自动获取DNS"
     fi
     
     # 配置DHCP
@@ -373,6 +380,7 @@ echo "  ✓ 主机名: Neptune"
 echo "  ✓ LAN IP地址: 192.168.10.1/24"
 echo "  ✓ LAN DNS: 127.0.0.1（指向路由器自身）"
 echo "  ✓ WAN DNS: 127.0.0.1（指向路由器自身）"
+echo "  ✓ 自动获取DNS: 已禁用"
 echo "  ✓ DHCP范围: 192.168.10.100-250"
 echo "  ✓ 计划任务: 已追加自定义任务"
 echo "  ✓ 升级保留: /overlay（追加方式）"
@@ -387,6 +395,7 @@ echo ""
 echo "【DNS配置说明】:"
 echo "  DNS设置为127.0.0.1表示使用路由器自身的DNS服务"
 echo "  需要确保已安装并配置dnsmasq或DNS相关服务"
+echo "  WAN口已禁用自动获取DNS，使用自定义DNS设置"
 echo "================================"
 EOF
     chmod +x "$dest"
@@ -446,6 +455,7 @@ if [ "$RUNTIME_MODE" = "true" ]; then
     echo "  ✓ LAN IP地址: 192.168.10.1/24"
     echo "  ✓ LAN DNS: 127.0.0.1"
     echo "  ✓ WAN DNS: 127.0.0.1"
+    echo "  ✓ 自动获取DNS: 已禁用"
     echo "  ✓ DHCP服务: 已配置（100-250）"
     echo "  ✓ 计划任务: 已追加（不覆盖原有任务）"
     echo "  ✓ 升级配置: 保留/overlay（追加方式）"
@@ -454,9 +464,10 @@ if [ "$RUNTIME_MODE" = "true" ]; then
     echo "【注意事项】:"
     echo "  1. IP地址更改需要重启网络或系统才能生效"
     echo "  2. DNS设置为127.0.0.1需要路由器上有DNS服务"
-    echo "  3. 无线配置因硬件差异需要手动配置"
-    echo "  4. 静态路由需要确保网关192.168.5.100可达"
-    echo "  5. 重启后访问地址: http://192.168.10.1"
+    echo "  3. WAN口已禁用自动获取DNS，使用自定义设置"
+    echo "  4. 无线配置因硬件差异需要手动配置"
+    echo "  5. 静态路由需要确保网关192.168.5.100可达"
+    echo "  6. 重启后访问地址: http://192.168.10.1"
     echo ""
     echo "【网络重启命令】:"
     echo "  /etc/init.d/network restart"
@@ -472,6 +483,7 @@ else
     echo "  ✓ LAN IP地址配置（192.168.10.1）"
     echo "  ✓ LAN DNS配置（127.0.0.1）"
     echo "  ✓ WAN DNS配置（127.0.0.1）"
+    echo "  ✓ WAN禁用自动获取DNS配置"
     echo "  ✓ DHCP服务配置"
     echo "  ✓ 自定义计划任务（需手动追加）"
     echo "  ✓ 升级保留配置"
@@ -484,6 +496,7 @@ else
     echo "  2. 主机名自动设置为Neptune"
     echo "  3. DHCP服务自动开启（100-250）"
     echo "  4. DNS指向路由器自身（127.0.0.1）"
+    echo "  5. WAN口禁用自动获取DNS，使用自定义设置"
     echo ""
     echo "【首次访问】:"
     echo "  刷机后访问: http://192.168.10.1"
