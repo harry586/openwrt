@@ -589,7 +589,7 @@ initialize_compiler_env() {
 #【build_firmware_main.sh-08】
 
 #【build_firmware_main.sh-09】
-# 添加 TurboACC 支持
+# 添加 TurboACC 支持 - 修复版：所有版本都添加
 add_turboacc_support() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -598,14 +598,8 @@ add_turboacc_support() {
     
     if [ "$CONFIG_MODE" = "normal" ]; then
         log "🔧 为正常模式添加 TurboACC 支持"
-        
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            log "🔧 为 23.05 添加 TurboACC 支持"
-            echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
-            log "✅ TurboACC feed 添加完成"
-        else
-            log "ℹ️ 21.02 版本已内置 TurboACC，无需额外添加"
-        fi
+        echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+        log "✅ TurboACC feed 添加完成"
     else
         log "ℹ️ 基础模式不添加 TurboACC 支持"
     fi
@@ -613,7 +607,7 @@ add_turboacc_support() {
 #【build_firmware_main.sh-09】
 
 #【build_firmware_main.sh-10】
-# 配置Feeds
+# 配置Feeds - 修复版：统一处理TurboACC
 configure_feeds() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -629,8 +623,10 @@ configure_feeds() {
     echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf.default
     echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
     
-    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ] && [ "$CONFIG_MODE" = "normal" ]; then
+    # 统一添加TurboACC支持（所有版本都添加）
+    if [ "$CONFIG_MODE" = "normal" ]; then
         echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+        log "✅ 添加TurboACC feed（所有版本）"
     fi
     
     log "=== 更新Feeds ==="
