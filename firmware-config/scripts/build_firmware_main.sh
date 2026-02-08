@@ -809,18 +809,26 @@ pre_build_space_check() {
 #【build_firmware_main.sh-12】
 
 #【build_firmware_main.sh-13】
-# 智能配置生成系统 - 修复版：调用配置文件
+# 智能配置生成系统 - 修复版：避免递归调用
 generate_config() {
     local extra_packages=$1
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 智能配置生成系统（修复版：调用配置文件）==="
+    log "=== 智能配置生成系统（修复版：避免递归调用）==="
     log "版本: $SELECTED_BRANCH"
     log "目标: $TARGET"
     log "子目标: $SUBTARGET"
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
+    
+    # 防止递归调用的标记
+    if [ -f "/tmp/generating_config.lock" ]; then
+        log "⚠️ 检测到可能的递归调用，跳过重复配置生成"
+        return 0
+    fi
+    
+    touch "/tmp/generating_config.lock"
     
     rm -f .config .config.old
     
@@ -838,21 +846,78 @@ generate_config() {
     echo "CONFIG_PACKAGE_tcp-bbr=y" >> .config
     log "✅ 添加TCP BBR拥塞控制算法支持"
     
-    # 调用support.sh进行完整配置
+    # 检查support.sh是否存在，但不直接调用full-config以避免递归
     if [ -f "$SUPPORT_SCRIPT" ]; then
-        log "🔍 调用support.sh进行完整配置..."
-        "$SUPPORT_SCRIPT" full-config "$DEVICE" "$CONFIG_MODE" "$BUILD_DIR" "$extra_packages"
-        if [ $? -eq 0 ]; then
-            log "✅ 通过support.sh完成配置生成"
-            return 0
+        log "🔍 检查support.sh的配置函数..."
+        
+        # 使用新的方式调用，避免递归
+        if "$SUPPORT_SCRIPT" has-function "full-config" 2>/dev/null; then
+            log "✅ support.sh有full-config函数，但为避免递归，使用直接配置"
+            
+            # 直接添加基础配置而不是递归调用
+            add_basic_configuration
         else
-            log "❌ support.sh配置失败"
-            handle_error "support.sh配置失败"
+            log "⚠️ support.sh没有full-config函数，使用基础配置"
+            add_basic_configuration
         fi
     else
-        log "❌ support.sh不存在"
-        handle_error "support.sh脚本缺失"
+        log "❌ support.sh不存在，使用基础配置"
+        add_basic_configuration
     fi
+    
+    # 清理锁文件
+    rm -f "/tmp/generating_config.lock"
+    
+    log "✅ 配置生成完成"
+}
+
+# 添加基础配置函数，避免调用support.sh
+add_basic_configuration() {
+    log "=== 添加基础配置 ==="
+    
+    # 添加USB驱动
+    echo "# USB支持" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-core=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-scsi-core=y" >> .config
+    
+    # 根据平台添加专用驱动
+    if [ "$TARGET" = "ipq40xx" ]; then
+        echo "# 高通IPQ40xx平台专用驱动" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
+    fi
+    
+    # 文件系统支持
+    echo "# 文件系统支持" >> .config
+    echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
+    
+    # 添加常用软件包
+    echo "# 常用软件包" >> .config
+    echo "CONFIG_PACKAGE_luci=y" >> .config
+    echo "CONFIG_PACKAGE_luci-ssl=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
+    
+    # 根据配置模式添加包
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        echo "# 正常模式额外包" >> .config
+        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+        echo "CONFIG_PACKAGE_samba4-server=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-samba4=y" >> .config
+    fi
+    
+    log "✅ 基础配置添加完成"
 }
 #【build_firmware_main.sh-13】
 
@@ -2994,6 +3059,46 @@ save_source_code_info() {
 #【build_firmware_main.sh-29】
 
 #【build_firmware_main.sh-30】
+# 新增：详细验证SDK目录函数
+verify_sdk_directory() {
+    log "=== 详细验证SDK目录 ==="
+    
+    if [ -n "$COMPILER_DIR" ]; then
+        log "检查环境变量: COMPILER_DIR=$COMPILER_DIR"
+        
+        if [ -d "$COMPILER_DIR" ]; then
+            log "✅ SDK目录存在: $COMPILER_DIR"
+            log "📊 目录信息:"
+            ls -ld "$COMPILER_DIR"
+            log "📁 目录内容示例:"
+            ls -la "$COMPILER_DIR/" | head -10
+            return 0
+        else
+            log "❌ SDK目录不存在: $COMPILER_DIR"
+            log "🔍 检查可能的路径问题..."
+            
+            # 尝试查找SDK目录
+            local found_dirs=$(find /mnt/openwrt-build -maxdepth 1 -type d -name "*sdk*" 2>/dev/null)
+            if [ -n "$found_dirs" ]; then
+                log "找到可能的SDK目录:"
+                echo "$found_dirs"
+                
+                # 使用第一个找到的目录
+                local first_dir=$(echo "$found_dirs" | head -1)
+                log "使用目录: $first_dir"
+                COMPILER_DIR="$first_dir"
+                save_env
+                return 0
+            fi
+            
+            return 1
+        fi
+    else
+        log "❌ COMPILER_DIR环境变量未设置"
+        return 1
+    fi
+}
+
 # 主函数
 main() {
     case $1 in
@@ -3078,6 +3183,9 @@ main() {
         "intelligent_platform_aware_compiler_search")
             intelligent_platform_aware_compiler_search "$2" "$3" "$4"
             ;;
+        "verify_sdk_directory")
+            verify_sdk_directory
+            ;;
         *)
             log "❌ 未知命令: $1"
             echo "可用命令:"
@@ -3090,6 +3198,7 @@ main() {
             echo "  check_firmware_files, cleanup, save_source_code_info, verify_compiler_files"
             echo "  check_compiler_invocation, search_compiler_files, universal_compiler_search"
             echo "  search_compiler_files_simple, intelligent_platform_aware_compiler_search"
+            echo "  verify_sdk_directory - 详细验证SDK目录"
             exit 1
             ;;
     esac
