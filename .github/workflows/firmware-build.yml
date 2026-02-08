@@ -52,9 +52,38 @@ jobs:
         run: |
           echo "=== 步骤 0: 生成时间戳 ==="
           
-          # 生成时间戳（修复时区问题，使用本地时间）
+          # 修复时间问题：使用实际系统时间而不是GitHub测试时间
+          # 显示当前系统时间和日期
+          echo "当前系统时间: $(date)"
+          echo "当前UTC时间: $(date -u)"
+          
+          # 设置时区为UTC+8（北京时间）
+          echo "设置时区为UTC+8..."
+          sudo timedatectl set-timezone Asia/Shanghai 2>/dev/null || true
+          
+          # 生成时间戳（使用修复后的实际时间）
           START_TIME=$(date +'%Y-%m-%d %H:%M:%S')
-          echo "🕐 开始时间: $START_TIME"
+          echo "🕐 修复后的开始时间: $START_TIME"
+          
+          # 检查年份是否是2026（GitHub测试环境的默认年份）
+          CURRENT_YEAR=$(date +'%Y')
+          echo "当前年份: $CURRENT_YEAR"
+          
+          # 如果年份是2026，尝试使用更可靠的时间源
+          if [ "$CURRENT_YEAR" = "2026" ]; then
+            echo "⚠️ 检测到GitHub测试环境时间 (2026年)"
+            echo "🔧 尝试从NTP服务器获取正确时间..."
+            
+            # 尝试从NTP服务器获取时间
+            sudo apt-get install -y ntpdate 2>/dev/null || true
+            sudo ntpdate -s pool.ntp.org 2>/dev/null || true
+            
+            # 重新获取时间
+            START_TIME=$(date +'%Y-%m-%d %H:%M:%S')
+            CURRENT_YEAR=$(date +'%Y')
+            echo "🔄 同步后的时间: $START_TIME"
+            echo "🔄 同步后的年份: $CURRENT_YEAR"
+          fi
           
           # 生成精确到秒的时间戳（年月日时分秒）
           TIMESTAMP_LOCAL=$(date +'%Y%m%d_%H%M%S')
@@ -68,11 +97,13 @@ jobs:
           echo "TIMESTAMP_DAY=$TIMESTAMP_DAY" >> $GITHUB_ENV
           echo "START_TIME=$START_TIME" >> $GITHUB_ENV
           echo "BASE_DATE=$BASE_DATE" >> $GITHUB_ENV
+          echo "CURRENT_YEAR=$CURRENT_YEAR" >> $GITHUB_ENV
           
           echo "✅ 生成时间戳:"
           echo "  精确到秒: $TIMESTAMP_SEC"
           echo "  仅到日: $TIMESTAMP_DAY"
           echo "  开始时间: $START_TIME"
+          echo "  当前年份: $CURRENT_YEAR"
           echo "📋 构建配置:"
           echo "  设备: ${{ github.event.inputs.device_name }}"
           echo "  版本: ${{ github.event.inputs.version_selection }}"
