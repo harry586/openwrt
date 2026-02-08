@@ -1813,7 +1813,7 @@ verify_compiler_files() {
         else
             log "  ❌ 未找到任何GCC相关可执行文件"
         fi
-    done
+    fi
     
     if [ -n "$gpp_executable" ]; then
         log "  ✅ 找到可执行G++: $(basename "$gpp_executable")"
