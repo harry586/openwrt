@@ -2,7 +2,7 @@
 
 # support.sh - 设备支持管理脚本
 # 位置: 根目录 /support.sh
-# 版本: 3.0.0 (修复版)
+# 版本: 3.0.1 (修复版 - 添加get-sdk-info函数)
 # 功能: 管理支持的设备列表、配置文件、工具链下载
 # 特点: 无硬编码，通过调用现有脚本和配置文件实现
 
@@ -25,10 +25,31 @@ DEVICES["ac42u"]="ipq40xx generic"
 DEVICES["cmcc_rax3000m"]="mediatek mt7981" 
 DEVICES["netgear_3800"]="ath79 generic"
 
+# OpenWrt官方SDK下载信息
+# 格式: SDK_INFO["目标/子目标/版本"]="SDK_URL|SDK_FILE|SDK_DIR"
+declare -A SDK_INFO
+
+# 初始化SDK信息
+init_sdk_info() {
+    # OpenWrt 21.02 SDK
+    SDK_INFO["ipq40xx/generic/21.02"]="https://downloads.openwrt.org/releases/21.02.10/targets/ipq40xx/generic/openwrt-sdk-21.02.10-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64"
+    SDK_INFO["mediatek/mt7981/21.02"]="https://downloads.openwrt.org/releases/21.02.10/targets/mediatek/mt7622/openwrt-sdk-21.02.10-mediatek-mt7622_gcc-8.4.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-mediatek-mt7622_gcc-8.4.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-mediatek-mt7622_gcc-8.4.0_musl.Linux-x86_64"
+    SDK_INFO["ath79/generic/21.02"]="https://downloads.openwrt.org/releases/21.02.10/targets/ath79/generic/openwrt-sdk-21.02.10-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-ath79-generic_gcc-8.4.0_musl.Linux-x86_64"
+    
+    # OpenWrt 23.05 SDK
+    SDK_INFO["ipq40xx/generic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/ipq40xx/generic/openwrt-sdk-23.05.5-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64"
+    SDK_INFO["mediatek/mt7981/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/mediatek/filogic/openwrt-sdk-23.05.5-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64"
+    SDK_INFO["ath79/generic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/ath79/generic/openwrt-sdk-23.05.5-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-ath79-generic_gcc-12.3.0_musl.Linux-x86_64"
+    
+    # 通用SDK（如果找不到精确匹配）
+    SDK_INFO["generic/21.02"]="https://downloads.openwrt.org/releases/21.02.10/targets/x86/64/openwrt-sdk-21.02.10-x86-64_gcc-8.4.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-x86-64_gcc-8.4.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-21.02.10-x86-64_gcc-8.4.0_musl.Linux-x86_64"
+    SDK_INFO["generic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/x86/64/openwrt-sdk-23.05.5-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz|openwrt-sdk-23.05.5-x86-64_gcc-12.3.0_musl.Linux-x86_64"
+}
+
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
+YELLOW='\033{1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
@@ -128,6 +149,47 @@ get_device_platform() {
     fi
     
     echo "${DEVICES[$device_name]}"
+}
+
+# 获取SDK下载信息函数 - 新增功能
+get_sdk_info() {
+    local target="$1"
+    local subtarget="$2"
+    local version="$3"
+    
+    # 初始化SDK信息
+    init_sdk_info
+    
+    log "获取SDK信息: 目标=$target, 子目标=$subtarget, 版本=$version"
+    
+    # 首先尝试精确匹配
+    local sdk_key="$target/$subtarget/$version"
+    if [ -n "${SDK_INFO[$sdk_key]}" ]; then
+        log "✅ 找到精确匹配的SDK: $sdk_key"
+        echo "${SDK_INFO[$sdk_key]}"
+        return 0
+    fi
+    
+    # 尝试通用匹配（只使用目标和版本）
+    local generic_key="$target/generic/$version"
+    if [ -n "${SDK_INFO[$generic_key]}" ]; then
+        log "⚠️ 使用通用目标匹配: $generic_key"
+        echo "${SDK_INFO[$generic_key]}"
+        return 0
+    fi
+    
+    # 尝试更通用的匹配
+    local fallback_key="generic/$version"
+    if [ -n "${SDK_INFO[$fallback_key]}" ]; then
+        log "⚠️ 使用通用SDK: $fallback_key"
+        echo "${SDK_INFO[$fallback_key]}"
+        return 0
+    fi
+    
+    # 如果没有找到，返回错误
+    log "❌ 未找到匹配的SDK: $sdk_key"
+    echo ""
+    return 1
 }
 #【support.sh-02】
 
@@ -610,6 +672,8 @@ show_help() {
     echo "  list-devices              显示支持的设备列表"
     echo "  validate-device <设备名>   验证设备是否支持"
     echo "  get-platform <设备名>      获取设备的平台信息"
+    echo "  get-sdk-info <目标> <子目标> <版本>"
+    echo "                           获取SDK下载信息"
     echo "  full-config <设备名> <模式> <构建目录> [额外包]"
     echo "                           执行完整配置流程"
     echo "  apply-device-config <设备名> <构建目录>"
@@ -650,6 +714,7 @@ show_help() {
     echo "示例:"
     echo "  ./support.sh list-devices"
     echo "  ./support.sh validate-device ac42u"
+    echo "  ./support.sh get-sdk-info ipq40xx generic 21.02"
     echo "  ./support.sh full-config ac42u normal /mnt/openwrt-build"
     echo "  ./support.sh initialize-compiler ac42u"
     echo ""
@@ -658,6 +723,9 @@ show_help() {
 # 主函数
 main() {
     local command="$1"
+    
+    # 初始化SDK信息
+    init_sdk_info
     
     # 检查构建主脚本和配置目录
     check_build_main_script
@@ -678,6 +746,12 @@ main() {
                 error "请提供设备名称"
             fi
             get_device_platform "$2"
+            ;;
+        "get-sdk-info")
+            if [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ]; then
+                error "使用方法: ./support.sh get-sdk-info <目标> <子目标> <版本>"
+            fi
+            get_sdk_info "$2" "$3" "$4"
             ;;
         "full-config")
             if [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ]; then
@@ -762,4 +836,3 @@ main() {
 
 # 运行主函数
 main "$@"
-#【support.sh-08】
