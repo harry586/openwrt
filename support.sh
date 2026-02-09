@@ -2,7 +2,7 @@
 
 # support.sh - 设备支持管理脚本
 # 位置: 根目录 /support.sh
-# 版本: 3.0.3 (修复版 - 修复SDK目录检测)
+# 版本: 3.0.4 (修复版 - 修复has-function函数和libustream冲突)
 # 功能: 管理支持的设备列表、配置文件、工具链下载
 # 特点: 无硬编码，通过调用现有脚本和配置文件实现
 
@@ -86,6 +86,16 @@ check_build_main_script() {
 check_config_dir() {
     if [ ! -d "$CONFIG_DIR" ]; then
         error "配置文件目录不存在: $CONFIG_DIR"
+    fi
+}
+
+# 检查函数是否存在（修复has-function问题）
+function_exists() {
+    local function_name="$1"
+    if [ -n "$(type -t "$function_name")" ] && [ "$(type -t "$function_name")" = "function" ]; then
+        return 0  # 函数存在
+    else
+        return 1  # 函数不存在
     fi
 }
 
@@ -445,6 +455,19 @@ show_config_info() {
                 echo "  ❌ $driver"
             fi
         done
+        
+        # 检查libustream冲突
+        echo ""
+        echo "🚨 libustream冲突检查:"
+        local openssl_enabled=$(grep -c "^CONFIG_PACKAGE_libustream-openssl" "$final_config" 2>/dev/null || echo "0")
+        local wolfssl_enabled=$(grep -c "^CONFIG_PACKAGE_libustream-wolfssl" "$final_config" 2>/dev/null || echo "0")
+        
+        if [ $openssl_enabled -gt 0 ] && [ $wolfssl_enabled -gt 0 ]; then
+            echo "  ⚠️ 发现libustream-openssl和libustream-wolfssl冲突"
+            echo "  💡 需要在配置中禁用其中一个"
+        else
+            echo "  ✅ 没有libustream冲突"
+        fi
     else
         echo ""
         warn "最终配置文件不存在: $final_config"
@@ -574,7 +597,7 @@ pre_build_error_check() {
     
     local exit_code=$?
     
-    if [ exit_code -eq 0 ]; then
+    if [ $exit_code -eq 0 ]; then
         success "前置错误检查通过"
         return 0
     else
