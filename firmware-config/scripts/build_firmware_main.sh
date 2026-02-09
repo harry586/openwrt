@@ -307,7 +307,7 @@ download_openwrt_sdk() {
                     COMPILER_DIR="$extracted_dir"
                     log "✅ 找到SDK目录: $COMPILER_DIR"
                     
-                    # 验证SDK文件
+                    # 验证SDK文件 - 使用修复版的验证函数
                     if verify_sdk_files_v2 "$COMPILER_DIR"; then
                         log "🎉 SDK下载、解压和验证完成"
                         log "📌 编译器目录已设置为: $COMPILER_DIR"
@@ -345,7 +345,7 @@ download_openwrt_sdk() {
 verify_sdk_files_v2() {
     local sdk_dir="$1"
     
-    log "=== 验证SDK文件完整性V2 ==="
+    log "=== 验证SDK文件完整性V2（修复版）==="
     
     if [ ! -d "$sdk_dir" ]; then
         log "❌ SDK目录不存在: $sdk_dir"
@@ -354,62 +354,119 @@ verify_sdk_files_v2() {
     
     log "✅ SDK目录存在: $sdk_dir"
     log "📊 目录大小: $(du -sh "$sdk_dir" 2>/dev/null | cut -f1 || echo '未知')"
+    log "📁 目录内容:"
+    ls -la "$sdk_dir/" | head -10
     
-    # 检查目录结构
-    log "📁 检查SDK目录结构..."
+    # 检查目录结构 - 查找可能的工具链目录
+    log "🔍 检查SDK目录结构..."
     
-    # 查找GCC编译器（排除dummy-tools）
-    local gcc_files=$(find "$sdk_dir" -maxdepth 3 -type f -executable \
+    # 1. 首先检查是否有 staging_dir 目录（这是标准SDK结构）
+    if [ -d "$sdk_dir/staging_dir" ]; then
+        log "✅ 找到 staging_dir 目录"
+        
+        # 在 staging_dir 中查找工具链
+        local toolchain_dirs=$(find "$sdk_dir/staging_dir" -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null)
+        if [ -n "$toolchain_dirs" ]; then
+            log "✅ 找到工具链目录"
+            
+            # 在工具链目录中查找GCC
+            local gcc_files=$(find "$sdk_dir/staging_dir/toolchain-"* -maxdepth 3 -type f -executable \
+              -name "*gcc" \
+              ! -name "*gcc-ar" \
+              ! -name "*gcc-ranlib" \
+              ! -name "*gcc-nm" \
+              2>/dev/null | head -1)
+            
+            if [ -n "$gcc_files" ]; then
+                log "✅ 在工具链目录中找到GCC编译器: $(basename "$gcc_files")"
+                local gcc_version=$("$gcc_files" --version 2>&1 | head -1)
+                log "📋 GCC版本: $gcc_version"
+                return 0
+            fi
+        fi
+        
+        # 2. 如果没有找到工具链目录，直接在 staging_dir 中搜索
+        log "🔍 直接在 staging_dir 中搜索GCC..."
+        local gcc_files=$(find "$sdk_dir/staging_dir" -maxdepth 3 -type f -executable \
+          -name "*gcc" \
+          ! -name "*gcc-ar" \
+          ! -name "*gcc-ranlib" \
+          ! -name "*gcc-nm" \
+          2>/dev/null | head -1)
+        
+        if [ -n "$gcc_files" ]; then
+            log "✅ 在 staging_dir 中找到GCC编译器: $(basename "$gcc_files")"
+            local gcc_version=$("$gcc_files" --version 2>&1 | head -1)
+            log "📋 GCC版本: $gcc_version"
+            return 0
+        fi
+    fi
+    
+    # 3. 检查是否有 toolchain 目录（另一种SDK结构）
+    if [ -d "$sdk_dir/toolchain" ]; then
+        log "✅ 找到 toolchain 目录"
+        
+        # 在 toolchain 目录中查找GCC
+        local gcc_files=$(find "$sdk_dir/toolchain" -maxdepth 3 -type f -executable \
+          -name "*gcc" \
+          ! -name "*gcc-ar" \
+          ! -name "*gcc-ranlib" \
+          ! -name "*gcc-nm" \
+          2>/dev/null | head -1)
+        
+        if [ -n "$gcc_files" ]; then
+            log "✅ 在 toolchain 目录中找到GCC编译器: $(basename "$gcc_files")"
+            local gcc_version=$("$gcc_files" --version 2>&1 | head -1)
+            log "📋 GCC版本: $gcc_version"
+            return 0
+        fi
+    fi
+    
+    # 4. 最后，在整个SDK目录中搜索GCC
+    log "🔍 在整个SDK目录中搜索GCC..."
+    local gcc_files=$(find "$sdk_dir" -maxdepth 5 -type f -executable \
       -name "*gcc" \
       ! -name "*gcc-ar" \
       ! -name "*gcc-ranlib" \
       ! -name "*gcc-nm" \
-      ! -path "*dummy-tools*" \
-      ! -path "*scripts*" \
       2>/dev/null | head -1)
     
     if [ -n "$gcc_files" ]; then
-        log "✅ 找到GCC编译器: $(basename "$gcc_files")"
-        
-        # 检查GCC版本
-        if [ -x "$gcc_files" ]; then
-            local gcc_version=$("$gcc_files" --version 2>&1 | head -1)
-            log "📋 GCC版本: $gcc_version"
-            
-            # 检查是否是dummy-tools
-            if echo "$gcc_version" | grep -qi "dummy-tools"; then
-                log "⚠️ 检测到虚假的dummy-tools编译器"
-                return 1
-            else
-                log "✅ 找到真正的GCC编译器"
-                return 0
-            fi
-        fi
-    else
-        log "⚠️ 未找到真正的GCC编译器"
-        
-        # 检查是否有其他工具链工具
-        local toolchain_tools=$(find "$sdk_dir" -maxdepth 3 -type f -executable -name "*gcc*" \
-          ! -path "*dummy-tools*" \
-          ! -path "*scripts*" \
-          2>/dev/null | head -5)
-        
-        if [ -n "$toolchain_tools" ]; then
-            log "📋 找到的工具链工具:"
-            while read tool; do
-                local tool_name=$(basename "$tool")
-                log "  🔧 $tool_name"
-            done <<< "$toolchain_tools"
-            
-            # 如果有足够的工具链工具，也认为是有效的
-            if [ $(echo "$toolchain_tools" | wc -l) -ge 3 ]; then
-                log "✅ 工具链工具足够，SDK可能有效"
-                return 0
-            fi
-        fi
-        
-        return 1
+        log "✅ 在SDK中找到GCC编译器: $(basename "$gcc_files")"
+        log "🔧 完整路径: $gcc_files"
+        local gcc_version=$("$gcc_files" --version 2>&1 | head -1)
+        log "📋 GCC版本: $gcc_version"
+        return 0
     fi
+    
+    # 5. 如果以上都失败，检查是否有工具链工具
+    log "🔍 检查工具链工具..."
+    local toolchain_tools=$(find "$sdk_dir" -maxdepth 5 -type f -executable \
+      -name "*gcc*" \
+      2>/dev/null | head -5)
+    
+    if [ -n "$toolchain_tools" ]; then
+        log "📋 找到的工具链工具:"
+        while read tool; do
+            local tool_name=$(basename "$tool")
+            log "  🔧 $tool_name"
+            
+            # 如果是gcc-ar等工具，显示其版本
+            if [[ "$tool_name" == *gcc-ar* ]] || [[ "$tool_name" == *gcc-ranlib* ]] || [[ "$tool_name" == *gcc-nm* ]]; then
+                local tool_version=$("$tool" --version 2>&1 | head -1)
+                log "    版本信息: $tool_version"
+            fi
+        done <<< "$toolchain_tools"
+        
+        log "✅ 找到工具链工具，SDK可能有效"
+        return 0
+    fi
+    
+    log "❌ 未找到任何GCC编译器或工具链工具"
+    log "📁 SDK目录内容详细列表:"
+    find "$sdk_dir" -type f -executable -name "*" 2>/dev/null | head -20
+    
+    return 1
 }
 
 # 旧版本的验证函数（保持兼容性）
@@ -462,13 +519,11 @@ initialize_compiler_env() {
         
         # 验证编译器目录是否真的包含GCC
         log "🔍 验证编译器目录有效性..."
-        local gcc_files=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable \
+        local gcc_files=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
           ! -name "*gcc-nm" \
-          ! -path "*dummy-tools*" \
-          ! -path "*scripts*" \
           2>/dev/null | head -1)
         
         if [ -n "$gcc_files" ]; then
@@ -517,14 +572,12 @@ initialize_compiler_env() {
             log "📊 SDK目录信息:"
             log "  目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
             
-            # 查找GCC编译器，排除虚假编译器
-            local gcc_file=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable \
+            # 查找GCC编译器
+            local gcc_file=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
               ! -name "*gcc-nm" \
-              ! -path "*dummy-tools*" \
-              ! -path "*scripts*" \
               2>/dev/null | head -1)
             
             if [ -n "$gcc_file" ]; then
@@ -913,7 +966,7 @@ apply_config() {
     
     log "📋 配置详情:"
     log "配置文件大小: $(ls -lh .config | awk '{print $5}')"
-    log "配置行数: $(wc -l < .config)"
+    log "配置行数: $(wc -l < .config)")
     
     # 检查libustream冲突并修复
     log "🔍 检查libustream冲突..."
@@ -1681,7 +1734,7 @@ verify_compiler_files() {
     
     # 如果没找到，在整个目录中搜索，排除dummy-tools
     if [ -z "$gcc_executable" ]; then
-        gcc_executable=$(find "$compiler_dir" -maxdepth 3 -type f -executable \
+        gcc_executable=$(find "$compiler_dir" -maxdepth 5 -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
@@ -1691,7 +1744,7 @@ verify_compiler_files() {
           2>/dev/null | head -1)
     fi
     
-    local gpp_executable=$(find "$compiler_dir" -maxdepth 3 -type f -executable \
+    local gpp_executable=$(find "$compiler_dir" -maxdepth 5 -type f -executable \
       -name "*g++" \
       ! -name "*g++-*" \
       ! -path "*dummy-tools*" \
@@ -1711,7 +1764,7 @@ verify_compiler_files() {
             log "     🔍 继续查找真正的GCC编译器..."
             
             # 继续查找排除这个虚假的
-            gcc_executable=$(find "$compiler_dir" -maxdepth 3 -type f -executable \
+            gcc_executable=$(find "$compiler_dir" -maxdepth 5 -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
@@ -1778,7 +1831,7 @@ verify_compiler_files() {
         log "  🔍 未找到真正的GCC编译器，查找工具链工具..."
         
         # 查找工具链工具，排除dummy-tools
-        local toolchain_tools=$(find "$compiler_dir" -maxdepth 3 -type f -executable \
+        local toolchain_tools=$(find "$compiler_dir" -maxdepth 5 -type f -executable \
           -name "*gcc*" \
           ! -path "*dummy-tools*" \
           ! -path "*scripts*" \
@@ -1812,7 +1865,7 @@ verify_compiler_files() {
     local tool_found_count=0
     
     for tool in "${required_tools[@]}"; do
-        local tool_executable=$(find "$compiler_dir" -maxdepth 3 -type f -executable -name "*${tool}*" \
+        local tool_executable=$(find "$compiler_dir" -maxdepth 5 -type f -executable -name "*${tool}*" \
           ! -path "*dummy-tools*" \
           ! -path "*scripts*" \
           2>/dev/null | head -1)
@@ -1909,7 +1962,7 @@ check_compiler_invocation() {
             log "📁 检查 staging_dir 中的编译器..."
             
             # 查找真正的GCC编译器（排除工具链工具和虚假编译器）
-            local used_compiler=$(find "$BUILD_DIR/staging_dir" -maxdepth 3 -type f -executable \
+            local used_compiler=$(find "$BUILD_DIR/staging_dir" -maxdepth 5 -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
@@ -1948,7 +2001,7 @@ check_compiler_invocation() {
                 # 检查是否有SDK编译器
                 log "  🔍 检查SDK编译器:"
                 if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-                    local sdk_gcc=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable \
+                    local sdk_gcc=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable \
                       -name "*gcc" \
                       ! -name "*gcc-ar" \
                       ! -name "*gcc-ranlib" \
@@ -2029,7 +2082,7 @@ check_compiler_invocation() {
         log "  📌 预构建编译器目录: $COMPILER_DIR"
         
         # 检查预构建编译器中的GCC版本，排除虚假编译器
-        local prebuilt_gcc=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable \
+        local prebuilt_gcc=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
@@ -2050,7 +2103,7 @@ check_compiler_invocation() {
     # 检查实际使用的编译器
     if [ -d "$BUILD_DIR/staging_dir" ]; then
         log "  🔍 实际使用的编译器:"
-        local used_gcc=$(find "$BUILD_DIR/staging_dir" -maxdepth 3 -type f -executable \
+        local used_gcc=$(find "$BUILD_DIR/staging_dir" -maxdepth 5 -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
@@ -2182,7 +2235,7 @@ pre_build_error_check() {
         log "📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
         
         # 放宽检查：只需要有编译器文件，不要求特定目录结构，排除虚假编译器
-        local gcc_files=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable \
+        local gcc_files=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
@@ -2195,7 +2248,7 @@ pre_build_error_check() {
             log "✅ 找到 $gcc_files 个GCC编译器文件"
             
             # 显示第一个GCC的版本信息
-            local first_gcc=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable \
+            local first_gcc=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
@@ -2215,7 +2268,7 @@ pre_build_error_check() {
                     elif echo "$sdk_version" | grep -qi "dummy-tools"; then
                         log "⚠️ 检测到虚假的dummy-tools编译器，继续查找..."
                         # 查找其他GCC
-                        local real_gcc=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable \
+                        local real_gcc=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable \
                           -name "*gcc" \
                           ! -name "*gcc-ar" \
                           ! -name "*gcc-ranlib" \
@@ -2240,7 +2293,7 @@ pre_build_error_check() {
             warning_count=$((warning_count + 1))
             
             # 检查是否有工具链工具
-            local toolchain_tools=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable -name "*gcc*" \
+            local toolchain_tools=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable -name "*gcc*" \
               ! -path "*dummy-tools*" \
               ! -path "*scripts*" \
               2>/dev/null | wc -l)
@@ -2332,7 +2385,7 @@ build_firmware() {
         log "  预构建编译器目录: $COMPILER_DIR"
         
         # 检查预构建编译器是否会被调用，排除虚假编译器
-        local prebuilt_gcc=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable \
+        local prebuilt_gcc=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
           ! -name "*gcc-ranlib" \
@@ -2362,7 +2415,7 @@ build_firmware() {
             log "  🔧 已将预构建编译器目录添加到PATH"
         else
             log "  ⚠️ 未找到真正的GCC编译器，只有工具链工具"
-            local toolchain_tools=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable -name "*gcc*" \
+            local toolchain_tools=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable -name "*gcc*" \
               ! -path "*dummy-tools*" \
               ! -path "*scripts*" \
               2>/dev/null | head -5)
@@ -2450,7 +2503,7 @@ build_firmware() {
                 log "🚨 发现编译器未找到错误"
                 log "检查编译器路径..."
                 if [ -d "staging_dir" ]; then
-                    find staging_dir -maxdepth 3 -type f -executable \
+                    find staging_dir -maxdepth 5 -type f -executable \
                       -name "*gcc" \
                       ! -name "*gcc-ar" \
                       ! -name "*gcc-ranlib" \
