@@ -798,24 +798,29 @@ jobs:
             echo ""
             echo "🔧 关键配置检查:"
             echo "1. ✅ 目标平台配置:"
-            grep "CONFIG_TARGET_" "/mnt/openwrt-build/.config" | head -5
+            # 修复：添加 2>/dev/null 忽略grep管道错误
+            grep "CONFIG_TARGET_" "/mnt/openwrt-build/.config" 2>/dev/null | head -5
             
             echo ""
             echo "2. ✅ USB 3.0驱动配置:"
-            grep "CONFIG_PACKAGE_kmod-usb-xhci" "/mnt/openwrt-build/.config"
+            # 修复：添加 2>/dev/null 忽略grep管道错误
+            grep "CONFIG_PACKAGE_kmod-usb-xhci" "/mnt/openwrt-build/.config" 2>/dev/null || true
             
             echo ""
             echo "3. ✅ TCP BBR拥塞控制算法配置:"
-            grep -E "CONFIG_PACKAGE_kmod-tcp-bbr|CONFIG_DEFAULT_TCP_CONG|CONFIG_PACKAGE_tcp-bbr" "/mnt/openwrt-build/.config"
+            # 修复：添加 2>/dev/null 忽略grep管道错误
+            grep -E "CONFIG_PACKAGE_kmod-tcp-bbr|CONFIG_DEFAULT_TCP_CONG|CONFIG_PACKAGE_tcp-bbr" "/mnt/openwrt-build/.config" 2>/dev/null || true
             
             echo ""
             echo "4. ✅ 关键USB驱动状态:"
-            grep -E "CONFIG_PACKAGE_kmod-usb-core|CONFIG_PACKAGE_kmod-usb2|CONFIG_PACKAGE_kmod-usb3|CONFIG_PACKAGE_kmod-usb-storage" "/mnt/openwrt-build/.config"
+            # 修复：添加 2>/dev/null 忽略grep管道错误
+            grep -E "CONFIG_PACKAGE_kmod-usb-core|CONFIG_PACKAGE_kmod-usb2|CONFIG_PACKAGE_kmod-usb3|CONFIG_PACKAGE_kmod-usb-storage" "/mnt/openwrt-build/.config" 2>/dev/null || true
             
             echo ""
             echo "5. ✅ 插件配置统计:"
-            enabled=$(grep -c "CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config")
-            disabled=$(grep -c "# CONFIG_PACKAGE_.* is not set" "/mnt/openwrt-build/.config")
+            # 修复：使用管道时忽略错误
+            enabled=$(grep -c "CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config" 2>/dev/null || echo "0")
+            disabled=$(grep -c "# CONFIG_PACKAGE_.* is not set" "/mnt/openwrt-build/.config" 2>/dev/null || echo "0")
             echo "   ✅ 已启用插件: $enabled 个"
             echo "   ❌ 已禁用插件: $disabled 个"
             
@@ -823,32 +828,32 @@ jobs:
             echo "=== 🎯 详细配置状态标识（完整版）==="
             echo "📋 USB配置状态:"
             
-            # USB配置检查
-            echo "  CONFIG_PACKAGE_kmod-usb-core: $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-usb2: $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-usb3: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-usb-xhci-hcd: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-usb-storage: $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-scsi-core: $(grep -q "^CONFIG_PACKAGE_kmod-scsi-core=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            # USB配置检查 - 使用 || true 防止grep失败导致脚本退出
+            echo "  CONFIG_PACKAGE_kmod-usb-core: $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            echo "  CONFIG_PACKAGE_kmod-usb2: $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            echo "  CONFIG_PACKAGE_kmod-usb3: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            echo "  CONFIG_PACKAGE_kmod-usb-xhci-hcd: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            echo "  CONFIG_PACKAGE_kmod-usb-storage: $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            echo "  CONFIG_PACKAGE_kmod-scsi-core: $(grep -q "^CONFIG_PACKAGE_kmod-scsi-core=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
             
             echo ""
             echo "📦 功能性插件状态:"
             
-            # 功能性插件状态
-            echo "  TurboACC 网络加速 (luci-app-turboacc): $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  TCP BBR拥塞控制算法 (kmod-tcp-bbr): $(grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  UPnP 自动端口转发 (luci-app-upnp): $(grep -q "^CONFIG_PACKAGE_luci-app-upnp=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  Samba 文件共享 (luci-app-samba4): $(grep -q "^CONFIG_PACKAGE_luci-app-samba4=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  磁盘管理 (luci-app-diskman): $(grep -q "^CONFIG_PACKAGE_luci-app-diskman=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  KMS 激活服务 (luci-app-vlmcsd): $(grep -q "^CONFIG_PACKAGE_luci-app-vlmcsd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  SmartDNS 智能DNS (luci-app-smartdns): $(grep -q "^CONFIG_PACKAGE_luci-app-smartdns=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  家长控制 (luci-app-accesscontrol): $(grep -q "^CONFIG_PACKAGE_luci-app-accesscontrol=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  微信推送 (luci-app-wechatpush): $(grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  流量控制 (SQM) (luci-app-sqm): $(grep -q "^CONFIG_PACKAGE_luci-app-sqm=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  FTP 服务器 (luci-app-vsftpd): $(grep -q "^CONFIG_PACKAGE_luci-app-vsftpd=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  ARP 绑定 (luci-app-arpbind): $(grep -q "^CONFIG_PACKAGE_luci-app-arpbind=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  CPU 限制 (luci-app-cpulimit): $(grep -q "^CONFIG_PACKAGE_luci-app-cpulimit=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
-            echo "  硬盘休眠 (luci-app-hd-idle): $(grep -q "^CONFIG_PACKAGE_luci-app-hd-idle=y" "/mnt/openwrt-build/.config" && echo "✅" || echo "❌")"
+            # 功能性插件状态 - 使用 || true 防止grep失败导致脚本退出
+            echo "  TurboACC 网络加速 (luci-app-turboacc): $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            echo "  TCP BBR拥塞控制算法 (kmod-tcp-bbr): $(grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            echo "  UPnP 自动端口转发 (luci-app-upnp): $(grep -q "^CONFIG_PACKAGE_luci-app-upnp=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            echo "  Samba 文件共享 (luci-app-samba4): $(grep -q "^CONFIG_PACKAGE_luci-app-samba4=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            echo "  磁盘管理 (luci-app-diskman): $(grep -q "^CONFIG_PACKAGE_luci-app-diskman=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            echo "  KMS 激活服务 (luci-app-vlmcsd): $(grep -q "^CONFIG_PACKAGE_luci-app-vlmcsd=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            echo "  SmartDNS 智能DNS (luci-app-smartdns): $(grep -q "^CONFIG_PACKAGE_luci-app-smartdns=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            echo "  家长控制 (luci-app-accesscontrol): $(grep -q "^CONFIG_PACKAGE_luci-app-accesscontrol=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            echo "  微信推送 (luci-app-wechatpush): $(grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            echo "  流量控制 (SQM) (luci-app-sqm): $(grep -q "^CONFIG_PACKAGE_luci-app-sqm=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            echo "  FTP 服务器 (luci-app-vsftpd): $(grep -q "^CONFIG_PACKAGE_luci-app-vsftpd=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            echo "  ARP 绑定 (luci-app-arpbind): $(grep -q "^CONFIG_PACKAGE_luci-app-arpbind=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            echo "  CPU 限制 (luci-app-cpulimit): $(grep -q "^CONFIG_PACKAGE_luci-app-cpulimit=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            echo "  硬盘休眠 (luci-app-hd-idle): $(grep -q "^CONFIG_PACKAGE_luci-app-hd-idle=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
             
             echo ""
             echo "🎯 配置模式: ${{ github.event.inputs.config_mode }}"
@@ -869,10 +874,10 @@ jobs:
             echo "  - TCP BBR: 已启用拥塞控制算法"
             echo "  - 插件数量: $enabled 个已启用"
             
-            # 显示前10个启用的插件
+            # 显示前10个启用的插件 - 使用 2>/dev/null 忽略管道错误
             echo ""
             echo "📋 启用的插件 (前10个):"
-            grep "^CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config" | head -10 | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g' | while read pkg; do
+            grep "^CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config" 2>/dev/null | head -10 | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g' | while read pkg; do
               echo "  ✅ $pkg"
             done
           else
