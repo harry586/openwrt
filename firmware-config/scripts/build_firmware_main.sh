@@ -772,28 +772,28 @@ generate_config() {
     log "✅ 配置生成完成"
 }
 
-# 从配置文件应用配置
+# 从配置文件应用配置 - 修复版：只使用usb-generic.config+normal.config或专用配置
 apply_configuration_from_files() {
-    log "=== 从配置文件应用配置 ==="
+    log "=== 从配置文件应用配置（简化版）==="
     
     # 检查配置文件目录
     if [ ! -d "$CONFIG_DIR" ]; then
         log "❌ 配置文件目录不存在: $CONFIG_DIR"
-        log "💡 使用基础配置"
-        return
+        handle_error "配置文件目录缺失"
     fi
     
-    # 1. 应用USB通用配置
+    # 1. 【必需】应用USB通用配置
     local usb_config="$CONFIG_DIR/usb-generic.config"
     if [ -f "$usb_config" ]; then
         log "📁 应用USB通用配置: $usb_config"
         cat "$usb_config" >> .config
         log "✅ 已应用USB通用配置"
     else
-        log "⚠️ USB通用配置文件不存在: $usb_config"
+        log "❌ USB通用配置文件不存在: $usb_config"
+        handle_error "缺少USB通用配置文件"
     fi
     
-    # 2. 应用模式配置
+    # 2. 【必需】应用模式配置
     local mode_config="$CONFIG_DIR/$CONFIG_MODE.config"
     if [ -f "$mode_config" ]; then
         log "📁 应用模式配置: $mode_config"
@@ -801,10 +801,10 @@ apply_configuration_from_files() {
         log "✅ 已应用模式配置"
     else
         log "❌ 模式配置文件不存在: $mode_config"
-        log "💡 使用基础配置"
+        handle_error "缺少模式配置文件"
     fi
     
-    # 3. 应用设备专用配置
+    # 3. 【可选】检查是否有设备专用配置
     local device_config="$CONFIG_DIR/devices/$DEVICE.config"
     if [ -f "$device_config" ]; then
         log "📁 应用设备专用配置: $device_config"
@@ -812,7 +812,7 @@ apply_configuration_from_files() {
         log "✅ 已应用设备专用配置"
     else
         log "ℹ️ 设备专用配置文件不存在: $device_config"
-        log "💡 使用通用配置"
+        log "💡 将使用USB通用配置+模式配置的组合"
     fi
     
     # 4. 添加额外包
@@ -952,7 +952,7 @@ check_usb_drivers_integrity() {
 #【build_firmware_main.sh-15】
 
 #【build_firmware_main.sh-16】
-# 应用配置并显示详情
+# 应用配置并显示详情 - 修复版：包含libustream冲突修复
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
