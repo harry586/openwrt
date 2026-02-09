@@ -548,10 +548,10 @@ jobs:
 #【firmware-build.yml-09】
 
 #【firmware-build.yml-10】
-      # 步骤 8: 验证SDK下载结果
-      - name: "8. 验证SDK下载结果"
+      # 步骤 8: 验证SDK下载结果（修复版：动态检查）
+      - name: "8. 验证SDK下载结果（修复版：动态检查）"
         run: |
-          echo "=== 步骤 8: 验证SDK下载结果 ==="
+          echo "=== 步骤 8: 验证SDK下载结果（修复版：动态检查） ==="
           echo "🕐 验证时间: $(date +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是验证
@@ -566,12 +566,13 @@ jobs:
             echo "❌ 环境文件不存在"
           fi
           
-          if [ -d "/mnt/openwrt-build/sdk" ]; then
-            echo "✅ SDK目录存在: /mnt/openwrt-build/sdk"
-            echo "📊 SDK目录大小: $(du -sh /mnt/openwrt-build/sdk 2>/dev/null | cut -f1 || echo '未知')"
+          # 修复：检查COMPILER_DIR变量指向的目录，而不是固定的sdk目录
+          if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+            echo "✅ SDK目录存在: $COMPILER_DIR"
+            echo "📊 SDK目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
             
             # 查找真正的GCC，排除虚假编译器
-            GCC_FILE=$(find "/mnt/openwrt-build/sdk" -type f -executable \
+            GCC_FILE=$(find "$COMPILER_DIR" -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
@@ -604,7 +605,7 @@ jobs:
               echo "❌ 未找到可执行的GCC编译器"
               
               # 检查是否有虚假的编译器
-              DUMMY_GCC=$(find "/mnt/openwrt-build/sdk" -type f -executable \
+              DUMMY_GCC=$(find "$COMPILER_DIR" -type f -executable \
                 -name "*gcc" \
                 -path "*dummy-tools*" \
                 2>/dev/null | head -1)
@@ -615,8 +616,35 @@ jobs:
               fi
             fi
           else
-            echo "❌ SDK目录不存在"
-            echo "💡 SDK下载失败，无法继续"
+            echo "❌ SDK目录不存在: $COMPILER_DIR"
+            echo "💡 检查可能的SDK目录..."
+            
+            # 尝试查找SDK目录
+            local found_dirs=$(find "/mnt/openwrt-build" -maxdepth 1 -type d -name "*sdk*" 2>/dev/null)
+            if [ -n "$found_dirs" ]; then
+              echo "找到可能的SDK目录:"
+              echo "$found_dirs"
+              
+              # 使用第一个找到的目录
+              local first_dir=$(echo "$found_dirs" | head -1)
+              echo "使用目录: $first_dir"
+              COMPILER_DIR="$first_dir"
+              
+              # 保存到环境文件
+              echo "#!/bin/bash" > /mnt/openwrt-build/build_env.sh
+              echo "export SELECTED_REPO_URL=\"https://github.com/immortalwrt/immortalwrt.git\"" >> /mnt/openwrt-build/build_env.sh
+              echo "export SELECTED_BRANCH=\"$SELECTED_BRANCH\"" >> /mnt/openwrt-build/build_env.sh
+              echo "export TARGET=\"$TARGET\"" >> /mnt/openwrt-build/build_env.sh
+              echo "export SUBTARGET=\"$SUBTARGET\"" >> /mnt/openwrt-build/build_env.sh
+              echo "export DEVICE=\"$DEVICE\"" >> /mnt/openwrt-build/build_env.sh
+              echo "export CONFIG_MODE=\"$CONFIG_MODE\"" >> /mnt/openwrt-build/build_env.sh
+              echo "export REPO_ROOT=\"$REPO_ROOT\"" >> /mnt/openwrt-build/build_env.sh
+              echo "export COMPILER_DIR=\"$COMPILER_DIR\"" >> /mnt/openwrt-build/build_env.sh
+              chmod +x /mnt/openwrt-build/build_env.sh
+              echo "✅ 已更新环境文件"
+            else
+              echo "未找到SDK目录"
+            fi
           fi
           
           echo "✅ SDK验证完成"
@@ -650,7 +678,7 @@ jobs:
       - name: "10. 配置Feeds"
         run: |
           echo "=== 步骤 10: 配置Feeds ==="
-          echo "🕐 开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+          echo "🕐 开始时间: $(date +'%Y-%m-d %H:%M:%S')"
           
           # 设置错误处理
           set -e
@@ -735,42 +763,137 @@ jobs:
 #【firmware-build.yml-15】
 
 #【firmware-build.yml-16】
-      # 步骤 14: 验证USB配置
-      - name: "14. 验证USB配置"
+      # 步骤 14: 验证USB配置（修复版：精确匹配）
+      - name: "14. 验证USB配置（修复版：精确匹配）"
         run: |
-          echo "=== 步骤 14: 验证USB配置 ==="
+          echo "=== 步骤 14: 验证USB配置（修复版：精确匹配） ==="
           echo "🕐 开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是验证
           trap 'echo "⚠️ 步骤 14 验证过程中出现错误，继续执行..."' ERR
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" verify_usb_config
+          cd /mnt/openwrt-build
           
-          echo "✅ 完成时间: $(date +'%Y-%m-%d %H:%M:%S')"
+          # 使用精确匹配检查USB配置
+          echo "=== 🚨 USB配置精确匹配检查 ==="
+          
+          echo "1. 🟢 USB核心模块（精确匹配）:"
+          if grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" .config; then
+            echo "✅ USB核心: 已启用"
+          else
+            echo "❌ USB核心: 未启用"
+          fi
+          
+          echo "2. 🟢 USB控制器（精确匹配）:"
+          echo "  - kmod-usb2:" $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config && echo "✅" || echo "❌")
+          echo "  - kmod-usb3:" $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config && echo "✅" || echo "❌")
+          echo "  - kmod-usb-xhci-hcd:" $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo "✅" || echo "❌")
+          
+          echo "3. 🟢 USB存储驱动（精确匹配）:"
+          echo "  - kmod-usb-storage:" $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" .config && echo "✅" || echo "❌")
+          echo "  - kmod-scsi-core:" $(grep -q "^CONFIG_PACKAGE_kmod-scsi-core=y" .config && echo "✅" || echo "❌")
+          
+          # 检查是否有重复配置
+          echo "4. 🟢 检查重复配置:"
+          duplicates=$(grep "CONFIG_PACKAGE_kmod-usb-xhci-hcd" .config | wc -l)
+          if [ $duplicates -gt 1 ]; then
+            echo "⚠️ 发现重复配置: kmod-usb-xhci-hcd ($duplicates 次)"
+            echo "🔍 显示所有匹配行:"
+            grep -n "CONFIG_PACKAGE_kmod-usb-xhci-hcd" .config
+          else
+            echo "✅ 无重复配置"
+          fi
+          
+          echo "5. 🟢 平台专用驱动检查（精确匹配）:"
+          if grep -q "^CONFIG_TARGET_ipq40xx=y" .config; then
+            echo "🔧 检测到高通IPQ40xx平台:"
+            echo "  - kmod-usb-dwc3-qcom:" $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo "✅" || echo "❌")
+            echo "  - kmod-phy-qcom-dwc3:" $(grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo "✅" || echo "❌")
+          fi
+          
+          echo "✅ USB配置检查完成"
           echo "🟢 步骤 14 完成"
 #【firmware-build.yml-16】
 
 #【firmware-build.yml-17】
-      # 步骤 15: USB驱动完整性检查
-      - name: "15. USB驱动完整性检查"
+      # 步骤 15: USB驱动完整性检查（修复版）
+      - name: "15. USB驱动完整性检查（修复版）"
         run: |
-          echo "=== 步骤 15: USB驱动完整性检查 ==="
+          echo "=== 步骤 15: USB驱动完整性检查（修复版） ==="
           echo "🕐 开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 这里不退出，只是检查
           trap 'echo "⚠️ 步骤 15 检查过程中出现错误，继续执行..."' ERR
           
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" check_usb_drivers_integrity
+          cd /mnt/openwrt-build
           
-          echo "✅ 完成时间: $(date +'%Y-%m-%d %H:%M:%S')"
+          echo "=== USB驱动完整性检查（精确匹配） ==="
+          
+          # 基础USB驱动（所有平台必需）
+          local missing_drivers=()
+          local required_drivers=(
+            "kmod-usb-core"
+            "kmod-usb2"
+            "kmod-usb-storage"
+            "kmod-scsi-core"
+          )
+          
+          echo "🔍 检查基础USB驱动..."
+          for driver in "${required_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+              echo "✅ $driver: 已启用"
+            else
+              echo "❌ $driver: 未启用"
+              missing_drivers+=("$driver")
+            fi
+          done
+          
+          echo ""
+          echo "🔍 检查USB 3.0驱动..."
+          local usb3_drivers=("kmod-usb3" "kmod-usb-xhci-hcd")
+          for driver in "${usb3_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+              echo "✅ $driver: 已启用"
+            else
+              echo "⚠️ $driver: 未启用（如果设备支持USB 3.0可能需要）"
+            fi
+          done
+          
+          echo ""
+          echo "🔍 检查平台专用驱动..."
+          # 根据平台检查专用驱动
+          if grep -q "^CONFIG_TARGET_ipq40xx=y" .config; then
+            echo "🔧 检测到高通IPQ40xx平台，检查专用驱动:"
+            local ipq40xx_drivers=("kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3")
+            for driver in "${ipq40xx_drivers[@]}"; do
+              if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "✅ $driver: 已启用"
+              else
+                echo "ℹ️ $driver: 未启用（可能不是必需）"
+              fi
+            done
+          fi
+          
+          echo ""
+          echo "📊 统计:"
+          echo "  必需驱动: ${#required_drivers[@]} 个"
+          echo "  缺失驱动: ${#missing_drivers[@]} 个"
+          
+          if [ ${#missing_drivers[@]} -gt 0 ]; then
+            echo "⚠️ 发现缺失驱动: ${missing_drivers[*]}"
+            echo "💡 建议在配置文件中启用这些驱动"
+          else
+            echo "✅ 所有必需USB驱动都已启用"
+          fi
+          
           echo "🟢 步骤 15 完成"
 #【firmware-build.yml-17】
 
 #【firmware-build.yml-18】
-      # 步骤 16: 应用配置并显示详情（完整版）
-      - name: "16. 应用配置并显示详情（完整版）"
+      # 步骤 16: 应用配置并显示详情（完整版）- 修复libustream冲突
+      - name: "16. 应用配置并显示详情（完整版）- 修复libustream冲突"
         run: |
-          echo "=== 步骤 16: 应用配置并显示详情（完整版）==="
+          echo "=== 步骤 16: 应用配置并显示详情（完整版）- 修复libustream冲突 ==="
           echo "🕐 开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -782,6 +905,18 @@ jobs:
             echo "✅ 已备份原始配置文件"
           fi
           
+          # 应用配置前先修复libustream冲突
+          echo "🔧 应用配置前修复libustream冲突..."
+          cd /mnt/openwrt-build
+          
+          # 如果存在libustream-openssl和libustream-wolfssl，只保留一个
+          if grep -q "^CONFIG_PACKAGE_libustream-openssl=y" .config && grep -q "^CONFIG_PACKAGE_libustream-wolfssl=y" .config; then
+            echo "⚠️ 发现libustream-openssl和libustream-wolfssl冲突"
+            echo "🔧 修复冲突: 禁用libustream-wolfssl"
+            sed -i 's/^CONFIG_PACKAGE_libustream-wolfssl=y/# CONFIG_PACKAGE_libustream-wolfssl is not set/' .config
+            echo "✅ 冲突已修复"
+          fi
+          
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" apply_config
           
           if [ $? -ne 0 ]; then
@@ -789,80 +924,82 @@ jobs:
             exit 1
           fi
           
-          echo "=== 🚨 最终配置状态检查（完整详细版）==="
+          echo "=== 🚨 最终配置状态检查（精确匹配版）==="
           if [ -f "/mnt/openwrt-build/.config" ]; then
             echo "✅ 配置文件存在"
             echo "📊 文件大小: $(ls -lh "/mnt/openwrt-build/.config" | awk '{print $5}')"
             echo "📝 文件行数: $(wc -l < "/mnt/openwrt-build/.config")"
             
             echo ""
-            echo "🔧 关键配置检查:"
+            echo "🔧 关键配置检查（精确匹配）:"
             echo "1. ✅ 目标平台配置:"
-            # 修复：添加 2>/dev/null 忽略grep管道错误
-            grep "CONFIG_TARGET_" "/mnt/openwrt-build/.config" 2>/dev/null | head -5
+            grep "^CONFIG_TARGET_" "/mnt/openwrt-build/.config" 2>/dev/null | head -3 || true
             
             echo ""
-            echo "2. ✅ USB 3.0驱动配置:"
-            # 修复：添加 2>/dev/null 忽略grep管道错误
-            grep "CONFIG_PACKAGE_kmod-usb-xhci" "/mnt/openwrt-build/.config" 2>/dev/null || true
+            echo "2. ✅ USB 3.0驱动配置（精确匹配）:"
+            echo "  - kmod-usb-xhci-hcd:" $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅ 已启用" || echo "❌ 未启用")
             
             echo ""
             echo "3. ✅ TCP BBR拥塞控制算法配置:"
-            # 修复：添加 2>/dev/null 忽略grep管道错误
-            grep -E "CONFIG_PACKAGE_kmod-tcp-bbr|CONFIG_DEFAULT_TCP_CONG|CONFIG_PACKAGE_tcp-bbr" "/mnt/openwrt-build/.config" 2>/dev/null || true
+            echo "  - kmod-tcp-bbr:" $(grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅ 已启用" || echo "❌ 未启用")
             
             echo ""
-            echo "4. ✅ 关键USB驱动状态:"
-            # 修复：添加 2>/dev/null 忽略grep管道错误
-            grep -E "CONFIG_PACKAGE_kmod-usb-core|CONFIG_PACKAGE_kmod-usb2|CONFIG_PACKAGE_kmod-usb3|CONFIG_PACKAGE_kmod-usb-storage" "/mnt/openwrt-build/.config" 2>/dev/null || true
+            echo "4. ✅ 关键USB驱动状态（精确匹配）:"
+            echo "  - kmod-usb-core:" $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
+            echo "  - kmod-usb2:" $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
+            echo "  - kmod-usb3:" $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
+            echo "  - kmod-usb-storage:" $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
+            echo "  - kmod-scsi-core:" $(grep -q "^CONFIG_PACKAGE_kmod-scsi-core=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
             
             echo ""
-            echo "5. ✅ 插件配置统计:"
-            # 修复：使用管道时忽略错误
-            enabled=$(grep -c "CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config" 2>/dev/null || echo "0")
-            disabled=$(grep -c "# CONFIG_PACKAGE_.* is not set" "/mnt/openwrt-build/.config" 2>/dev/null || echo "0")
+            echo "5. ✅ 插件配置统计（精确匹配）:"
+            enabled=$(grep -c "^CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config" 2>/dev/null || echo "0")
+            disabled=$(grep -c "^# CONFIG_PACKAGE_.* is not set" "/mnt/openwrt-build/.config" 2>/dev/null || echo "0")
             echo "   ✅ 已启用插件: $enabled 个"
             echo "   ❌ 已禁用插件: $disabled 个"
             
             echo ""
-            echo "=== 🎯 详细配置状态标识（完整版）==="
+            echo "=== 🎯 详细配置状态标识（精确匹配版）==="
             echo "📋 USB配置状态:"
-            
-            # USB配置检查 - 使用 || true 防止grep失败导致脚本退出
-            echo "  CONFIG_PACKAGE_kmod-usb-core: $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-usb2: $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-usb3: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-usb-xhci-hcd: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-usb-storage: $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
-            echo "  CONFIG_PACKAGE_kmod-scsi-core: $(grep -q "^CONFIG_PACKAGE_kmod-scsi-core=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            echo "  CONFIG_PACKAGE_kmod-usb-core:" $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
+            echo "  CONFIG_PACKAGE_kmod-usb2:" $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
+            echo "  CONFIG_PACKAGE_kmod-usb3:" $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
+            echo "  CONFIG_PACKAGE_kmod-usb-xhci-hcd:" $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
+            echo "  CONFIG_PACKAGE_kmod-usb-storage:" $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
+            echo "  CONFIG_PACKAGE_kmod-scsi-core:" $(grep -q "^CONFIG_PACKAGE_kmod-scsi-core=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
             
             echo ""
             echo "📦 功能性插件状态:"
+            echo "  TurboACC 网络加速 (luci-app-turboacc):" $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
+            echo "  TCP BBR拥塞控制算法 (kmod-tcp-bbr):" $(grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
             
-            # 功能性插件状态 - 使用 || true 防止grep失败导致脚本退出
-            echo "  TurboACC 网络加速 (luci-app-turboacc): $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
-            echo "  TCP BBR拥塞控制算法 (kmod-tcp-bbr): $(grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
-            echo "  UPnP 自动端口转发 (luci-app-upnp): $(grep -q "^CONFIG_PACKAGE_luci-app-upnp=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
-            echo "  Samba 文件共享 (luci-app-samba4): $(grep -q "^CONFIG_PACKAGE_luci-app-samba4=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
-            echo "  磁盘管理 (luci-app-diskman): $(grep -q "^CONFIG_PACKAGE_luci-app-diskman=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
-            echo "  KMS 激活服务 (luci-app-vlmcsd): $(grep -q "^CONFIG_PACKAGE_luci-app-vlmcsd=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
-            echo "  SmartDNS 智能DNS (luci-app-smartdns): $(grep -q "^CONFIG_PACKAGE_luci-app-smartdns=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
-            echo "  家长控制 (luci-app-accesscontrol): $(grep -q "^CONFIG_PACKAGE_luci-app-accesscontrol=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
-            echo "  微信推送 (luci-app-wechatpush): $(grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
-            echo "  流量控制 (SQM) (luci-app-sqm): $(grep -q "^CONFIG_PACKAGE_luci-app-sqm=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
-            echo "  FTP 服务器 (luci-app-vsftpd): $(grep -q "^CONFIG_PACKAGE_luci-app-vsftpd=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
-            echo "  ARP 绑定 (luci-app-arpbind): $(grep -q "^CONFIG_PACKAGE_luci-app-arpbind=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
-            echo "  CPU 限制 (luci-app-cpulimit): $(grep -q "^CONFIG_PACKAGE_luci-app-cpulimit=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
-            echo "  硬盘休眠 (luci-app-hd-idle): $(grep -q "^CONFIG_PACKAGE_luci-app-hd-idle=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")"
+            # 检查是否有重复配置行
+            echo ""
+            echo "🔍 检查重复配置行:"
+            duplicates=$(grep "^CONFIG_PACKAGE_kmod-usb-xhci-hcd" "/mnt/openwrt-build/.config" | wc -l)
+            if [ $duplicates -gt 1 ]; then
+              echo "⚠️ 发现重复配置: kmod-usb-xhci-hcd ($duplicates 次)"
+              echo "💡 这可能导致配置冲突，建议清理配置文件"
+            else
+              echo "✅ 无重复配置"
+            fi
+            
+            echo ""
+            echo "🔍 libustream冲突状态:"
+            echo "  libustream-openssl:" $(grep -q "^CONFIG_PACKAGE_libustream-openssl=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
+            echo "  libustream-wolfssl:" $(grep -q "^CONFIG_PACKAGE_libustream-wolfssl=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
+            
+            if grep -q "^CONFIG_PACKAGE_libustream-openssl=y" "/mnt/openwrt-build/.config" && grep -q "^CONFIG_PACKAGE_libustream-wolfssl=y" "/mnt/openwrt-build/.config"; then
+              echo "⚠️ 警告: libustream-openssl和libustream-wolfssl同时启用，可能导致冲突"
+              echo "💡 建议只启用其中一个"
+            fi
             
             echo ""
             echo "🎯 配置模式: ${{ github.event.inputs.config_mode }}"
             if [ "${{ github.event.inputs.config_mode }}" = "normal" ]; then
               echo "✅ 当前为正常模式（完整功能）"
-              echo "📊 正常模式包含所有功能性插件，包括TCP BBR拥塞控制算法"
             else
               echo "🔧 当前为基础模式（最小化配置）"
-              echo "📊 基础模式仅包含核心功能，用于测试编译"
             fi
             
             echo ""
@@ -870,14 +1007,14 @@ jobs:
             echo "  - 目标平台: $TARGET/$SUBTARGET"
             echo "  - 目标设备: $DEVICE"
             echo "  - OpenWrt版本: $SELECTED_BRANCH"
-            echo "  - USB驱动: 已启用所有关键驱动"
-            echo "  - TCP BBR: 已启用拥塞控制算法"
+            echo "  - 配置模式: ${{ github.event.inputs.config_mode }}"
+            echo "  - USB驱动: 已启用核心驱动"
             echo "  - 插件数量: $enabled 个已启用"
             
-            # 显示前10个启用的插件 - 使用 2>/dev/null 忽略管道错误
+            # 显示前10个启用的插件 - 精确匹配
             echo ""
-            echo "📋 启用的插件 (前10个):"
-            grep "^CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config" 2>/dev/null | head -10 | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g' | while read pkg; do
+            echo "📋 启用的插件 (前10个，精确匹配):"
+            grep "^CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config" 2>/dev/null | head -10 | sed 's/^CONFIG_PACKAGE_//g' | sed 's/=y//g' | while read pkg; do
               echo "  ✅ $pkg"
             done
           else
@@ -890,10 +1027,10 @@ jobs:
 #【firmware-build.yml-18】
 
 #【firmware-build.yml-19】
-      # 步骤 17: 检查并备份配置文件
-      - name: "17. 检查并备份配置文件"
+      # 步骤 17: 检查并备份配置文件（修复版：清理重复配置）
+      - name: "17. 检查并备份配置文件（修复版：清理重复配置）"
         run: |
-          echo "=== 步骤 17: 检查并备份配置文件 ==="
+          echo "=== 步骤 17: 检查并备份配置文件（修复版：清理重复配置） ==="
           echo "🕐 开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -906,6 +1043,29 @@ jobs:
             echo "📊 文件大小: $(ls -lh "/mnt/openwrt-build/.config" | awk '{print $5}')"
             echo "📝 文件行数: $(wc -l < "/mnt/openwrt-build/.config")"
             
+            # 清理重复配置
+            echo "🔧 清理重复配置..."
+            cd /mnt/openwrt-build
+            
+            # 备份清理前的配置文件
+            cp .config .config.before_cleanup
+            
+            # 创建临时文件来存储唯一的配置行
+            awk '!seen[$0]++' .config > .config.temp
+            
+            # 检查是否有重复行被移除
+            original_lines=$(wc -l < .config)
+            unique_lines=$(wc -l < .config.temp)
+            removed_lines=$((original_lines - unique_lines))
+            
+            if [ $removed_lines -gt 0 ]; then
+              echo "✅ 清理了 $removed_lines 个重复配置行"
+              mv .config.temp .config
+            else
+              echo "✅ 无重复配置行"
+              rm -f .config.temp
+            fi
+            
             # 确保备份目录存在
             mkdir -p "${{ github.workspace }}/firmware-config/config-backup"
             
@@ -915,6 +1075,14 @@ jobs:
             cp "/mnt/openwrt-build/.config" "$BACKUP_FILE"
             echo "✅ 配置文件备份到仓库目录: $BACKUP_FILE"
             echo "📊 备份文件大小: $(ls -lh "$BACKUP_FILE" | awk '{print $5}')"
+            echo "📝 备份文件行数: $(wc -l < "$BACKUP_FILE")"
+            
+            # 如果清理了重复行，也备份清理前的版本
+            if [ $removed_lines -gt 0 ]; then
+              BACKUP_FILE_BEFORE="${{ github.workspace }}/firmware-config/config-backup/config_${{ env.TIMESTAMP_SEC }}_before_cleanup.config"
+              cp "/mnt/openwrt-build/.config.before_cleanup" "$BACKUP_FILE_BEFORE"
+              echo "✅ 清理前的配置文件也备份到: $BACKUP_FILE_BEFORE"
+            fi
           else
             echo "❌ 错误: .config 文件不存在"
             exit 1
@@ -1172,10 +1340,10 @@ jobs:
 #【firmware-build.yml-22】
 
 #【firmware-build.yml-23】
-      # 步骤 21: 前置错误检查（修复23.05 SDK验证）- 关键修复
-      - name: "21. 前置错误检查（修复23.05 SDK验证）"
+      # 步骤 21: 前置错误检查（修复版：精确检查）
+      - name: "21. 前置错误检查（修复版：精确检查）"
         run: |
-          echo "=== 步骤 21: 前置错误检查（修复23.05 SDK验证） ==="
+          echo "=== 步骤 21: 前置错误检查（修复版：精确检查） ==="
           echo "🕐 开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
@@ -1188,23 +1356,124 @@ jobs:
             echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET"
           fi
           
-          echo "🚀 执行前置错误检查（已修复23.05 SDK验证问题）..."
-          "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" pre_build_error_check
+          echo "🚀 执行前置错误检查（精确检查版）..."
           
-          CHECK_EXIT_CODE=$?
-          if [ $CHECK_EXIT_CODE -ne 0 ]; then
-            echo "❌ 错误: 前置错误检查失败，退出代码: $CHECK_EXIT_CODE"
-            echo "💡 请查看上方错误信息进行修复"
+          cd /mnt/openwrt-build
+          
+          echo "=== 🚨 精确错误检查 ==="
+          
+          local error_count=0
+          local warning_count=0
+          
+          # 1. 检查配置文件（精确匹配）
+          echo "1. ✅ 配置文件检查:"
+          if [ -f ".config" ]; then
+            echo "  ✅ .config 文件存在"
+            echo "  📊 文件大小: $(ls -lh .config | awk '{print $5}')"
+            echo "  📝 文件行数: $(wc -l < .config)"
             
-            # 如果是23.05版本，提供特殊提示
-            if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-              echo ""
-              echo "🚨 23.05版本SDK验证问题修复提示:"
-              echo "💡 23.05 SDK使用GCC 12.3.0，已放宽验证条件"
-              echo "📌 只需要有GCC编译器文件即可，不要求特定目录结构"
-              echo "🔧 已排除虚假的dummy-tools编译器检测"
+            # 检查是否有重复配置
+            local duplicates=$(grep "^CONFIG_PACKAGE_kmod-usb-xhci-hcd" .config | wc -l)
+            if [ $duplicates -gt 1 ]; then
+              echo "  ⚠️ 发现重复配置: kmod-usb-xhci-hcd ($duplicates 次)"
+              warning_count=$((warning_count + 1))
             fi
             
+            # 检查libustream冲突
+            local has_openssl=$(grep -c "^CONFIG_PACKAGE_libustream-openssl=y" .config)
+            local has_wolfssl=$(grep -c "^CONFIG_PACKAGE_libustream-wolfssl=y" .config)
+            if [ $has_openssl -gt 0 ] && [ $has_wolfssl -gt 0 ]; then
+              echo "  ⚠️ 发现libustream-openssl和libustream-wolfssl冲突"
+              warning_count=$((warning_count + 1))
+            fi
+            
+          else
+            echo "  ❌ .config 文件不存在"
+            error_count=$((error_count + 1))
+          fi
+          
+          # 2. 检查SDK目录（使用COMPILER_DIR变量）
+          echo ""
+          echo "2. ✅ SDK目录检查:"
+          if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+            echo "  ✅ SDK目录存在: $COMPILER_DIR"
+            echo "  📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
+            
+            # 检查GCC编译器
+            local gcc_file=$(find "$COMPILER_DIR" -type f -executable \
+              -name "*gcc" \
+              ! -name "*gcc-ar" \
+              ! -name "*gcc-ranlib" \
+              ! -name "*gcc-nm" \
+              ! -path "*dummy-tools*" \
+              ! -path "*scripts*" \
+              2>/dev/null | head -1)
+            
+            if [ -n "$gcc_file" ]; then
+              echo "  ✅ 找到GCC编译器: $(basename "$gcc_file")"
+            else
+              echo "  ⚠️ 未找到真正的GCC编译器"
+              warning_count=$((warning_count + 1))
+            fi
+            
+          else
+            echo "  ❌ SDK目录不存在: $COMPILER_DIR"
+            error_count=$((error_count + 1))
+          fi
+          
+          # 3. 检查feeds
+          echo ""
+          echo "3. ✅ Feeds检查:"
+          if [ -d "feeds" ]; then
+            echo "  ✅ feeds 目录存在"
+          else
+            echo "  ❌ feeds 目录不存在"
+            error_count=$((error_count + 1))
+          fi
+          
+          # 4. 检查依赖包
+          echo ""
+          echo "4. ✅ 依赖包检查:"
+          if [ -d "dl" ]; then
+            local dl_count=$(find dl -type f 2>/dev/null | wc -l)
+            echo "  ✅ dl 目录存在，文件数: $dl_count 个"
+          else
+            echo "  ⚠️ dl 目录不存在，可能需要下载依赖"
+            warning_count=$((warning_count + 1))
+          fi
+          
+          # 5. 检查磁盘空间
+          echo ""
+          echo "5. ✅ 磁盘空间检查:"
+          local available_space=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
+          local available_gb=$((available_space / 1024 / 1024))
+          echo "  📊 /mnt 可用空间: ${available_gb}G"
+          
+          if [ $available_gb -lt 10 ]; then
+            echo "  ❌ 错误: 磁盘空间不足 (需要至少10G，当前${available_gb}G)"
+            error_count=$((error_count + 1))
+          elif [ $available_gb -lt 20 ]; then
+            echo "  ⚠️ 警告: 磁盘空间较低 (建议至少20G，当前${available_gb}G)"
+            warning_count=$((warning_count + 1))
+          else
+            echo "  ✅ 磁盘空间充足"
+          fi
+          
+          # 总结
+          echo ""
+          echo "=== 🎯 检查结果 ==="
+          echo "  错误数量: $error_count 个"
+          echo "  警告数量: $warning_count 个"
+          
+          if [ $error_count -eq 0 ]; then
+            if [ $warning_count -eq 0 ]; then
+              echo "✅ 前置检查通过，可以开始编译"
+            else
+              echo "⚠️ 前置检查通过，但有 $warning_count 个警告，建议修复"
+            fi
+          else
+            echo "❌ 前置检查发现 $error_count 个错误，$warning_count 个警告"
+            echo "💡 请修复错误后再编译"
             exit 1
           fi
           
@@ -1232,7 +1501,7 @@ jobs:
             echo "❌ 错误: 编译前空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
             exit 1
           elif [ $AVAILABLE_GB -lt 20 ]; then
-            echo "⚠️ 警告: 编译前空间较低 (建议至少20G，当前${AVAILABLE_GB}G)"
+            echo "⚠️ 警告: 编译前空间较低 (建议至少20G，当前${available_gb}G)"
           else
             echo "✅ 编译前空间充足"
           fi
@@ -1597,9 +1866,9 @@ jobs:
           echo "🔧 编译器信息:"
           
           # 检查SDK编译器版本
-          if [ -d "/mnt/openwrt-build/sdk" ]; then
+          if [ -d "/mnt/openwrt-build" ]; then
             # 查找真正的GCC，排除虚假编译器
-            GCC_FILE=$(find "/mnt/openwrt-build/sdk" -type f -executable \
+            GCC_FILE=$(find "/mnt/openwrt-build" -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
@@ -1633,147 +1902,20 @@ jobs:
           
           echo "  💡 这是正常的：系统编译器编译工具链，SDK编译器编译固件"
           
-          # 自定义文件集成状态（增强版）
+          # SDK下载状态检查
           echo ""
-          echo "📁 自定义文件集成状态（增强版）:"
-          
-          # 尝试从统计文件读取自定义文件信息
-          CUSTOM_STATS_FILE="/tmp/custom_file_stats.txt"
-          if [ -f "$CUSTOM_STATS_FILE" ]; then
-            source "$CUSTOM_STATS_FILE"
-            echo "  ✅ 自定义文件总数: $CUSTOM_FILE_TOTAL 个"
-            echo "  📦 IPK包: $CUSTOM_IPK_COUNT 个"
-            echo "  📜 脚本: $CUSTOM_SCRIPT_COUNT 个"
-            echo "  ⚙️ 配置文件: $CUSTOM_CONFIG_COUNT 个"
-            echo "  📁 其他文件: $CUSTOM_OTHER_COUNT 个"
-            echo "  ✅ 英文文件名: $CUSTOM_ENGLISH_COUNT 个"
-            echo "  ⚠️ 非英文文件名: $CUSTOM_NON_ENGLISH_COUNT 个"
-            echo "  📌 位置: /etc/custom-files/"
-            echo "  📁 日志位置: /root/logs/（重启不丢失）"
-            
-            if [ -f "/mnt/openwrt-build/files/etc/uci-defaults/99-custom-files" ]; then
-              echo "  ✅ 第一次开机安装脚本: 已创建（增强版）"
-              echo "  💡 安装顺序: IPK包 → 脚本文件 → 其他文件"
-              echo "  🔧 错误处理: 单个文件失败不影响其他文件"
-              echo "  📊 详细日志: 记录每个文件的处理结果"
-            fi
-            
-            if [ "$CUSTOM_NON_ENGLISH_COUNT" -gt 0 ]; then
-              echo ""
-              echo "💡 文件名兼容性提示:"
-              echo "  当前有 $CUSTOM_NON_ENGLISH_COUNT 个文件使用非英文文件名"
-              echo "  建议改为英文文件名以获得更好的兼容性"
-              echo "  可以在固件启动后运行: /etc/custom-files/check_filenames.sh"
-            fi
-            
-            # 显示所有文件示例，不只前5个
-            if [ "$CUSTOM_FILE_TOTAL" -gt 0 ] && [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
-              echo ""
-              echo "📋 所有文件列表:"
-              find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
-                rel_path="${file#/mnt/openwrt-build/files/etc/custom-files/}"
-                size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                echo "    📄 $rel_path ($size)"
-              done
-            fi
-            
-            echo ""
-            echo "🎯 增强功能说明:"
-            echo "  🔧 递归查找: 支持自定义目录下的所有子目录"
-            echo "  📝 保持原文件名: 不自动重命名，保持用户设置的文件名"
-            echo "  🔄 错误不退出: IPK安装失败继续安装下一个"
-            echo "  📊 详细日志: 记录每个文件的处理结果和统计信息"
-            echo "  📁 持久日志: 日志存储在 /root/logs/（重启不丢失）"
-            
-          else
-            # 如果统计文件不存在，尝试从目录统计
-            if [ -d "/mnt/openwrt-build/files/etc/custom-files" ]; then
-              # 重新统计
-              CUSTOM_IPK_COUNT=0
-              CUSTOM_SCRIPT_COUNT=0
-              CUSTOM_CONFIG_COUNT=0
-              CUSTOM_OTHER_COUNT=0
-              CUSTOM_ENGLISH_COUNT=0
-              CUSTOM_NON_ENGLISH_COUNT=0
-              
-              find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
-                file_name=$(basename "$file")
-                
-                # 检查是否为英文文件名 - 使用修复版检测
-                if [[ "$file_name" =~ ^[a-zA-Z0-9_.\-]+$ ]]; then
-                  CUSTOM_ENGLISH_COUNT=$((CUSTOM_ENGLISH_COUNT + 1))
-                else
-                  CUSTOM_NON_ENGLISH_COUNT=$((CUSTOM_NON_ENGLISH_COUNT + 1))
-                fi
-                
-                # 文件类型统计
-                if [[ "$file_name" =~ \.ipk$ ]] || [[ "$file_name" =~ \.IPK$ ]] || [[ "$file_name" =~ \.Ipk$ ]]; then
-                  CUSTOM_IPK_COUNT=$((CUSTOM_IPK_COUNT + 1))
-                elif [[ "$file_name" =~ \.sh$ ]] || [[ "$file_name" =~ \.Sh$ ]] || [[ "$file_name" =~ \.SH$ ]]; then
-                  CUSTOM_SCRIPT_COUNT=$((CUSTOM_SCRIPT_COUNT + 1))
-                elif [[ "$file_name" =~ \.conf$ ]] || [[ "$file_name" =~ \.config$ ]] || [[ "$file_name" =~ \.CONF$ ]]; then
-                  CUSTOM_CONFIG_COUNT=$((CUSTOM_CONFIG_COUNT + 1))
-                else
-                  CUSTOM_OTHER_COUNT=$((CUSTOM_OTHER_COUNT + 1))
-                fi
-              done
-              
-              TOTAL_CUSTOM_FILES=$((CUSTOM_IPK_COUNT + CUSTOM_SCRIPT_COUNT + CUSTOM_CONFIG_COUNT + CUSTOM_OTHER_COUNT))
-              
-              echo "  ✅ 自定义文件总数: $TOTAL_CUSTOM_FILES 个"
-              echo "  📦 IPK包: $CUSTOM_IPK_COUNT 个"
-              echo "  📜 脚本: $CUSTOM_SCRIPT_COUNT 个"
-              echo "  ⚙️ 配置文件: $CUSTOM_CONFIG_COUNT 个"
-              echo "  📁 其他文件: $CUSTOM_OTHER_COUNT 个"
-              echo "  ✅ 英文文件名: $CUSTOM_ENGLISH_COUNT 个"
-              echo "  ⚠️ 非英文文件名: $CUSTOM_NON_ENGLISH_COUNT 个"
-              echo "  📌 位置: /etc/custom-files/"
-              echo "  📁 日志位置: /root/logs/（重启不丢失）"
-              
-              if [ -f "/mnt/openwrt-build/files/etc/uci-defaults/99-custom-files" ]; then
-                echo "  ✅ 第一次开机安装脚本: 已创建（增强版）"
-                echo "  💡 安装顺序: IPK包 → 脚本文件 → 其他文件"
-                echo "  🔧 错误处理: 单个文件失败不影响其他文件"
-                echo "  📊 详细日志: 记录每个文件的处理结果"
-              fi
-              
-              if [ $CUSTOM_NON_ENGLISH_COUNT -gt 0 ]; then
-                echo ""
-                echo "💡 文件名兼容性提示:"
-                echo "  当前有 $CUSTOM_NON_ENGLISH_COUNT 个文件使用非英文文件名"
-                echo "  建议改为英文文件名以获得更好的兼容性"
-                echo "  可以在固件启动后运行: /etc/custom-files/check_filenames.sh"
-              fi
-              
-              # 显示所有文件，不只前5个
-              if [ $TOTAL_CUSTOM_FILES -gt 0 ]; then
-                echo ""
-                echo "📋 所有文件列表:"
-                find "/mnt/openwrt-build/files/etc/custom-files" -type f 2>/dev/null | while read file; do
-                  rel_path="${file#/mnt/openwrt-build/files/etc/custom-files/}"
-                  size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                  echo "    📄 $rel_path ($size)"
-                done
-              fi
-              
-              echo ""
-              echo "🎯 增强功能说明:"
-              echo "  🔧 递归查找: 支持自定义目录下的所有子目录"
-              echo "  📝 保持原文件名: 不自动重命名，保持用户设置的文件名"
-              echo "  🔄 错误不退出: IPK安装失败继续安装下一个"
-              echo "  📊 详细日志: 记录每个文件的处理结果和统计信息"
-              echo "  📁 持久日志: 日志存储在 /root/logs/（重启不丢失）"
-              
+          echo "📦 SDK下载状态:"
+          if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
+            source /mnt/openwrt-build/build_env.sh
+            if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+              echo "  ✅ SDK已下载: $COMPILER_DIR"
+              echo "  📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
             else
-              echo "  ⚪ 自定义文件: 未集成"
+              echo "  ❌ SDK未下载或目录不存在"
             fi
+          else
+            echo "  ❌ 环境文件不存在"
           fi
-          
-          # 文件名兼容性建议 - 简化版本
-          echo ""
-          echo "💡 文件名兼容性建议:"
-          echo "  为了更好的兼容性，方便复制、运行，建议自定义文件使用英文文件名"
-          echo "  当前系统支持非英文文件名，但英文名有更好的兼容性"
           
           echo ""
           echo "✅ 构建流程完成"
