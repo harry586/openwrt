@@ -620,13 +620,13 @@ jobs:
             echo "💡 检查可能的SDK目录..."
             
             # 尝试查找SDK目录
-            local found_dirs=$(find "/mnt/openwrt-build" -maxdepth 1 -type d -name "*sdk*" 2>/dev/null)
+            found_dirs=$(find "/mnt/openwrt-build" -maxdepth 1 -type d -name "*sdk*" 2>/dev/null)
             if [ -n "$found_dirs" ]; then
               echo "找到可能的SDK目录:"
               echo "$found_dirs"
               
               # 使用第一个找到的目录
-              local first_dir=$(echo "$found_dirs" | head -1)
+              first_dir=$(echo "$found_dirs" | head -1)
               echo "使用目录: $first_dir"
               COMPILER_DIR="$first_dir"
               
@@ -830,8 +830,8 @@ jobs:
           echo "=== USB驱动完整性检查（精确匹配） ==="
           
           # 基础USB驱动（所有平台必需）
-          local missing_drivers=()
-          local required_drivers=(
+          missing_drivers=()
+          required_drivers=(
             "kmod-usb-core"
             "kmod-usb2"
             "kmod-usb-storage"
@@ -850,7 +850,7 @@ jobs:
           
           echo ""
           echo "🔍 检查USB 3.0驱动..."
-          local usb3_drivers=("kmod-usb3" "kmod-usb-xhci-hcd")
+          usb3_drivers=("kmod-usb3" "kmod-usb-xhci-hcd")
           for driver in "${usb3_drivers[@]}"; do
             if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
               echo "✅ $driver: 已启用"
@@ -864,7 +864,7 @@ jobs:
           # 根据平台检查专用驱动
           if grep -q "^CONFIG_TARGET_ipq40xx=y" .config; then
             echo "🔧 检测到高通IPQ40xx平台，检查专用驱动:"
-            local ipq40xx_drivers=("kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3")
+            ipq40xx_drivers=("kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3")
             for driver in "${ipq40xx_drivers[@]}"; do
               if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
                 echo "✅ $driver: 已启用"
@@ -1362,8 +1362,8 @@ jobs:
           
           echo "=== 🚨 精确错误检查 ==="
           
-          local error_count=0
-          local warning_count=0
+          error_count=0
+          warning_count=0
           
           # 1. 检查配置文件（精确匹配）
           echo "1. ✅ 配置文件检查:"
@@ -1373,15 +1373,15 @@ jobs:
             echo "  📝 文件行数: $(wc -l < .config)"
             
             # 检查是否有重复配置
-            local duplicates=$(grep "^CONFIG_PACKAGE_kmod-usb-xhci-hcd" .config | wc -l)
+            duplicates=$(grep "^CONFIG_PACKAGE_kmod-usb-xhci-hcd" .config | wc -l)
             if [ $duplicates -gt 1 ]; then
               echo "  ⚠️ 发现重复配置: kmod-usb-xhci-hcd ($duplicates 次)"
               warning_count=$((warning_count + 1))
             fi
             
             # 检查libustream冲突
-            local has_openssl=$(grep -c "^CONFIG_PACKAGE_libustream-openssl=y" .config)
-            local has_wolfssl=$(grep -c "^CONFIG_PACKAGE_libustream-wolfssl=y" .config)
+            has_openssl=$(grep -c "^CONFIG_PACKAGE_libustream-openssl=y" .config)
+            has_wolfssl=$(grep -c "^CONFIG_PACKAGE_libustream-wolfssl=y" .config)
             if [ $has_openssl -gt 0 ] && [ $has_wolfssl -gt 0 ]; then
               echo "  ⚠️ 发现libustream-openssl和libustream-wolfssl冲突"
               warning_count=$((warning_count + 1))
@@ -1400,7 +1400,7 @@ jobs:
             echo "  📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
             
             # 检查GCC编译器
-            local gcc_file=$(find "$COMPILER_DIR" -type f -executable \
+            gcc_file=$(find "$COMPILER_DIR" -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
@@ -1435,7 +1435,7 @@ jobs:
           echo ""
           echo "4. ✅ 依赖包检查:"
           if [ -d "dl" ]; then
-            local dl_count=$(find dl -type f 2>/dev/null | wc -l)
+            dl_count=$(find dl -type f 2>/dev/null | wc -l)
             echo "  ✅ dl 目录存在，文件数: $dl_count 个"
           else
             echo "  ⚠️ dl 目录不存在，可能需要下载依赖"
@@ -1445,8 +1445,8 @@ jobs:
           # 5. 检查磁盘空间
           echo ""
           echo "5. ✅ 磁盘空间检查:"
-          local available_space=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
-          local available_gb=$((available_space / 1024 / 1024))
+          available_space=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
+          available_gb=$((available_space / 1024 / 1024))
           echo "  📊 /mnt 可用空间: ${available_gb}G"
           
           if [ $available_gb -lt 10 ]; then
@@ -1501,7 +1501,7 @@ jobs:
             echo "❌ 错误: 编译前空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
             exit 1
           elif [ $AVAILABLE_GB -lt 20 ]; then
-            echo "⚠️ 警告: 编译前空间较低 (建议至少20G，当前${available_gb}G)"
+            echo "⚠️ 警告: 编译前空间较低 (建议至少20G，当前${AVAILABLE_GB}G)"
           else
             echo "✅ 编译前空间充足"
           fi
