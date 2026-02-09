@@ -6,6 +6,7 @@ BUILD_DIR="/mnt/openwrt-build"
 ENV_FILE="$BUILD_DIR/build_env.sh"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SUPPORT_SCRIPT="$REPO_ROOT/support.sh"
+CONFIG_DIR="$REPO_ROOT/firmware-config/config"
 
 # 确保有日志目录
 mkdir -p /tmp/build-logs
@@ -75,7 +76,7 @@ setup_environment() {
     local base_packages=(
         build-essential clang flex bison g++ gawk gcc-multilib g++-multilib
         gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip
-        zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpath
+        zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpoint
         libpython3-dev python3 python3-dev python3-pip python3-setuptools
         python3-yaml xsltproc zip subversion ninja-build automake autoconf
         libtool pkg-config help2man texinfo groff texlive texinfo cmake
@@ -255,7 +256,6 @@ download_openwrt_sdk() {
         # 解析SDK信息：格式为 "SDK_URL|SDK_FILE|SDK_DIR"
         local sdk_url=$(echo "$sdk_info" | cut -d'|' -f1)
         local sdk_file=$(echo "$sdk_info" | cut -d'|' -f2)
-        local sdk_dir=$(echo "$sdk_info" | cut -d'|' -f3)
         
         if [ -z "$sdk_url" ] || [ -z "$sdk_file" ]; then
             log "❌ 无法从support.sh获取有效的SDK信息"
@@ -266,7 +266,6 @@ download_openwrt_sdk() {
         log "📥 SDK下载信息:"
         log "  URL: $sdk_url"
         log "  文件: $sdk_file"
-        log "  目录: $sdk_dir"
         
         # 创建SDK下载目录
         local sdk_download_dir="$BUILD_DIR/sdk-download"
@@ -291,40 +290,23 @@ download_openwrt_sdk() {
                 
                 # 首先尝试按预期的目录名查找
                 local extracted_dir=""
-                if [ -n "$sdk_dir" ] && [ -d "$BUILD_DIR/$sdk_dir" ]; then
-                    extracted_dir="$BUILD_DIR/$sdk_dir"
-                fi
+                local sdk_base_name="${sdk_file%.tar.xz}"
+                sdk_base_name="${sdk_base_name%.tar.gz}"
+                sdk_base_name="${sdk_base_name%.tar.bz2}"
                 
-                # 如果没找到，查找包含"openwrt-sdk"的目录
-                if [ -z "$extracted_dir" ]; then
+                # 查找包含"openwrt-sdk"或SDK文件名的目录
+                if [ -d "$BUILD_DIR/$sdk_base_name" ]; then
+                    extracted_dir="$BUILD_DIR/$sdk_base_name"
+                else
+                    # 查找其他可能的目录
                     extracted_dir=$(find "$BUILD_DIR" -maxdepth 2 -type d -name "openwrt-sdk-*" 2>/dev/null | head -1)
-                fi
-                
-                # 如果还没找到，查找包含"sdk"的目录
-                if [ -z "$extracted_dir" ]; then
-                    extracted_dir=$(find "$BUILD_DIR" -maxdepth 2 -type d -name "*sdk*" 2>/dev/null | head -1)
-                fi
-                
-                # 如果还是没找到，使用基于文件名的目录
-                if [ -z "$extracted_dir" ]; then
-                    local sdk_base_name="${sdk_file%.tar.xz}"
-                    sdk_base_name="${sdk_base_name%.tar.gz}"
-                    sdk_base_name="${sdk_base_name%.tar.bz2}"
-                    
-                    if [ -d "$BUILD_DIR/$sdk_base_name" ]; then
-                        extracted_dir="$BUILD_DIR/$sdk_base_name"
-                    fi
                 fi
                 
                 if [ -n "$extracted_dir" ] && [ -d "$extracted_dir" ]; then
                     COMPILER_DIR="$extracted_dir"
                     log "✅ 找到SDK目录: $COMPILER_DIR"
                     
-                    # 显示SDK目录内容
-                    log "📁 SDK目录内容概览:"
-                    ls -la "$COMPILER_DIR" | head -20
-                    
-                    # 验证SDK文件 - 使用修复版的验证函数
+                    # 验证SDK文件
                     if verify_sdk_files_v2 "$COMPILER_DIR"; then
                         log "🎉 SDK下载、解压和验证完成"
                         log "📌 编译器目录已设置为: $COMPILER_DIR"
@@ -338,14 +320,9 @@ download_openwrt_sdk() {
                         return 1
                     fi
                 else
-                    # 如果未找到SDK目录，检查解压文件列表
-                    log "🔍 检查解压文件列表..."
-                    if [ -f "$sdk_download_dir/$sdk_file" ]; then
-                        log "📋 查看tar文件内容:"
-                        tar -tf "$sdk_download_dir/$sdk_file" | head -30
-                    fi
-                    
-                    log "❌ 无法找到SDK目录"
+                    log "❌ 无法找到SDK目录，检查解压结果"
+                    log "📋 解压文件列表:"
+                    tar -tf "$sdk_download_dir/$sdk_file" | head -20
                     return 1
                 fi
             else
@@ -377,148 +354,59 @@ verify_sdk_files_v2() {
     log "✅ SDK目录存在: $sdk_dir"
     log "📊 目录大小: $(du -sh "$sdk_dir" 2>/dev/null | cut -f1 || echo '未知')"
     
-    # 检查目录结构 - 修复：检查更广泛的目录结构
+    # 检查目录结构
     log "📁 检查SDK目录结构..."
     
-    # OpenWrt SDK可能的目录结构
-    local possible_dirs=("staging_dir" "toolchain" "bin" "include" "lib" "usr" "scripts" "build_dir")
-    local found_dirs=0
-    
-    for dir in "${possible_dirs[@]}"; do
-        if [ -d "$sdk_dir/$dir" ]; then
-            log "✅ 目录存在: $dir"
-            found_dirs=$((found_dirs + 1))
-            
-            # 如果找到toolchain或staging_dir，检查其中的编译器
-            if [ "$dir" = "toolchain" ] || [ "$dir" = "staging_dir" ]; then
-                log "🔍 检查 $dir 目录中的编译器..."
-                local toolchain_path=""
-                
-                # 在toolchain目录中查找编译器
-                if [ "$dir" = "toolchain" ]; then
-                    toolchain_path="$sdk_dir/toolchain"
-                elif [ "$dir" = "staging_dir" ]; then
-                    # 在staging_dir中查找toolchain目录
-                    toolchain_path=$(find "$sdk_dir/staging_dir" -maxdepth 2 -type d -name "toolchain-*" 2>/dev/null | head -1)
-                fi
-                
-                if [ -n "$toolchain_path" ] && [ -d "$toolchain_path" ]; then
-                    log "🔧 找到工具链目录: $toolchain_path"
-                    
-                    # 在工具链目录中查找GCC编译器
-                    local gcc_executable=$(find "$toolchain_path" -type f -executable \
-                      -name "*gcc" \
-                      ! -name "*gcc-ar" \
-                      ! -name "*gcc-ranlib" \
-                      ! -name "*gcc-nm" \
-                      2>/dev/null | head -1)
-                    
-                    if [ -n "$gcc_executable" ]; then
-                        log "🎯 找到GCC编译器: $(basename "$gcc_executable")"
-                        log "  🔧 完整路径: $gcc_executable"
-                        
-                        # 检查GCC版本
-                        if [ -x "$gcc_executable" ]; then
-                            local gcc_version=$("$gcc_executable" --version 2>&1 | head -1)
-                            log "  📋 GCC版本: $gcc_version"
-                            
-                            # 检查是否是dummy-tools
-                            if echo "$gcc_version" | grep -qi "dummy-tools"; then
-                                log "⚠️ 检测到虚假的dummy-tools编译器，继续查找..."
-                            else
-                                log "✅ 找到真正的GCC编译器"
-                                return 0
-                            fi
-                        fi
-                    else
-                        log "⚠️ 在工具链目录中未找到GCC编译器"
-                    fi
-                fi
-            fi
-        fi
-    done
-    
-    # 如果在常规目录中没找到编译器，在整个SDK目录中搜索
-    log "🔍 在整个SDK目录中搜索编译器..."
-    
-    # 查找所有GCC编译器文件
-    local all_gcc_files=$(find "$sdk_dir" -type f -executable \
+    # 查找GCC编译器（排除dummy-tools）
+    local gcc_files=$(find "$sdk_dir" -maxdepth 3 -type f -executable \
       -name "*gcc" \
       ! -name "*gcc-ar" \
       ! -name "*gcc-ranlib" \
       ! -name "*gcc-nm" \
-      2>/dev/null)
+      ! -path "*dummy-tools*" \
+      ! -path "*scripts*" \
+      2>/dev/null | head -1)
     
-    if [ -n "$all_gcc_files" ]; then
-        log "📋 找到的GCC文件:"
-        local gcc_count=0
-        while IFS= read -r gcc_file; do
-            gcc_count=$((gcc_count + 1))
-            local rel_path="${gcc_file#$sdk_dir/}"
-            
-            # 检查是否是虚假编译器
-            if echo "$rel_path" | grep -q "dummy-tools\|scripts"; then
-                log "  ⚠️ 跳过虚假编译器: $rel_path"
-                continue
-            fi
-            
-            log "  ✅ 找到GCC: $rel_path"
-            
-            # 检查版本
-            if [ -x "$gcc_file" ]; then
-                local version=$("$gcc_file" --version 2>&1 | head -1)
-                log "     版本: $version"
-                
-                if ! echo "$version" | grep -qi "dummy-tools"; then
-                    log "🎯 找到真正的GCC编译器"
-                    return 0
-                fi
-            fi
-            
-            # 只显示前5个
-            if [ $gcc_count -ge 5 ]; then
-                log "  ... 还有更多GCC文件未显示"
-                break
-            fi
-        done <<< "$all_gcc_files"
-    else
-        log "⚠️ 在整个SDK目录中未找到GCC编译器"
-    fi
-    
-    # 查找其他编译器工具
-    log "🔧 查找其他编译器工具..."
-    local compiler_tools=$(find "$sdk_dir" -maxdepth 3 -type f -executable \
-      \( -name "*gcc*" -o -name "*g++*" -o -name "*ar" -o -name "*ld" -o -name "*as" \) \
-      2>/dev/null | head -10)
-    
-    if [ -n "$compiler_tools" ]; then
-        log "📋 找到的编译器工具:"
-        while read tool; do
-            local rel_path="${tool#$sdk_dir/}"
-            local tool_name=$(basename "$tool")
-            
-            # 检查是否是虚假工具
-            if echo "$rel_path" | grep -q "dummy-tools\|scripts"; then
-                log "  ⚠️ 跳过虚假工具: $rel_path"
-                continue
-            fi
-            
-            log "  🔧 $tool_name ($rel_path)"
-        done <<< "$compiler_tools"
+    if [ -n "$gcc_files" ]; then
+        log "✅ 找到GCC编译器: $(basename "$gcc_files")"
         
-        log "⚠️ 找到编译器工具但未验证GCC，可能目录结构特殊"
-        log "💡 尝试接受这个SDK目录"
-        
-        # 如果找到了足够的目录，就认为SDK有效
-        if [ $found_dirs -ge 3 ]; then
-            log "✅ SDK目录结构基本完整（找到 $found_dirs 个关键目录）"
-            return 0
-        else
-            log "❌ SDK目录结构不完整（只找到 $found_dirs 个关键目录）"
-            return 1
+        # 检查GCC版本
+        if [ -x "$gcc_files" ]; then
+            local gcc_version=$("$gcc_files" --version 2>&1 | head -1)
+            log "📋 GCC版本: $gcc_version"
+            
+            # 检查是否是dummy-tools
+            if echo "$gcc_version" | grep -qi "dummy-tools"; then
+                log "⚠️ 检测到虚假的dummy-tools编译器"
+                return 1
+            else
+                log "✅ 找到真正的GCC编译器"
+                return 0
+            fi
         fi
     else
-        log "❌ 未找到任何编译器工具"
+        log "⚠️ 未找到真正的GCC编译器"
+        
+        # 检查是否有其他工具链工具
+        local toolchain_tools=$(find "$sdk_dir" -maxdepth 3 -type f -executable -name "*gcc*" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
+          2>/dev/null | head -5)
+        
+        if [ -n "$toolchain_tools" ]; then
+            log "📋 找到的工具链工具:"
+            while read tool; do
+                local tool_name=$(basename "$tool")
+                log "  🔧 $tool_name"
+            done <<< "$toolchain_tools"
+            
+            # 如果有足够的工具链工具，也认为是有效的
+            if [ $(echo "$toolchain_tools" | wc -l) -ge 3 ]; then
+                log "✅ 工具链工具足够，SDK可能有效"
+                return 0
+            fi
+        fi
+        
         return 1
     fi
 }
@@ -535,24 +423,13 @@ initialize_compiler_env() {
     local device_name="$1"
     log "=== 初始化编译器环境（下载OpenWrt官方SDK）- 修复版 ==="
     
-    # 首先加载环境变量 - 修复检查逻辑
+    # 首先加载环境变量
     log "🔍 检查环境文件..."
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
         log "✅ 从 $BUILD_DIR/build_env.sh 加载环境变量"
-        
-        # 显示关键环境变量
-        log "📋 当前环境变量:"
-        log "  SELECTED_BRANCH: $SELECTED_BRANCH"
-        log "  TARGET: $TARGET"
-        log "  SUBTARGET: $SUBTARGET"
-        log "  DEVICE: $DEVICE"
-        log "  CONFIG_MODE: $CONFIG_MODE"
-        log "  REPO_ROOT: $REPO_ROOT"
-        log "  COMPILER_DIR: $COMPILER_DIR"
     else
         log "❌ 环境文件不存在: $BUILD_DIR/build_env.sh"
-        log "💡 环境文件应该在步骤6.3中创建，但未找到"
         
         # 调用support.sh获取设备信息
         if [ -f "$SUPPORT_SCRIPT" ]; then
@@ -562,6 +439,7 @@ initialize_compiler_env() {
                 TARGET=$(echo "$PLATFORM_INFO" | awk '{print $1}')
                 SUBTARGET=$(echo "$PLATFORM_INFO" | awk '{print $2}')
                 DEVICE="$device_name"
+                CONFIG_MODE="normal"
                 log "✅ 从support.sh获取平台信息: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
             else
                 log "❌ 无法从support.sh获取平台信息"
@@ -570,11 +448,6 @@ initialize_compiler_env() {
         else
             log "❌ support.sh不存在"
             return 1
-        fi
-        
-        if [ -z "$CONFIG_MODE" ]; then
-            CONFIG_MODE="normal"
-            log "⚠️ CONFIG_MODE未设置，使用默认值: $CONFIG_MODE"
         fi
         
         # 保存到环境文件
@@ -605,9 +478,6 @@ initialize_compiler_env() {
             
             # 保存到环境文件
             save_env
-            
-            # 验证编译器
-            verify_compiler_files
             return 0
         else
             log "⚠️ 编译器目录存在但不包含真正的GCC，将重新下载SDK"
@@ -635,14 +505,6 @@ initialize_compiler_env() {
     log "📌 SDK版本: $version_for_sdk"
     log "📌 目标平台: $TARGET/$SUBTARGET"
     
-    # 详细显示SDK下载信息
-    log "🔍 SDK下载详细信息:"
-    log "  设备: $device_name"
-    log "  OpenWrt版本: $SELECTED_BRANCH"
-    log "  SDK版本: $version_for_sdk"
-    log "  目标: $TARGET"
-    log "  子目标: $SUBTARGET"
-    
     # 下载OpenWrt官方SDK
     log "🚀 开始下载OpenWrt官方SDK..."
     if download_openwrt_sdk "$TARGET" "$SUBTARGET" "$version_for_sdk"; then
@@ -653,7 +515,6 @@ initialize_compiler_env() {
         if [ -d "$COMPILER_DIR" ]; then
             log "📊 SDK目录信息:"
             log "  目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
-            log "  文件数量: $(find "$COMPILER_DIR" -type f 2>/dev/null | wc -l)"
             
             # 查找GCC编译器，排除虚假编译器
             local gcc_file=$(find "$COMPILER_DIR" -maxdepth 3 -type f -executable \
@@ -809,18 +670,19 @@ pre_build_space_check() {
 #【build_firmware_main.sh-12】
 
 #【build_firmware_main.sh-13】
-# 智能配置生成系统 - 修复版：避免递归调用
+# 智能配置生成系统 - 修复版：使用配置文件
 generate_config() {
     local extra_packages=$1
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 智能配置生成系统（修复版：避免递归调用）==="
+    log "=== 智能配置生成系统（使用配置文件）==="
     log "版本: $SELECTED_BRANCH"
     log "目标: $TARGET"
     log "子目标: $SUBTARGET"
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
+    log "配置文件目录: $CONFIG_DIR"
     
     # 防止递归调用的标记
     if [ -f "/tmp/generating_config.lock" ]; then
@@ -846,24 +708,9 @@ generate_config() {
     echo "CONFIG_PACKAGE_tcp-bbr=y" >> .config
     log "✅ 添加TCP BBR拥塞控制算法支持"
     
-    # 检查support.sh是否存在，但不直接调用full-config以避免递归
-    if [ -f "$SUPPORT_SCRIPT" ]; then
-        log "🔍 检查support.sh的配置函数..."
-        
-        # 使用新的方式调用，避免递归
-        if "$SUPPORT_SCRIPT" has-function "full-config" 2>/dev/null; then
-            log "✅ support.sh有full-config函数，但为避免递归，使用直接配置"
-            
-            # 直接添加基础配置而不是递归调用
-            add_basic_configuration
-        else
-            log "⚠️ support.sh没有full-config函数，使用基础配置"
-            add_basic_configuration
-        fi
-    else
-        log "❌ support.sh不存在，使用基础配置"
-        add_basic_configuration
-    fi
+    # 使用配置文件，而不是调用support.sh
+    log "🔍 使用配置文件进行配置..."
+    apply_configuration_from_files
     
     # 清理锁文件
     rm -f "/tmp/generating_config.lock"
@@ -871,53 +718,61 @@ generate_config() {
     log "✅ 配置生成完成"
 }
 
-# 添加基础配置函数，避免调用support.sh
-add_basic_configuration() {
-    log "=== 添加基础配置 ==="
+# 从配置文件应用配置
+apply_configuration_from_files() {
+    log "=== 从配置文件应用配置 ==="
     
-    # 添加USB驱动
-    echo "# USB支持" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-core=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-scsi-core=y" >> .config
-    
-    # 根据平台添加专用驱动
-    if [ "$TARGET" = "ipq40xx" ]; then
-        echo "# 高通IPQ40xx平台专用驱动" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
+    # 检查配置文件目录
+    if [ ! -d "$CONFIG_DIR" ]; then
+        log "❌ 配置文件目录不存在: $CONFIG_DIR"
+        log "💡 使用基础配置"
+        return
     fi
     
-    # 文件系统支持
-    echo "# 文件系统支持" >> .config
-    echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
-    
-    # 添加常用软件包
-    echo "# 常用软件包" >> .config
-    echo "CONFIG_PACKAGE_luci=y" >> .config
-    echo "CONFIG_PACKAGE_luci-ssl=y" >> .config
-    echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
-    echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
-    
-    # 根据配置模式添加包
-    if [ "$CONFIG_MODE" = "normal" ]; then
-        echo "# 正常模式额外包" >> .config
-        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-        echo "CONFIG_PACKAGE_samba4-server=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-samba4=y" >> .config
+    # 1. 应用USB通用配置
+    local usb_config="$CONFIG_DIR/usb-generic.config"
+    if [ -f "$usb_config" ]; then
+        log "📁 应用USB通用配置: $usb_config"
+        cat "$usb_config" >> .config
+        log "✅ 已应用USB通用配置"
+    else
+        log "⚠️ USB通用配置文件不存在: $usb_config"
     fi
     
-    log "✅ 基础配置添加完成"
+    # 2. 应用模式配置
+    local mode_config="$CONFIG_DIR/$CONFIG_MODE.config"
+    if [ -f "$mode_config" ]; then
+        log "📁 应用模式配置: $mode_config"
+        cat "$mode_config" >> .config
+        log "✅ 已应用模式配置"
+    else
+        log "❌ 模式配置文件不存在: $mode_config"
+        log "💡 使用基础配置"
+    fi
+    
+    # 3. 应用设备专用配置
+    local device_config="$CONFIG_DIR/devices/$DEVICE.config"
+    if [ -f "$device_config" ]; then
+        log "📁 应用设备专用配置: $device_config"
+        cat "$device_config" >> .config
+        log "✅ 已应用设备专用配置"
+    else
+        log "ℹ️ 设备专用配置文件不存在: $device_config"
+        log "💡 使用通用配置"
+    fi
+    
+    # 4. 添加额外包
+    if [ -n "$extra_packages" ]; then
+        log "📦 添加额外包: $extra_packages"
+        echo "$extra_packages" | tr ',' '\n' | while read pkg; do
+            if [ -n "$pkg" ]; then
+                echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+                log "✅ 添加包: $pkg"
+            fi
+        done
+    fi
+    
+    log "✅ 配置文件应用完成"
 }
 #【build_firmware_main.sh-13】
 
@@ -1059,224 +914,18 @@ apply_config() {
     log "配置文件大小: $(ls -lh .config | awk '{print $5}')"
     log "配置行数: $(wc -l < .config)"
     
-    # 显示详细配置状态
-    echo ""
-    echo "=== 详细配置状态 ==="
-    
-    # 1. 关键USB配置状态
-    echo "🔧 关键USB配置状态:"
-    local critical_usb_drivers=(
-        "kmod-usb-core" "kmod-usb2" "kmod-usb3" 
-        "kmod-usb-ehci" "kmod-usb-ohci" "kmod-usb-xhci-hcd"
-        "kmod-usb-storage" "kmod-usb-storage-uas" "kmod-usb-storage-extras"
-        "kmod-scsi-core" "kmod-scsi-generic"
-    )
-    
-    local missing_usb=0
-    for driver in "${critical_usb_drivers[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-            echo "  ✅ $driver"
-        else
-            echo "  ❌ $driver - 缺失！"
-            missing_usb=$((missing_usb + 1))
-        fi
-    done
-    
-    # 2. 平台专用驱动检查
-    echo ""
-    echo "🔧 平台专用USB驱动状态:"
-    if [ "$TARGET" = "ipq40xx" ]; then
-        echo "  高通IPQ40xx平台专用驱动:"
-        local qcom_drivers=("kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3-of-simple")
-        for driver in "${qcom_drivers[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-                echo "    ✅ $driver"
-            else
-                echo "    ❌ $driver - 缺失！"
-                missing_usb=$((missing_usb + 1))
-            fi
-        done
-    elif [ "$TARGET" = "ramips" ] && { [ "$SUBTARGET" = "mt76x8" ] || [ "$SUBTARGET" = "mt7621" ]; }; then
-        echo "  雷凌MT76xx平台专用驱动:"
-        local mtk_drivers=("kmod-usb-ohci-pci" "kmod-usb2-pci" "kmod-usb-xhci-mtk")
-        for driver in "${mtk_drivers[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-                echo "    ✅ $driver"
-            else
-                echo "    ❌ $driver - 缺失！"
-                missing_usb=$((missing_usb + 1))
-            fi
-        done
+    # 检查libustream冲突并修复
+    log "🔍 检查libustream冲突..."
+    if grep -q "CONFIG_PACKAGE_libustream-openssl" .config && grep -q "CONFIG_PACKAGE_libustream-wolfssl" .config; then
+        log "⚠️ 发现libustream-openssl和libustream-wolfssl冲突"
+        log "🔧 修复冲突: 禁用libustream-openssl"
+        sed -i 's/CONFIG_PACKAGE_libustream-openssl=y/# CONFIG_PACKAGE_libustream-openssl is not set/' .config
+        log "✅ 冲突已修复"
     fi
     
-    # 3. 文件系统支持检查
-    echo ""
-    echo "🔧 文件系统支持状态:"
-    local fs_drivers=("kmod-fs-ext4" "kmod-fs-vfat" "kmod-fs-exfat" "kmod-fs-ntfs3")
-    for driver in "${fs_drivers[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-            echo "  ✅ $driver"
-        else
-            echo "  ❌ $driver - 缺失！"
-        fi
-    done
-    
-    # 4. 功能性插件状态
-    echo ""
-    echo "🚀 功能性插件状态:"
-    
-    local functional_plugins=(
-        "luci-app-turboacc" "TurboACC 网络加速"
-        "luci-app-upnp" "UPnP 自动端口转发"
-        "samba4-server" "Samba 文件共享"
-        "luci-app-diskman" "磁盘管理"
-        "vlmcsd" "KMS 激活服务"
-        "smartdns" "SmartDNS 智能DNS"
-        "luci-app-accesscontrol" "家长控制"
-        "luci-app-wechatpush" "微信推送"
-        "sqm-scripts" "流量控制 (SQM)"
-        "vsftpd" "FTP 服务器"
-        "luci-app-arpbind" "ARP 绑定"
-        "luci-app-cpulimit" "CPU 限制"
-        "luci-app-hd-idle" "硬盘休眠"
-        "kmod-tcp-bbr" "TCP BBR拥塞控制"
-    )
-    
-    for i in $(seq 0 2 $((${#functional_plugins[@]} - 1))); do
-        local plugin="${functional_plugins[$i]}"
-        local desc="${functional_plugins[$((i + 1))]}"
-        
-        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
-            echo "  ✅ $desc ($plugin)"
-        elif grep -q "^# CONFIG_PACKAGE_${plugin} is not set" .config; then
-            echo "  ❌ $desc ($plugin) - 已禁用"
-        else
-            echo "  ⚪ $desc ($plugin) - 未配置"
-        fi
-    done
-    
-    # 5. 统计信息
-    echo ""
-    echo "📊 配置统计信息:"
-    local enabled_count=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
-    local disabled_count=$(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)
-    echo "  ✅ 已启用插件: $enabled_count 个"
-    echo "  ❌ 已禁用插件: $disabled_count 个"
-    
-    # 6. 显示具体被禁用的插件（最多20个）
-    if [ $disabled_count -gt 0 ]; then
-        echo ""
-        echo "📋 具体被禁用的插件:"
-        local count=0
-        grep "^# CONFIG_PACKAGE_.* is not set$" .config | while read line; do
-            if [ $count -lt 20 ]; then
-                local pkg_name=$(echo $line | sed 's/# CONFIG_PACKAGE_//;s/ is not set//')
-                echo "  ❌ $pkg_name"
-                count=$((count + 1))
-            else
-                local remaining=$((disabled_count - 20))
-                echo "  ... 还有 $remaining 个被禁用的插件"
-                break
-            fi
-        done
-    fi
-    
-    # 7. 修复缺失的关键USB驱动
-    if [ $missing_usb -gt 0 ]; then
-        echo ""
-        echo "🚨 修复缺失的关键USB驱动:"
-        
-        # 确保kmod-usb-xhci-hcd启用
-        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
-            echo "  修复: 启用 kmod-usb-xhci-hcd"
-            sed -i 's/^# CONFIG_PACKAGE_kmod-usb-xhci-hcd is not set$/CONFIG_PACKAGE_kmod-usb-xhci-hcd=y/' .config
-            if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
-                echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
-            fi
-            echo "  ✅ 已修复 kmod-usb-xhci-hcd"
-        fi
-        
-        # 确保kmod-usb-xhci-pci启用
-        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-pci=y" .config; then
-            echo "  修复: 启用 kmod-usb-xhci-pci"
-            echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
-            echo "  ✅ 已修复 kmod-usb-xhci-pci"
-        fi
-        
-        # 确保kmod-usb-xhci-plat-hcd启用
-        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" .config; then
-            echo "  修复: 启用 kmod-usb-xhci-plat-hcd"
-            echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config
-            echo "  ✅ 已修复 kmod-usb-xhci-plat-hcd"
-        fi
-        
-        # 确保kmod-usb-ohci-pci启用
-        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-ohci-pci=y" .config; then
-            echo "  修复: 启用 kmod-usb-ohci-pci"
-            echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
-            echo "  ✅ 已修复 kmod-usb-ohci-pci"
-        fi
-        
-        # 确保kmod-usb-dwc3-of-simple启用（如果是高通平台）
-        if [ "$TARGET" = "ipq40xx" ] && ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" .config; then
-            echo "  修复: 启用 kmod-usb-dwc3-of-simple"
-            echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
-            echo "  ✅ 已修复 kmod-usb-dwc3-of-simple"
-        fi
-        
-        # 确保kmod-usb-xhci-mtk启用（如果是雷凌平台）
-        if [ "$TARGET" = "ramips" ] && { [ "$SUBTARGET" = "mt76x8" ] || [ "$SUBTARGET" = "mt7621" ]; } && ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config; then
-            echo "  修复: 启用 kmod-usb-xhci-mtk"
-            echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
-            echo "  ✅ 已修复 kmod-usb-xhci-mtk"
-        fi
-    fi
-    
-    # 版本特定的配置修复
-    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-        log "🔧 23.05版本配置预处理"
-        sed -i 's/CONFIG_PACKAGE_ntfs-3g=y/# CONFIG_PACKAGE_ntfs-3g is not set/g' .config
-        sed -i 's/CONFIG_PACKAGE_ntfs-3g-utils=y/# CONFIG_PACKAGE_ntfs-3g-utils is not set/g' .config
-        sed -i 's/CONFIG_PACKAGE_ntfs3-mount=y/# CONFIG_PACKAGE_ntfs3-mount is not set/g' .config
-        log "✅ NTFS配置修复完成"
-    fi
-    
+    # 运行defconfig
     log "🔄 运行 make defconfig..."
     make defconfig || handle_error "应用配置失败"
-    
-    log "🚨 强制启用关键USB驱动（防止defconfig删除）"
-    # 确保 USB 3.0 关键驱动被启用
-    echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
-    
-    # 根据平台启用专用驱动
-    if [ "$TARGET" = "ipq40xx" ]; then
-        echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
-        echo "# CONFIG_PACKAGE_kmod-usb-xhci-mtk is not set" >> .config
-    elif [ "$TARGET" = "ramips" ] && { [ "$SUBTARGET" = "mt76x8" ] || [ "$SUBTARGET" = "mt7621" ]; }; then
-        echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
-        echo "# CONFIG_PACKAGE_kmod-usb-dwc3-qcom is not set" >> .config
-        echo "# CONFIG_PACKAGE_kmod-phy-qcom-dwc3 is not set" >> .config
-        echo "# CONFIG_PACKAGE_kmod-usb-dwc3-of-simple is not set" >> .config
-    fi
-    
-    # 其他关键USB驱动
-    echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
-    
-    # 运行defconfig后，再次检查并修复USB驱动
-    check_usb_drivers_integrity
-    
-    # 最终检查
-    echo ""
-    echo "=== 最终配置检查 ==="
-    local final_enabled=$(grep "^CONFIG_PACKAGE_.*=y$" .config | wc -l)
-    local final_disabled=$(grep "^# CONFIG_PACKAGE_.* is not set$" .config | wc -l)
-    echo "✅ 最终状态: 已启用 $final_enabled 个, 已禁用 $final_disabled 个"
     
     log "✅ 配置应用完成"
     log "最终配置文件: .config"
