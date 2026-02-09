@@ -67,19 +67,20 @@ load_env() {
 #【build_firmware_main.sh-03】
 
 #【build_firmware_main.sh-04】
-# 安装编译依赖包
+# 安装编译依赖包 - 修复版：移除了不存在的java-propose-classpoint包
 setup_environment() {
     log "=== 安装编译依赖包 ==="
     sudo apt-get update || handle_error "apt-get update失败"
     
-    # 基础编译工具
+    # 基础编译工具 - 修复：移除了不存在的java-propose-classpoint包
     local base_packages=(
         build-essential clang flex bison g++ gawk gcc-multilib g++-multilib
         gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip
-        zlib1g-dev file wget libelf-dev ecj fastjar java-propose-classpoint
+        zlib1g-dev file wget libelf-dev ecj fastjar
         libpython3-dev python3 python3-dev python3-pip python3-setuptools
         python3-yaml xsltproc zip subversion ninja-build automake autoconf
         libtool pkg-config help2man texinfo groff texlive texinfo cmake
+        ccache time
     )
     
     # 网络工具
