@@ -966,7 +966,7 @@ apply_config() {
     
     log "📋 配置详情:"
     log "配置文件大小: $(ls -lh .config | awk '{print $5}')"
-    log "配置行数: $(wc -l < .config)")
+    log "配置行数: $(wc -l < .config)"
     
     # 检查libustream冲突并修复
     log "🔍 检查libustream冲突..."
@@ -1706,7 +1706,7 @@ verify_compiler_files() {
         log "✅ 使用环境变量中的编译器目录: $COMPILER_DIR"
         local compiler_dir="$COMPILER_DIR"
     else
-        log "🔍 编译器目录未设置或不存在"
+        log "🔍 编译器目录未设置或目录不存在"
         log "💡 将使用OpenWrt自动构建的编译器"
         return 0
     fi
@@ -1853,7 +1853,7 @@ verify_compiler_files() {
         else
             log "  ❌ 未找到任何GCC相关可执行文件"
         fi
-    fi
+    done
     
     if [ -n "$gpp_executable" ]; then
         log "  ✅ 找到可执行G++: $(basename "$gpp_executable")"
