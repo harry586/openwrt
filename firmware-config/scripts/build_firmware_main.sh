@@ -772,9 +772,9 @@ generate_config() {
     log "✅ 配置生成完成"
 }
 
-# 从配置文件应用配置 - 修复版：只使用usb-generic.config+normal.config或专用配置
+# 从配置文件应用配置 - 修复版：根据新要求
 apply_configuration_from_files() {
-    log "=== 从配置文件应用配置（简化版）==="
+    log "=== 从配置文件应用配置（新逻辑）==="
     
     # 检查配置文件目录
     if [ ! -d "$CONFIG_DIR" ]; then
@@ -793,29 +793,48 @@ apply_configuration_from_files() {
         handle_error "缺少USB通用配置文件"
     fi
     
-    # 2. 【必需】应用模式配置
-    local mode_config="$CONFIG_DIR/$CONFIG_MODE.config"
-    if [ -f "$mode_config" ]; then
-        log "📁 应用模式配置: $mode_config"
-        cat "$mode_config" >> .config
-        log "✅ 已应用模式配置"
-    else
-        log "❌ 模式配置文件不存在: $mode_config"
-        handle_error "缺少模式配置文件"
-    fi
-    
-    # 3. 【可选】检查是否有设备专用配置
+    # 2. 【检查是否有设备专用配置】
     local device_config="$CONFIG_DIR/devices/$DEVICE.config"
+    
     if [ -f "$device_config" ]; then
-        log "📁 应用设备专用配置: $device_config"
+        # 情况1：有设备专用配置
+        log "📁 找到设备专用配置: $device_config"
+        log "💡 使用配置：usb-generic.config + 专用配置"
         cat "$device_config" >> .config
         log "✅ 已应用设备专用配置"
     else
+        # 情况2：无设备专用配置，使用模式配置
         log "ℹ️ 设备专用配置文件不存在: $device_config"
-        log "💡 将使用USB通用配置+模式配置的组合"
+        
+        # 2a. 【必需】应用base配置（无论什么模式都需要）
+        local base_config="$CONFIG_DIR/base.config"
+        if [ -f "$base_config" ]; then
+            log "📁 应用基础配置: $base_config"
+            cat "$base_config" >> .config
+            log "✅ 已应用基础配置"
+        else
+            log "❌ 基础配置文件不存在: $base_config"
+            handle_error "缺少基础配置文件"
+        fi
+        
+        # 2b. 【条件】如果是正常模式，再应用normal配置
+        if [ "$CONFIG_MODE" = "normal" ]; then
+            local normal_config="$CONFIG_DIR/normal.config"
+            if [ -f "$normal_config" ]; then
+                log "📁 应用正常模式配置: $normal_config"
+                cat "$normal_config" >> .config
+                log "✅ 已应用正常模式配置"
+                log "💡 使用配置：usb-generic.config + base.config + normal.config"
+            else
+                log "❌ 正常模式配置文件不存在: $normal_config"
+                handle_error "缺少正常模式配置文件"
+            fi
+        else
+            log "💡 使用配置：usb-generic.config + base.config"
+        fi
     fi
     
-    # 4. 添加额外包
+    # 3. 添加额外包
     if [ -n "$extra_packages" ]; then
         log "📦 添加额外包: $extra_packages"
         echo "$extra_packages" | tr ',' '\n' | while read pkg; do
