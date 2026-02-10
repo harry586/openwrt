@@ -2947,7 +2947,13 @@ verify_sdk_directory() {
 
 # 主函数
 main() {
-    case $1 in
+    local command="$1"
+    local arg1="$2"
+    local arg2="$3"
+    local arg3="$4"
+    local arg4="$5"
+    
+    case "$command" in
         "setup_environment")
             setup_environment
             ;;
@@ -2955,10 +2961,10 @@ main() {
             create_build_dir
             ;;
         "initialize_build_env")
-            initialize_build_env "$2" "$3" "$4"
+            initialize_build_env "$arg1" "$arg2" "$arg3"
             ;;
         "initialize_compiler_env")
-            initialize_compiler_env "$2"
+            initialize_compiler_env "$arg1"
             ;;
         "add_turboacc_support")
             add_turboacc_support
@@ -2973,7 +2979,7 @@ main() {
             pre_build_space_check
             ;;
         "generate_config")
-            generate_config "$2"
+            generate_config "$arg1"
             ;;
         "verify_usb_config")
             verify_usb_config
@@ -2997,7 +3003,7 @@ main() {
             pre_build_error_check
             ;;
         "build_firmware")
-            build_firmware "$2"
+            build_firmware "$arg1"
             ;;
         "post_build_space_check")
             post_build_space_check
@@ -3018,16 +3024,16 @@ main() {
             check_compiler_invocation
             ;;
         "search_compiler_files")
-            search_compiler_files "$2" "$3"
+            search_compiler_files "$arg1" "$arg2"
             ;;
         "universal_compiler_search")
-            universal_compiler_search "$2" "$3"
+            universal_compiler_search "$arg1" "$arg2"
             ;;
         "search_compiler_files_simple")
-            search_compiler_files_simple "$2" "$3"
+            search_compiler_files_simple "$arg1" "$arg2"
             ;;
         "intelligent_platform_aware_compiler_search")
-            intelligent_platform_aware_compiler_search "$2" "$3" "$4"
+            intelligent_platform_aware_compiler_search "$arg1" "$arg2" "$arg3"
             ;;
         "verify_sdk_directory")
             verify_sdk_directory
@@ -3036,7 +3042,7 @@ main() {
             verify_config_files
             ;;
         *)
-            log "❌ 未知命令: $1"
+            log "❌ 未知命令: $command"
             echo "可用命令:"
             echo "  setup_environment, create_build_dir, initialize_build_env"
             echo "  initialize_compiler_env - 初始化编译器环境（下载OpenWrt官方SDK）"
@@ -3053,6 +3059,14 @@ main() {
             ;;
     esac
 }
+
+# 检查是否有参数
+if [ $# -eq 0 ]; then
+    echo "错误: 需要提供命令参数"
+    echo "用法: $0 <命令> [参数1] [参数2] [参数3] [参数4]"
+    echo "例如: $0 initialize_build_env xiaomi_mi-router-4a-100m 23.05 normal"
+    exit 1
+fi
 
 main "$@"
 #【build_firmware_main.sh-30】
