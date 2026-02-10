@@ -2843,15 +2843,41 @@ verify_config_files() {
         fi
     done
     
-    # 检查TurboACC配置冲突
+    # 检查TurboACC配置冲突 - 修复版
     log "🔍 检查TurboACC配置冲突..."
     local turboacc_found=0
-    for config_file in "$CONFIG_DIR"/*.config "$CONFIG_DIR"/devices/*.config 2>/dev/null; do
-        if [ -f "$config_file" ] && grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" "$config_file"; then
-            log "⚠️ 发现TurboACC静态配置: $(basename "$config_file")"
-            turboacc_found=1
-        fi
-    done
+    
+    # 方法1：使用find命令更安全地查找配置文件
+    local config_files=$(find "$CONFIG_DIR" -type f -name "*.config" 2>/dev/null)
+    
+    if [ -n "$config_files" ]; then
+        while IFS= read -r config_file; do
+            if [ -f "$config_file" ] && grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" "$config_file" 2>/dev/null; then
+                log "⚠️ 发现TurboACC静态配置: $(basename "$config_file")"
+                turboacc_found=1
+            fi
+        done <<< "$config_files"
+    fi
+    
+    # 方法2：或者使用更安全的for循环（分别处理每个模式）
+    # turboacc_found=0
+    # for pattern in "$CONFIG_DIR"/*.config; do
+    #     [ -e "$pattern" ] || continue
+    #     if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" "$pattern" 2>/dev/null; then
+    #         log "⚠️ 发现TurboACC静态配置: $(basename "$pattern")"
+    #         turboacc_found=1
+    #     fi
+    # done
+    
+    # if [ -d "$CONFIG_DIR/devices" ]; then
+    #     for pattern in "$CONFIG_DIR"/devices/*.config; do
+    #         [ -e "$pattern" ] || continue
+    #         if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" "$pattern" 2>/dev/null; then
+    #             log "⚠️ 发现TurboACC静态配置: $(basename "$pattern")"
+    #             turboacc_found=1
+    #         fi
+    #     done
+    # fi
     
     if [ $turboacc_found -eq 1 ]; then
         log "💡 建议：TurboACC应通过feeds动态添加，不要静态配置"
