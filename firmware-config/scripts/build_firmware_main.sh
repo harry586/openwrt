@@ -2284,8 +2284,8 @@ check_compiler_invocation() {
 }
 #【build_firmware_main.sh-22】
 
-#【系统修复-07：简化稳定版前置错误检查函数】
-# 前置错误检查（简化稳定版）
+#【系统修复-07：简化稳定版前置错误检查函数 - 重命名为pre_build_error_check】
+# 前置错误检查（简化稳定版）- 修改函数名
 pre_build_error_check() {
     load_env
     cd $BUILD_DIR || { log "❌ 进入构建目录失败"; exit 1; }
