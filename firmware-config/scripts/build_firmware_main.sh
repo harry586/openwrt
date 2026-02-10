@@ -2284,27 +2284,40 @@ check_compiler_invocation() {
 }
 #【build_firmware_main.sh-22】
 
-#【系统修复-07：简化稳定版前置错误检查函数 - 重命名为pre_build_error_check】
-# 前置错误检查（简化稳定版）- 修改函数名
+#【系统修复-08：完全修复pre_build_error_check函数 - 显示所有检查项】
 pre_build_error_check() {
     load_env
     cd $BUILD_DIR || { log "❌ 进入构建目录失败"; exit 1; }
     
-    log "=== 🚨 前置错误检查（简化稳定版）==="
+    log "=== 🚨 前置错误检查（完全修复版）==="
     
     local error_count=0
     local warning_count=0
     
-    # 1. 检查配置文件
+    # 1. 检查配置文件（显示详细状态）
     log "1. 检查配置文件..."
     if [ ! -f ".config" ]; then
         log "❌ 错误: .config 文件不存在"
         error_count=$((error_count + 1))
     else
         log "✅ .config 文件存在"
-        # 简单检查文件大小，避免复杂管道
+        # 获取文件大小
+        local config_size=$(ls -lh .config 2>/dev/null | awk '{print $5}' 2>/dev/null || echo "未知")
+        log "  📊 文件大小: $config_size"
+        
+        # 获取行数
+        local line_count=0
         if [ -s ".config" ]; then
-            log "✅ 配置文件非空"
+            line_count=$(wc -l < .config 2>/dev/null | awk '{print $1}' 2>/dev/null || echo "0")
+            log "  📝 文件行数: $line_count"
+            
+            if [ "$line_count" -eq 0 ]; then
+                log "❌ 错误: .config 文件为空"
+                error_count=$((error_count + 1))
+            elif [ "$line_count" -lt 10 ]; then
+                log "⚠️ 警告: .config 文件行数过少 ($line_count)"
+                warning_count=$((warning_count + 1))
+            fi
         else
             log "❌ 错误: .config 文件为空"
             error_count=$((error_count + 1))
@@ -2318,52 +2331,204 @@ pre_build_error_check() {
         error_count=$((error_count + 1))
     else
         log "✅ feeds 目录存在"
+        # 检查feeds是否已安装
+        local feeds_installed=$(ls -d feeds/* 2>/dev/null | wc -l 2>/dev/null || echo "0")
+        if [ "$feeds_installed" -gt 0 ]; then
+            log "  ✅ feeds 已安装: $feeds_installed 个目录"
+        else
+            log "⚠️ 警告: feeds 目录为空，可能未安装"
+            warning_count=$((warning_count + 1))
+        fi
     fi
     
     # 3. 检查关键文件
     log "3. 检查关键文件..."
-    local critical_files=("Makefile" "feeds.conf.default")
+    local critical_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
+    local missing_critical=0
+    
     for file in "${critical_files[@]}"; do
         if [ -f "$file" ]; then
             log "✅ 关键文件存在: $file"
         else
             log "❌ 错误: 关键文件不存在: $file"
-            error_count=$((error_count + 1))
+            missing_critical=$((missing_critical + 1))
         fi
     done
     
-    # 4. 检查磁盘空间（简化）
+    if [ $missing_critical -gt 0 ]; then
+        log "❌ 发现 $missing_critical 个关键文件缺失"
+        error_count=$((error_count + missing_critical))
+    fi
+    
+    # 4. 检查磁盘空间
     log "4. 检查磁盘空间..."
-    if df -h /mnt >/dev/null 2>&1; then
-        log "✅ 磁盘空间可访问"
+    local disk_check_passed=0
+    if command -v df >/dev/null 2>&1; then
+        # 检查/mnt可用空间
+        if df -h /mnt >/dev/null 2>&1; then
+            log "✅ /mnt 磁盘空间可访问"
+            
+            # 获取可用空间
+            local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1 2>/dev/null || echo "0")
+            local available_gb=$((available_space / 1024 / 1024))
+            
+            if [ "$available_gb" -eq 0 ] 2>/dev/null || [ "$available_gb" -lt 0 ] 2>/dev/null; then
+                log "⚠️ 警告: 无法获取/mnt可用空间"
+                warning_count=$((warning_count + 1))
+            elif [ "$available_gb" -lt 5 ]; then
+                log "⚠️ 警告: /mnt 可用空间过低: ${available_gb}G"
+                warning_count=$((warning_count + 1))
+            else
+                log "✅ /mnt 可用空间: ${available_gb}G"
+            fi
+            
+            disk_check_passed=1
+        else
+            log "⚠️ 警告: 无法检查/mnt磁盘空间"
+            warning_count=$((warning_count + 1))
+        fi
+        
+        # 检查根目录可用空间
+        if df -h / >/dev/null 2>&1; then
+            log "✅ / 磁盘空间可访问"
+            
+            # 获取根目录可用空间
+            local root_available_space=$(df / --output=avail 2>/dev/null | tail -1 2>/dev/null || echo "0")
+            local root_available_gb=$((root_available_space / 1024 / 1024))
+            
+            if [ "$root_available_gb" -eq 0 ] 2>/dev/null || [ "$root_available_gb" -lt 0 ] 2>/dev/null; then
+                log "⚠️ 警告: 无法获取根目录可用空间"
+                warning_count=$((warning_count + 1))
+            elif [ "$root_available_gb" -lt 2 ]; then
+                log "⚠️ 警告: 根目录可用空间过低: ${root_available_gb}G"
+                warning_count=$((warning_count + 1))
+            else
+                log "✅ 根目录可用空间: ${root_available_gb}G"
+            fi
+            
+            disk_check_passed=1
+        else
+            log "⚠️ 警告: 无法检查根目录磁盘空间"
+            warning_count=$((warning_count + 1))
+        fi
     else
-        log "⚠️ 警告: 无法检查磁盘空间"
+        log "⚠️ 警告: df 命令不可用，无法检查磁盘空间"
+        warning_count=$((warning_count + 1))
+    fi
+    
+    if [ $disk_check_passed -eq 0 ]; then
+        log "⚠️ 警告: 磁盘空间检查全部失败"
         warning_count=$((warning_count + 1))
     fi
     
     # 5. 检查SDK编译器
     log "5. 检查SDK编译器..."
-    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-        log "✅ SDK编译器目录存在: $COMPILER_DIR"
+    if [ -n "$COMPILER_DIR" ]; then
+        log "✅ COMPILER_DIR 已设置: $COMPILER_DIR"
+        if [ -d "$COMPILER_DIR" ]; then
+            log "✅ SDK编译器目录存在"
+            local compiler_dir_size=$(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 2>/dev/null || echo "未知")
+            log "  📊 目录大小: $compiler_dir_size"
+        else
+            log "⚠️ 警告: SDK编译器目录不存在"
+            warning_count=$((warning_count + 1))
+        fi
     else
-        log "ℹ️ SDK编译器目录未设置或不存在，将使用自动构建"
+        log "ℹ️ SDK编译器目录未设置，将使用自动构建的编译器"
     fi
+    
+    # 6. 检查内存
+    log "6. 检查内存..."
+    if command -v free >/dev/null 2>&1; then
+        local total_mem=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' 2>/dev/null || echo "0")
+        if [ "$total_mem" -eq 0 ] 2>/dev/null || [ "$total_mem" -lt 0 ] 2>/dev/null; then
+            log "⚠️ 警告: 无法获取内存信息"
+            warning_count=$((warning_count + 1))
+        elif [ "$total_mem" -lt 2048 ]; then
+            log "⚠️ 警告: 内存较低: ${total_mem}MB"
+            warning_count=$((warning_count + 1))
+        else
+            log "✅ 内存: ${total_mem}MB"
+        fi
+    else
+        log "⚠️ 警告: free 命令不可用，无法检查内存"
+        warning_count=$((warning_count + 1))
+    fi
+    
+    # 7. 检查CPU核心数
+    log "7. 检查CPU核心数..."
+    if command -v nproc >/dev/null 2>&1; then
+        local cpu_cores=$(nproc 2>/dev/null || echo "0")
+        if [ "$cpu_cores" -eq 0 ] 2>/dev/null || [ "$cpu_cores" -lt 0 ] 2>/dev/null; then
+            log "⚠️ 警告: 无法获取CPU核心数"
+            warning_count=$((warning_count + 1))
+        elif [ "$cpu_cores" -lt 2 ]; then
+            log "⚠️ 警告: CPU核心数较少: $cpu_cores"
+            warning_count=$((warning_count + 1))
+        else
+            log "✅ CPU核心数: $cpu_cores"
+        fi
+    else
+        log "⚠️ 警告: nproc 命令不可用，无法检查CPU核心数"
+        warning_count=$((warning_count + 1))
+    fi
+    
+    # 8. 检查构建目录权限
+    log "8. 检查构建目录权限..."
+    if [ -w "$BUILD_DIR" ]; then
+        log "✅ 构建目录可写"
+    else
+        log "❌ 错误: 构建目录不可写"
+        error_count=$((error_count + 1))
+    fi
+    
+    # 9. 检查环境变量
+    log "9. 检查环境变量..."
+    local required_vars=("SELECTED_BRANCH" "TARGET" "SUBTARGET" "DEVICE")
+    local missing_vars=0
+    
+    for var in "${required_vars[@]}"; do
+        if [ -n "${!var}" ]; then
+            log "✅ 环境变量 $var: ${!var}"
+        else
+            log "❌ 错误: 环境变量 $var 未设置"
+            missing_vars=$((missing_vars + 1))
+        fi
+    done
+    
+    if [ $missing_vars -gt 0 ]; then
+        log "❌ 发现 $missing_vars 个环境变量未设置"
+        error_count=$((error_count + missing_vars))
+    fi
+    
+    # 10. 检查目录内容
+    log "10. 检查目录内容..."
+    log "  当前目录: $(pwd)"
+    log "  目录内容:"
+    ls -la 2>/dev/null | head -5 || log "    无法列出目录内容"
     
     # 总结
     log ""
-    log "=== 检查总结 ==="
+    log "=== 🚨 检查总结 ==="
+    log "总共检查项: 10项"
     log "错误数量: $error_count 个"
     log "警告数量: $warning_count 个"
     
     if [ $error_count -eq 0 ]; then
-        log "✅ 前置检查通过，可以开始编译"
-        return 0
+        if [ $warning_count -eq 0 ]; then
+            log "✅ 前置检查全部通过，可以开始编译"
+            return 0
+        else
+            log "✅ 前置检查通过（有 $warning_count 个警告，但无致命错误）"
+            return 0
+        fi
     else
         log "❌ 前置检查发现 $error_count 个错误，必须修复"
+        log "💡 请检查以上错误信息，修复后再重新运行"
         return 1
     fi
 }
-#【系统修复-07结束】
+#【系统修复-08结束】
 
 #【build_firmware_main.sh-24】
 # 编译固件
