@@ -723,7 +723,7 @@ pre_build_space_check() {
 }
 #【build_firmware_main.sh-12】
 
-#【build_firmware_main.sh-13】
+#【系统修复-06：更新generate_config函数】
 # 智能配置生成系统 - 修复版：使用配置文件
 generate_config() {
     local extra_packages=$1
@@ -772,7 +772,7 @@ generate_config() {
     log "✅ 配置生成完成"
 }
 
-# 从配置文件应用配置 - 修复版：根据新要求
+# 从配置文件应用配置 - 修复版：根据新配置文件结构调整
 apply_configuration_from_files() {
     log "=== 从配置文件应用配置（新逻辑）==="
     
@@ -782,12 +782,19 @@ apply_configuration_from_files() {
         handle_error "配置文件目录缺失"
     fi
     
+    log "🔍 配置文件结构检查："
+    log "  基础配置目录: $CONFIG_DIR"
+    log "  设备名称: $DEVICE"
+    log "  目标平台: $TARGET"
+    log "  配置模式: $CONFIG_MODE"
+    log "  OpenWrt版本: $SELECTED_BRANCH"
+    
     # 1. 【必需】应用USB通用配置
     local usb_config="$CONFIG_DIR/usb-generic.config"
     if [ -f "$usb_config" ]; then
         log "📁 应用USB通用配置: $usb_config"
         cat "$usb_config" >> .config
-        log "✅ 已应用USB通用配置"
+        log "✅ USB通用配置应用完成 (行数: $(wc -l < "$usb_config"))"
     else
         log "❌ USB通用配置文件不存在: $usb_config"
         handle_error "缺少USB通用配置文件"
@@ -795,46 +802,69 @@ apply_configuration_from_files() {
     
     # 2. 【检查是否有设备专用配置】
     local device_config="$CONFIG_DIR/devices/$DEVICE.config"
+    local platform_config="$CONFIG_DIR/devices/$TARGET.config"
     
     if [ -f "$device_config" ]; then
         # 情况1：有设备专用配置
         log "📁 找到设备专用配置: $device_config"
-        log "💡 使用配置：usb-generic.config + 专用配置"
         cat "$device_config" >> .config
         log "✅ 已应用设备专用配置"
+        log "💡 使用配置：usb-generic.config + 设备专用配置"
+    elif [ -f "$platform_config" ]; then
+        # 情况2：有平台专用配置
+        log "📁 找到平台专用配置: $platform_config"
+        cat "$platform_config" >> .config
+        log "✅ 已应用平台专用配置"
+        log "💡 使用配置：usb-generic.config + 平台专用配置"
     else
-        # 情况2：无设备专用配置，使用模式配置
-        log "ℹ️ 设备专用配置文件不存在: $device_config"
-        
-        # 2a. 【必需】应用base配置（无论什么模式都需要）
-        local base_config="$CONFIG_DIR/base.config"
-        if [ -f "$base_config" ]; then
-            log "📁 应用基础配置: $base_config"
-            cat "$base_config" >> .config
-            log "✅ 已应用基础配置"
-        else
-            log "❌ 基础配置文件不存在: $base_config"
-            handle_error "缺少基础配置文件"
-        fi
-        
-        # 2b. 【条件】如果是正常模式，再应用normal配置
-        if [ "$CONFIG_MODE" = "normal" ]; then
-            local normal_config="$CONFIG_DIR/normal.config"
-            if [ -f "$normal_config" ]; then
-                log "📁 应用正常模式配置: $normal_config"
-                cat "$normal_config" >> .config
-                log "✅ 已应用正常模式配置"
-                log "💡 使用配置：usb-generic.config + base.config + normal.config"
-            else
-                log "❌ 正常模式配置文件不存在: $normal_config"
-                handle_error "缺少正常模式配置文件"
-            fi
-        else
-            log "💡 使用配置：usb-generic.config + base.config"
-        fi
+        # 情况3：无专用配置
+        log "ℹ️ 设备和平台专用配置文件都不存在"
+        log "💡 仅使用USB通用配置"
     fi
     
-    # 3. 添加额外包
+    # 3. 【必需】应用base配置（无论什么模式都需要）
+    local base_config="$CONFIG_DIR/base.config"
+    if [ -f "$base_config" ]; then
+        log "📁 应用基础配置: $base_config"
+        cat "$base_config" >> .config
+        log "✅ 已应用基础配置"
+    else
+        log "❌ 基础配置文件不存在: $base_config"
+        handle_error "缺少基础配置文件"
+    fi
+    
+    # 4. 【条件】如果是正常模式，再应用normal配置
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        local normal_config="$CONFIG_DIR/normal.config"
+        if [ -f "$normal_config" ]; then
+            log "📁 应用正常模式配置: $normal_config"
+            
+            # 检查TurboACC配置冲突
+            if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" "$normal_config"; then
+                log "⚠️ 检测到TurboACC静态配置，正在处理..."
+                # 创建临时文件，移除TurboACC配置
+                local temp_file=$(mktemp)
+                grep -v "CONFIG_PACKAGE_luci-app-turboacc" "$normal_config" | \
+                grep -v "CONFIG_PACKAGE_kmod-shortcut-fe" | \
+                grep -v "CONFIG_PACKAGE_kmod-fast-classifier" > "$temp_file"
+                cat "$temp_file" >> .config
+                rm -f "$temp_file"
+                log "✅ TurboACC配置已移除（将通过feeds动态添加）"
+            else
+                cat "$normal_config" >> .config
+            fi
+            
+            log "✅ 已应用正常模式配置"
+            log "💡 使用配置：usb-generic.config + base.config + normal.config"
+        else
+            log "❌ 正常模式配置文件不存在: $normal_config"
+            handle_error "缺少正常模式配置文件"
+        fi
+    else
+        log "💡 使用配置：usb-generic.config + base.config"
+    fi
+    
+    # 5. 添加额外包
     if [ -n "$extra_packages" ]; then
         log "📦 添加额外包: $extra_packages"
         echo "$extra_packages" | tr ',' '\n' | while read pkg; do
@@ -847,10 +877,10 @@ apply_configuration_from_files() {
     
     log "✅ 配置文件应用完成"
 }
-#【build_firmware_main.sh-13】
+#【系统修复-06结束】
 
 #【build_firmware_main.sh-14】
-# 验证USB配置
+# 验证USB配置 - 更新检查列表
 verify_usb_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -860,41 +890,57 @@ verify_usb_config() {
     echo "1. 🟢 USB核心模块:"
     grep "CONFIG_PACKAGE_kmod-usb-core" .config | grep "=y" && echo "✅ USB核心" || echo "❌ 缺少USB核心"
     
-    echo "2. 🟢 USB控制器:"
-    grep -E "CONFIG_PACKAGE_kmod-usb2|CONFIG_PACKAGE_kmod-usb3|CONFIG_PACKAGE_kmod-usb-ehci|CONFIG_PACKAGE_kmod-usb-ohci|CONFIG_PACKAGE_kmod-usb-xhci-hcd" .config | grep "=y" || echo "❌ 缺少USB控制器"
+    echo "2. 🟢 USB 2.0控制器:"
+    grep -E "CONFIG_PACKAGE_kmod-usb2=y" .config && echo "✅ USB 2.0" || echo "❌ 缺少USB 2.0"
+    grep -E "CONFIG_PACKAGE_kmod-usb-ehci=y" .config && echo "✅ USB EHCI" || echo "❌ 缺少USB EHCI"
+    grep -E "CONFIG_PACKAGE_kmod-usb-ohci=y" .config && echo "✅ USB OHCI" || echo "❌ 缺少USB OHCI"
     
     echo "3. 🚨 USB 3.0关键驱动:"
-    echo "  - kmod-usb-xhci-hcd:" $(grep "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
     echo "  - kmod-usb3:" $(grep "CONFIG_PACKAGE_kmod-usb3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
-    echo "  - kmod-usb-dwc3:" $(grep "CONFIG_PACKAGE_kmod-usb-dwc3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    echo "  - kmod-usb-xhci-hcd:" $(grep "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    echo "  - kmod-usb-xhci-pci:" $(grep "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
     
-    echo "4. 🚨 平台专用USB控制器:"
+    echo "4. 🚨 USB DWC3 核心驱动:"
+    echo "  - kmod-usb-dwc3:" $(grep "CONFIG_PACKAGE_kmod-usb-dwc3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    echo "  - kmod-usb-dwc3-of-simple:" $(grep "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    
+    echo "5. 🚨 平台专用USB控制器:"
     if [ "$TARGET" = "ipq40xx" ]; then
         echo "  🔧 检测到高通IPQ40xx平台，检查专用驱动:"
         echo "  - kmod-usb-dwc3-qcom:" $(grep "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
         echo "  - kmod-phy-qcom-dwc3:" $(grep "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+        echo "  - kmod-usb-phy-msm:" $(grep "CONFIG_PACKAGE_kmod-usb-phy-msm=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
     elif [ "$TARGET" = "ramips" ]; then
         echo "  🔧 检测到雷凌平台，检查专用驱动:"
-        echo "  - kmod-usb-ohci-pci:" $(grep "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
-        echo "  - kmod-usb2-pci:" $(grep "CONFIG_PACKAGE_kmod-usb2-pci=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+        echo "  - kmod-usb-xhci-mtk:" $(grep "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    elif [ "$TARGET" = "ath79" ]; then
+        echo "  🔧 检测到高通ATH79平台，检查专用驱动:"
+        echo "  - kmod-usb2-ath79:" $(grep "CONFIG_PACKAGE_kmod-usb2-ath79=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
     fi
     
-    echo "5. 🟢 USB存储:"
-    grep "CONFIG_PACKAGE_kmod-usb-storage" .config | grep "=y" && echo "✅ USB存储" || echo "❌ 缺少USB存储"
+    echo "6. 🟢 USB存储:"
+    grep "CONFIG_PACKAGE_kmod-usb-storage=y" .config && echo "✅ USB存储" || echo "❌ 缺少USB存储"
+    grep "CONFIG_PACKAGE_kmod-usb-storage-uas=y" .config && echo "✅ USB UAS" || echo "❌ 缺少USB UAS"
     
-    echo "6. 🟢 SCSI支持:"
-    grep -E "CONFIG_PACKAGE_kmod-scsi-core|CONFIG_PACKAGE_kmod-scsi-generic" .config | grep "=y" && echo "✅ SCSI支持" || echo "❌ 缺少SCSI支持"
+    echo "7. 🟢 SCSI支持:"
+    grep "CONFIG_PACKAGE_kmod-scsi-core=y" .config && echo "✅ SCSI核心" || echo "❌ 缺少SCSI核心"
+    grep "CONFIG_PACKAGE_kmod-scsi-generic=y" .config && echo "✅ SCSI通用" || echo "❌ 缺少SCSI通用"
     
-    echo "7. 🟢 文件系统支持:"
-    echo "  - NTFS3:" $(grep "CONFIG_PACKAGE_kmod-fs-ntfs3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    echo "8. 🟢 文件系统支持:"
     echo "  - ext4:" $(grep "CONFIG_PACKAGE_kmod-fs-ext4=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
     echo "  - vfat:" $(grep "CONFIG_PACKAGE_kmod-fs-vfat=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    echo "  - exfat:" $(grep "CONFIG_PACKAGE_kmod-fs-exfat=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    echo "  - NTFS3:" $(grep "CONFIG_PACKAGE_kmod-fs-ntfs3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    
+    echo "9. 🟢 编码支持:"
+    grep "CONFIG_PACKAGE_kmod-nls-utf8=y" .config && echo "✅ UTF-8编码" || echo "❌ 缺少UTF-8编码"
+    grep "CONFIG_PACKAGE_kmod-nls-cp936=y" .config && echo "✅ 中文编码" || echo "❌ 缺少中文编码"
     
     log "=== 🚨 USB配置验证完成 ==="
     
     # 输出总结
     log "📊 USB配置状态总结:"
-    local usb_drivers=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-ehci" "kmod-usb-ohci" "kmod-usb-xhci-hcd" "kmod-usb-storage")
+    local usb_drivers=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-xhci-hcd" "kmod-usb-storage" "kmod-scsi-core")
     local missing_count=0
     local enabled_count=0
     
@@ -934,11 +980,17 @@ check_usb_drivers_integrity() {
         "kmod-usb-xhci-hcd"
         "kmod-usb-storage"
         "kmod-scsi-core"
+        "kmod-fs-ext4"
+        "kmod-fs-vfat"
     )
     
     # 根据平台添加专用驱动
     if [ "$TARGET" = "ipq40xx" ]; then
-        required_drivers+=("kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3")
+        required_drivers+=("kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3")
+    elif [ "$TARGET" = "ramips" ]; then
+        required_drivers+=("kmod-usb-xhci-mtk")
+    elif [ "$TARGET" = "ath79" ]; then
+        required_drivers+=("kmod-usb2-ath79")
     fi
     
     # 检查所有必需驱动
@@ -2164,6 +2216,7 @@ pre_build_error_check() {
     
     # 显示当前环境变量
     log "当前环境变量:"
+    log "  SELECTED_REPO_URL: $SELECTED_REPO_URL"
     log "  SELECTED_BRANCH: $SELECTED_BRANCH"
     log "  TARGET: $TARGET"
     log "  SUBTARGET: $SUBTARGET"
@@ -2738,6 +2791,77 @@ intelligent_platform_aware_compiler_search() {
 }
 #【build_firmware_main.sh-28】
 
+#【系统修复-05：新增配置文件验证函数】
+# 位置：在合适的位置添加（比如第13部分之后）
+# 功能：验证配置文件完整性
+verify_config_files() {
+    log "=== 🔍 验证配置文件完整性 ==="
+    
+    log "检查配置文件目录: $CONFIG_DIR"
+    
+    if [ ! -d "$CONFIG_DIR" ]; then
+        log "❌ 配置文件目录不存在: $CONFIG_DIR"
+        return 1
+    fi
+    
+    # 必需文件列表
+    local required_files=("base.config" "usb-generic.config")
+    local optional_files=("normal.config")
+    local optional_dirs=("devices")
+    
+    # 检查必需文件
+    for file in "${required_files[@]}"; do
+        local file_path="$CONFIG_DIR/$file"
+        if [ -f "$file_path" ]; then
+            local line_count=$(wc -l < "$file_path")
+            log "✅ 必需文件存在: $file (行数: $line_count)"
+        else
+            log "❌ 必需文件缺失: $file"
+            return 1
+        fi
+    done
+    
+    # 检查可选文件
+    for file in "${optional_files[@]}"; do
+        local file_path="$CONFIG_DIR/$file"
+        if [ -f "$file_path" ]; then
+            local line_count=$(wc -l < "$file_path")
+            log "✅ 可选文件存在: $file (行数: $line_count)"
+        else
+            log "ℹ️ 可选文件不存在: $file (可跳过)"
+        fi
+    done
+    
+    # 检查可选目录
+    for dir in "${optional_dirs[@]}"; do
+        local dir_path="$CONFIG_DIR/$dir"
+        if [ -d "$dir_path" ]; then
+            local config_count=$(find "$dir_path" -type f -name "*.config" 2>/dev/null | wc -l)
+            log "✅ 目录存在: $dir (包含 $config_count 个配置文件)"
+        else
+            log "ℹ️ 可选目录不存在: $dir (可跳过)"
+        fi
+    done
+    
+    # 检查TurboACC配置冲突
+    log "🔍 检查TurboACC配置冲突..."
+    local turboacc_found=0
+    for config_file in "$CONFIG_DIR"/*.config "$CONFIG_DIR"/devices/*.config 2>/dev/null; do
+        if [ -f "$config_file" ] && grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" "$config_file"; then
+            log "⚠️ 发现TurboACC静态配置: $(basename "$config_file")"
+            turboacc_found=1
+        fi
+    done
+    
+    if [ $turboacc_found -eq 1 ]; then
+        log "💡 建议：TurboACC应通过feeds动态添加，不要静态配置"
+    fi
+    
+    log "✅ 配置文件验证完成"
+    return 0
+}
+#【系统修复-05结束】
+
 #【build_firmware_main.sh-29】
 # 保存源代码信息
 save_source_code_info() {
@@ -2908,6 +3032,9 @@ main() {
         "verify_sdk_directory")
             verify_sdk_directory
             ;;
+        "verify_config_files")
+            verify_config_files
+            ;;
         *)
             log "❌ 未知命令: $1"
             echo "可用命令:"
@@ -2921,6 +3048,7 @@ main() {
             echo "  check_compiler_invocation, search_compiler_files, universal_compiler_search"
             echo "  search_compiler_files_simple, intelligent_platform_aware_compiler_search"
             echo "  verify_sdk_directory - 详细验证SDK目录"
+            echo "  verify_config_files - 验证配置文件完整性"
             exit 1
             ;;
     esac
