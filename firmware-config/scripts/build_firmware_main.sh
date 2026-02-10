@@ -2284,13 +2284,13 @@ check_compiler_invocation() {
 }
 #【build_firmware_main.sh-22】
 
-#【build_firmware_main.sh-23】
+#【系统修复-07：增强前置错误检查函数】
 # 前置错误检查（修复版：增加详细错误信息和容错机制）
 pre_build_error_check() {
     load_env
     cd $BUILD_DIR || { log "❌ 进入构建目录失败"; exit 1; }
     
-    log "=== 🚨 前置错误检查（详细版）==="
+    log "=== 🚨 前置错误检查（详细增强版）==="
     
     local error_count=0
     local warning_count=0
@@ -2305,43 +2305,136 @@ pre_build_error_check() {
     log "  CONFIG_MODE: $CONFIG_MODE"
     log "  COMPILER_DIR: $COMPILER_DIR"
     
-    # 1. 检查配置文件 - 增加错误处理
-    log "1. 📋 检查配置文件..."
+    # 检查当前目录
+    log "当前工作目录: $(pwd)"
+    log "目录内容（前10个）:"
+    ls -la | head -10
+    
+    # 1. 检查配置文件 - 增加详细检查
+    log ""
+    log "1. 📋 详细检查配置文件..."
     if [ ! -f ".config" ]; then
         log "❌ 错误: .config 文件不存在"
         error_count=$((error_count + 1))
     else
         log "✅ .config 文件存在"
-        # 使用更安全的命令，避免失败
-        local config_size=$(ls -lh .config 2>/dev/null | awk '{print $5}' || echo "未知")
+        
+        # 使用更安全的命令检查文件大小
+        local config_size="未知"
+        if ls -lh .config 2>/dev/null | grep -q ".config"; then
+            config_size=$(ls -lh .config 2>/dev/null | awk '{print $5}' 2>/dev/null || echo "未知")
+        fi
         log "  文件大小: $config_size"
         
-        local line_count=$(wc -l < .config 2>/dev/null || echo "未知")
+        # 使用更安全的方式检查行数
+        local line_count="0"
+        if command -v wc >/dev/null 2>&1; then
+            line_count=$(wc -l < .config 2>/dev/null || echo "0")
+        fi
         log "  文件行数: $line_count"
         
         # 检查文件内容是否为空
-        if [ "$line_count" = "0" ] || [ "$line_count" = "未知" ]; then
-            log "⚠️ 警告: .config 文件可能为空或无法读取"
+        if [ "$line_count" = "0" ]; then
+            log "❌ 错误: .config 文件为空"
+            error_count=$((error_count + 1))
+        elif [ "$line_count" -lt 100 ]; then
+            log "⚠️ 警告: .config 文件行数较少 ($line_count)，可能不完整"
+            warning_count=$((warning_count + 1))
+        fi
+        
+        # 检查配置文件内容
+        log "  检查配置文件关键内容..."
+        
+        # 检查目标配置
+        local target_config=$(grep -c "CONFIG_TARGET_" .config 2>/dev/null || echo "0")
+        if [ "$target_config" -eq 0 ]; then
+            log "❌ 错误: .config 文件中没有目标配置 (CONFIG_TARGET_)"
+            error_count=$((error_count + 1))
+        else
+            log "  ✅ 目标配置数量: $target_config"
+            
+            # 显示目标配置
+            grep "^CONFIG_TARGET_" .config 2>/dev/null | head -5 | while read line; do
+                log "    $line"
+            done
+        fi
+        
+        # 检查包配置
+        local package_config=$(grep -c "CONFIG_PACKAGE_" .config 2>/dev/null || echo "0")
+        if [ "$package_config" -eq 0 ]; then
+            log "❌ 错误: .config 文件中没有包配置 (CONFIG_PACKAGE_)"
+            error_count=$((error_count + 1))
+        else
+            log "  ✅ 包配置数量: $package_config"
+        fi
+        
+        # 检查重复配置
+        log "  检查重复配置..."
+        local duplicate_count=$(sort .config 2>/dev/null | uniq -d 2>/dev/null | wc -l 2>/dev/null || echo "0")
+        if [ "$duplicate_count" -gt 0 ]; then
+            log "⚠️ 警告: 发现 $duplicate_count 个重复配置"
+            warning_count=$((warning_count + 1))
+        fi
+        
+        # 检查libustream冲突
+        log "  检查libustream冲突..."
+        local has_openssl=$(grep -c "^CONFIG_PACKAGE_libustream-openssl=y" .config 2>/dev/null || echo "0")
+        local has_wolfssl=$(grep -c "^CONFIG_PACKAGE_libustream-wolfssl=y" .config 2>/dev/null || echo "0")
+        
+        if [ $has_openssl -gt 0 ] && [ $has_wolfssl -gt 0 ]; then
+            log "❌ 错误: 发现libustream-openssl和libustream-wolfssl冲突"
+            error_count=$((error_count + 1))
+            
+            # 自动修复建议
+            log "💡 修复建议: 删除其中一个配置"
+            log "     sed -i 's/CONFIG_PACKAGE_libustream-openssl=y/# CONFIG_PACKAGE_libustream-openssl is not set/' .config"
+        fi
+        
+        # 检查kmod-usb-xhci-hcd重复配置
+        log "  检查kmod-usb-xhci-hcd重复配置..."
+        local xhci_duplicates=$(grep -c "^CONFIG_PACKAGE_kmod-usb-xhci-hcd" .config 2>/dev/null || echo "0")
+        if [ $xhci_duplicates -gt 1 ]; then
+            log "⚠️ 警告: 发现 kmod-usb-xhci-hcd 重复配置 ($xhci_duplicates 次)"
             warning_count=$((warning_count + 1))
         fi
     fi
     
-    # 2. 检查feeds - 增加错误处理
+    # 2. 检查feeds目录
+    log ""
     log "2. 📦 检查feeds目录..."
     if [ ! -d "feeds" ]; then
         log "❌ 错误: feeds 目录不存在"
         error_count=$((error_count + 1))
     else
         log "✅ feeds 目录存在"
-        # 使用ls命令，如果失败就跳过
-        if ls -la feeds/ 2>/dev/null | head -5 > /dev/null 2>&1; then
-            log "  feeds目录内容检查成功"
+        
+        # 检查feeds目录内容
+        local feed_count=$(find feeds -maxdepth 1 -type d 2>/dev/null | wc -l 2>/dev/null || echo "0")
+        log "  feeds目录数量: $((feed_count - 1))"  # 减去feeds本身
+        
+        # 检查关键feeds目录
+        local critical_feeds=("feeds/packages" "feeds/luci")
+        for feed in "${critical_feeds[@]}"; do
+            if [ -d "$feed" ]; then
+                log "  ✅ $feed 目录存在"
+            else
+                log "  ❌ 错误: $feed 目录不存在"
+                error_count=$((error_count + 1))
+            fi
+        done
+        
+        # 检查feeds安装状态
+        if [ -d "package/feeds" ]; then
+            local installed_feeds=$(find package/feeds -maxdepth 1 -type d 2>/dev/null | wc -l 2>/dev/null || echo "0")
+            log "  ✅ 已安装feeds: $((installed_feeds - 1)) 个"
         else
-            log "  ℹ️ 无法列出feeds目录内容"
+            log "⚠️ 警告: package/feeds 目录不存在，feeds可能未安装"
+            warning_count=$((warning_count + 1))
         fi
     fi
     
-    # 3. 检查依赖包 - 增加错误处理
+    # 3. 检查依赖包目录
+    log ""
     log "3. 📦 检查依赖包目录..."
     if [ ! -d "dl" ]; then
         log "⚠️ 警告: dl 目录不存在，可能需要下载依赖"
@@ -2349,83 +2442,61 @@ pre_build_error_check() {
     else
         local dl_count=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l 2>/dev/null || echo "0")
         log "✅ 依赖包数量: $dl_count 个"
+        
+        if [ "$dl_count" -eq 0 ]; then
+            log "⚠️ 警告: 没有下载的依赖包"
+            warning_count=$((warning_count + 1))
+        fi
     fi
     
     # 4. 检查编译器状态
+    log ""
     log "4. 🔧 检查编译器状态..."
     if [ -d "staging_dir" ]; then
-        local compiler_count=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" 2>/dev/null | wc -l 2>/dev/null || echo "0")
+        log "✅ staging_dir 目录存在"
+        
+        # 查找编译器目录
+        local compiler_dirs=$(find staging_dir -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null)
+        local compiler_count=$(echo "$compiler_dirs" | wc -l 2>/dev/null || echo "0")
+        
         if [ $compiler_count -eq 0 ]; then
-            log "ℹ️ 未找到已构建的编译器"
-            log "📌 已下载SDK编译器，无需自动构建"
+            log "ℹ️ 未找到已构建的编译器目录"
+            log "📌 将使用下载的SDK编译器"
         else
-            log "✅ 已检测到编译器: $compiler_count 个"
+            log "✅ 已检测到编译器目录: $compiler_count 个"
+            
+            # 检查第一个编译器目录
+            local first_compiler=$(echo "$compiler_dirs" | head -1)
+            if [ -n "$first_compiler" ]; then
+                log "  第一个编译器目录: $(basename "$first_compiler")"
+                
+                # 检查GCC编译器
+                local gcc_file=$(find "$first_compiler" -maxdepth 3 -type f -executable \
+                  -name "*gcc" \
+                  ! -name "*gcc-ar" \
+                  ! -name "*gcc-ranlib" \
+                  ! -name "*gcc-nm" \
+                  2>/dev/null | head -1)
+                
+                if [ -n "$gcc_file" ]; then
+                    log "  ✅ 找到GCC编译器: $(basename "$gcc_file")"
+                else
+                    log "  ⚠️ 未找到GCC编译器"
+                fi
+            fi
         fi
     else
         log "ℹ️ staging_dir目录不存在"
         log "📌 将使用下载的SDK编译器进行构建"
     fi
     
-    # 5. 检查关键文件
-    log "5. 🔑 检查关键文件..."
-    local critical_files=("Makefile" "rules.mk" "Config.in" "feeds.conf.default")
-    for file in "${critical_files[@]}"; do
-        if [ -f "$file" ]; then
-            log "  ✅ 关键文件存在: $file"
-        else
-            log "  ❌ 错误: 关键文件不存在: $file"
-            log "      当前路径: $(pwd)"
-            log "      文件查找: $file"
-            error_count=$((error_count + 1))
-        fi
-    done
-    
-    # 6. 检查磁盘空间 - 增加错误处理
-    log "6. 💾 检查磁盘空间..."
-    local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1 | tr -d ' ' 2>/dev/null || echo "0")
-    if [ -n "$available_space" ] && [[ "$available_space" =~ ^[0-9]+$ ]]; then
-        local available_gb=$((available_space / 1024 / 1024))
-        log "磁盘可用空间: ${available_gb}G"
-        
-        if [ $available_gb -lt 10 ]; then
-            log "❌ 错误: 磁盘空间不足 (需要至少10G，当前${available_gb}G)"
-            error_count=$((error_count + 1))
-        elif [ $available_gb -lt 20 ]; then
-            log "⚠️ 警告: 磁盘空间较低 (建议至少20G，当前${available_gb}G)"
-            warning_count=$((warning_count + 1))
-        else
-            log "✅ 编译前空间充足"
-        fi
-    else
-        log "⚠️ 警告: 无法获取磁盘空间信息"
-        warning_count=$((warning_count + 1))
-    fi
-    
-    # 7. 检查内存 - 增加错误处理
-    log "7. 🧠 检查内存..."
-    if command -v free >/dev/null 2>&1; then
-        local total_mem=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' 2>/dev/null || echo "0")
-        if [ -n "$total_mem" ] && [[ "$total_mem" =~ ^[0-9]+$ ]]; then
-            log "系统内存: ${total_mem}MB"
-            
-            if [ $total_mem -lt 1024 ]; then
-                log "⚠️ 警告: 内存较低 (建议至少1GB)"
-                warning_count=$((warning_count + 1))
-            else
-                log "✅ 内存充足"
-            fi
-        else
-            log "⚠️ 警告: 无法获取内存信息"
-            warning_count=$((warning_count + 1))
-        fi
-    else
-        log "ℹ️ 无法使用free命令检查内存"
-    fi
-    
-    # 8. 检查预构建编译器文件 - 增加错误处理
-    log "8. 🔧 检查预构建编译器文件..."
+    # 5. 检查SDK编译器
+    log ""
+    log "5. 📦 检查SDK编译器..."
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-        log "✅ 预构建编译器目录存在: $COMPILER_DIR"
+        log "✅ SDK编译器目录存在: $COMPILER_DIR"
+        
+        # 检查目录大小
         local dir_size=$(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 2>/dev/null || echo '未知')
         log "📊 目录大小: $dir_size"
         
@@ -2441,58 +2512,195 @@ pre_build_error_check() {
         
         if [ $gcc_files -gt 0 ]; then
             log "✅ 找到 $gcc_files 个GCC编译器文件"
+            
+            # 检查第一个GCC文件
+            local first_gcc=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable \
+              -name "*gcc" \
+              ! -name "*gcc-ar" \
+              ! -name "*gcc-ranlib" \
+              ! -name "*gcc-nm" \
+              ! -path "*dummy-tools*" \
+              ! -path "*scripts*" \
+              2>/dev/null | head -1)
+            
+            if [ -n "$first_gcc" ]; then
+                log "  第一个GCC: $(basename "$first_gcc")"
+                local gcc_version=$("$first_gcc" --version 2>&1 | head -1 2>/dev/null || echo "未知版本")
+                log "  版本: $gcc_version"
+            fi
         else
-            log "⚠️ 警告: 预构建编译器目录中未找到真正的GCC编译器"
+            log "⚠️ 警告: SDK目录中未找到真正的GCC编译器"
             warning_count=$((warning_count + 1))
         fi
     else
-        log "ℹ️ 未设置预构建编译器目录或目录不存在"
-        log "💡 将使用OpenWrt自动构建的编译器"
+        log "ℹ️ 未设置SDK编译器目录或目录不存在"
+        if [ -n "$COMPILER_DIR" ]; then
+            log "  COMPILER_DIR设置为: $COMPILER_DIR"
+            log "  ❌ 目录不存在"
+            error_count=$((error_count + 1))
+        fi
     fi
     
-    # 9. 检查编译器调用状态
-    log "9. 🔄 检查编译器调用状态..."
-    if ! check_compiler_invocation; then
-        log "⚠️ 编译器调用状态检查发现问题"
+    # 6. 检查关键文件
+    log ""
+    log "6. 🔑 检查关键文件..."
+    local critical_files=("Makefile" "rules.mk" "Config.in" "feeds.conf.default")
+    local missing_critical=0
+    
+    for file in "${critical_files[@]}"; do
+        if [ -f "$file" ]; then
+            log "  ✅ 关键文件存在: $file"
+        else
+            log "  ❌ 错误: 关键文件不存在: $file"
+            log "      当前路径: $(pwd)"
+            log "      文件查找: $file"
+            missing_critical=$((missing_critical + 1))
+        fi
+    done
+    
+    if [ $missing_critical -gt 0 ]; then
+        error_count=$((error_count + missing_critical))
+        log "  ❌ 缺失 $missing_critical 个关键文件"
+    fi
+    
+    # 7. 检查磁盘空间
+    log ""
+    log "7. 💾 检查磁盘空间..."
+    if command -v df >/dev/null 2>&1; then
+        local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1 | tr -d ' ' 2>/dev/null || echo "0")
+        if [ -n "$available_space" ] && [[ "$available_space" =~ ^[0-9]+$ ]]; then
+            local available_gb=$((available_space / 1024 / 1024))
+            log "磁盘可用空间: ${available_gb}G"
+            
+            if [ $available_gb -lt 10 ]; then
+                log "❌ 错误: 磁盘空间不足 (需要至少10G，当前${available_gb}G)"
+                error_count=$((error_count + 1))
+            elif [ $available_gb -lt 20 ]; then
+                log "⚠️ 警告: 磁盘空间较低 (建议至少20G，当前${available_gb}G)"
+                warning_count=$((warning_count + 1))
+            else
+                log "✅ 磁盘空间充足"
+            fi
+        else
+            log "⚠️ 警告: 无法获取磁盘空间信息"
+            warning_count=$((warning_count + 1))
+        fi
+    else
+        log "⚠️ 警告: 无法使用df命令检查磁盘空间"
         warning_count=$((warning_count + 1))
     fi
     
+    # 8. 检查内存
+    log ""
+    log "8. 🧠 检查内存..."
+    if command -v free >/dev/null 2>&1; then
+        local total_mem=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' 2>/dev/null || echo "0")
+        if [ -n "$total_mem" ] && [[ "$total_mem" =~ ^[0-9]+$ ]]; then
+            log "系统内存: ${total_mem}MB"
+            
+            if [ $total_mem -lt 1024 ]; then
+                log "⚠️ 警告: 内存较低 (建议至少1GB)"
+                warning_count=$((warning_count + 1))
+            elif [ $total_mem -lt 2048 ]; then
+                log "⚠️ 警告: 内存一般 (建议至少2GB)"
+                warning_count=$((warning_count + 1))
+            else
+                log "✅ 内存充足"
+            fi
+        else
+            log "⚠️ 警告: 无法获取内存信息"
+            warning_count=$((warning_count + 1))
+        fi
+    else
+        log "ℹ️ 无法使用free命令检查内存"
+    fi
+    
+    # 9. 检查CPU核心数
+    log ""
+    log "9. ⚙️ 检查CPU核心数..."
+    if command -v nproc >/dev/null 2>&1; then
+        local cpu_cores=$(nproc 2>/dev/null || echo "1")
+        log "CPU核心数: $cpu_cores"
+        
+        if [ $cpu_cores -lt 2 ]; then
+            log "⚠️ 警告: CPU核心数较少"
+            warning_count=$((warning_count + 1))
+        fi
+    else
+        log "ℹ️ 无法使用nproc命令检查CPU核心"
+    fi
+    
     # 总结
+    log ""
     log "=== 📊 检查总结 ==="
     log "错误数量: $error_count 个"
     log "警告数量: $warning_count 个"
     
+    # 显示详细问题
+    if [ $error_count -gt 0 ] || [ $warning_count -gt 0 ]; then
+        log ""
+        log "=== 🔍 发现的问题 ==="
+        
+        if [ $error_count -gt 0 ]; then
+            log "🚨 需要修复的错误 ($error_count 个):"
+            log "  1. 检查 .config 文件是否存在且内容完整"
+            log "  2. 检查 feeds 目录是否正确配置"
+            log "  3. 检查关键文件是否缺失"
+            log "  4. 检查SDK编译器目录是否正确"
+            log "  5. 确保有足够的磁盘空间"
+        fi
+        
+        if [ $warning_count -gt 0 ]; then
+            log "⚠️ 需要注意的警告 ($warning_count 个):"
+            log "  1. 依赖包可能需要下载"
+            log "  2. 内存和磁盘空间可能不足"
+            log "  3. 配置文件中可能有冲突"
+        fi
+    fi
+    
+    # 最终决定
     if [ $error_count -eq 0 ]; then
         if [ $warning_count -eq 0 ]; then
+            log ""
             log "✅ 前置检查通过，可以开始编译"
+            log "🎉 所有检查项都正常"
         else
+            log ""
             log "⚠️ 前置检查通过，但有 $warning_count 个警告，建议修复"
+            log "💡 警告不会阻止编译，但可能影响编译结果"
         fi
         return 0
     else
-        log "❌ 前置检查发现 $error_count 个错误，$warning_count 个警告，请修复后再编译"
+        log ""
+        log "❌ 前置检查发现 $error_count 个错误，$warning_count 个警告"
+        log "🔧 必须修复错误后才能编译"
         
-        # 显示具体问题建议
-        if [ $error_count -gt 0 ]; then
-            log "🔧 修复建议:"
-            if [ $error_count -ge 1 ]; then
-                log "  1. 检查 .config 文件是否存在且不为空"
-            fi
-            if [ $error_count -ge 2 ]; then
-                log "  2. 检查 feeds 目录是否存在"
-            fi
-            if [ $error_count -ge 3 ]; then
-                log "  3. 检查关键文件（Makefile, rules.mk等）是否存在"
-            fi
-            if [ $error_count -ge 4 ]; then
-                log "  4. 确保有足够的磁盘空间（至少10GB）"
-            fi
+        # 提供修复建议
+        log ""
+        log "=== 🛠️ 修复建议 ==="
+        log "1. 检查 .config 文件:"
+        log "   - 确保文件存在且不为空"
+        log "   - 检查目标配置是否正确: CONFIG_TARGET_${TARGET}=y"
+        log "   - 检查设备配置是否正确: CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
+        
+        log "2. 检查 feeds 目录:"
+        log "   - 运行: ls -la feeds/"
+        log "   - 确保 feeds/packages 和 feeds/luci 目录存在"
+        
+        log "3. 检查SDK编译器:"
+        if [ -n "$COMPILER_DIR" ]; then
+            log "   - 检查目录是否存在: ls -la $COMPILER_DIR"
+            log "   - 查找GCC编译器: find $COMPILER_DIR -name '*gcc' -type f"
         fi
+        
+        log "4. 检查磁盘空间:"
+        log "   - 运行: df -h /mnt"
+        log "   - 确保有至少10GB可用空间"
         
         return 1
     fi
 }
-#【build_firmware_main.sh-23】
+#【系统修复-07结束】
 
 #【build_firmware_main.sh-24】
 # 编译固件
