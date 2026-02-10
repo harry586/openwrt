@@ -2285,10 +2285,10 @@ check_compiler_invocation() {
 #【build_firmware_main.sh-22】
 
 #【build_firmware_main.sh-23】
-# 前置错误检查（修复版：增加详细错误信息）
+# 前置错误检查（修复版：增加详细错误信息和容错机制）
 pre_build_error_check() {
     load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    cd $BUILD_DIR || { log "❌ 进入构建目录失败"; exit 1; }
     
     log "=== 🚨 前置错误检查（详细版）==="
     
@@ -2305,42 +2305,56 @@ pre_build_error_check() {
     log "  CONFIG_MODE: $CONFIG_MODE"
     log "  COMPILER_DIR: $COMPILER_DIR"
     
-    # 1. 检查配置文件
+    # 1. 检查配置文件 - 增加错误处理
     log "1. 📋 检查配置文件..."
     if [ ! -f ".config" ]; then
         log "❌ 错误: .config 文件不存在"
         error_count=$((error_count + 1))
     else
         log "✅ .config 文件存在"
-        log "  文件大小: $(ls -lh .config | awk '{print $5}')"
-        log "  文件行数: $(wc -l < .config)"
+        # 使用更安全的命令，避免失败
+        local config_size=$(ls -lh .config 2>/dev/null | awk '{print $5}' || echo "未知")
+        log "  文件大小: $config_size"
+        
+        local line_count=$(wc -l < .config 2>/dev/null || echo "未知")
+        log "  文件行数: $line_count"
+        
+        # 检查文件内容是否为空
+        if [ "$line_count" = "0" ] || [ "$line_count" = "未知" ]; then
+            log "⚠️ 警告: .config 文件可能为空或无法读取"
+            warning_count=$((warning_count + 1))
+        fi
     fi
     
-    # 2. 检查feeds
+    # 2. 检查feeds - 增加错误处理
     log "2. 📦 检查feeds目录..."
     if [ ! -d "feeds" ]; then
         log "❌ 错误: feeds 目录不存在"
         error_count=$((error_count + 1))
     else
         log "✅ feeds 目录存在"
-        log "  feeds子目录:"
-        ls -la feeds/ 2>/dev/null || echo "无法列出feeds目录内容"
+        # 使用ls命令，如果失败就跳过
+        if ls -la feeds/ 2>/dev/null | head -5 > /dev/null 2>&1; then
+            log "  feeds目录内容检查成功"
+        else
+            log "  ℹ️ 无法列出feeds目录内容"
+        fi
     fi
     
-    # 3. 检查依赖包
+    # 3. 检查依赖包 - 增加错误处理
     log "3. 📦 检查依赖包目录..."
     if [ ! -d "dl" ]; then
         log "⚠️ 警告: dl 目录不存在，可能需要下载依赖"
         warning_count=$((warning_count + 1))
     else
-        local dl_count=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
+        local dl_count=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l 2>/dev/null || echo "0")
         log "✅ 依赖包数量: $dl_count 个"
     fi
     
     # 4. 检查编译器状态
     log "4. 🔧 检查编译器状态..."
     if [ -d "staging_dir" ]; then
-        local compiler_count=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" 2>/dev/null | wc -l)
+        local compiler_count=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" 2>/dev/null | wc -l 2>/dev/null || echo "0")
         if [ $compiler_count -eq 0 ]; then
             log "ℹ️ 未找到已构建的编译器"
             log "📌 已下载SDK编译器，无需自动构建"
@@ -2366,9 +2380,9 @@ pre_build_error_check() {
         fi
     done
     
-    # 6. 检查磁盘空间
+    # 6. 检查磁盘空间 - 增加错误处理
     log "6. 💾 检查磁盘空间..."
-    local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1 | tr -d ' ')
+    local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1 | tr -d ' ' 2>/dev/null || echo "0")
     if [ -n "$available_space" ] && [[ "$available_space" =~ ^[0-9]+$ ]]; then
         local available_gb=$((available_space / 1024 / 1024))
         log "磁盘可用空间: ${available_gb}G"
@@ -2387,10 +2401,10 @@ pre_build_error_check() {
         warning_count=$((warning_count + 1))
     fi
     
-    # 7. 检查内存
+    # 7. 检查内存 - 增加错误处理
     log "7. 🧠 检查内存..."
     if command -v free >/dev/null 2>&1; then
-        local total_mem=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')
+        local total_mem=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' 2>/dev/null || echo "0")
         if [ -n "$total_mem" ] && [[ "$total_mem" =~ ^[0-9]+$ ]]; then
             log "系统内存: ${total_mem}MB"
             
@@ -2408,11 +2422,12 @@ pre_build_error_check() {
         log "ℹ️ 无法使用free命令检查内存"
     fi
     
-    # 8. 检查预构建编译器文件
+    # 8. 检查预构建编译器文件 - 增加错误处理
     log "8. 🔧 检查预构建编译器文件..."
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
         log "✅ 预构建编译器目录存在: $COMPILER_DIR"
-        log "📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
+        local dir_size=$(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 2>/dev/null || echo '未知')
+        log "📊 目录大小: $dir_size"
         
         # 查找GCC编译器
         local gcc_files=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable \
@@ -2422,7 +2437,7 @@ pre_build_error_check() {
           ! -name "*gcc-nm" \
           ! -path "*dummy-tools*" \
           ! -path "*scripts*" \
-          2>/dev/null | wc -l)
+          2>/dev/null | wc -l 2>/dev/null || echo "0")
         
         if [ $gcc_files -gt 0 ]; then
             log "✅ 找到 $gcc_files 个GCC编译器文件"
@@ -2437,7 +2452,10 @@ pre_build_error_check() {
     
     # 9. 检查编译器调用状态
     log "9. 🔄 检查编译器调用状态..."
-    check_compiler_invocation
+    if ! check_compiler_invocation; then
+        log "⚠️ 编译器调用状态检查发现问题"
+        warning_count=$((warning_count + 1))
+    fi
     
     # 总结
     log "=== 📊 检查总结 ==="
@@ -2457,9 +2475,18 @@ pre_build_error_check() {
         # 显示具体问题建议
         if [ $error_count -gt 0 ]; then
             log "🔧 修复建议:"
-            log "  1. 确保运行了 'configure_feeds' 和 'download_dependencies'"
-            log "  2. 确保有足够的磁盘空间"
-            log "  3. 检查关键文件是否存在"
+            if [ $error_count -ge 1 ]; then
+                log "  1. 检查 .config 文件是否存在且不为空"
+            fi
+            if [ $error_count -ge 2 ]; then
+                log "  2. 检查 feeds 目录是否存在"
+            fi
+            if [ $error_count -ge 3 ]; then
+                log "  3. 检查关键文件（Makefile, rules.mk等）是否存在"
+            fi
+            if [ $error_count -ge 4 ]; then
+                log "  4. 确保有足够的磁盘空间（至少10GB）"
+            fi
         fi
         
         return 1
@@ -2512,7 +2539,7 @@ build_firmware() {
     local make_jobs=$cpu_cores
     
     # 如果内存小于4GB，减少并行任务
-    local total_mem=$(free -m | awk '/^Mem:/{print $2}')
+    local total_mem=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}' 2>/dev/null || echo "4096")
     if [ $total_mem -lt 4096 ]; then
         make_jobs=$((cpu_cores / 2))
         if [ $make_jobs -lt 1 ]; then
@@ -2541,11 +2568,11 @@ build_firmware() {
             log "     路径: $(dirname "$prebuilt_gcc")"
             
             # 检查GCC版本
-            local version=$("$prebuilt_gcc" --version 2>&1 | head -1)
+            local version=$("$prebuilt_gcc" --version 2>&1 | head -1 2>/dev/null || echo "未知版本")
             log "     GCC版本: $version"
             
             # 检查版本兼容性
-            local major_version=$(echo "$version" | grep -o "[0-9]\+" | head -1)
+            local major_version=$(echo "$version" | grep -o "[0-9]\+" | head -1 2>/dev/null || echo "0")
             if [ -n "$major_version" ] && [ "$major_version" -ge 8 ] && [ "$major_version" -le 15 ]; then
                 log "  ✅ GCC $major_version.x 版本兼容"
             else
@@ -2610,12 +2637,12 @@ build_firmware() {
         
         # 检查生成的固件
         if [ -d "bin/targets" ]; then
-            local firmware_count=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+            local firmware_count=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l 2>/dev/null || echo "0")
             log "✅ 生成固件文件: $firmware_count 个"
             
             # 显示固件文件
             find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | head -5 | while read file; do
-                log "固件: $file ($(du -h "$file" | cut -f1))"
+                log "固件: $file ($(du -h "$file" 2>/dev/null | cut -f1 2>/dev/null || echo "未知大小"))"
             done
         else
             log "❌ 固件目录不存在"
@@ -2628,8 +2655,8 @@ build_firmware() {
             log "=== 编译错误摘要 ==="
             
             # 查找常见错误
-            local error_count=$(grep -c "Error [0-9]|error:" build.log)
-            local warning_count=$(grep -c "Warning\|warning:" build.log)
+            local error_count=$(grep -c "Error [0-9]|error:" build.log 2>/dev/null || echo "0")
+            local warning_count=$(grep -c "Warning\|warning:" build.log 2>/dev/null || echo "0")
             
             log "发现 $error_count 个错误，$warning_count 个警告"
             
@@ -2656,7 +2683,7 @@ build_firmware() {
                 fi
             fi
             
-            if grep -q "$COMPILER_DIR" build.log | grep -i "error\|failed" 2>/dev/null; then
+            if grep -q "$COMPILER_DIR" build.log 2>/dev/null && grep -q -i "error\|failed" build.log 2>/dev/null; then
                 log "⚠️ 发现预构建编译器相关错误"
                 log "建议检查预构建编译器的完整性和兼容性"
             fi
@@ -2691,20 +2718,20 @@ post_build_space_check() {
     log "=== 编译后空间检查 ==="
     
     echo "=== 磁盘使用情况 ==="
-    df -h
+    df -h 2>/dev/null || echo "无法获取磁盘信息"
     
     # 构建目录空间
-    local build_dir_usage=$(du -sh $BUILD_DIR 2>/dev/null | cut -f1) || echo "无法获取构建目录大小"
+    local build_dir_usage=$(du -sh $BUILD_DIR 2>/dev/null | cut -f1 2>/dev/null) || echo "无法获取构建目录大小"
     echo "构建目录大小: $build_dir_usage"
     
     # 固件文件大小
     if [ -d "$BUILD_DIR/bin/targets" ]; then
-        local firmware_size=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) -exec du -ch {} + 2>/dev/null | tail -1 | cut -f1)
+        local firmware_size=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) -exec du -ch {} + 2>/dev/null | tail -1 | cut -f1 2>/dev/null || echo "未知")
         echo "固件文件总大小: $firmware_size"
     fi
     
     # 检查可用空间 - 修复：使用正确的df选项
-    local available_space=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
+    local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1 | awk '{print $1}' 2>/dev/null || echo "0")
     local available_gb=$((available_space / 1024 / 1024))
     log "/mnt 可用空间: ${available_gb}G"
     
@@ -2730,21 +2757,21 @@ check_firmware_files() {
         log "✅ 固件目录存在"
         
         # 统计固件文件
-        local firmware_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
-        local all_files=$(find bin/targets -type f 2>/dev/null | wc -l)
+        local firmware_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l 2>/dev/null || echo "0")
+        local all_files=$(find bin/targets -type f 2>/dev/null | wc -l 2>/dev/null || echo "0")
         
         log "固件文件: $firmware_files 个"
         log "所有文件: $all_files 个"
         
         # 显示固件文件详情
         echo "=== 生成的固件文件 ==="
-        find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) -exec ls -lh {} \;
+        find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) -exec ls -lh {} \; 2>/dev/null || echo "无法列出固件文件"
         
         # 检查文件大小
         local total_size=0
         while read size; do
             total_size=$((total_size + size))
-        done < <(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) -exec stat -c%s {} \; 2>/dev/null)
+        done < <(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) -exec stat -c%s {} \; 2>/dev/null 2>/dev/null)
         
         if [ $total_size -gt 0 ]; then
             local total_size_mb=$((total_size / 1024 / 1024))
@@ -2762,7 +2789,7 @@ check_firmware_files() {
         
         # 检查目标目录结构
         echo "=== 目标目录结构 ==="
-        find bin/targets -maxdepth 3 -type d | sort
+        find bin/targets -maxdepth 3 -type d 2>/dev/null | sort
         
     else
         log "❌ 固件目录不存在"
@@ -2883,7 +2910,7 @@ verify_config_files() {
     for file in "${required_files[@]}"; do
         local file_path="$CONFIG_DIR/$file"
         if [ -f "$file_path" ]; then
-            local line_count=$(wc -l < "$file_path")
+            local line_count=$(wc -l < "$file_path" 2>/dev/null || echo "0")
             log "✅ 必需文件存在: $file (行数: $line_count)"
         else
             log "❌ 必需文件缺失: $file"
@@ -2895,7 +2922,7 @@ verify_config_files() {
     for file in "${optional_files[@]}"; do
         local file_path="$CONFIG_DIR/$file"
         if [ -f "$file_path" ]; then
-            local line_count=$(wc -l < "$file_path")
+            local line_count=$(wc -l < "$file_path" 2>/dev/null || echo "0")
             log "✅ 可选文件存在: $file (行数: $line_count)"
         else
             log "ℹ️ 可选文件不存在: $file (可跳过)"
@@ -2906,7 +2933,7 @@ verify_config_files() {
     for dir in "${optional_dirs[@]}"; do
         local dir_path="$CONFIG_DIR/$dir"
         if [ -d "$dir_path" ]; then
-            local config_count=$(find "$dir_path" -type f -name "*.config" 2>/dev/null | wc -l)
+            local config_count=$(find "$dir_path" -type f -name "*.config" 2>/dev/null | wc -l 2>/dev/null || echo "0")
             log "✅ 目录存在: $dir (包含 $config_count 个配置文件)"
         else
             log "ℹ️ 可选目录不存在: $dir (可跳过)"
@@ -2928,26 +2955,6 @@ verify_config_files() {
             fi
         done <<< "$config_files"
     fi
-    
-    # 方法2：或者使用更安全的for循环（分别处理每个模式）
-    # turboacc_found=0
-    # for pattern in "$CONFIG_DIR"/*.config; do
-    #     [ -e "$pattern" ] || continue
-    #     if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" "$pattern" 2>/dev/null; then
-    #         log "⚠️ 发现TurboACC静态配置: $(basename "$pattern")"
-    #         turboacc_found=1
-    #     fi
-    # done
-    
-    # if [ -d "$CONFIG_DIR/devices" ]; then
-    #     for pattern in "$CONFIG_DIR"/devices/*.config; do
-    #         [ -e "$pattern" ] || continue
-    #         if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" "$pattern" 2>/dev/null; then
-    #             log "⚠️ 发现TurboACC静态配置: $(basename "$pattern")"
-    #             turboacc_found=1
-    #         fi
-    #     done
-    # fi
     
     if [ $turboacc_found -eq 1 ]; then
         log "💡 建议：TurboACC应通过feeds动态添加，不要静态配置"
@@ -2982,7 +2989,7 @@ save_source_code_info() {
     # 收集目录信息
     echo "" >> "$source_info_file"
     echo "=== 目录结构 ===" >> "$source_info_file"
-    find . -maxdepth 2 -type d | sort >> "$source_info_file"
+    find . -maxdepth 2 -type d 2>/dev/null | sort >> "$source_info_file"
     
     # 收集关键文件信息
     echo "" >> "$source_info_file"
@@ -2990,7 +2997,7 @@ save_source_code_info() {
     local key_files=("Makefile" "feeds.conf.default" ".config" "rules.mk" "Config.in")
     for file in "${key_files[@]}"; do
         if [ -f "$file" ]; then
-            echo "$file: 存在 ($(ls -lh "$file" | awk '{print $5}'))" >> "$source_info_file"
+            echo "$file: 存在 ($(ls -lh "$file" 2>/dev/null | awk '{print $5}' 2>/dev/null || echo "未知大小"))" >> "$source_info_file"
         else
             echo "$file: 不存在" >> "$source_info_file"
         fi
@@ -3011,9 +3018,9 @@ verify_sdk_directory() {
         if [ -d "$COMPILER_DIR" ]; then
             log "✅ SDK目录存在: $COMPILER_DIR"
             log "📊 目录信息:"
-            ls -ld "$COMPILER_DIR"
+            ls -ld "$COMPILER_DIR" 2>/dev/null || log "无法获取目录信息"
             log "📁 目录内容示例:"
-            ls -la "$COMPILER_DIR/" | head -10
+            ls -la "$COMPILER_DIR/" 2>/dev/null | head -10 || log "无法列出目录内容"
             return 0
         else
             log "❌ SDK目录不存在: $COMPILER_DIR"
