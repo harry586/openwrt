@@ -764,7 +764,7 @@ generate_config() {
     
     # 使用配置文件，而不是调用support.sh
     log "🔍 使用配置文件进行配置..."
-    apply_configuration_from_files
+    apply_configuration_from_files "$extra_packages"
     
     # 清理锁文件
     rm -f "/tmp/generating_config.lock"
@@ -772,8 +772,9 @@ generate_config() {
     log "✅ 配置生成完成"
 }
 
-# 从配置文件应用配置 - 修复版：根据新配置文件结构调整
+# 从配置文件应用配置 - 修改版：按新逻辑应用配置
 apply_configuration_from_files() {
+    local extra_packages=$1
     log "=== 从配置文件应用配置（新逻辑）==="
     
     # 检查配置文件目录
@@ -800,29 +801,7 @@ apply_configuration_from_files() {
         handle_error "缺少USB通用配置文件"
     fi
     
-    # 2. 【检查是否有设备专用配置】
-    local device_config="$CONFIG_DIR/devices/$DEVICE.config"
-    local platform_config="$CONFIG_DIR/devices/$TARGET.config"
-    
-    if [ -f "$device_config" ]; then
-        # 情况1：有设备专用配置
-        log "📁 找到设备专用配置: $device_config"
-        cat "$device_config" >> .config
-        log "✅ 已应用设备专用配置"
-        log "💡 使用配置：usb-generic.config + 设备专用配置"
-    elif [ -f "$platform_config" ]; then
-        # 情况2：有平台专用配置
-        log "📁 找到平台专用配置: $platform_config"
-        cat "$platform_config" >> .config
-        log "✅ 已应用平台专用配置"
-        log "💡 使用配置：usb-generic.config + 平台专用配置"
-    else
-        # 情况3：无专用配置
-        log "ℹ️ 设备和平台专用配置文件都不存在"
-        log "💡 仅使用USB通用配置"
-    fi
-    
-    # 3. 【必需】应用base配置（无论什么模式都需要）
+    # 2. 【必需】应用base配置（无论什么模式都需要）
     local base_config="$CONFIG_DIR/base.config"
     if [ -f "$base_config" ]; then
         log "📁 应用基础配置: $base_config"
@@ -833,8 +812,72 @@ apply_configuration_from_files() {
         handle_error "缺少基础配置文件"
     fi
     
-    # 4. 【条件】如果是正常模式，再应用normal配置
-    if [ "$CONFIG_MODE" = "normal" ]; then
+    # 3. 【模糊搜索】查找平台专用配置
+    log "🔍 模糊搜索平台专用配置..."
+    local platform_config=""
+    
+    # 在整个config目录中模糊搜索平台配置
+    log "🔍 在整个config目录中搜索平台配置..."
+    
+    # 方法1：搜索包含平台名的配置文件
+    local platform_match=$(find "$CONFIG_DIR" -type f -name "*.config" 2>/dev/null | \
+        xargs grep -l "TARGET.*${TARGET}\|${TARGET}.*TARGET" 2>/dev/null | \
+        grep -v "usb-generic.config" | grep -v "base.config" | grep -v "normal.config" | head -1)
+    
+    # 方法2：搜索文件名中包含平台名的配置文件
+    if [ -z "$platform_match" ] || [ ! -f "$platform_match" ]; then
+        platform_match=$(find "$CONFIG_DIR" -type f -name "*${TARGET}*.config" 2>/dev/null | head -1)
+    fi
+    
+    # 方法3：在devices目录中搜索平台配置
+    if [ -z "$platform_match" ] || [ ! -f "$platform_match" ]; then
+        if [ -f "$CONFIG_DIR/devices/$TARGET.config" ]; then
+            platform_config="$CONFIG_DIR/devices/$TARGET.config"
+            log "✅ 找到完全匹配的平台配置: $TARGET.config"
+        fi
+    elif [ -n "$platform_match" ] && [ -f "$platform_match" ]; then
+        platform_config="$platform_match"
+        log "✅ 找到模糊匹配的平台配置: $(basename "$platform_match")"
+    fi
+    
+    # 4. 【模糊搜索】查找设备专用配置
+    log "🔍 模糊搜索设备专用配置..."
+    local device_config=""
+    
+    # 首先检查是否有完全匹配的设备配置
+    if [ -f "$CONFIG_DIR/devices/$DEVICE.config" ]; then
+        device_config="$CONFIG_DIR/devices/$DEVICE.config"
+        log "✅ 找到完全匹配的设备配置: $DEVICE.config"
+    else
+        # 使用模糊搜索：在devices目录中搜索包含设备名的配置文件
+        log "🔍 进行模糊搜索..."
+        local fuzzy_match=$(find "$CONFIG_DIR/devices" -type f -name "*.config" 2>/dev/null | \
+            grep -i "$DEVICE" | head -1)
+        
+        if [ -n "$fuzzy_match" ] && [ -f "$fuzzy_match" ]; then
+            device_config="$fuzzy_match"
+            log "✅ 找到模糊匹配的设备配置: $(basename "$fuzzy_match")"
+        fi
+    fi
+    
+    # 5. 【配置逻辑】根据你的需求应用配置
+    if [ -n "$device_config" ]; then
+        # 情况1：有设备配置时，使用 usb-generic.config + 设备配置
+        log "📋 配置逻辑: 有设备配置时"
+        log "💡 使用配置: usb-generic.config + 设备配置"
+        
+        # 应用设备配置
+        cat "$device_config" >> .config
+        log "✅ 已应用设备配置: $(basename "$device_config")"
+        
+        # 注意：有设备配置时不应用base.config和normal.config
+        log "💡 有设备配置时不应用base.config和normal.config"
+        
+    elif [ "$CONFIG_MODE" = "normal" ]; then
+        # 情况2：正常模式（无设备配置）
+        log "📋 配置逻辑: 正常模式（无设备配置）"
+        log "💡 使用配置: usb-generic.config + base.config + normal.config"
+        
         local normal_config="$CONFIG_DIR/normal.config"
         if [ -f "$normal_config" ]; then
             log "📁 应用正常模式配置: $normal_config"
@@ -853,18 +896,29 @@ apply_configuration_from_files() {
             else
                 cat "$normal_config" >> .config
             fi
-            
             log "✅ 已应用正常模式配置"
-            log "💡 使用配置：usb-generic.config + base.config + normal.config"
         else
             log "❌ 正常模式配置文件不存在: $normal_config"
             handle_error "缺少正常模式配置文件"
         fi
     else
-        log "💡 使用配置：usb-generic.config + base.config"
+        # 情况3：基础模式（无设备配置）
+        log "📋 配置逻辑: 基础模式（无设备配置）"
+        log "💡 使用配置: usb-generic.config + base.config"
     fi
     
-    # 5. 添加额外包
+    # 6. 【平台配置】如果有平台专用配置，所有情况都加上
+    if [ -n "$platform_config" ]; then
+        log "📋 平台配置规则: 有平台专用配置时，所有情况都加上"
+        log "💡 追加平台配置: $(basename "$platform_config")"
+        
+        cat "$platform_config" >> .config
+        log "✅ 已应用平台专用配置"
+    else
+        log "💡 无平台专用配置，跳过平台配置"
+    fi
+    
+    # 7. 添加额外包
     if [ -n "$extra_packages" ]; then
         log "📦 添加额外包: $extra_packages"
         echo "$extra_packages" | tr ',' '\n' | while read pkg; do
@@ -873,6 +927,33 @@ apply_configuration_from_files() {
                 log "✅ 添加包: $pkg"
             fi
         done
+    fi
+    
+    # 8. 显示配置摘要
+    log "📊 配置应用摘要:"
+    log "  ✅ USB通用配置: 已应用"
+    
+    if [ -n "$device_config" ]; then
+        log "  ✅ 设备配置: 已应用 ($(basename "$device_config"))"
+        log "  ⚠️ 基础配置: 已跳过（因为有设备配置）"
+        log "  ⚠️ 正常模式配置: 已跳过（因为有设备配置）"
+    else
+        log "  ✅ 基础配置: 已应用"
+        if [ "$CONFIG_MODE" = "normal" ]; then
+            log "  ✅ 正常模式配置: 已应用"
+        else
+            log "  ℹ️ 正常模式配置: 未应用（基础模式）"
+        fi
+    fi
+    
+    if [ -n "$platform_config" ]; then
+        log "  ✅ 平台专用配置: 已应用 ($(basename "$platform_config"))"
+    else
+        log "  ℹ️ 平台专用配置: 未找到"
+    fi
+    
+    if [ -n "$extra_packages" ]; then
+        log "  ✅ 额外包: 已添加 ($extra_packages)"
     fi
     
     log "✅ 配置文件应用完成"
@@ -2204,12 +2285,12 @@ check_compiler_invocation() {
 #【build_firmware_main.sh-22】
 
 #【build_firmware_main.sh-23】
-# 前置错误检查（修复23.05 SDK验证问题） - 关键修复
+# 前置错误检查（修复版：增加详细错误信息）
 pre_build_error_check() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 🚨 前置错误检查（修复23.05 SDK验证）==="
+    log "=== 🚨 前置错误检查（详细版）==="
     
     local error_count=0
     local warning_count=0
@@ -2225,22 +2306,29 @@ pre_build_error_check() {
     log "  COMPILER_DIR: $COMPILER_DIR"
     
     # 1. 检查配置文件
+    log "1. 📋 检查配置文件..."
     if [ ! -f ".config" ]; then
         log "❌ 错误: .config 文件不存在"
         error_count=$((error_count + 1))
     else
         log "✅ .config 文件存在"
+        log "  文件大小: $(ls -lh .config | awk '{print $5}')"
+        log "  文件行数: $(wc -l < .config)"
     fi
     
     # 2. 检查feeds
+    log "2. 📦 检查feeds目录..."
     if [ ! -d "feeds" ]; then
         log "❌ 错误: feeds 目录不存在"
         error_count=$((error_count + 1))
     else
         log "✅ feeds 目录存在"
+        log "  feeds子目录:"
+        ls -la feeds/ 2>/dev/null || echo "无法列出feeds目录内容"
     fi
     
     # 3. 检查依赖包
+    log "3. 📦 检查依赖包目录..."
     if [ ! -d "dl" ]; then
         log "⚠️ 警告: dl 目录不存在，可能需要下载依赖"
         warning_count=$((warning_count + 1))
@@ -2250,6 +2338,7 @@ pre_build_error_check() {
     fi
     
     # 4. 检查编译器状态
+    log "4. 🔧 检查编译器状态..."
     if [ -d "staging_dir" ]; then
         local compiler_count=$(find staging_dir -maxdepth 1 -type d -name "compiler-*" 2>/dev/null | wc -l)
         if [ $compiler_count -eq 0 ]; then
@@ -2264,49 +2353,68 @@ pre_build_error_check() {
     fi
     
     # 5. 检查关键文件
+    log "5. 🔑 检查关键文件..."
     local critical_files=("Makefile" "rules.mk" "Config.in" "feeds.conf.default")
     for file in "${critical_files[@]}"; do
         if [ -f "$file" ]; then
-            log "✅ 关键文件存在: $file"
+            log "  ✅ 关键文件存在: $file"
         else
-            log "❌ 错误: 关键文件不存在: $file"
+            log "  ❌ 错误: 关键文件不存在: $file"
+            log "      当前路径: $(pwd)"
+            log "      文件查找: $file"
             error_count=$((error_count + 1))
         fi
     done
     
     # 6. 检查磁盘空间
-    local available_space=$(df /mnt --output=avail | tail -1)
-    local available_gb=$((available_space / 1024 / 1024))
-    log "磁盘可用空间: ${available_gb}G"
-    
-    if [ $available_gb -lt 10 ]; then
-        log "❌ 错误: 磁盘空间不足 (需要至少10G，当前${available_gb}G)"
-        error_count=$((error_count + 1))
-    elif [ $available_gb -lt 20 ]; then
-        log "⚠️ 警告: 磁盘空间较低 (建议至少20G，当前${available_gb}G)"
-        warning_count=$((warning_count + 1))
+    log "6. 💾 检查磁盘空间..."
+    local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1 | tr -d ' ')
+    if [ -n "$available_space" ] && [[ "$available_space" =~ ^[0-9]+$ ]]; then
+        local available_gb=$((available_space / 1024 / 1024))
+        log "磁盘可用空间: ${available_gb}G"
+        
+        if [ $available_gb -lt 10 ]; then
+            log "❌ 错误: 磁盘空间不足 (需要至少10G，当前${available_gb}G)"
+            error_count=$((error_count + 1))
+        elif [ $available_gb -lt 20 ]; then
+            log "⚠️ 警告: 磁盘空间较低 (建议至少20G，当前${available_gb}G)"
+            warning_count=$((warning_count + 1))
+        else
+            log "✅ 编译前空间充足"
+        fi
     else
-        log "✅ 编译前空间充足"
+        log "⚠️ 警告: 无法获取磁盘空间信息"
+        warning_count=$((warning_count + 1))
     fi
     
     # 7. 检查内存
-    local total_mem=$(free -m | awk '/^Mem:/{print $2}')
-    log "系统内存: ${total_mem}MB"
-    
-    if [ $total_mem -lt 1024 ]; then
-        log "⚠️ 警告: 内存较低 (建议至少1GB)"
-        warning_count=$((warning_count + 1))
+    log "7. 🧠 检查内存..."
+    if command -v free >/dev/null 2>&1; then
+        local total_mem=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')
+        if [ -n "$total_mem" ] && [[ "$total_mem" =~ ^[0-9]+$ ]]; then
+            log "系统内存: ${total_mem}MB"
+            
+            if [ $total_mem -lt 1024 ]; then
+                log "⚠️ 警告: 内存较低 (建议至少1GB)"
+                warning_count=$((warning_count + 1))
+            else
+                log "✅ 内存充足"
+            fi
+        else
+            log "⚠️ 警告: 无法获取内存信息"
+            warning_count=$((warning_count + 1))
+        fi
+    else
+        log "ℹ️ 无法使用free命令检查内存"
     fi
     
-    # 8. 检查预构建编译器文件 - 关键修复：简化23.05验证逻辑
-    log "🔧 检查预构建编译器文件..."
-    
-    # 简化验证逻辑，只做基本检查
+    # 8. 检查预构建编译器文件
+    log "8. 🔧 检查预构建编译器文件..."
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
         log "✅ 预构建编译器目录存在: $COMPILER_DIR"
         log "📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
         
-        # 放宽检查：只需要有编译器文件，不要求特定目录结构，排除虚假编译器
+        # 查找GCC编译器
         local gcc_files=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
@@ -2318,71 +2426,24 @@ pre_build_error_check() {
         
         if [ $gcc_files -gt 0 ]; then
             log "✅ 找到 $gcc_files 个GCC编译器文件"
-            
-            # 显示第一个GCC的版本信息
-            local first_gcc=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable \
-              -name "*gcc" \
-              ! -name "*gcc-ar" \
-              ! -name "*gcc-ranlib" \
-              ! -name "*gcc-nm" \
-              ! -path "*dummy-tools*" \
-              ! -path "*scripts*" \
-              2>/dev/null | head -1)
-            
-            if [ -n "$first_gcc" ]; then
-                log "🔧 第一个GCC版本: $("$first_gcc" --version 2>&1 | head -1)"
-                
-                # 对于23.05 SDK的特殊处理
-                if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-                    local sdk_version=$("$first_gcc" --version 2>&1 | head -1)
-                    if echo "$sdk_version" | grep -qi "12.3.0"; then
-                        log "🎯 确认是OpenWrt 23.05 SDK GCC 12.3.0"
-                    elif echo "$sdk_version" | grep -qi "dummy-tools"; then
-                        log "⚠️ 检测到虚假的dummy-tools编译器，继续查找..."
-                        # 查找其他GCC
-                        local real_gcc=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable \
-                          -name "*gcc" \
-                          ! -name "*gcc-ar" \
-                          ! -name "*gcc-ranlib" \
-                          ! -name "*gcc-nm" \
-                          ! -path "*dummy-tools*" \
-                          ! -path "*scripts*" \
-                          ! -path "$(dirname "$first_gcc")" \
-                          2>/dev/null | head -1)
-                        
-                        if [ -n "$real_gcc" ]; then
-                            log "✅ 找到真正的GCC: $(basename "$real_gcc")"
-                            log "🔧 版本: $("$real_gcc" --version 2>&1 | head -1)"
-                        fi
-                    else
-                        log "⚠️ 23.05 SDK GCC版本不是预期的12.3.0"
-                        log "💡 可能不是官方的23.05 SDK，但可以继续尝试"
-                    fi
-                fi
-            fi
         else
             log "⚠️ 警告: 预构建编译器目录中未找到真正的GCC编译器"
             warning_count=$((warning_count + 1))
-            
-            # 检查是否有工具链工具
-            local toolchain_tools=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable -name "*gcc*" \
-              ! -path "*dummy-tools*" \
-              ! -path "*scripts*" \
-              2>/dev/null | wc -l)
-            if [ $toolchain_tools -gt 0 ]; then
-                log "📊 找到 $toolchain_tools 个工具链工具"
-                log "💡 有工具链工具但没有真正的GCC编译器"
-            fi
         fi
     else
         log "ℹ️ 未设置预构建编译器目录或目录不存在"
         log "💡 将使用OpenWrt自动构建的编译器"
     fi
     
-    # 9. 检查编译器调用状态（使用增强版）
+    # 9. 检查编译器调用状态
+    log "9. 🔄 检查编译器调用状态..."
     check_compiler_invocation
     
     # 总结
+    log "=== 📊 检查总结 ==="
+    log "错误数量: $error_count 个"
+    log "警告数量: $warning_count 个"
+    
     if [ $error_count -eq 0 ]; then
         if [ $warning_count -eq 0 ]; then
             log "✅ 前置检查通过，可以开始编译"
@@ -2392,6 +2453,15 @@ pre_build_error_check() {
         return 0
     else
         log "❌ 前置检查发现 $error_count 个错误，$warning_count 个警告，请修复后再编译"
+        
+        # 显示具体问题建议
+        if [ $error_count -gt 0 ]; then
+            log "🔧 修复建议:"
+            log "  1. 确保运行了 'configure_feeds' 和 'download_dependencies'"
+            log "  2. 确保有足够的磁盘空间"
+            log "  3. 检查关键文件是否存在"
+        fi
+        
         return 1
     fi
 }
