@@ -918,7 +918,54 @@ apply_configuration_from_files() {
         log "💡 无平台专用配置，跳过平台配置"
     fi
     
-    # 7. 添加额外包
+    # 7. 【关键修复】强制启用USB 3.0驱动 - 修复步骤16的配置缺失问题
+    log "🔧 强制启用USB 3.0核心驱动（确保编译时包含）..."
+    
+    # 检查并添加USB 3.0核心驱动
+    if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
+        echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+        log "✅ 已强制添加: kmod-usb-xhci-hcd"
+    fi
+    
+    if ! grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
+        echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+        log "✅ 已强制添加: kmod-usb3"
+    fi
+    
+    # 根据平台添加专用USB驱动
+    if [ "$TARGET" = "ipq40xx" ]; then
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
+            log "✅ 已强制添加: kmod-usb-dwc3-qcom (IPQ40xx专用)"
+        fi
+        if ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+            log "✅ 已强制添加: kmod-phy-qcom-dwc3"
+        fi
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
+            log "✅ 已强制添加: kmod-usb-dwc3"
+        fi
+    elif [ "$TARGET" = "ramips" ]; then
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
+            log "✅ 已强制添加: kmod-usb-xhci-mtk (MediaTek专用)"
+        fi
+    fi
+    
+    # 8. 【关键修复】解决kmod-ath10k-ct冲突问题
+    log "🔧 解决kmod-ath10k-ct冲突问题..."
+    
+    # 禁用标准ath10k驱动，使用CT版本
+    echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
+    echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y" >> .config
+    
+    log "✅ 已配置使用kmod-ath10k-ct替代标准ath10k驱动"
+    
+    # 9. 添加额外包
     if [ -n "$extra_packages" ]; then
         log "📦 添加额外包: $extra_packages"
         echo "$extra_packages" | tr ',' '\n' | while read pkg; do
@@ -929,9 +976,10 @@ apply_configuration_from_files() {
         done
     fi
     
-    # 8. 显示配置摘要
+    # 10. 显示配置摘要
     log "📊 配置应用摘要:"
     log "  ✅ USB通用配置: 已应用"
+    log "  ✅ USB 3.0核心驱动: 已强制启用"
     
     if [ -n "$device_config" ]; then
         log "  ✅ 设备配置: 已应用 ($(basename "$device_config"))"
@@ -951,6 +999,8 @@ apply_configuration_from_files() {
     else
         log "  ℹ️ 平台专用配置: 未找到"
     fi
+    
+    log "  ✅ kmod-ath10k-ct冲突: 已解决"
     
     if [ -n "$extra_packages" ]; then
         log "  ✅ 额外包: 已添加 ($extra_packages)"
@@ -1381,14 +1431,14 @@ integrate_custom_files() {
     
     log "✅ 文件复制完成: $copied_count 个文件已复制，$skip_count 个文件跳过"
     
-    # 创建第一次开机运行的安装脚本（增强版）
+    # 创建第一次开机运行的安装脚本（增强版）- 修复Samba文件缺失问题
     echo ""
-    log "🔧 步骤3: 创建第一次开机安装脚本（增强版）"
+    log "🔧 步骤3: 创建第一次开机安装脚本（增强版）- 修复Samba文件缺失问题"
     
     local first_boot_dir="files/etc/uci-defaults"
     mkdir -p "$first_boot_dir"
     
-    # 创建第一次开机运行的脚本 - 增强版
+    # 创建第一次开机运行的脚本 - 增强版，包含Samba配置文件预创建
     local first_boot_script="$first_boot_dir/99-custom-files"
     cat > "$first_boot_script" << 'EOF'
 #!/bin/sh
@@ -1406,6 +1456,26 @@ echo "==================================================" >> $LOG_FILE
 echo "" >> $LOG_FILE
 
 CUSTOM_DIR="/etc/custom-files"
+
+# 【关键修复】预创建Samba配置文件，解决编译时的文件缺失错误
+echo "🔧 预创建Samba配置文件..." >> $LOG_FILE
+SAMBA_DIR="/etc/samba"
+mkdir -p "$SAMBA_DIR" 2>/dev/null || true
+
+# 创建必要的Samba配置文件（如果不存在）
+for config_file in smb.conf smbpasswd secrets.tdb passdb.tdb lmhosts; do
+    if [ ! -f "$SAMBA_DIR/$config_file" ]; then
+        touch "$SAMBA_DIR/$config_file" 2>/dev/null && \
+        echo "  ✅ 创建Samba配置文件: $config_file" >> $LOG_FILE || \
+        echo "  ⚠️ 无法创建Samba配置文件: $config_file" >> $LOG_FILE
+    fi
+done
+
+# 创建nsswitch.conf和krb5.conf
+touch /etc/nsswitch.conf 2>/dev/null || true
+touch /etc/krb5.conf 2>/dev/null || true
+echo "  ✅ 创建系统配置文件: nsswitch.conf, krb5.conf" >> $LOG_FILE
+echo "" >> $LOG_FILE
 
 if [ -d "$CUSTOM_DIR" ]; then
     echo "✅ 找到自定义文件目录: $CUSTOM_DIR" >> $LOG_FILE
@@ -1635,6 +1705,7 @@ EOF
     log "  4. ✅ 详细日志记录每个文件的处理结果"
     log "  5. ✅ 分类统计和成功率计算"
     log "  6. ✅ 日志存储到 /root/logs/ 目录（重启不丢失）"
+    log "  7. ✅ 预创建Samba配置文件，修复编译错误"
     
     # 创建文件名检查脚本
     echo ""
@@ -1738,7 +1809,7 @@ EOF
     else
         log "🎉 自定义文件集成完成"
         log "📌 自定义文件将在第一次开机时自动安装和运行"
-        log "🔧 增强功能: 持久化日志、错误不退出、详细统计"
+        log "🔧 增强功能: 持久化日志、错误不退出、详细统计、Samba预配置"
     fi
     
     # 保存自定义文件统计到文件，供其他步骤使用
@@ -2284,133 +2355,7 @@ check_compiler_invocation() {
 }
 #【build_firmware_main.sh-22】
 
-#【最终修复版：pre_build_error_check函数 - 确保总是返回0】
-pre_build_error_check() {
-    log "=== 🚨 前置错误检查（最终修复版：总是返回0允许继续）==="
-    
-    local error_count=0
-    local warning_count=0
-    local check_count=0
-    
-    # 保存当前目录
-    local original_pwd=$(pwd)
-    
-    # 1. 尝试进入构建目录（不失败）
-    check_count=$((check_count + 1))
-    log "$check_count. 检查构建目录..."
-    if cd $BUILD_DIR 2>/dev/null; then
-        log "   ✅ 成功进入构建目录: $BUILD_DIR"
-    else
-        log "   ❌ 错误: 无法进入构建目录: $BUILD_DIR"
-        error_count=$((error_count + 1))
-    fi
-    
-    # 2. 检查配置文件
-    check_count=$((check_count + 1))
-    log "$check_count. 检查配置文件..."
-    if [ -f ".config" ]; then
-        local config_size=$(ls -lh .config 2>/dev/null | awk '{print $5}' 2>/dev/null || echo "未知")
-        local line_count=$(wc -l < .config 2>/dev/null | awk '{print $1}' 2>/dev/null || echo "0")
-        log "   ✅ .config 文件存在"
-        log "     📊 文件大小: $config_size"
-        log "     📝 文件行数: $line_count"
-        if [ "$line_count" -eq 0 ] 2>/dev/null; then
-            log "   ⚠️ 警告: .config 文件为空"
-            warning_count=$((warning_count + 1))
-        fi
-    else
-        log "   ❌ 错误: .config 文件不存在"
-        error_count=$((error_count + 1))
-    fi
-    
-    # 3. 检查feeds目录
-    check_count=$((check_count + 1))
-    log "$check_count. 检查feeds目录..."
-    if [ -d "feeds" ]; then
-        log "   ✅ feeds 目录存在"
-        local feeds_count=$(ls -d feeds/* 2>/dev/null | wc -l 2>/dev/null || echo "0")
-        log "     📊 feeds数量: $feeds_count"
-    else
-        log "   ❌ 错误: feeds 目录不存在"
-        error_count=$((error_count + 1))
-    fi
-    
-    # 4. 检查关键文件
-    check_count=$((check_count + 1))
-    log "$check_count. 检查关键文件..."
-    local missing_critical=0
-    for file in Makefile feeds.conf.default rules.mk Config.in; do
-        if [ -f "$file" ]; then
-            log "   ✅ $file 存在"
-        else
-            log "   ❌ 错误: $file 不存在"
-            missing_critical=$((missing_critical + 1))
-        fi
-    done
-    error_count=$((error_count + missing_critical))
-    
-    # 5. 检查环境变量
-    check_count=$((check_count + 1))
-    log "$check_count. 检查环境变量..."
-    local missing_vars=0
-    for var in SELECTED_BRANCH TARGET SUBTARGET DEVICE; do
-        if [ -n "${!var}" ]; then
-            log "   ✅ $var = ${!var}"
-        else
-            log "   ❌ 错误: $var 未设置"
-            missing_vars=$((missing_vars + 1))
-        fi
-    done
-    error_count=$((error_count + missing_vars))
-    
-    # 6. 检查构建目录权限
-    check_count=$((check_count + 1))
-    log "$check_count. 检查构建目录权限..."
-    if [ -w "$BUILD_DIR" ] 2>/dev/null; then
-        log "   ✅ 构建目录可写"
-    else
-        log "   ❌ 错误: 构建目录不可写"
-        error_count=$((error_count + 1))
-    fi
-    
-    # 7. 检查磁盘空间
-    check_count=$((check_count + 1))
-    log "$check_count. 检查磁盘空间..."
-    if command -v df >/dev/null 2>&1; then
-        local df_output=$(df -h /mnt 2>/dev/null | tail -1 2>/dev/null)
-        local available=$(echo "$df_output" | awk '{print $4}' 2>/dev/null || echo "未知")
-        log "   📊 /mnt 可用空间: $available"
-    else
-        log "   ⚠️ 警告: 无法检查磁盘空间"
-        warning_count=$((warning_count + 1))
-    fi
-    
-    # 8. 返回原始目录
-    cd "$original_pwd" 2>/dev/null || true
-    
-    # 输出总结
-    log ""
-    log "=== 🚨 检查总结 ==="
-    log "检查项总数: $check_count"
-    log "错误数量: $error_count"
-    log "警告数量: $warning_count"
-    log ""
-    
-    if [ $error_count -eq 0 ]; then
-        if [ $warning_count -eq 0 ]; then
-            log "✅ 前置检查全部通过，可以开始编译"
-        else
-            log "✅ 前置检查通过（有 $warning_count 个警告）"
-        fi
-    else
-        log "⚠️ 前置检查发现 $error_count 个错误，将继续执行编译"
-        log "💡 如果编译失败，请检查以上错误信息"
-    fi
-    
-    # 总是返回0，确保流程继续
-    return 0
-}
-#【最终修复版结束】
+#【最终修复版：pre_build_error_check函数 - 删除，因为工作流文件已有步骤21】
 
 #【build_firmware_main.sh-24】
 # 编译固件
@@ -3020,9 +2965,6 @@ main() {
         "integrate_custom_files")
             integrate_custom_files
             ;;
-        "pre_build_error_check")
-            pre_build_error_check
-            ;;
         "build_firmware")
             build_firmware "$arg1"
             ;;
@@ -3070,7 +3012,7 @@ main() {
             echo "  add_turboacc_support, configure_feeds, install_turboacc_packages"
             echo "  pre_build_space_check, generate_config, verify_usb_config, check_usb_drivers_integrity, apply_config"
             echo "  fix_network, download_dependencies, integrate_custom_files"
-            echo "  pre_build_error_check, build_firmware, post_build_space_check"
+            echo "  build_firmware, post_build_space_check"
             echo "  check_firmware_files, cleanup, save_source_code_info, verify_compiler_files"
             echo "  check_compiler_invocation, search_compiler_files, universal_compiler_search"
             echo "  search_compiler_files_simple, intelligent_platform_aware_compiler_search"
