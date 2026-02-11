@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      # 步骤 0: 生成时间戳 - 修复版：添加UTC+8时区
+      # 步骤 0: 生成时间戳（UTC+8时区）- 修复版：保留完整输出，只移除无用的注释行
       - name: "0. 生成时间戳（UTC+8时区）"
         run: |
           echo "=== 步骤 0: 生成时间戳（UTC+8时区） ==="
@@ -52,9 +52,9 @@ jobs:
           echo "设置时区为UTC+8..."
           sudo timedatectl set-timezone Asia/Shanghai 2>/dev/null || true
           
-          # 生成时间戳（使用修复后的实际时间）
+          # 生成时间戳
           START_TIME=$(date +'%Y-%m-%d %H:%M:%S')
-          echo "🕐 修复后的开始时间: $START_TIME"
+          echo "🕐 开始时间: $START_TIME"
           
           # 生成精确到秒的时间戳
           TIMESTAMP_LOCAL=$(date +'%Y%m%d_%H%M%S')
@@ -731,7 +731,7 @@ jobs:
           echo "✅ 完成时间: $(date +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 13 完成"
 
-      # 步骤 14: 验证USB配置（修复版：精确匹配）
+      # 步骤 14: 验证USB配置（修复版：精确匹配）- 保留完整输出
       - name: "14. 验证USB配置（修复版：精确匹配）"
         run: |
           echo "=== 步骤 14: 验证USB配置（修复版：精确匹配） ==="
@@ -854,33 +854,91 @@ jobs:
           
           echo "🟢 步骤 15 完成"
 
-      # 步骤 16: 应用配置并显示详情（完整版）- 修复libustream冲突
-      - name: "16. 应用配置并显示详情（完整版）- 修复libustream冲突"
+      # 步骤 16: 应用配置并显示详情（完整版）- 修复USB 3.0、TurboACC和ath10k冲突
+      - name: "16. 应用配置并显示详情（完整版）- 修复USB 3.0、TurboACC和ath10k冲突"
         run: |
-          echo "=== 步骤 16: 应用配置并显示详情（完整版）- 修复libustream冲突 ==="
+          echo "=== 步骤 16: 应用配置并显示详情（完整版）- 修复USB 3.0、TurboACC和ath10k冲突 ==="
           echo "🕐 开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理
           set -e
           trap 'echo "❌ 步骤 16 失败，退出代码: $?"; exit 1' ERR
           
-          if [ -f "/mnt/openwrt-build/.config" ]; then
-            cp "/mnt/openwrt-build/.config" "/mnt/openwrt-build/.config.original"
-            echo "✅ 已备份原始配置文件"
-          fi
-          
-          # 应用配置前先修复libustream冲突
-          echo "🔧 应用配置前修复libustream冲突..."
           cd /mnt/openwrt-build
           
-          # 如果存在libustream-openssl和libustream-wolfssl，只保留一个
-          if grep -q "^CONFIG_PACKAGE_libustream-openssl=y" .config && grep -q "^CONFIG_PACKAGE_libustream-wolfssl=y" .config; then
-            echo "⚠️ 发现libustream-openssl和libustream-wolfssl冲突"
-            echo "🔧 修复冲突: 禁用libustream-wolfssl"
-            sed -i 's/^CONFIG_PACKAGE_libustream-wolfssl=y/# CONFIG_PACKAGE_libustream-wolfssl is not set/' .config
-            echo "✅ 冲突已修复"
+          # 【关键修复1】强制启用USB 3.0驱动
+          echo "🔧 强制启用USB 3.0核心驱动..."
+          if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+            echo "✅ 已强制添加: kmod-usb-xhci-hcd"
           fi
           
+          if ! grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+            echo "✅ 已强制添加: kmod-usb3"
+          fi
+          
+          # 根据平台添加专用USB驱动
+          if [ "${{ env.TARGET }}" = "ipq40xx" ] || grep -q "^CONFIG_TARGET_ipq40xx=y" .config 2>/dev/null; then
+            if ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config; then
+              echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
+              echo "✅ 已强制添加: kmod-usb-dwc3-qcom (IPQ40xx专用)"
+            fi
+            if ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config; then
+              echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+              echo "✅ 已强制添加: kmod-phy-qcom-dwc3"
+            fi
+          fi
+          
+          # 【关键修复2】强制启用TurboACC配置（正常模式）
+          if [ "${{ github.event.inputs.config_mode }}" = "normal" ]; then
+            echo "🔧 强制启用TurboACC配置..."
+            if ! grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+              echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+              echo "✅ 已强制添加: luci-app-turboacc"
+            fi
+            if ! grep -q "^CONFIG_PACKAGE_kmod-shortcut-fe=y" .config; then
+              echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+              echo "✅ 已强制添加: kmod-shortcut-fe"
+            fi
+            if ! grep -q "^CONFIG_PACKAGE_kmod-fast-classifier=y" .config; then
+              echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+              echo "✅ 已强制添加: kmod-fast-classifier"
+            fi
+            echo "✅ TurboACC配置已强制启用"
+          fi
+          
+          # 【关键修复3】强制启用TCP BBR拥塞控制
+          echo "🔧 强制启用TCP BBR拥塞控制..."
+          if ! grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+            echo "✅ 已强制添加: kmod-tcp-bbr"
+          fi
+          if ! grep -q "^CONFIG_DEFAULT_TCP_CONG=\"bbr\"" .config; then
+            echo "CONFIG_DEFAULT_TCP_CONG=\"bbr\"" >> .config
+            echo "✅ 已设置默认拥塞控制算法: BBR"
+          fi
+          
+          # 【关键修复4】解决kmod-ath10k-ct冲突问题
+          echo "🔧 解决kmod-ath10k-ct冲突问题..."
+          # 禁用标准ath10k驱动
+          sed -i 's/^CONFIG_PACKAGE_kmod-ath10k=y/# CONFIG_PACKAGE_kmod-ath10k is not set/' .config 2>/dev/null || true
+          sed -i 's/^CONFIG_PACKAGE_kmod-ath10k-pci=y/# CONFIG_PACKAGE_kmod-ath10k-pci is not set/' .config 2>/dev/null || true
+          sed -i 's/^CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set/' .config 2>/dev/null || true
+          
+          # 确保CT版本被启用
+          echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
+          echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
+          echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
+          echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y" >> .config
+          echo "✅ 已配置使用kmod-ath10k-ct替代标准ath10k驱动"
+          
+          # 备份原始配置文件
+          cp "/mnt/openwrt-build/.config" "/mnt/openwrt-build/.config.original" 2>/dev/null || true
+          echo "✅ 已备份原始配置文件"
+          
+          # 应用配置
           "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" apply_config
           
           if [ $? -ne 0 ]; then
@@ -902,56 +960,46 @@ jobs:
             echo ""
             echo "2. ✅ USB 3.0驱动配置（精确匹配）:"
             echo "  - kmod-usb-xhci-hcd:" $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅ 已启用" || echo "❌ 未启用")
+            echo "  - kmod-usb3:" $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅ 已启用" || echo "❌ 未启用")
             
             echo ""
             echo "3. ✅ TCP BBR拥塞控制算法配置:"
             echo "  - kmod-tcp-bbr:" $(grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅ 已启用" || echo "❌ 未启用")
             
             echo ""
-            echo "4. ✅ 关键USB驱动状态（精确匹配）:"
+            echo "4. ✅ TurboACC配置（正常模式必需）:"
+            if [ "${{ github.event.inputs.config_mode }}" = "normal" ]; then
+              echo "  - luci-app-turboacc:" $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅ 已启用" || echo "❌ 未启用")
+              echo "  - kmod-shortcut-fe:" $(grep -q "^CONFIG_PACKAGE_kmod-shortcut-fe=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅ 已启用" || echo "❌ 未启用")
+            else
+              echo "  ℹ️ 基础模式，不启用TurboACC"
+            fi
+            
+            echo ""
+            echo "5. ✅ kmod-ath10k-ct冲突解决状态:"
+            echo "  - kmod-ath10k:" $(grep -q "^CONFIG_PACKAGE_kmod-ath10k=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "⚠️ 仍启用" || echo "✅ 已禁用")
+            echo "  - kmod-ath10k-ct:" $(grep -q "^CONFIG_PACKAGE_kmod-ath10k-ct=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅ 已启用" || echo "❌ 未启用")
+            
+            echo ""
+            echo "6. ✅ 关键USB驱动状态（精确匹配）:"
             echo "  - kmod-usb-core:" $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
             echo "  - kmod-usb2:" $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
             echo "  - kmod-usb3:" $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
             echo "  - kmod-usb-storage:" $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
             echo "  - kmod-scsi-core:" $(grep -q "^CONFIG_PACKAGE_kmod-scsi-core=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
+            echo "  - kmod-usb-xhci-hcd:" $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
             
             echo ""
-            echo "5. ✅ 插件配置统计（精确匹配）:"
+            echo "7. ✅ 插件配置统计（精确匹配）:"
             enabled=$(grep -c "^CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config" 2>/dev/null || echo "0")
             disabled=$(grep -c "^# CONFIG_PACKAGE_.* is not set" "/mnt/openwrt-build/.config" 2>/dev/null || echo "0")
             echo "   ✅ 已启用插件: $enabled 个"
             echo "   ❌ 已禁用插件: $disabled 个"
             
             echo ""
-            echo "=== 🎯 详细配置状态标识（精确匹配版）==="
-            echo "📋 USB配置状态:"
-            echo "  CONFIG_PACKAGE_kmod-usb-core:" $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
-            echo "  CONFIG_PACKAGE_kmod-usb2:" $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
-            echo "  CONFIG_PACKAGE_kmod-usb3:" $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
-            echo "  CONFIG_PACKAGE_kmod-usb-xhci-hcd:" $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
-            echo "  CONFIG_PACKAGE_kmod-usb-storage:" $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
-            echo "  CONFIG_PACKAGE_kmod-scsi-core:" $(grep -q "^CONFIG_PACKAGE_kmod-scsi-core=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
-            
-            echo ""
-            echo "📦 功能性插件状态:"
-            echo "  TurboACC 网络加速 (luci-app-turboacc):" $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
-            echo "  TCP BBR拥塞控制算法 (kmod-tcp-bbr):" $(grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
-            
-            # 检查是否有重复配置行
-            echo ""
-            echo "🔍 检查重复配置行:"
-            duplicates=$(grep "^CONFIG_PACKAGE_kmod-usb-xhci-hcd" "/mnt/openwrt-build/.config" | wc -l)
-            if [ $duplicates -gt 1 ]; then
-              echo "⚠️ 发现重复配置: kmod-usb-xhci-hcd ($duplicates 次)"
-              echo "💡 这可能导致配置冲突，建议清理配置文件"
-            else
-              echo "✅ 无重复配置"
-            fi
-            
-            echo ""
-            echo "🔍 libustream冲突状态:"
-            echo "  libustream-openssl:" $(grep -q "^CONFIG_PACKAGE_libustream-openssl=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
-            echo "  libustream-wolfssl:" $(grep -q "^CONFIG_PACKAGE_libustream-wolfssl=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
+            echo "8. 🔍 libustream冲突状态:"
+            echo "  - libustream-openssl:" $(grep -q "^CONFIG_PACKAGE_libustream-openssl=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
+            echo "  - libustream-wolfssl:" $(grep -q "^CONFIG_PACKAGE_libustream-wolfssl=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅" || echo "❌")
             
             if grep -q "^CONFIG_PACKAGE_libustream-openssl=y" "/mnt/openwrt-build/.config" && grep -q "^CONFIG_PACKAGE_libustream-wolfssl=y" "/mnt/openwrt-build/.config"; then
               echo "⚠️ 警告: libustream-openssl和libustream-wolfssl同时启用，可能导致冲突"
@@ -959,23 +1007,13 @@ jobs:
             fi
             
             echo ""
-            echo "🎯 配置模式: ${{ github.event.inputs.config_mode }}"
-            if [ "${{ github.event.inputs.config_mode }}" = "normal" ]; then
-              echo "✅ 当前为正常模式（完整功能）"
-            else
-              echo "🔧 当前为基础模式（最小化配置）"
-            fi
-            
-            echo ""
-            echo "🔍 配置摘要:"
-            echo "  - 目标平台: $TARGET/$SUBTARGET"
-            echo "  - 目标设备: $DEVICE"
-            echo "  - OpenWrt版本: $SELECTED_BRANCH"
+            echo "🎯 配置摘要:"
             echo "  - 配置模式: ${{ github.event.inputs.config_mode }}"
-            echo "  - USB驱动: 已启用核心驱动"
-            echo "  - 插件数量: $enabled 个已启用"
+            echo "  - USB 3.0驱动: 已强制启用"
+            echo "  - TurboACC: $([ "${{ github.event.inputs.config_mode }}" = "normal" ] && echo "已强制启用" || echo "基础模式不启用")"
+            echo "  - kmod-ath10k-ct冲突: 已解决"
             
-            # 显示前10个启用的插件 - 精确匹配
+            # 显示前10个启用的插件
             echo ""
             echo "📋 启用的插件 (前10个，精确匹配):"
             grep "^CONFIG_PACKAGE_.*=y" "/mnt/openwrt-build/.config" 2>/dev/null | head -10 | sed 's/^CONFIG_PACKAGE_//g' | sed 's/=y//g' | while read pkg; do
@@ -1107,7 +1145,7 @@ jobs:
           
           echo "🟢 步骤 19 完成"
 
-      # 步骤 20: 集成自定义文件（增强版）
+      # 步骤 20: 集成自定义文件（增强版）- 保留完整输出
       - name: "20. 集成自定义文件（增强版）"
         run: |
           echo "=== 步骤 20: 集成自定义文件（增强版）==="
@@ -1250,6 +1288,7 @@ jobs:
                   echo "  - ✅ 详细日志记录每个文件的处理结果"
                   echo "  - ✅ 分类统计和成功率计算"
                   echo "  - ✅ 日志存储到 /root/logs/ 目录（重启不丢失）"
+                  echo "  - ✅ 预创建Samba配置文件，修复编译错误"
                 fi
                 
                 # 检查文件名检查脚本
@@ -1264,6 +1303,7 @@ jobs:
                 echo "  🔄 错误不退出: IPK安装失败继续安装下一个"
                 echo "  📊 详细日志: 记录每个文件的处理结果和统计信息"
                 echo "  📁 持久日志: 日志存储在 /root/logs/（重启不丢失）"
+                echo "  🔧 Samba预配置: 预创建Samba配置文件，解决编译错误"
                 
                 if [ $NON_ENGLISH_COUNT -gt 0 ]; then
                   echo ""
@@ -1294,10 +1334,10 @@ jobs:
           echo "✅ 完成时间: $(date +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 20 完成"
 
-      # ⚠️⚠️⚠️ 步骤 21: 前置错误检查（立即退出版）- 修复版 ⚠️⚠️⚠️
-      - name: "21. 前置错误检查（立即退出版）"
+      # ⚠️⚠️⚠️ 步骤 21: 前置错误检查（立即退出版）- 增强版，自动修复配置问题 ⚠️⚠️⚠️
+      - name: "21. 前置错误检查（立即退出版）- 增强版，自动修复配置问题"
         run: |
-          echo "=== 步骤 21: 前置错误检查（立即退出版） ==="
+          echo "=== 步骤 21: 前置错误检查（立即退出版）- 增强版，自动修复配置问题 ==="
           echo "🕐 开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
           
           # 设置错误处理 - 任何错误立即退出并显示具体原因
@@ -1309,6 +1349,7 @@ jobs:
             source /mnt/openwrt-build/build_env.sh
             echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET"
             echo "✅ COMPILER_DIR=$COMPILER_DIR"
+            echo "✅ CONFIG_MODE=$CONFIG_MODE"
           else
             echo "❌ 错误: 环境文件不存在 (/mnt/openwrt-build/build_env.sh)"
             echo "💡 请检查步骤6和步骤7是否成功执行"
@@ -1316,7 +1357,7 @@ jobs:
           fi
           
           cd /mnt/openwrt-build
-          echo "=== 🚨 前置错误检查（立即退出版） ==="
+          echo "=== 🚨 前置错误检查（立即退出版）- 增强版 ==="
           
           # 1. 检查配置文件
           echo ""
@@ -1425,9 +1466,162 @@ jobs:
             echo "  ✅ 磁盘空间充足"
           fi
           
-          # 6. 检查build_firmware_main.sh脚本
+          # 6. 检查USB 3.0配置 - 关键修复
           echo ""
-          echo "6. ✅ 主脚本检查:"
+          echo "6. ✅ USB 3.0配置检查（自动修复）:"
+          USB_FIXED=0
+          
+          if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
+            echo "  ❌ 错误: USB 3.0驱动未启用 (kmod-usb-xhci-hcd)"
+            echo "  🔧 正在自动修复..."
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+            echo "  ✅ 已强制添加: kmod-usb-xhci-hcd"
+            USB_FIXED=1
+          else
+            echo "  ✅ kmod-usb-xhci-hcd: 已启用"
+          fi
+          
+          if ! grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
+            echo "  ❌ 错误: USB 3.0驱动未启用 (kmod-usb3)"
+            echo "  🔧 正在自动修复..."
+            echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+            echo "  ✅ 已强制添加: kmod-usb3"
+            USB_FIXED=1
+          else
+            echo "  ✅ kmod-usb3: 已启用"
+          fi
+          
+          # 根据平台添加专用USB驱动
+          if [ "$TARGET" = "ipq40xx" ] || grep -q "^CONFIG_TARGET_ipq40xx=y" .config 2>/dev/null; then
+            if ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config; then
+              echo "  ℹ️ 检测到IPQ40xx平台，添加专用驱动..."
+              echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
+              echo "  ✅ 已添加: kmod-usb-dwc3-qcom"
+              USB_FIXED=1
+            fi
+            if ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config; then
+              echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+              echo "  ✅ 已添加: kmod-phy-qcom-dwc3"
+              USB_FIXED=1
+            fi
+          fi
+          
+          if [ $USB_FIXED -eq 1 ]; then
+            echo "  🔄 运行 make defconfig 应用USB配置修复..."
+            make defconfig
+            echo "  ✅ USB配置修复完成"
+          fi
+          
+          # 7. 检查TurboACC配置（正常模式）- 关键修复
+          echo ""
+          echo "7. ✅ TurboACC配置检查（自动修复）:"
+          TURBOACC_FIXED=0
+          
+          if [ "$CONFIG_MODE" = "normal" ]; then
+            if ! grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+              echo "  ❌ 错误: TurboACC未启用 (正常模式必需)"
+              echo "  🔧 正在自动修复..."
+              echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+              echo "  ✅ 已强制添加: luci-app-turboacc"
+              TURBOACC_FIXED=1
+            else
+              echo "  ✅ luci-app-turboacc: 已启用"
+            fi
+            
+            if ! grep -q "^CONFIG_PACKAGE_kmod-shortcut-fe=y" .config; then
+              echo "  ❌ 错误: kmod-shortcut-fe未启用 (TurboACC必需)"
+              echo "  🔧 正在自动修复..."
+              echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+              echo "  ✅ 已强制添加: kmod-shortcut-fe"
+              TURBOACC_FIXED=1
+            else
+              echo "  ✅ kmod-shortcut-fe: 已启用"
+            fi
+            
+            if ! grep -q "^CONFIG_PACKAGE_kmod-fast-classifier=y" .config; then
+              echo "  ❌ 错误: kmod-fast-classifier未启用 (TurboACC必需)"
+              echo "  🔧 正在自动修复..."
+              echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+              echo "  ✅ 已强制添加: kmod-fast-classifier"
+              TURBOACC_FIXED=1
+            else
+              echo "  ✅ kmod-fast-classifier: 已启用"
+            fi
+          else
+            echo "  ℹ️ 基础模式，不检查TurboACC配置"
+          fi
+          
+          # 8. 检查TCP BBR配置
+          echo ""
+          echo "8. ✅ TCP BBR拥塞控制检查（自动修复）:"
+          BBR_FIXED=0
+          
+          if ! grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
+            echo "  ❌ 错误: TCP BBR未启用"
+            echo "  🔧 正在自动修复..."
+            echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+            echo "  ✅ 已强制添加: kmod-tcp-bbr"
+            BBR_FIXED=1
+          else
+            echo "  ✅ kmod-tcp-bbr: 已启用"
+          fi
+          
+          if ! grep -q "^CONFIG_DEFAULT_TCP_CONG=\"bbr\"" .config; then
+            echo "  ❌ 错误: 默认拥塞控制算法未设置为BBR"
+            echo "  🔧 正在自动修复..."
+            echo "CONFIG_DEFAULT_TCP_CONG=\"bbr\"" >> .config
+            echo "  ✅ 已设置默认拥塞控制算法: BBR"
+            BBR_FIXED=1
+          fi
+          
+          # 9. 检查kmod-ath10k-ct冲突 - 关键修复
+          echo ""
+          echo "9. ✅ kmod-ath10k-ct冲突检查（自动修复）:"
+          ATH10K_FIXED=0
+          
+          if grep -q "^CONFIG_PACKAGE_kmod-ath10k=y" .config; then
+            echo "  ⚠️ 发现冲突: kmod-ath10k 已启用"
+            echo "  🔧 正在自动修复..."
+            sed -i 's/^CONFIG_PACKAGE_kmod-ath10k=y/# CONFIG_PACKAGE_kmod-ath10k is not set/' .config
+            echo "  ✅ 已禁用: kmod-ath10k"
+            ATH10K_FIXED=1
+          fi
+          
+          if grep -q "^CONFIG_PACKAGE_kmod-ath10k-pci=y" .config; then
+            echo "  ⚠️ 发现冲突: kmod-ath10k-pci 已启用"
+            echo "  🔧 正在自动修复..."
+            sed -i 's/^CONFIG_PACKAGE_kmod-ath10k-pci=y/# CONFIG_PACKAGE_kmod-ath10k-pci is not set/' .config
+            echo "  ✅ 已禁用: kmod-ath10k-pci"
+            ATH10K_FIXED=1
+          fi
+          
+          if ! grep -q "^CONFIG_PACKAGE_kmod-ath10k-ct=y" .config; then
+            echo "  ❌ 错误: kmod-ath10k-ct 未启用"
+            echo "  🔧 正在自动修复..."
+            echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+            echo "  ✅ 已强制添加: kmod-ath10k-ct"
+            ATH10K_FIXED=1
+          else
+            echo "  ✅ kmod-ath10k-ct: 已启用"
+          fi
+          
+          if [ $ATH10K_FIXED -eq 1 ]; then
+            echo "  🔄 运行 make defconfig 应用ath10k修复..."
+            make defconfig
+            echo "  ✅ kmod-ath10k-ct冲突修复完成"
+          fi
+          
+          # 10. 如果修复了任何配置，重新运行defconfig
+          if [ $USB_FIXED -eq 1 ] || [ $TURBOACC_FIXED -eq 1 ] || [ $BBR_FIXED -eq 1 ] || [ $ATH10K_FIXED -eq 1 ]; then
+            echo ""
+            echo "🔄 配置已修复，重新运行 make defconfig..."
+            make defconfig
+            echo "✅ 所有配置修复完成"
+          fi
+          
+          # 11. 检查build_firmware_main.sh脚本
+          echo ""
+          echo "11. ✅ 主脚本检查:"
           if [ -f "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" ]; then
             echo "  ✅ 主脚本存在: firmware-config/scripts/build_firmware_main.sh"
             if [ -x "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" ]; then
@@ -1446,7 +1640,7 @@ jobs:
           # 所有检查通过
           echo ""
           echo "========================================"
-          echo "✅✅✅ 所有前置检查通过，可以开始编译 ✅✅✅"
+          echo "✅✅✅ 所有前置检查通过，配置已修复，可以开始编译 ✅✅✅"
           echo "========================================"
           echo "📋 编译配置摘要:"
           echo "  - 设备: $DEVICE"
@@ -1455,6 +1649,10 @@ jobs:
           echo "  - 配置模式: $CONFIG_MODE"
           echo "  - SDK目录: $COMPILER_DIR"
           echo "  - 磁盘空间: ${AVAILABLE_GB}G"
+          echo "  - USB 3.0驱动: $([ $USB_FIXED -eq 1 ] && echo '已修复' || echo '正常')"
+          echo "  - TurboACC: $([ $TURBOACC_FIXED -eq 1 ] && echo '已修复' || echo '正常')"
+          echo "  - TCP BBR: $([ $BBR_FIXED -eq 1 ] && echo '已修复' || echo '正常')"
+          echo "  - kmod-ath10k-ct: $([ $ATH10K_FIXED -eq 1 ] && echo '已修复' || echo '正常')"
           echo ""
           
           echo "🟢 步骤 21 完成"
