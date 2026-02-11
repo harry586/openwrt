@@ -1,4 +1,3 @@
-#【firmware-build.yml-01】
 # .github/workflows/firmware-build.yml
 name: OpenWrt 智能固件构建工作流
 
@@ -42,10 +41,7 @@ env:
 jobs:
   build-firmware:
     runs-on: ubuntu-22.04
-#【firmware-build.yml-01】
 
-#【firmware-build.yml-02】
-    
     steps:
       # 步骤 0: 生成时间戳 - 修复版：添加UTC+8时区
       - name: "0. 生成时间戳（UTC+8时区）"
@@ -84,9 +80,7 @@ jobs:
           echo "  并行优化: ${{ github.event.inputs.enable_parallel }}"
           
           echo "🟢 步骤 0 完成"
-#【firmware-build.yml-02】
 
-#【firmware-build.yml-03】
       # 步骤 1: 使用Git Archive API下载源代码
       - name: "1. 使用Git Archive API下载源代码"
         run: |
@@ -161,9 +155,7 @@ jobs:
           rm -rf openwrt-source
           echo "✅ Git Archive API下载完成，时间: $(date +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 1 完成"
-#【firmware-build.yml-03】
 
-#【firmware-build.yml-04】
       # 步骤 2: 上传源代码Artifacts（使用精确到秒的时间戳）
       - name: "2. 上传源代码Artifacts"
         uses: actions/upload-artifact@v4
@@ -172,9 +164,7 @@ jobs:
           path: /tmp/build-artifacts/source-archive/
           retention-days: 7
           if-no-files-found: error
-#【firmware-build.yml-04】
 
-#【firmware-build.yml-05】
       # 步骤 3: 修复权限问题
       - name: "3. 修复权限问题"
         run: |
@@ -213,9 +203,7 @@ jobs:
           find "${{ github.workspace }}/firmware-config/scripts" -name "*.sh" -exec chmod +x {} \;
           echo "✅ 修复所有脚本权限完成"
           echo "🟢 步骤 3 完成"
-#【firmware-build.yml-05】
 
-#【firmware-build.yml-06】
       # 步骤 4: 安装基础工具（优化版）
       - name: "4. 安装基础工具（优化版）"
         run: |
@@ -392,9 +380,7 @@ jobs:
           
           echo "✅ 工具验证完成"
           echo "🟢 步骤 4 完成"
-#【firmware-build.yml-06】
 
-#【firmware-build.yml-07】
       # 步骤 5: 初始空间检查
       - name: "5. 初始空间检查"
         run: |
@@ -420,9 +406,7 @@ jobs:
           fi
           
           echo "🟢 步骤 5 完成"
-#【firmware-build.yml-07】
 
-#【firmware-build.yml-08】
       # 步骤 6: 设置编译环境和构建目录
       - name: "6. 设置编译环境和构建目录"
         run: |
@@ -462,9 +446,7 @@ jobs:
           
           echo "✅ 编译环境和构建目录设置完成，时间: $(date +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 6 完成"
-#【firmware-build.yml-08】
 
-#【firmware-build.yml-09】
       # 步骤 7: 下载OpenWrt官方SDK（修复版）
       - name: "7. 下载OpenWrt官方SDK（修复版）"
         run: |
@@ -545,9 +527,7 @@ jobs:
           
           echo "✅ SDK下载步骤完成，时间: $(date +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 7 完成"
-#【firmware-build.yml-09】
 
-#【firmware-build.yml-10】
       # 步骤 8: 验证SDK下载结果（修复版：动态检查）
       - name: "8. 验证SDK下载结果（修复版：动态检查）"
         run: |
@@ -649,9 +629,7 @@ jobs:
           
           echo "✅ SDK验证完成"
           echo "🟢 步骤 8 完成"
-#【firmware-build.yml-10】
 
-#【firmware-build.yml-11】
       # 步骤 9: 添加 TurboACC 支持 - 修复版：所有版本都添加
       - name: "9. 添加 TurboACC 支持"
         run: |
@@ -671,9 +649,7 @@ jobs:
           
           echo "✅ 完成时间: $(date +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 9 完成"
-#【firmware-build.yml-11】
 
-#【firmware-build.yml-12】
       # 步骤 10: 配置Feeds - 修复版：统一处理TurboACC
       - name: "10. 配置Feeds"
         run: |
@@ -693,9 +669,7 @@ jobs:
           
           echo "✅ 完成时间: $(date +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 10 完成"
-#【firmware-build.yml-12】
 
-#【firmware-build.yml-13】
       # 步骤 11: 安装 TurboACC 包 - 修复版：正常模式都安装
       - name: "11. 安装 TurboACC 包"
         if: github.event.inputs.config_mode == 'normal'
@@ -716,9 +690,7 @@ jobs:
           
           echo "✅ 完成时间: $(date +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 11 完成"
-#【firmware-build.yml-13】
 
-#【firmware-build.yml-14】
       # 步骤 12: 编译前空间检查
       - name: "12. 编译前空间检查"
         run: |
@@ -738,9 +710,7 @@ jobs:
           
           echo "✅ 完成时间: $(date +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 12 完成"
-#【firmware-build.yml-14】
 
-#【firmware-build.yml-15】
       # 步骤 13: 智能配置生成
       - name: "13. 智能配置生成"
         run: |
@@ -760,9 +730,7 @@ jobs:
           
           echo "✅ 完成时间: $(date +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 13 完成"
-#【firmware-build.yml-15】
 
-#【firmware-build.yml-16】
       # 步骤 14: 验证USB配置（修复版：精确匹配）
       - name: "14. 验证USB配置（修复版：精确匹配）"
         run: |
@@ -813,9 +781,7 @@ jobs:
           
           echo "✅ USB配置检查完成"
           echo "🟢 步骤 14 完成"
-#【firmware-build.yml-16】
 
-#【firmware-build.yml-17】
       # 步骤 15: USB驱动完整性检查（修复版）
       - name: "15. USB驱动完整性检查（修复版）"
         run: |
@@ -887,9 +853,7 @@ jobs:
           fi
           
           echo "🟢 步骤 15 完成"
-#【firmware-build.yml-17】
 
-#【firmware-build.yml-18】
       # 步骤 16: 应用配置并显示详情（完整版）- 修复libustream冲突
       - name: "16. 应用配置并显示详情（完整版）- 修复libustream冲突"
         run: |
@@ -1024,9 +988,7 @@ jobs:
           echo ""
           echo "✅ 配置应用完成"
           echo "🟢 步骤 16 完成"
-#【firmware-build.yml-18】
 
-#【firmware-build.yml-19】
       # 步骤 17: 检查并备份配置文件（修复版：清理重复配置）
       - name: "17. 检查并备份配置文件（修复版：清理重复配置）"
         run: |
@@ -1089,9 +1051,7 @@ jobs:
           fi
           
           echo "🟢 步骤 17 完成"
-#【firmware-build.yml-19】
 
-#【firmware-build.yml-20】
       # 步骤 18: 修复网络环境
       - name: "18. 修复网络环境"
         run: |
@@ -1105,9 +1065,7 @@ jobs:
           
           echo "✅ 完成时间: $(date +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 18 完成"
-#【firmware-build.yml-20】
 
-#【firmware-build.yml-21】
       # 步骤 19: 下载依赖包（优化版）
       - name: "19. 下载依赖包（优化版）"
         run: |
@@ -1148,9 +1106,7 @@ jobs:
           echo "📈 新增依赖包: $((NEW_DEP_COUNT - DEP_COUNT)) 个"
           
           echo "🟢 步骤 19 完成"
-#【firmware-build.yml-21】
 
-#【firmware-build.yml-22】
       # 步骤 20: 集成自定义文件（增强版）
       - name: "20. 集成自定义文件（增强版）"
         run: |
@@ -1337,16 +1293,14 @@ jobs:
           
           echo "✅ 完成时间: $(date +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 20 完成"
-#【firmware-build.yml-22】
 
-#【firmware-build.yml-23】
-      # 步骤 21: 前置错误检查（修复版：精确检查）
-      - name: "21. 前置错误检查（修复版：精确检查）"
+      # ⚠️⚠️⚠️ 步骤 21: 前置错误检查（立即退出版）- 修复版 ⚠️⚠️⚠️
+      - name: "21. 前置错误检查（立即退出版）"
         run: |
-          echo "=== 步骤 21: 前置错误检查（修复版：精确检查） ==="
+          echo "=== 步骤 21: 前置错误检查（立即退出版） ==="
           echo "🕐 开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
           
-          # 设置错误处理
+          # 设置错误处理 - 任何错误立即退出并显示具体原因
           set -e
           trap 'echo "❌ 步骤 21 失败，退出代码: $?"; exit 1' ERR
           
@@ -1354,53 +1308,38 @@ jobs:
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
             source /mnt/openwrt-build/build_env.sh
             echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET"
+            echo "✅ COMPILER_DIR=$COMPILER_DIR"
+          else
+            echo "❌ 错误: 环境文件不存在 (/mnt/openwrt-build/build_env.sh)"
+            echo "💡 请检查步骤6和步骤7是否成功执行"
+            exit 1
           fi
           
-          echo "🚀 执行前置错误检查（精确检查版）..."
-          
           cd /mnt/openwrt-build
+          echo "=== 🚨 前置错误检查（立即退出版） ==="
           
-          echo "=== 🚨 精确错误检查 ==="
-          
-          error_count=0
-          warning_count=0
-          
-          # 1. 检查配置文件（精确匹配）
+          # 1. 检查配置文件
+          echo ""
           echo "1. ✅ 配置文件检查:"
           if [ -f ".config" ]; then
             echo "  ✅ .config 文件存在"
             echo "  📊 文件大小: $(ls -lh .config | awk '{print $5}')"
             echo "  📝 文件行数: $(wc -l < .config)"
-            
-            # 检查是否有重复配置
-            duplicates=$(grep "^CONFIG_PACKAGE_kmod-usb-xhci-hcd" .config | wc -l)
-            if [ $duplicates -gt 1 ]; then
-              echo "  ⚠️ 发现重复配置: kmod-usb-xhci-hcd ($duplicates 次)"
-              warning_count=$((warning_count + 1))
-            fi
-            
-            # 检查libustream冲突
-            has_openssl=$(grep -c "^CONFIG_PACKAGE_libustream-openssl=y" .config)
-            has_wolfssl=$(grep -c "^CONFIG_PACKAGE_libustream-wolfssl=y" .config)
-            if [ $has_openssl -gt 0 ] && [ $has_wolfssl -gt 0 ]; then
-              echo "  ⚠️ 发现libustream-openssl和libustream-wolfssl冲突"
-              warning_count=$((warning_count + 1))
-            fi
-            
           else
-            echo "  ❌ .config 文件不存在"
-            error_count=$((error_count + 1))
+            echo "  ❌ 错误: .config 文件不存在"
+            echo "  💡 请检查步骤13智能配置生成是否成功"
+            exit 1
           fi
           
-          # 2. 检查SDK目录（使用COMPILER_DIR变量）
+          # 2. SDK目录检查 - 关键检查
           echo ""
           echo "2. ✅ SDK目录检查:"
           if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
             echo "  ✅ SDK目录存在: $COMPILER_DIR"
             echo "  📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | cut -f1 || echo '未知')"
             
-            # 检查GCC编译器
-            gcc_file=$(find "$COMPILER_DIR" -type f -executable \
+            # 检查GCC编译器 - 排除虚假的dummy-tools
+            GCC_FILE=$(find "$COMPILER_DIR" -type f -executable \
               -name "*gcc" \
               ! -name "*gcc-ar" \
               ! -name "*gcc-ranlib" \
@@ -1409,16 +1348,30 @@ jobs:
               ! -path "*scripts*" \
               2>/dev/null | head -1)
             
-            if [ -n "$gcc_file" ]; then
-              echo "  ✅ 找到GCC编译器: $(basename "$gcc_file")"
+            if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
+              echo "  ✅ 找到可执行GCC编译器: $(basename "$GCC_FILE")"
+              echo "  🔧 GCC版本: $("$GCC_FILE" --version 2>&1 | head -1)"
             else
-              echo "  ⚠️ 未找到真正的GCC编译器"
-              warning_count=$((warning_count + 1))
+              echo "  ❌ 错误: SDK目录中未找到真正的GCC编译器"
+              echo "  💡 COMPILER_DIR=$COMPILER_DIR"
+              echo "  📁 目录内容 (前20项):"
+              ls -la "$COMPILER_DIR" | head -20
+              
+              # 检查是否有虚假的dummy-tools
+              DUMMY_GCC=$(find "$COMPILER_DIR" -type f -executable -name "*gcc" -path "*dummy-tools*" 2>/dev/null | head -1)
+              if [ -n "$DUMMY_GCC" ]; then
+                echo "  ⚠️ 检测到虚假的dummy-tools编译器: $DUMMY_GCC"
+                echo "  💡 这是OpenWrt构建系统的占位符，不是真正的编译器"
+                echo "  💡 请检查SDK是否正确解压"
+              fi
+              exit 1
             fi
-            
           else
-            echo "  ❌ SDK目录不存在: $COMPILER_DIR"
-            error_count=$((error_count + 1))
+            echo "  ❌ 错误: SDK目录不存在: $COMPILER_DIR"
+            echo "  💡 请检查步骤7 SDK下载是否成功"
+            echo "  📁 当前/mnt/openwrt-build目录内容:"
+            ls -la /mnt/openwrt-build | head -20
+            exit 1
           fi
           
           # 3. 检查feeds
@@ -1426,62 +1379,86 @@ jobs:
           echo "3. ✅ Feeds检查:"
           if [ -d "feeds" ]; then
             echo "  ✅ feeds 目录存在"
+            echo "  📊 feeds目录大小: $(du -sh feeds 2>/dev/null | cut -f1 || echo '未知')"
+            
+            # 检查是否有feeds已更新
+            if [ -f "feeds.conf" ] || [ -f "feeds.conf.default" ]; then
+              echo "  ✅ feeds配置文件存在"
+            else
+              echo "  ⚠️ 警告: feeds配置文件不存在"
+            fi
           else
-            echo "  ❌ feeds 目录不存在"
-            error_count=$((error_count + 1))
+            echo "  ❌ 错误: feeds 目录不存在"
+            echo "  💡 请检查步骤10配置Feeds是否成功"
+            exit 1
           fi
           
-          # 4. 检查依赖包
+          # 4. 检查依赖包目录
           echo ""
           echo "4. ✅ 依赖包检查:"
           if [ -d "dl" ]; then
-            dl_count=$(find dl -type f 2>/dev/null | wc -l)
-            echo "  ✅ dl 目录存在，文件数: $dl_count 个"
+            DL_COUNT=$(find dl -type f 2>/dev/null | wc -l)
+            echo "  ✅ dl 目录存在，文件数: $DL_COUNT 个"
+            echo "  📊 dl目录大小: $(du -sh dl 2>/dev/null | cut -f1 || echo '未知')"
+            
+            if [ $DL_COUNT -eq 0 ]; then
+              echo "  ⚠️ 警告: dl目录为空，编译时会下载依赖包"
+            fi
           else
-            echo "  ⚠️ dl 目录不存在，可能需要下载依赖"
-            warning_count=$((warning_count + 1))
+            echo "  ⚠️ 警告: dl 目录不存在，将在编译时创建并下载依赖"
           fi
           
           # 5. 检查磁盘空间
           echo ""
           echo "5. ✅ 磁盘空间检查:"
-          available_space=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
-          available_gb=$((available_space / 1024 / 1024))
-          echo "  📊 /mnt 可用空间: ${available_gb}G"
+          AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
+          AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+          echo "  📊 /mnt 可用空间: ${AVAILABLE_GB}G"
           
-          if [ $available_gb -lt 10 ]; then
-            echo "  ❌ 错误: 磁盘空间不足 (需要至少10G，当前${available_gb}G)"
-            error_count=$((error_count + 1))
-          elif [ $available_gb -lt 20 ]; then
-            echo "  ⚠️ 警告: 磁盘空间较低 (建议至少20G，当前${available_gb}G)"
-            warning_count=$((warning_count + 1))
+          if [ $AVAILABLE_GB -lt 10 ]; then
+            echo "  ❌ 错误: 磁盘空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
+            echo "  💡 请清理磁盘空间或增加存储"
+            exit 1
+          elif [ $AVAILABLE_GB -lt 20 ]; then
+            echo "  ⚠️ 警告: 磁盘空间较低 (建议至少20G，当前${AVAILABLE_GB}G)"
           else
             echo "  ✅ 磁盘空间充足"
           fi
           
-          # 总结
+          # 6. 检查build_firmware_main.sh脚本
           echo ""
-          echo "=== 🎯 检查结果 ==="
-          echo "  错误数量: $error_count 个"
-          echo "  警告数量: $warning_count 个"
-          
-          if [ $error_count -eq 0 ]; then
-            if [ $warning_count -eq 0 ]; then
-              echo "✅ 前置检查通过，可以开始编译"
+          echo "6. ✅ 主脚本检查:"
+          if [ -f "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" ]; then
+            echo "  ✅ 主脚本存在: firmware-config/scripts/build_firmware_main.sh"
+            if [ -x "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" ]; then
+              echo "  ✅ 主脚本有执行权限"
             else
-              echo "⚠️ 前置检查通过，但有 $warning_count 个警告，建议修复"
+              echo "  ❌ 错误: 主脚本没有执行权限"
+              chmod +x "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh"
+              echo "  ✅ 已修复执行权限"
             fi
           else
-            echo "❌ 前置检查发现 $error_count 个错误，$warning_count 个警告"
-            echo "💡 请修复错误后再编译"
+            echo "  ❌ 错误: 主脚本不存在"
+            echo "  💡 请检查步骤1源代码下载是否成功"
             exit 1
           fi
           
-          echo "✅ 完成时间: $(date +'%Y-%m-%d %H:%M:%S')"
+          # 所有检查通过
+          echo ""
+          echo "========================================"
+          echo "✅✅✅ 所有前置检查通过，可以开始编译 ✅✅✅"
+          echo "========================================"
+          echo "📋 编译配置摘要:"
+          echo "  - 设备: $DEVICE"
+          echo "  - 版本: $SELECTED_BRANCH"
+          echo "  - 目标: $TARGET/$SUBTARGET"
+          echo "  - 配置模式: $CONFIG_MODE"
+          echo "  - SDK目录: $COMPILER_DIR"
+          echo "  - 磁盘空间: ${AVAILABLE_GB}G"
+          echo ""
+          
           echo "🟢 步骤 21 完成"
-#【firmware-build.yml-23】
 
-#【firmware-build.yml-24】
       # 步骤 22: 编译固件前的空间检查
       - name: "22. 编译固件前的空间检查"
         run: |
@@ -1507,9 +1484,7 @@ jobs:
           fi
           
           echo "🟢 步骤 22 完成"
-#【firmware-build.yml-24】
 
-#【firmware-build.yml-25】
       # 步骤 23: 编译固件（智能并行优化版）
       - name: "23. 编译固件（智能并行优化版）"
         run: |
@@ -1609,9 +1584,7 @@ jobs:
           fi
           
           echo "🟢 步骤 23 完成"
-#【firmware-build.yml-25】
 
-#【firmware-build.yml-26】
       # 步骤 24: 检查构建产物（修复版）
       - name: "24. 检查构建产物（修复版）"
         if: success()
@@ -1721,9 +1694,7 @@ jobs:
           
           echo "✅ 完成时间: $(date +'%Y-%m-%d %H:%M:%S')"
           echo "🟢 步骤 24 完成"
-#【firmware-build.yml-26】
 
-#【firmware-build.yml-27】
       # 步骤 25: 上传固件原始目录（使用精确到秒的时间戳）
       - name: "25. 上传固件原始目录"
         if: success()
@@ -1733,9 +1704,7 @@ jobs:
           path: /mnt/openwrt-build/bin/targets/
           retention-days: 7
           if-no-files-found: error
-#【firmware-build.yml-27】
 
-#【firmware-build.yml-28】
       # 步骤 26: 上传配置文件（使用精确到秒的时间戳）
       - name: "26. 上传配置文件"
         if: always()
@@ -1745,9 +1714,7 @@ jobs:
           path: ${{ github.workspace }}/firmware-config/config-backup/
           retention-days: 7
           if-no-files-found: error
-#【firmware-build.yml-28】
 
-#【firmware-build.yml-29】
       # 步骤 27: 编译后空间检查（修复版）
       - name: "27. 编译后空间检查（修复版）"
         if: always()
@@ -1773,9 +1740,7 @@ jobs:
           fi
           
           echo "🟢 步骤 27 完成"
-#【firmware-build.yml-29】
 
-#【firmware-build.yml-30】
       # 步骤 28: 编译后总结（增强版）
       - name: "28. 编译后总结（增强版）"
         if: always()
@@ -1922,4 +1887,3 @@ jobs:
           echo "📁 所有Artifact使用精确到秒的时间戳命名: ${{ env.TIMESTAMP_SEC }}"
           echo "========================================"
           echo "🟢 步骤 28 完成"
-#【firmware-build.yml-30】
