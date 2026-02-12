@@ -1,849 +1,467 @@
-# firmware-build-fix.yml
-name: 🔧 系统性标识修复系统（显式结束标记版）
+#【firmware-build.yml-00】
+# OpenWrt 智能固件构建工作流 - 系统主入口
+# 版本: 3.0.0
+# 最后更新: 2026-02-13
+
+name: OpenWrt 智能固件构建工作流
 
 on:
-  push:
-    paths:
-      - 'fix.txt'
   workflow_dispatch:
     inputs:
-      action:
-        description: "🔧 选择操作类型"
-        required: false
-        default: "apply"
+      device_name:
+        description: "📱 设备名称"
+        required: true
+        default: "ac42u"
         type: choice
-        options:
-          - "apply"    # 应用修复
-          - "restore"  # 恢复备份
-          - "verify"   # 仅验证
-      target_file:
-        description: "📁 目标文件路径（留空自动检测）"
+        options: ["ac42u", "cmcc_rax3000m", "netgear_3800"]
+      version_selection:
+        description: "🔄 版本选择"
+        required: true
+        type: choice
+        default: "21.02"
+        options: ["23.05", "21.02"]
+      config_mode:
+        description: "⚙️ 配置模式选择"
+        required: true
+        type: choice
+        default: "normal"
+        options: ["base", "normal"]
+      extra_packages:
+        description: "额外安装插件 - 格式：用分号;分隔"
         required: false
+        type: string
         default: ""
+      enable_parallel:
+        description: "⚡ 启用智能并行优化"
+        required: false
+        type: boolean
+        default: true
+
+env:
+  BUILD_DIR: "/mnt/openwrt-build"
+  REPO_ROOT: "${{ github.workspace }}"
+  ENABLE_PARALLEL: "${{ github.event.inputs.enable_parallel }}"
 
 jobs:
-  systemic-identifier-fix:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    
+  build-firmware:
+    runs-on: ubuntu-22.04
+#【firmware-build.yml-00-end】
+
     steps:
-      - name: 🛎️ 检出代码
-        uses: actions/checkout@v3
+      #【firmware-build.yml-01】
+      - name: "01. 生成时间戳（UTC+8时区）"
+        run: |
+          echo "=== 步骤01: 生成时间戳（UTC+8时区） ==="
+          
+          sudo timedatectl set-timezone Asia/Shanghai 2>/dev/null || true
+          
+          START_TIME=$(date +'%Y-%m-%d %H:%M:%S')
+          echo "🕐 开始时间: $START_TIME"
+          
+          TIMESTAMP_LOCAL=$(date +'%Y%m%d_%H%M%S')
+          TIMESTAMP_SEC="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$TIMESTAMP_LOCAL"
+          
+          echo "TIMESTAMP_SEC=$TIMESTAMP_SEC" >> $GITHUB_ENV
+          echo "START_TIME=$START_TIME" >> $GITHUB_ENV
+          
+          echo "✅ 生成时间戳: $TIMESTAMP_SEC"
+          echo "📋 构建配置:"
+          echo "  设备: ${{ github.event.inputs.device_name }}"
+          echo "  版本: ${{ github.event.inputs.version_selection }}"
+          echo "  模式: ${{ github.event.inputs.config_mode }}"
+          echo "  并行优化: ${{ github.event.inputs.enable_parallel }}"
+      #【firmware-build.yml-01-end】
+
+      #【firmware-build.yml-02】
+      - name: "02. 使用Git Archive API下载源代码"
+        run: |
+          echo "=== 步骤02: 使用Git Archive API下载源代码 ==="
+          
+          set -e
+          trap 'echo "❌ 步骤02 失败，退出代码: $?"; exit 1' ERR
+          
+          mkdir -p /tmp/openwrt-source
+          cd /tmp/openwrt-source
+          
+          echo "🔍 获取仓库默认分支..."
+          DEFAULT_BRANCH=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}" | jq -r '.default_branch')
+          echo "✅ 默认分支: $DEFAULT_BRANCH"
+          
+          echo "📥 下载源代码压缩包..."
+          curl -s -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/tarball/$DEFAULT_BRANCH" \
+            -o source.tar.gz
+          
+          if [ ! -f "source.tar.gz" ]; then
+            echo "❌ 错误: 下载源代码压缩包失败"
+            exit 1
+          fi
+          
+          echo "✅ 下载完成，文件大小: $(ls -lh source.tar.gz | awk '{print $5}')"
+          
+          echo "📦 解压源代码..."
+          tar -xzf source.tar.gz --strip-components=1
+          
+          echo "🔍 检查解压结果..."
+          if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            echo "✅ 源代码解压成功"
+            echo "✅ 主脚本存在: firmware-config/scripts/build_firmware_main.sh"
+            
+            echo "📁 复制文件到工作区..."
+            mkdir -p ${{ github.workspace }}
+            
+            if [ -d "firmware-config/build-Compiler-file" ]; then
+              echo "⚠️ 发现编译器目录，排除不复制"
+              rm -rf firmware-config/build-Compiler-file
+            fi
+            
+            rsync -av --exclude='.git' . ${{ github.workspace }}/
+            
+            echo "✅ 文件复制完成"
+            
+            mkdir -p /tmp/build-artifacts/source-archive
+            cp source.tar.gz /tmp/build-artifacts/source-archive/
+            echo "📦 源代码已保存到: /tmp/build-artifacts/source-archive/"
+          else
+            echo "❌ 错误: 源代码解压失败，重要文件缺失"
+            ls -la
+            exit 1
+          fi
+          
+          cd /tmp
+          rm -rf openwrt-source
+          echo "✅ 步骤02 完成"
+      #【firmware-build.yml-02-end】
+
+      #【firmware-build.yml-03】
+      - name: "03. 上传源代码Artifacts"
+        uses: actions/upload-artifact@v4
         with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: 🔧 设置操作类型
-        id: set_action
+          name: source-${{ env.TIMESTAMP_SEC }}
+          path: /tmp/build-artifacts/source-archive/
+          retention-days: 7
+          if-no-files-found: error
+      #【firmware-build.yml-03-end】
+
+      #【firmware-build.yml-04】
+      - name: "04. 修复权限问题"
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            case "${{ github.event.inputs.action }}" in
-              "restore")
-                echo "ACTION_TYPE=restore" >> $GITHUB_ENV
-                ;;
-              "verify")
-                echo "ACTION_TYPE=verify" >> $GITHUB_ENV
-                ;;
-              *)
-                echo "ACTION_TYPE=apply" >> $GITHUB_ENV
-                ;;
-            esac
+          echo "=== 步骤04: 修复权限问题 ==="
+          
+          set -e
+          trap 'echo "❌ 步骤04 失败，退出代码: $?"; exit 1' ERR
+          
+          echo "🔧 修复所有脚本的执行权限..."
+          
+          if [ -f "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" ]; then
+            chmod +x "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh"
+            echo "✅ 修复主脚本权限"
           else
-            echo "ACTION_TYPE=apply" >> $GITHUB_ENV
+            echo "❌ 错误: 主脚本不存在"
+            exit 1
           fi
-          echo "✅ 操作类型: $ACTION_TYPE"
-      
-      - name: 📁 查找目标文件
-        id: find_target
-        run: |
-          echo "=== 查找目标文件 ==="
           
-          if [ -n "${{ github.event.inputs.target_file }}" ]; then
-            if [ -f "${{ github.event.inputs.target_file }}" ]; then
-              TARGET_FILE="${{ github.event.inputs.target_file }}"
-              echo "✅ 使用用户指定的文件: $TARGET_FILE"
-            else
-              echo "❌ 用户指定的文件不存在: ${{ github.event.inputs.target_file }}"
-              exit 1
-            fi
+          if [ -f "${{ github.workspace }}/support.sh" ]; then
+            chmod +x "${{ github.workspace }}/support.sh"
+            echo "✅ 修复support.sh权限"
           else
-            POSSIBLE_PATHS=(
-              "firmware-config/scripts/build_firmware_main.sh"
-              "scripts/build_firmware_main.sh"
-              "build_firmware_main.sh"
-            )
-            
-            TARGET_FILE=""
-            for path in "${POSSIBLE_PATHS[@]}"; do
-              if [ -f "$path" ]; then
-                TARGET_FILE="$path"
-                break
-              fi
-            done
-            
-            if [ -z "$TARGET_FILE" ]; then
-              TARGET_FILE=$(find . -name "build_firmware_main.sh" -type f ! -path "./.git/*" | head -1)
-            fi
-          fi
-          
-          if [ -z "$TARGET_FILE" ]; then
-            echo "❌ 未找到 build_firmware_main.sh 文件"
+            echo "❌ 错误: support.sh不存在"
             exit 1
           fi
           
-          echo "✅ 目标文件: $TARGET_FILE"
-          echo "TARGET_FILE=$TARGET_FILE" >> $GITHUB_ENV
+          find "${{ github.workspace }}/firmware-config/scripts" -name "*.sh" -exec chmod +x {} \;
+          echo "✅ 修复所有脚本权限完成"
+      #【firmware-build.yml-04-end】
+
+      #【firmware-build.yml-05】
+      - name: "05. 安装基础工具（优化版）"
+        run: |
+          echo "=== 步骤05: 安装基础工具（优化版） ==="
           
-          # 检查换行符格式
-          if file "$TARGET_FILE" | grep -q "CRLF"; then
-            echo "⚠️ 目标文件包含Windows换行符(CRLF)"
-            echo "TARGET_HAS_CRLF=true" >> $GITHUB_ENV
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step05_install_basic_tools
+      #【firmware-build.yml-05-end】
+
+      #【firmware-build.yml-06】
+      - name: "06. 初始空间检查"
+        run: |
+          echo "=== 步骤06: 初始空间检查 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step06_initial_space_check
+      #【firmware-build.yml-06-end】
+
+      #【firmware-build.yml-07】
+      - name: "07. 创建构建目录"
+        run: |
+          echo "=== 步骤07: 创建构建目录 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step07_create_build_dir
+      #【firmware-build.yml-07-end】
+
+      #【firmware-build.yml-08】
+      - name: "08. 初始化构建环境"
+        run: |
+          echo "=== 步骤08: 初始化构建环境 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step08_initialize_build_env \
+            "${{ github.event.inputs.device_name }}" \
+            "${{ github.event.inputs.version_selection }}" \
+            "${{ github.event.inputs.config_mode }}"
+      #【firmware-build.yml-08-end】
+
+      #【firmware-build.yml-09】
+      - name: "09. 下载OpenWrt官方SDK"
+        run: |
+          echo "=== 步骤09: 下载OpenWrt官方SDK ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step09_download_sdk \
+            "${{ github.event.inputs.device_name }}"
+      #【firmware-build.yml-09-end】
+
+      #【firmware-build.yml-10】
+      - name: "10. 验证SDK下载结果"
+        run: |
+          echo "=== 步骤10: 验证SDK下载结果 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step10_verify_sdk
+      #【firmware-build.yml-10-end】
+
+      #【firmware-build.yml-11】
+      - name: "11. 添加TurboACC支持"
+        run: |
+          echo "=== 步骤11: 添加TurboACC支持 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step11_add_turboacc
+      #【firmware-build.yml-11-end】
+
+      #【firmware-build.yml-12】
+      - name: "12. 配置Feeds"
+        run: |
+          echo "=== 步骤12: 配置Feeds ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step12_configure_feeds
+      #【firmware-build.yml-12-end】
+
+      #【firmware-build.yml-13】
+      - name: "13. 安装TurboACC包"
+        if: github.event.inputs.config_mode == 'normal'
+        run: |
+          echo "=== 步骤13: 安装TurboACC包 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step13_install_turboacc
+      #【firmware-build.yml-13-end】
+
+      #【firmware-build.yml-14】
+      - name: "14. 编译前空间检查"
+        run: |
+          echo "=== 步骤14: 编译前空间检查 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step14_pre_build_space_check
+      #【firmware-build.yml-14-end】
+
+      #【firmware-build.yml-15】
+      - name: "15. 智能配置生成"
+        run: |
+          echo "=== 步骤15: 智能配置生成 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step15_generate_config \
+            "${{ github.event.inputs.extra_packages }}"
+      #【firmware-build.yml-15-end】
+
+      #【firmware-build.yml-16】
+      - name: "16. 验证USB配置"
+        run: |
+          echo "=== 步骤16: 验证USB配置 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step16_verify_usb
+      #【firmware-build.yml-16-end】
+
+      #【firmware-build.yml-17】
+      - name: "17. USB驱动完整性检查"
+        run: |
+          echo "=== 步骤17: USB驱动完整性检查 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step17_check_usb_drivers
+      #【firmware-build.yml-17-end】
+
+      #【firmware-build.yml-18】
+      - name: "18. 应用配置"
+        run: |
+          echo "=== 步骤18: 应用配置 ==="
+          
+          set -e
+          trap 'echo "❌ 步骤18 失败，退出代码: $?"; exit 1' ERR
+          
+          cd /mnt/openwrt-build
+          
+          echo "🔄 运行 make defconfig..."
+          make defconfig || {
+            echo "❌ make defconfig 失败"
+            exit 1
+          }
+          
+          echo "✅ 配置应用完成"
+      #【firmware-build.yml-18-end】
+
+      #【firmware-build.yml-19】
+      - name: "19. 备份配置文件"
+        run: |
+          echo "=== 步骤19: 备份配置文件 ==="
+          
+          set -e
+          trap 'echo "❌ 步骤19 失败，退出代码: $?"; exit 1' ERR
+          
+          cd /mnt/openwrt-build
+          
+          if [ ! -f ".config" ]; then
+            echo "❌ 错误: .config 文件不存在"
+            exit 1
+          fi
+          
+          echo "✅ .config 文件存在"
+          echo "📊 文件大小: $(ls -lh .config | awk '{print $5}')"
+          echo "📝 文件行数: $(wc -l < .config)"
+          
+          mkdir -p ${{ github.workspace }}/firmware-config/config-backup
+          BACKUP_FILE="${{ github.workspace }}/firmware-config/config-backup/config_${{ env.TIMESTAMP_SEC }}.config"
+          
+          cp .config "$BACKUP_FILE"
+          echo "✅ 配置文件已备份到: $BACKUP_FILE"
+      #【firmware-build.yml-19-end】
+
+      #【firmware-build.yml-20】
+      - name: "20. 修复网络环境"
+        run: |
+          echo "=== 步骤20: 修复网络环境 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step20_fix_network
+      #【firmware-build.yml-20-end】
+
+      #【firmware-build.yml-21】
+      - name: "21. 下载依赖包"
+        run: |
+          echo "=== 步骤21: 下载依赖包 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step21_download_deps
+      #【firmware-build.yml-21-end】
+
+      #【firmware-build.yml-22】
+      - name: "22. 集成自定义文件"
+        run: |
+          echo "=== 步骤22: 集成自定义文件 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step22_integrate_custom_files
+      #【firmware-build.yml-22-end】
+
+      #【firmware-build.yml-23】
+      - name: "23. 前置错误检查"
+        run: |
+          echo "=== 步骤23: 前置错误检查 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step23_pre_build_check
+      #【firmware-build.yml-23-end】
+
+      #【firmware-build.yml-24】
+      - name: "24. 编译前空间确认"
+        run: |
+          echo "=== 步骤24: 编译前空间确认 ==="
+          
+          set -e
+          trap 'echo "❌ 步骤24 失败，退出代码: $?"; exit 1' ERR
+          
+          df -h /mnt
+          AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
+          AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+          echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+          
+          if [ $AVAILABLE_GB -lt 10 ]; then
+            echo "❌ 错误: 编译前空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
+            exit 1
           else
-            echo "TARGET_HAS_CRLF=false" >> $GITHUB_ENV
+            echo "✅ 编译前空间充足"
           fi
-          
-          # 记录原始文件信息
-          ORIGINAL_SIZE=$(stat -c %s "$TARGET_FILE")
-          ORIGINAL_LINES=$(wc -l < "$TARGET_FILE")
-          ORIGINAL_IDENTIFIERS=$(grep -c "^#【build_firmware_main.sh-[0-9]\+】" "$TARGET_FILE" 2>/dev/null || echo "0")
-          
-          echo "ORIGINAL_SIZE=$ORIGINAL_SIZE" >> $GITHUB_ENV
-          echo "ORIGINAL_LINES=$ORIGINAL_LINES" >> $GITHUB_ENV
-          echo "ORIGINAL_IDENTIFIERS=$ORIGINAL_IDENTIFIERS" >> $GITHUB_ENV
-          
-          echo "📊 原始文件信息:"
-          echo "  - 大小: $ORIGINAL_SIZE 字节"
-          echo "  - 行数: $ORIGINAL_LINES 行"
-          echo "  - 系统性标识: $ORIGINAL_IDENTIFIERS 个"
-          echo "  - 换行符: $(file "$TARGET_FILE" | grep -q "CRLF" && echo "CRLF (Windows)" || echo "LF (Unix)")"
-      
-      # ============ 修复换行符 ============
-      - name: 🔧 修复换行符问题
-        if: env.ACTION_TYPE == 'apply' || env.ACTION_TYPE == 'verify'
+      #【firmware-build.yml-24-end】
+
+      #【firmware-build.yml-25】
+      - name: "25. 编译固件"
         run: |
-          echo "=== 修复换行符问题 ==="
+          echo "=== 步骤25: 编译固件 ==="
           
-          # 修复目标文件的换行符
-          if [ -f "$TARGET_FILE" ]; then
-            echo "🔧 转换目标文件换行符: $TARGET_FILE"
-            sed -i 's/\r$//' "$TARGET_FILE"
-            echo "✅ 目标文件换行符已转换为Unix格式(LF)"
-          fi
-          
-          # 修复fix.txt的换行符
-          if [ -f "fix.txt" ]; then
-            echo "🔧 转换修复文件换行符: fix.txt"
-            sed -i 's/\r$//' "fix.txt"
-            echo "✅ 修复文件换行符已转换为Unix格式(LF)"
-          fi
-          
-          # 验证换行符
-          echo ""
-          echo "🔍 验证换行符:"
-          if file "$TARGET_FILE" | grep -q "CRLF"; then
-            echo "⚠️ 目标文件仍包含CRLF换行符"
-          else
-            echo "✅ 目标文件换行符正确 (LF)"
-          fi
-          
-          if [ -f "fix.txt" ]; then
-            if file "fix.txt" | grep -q "CRLF"; then
-              echo "⚠️ 修复文件仍包含CRLF换行符"
-            else
-              echo "✅ 修复文件换行符正确 (LF)"
-            fi
-          fi
-      
-      # ============ 严格验证修复文件（支持显式结束标记）============
-      - name: 🔍 严格验证修复文件
-        if: env.ACTION_TYPE == 'apply' || env.ACTION_TYPE == 'verify'
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step25_build_firmware \
+            "${{ env.ENABLE_PARALLEL }}"
+      #【firmware-build.yml-25-end】
+
+      #【firmware-build.yml-26】
+      - name: "26. 检查构建产物"
+        if: success()
         run: |
-          echo "=== 严格验证修复文件 ==="
-          echo "📋 验证模式: 显式结束标记 (#【build_firmware_main.sh-序号-end】)"
-          
-          if [ ! -f "fix.txt" ]; then
-            echo "❌ 没有找到修复文件 fix.txt"
-            exit 1
-          fi
-          
-          if [ ! -s "fix.txt" ]; then
-            echo "❌ 修复文件 fix.txt 为空"
-            exit 1
-          fi
-          
-          # 再次确保换行符正确
-          sed -i 's/\r$//' "fix.txt"
-          
-          # 验证系统性标识开始格式
-          echo ""
-          echo "🔍 验证系统性标识开始格式..."
-          START_IDENTIFIERS=$(grep "^#【build_firmware_main.sh-[0-9]\+】$" fix.txt || true)
-          
-          if [ -z "$START_IDENTIFIERS" ]; then
-            echo "❌ 修复文件中未找到正确的系统性开始标识"
-            echo "💡 开始标识格式应为: #【build_firmware_main.sh-序号】"
-            exit 1
-          fi
-          
-          START_COUNT=$(echo "$START_IDENTIFIERS" | wc -l)
-          echo "✅ 找到 $START_COUNT 个开始标识"
-          
-          # 验证系统性标识结束格式
-          echo ""
-          echo "🔍 验证系统性标识结束格式..."
-          END_IDENTIFIERS=$(grep "^#【build_firmware_main.sh-[0-9]\+-end】$" fix.txt || true)
-          
-          if [ -z "$END_IDENTIFIERS" ]; then
-            echo "❌ 修复文件中未找到正确的系统性结束标识"
-            echo "💡 结束标识格式应为: #【build_firmware_main.sh-序号-end】"
-            exit 1
-          fi
-          
-          END_COUNT=$(echo "$END_IDENTIFIERS" | wc -l)
-          echo "✅ 找到 $END_COUNT 个结束标识"
-          
-          # 检查开始和结束数量是否匹配
-          if [ $START_COUNT -ne $END_COUNT ]; then
-            echo "❌ 开始标识($START_COUNT)和结束标识($END_COUNT)数量不匹配"
-            exit 1
-          fi
-          
-          # 提取所有序号并检查对应关系
-          echo ""
-          echo "🔍 检查标识对应关系..."
-          
-          # 提取开始序号
-          START_NUMBERS=$(echo "$START_IDENTIFIERS" | sed 's/^#【build_firmware_main.sh-\([0-9]\+\)】$/\1/')
-          # 提取结束序号
-          END_NUMBERS=$(echo "$END_IDENTIFIERS" | sed 's/^#【build_firmware_main.sh-\([0-9]\+\)-end】$/\1/')
-          
-          # 排序后比较
-          SORTED_START=$(echo "$START_NUMBERS" | sort -n)
-          SORTED_END=$(echo "$END_NUMBERS" | sort -n)
-          
-          if [ "$SORTED_START" != "$SORTED_END" ]; then
-            echo "❌ 开始标识和结束标识序号不匹配"
-            echo "📋 开始序号: $(echo $SORTED_START | tr '\n' ' ')"
-            echo "📋 结束序号: $(echo $SORTED_END | tr '\n' ' ')"
-            exit 1
-          fi
-          
-          echo "✅ 所有开始标识都有对应的结束标识"
-          
-          # 显示所有标识对
-          echo ""
-          echo "📋 系统性标识对列表:"
-          for number in $START_NUMBERS; do
-            echo "  🔖 #【build_firmware_main.sh-$number】 ⟹  #【build_firmware_main.sh-$number-end】"
-          done
-          
-          # 检查重复开始标识
-          echo ""
-          echo "🔍 检查重复开始标识..."
-          DUPLICATE_STARTS=$(echo "$START_IDENTIFIERS" | sort | uniq -d)
-          if [ -n "$DUPLICATE_STARTS" ]; then
-            echo "❌ 发现重复的系统性开始标识:"
-            echo "$DUPLICATE_STARTS" | while read -r id; do
-              echo "  ⚠️ $id"
-            done
-            exit 1
-          else
-            echo "✅ 无重复开始标识"
-          fi
-          
-          # 检查重复结束标识
-          echo ""
-          echo "🔍 检查重复结束标识..."
-          DUPLICATE_ENDS=$(echo "$END_IDENTIFIERS" | sort | uniq -d)
-          if [ -n "$DUPLICATE_ENDS" ]; then
-            echo "❌ 发现重复的系统性结束标识:"
-            echo "$DUPLICATE_ENDS" | while read -r id; do
-              echo "  ⚠️ $id"
-            done
-            exit 1
-          else
-            echo "✅ 无重复结束标识"
-          fi
-          
-          # 检查每个开始标识后的代码块（直到对应的结束标识）
-          echo ""
-          echo "🔍 检查标识对应的代码块..."
-          EMPTY_BLOCKS=0
-          
-          while IFS= read -r start_id; do
-            [ -z "$start_id" ] && continue
-            
-            # 提取序号
-            NUMBER=$(echo "$start_id" | sed 's/^#【build_firmware_main.sh-\([0-9]\+\)】$/\1/')
-            END_ID="#【build_firmware_main.sh-${NUMBER}-end】"
-            
-            # 提取开始标识和对应结束标识之间的内容
-            BLOCK=$(awk -v start="$start_id" -v end="$END_ID" '
-              $0 == start {found=1; next}
-              $0 == end {found=0; exit}
-              found {block = block $0 "\n"}
-              END {
-                gsub(/\n+$/, "", block)
-                printf "%s", block
-              }
-            ' fix.txt)
-            
-            CLEAN_BLOCK=$(echo "$BLOCK" | sed '/^\s*$/d')
-            if [ -z "$CLEAN_BLOCK" ]; then
-              echo "  ❌ $start_id (代码块为空)"
-              EMPTY_BLOCKS=$((EMPTY_BLOCKS + 1))
-            else
-              BLOCK_LINES=$(echo "$BLOCK" | wc -l)
-              echo "  ✅ $start_id (代码块: $BLOCK_LINES 行)"
-            fi
-          done <<< "$START_IDENTIFIERS"
-          
-          if [ $EMPTY_BLOCKS -gt 0 ]; then
-            echo "❌ 发现 $EMPTY_BLOCKS 个空的代码块"
-            exit 1
-          fi
-          
-          # 检查目标文件中是否存在这些开始标识
-          echo ""
-          echo "🔍 检查目标文件中的系统性标识..."
-          MISSING_IDS=0
-          
-          while IFS= read -r start_id; do
-            ESCAPED_ID=$(echo "$start_id" | sed 's/[][\/.*^$]/\\&/g')
-            if grep -q "^$ESCAPED_ID" "$TARGET_FILE"; then
-              echo "  ✅ $start_id (在目标文件中找到)"
-            else
-              echo "  ⚠️  $start_id (在目标文件中未找到，将追加到文件末尾)"
-              MISSING_IDS=$((MISSING_IDS + 1))
-            fi
-          done <<< "$START_IDENTIFIERS"
-          
-          echo ""
-          echo "📊 验证统计:"
-          echo "  - 开始标识数: $START_COUNT"
-          echo "  - 结束标识数: $END_COUNT"
-          echo "  - 空代码块: $EMPTY_BLOCKS"
-          echo "  - 缺失标识: $MISSING_IDS"
-          
-          if [ $EMPTY_BLOCKS -eq 0 ] && [ $START_COUNT -eq $END_COUNT ]; then
-            echo "✅ 修复文件验证通过"
-          else
-            echo "❌ 修复文件验证失败"
-            exit 1
-          fi
-          
-          echo "IDENTIFIER_COUNT=$START_COUNT" >> $GITHUB_ENV
-          echo "MISSING_IDS=$MISSING_IDS" >> $GITHUB_ENV
-      
-      - name: ⏹️ 仅验证模式退出
-        if: env.ACTION_TYPE == 'verify'
-        run: |
-          echo "✅ 验证完成，未执行任何修改"
-          exit 0
-      
-      # ============ 备份原始文件 ============
-      - name: 💾 备份原始文件
-        if: env.ACTION_TYPE == 'apply'
-        run: |
-          echo "=== 备份原始文件 ==="
-          
-          mkdir -p ".github/backups"
-          
-          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-          BACKUP_FILE=".github/backups/build_firmware_main.sh.${TIMESTAMP}.id${ORIGINAL_IDENTIFIERS}.backup"
-          
-          # 备份前确保换行符统一
-          sed -i 's/\r$//' "$TARGET_FILE"
-          cp "$TARGET_FILE" "$BACKUP_FILE"
-          
-          echo "✅ 原始文件已备份到: $BACKUP_FILE"
-          echo "BACKUP_FILE=$BACKUP_FILE" >> $GITHUB_ENV
-          
-          echo "📊 备份信息:"
-          echo "  - 时间: $TIMESTAMP"
-          echo "  - 大小: $(stat -c %s "$BACKUP_FILE") 字节"
-          echo "  - 标识数: $ORIGINAL_IDENTIFIERS 个"
-      
-      # ============ 核心：系统性标识整体块替换（支持显式结束标记）============
-      - name: 🛠️ 基于系统性标识进行整体块替换
-        if: env.ACTION_TYPE == 'apply'
-        run: |
-          echo "=== 基于系统性标识进行整体块替换 ==="
-          echo "🔧 替换策略: 以开始标识为锚点，以结束标识为边界，整体替换整个代码块"
-          echo "📋 标识格式: #【build_firmware_main.sh-序号】 ... #【build_firmware_main.sh-序号-end】"
-          
-          # 确保换行符正确
-          sed -i 's/\r$//' "$TARGET_FILE"
-          sed -i 's/\r$//' "fix.txt"
-          
-          # 创建临时文件
-          TEMP_FILE="${TARGET_FILE}.tmp"
-          cp "$TARGET_FILE" "$TEMP_FILE"
-          
-          # 读取fix.txt中的所有开始标识
-          START_IDENTIFIERS=$(grep "^#【build_firmware_main.sh-[0-9]\+】$" fix.txt)
-          
-          REPLACED_COUNT=0
-          APPENDED_COUNT=0
-          
-          # 处理每个标识
-          while IFS= read -r start_id; do
-            [ -z "$start_id" ] && continue
-            
-            # 提取序号
-            NUMBER=$(echo "$start_id" | sed 's/^#【build_firmware_main.sh-\([0-9]\+\)】$/\1/')
-            END_ID="#【build_firmware_main.sh-${NUMBER}-end】"
-            
-            echo ""
-            echo "🔨 处理标识对:"
-            echo "  📌 开始: $start_id"
-            echo "  📌 结束: $END_ID"
-            
-            # 提取fix.txt中该开始标识到对应结束标识之间的完整代码块
-            BLOCK=$(awk -v start="$start_id" -v end="$END_ID" '
-              $0 == start {found=1; next}
-              $0 == end {found=0; exit}
-              found {block = block $0 "\n"}
-              END {
-                gsub(/\n+$/, "", block)
-                printf "%s", block
-              }
-            ' fix.txt)
-            
-            BLOCK_LINES=$(echo "$BLOCK" | wc -l)
-            echo "  📦 代码块大小: $BLOCK_LINES 行"
-            
-            # 转义开始标识
-            ESCAPED_START=$(echo "$start_id" | sed 's/[][\/.*^$]/\\&/g')
-            ESCAPED_END=$(echo "$END_ID" | sed 's/[][\/.*^$]/\\&/g')
-            
-            # 检查目标文件中是否有该开始标识
-            if grep -q "^$ESCAPED_START" "$TEMP_FILE"; then
-              echo "  ✅ 在目标文件中找到开始标识，执行整体块替换"
-              
-              # 整体块替换逻辑（从开始标识到结束标识整体替换）
-              awk -v start="$start_id" -v end="$END_ID" -v new_block="$BLOCK" '
-                BEGIN {in_block=0; replaced=0}
-                
-                $0 == start && !replaced {
-                  print start
-                  if (new_block != "") print new_block
-                  print end
-                  in_block=1
-                  replaced=1
-                  next
-                }
-                
-                in_block && $0 == end {
-                  in_block=0
-                  next
-                }
-                
-                in_block {next}
-                
-                {print}
-              ' "$TEMP_FILE" > "${TEMP_FILE}.2"
-              
-              mv "${TEMP_FILE}.2" "$TEMP_FILE"
-              REPLACED_COUNT=$((REPLACED_COUNT + 1))
-              echo "  ✅ 整体块替换完成（包含开始标识、代码块、结束标识）"
-              
-            else
-              echo "  ➕ 在目标文件中未找到开始标识，追加到文件末尾"
-              
-              # 追加完整块（包含开始标识、代码块、结束标识）
-              echo "" >> "$TEMP_FILE"
-              echo "$start_id" >> "$TEMP_FILE"
-              if [ -n "$BLOCK" ]; then
-                echo "$BLOCK" >> "$TEMP_FILE"
-              fi
-              echo "$END_ID" >> "$TEMP_FILE"
-              APPENDED_COUNT=$((APPENDED_COUNT + 1))
-              echo "  ✅ 已追加完整块到文件末尾"
-            fi
-            
-          done <<< "$START_IDENTIFIERS"
-          
-          # 确保最终文件的换行符是Unix格式
-          sed -i 's/\r$//' "$TEMP_FILE"
-          
-          # 替换原始文件
-          mv "$TEMP_FILE" "$TARGET_FILE"
-          
-          echo ""
-          echo "📊 整体块替换统计:"
-          echo "  - 成功替换: $REPLACED_COUNT 个标识块"
-          echo "  - 追加新增: $APPENDED_COUNT 个标识块"
-          
-          echo "REPLACED_COUNT=$REPLACED_COUNT" >> $GITHUB_ENV
-          echo "APPENDED_COUNT=$APPENDED_COUNT" >> $GITHUB_ENV
-      
-      # ============ 验证替换结果 ============
-      - name: 📏 验证系统性标识替换结果
-        if: env.ACTION_TYPE == 'apply'
-        run: |
-          echo "=== 验证系统性标识替换结果 ==="
-          
-          if [ ! -f "$TARGET_FILE" ]; then
-            echo "❌ 错误: 目标文件丢失"
-            exit 1
-          fi
-          
-          # 再次确保换行符正确
-          sed -i 's/\r$//' "$TARGET_FILE"
-          
-          NEW_SIZE=$(stat -c %s "$TARGET_FILE")
-          NEW_LINES=$(wc -l < "$TARGET_FILE")
-          NEW_START_IDENTIFIERS=$(grep -c "^#【build_firmware_main.sh-[0-9]\+】$" "$TARGET_FILE" 2>/dev/null || echo "0")
-          NEW_END_IDENTIFIERS=$(grep -c "^#【build_firmware_main.sh-[0-9]\+-end】$" "$TARGET_FILE" 2>/dev/null || echo "0")
-          
-          echo "📊 文件变更统计:"
-          echo "  - 原始大小: $ORIGINAL_SIZE 字节"
-          echo "  - 新大小:   $NEW_SIZE 字节"
-          echo "  - 变化:     $((NEW_SIZE - ORIGINAL_SIZE)) 字节"
-          echo ""
-          echo "  - 原始行数: $ORIGINAL_LINES 行"
-          echo "  - 新行数:   $NEW_LINES 行"
-          echo "  - 变化:     $((NEW_LINES - ORIGINAL_LINES)) 行"
-          echo ""
-          echo "  - 原始开始标识: $ORIGINAL_IDENTIFIERS 个"
-          echo "  - 新开始标识:   $NEW_START_IDENTIFIERS 个"
-          echo "  - 新结束标识:   $NEW_END_IDENTIFIERS 个"
-          echo "  - 标识对变化:   $((NEW_START_IDENTIFIERS - ORIGINAL_IDENTIFIERS)) 个"
-          
-          # 大小验证
-          if command -v bc >/dev/null 2>&1; then
-            SIZE_RATIO=$(echo "scale=2; $NEW_SIZE / $ORIGINAL_SIZE" | bc)
-            echo "  - 大小比率: ${SIZE_RATIO}x"
-            
-            if (( $(echo "$SIZE_RATIO > 3.0" | bc -l) )); then
-              echo ""
-              echo "❌ 严重错误：文件大小异常增大"
-              echo "💡 正在从备份恢复..."
-              cp "$BACKUP_FILE" "$TARGET_FILE"
-              exit 1
-            elif (( $(echo "$SIZE_RATIO < 0.3" | bc -l) )); then
-              echo ""
-              echo "❌ 严重错误：文件大小异常减小"
-              echo "💡 正在从备份恢复..."
-              cp "$BACKUP_FILE" "$TARGET_FILE"
-              exit 1
-            fi
-          fi
-          
-          # 验证开始和结束标识数量是否匹配
-          if [ $NEW_START_IDENTIFIERS -ne $NEW_END_IDENTIFIERS ]; then
-            echo ""
-            echo "❌ 严重错误：开始标识($NEW_START_IDENTIFIERS)和结束标识($NEW_END_IDENTIFIERS)数量不匹配"
-            echo "💡 正在从备份恢复..."
-            cp "$BACKUP_FILE" "$TARGET_FILE"
-            exit 1
-          fi
-          
-          # 验证修复的标识
-          echo ""
-          echo "🔍 验证修复的标识块..."
-          
-          FIX_START_IDS=$(grep "^#【build_firmware_main.sh-[0-9]\+】$" fix.txt)
-          VERIFY_FAILED=0
-          
-          while IFS= read -r start_id; do
-            [ -z "$start_id" ] && continue
-            
-            # 提取序号
-            NUMBER=$(echo "$start_id" | sed 's/^#【build_firmware_main.sh-\([0-9]\+\)】$/\1/')
-            END_ID="#【build_firmware_main.sh-${NUMBER}-end】"
-            ESCAPED_START=$(echo "$start_id" | sed 's/[][\/.*^$]/\\&/g')
-            ESCAPED_END=$(echo "$END_ID" | sed 's/[][\/.*^$]/\\&/g')
-            
-            if grep -q "^$ESCAPED_START" "$TARGET_FILE"; then
-              # 检查该标识下的内容直到结束标识
-              BLOCK=$(awk -v start="$start_id" -v end="$END_ID" '
-                $0 == start {found=1; next}
-                $0 == end {found=0; exit}
-                found {block = block $0 "\n"}
-                END {
-                  gsub(/\n+$/, "", block)
-                  printf "%s", block
-                }
-              ' "$TARGET_FILE")
-              
-              # 检查结束标识是否存在
-              if grep -q "^$ESCAPED_END" "$TARGET_FILE"; then
-                CLEAN_BLOCK=$(echo "$BLOCK" | sed '/^\s*$/d')
-                if [ -n "$CLEAN_BLOCK" ]; then
-                  BLOCK_LINES=$(echo "$BLOCK" | wc -l)
-                  echo "  ✅ $start_id (代码块: $BLOCK_LINES 行, 结束标识: 存在)"
-                else
-                  echo "  ⚠️  $start_id (代码块为空)"
-                  VERIFY_FAILED=$((VERIFY_FAILED + 1))
-                fi
-              else
-                echo "  ❌ $start_id (结束标识 $END_ID 未找到)"
-                VERIFY_FAILED=$((VERIFY_FAILED + 1))
-              fi
-            else
-              echo "  ❌ $start_id (未在文件中找到)"
-              VERIFY_FAILED=$((VERIFY_FAILED + 1))
-            fi
-          done <<< "$FIX_START_IDS"
-          
-          if [ $VERIFY_FAILED -eq 0 ]; then
-            echo ""
-            echo "✅ 所有系统性标识块验证通过"
-          else
-            echo ""
-            echo "⚠️ 有 $VERIFY_FAILED 个标识块验证失败"
-          fi
-          
-          # ============ 关键修复：Shell语法检查前的预处理 ============
-          echo ""
-          echo "🔧 预处理Shell语法检查..."
-          
-          # 创建一个临时文件用于语法检查
-          SYNTAX_CHECK_FILE="${TARGET_FILE}.syntax_check"
-          cp "$TARGET_FILE" "$SYNTAX_CHECK_FILE"
-          
-          # 彻底移除所有Windows换行符
-          sed -i 's/\r$//' "$SYNTAX_CHECK_FILE"
-          sed -i 's/\r//g' "$SYNTAX_CHECK_FILE"
-          
-          # 修复函数定义格式
-          sed -i 's/() {$/() {/g' "$SYNTAX_CHECK_FILE"
-          sed -i 's/()\r{$/() {/g' "$SYNTAX_CHECK_FILE"
-          sed -i 's/(){$/() {/g' "$SYNTAX_CHECK_FILE"
-          
-          # 移除文件末尾的空行
-          sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$SYNTAX_CHECK_FILE"
-          
-          echo "🔧 检查Shell语法..."
-          if command -v bash >/dev/null 2>&1; then
-            # 使用严格模式检查
-            if bash -n "$SYNTAX_CHECK_FILE" 2>/tmp/bash_error.log; then
-              echo "✅ Shell语法检查通过"
-              # 语法检查通过，将修正后的文件复制回原文件
-              cp "$SYNTAX_CHECK_FILE" "$TARGET_FILE"
-            else
-              echo "❌ Shell语法检查失败"
-              echo "💡 错误信息:"
-              cat /tmp/bash_error.log | head -10
-              
-              # 尝试更彻底的修复
-              echo ""
-              echo "🔧 尝试深度修复Shell语法..."
-              
-              # 方法1: 使用dos2unix风格转换
-              tr -d '\r' < "$TARGET_FILE" > "${TARGET_FILE}.unix"
-              mv "${TARGET_FILE}.unix" "$TARGET_FILE"
-              
-              # 方法2: 修复函数定义
-              awk '
-                /^[a-zA-Z0-9_]+\(\) *\{/ {
-                  gsub(/\r/, "")
-                  gsub(/\(\) *\{/, "() {")
-                  print
-                  next
-                }
-                { gsub(/\r/, ""); print }
-              ' "$TARGET_FILE" > "${TARGET_FILE}.fixed"
-              
-              mv "${TARGET_FILE}.fixed" "$TARGET_FILE"
-              
-              # 再次检查
-              if bash -n "$TARGET_FILE" 2>/tmp/bash_error2.log; then
-                echo "✅ 深度修复后Shell语法检查通过"
-              else
-                echo "❌ 深度修复后仍然失败"
-                echo "💡 错误信息:"
-                cat /tmp/bash_error2.log | head -10
-                echo ""
-                echo "💡 正在从备份恢复..."
-                cp "$BACKUP_FILE" "$TARGET_FILE"
-                exit 1
-              fi
-            fi
-            rm -f "$SYNTAX_CHECK_FILE" /tmp/bash_error.log /tmp/bash_error2.log 2>/dev/null || true
-          fi
-          
-          echo ""
-          echo "✅ 替换结果验证完成"
-          
-          echo "NEW_SIZE=$NEW_SIZE" >> $GITHUB_ENV
-          echo "NEW_LINES=$NEW_LINES" >> $GITHUB_ENV
-          echo "NEW_IDENTIFIERS=$NEW_START_IDENTIFIERS" >> $GITHUB_ENV
-      
-      # ============ 恢复操作 ============
-      - name: 🔄 恢复备份
-        if: env.ACTION_TYPE == 'restore'
-        run: |
-          echo "=== 恢复备份 ==="
-          
-          BACKUP_FILE=$(ls -t .github/backups/build_firmware_main.sh.*.backup 2>/dev/null | head -1)
-          
-          if [ -z "$BACKUP_FILE" ]; then
-            echo "❌ 未找到备份文件"
-            exit 1
-          fi
-          
-          BACKUP_SIZE=$(stat -c %s "$BACKUP_FILE" 2>/dev/null || echo "未知")
-          BACKUP_IDENTIFIERS=$(grep -c "^#【build_firmware_main.sh-[0-9]\+】" "$BACKUP_FILE" 2>/dev/null || echo "0")
-          
-          echo "✅ 找到备份文件: $(basename "$BACKUP_FILE")"
-          echo "📊 备份信息:"
-          echo "  - 大小: $BACKUP_SIZE 字节"
-          echo "  - 标识数: $BACKUP_IDENTIFIERS 个"
-          
-          # 恢复前确保换行符正确
-          sed -i 's/\r$//' "$BACKUP_FILE"
-          cp "$BACKUP_FILE" "$TARGET_FILE"
-          
-          echo "✅ 已恢复备份到: $TARGET_FILE"
-      
-      # ============ 清理 ============
-      - name: 🧹 清理修复文件
-        if: env.ACTION_TYPE == 'apply' && success()
-        run: |
-          echo "=== 清理修复文件 ==="
-          
-          if [ -f "fix.txt" ] && [ -s "fix.txt" ]; then
-            mkdir -p ".github/fix-logs"
-            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-            FIX_LOG=".github/fix-logs/fix.${TIMESTAMP}.log"
-            
-            # 保存修复记录
-            cp "fix.txt" "$FIX_LOG"
-            
-            echo "" >> "$FIX_LOG"
-            echo "=== 修复元数据 ===" >> "$FIX_LOG"
-            echo "时间: $(date)" >> "$FIX_LOG"
-            echo "目标文件: $TARGET_FILE" >> "$FIX_LOG"
-            echo "原始大小: $ORIGINAL_SIZE 字节" >> "$FIX_LOG"
-            echo "新大小: $NEW_SIZE 字节" >> "$FIX_LOG"
-            echo "替换标识块: $REPLACED_COUNT 个" >> "$FIX_LOG"
-            echo "追加标识块: $APPENDED_COUNT 个" >> "$FIX_LOG"
-            echo "备份文件: $(basename "$BACKUP_FILE")" >> "$FIX_LOG"
-            
-            echo "✅ 修复记录已备份到: $FIX_LOG"
-          fi
-          
-          > "fix.txt"
-          echo "✅ 已清空fix.txt文件"
-          
-          git add fix.txt
-      
-      # ============ 提交更改 ============
-      - name: 📤 提交并推送
-        run: |
-          echo "=== 提交并推送 ==="
-          
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "GitHub Actions"
-          
-          if [ "$ACTION_TYPE" = "restore" ]; then
-            COMMIT_MSG="🔄 恢复备份 [系统性标识]"
-            COMMIT_MSG+=$'\n\n'
-            COMMIT_MSG+="📦 备份文件: $(basename "$BACKUP_FILE")"
-          else
-            COMMIT_MSG="🔧 系统性标识整体块修复（显式结束标记版）"
-            COMMIT_MSG+=$'\n\n'
-            COMMIT_MSG+="📊 修复统计:"
-            COMMIT_MSG+=$'\n'
-            COMMIT_MSG+="  - 替换标识块: $REPLACED_COUNT 个"
-            COMMIT_MSG+=$'\n'
-            COMMIT_MSG+="  - 追加标识块: $APPENDED_COUNT 个"
-            COMMIT_MSG+=$'\n'
-            COMMIT_MSG+="  - 大小变化: $ORIGINAL_SIZE → $NEW_SIZE 字节"
-            COMMIT_MSG+=$'\n'
-            COMMIT_MSG+="  - 开始标识: $ORIGINAL_IDENTIFIERS → $NEW_IDENTIFIERS 个"
-            COMMIT_MSG+=$'\n'
-            COMMIT_MSG+="  - 结束标识: $NEW_END_IDENTIFIERS 个"
-            COMMIT_MSG+=$'\n\n'
-            COMMIT_MSG+="🔧 修复换行符: CRLF → LF"
-            COMMIT_MSG+=$'\n'
-            COMMIT_MSG+="📁 备份文件: $(basename "$BACKUP_FILE")"
-          fi
-          
-          COMMIT_MSG+=$'\n'
-          COMMIT_MSG+="🕒 $(date '+%Y-%m-%d %H:%M:%S')"
-          
-          git add "$TARGET_FILE"
-          
-          if git diff-index --quiet HEAD --; then
-            echo "⚠️ 没有更改可提交"
-          else
-            echo "📝 提交信息:"
-            echo "$COMMIT_MSG"
-            echo ""
-            echo -e "$COMMIT_MSG" | git commit -F -
-            git push origin HEAD:main
-            echo "✅ 已提交并推送"
-          fi
-      
-      # ============ 生成报告 ============
-      - name: 📋 生成系统性标识修复报告
+          echo "=== 步骤26: 检查构建产物 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step26_check_artifacts
+      #【firmware-build.yml-26-end】
+
+      #【firmware-build.yml-27】
+      - name: "27. 上传固件"
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ env.TIMESTAMP_SEC }}
+          path: /mnt/openwrt-build/bin/targets/
+          retention-days: 7
+          if-no-files-found: error
+      #【firmware-build.yml-27-end】
+
+      #【firmware-build.yml-28】
+      - name: "28. 上传配置文件"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: config-${{ env.TIMESTAMP_SEC }}
+          path: ${{ github.workspace }}/firmware-config/config-backup/
+          retention-days: 7
+          if-no-files-found: error
+      #【firmware-build.yml-28-end】
+
+      #【firmware-build.yml-29】
+      - name: "29. 编译后空间检查"
         if: always()
         run: |
-          echo "### 🔧 系统性标识修复报告（显式结束标记版）" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "=== 步骤29: 编译后空间检查 ==="
           
-          echo "| 项目 | 详细信息 |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|----------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **状态** | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **操作类型** | $ACTION_TYPE |" >> $GITHUB_STEP_SUMMARY
-          echo "| **目标文件** | \`$TARGET_FILE\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **修复时间** | $(date '+%Y-%m-%d %H:%M:%S') |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step29_post_build_space_check
+      #【firmware-build.yml-29-end】
+
+      #【firmware-build.yml-30】
+      - name: "30. 编译总结"
+        if: always()
+        run: |
+          echo "=== 步骤30: 编译总结 ==="
           
-          if [ "$ACTION_TYPE" = "apply" ]; then
-            echo "### 📊 文件变更统计" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "| 指标 | 修复前 | 修复后 | 变化 |" >> $GITHUB_STEP_SUMMARY
-            echo "|------|--------|--------|------|" >> $GITHUB_STEP_SUMMARY
-            echo "| 文件大小 | $ORIGINAL_SIZE 字节 | $NEW_SIZE 字节 | $((NEW_SIZE - ORIGINAL_SIZE)) 字节 |" >> $GITHUB_STEP_SUMMARY
-            echo "| 文件行数 | $ORIGINAL_LINES 行 | $NEW_LINES 行 | $((NEW_LINES - ORIGINAL_LINES)) 行 |" >> $GITHUB_STEP_SUMMARY
-            echo "| 开始标识 | $ORIGINAL_IDENTIFIERS 个 | $NEW_IDENTIFIERS 个 | $((NEW_IDENTIFIERS - ORIGINAL_IDENTIFIERS)) 个 |" >> $GITHUB_STEP_SUMMARY
-            echo "| 结束标识 | - | $NEW_END_IDENTIFIERS 个 | +$NEW_END_IDENTIFIERS 个 |" >> $GITHUB_STEP_SUMMARY
-            echo "| **换行符** | CRLF/LF混合 | **LF (Unix)** | ✅ 已修复 |" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            
-            echo "### 🔨 修复操作统计" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "| 操作类型 | 数量 |" >> $GITHUB_STEP_SUMMARY
-            echo "|----------|------|" >> $GITHUB_STEP_SUMMARY
-            echo "| **整体块替换** | $REPLACED_COUNT 个标识块 |" >> $GITHUB_STEP_SUMMARY
-            echo "| **追加新增** | $APPENDED_COUNT 个标识块 |" >> $GITHUB_STEP_SUMMARY
-            echo "| **换行符修复** | CRLF → LF |" >> $GITHUB_STEP_SUMMARY
-            echo "| **备份文件** | \`$(basename "$BACKUP_FILE")\` |" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          if [ "$ACTION_TYPE" = "restore" ]; then
-            echo "### 🔄 恢复操作信息" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "| 项目 | 详细信息 |" >> $GITHUB_STEP_SUMMARY
-            echo "|------|----------|" >> $GITHUB_STEP_SUMMARY
-            echo "| **恢复的备份** | \`$(basename "$BACKUP_FILE")\` |" >> $GITHUB_STEP_SUMMARY
-            echo "| **备份时间** | $(stat -c %y "$BACKUP_FILE" 2>/dev/null | cut -d. -f1) |" >> $GITHUB_STEP_SUMMARY
-            echo "| **恢复时间** | $(date '+%Y-%m-%d %H:%M:%S') |" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          echo "### ⚙️ 系统性标识整体块替换原理（显式结束标记）" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "1. **标识锚定**：以 \`#【build_firmware_main.sh-序号】\` 为开始锚点" >> $GITHUB_STEP_SUMMARY
-          echo "2. **显式边界**：以 \`#【build_firmware_main.sh-序号-end】\` 为结束边界" >> $GITHUB_STEP_SUMMARY
-          echo "3. **整体提取**：完整提取开始标识和结束标识之间的所有代码行" >> $GITHUB_STEP_SUMMARY
-          echo "4. **整体替换**：在目标文件中找到相同开始标识，**完整替换**从开始到结束的整个块" >> $GITHUB_STEP_SUMMARY
-          echo "5. **原子操作**：开始标识和结束标识都保留，只替换中间的内容" >> $GITHUB_STEP_SUMMARY
-          echo "6. **智能追加**：未找到开始标识则追加完整块（开始标识+代码块+结束标识）" >> $GITHUB_STEP_SUMMARY
-          echo "7. **换行符修复**：自动转换CRLF为LF，避免Shell语法错误" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "### 📁 备份位置" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- 备份目录: \`.github/backups/\`" >> $GITHUB_STEP_SUMMARY
-          echo "- 修复日志: \`.github/fix-logs/\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "✅ 报告生成完成" >> $GITHUB_STEP_SUMMARY
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step30_build_summary \
+            "${{ github.event.inputs.device_name }}" \
+            "${{ github.event.inputs.version_selection }}" \
+            "${{ github.event.inputs.config_mode }}" \
+            "${{ env.TIMESTAMP_SEC }}" \
+            "${{ github.event.inputs.enable_parallel }}"
+      #【firmware-build.yml-30-end】
