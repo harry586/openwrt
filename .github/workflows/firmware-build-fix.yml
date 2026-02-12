@@ -1,5 +1,5 @@
 # firmware-build-fix.yml
-name: 🔧 系统性标识修复系统（完整修复版-带换行符处理）
+name: 🔧 系统性标识修复系统（显式结束标记版）
 
 on:
   push:
@@ -155,11 +155,12 @@ jobs:
             fi
           fi
       
-      # ============ 严格验证修复文件 ============
+      # ============ 严格验证修复文件（支持显式结束标记）============
       - name: 🔍 严格验证修复文件
         if: env.ACTION_TYPE == 'apply' || env.ACTION_TYPE == 'verify'
         run: |
           echo "=== 严格验证修复文件 ==="
+          echo "📋 验证模式: 显式结束标记 (#【build_firmware_main.sh-序号-end】)"
           
           if [ ! -f "fix.txt" ]; then
             echo "❌ 没有找到修复文件 fix.txt"
@@ -174,50 +175,113 @@ jobs:
           # 再次确保换行符正确
           sed -i 's/\r$//' "fix.txt"
           
-          # 验证系统性标识格式
-          echo "🔍 验证系统性标识格式..."
+          # 验证系统性标识开始格式
+          echo ""
+          echo "🔍 验证系统性标识开始格式..."
+          START_IDENTIFIERS=$(grep "^#【build_firmware_main.sh-[0-9]\+】$" fix.txt || true)
           
-          IDENTIFIERS=$(grep "^#【build_firmware_main.sh-[0-9]\+】" fix.txt || true)
-          
-          if [ -z "$IDENTIFIERS" ]; then
-            echo "❌ 修复文件中未找到正确的系统性标识"
-            echo "💡 标识格式应为: #【build_firmware_main.sh-序号】"
+          if [ -z "$START_IDENTIFIERS" ]; then
+            echo "❌ 修复文件中未找到正确的系统性开始标识"
+            echo "💡 开始标识格式应为: #【build_firmware_main.sh-序号】"
             exit 1
           fi
           
-          IDENTIFIER_COUNT=$(echo "$IDENTIFIERS" | wc -l)
-          echo "✅ 找到 $IDENTIFIER_COUNT 个系统性标识"
+          START_COUNT=$(echo "$START_IDENTIFIERS" | wc -l)
+          echo "✅ 找到 $START_COUNT 个开始标识"
           
+          # 验证系统性标识结束格式
           echo ""
-          echo "📋 系统性标识列表:"
-          echo "$IDENTIFIERS" | while read -r id; do
-            echo "  🔖 $id"
+          echo "🔍 验证系统性标识结束格式..."
+          END_IDENTIFIERS=$(grep "^#【build_firmware_main.sh-[0-9]\+-end】$" fix.txt || true)
+          
+          if [ -z "$END_IDENTIFIERS" ]; then
+            echo "❌ 修复文件中未找到正确的系统性结束标识"
+            echo "💡 结束标识格式应为: #【build_firmware_main.sh-序号-end】"
+            exit 1
+          fi
+          
+          END_COUNT=$(echo "$END_IDENTIFIERS" | wc -l)
+          echo "✅ 找到 $END_COUNT 个结束标识"
+          
+          # 检查开始和结束数量是否匹配
+          if [ $START_COUNT -ne $END_COUNT ]; then
+            echo "❌ 开始标识($START_COUNT)和结束标识($END_COUNT)数量不匹配"
+            exit 1
+          fi
+          
+          # 提取所有序号并检查对应关系
+          echo ""
+          echo "🔍 检查标识对应关系..."
+          
+          # 提取开始序号
+          START_NUMBERS=$(echo "$START_IDENTIFIERS" | sed 's/^#【build_firmware_main.sh-\([0-9]\+\)】$/\1/')
+          # 提取结束序号
+          END_NUMBERS=$(echo "$END_IDENTIFIERS" | sed 's/^#【build_firmware_main.sh-\([0-9]\+\)-end】$/\1/')
+          
+          # 排序后比较
+          SORTED_START=$(echo "$START_NUMBERS" | sort -n)
+          SORTED_END=$(echo "$END_NUMBERS" | sort -n)
+          
+          if [ "$SORTED_START" != "$SORTED_END" ]; then
+            echo "❌ 开始标识和结束标识序号不匹配"
+            echo "📋 开始序号: $(echo $SORTED_START | tr '\n' ' ')"
+            echo "📋 结束序号: $(echo $SORTED_END | tr '\n' ' ')"
+            exit 1
+          fi
+          
+          echo "✅ 所有开始标识都有对应的结束标识"
+          
+          # 显示所有标识对
+          echo ""
+          echo "📋 系统性标识对列表:"
+          for number in $START_NUMBERS; do
+            echo "  🔖 #【build_firmware_main.sh-$number】 ⟹  #【build_firmware_main.sh-$number-end】"
           done
           
-          # 检查重复标识
+          # 检查重复开始标识
           echo ""
-          echo "🔍 检查重复标识..."
-          DUPLICATES=$(echo "$IDENTIFIERS" | sort | uniq -d)
-          if [ -n "$DUPLICATES" ]; then
-            echo "❌ 发现重复的系统性标识:"
-            echo "$DUPLICATES" | while read -r id; do
+          echo "🔍 检查重复开始标识..."
+          DUPLICATE_STARTS=$(echo "$START_IDENTIFIERS" | sort | uniq -d)
+          if [ -n "$DUPLICATE_STARTS" ]; then
+            echo "❌ 发现重复的系统性开始标识:"
+            echo "$DUPLICATE_STARTS" | while read -r id; do
               echo "  ⚠️ $id"
             done
             exit 1
           else
-            echo "✅ 无重复标识"
+            echo "✅ 无重复开始标识"
           fi
           
-          # 检查每个标识后是否有内容
+          # 检查重复结束标识
+          echo ""
+          echo "🔍 检查重复结束标识..."
+          DUPLICATE_ENDS=$(echo "$END_IDENTIFIERS" | sort | uniq -d)
+          if [ -n "$DUPLICATE_ENDS" ]; then
+            echo "❌ 发现重复的系统性结束标识:"
+            echo "$DUPLICATE_ENDS" | while read -r id; do
+              echo "  ⚠️ $id"
+            done
+            exit 1
+          else
+            echo "✅ 无重复结束标识"
+          fi
+          
+          # 检查每个开始标识后的代码块（直到对应的结束标识）
           echo ""
           echo "🔍 检查标识对应的代码块..."
           EMPTY_BLOCKS=0
           
-          while IFS= read -r id; do
-            BLOCK=$(awk -v id="$id" '
-              BEGIN {found=0; block=""}
-              $0 == id {found=1; next}
-              found && /^#【build_firmware_main.sh-[0-9]+】/ {exit}
+          while IFS= read -r start_id; do
+            [ -z "$start_id" ] && continue
+            
+            # 提取序号
+            NUMBER=$(echo "$start_id" | sed 's/^#【build_firmware_main.sh-\([0-9]\+\)】$/\1/')
+            END_ID="#【build_firmware_main.sh-${NUMBER}-end】"
+            
+            # 提取开始标识和对应结束标识之间的内容
+            BLOCK=$(awk -v start="$start_id" -v end="$END_ID" '
+              $0 == start {found=1; next}
+              $0 == end {found=0; exit}
               found {block = block $0 "\n"}
               END {
                 gsub(/\n+$/, "", block)
@@ -227,48 +291,49 @@ jobs:
             
             CLEAN_BLOCK=$(echo "$BLOCK" | sed '/^\s*$/d')
             if [ -z "$CLEAN_BLOCK" ]; then
-              echo "  ❌ $id (代码块为空)"
+              echo "  ❌ $start_id (代码块为空)"
               EMPTY_BLOCKS=$((EMPTY_BLOCKS + 1))
             else
               BLOCK_LINES=$(echo "$BLOCK" | wc -l)
-              echo "  ✅ $id (代码块: $BLOCK_LINES 行)"
+              echo "  ✅ $start_id (代码块: $BLOCK_LINES 行)"
             fi
-          done <<< "$IDENTIFIERS"
+          done <<< "$START_IDENTIFIERS"
           
           if [ $EMPTY_BLOCKS -gt 0 ]; then
             echo "❌ 发现 $EMPTY_BLOCKS 个空的代码块"
             exit 1
           fi
           
-          # 检查目标文件中是否存在这些标识
+          # 检查目标文件中是否存在这些开始标识
           echo ""
           echo "🔍 检查目标文件中的系统性标识..."
           MISSING_IDS=0
           
-          while IFS= read -r id; do
-            ESCAPED_ID=$(echo "$id" | sed 's/[][\/.*^$]/\\&/g')
+          while IFS= read -r start_id; do
+            ESCAPED_ID=$(echo "$start_id" | sed 's/[][\/.*^$]/\\&/g')
             if grep -q "^$ESCAPED_ID" "$TARGET_FILE"; then
-              echo "  ✅ $id (在目标文件中找到)"
+              echo "  ✅ $start_id (在目标文件中找到)"
             else
-              echo "  ⚠️  $id (在目标文件中未找到，将追加到文件末尾)"
+              echo "  ⚠️  $start_id (在目标文件中未找到，将追加到文件末尾)"
               MISSING_IDS=$((MISSING_IDS + 1))
             fi
-          done <<< "$IDENTIFIERS"
+          done <<< "$START_IDENTIFIERS"
           
           echo ""
           echo "📊 验证统计:"
-          echo "  - 总标识数: $IDENTIFIER_COUNT"
+          echo "  - 开始标识数: $START_COUNT"
+          echo "  - 结束标识数: $END_COUNT"
           echo "  - 空代码块: $EMPTY_BLOCKS"
           echo "  - 缺失标识: $MISSING_IDS"
           
-          if [ $EMPTY_BLOCKS -eq 0 ]; then
+          if [ $EMPTY_BLOCKS -eq 0 ] && [ $START_COUNT -eq $END_COUNT ]; then
             echo "✅ 修复文件验证通过"
           else
             echo "❌ 修复文件验证失败"
             exit 1
           fi
           
-          echo "IDENTIFIER_COUNT=$IDENTIFIER_COUNT" >> $GITHUB_ENV
+          echo "IDENTIFIER_COUNT=$START_COUNT" >> $GITHUB_ENV
           echo "MISSING_IDS=$MISSING_IDS" >> $GITHUB_ENV
       
       - name: ⏹️ 仅验证模式退出
@@ -300,12 +365,13 @@ jobs:
           echo "  - 大小: $(stat -c %s "$BACKUP_FILE") 字节"
           echo "  - 标识数: $ORIGINAL_IDENTIFIERS 个"
       
-      # ============ 核心：系统性标识整体块替换 ============
+      # ============ 核心：系统性标识整体块替换（支持显式结束标记）============
       - name: 🛠️ 基于系统性标识进行整体块替换
         if: env.ACTION_TYPE == 'apply'
         run: |
           echo "=== 基于系统性标识进行整体块替换 ==="
-          echo "🔧 替换策略: 以标识为锚点，整体替换整个代码块"
+          echo "🔧 替换策略: 以开始标识为锚点，以结束标识为边界，整体替换整个代码块"
+          echo "📋 标识格式: #【build_firmware_main.sh-序号】 ... #【build_firmware_main.sh-序号-end】"
           
           # 确保换行符正确
           sed -i 's/\r$//' "$TARGET_FILE"
@@ -315,24 +381,29 @@ jobs:
           TEMP_FILE="${TARGET_FILE}.tmp"
           cp "$TARGET_FILE" "$TEMP_FILE"
           
-          # 读取fix.txt中的所有标识
-          IDENTIFIERS=$(grep "^#【build_firmware_main.sh-[0-9]\+】" fix.txt)
+          # 读取fix.txt中的所有开始标识
+          START_IDENTIFIERS=$(grep "^#【build_firmware_main.sh-[0-9]\+】$" fix.txt)
           
           REPLACED_COUNT=0
           APPENDED_COUNT=0
           
           # 处理每个标识
-          while IFS= read -r identifier; do
-            [ -z "$identifier" ] && continue
+          while IFS= read -r start_id; do
+            [ -z "$start_id" ] && continue
+            
+            # 提取序号
+            NUMBER=$(echo "$start_id" | sed 's/^#【build_firmware_main.sh-\([0-9]\+\)】$/\1/')
+            END_ID="#【build_firmware_main.sh-${NUMBER}-end】"
             
             echo ""
-            echo "🔨 处理标识: $identifier"
+            echo "🔨 处理标识对:"
+            echo "  📌 开始: $start_id"
+            echo "  📌 结束: $END_ID"
             
-            # 提取fix.txt中该标识对应的完整代码块
-            BLOCK=$(awk -v id="$identifier" '
-              BEGIN {found=0; block=""}
-              $0 == id {found=1; next}
-              found && /^#【build_firmware_main.sh-[0-9]+】/ {exit}
+            # 提取fix.txt中该开始标识到对应结束标识之间的完整代码块
+            BLOCK=$(awk -v start="$start_id" -v end="$END_ID" '
+              $0 == start {found=1; next}
+              $0 == end {found=0; exit}
               found {block = block $0 "\n"}
               END {
                 gsub(/\n+$/, "", block)
@@ -343,27 +414,29 @@ jobs:
             BLOCK_LINES=$(echo "$BLOCK" | wc -l)
             echo "  📦 代码块大小: $BLOCK_LINES 行"
             
-            # 转义标识
-            ESCAPED_ID=$(echo "$identifier" | sed 's/[][\/.*^$]/\\&/g')
+            # 转义开始标识
+            ESCAPED_START=$(echo "$start_id" | sed 's/[][\/.*^$]/\\&/g')
+            ESCAPED_END=$(echo "$END_ID" | sed 's/[][\/.*^$]/\\&/g')
             
-            # 检查目标文件中是否有该标识
-            if grep -q "^$ESCAPED_ID" "$TEMP_FILE"; then
-              echo "  ✅ 在目标文件中找到标识，执行整体块替换"
+            # 检查目标文件中是否有该开始标识
+            if grep -q "^$ESCAPED_START" "$TEMP_FILE"; then
+              echo "  ✅ 在目标文件中找到开始标识，执行整体块替换"
               
-              # 整体块替换逻辑
-              awk -v id="$identifier" -v new_block="$BLOCK" '
-                BEGIN {in_block=0}
+              # 整体块替换逻辑（从开始标识到结束标识整体替换）
+              awk -v start="$start_id" -v end="$END_ID" -v new_block="$BLOCK" '
+                BEGIN {in_block=0; replaced=0}
                 
-                $0 == id {
-                  print id
+                $0 == start && !replaced {
+                  print start
                   if (new_block != "") print new_block
+                  print end
                   in_block=1
+                  replaced=1
                   next
                 }
                 
-                in_block && /^#【build_firmware_main.sh-[0-9]+】/ {
+                in_block && $0 == end {
                   in_block=0
-                  print
                   next
                 }
                 
@@ -374,21 +447,23 @@ jobs:
               
               mv "${TEMP_FILE}.2" "$TEMP_FILE"
               REPLACED_COUNT=$((REPLACED_COUNT + 1))
-              echo "  ✅ 整体块替换完成"
+              echo "  ✅ 整体块替换完成（包含开始标识、代码块、结束标识）"
               
             else
-              echo "  ➕ 在目标文件中未找到标识，追加到文件末尾"
+              echo "  ➕ 在目标文件中未找到开始标识，追加到文件末尾"
               
+              # 追加完整块（包含开始标识、代码块、结束标识）
               echo "" >> "$TEMP_FILE"
-              echo "$identifier" >> "$TEMP_FILE"
+              echo "$start_id" >> "$TEMP_FILE"
               if [ -n "$BLOCK" ]; then
                 echo "$BLOCK" >> "$TEMP_FILE"
               fi
+              echo "$END_ID" >> "$TEMP_FILE"
               APPENDED_COUNT=$((APPENDED_COUNT + 1))
-              echo "  ✅ 已追加到文件末尾"
+              echo "  ✅ 已追加完整块到文件末尾"
             fi
             
-          done <<< "$IDENTIFIERS"
+          done <<< "$START_IDENTIFIERS"
           
           # 确保最终文件的换行符是Unix格式
           sed -i 's/\r$//' "$TEMP_FILE"
@@ -398,8 +473,8 @@ jobs:
           
           echo ""
           echo "📊 整体块替换统计:"
-          echo "  - 成功替换: $REPLACED_COUNT 个标识"
-          echo "  - 追加新增: $APPENDED_COUNT 个标识"
+          echo "  - 成功替换: $REPLACED_COUNT 个标识块"
+          echo "  - 追加新增: $APPENDED_COUNT 个标识块"
           
           echo "REPLACED_COUNT=$REPLACED_COUNT" >> $GITHUB_ENV
           echo "APPENDED_COUNT=$APPENDED_COUNT" >> $GITHUB_ENV
@@ -420,7 +495,8 @@ jobs:
           
           NEW_SIZE=$(stat -c %s "$TARGET_FILE")
           NEW_LINES=$(wc -l < "$TARGET_FILE")
-          NEW_IDENTIFIERS=$(grep -c "^#【build_firmware_main.sh-[0-9]\+】" "$TARGET_FILE" 2>/dev/null || echo "0")
+          NEW_START_IDENTIFIERS=$(grep -c "^#【build_firmware_main.sh-[0-9]\+】$" "$TARGET_FILE" 2>/dev/null || echo "0")
+          NEW_END_IDENTIFIERS=$(grep -c "^#【build_firmware_main.sh-[0-9]\+-end】$" "$TARGET_FILE" 2>/dev/null || echo "0")
           
           echo "📊 文件变更统计:"
           echo "  - 原始大小: $ORIGINAL_SIZE 字节"
@@ -431,9 +507,10 @@ jobs:
           echo "  - 新行数:   $NEW_LINES 行"
           echo "  - 变化:     $((NEW_LINES - ORIGINAL_LINES)) 行"
           echo ""
-          echo "  - 原始标识: $ORIGINAL_IDENTIFIERS 个"
-          echo "  - 新标识:   $NEW_IDENTIFIERS 个"
-          echo "  - 变化:     $((NEW_IDENTIFIERS - ORIGINAL_IDENTIFIERS)) 个"
+          echo "  - 原始开始标识: $ORIGINAL_IDENTIFIERS 个"
+          echo "  - 新开始标识:   $NEW_START_IDENTIFIERS 个"
+          echo "  - 新结束标识:   $NEW_END_IDENTIFIERS 个"
+          echo "  - 标识对变化:   $((NEW_START_IDENTIFIERS - ORIGINAL_IDENTIFIERS)) 个"
           
           # 大小验证
           if command -v bc >/dev/null 2>&1; then
@@ -455,24 +532,36 @@ jobs:
             fi
           fi
           
-          # 验证替换的标识
-          echo ""
-          echo "🔍 验证修复的标识..."
+          # 验证开始和结束标识数量是否匹配
+          if [ $NEW_START_IDENTIFIERS -ne $NEW_END_IDENTIFIERS ]; then
+            echo ""
+            echo "❌ 严重错误：开始标识($NEW_START_IDENTIFIERS)和结束标识($NEW_END_IDENTIFIERS)数量不匹配"
+            echo "💡 正在从备份恢复..."
+            cp "$BACKUP_FILE" "$TARGET_FILE"
+            exit 1
+          fi
           
-          FIX_IDENTIFIERS=$(grep "^#【build_firmware_main.sh-[0-9]\+】" fix.txt)
+          # 验证修复的标识
+          echo ""
+          echo "🔍 验证修复的标识块..."
+          
+          FIX_START_IDS=$(grep "^#【build_firmware_main.sh-[0-9]\+】$" fix.txt)
           VERIFY_FAILED=0
           
-          while IFS= read -r id; do
-            [ -z "$id" ] && continue
+          while IFS= read -r start_id; do
+            [ -z "$start_id" ] && continue
             
-            ESCAPED_ID=$(echo "$id" | sed 's/[][\/.*^$]/\\&/g')
+            # 提取序号
+            NUMBER=$(echo "$start_id" | sed 's/^#【build_firmware_main.sh-\([0-9]\+\)】$/\1/')
+            END_ID="#【build_firmware_main.sh-${NUMBER}-end】"
+            ESCAPED_START=$(echo "$start_id" | sed 's/[][\/.*^$]/\\&/g')
+            ESCAPED_END=$(echo "$END_ID" | sed 's/[][\/.*^$]/\\&/g')
             
-            if grep -q "^$ESCAPED_ID" "$TARGET_FILE"; then
-              # 检查该标识下的内容
-              BLOCK=$(awk -v id="$id" '
-                BEGIN {found=0; block=""}
-                $0 == id {found=1; next}
-                found && /^#【build_firmware_main.sh-[0-9]+】/ {exit}
+            if grep -q "^$ESCAPED_START" "$TARGET_FILE"; then
+              # 检查该标识下的内容直到结束标识
+              BLOCK=$(awk -v start="$start_id" -v end="$END_ID" '
+                $0 == start {found=1; next}
+                $0 == end {found=0; exit}
                 found {block = block $0 "\n"}
                 END {
                   gsub(/\n+$/, "", block)
@@ -480,26 +569,32 @@ jobs:
                 }
               ' "$TARGET_FILE")
               
-              CLEAN_BLOCK=$(echo "$BLOCK" | sed '/^\s*$/d')
-              if [ -n "$CLEAN_BLOCK" ]; then
-                BLOCK_LINES=$(echo "$BLOCK" | wc -l)
-                echo "  ✅ $id (代码块: $BLOCK_LINES 行)"
+              # 检查结束标识是否存在
+              if grep -q "^$ESCAPED_END" "$TARGET_FILE"; then
+                CLEAN_BLOCK=$(echo "$BLOCK" | sed '/^\s*$/d')
+                if [ -n "$CLEAN_BLOCK" ]; then
+                  BLOCK_LINES=$(echo "$BLOCK" | wc -l)
+                  echo "  ✅ $start_id (代码块: $BLOCK_LINES 行, 结束标识: 存在)"
+                else
+                  echo "  ⚠️  $start_id (代码块为空)"
+                  VERIFY_FAILED=$((VERIFY_FAILED + 1))
+                fi
               else
-                echo "  ⚠️  $id (代码块为空)"
+                echo "  ❌ $start_id (结束标识 $END_ID 未找到)"
                 VERIFY_FAILED=$((VERIFY_FAILED + 1))
               fi
             else
-              echo "  ❌ $id (未在文件中找到)"
+              echo "  ❌ $start_id (未在文件中找到)"
               VERIFY_FAILED=$((VERIFY_FAILED + 1))
             fi
-          done <<< "$FIX_IDENTIFIERS"
+          done <<< "$FIX_START_IDS"
           
           if [ $VERIFY_FAILED -eq 0 ]; then
             echo ""
-            echo "✅ 所有系统性标识验证通过"
+            echo "✅ 所有系统性标识块验证通过"
           else
             echo ""
-            echo "⚠️ 有 $VERIFY_FAILED 个标识验证失败"
+            echo "⚠️ 有 $VERIFY_FAILED 个标识块验证失败"
           fi
           
           # ============ 关键修复：Shell语法检查前的预处理 ============
@@ -576,7 +671,7 @@ jobs:
           
           echo "NEW_SIZE=$NEW_SIZE" >> $GITHUB_ENV
           echo "NEW_LINES=$NEW_LINES" >> $GITHUB_ENV
-          echo "NEW_IDENTIFIERS=$NEW_IDENTIFIERS" >> $GITHUB_ENV
+          echo "NEW_IDENTIFIERS=$NEW_START_IDENTIFIERS" >> $GITHUB_ENV
       
       # ============ 恢复操作 ============
       - name: 🔄 恢复备份
@@ -625,8 +720,8 @@ jobs:
             echo "目标文件: $TARGET_FILE" >> "$FIX_LOG"
             echo "原始大小: $ORIGINAL_SIZE 字节" >> "$FIX_LOG"
             echo "新大小: $NEW_SIZE 字节" >> "$FIX_LOG"
-            echo "替换标识: $REPLACED_COUNT 个" >> "$FIX_LOG"
-            echo "追加标识: $APPENDED_COUNT 个" >> "$FIX_LOG"
+            echo "替换标识块: $REPLACED_COUNT 个" >> "$FIX_LOG"
+            echo "追加标识块: $APPENDED_COUNT 个" >> "$FIX_LOG"
             echo "备份文件: $(basename "$BACKUP_FILE")" >> "$FIX_LOG"
             
             echo "✅ 修复记录已备份到: $FIX_LOG"
@@ -650,17 +745,19 @@ jobs:
             COMMIT_MSG+=$'\n\n'
             COMMIT_MSG+="📦 备份文件: $(basename "$BACKUP_FILE")"
           else
-            COMMIT_MSG="🔧 系统性标识整体块修复"
+            COMMIT_MSG="🔧 系统性标识整体块修复（显式结束标记版）"
             COMMIT_MSG+=$'\n\n'
             COMMIT_MSG+="📊 修复统计:"
             COMMIT_MSG+=$'\n'
-            COMMIT_MSG+="  - 替换标识: $REPLACED_COUNT 个"
+            COMMIT_MSG+="  - 替换标识块: $REPLACED_COUNT 个"
             COMMIT_MSG+=$'\n'
-            COMMIT_MSG+="  - 追加标识: $APPENDED_COUNT 个"
+            COMMIT_MSG+="  - 追加标识块: $APPENDED_COUNT 个"
             COMMIT_MSG+=$'\n'
             COMMIT_MSG+="  - 大小变化: $ORIGINAL_SIZE → $NEW_SIZE 字节"
             COMMIT_MSG+=$'\n'
-            COMMIT_MSG+="  - 标识总数: $ORIGINAL_IDENTIFIERS → $NEW_IDENTIFIERS 个"
+            COMMIT_MSG+="  - 开始标识: $ORIGINAL_IDENTIFIERS → $NEW_IDENTIFIERS 个"
+            COMMIT_MSG+=$'\n'
+            COMMIT_MSG+="  - 结束标识: $NEW_END_IDENTIFIERS 个"
             COMMIT_MSG+=$'\n\n'
             COMMIT_MSG+="🔧 修复换行符: CRLF → LF"
             COMMIT_MSG+=$'\n'
@@ -687,7 +784,7 @@ jobs:
       - name: 📋 生成系统性标识修复报告
         if: always()
         run: |
-          echo "### 🔧 系统性标识修复报告" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔧 系统性标识修复报告（显式结束标记版）" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           echo "| 项目 | 详细信息 |" >> $GITHUB_STEP_SUMMARY
@@ -705,7 +802,8 @@ jobs:
             echo "|------|--------|--------|------|" >> $GITHUB_STEP_SUMMARY
             echo "| 文件大小 | $ORIGINAL_SIZE 字节 | $NEW_SIZE 字节 | $((NEW_SIZE - ORIGINAL_SIZE)) 字节 |" >> $GITHUB_STEP_SUMMARY
             echo "| 文件行数 | $ORIGINAL_LINES 行 | $NEW_LINES 行 | $((NEW_LINES - ORIGINAL_LINES)) 行 |" >> $GITHUB_STEP_SUMMARY
-            echo "| 系统性标识 | $ORIGINAL_IDENTIFIERS 个 | $NEW_IDENTIFIERS 个 | $((NEW_IDENTIFIERS - ORIGINAL_IDENTIFIERS)) 个 |" >> $GITHUB_STEP_SUMMARY
+            echo "| 开始标识 | $ORIGINAL_IDENTIFIERS 个 | $NEW_IDENTIFIERS 个 | $((NEW_IDENTIFIERS - ORIGINAL_IDENTIFIERS)) 个 |" >> $GITHUB_STEP_SUMMARY
+            echo "| 结束标识 | - | $NEW_END_IDENTIFIERS 个 | +$NEW_END_IDENTIFIERS 个 |" >> $GITHUB_STEP_SUMMARY
             echo "| **换行符** | CRLF/LF混合 | **LF (Unix)** | ✅ 已修复 |" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             
@@ -713,8 +811,8 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "| 操作类型 | 数量 |" >> $GITHUB_STEP_SUMMARY
             echo "|----------|------|" >> $GITHUB_STEP_SUMMARY
-            echo "| **整体块替换** | $REPLACED_COUNT 个标识 |" >> $GITHUB_STEP_SUMMARY
-            echo "| **追加新增** | $APPENDED_COUNT 个标识 |" >> $GITHUB_STEP_SUMMARY
+            echo "| **整体块替换** | $REPLACED_COUNT 个标识块 |" >> $GITHUB_STEP_SUMMARY
+            echo "| **追加新增** | $APPENDED_COUNT 个标识块 |" >> $GITHUB_STEP_SUMMARY
             echo "| **换行符修复** | CRLF → LF |" >> $GITHUB_STEP_SUMMARY
             echo "| **备份文件** | \`$(basename "$BACKUP_FILE")\` |" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
@@ -731,14 +829,15 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
           fi
           
-          echo "### ⚙️ 系统性标识整体块替换原理" >> $GITHUB_STEP_SUMMARY
+          echo "### ⚙️ 系统性标识整体块替换原理（显式结束标记）" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "1. **标识锚定**：以 \`#【build_firmware_main.sh-序号】\` 为精确锚点" >> $GITHUB_STEP_SUMMARY
-          echo "2. **整体提取**：完整提取标识后的所有代码行" >> $GITHUB_STEP_SUMMARY
-          echo "3. **整体替换**：在目标文件中找到相同标识，**完整替换**整个代码块" >> $GITHUB_STEP_SUMMARY
-          echo "4. **原子操作**：标识行保持不变，只替换其下的内容" >> $GITHUB_STEP_SUMMARY
-          echo "5. **智能追加**：未找到标识则追加到文件末尾" >> $GITHUB_STEP_SUMMARY
-          echo "6. **换行符修复**：自动转换CRLF为LF，避免Shell语法错误" >> $GITHUB_STEP_SUMMARY
+          echo "1. **标识锚定**：以 \`#【build_firmware_main.sh-序号】\` 为开始锚点" >> $GITHUB_STEP_SUMMARY
+          echo "2. **显式边界**：以 \`#【build_firmware_main.sh-序号-end】\` 为结束边界" >> $GITHUB_STEP_SUMMARY
+          echo "3. **整体提取**：完整提取开始标识和结束标识之间的所有代码行" >> $GITHUB_STEP_SUMMARY
+          echo "4. **整体替换**：在目标文件中找到相同开始标识，**完整替换**从开始到结束的整个块" >> $GITHUB_STEP_SUMMARY
+          echo "5. **原子操作**：开始标识和结束标识都保留，只替换中间的内容" >> $GITHUB_STEP_SUMMARY
+          echo "6. **智能追加**：未找到开始标识则追加完整块（开始标识+代码块+结束标识）" >> $GITHUB_STEP_SUMMARY
+          echo "7. **换行符修复**：自动转换CRLF为LF，避免Shell语法错误" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           echo "### 📁 备份位置" >> $GITHUB_STEP_SUMMARY
