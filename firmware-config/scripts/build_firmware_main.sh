@@ -286,7 +286,7 @@ download_openwrt_sdk() {
             if tar -xf "$sdk_download_dir/$sdk_file" -C "$BUILD_DIR"; then
                 log "✅ SDK文件解压成功"
                 
-                # 查找解压后的SDK目录 - 修复：更灵活的查找逻辑
+                # 查找解压后的SDK目录
                 log "🔍 查找解压后的SDK目录..."
                 
                 # 首先尝试按预期的目录名查找
@@ -918,8 +918,8 @@ apply_configuration_from_files() {
         log "💡 无平台专用配置，跳过平台配置"
     fi
     
-    # 7. 【关键修复】强制启用USB 3.0驱动 - 修复步骤16的配置缺失问题
-    log "🔧 强制启用USB 3.0核心驱动（确保编译时包含）..."
+    # 7. 【关键修复】强制启用USB 3.0驱动
+    log "🔧 强制启用USB 3.0核心驱动..."
     
     # 检查并添加USB 3.0核心驱动
     if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
@@ -953,17 +953,18 @@ apply_configuration_from_files() {
         fi
     fi
     
-    # 8. 【关键修复】解决kmod-ath10k-ct冲突问题
+    # 8. 【关键修复】解决kmod-ath10k-ct冲突问题 - 增强版
     log "🔧 解决kmod-ath10k-ct冲突问题..."
     
-    # 禁用标准ath10k驱动，使用CT版本
+    # 禁用标准ath10k驱动
     echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
     echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
     echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
     echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y" >> .config
+    # 不启用kmod-ath10k-ct-smallbuffers，避免冲突
+    echo "# CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers is not set" >> .config
     
-    log "✅ 已配置使用kmod-ath10k-ct替代标准ath10k驱动"
+    log "✅ 已配置使用kmod-ath10k-ct替代标准ath10k驱动，并禁用smallbuffers版本"
     
     # 9. 添加额外包
     if [ -n "$extra_packages" ]; then
@@ -2354,8 +2355,6 @@ check_compiler_invocation() {
     log "✅ 编译器调用状态检查完成"
 }
 #【build_firmware_main.sh-22】
-
-#【最终修复版：pre_build_error_check函数 - 删除，因为工作流文件已有步骤21】
 
 #【build_firmware_main.sh-24】
 # 编译固件
