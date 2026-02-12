@@ -45,7 +45,7 @@ env:
 jobs:
   build-firmware:
     runs-on: ubuntu-22.04
-#【firmware-build.yml-00】
+#【firmware-build.yml-00-end】
 
     steps:
       #【firmware-build.yml-01】
@@ -70,7 +70,7 @@ jobs:
           echo "  版本: ${{ github.event.inputs.version_selection }}"
           echo "  模式: ${{ github.event.inputs.config_mode }}"
           echo "  并行优化: ${{ github.event.inputs.enable_parallel }}"
-      #【firmware-build.yml-01】
+      #【firmware-build.yml-01-end】
 
       #【firmware-build.yml-02】
       - name: "02. 使用Git Archive API下载源代码"
@@ -132,7 +132,7 @@ jobs:
           cd /tmp
           rm -rf openwrt-source
           echo "✅ 步骤02 完成"
-      #【firmware-build.yml-02】
+      #【firmware-build.yml-02-end】
 
       #【firmware-build.yml-03】
       - name: "03. 上传源代码Artifacts"
@@ -142,7 +142,7 @@ jobs:
           path: /tmp/build-artifacts/source-archive/
           retention-days: 7
           if-no-files-found: error
-      #【firmware-build.yml-03】
+      #【firmware-build.yml-03-end】
 
       #【firmware-build.yml-04】
       - name: "04. 修复权限问题"
@@ -172,7 +172,7 @@ jobs:
           
           find "${{ github.workspace }}/firmware-config/scripts" -name "*.sh" -exec chmod +x {} \;
           echo "✅ 修复所有脚本权限完成"
-      #【firmware-build.yml-04】
+      #【firmware-build.yml-04-end】
 
       #【firmware-build.yml-05】
       - name: "05. 安装基础工具（优化版）"
@@ -181,7 +181,7 @@ jobs:
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step05_install_basic_tools
-      #【firmware-build.yml-05】
+      #【firmware-build.yml-05-end】
 
       #【firmware-build.yml-06】
       - name: "06. 初始空间检查"
@@ -190,7 +190,7 @@ jobs:
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step06_initial_space_check
-      #【firmware-build.yml-06】
+      #【firmware-build.yml-06-end】
 
       #【firmware-build.yml-07】
       - name: "07. 创建构建目录"
@@ -199,7 +199,7 @@ jobs:
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step07_create_build_dir
-      #【firmware-build.yml-07】
+      #【firmware-build.yml-07-end】
 
       #【firmware-build.yml-08】
       - name: "08. 初始化构建环境"
@@ -211,7 +211,7 @@ jobs:
             "${{ github.event.inputs.device_name }}" \
             "${{ github.event.inputs.version_selection }}" \
             "${{ github.event.inputs.config_mode }}"
-      #【firmware-build.yml-08】
+      #【firmware-build.yml-08-end】
 
       #【firmware-build.yml-09】
       - name: "09. 下载OpenWrt官方SDK"
@@ -221,7 +221,7 @@ jobs:
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step09_download_sdk \
             "${{ github.event.inputs.device_name }}"
-      #【firmware-build.yml-09】
+      #【firmware-build.yml-09-end】
 
       #【firmware-build.yml-10】
       - name: "10. 验证SDK下载结果"
@@ -230,7 +230,7 @@ jobs:
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step10_verify_sdk
-      #【firmware-build.yml-10】
+      #【firmware-build.yml-10-end】
 
       #【firmware-build.yml-11】
       - name: "11. 添加TurboACC支持"
@@ -239,7 +239,7 @@ jobs:
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step11_add_turboacc
-      #【firmware-build.yml-11】
+      #【firmware-build.yml-11-end】
 
       #【firmware-build.yml-12】
       - name: "12. 配置Feeds"
@@ -248,7 +248,7 @@ jobs:
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step12_configure_feeds
-      #【firmware-build.yml-12】
+      #【firmware-build.yml-12-end】
 
       #【firmware-build.yml-13】
       - name: "13. 安装TurboACC包"
@@ -258,7 +258,7 @@ jobs:
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step13_install_turboacc
-      #【firmware-build.yml-13】
+      #【firmware-build.yml-13-end】
 
       #【firmware-build.yml-14】
       - name: "14. 编译前空间检查"
@@ -267,7 +267,7 @@ jobs:
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step14_pre_build_space_check
-      #【firmware-build.yml-14】
+      #【firmware-build.yml-14-end】
 
       #【firmware-build.yml-15】
       - name: "15. 智能配置生成"
@@ -277,7 +277,7 @@ jobs:
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step15_generate_config \
             "${{ github.event.inputs.extra_packages }}"
-      #【firmware-build.yml-15】
+      #【firmware-build.yml-15-end】
 
       #【firmware-build.yml-16】
       - name: "16. 验证USB配置"
@@ -286,7 +286,7 @@ jobs:
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step16_verify_usb
-      #【firmware-build.yml-16】
+      #【firmware-build.yml-16-end】
 
       #【firmware-build.yml-17】
       - name: "17. USB驱动完整性检查"
@@ -295,7 +295,7 @@ jobs:
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step17_check_usb_drivers
-      #【firmware-build.yml-17】
+      #【firmware-build.yml-17-end】
 
       #【firmware-build.yml-18】
       - name: "18. 应用配置"
@@ -314,7 +314,7 @@ jobs:
           }
           
           echo "✅ 配置应用完成"
-      #【firmware-build.yml-18】
+      #【firmware-build.yml-18-end】
 
       #【firmware-build.yml-19】
       - name: "19. 备份配置文件"
@@ -340,7 +340,7 @@ jobs:
           
           cp .config "$BACKUP_FILE"
           echo "✅ 配置文件已备份到: $BACKUP_FILE"
-      #【firmware-build.yml-19】
+      #【firmware-build.yml-19-end】
 
       #【firmware-build.yml-20】
       - name: "20. 修复网络环境"
@@ -349,7 +349,7 @@ jobs:
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step20_fix_network
-      #【firmware-build.yml-20】
+      #【firmware-build.yml-20-end】
 
       #【firmware-build.yml-21】
       - name: "21. 下载依赖包"
@@ -358,7 +358,7 @@ jobs:
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step21_download_deps
-      #【firmware-build.yml-21】
+      #【firmware-build.yml-21-end】
 
       #【firmware-build.yml-22】
       - name: "22. 集成自定义文件"
@@ -367,7 +367,7 @@ jobs:
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step22_integrate_custom_files
-      #【firmware-build.yml-22】
+      #【firmware-build.yml-22-end】
 
       #【firmware-build.yml-23】
       - name: "23. 前置错误检查"
@@ -376,7 +376,7 @@ jobs:
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step23_pre_build_check
-      #【firmware-build.yml-23】
+      #【firmware-build.yml-23-end】
 
       #【firmware-build.yml-24】
       - name: "24. 编译前空间确认"
@@ -397,7 +397,7 @@ jobs:
           else
             echo "✅ 编译前空间充足"
           fi
-      #【firmware-build.yml-24】
+      #【firmware-build.yml-24-end】
 
       #【firmware-build.yml-25】
       - name: "25. 编译固件"
@@ -407,7 +407,7 @@ jobs:
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step25_build_firmware \
             "${{ env.ENABLE_PARALLEL }}"
-      #【firmware-build.yml-25】
+      #【firmware-build.yml-25-end】
 
       #【firmware-build.yml-26】
       - name: "26. 检查构建产物"
@@ -417,7 +417,7 @@ jobs:
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step26_check_artifacts
-      #【firmware-build.yml-26】
+      #【firmware-build.yml-26-end】
 
       #【firmware-build.yml-27】
       - name: "27. 上传固件"
@@ -428,7 +428,7 @@ jobs:
           path: /mnt/openwrt-build/bin/targets/
           retention-days: 7
           if-no-files-found: error
-      #【firmware-build.yml-27】
+      #【firmware-build.yml-27-end】
 
       #【firmware-build.yml-28】
       - name: "28. 上传配置文件"
@@ -439,7 +439,7 @@ jobs:
           path: ${{ github.workspace }}/firmware-config/config-backup/
           retention-days: 7
           if-no-files-found: error
-      #【firmware-build.yml-28】
+      #【firmware-build.yml-28-end】
 
       #【firmware-build.yml-29】
       - name: "29. 编译后空间检查"
@@ -449,7 +449,7 @@ jobs:
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step29_post_build_space_check
-      #【firmware-build.yml-29】
+      #【firmware-build.yml-29-end】
 
       #【firmware-build.yml-30】
       - name: "30. 编译总结"
@@ -464,5 +464,4 @@ jobs:
             "${{ github.event.inputs.config_mode }}" \
             "${{ env.TIMESTAMP_SEC }}" \
             "${{ github.event.inputs.enable_parallel }}"
-      #【firmware-build.yml-30】
-#【firmware-build.yml-99】
+      #【firmware-build.yml-30-end】
