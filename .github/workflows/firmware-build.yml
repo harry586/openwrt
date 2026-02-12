@@ -1,7 +1,7 @@
 #【firmware-build.yml-00】
 # OpenWrt 智能固件构建工作流 - 系统主入口
 # 版本: 3.0.0
-# 最后更新: 2026-02-12
+# 最后更新: 2026-02-13
 #【firmware-build.yml-00】
 
 name: OpenWrt 智能固件构建工作流
@@ -180,61 +180,8 @@ jobs:
         run: |
           echo "=== 步骤05: 安装基础工具（优化版） ==="
           
-          set -e
-          trap 'echo "❌ 步骤05 失败，退出代码: $?"; exit 1' ERR
-          
-          echo "🔄 更新软件包列表..."
-          sudo apt-get update -q
-          
-          echo "📦 安装核心编译工具..."
-          sudo apt-get install -y -q \
-            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-            gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip \
-            zlib1g-dev file wget libelf-dev cmake ninja-build
-          
-          echo "🐍 安装Python和脚本工具..."
-          sudo apt-get install -y -q \
-            python3 python3-dev python3-pip python3-setuptools python3-yaml \
-            xsltproc zip subversion automake autoconf libtool pkg-config \
-            help2man texinfo groff texlive texinfo
-          
-          echo "🌐 安装网络和下载工具..."
-          sudo apt-get install -y -q \
-            curl net-tools iputils-ping dnsutils openssh-client ca-certificates \
-            gnupg lsb-release aria2 libcurl4-openssl-dev
-          
-          echo "💿 安装文件系统工具..."
-          sudo apt-get install -y -q \
-            squashfs-tools dosfstools e2fsprogs mtools parted fdisk gdisk hdparm smartmontools
-          
-          echo "🔍 安装调试和开发工具..."
-          sudo apt-get install -y -q \
-            gdb strace ltrace valgrind binutils-dev libdw-dev libiberty-dev \
-            ecj fastjar java-propose-classpath libpython3-dev liblz4-dev zstd
-          
-          echo "✅ 基础工具安装完成"
-          
-          echo "🔍 验证重要工具安装..."
-          tools_to_check=("gcc" "g++" "make" "git" "python3" "cmake" "flex" "bison")
-          missing_tools=()
-          
-          for tool in "${tools_to_check[@]}"; do
-            if command -v $tool >/dev/null 2>&1; then
-              echo "✅ $tool 已安装: $(which $tool)"
-            else
-              echo "❌ $tool 未安装"
-              missing_tools+=("$tool")
-            fi
-          done
-          
-          if [ ${#missing_tools[@]} -gt 0 ]; then
-            echo "❌ 错误: 以下重要工具缺失: ${missing_tools[*]}"
-            exit 1
-          fi
-          
-          GCC_VERSION=$(gcc --version | head -1)
-          echo "🔧 系统GCC版本: $GCC_VERSION"
-          echo "✅ 工具验证完成"
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step05_install_basic_tools
       #【firmware-build.yml-05】
 
       #【firmware-build.yml-06】
@@ -242,31 +189,14 @@ jobs:
         run: |
           echo "=== 步骤06: 初始空间检查 ==="
           
-          set -e
-          trap 'echo "❌ 步骤06 失败，退出代码: $?"; exit 1' ERR
-          
-          echo "📊 /mnt 分区详细信息:"
-          df -h /mnt
-          
-          AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
-          AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-          echo "/mnt 可用空间: ${AVAILABLE_GB}G"
-          
-          if [ $AVAILABLE_GB -lt 50 ]; then
-            echo "❌ 错误: /mnt 空间不足50G，当前只有${AVAILABLE_GB}G"
-            exit 1
-          else
-            echo "✅ 初始空间检查通过 - ${AVAILABLE_GB}G 可用"
-          fi
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step06_initial_space_check
       #【firmware-build.yml-06】
 
       #【firmware-build.yml-07】
       - name: "07. 创建构建目录"
         run: |
           echo "=== 步骤07: 创建构建目录 ==="
-          
-          set -e
-          trap 'echo "❌ 步骤07 失败，退出代码: $?"; exit 1' ERR
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step07_create_build_dir
@@ -276,9 +206,6 @@ jobs:
       - name: "08. 初始化构建环境"
         run: |
           echo "=== 步骤08: 初始化构建环境 ==="
-          
-          set -e
-          trap 'echo "❌ 步骤08 失败，退出代码: $?"; exit 1' ERR
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step08_initialize_build_env \
@@ -292,9 +219,6 @@ jobs:
         run: |
           echo "=== 步骤09: 下载OpenWrt官方SDK ==="
           
-          set -e
-          trap 'echo "❌ 步骤09 失败，退出代码: $?"; exit 1' ERR
-          
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step09_download_sdk \
             "${{ github.event.inputs.device_name }}"
@@ -305,8 +229,6 @@ jobs:
         run: |
           echo "=== 步骤10: 验证SDK下载结果 ==="
           
-          trap 'echo "⚠️ 步骤10 验证过程中出现错误，继续执行..."' ERR
-          
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step10_verify_sdk
       #【firmware-build.yml-10】
@@ -316,9 +238,6 @@ jobs:
         run: |
           echo "=== 步骤11: 添加TurboACC支持 ==="
           
-          set -e
-          trap 'echo "❌ 步骤11 失败，退出代码: $?"; exit 1' ERR
-          
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step11_add_turboacc
       #【firmware-build.yml-11】
@@ -327,9 +246,6 @@ jobs:
       - name: "12. 配置Feeds"
         run: |
           echo "=== 步骤12: 配置Feeds ==="
-          
-          set -e
-          trap 'echo "❌ 步骤12 失败，退出代码: $?"; exit 1' ERR
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step12_configure_feeds
@@ -341,9 +257,6 @@ jobs:
         run: |
           echo "=== 步骤13: 安装TurboACC包 ==="
           
-          set -e
-          trap 'echo "❌ 步骤13 失败，退出代码: $?"; exit 1' ERR
-          
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step13_install_turboacc
       #【firmware-build.yml-13】
@@ -353,9 +266,6 @@ jobs:
         run: |
           echo "=== 步骤14: 编译前空间检查 ==="
           
-          set -e
-          trap 'echo "❌ 步骤14 失败，退出代码: $?"; exit 1' ERR
-          
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step14_pre_build_space_check
       #【firmware-build.yml-14】
@@ -364,9 +274,6 @@ jobs:
       - name: "15. 智能配置生成"
         run: |
           echo "=== 步骤15: 智能配置生成 ==="
-          
-          set -e
-          trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step15_generate_config \
@@ -378,8 +285,6 @@ jobs:
         run: |
           echo "=== 步骤16: 验证USB配置 ==="
           
-          trap 'echo "⚠️ 步骤16 验证过程中出现错误，继续执行..."' ERR
-          
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step16_verify_usb
       #【firmware-build.yml-16】
@@ -388,8 +293,6 @@ jobs:
       - name: "17. USB驱动完整性检查"
         run: |
           echo "=== 步骤17: USB驱动完整性检查 ==="
-          
-          trap 'echo "⚠️ 步骤17 检查过程中出现错误，继续执行..."' ERR
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step17_check_usb_drivers
@@ -445,8 +348,6 @@ jobs:
         run: |
           echo "=== 步骤20: 修复网络环境 ==="
           
-          trap 'echo "⚠️ 步骤20 修复过程中出现错误，继续执行..."' ERR
-          
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step20_fix_network
       #【firmware-build.yml-20】
@@ -455,9 +356,6 @@ jobs:
       - name: "21. 下载依赖包"
         run: |
           echo "=== 步骤21: 下载依赖包 ==="
-          
-          set -e
-          trap 'echo "❌ 步骤21 失败，退出代码: $?"; exit 1' ERR
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step21_download_deps
@@ -468,8 +366,6 @@ jobs:
         run: |
           echo "=== 步骤22: 集成自定义文件 ==="
           
-          trap 'echo "⚠️ 步骤22 集成过程中出现错误，继续执行..."' ERR
-          
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step22_integrate_custom_files
       #【firmware-build.yml-22】
@@ -478,9 +374,6 @@ jobs:
       - name: "23. 前置错误检查"
         run: |
           echo "=== 步骤23: 前置错误检查 ==="
-          
-          set -e
-          trap 'echo "❌ 步骤23 失败，退出代码: $?"; exit 1' ERR
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step23_pre_build_check
@@ -512,9 +405,6 @@ jobs:
         run: |
           echo "=== 步骤25: 编译固件 ==="
           
-          set -e
-          trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
-          
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step25_build_firmware \
             "${{ env.ENABLE_PARALLEL }}"
@@ -525,9 +415,6 @@ jobs:
         if: success()
         run: |
           echo "=== 步骤26: 检查构建产物 ==="
-          
-          set -e
-          trap 'echo "❌ 步骤26 失败，退出代码: $?"; exit 1' ERR
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step26_check_artifacts
@@ -561,8 +448,6 @@ jobs:
         run: |
           echo "=== 步骤29: 编译后空间检查 ==="
           
-          trap 'echo "⚠️ 步骤29 检查过程中出现错误，继续执行..."' ERR
-          
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step29_post_build_space_check
       #【firmware-build.yml-29】
@@ -573,8 +458,6 @@ jobs:
         run: |
           echo "=== 步骤30: 编译总结 ==="
           
-          trap 'echo "⚠️ 步骤30 总结过程中出现错误，继续执行..."' ERR
-          
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step30_build_summary \
             "${{ github.event.inputs.device_name }}" \
@@ -583,3 +466,4 @@ jobs:
             "${{ env.TIMESTAMP_SEC }}" \
             "${{ github.event.inputs.enable_parallel }}"
       #【firmware-build.yml-30】
+#【firmware-build.yml-99】
