@@ -1,5 +1,5 @@
 # firmware-build-fix.yml
-name: 🔧 系统性标识修复系统（完整修复版）
+name: 🔧 系统性标识修复系统（完整修复版-带换行符处理）
 
 on:
   push:
@@ -54,12 +54,11 @@ jobs:
           fi
           echo "✅ 操作类型: $ACTION_TYPE"
       
-      - name: 📁 查找目标文件（支持系统性标识）
+      - name: 📁 查找目标文件
         id: find_target
         run: |
-          echo "=== 查找目标文件（支持系统性标识） ==="
+          echo "=== 查找目标文件 ==="
           
-          # 如果用户指定了目标文件
           if [ -n "${{ github.event.inputs.target_file }}" ]; then
             if [ -f "${{ github.event.inputs.target_file }}" ]; then
               TARGET_FILE="${{ github.event.inputs.target_file }}"
@@ -69,7 +68,6 @@ jobs:
               exit 1
             fi
           else
-            # 定义可能的文件位置
             POSSIBLE_PATHS=(
               "firmware-config/scripts/build_firmware_main.sh"
               "scripts/build_firmware_main.sh"
@@ -84,7 +82,6 @@ jobs:
               fi
             done
             
-            # 如果没找到，使用find搜索
             if [ -z "$TARGET_FILE" ]; then
               TARGET_FILE=$(find . -name "build_firmware_main.sh" -type f ! -path "./.git/*" | head -1)
             fi
@@ -97,6 +94,14 @@ jobs:
           
           echo "✅ 目标文件: $TARGET_FILE"
           echo "TARGET_FILE=$TARGET_FILE" >> $GITHUB_ENV
+          
+          # 检查换行符格式
+          if file "$TARGET_FILE" | grep -q "CRLF"; then
+            echo "⚠️ 目标文件包含Windows换行符(CRLF)"
+            echo "TARGET_HAS_CRLF=true" >> $GITHUB_ENV
+          else
+            echo "TARGET_HAS_CRLF=false" >> $GITHUB_ENV
+          fi
           
           # 记录原始文件信息
           ORIGINAL_SIZE=$(stat -c %s "$TARGET_FILE")
@@ -111,12 +116,50 @@ jobs:
           echo "  - 大小: $ORIGINAL_SIZE 字节"
           echo "  - 行数: $ORIGINAL_LINES 行"
           echo "  - 系统性标识: $ORIGINAL_IDENTIFIERS 个"
+          echo "  - 换行符: $(file "$TARGET_FILE" | grep -q "CRLF" && echo "CRLF (Windows)" || echo "LF (Unix)")"
       
-      # ============ 严格验证修复文件 ============
-      - name: 🔍 严格验证修复文件（系统性标识格式）
+      # ============ 修复换行符 ============
+      - name: 🔧 修复换行符问题
         if: env.ACTION_TYPE == 'apply' || env.ACTION_TYPE == 'verify'
         run: |
-          echo "=== 严格验证修复文件（系统性标识格式） ==="
+          echo "=== 修复换行符问题 ==="
+          
+          # 修复目标文件的换行符
+          if [ -f "$TARGET_FILE" ]; then
+            echo "🔧 转换目标文件换行符: $TARGET_FILE"
+            sed -i 's/\r$//' "$TARGET_FILE"
+            echo "✅ 目标文件换行符已转换为Unix格式(LF)"
+          fi
+          
+          # 修复fix.txt的换行符
+          if [ -f "fix.txt" ]; then
+            echo "🔧 转换修复文件换行符: fix.txt"
+            sed -i 's/\r$//' "fix.txt"
+            echo "✅ 修复文件换行符已转换为Unix格式(LF)"
+          fi
+          
+          # 验证换行符
+          echo ""
+          echo "🔍 验证换行符:"
+          if file "$TARGET_FILE" | grep -q "CRLF"; then
+            echo "⚠️ 目标文件仍包含CRLF换行符"
+          else
+            echo "✅ 目标文件换行符正确 (LF)"
+          fi
+          
+          if [ -f "fix.txt" ]; then
+            if file "fix.txt" | grep -q "CRLF"; then
+              echo "⚠️ 修复文件仍包含CRLF换行符"
+            else
+              echo "✅ 修复文件换行符正确 (LF)"
+            fi
+          fi
+      
+      # ============ 严格验证修复文件 ============
+      - name: 🔍 严格验证修复文件
+        if: env.ACTION_TYPE == 'apply' || env.ACTION_TYPE == 'verify'
+        run: |
+          echo "=== 严格验证修复文件 ==="
           
           if [ ! -f "fix.txt" ]; then
             echo "❌ 没有找到修复文件 fix.txt"
@@ -128,46 +171,42 @@ jobs:
             exit 1
           fi
           
-          # 验证系统性标识格式 - 严格匹配 #【build_firmware_main.sh-序号】
+          # 再次确保换行符正确
+          sed -i 's/\r$//' "fix.txt"
+          
+          # 验证系统性标识格式
           echo "🔍 验证系统性标识格式..."
           
-          # 提取所有标识行
           IDENTIFIERS=$(grep "^#【build_firmware_main.sh-[0-9]\+】" fix.txt || true)
           
           if [ -z "$IDENTIFIERS" ]; then
             echo "❌ 修复文件中未找到正确的系统性标识"
             echo "💡 标识格式应为: #【build_firmware_main.sh-序号】"
-            echo "💡 例如: #【build_firmware_main.sh-01】、#【build_firmware_main.sh-99】"
             exit 1
           fi
           
-          # 统计标识数量
           IDENTIFIER_COUNT=$(echo "$IDENTIFIERS" | wc -l)
           echo "✅ 找到 $IDENTIFIER_COUNT 个系统性标识"
           
-          # 显示所有标识
           echo ""
           echo "📋 系统性标识列表:"
           echo "$IDENTIFIERS" | while read -r id; do
             echo "  🔖 $id"
           done
           
-          # 检查标识格式是否正确（序号必须是两位数）
+          # 检查重复标识
           echo ""
-          echo "🔍 检查标识序号格式..."
-          INVALID_IDS=0
-          echo "$IDENTIFIERS" | while read -r id; do
-            SEQ_NUM=$(echo "$id" | grep -o "[0-9]\+")
-            if [ ${#SEQ_NUM} -eq 1 ]; then
-              echo "  ⚠️ 警告: $id (序号应为两位数，如: ${id%-*}-0${SEQ_NUM}】)"
-              INVALID_IDS=$((INVALID_IDS + 1))
-            elif [ ${#SEQ_NUM} -gt 2 ]; then
-              echo "  ⚠️ 警告: $id (序号超过两位数，建议使用00-99)"
-              INVALID_IDS=$((INVALID_IDS + 1))
-            else
-              echo "  ✅ $id (格式正确)"
-            fi
-          done
+          echo "🔍 检查重复标识..."
+          DUPLICATES=$(echo "$IDENTIFIERS" | sort | uniq -d)
+          if [ -n "$DUPLICATES" ]; then
+            echo "❌ 发现重复的系统性标识:"
+            echo "$DUPLICATES" | while read -r id; do
+              echo "  ⚠️ $id"
+            done
+            exit 1
+          else
+            echo "✅ 无重复标识"
+          fi
           
           # 检查每个标识后是否有内容
           echo ""
@@ -175,24 +214,24 @@ jobs:
           EMPTY_BLOCKS=0
           
           while IFS= read -r id; do
-            # 提取标识后的代码块（直到下一个标识或文件结束）
             BLOCK=$(awk -v id="$id" '
               BEGIN {found=0; block=""}
               $0 == id {found=1; next}
               found && /^#【build_firmware_main.sh-[0-9]+】/ {exit}
               found {block = block $0 "\n"}
-              END {printf "%s", block}
+              END {
+                gsub(/\n+$/, "", block)
+                printf "%s", block
+              }
             ' fix.txt)
             
-            # 去除空白行后检查是否为空
             CLEAN_BLOCK=$(echo "$BLOCK" | sed '/^\s*$/d')
             if [ -z "$CLEAN_BLOCK" ]; then
               echo "  ❌ $id (代码块为空)"
               EMPTY_BLOCKS=$((EMPTY_BLOCKS + 1))
             else
               BLOCK_LINES=$(echo "$BLOCK" | wc -l)
-              BLOCK_CHARS=$(echo "$BLOCK" | wc -c)
-              echo "  ✅ $id (代码块: $BLOCK_LINES 行, $BLOCK_CHARS 字符)"
+              echo "  ✅ $id (代码块: $BLOCK_LINES 行)"
             fi
           done <<< "$IDENTIFIERS"
           
@@ -216,13 +255,11 @@ jobs:
             fi
           done <<< "$IDENTIFIERS"
           
-          # 验证通过信息
           echo ""
           echo "📊 验证统计:"
           echo "  - 总标识数: $IDENTIFIER_COUNT"
           echo "  - 空代码块: $EMPTY_BLOCKS"
           echo "  - 缺失标识: $MISSING_IDS"
-          echo "  - 序号警告: $INVALID_IDS"
           
           if [ $EMPTY_BLOCKS -eq 0 ]; then
             echo "✅ 修复文件验证通过"
@@ -231,7 +268,6 @@ jobs:
             exit 1
           fi
           
-          # 保存验证信息到环境变量
           echo "IDENTIFIER_COUNT=$IDENTIFIER_COUNT" >> $GITHUB_ENV
           echo "MISSING_IDS=$MISSING_IDS" >> $GITHUB_ENV
       
@@ -242,33 +278,27 @@ jobs:
           exit 0
       
       # ============ 备份原始文件 ============
-      - name: 💾 备份原始文件（带系统性标识）
+      - name: 💾 备份原始文件
         if: env.ACTION_TYPE == 'apply'
         run: |
-          echo "=== 备份原始文件（带系统性标识） ==="
+          echo "=== 备份原始文件 ==="
           
-          # 创建备份目录
           mkdir -p ".github/backups"
           
-          # 生成备份文件名（包含时间戳和标识数量）
           TIMESTAMP=$(date +%Y%m%d_%H%M%S)
           BACKUP_FILE=".github/backups/build_firmware_main.sh.${TIMESTAMP}.id${ORIGINAL_IDENTIFIERS}.backup"
           
-          # 备份原始文件
+          # 备份前确保换行符统一
+          sed -i 's/\r$//' "$TARGET_FILE"
           cp "$TARGET_FILE" "$BACKUP_FILE"
           
           echo "✅ 原始文件已备份到: $BACKUP_FILE"
           echo "BACKUP_FILE=$BACKUP_FILE" >> $GITHUB_ENV
           
-          # 记录备份信息
           echo "📊 备份信息:"
           echo "  - 时间: $TIMESTAMP"
           echo "  - 大小: $(stat -c %s "$BACKUP_FILE") 字节"
           echo "  - 标识数: $ORIGINAL_IDENTIFIERS 个"
-          
-          # 创建备份索引
-          BACKUP_INDEX=".github/backups/backup_index.txt"
-          echo "$TIMESTAMP|$BACKUP_FILE|$ORIGINAL_SIZE|$ORIGINAL_IDENTIFIERS|$TARGET_FILE" >> "$BACKUP_INDEX"
       
       # ============ 核心：系统性标识整体块替换 ============
       - name: 🛠️ 基于系统性标识进行整体块替换
@@ -277,6 +307,10 @@ jobs:
           echo "=== 基于系统性标识进行整体块替换 ==="
           echo "🔧 替换策略: 以标识为锚点，整体替换整个代码块"
           
+          # 确保换行符正确
+          sed -i 's/\r$//' "$TARGET_FILE"
+          sed -i 's/\r$//' "fix.txt"
+          
           # 创建临时文件
           TEMP_FILE="${TARGET_FILE}.tmp"
           cp "$TARGET_FILE" "$TEMP_FILE"
@@ -284,10 +318,8 @@ jobs:
           # 读取fix.txt中的所有标识
           IDENTIFIERS=$(grep "^#【build_firmware_main.sh-[0-9]\+】" fix.txt)
           
-          # 记录处理统计
           REPLACED_COUNT=0
           APPENDED_COUNT=0
-          SKIPPED_COUNT=0
           
           # 处理每个标识
           while IFS= read -r identifier; do
@@ -297,57 +329,46 @@ jobs:
             echo "🔨 处理标识: $identifier"
             
             # 提取fix.txt中该标识对应的完整代码块
-            # 从当前标识开始，到下一个标识或文件结束
             BLOCK=$(awk -v id="$identifier" '
               BEGIN {found=0; block=""}
               $0 == id {found=1; next}
               found && /^#【build_firmware_main.sh-[0-9]+】/ {exit}
               found {block = block $0 "\n"}
               END {
-                # 移除末尾的空白行
                 gsub(/\n+$/, "", block)
                 printf "%s", block
               }
             ' fix.txt)
             
             BLOCK_LINES=$(echo "$BLOCK" | wc -l)
-            BLOCK_CHARS=$(echo "$BLOCK" | wc -c)
-            echo "  📦 代码块大小: $BLOCK_LINES 行, $BLOCK_CHARS 字符"
+            echo "  📦 代码块大小: $BLOCK_LINES 行"
             
-            # 转义标识用于正则表达式
+            # 转义标识
             ESCAPED_ID=$(echo "$identifier" | sed 's/[][\/.*^$]/\\&/g')
             
             # 检查目标文件中是否有该标识
             if grep -q "^$ESCAPED_ID" "$TEMP_FILE"; then
               echo "  ✅ 在目标文件中找到标识，执行整体块替换"
               
-              # 整体块替换逻辑：
-              # 1. 保留标识行
-              # 2. 删除原标识下的所有内容（直到下一个标识或文件结束）
-              # 3. 插入新的代码块
+              # 整体块替换逻辑
               awk -v id="$identifier" -v new_block="$BLOCK" '
-                BEGIN {in_block=0; printed=0}
+                BEGIN {in_block=0}
                 
-                # 找到标识行
                 $0 == id {
                   print id
                   if (new_block != "") print new_block
                   in_block=1
-                  printed=1
                   next
                 }
                 
-                # 如果在原标识块中，跳过直到下一个标识
                 in_block && /^#【build_firmware_main.sh-[0-9]+】/ {
                   in_block=0
                   print
                   next
                 }
                 
-                # 跳过原标识块中的内容
                 in_block {next}
                 
-                # 打印其他行
                 {print}
               ' "$TEMP_FILE" > "${TEMP_FILE}.2"
               
@@ -358,7 +379,6 @@ jobs:
             else
               echo "  ➕ 在目标文件中未找到标识，追加到文件末尾"
               
-              # 追加到文件末尾
               echo "" >> "$TEMP_FILE"
               echo "$identifier" >> "$TEMP_FILE"
               if [ -n "$BLOCK" ]; then
@@ -370,6 +390,9 @@ jobs:
             
           done <<< "$IDENTIFIERS"
           
+          # 确保最终文件的换行符是Unix格式
+          sed -i 's/\r$//' "$TEMP_FILE"
+          
           # 替换原始文件
           mv "$TEMP_FILE" "$TARGET_FILE"
           
@@ -377,7 +400,6 @@ jobs:
           echo "📊 整体块替换统计:"
           echo "  - 成功替换: $REPLACED_COUNT 个标识"
           echo "  - 追加新增: $APPENDED_COUNT 个标识"
-          echo "  - 跳过: $SKIPPED_COUNT 个标识"
           
           echo "REPLACED_COUNT=$REPLACED_COUNT" >> $GITHUB_ENV
           echo "APPENDED_COUNT=$APPENDED_COUNT" >> $GITHUB_ENV
@@ -388,13 +410,14 @@ jobs:
         run: |
           echo "=== 验证系统性标识替换结果 ==="
           
-          # 检查文件是否存在
           if [ ! -f "$TARGET_FILE" ]; then
             echo "❌ 错误: 目标文件丢失"
             exit 1
           fi
           
-          # 获取新文件信息
+          # 再次确保换行符正确
+          sed -i 's/\r$//' "$TARGET_FILE"
+          
           NEW_SIZE=$(stat -c %s "$TARGET_FILE")
           NEW_LINES=$(wc -l < "$TARGET_FILE")
           NEW_IDENTIFIERS=$(grep -c "^#【build_firmware_main.sh-[0-9]\+】" "$TARGET_FILE" 2>/dev/null || echo "0")
@@ -412,34 +435,31 @@ jobs:
           echo "  - 新标识:   $NEW_IDENTIFIERS 个"
           echo "  - 变化:     $((NEW_IDENTIFIERS - ORIGINAL_IDENTIFIERS)) 个"
           
-          # 计算大小变化比率
+          # 大小验证
           if command -v bc >/dev/null 2>&1; then
             SIZE_RATIO=$(echo "scale=2; $NEW_SIZE / $ORIGINAL_SIZE" | bc)
             echo "  - 大小比率: ${SIZE_RATIO}x"
             
-            # 严格检查大小异常（超过3倍或小于0.3倍）
             if (( $(echo "$SIZE_RATIO > 3.0" | bc -l) )); then
               echo ""
-              echo "❌ 严重错误：文件大小异常增大（${SIZE_RATIO}倍）"
+              echo "❌ 严重错误：文件大小异常增大"
               echo "💡 正在从备份恢复..."
               cp "$BACKUP_FILE" "$TARGET_FILE"
               exit 1
             elif (( $(echo "$SIZE_RATIO < 0.3" | bc -l) )); then
               echo ""
-              echo "❌ 严重错误：文件大小异常减小（${SIZE_RATIO}倍）"
+              echo "❌ 严重错误：文件大小异常减小"
               echo "💡 正在从备份恢复..."
               cp "$BACKUP_FILE" "$TARGET_FILE"
               exit 1
             fi
           fi
           
-          # 验证替换的标识是否正确插入
+          # 验证替换的标识
           echo ""
           echo "🔍 验证修复的标识..."
           
-          # 读取fix.txt中的标识
           FIX_IDENTIFIERS=$(grep "^#【build_firmware_main.sh-[0-9]\+】" fix.txt)
-          
           VERIFY_FAILED=0
           
           while IFS= read -r id; do
@@ -448,13 +468,16 @@ jobs:
             ESCAPED_ID=$(echo "$id" | sed 's/[][\/.*^$]/\\&/g')
             
             if grep -q "^$ESCAPED_ID" "$TARGET_FILE"; then
-              # 检查该标识下的内容是否非空
+              # 检查该标识下的内容
               BLOCK=$(awk -v id="$id" '
                 BEGIN {found=0; block=""}
                 $0 == id {found=1; next}
                 found && /^#【build_firmware_main.sh-[0-9]+】/ {exit}
                 found {block = block $0 "\n"}
-                END {printf "%s", block}
+                END {
+                  gsub(/\n+$/, "", block)
+                  printf "%s", block
+                }
               ' "$TARGET_FILE")
               
               CLEAN_BLOCK=$(echo "$BLOCK" | sed '/^\s*$/d')
@@ -479,68 +502,108 @@ jobs:
             echo "⚠️ 有 $VERIFY_FAILED 个标识验证失败"
           fi
           
-          # Shell语法检查
-          if [[ "$TARGET_FILE" == *.sh ]]; then
-            echo ""
-            echo "🔧 检查Shell语法..."
-            if command -v bash >/dev/null 2>&1; then
-              if bash -n "$TARGET_FILE" 2>/dev/null; then
-                echo "✅ Shell语法检查通过"
+          # ============ 关键修复：Shell语法检查前的预处理 ============
+          echo ""
+          echo "🔧 预处理Shell语法检查..."
+          
+          # 创建一个临时文件用于语法检查
+          SYNTAX_CHECK_FILE="${TARGET_FILE}.syntax_check"
+          cp "$TARGET_FILE" "$SYNTAX_CHECK_FILE"
+          
+          # 彻底移除所有Windows换行符
+          sed -i 's/\r$//' "$SYNTAX_CHECK_FILE"
+          sed -i 's/\r//g' "$SYNTAX_CHECK_FILE"
+          
+          # 修复函数定义格式
+          sed -i 's/() {$/() {/g' "$SYNTAX_CHECK_FILE"
+          sed -i 's/()\r{$/() {/g' "$SYNTAX_CHECK_FILE"
+          sed -i 's/(){$/() {/g' "$SYNTAX_CHECK_FILE"
+          
+          # 移除文件末尾的空行
+          sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$SYNTAX_CHECK_FILE"
+          
+          echo "🔧 检查Shell语法..."
+          if command -v bash >/dev/null 2>&1; then
+            # 使用严格模式检查
+            if bash -n "$SYNTAX_CHECK_FILE" 2>/tmp/bash_error.log; then
+              echo "✅ Shell语法检查通过"
+              # 语法检查通过，将修正后的文件复制回原文件
+              cp "$SYNTAX_CHECK_FILE" "$TARGET_FILE"
+            else
+              echo "❌ Shell语法检查失败"
+              echo "💡 错误信息:"
+              cat /tmp/bash_error.log | head -10
+              
+              # 尝试更彻底的修复
+              echo ""
+              echo "🔧 尝试深度修复Shell语法..."
+              
+              # 方法1: 使用dos2unix风格转换
+              tr -d '\r' < "$TARGET_FILE" > "${TARGET_FILE}.unix"
+              mv "${TARGET_FILE}.unix" "$TARGET_FILE"
+              
+              # 方法2: 修复函数定义
+              awk '
+                /^[a-zA-Z0-9_]+\(\) *\{/ {
+                  gsub(/\r/, "")
+                  gsub(/\(\) *\{/, "() {")
+                  print
+                  next
+                }
+                { gsub(/\r/, ""); print }
+              ' "$TARGET_FILE" > "${TARGET_FILE}.fixed"
+              
+              mv "${TARGET_FILE}.fixed" "$TARGET_FILE"
+              
+              # 再次检查
+              if bash -n "$TARGET_FILE" 2>/tmp/bash_error2.log; then
+                echo "✅ 深度修复后Shell语法检查通过"
               else
-                echo "❌ Shell语法检查失败"
+                echo "❌ 深度修复后仍然失败"
                 echo "💡 错误信息:"
-                bash -n "$TARGET_FILE" 2>&1 | head -5
+                cat /tmp/bash_error2.log | head -10
                 echo ""
                 echo "💡 正在从备份恢复..."
                 cp "$BACKUP_FILE" "$TARGET_FILE"
                 exit 1
               fi
             fi
+            rm -f "$SYNTAX_CHECK_FILE" /tmp/bash_error.log /tmp/bash_error2.log 2>/dev/null || true
           fi
           
           echo ""
           echo "✅ 替换结果验证完成"
           
-          # 保存新文件信息
           echo "NEW_SIZE=$NEW_SIZE" >> $GITHUB_ENV
           echo "NEW_LINES=$NEW_LINES" >> $GITHUB_ENV
           echo "NEW_IDENTIFIERS=$NEW_IDENTIFIERS" >> $GITHUB_ENV
       
       # ============ 恢复操作 ============
-      - name: 🔄 恢复备份（按系统性标识）
+      - name: 🔄 恢复备份
         if: env.ACTION_TYPE == 'restore'
         run: |
-          echo "=== 恢复备份（按系统性标识） ==="
+          echo "=== 恢复备份 ==="
           
-          # 查找最新的备份文件
           BACKUP_FILE=$(ls -t .github/backups/build_firmware_main.sh.*.backup 2>/dev/null | head -1)
           
           if [ -z "$BACKUP_FILE" ]; then
             echo "❌ 未找到备份文件"
-            echo "💡 请先执行一次修复操作以创建备份"
             exit 1
           fi
           
-          # 获取备份信息
           BACKUP_SIZE=$(stat -c %s "$BACKUP_FILE" 2>/dev/null || echo "未知")
-          BACKUP_LINES=$(wc -l < "$BACKUP_FILE" 2>/dev/null || echo "未知")
           BACKUP_IDENTIFIERS=$(grep -c "^#【build_firmware_main.sh-[0-9]\+】" "$BACKUP_FILE" 2>/dev/null || echo "0")
           
           echo "✅ 找到备份文件: $(basename "$BACKUP_FILE")"
           echo "📊 备份信息:"
           echo "  - 大小: $BACKUP_SIZE 字节"
-          echo "  - 行数: $BACKUP_LINES 行"
           echo "  - 标识数: $BACKUP_IDENTIFIERS 个"
-          echo "  - 时间: $(stat -c %y "$BACKUP_FILE" 2>/dev/null || echo '未知')"
           
-          # 恢复备份
+          # 恢复前确保换行符正确
+          sed -i 's/\r$//' "$BACKUP_FILE"
           cp "$BACKUP_FILE" "$TARGET_FILE"
           
           echo "✅ 已恢复备份到: $TARGET_FILE"
-          
-          # 记录恢复操作
-          RESTORE_LOG=".github/backups/restore_log.txt"
-          echo "$(date +%Y%m%d_%H%M%S)|恢复|$BACKUP_FILE|$TARGET_FILE" >> "$RESTORE_LOG"
       
       # ============ 清理 ============
       - name: 🧹 清理修复文件
@@ -548,7 +611,6 @@ jobs:
         run: |
           echo "=== 清理修复文件 ==="
           
-          # 备份fix.txt到日志目录
           if [ -f "fix.txt" ] && [ -s "fix.txt" ]; then
             mkdir -p ".github/fix-logs"
             TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -557,7 +619,6 @@ jobs:
             # 保存修复记录
             cp "fix.txt" "$FIX_LOG"
             
-            # 添加元数据
             echo "" >> "$FIX_LOG"
             echo "=== 修复元数据 ===" >> "$FIX_LOG"
             echo "时间: $(date)" >> "$FIX_LOG"
@@ -571,28 +632,23 @@ jobs:
             echo "✅ 修复记录已备份到: $FIX_LOG"
           fi
           
-          # 清空fix.txt
           > "fix.txt"
           echo "✅ 已清空fix.txt文件"
           
-          # 如果fix.txt为空，提交空文件
           git add fix.txt
       
       # ============ 提交更改 ============
-      - name: 📤 提交并推送（带系统性标识信息）
+      - name: 📤 提交并推送
         run: |
-          echo "=== 提交并推送（带系统性标识信息） ==="
+          echo "=== 提交并推送 ==="
           
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "GitHub Actions"
           
-          # 构建提交信息
           if [ "$ACTION_TYPE" = "restore" ]; then
             COMMIT_MSG="🔄 恢复备份 [系统性标识]"
             COMMIT_MSG+=$'\n\n'
             COMMIT_MSG+="📦 备份文件: $(basename "$BACKUP_FILE")"
-            COMMIT_MSG+=$'\n'
-            COMMIT_MSG+="🕒 恢复时间: $(date '+%Y-%m-%d %H:%M:%S')"
           else
             COMMIT_MSG="🔧 系统性标识整体块修复"
             COMMIT_MSG+=$'\n\n'
@@ -602,42 +658,20 @@ jobs:
             COMMIT_MSG+=$'\n'
             COMMIT_MSG+="  - 追加标识: $APPENDED_COUNT 个"
             COMMIT_MSG+=$'\n'
-            COMMIT_MSG+="  - 原始大小: $ORIGINAL_SIZE → $NEW_SIZE 字节"
-            COMMIT_MSG+=$'\n'
-            COMMIT_MSG+="  - 原始行数: $ORIGINAL_LINES → $NEW_LINES 行"
+            COMMIT_MSG+="  - 大小变化: $ORIGINAL_SIZE → $NEW_SIZE 字节"
             COMMIT_MSG+=$'\n'
             COMMIT_MSG+="  - 标识总数: $ORIGINAL_IDENTIFIERS → $NEW_IDENTIFIERS 个"
             COMMIT_MSG+=$'\n\n'
-            
-            # 添加修复的标识列表
-            COMMIT_MSG+="🔖 修复的标识:"
-            COMMIT_MSG+=$'\n'
-            
-            # 从最新的修复日志中获取标识
-            LATEST_LOG=$(ls -t .github/fix-logs/fix.*.log 2>/dev/null | head -1)
-            if [ -f "$LATEST_LOG" ]; then
-              grep "^#【build_firmware_main.sh-[0-9]\+】" "$LATEST_LOG" | head -10 | while read -r id; do
-                COMMIT_MSG+="  - $id"
-                COMMIT_MSG+=$'\n'
-              done
-              
-              TOTAL_IDS=$(grep -c "^#【build_firmware_main.sh-[0-9]\+】" "$LATEST_LOG" 2>/dev/null || echo "0")
-              if [ $TOTAL_IDS -gt 10 ]; then
-                COMMIT_MSG+="  - ... 等共 $TOTAL_IDS 个标识"
-                COMMIT_MSG+=$'\n'
-              fi
-            fi
-            
+            COMMIT_MSG+="🔧 修复换行符: CRLF → LF"
             COMMIT_MSG+=$'\n'
             COMMIT_MSG+="📁 备份文件: $(basename "$BACKUP_FILE")"
-            COMMIT_MSG+=$'\n'
-            COMMIT_MSG+="🕒 修复时间: $(date '+%Y-%m-%d %H:%M:%S')"
           fi
           
-          # 添加所有更改
-          git add -A
+          COMMIT_MSG+=$'\n'
+          COMMIT_MSG+="🕒 $(date '+%Y-%m-%d %H:%M:%S')"
           
-          # 提交更改
+          git add "$TARGET_FILE"
+          
           if git diff-index --quiet HEAD --; then
             echo "⚠️ 没有更改可提交"
           else
@@ -649,7 +683,7 @@ jobs:
             echo "✅ 已提交并推送"
           fi
       
-      # ============ 生成详细报告 ============
+      # ============ 生成报告 ============
       - name: 📋 生成系统性标识修复报告
         if: always()
         run: |
@@ -672,6 +706,7 @@ jobs:
             echo "| 文件大小 | $ORIGINAL_SIZE 字节 | $NEW_SIZE 字节 | $((NEW_SIZE - ORIGINAL_SIZE)) 字节 |" >> $GITHUB_STEP_SUMMARY
             echo "| 文件行数 | $ORIGINAL_LINES 行 | $NEW_LINES 行 | $((NEW_LINES - ORIGINAL_LINES)) 行 |" >> $GITHUB_STEP_SUMMARY
             echo "| 系统性标识 | $ORIGINAL_IDENTIFIERS 个 | $NEW_IDENTIFIERS 个 | $((NEW_IDENTIFIERS - ORIGINAL_IDENTIFIERS)) 个 |" >> $GITHUB_STEP_SUMMARY
+            echo "| **换行符** | CRLF/LF混合 | **LF (Unix)** | ✅ 已修复 |" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             
             echo "### 🔨 修复操作统计" >> $GITHUB_STEP_SUMMARY
@@ -680,21 +715,8 @@ jobs:
             echo "|----------|------|" >> $GITHUB_STEP_SUMMARY
             echo "| **整体块替换** | $REPLACED_COUNT 个标识 |" >> $GITHUB_STEP_SUMMARY
             echo "| **追加新增** | $APPENDED_COUNT 个标识 |" >> $GITHUB_STEP_SUMMARY
+            echo "| **换行符修复** | CRLF → LF |" >> $GITHUB_STEP_SUMMARY
             echo "| **备份文件** | \`$(basename "$BACKUP_FILE")\` |" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            
-            echo "### 🔖 修复的系统性标识" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            
-            LATEST_LOG=$(ls -t .github/fix-logs/fix.*.log 2>/dev/null | head -1)
-            if [ -f "$LATEST_LOG" ]; then
-              grep "^#【build_firmware_main.sh-[0-9]\+】" "$LATEST_LOG" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "（无法读取修复日志）" >> $GITHUB_STEP_SUMMARY
-            fi
-            
-            echo '```' >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
           fi
           
@@ -704,8 +726,7 @@ jobs:
             echo "| 项目 | 详细信息 |" >> $GITHUB_STEP_SUMMARY
             echo "|------|----------|" >> $GITHUB_STEP_SUMMARY
             echo "| **恢复的备份** | \`$(basename "$BACKUP_FILE")\` |" >> $GITHUB_STEP_SUMMARY
-            echo "| **备份时间** | $(stat -c %y "$BACKUP_FILE" 2>/dev/null \| cut -d. -f1) |" >> $GITHUB_STEP_SUMMARY
-            echo "| **备份大小** | $(stat -c %s "$BACKUP_FILE") 字节 |" >> $GITHUB_STEP_SUMMARY
+            echo "| **备份时间** | $(stat -c %y "$BACKUP_FILE" 2>/dev/null | cut -d. -f1) |" >> $GITHUB_STEP_SUMMARY
             echo "| **恢复时间** | $(date '+%Y-%m-%d %H:%M:%S') |" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
           fi
@@ -713,11 +734,11 @@ jobs:
           echo "### ⚙️ 系统性标识整体块替换原理" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "1. **标识锚定**：以 \`#【build_firmware_main.sh-序号】\` 为精确锚点" >> $GITHUB_STEP_SUMMARY
-          echo "2. **整体提取**：完整提取标识后的所有代码行（直到下一个标识）" >> $GITHUB_STEP_SUMMARY
+          echo "2. **整体提取**：完整提取标识后的所有代码行" >> $GITHUB_STEP_SUMMARY
           echo "3. **整体替换**：在目标文件中找到相同标识，**完整替换**整个代码块" >> $GITHUB_STEP_SUMMARY
           echo "4. **原子操作**：标识行保持不变，只替换其下的内容" >> $GITHUB_STEP_SUMMARY
           echo "5. **智能追加**：未找到标识则追加到文件末尾" >> $GITHUB_STEP_SUMMARY
-          echo "6. **自动验证**：替换后验证文件大小、标识完整性、Shell语法" >> $GITHUB_STEP_SUMMARY
+          echo "6. **换行符修复**：自动转换CRLF为LF，避免Shell语法错误" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           echo "### 📁 备份位置" >> $GITHUB_STEP_SUMMARY
