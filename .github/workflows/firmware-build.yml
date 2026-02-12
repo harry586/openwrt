@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      # 步骤 0: 生成时间戳（UTC+8时区）- 修复版：保留完整输出，只移除无用的注释行
+      # 步骤 0: 生成时间戳（UTC+8时区）- 修复版：移除多余的日期格式
       - name: "0. 生成时间戳（UTC+8时区）"
         run: |
           echo "=== 步骤 0: 生成时间戳（UTC+8时区） ==="
@@ -52,26 +52,19 @@ jobs:
           echo "设置时区为UTC+8..."
           sudo timedatectl set-timezone Asia/Shanghai 2>/dev/null || true
           
-          # 生成时间戳
+          # 生成时间戳 - 只保留精确到秒的格式
           START_TIME=$(date +'%Y-%m-%d %H:%M:%S')
           echo "🕐 开始时间: $START_TIME"
           
           # 生成精确到秒的时间戳
           TIMESTAMP_LOCAL=$(date +'%Y%m%d_%H%M%S')
-          BASE_DATE=$(date +'%Y%m%d')
-          
-          # 多个时间戳格式
           TIMESTAMP_SEC="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$TIMESTAMP_LOCAL"
-          TIMESTAMP_DAY="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$BASE_DATE"
           
           echo "TIMESTAMP_SEC=$TIMESTAMP_SEC" >> $GITHUB_ENV
-          echo "TIMESTAMP_DAY=$TIMESTAMP_DAY" >> $GITHUB_ENV
           echo "START_TIME=$START_TIME" >> $GITHUB_ENV
-          echo "BASE_DATE=$BASE_DATE" >> $GITHUB_ENV
           
           echo "✅ 生成时间戳:"
           echo "  精确到秒: $TIMESTAMP_SEC"
-          echo "  仅到日: $TIMESTAMP_DAY"
           echo "  开始时间: $START_TIME"
           echo "📋 构建配置:"
           echo "  设备: ${{ github.event.inputs.device_name }}"
@@ -919,20 +912,21 @@ jobs:
             echo "✅ 已设置默认拥塞控制算法: BBR"
           fi
           
-          # 【关键修复4】解决kmod-ath10k-ct冲突问题
+          # 【关键修复4】解决kmod-ath10k-ct冲突问题 - 增强版
           echo "🔧 解决kmod-ath10k-ct冲突问题..."
           # 禁用标准ath10k驱动
           sed -i 's/^CONFIG_PACKAGE_kmod-ath10k=y/# CONFIG_PACKAGE_kmod-ath10k is not set/' .config 2>/dev/null || true
           sed -i 's/^CONFIG_PACKAGE_kmod-ath10k-pci=y/# CONFIG_PACKAGE_kmod-ath10k-pci is not set/' .config 2>/dev/null || true
           sed -i 's/^CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set/' .config 2>/dev/null || true
+          sed -i 's/^CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y/# CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers is not set/' .config 2>/dev/null || true
           
-          # 确保CT版本被启用
+          # 确保CT版本被启用，禁用smallbuffers版本
           echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
           echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
           echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
           echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y" >> .config
-          echo "✅ 已配置使用kmod-ath10k-ct替代标准ath10k驱动"
+          echo "# CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers is not set" >> .config
+          echo "✅ 已配置使用kmod-ath10k-ct替代标准ath10k驱动，并禁用smallbuffers版本"
           
           # 备份原始配置文件
           cp "/mnt/openwrt-build/.config" "/mnt/openwrt-build/.config.original" 2>/dev/null || true
@@ -979,6 +973,7 @@ jobs:
             echo "5. ✅ kmod-ath10k-ct冲突解决状态:"
             echo "  - kmod-ath10k:" $(grep -q "^CONFIG_PACKAGE_kmod-ath10k=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "⚠️ 仍启用" || echo "✅ 已禁用")
             echo "  - kmod-ath10k-ct:" $(grep -q "^CONFIG_PACKAGE_kmod-ath10k-ct=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "✅ 已启用" || echo "❌ 未启用")
+            echo "  - kmod-ath10k-ct-smallbuffers:" $(grep -q "^CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y" "/mnt/openwrt-build/.config" 2>/dev/null && echo "⚠️ 仍启用（可能冲突）" || echo "✅ 已禁用")
             
             echo ""
             echo "6. ✅ 关键USB驱动状态（精确匹配）:"
@@ -1011,7 +1006,7 @@ jobs:
             echo "  - 配置模式: ${{ github.event.inputs.config_mode }}"
             echo "  - USB 3.0驱动: 已强制启用"
             echo "  - TurboACC: $([ "${{ github.event.inputs.config_mode }}" = "normal" ] && echo "已强制启用" || echo "基础模式不启用")"
-            echo "  - kmod-ath10k-ct冲突: 已解决"
+            echo "  - kmod-ath10k-ct冲突: 已解决（禁用smallbuffers版本）"
             
             # 显示前10个启用的插件
             echo ""
@@ -1595,6 +1590,14 @@ jobs:
             ATH10K_FIXED=1
           fi
           
+          if grep -q "^CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y" .config; then
+            echo "  ⚠️ 发现潜在冲突: kmod-ath10k-ct-smallbuffers 已启用"
+            echo "  🔧 正在自动修复..."
+            sed -i 's/^CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y/# CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers is not set/' .config
+            echo "  ✅ 已禁用: kmod-ath10k-ct-smallbuffers"
+            ATH10K_FIXED=1
+          fi
+          
           if ! grep -q "^CONFIG_PACKAGE_kmod-ath10k-ct=y" .config; then
             echo "  ❌ 错误: kmod-ath10k-ct 未启用"
             echo "  🔧 正在自动修复..."
@@ -1939,7 +1942,7 @@ jobs:
           
           echo "🟢 步骤 27 完成"
 
-      # 步骤 28: 编译后总结（增强版）
+      # 步骤 28: 编译后总结（增强版）- 移除多余的日期格式
       - name: "28. 编译后总结（增强版）"
         if: always()
         run: |
@@ -1954,8 +1957,7 @@ jobs:
           echo "设备: ${{ github.event.inputs.device_name }}"
           echo "版本: ${{ github.event.inputs.version_selection }}"
           echo "配置模式: ${{ github.event.inputs.config_mode }}"
-          echo "时间戳（精确到秒）: ${{ env.TIMESTAMP_SEC }}"
-          echo "时间戳（仅到日）: ${{ env.TIMESTAMP_DAY }}"
+          echo "时间戳: ${{ env.TIMESTAMP_SEC }}"
           echo "并行优化: ${{ github.event.inputs.enable_parallel }}"
           echo ""
           
