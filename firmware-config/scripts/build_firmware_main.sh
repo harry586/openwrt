@@ -1008,7 +1008,7 @@ check_usb_drivers_integrity() {
 #【build_firmware_main.sh-15】
 
 #【build_firmware_main.sh-16】
-# 应用配置并显示详情 - 综合修复版：使用scripts/config工具，格式检查，去重，空格修复
+# 应用配置并显示详情 - 综合修复版：修复sed错误，添加输入文件检查
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -1032,23 +1032,31 @@ apply_config() {
     # ========== 第2步：使用sed标准化配置文件格式 ==========
     log "🔧 步骤1: 标准化配置文件格式..."
     
-    # 2.1 移除所有行首尾空格
-    sed -i 's/^[[:space:]]*//; s/[[:space:]]*$//' .config
-    
-    # 2.2 标准化注释行格式（确保是 "# CONFIG_XXX is not set" 格式）
-    sed -i 's/^#\([^[:space:]]\)/# \1/' .config
-    sed -i 's/^#[[:space:]]*CONFIG_/# CONFIG_/' .config
-    sed -i 's/\(CONFIG_.*\)[[:space:]]*is not set[[:space:]]*/\1 is not set/' .config
-    sed -i 's/^# CONFIG_.*$/& is not set/' .config | grep -v "is not set$" | sed -i 's/$/ is not set/'
-    
-    # 2.3 标准化配置行格式（确保是 "CONFIG_XXX=y" 或 "CONFIG_XXX=value" 格式）
-    sed -i 's/^CONFIG_\(.*\)[[:space:]]*=[[:space:]]*\(.*\)/CONFIG_\1=\2/' .config
-    sed -i 's/^CONFIG_\(.*\)[[:space:]]*=[[:space:]]*y/CONFIG_\1=y/' .config
-    
-    # 2.4 移除空行
-    sed -i '/^[[:space:]]*$/d' .config
-    
-    log "✅ 配置文件格式标准化完成"
+    # 修复: 确保输入文件存在，并且sed命令正确执行
+    if [ -f ".config" ]; then
+        # 2.1 移除所有行首尾空格
+        sed -i 's/^[[:space:]]*//; s/[[:space:]]*$//' .config
+        
+        # 2.2 标准化注释行格式（确保是 "# CONFIG_XXX is not set" 格式）
+        sed -i 's/^#\([^[:space:]]\)/# \1/' .config
+        sed -i 's/^#[[:space:]]*CONFIG_/# CONFIG_/' .config
+        
+        # 修复: 正确处理"is not set"格式
+        sed -i 's/^# CONFIG_.*$/\0 is not set/' .config
+        sed -i 's/ is not set is not set/ is not set/g' .config
+        
+        # 2.3 标准化配置行格式（确保是 "CONFIG_XXX=y" 或 "CONFIG_XXX=value" 格式）
+        sed -i 's/^CONFIG_\(.*\)[[:space:]]*=[[:space:]]*\(.*\)/CONFIG_\1=\2/' .config
+        sed -i 's/^CONFIG_\(.*\)[[:space:]]*=[[:space:]]*y/CONFIG_\1=y/' .config
+        
+        # 2.4 移除空行
+        sed -i '/^[[:space:]]*$/d' .config
+        
+        log "✅ 配置文件格式标准化完成"
+    else
+        log "❌ .config 文件在操作过程中丢失"
+        return 1
+    fi
     
     # ========== 第3步：使用awk去重（保留最后一个有效配置）==========
     log "🔧 步骤2: 清理重复配置行..."
