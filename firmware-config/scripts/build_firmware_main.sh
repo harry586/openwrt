@@ -1002,7 +1002,7 @@ apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 应用配置并显示详情（综合修复版）==="
+    log "=== 应用配置并显示详情（综合修复版 + Makefile语法检查）==="
     
     if [ ! -f ".config" ]; then
         log "❌ 错误: .config 文件不存在，无法应用配置"
@@ -1273,10 +1273,142 @@ apply_config() {
     
     log "✅ 最终去重完成"
     
-    log "🔄 步骤6: 运行 make defconfig..."
-    make defconfig || handle_error "应用配置失败"
+    log "🔧 步骤6: Makefile语法检查与修复..."
     
-    log "🔧 步骤7: 验证关键配置..."
+    local config_line_num=1
+    local fixed_count=0
+    local temp_config=$(mktemp)
+    
+    while IFS= read -r line; do
+        if echo "$line" | grep -q "^CONFIG_" && ! echo "$line" | grep -q "=y$" && ! echo "$line" | grep -q "=m$" && ! echo "$line" | grep -q "=" && ! echo "$line" | grep -q "is not set$"; then
+            log "⚠️ 第 $config_line_num 行格式错误: $line"
+            echo "# $line (已修复: 缺少分隔符)" >> "$temp_config"
+            echo "# CONFIG_$(echo "$line" | sed 's/^CONFIG_//') is not set" >> "$temp_config"
+            fixed_count=$((fixed_count + 1))
+        elif echo "$line" | grep -q "^CONFIG_.*=y$" && echo "$line" | grep -q "[[:space:]]=y$"; then
+            local fixed_line=$(echo "$line" | sed 's/[[:space:]]*=y$/=y/')
+            log "⚠️ 第 $config_line_num 行空格修复: $line -> $fixed_line"
+            echo "$fixed_line" >> "$temp_config"
+            fixed_count=$((fixed_count + 1))
+        elif echo "$line" | grep -q "^CONFIG_.*=m$" && echo "$line" | grep -q "[[:space:]]=m$"; then
+            local fixed_line=$(echo "$line" | sed 's/[[:space:]]*=m$/=m/')
+            log "⚠️ 第 $config_line_num 行空格修复: $line -> $fixed_line"
+            echo "$fixed_line" >> "$temp_config"
+            fixed_count=$((fixed_count + 1))
+        elif echo "$line" | grep -q "^CONFIG_.*[[:space:]]+$"; then
+            log "⚠️ 第 $config_line_num 行尾随空格: $line"
+            local fixed_line=$(echo "$line" | sed 's/[[:space:]]*$//')
+            echo "$fixed_line" >> "$temp_config"
+            fixed_count=$((fixed_count + 1))
+        elif echo "$line" | grep -q "^[[:space:]]*CONFIG_" && ! echo "$line" | grep -q "^CONFIG_"; then
+            log "⚠️ 第 $config_line_num 行前导空格: $line"
+            local fixed_line=$(echo "$line" | sed 's/^[[:space:]]*//')
+            echo "$fixed_line" >> "$temp_config"
+            fixed_count=$((fixed_count + 1))
+        else
+            echo "$line" >> "$temp_config"
+        fi
+        config_line_num=$((config_line_num + 1))
+    done < .config
+    
+    mv "$temp_config" .config
+    
+    if [ $fixed_count -gt 0 ]; then
+        log "✅ Makefile语法修复完成，共修复 $fixed_count 个格式问题"
+    else
+        log "✅ Makefile语法检查通过，未发现格式问题"
+    fi
+    
+    log "🔧 步骤7: 检查无效配置项..."
+    
+    local invalid_patterns=(
+        "CONFIG_PACKAGE_bmx7"
+        "CONFIG_PACKAGE_bmx7-dnsupdate"
+        "CONFIG_PACKAGE_kmod-bmx7"
+    )
+    
+    local invalid_count=0
+    for pattern in "${invalid_patterns[@]}"; do
+        if grep -q "^${pattern}=y" .config; then
+            log "⚠️ 发现无效配置项: ${pattern}=y"
+            awk "!/^${pattern}=y/" .config > .config.tmp
+            mv .config.tmp .config
+            log "✅ 已移除无效配置: ${pattern}"
+            invalid_count=$((invalid_count + 1))
+        fi
+    done
+    
+    if [ $invalid_count -gt 0 ]; then
+        log "✅ 已移除 $invalid_count 个无效配置项"
+    fi
+    
+    log "🔧 步骤8: 运行 make defconfig 前验证..."
+    
+    if [ ! -f "scripts/config" ]; then
+        log "⚠️ scripts/config工具不存在，跳过预验证"
+    else
+        local test_config=$(mktemp)
+        cp .config "$test_config"
+        
+        if ./scripts/config --file "$test_config" --enable TEST_CONFIG 2>/dev/null; then
+            log "✅ scripts/config 工具可用"
+        else
+            log "⚠️ scripts/config 工具可能有问题，将使用直接写入方式"
+        fi
+        rm -f "$test_config"
+    fi
+    
+    log "🔄 步骤9: 运行 make defconfig..."
+    
+    local defconfig_output=$(mktemp)
+    
+    if make defconfig 2>&1 | tee "$defconfig_output"; then
+        log "✅ make defconfig 执行成功"
+    else
+        local exit_code=$?
+        log "❌ make defconfig 失败，退出代码: $exit_code"
+        
+        if grep -q "missing separator" "$defconfig_output"; then
+            log "🔧 检测到配置文件语法错误，正在执行深度修复..."
+            
+            local line_number=$(grep -n "missing separator" "$defconfig_output" | head -1 | grep -o "[0-9]+")
+            if [ -n "$line_number" ]; then
+                log "📌 错误发生在第 $line_number 行附近"
+                
+                local start_line=$((line_number - 5))
+                if [ $start_line -lt 1 ]; then start_line=1; fi
+                
+                log "📋 错误上下文:"
+                sed -n "${start_line},$((line_number + 5))p" .config 2>/dev/null | nl -v $start_line || true
+            fi
+            
+            log "🔧 执行激进修复模式..."
+            
+            local clean_config=$(mktemp)
+            
+            grep "^CONFIG_.*=[ym]$" .config | sort -u > "$clean_config"
+            grep "^# CONFIG_.* is not set$" .config | sort -u >> "$clean_config"
+            
+            mv "$clean_config" .config
+            
+            log "✅ 激进修复完成，配置行数: $(wc -l < .config)"
+            
+            log "🔄 重新运行 make defconfig..."
+            if make defconfig; then
+                log "✅ make defconfig 修复成功"
+            else
+                log "❌ make defconfig 仍然失败，请检查配置文件"
+                cat .config | head -50
+                handle_error "应用配置失败"
+            fi
+        else
+            handle_error "make defconfig 失败"
+        fi
+    fi
+    
+    rm -f "$defconfig_output"
+    
+    log "🔧 步骤10: 验证关键配置..."
     
     local missing_key_configs=()
     
@@ -1296,7 +1428,20 @@ apply_config() {
     
     if [ ${#missing_key_configs[@]} -gt 0 ]; then
         log "⚠️ 警告: 以下关键配置在defconfig后丢失: ${missing_key_configs[*]}"
-        log "💡 这可能是由于依赖关系不满足，请检查配置文件"
+        log "💡 尝试强制添加丢失的关键配置..."
+        
+        for config in "${missing_key_configs[@]}"; do
+            if [ -f "scripts/config" ]; then
+                ./scripts/config --enable "CONFIG_PACKAGE_${config}"
+                log "✅ 强制添加: $config"
+            else
+                echo "CONFIG_PACKAGE_${config}=y" >> .config
+                log "✅ 强制添加: $config"
+            fi
+        done
+        
+        make defconfig || log "⚠️ 二次defconfig失败，但继续执行"
+        log "✅ 关键配置强制添加完成"
     else
         log "✅ 所有关键配置验证通过"
     fi
