@@ -4,7 +4,7 @@
 # 对应工作流: firmware-build.yml
 # 版本: 3.0.0
 # 最后更新: 2026-02-13
-#【build_firmware_main.sh-00】
+#【build_firmware_main.sh-00-end】
 
 #【build_firmware_main.sh-01】
 set -e
@@ -28,7 +28,7 @@ handle_error() {
     tail -50 /tmp/build-logs/*.log 2>/dev/null || echo "无日志文件"
     exit 1
 }
-#【build_firmware_main.sh-01】
+#【build_firmware_main.sh-01-end】
 
 #【build_firmware_main.sh-02】
 save_env() {
@@ -56,7 +56,7 @@ save_env() {
     chmod +x $ENV_FILE
     log "✅ 环境变量已保存到: $ENV_FILE"
 }
-#【build_firmware_main.sh-02】
+#【build_firmware_main.sh-02-end】
 
 #【build_firmware_main.sh-03】
 load_env() {
@@ -67,7 +67,7 @@ load_env() {
         log "⚠️ 环境文件不存在: $ENV_FILE"
     fi
 }
-#【build_firmware_main.sh-03】
+#【build_firmware_main.sh-03-end】
 
 #【build_firmware_main.sh-04】
 setup_environment() {
@@ -122,7 +122,7 @@ setup_environment() {
     
     log "✅ 编译环境设置完成"
 }
-#【build_firmware_main.sh-04】
+#【build_firmware_main.sh-04-end】
 
 #【build_firmware_main.sh-05】
 create_build_dir() {
@@ -138,7 +138,7 @@ create_build_dir() {
         exit 1
     fi
 }
-#【build_firmware_main.sh-05】
+#【build_firmware_main.sh-05-end】
 
 #【build_firmware_main.sh-06】
 initialize_build_env() {
@@ -215,7 +215,7 @@ initialize_build_env() {
     
     log "✅ 构建环境初始化完成"
 }
-#【build_firmware_main.sh-06】
+#【build_firmware_main.sh-06-end】
 
 #【build_firmware_main.sh-07】
 download_openwrt_sdk() {
@@ -429,7 +429,7 @@ verify_sdk_files_v2() {
 verify_sdk_files() {
     verify_sdk_files_v2 "$1"
 }
-#【build_firmware_main.sh-07】
+#【build_firmware_main.sh-07-end】
 
 #【build_firmware_main.sh-08】
 initialize_compiler_env() {
@@ -539,7 +539,7 @@ initialize_compiler_env() {
         return 1
     fi
 }
-#【build_firmware_main.sh-08】
+#【build_firmware_main.sh-08-end】
 
 #【build_firmware_main.sh-09】
 add_turboacc_support() {
@@ -556,7 +556,7 @@ add_turboacc_support() {
         log "ℹ️ 基础模式不添加 TurboACC 支持"
     fi
 }
-#【build_firmware_main.sh-09】
+#【build_firmware_main.sh-09-end】
 
 #【build_firmware_main.sh-10】
 configure_feeds() {
@@ -596,7 +596,7 @@ configure_feeds() {
     
     log "✅ Feeds配置完成"
 }
-#【build_firmware_main.sh-10】
+#【build_firmware_main.sh-10-end】
 
 #【build_firmware_main.sh-11】
 install_turboacc_packages() {
@@ -613,7 +613,7 @@ install_turboacc_packages() {
     
     log "✅ TurboACC 包安装完成"
 }
-#【build_firmware_main.sh-11】
+#【build_firmware_main.sh-11-end】
 
 #【build_firmware_main.sh-12】
 pre_build_space_check() {
@@ -651,7 +651,7 @@ pre_build_space_check() {
     
     log "✅ 空间检查完成"
 }
-#【build_firmware_main.sh-12】
+#【build_firmware_main.sh-12-end】
 
 #【build_firmware_main.sh-13】
 generate_config() {
@@ -859,7 +859,7 @@ apply_configuration_from_files() {
     
     log "✅ 配置文件应用完成"
 }
-#【build_firmware_main.sh-13】
+#【build_firmware_main.sh-13-end】
 
 #【build_firmware_main.sh-14】
 verify_usb_config() {
@@ -942,7 +942,7 @@ verify_usb_config() {
         log "🎉 恭喜: 所有关键USB驱动都已启用"
     fi
 }
-#【build_firmware_main.sh-14】
+#【build_firmware_main.sh-14-end】
 
 #【build_firmware_main.sh-15】
 check_usb_drivers_integrity() {
@@ -995,7 +995,7 @@ check_usb_drivers_integrity() {
         log "🎉 所有必需USB驱动都已启用"
     fi
 }
-#【build_firmware_main.sh-15】
+#【build_firmware_main.sh-15-end】
 
 #【build_firmware_main.sh-16】
 apply_config() {
@@ -1306,7 +1306,7 @@ apply_config() {
     log "最终配置大小: $(ls -lh .config | awk '{print $5}')"
     log "最终配置行数: $(wc -l < .config)"
 }
-#【build_firmware_main.sh-16】
+#【build_firmware_main.sh-16-end】
 
 #【build_firmware_main.sh-17】
 fix_network() {
@@ -1337,7 +1337,7 @@ fix_network() {
     
     log "✅ 网络环境修复完成"
 }
-#【build_firmware_main.sh-17】
+#【build_firmware_main.sh-17-end】
 
 #【build_firmware_main.sh-18】
 download_dependencies() {
@@ -1372,7 +1372,7 @@ download_dependencies() {
     
     log "✅ 依赖包下载完成"
 }
-#【build_firmware_main.sh-18】
+#【build_firmware_main.sh-18-end】
 
 #【build_firmware_main.sh-19】
 integrate_custom_files() {
@@ -1839,7 +1839,7 @@ EOF
     
     log "✅ 自定义文件集成完成"
 }
-#【build_firmware_main.sh-19】
+#【build_firmware_main.sh-19-end】
 
 #【build_firmware_main.sh-20】
 verify_compiler_files() {
@@ -2056,7 +2056,7 @@ verify_compiler_files() {
         return 1
     fi
 }
-#【build_firmware_main.sh-20】
+#【build_firmware_main.sh-20-end】
 
 #【build_firmware_main.sh-21】
 check_compiler_invocation() {
@@ -2155,7 +2155,7 @@ check_compiler_invocation() {
     
     log "✅ 编译器调用状态检查完成"
 }
-#【build_firmware_main.sh-21】
+#【build_firmware_main.sh-21-end】
 
 #【build_firmware_main.sh-22】
 verify_sdk_directory() {
@@ -2194,7 +2194,7 @@ verify_sdk_directory() {
         return 1
     fi
 }
-#【build_firmware_main.sh-22】
+#【build_firmware_main.sh-22-end】
 
 #【build_firmware_main.sh-23】
 verify_config_files() {
@@ -2263,7 +2263,7 @@ verify_config_files() {
     log "✅ 配置文件验证完成"
     return 0
 }
-#【build_firmware_main.sh-23】
+#【build_firmware_main.sh-23-end】
 
 #【build_firmware_main.sh-24】
 cleanup() {
@@ -2293,7 +2293,7 @@ cleanup() {
         log "ℹ️ 构建目录不存在，无需清理"
     fi
 }
-#【build_firmware_main.sh-24】
+#【build_firmware_main.sh-24-end】
 
 #【build_firmware_main.sh-25】
 save_source_code_info() {
@@ -2332,7 +2332,7 @@ save_source_code_info() {
     
     log "✅ 源代码信息已保存到: $source_info_file"
 }
-#【build_firmware_main.sh-25】
+#【build_firmware_main.sh-25-end】
 
 # ============================================
 # 步骤10: 验证SDK下载结果
@@ -2418,7 +2418,7 @@ workflow_step10_verify_sdk() {
     echo "✅ SDK验证完成"
     log "✅ 步骤10 完成"
 }
-#【build_firmware_main.sh-26】
+#【build_firmware_main.sh-26-end】
 
 # ============================================
 # 步骤11: 添加TurboACC支持
@@ -2441,7 +2441,7 @@ workflow_step11_add_turboacc() {
     
     log "✅ 步骤11 完成"
 }
-#【build_firmware_main.sh-27】
+#【build_firmware_main.sh-27-end】
 
 # ============================================
 # 步骤12: 配置Feeds
@@ -2464,7 +2464,7 @@ workflow_step12_configure_feeds() {
     
     log "✅ 步骤12 完成"
 }
-#【build_firmware_main.sh-28】
+#【build_firmware_main.sh-28-end】
 
 # ============================================
 # 步骤13: 安装TurboACC包
@@ -2487,7 +2487,7 @@ workflow_step13_install_turboacc() {
     
     log "✅ 步骤13 完成"
 }
-#【build_firmware_main.sh-29】
+#【build_firmware_main.sh-29-end】
 
 # ============================================
 # 步骤14: 编译前空间检查
@@ -2510,7 +2510,7 @@ workflow_step14_pre_build_space_check() {
     
     log "✅ 步骤14 完成"
 }
-#【build_firmware_main.sh-30】
+#【build_firmware_main.sh-30-end】
 
 # ============================================
 # 步骤15: 智能配置生成
@@ -2535,7 +2535,7 @@ workflow_step15_generate_config() {
     
     log "✅ 步骤15 完成"
 }
-#【build_firmware_main.sh-31】
+#【build_firmware_main.sh-31-end】
 
 # ============================================
 # 步骤16: 验证USB配置
@@ -2588,7 +2588,7 @@ workflow_step16_verify_usb() {
     echo "✅ USB配置检查完成"
     log "✅ 步骤16 完成"
 }
-#【build_firmware_main.sh-32】
+#【build_firmware_main.sh-32-end】
 
 # ============================================
 # 步骤17: USB驱动完整性检查
@@ -2662,21 +2662,7 @@ workflow_step17_check_usb_drivers() {
     
     log "✅ 步骤17 完成"
 }
-#【build_firmware_main.sh-33】
-
-# ============================================
-# 步骤18: 应用配置 - 在工作流中直接执行make defconfig
-# 对应 firmware-build.yml 步骤18
-#【firmware-build.yml-18】
-# ============================================
-# 无对应函数，在工作流中直接执行
-
-# ============================================
-# 步骤19: 备份配置文件
-# 对应 firmware-build.yml 步骤19
-#【firmware-build.yml-19】
-# ============================================
-# 无对应函数，在工作流中直接执行
+#【build_firmware_main.sh-33-end】
 
 # ============================================
 # 步骤20: 修复网络环境
@@ -2693,7 +2679,7 @@ workflow_step20_fix_network() {
     
     log "✅ 步骤20 完成"
 }
-#【build_firmware_main.sh-34】
+#【build_firmware_main.sh-34-end】
 
 # ============================================
 # 步骤21: 下载依赖包
@@ -2736,7 +2722,7 @@ workflow_step21_download_deps() {
     
     log "✅ 步骤21 完成"
 }
-#【build_firmware_main.sh-35】
+#【build_firmware_main.sh-35-end】
 
 # ============================================
 # 步骤22: 集成自定义文件
@@ -2753,7 +2739,7 @@ workflow_step22_integrate_custom_files() {
     
     log "✅ 步骤22 完成"
 }
-#【build_firmware_main.sh-36】
+#【build_firmware_main.sh-36-end】
 
 # ============================================
 # 步骤23: 前置错误检查
@@ -2936,14 +2922,7 @@ workflow_step23_pre_build_check() {
     
     log "✅ 步骤23 完成"
 }
-#【build_firmware_main.sh-37】
-
-# ============================================
-# 步骤24: 编译前空间确认 - 在工作流中直接执行
-# 对应 firmware-build.yml 步骤24
-#【firmware-build.yml-24】
-# ============================================
-# 无对应函数，在工作流中直接执行
+#【build_firmware_main.sh-37-end】
 
 # ============================================
 # 步骤25: 编译固件
@@ -3027,7 +3006,7 @@ workflow_step25_build_firmware() {
     
     log "✅ 步骤25 完成"
 }
-#【build_firmware_main.sh-38】
+#【build_firmware_main.sh-38-end】
 
 # ============================================
 # 步骤26: 检查构建产物
@@ -3079,21 +3058,7 @@ workflow_step26_check_artifacts() {
     
     log "✅ 步骤26 完成"
 }
-#【build_firmware_main.sh-39】
-
-# ============================================
-# 步骤27: 上传固件 - 在工作流中使用actions/upload-artifact
-# 对应 firmware-build.yml 步骤27
-#【firmware-build.yml-27】
-# ============================================
-# 无对应函数，在工作流中使用GitHub Actions
-
-# ============================================
-# 步骤28: 上传配置文件 - 在工作流中使用actions/upload-artifact
-# 对应 firmware-build.yml 步骤28
-#【firmware-build.yml-28】
-# ============================================
-# 无对应函数，在工作流中使用GitHub Actions
+#【build_firmware_main.sh-39-end】
 
 # ============================================
 # 步骤29: 编译后空间检查
@@ -3121,7 +3086,7 @@ workflow_step29_post_build_space_check() {
     
     log "✅ 步骤29 完成"
 }
-#【build_firmware_main.sh-40】
+#【build_firmware_main.sh-40-end】
 
 # ============================================
 # 步骤30: 编译总结
@@ -3202,7 +3167,7 @@ workflow_step30_build_summary() {
     
     log "✅ 步骤30 完成"
 }
-#【build_firmware_main.sh-41】
+#【build_firmware_main.sh-41-end】
 
 # ============================================
 # 已废弃的搜索函数（保留兼容性）
@@ -3213,25 +3178,31 @@ search_compiler_files() {
     log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
     return 1
 }
+#【build_firmware_main.sh-42-end】
 
+#【build_firmware_main.sh-43】
 universal_compiler_search() {
     log "=== 通用编译器搜索 ==="
     log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
     return 1
 }
+#【build_firmware_main.sh-43-end】
 
+#【build_firmware_main.sh-44】
 search_compiler_files_simple() {
     log "=== 简单编译器文件搜索 ==="
     log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
     return 1
 }
+#【build_firmware_main.sh-44-end】
 
+#【build_firmware_main.sh-45】
 intelligent_platform_aware_compiler_search() {
     log "=== 智能平台感知的编译器搜索 ==="
     log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
     return 1
 }
-#【build_firmware_main.sh-42】
+#【build_firmware_main.sh-45-end】
 
 # ============================================
 # 主函数 - 命令分发
@@ -3416,4 +3387,3 @@ if [ $# -eq 0 ]; then
 fi
 
 main "$@"
-#【build_firmware_main.sh-99】
