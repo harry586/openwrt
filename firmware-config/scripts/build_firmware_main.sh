@@ -3387,3 +3387,4 @@ if [ $# -eq 0 ]; then
 fi
 
 main "$@"
+#【build_firmware_main.sh-99-end】
