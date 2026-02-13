@@ -1510,28 +1510,142 @@ apply_config() {
     
     log "🔧 步骤7: 验证关键配置..."
     
-    local missing_key_configs=()
+    echo ""
+    echo "=== 🔍 USB驱动完整性检查（精确匹配） ==="
     
-    if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
-        missing_key_configs+=("kmod-usb-xhci-hcd")
-    fi
+    echo ""
+    echo "🔍 检查基础USB驱动..."
+    local required_drivers=(
+        "kmod-usb-core"
+        "kmod-usb2"
+        "kmod-usb-storage"
+        "kmod-scsi-core"
+    )
     
-    if ! grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
-        missing_key_configs+=("kmod-usb3")
-    fi
-    
-    if [ "$CONFIG_MODE" = "normal" ]; then
-        if ! grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
-            missing_key_configs+=("luci-app-turboacc")
+    for driver in "${required_drivers[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            echo "✅ $driver: 已启用"
+        else
+            echo "❌ $driver: 未启用"
         fi
+    done
+    
+    echo ""
+    echo "🔍 检查USB 3.0驱动..."
+    local usb3_drivers=(
+        "kmod-usb3"
+        "kmod-usb-xhci-hcd"
+    )
+    
+    for driver in "${usb3_drivers[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            echo "✅ $driver: 已启用"
+        else
+            echo "⚠️ $driver: 未启用（如果设备支持USB 3.0可能需要）"
+        fi
+    done
+    
+    echo ""
+    echo "🔍 检查平台专用驱动..."
+    if [ "$TARGET" = "ipq40xx" ] || grep -q "^CONFIG_TARGET_ipq40xx=y" .config 2>/dev/null; then
+        echo "🔧 检测到高通IPQ40xx平台，检查专用驱动:"
+        local ipq40xx_drivers=(
+            "kmod-usb-dwc3-qcom"
+            "kmod-phy-qcom-dwc3"
+            "kmod-usb-dwc3"
+        )
+        for driver in "${ipq40xx_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "✅ $driver: 已启用"
+            else
+                echo "ℹ️ $driver: 未启用（可能不是必需）"
+            fi
+        done
+    elif [ "$TARGET" = "ramips" ] || grep -q "^CONFIG_TARGET_ramips=y" .config 2>/dev/null; then
+        echo "🔧 检测到雷凌MT76xx平台，检查专用驱动:"
+        local ramips_drivers=(
+            "kmod-usb-xhci-mtk"
+            "kmod-usb-ohci-pci"
+            "kmod-usb2-pci"
+        )
+        for driver in "${ramips_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "✅ $driver: 已启用"
+            else
+                echo "ℹ️ $driver: 未启用（可能不是必需）"
+            fi
+        done
+    elif [ "$TARGET" = "ath79" ] || grep -q "^CONFIG_TARGET_ath79=y" .config 2>/dev/null; then
+        echo "🔧 检测到高通ATH79平台，检查专用驱动:"
+        local ath79_drivers=(
+            "kmod-usb2-ath79"
+            "kmod-usb-ohci"
+        )
+        for driver in "${ath79_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "✅ $driver: 已启用"
+            else
+                echo "ℹ️ $driver: 未启用（可能不是必需）"
+            fi
+        done
+    elif [ "$TARGET" = "mediatek" ] || grep -q "^CONFIG_TARGET_mediatek=y" .config 2>/dev/null; then
+        echo "🔧 检测到联发科平台，检查专用驱动:"
+        local mediatek_drivers=(
+            "kmod-usb-dwc3-mediatek"
+            "kmod-phy-mediatek"
+            "kmod-usb-dwc3"
+        )
+        for driver in "${mediatek_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "✅ $driver: 已启用"
+            else
+                echo "ℹ️ $driver: 未启用（可能不是必需）"
+            fi
+        done
     fi
     
-    if [ ${#missing_key_configs[@]} -gt 0 ]; then
-        log "⚠️ 警告: 以下关键配置在defconfig后丢失: ${missing_key_configs[*]}"
-        log "💡 这可能是由于依赖关系不满足，请检查配置文件"
-    else
-        log "✅ 所有关键配置验证通过"
-    fi
+    echo ""
+    echo "=== 📦 插件配置状态 ==="
+    
+    local functional_plugins=(
+        "luci-app-turboacc:TurboACC 网络加速"
+        "luci-app-upnp:UPnP 自动端口转发"
+        "samba4-server:Samba 文件共享"
+        "luci-app-diskman:磁盘管理"
+        "vlmcsd:KMS 激活服务"
+        "smartdns:SmartDNS 智能DNS"
+        "luci-app-accesscontrol:家长控制"
+        "luci-app-wechatpush:微信推送"
+        "sqm-scripts:流量控制 (SQM)"
+        "vsftpd:FTP 服务器"
+        "luci-app-arpbind:ARP 绑定"
+        "luci-app-cpulimit:CPU 限制"
+        "luci-app-hd-idle:硬盘休眠"
+    )
+    
+    for plugin_entry in "${functional_plugins[@]}"; do
+        local plugin="${plugin_entry%%:*}"
+        local desc="${plugin_entry#*:}"
+        
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
+            echo "✅ $desc: 已启用"
+        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+            echo "📦 $desc: 模块化"
+        elif grep -q "^# CONFIG_PACKAGE_${plugin} is not set" .config; then
+            echo "❌ $desc: 已禁用"
+        else
+            echo "⚪ $desc: 未配置"
+        fi
+    done
+    
+    echo ""
+    echo "=== 📊 配置统计 ==="
+    local enabled_count=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config 2>/dev/null || echo "0")
+    local module_count=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config 2>/dev/null || echo "0")
+    local disabled_count=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config 2>/dev/null || echo "0")
+    echo "✅ 已启用插件: $enabled_count 个"
+    echo "📦 模块化插件: $module_count 个"
+    echo "❌ 已禁用插件: $disabled_count 个"
     
     log "✅ 配置应用完成"
     log "最终配置文件: .config"
