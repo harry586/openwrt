@@ -1,6 +1,6 @@
 #【firmware-build.yml-00】
 # OpenWrt 智能固件构建工作流 - 系统主入口
-# 版本: 3.0.0
+# 版本: 3.0.1
 # 最后更新: 2026-02-13
 
 name: OpenWrt 智能固件构建工作流
@@ -270,9 +270,9 @@ jobs:
       #【firmware-build.yml-14-end】
 
       #【firmware-build.yml-15】
-      - name: "15. 智能配置生成"
+      - name: "15. 智能配置生成【修复版】"
         run: |
-          echo "=== 步骤15: 智能配置生成 ==="
+          echo "=== 步骤15: 智能配置生成【修复版】 ==="
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step15_generate_config \
