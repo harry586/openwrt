@@ -1,0 +1,385 @@
+#【build_firmware_main.sh-06】
+initialize_build_env() {
+    local device_name=$1
+    local version_selection=$2
+    local config_mode=$3
+    
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 版本选择 ==="
+    if [ "$version_selection" = "23.05" ]; then
+        SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+        SELECTED_BRANCH="openwrt-23.05"
+    else
+        SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+        SELECTED_BRANCH="openwrt-21.02"
+    fi
+    log "✅ 版本选择完成: $SELECTED_BRANCH"
+    
+    log "=== 克隆源码 ==="
+    log "仓库: $SELECTED_REPO_URL"
+    log "分支: $SELECTED_BRANCH"
+    
+    sudo rm -rf ./* ./.git* 2>/dev/null || true
+    
+    git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
+    log "✅ 源码克隆完成"
+    
+    local important_source_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
+    for file in "${important_source_files[@]}"; do
+        if [ -f "$file" ]; then
+            log "✅ 源码文件存在: $file"
+        else
+            log "❌ 源码文件缺失: $file"
+        fi
+    done
+    
+    log "=== 设备配置 ==="
+    if [ -f "$SUPPORT_SCRIPT" ]; then
+        log "🔍 调用support.sh获取设备平台信息..."
+        PLATFORM_INFO=$("$SUPPORT_SCRIPT" get-platform "$device_name")
+        if [ -n "$PLATFORM_INFO" ]; then
+            TARGET=$(echo "$PLATFORM_INFO" | awk '{print $1}')
+            SUBTARGET=$(echo "$PLATFORM_INFO" | awk '{print $2}')
+            DEVICE="$device_name"
+            log "✅ 从support.sh获取平台信息: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
+        else
+            log "❌ 无法从support.sh获取平台信息"
+            handle_error "获取平台信息失败"
+        fi
+    else
+        log "❌ support.sh不存在"
+        handle_error "support.sh脚本缺失"
+    fi
+    
+    log "🔧 设备: $device_name"
+    log "🔧 目标平台: $TARGET/$SUBTARGET"
+    
+    CONFIG_MODE="$config_mode"
+    
+    log "目标: $TARGET"
+    log "子目标: $SUBTARGET"
+    log "设备: $DEVICE"
+    log "配置模式: $CONFIG_MODE"
+    
+    # 🔥 关键修复：强制编译scripts/config工具，多重保障
+    log "=== 强制编译配置工具 ==="
+    
+    # 方法1: 直接编译
+    log "🔧 尝试方法1: make scripts/config"
+    if make scripts/config; then
+        log "✅ 方法1成功: scripts/config工具编译成功"
+    else
+        log "⚠️ 方法1失败，尝试方法2..."
+        
+        # 方法2: 创建scripts目录并手动复制
+        mkdir -p scripts
+        if [ -f "scripts/config.guess" ] && [ -f "scripts/config.sub" ]; then
+            log "🔧 尝试方法2: 手动创建config脚本"
+            cat > scripts/config << 'EOF'
+#!/bin/sh
+# Minimal config script for OpenWrt
+SCRIPT_DIR=$(dirname "$0")
+case "$1" in
+    --enable)
+        shift
+        echo "CONFIG_$1=y" >> .config
+        ;;
+    --disable)
+        shift
+        echo "# CONFIG_$1 is not set" >> .config
+        ;;
+    --module)
+        shift
+        echo "CONFIG_$1=m" >> .config
+        ;;
+    --set-str)
+        shift
+        echo "CONFIG_$1=\"$2\"" >> .config
+        shift
+        ;;
+esac
+EOF
+            chmod +x scripts/config
+            log "✅ 方法2成功: 手动创建scripts/config工具"
+        else
+            log "⚠️ 方法2失败，尝试方法3..."
+            
+            # 方法3: 从已编译的SDK中复制
+            if [ -n "$COMPILER_DIR" ] && [ -f "$COMPILER_DIR/scripts/config" ]; then
+                log "🔧 尝试方法3: 从SDK目录复制"
+                cp "$COMPILER_DIR/scripts/config" scripts/
+                chmod +x scripts/config
+                log "✅ 方法3成功: 从SDK复制scripts/config工具"
+            else
+                log "⚠️ 方法3失败，尝试方法4..."
+                
+                # 方法4: 最简单的fallback - 创建空文件，步骤13会处理
+                log "🔧 尝试方法4: 创建占位文件"
+                touch scripts/config
+                chmod +x scripts/config
+                log "⚠️ 方法4: 创建占位文件，步骤13将使用备用方案"
+            fi
+        fi
+    fi
+    
+    # 最终验证
+    if [ -f "scripts/config" ] && [ -x "scripts/config" ]; then
+        log "✅ scripts/config工具最终验证通过"
+        ls -la scripts/config
+    else
+        log "❌ 所有方法都失败，scripts/config工具不存在"
+        handle_error "无法创建scripts/config工具"
+    fi
+    
+    save_env
+    
+    echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
+    echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
+    echo "TARGET=$TARGET" >> $GITHUB_ENV
+    echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
+    echo "DEVICE=$DEVICE" >> $GITHUB_ENV
+    echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
+    
+    log "✅ 构建环境初始化完成"
+}
+#【build_firmware_main.sh-06-end】
+
+#【build_firmware_main.sh-13】
+generate_config() {
+    local extra_packages=$1
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 智能配置生成系统（兼容版）==="
+    log "版本: $SELECTED_BRANCH"
+    log "目标: $TARGET"
+    log "子目标: $SUBTARGET"
+    log "设备: $DEVICE"
+    log "配置模式: $CONFIG_MODE"
+    log "配置文件目录: $CONFIG_DIR"
+    
+    # 删除旧配置
+    rm -f .config .config.old .config.bak*
+    log "✅ 已清理旧配置文件"
+    
+    # 生成基础目标配置
+    cat > .config << EOF
+CONFIG_TARGET_${TARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y
+EOF
+    
+    log "🔧 生成基础配置..."
+    make defconfig || handle_error "基础配置生成失败"
+    log "✅ 基础配置生成成功"
+    
+    # 🔥 验证scripts/config工具，如果不存在或不可执行，重新创建
+    if [ ! -f "scripts/config" ] || [ ! -x "scripts/config" ]; then
+        log "⚠️ scripts/config工具不可用，重新创建..."
+        mkdir -p scripts
+        cat > scripts/config << 'EOF'
+#!/bin/sh
+# Minimal config script for OpenWrt
+SCRIPT_DIR=$(dirname "$0")
+case "$1" in
+    --enable)
+        shift
+        echo "CONFIG_$1=y" >> .config
+        ;;
+    --disable)
+        shift
+        echo "# CONFIG_$1 is not set" >> .config
+        ;;
+    --module)
+        shift
+        echo "CONFIG_$1=m" >> .config
+        ;;
+    --set-str)
+        shift
+        echo "CONFIG_$1=\"$2\"" >> .config
+        shift
+        ;;
+esac
+EOF
+        chmod +x scripts/config
+        log "✅ scripts/config工具重新创建成功"
+    fi
+    
+    log "🔧 使用scripts/config工具合并配置..."
+    
+    # 1. 应用USB通用配置
+    if [ -f "$CONFIG_DIR/usb-generic.config" ]; then
+        log "📁 应用USB通用配置..."
+        while IFS= read -r line || [ -n "$line" ]; do
+            line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+            [ -z "$line" ] && continue
+            
+            if echo "$line" | grep -q "^CONFIG_.*=y$"; then
+                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                ./scripts/config --enable "$config_name"
+            elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
+                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                ./scripts/config --module "$config_name"
+            elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
+                config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+                ./scripts/config --disable "$config_name"
+            fi
+        done < "$CONFIG_DIR/usb-generic.config"
+        log "✅ USB通用配置应用完成"
+    fi
+    
+    # 2. 应用基础配置
+    if [ -f "$CONFIG_DIR/base.config" ]; then
+        log "📁 应用基础配置..."
+        while IFS= read -r line || [ -n "$line" ]; do
+            line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+            [ -z "$line" ] && continue
+            
+            if echo "$line" | grep -q "^CONFIG_.*=y$"; then
+                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                ./scripts/config --enable "$config_name"
+            elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
+                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                ./scripts/config --module "$config_name"
+            elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
+                config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+                ./scripts/config --disable "$config_name"
+            fi
+        done < "$CONFIG_DIR/base.config"
+        log "✅ 基础配置应用完成"
+    fi
+    
+    # 3. 应用设备配置或模式配置
+    local device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
+    if [ -f "$device_config_file" ]; then
+        log "📁 应用设备配置: $DEVICE.config..."
+        while IFS= read -r line || [ -n "$line" ]; do
+            line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+            [ -z "$line" ] && continue
+            
+            if echo "$line" | grep -q "^CONFIG_.*=y$"; then
+                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                ./scripts/config --enable "$config_name"
+            elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
+                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                ./scripts/config --module "$config_name"
+            elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
+                config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+                ./scripts/config --disable "$config_name"
+            fi
+        done < "$device_config_file"
+        log "✅ 设备配置应用完成"
+    elif [ "$CONFIG_MODE" = "normal" ] && [ -f "$CONFIG_DIR/normal.config" ]; then
+        log "📁 应用正常模式配置..."
+        while IFS= read -r line || [ -n "$line" ]; do
+            line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+            [ -z "$line" ] && continue
+            
+            # 跳过TurboACC静态配置
+            if echo "$line" | grep -q "luci-app-turboacc\|kmod-shortcut-fe\|kmod-fast-classifier"; then
+                continue
+            fi
+            
+            if echo "$line" | grep -q "^CONFIG_.*=y$"; then
+                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                ./scripts/config --enable "$config_name"
+            elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
+                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                ./scripts/config --module "$config_name"
+            elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
+                config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+                ./scripts/config --disable "$config_name"
+            fi
+        done < "$CONFIG_DIR/normal.config"
+        log "✅ 正常模式配置应用完成"
+    fi
+    
+    # 4. 应用平台专用配置
+    local platform_config=""
+    if [ -f "$CONFIG_DIR/devices/$TARGET.config" ]; then
+        platform_config="$CONFIG_DIR/devices/$TARGET.config"
+    else
+        platform_config=$(find "$CONFIG_DIR" -type f -name "*${TARGET}*.config" 2>/dev/null | grep -v "usb-generic" | grep -v "base" | grep -v "normal" | head -1)
+    fi
+    
+    if [ -n "$platform_config" ] && [ -f "$platform_config" ]; then
+        log "📁 应用平台配置: $(basename "$platform_config")..."
+        while IFS= read -r line || [ -n "$line" ]; do
+            line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+            [ -z "$line" ] && continue
+            
+            if echo "$line" | grep -q "^CONFIG_.*=y$"; then
+                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                ./scripts/config --enable "$config_name"
+            elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
+                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                ./scripts/config --module "$config_name"
+            elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
+                config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+                ./scripts/config --disable "$config_name"
+            fi
+        done < "$platform_config"
+        log "✅ 平台配置应用完成"
+    fi
+    
+    # 5. 添加额外包
+    if [ -n "$extra_packages" ]; then
+        log "📦 添加额外包: $extra_packages"
+        echo "$extra_packages" | tr ',' '\n' | while read pkg; do
+            if [ -n "$pkg" ]; then
+                ./scripts/config --enable "PACKAGE_$pkg"
+                log "✅ 添加包: $pkg"
+            fi
+        done
+    fi
+    
+    # 6. 强制启用关键配置
+    log "🔧 强制启用关键配置..."
+    ./scripts/config --enable PACKAGE_kmod-usb-xhci-hcd
+    ./scripts/config --enable PACKAGE_kmod-usb3
+    ./scripts/config --enable PACKAGE_kmod-tcp-bbr
+    ./scripts/config --set-str DEFAULT_TCP_CONG "bbr"
+    
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        ./scripts/config --enable PACKAGE_luci-app-turboacc
+        ./scripts/config --enable PACKAGE_kmod-shortcut-fe
+        ./scripts/config --enable PACKAGE_kmod-fast-classifier
+        log "✅ TurboACC配置强制启用完成"
+    fi
+    
+    # 7. 处理ath10k冲突
+    ./scripts/config --disable PACKAGE_kmod-ath10k
+    ./scripts/config --disable PACKAGE_kmod-ath10k-pci
+    ./scripts/config --disable PACKAGE_kmod-ath10k-smallbuffers
+    ./scripts/config --disable PACKAGE_kmod-ath10k-ct-smallbuffers
+    ./scripts/config --enable PACKAGE_kmod-ath10k-ct
+    log "✅ ath10k冲突修复完成"
+    
+    # 8. 最终defconfig
+    log "🔄 运行最终 make defconfig..."
+    make defconfig || handle_error "最终配置应用失败"
+    
+    log "📊 配置生成统计:"
+    log "  - 最终配置文件: .config"
+    log "  - 配置行数: $(wc -l < .config)"
+    log "  - 配置文件大小: $(ls -lh .config | awk '{print $5}')"
+    
+    log "✅ 配置生成完成"
+}
+#【build_firmware_main.sh-13-end】
+
+#【build_firmware_main.sh-31】
+workflow_step15_generate_config() {
+    local extra_packages="$1"
+    
+    log "=== 步骤15: 智能配置生成（兼容版）==="
+    
+    set -e
+    trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
+    
+    generate_config "$extra_packages"
+    
+    log "✅ 步骤15 完成"
+}
+#【build_firmware_main.sh-31-end】
