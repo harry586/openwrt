@@ -1,0 +1,424 @@
+#【build_firmware_main.sh-16】
+apply_config() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 应用配置并显示详细信息（综合修复版） ==="
+    
+    if [ ! -f ".config" ]; then
+        log "❌ 错误: .config 文件不存在，无法应用配置"
+        return 1
+    fi
+    
+    log "📋 配置详情:"
+    log "配置文件大小: $(ls -lh .config | awk '{print $5}')"
+    log "配置行数: $(wc -l < .config)"
+    
+    local backup_file=".config.bak.$(date +%Y%m%d%H%M%S)"
+    cp .config "$backup_file"
+    log "✅ 配置文件已备份: $backup_file"
+    
+    log "🔧 步骤1: 标准化配置文件格式..."
+    
+    if [ -f ".config" ]; then
+        awk '
+        {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+            if ($0 ~ /^#/) {
+                if ($0 ~ /^#CONFIG_/) {
+                    $0 = "# " substr($0, 2)
+                }
+                if ($0 !~ /is not set$/) {
+                    $0 = $0 " is not set"
+                }
+            }
+            if ($0 ~ /^CONFIG_/) {
+                if ($0 ~ /y$|m$|=$/) {
+                    gsub(/[[:space:]]*=[[:space:]]*y$/, "=y")
+                    gsub(/[[:space:]]*=[[:space:]]*m$/, "=m")
+                    gsub(/[[:space:]]*=[[:space:]]*$/, "=")
+                }
+            }
+            if (length($0) > 0) {
+                print $0
+            }
+        }' .config > .config.tmp
+        
+        mv .config.tmp .config
+        log "✅ 配置文件格式标准化完成"
+    else
+        log "❌ .config 文件在操作过程中丢失"
+        return 1
+    fi
+    
+    log "🔧 步骤2: 清理重复配置行..."
+    
+    local dup_before=$(wc -l < .config)
+    
+    awk '!seen[$0]++' .config > .config.tmp
+    mv .config.tmp .config
+    
+    local dup_after=$(wc -l < .config)
+    local dup_removed=$((dup_before - dup_after))
+    
+    if [ $dup_removed -gt 0 ]; then
+        log "✅ 已删除 $dup_removed 个完全重复的配置行"
+    fi
+    
+    awk '
+    BEGIN { FS="=" }
+    /^CONFIG_/ {
+        config_lines[$1] = $0
+        next
+    }
+    { other_lines[NR] = $0 }
+    END {
+        for (i in config_lines) print config_lines[i]
+        for (i in other_lines) print other_lines[i]
+    }' .config > .config.uniq
+    
+    mv .config.uniq .config
+    
+    local config_uniq_removed=$((dup_after - $(wc -l < .config)))
+    if [ $config_uniq_removed -gt 0 ]; then
+        log "✅ 已合并 $config_uniq_removed 个重复配置项"
+    fi
+    
+    log "🔧 步骤3: 检查libustream冲突..."
+    
+    local openssl_enabled=0
+    local wolfssl_enabled=0
+    
+    if grep -q "^CONFIG_PACKAGE_libustream-openssl=y" .config; then
+        openssl_enabled=1
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_libustream-wolfssl=y" .config; then
+        wolfssl_enabled=1
+    fi
+    
+    if [ $openssl_enabled -eq 1 ] && [ $wolfssl_enabled -eq 1 ]; then
+        log "⚠️ 发现libustream-openssl和libustream-wolfssl冲突"
+        log "🔧 修复冲突: 禁用libustream-openssl"
+        
+        awk '
+        /^CONFIG_PACKAGE_libustream-openssl=y/ {
+            print "# CONFIG_PACKAGE_libustream-openssl is not set"
+            next
+        }
+        { print $0 }
+        ' .config > .config.tmp
+        mv .config.tmp .config
+        
+        log "✅ 冲突已修复"
+    fi
+    
+    log "🔧 步骤4: 使用OpenWrt官方配置工具强制修复关键配置..."
+    
+    if [ ! -f "scripts/config" ]; then
+        log "⚠️ scripts/config工具不存在，编译生成中..."
+        make scripts/config || {
+            log "❌ 无法生成scripts/config工具"
+            log "⚠️ 将使用awk方式进行修复"
+        }
+    fi
+    
+    log "  🔧 USB 3.0驱动修复..."
+    if [ -f "scripts/config" ]; then
+        ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-xhci-hcd
+        ./scripts/config --enable CONFIG_PACKAGE_kmod-usb3
+    else
+        awk '
+        /^# CONFIG_PACKAGE_kmod-usb-xhci-hcd is not set/ {
+            print "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
+            next
+        }
+        /^CONFIG_PACKAGE_kmod-usb-xhci-hcd=.*/ {
+            print "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
+            next
+        }
+        { print $0 }
+        ' .config > .config.tmp
+        
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config.tmp; then
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config.tmp
+        fi
+        
+        awk '
+        /^# CONFIG_PACKAGE_kmod-usb3 is not set/ {
+            print "CONFIG_PACKAGE_kmod-usb3=y"
+            next
+        }
+        /^CONFIG_PACKAGE_kmod-usb3=.*/ {
+            print "CONFIG_PACKAGE_kmod-usb3=y"
+            next
+        }
+        { print $0 }
+        ' .config.tmp > .config
+        rm -f .config.tmp
+        
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+        fi
+    fi
+    log "  ✅ USB 3.0驱动强制启用完成"
+    
+    if [ "$TARGET" = "ipq40xx" ] || grep -q "^CONFIG_TARGET_ipq40xx=y" .config 2>/dev/null; then
+        log "  🔧 IPQ40xx平台专用USB驱动修复..."
+        if [ -f "scripts/config" ]; then
+            ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-dwc3-qcom
+            ./scripts/config --enable CONFIG_PACKAGE_kmod-phy-qcom-dwc3
+            ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-dwc3
+        else
+            if ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config; then
+                echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
+            fi
+            if ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config; then
+                echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+            fi
+        fi
+        log "  ✅ IPQ40xx平台专用USB驱动修复完成"
+    fi
+    
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        log "  🔧 TurboACC配置修复..."
+        if [ -f "scripts/config" ]; then
+            ./scripts/config --enable CONFIG_PACKAGE_luci-app-turboacc
+            ./scripts/config --enable CONFIG_PACKAGE_kmod-shortcut-fe
+            ./scripts/config --enable CONFIG_PACKAGE_kmod-fast-classifier
+        else
+            if ! grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+                echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+            fi
+            if ! grep -q "^CONFIG_PACKAGE_kmod-shortcut-fe=y" .config; then
+                echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+            fi
+            if ! grep -q "^CONFIG_PACKAGE_kmod-fast-classifier=y" .config; then
+                echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+            fi
+        fi
+        log "  ✅ TurboACC配置修复完成"
+    fi
+    
+    log "  🔧 TCP BBR拥塞控制修复..."
+    if [ -f "scripts/config" ]; then
+        ./scripts/config --enable CONFIG_PACKAGE_kmod-tcp-bbr
+        ./scripts/config --set-str CONFIG_DEFAULT_TCP_CONG "bbr"
+    else
+        if ! grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+        fi
+        
+        awk '!/^CONFIG_DEFAULT_TCP_CONG=/' .config > .config.tmp
+        mv .config.tmp .config
+        echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
+    fi
+    log "  ✅ TCP BBR拥塞控制修复完成"
+    
+    log "  🔧 kmod-ath10k-ct冲突修复..."
+    if [ -f "scripts/config" ]; then
+        ./scripts/config --disable CONFIG_PACKAGE_kmod-ath10k
+        ./scripts/config --disable CONFIG_PACKAGE_kmod-ath10k-pci
+        ./scripts/config --disable CONFIG_PACKAGE_kmod-ath10k-smallbuffers
+        ./scripts/config --enable CONFIG_PACKAGE_kmod-ath10k-ct
+        ./scripts/config --disable CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers
+    else
+        awk '
+        /^CONFIG_PACKAGE_kmod-ath10k=y/ {
+            print "# CONFIG_PACKAGE_kmod-ath10k is not set"
+            next
+        }
+        /^CONFIG_PACKAGE_kmod-ath10k-pci=y/ {
+            print "# CONFIG_PACKAGE_kmod-ath10k-pci is not set"
+            next
+        }
+        /^CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/ {
+            print "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set"
+            next
+        }
+        /^CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y/ {
+            print "# CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers is not set"
+            next
+        }
+        { print $0 }
+        ' .config > .config.tmp
+        mv .config.tmp .config
+        
+        if ! grep -q "^CONFIG_PACKAGE_kmod-ath10k-ct=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+        fi
+    fi
+    log "  ✅ kmod-ath10k-ct冲突修复完成"
+    
+    log "🔧 步骤5: 最终去重和格式检查..."
+    
+    awk '!seen[$0]++' .config > .config.tmp
+    mv .config.tmp .config
+    
+    awk '
+    BEGIN { FS="=" }
+    /^CONFIG_/ {
+        config_lines[$1] = $0
+        next
+    }
+    { other_lines[NR] = $0 }
+    END {
+        for (i in config_lines) print config_lines[i]
+        for (i in other_lines) print other_lines[i]
+    }' .config > .config.uniq
+    
+    mv .config.uniq .config
+    
+    awk 'NF > 0' .config > .config.tmp
+    mv .config.tmp .config
+    
+    log "✅ 最终去重完成"
+    
+    log "🔄 步骤6: 运行 make defconfig..."
+    make defconfig || handle_error "应用配置失败"
+    
+    log "🔧 步骤7: 验证关键配置..."
+    
+    echo ""
+    echo "=== 🔍 USB驱动完整性检查（精确匹配） ==="
+    
+    echo ""
+    echo "🔍 检查基础USB驱动..."
+    local required_drivers=(
+        "kmod-usb-core"
+        "kmod-usb2"
+        "kmod-usb-storage"
+        "kmod-scsi-core"
+    )
+    
+    for driver in "${required_drivers[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            echo "✅ $driver: 已启用"
+        else
+            echo "❌ $driver: 未启用"
+        fi
+    done
+    
+    echo ""
+    echo "🔍 检查USB 3.0驱动..."
+    local usb3_drivers=(
+        "kmod-usb3"
+        "kmod-usb-xhci-hcd"
+    )
+    
+    for driver in "${usb3_drivers[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            echo "✅ $driver: 已启用"
+        else
+            echo "⚠️ $driver: 未启用（如果设备支持USB 3.0可能需要）"
+        fi
+    done
+    
+    echo ""
+    echo "🔍 检查平台专用驱动..."
+    if [ "$TARGET" = "ipq40xx" ] || grep -q "^CONFIG_TARGET_ipq40xx=y" .config 2>/dev/null; then
+        echo "🔧 检测到高通IPQ40xx平台，检查专用驱动:"
+        local ipq40xx_drivers=(
+            "kmod-usb-dwc3-qcom"
+            "kmod-phy-qcom-dwc3"
+            "kmod-usb-dwc3"
+        )
+        for driver in "${ipq40xx_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "✅ $driver: 已启用"
+            else
+                echo "ℹ️ $driver: 未启用（可能不是必需）"
+            fi
+        done
+    elif [ "$TARGET" = "ramips" ] || grep -q "^CONFIG_TARGET_ramips=y" .config 2>/dev/null; then
+        echo "🔧 检测到雷凌MT76xx平台，检查专用驱动:"
+        local ramips_drivers=(
+            "kmod-usb-xhci-mtk"
+            "kmod-usb-ohci-pci"
+            "kmod-usb2-pci"
+        )
+        for driver in "${ramips_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "✅ $driver: 已启用"
+            else
+                echo "ℹ️ $driver: 未启用（可能不是必需）"
+            fi
+        done
+    elif [ "$TARGET" = "ath79" ] || grep -q "^CONFIG_TARGET_ath79=y" .config 2>/dev/null; then
+        echo "🔧 检测到高通ATH79平台，检查专用驱动:"
+        local ath79_drivers=(
+            "kmod-usb2-ath79"
+            "kmod-usb-ohci"
+        )
+        for driver in "${ath79_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "✅ $driver: 已启用"
+            else
+                echo "ℹ️ $driver: 未启用（可能不是必需）"
+            fi
+        done
+    elif [ "$TARGET" = "mediatek" ] || grep -q "^CONFIG_TARGET_mediatek=y" .config 2>/dev/null; then
+        echo "🔧 检测到联发科平台，检查专用驱动:"
+        local mediatek_drivers=(
+            "kmod-usb-dwc3-mediatek"
+            "kmod-phy-mediatek"
+            "kmod-usb-dwc3"
+        )
+        for driver in "${mediatek_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                echo "✅ $driver: 已启用"
+            else
+                echo "ℹ️ $driver: 未启用（可能不是必需）"
+            fi
+        done
+    fi
+    
+    echo ""
+    echo "=== 📦 插件配置状态 ==="
+    
+    local functional_plugins=(
+        "luci-app-turboacc:TurboACC 网络加速"
+        "luci-app-upnp:UPnP 自动端口转发"
+        "samba4-server:Samba 文件共享"
+        "luci-app-diskman:磁盘管理"
+        "vlmcsd:KMS 激活服务"
+        "smartdns:SmartDNS 智能DNS"
+        "luci-app-accesscontrol:家长控制"
+        "luci-app-wechatpush:微信推送"
+        "sqm-scripts:流量控制 (SQM)"
+        "vsftpd:FTP 服务器"
+        "luci-app-arpbind:ARP 绑定"
+        "luci-app-cpulimit:CPU 限制"
+        "luci-app-hd-idle:硬盘休眠"
+    )
+    
+    for plugin_entry in "${functional_plugins[@]}"; do
+        local plugin="${plugin_entry%%:*}"
+        local desc="${plugin_entry#*:}"
+        
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
+            echo "✅ $desc: 已启用"
+        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+            echo "📦 $desc: 模块化"
+        elif grep -q "^# CONFIG_PACKAGE_${plugin} is not set" .config; then
+            echo "❌ $desc: 已禁用"
+        else
+            echo "⚪ $desc: 未配置"
+        fi
+    done
+    
+    echo ""
+    echo "=== 📊 配置统计 ==="
+    local enabled_count=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config 2>/dev/null || echo "0")
+    local module_count=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config 2>/dev/null || echo "0")
+    local disabled_count=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config 2>/dev/null || echo "0")
+    echo "✅ 已启用插件: $enabled_count 个"
+    echo "📦 模块化插件: $module_count 个"
+    echo "❌ 已禁用插件: $disabled_count 个"
+    
+    log "✅ 配置应用完成"
+    log "最终配置文件: .config"
+    log "最终配置大小: $(ls -lh .config | awk '{print $5}')"
+    log "最终配置行数: $(wc -l < .config)"
+}
+#【build_firmware_main.sh-16-end】
