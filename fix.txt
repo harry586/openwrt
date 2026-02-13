@@ -1,0 +1,214 @@
+#【build_firmware_main.sh-31】
+workflow_step15_generate_config() {
+    local extra_packages="$1"
+    
+    log "=== 步骤15: 智能配置生成【修复版】==="
+    
+    set -e
+    trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
+    
+    # 调用完全重写的generate_config修复版
+    generate_config_fixed "$extra_packages"
+    
+    if [ $? -ne 0 ]; then
+        echo "❌ 错误: 智能配置生成失败"
+        exit 1
+    fi
+    
+    log "✅ 步骤15 完成"
+}
+#【build_firmware_main.sh-31-end】
+
+#【build_firmware_main.sh-13-fixed】
+generate_config_fixed() {
+    local extra_packages=$1
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 智能配置生成系统【完整修复版】==="
+    log "版本: $SELECTED_BRANCH"
+    log "目标: $TARGET"
+    log "子目标: $SUBTARGET"
+    log "设备: $DEVICE"
+    log "配置模式: $CONFIG_MODE"
+    log "配置文件目录: $CONFIG_DIR"
+    
+    # 🔥 关键修复1: 彻底删除旧配置
+    rm -f .config .config.old .config.bak*
+    log "✅ 已清理旧配置文件"
+    
+    # 🔥 关键修复2: 先生成目标平台配置 - 只写最基本的三行
+    cat > .config << EOF
+CONFIG_TARGET_${TARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y
+EOF
+    
+    # 🔥 关键修复3: 立即运行defconfig生成完整、语法正确的配置
+    log "🔧 生成基础配置..."
+    make defconfig || handle_error "基础配置生成失败"
+    log "✅ 基础配置生成成功"
+    
+    # 🔥 关键修复4: 备份基础配置
+    cp .config .config.base
+    
+    # 🔥 关键修复5: 使用scripts/config工具合并配置（最安全的方式）
+    if [ -f "scripts/config" ]; then
+        log "🔧 使用scripts/config工具合并配置..."
+        
+        # 应用usb-generic.config
+        if [ -f "$CONFIG_DIR/usb-generic.config" ]; then
+            log "📁 应用USB通用配置..."
+            while IFS= read -r line || [ -n "$line" ]; do
+                # 去除空格和空行
+                line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                [ -z "$line" ] && continue
+                
+                if [[ "$line" =~ ^CONFIG_([^=]+)=y$ ]]; then
+                    ./scripts/config --enable "${BASH_REMATCH[1]}"
+                elif [[ "$line" =~ ^CONFIG_([^=]+)=m$ ]]; then
+                    ./scripts/config --module "${BASH_REMATCH[1]}"
+                elif [[ "$line" =~ ^#\ CONFIG_([^\ ]+)\ is\ not\ set$ ]]; then
+                    ./scripts/config --disable "${BASH_REMATCH[1]}"
+                fi
+            done < "$CONFIG_DIR/usb-generic.config"
+        fi
+        
+        # 应用base.config
+        if [ -f "$CONFIG_DIR/base.config" ]; then
+            log "📁 应用基础配置..."
+            while IFS= read -r line || [ -n "$line" ]; do
+                line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                [ -z "$line" ] && continue
+                
+                if [[ "$line" =~ ^CONFIG_([^=]+)=y$ ]]; then
+                    ./scripts/config --enable "${BASH_REMATCH[1]}"
+                elif [[ "$line" =~ ^CONFIG_([^=]+)=m$ ]]; then
+                    ./scripts/config --module "${BASH_REMATCH[1]}"
+                elif [[ "$line" =~ ^#\ CONFIG_([^\ ]+)\ is\ not\ set$ ]]; then
+                    ./scripts/config --disable "${BASH_REMATCH[1]}"
+                fi
+            done < "$CONFIG_DIR/base.config"
+        fi
+        
+        # 根据配置模式应用配置
+        if [ ! -f "$CONFIG_DIR/devices/$DEVICE.config" ]; then
+            if [ "$CONFIG_MODE" = "normal" ] && [ -f "$CONFIG_DIR/normal.config" ]; then
+                log "📁 应用正常模式配置..."
+                while IFS= read -r line || [ -n "$line" ]; do
+                    line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                    [ -z "$line" ] && continue
+                    
+                    # 跳过TurboACC静态配置
+                    if [[ "$line" =~ luci-app-turboacc|kmod-shortcut-fe|kmod-fast-classifier ]]; then
+                        continue
+                    fi
+                    
+                    if [[ "$line" =~ ^CONFIG_([^=]+)=y$ ]]; then
+                        ./scripts/config --enable "${BASH_REMATCH[1]}"
+                    elif [[ "$line" =~ ^CONFIG_([^=]+)=m$ ]]; then
+                        ./scripts/config --module "${BASH_REMATCH[1]}"
+                    elif [[ "$line" =~ ^#\ CONFIG_([^\ ]+)\ is\ not\ set$ ]]; then
+                        ./scripts/config --disable "${BASH_REMATCH[1]}"
+                    fi
+                done < "$CONFIG_DIR/normal.config"
+            fi
+        else
+            log "📁 应用设备配置: $DEVICE.config..."
+            while IFS= read -r line || [ -n "$line" ]; do
+                line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                [ -z "$line" ] && continue
+                
+                if [[ "$line" =~ ^CONFIG_([^=]+)=y$ ]]; then
+                    ./scripts/config --enable "${BASH_REMATCH[1]}"
+                elif [[ "$line" =~ ^CONFIG_([^=]+)=m$ ]]; then
+                    ./scripts/config --module "${BASH_REMATCH[1]}"
+                elif [[ "$line" =~ ^#\ CONFIG_([^\ ]+)\ is\ not\ set$ ]]; then
+                    ./scripts/config --disable "${BASH_REMATCH[1]}"
+                fi
+            done < "$CONFIG_DIR/devices/$DEVICE.config"
+        fi
+        
+        # 应用平台专用配置
+        local platform_config=""
+        if [ -f "$CONFIG_DIR/devices/$TARGET.config" ]; then
+            platform_config="$CONFIG_DIR/devices/$TARGET.config"
+        else
+            platform_config=$(find "$CONFIG_DIR" -type f -name "*${TARGET}*.config" 2>/dev/null | grep -v "usb-generic" | grep -v "base" | head -1)
+        fi
+        
+        if [ -n "$platform_config" ] && [ -f "$platform_config" ]; then
+            log "📁 应用平台配置: $(basename "$platform_config")..."
+            while IFS= read -r line || [ -n "$line" ]; do
+                line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                [ -z "$line" ] && continue
+                
+                if [[ "$line" =~ ^CONFIG_([^=]+)=y$ ]]; then
+                    ./scripts/config --enable "${BASH_REMATCH[1]}"
+                elif [[ "$line" =~ ^CONFIG_([^=]+)=m$ ]]; then
+                    ./scripts/config --module "${BASH_REMATCH[1]}"
+                elif [[ "$line" =~ ^#\ CONFIG_([^\ ]+)\ is\ not\ set$ ]]; then
+                    ./scripts/config --disable "${BASH_REMATCH[1]}"
+                fi
+            done < "$platform_config"
+        fi
+        
+        # 添加额外包
+        if [ -n "$extra_packages" ]; then
+            log "📦 添加额外包: $extra_packages"
+            echo "$extra_packages" | tr ',' '\n' | while read pkg; do
+                if [ -n "$pkg" ]; then
+                    ./scripts/config --enable "PACKAGE_$pkg"
+                    log "✅ 添加包: $pkg"
+                fi
+            done
+        fi
+        
+        # 强制启用关键配置
+        log "🔧 强制启用关键配置..."
+        ./scripts/config --enable PACKAGE_kmod-usb-xhci-hcd
+        ./scripts/config --enable PACKAGE_kmod-usb3
+        ./scripts/config --enable PACKAGE_kmod-tcp-bbr
+        ./scripts/config --set-str DEFAULT_TCP_CONG "bbr"
+        
+        if [ "$CONFIG_MODE" = "normal" ]; then
+            ./scripts/config --enable PACKAGE_luci-app-turboacc
+            ./scripts/config --enable PACKAGE_kmod-shortcut-fe
+            ./scripts/config --enable PACKAGE_kmod-fast-classifier
+        fi
+        
+        # 处理ath10k冲突
+        ./scripts/config --disable PACKAGE_kmod-ath10k
+        ./scripts/config --disable PACKAGE_kmod-ath10k-pci
+        ./scripts/config --disable PACKAGE_kmod-ath10k-smallbuffers
+        ./scripts/config --disable PACKAGE_kmod-ath10k-ct-smallbuffers
+        ./scripts/config --enable PACKAGE_kmod-ath10k-ct
+        
+    else
+        log "⚠️ scripts/config不存在，使用备用方案..."
+        # 备用方案：直接cp基础配置，然后echo追加
+        # 但这不是最佳方案，先退出
+        handle_error "scripts/config工具不存在，无法安全合并配置"
+    fi
+    
+    # 🔥 关键修复6: 最终defconfig生成完整配置
+    log "🔄 运行最终 make defconfig..."
+    make defconfig || handle_error "最终配置应用失败"
+    
+    # 🔥 关键修复7: 验证配置文件语法
+    log "🔍 验证配置文件语法..."
+    if grep -q "^[[:space:]]" .config; then
+        log "⚠️ 发现行首空格，正在修复..."
+        sed -i 's/^[[:space:]]*//' .config
+    fi
+    
+    if ! make defconfig > /dev/null 2>&1; then
+        handle_error "配置文件语法错误"
+    fi
+    log "✅ 配置文件语法验证通过"
+    
+    log "✅ 配置生成完成"
+    log "最终配置文件: .config"
+    log "最终配置行数: $(wc -l < .config)"
+}
+#【build_firmware_main.sh-13-fixed-end】
