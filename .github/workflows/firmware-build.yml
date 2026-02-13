@@ -298,22 +298,20 @@ jobs:
       #【firmware-build.yml-17-end】
 
       #【firmware-build.yml-18】
-      - name: "18. 应用配置"
+      - name: "18. 应用配置并显示详细信息"
         run: |
-          echo "=== 步骤18: 应用配置 ==="
+          echo "=== 步骤18: 应用配置并显示详细信息 ==="
           
           set -e
           trap 'echo "❌ 步骤18 失败，退出代码: $?"; exit 1' ERR
           
           cd /mnt/openwrt-build
           
-          echo "🔄 运行 make defconfig..."
-          make defconfig || {
-            echo "❌ make defconfig 失败"
-            exit 1
-          }
+          echo "🔄 调用主脚本的 apply_config 函数..."
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            apply_config
           
-          echo "✅ 配置应用完成"
+          echo "✅ 步骤18 完成"
       #【firmware-build.yml-18-end】
 
       #【firmware-build.yml-19】
