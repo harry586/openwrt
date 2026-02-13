@@ -1,0 +1,256 @@
+#【build_firmware_main.sh-23】
+# 此函数已废弃，由【37】版本替代
+# 保留空函数以避免破坏系统性标识
+workflow_step23_pre_build_check() {
+    log "=== 步骤23: 前置错误检查（已废弃）==="
+    log "⚠️ 警告: 此函数已废弃，请使用【37】版本"
+    return 0
+}
+#【build_firmware_main.sh-23-end】
+
+#【build_firmware_main.sh-37】
+workflow_step23_pre_build_check() {
+    log "=== 步骤23: 前置错误检查（立即退出版）- 增强版，自动修复配置问题 ==="
+    
+    set -e
+    trap 'echo "❌ 步骤23 失败，退出代码: $?"; exit 1' ERR
+    
+    echo "🔍 检查当前环境..."
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET"
+        echo "✅ COMPILER_DIR=$COMPILER_DIR"
+        echo "✅ CONFIG_MODE=$CONFIG_MODE"
+    else
+        echo "❌ 错误: 环境文件不存在 ($BUILD_DIR/build_env.sh)"
+        echo "💡 请检查步骤08和步骤09是否成功执行"
+        exit 1
+    fi
+    
+    cd $BUILD_DIR
+    echo "=== 🚨 前置错误检查（立即退出版）- 增强版 ==="
+    
+    echo ""
+    echo "1. ✅ 配置文件检查:"
+    if [ -f ".config" ]; then
+        echo "  ✅ .config 文件存在"
+        echo "  📊 文件大小: $(ls -lh .config | awk '{print $5}')"
+        echo "  📝 文件行数: $(wc -l < .config)"
+    else
+        echo "  ❌ 错误: .config 文件不存在"
+        echo "  💡 请检查步骤15智能配置生成是否成功"
+        exit 1
+    fi
+    
+    echo ""
+    echo "2. ✅ SDK目录检查:"
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+        echo "  ✅ SDK目录存在: $COMPILER_DIR"
+        echo "  📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | awk '{print $1}' || echo '未知')"
+        
+        GCC_FILE=$(find "$COMPILER_DIR" -type f -executable \
+          -name "*gcc" \
+          ! -name "*gcc-ar" \
+          ! -name "*gcc-ranlib" \
+          ! -name "*gcc-nm" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
+          2>/dev/null | head -1)
+        
+        if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
+            echo "  ✅ 找到可执行GCC编译器: $(basename "$GCC_FILE")"
+            echo "  🔧 GCC版本: $("$GCC_FILE" --version 2>&1 | head -1)"
+        else
+            echo "  ❌ 错误: SDK目录中未找到真正的GCC编译器"
+            exit 1
+        fi
+    else
+        echo "  ❌ 错误: SDK目录不存在: $COMPILER_DIR"
+        echo "  💡 请检查步骤09 SDK下载是否成功"
+        exit 1
+    fi
+    
+    echo ""
+    echo "3. ✅ Feeds检查:"
+    if [ -d "feeds" ]; then
+        echo "  ✅ feeds 目录存在"
+        echo "  📊 feeds目录大小: $(du -sh feeds 2>/dev/null | awk '{print $1}' || echo '未知')"
+    else
+        echo "  ❌ 错误: feeds 目录不存在"
+        echo "  💡 请检查步骤12配置Feeds是否成功"
+        exit 1
+    fi
+    
+    echo ""
+    echo "4. ✅ 磁盘空间检查:"
+    AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
+    AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+    echo "  📊 /mnt 可用空间: ${AVAILABLE_GB}G"
+    
+    if [ $AVAILABLE_GB -lt 10 ]; then
+        echo "  ❌ 错误: 磁盘空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
+        exit 1
+    elif [ $AVAILABLE_GB -lt 20 ]; then
+        echo "  ⚠️ 警告: 磁盘空间较低 (建议至少20G，当前${AVAILABLE_GB}G)"
+    else
+        echo "  ✅ 磁盘空间充足"
+    fi
+    
+    echo ""
+    echo "5. ✅ USB配置检查（自动修复）:"
+    USB_FIXED=0
+    
+    if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
+        echo "  ❌ 错误: USB 3.0驱动未启用 (kmod-usb-xhci-hcd)"
+        echo "  🔧 正在自动修复..."
+        if [ -f "scripts/config/config" ]; then
+            ./scripts/config/config --enable PACKAGE_kmod-usb-xhci-hcd
+            echo "  ✅ 已强制添加: kmod-usb-xhci-hcd"
+        else
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+            echo "  ✅ 已强制添加: kmod-usb-xhci-hcd"
+        fi
+        USB_FIXED=1
+    else
+        echo "  ✅ kmod-usb-xhci-hcd: 已启用"
+    fi
+    
+    if ! grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
+        echo "  ❌ 错误: USB 3.0驱动未启用 (kmod-usb3)"
+        echo "  🔧 正在自动修复..."
+        if [ -f "scripts/config/config" ]; then
+            ./scripts/config/config --enable PACKAGE_kmod-usb3
+            echo "  ✅ 已强制添加: kmod-usb3"
+        else
+            echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+            echo "  ✅ 已强制添加: kmod-usb3"
+        fi
+        USB_FIXED=1
+    else
+        echo "  ✅ kmod-usb3: 已启用"
+    fi
+    
+    if ! grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config; then
+        echo "  ❌ 错误: USB 2.0驱动未启用 (kmod-usb2)"
+        echo "  🔧 正在自动修复..."
+        if [ -f "scripts/config/config" ]; then
+            ./scripts/config/config --enable PACKAGE_kmod-usb2
+            echo "  ✅ 已强制添加: kmod-usb2"
+        else
+            echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+            echo "  ✅ 已强制添加: kmod-usb2"
+        fi
+        USB_FIXED=1
+    else
+        echo "  ✅ kmod-usb2: 已启用"
+    fi
+    
+    if [ "$TARGET" = "ipq40xx" ]; then
+        if ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config; then
+            echo "  ❌ 错误: IPQ40xx平台驱动未启用 (kmod-phy-qcom-dwc3)"
+            echo "  🔧 正在自动修复..."
+            if [ -f "scripts/config/config" ]; then
+                ./scripts/config/config --enable PACKAGE_kmod-phy-qcom-dwc3
+                echo "  ✅ 已强制添加: kmod-phy-qcom-dwc3"
+            else
+                echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+                echo "  ✅ 已强制添加: kmod-phy-qcom-dwc3"
+            fi
+            USB_FIXED=1
+        else
+            echo "  ✅ kmod-phy-qcom-dwc3: 已启用"
+        fi
+    fi
+    
+    echo ""
+    echo "6. ✅ TurboACC配置检查（自动修复）:"
+    TURBOACC_FIXED=0
+    
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        if ! grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+            echo "  ❌ 错误: TurboACC未启用 (正常模式必需)"
+            echo "  🔧 正在自动修复..."
+            if [ -f "scripts/config/config" ]; then
+                ./scripts/config/config --enable PACKAGE_luci-app-turboacc
+                echo "  ✅ 已强制添加: luci-app-turboacc"
+            else
+                echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+            fi
+            TURBOACC_FIXED=1
+        else
+            echo "  ✅ luci-app-turboacc: 已启用"
+        fi
+    else
+        echo "  ℹ️ 基础模式，不检查TurboACC配置"
+    fi
+    
+    echo ""
+    echo "7. ✅ TCP BBR拥塞控制检查（自动修复）:"
+    BBR_FIXED=0
+    
+    if ! grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
+        echo "  ❌ 错误: TCP BBR未启用"
+        echo "  🔧 正在自动修复..."
+        if [ -f "scripts/config/config" ]; then
+            ./scripts/config/config --enable PACKAGE_kmod-tcp-bbr
+            echo "  ✅ 已强制添加: kmod-tcp-bbr"
+        else
+            echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+        fi
+        BBR_FIXED=1
+    else
+        echo "  ✅ kmod-tcp-bbr: 已启用"
+    fi
+    
+    if ! grep -q '^CONFIG_DEFAULT_TCP_CONG="bbr"' .config; then
+        echo "  ❌ 错误: TCP BBR未设置为默认拥塞控制算法"
+        echo "  🔧 正在自动修复..."
+        if [ -f "scripts/config/config" ]; then
+            ./scripts/config/config --set-str DEFAULT_TCP_CONG "bbr"
+            echo "  ✅ 已设置: DEFAULT_TCP_CONG=\"bbr\""
+        else
+            sed -i '/^CONFIG_DEFAULT_TCP_CONG=/d' .config
+            echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
+        fi
+        BBR_FIXED=1
+    else
+        echo "  ✅ DEFAULT_TCP_CONG=\"bbr\": 已设置"
+    fi
+    
+    if [ $USB_FIXED -eq 1 ] || [ $TURBOACC_FIXED -eq 1 ] || [ $BBR_FIXED -eq 1 ]; then
+        echo ""
+        echo "🔄 配置已修复，重新运行 make defconfig..."
+        make defconfig
+        
+        echo ""
+        echo "📋 修复后配置状态:"
+        echo "  - kmod-usb2: $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        echo "  - kmod-usb3: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        echo "  - kmod-usb-xhci-hcd: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        
+        if [ "$TARGET" = "ipq40xx" ]; then
+            echo "  - kmod-usb-dwc3-qcom: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+            echo "  - kmod-phy-qcom-dwc3: $(grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        fi
+        
+        if [ "$CONFIG_MODE" = "normal" ]; then
+            echo "  - luci-app-turboacc: $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        fi
+        
+        echo "  - kmod-tcp-bbr: $(grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        echo "  - DEFAULT_TCP_CONG: $(grep "^CONFIG_DEFAULT_TCP_CONG=" .config | cut -d'"' -f2 || echo '未设置')"
+        
+        echo "✅ 所有配置修复完成"
+    else
+        echo ""
+        echo "✅ 所有配置检查通过，无需修复"
+    fi
+    
+    echo ""
+    echo "========================================"
+    echo "✅✅✅ 所有前置检查通过，可以开始编译 ✅✅✅"
+    echo "========================================"
+    
+    log "✅ 步骤23 完成"
+}
+#【build_firmware_main.sh-37-end】
