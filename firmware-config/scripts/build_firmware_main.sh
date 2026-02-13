@@ -204,6 +204,13 @@ initialize_build_env() {
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
     
+    # 🔥 关键修复：立即编译scripts/config工具
+    log "=== 编译配置工具 ==="
+    log "🔧 编译scripts/config工具..."
+    make scripts/config || handle_error "编译scripts/config工具失败"
+    log "✅ scripts/config工具编译成功"
+    log "📁 工具位置: $(pwd)/scripts/config"
+    
     save_env
     
     echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
@@ -656,11 +663,10 @@ pre_build_space_check() {
 #【build_firmware_main.sh-13】
 generate_config() {
     local extra_packages=$1
-    local retry_count=${2:-0}
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 智能配置生成系统（完整修复版）==="
+    log "=== 智能配置生成系统（纯scripts/config版）==="
     log "版本: $SELECTED_BRANCH"
     log "目标: $TARGET"
     log "子目标: $SUBTARGET"
@@ -668,9 +674,11 @@ generate_config() {
     log "配置模式: $CONFIG_MODE"
     log "配置文件目录: $CONFIG_DIR"
     
+    # 删除旧配置
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
+    # 生成基础目标配置
     cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
@@ -681,27 +689,16 @@ EOF
     make defconfig || handle_error "基础配置生成失败"
     log "✅ 基础配置生成成功"
     
-    cp .config .config.base
-    
-    # 🔥 修复1: 提前编译scripts/config工具（只在第一次调用时）
-    if [ ! -f "scripts/config" ] && [ $retry_count -eq 0 ]; then
-        log "🔧 scripts/config工具不存在，正在编译..."
-        make scripts/config || handle_error "无法生成scripts/config工具"
-        log "✅ scripts/config工具编译成功"
-        # 重新调用自身，但标记已重试
-        generate_config "$extra_packages" 1
-        return
-    fi
-    
-    # 🔥 修复2: 如果编译后仍不存在，使用备用方案
+    # 🔥 验证scripts/config工具存在（步骤06已编译）
     if [ ! -f "scripts/config" ]; then
-        log "⚠️ scripts/config工具仍不存在，使用备用合并方案..."
-        apply_config_fallback "$extra_packages"
-        return
+        log "❌ scripts/config工具不存在，请检查步骤06"
+        handle_error "scripts/config工具缺失"
     fi
+    log "✅ scripts/config工具已就绪"
     
     log "🔧 使用scripts/config工具合并配置..."
     
+    # 1. 应用USB通用配置
     if [ -f "$CONFIG_DIR/usb-generic.config" ]; then
         log "📁 应用USB通用配置..."
         while IFS= read -r line || [ -n "$line" ]; do
@@ -722,6 +719,7 @@ EOF
         log "✅ USB通用配置应用完成"
     fi
     
+    # 2. 应用基础配置
     if [ -f "$CONFIG_DIR/base.config" ]; then
         log "📁 应用基础配置..."
         while IFS= read -r line || [ -n "$line" ]; do
@@ -742,6 +740,7 @@ EOF
         log "✅ 基础配置应用完成"
     fi
     
+    # 3. 应用设备配置或模式配置
     local device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
     if [ -f "$device_config_file" ]; then
         log "📁 应用设备配置: $DEVICE.config..."
@@ -767,6 +766,7 @@ EOF
             line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
             [ -z "$line" ] && continue
             
+            # 跳过TurboACC静态配置
             if echo "$line" | grep -q "luci-app-turboacc|kmod-shortcut-fe|kmod-fast-classifier"; then
                 continue
             fi
@@ -785,6 +785,7 @@ EOF
         log "✅ 正常模式配置应用完成"
     fi
     
+    # 4. 应用平台专用配置
     local platform_config=""
     if [ -f "$CONFIG_DIR/devices/$TARGET.config" ]; then
         platform_config="$CONFIG_DIR/devices/$TARGET.config"
@@ -812,6 +813,7 @@ EOF
         log "✅ 平台配置应用完成"
     fi
     
+    # 5. 添加额外包
     if [ -n "$extra_packages" ]; then
         log "📦 添加额外包: $extra_packages"
         echo "$extra_packages" | tr ',' '
@@ -823,6 +825,7 @@ EOF
         done
     fi
     
+    # 6. 强制启用关键配置
     log "🔧 强制启用关键配置..."
     ./scripts/config --enable PACKAGE_kmod-usb-xhci-hcd
     ./scripts/config --enable PACKAGE_kmod-usb3
@@ -836,6 +839,7 @@ EOF
         log "✅ TurboACC配置强制启用完成"
     fi
     
+    # 7. 处理ath10k冲突
     ./scripts/config --disable PACKAGE_kmod-ath10k
     ./scripts/config --disable PACKAGE_kmod-ath10k-pci
     ./scripts/config --disable PACKAGE_kmod-ath10k-smallbuffers
@@ -843,19 +847,9 @@ EOF
     ./scripts/config --enable PACKAGE_kmod-ath10k-ct
     log "✅ ath10k冲突修复完成"
     
+    # 8. 最终defconfig
     log "🔄 运行最终 make defconfig..."
     make defconfig || handle_error "最终配置应用失败"
-    
-    log "🔍 验证配置文件语法..."
-    if grep -q "^[[:space:]]" .config; then
-        log "⚠️ 发现行首空格，正在修复..."
-        sed -i 's/^[[:space:]]*//' .config
-    fi
-    
-    if ! make defconfig > /dev/null 2>&1; then
-        handle_error "配置文件语法错误"
-    fi
-    log "✅ 配置文件语法验证通过"
     
     log "📊 配置生成统计:"
     log "  - 最终配置文件: .config"
@@ -863,59 +857,6 @@ EOF
     log "  - 配置文件大小: $(ls -lh .config | awk '{print $5}')"
     
     log "✅ 配置生成完成"
-}
-
-# 🔥 修复3: 添加备用配置合并方案
-apply_config_fallback() {
-    local extra_packages=$1
-    log "⚠️ 使用备用方案合并配置..."
-    
-    # 直接追加配置行，但确保格式正确
-    if [ -f "$CONFIG_DIR/usb-generic.config" ]; then
-        grep "^CONFIG_" "$CONFIG_DIR/usb-generic.config" | sed 's/[[:space:]]*$//' >> .config
-    fi
-    
-    if [ -f "$CONFIG_DIR/base.config" ]; then
-        grep "^CONFIG_" "$CONFIG_DIR/base.config" | sed 's/[[:space:]]*$//' >> .config
-    fi
-    
-    local device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
-    if [ -f "$device_config_file" ]; then
-        grep "^CONFIG_" "$device_config_file" | sed 's/[[:space:]]*$//' >> .config
-    elif [ "$CONFIG_MODE" = "normal" ] && [ -f "$CONFIG_DIR/normal.config" ]; then
-        grep "^CONFIG_" "$CONFIG_DIR/normal.config" | grep -v "luci-app-turboacc|kmod-shortcut-fe|kmod-fast-classifier" | sed 's/[[:space:]]*$//' >> .config
-    fi
-    
-    local platform_config=""
-    if [ -f "$CONFIG_DIR/devices/$TARGET.config" ]; then
-        platform_config="$CONFIG_DIR/devices/$TARGET.config"
-    else
-        platform_config=$(find "$CONFIG_DIR" -type f -name "*${TARGET}*.config" 2>/dev/null | grep -v "usb-generic" | grep -v "base" | grep -v "normal" | head -1)
-    fi
-    
-    if [ -n "$platform_config" ] && [ -f "$platform_config" ]; then
-        grep "^CONFIG_" "$platform_config" | sed 's/[[:space:]]*$//' >> .config
-    fi
-    
-    # 强制添加关键配置
-    echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
-    echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
-    
-    if [ "$CONFIG_MODE" = "normal" ]; then
-        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-    fi
-    
-    # 去重
-    sort -u .config -o .config
-    
-    log "🔄 运行 make defconfig..."
-    make defconfig || handle_error "配置应用失败"
-    
-    log "✅ 备用配置合并完成"
 }
 #【build_firmware_main.sh-13-end】
 
@@ -2579,27 +2520,13 @@ workflow_step14_pre_build_space_check() {
 workflow_step15_generate_config() {
     local extra_packages="$1"
     
-    log "=== 步骤15: 智能配置生成（修复版）==="
+    log "=== 步骤15: 智能配置生成（纯scripts/config版）==="
     
     set -e
     trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
     
-    cd $BUILD_DIR
-    
-    # 🔥 修复4: 提前编译scripts/config工具，避免在generate_config中重复编译
-    if [ ! -f "scripts/config" ]; then
-        log "🔧 提前编译scripts/config工具..."
-        make scripts/config || {
-            log "⚠️ 编译scripts/config失败，将使用备用方案"
-        }
-    fi
-    
+    # scripts/config工具已在步骤06编译完成，直接调用
     generate_config "$extra_packages"
-    
-    if [ $? -ne 0 ]; then
-        echo "❌ 错误: 智能配置生成失败"
-        exit 1
-    fi
     
     log "✅ 步骤15 完成"
 }
