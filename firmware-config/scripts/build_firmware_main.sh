@@ -2521,12 +2521,13 @@ workflow_step14_pre_build_space_check() {
 workflow_step15_generate_config() {
     local extra_packages="$1"
     
-    log "=== 步骤15: 智能配置生成 ==="
+    log "=== 步骤15: 智能配置生成【修复版】==="
     
     set -e
     trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
     
-    generate_config "$extra_packages"
+    # 调用完全重写的generate_config修复版
+    generate_config_fixed "$extra_packages"
     
     if [ $? -ne 0 ]; then
         echo "❌ 错误: 智能配置生成失败"
