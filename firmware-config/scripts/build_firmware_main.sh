@@ -204,17 +204,23 @@ initialize_build_env() {
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
     
-    # 🔥 关键修复：强制编译scripts/config工具，多重保障
+    # 🔥 关键修复：修正逻辑判断，方法1成功就直接通过
     log "=== 强制编译配置工具 ==="
+    
+    local config_tool_created=0
     
     # 方法1: 直接编译
     log "🔧 尝试方法1: make scripts/config"
     if make scripts/config; then
-        log "✅ 方法1成功: scripts/config工具编译成功"
-    else
+        if [ -f "scripts/config" ] && [ -x "scripts/config" ]; then
+            log "✅ 方法1成功: scripts/config工具编译成功"
+            config_tool_created=1
+        fi
+    fi
+    
+    # 方法2: 如果方法1失败，手动创建
+    if [ $config_tool_created -eq 0 ]; then
         log "⚠️ 方法1失败，尝试方法2..."
-        
-        # 方法2: 创建scripts目录并手动复制
         mkdir -p scripts
         if [ -f "scripts/config.guess" ] && [ -f "scripts/config.sub" ]; then
             log "🔧 尝试方法2: 手动创建config脚本"
@@ -243,32 +249,32 @@ case "$1" in
 esac
 EOF
             chmod +x scripts/config
-            log "✅ 方法2成功: 手动创建scripts/config工具"
-        else
-            log "⚠️ 方法2失败，尝试方法3..."
-            
-            # 方法3: 从已编译的SDK中复制
-            if [ -n "$COMPILER_DIR" ] && [ -f "$COMPILER_DIR/scripts/config" ]; then
-                log "🔧 尝试方法3: 从SDK目录复制"
-                cp "$COMPILER_DIR/scripts/config" scripts/
-                chmod +x scripts/config
+            if [ -f "scripts/config" ] && [ -x "scripts/config" ]; then
+                log "✅ 方法2成功: 手动创建scripts/config工具"
+                config_tool_created=1
+            fi
+        fi
+    fi
+    
+    # 方法3: 从SDK复制
+    if [ $config_tool_created -eq 0 ]; then
+        log "⚠️ 方法2失败，尝试方法3..."
+        if [ -n "$COMPILER_DIR" ] && [ -f "$COMPILER_DIR/scripts/config" ]; then
+            log "🔧 尝试方法3: 从SDK目录复制"
+            mkdir -p scripts
+            cp "$COMPILER_DIR/scripts/config" scripts/
+            chmod +x scripts/config
+            if [ -f "scripts/config" ] && [ -x "scripts/config" ]; then
                 log "✅ 方法3成功: 从SDK复制scripts/config工具"
-            else
-                log "⚠️ 方法3失败，尝试方法4..."
-                
-                # 方法4: 最简单的fallback - 创建空文件，步骤13会处理
-                log "🔧 尝试方法4: 创建占位文件"
-                touch scripts/config
-                chmod +x scripts/config
-                log "⚠️ 方法4: 创建占位文件，步骤13将使用备用方案"
+                config_tool_created=1
             fi
         fi
     fi
     
     # 最终验证
-    if [ -f "scripts/config" ] && [ -x "scripts/config" ]; then
+    if [ $config_tool_created -eq 1 ]; then
         log "✅ scripts/config工具最终验证通过"
-        ls -la scripts/config
+        ls -la scripts/config 2>/dev/null || log "⚠️ 无法显示文件信息"
     else
         log "❌ 所有方法都失败，scripts/config工具不存在"
         handle_error "无法创建scripts/config工具"
@@ -729,7 +735,7 @@ generate_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 智能配置生成系统（兼容版）==="
+    log "=== 智能配置生成系统 ==="
     log "版本: $SELECTED_BRANCH"
     log "目标: $TARGET"
     log "子目标: $SUBTARGET"
@@ -752,37 +758,16 @@ EOF
     make defconfig || handle_error "基础配置生成失败"
     log "✅ 基础配置生成成功"
     
-    # 🔥 验证scripts/config工具，如果不存在或不可执行，重新创建
-    if [ ! -f "scripts/config" ] || [ ! -x "scripts/config" ]; then
-        log "⚠️ scripts/config工具不可用，重新创建..."
-        mkdir -p scripts
-        cat > scripts/config << 'EOF'
-#!/bin/sh
-# Minimal config script for OpenWrt
-SCRIPT_DIR=$(dirname "$0")
-case "$1" in
-    --enable)
-        shift
-        echo "CONFIG_$1=y" >> .config
-        ;;
-    --disable)
-        shift
-        echo "# CONFIG_$1 is not set" >> .config
-        ;;
-    --module)
-        shift
-        echo "CONFIG_$1=m" >> .config
-        ;;
-    --set-str)
-        shift
-        echo "CONFIG_$1="$2"" >> .config
-        shift
-        ;;
-esac
-EOF
-        chmod +x scripts/config
-        log "✅ scripts/config工具重新创建成功"
+    # 🔥 验证scripts/config工具（步骤06已确保存在）
+    if [ ! -f "scripts/config" ]; then
+        log "❌ scripts/config工具不存在，步骤06应该已创建"
+        handle_error "scripts/config工具缺失"
     fi
+    if [ ! -x "scripts/config" ]; then
+        log "🔧 修复scripts/config执行权限"
+        chmod +x scripts/config
+    fi
+    log "✅ scripts/config工具已就绪"
     
     log "🔧 使用scripts/config工具合并配置..."
     
@@ -2608,7 +2593,7 @@ workflow_step14_pre_build_space_check() {
 workflow_step15_generate_config() {
     local extra_packages="$1"
     
-    log "=== 步骤15: 智能配置生成（兼容版）==="
+    log "=== 步骤15: 智能配置生成 ==="
     
     set -e
     trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
