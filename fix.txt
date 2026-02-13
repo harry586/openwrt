@@ -1,0 +1,114 @@
+#【build_firmware_main.sh-42】
+# ============================================
+# 工作流步骤函数 - 步骤05-09
+# 对应 firmware-build.yml 步骤05-09
+# ============================================
+
+workflow_step05_install_basic_tools() {
+    log "=== 步骤05: 安装基础工具（优化版） ==="
+    
+    set -e
+    trap 'echo "❌ 步骤05 失败，退出代码: $?"; exit 1' ERR
+    
+    setup_environment
+    
+    log "✅ 步骤05 完成"
+}
+
+workflow_step06_initial_space_check() {
+    log "=== 步骤06: 初始空间检查 ==="
+    
+    set -e
+    trap 'echo "❌ 步骤06 失败，退出代码: $?"; exit 1' ERR
+    
+    echo "=== 🚨 初始磁盘空间检查 ==="
+    
+    echo "📊 磁盘使用情况:"
+    df -h
+    
+    AVAILABLE_SPACE=$(df /mnt --output=avail 2>/dev/null | tail -1 || df / --output=avail | tail -1)
+    AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+    echo "可用空间: ${AVAILABLE_GB}G"
+    
+    if [ $AVAILABLE_GB -lt 20 ]; then
+        echo "⚠️ 警告: 初始磁盘空间可能不足 (当前${AVAILABLE_GB}G，建议至少20G)"
+    else
+        echo "✅ 初始磁盘空间充足"
+    fi
+    
+    echo "💻 CPU信息:"
+    echo "  CPU核心数: $(nproc)"
+    echo "  CPU型号: $(grep "model name" /proc/cpuinfo | head -1 | cut -d':' -f2 | xargs || echo '未知')"
+    
+    echo "🧠 内存信息:"
+    free -h
+    
+    log "✅ 步骤06 完成"
+}
+
+workflow_step07_create_build_dir() {
+    log "=== 步骤07: 创建构建目录 ==="
+    
+    set -e
+    trap 'echo "❌ 步骤07 失败，退出代码: $?"; exit 1' ERR
+    
+    create_build_dir
+    
+    log "✅ 步骤07 完成"
+}
+
+workflow_step08_initialize_build_env() {
+    local device_name="$1"
+    local version_selection="$2"
+    local config_mode="$3"
+    
+    log "=== 步骤08: 初始化构建环境 ==="
+    
+    set -e
+    trap 'echo "❌ 步骤08 失败，退出代码: $?"; exit 1' ERR
+    
+    initialize_build_env "$device_name" "$version_selection" "$config_mode"
+    
+    log "✅ 步骤08 完成"
+}
+
+workflow_step09_download_sdk() {
+    local device_name="$1"
+    
+    log "=== 步骤09: 下载OpenWrt官方SDK ==="
+    
+    set -e
+    trap 'echo "❌ 步骤09 失败，退出代码: $?"; exit 1' ERR
+    
+    initialize_compiler_env "$device_name"
+    
+    log "✅ 步骤09 完成"
+}
+
+# 以下编译器搜索函数已废弃，由 initialize_compiler_env 替代
+#【build_firmware_main.sh-42-end】
+
+#【build_firmware_main.sh-43】
+universal_compiler_search() {
+    log "=== 通用编译器搜索 ==="
+    log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
+    return 1
+}
+#【build_firmware_main.sh-43-end】
+
+#【build_firmware_main.sh-44】
+search_compiler_files_simple() {
+    log "=== 简单编译器文件搜索 ==="
+    log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
+    return 1
+}
+#【build_firmware_main.sh-44-end】
+
+#【build_firmware_main.sh-45】
+intelligent_platform_aware_compiler_search() {
+    log "=== 智能平台感知的编译器搜索 ==="
+    log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
+    return 1
+}
+#【build_firmware_main.sh-45-end】
+
