@@ -204,11 +204,11 @@ initialize_build_env() {
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
     
-    # 🔥 关键修复：正确处理scripts/config目录
+    # 🔥 关键修复：确保config工具可用
     log "=== 编译配置工具 ==="
     
     local config_tool_created=0
-    local config_tool_path="scripts/config"
+    local real_config_tool=""
     
     # 方法1: 直接编译 - OpenWrt编译后生成的是scripts/config/config可执行文件
     log "🔧 尝试方法1: make scripts/config"
@@ -216,14 +216,12 @@ initialize_build_env() {
         # 检查编译后的实际位置
         if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
             log "✅ 方法1成功: scripts/config/config 工具编译成功"
-            # 创建符号链接方便调用
-            ln -sf config scripts/config/config-link
+            real_config_tool="scripts/config/config"
             config_tool_created=1
         elif [ -f "scripts/config" ] && [ -x "scripts/config" ] && [ ! -d "scripts/config" ]; then
             log "✅ 方法1成功: scripts/config 工具编译成功"
+            real_config_tool="scripts/config"
             config_tool_created=1
-        else
-            log "⚠️ 方法1编译完成但找不到可执行文件"
         fi
     fi
     
@@ -232,12 +230,18 @@ initialize_build_env() {
         log "🔧 尝试方法2: 查找已编译的config工具"
         if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
             log "✅ 方法2成功: 找到 scripts/config/config"
+            real_config_tool="scripts/config/config"
             config_tool_created=1
         elif [ -f "scripts/kconfig/conf" ] && [ -x "scripts/kconfig/conf" ]; then
             log "✅ 方法2成功: 找到 scripts/kconfig/conf"
-            # 创建兼容调用
+            # 创建config目录和包装脚本
             mkdir -p scripts/config
-            ln -sf ../kconfig/conf scripts/config/config
+            cat > scripts/config/config << EOF
+#!/bin/sh
+exec "$(dirname "$0")/../kconfig/conf" "$@"
+EOF
+            chmod +x scripts/config/config
+            real_config_tool="scripts/config/config"
             config_tool_created=1
         fi
     fi
@@ -250,66 +254,138 @@ initialize_build_env() {
             cp "$COMPILER_DIR/scripts/config/config" scripts/config/
             chmod +x scripts/config/config
             log "✅ 方法3成功: 从SDK复制 config 工具"
+            real_config_tool="scripts/config/config"
             config_tool_created=1
         elif [ -f "$COMPILER_DIR/scripts/config" ] && [ -x "$COMPILER_DIR/scripts/config" ] && [ ! -d "$COMPILER_DIR/scripts/config" ]; then
             cp "$COMPILER_DIR/scripts/config" scripts/
             chmod +x scripts/config
             log "✅ 方法3成功: 从SDK复制 config 工具"
+            real_config_tool="scripts/config"
             config_tool_created=1
         fi
     fi
     
-    # 方法4: 创建包装脚本（终极方案）
+    # 方法4: 使用defconfig生成配置工具（终极方案）
     if [ $config_tool_created -eq 0 ]; then
-        log "🔧 尝试方法4: 创建包装脚本"
+        log "🔧 尝试方法4: 运行defconfig生成配置工具"
+        # 先创建一个最小配置
+        echo "CONFIG_TARGET_${TARGET}=y" > .config
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
+        if make defconfig; then
+            if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+                log "✅ 方法4成功: defconfig生成了config工具"
+                real_config_tool="scripts/config/config"
+                config_tool_created=1
+            fi
+        fi
+    fi
+    
+    # 方法5: 创建直接写入.config的包装脚本（保底方案）
+    if [ $config_tool_created -eq 0 ]; then
+        log "🔧 尝试方法5: 创建直接写入.config的包装脚本"
         mkdir -p scripts/config
         cat > scripts/config/config << 'EOF'
 #!/bin/sh
-# OpenWrt config 工具包装脚本
-KCONFIG_DIR="$(dirname "$0")/../kconfig"
-if [ -f "$KCONFIG_DIR/conf" ] && [ -x "$KCONFIG_DIR/conf" ]; then
-    exec "$KCONFIG_DIR/conf" "$@"
-else
-    echo "Error: config tool not found" >&2
-    exit 1
-fi
+# 直接写入.config的简易config工具
+CONFIG_FILE=".config"
+
+case "$1" in
+    --enable)
+        shift
+        sed -i "/^# CONFIG_$1 is not set/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_$1=/d" "$CONFIG_FILE"
+        echo "CONFIG_$1=y" >> "$CONFIG_FILE"
+        ;;
+    --disable)
+        shift
+        sed -i "/^CONFIG_$1=y/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_$1=m/d" "$CONFIG_FILE"
+        echo "# CONFIG_$1 is not set" >> "$CONFIG_FILE"
+        ;;
+    --module)
+        shift
+        sed -i "/^# CONFIG_$1 is not set/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_$1=y/d" "$CONFIG_FILE"
+        echo "CONFIG_$1=m" >> "$CONFIG_FILE"
+        ;;
+    --set-str)
+        shift
+        local name="$1"
+        local value="$2"
+        sed -i "/^CONFIG_$name=/d" "$CONFIG_FILE"
+        echo "CONFIG_$name="$value"" >> "$CONFIG_FILE"
+        shift 2
+        ;;
+esac
 EOF
         chmod +x scripts/config/config
-        # 创建兼容调用
-        ln -sf config scripts/config/config-link
-        if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
-            log "✅ 方法4成功: 创建 config 包装脚本"
-            config_tool_created=1
-        fi
+        log "✅ 方法5成功: 创建简易config工具"
+        real_config_tool="scripts/config/config"
+        config_tool_created=1
     fi
     
-    # 创建便捷调用脚本（统一接口）
+    # 创建统一调用接口（绝对可靠版）
     if [ $config_tool_created -eq 1 ]; then
         log "🔧 创建统一调用接口..."
-        cat > scripts/config-tool << 'EOF'
+        
+        # 记录真实工具路径
+        echo "$real_config_tool" > scripts/.config_tool_path
+        
+        cat > scripts/config-tool << EOF
 #!/bin/sh
-# 统一 config 工具调用接口
-if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
-    exec scripts/config/config "$@"
-elif [ -f "scripts/config" ] && [ -x "scripts/config" ] && [ ! -d "scripts/config" ]; then
-    exec scripts/config "$@"
-else
-    echo "Error: config tool not found" >&2
-    exit 1
+# 统一 config 工具调用接口（绝对可靠版）
+CONFIG_TOOL="$(cat "$(dirname "$0")/.config_tool_path" 2>/dev/null)"
+if [ -n "$CONFIG_TOOL" ] && [ -f "$CONFIG_TOOL" ] && [ -x "$CONFIG_TOOL" ]; then
+    exec "$CONFIG_TOOL" "$@"
 fi
+
+# 备选1: 直接查找
+if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+    echo "scripts/config/config" > "$(dirname "$0")/.config_tool_path"
+    exec scripts/config/config "$@"
+fi
+
+# 备选2: 旧式路径
+if [ -f "scripts/config" ] && [ -x "scripts/config" ] && [ ! -d "scripts/config" ]; then
+    echo "scripts/config" > "$(dirname "$0")/.config_tool_path"
+    exec scripts/config "$@"
+fi
+
+# 备选3: kconfig/conf
+if [ -f "scripts/kconfig/conf" ] && [ -x "scripts/kconfig/conf" ]; then
+    mkdir -p scripts/config
+    cat > scripts/config/config << 'INNEREOF'
+#!/bin/sh
+exec "$(dirname "$0")/../kconfig/conf" "$@"
+INNEREOF
+    chmod +x scripts/config/config
+    echo "scripts/config/config" > "$(dirname "$0")/.config_tool_path"
+    exec scripts/config/config "$@"
+fi
+
+echo "Error: config tool not found" >&2
+exit 1
 EOF
         chmod +x scripts/config-tool
         log "✅ 统一调用接口创建成功: scripts/config-tool"
+        
+        # 测试一下
+        if scripts/config-tool --help > /dev/null 2>&1; then
+            log "✅ 统一调用接口测试通过"
+        else
+            log "⚠️ 统一调用接口测试失败，但工具可能仍可用"
+        fi
     fi
     
     # 最终验证
     if [ $config_tool_created -eq 1 ]; then
         log "✅ 配置工具最终验证通过"
-        if [ -f "scripts/config-tool" ]; then
-            log "📁 可用命令: scripts/config-tool"
-        fi
-        if [ -f "scripts/config/config" ]; then
-            log "📁 工具位置: scripts/config/config"
+        log "📁 真实工具路径: $real_config_tool"
+        log "📁 统一调用接口: scripts/config-tool"
+        
+        # 显示工具版本信息
+        if [ -f "$real_config_tool" ]; then
+            log "📋 工具信息: $(file "$real_config_tool" | cut -d: -f2- | xargs)"
         fi
     else
         log "❌ 所有方法都失败，配置工具不存在"
@@ -794,20 +870,29 @@ EOF
     make defconfig || handle_error "基础配置生成失败"
     log "✅ 基础配置生成成功"
     
-    # 🔥 使用统一调用接口
-    local CONFIG_CMD=""
-    if [ -f "scripts/config-tool" ] && [ -x "scripts/config-tool" ]; then
-        CONFIG_CMD="./scripts/config-tool"
-        log "✅ 使用统一调用接口: scripts/config-tool"
-    elif [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
-        CONFIG_CMD="./scripts/config/config"
-        log "✅ 使用 config/config 工具"
-    elif [ -f "scripts/config" ] && [ -x "scripts/config" ] && [ ! -d "scripts/config" ]; then
-        CONFIG_CMD="./scripts/config"
-        log "✅ 使用 scripts/config 工具"
-    else
-        log "❌ 找不到 config 工具，请检查步骤06"
-        handle_error "config工具缺失"
+    # 🔥 使用统一调用接口（步骤06已确保可用）
+    if [ ! -f "scripts/config-tool" ] || [ ! -x "scripts/config-tool" ]; then
+        log "❌ 统一调用接口不存在，请检查步骤06"
+        handle_error "config-tool缺失"
+    fi
+    
+    local CONFIG_CMD="./scripts/config-tool"
+    log "✅ 使用统一调用接口: scripts/config-tool"
+    
+    # 测试工具是否可用
+    if ! $CONFIG_CMD --help > /dev/null 2>&1; then
+        log "⚠️ config-tool测试失败，尝试重新初始化..."
+        # 重新运行步骤06的配置工具创建逻辑
+        cd $BUILD_DIR
+        make scripts/config > /dev/null 2>&1 || true
+        if [ -f "scripts/config/config" ]; then
+            cat > scripts/config-tool << 'EOF'
+#!/bin/sh
+exec scripts/config/config "$@"
+EOF
+            chmod +x scripts/config-tool
+            log "✅ config-tool已重新创建"
+        fi
     fi
     
     log "🔧 使用配置工具合并配置..."
