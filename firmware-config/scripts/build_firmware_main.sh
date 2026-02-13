@@ -209,7 +209,7 @@ initialize_build_env() {
     mkdir -p scripts/config
     cat > scripts/config/config << 'EOF'
 #!/bin/sh
-# 直接写入.config的简易config工具 - 最终稳定版
+# 直接写入.config的简易config工具 - 最终稳定版（无local关键字）
 CONFIG_FILE=".config"
 
 case "$1" in
@@ -233,8 +233,8 @@ case "$1" in
         ;;
     --set-str)
         shift
-        local name="$1"
-        local value="$2"
+        name="$1"
+        value="$2"
         sed -i "/^CONFIG_$name=/d" "$CONFIG_FILE"
         echo "CONFIG_$name="$value"" >> "$CONFIG_FILE"
         shift 2
@@ -900,7 +900,7 @@ EOF
     
     log "🔧 第二次强制写入被defconfig重置的关键驱动..."
     
-    local force_drivers_phase1=(
+    force_drivers_phase1=(
         "PACKAGE_kmod-usb-xhci-hcd"
     )
     
@@ -908,7 +908,7 @@ EOF
         force_drivers_phase1+=("PACKAGE_kmod-phy-qcom-dwc3")
     fi
     
-    local fixed_count=0
+    fixed_count=0
     for driver in "${force_drivers_phase1[@]}"; do
         if ! grep -q "^CONFIG_${driver}=y" .config; then
             log "⚠️ 检测到 $driver 被defconfig重置，二次强制写入..."
@@ -923,7 +923,7 @@ EOF
         make defconfig || handle_error "二次配置同步失败"
         
         log "🔧 第三次强制写入（终极锁死）..."
-        local force_drivers_phase2=(
+        force_drivers_phase2=(
             "PACKAGE_kmod-usb-xhci-hcd"
         )
         
