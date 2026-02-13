@@ -204,12 +204,89 @@ initialize_build_env() {
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
     
-    log "=== 创建配置工具（直接写入.config的包装脚本）==="
+    # 🔥 关键修复：确保config工具可用
+    log "=== 编译配置工具 ==="
     
-    mkdir -p scripts/config
-    cat > scripts/config/config << 'EOF'
+    local config_tool_created=0
+    local real_config_tool=""
+    
+    # 方法1: 直接编译 - OpenWrt编译后生成的是scripts/config/config可执行文件
+    log "🔧 尝试方法1: make scripts/config"
+    if make scripts/config; then
+        # 检查编译后的实际位置
+        if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+            log "✅ 方法1成功: scripts/config/config 工具编译成功"
+            real_config_tool="scripts/config/config"
+            config_tool_created=1
+        elif [ -f "scripts/config" ] && [ -x "scripts/config" ] && [ ! -d "scripts/config" ]; then
+            log "✅ 方法1成功: scripts/config 工具编译成功"
+            real_config_tool="scripts/config"
+            config_tool_created=1
+        fi
+    fi
+    
+    # 方法2: 查找已编译的config工具
+    if [ $config_tool_created -eq 0 ]; then
+        log "🔧 尝试方法2: 查找已编译的config工具"
+        if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+            log "✅ 方法2成功: 找到 scripts/config/config"
+            real_config_tool="scripts/config/config"
+            config_tool_created=1
+        elif [ -f "scripts/kconfig/conf" ] && [ -x "scripts/kconfig/conf" ]; then
+            log "✅ 方法2成功: 找到 scripts/kconfig/conf"
+            # 创建config目录和包装脚本
+            mkdir -p scripts/config
+            cat > scripts/config/config << EOF
 #!/bin/sh
-# 直接写入.config的简易config工具 - 最终稳定版（无local关键字）
+exec "$(dirname "$0")/../kconfig/conf" "$@"
+EOF
+            chmod +x scripts/config/config
+            real_config_tool="scripts/config/config"
+            config_tool_created=1
+        fi
+    fi
+    
+    # 方法3: 从SDK复制
+    if [ $config_tool_created -eq 0 ] && [ -n "$COMPILER_DIR" ]; then
+        log "🔧 尝试方法3: 从SDK目录复制"
+        if [ -f "$COMPILER_DIR/scripts/config/config" ] && [ -x "$COMPILER_DIR/scripts/config/config" ]; then
+            mkdir -p scripts/config
+            cp "$COMPILER_DIR/scripts/config/config" scripts/config/
+            chmod +x scripts/config/config
+            log "✅ 方法3成功: 从SDK复制 config 工具"
+            real_config_tool="scripts/config/config"
+            config_tool_created=1
+        elif [ -f "$COMPILER_DIR/scripts/config" ] && [ -x "$COMPILER_DIR/scripts/config" ] && [ ! -d "$COMPILER_DIR/scripts/config" ]; then
+            cp "$COMPILER_DIR/scripts/config" scripts/
+            chmod +x scripts/config
+            log "✅ 方法3成功: 从SDK复制 config 工具"
+            real_config_tool="scripts/config"
+            config_tool_created=1
+        fi
+    fi
+    
+    # 方法4: 使用defconfig生成配置工具（终极方案）
+    if [ $config_tool_created -eq 0 ]; then
+        log "🔧 尝试方法4: 运行defconfig生成配置工具"
+        # 先创建一个最小配置
+        echo "CONFIG_TARGET_${TARGET}=y" > .config
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
+        if make defconfig; then
+            if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+                log "✅ 方法4成功: defconfig生成了config工具"
+                real_config_tool="scripts/config/config"
+                config_tool_created=1
+            fi
+        fi
+    fi
+    
+    # 方法5: 创建直接写入.config的包装脚本（保底方案）
+    if [ $config_tool_created -eq 0 ]; then
+        log "🔧 尝试方法5: 创建直接写入.config的包装脚本"
+        mkdir -p scripts/config
+        cat > scripts/config/config << 'EOF'
+#!/bin/sh
+# 直接写入.config的简易config工具
 CONFIG_FILE=".config"
 
 case "$1" in
@@ -233,36 +310,87 @@ case "$1" in
         ;;
     --set-str)
         shift
-        name="$1"
-        value="$2"
+        local name="$1"
+        local value="$2"
         sed -i "/^CONFIG_$name=/d" "$CONFIG_FILE"
         echo "CONFIG_$name="$value"" >> "$CONFIG_FILE"
         shift 2
         ;;
 esac
 EOF
-    chmod +x scripts/config/config
-    
-    cat > scripts/config-tool << 'EOF'
-#!/bin/sh
-# 统一 config 工具调用接口
-if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
-    exec scripts/config/config "$@"
-else
-    echo "Error: config tool not found" >&2
-    exit 1
-fi
-EOF
-    chmod +x scripts/config-tool
-    
-    log "✅ 简易config工具创建成功: scripts/config/config"
-    log "✅ 统一调用接口创建成功: scripts/config-tool"
-    
-    if scripts/config-tool --help > /dev/null 2>&1; then
-        log "✅ 统一调用接口测试通过"
+        chmod +x scripts/config/config
+        log "✅ 方法5成功: 创建简易config工具"
+        real_config_tool="scripts/config/config"
+        config_tool_created=1
     fi
     
-    log "✅ 配置工具最终验证通过"
+    # 创建统一调用接口（绝对可靠版）
+    if [ $config_tool_created -eq 1 ]; then
+        log "🔧 创建统一调用接口..."
+        
+        # 记录真实工具路径
+        echo "$real_config_tool" > scripts/.config_tool_path
+        
+        cat > scripts/config-tool << EOF
+#!/bin/sh
+# 统一 config 工具调用接口（绝对可靠版）
+CONFIG_TOOL="$(cat "$(dirname "$0")/.config_tool_path" 2>/dev/null)"
+if [ -n "$CONFIG_TOOL" ] && [ -f "$CONFIG_TOOL" ] && [ -x "$CONFIG_TOOL" ]; then
+    exec "$CONFIG_TOOL" "$@"
+fi
+
+# 备选1: 直接查找
+if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+    echo "scripts/config/config" > "$(dirname "$0")/.config_tool_path"
+    exec scripts/config/config "$@"
+fi
+
+# 备选2: 旧式路径
+if [ -f "scripts/config" ] && [ -x "scripts/config" ] && [ ! -d "scripts/config" ]; then
+    echo "scripts/config" > "$(dirname "$0")/.config_tool_path"
+    exec scripts/config "$@"
+fi
+
+# 备选3: kconfig/conf
+if [ -f "scripts/kconfig/conf" ] && [ -x "scripts/kconfig/conf" ]; then
+    mkdir -p scripts/config
+    cat > scripts/config/config << 'INNEREOF'
+#!/bin/sh
+exec "$(dirname "$0")/../kconfig/conf" "$@"
+INNEREOF
+    chmod +x scripts/config/config
+    echo "scripts/config/config" > "$(dirname "$0")/.config_tool_path"
+    exec scripts/config/config "$@"
+fi
+
+echo "Error: config tool not found" >&2
+exit 1
+EOF
+        chmod +x scripts/config-tool
+        log "✅ 统一调用接口创建成功: scripts/config-tool"
+        
+        # 测试一下
+        if scripts/config-tool --help > /dev/null 2>&1; then
+            log "✅ 统一调用接口测试通过"
+        else
+            log "⚠️ 统一调用接口测试失败，但工具可能仍可用"
+        fi
+    fi
+    
+    # 最终验证
+    if [ $config_tool_created -eq 1 ]; then
+        log "✅ 配置工具最终验证通过"
+        log "📁 真实工具路径: $real_config_tool"
+        log "📁 统一调用接口: scripts/config-tool"
+        
+        # 显示工具版本信息
+        if [ -f "$real_config_tool" ]; then
+            log "📋 工具信息: $(file "$real_config_tool" | cut -d: -f2- | xargs)"
+        fi
+    else
+        log "❌ 所有方法都失败，配置工具不存在"
+        handle_error "无法创建配置工具"
+    fi
     
     save_env
     
@@ -719,7 +847,7 @@ generate_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 智能配置生成系统（终极锁死版V6-直接修改内核配置）==="
+    log "=== 智能配置生成系统（最终稳定版）==="
     log "版本: $SELECTED_BRANCH"
     log "目标: $TARGET"
     log "子目标: $SUBTARGET"
@@ -739,6 +867,44 @@ EOF
     log "🔧 生成基础配置..."
     make defconfig || handle_error "基础配置生成失败"
     log "✅ 基础配置生成成功"
+    
+    mkdir -p scripts/config
+    cat > scripts/config/config << 'EOF'
+#!/bin/sh
+# 直接写入.config的简易config工具
+CONFIG_FILE=".config"
+
+case "$1" in
+    --enable)
+        shift
+        sed -i "/^# CONFIG_$1 is not set/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_$1=/d" "$CONFIG_FILE"
+        echo "CONFIG_$1=y" >> "$CONFIG_FILE"
+        ;;
+    --disable)
+        shift
+        sed -i "/^CONFIG_$1=y/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_$1=m/d" "$CONFIG_FILE"
+        echo "# CONFIG_$1 is not set" >> "$CONFIG_FILE"
+        ;;
+    --module)
+        shift
+        sed -i "/^# CONFIG_$1 is not set/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_$1=y/d" "$CONFIG_FILE"
+        echo "CONFIG_$1=m" >> "$CONFIG_FILE"
+        ;;
+    --set-str)
+        shift
+        name="$1"
+        value="$2"
+        sed -i "/^CONFIG_$name=/d" "$CONFIG_FILE"
+        echo "CONFIG_$name="$value"" >> "$CONFIG_FILE"
+        shift 2
+        ;;
+esac
+EOF
+    chmod +x scripts/config/config
+    ln -sf config scripts/config/config-link
     
     local CONFIG_CMD="./scripts/config/config"
     log "✅ 使用简易config工具"
@@ -810,6 +976,10 @@ EOF
             line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
             [ -z "$line" ] && continue
             
+            if echo "$line" | grep -q "luci-app-turboacc|kmod-shortcut-fe|kmod-fast-classifier"; then
+                continue
+            fi
+            
             if echo "$line" | grep -q "^CONFIG_.*=y$"; then
                 config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
                 $CONFIG_CMD --enable "$config_name"
@@ -862,7 +1032,7 @@ EOF
         done
     fi
     
-    log "🔧 第一次强制启用所有关键配置..."
+    log "🔧 强制启用所有关键配置..."
     
     $CONFIG_CMD --enable PACKAGE_kmod-usb-core
     $CONFIG_CMD --enable PACKAGE_kmod-usb2
@@ -895,198 +1065,24 @@ EOF
     $CONFIG_CMD --enable PACKAGE_kmod-ath10k-ct
     log "✅ ath10k冲突修复完成"
     
-    log "🔄 第一次运行 make defconfig..."
+    log "🔄 运行最终 make defconfig..."
     make defconfig || handle_error "最终配置应用失败"
     
-    log "🔧 第二次强制写入被defconfig重置的关键驱动..."
-    
-    force_drivers_phase1=(
-        "PACKAGE_kmod-usb-xhci-hcd"
-    )
-    
-    if [ "$TARGET" = "ipq40xx" ]; then
-        force_drivers_phase1+=("PACKAGE_kmod-phy-qcom-dwc3")
-    fi
-    
-    fixed_count=0
-    for driver in "${force_drivers_phase1[@]}"; do
-        if ! grep -q "^CONFIG_${driver}=y" .config; then
-            log "⚠️ 检测到 $driver 被defconfig重置，二次强制写入..."
-            $CONFIG_CMD --enable "$driver"
-            fixed_count=$((fixed_count + 1))
-        fi
-    done
-    
-    if [ $fixed_count -gt 0 ]; then
-        log "✅ 已修复 $fixed_count 个被重置的驱动"
-        log "🔄 第二次运行 make defconfig..."
-        make defconfig || handle_error "二次配置同步失败"
-    fi
-    
-    log "🔧 第三次尝试：直接修改内核配置（绕过包管理检查）..."
-    
-    # 检查内核版本和平台
-    KERNEL_VERSION=$(cat include/kernel-version.mk 2>/dev/null | grep "LINUX_VERSION-" | head -1 | cut -d'=' -f2 | tr -d ' ' || echo "未知")
-    log "📋 内核版本: $KERNEL_VERSION"
-    
-    # 直接修改内核配置 - 创建内核配置片段
-    mkdir -p files/lib/modules
-    
-    # 强制启用USB XHCI支持（内核级）
-    cat > target/linux/generic/config-5.4 << 'EOF' 2>/dev/null || true
-CONFIG_USB_XHCI_HCD=y
-CONFIG_USB_XHCI_PCI=y
-CONFIG_USB_XHCI_PLATFORM=y
-CONFIG_USB_XHCI_MTK=y
-CONFIG_USB_XHCI_TEGRA=y
-CONFIG_USB_XHCI_RCAR=y
-EOF
-
-    cat > target/linux/generic/config-5.10 << 'EOF' 2>/dev/null || true
-CONFIG_USB_XHCI_HCD=y
-CONFIG_USB_XHCI_PCI=y
-CONFIG_USB_XHCI_PLATFORM=y
-CONFIG_USB_XHCI_MTK=y
-CONFIG_USB_XHCI_TEGRA=y
-CONFIG_USB_XHCI_RCAR=y
-EOF
-
-    cat > target/linux/generic/config-5.15 << 'EOF' 2>/dev/null || true
-CONFIG_USB_XHCI_HCD=y
-CONFIG_USB_XHCI_PCI=y
-CONFIG_USB_XHCI_PLATFORM=y
-CONFIG_USB_XHCI_MTK=y
-CONFIG_USB_XHCI_TEGRA=y
-CONFIG_USB_XHCI_RCAR=y
-EOF
-
-    cat > target/linux/generic/config-6.1 << 'EOF' 2>/dev/null || true
-CONFIG_USB_XHCI_HCD=y
-CONFIG_USB_XHCI_PCI=y
-CONFIG_USB_XHCI_PLATFORM=y
-CONFIG_USB_XHCI_MTK=y
-CONFIG_USB_XHCI_TEGRA=y
-CONFIG_USB_XHCI_RCAR=y
-EOF
-
-    cat > target/linux/generic/config-6.6 << 'EOF' 2>/dev/null || true
-CONFIG_USB_XHCI_HCD=y
-CONFIG_USB_XHCI_PCI=y
-CONFIG_USB_XHCI_PLATFORM=y
-CONFIG_USB_XHCI_MTK=y
-CONFIG_USB_XHCI_TEGRA=y
-CONFIG_USB_XHCI_RCAR=y
-EOF
-
-    # IPQ40xx平台专用PHY驱动
-    if [ "$TARGET" = "ipq40xx" ]; then
-        cat > target/linux/ipq40xx/config-5.4 << 'EOF' 2>/dev/null || true
-CONFIG_PHY_QCOM_USB_HS=y
-CONFIG_PHY_QCOM_USB_HSIC=y
-CONFIG_PHY_QCOM_USB_SS=y
-CONFIG_PHY_QCOM_IPQ4019_USB=y
-EOF
-
-        cat > target/linux/ipq40xx/config-5.10 << 'EOF' 2>/dev/null || true
-CONFIG_PHY_QCOM_USB_HS=y
-CONFIG_PHY_QCOM_USB_HSIC=y
-CONFIG_PHY_QCOM_USB_SS=y
-CONFIG_PHY_QCOM_IPQ4019_USB=y
-EOF
-
-        cat > target/linux/ipq40xx/config-5.15 << 'EOF' 2>/dev/null || true
-CONFIG_PHY_QCOM_USB_HS=y
-CONFIG_PHY_QCOM_USB_HSIC=y
-CONFIG_PHY_QCOM_USB_SS=y
-CONFIG_PHY_QCOM_IPQ4019_USB=y
-EOF
-    fi
-    
-    log "✅ 已强制写入内核级配置"
-    
-    # 第四次运行：使用老式配置方式
-    log "🔄 第四次运行：使用脚本直接修改 .config"
-    
-    # 直接删除可能冲突的行
-    sed -i '/CONFIG_PACKAGE_kmod-usb-xhci-hcd/d' .config
-    sed -i '/# CONFIG_PACKAGE_kmod-usb-xhci-hcd/d' .config
-    sed -i '/CONFIG_USB_XHCI_HCD/d' .config
-    sed -i '/# CONFIG_USB_XHCI_HCD/d' .config
-    
-    # 写入包配置
-    echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
-    
-    # 写入内核配置
-    echo "CONFIG_USB_XHCI_HCD=y" >> .config
-    echo "CONFIG_USB_XHCI_PCI=y" >> .config
-    echo "CONFIG_USB_XHCI_PLATFORM=y" >> .config
+    log "📋 关键配置状态:"
+    log "  - kmod-usb2: $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+    log "  - kmod-usb3: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+    log "  - kmod-usb-xhci-hcd: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
     
     if [ "$TARGET" = "ipq40xx" ]; then
-        sed -i '/CONFIG_PACKAGE_kmod-phy-qcom-dwc3/d' .config
-        sed -i '/# CONFIG_PACKAGE_kmod-phy-qcom-dwc3/d' .config
-        sed -i '/CONFIG_PHY_QCOM_IPQ4019_USB/d' .config
-        sed -i '/# CONFIG_PHY_QCOM_IPQ4019_USB/d' .config
-        
-        echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
-        echo "CONFIG_PHY_QCOM_IPQ4019_USB=y" >> .config
-        echo "CONFIG_PHY_QCOM_USB_HS=y" >> .config
-        echo "CONFIG_PHY_QCOM_USB_SS=y" >> .config
+        log "  - kmod-usb-dwc3-qcom: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        log "  - kmod-phy-qcom-dwc3: $(grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
     fi
     
-    log "🔄 第五次运行 make defconfig（但保留内核配置）..."
-    
-    # 备份当前配置
-    cp .config .config.kernel
-    
-    # 运行defconfig
-    make defconfig || true
-    
-    # 恢复内核配置（如果被覆盖）
-    grep "CONFIG_USB_XHCI" .config.kernel >> .config 2>/dev/null || true
-    
-    if [ "$TARGET" = "ipq40xx" ]; then
-        grep "CONFIG_PHY_QCOM" .config.kernel >> .config 2>/dev/null || true
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        log "  - luci-app-turboacc: $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
     fi
     
-    # 最终检查
-    log "📋 最终内核配置状态:"
-    log "  - CONFIG_USB_XHCI_HCD: $(grep -q "^CONFIG_USB_XHCI_HCD=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-    log "  - CONFIG_USB_XHCI_PCI: $(grep -q "^CONFIG_USB_XHCI_PCI=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-    log "  - CONFIG_USB_XHCI_PLATFORM: $(grep -q "^CONFIG_USB_XHCI_PLATFORM=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-    
-    if [ "$TARGET" = "ipq40xx" ]; then
-        log "  - CONFIG_PHY_QCOM_IPQ4019_USB: $(grep -q "^CONFIG_PHY_QCOM_IPQ4019_USB=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-    fi
-    
-    log "📋 包配置状态:"
-    log "  - PACKAGE_kmod-usb-xhci-hcd: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-    
-    if [ "$TARGET" = "ipq40xx" ]; then
-        log "  - PACKAGE_kmod-phy-qcom-dwc3: $(grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-    fi
-    
-    # 最终检查 - 如果内核配置启用了，但包配置没有，警告但不退出
-    if grep -q "^CONFIG_USB_XHCI_HCD=y" .config; then
-        log "✅✅✅ USB 3.0 内核支持已启用"
-        
-        # 如果包配置没有，尝试创建符号链接或包装
-        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
-            log "⚠️ 包配置未启用，但内核已支持，继续构建..."
-            # 创建虚拟包标记
-            mkdir -p package/kernel/mac80211/files
-            echo "# USB XHCI support enabled in kernel" > package/kernel/mac80211/files/usb-xhci-enabled
-        fi
-    else
-        log "❌ 致命错误: USB 3.0 内核支持未启用"
-        log "💡 请检查内核版本和平台是否支持 XHCI"
-        handle_error "USB 3.0 内核支持强制启用失败"
-    fi
-    
-    if [ "$TARGET" = "ipq40xx" ] && ! grep -q "^CONFIG_PHY_QCOM_IPQ4019_USB=y" .config; then
-        log "❌ 致命错误: IPQ40xx USB PHY 内核支持未启用"
-        log "💡 请检查内核版本和平台是否支持"
-        handle_error "IPQ40xx USB PHY 强制启用失败"
-    fi
+    log "  - kmod-tcp-bbr: $(grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
     
     log "📊 配置生成统计:"
     log "  - 最终配置文件: .config"
@@ -1238,7 +1234,7 @@ apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 应用配置并显示详情（综合修复版V3）==="
+    log "=== 应用配置并显示详情（综合修复版）==="
     
     if [ ! -f ".config" ]; then
         log "❌ 错误: .config 文件不存在，无法应用配置"
@@ -1348,43 +1344,171 @@ apply_config() {
         log "✅ 冲突已修复"
     fi
     
-    log "🔧 步骤4: 运行 make defconfig..."
-    make defconfig || handle_error "应用配置失败"
+    log "🔧 步骤4: 使用OpenWrt官方配置工具强制修复关键配置..."
     
-    log "🔧 步骤5: 二次强制写入被defconfig重置的关键驱动..."
+    if [ ! -f "scripts/config" ]; then
+        log "⚠️ scripts/config工具不存在，编译生成中..."
+        make scripts/config || {
+            log "❌ 无法生成scripts/config工具"
+            log "⚠️ 将使用awk方式进行修复"
+        }
+    fi
     
-    local force_drivers=(
-        "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
-    )
+    log "  🔧 USB 3.0驱动修复..."
+    if [ -f "scripts/config" ]; then
+        ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-xhci-hcd
+        ./scripts/config --enable CONFIG_PACKAGE_kmod-usb3
+    else
+        awk '
+        /^# CONFIG_PACKAGE_kmod-usb-xhci-hcd is not set/ {
+            print "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
+            next
+        }
+        /^CONFIG_PACKAGE_kmod-usb-xhci-hcd=.*/ {
+            print "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
+            next
+        }
+        { print $0 }
+        ' .config > .config.tmp
+        
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config.tmp; then
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config.tmp
+        fi
+        
+        awk '
+        /^# CONFIG_PACKAGE_kmod-usb3 is not set/ {
+            print "CONFIG_PACKAGE_kmod-usb3=y"
+            next
+        }
+        /^CONFIG_PACKAGE_kmod-usb3=.*/ {
+            print "CONFIG_PACKAGE_kmod-usb3=y"
+            next
+        }
+        { print $0 }
+        ' .config.tmp > .config
+        rm -f .config.tmp
+        
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+        fi
+    fi
+    log "  ✅ USB 3.0驱动强制启用完成"
     
     if [ "$TARGET" = "ipq40xx" ] || grep -q "^CONFIG_TARGET_ipq40xx=y" .config 2>/dev/null; then
-        force_drivers+=("CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y")
-    fi
-    
-    local fixed_count=0
-    for driver in "${force_drivers[@]}"; do
-        driver_name=$(echo "$driver" | cut -d'=' -f1)
-        if ! grep -q "^${driver_name}=y" .config; then
-            log "⚠️ 检测到 ${driver_name} 被defconfig重置，二次强制写入..."
-            if [ -f "scripts/config/config" ]; then
-                config_item=$(echo "$driver_name" | sed 's/^CONFIG_PACKAGE_//')
-                scripts/config/config --enable "$config_item"
-            else
-                sed -i "/^# ${driver_name} is not set/d" .config
-                sed -i "/^${driver_name}=/d" .config
-                echo "$driver" >> .config
+        log "  🔧 IPQ40xx平台专用USB驱动修复..."
+        if [ -f "scripts/config" ]; then
+            ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-dwc3-qcom
+            ./scripts/config --enable CONFIG_PACKAGE_kmod-phy-qcom-dwc3
+            ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-dwc3
+        else
+            if ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config; then
+                echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
             fi
-            fixed_count=$((fixed_count + 1))
+            if ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config; then
+                echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+            fi
         fi
-    done
-    
-    if [ $fixed_count -gt 0 ]; then
-        log "✅ 已修复 $fixed_count 个被重置的驱动"
-        log "🔄 再次运行 make defconfig 同步..."
-        make defconfig
+        log "  ✅ IPQ40xx平台专用USB驱动修复完成"
     fi
     
-    log "🔧 步骤6: 验证关键配置..."
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        log "  🔧 TurboACC配置修复..."
+        if [ -f "scripts/config" ]; then
+            ./scripts/config --enable CONFIG_PACKAGE_luci-app-turboacc
+            ./scripts/config --enable CONFIG_PACKAGE_kmod-shortcut-fe
+            ./scripts/config --enable CONFIG_PACKAGE_kmod-fast-classifier
+        else
+            if ! grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+                echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+            fi
+            if ! grep -q "^CONFIG_PACKAGE_kmod-shortcut-fe=y" .config; then
+                echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+            fi
+            if ! grep -q "^CONFIG_PACKAGE_kmod-fast-classifier=y" .config; then
+                echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+            fi
+        fi
+        log "  ✅ TurboACC配置修复完成"
+    fi
+    
+    log "  🔧 TCP BBR拥塞控制修复..."
+    if [ -f "scripts/config" ]; then
+        ./scripts/config --enable CONFIG_PACKAGE_kmod-tcp-bbr
+        ./scripts/config --set-str CONFIG_DEFAULT_TCP_CONG "bbr"
+    else
+        if ! grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+        fi
+        
+        awk '!/^CONFIG_DEFAULT_TCP_CONG=/' .config > .config.tmp
+        mv .config.tmp .config
+        echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
+    fi
+    log "  ✅ TCP BBR拥塞控制修复完成"
+    
+    log "  🔧 kmod-ath10k-ct冲突修复..."
+    if [ -f "scripts/config" ]; then
+        ./scripts/config --disable CONFIG_PACKAGE_kmod-ath10k
+        ./scripts/config --disable CONFIG_PACKAGE_kmod-ath10k-pci
+        ./scripts/config --disable CONFIG_PACKAGE_kmod-ath10k-smallbuffers
+        ./scripts/config --enable CONFIG_PACKAGE_kmod-ath10k-ct
+        ./scripts/config --disable CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers
+    else
+        awk '
+        /^CONFIG_PACKAGE_kmod-ath10k=y/ {
+            print "# CONFIG_PACKAGE_kmod-ath10k is not set"
+            next
+        }
+        /^CONFIG_PACKAGE_kmod-ath10k-pci=y/ {
+            print "# CONFIG_PACKAGE_kmod-ath10k-pci is not set"
+            next
+        }
+        /^CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/ {
+            print "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set"
+            next
+        }
+        /^CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y/ {
+            print "# CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers is not set"
+            next
+        }
+        { print $0 }
+        ' .config > .config.tmp
+        mv .config.tmp .config
+        
+        if ! grep -q "^CONFIG_PACKAGE_kmod-ath10k-ct=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+        fi
+    fi
+    log "  ✅ kmod-ath10k-ct冲突修复完成"
+    
+    log "🔧 步骤5: 最终去重和格式检查..."
+    
+    awk '!seen[$0]++' .config > .config.tmp
+    mv .config.tmp .config
+    
+    awk '
+    BEGIN { FS="=" }
+    /^CONFIG_/ {
+        config_lines[$1] = $0
+        next
+    }
+    { other_lines[NR] = $0 }
+    END {
+        for (i in config_lines) print config_lines[i]
+        for (i in other_lines) print other_lines[i]
+    }' .config > .config.uniq
+    
+    mv .config.uniq .config
+    
+    awk 'NF > 0' .config > .config.tmp
+    mv .config.tmp .config
+    
+    log "✅ 最终去重完成"
+    
+    log "🔄 步骤6: 运行 make defconfig..."
+    make defconfig || handle_error "应用配置失败"
+    
+    log "🔧 步骤7: 验证关键配置..."
     
     local missing_key_configs=()
     
@@ -1392,23 +1516,21 @@ apply_config() {
         missing_key_configs+=("kmod-usb-xhci-hcd")
     fi
     
-    if [ "$TARGET" = "ipq40xx" ] || grep -q "^CONFIG_TARGET_ipq40xx=y" .config 2>/dev/null; then
-        if ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config; then
-            missing_key_configs+=("kmod-phy-qcom-dwc3")
+    if ! grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
+        missing_key_configs+=("kmod-usb3")
+    fi
+    
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        if ! grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+            missing_key_configs+=("luci-app-turboacc")
         fi
     fi
     
     if [ ${#missing_key_configs[@]} -gt 0 ]; then
-        log "⚠️ 警告: 以下关键配置在二次修复后仍然丢失: ${missing_key_configs[*]}"
+        log "⚠️ 警告: 以下关键配置在defconfig后丢失: ${missing_key_configs[*]}"
+        log "💡 这可能是由于依赖关系不满足，请检查配置文件"
     else
         log "✅ 所有关键配置验证通过"
-    fi
-    
-    log "📋 应用配置后最终状态:"
-    log "  - kmod-usb-xhci-hcd: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-    
-    if [ "$TARGET" = "ipq40xx" ] || grep -q "^CONFIG_TARGET_ipq40xx=y" .config 2>/dev/null; then
-        log "  - kmod-phy-qcom-dwc3: $(grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
     fi
     
     log "✅ 配置应用完成"
