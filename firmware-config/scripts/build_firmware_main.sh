@@ -847,7 +847,7 @@ generate_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 智能配置生成系统 ==="
+    log "=== 智能配置生成系统（最终稳定版）==="
     log "版本: $SELECTED_BRANCH"
     log "目标: $TARGET"
     log "子目标: $SUBTARGET"
@@ -855,11 +855,9 @@ generate_config() {
     log "配置模式: $CONFIG_MODE"
     log "配置文件目录: $CONFIG_DIR"
     
-    # 删除旧配置
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
-    # 生成基础目标配置
     cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
@@ -870,34 +868,49 @@ EOF
     make defconfig || handle_error "基础配置生成失败"
     log "✅ 基础配置生成成功"
     
-    # 🔥 使用统一调用接口（步骤06已确保可用）
-    if [ ! -f "scripts/config-tool" ] || [ ! -x "scripts/config-tool" ]; then
-        log "❌ 统一调用接口不存在，请检查步骤06"
-        handle_error "config-tool缺失"
-    fi
-    
-    local CONFIG_CMD="./scripts/config-tool"
-    log "✅ 使用统一调用接口: scripts/config-tool"
-    
-    # 测试工具是否可用
-    if ! $CONFIG_CMD --help > /dev/null 2>&1; then
-        log "⚠️ config-tool测试失败，尝试重新初始化..."
-        # 重新运行步骤06的配置工具创建逻辑
-        cd $BUILD_DIR
-        make scripts/config > /dev/null 2>&1 || true
-        if [ -f "scripts/config/config" ]; then
-            cat > scripts/config-tool << 'EOF'
+    mkdir -p scripts/config
+    cat > scripts/config/config << 'EOF'
 #!/bin/sh
-exec scripts/config/config "$@"
+# 直接写入.config的简易config工具
+CONFIG_FILE=".config"
+
+case "$1" in
+    --enable)
+        shift
+        sed -i "/^# CONFIG_$1 is not set/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_$1=/d" "$CONFIG_FILE"
+        echo "CONFIG_$1=y" >> "$CONFIG_FILE"
+        ;;
+    --disable)
+        shift
+        sed -i "/^CONFIG_$1=y/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_$1=m/d" "$CONFIG_FILE"
+        echo "# CONFIG_$1 is not set" >> "$CONFIG_FILE"
+        ;;
+    --module)
+        shift
+        sed -i "/^# CONFIG_$1 is not set/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_$1=y/d" "$CONFIG_FILE"
+        echo "CONFIG_$1=m" >> "$CONFIG_FILE"
+        ;;
+    --set-str)
+        shift
+        local name="$1"
+        local value="$2"
+        sed -i "/^CONFIG_$name=/d" "$CONFIG_FILE"
+        echo "CONFIG_$name="$value"" >> "$CONFIG_FILE"
+        shift 2
+        ;;
+esac
 EOF
-            chmod +x scripts/config-tool
-            log "✅ config-tool已重新创建"
-        fi
-    fi
+    chmod +x scripts/config/config
+    ln -sf config scripts/config/config-link
+    
+    local CONFIG_CMD="./scripts/config/config"
+    log "✅ 使用简易config工具"
     
     log "🔧 使用配置工具合并配置..."
     
-    # 1. 应用USB通用配置
     if [ -f "$CONFIG_DIR/usb-generic.config" ]; then
         log "📁 应用USB通用配置..."
         while IFS= read -r line || [ -n "$line" ]; do
@@ -918,7 +931,6 @@ EOF
         log "✅ USB通用配置应用完成"
     fi
     
-    # 2. 应用基础配置
     if [ -f "$CONFIG_DIR/base.config" ]; then
         log "📁 应用基础配置..."
         while IFS= read -r line || [ -n "$line" ]; do
@@ -939,7 +951,6 @@ EOF
         log "✅ 基础配置应用完成"
     fi
     
-    # 3. 应用设备配置或模式配置
     local device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
     if [ -f "$device_config_file" ]; then
         log "📁 应用设备配置: $DEVICE.config..."
@@ -965,7 +976,6 @@ EOF
             line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
             [ -z "$line" ] && continue
             
-            # 跳过TurboACC静态配置
             if echo "$line" | grep -q "luci-app-turboacc|kmod-shortcut-fe|kmod-fast-classifier"; then
                 continue
             fi
@@ -984,7 +994,6 @@ EOF
         log "✅ 正常模式配置应用完成"
     fi
     
-    # 4. 应用平台专用配置
     local platform_config=""
     if [ -f "$CONFIG_DIR/devices/$TARGET.config" ]; then
         platform_config="$CONFIG_DIR/devices/$TARGET.config"
@@ -1012,7 +1021,6 @@ EOF
         log "✅ 平台配置应用完成"
     fi
     
-    # 5. 添加额外包
     if [ -n "$extra_packages" ]; then
         log "📦 添加额外包: $extra_packages"
         echo "$extra_packages" | tr ',' '
@@ -1024,10 +1032,22 @@ EOF
         done
     fi
     
-    # 6. 强制启用关键配置
-    log "🔧 强制启用关键配置..."
-    $CONFIG_CMD --enable PACKAGE_kmod-usb-xhci-hcd
+    log "🔧 强制启用所有关键配置..."
+    
+    $CONFIG_CMD --enable PACKAGE_kmod-usb-core
+    $CONFIG_CMD --enable PACKAGE_kmod-usb2
     $CONFIG_CMD --enable PACKAGE_kmod-usb3
+    $CONFIG_CMD --enable PACKAGE_kmod-usb-xhci-hcd
+    $CONFIG_CMD --enable PACKAGE_kmod-usb-storage
+    $CONFIG_CMD --enable PACKAGE_kmod-scsi-core
+    
+    if [ "$TARGET" = "ipq40xx" ]; then
+        $CONFIG_CMD --enable PACKAGE_kmod-usb-dwc3
+        $CONFIG_CMD --enable PACKAGE_kmod-usb-dwc3-qcom
+        $CONFIG_CMD --enable PACKAGE_kmod-phy-qcom-dwc3
+        log "✅ IPQ40xx平台专用驱动强制启用完成"
+    fi
+    
     $CONFIG_CMD --enable PACKAGE_kmod-tcp-bbr
     $CONFIG_CMD --set-str DEFAULT_TCP_CONG "bbr"
     
@@ -1038,7 +1058,6 @@ EOF
         log "✅ TurboACC配置强制启用完成"
     fi
     
-    # 7. 处理ath10k冲突
     $CONFIG_CMD --disable PACKAGE_kmod-ath10k
     $CONFIG_CMD --disable PACKAGE_kmod-ath10k-pci
     $CONFIG_CMD --disable PACKAGE_kmod-ath10k-smallbuffers
@@ -1046,9 +1065,24 @@ EOF
     $CONFIG_CMD --enable PACKAGE_kmod-ath10k-ct
     log "✅ ath10k冲突修复完成"
     
-    # 8. 最终defconfig
     log "🔄 运行最终 make defconfig..."
     make defconfig || handle_error "最终配置应用失败"
+    
+    log "📋 关键配置状态:"
+    log "  - kmod-usb2: $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+    log "  - kmod-usb3: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+    log "  - kmod-usb-xhci-hcd: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+    
+    if [ "$TARGET" = "ipq40xx" ]; then
+        log "  - kmod-usb-dwc3-qcom: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        log "  - kmod-phy-qcom-dwc3: $(grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+    fi
+    
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        log "  - luci-app-turboacc: $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+    fi
+    
+    log "  - kmod-tcp-bbr: $(grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
     
     log "📊 配置生成统计:"
     log "  - 最终配置文件: .config"
@@ -1590,9 +1624,34 @@ integrate_custom_files() {
     log "自定义文件目录: $custom_dir"
     log "OpenWrt版本: $SELECTED_BRANCH"
     
+    recursive_find_custom_files() {
+        local dir="$1"
+        local files=""
+        if [ -d "$dir" ]; then
+            for item in "$dir"/*; do
+                if [ -f "$item" ]; then
+                    files="$files$item"$'
+'
+                elif [ -d "$item" ]; then
+                    files="$files$(recursive_find_custom_files "$item")"
+                fi
+            done
+        fi
+        echo "$files" | sed '/^$/d'
+    }
+    
+    is_english_filename() {
+        local filename="$1"
+        if echo "$filename" | grep -q '^[a-zA-Z0-9_.-]*$'; then
+            return 0
+        else
+            return 1
+        fi
+    }
+    
     log "🔍 递归查找所有自定义文件..."
     local all_files=$(recursive_find_custom_files "$custom_dir")
-    local file_count=$(echo "$all_files" | wc -l)
+    local file_count=$(echo "$all_files" | grep -c '^' || echo "0")
     
     if [ $file_count -eq 0 ]; then
         log "ℹ️ 未找到任何自定义文件"
@@ -1618,7 +1677,6 @@ integrate_custom_files() {
         local rel_path="${file#$custom_dir/}"
         local file_name=$(basename "$file")
         local file_size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-        local file_type=$(file -b --mime-type "$file" 2>/dev/null | cut -d'/' -f1 || echo "未知")
         
         if is_english_filename "$file_name"; then
             local name_status="✅ 英文"
@@ -1628,13 +1686,13 @@ integrate_custom_files() {
             non_english_count=$((non_english_count + 1))
         fi
         
-        if [[ "$file_name" =~ \.ipk$ ]] || [[ "$file_name" =~ \.IPK$ ]] || [[ "$file_name" =~ \.Ipk$ ]]; then
+        if [[ "$file_name" =~ .ipk$ ]] || [[ "$file_name" =~ .IPK$ ]] || [[ "$file_name" =~ .Ipk$ ]]; then
             local type_desc="📦 IPK包"
             ipk_count=$((ipk_count + 1))
-        elif [[ "$file_name" =~ \.sh$ ]] || [[ "$file_name" =~ \.Sh$ ]] || [[ "$file_name" =~ \.SH$ ]]; then
+        elif [[ "$file_name" =~ .sh$ ]] || [[ "$file_name" =~ .Sh$ ]] || [[ "$file_name" =~ .SH$ ]]; then
             local type_desc="📜 脚本"
             script_count=$((script_count + 1))
-        elif [[ "$file_name" =~ \.conf$ ]] || [[ "$file_name" =~ \.config$ ]] || [[ "$file_name" =~ \.CONF$ ]]; then
+        elif [[ "$file_name" =~ .conf$ ]] || [[ "$file_name" =~ .config$ ]] || [[ "$file_name" =~ .CONF$ ]]; then
             local type_desc="⚙️ 配置"
             config_count=$((config_count + 1))
         else
@@ -1642,7 +1700,8 @@ integrate_custom_files() {
             other_count=$((other_count + 1))
         fi
         
-        printf "%-50s %-10s %-15s %s\n" "$rel_path" "$file_size" "$type_desc" "$name_status"
+        printf "%-50s %-10s %-15s %s
+" "$rel_path" "$file_size" "$type_desc" "$name_status"
         
     done <<< "$all_files"
     
@@ -1690,7 +1749,7 @@ integrate_custom_files() {
         if cp "$src_file" "$dest_path" 2>/dev/null; then
             copied_count=$((copied_count + 1))
             
-            if [[ "$src_file" =~ \.sh$ ]] || [[ "$src_file" =~ \.Sh$ ]] || [[ "$src_file" =~ \.SH$ ]]; then
+            if [[ "$src_file" =~ .sh$ ]] || [[ "$src_file" =~ .Sh$ ]] || [[ "$src_file" =~ .SH$ ]]; then
                 chmod +x "$dest_path" 2>/dev/null || true
             fi
         else
@@ -1730,9 +1789,7 @@ mkdir -p "$SAMBA_DIR" 2>/dev/null || true
 
 for config_file in smb.conf smbpasswd secrets.tdb passdb.tdb lmhosts; do
     if [ ! -f "$SAMBA_DIR/$config_file" ]; then
-        touch "$SAMBA_DIR/$config_file" 2>/dev/null && \
-        echo "  ✅ 创建Samba配置文件: $config_file" >> $LOG_FILE || \
-        echo "  ⚠️ 无法创建Samba配置文件: $config_file" >> $LOG_FILE
+        touch "$SAMBA_DIR/$config_file" 2>/dev/null &&         echo "  ✅ 创建Samba配置文件: $config_file" >> $LOG_FILE ||         echo "  ⚠️ 无法创建Samba配置文件: $config_file" >> $LOG_FILE
     fi
 done
 
@@ -1764,7 +1821,7 @@ if [ -d "$CUSTOM_DIR" ]; then
     while IFS= read -r file; do
         file_name=$(basename "$file")
         
-        if echo "$file_name" | grep -qi "\.ipk$"; then
+        if echo "$file_name" | grep -qi ".ipk$"; then
             IPK_COUNT=$((IPK_COUNT + 1))
             rel_path="${file#$CUSTOM_DIR/}"
             
@@ -1807,7 +1864,7 @@ if [ -d "$CUSTOM_DIR" ]; then
     while IFS= read -r file; do
         file_name=$(basename "$file")
         
-        if echo "$file_name" | grep -qi "\.sh$"; then
+        if echo "$file_name" | grep -qi ".sh$"; then
             SCRIPT_COUNT=$((SCRIPT_COUNT + 1))
             rel_path="${file#$CUSTOM_DIR/}"
             
@@ -1853,11 +1910,11 @@ if [ -d "$CUSTOM_DIR" ]; then
     while IFS= read -r file; do
         file_name=$(basename "$file")
         
-        if echo "$file_name" | grep -qi "\.ipk$"; then
+        if echo "$file_name" | grep -qi ".ipk$"; then
             continue
         fi
         
-        if echo "$file_name" | grep -qi "\.sh$"; then
+        if echo "$file_name" | grep -qi ".sh$"; then
             continue
         fi
         
@@ -1866,7 +1923,7 @@ if [ -d "$CUSTOM_DIR" ]; then
         
         echo "  📋 正在处理 [$OTHER_COUNT]: $rel_path" >> $LOG_FILE
         
-        if echo "$file_name" | grep -qi "\.conf$"; then
+        if echo "$file_name" | grep -qi ".conf$"; then
             echo "      类型: 配置文件" >> $LOG_FILE
             if cp "$file" "/etc/config/$file_name" 2>/dev/null; then
                 echo "      ✅ 复制到 /etc/config/" >> $LOG_FILE
@@ -1975,7 +2032,7 @@ while IFS= read -r file; do
     file_name=$(basename "$file")
     rel_path="${file#$CUSTOM_DIR/}"
     
-    if echo "$file_name" | grep -q '^[a-zA-Z0-9_.\-]*$'; then
+    if echo "$file_name" | grep -q '^[a-zA-Z0-9_.-]*$'; then
         ENGLISH_COUNT=$((ENGLISH_COUNT + 1))
         echo "✅ $rel_path"
     else
@@ -2395,71 +2452,242 @@ verify_sdk_directory() {
 #【build_firmware_main.sh-22-end】
 
 #【build_firmware_main.sh-23】
-verify_config_files() {
-    log "=== 🔍 验证配置文件完整性 ==="
+workflow_step23_pre_build_check() {
+    log "=== 步骤23: 前置错误检查（立即退出版）- 增强版，自动修复配置问题 ==="
     
-    log "检查配置文件目录: $CONFIG_DIR"
+    set -e
+    trap 'echo "❌ 步骤23 失败，退出代码: $?"; exit 1' ERR
     
-    if [ ! -d "$CONFIG_DIR" ]; then
-        log "❌ 配置文件目录不存在: $CONFIG_DIR"
-        return 1
+    echo "🔍 检查当前环境..."
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET"
+        echo "✅ COMPILER_DIR=$COMPILER_DIR"
+        echo "✅ CONFIG_MODE=$CONFIG_MODE"
+    else
+        echo "❌ 错误: 环境文件不存在 ($BUILD_DIR/build_env.sh)"
+        echo "💡 请检查步骤08和步骤09是否成功执行"
+        exit 1
     fi
     
-    local required_files=("base.config" "usb-generic.config")
-    local optional_files=("normal.config")
-    local optional_dirs=("devices")
+    cd $BUILD_DIR
+    echo "=== 🚨 前置错误检查（立即退出版）- 增强版 ==="
     
-    for file in "${required_files[@]}"; do
-        local file_path="$CONFIG_DIR/$file"
-        if [ -f "$file_path" ]; then
-            local line_count=$(wc -l < "$file_path" 2>/dev/null || echo "0")
-            log "✅ 必需文件存在: $file (行数: $line_count)"
+    echo ""
+    echo "1. ✅ 配置文件检查:"
+    if [ -f ".config" ]; then
+        echo "  ✅ .config 文件存在"
+        echo "  📊 文件大小: $(ls -lh .config | awk '{print $5}')"
+        echo "  📝 文件行数: $(wc -l < .config)"
+    else
+        echo "  ❌ 错误: .config 文件不存在"
+        echo "  💡 请检查步骤15智能配置生成是否成功"
+        exit 1
+    fi
+    
+    echo ""
+    echo "2. ✅ SDK目录检查:"
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+        echo "  ✅ SDK目录存在: $COMPILER_DIR"
+        echo "  📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | awk '{print $1}' || echo '未知')"
+        
+        GCC_FILE=$(find "$COMPILER_DIR" -type f -executable           -name "*gcc"           ! -name "*gcc-ar"           ! -name "*gcc-ranlib"           ! -name "*gcc-nm"           ! -path "*dummy-tools*"           ! -path "*scripts*"           2>/dev/null | head -1)
+        
+        if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
+            echo "  ✅ 找到可执行GCC编译器: $(basename "$GCC_FILE")"
+            echo "  🔧 GCC版本: $("$GCC_FILE" --version 2>&1 | head -1)"
         else
-            log "❌ 必需文件缺失: $file"
-            return 1
+            echo "  ❌ 错误: SDK目录中未找到真正的GCC编译器"
+            exit 1
         fi
-    done
+    else
+        echo "  ❌ 错误: SDK目录不存在: $COMPILER_DIR"
+        echo "  💡 请检查步骤09 SDK下载是否成功"
+        exit 1
+    fi
     
-    for file in "${optional_files[@]}"; do
-        local file_path="$CONFIG_DIR/$file"
-        if [ -f "$file_path" ]; then
-            local line_count=$(wc -l < "$file_path" 2>/dev/null || echo "0")
-            log "✅ 可选文件存在: $file (行数: $line_count)"
+    echo ""
+    echo "3. ✅ Feeds检查:"
+    if [ -d "feeds" ]; then
+        echo "  ✅ feeds 目录存在"
+        echo "  📊 feeds目录大小: $(du -sh feeds 2>/dev/null | awk '{print $1}' || echo '未知')"
+    else
+        echo "  ❌ 错误: feeds 目录不存在"
+        echo "  💡 请检查步骤12配置Feeds是否成功"
+        exit 1
+    fi
+    
+    echo ""
+    echo "4. ✅ 磁盘空间检查:"
+    AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
+    AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+    echo "  📊 /mnt 可用空间: ${AVAILABLE_GB}G"
+    
+    if [ $AVAILABLE_GB -lt 10 ]; then
+        echo "  ❌ 错误: 磁盘空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
+        exit 1
+    elif [ $AVAILABLE_GB -lt 20 ]; then
+        echo "  ⚠️ 警告: 磁盘空间较低 (建议至少20G，当前${AVAILABLE_GB}G)"
+    else
+        echo "  ✅ 磁盘空间充足"
+    fi
+    
+    echo ""
+    echo "5. ✅ USB配置检查（自动修复）:"
+    USB_FIXED=0
+    
+    if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
+        echo "  ❌ 错误: USB 3.0驱动未启用 (kmod-usb-xhci-hcd)"
+        echo "  🔧 正在自动修复..."
+        if [ -f "scripts/config/config" ]; then
+            ./scripts/config/config --enable PACKAGE_kmod-usb-xhci-hcd
+            echo "  ✅ 已强制添加: kmod-usb-xhci-hcd"
         else
-            log "ℹ️ 可选文件不存在: $file (可跳过)"
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+            echo "  ✅ 已强制添加: kmod-usb-xhci-hcd"
         fi
-    done
+        USB_FIXED=1
+    else
+        echo "  ✅ kmod-usb-xhci-hcd: 已启用"
+    fi
     
-    for dir in "${optional_dirs[@]}"; do
-        local dir_path="$CONFIG_DIR/$dir"
-        if [ -d "$dir_path" ]; then
-            local config_count=$(find "$dir_path" -type f -name "*.config" 2>/dev/null | wc -l 2>/dev/null || echo "0")
-            log "✅ 目录存在: $dir (包含 $config_count 个配置文件)"
+    if ! grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
+        echo "  ❌ 错误: USB 3.0驱动未启用 (kmod-usb3)"
+        echo "  🔧 正在自动修复..."
+        if [ -f "scripts/config/config" ]; then
+            ./scripts/config/config --enable PACKAGE_kmod-usb3
+            echo "  ✅ 已强制添加: kmod-usb3"
         else
-            log "ℹ️ 可选目录不存在: $dir (可跳过)"
+            echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+            echo "  ✅ 已强制添加: kmod-usb3"
         fi
-    done
+        USB_FIXED=1
+    else
+        echo "  ✅ kmod-usb3: 已启用"
+    fi
     
-    log "🔍 检查TurboACC配置冲突..."
-    local turboacc_found=0
+    if ! grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config; then
+        echo "  ❌ 错误: USB 2.0驱动未启用 (kmod-usb2)"
+        echo "  🔧 正在自动修复..."
+        if [ -f "scripts/config/config" ]; then
+            ./scripts/config/config --enable PACKAGE_kmod-usb2
+            echo "  ✅ 已强制添加: kmod-usb2"
+        else
+            echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+            echo "  ✅ 已强制添加: kmod-usb2"
+        fi
+        USB_FIXED=1
+    else
+        echo "  ✅ kmod-usb2: 已启用"
+    fi
     
-    local config_files=$(find "$CONFIG_DIR" -type f -name "*.config" 2>/dev/null)
-    
-    if [ -n "$config_files" ]; then
-        while IFS= read -r config_file; do
-            if [ -f "$config_file" ] && grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" "$config_file" 2>/dev/null; then
-                log "⚠️ 发现TurboACC静态配置: $(basename "$config_file")"
-                turboacc_found=1
+    if [ "$TARGET" = "ipq40xx" ]; then
+        if ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config; then
+            echo "  ❌ 错误: IPQ40xx平台驱动未启用 (kmod-phy-qcom-dwc3)"
+            echo "  🔧 正在自动修复..."
+            if [ -f "scripts/config/config" ]; then
+                ./scripts/config/config --enable PACKAGE_kmod-phy-qcom-dwc3
+                echo "  ✅ 已强制添加: kmod-phy-qcom-dwc3"
+            else
+                echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+                echo "  ✅ 已强制添加: kmod-phy-qcom-dwc3"
             fi
-        done <<< "$config_files"
+            USB_FIXED=1
+        else
+            echo "  ✅ kmod-phy-qcom-dwc3: 已启用"
+        fi
     fi
     
-    if [ $turboacc_found -eq 1 ]; then
-        log "💡 建议：TurboACC应通过feeds动态添加，不要静态配置"
+    echo ""
+    echo "6. ✅ TurboACC配置检查（自动修复）:"
+    TURBOACC_FIXED=0
+    
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        if ! grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+            echo "  ❌ 错误: TurboACC未启用 (正常模式必需)"
+            echo "  🔧 正在自动修复..."
+            if [ -f "scripts/config/config" ]; then
+                ./scripts/config/config --enable PACKAGE_luci-app-turboacc
+                echo "  ✅ 已强制添加: luci-app-turboacc"
+            else
+                echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+            fi
+            TURBOACC_FIXED=1
+        else
+            echo "  ✅ luci-app-turboacc: 已启用"
+        fi
+    else
+        echo "  ℹ️ 基础模式，不检查TurboACC配置"
     fi
     
-    log "✅ 配置文件验证完成"
-    return 0
+    echo ""
+    echo "7. ✅ TCP BBR拥塞控制检查（自动修复）:"
+    BBR_FIXED=0
+    
+    if ! grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
+        echo "  ❌ 错误: TCP BBR未启用"
+        echo "  🔧 正在自动修复..."
+        if [ -f "scripts/config/config" ]; then
+            ./scripts/config/config --enable PACKAGE_kmod-tcp-bbr
+            echo "  ✅ 已强制添加: kmod-tcp-bbr"
+        else
+            echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+        fi
+        BBR_FIXED=1
+    else
+        echo "  ✅ kmod-tcp-bbr: 已启用"
+    fi
+    
+    if ! grep -q '^CONFIG_DEFAULT_TCP_CONG="bbr"' .config; then
+        echo "  ❌ 错误: TCP BBR未设置为默认拥塞控制算法"
+        echo "  🔧 正在自动修复..."
+        if [ -f "scripts/config/config" ]; then
+            ./scripts/config/config --set-str DEFAULT_TCP_CONG "bbr"
+            echo "  ✅ 已设置: DEFAULT_TCP_CONG="bbr""
+        else
+            sed -i '/^CONFIG_DEFAULT_TCP_CONG=/d' .config
+            echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
+        fi
+        BBR_FIXED=1
+    else
+        echo "  ✅ DEFAULT_TCP_CONG="bbr": 已设置"
+    fi
+    
+    if [ $USB_FIXED -eq 1 ] || [ $TURBOACC_FIXED -eq 1 ] || [ $BBR_FIXED -eq 1 ]; then
+        echo ""
+        echo "🔄 配置已修复，重新运行 make defconfig..."
+        make defconfig
+        
+        echo ""
+        echo "📋 修复后配置状态:"
+        echo "  - kmod-usb2: $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        echo "  - kmod-usb3: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        echo "  - kmod-usb-xhci-hcd: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        
+        if [ "$TARGET" = "ipq40xx" ]; then
+            echo "  - kmod-usb-dwc3-qcom: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+            echo "  - kmod-phy-qcom-dwc3: $(grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        fi
+        
+        if [ "$CONFIG_MODE" = "normal" ]; then
+            echo "  - luci-app-turboacc: $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        fi
+        
+        echo "  - kmod-tcp-bbr: $(grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        echo "  - DEFAULT_TCP_CONG: $(grep "^CONFIG_DEFAULT_TCP_CONG=" .config | cut -d'"' -f2 || echo '未设置')"
+        
+        echo "✅ 所有配置修复完成"
+    else
+        echo ""
+        echo "✅ 所有配置检查通过，无需修复"
+    fi
+    
+    echo ""
+    echo "========================================"
+    echo "✅✅✅ 所有前置检查通过，可以开始编译 ✅✅✅"
+    echo "========================================"
+    
+    log "✅ 步骤23 完成"
 }
 #【build_firmware_main.sh-23-end】
 
