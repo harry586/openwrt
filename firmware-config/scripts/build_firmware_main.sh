@@ -204,76 +204,272 @@ initialize_build_env() {
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
     
-    # 🔥 关键修复：强制编译 config 工具
-    log "=== 强制编译配置工具 ==="
+    # 🔥 关键修复：正确识别和使用编译好的 config 工具
+    log "=== 编译配置工具 ==="
     
-    # 方法1: 直接编译 scripts/config
-    log "🔧 尝试编译 scripts/config..."
-    if make -C scripts/config all; then
-        if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
-            log "✅ scripts/config/config 编译成功"
-        else
-            log "⚠️ 编译完成但文件不存在，尝试其他方法"
-        fi
-    fi
+    local config_tool_created=0
+    local real_config_tool=""
     
-    # 方法2: 编译整个配置系统
-    if [ ! -f "scripts/config/config" ] || [ ! -x "scripts/config/config" ]; then
-        log "🔧 尝试编译整个配置系统..."
-        make scripts/config/mconf || true
-        make scripts/config/conf || true
-    fi
-    
-    # 方法3: 通过 defconfig 触发编译
-    if [ ! -f "scripts/config/config" ] || [ ! -x "scripts/config/config" ]; then
-        log "🔧 通过 defconfig 触发编译..."
-        echo "CONFIG_TARGET_${TARGET}=y" > .config
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
-        make defconfig || true
-    fi
-    
-    # 最终检查
-    if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
-        log "✅ 配置工具就绪: scripts/config/config"
-        log "📋 工具版本: $(scripts/config/config --help 2>&1 | head -1 || echo '可用')"
-    else
-        log "⚠️ 配置工具编译失败，将使用内置简易工具"
-        # 创建简易工具作为后备
-        mkdir -p scripts/config
-        cat > scripts/config/config << 'EOF'
+    # 方法1: 编译 scripts/config
+    log "🔧 尝试方法1: 编译 scripts/config..."
+    if [ -d "scripts/config" ]; then
+        cd scripts/config
+        make
+        cd $BUILD_DIR
+        
+        # 检查编译生成的文件
+        if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
+            log "✅ 方法1成功: 编译生成 conf 工具"
+            
+            # 创建 config 包装脚本，使用 conf
+            mkdir -p scripts/config
+            cat > scripts/config/config << 'EOF'
 #!/bin/sh
-CONFIG_FILE=".config"
+# OpenWrt config 工具包装脚本
+# 使用编译生成的 conf 工具
+
+CONF_TOOL="$(dirname "$0")/conf"
+
+if [ ! -x "$CONF_TOOL" ]; then
+    echo "Error: conf tool not found" >&2
+    exit 1
+fi
+
+# 转换参数格式
 case "$1" in
     --enable)
         shift
-        sed -i "/^# CONFIG_$1 is not set/d" "$CONFIG_FILE"
-        sed -i "/^CONFIG_$1=/d" "$CONFIG_FILE"
-        echo "CONFIG_$1=y" >> "$CONFIG_FILE"
+        "$CONF_TOOL" --defconfig CONFIG_$1=y .config
         ;;
     --disable)
         shift
-        sed -i "/^CONFIG_$1=y/d" "$CONFIG_FILE"
-        sed -i "/^CONFIG_$1=m/d" "$CONFIG_FILE"
-        echo "# CONFIG_$1 is not set" >> "$CONFIG_FILE"
+        "$CONF_TOOL" --defconfig CONFIG_$1=n .config
         ;;
     --module)
         shift
-        sed -i "/^# CONFIG_$1 is not set/d" "$CONFIG_FILE"
-        sed -i "/^CONFIG_$1=y/d" "$CONFIG_FILE"
-        echo "CONFIG_$1=m" >> "$CONFIG_FILE"
+        "$CONF_TOOL" --defconfig CONFIG_$1=m .config
         ;;
     --set-str)
         shift
         name="$1"
         value="$2"
-        sed -i "/^CONFIG_$name=/d" "$CONFIG_FILE"
-        echo "CONFIG_$name="$value"" >> "$CONFIG_FILE"
+        "$CONF_TOOL" --defconfig CONFIG_$name="$value" .config
         shift 2
+        ;;
+    *)
+        "$CONF_TOOL" "$@"
+        ;;
+esac
+EOF
+            chmod +x scripts/config/config
+            log "✅ 创建 config 包装脚本成功"
+            real_config_tool="scripts/config/config"
+            config_tool_created=1
+        elif [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+            log "✅ 方法1成功: 编译生成 config 工具"
+            real_config_tool="scripts/config/config"
+            config_tool_created=1
+        fi
+    fi
+    
+    # 方法2: 直接使用 conf 作为配置工具
+    if [ $config_tool_created -eq 0 ]; then
+        if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
+            log "✅ 方法2成功: 直接使用 conf 工具"
+            mkdir -p scripts/config
+            cat > scripts/config/config << 'EOF'
+#!/bin/sh
+# 使用 conf 工具的包装脚本
+exec "$(dirname "$0")/conf" "$@"
+EOF
+            chmod +x scripts/config/config
+            real_config_tool="scripts/config/config"
+            config_tool_created=1
+        fi
+    fi
+    
+    # 方法3: 使用 mconf (如果可用)
+    if [ $config_tool_created -eq 0 ]; then
+        if [ -f "scripts/config/mconf" ] && [ -x "scripts/config/mconf" ]; then
+            log "✅ 方法3成功: 使用 mconf 工具"
+            mkdir -p scripts/config
+            cat > scripts/config/config << 'EOF'
+#!/bin/sh
+# 使用 mconf 工具的包装脚本
+exec "$(dirname "$0")/mconf" "$@"
+EOF
+            chmod +x scripts/config/config
+            real_config_tool="scripts/config/config"
+            config_tool_created=1
+        fi
+    fi
+    
+    # 方法4: 从 SDK 复制
+    if [ $config_tool_created -eq 0 ] && [ -n "$COMPILER_DIR" ]; then
+        log "🔧 尝试方法4: 从 SDK 目录复制"
+        if [ -f "$COMPILER_DIR/scripts/config/conf" ] && [ -x "$COMPILER_DIR/scripts/config/conf" ]; then
+            mkdir -p scripts/config
+            cp "$COMPILER_DIR/scripts/config/conf" scripts/config/
+            cat > scripts/config/config << 'EOF'
+#!/bin/sh
+exec "$(dirname "$0")/conf" "$@"
+EOF
+            chmod +x scripts/config/config
+            log "✅ 方法4成功: 从 SDK 复制 conf 工具"
+            real_config_tool="scripts/config/config"
+            config_tool_created=1
+        fi
+    fi
+    
+    # 方法5: 创建功能完整的简易工具
+    if [ $config_tool_created -eq 0 ]; then
+        log "🔧 方法5: 创建功能完整的简易 config 工具"
+        mkdir -p scripts/config
+        cat > scripts/config/config << 'EOF'
+#!/bin/bash
+# 功能完整的 config 工具
+CONFIG_FILE=".config"
+
+show_help() {
+    echo "Usage: config [options]"
+    echo "  --enable <symbol>    Enable a configuration option"
+    echo "  --disable <symbol>   Disable a configuration option"
+    echo "  --module <symbol>    Set a configuration option as module"
+    echo "  --set-str <name> <value> Set a string configuration option"
+}
+
+# 确保 .config 存在
+if [ ! -f "$CONFIG_FILE" ]; then
+    touch "$CONFIG_FILE"
+fi
+
+case "$1" in
+    --enable)
+        shift
+        symbol="$1"
+        # 移除 CONFIG_ 前缀（如果存在）
+        symbol="${symbol#CONFIG_}"
+        # 移除 PACKAGE_ 前缀（如果存在）
+        symbol="${symbol#PACKAGE_}"
+        
+        # 删除所有相关的行
+        sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" "$CONFIG_FILE"
+        
+        # 添加启用行
+        echo "CONFIG_PACKAGE_${symbol}=y" >> "$CONFIG_FILE"
+        ;;
+    --disable)
+        shift
+        symbol="$1"
+        symbol="${symbol#CONFIG_}"
+        symbol="${symbol#PACKAGE_}"
+        
+        sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" "$CONFIG_FILE"
+        
+        echo "# CONFIG_PACKAGE_${symbol} is not set" >> "$CONFIG_FILE"
+        ;;
+    --module)
+        shift
+        symbol="$1"
+        symbol="${symbol#CONFIG_}"
+        symbol="${symbol#PACKAGE_}"
+        
+        sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" "$CONFIG_FILE"
+        
+        echo "CONFIG_PACKAGE_${symbol}=m" >> "$CONFIG_FILE"
+        ;;
+    --set-str)
+        shift
+        name="$1"
+        value="$2"
+        name="${name#CONFIG_}"
+        
+        sed -i "/^CONFIG_${name}=/d" "$CONFIG_FILE"
+        echo "CONFIG_${name}="$value"" >> "$CONFIG_FILE"
+        shift 2
+        ;;
+    --help)
+        show_help
+        ;;
+    *)
+        echo "Unknown option: $1"
+        show_help
+        exit 1
         ;;
 esac
 EOF
         chmod +x scripts/config/config
-        log "✅ 创建简易配置工具作为后备"
+        log "✅ 方法5成功: 创建功能完整的简易 config 工具"
+        real_config_tool="scripts/config/config"
+        config_tool_created=1
+    fi
+    
+    # 创建统一调用接口
+    if [ $config_tool_created -eq 1 ]; then
+        log "🔧 创建统一调用接口..."
+        
+        # 记录真实工具路径
+        echo "$real_config_tool" > scripts/.config_tool_path
+        
+        cat > scripts/config-tool << EOF
+#!/bin/sh
+# 统一 config 工具调用接口
+CONFIG_TOOL="$(cat "$(dirname "$0")/.config_tool_path" 2>/dev/null)"
+if [ -n "$CONFIG_TOOL" ] && [ -f "$CONFIG_TOOL" ] && [ -x "$CONFIG_TOOL" ]; then
+    exec "$CONFIG_TOOL" "$@"
+fi
+
+# 备选1: 直接查找
+if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+    echo "scripts/config/config" > "$(dirname "$0")/.config_tool_path"
+    exec scripts/config/config "$@"
+fi
+
+# 备选2: 使用 conf
+if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
+    exec scripts/config/conf "$@"
+fi
+
+echo "Error: config tool not found" >&2
+exit 1
+EOF
+        chmod +x scripts/config-tool
+        log "✅ 统一调用接口创建成功: scripts/config-tool"
+        
+        # 测试工具
+        if scripts/config-tool --help > /dev/null 2>&1; then
+            log "✅ 统一调用接口测试通过"
+        else
+            log "⚠️ 统一调用接口测试失败，但工具可能仍可用"
+        fi
+    fi
+    
+    # 最终验证
+    if [ $config_tool_created -eq 1 ]; then
+        log "✅ 配置工具最终验证通过"
+        log "📁 真实工具路径: $real_config_tool"
+        log "📁 统一调用接口: scripts/config-tool"
+        
+        # 显示工具信息
+        if [ -f "$real_config_tool" ]; then
+            if file "$real_config_tool" | grep -q "ELF"; then
+                log "📋 工具类型: 已编译二进制文件"
+            else
+                log "📋 工具类型: Shell 脚本"
+            fi
+        fi
+    else
+        log "❌ 所有方法都失败，配置工具不存在"
+        handle_error "无法创建配置工具"
     fi
     
     save_env
@@ -731,7 +927,7 @@ generate_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 智能配置生成系统（根源解决版） ==="
+    log "=== 智能配置生成系统（依赖链完整版） ==="
     log "版本: $SELECTED_BRANCH"
     log "目标: $TARGET"
     log "子目标: $SUBTARGET"
@@ -753,77 +949,66 @@ EOF
     make defconfig || handle_error "基础配置生成失败"
     log "✅ 基础配置生成成功"
     
-    # 检查并编译配置工具
-    if [ ! -f "scripts/config/config" ] || [ ! -x "scripts/config/config" ]; then
-        log "🔧 编译配置工具..."
-        make scripts/config || true
-    fi
-    
-    # 使用配置工具或内置工具
+    # 检查配置工具
     local CONFIG_CMD="./scripts/config/config"
     if [ ! -f "$CONFIG_CMD" ] || [ ! -x "$CONFIG_CMD" ]; then
-        log "⚠️ 配置工具不可用，使用内置工具"
-        mkdir -p scripts/config
-        cat > scripts/config/config << 'EOF'
+        if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
+            log "✅ 使用 conf 工具"
+            CONFIG_CMD="./scripts/config/conf"
+        elif [ -f "scripts/config-tool" ] && [ -x "scripts/config-tool" ]; then
+            log "✅ 使用 config-tool"
+            CONFIG_CMD="./scripts/config-tool"
+        else
+            log "⚠️ 使用内置简易工具"
+            mkdir -p scripts/config
+            cat > scripts/config/config << 'EOF'
 #!/bin/bash
 CONFIG_FILE=".config"
 case "$1" in
     --enable)
         shift
-        sed -i "/^# CONFIG_$1 is not set/d" "$CONFIG_FILE"
-        sed -i "/^CONFIG_$1=/d" "$CONFIG_FILE"
-        echo "CONFIG_$1=y" >> "$CONFIG_FILE"
+        symbol="$1"
+        symbol="${symbol#CONFIG_}"
+        symbol="${symbol#PACKAGE_}"
+        sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" "$CONFIG_FILE"
+        echo "CONFIG_PACKAGE_${symbol}=y" >> "$CONFIG_FILE"
         ;;
     --disable)
         shift
-        sed -i "/^CONFIG_$1=y/d" "$CONFIG_FILE"
-        sed -i "/^CONFIG_$1=m/d" "$CONFIG_FILE"
-        echo "# CONFIG_$1 is not set" >> "$CONFIG_FILE"
-        ;;
-    --module)
-        shift
-        sed -i "/^# CONFIG_$1 is not set/d" "$CONFIG_FILE"
-        sed -i "/^CONFIG_$1=y/d" "$CONFIG_FILE"
-        echo "CONFIG_$1=m" >> "$CONFIG_FILE"
-        ;;
-    --set-str)
-        shift
-        name="$1"
-        value="$2"
-        sed -i "/^CONFIG_$name=/d" "$CONFIG_FILE"
-        echo "CONFIG_$name="$value"" >> "$CONFIG_FILE"
-        shift 2
+        symbol="$1"
+        symbol="${symbol#CONFIG_}"
+        symbol="${symbol#PACKAGE_}"
+        sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
+        echo "# CONFIG_PACKAGE_${symbol} is not set" >> "$CONFIG_FILE"
         ;;
 esac
 EOF
-        chmod +x scripts/config/config
-        CONFIG_CMD="./scripts/config/config"
+            chmod +x scripts/config/config
+            CONFIG_CMD="./scripts/config/config"
+        fi
     fi
     
-    log "🔧 使用配置工具合并配置..."
+    log "🔧 使用配置工具: $CONFIG_CMD"
     
-    # 先应用USB通用配置（包含正确的依赖关系）
+    # 应用配置文件
     if [ -f "$CONFIG_DIR/usb-generic.config" ]; then
-        log "📁 应用USB通用配置（包含完整依赖链）..."
+        log "📁 应用USB通用配置..."
         while IFS= read -r line || [ -n "$line" ]; do
             line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
             [ -z "$line" ] && continue
             
             if echo "$line" | grep -q "^CONFIG_.*=y$"; then
-                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                config_name=$(echo "$line" | cut -d'=' -f1 | sed 's/^CONFIG_//')
                 $CONFIG_CMD --enable "$config_name"
-            elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
-                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
-                $CONFIG_CMD --module "$config_name"
-            elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
-                config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//')
-                $CONFIG_CMD --disable "$config_name"
             fi
         done < "$CONFIG_DIR/usb-generic.config"
         log "✅ USB通用配置应用完成"
     fi
     
-    # 应用基础配置
     if [ -f "$CONFIG_DIR/base.config" ]; then
         log "📁 应用基础配置..."
         while IFS= read -r line || [ -n "$line" ]; do
@@ -831,20 +1016,13 @@ EOF
             [ -z "$line" ] && continue
             
             if echo "$line" | grep -q "^CONFIG_.*=y$"; then
-                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                config_name=$(echo "$line" | cut -d'=' -f1 | sed 's/^CONFIG_//')
                 $CONFIG_CMD --enable "$config_name"
-            elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
-                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
-                $CONFIG_CMD --module "$config_name"
-            elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
-                config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//')
-                $CONFIG_CMD --disable "$config_name"
             fi
         done < "$CONFIG_DIR/base.config"
         log "✅ 基础配置应用完成"
     fi
     
-    # 应用设备配置
     local device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
     if [ -f "$device_config_file" ]; then
         log "📁 应用设备配置: $DEVICE.config..."
@@ -853,20 +1031,13 @@ EOF
             [ -z "$line" ] && continue
             
             if echo "$line" | grep -q "^CONFIG_.*=y$"; then
-                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                config_name=$(echo "$line" | cut -d'=' -f1 | sed 's/^CONFIG_//')
                 $CONFIG_CMD --enable "$config_name"
-            elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
-                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
-                $CONFIG_CMD --module "$config_name"
-            elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
-                config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//')
-                $CONFIG_CMD --disable "$config_name"
             fi
         done < "$device_config_file"
         log "✅ 设备配置应用完成"
     fi
     
-    # 根据配置模式应用配置
     if [ "$CONFIG_MODE" = "normal" ] && [ -f "$CONFIG_DIR/normal.config" ]; then
         log "📁 应用正常模式配置..."
         while IFS= read -r line || [ -n "$line" ]; do
@@ -874,14 +1045,8 @@ EOF
             [ -z "$line" ] && continue
             
             if echo "$line" | grep -q "^CONFIG_.*=y$"; then
-                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                config_name=$(echo "$line" | cut -d'=' -f1 | sed 's/^CONFIG_//')
                 $CONFIG_CMD --enable "$config_name"
-            elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
-                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
-                $CONFIG_CMD --module "$config_name"
-            elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
-                config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//')
-                $CONFIG_CMD --disable "$config_name"
             fi
         done < "$CONFIG_DIR/normal.config"
         log "✅ 正常模式配置应用完成"
@@ -902,14 +1067,8 @@ EOF
             [ -z "$line" ] && continue
             
             if echo "$line" | grep -q "^CONFIG_.*=y$"; then
-                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                config_name=$(echo "$line" | cut -d'=' -f1 | sed 's/^CONFIG_//')
                 $CONFIG_CMD --enable "$config_name"
-            elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
-                config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
-                $CONFIG_CMD --module "$config_name"
-            elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
-                config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//')
-                $CONFIG_CMD --disable "$config_name"
             fi
         done < "$platform_config"
         log "✅ 平台配置应用完成"
@@ -927,44 +1086,67 @@ EOF
         done
     fi
     
-    # 关键配置依赖链修复
-    log "🔧 修复关键配置依赖链..."
+    # 🔥 关键修复：完整的依赖链配置
+    log "🔧 启用完整的依赖链..."
     
-    # USB 3.0 依赖链：xhci-hcd -> usb3 -> usb-core
+    # USB 核心依赖链
     $CONFIG_CMD --enable PACKAGE_kmod-usb-core
-    $CONFIG_CMD --enable PACKAGE_kmod-usb-xhci-hcd
-    $CONFIG_CMD --enable PACKAGE_kmod-usb3
     
-    # USB 2.0 依赖链
+    # USB 2.0 完整依赖链
     $CONFIG_CMD --enable PACKAGE_kmod-usb2
     $CONFIG_CMD --enable PACKAGE_kmod-usb-ehci
     $CONFIG_CMD --enable PACKAGE_kmod-usb-ohci
+    $CONFIG_CMD --enable PACKAGE_kmod-usb-uhci
     
-    # 存储依赖链
+    # USB 3.0 完整依赖链 - 关键修复
+    log "🔧 启用 USB 3.0 完整依赖链..."
+    $CONFIG_CMD --enable PACKAGE_kmod-usb-xhci-hcd
+    $CONFIG_CMD --enable PACKAGE_kmod-usb-xhci-hcd-dbg
+    $CONFIG_CMD --enable PACKAGE_kmod-usb-xhci-mtk
+    $CONFIG_CMD --enable PACKAGE_kmod-usb-xhci-pci
+    $CONFIG_CMD --enable PACKAGE_kmod-usb-xhci-plat-hcd
+    $CONFIG_CMD --enable PACKAGE_kmod-usb3
+    
+    # USB 存储完整依赖链
     $CONFIG_CMD --enable PACKAGE_kmod-scsi-core
     $CONFIG_CMD --enable PACKAGE_kmod-usb-storage
+    $CONFIG_CMD --enable PACKAGE_kmod-usb-storage-extras
     $CONFIG_CMD --enable PACKAGE_kmod-usb-storage-uas
     
-    # 文件系统依赖
+    # 文件系统支持
     $CONFIG_CMD --enable PACKAGE_kmod-fs-ext4
     $CONFIG_CMD --enable PACKAGE_kmod-fs-vfat
     $CONFIG_CMD --enable PACKAGE_kmod-fs-exfat
     $CONFIG_CMD --enable PACKAGE_kmod-fs-ntfs3
     $CONFIG_CMD --enable PACKAGE_kmod-nls-utf8
     $CONFIG_CMD --enable PACKAGE_kmod-nls-cp936
+    $CONFIG_CMD --enable PACKAGE_kmod-nls-cp437
+    $CONFIG_CMD --enable PACKAGE_kmod-nls-iso8859-1
     
-    # IPQ40xx 平台专用 USB 依赖链
+    # IPQ40xx 平台专用 USB 完整依赖链
     if [ "$TARGET" = "ipq40xx" ]; then
-        log "🔧 启用 IPQ40xx 平台 USB 驱动链..."
+        log "🔧 启用 IPQ40xx 平台 USB 完整依赖链..."
+        
+        # DWC3 核心
         $CONFIG_CMD --enable PACKAGE_kmod-usb-dwc3
         $CONFIG_CMD --enable PACKAGE_kmod-usb-dwc3-of-simple
+        
+        # QCOM 专用驱动
         $CONFIG_CMD --enable PACKAGE_kmod-usb-dwc3-qcom
         $CONFIG_CMD --enable PACKAGE_kmod-phy-qcom-dwc3
         $CONFIG_CMD --enable PACKAGE_kmod-usb-phy-msm
-        log "✅ IPQ40xx USB 驱动链启用完成"
+        
+        # USB 角色切换
+        $CONFIG_CMD --enable PACKAGE_kmod-usb-dwc3-role-switch
+        
+        # 依赖的内核配置
+        $CONFIG_CMD --enable PACKAGE_kernel
+        $CONFIG_CMD --enable PACKAGE_kmod-usb-common
+        
+        log "✅ IPQ40xx USB 完整依赖链启用完成"
     fi
     
-    # TCP BBR 依赖
+    # TCP BBR 拥塞控制
     $CONFIG_CMD --enable PACKAGE_kmod-tcp-bbr
     $CONFIG_CMD --set-str DEFAULT_TCP_CONG "bbr"
     
@@ -980,6 +1162,7 @@ EOF
         log "🔧 启用 TurboACC 组件..."
         $CONFIG_CMD --enable PACKAGE_luci-app-turboacc
         $CONFIG_CMD --enable PACKAGE_kmod-shortcut-fe
+        $CONFIG_CMD --enable PACKAGE_kmod-shortcut-fe-cm
         $CONFIG_CMD --enable PACKAGE_kmod-fast-classifier
         log "✅ TurboACC 组件启用完成"
     fi
@@ -987,7 +1170,31 @@ EOF
     log "🔄 运行 make defconfig 解决依赖关系..."
     make defconfig || handle_error "最终配置应用失败"
     
-    log "📋 关键配置状态（依赖解决后）:"
+    # 再次检查关键驱动并强制写入（如果仍未启用）
+    log "🔧 二次检查关键驱动..."
+    
+    if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
+        log "⚠️ kmod-usb-xhci-hcd 仍未启用，检查依赖..."
+        # 检查是否因为内核版本问题
+        if grep -q "CONFIG_TARGET_ipq40xx=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+        fi
+        make defconfig
+    fi
+    
+    if ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && [ "$TARGET" = "ipq40xx" ]; then
+        log "⚠️ kmod-phy-qcom-dwc3 仍未启用，强制启用..."
+        echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
+        make defconfig
+    fi
+    
+    log "📋 关键配置状态（最终）:"
     log "  - kmod-usb-core: $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
     log "  - kmod-usb-xhci-hcd: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
     log "  - kmod-usb3: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
