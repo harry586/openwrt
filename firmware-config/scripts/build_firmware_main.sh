@@ -1002,227 +1002,309 @@ apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 应用配置（终极修复版 - 修复prepare-tmpinfo源头）==="
+    log "=== 应用配置并显示详情（综合修复版）==="
     
-    log "🔧 步骤1: 定位并修复prepare-tmpinfo错误源头"
-    
-    # 1.1 检查toplevel.mk
-    if [ -f "include/toplevel.mk" ]; then
-        log "📋 检查 include/toplevel.mk 第82行:"
-        sed -n '80,85p' include/toplevel.mk | sed 's/^/  /'
+    if [ ! -f ".config" ]; then
+        log "❌ 错误: .config 文件不存在，无法应用配置"
+        return 1
     fi
     
-    # 1.2 检查并修复所有Makefile中的bmx7依赖（这是23.05的主要问题）
-    log "🔍 扫描并修复bmx7依赖问题..."
+    log "📋 配置详情:"
+    log "配置文件大小: $(ls -lh .config | awk '{print $5}')"
+    log "配置行数: $(wc -l < .config)"
     
-    find package feeds -name "Makefile" -type f 2>/dev/null | while read makefile; do
-        if grep -q "bmx7" "$makefile" 2>/dev/null; then
-            log "  🔧 修复: $makefile"
-            # 备份原文件
-            cp "$makefile" "$makefile.bak"
-            # 注释掉bmx7依赖行
-            sed -i 's/(DEPENDS.*+bmx7.*)/#  # 临时禁用/g' "$makefile"
-            sed -i 's/(DEPENDS.*bmx7-dnsupdate.*)/#  # 临时禁用/g' "$makefile"
-        fi
-    done
+    local backup_file=".config.bak.$(date +%Y%m%d%H%M%S)"
+    cp .config "$backup_file"
+    log "✅ 配置文件已备份: $backup_file"
     
-    # 1.3 直接删除所有bmx7相关包（它们是23.05的祸根）
-    log "🗑️ 删除所有bmx7相关包..."
-    rm -rf package/feeds/packages/bmx7* 2>/dev/null || true
-    rm -rf feeds/packages/bmx7* 2>/dev/null || true
-    rm -rf feeds/packages/net/bmx7* 2>/dev/null || true
+    log "🔧 步骤1: 标准化配置文件格式..."
     
-    log "✅ 步骤1完成: prepare-tmpinfo错误源头已修复"
-    
-    log "🔧 步骤2: 完全清理所有缓存和临时文件"
-    
-    # 2.1 删除所有可能的配置文件
-    rm -f .config .config.old
-    rm -f .config_bak .config_bak_old
-    rm -f tmp/.config* 2>/dev/null || true
-    rm -f staging_dir/.config* 2>/dev/null || true
-    rm -f staging_dir/tmp/.config* 2>/dev/null || true
-    
-    # 2.2 删除prepare-tmpinfo生成的临时文件
-    rm -rf tmp/info 2>/dev/null || true
-    rm -f tmp/.packageinfo* 2>/dev/null || true
-    rm -f tmp/.targetinfo* 2>/dev/null || true
-    rm -f tmp/.config_fixed 2>/dev/null || true
-    
-    # 2.3 删除配置缓存
-    rm -rf include/config 2>/dev/null || true
-    rm -f include/autoconf.h 2>/dev/null || true
-    rm -f include/config.h 2>/dev/null || true
-    
-    log "✅ 步骤2完成: 所有缓存已清理"
-    
-    log "🔧 步骤3: 创建最小配置文件"
-    
-    cat > .config << EOF
-# 最小配置 - 2026-02-13
-CONFIG_TARGET_${TARGET}=y
-CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
-CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y
-CONFIG_TARGET_ROOTFS_SQUASHFS=y
-CONFIG_TARGET_IMAGES_GZIP=y
-EOF
-    
-    log "📝 最小配置已创建:"
-    cat .config | sed 's/^/  /'
-    
-    log "🔄 步骤4: 运行make defconfig（首次尝试）"
-    
-    # 首次运行，可能会失败，但我们捕获错误并修复
-    set +e
-    make defconfig 2>&1 | tee /tmp/defconfig_1.log
-    local exit_code=${PIPESTATUS[0]}
-    set -e
-    
-    if [ $exit_code -eq 0 ]; then
-        log "✅ make defconfig 成功"
-    else
-        log "❌ make defconfig 失败，退出码: $exit_code"
-        
-        # 检查是否是bmx7错误
-        if grep -q "bmx7" /tmp/defconfig_1.log; then
-            log "⚠️ 检测到bmx7依赖错误，执行深度修复..."
-            
-            # 更彻底的bmx7清理
-            find . -name "Makefile" -type f | while read mf; do
-                if grep -l "bmx7" "$mf" 2>/dev/null; then
-                    log "  🗑️ 删除文件: $mf"
-                    rm -f "$mf"
-                fi
-            done
-            
-            # 删除整个bmx7目录
-            find . -type d -name "bmx7*" 2>/dev/null | while read dir; do
-                log "  🗑️ 删除目录: $dir"
-                rm -rf "$dir"
-            done
-            
-            # 重新运行defconfig
-            log "🔄 重新运行make defconfig..."
-            make defconfig || {
-                log "❌ 深度修复后仍然失败"
-                # 继续执行，不退出
+    if [ -f ".config" ]; then
+        awk '
+        {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+            if ($0 ~ /^#/) {
+                if ($0 ~ /^#CONFIG_/) {
+                    $0 = "# " substr($0, 2)
+                }
+                if ($0 !~ /is not set$/) {
+                    $0 = $0 " is not set"
+                }
             }
-        fi
+            if ($0 ~ /^CONFIG_/) {
+                if ($0 ~ /y$|m$|=$/) {
+                    gsub(/[[:space:]]*=[[:space:]]*y$/, "=y")
+                    gsub(/[[:space:]]*=[[:space:]]*m$/, "=m")
+                    gsub(/[[:space:]]*=[[:space:]]*$/, "=")
+                }
+            }
+            if (length($0) > 0) {
+                print $0
+            }
+        }' .config > .config.tmp
+        
+        mv .config.tmp .config
+        log "✅ 配置文件格式标准化完成"
+    else
+        log "❌ .config 文件在操作过程中丢失"
+        return 1
     fi
     
-    log "🔧 步骤5: 使用scripts/config添加配置（最安全的方式）"
+    log "🔧 步骤2: 清理重复配置行..."
     
-    # 确保scripts/config存在
+    local dup_before=$(wc -l < .config)
+    
+    awk '!seen[$0]++' .config > .config.tmp
+    mv .config.tmp .config
+    
+    local dup_after=$(wc -l < .config)
+    local dup_removed=$((dup_before - dup_after))
+    
+    if [ $dup_removed -gt 0 ]; then
+        log "✅ 已删除 $dup_removed 个完全重复的配置行"
+    fi
+    
+    awk '
+    BEGIN { FS="=" }
+    /^CONFIG_/ {
+        config_lines[$1] = $0
+        next
+    }
+    { other_lines[NR] = $0 }
+    END {
+        for (i in config_lines) print config_lines[i]
+        for (i in other_lines) print other_lines[i]
+    }' .config > .config.uniq
+    
+    mv .config.uniq .config
+    
+    local config_uniq_removed=$((dup_after - $(wc -l < .config)))
+    if [ $config_uniq_removed -gt 0 ]; then
+        log "✅ 已合并 $config_uniq_removed 个重复配置项"
+    fi
+    
+    log "🔧 步骤3: 检查libustream冲突..."
+    
+    local openssl_enabled=0
+    local wolfssl_enabled=0
+    
+    if grep -q "^CONFIG_PACKAGE_libustream-openssl=y" .config; then
+        openssl_enabled=1
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_libustream-wolfssl=y" .config; then
+        wolfssl_enabled=1
+    fi
+    
+    if [ $openssl_enabled -eq 1 ] && [ $wolfssl_enabled -eq 1 ]; then
+        log "⚠️ 发现libustream-openssl和libustream-wolfssl冲突"
+        log "🔧 修复冲突: 禁用libustream-openssl"
+        
+        awk '
+        /^CONFIG_PACKAGE_libustream-openssl=y/ {
+            print "# CONFIG_PACKAGE_libustream-openssl is not set"
+            next
+        }
+        { print $0 }
+        ' .config > .config.tmp
+        mv .config.tmp .config
+        
+        log "✅ 冲突已修复"
+    fi
+    
+    log "🔧 步骤4: 使用OpenWrt官方配置工具强制修复关键配置..."
+    
     if [ ! -f "scripts/config" ]; then
-        log "  🔧 编译scripts/config工具..."
-        make scripts/config > /dev/null 2>&1 || true
+        log "⚠️ scripts/config工具不存在，编译生成中..."
+        make scripts/config || {
+            log "❌ 无法生成scripts/config工具"
+            log "⚠️ 将使用awk方式进行修复"
+        }
     fi
     
+    log "  🔧 USB 3.0驱动修复..."
     if [ -f "scripts/config" ]; then
-        log "  ✅ 使用scripts/config添加配置"
-        
-        # USB基础支持
-        ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-core
-        ./scripts/config --enable CONFIG_PACKAGE_kmod-usb2
-        ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-storage
-        ./scripts/config --enable CONFIG_PACKAGE_kmod-scsi-core
-        
-        # USB3.0支持
         ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-xhci-hcd
         ./scripts/config --enable CONFIG_PACKAGE_kmod-usb3
+    else
+        awk '
+        /^# CONFIG_PACKAGE_kmod-usb-xhci-hcd is not set/ {
+            print "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
+            next
+        }
+        /^CONFIG_PACKAGE_kmod-usb-xhci-hcd=.*/ {
+            print "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
+            next
+        }
+        { print $0 }
+        ' .config > .config.tmp
         
-        # 文件系统支持
-        ./scripts/config --enable CONFIG_PACKAGE_kmod-fs-ext4
-        ./scripts/config --enable CONFIG_PACKAGE_kmod-fs-vfat
-        ./scripts/config --enable CONFIG_PACKAGE_kmod-fs-exfat
-        ./scripts/config --enable CONFIG_PACKAGE_kmod-fs-ntfs3
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config.tmp; then
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config.tmp
+        fi
         
-        # TCP BBR
-        ./scripts/config --enable CONFIG_PACKAGE_kmod-tcp-bbr
-        ./scripts/config --set-str CONFIG_DEFAULT_TCP_CONG "bbr"
+        awk '
+        /^# CONFIG_PACKAGE_kmod-usb3 is not set/ {
+            print "CONFIG_PACKAGE_kmod-usb3=y"
+            next
+        }
+        /^CONFIG_PACKAGE_kmod-usb3=.*/ {
+            print "CONFIG_PACKAGE_kmod-usb3=y"
+            next
+        }
+        { print $0 }
+        ' .config.tmp > .config
+        rm -f .config.tmp
         
-        # TurboACC (normal模式)
-        if [ "$CONFIG_MODE" = "normal" ]; then
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+        fi
+    fi
+    log "  ✅ USB 3.0驱动强制启用完成"
+    
+    if [ "$TARGET" = "ipq40xx" ] || grep -q "^CONFIG_TARGET_ipq40xx=y" .config 2>/dev/null; then
+        log "  🔧 IPQ40xx平台专用USB驱动修复..."
+        if [ -f "scripts/config" ]; then
+            ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-dwc3-qcom
+            ./scripts/config --enable CONFIG_PACKAGE_kmod-phy-qcom-dwc3
+            ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-dwc3
+        else
+            if ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config; then
+                echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
+            fi
+            if ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config; then
+                echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+            fi
+        fi
+        log "  ✅ IPQ40xx平台专用USB驱动修复完成"
+    fi
+    
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        log "  🔧 TurboACC配置修复..."
+        if [ -f "scripts/config" ]; then
             ./scripts/config --enable CONFIG_PACKAGE_luci-app-turboacc
             ./scripts/config --enable CONFIG_PACKAGE_kmod-shortcut-fe
             ./scripts/config --enable CONFIG_PACKAGE_kmod-fast-classifier
+        else
+            if ! grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+                echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+            fi
+            if ! grep -q "^CONFIG_PACKAGE_kmod-shortcut-fe=y" .config; then
+                echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+            fi
+            if ! grep -q "^CONFIG_PACKAGE_kmod-fast-classifier=y" .config; then
+                echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+            fi
+        fi
+        log "  ✅ TurboACC配置修复完成"
+    fi
+    
+    log "  🔧 TCP BBR拥塞控制修复..."
+    if [ -f "scripts/config" ]; then
+        ./scripts/config --enable CONFIG_PACKAGE_kmod-tcp-bbr
+        ./scripts/config --set-str CONFIG_DEFAULT_TCP_CONG "bbr"
+    else
+        if ! grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
         fi
         
-        log "  ✅ 所有配置已通过scripts/config添加"
+        awk '!/^CONFIG_DEFAULT_TCP_CONG=/' .config > .config.tmp
+        mv .config.tmp .config
+        echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
+    fi
+    log "  ✅ TCP BBR拥塞控制修复完成"
+    
+    log "  🔧 kmod-ath10k-ct冲突修复..."
+    if [ -f "scripts/config" ]; then
+        ./scripts/config --disable CONFIG_PACKAGE_kmod-ath10k
+        ./scripts/config --disable CONFIG_PACKAGE_kmod-ath10k-pci
+        ./scripts/config --disable CONFIG_PACKAGE_kmod-ath10k-smallbuffers
+        ./scripts/config --enable CONFIG_PACKAGE_kmod-ath10k-ct
+        ./scripts/config --disable CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers
     else
-        log "  ⚠️ scripts/config不可用，使用直接写入方式"
+        awk '
+        /^CONFIG_PACKAGE_kmod-ath10k=y/ {
+            print "# CONFIG_PACKAGE_kmod-ath10k is not set"
+            next
+        }
+        /^CONFIG_PACKAGE_kmod-ath10k-pci=y/ {
+            print "# CONFIG_PACKAGE_kmod-ath10k-pci is not set"
+            next
+        }
+        /^CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/ {
+            print "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set"
+            next
+        }
+        /^CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y/ {
+            print "# CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers is not set"
+            next
+        }
+        { print $0 }
+        ' .config > .config.tmp
+        mv .config.tmp .config
         
-        cat >> .config << 'EOF'
-CONFIG_PACKAGE_kmod-usb-core=y
-CONFIG_PACKAGE_kmod-usb2=y
-CONFIG_PACKAGE_kmod-usb-storage=y
-CONFIG_PACKAGE_kmod-scsi-core=y
-CONFIG_PACKAGE_kmod-usb-xhci-hcd=y
-CONFIG_PACKAGE_kmod-usb3=y
-CONFIG_PACKAGE_kmod-fs-ext4=y
-CONFIG_PACKAGE_kmod-fs-vfat=y
-CONFIG_PACKAGE_kmod-fs-exfat=y
-CONFIG_PACKAGE_kmod-fs-ntfs3=y
-CONFIG_PACKAGE_kmod-tcp-bbr=y
-CONFIG_DEFAULT_TCP_CONG="bbr"
-EOF
-        
-        if [ "$CONFIG_MODE" = "normal" ]; then
-            cat >> .config << 'EOF'
-CONFIG_PACKAGE_luci-app-turboacc=y
-CONFIG_PACKAGE_kmod-shortcut-fe=y
-CONFIG_PACKAGE_kmod-fast-classifier=y
-EOF
+        if ! grep -q "^CONFIG_PACKAGE_kmod-ath10k-ct=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+        fi
+    fi
+    log "  ✅ kmod-ath10k-ct冲突修复完成"
+    
+    log "🔧 步骤5: 最终去重和格式检查..."
+    
+    awk '!seen[$0]++' .config > .config.tmp
+    mv .config.tmp .config
+    
+    awk '
+    BEGIN { FS="=" }
+    /^CONFIG_/ {
+        config_lines[$1] = $0
+        next
+    }
+    { other_lines[NR] = $0 }
+    END {
+        for (i in config_lines) print config_lines[i]
+        for (i in other_lines) print other_lines[i]
+    }' .config > .config.uniq
+    
+    mv .config.uniq .config
+    
+    awk 'NF > 0' .config > .config.tmp
+    mv .config.tmp .config
+    
+    log "✅ 最终去重完成"
+    
+    log "🔄 步骤6: 运行 make defconfig..."
+    make defconfig || handle_error "应用配置失败"
+    
+    log "🔧 步骤7: 验证关键配置..."
+    
+    local missing_key_configs=()
+    
+    if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
+        missing_key_configs+=("kmod-usb-xhci-hcd")
+    fi
+    
+    if ! grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
+        missing_key_configs+=("kmod-usb3")
+    fi
+    
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        if ! grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+            missing_key_configs+=("luci-app-turboacc")
         fi
     fi
     
-    log "🔧 步骤6: 添加平台专用驱动"
-    
-    case "$TARGET" in
-        "ipq40xx")
-            if [ -f "scripts/config" ]; then
-                ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-dwc3
-                ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-dwc3-qcom
-                ./scripts/config --enable CONFIG_PACKAGE_kmod-phy-qcom-dwc3
-            else
-                echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
-                echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
-                echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
-            fi
-            log "  ✅ IPQ40xx USB驱动已添加"
-            ;;
-        "ramips")
-            if [ -f "scripts/config" ]; then
-                ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-xhci-mtk
-                ./scripts/config --enable CONFIG_PACKAGE_kmod-usb2-mtk
-            else
-                echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
-                echo "CONFIG_PACKAGE_kmod-usb2-mtk=y" >> .config
-            fi
-            log "  ✅ Ramips USB驱动已添加"
-            ;;
-        "ath79")
-            if [ -f "scripts/config" ]; then
-                ./scripts/config --enable CONFIG_PACKAGE_kmod-usb2-ath79
-            else
-                echo "CONFIG_PACKAGE_kmod-usb2-ath79=y" >> .config
-            fi
-            log "  ✅ Ath79 USB驱动已添加"
-            ;;
-    esac
-    
-    log "🔄 步骤7: 最终配置同步"
-    
-    # 最后一次defconfig，忽略错误
-    make defconfig > /tmp/defconfig_final.log 2>&1 || true
-    
-    log "📊 最终配置统计:"
-    log "  📝 .config 总行数: $(wc -l < .config)"
-    log "  ✅ USB3.0: $(grep -q "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo "已启用" || echo "未启用")"
-    log "  ✅ TurboACC: $(grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config && echo "已启用" || echo "未启用")"
-    log "  ✅ TCP BBR: $(grep -q 'CONFIG_DEFAULT_TCP_CONG="bbr"' .config && echo "已启用" || echo "未启用")"
+    if [ ${#missing_key_configs[@]} -gt 0 ]; then
+        log "⚠️ 警告: 以下关键配置在defconfig后丢失: ${missing_key_configs[*]}"
+        log "💡 这可能是由于依赖关系不满足，请检查配置文件"
+    else
+        log "✅ 所有关键配置验证通过"
+    fi
     
     log "✅ 配置应用完成"
+    log "最终配置文件: .config"
+    log "最终配置大小: $(ls -lh .config | awk '{print $5}')"
+    log "最终配置行数: $(wc -l < .config)"
 }
 #【build_firmware_main.sh-16-end】
 
@@ -2666,90 +2748,176 @@ workflow_step22_integrate_custom_files() {
 # ============================================
 #【build_firmware_main.sh-37】
 workflow_step23_pre_build_check() {
-    log "=== 步骤23: 前置错误检查（物理删除第138行版）==="
+    log "=== 步骤23: 前置错误检查（立即退出版）- 增强版，自动修复配置问题 ==="
     
     set -e
     trap 'echo "❌ 步骤23 失败，退出代码: $?"; exit 1' ERR
     
-    cd $BUILD_DIR
-    
-    echo "=== 🚨 物理删除第138行 ==="
-    echo ""
-    
-    echo "1. 🔍 扫描所有.config文件"
-    
-    local config_files=$(find $BUILD_DIR -name ".config*" -type f 2>/dev/null | grep -v ".bak")
-    local deleted_count=0
-    
-    for config_file in $config_files; do
-        if [ -f "$config_file" ]; then
-            local line_count=$(wc -l < "$config_file" 2>/dev/null || echo "0")
-            if [ "$line_count" -ge 138 ]; then
-                local line_138=$(sed -n '138p' "$config_file" 2>/dev/null)
-                echo "  📍 $config_file 第138行: $line_138"
-                
-                # 物理删除第138行
-                sed -i '138d' "$config_file" 2>/dev/null || true
-                deleted_count=$((deleted_count + 1))
-                echo "  ✅ 已删除"
-            fi
-        fi
-    done
-    
-    echo "  ✅ 共删除 $deleted_count 个文件的第138行"
-    
-    echo ""
-    echo "2. 🧪 测试make defconfig"
-    
-    if make defconfig > /tmp/defconfig_test.log 2>&1; then
-        echo "  ✅ make defconfig 通过"
+    echo "🔍 检查当前环境..."
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET"
+        echo "✅ COMPILER_DIR=$COMPILER_DIR"
+        echo "✅ CONFIG_MODE=$CONFIG_MODE"
     else
-        echo "  ❌ make defconfig 仍然失败"
-        
-        if grep -q ".config:138:" /tmp/defconfig_test.log; then
-            echo "  ⚠️ 第138行又出现了！"
-            
-            # 再次物理删除
-            if [ -f ".config" ]; then
-                sed -i '138d' .config 2>/dev/null || true
-                echo "  ✅ 再次删除第138行"
-            fi
-            
-            # 第三次尝试
-            if make defconfig; then
-                echo "  ✅ 第三次尝试成功"
-            else
-                echo "  ❌ 第三次尝试失败"
-            fi
-        else
-            echo "  ❌ 其他错误:"
-            tail -5 /tmp/defconfig_test.log
-        fi
+        echo "❌ 错误: 环境文件不存在 ($BUILD_DIR/build_env.sh)"
+        echo "💡 请检查步骤08和步骤09是否成功执行"
+        exit 1
     fi
     
-    echo ""
-    echo "3. 🛡️ 永久保护第138行"
+    cd $BUILD_DIR
+    echo "=== 🚨 前置错误检查（立即退出版）- 增强版 ==="
     
+    echo ""
+    echo "1. ✅ 配置文件检查:"
     if [ -f ".config" ]; then
-        # 在文件末尾添加保护注释
-        echo "" >> .config
-        echo "# 第138行保护 - 确保此文件永远不会有第138行错误" >> .config
-        echo "# 如果您的OpenWrt 23.05遇到第138行错误，请运行:" >> .config
-        echo "# sed -i '138d' .config" >> .config
+        echo "  ✅ .config 文件存在"
+        echo "  📊 文件大小: $(ls -lh .config | awk '{print $5}')"
+        echo "  📝 文件行数: $(wc -l < .config)"
+    else
+        echo "  ❌ 错误: .config 文件不存在"
+        echo "  💡 请检查步骤15智能配置生成是否成功"
+        exit 1
     fi
     
     echo ""
-    echo "4. ✅ 验证关键配置"
+    echo "2. ✅ SDK目录检查:"
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+        echo "  ✅ SDK目录存在: $COMPILER_DIR"
+        echo "  📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | awk '{print $1}' || echo '未知')"
+        
+        GCC_FILE=$(find "$COMPILER_DIR" -type f -executable \
+          -name "*gcc" \
+          ! -name "*gcc-ar" \
+          ! -name "*gcc-ranlib" \
+          ! -name "*gcc-nm" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
+          2>/dev/null | head -1)
+        
+        if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
+            echo "  ✅ 找到可执行GCC编译器: $(basename "$GCC_FILE")"
+            echo "  🔧 GCC版本: $("$GCC_FILE" --version 2>&1 | head -1)"
+        else
+            echo "  ❌ 错误: SDK目录中未找到真正的GCC编译器"
+            exit 1
+        fi
+    else
+        echo "  ❌ 错误: SDK目录不存在: $COMPILER_DIR"
+        echo "  💡 请检查步骤09 SDK下载是否成功"
+        exit 1
+    fi
     
-    local usb3=$(grep -c "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config 2>/dev/null || echo "0")
-    local turboacc=$(grep -c "CONFIG_PACKAGE_luci-app-turboacc=y" .config 2>/dev/null || echo "0")
+    echo ""
+    echo "3. ✅ Feeds检查:"
+    if [ -d "feeds" ]; then
+        echo "  ✅ feeds 目录存在"
+        echo "  📊 feeds目录大小: $(du -sh feeds 2>/dev/null | awk '{print $1}' || echo '未知')"
+    else
+        echo "  ❌ 错误: feeds 目录不存在"
+        echo "  💡 请检查步骤12配置Feeds是否成功"
+        exit 1
+    fi
     
-    echo "  📊 USB3.0: $([ $usb3 -gt 0 ] && echo "✅" || echo "❌")"
-    echo "  📊 TurboACC: $([ $turboacc -gt 0 ] && echo "✅" || echo "❌")"
+    echo ""
+    echo "4. ✅ 磁盘空间检查:"
+    AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
+    AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+    echo "  📊 /mnt 可用空间: ${AVAILABLE_GB}G"
+    
+    if [ $AVAILABLE_GB -lt 10 ]; then
+        echo "  ❌ 错误: 磁盘空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
+        exit 1
+    elif [ $AVAILABLE_GB -lt 20 ]; then
+        echo "  ⚠️ 警告: 磁盘空间较低 (建议至少20G，当前${AVAILABLE_GB}G)"
+    else
+        echo "  ✅ 磁盘空间充足"
+    fi
+    
+    echo ""
+    echo "5. ✅ USB 3.0配置检查（自动修复）:"
+    USB_FIXED=0
+    
+    if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
+        echo "  ❌ 错误: USB 3.0驱动未启用 (kmod-usb-xhci-hcd)"
+        echo "  🔧 正在自动修复..."
+        if [ -f "scripts/config" ]; then
+            ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-xhci-hcd
+            echo "  ✅ 已强制添加: kmod-usb-xhci-hcd"
+        else
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+            echo "  ✅ 已强制添加: kmod-usb-xhci-hcd"
+        fi
+        USB_FIXED=1
+    else
+        echo "  ✅ kmod-usb-xhci-hcd: 已启用"
+    fi
+    
+    if ! grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
+        echo "  ❌ 错误: USB 3.0驱动未启用 (kmod-usb3)"
+        echo "  🔧 正在自动修复..."
+        if [ -f "scripts/config" ]; then
+            ./scripts/config --enable CONFIG_PACKAGE_kmod-usb3
+            echo "  ✅ 已强制添加: kmod-usb3"
+        else
+            echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+            echo "  ✅ 已强制添加: kmod-usb3"
+        fi
+        USB_FIXED=1
+    else
+        echo "  ✅ kmod-usb3: 已启用"
+    fi
+    
+    echo ""
+    echo "6. ✅ TurboACC配置检查（自动修复）:"
+    TURBOACC_FIXED=0
+    
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        if ! grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+            echo "  ❌ 错误: TurboACC未启用 (正常模式必需)"
+            echo "  🔧 正在自动修复..."
+            if [ -f "scripts/config" ]; then
+                ./scripts/config --enable CONFIG_PACKAGE_luci-app-turboacc
+                echo "  ✅ 已强制添加: luci-app-turboacc"
+            else
+                echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+            fi
+            TURBOACC_FIXED=1
+        else
+            echo "  ✅ luci-app-turboacc: 已启用"
+        fi
+    else
+        echo "  ℹ️ 基础模式，不检查TurboACC配置"
+    fi
+    
+    echo ""
+    echo "7. ✅ TCP BBR拥塞控制检查（自动修复）:"
+    BBR_FIXED=0
+    
+    if ! grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
+        echo "  ❌ 错误: TCP BBR未启用"
+        echo "  🔧 正在自动修复..."
+        if [ -f "scripts/config" ]; then
+            ./scripts/config --enable CONFIG_PACKAGE_kmod-tcp-bbr
+            echo "  ✅ 已强制添加: kmod-tcp-bbr"
+        else
+            echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+        fi
+        BBR_FIXED=1
+    else
+        echo "  ✅ kmod-tcp-bbr: 已启用"
+    fi
+    
+    if [ $USB_FIXED -eq 1 ] || [ $TURBOACC_FIXED -eq 1 ] || [ $BBR_FIXED -eq 1 ]; then
+        echo ""
+        echo "🔄 配置已修复，重新运行 make defconfig..."
+        make defconfig
+        echo "✅ 所有配置修复完成"
+    fi
     
     echo ""
     echo "========================================"
-    echo "✅✅✅ 第138行已被物理删除 ✅✅✅"
+    echo "✅✅✅ 所有前置检查通过，可以开始编译 ✅✅✅"
     echo "========================================"
     
     log "✅ 步骤23 完成"
