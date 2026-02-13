@@ -895,8 +895,8 @@ case "$1" in
         ;;
     --set-str)
         shift
-        local name="$1"
-        local value="$2"
+        name="$1"
+        value="$2"
         sed -i "/^CONFIG_$name=/d" "$CONFIG_FILE"
         echo "CONFIG_$name="$value"" >> "$CONFIG_FILE"
         shift 2
