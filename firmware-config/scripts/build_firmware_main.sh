@@ -659,7 +659,7 @@ generate_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 智能配置生成系统（使用配置文件）==="
+    log "=== 智能配置生成系统（完整修复版）==="
     log "版本: $SELECTED_BRANCH"
     log "目标: $TARGET"
     log "子目标: $SUBTARGET"
@@ -667,197 +667,193 @@ generate_config() {
     log "配置模式: $CONFIG_MODE"
     log "配置文件目录: $CONFIG_DIR"
     
-    if [ -f "/tmp/generating_config.lock" ]; then
-        log "⚠️ 检测到可能的递归调用，跳过重复配置生成"
-        return 0
-    fi
+    rm -f .config .config.old .config.bak*
+    log "✅ 已清理旧配置文件"
     
-    touch "/tmp/generating_config.lock"
+    cat > .config << EOF
+CONFIG_TARGET_${TARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y
+EOF
     
-    rm -f .config .config.old
+    log "🔧 生成基础配置..."
+    make defconfig || handle_error "基础配置生成失败"
+    log "✅ 基础配置生成成功"
     
-    echo "CONFIG_TARGET_${TARGET}=y" > .config
-    echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
-    echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" >> .config
-    echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-    echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
+    cp .config .config.base
     
-    echo "# TCP BBR拥塞控制算法" >> .config
-    echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
-    echo "CONFIG_DEFAULT_TCP_CONG=\"bbr\"" >> .config
-    echo "CONFIG_PACKAGE_tcp-bbr=y" >> .config
-    log "✅ 添加TCP BBR拥塞控制算法支持"
-    
-    log "🔍 使用配置文件进行配置..."
-    apply_configuration_from_files "$extra_packages"
-    
-    rm -f "/tmp/generating_config.lock"
-    
-    log "✅ 配置生成完成"
-}
-
-apply_configuration_from_files() {
-    local extra_packages=$1
-    log "=== 从配置文件应用配置（新逻辑）==="
-    
-    if [ ! -d "$CONFIG_DIR" ]; then
-        log "❌ 配置文件目录不存在: $CONFIG_DIR"
-        handle_error "配置文件目录缺失"
-    fi
-    
-    log "🔍 配置文件结构检查："
-    log "  基础配置目录: $CONFIG_DIR"
-    log "  设备名称: $DEVICE"
-    log "  目标平台: $TARGET"
-    log "  配置模式: $CONFIG_MODE"
-    log "  OpenWrt版本: $SELECTED_BRANCH"
-    
-    local usb_config="$CONFIG_DIR/usb-generic.config"
-    if [ -f "$usb_config" ]; then
-        log "📁 应用USB通用配置: $usb_config"
-        cat "$usb_config" >> .config
-        log "✅ USB通用配置应用完成 (行数: $(wc -l < "$usb_config"))"
-    else
-        log "❌ USB通用配置文件不存在: $usb_config"
-        handle_error "缺少USB通用配置文件"
-    fi
-    
-    local base_config="$CONFIG_DIR/base.config"
-    if [ -f "$base_config" ]; then
-        log "📁 应用基础配置: $base_config"
-        cat "$base_config" >> .config
-        log "✅ 已应用基础配置"
-    else
-        log "❌ 基础配置文件不存在: $base_config"
-        handle_error "缺少基础配置文件"
-    fi
-    
-    log "🔍 模糊搜索平台专用配置..."
-    local platform_config=""
-    
-    log "🔍 在整个config目录中搜索平台配置..."
-    
-    local platform_match=$(find "$CONFIG_DIR" -type f -name "*.config" 2>/dev/null | \
-        xargs grep -l "TARGET.*${TARGET}\|${TARGET}.*TARGET" 2>/dev/null | \
-        grep -v "usb-generic.config" | grep -v "base.config" | grep -v "normal.config" | head -1)
-    
-    if [ -z "$platform_match" ] || [ ! -f "$platform_match" ]; then
-        platform_match=$(find "$CONFIG_DIR" -type f -name "*${TARGET}*.config" 2>/dev/null | head -1)
-    fi
-    
-    if [ -z "$platform_match" ] || [ ! -f "$platform_match" ]; then
+    if [ -f "scripts/config" ]; then
+        log "🔧 使用scripts/config工具合并配置..."
+        
+        if [ -f "$CONFIG_DIR/usb-generic.config" ]; then
+            log "📁 应用USB通用配置..."
+            while IFS= read -r line || [ -n "$line" ]; do
+                line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                [ -z "$line" ] && continue
+                
+                if echo "$line" | grep -q "^CONFIG_.*=y$"; then
+                    config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                    ./scripts/config --enable "$config_name"
+                elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
+                    config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                    ./scripts/config --module "$config_name"
+                elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
+                    config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+                    ./scripts/config --disable "$config_name"
+                fi
+            done < "$CONFIG_DIR/usb-generic.config"
+            log "✅ USB通用配置应用完成"
+        fi
+        
+        if [ -f "$CONFIG_DIR/base.config" ]; then
+            log "📁 应用基础配置..."
+            while IFS= read -r line || [ -n "$line" ]; do
+                line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                [ -z "$line" ] && continue
+                
+                if echo "$line" | grep -q "^CONFIG_.*=y$"; then
+                    config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                    ./scripts/config --enable "$config_name"
+                elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
+                    config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                    ./scripts/config --module "$config_name"
+                elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
+                    config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+                    ./scripts/config --disable "$config_name"
+                fi
+            done < "$CONFIG_DIR/base.config"
+            log "✅ 基础配置应用完成"
+        fi
+        
+        local device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
+        if [ -f "$device_config_file" ]; then
+            log "📁 应用设备配置: $DEVICE.config..."
+            while IFS= read -r line || [ -n "$line" ]; do
+                line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                [ -z "$line" ] && continue
+                
+                if echo "$line" | grep -q "^CONFIG_.*=y$"; then
+                    config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                    ./scripts/config --enable "$config_name"
+                elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
+                    config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                    ./scripts/config --module "$config_name"
+                elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
+                    config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+                    ./scripts/config --disable "$config_name"
+                fi
+            done < "$device_config_file"
+            log "✅ 设备配置应用完成"
+        elif [ "$CONFIG_MODE" = "normal" ] && [ -f "$CONFIG_DIR/normal.config" ]; then
+            log "📁 应用正常模式配置..."
+            while IFS= read -r line || [ -n "$line" ]; do
+                line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                [ -z "$line" ] && continue
+                
+                if echo "$line" | grep -q "luci-app-turboacc|kmod-shortcut-fe|kmod-fast-classifier"; then
+                    continue
+                fi
+                
+                if echo "$line" | grep -q "^CONFIG_.*=y$"; then
+                    config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                    ./scripts/config --enable "$config_name"
+                elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
+                    config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                    ./scripts/config --module "$config_name"
+                elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
+                    config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+                    ./scripts/config --disable "$config_name"
+                fi
+            done < "$CONFIG_DIR/normal.config"
+            log "✅ 正常模式配置应用完成"
+        fi
+        
+        local platform_config=""
         if [ -f "$CONFIG_DIR/devices/$TARGET.config" ]; then
             platform_config="$CONFIG_DIR/devices/$TARGET.config"
-            log "✅ 找到完全匹配的平台配置: $TARGET.config"
-        fi
-    elif [ -n "$platform_match" ] && [ -f "$platform_match" ]; then
-        platform_config="$platform_match"
-        log "✅ 找到模糊匹配的平台配置: $(basename "$platform_match")"
-    fi
-    
-    log "🔍 模糊搜索设备专用配置..."
-    local device_config=""
-    
-    if [ -f "$CONFIG_DIR/devices/$DEVICE.config" ]; then
-        device_config="$CONFIG_DIR/devices/$DEVICE.config"
-        log "✅ 找到完全匹配的设备配置: $DEVICE.config"
-    else
-        log "🔍 进行模糊搜索..."
-        local fuzzy_match=$(find "$CONFIG_DIR/devices" -type f -name "*.config" 2>/dev/null | \
-            grep -i "$DEVICE" | head -1)
-        
-        if [ -n "$fuzzy_match" ] && [ -f "$fuzzy_match" ]; then
-            device_config="$fuzzy_match"
-            log "✅ 找到模糊匹配的设备配置: $(basename "$fuzzy_match")"
-        fi
-    fi
-    
-    if [ -n "$device_config" ]; then
-        log "📋 配置逻辑: 有设备配置时"
-        log "💡 使用配置: usb-generic.config + 设备配置"
-        
-        cat "$device_config" >> .config
-        log "✅ 已应用设备配置: $(basename "$device_config")"
-        
-        log "💡 有设备配置时不应用base.config和normal.config"
-        
-    elif [ "$CONFIG_MODE" = "normal" ]; then
-        log "📋 配置逻辑: 正常模式（无设备配置）"
-        log "💡 使用配置: usb-generic.config + base.config + normal.config"
-        
-        local normal_config="$CONFIG_DIR/normal.config"
-        if [ -f "$normal_config" ]; then
-            log "📁 应用正常模式配置: $normal_config"
-            
-            if grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" "$normal_config"; then
-                log "⚠️ 检测到TurboACC静态配置，正在处理..."
-                local temp_file=$(mktemp)
-                grep -v "CONFIG_PACKAGE_luci-app-turboacc" "$normal_config" | \
-                grep -v "CONFIG_PACKAGE_kmod-shortcut-fe" | \
-                grep -v "CONFIG_PACKAGE_kmod-fast-classifier" > "$temp_file"
-                cat "$temp_file" >> .config
-                rm -f "$temp_file"
-                log "✅ TurboACC配置已移除（将通过feeds动态添加）"
-            else
-                cat "$normal_config" >> .config
-            fi
-            log "✅ 已应用正常模式配置"
         else
-            log "❌ 正常模式配置文件不存在: $normal_config"
-            handle_error "缺少正常模式配置文件"
+            platform_config=$(find "$CONFIG_DIR" -type f -name "*${TARGET}*.config" 2>/dev/null | grep -v "usb-generic" | grep -v "base" | grep -v "normal" | head -1)
         fi
-    else
-        log "📋 配置逻辑: 基础模式（无设备配置）"
-        log "💡 使用配置: usb-generic.config + base.config"
-    fi
-    
-    if [ -n "$platform_config" ]; then
-        log "📋 平台配置规则: 有平台专用配置时，所有情况都加上"
-        log "💡 追加平台配置: $(basename "$platform_config")"
         
-        cat "$platform_config" >> .config
-        log "✅ 已应用平台专用配置"
-    else
-        log "💡 无平台专用配置，跳过平台配置"
-    fi
-    
-    if [ -n "$extra_packages" ]; then
-        log "📦 添加额外包: $extra_packages"
-        echo "$extra_packages" | tr ',' '\n' | while read pkg; do
-            if [ -n "$pkg" ]; then
-                echo "CONFIG_PACKAGE_${pkg}=y" >> .config
-                log "✅ 添加包: $pkg"
-            fi
-        done
-    fi
-    
-    log "📊 配置应用摘要:"
-    log "  ✅ USB通用配置: 已应用"
-    
-    if [ -n "$device_config" ]; then
-        log "  ✅ 设备配置: 已应用 ($(basename "$device_config"))"
-        log "  ⚠️ 基础配置: 已跳过（因为有设备配置）"
-        log "  ⚠️ 正常模式配置: 已跳过（因为有设备配置）"
-    else
-        log "  ✅ 基础配置: 已应用"
+        if [ -n "$platform_config" ] && [ -f "$platform_config" ]; then
+            log "📁 应用平台配置: $(basename "$platform_config")..."
+            while IFS= read -r line || [ -n "$line" ]; do
+                line=$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                [ -z "$line" ] && continue
+                
+                if echo "$line" | grep -q "^CONFIG_.*=y$"; then
+                    config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                    ./scripts/config --enable "$config_name"
+                elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
+                    config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
+                    ./scripts/config --module "$config_name"
+                elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
+                    config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+                    ./scripts/config --disable "$config_name"
+                fi
+            done < "$platform_config"
+            log "✅ 平台配置应用完成"
+        fi
+        
+        if [ -n "$extra_packages" ]; then
+            log "📦 添加额外包: $extra_packages"
+            echo "$extra_packages" | tr ',' '
+' | while read pkg; do
+                if [ -n "$pkg" ]; then
+                    ./scripts/config --enable "PACKAGE_$pkg"
+                    log "✅ 添加包: $pkg"
+                fi
+            done
+        fi
+        
+        log "🔧 强制启用关键配置..."
+        ./scripts/config --enable PACKAGE_kmod-usb-xhci-hcd
+        ./scripts/config --enable PACKAGE_kmod-usb3
+        ./scripts/config --enable PACKAGE_kmod-tcp-bbr
+        ./scripts/config --set-str DEFAULT_TCP_CONG "bbr"
+        
         if [ "$CONFIG_MODE" = "normal" ]; then
-            log "  ✅ 正常模式配置: 已应用"
-        else
-            log "  ℹ️ 正常模式配置: 未应用（基础模式）"
+            ./scripts/config --enable PACKAGE_luci-app-turboacc
+            ./scripts/config --enable PACKAGE_kmod-shortcut-fe
+            ./scripts/config --enable PACKAGE_kmod-fast-classifier
+            log "✅ TurboACC配置强制启用完成"
         fi
-    fi
-    
-    if [ -n "$platform_config" ]; then
-        log "  ✅ 平台专用配置: 已应用 ($(basename "$platform_config"))"
+        
+        ./scripts/config --disable PACKAGE_kmod-ath10k
+        ./scripts/config --disable PACKAGE_kmod-ath10k-pci
+        ./scripts/config --disable PACKAGE_kmod-ath10k-smallbuffers
+        ./scripts/config --disable PACKAGE_kmod-ath10k-ct-smallbuffers
+        ./scripts/config --enable PACKAGE_kmod-ath10k-ct
+        log "✅ ath10k冲突修复完成"
+        
     else
-        log "  ℹ️ 平台专用配置: 未找到"
+        log "❌ scripts/config工具不存在，无法安全合并配置"
+        log "⚠️ 尝试编译scripts/config工具..."
+        make scripts/config || handle_error "无法生成scripts/config工具"
+        generate_config "$extra_packages"
+        return
     fi
     
-    if [ -n "$extra_packages" ]; then
-        log "  ✅ 额外包: 已添加 ($extra_packages)"
+    log "🔄 运行最终 make defconfig..."
+    make defconfig || handle_error "最终配置应用失败"
+    
+    log "🔍 验证配置文件语法..."
+    if grep -q "^[[:space:]]" .config; then
+        log "⚠️ 发现行首空格，正在修复..."
+        sed -i 's/^[[:space:]]*//' .config
     fi
     
-    log "✅ 配置文件应用完成"
+    if ! make defconfig > /dev/null 2>&1; then
+        handle_error "配置文件语法错误"
+    fi
+    log "✅ 配置文件语法验证通过"
+    
+    log "📊 配置生成统计:"
+    log "  - 最终配置文件: .config"
+    log "  - 配置行数: $(wc -l < .config)"
+    log "  - 配置文件大小: $(ls -lh .config | awk '{print $5}')"
+    
+    log "✅ 配置生成完成"
 }
 #【build_firmware_main.sh-13-end】
 
@@ -2521,7 +2517,7 @@ workflow_step14_pre_build_space_check() {
 workflow_step15_generate_config() {
     local extra_packages="$1"
     
-    log "=== 步骤15: 智能配置生成 ==="
+    log "=== 步骤15: 智能配置生成（修复版）==="
     
     set -e
     trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
@@ -3320,7 +3316,6 @@ main() {
     local arg5="$6"
     
     case "$command" in
-        # 基础函数
         "setup_environment")
             setup_environment
             ;;
@@ -3385,7 +3380,6 @@ main() {
             verify_config_files
             ;;
         
-        # 工作流步骤函数 - 与firmware-build.yml完全对应
         "step05_install_basic_tools")
             workflow_step05_install_basic_tools
             ;;
@@ -3450,9 +3444,8 @@ main() {
             workflow_step30_build_summary "$arg1" "$arg2" "$arg3" "$arg4" "$arg5"
             ;;
         
-        # 已废弃的搜索函数（保留兼容性）
         "search_compiler_files")
-            search_compiler_files "$arg1" "$arg2"
+            universal_compiler_search "$arg1" "$arg2"
             ;;
         "universal_compiler_search")
             universal_compiler_search "$arg1" "$arg2"
@@ -3469,7 +3462,7 @@ main() {
             echo "可用命令:"
             echo "  基础函数: setup_environment, create_build_dir, initialize_build_env, etc."
             echo ""
-            echo "  工作流步骤命令（与firmware-build.yml对应）:"
+            echo "  工作流步骤命令:"
             echo "    step05_install_basic_tools, step06_initial_space_check, step07_create_build_dir"
             echo "    step08_initialize_build_env, step09_download_sdk, step10_verify_sdk"
             echo "    step11_add_turboacc, step12_configure_feeds, step13_install_turboacc"
