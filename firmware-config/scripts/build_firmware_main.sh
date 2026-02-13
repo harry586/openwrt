@@ -719,7 +719,7 @@ generate_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 智能配置生成系统（最终稳定版V3-强制驱动锁死+二次写入）==="
+    log "=== 智能配置生成系统（终极锁死版V5-直接修改Kconfig）==="
     log "版本: $SELECTED_BRANCH"
     log "目标: $TARGET"
     log "子目标: $SUBTARGET"
@@ -922,24 +922,59 @@ EOF
         log "🔄 第二次运行 make defconfig..."
         make defconfig || handle_error "二次配置同步失败"
         
-        log "🔧 第三次强制写入（终极锁死）..."
-        force_drivers_phase2=(
-            "PACKAGE_kmod-usb-xhci-hcd"
-        )
+        log "🔧 第三次强制写入（终极锁死-直接修改Kconfig依赖）..."
         
-        if [ "$TARGET" = "ipq40xx" ]; then
-            force_drivers_phase2+=("PACKAGE_kmod-phy-qcom-dwc3")
+        # 先检查哪些驱动仍然缺失
+        missing_xhci=0
+        missing_phy=0
+        
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
+            missing_xhci=1
+            log "⚠️ PACKAGE_kmod-usb-xhci-hcd 仍然被重置，直接写入.config文件并添加依赖..."
+            
+            # 删除可能冲突的行
+            sed -i '/CONFIG_PACKAGE_kmod-usb-xhci-hcd/d' .config
+            sed -i '/# CONFIG_PACKAGE_kmod-usb-xhci-hcd/d' .config
+            
+            # 写入配置
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+            
+            # 同时写入可能依赖的配置
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
         fi
         
-        for driver in "${force_drivers_phase2[@]}"; do
-            if ! grep -q "^CONFIG_${driver}=y" .config; then
-                log "⚠️ $driver 仍然被重置，直接写入.config文件..."
-                echo "CONFIG_${driver}=y" >> .config
-            fi
-        done
+        if [ "$TARGET" = "ipq40xx" ] && ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config; then
+            missing_phy=1
+            log "⚠️ PACKAGE_kmod-phy-qcom-dwc3 仍然被重置，直接写入.config文件并添加依赖..."
+            
+            # 删除可能冲突的行
+            sed -i '/CONFIG_PACKAGE_kmod-phy-qcom-dwc3/d' .config
+            sed -i '/# CONFIG_PACKAGE_kmod-phy-qcom-dwc3/d' .config
+            
+            # 写入配置
+            echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+        fi
         
-        log "🔄 第三次运行 make defconfig..."
-        make defconfig || handle_error "三次配置同步失败"
+        if [ $missing_xhci -eq 1 ] || [ $missing_phy -eq 1 ]; then
+            log "🔄 第三次运行 make defconfig（但保留手动写入的配置）..."
+            
+            # 备份手动写入的配置
+            cp .config .config.custom
+            
+            # 运行defconfig
+            make defconfig || handle_error "三次配置同步失败"
+            
+            # 恢复手动写入的配置（如果被覆盖）
+            for driver in "${force_drivers_phase1[@]}"; do
+                if ! grep -q "^CONFIG_${driver}=y" .config; then
+                    log "⚠️ $driver 被defconfig覆盖，从备份恢复..."
+                    grep "^CONFIG_${driver}=y" .config.custom >> .config 2>/dev/null || echo "CONFIG_${driver}=y" >> .config
+                fi
+            done
+            
+            log "🔄 第四次运行 make defconfig 最终同步..."
+            make defconfig
+        fi
     fi
     
     log "📋 关键配置状态（最终验证）:"
@@ -957,6 +992,19 @@ EOF
     fi
     
     log "  - kmod-tcp-bbr: $(grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+    
+    # 最终强制退出机制 - 如果关键驱动仍未启用，直接报错退出
+    if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
+        log "❌ 致命错误: 经过四次尝试后，kmod-usb-xhci-hcd 仍然未启用"
+        log "💡 请检查内核版本和平台支持情况"
+        handle_error "USB 3.0驱动强制启用失败"
+    fi
+    
+    if [ "$TARGET" = "ipq40xx" ] && ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config; then
+        log "❌ 致命错误: 经过四次尝试后，kmod-phy-qcom-dwc3 仍然未启用"
+        log "💡 请检查内核版本和平台支持情况"
+        handle_error "IPQ40xx平台驱动强制启用失败"
+    fi
     
     log "📊 配置生成统计:"
     log "  - 最终配置文件: .config"
