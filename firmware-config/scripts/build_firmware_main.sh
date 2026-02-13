@@ -204,80 +204,116 @@ initialize_build_env() {
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
     
-    # 🔥 关键修复：修正逻辑判断，方法1成功就直接通过
-    log "=== 强制编译配置工具 ==="
+    # 🔥 关键修复：正确处理scripts/config目录
+    log "=== 编译配置工具 ==="
     
     local config_tool_created=0
+    local config_tool_path="scripts/config"
     
-    # 方法1: 直接编译
+    # 方法1: 直接编译 - OpenWrt编译后生成的是scripts/config/config可执行文件
     log "🔧 尝试方法1: make scripts/config"
     if make scripts/config; then
-        if [ -f "scripts/config" ] && [ -x "scripts/config" ]; then
-            log "✅ 方法1成功: scripts/config工具编译成功"
+        # 检查编译后的实际位置
+        if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+            log "✅ 方法1成功: scripts/config/config 工具编译成功"
+            # 创建符号链接方便调用
+            ln -sf config scripts/config/config-link
+            config_tool_created=1
+        elif [ -f "scripts/config" ] && [ -x "scripts/config" ] && [ ! -d "scripts/config" ]; then
+            log "✅ 方法1成功: scripts/config 工具编译成功"
+            config_tool_created=1
+        else
+            log "⚠️ 方法1编译完成但找不到可执行文件"
+        fi
+    fi
+    
+    # 方法2: 查找已编译的config工具
+    if [ $config_tool_created -eq 0 ]; then
+        log "🔧 尝试方法2: 查找已编译的config工具"
+        if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+            log "✅ 方法2成功: 找到 scripts/config/config"
+            config_tool_created=1
+        elif [ -f "scripts/kconfig/conf" ] && [ -x "scripts/kconfig/conf" ]; then
+            log "✅ 方法2成功: 找到 scripts/kconfig/conf"
+            # 创建兼容调用
+            mkdir -p scripts/config
+            ln -sf ../kconfig/conf scripts/config/config
             config_tool_created=1
         fi
     fi
     
-    # 方法2: 如果方法1失败，手动创建
-    if [ $config_tool_created -eq 0 ]; then
-        log "⚠️ 方法1失败，尝试方法2..."
-        mkdir -p scripts
-        if [ -f "scripts/config.guess" ] && [ -f "scripts/config.sub" ]; then
-            log "🔧 尝试方法2: 手动创建config脚本"
-            cat > scripts/config << 'EOF'
-#!/bin/sh
-# Minimal config script for OpenWrt
-SCRIPT_DIR=$(dirname "$0")
-case "$1" in
-    --enable)
-        shift
-        echo "CONFIG_$1=y" >> .config
-        ;;
-    --disable)
-        shift
-        echo "# CONFIG_$1 is not set" >> .config
-        ;;
-    --module)
-        shift
-        echo "CONFIG_$1=m" >> .config
-        ;;
-    --set-str)
-        shift
-        echo "CONFIG_$1="$2"" >> .config
-        shift
-        ;;
-esac
-EOF
+    # 方法3: 从SDK复制
+    if [ $config_tool_created -eq 0 ] && [ -n "$COMPILER_DIR" ]; then
+        log "🔧 尝试方法3: 从SDK目录复制"
+        if [ -f "$COMPILER_DIR/scripts/config/config" ] && [ -x "$COMPILER_DIR/scripts/config/config" ]; then
+            mkdir -p scripts/config
+            cp "$COMPILER_DIR/scripts/config/config" scripts/config/
+            chmod +x scripts/config/config
+            log "✅ 方法3成功: 从SDK复制 config 工具"
+            config_tool_created=1
+        elif [ -f "$COMPILER_DIR/scripts/config" ] && [ -x "$COMPILER_DIR/scripts/config" ] && [ ! -d "$COMPILER_DIR/scripts/config" ]; then
+            cp "$COMPILER_DIR/scripts/config" scripts/
             chmod +x scripts/config
-            if [ -f "scripts/config" ] && [ -x "scripts/config" ]; then
-                log "✅ 方法2成功: 手动创建scripts/config工具"
-                config_tool_created=1
-            fi
+            log "✅ 方法3成功: 从SDK复制 config 工具"
+            config_tool_created=1
         fi
     fi
     
-    # 方法3: 从SDK复制
+    # 方法4: 创建包装脚本（终极方案）
     if [ $config_tool_created -eq 0 ]; then
-        log "⚠️ 方法2失败，尝试方法3..."
-        if [ -n "$COMPILER_DIR" ] && [ -f "$COMPILER_DIR/scripts/config" ]; then
-            log "🔧 尝试方法3: 从SDK目录复制"
-            mkdir -p scripts
-            cp "$COMPILER_DIR/scripts/config" scripts/
-            chmod +x scripts/config
-            if [ -f "scripts/config" ] && [ -x "scripts/config" ]; then
-                log "✅ 方法3成功: 从SDK复制scripts/config工具"
-                config_tool_created=1
-            fi
+        log "🔧 尝试方法4: 创建包装脚本"
+        mkdir -p scripts/config
+        cat > scripts/config/config << 'EOF'
+#!/bin/sh
+# OpenWrt config 工具包装脚本
+KCONFIG_DIR="$(dirname "$0")/../kconfig"
+if [ -f "$KCONFIG_DIR/conf" ] && [ -x "$KCONFIG_DIR/conf" ]; then
+    exec "$KCONFIG_DIR/conf" "$@"
+else
+    echo "Error: config tool not found" >&2
+    exit 1
+fi
+EOF
+        chmod +x scripts/config/config
+        # 创建兼容调用
+        ln -sf config scripts/config/config-link
+        if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+            log "✅ 方法4成功: 创建 config 包装脚本"
+            config_tool_created=1
         fi
+    fi
+    
+    # 创建便捷调用脚本（统一接口）
+    if [ $config_tool_created -eq 1 ]; then
+        log "🔧 创建统一调用接口..."
+        cat > scripts/config-tool << 'EOF'
+#!/bin/sh
+# 统一 config 工具调用接口
+if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+    exec scripts/config/config "$@"
+elif [ -f "scripts/config" ] && [ -x "scripts/config" ] && [ ! -d "scripts/config" ]; then
+    exec scripts/config "$@"
+else
+    echo "Error: config tool not found" >&2
+    exit 1
+fi
+EOF
+        chmod +x scripts/config-tool
+        log "✅ 统一调用接口创建成功: scripts/config-tool"
     fi
     
     # 最终验证
     if [ $config_tool_created -eq 1 ]; then
-        log "✅ scripts/config工具最终验证通过"
-        ls -la scripts/config 2>/dev/null || log "⚠️ 无法显示文件信息"
+        log "✅ 配置工具最终验证通过"
+        if [ -f "scripts/config-tool" ]; then
+            log "📁 可用命令: scripts/config-tool"
+        fi
+        if [ -f "scripts/config/config" ]; then
+            log "📁 工具位置: scripts/config/config"
+        fi
     else
-        log "❌ 所有方法都失败，scripts/config工具不存在"
-        handle_error "无法创建scripts/config工具"
+        log "❌ 所有方法都失败，配置工具不存在"
+        handle_error "无法创建配置工具"
     fi
     
     save_env
@@ -758,18 +794,23 @@ EOF
     make defconfig || handle_error "基础配置生成失败"
     log "✅ 基础配置生成成功"
     
-    # 🔥 验证scripts/config工具（步骤06已确保存在）
-    if [ ! -f "scripts/config" ]; then
-        log "❌ scripts/config工具不存在，步骤06应该已创建"
-        handle_error "scripts/config工具缺失"
+    # 🔥 使用统一调用接口
+    local CONFIG_CMD=""
+    if [ -f "scripts/config-tool" ] && [ -x "scripts/config-tool" ]; then
+        CONFIG_CMD="./scripts/config-tool"
+        log "✅ 使用统一调用接口: scripts/config-tool"
+    elif [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+        CONFIG_CMD="./scripts/config/config"
+        log "✅ 使用 config/config 工具"
+    elif [ -f "scripts/config" ] && [ -x "scripts/config" ] && [ ! -d "scripts/config" ]; then
+        CONFIG_CMD="./scripts/config"
+        log "✅ 使用 scripts/config 工具"
+    else
+        log "❌ 找不到 config 工具，请检查步骤06"
+        handle_error "config工具缺失"
     fi
-    if [ ! -x "scripts/config" ]; then
-        log "🔧 修复scripts/config执行权限"
-        chmod +x scripts/config
-    fi
-    log "✅ scripts/config工具已就绪"
     
-    log "🔧 使用scripts/config工具合并配置..."
+    log "🔧 使用配置工具合并配置..."
     
     # 1. 应用USB通用配置
     if [ -f "$CONFIG_DIR/usb-generic.config" ]; then
@@ -780,13 +821,13 @@ EOF
             
             if echo "$line" | grep -q "^CONFIG_.*=y$"; then
                 config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
-                ./scripts/config --enable "$config_name"
+                $CONFIG_CMD --enable "$config_name"
             elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
                 config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
-                ./scripts/config --module "$config_name"
+                $CONFIG_CMD --module "$config_name"
             elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
                 config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
-                ./scripts/config --disable "$config_name"
+                $CONFIG_CMD --disable "$config_name"
             fi
         done < "$CONFIG_DIR/usb-generic.config"
         log "✅ USB通用配置应用完成"
@@ -801,13 +842,13 @@ EOF
             
             if echo "$line" | grep -q "^CONFIG_.*=y$"; then
                 config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
-                ./scripts/config --enable "$config_name"
+                $CONFIG_CMD --enable "$config_name"
             elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
                 config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
-                ./scripts/config --module "$config_name"
+                $CONFIG_CMD --module "$config_name"
             elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
                 config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
-                ./scripts/config --disable "$config_name"
+                $CONFIG_CMD --disable "$config_name"
             fi
         done < "$CONFIG_DIR/base.config"
         log "✅ 基础配置应用完成"
@@ -823,13 +864,13 @@ EOF
             
             if echo "$line" | grep -q "^CONFIG_.*=y$"; then
                 config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
-                ./scripts/config --enable "$config_name"
+                $CONFIG_CMD --enable "$config_name"
             elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
                 config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
-                ./scripts/config --module "$config_name"
+                $CONFIG_CMD --module "$config_name"
             elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
                 config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
-                ./scripts/config --disable "$config_name"
+                $CONFIG_CMD --disable "$config_name"
             fi
         done < "$device_config_file"
         log "✅ 设备配置应用完成"
@@ -846,13 +887,13 @@ EOF
             
             if echo "$line" | grep -q "^CONFIG_.*=y$"; then
                 config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
-                ./scripts/config --enable "$config_name"
+                $CONFIG_CMD --enable "$config_name"
             elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
                 config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
-                ./scripts/config --module "$config_name"
+                $CONFIG_CMD --module "$config_name"
             elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
                 config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
-                ./scripts/config --disable "$config_name"
+                $CONFIG_CMD --disable "$config_name"
             fi
         done < "$CONFIG_DIR/normal.config"
         log "✅ 正常模式配置应用完成"
@@ -874,13 +915,13 @@ EOF
             
             if echo "$line" | grep -q "^CONFIG_.*=y$"; then
                 config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
-                ./scripts/config --enable "$config_name"
+                $CONFIG_CMD --enable "$config_name"
             elif echo "$line" | grep -q "^CONFIG_.*=m$"; then
                 config_name=$(echo "$line" | cut -d'=' -f1 | cut -d'_' -f2-)
-                ./scripts/config --module "$config_name"
+                $CONFIG_CMD --module "$config_name"
             elif echo "$line" | grep -q "^# CONFIG_.* is not set$"; then
                 config_name=$(echo "$line" | sed 's/^# CONFIG_//' | sed 's/ is not set//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
-                ./scripts/config --disable "$config_name"
+                $CONFIG_CMD --disable "$config_name"
             fi
         done < "$platform_config"
         log "✅ 平台配置应用完成"
@@ -892,7 +933,7 @@ EOF
         echo "$extra_packages" | tr ',' '
 ' | while read pkg; do
             if [ -n "$pkg" ]; then
-                ./scripts/config --enable "PACKAGE_$pkg"
+                $CONFIG_CMD --enable "PACKAGE_$pkg"
                 log "✅ 添加包: $pkg"
             fi
         done
@@ -900,24 +941,24 @@ EOF
     
     # 6. 强制启用关键配置
     log "🔧 强制启用关键配置..."
-    ./scripts/config --enable PACKAGE_kmod-usb-xhci-hcd
-    ./scripts/config --enable PACKAGE_kmod-usb3
-    ./scripts/config --enable PACKAGE_kmod-tcp-bbr
-    ./scripts/config --set-str DEFAULT_TCP_CONG "bbr"
+    $CONFIG_CMD --enable PACKAGE_kmod-usb-xhci-hcd
+    $CONFIG_CMD --enable PACKAGE_kmod-usb3
+    $CONFIG_CMD --enable PACKAGE_kmod-tcp-bbr
+    $CONFIG_CMD --set-str DEFAULT_TCP_CONG "bbr"
     
     if [ "$CONFIG_MODE" = "normal" ]; then
-        ./scripts/config --enable PACKAGE_luci-app-turboacc
-        ./scripts/config --enable PACKAGE_kmod-shortcut-fe
-        ./scripts/config --enable PACKAGE_kmod-fast-classifier
+        $CONFIG_CMD --enable PACKAGE_luci-app-turboacc
+        $CONFIG_CMD --enable PACKAGE_kmod-shortcut-fe
+        $CONFIG_CMD --enable PACKAGE_kmod-fast-classifier
         log "✅ TurboACC配置强制启用完成"
     fi
     
     # 7. 处理ath10k冲突
-    ./scripts/config --disable PACKAGE_kmod-ath10k
-    ./scripts/config --disable PACKAGE_kmod-ath10k-pci
-    ./scripts/config --disable PACKAGE_kmod-ath10k-smallbuffers
-    ./scripts/config --disable PACKAGE_kmod-ath10k-ct-smallbuffers
-    ./scripts/config --enable PACKAGE_kmod-ath10k-ct
+    $CONFIG_CMD --disable PACKAGE_kmod-ath10k
+    $CONFIG_CMD --disable PACKAGE_kmod-ath10k-pci
+    $CONFIG_CMD --disable PACKAGE_kmod-ath10k-smallbuffers
+    $CONFIG_CMD --disable PACKAGE_kmod-ath10k-ct-smallbuffers
+    $CONFIG_CMD --enable PACKAGE_kmod-ath10k-ct
     log "✅ ath10k冲突修复完成"
     
     # 8. 最终defconfig
