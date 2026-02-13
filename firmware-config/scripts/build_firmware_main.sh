@@ -3207,14 +3207,7 @@ workflow_step23_pre_build_check() {
         echo "  ✅ SDK目录存在: $COMPILER_DIR"
         echo "  📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | awk '{print $1}' || echo '未知')"
         
-        GCC_FILE=$(find "$COMPILER_DIR" -type f -executable \
-          -name "*gcc" \
-          ! -name "*gcc-ar" \
-          ! -name "*gcc-ranlib" \
-          ! -name "*gcc-nm" \
-          ! -path "*dummy-tools*" \
-          ! -path "*scripts*" \
-          2>/dev/null | head -1)
+        GCC_FILE=$(find "$COMPILER_DIR" -type f -executable           -name "*gcc"           ! -name "*gcc-ar"           ! -name "*gcc-ranlib"           ! -name "*gcc-nm"           ! -path "*dummy-tools*"           ! -path "*scripts*"           2>/dev/null | head -1)
         
         if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
             echo "  ✅ 找到可执行GCC编译器: $(basename "$GCC_FILE")"
@@ -3256,14 +3249,14 @@ workflow_step23_pre_build_check() {
     fi
     
     echo ""
-    echo "5. ✅ USB 3.0配置检查（自动修复）:"
+    echo "5. ✅ USB配置检查（自动修复）:"
     USB_FIXED=0
     
     if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
         echo "  ❌ 错误: USB 3.0驱动未启用 (kmod-usb-xhci-hcd)"
         echo "  🔧 正在自动修复..."
-        if [ -f "scripts/config" ]; then
-            ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-xhci-hcd
+        if [ -f "scripts/config/config" ]; then
+            ./scripts/config/config --enable PACKAGE_kmod-usb-xhci-hcd
             echo "  ✅ 已强制添加: kmod-usb-xhci-hcd"
         else
             echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
@@ -3277,8 +3270,8 @@ workflow_step23_pre_build_check() {
     if ! grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
         echo "  ❌ 错误: USB 3.0驱动未启用 (kmod-usb3)"
         echo "  🔧 正在自动修复..."
-        if [ -f "scripts/config" ]; then
-            ./scripts/config --enable CONFIG_PACKAGE_kmod-usb3
+        if [ -f "scripts/config/config" ]; then
+            ./scripts/config/config --enable PACKAGE_kmod-usb3
             echo "  ✅ 已强制添加: kmod-usb3"
         else
             echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
@@ -3289,6 +3282,23 @@ workflow_step23_pre_build_check() {
         echo "  ✅ kmod-usb3: 已启用"
     fi
     
+    if [ "$TARGET" = "ipq40xx" ]; then
+        if ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config; then
+            echo "  ❌ 错误: IPQ40xx平台驱动未启用 (kmod-phy-qcom-dwc3)"
+            echo "  🔧 正在自动修复..."
+            if [ -f "scripts/config/config" ]; then
+                ./scripts/config/config --enable PACKAGE_kmod-phy-qcom-dwc3
+                echo "  ✅ 已强制添加: kmod-phy-qcom-dwc3"
+            else
+                echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+                echo "  ✅ 已强制添加: kmod-phy-qcom-dwc3"
+            fi
+            USB_FIXED=1
+        else
+            echo "  ✅ kmod-phy-qcom-dwc3: 已启用"
+        fi
+    fi
+    
     echo ""
     echo "6. ✅ TurboACC配置检查（自动修复）:"
     TURBOACC_FIXED=0
@@ -3297,8 +3307,8 @@ workflow_step23_pre_build_check() {
         if ! grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
             echo "  ❌ 错误: TurboACC未启用 (正常模式必需)"
             echo "  🔧 正在自动修复..."
-            if [ -f "scripts/config" ]; then
-                ./scripts/config --enable CONFIG_PACKAGE_luci-app-turboacc
+            if [ -f "scripts/config/config" ]; then
+                ./scripts/config/config --enable PACKAGE_luci-app-turboacc
                 echo "  ✅ 已强制添加: luci-app-turboacc"
             else
                 echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
@@ -3318,8 +3328,8 @@ workflow_step23_pre_build_check() {
     if ! grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
         echo "  ❌ 错误: TCP BBR未启用"
         echo "  🔧 正在自动修复..."
-        if [ -f "scripts/config" ]; then
-            ./scripts/config --enable CONFIG_PACKAGE_kmod-tcp-bbr
+        if [ -f "scripts/config/config" ]; then
+            ./scripts/config/config --enable PACKAGE_kmod-tcp-bbr
             echo "  ✅ 已强制添加: kmod-tcp-bbr"
         else
             echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
