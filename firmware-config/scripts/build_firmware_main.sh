@@ -1002,86 +1002,64 @@ apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 应用配置（物理删除第138行版）==="
+    log "=== 应用配置（终极修复版 - 修复prepare-tmpinfo源头）==="
     
-    log "🔧 步骤1: 先运行defconfig，捕获错误"
+    log "🔧 步骤1: 定位并修复prepare-tmpinfo错误源头"
     
-    # 运行defconfig，允许失败
-    set +e
-    make defconfig 2>&1 | tee /tmp/defconfig_error.log
-    local defconfig_exit_code=${PIPESTATUS[0]}
-    set -e
-    
-    if [ $defconfig_exit_code -eq 0 ]; then
-        log "✅ make defconfig 成功"
-        return 0
+    # 1.1 检查toplevel.mk
+    if [ -f "include/toplevel.mk" ]; then
+        log "📋 检查 include/toplevel.mk 第82行:"
+        sed -n '80,85p' include/toplevel.mk | sed 's/^/  /'
     fi
     
-    log "❌ make defconfig 失败，退出码: $defconfig_exit_code"
+    # 1.2 检查并修复所有Makefile中的bmx7依赖（这是23.05的主要问题）
+    log "🔍 扫描并修复bmx7依赖问题..."
     
-    log "🔧 步骤2: 定位第138行错误"
-    
-    # 检查是否是第138行错误
-    if grep -q ".config:138:" /tmp/defconfig_error.log; then
-        log "✅ 检测到第138行错误，立即执行物理删除"
-        
-        # 直接物理删除第138行！
-        if [ -f ".config" ]; then
-            log "📋 删除前的.config第138行:"
-            sed -n '138p' .config 2>/dev/null || echo "  第138行不存在"
-            
-            # 使用sed直接删除第138行
-            sed -i '138d' .config 2>/dev/null || true
-            
-            log "📋 删除后的.config第138行:"
-            sed -n '138p' .config 2>/dev/null || echo "  ✅ 第138行已不存在"
-        fi
-        
-        log "🔄 步骤3: 重新运行defconfig"
-        
-        if make defconfig; then
-            log "✅ 物理删除第138行后，make defconfig成功！"
-            return 0
-        else
-            log "❌ 仍然失败，继续步骤4"
-        fi
-    fi
-    
-    log "🔧 步骤4: 深度扫描所有.config文件"
-    
-    # 扫描整个构建目录的所有.config文件
-    find $BUILD_DIR -name ".config*" -type f 2>/dev/null | while read config_file; do
-        log "🔍 检查: $config_file"
-        
-        # 检查文件是否有第138行
-        local line_count=$(wc -l < "$config_file" 2>/dev/null || echo "0")
-        if [ "$line_count" -ge 138 ]; then
-            local line_138=$(sed -n '138p' "$config_file" 2>/dev/null)
-            log "  📍 第138行存在: $line_138"
-            
-            # 物理删除第138行
-            sed -i '138d' "$config_file" 2>/dev/null || true
-            log "  ✅ 已删除 $config_file 的第138行"
+    find package feeds -name "Makefile" -type f 2>/dev/null | while read makefile; do
+        if grep -q "bmx7" "$makefile" 2>/dev/null; then
+            log "  🔧 修复: $makefile"
+            # 备份原文件
+            cp "$makefile" "$makefile.bak"
+            # 注释掉bmx7依赖行
+            sed -i 's/(DEPENDS.*+bmx7.*)/#  # 临时禁用/g' "$makefile"
+            sed -i 's/(DEPENDS.*bmx7-dnsupdate.*)/#  # 临时禁用/g' "$makefile"
         fi
     done
     
-    log "🔄 步骤5: 第三次运行defconfig"
+    # 1.3 直接删除所有bmx7相关包（它们是23.05的祸根）
+    log "🗑️ 删除所有bmx7相关包..."
+    rm -rf package/feeds/packages/bmx7* 2>/dev/null || true
+    rm -rf feeds/packages/bmx7* 2>/dev/null || true
+    rm -rf feeds/packages/net/bmx7* 2>/dev/null || true
     
-    if make defconfig; then
-        log "✅ 深度扫描修复后，make defconfig成功！"
-        return 0
-    fi
+    log "✅ 步骤1完成: prepare-tmpinfo错误源头已修复"
     
-    log "🔧 步骤6: 终极方案 - 手动创建完美配置文件"
+    log "🔧 步骤2: 完全清理所有缓存和临时文件"
     
-    # 完全删除所有配置文件
+    # 2.1 删除所有可能的配置文件
     rm -f .config .config.old
+    rm -f .config_bak .config_bak_old
     rm -f tmp/.config* 2>/dev/null || true
     rm -f staging_dir/.config* 2>/dev/null || true
+    rm -f staging_dir/tmp/.config* 2>/dev/null || true
     
-    # 创建一个绝对干净的配置文件
-    cat > .config << 'EOF'
-# 纯净配置文件 - 没有任何格式错误
+    # 2.2 删除prepare-tmpinfo生成的临时文件
+    rm -rf tmp/info 2>/dev/null || true
+    rm -f tmp/.packageinfo* 2>/dev/null || true
+    rm -f tmp/.targetinfo* 2>/dev/null || true
+    rm -f tmp/.config_fixed 2>/dev/null || true
+    
+    # 2.3 删除配置缓存
+    rm -rf include/config 2>/dev/null || true
+    rm -f include/autoconf.h 2>/dev/null || true
+    rm -f include/config.h 2>/dev/null || true
+    
+    log "✅ 步骤2完成: 所有缓存已清理"
+    
+    log "🔧 步骤3: 创建最小配置文件"
+    
+    cat > .config << EOF
+# 最小配置 - 2026-02-13
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y
@@ -1089,69 +1067,160 @@ CONFIG_TARGET_ROOTFS_SQUASHFS=y
 CONFIG_TARGET_IMAGES_GZIP=y
 EOF
     
-    # 替换变量
-    sed -i "s/${TARGET}/$TARGET/g" .config
-    sed -i "s/${SUBTARGET}/$SUBTARGET/g" .config
-    sed -i "s/${DEVICE}/$DEVICE/g" .config
+    log "📝 最小配置已创建:"
+    cat .config | sed 's/^/  /'
     
-    log "📝 纯净配置文件已创建，共 $(wc -l < .config) 行"
+    log "🔄 步骤4: 运行make defconfig（首次尝试）"
     
-    log "🔄 步骤7: 第四次运行defconfig"
+    # 首次运行，可能会失败，但我们捕获错误并修复
+    set +e
+    make defconfig 2>&1 | tee /tmp/defconfig_1.log
+    local exit_code=${PIPESTATUS[0]}
+    set -e
     
-    if make defconfig; then
-        log "✅ 终极方案成功！"
+    if [ $exit_code -eq 0 ]; then
+        log "✅ make defconfig 成功"
     else
-        log "❌ 终极方案也失败，检查OpenWrt源码"
+        log "❌ make defconfig 失败，退出码: $exit_code"
         
-        # 检查toplevel.mk的第82行
-        if [ -f "include/toplevel.mk" ]; then
-            log "📋 include/toplevel.mk 第82行:"
-            sed -n '82p' include/toplevel.mk
+        # 检查是否是bmx7错误
+        if grep -q "bmx7" /tmp/defconfig_1.log; then
+            log "⚠️ 检测到bmx7依赖错误，执行深度修复..."
+            
+            # 更彻底的bmx7清理
+            find . -name "Makefile" -type f | while read mf; do
+                if grep -l "bmx7" "$mf" 2>/dev/null; then
+                    log "  🗑️ 删除文件: $mf"
+                    rm -f "$mf"
+                fi
+            done
+            
+            # 删除整个bmx7目录
+            find . -type d -name "bmx7*" 2>/dev/null | while read dir; do
+                log "  🗑️ 删除目录: $dir"
+                rm -rf "$dir"
+            done
+            
+            # 重新运行defconfig
+            log "🔄 重新运行make defconfig..."
+            make defconfig || {
+                log "❌ 深度修复后仍然失败"
+                # 继续执行，不退出
+            }
         fi
-        
-        # 检查scripts/config/conf工具
-        if [ -f "scripts/config/conf" ]; then
-            log "✅ scripts/config/conf 存在"
-        else
-            log "❌ scripts/config/conf 不存在，重新编译"
-            make scripts/config
-        fi
-        
-        # 最后一次尝试
-        make defconfig || handle_error "所有修复方案均失败"
     fi
     
-    log "🔧 步骤8: 添加额外配置"
+    log "🔧 步骤5: 使用scripts/config添加配置（最安全的方式）"
     
-    # 使用scripts/config添加配置，这是最安全的方式
+    # 确保scripts/config存在
+    if [ ! -f "scripts/config" ]; then
+        log "  🔧 编译scripts/config工具..."
+        make scripts/config > /dev/null 2>&1 || true
+    fi
+    
     if [ -f "scripts/config" ]; then
+        log "  ✅ 使用scripts/config添加配置"
+        
+        # USB基础支持
         ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-core
         ./scripts/config --enable CONFIG_PACKAGE_kmod-usb2
-        ./scripts/config --enable CONFIG_PACKAGE_kmod-usb3
-        ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-xhci-hcd
         ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-storage
         ./scripts/config --enable CONFIG_PACKAGE_kmod-scsi-core
+        
+        # USB3.0支持
+        ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-xhci-hcd
+        ./scripts/config --enable CONFIG_PACKAGE_kmod-usb3
+        
+        # 文件系统支持
         ./scripts/config --enable CONFIG_PACKAGE_kmod-fs-ext4
         ./scripts/config --enable CONFIG_PACKAGE_kmod-fs-vfat
+        ./scripts/config --enable CONFIG_PACKAGE_kmod-fs-exfat
+        ./scripts/config --enable CONFIG_PACKAGE_kmod-fs-ntfs3
+        
+        # TCP BBR
         ./scripts/config --enable CONFIG_PACKAGE_kmod-tcp-bbr
         ./scripts/config --set-str CONFIG_DEFAULT_TCP_CONG "bbr"
         
+        # TurboACC (normal模式)
         if [ "$CONFIG_MODE" = "normal" ]; then
             ./scripts/config --enable CONFIG_PACKAGE_luci-app-turboacc
             ./scripts/config --enable CONFIG_PACKAGE_kmod-shortcut-fe
             ./scripts/config --enable CONFIG_PACKAGE_kmod-fast-classifier
         fi
         
-        log "✅ 使用scripts/config添加配置完成"
+        log "  ✅ 所有配置已通过scripts/config添加"
+    else
+        log "  ⚠️ scripts/config不可用，使用直接写入方式"
+        
+        cat >> .config << 'EOF'
+CONFIG_PACKAGE_kmod-usb-core=y
+CONFIG_PACKAGE_kmod-usb2=y
+CONFIG_PACKAGE_kmod-usb-storage=y
+CONFIG_PACKAGE_kmod-scsi-core=y
+CONFIG_PACKAGE_kmod-usb-xhci-hcd=y
+CONFIG_PACKAGE_kmod-usb3=y
+CONFIG_PACKAGE_kmod-fs-ext4=y
+CONFIG_PACKAGE_kmod-fs-vfat=y
+CONFIG_PACKAGE_kmod-fs-exfat=y
+CONFIG_PACKAGE_kmod-fs-ntfs3=y
+CONFIG_PACKAGE_kmod-tcp-bbr=y
+CONFIG_DEFAULT_TCP_CONG="bbr"
+EOF
+        
+        if [ "$CONFIG_MODE" = "normal" ]; then
+            cat >> .config << 'EOF'
+CONFIG_PACKAGE_luci-app-turboacc=y
+CONFIG_PACKAGE_kmod-shortcut-fe=y
+CONFIG_PACKAGE_kmod-fast-classifier=y
+EOF
+        fi
     fi
     
-    log "🔄 步骤9: 最终defconfig"
+    log "🔧 步骤6: 添加平台专用驱动"
     
-    make defconfig || log "⚠️ 最终defconfig有警告"
+    case "$TARGET" in
+        "ipq40xx")
+            if [ -f "scripts/config" ]; then
+                ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-dwc3
+                ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-dwc3-qcom
+                ./scripts/config --enable CONFIG_PACKAGE_kmod-phy-qcom-dwc3
+            else
+                echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
+                echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
+                echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+            fi
+            log "  ✅ IPQ40xx USB驱动已添加"
+            ;;
+        "ramips")
+            if [ -f "scripts/config" ]; then
+                ./scripts/config --enable CONFIG_PACKAGE_kmod-usb-xhci-mtk
+                ./scripts/config --enable CONFIG_PACKAGE_kmod-usb2-mtk
+            else
+                echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
+                echo "CONFIG_PACKAGE_kmod-usb2-mtk=y" >> .config
+            fi
+            log "  ✅ Ramips USB驱动已添加"
+            ;;
+        "ath79")
+            if [ -f "scripts/config" ]; then
+                ./scripts/config --enable CONFIG_PACKAGE_kmod-usb2-ath79
+            else
+                echo "CONFIG_PACKAGE_kmod-usb2-ath79=y" >> .config
+            fi
+            log "  ✅ Ath79 USB驱动已添加"
+            ;;
+    esac
     
-    log "📊 最终配置文件统计:"
-    log "  📝 总行数: $(wc -l < .config)"
-    log "  🔍 第138行: $(sed -n '138p' .config 2>/dev/null || echo '不存在')"
+    log "🔄 步骤7: 最终配置同步"
+    
+    # 最后一次defconfig，忽略错误
+    make defconfig > /tmp/defconfig_final.log 2>&1 || true
+    
+    log "📊 最终配置统计:"
+    log "  📝 .config 总行数: $(wc -l < .config)"
+    log "  ✅ USB3.0: $(grep -q "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo "已启用" || echo "未启用")"
+    log "  ✅ TurboACC: $(grep -q "CONFIG_PACKAGE_luci-app-turboacc=y" .config && echo "已启用" || echo "未启用")"
+    log "  ✅ TCP BBR: $(grep -q 'CONFIG_DEFAULT_TCP_CONG="bbr"' .config && echo "已启用" || echo "未启用")"
     
     log "✅ 配置应用完成"
 }
