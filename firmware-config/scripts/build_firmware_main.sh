@@ -1188,14 +1188,74 @@ EOF
         log "💡 如果硬件需要这些驱动，请检查平台支持"
     fi
     
-    # 最终设备验证（不区分大小写）
-    local selected_device=$(grep -i "^CONFIG_TARGET_DEVICE_.*${DEVICE}=y" .config | head -1)
-    if [ -n "$selected_device" ]; then
-        log "✅ 目标设备已正确选择: $selected_device"
-    else
+    # 最终设备验证（增强版：尝试多种匹配方式）
+    log "🔍 正在验证设备 $DEVICE 是否被选中..."
+    
+    local device_selected=""
+    local device_patterns=(
+        "^CONFIG_TARGET_DEVICE_.*${DEVICE}=y"
+        "^CONFIG_TARGET_DEVICE_.*${DEVICE^^}=y"
+        "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
+        "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE^^}=y"
+    )
+    
+    for pattern in "${device_patterns[@]}"; do
+        device_selected=$(grep -i "$pattern" .config | head -1)
+        if [ -n "$device_selected" ]; then
+            log "✅ 目标设备已匹配: $device_selected"
+            break
+        fi
+    done
+    
+    if [ -z "$device_selected" ]; then
         log "❌ 错误: 目标设备 $DEVICE 未被选中！"
         log "当前可用的设备选项:"
-        grep "^CONFIG_TARGET_DEVICE_.*=y" .config | head -10
+        grep "^CONFIG_TARGET_DEVICE_.*=y" .config | head -20 | sed 's/^/  /'
+        
+        # 尝试自动修复：重新强制写入设备选项并再次运行 oldconfig
+        log "🔄 尝试自动修复：重新强制写入设备选项并再次运行 make oldconfig..."
+        
+        # 尝试使用大写设备名
+        local device_upper="${DEVICE^^}"
+        local device_lower="${DEVICE,,}"
+        
+        # 删除可能存在的冲突行
+        sed -i "/^CONFIG_TARGET_DEVICE_.*${device_lower}/d" .config
+        sed -i "/^CONFIG_TARGET_DEVICE_.*${device_upper}/d" .config
+        sed -i "/^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=/d" .config
+        sed -i "/^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=/d" .config
+        
+        # 尝试写入常见格式
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+        echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+        
+        # 去重
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
+        
+        # 再次运行 oldconfig
+        if yes "" | make -j1 oldconfig V=s > /tmp/build-logs/oldconfig_fix.log 2>&1; then
+            log "✅ make oldconfig 修复成功"
+            
+            # 再次检查
+            for pattern in "${device_patterns[@]}"; do
+                device_selected=$(grep -i "$pattern" .config | head -1)
+                if [ -n "$device_selected" ]; then
+                    log "✅ 修复后设备已选中: $device_selected"
+                    break
+                fi
+            done
+        else
+            log "❌ make oldconfig 修复失败"
+        fi
+    fi
+    
+    if [ -z "$device_selected" ]; then
+        # 最终失败，列出所有可能的设备选项供用户选择
+        log "❌ 错误: 无法自动修复设备选择问题"
+        log "请检查设备名称是否正确，或手动配置设备。"
+        log "当前可用的设备选项（前20个）:"
+        grep "^CONFIG_TARGET_DEVICE_.*=y" .config | head -20 | sed 's/^/  /' || echo "  没有可用的设备选项"
         handle_error "设备配置错误"
     fi
     
