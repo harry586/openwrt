@@ -951,205 +951,344 @@ generate_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 智能配置生成系统 ==="
+    log "=== 智能配置生成系统（设备显式指定版） ==="
     log "版本: $SELECTED_BRANCH"
     log "目标: $TARGET"
     log "子目标: $SUBTARGET"
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
-    
-    ARTIFACTS_DIR="$REPO_ROOT/artifacts/step15-logs"
-    mkdir -p "$ARTIFACTS_DIR"
+    log "配置文件目录: $CONFIG_DIR"
     
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
-    # ---------- 第一步：基础配置 ----------
-    log "🔧 步骤1: 生成基础配置"
+    # 步骤1: 创建基础目标配置（显式指定设备）
     cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y
 EOF
-    make defconfig || handle_error "基础配置失败"
-    log "✅ 基础配置成功"
     
-    # ---------- 第二步：设备选择 ----------
-    log "🔍 步骤2: 设备选择"
+    log "🔧 生成基础配置..."
+    make defconfig || handle_error "基础配置生成失败"
+    log "✅ 基础配置生成成功"
     
-    # 获取可用设备
-    local available_devices=$(grep -E '^CONFIG_TARGET_DEVICE_.*=' .config | sed -E 's/^CONFIG_TARGET_DEVICE_//' | sed 's/=.*$//' | sort -u)
+    # 步骤2: 合并所有配置文件
+    log "📁 开始合并配置文件..."
     
-    if [ -n "$available_devices" ]; then
-        log "📋 可用设备:"
-        echo "$available_devices" | sed 's/^/   /'
-        
-        # 尝试匹配用户设备
-        local matched=""
-        local user_lower=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]')
-        while read avail; do
-            avail_lower=$(echo "$avail" | tr '[:upper:]' '[:lower:]')
-            if [ "$avail_lower" = "$user_lower" ]; then
-                matched="$avail"
-                break
-            fi
-        done <<< "$available_devices"
-        
-        if [ -n "$matched" ]; then
-            DEVICE="$matched"
-            log "✅ 匹配到设备: $DEVICE"
-        else
-            DEVICE=$(echo "$available_devices" | head -1)
-            log "⚠️ 使用第一个设备: $DEVICE"
-        fi
-    else
-        log "⚠️ 无可用设备列表，继续使用: $DEVICE"
-    fi
-    
-    # 写入设备配置
-    echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" >> .config
-    make defconfig || handle_error "设备配置失败"
-    log "✅ 设备配置完成"
-    
-    # ---------- 第三步：合并配置 ----------
-    log "📁 步骤3: 合并配置文件"
-    
+    # 辅助函数：安全追加配置（过滤注释和空行）
     append_config() {
         local file=$1
-        [ -f "$file" ] && grep -v '^[[:space:]]*#' "$file" | grep -v '^[[:space:]]*$' | grep 'CONFIG_' >> .config
+        if [ -f "$file" ]; then
+            grep -v '^[[:space:]]*#' "$file" | grep -v '^[[:space:]]*$' | grep 'CONFIG_' >> .config
+        fi
     }
     
     append_config "$CONFIG_DIR/base.config"
     append_config "$CONFIG_DIR/usb-generic.config"
     append_config "$CONFIG_DIR/$TARGET.config"
     append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
+    append_config "$CONFIG_DIR/devices/$DEVICE.config"
     
     if [ "$CONFIG_MODE" = "normal" ]; then
         append_config "$CONFIG_DIR/normal.config"
     fi
     
-    # 额外包
+    # 添加额外包
     if [ -n "$extra_packages" ]; then
+        log "📦 添加额外包: $extra_packages"
         echo "$extra_packages" | tr ',' '
 ' | while read pkg; do
             [ -n "$pkg" ] && echo "CONFIG_PACKAGE_$pkg=y" >> .config
         done
     fi
     
-    # BBR
+    # TCP BBR
     echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
     echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
     
-    # TurboACC
+    # TurboACC（正常模式）
     if [ "$CONFIG_MODE" = "normal" ]; then
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
     fi
     
-    # ath10k
-    if [ "$TARGET" = "ipq40xx" ]; then
-        sed -i '/CONFIG_PACKAGE_kmod-ath10k/d' .config
-        echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
-    fi
+    # ath10k 冲突解决
+    sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
+    sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
+    sed -i '/CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/d' .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
+    echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
     
-    # ---------- 第四步：先运行 oldconfig ----------
-    log "🔄 步骤4: 第一次依赖解决"
-    yes "" | make oldconfig > /tmp/build-logs/oldconfig1.log 2>&1 || true
-    
-    # ---------- 第五步：强制写入 USB 驱动（关键修复）----------
-    log "🔧 步骤5: 强制写入 USB 驱动"
-    
-    # 直接追加到文件末尾，然后排序去重
-    cat >> .config << 'EOF'
-# USB Core
-CONFIG_PACKAGE_kmod-usb-core=y
-CONFIG_PACKAGE_kmod-usb-common=y
-CONFIG_PACKAGE_kmod-usb2=y
-CONFIG_PACKAGE_kmod-usb3=y
-CONFIG_PACKAGE_kmod-usb-ehci=y
-CONFIG_PACKAGE_kmod-usb-ohci=y
-CONFIG_PACKAGE_kmod-usb-xhci-hcd=y
-CONFIG_PACKAGE_kmod-usb-xhci-pci=y
-CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y
-
-# USB Storage
-CONFIG_PACKAGE_kmod-usb-storage=y
-CONFIG_PACKAGE_kmod-usb-storage-uas=y
-CONFIG_PACKAGE_kmod-usb-storage-extras=y
-CONFIG_PACKAGE_kmod-scsi-core=y
-CONFIG_PACKAGE_kmod-scsi-generic=y
-
-# USB DWC3
-CONFIG_PACKAGE_kmod-usb-dwc3=y
-CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y
-CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y
-CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y
-
-# Filesystem
-CONFIG_PACKAGE_kmod-fs-ext4=y
-CONFIG_PACKAGE_kmod-fs-vfat=y
-CONFIG_PACKAGE_kmod-fs-exfat=y
-CONFIG_PACKAGE_kmod-fs-ntfs3=y
-
-# NLS
-CONFIG_PACKAGE_kmod-nls-utf8=y
-CONFIG_PACKAGE_kmod-nls-cp936=y
-
-# Tools
-CONFIG_PACKAGE_block-mount=y
-CONFIG_PACKAGE_automount=y
-CONFIG_PACKAGE_usbutils=y
-CONFIG_PACKAGE_lsusb=y
-CONFIG_PACKAGE_kmod-usb-serial=y
-EOF
-    
-    # 去重
+    # 步骤3: 去重
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    log "✅ USB 驱动已写入"
-    
-    # ---------- 第六步：第二次 oldconfig（保留配置）----------
-    log "🔄 步骤6: 最终依赖解决"
-    
-    # 使用 olddefconfig 而不是 oldconfig，它会保留现有配置
-    make olddefconfig > /tmp/build-logs/oldconfig2.log 2>&1 || {
-        log "⚠️ olddefconfig 有警告，尝试 oldconfig"
-        yes "" | make oldconfig > /tmp/build-logs/oldconfig2.log 2>&1 || true
+    # 步骤4: 运行 make olddefconfig 解决依赖关系（改用 yes "" | make oldconfig）
+    log "🔄 运行 yes "" | make oldconfig 解决依赖关系..."
+    yes "" | make -j1 oldconfig V=s > /tmp/build-logs/oldconfig.log 2>&1 || {
+        log "❌ make oldconfig 失败，查看日志..."
+        tail -50 /tmp/build-logs/oldconfig.log
+        handle_error "依赖解决失败"
     }
+    log "✅ 依赖关系解决成功"
     
-    # ---------- 第七步：验证 ----------
-    log "🔍 步骤7: 验证配置"
+    # 步骤5: 后处理强制启用关键USB软件包（增强版）
+    log "🔧 后处理：强制启用USB软件包（增强版）..."
     
-    local CHECK=(
+    # 定义所有平台必需的USB软件包（扩展列表）
+    local MUST_PACKAGES=(
+        # 核心驱动
+        "kmod-usb-core"
         "kmod-usb-common"
+        # USB 2.0/3.0 控制器
+        "kmod-usb2"
+        "kmod-usb3"
+        "kmod-usb-ehci"
+        "kmod-usb-ohci"
         "kmod-usb-xhci-hcd"
         "kmod-usb-xhci-pci"
         "kmod-usb-xhci-plat-hcd"
+        # USB 存储
+        "kmod-usb-storage"
+        "kmod-usb-storage-uas"
+        "kmod-usb-storage-extras"
+        # SCSI 支持
+        "kmod-scsi-core"
+        "kmod-scsi-generic"
+        # 通用 USB 驱动
+        "kmod-usb-dwc3"
         "kmod-usb-dwc3-of-simple"
+        # 文件系统
+        "kmod-fs-ext4"
+        "kmod-fs-vfat"
+        "kmod-fs-exfat"
+        "kmod-fs-ntfs3"
+        # 编码支持
+        "kmod-nls-utf8"
+        "kmod-nls-cp936"
+        # 挂载工具
+        "block-mount"
+        "automount"
+        # 实用工具
+        "usbutils"
         "lsusb"
-        "kmod-phy-qcom-dwc3"
+        # 串口支持（可选但常用）
+        "kmod-usb-serial"
     )
     
-    local missing=()
-    for driver in "${CHECK[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-            log "  ✅ $driver: 已启用"
+    # 平台特定软件包（扩展）
+    case "$TARGET" in
+        ipq40xx)
+            MUST_PACKAGES+=(
+                "kmod-usb-dwc3-qcom"
+                "kmod-phy-qcom-dwc3"
+            )
+            ;;
+        ramips)
+            MUST_PACKAGES+=(
+                "kmod-usb-xhci-mtk"
+                "kmod-usb-ohci-pci"
+                "kmod-usb2-pci"
+            )
+            ;;
+        mediatek)
+            MUST_PACKAGES+=(
+                "kmod-usb-dwc3-mediatek"
+                "kmod-phy-mediatek"
+            )
+            ;;
+        ath79)
+            MUST_PACKAGES+=(
+                "kmod-usb2-ath79"
+                "kmod-usb-ohci"
+            )
+            ;;
+    esac
+    
+    # 强制写入.config（删除可能存在的禁用/模块行，添加=y）
+    for pkg in "${MUST_PACKAGES[@]}"; do
+        sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
+        sed -i "/^# CONFIG_PACKAGE_${pkg} is not set/d" .config
+        echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+    done
+    
+    # 再次确保设备选项存在（防止被覆盖）
+    if ! grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" .config; then
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" >> .config
+    fi
+    
+    # 再次去重
+    sort .config | uniq > .config.tmp
+    mv .config.tmp .config
+    
+    # 步骤6: 再次运行 yes "" | make oldconfig 应用强制配置（不重置）
+    log "🔄 再次运行 yes "" | make oldconfig 应用强制配置..."
+    
+    # 保存当前配置备份
+    cp .config .config.force
+    
+    # 使用 yes "" | make oldconfig 运行以获取详细输出
+    if ! yes "" | make -j1 oldconfig V=s > /tmp/build-logs/oldconfig2.log 2>&1; then
+        log "❌ make oldconfig 失败，查看详细日志..."
+        echo "=== oldconfig2.log 最后50行 ==="
+        tail -50 /tmp/build-logs/oldconfig2.log
+        echo "================================"
+        
+        # 尝试恢复备份并继续
+        if [ -f ".config.force" ]; then
+            log "🔄 尝试恢复强制配置并继续..."
+            cp .config.force .config
         else
-            log "  ❌ $driver: 未启用"
-            missing+=("$driver")
+            handle_error "强制配置应用失败"
+        fi
+    else
+        log "✅ make oldconfig 成功"
+    fi
+    
+    # 步骤7: 最终验证
+    log "📋 必需USB驱动状态验证:"
+    local missing=()
+    local missing_optional=()
+    
+    for pkg in "${MUST_PACKAGES[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
+            log "  ✅ $pkg: 已启用"
+        else
+            # 检查是否是平台特定包
+            local is_optional=0
+            case "$pkg" in
+                kmod-usb-dwc3-qcom|kmod-phy-qcom-dwc3|kmod-usb-xhci-mtk|kmod-usb-dwc3-mediatek|kmod-phy-mediatek|kmod-usb2-ath79|kmod-usb-ohci-pci|kmod-usb2-pci)
+                    is_optional=1
+                    ;;
+            esac
+            
+            if [ $is_optional -eq 1 ]; then
+                log "  ⚠️ $pkg: 未启用（平台可选）"
+                missing_optional+=("$pkg")
+            else
+                log "  ❌ $pkg: 未启用"
+                missing+=("$pkg")
+            fi
         fi
     done
     
-    if [ ${#missing[@]} -eq 0 ]; then
-        log "🎉 所有 USB 驱动已启用！"
+    if [ ${#missing[@]} -gt 0 ]; then
+        log "⚠️ 警告: 以下必需驱动未启用: ${missing[*]}"
+        log "💡 可能原因: 内核不支持或平台未包含相应驱动"
     else
-        log "⚠️ 缺失驱动: ${missing[*]}"
-        echo "${missing[@]}" > "$ARTIFACTS_DIR/missing-deps.txt"
+        log "🎉 所有必需USB驱动已成功启用！"
     fi
     
-    # 保存最终配置
-    cp .config "$ARTIFACTS_DIR/config-final" 2>/dev/null || true
+    if [ ${#missing_optional[@]} -gt 0 ]; then
+        log "ℹ️ 可选驱动未启用: ${missing_optional[*]}"
+        log "💡 如果硬件需要这些驱动，请检查平台支持"
+    fi
+    
+    # 最终设备验证（增强版：尝试多种匹配方式，并使用 scripts/config 工具和 make defconfig）
+    log "🔍 正在验证设备 $DEVICE 是否被选中..."
+    
+    local device_selected=""
+    local device_patterns=(
+        "^CONFIG_TARGET_DEVICE_.*${DEVICE}=y"
+        "^CONFIG_TARGET_DEVICE_.*${DEVICE^^}=y"
+        "^CONFIG_TARGET_DEVICE_.*${DEVICE,,}=y"
+        "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
+        "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE^^}=y"
+        "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE,,}=y"
+    )
+    
+    for pattern in "${device_patterns[@]}"; do
+        device_selected=$(grep -E "$pattern" .config | head -1)
+        if [ -n "$device_selected" ]; then
+            log "✅ 目标设备已匹配: $device_selected"
+            break
+        fi
+    done
+    
+    if [ -z "$device_selected" ]; then
+        log "❌ 错误: 目标设备 $DEVICE 未被选中！"
+        log "当前可用的设备选项:"
+        grep -E "^CONFIG_TARGET_DEVICE_.*=y|^CONFIG_TARGET_.*_DEVICE_.*=y" .config | head -20 | sed 's/^/  /' || echo "  没有可用的设备选项"
+        
+        # 尝试自动修复
+        log "🔄 尝试自动修复：使用 scripts/config 工具启用设备选项..."
+        
+        local config_tool=""
+        if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+            config_tool="scripts/config/config"
+        elif [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
+            config_tool="scripts/config/conf"
+        fi
+        
+        # 准备设备名变体
+        local device_upper="${DEVICE^^}"
+        local device_lower="${DEVICE,,}"
+        local device_capital="$(echo ${DEVICE:0:1} | tr '[:lower:]' '[:upper:]')${DEVICE:1}"
+        
+        if [ -n "$config_tool" ]; then
+            # 使用配置工具启用设备选项（尝试多种格式）
+            log "🔧 使用配置工具 $config_tool 启用设备..."
+            
+            # 先禁用可能的冲突选项
+            $config_tool --disable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
+            $config_tool --disable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
+            $config_tool --disable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
+            $config_tool --disable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
+            $config_tool --disable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
+            $config_tool --disable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
+            
+            # 启用设备选项
+            $config_tool --enable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
+            $config_tool --enable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
+            $config_tool --enable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
+            $config_tool --enable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
+            $config_tool --enable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
+            $config_tool --enable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
+        else
+            # 直接写入多种格式
+            log "⚠️ 配置工具不可用，直接写入多种设备格式..."
+            echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+            echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
+            echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_capital}=y" >> .config
+            echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+            echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
+            echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_capital}=y" >> .config
+        fi
+        
+        # 去重
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
+        
+        log "🔄 重新运行 make defconfig 以应用设备选择..."
+        if make defconfig > /tmp/build-logs/defconfig_fix.log 2>&1; then
+            log "✅ make defconfig 修复成功"
+            
+            # 再次检查
+            for pattern in "${device_patterns[@]}"; do
+                device_selected=$(grep -E "$pattern" .config | head -1)
+                if [ -n "$device_selected" ]; then
+                    log "✅ 修复后设备已选中: $device_selected"
+                    break
+                fi
+            done
+        else
+            log "❌ make defconfig 修复失败"
+            cat /tmp/build-logs/defconfig_fix.log
+        fi
+    fi
+    
+    if [ -z "$device_selected" ]; then
+        # 最终失败
+        log "❌ 错误: 无法自动修复设备选择问题"
+        log "请检查设备名称是否正确，或手动配置设备。"
+        log "当前可用的设备选项（前20个）:"
+        grep -E "^CONFIG_TARGET_DEVICE_.*=y|^CONFIG_TARGET_.*_DEVICE_.*=y" .config | head -20 | sed 's/^/  /' || echo "  没有可用的设备选项"
+        handle_error "设备配置错误"
+    fi
     
     log "✅ 配置生成完成"
 }
