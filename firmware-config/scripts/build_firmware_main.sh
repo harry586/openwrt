@@ -1188,19 +1188,21 @@ EOF
         log "💡 如果硬件需要这些驱动，请检查平台支持"
     fi
     
-    # 最终设备验证（增强版：尝试多种匹配方式）
+    # 最终设备验证（增强版：尝试多种匹配方式，并使用 scripts/config 工具和 make defconfig）
     log "🔍 正在验证设备 $DEVICE 是否被选中..."
     
     local device_selected=""
     local device_patterns=(
         "^CONFIG_TARGET_DEVICE_.*${DEVICE}=y"
         "^CONFIG_TARGET_DEVICE_.*${DEVICE^^}=y"
+        "^CONFIG_TARGET_DEVICE_.*${DEVICE,,}=y"
         "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
         "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE^^}=y"
+        "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE,,}=y"
     )
     
     for pattern in "${device_patterns[@]}"; do
-        device_selected=$(grep -i "$pattern" .config | head -1)
+        device_selected=$(grep -E "$pattern" .config | head -1)
         if [ -n "$device_selected" ]; then
             log "✅ 目标设备已匹配: $device_selected"
             break
@@ -1210,52 +1212,81 @@ EOF
     if [ -z "$device_selected" ]; then
         log "❌ 错误: 目标设备 $DEVICE 未被选中！"
         log "当前可用的设备选项:"
-        grep "^CONFIG_TARGET_DEVICE_.*=y" .config | head -20 | sed 's/^/  /'
+        grep -E "^CONFIG_TARGET_DEVICE_.*=y|^CONFIG_TARGET_.*_DEVICE_.*=y" .config | head -20 | sed 's/^/  /' || echo "  没有可用的设备选项"
         
-        # 尝试自动修复：重新强制写入设备选项并再次运行 oldconfig
-        log "🔄 尝试自动修复：重新强制写入设备选项并再次运行 make oldconfig..."
+        # 尝试自动修复
+        log "🔄 尝试自动修复：使用 scripts/config 工具启用设备选项..."
         
-        # 尝试使用大写设备名
+        local config_tool=""
+        if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+            config_tool="scripts/config/config"
+        elif [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
+            config_tool="scripts/config/conf"
+        fi
+        
+        # 准备设备名变体
         local device_upper="${DEVICE^^}"
         local device_lower="${DEVICE,,}"
+        local device_capital="$(echo ${DEVICE:0:1} | tr '[:lower:]' '[:upper:]')${DEVICE:1}"
         
-        # 删除可能存在的冲突行
-        sed -i "/^CONFIG_TARGET_DEVICE_.*${device_lower}/d" .config
-        sed -i "/^CONFIG_TARGET_DEVICE_.*${device_upper}/d" .config
-        sed -i "/^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=/d" .config
-        sed -i "/^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=/d" .config
-        
-        # 尝试写入常见格式
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
-        echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+        if [ -n "$config_tool" ]; then
+            # 使用配置工具启用设备选项（尝试多种格式）
+            log "🔧 使用配置工具 $config_tool 启用设备..."
+            
+            # 先禁用可能的冲突选项
+            $config_tool --disable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
+            $config_tool --disable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
+            $config_tool --disable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
+            $config_tool --disable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
+            $config_tool --disable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
+            $config_tool --disable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
+            
+            # 启用设备选项
+            $config_tool --enable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
+            $config_tool --enable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
+            $config_tool --enable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
+            $config_tool --enable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
+            $config_tool --enable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
+            $config_tool --enable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
+        else
+            # 直接写入多种格式
+            log "⚠️ 配置工具不可用，直接写入多种设备格式..."
+            echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+            echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
+            echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_capital}=y" >> .config
+            echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+            echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
+            echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_capital}=y" >> .config
+        fi
         
         # 去重
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
         
-        # 再次运行 oldconfig
-        if yes "" | make -j1 oldconfig V=s > /tmp/build-logs/oldconfig_fix.log 2>&1; then
-            log "✅ make oldconfig 修复成功"
+        log "🔄 重新运行 make defconfig 以应用设备选择..."
+        if make defconfig > /tmp/build-logs/defconfig_fix.log 2>&1; then
+            log "✅ make defconfig 修复成功"
             
             # 再次检查
             for pattern in "${device_patterns[@]}"; do
-                device_selected=$(grep -i "$pattern" .config | head -1)
+                device_selected=$(grep -E "$pattern" .config | head -1)
                 if [ -n "$device_selected" ]; then
                     log "✅ 修复后设备已选中: $device_selected"
                     break
                 fi
             done
         else
-            log "❌ make oldconfig 修复失败"
+            log "❌ make defconfig 修复失败"
+            cat /tmp/build-logs/defconfig_fix.log
         fi
     fi
     
     if [ -z "$device_selected" ]; then
-        # 最终失败，列出所有可能的设备选项供用户选择
+        # 最终失败
         log "❌ 错误: 无法自动修复设备选择问题"
         log "请检查设备名称是否正确，或手动配置设备。"
         log "当前可用的设备选项（前20个）:"
-        grep "^CONFIG_TARGET_DEVICE_.*=y" .config | head -20 | sed 's/^/  /' || echo "  没有可用的设备选项"
+        grep -E "^CONFIG_TARGET_DEVICE_.*=y|^CONFIG_TARGET_.*_DEVICE_.*=y" .config | head -20 | sed 's/^/  /' || echo "  没有可用的设备选项"
         handle_error "设备配置错误"
     fi
     
