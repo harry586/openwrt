@@ -948,8 +948,16 @@ pre_build_space_check() {
 #【build_firmware_main.sh-13】
 generate_config() {
     local extra_packages=$1
+    local device_override=$2  # 新增设备覆盖参数
+    
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    # 如果提供了设备覆盖参数，优先使用
+    if [ -n "$device_override" ]; then
+        DEVICE="$device_override"
+        log "🔧 使用设备覆盖参数: $DEVICE"
+    fi
     
     log "=== 智能配置生成系统（设备显式指定版） ==="
     log "版本: $SELECTED_BRANCH"
@@ -959,19 +967,41 @@ generate_config() {
     log "配置模式: $CONFIG_MODE"
     log "配置文件目录: $CONFIG_DIR"
     
+    # 验证设备变量是否为空
+    if [ -z "$DEVICE" ]; then
+        log "❌ 错误: DEVICE变量为空！"
+        log "可用环境变量:"
+        env | grep -E "DEVICE|TARGET|SELECTED" || true
+        handle_error "DEVICE变量未设置"
+    fi
+    
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
-    # 步骤1: 创建基础目标配置（直接写入设备配置）
+    # 步骤1: 创建基础目标配置（使用变量构建设备配置）
+    # 转换设备名称为大写（某些平台需要）
+    local device_upper=$(echo "$DEVICE" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
+    
+    # 使用变量构建基础配置
     cat > .config << EOF
-CONFIG_TARGET_ipq40xx=y
-CONFIG_TARGET_ipq40xx_generic=y
-CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y
+CONFIG_TARGET_${TARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y
 EOF
     
     log "🔧 生成基础配置..."
+    log "基础配置文件内容:"
+    cat .config | head -5
+    
     make defconfig || handle_error "基础配置生成失败"
     log "✅ 基础配置生成成功"
+    
+    # 验证设备是否被选中
+    if ! grep -q "${DEVICE}" .config; then
+        log "⚠️ 设备 ${DEVICE} 未在配置中找到，尝试直接写入..."
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
+        make defconfig || log "⚠️ 重新生成配置失败"
+    fi
     
     # 步骤2: 合并所有配置文件
     log "📁 开始合并配置文件..."
@@ -1290,9 +1320,10 @@ EOF
         echo "CONFIG_PACKAGE_${pkg}=y" >> .config
     done
     
-    # 再次确保设备选项存在（防止被覆盖）- 使用固定设备配置
-    if ! grep -q "^CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" .config; then
-        echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
+    # 再次确保设备选项存在（防止被覆盖）- 使用变量
+    local device_check_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y"
+    if ! grep -q "$device_check_pattern" .config; then
+        echo "$device_check_pattern" >> .config
     fi
     
     # 再次去重
@@ -1362,32 +1393,29 @@ EOF
         log "💡 如果硬件需要这些驱动，请检查平台支持"
     fi
     
-    # 最终设备验证（直接检查固定设备配置）
-    log "🔍 正在验证设备 ASUS RT-AC42U 是否被选中..."
+    # 最终设备验证（使用变量检查）
+    log "🔍 正在验证设备 $DEVICE 是否被选中..."
     
     local device_selected=""
+    local device_patterns=(
+        "^CONFIG_TARGET_DEVICE_.*${DEVICE}=y"
+        "^CONFIG_TARGET_DEVICE_.*${DEVICE^^}=y"
+        "^CONFIG_TARGET_DEVICE_.*${DEVICE,,}=y"
+        "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE^^}=y"
+        "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE,,}=y"
+        "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y"
+    )
     
-    if grep -q "^CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" .config; then
-        device_selected="CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y"
-        log "✅ 目标设备已配置: $device_selected"
-    else
-        # 尝试其他变体
-        local device_patterns=(
-            "^CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-ac42u=y"
-            "^CONFIG_TARGET_ipq40xx_generic_DEVICE_asus-rt-ac42u=y"
-        )
-        
-        for pattern in "${device_patterns[@]}"; do
-            device_selected=$(grep -E "$pattern" .config | head -1)
-            if [ -n "$device_selected" ]; then
-                log "✅ 目标设备已匹配: $device_selected"
-                break
-            fi
-        done
-    fi
+    for pattern in "${device_patterns[@]}"; do
+        device_selected=$(grep -E "$pattern" .config | head -1)
+        if [ -n "$device_selected" ]; then
+            log "✅ 目标设备已匹配: $device_selected"
+            break
+        fi
+    done
     
     if [ -z "$device_selected" ]; then
-        log "❌ 错误: 目标设备 ASUS RT-AC42U 未被选中！"
+        log "❌ 错误: 目标设备 $DEVICE 未被选中！"
         log "当前可用的设备选项:"
         grep -E "^CONFIG_TARGET_DEVICE_.*=y|^CONFIG_TARGET_.*_DEVICE_.*=y" .config | head -20 | sed 's/^/  /' || echo "  没有可用的设备选项"
         
@@ -1395,7 +1423,7 @@ EOF
         log "🔄 尝试自动修复：直接写入设备配置..."
         
         # 直接写入设备配置
-        echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
         
         # 去重
         sort .config | uniq > .config.tmp
@@ -1406,8 +1434,8 @@ EOF
             log "✅ make defconfig 修复成功"
             
             # 再次检查
-            if grep -q "^CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" .config; then
-                log "✅ 修复后设备已选中: CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y"
+            if grep -q "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" .config; then
+                log "✅ 修复后设备已选中"
             else
                 log "⚠️ 修复后设备仍未选中，但可能已通过其他方式配置"
             fi
@@ -3267,11 +3295,26 @@ workflow_step15_generate_config() {
     local extra_packages="$1"
     
     log "=== 步骤15: 智能配置生成 ==="
+    log "当前设备: $DEVICE"
+    log "当前目标: $TARGET"
+    log "当前子目标: $SUBTARGET"
     
     set -e
     trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
     
-    generate_config "$extra_packages"
+    # 确保环境变量已加载
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        log "✅ 从环境文件重新加载: DEVICE=$DEVICE, TARGET=$TARGET"
+    fi
+    
+    # 如果DEVICE为空，尝试从设备名获取
+    if [ -z "$DEVICE" ] && [ -n "$2" ]; then
+        DEVICE="$2"
+        log "⚠️ DEVICE为空，使用参数: $DEVICE"
+    fi
+    
+    generate_config "$extra_packages" "$DEVICE"
     
     log "✅ 步骤15 完成"
 }
@@ -3499,6 +3542,7 @@ workflow_step23_pre_build_check() {
         echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET"
         echo "✅ COMPILER_DIR=$COMPILER_DIR"
         echo "✅ CONFIG_MODE=$CONFIG_MODE"
+        echo "✅ DEVICE=$DEVICE"
     else
         echo "❌ 错误: 环境文件不存在 ($BUILD_DIR/build_env.sh)"
         echo "💡 请检查步骤08和步骤09是否成功执行"
@@ -3515,8 +3559,18 @@ workflow_step23_pre_build_check() {
         echo "  📊 文件大小: $(ls -lh .config | awk '{print $5}')"
         echo "  📝 文件行数: $(wc -l < .config)"
         
+        # 检查设备配置是否正确
+        local device_upper=$(echo "$DEVICE" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
+        if grep -q "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" .config; then
+            echo "  ✅ 设备配置正确: $DEVICE"
+        else
+            echo "  ⚠️ 设备配置可能不正确，尝试修复..."
+            echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
+            make defconfig > /dev/null 2>&1
+        fi
+        
         # 检查关键配置项是否存在
-        echo "  🔍 检查ASUS RT-AC42U关键配置项:"
+        echo "  🔍 检查关键配置项:"
         local key_configs=(
             "CONFIG_PACKAGE_kmod-phy-qcom-dwc3"
             "CONFIG_PACKAGE_kmod-usb-xhci-hcd"
@@ -3544,7 +3598,7 @@ workflow_step23_pre_build_check() {
         echo "  ✅ SDK目录存在: $COMPILER_DIR"
         echo "  📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | awk '{print $1}' || echo '未知')"
         
-        GCC_FILE=$(find "$COMPILER_DIR" -type f -executable           -name "*gcc"           ! -name "*gcc-ar"           ! -name "*gcc-ranlib"           ! -name "*gcc-nm"           ! -path "*dummy-tools*"           ! -path "*scripts*"           2>/dev/null | head -1)
+        GCC_FILE=$(find "$COMPILER_DIR" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" ! -path "*dummy-tools*" ! -path "*scripts*" 2>/dev/null | head -1)
         
         if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
             echo "  ✅ 找到可执行GCC编译器: $(basename "$GCC_FILE")"
