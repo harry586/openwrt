@@ -951,7 +951,7 @@ generate_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 智能配置生成系统（参数格式修复版） ==="
+    log "=== 智能配置生成系统（使用配置文件） ==="
     log "版本: $SELECTED_BRANCH"
     log "目标: $TARGET"
     log "子目标: $SUBTARGET"
@@ -1090,122 +1090,49 @@ EOF
         esac
     }
     
-    # 应用配置文件 - 使用直接写入方式避免工具参数问题
-    log "📁 直接写入配置文件..."
+    # 应用配置文件 - 使用直接写入方式
+    log "📁 开始合并配置文件..."
     
-    # USB 核心配置
-    echo "" >> .config
-    
-    # USB 核心依赖链
-    echo "# USB Core Support" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-core=y" >> .config
-    
-    # USB 2.0 完整依赖链
-    echo "# USB 2.0 Support" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-ehci=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-uhci=y" >> .config
-    
-    # USB 3.0 完整依赖链
-    echo "# USB 3.0 Support" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd-dbg=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
-    
-    # USB 存储完整依赖链
-    echo "# USB Storage Support" >> .config
-    echo "CONFIG_PACKAGE_kmod-scsi-core=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-storage-extras=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config
-    
-    # 文件系统支持
-    echo "# Filesystem Support" >> .config
-    echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-fs-exfat=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-nls-utf8=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-nls-cp936=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-nls-cp437=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-nls-iso8859-1=y" >> .config
-    
-    # IPQ40xx 平台专用 USB 完整依赖链
-    if [ "$TARGET" = "ipq40xx" ]; then
-        log "🔧 启用 IPQ40xx 平台 USB 完整依赖链..."
-        echo "# IPQ40xx Platform USB Support" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-phy-msm=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-dwc3-role-switch=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-common=y" >> .config
-    fi
-    
-    # TCP BBR 拥塞控制
-    echo "# TCP BBR" >> .config
-    echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
-    echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
-    
-    # ath10k 冲突解决
-    echo "# ath10k Configuration" >> .config
-    echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
-    echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
-    echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
-    echo "# CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers is not set" >> .config
-    echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
-    
-    # TurboACC 配置
-    if [ "$CONFIG_MODE" = "normal" ]; then
-        log "🔧 启用 TurboACC 组件..."
-        echo "# TurboACC Support" >> .config
-        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-shortcut-fe-cm=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-    fi
-    
-    # 应用其他配置文件
-    if [ -f "$CONFIG_DIR/usb-generic.config" ]; then
-        log "📁 合并USB通用配置..."
-        cat "$CONFIG_DIR/usb-generic.config" | grep -v "^#" | grep "CONFIG_" >> .config
-    fi
-    
+    # 1. 合并基础配置文件
     if [ -f "$CONFIG_DIR/base.config" ]; then
-        log "📁 合并基础配置..."
+        log "📁 合并基础配置: base.config..."
         cat "$CONFIG_DIR/base.config" | grep -v "^#" | grep "CONFIG_" >> .config
     fi
     
-    local device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
-    if [ -f "$device_config_file" ]; then
-        log "📁 合并设备配置: $DEVICE.config..."
-        cat "$device_config_file" | grep -v "^#" | grep "CONFIG_" >> .config
+    # 2. 合并USB通用配置
+    if [ -f "$CONFIG_DIR/usb-generic.config" ]; then
+        log "📁 合并USB通用配置: usb-generic.config..."
+        cat "$CONFIG_DIR/usb-generic.config" | grep -v "^#" | grep "CONFIG_" >> .config
     fi
     
-    if [ "$CONFIG_MODE" = "normal" ] && [ -f "$CONFIG_DIR/normal.config" ]; then
-        log "📁 合并正常模式配置..."
-        cat "$CONFIG_DIR/normal.config" | grep -v "^#" | grep "CONFIG_" >> .config
-    fi
-    
-    # 平台专用配置
-    local platform_config=""
-    if [ -f "$CONFIG_DIR/devices/$TARGET.config" ]; then
-        platform_config="$CONFIG_DIR/devices/$TARGET.config"
-    else
-        platform_config=$(find "$CONFIG_DIR" -type f -name "*${TARGET}*.config" 2>/dev/null | grep -v "usb-generic" | grep -v "base" | grep -v "normal" | head -1)
-    fi
-    
-    if [ -n "$platform_config" ] && [ -f "$platform_config" ]; then
-        log "📁 合并平台配置: $(basename "$platform_config")..."
+    # 3. 合并平台专用配置
+    local platform_config="$CONFIG_DIR/$TARGET.config"
+    if [ -f "$platform_config" ]; then
+        log "📁 合并平台配置: $TARGET.config..."
         cat "$platform_config" | grep -v "^#" | grep "CONFIG_" >> .config
     fi
     
-    # 添加额外包
+    # 4. 合并版本专用配置
+    local version_config="$CONFIG_DIR/$SELECTED_BRANCH.config"
+    if [ -f "$version_config" ]; then
+        log "📁 合并版本配置: $SELECTED_BRANCH.config..."
+        cat "$version_config" | grep -v "^#" | grep "CONFIG_" >> .config
+    fi
+    
+    # 5. 合并设备专用配置
+    local device_config="$CONFIG_DIR/devices/$DEVICE.config"
+    if [ -f "$device_config" ]; then
+        log "📁 合并设备配置: $DEVICE.config..."
+        cat "$device_config" | grep -v "^#" | grep "CONFIG_" >> .config
+    fi
+    
+    # 6. 根据配置模式合并对应配置
+    if [ "$CONFIG_MODE" = "normal" ] && [ -f "$CONFIG_DIR/normal.config" ]; then
+        log "📁 合并正常模式配置: normal.config..."
+        cat "$CONFIG_DIR/normal.config" | grep -v "^#" | grep "CONFIG_" >> .config
+    fi
+    
+    # 7. 添加额外包
     if [ -n "$extra_packages" ]; then
         log "📦 添加额外包: $extra_packages"
         echo "$extra_packages" | tr ',' '
@@ -1217,7 +1144,43 @@ EOF
         done
     fi
     
-    # 去重
+    # TCP BBR 拥塞控制（确保启用）
+    log "🔧 确保TCP BBR启用..."
+    if ! grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
+        echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+    fi
+    if ! grep -q '^CONFIG_DEFAULT_TCP_CONG=' .config; then
+        echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
+    fi
+    
+    # TurboACC 配置（正常模式）
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        log "🔧 确保TurboACC组件启用..."
+        if ! grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+        fi
+        if ! grep -q "^CONFIG_PACKAGE_kmod-shortcut-fe=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+        fi
+        if ! grep -q "^CONFIG_PACKAGE_kmod-fast-classifier=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+        fi
+    fi
+    
+    # ath10k 冲突解决
+    log "🔧 解决ath10k冲突..."
+    # 确保禁用冲突驱动
+    sed -i '/^CONFIG_PACKAGE_kmod-ath10k=y/d' .config
+    sed -i '/^CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
+    sed -i '/^CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/d' .config
+    sed -i '/^CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y/d' .config
+    
+    # 如果未找到ath10k-ct，添加它
+    if ! grep -q "^CONFIG_PACKAGE_kmod-ath10k-ct=y" .config; then
+        echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+    fi
+    
+    # 去重配置
     log "🔧 去重配置..."
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
