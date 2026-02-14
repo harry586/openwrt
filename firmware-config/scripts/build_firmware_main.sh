@@ -1394,9 +1394,21 @@ EOF
         fi
     done
     
+    # 先查看.config中实际有哪些内核配置选项（用于调试）
+    log "🔍 查看.config中的USB相关内核配置选项:"
+    local usb_configs=$(grep -E "CONFIG_(USB|PHY|DWC|XHCI|QCOM|EXTCON|CLK|ARCH)" .config | grep -v "PACKAGE" | head -20)
+    if [ -n "$usb_configs" ]; then
+        echo "$usb_configs" | while read line; do
+            log "    $line"
+        done
+    else
+        log "    未找到USB相关内核配置"
+    fi
+    
     # 检查内核配置状态
     log "🔍 检查内核配置状态:"
     
+    # 定义要检查的内核配置及其可能的变体
     local kernel_configs=(
         "ARCH_QCOM"
         "ARCH_IPQ40XX"
@@ -1424,7 +1436,13 @@ EOF
             log "  ❌ ${config}: 已禁用"
             missing_kernel=$((missing_kernel + 1))
         else
-            log "  ⚪ ${config}: 未找到"
+            # 尝试查找类似的配置
+            local similar=$(grep -E "^CONFIG_.*${config}.*=y" .config | head -1)
+            if [ -n "$similar" ]; then
+                log "  🔍 ${config} 未找到，但找到相似配置: $similar"
+            else
+                log "  ⚪ ${config}: 未找到"
+            fi
             missing_kernel=$((missing_kernel + 1))
         fi
     done
@@ -1432,7 +1450,7 @@ EOF
     if [ ${#missing_drivers[@]} -gt 0 ]; then
         log "⚠️ 仍有 ${#missing_drivers[@]} 个USB驱动缺失"
         if [ $missing_kernel -gt 0 ]; then
-            log "ℹ️ 同时有 ${missing_kernel} 个内核配置缺失"
+            log "ℹ️ 同时有 ${missing_kernel} 个内核配置缺失或未找到"
             log "ℹ️ 这些驱动可能因为内核版本或平台限制无法启用"
         else
             log "ℹ️ 但内核配置都已启用，驱动可能被上层配置禁用"
