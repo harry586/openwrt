@@ -1048,7 +1048,7 @@ EOF
     grep -E "WARNING:.*has a dependency on.*which does not exist" /tmp/build-logs/oldconfig.log >> "$ARTIFACTS_DIR/missing-deps.txt" 2>/dev/null || true
     log "✅ 依赖关系解决成功"
     
-    # 步骤5: 后处理强制启用关键USB软件包（增强版）
+    # 步骤5: 后处理强制启用关键USB软件包（增强版 + 循环修复）
     log "🔧 后处理：强制启用USB软件包（增强版）..."
     
     # 定义所有平台必需的USB软件包（扩展列表）
@@ -1121,7 +1121,7 @@ EOF
             ;;
     esac
     
-    # 强制写入.config（删除可能存在的禁用/模块行，添加=y）
+    # 第一次强制写入
     for pkg in "${MUST_PACKAGES[@]}"; do
         sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
         sed -i "/^# CONFIG_PACKAGE_${pkg} is not set/d" .config
@@ -1133,81 +1133,64 @@ EOF
         echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" >> .config
     fi
     
-    # 再次去重
+    # 去重
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 步骤6: 再次运行 yes "" | make oldconfig 应用强制配置（不重置）
-    log "🔄 再次运行 yes "" | make oldconfig 应用强制配置..."
+    # 步骤6: 循环修复USB驱动，直到稳定或达到最大尝试次数
+    local MAX_RETRIES=3
+    local retry=0
+    local fixed=0
     
-    # 保存当前配置备份
-    cp .config .config.force
-    
-    # 使用 yes "" | make oldconfig 运行以获取详细输出
-    if ! yes "" | make -j1 oldconfig V=s > /tmp/build-logs/oldconfig2.log 2>&1; then
-        log "❌ make oldconfig 失败，查看详细日志..."
-        echo "=== oldconfig2.log 最后50行 ==="
-        tail -50 /tmp/build-logs/oldconfig2.log
-        echo "================================"
+    while [ $retry -lt $MAX_RETRIES ]; do
+        retry=$((retry + 1))
+        log "🔄 USB驱动修复循环 #$retry ..."
         
-        # 复制日志并提取缺失依赖
-        cp /tmp/build-logs/oldconfig2.log "$ARTIFACTS_DIR/" 2>/dev/null || true
-        grep -E "WARNING:.*has a dependency on.*which does not exist" /tmp/build-logs/oldconfig2.log >> "$ARTIFACTS_DIR/missing-deps.txt" 2>/dev/null || true
-        
-        # 尝试恢复备份并继续
-        if [ -f ".config.force" ]; then
-            log "🔄 尝试恢复强制配置并继续..."
-            cp .config.force .config
+        # 运行 yes "" | make oldconfig 应用当前配置
+        if ! yes "" | make -j1 oldconfig V=s > /tmp/build-logs/oldconfig2_$retry.log 2>&1; then
+            log "❌ make oldconfig 失败，查看日志..."
+            tail -50 /tmp/build-logs/oldconfig2_$retry.log
+            cp /tmp/build-logs/oldconfig2_$retry.log "$ARTIFACTS_DIR/" 2>/dev/null || true
+            grep -E "WARNING:.*has a dependency on.*which does not exist" /tmp/build-logs/oldconfig2_$retry.log >> "$ARTIFACTS_DIR/missing-deps.txt" 2>/dev/null || true
+            # 不中断，尝试继续
         else
-            handle_error "强制配置应用失败"
+            cp /tmp/build-logs/oldconfig2_$retry.log "$ARTIFACTS_DIR/" 2>/dev/null || true
+            grep -E "WARNING:.*has a dependency on.*which does not exist" /tmp/build-logs/oldconfig2_$retry.log >> "$ARTIFACTS_DIR/missing-deps.txt" 2>/dev/null || true
         fi
-    else
-        # 成功时也复制日志并提取缺失依赖
-        cp /tmp/build-logs/oldconfig2.log "$ARTIFACTS_DIR/" 2>/dev/null || true
-        grep -E "WARNING:.*has a dependency on.*which does not exist" /tmp/build-logs/oldconfig2.log >> "$ARTIFACTS_DIR/missing-deps.txt" 2>/dev/null || true
-        log "✅ make oldconfig 成功"
-    fi
-    
-    # 步骤7: 最终验证
-    log "📋 必需USB驱动状态验证:"
-    local missing=()
-    local missing_optional=()
-    
-    for pkg in "${MUST_PACKAGES[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
-            log "  ✅ $pkg: 已启用"
-        else
-            # 检查是否是平台特定包
-            local is_optional=0
-            case "$pkg" in
-                kmod-usb-dwc3-qcom|kmod-phy-qcom-dwc3|kmod-usb-xhci-mtk|kmod-usb-dwc3-mediatek|kmod-phy-mediatek|kmod-usb2-ath79|kmod-usb-ohci-pci|kmod-usb2-pci)
-                    is_optional=1
-                    ;;
-            esac
-            
-            if [ $is_optional -eq 1 ]; then
-                log "  ⚠️ $pkg: 未启用（平台可选）"
-                missing_optional+=("$pkg")
-            else
-                log "  ❌ $pkg: 未启用"
-                missing+=("$pkg")
+        
+        # 检查哪些必需驱动仍未启用
+        local missing_pkgs=()
+        for pkg in "${MUST_PACKAGES[@]}"; do
+            if ! grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
+                missing_pkgs+=("$pkg")
             fi
+        done
+        
+        if [ ${#missing_pkgs[@]} -eq 0 ]; then
+            log "✅ 所有必需USB驱动已启用，退出循环"
+            fixed=1
+            break
         fi
+        
+        log "⚠️ 本轮仍有 ${#missing_pkgs[@]} 个驱动未启用: ${missing_pkgs[*]}"
+        log "🔧 再次强制添加缺失驱动..."
+        
+        for pkg in "${missing_pkgs[@]}"; do
+            sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
+            sed -i "/^# CONFIG_PACKAGE_${pkg} is not set/d" .config
+            echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+        done
+        
+        # 去重
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
     done
     
-    if [ ${#missing[@]} -gt 0 ]; then
-        log "⚠️ 警告: 以下必需驱动未启用: ${missing[*]}"
-        log "💡 可能原因: 内核不支持或平台未包含相应驱动"
-    else
-        log "🎉 所有必需USB驱动已成功启用！"
+    if [ $fixed -eq 0 ]; then
+        log "⚠️ 经过 $MAX_RETRIES 次循环后，仍有驱动未启用，继续后续步骤"
     fi
     
-    if [ ${#missing_optional[@]} -gt 0 ]; then
-        log "ℹ️ 可选驱动未启用: ${missing_optional[*]}"
-        log "💡 如果硬件需要这些驱动，请检查平台支持"
-    fi
-    
-    # 最终设备验证（增强版：尝试多种匹配方式，并使用 scripts/config 工具和 make defconfig）
+    # 步骤7: 最终验证设备是否被选中（增强版：智能匹配）
     log "🔍 正在验证设备 $DEVICE 是否被选中..."
     
     local device_selected=""
@@ -1230,79 +1213,111 @@ EOF
     
     if [ -z "$device_selected" ]; then
         log "❌ 错误: 目标设备 $DEVICE 未被选中！"
-        log "当前可用的设备选项:"
-        grep -E "^CONFIG_TARGET_DEVICE_.*=y|^CONFIG_TARGET_.*_DEVICE_.*=y" .config | head -20 | sed 's/^/  /' || echo "  没有可用的设备选项"
+        log "🔍 尝试从 .config 中提取所有可用设备选项进行模糊匹配..."
         
-        # 将可用设备选项保存到文件
-        grep -E "^CONFIG_TARGET_DEVICE_.*=y|^CONFIG_TARGET_.*_DEVICE_.*=y" .config > "$ARTIFACTS_DIR/available-devices.txt" 2>/dev/null || true
+        # 收集所有设备选项
+        local available_devices=$(grep -E '^CONFIG_TARGET_DEVICE_.*=y|^CONFIG_TARGET_.*_DEVICE_.*=y' .config | sed -E 's/^(CONFIG_TARGET_DEVICE_|CONFIG_TARGET_.*_DEVICE_)//' | sed 's/=y//')
+        log "可用设备选项:"
+        echo "$available_devices" | sed 's/^/  /'
         
-        # 尝试自动修复
-        log "🔄 尝试自动修复：使用 scripts/config 工具启用设备选项..."
-        
-        local config_tool=""
-        if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
-            config_tool="scripts/config/config"
-        elif [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
-            config_tool="scripts/config/conf"
-        fi
-        
-        # 准备设备名变体
-        local device_upper="${DEVICE^^}"
+        # 尝试模糊匹配（忽略大小写、下划线）
+        local matched_device=""
         local device_lower="${DEVICE,,}"
-        local device_capital="$(echo ${DEVICE:0:1} | tr '[:lower:]' '[:upper:]')${DEVICE:1}"
+        local device_no_underscore="${device_lower//_/}"
         
-        if [ -n "$config_tool" ]; then
-            # 使用配置工具启用设备选项（尝试多种格式）
-            log "🔧 使用配置工具 $config_tool 启用设备..."
+        while IFS= read -r avail; do
+            avail_lower="${avail,,}"
+            avail_no_underscore="${avail_lower//_/}"
+            if [ "$avail_lower" = "$device_lower" ] || [ "$avail_no_underscore" = "$device_no_underscore" ]; then
+                matched_device="$avail"
+                break
+            fi
+        done <<< "$available_devices"
+        
+        if [ -n "$matched_device" ]; then
+            log "✅ 模糊匹配到设备: $matched_device"
+            log "🔧 正在启用设备 $matched_device ..."
             
-            # 先禁用可能的冲突选项
-            $config_tool --disable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
-            $config_tool --disable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
-            $config_tool --disable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
-            $config_tool --disable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
-            $config_tool --disable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
-            $config_tool --disable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
+            # 禁用其他设备选项（可选），直接启用匹配的
+            local config_tool=""
+            if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+                config_tool="scripts/config/config"
+            elif [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
+                config_tool="scripts/config/conf"
+            fi
             
-            # 启用设备选项
-            $config_tool --enable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
-            $config_tool --enable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
-            $config_tool --enable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
-            $config_tool --enable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
-            $config_tool --enable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
-            $config_tool --enable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
+            if [ -n "$config_tool" ]; then
+                $config_tool --enable "TARGET_DEVICE_${matched_device}" 2>/dev/null || true
+                $config_tool --enable "TARGET_${TARGET}_${SUBTARGET}_DEVICE_${matched_device}" 2>/dev/null || true
+            else
+                echo "CONFIG_TARGET_DEVICE_${matched_device}=y" >> .config
+                echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${matched_device}=y" >> .config
+            fi
+            
+            # 去重并重新运行 defconfig
+            sort .config | uniq > .config.tmp
+            mv .config.tmp .config
+            
+            log "🔄 重新运行 make defconfig 以应用设备选择..."
+            if make defconfig > /tmp/build-logs/defconfig_fix.log 2>&1; then
+                log "✅ make defconfig 修复成功"
+                cp /tmp/build-logs/defconfig_fix.log "$ARTIFACTS_DIR/" 2>/dev/null || true
+                device_selected="CONFIG_TARGET_DEVICE_${matched_device}=y"
+            else
+                log "❌ make defconfig 修复失败"
+                cat /tmp/build-logs/defconfig_fix.log
+                cp /tmp/build-logs/defconfig_fix.log "$ARTIFACTS_DIR/" 2>/dev/null || true
+            fi
         else
-            # 直接写入多种格式
-            log "⚠️ 配置工具不可用，直接写入多种设备格式..."
-            echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
-            echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
-            echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_capital}=y" >> .config
-            echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
-            echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
-            echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_capital}=y" >> .config
-        fi
-        
-        # 去重
-        sort .config | uniq > .config.tmp
-        mv .config.tmp .config
-        
-        log "🔄 重新运行 make defconfig 以应用设备选择..."
-        if make defconfig > /tmp/build-logs/defconfig_fix.log 2>&1; then
-            log "✅ make defconfig 修复成功"
-            # 复制修复日志
-            cp /tmp/build-logs/defconfig_fix.log "$ARTIFACTS_DIR/" 2>/dev/null || true
+            # 若无模糊匹配，回退到原修复逻辑（写入多种格式）
+            log "⚠️ 无模糊匹配，尝试直接写入多种设备格式..."
+            local config_tool=""
+            if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+                config_tool="scripts/config/config"
+            elif [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
+                config_tool="scripts/config/conf"
+            fi
             
-            # 再次检查
-            for pattern in "${device_patterns[@]}"; do
-                device_selected=$(grep -E "$pattern" .config | head -1)
-                if [ -n "$device_selected" ]; then
-                    log "✅ 修复后设备已选中: $device_selected"
-                    break
-                fi
-            done
-        else
-            log "❌ make defconfig 修复失败"
-            cat /tmp/build-logs/defconfig_fix.log
-            cp /tmp/build-logs/defconfig_fix.log "$ARTIFACTS_DIR/" 2>/dev/null || true
+            local device_upper="${DEVICE^^}"
+            local device_lower="${DEVICE,,}"
+            local device_capital="$(echo ${DEVICE:0:1} | tr '[:lower:]' '[:upper:]')${DEVICE:1}"
+            
+            if [ -n "$config_tool" ]; then
+                $config_tool --enable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
+                $config_tool --enable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
+                $config_tool --enable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
+                $config_tool --enable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
+                $config_tool --enable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
+                $config_tool --enable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
+            else
+                echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+                echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
+                echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_capital}=y" >> .config
+                echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+                echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
+                echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_capital}=y" >> .config
+            fi
+            
+            sort .config | uniq > .config.tmp
+            mv .config.tmp .config
+            
+            log "🔄 重新运行 make defconfig 以应用设备选择..."
+            if make defconfig > /tmp/build-logs/defconfig_fix.log 2>&1; then
+                log "✅ make defconfig 修复成功"
+                cp /tmp/build-logs/defconfig_fix.log "$ARTIFACTS_DIR/" 2>/dev/null || true
+                
+                for pattern in "${device_patterns[@]}"; do
+                    device_selected=$(grep -E "$pattern" .config | head -1)
+                    if [ -n "$device_selected" ]; then
+                        log "✅ 修复后设备已选中: $device_selected"
+                        break
+                    fi
+                done
+            else
+                log "❌ make defconfig 修复失败"
+                cat /tmp/build-logs/defconfig_fix.log
+                cp /tmp/build-logs/defconfig_fix.log "$ARTIFACTS_DIR/" 2>/dev/null || true
+            fi
         fi
     fi
     
