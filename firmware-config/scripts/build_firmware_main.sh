@@ -951,7 +951,7 @@ generate_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 智能配置生成系统（稳健版） ==="
+    log "=== 智能配置生成系统（设备显式指定版） ==="
     log "版本: $SELECTED_BRANCH"
     log "目标: $TARGET"
     log "子目标: $SUBTARGET"
@@ -962,7 +962,7 @@ generate_config() {
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
-    # 步骤1: 创建基础目标配置
+    # 步骤1: 创建基础目标配置（显式指定设备）
     cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
@@ -1080,6 +1080,11 @@ EOF
         echo "CONFIG_PACKAGE_${pkg}=y" >> .config
     done
     
+    # 再次确保设备选项存在（防止被覆盖）
+    if ! grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" .config; then
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" >> .config
+    fi
+    
     # 再次去重
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
@@ -1145,6 +1150,17 @@ EOF
     if [ ${#missing_optional[@]} -gt 0 ]; then
         log "ℹ️ 可选驱动未启用: ${missing_optional[*]}"
         log "💡 如果硬件需要这些驱动，请检查平台支持"
+    fi
+    
+    # 最终设备验证
+    local selected_device=$(grep "^CONFIG_TARGET_DEVICE_.*${DEVICE}=y" .config | head -1)
+    if [ -n "$selected_device" ]; then
+        log "✅ 目标设备已正确选择: $selected_device"
+    else
+        log "❌ 错误: 目标设备 $DEVICE 未被选中！"
+        log "当前可用的设备选项:"
+        grep "^CONFIG_TARGET_DEVICE_.*=y" .config | head -10
+        handle_error "设备配置错误"
     fi
     
     log "✅ 配置生成完成"
