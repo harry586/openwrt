@@ -951,7 +951,7 @@ generate_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 智能配置生成系统（强制启用USB内核依赖） ==="
+    log "=== 智能配置生成系统（稳健版） ==="
     log "版本: $SELECTED_BRANCH"
     log "目标: $TARGET"
     log "子目标: $SUBTARGET"
@@ -1027,174 +1027,89 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 步骤4: 运行 defconfig 解决基础依赖
+    # 步骤4: 运行 defconfig 解决依赖
     log "🔄 运行 make defconfig 解决依赖关系..."
     make defconfig || handle_error "依赖解决失败"
     
-    # 步骤5: 后处理强制启用关键USB驱动（包括内核符号）
-    log "🔧 后处理：强制启用USB内核符号..."
+    # 步骤5: 后处理强制启用关键USB软件包
+    log "🔧 后处理：强制启用USB软件包..."
     
-    # 定义完整的内核USB符号列表（根据常见依赖）
-    local KERNEL_USB_SYMS=(
-        # 基础 USB 支持
-        "CONFIG_USB_SUPPORT=y"
-        "CONFIG_USB_COMMON=y"
-        "CONFIG_USB=y"
-        "CONFIG_USB_ARCH_HAS_HCD=y"
-        "CONFIG_USB_PCI=y"
-        
-        # XHCI 主机控制器
-        "CONFIG_USB_XHCI_HCD=y"
-        "CONFIG_USB_XHCI_PCI=y"
-        "CONFIG_USB_XHCI_PLATFORM=y"
-        
-        # DWC3 核心
-        "CONFIG_USB_DWC3=y"
-        "CONFIG_USB_DWC3_EP0=y"
-        "CONFIG_USB_DWC3_GADGET=y"
-        "CONFIG_USB_DWC3_DUAL_ROLE=y"
-        "CONFIG_USB_DWC3_PCI=y"
-        "CONFIG_USB_DWC3_OF_SIMPLE=y"
-        
-        # 其他主机控制器（可选，但确保USB2支持）
-        "CONFIG_USB_EHCI_HCD=y"
-        "CONFIG_USB_EHCI_PCI=y"
-        "CONFIG_USB_OHCI_HCD=y"
-        "CONFIG_USB_OHCI_PCI=y"
-        
-        # 存储支持
-        "CONFIG_USB_STORAGE=y"
+    # 定义所有平台必需的USB软件包
+    local MUST_PACKAGES=(
+        "kmod-usb-core"
+        "kmod-usb-common"
+        "kmod-usb2"
+        "kmod-usb3"
+        "kmod-usb-xhci-hcd"
+        "kmod-usb-storage"
+        "kmod-scsi-core"
+        "kmod-usb-dwc3"
+        "kmod-usb-dwc3-of-simple"
     )
     
-    # 平台特定内核符号
+    # 平台特定软件包
     case "$TARGET" in
         ipq40xx)
-            KERNEL_USB_SYMS+=(
-                "CONFIG_USB_DWC3_QCOM=y"
-                "CONFIG_PHY_QCOM_DWC3=y"
-                "CONFIG_PHY_QCOM_USB_HS=y"
+            MUST_PACKAGES+=(
+                "kmod-usb-dwc3-qcom"
+                "kmod-phy-qcom-dwc3"
             )
             ;;
         ramips)
-            KERNEL_USB_SYMS+=(
-                "CONFIG_USB_XHCI_MTK=y"
+            MUST_PACKAGES+=(
+                "kmod-usb-xhci-mtk"
             )
             ;;
         mediatek)
-            KERNEL_USB_SYMS+=(
-                "CONFIG_USB_DWC3_MTK=y"
-                "CONFIG_PHY_MTK_TPHY=y"
+            MUST_PACKAGES+=(
+                "kmod-usb-dwc3-mediatek"
+                "kmod-phy-mediatek"
             )
             ;;
         ath79)
-            KERNEL_USB_SYMS+=(
-                "CONFIG_USB_EHCI_HCD=y"
-                "CONFIG_USB_OHCI_HCD=y"
+            MUST_PACKAGES+=(
+                "kmod-usb2-ath79"
             )
             ;;
     esac
     
-    # 使用 scripts/config 工具（如果可用）或直接写入
-    local CONFIG_TOOL=""
-    if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
-        CONFIG_TOOL="scripts/config/conf"
-    elif [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
-        CONFIG_TOOL="scripts/config/config"
-    fi
-    
-    if [ -n "$CONFIG_TOOL" ]; then
-        for sym in "${KERNEL_USB_SYMS[@]}"; do
-            # 提取符号名和值
-            local name="${sym%%=*}"
-            local value="${sym#*=}"
-            if [ "$CONFIG_TOOL" = "scripts/config/conf" ]; then
-                # conf 使用 --defconfig 参数设置
-                $CONFIG_TOOL --defconfig "$sym" .config 2>/dev/null || true
-            else
-                # config 使用 --enable 等，但这里符号可能不是 PACKAGE_ 开头，所以用直接写入更简单
-                sed -i "/^${name}=/d" .config
-                echo "$sym" >> .config
-            fi
-        done
-    else
-        # 直接写入
-        for sym in "${KERNEL_USB_SYMS[@]}"; do
-            local name="${sym%%=*}"
-            sed -i "/^${name}=/d" .config
-            echo "$sym" >> .config
-        done
-    fi
-    
-    # 同时强制启用对应的软件包符号（确保包被选中）
-    local PACKAGE_SYMS=(
-        "CONFIG_PACKAGE_kmod-usb-core=y"
-        "CONFIG_PACKAGE_kmod-usb-common=y"
-        "CONFIG_PACKAGE_kmod-usb2=y"
-        "CONFIG_PACKAGE_kmod-usb3=y"
-        "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
-        "CONFIG_PACKAGE_kmod-usb-storage=y"
-        "CONFIG_PACKAGE_kmod-scsi-core=y"
-        "CONFIG_PACKAGE_kmod-usb-dwc3=y"
-        "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y"
-        "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y"
-    )
-    for sym in "${PACKAGE_SYMS[@]}"; do
-        local name="${sym%%=*}"
-        sed -i "/^${name}=/d" .config
-        echo "$sym" >> .config
+    # 强制写入.config（删除可能存在的禁用/模块行，添加=y）
+    for pkg in "${MUST_PACKAGES[@]}"; do
+        sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
+        sed -i "/^# CONFIG_PACKAGE_${pkg} is not set/d" .config
+        echo "CONFIG_PACKAGE_${pkg}=y" >> .config
     done
     
-    # 步骤6: 使用 olddefconfig 更新配置（保留我们的设置，自动补全依赖）
-    log "🔄 运行 make olddefconfig 应用强制配置..."
-    make olddefconfig || handle_error "强制配置应用失败"
+    # 再次去重
+    sort .config | uniq > .config.tmp
+    mv .config.tmp .config
     
-    # 步骤7: 最终验证（区分必需和可选）
+    # 步骤6: 再次运行 defconfig 应用强制配置
+    log "🔄 再次运行 make defconfig 应用强制配置..."
+    if ! make defconfig > /tmp/build-logs/defconfig.log 2>&1; then
+        log "❌ make defconfig 失败，查看详细日志..."
+        cat /tmp/build-logs/defconfig.log
+        handle_error "强制配置应用失败"
+    fi
+    
+    # 步骤7: 最终验证
     log "📋 必需USB驱动状态验证:"
-    local MUST_DRIVERS=(
-        "kmod-usb-core"
-        "kmod-usb2"
-        "kmod-usb3"
-        "kmod-usb-storage"
-        "kmod-scsi-core"
-    )
     local missing=()
-    for driver in "${MUST_DRIVERS[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-            log "  ✅ $driver: 已启用"
+    for pkg in "${MUST_PACKAGES[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
+            log "  ✅ $pkg: 已启用"
         else
-            log "  ❌ $driver: 未启用"
-            missing+=("$driver")
+            log "  ❌ $pkg: 未启用"
+            missing+=("$pkg")
         fi
     done
     
     if [ ${#missing[@]} -gt 0 ]; then
-        log "⚠️ 警告: 以下必需驱动未启用: ${missing[*]}"
-        log "💡 请检查内核依赖或平台支持"
+        log "⚠️ 警告: 以下驱动未启用: ${missing[*]}"
+        log "💡 可能原因: 内核不支持或平台未包含相应驱动"
     else
-        log "🎉 所有必需USB驱动已成功启用！"
+        log "🎉 所有关键USB驱动已成功启用！"
     fi
-    
-    log "📋 平台特定驱动状态验证（可选）:"
-    case "$TARGET" in
-        ipq40xx)
-            for driver in "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3-of-simple"; do
-                if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-                    log "  ✅ $driver: 已启用"
-                else
-                    log "  ⚠️ $driver: 未启用（如果硬件需要，请检查支持）"
-                fi
-            done
-            ;;
-        ramips)
-            for driver in "kmod-usb-xhci-mtk"; do
-                if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-                    log "  ✅ $driver: 已启用"
-                else
-                    log "  ⚠️ $driver: 未启用（如果硬件需要，请检查支持）"
-                fi
-            done
-            ;;
-    esac
     
     log "✅ 配置生成完成"
 }
