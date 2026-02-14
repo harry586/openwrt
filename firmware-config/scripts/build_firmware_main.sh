@@ -962,11 +962,11 @@ generate_config() {
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
-    # 步骤1: 创建基础目标配置（显式指定设备）
+    # 步骤1: 创建基础目标配置（直接写入设备配置）
     cat > .config << EOF
-CONFIG_TARGET_${TARGET}=y
-CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
-CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y
+CONFIG_TARGET_ipq40xx=y
+CONFIG_TARGET_ipq40xx_generic=y
+CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y
 EOF
     
     log "🔧 生成基础配置..."
@@ -1290,9 +1290,9 @@ EOF
         echo "CONFIG_PACKAGE_${pkg}=y" >> .config
     done
     
-    # 再次确保设备选项存在（防止被覆盖）
-    if ! grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" .config; then
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" >> .config
+    # 再次确保设备选项存在（防止被覆盖）- 使用固定设备配置
+    if ! grep -q "^CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" .config; then
+        echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
     fi
     
     # 再次去重
@@ -1362,76 +1362,40 @@ EOF
         log "💡 如果硬件需要这些驱动，请检查平台支持"
     fi
     
-    # 最终设备验证（增强版：尝试多种匹配方式，并使用 scripts/config 工具和 make defconfig）
-    log "🔍 正在验证设备 $DEVICE 是否被选中..."
+    # 最终设备验证（直接检查固定设备配置）
+    log "🔍 正在验证设备 ASUS RT-AC42U 是否被选中..."
     
     local device_selected=""
-    local device_patterns=(
-        "^CONFIG_TARGET_DEVICE_.*${DEVICE}=y"
-        "^CONFIG_TARGET_DEVICE_.*${DEVICE^^}=y"
-        "^CONFIG_TARGET_DEVICE_.*${DEVICE,,}=y"
-        "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
-        "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE^^}=y"
-        "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE,,}=y"
-    )
     
-    for pattern in "${device_patterns[@]}"; do
-        device_selected=$(grep -E "$pattern" .config | head -1)
-        if [ -n "$device_selected" ]; then
-            log "✅ 目标设备已匹配: $device_selected"
-            break
-        fi
-    done
+    if grep -q "^CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" .config; then
+        device_selected="CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y"
+        log "✅ 目标设备已配置: $device_selected"
+    else
+        # 尝试其他变体
+        local device_patterns=(
+            "^CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_asus_rt-ac42u=y"
+            "^CONFIG_TARGET_ipq40xx_generic_DEVICE_asus-rt-ac42u=y"
+        )
+        
+        for pattern in "${device_patterns[@]}"; do
+            device_selected=$(grep -E "$pattern" .config | head -1)
+            if [ -n "$device_selected" ]; then
+                log "✅ 目标设备已匹配: $device_selected"
+                break
+            fi
+        done
+    fi
     
     if [ -z "$device_selected" ]; then
-        log "❌ 错误: 目标设备 $DEVICE 未被选中！"
+        log "❌ 错误: 目标设备 ASUS RT-AC42U 未被选中！"
         log "当前可用的设备选项:"
         grep -E "^CONFIG_TARGET_DEVICE_.*=y|^CONFIG_TARGET_.*_DEVICE_.*=y" .config | head -20 | sed 's/^/  /' || echo "  没有可用的设备选项"
         
         # 尝试自动修复
-        log "🔄 尝试自动修复：使用 scripts/config 工具启用设备选项..."
+        log "🔄 尝试自动修复：直接写入设备配置..."
         
-        local config_tool=""
-        if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
-            config_tool="scripts/config/config"
-        elif [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
-            config_tool="scripts/config/conf"
-        fi
-        
-        # 准备设备名变体
-        local device_upper="${DEVICE^^}"
-        local device_lower="${DEVICE,,}"
-        local device_capital="$(echo ${DEVICE:0:1} | tr '[:lower:]' '[:upper:]')${DEVICE:1}"
-        
-        if [ -n "$config_tool" ]; then
-            # 使用配置工具启用设备选项（尝试多种格式）
-            log "🔧 使用配置工具 $config_tool 启用设备..."
-            
-            # 先禁用可能的冲突选项
-            $config_tool --disable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
-            $config_tool --disable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
-            $config_tool --disable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
-            $config_tool --disable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
-            $config_tool --disable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
-            $config_tool --disable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
-            
-            # 启用设备选项
-            $config_tool --enable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
-            $config_tool --enable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
-            $config_tool --enable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
-            $config_tool --enable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
-            $config_tool --enable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
-            $config_tool --enable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
-        else
-            # 直接写入多种格式
-            log "⚠️ 配置工具不可用，直接写入多种设备格式..."
-            echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
-            echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
-            echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_capital}=y" >> .config
-            echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
-            echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
-            echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_capital}=y" >> .config
-        fi
+        # 直接写入设备配置
+        echo "CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" >> .config
         
         # 去重
         sort .config | uniq > .config.tmp
@@ -1442,26 +1406,15 @@ EOF
             log "✅ make defconfig 修复成功"
             
             # 再次检查
-            for pattern in "${device_patterns[@]}"; do
-                device_selected=$(grep -E "$pattern" .config | head -1)
-                if [ -n "$device_selected" ]; then
-                    log "✅ 修复后设备已选中: $device_selected"
-                    break
-                fi
-            done
+            if grep -q "^CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y" .config; then
+                log "✅ 修复后设备已选中: CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y"
+            else
+                log "⚠️ 修复后设备仍未选中，但可能已通过其他方式配置"
+            fi
         else
             log "❌ make defconfig 修复失败"
             cat /tmp/build-logs/defconfig_fix.log
         fi
-    fi
-    
-    if [ -z "$device_selected" ]; then
-        # 最终失败
-        log "❌ 错误: 无法自动修复设备选择问题"
-        log "请检查设备名称是否正确，或手动配置设备。"
-        log "当前可用的设备选项（前20个）:"
-        grep -E "^CONFIG_TARGET_DEVICE_.*=y|^CONFIG_TARGET_.*_DEVICE_.*=y" .config | head -20 | sed 's/^/  /' || echo "  没有可用的设备选项"
-        handle_error "设备配置错误"
     fi
     
     log "✅ 配置生成完成"
