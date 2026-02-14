@@ -279,16 +279,6 @@ jobs:
             "${{ github.event.inputs.extra_packages }}"
       #【firmware-build.yml-15-end】
 
-      #【新增步骤】上传步骤15生成的日志和缺失依赖
-      - name: "15a. 上传配置生成日志（含缺失依赖）"
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: step15-logs-${{ env.TIMESTAMP_SEC }}
-          path: ${{ github.workspace }}/artifacts/step15-logs/
-          retention-days: 7
-          if-no-files-found: warn
-
       #【firmware-build.yml-16】
       - name: "16. 验证USB配置"
         run: |
@@ -448,16 +438,6 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       #【firmware-build.yml-28-end】
-
-      #【可选】上传错误日志（如果存在）
-      - name: "28a. 上传错误日志"
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: error-logs-${{ env.TIMESTAMP_SEC }}
-          path: ${{ github.workspace }}/artifacts/error-logs/
-          retention-days: 7
-          if-no-files-found: warn
 
       #【firmware-build.yml-29】
       - name: "29. 编译后空间检查"
