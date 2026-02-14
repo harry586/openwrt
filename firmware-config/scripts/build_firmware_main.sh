@@ -1027,9 +1027,14 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 步骤4: 运行 make olddefconfig 解决依赖关系（保留现有配置）
-    log "🔄 运行 make olddefconfig 解决依赖关系..."
-    make olddefconfig || handle_error "依赖解决失败"
+    # 步骤4: 运行 make olddefconfig 解决依赖关系（改用 yes "" | make oldconfig）
+    log "🔄 运行 yes "" | make oldconfig 解决依赖关系..."
+    yes "" | make -j1 oldconfig V=s > /tmp/build-logs/oldconfig.log 2>&1 || {
+        log "❌ make oldconfig 失败，查看日志..."
+        tail -50 /tmp/build-logs/oldconfig.log
+        handle_error "依赖解决失败"
+    }
+    log "✅ 依赖关系解决成功"
     
     # 步骤5: 后处理强制启用关键USB软件包（增强版）
     log "🔧 后处理：强制启用USB软件包（增强版）..."
@@ -1120,17 +1125,17 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 步骤6: 再次运行 olddefconfig 应用强制配置（不重置）
-    log "🔄 再次运行 make olddefconfig 应用强制配置..."
+    # 步骤6: 再次运行 yes "" | make oldconfig 应用强制配置（不重置）
+    log "🔄 再次运行 yes "" | make oldconfig 应用强制配置..."
     
     # 保存当前配置备份
     cp .config .config.force
     
-    # 使用 -j1 V=s 运行以获取详细输出
-    if ! make -j1 olddefconfig V=s > /tmp/build-logs/defconfig.log 2>&1; then
-        log "❌ make olddefconfig 失败，查看详细日志..."
-        echo "=== defconfig.log 最后50行 ==="
-        tail -50 /tmp/build-logs/defconfig.log
+    # 使用 yes "" | make oldconfig 运行以获取详细输出
+    if ! yes "" | make -j1 oldconfig V=s > /tmp/build-logs/oldconfig2.log 2>&1; then
+        log "❌ make oldconfig 失败，查看详细日志..."
+        echo "=== oldconfig2.log 最后50行 ==="
+        tail -50 /tmp/build-logs/oldconfig2.log
         echo "================================"
         
         # 尝试恢复备份并继续
@@ -1141,7 +1146,7 @@ EOF
             handle_error "强制配置应用失败"
         fi
     else
-        log "✅ make olddefconfig 成功"
+        log "✅ make oldconfig 成功"
     fi
     
     # 步骤7: 最终验证
