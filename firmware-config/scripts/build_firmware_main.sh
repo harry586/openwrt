@@ -1027,23 +1027,43 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 步骤4: 运行 defconfig 解决依赖
+    # 步骤4: 运行 defconfig 解决基础依赖
     log "🔄 运行 make defconfig 解决依赖关系..."
     make defconfig || handle_error "依赖解决失败"
     
     # 步骤5: 后处理强制启用关键USB驱动（包括内核符号）
     log "🔧 后处理：强制启用USB内核符号..."
     
-    # 基础USB内核符号（所有平台都需要）
+    # 定义完整的内核USB符号列表（根据常见依赖）
     local KERNEL_USB_SYMS=(
-        "CONFIG_USB=y"
+        # 基础 USB 支持
         "CONFIG_USB_SUPPORT=y"
         "CONFIG_USB_COMMON=y"
+        "CONFIG_USB=y"
+        "CONFIG_USB_ARCH_HAS_HCD=y"
+        "CONFIG_USB_PCI=y"
+        
+        # XHCI 主机控制器
         "CONFIG_USB_XHCI_HCD=y"
-        "CONFIG_USB_XHCI_HCD_PCI=y"      # 若支持PCI
+        "CONFIG_USB_XHCI_PCI=y"
+        "CONFIG_USB_XHCI_PLATFORM=y"
+        
+        # DWC3 核心
         "CONFIG_USB_DWC3=y"
+        "CONFIG_USB_DWC3_EP0=y"
+        "CONFIG_USB_DWC3_GADGET=y"
+        "CONFIG_USB_DWC3_DUAL_ROLE=y"
+        "CONFIG_USB_DWC3_PCI=y"
         "CONFIG_USB_DWC3_OF_SIMPLE=y"
-        "CONFIG_USB_STORAGE=y"            # 可选，但有助于依赖
+        
+        # 其他主机控制器（可选，但确保USB2支持）
+        "CONFIG_USB_EHCI_HCD=y"
+        "CONFIG_USB_EHCI_PCI=y"
+        "CONFIG_USB_OHCI_HCD=y"
+        "CONFIG_USB_OHCI_PCI=y"
+        
+        # 存储支持
+        "CONFIG_USB_STORAGE=y"
     )
     
     # 平台特定内核符号
@@ -1052,14 +1072,12 @@ EOF
             KERNEL_USB_SYMS+=(
                 "CONFIG_USB_DWC3_QCOM=y"
                 "CONFIG_PHY_QCOM_DWC3=y"
-                "CONFIG_PHY_QCOM_USB_HS=y"   # 可能也需要
+                "CONFIG_PHY_QCOM_USB_HS=y"
             )
             ;;
         ramips)
             KERNEL_USB_SYMS+=(
                 "CONFIG_USB_XHCI_MTK=y"
-                "CONFIG_USB_OHCI_PCI=y"
-                "CONFIG_USB_EHCI_PCI=y"
             )
             ;;
         mediatek)
@@ -1070,52 +1088,77 @@ EOF
             ;;
         ath79)
             KERNEL_USB_SYMS+=(
-                "CONFIG_USB_OHCI_HCD=y"
                 "CONFIG_USB_EHCI_HCD=y"
+                "CONFIG_USB_OHCI_HCD=y"
             )
             ;;
     esac
     
-    # 写入内核符号
-    for sym in "${KERNEL_USB_SYMS[@]}"; do
-        # 删除可能存在的行（包括启用和禁用）
-        sed -i "/^${sym%%=*}/d" .config
-        echo "$sym" >> .config
-        log "  ✅ 强制启用内核符号: $sym"
-    done
+    # 使用 scripts/config 工具（如果可用）或直接写入
+    local CONFIG_TOOL=""
+    if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
+        CONFIG_TOOL="scripts/config/conf"
+    elif [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+        CONFIG_TOOL="scripts/config/config"
+    fi
+    
+    if [ -n "$CONFIG_TOOL" ]; then
+        for sym in "${KERNEL_USB_SYMS[@]}"; do
+            # 提取符号名和值
+            local name="${sym%%=*}"
+            local value="${sym#*=}"
+            if [ "$CONFIG_TOOL" = "scripts/config/conf" ]; then
+                # conf 使用 --defconfig 参数设置
+                $CONFIG_TOOL --defconfig "$sym" .config 2>/dev/null || true
+            else
+                # config 使用 --enable 等，但这里符号可能不是 PACKAGE_ 开头，所以用直接写入更简单
+                sed -i "/^${name}=/d" .config
+                echo "$sym" >> .config
+            fi
+        done
+    else
+        # 直接写入
+        for sym in "${KERNEL_USB_SYMS[@]}"; do
+            local name="${sym%%=*}"
+            sed -i "/^${name}=/d" .config
+            echo "$sym" >> .config
+        done
+    fi
     
     # 同时强制启用对应的软件包符号（确保包被选中）
     local PACKAGE_SYMS=(
         "CONFIG_PACKAGE_kmod-usb-core=y"
         "CONFIG_PACKAGE_kmod-usb-common=y"
-        "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
+        "CONFIG_PACKAGE_kmod-usb2=y"
         "CONFIG_PACKAGE_kmod-usb3=y"
+        "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
+        "CONFIG_PACKAGE_kmod-usb-storage=y"
+        "CONFIG_PACKAGE_kmod-scsi-core=y"
         "CONFIG_PACKAGE_kmod-usb-dwc3=y"
         "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y"
         "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y"
     )
     for sym in "${PACKAGE_SYMS[@]}"; do
-        sed -i "/^${sym%%=*}/d" .config
+        local name="${sym%%=*}"
+        sed -i "/^${name}=/d" .config
         echo "$sym" >> .config
     done
     
-    # 再次运行 defconfig 使强制配置生效
-    log "🔄 再次运行 make defconfig 应用强制配置..."
-    make defconfig || handle_error "强制配置应用失败"
+    # 步骤6: 使用 olddefconfig 更新配置（保留我们的设置，自动补全依赖）
+    log "🔄 运行 make olddefconfig 应用强制配置..."
+    make olddefconfig || handle_error "强制配置应用失败"
     
-    # 步骤6: 最终验证
-    log "📋 关键USB驱动状态验证:"
-    local MUST_CHECK=(
+    # 步骤7: 最终验证（区分必需和可选）
+    log "📋 必需USB驱动状态验证:"
+    local MUST_DRIVERS=(
         "kmod-usb-core"
-        "kmod-usb-common"
-        "kmod-usb-xhci-hcd"
+        "kmod-usb2"
         "kmod-usb3"
-        "kmod-usb-dwc3"
-        "kmod-usb-dwc3-of-simple"
-        "kmod-phy-qcom-dwc3"
+        "kmod-usb-storage"
+        "kmod-scsi-core"
     )
     local missing=()
-    for driver in "${MUST_CHECK[@]}"; do
+    for driver in "${MUST_DRIVERS[@]}"; do
         if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
             log "  ✅ $driver: 已启用"
         else
@@ -1125,11 +1168,33 @@ EOF
     done
     
     if [ ${#missing[@]} -gt 0 ]; then
-        log "⚠️ 警告: 以下驱动仍未启用: ${missing[*]}"
-        log "💡 可能需要手动检查内核配置或平台支持"
+        log "⚠️ 警告: 以下必需驱动未启用: ${missing[*]}"
+        log "💡 请检查内核依赖或平台支持"
     else
-        log "🎉 所有关键USB驱动已成功启用！"
+        log "🎉 所有必需USB驱动已成功启用！"
     fi
+    
+    log "📋 平台特定驱动状态验证（可选）:"
+    case "$TARGET" in
+        ipq40xx)
+            for driver in "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3-of-simple"; do
+                if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                    log "  ✅ $driver: 已启用"
+                else
+                    log "  ⚠️ $driver: 未启用（如果硬件需要，请检查支持）"
+                fi
+            done
+            ;;
+        ramips)
+            for driver in "kmod-usb-xhci-mtk"; do
+                if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                    log "  ✅ $driver: 已启用"
+                else
+                    log "  ⚠️ $driver: 未启用（如果硬件需要，请检查支持）"
+                fi
+            done
+            ;;
+    esac
     
     log "✅ 配置生成完成"
 }
