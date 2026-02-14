@@ -1126,7 +1126,24 @@ EOF
         local config_count=$(wc -l < "$usb_configs_file.sorted")
         log "找到 $config_count 个USB相关内核配置"
         
+        # 显示前10个作为示例
+        log "配置示例:"
+        head -10 "$usb_configs_file.sorted" | while read line; do
+            if echo "$line" | grep -q "=y$"; then
+                log "   ✅ $line"
+            elif echo "$line" | grep -q "is not set"; then
+                log "   ⚪ $line"
+            else
+                log "   📄 $line"
+            fi
+        done
+        
+        if [ $config_count -gt 10 ]; then
+            log "   ... 还有 $((config_count - 10)) 个配置未显示"
+        fi
+        
         # 将这些配置添加到.config中（但不要覆盖已启用的配置）
+        local added_count=0
         while read line; do
             # 提取配置名（去掉前面的#和空格）
             local config_name=$(echo "$line" | sed 's/^# //g' | cut -d'=' -f1 | cut -d' ' -f1)
@@ -1136,14 +1153,16 @@ EOF
                 # 如果配置是启用的（=y），直接添加
                 if echo "$line" | grep -q "=y$"; then
                     echo "$line" >> .config
-                    log "  ✅ 添加: $line"
+                    added_count=$((added_count + 1))
                 # 如果配置是禁用的（is not set），作为注释添加
                 elif echo "$line" | grep -q "is not set"; then
                     echo "$line" >> .config
-                    log "  ⚪ 添加: $line"
+                    added_count=$((added_count + 1))
                 fi
             fi
         done < "$usb_configs_file.sorted"
+        
+        log "✅ 添加了 $added_count 个新的内核配置"
         
         rm -f "$usb_configs_file" "$usb_configs_file.sorted"
     else
@@ -1159,7 +1178,7 @@ EOF
     }
     log "✅ 第一次 make defconfig 成功"
     
-    # 步骤7: 动态检测实际生效的内核配置
+    # 步骤7: 动态检测实际生效的USB内核配置
     log "🔍 动态检测实际生效的USB内核配置..."
     
     # 定义要检查的关键USB组件
@@ -1173,11 +1192,24 @@ EOF
     )
     
     for component in "${usb_components[@]}"; do
-        log "检查 $component 相关配置:"
-        grep -E "CONFIG_${component}" .config | head -10 | while read line; do
-            log "    $line"
-        done
+        local matches=$(grep -E "^CONFIG_${component}" .config | grep -E "=y|=m" | wc -l)
+        if [ $matches -gt 0 ]; then
+            log "✅ $component 相关配置: 找到 $matches 个"
+            # 显示具体配置
+            grep -E "^CONFIG_${component}" .config | grep -E "=y|=m" | head -5 | while read line; do
+                log "    $line"
+            done
+            if [ $matches -gt 5 ]; then
+                log "    ... 还有 $((matches - 5)) 个"
+            fi
+        else
+            log "ℹ️ $component 相关配置: 未找到"
+        fi
     done
+    
+    # 显示所有USB相关内核配置的统计
+    local total_usb_kernel=$(grep -E "^CONFIG_USB_|^CONFIG_PHY_|^CONFIG_DWC|^CONFIG_XHCI" .config | grep -E "=y|=m" | wc -l)
+    log "📊 总计: $total_usb_kernel 个USB相关内核配置已启用"
     
     # 步骤8: 动态添加USB软件包（基于目标平台）
     log "📋 动态添加USB软件包..."
@@ -1229,13 +1261,21 @@ EOF
     esac
     
     # 去重并添加USB软件包
+    local added_packages=0
     printf "%s
 " "${base_usb_packages[@]}" | sort -u | while read pkg; do
-        if ! grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
+        if ! grep -q "^CONFIG_PACKAGE_${pkg}=y" .config && ! grep -q "^CONFIG_PACKAGE_${pkg}=m" .config; then
             echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+            added_packages=$((added_packages + 1))
             log "  ✅ 添加软件包: $pkg"
         fi
     done
+    
+    if [ $added_packages -gt 0 ]; then
+        log "✅ 添加了 $added_packages 个USB软件包"
+    else
+        log "ℹ️ 所有USB软件包已存在"
+    fi
     
     # 步骤9: 第二次去重
     log "🔄 第二次去重配置..."
@@ -1249,74 +1289,132 @@ EOF
     }
     log "✅ 第二次 make defconfig 完成"
     
-    # 步骤11: 验证关键USB驱动状态
+    # 步骤11: 验证关键USB驱动是否被正确启用
     log "🔍 验证关键USB驱动状态..."
     
-    # 动态检测哪些USB驱动已启用
-    local enabled_usb_drivers=$(grep "^CONFIG_PACKAGE_kmod-usb" .config | grep "=y" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//g')
-    local disabled_usb_drivers=$(grep "^# CONFIG_PACKAGE_kmod-usb" .config | grep "is not set" | sed 's/# CONFIG_PACKAGE_//g' | sed 's/ is not set//g')
-    
-    log "已启用的USB驱动:"
-    echo "$enabled_usb_drivers" | head -20 | while read driver; do
-        [ -n "$driver" ] && log "  ✅ $driver"
-    done
-    
-    # 检查关键驱动是否缺失
-    local critical_drivers=(
+    local critical_usb_drivers=(
         "kmod-usb-core"
         "kmod-usb2"
         "kmod-usb-storage"
+        "kmod-scsi-core"
     )
     
-    local missing_critical=0
-    for driver in "${critical_drivers[@]}"; do
-        if ! echo "$enabled_usb_drivers" | grep -q "$driver"; then
-            log "  ❌ 关键驱动缺失: $driver"
-            missing_critical=$((missing_critical + 1))
+    # 根据平台添加关键驱动
+    case "$TARGET" in
+        ipq40xx|ipq806x|qcom)
+            critical_usb_drivers+=(
+                "kmod-usb-dwc3"
+                "kmod-usb-dwc3-qcom"
+            )
+            ;;
+        mediatek|ramips)
+            critical_usb_drivers+=(
+                "kmod-usb-xhci-mtk"
+            )
+            ;;
+    esac
+    
+    local missing_drivers=()
+    for driver in "${critical_usb_drivers[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            log "  ✅ $driver: 已启用"
+        elif grep -q "^CONFIG_PACKAGE_${driver}=m" .config; then
+            log "  📦 $driver: 模块化"
+        else
+            log "  ❌ $driver: 未启用"
+            missing_drivers+=("$driver")
         fi
     done
     
-    if [ $missing_critical -eq 0 ]; then
-        log "✅ 所有关键USB驱动都已启用"
-    else
-        log "⚠️ 有 $missing_critical 个关键USB驱动缺失"
+    # 检查USB 3.0/xhci功能（多种实现方式）
+    log "  🔍 USB 3.0/xhci功能检测:"
+    local usb3_found=0
+    
+    if grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
+        log "    ✅ kmod-usb3: 已启用"
+        usb3_found=1
     fi
     
-    # 步骤12: 最终设备验证
+    if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
+        log "    ✅ kmod-usb-xhci-hcd: 已启用"
+        usb3_found=1
+    elif grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" .config; then
+        log "    ✅ kmod-usb-xhci-plat-hcd: 已启用"
+        usb3_found=1
+    elif grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-qcom=y" .config; then
+        log "    ✅ kmod-usb-xhci-qcom: 已启用"
+        usb3_found=1
+    elif grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config; then
+        log "    ✅ kmod-usb-xhci-mtk: 已启用"
+        usb3_found=1
+    elif grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3=y" .config && grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
+        log "    ✅ DWC3 + USB3: 已启用"
+        usb3_found=1
+    elif grep -q "^CONFIG_USB_XHCI_HCD=y" .config; then
+        log "    ✅ 内核xhci支持: 已启用"
+        usb3_found=1
+    fi
+    
+    if [ $usb3_found -eq 0 ]; then
+        log "    ❌ USB 3.0功能未启用"
+        missing_drivers+=("USB 3.0功能")
+    fi
+    
+    if [ ${#missing_drivers[@]} -gt 0 ]; then
+        log "⚠️ 缺失驱动: ${missing_drivers[*]}"
+    else
+        log "✅ 所有关键USB驱动都已启用"
+    fi
+    
+    # 步骤12: 显示所有启用的USB驱动
+    log "📋 所有已启用的USB驱动:"
+    local all_usb=$(grep "^CONFIG_PACKAGE_kmod-usb.*=y" .config | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
+    if [ -n "$all_usb" ]; then
+        local usb_count=$(echo "$all_usb" | wc -l)
+        log "共 $usb_count 个USB驱动:"
+        echo "$all_usb" | while read driver; do
+            log "  ✅ $driver"
+        done
+    else
+        log "  未找到USB驱动"
+    fi
+    
+    # 步骤13: 最终设备验证
     log "🔍 正在验证设备 $openwrt_device 是否被选中..."
     
-    # 动态查找设备配置
-    local device_found=$(grep -E "CONFIG_TARGET_.*DEVICE.*${device_lower}=y" .config | head -1)
-    
-    if [ -n "$device_found" ]; then
-        log "✅ 目标设备已正确启用: $device_found"
-    else
-        # 尝试查找可用的设备选项
-        log "⚠️ 警告: 设备 $openwrt_device 未找到，查找可用设备:"
-        grep -E "CONFIG_TARGET_.*DEVICE.*=y" .config | head -10 | while read line; do
-            log "    $line"
-        done
-        
-        # 尝试强制添加
-        log "🔄 尝试强制添加设备配置..."
+    if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
+        log "✅ 目标设备已正确启用: CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y"
+    elif grep -q "^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} is not set" .config; then
+        log "⚠️ 警告: 设备被禁用，尝试强制启用..."
+        sed -i "/^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} is not set/d" .config
         echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
         make defconfig > /dev/null 2>&1
         
-        if grep -q "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
-            log "✅ 设备已强制添加"
+        if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
+            log "✅ 设备已强制启用"
+        else
+            log "❌ 无法启用设备"
         fi
+    else
+        log "⚠️ 警告: 设备配置行未找到，手动添加..."
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
+        make defconfig > /dev/null 2>&1
     fi
     
-    # 步骤13: 保存配置统计信息
+    # 步骤14: 保存配置统计信息
     local total_configs=$(wc -l < .config)
     local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config)
+    local module_packages=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config)
     local enabled_kernel=$(grep -c "^CONFIG_[A-Z].*=y$" .config | grep -v "PACKAGE" | wc -l)
     
     log "📊 配置统计:"
     log "  总配置行数: $total_configs"
     log "  启用软件包: $enabled_packages"
+    log "  模块化软件包: $module_packages"
     log "  启用内核配置: $enabled_kernel"
     
     log "✅ 配置生成完成"
