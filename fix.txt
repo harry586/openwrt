@@ -1,0 +1,194 @@
+#【build_firmware_main.sh-13】
+generate_config() {
+    local extra_packages=$1
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 智能配置生成系统（强制启用USB依赖） ==="
+    log "版本: $SELECTED_BRANCH"
+    log "目标: $TARGET"
+    log "子目标: $SUBTARGET"
+    log "设备: $DEVICE"
+    log "配置模式: $CONFIG_MODE"
+    log "配置文件目录: $CONFIG_DIR"
+    
+    rm -f .config .config.old .config.bak*
+    log "✅ 已清理旧配置文件"
+    
+    # 步骤1: 创建基础目标配置
+    cat > .config << EOF
+CONFIG_TARGET_${TARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y
+EOF
+    
+    log "🔧 生成基础配置..."
+    make defconfig || handle_error "基础配置生成失败"
+    log "✅ 基础配置生成成功"
+    
+    # 步骤2: 直接合并所有USB配置（确保所有依赖项都明确启用）
+    log "📁 开始合并配置文件..."
+    
+    # 基础配置
+    if [ -f "$CONFIG_DIR/base.config" ]; then
+        log "📁 合并基础配置: base.config..."
+        # 移除注释行，只保留有效的CONFIG行
+        grep -v "^#" "$CONFIG_DIR/base.config" | grep "CONFIG_" >> .config
+    fi
+    
+    # USB通用配置（包含完整的USB驱动链）
+    if [ -f "$CONFIG_DIR/usb-generic.config" ]; then
+        log "📁 合并USB通用配置: usb-generic.config..."
+        grep -v "^#" "$CONFIG_DIR/usb-generic.config" | grep "CONFIG_" >> .config
+    fi
+    
+    # 平台专用配置（如ipq40xx.config、ramips.config等）
+    local platform_config="$CONFIG_DIR/$TARGET.config"
+    if [ -f "$platform_config" ]; then
+        log "📁 合并平台配置: $TARGET.config..."
+        grep -v "^#" "$platform_config" | grep "CONFIG_" >> .config
+    fi
+    
+    # 版本专用配置
+    local version_config="$CONFIG_DIR/$SELECTED_BRANCH.config"
+    if [ -f "$version_config" ]; then
+        log "📁 合并版本配置: $SELECTED_BRANCH.config..."
+        grep -v "^#" "$version_config" | grep "CONFIG_" >> .config
+    fi
+    
+    # 设备专用配置
+    local device_config="$CONFIG_DIR/devices/$DEVICE.config"
+    if [ -f "$device_config" ]; then
+        log "📁 合并设备配置: $DEVICE.config..."
+        grep -v "^#" "$device_config" | grep "CONFIG_" >> .config
+    fi
+    
+    # 正常模式配置
+    if [ "$CONFIG_MODE" = "normal" ] && [ -f "$CONFIG_DIR/normal.config" ]; then
+        log "📁 合并正常模式配置: normal.config..."
+        grep -v "^#" "$CONFIG_DIR/normal.config" | grep "CONFIG_" >> .config
+    fi
+    
+    # 添加额外包
+    if [ -n "$extra_packages" ]; then
+        log "📦 添加额外包: $extra_packages"
+        echo "$extra_packages" | tr ',' '
+' | while read pkg; do
+            if [ -n "$pkg" ]; then
+                echo "CONFIG_PACKAGE_$pkg=y" >> .config
+            fi
+        done
+    fi
+    
+    # TCP BBR
+    echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+    echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
+    
+    # TurboACC（正常模式）
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+    fi
+    
+    # ath10k 冲突解决
+    sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
+    sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
+    sed -i '/CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/d' .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
+    echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+    
+    # 步骤3: 去重
+    sort .config | uniq > .config.tmp
+    mv .config.tmp .config
+    
+    # 步骤4: 再次运行 defconfig 解决依赖（此时所有USB选项已强制写入）
+    log "🔄 运行 make defconfig 解决依赖关系..."
+    make defconfig || handle_error "依赖解决失败"
+    
+    # 步骤5: 后处理强制启用关键USB驱动（防止被依赖系统再次禁用）
+    log "🔧 后处理：强制启用关键USB驱动..."
+    
+    # 定义需要强制启用的驱动列表（按平台）
+    local MUST_ENABLE=(
+        "kmod-usb-core"
+        "kmod-usb-common"
+        "kmod-usb2"
+        "kmod-usb-ehci"
+        "kmod-usb-ohci"
+        "kmod-usb-xhci-hcd"
+        "kmod-usb3"
+        "kmod-usb-storage"
+        "kmod-scsi-core"
+    )
+    
+    # 平台特定驱动
+    case "$TARGET" in
+        ipq40xx)
+            MUST_ENABLE+=(
+                "kmod-usb-dwc3"
+                "kmod-usb-dwc3-of-simple"
+                "kmod-usb-dwc3-qcom"
+                "kmod-phy-qcom-dwc3"
+            )
+            ;;
+        ramips)
+            MUST_ENABLE+=(
+                "kmod-usb-xhci-mtk"
+                "kmod-usb-ohci-pci"
+                "kmod-usb2-pci"
+            )
+            ;;
+        mediatek)
+            MUST_ENABLE+=(
+                "kmod-usb-dwc3-mediatek"
+                "kmod-phy-mediatek"
+            )
+            ;;
+        ath79)
+            MUST_ENABLE+=(
+                "kmod-usb2-ath79"
+            )
+            ;;
+    esac
+    
+    # 逐个强制启用
+    for driver in "${MUST_ENABLE[@]}"; do
+        # 删除可能存在的禁用行
+        sed -i "/^# CONFIG_PACKAGE_${driver} is not set/d" .config
+        sed -i "/^CONFIG_PACKAGE_${driver}=m/d" .config
+        # 如果不存在启用行，则添加
+        if ! grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            echo "CONFIG_PACKAGE_${driver}=y" >> .config
+            log "  ✅ 强制启用: $driver"
+        fi
+    done
+    
+    # 再次运行 defconfig 使强制启用的驱动生效
+    log "🔄 再次运行 make defconfig 应用强制配置..."
+    make defconfig || handle_error "强制配置应用失败"
+    
+    # 最终验证
+    log "📋 关键USB驱动状态验证:"
+    local missing=()
+    for driver in "${MUST_ENABLE[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            log "  ✅ $driver: 已启用"
+        else
+            log "  ❌ $driver: 未启用"
+            missing+=("$driver")
+        fi
+    done
+    
+    if [ ${#missing[@]} -gt 0 ]; then
+        log "⚠️ 警告: 以下驱动仍未启用: ${missing[*]}"
+        log "💡 可能需要检查内核依赖或平台支持"
+    else
+        log "🎉 所有关键USB驱动已成功启用！"
+    fi
+    
+    log "✅ 配置生成完成"
+}
+#【build_firmware_main.sh-13-end】
