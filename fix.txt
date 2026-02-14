@@ -1,0 +1,189 @@
+#【build_firmware_main.sh-13】
+generate_config() {
+    local extra_packages=$1
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 智能配置生成系统（强制启用USB内核依赖） ==="
+    log "版本: $SELECTED_BRANCH"
+    log "目标: $TARGET"
+    log "子目标: $SUBTARGET"
+    log "设备: $DEVICE"
+    log "配置模式: $CONFIG_MODE"
+    log "配置文件目录: $CONFIG_DIR"
+    
+    rm -f .config .config.old .config.bak*
+    log "✅ 已清理旧配置文件"
+    
+    # 步骤1: 创建基础目标配置
+    cat > .config << EOF
+CONFIG_TARGET_${TARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y
+EOF
+    
+    log "🔧 生成基础配置..."
+    make defconfig || handle_error "基础配置生成失败"
+    log "✅ 基础配置生成成功"
+    
+    # 步骤2: 合并所有配置文件
+    log "📁 开始合并配置文件..."
+    
+    # 辅助函数：安全追加配置（过滤注释和空行）
+    append_config() {
+        local file=$1
+        if [ -f "$file" ]; then
+            grep -v '^[[:space:]]*#' "$file" | grep -v '^[[:space:]]*$' | grep 'CONFIG_' >> .config
+        fi
+    }
+    
+    append_config "$CONFIG_DIR/base.config"
+    append_config "$CONFIG_DIR/usb-generic.config"
+    append_config "$CONFIG_DIR/$TARGET.config"
+    append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
+    append_config "$CONFIG_DIR/devices/$DEVICE.config"
+    
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        append_config "$CONFIG_DIR/normal.config"
+    fi
+    
+    # 添加额外包
+    if [ -n "$extra_packages" ]; then
+        log "📦 添加额外包: $extra_packages"
+        echo "$extra_packages" | tr ',' '\n' | while read pkg; do
+            [ -n "$pkg" ] && echo "CONFIG_PACKAGE_$pkg=y" >> .config
+        done
+    fi
+    
+    # TCP BBR
+    echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+    echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
+    
+    # TurboACC（正常模式）
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+    fi
+    
+    # ath10k 冲突解决
+    sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
+    sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
+    sed -i '/CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/d' .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
+    echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+    
+    # 步骤3: 去重
+    sort .config | uniq > .config.tmp
+    mv .config.tmp .config
+    
+    # 步骤4: 运行 defconfig 解决依赖
+    log "🔄 运行 make defconfig 解决依赖关系..."
+    make defconfig || handle_error "依赖解决失败"
+    
+    # 步骤5: 后处理强制启用关键USB驱动（包括内核符号）
+    log "🔧 后处理：强制启用USB内核符号..."
+    
+    # 基础USB内核符号（所有平台都需要）
+    local KERNEL_USB_SYMS=(
+        "CONFIG_USB=y"
+        "CONFIG_USB_SUPPORT=y"
+        "CONFIG_USB_COMMON=y"
+        "CONFIG_USB_XHCI_HCD=y"
+        "CONFIG_USB_XHCI_HCD_PCI=y"      # 若支持PCI
+        "CONFIG_USB_DWC3=y"
+        "CONFIG_USB_DWC3_OF_SIMPLE=y"
+        "CONFIG_USB_STORAGE=y"            # 可选，但有助于依赖
+    )
+    
+    # 平台特定内核符号
+    case "$TARGET" in
+        ipq40xx)
+            KERNEL_USB_SYMS+=(
+                "CONFIG_USB_DWC3_QCOM=y"
+                "CONFIG_PHY_QCOM_DWC3=y"
+                "CONFIG_PHY_QCOM_USB_HS=y"   # 可能也需要
+            )
+            ;;
+        ramips)
+            KERNEL_USB_SYMS+=(
+                "CONFIG_USB_XHCI_MTK=y"
+                "CONFIG_USB_OHCI_PCI=y"
+                "CONFIG_USB_EHCI_PCI=y"
+            )
+            ;;
+        mediatek)
+            KERNEL_USB_SYMS+=(
+                "CONFIG_USB_DWC3_MTK=y"
+                "CONFIG_PHY_MTK_TPHY=y"
+            )
+            ;;
+        ath79)
+            KERNEL_USB_SYMS+=(
+                "CONFIG_USB_OHCI_HCD=y"
+                "CONFIG_USB_EHCI_HCD=y"
+            )
+            ;;
+    esac
+    
+    # 写入内核符号
+    for sym in "${KERNEL_USB_SYMS[@]}"; do
+        # 删除可能存在的行（包括启用和禁用）
+        sed -i "/^${sym%%=*}/d" .config
+        echo "$sym" >> .config
+        log "  ✅ 强制启用内核符号: $sym"
+    done
+    
+    # 同时强制启用对应的软件包符号（确保包被选中）
+    local PACKAGE_SYMS=(
+        "CONFIG_PACKAGE_kmod-usb-core=y"
+        "CONFIG_PACKAGE_kmod-usb-common=y"
+        "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
+        "CONFIG_PACKAGE_kmod-usb3=y"
+        "CONFIG_PACKAGE_kmod-usb-dwc3=y"
+        "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y"
+        "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y"
+    )
+    for sym in "${PACKAGE_SYMS[@]}"; do
+        sed -i "/^${sym%%=*}/d" .config
+        echo "$sym" >> .config
+    done
+    
+    # 再次运行 defconfig 使强制配置生效
+    log "🔄 再次运行 make defconfig 应用强制配置..."
+    make defconfig || handle_error "强制配置应用失败"
+    
+    # 步骤6: 最终验证
+    log "📋 关键USB驱动状态验证:"
+    local MUST_CHECK=(
+        "kmod-usb-core"
+        "kmod-usb-common"
+        "kmod-usb-xhci-hcd"
+        "kmod-usb3"
+        "kmod-usb-dwc3"
+        "kmod-usb-dwc3-of-simple"
+        "kmod-phy-qcom-dwc3"
+    )
+    local missing=()
+    for driver in "${MUST_CHECK[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            log "  ✅ $driver: 已启用"
+        else
+            log "  ❌ $driver: 未启用"
+            missing+=("$driver")
+        fi
+    done
+    
+    if [ ${#missing[@]} -gt 0 ]; then
+        log "⚠️ 警告: 以下驱动仍未启用: ${missing[*]}"
+        log "💡 可能需要手动检查内核配置或平台支持"
+    else
+        log "🎉 所有关键USB驱动已成功启用！"
+    fi
+    
+    log "✅ 配置生成完成"
+}
+#【build_firmware_main.sh-13-end】
+
