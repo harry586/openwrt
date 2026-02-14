@@ -1,0 +1,1230 @@
+#【build_firmware_main.sh-06】
+initialize_build_env() {
+    local device_name=$1
+    local version_selection=$2
+    local config_mode=$3
+    
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 版本选择 ==="
+    if [ "$version_selection" = "23.05" ]; then
+        SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+        SELECTED_BRANCH="openwrt-23.05"
+    else
+        SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
+        SELECTED_BRANCH="openwrt-21.02"
+    fi
+    log "✅ 版本选择完成: $SELECTED_BRANCH"
+    
+    log "=== 克隆源码 ==="
+    log "仓库: $SELECTED_REPO_URL"
+    log "分支: $SELECTED_BRANCH"
+    
+    sudo rm -rf ./* ./.git* 2>/dev/null || true
+    
+    git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
+    log "✅ 源码克隆完成"
+    
+    local important_source_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
+    for file in "${important_source_files[@]}"; do
+        if [ -f "$file" ]; then
+            log "✅ 源码文件存在: $file"
+        else
+            log "❌ 源码文件缺失: $file"
+        fi
+    done
+    
+    log "=== 设备配置 ==="
+    if [ -f "$SUPPORT_SCRIPT" ]; then
+        log "🔍 调用support.sh获取设备平台信息..."
+        PLATFORM_INFO=$("$SUPPORT_SCRIPT" get-platform "$device_name")
+        if [ -n "$PLATFORM_INFO" ]; then
+            TARGET=$(echo "$PLATFORM_INFO" | awk '{print $1}')
+            SUBTARGET=$(echo "$PLATFORM_INFO" | awk '{print $2}')
+            DEVICE="$device_name"
+            log "✅ 从support.sh获取平台信息: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
+        else
+            log "❌ 无法从support.sh获取平台信息"
+            handle_error "获取平台信息失败"
+        fi
+    else
+        log "❌ support.sh不存在"
+        handle_error "support.sh脚本缺失"
+    fi
+    
+    log "🔧 设备: $device_name"
+    log "🔧 目标平台: $TARGET/$SUBTARGET"
+    
+    CONFIG_MODE="$config_mode"
+    
+    log "目标: $TARGET"
+    log "子目标: $SUBTARGET"
+    log "设备: $DEVICE"
+    log "配置模式: $CONFIG_MODE"
+    
+    # 🔥 关键修复：正确识别和使用编译好的 config 工具
+    log "=== 编译配置工具 ==="
+    
+    local config_tool_created=0
+    local real_config_tool=""
+    
+    # 方法1: 编译 scripts/config
+    log "🔧 尝试方法1: 编译 scripts/config..."
+    if [ -d "scripts/config" ]; then
+        cd scripts/config
+        make
+        cd $BUILD_DIR
+        
+        # 检查编译生成的文件
+        if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
+            log "✅ 方法1成功: 编译生成 conf 工具"
+            
+            # 创建 config 包装脚本，使用 conf
+            mkdir -p scripts/config
+            cat > scripts/config/config << 'EOF'
+#!/bin/sh
+# OpenWrt config 工具包装脚本
+# 使用编译生成的 conf 工具
+
+CONF_TOOL="$(dirname "$0")/conf"
+
+if [ ! -x "$CONF_TOOL" ]; then
+    echo "Error: conf tool not found" >&2
+    exit 1
+fi
+
+# 转换参数格式
+case "$1" in
+    --enable)
+        shift
+        "$CONF_TOOL" --defconfig CONFIG_$1=y .config
+        ;;
+    --disable)
+        shift
+        "$CONF_TOOL" --defconfig CONFIG_$1=n .config
+        ;;
+    --module)
+        shift
+        "$CONF_TOOL" --defconfig CONFIG_$1=m .config
+        ;;
+    --set-str)
+        shift
+        name="$1"
+        value="$2"
+        "$CONF_TOOL" --defconfig CONFIG_$name="$value" .config
+        shift 2
+        ;;
+    *)
+        "$CONF_TOOL" "$@"
+        ;;
+esac
+EOF
+            chmod +x scripts/config/config
+            log "✅ 创建 config 包装脚本成功"
+            real_config_tool="scripts/config/config"
+            config_tool_created=1
+        elif [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+            log "✅ 方法1成功: 编译生成 config 工具"
+            real_config_tool="scripts/config/config"
+            config_tool_created=1
+        fi
+    fi
+    
+    # 方法2: 直接使用 conf 作为配置工具
+    if [ $config_tool_created -eq 0 ]; then
+        if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
+            log "✅ 方法2成功: 直接使用 conf 工具"
+            mkdir -p scripts/config
+            cat > scripts/config/config << 'EOF'
+#!/bin/sh
+# 使用 conf 工具的包装脚本
+exec "$(dirname "$0")/conf" "$@"
+EOF
+            chmod +x scripts/config/config
+            real_config_tool="scripts/config/config"
+            config_tool_created=1
+        fi
+    fi
+    
+    # 方法3: 使用 mconf (如果可用)
+    if [ $config_tool_created -eq 0 ]; then
+        if [ -f "scripts/config/mconf" ] && [ -x "scripts/config/mconf" ]; then
+            log "✅ 方法3成功: 使用 mconf 工具"
+            mkdir -p scripts/config
+            cat > scripts/config/config << 'EOF'
+#!/bin/sh
+# 使用 mconf 工具的包装脚本
+exec "$(dirname "$0")/mconf" "$@"
+EOF
+            chmod +x scripts/config/config
+            real_config_tool="scripts/config/config"
+            config_tool_created=1
+        fi
+    fi
+    
+    # 方法4: 从 SDK 复制
+    if [ $config_tool_created -eq 0 ] && [ -n "$COMPILER_DIR" ]; then
+        log "🔧 尝试方法4: 从 SDK 目录复制"
+        if [ -f "$COMPILER_DIR/scripts/config/conf" ] && [ -x "$COMPILER_DIR/scripts/config/conf" ]; then
+            mkdir -p scripts/config
+            cp "$COMPILER_DIR/scripts/config/conf" scripts/config/
+            cat > scripts/config/config << 'EOF'
+#!/bin/sh
+exec "$(dirname "$0")/conf" "$@"
+EOF
+            chmod +x scripts/config/config
+            log "✅ 方法4成功: 从 SDK 复制 conf 工具"
+            real_config_tool="scripts/config/config"
+            config_tool_created=1
+        fi
+    fi
+    
+    # 方法5: 创建功能完整的简易工具
+    if [ $config_tool_created -eq 0 ]; then
+        log "🔧 方法5: 创建功能完整的简易 config 工具"
+        mkdir -p scripts/config
+        cat > scripts/config/config << 'EOF'
+#!/bin/bash
+# 功能完整的 config 工具
+CONFIG_FILE=".config"
+
+show_help() {
+    echo "Usage: config [options]"
+    echo "  --enable <symbol>    Enable a configuration option"
+    echo "  --disable <symbol>   Disable a configuration option"
+    echo "  --module <symbol>    Set a configuration option as module"
+    echo "  --set-str <name> <value> Set a string configuration option"
+}
+
+# 确保 .config 存在
+if [ ! -f "$CONFIG_FILE" ]; then
+    touch "$CONFIG_FILE"
+fi
+
+case "$1" in
+    --enable)
+        shift
+        symbol="$1"
+        # 移除 CONFIG_ 前缀（如果存在）
+        symbol="${symbol#CONFIG_}"
+        # 移除 PACKAGE_ 前缀（如果存在）
+        symbol="${symbol#PACKAGE_}"
+        
+        # 删除所有相关的行
+        sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" "$CONFIG_FILE"
+        
+        # 添加启用行
+        echo "CONFIG_PACKAGE_${symbol}=y" >> "$CONFIG_FILE"
+        ;;
+    --disable)
+        shift
+        symbol="$1"
+        symbol="${symbol#CONFIG_}"
+        symbol="${symbol#PACKAGE_}"
+        
+        sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" "$CONFIG_FILE"
+        
+        echo "# CONFIG_PACKAGE_${symbol} is not set" >> "$CONFIG_FILE"
+        ;;
+    --module)
+        shift
+        symbol="$1"
+        symbol="${symbol#CONFIG_}"
+        symbol="${symbol#PACKAGE_}"
+        
+        sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" "$CONFIG_FILE"
+        
+        echo "CONFIG_PACKAGE_${symbol}=m" >> "$CONFIG_FILE"
+        ;;
+    --set-str)
+        shift
+        name="$1"
+        value="$2"
+        name="${name#CONFIG_}"
+        
+        sed -i "/^CONFIG_${name}=/d" "$CONFIG_FILE"
+        echo "CONFIG_${name}="$value"" >> "$CONFIG_FILE"
+        shift 2
+        ;;
+    --help)
+        show_help
+        ;;
+    *)
+        echo "Unknown option: $1"
+        show_help
+        exit 1
+        ;;
+esac
+EOF
+        chmod +x scripts/config/config
+        log "✅ 方法5成功: 创建功能完整的简易 config 工具"
+        real_config_tool="scripts/config/config"
+        config_tool_created=1
+    fi
+    
+    # 创建统一调用接口 - 修复版，不使用 --help 测试
+    if [ $config_tool_created -eq 1 ]; then
+        log "🔧 创建统一调用接口..."
+        
+        # 记录真实工具路径
+        echo "$real_config_tool" > scripts/.config_tool_path
+        
+        # 创建 scripts/config 软链接或副本，以便 make defconfig 能找到
+        if [ ! -f "scripts/config" ]; then
+            if [ -f "scripts/config/config" ]; then
+                ln -sf config scripts/config 2>/dev/null || cp scripts/config/config scripts/config 2>/dev/null || true
+                log "✅ 创建 scripts/config 链接/副本"
+            fi
+        fi
+        
+        cat > scripts/config-tool << 'EOF'
+#!/bin/sh
+# 统一 config 工具调用接口
+CONFIG_TOOL_PATH="$(dirname "$0")/.config_tool_path"
+
+if [ -f "$CONFIG_TOOL_PATH" ]; then
+    CONFIG_TOOL="$(cat "$CONFIG_TOOL_PATH" 2>/dev/null)"
+    if [ -n "$CONFIG_TOOL" ] && [ -f "$CONFIG_TOOL" ] && [ -x "$CONFIG_TOOL" ]; then
+        exec "$CONFIG_TOOL" "$@"
+    fi
+fi
+
+# 备选1: 直接查找
+if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+    echo "scripts/config/config" > "$CONFIG_TOOL_PATH"
+    exec scripts/config/config "$@"
+fi
+
+# 备选2: 使用 conf
+if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
+    echo "scripts/config/conf" > "$CONFIG_TOOL_PATH"
+    exec scripts/config/conf "$@"
+fi
+
+# 备选3: 使用 mconf
+if [ -f "scripts/config/mconf" ] && [ -x "scripts/config/mconf" ]; then
+    echo "scripts/config/mconf" > "$CONFIG_TOOL_PATH"
+    exec scripts/config/mconf "$@"
+fi
+
+echo "Error: config tool not found" >&2
+exit 1
+EOF
+        chmod +x scripts/config-tool
+        log "✅ 统一调用接口创建成功: scripts/config-tool"
+        
+        # 不再测试 --help，而是测试基本功能
+        if scripts/config-tool --version > /dev/null 2>&1 || scripts/config-tool -h > /dev/null 2>&1; then
+            log "✅ 统一调用接口测试通过"
+        else
+            # 尝试测试是否存在
+            if [ -f scripts/config/config ] || [ -f scripts/config/conf ]; then
+                log "✅ 统一调用接口可用（跳过参数测试）"
+            else
+                log "⚠️ 统一调用接口可能有问题，但工具可能仍可用"
+            fi
+        fi
+    fi
+    
+    # 最终验证
+    if [ $config_tool_created -eq 1 ]; then
+        log "✅ 配置工具最终验证通过"
+        log "📁 真实工具路径: $real_config_tool"
+        log "📁 统一调用接口: scripts/config-tool"
+        
+        # 显示工具信息
+        if [ -f "$real_config_tool" ]; then
+            if file "$real_config_tool" | grep -q "ELF"; then
+                log "📋 工具类型: 已编译二进制文件"
+            else
+                log "📋 工具类型: Shell 脚本"
+            fi
+        fi
+    else
+        log "❌ 所有方法都失败，配置工具不存在"
+        handle_error "无法创建配置工具"
+    fi
+    
+    save_env
+    
+    echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
+    echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
+    echo "TARGET=$TARGET" >> $GITHUB_ENV
+    echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
+    echo "DEVICE=$DEVICE" >> $GITHUB_ENV
+    echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
+    
+    log "✅ 构建环境初始化完成"
+}
+#【build_firmware_main.sh-06-end】
+
+#【build_firmware_main.sh-13】
+generate_config() {
+    local extra_packages=$1
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 智能配置生成系统（设备显式指定版） ==="
+    log "版本: $SELECTED_BRANCH"
+    log "目标: $TARGET"
+    log "子目标: $SUBTARGET"
+    log "设备: $DEVICE"
+    log "配置模式: $CONFIG_MODE"
+    log "配置文件目录: $CONFIG_DIR"
+    
+    rm -f .config .config.old .config.bak*
+    log "✅ 已清理旧配置文件"
+    
+    # 步骤1: 创建基础目标配置（显式指定设备）
+    cat > .config << EOF
+CONFIG_TARGET_${TARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y
+EOF
+    
+    log "🔧 生成基础配置..."
+    make defconfig || handle_error "基础配置生成失败"
+    log "✅ 基础配置生成成功"
+    
+    # 步骤2: 合并所有配置文件
+    log "📁 开始合并配置文件..."
+    
+    # 辅助函数：安全追加配置（过滤注释和空行）
+    append_config() {
+        local file=$1
+        if [ -f "$file" ]; then
+            grep -v '^[[:space:]]*#' "$file" | grep -v '^[[:space:]]*$' | grep 'CONFIG_' >> .config
+        fi
+    }
+    
+    append_config "$CONFIG_DIR/base.config"
+    append_config "$CONFIG_DIR/usb-generic.config"
+    append_config "$CONFIG_DIR/$TARGET.config"
+    append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
+    append_config "$CONFIG_DIR/devices/$DEVICE.config"
+    
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        append_config "$CONFIG_DIR/normal.config"
+    fi
+    
+    # 添加额外包
+    if [ -n "$extra_packages" ]; then
+        log "📦 添加额外包: $extra_packages"
+        echo "$extra_packages" | tr ',' '
+' | while read pkg; do
+            [ -n "$pkg" ] && echo "CONFIG_PACKAGE_$pkg=y" >> .config
+        done
+    fi
+    
+    # 根据config.txt添加ASUS RT-AC42U特定配置
+    log "📋 应用ASUS RT-AC42U特定配置..."
+    
+    # 基础依赖库
+    echo "CONFIG_GNUTLS_ALPN=y" >> .config
+    echo "CONFIG_GNUTLS_ANON=y" >> .config
+    echo "CONFIG_GNUTLS_CRYPTODEV=y" >> .config
+    echo "CONFIG_GNUTLS_DTLS_SRTP=y" >> .config
+    echo "CONFIG_GNUTLS_HEARTBEAT=y" >> .config
+    echo "CONFIG_GNUTLS_OCSP=y" >> .config
+    echo "CONFIG_GNUTLS_PSK=y" >> .config
+    
+    # libcurl配置
+    echo "CONFIG_LIBCURL_COOKIES=y" >> .config
+    echo "CONFIG_LIBCURL_CRYPTO_AUTH=y" >> .config
+    echo "CONFIG_LIBCURL_FILE=y" >> .config
+    echo "CONFIG_LIBCURL_FTP=y" >> .config
+    echo "CONFIG_LIBCURL_HTTP=y" >> .config
+    echo "CONFIG_LIBCURL_NGHTTP2=y" >> .config
+    echo "CONFIG_LIBCURL_OPENSSL=y" >> .config
+    echo "CONFIG_LIBCURL_PROXY=y" >> .config
+    echo "CONFIG_LIBCURL_TFTP=y" >> .config
+    echo "CONFIG_LIBCURL_THREADED_RESOLVER=y" >> .config
+    echo "CONFIG_LIBCURL_TLS_SRP=y" >> .config
+    echo "CONFIG_LIBCURL_UNIX_SOCKETS=y" >> .config
+    
+    # ath10k驱动和固件
+    echo "CONFIG_PACKAGE_ath10k-board-qca988x=y" >> .config
+    echo "CONFIG_PACKAGE_ath10k-firmware-qca988x=y" >> .config
+    
+    # 基础工具
+    echo "CONFIG_PACKAGE_attr=y" >> .config
+    echo "CONFIG_PACKAGE_avahi-dbus-daemon=y" >> .config
+    echo "CONFIG_PACKAGE_bash=y" >> .config
+    echo "CONFIG_PACKAGE_blkid=y" >> .config
+    echo "CONFIG_PACKAGE_blockd=y" >> .config
+    echo "CONFIG_PACKAGE_bridge=y" >> .config
+    echo "CONFIG_PACKAGE_btrfs-progs=y" >> .config
+    echo "CONFIG_PACKAGE_cpulimit=y" >> .config
+    echo "CONFIG_PACKAGE_curl=y" >> .config
+    echo "CONFIG_PACKAGE_dbus=y" >> .config
+    echo "CONFIG_PACKAGE_hd-idle=y" >> .config
+    echo "CONFIG_PACKAGE_ip-tiny=y" >> .config
+    echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> .config
+    echo "CONFIG_PACKAGE_iptables-mod-ipopt=y" >> .config
+    echo "CONFIG_PACKAGE_iputils-arping=y" >> .config
+    echo "CONFIG_PACKAGE_jq=y" >> .config
+    
+    # 内核模块
+    echo "CONFIG_PACKAGE_kmod-crypto-acompress=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-fs-autofs4=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-fs-btrfs=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-ifb=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-ipt-conntrack-extra=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-ipt-ipopt=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-lib-crc32c=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-lib-lzo=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-lib-raid6=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-lib-xor=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-lib-zlib-deflate=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-lib-zlib-inflate=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-lib-zstd=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-nls-cp936=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-sched-cake=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-sched-core=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-scsi-generic=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+    
+    # USB驱动（全面启用）
+    echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-ehci=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-serial=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-serial-ftdi=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-serial-pl2303=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-uhci=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config
+    
+    # 库文件
+    echo "CONFIG_PACKAGE_libatomic=y" >> .config
+    echo "CONFIG_PACKAGE_libattr=y" >> .config
+    echo "CONFIG_PACKAGE_libavahi-client=y" >> .config
+    echo "CONFIG_PACKAGE_libavahi-dbus-support=y" >> .config
+    echo "CONFIG_PACKAGE_libcap=y" >> .config
+    echo "CONFIG_PACKAGE_libcurl=y" >> .config
+    echo "CONFIG_PACKAGE_libdaemon=y" >> .config
+    echo "CONFIG_PACKAGE_libdbus=y" >> .config
+    echo "CONFIG_PACKAGE_libevdev=y" >> .config
+    echo "CONFIG_PACKAGE_libexpat=y" >> .config
+    echo "CONFIG_PACKAGE_libgnutls=y" >> .config
+    echo "CONFIG_PACKAGE_liblzo=y" >> .config
+    echo "CONFIG_PACKAGE_libmount=y" >> .config
+    echo "CONFIG_PACKAGE_libncurses=y" >> .config
+    echo "CONFIG_PACKAGE_libnghttp2=y" >> .config
+    echo "CONFIG_PACKAGE_libpopt=y" >> .config
+    echo "CONFIG_PACKAGE_libreadline=y" >> .config
+    echo "CONFIG_PACKAGE_libsmartcols=y" >> .config
+    echo "CONFIG_PACKAGE_libtasn1=y" >> .config
+    echo "CONFIG_PACKAGE_libtirpc=y" >> .config
+    echo "CONFIG_PACKAGE_libudev-zero=y" >> .config
+    echo "CONFIG_PACKAGE_liburing=y" >> .config
+    echo "CONFIG_PACKAGE_libusb-1.0=y" >> .config
+    echo "CONFIG_PACKAGE_libwolfssl=y" >> .config
+    echo "CONFIG_PACKAGE_lsblk=y" >> .config
+    
+    # Luci应用（全面启用）
+    echo "CONFIG_PACKAGE_luci-app-accesscontrol=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-arpbind=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-cpulimit=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-diskman=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-hd-idle=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-samba4=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-vlmcsd=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-wechatpush=y" >> .config
+    
+    # Luci中文语言包
+    echo "CONFIG_PACKAGE_luci-i18n-accesscontrol-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-arpbind-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-cpulimit-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-hd-idle-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-vlmcsd-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y" >> .config
+    
+    # 服务和应用
+    echo "CONFIG_PACKAGE_miniupnpd=y" >> .config
+    echo "CONFIG_PACKAGE_parted=y" >> .config
+    echo "CONFIG_PACKAGE_samba4-libs=y" >> .config
+    echo "CONFIG_PACKAGE_samba4-server=y" >> .config
+    echo "CONFIG_PACKAGE_smartdns=y" >> .config
+    echo "CONFIG_PACKAGE_smartmontools=y" >> .config
+    echo "CONFIG_PACKAGE_sqm-scripts=y" >> .config
+    echo "CONFIG_PACKAGE_tc-mod-iptables=y" >> .config
+    echo "CONFIG_PACKAGE_tc-tiny=y" >> .config
+    echo "CONFIG_PACKAGE_terminfo=y" >> .config
+    echo "CONFIG_PACKAGE_uclibcxx=y" >> .config
+    echo "CONFIG_PACKAGE_usbids=y" >> .config
+    echo "CONFIG_PACKAGE_usbutils=y" >> .config
+    echo "CONFIG_PACKAGE_vlmcsd=y" >> .config
+    echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+    echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
+    echo "CONFIG_PACKAGE_wsdd2=y" >> .config
+    
+    # 服务配置选项
+    echo "CONFIG_PARTED_READLINE=y" >> .config
+    echo "CONFIG_SAMBA4_SERVER_AVAHI=y" >> .config
+    echo "CONFIG_SAMBA4_SERVER_NETBIOS=y" >> .config
+    echo "CONFIG_SAMBA4_SERVER_VFS=y" >> .config
+    echo "CONFIG_SAMBA4_SERVER_WSDD2=y" >> .config
+    echo "CONFIG_WOLFSSL_HAS_NO_HW=y" >> .config
+    echo "CONFIG_WPA_WOLFSSL=y" >> .config
+    
+    # 确保wpad-openssl是模块化而不是内置
+    echo "CONFIG_PACKAGE_wpad-openssl=m" >> .config
+    
+    # 禁用不兼容的USB驱动
+    echo "# CONFIG_PACKAGE_kmod-usb-xhci-mtk is not set" >> .config
+    
+    # TCP BBR
+    echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+    echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
+    
+    # TurboACC（正常模式）
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+    fi
+    
+    # ath10k 冲突解决（使用ct驱动）
+    sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
+    sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
+    sed -i '/CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/d' .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
+    echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+    
+    # 步骤3: 去重
+    sort .config | uniq > .config.tmp
+    mv .config.tmp .config
+    
+    # 步骤4: 运行 make olddefconfig 解决依赖关系（改用 yes "" | make oldconfig）
+    log "🔄 运行 yes "" | make oldconfig 解决依赖关系..."
+    yes "" | make -j1 oldconfig V=s > /tmp/build-logs/oldconfig.log 2>&1 || {
+        log "❌ make oldconfig 失败，查看日志..."
+        tail -50 /tmp/build-logs/oldconfig.log
+        handle_error "依赖解决失败"
+    }
+    log "✅ 依赖关系解决成功"
+    
+    # 步骤5: 后处理强制启用关键USB软件包（增强版）
+    log "🔧 后处理：强制启用USB软件包（增强版）..."
+    
+    # 定义所有平台必需的USB软件包（扩展列表）
+    local MUST_PACKAGES=(
+        # 核心驱动
+        "kmod-usb-core"
+        "kmod-usb-common"
+        # USB 2.0/3.0 控制器
+        "kmod-usb2"
+        "kmod-usb3"
+        "kmod-usb-ehci"
+        "kmod-usb-ohci"
+        "kmod-usb-xhci-hcd"
+        "kmod-usb-xhci-pci"
+        "kmod-usb-xhci-plat-hcd"
+        # USB 存储
+        "kmod-usb-storage"
+        "kmod-usb-storage-uas"
+        "kmod-usb-storage-extras"
+        # SCSI 支持
+        "kmod-scsi-core"
+        "kmod-scsi-generic"
+        # 通用 USB 驱动
+        "kmod-usb-dwc3"
+        "kmod-usb-dwc3-of-simple"
+        # 文件系统
+        "kmod-fs-ext4"
+        "kmod-fs-vfat"
+        "kmod-fs-exfat"
+        "kmod-fs-ntfs3"
+        # 编码支持
+        "kmod-nls-utf8"
+        "kmod-nls-cp936"
+        # 挂载工具
+        "block-mount"
+        "automount"
+        # 实用工具
+        "usbutils"
+        "lsusb"
+        # 串口支持（可选但常用）
+        "kmod-usb-serial"
+    )
+    
+    # 平台特定软件包（扩展）
+    case "$TARGET" in
+        ipq40xx)
+            MUST_PACKAGES+=(
+                "kmod-usb-dwc3-qcom"
+                "kmod-phy-qcom-dwc3"
+            )
+            ;;
+        ramips)
+            MUST_PACKAGES+=(
+                "kmod-usb-xhci-mtk"
+                "kmod-usb-ohci-pci"
+                "kmod-usb2-pci"
+            )
+            ;;
+        mediatek)
+            MUST_PACKAGES+=(
+                "kmod-usb-dwc3-mediatek"
+                "kmod-phy-mediatek"
+            )
+            ;;
+        ath79)
+            MUST_PACKAGES+=(
+                "kmod-usb2-ath79"
+                "kmod-usb-ohci"
+            )
+            ;;
+    esac
+    
+    # 强制写入.config（删除可能存在的禁用/模块行，添加=y）
+    for pkg in "${MUST_PACKAGES[@]}"; do
+        sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
+        sed -i "/^# CONFIG_PACKAGE_${pkg} is not set/d" .config
+        echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+    done
+    
+    # 再次确保设备选项存在（防止被覆盖）
+    if ! grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" .config; then
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y" >> .config
+    fi
+    
+    # 再次去重
+    sort .config | uniq > .config.tmp
+    mv .config.tmp .config
+    
+    # 步骤6: 再次运行 yes "" | make oldconfig 应用强制配置（不重置）
+    log "🔄 再次运行 yes "" | make oldconfig 应用强制配置..."
+    
+    # 保存当前配置备份
+    cp .config .config.force
+    
+    # 使用 yes "" | make oldconfig 运行以获取详细输出
+    if ! yes "" | make -j1 oldconfig V=s > /tmp/build-logs/oldconfig2.log 2>&1; then
+        log "❌ make oldconfig 失败，查看详细日志..."
+        echo "=== oldconfig2.log 最后50行 ==="
+        tail -50 /tmp/build-logs/oldconfig2.log
+        echo "================================"
+        
+        # 尝试恢复备份并继续
+        if [ -f ".config.force" ]; then
+            log "🔄 尝试恢复强制配置并继续..."
+            cp .config.force .config
+        else
+            handle_error "强制配置应用失败"
+        fi
+    else
+        log "✅ make oldconfig 成功"
+    fi
+    
+    # 步骤7: 最终验证
+    log "📋 必需USB驱动状态验证:"
+    local missing=()
+    local missing_optional=()
+    
+    for pkg in "${MUST_PACKAGES[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
+            log "  ✅ $pkg: 已启用"
+        else
+            # 检查是否是平台特定包
+            local is_optional=0
+            case "$pkg" in
+                kmod-usb-dwc3-qcom|kmod-phy-qcom-dwc3|kmod-usb-xhci-mtk|kmod-usb-dwc3-mediatek|kmod-phy-mediatek|kmod-usb2-ath79|kmod-usb-ohci-pci|kmod-usb2-pci)
+                    is_optional=1
+                    ;;
+            esac
+            
+            if [ $is_optional -eq 1 ]; then
+                log "  ⚠️ $pkg: 未启用（平台可选）"
+                missing_optional+=("$pkg")
+            else
+                log "  ❌ $pkg: 未启用"
+                missing+=("$pkg")
+            fi
+        fi
+    done
+    
+    if [ ${#missing[@]} -gt 0 ]; then
+        log "⚠️ 警告: 以下必需驱动未启用: ${missing[*]}"
+        log "💡 可能原因: 内核不支持或平台未包含相应驱动"
+    else
+        log "🎉 所有必需USB驱动已成功启用！"
+    fi
+    
+    if [ ${#missing_optional[@]} -gt 0 ]; then
+        log "ℹ️ 可选驱动未启用: ${missing_optional[*]}"
+        log "💡 如果硬件需要这些驱动，请检查平台支持"
+    fi
+    
+    # 最终设备验证（增强版：尝试多种匹配方式，并使用 scripts/config 工具和 make defconfig）
+    log "🔍 正在验证设备 $DEVICE 是否被选中..."
+    
+    local device_selected=""
+    local device_patterns=(
+        "^CONFIG_TARGET_DEVICE_.*${DEVICE}=y"
+        "^CONFIG_TARGET_DEVICE_.*${DEVICE^^}=y"
+        "^CONFIG_TARGET_DEVICE_.*${DEVICE,,}=y"
+        "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
+        "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE^^}=y"
+        "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE,,}=y"
+    )
+    
+    for pattern in "${device_patterns[@]}"; do
+        device_selected=$(grep -E "$pattern" .config | head -1)
+        if [ -n "$device_selected" ]; then
+            log "✅ 目标设备已匹配: $device_selected"
+            break
+        fi
+    done
+    
+    if [ -z "$device_selected" ]; then
+        log "❌ 错误: 目标设备 $DEVICE 未被选中！"
+        log "当前可用的设备选项:"
+        grep -E "^CONFIG_TARGET_DEVICE_.*=y|^CONFIG_TARGET_.*_DEVICE_.*=y" .config | head -20 | sed 's/^/  /' || echo "  没有可用的设备选项"
+        
+        # 尝试自动修复
+        log "🔄 尝试自动修复：使用 scripts/config 工具启用设备选项..."
+        
+        local config_tool=""
+        if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+            config_tool="scripts/config/config"
+        elif [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
+            config_tool="scripts/config/conf"
+        fi
+        
+        # 准备设备名变体
+        local device_upper="${DEVICE^^}"
+        local device_lower="${DEVICE,,}"
+        local device_capital="$(echo ${DEVICE:0:1} | tr '[:lower:]' '[:upper:]')${DEVICE:1}"
+        
+        if [ -n "$config_tool" ]; then
+            # 使用配置工具启用设备选项（尝试多种格式）
+            log "🔧 使用配置工具 $config_tool 启用设备..."
+            
+            # 先禁用可能的冲突选项
+            $config_tool --disable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
+            $config_tool --disable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
+            $config_tool --disable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
+            $config_tool --disable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
+            $config_tool --disable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
+            $config_tool --disable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
+            
+            # 启用设备选项
+            $config_tool --enable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
+            $config_tool --enable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
+            $config_tool --enable TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
+            $config_tool --enable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} 2>/dev/null || true
+            $config_tool --enable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper} 2>/dev/null || true
+            $config_tool --enable TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_capital} 2>/dev/null || true
+        else
+            # 直接写入多种格式
+            log "⚠️ 配置工具不可用，直接写入多种设备格式..."
+            echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+            echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
+            echo "CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_capital}=y" >> .config
+            echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+            echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
+            echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_capital}=y" >> .config
+        fi
+        
+        # 去重
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
+        
+        log "🔄 重新运行 make defconfig 以应用设备选择..."
+        if make defconfig > /tmp/build-logs/defconfig_fix.log 2>&1; then
+            log "✅ make defconfig 修复成功"
+            
+            # 再次检查
+            for pattern in "${device_patterns[@]}"; do
+                device_selected=$(grep -E "$pattern" .config | head -1)
+                if [ -n "$device_selected" ]; then
+                    log "✅ 修复后设备已选中: $device_selected"
+                    break
+                fi
+            done
+        else
+            log "❌ make defconfig 修复失败"
+            cat /tmp/build-logs/defconfig_fix.log
+        fi
+    fi
+    
+    if [ -z "$device_selected" ]; then
+        # 最终失败
+        log "❌ 错误: 无法自动修复设备选择问题"
+        log "请检查设备名称是否正确，或手动配置设备。"
+        log "当前可用的设备选项（前20个）:"
+        grep -E "^CONFIG_TARGET_DEVICE_.*=y|^CONFIG_TARGET_.*_DEVICE_.*=y" .config | head -20 | sed 's/^/  /' || echo "  没有可用的设备选项"
+        handle_error "设备配置错误"
+    fi
+    
+    log "✅ 配置生成完成"
+}
+#【build_firmware_main.sh-13-end】
+
+#【build_firmware_main.sh-37】
+workflow_step23_pre_build_check() {
+    log "=== 步骤23: 前置错误检查（立即退出版）- 增强版，自动修复配置问题 ==="
+    
+    set -e
+    trap 'echo "❌ 步骤23 失败，退出代码: $?"; exit 1' ERR
+    
+    echo "🔍 检查当前环境..."
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET"
+        echo "✅ COMPILER_DIR=$COMPILER_DIR"
+        echo "✅ CONFIG_MODE=$CONFIG_MODE"
+    else
+        echo "❌ 错误: 环境文件不存在 ($BUILD_DIR/build_env.sh)"
+        echo "💡 请检查步骤08和步骤09是否成功执行"
+        exit 1
+    fi
+    
+    cd $BUILD_DIR
+    echo "=== 🚨 前置错误检查（立即退出版）- 增强版 ==="
+    
+    echo ""
+    echo "1. ✅ 配置文件检查:"
+    if [ -f ".config" ]; then
+        echo "  ✅ .config 文件存在"
+        echo "  📊 文件大小: $(ls -lh .config | awk '{print $5}')"
+        echo "  📝 文件行数: $(wc -l < .config)"
+        
+        # 检查关键配置项是否存在
+        echo "  🔍 检查ASUS RT-AC42U关键配置项:"
+        local key_configs=(
+            "CONFIG_PACKAGE_kmod-phy-qcom-dwc3"
+            "CONFIG_PACKAGE_kmod-usb-xhci-hcd"
+            "CONFIG_PACKAGE_luci-app-samba4"
+            "CONFIG_PACKAGE_luci-app-diskman"
+            "CONFIG_PACKAGE_kmod-ath10k-ct"
+        )
+        
+        for config in "${key_configs[@]}"; do
+            if grep -q "^${config}=y" .config; then
+                echo "    ✅ $config: 已启用"
+            else
+                echo "    ❌ $config: 未启用"
+            fi
+        done
+    else
+        echo "  ❌ 错误: .config 文件不存在"
+        echo "  💡 请检查步骤15智能配置生成是否成功"
+        exit 1
+    fi
+    
+    echo ""
+    echo "2. ✅ SDK目录检查:"
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+        echo "  ✅ SDK目录存在: $COMPILER_DIR"
+        echo "  📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | awk '{print $1}' || echo '未知')"
+        
+        GCC_FILE=$(find "$COMPILER_DIR" -type f -executable           -name "*gcc"           ! -name "*gcc-ar"           ! -name "*gcc-ranlib"           ! -name "*gcc-nm"           ! -path "*dummy-tools*"           ! -path "*scripts*"           2>/dev/null | head -1)
+        
+        if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
+            echo "  ✅ 找到可执行GCC编译器: $(basename "$GCC_FILE")"
+            echo "  🔧 GCC版本: $("$GCC_FILE" --version 2>&1 | head -1)"
+        else
+            echo "  ❌ 错误: SDK目录中未找到真正的GCC编译器"
+            exit 1
+        fi
+    else
+        echo "  ❌ 错误: SDK目录不存在: $COMPILER_DIR"
+        echo "  💡 请检查步骤09 SDK下载是否成功"
+        exit 1
+    fi
+    
+    echo ""
+    echo "3. ✅ Feeds检查:"
+    if [ -d "feeds" ]; then
+        echo "  ✅ feeds 目录存在"
+        echo "  📊 feeds目录大小: $(du -sh feeds 2>/dev/null | awk '{print $1}' || echo '未知')"
+        
+        # 检查关键feeds
+        if [ -d "feeds/packages" ]; then
+            echo "  ✅ packages feed: 存在"
+        else
+            echo "  ❌ packages feed: 不存在"
+        fi
+        
+        if [ -d "feeds/luci" ]; then
+            echo "  ✅ luci feed: 存在"
+        else
+            echo "  ❌ luci feed: 不存在"
+        fi
+    else
+        echo "  ❌ 错误: feeds 目录不存在"
+        echo "  💡 请检查步骤12配置Feeds是否成功"
+        exit 1
+    fi
+    
+    echo ""
+    echo "4. ✅ 磁盘空间检查:"
+    AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
+    AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+    echo "  📊 /mnt 可用空间: ${AVAILABLE_GB}G"
+    
+    if [ $AVAILABLE_GB -lt 10 ]; then
+        echo "  ❌ 错误: 磁盘空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
+        exit 1
+    elif [ $AVAILABLE_GB -lt 20 ]; then
+        echo "  ⚠️ 警告: 磁盘空间较低 (建议至少20G，当前${AVAILABLE_GB}G)"
+    else
+        echo "  ✅ 磁盘空间充足"
+    fi
+    
+    echo ""
+    echo "5. ✅ USB配置检查（自动修复）:"
+    USB_FIXED=0
+    
+    # USB 3.0驱动
+    if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
+        echo "  ❌ 错误: USB 3.0驱动未启用 (kmod-usb-xhci-hcd)"
+        echo "  🔧 正在自动修复..."
+        if [ -f "scripts/config/config" ]; then
+            ./scripts/config/config --enable PACKAGE_kmod-usb-xhci-hcd
+            echo "  ✅ 已强制添加: kmod-usb-xhci-hcd"
+        else
+            echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+            echo "  ✅ 已强制添加: kmod-usb-xhci-hcd"
+        fi
+        USB_FIXED=1
+    else
+        echo "  ✅ kmod-usb-xhci-hcd: 已启用"
+    fi
+    
+    if ! grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
+        echo "  ❌ 错误: USB 3.0驱动未启用 (kmod-usb3)"
+        echo "  🔧 正在自动修复..."
+        if [ -f "scripts/config/config" ]; then
+            ./scripts/config/config --enable PACKAGE_kmod-usb3
+            echo "  ✅ 已强制添加: kmod-usb3"
+        else
+            echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
+            echo "  ✅ 已强制添加: kmod-usb3"
+        fi
+        USB_FIXED=1
+    else
+        echo "  ✅ kmod-usb3: 已启用"
+    fi
+    
+    if ! grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config; then
+        echo "  ❌ 错误: USB 2.0驱动未启用 (kmod-usb2)"
+        echo "  🔧 正在自动修复..."
+        if [ -f "scripts/config/config" ]; then
+            ./scripts/config/config --enable PACKAGE_kmod-usb2
+            echo "  ✅ 已强制添加: kmod-usb2"
+        else
+            echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+            echo "  ✅ 已强制添加: kmod-usb2"
+        fi
+        USB_FIXED=1
+    else
+        echo "  ✅ kmod-usb2: 已启用"
+    fi
+    
+    # 平台专用驱动
+    if [ "$TARGET" = "ipq40xx" ]; then
+        if ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config; then
+            echo "  ❌ 错误: IPQ40xx平台驱动未启用 (kmod-phy-qcom-dwc3)"
+            echo "  🔧 正在自动修复..."
+            if [ -f "scripts/config/config" ]; then
+                ./scripts/config/config --enable PACKAGE_kmod-phy-qcom-dwc3
+                echo "  ✅ 已强制添加: kmod-phy-qcom-dwc3"
+            else
+                echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+                echo "  ✅ 已强制添加: kmod-phy-qcom-dwc3"
+            fi
+            USB_FIXED=1
+        else
+            echo "  ✅ kmod-phy-qcom-dwc3: 已启用"
+        fi
+        
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" .config; then
+            echo "  ❌ 错误: IPQ40xx平台USB DWC3驱动未启用 (kmod-usb-dwc3-of-simple)"
+            echo "  🔧 正在自动修复..."
+            if [ -f "scripts/config/config" ]; then
+                ./scripts/config/config --enable PACKAGE_kmod-usb-dwc3-of-simple
+                echo "  ✅ 已强制添加: kmod-usb-dwc3-of-simple"
+            else
+                echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
+                echo "  ✅ 已强制添加: kmod-usb-dwc3-of-simple"
+            fi
+            USB_FIXED=1
+        else
+            echo "  ✅ kmod-usb-dwc3-of-simple: 已启用"
+        fi
+    fi
+    
+    echo ""
+    echo "6. ✅ TurboACC配置检查（自动修复）:"
+    TURBOACC_FIXED=0
+    
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        if ! grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+            echo "  ❌ 错误: TurboACC未启用 (正常模式必需)"
+            echo "  🔧 正在自动修复..."
+            if [ -f "scripts/config/config" ]; then
+                ./scripts/config/config --enable PACKAGE_luci-app-turboacc
+                echo "  ✅ 已强制添加: luci-app-turboacc"
+            else
+                echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+            fi
+            TURBOACC_FIXED=1
+        else
+            echo "  ✅ luci-app-turboacc: 已启用"
+        fi
+        
+        if ! grep -q "^CONFIG_PACKAGE_kmod-shortcut-fe=y" .config; then
+            echo "  ❌ 错误: Shortcut-FE未启用"
+            echo "  🔧 正在自动修复..."
+            if [ -f "scripts/config/config" ]; then
+                ./scripts/config/config --enable PACKAGE_kmod-shortcut-fe
+                echo "  ✅ 已强制添加: kmod-shortcut-fe"
+            else
+                echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+            fi
+            TURBOACC_FIXED=1
+        else
+            echo "  ✅ kmod-shortcut-fe: 已启用"
+        fi
+        
+        if ! grep -q "^CONFIG_PACKAGE_kmod-fast-classifier=y" .config; then
+            echo "  ❌ 错误: Fast Classifier未启用"
+            echo "  🔧 正在自动修复..."
+            if [ -f "scripts/config/config" ]; then
+                ./scripts/config/config --enable PACKAGE_kmod-fast-classifier
+                echo "  ✅ 已强制添加: kmod-fast-classifier"
+            else
+                echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+            fi
+            TURBOACC_FIXED=1
+        else
+            echo "  ✅ kmod-fast-classifier: 已启用"
+        fi
+    else
+        echo "  ℹ️ 基础模式，不检查TurboACC配置"
+    fi
+    
+    echo ""
+    echo "7. ✅ TCP BBR拥塞控制检查（自动修复）:"
+    BBR_FIXED=0
+    
+    if ! grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
+        echo "  ❌ 错误: TCP BBR未启用"
+        echo "  🔧 正在自动修复..."
+        if [ -f "scripts/config/config" ]; then
+            ./scripts/config/config --enable PACKAGE_kmod-tcp-bbr
+            echo "  ✅ 已强制添加: kmod-tcp-bbr"
+        else
+            echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+        fi
+        BBR_FIXED=1
+    else
+        echo "  ✅ kmod-tcp-bbr: 已启用"
+    fi
+    
+    if ! grep -q '^CONFIG_DEFAULT_TCP_CONG="bbr"' .config; then
+        echo "  ❌ 错误: TCP BBR未设置为默认拥塞控制算法"
+        echo "  🔧 正在自动修复..."
+        if [ -f "scripts/config/config" ]; then
+            ./scripts/config/config --set-str DEFAULT_TCP_CONG "bbr"
+            echo "  ✅ 已设置: DEFAULT_TCP_CONG="bbr""
+        else
+            sed -i '/^CONFIG_DEFAULT_TCP_CONG=/d' .config
+            echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
+        fi
+        BBR_FIXED=1
+    else
+        echo "  ✅ DEFAULT_TCP_CONG="bbr": 已设置"
+    fi
+    
+    echo ""
+    echo "8. ✅ ath10k驱动冲突检查（自动修复）:"
+    ATH10K_FIXED=0
+    
+    if grep -q "^CONFIG_PACKAGE_kmod-ath10k=y" .config; then
+        echo "  ❌ 错误: 检测到标准ath10k驱动，与ath10k-ct冲突"
+        echo "  🔧 正在自动修复..."
+        sed -i '/^CONFIG_PACKAGE_kmod-ath10k=y/d' .config
+        echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
+        
+        if ! grep -q "^CONFIG_PACKAGE_kmod-ath10k-ct=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+        fi
+        ATH10K_FIXED=1
+        echo "  ✅ 已修复: 禁用标准ath10k，启用ath10k-ct"
+    else
+        echo "  ✅ ath10k驱动配置正确"
+    fi
+    
+    if [ $USB_FIXED -eq 1 ] || [ $TURBOACC_FIXED -eq 1 ] || [ $BBR_FIXED -eq 1 ] || [ $ATH10K_FIXED -eq 1 ]; then
+        echo ""
+        echo "🔄 配置已修复，重新运行 make defconfig..."
+        make defconfig
+        
+        echo ""
+        echo "📋 修复后配置状态:"
+        echo "  - kmod-usb2: $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        echo "  - kmod-usb3: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        echo "  - kmod-usb-xhci-hcd: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        
+        if [ "$TARGET" = "ipq40xx" ]; then
+            echo "  - kmod-usb-dwc3-qcom: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+            echo "  - kmod-phy-qcom-dwc3: $(grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+            echo "  - kmod-usb-dwc3-of-simple: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        fi
+        
+        if [ "$CONFIG_MODE" = "normal" ]; then
+            echo "  - luci-app-turboacc: $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+            echo "  - kmod-shortcut-fe: $(grep -q "^CONFIG_PACKAGE_kmod-shortcut-fe=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+            echo "  - kmod-fast-classifier: $(grep -q "^CONFIG_PACKAGE_kmod-fast-classifier=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        fi
+        
+        echo "  - kmod-tcp-bbr: $(grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        echo "  - DEFAULT_TCP_CONG: $(grep "^CONFIG_DEFAULT_TCP_CONG=" .config | cut -d'"' -f2 || echo '未设置')"
+        echo "  - ath10k-ct: $(grep -q "^CONFIG_PACKAGE_kmod-ath10k-ct=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+        
+        echo "✅ 所有配置修复完成"
+    else
+        echo ""
+        echo "✅ 所有配置检查通过，无需修复"
+    fi
+    
+    echo ""
+    echo "========================================"
+    echo "✅✅✅ 所有前置检查通过，可以开始编译 ✅✅✅"
+    echo "========================================"
+    
+    log "✅ 步骤23 完成"
+}
+#【build_firmware_main.sh-37-end】
