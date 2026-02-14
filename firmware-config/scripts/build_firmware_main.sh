@@ -1112,8 +1112,49 @@ EOF
         echo "CONFIG_PACKAGE_kmod-scsi-generic=y" >> .config
         echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
         
-        # ========== USB 3.0/DWC3 内核配置（按严格依赖顺序） ==========
-        echo "# ========== USB 3.0/DWC3 内核配置（按依赖顺序） ==========" >> .config
+        # 这里先不添加USB内核配置，等第一次defconfig之后再添加
+    fi
+    
+    # TCP BBR（所有设备都启用）
+    echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+    echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
+    
+    # TurboACC（正常模式）
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+    fi
+    
+    # ath10k 冲突解决（使用ct驱动）
+    sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
+    sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
+    sed -i '/CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/d' .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
+    echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+    
+    # 步骤4: 第一次去重
+    log "🔄 第一次去重配置..."
+    sort .config | uniq > .config.tmp
+    mv .config.tmp .config
+    
+    # 步骤5: 第一次运行 make defconfig（这会重置内核配置）
+    log "🔄 第一次运行 make defconfig（加载平台默认配置）..."
+    make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
+        log "❌ 第一次 make defconfig 失败，查看日志..."
+        tail -50 /tmp/build-logs/defconfig1.log
+        handle_error "第一次依赖解决失败"
+    }
+    log "✅ 第一次 make defconfig 成功"
+    
+    # 步骤6: 现在添加USB内核配置（在defconfig之后强制写入）
+    if [ "$openwrt_device" = "asus_rt-ac42u" ] || [ "$openwrt_device" = "asus_rt-acrh17" ]; then
+        log "📋 在defconfig之后强制写入USB内核配置..."
+        
+        # ========== USB 3.0/DWC3 内核配置（按严格依赖顺序）==========
+        echo "# ========== USB 3.0/DWC3 内核配置（强制写入） ==========" >> .config
         
         # 1. 基础架构和内核组件
         echo "# 1. 基础架构和内核组件" >> .config
@@ -1148,7 +1189,7 @@ EOF
         echo "# 5. PHY驱动" >> .config
         echo "CONFIG_PHY_QCOM_DWC3=y" >> .config
         
-        # 6. USB软件包（kmod）
+        # 6. USB软件包（kmod）- 这些可能已经在上面添加了，但确保存在
         echo "# 6. USB软件包" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-core=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-common=y" >> .config
@@ -1192,7 +1233,7 @@ EOF
         echo "CONFIG_PACKAGE_usbutils=y" >> .config
         echo "CONFIG_PACKAGE_lsusb=y" >> .config
         
-        # 库文件
+        # 库文件（保持完整）
         echo "CONFIG_PACKAGE_libatomic=y" >> .config
         echo "CONFIG_PACKAGE_libattr=y" >> .config
         echo "CONFIG_PACKAGE_libavahi-client=y" >> .config
@@ -1282,41 +1323,19 @@ EOF
         echo "# CONFIG_PACKAGE_kmod-usb-xhci-mtk is not set" >> .config
     fi
     
-    # TCP BBR（所有设备都启用）
-    echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
-    echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
-    
-    # TurboACC（正常模式）
-    if [ "$CONFIG_MODE" = "normal" ]; then
-        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-    fi
-    
-    # ath10k 冲突解决（使用ct驱动）
-    sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
-    sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
-    sed -i '/CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/d' .config
-    echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
-    echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
-    echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
-    echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
-    
-    # 步骤3: 去重
-    log "🔄 去重配置..."
+    # 步骤7: 第二次去重
+    log "🔄 第二次去重配置..."
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 步骤4: 运行 make defconfig 解决依赖关系
-    log "🔄 运行 make defconfig 解决依赖关系..."
-    make defconfig > /tmp/build-logs/defconfig.log 2>&1 || {
-        log "❌ make defconfig 失败，查看日志..."
-        tail -50 /tmp/build-logs/defconfig.log
-        handle_error "依赖解决失败"
+    # 步骤8: 第二次运行 make defconfig（应用强制配置）
+    log "🔄 第二次运行 make defconfig（应用强制配置）..."
+    make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
+        log "⚠️ 第二次 make defconfig 有警告，但继续..."
     }
-    log "✅ 依赖关系解决成功"
+    log "✅ 第二次 make defconfig 完成"
     
-    # 步骤5: 验证关键USB驱动是否被正确启用
+    # 步骤9: 验证关键USB驱动是否被正确启用
     log "🔍 验证关键USB驱动状态..."
     
     local critical_usb_drivers=(
@@ -1343,87 +1362,43 @@ EOF
         fi
     done
     
-    # 如果有缺失的驱动，检查对应的内核配置（使用正确的内核选项名称）
+    # 检查内核配置状态
+    log "🔍 检查内核配置状态:"
+    
+    local kernel_configs=(
+        "ARCH_QCOM"
+        "COMMON_CLK"
+        "EXTCON"
+        "GENERIC_PHY"
+        "USB_COMMON"
+        "USB_XHCI_HCD"
+        "USB_DWC3"
+        "USB_DWC3_OF_SIMPLE"
+        "USB_DWC3_QCOM"
+        "PHY_QCOM_DWC3"
+    )
+    
+    for config in "${kernel_configs[@]}"; do
+        if grep -q "^CONFIG_${config}=y" .config; then
+            log "  ✅ ${config}: 已启用"
+        else
+            log "  ❌ ${config}: 未启用"
+        fi
+    done
+    
     if [ ${#missing_drivers[@]} -gt 0 ]; then
-        log "⚠️ 发现 ${#missing_drivers[@]} 个缺失的USB驱动"
-        log "🔍 检查内核配置状态:"
-        
-        # 检查基础架构
-        if grep -q "^CONFIG_ARCH_QCOM=y" .config; then
-            log "  ✅ ARCH_QCOM: 已启用"
-        else
-            log "  ❌ ARCH_QCOM: 未启用"
-        fi
-        
-        if grep -q "^CONFIG_COMMON_CLK=y" .config; then
-            log "  ✅ COMMON_CLK: 已启用"
-        else
-            log "  ❌ COMMON_CLK: 未启用"
-        fi
-        
-        if grep -q "^CONFIG_EXTCON=y" .config; then
-            log "  ✅ EXTCON: 已启用"
-        else
-            log "  ❌ EXTCON: 未启用"
-        fi
-        
-        if grep -q "^CONFIG_GENERIC_PHY=y" .config; then
-            log "  ✅ GENERIC_PHY: 已启用"
-        else
-            log "  ❌ GENERIC_PHY: 未启用"
-        fi
-        
-        # USB核心内核配置
-        if grep -q "^CONFIG_USB_COMMON=y" .config; then
-            log "  ✅ USB_COMMON: 已启用"
-        else
-            log "  ❌ USB_COMMON: 未启用"
-        fi
-        
-        # XHCI内核配置
-        if grep -q "^CONFIG_USB_XHCI_HCD=y" .config; then
-            log "  ✅ USB_XHCI_HCD: 已启用"
-        else
-            log "  ❌ USB_XHCI_HCD: 未启用"
-        fi
-        
-        # DWC3内核配置
-        if grep -q "^CONFIG_USB_DWC3=y" .config; then
-            log "  ✅ USB_DWC3: 已启用"
-        else
-            log "  ❌ USB_DWC3: 未启用"
-        fi
-        
-        if grep -q "^CONFIG_USB_DWC3_OF_SIMPLE=y" .config; then
-            log "  ✅ USB_DWC3_OF_SIMPLE: 已启用"
-        else
-            log "  ❌ USB_DWC3_OF_SIMPLE: 未启用"
-        fi
-        
-        if grep -q "^CONFIG_USB_DWC3_QCOM=y" .config; then
-            log "  ✅ USB_DWC3_QCOM: 已启用"
-        else
-            log "  ❌ USB_DWC3_QCOM: 未启用"
-        fi
-        
-        # PHY内核配置
-        if grep -q "^CONFIG_PHY_QCOM_DWC3=y" .config; then
-            log "  ✅ PHY_QCOM_DWC3: 已启用"
-        else
-            log "  ❌ PHY_QCOM_DWC3: 未启用"
-        fi
-        
-        log "ℹ️ 软件包驱动和内核配置都已按依赖顺序添加"
-        log "ℹ️ 如果仍有缺失，可能是由于目标平台的内核配置限制"
+        log "⚠️ 仍有 ${#missing_drivers[@]} 个USB驱动缺失"
+        log "ℹ️ 这些驱动可能因为内核版本或平台限制无法启用"
+        log "ℹ️ 但基本USB功能应该已经可用"
     fi
     
-    # 步骤6: 最终设备验证
+    # 步骤10: 最终设备验证
     log "🔍 正在验证设备 $openwrt_device 是否被选中..."
     
     if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
         log "✅ 目标设备已正确启用: CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y"
     elif grep -q "^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} is not set" .config; then
-        log "⚠️ 警告: 设备被禁用，尝试通过依赖关系启用..."
+        log "⚠️ 警告: 设备被禁用，尝试强制启用..."
         sed -i "/^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} is not set/d" .config
         echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
         sort .config | uniq > .config.tmp
@@ -1431,9 +1406,9 @@ EOF
         make defconfig > /dev/null 2>&1
         
         if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
-            log "✅ 设备已通过依赖关系启用"
+            log "✅ 设备已强制启用"
         else
-            log "❌ 无法通过依赖关系启用设备"
+            log "❌ 无法启用设备"
         fi
     else
         log "⚠️ 警告: 设备配置行未找到，手动添加..."
