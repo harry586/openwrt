@@ -1140,7 +1140,28 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 步骤5: 第一次运行 make defconfig（这会重置内核配置）
+    # 步骤5: 调试 - 查看目标平台支持的内核配置
+    log "🔍 查看目标平台支持的所有内核配置:"
+    if [ -d "target/linux/ipq40xx" ]; then
+        log "目标平台内核配置文件:"
+        ls -la target/linux/ipq40xx/config-* 2>/dev/null | while read line; do
+            log "    $line"
+        done
+        
+        # 显示内核配置文件中的USB相关配置
+        for config_file in target/linux/ipq40xx/config-*; do
+            if [ -f "$config_file" ]; then
+                log "从 $(basename $config_file) 中提取USB配置:"
+                grep -E "CONFIG_USB|CONFIG_PHY|CONFIG_DWC|CONFIG_XHCI|CONFIG_EXTCON|CONFIG_COMMON_CLK|CONFIG_ARCH" "$config_file" | head -30 | while read line; do
+                    log "    $line"
+                done
+            fi
+        done
+    else
+        log "目标平台目录不存在: target/linux/ipq40xx"
+    fi
+    
+    # 步骤6: 第一次运行 make defconfig（这会重置内核配置）
     log "🔄 第一次运行 make defconfig（加载平台默认配置）..."
     make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
         log "❌ 第一次 make defconfig 失败，查看日志..."
@@ -1149,7 +1170,13 @@ EOF
     }
     log "✅ 第一次 make defconfig 成功"
     
-    # 步骤6: 现在添加USB内核配置（在defconfig之后强制写入）
+    # 步骤7: 调试 - 查看第一次defconfig后生成的配置
+    log "🔍 第一次defconfig后生成的USB配置:"
+    grep -E "CONFIG_USB|CONFIG_PHY|CONFIG_DWC|CONFIG_XHCI|CONFIG_EXTCON|CONFIG_COMMON_CLK|CONFIG_ARCH" .config | sort | head -30 | while read line; do
+        log "    $line"
+    done
+    
+    # 步骤8: 现在添加USB内核配置（在defconfig之后强制写入）
     if [ "$openwrt_device" = "asus_rt-ac42u" ] || [ "$openwrt_device" = "asus_rt-acrh17" ]; then
         log "📋 在defconfig之后强制写入USB内核配置..."
         
@@ -1355,19 +1382,25 @@ EOF
         echo "# CONFIG_PACKAGE_kmod-usb-xhci-mtk is not set" >> .config
     fi
     
-    # 步骤7: 第二次去重
+    # 步骤9: 第二次去重
     log "🔄 第二次去重配置..."
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 步骤8: 第二次运行 make defconfig（应用强制配置）
+    # 步骤10: 第二次运行 make defconfig（应用强制配置）
     log "🔄 第二次运行 make defconfig（应用强制配置）..."
     make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
         log "⚠️ 第二次 make defconfig 有警告，但继续..."
     }
     log "✅ 第二次 make defconfig 完成"
     
-    # 步骤9: 验证关键USB驱动是否被正确启用
+    # 步骤11: 调试 - 查看最终生成的配置
+    log "🔍 最终生成的USB配置:"
+    grep -E "CONFIG_USB|CONFIG_PHY|CONFIG_DWC|CONFIG_XHCI|CONFIG_EXTCON|CONFIG_COMMON_CLK|CONFIG_ARCH" .config | sort | head -30 | while read line; do
+        log "    $line"
+    done
+    
+    # 步骤12: 验证关键USB驱动是否被正确启用
     log "🔍 验证关键USB驱动状态..."
     
     local critical_usb_drivers=(
@@ -1394,21 +1427,9 @@ EOF
         fi
     done
     
-    # 先查看.config中实际有哪些内核配置选项（用于调试）
-    log "🔍 查看.config中的USB相关内核配置选项:"
-    local usb_configs=$(grep -E "CONFIG_(USB|PHY|DWC|XHCI|QCOM|EXTCON|CLK|ARCH)" .config | grep -v "PACKAGE" | head -20)
-    if [ -n "$usb_configs" ]; then
-        echo "$usb_configs" | while read line; do
-            log "    $line"
-        done
-    else
-        log "    未找到USB相关内核配置"
-    fi
-    
     # 检查内核配置状态
     log "🔍 检查内核配置状态:"
     
-    # 定义要检查的内核配置及其可能的变体
     local kernel_configs=(
         "ARCH_QCOM"
         "ARCH_IPQ40XX"
@@ -1460,7 +1481,7 @@ EOF
         log "🎉 所有USB驱动都已成功启用！"
     fi
     
-    # 步骤10: 最终设备验证
+    # 步骤13: 最终设备验证
     log "🔍 正在验证设备 $openwrt_device 是否被选中..."
     
     if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
