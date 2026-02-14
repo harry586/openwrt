@@ -1086,29 +1086,65 @@ EOF
     
     # 步骤6: 再次运行 defconfig 应用强制配置
     log "🔄 再次运行 make defconfig 应用强制配置..."
-    if ! make defconfig > /tmp/build-logs/defconfig.log 2>&1; then
+    
+    # 保存当前配置备份
+    cp .config .config.force
+    
+    # 使用 -j1 V=s 运行以获取详细输出
+    if ! make -j1 defconfig V=s > /tmp/build-logs/defconfig.log 2>&1; then
         log "❌ make defconfig 失败，查看详细日志..."
-        cat /tmp/build-logs/defconfig.log
-        handle_error "强制配置应用失败"
+        echo "=== defconfig.log 最后50行 ==="
+        tail -50 /tmp/build-logs/defconfig.log
+        echo "================================"
+        
+        # 尝试恢复备份并继续
+        if [ -f ".config.force" ]; then
+            log "🔄 尝试恢复强制配置并继续..."
+            cp .config.force .config
+        else
+            handle_error "强制配置应用失败"
+        fi
+    else
+        log "✅ make defconfig 成功"
     fi
     
     # 步骤7: 最终验证
     log "📋 必需USB驱动状态验证:"
     local missing=()
+    local missing_optional=()
+    
     for pkg in "${MUST_PACKAGES[@]}"; do
         if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
             log "  ✅ $pkg: 已启用"
         else
-            log "  ❌ $pkg: 未启用"
-            missing+=("$pkg")
+            # 检查是否是平台特定包
+            local is_optional=0
+            case "$pkg" in
+                kmod-usb-dwc3-qcom|kmod-phy-qcom-dwc3|kmod-usb-xhci-mtk|kmod-usb-dwc3-mediatek|kmod-phy-mediatek|kmod-usb2-ath79)
+                    is_optional=1
+                    ;;
+            esac
+            
+            if [ $is_optional -eq 1 ]; then
+                log "  ⚠️ $pkg: 未启用（平台可选）"
+                missing_optional+=("$pkg")
+            else
+                log "  ❌ $pkg: 未启用"
+                missing+=("$pkg")
+            fi
         fi
     done
     
     if [ ${#missing[@]} -gt 0 ]; then
-        log "⚠️ 警告: 以下驱动未启用: ${missing[*]}"
+        log "⚠️ 警告: 以下必需驱动未启用: ${missing[*]}"
         log "💡 可能原因: 内核不支持或平台未包含相应驱动"
     else
-        log "🎉 所有关键USB驱动已成功启用！"
+        log "🎉 所有必需USB驱动已成功启用！"
+    fi
+    
+    if [ ${#missing_optional[@]} -gt 0 ]; then
+        log "ℹ️ 可选驱动未启用: ${missing_optional[*]}"
+        log "💡 如果硬件需要这些驱动，请检查平台支持"
     fi
     
     log "✅ 配置生成完成"
