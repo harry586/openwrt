@@ -1031,23 +1031,51 @@ EOF
     log "🔄 运行 make defconfig 解决依赖关系..."
     make defconfig || handle_error "依赖解决失败"
     
-    # 步骤5: 后处理强制启用关键USB软件包
-    log "🔧 后处理：强制启用USB软件包..."
+    # 步骤5: 后处理强制启用关键USB软件包（增强版）
+    log "🔧 后处理：强制启用USB软件包（增强版）..."
     
-    # 定义所有平台必需的USB软件包
+    # 定义所有平台必需的USB软件包（扩展列表）
     local MUST_PACKAGES=(
+        # 核心驱动
         "kmod-usb-core"
         "kmod-usb-common"
+        # USB 2.0/3.0 控制器
         "kmod-usb2"
         "kmod-usb3"
+        "kmod-usb-ehci"
+        "kmod-usb-ohci"
         "kmod-usb-xhci-hcd"
+        "kmod-usb-xhci-pci"
+        "kmod-usb-xhci-plat-hcd"
+        # USB 存储
         "kmod-usb-storage"
+        "kmod-usb-storage-uas"
+        "kmod-usb-storage-extras"
+        # SCSI 支持
         "kmod-scsi-core"
+        "kmod-scsi-generic"
+        # 通用 USB 驱动
         "kmod-usb-dwc3"
         "kmod-usb-dwc3-of-simple"
+        # 文件系统
+        "kmod-fs-ext4"
+        "kmod-fs-vfat"
+        "kmod-fs-exfat"
+        "kmod-fs-ntfs3"
+        # 编码支持
+        "kmod-nls-utf8"
+        "kmod-nls-cp936"
+        # 挂载工具
+        "block-mount"
+        "automount"
+        # 实用工具
+        "usbutils"
+        "lsusb"
+        # 串口支持（可选但常用）
+        "kmod-usb-serial"
     )
     
-    # 平台特定软件包
+    # 平台特定软件包（扩展）
     case "$TARGET" in
         ipq40xx)
             MUST_PACKAGES+=(
@@ -1058,6 +1086,8 @@ EOF
         ramips)
             MUST_PACKAGES+=(
                 "kmod-usb-xhci-mtk"
+                "kmod-usb-ohci-pci"
+                "kmod-usb2-pci"
             )
             ;;
         mediatek)
@@ -1069,6 +1099,7 @@ EOF
         ath79)
             MUST_PACKAGES+=(
                 "kmod-usb2-ath79"
+                "kmod-usb-ohci"
             )
             ;;
     esac
@@ -1125,7 +1156,7 @@ EOF
             # 检查是否是平台特定包
             local is_optional=0
             case "$pkg" in
-                kmod-usb-dwc3-qcom|kmod-phy-qcom-dwc3|kmod-usb-xhci-mtk|kmod-usb-dwc3-mediatek|kmod-phy-mediatek|kmod-usb2-ath79)
+                kmod-usb-dwc3-qcom|kmod-phy-qcom-dwc3|kmod-usb-xhci-mtk|kmod-usb-dwc3-mediatek|kmod-phy-mediatek|kmod-usb2-ath79|kmod-usb-ohci-pci|kmod-usb2-pci)
                     is_optional=1
                     ;;
             esac
@@ -1172,66 +1203,92 @@ verify_usb_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 🚨 详细验证USB和存储配置 ==="
+    log "=== 🚨 详细验证USB和存储配置（增强版） ==="
     
+    echo ""
     echo "1. 🟢 USB核心模块:"
-    grep "CONFIG_PACKAGE_kmod-usb-core" .config | grep "=y" && echo "✅ USB核心" || echo "❌ 缺少USB核心"
+    grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" .config && echo "   ✅ kmod-usb-core" || echo "   ❌ kmod-usb-core"
+    grep -q "^CONFIG_PACKAGE_kmod-usb-common=y" .config && echo "   ✅ kmod-usb-common" || echo "   ❌ kmod-usb-common"
     
-    echo "2. 🟢 USB 2.0控制器:"
-    grep -E "CONFIG_PACKAGE_kmod-usb2=y" .config && echo "✅ USB 2.0" || echo "❌ 缺少USB 2.0"
-    grep -E "CONFIG_PACKAGE_kmod-usb-ehci=y" .config && echo "✅ USB EHCI" || echo "❌ 缺少USB EHCI"
-    grep -E "CONFIG_PACKAGE_kmod-usb-ohci=y" .config && echo "✅ USB OHCI" || echo "❌ 缺少USB OHCI"
+    echo ""
+    echo "2. 🟢 USB控制器驱动:"
+    echo "   - kmod-usb2:       $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config && echo '✅' || echo '❌')"
+    echo "   - kmod-usb3:       $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config && echo '✅' || echo '❌')"
+    echo "   - kmod-usb-ehci:   $(grep -q "^CONFIG_PACKAGE_kmod-usb-ehci=y" .config && echo '✅' || echo '❌')"
+    echo "   - kmod-usb-ohci:   $(grep -q "^CONFIG_PACKAGE_kmod-usb-ohci=y" .config && echo '✅' || echo '❌')"
+    echo "   - kmod-usb-xhci-hcd: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo '✅' || echo '❌')"
+    echo "   - kmod-usb-xhci-pci: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-pci=y" .config && echo '✅' || echo '❌')"
+    echo "   - kmod-usb-xhci-plat-hcd: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" .config && echo '✅' || echo '❌')"
     
-    echo "3. 🚨 USB 3.0关键驱动:"
-    echo "  - kmod-usb3:" $(grep "CONFIG_PACKAGE_kmod-usb3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
-    echo "  - kmod-usb-xhci-hcd:" $(grep "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
-    echo "  - kmod-usb-xhci-pci:" $(grep "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    echo ""
+    echo "3. 🚨 USB 3.0 DWC3 核心驱动:"
+    echo "   - kmod-usb-dwc3:   $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3=y" .config && echo '✅' || echo '❌')"
+    echo "   - kmod-usb-dwc3-of-simple: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" .config && echo '✅' || echo '❌')"
     
-    echo "4. 🚨 USB DWC3 核心驱动:"
-    echo "  - kmod-usb-dwc3:" $(grep "CONFIG_PACKAGE_kmod-usb-dwc3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
-    echo "  - kmod-usb-dwc3-of-simple:" $(grep "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
-    
-    echo "5. 🚨 平台专用USB控制器:"
-    if [ "$TARGET" = "ipq40xx" ]; then
-        echo "  🔧 检测到高通IPQ40xx平台，检查专用驱动:"
-        echo "  - kmod-usb-dwc3-qcom:" $(grep "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
-        echo "  - kmod-phy-qcom-dwc3:" $(grep "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
-        echo "  - kmod-usb-phy-msm:" $(grep "CONFIG_PACKAGE_kmod-usb-phy-msm=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
-    elif [ "$TARGET" = "ramips" ]; then
-        echo "  🔧 检测到雷凌平台，检查专用驱动:"
-        echo "  - kmod-usb-xhci-mtk:" $(grep "CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
-    elif [ "$TARGET" = "ath79" ]; then
-        echo "  🔧 检测到高通ATH79平台，检查专用驱动:"
-        echo "  - kmod-usb2-ath79:" $(grep "CONFIG_PACKAGE_kmod-usb2-ath79=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    echo ""
+    echo "4. 🚨 平台专用USB控制器:"
+    if [ "$TARGET" = "ipq40xx" ] || grep -q "^CONFIG_TARGET_ipq40xx=y" .config 2>/dev/null; then
+        echo "   🔧 检测到高通IPQ40xx平台:"
+        echo "     - kmod-usb-dwc3-qcom:     $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo '✅' || echo '❌')"
+        echo "     - kmod-phy-qcom-dwc3:     $(grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo '✅' || echo '❌')"
+    elif [ "$TARGET" = "ramips" ] || grep -q "^CONFIG_TARGET_ramips=y" .config 2>/dev/null; then
+        echo "   🔧 检测到雷凌MT76xx平台:"
+        echo "     - kmod-usb-xhci-mtk:       $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config && echo '✅' || echo '❌')"
+        echo "     - kmod-usb-ohci-pci:       $(grep -q "^CONFIG_PACKAGE_kmod-usb-ohci-pci=y" .config && echo '✅' || echo '❌')"
+        echo "     - kmod-usb2-pci:           $(grep -q "^CONFIG_PACKAGE_kmod-usb2-pci=y" .config && echo '✅' || echo '❌')"
+    elif [ "$TARGET" = "mediatek" ] || grep -q "^CONFIG_TARGET_mediatek=y" .config 2>/dev/null; then
+        echo "   🔧 检测到联发科平台:"
+        echo "     - kmod-usb-dwc3-mediatek:  $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-mediatek=y" .config && echo '✅' || echo '❌')"
+        echo "     - kmod-phy-mediatek:       $(grep -q "^CONFIG_PACKAGE_kmod-phy-mediatek=y" .config && echo '✅' || echo '❌')"
+    elif [ "$TARGET" = "ath79" ] || grep -q "^CONFIG_TARGET_ath79=y" .config 2>/dev/null; then
+        echo "   🔧 检测到高通ATH79平台:"
+        echo "     - kmod-usb2-ath79:         $(grep -q "^CONFIG_PACKAGE_kmod-usb2-ath79=y" .config && echo '✅' || echo '❌')"
+        echo "     - kmod-usb-ohci:           $(grep -q "^CONFIG_PACKAGE_kmod-usb-ohci=y" .config && echo '✅' || echo '❌')"
     fi
     
-    echo "6. 🟢 USB存储:"
-    grep "CONFIG_PACKAGE_kmod-usb-storage=y" .config && echo "✅ USB存储" || echo "❌ 缺少USB存储"
-    grep "CONFIG_PACKAGE_kmod-usb-storage-uas=y" .config && echo "✅ USB UAS" || echo "❌ 缺少USB UAS"
+    echo ""
+    echo "5. 🟢 USB存储驱动:"
+    echo "   - kmod-usb-storage:        $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" .config && echo '✅' || echo '❌')"
+    echo "   - kmod-usb-storage-uas:    $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage-uas=y" .config && echo '✅' || echo '❌')"
+    echo "   - kmod-usb-storage-extras: $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage-extras=y" .config && echo '✅' || echo '❌')"
     
-    echo "7. 🟢 SCSI支持:"
-    grep "CONFIG_PACKAGE_kmod-scsi-core=y" .config && echo "✅ SCSI核心" || echo "❌ 缺少SCSI核心"
-    grep "CONFIG_PACKAGE_kmod-scsi-generic=y" .config && echo "✅ SCSI通用" || echo "❌ 缺少SCSI通用"
+    echo ""
+    echo "6. 🟢 SCSI支持:"
+    echo "   - kmod-scsi-core:    $(grep -q "^CONFIG_PACKAGE_kmod-scsi-core=y" .config && echo '✅' || echo '❌')"
+    echo "   - kmod-scsi-generic: $(grep -q "^CONFIG_PACKAGE_kmod-scsi-generic=y" .config && echo '✅' || echo '❌')"
     
-    echo "8. 🟢 文件系统支持:"
-    echo "  - ext4:" $(grep "CONFIG_PACKAGE_kmod-fs-ext4=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
-    echo "  - vfat:" $(grep "CONFIG_PACKAGE_kmod-fs-vfat=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
-    echo "  - exfat:" $(grep "CONFIG_PACKAGE_kmod-fs-exfat=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
-    echo "  - NTFS3:" $(grep "CONFIG_PACKAGE_kmod-fs-ntfs3=y" .config && echo "✅ 已启用" || echo "❌ 未启用")
+    echo ""
+    echo "7. 🟢 文件系统支持:"
+    echo "   - kmod-fs-ext4:  $(grep -q "^CONFIG_PACKAGE_kmod-fs-ext4=y" .config && echo '✅' || echo '❌')"
+    echo "   - kmod-fs-vfat:  $(grep -q "^CONFIG_PACKAGE_kmod-fs-vfat=y" .config && echo '✅' || echo '❌')"
+    echo "   - kmod-fs-exfat: $(grep -q "^CONFIG_PACKAGE_kmod-fs-exfat=y" .config && echo '✅' || echo '❌')"
+    echo "   - kmod-fs-ntfs3: $(grep -q "^CONFIG_PACKAGE_kmod-fs-ntfs3=y" .config && echo '✅' || echo '❌')"
     
-    echo "9. 🟢 编码支持:"
-    grep "CONFIG_PACKAGE_kmod-nls-utf8=y" .config && echo "✅ UTF-8编码" || echo "❌ 缺少UTF-8编码"
-    grep "CONFIG_PACKAGE_kmod-nls-cp936=y" .config && echo "✅ 中文编码" || echo "❌ 缺少中文编码"
+    echo ""
+    echo "8. 🟢 编码支持:"
+    echo "   - kmod-nls-utf8:  $(grep -q "^CONFIG_PACKAGE_kmod-nls-utf8=y" .config && echo '✅' || echo '❌')"
+    echo "   - kmod-nls-cp936: $(grep -q "^CONFIG_PACKAGE_kmod-nls-cp936=y" .config && echo '✅' || echo '❌')"
     
-    log "=== 🚨 USB配置验证完成 ==="
+    echo ""
+    echo "9. 🟢 自动挂载工具:"
+    echo "   - block-mount: $(grep -q "^CONFIG_PACKAGE_block-mount=y" .config && echo '✅' || echo '❌')"
+    echo "   - automount:   $(grep -q "^CONFIG_PACKAGE_automount=y" .config && echo '✅' || echo '❌')"
+    
+    echo ""
+    echo "10. 🟢 USB实用工具:"
+    echo "   - usbutils: $(grep -q "^CONFIG_PACKAGE_usbutils=y" .config && echo '✅' || echo '❌')"
+    echo "   - lsusb:    $(grep -q "^CONFIG_PACKAGE_lsusb=y" .config && echo '✅' || echo '❌')"
+    
+    echo ""
+    echo "=== 🚨 USB配置验证完成 ==="
     
     log "📊 USB配置状态总结:"
-    local usb_drivers=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-xhci-hcd" "kmod-usb-storage" "kmod-scsi-core")
+    local usb_drivers=("kmod-usb-core" "kmod-usb2" "kmod-usb3" "kmod-usb-xhci-hcd" "kmod-usb-storage" "kmod-scsi-core" "kmod-fs-ext4")
     local missing_count=0
     local enabled_count=0
     
     for driver in "${usb_drivers[@]}"; do
-        if grep -q "CONFIG_PACKAGE_${driver}=y" .config; then
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
             log "  ✅ $driver: 已启用"
             enabled_count=$((enabled_count + 1))
         else
@@ -1255,10 +1312,11 @@ check_usb_drivers_integrity() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 🚨 USB驱动完整性检查 ==="
+    log "=== 🚨 USB驱动完整性检查（增强版） ==="
     
     local missing_drivers=()
     local required_drivers=(
+        # 核心驱动
         "kmod-usb-core"
         "kmod-usb2"
         "kmod-usb3"
@@ -1267,16 +1325,29 @@ check_usb_drivers_integrity() {
         "kmod-scsi-core"
         "kmod-fs-ext4"
         "kmod-fs-vfat"
+        # 扩展驱动（推荐启用）
+        "kmod-usb-xhci-pci"
+        "kmod-usb-xhci-plat-hcd"
+        "kmod-usb-storage-uas"
+        "kmod-scsi-generic"
+        "kmod-fs-exfat"
+        "kmod-fs-ntfs3"
+        "kmod-nls-utf8"
+        "kmod-nls-cp936"
     )
     
-    if [ "$TARGET" = "ipq40xx" ]; then
-        required_drivers+=("kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3")
-    elif [ "$TARGET" = "ramips" ]; then
-        required_drivers+=("kmod-usb-xhci-mtk")
-    elif [ "$TARGET" = "ath79" ]; then
-        required_drivers+=("kmod-usb2-ath79")
+    # 根据平台添加专用驱动
+    if [ "$TARGET" = "ipq40xx" ] || grep -q "^CONFIG_TARGET_ipq40xx=y" .config 2>/dev/null; then
+        required_drivers+=("kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3" "kmod-usb-dwc3-of-simple")
+    elif [ "$TARGET" = "ramips" ] || grep -q "^CONFIG_TARGET_ramips=y" .config 2>/dev/null; then
+        required_drivers+=("kmod-usb-xhci-mtk" "kmod-usb-ohci-pci" "kmod-usb2-pci")
+    elif [ "$TARGET" = "mediatek" ] || grep -q "^CONFIG_TARGET_mediatek=y" .config 2>/dev/null; then
+        required_drivers+=("kmod-usb-dwc3-mediatek" "kmod-phy-mediatek" "kmod-usb-dwc3")
+    elif [ "$TARGET" = "ath79" ] || grep -q "^CONFIG_TARGET_ath79=y" .config 2>/dev/null; then
+        required_drivers+=("kmod-usb2-ath79" "kmod-usb-ohci")
     fi
     
+    # 检查每个驱动
     for driver in "${required_drivers[@]}"; do
         if ! grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
             log "❌ 缺失驱动: $driver"
@@ -1286,6 +1357,7 @@ check_usb_drivers_integrity() {
         fi
     done
     
+    # 如果有缺失驱动，尝试修复
     if [ ${#missing_drivers[@]} -gt 0 ]; then
         log "🚨 发现 ${#missing_drivers[@]} 个缺失的USB驱动"
         log "正在尝试修复..."
@@ -1295,7 +1367,8 @@ check_usb_drivers_integrity() {
             log "✅ 已添加: $driver"
         done
         
-        make defconfig
+        # 重新运行defconfig
+        make defconfig || log "⚠️ make defconfig 修复后仍有问题"
         log "✅ USB驱动修复完成"
     else
         log "🎉 所有必需USB驱动都已启用"
