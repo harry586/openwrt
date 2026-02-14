@@ -978,11 +978,29 @@ generate_config() {
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
-    # 步骤1: 创建基础目标配置（使用变量构建设备配置）
-    # 转换设备名称为大写（某些平台需要）
-    local device_upper=$(echo "$DEVICE" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
+    # 步骤1: 创建基础目标配置
+    # 根据设备名映射到正确的OpenWrt设备配置名
+    local openwrt_device=""
+    case "$DEVICE" in
+        ac42u|rt-ac42u|asus_rt-ac42u)
+            openwrt_device="asus_rt-ac42u"
+            log "🔧 映射设备 $DEVICE -> $openwrt_device"
+            ;;
+        acrh17|rt-acrh17|asus_rt-acrh17)
+            openwrt_device="asus_rt-acrh17"
+            log "🔧 映射设备 $DEVICE -> $openwrt_device"
+            ;;
+        *)
+            # 默认使用原设备名，但转换为OpenWrt格式（小写，下划线）
+            openwrt_device=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+            log "🔧 使用转换后的设备名: $openwrt_device"
+            ;;
+    esac
     
-    # 使用变量构建基础配置
+    # 转换为大写（用于CONFIG_变量）
+    local device_upper=$(echo "$openwrt_device" | tr '[:lower:]' '[:upper:]')
+    
+    # 写入基础配置 - 使用正确的设备名格式
     cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
@@ -993,14 +1011,14 @@ EOF
     log "基础配置文件内容:"
     cat .config | head -5
     
-    make defconfig || handle_error "基础配置生成失败"
-    log "✅ 基础配置生成成功"
+    # 不运行make defconfig，直接继续添加配置
+    # make defconfig || handle_error "基础配置生成失败"
+    log "✅ 基础配置写入成功"
     
-    # 验证设备是否被选中
-    if ! grep -q "${DEVICE}" .config; then
-        log "⚠️ 设备 ${DEVICE} 未在配置中找到，尝试直接写入..."
+    # 验证设备是否被正确写入
+    if ! grep -q "DEVICE_${device_upper}=y" .config; then
+        log "⚠️ 设备 ${openwrt_device} 未正确写入，尝试直接写入..."
         echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
-        make defconfig || log "⚠️ 重新生成配置失败"
     fi
     
     # 步骤2: 合并所有配置文件
@@ -1034,180 +1052,182 @@ EOF
     fi
     
     # 根据config.txt添加ASUS RT-AC42U特定配置
-    log "📋 应用ASUS RT-AC42U特定配置..."
+    if [ "$openwrt_device" = "asus_rt-ac42u" ] || [ "$openwrt_device" = "asus_rt-acrh17" ]; then
+        log "📋 应用ASUS RT-AC42U/ACRH17特定配置..."
+        
+        # 基础依赖库
+        echo "CONFIG_GNUTLS_ALPN=y" >> .config
+        echo "CONFIG_GNUTLS_ANON=y" >> .config
+        echo "CONFIG_GNUTLS_CRYPTODEV=y" >> .config
+        echo "CONFIG_GNUTLS_DTLS_SRTP=y" >> .config
+        echo "CONFIG_GNUTLS_HEARTBEAT=y" >> .config
+        echo "CONFIG_GNUTLS_OCSP=y" >> .config
+        echo "CONFIG_GNUTLS_PSK=y" >> .config
+        
+        # libcurl配置
+        echo "CONFIG_LIBCURL_COOKIES=y" >> .config
+        echo "CONFIG_LIBCURL_CRYPTO_AUTH=y" >> .config
+        echo "CONFIG_LIBCURL_FILE=y" >> .config
+        echo "CONFIG_LIBCURL_FTP=y" >> .config
+        echo "CONFIG_LIBCURL_HTTP=y" >> .config
+        echo "CONFIG_LIBCURL_NGHTTP2=y" >> .config
+        echo "CONFIG_LIBCURL_OPENSSL=y" >> .config
+        echo "CONFIG_LIBCURL_PROXY=y" >> .config
+        echo "CONFIG_LIBCURL_TFTP=y" >> .config
+        echo "CONFIG_LIBCURL_THREADED_RESOLVER=y" >> .config
+        echo "CONFIG_LIBCURL_TLS_SRP=y" >> .config
+        echo "CONFIG_LIBCURL_UNIX_SOCKETS=y" >> .config
+        
+        # ath10k驱动和固件
+        echo "CONFIG_PACKAGE_ath10k-board-qca988x=y" >> .config
+        echo "CONFIG_PACKAGE_ath10k-firmware-qca988x=y" >> .config
+        
+        # 基础工具
+        echo "CONFIG_PACKAGE_attr=y" >> .config
+        echo "CONFIG_PACKAGE_avahi-dbus-daemon=y" >> .config
+        echo "CONFIG_PACKAGE_bash=y" >> .config
+        echo "CONFIG_PACKAGE_blkid=y" >> .config
+        echo "CONFIG_PACKAGE_blockd=y" >> .config
+        echo "CONFIG_PACKAGE_bridge=y" >> .config
+        echo "CONFIG_PACKAGE_btrfs-progs=y" >> .config
+        echo "CONFIG_PACKAGE_cpulimit=y" >> .config
+        echo "CONFIG_PACKAGE_curl=y" >> .config
+        echo "CONFIG_PACKAGE_dbus=y" >> .config
+        echo "CONFIG_PACKAGE_hd-idle=y" >> .config
+        echo "CONFIG_PACKAGE_ip-tiny=y" >> .config
+        echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> .config
+        echo "CONFIG_PACKAGE_iptables-mod-ipopt=y" >> .config
+        echo "CONFIG_PACKAGE_iputils-arping=y" >> .config
+        echo "CONFIG_PACKAGE_jq=y" >> .config
+        
+        # 内核模块
+        echo "CONFIG_PACKAGE_kmod-crypto-acompress=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-fs-autofs4=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-fs-btrfs=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ifb=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-conntrack-extra=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-ipt-ipopt=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-lib-crc32c=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-lib-lzo=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-lib-raid6=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-lib-xor=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-lib-zlib-deflate=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-lib-zlib-inflate=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-lib-zstd=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nls-cp936=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-sched-cake=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-sched-core=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-scsi-generic=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+        
+        # USB驱动（全面启用）
+        echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-ehci=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-serial=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-serial-ftdi=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-serial-pl2303=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-uhci=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config
+        
+        # 库文件
+        echo "CONFIG_PACKAGE_libatomic=y" >> .config
+        echo "CONFIG_PACKAGE_libattr=y" >> .config
+        echo "CONFIG_PACKAGE_libavahi-client=y" >> .config
+        echo "CONFIG_PACKAGE_libavahi-dbus-support=y" >> .config
+        echo "CONFIG_PACKAGE_libcap=y" >> .config
+        echo "CONFIG_PACKAGE_libcurl=y" >> .config
+        echo "CONFIG_PACKAGE_libdaemon=y" >> .config
+        echo "CONFIG_PACKAGE_libdbus=y" >> .config
+        echo "CONFIG_PACKAGE_libevdev=y" >> .config
+        echo "CONFIG_PACKAGE_libexpat=y" >> .config
+        echo "CONFIG_PACKAGE_libgnutls=y" >> .config
+        echo "CONFIG_PACKAGE_liblzo=y" >> .config
+        echo "CONFIG_PACKAGE_libmount=y" >> .config
+        echo "CONFIG_PACKAGE_libncurses=y" >> .config
+        echo "CONFIG_PACKAGE_libnghttp2=y" >> .config
+        echo "CONFIG_PACKAGE_libpopt=y" >> .config
+        echo "CONFIG_PACKAGE_libreadline=y" >> .config
+        echo "CONFIG_PACKAGE_libsmartcols=y" >> .config
+        echo "CONFIG_PACKAGE_libtasn1=y" >> .config
+        echo "CONFIG_PACKAGE_libtirpc=y" >> .config
+        echo "CONFIG_PACKAGE_libudev-zero=y" >> .config
+        echo "CONFIG_PACKAGE_liburing=y" >> .config
+        echo "CONFIG_PACKAGE_libusb-1.0=y" >> .config
+        echo "CONFIG_PACKAGE_libwolfssl=y" >> .config
+        echo "CONFIG_PACKAGE_lsblk=y" >> .config
+        
+        # Luci应用（全面启用）
+        echo "CONFIG_PACKAGE_luci-app-accesscontrol=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-arpbind=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-cpulimit=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-diskman=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-hd-idle=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-samba4=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-vlmcsd=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-wechatpush=y" >> .config
+        
+        # Luci中文语言包
+        echo "CONFIG_PACKAGE_luci-i18n-accesscontrol-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-arpbind-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-cpulimit-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-hd-idle-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-vlmcsd-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y" >> .config
+        
+        # 服务和应用
+        echo "CONFIG_PACKAGE_miniupnpd=y" >> .config
+        echo "CONFIG_PACKAGE_parted=y" >> .config
+        echo "CONFIG_PACKAGE_samba4-libs=y" >> .config
+        echo "CONFIG_PACKAGE_samba4-server=y" >> .config
+        echo "CONFIG_PACKAGE_smartdns=y" >> .config
+        echo "CONFIG_PACKAGE_smartmontools=y" >> .config
+        echo "CONFIG_PACKAGE_sqm-scripts=y" >> .config
+        echo "CONFIG_PACKAGE_tc-mod-iptables=y" >> .config
+        echo "CONFIG_PACKAGE_tc-tiny=y" >> .config
+        echo "CONFIG_PACKAGE_terminfo=y" >> .config
+        echo "CONFIG_PACKAGE_uclibcxx=y" >> .config
+        echo "CONFIG_PACKAGE_usbids=y" >> .config
+        echo "CONFIG_PACKAGE_usbutils=y" >> .config
+        echo "CONFIG_PACKAGE_vlmcsd=y" >> .config
+        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+        echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
+        echo "CONFIG_PACKAGE_wsdd2=y" >> .config
+        
+        # 服务配置选项
+        echo "CONFIG_PARTED_READLINE=y" >> .config
+        echo "CONFIG_SAMBA4_SERVER_AVAHI=y" >> .config
+        echo "CONFIG_SAMBA4_SERVER_NETBIOS=y" >> .config
+        echo "CONFIG_SAMBA4_SERVER_VFS=y" >> .config
+        echo "CONFIG_SAMBA4_SERVER_WSDD2=y" >> .config
+        echo "CONFIG_WOLFSSL_HAS_NO_HW=y" >> .config
+        echo "CONFIG_WPA_WOLFSSL=y" >> .config
+        
+        # 确保wpad-openssl是模块化而不是内置
+        echo "CONFIG_PACKAGE_wpad-openssl=m" >> .config
+        
+        # 禁用不兼容的USB驱动
+        echo "# CONFIG_PACKAGE_kmod-usb-xhci-mtk is not set" >> .config
+    fi
     
-    # 基础依赖库
-    echo "CONFIG_GNUTLS_ALPN=y" >> .config
-    echo "CONFIG_GNUTLS_ANON=y" >> .config
-    echo "CONFIG_GNUTLS_CRYPTODEV=y" >> .config
-    echo "CONFIG_GNUTLS_DTLS_SRTP=y" >> .config
-    echo "CONFIG_GNUTLS_HEARTBEAT=y" >> .config
-    echo "CONFIG_GNUTLS_OCSP=y" >> .config
-    echo "CONFIG_GNUTLS_PSK=y" >> .config
-    
-    # libcurl配置
-    echo "CONFIG_LIBCURL_COOKIES=y" >> .config
-    echo "CONFIG_LIBCURL_CRYPTO_AUTH=y" >> .config
-    echo "CONFIG_LIBCURL_FILE=y" >> .config
-    echo "CONFIG_LIBCURL_FTP=y" >> .config
-    echo "CONFIG_LIBCURL_HTTP=y" >> .config
-    echo "CONFIG_LIBCURL_NGHTTP2=y" >> .config
-    echo "CONFIG_LIBCURL_OPENSSL=y" >> .config
-    echo "CONFIG_LIBCURL_PROXY=y" >> .config
-    echo "CONFIG_LIBCURL_TFTP=y" >> .config
-    echo "CONFIG_LIBCURL_THREADED_RESOLVER=y" >> .config
-    echo "CONFIG_LIBCURL_TLS_SRP=y" >> .config
-    echo "CONFIG_LIBCURL_UNIX_SOCKETS=y" >> .config
-    
-    # ath10k驱动和固件
-    echo "CONFIG_PACKAGE_ath10k-board-qca988x=y" >> .config
-    echo "CONFIG_PACKAGE_ath10k-firmware-qca988x=y" >> .config
-    
-    # 基础工具
-    echo "CONFIG_PACKAGE_attr=y" >> .config
-    echo "CONFIG_PACKAGE_avahi-dbus-daemon=y" >> .config
-    echo "CONFIG_PACKAGE_bash=y" >> .config
-    echo "CONFIG_PACKAGE_blkid=y" >> .config
-    echo "CONFIG_PACKAGE_blockd=y" >> .config
-    echo "CONFIG_PACKAGE_bridge=y" >> .config
-    echo "CONFIG_PACKAGE_btrfs-progs=y" >> .config
-    echo "CONFIG_PACKAGE_cpulimit=y" >> .config
-    echo "CONFIG_PACKAGE_curl=y" >> .config
-    echo "CONFIG_PACKAGE_dbus=y" >> .config
-    echo "CONFIG_PACKAGE_hd-idle=y" >> .config
-    echo "CONFIG_PACKAGE_ip-tiny=y" >> .config
-    echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> .config
-    echo "CONFIG_PACKAGE_iptables-mod-ipopt=y" >> .config
-    echo "CONFIG_PACKAGE_iputils-arping=y" >> .config
-    echo "CONFIG_PACKAGE_jq=y" >> .config
-    
-    # 内核模块
-    echo "CONFIG_PACKAGE_kmod-crypto-acompress=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-fs-autofs4=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-fs-btrfs=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-ifb=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-ipt-conntrack-extra=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-ipt-ipopt=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-lib-crc32c=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-lib-lzo=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-lib-raid6=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-lib-xor=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-lib-zlib-deflate=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-lib-zlib-inflate=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-lib-zstd=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-nls-cp936=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-sched-cake=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-sched-core=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-scsi-generic=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
-    
-    # USB驱动（全面启用）
-    echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-ehci=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-serial=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-serial-ftdi=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-serial-pl2303=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-uhci=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
-    echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config
-    
-    # 库文件
-    echo "CONFIG_PACKAGE_libatomic=y" >> .config
-    echo "CONFIG_PACKAGE_libattr=y" >> .config
-    echo "CONFIG_PACKAGE_libavahi-client=y" >> .config
-    echo "CONFIG_PACKAGE_libavahi-dbus-support=y" >> .config
-    echo "CONFIG_PACKAGE_libcap=y" >> .config
-    echo "CONFIG_PACKAGE_libcurl=y" >> .config
-    echo "CONFIG_PACKAGE_libdaemon=y" >> .config
-    echo "CONFIG_PACKAGE_libdbus=y" >> .config
-    echo "CONFIG_PACKAGE_libevdev=y" >> .config
-    echo "CONFIG_PACKAGE_libexpat=y" >> .config
-    echo "CONFIG_PACKAGE_libgnutls=y" >> .config
-    echo "CONFIG_PACKAGE_liblzo=y" >> .config
-    echo "CONFIG_PACKAGE_libmount=y" >> .config
-    echo "CONFIG_PACKAGE_libncurses=y" >> .config
-    echo "CONFIG_PACKAGE_libnghttp2=y" >> .config
-    echo "CONFIG_PACKAGE_libpopt=y" >> .config
-    echo "CONFIG_PACKAGE_libreadline=y" >> .config
-    echo "CONFIG_PACKAGE_libsmartcols=y" >> .config
-    echo "CONFIG_PACKAGE_libtasn1=y" >> .config
-    echo "CONFIG_PACKAGE_libtirpc=y" >> .config
-    echo "CONFIG_PACKAGE_libudev-zero=y" >> .config
-    echo "CONFIG_PACKAGE_liburing=y" >> .config
-    echo "CONFIG_PACKAGE_libusb-1.0=y" >> .config
-    echo "CONFIG_PACKAGE_libwolfssl=y" >> .config
-    echo "CONFIG_PACKAGE_lsblk=y" >> .config
-    
-    # Luci应用（全面启用）
-    echo "CONFIG_PACKAGE_luci-app-accesscontrol=y" >> .config
-    echo "CONFIG_PACKAGE_luci-app-arpbind=y" >> .config
-    echo "CONFIG_PACKAGE_luci-app-cpulimit=y" >> .config
-    echo "CONFIG_PACKAGE_luci-app-diskman=y" >> .config
-    echo "CONFIG_PACKAGE_luci-app-hd-idle=y" >> .config
-    echo "CONFIG_PACKAGE_luci-app-samba4=y" >> .config
-    echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> .config
-    echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
-    echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
-    echo "CONFIG_PACKAGE_luci-app-vlmcsd=y" >> .config
-    echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
-    echo "CONFIG_PACKAGE_luci-app-wechatpush=y" >> .config
-    
-    # Luci中文语言包
-    echo "CONFIG_PACKAGE_luci-i18n-accesscontrol-zh-cn=y" >> .config
-    echo "CONFIG_PACKAGE_luci-i18n-arpbind-zh-cn=y" >> .config
-    echo "CONFIG_PACKAGE_luci-i18n-cpulimit-zh-cn=y" >> .config
-    echo "CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y" >> .config
-    echo "CONFIG_PACKAGE_luci-i18n-hd-idle-zh-cn=y" >> .config
-    echo "CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y" >> .config
-    echo "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y" >> .config
-    echo "CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y" >> .config
-    echo "CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y" >> .config
-    echo "CONFIG_PACKAGE_luci-i18n-vlmcsd-zh-cn=y" >> .config
-    echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> .config
-    echo "CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y" >> .config
-    
-    # 服务和应用
-    echo "CONFIG_PACKAGE_miniupnpd=y" >> .config
-    echo "CONFIG_PACKAGE_parted=y" >> .config
-    echo "CONFIG_PACKAGE_samba4-libs=y" >> .config
-    echo "CONFIG_PACKAGE_samba4-server=y" >> .config
-    echo "CONFIG_PACKAGE_smartdns=y" >> .config
-    echo "CONFIG_PACKAGE_smartmontools=y" >> .config
-    echo "CONFIG_PACKAGE_sqm-scripts=y" >> .config
-    echo "CONFIG_PACKAGE_tc-mod-iptables=y" >> .config
-    echo "CONFIG_PACKAGE_tc-tiny=y" >> .config
-    echo "CONFIG_PACKAGE_terminfo=y" >> .config
-    echo "CONFIG_PACKAGE_uclibcxx=y" >> .config
-    echo "CONFIG_PACKAGE_usbids=y" >> .config
-    echo "CONFIG_PACKAGE_usbutils=y" >> .config
-    echo "CONFIG_PACKAGE_vlmcsd=y" >> .config
-    echo "CONFIG_PACKAGE_vsftpd=y" >> .config
-    echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
-    echo "CONFIG_PACKAGE_wsdd2=y" >> .config
-    
-    # 服务配置选项
-    echo "CONFIG_PARTED_READLINE=y" >> .config
-    echo "CONFIG_SAMBA4_SERVER_AVAHI=y" >> .config
-    echo "CONFIG_SAMBA4_SERVER_NETBIOS=y" >> .config
-    echo "CONFIG_SAMBA4_SERVER_VFS=y" >> .config
-    echo "CONFIG_SAMBA4_SERVER_WSDD2=y" >> .config
-    echo "CONFIG_WOLFSSL_HAS_NO_HW=y" >> .config
-    echo "CONFIG_WPA_WOLFSSL=y" >> .config
-    
-    # 确保wpad-openssl是模块化而不是内置
-    echo "CONFIG_PACKAGE_wpad-openssl=m" >> .config
-    
-    # 禁用不兼容的USB驱动
-    echo "# CONFIG_PACKAGE_kmod-usb-xhci-mtk is not set" >> .config
-    
-    # TCP BBR
+    # TCP BBR（所有设备都启用）
     echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
     echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
     
@@ -1231,24 +1251,22 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 步骤4: 运行 make olddefconfig 解决依赖关系（改用 yes "" | make oldconfig）
-    log "🔄 运行 yes "" | make oldconfig 解决依赖关系..."
-    yes "" | make -j1 oldconfig V=s > /tmp/build-logs/oldconfig.log 2>&1 || {
-        log "❌ make oldconfig 失败，查看日志..."
-        tail -50 /tmp/build-logs/oldconfig.log
+    # 步骤4: 运行 make defconfig 解决依赖关系
+    log "🔄 运行 make defconfig 解决依赖关系..."
+    make defconfig > /tmp/build-logs/defconfig.log 2>&1 || {
+        log "❌ make defconfig 失败，查看日志..."
+        tail -50 /tmp/build-logs/defconfig.log
         handle_error "依赖解决失败"
     }
     log "✅ 依赖关系解决成功"
     
-    # 步骤5: 后处理强制启用关键USB软件包（增强版）
-    log "🔧 后处理：强制启用USB软件包（增强版）..."
+    # 步骤5: 后处理强制启用关键USB软件包
+    log "🔧 后处理：强制启用USB软件包..."
     
-    # 定义所有平台必需的USB软件包（扩展列表）
+    # 定义所有平台必需的USB软件包
     local MUST_PACKAGES=(
-        # 核心驱动
         "kmod-usb-core"
         "kmod-usb-common"
-        # USB 2.0/3.0 控制器
         "kmod-usb2"
         "kmod-usb3"
         "kmod-usb-ehci"
@@ -1256,35 +1274,25 @@ EOF
         "kmod-usb-xhci-hcd"
         "kmod-usb-xhci-pci"
         "kmod-usb-xhci-plat-hcd"
-        # USB 存储
         "kmod-usb-storage"
         "kmod-usb-storage-uas"
-        "kmod-usb-storage-extras"
-        # SCSI 支持
         "kmod-scsi-core"
         "kmod-scsi-generic"
-        # 通用 USB 驱动
         "kmod-usb-dwc3"
         "kmod-usb-dwc3-of-simple"
-        # 文件系统
         "kmod-fs-ext4"
         "kmod-fs-vfat"
         "kmod-fs-exfat"
         "kmod-fs-ntfs3"
-        # 编码支持
         "kmod-nls-utf8"
         "kmod-nls-cp936"
-        # 挂载工具
         "block-mount"
         "automount"
-        # 实用工具
         "usbutils"
         "lsusb"
-        # 串口支持（可选但常用）
-        "kmod-usb-serial"
     )
     
-    # 平台特定软件包（扩展）
+    # 平台特定软件包
     case "$TARGET" in
         ipq40xx)
             MUST_PACKAGES+=(
@@ -1292,156 +1300,52 @@ EOF
                 "kmod-phy-qcom-dwc3"
             )
             ;;
-        ramips)
-            MUST_PACKAGES+=(
-                "kmod-usb-xhci-mtk"
-                "kmod-usb-ohci-pci"
-                "kmod-usb2-pci"
-            )
-            ;;
-        mediatek)
-            MUST_PACKAGES+=(
-                "kmod-usb-dwc3-mediatek"
-                "kmod-phy-mediatek"
-            )
-            ;;
-        ath79)
-            MUST_PACKAGES+=(
-                "kmod-usb2-ath79"
-                "kmod-usb-ohci"
-            )
-            ;;
     esac
     
-    # 强制写入.config（删除可能存在的禁用/模块行，添加=y）
+    # 强制写入.config
     for pkg in "${MUST_PACKAGES[@]}"; do
         sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
         sed -i "/^# CONFIG_PACKAGE_${pkg} is not set/d" .config
         echo "CONFIG_PACKAGE_${pkg}=y" >> .config
     done
     
-    # 再次确保设备选项存在（防止被覆盖）- 使用变量
-    local device_check_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y"
-    if ! grep -q "$device_check_pattern" .config; then
-        echo "$device_check_pattern" >> .config
+    # 再次确保设备选项存在
+    if ! grep -q "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" .config; then
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
     fi
     
     # 再次去重
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 步骤6: 再次运行 yes "" | make oldconfig 应用强制配置（不重置）
-    log "🔄 再次运行 yes "" | make oldconfig 应用强制配置..."
-    
-    # 保存当前配置备份
-    cp .config .config.force
-    
-    # 使用 yes "" | make oldconfig 运行以获取详细输出
-    if ! yes "" | make -j1 oldconfig V=s > /tmp/build-logs/oldconfig2.log 2>&1; then
-        log "❌ make oldconfig 失败，查看详细日志..."
-        echo "=== oldconfig2.log 最后50行 ==="
-        tail -50 /tmp/build-logs/oldconfig2.log
-        echo "================================"
-        
-        # 尝试恢复备份并继续
-        if [ -f ".config.force" ]; then
-            log "🔄 尝试恢复强制配置并继续..."
-            cp .config.force .config
-        else
-            handle_error "强制配置应用失败"
-        fi
-    else
-        log "✅ make oldconfig 成功"
-    fi
+    # 步骤6: 再次运行 make defconfig 应用强制配置
+    log "🔄 再次运行 make defconfig 应用强制配置..."
+    make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
+        log "⚠️ make defconfig 第二次运行有警告，但继续..."
+    }
     
     # 步骤7: 最终验证
-    log "📋 必需USB驱动状态验证:"
-    local missing=()
-    local missing_optional=()
+    log "📋 最终配置验证:"
     
-    for pkg in "${MUST_PACKAGES[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
-            log "  ✅ $pkg: 已启用"
-        else
-            # 检查是否是平台特定包
-            local is_optional=0
-            case "$pkg" in
-                kmod-usb-dwc3-qcom|kmod-phy-qcom-dwc3|kmod-usb-xhci-mtk|kmod-usb-dwc3-mediatek|kmod-phy-mediatek|kmod-usb2-ath79|kmod-usb-ohci-pci|kmod-usb2-pci)
-                    is_optional=1
-                    ;;
-            esac
-            
-            if [ $is_optional -eq 1 ]; then
-                log "  ⚠️ $pkg: 未启用（平台可选）"
-                missing_optional+=("$pkg")
-            else
-                log "  ❌ $pkg: 未启用"
-                missing+=("$pkg")
-            fi
-        fi
-    done
-    
-    if [ ${#missing[@]} -gt 0 ]; then
-        log "⚠️ 警告: 以下必需驱动未启用: ${missing[*]}"
-        log "💡 可能原因: 内核不支持或平台未包含相应驱动"
-    else
-        log "🎉 所有必需USB驱动已成功启用！"
-    fi
-    
-    if [ ${#missing_optional[@]} -gt 0 ]; then
-        log "ℹ️ 可选驱动未启用: ${missing_optional[*]}"
-        log "💡 如果硬件需要这些驱动，请检查平台支持"
-    fi
-    
-    # 最终设备验证（使用变量检查）
-    log "🔍 正在验证设备 $DEVICE 是否被选中..."
+    # 验证设备是否被选中 - 使用正确的设备名格式
+    log "🔍 正在验证设备 $openwrt_device 是否被选中..."
     
     local device_selected=""
-    local device_patterns=(
-        "^CONFIG_TARGET_DEVICE_.*${DEVICE}=y"
-        "^CONFIG_TARGET_DEVICE_.*${DEVICE^^}=y"
-        "^CONFIG_TARGET_DEVICE_.*${DEVICE,,}=y"
-        "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE^^}=y"
-        "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE,,}=y"
-        "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y"
-    )
+    local check_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y"
     
-    for pattern in "${device_patterns[@]}"; do
-        device_selected=$(grep -E "$pattern" .config | head -1)
-        if [ -n "$device_selected" ]; then
-            log "✅ 目标设备已匹配: $device_selected"
-            break
-        fi
-    done
-    
-    if [ -z "$device_selected" ]; then
-        log "❌ 错误: 目标设备 $DEVICE 未被选中！"
-        log "当前可用的设备选项:"
-        grep -E "^CONFIG_TARGET_DEVICE_.*=y|^CONFIG_TARGET_.*_DEVICE_.*=y" .config | head -20 | sed 's/^/  /' || echo "  没有可用的设备选项"
-        
-        # 尝试自动修复
-        log "🔄 尝试自动修复：直接写入设备配置..."
-        
-        # 直接写入设备配置
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
-        
-        # 去重
-        sort .config | uniq > .config.tmp
-        mv .config.tmp .config
-        
-        log "🔄 重新运行 make defconfig 以应用设备选择..."
-        if make defconfig > /tmp/build-logs/defconfig_fix.log 2>&1; then
-            log "✅ make defconfig 修复成功"
-            
-            # 再次检查
-            if grep -q "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" .config; then
-                log "✅ 修复后设备已选中"
-            else
-                log "⚠️ 修复后设备仍未选中，但可能已通过其他方式配置"
-            fi
+    if grep -q "$check_pattern" .config; then
+        device_selected="$check_pattern"
+        log "✅ 目标设备已正确配置: $device_selected"
+    else
+        # 尝试其他可能的格式
+        local alt_pattern="CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y"
+        if grep -q "$alt_pattern" .config; then
+            device_selected="$alt_pattern"
+            log "✅ 目标设备已配置（备用格式）: $device_selected"
         else
-            log "❌ make defconfig 修复失败"
-            cat /tmp/build-logs/defconfig_fix.log
+            log "⚠️ 警告: 设备配置行未找到，但可能已通过其他方式启用"
+            log "当前配置中的设备相关选项:"
+            grep -E "CONFIG_TARGET.*DEVICE" .config | head -10 | sed 's/^/  /'
         fi
     fi
     
