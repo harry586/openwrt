@@ -1112,11 +1112,9 @@ EOF
         echo "CONFIG_PACKAGE_kmod-scsi-generic=y" >> .config
         echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
         
-        # USB驱动和相关内核配置
-        echo "# USB核心配置" >> .config
+        # USB驱动和相关内核配置（修正内核配置选项名称）
+        echo "# USB核心驱动" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-core=y" >> .config
-        echo "CONFIG_USB_SUPPORT=y" >> .config
-        echo "CONFIG_USB_COMMON=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-common=y" >> .config
         
         # USB控制器驱动
@@ -1126,11 +1124,12 @@ EOF
         echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
         
-        # XHCI USB 3.0控制器配置
-        echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+        # XHCI USB 3.0控制器 - 这些是内核选项，不是软件包选项
+        echo "# XHCI USB 3.0控制器内核选项" >> .config
         echo "CONFIG_USB_XHCI_HCD=y" >> .config
         echo "CONFIG_USB_XHCI_PCI=y" >> .config
         echo "CONFIG_USB_XHCI_PLATFORM=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config
         
@@ -1141,16 +1140,18 @@ EOF
         echo "CONFIG_PACKAGE_kmod-scsi-generic=y" >> .config
         
         # DWC3 USB 3.0控制器（高通平台专用）
-        echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
+        echo "# DWC3 USB控制器内核选项" >> .config
         echo "CONFIG_USB_DWC3=y" >> .config
         echo "CONFIG_USB_DWC3_OF_SIMPLE=y" >> .config
+        echo "CONFIG_USB_DWC3_QCOM=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
-        echo "CONFIG_USB_DWC3_QCOM=y" >> .config
         
         # PHY驱动
-        echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+        echo "# PHY驱动内核选项" >> .config
         echo "CONFIG_PHY_QCOM_DWC3=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
         
         # USB串口驱动
         echo "CONFIG_PACKAGE_kmod-usb-serial=y" >> .config
@@ -1326,30 +1327,26 @@ EOF
         fi
     done
     
-    # 如果有缺失的驱动，检查对应的内核配置
+    # 如果有缺失的驱动，检查对应的内核配置（使用正确的内核选项名称）
     if [ ${#missing_drivers[@]} -gt 0 ]; then
         log "⚠️ 发现 ${#missing_drivers[@]} 个缺失的USB驱动"
         log "🔍 检查内核配置状态:"
         
-        # 检查USB内核配置
-        if grep -q "^CONFIG_USB_SUPPORT=y" .config; then
-            log "  ✅ CONFIG_USB_SUPPORT: 已启用"
+        # USB核心内核配置
+        if grep -q "^CONFIG_USB_SUPPORT=y" .config || grep -q "^CONFIG_USB=y" .config; then
+            log "  ✅ USB核心支持: 已启用"
         else
-            log "  ❌ CONFIG_USB_SUPPORT: 未启用"
+            log "  ❌ USB核心支持: 未启用"
         fi
         
-        if grep -q "^CONFIG_USB_COMMON=y" .config; then
-            log "  ✅ CONFIG_USB_COMMON: 已启用"
-        else
-            log "  ❌ CONFIG_USB_COMMON: 未启用"
-        fi
-        
+        # XHCI内核配置
         if grep -q "^CONFIG_USB_XHCI_HCD=y" .config; then
             log "  ✅ CONFIG_USB_XHCI_HCD: 已启用"
         else
             log "  ❌ CONFIG_USB_XHCI_HCD: 未启用"
         fi
         
+        # DWC3内核配置
         if grep -q "^CONFIG_USB_DWC3=y" .config; then
             log "  ✅ CONFIG_USB_DWC3: 已启用"
         else
@@ -1368,14 +1365,15 @@ EOF
             log "  ❌ CONFIG_USB_DWC3_QCOM: 未启用"
         fi
         
+        # PHY内核配置
         if grep -q "^CONFIG_PHY_QCOM_DWC3=y" .config; then
             log "  ✅ CONFIG_PHY_QCOM_DWC3: 已启用"
         else
             log "  ❌ CONFIG_PHY_QCOM_DWC3: 未启用"
         fi
         
-        log "ℹ️ 这些内核配置选项可能需要在内核配置中手动启用"
-        log "ℹ️ 但当前的配置已经可以满足基本USB功能"
+        log "ℹ️ 软件包驱动已启用，但对应的内核驱动可能需要在内核配置中手动启用"
+        log "ℹ️ 不过这不会影响USB基本功能的正常使用"
     fi
     
     # 步骤6: 最终设备验证
@@ -1385,11 +1383,8 @@ EOF
         log "✅ 目标设备已正确启用: CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y"
     elif grep -q "^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} is not set" .config; then
         log "⚠️ 警告: 设备被禁用，尝试通过依赖关系启用..."
-        # 删除禁用行
         sed -i "/^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} is not set/d" .config
-        # 添加启用行
         echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
-        # 再次去重并运行defconfig
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
         make defconfig > /dev/null 2>&1
