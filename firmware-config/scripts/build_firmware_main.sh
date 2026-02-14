@@ -951,7 +951,7 @@ generate_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 智能配置生成系统（使用配置文件） ==="
+    log "=== 智能配置生成系统（强制启用USB依赖） ==="
     log "版本: $SELECTED_BRANCH"
     log "目标: $TARGET"
     log "子目标: $SUBTARGET"
@@ -962,7 +962,7 @@ generate_config() {
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
-    # 创建基础配置
+    # 步骤1: 创建基础目标配置
     cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
@@ -973,230 +973,167 @@ EOF
     make defconfig || handle_error "基础配置生成失败"
     log "✅ 基础配置生成成功"
     
-    # 检查配置工具并确定正确的使用方法
-    local CONFIG_CMD=""
-    local CONFIG_TYPE=""
-    
-    if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
-        # 测试工具类型
-        if scripts/config/config --help 2>&1 | grep -q "Usage"; then
-            CONFIG_CMD="scripts/config/config"
-            CONFIG_TYPE="standard"
-            log "✅ 使用标准 config 工具: $CONFIG_CMD"
-        else
-            CONFIG_CMD="scripts/config/config"
-            CONFIG_TYPE="conf"
-            log "✅ 使用 conf 类型工具: $CONFIG_CMD"
-        fi
-    elif [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
-        CONFIG_CMD="scripts/config/conf"
-        CONFIG_TYPE="conf"
-        log "✅ 使用 conf 工具: $CONFIG_CMD"
-    else
-        log "⚠️ 使用内置简易工具"
-        mkdir -p scripts/config
-        cat > scripts/config/config << 'EOF'
-#!/bin/bash
-# 简易 config 工具
-CONFIG_FILE=".config"
-
-case "$1" in
-    --enable)
-        shift
-        symbol="$1"
-        symbol="${symbol#CONFIG_}"
-        symbol="${symbol#PACKAGE_}"
-        sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
-        sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
-        sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
-        echo "CONFIG_PACKAGE_${symbol}=y" >> "$CONFIG_FILE"
-        ;;
-    --disable)
-        shift
-        symbol="$1"
-        symbol="${symbol#CONFIG_}"
-        symbol="${symbol#PACKAGE_}"
-        sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
-        sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
-        echo "# CONFIG_PACKAGE_${symbol} is not set" >> "$CONFIG_FILE"
-        ;;
-esac
-EOF
-        chmod +x scripts/config/config
-        CONFIG_CMD="scripts/config/config"
-        CONFIG_TYPE="simple"
-    fi
-    
-    log "🔧 使用配置工具: $CONFIG_CMD (类型: $CONFIG_TYPE)"
-    
-    # 定义配置函数，根据工具类型调用正确的参数格式
-    enable_config() {
-        local symbol="$1"
-        # 移除可能的 CONFIG_ 或 PACKAGE_ 前缀
-        symbol="${symbol#CONFIG_}"
-        symbol="${symbol#PACKAGE_}"
-        
-        case "$CONFIG_TYPE" in
-            "standard")
-                # 标准 config 工具使用 --enable 参数
-                $CONFIG_CMD --enable "PACKAGE_${symbol}"
-                ;;
-            "conf")
-                # conf 工具需要写文件
-                sed -i "/^CONFIG_PACKAGE_${symbol}=/d" .config
-                sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" .config
-                echo "CONFIG_PACKAGE_${symbol}=y" >> .config
-                ;;
-            "simple")
-                # 简易工具
-                $CONFIG_CMD --enable "PACKAGE_${symbol}"
-                ;;
-        esac
-    }
-    
-    disable_config() {
-        local symbol="$1"
-        symbol="${symbol#CONFIG_}"
-        symbol="${symbol#PACKAGE_}"
-        
-        case "$CONFIG_TYPE" in
-            "standard")
-                $CONFIG_CMD --disable "PACKAGE_${symbol}"
-                ;;
-            "conf")
-                sed -i "/^CONFIG_PACKAGE_${symbol}=/d" .config
-                sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" .config
-                echo "# CONFIG_PACKAGE_${symbol} is not set" >> .config
-                ;;
-            "simple")
-                $CONFIG_CMD --disable "PACKAGE_${symbol}"
-                ;;
-        esac
-    }
-    
-    set_config_string() {
-        local name="$1"
-        local value="$2"
-        name="${name#CONFIG_}"
-        
-        case "$CONFIG_TYPE" in
-            "standard")
-                $CONFIG_CMD --set-str "$name" "$value"
-                ;;
-            "conf"|"simple")
-                sed -i "/^CONFIG_${name}=/d" .config
-                echo "CONFIG_${name}="$value"" >> .config
-                ;;
-        esac
-    }
-    
-    # 应用配置文件 - 使用直接写入方式
+    # 步骤2: 直接合并所有USB配置（确保所有依赖项都明确启用）
     log "📁 开始合并配置文件..."
     
-    # 1. 合并基础配置文件
+    # 基础配置
     if [ -f "$CONFIG_DIR/base.config" ]; then
         log "📁 合并基础配置: base.config..."
-        cat "$CONFIG_DIR/base.config" | grep -v "^#" | grep "CONFIG_" >> .config
+        # 移除注释行，只保留有效的CONFIG行
+        grep -v "^#" "$CONFIG_DIR/base.config" | grep "CONFIG_" >> .config
     fi
     
-    # 2. 合并USB通用配置
+    # USB通用配置（包含完整的USB驱动链）
     if [ -f "$CONFIG_DIR/usb-generic.config" ]; then
         log "📁 合并USB通用配置: usb-generic.config..."
-        cat "$CONFIG_DIR/usb-generic.config" | grep -v "^#" | grep "CONFIG_" >> .config
+        grep -v "^#" "$CONFIG_DIR/usb-generic.config" | grep "CONFIG_" >> .config
     fi
     
-    # 3. 合并平台专用配置
+    # 平台专用配置（如ipq40xx.config、ramips.config等）
     local platform_config="$CONFIG_DIR/$TARGET.config"
     if [ -f "$platform_config" ]; then
         log "📁 合并平台配置: $TARGET.config..."
-        cat "$platform_config" | grep -v "^#" | grep "CONFIG_" >> .config
+        grep -v "^#" "$platform_config" | grep "CONFIG_" >> .config
     fi
     
-    # 4. 合并版本专用配置
+    # 版本专用配置
     local version_config="$CONFIG_DIR/$SELECTED_BRANCH.config"
     if [ -f "$version_config" ]; then
         log "📁 合并版本配置: $SELECTED_BRANCH.config..."
-        cat "$version_config" | grep -v "^#" | grep "CONFIG_" >> .config
+        grep -v "^#" "$version_config" | grep "CONFIG_" >> .config
     fi
     
-    # 5. 合并设备专用配置
+    # 设备专用配置
     local device_config="$CONFIG_DIR/devices/$DEVICE.config"
     if [ -f "$device_config" ]; then
         log "📁 合并设备配置: $DEVICE.config..."
-        cat "$device_config" | grep -v "^#" | grep "CONFIG_" >> .config
+        grep -v "^#" "$device_config" | grep "CONFIG_" >> .config
     fi
     
-    # 6. 根据配置模式合并对应配置
+    # 正常模式配置
     if [ "$CONFIG_MODE" = "normal" ] && [ -f "$CONFIG_DIR/normal.config" ]; then
         log "📁 合并正常模式配置: normal.config..."
-        cat "$CONFIG_DIR/normal.config" | grep -v "^#" | grep "CONFIG_" >> .config
+        grep -v "^#" "$CONFIG_DIR/normal.config" | grep "CONFIG_" >> .config
     fi
     
-    # 7. 添加额外包
+    # 添加额外包
     if [ -n "$extra_packages" ]; then
         log "📦 添加额外包: $extra_packages"
         echo "$extra_packages" | tr ',' '
 ' | while read pkg; do
             if [ -n "$pkg" ]; then
                 echo "CONFIG_PACKAGE_$pkg=y" >> .config
-                log "✅ 添加包: $pkg"
             fi
         done
     fi
     
-    # TCP BBR 拥塞控制（确保启用）
-    log "🔧 确保TCP BBR启用..."
-    if ! grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
-        echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
-    fi
-    if ! grep -q '^CONFIG_DEFAULT_TCP_CONG=' .config; then
-        echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
-    fi
+    # TCP BBR
+    echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+    echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
     
-    # TurboACC 配置（正常模式）
+    # TurboACC（正常模式）
     if [ "$CONFIG_MODE" = "normal" ]; then
-        log "🔧 确保TurboACC组件启用..."
-        if ! grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
-            echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-        fi
-        if ! grep -q "^CONFIG_PACKAGE_kmod-shortcut-fe=y" .config; then
-            echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
-        fi
-        if ! grep -q "^CONFIG_PACKAGE_kmod-fast-classifier=y" .config; then
-            echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-        fi
+        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
     fi
     
     # ath10k 冲突解决
-    log "🔧 解决ath10k冲突..."
-    # 确保禁用冲突驱动
-    sed -i '/^CONFIG_PACKAGE_kmod-ath10k=y/d' .config
-    sed -i '/^CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
-    sed -i '/^CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/d' .config
-    sed -i '/^CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y/d' .config
+    sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
+    sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
+    sed -i '/CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/d' .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
+    echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
+    echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
     
-    # 如果未找到ath10k-ct，添加它
-    if ! grep -q "^CONFIG_PACKAGE_kmod-ath10k-ct=y" .config; then
-        echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
-    fi
-    
-    # 去重配置
-    log "🔧 去重配置..."
+    # 步骤3: 去重
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
+    # 步骤4: 再次运行 defconfig 解决依赖（此时所有USB选项已强制写入）
     log "🔄 运行 make defconfig 解决依赖关系..."
-    make defconfig || handle_error "最终配置应用失败"
+    make defconfig || handle_error "依赖解决失败"
     
-    log "📋 关键配置状态（最终）:"
-    log "  - kmod-usb-core: $(grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-    log "  - kmod-usb-xhci-hcd: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-    log "  - kmod-usb3: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-    log "  - kmod-usb2: $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+    # 步骤5: 后处理强制启用关键USB驱动（防止被依赖系统再次禁用）
+    log "🔧 后处理：强制启用关键USB驱动..."
     
-    if [ "$TARGET" = "ipq40xx" ]; then
-        log "  - kmod-usb-dwc3-qcom: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-        log "  - kmod-phy-qcom-dwc3: $(grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+    # 定义需要强制启用的驱动列表（按平台）
+    local MUST_ENABLE=(
+        "kmod-usb-core"
+        "kmod-usb-common"
+        "kmod-usb2"
+        "kmod-usb-ehci"
+        "kmod-usb-ohci"
+        "kmod-usb-xhci-hcd"
+        "kmod-usb3"
+        "kmod-usb-storage"
+        "kmod-scsi-core"
+    )
+    
+    # 平台特定驱动
+    case "$TARGET" in
+        ipq40xx)
+            MUST_ENABLE+=(
+                "kmod-usb-dwc3"
+                "kmod-usb-dwc3-of-simple"
+                "kmod-usb-dwc3-qcom"
+                "kmod-phy-qcom-dwc3"
+            )
+            ;;
+        ramips)
+            MUST_ENABLE+=(
+                "kmod-usb-xhci-mtk"
+                "kmod-usb-ohci-pci"
+                "kmod-usb2-pci"
+            )
+            ;;
+        mediatek)
+            MUST_ENABLE+=(
+                "kmod-usb-dwc3-mediatek"
+                "kmod-phy-mediatek"
+            )
+            ;;
+        ath79)
+            MUST_ENABLE+=(
+                "kmod-usb2-ath79"
+            )
+            ;;
+    esac
+    
+    # 逐个强制启用
+    for driver in "${MUST_ENABLE[@]}"; do
+        # 删除可能存在的禁用行
+        sed -i "/^# CONFIG_PACKAGE_${driver} is not set/d" .config
+        sed -i "/^CONFIG_PACKAGE_${driver}=m/d" .config
+        # 如果不存在启用行，则添加
+        if ! grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            echo "CONFIG_PACKAGE_${driver}=y" >> .config
+            log "  ✅ 强制启用: $driver"
+        fi
+    done
+    
+    # 再次运行 defconfig 使强制启用的驱动生效
+    log "🔄 再次运行 make defconfig 应用强制配置..."
+    make defconfig || handle_error "强制配置应用失败"
+    
+    # 最终验证
+    log "📋 关键USB驱动状态验证:"
+    local missing=()
+    for driver in "${MUST_ENABLE[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            log "  ✅ $driver: 已启用"
+        else
+            log "  ❌ $driver: 未启用"
+            missing+=("$driver")
+        fi
+    done
+    
+    if [ ${#missing[@]} -gt 0 ]; then
+        log "⚠️ 警告: 以下驱动仍未启用: ${missing[*]}"
+        log "💡 可能需要检查内核依赖或平台支持"
+    else
+        log "🎉 所有关键USB驱动已成功启用！"
     fi
     
     log "✅ 配置生成完成"
