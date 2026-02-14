@@ -1153,25 +1153,51 @@ EOF
     if [ "$openwrt_device" = "asus_rt-ac42u" ] || [ "$openwrt_device" = "asus_rt-acrh17" ]; then
         log "📋 在defconfig之后强制写入USB内核配置..."
         
-        # ========== USB 3.0/DWC3 内核配置（按严格依赖顺序）==========
+        # ========== USB 3.0/DWC3 内核配置（按严格依赖顺序） ==========
         echo "# ========== USB 3.0/DWC3 内核配置（强制写入） ==========" >> .config
         
         # 1. 基础架构和内核组件
         echo "# 1. 基础架构和内核组件" >> .config
+        
+        # 高通平台支持
         echo "CONFIG_ARCH_QCOM=y" >> .config
+        echo "CONFIG_ARCH_IPQ40XX=y" >> .config
+        
+        # 设备树支持
         echo "CONFIG_OF=y" >> .config
+        echo "CONFIG_OF_NET=y" >> .config
+        
+        # 时钟框架
         echo "CONFIG_COMMON_CLK=y" >> .config
+        echo "CONFIG_COMMON_CLK_QCOM=y" >> .config
+        
+        # External Connector框架
         echo "CONFIG_EXTCON=y" >> .config
+        echo "CONFIG_EXTCON_QCOM=y" >> .config
+        echo "CONFIG_EXTCON_GPIO=y" >> .config
+        echo "CONFIG_EXTCON_USB_GPIO=y" >> .config
+        echo "CONFIG_EXTCON_USBC_CHARGER=y" >> .config
+        
+        # PHY框架
         echo "CONFIG_GENERIC_PHY=y" >> .config
         
         # 2. USB核心层
         echo "# 2. USB核心层" >> .config
-        echo "CONFIG_USB_COMMON=y" >> .config
-        echo "CONFIG_USB=y" >> .config
         echo "CONFIG_USB_SUPPORT=y" >> .config
+        echo "CONFIG_USB_COMMON=y" >> .config
+        echo "CONFIG_USB_ARCH_HAS_HCD=y" >> .config
+        echo "CONFIG_USB=y" >> .config
+        
+        # USB控制器驱动
+        echo "CONFIG_USB_EHCI_HCD=y" >> .config
+        echo "CONFIG_USB_EHCI_ROOT_HUB_TT=y" >> .config
+        echo "CONFIG_USB_OHCI_HCD=y" >> .config
+        
+        # XHCI USB 3.0控制器
         echo "CONFIG_USB_XHCI_HCD=y" >> .config
         echo "CONFIG_USB_XHCI_PCI=y" >> .config
         echo "CONFIG_USB_XHCI_PLATFORM=y" >> .config
+        echo "CONFIG_USB_XHCI_QCOM=y" >> .config
         
         # 3. DWC3核心驱动
         echo "# 3. DWC3核心驱动" >> .config
@@ -1179,6 +1205,9 @@ EOF
         echo "CONFIG_USB_DWC3_DUAL_ROLE=y" >> .config
         echo "CONFIG_USB_DWC3_HOST=y" >> .config
         echo "CONFIG_USB_DWC3_GADGET=y" >> .config
+        echo "CONFIG_USB_DWC3_ULPI=y" >> .config
+        echo "CONFIG_USB_DWC3_DEBUG=y" >> .config
+        echo "CONFIG_USB_DWC3_VERBOSE=y" >> .config
         
         # 4. DWC3平台胶水层
         echo "# 4. DWC3平台胶水层" >> .config
@@ -1188,8 +1217,11 @@ EOF
         # 5. PHY驱动
         echo "# 5. PHY驱动" >> .config
         echo "CONFIG_PHY_QCOM_DWC3=y" >> .config
+        echo "CONFIG_PHY_QCOM_USB_HS=y" >> .config
+        echo "CONFIG_PHY_QCOM_USB_HSIC=y" >> .config
+        echo "CONFIG_PHY_QCOM_USB_SS=y" >> .config
         
-        # 6. USB软件包（kmod）- 这些可能已经在上面添加了，但确保存在
+        # 6. USB软件包（kmod）- 确保存在
         echo "# 6. USB软件包" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-core=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-common=y" >> .config
@@ -1233,7 +1265,7 @@ EOF
         echo "CONFIG_PACKAGE_usbutils=y" >> .config
         echo "CONFIG_PACKAGE_lsusb=y" >> .config
         
-        # 库文件（保持完整）
+        # 库文件
         echo "CONFIG_PACKAGE_libatomic=y" >> .config
         echo "CONFIG_PACKAGE_libattr=y" >> .config
         echo "CONFIG_PACKAGE_libavahi-client=y" >> .config
@@ -1367,29 +1399,47 @@ EOF
     
     local kernel_configs=(
         "ARCH_QCOM"
+        "ARCH_IPQ40XX"
         "COMMON_CLK"
+        "COMMON_CLK_QCOM"
         "EXTCON"
+        "EXTCON_QCOM"
         "GENERIC_PHY"
         "USB_COMMON"
         "USB_XHCI_HCD"
+        "USB_XHCI_QCOM"
         "USB_DWC3"
         "USB_DWC3_OF_SIMPLE"
         "USB_DWC3_QCOM"
         "PHY_QCOM_DWC3"
     )
     
+    local missing_kernel=0
     for config in "${kernel_configs[@]}"; do
         if grep -q "^CONFIG_${config}=y" .config; then
             log "  ✅ ${config}: 已启用"
+        elif grep -q "^CONFIG_${config}=m" .config; then
+            log "  📦 ${config}: 模块化"
+        elif grep -q "^# CONFIG_${config} is not set" .config; then
+            log "  ❌ ${config}: 已禁用"
+            missing_kernel=$((missing_kernel + 1))
         else
-            log "  ❌ ${config}: 未启用"
+            log "  ⚪ ${config}: 未找到"
+            missing_kernel=$((missing_kernel + 1))
         fi
     done
     
     if [ ${#missing_drivers[@]} -gt 0 ]; then
         log "⚠️ 仍有 ${#missing_drivers[@]} 个USB驱动缺失"
-        log "ℹ️ 这些驱动可能因为内核版本或平台限制无法启用"
-        log "ℹ️ 但基本USB功能应该已经可用"
+        if [ $missing_kernel -gt 0 ]; then
+            log "ℹ️ 同时有 ${missing_kernel} 个内核配置缺失"
+            log "ℹ️ 这些驱动可能因为内核版本或平台限制无法启用"
+        else
+            log "ℹ️ 但内核配置都已启用，驱动可能被上层配置禁用"
+        fi
+        log "ℹ️ 基本USB功能应该已经可用"
+    else
+        log "🎉 所有USB驱动都已成功启用！"
     fi
     
     # 步骤10: 最终设备验证
