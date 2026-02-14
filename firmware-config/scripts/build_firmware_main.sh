@@ -1126,21 +1126,21 @@ EOF
         local config_count=$(wc -l < "$usb_configs_file.sorted")
         log "找到 $config_count 个USB相关内核配置"
         
-        # 显示前10个作为示例
-        log "配置示例:"
-        head -10 "$usb_configs_file.sorted" | while read line; do
+        # 显示所有配置，不分页
+        log "所有USB相关内核配置:"
+        local line_num=0
+        while read line; do
+            line_num=$((line_num + 1))
             if echo "$line" | grep -q "=y$"; then
-                log "   ✅ $line"
+                log "   ✅ [$line_num] $line"
+            elif echo "$line" | grep -q "=m$"; then
+                log "   📦 [$line_num] $line"
             elif echo "$line" | grep -q "is not set"; then
-                log "   ⚪ $line"
+                log "   ⚪ [$line_num] $line"
             else
-                log "   📄 $line"
+                log "   📄 [$line_num] $line"
             fi
-        done
-        
-        if [ $config_count -gt 10 ]; then
-            log "   ... 还有 $((config_count - 10)) 个配置未显示"
-        fi
+        done < "$usb_configs_file.sorted"
         
         # 将这些配置添加到.config中（但不要覆盖已启用的配置）
         local added_count=0
@@ -1195,21 +1195,27 @@ EOF
         local matches=$(grep -E "^CONFIG_${component}" .config | grep -E "=y|=m" | wc -l)
         if [ $matches -gt 0 ]; then
             log "✅ $component 相关配置: 找到 $matches 个"
-            # 显示具体配置
-            grep -E "^CONFIG_${component}" .config | grep -E "=y|=m" | head -5 | while read line; do
+            # 显示所有具体配置
+            grep -E "^CONFIG_${component}" .config | grep -E "=y|=m" | while read line; do
                 log "    $line"
             done
-            if [ $matches -gt 5 ]; then
-                log "    ... 还有 $((matches - 5)) 个"
-            fi
         else
             log "ℹ️ $component 相关配置: 未找到"
         fi
     done
     
-    # 显示所有USB相关内核配置的统计
-    local total_usb_kernel=$(grep -E "^CONFIG_USB_|^CONFIG_PHY_|^CONFIG_DWC|^CONFIG_XHCI" .config | grep -E "=y|=m" | wc -l)
-    log "📊 总计: $total_usb_kernel 个USB相关内核配置已启用"
+    # 显示所有USB相关内核配置
+    log "📋 所有USB相关内核配置（已生效）:"
+    local all_usb_kernel=$(grep -E "^CONFIG_USB_|^CONFIG_PHY_|^CONFIG_DWC|^CONFIG_XHCI|^CONFIG_EXTCON|^CONFIG_COMMON_CLK|^CONFIG_ARCH" .config | grep -E "=y|=m" | sort)
+    if [ -n "$all_usb_kernel" ]; then
+        local kernel_count=$(echo "$all_usb_kernel" | wc -l)
+        log "共 $kernel_count 个USB相关内核配置:"
+        echo "$all_usb_kernel" | while read line; do
+            log "  ✅ $line"
+        done
+    else
+        log "  未找到USB相关内核配置"
+    fi
     
     # 步骤8: 动态添加USB软件包（基于目标平台）
     log "📋 动态添加USB软件包..."
@@ -1262,20 +1268,20 @@ EOF
     
     # 去重并添加USB软件包
     local added_packages=0
-    printf "%s
-" "${base_usb_packages[@]}" | sort -u | while read pkg; do
+    local existing_packages=0
+    while read pkg; do
+        [ -z "$pkg" ] && continue
         if ! grep -q "^CONFIG_PACKAGE_${pkg}=y" .config && ! grep -q "^CONFIG_PACKAGE_${pkg}=m" .config; then
             echo "CONFIG_PACKAGE_${pkg}=y" >> .config
             added_packages=$((added_packages + 1))
             log "  ✅ 添加软件包: $pkg"
+        else
+            existing_packages=$((existing_packages + 1))
         fi
-    done
+    done < <(printf "%s
+" "${base_usb_packages[@]}" | sort -u)
     
-    if [ $added_packages -gt 0 ]; then
-        log "✅ 添加了 $added_packages 个USB软件包"
-    else
-        log "ℹ️ 所有USB软件包已存在"
-    fi
+    log "📊 USB软件包统计: 新增 $added_packages 个, 已存在 $existing_packages 个"
     
     # 步骤9: 第二次去重
     log "🔄 第二次去重配置..."
@@ -1366,7 +1372,7 @@ EOF
         log "✅ 所有关键USB驱动都已启用"
     fi
     
-    # 步骤12: 显示所有启用的USB驱动
+    # 步骤12: 显示所有已启用的USB驱动
     log "📋 所有已启用的USB驱动:"
     local all_usb=$(grep "^CONFIG_PACKAGE_kmod-usb.*=y" .config | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
     if [ -n "$all_usb" ]; then
@@ -1379,7 +1385,24 @@ EOF
         log "  未找到USB驱动"
     fi
     
-    # 步骤13: 最终设备验证
+    # 步骤13: 显示所有USB相关软件包（包括模块化的）
+    log "📋 所有USB相关软件包（包括模块化）:"
+    local all_usb_packages=$(grep "^CONFIG_PACKAGE_kmod-usb" .config | grep -E "=y|=m" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
+    if [ -n "$all_usb_packages" ]; then
+        local pkg_count=$(echo "$all_usb_packages" | wc -l)
+        log "共 $pkg_count 个USB软件包:"
+        echo "$all_usb_packages" | while read pkg; do
+            if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
+                log "  ✅ $pkg"
+            else
+                log "  📦 $pkg"
+            fi
+        done
+    else
+        log "  未找到USB软件包"
+    fi
+    
+    # 步骤14: 最终设备验证
     log "🔍 正在验证设备 $openwrt_device 是否被选中..."
     
     if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
@@ -1405,16 +1428,18 @@ EOF
         make defconfig > /dev/null 2>&1
     fi
     
-    # 步骤14: 保存配置统计信息
+    # 步骤15: 保存配置统计信息
     local total_configs=$(wc -l < .config)
     local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config)
     local module_packages=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config)
+    local disabled_packages=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config)
     local enabled_kernel=$(grep -c "^CONFIG_[A-Z].*=y$" .config | grep -v "PACKAGE" | wc -l)
     
     log "📊 配置统计:"
     log "  总配置行数: $total_configs"
     log "  启用软件包: $enabled_packages"
     log "  模块化软件包: $module_packages"
+    log "  禁用软件包: $disabled_packages"
     log "  启用内核配置: $enabled_kernel"
     
     log "✅ 配置生成完成"
