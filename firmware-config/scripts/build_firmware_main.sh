@@ -996,7 +996,7 @@ generate_config() {
             ;;
     esac
     
-    # 直接使用小写的设备名，不转大写
+    # 直接使用小写的设备名
     local device_lower="$openwrt_device"
     local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}"
     
@@ -1113,20 +1113,54 @@ EOF
         echo "CONFIG_PACKAGE_kmod-scsi-generic=y" >> .config
         echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
         
-        # USB驱动（全面启用）
-        echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
+        # USB驱动（全面启用）- 按依赖关系顺序添加
+        # 首先添加USB核心依赖
+        echo "CONFIG_PACKAGE_kmod-usb-core=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-common=y" >> .config
+        
+        # USB控制器驱动
+        echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-ehci=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-serial=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-serial-ftdi=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-serial-pl2303=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb-uhci=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config
+        
+        # USB存储驱动（依赖USB核心）
+        echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-scsi-core=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-scsi-generic=y" >> .config
+        
+        # DWC3 USB 3.0控制器（高通平台专用）
+        echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
+        
+        # USB串口驱动
+        echo "CONFIG_PACKAGE_kmod-usb-serial=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-serial-ftdi=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-serial-pl2303=y" >> .config
+        
+        # 文件系统支持
+        echo "CONFIG_PACKAGE_kmod-fs-ext4=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-fs-vfat=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-fs-exfat=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-fs-ntfs3=y" >> .config
+        
+        # 编码支持
+        echo "CONFIG_PACKAGE_kmod-nls-utf8=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-nls-cp936=y" >> .config
+        
+        # 挂载工具
+        echo "CONFIG_PACKAGE_block-mount=y" >> .config
+        echo "CONFIG_PACKAGE_automount=y" >> .config
+        
+        # USB实用工具
+        echo "CONFIG_PACKAGE_usbutils=y" >> .config
+        echo "CONFIG_PACKAGE_lsusb=y" >> .config
         
         # 库文件
         echo "CONFIG_PACKAGE_libatomic=y" >> .config
@@ -1239,6 +1273,7 @@ EOF
     echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
     
     # 步骤3: 去重
+    log "🔄 去重配置..."
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
@@ -1251,102 +1286,102 @@ EOF
     }
     log "✅ 依赖关系解决成功"
     
-    # 步骤5: 后处理强制启用关键USB软件包
-    log "🔧 后处理：强制启用USB软件包..."
+    # 步骤5: 验证关键USB驱动是否被正确启用
+    log "🔍 验证关键USB驱动状态..."
     
-    # 定义所有平台必需的USB软件包
-    local MUST_PACKAGES=(
+    local critical_usb_drivers=(
         "kmod-usb-core"
         "kmod-usb-common"
         "kmod-usb2"
         "kmod-usb3"
-        "kmod-usb-ehci"
-        "kmod-usb-ohci"
         "kmod-usb-xhci-hcd"
-        "kmod-usb-xhci-pci"
-        "kmod-usb-xhci-plat-hcd"
         "kmod-usb-storage"
-        "kmod-usb-storage-uas"
         "kmod-scsi-core"
-        "kmod-scsi-generic"
         "kmod-usb-dwc3"
         "kmod-usb-dwc3-of-simple"
-        "kmod-fs-ext4"
-        "kmod-fs-vfat"
-        "kmod-fs-exfat"
-        "kmod-fs-ntfs3"
-        "kmod-nls-utf8"
-        "kmod-nls-cp936"
-        "block-mount"
-        "automount"
-        "usbutils"
-        "lsusb"
+        "kmod-usb-dwc3-qcom"
+        "kmod-phy-qcom-dwc3"
     )
     
-    # 平台特定软件包
-    case "$TARGET" in
-        ipq40xx)
-            MUST_PACKAGES+=(
-                "kmod-usb-dwc3-qcom"
-                "kmod-phy-qcom-dwc3"
-            )
-            ;;
-    esac
-    
-    # 强制写入.config
-    for pkg in "${MUST_PACKAGES[@]}"; do
-        sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
-        sed -i "/^# CONFIG_PACKAGE_${pkg} is not set/d" .config
-        echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+    local missing_drivers=()
+    for driver in "${critical_usb_drivers[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            log "  ✅ $driver: 已启用"
+        else
+            log "  ❌ $driver: 未启用"
+            missing_drivers+=("$driver")
+        fi
     done
     
-    # 再次确保设备选项存在 - 使用小写
-    local device_check_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y"
-    if ! grep -q "$device_check_pattern" .config; then
-        echo "$device_check_pattern" >> .config
-        log "⚠️ 重新添加设备配置: $device_check_pattern"
+    # 如果有缺失的驱动，尝试通过依赖关系解决
+    if [ ${#missing_drivers[@]} -gt 0 ]; then
+        log "⚠️ 发现 ${#missing_drivers[@]} 个缺失的USB驱动，尝试通过依赖关系解决..."
+        
+        # 重新添加缺失的驱动（按照依赖顺序）
+        for driver in "${missing_drivers[@]}"; do
+            # 删除可能存在的禁用行
+            sed -i "/^# CONFIG_PACKAGE_${driver} is not set/d" .config
+            # 添加启用行
+            echo "CONFIG_PACKAGE_${driver}=y" >> .config
+            log "  🔧 重新添加: $driver"
+        done
+        
+        # 再次去重
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
+        
+        # 再次运行 make defconfig
+        log "🔄 再次运行 make defconfig 解决依赖关系..."
+        make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
+            log "⚠️ make defconfig 第二次运行有警告，但继续..."
+        }
+        
+        # 最终验证
+        log "📋 最终USB驱动状态:"
+        local still_missing=0
+        for driver in "${critical_usb_drivers[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+                log "  ✅ $driver: 已启用"
+            else
+                log "  ❌ $driver: 仍缺失"
+                still_missing=$((still_missing + 1))
+            fi
+        done
+        
+        if [ $still_missing -eq 0 ]; then
+            log "🎉 所有USB驱动已通过依赖关系成功启用！"
+        else
+            log "⚠️ 仍有 $still_missing 个USB驱动缺失，可能因为内核配置限制"
+        fi
     fi
     
-    # 再次去重
-    sort .config | uniq > .config.tmp
-    mv .config.tmp .config
-    
-    # 步骤6: 再次运行 make defconfig 应用强制配置
-    log "🔄 再次运行 make defconfig 应用强制配置..."
-    make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
-        log "⚠️ make defconfig 第二次运行有警告，但继续..."
-    }
-    
-    # 步骤7: 最终验证 - 检查设备是否被正确启用
+    # 步骤6: 最终设备验证
     log "🔍 正在验证设备 $openwrt_device 是否被选中..."
     
     if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
         log "✅ 目标设备已正确启用: CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y"
     elif grep -q "^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} is not set" .config; then
-        log "⚠️ 警告: 设备被禁用，尝试强制启用..."
-        # 删除禁用行，添加启用行
+        log "⚠️ 警告: 设备被禁用，尝试通过依赖关系启用..."
+        # 删除禁用行
         sed -i "/^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} is not set/d" .config
+        # 添加启用行
         echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
         # 再次去重并运行defconfig
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
         make defconfig > /dev/null 2>&1
-        log "✅ 已强制启用设备"
+        
+        if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
+            log "✅ 设备已通过依赖关系启用"
+        else
+            log "❌ 无法通过依赖关系启用设备"
+        fi
     else
         log "⚠️ 警告: 设备配置行未找到，手动添加..."
         echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
         make defconfig > /dev/null 2>&1
-    fi
-    
-    # 最终确认
-    if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
-        log "✅✅ 设备配置最终确认: 已启用"
-    else
-        log "❌ 错误: 无法启用设备 $openwrt_device"
-        log "当前设备相关配置:"
-        grep -E "CONFIG_TARGET.*DEVICE.*${device_lower}" .config || echo "  未找到"
     fi
     
     log "✅ 配置生成完成"
