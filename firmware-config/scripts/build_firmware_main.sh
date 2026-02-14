@@ -1003,6 +1003,180 @@ EOF
         done
     fi
     
+    # 根据config.txt添加ASUS RT-AC42U特定配置
+    log "📋 应用ASUS RT-AC42U特定配置..."
+    
+    # 基础依赖库
+    echo "CONFIG_GNUTLS_ALPN=y" >> .config
+    echo "CONFIG_GNUTLS_ANON=y" >> .config
+    echo "CONFIG_GNUTLS_CRYPTODEV=y" >> .config
+    echo "CONFIG_GNUTLS_DTLS_SRTP=y" >> .config
+    echo "CONFIG_GNUTLS_HEARTBEAT=y" >> .config
+    echo "CONFIG_GNUTLS_OCSP=y" >> .config
+    echo "CONFIG_GNUTLS_PSK=y" >> .config
+    
+    # libcurl配置
+    echo "CONFIG_LIBCURL_COOKIES=y" >> .config
+    echo "CONFIG_LIBCURL_CRYPTO_AUTH=y" >> .config
+    echo "CONFIG_LIBCURL_FILE=y" >> .config
+    echo "CONFIG_LIBCURL_FTP=y" >> .config
+    echo "CONFIG_LIBCURL_HTTP=y" >> .config
+    echo "CONFIG_LIBCURL_NGHTTP2=y" >> .config
+    echo "CONFIG_LIBCURL_OPENSSL=y" >> .config
+    echo "CONFIG_LIBCURL_PROXY=y" >> .config
+    echo "CONFIG_LIBCURL_TFTP=y" >> .config
+    echo "CONFIG_LIBCURL_THREADED_RESOLVER=y" >> .config
+    echo "CONFIG_LIBCURL_TLS_SRP=y" >> .config
+    echo "CONFIG_LIBCURL_UNIX_SOCKETS=y" >> .config
+    
+    # ath10k驱动和固件
+    echo "CONFIG_PACKAGE_ath10k-board-qca988x=y" >> .config
+    echo "CONFIG_PACKAGE_ath10k-firmware-qca988x=y" >> .config
+    
+    # 基础工具
+    echo "CONFIG_PACKAGE_attr=y" >> .config
+    echo "CONFIG_PACKAGE_avahi-dbus-daemon=y" >> .config
+    echo "CONFIG_PACKAGE_bash=y" >> .config
+    echo "CONFIG_PACKAGE_blkid=y" >> .config
+    echo "CONFIG_PACKAGE_blockd=y" >> .config
+    echo "CONFIG_PACKAGE_bridge=y" >> .config
+    echo "CONFIG_PACKAGE_btrfs-progs=y" >> .config
+    echo "CONFIG_PACKAGE_cpulimit=y" >> .config
+    echo "CONFIG_PACKAGE_curl=y" >> .config
+    echo "CONFIG_PACKAGE_dbus=y" >> .config
+    echo "CONFIG_PACKAGE_hd-idle=y" >> .config
+    echo "CONFIG_PACKAGE_ip-tiny=y" >> .config
+    echo "CONFIG_PACKAGE_iptables-mod-conntrack-extra=y" >> .config
+    echo "CONFIG_PACKAGE_iptables-mod-ipopt=y" >> .config
+    echo "CONFIG_PACKAGE_iputils-arping=y" >> .config
+    echo "CONFIG_PACKAGE_jq=y" >> .config
+    
+    # 内核模块
+    echo "CONFIG_PACKAGE_kmod-crypto-acompress=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-fs-autofs4=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-fs-btrfs=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-ifb=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-ipt-conntrack-extra=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-ipt-ipopt=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-lib-crc32c=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-lib-lzo=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-lib-raid6=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-lib-xor=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-lib-zlib-deflate=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-lib-zlib-inflate=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-lib-zstd=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-nls-cp936=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-sched-cake=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-sched-core=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-scsi-generic=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+    
+    # USB驱动（全面启用）
+    echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-ehci=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-serial=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-serial-ftdi=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-serial-pl2303=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-uhci=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
+    echo "CONFIG_PACKAGE_kmod-usb2-pci=y" >> .config
+    
+    # 库文件
+    echo "CONFIG_PACKAGE_libatomic=y" >> .config
+    echo "CONFIG_PACKAGE_libattr=y" >> .config
+    echo "CONFIG_PACKAGE_libavahi-client=y" >> .config
+    echo "CONFIG_PACKAGE_libavahi-dbus-support=y" >> .config
+    echo "CONFIG_PACKAGE_libcap=y" >> .config
+    echo "CONFIG_PACKAGE_libcurl=y" >> .config
+    echo "CONFIG_PACKAGE_libdaemon=y" >> .config
+    echo "CONFIG_PACKAGE_libdbus=y" >> .config
+    echo "CONFIG_PACKAGE_libevdev=y" >> .config
+    echo "CONFIG_PACKAGE_libexpat=y" >> .config
+    echo "CONFIG_PACKAGE_libgnutls=y" >> .config
+    echo "CONFIG_PACKAGE_liblzo=y" >> .config
+    echo "CONFIG_PACKAGE_libmount=y" >> .config
+    echo "CONFIG_PACKAGE_libncurses=y" >> .config
+    echo "CONFIG_PACKAGE_libnghttp2=y" >> .config
+    echo "CONFIG_PACKAGE_libpopt=y" >> .config
+    echo "CONFIG_PACKAGE_libreadline=y" >> .config
+    echo "CONFIG_PACKAGE_libsmartcols=y" >> .config
+    echo "CONFIG_PACKAGE_libtasn1=y" >> .config
+    echo "CONFIG_PACKAGE_libtirpc=y" >> .config
+    echo "CONFIG_PACKAGE_libudev-zero=y" >> .config
+    echo "CONFIG_PACKAGE_liburing=y" >> .config
+    echo "CONFIG_PACKAGE_libusb-1.0=y" >> .config
+    echo "CONFIG_PACKAGE_libwolfssl=y" >> .config
+    echo "CONFIG_PACKAGE_lsblk=y" >> .config
+    
+    # Luci应用（全面启用）
+    echo "CONFIG_PACKAGE_luci-app-accesscontrol=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-arpbind=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-cpulimit=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-diskman=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-hd-idle=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-samba4=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-vlmcsd=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-vsftpd=y" >> .config
+    echo "CONFIG_PACKAGE_luci-app-wechatpush=y" >> .config
+    
+    # Luci中文语言包
+    echo "CONFIG_PACKAGE_luci-i18n-accesscontrol-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-arpbind-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-cpulimit-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-diskman-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-hd-idle-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-samba4-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-sqm-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-upnp-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-vlmcsd-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-vsftpd-zh-cn=y" >> .config
+    echo "CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y" >> .config
+    
+    # 服务和应用
+    echo "CONFIG_PACKAGE_miniupnpd=y" >> .config
+    echo "CONFIG_PACKAGE_parted=y" >> .config
+    echo "CONFIG_PACKAGE_samba4-libs=y" >> .config
+    echo "CONFIG_PACKAGE_samba4-server=y" >> .config
+    echo "CONFIG_PACKAGE_smartdns=y" >> .config
+    echo "CONFIG_PACKAGE_smartmontools=y" >> .config
+    echo "CONFIG_PACKAGE_sqm-scripts=y" >> .config
+    echo "CONFIG_PACKAGE_tc-mod-iptables=y" >> .config
+    echo "CONFIG_PACKAGE_tc-tiny=y" >> .config
+    echo "CONFIG_PACKAGE_terminfo=y" >> .config
+    echo "CONFIG_PACKAGE_uclibcxx=y" >> .config
+    echo "CONFIG_PACKAGE_usbids=y" >> .config
+    echo "CONFIG_PACKAGE_usbutils=y" >> .config
+    echo "CONFIG_PACKAGE_vlmcsd=y" >> .config
+    echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+    echo "CONFIG_PACKAGE_wpad-basic-wolfssl=y" >> .config
+    echo "CONFIG_PACKAGE_wsdd2=y" >> .config
+    
+    # 服务配置选项
+    echo "CONFIG_PARTED_READLINE=y" >> .config
+    echo "CONFIG_SAMBA4_SERVER_AVAHI=y" >> .config
+    echo "CONFIG_SAMBA4_SERVER_NETBIOS=y" >> .config
+    echo "CONFIG_SAMBA4_SERVER_VFS=y" >> .config
+    echo "CONFIG_SAMBA4_SERVER_WSDD2=y" >> .config
+    echo "CONFIG_WOLFSSL_HAS_NO_HW=y" >> .config
+    echo "CONFIG_WPA_WOLFSSL=y" >> .config
+    
+    # 确保wpad-openssl是模块化而不是内置
+    echo "CONFIG_PACKAGE_wpad-openssl=m" >> .config
+    
+    # 禁用不兼容的USB驱动
+    echo "# CONFIG_PACKAGE_kmod-usb-xhci-mtk is not set" >> .config
+    
     # TCP BBR
     echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
     echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
@@ -1014,7 +1188,7 @@ EOF
         echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
     fi
     
-    # ath10k 冲突解决
+    # ath10k 冲突解决（使用ct驱动）
     sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
     sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
     sed -i '/CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/d' .config
@@ -3387,6 +3561,24 @@ workflow_step23_pre_build_check() {
         echo "  ✅ .config 文件存在"
         echo "  📊 文件大小: $(ls -lh .config | awk '{print $5}')"
         echo "  📝 文件行数: $(wc -l < .config)"
+        
+        # 检查关键配置项是否存在
+        echo "  🔍 检查ASUS RT-AC42U关键配置项:"
+        local key_configs=(
+            "CONFIG_PACKAGE_kmod-phy-qcom-dwc3"
+            "CONFIG_PACKAGE_kmod-usb-xhci-hcd"
+            "CONFIG_PACKAGE_luci-app-samba4"
+            "CONFIG_PACKAGE_luci-app-diskman"
+            "CONFIG_PACKAGE_kmod-ath10k-ct"
+        )
+        
+        for config in "${key_configs[@]}"; do
+            if grep -q "^${config}=y" .config; then
+                echo "    ✅ $config: 已启用"
+            else
+                echo "    ❌ $config: 未启用"
+            fi
+        done
     else
         echo "  ❌ 错误: .config 文件不存在"
         echo "  💡 请检查步骤15智能配置生成是否成功"
@@ -3419,6 +3611,19 @@ workflow_step23_pre_build_check() {
     if [ -d "feeds" ]; then
         echo "  ✅ feeds 目录存在"
         echo "  📊 feeds目录大小: $(du -sh feeds 2>/dev/null | awk '{print $1}' || echo '未知')"
+        
+        # 检查关键feeds
+        if [ -d "feeds/packages" ]; then
+            echo "  ✅ packages feed: 存在"
+        else
+            echo "  ❌ packages feed: 不存在"
+        fi
+        
+        if [ -d "feeds/luci" ]; then
+            echo "  ✅ luci feed: 存在"
+        else
+            echo "  ❌ luci feed: 不存在"
+        fi
     else
         echo "  ❌ 错误: feeds 目录不存在"
         echo "  💡 请检查步骤12配置Feeds是否成功"
@@ -3444,6 +3649,7 @@ workflow_step23_pre_build_check() {
     echo "5. ✅ USB配置检查（自动修复）:"
     USB_FIXED=0
     
+    # USB 3.0驱动
     if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
         echo "  ❌ 错误: USB 3.0驱动未启用 (kmod-usb-xhci-hcd)"
         echo "  🔧 正在自动修复..."
@@ -3489,6 +3695,7 @@ workflow_step23_pre_build_check() {
         echo "  ✅ kmod-usb2: 已启用"
     fi
     
+    # 平台专用驱动
     if [ "$TARGET" = "ipq40xx" ]; then
         if ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config; then
             echo "  ❌ 错误: IPQ40xx平台驱动未启用 (kmod-phy-qcom-dwc3)"
@@ -3503,6 +3710,21 @@ workflow_step23_pre_build_check() {
             USB_FIXED=1
         else
             echo "  ✅ kmod-phy-qcom-dwc3: 已启用"
+        fi
+        
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" .config; then
+            echo "  ❌ 错误: IPQ40xx平台USB DWC3驱动未启用 (kmod-usb-dwc3-of-simple)"
+            echo "  🔧 正在自动修复..."
+            if [ -f "scripts/config/config" ]; then
+                ./scripts/config/config --enable PACKAGE_kmod-usb-dwc3-of-simple
+                echo "  ✅ 已强制添加: kmod-usb-dwc3-of-simple"
+            else
+                echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
+                echo "  ✅ 已强制添加: kmod-usb-dwc3-of-simple"
+            fi
+            USB_FIXED=1
+        else
+            echo "  ✅ kmod-usb-dwc3-of-simple: 已启用"
         fi
     fi
     
@@ -3523,6 +3745,34 @@ workflow_step23_pre_build_check() {
             TURBOACC_FIXED=1
         else
             echo "  ✅ luci-app-turboacc: 已启用"
+        fi
+        
+        if ! grep -q "^CONFIG_PACKAGE_kmod-shortcut-fe=y" .config; then
+            echo "  ❌ 错误: Shortcut-FE未启用"
+            echo "  🔧 正在自动修复..."
+            if [ -f "scripts/config/config" ]; then
+                ./scripts/config/config --enable PACKAGE_kmod-shortcut-fe
+                echo "  ✅ 已强制添加: kmod-shortcut-fe"
+            else
+                echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+            fi
+            TURBOACC_FIXED=1
+        else
+            echo "  ✅ kmod-shortcut-fe: 已启用"
+        fi
+        
+        if ! grep -q "^CONFIG_PACKAGE_kmod-fast-classifier=y" .config; then
+            echo "  ❌ 错误: Fast Classifier未启用"
+            echo "  🔧 正在自动修复..."
+            if [ -f "scripts/config/config" ]; then
+                ./scripts/config/config --enable PACKAGE_kmod-fast-classifier
+                echo "  ✅ 已强制添加: kmod-fast-classifier"
+            else
+                echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+            fi
+            TURBOACC_FIXED=1
+        else
+            echo "  ✅ kmod-fast-classifier: 已启用"
         fi
     else
         echo "  ℹ️ 基础模式，不检查TurboACC配置"
@@ -3561,7 +3811,26 @@ workflow_step23_pre_build_check() {
         echo "  ✅ DEFAULT_TCP_CONG="bbr": 已设置"
     fi
     
-    if [ $USB_FIXED -eq 1 ] || [ $TURBOACC_FIXED -eq 1 ] || [ $BBR_FIXED -eq 1 ]; then
+    echo ""
+    echo "8. ✅ ath10k驱动冲突检查（自动修复）:"
+    ATH10K_FIXED=0
+    
+    if grep -q "^CONFIG_PACKAGE_kmod-ath10k=y" .config; then
+        echo "  ❌ 错误: 检测到标准ath10k驱动，与ath10k-ct冲突"
+        echo "  🔧 正在自动修复..."
+        sed -i '/^CONFIG_PACKAGE_kmod-ath10k=y/d' .config
+        echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
+        
+        if ! grep -q "^CONFIG_PACKAGE_kmod-ath10k-ct=y" .config; then
+            echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+        fi
+        ATH10K_FIXED=1
+        echo "  ✅ 已修复: 禁用标准ath10k，启用ath10k-ct"
+    else
+        echo "  ✅ ath10k驱动配置正确"
+    fi
+    
+    if [ $USB_FIXED -eq 1 ] || [ $TURBOACC_FIXED -eq 1 ] || [ $BBR_FIXED -eq 1 ] || [ $ATH10K_FIXED -eq 1 ]; then
         echo ""
         echo "🔄 配置已修复，重新运行 make defconfig..."
         make defconfig
@@ -3575,14 +3844,18 @@ workflow_step23_pre_build_check() {
         if [ "$TARGET" = "ipq40xx" ]; then
             echo "  - kmod-usb-dwc3-qcom: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
             echo "  - kmod-phy-qcom-dwc3: $(grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+            echo "  - kmod-usb-dwc3-of-simple: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
         fi
         
         if [ "$CONFIG_MODE" = "normal" ]; then
             echo "  - luci-app-turboacc: $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+            echo "  - kmod-shortcut-fe: $(grep -q "^CONFIG_PACKAGE_kmod-shortcut-fe=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
+            echo "  - kmod-fast-classifier: $(grep -q "^CONFIG_PACKAGE_kmod-fast-classifier=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
         fi
         
         echo "  - kmod-tcp-bbr: $(grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
         echo "  - DEFAULT_TCP_CONG: $(grep "^CONFIG_DEFAULT_TCP_CONG=" .config | cut -d'"' -f2 || echo '未设置')"
+        echo "  - ath10k-ct: $(grep -q "^CONFIG_PACKAGE_kmod-ath10k-ct=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
         
         echo "✅ 所有配置修复完成"
     else
