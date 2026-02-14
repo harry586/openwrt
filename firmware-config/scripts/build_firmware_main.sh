@@ -978,8 +978,7 @@ generate_config() {
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
-    # 步骤1: 创建基础目标配置
-    # 根据设备名映射到正确的OpenWrt设备配置名
+    # 步骤1: 根据设备名映射到正确的OpenWrt设备配置名（保持小写）
     local openwrt_device=""
     case "$DEVICE" in
         ac42u|rt-ac42u|asus_rt-ac42u)
@@ -991,37 +990,29 @@ generate_config() {
             log "🔧 映射设备 $DEVICE -> $openwrt_device"
             ;;
         *)
-            # 默认使用原设备名，但转换为OpenWrt格式（小写，下划线）
+            # 默认使用原设备名，但转换为OpenWrt格式（全部小写，下划线）
             openwrt_device=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
             log "🔧 使用转换后的设备名: $openwrt_device"
             ;;
     esac
     
-    # 转换为大写（用于CONFIG_变量）
-    local device_upper=$(echo "$openwrt_device" | tr '[:lower:]' '[:upper:]')
+    # 直接使用小写的设备名，不转大写
+    local device_lower="$openwrt_device"
+    local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}"
     
-    # 写入基础配置 - 使用正确的设备名格式
+    log "🔧 设备配置变量: $device_config=y"
+    
+    # 步骤2: 创建基础目标配置 - 使用小写设备名
     cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
-CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y
+${device_config}=y
 EOF
     
-    log "🔧 生成基础配置..."
-    log "基础配置文件内容:"
-    cat .config | head -5
+    log "🔧 基础配置文件内容:"
+    cat .config
     
-    # 不运行make defconfig，直接继续添加配置
-    # make defconfig || handle_error "基础配置生成失败"
-    log "✅ 基础配置写入成功"
-    
-    # 验证设备是否被正确写入
-    if ! grep -q "DEVICE_${device_upper}=y" .config; then
-        log "⚠️ 设备 ${openwrt_device} 未正确写入，尝试直接写入..."
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
-    fi
-    
-    # 步骤2: 合并所有配置文件
+    # 步骤3: 合并所有配置文件
     log "📁 开始合并配置文件..."
     
     # 辅助函数：安全追加配置（过滤注释和空行）
@@ -1309,9 +1300,11 @@ EOF
         echo "CONFIG_PACKAGE_${pkg}=y" >> .config
     done
     
-    # 再次确保设备选项存在
-    if ! grep -q "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" .config; then
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
+    # 再次确保设备选项存在 - 使用小写
+    local device_check_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y"
+    if ! grep -q "$device_check_pattern" .config; then
+        echo "$device_check_pattern" >> .config
+        log "⚠️ 重新添加设备配置: $device_check_pattern"
     fi
     
     # 再次去重
@@ -1324,29 +1317,36 @@ EOF
         log "⚠️ make defconfig 第二次运行有警告，但继续..."
     }
     
-    # 步骤7: 最终验证
-    log "📋 最终配置验证:"
-    
-    # 验证设备是否被选中 - 使用正确的设备名格式
+    # 步骤7: 最终验证 - 检查设备是否被正确启用
     log "🔍 正在验证设备 $openwrt_device 是否被选中..."
     
-    local device_selected=""
-    local check_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y"
-    
-    if grep -q "$check_pattern" .config; then
-        device_selected="$check_pattern"
-        log "✅ 目标设备已正确配置: $device_selected"
+    if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
+        log "✅ 目标设备已正确启用: CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y"
+    elif grep -q "^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} is not set" .config; then
+        log "⚠️ 警告: 设备被禁用，尝试强制启用..."
+        # 删除禁用行，添加启用行
+        sed -i "/^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} is not set/d" .config
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+        # 再次去重并运行defconfig
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
+        make defconfig > /dev/null 2>&1
+        log "✅ 已强制启用设备"
     else
-        # 尝试其他可能的格式
-        local alt_pattern="CONFIG_TARGET_DEVICE_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y"
-        if grep -q "$alt_pattern" .config; then
-            device_selected="$alt_pattern"
-            log "✅ 目标设备已配置（备用格式）: $device_selected"
-        else
-            log "⚠️ 警告: 设备配置行未找到，但可能已通过其他方式启用"
-            log "当前配置中的设备相关选项:"
-            grep -E "CONFIG_TARGET.*DEVICE" .config | head -10 | sed 's/^/  /'
-        fi
+        log "⚠️ 警告: 设备配置行未找到，手动添加..."
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
+        make defconfig > /dev/null 2>&1
+    fi
+    
+    # 最终确认
+    if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
+        log "✅✅ 设备配置最终确认: 已启用"
+    else
+        log "❌ 错误: 无法启用设备 $openwrt_device"
+        log "当前设备相关配置:"
+        grep -E "CONFIG_TARGET.*DEVICE.*${device_lower}" .config || echo "  未找到"
     fi
     
     log "✅ 配置生成完成"
