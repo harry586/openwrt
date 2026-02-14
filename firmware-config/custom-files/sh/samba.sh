@@ -1,6 +1,7 @@
 #!/bin/sh
 # Samba只读增强版配置脚本（兼容Samba 3.x/4.x）
 # 包含：文件过滤、性能优化、匿名访问，只读权限
+# 修改：禁用打印共享（避免 /etc/printcap 错误）
 
 echo "=== Samba只读增强版配置（Samba 3.x/4.x兼容版） ==="
 
@@ -43,6 +44,10 @@ if [ "$SAMBA_MAJOR_VERSION" = "3" ]; then
     netbios name = OpenWRT
     interfaces = lo br-lan
     bind interfaces only = yes
+    
+    # ========== 禁用打印共享（避免printcap错误）==========
+    load printers = no
+    printing = bsd
     
     # ========== 安全与访问控制 ==========
     security = share
@@ -139,6 +144,10 @@ else
     netbios name = OpenWRT
     interfaces = lo br-lan
     bind interfaces only = yes
+    
+    # ========== 禁用打印共享（避免printcap错误）==========
+    load printers = no
+    printing = bsd
     
     # ========== 安全与访问控制 ==========
     security = user
@@ -288,4 +297,5 @@ echo "  ✓ 文件过滤 (.exe/.dll/.tmp等)"
 echo "  ✓ 性能优化"
 echo "  ✓ 协议兼容"
 echo "  ✓ 安全设置 (只读权限)"
+echo "  ✓ 禁用打印共享 (避免printcap错误)"
 echo ""
