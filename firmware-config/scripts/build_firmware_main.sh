@@ -1506,7 +1506,7 @@ apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 应用配置并显示详细信息（综合修复版） ==="
+    log "=== 应用配置并显示详细信息（智能修复版） ==="
     
     if [ ! -f ".config" ]; then
         log "❌ 错误: .config 文件不存在，无法应用配置"
@@ -1614,11 +1614,13 @@ apply_config() {
         mv .config.tmp .config
         
         log "✅ 冲突已修复"
+    else
+        log "✅ libustream无冲突"
     fi
     
-    log "🔧 步骤4: 使用OpenWrt配置工具强制修复关键配置..."
+    log "🔧 步骤4: 检查并修复关键配置（仅修复缺失项）..."
     
-    # 检查配置工具是否存在 - 修复版
+    # 检查配置工具是否存在
     local config_tool=""
     if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
         config_tool="scripts/config/config"
@@ -1630,193 +1632,212 @@ apply_config() {
         config_tool="scripts/config"
         log "✅ 使用 scripts/config 工具"
     else
-        log "⚠️ 配置工具不存在，编译生成中..."
-        
-        # 尝试编译配置工具
-        if [ -d "scripts/config" ]; then
-            make -C scripts/config 2>/dev/null || make scripts/config 2>/dev/null || true
-        else
-            make scripts/config 2>/dev/null || true
-        fi
-        
-        # 再次检查
-        if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
-            config_tool="scripts/config/config"
-            log "✅ 编译后找到 scripts/config/config 工具"
-        elif [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
-            config_tool="scripts/config/conf"
-            log "✅ 编译后找到 scripts/config/conf 工具"
-        elif [ -f "scripts/config" ] && [ -x "scripts/config" ]; then
-            config_tool="scripts/config"
-            log "✅ 编译后找到 scripts/config 工具"
-        else
-            log "⚠️ 无法编译配置工具，将使用awk方式进行修复"
-            config_tool=""
-        fi
+        log "⚠️ 配置工具不存在，将使用awk方式进行修复"
+        config_tool=""
     fi
     
-    log "  🔧 USB 3.0驱动修复..."
-    if [ -n "$config_tool" ]; then
-        if [ "$config_tool" = "scripts/config/conf" ]; then
-            # conf 工具用法不同
-            $config_tool --defconfig CONFIG_PACKAGE_kmod-usb-xhci-hcd=y .config 2>/dev/null || true
-            $config_tool --defconfig CONFIG_PACKAGE_kmod-usb3=y .config 2>/dev/null || true
+    # 获取目标平台
+    local target=$(grep "^CONFIG_TARGET_" .config | grep "=y" | head -1 | cut -d'_' -f2 | tr '[:upper:]' '[:lower:]')
+    
+    # 定义需要检查的配置项
+    local fix_count=0
+    
+    # USB 3.0驱动检查 - 检查多种实现方式
+    log "  🔧 USB 3.0驱动检查..."
+    local usb3_enabled=0
+    
+    # 检查各种USB 3.0实现
+    if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
+        usb3_enabled=1
+    elif grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" .config; then
+        usb3_enabled=1
+    elif grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-qcom=y" .config; then
+        usb3_enabled=1
+    elif grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config; then
+        usb3_enabled=1
+    elif grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3=y" .config && grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
+        usb3_enabled=1
+    elif grep -q "^CONFIG_USB_XHCI_HCD=y" .config; then
+        usb3_enabled=1
+    fi
+    
+    if [ $usb3_enabled -eq 0 ]; then
+        log "  ⚠️ USB 3.0功能未启用，尝试修复..."
+        if [ -n "$config_tool" ]; then
+            if [ "$config_tool" = "scripts/config/conf" ]; then
+                $config_tool --defconfig CONFIG_PACKAGE_kmod-usb3=y .config 2>/dev/null || true
+            else
+                $config_tool --enable PACKAGE_kmod-usb3 2>/dev/null || true
+            fi
         else
-            $config_tool --enable PACKAGE_kmod-usb-xhci-hcd 2>/dev/null || true
-            $config_tool --enable PACKAGE_kmod-usb3 2>/dev/null || true
-        fi
-    else
-        awk '
-        /^# CONFIG_PACKAGE_kmod-usb-xhci-hcd is not set/ {
-            print "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
-            next
-        }
-        /^CONFIG_PACKAGE_kmod-usb-xhci-hcd=.*/ {
-            print "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y"
-            next
-        }
-        { print $0 }
-        ' .config > .config.tmp
-        
-        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config.tmp; then
-            echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config.tmp
-        fi
-        
-        awk '
-        /^# CONFIG_PACKAGE_kmod-usb3 is not set/ {
-            print "CONFIG_PACKAGE_kmod-usb3=y"
-            next
-        }
-        /^CONFIG_PACKAGE_kmod-usb3=.*/ {
-            print "CONFIG_PACKAGE_kmod-usb3=y"
-            next
-        }
-        { print $0 }
-        ' .config.tmp > .config
-        rm -f .config.tmp
-        
-        if ! grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
             echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
         fi
+        fix_count=$((fix_count + 1))
+        log "  ✅ USB 3.0功能已添加"
+    else
+        log "  ✅ USB 3.0功能已启用"
     fi
-    log "  ✅ USB 3.0驱动强制启用完成"
     
-    if [ "$TARGET" = "ipq40xx" ] || grep -q "^CONFIG_TARGET_ipq40xx=y" .config 2>/dev/null; then
-        log "  🔧 IPQ40xx平台专用USB驱动修复..."
-        if [ -n "$config_tool" ]; then
-            if [ "$config_tool" = "scripts/config/conf" ]; then
-                $config_tool --defconfig CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y .config 2>/dev/null || true
-                $config_tool --defconfig CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y .config 2>/dev/null || true
-                $config_tool --defconfig CONFIG_PACKAGE_kmod-usb-dwc3=y .config 2>/dev/null || true
+    # IPQ40xx平台专用驱动检查
+    if [ "$target" = "ipq40xx" ] || [ "$target" = "qcom" ]; then
+        log "  🔧 IPQ40xx平台专用USB驱动检查..."
+        
+        # 检查dwc3-qcom
+        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=m" .config; then
+            log "  ⚠️ kmod-usb-dwc3-qcom未启用，尝试添加..."
+            if [ -n "$config_tool" ]; then
+                if [ "$config_tool" = "scripts/config/conf" ]; then
+                    $config_tool --defconfig CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y .config 2>/dev/null || true
+                else
+                    $config_tool --enable PACKAGE_kmod-usb-dwc3-qcom 2>/dev/null || true
+                fi
             else
-                $config_tool --enable PACKAGE_kmod-usb-dwc3-qcom 2>/dev/null || true
-                $config_tool --enable PACKAGE_kmod-phy-qcom-dwc3 2>/dev/null || true
-                $config_tool --enable PACKAGE_kmod-usb-dwc3 2>/dev/null || true
-            fi
-        else
-            if ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config; then
                 echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
             fi
-            if ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config; then
-                echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
-            fi
-            if ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3=y" .config; then
-                echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
-            fi
-        fi
-        log "  ✅ IPQ40xx平台专用USB驱动修复完成"
-    fi
-    
-    if [ "$CONFIG_MODE" = "normal" ]; then
-        log "  🔧 TurboACC配置修复..."
-        if [ -n "$config_tool" ]; then
-            if [ "$config_tool" = "scripts/config/conf" ]; then
-                $config_tool --defconfig CONFIG_PACKAGE_luci-app-turboacc=y .config 2>/dev/null || true
-                $config_tool --defconfig CONFIG_PACKAGE_kmod-shortcut-fe=y .config 2>/dev/null || true
-                $config_tool --defconfig CONFIG_PACKAGE_kmod-fast-classifier=y .config 2>/dev/null || true
-            else
-                $config_tool --enable PACKAGE_luci-app-turboacc 2>/dev/null || true
-                $config_tool --enable PACKAGE_kmod-shortcut-fe 2>/dev/null || true
-                $config_tool --enable PACKAGE_kmod-fast-classifier 2>/dev/null || true
-            fi
+            fix_count=$((fix_count + 1))
+            log "  ✅ kmod-usb-dwc3-qcom已添加"
         else
-            if ! grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
-                echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-            fi
-            if ! grep -q "^CONFIG_PACKAGE_kmod-shortcut-fe=y" .config; then
-                echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
-            fi
-            if ! grep -q "^CONFIG_PACKAGE_kmod-fast-classifier=y" .config; then
-                echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-            fi
-        fi
-        log "  ✅ TurboACC配置修复完成"
-    fi
-    
-    log "  🔧 TCP BBR拥塞控制修复..."
-    if [ -n "$config_tool" ]; then
-        if [ "$config_tool" = "scripts/config/conf" ]; then
-            $config_tool --defconfig CONFIG_PACKAGE_kmod-tcp-bbr=y .config 2>/dev/null || true
-            # conf 工具设置字符串参数的方式
-            sed -i '/^CONFIG_DEFAULT_TCP_CONG=/d' .config
-            echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
-        else
-            $config_tool --enable PACKAGE_kmod-tcp-bbr 2>/dev/null || true
-            $config_tool --set-str DEFAULT_TCP_CONG "bbr" 2>/dev/null || true
-        fi
-    else
-        if ! grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
-            echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+            log "  ✅ kmod-usb-dwc3-qcom已启用"
         fi
         
-        awk '!/^CONFIG_DEFAULT_TCP_CONG=/' .config > .config.tmp
-        mv .config.tmp .config
-        echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
-    fi
-    log "  ✅ TCP BBR拥塞控制修复完成"
-    
-    log "  🔧 kmod-ath10k-ct冲突修复..."
-    if [ -n "$config_tool" ]; then
-        if [ "$config_tool" = "scripts/config/conf" ]; then
-            $config_tool --defconfig '# CONFIG_PACKAGE_kmod-ath10k is not set' .config 2>/dev/null || true
-            $config_tool --defconfig '# CONFIG_PACKAGE_kmod-ath10k-pci is not set' .config 2>/dev/null || true
-            $config_tool --defconfig '# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set' .config 2>/dev/null || true
-            $config_tool --defconfig CONFIG_PACKAGE_kmod-ath10k-ct=y .config 2>/dev/null || true
-            $config_tool --defconfig '# CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers is not set' .config 2>/dev/null || true
-        else
-            $config_tool --disable PACKAGE_kmod-ath10k 2>/dev/null || true
-            $config_tool --disable PACKAGE_kmod-ath10k-pci 2>/dev/null || true
-            $config_tool --disable PACKAGE_kmod-ath10k-smallbuffers 2>/dev/null || true
-            $config_tool --enable PACKAGE_kmod-ath10k-ct 2>/dev/null || true
-            $config_tool --disable PACKAGE_kmod-ath10k-ct-smallbuffers 2>/dev/null || true
+        # 检查PHY驱动（使用正确的名称）
+        if grep -q "^CONFIG_PHY_QCOM_IPQ4019_USB=y" .config; then
+            log "  ✅ 高通IPQ4019 USB PHY已启用"
+        elif ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-ipq4019-usb=y" .config && ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-ipq4019-usb=m" .config; then
+            log "  ⚠️ 高通USB PHY未启用，尝试添加..."
+            if [ -n "$config_tool" ]; then
+                if [ "$config_tool" = "scripts/config/conf" ]; then
+                    $config_tool --defconfig CONFIG_PACKAGE_kmod-phy-qcom-ipq4019-usb=y .config 2>/dev/null || true
+                else
+                    $config_tool --enable PACKAGE_kmod-phy-qcom-ipq4019-usb 2>/dev/null || true
+                fi
+            else
+                echo "CONFIG_PACKAGE_kmod-phy-qcom-ipq4019-usb=y" >> .config
+            fi
+            fix_count=$((fix_count + 1))
+            log "  ✅ 高通USB PHY已添加"
         fi
+    fi
+    
+    # TurboACC配置检查
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        log "  🔧 TurboACC配置检查..."
+        local turboacc_fixed=0
+        
+        if ! grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
+            log "  ⚠️ luci-app-turboacc未启用，尝试添加..."
+            if [ -n "$config_tool" ]; then
+                if [ "$config_tool" = "scripts/config/conf" ]; then
+                    $config_tool --defconfig CONFIG_PACKAGE_luci-app-turboacc=y .config 2>/dev/null || true
+                else
+                    $config_tool --enable PACKAGE_luci-app-turboacc 2>/dev/null || true
+                fi
+            else
+                echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+            fi
+            turboacc_fixed=1
+        fi
+        
+        if ! grep -q "^CONFIG_PACKAGE_kmod-shortcut-fe=y" .config; then
+            log "  ⚠️ kmod-shortcut-fe未启用，尝试添加..."
+            if [ -n "$config_tool" ]; then
+                if [ "$config_tool" = "scripts/config/conf" ]; then
+                    $config_tool --defconfig CONFIG_PACKAGE_kmod-shortcut-fe=y .config 2>/dev/null || true
+                else
+                    $config_tool --enable PACKAGE_kmod-shortcut-fe 2>/dev/null || true
+                fi
+            else
+                echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+            fi
+            turboacc_fixed=1
+        fi
+        
+        if ! grep -q "^CONFIG_PACKAGE_kmod-fast-classifier=y" .config; then
+            log "  ⚠️ kmod-fast-classifier未启用，尝试添加..."
+            if [ -n "$config_tool" ]; then
+                if [ "$config_tool" = "scripts/config/conf" ]; then
+                    $config_tool --defconfig CONFIG_PACKAGE_kmod-fast-classifier=y .config 2>/dev/null || true
+                else
+                    $config_tool --enable PACKAGE_kmod-fast-classifier 2>/dev/null || true
+                fi
+            else
+                echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+            fi
+            turboacc_fixed=1
+        fi
+        
+        if [ $turboacc_fixed -eq 1 ]; then
+            log "  ✅ TurboACC配置已修复"
+            fix_count=$((fix_count + 1))
+        else
+            log "  ✅ TurboACC配置正常"
+        fi
+    fi
+    
+    # TCP BBR检查
+    log "  🔧 TCP BBR拥塞控制检查..."
+    local bbr_fixed=0
+    
+    if ! grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
+        log "  ⚠️ kmod-tcp-bbr未启用，尝试添加..."
+        if [ -n "$config_tool" ]; then
+            if [ "$config_tool" = "scripts/config/conf" ]; then
+                $config_tool --defconfig CONFIG_PACKAGE_kmod-tcp-bbr=y .config 2>/dev/null || true
+            else
+                $config_tool --enable PACKAGE_kmod-tcp-bbr 2>/dev/null || true
+            fi
+        else
+            echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+        fi
+        bbr_fixed=1
+    fi
+    
+    if ! grep -q '^CONFIG_DEFAULT_TCP_CONG="bbr"' .config; then
+        log "  ⚠️ DEFAULT_TCP_CONG未设置为bbr，尝试修复..."
+        if [ -n "$config_tool" ]; then
+            if [ "$config_tool" = "scripts/config/conf" ]; then
+                sed -i '/^CONFIG_DEFAULT_TCP_CONG=/d' .config
+                echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
+            else
+                $config_tool --set-str DEFAULT_TCP_CONG "bbr" 2>/dev/null || true
+            fi
+        else
+            sed -i '/^CONFIG_DEFAULT_TCP_CONG=/d' .config
+            echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
+        fi
+        bbr_fixed=1
+    fi
+    
+    if [ $bbr_fixed -eq 1 ]; then
+        log "  ✅ TCP BBR配置已修复"
+        fix_count=$((fix_count + 1))
     else
-        awk '
-        /^CONFIG_PACKAGE_kmod-ath10k=y/ {
-            print "# CONFIG_PACKAGE_kmod-ath10k is not set"
-            next
-        }
-        /^CONFIG_PACKAGE_kmod-ath10k-pci=y/ {
-            print "# CONFIG_PACKAGE_kmod-ath10k-pci is not set"
-            next
-        }
-        /^CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/ {
-            print "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set"
-            next
-        }
-        /^CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y/ {
-            print "# CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers is not set"
-            next
-        }
-        { print $0 }
-        ' .config > .config.tmp
-        mv .config.tmp .config
+        log "  ✅ TCP BBR配置正常"
+    fi
+    
+    # ath10k-ct冲突检查
+    log "  🔧 kmod-ath10k-ct冲突检查..."
+    local ath10k_fixed=0
+    
+    if grep -q "^CONFIG_PACKAGE_kmod-ath10k=y" .config; then
+        log "  ⚠️ 检测到标准ath10k驱动，与ath10k-ct冲突，正在修复..."
+        sed -i '/^CONFIG_PACKAGE_kmod-ath10k=y/d' .config
+        echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
         
         if ! grep -q "^CONFIG_PACKAGE_kmod-ath10k-ct=y" .config; then
             echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
         fi
+        ath10k_fixed=1
+        log "  ✅ kmod-ath10k-ct冲突已修复"
+    else
+        log "  ✅ kmod-ath10k-ct配置正常"
     fi
-    log "  ✅ kmod-ath10k-ct冲突修复完成"
+    
+    if [ $fix_count -eq 0 ]; then
+        log "✅ 所有关键配置检查通过，无需修复"
+    else
+        log "✅ 已修复 $fix_count 个关键配置项"
+    fi
     
     log "🔧 步骤5: 最终去重和格式检查..."
     
@@ -1848,18 +1869,18 @@ apply_config() {
     log "🔧 步骤7: 验证关键配置..."
     
     echo ""
-    echo "=== 🔍 USB驱动完整性检查（精确匹配） ==="
+    echo "=== 🔍 USB驱动完整性检查（智能检测） ==="
     
     echo ""
     echo "🔍 检查基础USB驱动..."
-    local required_drivers=(
+    local base_drivers=(
         "kmod-usb-core"
         "kmod-usb2"
         "kmod-usb-storage"
         "kmod-scsi-core"
     )
     
-    for driver in "${required_drivers[@]}"; do
+    for driver in "${base_drivers[@]}"; do
         if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
             echo "✅ $driver: 已启用"
         else
@@ -1868,121 +1889,132 @@ apply_config() {
     done
     
     echo ""
-    echo "🔍 检查USB 3.0驱动..."
-    local usb3_drivers=(
-        "kmod-usb3"
-        "kmod-usb-xhci-hcd"
-    )
+    echo "🔍 检查USB 3.0驱动（多种实现方式）..."
     
-    for driver in "${usb3_drivers[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-            echo "✅ $driver: 已启用"
-        else
-            echo "⚠️ $driver: 未启用（如果设备支持USB 3.0可能需要）"
-        fi
-    done
+    # 检查各种USB 3.0实现
+    local usb3_found=0
+    
+    if grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
+        echo "✅ kmod-usb3: 已启用"
+        usb3_found=1
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
+        echo "✅ kmod-usb-xhci-hcd: 已启用（通用xhci驱动）"
+        usb3_found=1
+    elif grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" .config; then
+        echo "✅ kmod-usb-xhci-plat-hcd: 已启用（平台xhci驱动）"
+        usb3_found=1
+    elif grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-qcom=y" .config; then
+        echo "✅ kmod-usb-xhci-qcom: 已启用（高通xhci驱动）"
+        usb3_found=1
+    elif grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config; then
+        echo "✅ kmod-usb-xhci-mtk: 已启用（联发科xhci驱动）"
+        usb3_found=1
+    elif grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3=y" .config && grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
+        echo "✅ DWC3 + USB3: 已启用（DWC3内部集成xhci）"
+        usb3_found=1
+    elif grep -q "^CONFIG_USB_XHCI_HCD=y" .config; then
+        echo "✅ 内核xhci支持: 已启用（通过内核配置）"
+        usb3_found=1
+    fi
+    
+    if [ $usb3_found -eq 0 ]; then
+        echo "⚠️ USB 3.0驱动: 未找到任何实现"
+    fi
     
     echo ""
     echo "🔍 检查平台专用驱动..."
-    if [ "$TARGET" = "ipq40xx" ] || grep -q "^CONFIG_TARGET_ipq40xx=y" .config 2>/dev/null; then
-        echo "🔧 检测到高通IPQ40xx平台，检查专用驱动:"
-        local ipq40xx_drivers=(
-            "kmod-usb-dwc3-qcom"
-            "kmod-phy-qcom-dwc3"
-            "kmod-usb-dwc3"
-        )
-        for driver in "${ipq40xx_drivers[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-                echo "✅ $driver: 已启用"
+    
+    # 检测目标平台
+    local target=$(grep "^CONFIG_TARGET_" .config | grep "=y" | head -1 | cut -d'_' -f2 | tr '[:upper:]' '[:lower:]')
+    
+    case "$target" in
+        ipq40xx|qcom)
+            echo "🔧 检测到高通IPQ40xx平台，检查专用驱动:"
+            
+            if grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config; then
+                echo "✅ kmod-usb-dwc3-qcom: 已启用"
             else
-                echo "ℹ️ $driver: 未启用（可能不是必需）"
+                echo "ℹ️ kmod-usb-dwc3-qcom: 未启用"
             fi
-        done
-    elif [ "$TARGET" = "ramips" ] || grep -q "^CONFIG_TARGET_ramips=y" .config 2>/dev/null; then
-        echo "🔧 检测到雷凌MT76xx平台，检查专用驱动:"
-        local ramips_drivers=(
-            "kmod-usb-xhci-mtk"
-            "kmod-usb-ohci-pci"
-            "kmod-usb2-pci"
-        )
-        for driver in "${ramips_drivers[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-                echo "✅ $driver: 已启用"
+            
+            if grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-ipq4019-usb=y" .config; then
+                echo "✅ kmod-phy-qcom-ipq4019-usb: 已启用"
+            elif grep -q "^CONFIG_PHY_QCOM_IPQ4019_USB=y" .config; then
+                echo "✅ 高通IPQ4019 USB PHY: 已启用（内核配置）"
             else
-                echo "ℹ️ $driver: 未启用（可能不是必需）"
+                echo "ℹ️ 高通USB PHY: 未启用"
             fi
-        done
-    elif [ "$TARGET" = "ath79" ] || grep -q "^CONFIG_TARGET_ath79=y" .config 2>/dev/null; then
-        echo "🔧 检测到高通ATH79平台，检查专用驱动:"
-        local ath79_drivers=(
-            "kmod-usb2-ath79"
-            "kmod-usb-ohci"
-        )
-        for driver in "${ath79_drivers[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-                echo "✅ $driver: 已启用"
+            
+            if grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3=y" .config; then
+                echo "✅ kmod-usb-dwc3: 已启用"
             else
-                echo "ℹ️ $driver: 未启用（可能不是必需）"
+                echo "ℹ️ kmod-usb-dwc3: 未启用"
             fi
-        done
-    elif [ "$TARGET" = "mediatek" ] || grep -q "^CONFIG_TARGET_mediatek=y" .config 2>/dev/null; then
-        echo "🔧 检测到联发科平台，检查专用驱动:"
-        local mediatek_drivers=(
-            "kmod-usb-dwc3-mediatek"
-            "kmod-phy-mediatek"
-            "kmod-usb-dwc3"
-        )
-        for driver in "${mediatek_drivers[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-                echo "✅ $driver: 已启用"
+            ;;
+        mediatek|ramips)
+            echo "🔧 检测到联发科平台，检查专用驱动:"
+            
+            if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config; then
+                echo "✅ kmod-usb-xhci-mtk: 已启用"
             else
-                echo "ℹ️ $driver: 未启用（可能不是必需）"
+                echo "ℹ️ kmod-usb-xhci-mtk: 未启用"
             fi
-        done
-    fi
+            ;;
+        ath79)
+            echo "🔧 检测到ATH79平台，检查专用驱动:"
+            
+            if grep -q "^CONFIG_PACKAGE_kmod-usb2-ath79=y" .config; then
+                echo "✅ kmod-usb2-ath79: 已启用"
+            else
+                echo "ℹ️ kmod-usb2-ath79: 未启用"
+            fi
+            
+            if grep -q "^CONFIG_PACKAGE_kmod-usb-ohci=y" .config; then
+                echo "✅ kmod-usb-ohci: 已启用"
+            else
+                echo "ℹ️ kmod-usb-ohci: 未启用"
+            fi
+            ;;
+        *)
+            echo "ℹ️ 通用平台，无专用驱动检查"
+            ;;
+    esac
     
     echo ""
     echo "=== 📦 插件配置状态 ==="
     
-    local functional_plugins=(
-        "luci-app-turboacc:TurboACC 网络加速"
-        "luci-app-upnp:UPnP 自动端口转发"
-        "samba4-server:Samba 文件共享"
-        "luci-app-diskman:磁盘管理"
-        "vlmcsd:KMS 激活服务"
-        "smartdns:SmartDNS 智能DNS"
-        "luci-app-accesscontrol:家长控制"
-        "luci-app-wechatpush:微信推送"
-        "sqm-scripts:流量控制 (SQM)"
-        "vsftpd:FTP 服务器"
-        "luci-app-arpbind:ARP 绑定"
-        "luci-app-cpulimit:CPU 限制"
-        "luci-app-hd-idle:硬盘休眠"
-    )
+    # 动态检测插件
+    local plugins=$(grep "^CONFIG_PACKAGE_luci-app" .config | grep -E "=y|=m" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
     
-    for plugin_entry in "${functional_plugins[@]}"; do
-        local plugin="${plugin_entry%%:*}"
-        local desc="${plugin_entry#*:}"
-        
-        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
-            echo "✅ $desc: 已启用"
-        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
-            echo "📦 $desc: 模块化"
-        elif grep -q "^# CONFIG_PACKAGE_${plugin} is not set" .config; then
-            echo "❌ $desc: 已禁用"
-        else
-            echo "⚪ $desc: 未配置"
+    if [ -n "$plugins" ]; then
+        echo "$plugins" | head -20 | while read plugin; do
+            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
+                echo "✅ $plugin: 已启用"
+            elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+                echo "📦 $plugin: 模块化"
+            fi
+        done
+        local plugin_count=$(echo "$plugins" | wc -l)
+        if [ $plugin_count -gt 20 ]; then
+            echo "... 还有 $((plugin_count - 20)) 个插件未显示"
         fi
-    done
+    else
+        echo "未找到Luci插件"
+    fi
     
     echo ""
     echo "=== 📊 配置统计 ==="
-    local enabled_count=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config 2>/dev/null || echo "0")
-    local module_count=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config 2>/dev/null || echo "0")
-    local disabled_count=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config 2>/dev/null || echo "0")
-    echo "✅ 已启用插件: $enabled_count 个"
-    echo "📦 模块化插件: $module_count 个"
-    echo "❌ 已禁用插件: $disabled_count 个"
+    local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config 2>/dev/null || echo "0")
+    local module_packages=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config 2>/dev/null || echo "0")
+    local disabled_packages=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config 2>/dev/null || echo "0")
+    local kernel_configs=$(grep -c "^CONFIG_[A-Z].*=y$" .config | grep -v "PACKAGE" | wc -l)
+    
+    echo "✅ 已启用插件: $enabled_packages 个"
+    echo "📦 模块化插件: $module_packages 个"
+    echo "❌ 已禁用插件: $disabled_packages 个"
+    echo "⚙️ 内核配置: $kernel_configs 个"
     
     log "✅ 配置应用完成"
     log "最终配置文件: .config"
@@ -3497,7 +3529,6 @@ workflow_step17_check_usb_drivers() {
                 "kmod-usb3"
                 "kmod-usb-dwc3"
                 "kmod-usb-dwc3-qcom"
-                "kmod-usb-xhci-hcd"
                 "kmod-usb-storage"
                 "kmod-scsi-core"
             )
@@ -3580,24 +3611,49 @@ workflow_step17_check_usb_drivers() {
                 echo "   ✅ $driver 可能被内核配置 $(echo $kernel_config | cut -d'=' -f1) 替代"
             fi
         done
-    else
-        echo ""
-        echo "✅ 所有必需USB驱动都已启用或有替代"
     fi
     
     echo ""
-    echo "🔍 检查实际启用的USB驱动:"
-    local enabled_all=$(grep "^CONFIG_PACKAGE_kmod-usb.*=y" .config | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
-    if [ -n "$enabled_all" ]; then
-        echo "$enabled_all" | head -10 | while read driver; do
+    echo "🔍 检查所有实际启用的USB驱动:"
+    echo "----------------------------------------"
+    
+    # 获取所有启用的USB驱动
+    local all_enabled=$(grep "^CONFIG_PACKAGE_kmod-usb.*=y" .config | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
+    local all_module=$(grep "^CONFIG_PACKAGE_kmod-usb.*=m" .config | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
+    
+    # 显示所有启用的驱动
+    if [ -n "$all_enabled" ]; then
+        echo "✅ 已启用驱动 ($(echo "$all_enabled" | wc -l) 个):"
+        echo "$all_enabled" | while read driver; do
             echo "   ✅ $driver"
         done
-        local total=$(echo "$enabled_all" | wc -l)
-        if [ $total -gt 10 ]; then
-            echo "   ... 还有 $((total - 10)) 个"
+    else
+        echo "   没有已启用的USB驱动"
+    fi
+    
+    # 显示所有模块化的驱动
+    if [ -n "$all_module" ]; then
+        echo ""
+        echo "📦 模块化驱动 ($(echo "$all_module" | wc -l) 个):"
+        echo "$all_module" | while read driver; do
+            echo "   📦 $driver"
+        done
+    fi
+    
+    # 显示禁用的驱动（可选）
+    local all_disabled=$(grep "^# CONFIG_PACKAGE_kmod-usb" .config | grep "is not set" | sed 's/# CONFIG_PACKAGE_//g' | sed 's/ is not set//g' | sort)
+    if [ -n "$all_disabled" ]; then
+        echo ""
+        echo "❌ 禁用驱动 ($(echo "$all_disabled" | wc -l) 个，仅显示前20个):"
+        echo "$all_disabled" | head -20 | while read driver; do
+            echo "   ❌ $driver"
+        done
+        if [ $(echo "$all_disabled" | wc -l) -gt 20 ]; then
+            echo "   ... 还有 $(( $(echo "$all_disabled" | wc -l) - 20 )) 个禁用驱动未显示"
         fi
     fi
     
+    echo "----------------------------------------"
     log "✅ 步骤17 完成"
 }
 #【build_firmware_main.sh-33-end】
