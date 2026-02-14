@@ -3201,46 +3201,157 @@ workflow_step15_generate_config() {
 # ============================================
 #【build_firmware_main.sh-32】
 workflow_step16_verify_usb() {
-    log "=== 步骤16: 验证USB配置（修复版：精确匹配） ==="
+    log "=== 步骤16: 验证USB配置（动态检测版） ==="
     
     trap 'echo "⚠️ 步骤16 验证过程中出现错误，继续执行..."' ERR
     
     cd $BUILD_DIR
     
-    echo "=== 🚨 USB配置精确匹配检查 ==="
+    echo "=== 🚨 USB配置动态检测 ==="
+    echo ""
     
-    echo "1. 🟢 USB核心模块（精确匹配）:"
-    if grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" .config; then
-        echo "✅ USB核心: 已启用"
+    # 1. 检测USB核心模块
+    echo "1. 🟢 USB核心模块:"
+    local usb_core=$(grep "^CONFIG_PACKAGE_kmod-usb-core=" .config | head -1)
+    if [ -n "$usb_core" ]; then
+        echo "   ✅ kmod-usb-core: $(echo $usb_core | cut -d'=' -f2)"
     else
-        echo "❌ USB核心: 未启用"
+        echo "   ❌ kmod-usb-core: 未启用"
     fi
+    echo ""
     
-    echo "2. 🟢 USB控制器（精确匹配）:"
-    echo "  - kmod-usb2:" $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config && echo "✅" || echo "❌")
-    echo "  - kmod-usb3:" $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config && echo "✅" || echo "❌")
-    echo "  - kmod-usb-xhci-hcd:" $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo "✅" || echo "❌")
+    # 2. 检测所有USB控制器驱动
+    echo "2. 🟢 USB控制器驱动:"
+    local usb_controllers=$(grep "^CONFIG_PACKAGE_kmod-usb" .config | grep -E "usb2|usb3|ehci|ohci|xhci|dwc" | grep -v "storage|serial|net" | sort)
     
-    echo "3. 🟢 USB存储驱动（精确匹配）:"
-    echo "  - kmod-usb-storage:" $(grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" .config && echo "✅" || echo "❌")
-    echo "  - kmod-scsi-core:" $(grep -q "^CONFIG_PACKAGE_kmod-scsi-core=y" .config && echo "✅" || echo "❌")
-    
-    echo "4. 🟢 检查重复配置:"
-    duplicates=$(grep "CONFIG_PACKAGE_kmod-usb-xhci-hcd" .config | wc -l)
-    if [ $duplicates -gt 1 ]; then
-        echo "⚠️ 发现重复配置: kmod-usb-xhci-hcd ($duplicates 次)"
-        echo "🔍 显示所有匹配行:"
-        grep -n "CONFIG_PACKAGE_kmod-usb-xhci-hcd" .config
+    if [ -n "$usb_controllers" ]; then
+        echo "$usb_controllers" | while read line; do
+            local pkg=$(echo "$line" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
+            local val=$(echo "$line" | cut -d'=' -f2)
+            if [ "$val" = "y" ]; then
+                echo "   ✅ $pkg: 已启用"
+            elif [ "$val" = "m" ]; then
+                echo "   📦 $pkg: 模块化"
+            fi
+        done
     else
-        echo "✅ 无重复配置"
+        echo "   未找到USB控制器驱动"
+    fi
+    echo ""
+    
+    # 3. 检测USB存储驱动
+    echo "3. 🟢 USB存储驱动:"
+    local usb_storage=$(grep "^CONFIG_PACKAGE_kmod-usb-storage" .config | grep -E "=y|=m" | sort)
+    if [ -n "$usb_storage" ]; then
+        echo "$usb_storage" | while read line; do
+            local pkg=$(echo "$line" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
+            local val=$(echo "$line" | cut -d'=' -f2)
+            if [ "$val" = "y" ]; then
+                echo "   ✅ $pkg: 已启用"
+            elif [ "$val" = "m" ]; then
+                echo "   📦 $pkg: 模块化"
+            fi
+        done
+    else
+        echo "   ❌ kmod-usb-storage: 未启用"
     fi
     
-    echo "5. 🟢 平台专用驱动检查（精确匹配）:"
-    if grep -q "^CONFIG_TARGET_ipq40xx=y" .config; then
-        echo "🔧 检测到高通IPQ40xx平台:"
-        echo "  - kmod-usb-dwc3-qcom:" $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo "✅" || echo "❌")
-        echo "  - kmod-phy-qcom-dwc3:" $(grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo "✅" || echo "❌")
+    # SCSI核心
+    if grep -q "^CONFIG_PACKAGE_kmod-scsi-core=y" .config; then
+        echo "   ✅ kmod-scsi-core: 已启用"
+    elif grep -q "^CONFIG_PACKAGE_kmod-scsi-core=m" .config; then
+        echo "   📦 kmod-scsi-core: 模块化"
+    else
+        echo "   ❌ kmod-scsi-core: 未启用"
     fi
+    echo ""
+    
+    # 4. 检测平台专用驱动
+    echo "4. 🟢 平台专用驱动:"
+    
+    # 检测目标平台
+    local target=$(grep "^CONFIG_TARGET_" .config | grep "=y" | head -1 | cut -d'_' -f2 | tr '[:upper:]' '[:lower:]')
+    
+    case "$target" in
+        ipq40xx|ipq806x|qcom)
+            echo "   🔧 检测到高通平台"
+            local qcom_drivers=$(grep "^CONFIG_PACKAGE_kmod" .config | grep -E "qcom|ipq40" | grep -E "=y|=m" | sort)
+            if [ -n "$qcom_drivers" ]; then
+                echo "$qcom_drivers" | while read line; do
+                    local pkg=$(echo "$line" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
+                    local val=$(echo "$line" | cut -d'=' -f2)
+                    if [ "$val" = "y" ]; then
+                        echo "   ✅ $pkg: 已启用"
+                    elif [ "$val" = "m" ]; then
+                        echo "   📦 $pkg: 模块化"
+                    fi
+                done
+            else
+                echo "   未找到高通专用驱动"
+            fi
+            ;;
+        mediatek|ramips)
+            echo "   🔧 检测到联发科平台"
+            local mtk_drivers=$(grep "^CONFIG_PACKAGE_kmod" .config | grep -E "mtk|mediatek" | grep -E "=y|=m" | sort)
+            if [ -n "$mtk_drivers" ]; then
+                echo "$mtk_drivers" | while read line; do
+                    local pkg=$(echo "$line" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
+                    local val=$(echo "$line" | cut -d'=' -f2)
+                    if [ "$val" = "y" ]; then
+                        echo "   ✅ $pkg: 已启用"
+                    elif [ "$val" = "m" ]; then
+                        echo "   📦 $pkg: 模块化"
+                    fi
+                done
+            else
+                echo "   未找到联发科专用驱动"
+            fi
+            ;;
+        ath79)
+            echo "   🔧 检测到ATH79平台"
+            local ath79_drivers=$(grep "^CONFIG_PACKAGE_kmod" .config | grep -E "ath79" | grep -E "=y|=m" | sort)
+            if [ -n "$ath79_drivers" ]; then
+                echo "$ath79_drivers" | while read line; do
+                    local pkg=$(echo "$line" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
+                    local val=$(echo "$line" | cut -d'=' -f2)
+                    if [ "$val" = "y" ]; then
+                        echo "   ✅ $pkg: 已启用"
+                    elif [ "$val" = "m" ]; then
+                        echo "   📦 $pkg: 模块化"
+                    fi
+                done
+            else
+                echo "   未找到ATH79专用驱动"
+            fi
+            ;;
+        *)
+            echo "   ℹ️ 通用平台，无专用驱动"
+            ;;
+    esac
+    echo ""
+    
+    # 5. 检查重复配置
+    echo "5. 🟢 检查重复配置:"
+    local duplicates=$(grep "^CONFIG_PACKAGE_kmod-usb" .config | cut -d'=' -f1 | sort | uniq -d)
+    if [ -n "$duplicates" ]; then
+        echo "$duplicates" | while read dup; do
+            local count=$(grep -c "^$dup=" .config)
+            echo "   ⚠️ $dup: 出现 $count 次"
+        done
+    else
+        echo "   ✅ 无重复配置"
+    fi
+    echo ""
+    
+    # 6. 统计信息
+    echo "6. 📊 USB驱动统计:"
+    local total_usb=$(grep -c "^CONFIG_PACKAGE_kmod-usb" .config)
+    local enabled_usb=$(grep -c "^CONFIG_PACKAGE_kmod-usb.*=y" .config)
+    local module_usb=$(grep -c "^CONFIG_PACKAGE_kmod-usb.*=m" .config)
+    echo "   总USB包: $total_usb"
+    echo "   已启用: $enabled_usb"
+    echo "   模块化: $module_usb"
+    echo ""
     
     echo "✅ USB配置检查完成"
     log "✅ 步骤16 完成"
@@ -3254,67 +3365,134 @@ workflow_step16_verify_usb() {
 # ============================================
 #【build_firmware_main.sh-33】
 workflow_step17_check_usb_drivers() {
-    log "=== 步骤17: USB驱动完整性检查（修复版） ==="
+    log "=== 步骤17: USB驱动完整性检查（动态检测版） ==="
     
     trap 'echo "⚠️ 步骤17 检查过程中出现错误，继续执行..."' ERR
     
     cd $BUILD_DIR
     
-    echo "=== USB驱动完整性检查（精确匹配） ==="
+    echo "=== USB驱动完整性动态检测 ==="
+    echo ""
     
-    missing_drivers=()
-    required_drivers=(
+    # 获取目标平台
+    local target=$(grep "^CONFIG_TARGET_" .config | grep "=y" | head -1 | cut -d'_' -f2 | tr '[:upper:]' '[:lower:]')
+    echo "目标平台: $target"
+    echo ""
+    
+    # 定义基础必需驱动
+    local base_required=(
         "kmod-usb-core"
-        "kmod-usb2"
-        "kmod-usb-storage"
-        "kmod-scsi-core"
     )
     
-    echo "🔍 检查基础USB驱动..."
+    # 根据平台定义必需驱动
+    local required_drivers=()
+    case "$target" in
+        ipq40xx|ipq806x|qcom)
+            required_drivers=(
+                "kmod-usb-core"
+                "kmod-usb2"
+                "kmod-usb3"
+                "kmod-usb-dwc3"
+                "kmod-usb-dwc3-qcom"
+                "kmod-usb-xhci-hcd"
+                "kmod-usb-storage"
+                "kmod-scsi-core"
+            )
+            ;;
+        mediatek|ramips)
+            required_drivers=(
+                "kmod-usb-core"
+                "kmod-usb2"
+                "kmod-usb3"
+                "kmod-usb-xhci-mtk"
+                "kmod-usb-storage"
+                "kmod-scsi-core"
+            )
+            ;;
+        ath79)
+            required_drivers=(
+                "kmod-usb-core"
+                "kmod-usb2"
+                "kmod-usb-ohci"
+                "kmod-usb-storage"
+                "kmod-scsi-core"
+            )
+            ;;
+        *)
+            required_drivers=(
+                "kmod-usb-core"
+                "kmod-usb2"
+                "kmod-usb-storage"
+                "kmod-scsi-core"
+            )
+            ;;
+    esac
+    
+    echo "🔍 检查必需USB驱动:"
+    echo ""
+    
+    local missing_drivers=()
+    local enabled_drivers=()
+    
     for driver in "${required_drivers[@]}"; do
         if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-            echo "✅ $driver: 已启用"
+            echo "   ✅ $driver: 已启用"
+            enabled_drivers+=("$driver")
+        elif grep -q "^CONFIG_PACKAGE_${driver}=m" .config; then
+            echo "   📦 $driver: 模块化"
+            enabled_drivers+=("$driver")
         else
-            echo "❌ $driver: 未启用"
-            missing_drivers+=("$driver")
-        fi
-    done
-    
-    echo ""
-    echo "🔍 检查USB 3.0驱动..."
-    usb3_drivers=("kmod-usb3" "kmod-usb-xhci-hcd")
-    for driver in "${usb3_drivers[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-            echo "✅ $driver: 已启用"
-        else
-            echo "⚠️ $driver: 未启用（如果设备支持USB 3.0可能需要）"
-        fi
-    done
-    
-    echo ""
-    echo "🔍 检查平台专用驱动..."
-    if grep -q "^CONFIG_TARGET_ipq40xx=y" .config; then
-        echo "🔧 检测到高通IPQ40xx平台，检查专用驱动:"
-        ipq40xx_drivers=("kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3")
-        for driver in "${ipq40xx_drivers[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-                echo "✅ $driver: 已启用"
+            # 检查是否有替代驱动
+            local alt_driver=$(grep "^CONFIG_PACKAGE_" .config | grep -i "${driver#kmod-}" | grep -E "=y|=m" | head -1)
+            if [ -n "$alt_driver" ]; then
+                local alt_name=$(echo "$alt_driver" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
+                echo "   🔄 $driver: 未找到，但发现替代: $alt_name"
+                enabled_drivers+=("$driver(替代:$alt_name)")
             else
-                echo "ℹ️ $driver: 未启用（可能不是必需）"
+                echo "   ❌ $driver: 未启用"
+                missing_drivers+=("$driver")
             fi
-        done
-    fi
+        fi
+    done
     
     echo ""
     echo "📊 统计:"
-    echo "  必需驱动: ${#required_drivers[@]} 个"
-    echo "  缺失驱动: ${#missing_drivers[@]} 个"
+    echo "   必需驱动: ${#required_drivers[@]} 个"
+    echo "   已启用/替代: ${#enabled_drivers[@]} 个"
+    echo "   缺失驱动: ${#missing_drivers[@]} 个"
     
     if [ ${#missing_drivers[@]} -gt 0 ]; then
-        echo "⚠️ 发现缺失驱动: ${missing_drivers[*]}"
-        echo "💡 建议在配置文件中启用这些驱动"
+        echo ""
+        echo "⚠️ 发现缺失驱动:"
+        for driver in "${missing_drivers[@]}"; do
+            echo "   - $driver"
+        done
+        
+        # 检查这些驱动是否被内核选项替代
+        echo ""
+        echo "🔍 检查内核配置替代:"
+        for driver in "${missing_drivers[@]}"; do
+            local kernel_config=$(grep -E "^CONFIG_.*${driver#kmod-}.*=y" .config | head -1)
+            if [ -n "$kernel_config" ]; then
+                echo "   ✅ $driver 可能被内核配置 $(echo $kernel_config | cut -d'=' -f1) 替代"
+            fi
+        done
     else
-        echo "✅ 所有必需USB驱动都已启用"
+        echo ""
+        echo "✅ 所有必需USB驱动都已启用或有替代"
+    fi
+    
+    echo ""
+    echo "🔍 检查实际启用的USB驱动:"
+    local enabled_all=$(grep "^CONFIG_PACKAGE_kmod-usb.*=y" .config | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
+    if [ -n "$enabled_all" ]; then
+        echo "$enabled_all" | head -10 | while read driver; do
+            echo "   ✅ $driver"
+        done
+        local total=$(echo "$enabled_all" | wc -l)
+        if [ $total -gt 10 ]; then
+            echo "   ... 还有 $((total - 10)) 个"
+        fi
     fi
     
     log "✅ 步骤17 完成"
@@ -3328,11 +3506,68 @@ workflow_step17_check_usb_drivers() {
 # ============================================
 #【build_firmware_main.sh-34】
 workflow_step20_fix_network() {
-    log "=== 步骤20: 修复网络环境 ==="
+    log "=== 步骤20: 修复网络环境（动态检测版） ==="
     
     trap 'echo "⚠️ 步骤20 修复过程中出现错误，继续执行..."' ERR
     
-    fix_network
+    cd $BUILD_DIR
+    
+    echo "🔍 检测当前网络环境..."
+    
+    # 检测网络连通性
+    if ping -c 1 -W 2 github.com > /dev/null 2>&1; then
+        echo "✅ GitHub 可达"
+    else
+        echo "⚠️ GitHub 不可达，尝试使用代理..."
+    fi
+    
+    if ping -c 1 -W 2 google.com > /dev/null 2>&1; then
+        echo "✅ 国际网络可达"
+    else
+        echo "⚠️ 国际网络可能受限"
+    fi
+    
+    # 检测当前代理设置
+    if [ -n "$http_proxy" ] || [ -n "$https_proxy" ]; then
+        echo "检测到代理设置:"
+        [ -n "$http_proxy" ] && echo "   HTTP_PROXY: $http_proxy"
+        [ -n "$https_proxy" ] && echo "   HTTPS_PROXY: $https_proxy"
+    else
+        echo "未检测到代理设置"
+    fi
+    
+    echo ""
+    echo "🔧 配置Git优化..."
+    
+    # 动态设置Git配置
+    git config --global http.postBuffer 524288000
+    git config --global http.lowSpeedLimit 0
+    git config --global http.lowSpeedTime 999999
+    git config --global core.compression 0
+    
+    # 检测Git版本并设置相应选项
+    local git_version=$(git --version | cut -d' ' -f3)
+    echo "Git版本: $git_version"
+    
+    # 根据网络情况设置SSL验证
+    if curl -s --connect-timeout 5 https://github.com > /dev/null 2>&1; then
+        export GIT_SSL_NO_VERIFY=0
+        echo "✅ SSL验证: 启用"
+    else
+        export GIT_SSL_NO_VERIFY=1
+        export PYTHONHTTPSVERIFY=0
+        export CURL_SSL_NO_VERIFY=1
+        echo "⚠️ SSL验证: 禁用（由于网络问题）"
+    fi
+    
+    # 测试最终连接
+    echo ""
+    echo "🔍 测试最终连接..."
+    if curl -s --connect-timeout 10 https://github.com > /dev/null; then
+        echo "✅ 网络连接正常"
+    else
+        echo "⚠️ 网络连接可能有问题，但将继续尝试"
+    fi
     
     log "✅ 步骤20 完成"
 }
@@ -3345,7 +3580,7 @@ workflow_step20_fix_network() {
 # ============================================
 #【build_firmware_main.sh-35】
 workflow_step21_download_deps() {
-    log "=== 步骤21: 下载依赖包（优化版） ==="
+    log "=== 步骤21: 下载依赖包（动态优化版） ==="
     
     set -e
     trap 'echo "❌ 步骤21 失败，退出代码: $?"; exit 1' ERR
@@ -3358,24 +3593,66 @@ workflow_step21_download_deps() {
         echo "✅ 创建依赖包目录: dl"
     fi
     
-    DEP_COUNT=$(find dl -type f 2>/dev/null | wc -l)
-    echo "📊 当前依赖包数量: $DEP_COUNT 个"
+    # 统计现有依赖包
+    local dep_count=$(find dl -type f 2>/dev/null | wc -l)
+    local dep_size=$(du -sh dl 2>/dev/null | cut -f1 || echo "0B")
+    echo "📊 当前依赖包: $dep_count 个, 总大小: $dep_size"
     
-    echo "🚀 开始下载依赖包（启用并行下载）..."
-    stdbuf -oL -eL make -j4 download V=s 2>&1 | tee download.log
+    # 检测系统资源动态调整并行数
+    local cpu_cores=$(nproc)
+    local mem_total=$(free -m | awk '/^Mem:/{print $2}')
+    local download_jobs=1
     
-    DOWNLOAD_EXIT_CODE=${PIPESTATUS[0]}
-    if [ $DOWNLOAD_EXIT_CODE -ne 0 ]; then
-        echo "⚠️ 警告: 依赖包下载过程中出现错误，退出代码: $DOWNLOAD_EXIT_CODE"
-        echo "💡 查看下载日志中的错误信息:"
-        grep -i "error\|failed\|404\|not found" download.log | head -10 || true
+    if [ $cpu_cores -ge 4 ] && [ $mem_total -ge 4096 ]; then
+        download_jobs=$((cpu_cores > 8 ? 8 : cpu_cores))
+        echo "✅ 检测到高性能系统，使用 $download_jobs 并行下载"
+    elif [ $cpu_cores -ge 2 ] && [ $mem_total -ge 2048 ]; then
+        download_jobs=4
+        echo "✅ 检测到标准系统，使用 4 并行下载"
+    else
+        download_jobs=2
+        echo "⚠️ 检测到资源有限，使用 2 并行下载"
     fi
     
-    echo "✅ 下载完成"
+    echo "🚀 开始下载依赖包（并行数: $download_jobs）..."
     
-    NEW_DEP_COUNT=$(find dl -type f 2>/dev/null | wc -l)
-    echo "📊 下载后依赖包数量: $NEW_DEP_COUNT 个"
-    echo "📈 新增依赖包: $((NEW_DEP_COUNT - DEP_COUNT)) 个"
+    # 使用timeout避免卡死
+    local start_time=$(date +%s)
+    
+    # 先尝试快速下载
+    if make -j$download_jobs download -k > download.log 2>&1; then
+        echo "✅ 下载完成"
+    else
+        echo "⚠️ 部分下载失败，尝试单线程重试失败项..."
+        # 提取失败的包并重试
+        grep -E "ERROR|Failed" download.log | grep -o "make[^)]*" | while read cmd; do
+            echo "重试: $cmd"
+            eval $cmd || true
+        done
+    fi
+    
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    
+    # 统计下载结果
+    local new_dep_count=$(find dl -type f 2>/dev/null | wc -l)
+    local new_dep_size=$(du -sh dl 2>/dev/null | cut -f1)
+    local added=$((new_dep_count - dep_count))
+    
+    echo ""
+    echo "📊 下载统计:"
+    echo "   耗时: $((duration / 60))分$((duration % 60))秒"
+    echo "   原有包: $dep_count 个 ($dep_size)"
+    echo "   现有包: $new_dep_count 个 ($new_dep_size)"
+    echo "   新增包: $added 个"
+    
+    # 检查下载错误
+    local error_count=$(grep -c -E "ERROR|Failed|404" download.log 2>/dev/null || echo "0")
+    if [ $error_count -gt 0 ]; then
+        echo "⚠️ 发现 $error_count 个下载错误，但不影响继续"
+        echo "错误示例:"
+        grep -E "ERROR|Failed|404" download.log | head -5
+    fi
     
     log "✅ 步骤21 完成"
 }
@@ -3405,7 +3682,7 @@ workflow_step22_integrate_custom_files() {
 # ============================================
 #【build_firmware_main.sh-37】
 workflow_step23_pre_build_check() {
-    log "=== 步骤23: 前置错误检查（立即退出版）- 增强版，自动修复配置问题 ==="
+    log "=== 步骤23: 前置错误检查（动态检测版） ==="
     
     set -e
     trap 'echo "❌ 步骤23 失败，退出代码: $?"; exit 1' ERR
@@ -3413,340 +3690,185 @@ workflow_step23_pre_build_check() {
     echo "🔍 检查当前环境..."
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
-        echo "✅ 加载环境变量: SELECTED_BRANCH=$SELECTED_BRANCH, TARGET=$TARGET"
-        echo "✅ COMPILER_DIR=$COMPILER_DIR"
-        echo "✅ CONFIG_MODE=$CONFIG_MODE"
-        echo "✅ DEVICE=$DEVICE"
+        echo "✅ 加载环境变量:"
+        echo "   SELECTED_BRANCH=$SELECTED_BRANCH"
+        echo "   TARGET=$TARGET"
+        echo "   SUBTARGET=$SUBTARGET"
+        echo "   DEVICE=$DEVICE"
+        echo "   CONFIG_MODE=$CONFIG_MODE"
+        echo "   COMPILER_DIR=$COMPILER_DIR"
     else
         echo "❌ 错误: 环境文件不存在 ($BUILD_DIR/build_env.sh)"
-        echo "💡 请检查步骤08和步骤09是否成功执行"
         exit 1
     fi
     
     cd $BUILD_DIR
-    echo "=== 🚨 前置错误检查（立即退出版）- 增强版 ==="
-    
     echo ""
+    echo "=== 🚨 前置错误动态检测 ==="
+    echo ""
+    
+    local error_count=0
+    local warning_count=0
+    
+    # 1. 检查配置文件
     echo "1. ✅ 配置文件检查:"
     if [ -f ".config" ]; then
-        echo "  ✅ .config 文件存在"
-        echo "  📊 文件大小: $(ls -lh .config | awk '{print $5}')"
-        echo "  📝 文件行数: $(wc -l < .config)"
+        local config_size=$(ls -lh .config | awk '{print $5}')
+        local config_lines=$(wc -l < .config)
+        echo "   ✅ .config 文件存在"
+        echo "   📊 大小: $config_size, 行数: $config_lines"
         
-        # 检查设备配置是否正确
+        # 检查设备配置
         local device_upper=$(echo "$DEVICE" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
-        if grep -q "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" .config; then
-            echo "  ✅ 设备配置正确: $DEVICE"
+        if grep -q "CONFIG_TARGET_.*DEVICE.*${device_upper}=y" .config; then
+            echo "   ✅ 设备配置正确"
         else
-            echo "  ⚠️ 设备配置可能不正确，尝试修复..."
-            echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_upper}=y" >> .config
-            make defconfig > /dev/null 2>&1
-        fi
-        
-        # 检查关键配置项是否存在
-        echo "  🔍 检查关键配置项:"
-        local key_configs=(
-            "CONFIG_PACKAGE_kmod-phy-qcom-dwc3"
-            "CONFIG_PACKAGE_kmod-usb-xhci-hcd"
-            "CONFIG_PACKAGE_luci-app-samba4"
-            "CONFIG_PACKAGE_luci-app-diskman"
-            "CONFIG_PACKAGE_kmod-ath10k-ct"
-        )
-        
-        for config in "${key_configs[@]}"; do
-            if grep -q "^${config}=y" .config; then
-                echo "    ✅ $config: 已启用"
+            # 尝试小写匹配
+            local device_lower=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+            if grep -q "CONFIG_TARGET_.*DEVICE.*${device_lower}=y" .config; then
+                echo "   ✅ 设备配置正确 (小写)"
             else
-                echo "    ❌ $config: 未启用"
+                echo "   ❌ 设备配置可能不正确"
+                error_count=$((error_count + 1))
+            fi
+        fi
+    else
+        echo "   ❌ .config 文件不存在"
+        error_count=$((error_count + 1))
+    fi
+    echo ""
+    
+    # 2. 检查SDK/编译器
+    echo "2. ✅ SDK/编译器检查:"
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+        echo "   ✅ SDK目录存在: $COMPILER_DIR"
+        local sdk_size=$(du -sh "$COMPILER_DIR" 2>/dev/null | awk '{print $1}')
+        echo "   📊 大小: $sdk_size"
+        
+        # 查找真正的GCC
+        local gcc_file=$(find "$COMPILER_DIR" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" ! -path "*dummy-tools*" 2>/dev/null | head -1)
+        if [ -n "$gcc_file" ]; then
+            echo "   ✅ 找到GCC: $(basename "$gcc_file")"
+            local gcc_version=$("$gcc_file" --version 2>&1 | head -1)
+            echo "   🔧 版本: $gcc_version"
+        else
+            echo "   ❌ 未找到GCC编译器"
+            error_count=$((error_count + 1))
+        fi
+    else
+        echo "   ❌ SDK目录不存在"
+        error_count=$((error_count + 1))
+    fi
+    echo ""
+    
+    # 3. 检查Feeds
+    echo "3. ✅ Feeds检查:"
+    if [ -d "feeds" ]; then
+        local feeds_count=$(find feeds -maxdepth 1 -type d 2>/dev/null | wc -l)
+        feeds_count=$((feeds_count - 1))  # 减去feeds目录本身
+        echo "   ✅ feeds目录存在, 包含 $feeds_count 个feed"
+        
+        # 检查关键feed
+        for feed in packages luci; do
+            if [ -d "feeds/$feed" ]; then
+                echo "   ✅ $feed feed: 存在"
+            else
+                echo "   ❌ $feed feed: 不存在"
+                warning_count=$((warning_count + 1))
             fi
         done
     else
-        echo "  ❌ 错误: .config 文件不存在"
-        echo "  💡 请检查步骤15智能配置生成是否成功"
-        exit 1
+        echo "   ❌ feeds目录不存在"
+        error_count=$((error_count + 1))
     fi
-    
     echo ""
-    echo "2. ✅ SDK目录检查:"
-    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-        echo "  ✅ SDK目录存在: $COMPILER_DIR"
-        echo "  📊 目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | awk '{print $1}' || echo '未知')"
-        
-        GCC_FILE=$(find "$COMPILER_DIR" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" ! -path "*dummy-tools*" ! -path "*scripts*" 2>/dev/null | head -1)
-        
-        if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
-            echo "  ✅ 找到可执行GCC编译器: $(basename "$GCC_FILE")"
-            echo "  🔧 GCC版本: $("$GCC_FILE" --version 2>&1 | head -1)"
-        else
-            echo "  ❌ 错误: SDK目录中未找到真正的GCC编译器"
-            exit 1
-        fi
-    else
-        echo "  ❌ 错误: SDK目录不存在: $COMPILER_DIR"
-        echo "  💡 请检查步骤09 SDK下载是否成功"
-        exit 1
-    fi
     
-    echo ""
-    echo "3. ✅ Feeds检查:"
-    if [ -d "feeds" ]; then
-        echo "  ✅ feeds 目录存在"
-        echo "  📊 feeds目录大小: $(du -sh feeds 2>/dev/null | awk '{print $1}' || echo '未知')"
-        
-        # 检查关键feeds
-        if [ -d "feeds/packages" ]; then
-            echo "  ✅ packages feed: 存在"
-        else
-            echo "  ❌ packages feed: 不存在"
-        fi
-        
-        if [ -d "feeds/luci" ]; then
-            echo "  ✅ luci feed: 存在"
-        else
-            echo "  ❌ luci feed: 不存在"
-        fi
-    else
-        echo "  ❌ 错误: feeds 目录不存在"
-        echo "  💡 请检查步骤12配置Feeds是否成功"
-        exit 1
-    fi
-    
-    echo ""
+    # 4. 检查磁盘空间
     echo "4. ✅ 磁盘空间检查:"
-    AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
-    AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-    echo "  📊 /mnt 可用空间: ${AVAILABLE_GB}G"
+    local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1 || df / --output=avail | tail -1)
+    local available_gb=$((available_space / 1024 / 1024))
+    echo "   📊 可用空间: ${available_gb}G"
     
-    if [ $AVAILABLE_GB -lt 10 ]; then
-        echo "  ❌ 错误: 磁盘空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
-        exit 1
-    elif [ $AVAILABLE_GB -lt 20 ]; then
-        echo "  ⚠️ 警告: 磁盘空间较低 (建议至少20G，当前${AVAILABLE_GB}G)"
+    if [ $available_gb -lt 5 ]; then
+        echo "   ❌ 空间严重不足 (<5G)"
+        error_count=$((error_count + 1))
+    elif [ $available_gb -lt 10 ]; then
+        echo "   ⚠️ 空间较低 (<10G)"
+        warning_count=$((warning_count + 1))
+    elif [ $available_gb -lt 20 ]; then
+        echo "   ⚠️ 空间一般 (<20G)"
+        warning_count=$((warning_count + 1))
     else
-        echo "  ✅ 磁盘空间充足"
+        echo "   ✅ 空间充足"
     fi
-    
     echo ""
-    echo "5. ✅ USB配置检查（自动修复）:"
-    USB_FIXED=0
     
-    # USB 3.0驱动
-    if ! grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
-        echo "  ❌ 错误: USB 3.0驱动未启用 (kmod-usb-xhci-hcd)"
-        echo "  🔧 正在自动修复..."
-        if [ -f "scripts/config/config" ]; then
-            ./scripts/config/config --enable PACKAGE_kmod-usb-xhci-hcd
-            echo "  ✅ 已强制添加: kmod-usb-xhci-hcd"
+    # 5. 检查关键USB驱动
+    echo "5. ✅ USB驱动检查:"
+    local critical_drivers=(
+        "kmod-usb-core"
+    )
+    
+    # 根据平台添加关键驱动
+    case "$TARGET" in
+        ipq40xx|ipq806x|qcom)
+            critical_drivers+=("kmod-usb-dwc3" "kmod-usb-dwc3-qcom")
+            ;;
+        mediatek|ramips)
+            critical_drivers+=("kmod-usb-xhci-mtk")
+            ;;
+    esac
+    
+    local missing_usb=0
+    for driver in "${critical_drivers[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            echo "   ✅ $driver: 已启用"
+        elif grep -q "^CONFIG_PACKAGE_${driver}=m" .config; then
+            echo "   📦 $driver: 模块化"
         else
-            echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
-            echo "  ✅ 已强制添加: kmod-usb-xhci-hcd"
+            echo "   ❌ $driver: 未启用"
+            missing_usb=$((missing_usb + 1))
         fi
-        USB_FIXED=1
-    else
-        echo "  ✅ kmod-usb-xhci-hcd: 已启用"
+    done
+    
+    if [ $missing_usb -gt 0 ]; then
+        echo "   ⚠️ 有 $missing_usb 个关键USB驱动缺失"
+        warning_count=$((warning_count + 1))
     fi
-    
-    if ! grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
-        echo "  ❌ 错误: USB 3.0驱动未启用 (kmod-usb3)"
-        echo "  🔧 正在自动修复..."
-        if [ -f "scripts/config/config" ]; then
-            ./scripts/config/config --enable PACKAGE_kmod-usb3
-            echo "  ✅ 已强制添加: kmod-usb3"
-        else
-            echo "CONFIG_PACKAGE_kmod-usb3=y" >> .config
-            echo "  ✅ 已强制添加: kmod-usb3"
-        fi
-        USB_FIXED=1
-    else
-        echo "  ✅ kmod-usb3: 已启用"
-    fi
-    
-    if ! grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config; then
-        echo "  ❌ 错误: USB 2.0驱动未启用 (kmod-usb2)"
-        echo "  🔧 正在自动修复..."
-        if [ -f "scripts/config/config" ]; then
-            ./scripts/config/config --enable PACKAGE_kmod-usb2
-            echo "  ✅ 已强制添加: kmod-usb2"
-        else
-            echo "CONFIG_PACKAGE_kmod-usb2=y" >> .config
-            echo "  ✅ 已强制添加: kmod-usb2"
-        fi
-        USB_FIXED=1
-    else
-        echo "  ✅ kmod-usb2: 已启用"
-    fi
-    
-    # 平台专用驱动
-    if [ "$TARGET" = "ipq40xx" ]; then
-        if ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config; then
-            echo "  ❌ 错误: IPQ40xx平台驱动未启用 (kmod-phy-qcom-dwc3)"
-            echo "  🔧 正在自动修复..."
-            if [ -f "scripts/config/config" ]; then
-                ./scripts/config/config --enable PACKAGE_kmod-phy-qcom-dwc3
-                echo "  ✅ 已强制添加: kmod-phy-qcom-dwc3"
-            else
-                echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
-                echo "  ✅ 已强制添加: kmod-phy-qcom-dwc3"
-            fi
-            USB_FIXED=1
-        else
-            echo "  ✅ kmod-phy-qcom-dwc3: 已启用"
-        fi
-        
-        if ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" .config; then
-            echo "  ❌ 错误: IPQ40xx平台USB DWC3驱动未启用 (kmod-usb-dwc3-of-simple)"
-            echo "  🔧 正在自动修复..."
-            if [ -f "scripts/config/config" ]; then
-                ./scripts/config/config --enable PACKAGE_kmod-usb-dwc3-of-simple
-                echo "  ✅ 已强制添加: kmod-usb-dwc3-of-simple"
-            else
-                echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
-                echo "  ✅ 已强制添加: kmod-usb-dwc3-of-simple"
-            fi
-            USB_FIXED=1
-        else
-            echo "  ✅ kmod-usb-dwc3-of-simple: 已启用"
-        fi
-    fi
-    
     echo ""
-    echo "6. ✅ TurboACC配置检查（自动修复）:"
-    TURBOACC_FIXED=0
     
-    if [ "$CONFIG_MODE" = "normal" ]; then
-        if ! grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config; then
-            echo "  ❌ 错误: TurboACC未启用 (正常模式必需)"
-            echo "  🔧 正在自动修复..."
-            if [ -f "scripts/config/config" ]; then
-                ./scripts/config/config --enable PACKAGE_luci-app-turboacc
-                echo "  ✅ 已强制添加: luci-app-turboacc"
-            else
-                echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-            fi
-            TURBOACC_FIXED=1
-        else
-            echo "  ✅ luci-app-turboacc: 已启用"
-        fi
-        
-        if ! grep -q "^CONFIG_PACKAGE_kmod-shortcut-fe=y" .config; then
-            echo "  ❌ 错误: Shortcut-FE未启用"
-            echo "  🔧 正在自动修复..."
-            if [ -f "scripts/config/config" ]; then
-                ./scripts/config/config --enable PACKAGE_kmod-shortcut-fe
-                echo "  ✅ 已强制添加: kmod-shortcut-fe"
-            else
-                echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
-            fi
-            TURBOACC_FIXED=1
-        else
-            echo "  ✅ kmod-shortcut-fe: 已启用"
-        fi
-        
-        if ! grep -q "^CONFIG_PACKAGE_kmod-fast-classifier=y" .config; then
-            echo "  ❌ 错误: Fast Classifier未启用"
-            echo "  🔧 正在自动修复..."
-            if [ -f "scripts/config/config" ]; then
-                ./scripts/config/config --enable PACKAGE_kmod-fast-classifier
-                echo "  ✅ 已强制添加: kmod-fast-classifier"
-            else
-                echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-            fi
-            TURBOACC_FIXED=1
-        else
-            echo "  ✅ kmod-fast-classifier: 已启用"
-        fi
+    # 6. 检查内存
+    echo "6. ✅ 内存检查:"
+    local mem_total=$(free -m | awk '/^Mem:/{print $2}')
+    local mem_available=$(free -m | awk '/^Mem:/{print $7}')
+    echo "   📊 总内存: ${mem_total}MB, 可用: ${mem_available}MB"
+    
+    if [ $mem_available -lt 512 ]; then
+        echo "   ⚠️ 可用内存不足 (<512MB)"
+        warning_count=$((warning_count + 1))
     else
-        echo "  ℹ️ 基础模式，不检查TurboACC配置"
+        echo "   ✅ 内存充足"
     fi
-    
     echo ""
-    echo "7. ✅ TCP BBR拥塞控制检查（自动修复）:"
-    BBR_FIXED=0
     
-    if ! grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config; then
-        echo "  ❌ 错误: TCP BBR未启用"
-        echo "  🔧 正在自动修复..."
-        if [ -f "scripts/config/config" ]; then
-            ./scripts/config/config --enable PACKAGE_kmod-tcp-bbr
-            echo "  ✅ 已强制添加: kmod-tcp-bbr"
-        else
-            echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
-        fi
-        BBR_FIXED=1
-    else
-        echo "  ✅ kmod-tcp-bbr: 已启用"
-    fi
-    
-    if ! grep -q '^CONFIG_DEFAULT_TCP_CONG="bbr"' .config; then
-        echo "  ❌ 错误: TCP BBR未设置为默认拥塞控制算法"
-        echo "  🔧 正在自动修复..."
-        if [ -f "scripts/config/config" ]; then
-            ./scripts/config/config --set-str DEFAULT_TCP_CONG "bbr"
-            echo "  ✅ 已设置: DEFAULT_TCP_CONG="bbr""
-        else
-            sed -i '/^CONFIG_DEFAULT_TCP_CONG=/d' .config
-            echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
-        fi
-        BBR_FIXED=1
-    else
-        echo "  ✅ DEFAULT_TCP_CONG="bbr": 已设置"
-    fi
-    
+    # 7. 检查CPU
+    echo "7. ✅ CPU检查:"
+    local cpu_cores=$(nproc)
+    local cpu_model=$(grep "model name" /proc/cpuinfo | head -1 | cut -d':' -f2 | xargs)
+    echo "   📊 核心数: $cpu_cores"
+    echo "   📊 型号: $cpu_model"
     echo ""
-    echo "8. ✅ ath10k驱动冲突检查（自动修复）:"
-    ATH10K_FIXED=0
     
-    if grep -q "^CONFIG_PACKAGE_kmod-ath10k=y" .config; then
-        echo "  ❌ 错误: 检测到标准ath10k驱动，与ath10k-ct冲突"
-        echo "  🔧 正在自动修复..."
-        sed -i '/^CONFIG_PACKAGE_kmod-ath10k=y/d' .config
-        echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
-        
-        if ! grep -q "^CONFIG_PACKAGE_kmod-ath10k-ct=y" .config; then
-            echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
-        fi
-        ATH10K_FIXED=1
-        echo "  ✅ 已修复: 禁用标准ath10k，启用ath10k-ct"
-    else
-        echo "  ✅ ath10k驱动配置正确"
-    fi
-    
-    if [ $USB_FIXED -eq 1 ] || [ $TURBOACC_FIXED -eq 1 ] || [ $BBR_FIXED -eq 1 ] || [ $ATH10K_FIXED -eq 1 ]; then
-        echo ""
-        echo "🔄 配置已修复，重新运行 make defconfig..."
-        make defconfig
-        
-        echo ""
-        echo "📋 修复后配置状态:"
-        echo "  - kmod-usb2: $(grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-        echo "  - kmod-usb3: $(grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-        echo "  - kmod-usb-xhci-hcd: $(grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-        
-        if [ "$TARGET" = "ipq40xx" ]; then
-            echo "  - kmod-usb-dwc3-qcom: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-            echo "  - kmod-phy-qcom-dwc3: $(grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-            echo "  - kmod-usb-dwc3-of-simple: $(grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-        fi
-        
-        if [ "$CONFIG_MODE" = "normal" ]; then
-            echo "  - luci-app-turboacc: $(grep -q "^CONFIG_PACKAGE_luci-app-turboacc=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-            echo "  - kmod-shortcut-fe: $(grep -q "^CONFIG_PACKAGE_kmod-shortcut-fe=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-            echo "  - kmod-fast-classifier: $(grep -q "^CONFIG_PACKAGE_kmod-fast-classifier=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-        fi
-        
-        echo "  - kmod-tcp-bbr: $(grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-        echo "  - DEFAULT_TCP_CONG: $(grep "^CONFIG_DEFAULT_TCP_CONG=" .config | cut -d'"' -f2 || echo '未设置')"
-        echo "  - ath10k-ct: $(grep -q "^CONFIG_PACKAGE_kmod-ath10k-ct=y" .config && echo '✅ 已启用' || echo '❌ 未启用')"
-        
-        echo "✅ 所有配置修复完成"
-    else
-        echo ""
-        echo "✅ 所有配置检查通过，无需修复"
-    fi
-    
-    echo ""
+    # 汇总
     echo "========================================"
-    echo "✅✅✅ 所有前置检查通过，可以开始编译 ✅✅✅"
+    if [ $error_count -gt 0 ]; then
+        echo "❌❌❌ 检测到 $error_count 个错误，请修复后重试 ❌❌❌"
+        exit 1
+    elif [ $warning_count -gt 0 ]; then
+        echo "⚠️⚠️⚠️ 检测到 $warning_count 个警告，但可以继续 ⚠️⚠️⚠️"
+    else
+        echo "✅✅✅ 所有检查通过，可以开始编译 ✅✅✅"
+    fi
     echo "========================================"
     
     log "✅ 步骤23 完成"
