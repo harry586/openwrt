@@ -959,6 +959,11 @@ generate_config() {
     log "配置模式: $CONFIG_MODE"
     log "配置文件目录: $CONFIG_DIR"
     
+    # 创建 artifacts 目录
+    ARTIFACTS_DIR="$REPO_ROOT/artifacts/step15-logs"
+    mkdir -p "$ARTIFACTS_DIR"
+    rm -f "$ARTIFACTS_DIR"/*.log "$ARTIFACTS_DIR"/missing-deps.txt 2>/dev/null || true
+    
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
@@ -1032,8 +1037,15 @@ EOF
     yes "" | make -j1 oldconfig V=s > /tmp/build-logs/oldconfig.log 2>&1 || {
         log "❌ make oldconfig 失败，查看日志..."
         tail -50 /tmp/build-logs/oldconfig.log
+        # 复制日志到 artifacts
+        cp /tmp/build-logs/oldconfig.log "$ARTIFACTS_DIR/" 2>/dev/null || true
+        # 提取缺失依赖
+        grep -E "WARNING:.*has a dependency on.*which does not exist" /tmp/build-logs/oldconfig.log > "$ARTIFACTS_DIR/missing-deps.txt" 2>/dev/null || true
         handle_error "依赖解决失败"
     }
+    # 无论成功与否，复制日志并提取缺失依赖
+    cp /tmp/build-logs/oldconfig.log "$ARTIFACTS_DIR/" 2>/dev/null || true
+    grep -E "WARNING:.*has a dependency on.*which does not exist" /tmp/build-logs/oldconfig.log >> "$ARTIFACTS_DIR/missing-deps.txt" 2>/dev/null || true
     log "✅ 依赖关系解决成功"
     
     # 步骤5: 后处理强制启用关键USB软件包（增强版）
@@ -1138,6 +1150,10 @@ EOF
         tail -50 /tmp/build-logs/oldconfig2.log
         echo "================================"
         
+        # 复制日志并提取缺失依赖
+        cp /tmp/build-logs/oldconfig2.log "$ARTIFACTS_DIR/" 2>/dev/null || true
+        grep -E "WARNING:.*has a dependency on.*which does not exist" /tmp/build-logs/oldconfig2.log >> "$ARTIFACTS_DIR/missing-deps.txt" 2>/dev/null || true
+        
         # 尝试恢复备份并继续
         if [ -f ".config.force" ]; then
             log "🔄 尝试恢复强制配置并继续..."
@@ -1146,6 +1162,9 @@ EOF
             handle_error "强制配置应用失败"
         fi
     else
+        # 成功时也复制日志并提取缺失依赖
+        cp /tmp/build-logs/oldconfig2.log "$ARTIFACTS_DIR/" 2>/dev/null || true
+        grep -E "WARNING:.*has a dependency on.*which does not exist" /tmp/build-logs/oldconfig2.log >> "$ARTIFACTS_DIR/missing-deps.txt" 2>/dev/null || true
         log "✅ make oldconfig 成功"
     fi
     
@@ -1214,6 +1233,9 @@ EOF
         log "当前可用的设备选项:"
         grep -E "^CONFIG_TARGET_DEVICE_.*=y|^CONFIG_TARGET_.*_DEVICE_.*=y" .config | head -20 | sed 's/^/  /' || echo "  没有可用的设备选项"
         
+        # 将可用设备选项保存到文件
+        grep -E "^CONFIG_TARGET_DEVICE_.*=y|^CONFIG_TARGET_.*_DEVICE_.*=y" .config > "$ARTIFACTS_DIR/available-devices.txt" 2>/dev/null || true
+        
         # 尝试自动修复
         log "🔄 尝试自动修复：使用 scripts/config 工具启用设备选项..."
         
@@ -1266,6 +1288,8 @@ EOF
         log "🔄 重新运行 make defconfig 以应用设备选择..."
         if make defconfig > /tmp/build-logs/defconfig_fix.log 2>&1; then
             log "✅ make defconfig 修复成功"
+            # 复制修复日志
+            cp /tmp/build-logs/defconfig_fix.log "$ARTIFACTS_DIR/" 2>/dev/null || true
             
             # 再次检查
             for pattern in "${device_patterns[@]}"; do
@@ -1278,6 +1302,7 @@ EOF
         else
             log "❌ make defconfig 修复失败"
             cat /tmp/build-logs/defconfig_fix.log
+            cp /tmp/build-logs/defconfig_fix.log "$ARTIFACTS_DIR/" 2>/dev/null || true
         fi
     fi
     
@@ -1287,7 +1312,17 @@ EOF
         log "请检查设备名称是否正确，或手动配置设备。"
         log "当前可用的设备选项（前20个）:"
         grep -E "^CONFIG_TARGET_DEVICE_.*=y|^CONFIG_TARGET_.*_DEVICE_.*=y" .config | head -20 | sed 's/^/  /' || echo "  没有可用的设备选项"
+        # 再次保存可用设备选项
+        grep -E "^CONFIG_TARGET_DEVICE_.*=y|^CONFIG_TARGET_.*_DEVICE_.*=y" .config > "$ARTIFACTS_DIR/available-devices.txt" 2>/dev/null || true
         handle_error "设备配置错误"
+    fi
+    
+    # 将最终的 .config 复制到 artifacts
+    cp .config "$ARTIFACTS_DIR/config-final" 2>/dev/null || true
+    
+    # 如果缺失依赖文件不为空，输出提示
+    if [ -s "$ARTIFACTS_DIR/missing-deps.txt" ]; then
+        log "⚠️ 发现缺失依赖，详情见 $ARTIFACTS_DIR/missing-deps.txt"
     fi
     
     log "✅ 配置生成完成"
