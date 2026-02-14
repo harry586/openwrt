@@ -3201,73 +3201,146 @@ workflow_step15_generate_config() {
 # ============================================
 #【build_firmware_main.sh-32】
 workflow_step16_verify_usb() {
-    log "=== 步骤16: 验证USB配置（动态检测版） ==="
+    log "=== 步骤16: 验证USB配置（智能检测版） ==="
     
     trap 'echo "⚠️ 步骤16 验证过程中出现错误，继续执行..."' ERR
     
     cd $BUILD_DIR
     
-    echo "=== 🚨 USB配置动态检测 ==="
+    echo "=== 🚨 USB配置智能检测 ==="
     echo ""
     
     # 1. 检测USB核心模块
     echo "1. 🟢 USB核心模块:"
-    local usb_core=$(grep "^CONFIG_PACKAGE_kmod-usb-core=" .config | head -1)
-    if [ -n "$usb_core" ]; then
-        echo "   ✅ kmod-usb-core: $(echo $usb_core | cut -d'=' -f2)"
+    if grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" .config; then
+        echo "   ✅ kmod-usb-core: 已启用"
     else
         echo "   ❌ kmod-usb-core: 未启用"
     fi
     echo ""
     
-    # 2. 检测所有USB控制器驱动
-    echo "2. 🟢 USB控制器驱动:"
-    local usb_controllers=$(grep "^CONFIG_PACKAGE_kmod-usb" .config | grep -E "usb2|usb3|ehci|ohci|xhci|dwc" | grep -v "storage|serial|net" | sort)
-    
-    if [ -n "$usb_controllers" ]; then
-        echo "$usb_controllers" | while read line; do
-            local pkg=$(echo "$line" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
-            local val=$(echo "$line" | cut -d'=' -f2)
-            if [ "$val" = "y" ]; then
-                echo "   ✅ $pkg: 已启用"
-            elif [ "$val" = "m" ]; then
-                echo "   📦 $pkg: 模块化"
-            fi
-        done
+    # 2. 检测USB 2.0支持
+    echo "2. 🟢 USB 2.0支持:"
+    local usb2_enabled=0
+    if grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config; then
+        echo "   ✅ kmod-usb2: 已启用"
+        usb2_enabled=1
+    elif grep -q "^CONFIG_USB_EHCI_HCD=y" .config || grep -q "^CONFIG_USB_OHCI_HCD=y" .config; then
+        echo "   ✅ USB 2.0功能已启用（通过内核配置）"
+        usb2_enabled=1
     else
-        echo "   未找到USB控制器驱动"
+        echo "   ❌ USB 2.0功能未启用"
     fi
     echo ""
     
-    # 3. 检测USB存储驱动
-    echo "3. 🟢 USB存储驱动:"
-    local usb_storage=$(grep "^CONFIG_PACKAGE_kmod-usb-storage" .config | grep -E "=y|=m" | sort)
-    if [ -n "$usb_storage" ]; then
-        echo "$usb_storage" | while read line; do
-            local pkg=$(echo "$line" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
-            local val=$(echo "$line" | cut -d'=' -f2)
-            if [ "$val" = "y" ]; then
-                echo "   ✅ $pkg: 已启用"
-            elif [ "$val" = "m" ]; then
-                echo "   📦 $pkg: 模块化"
-            fi
-        done
-    else
-        echo "   ❌ kmod-usb-storage: 未启用"
+    # 3. 智能检测USB 3.0/xhci功能
+    echo "3. 🟢 USB 3.0/xhci功能检测:"
+    
+    local xhci_enabled=0
+    local xhci_methods=""
+    
+    # 方法1: 检查通用xhci-hcd包
+    if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
+        xhci_enabled=1
+        xhci_methods="$xhci_methods
+   - 通用xhci-hcd包"
     fi
     
-    # SCSI核心
+    # 方法2: 检查平台专用xhci包
+    if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config; then
+        xhci_enabled=1
+        xhci_methods="$xhci_methods
+   - 联发科xhci-mtk包"
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-qcom=y" .config; then
+        xhci_enabled=1
+        xhci_methods="$xhci_methods
+   - 高通xhci-qcom包"
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" .config; then
+        xhci_enabled=1
+        xhci_methods="$xhci_methods
+   - 平台xhci-plat-hcd包"
+    fi
+    
+    # 方法3: 检查DWC3驱动（内部集成xhci）
+    if grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3=y" .config || grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config; then
+        xhci_enabled=1
+        xhci_methods="$xhci_methods
+   - DWC3控制器（内部集成xhci）"
+    fi
+    
+    # 方法4: 检查内核xhci配置
+    if grep -q "^CONFIG_USB_XHCI_HCD=y" .config; then
+        xhci_enabled=1
+        xhci_methods="$xhci_methods
+   - 内核xhci支持"
+    fi
+    
+    if grep -q "^CONFIG_USB_XHCI_PLATFORM=y" .config; then
+        xhci_enabled=1
+        xhci_methods="$xhci_methods
+   - 内核平台xhci支持"
+    fi
+    
+    # 方法5: 检查高通平台专用PHY
+    if grep -q "^CONFIG_PHY_QCOM_IPQ4019_USB=y" .config; then
+        # 高通IPQ40xx平台有专用PHY，通常与DWC3配合
+        if [ $xhci_enabled -eq 0 ]; then
+            # 虽然没有直接xhci包，但平台支持USB 3.0
+            xhci_enabled=1
+            xhci_methods="$xhci_methods
+   - 高通IPQ40xx平台（通过PHY和DWC3）"
+        fi
+    fi
+    
+    # 输出检测结果
+    if [ $xhci_enabled -eq 1 ]; then
+        echo "   ✅ USB 3.0/xhci功能已启用"
+        echo "   检测方式:"
+        echo -e "$xhci_methods" | while read line; do
+            [ -n "$line" ] && echo "     $line"
+        done
+        
+        # 显示实际启用的相关配置
+        echo "   实际配置:"
+        grep -E "CONFIG_(PACKAGE_kmod-usb-xhci|PACKAGE_kmod-usb-dwc3|USB_XHCI|PHY_QCOM)" .config | grep -E "=y|=m" | head -5 | while read line; do
+            echo "     $line"
+        done
+    else
+        echo "   ❌ USB 3.0/xhci功能未启用"
+    fi
+    echo ""
+    
+    # 4. 检测USB存储驱动
+    echo "4. 🟢 USB存储支持:"
+    local storage_enabled=0
+    
+    if grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" .config; then
+        echo "   ✅ kmod-usb-storage: 已启用"
+        storage_enabled=1
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_kmod-usb-storage-uas=y" .config; then
+        echo "   ✅ kmod-usb-storage-uas: 已启用"
+        storage_enabled=1
+    fi
+    
     if grep -q "^CONFIG_PACKAGE_kmod-scsi-core=y" .config; then
         echo "   ✅ kmod-scsi-core: 已启用"
-    elif grep -q "^CONFIG_PACKAGE_kmod-scsi-core=m" .config; then
-        echo "   📦 kmod-scsi-core: 模块化"
     else
         echo "   ❌ kmod-scsi-core: 未启用"
     fi
+    
+    if [ $storage_enabled -eq 0 ]; then
+        echo "   ❌ USB存储驱动未启用"
+    fi
     echo ""
     
-    # 4. 检测平台专用驱动
-    echo "4. 🟢 平台专用驱动:"
+    # 5. 检测平台专用驱动
+    echo "5. 🟢 平台专用驱动检测:"
     
     # 检测目标平台
     local target=$(grep "^CONFIG_TARGET_" .config | grep "=y" | head -1 | cut -d'_' -f2 | tr '[:upper:]' '[:lower:]')
@@ -3275,7 +3348,7 @@ workflow_step16_verify_usb() {
     case "$target" in
         ipq40xx|ipq806x|qcom)
             echo "   🔧 检测到高通平台"
-            local qcom_drivers=$(grep "^CONFIG_PACKAGE_kmod" .config | grep -E "qcom|ipq40" | grep -E "=y|=m" | sort)
+            local qcom_drivers=$(grep "^CONFIG_PACKAGE_kmod" .config | grep -E "qcom|ipq40|dwc3" | grep -E "=y|=m" | sort)
             if [ -n "$qcom_drivers" ]; then
                 echo "$qcom_drivers" | while read line; do
                     local pkg=$(echo "$line" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
@@ -3289,10 +3362,15 @@ workflow_step16_verify_usb() {
             else
                 echo "   未找到高通专用驱动"
             fi
+            
+            # 检查高通PHY
+            if grep -q "^CONFIG_PHY_QCOM_IPQ4019_USB=y" .config; then
+                echo "   ✅ 高通IPQ4019 USB PHY: 已启用"
+            fi
             ;;
         mediatek|ramips)
             echo "   🔧 检测到联发科平台"
-            local mtk_drivers=$(grep "^CONFIG_PACKAGE_kmod" .config | grep -E "mtk|mediatek" | grep -E "=y|=m" | sort)
+            local mtk_drivers=$(grep "^CONFIG_PACKAGE_kmod" .config | grep -E "mtk|mediatek|xhci-mtk" | grep -E "=y|=m" | sort)
             if [ -n "$mtk_drivers" ]; then
                 echo "$mtk_drivers" | while read line; do
                     local pkg=$(echo "$line" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
@@ -3325,13 +3403,13 @@ workflow_step16_verify_usb() {
             fi
             ;;
         *)
-            echo "   ℹ️ 通用平台，无专用驱动"
+            echo "   ℹ️ 通用平台"
             ;;
     esac
     echo ""
     
-    # 5. 检查重复配置
-    echo "5. 🟢 检查重复配置:"
+    # 6. 检查重复配置
+    echo "6. 🟢 检查重复配置:"
     local duplicates=$(grep "^CONFIG_PACKAGE_kmod-usb" .config | cut -d'=' -f1 | sort | uniq -d)
     if [ -n "$duplicates" ]; then
         echo "$duplicates" | while read dup; do
@@ -3343,8 +3421,8 @@ workflow_step16_verify_usb() {
     fi
     echo ""
     
-    # 6. 统计信息
-    echo "6. 📊 USB驱动统计:"
+    # 7. 统计信息
+    echo "7. 📊 USB驱动统计:"
     local total_usb=$(grep -c "^CONFIG_PACKAGE_kmod-usb" .config)
     local enabled_usb=$(grep -c "^CONFIG_PACKAGE_kmod-usb.*=y" .config)
     local module_usb=$(grep -c "^CONFIG_PACKAGE_kmod-usb.*=m" .config)
@@ -3353,6 +3431,31 @@ workflow_step16_verify_usb() {
     echo "   模块化: $module_usb"
     echo ""
     
+    # 8. USB功能总结
+    echo "8. 📋 USB功能总结:"
+    
+    # USB 2.0
+    if [ $usb2_enabled -eq 1 ]; then
+        echo "   ✅ USB 2.0: 支持"
+    else
+        echo "   ❌ USB 2.0: 不支持"
+    fi
+    
+    # USB 3.0
+    if [ $xhci_enabled -eq 1 ]; then
+        echo "   ✅ USB 3.0: 支持"
+    else
+        echo "   ❌ USB 3.0: 不支持"
+    fi
+    
+    # USB存储
+    if [ $storage_enabled -eq 1 ]; then
+        echo "   ✅ USB存储: 支持"
+    else
+        echo "   ❌ USB存储: 不支持"
+    fi
+    
+    echo ""
     echo "✅ USB配置检查完成"
     log "✅ 步骤16 完成"
 }
