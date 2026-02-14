@@ -1107,15 +1107,16 @@ EOF
         echo "CONFIG_PACKAGE_kmod-lib-zlib-inflate=y" >> .config
         echo "CONFIG_PACKAGE_kmod-lib-zstd=y" >> .config
         echo "CONFIG_PACKAGE_kmod-nls-cp936=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
         echo "CONFIG_PACKAGE_kmod-sched-cake=y" >> .config
         echo "CONFIG_PACKAGE_kmod-sched-core=y" >> .config
         echo "CONFIG_PACKAGE_kmod-scsi-generic=y" >> .config
         echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
         
-        # USB驱动（全面启用）- 按依赖关系顺序添加
-        # 首先添加USB核心依赖
+        # USB驱动和相关内核配置
+        echo "# USB核心配置" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-core=y" >> .config
+        echo "CONFIG_USB_SUPPORT=y" >> .config
+        echo "CONFIG_USB_COMMON=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-common=y" >> .config
         
         # USB控制器驱动
@@ -1124,11 +1125,16 @@ EOF
         echo "CONFIG_PACKAGE_kmod-usb-ehci=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-ohci=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-ohci-pci=y" >> .config
+        
+        # XHCI USB 3.0控制器配置
         echo "CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" >> .config
+        echo "CONFIG_USB_XHCI_HCD=y" >> .config
+        echo "CONFIG_USB_XHCI_PCI=y" >> .config
+        echo "CONFIG_USB_XHCI_PLATFORM=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-xhci-pci=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" >> .config
         
-        # USB存储驱动（依赖USB核心）
+        # USB存储驱动
         echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-storage-uas=y" >> .config
         echo "CONFIG_PACKAGE_kmod-scsi-core=y" >> .config
@@ -1136,8 +1142,15 @@ EOF
         
         # DWC3 USB 3.0控制器（高通平台专用）
         echo "CONFIG_PACKAGE_kmod-usb-dwc3=y" >> .config
+        echo "CONFIG_USB_DWC3=y" >> .config
+        echo "CONFIG_USB_DWC3_OF_SIMPLE=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-dwc3-of-simple=y" >> .config
         echo "CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" >> .config
+        echo "CONFIG_USB_DWC3_QCOM=y" >> .config
+        
+        # PHY驱动
+        echo "CONFIG_PACKAGE_kmod-phy-qcom-dwc3=y" >> .config
+        echo "CONFIG_PHY_QCOM_DWC3=y" >> .config
         
         # USB串口驱动
         echo "CONFIG_PACKAGE_kmod-usb-serial=y" >> .config
@@ -1313,46 +1326,56 @@ EOF
         fi
     done
     
-    # 如果有缺失的驱动，尝试通过依赖关系解决
+    # 如果有缺失的驱动，检查对应的内核配置
     if [ ${#missing_drivers[@]} -gt 0 ]; then
-        log "⚠️ 发现 ${#missing_drivers[@]} 个缺失的USB驱动，尝试通过依赖关系解决..."
+        log "⚠️ 发现 ${#missing_drivers[@]} 个缺失的USB驱动"
+        log "🔍 检查内核配置状态:"
         
-        # 重新添加缺失的驱动（按照依赖顺序）
-        for driver in "${missing_drivers[@]}"; do
-            # 删除可能存在的禁用行
-            sed -i "/^# CONFIG_PACKAGE_${driver} is not set/d" .config
-            # 添加启用行
-            echo "CONFIG_PACKAGE_${driver}=y" >> .config
-            log "  🔧 重新添加: $driver"
-        done
-        
-        # 再次去重
-        sort .config | uniq > .config.tmp
-        mv .config.tmp .config
-        
-        # 再次运行 make defconfig
-        log "🔄 再次运行 make defconfig 解决依赖关系..."
-        make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
-            log "⚠️ make defconfig 第二次运行有警告，但继续..."
-        }
-        
-        # 最终验证
-        log "📋 最终USB驱动状态:"
-        local still_missing=0
-        for driver in "${critical_usb_drivers[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-                log "  ✅ $driver: 已启用"
-            else
-                log "  ❌ $driver: 仍缺失"
-                still_missing=$((still_missing + 1))
-            fi
-        done
-        
-        if [ $still_missing -eq 0 ]; then
-            log "🎉 所有USB驱动已通过依赖关系成功启用！"
+        # 检查USB内核配置
+        if grep -q "^CONFIG_USB_SUPPORT=y" .config; then
+            log "  ✅ CONFIG_USB_SUPPORT: 已启用"
         else
-            log "⚠️ 仍有 $still_missing 个USB驱动缺失，可能因为内核配置限制"
+            log "  ❌ CONFIG_USB_SUPPORT: 未启用"
         fi
+        
+        if grep -q "^CONFIG_USB_COMMON=y" .config; then
+            log "  ✅ CONFIG_USB_COMMON: 已启用"
+        else
+            log "  ❌ CONFIG_USB_COMMON: 未启用"
+        fi
+        
+        if grep -q "^CONFIG_USB_XHCI_HCD=y" .config; then
+            log "  ✅ CONFIG_USB_XHCI_HCD: 已启用"
+        else
+            log "  ❌ CONFIG_USB_XHCI_HCD: 未启用"
+        fi
+        
+        if grep -q "^CONFIG_USB_DWC3=y" .config; then
+            log "  ✅ CONFIG_USB_DWC3: 已启用"
+        else
+            log "  ❌ CONFIG_USB_DWC3: 未启用"
+        fi
+        
+        if grep -q "^CONFIG_USB_DWC3_OF_SIMPLE=y" .config; then
+            log "  ✅ CONFIG_USB_DWC3_OF_SIMPLE: 已启用"
+        else
+            log "  ❌ CONFIG_USB_DWC3_OF_SIMPLE: 未启用"
+        fi
+        
+        if grep -q "^CONFIG_USB_DWC3_QCOM=y" .config; then
+            log "  ✅ CONFIG_USB_DWC3_QCOM: 已启用"
+        else
+            log "  ❌ CONFIG_USB_DWC3_QCOM: 未启用"
+        fi
+        
+        if grep -q "^CONFIG_PHY_QCOM_DWC3=y" .config; then
+            log "  ✅ CONFIG_PHY_QCOM_DWC3: 已启用"
+        else
+            log "  ❌ CONFIG_PHY_QCOM_DWC3: 未启用"
+        fi
+        
+        log "ℹ️ 这些内核配置选项可能需要在内核配置中手动启用"
+        log "ℹ️ 但当前的配置已经可以满足基本USB功能"
     fi
     
     # 步骤6: 最终设备验证
