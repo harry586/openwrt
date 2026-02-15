@@ -302,22 +302,21 @@ get_device_support_summary() {
 get_supported_branches() {
     local branches=()
     
-    # 从配置文件中获取分支信息 - 修复正则表达式避免awk警告
+    # 从配置文件中获取分支信息
     if [ -f "$REPO_ROOT/build-config.conf" ]; then
         while IFS= read -r line; do
-            # 简化正则表达式，避免复杂的转义
-            if [[ "$line" == *"BRANCH_"*":="* ]]; then
-                # 提取分支名
-                local branch_name=$(echo "$line" | sed -n 's/.*BRANCH_[^=]*:="*\([^"]*\)"*.*/\1/p')
-                if [ -n "$branch_name" ]; then
-                    branches+=("$branch_name")
-                fi
-            elif [[ "$line" == *"export BRANCH_"*"="* ]]; then
-                # 提取export行中的分支名
-                local branch_name=$(echo "$line" | sed -n 's/.*export BRANCH_[^=]*="*\([^"]*\)"*.*/\1/p')
-                if [ -n "$branch_name" ]; then
-                    branches+=("$branch_name")
-                fi
+            # 方法1: 匹配 ${BRANCH_XX:=value} 格式
+            if [[ "$line" =~ :?\ \$\{BRANCH_[^=]+:=([^}]+)\} ]]; then
+                local branch_name="${BASH_REMATCH[1]}"
+                branches+=("$branch_name")
+            # 方法2: 匹配 export BRANCH_XX="value" 格式
+            elif [[ "$line" =~ export[[:space:]]+BRANCH_[^=]+=\"([^\"]+)\" ]]; then
+                local branch_name="${BASH_REMATCH[1]}"
+                branches+=("$branch_name")
+            # 方法3: 匹配 export BRANCH_XX=value 格式
+            elif [[ "$line" =~ export[[:space:]]+BRANCH_[^=]+=([^[:space:]]+) ]]; then
+                local branch_name="${BASH_REMATCH[1]}"
+                branches+=("$branch_name")
             fi
         done < "$REPO_ROOT/build-config.conf"
     fi
@@ -325,7 +324,7 @@ get_supported_branches() {
     # 如果配置文件没有，从git远程仓库获取
     if [ ${#branches[@]} -eq 0 ]; then
         if command -v git >/dev/null 2>&1; then
-            # 使用更简单的方式获取远程分支
+            # 获取远程分支
             local remote_branches=$(git ls-remote --heads "${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}" 2>/dev/null | \
                 awk -F'/' '{print $NF}' | grep -E '^(openwrt-|main|master)' | sort -r | head -5)
             
@@ -354,7 +353,7 @@ get_subtargets_by_platform() {
     local platform_path="target/linux/$platform"
     
     if [ -d "$platform_path" ]; then
-        # 查找子平台目录 - 简化find命令
+        # 查找子平台目录
         while IFS= read -r subtarget_dir; do
             if [ -n "$subtarget_dir" ]; then
                 local subtarget=$(basename "$subtarget_dir")
@@ -399,7 +398,7 @@ get_subtargets_by_platform() {
 # 提取子平台的数字系列
 extract_series_number() {
     local subtarget="$1"
-    # 使用更简单的方式提取数字
+    # 提取数字
     local numbers=$(echo "$subtarget" | grep -o '[0-9][0-9]*' | head -1)
     if [ -n "$numbers" ] && [ ${#numbers} -ge 3 ]; then
         # 取前三位
@@ -428,7 +427,7 @@ match_series_pattern() {
         return 0
     fi
     
-    # 检查通配符模式 - 简化处理
+    # 检查通配符模式
     if [[ "$candidate_subtarget" == *"*"* ]]; then
         local base_name=$(echo "$candidate_subtarget" | sed 's/\*//g')
         if [[ "$target_subtarget" == *"$base_name"* ]]; then
@@ -436,7 +435,7 @@ match_series_pattern() {
         fi
     fi
     
-    # 检查通用系列 - 使用case语句
+    # 检查通用系列
     case "$candidate_subtarget" in
         filogic)
             case "$target_subtarget" in
@@ -474,7 +473,6 @@ get_devices_by_subtarget() {
     local subtarget="$3"
     local match_type="${4:-all}"
     
-    local devices=()
     local exact_devices=()
     local series_devices=()
     local wildcard_devices=()
@@ -534,37 +532,70 @@ get_devices_by_subtarget() {
                 esac
             fi
             
-            # 查找设备定义
-            while IFS= read -r mk_file; do
-                if [ -f "$mk_file" ]; then
-                    # 提取设备定义
-                    while IFS= read -r line; do
-                        if [[ "$line" == "define Device/"* ]]; then
-                            local device=$(echo "$line" | sed 's/define Device\///' | awk '{print $1}')
-                            if [ -n "$device" ]; then
-                                case "$path_type" in
-                                    exact)    exact_devices+=("$device") ;;
-                                    series)   series_devices+=("$device") ;;
-                                    wildcard) wildcard_devices+=("$device") ;;
-                                esac
+            # 平替方案1: 使用两个find命令分别查找.mk和Makefile文件
+            local mk_files=""
+            
+            # 查找.mk文件
+            local mk_find=$(find "$path" -maxdepth 2 -type f -name "*.mk" 2>/dev/null)
+            if [ -n "$mk_find" ]; then
+                mk_files="$mk_files"$'\n'"$mk_find"
+            fi
+            
+            # 查找Makefile文件
+            local makefile_find=$(find "$path" -maxdepth 2 -type f -name "Makefile" 2>/dev/null)
+            if [ -n "$makefile_find" ]; then
+                mk_files="$mk_files"$'\n'"$makefile_find"
+            fi
+            
+            # 去重并处理
+            if [ -n "$mk_files" ]; then
+                echo "$mk_files" | sort -u | while read mk_file; do
+                    if [ -f "$mk_file" ]; then
+                        # 提取设备定义
+                        while IFS= read -r line; do
+                            if [[ "$line" == "define Device/"* ]]; then
+                                local device=$(echo "$line" | sed 's/define Device\///' | awk '{print $1}')
+                                if [ -n "$device" ]; then
+                                    case "$path_type" in
+                                        exact)    echo "$device" >> /tmp/exact_devices_$$.tmp ;;
+                                        series)   echo "$device" >> /tmp/series_devices_$$.tmp ;;
+                                        wildcard) echo "$device" >> /tmp/wildcard_devices_$$.tmp ;;
+                                    esac
+                                fi
                             fi
-                        fi
-                    done < "$mk_file"
-                fi
-            done < <(find "$path" -maxdepth 2 -type f \( -name "*.mk" -o -name "Makefile" \) 2>/dev/null | sort -u)
+                        done < "$mk_file"
+                    fi
+                done
+            fi
         fi
     done
+    
+    # 从临时文件读取结果
+    if [ -f /tmp/exact_devices_$$.tmp ]; then
+        exact_devices=($(cat /tmp/exact_devices_$$.tmp | sort -u))
+        rm -f /tmp/exact_devices_$$.tmp
+    fi
+    
+    if [ -f /tmp/series_devices_$$.tmp ]; then
+        series_devices=($(cat /tmp/series_devices_$$.tmp | sort -u))
+        rm -f /tmp/series_devices_$$.tmp
+    fi
+    
+    if [ -f /tmp/wildcard_devices_$$.tmp ]; then
+        wildcard_devices=($(cat /tmp/wildcard_devices_$$.tmp | sort -u))
+        rm -f /tmp/wildcard_devices_$$.tmp
+    fi
     
     # 根据请求的匹配类型返回结果
     case "$match_type" in
         exact)
-            printf '%s\n' "${exact_devices[@]}" | sort -u
+            printf '%s\n' "${exact_devices[@]}"
             ;;
         series)
-            printf '%s\n' "${series_devices[@]}" | sort -u
+            printf '%s\n' "${series_devices[@]}"
             ;;
         wildcard)
-            printf '%s\n' "${wildcard_devices[@]}" | sort -u
+            printf '%s\n' "${wildcard_devices[@]}"
             ;;
         all)
             {
