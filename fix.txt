@@ -1,0 +1,274 @@
+#【build_firmware_main.sh-13】
+generate_config() {
+    local extra_packages=$1
+    local device_override=$2
+    
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    if [ -n "$device_override" ]; then
+        DEVICE="$device_override"
+        log "🔧 使用设备覆盖参数: $DEVICE"
+    fi
+    
+    log "=== 智能配置生成系统（动态映射版） ==="
+    log "版本: $SELECTED_BRANCH"
+    log "目标: $TARGET"
+    log "子目标: $SUBTARGET"
+    log "设备: $DEVICE"
+    log "配置模式: $CONFIG_MODE"
+    log "配置文件目录: $CONFIG_DIR"
+    
+    if [ -z "$DEVICE" ]; then
+        log "❌ 错误: DEVICE变量为空！"
+        env | grep -E "DEVICE|TARGET|SELECTED" || true
+        handle_error "DEVICE变量未设置"
+    fi
+    
+    rm -f .config .config.old .config.bak*
+    log "✅ 已清理旧配置文件"
+    
+    # 动态获取设备平台信息
+    if [ -f "$SUPPORT_SCRIPT" ]; then
+        log "🔍 从support.sh获取设备平台信息..."
+        local platform_info=$("$SUPPORT_SCRIPT" get-platform "$DEVICE" 2>/dev/null)
+        if [ -n "$platform_info" ]; then
+            TARGET=$(echo "$platform_info" | awk '{print $1}')
+            SUBTARGET=$(echo "$platform_info" | awk '{print $2}')
+            log "✅ 从support.sh获取平台信息: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
+            save_env
+        else
+            log "❌ support.sh无法获取设备信息"
+            handle_error "获取设备信息失败"
+        fi
+    else
+        log "❌ support.sh不存在"
+        handle_error "support.sh脚本缺失"
+    fi
+    
+    local device_lower="$DEVICE"
+    local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}"
+    
+    log "🔧 设备配置变量: $device_config=y"
+    
+    cat > .config << EOF
+CONFIG_TARGET_${TARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+${device_config}=y
+EOF
+    
+    log "🔧 基础配置文件内容:"
+    cat .config
+    
+    log "📁 开始合并配置文件..."
+    
+    append_config() {
+        local file=$1
+        if [ -f "$file" ]; then
+            grep -v '^[[:space:]]*#' "$file" | grep -v '^[[:space:]]*$' | grep 'CONFIG_' >> .config
+            log "✅ 加载配置: $(basename "$file")"
+        fi
+    }
+    
+    # 递归搜索配置文件 - 不限层级
+    find_config_file() {
+        local pattern=$1
+        local search_dir=$2
+        find "$search_dir" -type f -name "$pattern" 2>/dev/null | head -1
+    }
+    
+    # 递归搜索包含关键字的配置文件
+    find_config_file_by_content() {
+        local keyword=$1
+        local search_dir=$2
+        find "$search_dir" -type f -name "*.config" -exec grep -l "$keyword" {} \; 2>/dev/null | head -1
+    }
+    
+    # 基础配置
+    append_config "$CONFIG_DIR/base.config"
+    append_config "$CONFIG_DIR/usb-generic.config"
+    
+    # 目标平台配置 - 递归搜索所有子目录
+    local target_config=$(find_config_file "*${TARGET}*.config" "$CONFIG_DIR")
+    if [ -n "$target_config" ]; then
+        log "🔍 找到目标平台配置: $(basename "$target_config")"
+        append_config "$target_config"
+    else
+        # 尝试按内容搜索
+        target_config=$(find_config_file_by_content "TARGET_${TARGET}" "$CONFIG_DIR")
+        if [ -n "$target_config" ]; then
+            log "🔍 通过内容找到目标平台配置: $(basename "$target_config")"
+            append_config "$target_config"
+        else
+            log "⚠️ 未找到目标平台配置文件: $TARGET.config"
+        fi
+    fi
+    
+    # 版本配置 - 递归搜索所有子目录
+    local branch_short="${SELECTED_BRANCH#openwrt-}"
+    local version_config=$(find_config_file "*${branch_short}*.config" "$CONFIG_DIR")
+    if [ -n "$version_config" ]; then
+        log "🔍 找到版本配置: $(basename "$version_config")"
+        append_config "$version_config"
+    else
+        log "⚠️ 未找到版本配置文件: $SELECTED_BRANCH.config"
+    fi
+    
+    # 设备配置 - 递归搜索所有子目录
+    local device_config_file=$(find_config_file "*${DEVICE}*.config" "$CONFIG_DIR")
+    if [ -n "$device_config_file" ]; then
+        log "🔍 找到设备配置: $(basename "$device_config_file")"
+        append_config "$device_config_file"
+    else
+        # 尝试在devices子目录中搜索
+        device_config_file=$(find_config_file "*${DEVICE}*.config" "$CONFIG_DIR/devices")
+        if [ -n "$device_config_file" ]; then
+            log "🔍 在devices目录找到设备配置: $(basename "$device_config_file")"
+            append_config "$device_config_file"
+        else
+            log "⚠️ 未找到设备配置文件: $DEVICE.config"
+        fi
+    fi
+    
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        append_config "$CONFIG_DIR/normal.config"
+    fi
+    
+    # 添加额外包
+    if [ -n "$extra_packages" ]; then
+        log "📦 添加额外包: $extra_packages"
+        echo "$extra_packages" | tr ',' '\n' | while read pkg; do
+            [ -n "$pkg" ] && echo "CONFIG_PACKAGE_$pkg=y" >> .config
+        done
+    fi
+    
+    # TCP BBR
+    if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
+        echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+        echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
+        log "✅ TCP BBR已启用"
+    fi
+    
+    # TurboACC
+    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+        log "✅ TurboACC已启用"
+    fi
+    
+    # ath10k-ct
+    if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
+        sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
+        sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
+        sed -i '/CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/d' .config
+        echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
+        echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+        log "✅ ath10k-ct驱动已强制启用"
+    fi
+    
+    # 第一次去重
+    log "🔄 第一次去重配置..."
+    sort .config | uniq > .config.tmp
+    mv .config.tmp .config
+    
+    # 动态内核配置检测 - 递归搜索内核配置文件
+    log "🔍 动态获取目标平台支持的内核配置..."
+    
+    local kernel_config_file=""
+    local kernel_version=""
+    
+    # 递归搜索内核配置文件
+    if [ -d "target/linux/$TARGET" ]; then
+        kernel_config_file=$(find "target/linux/$TARGET" -maxdepth 2 -type f -name "config-*" 2>/dev/null | head -1)
+        if [ -n "$kernel_config_file" ]; then
+            kernel_version=$(basename "$kernel_config_file" | sed 's/config-//')
+            log "✅ 找到内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
+        fi
+    fi
+    
+    if [ -n "$kernel_config_file" ] && [ -f "$kernel_config_file" ]; then
+        # 提取USB相关配置
+        local usb_configs_file="/tmp/usb_configs_$$.txt"
+        grep -E "^(CONFIG_USB|CONFIG_PHY|CONFIG_DWC|CONFIG_XHCI|CONFIG_MMC|CONFIG_SCSI)" "$kernel_config_file" > "$usb_configs_file" 2>/dev/null || true
+        
+        if [ -s "$usb_configs_file" ]; then
+            sort -u "$usb_configs_file" > "$usb_configs_file.sorted"
+            local config_count=$(wc -l < "$usb_configs_file.sorted")
+            log "找到 $config_count 个USB/存储相关内核配置"
+            
+            local added_count=0
+            while read line; do
+                local config_name=$(echo "$line" | sed 's/^# //g' | cut -d'=' -f1 | cut -d' ' -f1)
+                if ! grep -q "^${config_name}=" .config && ! grep -q "^# ${config_name} is not set" .config; then
+                    if echo "$line" | grep -q "=y$"; then
+                        echo "$line" >> .config
+                        added_count=$((added_count + 1))
+                    elif echo "$line" | grep -q "is not set"; then
+                        echo "$line" >> .config
+                        added_count=$((added_count + 1))
+                    fi
+                fi
+            done < "$usb_configs_file.sorted"
+            
+            log "✅ 添加了 $added_count 个新的内核配置"
+            rm -f "$usb_configs_file" "$usb_configs_file.sorted"
+        fi
+    else
+        log "⚠️ 未找到目标平台 $TARGET 的内核配置文件"
+    fi
+    
+    # 第一次make defconfig
+    log "🔄 第一次运行 make defconfig..."
+    if make defconfig > /tmp/build-logs/defconfig1.log 2>&1; then
+        log "✅ 第一次 make defconfig 成功"
+    else
+        log "❌ 第一次 make defconfig 失败"
+        tail -50 /tmp/build-logs/defconfig1.log
+        handle_error "第一次依赖解决失败"
+    fi
+    
+    # 第二次去重
+    log "🔄 第二次去重配置..."
+    sort .config | uniq > .config.tmp
+    mv .config.tmp .config
+    
+    # 第二次make defconfig
+    log "🔄 第二次运行 make defconfig..."
+    make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || true
+    
+    # 最终设备验证 - 添加调试信息
+    log "🔍 正在验证设备 $device_lower 是否被选中..."
+    
+    log "📋 当前.config中的设备配置:"
+    grep "CONFIG_TARGET_.*DEVICE" .config | head -10 || log "  未找到任何设备配置"
+    
+    if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
+        log "✅ 目标设备已正确启用"
+    else
+        log "❌ 设备未启用"
+        log "期望的设备配置: CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y"
+        log "请检查:"
+        log "  1. support.sh是否正确返回平台信息"
+        log "  2. 设备名是否正确: $DEVICE"
+        log "  3. 目标平台是否正确: $TARGET/$SUBTARGET"
+        handle_error "设备启用失败"
+    fi
+    
+    # 配置统计
+    local total_configs=$(wc -l < .config)
+    local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config)
+    local module_packages=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config)
+    local disabled_packages=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config)
+    
+    log "📊 配置统计:"
+    log "  总配置行数: $total_configs"
+    log "  启用软件包: $enabled_packages"
+    log "  模块化软件包: $module_packages"
+    log "  禁用软件包: $disabled_packages"
+    
+    log "✅ 配置生成完成"
+}
+#【build_firmware_main.sh-13-end】
