@@ -4334,7 +4334,8 @@ main() {
     
     # 只在首次调用主函数时加载配置
     if [ -z "$MAIN_CONFIG_LOADED" ]; then
-        if [ -f "$REPO_ROOT/build-config.conf" ] && [ -z "$CONFIG_LOADED" ]; then
+        # 检查是否已经通过脚本开头加载过
+        if [ -z "$CONFIG_LOADED" ] && [ -f "$REPO_ROOT/build-config.conf" ]; then
             source "$REPO_ROOT/build-config.conf"
             load_build_config
         fi
