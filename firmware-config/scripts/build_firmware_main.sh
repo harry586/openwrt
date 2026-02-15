@@ -3440,7 +3440,7 @@ workflow_step14_pre_build_space_check() {
 workflow_step15_generate_config() {
     local extra_packages="$1"
     
-    log "=== 步骤15: 智能配置生成 ==="
+    log "=== 步骤15: 智能配置生成【修复版】 ==="
     log "当前设备: $DEVICE"
     log "当前目标: $TARGET"
     log "当前子目标: $SUBTARGET"
@@ -3454,13 +3454,30 @@ workflow_step15_generate_config() {
         log "✅ 从环境文件重新加载: DEVICE=$DEVICE, TARGET=$TARGET"
     fi
     
-    # 如果DEVICE为空，尝试从设备名获取
+    # 如果DEVICE为空，尝试从参数获取
     if [ -z "$DEVICE" ] && [ -n "$2" ]; then
         DEVICE="$2"
         log "⚠️ DEVICE为空，使用参数: $DEVICE"
     fi
     
-    generate_config "$extra_packages" "$DEVICE"
+    # 设备名转换 - 针对ac42u的特殊处理
+    local device_for_config="$DEVICE"
+    case "$DEVICE" in
+        ac42u|rt-ac42u)
+            device_for_config="asus_rt-ac42u"
+            log "🔧 设备名转换: $DEVICE -> $device_for_config"
+            ;;
+        acrh17|rt-acrh17)
+            device_for_config="asus_rt-acrh17"
+            log "🔧 设备名转换: $DEVICE -> $device_for_config"
+            ;;
+        *)
+            # 默认转换：转小写，横线变下划线
+            device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+            ;;
+    esac
+    
+    generate_config "$extra_packages" "$device_for_config"
     
     log "✅ 步骤15 完成"
 }
