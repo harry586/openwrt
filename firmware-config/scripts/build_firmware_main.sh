@@ -4471,7 +4471,6 @@ workflow_step30_build_summary() {
     echo ""
     
     if [ -d "$BUILD_DIR/bin/targets" ]; then
-        # 不使用括号，改用多个 -o 连接
         FIRMWARE_COUNT=$(find "$BUILD_DIR/bin/targets" -type f -name "*.bin" -o -name "*.img" 2>/dev/null | wc -l)
         
         echo "📦 构建产物:"
@@ -4490,8 +4489,8 @@ workflow_step30_build_summary() {
         
         if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
             SDK_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
-            # 修复：使用 grep -oE "[0-9]+" 替代 grep -o "[0-9]+"
-            MAJOR_VERSION=$(echo "$SDK_VERSION" | grep -oE "[0-9]+" | head -1)
+            # 使用 awk 替代 grep 来提取第一个数字
+            MAJOR_VERSION=$(echo "$SDK_VERSION" | awk '{match($0, /[0-9]+/); print substr($0, RSTART, RLENGTH)}')
             
             if [ "$MAJOR_VERSION" = "12" ]; then
                 echo "  🎯 SDK GCC: 12.3.0 (OpenWrt 23.05 SDK)"
