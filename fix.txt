@@ -73,32 +73,89 @@ workflow_step23_pre_build_check() {
         fi
     fi
     
-    # 获取当前平台/子平台下的所有设备
+    # 获取当前平台/子平台下的所有设备（包括系列匹配）
     if [ -n "$TARGET" ] && [ -n "$SUBTARGET" ]; then
-        local supported_devices=$(get_devices_by_subtarget "$SELECTED_BRANCH" "$TARGET" "$SUBTARGET" 2>/dev/null | head -20 || echo "")
-        if [ -n "$supported_devices" ]; then
-            local device_count=$(get_devices_by_subtarget "$SELECTED_BRANCH" "$TARGET" "$SUBTARGET" 2>/dev/null | wc -l)
+        echo ""
+        echo "   📱 平台 $TARGET/$SUBTARGET 设备支持检测:"
+        
+        # 获取精确匹配的设备
+        local exact_devices=$(get_devices_by_subtarget "$SELECTED_BRANCH" "$TARGET" "$SUBTARGET" "exact" 2>/dev/null)
+        local exact_count=0
+        if [ -n "$exact_devices" ]; then
+            exact_count=$(echo "$exact_devices" | wc -l)
+        fi
+        
+        # 获取系列匹配的设备（如7981匹配798x）
+        local series_devices=$(get_devices_by_subtarget "$SELECTED_BRANCH" "$TARGET" "$SUBTARGET" "series" 2>/dev/null)
+        local series_count=0
+        if [ -n "$series_devices" ]; then
+            series_count=$(echo "$series_devices" | wc -l)
+        fi
+        
+        # 获取通配匹配的设备
+        local wildcard_devices=$(get_devices_by_subtarget "$SELECTED_BRANCH" "$TARGET" "$SUBTARGET" "wildcard" 2>/dev/null)
+        local wildcard_count=0
+        if [ -n "$wildcard_devices" ]; then
+            wildcard_count=$(echo "$wildcard_devices" | wc -l)
+        fi
+        
+        echo "     📊 精确匹配: $exact_count 个设备"
+        echo "     📊 系列匹配: $series_count 个设备 (如7981匹配798x)"
+        echo "     📊 通配匹配: $wildcard_count 个设备"
+        
+        # 显示精确匹配的设备（当前子平台专用）
+        if [ $exact_count -gt 0 ]; then
             echo ""
-            echo "   📱 平台 $TARGET/$SUBTARGET 支持的设备 ($device_count 个，显示前20个):"
+            echo "     📋 精确匹配设备 (子平台 $SUBTARGET 专用):"
             local found_current=0
-            echo "$supported_devices" | while read device; do
+            echo "$exact_devices" | head -10 | while read device; do
                 if [ "$device" = "$DEVICE" ]; then
-                    echo "     ✅ $device (当前选择)"
+                    echo "       ✅ $device (当前选择)"
                     found_current=1
                 else
-                    echo "     📌 $device"
+                    echo "       📌 $device"
                 fi
             done
-            if [ $found_current -eq 0 ]; then
-                echo ""
-                echo "   ⚠️ 警告: 当前设备 $DEVICE 不在支持的设备列表中!"
-                echo "     这可能是因为设备名不匹配或该设备在此平台/子平台下不支持"
-                warning_count=$((warning_count + 1))
+            if [ $exact_count -gt 10 ]; then
+                echo "       ... 还有 $((exact_count - 10)) 个设备未显示"
             fi
-        else
-            echo ""
-            echo "   ⚠️ 无法获取平台 $TARGET/$SUBTARGET 支持的设备列表"
         fi
+        
+        # 显示系列匹配的设备（如7981在filogic目录下匹配798x）
+        if [ $series_count -gt 0 ]; then
+            echo ""
+            echo "     🔗 系列匹配设备 (适用于 $SUBTARGET 系列):"
+            echo "$series_devices" | head -10 | while read device; do
+                if [ "$device" = "$DEVICE" ] && [ $found_current -eq 0 ]; then
+                    echo "       🔄 $device (当前选择 - 系列匹配)"
+                    found_current=1
+                else
+                    echo "       🔗 $device"
+                fi
+            done
+            if [ $series_count -gt 10 ]; then
+                echo "       ... 还有 $((series_count - 10)) 个设备未显示"
+            fi
+        fi
+        
+        # 如果当前设备在任何匹配中都没找到
+        if [ $found_current -eq 0 ]; then
+            echo ""
+            echo "   ⚠️ 警告: 当前设备 $DEVICE 未在匹配列表中找到!"
+            echo "     可能的原因:"
+            echo "     - 设备名不匹配"
+            echo "     - 设备在此平台/子平台下不支持"
+            echo "     - 需要检查系列匹配规则"
+            warning_count=$((warning_count + 1))
+        fi
+        
+        # 显示匹配统计
+        echo ""
+        echo "     📈 匹配统计:"
+        echo "       精确匹配目录: $exact_count 个设备"
+        echo "       系列匹配目录: $series_count 个设备"
+        echo "       通配匹配目录: $wildcard_count 个设备"
+        echo "       总计: $((exact_count + series_count + wildcard_count)) 个相关设备"
     fi
     
     echo "----------------------------------------"
@@ -374,26 +431,153 @@ get_subtargets_by_platform() {
     printf '%s\n' "${subtargets[@]}" | sort -u 2>/dev/null || echo ""
 }
 
-# 获取指定平台/子平台下的所有设备
+# 提取子平台的数字系列（如从7981提取798）
+extract_series_number() {
+    local subtarget="$1"
+    # 提取数字部分
+    local numbers=$(echo "$subtarget" | grep -oE '[0-9]+' | head -1)
+    if [ -n "$numbers" ] && [ ${#numbers} -ge 3 ]; then
+        # 取前三位作为系列号（如7981 -> 798）
+        echo "${numbers:0:3}"
+    else
+        echo ""
+    fi
+}
+
+# 检查子平台是否匹配系列模式
+match_series_pattern() {
+    local target_subtarget="$1"
+    local candidate_subtarget="$2"
+    
+    # 精确匹配
+    if [ "$target_subtarget" = "$candidate_subtarget" ]; then
+        return 0
+    fi
+    
+    # 提取数字系列
+    local target_series=$(extract_series_number "$target_subtarget")
+    local candidate_series=$(extract_series_number "$candidate_subtarget")
+    
+    # 如果都有数字系列且相同
+    if [ -n "$target_series" ] && [ -n "$candidate_series" ] && [ "$target_series" = "$candidate_series" ]; then
+        return 0
+    fi
+    
+    # 检查是否包含通配符模式（如 mt7981 匹配 mt798*）
+    if [[ "$candidate_subtarget" == *"*"* ]]; then
+        local pattern=$(echo "$candidate_subtarget" | sed 's/\*/.*/g')
+        if [[ "$target_subtarget" =~ $pattern ]]; then
+            return 0
+        fi
+    fi
+    
+    # 检查通用系列（如 filogic 包含 7981、7986 等）
+    case "$candidate_subtarget" in
+        filogic)
+            if [[ "$target_subtarget" =~ ^(filogic|mt7981|mt7986|mt7988|mt798x)$ ]]; then
+                return 0
+            fi
+            ;;
+        mt798x)
+            if [[ "$target_subtarget" =~ ^(mt7981|mt7986|mt7988|mt798x)$ ]]; then
+                return 0
+            fi
+            ;;
+        ipq40xx)
+            if [[ "$target_subtarget" =~ ^(ipq40xx|ipq4018|ipq4019|ipq4028|ipq4029)$ ]]; then
+                return 0
+            fi
+            ;;
+        ipq807x)
+            if [[ "$target_subtarget" =~ ^(ipq807x|ipq8071|ipq8072|ipq8074)$ ]]; then
+                return 0
+            fi
+            ;;
+        bcm53xx)
+            if [[ "$target_subtarget" =~ ^(bcm53xx|bcm4708|bcm4709|bcm47189)$ ]]; then
+                return 0
+            fi
+            ;;
+    esac
+    
+    return 1
+}
+
+# 获取指定平台/子平台下的所有设备（支持系列匹配）
 get_devices_by_subtarget() {
     local branch="$1"
     local platform="$2"
     local subtarget="$3"
+    local match_type="${4:-all}"  # exact, series, wildcard, all
     
     local devices=()
+    local exact_devices=()
+    local series_devices=()
+    local wildcard_devices=()
+    
+    # 定义要搜索的路径
     local search_paths=()
     
-    # 优先在子平台目录中搜索
+    # 1. 精确匹配路径（当前子平台）
     if [ -d "target/linux/$platform/$subtarget" ]; then
-        search_paths+=("target/linux/$platform/$subtarget")
+        search_paths+=("target/linux/$platform/$subtarget:exact")
     fi
     
-    # 同时在平台根目录搜索
-    search_paths+=("target/linux/$platform")
+    # 2. 查找可能的系列匹配路径
+    local target_series=$(extract_series_number "$subtarget")
+    if [ -n "$target_series" ]; then
+        while IFS= read -r candidate_dir; do
+            local candidate=$(basename "$candidate_dir")
+            local candidate_series=$(extract_series_number "$candidate")
+            
+            # 如果系列号相同但不是精确匹配
+            if [ -n "$candidate_series" ] && [ "$candidate_series" = "$target_series" ] && \
+               [ "$candidate" != "$subtarget" ] && [ -d "$candidate_dir" ]; then
+                search_paths+=("$candidate_dir:series")
+            fi
+        done < <(find "target/linux/$platform" -maxdepth 1 -type d ! -path "target/linux/$platform" 2>/dev/null)
+    fi
     
-    for search_path in "${search_paths[@]}"; do
+    # 3. 查找通配符路径（如包含 * 的目录）
+    while IFS= read -r candidate_dir; do
+        local candidate=$(basename "$candidate_dir")
+        if [[ "$candidate" == *"*"* ]] && [ -d "$candidate_dir" ]; then
+            if match_series_pattern "$subtarget" "$candidate"; then
+                search_paths+=("$candidate_dir:wildcard")
+            fi
+        fi
+    done < <(find "target/linux/$platform" -maxdepth 1 -type d ! -path "target/linux/$platform" 2>/dev/null)
+    
+    # 4. 始终包含平台根目录
+    search_paths+=("target/linux/$platform:generic")
+    
+    # 去重搜索路径
+    local unique_paths=()
+    local seen_paths=()
+    for path_entry in "${search_paths[@]}"; do
+        local path="${path_entry%%:*}"
+        if [[ ! " ${seen_paths[@]} " =~ " ${path} " ]]; then
+            unique_paths+=("$path_entry")
+            seen_paths+=("$path")
+        fi
+    done
+    
+    # 遍历所有搜索路径查找设备
+    for path_entry in "${unique_paths[@]}"; do
+        local search_path="${path_entry%%:*}"
+        local path_type="${path_entry##*:}"
+        
         if [ ! -d "$search_path" ]; then
             continue
+        fi
+        
+        # 根据匹配类型过滤
+        if [ "$match_type" != "all" ]; then
+            case "$match_type" in
+                exact)   [ "$path_type" != "exact" ] && continue ;;
+                series)  [ "$path_type" != "series" ] && continue ;;
+                wildcard)[ "$path_type" != "wildcard" ] && continue ;;
+            esac
         fi
         
         # 查找所有包含设备定义的mk文件
@@ -406,15 +590,76 @@ get_devices_by_subtarget() {
                     
                     if [ -n "$file_devices" ]; then
                         while IFS= read -r device; do
-                            devices+=("$device")
+                            case "$path_type" in
+                                exact)    exact_devices+=("$device") ;;
+                                series)   series_devices+=("$device") ;;
+                                wildcard) wildcard_devices+=("$device") ;;
+                                generic)  [[ ! " ${exact_devices[@]} ${series_devices[@]} ${wildcard_devices[@]} " =~ " ${device} " ]] && \
+                                          wildcard_devices+=("$device") ;;
+                            esac
                         done <<< "$file_devices"
                     fi
                 fi
             fi
-        done < <(find "$search_path" -type f -name "*.mk" -o -name "Makefile" 2>/dev/null | sort -u)
+        done < <(find "$search_path" -maxdepth 2 -type f -name "*.mk" -o -name "Makefile" 2>/dev/null | sort -u)
     done
     
-    # 去重并返回
-    printf '%s\n' "${devices[@]}" | sort -u 2>/dev/null | head -20 || echo ""
+    # 根据请求的匹配类型返回结果
+    case "$match_type" in
+        exact)
+            printf '%s\n' "${exact_devices[@]}" | sort -u
+            ;;
+        series)
+            printf '%s\n' "${series_devices[@]}" | sort -u
+            ;;
+        wildcard)
+            printf '%s\n' "${wildcard_devices[@]}" | sort -u
+            ;;
+        all)
+            # 返回所有设备，但标记来源
+            {
+                printf '%s\n' "${exact_devices[@]}"
+                printf '%s\n' "${series_devices[@]}"
+                printf '%s\n' "${wildcard_devices[@]}"
+            } | sort -u
+            ;;
+    esac
+}
+
+# 获取设备的完整支持信息（包括系列匹配）
+get_device_full_support() {
+    local device_name="$1"
+    local platform="$2"
+    local subtarget="$3"
+    
+    local support_info=""
+    local match_level="none"  # none, exact, series, wildcard
+    
+    # 检查精确匹配
+    local exact_devices=$(get_devices_by_subtarget "$SELECTED_BRANCH" "$platform" "$subtarget" "exact" 2>/dev/null)
+    if echo "$exact_devices" | grep -q "^$device_name$"; then
+        match_level="exact"
+        support_info="✅ 精确匹配 (子平台 $subtarget 专用)"
+    fi
+    
+    # 检查系列匹配
+    if [ "$match_level" = "none" ]; then
+        local series_devices=$(get_devices_by_subtarget "$SELECTED_BRANCH" "$platform" "$subtarget" "series" 2>/dev/null)
+        if echo "$series_devices" | grep -q "^$device_name$"; then
+            match_level="series"
+            support_info="🔄 系列匹配 (适用于 $subtarget 系列)"
+        fi
+    fi
+    
+    # 检查通配匹配
+    if [ "$match_level" = "none" ]; then
+        local wildcard_devices=$(get_devices_by_subtarget "$SELECTED_BRANCH" "$platform" "$subtarget" "wildcard" 2>/dev/null)
+        if echo "$wildcard_devices" | grep -q "^$device_name$"; then
+            match_level="wildcard"
+            support_info="🔗 通配匹配 (通过通配规则)"
+        fi
+    fi
+    
+    echo "$match_level|$support_info"
 }
 #【build_firmware_main.sh-37-end】
