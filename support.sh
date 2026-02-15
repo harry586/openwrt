@@ -22,7 +22,7 @@ CONFIG_DIR="$REPO_ROOT/firmware-config/config"
 # 格式: DEVICES["设备名称"]="目标平台 子目标"
 declare -A DEVICES
 DEVICES["ac42u"]="ipq40xx generic"
-DEVICES["cmcc_rax3000m"]="mediatek filogic" 
+DEVICES["cmcc_rax3000m"]="mediatek mt7981" 
 DEVICES["netgear_3800"]="ath79 generic"
 
 # OpenWrt官方SDK下载信息
@@ -33,12 +33,12 @@ declare -A SDK_INFO
 init_sdk_info() {
     # OpenWrt 21.02 SDK
     SDK_INFO["ipq40xx/generic/21.02"]="https://downloads.openwrt.org/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
-    SDK_INFO["mediatek/filogic/21.02"]=""
+    SDK_INFO["mediatek/mt7981/21.02"]=""
     SDK_INFO["ath79/generic/21.02"]="https://downloads.openwrt.org/releases/21.02.7/targets/ath79/generic/openwrt-sdk-21.02.7-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
     
     # OpenWrt 23.05 SDK
     SDK_INFO["ipq40xx/generic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/ipq40xx/generic/openwrt-sdk-23.05.5-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
-    SDK_INFO["mediatek/filogic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/mediatek/filogic/openwrt-sdk-23.05.5-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+    SDK_INFO["mediatek/mt7981/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/mediatek/filogic/openwrt-sdk-23.05.5-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
     SDK_INFO["ath79/generic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/ath79/generic/openwrt-sdk-23.05.5-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
     
     # 通用SDK（如果找不到精确匹配）
