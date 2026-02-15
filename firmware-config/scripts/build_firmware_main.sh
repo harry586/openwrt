@@ -1063,11 +1063,18 @@ EOF
         fi
     }
     
-    # 递归搜索配置文件
+    # 递归搜索配置文件 - 不限层级
     find_config_file() {
         local pattern=$1
         local search_dir=$2
         find "$search_dir" -type f -name "$pattern" 2>/dev/null | head -1
+    }
+    
+    # 递归搜索包含关键字的配置文件
+    find_config_file_by_content() {
+        local keyword=$1
+        local search_dir=$2
+        find "$search_dir" -type f -name "*.config" -exec grep -l "$keyword" {} ; 2>/dev/null | head -1
     }
     
     # 基础配置
@@ -1080,7 +1087,14 @@ EOF
         log "🔍 找到目标平台配置: $(basename "$target_config")"
         append_config "$target_config"
     else
-        log "⚠️ 未找到目标平台配置文件: $TARGET.config"
+        # 尝试按内容搜索
+        target_config=$(find_config_file_by_content "TARGET_${TARGET}" "$CONFIG_DIR")
+        if [ -n "$target_config" ]; then
+            log "🔍 通过内容找到目标平台配置: $(basename "$target_config")"
+            append_config "$target_config"
+        else
+            log "⚠️ 未找到目标平台配置文件: $TARGET.config"
+        fi
     fi
     
     # 版本配置 - 递归搜索所有子目录
@@ -1099,7 +1113,14 @@ EOF
         log "🔍 找到设备配置: $(basename "$device_config_file")"
         append_config "$device_config_file"
     else
-        log "⚠️ 未找到设备配置文件: $DEVICE.config"
+        # 尝试在devices子目录中搜索
+        device_config_file=$(find_config_file "*${DEVICE}*.config" "$CONFIG_DIR/devices")
+        if [ -n "$device_config_file" ]; then
+            log "🔍 在devices目录找到设备配置: $(basename "$device_config_file")"
+            append_config "$device_config_file"
+        else
+            log "⚠️ 未找到设备配置文件: $DEVICE.config"
+        fi
     fi
     
     if [ "$CONFIG_MODE" = "normal" ]; then
@@ -1147,30 +1168,30 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 动态内核配置检测
+    # 动态内核配置检测 - 递归搜索内核配置文件
     log "🔍 动态获取目标平台支持的内核配置..."
     
     local kernel_config_file=""
     local kernel_version=""
     
-    for ver in 6.6 6.1 5.15 5.10 5.4; do
-        if [ -f "target/linux/$TARGET/config-$ver" ]; then
-            kernel_config_file="target/linux/$TARGET/config-$ver"
-            kernel_version="$ver"
-            break
+    # 递归搜索内核配置文件
+    if [ -d "target/linux/$TARGET" ]; then
+        kernel_config_file=$(find "target/linux/$TARGET" -maxdepth 2 -type f -name "config-*" 2>/dev/null | head -1)
+        if [ -n "$kernel_config_file" ]; then
+            kernel_version=$(basename "$kernel_config_file" | sed 's/config-//')
+            log "✅ 找到内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
         fi
-    done
+    fi
     
     if [ -n "$kernel_config_file" ] && [ -f "$kernel_config_file" ]; then
-        log "✅ 找到内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
-        
+        # 提取USB相关配置
         local usb_configs_file="/tmp/usb_configs_$$.txt"
-        grep -E "^(CONFIG_USB|CONFIG_PHY|CONFIG_DWC|CONFIG_XHCI)" "$kernel_config_file" > "$usb_configs_file" 2>/dev/null || true
+        grep -E "^(CONFIG_USB|CONFIG_PHY|CONFIG_DWC|CONFIG_XHCI|CONFIG_MMC|CONFIG_SCSI)" "$kernel_config_file" > "$usb_configs_file" 2>/dev/null || true
         
         if [ -s "$usb_configs_file" ]; then
             sort -u "$usb_configs_file" > "$usb_configs_file.sorted"
             local config_count=$(wc -l < "$usb_configs_file.sorted")
-            log "找到 $config_count 个USB相关内核配置"
+            log "找到 $config_count 个USB/存储相关内核配置"
             
             local added_count=0
             while read line; do
