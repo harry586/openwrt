@@ -3229,63 +3229,87 @@ find_device_definition_file() {
     fi
     
     echo "   🔍 开始搜索设备 $device_name 的定义文件..."
+    echo "   📁 搜索路径: $base_path"
     
+    local file_count=0
     while IFS= read -r mk_file; do
+        file_count=$((file_count + 1))
         if [ -f "$mk_file" ]; then
             local score=0
             local matched=0
             local match_desc=""
             
-            # 检查是否包含设备定义
-            if grep -q "define Device/$device_name" "$mk_file" 2>/dev/null; then
+            # 读取文件内容
+            local file_content=$(cat "$mk_file" 2>/dev/null)
+            
+            # 检查是否包含设备定义 - 多种匹配模式
+            if echo "$file_content" | grep -q "define Device[/=_]$device_name" 2>/dev/null; then
                 score=$((score + 100))
                 matched=1
                 match_desc="精确设备定义"
-            elif grep -q "Device/$device_name" "$mk_file" 2>/dev/null; then
+                echo "        ✅ 找到精确设备定义: define Device/$device_name"
+            elif echo "$file_content" | grep -q "define Device.*$device_name" 2>/dev/null; then
+                score=$((score + 90))
+                matched=1
+                match_desc="设备定义包含设备名"
+                echo "        ✅ 找到设备定义包含: $device_name"
+            elif echo "$file_content" | grep -q "Device[/=_]$device_name" 2>/dev/null; then
                 score=$((score + 80))
                 matched=1
                 match_desc="设备引用"
-            elif grep -q "DEVICE_MODEL.*$device_name" "$mk_file" 2>/dev/null; then
-                score=$((score + 60))
+                echo "        ✅ 找到设备引用: Device/$device_name"
+            elif echo "$file_content" | grep -q "DEVICE_MODEL.*$device_name" 2>/dev/null; then
+                score=$((score + 70))
                 matched=1
                 match_desc="设备型号匹配"
-            elif grep -qi "$device_name" "$mk_file" 2>/dev/null; then
-                local match_count=$(grep -io "$device_name" "$mk_file" 2>/dev/null | wc -l)
-                score=$((score + match_count * 10))
+                echo "        ✅ 找到设备型号: $device_name"
+            elif echo "$file_content" | grep -q "DEVICE_TITLE.*$device_name" 2>/dev/null; then
+                score=$((score + 60))
+                matched=1
+                match_desc="设备标题匹配"
+                echo "        ✅ 找到设备标题包含: $device_name"
+            elif echo "$file_content" | grep -q "DEVICE_DTS.*$device_name" 2>/dev/null; then
+                score=$((score + 50))
+                matched=1
+                match_desc="DTS匹配"
+                echo "        ✅ 找到DTS包含: $device_name"
+            elif echo "$file_content" | grep -qi "$device_name" 2>/dev/null; then
+                local match_count=$(echo "$file_content" | grep -io "$device_name" 2>/dev/null | wc -l)
+                score=$((score + match_count * 5))
                 if [ $match_count -gt 0 ]; then
                     matched=1
                     match_desc="模糊匹配 ($match_count 次)"
+                    echo "        🔍 找到模糊匹配: $device_name (出现 $match_count 次)"
                 fi
             fi
             
             # 根据文件路径加分
             if [[ "$mk_file" == *"/image/"* ]]; then
-                score=$((score + 50))
-                match_desc="$match_desc + image目录"
+                score=$((score + 30))
+                echo "        📍 image目录 +30"
             fi
             
             if [[ "$mk_file" == *"/$platform/"*"target.mk" ]]; then
-                score=$((score + 30))
-                match_desc="$match_desc + target.mk"
+                score=$((score + 20))
+                echo "        📍 target.mk +20"
             fi
             
             # 根据文件内容加分
-            if grep -q "DEVICE_PACKAGES" "$mk_file" 2>/dev/null; then
-                score=$((score + 20))
-            fi
-            
-            if grep -q "DEVICE_DTS" "$mk_file" 2>/dev/null; then
-                score=$((score + 20))
-            fi
-            
-            if grep -q "KERNEL_PATCHVER" "$mk_file" 2>/dev/null; then
+            if echo "$file_content" | grep -q "DEVICE_PACKAGES" 2>/dev/null; then
                 score=$((score + 15))
+            fi
+            
+            if echo "$file_content" | grep -q "DEVICE_DTS" 2>/dev/null; then
+                score=$((score + 15))
+            fi
+            
+            if echo "$file_content" | grep -q "KERNEL" 2>/dev/null; then
+                score=$((score + 10))
             fi
             
             if [ $matched -eq 1 ]; then
                 found_files+=("$mk_file|$score|$match_desc")
-                echo "     📍 $mk_file"
-                echo "       匹配: $match_desc, 得分: $score"
+                echo "       总分: $score"
                 
                 if [ $score -gt $best_score ]; then
                     best_score=$score
@@ -3293,12 +3317,39 @@ find_device_definition_file() {
                 fi
             fi
         fi
-    done < <(find "$base_path" -type f -name "*.mk" 2>/dev/null)
+    done < <(find "$base_path" -type f -name "*.mk" 2>/dev/null | sort)
+    
+    echo "   📊 共检查 $file_count 个.mk文件"
     
     if [ -n "$best_file" ]; then
         echo "   🏆 最佳匹配文件 (得分: $best_score): $best_file"
+        
+        # 显示文件中的设备定义
+        echo ""
+        echo "   📋 文件中的设备定义:"
+        local in_device=0
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^define[[:space:]]+Device/ ]]; then
+                in_device=1
+                echo "     $line"
+            elif [[ "$line" =~ ^endef ]] && [ $in_device -eq 1 ]; then
+                echo "     $line"
+                in_device=0
+            elif [ $in_device -eq 1 ]; then
+                echo "     $line"
+            fi
+        done < "$best_file"
     else
         echo "   ❌ 未找到设备 $device_name 的定义文件"
+        
+        # 显示找到的所有设备名
+        echo ""
+        echo "   📋 文件中包含的设备名:"
+        find "$base_path" -type f -name "*.mk" 2>/dev/null | while read f; do
+            grep -h "^define Device/" "$f" 2>/dev/null | sed 's/define Device///' | while read dev; do
+                echo "     - $dev (在 $(basename "$f") 中)"
+            done
+        done | sort -u
     fi
     
     echo "$best_file"
@@ -3316,15 +3367,21 @@ extract_device_config() {
     local in_device_block=0
     local device_block=""
     local current_device=""
+    local found=0
+    
+    echo "   📖 正在从 $(basename "$device_file") 中提取设备 $device_name 的配置..."
     
     while IFS= read -r line; do
         # 检查是否是设备定义开始
-        if [[ "$line" =~ ^define[[:space:]]+Device/([^[:space:]]+) ]]; then
+        if [[ "$line" =~ ^define[[:space:]]+Device/(.+) ]]; then
             current_device="${BASH_REMATCH[1]}"
-            if [ "$current_device" = "$device_name" ]; then
+            # 检查是否匹配设备名（多种匹配方式）
+            if [[ "$current_device" == *"$device_name"* ]] || [[ "$device_name" == *"$current_device"* ]]; then
                 in_device_block=1
                 device_block="$line"$'
 '
+                found=1
+                echo "     找到匹配设备: $current_device"
             else
                 in_device_block=0
             fi
@@ -3337,7 +3394,17 @@ extract_device_config() {
         fi
     done < "$device_file"
     
-    echo "$device_block"
+    if [ $found -eq 1 ]; then
+        echo "   ✅ 成功提取设备配置"
+        echo "$device_block"
+    else
+        echo "   ⚠️ 在文件中未找到设备 $device_name 的配置"
+        echo ""
+        echo "   文件中包含的设备:"
+        grep "^define Device/" "$device_file" 2>/dev/null | sed 's/define Device///' | while read dev; do
+            echo "     - $dev"
+        done
+    fi
 }
 
 # 从设备定义块中提取具体配置值
@@ -3345,10 +3412,10 @@ extract_config_value() {
     local device_block="$1"
     local key="$2"
     
-    echo "$device_block" | grep -E "^[[:space:]]*$key[[:space:]]*:?=" | head -1 | sed 's/.*=[[:space:]]*//'
+    echo "$device_block" | grep -E "^[[:space:]]*$key[[:space:]]*:?=" | head -1 | sed 's/.*=[[:space:]]*//' | tr -d '"'
 }
 
-# 获取设备支持信息摘要（修复版）
+# 获取设备支持信息摘要
 get_device_support_summary() {
     local device_name="$1"
     local platform="$2"
@@ -3389,14 +3456,6 @@ get_device_support_summary() {
             [ -n "$packages" ] && echo "   📦 默认包: $packages"
             [ -n "$dts" ] && echo "   🔧 DTS: $dts"
             [ -n "$kernel_ver" ] && echo "   🐧 内核版本: $kernel_ver"
-        else
-            echo "   ⚠️ 在文件中未找到设备 $device_name 的配置块"
-            
-            # 显示文件中所有设备
-            echo "   文件中包含的设备:"
-            grep "^define Device/" "$device_file" 2>/dev/null | sed 's/define Device///' | while read dev; do
-                echo "     - $dev"
-            done
         fi
         
         return 0
@@ -3406,7 +3465,7 @@ get_device_support_summary() {
     fi
 }
 
-# 从设备定义文件中提取内核版本（精确匹配指定设备）
+# 从设备定义文件中提取内核版本
 extract_kernel_version_from_device_file() {
     local device_file="$1"
     local device_name="$2"
