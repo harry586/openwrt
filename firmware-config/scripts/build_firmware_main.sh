@@ -4269,7 +4269,7 @@ workflow_step22_integrate_custom_files() {
 # ============================================
 #【build_firmware_main.sh-37】
 workflow_step23_pre_build_check() {
-    log "=== 步骤23: 前置错误检查（动态检测版） ==="
+    log "=== 步骤23: 前置错误检查（调用动态查询模块） ==="
     
     set -e
     trap 'echo "❌ 步骤23 失败，退出代码: $?"; exit 1' ERR
@@ -4296,6 +4296,25 @@ workflow_step23_pre_build_check() {
     
     local error_count=0
     local warning_count=0
+    
+    # =========================================================================
+    # 调用动态查询模块获取设备支持信息
+    # =========================================================================
+    echo "0. 🔍 动态获取设备支持信息:"
+    echo "----------------------------------------"
+    
+    # 调用步骤15中的动态查询函数
+    local device_support_info=$(get_device_support_summary "$TARGET" "$SUBTARGET" "$DEVICE" 2>/dev/null || echo "")
+    
+    if [ -n "$device_support_info" ]; then
+        echo "$device_support_info"
+    else
+        echo "   ⚠️ 无法获取设备支持信息"
+        warning_count=$((warning_count + 1))
+    fi
+    
+    echo "----------------------------------------"
+    echo ""
     
     # 1. 检查配置文件
     echo "1. ✅ 配置文件检查:"
@@ -4446,6 +4465,30 @@ workflow_step23_pre_build_check() {
     echo "   📊 型号: $cpu_model"
     echo ""
     
+    # 8. 检查分支兼容性
+    echo "8. ✅ 分支兼容性检查:"
+    local supported_branches=$(get_supported_branches 2>/dev/null || echo "")
+    if [ -n "$supported_branches" ]; then
+        if echo "$supported_branches" | grep -q "^$SELECTED_BRANCH$"; then
+            echo "   ✅ 当前分支 $SELECTED_BRANCH 在支持列表中"
+        else
+            echo "   ⚠️ 当前分支 $SELECTED_BRANCH 不在支持列表中"
+            warning_count=$((warning_count + 1))
+        fi
+    fi
+    echo ""
+    
+    # 9. 检查内核配置文件
+    echo "9. ✅ 内核配置文件检查:"
+    local kernel_configs=$(find "target/linux/$TARGET" -type f -name "config-*" 2>/dev/null | wc -l)
+    if [ $kernel_configs -gt 0 ]; then
+        echo "   ✅ 找到 $kernel_configs 个内核配置文件"
+    else
+        echo "   ⚠️ 未找到内核配置文件"
+        warning_count=$((warning_count + 1))
+    fi
+    echo ""
+    
     # 汇总
     echo "========================================"
     if [ $error_count -gt 0 ]; then
@@ -4459,6 +4502,398 @@ workflow_step23_pre_build_check() {
     echo "========================================"
     
     log "✅ 步骤23 完成"
+}
+
+# ============================================================================
+# 设备支持信息摘要函数（在步骤15中使用）
+# ============================================================================
+get_device_support_summary() {
+    local platform="$1"
+    local subtarget="$2"
+    local device="$3"
+    
+    local summary=""
+    
+    # 获取支持的分支
+    local branches=$(get_supported_branches 2>/dev/null | head -3 | tr '
+' ' ' || echo "未知")
+    summary="${summary}   📦 支持的分支: $branches
+"
+    
+    # 获取子平台信息
+    local subtargets=$(get_subtargets_by_platform "$SELECTED_BRANCH" "$platform" 2>/dev/null | head -5 | tr '
+' ' ' || echo "未知")
+    summary="${summary}   📁 平台 $platform 支持的子平台: $subtargets
+"
+    
+    # 获取设备匹配信息
+    local match_level="none"
+    local match_info=""
+    
+    # 检查精确匹配
+    local exact_devices=$(get_devices_by_subtarget "$SELECTED_BRANCH" "$platform" "$subtarget" "exact" 2>/dev/null)
+    if echo "$exact_devices" | grep -q "^$device$"; then
+        match_level="exact"
+        match_info="✅ 精确匹配 (子平台 $subtarget 专用)"
+    fi
+    
+    # 检查系列匹配
+    if [ "$match_level" = "none" ]; then
+        local series_devices=$(get_devices_by_subtarget "$SELECTED_BRANCH" "$platform" "$subtarget" "series" 2>/dev/null)
+        if echo "$series_devices" | grep -q "^$device$"; then
+            match_level="series"
+            match_info="🔄 系列匹配 (适用于 $subtarget 系列)"
+        fi
+    fi
+    
+    # 检查通配匹配
+    if [ "$match_level" = "none" ]; then
+        local wildcard_devices=$(get_devices_by_subtarget "$SELECTED_BRANCH" "$platform" "$subtarget" "wildcard" 2>/dev/null)
+        if echo "$wildcard_devices" | grep -q "^$device$"; then
+            match_level="wildcard"
+            match_info="🔗 通配匹配 (通过通配规则)"
+        fi
+    fi
+    
+    if [ "$match_level" != "none" ]; then
+        summary="${summary}   📱 设备匹配状态: $match_info
+"
+    else
+        summary="${summary}   ⚠️ 设备 $device 未在匹配列表中找到
+"
+    fi
+    
+    # 获取设备数量统计
+    local exact_count=$(get_devices_by_subtarget "$SELECTED_BRANCH" "$platform" "$subtarget" "exact" 2>/dev/null | wc -l)
+    local series_count=$(get_devices_by_subtarget "$SELECTED_BRANCH" "$platform" "$subtarget" "series" 2>/dev/null | wc -l)
+    local wildcard_count=$(get_devices_by_subtarget "$SELECTED_BRANCH" "$platform" "$subtarget" "wildcard" 2>/dev/null | wc -l)
+    
+    summary="${summary}   📊 匹配统计: 精确=${exact_count}, 系列=${series_count}, 通配=${wildcard_count}
+"
+    
+    printf "%b" "$summary"
+}
+
+# 获取所有支持的分支列表 - 修复正则表达式错误
+get_supported_branches() {
+    local branches=()
+    
+    # 从配置文件中获取分支信息 - 使用简单的grep和sed，避免复杂的正则表达式
+    if [ -f "$REPO_ROOT/build-config.conf" ]; then
+        # 方法1: 匹配 ${BRANCH_XX:=value} 格式
+        while IFS= read -r line; do
+            if [[ "$line" == *"BRANCH_"*":="* ]]; then
+                # 提取分支名 - 使用sed替代复杂的正则匹配
+                local branch_name=$(echo "$line" | sed -n 's/.*BRANCH_[^=]*:="*([^"]*)"*.*//p')
+                if [ -n "$branch_name" ]; then
+                    branches+=("$branch_name")
+                fi
+            fi
+        done < "$REPO_ROOT/build-config.conf"
+        
+        # 方法2: 匹配 export BRANCH_XX="value" 格式
+        while IFS= read -r line; do
+            if [[ "$line" == *"export BRANCH_"*"="* ]]; then
+                local branch_name=$(echo "$line" | sed -n 's/.*export BRANCH_[^=]*="*([^"]*)"*.*//p')
+                if [ -n "$branch_name" ]; then
+                    branches+=("$branch_name")
+                fi
+            fi
+        done < "$REPO_ROOT/build-config.conf"
+    fi
+    
+    # 如果配置文件没有，从git远程仓库获取
+    if [ ${#branches[@]} -eq 0 ]; then
+        if command -v git >/dev/null 2>&1; then
+            # 获取远程分支
+            local remote_branches=$(git ls-remote --heads "${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}" 2>/dev/null |                 awk -F'/' '{print $NF}' | grep -E '^(openwrt-|main|master)' | sort -r | head -5)
+            
+            if [ -n "$remote_branches" ]; then
+                while IFS= read -r branch; do
+                    branches+=("$branch")
+                done <<< "$remote_branches"
+            fi
+        fi
+    fi
+    
+    # 去重并返回
+    if [ ${#branches[@]} -gt 0 ]; then
+        printf '%s
+' "${branches[@]}" | sort -u 2>/dev/null
+    else
+        echo "openwrt-23.05 openwrt-21.02"
+    fi
+}
+
+# 获取指定平台下的所有子平台
+get_subtargets_by_platform() {
+    local branch="$1"
+    local platform="$2"
+    
+    local subtargets=()
+    local platform_path="target/linux/$platform"
+    
+    if [ -d "$platform_path" ]; then
+        # 查找子平台目录
+        while IFS= read -r subtarget_dir; do
+            if [ -n "$subtarget_dir" ]; then
+                local subtarget=$(basename "$subtarget_dir")
+                # 过滤掉非子平台目录
+                case "$subtarget" in
+                    image|base-files|config|patches|files|Makefile)
+                        continue
+                        ;;
+                    *)
+                        if [ -f "$subtarget_dir/target.mk" ] || [ -f "$subtarget_dir/Makefile" ]; then
+                            subtargets+=("$subtarget")
+                        fi
+                        ;;
+                esac
+            fi
+        done < <(find "$platform_path" -maxdepth 1 -type d ! -path "$platform_path" 2>/dev/null | sort)
+        
+        # 如果没有子平台目录，检查Makefile
+        if [ ${#subtargets[@]} -eq 0 ] && [ -f "$platform_path/Makefile" ]; then
+            # 从Makefile中提取SUBTARGET定义
+            local default_subtarget=$(grep -E '^[[:space:]]*SUBTARGETS?[[:space:]]*:?=' "$platform_path/Makefile" 2>/dev/null |                 sed 's/.*=[[:space:]]*//' | tr -d ' ' | tr ',' ' ')
+            
+            if [ -n "$default_subtarget" ]; then
+                for st in $default_subtarget; do
+                    [ -n "$st" ] && subtargets+=("$st")
+                done
+            else
+                subtargets+=("generic")
+            fi
+        fi
+    fi
+    
+    # 返回结果
+    if [ ${#subtargets[@]} -gt 0 ]; then
+        printf '%s
+' "${subtargets[@]}" | sort -u 2>/dev/null | head -10
+    else
+        echo "generic"
+    fi
+}
+
+# 提取子平台的数字系列
+extract_series_number() {
+    local subtarget="$1"
+    # 提取数字
+    local numbers=$(echo "$subtarget" | grep -o '[0-9][0-9]*' | head -1)
+    if [ -n "$numbers" ] && [ ${#numbers} -ge 3 ]; then
+        # 取前三位
+        echo "$numbers" | cut -c1-3
+    else
+        echo ""
+    fi
+}
+
+# 检查子平台是否匹配系列模式
+match_series_pattern() {
+    local target_subtarget="$1"
+    local candidate_subtarget="$2"
+    
+    # 精确匹配
+    if [ "$target_subtarget" = "$candidate_subtarget" ]; then
+        return 0
+    fi
+    
+    # 提取数字系列
+    local target_series=$(extract_series_number "$target_subtarget")
+    local candidate_series=$(extract_series_number "$candidate_subtarget")
+    
+    # 如果都有数字系列且相同
+    if [ -n "$target_series" ] && [ -n "$candidate_series" ] && [ "$target_series" = "$candidate_series" ]; then
+        return 0
+    fi
+    
+    # 检查通配符模式
+    if [[ "$candidate_subtarget" == *"*"* ]]; then
+        local base_name=$(echo "$candidate_subtarget" | sed 's/*//g')
+        if [[ "$target_subtarget" == *"$base_name"* ]]; then
+            return 0
+        fi
+    fi
+    
+    # 检查通用系列
+    case "$candidate_subtarget" in
+        filogic)
+            case "$target_subtarget" in
+                filogic|mt7981|mt7986|mt7988|mt798x) return 0 ;;
+                *) ;;
+            esac
+            ;;
+        mt798x)
+            case "$target_subtarget" in
+                mt7981|mt7986|mt7988|mt798x) return 0 ;;
+                *) ;;
+            esac
+            ;;
+        ipq40xx)
+            case "$target_subtarget" in
+                ipq40xx|ipq4018|ipq4019|ipq4028|ipq4029) return 0 ;;
+                *) ;;
+            esac
+            ;;
+        ipq807x)
+            case "$target_subtarget" in
+                ipq807x|ipq8071|ipq8072|ipq8074) return 0 ;;
+                *) ;;
+            esac
+            ;;
+    esac
+    
+    return 1
+}
+
+# 获取指定平台/子平台下的所有设备
+get_devices_by_subtarget() {
+    local branch="$1"
+    local platform="$2"
+    local subtarget="$3"
+    local match_type="${4:-all}"
+    
+    local exact_devices=()
+    local series_devices=()
+    local wildcard_devices=()
+    
+    # 定义要搜索的路径
+    local search_paths=""
+    
+    # 1. 精确匹配路径
+    if [ -d "target/linux/$platform/$subtarget" ]; then
+        search_paths="$search_paths target/linux/$platform/$subtarget:exact"
+    fi
+    
+    # 2. 系列匹配路径
+    local target_series=$(extract_series_number "$subtarget")
+    if [ -n "$target_series" ]; then
+        while IFS= read -r candidate_dir; do
+            if [ -n "$candidate_dir" ]; then
+                local candidate=$(basename "$candidate_dir")
+                local candidate_series=$(extract_series_number "$candidate")
+                
+                if [ -n "$candidate_series" ] && [ "$candidate_series" = "$target_series" ] &&                    [ "$candidate" != "$subtarget" ] && [ -d "$candidate_dir" ]; then
+                    search_paths="$search_paths $candidate_dir:series"
+                fi
+            fi
+        done < <(find "target/linux/$platform" -maxdepth 1 -type d ! -path "target/linux/$platform" 2>/dev/null)
+    fi
+    
+    # 3. 通配匹配路径
+    while IFS= read -r candidate_dir; do
+        if [ -n "$candidate_dir" ]; then
+            local candidate=$(basename "$candidate_dir")
+            if [[ "$candidate" == *"*"* ]] && [ -d "$candidate_dir" ]; then
+                if match_series_pattern "$subtarget" "$candidate"; then
+                    search_paths="$search_paths $candidate_dir:wildcard"
+                fi
+            fi
+        fi
+    done < <(find "target/linux/$platform" -maxdepth 1 -type d ! -path "target/linux/$platform" 2>/dev/null)
+    
+    # 去重并处理每个路径
+    local seen_paths=""
+    for path_entry in $search_paths; do
+        local path="${path_entry%%:*}"
+        local path_type="${path_entry##*:}"
+        
+        # 检查是否已处理过
+        if [[ " $seen_paths " != *" $path "* ]]; then
+            seen_paths="$seen_paths $path"
+            
+            # 根据匹配类型过滤
+            if [ "$match_type" != "all" ]; then
+                case "$match_type" in
+                    exact)   [ "$path_type" != "exact" ] && continue ;;
+                    series)  [ "$path_type" != "series" ] && continue ;;
+                    wildcard)[ "$path_type" != "wildcard" ] && continue ;;
+                esac
+            fi
+            
+            # 查找.mk文件
+            local mk_files=$(find "$path" -maxdepth 2 -type f -name "*.mk" 2>/dev/null)
+            
+            # 查找Makefile文件
+            local makefiles=$(find "$path" -maxdepth 2 -type f -name "Makefile" 2>/dev/null)
+            
+            # 合并所有文件
+            local all_files=""
+            if [ -n "$mk_files" ]; then
+                all_files="$all_files"$'
+'"$mk_files"
+            fi
+            if [ -n "$makefiles" ]; then
+                all_files="$all_files"$'
+'"$makefiles"
+            fi
+            
+            # 去重并处理
+            if [ -n "$all_files" ]; then
+                echo "$all_files" | sort -u | while read mk_file; do
+                    if [ -f "$mk_file" ]; then
+                        # 提取设备定义
+                        while IFS= read -r line; do
+                            if [[ "$line" == "define Device/"* ]]; then
+                                local device=$(echo "$line" | sed 's/define Device///' | awk '{print $1}')
+                                if [ -n "$device" ]; then
+                                    # 根据路径类型存储到不同的临时文件
+                                    case "$path_type" in
+                                        exact)    echo "$device" >> /tmp/exact_devices_$$.tmp ;;
+                                        series)   echo "$device" >> /tmp/series_devices_$$.tmp ;;
+                                        wildcard) echo "$device" >> /tmp/wildcard_devices_$$.tmp ;;
+                                    esac
+                                fi
+                            fi
+                        done < "$mk_file"
+                    fi
+                done
+            fi
+        fi
+    done
+    
+    # 从临时文件读取结果
+    if [ -f /tmp/exact_devices_$$.tmp ]; then
+        exact_devices=($(cat /tmp/exact_devices_$$.tmp | sort -u))
+        rm -f /tmp/exact_devices_$$.tmp
+    fi
+    
+    if [ -f /tmp/series_devices_$$.tmp ]; then
+        series_devices=($(cat /tmp/series_devices_$$.tmp | sort -u))
+        rm -f /tmp/series_devices_$$.tmp
+    fi
+    
+    if [ -f /tmp/wildcard_devices_$$.tmp ]; then
+        wildcard_devices=($(cat /tmp/wildcard_devices_$$.tmp | sort -u))
+        rm -f /tmp/wildcard_devices_$$.tmp
+    fi
+    
+    # 根据请求的匹配类型返回结果
+    case "$match_type" in
+        exact)
+            printf '%s
+' "${exact_devices[@]}"
+            ;;
+        series)
+            printf '%s
+' "${series_devices[@]}"
+            ;;
+        wildcard)
+            printf '%s
+' "${wildcard_devices[@]}"
+            ;;
+        all)
+            {
+                printf '%s
+' "${exact_devices[@]}"
+                printf '%s
+' "${series_devices[@]}"
+                printf '%s
+' "${wildcard_devices[@]}"
+            } | sort -u
+            ;;
+    esac
 }
 #【build_firmware_main.sh-37-end】
 
