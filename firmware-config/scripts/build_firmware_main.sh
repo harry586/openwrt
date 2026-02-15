@@ -2,20 +2,54 @@
 #【build_firmware_main.sh-00】
 # OpenWrt 智能固件构建主脚本
 # 对应工作流: firmware-build.yml
-# 版本: 3.0.0
-# 最后更新: 2026-02-13
+# 版本: 3.1.0
+# 最后更新: 2026-02-15
 #【build_firmware_main.sh-00-end】
+
+#【build_firmware_main.sh-00.5】
+# 加载统一配置文件
+load_build_config() {
+    local config_file="${1:-$REPO_ROOT/build-config.conf}"
+    
+    if [ -f "$config_file" ]; then
+        log "📁 加载统一配置文件: $config_file"
+        source "$config_file"
+    else
+        log "⚠️ 未找到配置文件 $config_file，使用脚本内默认值"
+    fi
+    
+    # 导出所有配置为环境变量
+    export BUILD_DIR LOG_DIR BACKUP_DIR CONFIG_DIR
+    export IMMORTALWRT_URL PACKAGES_FEED_URL LUCI_FEED_URL TURBOACC_FEED_URL
+    export ENABLE_TURBOACC ENABLE_TCP_BBR FORCE_ATH10K_CT AUTO_FIX_USB_DRIVERS
+    export ENABLE_DYNAMIC_KERNEL_DETECTION ENABLE_DYNAMIC_PLATFORM_DRIVERS ENABLE_DYNAMIC_DEVICE_MAPPING
+    
+    log "✅ 配置加载完成"
+}
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+CONFIG_FILE="$REPO_ROOT/build-config.conf"
+if [ -f "$CONFIG_FILE" ]; then
+    source "$CONFIG_FILE"
+    load_build_config
+fi
+#【build_firmware_main.sh-00.5-end】
+
 
 #【build_firmware_main.sh-01】
 set -e
 
-BUILD_DIR="/mnt/openwrt-build"
+# 使用配置文件的变量，如果未定义则使用默认值
+: ${BUILD_DIR:="/mnt/openwrt-build"}
+: ${LOG_DIR:="/tmp/build-logs"}
+: ${BACKUP_DIR:="/tmp/openwrt_backup"}
+
 ENV_FILE="$BUILD_DIR/build_env.sh"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SUPPORT_SCRIPT="$REPO_ROOT/support.sh"
 CONFIG_DIR="$REPO_ROOT/firmware-config/config"
 
-mkdir -p /tmp/build-logs
+mkdir -p "$LOG_DIR"
 
 log() {
     echo "【$(date '+%Y-%m-%d %H:%M:%S')】$1"
@@ -25,7 +59,7 @@ handle_error() {
     log "❌ 错误发生在: $1"
     log "详细错误信息:"
     echo "最后50行日志:"
-    tail -50 /tmp/build-logs/*.log 2>/dev/null || echo "无日志文件"
+    tail -50 "$LOG_DIR"/*.log 2>/dev/null || echo "无日志文件"
     exit 1
 }
 #【build_firmware_main.sh-01-end】
@@ -42,6 +76,12 @@ save_env() {
     echo "export CONFIG_MODE=\"${CONFIG_MODE}\"" >> $ENV_FILE
     echo "export REPO_ROOT=\"${REPO_ROOT}\"" >> $ENV_FILE
     echo "export COMPILER_DIR=\"${COMPILER_DIR}\"" >> $ENV_FILE
+    
+    # 保存配置开关状态
+    echo "export ENABLE_TURBOACC=\"${ENABLE_TURBOACC}\"" >> $ENV_FILE
+    echo "export ENABLE_TCP_BBR=\"${ENABLE_TCP_BBR}\"" >> $ENV_FILE
+    echo "export FORCE_ATH10K_CT=\"${FORCE_ATH10K_CT}\"" >> $ENV_FILE
+    echo "export AUTO_FIX_USB_DRIVERS=\"${AUTO_FIX_USB_DRIVERS}\"" >> $ENV_FILE
     
     if [ -n "$GITHUB_ENV" ]; then
         echo "SELECTED_REPO_URL=${SELECTED_REPO_URL}" >> $GITHUB_ENV
@@ -150,11 +190,11 @@ initialize_build_env() {
     
     log "=== 版本选择 ==="
     if [ "$version_selection" = "23.05" ]; then
-        SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-        SELECTED_BRANCH="openwrt-23.05"
+        SELECTED_REPO_URL="${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}"
+        SELECTED_BRANCH="${BRANCH_23_05:-openwrt-23.05}"
     else
-        SELECTED_REPO_URL="https://github.com/immortalwrt/immortalwrt.git"
-        SELECTED_BRANCH="openwrt-21.02"
+        SELECTED_REPO_URL="${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}"
+        SELECTED_BRANCH="${BRANCH_21_02:-openwrt-21.02}"
     fi
     log "✅ 版本选择完成: $SELECTED_BRANCH"
     
@@ -609,7 +649,7 @@ download_openwrt_sdk() {
 verify_sdk_files_v2() {
     local sdk_dir="$1"
     
-    log "=== 验证SDK文件完整性V2（修复版）==="
+    log "=== 验证SDK文件完整性V2（修复版） ==="
     
     if [ ! -d "$sdk_dir" ]; then
         log "❌ SDK目录不存在: $sdk_dir"
@@ -840,12 +880,17 @@ add_turboacc_support() {
     
     log "=== 添加 TurboACC 支持 ==="
     
-    if [ "$CONFIG_MODE" = "normal" ]; then
+    # 使用配置文件中的开关
+    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
         log "🔧 为正常模式添加 TurboACC 支持"
-        echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+        echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
         log "✅ TurboACC feed 添加完成"
     else
-        log "ℹ️ 基础模式不添加 TurboACC 支持"
+        if [ "$CONFIG_MODE" = "normal" ]; then
+            log "ℹ️ TurboACC 已被配置禁用"
+        else
+            log "ℹ️ 基础模式不添加 TurboACC 支持"
+        fi
     fi
 }
 #【build_firmware_main.sh-09-end】
@@ -863,11 +908,12 @@ configure_feeds() {
         FEEDS_BRANCH="openwrt-21.02"
     fi
     
-    echo "src-git packages https://github.com/immortalwrt/packages.git;$FEEDS_BRANCH" > feeds.conf.default
-    echo "src-git luci https://github.com/immortalwrt/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
+    # 使用配置文件中的Feed URL
+    echo "src-git packages ${PACKAGES_FEED_URL:-https://github.com/immortalwrt/packages.git};$FEEDS_BRANCH" > feeds.conf.default
+    echo "src-git luci ${LUCI_FEED_URL:-https://github.com/immortalwrt/luci.git};$FEEDS_BRANCH" >> feeds.conf.default
     
-    if [ "$CONFIG_MODE" = "normal" ]; then
-        echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+        echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
         log "✅ 添加TurboACC feed（所有版本）"
     fi
     
@@ -978,23 +1024,37 @@ generate_config() {
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
-    # 步骤1: 根据设备名映射到正确的OpenWrt设备配置名（保持小写）
+    # 步骤1: 根据设备名映射到正确的OpenWrt设备配置名
     local openwrt_device=""
-    case "$DEVICE" in
-        ac42u|rt-ac42u|asus_rt-ac42u)
-            openwrt_device="asus_rt-ac42u"
-            log "🔧 映射设备 $DEVICE -> $openwrt_device"
-            ;;
-        acrh17|rt-acrh17|asus_rt-acrh17)
-            openwrt_device="asus_rt-acrh17"
-            log "🔧 映射设备 $DEVICE -> $openwrt_device"
-            ;;
-        *)
-            # 默认使用原设备名，但转换为OpenWrt格式（全部小写，下划线）
-            openwrt_device=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-            log "🔧 使用转换后的设备名: $openwrt_device"
-            ;;
-    esac
+    
+    # 如果启用了动态设备映射，尝试从support.sh获取
+    if [ "${ENABLE_DYNAMIC_DEVICE_MAPPING:-true}" = "true" ] && [ -f "$SUPPORT_SCRIPT" ]; then
+        log "🔍 尝试从support.sh获取设备映射..."
+        local platform_info=$("$SUPPORT_SCRIPT" get-platform "$DEVICE" 2>/dev/null)
+        if [ -n "$platform_info" ]; then
+            # 使用设备名本身作为openwrt_device（support.sh已经处理了映射）
+            openwrt_device="$DEVICE"
+            log "✅ 从support.sh获取设备信息成功"
+        fi
+    fi
+    
+    # 如果没有获取到，使用转换规则
+    if [ -z "$openwrt_device" ]; then
+        case "$DEVICE" in
+            ac42u|rt-ac42u|asus_rt-ac42u)
+                openwrt_device="asus_rt-ac42u"
+                log "🔧 映射设备 $DEVICE -> $openwrt_device"
+                ;;
+            acrh17|rt-acrh17|asus_rt-acrh17)
+                openwrt_device="asus_rt-acrh17"
+                log "🔧 映射设备 $DEVICE -> $openwrt_device"
+                ;;
+            *)
+                openwrt_device=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+                log "🔧 使用转换后的设备名: $openwrt_device"
+                ;;
+        esac
+    fi
     
     # 直接使用小写的设备名
     local device_lower="$openwrt_device"
@@ -1023,14 +1083,19 @@ EOF
         fi
     }
     
-    append_config "$CONFIG_DIR/base.config"
-    append_config "$CONFIG_DIR/usb-generic.config"
+    # 使用配置文件名映射
+    : ${CONFIG_BASE:="base.config"}
+    : ${CONFIG_USB_GENERIC:="usb-generic.config"}
+    : ${CONFIG_NORMAL:="normal.config"}
+    
+    append_config "$CONFIG_DIR/$CONFIG_BASE"
+    append_config "$CONFIG_DIR/$CONFIG_USB_GENERIC"
     append_config "$CONFIG_DIR/$TARGET.config"
     append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
     append_config "$CONFIG_DIR/devices/$DEVICE.config"
     
     if [ "$CONFIG_MODE" = "normal" ]; then
-        append_config "$CONFIG_DIR/normal.config"
+        append_config "$CONFIG_DIR/$CONFIG_NORMAL"
     fi
     
     # 添加额外包
@@ -1048,25 +1113,32 @@ EOF
         append_config "$CONFIG_DIR/devices/$DEVICE.config"
     fi
     
-    # TCP BBR（所有设备都启用）
-    echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
-    echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
+    # TCP BBR（根据配置开关）
+    if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
+        echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+        echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
+        log "✅ TCP BBR已启用"
+    fi
     
-    # TurboACC（正常模式）
-    if [ "$CONFIG_MODE" = "normal" ]; then
+    # TurboACC（根据配置开关）
+    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+        log "✅ TurboACC已启用"
     fi
     
-    # ath10k 冲突解决（使用ct驱动）
-    sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
-    sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
-    sed -i '/CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/d' .config
-    echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
-    echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
-    echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
-    echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+    # ath10k 冲突解决（根据配置开关）
+    if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
+        sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
+        sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
+        sed -i '/CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/d' .config
+        echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
+        echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+        log "✅ ath10k-ct驱动已强制启用"
+    fi
     
     # 步骤4: 第一次去重
     log "🔄 第一次去重配置..."
@@ -1076,46 +1148,61 @@ EOF
     # 步骤5: 动态获取目标平台支持的内核配置
     log "🔍 动态获取目标平台支持的内核配置..."
     
-    # 获取目标平台的内核配置文件
     local kernel_config_file=""
     local kernel_version=""
     
-    # 检测内核版本
-    if [ -f "target/linux/$TARGET/config-5.4" ]; then
-        kernel_config_file="target/linux/$TARGET/config-5.4"
-        kernel_version="5.4"
-    elif [ -f "target/linux/$TARGET/config-5.10" ]; then
-        kernel_config_file="target/linux/$TARGET/config-5.10"
-        kernel_version="5.10"
-    elif [ -f "target/linux/$TARGET/config-5.15" ]; then
-        kernel_config_file="target/linux/$TARGET/config-5.15"
-        kernel_version="5.15"
-    elif [ -f "target/linux/$TARGET/config-6.1" ]; then
-        kernel_config_file="target/linux/$TARGET/config-6.1"
-        kernel_version="6.1"
+    # 如果启用了动态内核检测
+    if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ] && [ -f "$SUPPORT_SCRIPT" ]; then
+        log "🔍 尝试动态检测内核配置文件..."
+        # 这里可以调用detect_kernel_config函数
+        if [ -f "target/linux/$TARGET/config-6.1" ]; then
+            kernel_config_file="target/linux/$TARGET/config-6.1"
+            kernel_version="6.1"
+        elif [ -f "target/linux/$TARGET/config-5.15" ]; then
+            kernel_config_file="target/linux/$TARGET/config-5.15"
+            kernel_version="5.15"
+        elif [ -f "target/linux/$TARGET/config-5.10" ]; then
+            kernel_config_file="target/linux/$TARGET/config-5.10"
+            kernel_version="5.10"
+        elif [ -f "target/linux/$TARGET/config-5.4" ]; then
+            kernel_config_file="target/linux/$TARGET/config-5.4"
+            kernel_version="5.4"
+        fi
+    else
+        # 使用传统的硬编码检测
+        if [ -f "target/linux/$TARGET/config-5.4" ]; then
+            kernel_config_file="target/linux/$TARGET/config-5.4"
+            kernel_version="5.4"
+        elif [ -f "target/linux/$TARGET/config-5.10" ]; then
+            kernel_config_file="target/linux/$TARGET/config-5.10"
+            kernel_version="5.10"
+        elif [ -f "target/linux/$TARGET/config-5.15" ]; then
+            kernel_config_file="target/linux/$TARGET/config-5.15"
+            kernel_version="5.15"
+        elif [ -f "target/linux/$TARGET/config-6.1" ]; then
+            kernel_config_file="target/linux/$TARGET/config-6.1"
+            kernel_version="6.1"
+        fi
     fi
     
     if [ -n "$kernel_config_file" ] && [ -f "$kernel_config_file" ]; then
         log "✅ 找到内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
         
-        # 动态提取USB相关的内核配置
-        log "📋 从内核配置文件动态提取USB相关配置:"
-        
-        # 定义要查找的USB相关配置模式
-        local usb_patterns=(
-            "CONFIG_USB"
-            "CONFIG_PHY"
-            "CONFIG_DWC"
-            "CONFIG_XHCI"
-            "CONFIG_EXTCON"
-            "CONFIG_COMMON_CLK"
-            "CONFIG_ARCH"
+        # 定义内核提取模式（可从配置文件获取）
+        local kernel_patterns=(
+            "^CONFIG_USB"
+            "^CONFIG_PHY"
+            "^CONFIG_DWC"
+            "^CONFIG_XHCI"
+            "^CONFIG_EXTCON"
+            "^CONFIG_COMMON_CLK"
+            "^CONFIG_ARCH"
         )
         
         # 创建一个临时文件存储提取的配置
         local usb_configs_file="/tmp/usb_configs_$$.txt"
         
-        for pattern in "${usb_patterns[@]}"; do
+        for pattern in "${kernel_patterns[@]}"; do
             grep -E "^${pattern}|^# ${pattern}" "$kernel_config_file" >> "$usb_configs_file" 2>/dev/null || true
         done
         
@@ -1126,7 +1213,6 @@ EOF
         local config_count=$(wc -l < "$usb_configs_file.sorted")
         log "找到 $config_count 个USB相关内核配置"
         
-        # 显示所有配置，不分页
         log "所有USB相关内核配置:"
         local line_num=0
         while read line; do
@@ -1220,6 +1306,7 @@ EOF
     # 步骤8: 动态添加USB软件包（基于目标平台）
     log "📋 动态添加USB软件包..."
     
+    # 从配置文件获取USB包列表
     # 基础USB软件包（所有平台都需要）
     local base_usb_packages=(
         "kmod-usb-core"
@@ -1231,6 +1318,23 @@ EOF
         "block-mount"
         "automount"
         "usbutils"
+    )
+    
+    # 扩展USB包
+    local extended_usb_packages=(
+        "kmod-usb-storage-uas"
+        "kmod-usb-storage-extras"
+        "kmod-scsi-generic"
+    )
+    
+    # 文件系统支持
+    local fs_support_packages=(
+        "kmod-fs-ext4"
+        "kmod-fs-vfat"
+        "kmod-fs-exfat"
+        "kmod-fs-ntfs3"
+        "kmod-nls-utf8"
+        "kmod-nls-cp936"
     )
     
     # 根据目标平台添加特定软件包
@@ -1278,8 +1382,7 @@ EOF
         else
             existing_packages=$((existing_packages + 1))
         fi
-    done < <(printf "%s
-" "${base_usb_packages[@]}" | sort -u)
+    done < <(printf "%s\n" "${base_usb_packages[@]}" "${extended_usb_packages[@]}" "${fs_support_packages[@]}" | sort -u)
     
     log "📊 USB软件包统计: 新增 $added_packages 个, 已存在 $existing_packages 个"
     
@@ -1368,6 +1471,20 @@ EOF
     
     if [ ${#missing_drivers[@]} -gt 0 ]; then
         log "⚠️ 缺失驱动: ${missing_drivers[*]}"
+        
+        # 如果启用了自动修复，尝试添加缺失驱动
+        if [ "${AUTO_FIX_USB_DRIVERS:-true}" = "true" ]; then
+            log "🔧 自动修复缺失驱动..."
+            for driver in "${missing_drivers[@]}"; do
+                if [[ "$driver" != "USB 3.0功能" ]]; then
+                    echo "CONFIG_PACKAGE_${driver}=y" >> .config
+                    log "  ✅ 已添加: $driver"
+                fi
+            done
+            # 重新运行defconfig
+            make defconfig > /dev/null 2>&1
+            log "✅ 自动修复完成"
+        fi
     else
         log "✅ 所有关键USB驱动都已启用"
     fi
@@ -2217,7 +2334,7 @@ integrate_custom_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 集成自定义文件（增强版）==="
+    log "=== 集成自定义文件（增强版） ==="
     
     local custom_dir="$REPO_ROOT/firmware-config/custom-files"
     
@@ -2236,8 +2353,7 @@ integrate_custom_files() {
         if [ -d "$dir" ]; then
             for item in "$dir"/*; do
                 if [ -f "$item" ]; then
-                    files="$files$item"$'
-'
+                    files="$files$item"$'\n'
                 elif [ -d "$item" ]; then
                     files="$files$(recursive_find_custom_files "$item")"
                 fi
@@ -2306,8 +2422,7 @@ integrate_custom_files() {
             other_count=$((other_count + 1))
         fi
         
-        printf "%-50s %-10s %-15s %s
-" "$rel_path" "$file_size" "$type_desc" "$name_status"
+        printf "%-50s %-10s %-15s %s\n" "$rel_path" "$file_size" "$type_desc" "$name_status"
         
     done <<< "$all_files"
     
@@ -2395,7 +2510,9 @@ mkdir -p "$SAMBA_DIR" 2>/dev/null || true
 
 for config_file in smb.conf smbpasswd secrets.tdb passdb.tdb lmhosts; do
     if [ ! -f "$SAMBA_DIR/$config_file" ]; then
-        touch "$SAMBA_DIR/$config_file" 2>/dev/null &&         echo "  ✅ 创建Samba配置文件: $config_file" >> $LOG_FILE ||         echo "  ⚠️ 无法创建Samba配置文件: $config_file" >> $LOG_FILE
+        touch "$SAMBA_DIR/$config_file" 2>/dev/null && \
+        echo "  ✅ 创建Samba配置文件: $config_file" >> $LOG_FILE || \
+        echo "  ⚠️ 无法创建Samba配置文件: $config_file" >> $LOG_FILE
     fi
 done
 
@@ -3076,16 +3193,16 @@ cleanup() {
         
         if [ -f "$BUILD_DIR/.config" ]; then
             log "备份配置文件..."
-            mkdir -p /tmp/openwrt_backup
-            local backup_file="/tmp/openwrt_backup/config_$(date +%Y%m%d_%H%M%S).config"
+            mkdir -p $BACKUP_DIR
+            local backup_file="$BACKUP_DIR/config_$(date +%Y%m%d_%H%M%S).config"
             cp "$BUILD_DIR/.config" "$backup_file"
             log "✅ 配置文件备份到: $backup_file"
         fi
         
         if [ -f "$BUILD_DIR/build.log" ]; then
             log "备份编译日志..."
-            mkdir -p /tmp/openwrt_backup
-            cp "$BUILD_DIR/build.log" "/tmp/openwrt_backup/build_$(date +%Y%m%d_%H%M%S).log"
+            mkdir -p $BACKUP_DIR
+            cp "$BUILD_DIR/build.log" "$BACKUP_DIR/build_$(date +%Y%m%d_%H%M%S).log"
         fi
         
         log "清理构建目录: $BUILD_DIR"
@@ -3397,47 +3514,40 @@ workflow_step16_verify_usb() {
     # 方法1: 检查通用xhci-hcd包
     if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
         xhci_enabled=1
-        xhci_methods="$xhci_methods
-   - 通用xhci-hcd包"
+        xhci_methods="$xhci_methods\n   - 通用xhci-hcd包"
     fi
     
     # 方法2: 检查平台专用xhci包
     if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config; then
         xhci_enabled=1
-        xhci_methods="$xhci_methods
-   - 联发科xhci-mtk包"
+        xhci_methods="$xhci_methods\n   - 联发科xhci-mtk包"
     fi
     
     if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-qcom=y" .config; then
         xhci_enabled=1
-        xhci_methods="$xhci_methods
-   - 高通xhci-qcom包"
+        xhci_methods="$xhci_methods\n   - 高通xhci-qcom包"
     fi
     
     if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" .config; then
         xhci_enabled=1
-        xhci_methods="$xhci_methods
-   - 平台xhci-plat-hcd包"
+        xhci_methods="$xhci_methods\n   - 平台xhci-plat-hcd包"
     fi
     
     # 方法3: 检查DWC3驱动（内部集成xhci）
     if grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3=y" .config || grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config; then
         xhci_enabled=1
-        xhci_methods="$xhci_methods
-   - DWC3控制器（内部集成xhci）"
+        xhci_methods="$xhci_methods\n   - DWC3控制器（内部集成xhci）"
     fi
     
     # 方法4: 检查内核xhci配置
     if grep -q "^CONFIG_USB_XHCI_HCD=y" .config; then
         xhci_enabled=1
-        xhci_methods="$xhci_methods
-   - 内核xhci支持"
+        xhci_methods="$xhci_methods\n   - 内核xhci支持"
     fi
     
     if grep -q "^CONFIG_USB_XHCI_PLATFORM=y" .config; then
         xhci_enabled=1
-        xhci_methods="$xhci_methods
-   - 内核平台xhci支持"
+        xhci_methods="$xhci_methods\n   - 内核平台xhci支持"
     fi
     
     # 方法5: 检查高通平台专用PHY
@@ -3446,8 +3556,7 @@ workflow_step16_verify_usb() {
         if [ $xhci_enabled -eq 0 ]; then
             # 虽然没有直接xhci包，但平台支持USB 3.0
             xhci_enabled=1
-            xhci_methods="$xhci_methods
-   - 高通IPQ40xx平台（通过PHY和DWC3）"
+            xhci_methods="$xhci_methods\n   - 高通IPQ40xx平台（通过PHY和DWC3）"
         fi
     fi
     
@@ -4184,25 +4293,34 @@ workflow_step25_build_firmware() {
     if [ "$enable_parallel" = "true" ]; then
         echo "🧠 智能判断最佳并行任务数..."
         
-        if [ $CPU_CORES -ge 4 ]; then
-            if [ $TOTAL_MEM -ge 8000 ]; then
-                MAKE_JOBS=4
-                echo "✅ 检测到高性能Runner (4核+8GB)"
+        # 使用配置文件中的阈值
+        : ${HIGH_PERF_CORES:=4}
+        : ${HIGH_PERF_MEM:=4096}
+        : ${STD_PERF_CORES:=2}
+        : ${STD_PERF_MEM:=2048}
+        : ${HIGH_PERF_JOBS:=4}
+        : ${STD_PERF_JOBS:=3}
+        : ${LOW_PERF_JOBS:=2}
+        
+        if [ $CPU_CORES -ge $HIGH_PERF_CORES ]; then
+            if [ $TOTAL_MEM -ge $HIGH_PERF_MEM ]; then
+                MAKE_JOBS=$HIGH_PERF_JOBS
+                echo "✅ 检测到高性能Runner (${HIGH_PERF_CORES}核+${HIGH_PERF_MEM}MB)"
             else
-                MAKE_JOBS=3
-                echo "✅ 检测到标准Runner (4核)"
+                MAKE_JOBS=$((HIGH_PERF_JOBS - 1))
+                echo "✅ 检测到标准Runner (${HIGH_PERF_CORES}核)"
             fi
-        elif [ $CPU_CORES -ge 2 ]; then
-            if [ $TOTAL_MEM -ge 7000 ]; then
-                MAKE_JOBS=3
-                echo "✅ 检测到GitHub标准Runner (2核7GB)"
+        elif [ $CPU_CORES -ge $STD_PERF_CORES ]; then
+            if [ $TOTAL_MEM -ge $STD_PERF_MEM ]; then
+                MAKE_JOBS=$STD_PERF_JOBS
+                echo "✅ 检测到GitHub标准Runner (${STD_PERF_CORES}核${STD_PERF_MEM}MB)"
             else
-                MAKE_JOBS=2
-                echo "✅ 检测到2核Runner"
+                MAKE_JOBS=$((STD_PERF_JOBS - 1))
+                echo "✅ 检测到${STD_PERF_CORES}核Runner"
             fi
         else
-            MAKE_JOBS=2
-            echo "⚠️ 检测到单核Runner"
+            MAKE_JOBS=$LOW_PERF_JOBS
+            echo "⚠️ 检测到低性能系统"
         fi
         
         echo "🎯 决定使用 $MAKE_JOBS 个并行任务"
@@ -4220,7 +4338,11 @@ workflow_step25_build_firmware() {
     export FORCE_UNSAFE_CONFIGURE=1
     
     START_TIME=$(date +%s)
-    stdbuf -oL -eL time make -j$MAKE_JOBS V=s 2>&1 | tee build.log
+    if [ "${ENABLE_VERBOSE_LOG:-false}" = "true" ]; then
+        stdbuf -oL -eL time make -j$MAKE_JOBS V=s 2>&1 | tee build.log
+    else
+        stdbuf -oL -eL time make -j$MAKE_JOBS 2>&1 | tee build.log
+    fi
     BUILD_EXIT_CODE=${PIPESTATUS[0]}
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
@@ -4345,6 +4467,7 @@ workflow_step30_build_summary() {
     echo "配置模式: $config_mode"
     echo "时间戳: $timestamp_sec"
     echo "并行优化: $enable_parallel"
+    echo "配置来源: ${CONFIG_FILE:-使用脚本内默认值}"
     echo ""
     
     if [ -d "$BUILD_DIR/bin/targets" ]; then
@@ -4393,6 +4516,13 @@ workflow_step30_build_summary() {
             echo "  ❌ SDK未下载或目录不存在"
         fi
     fi
+    
+    echo ""
+    echo "⚙️ 功能开关状态:"
+    echo "  TurboACC: ${ENABLE_TURBOACC:-true}"
+    echo "  TCP BBR: ${ENABLE_TCP_BBR:-true}"
+    echo "  ath10k-ct强制: ${FORCE_ATH10K_CT:-true}"
+    echo "  USB自动修复: ${AUTO_FIX_USB_DRIVERS:-true}"
     
     echo ""
     echo "✅ 构建流程完成"
@@ -4530,6 +4660,15 @@ main() {
     local arg3="$4"
     local arg4="$5"
     local arg5="$6"
+    
+    # 确保配置已加载
+    if [ -z "$CONFIG_LOADED" ]; then
+        if [ -f "$REPO_ROOT/build-config.conf" ]; then
+            source "$REPO_ROOT/build-config.conf"
+            load_build_config
+            export CONFIG_LOADED=1
+        fi
+    fi
     
     case "$command" in
         "setup_environment")
