@@ -4490,7 +4490,8 @@ workflow_step30_build_summary() {
         
         if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
             SDK_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
-            MAJOR_VERSION=$(echo "$SDK_VERSION" | grep -o "[0-9]+" | head -1)
+            # 修复：使用 grep -oE "[0-9]+" 替代 grep -o "[0-9]+"
+            MAJOR_VERSION=$(echo "$SDK_VERSION" | grep -oE "[0-9]+" | head -1)
             
             if [ "$MAJOR_VERSION" = "12" ]; then
                 echo "  🎯 SDK GCC: 12.3.0 (OpenWrt 23.05 SDK)"
