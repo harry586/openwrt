@@ -1146,14 +1146,13 @@ EOF
     mv .config.tmp .config
     
     # =========================================================================
-    # 步骤5: 动态递归搜索内核配置文件 - 完全动态版
+    # 步骤5: 动态获取目标平台支持的内核配置 - 增强版
     # 查找逻辑:
     #   1. 递归搜索整个target/linux/$TARGET目录下的所有config-*文件
     #   2. 优先查找子平台目录中的内核配置文件
-    #   3. 如果找不到，递归搜索整个target/linux目录
-    #   4. 根据内核版本优先级选择最合适的配置
+    #   3. 根据内核版本优先级选择最合适的配置
     # =========================================================================
-    log "🔍 动态递归搜索内核配置文件（完全动态版）..."
+    log "🔍 动态获取目标平台支持的内核配置（增强版）..."
     
     local kernel_config_file=""
     local kernel_version=""
@@ -1216,8 +1215,8 @@ EOF
                     log "📄 找到target.mk文件: $target_mk"
                     
                     # 从target.mk中提取内核版本信息
-                    local kernel_patchver=$(grep -E "^KERNEL_PATCHVER:=" "$target_mk" | cut -d'=' -f2 | tr -d ' ')
-                    local kernel_version_line=$(grep -E "^KERNEL_VERSION:=" "$target_mk" | cut -d'=' -f2 | tr -d ' ')
+                    local kernel_patchver=$(grep -E "^KERNEL_PATCHVER:=" "$target_mk" 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+                    local kernel_version_line=$(grep -E "^KERNEL_VERSION:=" "$target_mk" 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
                     
                     if [ -n "$kernel_patchver" ]; then
                         kernel_version="$kernel_patchver"
@@ -1287,8 +1286,8 @@ EOF
                         log "📄 找到Makefile文件: $makefile"
                         
                         # 从Makefile中提取内核版本信息
-                        local kernel_patchver=$(grep -E "^KERNEL_PATCHVER:=" "$makefile" | cut -d'=' -f2 | tr -d ' ')
-                        local kernel_version_line=$(grep -E "^KERNEL_VERSION:=" "$makefile" | cut -d'=' -f2 | tr -d ' ')
+                        local kernel_patchver=$(grep -E "^KERNEL_PATCHVER:=" "$makefile" 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+                        local kernel_version_line=$(grep -E "^KERNEL_VERSION:=" "$makefile" 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
                         
                         if [ -n "$kernel_patchver" ]; then
                             kernel_version="$kernel_patchver"
@@ -1310,158 +1309,34 @@ EOF
                         fi
                     done
                 fi
-            else
-                log "ℹ️ 主平台目录不存在: $target_search_path"
             fi
         fi
         
-        # 步骤3: 如果主平台没有找到，在整个target/linux目录中递归搜索
+        # 步骤3: 最终检查
         if [ $found_kernel -eq 0 ]; then
-            log "📁 步骤3: 在整个target/linux目录中递归搜索内核配置..."
-            
-            if [ -d "$search_base" ]; then
-                # 递归搜索整个target/linux目录下的所有config文件
-                local all_configs=$(find "$search_base" -type f -name "$config_pattern" 2>/dev/null | grep "/$TARGET/" | sort)
-                
-                if [ -n "$all_configs" ]; then
-                    log "✅ 在整个target/linux目录中找到内核配置文件:"
-                    echo "$all_configs" | head -10 | while read config; do
-                        log "   📄 $config"
-                    done
-                    
-                    local total_count=$(echo "$all_configs" | wc -l)
-                    if [ $total_count -gt 10 ]; then
-                        log "   ... 还有 $((total_count - 10)) 个文件未显示"
-                    fi
-                    
-                    # 按优先级选择内核版本
-                    for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
-                        local matched_config=$(echo "$all_configs" | grep "config-$ver$" | head -1)
-                        if [ -n "$matched_config" ]; then
-                            kernel_config_file="$matched_config"
-                            kernel_version="$ver"
-                            log "✅ 选择内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
-                            found_kernel=1
-                            break
-                        fi
-                    done
-                    
-                    # 如果没有匹配优先级，选择最新的
-                    if [ $found_kernel -eq 0 ]; then
-                        kernel_config_file=$(echo "$all_configs" | head -1)
-                        kernel_version=$(basename "$kernel_config_file" | sed 's/config-//')
-                        log "✅ 选择内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
-                        found_kernel=1
-                    fi
-                fi
-            fi
-        fi
-        
-        # 步骤4: 如果还是没找到，在其他分支中递归搜索
-        if [ $found_kernel -eq 0 ]; then
-            log "📁 步骤4: 在其他分支中递归搜索内核配置..."
-            
-            # 定义要搜索的分支列表（从配置文件获取）
-            local branches_to_try=()
-            
-            # 根据当前SELECTED_BRANCH确定要搜索的分支
-            if [ -n "$SELECTED_BRANCH" ]; then
-                branches_to_try+=("$SELECTED_BRANCH")
-            fi
-            
-            # 从配置文件获取其他可能的分支
-            if [ -n "$BRANCH_23_05" ] && [[ "$SELECTED_BRANCH" != "$BRANCH_23_05" ]]; then
-                branches_to_try+=("$BRANCH_23_05")
-            fi
-            
-            if [ -n "$BRANCH_21_02" ] && [[ "$SELECTED_BRANCH" != "$BRANCH_21_02" ]] &&                [[ "$BRANCH_23_05" != "$BRANCH_21_02" ]]; then
-                branches_to_try+=("$BRANCH_21_02")
-            fi
-            
-            # 保存当前分支
-            local current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-            
-            for branch in "${branches_to_try[@]}"; do
-                # 跳过当前分支（已经查过）
-                if [ "$branch" = "$current_branch" ] || [ "$branch" = "$SELECTED_BRANCH" ]; then
-                    continue
-                fi
-                
-                log "🔍 尝试在分支 '$branch' 中递归搜索..."
-                
-                # 检查分支是否存在
-                if git show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null ||                    git ls-remote --exit-code origin "$branch" >/dev/null 2>&1; then
-                    
-                    # 获取该分支的内核配置文件列表（递归）
-                    local branch_configs=$(git ls-tree -r "$branch" --name-only 2>/dev/null |                         grep "^target/linux/.*$config_pattern" |                         grep "/$TARGET/" | sort || echo "")
-                    
-                    if [ -n "$branch_configs" ]; then
-                        log "✅ 在分支 '$branch' 中找到内核配置文件"
-                        
-                        # 按优先级选择内核版本
-                        for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
-                            if echo "$branch_configs" | grep -q "config-$ver$"; then
-                                kernel_version="$ver"
-                                kernel_config_file=$(echo "$branch_configs" | grep "config-$ver$" | head -1)
-                                log "✅ 在分支 '$branch' 中找到内核配置文件: $kernel_config_file (内核版本 $ver)"
-                                found_kernel=1
-                                break
-                            fi
-                        done
-                        
-                        # 如果没有匹配优先级，取第一个
-                        if [ $found_kernel -eq 0 ]; then
-                            kernel_config_file=$(echo "$branch_configs" | head -1)
-                            kernel_version=$(basename "$kernel_config_file" | sed 's/config-//')
-                            log "✅ 在分支 '$branch' 中找到内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
-                            found_kernel=1
-                        fi
-                        
-                        if [ $found_kernel -eq 1 ]; then
-                            break
-                        fi
-                    fi
-                fi
-            done
-        fi
-        
-        # 步骤5: 最终检查
-        if [ $found_kernel -eq 0 ]; then
-            log "⚠️ 警告: 在所有位置均未找到目标平台 $TARGET 的内核配置文件"
+            log "⚠️ 警告: 未找到目标平台 $TARGET 的内核配置文件"
             
             # 检查是否配置为必须找到内核配置
             if [ "${REQUIRE_KERNEL_CONFIG:-false}" = "true" ]; then
                 log "❌ 错误: 未找到内核配置文件，且 REQUIRE_KERNEL_CONFIG 设置为 true"
-                log "💡 请检查目标平台 $TARGET 是否正确"
                 handle_error "未找到内核配置文件"
             else
                 log "ℹ️ 将继续构建，但可能缺少USB相关内核配置"
             fi
         fi
     else
-        # 动态检测已禁用，但仍然使用递归搜索
-        log "ℹ️ 动态内核检测已禁用，使用递归搜索..."
+        # 动态检测已禁用，使用传统检测
+        log "ℹ️ 动态内核检测已禁用，使用传统检测..."
         
-        if [ -d "target/linux/$TARGET" ]; then
-            local config_files=$(find "target/linux/$TARGET" -type f -name "${KERNEL_CONFIG_PATTERN:-config-*}" 2>/dev/null | sort)
-            
-            if [ -n "$config_files" ]; then
-                for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
-                    local matched_config=$(echo "$config_files" | grep "config-$ver$" | head -1)
-                    if [ -n "$matched_config" ]; then
-                        kernel_config_file="$matched_config"
-                        kernel_version="$ver"
-                        log "✅ 找到内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
-                        found_kernel=1
-                        break
-                    fi
-                done
+        for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
+            if [ -f "target/linux/$TARGET/config-$ver" ]; then
+                kernel_config_file="target/linux/$TARGET/config-$ver"
+                kernel_version="$ver"
+                log "✅ 通过传统检测找到内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
+                found_kernel=1
+                break
             fi
-        fi
-        
-        if [ $found_kernel -eq 0 ]; then
-            log "⚠️ 未找到目标平台 $TARGET 的内核配置文件"
-        fi
+        done
     fi
     
     # 如果找到内核配置文件，提取USB相关配置
