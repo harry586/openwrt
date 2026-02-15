@@ -1021,56 +1021,28 @@ generate_config() {
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
-    # 动态设备映射 - 使用support.sh
-    local openwrt_device=""
+    # 动态获取设备平台信息 - 每次都重新获取，确保最新
     if [ -f "$SUPPORT_SCRIPT" ]; then
-        log "🔍 从support.sh获取设备映射..."
+        log "🔍 从support.sh获取设备平台信息..."
         local platform_info=$("$SUPPORT_SCRIPT" get-platform "$DEVICE" 2>/dev/null)
         if [ -n "$platform_info" ]; then
+            # 更新TARGET和SUBTARGET
             TARGET=$(echo "$platform_info" | awk '{print $1}')
             SUBTARGET=$(echo "$platform_info" | awk '{print $2}')
-            # 使用原始设备名，support.sh已经处理了映射
-            openwrt_device="$DEVICE"
-            log "✅ 从support.sh获取设备信息: $TARGET/$SUBTARGET/$openwrt_device"
+            log "✅ 从support.sh获取平台信息: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
+            
+            # 保存到环境文件
+            save_env
         else
-            log "⚠️ support.sh无法获取设备信息，使用本地映射"
+            log "❌ support.sh无法获取设备信息"
+            handle_error "获取设备信息失败"
         fi
+    else
+        log "❌ support.sh不存在"
+        handle_error "support.sh脚本缺失"
     fi
     
-    # 本地映射规则（作为后备）
-    if [ -z "$openwrt_device" ]; then
-        case "$DEVICE" in
-            # 华硕路由器
-            ac42u|rt-ac42u|asus_rt-ac42u)
-                openwrt_device="asus_rt-ac42u"
-                ;;
-            acrh17|rt-acrh17|asus_rt-acrh17)
-                openwrt_device="asus_rt-acrh17"
-                ;;
-            # 小米路由器
-            xiaomi_mi-router-4a-100m|xiaomi_mi-router-4a)
-                openwrt_device="xiaomi_mi-router-4a-100m"
-                ;;
-            xiaomi_mi-router-3g-v2|xiaomi_mi-router-3g)
-                openwrt_device="xiaomi_mi-router-3g-v2"
-                ;;
-            # CMCC路由器
-            cmcc_rax3000m|rax3000m)
-                openwrt_device="cmcc_rax3000m"
-                ;;
-            # Netgear路由器
-            netgear_3800|wndr3800)
-                openwrt_device="netgear_wndr3800"
-                ;;
-            # 默认转换
-            *)
-                openwrt_device=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-                ;;
-        esac
-        log "🔧 使用本地映射: $DEVICE -> $openwrt_device"
-    fi
-    
-    local device_lower="$openwrt_device"
+    local device_lower="$DEVICE"
     local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}"
     
     log "🔧 设备配置变量: $device_config=y"
@@ -1091,6 +1063,9 @@ EOF
         local file=$1
         if [ -f "$file" ]; then
             grep -v '^[[:space:]]*#' "$file" | grep -v '^[[:space:]]*$' | grep 'CONFIG_' >> .config
+            log "✅ 加载配置: $(basename "$file")"
+        else
+            log "⚠️ 配置文件不存在: $(basename "$file")"
         fi
     }
     
@@ -1101,33 +1076,12 @@ EOF
     
     append_config "$CONFIG_DIR/$CONFIG_BASE"
     append_config "$CONFIG_DIR/$CONFIG_USB_GENERIC"
+    append_config "$CONFIG_DIR/$TARGET.config"
+    append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
+    append_config "$CONFIG_DIR/devices/$DEVICE.config"
     
-    # 目标平台配置
-    if [ -f "$CONFIG_DIR/$TARGET.config" ]; then
-        append_config "$CONFIG_DIR/$TARGET.config"
-        log "✅ 加载目标平台配置: $TARGET.config"
-    else
-        log "⚠️ 目标平台配置不存在: $TARGET.config"
-    fi
-    
-    # 版本配置
-    if [ -f "$CONFIG_DIR/$SELECTED_BRANCH.config" ]; then
-        append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
-        log "✅ 加载版本配置: $SELECTED_BRANCH.config"
-    fi
-    
-    # 设备配置
-    if [ -f "$CONFIG_DIR/devices/$DEVICE.config" ]; then
-        append_config "$CONFIG_DIR/devices/$DEVICE.config"
-        log "✅ 加载设备配置: $DEVICE.config"
-    else
-        log "⚠️ 设备配置不存在: $DEVICE.config"
-    fi
-    
-    # 模式配置
-    if [ "$CONFIG_MODE" = "normal" ] && [ -f "$CONFIG_DIR/$CONFIG_NORMAL" ]; then
+    if [ "$CONFIG_MODE" = "normal" ]; then
         append_config "$CONFIG_DIR/$CONFIG_NORMAL"
-        log "✅ 加载正常模式配置"
     fi
     
     # 添加额外包
@@ -1178,7 +1132,7 @@ EOF
     local kernel_version=""
     
     # 检测内核配置文件
-    for ver in 6.1 5.15 5.10 5.4; do
+    for ver in 6.6 6.1 5.15 5.10 5.4; do
         if [ -f "target/linux/$TARGET/config-$ver" ]; then
             kernel_config_file="target/linux/$TARGET/config-$ver"
             kernel_version="$ver"
@@ -1198,7 +1152,6 @@ EOF
             local config_count=$(wc -l < "$usb_configs_file.sorted")
             log "找到 $config_count 个USB相关内核配置"
             
-            # 添加到.config
             local added_count=0
             while read line; do
                 local config_name=$(echo "$line" | sed 's/^# //g' | cut -d'=' -f1 | cut -d' ' -f1)
@@ -1215,8 +1168,6 @@ EOF
             
             log "✅ 添加了 $added_count 个新的内核配置"
             rm -f "$usb_configs_file" "$usb_configs_file.sorted"
-        else
-            log "⚠️ 内核配置文件中未找到USB相关配置"
         fi
     else
         log "⚠️ 未找到目标平台 $TARGET 的内核配置文件"
@@ -1224,12 +1175,13 @@ EOF
     
     # 第一次make defconfig
     log "🔄 第一次运行 make defconfig..."
-    make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
+    if make defconfig > /tmp/build-logs/defconfig1.log 2>&1; then
+        log "✅ 第一次 make defconfig 成功"
+    else
         log "❌ 第一次 make defconfig 失败"
         tail -50 /tmp/build-logs/defconfig1.log
         handle_error "第一次依赖解决失败"
-    }
-    log "✅ 第一次 make defconfig 成功"
+    fi
     
     # 第二次去重
     log "🔄 第二次去重配置..."
@@ -1238,10 +1190,12 @@ EOF
     
     # 第二次make defconfig
     log "🔄 第二次运行 make defconfig..."
-    make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
+    if make defconfig > /tmp/build-logs/defconfig2.log 2>&1; then
+        log "✅ 第二次 make defconfig 成功"
+    else
         log "⚠️ 第二次 make defconfig 有警告，但继续..."
-    }
-    log "✅ 第二次 make defconfig 完成"
+        tail -20 /tmp/build-logs/defconfig2.log
+    fi
     
     # 最终设备验证
     log "🔍 正在验证设备 $device_lower 是否被选中..."
@@ -1249,17 +1203,8 @@ EOF
     if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
         log "✅ 目标设备已正确启用"
     else
-        log "⚠️ 设备未启用，尝试手动添加..."
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
-        sort .config | uniq > .config.tmp
-        mv .config.tmp .config
-        make defconfig > /dev/null 2>&1
-        
-        if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
-            log "✅ 设备已手动添加"
-        else
-            log "❌ 无法启用设备"
-        fi
+        log "❌ 设备未启用"
+        handle_error "设备启用失败"
     fi
     
     # 配置统计
