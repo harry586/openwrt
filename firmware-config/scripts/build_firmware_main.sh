@@ -4471,7 +4471,8 @@ workflow_step30_build_summary() {
     echo ""
     
     if [ -d "$BUILD_DIR/bin/targets" ]; then
-        FIRMWARE_COUNT=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+        # 不使用括号，改用多个 -o 连接
+        FIRMWARE_COUNT=$(find "$BUILD_DIR/bin/targets" -type f -name "*.bin" -o -name "*.img" 2>/dev/null | wc -l)
         
         echo "📦 构建产物:"
         echo "  固件数量: $FIRMWARE_COUNT 个 (.bin/.img)"
@@ -4485,18 +4486,11 @@ workflow_step30_build_summary() {
     echo ""
     echo "🔧 编译器信息:"
     if [ -d "$BUILD_DIR" ]; then
-        GCC_FILE=$(find "$BUILD_DIR" -type f -executable \
-          -name "*gcc" \
-          ! -name "*gcc-ar" \
-          ! -name "*gcc-ranlib" \
-          ! -name "*gcc-nm" \
-          ! -path "*dummy-tools*" \
-          ! -path "*scripts*" \
-          2>/dev/null | head -1)
+        GCC_FILE=$(find "$BUILD_DIR" -type f -executable             -name "*gcc"             ! -name "*gcc-ar"             ! -name "*gcc-ranlib"             ! -name "*gcc-nm"             ! -path "*dummy-tools*"             ! -path "*scripts*"             2>/dev/null | head -1)
         
         if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
             SDK_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
-            MAJOR_VERSION=$(echo "$SDK_VERSION" | grep -o "[0-9]\+" | head -1)
+            MAJOR_VERSION=$(echo "$SDK_VERSION" | grep -o "[0-9]+" | head -1)
             
             if [ "$MAJOR_VERSION" = "12" ]; then
                 echo "  🎯 SDK GCC: 12.3.0 (OpenWrt 23.05 SDK)"
@@ -4509,7 +4503,7 @@ workflow_step30_build_summary() {
     echo ""
     echo "📦 SDK下载状态:"
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
-        source $BUILD_DIR/build_env.sh
+        source "$BUILD_DIR/build_env.sh"
         if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
             echo "  ✅ SDK已下载: $COMPILER_DIR"
         else
