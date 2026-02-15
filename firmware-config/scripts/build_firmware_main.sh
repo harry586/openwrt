@@ -1139,12 +1139,22 @@ EOF
     if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
         log "🔍 根据设备定义文件查找内核配置..."
         
+        # 直接调用函数，让函数内部输出详细信息
         local device_def_file=$(find_device_definition_file "$DEVICE" "$TARGET")
         
         if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
             log "✅ 找到设备定义文件: $device_def_file"
             
-            kernel_version=$(extract_kernel_version_from_device_file "$device_def_file")
+            # 显示设备配置块
+            local device_block=$(extract_device_config "$device_def_file" "$DEVICE")
+            if [ -n "$device_block" ]; then
+                log "📋 设备 $DEVICE 配置:"
+                echo "$device_block" | while read line; do
+                    log "   $line"
+                done
+            fi
+            
+            kernel_version=$(extract_kernel_version_from_device_file "$device_def_file" "$DEVICE")
             
             if [ -n "$kernel_version" ]; then
                 log "✅ 从设备定义文件获取到内核版本: $kernel_version"
@@ -1154,8 +1164,14 @@ EOF
                 if [ -n "$kernel_config_file" ] && [ -f "$kernel_config_file" ]; then
                     log "✅ 找到内核配置文件: $kernel_config_file"
                     found_kernel=1
+                else
+                    log "⚠️ 未找到对应内核版本 $kernel_version 的配置文件"
                 fi
+            else
+                log "⚠️ 设备定义文件中未指定内核版本"
             fi
+        else
+            log "⚠️ 未找到设备 $DEVICE 的定义文件"
         fi
         
         if [ $found_kernel -eq 0 ]; then
@@ -2187,35 +2203,43 @@ apply_config() {
     echo "=== 🔍 设备信息详细查询（使用公共函数） ==="
     echo "----------------------------------------"
     
+    # 直接调用函数，让函数内部输出详细信息
     local device_file=$(find_device_definition_file "$DEVICE" "$TARGET")
-    
-    echo "📁 搜索平台: $TARGET"
     
     if [ -n "$device_file" ] && [ -f "$device_file" ]; then
         echo "✅ 找到设备定义文件: $device_file"
         echo ""
-        echo "📋 设备配置内容:"
-        echo "----------------------------------------"
         
-        grep -E "(define Device/$DEVICE|Device/$DEVICE|DEVICE_|SUBTARGET|TARGET_|SOC)" "$device_file" 2>/dev/null | while read line; do
-            echo "  $line"
-        done
-        
-        local soc=$(grep -E "^[[:space:]]*SOC[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-        local model=$(grep -E "DEVICE_MODEL[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-        local title=$(grep -E "DEVICE_TITLE[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-        local packages=$(grep -E "DEVICE_PACKAGES[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-        local dts=$(grep -E "DEVICE_DTS[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-        local kernel_ver=$(extract_kernel_version_from_device_file "$device_file")
-        
-        [ -n "$soc" ] && echo "  🔧 SOC: $soc"
-        [ -n "$model" ] && echo "  📱 型号: $model"
-        [ -n "$title" ] && echo "  📝 标题: $title"
-        [ -n "$packages" ] && echo "  📦 默认包: $packages"
-        [ -n "$dts" ] && echo "  🔧 DTS: $dts"
-        [ -n "$kernel_ver" ] && echo "  🐧 内核版本: $kernel_ver"
-        
-        echo "----------------------------------------"
+        # 提取并显示设备配置块
+        local device_block=$(extract_device_config "$device_file" "$DEVICE")
+        if [ -n "$device_block" ]; then
+            echo "📋 设备 $DEVICE 配置:"
+            echo "----------------------------------------"
+            echo "$device_block"
+            echo "----------------------------------------"
+            
+            # 提取具体信息
+            local soc=$(extract_config_value "$device_block" "SOC")
+            local model=$(extract_config_value "$device_block" "DEVICE_MODEL")
+            local title=$(extract_config_value "$device_block" "DEVICE_TITLE")
+            local packages=$(extract_config_value "$device_block" "DEVICE_PACKAGES")
+            local dts=$(extract_config_value "$device_block" "DEVICE_DTS")
+            local kernel_ver=$(extract_config_value "$device_block" "KERNEL_PATCHVER")
+            
+            [ -n "$soc" ] && echo "🔧 SOC: $soc"
+            [ -n "$model" ] && echo "📱 型号: $model"
+            [ -n "$title" ] && echo "📝 标题: $title"
+            [ -n "$packages" ] && echo "📦 默认包: $packages"
+            [ -n "$dts" ] && echo "🔧 DTS: $dts"
+            [ -n "$kernel_ver" ] && echo "🐧 内核版本: $kernel_ver"
+        else
+            echo "⚠️ 在文件中未找到设备 $DEVICE 的配置块"
+            echo ""
+            echo "文件中包含的设备:"
+            grep "^define Device/" "$device_file" 2>/dev/null | sed 's/define Device///' | while read dev; do
+                echo "  - $dev"
+            done
+        fi
     else
         echo "⚠️ 未找到设备 $DEVICE 的定义文件"
     fi
@@ -3280,7 +3304,7 @@ find_device_definition_file() {
     echo "$best_file"
 }
 
-# 从设备定义文件中提取指定设备的配置
+# 从设备定义文件中提取指定设备的配置块
 extract_device_config() {
     local device_file="$1"
     local device_name="$2"
@@ -3316,7 +3340,7 @@ extract_device_config() {
     echo "$device_block"
 }
 
-# 从设备定义块中提取具体配置
+# 从设备定义块中提取具体配置值
 extract_config_value() {
     local device_block="$1"
     local key="$2"
@@ -3333,6 +3357,7 @@ get_device_support_summary() {
     echo "   📁 平台: $platform"
     echo "   📁 子平台: $subtarget"
     
+    # 直接调用函数，让函数内部输出详细信息
     local device_file=$(find_device_definition_file "$device_name" "$platform")
     
     if [ -n "$device_file" ] && [ -f "$device_file" ]; then
@@ -3411,7 +3436,6 @@ extract_kernel_version_from_device_file() {
     fi
 }
 
-# 其余函数保持不变...
 # 获取所有支持的分支列表
 get_supported_branches() {
     local branches=()
@@ -4479,6 +4503,7 @@ workflow_step23_pre_build_check() {
 ' ' ' || echo "未知")
     echo "   📁 平台 $TARGET 支持的子平台: $subtargets"
     
+    # 直接调用函数，让函数内部输出详细信息
     get_device_support_summary "$DEVICE" "$TARGET" "$SUBTARGET"
     
     echo "----------------------------------------"
