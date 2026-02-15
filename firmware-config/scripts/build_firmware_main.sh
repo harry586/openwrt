@@ -1021,17 +1021,14 @@ generate_config() {
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
-    # 动态获取设备平台信息 - 每次都重新获取，确保最新
+    # 动态获取设备平台信息
     if [ -f "$SUPPORT_SCRIPT" ]; then
         log "🔍 从support.sh获取设备平台信息..."
         local platform_info=$("$SUPPORT_SCRIPT" get-platform "$DEVICE" 2>/dev/null)
         if [ -n "$platform_info" ]; then
-            # 更新TARGET和SUBTARGET
             TARGET=$(echo "$platform_info" | awk '{print $1}')
             SUBTARGET=$(echo "$platform_info" | awk '{print $2}')
             log "✅ 从support.sh获取平台信息: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
-            
-            # 保存到环境文件
             save_env
         else
             log "❌ support.sh无法获取设备信息"
@@ -1047,7 +1044,6 @@ generate_config() {
     
     log "🔧 设备配置变量: $device_config=y"
     
-    # 创建基础目标配置
     cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
@@ -1064,24 +1060,50 @@ EOF
         if [ -f "$file" ]; then
             grep -v '^[[:space:]]*#' "$file" | grep -v '^[[:space:]]*$' | grep 'CONFIG_' >> .config
             log "✅ 加载配置: $(basename "$file")"
-        else
-            log "⚠️ 配置文件不存在: $(basename "$file")"
         fi
     }
     
-    # 合并配置文件
-    : ${CONFIG_BASE:="base.config"}
-    : ${CONFIG_USB_GENERIC:="usb-generic.config"}
-    : ${CONFIG_NORMAL:="normal.config"}
+    # 递归搜索配置文件
+    find_config_file() {
+        local pattern=$1
+        local search_dir=$2
+        find "$search_dir" -type f -name "$pattern" 2>/dev/null | head -1
+    }
     
-    append_config "$CONFIG_DIR/$CONFIG_BASE"
-    append_config "$CONFIG_DIR/$CONFIG_USB_GENERIC"
-    append_config "$CONFIG_DIR/$TARGET.config"
-    append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
-    append_config "$CONFIG_DIR/devices/$DEVICE.config"
+    # 基础配置
+    append_config "$CONFIG_DIR/base.config"
+    append_config "$CONFIG_DIR/usb-generic.config"
+    
+    # 目标平台配置 - 递归搜索所有子目录
+    local target_config=$(find_config_file "*${TARGET}*.config" "$CONFIG_DIR")
+    if [ -n "$target_config" ]; then
+        log "🔍 找到目标平台配置: $(basename "$target_config")"
+        append_config "$target_config"
+    else
+        log "⚠️ 未找到目标平台配置文件: $TARGET.config"
+    fi
+    
+    # 版本配置 - 递归搜索所有子目录
+    local branch_short="${SELECTED_BRANCH#openwrt-}"
+    local version_config=$(find_config_file "*${branch_short}*.config" "$CONFIG_DIR")
+    if [ -n "$version_config" ]; then
+        log "🔍 找到版本配置: $(basename "$version_config")"
+        append_config "$version_config"
+    else
+        log "⚠️ 未找到版本配置文件: $SELECTED_BRANCH.config"
+    fi
+    
+    # 设备配置 - 递归搜索所有子目录
+    local device_config_file=$(find_config_file "*${DEVICE}*.config" "$CONFIG_DIR")
+    if [ -n "$device_config_file" ]; then
+        log "🔍 找到设备配置: $(basename "$device_config_file")"
+        append_config "$device_config_file"
+    else
+        log "⚠️ 未找到设备配置文件: $DEVICE.config"
+    fi
     
     if [ "$CONFIG_MODE" = "normal" ]; then
-        append_config "$CONFIG_DIR/$CONFIG_NORMAL"
+        append_config "$CONFIG_DIR/normal.config"
     fi
     
     # 添加额外包
@@ -1131,7 +1153,6 @@ EOF
     local kernel_config_file=""
     local kernel_version=""
     
-    # 检测内核配置文件
     for ver in 6.6 6.1 5.15 5.10 5.4; do
         if [ -f "target/linux/$TARGET/config-$ver" ]; then
             kernel_config_file="target/linux/$TARGET/config-$ver"
@@ -1143,7 +1164,6 @@ EOF
     if [ -n "$kernel_config_file" ] && [ -f "$kernel_config_file" ]; then
         log "✅ 找到内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
         
-        # 提取USB相关配置
         local usb_configs_file="/tmp/usb_configs_$$.txt"
         grep -E "^(CONFIG_USB|CONFIG_PHY|CONFIG_DWC|CONFIG_XHCI)" "$kernel_config_file" > "$usb_configs_file" 2>/dev/null || true
         
@@ -1190,12 +1210,7 @@ EOF
     
     # 第二次make defconfig
     log "🔄 第二次运行 make defconfig..."
-    if make defconfig > /tmp/build-logs/defconfig2.log 2>&1; then
-        log "✅ 第二次 make defconfig 成功"
-    else
-        log "⚠️ 第二次 make defconfig 有警告，但继续..."
-        tail -20 /tmp/build-logs/defconfig2.log
-    fi
+    make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || true
     
     # 最终设备验证
     log "🔍 正在验证设备 $device_lower 是否被选中..."
