@@ -21,7 +21,8 @@ workflow_step30_build_summary() {
     echo ""
     
     if [ -d "$BUILD_DIR/bin/targets" ]; then
-        FIRMWARE_COUNT=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+        # 不使用括号，改用多个 -o 连接
+        FIRMWARE_COUNT=$(find "$BUILD_DIR/bin/targets" -type f -name "*.bin" -o -name "*.img" 2>/dev/null | wc -l)
         
         echo "📦 构建产物:"
         echo "  固件数量: $FIRMWARE_COUNT 个 (.bin/.img)"
