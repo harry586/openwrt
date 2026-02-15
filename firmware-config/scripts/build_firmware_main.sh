@@ -994,12 +994,11 @@ pre_build_space_check() {
 #【build_firmware_main.sh-13】
 generate_config() {
     local extra_packages=$1
-    local device_override=$2  # 新增设备覆盖参数
+    local device_override=$2
     
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    # 如果提供了设备覆盖参数，优先使用
     if [ -n "$device_override" ]; then
         DEVICE="$device_override"
         log "🔧 使用设备覆盖参数: $DEVICE"
@@ -1013,10 +1012,8 @@ generate_config() {
     log "配置模式: $CONFIG_MODE"
     log "配置文件目录: $CONFIG_DIR"
     
-    # 验证设备变量是否为空
     if [ -z "$DEVICE" ]; then
         log "❌ 错误: DEVICE变量为空！"
-        log "可用环境变量:"
         env | grep -E "DEVICE|TARGET|SELECTED" || true
         handle_error "DEVICE变量未设置"
     fi
@@ -1024,21 +1021,17 @@ generate_config() {
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
-    # 步骤1: 根据设备名映射到正确的OpenWrt设备配置名
     local openwrt_device=""
     
-    # 如果启用了动态设备映射，尝试从support.sh获取
     if [ "${ENABLE_DYNAMIC_DEVICE_MAPPING:-true}" = "true" ] && [ -f "$SUPPORT_SCRIPT" ]; then
         log "🔍 尝试从support.sh获取设备映射..."
         local platform_info=$("$SUPPORT_SCRIPT" get-platform "$DEVICE" 2>/dev/null)
         if [ -n "$platform_info" ]; then
-            # 使用设备名本身作为openwrt_device（support.sh已经处理了映射）
             openwrt_device="$DEVICE"
             log "✅ 从support.sh获取设备信息成功"
         fi
     fi
     
-    # 如果没有获取到，使用转换规则
     if [ -z "$openwrt_device" ]; then
         case "$DEVICE" in
             ac42u|rt-ac42u|asus_rt-ac42u)
@@ -1056,13 +1049,11 @@ generate_config() {
         esac
     fi
     
-    # 直接使用小写的设备名
     local device_lower="$openwrt_device"
     local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}"
     
     log "🔧 设备配置变量: $device_config=y"
     
-    # 步骤2: 创建基础目标配置 - 使用小写设备名
     cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
@@ -1072,10 +1063,8 @@ EOF
     log "🔧 基础配置文件内容:"
     cat .config
     
-    # 步骤3: 合并所有配置文件
     log "📁 开始合并配置文件..."
     
-    # 辅助函数：安全追加配置（过滤注释和空行）
     append_config() {
         local file=$1
         if [ -f "$file" ]; then
@@ -1083,7 +1072,6 @@ EOF
         fi
     }
     
-    # 使用配置文件名映射
     : ${CONFIG_BASE:="base.config"}
     : ${CONFIG_USB_GENERIC:="usb-generic.config"}
     : ${CONFIG_NORMAL:="normal.config"}
@@ -1098,7 +1086,6 @@ EOF
         append_config "$CONFIG_DIR/$CONFIG_NORMAL"
     fi
     
-    # 添加额外包
     if [ -n "$extra_packages" ]; then
         log "📦 添加额外包: $extra_packages"
         echo "$extra_packages" | tr ',' '
@@ -1107,20 +1094,17 @@ EOF
         done
     fi
     
-    # 从config.txt动态添加配置（如果存在）
     if [ -f "$CONFIG_DIR/devices/$DEVICE.config" ]; then
         log "📋 从设备配置文件动态添加配置: $CONFIG_DIR/devices/$DEVICE.config"
         append_config "$CONFIG_DIR/devices/$DEVICE.config"
     fi
     
-    # TCP BBR（根据配置开关）
     if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
         echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
         echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
         log "✅ TCP BBR已启用"
     fi
     
-    # TurboACC（根据配置开关）
     if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
@@ -1128,7 +1112,6 @@ EOF
         log "✅ TurboACC已启用"
     fi
     
-    # ath10k 冲突解决（根据配置开关）
     if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
         sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
         sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
@@ -1140,73 +1123,47 @@ EOF
         log "✅ ath10k-ct驱动已强制启用"
     fi
     
-    # 步骤4: 第一次去重
     log "🔄 第一次去重配置..."
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
     # =========================================================================
-    # 步骤5: 动态获取目标平台支持的内核配置 - 使用正确的设备查找逻辑
+    # 步骤5: 动态获取目标平台支持的内核配置 - 使用公共函数
     # =========================================================================
-    log "🔍 动态获取目标平台支持的内核配置（使用设备定义文件）..."
+    log "🔍 动态获取目标平台支持的内核配置（使用公共函数）..."
     
     local kernel_config_file=""
     local kernel_version=""
     local found_kernel=0
     
-    # 如果启用了动态内核检测
     if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
         log "🔍 根据设备定义文件查找内核配置..."
         
-        # 首先找到设备定义文件
         local device_def_file=$(find_device_definition_file "$DEVICE" "$TARGET")
         
         if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
             log "✅ 找到设备定义文件: $device_def_file"
             
-            # 从设备定义文件中提取内核版本信息
-            # 查找类似 KERNEL:= 或 KERNEL_PATCHVER:= 的定义
-            local kernel_patchver=$(grep -E "^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:?=" "$device_def_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-            local kernel_version_line=$(grep -E "^[[:space:]]*KERNEL[[:space:]]*:?=" "$device_def_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
+            kernel_version=$(extract_kernel_version_from_device_file "$device_def_file")
             
-            if [ -n "$kernel_patchver" ]; then
-                kernel_version="$kernel_patchver"
-                log "✅ 从设备定义文件获取到内核补丁版本: $kernel_version"
-            elif [ -n "$kernel_version_line" ]; then
-                kernel_version=$(echo "$kernel_version_line" | grep -oE '^[0-9]+.[0-9]+')
-                log "✅ 从设备定义文件获取到内核版本: $kernel_version_line (主版本: $kernel_version)"
+            if [ -n "$kernel_version" ]; then
+                log "✅ 从设备定义文件获取到内核版本: $kernel_version"
+                
+                kernel_config_file=$(find_kernel_config_by_version "$TARGET" "$SUBTARGET" "$kernel_version")
+                
+                if [ -n "$kernel_config_file" ] && [ -f "$kernel_config_file" ]; then
+                    log "✅ 找到内核配置文件: $kernel_config_file"
+                    found_kernel=1
+                fi
             fi
         fi
         
-        # 根据获取到的内核版本查找配置文件
-        if [ -n "$kernel_version" ]; then
-            # 先在子平台目录中查找
-            local search_paths=(
-                "target/linux/$TARGET/$SUBTARGET"
-                "target/linux/$TARGET"
-            )
-            
-            for search_path in "${search_paths[@]}"; do
-                if [ -d "$search_path" ]; then
-                    local config_candidate=$(find "$search_path" -maxdepth 2 -type f -name "config-${kernel_version}*" 2>/dev/null | head -1)
-                    if [ -n "$config_candidate" ]; then
-                        kernel_config_file="$config_candidate"
-                        log "✅ 找到内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
-                        found_kernel=1
-                        break
-                    fi
-                fi
-            done
-        fi
-        
-        # 如果没找到，按优先级搜索所有内核配置文件
         if [ $found_kernel -eq 0 ]; then
             log "📁 按优先级搜索内核配置文件..."
             
             for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
-                local config_candidate="target/linux/$TARGET/config-$ver"
-                if [ -f "$config_candidate" ]; then
-                    kernel_config_file="$config_candidate"
+                kernel_config_file="target/linux/$TARGET/config-$ver"
+                if [ -f "$kernel_config_file" ]; then
                     kernel_version="$ver"
                     log "✅ 找到内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
                     found_kernel=1
@@ -1215,7 +1172,6 @@ EOF
             done
         fi
         
-        # 最终检查
         if [ $found_kernel -eq 0 ]; then
             log "⚠️ 警告: 未找到目标平台 $TARGET 的内核配置文件"
             
@@ -1228,11 +1184,9 @@ EOF
         fi
     fi
     
-    # 如果找到内核配置文件，提取USB相关配置
     if [ -n "$kernel_config_file" ] && [ -f "$kernel_config_file" ]; then
         log "✅ 使用内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
         
-        # 定义内核提取模式
         local kernel_patterns=(
             "^CONFIG_USB"
             "^CONFIG_PHY"
@@ -1243,26 +1197,21 @@ EOF
             "^CONFIG_ARCH"
         )
         
-        # 如果配置文件中定义了KERNEL_EXTRACT_PATTERNS，使用配置文件的
         if [ ${#KERNEL_EXTRACT_PATTERNS[@]} -gt 0 ]; then
             kernel_patterns=("${KERNEL_EXTRACT_PATTERNS[@]}")
         fi
         
-        # 创建一个临时文件存储提取的配置
         local usb_configs_file="/tmp/usb_configs_$$.txt"
         
         for pattern in "${kernel_patterns[@]}"; do
             grep -E "^${pattern}|^# ${pattern}" "$kernel_config_file" >> "$usb_configs_file" 2>/dev/null || true
         done
         
-        # 去重并排序
         sort -u "$usb_configs_file" > "$usb_configs_file.sorted"
         
-        # 显示找到的配置
         local config_count=$(wc -l < "$usb_configs_file.sorted")
         log "找到 $config_count 个USB相关内核配置"
         
-        # 将这些配置添加到.config中
         local added_count=0
         while read line; do
             local config_name=$(echo "$line" | sed 's/^# //g' | cut -d'=' -f1 | cut -d' ' -f1)
@@ -1281,9 +1230,10 @@ EOF
         log "✅ 添加了 $added_count 个新的内核配置"
         
         rm -f "$usb_configs_file" "$usb_configs_file.sorted"
+    else
+        log "⚠️ 未找到目标平台 $TARGET 的内核配置文件"
     fi
     
-    # 步骤6: 第一次运行 make defconfig
     log "🔄 第一次运行 make defconfig..."
     make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
         log "❌ 第一次 make defconfig 失败"
@@ -1292,7 +1242,6 @@ EOF
     }
     log "✅ 第一次 make defconfig 成功"
     
-    # 步骤7: 动态检测实际生效的USB内核配置
     log "🔍 动态检测实际生效的USB内核配置..."
     
     local usb_components=(
@@ -1311,7 +1260,6 @@ EOF
         fi
     done
     
-    # 步骤8: 动态添加USB软件包
     log "📋 动态添加USB软件包..."
     
     local base_usb_packages=(
@@ -1341,7 +1289,18 @@ EOF
         "kmod-nls-cp936"
     )
     
-    # 根据目标平台添加特定软件包
+    if [ ${#BASE_USB_PACKAGES[@]} -gt 0 ]; then
+        base_usb_packages=("${BASE_USB_PACKAGES[@]}")
+    fi
+    
+    if [ ${#EXTENDED_USB_PACKAGES[@]} -gt 0 ]; then
+        extended_usb_packages=("${EXTENDED_USB_PACKAGES[@]}")
+    fi
+    
+    if [ ${#FS_SUPPORT_PACKAGES[@]} -gt 0 ]; then
+        fs_support_packages=("${FS_SUPPORT_PACKAGES[@]}")
+    fi
+    
     case "$TARGET" in
         ipq40xx|ipq806x|qcom)
             log "检测到高通平台，添加专用USB驱动..."
@@ -1374,7 +1333,6 @@ EOF
             ;;
     esac
     
-    # 去重并添加USB软件包
     local added_packages=0
     local existing_packages=0
     while read pkg; do
@@ -1391,19 +1349,16 @@ EOF
     
     log "📊 USB软件包统计: 新增 $added_packages 个, 已存在 $existing_packages 个"
     
-    # 步骤9: 第二次去重
     log "🔄 第二次去重配置..."
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 步骤10: 第二次运行 make defconfig
     log "🔄 第二次运行 make defconfig..."
     make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
         log "⚠️ 第二次 make defconfig 有警告，但继续..."
     }
     log "✅ 第二次 make defconfig 完成"
     
-    # 步骤11: 验证关键USB驱动
     log "🔍 验证关键USB驱动状态..."
     
     local critical_usb_drivers=(
@@ -1412,6 +1367,24 @@ EOF
         "kmod-usb-storage"
         "kmod-scsi-core"
     )
+    
+    if [ ${#CRITICAL_USB_DRIVERS[@]} -gt 0 ]; then
+        critical_usb_drivers=("${CRITICAL_USB_DRIVERS[@]}")
+    fi
+    
+    case "$TARGET" in
+        ipq40xx|ipq806x|qcom)
+            critical_usb_drivers+=(
+                "kmod-usb-dwc3"
+                "kmod-usb-dwc3-qcom"
+            )
+            ;;
+        mediatek|ramips)
+            critical_usb_drivers+=(
+                "kmod-usb-xhci-mtk"
+            )
+            ;;
+    esac
     
     local missing_drivers=()
     for driver in "${critical_usb_drivers[@]}"; do
@@ -1434,18 +1407,31 @@ EOF
         make defconfig > /dev/null 2>&1
     fi
     
-    # 步骤12: 最终设备验证
     log "🔍 正在验证设备 $openwrt_device 是否被选中..."
     
     if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
-        log "✅ 目标设备已正确启用"
-    else
-        log "⚠️ 警告: 设备未启用，手动添加..."
+        log "✅ 目标设备已正确启用: CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y"
+    elif grep -q "^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} is not set" .config; then
+        log "⚠️ 警告: 设备被禁用，尝试强制启用..."
+        sed -i "/^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} is not set/d" .config
         echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
+        make defconfig > /dev/null 2>&1
+        
+        if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
+            log "✅ 设备已强制启用"
+        else
+            log "❌ 无法启用设备"
+        fi
+    else
+        log "⚠️ 警告: 设备配置行未找到，手动添加..."
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
         make defconfig > /dev/null 2>&1
     fi
     
-    # 步骤13: 保存配置统计信息
     local total_configs=$(wc -l < .config)
     local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config)
     local module_packages=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config)
@@ -1756,9 +1742,8 @@ apply_config() {
         log "✅ libustream无冲突"
     fi
     
-    log "🔧 步骤4: 检查并修复关键配置（仅修复缺失项）..."
+    log "🔧 步骤4: 检查并修复关键配置..."
     
-    # 检查配置工具是否存在
     local config_tool=""
     if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
         config_tool="scripts/config/config"
@@ -1774,17 +1759,12 @@ apply_config() {
         config_tool=""
     fi
     
-    # 获取目标平台
     local target=$(grep "^CONFIG_TARGET_" .config | grep "=y" | head -1 | cut -d'_' -f2 | tr '[:upper:]' '[:lower:]')
-    
-    # 定义需要检查的配置项
     local fix_count=0
     
-    # USB 3.0驱动检查 - 检查多种实现方式
     log "  🔧 USB 3.0驱动检查..."
     local usb3_enabled=0
     
-    # 检查各种USB 3.0实现
     if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
         usb3_enabled=1
     elif grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" .config; then
@@ -1816,11 +1796,9 @@ apply_config() {
         log "  ✅ USB 3.0功能已启用"
     fi
     
-    # IPQ40xx平台专用驱动检查
     if [ "$target" = "ipq40xx" ] || [ "$target" = "qcom" ]; then
         log "  🔧 IPQ40xx平台专用USB驱动检查..."
         
-        # 检查dwc3-qcom
         if ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config && ! grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=m" .config; then
             log "  ⚠️ kmod-usb-dwc3-qcom未启用，尝试添加..."
             if [ -n "$config_tool" ]; then
@@ -1838,7 +1816,6 @@ apply_config() {
             log "  ✅ kmod-usb-dwc3-qcom已启用"
         fi
         
-        # 检查PHY驱动
         if grep -q "^CONFIG_PHY_QCOM_IPQ4019_USB=y" .config; then
             log "  ✅ 高通IPQ4019 USB PHY已启用"
         elif ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-ipq4019-usb=y" .config && ! grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-ipq4019-usb=m" .config; then
@@ -1857,7 +1834,6 @@ apply_config() {
         fi
     fi
     
-    # TurboACC配置检查
     if [ "$CONFIG_MODE" = "normal" ]; then
         log "  🔧 TurboACC配置检查..."
         local turboacc_fixed=0
@@ -1912,7 +1888,6 @@ apply_config() {
         fi
     fi
     
-    # TCP BBR检查
     log "  🔧 TCP BBR拥塞控制检查..."
     local bbr_fixed=0
     
@@ -1953,7 +1928,6 @@ apply_config() {
         log "  ✅ TCP BBR配置正常"
     fi
     
-    # ath10k-ct冲突检查
     log "  🔧 kmod-ath10k-ct冲突检查..."
     local ath10k_fixed=0
     
@@ -2007,10 +1981,10 @@ apply_config() {
     log "🔧 步骤7: 验证关键配置..."
     
     echo ""
-    echo "=== 🔍 USB驱动完整性检查（智能检测） ==="
-    
+    echo "=== 🔍 USB驱动完整性检查 ==="
     echo ""
     echo "🔍 检查基础USB驱动..."
+    
     local base_drivers=(
         "kmod-usb-core"
         "kmod-usb2"
@@ -2027,9 +2001,8 @@ apply_config() {
     done
     
     echo ""
-    echo "🔍 检查USB 3.0驱动（多种实现方式）..."
+    echo "🔍 检查USB 3.0驱动..."
     
-    # 检查各种USB 3.0实现
     local usb3_found=0
     
     if grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
@@ -2038,22 +2011,22 @@ apply_config() {
     fi
     
     if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
-        echo "✅ kmod-usb-xhci-hcd: 已启用（通用xhci驱动）"
+        echo "✅ kmod-usb-xhci-hcd: 已启用"
         usb3_found=1
     elif grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" .config; then
-        echo "✅ kmod-usb-xhci-plat-hcd: 已启用（平台xhci驱动）"
+        echo "✅ kmod-usb-xhci-plat-hcd: 已启用"
         usb3_found=1
     elif grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-qcom=y" .config; then
-        echo "✅ kmod-usb-xhci-qcom: 已启用（高通xhci驱动）"
+        echo "✅ kmod-usb-xhci-qcom: 已启用"
         usb3_found=1
     elif grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config; then
-        echo "✅ kmod-usb-xhci-mtk: 已启用（联发科xhci驱动）"
+        echo "✅ kmod-usb-xhci-mtk: 已启用"
         usb3_found=1
     elif grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3=y" .config && grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
-        echo "✅ DWC3 + USB3: 已启用（DWC3内部集成xhci）"
+        echo "✅ DWC3 + USB3: 已启用"
         usb3_found=1
     elif grep -q "^CONFIG_USB_XHCI_HCD=y" .config; then
-        echo "✅ 内核xhci支持: 已启用（通过内核配置）"
+        echo "✅ 内核xhci支持: 已启用"
         usb3_found=1
     fi
     
@@ -2064,7 +2037,6 @@ apply_config() {
     echo ""
     echo "🔍 检查平台专用驱动..."
     
-    # 检测目标平台
     local target=$(grep "^CONFIG_TARGET_" .config | grep "=y" | head -1 | cut -d'_' -f2 | tr '[:upper:]' '[:lower:]')
     
     case "$target" in
@@ -2080,15 +2052,9 @@ apply_config() {
             if grep -q "^CONFIG_PACKAGE_kmod-phy-qcom-ipq4019-usb=y" .config; then
                 echo "✅ kmod-phy-qcom-ipq4019-usb: 已启用"
             elif grep -q "^CONFIG_PHY_QCOM_IPQ4019_USB=y" .config; then
-                echo "✅ 高通IPQ4019 USB PHY: 已启用（内核配置）"
+                echo "✅ 高通IPQ4019 USB PHY: 已启用"
             else
                 echo "ℹ️ 高通USB PHY: 未启用"
-            fi
-            
-            if grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3=y" .config; then
-                echo "✅ kmod-usb-dwc3: 已启用"
-            else
-                echo "ℹ️ kmod-usb-dwc3: 未启用"
             fi
             ;;
         mediatek|ramips)
@@ -2108,22 +2074,12 @@ apply_config() {
             else
                 echo "ℹ️ kmod-usb2-ath79: 未启用"
             fi
-            
-            if grep -q "^CONFIG_PACKAGE_kmod-usb-ohci=y" .config; then
-                echo "✅ kmod-usb-ohci: 已启用"
-            else
-                echo "ℹ️ kmod-usb-ohci: 未启用"
-            fi
-            ;;
-        *)
-            echo "ℹ️ 通用平台，无专用驱动检查"
             ;;
     esac
     
     echo ""
-    echo "=== 📦 插件配置状态（完整显示） ==="
+    echo "=== 📦 插件配置状态 ==="
     
-    # 动态检测插件 - 全部显示，不省略
     local plugins=$(grep "^CONFIG_PACKAGE_luci-app" .config | grep -E "=y|=m" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
     local plugin_count=0
     
@@ -2145,9 +2101,8 @@ apply_config() {
     fi
     
     echo ""
-    echo "=== 📦 内核模块配置状态（完整显示） ==="
+    echo "=== 📦 内核模块配置状态 ==="
     
-    # 显示所有内核模块
     local kernel_modules=$(grep "^CONFIG_PACKAGE_kmod-" .config | grep -E "=y|=m" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
     local module_count=0
     
@@ -2169,9 +2124,8 @@ apply_config() {
     fi
     
     echo ""
-    echo "=== 📦 网络工具配置状态（完整显示） ==="
+    echo "=== 📦 网络工具配置状态 ==="
     
-    # 显示网络相关工具
     local net_tools=$(grep "^CONFIG_PACKAGE_" .config | grep -E "=y|=m" | grep -E "iptables|nftables|firewall|qos|sfe|shortcut|acceler|tc|fullcone" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
     local net_count=0
     
@@ -2193,9 +2147,8 @@ apply_config() {
     fi
     
     echo ""
-    echo "=== 📦 文件系统支持（完整显示） ==="
+    echo "=== 📦 文件系统支持 ==="
     
-    # 显示文件系统支持
     local fs_support=$(grep "^CONFIG_PACKAGE_kmod-fs-" .config | grep -E "=y|=m" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
     local fs_count=0
     
@@ -2218,6 +2171,7 @@ apply_config() {
     
     echo ""
     echo "=== 📊 配置统计 ==="
+    
     local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config 2>/dev/null || echo "0")
     local module_packages=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config 2>/dev/null || echo "0")
     local disabled_packages=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config 2>/dev/null || echo "0")
@@ -2229,149 +2183,46 @@ apply_config() {
     echo "⚙️ 内核配置: $kernel_configs 个"
     echo "📊 总配置行数: $(wc -l < .config) 行"
     
-    # ============================================================================
-    # 增强的设备信息查询 - 根据内容选择正确的.mk文件
-    # ============================================================================
     echo ""
-    echo "=== 🔍 设备信息详细查询（根据内容选择.mk文件） ==="
+    echo "=== 🔍 设备信息详细查询（使用公共函数） ==="
     echo "----------------------------------------"
     
-    # 根据内容选择正确的.mk文件
-    find_device_definition() {
-        local device_name="$1"
-        local platform="$2"
-        local base_path="target/linux/$platform"
-        local found_files=()
-        local best_file=""
-        local best_score=0
-        
-        if [ ! -d "$base_path" ]; then
-            return
-        fi
-        
-        echo "📁 搜索平台: $platform"
-        
-        # 递归查找所有.mk文件
-        while IFS= read -r mk_file; do
-            if [ -f "$mk_file" ]; then
-                local score=0
-                local matched=0
-                
-                # 检查是否包含设备定义
-                if grep -q "define Device/$device_name" "$mk_file" 2>/dev/null; then
-                    score=$((score + 100))
-                    matched=1
-                    echo "  ✅ 找到精确设备定义: $mk_file"
-                elif grep -q "Device/$device_name" "$mk_file" 2>/dev/null; then
-                    score=$((score + 80))
-                    matched=1
-                    echo "  ✅ 找到设备引用: $mk_file"
-                elif grep -q "DEVICE_MODEL.*$device_name" "$mk_file" 2>/dev/null; then
-                    score=$((score + 60))
-                    matched=1
-                    echo "  ✅ 找到设备型号匹配: $mk_file"
-                elif grep -qi "$device_name" "$mk_file" 2>/dev/null; then
-                    # 模糊匹配，计算匹配程度
-                    local match_count=$(grep -io "$device_name" "$mk_file" 2>/dev/null | wc -l)
-                    score=$((score + match_count * 10))
-                    if [ $match_count -gt 0 ]; then
-                        matched=1
-                        echo "  📍 找到模糊匹配 ($match_count 次): $mk_file"
-                    fi
-                fi
-                
-                # 根据文件路径加分
-                if [[ "$mk_file" == *"/image/"* ]]; then
-                    score=$((score + 50))  # image目录的.mk文件权重高
-                    echo "     📍 image目录 +50"
-                fi
-                
-                if [[ "$mk_file" == *"/$platform/"*"target.mk" ]]; then
-                    score=$((score + 30))  # target.mk文件
-                fi
-                
-                # 根据文件内容加分
-                if grep -q "DEVICE_PACKAGES" "$mk_file" 2>/dev/null; then
-                    score=$((score + 20))
-                fi
-                
-                if grep -q "DEVICE_DTS" "$mk_file" 2>/dev/null; then
-                    score=$((score + 20))
-                fi
-                
-                if [ $matched -eq 1 ]; then
-                    found_files+=("$mk_file|$score")
-                    echo "     得分: $score"
-                    
-                    if [ $score -gt $best_score ]; then
-                        best_score=$score
-                        best_file="$mk_file"
-                    fi
-                fi
-            fi
-        done < <(find "$base_path" -type f -name "*.mk" 2>/dev/null | sort)
-        
-        echo ""
-        if [ -n "$best_file" ]; then
-            echo "🏆 最佳匹配文件 (得分: $best_score):"
-            echo "   📄 $best_file"
-            echo ""
-            echo "   📋 设备配置内容:"
-            echo "   ----------------------------------------"
-            
-            # 显示设备相关配置
-            grep -E "(define Device/$device_name|Device/$device_name|DEVICE_|SUBTARGET|TARGET_|SOC)" "$best_file" 2>/dev/null | while read line; do
-                echo "     $line"
-            done
-            
-            # 提取SOC信息
-            local soc=$(grep -E "^[[:space:]]*SOC[[:space:]]*:?=" "$best_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-            if [ -n "$soc" ]; then
-                echo "     🔧 SOC: $soc"
-            fi
-            
-            # 提取设备型号
-            local model=$(grep -E "DEVICE_MODEL[[:space:]]*:?=" "$best_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-            if [ -n "$model" ]; then
-                echo "     📱 型号: $model"
-            fi
-            
-            # 提取设备标题
-            local title=$(grep -E "DEVICE_TITLE[[:space:]]*:?=" "$best_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-            if [ -n "$title" ]; then
-                echo "     📝 标题: $title"
-            fi
-            
-            # 提取设备包列表
-            local packages=$(grep -E "DEVICE_PACKAGES[[:space:]]*:?=" "$best_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-            if [ -n "$packages" ]; then
-                echo "     📦 默认包: $packages"
-            fi
-            
-            # 提取DTS文件
-            local dts=$(grep -E "DEVICE_DTS[[:space:]]*:?=" "$best_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-            if [ -n "$dts" ]; then
-                echo "     🔧 DTS: $dts"
-            fi
-            
-            echo "   ----------------------------------------"
-        else
-            echo "⚠️ 未找到设备 $device_name 的定义文件"
-        fi
-        
-        echo ""
-        echo "📊 找到 ${#found_files[@]} 个相关文件"
-    }
+    local device_file=$(find_device_definition_file "$DEVICE" "$TARGET")
     
-    # 执行设备搜索
-    if [ -n "$TARGET" ]; then
-        find_device_definition "$DEVICE" "$TARGET"
+    echo "📁 搜索平台: $TARGET"
+    
+    if [ -n "$device_file" ] && [ -f "$device_file" ]; then
+        echo "✅ 找到设备定义文件: $device_file"
+        echo ""
+        echo "📋 设备配置内容:"
+        echo "----------------------------------------"
+        
+        grep -E "(define Device/$DEVICE|Device/$DEVICE|DEVICE_|SUBTARGET|TARGET_|SOC)" "$device_file" 2>/dev/null | while read line; do
+            echo "  $line"
+        done
+        
+        local soc=$(grep -E "^[[:space:]]*SOC[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
+        local model=$(grep -E "DEVICE_MODEL[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
+        local title=$(grep -E "DEVICE_TITLE[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
+        local packages=$(grep -E "DEVICE_PACKAGES[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
+        local dts=$(grep -E "DEVICE_DTS[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
+        local kernel_ver=$(extract_kernel_version_from_device_file "$device_file")
+        
+        [ -n "$soc" ] && echo "  🔧 SOC: $soc"
+        [ -n "$model" ] && echo "  📱 型号: $model"
+        [ -n "$title" ] && echo "  📝 标题: $title"
+        [ -n "$packages" ] && echo "  📦 默认包: $packages"
+        [ -n "$dts" ] && echo "  🔧 DTS: $dts"
+        [ -n "$kernel_ver" ] && echo "  🐧 内核版本: $kernel_ver"
+        
+        echo "----------------------------------------"
+    else
+        echo "⚠️ 未找到设备 $DEVICE 的定义文件"
     fi
     
     echo ""
     echo "=== 📁 所有子平台.mk文件列表 ==="
     
-    # 列出所有子平台.mk文件
     local mk_count=0
     if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
         while IFS= read -r mk_file; do
@@ -2387,7 +2238,6 @@ apply_config() {
     echo ""
     echo "=== 📁 内核配置文件列表 ==="
     
-    # 查找内核配置文件
     local kernel_count=0
     if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
         while IFS= read -r config; do
@@ -2404,7 +2254,6 @@ apply_config() {
     echo ""
     echo "=== 📁 设备相关文件列表 ==="
     
-    # 查找设备专属配置文件
     local dev_count=0
     if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
         while IFS= read -r config; do
@@ -3336,12 +3185,256 @@ verify_sdk_directory() {
 #【build_firmware_main.sh-22-end】
 
 #【build_firmware_main.sh-23】
-# 此函数已废弃，由【37】版本替代
-# 保留空函数以避免破坏系统性标识
-workflow_step23_pre_build_check() {
-    log "=== 步骤23: 前置错误检查（已废弃）==="
-    log "⚠️ 警告: 此函数已废弃，请使用【37】版本"
-    return 0
+# 此函数已废弃，现在用作公共函数库
+# ============================================================================
+# 公共函数库 - 供所有步骤调用
+# ============================================================================
+
+# 根据内容选择最佳的设备定义文件
+find_device_definition_file() {
+    local device_name="$1"
+    local platform="$2"
+    local base_path="target/linux/$platform"
+    local best_file=""
+    local best_score=0
+    local found_files=()
+    
+    if [ ! -d "$base_path" ]; then
+        echo ""
+        return
+    fi
+    
+    while IFS= read -r mk_file; do
+        if [ -f "$mk_file" ]; then
+            local score=0
+            local matched=0
+            
+            if grep -q "define Device/$device_name" "$mk_file" 2>/dev/null; then
+                score=$((score + 100))
+                matched=1
+            elif grep -q "Device/$device_name" "$mk_file" 2>/dev/null; then
+                score=$((score + 80))
+                matched=1
+            elif grep -q "DEVICE_MODEL.*$device_name" "$mk_file" 2>/dev/null; then
+                score=$((score + 60))
+                matched=1
+            elif grep -qi "$device_name" "$mk_file" 2>/dev/null; then
+                local match_count=$(grep -io "$device_name" "$mk_file" 2>/dev/null | wc -l)
+                score=$((score + match_count * 10))
+                if [ $match_count -gt 0 ]; then
+                    matched=1
+                fi
+            fi
+            
+            if [[ "$mk_file" == *"/image/"* ]]; then
+                score=$((score + 50))
+            fi
+            
+            if [[ "$mk_file" == *"/$platform/"*"target.mk" ]]; then
+                score=$((score + 30))
+            fi
+            
+            if grep -q "DEVICE_PACKAGES" "$mk_file" 2>/dev/null; then
+                score=$((score + 20))
+            fi
+            
+            if grep -q "DEVICE_DTS" "$mk_file" 2>/dev/null; then
+                score=$((score + 20))
+            fi
+            
+            if grep -q "KERNEL_PATCHVER" "$mk_file" 2>/dev/null; then
+                score=$((score + 15))
+            fi
+            
+            if [ $matched -eq 1 ]; then
+                found_files+=("$mk_file|$score")
+                if [ $score -gt $best_score ]; then
+                    best_score=$score
+                    best_file="$mk_file"
+                fi
+            fi
+        fi
+    done < <(find "$base_path" -type f -name "*.mk" 2>/dev/null)
+    
+    echo "$best_file"
+}
+
+# 从设备定义文件中提取内核版本
+extract_kernel_version_from_device_file() {
+    local device_file="$1"
+    local kernel_version=""
+    
+    if [ ! -f "$device_file" ]; then
+        echo ""
+        return
+    fi
+    
+    local kernel_patchver=$(grep -E "^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
+    local kernel_line=$(grep -E "^[[:space:]]*KERNEL[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
+    
+    if [ -n "$kernel_patchver" ]; then
+        kernel_version="$kernel_patchver"
+    elif [ -n "$kernel_line" ]; then
+        kernel_version=$(echo "$kernel_line" | grep -oE '^[0-9]+.[0-9]+')
+    fi
+    
+    echo "$kernel_version"
+}
+
+# 根据内核版本查找配置文件
+find_kernel_config_by_version() {
+    local platform="$1"
+    local subtarget="$2"
+    local kernel_version="$3"
+    local config_file=""
+    
+    local search_paths=(
+        "target/linux/$platform/$subtarget"
+        "target/linux/$platform"
+    )
+    
+    if [ -n "$kernel_version" ]; then
+        for search_path in "${search_paths[@]}"; do
+            if [ -d "$search_path" ]; then
+                config_file=$(find "$search_path" -maxdepth 2 -type f -name "config-${kernel_version}*" 2>/dev/null | head -1)
+                if [ -n "$config_file" ]; then
+                    echo "$config_file"
+                    return
+                fi
+            fi
+        done
+    fi
+    
+    for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
+        config_file="target/linux/$platform/config-$ver"
+        if [ -f "$config_file" ]; then
+            echo "$config_file"
+            return
+        fi
+    done
+    
+    echo ""
+}
+
+# 获取设备支持信息摘要
+get_device_support_summary() {
+    local device_name="$1"
+    local platform="$2"
+    local subtarget="$3"
+    
+    local device_file=$(find_device_definition_file "$device_name" "$platform")
+    
+    echo "   📁 平台: $platform"
+    echo "   📁 子平台: $subtarget"
+    
+    if [ -n "$device_file" ] && [ -f "$device_file" ]; then
+        echo "   ✅ 找到设备定义文件: $device_file"
+        
+        local soc=$(grep -E "^[[:space:]]*SOC[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
+        local model=$(grep -E "DEVICE_MODEL[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
+        local title=$(grep -E "DEVICE_TITLE[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
+        local packages=$(grep -E "DEVICE_PACKAGES[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
+        local dts=$(grep -E "DEVICE_DTS[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
+        local kernel_ver=$(extract_kernel_version_from_device_file "$device_file")
+        
+        [ -n "$soc" ] && echo "   🔧 SOC: $soc"
+        [ -n "$model" ] && echo "   📱 型号: $model"
+        [ -n "$title" ] && echo "   📝 标题: $title"
+        [ -n "$packages" ] && echo "   📦 默认包: $packages"
+        [ -n "$dts" ] && echo "   🔧 DTS: $dts"
+        [ -n "$kernel_ver" ] && echo "   🐧 内核版本: $kernel_ver"
+        
+        return 0
+    else
+        echo "   ⚠️ 未找到设备 $device_name 的定义文件"
+        return 1
+    fi
+}
+
+# 获取所有支持的分支列表
+get_supported_branches() {
+    local branches=()
+    
+    if [ -f "$REPO_ROOT/build-config.conf" ]; then
+        while IFS= read -r line; do
+            if [[ "$line" == *"BRANCH_"*":="* ]]; then
+                local branch_name=$(echo "$line" | sed -n 's/.*BRANCH_[^=]*:="*([^"]*)"*.*//p')
+                if [ -n "$branch_name" ]; then
+                    branches+=("$branch_name")
+                fi
+            elif [[ "$line" == *"export BRANCH_"*"="* ]]; then
+                local branch_name=$(echo "$line" | sed -n 's/.*export BRANCH_[^=]*="*([^"]*)"*.*//p')
+                if [ -n "$branch_name" ]; then
+                    branches+=("$branch_name")
+                fi
+            fi
+        done < "$REPO_ROOT/build-config.conf"
+    fi
+    
+    if [ ${#branches[@]} -eq 0 ]; then
+        if command -v git >/dev/null 2>&1; then
+            local remote_branches=$(git ls-remote --heads "${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}" 2>/dev/null |                 awk -F'/' '{print $NF}' | grep -E '^(openwrt-|main|master)' | sort -r | head -5)
+            
+            if [ -n "$remote_branches" ]; then
+                while IFS= read -r branch; do
+                    branches+=("$branch")
+                done <<< "$remote_branches"
+            fi
+        fi
+    fi
+    
+    if [ ${#branches[@]} -gt 0 ]; then
+        printf '%s
+' "${branches[@]}" | sort -u 2>/dev/null
+    else
+        echo "openwrt-23.05 openwrt-21.02"
+    fi
+}
+
+# 获取指定平台下的所有子平台
+get_subtargets_by_platform() {
+    local branch="$1"
+    local platform="$2"
+    
+    local subtargets=()
+    local platform_path="target/linux/$platform"
+    
+    if [ -d "$platform_path" ]; then
+        while IFS= read -r subtarget_dir; do
+            if [ -n "$subtarget_dir" ]; then
+                local subtarget=$(basename "$subtarget_dir")
+                case "$subtarget" in
+                    image|base-files|config|patches|files|Makefile)
+                        continue
+                        ;;
+                    *)
+                        if [ -f "$subtarget_dir/target.mk" ] || [ -f "$subtarget_dir/Makefile" ]; then
+                            subtargets+=("$subtarget")
+                        fi
+                        ;;
+                esac
+            fi
+        done < <(find "$platform_path" -maxdepth 1 -type d ! -path "$platform_path" 2>/dev/null | sort)
+        
+        if [ ${#subtargets[@]} -eq 0 ] && [ -f "$platform_path/Makefile" ]; then
+            local default_subtarget=$(grep -E '^[[:space:]]*SUBTARGETS?[[:space:]]*:?=' "$platform_path/Makefile" 2>/dev/null |                 sed 's/.*=[[:space:]]*//' | tr -d ' ' | tr ',' ' ')
+            
+            if [ -n "$default_subtarget" ]; then
+                for st in $default_subtarget; do
+                    [ -n "$st" ] && subtargets+=("$st")
+                done
+            else
+                subtargets+=("generic")
+            fi
+        fi
+    fi
+    
+    if [ ${#subtargets[@]} -gt 0 ]; then
+        printf '%s
+' "${subtargets[@]}" | sort -u 2>/dev/null | head -10
+    else
+        echo "generic"
+    fi
 }
 #【build_firmware_main.sh-23-end】
 
@@ -4251,7 +4344,7 @@ workflow_step22_integrate_custom_files() {
 # ============================================
 #【build_firmware_main.sh-37】
 workflow_step23_pre_build_check() {
-    log "=== 步骤23: 前置错误检查（使用正确的设备查找逻辑） ==="
+    log "=== 步骤23: 前置错误检查（使用公共函数） ==="
     
     set -e
     trap 'echo "❌ 步骤23 失败，退出代码: $?"; exit 1' ERR
@@ -4279,122 +4372,192 @@ workflow_step23_pre_build_check() {
     local error_count=0
     local warning_count=0
     
-    # =========================================================================
-    # 调用正确的设备查找函数
-    # =========================================================================
     echo "0. 🔍 动态获取设备支持信息:"
     echo "----------------------------------------"
     
-    # 使用步骤18中的设备查找函数
-    get_device_support_info_correct() {
-        local device_name="$1"
-        local platform="$2"
-        local subtarget="$3"
-        
-        # 查找设备定义文件
-        local device_def_file=$(find_device_definition_file "$device_name" "$platform")
-        
-        echo "   📁 平台: $platform"
-        echo "   📁 子平台: $subtarget"
-        
-        if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
-            echo "   ✅ 找到设备定义文件: $device_def_file"
-            
-            # 提取设备信息
-            local soc=$(grep -E "^[[:space:]]*SOC[[:space:]]*:?=" "$device_def_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-            local model=$(grep -E "DEVICE_MODEL[[:space:]]*:?=" "$device_def_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-            local title=$(grep -E "DEVICE_TITLE[[:space:]]*:?=" "$device_def_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-            local packages=$(grep -E "DEVICE_PACKAGES[[:space:]]*:?=" "$device_def_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-            local dts=$(grep -E "DEVICE_DTS[[:space:]]*:?=" "$device_def_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-            
-            [ -n "$soc" ] && echo "   🔧 SOC: $soc"
-            [ -n "$model" ] && echo "   📱 型号: $model"
-            [ -n "$title" ] && echo "   📝 标题: $title"
-            [ -n "$packages" ] && echo "   📦 默认包: $packages"
-            [ -n "$dts" ] && echo "   🔧 DTS: $dts"
-            
-            return 0
-        else
-            echo "   ⚠️ 未找到设备 $device_name 的定义文件"
-            return 1
-        fi
-    }
+    local branches=$(get_supported_branches 2>/dev/null | head -3 | tr '
+' ' ' || echo "未知")
+    echo "   📦 支持的分支: $branches"
     
-    # 执行设备信息查询
-    if get_device_support_info_correct "$DEVICE" "$TARGET" "$SUBTARGET"; then
-        echo "   ✅ 设备信息查询成功"
-    else
-        echo "   ⚠️ 设备信息查询失败"
-        warning_count=$((warning_count + 1))
-    fi
+    local subtargets=$(get_subtargets_by_platform "$SELECTED_BRANCH" "$TARGET" 2>/dev/null | head -5 | tr '
+' ' ' || echo "未知")
+    echo "   📁 平台 $TARGET 支持的子平台: $subtargets"
+    
+    get_device_support_summary "$DEVICE" "$TARGET" "$SUBTARGET"
     
     echo "----------------------------------------"
     echo ""
     
-    # 其余检查保持不变...
-    # [这里省略其他检查，保持原有代码]
-    
-    log "✅ 步骤23 完成"
-}
-
-# ============================================================================
-# 公共设备查找函数 - 供所有步骤使用
-# ============================================================================
-find_device_definition_file() {
-    local device_name="$1"
-    local platform="$2"
-    local base_path="target/linux/$platform"
-    local best_file=""
-    local best_score=0
-    
-    if [ ! -d "$base_path" ]; then
-        echo ""
-        return
-    fi
-    
-    # 递归查找所有.mk文件
-    while IFS= read -r mk_file; do
-        if [ -f "$mk_file" ]; then
-            local score=0
-            
-            # 检查是否包含设备定义
-            if grep -q "define Device/$device_name" "$mk_file" 2>/dev/null; then
-                score=$((score + 100))
-            elif grep -q "Device/$device_name" "$mk_file" 2>/dev/null; then
-                score=$((score + 80))
-            elif grep -q "DEVICE_MODEL.*$device_name" "$mk_file" 2>/dev/null; then
-                score=$((score + 60))
-            elif grep -qi "$device_name" "$mk_file" 2>/dev/null; then
-                local match_count=$(grep -io "$device_name" "$mk_file" 2>/dev/null | wc -l)
-                score=$((score + match_count * 10))
-            fi
-            
-            # 根据文件路径加分
-            if [[ "$mk_file" == *"/image/"* ]]; then
-                score=$((score + 50))
-            fi
-            
-            if [[ "$mk_file" == *"/$platform/"*"target.mk" ]]; then
-                score=$((score + 30))
-            fi
-            
-            # 根据文件内容加分
-            if grep -q "DEVICE_PACKAGES" "$mk_file" 2>/dev/null; then
-                score=$((score + 20))
-            fi
-            
-            if grep -q "DEVICE_DTS" "$mk_file" 2>/dev/null; then
-                score=$((score + 20))
-            fi
-            
-            if [ $score -gt $best_score ]; then
-                best_score=$score
-                best_file="$mk_file"
+    echo "1. ✅ 配置文件检查:"
+    if [ -f ".config" ]; then
+        local config_size=$(ls -lh .config | awk '{print $5}')
+        local config_lines=$(wc -l < .config)
+        echo "   ✅ .config 文件存在"
+        echo "   📊 大小: $config_size, 行数: $config_lines"
+        
+        local device_upper=$(echo "$DEVICE" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
+        if grep -q "CONFIG_TARGET_.*DEVICE.*${device_upper}=y" .config; then
+            echo "   ✅ 设备配置正确"
+        else
+            local device_lower=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+            if grep -q "CONFIG_TARGET_.*DEVICE.*${device_lower}=y" .config; then
+                echo "   ✅ 设备配置正确 (小写)"
+            else
+                echo "   ❌ 设备配置可能不正确"
+                error_count=$((error_count + 1))
             fi
         fi
-    done < <(find "$base_path" -type f -name "*.mk" 2>/dev/null)
+    else
+        echo "   ❌ .config 文件不存在"
+        error_count=$((error_count + 1))
+    fi
+    echo ""
     
-    echo "$best_file"
+    echo "2. ✅ SDK/编译器检查:"
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+        echo "   ✅ SDK目录存在: $COMPILER_DIR"
+        local sdk_size=$(du -sh "$COMPILER_DIR" 2>/dev/null | awk '{print $1}')
+        echo "   📊 大小: $sdk_size"
+        
+        local gcc_file=$(find "$COMPILER_DIR" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" ! -path "*dummy-tools*" 2>/dev/null | head -1)
+        if [ -n "$gcc_file" ]; then
+            echo "   ✅ 找到GCC: $(basename "$gcc_file")"
+            local gcc_version=$("$gcc_file" --version 2>&1 | head -1)
+            echo "   🔧 版本: $gcc_version"
+        else
+            echo "   ❌ 未找到GCC编译器"
+            error_count=$((error_count + 1))
+        fi
+    else
+        echo "   ❌ SDK目录不存在"
+        error_count=$((error_count + 1))
+    fi
+    echo ""
+    
+    echo "3. ✅ Feeds检查:"
+    if [ -d "feeds" ]; then
+        local feeds_count=$(find feeds -maxdepth 1 -type d 2>/dev/null | wc -l)
+        feeds_count=$((feeds_count - 1))
+        echo "   ✅ feeds目录存在, 包含 $feeds_count 个feed"
+        
+        for feed in packages luci; do
+            if [ -d "feeds/$feed" ]; then
+                echo "   ✅ $feed feed: 存在"
+            else
+                echo "   ❌ $feed feed: 不存在"
+                warning_count=$((warning_count + 1))
+            fi
+        done
+    else
+        echo "   ❌ feeds目录不存在"
+        error_count=$((error_count + 1))
+    fi
+    echo ""
+    
+    echo "4. ✅ 磁盘空间检查:"
+    local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1 || df / --output=avail | tail -1)
+    local available_gb=$((available_space / 1024 / 1024))
+    echo "   📊 可用空间: ${available_gb}G"
+    
+    if [ $available_gb -lt 5 ]; then
+        echo "   ❌ 空间严重不足 (<5G)"
+        error_count=$((error_count + 1))
+    elif [ $available_gb -lt 10 ]; then
+        echo "   ⚠️ 空间较低 (<10G)"
+        warning_count=$((warning_count + 1))
+    elif [ $available_gb -lt 20 ]; then
+        echo "   ⚠️ 空间一般 (<20G)"
+        warning_count=$((warning_count + 1))
+    else
+        echo "   ✅ 空间充足"
+    fi
+    echo ""
+    
+    echo "5. ✅ USB驱动检查:"
+    local critical_drivers=(
+        "kmod-usb-core"
+    )
+    
+    case "$TARGET" in
+        ipq40xx|ipq806x|qcom)
+            critical_drivers+=("kmod-usb-dwc3" "kmod-usb-dwc3-qcom")
+            ;;
+        mediatek|ramips)
+            critical_drivers+=("kmod-usb-xhci-mtk")
+            ;;
+    esac
+    
+    local missing_usb=0
+    for driver in "${critical_drivers[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            echo "   ✅ $driver: 已启用"
+        elif grep -q "^CONFIG_PACKAGE_${driver}=m" .config; then
+            echo "   📦 $driver: 模块化"
+        else
+            echo "   ❌ $driver: 未启用"
+            missing_usb=$((missing_usb + 1))
+        fi
+    done
+    
+    if [ $missing_usb -gt 0 ]; then
+        echo "   ⚠️ 有 $missing_usb 个关键USB驱动缺失"
+        warning_count=$((warning_count + 1))
+    fi
+    echo ""
+    
+    echo "6. ✅ 内存检查:"
+    local mem_total=$(free -m | awk '/^Mem:/{print $2}')
+    local mem_available=$(free -m | awk '/^Mem:/{print $7}')
+    echo "   📊 总内存: ${mem_total}MB, 可用: ${mem_available}MB"
+    
+    if [ $mem_available -lt 512 ]; then
+        echo "   ⚠️ 可用内存不足 (<512MB)"
+        warning_count=$((warning_count + 1))
+    else
+        echo "   ✅ 内存充足"
+    fi
+    echo ""
+    
+    echo "7. ✅ CPU检查:"
+    local cpu_cores=$(nproc)
+    local cpu_model=$(grep "model name" /proc/cpuinfo | head -1 | cut -d':' -f2 | xargs)
+    echo "   📊 核心数: $cpu_cores"
+    echo "   📊 型号: $cpu_model"
+    echo ""
+    
+    echo "8. ✅ 分支兼容性检查:"
+    if [ -n "$branches" ] && [ "$branches" != "未知" ]; then
+        if echo "$branches" | grep -q "$SELECTED_BRANCH"; then
+            echo "   ✅ 当前分支 $SELECTED_BRANCH 在支持列表中"
+        else
+            echo "   ⚠️ 当前分支 $SELECTED_BRANCH 不在支持列表中"
+            warning_count=$((warning_count + 1))
+        fi
+    fi
+    echo ""
+    
+    echo "9. ✅ 内核配置文件检查:"
+    local kernel_configs=$(find "target/linux/$TARGET" -type f -name "config-*" 2>/dev/null | wc -l)
+    if [ $kernel_configs -gt 0 ]; then
+        echo "   ✅ 找到 $kernel_configs 个内核配置文件"
+    else
+        echo "   ⚠️ 未找到内核配置文件"
+        warning_count=$((warning_count + 1))
+    fi
+    echo ""
+    
+    echo "========================================"
+    if [ $error_count -gt 0 ]; then
+        echo "❌❌❌ 检测到 $error_count 个错误，请修复后重试 ❌❌❌"
+        exit 1
+    elif [ $warning_count -gt 0 ]; then
+        echo "⚠️⚠️⚠️ 检测到 $warning_count 个警告，但可以继续 ⚠️⚠️⚠️"
+    else
+        echo "✅✅✅ 所有检查通过，可以开始编译 ✅✅✅"
+    fi
+    echo "========================================"
+    
+    log "✅ 步骤23 完成"
 }
 #【build_firmware_main.sh-37-end】
 
