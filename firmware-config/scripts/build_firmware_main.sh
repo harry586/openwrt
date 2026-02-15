@@ -994,18 +994,17 @@ pre_build_space_check() {
 #【build_firmware_main.sh-13】
 generate_config() {
     local extra_packages=$1
-    local device_override=$2  # 新增设备覆盖参数
+    local device_override=$2
     
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    # 如果提供了设备覆盖参数，优先使用
     if [ -n "$device_override" ]; then
         DEVICE="$device_override"
         log "🔧 使用设备覆盖参数: $DEVICE"
     fi
     
-    log "=== 智能配置生成系统（设备显式指定版） ==="
+    log "=== 智能配置生成系统（动态映射版） ==="
     log "版本: $SELECTED_BRANCH"
     log "目标: $TARGET"
     log "子目标: $SUBTARGET"
@@ -1013,10 +1012,8 @@ generate_config() {
     log "配置模式: $CONFIG_MODE"
     log "配置文件目录: $CONFIG_DIR"
     
-    # 验证设备变量是否为空
     if [ -z "$DEVICE" ]; then
         log "❌ 错误: DEVICE变量为空！"
-        log "可用环境变量:"
         env | grep -E "DEVICE|TARGET|SELECTED" || true
         handle_error "DEVICE变量未设置"
     fi
@@ -1024,45 +1021,61 @@ generate_config() {
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
-    # 步骤1: 根据设备名映射到正确的OpenWrt设备配置名
+    # 动态设备映射 - 使用support.sh
     local openwrt_device=""
-    
-    # 如果启用了动态设备映射，尝试从support.sh获取
-    if [ "${ENABLE_DYNAMIC_DEVICE_MAPPING:-true}" = "true" ] && [ -f "$SUPPORT_SCRIPT" ]; then
-        log "🔍 尝试从support.sh获取设备映射..."
+    if [ -f "$SUPPORT_SCRIPT" ]; then
+        log "🔍 从support.sh获取设备映射..."
         local platform_info=$("$SUPPORT_SCRIPT" get-platform "$DEVICE" 2>/dev/null)
         if [ -n "$platform_info" ]; then
-            # 使用设备名本身作为openwrt_device（support.sh已经处理了映射）
+            TARGET=$(echo "$platform_info" | awk '{print $1}')
+            SUBTARGET=$(echo "$platform_info" | awk '{print $2}')
+            # 使用原始设备名，support.sh已经处理了映射
             openwrt_device="$DEVICE"
-            log "✅ 从support.sh获取设备信息成功"
+            log "✅ 从support.sh获取设备信息: $TARGET/$SUBTARGET/$openwrt_device"
+        else
+            log "⚠️ support.sh无法获取设备信息，使用本地映射"
         fi
     fi
     
-    # 如果没有获取到，使用转换规则
+    # 本地映射规则（作为后备）
     if [ -z "$openwrt_device" ]; then
         case "$DEVICE" in
+            # 华硕路由器
             ac42u|rt-ac42u|asus_rt-ac42u)
                 openwrt_device="asus_rt-ac42u"
-                log "🔧 映射设备 $DEVICE -> $openwrt_device"
                 ;;
             acrh17|rt-acrh17|asus_rt-acrh17)
                 openwrt_device="asus_rt-acrh17"
-                log "🔧 映射设备 $DEVICE -> $openwrt_device"
                 ;;
+            # 小米路由器
+            xiaomi_mi-router-4a-100m|xiaomi_mi-router-4a)
+                openwrt_device="xiaomi_mi-router-4a-100m"
+                ;;
+            xiaomi_mi-router-3g-v2|xiaomi_mi-router-3g)
+                openwrt_device="xiaomi_mi-router-3g-v2"
+                ;;
+            # CMCC路由器
+            cmcc_rax3000m|rax3000m)
+                openwrt_device="cmcc_rax3000m"
+                ;;
+            # Netgear路由器
+            netgear_3800|wndr3800)
+                openwrt_device="netgear_wndr3800"
+                ;;
+            # 默认转换
             *)
                 openwrt_device=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-                log "🔧 使用转换后的设备名: $openwrt_device"
                 ;;
         esac
+        log "🔧 使用本地映射: $DEVICE -> $openwrt_device"
     fi
     
-    # 直接使用小写的设备名
     local device_lower="$openwrt_device"
     local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}"
     
     log "🔧 设备配置变量: $device_config=y"
     
-    # 步骤2: 创建基础目标配置 - 使用小写设备名
+    # 创建基础目标配置
     cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
@@ -1072,10 +1085,8 @@ EOF
     log "🔧 基础配置文件内容:"
     cat .config
     
-    # 步骤3: 合并所有配置文件
     log "📁 开始合并配置文件..."
     
-    # 辅助函数：安全追加配置（过滤注释和空行）
     append_config() {
         local file=$1
         if [ -f "$file" ]; then
@@ -1083,19 +1094,40 @@ EOF
         fi
     }
     
-    # 使用配置文件名映射
+    # 合并配置文件
     : ${CONFIG_BASE:="base.config"}
     : ${CONFIG_USB_GENERIC:="usb-generic.config"}
     : ${CONFIG_NORMAL:="normal.config"}
     
     append_config "$CONFIG_DIR/$CONFIG_BASE"
     append_config "$CONFIG_DIR/$CONFIG_USB_GENERIC"
-    append_config "$CONFIG_DIR/$TARGET.config"
-    append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
-    append_config "$CONFIG_DIR/devices/$DEVICE.config"
     
-    if [ "$CONFIG_MODE" = "normal" ]; then
+    # 目标平台配置
+    if [ -f "$CONFIG_DIR/$TARGET.config" ]; then
+        append_config "$CONFIG_DIR/$TARGET.config"
+        log "✅ 加载目标平台配置: $TARGET.config"
+    else
+        log "⚠️ 目标平台配置不存在: $TARGET.config"
+    fi
+    
+    # 版本配置
+    if [ -f "$CONFIG_DIR/$SELECTED_BRANCH.config" ]; then
+        append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
+        log "✅ 加载版本配置: $SELECTED_BRANCH.config"
+    fi
+    
+    # 设备配置
+    if [ -f "$CONFIG_DIR/devices/$DEVICE.config" ]; then
+        append_config "$CONFIG_DIR/devices/$DEVICE.config"
+        log "✅ 加载设备配置: $DEVICE.config"
+    else
+        log "⚠️ 设备配置不存在: $DEVICE.config"
+    fi
+    
+    # 模式配置
+    if [ "$CONFIG_MODE" = "normal" ] && [ -f "$CONFIG_DIR/$CONFIG_NORMAL" ]; then
         append_config "$CONFIG_DIR/$CONFIG_NORMAL"
+        log "✅ 加载正常模式配置"
     fi
     
     # 添加额外包
@@ -1107,20 +1139,14 @@ EOF
         done
     fi
     
-    # 从config.txt动态添加配置（如果存在）
-    if [ -f "$CONFIG_DIR/devices/$DEVICE.config" ]; then
-        log "📋 从设备配置文件动态添加配置: $CONFIG_DIR/devices/$DEVICE.config"
-        append_config "$CONFIG_DIR/devices/$DEVICE.config"
-    fi
-    
-    # TCP BBR（根据配置开关）
+    # TCP BBR
     if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
         echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
         echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
         log "✅ TCP BBR已启用"
     fi
     
-    # TurboACC（根据配置开关）
+    # TurboACC
     if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
@@ -1128,7 +1154,7 @@ EOF
         log "✅ TurboACC已启用"
     fi
     
-    # ath10k 冲突解决（根据配置开关）
+    # ath10k-ct
     if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
         sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
         sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
@@ -1140,424 +1166,113 @@ EOF
         log "✅ ath10k-ct驱动已强制启用"
     fi
     
-    # 步骤4: 第一次去重
+    # 第一次去重
     log "🔄 第一次去重配置..."
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 步骤5: 动态获取目标平台支持的内核配置
+    # 动态内核配置检测
     log "🔍 动态获取目标平台支持的内核配置..."
     
     local kernel_config_file=""
     local kernel_version=""
     
-    # 如果启用了动态内核检测
-    if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ] && [ -f "$SUPPORT_SCRIPT" ]; then
-        log "🔍 尝试动态检测内核配置文件..."
-        # 这里可以调用detect_kernel_config函数
-        if [ -f "target/linux/$TARGET/config-6.1" ]; then
-            kernel_config_file="target/linux/$TARGET/config-6.1"
-            kernel_version="6.1"
-        elif [ -f "target/linux/$TARGET/config-5.15" ]; then
-            kernel_config_file="target/linux/$TARGET/config-5.15"
-            kernel_version="5.15"
-        elif [ -f "target/linux/$TARGET/config-5.10" ]; then
-            kernel_config_file="target/linux/$TARGET/config-5.10"
-            kernel_version="5.10"
-        elif [ -f "target/linux/$TARGET/config-5.4" ]; then
-            kernel_config_file="target/linux/$TARGET/config-5.4"
-            kernel_version="5.4"
+    # 检测内核配置文件
+    for ver in 6.1 5.15 5.10 5.4; do
+        if [ -f "target/linux/$TARGET/config-$ver" ]; then
+            kernel_config_file="target/linux/$TARGET/config-$ver"
+            kernel_version="$ver"
+            break
         fi
-    else
-        # 使用传统的硬编码检测
-        if [ -f "target/linux/$TARGET/config-5.4" ]; then
-            kernel_config_file="target/linux/$TARGET/config-5.4"
-            kernel_version="5.4"
-        elif [ -f "target/linux/$TARGET/config-5.10" ]; then
-            kernel_config_file="target/linux/$TARGET/config-5.10"
-            kernel_version="5.10"
-        elif [ -f "target/linux/$TARGET/config-5.15" ]; then
-            kernel_config_file="target/linux/$TARGET/config-5.15"
-            kernel_version="5.15"
-        elif [ -f "target/linux/$TARGET/config-6.1" ]; then
-            kernel_config_file="target/linux/$TARGET/config-6.1"
-            kernel_version="6.1"
-        fi
-    fi
+    done
     
     if [ -n "$kernel_config_file" ] && [ -f "$kernel_config_file" ]; then
         log "✅ 找到内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
         
-        # 定义内核提取模式（可从配置文件获取）
-        local kernel_patterns=(
-            "^CONFIG_USB"
-            "^CONFIG_PHY"
-            "^CONFIG_DWC"
-            "^CONFIG_XHCI"
-            "^CONFIG_EXTCON"
-            "^CONFIG_COMMON_CLK"
-            "^CONFIG_ARCH"
-        )
-        
-        # 创建一个临时文件存储提取的配置
+        # 提取USB相关配置
         local usb_configs_file="/tmp/usb_configs_$$.txt"
+        grep -E "^(CONFIG_USB|CONFIG_PHY|CONFIG_DWC|CONFIG_XHCI)" "$kernel_config_file" > "$usb_configs_file" 2>/dev/null || true
         
-        for pattern in "${kernel_patterns[@]}"; do
-            grep -E "^${pattern}|^# ${pattern}" "$kernel_config_file" >> "$usb_configs_file" 2>/dev/null || true
-        done
-        
-        # 去重并排序
-        sort -u "$usb_configs_file" > "$usb_configs_file.sorted"
-        
-        # 显示找到的配置
-        local config_count=$(wc -l < "$usb_configs_file.sorted")
-        log "找到 $config_count 个USB相关内核配置"
-        
-        log "所有USB相关内核配置:"
-        local line_num=0
-        while read line; do
-            line_num=$((line_num + 1))
-            if echo "$line" | grep -q "=y$"; then
-                log "   ✅ [$line_num] $line"
-            elif echo "$line" | grep -q "=m$"; then
-                log "   📦 [$line_num] $line"
-            elif echo "$line" | grep -q "is not set"; then
-                log "   ⚪ [$line_num] $line"
-            else
-                log "   📄 [$line_num] $line"
-            fi
-        done < "$usb_configs_file.sorted"
-        
-        # 将这些配置添加到.config中（但不要覆盖已启用的配置）
-        local added_count=0
-        while read line; do
-            # 提取配置名（去掉前面的#和空格）
-            local config_name=$(echo "$line" | sed 's/^# //g' | cut -d'=' -f1 | cut -d' ' -f1)
+        if [ -s "$usb_configs_file" ]; then
+            sort -u "$usb_configs_file" > "$usb_configs_file.sorted"
+            local config_count=$(wc -l < "$usb_configs_file.sorted")
+            log "找到 $config_count 个USB相关内核配置"
             
-            # 检查配置是否已存在
-            if ! grep -q "^${config_name}=" .config && ! grep -q "^# ${config_name} is not set" .config; then
-                # 如果配置是启用的（=y），直接添加
-                if echo "$line" | grep -q "=y$"; then
-                    echo "$line" >> .config
-                    added_count=$((added_count + 1))
-                # 如果配置是禁用的（is not set），作为注释添加
-                elif echo "$line" | grep -q "is not set"; then
-                    echo "$line" >> .config
-                    added_count=$((added_count + 1))
+            # 添加到.config
+            local added_count=0
+            while read line; do
+                local config_name=$(echo "$line" | sed 's/^# //g' | cut -d'=' -f1 | cut -d' ' -f1)
+                if ! grep -q "^${config_name}=" .config && ! grep -q "^# ${config_name} is not set" .config; then
+                    if echo "$line" | grep -q "=y$"; then
+                        echo "$line" >> .config
+                        added_count=$((added_count + 1))
+                    elif echo "$line" | grep -q "is not set"; then
+                        echo "$line" >> .config
+                        added_count=$((added_count + 1))
+                    fi
                 fi
-            fi
-        done < "$usb_configs_file.sorted"
-        
-        log "✅ 添加了 $added_count 个新的内核配置"
-        
-        rm -f "$usb_configs_file" "$usb_configs_file.sorted"
+            done < "$usb_configs_file.sorted"
+            
+            log "✅ 添加了 $added_count 个新的内核配置"
+            rm -f "$usb_configs_file" "$usb_configs_file.sorted"
+        else
+            log "⚠️ 内核配置文件中未找到USB相关配置"
+        fi
     else
         log "⚠️ 未找到目标平台 $TARGET 的内核配置文件"
     fi
     
-    # 步骤6: 第一次运行 make defconfig（这会重置内核配置）
-    log "🔄 第一次运行 make defconfig（加载平台默认配置）..."
+    # 第一次make defconfig
+    log "🔄 第一次运行 make defconfig..."
     make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
-        log "❌ 第一次 make defconfig 失败，查看日志..."
+        log "❌ 第一次 make defconfig 失败"
         tail -50 /tmp/build-logs/defconfig1.log
         handle_error "第一次依赖解决失败"
     }
     log "✅ 第一次 make defconfig 成功"
     
-    # 步骤7: 动态检测实际生效的USB内核配置
-    log "🔍 动态检测实际生效的USB内核配置..."
-    
-    # 定义要检查的关键USB组件
-    local usb_components=(
-        "USB_SUPPORT"
-        "USB_COMMON"
-        "USB"
-        "USB_XHCI_HCD"
-        "USB_DWC3"
-        "PHY"
-    )
-    
-    for component in "${usb_components[@]}"; do
-        local matches=$(grep -E "^CONFIG_${component}" .config | grep -E "=y|=m" | wc -l)
-        if [ $matches -gt 0 ]; then
-            log "✅ $component 相关配置: 找到 $matches 个"
-            # 显示所有具体配置
-            grep -E "^CONFIG_${component}" .config | grep -E "=y|=m" | while read line; do
-                log "    $line"
-            done
-        else
-            log "ℹ️ $component 相关配置: 未找到"
-        fi
-    done
-    
-    # 显示所有USB相关内核配置
-    log "📋 所有USB相关内核配置（已生效）:"
-    local all_usb_kernel=$(grep -E "^CONFIG_USB_|^CONFIG_PHY_|^CONFIG_DWC|^CONFIG_XHCI|^CONFIG_EXTCON|^CONFIG_COMMON_CLK|^CONFIG_ARCH" .config | grep -E "=y|=m" | sort)
-    if [ -n "$all_usb_kernel" ]; then
-        local kernel_count=$(echo "$all_usb_kernel" | wc -l)
-        log "共 $kernel_count 个USB相关内核配置:"
-        echo "$all_usb_kernel" | while read line; do
-            log "  ✅ $line"
-        done
-    else
-        log "  未找到USB相关内核配置"
-    fi
-    
-    # 步骤8: 动态添加USB软件包（基于目标平台）
-    log "📋 动态添加USB软件包..."
-    
-    # 从配置文件获取USB包列表
-    # 基础USB软件包（所有平台都需要）
-    local base_usb_packages=(
-        "kmod-usb-core"
-        "kmod-usb-common"
-        "kmod-usb2"
-        "kmod-usb3"
-        "kmod-usb-storage"
-        "kmod-scsi-core"
-        "block-mount"
-        "automount"
-        "usbutils"
-    )
-    
-    # 扩展USB包
-    local extended_usb_packages=(
-        "kmod-usb-storage-uas"
-        "kmod-usb-storage-extras"
-        "kmod-scsi-generic"
-    )
-    
-    # 文件系统支持
-    local fs_support_packages=(
-        "kmod-fs-ext4"
-        "kmod-fs-vfat"
-        "kmod-fs-exfat"
-        "kmod-fs-ntfs3"
-        "kmod-nls-utf8"
-        "kmod-nls-cp936"
-    )
-    
-    # 根据目标平台添加特定软件包
-    case "$TARGET" in
-        ipq40xx|ipq806x|qcom)
-            log "检测到高通平台，添加专用USB驱动..."
-            local qcom_packages=(
-                "kmod-usb-dwc3"
-                "kmod-usb-dwc3-qcom"
-                "kmod-usb-dwc3-of-simple"
-                "kmod-phy-qcom-ipq4019-usb"
-                "kmod-usb-xhci-hcd"
-                "kmod-usb-xhci-plat-hcd"
-            )
-            base_usb_packages+=("${qcom_packages[@]}")
-            ;;
-        mediatek|ramips)
-            log "检测到联发科平台，添加专用USB驱动..."
-            local mtk_packages=(
-                "kmod-usb-xhci-mtk"
-                "kmod-usb-dwc3"
-                "kmod-usb-dwc3-mediatek"
-            )
-            base_usb_packages+=("${mtk_packages[@]}")
-            ;;
-        ath79)
-            log "检测到ATH79平台，添加专用USB驱动..."
-            local ath79_packages=(
-                "kmod-usb2-ath79"
-                "kmod-usb-ohci"
-            )
-            base_usb_packages+=("${ath79_packages[@]}")
-            ;;
-    esac
-    
-    # 去重并添加USB软件包
-    local added_packages=0
-    local existing_packages=0
-    while read pkg; do
-        [ -z "$pkg" ] && continue
-        if ! grep -q "^CONFIG_PACKAGE_${pkg}=y" .config && ! grep -q "^CONFIG_PACKAGE_${pkg}=m" .config; then
-            echo "CONFIG_PACKAGE_${pkg}=y" >> .config
-            added_packages=$((added_packages + 1))
-            log "  ✅ 添加软件包: $pkg"
-        else
-            existing_packages=$((existing_packages + 1))
-        fi
-    done < <(printf "%s\n" "${base_usb_packages[@]}" "${extended_usb_packages[@]}" "${fs_support_packages[@]}" | sort -u)
-    
-    log "📊 USB软件包统计: 新增 $added_packages 个, 已存在 $existing_packages 个"
-    
-    # 步骤9: 第二次去重
+    # 第二次去重
     log "🔄 第二次去重配置..."
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 步骤10: 第二次运行 make defconfig（应用强制配置）
-    log "🔄 第二次运行 make defconfig（应用强制配置）..."
+    # 第二次make defconfig
+    log "🔄 第二次运行 make defconfig..."
     make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
         log "⚠️ 第二次 make defconfig 有警告，但继续..."
     }
     log "✅ 第二次 make defconfig 完成"
     
-    # 步骤11: 验证关键USB驱动是否被正确启用
-    log "🔍 验证关键USB驱动状态..."
-    
-    local critical_usb_drivers=(
-        "kmod-usb-core"
-        "kmod-usb2"
-        "kmod-usb-storage"
-        "kmod-scsi-core"
-    )
-    
-    # 根据平台添加关键驱动
-    case "$TARGET" in
-        ipq40xx|ipq806x|qcom)
-            critical_usb_drivers+=(
-                "kmod-usb-dwc3"
-                "kmod-usb-dwc3-qcom"
-            )
-            ;;
-        mediatek|ramips)
-            critical_usb_drivers+=(
-                "kmod-usb-xhci-mtk"
-            )
-            ;;
-    esac
-    
-    local missing_drivers=()
-    for driver in "${critical_usb_drivers[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-            log "  ✅ $driver: 已启用"
-        elif grep -q "^CONFIG_PACKAGE_${driver}=m" .config; then
-            log "  📦 $driver: 模块化"
-        else
-            log "  ❌ $driver: 未启用"
-            missing_drivers+=("$driver")
-        fi
-    done
-    
-    # 检查USB 3.0/xhci功能（多种实现方式）
-    log "  🔍 USB 3.0/xhci功能检测:"
-    local usb3_found=0
-    
-    if grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
-        log "    ✅ kmod-usb3: 已启用"
-        usb3_found=1
-    fi
-    
-    if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
-        log "    ✅ kmod-usb-xhci-hcd: 已启用"
-        usb3_found=1
-    elif grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" .config; then
-        log "    ✅ kmod-usb-xhci-plat-hcd: 已启用"
-        usb3_found=1
-    elif grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-qcom=y" .config; then
-        log "    ✅ kmod-usb-xhci-qcom: 已启用"
-        usb3_found=1
-    elif grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config; then
-        log "    ✅ kmod-usb-xhci-mtk: 已启用"
-        usb3_found=1
-    elif grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3=y" .config && grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
-        log "    ✅ DWC3 + USB3: 已启用"
-        usb3_found=1
-    elif grep -q "^CONFIG_USB_XHCI_HCD=y" .config; then
-        log "    ✅ 内核xhci支持: 已启用"
-        usb3_found=1
-    fi
-    
-    if [ $usb3_found -eq 0 ]; then
-        log "    ❌ USB 3.0功能未启用"
-        missing_drivers+=("USB 3.0功能")
-    fi
-    
-    if [ ${#missing_drivers[@]} -gt 0 ]; then
-        log "⚠️ 缺失驱动: ${missing_drivers[*]}"
-        
-        # 如果启用了自动修复，尝试添加缺失驱动
-        if [ "${AUTO_FIX_USB_DRIVERS:-true}" = "true" ]; then
-            log "🔧 自动修复缺失驱动..."
-            for driver in "${missing_drivers[@]}"; do
-                if [[ "$driver" != "USB 3.0功能" ]]; then
-                    echo "CONFIG_PACKAGE_${driver}=y" >> .config
-                    log "  ✅ 已添加: $driver"
-                fi
-            done
-            # 重新运行defconfig
-            make defconfig > /dev/null 2>&1
-            log "✅ 自动修复完成"
-        fi
-    else
-        log "✅ 所有关键USB驱动都已启用"
-    fi
-    
-    # 步骤12: 显示所有已启用的USB驱动
-    log "📋 所有已启用的USB驱动:"
-    local all_usb=$(grep "^CONFIG_PACKAGE_kmod-usb.*=y" .config | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
-    if [ -n "$all_usb" ]; then
-        local usb_count=$(echo "$all_usb" | wc -l)
-        log "共 $usb_count 个USB驱动:"
-        echo "$all_usb" | while read driver; do
-            log "  ✅ $driver"
-        done
-    else
-        log "  未找到USB驱动"
-    fi
-    
-    # 步骤13: 显示所有USB相关软件包（包括模块化的）
-    log "📋 所有USB相关软件包（包括模块化）:"
-    local all_usb_packages=$(grep "^CONFIG_PACKAGE_kmod-usb" .config | grep -E "=y|=m" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
-    if [ -n "$all_usb_packages" ]; then
-        local pkg_count=$(echo "$all_usb_packages" | wc -l)
-        log "共 $pkg_count 个USB软件包:"
-        echo "$all_usb_packages" | while read pkg; do
-            if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
-                log "  ✅ $pkg"
-            else
-                log "  📦 $pkg"
-            fi
-        done
-    else
-        log "  未找到USB软件包"
-    fi
-    
-    # 步骤14: 最终设备验证
-    log "🔍 正在验证设备 $openwrt_device 是否被选中..."
+    # 最终设备验证
+    log "🔍 正在验证设备 $device_lower 是否被选中..."
     
     if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
-        log "✅ 目标设备已正确启用: CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y"
-    elif grep -q "^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} is not set" .config; then
-        log "⚠️ 警告: 设备被禁用，尝试强制启用..."
-        sed -i "/^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} is not set/d" .config
+        log "✅ 目标设备已正确启用"
+    else
+        log "⚠️ 设备未启用，尝试手动添加..."
         echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
         make defconfig > /dev/null 2>&1
         
         if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
-            log "✅ 设备已强制启用"
+            log "✅ 设备已手动添加"
         else
             log "❌ 无法启用设备"
         fi
-    else
-        log "⚠️ 警告: 设备配置行未找到，手动添加..."
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
-        sort .config | uniq > .config.tmp
-        mv .config.tmp .config
-        make defconfig > /dev/null 2>&1
     fi
     
-    # 步骤15: 保存配置统计信息
+    # 配置统计
     local total_configs=$(wc -l < .config)
     local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config)
     local module_packages=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config)
     local disabled_packages=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config)
-    local enabled_kernel=$(grep -c "^CONFIG_[A-Z].*=y$" .config | grep -v "PACKAGE" | wc -l)
     
     log "📊 配置统计:"
     log "  总配置行数: $total_configs"
     log "  启用软件包: $enabled_packages"
     log "  模块化软件包: $module_packages"
     log "  禁用软件包: $disabled_packages"
-    log "  启用内核配置: $enabled_kernel"
     
     log "✅ 配置生成完成"
 }
