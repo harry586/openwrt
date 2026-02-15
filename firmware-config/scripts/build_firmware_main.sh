@@ -4672,13 +4672,13 @@ main() {
     local arg4="$5"
     local arg5="$6"
     
-    # 确保配置已加载
-    if [ -z "$CONFIG_LOADED" ]; then
-        if [ -f "$REPO_ROOT/build-config.conf" ]; then
+    # 只在首次调用主函数时加载配置
+    if [ -z "$MAIN_CONFIG_LOADED" ]; then
+        if [ -f "$REPO_ROOT/build-config.conf" ] && [ -z "$CONFIG_LOADED" ]; then
             source "$REPO_ROOT/build-config.conf"
             load_build_config
-            export CONFIG_LOADED=1
         fi
+        export MAIN_CONFIG_LOADED=1
     fi
     
     case "$command" in
