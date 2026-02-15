@@ -3190,7 +3190,7 @@ verify_sdk_directory() {
 # 公共函数库 - 供所有步骤调用
 # ============================================================================
 
-# 根据内容选择最佳的设备定义文件
+# 根据内容选择最佳的设备定义文件（带评分和详细信息）
 find_device_definition_file() {
     local device_name="$1"
     local platform="$2"
@@ -3204,36 +3204,48 @@ find_device_definition_file() {
         return
     fi
     
+    echo "   🔍 开始搜索设备 $device_name 的定义文件..."
+    
     while IFS= read -r mk_file; do
         if [ -f "$mk_file" ]; then
             local score=0
             local matched=0
+            local match_desc=""
             
+            # 检查是否包含设备定义
             if grep -q "define Device/$device_name" "$mk_file" 2>/dev/null; then
                 score=$((score + 100))
                 matched=1
+                match_desc="精确设备定义"
             elif grep -q "Device/$device_name" "$mk_file" 2>/dev/null; then
                 score=$((score + 80))
                 matched=1
+                match_desc="设备引用"
             elif grep -q "DEVICE_MODEL.*$device_name" "$mk_file" 2>/dev/null; then
                 score=$((score + 60))
                 matched=1
+                match_desc="设备型号匹配"
             elif grep -qi "$device_name" "$mk_file" 2>/dev/null; then
                 local match_count=$(grep -io "$device_name" "$mk_file" 2>/dev/null | wc -l)
                 score=$((score + match_count * 10))
                 if [ $match_count -gt 0 ]; then
                     matched=1
+                    match_desc="模糊匹配 ($match_count 次)"
                 fi
             fi
             
+            # 根据文件路径加分
             if [[ "$mk_file" == *"/image/"* ]]; then
                 score=$((score + 50))
+                match_desc="$match_desc + image目录"
             fi
             
             if [[ "$mk_file" == *"/$platform/"*"target.mk" ]]; then
                 score=$((score + 30))
+                match_desc="$match_desc + target.mk"
             fi
             
+            # 根据文件内容加分
             if grep -q "DEVICE_PACKAGES" "$mk_file" 2>/dev/null; then
                 score=$((score + 20))
             fi
@@ -3247,7 +3259,10 @@ find_device_definition_file() {
             fi
             
             if [ $matched -eq 1 ]; then
-                found_files+=("$mk_file|$score")
+                found_files+=("$mk_file|$score|$match_desc")
+                echo "     📍 $mk_file"
+                echo "       匹配: $match_desc, 得分: $score"
+                
                 if [ $score -gt $best_score ]; then
                     best_score=$score
                     best_file="$mk_file"
@@ -3256,93 +3271,108 @@ find_device_definition_file() {
         fi
     done < <(find "$base_path" -type f -name "*.mk" 2>/dev/null)
     
+    if [ -n "$best_file" ]; then
+        echo "   🏆 最佳匹配文件 (得分: $best_score): $best_file"
+    else
+        echo "   ❌ 未找到设备 $device_name 的定义文件"
+    fi
+    
     echo "$best_file"
 }
 
-# 从设备定义文件中提取内核版本
-extract_kernel_version_from_device_file() {
+# 从设备定义文件中提取指定设备的配置
+extract_device_config() {
     local device_file="$1"
-    local kernel_version=""
+    local device_name="$2"
     
     if [ ! -f "$device_file" ]; then
-        echo ""
-        return
+        return 1
     fi
     
-    local kernel_patchver=$(grep -E "^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-    local kernel_line=$(grep -E "^[[:space:]]*KERNEL[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
+    local in_device_block=0
+    local device_block=""
+    local current_device=""
     
-    if [ -n "$kernel_patchver" ]; then
-        kernel_version="$kernel_patchver"
-    elif [ -n "$kernel_line" ]; then
-        kernel_version=$(echo "$kernel_line" | grep -oE '^[0-9]+.[0-9]+')
-    fi
-    
-    echo "$kernel_version"
-}
-
-# 根据内核版本查找配置文件
-find_kernel_config_by_version() {
-    local platform="$1"
-    local subtarget="$2"
-    local kernel_version="$3"
-    local config_file=""
-    
-    local search_paths=(
-        "target/linux/$platform/$subtarget"
-        "target/linux/$platform"
-    )
-    
-    if [ -n "$kernel_version" ]; then
-        for search_path in "${search_paths[@]}"; do
-            if [ -d "$search_path" ]; then
-                config_file=$(find "$search_path" -maxdepth 2 -type f -name "config-${kernel_version}*" 2>/dev/null | head -1)
-                if [ -n "$config_file" ]; then
-                    echo "$config_file"
-                    return
-                fi
+    while IFS= read -r line; do
+        # 检查是否是设备定义开始
+        if [[ "$line" =~ ^define[[:space:]]+Device/([^[:space:]]+) ]]; then
+            current_device="${BASH_REMATCH[1]}"
+            if [ "$current_device" = "$device_name" ]; then
+                in_device_block=1
+                device_block="$line"$'
+'
+            else
+                in_device_block=0
             fi
-        done
-    fi
-    
-    for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
-        config_file="target/linux/$platform/config-$ver"
-        if [ -f "$config_file" ]; then
-            echo "$config_file"
-            return
+        elif [[ "$line" =~ ^endef ]] && [ $in_device_block -eq 1 ]; then
+            device_block="${device_block}$line"
+            break
+        elif [ $in_device_block -eq 1 ]; then
+            device_block="${device_block}$line"$'
+'
         fi
-    done
+    done < "$device_file"
     
-    echo ""
+    echo "$device_block"
 }
 
-# 获取设备支持信息摘要
+# 从设备定义块中提取具体配置
+extract_config_value() {
+    local device_block="$1"
+    local key="$2"
+    
+    echo "$device_block" | grep -E "^[[:space:]]*$key[[:space:]]*:?=" | head -1 | sed 's/.*=[[:space:]]*//'
+}
+
+# 获取设备支持信息摘要（修复版）
 get_device_support_summary() {
     local device_name="$1"
     local platform="$2"
     local subtarget="$3"
     
-    local device_file=$(find_device_definition_file "$device_name" "$platform")
-    
     echo "   📁 平台: $platform"
     echo "   📁 子平台: $subtarget"
+    
+    local device_file=$(find_device_definition_file "$device_name" "$platform")
     
     if [ -n "$device_file" ] && [ -f "$device_file" ]; then
         echo "   ✅ 找到设备定义文件: $device_file"
         
-        local soc=$(grep -E "^[[:space:]]*SOC[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-        local model=$(grep -E "DEVICE_MODEL[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-        local title=$(grep -E "DEVICE_TITLE[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-        local packages=$(grep -E "DEVICE_PACKAGES[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-        local dts=$(grep -E "DEVICE_DTS[[:space:]]*:?=" "$device_file" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*//')
-        local kernel_ver=$(extract_kernel_version_from_device_file "$device_file")
+        # 提取指定设备的配置块
+        local device_block=$(extract_device_config "$device_file" "$device_name")
         
-        [ -n "$soc" ] && echo "   🔧 SOC: $soc"
-        [ -n "$model" ] && echo "   📱 型号: $model"
-        [ -n "$title" ] && echo "   📝 标题: $title"
-        [ -n "$packages" ] && echo "   📦 默认包: $packages"
-        [ -n "$dts" ] && echo "   🔧 DTS: $dts"
-        [ -n "$kernel_ver" ] && echo "   🐧 内核版本: $kernel_ver"
+        if [ -n "$device_block" ]; then
+            echo ""
+            echo "   📋 设备 $device_name 配置:"
+            echo "   ----------------------------------------"
+            echo "$device_block" | while read line; do
+                echo "     $line"
+            done
+            echo "   ----------------------------------------"
+            
+            # 从设备块中提取具体信息
+            local soc=$(extract_config_value "$device_block" "SOC")
+            local model=$(extract_config_value "$device_block" "DEVICE_MODEL")
+            local title=$(extract_config_value "$device_block" "DEVICE_TITLE")
+            local packages=$(extract_config_value "$device_block" "DEVICE_PACKAGES")
+            local dts=$(extract_config_value "$device_block" "DEVICE_DTS")
+            local kernel_ver=$(extract_config_value "$device_block" "KERNEL_PATCHVER")
+            
+            [ -n "$soc" ] && echo "   🔧 SOC: $soc"
+            [ -n "$model" ] && echo "   📱 型号: $model"
+            [ -n "$title" ] && echo "   📝 标题: $title"
+            [ -n "$packages" ] && echo "   📦 默认包: $packages"
+            [ -n "$dts" ] && echo "   🔧 DTS: $dts"
+            [ -n "$kernel_ver" ] && echo "   🐧 内核版本: $kernel_ver"
+        else
+            echo "   ⚠️ 在文件中未找到设备 $device_name 的配置块"
+            
+            # 显示文件中所有设备
+            echo "   文件中包含的设备:"
+            grep "^define Device/" "$device_file" 2>/dev/null | sed 's/define Device///' | while read dev; do
+                echo "     - $dev"
+            done
+        fi
         
         return 0
     else
@@ -3351,6 +3381,37 @@ get_device_support_summary() {
     fi
 }
 
+# 从设备定义文件中提取内核版本（精确匹配指定设备）
+extract_kernel_version_from_device_file() {
+    local device_file="$1"
+    local device_name="$2"
+    
+    if [ ! -f "$device_file" ]; then
+        echo ""
+        return
+    fi
+    
+    # 先提取指定设备的配置块
+    local device_block=$(extract_device_config "$device_file" "$device_name")
+    
+    if [ -n "$device_block" ]; then
+        # 从设备块中提取内核版本
+        local kernel_patchver=$(echo "$device_block" | grep -E "^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:?=" | head -1 | sed 's/.*=[[:space:]]*//')
+        local kernel_line=$(echo "$device_block" | grep -E "^[[:space:]]*KERNEL[[:space:]]*:?=" | head -1 | sed 's/.*=[[:space:]]*//')
+        
+        if [ -n "$kernel_patchver" ]; then
+            echo "$kernel_patchver"
+        elif [ -n "$kernel_line" ]; then
+            echo "$kernel_line" | grep -oE '^[0-9]+.[0-9]+'
+        else
+            echo ""
+        fi
+    else
+        echo ""
+    fi
+}
+
+# 其余函数保持不变...
 # 获取所有支持的分支列表
 get_supported_branches() {
     local branches=()
@@ -3435,6 +3496,41 @@ get_subtargets_by_platform() {
     else
         echo "generic"
     fi
+}
+
+# 根据内核版本查找配置文件
+find_kernel_config_by_version() {
+    local platform="$1"
+    local subtarget="$2"
+    local kernel_version="$3"
+    local config_file=""
+    
+    local search_paths=(
+        "target/linux/$platform/$subtarget"
+        "target/linux/$platform"
+    )
+    
+    if [ -n "$kernel_version" ]; then
+        for search_path in "${search_paths[@]}"; do
+            if [ -d "$search_path" ]; then
+                config_file=$(find "$search_path" -maxdepth 2 -type f -name "config-${kernel_version}*" 2>/dev/null | head -1)
+                if [ -n "$config_file" ]; then
+                    echo "$config_file"
+                    return
+                fi
+            fi
+        done
+    fi
+    
+    for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
+        config_file="target/linux/$platform/config-$ver"
+        if [ -f "$config_file" ]; then
+            echo "$config_file"
+            return
+        fi
+    done
+    
+    echo ""
 }
 #【build_firmware_main.sh-23-end】
 
