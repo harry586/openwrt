@@ -1071,7 +1071,7 @@ EOF
         find "$search_dir" -type f -name "$pattern" 2>/dev/null | head -1
     }
     
-    # 递归搜索包含关键字的配置文件 - 修复 -exec 语法
+    # 递归搜索包含关键字的配置文件
     find_config_file_by_content() {
         local keyword=$1
         local search_dir=$2
@@ -1185,20 +1185,20 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 动态内核配置检测 - 根据子目标搜索内核配置文件
+    # 动态内核配置检测 - 优先按子目标目录搜索
     log "🔍 动态获取目标平台支持的内核配置..."
     
     local kernel_config_file=""
     local kernel_version=""
     
-    # 先按子目标搜索
+    # 优先搜索子目标对应的内核配置
     if [ -d "target/linux/$TARGET" ]; then
-        # 优先搜索子目标对应的内核配置
         if [ -n "$SUBTARGET" ]; then
-            kernel_config_file=$(find "target/linux/$TARGET" -type f -name "config-*" -exec grep -l "$SUBTARGET" {} ; 2>/dev/null | head -1)
+            # 先搜索子目标目录
+            kernel_config_file=$(find "target/linux/$TARGET/$SUBTARGET" -maxdepth 1 -type f -name "config-*" 2>/dev/null | head -1)
         fi
         
-        # 如果没找到，搜索所有内核配置
+        # 如果没找到，搜索主目录
         if [ -z "$kernel_config_file" ]; then
             kernel_config_file=$(find "target/linux/$TARGET" -maxdepth 2 -type f -name "config-*" 2>/dev/null | head -1)
         fi
@@ -1323,11 +1323,12 @@ EOF
             # 手动查询可用设备和内核
             log "📋 可用子目标列表:"
             if [ -d "target/linux/$TARGET" ]; then
-                ls -la "target/linux/$TARGET/" | grep -E "config-|image" | head -10
+                ls -la "target/linux/$TARGET/" | grep -E "config-|image|filogic" | head -10
             fi
             
             log "📋 可用设备列表:"
             grep -r "define Device" "target/linux/$TARGET/image" 2>/dev/null | head -10 || true
+            grep -r "DEVICE_${device_lower}" "target/linux/$TARGET" 2>/dev/null | head -5 || true
             
             handle_error "设备启用失败"
         fi
