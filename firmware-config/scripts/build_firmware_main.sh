@@ -1047,6 +1047,7 @@ generate_config() {
     cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+CONFIG_TARGET_MULTI_PROFILE=y
 ${device_config}=y
 EOF
     
@@ -1063,7 +1064,7 @@ EOF
         fi
     }
     
-    # 递归搜索配置文件 - 不限层级
+    # 递归搜索配置文件
     find_config_file() {
         local pattern=$1
         local search_dir=$2
@@ -1094,6 +1095,22 @@ EOF
             append_config "$target_config"
         else
             log "⚠️ 未找到目标平台配置文件: $TARGET.config"
+        fi
+    fi
+    
+    # 子目标平台配置 - 递归搜索所有子目录
+    if [ -n "$SUBTARGET" ]; then
+        local subtarget_config=$(find_config_file "*${SUBTARGET}*.config" "$CONFIG_DIR")
+        if [ -n "$subtarget_config" ]; then
+            log "🔍 找到子目标平台配置: $(basename "$subtarget_config")"
+            append_config "$subtarget_config"
+        else
+            # 尝试按内容搜索
+            subtarget_config=$(find_config_file_by_content "TARGET_${TARGET}_${SUBTARGET}" "$CONFIG_DIR")
+            if [ -n "$subtarget_config" ]; then
+                log "🔍 通过内容找到子目标平台配置: $(basename "$subtarget_config")"
+                append_config "$subtarget_config"
+            fi
         fi
     fi
     
@@ -1224,31 +1241,77 @@ EOF
         handle_error "第一次依赖解决失败"
     fi
     
+    # 检查子目标是否正确
+    if ! grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" .config; then
+        log "⚠️ 子目标 $SUBTARGET 未启用，强制启用..."
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
+        make defconfig > /dev/null 2>&1
+    fi
+    
     # 第二次去重
     log "🔄 第二次去重配置..."
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 第二次make defconfig
-    log "🔄 第二次运行 make defconfig..."
+    # 第二次make defconfig - 这次强制保留设备配置
+    log "🔄 第二次运行 make defconfig（强制保留设备配置）..."
+    
+    # 先删除可能冲突的配置
+    sed -i "/^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_/d" .config
+    sed -i "/^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_/d" .config
+    
+    # 重新添加目标设备
+    echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+    sort .config | uniq > .config.tmp
+    mv .config.tmp .config
+    
+    # 运行defconfig
     make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || true
     
-    # 最终设备验证 - 添加调试信息
+    # 最终设备验证
     log "🔍 正在验证设备 $device_lower 是否被选中..."
     
     log "📋 当前.config中的设备配置:"
-    grep "CONFIG_TARGET_.*DEVICE" .config | head -10 || log "  未找到任何设备配置"
+    grep "CONFIG_TARGET_.*DEVICE" .config | head -20 || log "  未找到任何设备配置"
     
     if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
         log "✅ 目标设备已正确启用"
     else
-        log "❌ 设备未启用"
-        log "期望的设备配置: CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y"
-        log "请检查:"
-        log "  1. support.sh是否正确返回平台信息"
-        log "  2. 设备名是否正确: $DEVICE"
-        log "  3. 目标平台是否正确: $TARGET/$SUBTARGET"
-        handle_error "设备启用失败"
+        # 最后一次尝试强制启用
+        log "⚠️ 设备未启用，最后一次尝试强制启用..."
+        
+        # 备份当前配置
+        cp .config .config.bak
+        
+        # 清理所有设备配置
+        sed -i "/^CONFIG_TARGET_.*DEVICE/d" .config
+        sed -i "/^# CONFIG_TARGET_.*DEVICE/d" .config
+        
+        # 只添加目标设备
+        echo "CONFIG_TARGET_${TARGET}=y" >> .config
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}=y" >> .config
+        echo "CONFIG_TARGET_MULTI_PROFILE=y" >> .config
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+        
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
+        
+        # 运行defconfig
+        make defconfig > /tmp/build-logs/defconfig3.log 2>&1 || true
+        
+        if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
+            log "✅ 设备已强制启用"
+        else
+            log "❌ 设备启用失败"
+            log "期望的设备配置: CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y"
+            log "请检查:"
+            log "  1. support.sh是否正确返回平台信息: $TARGET/$SUBTARGET"
+            log "  2. 设备名是否正确: $DEVICE"
+            log "  3. 内核是否支持该子目标: $SUBTARGET"
+            handle_error "设备启用失败"
+        fi
     fi
     
     # 配置统计
