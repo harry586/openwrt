@@ -1212,13 +1212,21 @@ EOF
     log "🔄 第二次运行 make defconfig..."
     make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || true
     
-    # 最终设备验证
+    # 最终设备验证 - 添加调试信息
     log "🔍 正在验证设备 $device_lower 是否被选中..."
+    
+    log "📋 当前.config中的设备配置:"
+    grep "CONFIG_TARGET_.*DEVICE" .config | head -10 || log "  未找到任何设备配置"
     
     if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
         log "✅ 目标设备已正确启用"
     else
         log "❌ 设备未启用"
+        log "期望的设备配置: CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y"
+        log "请检查:"
+        log "  1. support.sh是否正确返回平台信息"
+        log "  2. 设备名是否正确: $DEVICE"
+        log "  3. 目标平台是否正确: $TARGET/$SUBTARGET"
         handle_error "设备启用失败"
     fi
     
