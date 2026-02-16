@@ -1453,6 +1453,109 @@ EOF
     log "  禁用软件包: $disabled_packages"
     
     log "✅ 配置生成完成"
+    
+    # =========================================================================
+    # 添加设备信息详细查询 - 与步骤23保持一致
+    # =========================================================================
+    echo ""
+    echo "=== 🔍 设备信息详细查询（完整版） ==="
+    echo "----------------------------------------"
+    
+    local search_device=""
+    case "$DEVICE" in
+        ac42u|rt-ac42u|asus_rt-ac42u)
+            search_device="ac42u"
+            ;;
+        acrh17|rt-acrh17|asus_rt-acrh17)
+            search_device="acrh17"
+            ;;
+        *)
+            search_device="$DEVICE"
+            ;;
+    esac
+    
+    echo "🔍 搜索设备名: $search_device"
+    echo ""
+    
+    # 直接调用函数，它会输出详细信息
+    local device_file=$(find_device_definition_file "$search_device" "$TARGET")
+    
+    if [ -n "$device_file" ] && [ -f "$device_file" ]; then
+        echo "✅ 找到设备定义文件: $device_file"
+        echo ""
+        
+        local device_block=$(extract_device_config "$device_file" "$search_device")
+        if [ -n "$device_block" ]; then
+            echo "📋 设备 $search_device 配置:"
+            echo "----------------------------------------"
+            echo "$device_block"
+            echo "----------------------------------------"
+            
+            local soc=$(extract_config_value "$device_block" "SOC")
+            local model=$(extract_config_value "$device_block" "DEVICE_MODEL")
+            local title=$(extract_config_value "$device_block" "DEVICE_TITLE")
+            local packages=$(extract_config_value "$device_block" "DEVICE_PACKAGES")
+            local dts=$(extract_config_value "$device_block" "DEVICE_DTS")
+            local kernel_ver=$(extract_config_value "$device_block" "KERNEL_PATCHVER")
+            
+            [ -n "$soc" ] && echo "🔧 SOC: $soc"
+            [ -n "$model" ] && echo "📱 型号: $model"
+            [ -n "$title" ] && echo "📝 标题: $title"
+            [ -n "$packages" ] && echo "📦 默认包: $packages"
+            [ -n "$dts" ] && echo "🔧 DTS: $dts"
+            [ -n "$kernel_ver" ] && echo "🐧 内核版本: $kernel_ver"
+        else
+            echo "⚠️ 在文件中未找到设备 $search_device 的配置块"
+        fi
+    else
+        echo "⚠️ 未找到设备 $search_device 的定义文件"
+    fi
+    
+    echo ""
+    echo "=== 📁 所有子平台.mk文件列表 ==="
+    
+    local mk_count=0
+    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
+        while IFS= read -r mk_file; do
+            mk_count=$((mk_count + 1))
+            echo "   📄 [$mk_count] $mk_file"
+        done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null | sort)
+        echo ""
+        echo "   📊 共找到 $mk_count 个.mk文件"
+    else
+        echo "   未找到.mk文件"
+    fi
+    
+    echo ""
+    echo "=== 📁 内核配置文件列表 ==="
+    
+    local kernel_count=0
+    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
+        while IFS= read -r config; do
+            kernel_count=$((kernel_count + 1))
+            local ver=$(basename "$config" | sed 's/config-//')
+            echo "   📄 [$kernel_count] $config (内核版本 $ver)"
+        done < <(find "target/linux/$TARGET" -type f -name "config-*" 2>/dev/null | sort)
+        echo ""
+        echo "   📊 共找到 $kernel_count 个内核配置文件"
+    else
+        echo "   未找到内核配置文件"
+    fi
+    
+    echo ""
+    echo "=== 📁 设备相关文件列表 ==="
+    
+    local dev_count=0
+    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
+        while IFS= read -r config; do
+            dev_count=$((dev_count + 1))
+            echo "   📄 [$dev_count] $config"
+        done < <(find "target/linux/$TARGET" -type f -name "*${DEVICE}*" 2>/dev/null | sort)
+        echo ""
+        echo "   📊 共找到 $dev_count 个设备相关文件"
+    else
+        echo "   未找到设备专属配置文件"
+    fi
 }
 #【build_firmware_main.sh-13-end】
 
@@ -2341,13 +2444,15 @@ download_dependencies() {
         log "创建依赖包目录: dl"
     fi
     
-    local existing_deps=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
+    # 使用 -name 条件，不加括号
+    local existing_deps=$(find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" 2>/dev/null | wc -l)
     log "现有依赖包数量: $existing_deps 个"
     
     log "开始下载依赖包..."
     make -j1 download V=s 2>&1 | tee download.log || handle_error "下载依赖包失败"
     
-    local downloaded_deps=$(find dl -type f \( -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" \) 2>/dev/null | wc -l)
+    # 使用 -name 条件，不加括号
+    local downloaded_deps=$(find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" 2>/dev/null | wc -l)
     log "下载后依赖包数量: $downloaded_deps 个"
     
     if [ $downloaded_deps -gt $existing_deps ]; then
@@ -2356,12 +2461,115 @@ download_dependencies() {
         log "ℹ️ 没有下载新的依赖包"
     fi
     
-    if grep -q "ERROR\|Failed\|404" download.log 2>/dev/null; then
+    if grep -q "ERROR|Failed|404" download.log 2>/dev/null; then
         log "⚠️ 下载过程中发现错误:"
         grep -E "ERROR|Failed|404" download.log | head -10
     fi
     
     log "✅ 依赖包下载完成"
+    
+    # =========================================================================
+    # 添加设备信息详细查询 - 与步骤23保持一致
+    # =========================================================================
+    echo ""
+    echo "=== 🔍 设备信息详细查询（完整版） ==="
+    echo "----------------------------------------"
+    
+    local search_device=""
+    case "$DEVICE" in
+        ac42u|rt-ac42u|asus_rt-ac42u)
+            search_device="ac42u"
+            ;;
+        acrh17|rt-acrh17|asus_rt-acrh17)
+            search_device="acrh17"
+            ;;
+        *)
+            search_device="$DEVICE"
+            ;;
+    esac
+    
+    echo "🔍 搜索设备名: $search_device"
+    echo ""
+    
+    # 直接调用函数，它会输出详细信息
+    local device_file=$(find_device_definition_file "$search_device" "$TARGET")
+    
+    if [ -n "$device_file" ] && [ -f "$device_file" ]; then
+        echo "✅ 找到设备定义文件: $device_file"
+        echo ""
+        
+        local device_block=$(extract_device_config "$device_file" "$search_device")
+        if [ -n "$device_block" ]; then
+            echo "📋 设备 $search_device 配置:"
+            echo "----------------------------------------"
+            echo "$device_block"
+            echo "----------------------------------------"
+            
+            local soc=$(extract_config_value "$device_block" "SOC")
+            local model=$(extract_config_value "$device_block" "DEVICE_MODEL")
+            local title=$(extract_config_value "$device_block" "DEVICE_TITLE")
+            local packages=$(extract_config_value "$device_block" "DEVICE_PACKAGES")
+            local dts=$(extract_config_value "$device_block" "DEVICE_DTS")
+            local kernel_ver=$(extract_config_value "$device_block" "KERNEL_PATCHVER")
+            
+            [ -n "$soc" ] && echo "🔧 SOC: $soc"
+            [ -n "$model" ] && echo "📱 型号: $model"
+            [ -n "$title" ] && echo "📝 标题: $title"
+            [ -n "$packages" ] && echo "📦 默认包: $packages"
+            [ -n "$dts" ] && echo "🔧 DTS: $dts"
+            [ -n "$kernel_ver" ] && echo "🐧 内核版本: $kernel_ver"
+        else
+            echo "⚠️ 在文件中未找到设备 $search_device 的配置块"
+        fi
+    else
+        echo "⚠️ 未找到设备 $search_device 的定义文件"
+    fi
+    
+    echo ""
+    echo "=== 📁 所有子平台.mk文件列表 ==="
+    
+    local mk_count=0
+    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
+        while IFS= read -r mk_file; do
+            mk_count=$((mk_count + 1))
+            echo "   📄 [$mk_count] $mk_file"
+        done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null | sort)
+        echo ""
+        echo "   📊 共找到 $mk_count 个.mk文件"
+    else
+        echo "   未找到.mk文件"
+    fi
+    
+    echo ""
+    echo "=== 📁 内核配置文件列表 ==="
+    
+    local kernel_count=0
+    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
+        while IFS= read -r config; do
+            kernel_count=$((kernel_count + 1))
+            local ver=$(basename "$config" | sed 's/config-//')
+            echo "   📄 [$kernel_count] $config (内核版本 $ver)"
+        done < <(find "target/linux/$TARGET" -type f -name "config-*" 2>/dev/null | sort)
+        echo ""
+        echo "   📊 共找到 $kernel_count 个内核配置文件"
+    else
+        echo "   未找到内核配置文件"
+    fi
+    
+    echo ""
+    echo "=== 📁 设备相关文件列表 ==="
+    
+    local dev_count=0
+    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
+        while IFS= read -r config; do
+            dev_count=$((dev_count + 1))
+            echo "   📄 [$dev_count] $config"
+        done < <(find "target/linux/$TARGET" -type f -name "*${DEVICE}*" 2>/dev/null | sort)
+        echo ""
+        echo "   📊 共找到 $dev_count 个设备相关文件"
+    else
+        echo "   未找到设备专属配置文件"
+    fi
 }
 #【build_firmware_main.sh-18-end】
 
