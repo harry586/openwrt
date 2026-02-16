@@ -1458,6 +1458,34 @@ EOF
     log "  模块化软件包: $module_packages"
     log "  禁用软件包: $disabled_packages"
     
+    # =========================================================================
+    # 手动禁用特定插件（vssr, ssr-plus, rclone, passwall）
+    # 这些插件可能由feeds自动引入，这里强制禁用
+    # =========================================================================
+    log "🔧 手动禁用 luci-app-vssr, luci-app-ssr-plus, luci-app-rclone, luci-app-passwall 及其子选项"
+    
+    # 禁用 luci-app-vssr
+    sed -i '/CONFIG_PACKAGE_luci-app-vssr=/d' .config
+    echo '# CONFIG_PACKAGE_luci-app-vssr is not set' >> .config
+    sed -i '/CONFIG_PACKAGE_luci-app-vssr_INCLUDE_/d' .config
+    
+    # 禁用 luci-app-ssr-plus
+    sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus=/d' .config
+    echo '# CONFIG_PACKAGE_luci-app-ssr-plus is not set' >> .config
+    sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_/d' .config
+    
+    # 禁用 luci-app-rclone
+    sed -i '/CONFIG_PACKAGE_luci-app-rclone=/d' .config
+    echo '# CONFIG_PACKAGE_luci-app-rclone is not set' >> .config
+    sed -i '/CONFIG_PACKAGE_luci-app-rclone_INCLUDE_/d' .config
+    
+    # 禁用 luci-app-passwall
+    sed -i '/CONFIG_PACKAGE_luci-app-passwall=/d' .config
+    echo '# CONFIG_PACKAGE_luci-app-passwall is not set' >> .config
+    sed -i '/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_/d' .config
+    
+    log "✅ 插件禁用完成"
+    
     log "✅ 配置生成完成"
 }
 #【build_firmware_main.sh-13-end】
