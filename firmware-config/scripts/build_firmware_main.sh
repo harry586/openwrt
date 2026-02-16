@@ -1476,49 +1476,7 @@ EOF
     
     echo "🔍 搜索设备名: $search_device"
     echo ""
-    echo "   📁 平台: $TARGET"
-    echo "   📁 子平台: $SUBTARGET"
-    echo "   ⚠️ 调试模式: 只列出文件"
-    
-    # 先直接调用函数显示所有.mk文件列表（不捕获输出）
-    find_device_definition_file "$search_device" "$TARGET"
-    
-    # 单独查找设备定义文件路径（不依赖捕获输出）
-    local device_file=""
-    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
-        device_file=$(find "target/linux/$TARGET" -type f -name "*.mk" -exec grep -l "define Device.*${search_device}" {} ; 2>/dev/null | head -1)
-    fi
-    
-    if [ -n "$device_file" ] && [ -f "$device_file" ]; then
-        echo "✅ 找到设备定义文件: $device_file"
-        echo ""
-        
-        local device_block=$(extract_device_config "$device_file" "$search_device")
-        if [ -n "$device_block" ]; then
-            echo "📋 设备 $search_device 配置:"
-            echo "----------------------------------------"
-            echo "$device_block"
-            echo "----------------------------------------"
-            
-            local soc=$(extract_config_value "$device_block" "SOC")
-            local model=$(extract_config_value "$device_block" "DEVICE_MODEL")
-            local title=$(extract_config_value "$device_block" "DEVICE_TITLE")
-            local packages=$(extract_config_value "$device_block" "DEVICE_PACKAGES")
-            local dts=$(extract_config_value "$device_block" "DEVICE_DTS")
-            local kernel_ver=$(extract_config_value "$device_block" "KERNEL_PATCHVER")
-            
-            [ -n "$soc" ] && echo "🔧 SOC: $soc"
-            [ -n "$model" ] && echo "📱 型号: $model"
-            [ -n "$title" ] && echo "📝 标题: $title"
-            [ -n "$packages" ] && echo "📦 默认包: $packages"
-            [ -n "$dts" ] && echo "🔧 DTS: $dts"
-            [ -n "$kernel_ver" ] && echo "🐧 内核版本: $kernel_ver"
-        else
-            echo "⚠️ 在文件中未找到设备 $search_device 的配置块"
-        fi
-    else
-        echo "⚠️ 未找到设备 $search_device 的定义文件"
-    fi
+    get_device_support_summary "$search_device" "$TARGET" "$SUBTARGET"
     
     echo ""
     echo "=== 📁 所有子平台.mk文件列表 ==="
@@ -2499,49 +2457,7 @@ download_dependencies() {
     
     echo "🔍 搜索设备名: $search_device"
     echo ""
-    echo "   📁 平台: $TARGET"
-    echo "   📁 子平台: $SUBTARGET"
-    echo "   ⚠️ 调试模式: 只列出文件"
-    
-    # 先直接调用函数显示所有.mk文件列表（不捕获输出）
-    find_device_definition_file "$search_device" "$TARGET"
-    
-    # 单独查找设备定义文件路径（不依赖捕获输出）
-    local device_file=""
-    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
-        device_file=$(find "target/linux/$TARGET" -type f -name "*.mk" -exec grep -l "define Device.*${search_device}" {} ; 2>/dev/null | head -1)
-    fi
-    
-    if [ -n "$device_file" ] && [ -f "$device_file" ]; then
-        echo "✅ 找到设备定义文件: $device_file"
-        echo ""
-        
-        local device_block=$(extract_device_config "$device_file" "$search_device")
-        if [ -n "$device_block" ]; then
-            echo "📋 设备 $search_device 配置:"
-            echo "----------------------------------------"
-            echo "$device_block"
-            echo "----------------------------------------"
-            
-            local soc=$(extract_config_value "$device_block" "SOC")
-            local model=$(extract_config_value "$device_block" "DEVICE_MODEL")
-            local title=$(extract_config_value "$device_block" "DEVICE_TITLE")
-            local packages=$(extract_config_value "$device_block" "DEVICE_PACKAGES")
-            local dts=$(extract_config_value "$device_block" "DEVICE_DTS")
-            local kernel_ver=$(extract_config_value "$device_block" "KERNEL_PATCHVER")
-            
-            [ -n "$soc" ] && echo "🔧 SOC: $soc"
-            [ -n "$model" ] && echo "📱 型号: $model"
-            [ -n "$title" ] && echo "📝 标题: $title"
-            [ -n "$packages" ] && echo "📦 默认包: $packages"
-            [ -n "$dts" ] && echo "🔧 DTS: $dts"
-            [ -n "$kernel_ver" ] && echo "🐧 内核版本: $kernel_ver"
-        else
-            echo "⚠️ 在文件中未找到设备 $search_device 的配置块"
-        fi
-    else
-        echo "⚠️ 未找到设备 $search_device 的定义文件"
-    fi
+    get_device_support_summary "$search_device" "$TARGET" "$SUBTARGET"
     
     echo ""
     echo "=== 📁 所有子平台.mk文件列表 ==="
