@@ -4271,15 +4271,18 @@ workflow_step23_pre_build_check() {
         echo "   ✅ .config 文件存在"
         echo "   📊 大小: $config_size, 行数: $config_lines"
         
-        local device_upper=$(echo "$DEVICE" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
-        if grep -q "CONFIG_TARGET_.*DEVICE.*${device_upper}=y" .config; then
-            echo "   ✅ 设备配置正确"
+        # 构建设备配置行
+        local device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+        local expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_config}=y"
+        
+        if grep -q "^${expected_config}$" .config; then
+            echo "   ✅ 设备配置正确: $expected_config"
         else
-            local device_lower=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-            if grep -q "CONFIG_TARGET_.*DEVICE.*${device_lower}=y" .config; then
-                echo "   ✅ 设备配置正确 (小写)"
+            # 尝试查找任何包含该设备的配置行（兼容旧格式）
+            if grep -q "CONFIG_TARGET_.*DEVICE.*${device_for_config}=y" .config; then
+                echo "   ✅ 设备配置正确 (模糊匹配)"
             else
-                echo "   ❌ 设备配置可能不正确"
+                echo "   ❌ 设备配置可能不正确，未找到: $expected_config"
                 error_count=$((error_count + 1))
             fi
         fi
