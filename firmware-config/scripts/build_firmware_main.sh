@@ -1480,8 +1480,14 @@ EOF
     echo "   📁 子平台: $SUBTARGET"
     echo "   ⚠️ 调试模式: 只列出文件"
     
-    # 直接调用函数，它会输出详细信息
-    local device_file=$(find_device_definition_file "$search_device" "$TARGET")
+    # 先直接调用函数显示所有.mk文件列表（不捕获输出）
+    find_device_definition_file "$search_device" "$TARGET"
+    
+    # 单独查找设备定义文件路径（不依赖捕获输出）
+    local device_file=""
+    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
+        device_file=$(find "target/linux/$TARGET" -type f -name "*.mk" -exec grep -l "define Device.*${search_device}" {} ; 2>/dev/null | head -1)
+    fi
     
     if [ -n "$device_file" ] && [ -f "$device_file" ]; then
         echo "✅ 找到设备定义文件: $device_file"
@@ -2497,8 +2503,14 @@ download_dependencies() {
     echo "   📁 子平台: $SUBTARGET"
     echo "   ⚠️ 调试模式: 只列出文件"
     
-    # 直接调用函数，它会输出详细信息
-    local device_file=$(find_device_definition_file "$search_device" "$TARGET")
+    # 先直接调用函数显示所有.mk文件列表（不捕获输出）
+    find_device_definition_file "$search_device" "$TARGET"
+    
+    # 单独查找设备定义文件路径（不依赖捕获输出）
+    local device_file=""
+    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
+        device_file=$(find "target/linux/$TARGET" -type f -name "*.mk" -exec grep -l "define Device.*${search_device}" {} ; 2>/dev/null | head -1)
+    fi
     
     if [ -n "$device_file" ] && [ -f "$device_file" ]; then
         echo "✅ 找到设备定义文件: $device_file"
