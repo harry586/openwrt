@@ -1121,72 +1121,55 @@ EOF
     mv .config.tmp .config
     
     log "🔍 动态获取目标平台支持的内核配置..."
+    log "🔍 根据设备定义文件查找内核配置..."
+    log "🔍 使用搜索设备名: $search_device"
     
-    local kernel_config_file=""
-    local kernel_version=""
-    local found_kernel=0
+    # 直接调用函数查看输出
+    local device_def_file=$(find_device_definition_file "$search_device" "$TARGET")
     
-    if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
-        log "🔍 根据设备定义文件查找内核配置..."
-        log "🔍 使用搜索设备名: $search_device"
+    if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
+        log "✅ 找到设备定义文件: $device_def_file"
         
-        local device_def_file=$(find_device_definition_file "$search_device" "$TARGET")
-        
-        if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
-            log "✅ 找到设备定义文件: $device_def_file"
-            
-            local device_block=$(extract_device_config "$device_def_file" "$search_device")
-            if [ -n "$device_block" ]; then
-                log "📋 设备 $search_device 配置:"
-                echo "$device_block" | while read line; do
-                    log "   $line"
-                done
-            fi
-            
-            kernel_version=$(extract_kernel_version_from_device_file "$device_def_file" "$search_device")
-            
-            if [ -n "$kernel_version" ]; then
-                log "✅ 从设备定义文件获取到内核版本: $kernel_version"
-                
-                kernel_config_file=$(find_kernel_config_by_version "$TARGET" "$SUBTARGET" "$kernel_version")
-                
-                if [ -n "$kernel_config_file" ] && [ -f "$kernel_config_file" ]; then
-                    log "✅ 找到内核配置文件: $kernel_config_file"
-                    found_kernel=1
-                else
-                    log "⚠️ 未找到对应内核版本 $kernel_version 的配置文件"
-                fi
-            else
-                log "⚠️ 设备定义文件中未指定内核版本"
-            fi
-        else
-            log "⚠️ 未找到设备 $search_device 的定义文件"
-        fi
-        
-        if [ $found_kernel -eq 0 ]; then
-            log "📁 按优先级搜索内核配置文件..."
-            
-            for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
-                kernel_config_file="target/linux/$TARGET/config-$ver"
-                if [ -f "$kernel_config_file" ]; then
-                    kernel_version="$ver"
-                    log "✅ 找到内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
-                    found_kernel=1
-                    break
-                fi
+        local device_block=$(extract_device_config "$device_def_file" "$search_device")
+        if [ -n "$device_block" ]; then
+            log "📋 设备 $search_device 配置:"
+            echo "$device_block" | while read line; do
+                log "   $line"
             done
         fi
         
-        if [ $found_kernel -eq 0 ]; then
-            log "⚠️ 警告: 未找到目标平台 $TARGET 的内核配置文件"
+        kernel_version=$(extract_kernel_version_from_device_file "$device_def_file" "$search_device")
+        
+        if [ -n "$kernel_version" ]; then
+            log "✅ 从设备定义文件获取到内核版本: $kernel_version"
             
-            if [ "${REQUIRE_KERNEL_CONFIG:-false}" = "true" ]; then
-                log "❌ 错误: 未找到内核配置文件，且 REQUIRE_KERNEL_CONFIG 设置为 true"
-                handle_error "未找到内核配置文件"
+            kernel_config_file=$(find_kernel_config_by_version "$TARGET" "$SUBTARGET" "$kernel_version")
+            
+            if [ -n "$kernel_config_file" ] && [ -f "$kernel_config_file" ]; then
+                log "✅ 找到内核配置文件: $kernel_config_file"
+                found_kernel=1
             else
-                log "ℹ️ 将继续构建，但可能缺少USB相关内核配置"
+                log "⚠️ 未找到对应内核版本 $kernel_version 的配置文件"
             fi
+        else
+            log "⚠️ 设备定义文件中未指定内核版本"
         fi
+    else
+        log "⚠️ 未找到设备 $search_device 的定义文件"
+    fi
+    
+    if [ $found_kernel -eq 0 ]; then
+        log "📁 按优先级搜索内核配置文件..."
+        
+        for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
+            kernel_config_file="target/linux/$TARGET/config-$ver"
+            if [ -f "$kernel_config_file" ]; then
+                kernel_version="$ver"
+                log "✅ 找到内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
+                found_kernel=1
+                break
+            fi
+        done
     fi
     
     if [ -n "$kernel_config_file" ] && [ -f "$kernel_config_file" ]; then
@@ -2207,6 +2190,7 @@ apply_config() {
     
     echo "🔍 搜索设备名: $search_device"
     
+    # 直接调用函数查看输出
     local device_file=$(find_device_definition_file "$search_device" "$TARGET")
     
     if [ -n "$device_file" ] && [ -f "$device_file" ]; then
@@ -2235,11 +2219,6 @@ apply_config() {
             [ -n "$kernel_ver" ] && echo "🐧 内核版本: $kernel_ver"
         else
             echo "⚠️ 在文件中未找到设备 $search_device 的配置块"
-            echo ""
-            echo "文件中包含的设备:"
-            grep "^define Device/" "$device_file" 2>/dev/null | sed 's/define Device///' | while read dev; do
-                echo "  - $dev"
-            done
         fi
     else
         echo "⚠️ 未找到设备 $search_device 的定义文件"
