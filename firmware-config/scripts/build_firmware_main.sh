@@ -3212,7 +3212,7 @@ verify_sdk_directory() {
 #【build_firmware_main.sh-23】
 # 此函数已废弃，现在用作公共函数库
 # ============================================================================
-# 公共函数库 - 真正的递归模糊搜索和评分
+# 公共函数库 - 真正的递归模糊搜索和评分（修复sed错误）
 # ============================================================================
 
 # 递归搜索所有.mk文件并查找设备名
@@ -3231,7 +3231,6 @@ search_all_mk_files() {
     
     echo "   📊 找到 ${#found_files[@]} 个.mk文件"
     
-    # 返回文件列表
     printf '%s
 ' "${found_files[@]}"
 }
@@ -3242,10 +3241,8 @@ search_device_in_file() {
     local device_name="$2"
     local matches=()
     
-    # 读取文件内容
     local content=$(cat "$mk_file" 2>/dev/null)
     
-    # 多种匹配模式
     if echo "$content" | grep -q "define Device.*$device_name"; then
         matches+=("精确设备定义")
     fi
@@ -3266,7 +3263,6 @@ search_device_in_file() {
         matches+=("模糊匹配($count次)")
     fi
     
-    # 返回匹配结果
     if [ ${#matches[@]} -gt 0 ]; then
         echo "${matches[@]}"
     fi
@@ -3307,17 +3303,14 @@ score_device_block() {
     local device_name="$2"
     local score=0
     
-    # 提取设备名
-    local dev_name=$(echo "$block" | grep "^define Device/" | head -1 | sed 's/define Device///' | awk '{print $1}')
+    local dev_name=$(echo "$block" | grep "^define Device/" | head -1 | awk '{print $2}' | cut -d' ' -f1)
     
-    # 精确匹配设备名
     if [ "$dev_name" = "$device_name" ]; then
         score=$((score + 200))
     elif [[ "$dev_name" == *"$device_name"* ]] || [[ "$device_name" == *"$dev_name"* ]]; then
         score=$((score + 150))
     fi
     
-    # 检查各个字段
     if echo "$block" | grep -q "^[[:space:]]*SOC"; then
         score=$((score + 30))
     fi
@@ -3340,7 +3333,7 @@ score_device_block() {
     echo "$score"
 }
 
-# 根据内容选择最佳的设备定义文件
+# 根据内容选择最佳的设备定义文件（修复sed错误）
 find_device_definition_file() {
     local device_name="$1"
     local platform="$2"
@@ -3358,20 +3351,17 @@ find_device_definition_file() {
     echo "   🔍 开始递归搜索设备 $device_name 的定义文件..."
     echo "   📁 搜索路径: $base_path"
     
-    # 收集所有.mk文件
     while IFS= read -r mk_file; do
         all_files+=("$mk_file")
     done < <(find "$base_path" -type f -name "*.mk" 2>/dev/null | sort)
     
     echo "   📊 找到 ${#all_files[@]} 个.mk文件"
     
-    # 遍历每个文件
     for mk_file in "${all_files[@]}"; do
         local file_score=0
         local file_matched=0
         local matched_types=""
         
-        # 检查文件是否包含设备名
         if grep -qi "$device_name" "$mk_file" 2>/dev/null; then
             local matches=$(grep -i "$device_name" "$mk_file" | wc -l)
             file_score=$((file_score + matches * 5))
@@ -3379,7 +3369,6 @@ find_device_definition_file() {
             matched_types="包含设备名($matches次)"
         fi
         
-        # 提取并评分每个设备块
         local block_index=0
         while IFS= read -r block; do
             if [ -n "$block" ]; then
@@ -3389,7 +3378,6 @@ find_device_definition_file() {
                     file_matched=1
                     matched_types="$matched_types + 设备块得分$block_score"
                     
-                    # 如果是当前最高分，保存这个块
                     if [ $file_score -gt $best_score ]; then
                         best_score=$file_score
                         best_file="$mk_file"
@@ -3400,7 +3388,6 @@ find_device_definition_file() {
             fi
         done < <(extract_device_blocks "$mk_file")
         
-        # 根据文件路径加分
         if [[ "$mk_file" == *"/image/"* ]]; then
             file_score=$((file_score + 30))
             matched_types="$matched_types + image目录"
@@ -3433,7 +3420,7 @@ find_device_definition_file() {
     echo "$best_file"
 }
 
-# 从设备定义文件中提取指定设备的配置块
+# 从设备定义文件中提取指定设备的配置块（修复sed错误）
 extract_device_config() {
     local device_file="$1"
     local device_name="$2"
@@ -3444,7 +3431,6 @@ extract_device_config() {
         return 1
     fi
     
-    # 提取所有设备块并评分
     while IFS= read -r block; do
         if [ -n "$block" ]; then
             local score=$(score_device_block "$block" "$device_name")
@@ -3458,12 +3444,15 @@ extract_device_config() {
     echo "$best_block"
 }
 
-# 从设备定义块中提取具体配置值
+# 从设备定义块中提取具体配置值（修复sed错误）
 extract_config_value() {
     local device_block="$1"
     local key="$2"
     
-    echo "$device_block" | grep -E "^[[:space:]]*$key[[:space:]]*:?=" | head -1 | sed 's/.*=[[:space:]]*//' | tr -d '"'
+    echo "$device_block" | grep -E "^[[:space:]]*$key[[:space:]]*:?=" | head -1 | while read line; do
+        # 使用awk替代sed来避免路径分隔符问题
+        echo "$line" | awk -F'=' '{print $2}' | awk '{$1=$1;print}' | tr -d '"'
+    done
 }
 
 # 获取设备支持信息摘要
@@ -3513,7 +3502,7 @@ get_device_support_summary() {
     fi
 }
 
-# 从设备定义文件中提取内核版本
+# 从设备定义文件中提取内核版本（修复sed错误）
 extract_kernel_version_from_device_file() {
     local device_file="$1"
     local device_name="$2"
@@ -3526,8 +3515,8 @@ extract_kernel_version_from_device_file() {
     local device_block=$(extract_device_config "$device_file" "$device_name")
     
     if [ -n "$device_block" ]; then
-        local kernel_patchver=$(echo "$device_block" | grep -E "^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:?=" | head -1 | sed 's/.*=[[:space:]]*//')
-        local kernel_line=$(echo "$device_block" | grep -E "^[[:space:]]*KERNEL[[:space:]]*:?=" | head -1 | sed 's/.*=[[:space:]]*//')
+        local kernel_patchver=$(echo "$device_block" | grep -E "^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:?=" | head -1 | awk -F'=' '{print $2}' | awk '{$1=$1;print}')
+        local kernel_line=$(echo "$device_block" | grep -E "^[[:space:]]*KERNEL[[:space:]]*:?=" | head -1 | awk -F'=' '{print $2}' | awk '{$1=$1;print}')
         
         if [ -n "$kernel_patchver" ]; then
             echo "$kernel_patchver"
@@ -3548,12 +3537,12 @@ get_supported_branches() {
     if [ -f "$REPO_ROOT/build-config.conf" ]; then
         while IFS= read -r line; do
             if [[ "$line" == *"BRANCH_"*":="* ]]; then
-                local branch_name=$(echo "$line" | sed -n 's/.*BRANCH_[^=]*:="*([^"]*)"*.*//p')
+                local branch_name=$(echo "$line" | awk -F':=' '{print $2}' | tr -d '"' | awk '{$1=$1;print}')
                 if [ -n "$branch_name" ]; then
                     branches+=("$branch_name")
                 fi
             elif [[ "$line" == *"export BRANCH_"*"="* ]]; then
-                local branch_name=$(echo "$line" | sed -n 's/.*export BRANCH_[^=]*="*([^"]*)"*.*//p')
+                local branch_name=$(echo "$line" | awk -F'=' '{print $2}' | tr -d '"' | awk '{$1=$1;print}')
                 if [ -n "$branch_name" ]; then
                     branches+=("$branch_name")
                 fi
@@ -3607,7 +3596,7 @@ get_subtargets_by_platform() {
         done < <(find "$platform_path" -maxdepth 1 -type d ! -path "$platform_path" 2>/dev/null | sort)
         
         if [ ${#subtargets[@]} -eq 0 ] && [ -f "$platform_path/Makefile" ]; then
-            local default_subtarget=$(grep -E '^[[:space:]]*SUBTARGETS?[[:space:]]*:?=' "$platform_path/Makefile" 2>/dev/null |                 sed 's/.*=[[:space:]]*//' | tr -d ' ' | tr ',' ' ')
+            local default_subtarget=$(grep -E '^[[:space:]]*SUBTARGETS?[[:space:]]*:?=' "$platform_path/Makefile" 2>/dev/null |                 awk -F'=' '{print $2}' | awk '{$1=$1;print}' | tr -d ' ' | tr ',' ' ')
             
             if [ -n "$default_subtarget" ]; then
                 for st in $default_subtarget; do
