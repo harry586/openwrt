@@ -1022,32 +1022,25 @@ generate_config() {
     log "✅ 已清理旧配置文件"
     
     local openwrt_device=""
+    local search_device=""
     
-    if [ "${ENABLE_DYNAMIC_DEVICE_MAPPING:-true}" = "true" ] && [ -f "$SUPPORT_SCRIPT" ]; then
-        log "🔍 尝试从support.sh获取设备映射..."
-        local platform_info=$("$SUPPORT_SCRIPT" get-platform "$DEVICE" 2>/dev/null)
-        if [ -n "$platform_info" ]; then
-            openwrt_device="$DEVICE"
-            log "✅ 从support.sh获取设备信息成功"
-        fi
-    fi
-    
-    if [ -z "$openwrt_device" ]; then
-        case "$DEVICE" in
-            ac42u|rt-ac42u|asus_rt-ac42u)
-                openwrt_device="asus_rt-ac42u"
-                log "🔧 映射设备 $DEVICE -> $openwrt_device"
-                ;;
-            acrh17|rt-acrh17|asus_rt-acrh17)
-                openwrt_device="asus_rt-acrh17"
-                log "🔧 映射设备 $DEVICE -> $openwrt_device"
-                ;;
-            *)
-                openwrt_device=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-                log "🔧 使用转换后的设备名: $openwrt_device"
-                ;;
-        esac
-    fi
+    case "$DEVICE" in
+        ac42u|rt-ac42u|asus_rt-ac42u)
+            openwrt_device="asus_rt-ac42u"
+            search_device="ac42u"
+            log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
+            ;;
+        acrh17|rt-acrh17|asus_rt-acrh17)
+            openwrt_device="asus_rt-acrh17"
+            search_device="acrh17"
+            log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
+            ;;
+        *)
+            openwrt_device=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+            search_device="$DEVICE"
+            log "🔧 使用原始设备名: $openwrt_device"
+            ;;
+    esac
     
     local device_lower="$openwrt_device"
     local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}"
@@ -1127,10 +1120,7 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # =========================================================================
-    # 步骤5: 动态获取目标平台支持的内核配置 - 使用公共函数
-    # =========================================================================
-    log "🔍 动态获取目标平台支持的内核配置（使用公共函数）..."
+    log "🔍 动态获取目标平台支持的内核配置..."
     
     local kernel_config_file=""
     local kernel_version=""
@@ -1138,23 +1128,22 @@ EOF
     
     if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
         log "🔍 根据设备定义文件查找内核配置..."
+        log "🔍 使用搜索设备名: $search_device"
         
-        # 直接调用函数，让函数内部输出详细信息
-        local device_def_file=$(find_device_definition_file "$DEVICE" "$TARGET")
+        local device_def_file=$(find_device_definition_file "$search_device" "$TARGET")
         
         if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
             log "✅ 找到设备定义文件: $device_def_file"
             
-            # 显示设备配置块
-            local device_block=$(extract_device_config "$device_def_file" "$DEVICE")
+            local device_block=$(extract_device_config "$device_def_file" "$search_device")
             if [ -n "$device_block" ]; then
-                log "📋 设备 $DEVICE 配置:"
+                log "📋 设备 $search_device 配置:"
                 echo "$device_block" | while read line; do
                     log "   $line"
                 done
             fi
             
-            kernel_version=$(extract_kernel_version_from_device_file "$device_def_file" "$DEVICE")
+            kernel_version=$(extract_kernel_version_from_device_file "$device_def_file" "$search_device")
             
             if [ -n "$kernel_version" ]; then
                 log "✅ 从设备定义文件获取到内核版本: $kernel_version"
@@ -1171,7 +1160,7 @@ EOF
                 log "⚠️ 设备定义文件中未指定内核版本"
             fi
         else
-            log "⚠️ 未找到设备 $DEVICE 的定义文件"
+            log "⚠️ 未找到设备 $search_device 的定义文件"
         fi
         
         if [ $found_kernel -eq 0 ]; then
@@ -2203,22 +2192,34 @@ apply_config() {
     echo "=== 🔍 设备信息详细查询（使用公共函数） ==="
     echo "----------------------------------------"
     
-    # 直接调用函数，让函数内部输出详细信息
-    local device_file=$(find_device_definition_file "$DEVICE" "$TARGET")
+    local search_device=""
+    case "$DEVICE" in
+        ac42u|rt-ac42u|asus_rt-ac42u)
+            search_device="ac42u"
+            ;;
+        acrh17|rt-acrh17|asus_rt-acrh17)
+            search_device="acrh17"
+            ;;
+        *)
+            search_device="$DEVICE"
+            ;;
+    esac
+    
+    echo "🔍 搜索设备名: $search_device"
+    
+    local device_file=$(find_device_definition_file "$search_device" "$TARGET")
     
     if [ -n "$device_file" ] && [ -f "$device_file" ]; then
         echo "✅ 找到设备定义文件: $device_file"
         echo ""
         
-        # 提取并显示设备配置块
-        local device_block=$(extract_device_config "$device_file" "$DEVICE")
+        local device_block=$(extract_device_config "$device_file" "$search_device")
         if [ -n "$device_block" ]; then
-            echo "📋 设备 $DEVICE 配置:"
+            echo "📋 设备 $search_device 配置:"
             echo "----------------------------------------"
             echo "$device_block"
             echo "----------------------------------------"
             
-            # 提取具体信息
             local soc=$(extract_config_value "$device_block" "SOC")
             local model=$(extract_config_value "$device_block" "DEVICE_MODEL")
             local title=$(extract_config_value "$device_block" "DEVICE_TITLE")
@@ -2233,7 +2234,7 @@ apply_config() {
             [ -n "$dts" ] && echo "🔧 DTS: $dts"
             [ -n "$kernel_ver" ] && echo "🐧 内核版本: $kernel_ver"
         else
-            echo "⚠️ 在文件中未找到设备 $DEVICE 的配置块"
+            echo "⚠️ 在文件中未找到设备 $search_device 的配置块"
             echo ""
             echo "文件中包含的设备:"
             grep "^define Device/" "$device_file" 2>/dev/null | sed 's/define Device///' | while read dev; do
@@ -2241,7 +2242,7 @@ apply_config() {
             done
         fi
     else
-        echo "⚠️ 未找到设备 $DEVICE 的定义文件"
+        echo "⚠️ 未找到设备 $search_device 的定义文件"
     fi
     
     echo ""
@@ -4496,8 +4497,21 @@ workflow_step23_pre_build_check() {
 ' ' ' || echo "未知")
     echo "   📁 平台 $TARGET 支持的子平台: $subtargets"
     
-    # 直接调用函数，让函数内部输出详细信息
-    get_device_support_summary "$DEVICE" "$TARGET" "$SUBTARGET"
+    local search_device=""
+    case "$DEVICE" in
+        ac42u|rt-ac42u|asus_rt-ac42u)
+            search_device="ac42u"
+            ;;
+        acrh17|rt-acrh17|asus_rt-acrh17)
+            search_device="acrh17"
+            ;;
+        *)
+            search_device="$DEVICE"
+            ;;
+    esac
+    
+    echo "   🔍 搜索设备名: $search_device"
+    get_device_support_summary "$search_device" "$TARGET" "$SUBTARGET"
     
     echo "----------------------------------------"
     echo ""
