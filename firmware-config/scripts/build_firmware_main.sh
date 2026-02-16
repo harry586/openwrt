@@ -3212,90 +3212,220 @@ verify_sdk_directory() {
 #【build_firmware_main.sh-23】
 # 此函数已废弃，现在用作公共函数库
 # ============================================================================
-# 公共函数库 - 供所有步骤调用（使用正确的评分逻辑）
+# 公共函数库 - 真正的递归模糊搜索和评分
 # ============================================================================
 
-# 根据内容选择最佳的设备定义文件（使用正确的评分逻辑）
+# 递归搜索所有.mk文件并查找设备名
+search_all_mk_files() {
+    local search_path="$1"
+    local device_name="$2"
+    local found_files=()
+    
+    echo "   🔍 递归搜索所有.mk文件..."
+    
+    while IFS= read -r mk_file; do
+        if [ -f "$mk_file" ]; then
+            found_files+=("$mk_file")
+        fi
+    done < <(find "$search_path" -type f -name "*.mk" 2>/dev/null)
+    
+    echo "   📊 找到 ${#found_files[@]} 个.mk文件"
+    
+    # 返回文件列表
+    printf '%s
+' "${found_files[@]}"
+}
+
+# 在文件中搜索设备名
+search_device_in_file() {
+    local mk_file="$1"
+    local device_name="$2"
+    local matches=()
+    
+    # 读取文件内容
+    local content=$(cat "$mk_file" 2>/dev/null)
+    
+    # 多种匹配模式
+    if echo "$content" | grep -q "define Device.*$device_name"; then
+        matches+=("精确设备定义")
+    fi
+    if echo "$content" | grep -q "Device.*$device_name"; then
+        matches+=("设备引用")
+    fi
+    if echo "$content" | grep -q "DEVICE_MODEL.*$device_name"; then
+        matches+=("设备型号")
+    fi
+    if echo "$content" | grep -q "DEVICE_TITLE.*$device_name"; then
+        matches+=("设备标题")
+    fi
+    if echo "$content" | grep -q "DEVICE_DTS.*$device_name"; then
+        matches+=("DTS引用")
+    fi
+    if echo "$content" | grep -qi "$device_name"; then
+        local count=$(echo "$content" | grep -io "$device_name" | wc -l)
+        matches+=("模糊匹配($count次)")
+    fi
+    
+    # 返回匹配结果
+    if [ ${#matches[@]} -gt 0 ]; then
+        echo "${matches[@]}"
+    fi
+}
+
+# 提取文件中的设备定义块
+extract_device_blocks() {
+    local mk_file="$1"
+    local in_block=0
+    local blocks=()
+    local current_block=""
+    
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^define[[:space:]]+Device/ ]]; then
+            if [ $in_block -eq 1 ]; then
+                blocks+=("$current_block")
+            fi
+            in_block=1
+            current_block="$line"$'
+'
+        elif [[ "$line" =~ ^endef ]] && [ $in_block -eq 1 ]; then
+            current_block="${current_block}$line"
+            blocks+=("$current_block")
+            in_block=0
+        elif [ $in_block -eq 1 ]; then
+            current_block="${current_block}$line"$'
+'
+        fi
+    done < "$mk_file"
+    
+    printf '%s
+' "${blocks[@]}"
+}
+
+# 评分设备定义块
+score_device_block() {
+    local block="$1"
+    local device_name="$2"
+    local score=0
+    
+    # 提取设备名
+    local dev_name=$(echo "$block" | grep "^define Device/" | head -1 | sed 's/define Device///' | awk '{print $1}')
+    
+    # 精确匹配设备名
+    if [ "$dev_name" = "$device_name" ]; then
+        score=$((score + 200))
+    elif [[ "$dev_name" == *"$device_name"* ]] || [[ "$device_name" == *"$dev_name"* ]]; then
+        score=$((score + 150))
+    fi
+    
+    # 检查各个字段
+    if echo "$block" | grep -q "^[[:space:]]*SOC"; then
+        score=$((score + 30))
+    fi
+    if echo "$block" | grep -q "^[[:space:]]*DEVICE_MODEL"; then
+        score=$((score + 30))
+    fi
+    if echo "$block" | grep -q "^[[:space:]]*DEVICE_TITLE.*$device_name"; then
+        score=$((score + 50))
+    fi
+    if echo "$block" | grep -q "^[[:space:]]*DEVICE_PACKAGES"; then
+        score=$((score + 20))
+    fi
+    if echo "$block" | grep -q "^[[:space:]]*DEVICE_DTS.*$device_name"; then
+        score=$((score + 40))
+    fi
+    if echo "$block" | grep -q "^[[:space:]]*KERNEL_PATCHVER"; then
+        score=$((score + 15))
+    fi
+    
+    echo "$score"
+}
+
+# 根据内容选择最佳的设备定义文件
 find_device_definition_file() {
     local device_name="$1"
     local platform="$2"
     local base_path="target/linux/$platform"
     local best_file=""
     local best_score=0
-    local found_files=()
+    local best_block=""
+    local all_files=()
     
     if [ ! -d "$base_path" ]; then
         echo ""
         return
     fi
     
-    echo "   🔍 开始搜索设备 $device_name 的定义文件..."
+    echo "   🔍 开始递归搜索设备 $device_name 的定义文件..."
+    echo "   📁 搜索路径: $base_path"
     
+    # 收集所有.mk文件
     while IFS= read -r mk_file; do
-        if [ -f "$mk_file" ]; then
-            local score=0
-            local matched=0
-            
-            # 检查是否包含设备定义
-            if grep -q "define Device/$device_name" "$mk_file" 2>/dev/null; then
-                score=$((score + 100))
-                matched=1
-                echo "     📍 $mk_file - 精确设备定义 +100"
-            elif grep -q "Device/$device_name" "$mk_file" 2>/dev/null; then
-                score=$((score + 80))
-                matched=1
-                echo "     📍 $mk_file - 设备引用 +80"
-            elif grep -q "DEVICE_MODEL.*$device_name" "$mk_file" 2>/dev/null; then
-                score=$((score + 60))
-                matched=1
-                echo "     📍 $mk_file - 设备型号匹配 +60"
-            elif grep -qi "$device_name" "$mk_file" 2>/dev/null; then
-                local match_count=$(grep -io "$device_name" "$mk_file" 2>/dev/null | wc -l)
-                score=$((score + match_count * 10))
-                if [ $match_count -gt 0 ]; then
-                    matched=1
-                    echo "     📍 $mk_file - 模糊匹配 ($match_count 次) +$((match_count * 10))"
-                fi
-            fi
-            
-            # 根据文件路径加分
-            if [[ "$mk_file" == *"/image/"* ]]; then
-                score=$((score + 50))
-                echo "        image目录 +50"
-            fi
-            
-            if [[ "$mk_file" == *"/$platform/"*"target.mk" ]]; then
-                score=$((score + 30))
-                echo "        target.mk +30"
-            fi
-            
-            # 根据文件内容加分
-            if grep -q "DEVICE_PACKAGES" "$mk_file" 2>/dev/null; then
-                score=$((score + 20))
-            fi
-            
-            if grep -q "DEVICE_DTS" "$mk_file" 2>/dev/null; then
-                score=$((score + 20))
-            fi
-            
-            if grep -q "KERNEL_PATCHVER" "$mk_file" 2>/dev/null; then
-                score=$((score + 15))
-            fi
-            
-            if [ $matched -eq 1 ]; then
-                found_files+=("$mk_file|$score")
-                echo "        总分: $score"
-                
-                if [ $score -gt $best_score ]; then
-                    best_score=$score
-                    best_file="$mk_file"
-                fi
-            fi
+        all_files+=("$mk_file")
+    done < <(find "$base_path" -type f -name "*.mk" 2>/dev/null | sort)
+    
+    echo "   📊 找到 ${#all_files[@]} 个.mk文件"
+    
+    # 遍历每个文件
+    for mk_file in "${all_files[@]}"; do
+        local file_score=0
+        local file_matched=0
+        local matched_types=""
+        
+        # 检查文件是否包含设备名
+        if grep -qi "$device_name" "$mk_file" 2>/dev/null; then
+            local matches=$(grep -i "$device_name" "$mk_file" | wc -l)
+            file_score=$((file_score + matches * 5))
+            file_matched=1
+            matched_types="包含设备名($matches次)"
         fi
-    done < <(find "$base_path" -type f -name "*.mk" 2>/dev/null)
+        
+        # 提取并评分每个设备块
+        local block_index=0
+        while IFS= read -r block; do
+            if [ -n "$block" ]; then
+                local block_score=$(score_device_block "$block" "$device_name")
+                if [ $block_score -gt 0 ]; then
+                    file_score=$((file_score + block_score))
+                    file_matched=1
+                    matched_types="$matched_types + 设备块得分$block_score"
+                    
+                    # 如果是当前最高分，保存这个块
+                    if [ $file_score -gt $best_score ]; then
+                        best_score=$file_score
+                        best_file="$mk_file"
+                        best_block="$block"
+                    fi
+                fi
+                block_index=$((block_index + 1))
+            fi
+        done < <(extract_device_blocks "$mk_file")
+        
+        # 根据文件路径加分
+        if [[ "$mk_file" == *"/image/"* ]]; then
+            file_score=$((file_score + 30))
+            matched_types="$matched_types + image目录"
+        fi
+        if [[ "$mk_file" == *"/$platform/"*"target.mk" ]]; then
+            file_score=$((file_score + 20))
+            matched_types="$matched_types + target.mk"
+        fi
+        
+        if [ $file_matched -eq 1 ]; then
+            echo "   📍 $mk_file"
+            echo "     匹配: $matched_types"
+            echo "     总分: $file_score"
+        fi
+    done
     
     if [ -n "$best_file" ]; then
         echo "   🏆 最佳匹配文件 (得分: $best_score): $best_file"
+        if [ -n "$best_block" ]; then
+            echo ""
+            echo "   📋 最佳匹配设备块:"
+            echo "$best_block" | while read line; do
+                echo "     $line"
+            done
+        fi
     else
         echo "   ❌ 未找到设备 $device_name 的定义文件"
     fi
@@ -3307,37 +3437,25 @@ find_device_definition_file() {
 extract_device_config() {
     local device_file="$1"
     local device_name="$2"
+    local best_block=""
+    local best_score=0
     
     if [ ! -f "$device_file" ]; then
         return 1
     fi
     
-    local in_device_block=0
-    local device_block=""
-    local current_device=""
-    
-    while IFS= read -r line; do
-        # 检查是否是设备定义开始
-        if [[ "$line" =~ ^define[[:space:]]+Device/(.+) ]]; then
-            current_device="${BASH_REMATCH[1]}"
-            # 检查是否匹配设备名
-            if [[ "$current_device" == "$device_name" ]] || [[ "$current_device" == *"$device_name"* ]]; then
-                in_device_block=1
-                device_block="$line"$'
-'
-            else
-                in_device_block=0
+    # 提取所有设备块并评分
+    while IFS= read -r block; do
+        if [ -n "$block" ]; then
+            local score=$(score_device_block "$block" "$device_name")
+            if [ $score -gt $best_score ]; then
+                best_score=$score
+                best_block="$block"
             fi
-        elif [[ "$line" =~ ^endef ]] && [ $in_device_block -eq 1 ]; then
-            device_block="${device_block}$line"
-            break
-        elif [ $in_device_block -eq 1 ]; then
-            device_block="${device_block}$line"$'
-'
         fi
-    done < "$device_file"
+    done < <(extract_device_blocks "$device_file")
     
-    echo "$device_block"
+    echo "$best_block"
 }
 
 # 从设备定义块中提取具体配置值
@@ -3386,13 +3504,6 @@ get_device_support_summary() {
             [ -n "$packages" ] && echo "   📦 默认包: $packages"
             [ -n "$dts" ] && echo "   🔧 DTS: $dts"
             [ -n "$kernel_ver" ] && echo "   🐧 内核版本: $kernel_ver"
-        else
-            echo "   ⚠️ 在文件中未找到设备 $device_name 的配置块"
-            
-            echo "   文件中包含的设备:"
-            grep "^define Device/" "$device_file" 2>/dev/null | sed 's/define Device///' | while read dev; do
-                echo "     - $dev"
-            done
         fi
         
         return 0
