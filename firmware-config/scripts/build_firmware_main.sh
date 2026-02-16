@@ -1155,6 +1155,21 @@ EOF
                 echo "----------------------------------------"
                 echo "$device_block"
                 echo "----------------------------------------"
+                
+                # 提取并显示常用配置项
+                local soc=$(extract_config_value "$device_block" "SOC")
+                local model=$(extract_config_value "$device_block" "DEVICE_MODEL")
+                local title=$(extract_config_value "$device_block" "DEVICE_TITLE")
+                local packages=$(extract_config_value "$device_block" "DEVICE_PACKAGES")
+                local dts=$(extract_config_value "$device_block" "DEVICE_DTS")
+                local kernel_ver=$(extract_config_value "$device_block" "KERNEL_PATCHVER")
+                
+                [ -n "$soc" ] && echo "🔧 SOC: $soc"
+                [ -n "$model" ] && echo "📱 型号: $model"
+                [ -n "$title" ] && echo "📝 标题: $title"
+                [ -n "$packages" ] && echo "📦 默认包: $packages"
+                [ -n "$dts" ] && echo "🔧 DTS: $dts"
+                [ -n "$kernel_ver" ] && echo "🐧 内核版本: $kernel_ver"
             fi
             
             kernel_version=$(extract_kernel_version_from_device_file "$device_def_file" "$search_device")
@@ -1459,6 +1474,56 @@ EOF
     log "  禁用软件包: $disabled_packages"
     
     log "✅ 配置生成完成"
+    
+    # =========================================================================
+    # 添加设备信息详细查询 - 与步骤18保持一致
+    # =========================================================================
+    echo ""
+    echo "=== 📁 所有子平台.mk文件列表 ==="
+    
+    local mk_count=0
+    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
+        while IFS= read -r mk_file; do
+            mk_count=$((mk_count + 1))
+            echo "   📄 [$mk_count] $mk_file"
+        done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null | sort)
+        echo ""
+        echo "   📊 共找到 $mk_count 个.mk文件"
+    else
+        echo "   未找到.mk文件"
+    fi
+    
+    echo ""
+    echo "=== 📁 内核配置文件列表 ==="
+    
+    local kernel_count=0
+    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
+        while IFS= read -r config; do
+            kernel_count=$((kernel_count + 1))
+            local ver=$(basename "$config" | sed 's/config-//')
+            echo "   📄 [$kernel_count] $config (内核版本 $ver)"
+        done < <(find "target/linux/$TARGET" -type f -name "config-*" 2>/dev/null | sort)
+        echo ""
+        echo "   📊 共找到 $kernel_count 个内核配置文件"
+    else
+        echo "   未找到内核配置文件"
+    fi
+    
+    echo ""
+    echo "=== 📁 设备相关文件列表 ==="
+    
+    local dev_count=0
+    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
+        # 使用映射后的完整设备名 openwrt_device 进行搜索（例如 asus_rt-ac42u）
+        while IFS= read -r config; do
+            dev_count=$((dev_count + 1))
+            echo "   📄 [$dev_count] $config"
+        done < <(find "target/linux/$TARGET" -type f -name "*${openwrt_device}*" 2>/dev/null | sort)
+        echo ""
+        echo "   📊 共找到 $dev_count 个设备相关文件"
+    else
+        echo "   未找到设备专属配置文件"
+    fi
 }
 #【build_firmware_main.sh-13-end】
 
@@ -2372,28 +2437,73 @@ download_dependencies() {
     log "✅ 依赖包下载完成"
     
     # =========================================================================
-    # 添加设备信息详细查询 - 与步骤23保持一致
+    # 添加设备信息详细查询 - 与步骤15保持一致
     # =========================================================================
     echo ""
     echo "=== 🔍 设备信息详细查询（完整版） ==="
     echo "----------------------------------------"
     
+    # 设备名映射，确保与步骤15一致
+    local openwrt_device=""
     local search_device=""
     case "$DEVICE" in
         ac42u|rt-ac42u|asus_rt-ac42u)
+            openwrt_device="asus_rt-ac42u"
             search_device="ac42u"
+            log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
             ;;
         acrh17|rt-acrh17|asus_rt-acrh17)
+            openwrt_device="asus_rt-acrh17"
             search_device="acrh17"
+            log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
             ;;
         *)
+            openwrt_device=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
             search_device="$DEVICE"
+            log "🔧 使用原始设备名: $openwrt_device"
             ;;
     esac
     
     echo "🔍 搜索设备名: $search_device"
     echo ""
-    get_device_support_summary "$search_device" "$TARGET" "$SUBTARGET"
+    
+    # 直接调用 find_device_definition_file 显示所有.mk文件列表
+    find_device_definition_file "$search_device" "$TARGET"
+    
+    # 单独查找设备定义文件路径并显示配置
+    local device_def_file=""
+    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
+        device_def_file=$(find "target/linux/$TARGET" -type f -name "*.mk" -exec grep -l "define Device.*${search_device}" {} + 2>/dev/null | head -1)
+    fi
+    
+    if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
+        echo "✅ 找到设备定义文件: $device_def_file"
+        echo ""
+        
+        local device_block=$(extract_device_config "$device_def_file" "$search_device")
+        if [ -n "$device_block" ]; then
+            echo "📋 设备 $search_device 配置:"
+            echo "----------------------------------------"
+            echo "$device_block"
+            echo "----------------------------------------"
+            
+            local soc=$(extract_config_value "$device_block" "SOC")
+            local model=$(extract_config_value "$device_block" "DEVICE_MODEL")
+            local title=$(extract_config_value "$device_block" "DEVICE_TITLE")
+            local packages=$(extract_config_value "$device_block" "DEVICE_PACKAGES")
+            local dts=$(extract_config_value "$device_block" "DEVICE_DTS")
+            local kernel_ver=$(extract_config_value "$device_block" "KERNEL_PATCHVER")
+            
+            [ -n "$soc" ] && echo "🔧 SOC: $soc"
+            [ -n "$model" ] && echo "📱 型号: $model"
+            [ -n "$title" ] && echo "📝 标题: $title"
+            [ -n "$packages" ] && echo "📦 默认包: $packages"
+            [ -n "$dts" ] && echo "🔧 DTS: $dts"
+            [ -n "$kernel_ver" ] && echo "🐧 内核版本: $kernel_ver"
+        fi
+    else
+        echo "⚠️ 未找到设备 $search_device 的定义文件"
+    fi
     
     echo ""
     echo "=== 📁 所有子平台.mk文件列表 ==="
@@ -2434,7 +2544,7 @@ download_dependencies() {
         while IFS= read -r config; do
             dev_count=$((dev_count + 1))
             echo "   📄 [$dev_count] $config"
-        done < <(find "target/linux/$TARGET" -type f -name "*${DEVICE}*" 2>/dev/null | sort)
+        done < <(find "target/linux/$TARGET" -type f -name "*${openwrt_device}*" 2>/dev/null | sort)
         echo ""
         echo "   📊 共找到 $dev_count 个设备相关文件"
     else
