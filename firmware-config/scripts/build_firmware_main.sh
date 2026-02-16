@@ -1476,6 +1476,9 @@ EOF
     
     echo "🔍 搜索设备名: $search_device"
     echo ""
+    echo "   📁 平台: $TARGET"
+    echo "   📁 子平台: $SUBTARGET"
+    echo "   ⚠️ 调试模式: 只列出文件"
     
     # 直接调用函数，它会输出详细信息
     local device_file=$(find_device_definition_file "$search_device" "$TARGET")
@@ -2490,6 +2493,9 @@ download_dependencies() {
     
     echo "🔍 搜索设备名: $search_device"
     echo ""
+    echo "   📁 平台: $TARGET"
+    echo "   📁 子平台: $SUBTARGET"
+    echo "   ⚠️ 调试模式: 只列出文件"
     
     # 直接调用函数，它会输出详细信息
     local device_file=$(find_device_definition_file "$search_device" "$TARGET")
