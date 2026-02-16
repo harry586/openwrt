@@ -1121,7 +1121,7 @@ EOF
     mv .config.tmp .config
     
     # =========================================================================
-    # 步骤5: 动态获取目标平台支持的内核配置 - 直接调用搜索函数
+    # 动态获取目标平台支持的内核配置 - 直接调用搜索函数（显示mk文件列表并获取设备定义文件）
     # =========================================================================
     echo ""
     echo "=== 🔍 开始搜索设备定义文件 ==="
@@ -1130,14 +1130,20 @@ EOF
     local kernel_config_file=""
     local kernel_version=""
     local found_kernel=0
+    local device_def_file=""
     
     if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
         echo "🔍 根据设备定义文件查找内核配置..."
         echo "🔍 使用搜索设备名: $search_device"
         echo ""
         
-        # 直接调用函数，它会输出详细信息
-        local device_def_file=$(find_device_definition_file "$search_device" "$TARGET")
+        # 直接调用 find_device_definition_file 显示所有.mk文件列表（不捕获输出）
+        find_device_definition_file "$search_device" "$TARGET"
+        
+        # 单独查找设备定义文件路径（不依赖捕获输出）
+        if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
+            device_def_file=$(find "target/linux/$TARGET" -type f -name "*.mk" -exec grep -l "define Device.*${search_device}" {} + 2>/dev/null | head -1)
+        fi
         
         if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
             echo "✅ 找到设备定义文件: $device_def_file"
@@ -1453,76 +1459,6 @@ EOF
     log "  禁用软件包: $disabled_packages"
     
     log "✅ 配置生成完成"
-    
-    # =========================================================================
-    # 添加设备信息详细查询 - 与步骤23保持一致
-    # =========================================================================
-    echo ""
-    echo "=== 🔍 设备信息详细查询（完整版） ==="
-    echo "----------------------------------------"
-    
-    local search_device=""
-    case "$DEVICE" in
-        ac42u|rt-ac42u|asus_rt-ac42u)
-            search_device="ac42u"
-            ;;
-        acrh17|rt-acrh17|asus_rt-acrh17)
-            search_device="acrh17"
-            ;;
-        *)
-            search_device="$DEVICE"
-            ;;
-    esac
-    
-    echo "🔍 搜索设备名: $search_device"
-    echo ""
-    get_device_support_summary "$search_device" "$TARGET" "$SUBTARGET"
-    
-    echo ""
-    echo "=== 📁 所有子平台.mk文件列表 ==="
-    
-    local mk_count=0
-    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
-        while IFS= read -r mk_file; do
-            mk_count=$((mk_count + 1))
-            echo "   📄 [$mk_count] $mk_file"
-        done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null | sort)
-        echo ""
-        echo "   📊 共找到 $mk_count 个.mk文件"
-    else
-        echo "   未找到.mk文件"
-    fi
-    
-    echo ""
-    echo "=== 📁 内核配置文件列表 ==="
-    
-    local kernel_count=0
-    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
-        while IFS= read -r config; do
-            kernel_count=$((kernel_count + 1))
-            local ver=$(basename "$config" | sed 's/config-//')
-            echo "   📄 [$kernel_count] $config (内核版本 $ver)"
-        done < <(find "target/linux/$TARGET" -type f -name "config-*" 2>/dev/null | sort)
-        echo ""
-        echo "   📊 共找到 $kernel_count 个内核配置文件"
-    else
-        echo "   未找到内核配置文件"
-    fi
-    
-    echo ""
-    echo "=== 📁 设备相关文件列表 ==="
-    
-    local dev_count=0
-    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
-        while IFS= read -r config; do
-            dev_count=$((dev_count + 1))
-            echo "   📄 [$dev_count] $config"
-        done < <(find "target/linux/$TARGET" -type f -name "*${DEVICE}*" 2>/dev/null | sort)
-        echo ""
-        echo "   📊 共找到 $dev_count 个设备相关文件"
-    else
-        echo "   未找到设备专属配置文件"
-    fi
 }
 #【build_firmware_main.sh-13-end】
 
