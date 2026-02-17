@@ -2193,10 +2193,10 @@ apply_config() {
     echo "📊 总配置行数: $(wc -l < .config) 行"
     
     # =========================================================================
-    # 终极禁用：确保指定插件被彻底清除（加强版 v3 - 多次过滤+defconfig循环）
+    # 终极禁用：确保指定插件被彻底清除（加强版 v4 - 使用sed精确删除）
     # =========================================================================
     log ""
-    log "=== 🔧 终极禁用不需要的插件系列（加强版 v3） ==="
+    log "=== 🔧 终极禁用不需要的插件系列（加强版 v4） ==="
 
     local forbidden_plugins=(
         "luci-app-vssr"
@@ -2210,13 +2210,15 @@ apply_config() {
     local still_remaining=0
 
     while [ $attempt -le $max_attempts ]; do
-        log "尝试 $attempt/$max_attempts: 过滤所有相关配置行..."
+        log "尝试 $attempt/$max_attempts: 删除所有相关配置行..."
         
-        # 构建排除模式，匹配所有包含插件名的行（包括注释和选项）
-        local exclude_pattern="CONFIG_PACKAGE_($(IFS='|'; echo "${forbidden_plugins[*]}"))"
-        # 使用 grep -v 过滤掉所有匹配的行（不区分是否为注释）
-        grep -v -E "$exclude_pattern" .config > .config.filtered
-        mv .config.filtered .config
+        # 使用 sed 删除所有包含插件名的行（包括子选项和注释）
+        for plugin in "${forbidden_plugins[@]}"; do
+            # 删除非注释的配置行（CONFIG_PACKAGE_插件名 后跟 = 或 _ 或空格）
+            sed -i "/^CONFIG_PACKAGE_${plugin}[=_ ]/d" .config
+            # 删除注释行（# CONFIG_PACKAGE_插件名 后跟 = 或 _ 或空格）
+            sed -i "/^# CONFIG_PACKAGE_${plugin}[=_ ]/d" .config
+        done
         
         # 去重
         sort -u .config > .config.tmp && mv .config.tmp .config
@@ -2231,7 +2233,7 @@ apply_config() {
         local remaining_lines=""
         for plugin in "${forbidden_plugins[@]}"; do
             # 检查是否存在任何包含插件名的配置行（包括注释）
-            local lines=$(grep -E "CONFIG_PACKAGE_${plugin}" .config | head -5)
+            local lines=$(grep -E "^CONFIG_PACKAGE_${plugin}[=_ ]|^# CONFIG_PACKAGE_${plugin}[=_ ]" .config | head -5)
             if [ -n "$lines" ]; then
                 still_remaining=$((still_remaining + 1))
                 remaining_lines="${remaining_lines}${plugin}残留行:
@@ -2259,7 +2261,7 @@ $lines
     log "📊 最终插件状态验证:"
     still_remaining=0
     for plugin in "${forbidden_plugins[@]}"; do
-        if grep -q -E "CONFIG_PACKAGE_${plugin}" .config; then
+        if grep -q -E "^CONFIG_PACKAGE_${plugin}[=_ ]|^# CONFIG_PACKAGE_${plugin}[=_ ]" .config; then
             log "  ❌ $plugin 仍有配置行残留"
             still_remaining=$((still_remaining + 1))
         else
