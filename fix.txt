@@ -1,0 +1,226 @@
+#【build_firmware_main.sh-31】
+workflow_step15_generate_config() {
+    local extra_packages="$1"
+    
+    log "=== 步骤15: 智能配置生成【修复版】 ==="
+    log "当前设备: $DEVICE"
+    log "当前目标: $TARGET"
+    log "当前子目标: $SUBTARGET"
+    
+    set -e
+    trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
+    
+    # 确保环境变量已加载
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        log "✅ 从环境文件重新加载: DEVICE=$DEVICE, TARGET=$TARGET"
+    fi
+    
+    # 如果DEVICE为空，尝试从参数获取
+    if [ -z "$DEVICE" ] && [ -n "$2" ]; then
+        DEVICE="$2"
+        log "⚠️ DEVICE为空，使用参数: $DEVICE"
+    fi
+    
+    # 设备名转换 - 针对ac42u/acrh17的特殊处理
+    local device_for_config="$DEVICE"
+    case "$DEVICE" in
+        ac42u|rt-ac42u)
+            device_for_config="asus_rt-ac42u"
+            log "🔧 设备名转换: $DEVICE -> $device_for_config"
+            ;;
+        acrh17|rt-acrh17)
+            device_for_config="asus_rt-acrh17"
+            log "🔧 设备名转换: $DEVICE -> $device_for_config"
+            ;;
+        *)
+            # 默认转换：转小写，横线变下划线
+            device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+            ;;
+    esac
+    
+    # 调用核心配置生成函数
+    generate_config "$extra_packages" "$device_for_config"
+    
+    # =========================================================================
+    # 新增：设备定义文件检查与信息对比
+    # =========================================================================
+    log ""
+    log "=== 🔍 设备定义文件验证 ==="
+    
+    cd "$BUILD_DIR" || handle_error "无法进入构建目录"
+    
+    # 查找设备定义文件
+    local search_device=""
+    case "$DEVICE" in
+        ac42u|rt-ac42u|asus_rt-ac42u)
+            search_device="ac42u"
+            ;;
+        acrh17|rt-acrh17|asus_rt-acrh17)
+            search_device="acrh17"
+            ;;
+        *)
+            search_device="$DEVICE"
+            ;;
+    esac
+    
+    local device_file
+    device_file=$(find_device_definition_file "$search_device" "$TARGET" 2>/dev/null | tail -1)
+    
+    if [ -z "$device_file" ] || [ ! -f "$device_file" ]; then
+        log "❌ 错误：未找到设备 $DEVICE (搜索名: $search_device) 的定义文件"
+        log "请检查设备名称是否正确，或 target/linux/$TARGET 目录下是否存在对应的 .mk 文件"
+        exit 1
+    fi
+    
+    log "✅ 找到设备定义文件: $device_file"
+    
+    # 提取设备定义块
+    local device_block
+    device_block=$(extract_device_config "$device_file" "$search_device")
+    
+    if [ -z "$device_block" ]; then
+        log "⚠️ 警告：在文件中未找到设备 $search_device 的配置块，但文件本身存在"
+    else
+        log "📋 设备定义信息:"
+        echo "$device_block" | while IFS= read -r line; do
+            log "   $line"
+        done
+    fi
+    
+    # 从设备定义中提取关键字段
+    local soc_define
+    local model_define
+    local title_define
+    local kernel_define
+    local packages_define
+    
+    soc_define=$(extract_config_value "$device_block" "SOC")
+    model_define=$(extract_config_value "$device_block" "DEVICE_MODEL")
+    title_define=$(extract_config_value "$device_block" "DEVICE_TITLE")
+    kernel_define=$(extract_config_value "$device_block" "KERNEL_PATCHVER")
+    packages_define=$(extract_config_value "$device_block" "DEVICE_PACKAGES")
+    
+    # 从 support.sh 获取平台信息
+    log ""
+    log "📊 与 support.sh 信息对比:"
+    
+    local support_info
+    support_info=$("$SUPPORT_SCRIPT" get-platform "$DEVICE" 2>/dev/null)
+    if [ -n "$support_info" ]; then
+        local support_target
+        local support_subtarget
+        support_target=$(echo "$support_info" | awk '{print $1}')
+        support_subtarget=$(echo "$support_info" | awk '{print $2}')
+        
+        log "  来源          | 目标平台       | 子目标         | SOC/型号       | 内核版本"
+        log "  --------------|----------------|----------------|----------------|----------------"
+        
+        # support.sh 行
+        printf "  support.sh    | %-14s | %-14s | %-14s | %s\n" \
+               "$support_target" "$support_subtarget" \
+               "${soc_define:-N/A}" "${kernel_define:-N/A}"
+        
+        # 定义文件行
+        printf "  定义文件      | %-14s | %-14s | %-14s | %s\n" \
+               "$TARGET" "$SUBTARGET" \
+               "${soc_define:-N/A}" "${kernel_define:-N/A}"
+        
+        # 检查一致性
+        if [ "$support_target" = "$TARGET" ] && [ "$support_subtarget" = "$SUBTARGET" ]; then
+            log "  ✅ 目标/子目标与 support.sh 一致"
+        else
+            log "  ⚠️ 警告：目标/子目标与 support.sh 不一致"
+            log "     support.sh: $support_target/$support_subtarget"
+            log "     当前配置:   $TARGET/$SUBTARGET"
+        fi
+    else
+        log "  ⚠️ 无法从 support.sh 获取信息，跳过对比"
+    fi
+    
+    # 显示设备详细信息
+    log ""
+    log "📱 设备详细信息:"
+    [ -n "$soc_define" ] && log "  SOC: $soc_define"
+    [ -n "$model_define" ] && log "  型号: $model_define"
+    [ -n "$title_define" ] && log "  标题: $title_define"
+    [ -n "$kernel_define" ] && log "  内核版本: $kernel_define"
+    [ -n "$packages_define" ] && log "  默认包: $packages_define"
+    
+    # =========================================================================
+    # 新增：强制禁用指定插件系列
+    # =========================================================================
+    log ""
+    log "=== 🔧 强制禁用不需要的插件系列 ==="
+    
+    local forbidden_plugins=(
+        "luci-app-vssr"
+        "luci-app-ssr-plus"
+        "luci-app-rclone"
+        "luci-app-passwall"
+    )
+    
+    # 备份当前配置
+    cp .config .config.before_disable
+    
+    # 删除所有相关配置行（包括主包和子选项）
+    for plugin in "${forbidden_plugins[@]}"; do
+        log "  处理插件: $plugin"
+        
+        # 删除主包启用行
+        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+        
+        # 删除所有子选项（以插件名开头的配置）
+        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
+        
+        # 添加禁用标记
+        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+        
+        log "    ✅ 已禁用 $plugin 及其子选项"
+    done
+    
+    # 额外清理可能存在的旧格式
+    sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_/d' .config
+    sed -i '/CONFIG_PACKAGE_luci-app-vssr_INCLUDE_/d' .config
+    sed -i '/CONFIG_PACKAGE_luci-app-rclone_INCLUDE_/d' .config
+    sed -i '/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_/d' .config
+    
+    # 去重
+    sort -u .config > .config.tmp && mv .config.tmp .config
+    
+    log "🔄 重新运行 make defconfig 使禁用生效..."
+    make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
+        log "⚠️ make defconfig 警告，但继续"
+    }
+    
+    # 验证禁用结果
+    local still_enabled=0
+    for plugin in "${forbidden_plugins[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
+            log "  ❌ $plugin 仍然被启用"
+            still_enabled=$((still_enabled + 1))
+        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+            log "  ❌ $plugin 仍然被模块化"
+            still_enabled=$((still_enabled + 1))
+        else
+            log "  ✅ $plugin 已正确禁用"
+        fi
+    done
+    
+    if [ $still_enabled -eq 0 ]; then
+        log "🎉 所有指定插件已成功禁用"
+    else
+        log "⚠️ 有 $still_enabled 个插件未能禁用，请检查 feeds 或依赖"
+    fi
+    
+    # 最终配置统计
+    log ""
+    log "📊 配置统计（禁用后）:"
+    log "  总配置行数: $(wc -l < .config)"
+    log "  启用软件包: $(grep -c "^CONFIG_PACKAGE_.*=y$" .config)"
+    log "  模块化软件包: $(grep -c "^CONFIG_PACKAGE_.*=m$" .config)"
+    
+    log "✅ 步骤15 完成"
+}
+#【build_firmware_main.sh-31-end】
