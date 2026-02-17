@@ -1,0 +1,44 @@
+#【build_firmware_main.sh-39】
+workflow_step26_check_artifacts() {
+    log "=== 步骤26: 检查构建产物（完整显示） ==="
+    
+    set -e
+    trap 'echo "❌ 步骤26 失败，退出代码: $?"; exit 1' ERR
+    
+    cd "$BUILD_DIR"
+    
+    if [ -d "bin/targets" ]; then
+        echo "✅ 找到固件目录"
+        
+        # 使用转义的括号进行 find 操作，避免 shell 语法错误
+        FIRMWARE_COUNT=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+        PACKAGE_COUNT=$(find bin/targets -type f \( -name "*.gz" -o -name "*.ipk" \) 2>/dev/null | wc -l)
+        
+        echo "=========================================="
+        echo "📈 构建产物统计:"
+        echo "  固件文件: $FIRMWARE_COUNT 个 (.bin/.img)"
+        echo "  包文件: $PACKAGE_COUNT 个 (.gz/.ipk)"
+        echo ""
+        
+        if [ $FIRMWARE_COUNT -gt 0 ]; then
+            echo "📁 固件文件详细信息:"
+            echo "------------------------------------------"
+            find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read -r file; do
+                SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
+                FILE_NAME=$(basename "$file")
+                echo "🎯 $FILE_NAME ($SIZE)"
+            done
+        else
+            echo "⚠️ 警告: 未找到任何固件文件 (.bin/.img)"
+        fi
+        
+        echo "=========================================="
+        echo "✅ 构建产物检查完成"
+    else
+        echo "❌ 错误: 未找到固件目录"
+        exit 1
+    fi
+    
+    log "✅ 步骤26 完成"
+}
+#【build_firmware_main.sh-39-end】
