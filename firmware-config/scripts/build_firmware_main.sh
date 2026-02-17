@@ -2226,105 +2226,7 @@ apply_config() {
     echo "⚙️ 内核配置: $kernel_configs 个"
     echo "📊 总配置行数: $(wc -l < .config) 行"
     
-    echo ""
-    echo "=== 🔍 设备信息详细查询（使用公共函数） ==="
-    echo "----------------------------------------"
-    
-    local search_device=""
-    case "$DEVICE" in
-        ac42u|rt-ac42u|asus_rt-ac42u)
-            search_device="ac42u"
-            ;;
-        acrh17|rt-acrh17|asus_rt-acrh17)
-            search_device="acrh17"
-            ;;
-        *)
-            search_device="$DEVICE"
-            ;;
-    esac
-    
-    echo "🔍 搜索设备名: $search_device"
-    echo ""
-    
-    # 直接调用函数，它会输出详细信息
-    local device_file=$(find_device_definition_file "$search_device" "$TARGET")
-    
-    if [ -n "$device_file" ] && [ -f "$device_file" ]; then
-        echo "✅ 找到设备定义文件: $device_file"
-        echo ""
-        
-        local device_block=$(extract_device_config "$device_file" "$search_device")
-        if [ -n "$device_block" ]; then
-            echo "📋 设备 $search_device 配置:"
-            echo "----------------------------------------"
-            echo "$device_block"
-            echo "----------------------------------------"
-            
-            local soc=$(extract_config_value "$device_block" "SOC")
-            local model=$(extract_config_value "$device_block" "DEVICE_MODEL")
-            local title=$(extract_config_value "$device_block" "DEVICE_TITLE")
-            local packages=$(extract_config_value "$device_block" "DEVICE_PACKAGES")
-            local dts=$(extract_config_value "$device_block" "DEVICE_DTS")
-            local kernel_ver=$(extract_config_value "$device_block" "KERNEL_PATCHVER")
-            
-            [ -n "$soc" ] && echo "🔧 SOC: $soc"
-            [ -n "$model" ] && echo "📱 型号: $model"
-            [ -n "$title" ] && echo "📝 标题: $title"
-            [ -n "$packages" ] && echo "📦 默认包: $packages"
-            [ -n "$dts" ] && echo "🔧 DTS: $dts"
-            [ -n "$kernel_ver" ] && echo "🐧 内核版本: $kernel_ver"
-        else
-            echo "⚠️ 在文件中未找到设备 $search_device 的配置块"
-        fi
-    else
-        echo "⚠️ 未找到设备 $search_device 的定义文件"
-    fi
-    
-    echo ""
-    echo "=== 📁 所有子平台.mk文件列表 ==="
-    
-    local mk_count=0
-    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
-        while IFS= read -r mk_file; do
-            mk_count=$((mk_count + 1))
-            echo "   📄 [$mk_count] $mk_file"
-        done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null | sort)
-        echo ""
-        echo "   📊 共找到 $mk_count 个.mk文件"
-    else
-        echo "   未找到.mk文件"
-    fi
-    
-    echo ""
-    echo "=== 📁 内核配置文件列表 ==="
-    
-    local kernel_count=0
-    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
-        while IFS= read -r config; do
-            kernel_count=$((kernel_count + 1))
-            local ver=$(basename "$config" | sed 's/config-//')
-            echo "   📄 [$kernel_count] $config (内核版本 $ver)"
-        done < <(find "target/linux/$TARGET" -type f -name "config-*" 2>/dev/null | sort)
-        echo ""
-        echo "   📊 共找到 $kernel_count 个内核配置文件"
-    else
-        echo "   未找到内核配置文件"
-    fi
-    
-    echo ""
-    echo "=== 📁 设备相关文件列表 ==="
-    
-    local dev_count=0
-    if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
-        while IFS= read -r config; do
-            dev_count=$((dev_count + 1))
-            echo "   📄 [$dev_count] $config"
-        done < <(find "target/linux/$TARGET" -type f -name "*${DEVICE}*" 2>/dev/null | sort)
-        echo ""
-        echo "   📊 共找到 $dev_count 个设备相关文件"
-    else
-        echo "   未找到设备专属配置文件"
-    fi
+    # ========== 已删除设备信息详细查询部分 ==========
     
     log "✅ 配置应用完成"
     log "最终配置文件: .config"
@@ -3626,7 +3528,7 @@ workflow_step15_generate_config() {
     cd "$BUILD_DIR" || handle_error "无法进入构建目录"
     
     # =========================================================================
-    # 设备定义文件查找（稳健版）
+    # 设备定义文件查找（仅一次）
     # =========================================================================
     log ""
     log "=== 🔍 设备定义文件验证（前置检查） ==="
@@ -3648,7 +3550,7 @@ workflow_step15_generate_config() {
     log "搜索设备名: $search_device"
     log "搜索路径: target/linux/$TARGET"
     
-    # 列出所有 .mk 文件（恢复原有表格）
+    # 列出所有 .mk 文件
     echo ""
     echo "📁 所有子平台 .mk 文件列表:"
     local mk_files=()
@@ -3686,28 +3588,24 @@ workflow_step15_generate_config() {
     
     log "✅ 找到设备定义文件: $device_file"
     
-    # 提取设备定义块（改进版：支持 common 块，提取完整定义）
+    # 提取设备定义块并显示关键行
     local device_block=""
-    # 首先尝试精确匹配 define Device/<设备名> (可能带后缀 _common 等)
-    # 使用 awk 提取从匹配行到下一个空行或 endef
     device_block=$(awk "/define Device.*$search_device/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
-    
-    if [ -z "$device_block" ]; then
-        # 如果没找到，尝试模糊匹配（可能设备名在行内）
-        device_block=$(awk "/$search_device/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
-    fi
     
     if [ -n "$device_block" ]; then
         echo ""
-        echo "📋 设备定义信息:"
+        echo "📋 设备定义信息（关键字段）:"
         echo "----------------------------------------"
-        echo "$device_block"
+        # 显示 define Device 行
+        echo "$device_block" | grep -E "define Device" | head -1
+        # 显示关键属性
+        echo "$device_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS)[[:space:]]*:="
         echo "----------------------------------------"
     else
         log "⚠️ 警告：无法提取设备 $search_device 的配置块"
     fi
     
-    # 从设备定义中提取关键字段（使用 awk 直接提取）
+    # 提取关键值用于后续对比
     local soc_define=""
     local model_define=""
     local title_define=""
@@ -3725,12 +3623,7 @@ workflow_step15_generate_config() {
     log "✅ 设备定义文件验证通过，继续生成配置"
     
     # =========================================================================
-    # 调用核心配置生成函数
-    # =========================================================================
-    generate_config "$extra_packages" "$device_for_config"
-    
-    # =========================================================================
-    # 与 support.sh 信息对比（恢复表格）
+    # 与 support.sh 信息对比（移至设备定义信息后面）
     # =========================================================================
     log ""
     log "📊 与 support.sh 信息对比:"
@@ -3767,14 +3660,10 @@ workflow_step15_generate_config() {
         log "  ⚠️ 无法从 support.sh 获取信息，跳过对比"
     fi
     
-    # 显示设备详细信息
-    log ""
-    log "📱 设备详细信息:"
-    [ -n "$soc_define" ] && log "  SOC: $soc_define"
-    [ -n "$model_define" ] && log "  型号: $model_define"
-    [ -n "$title_define" ] && log "  标题: $title_define"
-    [ -n "$kernel_define" ] && log "  内核版本: $kernel_define"
-    [ -n "$packages_define" ] && log "  默认包: $packages_define"
+    # =========================================================================
+    # 调用核心配置生成函数
+    # =========================================================================
+    generate_config "$extra_packages" "$device_for_config"
     
     # =========================================================================
     # 强制禁用指定插件系列
