@@ -23,7 +23,7 @@ CONFIG_DIR="$REPO_ROOT/firmware-config/config"
 declare -A DEVICES
 DEVICES["ac42u"]="ipq40xx generic"
 DEVICES["cmcc_rax3000m"]="mediatek filogic" 
-DEVICES["netgear_3800"]="ath79 generic"
+DEVICES["netgear_wndr3800"]="ath79 generic"
 
 # OpenWrt官方SDK下载信息
 # 格式: SDK_INFO["目标/子目标/版本"]="SDK_URL"
