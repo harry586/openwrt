@@ -3623,18 +3623,15 @@ workflow_step15_generate_config() {
             ;;
     esac
     
-    # 调用核心配置生成函数
-    generate_config "$extra_packages" "$device_for_config"
-    
-    # =========================================================================
-    # 新增：设备定义文件检查与信息对比
-    # =========================================================================
-    log ""
-    log "=== 🔍 设备定义文件验证 ==="
-    
     cd "$BUILD_DIR" || handle_error "无法进入构建目录"
     
-    # 查找设备定义文件
+    # =========================================================================
+    # 设备定义文件查找（重写，不依赖有问题的函数）
+    # =========================================================================
+    log ""
+    log "=== 🔍 设备定义文件验证（前置检查） ==="
+    
+    # 确定搜索关键词
     local search_device=""
     case "$DEVICE" in
         ac42u|rt-ac42u|asus_rt-ac42u)
@@ -3648,8 +3645,12 @@ workflow_step15_generate_config() {
             ;;
     esac
     
+    log "搜索设备名: $search_device"
+    log "搜索路径: target/linux/$TARGET"
+    
+    # 直接使用 find + grep 查找包含设备定义的 .mk 文件
     local device_file
-    device_file=$(find_device_definition_file "$search_device" "$TARGET" 2>/dev/null | tail -1)
+    device_file=$(find "target/linux/$TARGET" -type f -name "*.mk"                   -exec grep -l "define Device.*$search_device" {} ; 2>/dev/null | head -1)
     
     if [ -z "$device_file" ] || [ ! -f "$device_file" ]; then
         log "❌ 错误：未找到设备 $DEVICE (搜索名: $search_device) 的定义文件"
@@ -3659,33 +3660,48 @@ workflow_step15_generate_config() {
     
     log "✅ 找到设备定义文件: $device_file"
     
-    # 提取设备定义块
+    # 提取设备定义块（使用原有的 extract_device_config 函数，但增加 fallback）
     local device_block
-    device_block=$(extract_device_config "$device_file" "$search_device")
+    device_block=$(extract_device_config "$device_file" "$search_device" 2>/dev/null)
     
     if [ -z "$device_block" ]; then
-        log "⚠️ 警告：在文件中未找到设备 $search_device 的配置块，但文件本身存在"
-    else
+        log "⚠️ 警告：extract_device_config 未能提取配置块，尝试手动提取"
+        # 手动提取：从文件中找到从 "define Device/..." 到下一个空行或 "endef" 的内容
+        device_block=$(awk "/define Device.*$search_device/,/endef/ { print }" "$device_file" 2>/dev/null)
+    fi
+    
+    if [ -n "$device_block" ]; then
         log "📋 设备定义信息:"
         echo "$device_block" | while IFS= read -r line; do
             log "   $line"
         done
+    else
+        log "⚠️ 警告：无法提取设备 $search_device 的配置块"
     fi
     
-    # 从设备定义中提取关键字段
+    # 从设备定义中提取关键字段（使用原有函数，如果失败则手动）
     local soc_define
     local model_define
     local title_define
     local kernel_define
     local packages_define
     
-    soc_define=$(extract_config_value "$device_block" "SOC")
-    model_define=$(extract_config_value "$device_block" "DEVICE_MODEL")
-    title_define=$(extract_config_value "$device_block" "DEVICE_TITLE")
-    kernel_define=$(extract_config_value "$device_block" "KERNEL_PATCHVER")
-    packages_define=$(extract_config_value "$device_block" "DEVICE_PACKAGES")
+    soc_define=$(extract_config_value "$device_block" "SOC" 2>/dev/null)
+    model_define=$(extract_config_value "$device_block" "DEVICE_MODEL" 2>/dev/null)
+    title_define=$(extract_config_value "$device_block" "DEVICE_TITLE" 2>/dev/null)
+    kernel_define=$(extract_config_value "$device_block" "KERNEL_PATCHVER" 2>/dev/null)
+    packages_define=$(extract_config_value "$device_block" "DEVICE_PACKAGES" 2>/dev/null)
     
-    # 从 support.sh 获取平台信息
+    log "✅ 设备定义文件验证通过，继续生成配置"
+    
+    # =========================================================================
+    # 调用核心配置生成函数
+    # =========================================================================
+    generate_config "$extra_packages" "$device_for_config"
+    
+    # =========================================================================
+    # 与 support.sh 信息对比（仅用于展示，不退出）
+    # =========================================================================
     log ""
     log "📊 与 support.sh 信息对比:"
     
@@ -3730,7 +3746,7 @@ workflow_step15_generate_config() {
     [ -n "$packages_define" ] && log "  默认包: $packages_define"
     
     # =========================================================================
-    # 新增：强制禁用指定插件系列
+    # 强制禁用指定插件系列
     # =========================================================================
     log ""
     log "=== 🔧 强制禁用不需要的插件系列 ==="
