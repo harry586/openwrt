@@ -2193,71 +2193,69 @@ apply_config() {
     echo "📊 总配置行数: $(wc -l < .config) 行"
     
     # =========================================================================
-    # 终极禁用：确保指定插件被彻底清除（加强版）
+    # 终极禁用：确保指定插件被彻底清除（加强版 v2）
     # =========================================================================
     log ""
-    log "=== 🔧 终极禁用不需要的插件系列（加强版） ==="
-    
+    log "=== 🔧 终极禁用不需要的插件系列（加强版 v2） ==="
+
     local forbidden_plugins=(
         "luci-app-vssr"
         "luci-app-ssr-plus"
         "luci-app-rclone"
         "luci-app-passwall"
     )
-    
-    # 多次清理，确保覆盖所有可能
-    for i in 1 2 3; do
-        for plugin in "${forbidden_plugins[@]}"; do
-            # 删除所有包含插件名的配置行（包括启用、模块化、子选项）
-            sed -i "/^CONFIG_PACKAGE_${plugin}[=_]/d" .config
-            sed -i "/^# CONFIG_PACKAGE_${plugin}[=_]/d" .config
-            sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
-            # 添加禁用标记（如果还没有）
-            if ! grep -q "^# CONFIG_PACKAGE_${plugin} is not set" .config; then
-                echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-            fi
-        done
+
+    # 方法1：使用 sed 删除（保留，但可能不够）
+    for plugin in "${forbidden_plugins[@]}"; do
+        sed -i "/^CONFIG_PACKAGE_${plugin}[=_]/d" .config
+        sed -i "/^# CONFIG_PACKAGE_${plugin}[=_]/d" .config
     done
-    
-    # 额外清理特定子选项（直接匹配）
-    sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_/d' .config
-    sed -i '/CONFIG_PACKAGE_luci-app-vssr_INCLUDE_/d' .config
-    sed -i '/CONFIG_PACKAGE_luci-app-rclone_INCLUDE_/d' .config
-    sed -i '/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_/d' .config
-    
+
+    # 方法2：使用 grep -v 彻底过滤，确保无残留
+    local tmp_config=$(mktemp)
+    # 构建排除模式：用 | 连接所有插件，匹配行首的 CONFIG_PACKAGE_ 后跟插件名（后面可能跟 = 或 _）
+    local exclude_pattern="^CONFIG_PACKAGE_($(IFS='|'; echo "${forbidden_plugins[*]}"))[=_].*"
+    grep -v -E "$exclude_pattern" .config > "$tmp_config"
+    # 同时排除禁用标记行（但我们已经添加了，保留也行，但为了干净，也排除以 # CONFIG_PACKAGE_ 开头且后跟插件名的行）
+    grep -v -E "^# CONFIG_PACKAGE_($(IFS='|'; echo "${forbidden_plugins[*]}"))[=_]" "$tmp_config" > "${tmp_config}.2"
+    mv "${tmp_config}.2" .config
+    rm -f "$tmp_config"
+
+    # 为每个插件添加禁用标记（如果不存在）
+    for plugin in "${forbidden_plugins[@]}"; do
+        if ! grep -q "^# CONFIG_PACKAGE_${plugin} is not set" .config; then
+            echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+        fi
+    done
+
     # 去重
     sort -u .config > .config.tmp && mv .config.tmp .config
-    
+
     log "🔄 重新运行 make defconfig 使禁用最终生效..."
     make defconfig > /tmp/build-logs/defconfig_final.log 2>&1 || {
         log "⚠️ make defconfig 警告，但继续"
     }
-    
-    # 最终验证
+
+    # 最终验证（更严格的检查）
     log ""
     log "📊 最终插件状态验证:"
     local still_enabled=0
     for plugin in "${forbidden_plugins[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
-            log "  ❌ $plugin 仍然被启用"
-            still_enabled=$((still_enabled + 1))
-        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
-            log "  ❌ $plugin 仍然被模块化"
-            still_enabled=$((still_enabled + 1))
-        elif grep -q "^CONFIG_PACKAGE_${plugin}_" .config; then
-            log "  ❌ $plugin 仍有子选项残留"
+        # 检查主包或子选项是否存在（包括启用、模块化、已标记为 is not set 的行不算残留）
+        if grep -q -E "^CONFIG_PACKAGE_${plugin}(=|_)" .config; then
+            log "  ❌ $plugin 仍有配置行残留"
             still_enabled=$((still_enabled + 1))
         else
             log "  ✅ $plugin 已正确禁用"
         fi
     done
-    
+
     if [ $still_enabled -eq 0 ]; then
         log "🎉 所有指定插件已成功禁用"
     else
         log "⚠️ 有 $still_enabled 个插件未能彻底禁用，请检查 feeds 或依赖"
     fi
-    
+
     log "✅ 配置应用完成"
     log "最终配置文件: .config"
     log "最终配置大小: $(ls -lh .config | awk '{print $5}')"
