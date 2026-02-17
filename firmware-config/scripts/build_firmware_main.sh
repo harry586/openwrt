@@ -1121,7 +1121,7 @@ EOF
     mv .config.tmp .config
     
     # =========================================================================
-    # 静默获取内核配置文件（不输出冗长调试信息）
+    # 静默获取内核配置文件（不再输出冗长日志）
     # =========================================================================
     local kernel_config_file=""
     local kernel_version=""
@@ -1130,7 +1130,7 @@ EOF
     if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
         # 尝试从设备定义文件获取内核版本（静默）
         if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
-            # 查找设备定义文件
+            # 查找设备定义文件（复用之前的 search_device）
             local device_def_file=""
             while IFS= read -r mkfile; do
                 if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
@@ -1140,7 +1140,6 @@ EOF
             done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
             
             if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
-                # 提取内核版本（如果有）
                 kernel_version=$(awk -F':=' '/^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}' "$device_def_file")
                 if [ -n "$kernel_version" ]; then
                     kernel_config_file="target/linux/$TARGET/config-$kernel_version"
@@ -1210,7 +1209,10 @@ EOF
         
         rm -f "$usb_configs_file" "$usb_configs_file.sorted"
     else
-        log "⚠️ 未找到目标平台 $TARGET 的内核配置文件，跳过内核配置添加"
+        # 未找到内核配置文件时不再输出警告，仅保留一个调试日志（可忽略）
+        if [ "${DEBUG:-false}" = "true" ]; then
+            log "ℹ️ 未找到目标平台 $TARGET 的内核配置文件，跳过内核配置添加"
+        fi
     fi
     
     log "🔄 第一次运行 make defconfig..."
@@ -2191,10 +2193,10 @@ apply_config() {
     echo "📊 总配置行数: $(wc -l < .config) 行"
     
     # =========================================================================
-    # 新增：强制禁用不需要的插件系列（确保最终配置干净）
+    # 终极禁用：确保指定插件被彻底清除
     # =========================================================================
     log ""
-    log "=== 🔧 强制禁用不需要的插件系列（最终检查） ==="
+    log "=== 🔧 终极禁用不需要的插件系列（再次确认） ==="
     
     local forbidden_plugins=(
         "luci-app-vssr"
@@ -2203,14 +2205,13 @@ apply_config() {
         "luci-app-passwall"
     )
     
-    local still_enabled=0
     for plugin in "${forbidden_plugins[@]}"; do
         # 删除主包启用行
         sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
         sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
         # 删除所有子选项
         sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
-        # 添加禁用标记（如果不存在）
+        # 添加禁用标记
         if ! grep -q "^# CONFIG_PACKAGE_${plugin} is not set" .config; then
             echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
         fi
@@ -2226,7 +2227,32 @@ apply_config() {
     # 去重
     sort -u .config > .config.tmp && mv .config.tmp .config
     
-    log "✅ 插件最终禁用完成"
+    log "🔄 再次运行 make defconfig 使禁用最终生效..."
+    make defconfig > /tmp/build-logs/defconfig_final.log 2>&1 || {
+        log "⚠️ make defconfig 警告，但继续"
+    }
+    
+    # 最终验证
+    log ""
+    log "📊 最终插件状态验证:"
+    local still_enabled=0
+    for plugin in "${forbidden_plugins[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
+            log "  ❌ $plugin 仍然被启用"
+            still_enabled=$((still_enabled + 1))
+        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+            log "  ❌ $plugin 仍然被模块化"
+            still_enabled=$((still_enabled + 1))
+        else
+            log "  ✅ $plugin 已正确禁用"
+        fi
+    done
+    
+    if [ $still_enabled -eq 0 ]; then
+        log "🎉 所有指定插件已成功禁用"
+    else
+        log "⚠️ 有 $still_enabled 个插件未能禁用，请检查 feeds 或依赖"
+    fi
     
     log "✅ 配置应用完成"
     log "最终配置文件: .config"
@@ -3528,7 +3554,7 @@ workflow_step15_generate_config() {
     cd "$BUILD_DIR" || handle_error "无法进入构建目录"
     
     # =========================================================================
-    # 设备定义文件查找（仅一次）
+    # 设备定义文件查找
     # =========================================================================
     log ""
     log "=== 🔍 设备定义文件验证（前置检查） ==="
@@ -3620,10 +3646,8 @@ workflow_step15_generate_config() {
         packages_define=$(echo "$device_block" | awk -F':=' '/^[[:space:]]*DEVICE_PACKAGES[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')
     fi
     
-    log "✅ 设备定义文件验证通过，继续生成配置"
-    
     # =========================================================================
-    # 与 support.sh 信息对比（移至设备定义信息后面）
+    # 与 support.sh 信息对比（现在放在调用 generate_config 之前）
     # =========================================================================
     log ""
     log "📊 与 support.sh 信息对比:"
@@ -3660,8 +3684,10 @@ workflow_step15_generate_config() {
         log "  ⚠️ 无法从 support.sh 获取信息，跳过对比"
     fi
     
+    log "✅ 设备定义文件验证通过，继续生成配置"
+    
     # =========================================================================
-    # 调用核心配置生成函数
+    # 调用核心配置生成函数（内部会输出设备验证等信息）
     # =========================================================================
     generate_config "$extra_packages" "$device_for_config"
     
