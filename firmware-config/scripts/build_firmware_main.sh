@@ -3626,7 +3626,7 @@ workflow_step15_generate_config() {
     cd "$BUILD_DIR" || handle_error "无法进入构建目录"
     
     # =========================================================================
-    # 设备定义文件查找（重写，不依赖有问题的函数）
+    # 设备定义文件查找（稳健版，避免 find -exec 语法问题）
     # =========================================================================
     log ""
     log "=== 🔍 设备定义文件验证（前置检查） ==="
@@ -3648,9 +3648,14 @@ workflow_step15_generate_config() {
     log "搜索设备名: $search_device"
     log "搜索路径: target/linux/$TARGET"
     
-    # 直接使用 find + grep 查找包含设备定义的 .mk 文件
-    local device_file
-    device_file=$(find "target/linux/$TARGET" -type f -name "*.mk"                   -exec grep -l "define Device.*$search_device" {} ; 2>/dev/null | head -1)
+    # 稳健查找方法：遍历所有 .mk 文件，用 grep 检查是否包含设备定义
+    local device_file=""
+    while IFS= read -r mkfile; do
+        if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
+            device_file="$mkfile"
+            break
+        fi
+    done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
     
     if [ -z "$device_file" ] || [ ! -f "$device_file" ]; then
         log "❌ 错误：未找到设备 $DEVICE (搜索名: $search_device) 的定义文件"
@@ -3660,7 +3665,7 @@ workflow_step15_generate_config() {
     
     log "✅ 找到设备定义文件: $device_file"
     
-    # 提取设备定义块（使用原有的 extract_device_config 函数，但增加 fallback）
+    # 提取设备定义块（使用原有的 extract_device_config 函数，增加 fallback）
     local device_block
     device_block=$(extract_device_config "$device_file" "$search_device" 2>/dev/null)
     
