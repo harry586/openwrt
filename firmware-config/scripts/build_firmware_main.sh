@@ -4637,21 +4637,24 @@ workflow_step25_build_firmware() {
 # ============================================
 #【build_firmware_main.sh-39】
 workflow_step26_check_artifacts() {
-    log "=== 步骤26: 检查构建产物（修复版） ==="
+    log "=== 步骤26: 检查构建产物（完整显示） ==="
     
     set -e
     trap 'echo "❌ 步骤26 失败，退出代码: $?"; exit 1' ERR
     
-    cd $BUILD_DIR
+    cd "$BUILD_DIR"
     
     if [ -d "bin/targets" ]; then
         echo "✅ 找到固件目录"
         
-        FIRMWARE_COUNT=0
-        PACKAGE_COUNT=0
+        # 分别统计 .bin 和 .img 文件，避免括号转义问题
+        bin_count=$(find bin/targets -type f -name "*.bin" 2>/dev/null | wc -l)
+        img_count=$(find bin/targets -type f -name "*.img" 2>/dev/null | wc -l)
+        FIRMWARE_COUNT=$((bin_count + img_count))
         
-        FIRMWARE_COUNT=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
-        PACKAGE_COUNT=$(find bin/targets -type f \( -name "*.gz" -o -name "*.ipk" \) 2>/dev/null | wc -l)
+        gz_count=$(find bin/targets -type f -name "*.gz" 2>/dev/null | wc -l)
+        ipk_count=$(find bin/targets -type f -name "*.ipk" 2>/dev/null | wc -l)
+        PACKAGE_COUNT=$((gz_count + ipk_count))
         
         echo "=========================================="
         echo "📈 构建产物统计:"
@@ -4662,11 +4665,16 @@ workflow_step26_check_artifacts() {
         if [ $FIRMWARE_COUNT -gt 0 ]; then
             echo "📁 固件文件详细信息:"
             echo "------------------------------------------"
-            find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | head -5 | while read file; do
+            # 使用临时文件合并两个 find 结果，避免括号
+            temp_list=$(mktemp)
+            find bin/targets -type f -name "*.bin" 2>/dev/null >> "$temp_list"
+            find bin/targets -type f -name "*.img" 2>/dev/null >> "$temp_list"
+            sort -u "$temp_list" | while read -r file; do
                 SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
                 FILE_NAME=$(basename "$file")
                 echo "🎯 $FILE_NAME ($SIZE)"
             done
+            rm -f "$temp_list"
         else
             echo "⚠️ 警告: 未找到任何固件文件 (.bin/.img)"
         fi
