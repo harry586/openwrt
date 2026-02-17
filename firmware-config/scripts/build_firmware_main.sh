@@ -1121,87 +1121,49 @@ EOF
     mv .config.tmp .config
     
     # =========================================================================
-    # 动态获取目标平台支持的内核配置 - 直接调用搜索函数
+    # 静默获取内核配置文件（不输出冗长调试信息）
     # =========================================================================
-    echo ""
-    echo "=== 🔍 开始搜索设备定义文件 ==="
-    echo "----------------------------------------"
-    
     local kernel_config_file=""
     local kernel_version=""
     local found_kernel=0
-    local device_def_file=""
     
     if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
-        echo "🔍 根据设备定义文件查找内核配置..."
-        echo "🔍 使用搜索设备名: $search_device"
-        echo ""
-        
-        # 直接调用 find_device_definition_file 显示所有.mk文件列表（不捕获输出）
-        find_device_definition_file "$search_device" "$TARGET"
-        
-        # 单独查找设备定义文件路径（不依赖捕获输出）
+        # 尝试从设备定义文件获取内核版本（静默）
         if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
-            device_def_file=$(find "target/linux/$TARGET" -type f -name "*.mk" -exec grep -l "define Device.*${search_device}" {} + 2>/dev/null | head -1)
-        fi
-        
-        if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
-            echo "✅ 找到设备定义文件: $device_def_file"
-            echo ""
-            
-            local device_block=$(extract_device_config "$device_def_file" "$search_device")
-            if [ -n "$device_block" ]; then
-                echo "📋 设备 $search_device 配置:"
-                echo "----------------------------------------"
-                echo "$device_block"
-                echo "----------------------------------------"
-            fi
-            
-            kernel_version=$(extract_kernel_version_from_device_file "$device_def_file" "$search_device")
-            
-            if [ -n "$kernel_version" ]; then
-                echo "✅ 从设备定义文件获取到内核版本: $kernel_version"
-                echo ""
-                
-                kernel_config_file=$(find_kernel_config_by_version "$TARGET" "$SUBTARGET" "$kernel_version")
-                
-                if [ -n "$kernel_config_file" ] && [ -f "$kernel_config_file" ]; then
-                    echo "✅ 找到内核配置文件: $kernel_config_file"
-                    found_kernel=1
-                else
-                    echo "⚠️ 未找到对应内核版本 $kernel_version 的配置文件"
+            # 查找设备定义文件
+            local device_def_file=""
+            while IFS= read -r mkfile; do
+                if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
+                    device_def_file="$mkfile"
+                    break
                 fi
-            else
-                echo "⚠️ 设备定义文件中未指定内核版本"
+            done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
+            
+            if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
+                # 提取内核版本（如果有）
+                kernel_version=$(awk -F':=' '/^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}' "$device_def_file")
+                if [ -n "$kernel_version" ]; then
+                    kernel_config_file="target/linux/$TARGET/config-$kernel_version"
+                fi
             fi
-        else
-            echo "⚠️ 未找到设备 $search_device 的定义文件"
         fi
         
-        if [ $found_kernel -eq 0 ]; then
-            echo "📁 按优先级搜索内核配置文件..."
-            echo ""
-            
+        # 如果未找到，按优先级搜索
+        if [ -z "$kernel_config_file" ] || [ ! -f "$kernel_config_file" ]; then
             for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
                 kernel_config_file="target/linux/$TARGET/config-$ver"
                 if [ -f "$kernel_config_file" ]; then
                     kernel_version="$ver"
-                    echo "✅ 找到内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
                     found_kernel=1
                     break
                 fi
             done
-        fi
-        
-        if [ $found_kernel -eq 0 ]; then
-            echo "⚠️ 警告: 未找到目标平台 $TARGET 的内核配置文件"
+        else
+            found_kernel=1
         fi
     fi
     
-    echo "========================================"
-    echo ""
-    
-    if [ -n "$kernel_config_file" ] && [ -f "$kernel_config_file" ]; then
+    if [ $found_kernel -eq 1 ] && [ -f "$kernel_config_file" ]; then
         log "✅ 使用内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
         
         local kernel_patterns=(
@@ -1247,6 +1209,8 @@ EOF
         log "✅ 添加了 $added_count 个新的内核配置"
         
         rm -f "$usb_configs_file" "$usb_configs_file.sorted"
+    else
+        log "⚠️ 未找到目标平台 $TARGET 的内核配置文件，跳过内核配置添加"
     fi
     
     log "🔄 第一次运行 make defconfig..."
@@ -2226,7 +2190,43 @@ apply_config() {
     echo "⚙️ 内核配置: $kernel_configs 个"
     echo "📊 总配置行数: $(wc -l < .config) 行"
     
-    # ========== 已删除设备信息详细查询部分 ==========
+    # =========================================================================
+    # 新增：强制禁用不需要的插件系列（确保最终配置干净）
+    # =========================================================================
+    log ""
+    log "=== 🔧 强制禁用不需要的插件系列（最终检查） ==="
+    
+    local forbidden_plugins=(
+        "luci-app-vssr"
+        "luci-app-ssr-plus"
+        "luci-app-rclone"
+        "luci-app-passwall"
+    )
+    
+    local still_enabled=0
+    for plugin in "${forbidden_plugins[@]}"; do
+        # 删除主包启用行
+        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+        # 删除所有子选项
+        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
+        # 添加禁用标记（如果不存在）
+        if ! grep -q "^# CONFIG_PACKAGE_${plugin} is not set" .config; then
+            echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+        fi
+        log "  已确保 $plugin 被禁用"
+    done
+    
+    # 额外清理
+    sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_/d' .config
+    sed -i '/CONFIG_PACKAGE_luci-app-vssr_INCLUDE_/d' .config
+    sed -i '/CONFIG_PACKAGE_luci-app-rclone_INCLUDE_/d' .config
+    sed -i '/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_/d' .config
+    
+    # 去重
+    sort -u .config > .config.tmp && mv .config.tmp .config
+    
+    log "✅ 插件最终禁用完成"
     
     log "✅ 配置应用完成"
     log "最终配置文件: .config"
