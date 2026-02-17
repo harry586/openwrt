@@ -2193,10 +2193,10 @@ apply_config() {
     echo "📊 总配置行数: $(wc -l < .config) 行"
     
     # =========================================================================
-    # 终极禁用：确保指定插件被彻底清除
+    # 终极禁用：确保指定插件被彻底清除（加强版）
     # =========================================================================
     log ""
-    log "=== 🔧 终极禁用不需要的插件系列（再次确认） ==="
+    log "=== 🔧 终极禁用不需要的插件系列（加强版） ==="
     
     local forbidden_plugins=(
         "luci-app-vssr"
@@ -2205,20 +2205,21 @@ apply_config() {
         "luci-app-passwall"
     )
     
-    for plugin in "${forbidden_plugins[@]}"; do
-        # 删除主包启用行
-        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
-        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-        # 删除所有子选项
-        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
-        # 添加禁用标记
-        if ! grep -q "^# CONFIG_PACKAGE_${plugin} is not set" .config; then
-            echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-        fi
-        log "  已确保 $plugin 被禁用"
+    # 多次清理，确保覆盖所有可能
+    for i in 1 2 3; do
+        for plugin in "${forbidden_plugins[@]}"; do
+            # 删除所有包含插件名的配置行（包括启用、模块化、子选项）
+            sed -i "/^CONFIG_PACKAGE_${plugin}[=_]/d" .config
+            sed -i "/^# CONFIG_PACKAGE_${plugin}[=_]/d" .config
+            sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
+            # 添加禁用标记（如果还没有）
+            if ! grep -q "^# CONFIG_PACKAGE_${plugin} is not set" .config; then
+                echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+            fi
+        done
     done
     
-    # 额外清理
+    # 额外清理特定子选项（直接匹配）
     sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_/d' .config
     sed -i '/CONFIG_PACKAGE_luci-app-vssr_INCLUDE_/d' .config
     sed -i '/CONFIG_PACKAGE_luci-app-rclone_INCLUDE_/d' .config
@@ -2227,7 +2228,7 @@ apply_config() {
     # 去重
     sort -u .config > .config.tmp && mv .config.tmp .config
     
-    log "🔄 再次运行 make defconfig 使禁用最终生效..."
+    log "🔄 重新运行 make defconfig 使禁用最终生效..."
     make defconfig > /tmp/build-logs/defconfig_final.log 2>&1 || {
         log "⚠️ make defconfig 警告，但继续"
     }
@@ -2243,6 +2244,9 @@ apply_config() {
         elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
             log "  ❌ $plugin 仍然被模块化"
             still_enabled=$((still_enabled + 1))
+        elif grep -q "^CONFIG_PACKAGE_${plugin}_" .config; then
+            log "  ❌ $plugin 仍有子选项残留"
+            still_enabled=$((still_enabled + 1))
         else
             log "  ✅ $plugin 已正确禁用"
         fi
@@ -2251,7 +2255,7 @@ apply_config() {
     if [ $still_enabled -eq 0 ]; then
         log "🎉 所有指定插件已成功禁用"
     else
-        log "⚠️ 有 $still_enabled 个插件未能禁用，请检查 feeds 或依赖"
+        log "⚠️ 有 $still_enabled 个插件未能彻底禁用，请检查 feeds 或依赖"
     fi
     
     log "✅ 配置应用完成"
