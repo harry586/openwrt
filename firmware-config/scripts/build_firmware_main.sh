@@ -3626,7 +3626,7 @@ workflow_step15_generate_config() {
     cd "$BUILD_DIR" || handle_error "无法进入构建目录"
     
     # =========================================================================
-    # 设备定义文件查找（稳健版，避免 find -exec 语法问题）
+    # 设备定义文件查找（稳健版）
     # =========================================================================
     log ""
     log "=== 🔍 设备定义文件验证（前置检查） ==="
@@ -3648,14 +3648,35 @@ workflow_step15_generate_config() {
     log "搜索设备名: $search_device"
     log "搜索路径: target/linux/$TARGET"
     
-    # 稳健查找方法：遍历所有 .mk 文件，用 grep 检查是否包含设备定义
+    # 列出所有 .mk 文件（恢复原有表格）
+    echo ""
+    echo "📁 所有子平台 .mk 文件列表:"
+    local mk_files=()
+    while IFS= read -r file; do
+        mk_files+=("$file")
+    done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null | sort)
+    
+    if [ ${#mk_files[@]} -gt 0 ]; then
+        echo "----------------------------------------"
+        for i in "${!mk_files[@]}"; do
+            printf "[%2d] %s
+" $((i+1)) "${mk_files[$i]}"
+        done
+        echo "----------------------------------------"
+        echo "📊 共找到 ${#mk_files[@]} 个 .mk 文件"
+    else
+        echo "   未找到 .mk 文件"
+    fi
+    echo ""
+    
+    # 查找包含设备定义的 .mk 文件
     local device_file=""
-    while IFS= read -r mkfile; do
+    for mkfile in "${mk_files[@]}"; do
         if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
             device_file="$mkfile"
             break
         fi
-    done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
+    done
     
     if [ -z "$device_file" ] || [ ! -f "$device_file" ]; then
         log "❌ 错误：未找到设备 $DEVICE (搜索名: $search_device) 的定义文件"
@@ -3665,37 +3686,41 @@ workflow_step15_generate_config() {
     
     log "✅ 找到设备定义文件: $device_file"
     
-    # 提取设备定义块（使用原有的 extract_device_config 函数，增加 fallback）
-    local device_block
-    device_block=$(extract_device_config "$device_file" "$search_device" 2>/dev/null)
+    # 提取设备定义块（改进版：支持 common 块，提取完整定义）
+    local device_block=""
+    # 首先尝试精确匹配 define Device/<设备名> (可能带后缀 _common 等)
+    # 使用 awk 提取从匹配行到下一个空行或 endef
+    device_block=$(awk "/define Device.*$search_device/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
     
     if [ -z "$device_block" ]; then
-        log "⚠️ 警告：extract_device_config 未能提取配置块，尝试手动提取"
-        # 手动提取：从文件中找到从 "define Device/..." 到下一个空行或 "endef" 的内容
-        device_block=$(awk "/define Device.*$search_device/,/endef/ { print }" "$device_file" 2>/dev/null)
+        # 如果没找到，尝试模糊匹配（可能设备名在行内）
+        device_block=$(awk "/$search_device/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
     fi
     
     if [ -n "$device_block" ]; then
-        log "📋 设备定义信息:"
-        echo "$device_block" | while IFS= read -r line; do
-            log "   $line"
-        done
+        echo ""
+        echo "📋 设备定义信息:"
+        echo "----------------------------------------"
+        echo "$device_block"
+        echo "----------------------------------------"
     else
         log "⚠️ 警告：无法提取设备 $search_device 的配置块"
     fi
     
-    # 从设备定义中提取关键字段（使用原有函数，如果失败则手动）
-    local soc_define
-    local model_define
-    local title_define
-    local kernel_define
-    local packages_define
+    # 从设备定义中提取关键字段（使用 awk 直接提取）
+    local soc_define=""
+    local model_define=""
+    local title_define=""
+    local kernel_define=""
+    local packages_define=""
     
-    soc_define=$(extract_config_value "$device_block" "SOC" 2>/dev/null)
-    model_define=$(extract_config_value "$device_block" "DEVICE_MODEL" 2>/dev/null)
-    title_define=$(extract_config_value "$device_block" "DEVICE_TITLE" 2>/dev/null)
-    kernel_define=$(extract_config_value "$device_block" "KERNEL_PATCHVER" 2>/dev/null)
-    packages_define=$(extract_config_value "$device_block" "DEVICE_PACKAGES" 2>/dev/null)
+    if [ -n "$device_block" ]; then
+        soc_define=$(echo "$device_block" | awk -F':=' '/^[[:space:]]*SOC[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')
+        model_define=$(echo "$device_block" | awk -F':=' '/^[[:space:]]*DEVICE_MODEL[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')
+        title_define=$(echo "$device_block" | awk -F':=' '/^[[:space:]]*DEVICE_TITLE[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')
+        kernel_define=$(echo "$device_block" | awk -F':=' '/^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')
+        packages_define=$(echo "$device_block" | awk -F':=' '/^[[:space:]]*DEVICE_PACKAGES[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')
+    fi
     
     log "✅ 设备定义文件验证通过，继续生成配置"
     
@@ -3705,7 +3730,7 @@ workflow_step15_generate_config() {
     generate_config "$extra_packages" "$device_for_config"
     
     # =========================================================================
-    # 与 support.sh 信息对比（仅用于展示，不退出）
+    # 与 support.sh 信息对比（恢复表格）
     # =========================================================================
     log ""
     log "📊 与 support.sh 信息对比:"
@@ -3718,8 +3743,9 @@ workflow_step15_generate_config() {
         support_target=$(echo "$support_info" | awk '{print $1}')
         support_subtarget=$(echo "$support_info" | awk '{print $2}')
         
-        log "  来源          | 目标平台       | 子目标         | SOC/型号       | 内核版本"
-        log "  --------------|----------------|----------------|----------------|----------------"
+        echo ""
+        echo "  来源          | 目标平台       | 子目标         | SOC/型号       | 内核版本"
+        echo "  --------------|----------------|----------------|----------------|----------------"
         
         # support.sh 行
         printf "  support.sh    | %-14s | %-14s | %-14s | %s
