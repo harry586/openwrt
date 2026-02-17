@@ -2193,10 +2193,10 @@ apply_config() {
     echo "📊 总配置行数: $(wc -l < .config) 行"
     
     # =========================================================================
-    # 终极禁用：确保指定插件被彻底清除（加强版 v2）
+    # 终极禁用：确保指定插件被彻底清除（加强版 v3 - 多次过滤+defconfig循环）
     # =========================================================================
     log ""
-    log "=== 🔧 终极禁用不需要的插件系列（加强版 v2） ==="
+    log "=== 🔧 终极禁用不需要的插件系列（加强版 v3） ==="
 
     local forbidden_plugins=(
         "luci-app-vssr"
@@ -2205,55 +2205,73 @@ apply_config() {
         "luci-app-passwall"
     )
 
-    # 方法1：使用 sed 删除（保留，但可能不够）
-    for plugin in "${forbidden_plugins[@]}"; do
-        sed -i "/^CONFIG_PACKAGE_${plugin}[=_]/d" .config
-        sed -i "/^# CONFIG_PACKAGE_${plugin}[=_]/d" .config
-    done
+    local max_attempts=5
+    local attempt=1
+    local still_remaining=0
 
-    # 方法2：使用 grep -v 彻底过滤，确保无残留
-    local tmp_config=$(mktemp)
-    # 构建排除模式：用 | 连接所有插件，匹配行首的 CONFIG_PACKAGE_ 后跟插件名（后面可能跟 = 或 _）
-    local exclude_pattern="^CONFIG_PACKAGE_($(IFS='|'; echo "${forbidden_plugins[*]}"))[=_].*"
-    grep -v -E "$exclude_pattern" .config > "$tmp_config"
-    # 同时排除禁用标记行（但我们已经添加了，保留也行，但为了干净，也排除以 # CONFIG_PACKAGE_ 开头且后跟插件名的行）
-    grep -v -E "^# CONFIG_PACKAGE_($(IFS='|'; echo "${forbidden_plugins[*]}"))[=_]" "$tmp_config" > "${tmp_config}.2"
-    mv "${tmp_config}.2" .config
-    rm -f "$tmp_config"
-
-    # 为每个插件添加禁用标记（如果不存在）
-    for plugin in "${forbidden_plugins[@]}"; do
-        if ! grep -q "^# CONFIG_PACKAGE_${plugin} is not set" .config; then
-            echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+    while [ $attempt -le $max_attempts ]; do
+        log "尝试 $attempt/$max_attempts: 过滤所有相关配置行..."
+        
+        # 构建排除模式，匹配所有包含插件名的行（包括注释和选项）
+        local exclude_pattern="CONFIG_PACKAGE_($(IFS='|'; echo "${forbidden_plugins[*]}"))"
+        # 使用 grep -v 过滤掉所有匹配的行（不区分是否为注释）
+        grep -v -E "$exclude_pattern" .config > .config.filtered
+        mv .config.filtered .config
+        
+        # 去重
+        sort -u .config > .config.tmp && mv .config.tmp .config
+        
+        log "🔄 运行 make defconfig..."
+        make defconfig > /tmp/build-logs/defconfig_attempt${attempt}.log 2>&1 || {
+            log "⚠️ make defconfig 警告，但继续"
+        }
+        
+        # 检查残留
+        still_remaining=0
+        local remaining_lines=""
+        for plugin in "${forbidden_plugins[@]}"; do
+            # 检查是否存在任何包含插件名的配置行（包括注释）
+            local lines=$(grep -E "CONFIG_PACKAGE_${plugin}" .config | head -5)
+            if [ -n "$lines" ]; then
+                still_remaining=$((still_remaining + 1))
+                remaining_lines="${remaining_lines}${plugin}残留行:
+$lines
+"
+            fi
+        done
+        
+        if [ $still_remaining -eq 0 ]; then
+            log "✅ 第 $attempt 次尝试后已无残留"
+            break
+        else
+            log "⚠️ 第 $attempt 次尝试后仍有 $still_remaining 个插件残留"
+            if [ $attempt -eq $max_attempts ]; then
+                log "达到最大尝试次数，输出残留行供调试:"
+                echo "$remaining_lines"
+            fi
         fi
+        
+        attempt=$((attempt + 1))
     done
 
-    # 去重
-    sort -u .config > .config.tmp && mv .config.tmp .config
-
-    log "🔄 重新运行 make defconfig 使禁用最终生效..."
-    make defconfig > /tmp/build-logs/defconfig_final.log 2>&1 || {
-        log "⚠️ make defconfig 警告，但继续"
-    }
-
-    # 最终验证（更严格的检查）
+    # 最终验证
     log ""
     log "📊 最终插件状态验证:"
-    local still_enabled=0
+    still_remaining=0
     for plugin in "${forbidden_plugins[@]}"; do
-        # 检查主包或子选项是否存在（包括启用、模块化、已标记为 is not set 的行不算残留）
-        if grep -q -E "^CONFIG_PACKAGE_${plugin}(=|_)" .config; then
+        if grep -q -E "CONFIG_PACKAGE_${plugin}" .config; then
             log "  ❌ $plugin 仍有配置行残留"
-            still_enabled=$((still_enabled + 1))
+            still_remaining=$((still_remaining + 1))
         else
             log "  ✅ $plugin 已正确禁用"
         fi
     done
 
-    if [ $still_enabled -eq 0 ]; then
+    if [ $still_remaining -eq 0 ]; then
         log "🎉 所有指定插件已成功禁用"
     else
-        log "⚠️ 有 $still_enabled 个插件未能彻底禁用，请检查 feeds 或依赖"
+        log "⚠️ 有 $still_remaining 个插件未能彻底禁用，请检查 feeds 或依赖"
+        log "提示: 这些插件可能被其他包依赖，请手动运行 make menuconfig 检查依赖关系"
     fi
 
     log "✅ 配置应用完成"
