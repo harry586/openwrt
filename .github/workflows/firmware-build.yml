@@ -1,19 +1,39 @@
 #【firmware-build.yml-00】
 # OpenWrt 智能固件构建工作流 - 系统主入口
-# 版本: 3.0.1
-# 最后更新: 2026-02-13
+# 版本: 3.1.0
+# 最后更新: 2026-02-18
 
 name: OpenWrt 智能固件构建工作流
 
 on:
   workflow_dispatch:
     inputs:
+      # 预定义设备下拉选择（保留）
       device_name:
-        description: "📱 设备名称"
-        required: true
-        default: "ac42u"
+        description: "📱 预定义设备（下拉选择）"
+        required: false
         type: choice
+        default: "ac42u"
         options: ["ac42u", "cmcc_rax3000m", "netgear_wndr3800"]
+      
+      # 手动输入框（竖向排列）
+      manual_device_name:
+        description: "📝 手动输入设备名称（若填写此项，将覆盖预定义设备）"
+        required: false
+        type: string
+        default: ""
+      manual_target:
+        description: "🎯 手动输入芯片型号（例如：ath79）"
+        required: false
+        type: string
+        default: ""
+      manual_subtarget:
+        description: "🔧 手动输入子平台（设备定义文件所在目录，例如：generic、image、filogic）"
+        required: false
+        type: string
+        default: ""
+      
+      # 其他选项保持不变
       version_selection:
         description: "🔄 版本选择"
         required: true
@@ -59,14 +79,17 @@ jobs:
           echo "🕐 开始时间: $START_TIME"
           
           TIMESTAMP_LOCAL=$(date +'%Y%m%d_%H%M%S')
-          TIMESTAMP_SEC="${{ github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$TIMESTAMP_LOCAL"
+          TIMESTAMP_SEC="${{ github.event.inputs.manual_device_name != '' && github.event.inputs.manual_device_name || github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$TIMESTAMP_LOCAL"
           
           echo "TIMESTAMP_SEC=$TIMESTAMP_SEC" >> $GITHUB_ENV
           echo "START_TIME=$START_TIME" >> $GITHUB_ENV
           
           echo "✅ 生成时间戳: $TIMESTAMP_SEC"
           echo "📋 构建配置:"
-          echo "  设备: ${{ github.event.inputs.device_name }}"
+          echo "  预定义设备: ${{ github.event.inputs.device_name }}"
+          echo "  手动设备名: ${{ github.event.inputs.manual_device_name }}"
+          echo "  手动芯片型号: ${{ github.event.inputs.manual_target }}"
+          echo "  手动子平台: ${{ github.event.inputs.manual_subtarget }}"
           echo "  版本: ${{ github.event.inputs.version_selection }}"
           echo "  模式: ${{ github.event.inputs.config_mode }}"
           echo "  并行优化: ${{ github.event.inputs.enable_parallel }}"
@@ -202,15 +225,26 @@ jobs:
       #【firmware-build.yml-07-end】
 
       #【firmware-build.yml-08】
-      - name: "08. 初始化构建环境"
+      - name: "08. 初始化构建环境（混合模式：优先使用手动输入）"
         run: |
-          echo "=== 步骤08: 初始化构建环境 ==="
+          echo "=== 步骤08: 初始化构建环境（混合模式） ==="
+          
+          # 确定最终使用的设备名称
+          if [ -n "${{ github.event.inputs.manual_device_name }}" ]; then
+            FINAL_DEVICE_NAME="${{ github.event.inputs.manual_device_name }}"
+          else
+            FINAL_DEVICE_NAME="${{ github.event.inputs.device_name }}"
+          fi
+          
+          echo "📌 最终设备名称: $FINAL_DEVICE_NAME"
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step08_initialize_build_env \
-            "${{ github.event.inputs.device_name }}" \
+            step08_initialize_build_env_hybrid \
+            "$FINAL_DEVICE_NAME" \
             "${{ github.event.inputs.version_selection }}" \
-            "${{ github.event.inputs.config_mode }}"
+            "${{ github.event.inputs.config_mode }}" \
+            "${{ github.event.inputs.manual_target }}" \
+            "${{ github.event.inputs.manual_subtarget }}"
       #【firmware-build.yml-08-end】
 
       #【firmware-build.yml-09】
@@ -220,7 +254,7 @@ jobs:
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step09_download_sdk \
-            "${{ github.event.inputs.device_name }}"
+            "$FINAL_DEVICE_NAME"
       #【firmware-build.yml-09-end】
 
       #【firmware-build.yml-10】
@@ -457,7 +491,7 @@ jobs:
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step30_build_summary \
-            "${{ github.event.inputs.device_name }}" \
+            "$FINAL_DEVICE_NAME" \
             "${{ github.event.inputs.version_selection }}" \
             "${{ github.event.inputs.config_mode }}" \
             "${{ env.TIMESTAMP_SEC }}" \
