@@ -185,9 +185,11 @@ initialize_build_env() {
     local device_name=$1
     local version_selection=$2
     local config_mode=$3
-    
+    local manual_target=$4   # 可选，手动指定的芯片型号
+    local manual_subtarget=$5 # 可选，手动指定的子平台
+
     cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
+
     log "=== 版本选择 ==="
     if [ "$version_selection" = "23.05" ]; then
         SELECTED_REPO_URL="${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}"
@@ -197,16 +199,16 @@ initialize_build_env() {
         SELECTED_BRANCH="${BRANCH_21_02:-openwrt-21.02}"
     fi
     log "✅ 版本选择完成: $SELECTED_BRANCH"
-    
+
     log "=== 克隆源码 ==="
     log "仓库: $SELECTED_REPO_URL"
     log "分支: $SELECTED_BRANCH"
-    
+
     sudo rm -rf ./* ./.git* 2>/dev/null || true
-    
+
     git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
     log "✅ 源码克隆完成"
-    
+
     local important_source_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
     for file in "${important_source_files[@]}"; do
         if [ -f "$file" ]; then
@@ -215,9 +217,15 @@ initialize_build_env() {
             log "❌ 源码文件缺失: $file"
         fi
     done
-    
+
     log "=== 设备配置 ==="
-    if [ -f "$SUPPORT_SCRIPT" ]; then
+    # 判断是否使用手动输入的芯片型号和子平台
+    if [ -n "$manual_target" ] && [ -n "$manual_subtarget" ]; then
+        TARGET="$manual_target"
+        SUBTARGET="$manual_subtarget"
+        DEVICE="$device_name"
+        log "✅ 使用手动指定的平台信息: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
+    elif [ -f "$SUPPORT_SCRIPT" ]; then
         log "🔍 调用support.sh获取设备平台信息..."
         PLATFORM_INFO=$("$SUPPORT_SCRIPT" get-platform "$device_name")
         if [ -n "$PLATFORM_INFO" ]; then
@@ -230,37 +238,37 @@ initialize_build_env() {
             handle_error "获取平台信息失败"
         fi
     else
-        log "❌ support.sh不存在"
-        handle_error "support.sh脚本缺失"
+        log "❌ support.sh不存在且未手动指定平台信息"
+        handle_error "无法确定平台信息"
     fi
-    
+
     log "🔧 设备: $device_name"
     log "🔧 目标平台: $TARGET/$SUBTARGET"
-    
+
     CONFIG_MODE="$config_mode"
-    
+
     log "目标: $TARGET"
     log "子目标: $SUBTARGET"
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
-    
+
     # 🔥 关键修复：正确识别和使用编译好的 config 工具
     log "=== 编译配置工具 ==="
-    
+
     local config_tool_created=0
     local real_config_tool=""
-    
+
     # 方法1: 编译 scripts/config
     log "🔧 尝试方法1: 编译 scripts/config..."
     if [ -d "scripts/config" ]; then
         cd scripts/config
         make
         cd $BUILD_DIR
-        
+
         # 检查编译生成的文件
         if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
             log "✅ 方法1成功: 编译生成 conf 工具"
-            
+
             # 创建 config 包装脚本，使用 conf
             mkdir -p scripts/config
             cat > scripts/config/config << 'EOF'
@@ -311,7 +319,7 @@ EOF
             config_tool_created=1
         fi
     fi
-    
+
     # 方法2: 直接使用 conf 作为配置工具
     if [ $config_tool_created -eq 0 ]; then
         if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
@@ -327,7 +335,7 @@ EOF
             config_tool_created=1
         fi
     fi
-    
+
     # 方法3: 使用 mconf (如果可用)
     if [ $config_tool_created -eq 0 ]; then
         if [ -f "scripts/config/mconf" ] && [ -x "scripts/config/mconf" ]; then
@@ -343,7 +351,7 @@ EOF
             config_tool_created=1
         fi
     fi
-    
+
     # 方法4: 从 SDK 复制
     if [ $config_tool_created -eq 0 ] && [ -n "$COMPILER_DIR" ]; then
         log "🔧 尝试方法4: 从 SDK 目录复制"
@@ -360,7 +368,7 @@ EOF
             config_tool_created=1
         fi
     fi
-    
+
     # 方法5: 创建功能完整的简易工具
     if [ $config_tool_created -eq 0 ]; then
         log "🔧 方法5: 创建功能完整的简易 config 工具"
@@ -391,13 +399,13 @@ case "$1" in
         symbol="${symbol#CONFIG_}"
         # 移除 PACKAGE_ 前缀（如果存在）
         symbol="${symbol#PACKAGE_}"
-        
+
         # 删除所有相关的行
         sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
         sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
         sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
         sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" "$CONFIG_FILE"
-        
+
         # 添加启用行
         echo "CONFIG_PACKAGE_${symbol}=y" >> "$CONFIG_FILE"
         ;;
@@ -406,12 +414,12 @@ case "$1" in
         symbol="$1"
         symbol="${symbol#CONFIG_}"
         symbol="${symbol#PACKAGE_}"
-        
+
         sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
         sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
         sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
         sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" "$CONFIG_FILE"
-        
+
         echo "# CONFIG_PACKAGE_${symbol} is not set" >> "$CONFIG_FILE"
         ;;
     --module)
@@ -419,12 +427,12 @@ case "$1" in
         symbol="$1"
         symbol="${symbol#CONFIG_}"
         symbol="${symbol#PACKAGE_}"
-        
+
         sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
         sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
         sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
         sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" "$CONFIG_FILE"
-        
+
         echo "CONFIG_PACKAGE_${symbol}=m" >> "$CONFIG_FILE"
         ;;
     --set-str)
@@ -432,7 +440,7 @@ case "$1" in
         name="$1"
         value="$2"
         name="${name#CONFIG_}"
-        
+
         sed -i "/^CONFIG_${name}=/d" "$CONFIG_FILE"
         echo "CONFIG_${name}="$value"" >> "$CONFIG_FILE"
         shift 2
@@ -452,14 +460,14 @@ EOF
         real_config_tool="scripts/config/config"
         config_tool_created=1
     fi
-    
+
     # 创建统一调用接口 - 修复版，不使用 --help 测试
     if [ $config_tool_created -eq 1 ]; then
         log "🔧 创建统一调用接口..."
-        
+
         # 记录真实工具路径
         echo "$real_config_tool" > scripts/.config_tool_path
-        
+
         # 创建 scripts/config 软链接或副本，以便 make defconfig 能找到
         if [ ! -f "scripts/config" ]; then
             if [ -f "scripts/config/config" ]; then
@@ -467,7 +475,7 @@ EOF
                 log "✅ 创建 scripts/config 链接/副本"
             fi
         fi
-        
+
         cat > scripts/config-tool << 'EOF'
 #!/bin/sh
 # 统一 config 工具调用接口
@@ -503,7 +511,7 @@ exit 1
 EOF
         chmod +x scripts/config-tool
         log "✅ 统一调用接口创建成功: scripts/config-tool"
-        
+
         # 不再测试 --help，而是测试基本功能
         if scripts/config-tool --version > /dev/null 2>&1 || scripts/config-tool -h > /dev/null 2>&1; then
             log "✅ 统一调用接口测试通过"
@@ -516,13 +524,13 @@ EOF
             fi
         fi
     fi
-    
+
     # 最终验证
     if [ $config_tool_created -eq 1 ]; then
         log "✅ 配置工具最终验证通过"
         log "📁 真实工具路径: $real_config_tool"
         log "📁 统一调用接口: scripts/config-tool"
-        
+
         # 显示工具信息
         if [ -f "$real_config_tool" ]; then
             if file "$real_config_tool" | grep -q "ELF"; then
@@ -535,16 +543,16 @@ EOF
         log "❌ 所有方法都失败，配置工具不存在"
         handle_error "无法创建配置工具"
     fi
-    
+
     save_env
-    
+
     echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
     echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
     echo "TARGET=$TARGET" >> $GITHUB_ENV
     echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
     echo "DEVICE=$DEVICE" >> $GITHUB_ENV
     echo "CONFIG_MODE=$CONFIG_MODE" >> $GITHUB_ENV
-    
+
     log "✅ 构建环境初始化完成"
 }
 #【build_firmware_main.sh-06-end】
@@ -4977,7 +4985,7 @@ main() {
     local arg3="$4"
     local arg4="$5"
     local arg5="$6"
-    
+
     # 只在首次调用主函数时加载配置
     if [ -z "$MAIN_CONFIG_LOADED" ]; then
         if [ -f "$REPO_ROOT/build-config.conf" ] && [ -z "$CONFIG_LOADED" ]; then
@@ -4986,7 +4994,7 @@ main() {
         fi
         export MAIN_CONFIG_LOADED=1
     fi
-    
+
     case "$command" in
         "setup_environment")
             setup_environment
@@ -5051,7 +5059,7 @@ main() {
         "verify_config_files")
             verify_config_files
             ;;
-        
+
         "step05_install_basic_tools")
             workflow_step05_install_basic_tools
             ;;
@@ -5063,6 +5071,9 @@ main() {
             ;;
         "step08_initialize_build_env")
             workflow_step08_initialize_build_env "$arg1" "$arg2" "$arg3"
+            ;;
+        "step08_initialize_build_env_hybrid")
+            workflow_step08_initialize_build_env_hybrid "$arg1" "$arg2" "$arg3" "$arg4" "$arg5"
             ;;
         "step09_download_sdk")
             workflow_step09_download_sdk "$arg1"
@@ -5115,7 +5126,7 @@ main() {
         "step30_build_summary")
             workflow_step30_build_summary "$arg1" "$arg2" "$arg3" "$arg4" "$arg5"
             ;;
-        
+
         "search_compiler_files")
             universal_compiler_search "$arg1" "$arg2"
             ;;
@@ -5128,7 +5139,7 @@ main() {
         "intelligent_platform_aware_compiler_search")
             intelligent_platform_aware_compiler_search "$arg1" "$arg2" "$arg3"
             ;;
-        
+
         *)
             log "❌ 未知命令: $command"
             echo "可用命令:"
@@ -5136,7 +5147,7 @@ main() {
             echo ""
             echo "  工作流步骤命令:"
             echo "    step05_install_basic_tools, step06_initial_space_check, step07_create_build_dir"
-            echo "    step08_initialize_build_env, step09_download_sdk, step10_verify_sdk"
+            echo "    step08_initialize_build_env, step08_initialize_build_env_hybrid, step09_download_sdk, step10_verify_sdk"
             echo "    step11_add_turboacc, step12_configure_feeds, step13_install_turboacc"
             echo "    step14_pre_build_space_check, step15_generate_config, step16_verify_usb"
             echo "    step17_check_usb_drivers, step20_fix_network, step21_download_deps"
