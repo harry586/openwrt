@@ -18,17 +18,17 @@ on:
       
       # 手动输入框（竖向排列）
       manual_device_name:
-        description: "📝 手动输入设备名称（若填写此项，将覆盖预定义设备）"
+        description: "📝 设备名称（若填写此项，将覆盖预定义设备）"
         required: false
         type: string
         default: ""
       manual_target:
-        description: "🎯 手动输入芯片型号（例如：ath79）"
+        description: "🎯 芯片型号（例如：ipx4xx、ath79等）"
         required: false
         type: string
         default: ""
       manual_subtarget:
-        description: "🔧 手动输入子平台（设备定义文件所在目录，例如：generic、image、filogic）"
+        description: "🔧 子平台（设备定义文件所在目录，例如：generic[一般]、filogic）"
         required: false
         type: string
         default: ""
