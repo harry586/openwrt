@@ -2193,11 +2193,8 @@ apply_config() {
     echo "⚙️ 内核配置: $kernel_configs 个"
     echo "📊 总配置行数: $(wc -l < .config) 行"
 
-    # =========================================================================
-    # 终极禁用：确保指定插件被彻底清除（加强版 v6 - 使用 config 工具强制禁用）
-    # =========================================================================
     log ""
-    log "=== 🔧 终极禁用不需要的插件系列（加强版 v6） ==="
+    log "=== 🔧 终极禁用不需要的插件系列（优化版 - 最多2次尝试） ==="
 
     local forbidden_plugins=(
         "luci-app-vssr"
@@ -2206,21 +2203,16 @@ apply_config() {
         "luci-app-passwall"
     )
 
-    # 定义强制禁用函数，使用 config 工具（如果可用）
     force_disable_plugins() {
         local config_file="$1"
         for plugin in "${forbidden_plugins[@]}"; do
-            # 使用 sed 删除所有相关行
             sed -i "/^CONFIG_PACKAGE_${plugin}[=_ ]/d" "$config_file"
             sed -i "/^CONFIG_PACKAGE_${plugin}_/d" "$config_file"
             sed -i "/^# CONFIG_PACKAGE_${plugin}[=_ ]/d" "$config_file"
-            # 如果 config 工具可用，则使用它设置禁用
             if [ -n "$config_tool" ] && [ -x "$config_tool" ]; then
                 if [ "$config_tool" = "scripts/config/conf" ]; then
-                    # conf 不支持直接禁用，所以还是用 sed
                     echo "# CONFIG_PACKAGE_${plugin} is not set" >> "$config_file"
                 else
-                    # 使用 config 工具禁用
                     $config_tool --disable "PACKAGE_${plugin}" 2>/dev/null || true
                 fi
             else
@@ -2230,11 +2222,19 @@ apply_config() {
         sort -u "$config_file" > "$config_file.tmp" && mv "$config_file.tmp" "$config_file"
     }
 
-    # 初次强制禁用
+    check_plugins_enabled() {
+        local enabled=0
+        for plugin in "${forbidden_plugins[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+                enabled=$((enabled + 1))
+            fi
+        done
+        return $enabled
+    }
+
     force_disable_plugins ".config"
 
-    # 循环运行 defconfig 直到所有插件都被禁用（最多 10 次）
-    local max_attempts=10
+    local max_attempts=2
     local attempt=1
     while [ $attempt -le $max_attempts ]; do
         log "尝试 $attempt/$max_attempts: 运行 make defconfig..."
@@ -2242,43 +2242,25 @@ apply_config() {
             log "⚠️ make defconfig 警告，但继续"
         }
 
-        # 检查是否还有残留
-        local still_enabled=0
-        for plugin in "${forbidden_plugins[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
-                still_enabled=$((still_enabled + 1))
-                log "  ❌ $plugin 仍然被启用"
-            elif grep -q "^CONFIG_PACKAGE_${plugin}_" .config; then
-                still_enabled=$((still_enabled + 1))
-                log "  ❌ $plugin 子选项残留"
-            fi
-        done
-
-        if [ $still_enabled -eq 0 ]; then
-            log "✅ 第 $attempt 次尝试后所有插件已成功禁用"
+        if check_plugins_enabled; then
+            log "✅ 第 $attempt 次尝试后所有主插件已成功禁用"
             break
         else
-            log "⚠️ 第 $attempt 次尝试后仍有 $still_enabled 个插件残留，再次强制禁用..."
+            log "⚠️ 第 $attempt 次尝试后仍有插件残留，再次强制禁用..."
             force_disable_plugins ".config"
         fi
         attempt=$((attempt + 1))
     done
 
-    # 最终验证
     log ""
     log "📊 最终插件状态验证:"
     local still_remaining=0
     for plugin in "${forbidden_plugins[@]}"; do
-        if grep -q -E "^CONFIG_PACKAGE_${plugin}[=_ ]|^# CONFIG_PACKAGE_${plugin}[=_ ]" .config; then
-            # 如果只有禁用标记，不算残留
-            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
-                log "  ❌ $plugin 仍有启用配置残留"
-                still_remaining=$((still_remaining + 1))
-            else
-                log "  ✅ $plugin 已正确禁用（仅禁用标记）"
-            fi
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+            log "  ❌ $plugin 仍有启用配置残留"
+            still_remaining=$((still_remaining + 1))
         else
-            log "  ✅ $plugin 已完全清除"
+            log "  ✅ $plugin 已正确禁用"
         fi
     done
 
@@ -3546,10 +3528,11 @@ workflow_step14_pre_build_space_check() {
 #【firmware-build.yml-15】
 # ============================================
 #【build_firmware_main.sh-31】
+#【build_firmware_main.sh-31】
 workflow_step15_generate_config() {
     local extra_packages="$1"
     
-    log "=== 步骤15: 智能配置生成【修复版】 ==="
+    log "=== 步骤15: 智能配置生成【优化版 - 最多2次尝试】 ==="
     log "当前设备: $DEVICE"
     log "当前目标: $TARGET"
     log "当前子目标: $SUBTARGET"
@@ -3557,19 +3540,16 @@ workflow_step15_generate_config() {
     set -e
     trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
     
-    # 确保环境变量已加载
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
         log "✅ 从环境文件重新加载: DEVICE=$DEVICE, TARGET=$TARGET"
     fi
     
-    # 如果DEVICE为空，尝试从参数获取
     if [ -z "$DEVICE" ] && [ -n "$2" ]; then
         DEVICE="$2"
         log "⚠️ DEVICE为空，使用参数: $DEVICE"
     fi
     
-    # 设备名转换 - 针对ac42u/acrh17的特殊处理
     local device_for_config="$DEVICE"
     case "$DEVICE" in
         ac42u|rt-ac42u)
@@ -3581,20 +3561,15 @@ workflow_step15_generate_config() {
             log "🔧 设备名转换: $DEVICE -> $device_for_config"
             ;;
         *)
-            # 默认转换：转小写，横线变下划线
             device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
             ;;
     esac
     
     cd "$BUILD_DIR" || handle_error "无法进入构建目录"
     
-    # =========================================================================
-    # 设备定义文件查找
-    # =========================================================================
     log ""
     log "=== 🔍 设备定义文件验证（前置检查） ==="
     
-    # 确定搜索关键词
     local search_device=""
     case "$DEVICE" in
         ac42u|rt-ac42u|asus_rt-ac42u)
@@ -3611,7 +3586,6 @@ workflow_step15_generate_config() {
     log "搜索设备名: $search_device"
     log "搜索路径: target/linux/$TARGET"
     
-    # 列出所有 .mk 文件
     echo ""
     echo "📁 所有子平台 .mk 文件列表:"
     local mk_files=()
@@ -3622,8 +3596,7 @@ workflow_step15_generate_config() {
     if [ ${#mk_files[@]} -gt 0 ]; then
         echo "----------------------------------------"
         for i in "${!mk_files[@]}"; do
-            printf "[%2d] %s
-" $((i+1)) "${mk_files[$i]}"
+            printf "[%2d] %s\n" $((i+1)) "${mk_files[$i]}"
         done
         echo "----------------------------------------"
         echo "📊 共找到 ${#mk_files[@]} 个 .mk 文件"
@@ -3632,7 +3605,6 @@ workflow_step15_generate_config() {
     fi
     echo ""
     
-    # 查找包含设备定义的 .mk 文件
     local device_file=""
     for mkfile in "${mk_files[@]}"; do
         if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
@@ -3649,7 +3621,6 @@ workflow_step15_generate_config() {
     
     log "✅ 找到设备定义文件: $device_file"
     
-    # 提取设备定义块并显示关键行
     local device_block=""
     device_block=$(awk "/define Device.*$search_device/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
     
@@ -3657,16 +3628,13 @@ workflow_step15_generate_config() {
         echo ""
         echo "📋 设备定义信息（关键字段）:"
         echo "----------------------------------------"
-        # 显示 define Device 行
         echo "$device_block" | grep -E "define Device" | head -1
-        # 显示关键属性
         echo "$device_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS)[[:space:]]*:="
         echo "----------------------------------------"
     else
         log "⚠️ 警告：无法提取设备 $search_device 的配置块"
     fi
     
-    # 提取关键值用于后续对比
     local soc_define=""
     local model_define=""
     local title_define=""
@@ -3681,9 +3649,6 @@ workflow_step15_generate_config() {
         packages_define=$(echo "$device_block" | awk -F':=' '/^[[:space:]]*DEVICE_PACKAGES[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')
     fi
     
-    # =========================================================================
-    # 与 support.sh 信息对比（现在放在调用 generate_config 之前）
-    # =========================================================================
     log ""
     log "📊 与 support.sh 信息对比:"
     
@@ -3699,15 +3664,10 @@ workflow_step15_generate_config() {
         echo "  来源          | 目标平台       | 子目标         | SOC/型号       | 内核版本"
         echo "  --------------|----------------|----------------|----------------|----------------"
         
-        # support.sh 行
-        printf "  support.sh    | %-14s | %-14s | %-14s | %s
-"                "$support_target" "$support_subtarget"                "${soc_define:-N/A}" "${kernel_define:-N/A}"
+        printf "  support.sh    | %-14s | %-14s | %-14s | %s\n"                "$support_target" "$support_subtarget"                "${soc_define:-N/A}" "${kernel_define:-N/A}"
         
-        # 定义文件行
-        printf "  定义文件      | %-14s | %-14s | %-14s | %s
-"                "$TARGET" "$SUBTARGET"                "${soc_define:-N/A}" "${kernel_define:-N/A}"
+        printf "  定义文件      | %-14s | %-14s | %-14s | %s\n"                "$TARGET" "$SUBTARGET"                "${soc_define:-N/A}" "${kernel_define:-N/A}"
         
-        # 检查一致性
         if [ "$support_target" = "$TARGET" ] && [ "$support_subtarget" = "$SUBTARGET" ]; then
             log "  ✅ 目标/子目标与 support.sh 一致"
         else
@@ -3721,16 +3681,10 @@ workflow_step15_generate_config() {
     
     log "✅ 设备定义文件验证通过，继续生成配置"
     
-    # =========================================================================
-    # 调用核心配置生成函数（内部会输出设备验证等信息）
-    # =========================================================================
     generate_config "$extra_packages" "$device_for_config"
     
-    # =========================================================================
-    # 强制禁用指定插件系列
-    # =========================================================================
     log ""
-    log "=== 🔧 强制禁用不需要的插件系列 ==="
+    log "=== 🔧 强制禁用不需要的插件系列（优化版 - 最多2次尝试） ==="
     
     local forbidden_plugins=(
         "luci-app-vssr"
@@ -3739,61 +3693,80 @@ workflow_step15_generate_config() {
         "luci-app-passwall"
     )
     
-    # 备份当前配置
     cp .config .config.before_disable
     
-    # 删除所有相关配置行（包括主包和子选项）
     for plugin in "${forbidden_plugins[@]}"; do
         log "  处理插件: $plugin"
         
-        # 删除主包启用行
         sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
         sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-        
-        # 删除所有子选项（以插件名开头的配置）
         sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
         
-        # 添加禁用标记
         echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
         
         log "    ✅ 已禁用 $plugin 及其子选项"
     done
     
-    # 额外清理可能存在的旧格式
     sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_/d' .config
     sed -i '/CONFIG_PACKAGE_luci-app-vssr_INCLUDE_/d' .config
     sed -i '/CONFIG_PACKAGE_luci-app-rclone_INCLUDE_/d' .config
     sed -i '/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_/d' .config
     
-    # 去重
     sort -u .config > .config.tmp && mv .config.tmp .config
     
-    log "🔄 重新运行 make defconfig 使禁用生效..."
-    make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
-        log "⚠️ make defconfig 警告，但继续"
-    }
+    local max_attempts=2
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        log "尝试 $attempt/$max_attempts: 运行 make defconfig..."
+        make defconfig > /tmp/build-logs/defconfig_disable_attempt${attempt}.log 2>&1 || {
+            log "⚠️ make defconfig 警告，但继续"
+        }
+        
+        local still_enabled=0
+        for plugin in "${forbidden_plugins[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+                still_enabled=$((still_enabled + 1))
+            fi
+        done
+        
+        if [ $still_enabled -eq 0 ]; then
+            log "✅ 第 $attempt 次尝试后所有主插件已成功禁用"
+            break
+        else
+            if [ $attempt -lt $max_attempts ]; then
+                log "⚠️ 第 $attempt 次尝试后仍有 $still_enabled 个插件残留，再次强制禁用..."
+                for plugin in "${forbidden_plugins[@]}"; do
+                    sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+                    sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+                    echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+                done
+                sort -u .config > .config.tmp && mv .config.tmp .config
+            fi
+        fi
+        attempt=$((attempt + 1))
+    done
     
-    # 验证禁用结果
-    local still_enabled=0
+    log ""
+    log "📊 最终插件状态验证:"
+    local still_enabled_final=0
     for plugin in "${forbidden_plugins[@]}"; do
         if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
             log "  ❌ $plugin 仍然被启用"
-            still_enabled=$((still_enabled + 1))
+            still_enabled_final=$((still_enabled_final + 1))
         elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
             log "  ❌ $plugin 仍然被模块化"
-            still_enabled=$((still_enabled + 1))
+            still_enabled_final=$((still_enabled_final + 1))
         else
             log "  ✅ $plugin 已正确禁用"
         fi
     done
     
-    if [ $still_enabled -eq 0 ]; then
+    if [ $still_enabled_final -eq 0 ]; then
         log "🎉 所有指定插件已成功禁用"
     else
-        log "⚠️ 有 $still_enabled 个插件未能禁用，请检查 feeds 或依赖"
+        log "⚠️ 有 $still_enabled_final 个插件未能禁用，请检查 feeds 或依赖"
     fi
     
-    # 最终配置统计
     log ""
     log "📊 配置统计（禁用后）:"
     log "  总配置行数: $(wc -l < .config)"
