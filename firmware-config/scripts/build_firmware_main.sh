@@ -2223,10 +2223,10 @@ apply_config() {
     echo "📊 总配置行数: $(wc -l < .config) 行"
 
     # =========================================================================
-    # 终极禁用：确保指定插件被彻底清除（加强版 v5 - 每次 defconfig 后都检查）
+    # 终极禁用：确保指定插件被彻底清除（加强版 v6 - 使用 config 工具强制禁用）
     # =========================================================================
     log ""
-    log "=== 🔧 终极禁用不需要的插件系列（加强版 v5） ==="
+    log "=== 🔧 终极禁用不需要的插件系列（加强版 v6） ==="
 
     local forbidden_plugins=(
         "luci-app-vssr"
@@ -2235,16 +2235,26 @@ apply_config() {
         "luci-app-passwall"
     )
 
-    # 定义一个函数：强制禁用指定插件
+    # 定义强制禁用函数，使用 config 工具（如果可用）
     force_disable_plugins() {
         local config_file="$1"
         for plugin in "${forbidden_plugins[@]}"; do
-            # 删除所有相关行（主包和子选项）
+            # 使用 sed 删除所有相关行
             sed -i "/^CONFIG_PACKAGE_${plugin}[=_ ]/d" "$config_file"
             sed -i "/^CONFIG_PACKAGE_${plugin}_/d" "$config_file"
             sed -i "/^# CONFIG_PACKAGE_${plugin}[=_ ]/d" "$config_file"
-            # 添加禁用标记（仅主包）
-            echo "# CONFIG_PACKAGE_${plugin} is not set" >> "$config_file"
+            # 如果 config 工具可用，则使用它设置禁用
+            if [ -n "$config_tool" ] && [ -x "$config_tool" ]; then
+                if [ "$config_tool" = "scripts/config/conf" ]; then
+                    # conf 不支持直接禁用，所以还是用 sed
+                    echo "# CONFIG_PACKAGE_${plugin} is not set" >> "$config_file"
+                else
+                    # 使用 config 工具禁用
+                    $config_tool --disable "PACKAGE_${plugin}" 2>/dev/null || true
+                fi
+            else
+                echo "# CONFIG_PACKAGE_${plugin} is not set" >> "$config_file"
+            fi
         done
         sort -u "$config_file" > "$config_file.tmp" && mv "$config_file.tmp" "$config_file"
     }
@@ -2252,8 +2262,8 @@ apply_config() {
     # 初次强制禁用
     force_disable_plugins ".config"
 
-    # 循环运行 defconfig 直到所有插件都被禁用（最多 5 次）
-    local max_attempts=5
+    # 循环运行 defconfig 直到所有插件都被禁用（最多 10 次）
+    local max_attempts=10
     local attempt=1
     while [ $attempt -le $max_attempts ]; do
         log "尝试 $attempt/$max_attempts: 运行 make defconfig..."
@@ -2289,10 +2299,15 @@ apply_config() {
     local still_remaining=0
     for plugin in "${forbidden_plugins[@]}"; do
         if grep -q -E "^CONFIG_PACKAGE_${plugin}[=_ ]|^# CONFIG_PACKAGE_${plugin}[=_ ]" .config; then
-            log "  ❌ $plugin 仍有配置行残留"
-            still_remaining=$((still_remaining + 1))
+            # 如果只有禁用标记，不算残留
+            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+                log "  ❌ $plugin 仍有启用配置残留"
+                still_remaining=$((still_remaining + 1))
+            else
+                log "  ✅ $plugin 已正确禁用（仅禁用标记）"
+            fi
         else
-            log "  ✅ $plugin 已正确禁用"
+            log "  ✅ $plugin 已完全清除"
         fi
     done
 
