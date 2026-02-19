@@ -1003,15 +1003,15 @@ pre_build_space_check() {
 generate_config() {
     local extra_packages=$1
     local device_override=$2
-
+    
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
-
+    
     if [ -n "$device_override" ]; then
         DEVICE="$device_override"
         log "🔧 使用设备覆盖参数: $DEVICE"
     fi
-
+    
     log "=== 智能配置生成系统（设备显式指定版） ==="
     log "版本: $SELECTED_BRANCH"
     log "目标: $TARGET"
@@ -1019,19 +1019,19 @@ generate_config() {
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
     log "配置文件目录: $CONFIG_DIR"
-
+    
     if [ -z "$DEVICE" ]; then
         log "❌ 错误: DEVICE变量为空！"
         env | grep -E "DEVICE|TARGET|SELECTED" || true
         handle_error "DEVICE变量未设置"
     fi
-
+    
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
-
+    
     local openwrt_device=""
     local search_device=""
-
+    
     case "$DEVICE" in
         ac42u|rt-ac42u|asus_rt-ac42u)
             openwrt_device="asus_rt-ac42u"
@@ -1049,44 +1049,44 @@ generate_config() {
             log "🔧 使用原始设备名: $openwrt_device"
             ;;
     esac
-
+    
     local device_lower="$openwrt_device"
     local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}"
-
+    
     log "🔧 设备配置变量: $device_config=y"
-
+    
     cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
 ${device_config}=y
 EOF
-
+    
     log "🔧 基础配置文件内容:"
     cat .config
-
+    
     log "📁 开始合并配置文件..."
-
+    
     append_config() {
         local file=$1
         if [ -f "$file" ]; then
             grep -v '^[[:space:]]*#' "$file" | grep -v '^[[:space:]]*$' | grep 'CONFIG_' >> .config
         fi
     }
-
+    
     : ${CONFIG_BASE:="base.config"}
     : ${CONFIG_USB_GENERIC:="usb-generic.config"}
     : ${CONFIG_NORMAL:="normal.config"}
-
+    
     append_config "$CONFIG_DIR/$CONFIG_BASE"
     append_config "$CONFIG_DIR/$CONFIG_USB_GENERIC"
     append_config "$CONFIG_DIR/$TARGET.config"
     append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
     append_config "$CONFIG_DIR/devices/$DEVICE.config"
-
+    
     if [ "$CONFIG_MODE" = "normal" ]; then
         append_config "$CONFIG_DIR/$CONFIG_NORMAL"
     fi
-
+    
     if [ -n "$extra_packages" ]; then
         log "📦 添加额外包: $extra_packages"
         echo "$extra_packages" | tr ',' '
@@ -1094,25 +1094,25 @@ EOF
             [ -n "$pkg" ] && echo "CONFIG_PACKAGE_$pkg=y" >> .config
         done
     fi
-
+    
     if [ -f "$CONFIG_DIR/devices/$DEVICE.config" ]; then
         log "📋 从设备配置文件动态添加配置: $CONFIG_DIR/devices/$DEVICE.config"
         append_config "$CONFIG_DIR/devices/$DEVICE.config"
     fi
-
+    
     if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
         echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
         echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
         log "✅ TCP BBR已启用"
     fi
-
+    
     if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
         log "✅ TurboACC已启用"
     fi
-
+    
     if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
         sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
         sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
@@ -1123,18 +1123,18 @@ EOF
         echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
         log "✅ ath10k-ct驱动已强制启用"
     fi
-
+    
     log "🔄 第一次去重配置..."
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
-
+    
     # =========================================================================
     # 静默获取内核配置文件（不再输出冗长日志）
     # =========================================================================
     local kernel_config_file=""
     local kernel_version=""
     local found_kernel=0
-
+    
     if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
         # 尝试从设备定义文件获取内核版本（静默）
         if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
@@ -1146,7 +1146,7 @@ EOF
                     break
                 fi
             done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
-
+            
             if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
                 kernel_version=$(awk -F':=' '/^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}' "$device_def_file")
                 if [ -n "$kernel_version" ]; then
@@ -1154,7 +1154,7 @@ EOF
                 fi
             fi
         fi
-
+        
         # 如果未找到，按优先级搜索
         if [ -z "$kernel_config_file" ] || [ ! -f "$kernel_config_file" ]; then
             for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
@@ -1169,10 +1169,10 @@ EOF
             found_kernel=1
         fi
     fi
-
+    
     if [ $found_kernel -eq 1 ] && [ -f "$kernel_config_file" ]; then
         log "✅ 使用内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
-
+        
         local kernel_patterns=(
             "^CONFIG_USB"
             "^CONFIG_PHY"
@@ -1182,26 +1182,26 @@ EOF
             "^CONFIG_COMMON_CLK"
             "^CONFIG_ARCH"
         )
-
+        
         if [ ${#KERNEL_EXTRACT_PATTERNS[@]} -gt 0 ]; then
             kernel_patterns=("${KERNEL_EXTRACT_PATTERNS[@]}")
         fi
-
+        
         local usb_configs_file="/tmp/usb_configs_$$.txt"
-
+        
         for pattern in "${kernel_patterns[@]}"; do
             grep -E "^${pattern}|^# ${pattern}" "$kernel_config_file" >> "$usb_configs_file" 2>/dev/null || true
         done
-
+        
         sort -u "$usb_configs_file" > "$usb_configs_file.sorted"
-
+        
         local config_count=$(wc -l < "$usb_configs_file.sorted")
         log "找到 $config_count 个USB相关内核配置"
-
+        
         local added_count=0
         while read line; do
             local config_name=$(echo "$line" | sed 's/^# //g' | cut -d'=' -f1 | cut -d' ' -f1)
-
+            
             if ! grep -q "^${config_name}=" .config && ! grep -q "^# ${config_name} is not set" .config; then
                 if echo "$line" | grep -q "=y$"; then
                     echo "$line" >> .config
@@ -1212,9 +1212,9 @@ EOF
                 fi
             fi
         done < "$usb_configs_file.sorted"
-
+        
         log "✅ 添加了 $added_count 个新的内核配置"
-
+        
         rm -f "$usb_configs_file" "$usb_configs_file.sorted"
     else
         # 未找到内核配置文件时不再输出警告，仅保留一个调试日志（可忽略）
@@ -1222,7 +1222,7 @@ EOF
             log "ℹ️ 未找到目标平台 $TARGET 的内核配置文件，跳过内核配置添加"
         fi
     fi
-
+    
     log "🔄 第一次运行 make defconfig..."
     make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
         log "❌ 第一次 make defconfig 失败"
@@ -1230,9 +1230,9 @@ EOF
         handle_error "第一次依赖解决失败"
     }
     log "✅ 第一次 make defconfig 成功"
-
+    
     log "🔍 动态检测实际生效的USB内核配置..."
-
+    
     local usb_components=(
         "USB_SUPPORT"
         "USB_COMMON"
@@ -1241,16 +1241,16 @@ EOF
         "USB_DWC3"
         "PHY"
     )
-
+    
     for component in "${usb_components[@]}"; do
         local matches=$(grep -E "^CONFIG_${component}" .config | grep -E "=y|=m" | wc -l)
         if [ $matches -gt 0 ]; then
             log "✅ $component 相关配置: 找到 $matches 个"
         fi
     done
-
+    
     log "📋 动态添加USB软件包..."
-
+    
     local base_usb_packages=(
         "kmod-usb-core"
         "kmod-usb-common"
@@ -1262,13 +1262,13 @@ EOF
         "automount"
         "usbutils"
     )
-
+    
     local extended_usb_packages=(
         "kmod-usb-storage-uas"
         "kmod-usb-storage-extras"
         "kmod-scsi-generic"
     )
-
+    
     local fs_support_packages=(
         "kmod-fs-ext4"
         "kmod-fs-vfat"
@@ -1277,19 +1277,19 @@ EOF
         "kmod-nls-utf8"
         "kmod-nls-cp936"
     )
-
+    
     if [ ${#BASE_USB_PACKAGES[@]} -gt 0 ]; then
         base_usb_packages=("${BASE_USB_PACKAGES[@]}")
     fi
-
+    
     if [ ${#EXTENDED_USB_PACKAGES[@]} -gt 0 ]; then
         extended_usb_packages=("${EXTENDED_USB_PACKAGES[@]}")
     fi
-
+    
     if [ ${#FS_SUPPORT_PACKAGES[@]} -gt 0 ]; then
         fs_support_packages=("${FS_SUPPORT_PACKAGES[@]}")
     fi
-
+    
     case "$TARGET" in
         ipq40xx|ipq806x|qcom)
             log "检测到高通平台，添加专用USB驱动..."
@@ -1321,7 +1321,7 @@ EOF
             base_usb_packages+=("${ath79_packages[@]}")
             ;;
     esac
-
+    
     local added_packages=0
     local existing_packages=0
     while read pkg; do
@@ -1335,32 +1335,32 @@ EOF
         fi
     done < <(printf "%s
 " "${base_usb_packages[@]}" "${extended_usb_packages[@]}" "${fs_support_packages[@]}" | sort -u)
-
+    
     log "📊 USB软件包统计: 新增 $added_packages 个, 已存在 $existing_packages 个"
-
+    
     log "🔄 第二次去重配置..."
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
-
+    
     log "🔄 第二次运行 make defconfig..."
     make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
         log "⚠️ 第二次 make defconfig 有警告，但继续..."
     }
     log "✅ 第二次 make defconfig 完成"
-
+    
     log "🔍 验证关键USB驱动状态..."
-
+    
     local critical_usb_drivers=(
         "kmod-usb-core"
         "kmod-usb2"
         "kmod-usb-storage"
         "kmod-scsi-core"
     )
-
+    
     if [ ${#CRITICAL_USB_DRIVERS[@]} -gt 0 ]; then
         critical_usb_drivers=("${CRITICAL_USB_DRIVERS[@]}")
     fi
-
+    
     case "$TARGET" in
         ipq40xx|ipq806x|qcom)
             critical_usb_drivers+=(
@@ -1374,7 +1374,7 @@ EOF
             )
             ;;
     esac
-
+    
     local missing_drivers=()
     for driver in "${critical_usb_drivers[@]}"; do
         if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
@@ -1386,7 +1386,7 @@ EOF
             missing_drivers+=("$driver")
         fi
     done
-
+    
     if [ ${#missing_drivers[@]} -gt 0 ] && [ "${AUTO_FIX_USB_DRIVERS:-true}" = "true" ]; then
         log "🔧 自动修复缺失驱动..."
         for driver in "${missing_drivers[@]}"; do
@@ -1395,9 +1395,9 @@ EOF
         done
         make defconfig > /dev/null 2>&1
     fi
-
+    
     log "🔍 正在验证设备 $openwrt_device 是否被选中..."
-
+    
     if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
         log "✅ 目标设备已正确启用: CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y"
     elif grep -q "^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} is not set" .config; then
@@ -1407,7 +1407,7 @@ EOF
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
         make defconfig > /dev/null 2>&1
-
+        
         if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
             log "✅ 设备已强制启用"
         else
@@ -1420,68 +1420,46 @@ EOF
         mv .config.tmp .config
         make defconfig > /dev/null 2>&1
     fi
-
+    
     local total_configs=$(wc -l < .config)
     local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config)
     local module_packages=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config)
     local disabled_packages=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config)
-
+    
     log "📊 配置统计:"
     log "  总配置行数: $total_configs"
     log "  启用软件包: $enabled_packages"
     log "  模块化软件包: $module_packages"
     log "  禁用软件包: $disabled_packages"
-
+    
     # =========================================================================
-    # 手动禁用特定插件（vssr, ssr-plus, rclone, passwall）- 增强版
+    # 手动禁用特定插件（vssr, ssr-plus, rclone, passwall）
+    # 这些插件可能由feeds自动引入，这里强制禁用
     # =========================================================================
     log "🔧 手动禁用 luci-app-vssr, luci-app-ssr-plus, luci-app-rclone, luci-app-passwall 及其子选项"
-
-    local forbidden_plugins=(
-        "luci-app-vssr"
-        "luci-app-ssr-plus"
-        "luci-app-rclone"
-        "luci-app-passwall"
-    )
-
-    # 删除所有相关行（包括主包和子选项）
-    for plugin in "${forbidden_plugins[@]}"; do
-        sed -i "/^CONFIG_PACKAGE_${plugin}[=_ ]/d" .config
-        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
-        sed -i "/^# CONFIG_PACKAGE_${plugin}[=_ ]/d" .config
-        # 添加禁用标记（仅主包，子选项会自动继承）
-        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-    done
-
-    # 额外清理可能残留的旧格式
-    sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_/d' .config
+    
+    # 禁用 luci-app-vssr
+    sed -i '/CONFIG_PACKAGE_luci-app-vssr=/d' .config
+    echo '# CONFIG_PACKAGE_luci-app-vssr is not set' >> .config
     sed -i '/CONFIG_PACKAGE_luci-app-vssr_INCLUDE_/d' .config
+    
+    # 禁用 luci-app-ssr-plus
+    sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus=/d' .config
+    echo '# CONFIG_PACKAGE_luci-app-ssr-plus is not set' >> .config
+    sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_/d' .config
+    
+    # 禁用 luci-app-rclone
+    sed -i '/CONFIG_PACKAGE_luci-app-rclone=/d' .config
+    echo '# CONFIG_PACKAGE_luci-app-rclone is not set' >> .config
     sed -i '/CONFIG_PACKAGE_luci-app-rclone_INCLUDE_/d' .config
+    
+    # 禁用 luci-app-passwall
+    sed -i '/CONFIG_PACKAGE_luci-app-passwall=/d' .config
+    echo '# CONFIG_PACKAGE_luci-app-passwall is not set' >> .config
     sed -i '/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_/d' .config
-
-    # 去重
-    sort .config | uniq > .config.tmp && mv .config.tmp .config
-
-    log "🔄 运行 make defconfig 以应用禁用..."
-    make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
-        log "⚠️ make defconfig 警告，但继续"
-    }
-
-    # 再次检查并强制禁用（防止依赖重新引入）
-    for plugin in "${forbidden_plugins[@]}"; do
-        # 如果仍然存在启用行，则再次删除并添加禁用标记
-        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
-            sed -i "/^CONFIG_PACKAGE_${plugin}[=_ ]/d" .config
-            echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-        fi
-        # 删除所有子选项（无论状态）
-        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
-    done
-
-    sort .config | uniq > .config.tmp && mv .config.tmp .config
-
+    
     log "✅ 插件禁用完成"
-
+    
     log "✅ 配置生成完成"
 }
 #【build_firmware_main.sh-13-end】
@@ -1664,6 +1642,7 @@ check_usb_drivers_integrity() {
 }
 #【build_firmware_main.sh-15-end】
 
+#【build_firmware_main.sh-16】
 #【build_firmware_main.sh-16】
 apply_config() {
     load_env
@@ -2126,11 +2105,9 @@ apply_config() {
         while read plugin; do
             plugin_count=$((plugin_count + 1))
             if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
-                printf "%-4s ✅ %s: 已启用
-" "[$plugin_count]" "$plugin"
+                printf "%-4s ✅ %s: 已启用\n" "[$plugin_count]" "$plugin"
             elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
-                printf "%-4s 📦 %s: 模块化
-" "[$plugin_count]" "$plugin"
+                printf "%-4s 📦 %s: 模块化\n" "[$plugin_count]" "$plugin"
             fi
         done <<< "$plugins"
         echo ""
@@ -2149,11 +2126,9 @@ apply_config() {
         while read module; do
             module_count=$((module_count + 1))
             if grep -q "^CONFIG_PACKAGE_${module}=y" .config; then
-                printf "%-4s ✅ %s: 已启用
-" "[$module_count]" "$module"
+                printf "%-4s ✅ %s: 已启用\n" "[$module_count]" "$module"
             elif grep -q "^CONFIG_PACKAGE_${module}=m" .config; then
-                printf "%-4s 📦 %s: 模块化
-" "[$module_count]" "$module"
+                printf "%-4s 📦 %s: 模块化\n" "[$module_count]" "$module"
             fi
         done <<< "$kernel_modules"
         echo ""
@@ -2172,11 +2147,9 @@ apply_config() {
         while read tool; do
             net_count=$((net_count + 1))
             if grep -q "^CONFIG_PACKAGE_${tool}=y" .config; then
-                printf "%-4s ✅ %s: 已启用
-" "[$net_count]" "$tool"
+                printf "%-4s ✅ %s: 已启用\n" "[$net_count]" "$tool"
             elif grep -q "^CONFIG_PACKAGE_${tool}=m" .config; then
-                printf "%-4s 📦 %s: 模块化
-" "[$net_count]" "$tool"
+                printf "%-4s 📦 %s: 模块化\n" "[$net_count]" "$tool"
             fi
         done <<< "$net_tools"
         echo ""
@@ -2195,11 +2168,9 @@ apply_config() {
         while read fs; do
             fs_count=$((fs_count + 1))
             if grep -q "^CONFIG_PACKAGE_${fs}=y" .config; then
-                printf "%-4s ✅ %s: 已启用
-" "[$fs_count]" "$fs"
+                printf "%-4s ✅ %s: 已启用\n" "[$fs_count]" "$fs"
             elif grep -q "^CONFIG_PACKAGE_${fs}=m" .config; then
-                printf "%-4s 📦 %s: 模块化
-" "[$fs_count]" "$fs"
+                printf "%-4s 📦 %s: 模块化\n" "[$fs_count]" "$fs"
             fi
         done <<< "$fs_support"
         echo ""
