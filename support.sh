@@ -26,9 +26,9 @@ CONFIG_DIR="$REPO_ROOT/firmware-config/config"
 # 支持的设备列表（仅3个设备）
 # 格式: DEVICES["设备名称"]="目标平台 子目标"
 declare -A DEVICES
-DEVICES["ac42u"]="ipq40xx generic"
-DEVICES["cmcc_rax3000m"]="mediatek filogic" 
-DEVICES["netgear_wndr3800"]="ath79 generic"
+DEVICES["ac42u"]="ipq40xx image"
+DEVICES["cmcc_rax3000m"]="mediatek image" 
+DEVICES["netgear_wndr3800"]="ath79 image"
 #【support.sh-03-end】
 
 #【support.sh-04】
