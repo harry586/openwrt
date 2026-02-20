@@ -1,13 +1,21 @@
 #【firmware-build.yml-00】
 # OpenWrt 智能固件构建工作流 - 系统主入口
-# 版本: 3.1.0
-# 最后更新: 2026-02-18
+# 版本: 3.2.0
+# 最后更新: 2026-02-20
 
 name: OpenWrt 智能固件构建工作流
 
 on:
   workflow_dispatch:
     inputs:
+      # 源码仓库选择
+      source_repo:
+        description: "📦 源码仓库选择"
+        required: true
+        type: choice
+        default: "immortalwrt"
+        options: ["immortalwrt", "openwrt", "lede"]
+      
       # 预定义设备下拉选择（保留）
       device_name:
         description: "📱 预定义设备（下拉选择）"
@@ -23,7 +31,7 @@ on:
         type: string
         default: ""
       manual_target:
-        description: "🎯 芯片型号（ipx4xx、ath79等）"
+        description: "🎯 芯片型号（ipq40xx、ath79等）"
         required: false
         type: string
         default: ""
@@ -33,7 +41,7 @@ on:
         type: string
         default: ""
       
-      # 其他选项保持不变
+      # 版本选择
       version_selection:
         description: "🔄 版本选择"
         required: true
@@ -61,6 +69,7 @@ env:
   BUILD_DIR: "/mnt/openwrt-build"
   REPO_ROOT: "${{ github.workspace }}"
   ENABLE_PARALLEL: "${{ github.event.inputs.enable_parallel }}"
+  SOURCE_REPO: "${{ github.event.inputs.source_repo }}"
 
 jobs:
   build-firmware:
