@@ -1,11 +1,14 @@
 #!/bin/bash
 
+#【support.sh-01】
 # support.sh - 设备支持管理脚本
 # 位置: 根目录 /support.sh
 # 版本: 3.0.4 (修复版 - 修复has-function函数和libustream冲突)
 # 功能: 管理支持的设备列表、配置文件、工具链下载
 # 特点: 无硬编码，通过调用现有脚本和配置文件实现
+#【support.sh-01-end】
 
+#【support.sh-02】
 set -e
 
 # 脚本目录（根目录）
@@ -17,14 +20,19 @@ BUILD_MAIN_SCRIPT="$REPO_ROOT/firmware-config/scripts/build_firmware_main.sh"
 
 # 配置文件目录
 CONFIG_DIR="$REPO_ROOT/firmware-config/config"
+#【support.sh-02-end】
 
+#【support.sh-03】
 # 支持的设备列表（仅3个设备）
 # 格式: DEVICES["设备名称"]="目标平台 子目标"
 declare -A DEVICES
 DEVICES["ac42u"]="ipq40xx generic"
 DEVICES["cmcc_rax3000m"]="mediatek filogic" 
-DEVICES["netgear_wndr3800"]="ath79 image"
+DEVICES["netgear_wndr3800"]="ath79 generic"
+#【support.sh-03-end】
 
+#【support.sh-04】
+#【support.sh-04】
 # OpenWrt官方SDK下载信息
 # 格式: SDK_INFO["目标/子目标/版本"]="SDK_URL"
 declare -A SDK_INFO
@@ -34,18 +42,20 @@ init_sdk_info() {
     # OpenWrt 21.02 SDK
     SDK_INFO["ipq40xx/generic/21.02"]="https://downloads.openwrt.org/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
     SDK_INFO["mediatek/filogic/21.02"]=""
-    SDK_INFO["ath79/image/21.02"]="https://downloads.openwrt.org/releases/21.02.7/targets/ath79/generic/openwrt-sdk-21.02.7-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+    SDK_INFO["ath79/generic/21.02"]="https://downloads.openwrt.org/releases/21.02.7/targets/ath79/generic/openwrt-sdk-21.02.7-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
     
-    # OpenWrt 23.05 SDK
-    SDK_INFO["ipq40xx/generic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/ipq40xx/generic/openwrt-sdk-23.05.5-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
-    SDK_INFO["mediatek/filogic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/mediatek/filogic/openwrt-sdk-23.05.5-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-    SDK_INFO["ath79/image/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/ath79/generic/openwrt-sdk-23.05.5-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+    # OpenWrt 23.05 SDK - 固定使用23.05.3版本
+    SDK_INFO["ipq40xx/generic/23.05"]="https://downloads.openwrt.org/releases/23.05.3/targets/ipq40xx/generic/openwrt-sdk-23.05.3-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
+    SDK_INFO["mediatek/filogic/23.05"]="https://downloads.openwrt.org/releases/23.05.3/targets/mediatek/filogic/openwrt-sdk-23.05.3-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+    SDK_INFO["ath79/generic/23.05"]="https://downloads.openwrt.org/releases/23.05.3/targets/ath79/generic/openwrt-sdk-23.05.3-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
     
     # 通用SDK（如果找不到精确匹配）
     SDK_INFO["generic/21.02"]="https://downloads.openwrt.org/releases/21.02.7/targets/x86/64/openwrt-sdk-21.02.7-x86-64_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
-    SDK_INFO["generic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/x86/64/openwrt-sdk-23.05.5-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+    SDK_INFO["generic/23.05"]="https://downloads.openwrt.org/releases/23.05.3/targets/x86/64/openwrt-sdk-23.05.3-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
 }
+#【support.sh-04-end】
 
+#【support.sh-05】
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -70,7 +80,9 @@ warn() {
 success() {
     echo -e "${GREEN}✅ $1${NC}" >&2
 }
+#【support.sh-05-end】
 
+#【support.sh-06】
 # 检查构建主脚本是否存在
 check_build_main_script() {
     if [ ! -f "$BUILD_MAIN_SCRIPT" ]; then
@@ -98,7 +110,9 @@ function_exists() {
         return 1  # 函数不存在
     fi
 }
+#【support.sh-06-end】
 
+#【support.sh-07】
 # 显示支持的设备列表
 list_devices() {
     log "=== 支持的设备列表 (共 ${#DEVICES[@]} 个) ==="
@@ -127,7 +141,9 @@ list_devices() {
     
     success "设备列表显示完成"
 }
+#【support.sh-07-end】
 
+#【support.sh-08】
 # 验证设备是否支持
 validate_device() {
     local device_name="$1"
@@ -158,7 +174,9 @@ get_device_platform() {
     
     echo "${DEVICES[$device_name]}"
 }
+#【support.sh-08-end】
 
+#【support.sh-09】
 # 获取SDK下载信息函数 - 修复版（返回空目录名，由主脚本自动检测）
 get_sdk_info() {
     local target="$1"
@@ -203,7 +221,9 @@ get_sdk_info() {
     echo ""
     return 1
 }
+#【support.sh-09-end】
 
+#【support.sh-10】
 # 应用设备专用配置
 apply_device_config() {
     local device_name="$1"
@@ -247,7 +267,9 @@ apply_device_config() {
         warn "设备配置文件不存在，跳过设备专用配置"
     fi
 }
+#【support.sh-10-end】
 
+#【support.sh-11】
 # 应用通用配置
 apply_generic_config() {
     local config_type="$1"  # usb-generic, normal, base
@@ -289,7 +311,9 @@ apply_generic_config() {
         error "通用配置文件不存在: $generic_config"
     fi
 }
+#【support.sh-11-end】
 
+#【support.sh-12】
 # 初始化编译器环境（调用主脚本）
 initialize_compiler() {
     local device_name="$1"
@@ -323,7 +347,9 @@ verify_compiler() {
         warn "编译器文件验证发现问题，但继续执行"
     fi
 }
+#【support.sh-12-end】
 
+#【support.sh-13】
 # 检查编译器调用状态
 check_compiler_invocation() {
     log "检查编译器调用状态..."
@@ -352,7 +378,9 @@ check_usb_config() {
     
     success "USB配置检查完成"
 }
+#【support.sh-13-end】
 
+#【support.sh-14】
 # 检查USB驱动完整性
 check_usb_drivers_integrity() {
     local build_dir="$1"
@@ -369,7 +397,9 @@ check_usb_drivers_integrity() {
     
     success "USB驱动完整性检查完成"
 }
+#【support.sh-14-end】
 
+#【support.sh-15】
 # 显示配置文件信息
 show_config_info() {
     local device_name="$1"
@@ -475,7 +505,9 @@ show_config_info() {
     
     success "配置文件信息显示完成"
 }
+#【support.sh-15-end】
 
+#【support.sh-16】
 # 保存源代码信息
 save_source_info() {
     local build_dir="$1"
@@ -492,7 +524,9 @@ save_source_info() {
     
     success "源代码信息保存完成"
 }
+#【support.sh-16-end】
 
+#【support.sh-17】
 # 搜索编译器文件（调用主脚本）
 search_compiler_files() {
     local search_root="${1:-/tmp}"
@@ -539,7 +573,9 @@ intelligent_platform_aware_compiler_search() {
         return 1
     fi
 }
+#【support.sh-17-end】
 
+#【support.sh-18】
 # 通用编译器搜索（调用主脚本）
 universal_compiler_search() {
     local search_root="${1:-/tmp}"
@@ -585,7 +621,9 @@ search_compiler_files_simple() {
         return 1
     fi
 }
+#【support.sh-18-end】
 
+#【support.sh-19】
 # 前置错误检查（调用主脚本）
 pre_build_error_check() {
     log "前置错误检查..."
@@ -623,7 +661,9 @@ apply_config() {
         error "配置应用失败"
     fi
 }
+#【support.sh-19-end】
 
+#【support.sh-20】
 # 完整配置流程
 full_config_process() {
     local device_name="$1"
@@ -673,7 +713,9 @@ full_config_process() {
     
     success "完整配置流程完成"
 }
+#【support.sh-20-end】
 
+#【support.sh-21】
 # 显示帮助信息
 show_help() {
     echo "📱 设备支持管理脚本 (support.sh)"
@@ -732,7 +774,9 @@ show_help() {
     echo "  ./support.sh initialize-compiler ac42u"
     echo ""
 }
+#【support.sh-21-end】
 
+#【support.sh-22】
 # 主函数
 main() {
     local command="$1"
@@ -846,6 +890,9 @@ main() {
             ;;
     esac
 }
+#【support.sh-22-end】
 
+#【support.sh-23】
 # 运行主函数
 main "$@"
+#【support.sh-23-end】
