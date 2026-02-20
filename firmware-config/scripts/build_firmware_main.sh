@@ -225,6 +225,7 @@ initialize_build_env() {
     # 根据仓库类型和版本选择获取分支名
     if [ "$repo_type" = "lede" ]; then
         SELECTED_BRANCH="${BRANCH_LEDE_17_01:-lede-17.01}"
+        log "⚠️ LEDE源码使用固定的lede-17.01分支"
     elif [ "$version_selection" = "23.05" ]; then
         SELECTED_BRANCH="${BRANCH_23_05:-openwrt-23.05}"
     else
@@ -238,8 +239,20 @@ initialize_build_env() {
 
     sudo rm -rf ./* ./.git* 2>/dev/null || true
 
-    git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
+    git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || {
+        log "❌ 克隆分支 $SELECTED_BRANCH 失败，尝试克隆默认分支..."
+        git clone --depth 1 "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
+    }
     log "✅ 源码克隆完成"
+    
+    # 显示源码信息
+    log "=== 源码信息 ==="
+    log "当前源码目录: $(pwd)"
+    if [ -d ".git" ]; then
+        log "Git远程地址: $(git config --get remote.origin.url 2>/dev/null || echo '未知')"
+        log "当前分支: $(git branch --show-current 2>/dev/null || echo '未知')"
+        log "最后提交: $(git log -1 --pretty=format:'%h - %s' 2>/dev/null || echo '未知')"
+    fi
 
     local important_source_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
     for file in "${important_source_files[@]}"; do
@@ -283,6 +296,45 @@ initialize_build_env() {
     log "子目标: $SUBTARGET"
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
+    
+    # 显示设备定义文件位置
+    log "=== 设备定义文件查找 ==="
+    local search_device=""
+    case "$DEVICE" in
+        ac42u|rt-ac42u|asus_rt-ac42u)
+            search_device="ac42u"
+            ;;
+        acrh17|rt-acrh17|asus_rt-acrh17)
+            search_device="acrh17"
+            ;;
+        cmcc_rax3000m)
+            search_device="rax3000m"
+            ;;
+        netgear_wndr3800)
+            search_device="wndr3800"
+            ;;
+        *)
+            search_device="$DEVICE"
+            ;;
+    esac
+    log "搜索设备名: $search_device"
+    
+    local device_file=""
+    if [ -d "target/linux/$TARGET" ]; then
+        log "搜索路径: target/linux/$TARGET"
+        device_file=$(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null | xargs grep -l "define Device.*$search_device" 2>/dev/null | head -1)
+        if [ -n "$device_file" ]; then
+            log "✅ 找到设备定义文件: $device_file"
+            log "📄 文件内容预览:"
+            head -20 "$device_file" | grep -E "define Device|DEVICE_|KERNEL|IMAGE" | sed 's/^/    /'
+        else
+            log "❌ 未找到设备 $search_device 的定义文件"
+            log "当前平台 $TARGET 下的所有设备:"
+            find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null | xargs grep -l "define Device" 2>/dev/null | head -5 | sed 's/^/    /'
+        fi
+    else
+        log "❌ 平台目录不存在: target/linux/$TARGET"
+    fi
 
     # 🔥 关键修复：正确识别和使用编译好的 config 工具
     log "=== 编译配置工具 ==="
@@ -810,7 +862,7 @@ verify_sdk_files() {
 #【build_firmware_main.sh-08】
 initialize_compiler_env() {
     local device_name="$1"
-    log "=== 初始化编译器环境（下载OpenWrt官方SDK）- 修复版 ==="
+    log "=== 初始化编译器环境（根据源码类型选择） ==="
     
     log "🔍 检查环境文件..."
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
@@ -864,7 +916,7 @@ initialize_compiler_env() {
             log "⚠️ 编译器目录存在但不包含真正的GCC，将重新下载SDK"
         fi
     else
-        log "🔍 COMPILER_DIR未设置或目录不存在，将下载OpenWrt官方SDK"
+        log "🔍 COMPILER_DIR未设置或目录不存在，将根据源码类型决定是否下载SDK"
     fi
     
     log "目标平台: $TARGET/$SUBTARGET"
@@ -879,6 +931,9 @@ initialize_compiler_env() {
         version_for_sdk="21.02"
     elif [ "$SELECTED_BRANCH" = "lede-17.01" ]; then
         version_for_sdk="17.01"
+        log "⚠️ LEDE源码不使用SDK，将使用源码自带工具链"
+        log "✅ 跳过SDK下载，使用LEDE源码自带工具链"
+        return 0
     else
         log "❌ 不支持的OpenWrt版本: $SELECTED_BRANCH"
         return 1
@@ -1636,81 +1691,286 @@ verify_usb_config() {
 #【build_firmware_main.sh-14-end】
 
 #【build_firmware_main.sh-15】
-check_usb_drivers_integrity() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+workflow_step15_generate_config() {
+    local extra_packages="$1"
     
-    log "=== 🚨 USB驱动完整性检查（增强版） ==="
+    log "=== 步骤15: 智能配置生成【修复版 - 强制bin格式】 ==="
+    log "当前设备: $DEVICE"
+    log "当前目标: $TARGET"
+    log "当前子目标: $SUBTARGET"
     
-    local missing_drivers=()
-    local required_drivers=(
-        # 核心驱动
-        "kmod-usb-core"
-        "kmod-usb2"
-        "kmod-usb3"
-        "kmod-usb-xhci-hcd"
-        "kmod-usb-storage"
-        "kmod-scsi-core"
-        "kmod-fs-ext4"
-        "kmod-fs-vfat"
-        # 扩展驱动（推荐启用）
-        "kmod-usb-xhci-pci"
-        "kmod-usb-xhci-plat-hcd"
-        "kmod-usb-storage-uas"
-        "kmod-scsi-generic"
-        "kmod-fs-exfat"
-        "kmod-fs-ntfs3"
-        "kmod-nls-utf8"
-        "kmod-nls-cp936"
-    )
+    set -e
+    trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
     
-    # 根据平台添加专用驱动
-    if [ "$TARGET" = "ipq40xx" ] || grep -q "^CONFIG_TARGET_ipq40xx=y" .config 2>/dev/null; then
-        required_drivers+=("kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3" "kmod-usb-dwc3-of-simple")
-    elif [ "$TARGET" = "ramips" ] || grep -q "^CONFIG_TARGET_ramips=y" .config 2>/dev/null; then
-        required_drivers+=("kmod-usb-xhci-mtk" "kmod-usb-ohci-pci" "kmod-usb2-pci")
-    elif [ "$TARGET" = "mediatek" ] || grep -q "^CONFIG_TARGET_mediatek=y" .config 2>/dev/null; then
-        required_drivers+=("kmod-usb-dwc3-mediatek" "kmod-phy-mediatek" "kmod-usb-dwc3")
-    elif [ "$TARGET" = "ath79" ] || grep -q "^CONFIG_TARGET_ath79=y" .config 2>/dev/null; then
-        required_drivers+=("kmod-usb2-ath79" "kmod-usb-ohci")
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        log "✅ 从环境文件重新加载: DEVICE=$DEVICE, TARGET=$TARGET"
     fi
     
-    # 检查每个驱动
-    for driver in "${required_drivers[@]}"; do
-        if ! grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-            log "❌ 缺失驱动: $driver"
-            missing_drivers+=("$driver")
-        else
-            log "✅ 驱动存在: $driver"
+    if [ -z "$DEVICE" ] && [ -n "$2" ]; then
+        DEVICE="$2"
+        log "⚠️ DEVICE为空，使用参数: $DEVICE"
+    fi
+    
+    local device_for_config="$DEVICE"
+    case "$DEVICE" in
+        ac42u|rt-ac42u)
+            device_for_config="asus_rt-ac42u"
+            log "🔧 设备名转换: $DEVICE -> $device_for_config"
+            ;;
+        acrh17|rt-acrh17)
+            device_for_config="asus_rt-acrh17"
+            log "🔧 设备名转换: $DEVICE -> $device_for_config"
+            ;;
+        cmcc_rax3000m)
+            device_for_config="cmcc_rax3000m"
+            log "🔧 设备名转换: $DEVICE -> $device_for_config"
+            ;;
+        netgear_wndr3800)
+            device_for_config="netgear_wndr3800"
+            log "🔧 设备名转换: $DEVICE -> $device_for_config"
+            ;;
+        *)
+            device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+            ;;
+    esac
+    
+    cd "$BUILD_DIR" || handle_error "无法进入构建目录"
+    
+    log ""
+    log "=== 🔍 设备定义文件验证（前置检查） ==="
+    
+    local search_device=""
+    case "$DEVICE" in
+        ac42u|rt-ac42u|asus_rt-ac42u)
+            search_device="ac42u"
+            ;;
+        acrh17|rt-acrh17|asus_rt-acrh17)
+            search_device="acrh17"
+            ;;
+        cmcc_rax3000m)
+            search_device="rax3000m"
+            ;;
+        netgear_wndr3800)
+            search_device="wndr3800"
+            ;;
+        *)
+            search_device="$DEVICE"
+            ;;
+    esac
+    
+    log "搜索设备名: $search_device"
+    log "搜索路径: target/linux/$TARGET"
+    
+    echo ""
+    echo "📁 所有子平台 .mk 文件列表:"
+    local mk_files=()
+    while IFS= read -r file; do
+        mk_files+=("$file")
+    done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null | sort)
+    
+    if [ ${#mk_files[@]} -gt 0 ]; then
+        echo "----------------------------------------"
+        for i in "${!mk_files[@]}"; do
+            printf "[%2d] %s\n" $((i+1)) "${mk_files[$i]}"
+        done
+        echo "----------------------------------------"
+        echo "📊 共找到 ${#mk_files[@]} 个 .mk 文件"
+    else
+        echo "   未找到 .mk 文件"
+    fi
+    echo ""
+    
+    local device_file=""
+    for mkfile in "${mk_files[@]}"; do
+        if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
+            device_file="$mkfile"
+            log "✅ 找到设备定义文件: $mkfile"
+            break
         fi
     done
     
-    # 如果有缺失驱动，尝试修复
-    if [ ${#missing_drivers[@]} -gt 0 ]; then
-        log "🚨 发现 ${#missing_drivers[@]} 个缺失的USB驱动"
-        log "正在尝试修复..."
+    if [ -z "$device_file" ] || [ ! -f "$device_file" ]; then
+        log "❌ 错误：未找到设备 $DEVICE (搜索名: $search_device) 的定义文件"
+        log "请检查设备名称是否正确，或 target/linux/$TARGET 目录下是否存在对应的 .mk 文件"
+        exit 1
+    fi
+    
+    log "✅ 找到设备定义文件: $device_file"
+    
+    local device_block=""
+    device_block=$(awk "/define Device.*$search_device/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
+    
+    if [ -n "$device_block" ]; then
+        echo ""
+        echo "📋 设备定义信息（关键字段）:"
+        echo "----------------------------------------"
+        echo "$device_block" | grep -E "define Device" | head -1
+        echo "$device_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS|KERNEL|IMAGES|IMAGE)" | sed 's/^/    /'
+        echo "----------------------------------------"
+    else
+        log "⚠️ 警告：无法提取设备 $search_device 的配置块"
+    fi
+    
+    # 检查镜像格式定义
+    log ""
+    log "=== 🔍 检查镜像格式定义 ==="
+    if [ -n "$device_block" ]; then
+        local images_def=$(echo "$device_block" | grep -E "^[[:space:]]*IMAGES\s*:=" | sed 's/^[[:space:]]*//')
+        if [ -n "$images_def" ]; then
+            log "当前 IMAGES 定义: $images_def"
+            if echo "$images_def" | grep -q "itb"; then
+                log "⚠️ 检测到 .itb 格式定义，将强制覆盖为 .bin"
+            fi
+        else
+            log "未找到 IMAGES 定义，将使用默认格式"
+        fi
+    fi
+    
+    log ""
+    log "=== 开始生成配置 ==="
+    
+    generate_config "$extra_packages" "$device_for_config"
+    
+    log ""
+    log "=== 🔧 强制设置固件输出格式为 .bin ==="
+    
+    # 强制设置固件输出格式
+    echo "" >> .config
+    echo "# 强制使用 .bin 格式" >> .config
+    echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
+    echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
+    
+    # 针对不同平台设置
+    case "$TARGET" in
+        mediatek)
+            echo "# mediatek 平台强制使用 squashfs" >> .config
+            echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+            echo "CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256" >> .config
+            ;;
+        ipq40xx|ipq806x)
+            echo "# ipq40xx 平台强制使用 squashfs" >> .config
+            echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+            echo "CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256" >> .config
+            ;;
+        ath79)
+            echo "# ath79 平台强制使用 squashfs" >> .config
+            echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+            ;;
+    esac
+    
+    # 禁用 FIT 格式
+    echo "# 禁用 FIT 镜像格式" >> .config
+    echo "# CONFIG_TARGET_IMAGES_FIT is not set" >> .config
+    echo "# CONFIG_TARGET_FIT is not set" >> .config
+    
+    # 强制生成 .bin 文件
+    echo "# 强制生成 .bin 文件" >> .config
+    echo "CONFIG_TARGET_IMAGES=y" >> .config
+    echo "CONFIG_TARGET_IMAGES_BIN=y" >> .config
+    
+    log "✅ 已强制设置固件输出格式为 .bin"
+    
+    log ""
+    log "=== 🔧 强制禁用不需要的插件系列 ==="
+    
+    local forbidden_plugins=(
+        "luci-app-vssr"
+        "luci-app-ssr-plus"
+        "luci-app-rclone"
+        "luci-app-passwall"
+    )
+    
+    cp .config .config.before_disable
+    
+    for plugin in "${forbidden_plugins[@]}"; do
+        log "  处理插件: $plugin"
         
-        for driver in "${missing_drivers[@]}"; do
-            echo "CONFIG_PACKAGE_${driver}=y" >> .config
-            log "✅ 已添加: $driver"
+        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
+        
+        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+        
+        log "    ✅ 已禁用 $plugin 及其子选项"
+    done
+    
+    sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_/d' .config
+    sed -i '/CONFIG_PACKAGE_luci-app-vssr_INCLUDE_/d' .config
+    sed -i '/CONFIG_PACKAGE_luci-app-rclone_INCLUDE_/d' .config
+    sed -i '/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_/d' .config
+    
+    sort -u .config > .config.tmp && mv .config.tmp .config
+    
+    local max_attempts=2
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        log "尝试 $attempt/$max_attempts: 运行 make defconfig..."
+        make defconfig > /tmp/build-logs/defconfig_disable_attempt${attempt}.log 2>&1 || {
+            log "⚠️ make defconfig 警告，但继续"
+        }
+        
+        local still_enabled=0
+        for plugin in "${forbidden_plugins[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+                still_enabled=$((still_enabled + 1))
+            fi
         done
         
-        # 重新运行defconfig
-        make defconfig || log "⚠️ make defconfig 修复后仍有问题"
-        log "✅ USB驱动修复完成"
+        if [ $still_enabled -eq 0 ]; then
+            log "✅ 第 $attempt 次尝试后所有主插件已成功禁用"
+            break
+        else
+            if [ $attempt -lt $max_attempts ]; then
+                log "⚠️ 第 $attempt 次尝试后仍有 $still_enabled 个插件残留，再次强制禁用..."
+                for plugin in "${forbidden_plugins[@]}"; do
+                    sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+                    sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+                    echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+                done
+                sort -u .config > .config.tmp && mv .config.tmp .config
+            fi
+        fi
+        attempt=$((attempt + 1))
+    done
+    
+    log ""
+    log "📊 最终插件状态验证:"
+    local still_enabled_final=0
+    for plugin in "${forbidden_plugins[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
+            log "  ❌ $plugin 仍然被启用"
+            still_enabled_final=$((still_enabled_final + 1))
+        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+            log "  ❌ $plugin 仍然被模块化"
+            still_enabled_final=$((still_enabled_final + 1))
+        else
+            log "  ✅ $plugin 已正确禁用"
+        fi
+    done
+    
+    if [ $still_enabled_final -eq 0 ]; then
+        log "🎉 所有指定插件已成功禁用"
     else
-        log "🎉 所有必需USB驱动都已启用"
+        log "⚠️ 有 $still_enabled_final 个插件未能禁用，请检查 feeds 或依赖"
     fi
+    
+    log ""
+    log "📊 配置统计（禁用后）:"
+    log "  总配置行数: $(wc -l < .config)"
+    log "  启用软件包: $(grep -c "^CONFIG_PACKAGE_.*=y$" .config)"
+    log "  模块化软件包: $(grep -c "^CONFIG_PACKAGE_.*=m$" .config)"
+    
+    log "✅ 步骤15 完成"
 }
 #【build_firmware_main.sh-15-end】
 
-#【build_firmware_main.sh-16】
 #【build_firmware_main.sh-16】
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
 
-    log "=== 应用配置并显示详细信息（完整版） ==="
+    log "=== 应用配置并显示详细信息（完整版 - 强制bin格式） ==="
 
     if [ ! -f ".config" ]; then
         log "❌ 错误: .config 文件不存在，无法应用配置"
@@ -2025,6 +2285,17 @@ apply_config() {
         log "  ✅ kmod-ath10k-ct配置正常"
     fi
 
+    log "  🔧 强制设置固件输出格式为 .bin..."
+    echo "" >> .config
+    echo "# CONFIG_TARGET_IMAGES_FIT is not set" >> .config
+    echo "# CONFIG_TARGET_FIT is not set" >> .config
+    echo "CONFIG_TARGET_IMAGES=y" >> .config
+    echo "CONFIG_TARGET_IMAGES_BIN=y" >> .config
+    echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
+    echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
+    echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+    log "  ✅ 固件格式强制设置为 .bin"
+
     if [ $fix_count -eq 0 ]; then
         log "✅ 所有关键配置检查通过，无需修复"
     else
@@ -2120,7 +2391,7 @@ apply_config() {
     local target=$(grep "^CONFIG_TARGET_" .config | grep "=y" | head -1 | cut -d'_' -f2 | tr '[:upper:]' '[:lower:]')
 
     case "$target" in
-        ipq40xx|qcom)
+        ipq40xx|ipq806x|qcom)
             echo "🔧 检测到高通IPQ40xx平台，检查专用驱动:"
 
             if grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config; then
@@ -2157,6 +2428,27 @@ apply_config() {
             ;;
     esac
 
+    echo ""
+    echo "=== 📦 固件格式验证 ==="
+    echo ""
+    if grep -q "^CONFIG_TARGET_IMAGES_FIT=y" .config; then
+        echo "⚠️ FIT格式: 已启用（可能导致 .itb 文件）"
+    else
+        echo "✅ FIT格式: 已禁用"
+    fi
+    
+    if grep -q "^CONFIG_TARGET_IMAGES_BIN=y" .config; then
+        echo "✅ BIN格式: 已启用"
+    else
+        echo "⚠️ BIN格式: 未启用"
+    fi
+    
+    if grep -q "^CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config; then
+        echo "✅ SquashFS: 已启用"
+    else
+        echo "⚠️ SquashFS: 未启用"
+    fi
+    
     echo ""
     echo "=== 📦 插件配置状态 ==="
 
