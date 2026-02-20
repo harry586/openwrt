@@ -20,7 +20,8 @@ load_build_config() {
     
     # 导出所有配置为环境变量
     export BUILD_DIR LOG_DIR BACKUP_DIR CONFIG_DIR
-    export IMMORTALWRT_URL PACKAGES_FEED_URL LUCI_FEED_URL TURBOACC_FEED_URL
+    export IMMORTALWRT_URL OPENWRT_URL LEDE_URL CUSTOM_REPO_URL
+    export SOURCE_REPO_TYPE PACKAGES_FEED_URL LUCI_FEED_URL TURBOACC_FEED_URL
     export ENABLE_TURBOACC ENABLE_TCP_BBR FORCE_ATH10K_CT AUTO_FIX_USB_DRIVERS
     export ENABLE_DYNAMIC_KERNEL_DETECTION ENABLE_DYNAMIC_PLATFORM_DRIVERS ENABLE_DYNAMIC_DEVICE_MAPPING
     
@@ -70,6 +71,7 @@ save_env() {
     echo "#!/bin/bash" > $ENV_FILE
     echo "export SELECTED_REPO_URL=\"${SELECTED_REPO_URL}\"" >> $ENV_FILE
     echo "export SELECTED_BRANCH=\"${SELECTED_BRANCH}\"" >> $ENV_FILE
+    echo "export SELECTED_REPO_TYPE=\"${SELECTED_REPO_TYPE}\"" >> $ENV_FILE
     echo "export TARGET=\"${TARGET}\"" >> $ENV_FILE
     echo "export SUBTARGET=\"${SUBTARGET}\"" >> $ENV_FILE
     echo "export DEVICE=\"${DEVICE}\"" >> $ENV_FILE
@@ -86,6 +88,7 @@ save_env() {
     if [ -n "$GITHUB_ENV" ]; then
         echo "SELECTED_REPO_URL=${SELECTED_REPO_URL}" >> $GITHUB_ENV
         echo "SELECTED_BRANCH=${SELECTED_BRANCH}" >> $GITHUB_ENV
+        echo "SELECTED_REPO_TYPE=${SELECTED_REPO_TYPE}" >> $GITHUB_ENV
         echo "TARGET=${TARGET}" >> $GITHUB_ENV
         echo "SUBTARGET=${SUBTARGET}" >> $GITHUB_ENV
         echo "DEVICE=${DEVICE}" >> $GITHUB_ENV
@@ -187,18 +190,47 @@ initialize_build_env() {
     local config_mode=$3
     local manual_target=$4   # 可选，手动指定的芯片型号
     local manual_subtarget=$5 # 可选，手动指定的子平台
+    local repo_type=${SOURCE_REPO_TYPE:-immortalwrt}
 
     cd $BUILD_DIR || handle_error "进入构建目录失败"
 
+    log "=== 源码仓库选择 ==="
+    log "选择的仓库类型: $repo_type"
+    
+    # 根据仓库类型设置URL
+    case "$repo_type" in
+        "immortalwrt")
+            SELECTED_REPO_URL="${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}"
+            ;;
+        "openwrt")
+            SELECTED_REPO_URL="${OPENWRT_URL:-https://github.com/openwrt/openwrt.git}"
+            ;;
+        "lede")
+            SELECTED_REPO_URL="${LEDE_URL:-https://github.com/lede-project/source.git}"
+            ;;
+        "custom")
+            if [ -z "$CUSTOM_REPO_URL" ]; then
+                log "❌ 自定义仓库类型但未设置 CUSTOM_REPO_URL"
+                handle_error "请设置自定义仓库URL"
+            fi
+            SELECTED_REPO_URL="$CUSTOM_REPO_URL"
+            ;;
+        *)
+            log "❌ 未知的仓库类型: $repo_type"
+            handle_error "无效的仓库类型"
+            ;;
+    esac
+    
     log "=== 版本选择 ==="
-    if [ "$version_selection" = "23.05" ]; then
-        SELECTED_REPO_URL="${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}"
+    # 根据仓库类型和版本选择获取分支名
+    if [ "$repo_type" = "lede" ]; then
+        SELECTED_BRANCH="${BRANCH_LEDE_17_01:-lede-17.01}"
+    elif [ "$version_selection" = "23.05" ]; then
         SELECTED_BRANCH="${BRANCH_23_05:-openwrt-23.05}"
     else
-        SELECTED_REPO_URL="${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}"
         SELECTED_BRANCH="${BRANCH_21_02:-openwrt-21.02}"
     fi
-    log "✅ 版本选择完成: $SELECTED_BRANCH"
+    log "✅ 版本选择完成: $SELECTED_BRANCH (仓库: $repo_type)"
 
     log "=== 克隆源码 ==="
     log "仓库: $SELECTED_REPO_URL"
@@ -544,10 +576,12 @@ EOF
         handle_error "无法创建配置工具"
     fi
 
+    SELECTED_REPO_TYPE="$repo_type"
     save_env
 
     echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
     echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
+    echo "SELECTED_REPO_TYPE=$SELECTED_REPO_TYPE" >> $GITHUB_ENV
     echo "TARGET=$TARGET" >> $GITHUB_ENV
     echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
     echo "DEVICE=$DEVICE" >> $GITHUB_ENV
@@ -562,10 +596,12 @@ download_openwrt_sdk() {
     local target="$1"
     local subtarget="$2"
     local version="$3"
+    local repo_type="${SELECTED_REPO_TYPE:-immortalwrt}"
     
     log "=== 下载OpenWrt官方SDK工具链 ==="
     log "目标平台: $target/$subtarget"
     log "OpenWrt版本: $version"
+    log "源码仓库: $repo_type"
     
     if [ ! -f "$SUPPORT_SCRIPT" ]; then
         log "❌ support.sh不存在，无法获取SDK信息"
@@ -834,12 +870,15 @@ initialize_compiler_env() {
     log "目标平台: $TARGET/$SUBTARGET"
     log "目标设备: $DEVICE"
     log "OpenWrt版本: $SELECTED_BRANCH"
+    log "源码仓库: ${SELECTED_REPO_TYPE:-immortalwrt}"
     
     local version_for_sdk=""
     if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
         version_for_sdk="23.05"
     elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
         version_for_sdk="21.02"
+    elif [ "$SELECTED_BRANCH" = "lede-17.01" ]; then
+        version_for_sdk="17.01"
     else
         log "❌ 不支持的OpenWrt版本: $SELECTED_BRANCH"
         return 1
@@ -909,20 +948,43 @@ configure_feeds() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
     log "=== 配置Feeds ==="
+    log "源码仓库类型: ${SELECTED_REPO_TYPE:-immortalwrt}"
     
     if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
         FEEDS_BRANCH="openwrt-23.05"
+    elif [ "$SELECTED_BRANCH" = "lede-17.01" ]; then
+        FEEDS_BRANCH="lede-17.01"
     else
         FEEDS_BRANCH="openwrt-21.02"
     fi
     
-    # 使用配置文件中的Feed URL
-    echo "src-git packages ${PACKAGES_FEED_URL:-https://github.com/immortalwrt/packages.git};$FEEDS_BRANCH" > feeds.conf.default
-    echo "src-git luci ${LUCI_FEED_URL:-https://github.com/immortalwrt/luci.git};$FEEDS_BRANCH" >> feeds.conf.default
+    # 根据仓库类型调整feeds配置
+    case "${SELECTED_REPO_TYPE:-immortalwrt}" in
+        "immortalwrt")
+            # ImmortalWrt 使用自己的 feeds
+            echo "src-git packages ${PACKAGES_FEED_URL:-https://github.com/immortalwrt/packages.git};$FEEDS_BRANCH" > feeds.conf.default
+            echo "src-git luci ${LUCI_FEED_URL:-https://github.com/immortalwrt/luci.git};$FEEDS_BRANCH" >> feeds.conf.default
+            ;;
+        "openwrt")
+            # OpenWrt 官方使用官方的 feeds
+            echo "src-git packages https://git.openwrt.org/feed/packages.git;$FEEDS_BRANCH" > feeds.conf.default
+            echo "src-git luci https://git.openwrt.org/project/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
+            echo "src-git routing https://git.openwrt.org/feed/routing.git;$FEEDS_BRANCH" >> feeds.conf.default
+            echo "src-git telephony https://git.openwrt.org/feed/telephony.git;$FEEDS_BRANCH" >> feeds.conf.default
+            ;;
+        "lede")
+            # LEDE 使用 LEDE 项目的 feeds
+            echo "src-git packages https://github.com/lede-project/packages.git;master" > feeds.conf.default
+            echo "src-git luci https://github.com/lede-project/luci.git;master" >> feeds.conf.default
+            echo "src-git routing https://github.com/lede-project/routing.git;master" >> feeds.conf.default
+            echo "src-git telephony https://github.com/lede-project/telephony.git;master" >> feeds.conf.default
+            ;;
+    esac
     
+    # 添加 TurboACC feed（仅 normal 模式且启用了 TurboACC）
     if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
         echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
-        log "✅ 添加TurboACC feed（所有版本）"
+        log "✅ 添加TurboACC feed"
     fi
     
     log "=== 更新Feeds ==="
@@ -4875,6 +4937,7 @@ workflow_step30_build_summary() {
     local config_mode="$3"
     local timestamp_sec="$4"
     local enable_parallel="$5"
+    local source_repo="${6:-immortalwrt}"
     
     log "=== 步骤30: 编译后总结（增强版） ==="
     
@@ -4883,6 +4946,7 @@ workflow_step30_build_summary() {
     echo "🚀 构建总结报告"
     echo "========================================"
     echo "设备: $device_name"
+    echo "源码仓库: $source_repo"
     echo "版本: $version_selection"
     echo "配置模式: $config_mode"
     echo "时间戳: $timestamp_sec"
@@ -4905,7 +4969,14 @@ workflow_step30_build_summary() {
     echo ""
     echo "🔧 编译器信息:"
     if [ -d "$BUILD_DIR" ]; then
-        GCC_FILE=$(find "$BUILD_DIR" -type f -executable             -name "*gcc"             ! -name "*gcc-ar"             ! -name "*gcc-ranlib"             ! -name "*gcc-nm"             ! -path "*dummy-tools*"             ! -path "*scripts*"             2>/dev/null | head -1)
+        GCC_FILE=$(find "$BUILD_DIR" -type f -executable \
+          -name "*gcc" \
+          ! -name "*gcc-ar" \
+          ! -name "*gcc-ranlib" \
+          ! -name "*gcc-nm" \
+          ! -path "*dummy-tools*" \
+          ! -path "*scripts*" \
+          2>/dev/null | head -1)
         
         if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
             SDK_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
@@ -5075,8 +5146,10 @@ workflow_step08_initialize_build_env_hybrid() {
     local config_mode="$3"
     local manual_target="$4"
     local manual_subtarget="$5"
+    local repo_type="${SOURCE_REPO_TYPE:-immortalwrt}"
 
     log "=== 步骤08: 初始化构建环境（混合模式：优先使用手动输入） ==="
+    log "源码仓库: $repo_type"
 
     set -e
     trap 'echo "❌ 步骤08 失败，退出代码: $?"; exit 1' ERR
