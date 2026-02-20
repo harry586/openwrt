@@ -4573,10 +4573,11 @@ workflow_step23_pre_build_check() {
 #【firmware-build.yml-25】
 # ============================================
 #【build_firmware_main.sh-38】
+#【build_firmware_main.sh-38】
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（智能并行优化版） ==="
+    log "=== 步骤25: 编译固件（智能并行优化版 - 详细日志模式） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
@@ -4594,7 +4595,6 @@ workflow_step25_build_firmware() {
     if [ "$enable_parallel" = "true" ]; then
         echo "🧠 智能判断最佳并行任务数..."
         
-        # 使用配置文件中的阈值
         : ${HIGH_PERF_CORES:=4}
         : ${HIGH_PERF_MEM:=4096}
         : ${STD_PERF_CORES:=2}
@@ -4631,19 +4631,19 @@ workflow_step25_build_firmware() {
     fi
     
     echo ""
-    echo "🚀 开始编译固件"
+    echo "🚀 开始编译固件（详细日志模式）"
     echo "💡 编译配置:"
     echo "  - 并行任务: $MAKE_JOBS"
+    echo "  - 日志级别: V=s（详细输出）"
     echo "  - 开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
     
     export FORCE_UNSAFE_CONFIGURE=1
     
     START_TIME=$(date +%s)
-    if [ "${ENABLE_VERBOSE_LOG:-false}" = "true" ]; then
-        stdbuf -oL -eL time make -j$MAKE_JOBS V=s 2>&1 | tee build.log
-    else
-        stdbuf -oL -eL time make -j$MAKE_JOBS 2>&1 | tee build.log
-    fi
+    
+    # 强制使用详细日志模式，无论 ENABLE_VERBOSE_LOG 设置如何
+    stdbuf -oL -eL time make -j$MAKE_JOBS V=s 2>&1 | tee build.log
+    
     BUILD_EXIT_CODE=${PIPESTATUS[0]}
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
@@ -4652,11 +4652,17 @@ workflow_step25_build_firmware() {
     echo "📊 编译统计:"
     echo "  - 总耗时: $((DURATION / 60))分钟$((DURATION % 60))秒"
     echo "  - 退出代码: $BUILD_EXIT_CODE"
+    echo "  - 详细日志已保存到: build.log"
     
     if [ $BUILD_EXIT_CODE -eq 0 ]; then
         echo "✅ 固件编译成功"
     else
         echo "❌ 错误: 编译失败，退出代码: $BUILD_EXIT_CODE"
+        echo ""
+        echo "🔍 最后50行错误日志:"
+        tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || echo "   未找到错误关键字"
+        echo ""
+        echo "📝 完整日志请查看: build.log"
         exit $BUILD_EXIT_CODE
     fi
     
