@@ -4576,12 +4576,82 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（智能并行优化版） ==="
+    log "=== 步骤25: 编译固件（智能并行优化版 - 带自动补丁修复） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
     
     cd $BUILD_DIR
+    
+    # ============================================
+    # 补丁自动检测和处理函数（内嵌）
+    # ============================================
+    check_and_fix_failed_patches() {
+        log "🔍 自动检测和处理失败的内核补丁..."
+        
+        local fixed_patches=0
+        local patch_dirs=$(find target/linux -type d -name "patches-*" 2>/dev/null | sort)
+        
+        for patch_dir in $patch_dirs; do
+            local platform=$(echo "$patch_dir" | cut -d'/' -f3)
+            local kernel_ver=$(basename "$patch_dir" | sed 's/patches-//')
+            
+            # 检查构建目录中的失败补丁
+            local build_dirs=$(find build_dir -maxdepth 3 -type d -path "*/linux-${platform}_*" 2>/dev/null)
+            
+            for build_dir in $build_dirs; do
+                if [ -d "$build_dir" ]; then
+                    local rej_files=$(find "$build_dir" -name "*.rej" 2>/dev/null | wc -l)
+                    
+                    if [ $rej_files -gt 0 ]; then
+                        log "⚠️ 在 $build_dir 中发现 $rej_files 个失败的补丁"
+                        
+                        local failed_patches=$(find "$build_dir" -name "*.rej" 2>/dev/null | sed 's/\.rej$/.patch/' | xargs -r basename -a 2>/dev/null | sort -u)
+                        
+                        for failed_patch in $failed_patches; do
+                            local source_patch="$patch_dir/$failed_patch"
+                            
+                            if [ -f "$source_patch" ]; then
+                                log "  🗑️  移除失败补丁: $platform/$kernel_ver/$failed_patch"
+                                
+                                # 备份
+                                mkdir -p "$BUILD_DIR/patches-backup"
+                                cp "$source_patch" "$BUILD_DIR/patches-backup/${platform}-${kernel_ver}-${failed_patch}.bak" 2>/dev/null || true
+                                
+                                # 移除
+                                rm -f "$source_patch"
+                                fixed_patches=$((fixed_patches + 1))
+                            fi
+                        done
+                    fi
+                fi
+            done
+            
+            # 预防性移除已知问题补丁
+            if [ "$platform" = "ipq40xx" ] && [ "$kernel_ver" = "5.15" ]; then
+                local problem_patch="401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
+                if [ -f "$patch_dir/$problem_patch" ]; then
+                    log "🔧 预防性移除已知问题补丁: $platform/$kernel_ver/$problem_patch"
+                    mkdir -p "$BUILD_DIR/patches-backup"
+                    cp "$patch_dir/$problem_patch" "$BUILD_DIR/patches-backup/${platform}-${kernel_ver}-${problem_patch}.bak" 2>/dev/null || true
+                    rm -f "$patch_dir/$problem_patch"
+                    fixed_patches=$((fixed_patches + 1))
+                fi
+            fi
+        done
+        
+        # 清理残留文件
+        find build_dir -name "*.rej" -o -name "*.orig" 2>/dev/null | xargs -r rm -f
+        
+        if [ $fixed_patches -gt 0 ]; then
+            log "✅ 已处理 $fixed_patches 个失败的补丁"
+        else
+            log "✅ 未发现失败的补丁"
+        fi
+    }
+    
+    # 编译前先检查并修复补丁
+    check_and_fix_failed_patches
     
     CPU_CORES=$(nproc)
     TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
@@ -4594,7 +4664,6 @@ workflow_step25_build_firmware() {
     if [ "$enable_parallel" = "true" ]; then
         echo "🧠 智能判断最佳并行任务数..."
         
-        # 使用配置文件中的阈值
         : ${HIGH_PERF_CORES:=4}
         : ${HIGH_PERF_MEM:=4096}
         : ${STD_PERF_CORES:=2}
@@ -4630,33 +4699,75 @@ workflow_step25_build_firmware() {
         echo "🔄 禁用并行优化，使用单线程编译"
     fi
     
-    echo ""
-    echo "🚀 开始编译固件"
-    echo "💡 编译配置:"
-    echo "  - 并行任务: $MAKE_JOBS"
-    echo "  - 开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-    
     export FORCE_UNSAFE_CONFIGURE=1
     
-    START_TIME=$(date +%s)
-    if [ "${ENABLE_VERBOSE_LOG:-false}" = "true" ]; then
+    local max_retries=2
+    local retry_count=0
+    local build_success=0
+    
+    while [ $retry_count -lt $max_retries ] && [ $build_success -eq 0 ]; do
+        echo ""
+        echo "🚀 开始编译固件 (尝试 $((retry_count + 1))/$max_retries)"
+        echo "💡 编译配置:"
+        echo "  - 并行任务: $MAKE_JOBS"
+        echo "  - 开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+        
+        START_TIME=$(date +%s)
+        
+        # 使用详细日志模式
         stdbuf -oL -eL time make -j$MAKE_JOBS V=s 2>&1 | tee build.log
-    else
-        stdbuf -oL -eL time make -j$MAKE_JOBS 2>&1 | tee build.log
-    fi
-    BUILD_EXIT_CODE=${PIPESTATUS[0]}
-    END_TIME=$(date +%s)
-    DURATION=$((END_TIME - START_TIME))
+        
+        BUILD_EXIT_CODE=${PIPESTATUS[0]}
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        
+        echo ""
+        echo "📊 编译统计 (尝试 $((retry_count + 1))):"
+        echo "  - 总耗时: $((DURATION / 60))分钟$((DURATION % 60))秒"
+        echo "  - 退出代码: $BUILD_EXIT_CODE"
+        
+        if [ $BUILD_EXIT_CODE -eq 0 ]; then
+            echo "✅ 固件编译成功"
+            build_success=1
+        else
+            echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
+            
+            # 检查是否是补丁失败导致的
+            if grep -q "Patch failed\|FAILED\|.rej" build.log; then
+                retry_count=$((retry_count + 1))
+                if [ $retry_count -lt $max_retries ]; then
+                    echo ""
+                    echo "🔄 检测到补丁失败，尝试修复后重试..."
+                    echo "========================================"
+                    
+                    # 再次检查并修复补丁
+                    check_and_fix_failed_patches
+                    
+                    # 清理编译目录
+                    make clean 2>/dev/null || true
+                else
+                    echo "❌ 已达到最大重试次数 ($max_retries)，编译失败"
+                    echo ""
+                    echo "🔍 最后50行错误日志:"
+                    tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED|Patch" -A 5 -B 5 || true
+                    echo ""
+                    echo "📝 完整日志请查看: build.log"
+                    exit $BUILD_EXIT_CODE
+                fi
+            else
+                # 如果不是补丁问题，直接退出
+                echo "❌ 编译失败且不是补丁问题，退出"
+                echo ""
+                echo "🔍 最后50行错误日志:"
+                tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || true
+                echo ""
+                echo "📝 完整日志请查看: build.log"
+                exit $BUILD_EXIT_CODE
+            fi
+        fi
+    done
     
-    echo ""
-    echo "📊 编译统计:"
-    echo "  - 总耗时: $((DURATION / 60))分钟$((DURATION % 60))秒"
-    echo "  - 退出代码: $BUILD_EXIT_CODE"
-    
-    if [ $BUILD_EXIT_CODE -eq 0 ]; then
-        echo "✅ 固件编译成功"
-    else
-        echo "❌ 错误: 编译失败，退出代码: $BUILD_EXIT_CODE"
+    if [ $build_success -eq 0 ]; then
         exit $BUILD_EXIT_CODE
     fi
     
@@ -4977,265 +5088,7 @@ workflow_step08_initialize_build_env_hybrid() {
 #【build_firmware_main.sh-46-end】
 
 #【build_firmware_main.sh-47】
-# ============================================
-# 补丁自动检测和处理函数
-# 功能：在编译前检查并自动移除失败的内核补丁
-# ============================================
 
-check_and_fix_failed_patches() {
-    log "=== 自动检测和处理失败的内核补丁 ==="
-    
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    local patch_failed=0
-    local fixed_patches=0
-    
-    # 查找所有平台的补丁目录
-    local target_platforms=$(ls target/linux/ 2>/dev/null | grep -v "generic" || echo "")
-    
-    if [ -z "$target_platforms" ]; then
-        log "ℹ️ 未找到目标平台目录，跳过补丁检查"
-        return 0
-    fi
-    
-    for platform in $target_platforms; do
-        # 查找该平台的所有内核版本补丁目录
-        local patch_dirs=$(find "target/linux/$platform" -maxdepth 1 -type d -name "patches-*" 2>/dev/null | sort)
-        
-        for patch_dir in $patch_dirs; do
-            local kernel_ver=$(basename "$patch_dir" | sed 's/patches-//')
-            
-            # 检查该平台/内核版本的构建目录中是否有失败的补丁标记
-            local build_patch_dir="build_dir/target-*/linux-${platform}_*/linux-*/$patch_dir"
-            
-            # 使用 find 查找可能的构建目录
-            local found_dirs=$(find build_dir -maxdepth 3 -type d -path "*/linux-${platform}_*" 2>/dev/null)
-            
-            for build_dir in $found_dirs; do
-                if [ -d "$build_dir" ]; then
-                    # 检查 .rej 文件（补丁失败产生的拒绝文件）
-                    local rej_files=$(find "$build_dir" -name "*.rej" 2>/dev/null | wc -l)
-                    
-                    if [ $rej_files -gt 0 ]; then
-                        log "⚠️ 在 $build_dir 中发现 $rej_files 个失败的补丁"
-                        
-                        # 找出导致失败的补丁文件
-                        local failed_patches=$(find "$build_dir" -name "*.rej" 2>/dev/null | sed 's/\.rej$/.patch/' | xargs -r basename -a 2>/dev/null | sort -u)
-                        
-                        for failed_patch in $failed_patches; do
-                            local source_patch="$patch_dir/$failed_patch"
-                            
-                            if [ -f "$source_patch" ]; then
-                                log "  🔧 发现失败补丁: $platform/$kernel_ver/$failed_patch"
-                                log "  🗑️  正在移除..."
-                                
-                                # 备份补丁文件
-                                local backup_dir="$BUILD_DIR/patches-backup"
-                                mkdir -p "$backup_dir"
-                                cp "$source_patch" "$backup_dir/${platform}-${kernel_ver}-${failed_patch}.bak"
-                                log "  💾 已备份到: $backup_dir/${platform}-${kernel_ver}-${failed_patch}.bak"
-                                
-                                # 移除补丁文件
-                                rm -f "$source_patch"
-                                
-                                patch_failed=$((patch_failed + 1))
-                                fixed_patches=$((fixed_patches + 1))
-                                log "  ✅ 已移除补丁: $failed_patch"
-                            fi
-                        done
-                    fi
-                fi
-            done
-            
-            # 如果没有构建目录，但我们需要预防性检查已知的问题补丁
-            if [ $fixed_patches -eq 0 ]; then
-                # 针对已知问题的预防性修复
-                case "$platform" in
-                    ipq40xx)
-                        if [ "$kernel_ver" = "5.15" ]; then
-                            local problem_patches=(
-                                "401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
-                            )
-                            
-                            for problem_patch in "${problem_patches[@]}"; do
-                                if [ -f "$patch_dir/$problem_patch" ]; then
-                                    log "🔧 预防性移除已知问题补丁: $platform/$kernel_ver/$problem_patch"
-                                    
-                                    # 备份
-                                    mkdir -p "$BUILD_DIR/patches-backup"
-                                    cp "$patch_dir/$problem_patch" "$BUILD_DIR/patches-backup/${platform}-${kernel_ver}-${problem_patch}.bak"
-                                    
-                                    # 移除
-                                    rm -f "$patch_dir/$problem_patch"
-                                    
-                                    fixed_patches=$((fixed_patches + 1))
-                                    log "✅ 已预防性移除: $problem_patch"
-                                fi
-                            done
-                        fi
-                        ;;
-                    ramips|mediatek)
-                        # 可以添加其他平台已知的问题补丁
-                        ;;
-                esac
-            fi
-        done
-    done
-    
-    if [ $fixed_patches -gt 0 ]; then
-        log "✅ 共处理了 $fixed_patches 个失败的补丁"
-        log "📌 补丁备份位置: $BUILD_DIR/patches-backup/"
-        
-        # 清理补丁应用后的残留文件
-        log "🧹 清理补丁残留文件..."
-        find build_dir -name "*.rej" -o -name "*.orig" 2>/dev/null | xargs -r rm -f
-        log "✅ 清理完成"
-    else
-        log "✅ 未发现失败的补丁"
-    fi
-    
-    log "✅ 补丁检查完成"
-}
-
-# 在编译前调用此函数的新工作流步骤
-workflow_step24_check_patches() {
-    log "=== 步骤24: 编译前补丁检查（自动修复版） ==="
-    
-    set -e
-    trap 'echo "❌ 步骤24 失败，退出代码: $?"; exit 1' ERR
-    
-    check_and_fix_failed_patches
-    
-    log "✅ 步骤24 完成"
-}
-
-# 增强版的编译函数，在编译失败时自动尝试修复补丁
-workflow_step25_build_firmware_with_patch_fix() {
-    local enable_parallel="$1"
-    local max_retries="${2:-2}"  # 最大重试次数，默认2次
-    
-    log "=== 步骤25: 编译固件（带自动补丁修复） ==="
-    
-    set -e
-    trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
-    
-    cd $BUILD_DIR
-    
-    CPU_CORES=$(nproc)
-    TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
-    
-    echo "🔧 系统信息:"
-    echo "  CPU核心数: $CPU_CORES"
-    echo "  内存大小: ${TOTAL_MEM}MB"
-    echo "  并行优化: $enable_parallel"
-    echo "  最大重试次数: $max_retries"
-    
-    if [ "$enable_parallel" = "true" ]; then
-        echo "🧠 智能判断最佳并行任务数..."
-        
-        : ${HIGH_PERF_CORES:=4}
-        : ${HIGH_PERF_MEM:=4096}
-        : ${STD_PERF_CORES:=2}
-        : ${STD_PERF_MEM:=2048}
-        : ${HIGH_PERF_JOBS:=4}
-        : ${STD_PERF_JOBS:=3}
-        : ${LOW_PERF_JOBS:=2}
-        
-        if [ $CPU_CORES -ge $HIGH_PERF_CORES ]; then
-            if [ $TOTAL_MEM -ge $HIGH_PERF_MEM ]; then
-                MAKE_JOBS=$HIGH_PERF_JOBS
-                echo "✅ 检测到高性能Runner (${HIGH_PERF_CORES}核+${HIGH_PERF_MEM}MB)"
-            else
-                MAKE_JOBS=$((HIGH_PERF_JOBS - 1))
-                echo "✅ 检测到标准Runner (${HIGH_PERF_CORES}核)"
-            fi
-        elif [ $CPU_CORES -ge $STD_PERF_CORES ]; then
-            if [ $TOTAL_MEM -ge $STD_PERF_MEM ]; then
-                MAKE_JOBS=$STD_PERF_JOBS
-                echo "✅ 检测到GitHub标准Runner (${STD_PERF_CORES}核${STD_PERF_MEM}MB)"
-            else
-                MAKE_JOBS=$((STD_PERF_JOBS - 1))
-                echo "✅ 检测到${STD_PERF_CORES}核Runner"
-            fi
-        else
-            MAKE_JOBS=$LOW_PERF_JOBS
-            echo "⚠️ 检测到低性能系统"
-        fi
-        
-        echo "🎯 决定使用 $MAKE_JOBS 个并行任务"
-    else
-        MAKE_JOBS=1
-        echo "🔄 禁用并行优化，使用单线程编译"
-    fi
-    
-    export FORCE_UNSAFE_CONFIGURE=1
-    
-    local retry_count=0
-    local build_success=0
-    
-    while [ $retry_count -lt $max_retries ] && [ $build_success -eq 0 ]; do
-        echo ""
-        echo "🚀 开始编译固件 (尝试 $((retry_count + 1))/$max_retries)"
-        echo "💡 编译配置:"
-        echo "  - 并行任务: $MAKE_JOBS"
-        echo "  - 开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-        
-        START_TIME=$(date +%s)
-        
-        # 使用详细日志模式
-        stdbuf -oL -eL time make -j$MAKE_JOBS V=s 2>&1 | tee build.log
-        
-        BUILD_EXIT_CODE=${PIPESTATUS[0]}
-        END_TIME=$(date +%s)
-        DURATION=$((END_TIME - START_TIME))
-        
-        echo ""
-        echo "📊 编译统计 (尝试 $((retry_count + 1))):"
-        echo "  - 总耗时: $((DURATION / 60))分钟$((DURATION % 60))秒"
-        echo "  - 退出代码: $BUILD_EXIT_CODE"
-        
-        if [ $BUILD_EXIT_CODE -eq 0 ]; then
-            echo "✅ 固件编译成功"
-            build_success=1
-        else
-            echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
-            
-            # 检查是否是补丁失败导致的
-            if grep -q "Patch failed" build.log || grep -q "FAILED" build.log; then
-                echo "🔍 检测到补丁失败，尝试自动修复..."
-                
-                # 调用补丁修复函数
-                check_and_fix_failed_patches
-                
-                retry_count=$((retry_count + 1))
-                
-                if [ $retry_count -lt $max_retries ]; then
-                    echo ""
-                    echo "🔄 准备第 $((retry_count + 1)) 次重试编译..."
-                    echo "========================================"
-                else
-                    echo "❌ 已达到最大重试次数 ($max_retries)，编译失败"
-                fi
-            else
-                # 如果不是补丁问题，直接退出
-                echo "❌ 编译失败且不是补丁问题，退出"
-                exit $BUILD_EXIT_CODE
-            fi
-        fi
-    done
-    
-    if [ $build_success -eq 0 ]; then
-        echo "❌ 错误: 编译失败，退出代码: $BUILD_EXIT_CODE"
-        echo ""
-        echo "🔍 最后50行错误日志:"
-        tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || echo "   未找到错误关键字"
-        echo ""
-        echo "📝 完整日志请查看: build.log"
-        exit $BUILD_EXIT_CODE
-    fi
-    
-    log "✅ 步骤25 完成"
-}
 #【build_firmware_main.sh-47-end】
 
 #【build_firmware_main.sh-48】
@@ -5250,10 +5103,6 @@ workflow_step25_build_firmware_with_patch_fix() {
 # 主函数 - 命令分发
 # ============================================
 #【build_firmware_main.sh-99】
-# ============================================
-# 主函数 - 命令分发
-# ============================================
-
 main() {
     local command="$1"
     local arg1="$2"
@@ -5390,14 +5239,8 @@ main() {
         "step23_pre_build_check")
             workflow_step23_pre_build_check
             ;;
-        "step24_check_patches")
-            workflow_step24_check_patches
-            ;;
         "step25_build_firmware")
             workflow_step25_build_firmware "$arg1"
-            ;;
-        "step25_build_firmware_with_patch_fix")
-            workflow_step25_build_firmware_with_patch_fix "$arg1" "$arg2"
             ;;
         "step26_check_artifacts")
             workflow_step26_check_artifacts
@@ -5433,9 +5276,8 @@ main() {
             echo "    step11_add_turboacc, step12_configure_feeds, step13_install_turboacc"
             echo "    step14_pre_build_space_check, step15_generate_config, step16_verify_usb"
             echo "    step17_check_usb_drivers, step20_fix_network, step21_download_deps"
-            echo "    step22_integrate_custom_files, step23_pre_build_check, step24_check_patches"
-            echo "    step25_build_firmware, step25_build_firmware_with_patch_fix, step26_check_artifacts"
-            echo "    step29_post_build_space_check, step30_build_summary"
+            echo "    step22_integrate_custom_files, step23_pre_build_check, step25_build_firmware"
+            echo "    step26_check_artifacts, step29_post_build_space_check, step30_build_summary"
             exit 1
             ;;
     esac
