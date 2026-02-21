@@ -1,0 +1,135 @@
+# 【readme-autoup.yml-01】
+# 更新频率：可手动触发或每周一早上8点自动运行
+# 说明：自动更新 README.md 中的项目结构表，基于实际仓库目录
+# readme-autoup.yml-01-end
+
+name: 自动更新 README 目录结构
+
+on:
+  schedule:
+    # 每周一早上 8:00 运行（UTC+8 对应 UTC 0:00）
+    - cron: '0 0 * * 1'
+  workflow_dispatch:  # 支持手动触发
+  push:
+    paths:
+      - 'firmware-config/**'
+      - '.github/workflows/readme-autoup.yml'
+      - 'README.md'
+
+jobs:
+  update-readme:
+    name: 更新 README 目录表
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      # 【readme-autoup.yml-02】检出代码
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # readme-autoup.yml-02-end
+
+      # 【readme-autoup.yml-03】生成目录结构树
+      - name: 生成项目目录结构
+        id: tree
+        run: |
+          # 使用 tree 命令生成目录结构（排除 .git 目录）
+          sudo apt-get install -y tree
+          
+          # 生成目录树，排除 .git 和多余文件
+          TREE_OUTPUT=$(tree -I '.git|__pycache__|*.pyc' --dirsfirst -F)
+          
+          # 将多行内容保存为环境变量
+          {
+            echo 'TREE_CONTENT<<EOF'
+            echo "$TREE_OUTPUT"
+            echo 'EOF'
+          } >> $GITHUB_ENV
+          
+          # 同时保存到文件备用
+          echo "$TREE_OUTPUT" > project_tree.txt
+      # readme-autoup.yml-03-end
+
+      # 【readme-autoup.yml-04】更新 README.md 中的目录表
+      - name: 更新 README 目录表
+        run: |
+          # 定义标记
+          START_MARK="## 📁 项目结构"
+          END_MARK="注意，自定义文件名是英文的，方便复制、运行"
+          
+          # 读取当前 README
+          cp README.md README.md.bak
+          
+          # 构建新的目录表内容
+          cat > new_tree_section.md << 'EOF'
+          ## 📁 项目结构
+
+          ```
+          $TREE_CONTENT
+          ```
+          EOF
+          
+          # 替换标记之间的内容
+          # 使用 awk 进行替换
+          awk -v start="$START_MARK" -v end="$END_MARK" -v newfile="new_tree_section.md" '
+          BEGIN { printing = 1; found = 0; }
+          {
+            if ($0 ~ start && !found) {
+              print $0;
+              found = 1;
+              printing = 0;
+              while ((getline line < newfile) > 0) {
+                print line;
+              }
+              close(newfile);
+              next;
+            }
+            if ($0 ~ end && found) {
+              printing = 1;
+              found = 0;
+            }
+            if (printing) print $0;
+          }' README.md.bak > README.md
+          
+          # 清理临时文件
+          rm -f README.md.bak new_tree_section.md
+      # readme-autoup.yml-04-end
+
+      # 【readme-autoup.yml-05】检查是否有变更
+      - name: 检查 README 变更
+        id: git-check
+        run: |
+          if git diff --quiet README.md; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+      # readme-autoup.yml-05-end
+
+      # 【readme-autoup.yml-06】提交变更
+      - name: 提交 README 更新
+        if: steps.git-check.outputs.changed == 'true'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add README.md
+          git commit -m "docs: 自动更新项目目录结构 [skip ci]"
+          git push
+      # readme-autoup.yml-06-end
+
+      # 【readme-autoup.yml-07】创建 PR（可选，如果 main 分支受保护）
+      - name: 创建 Pull Request
+        if: steps.git-check.outputs.changed == 'true' && github.ref == 'refs/heads/main'
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "docs: 自动更新项目目录结构"
+          title: "自动更新 README 目录结构"
+          body: "此 PR 由 GitHub Actions 自动创建，用于更新 README.md 中的项目目录结构。"
+          branch: "auto-update-readme"
+          base: "main"
+          labels: "automated pr, documentation"
+      # readme-autoup.yml-07-end
