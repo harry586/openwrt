@@ -3,7 +3,7 @@
 #【support.sh-01】
 # support.sh - 设备支持管理脚本
 # 位置: 根目录 /support.sh
-# 版本: 3.0.4 (修复版 - 修复has-function函数和libustream冲突)
+# 版本: 3.0.5 (修复版 - 修复has-function函数和libustream冲突)
 # 功能: 管理支持的设备列表、配置文件、工具链下载
 # 特点: 无硬编码，通过调用现有脚本和配置文件实现
 #【support.sh-01-end】
