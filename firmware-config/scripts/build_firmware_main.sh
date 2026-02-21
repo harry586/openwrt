@@ -5478,21 +5478,31 @@ workflow_step30_build_summary() {
             echo "  产物位置: $BUILD_DIR/bin/targets/"
             echo "  下载名称: firmware-$timestamp_sec.zip"
             
-            # 显示实际固件名称（替换源码前缀）
+            # 显示实际固件名称（根据实际源码替换）
             echo ""
             echo "📋 固件文件列表:"
             find "$BUILD_DIR/bin/targets" -type f -name "*.bin" -o -name "*.img" -o -name "*.itb" 2>/dev/null | sort | while read file; do
                 size=$(ls -lh "$file" | awk '{print $5}')
                 name=$(basename "$file")
-                # 替换源码前缀为实际源码名称
-                case "$source_repo" in
-                    "immortalwrt")
-                        name=$(echo "$name" | sed 's/^openwrt/immortalwrt/')
-                        ;;
-                    "lede")
-                        name=$(echo "$name" | sed 's/^openwrt/lede/')
-                        ;;
-                esac
+                
+                # 获取实际源码类型
+                local actual_source=""
+                if [ -f "$BUILD_DIR/.git/config" ]; then
+                    local remote_url=$(git --git-dir="$BUILD_DIR/.git" config --get remote.origin.url 2>/dev/null || echo "")
+                    if echo "$remote_url" | grep -q "coolsnowwolf/lede"; then
+                        actual_source="lede"
+                    elif echo "$remote_url" | grep -q "immortalwrt"; then
+                        actual_source="immortalwrt"
+                    elif echo "$remote_url" | grep -q "openwrt/openwrt"; then
+                        actual_source="openwrt"
+                    fi
+                fi
+                
+                # 根据实际源码替换前缀
+                if [ -n "$actual_source" ] && [ "$actual_source" != "openwrt" ]; then
+                    name=$(echo "$name" | sed "s/^openwrt/$actual_source/")
+                fi
+                
                 echo "  🎯 $name ($size)"
             done
         fi
@@ -5537,7 +5547,16 @@ workflow_step30_build_summary() {
         if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
             echo "  ✅ SDK已下载: $COMPILER_DIR"
         else
-            if [ "$source_repo" = "lede" ]; then
+            # 检查实际源码类型
+            local actual_source=""
+            if [ -f "$BUILD_DIR/.git/config" ]; then
+                remote_url=$(git --git-dir="$BUILD_DIR/.git" config --get remote.origin.url 2>/dev/null || echo "")
+                if echo "$remote_url" | grep -q "coolsnowwolf/lede"; then
+                    actual_source="lede"
+                fi
+            fi
+            
+            if [ "$actual_source" = "lede" ] || [ "$source_repo" = "lede" ]; then
                 echo "  ✅ LEDE 使用源码自带工具链，无需 SDK"
             else
                 echo "  ❌ SDK未下载或目录不存在"
