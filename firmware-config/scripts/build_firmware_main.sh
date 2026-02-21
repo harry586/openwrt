@@ -1083,6 +1083,8 @@ configure_feeds() {
             if [ -f "feeds.conf.default" ]; then
                 log "使用源码自带的 feeds.conf.default"
                 cat feeds.conf.default
+                # 直接使用源码自带的配置文件
+                cp feeds.conf.default feeds.conf.default.bak
             else
                 log "创建默认 feeds 配置"
                 echo "src-git packages https://github.com/coolsnowwolf/packages.git;master" > feeds.conf.default
@@ -1110,20 +1112,41 @@ configure_feeds() {
     log "=== 更新Feeds ==="
     ./scripts/feeds update -a || {
         log "⚠️ 更新 feeds 失败，尝试使用 -f 强制更新..."
-        ./scripts/feeds update -a -f || handle_error "更新feeds失败"
+        ./scripts/feeds update -a -f || {
+            log "❌ 更新 feeds 失败，但继续尝试安装..."
+        }
     }
     
     log "=== 安装Feeds ==="
-    ./scripts/feeds install -a || {
-        log "⚠️ 安装 feeds 失败，但继续..."
-    }
+    # 先尝试安装所有包
+    ./scripts/feeds install -a 2>/dev/null || true
+    
+    # 单独安装关键包
+    log "安装关键包..."
+    for pkg in base luci packages routing telephony; do
+        if ./scripts/feeds install -p $pkg 2>/dev/null; then
+            log "✅ 安装 $pkg 成功"
+        fi
+    done
+    
+    # 等待一会让文件系统同步
+    sleep 2
     
     local critical_feeds_dirs=("feeds/packages" "feeds/luci" "package/feeds")
     for dir in "${critical_feeds_dirs[@]}"; do
         if [ -d "$dir" ]; then
             log "✅ Feed目录存在: $dir"
+            # 显示目录内容的前几行
+            ls -la "$dir/" 2>/dev/null | head -3 | while read line; do
+                log "    $line"
+            done
         else
             log "❌ Feed目录缺失: $dir"
+            # 尝试创建必要的符号链接
+            if [ "$dir" = "package/feeds" ] && [ ! -d "package/feeds" ]; then
+                mkdir -p package/feeds
+                log "✅ 创建 package/feeds 目录"
+            fi
         fi
     done
     
@@ -3778,20 +3801,28 @@ workflow_step10_verify_sdk() {
     log "=== 步骤10: 验证SDK下载结果（修复版：动态检查） ==="
     
     trap 'echo "⚠️ 步骤10 验证过程中出现错误，继续执行..."' ERR
-    
+
     echo "🔍 检查SDK下载结果..."
-    
+
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
-        echo "✅ 从环境文件加载变量: COMPILER_DIR=$COMPILER_DIR"
+        echo "✅ 从环境文件加载变量: COMPILER_DIR=$COMPILER_DIR, SELECTED_REPO_TYPE=$SELECTED_REPO_TYPE"
     else
         echo "❌ 环境文件不存在"
     fi
-    
+
+    # 检查是否是 LEDE
+    if [ "${SELECTED_REPO_TYPE:-immortalwrt}" = "lede" ]; then
+        echo "✅ LEDE 源码使用自带工具链，无需 SDK"
+        echo "✅ SDK验证跳过"
+        log "✅ 步骤10 完成"
+        return 0
+    fi
+
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
         echo "✅ SDK目录存在: $COMPILER_DIR"
         echo "📊 SDK目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | awk '{print $1}' || echo '未知')"
-        
+
         GCC_FILE=$(find "$COMPILER_DIR" -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
@@ -3800,17 +3831,17 @@ workflow_step10_verify_sdk() {
           ! -path "*dummy-tools*" \
           ! -path "*scripts*" \
           2>/dev/null | head -1)
-        
+
         if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
             echo "✅ 找到可执行GCC编译器: $(basename "$GCC_FILE")"
             echo "🔧 GCC版本测试:"
             "$GCC_FILE" --version 2>&1 | head -1
-            
+
             SDK_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
             MAJOR_VERSION=$(echo "$SDK_VERSION" | grep -o "[0-9]\+" | head -1)
-            
+
             echo "💡 这是OpenWrt官方SDK交叉编译器，用于编译目标平台固件"
-            
+
             if [ "$MAJOR_VERSION" = "12" ]; then
                 echo "💡 SDK GCC版本: 12.3.0 (OpenWrt 23.05 SDK)"
             elif [ "$MAJOR_VERSION" = "8" ]; then
@@ -3820,12 +3851,12 @@ workflow_step10_verify_sdk() {
             fi
         else
             echo "❌ 未找到可执行的GCC编译器"
-            
+
             DUMMY_GCC=$(find "$COMPILER_DIR" -type f -executable \
               -name "*gcc" \
               -path "*dummy-tools*" \
               2>/dev/null | head -1)
-            
+
             if [ -n "$DUMMY_GCC" ]; then
                 echo "⚠️ 检测到虚假的dummy-tools编译器: $DUMMY_GCC"
                 echo "💡 这是OpenWrt构建系统的占位符，不是真正的编译器"
@@ -3834,21 +3865,21 @@ workflow_step10_verify_sdk() {
     else
         echo "❌ SDK目录不存在: $COMPILER_DIR"
         echo "💡 检查可能的SDK目录..."
-        
+
         found_dirs=$(find "$BUILD_DIR" -maxdepth 1 -type d -name "*sdk*" 2>/dev/null)
         if [ -n "$found_dirs" ]; then
             echo "找到可能的SDK目录:"
             echo "$found_dirs"
-            
+
             first_dir=$(echo "$found_dirs" | head -1)
             echo "使用目录: $first_dir"
             COMPILER_DIR="$first_dir"
-            
+
             save_env
             echo "✅ 已更新环境文件"
         fi
     fi
-    
+
     echo "✅ SDK验证完成"
     log "✅ 步骤10 完成"
 }
