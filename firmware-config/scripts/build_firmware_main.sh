@@ -4854,6 +4854,7 @@ workflow_step23_pre_build_check() {
         echo "   DEVICE=$DEVICE"
         echo "   CONFIG_MODE=$CONFIG_MODE"
         echo "   COMPILER_DIR=$COMPILER_DIR"
+        echo "   SELECTED_REPO_TYPE=$SELECTED_REPO_TYPE"
     else
         echo "❌ 错误: 环境文件不存在 ($BUILD_DIR/build_env.sh)"
         exit 1
@@ -4896,7 +4897,11 @@ workflow_step23_pre_build_check() {
     echo ""
     
     echo "2. ✅ SDK/编译器检查:"
-    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+    # 根据仓库类型判断
+    if [ "$SELECTED_REPO_TYPE" = "lede" ]; then
+        echo "   ✅ LEDE 源码使用自带工具链，无需 SDK"
+        echo "   📌 将使用源码中的工具链编译"
+    elif [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
         echo "   ✅ SDK目录存在: $COMPILER_DIR"
         local sdk_size=$(du -sh "$COMPILER_DIR" 2>/dev/null | awk '{print $1}')
         echo "   📊 大小: $sdk_size"
@@ -4922,13 +4927,25 @@ workflow_step23_pre_build_check() {
         feeds_count=$((feeds_count - 1))
         echo "   ✅ feeds目录存在, 包含 $feeds_count 个feed"
         
+        # 检查关键feed是否存在（可能是符号链接）
         for feed in packages luci; do
-            if [ -d "feeds/$feed" ]; then
+            if [ -d "feeds/$feed" ] || [ -L "feeds/$feed" ]; then
                 echo "   ✅ $feed feed: 存在"
             else
-                echo "   ❌ $feed feed: 不存在"
+                echo "   ⚠️ $feed feed: 不存在（可能是LEDE的特殊结构）"
+                # 检查是否有其他名称的feed
+                found_alt=$(find feeds -maxdepth 1 -type d | grep -v "^feeds$" | head -1)
+                if [ -n "$found_alt" ]; then
+                    echo "     找到替代feed: $(basename $found_alt)"
+                fi
                 warning_count=$((warning_count + 1))
             fi
+        done
+        
+        # 显示实际的feed目录结构
+        echo "   📁 实际feed目录:"
+        ls -la feeds/ 2>/dev/null | grep "^d" | head -3 | while read line; do
+            echo "     $line"
         done
     else
         echo "   ❌ feeds目录不存在"
