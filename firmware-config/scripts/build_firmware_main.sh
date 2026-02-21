@@ -1077,12 +1077,19 @@ configure_feeds() {
         "lede")
             log "使用 coolsnowwolf/lede 的 feeds 配置（固定 master 分支）"
             # coolsnowwolf/lede 使用自己的 feeds 配置，固定 master 分支
-            if [ -f "feeds.conf.default" ]; then
+            if [ -f "feeds.conf.default" ] && [ -s "feeds.conf.default" ]; then
                 log "使用源码自带的 feeds.conf.default"
                 # 备份原文件
                 cp feeds.conf.default feeds.conf.default.orig
+                # 创建新文件
+                > feeds.conf.default.new
                 # 读取并处理原文件，确保所有 feed 使用 master 分支
-                while IFS= read -r line; do
+                while IFS= read -r line || [ -n "$line" ]; do
+                    # 跳过空行
+                    if [ -z "$line" ]; then
+                        echo "" >> feeds.conf.default.new
+                        continue
+                    fi
                     # 跳过注释行
                     if [[ "$line" =~ ^[[:space:]]*# ]]; then
                         echo "$line" >> feeds.conf.default.new
@@ -1097,10 +1104,18 @@ configure_feeds() {
                         echo "$line" >> feeds.conf.default.new
                     fi
                 done < "feeds.conf.default"
-                mv feeds.conf.default.new feeds.conf.default
+                
+                # 检查新文件是否创建成功且有内容
+                if [ -f "feeds.conf.default.new" ] && [ -s "feeds.conf.default.new" ]; then
+                    mv feeds.conf.default.new feeds.conf.default
+                    log "✅ feeds.conf.default 处理完成"
+                else
+                    log "⚠️ 处理 feeds.conf.default 失败，使用原始文件"
+                    rm -f feeds.conf.default.new
+                fi
                 cat feeds.conf.default
             else
-                log "创建默认 feeds 配置（master 分支）"
+                log "源码自带的 feeds.conf.default 不存在或为空，创建默认配置"
                 echo "src-git packages https://github.com/coolsnowwolf/packages.git;master" > feeds.conf.default
                 echo "src-git luci https://github.com/coolsnowwolf/luci.git;master" >> feeds.conf.default
                 echo "src-git routing https://github.com/coolsnowwolf/routing.git;master" >> feeds.conf.default
@@ -1119,9 +1134,13 @@ configure_feeds() {
     
     # 显示 feeds 配置
     log "Feeds 配置文件内容:"
-    cat feeds.conf.default | while read line; do
-        log "  $line"
-    done
+    if [ -f "feeds.conf.default" ]; then
+        cat feeds.conf.default | while read line; do
+            log "  $line"
+        done
+    else
+        log "❌ feeds.conf.default 文件不存在"
+    fi
     
     log "=== 更新Feeds ==="
     ./scripts/feeds update -a || {
