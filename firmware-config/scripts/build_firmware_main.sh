@@ -5247,14 +5247,26 @@ workflow_step30_build_summary() {
     echo ""
     
     if [ -d "$BUILD_DIR/bin/targets" ]; then
-        FIRMWARE_COUNT=$(find "$BUILD_DIR/bin/targets" -type f -name "*.bin" -o -name "*.img" 2>/dev/null | wc -l)
+        BIN_COUNT=$(find "$BUILD_DIR/bin/targets" -type f -name "*.bin" 2>/dev/null | wc -l)
+        ITB_COUNT=$(find "$BUILD_DIR/bin/targets" -type f -name "*.itb" 2>/dev/null | wc -l)
+        IMG_COUNT=$(find "$BUILD_DIR/bin/targets" -type f -name "*.img" 2>/dev/null | wc -l)
+        FIRMWARE_COUNT=$((BIN_COUNT + ITB_COUNT + IMG_COUNT))
         
         echo "📦 构建产物:"
-        echo "  固件数量: $FIRMWARE_COUNT 个 (.bin/.img)"
+        echo "  固件总数: $FIRMWARE_COUNT 个"
+        echo "  .bin文件: $BIN_COUNT 个"
+        echo "  .itb文件: $ITB_COUNT 个"
+        echo "  .img文件: $IMG_COUNT 个"
         
         if [ $FIRMWARE_COUNT -gt 0 ]; then
             echo "  产物位置: $BUILD_DIR/bin/targets/"
-            echo "  下载名称: firmware-$timestamp_sec"
+            echo "  下载名称: firmware-$timestamp_sec.tar.gz"
+        fi
+        
+        if [ $ITB_COUNT -gt 0 ]; then
+            echo ""
+            echo "⚠️ 警告: 检测到 .itb 格式固件，这可能是 initramfs/recovery 镜像"
+            echo "   正常 sysupgrade 固件应为 .bin 格式"
         fi
     fi
     
@@ -5272,13 +5284,14 @@ workflow_step30_build_summary() {
         
         if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
             SDK_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
-            # 使用 awk 替代 grep 来提取第一个数字
             MAJOR_VERSION=$(echo "$SDK_VERSION" | awk '{match($0, /[0-9]+/); print substr($0, RSTART, RLENGTH)}')
             
             if [ "$MAJOR_VERSION" = "12" ]; then
                 echo "  🎯 SDK GCC: 12.3.0 (OpenWrt 23.05 SDK)"
             elif [ "$MAJOR_VERSION" = "8" ]; then
                 echo "  🎯 SDK GCC: 8.4.0 (OpenWrt 21.02 SDK)"
+            elif [ "$MAJOR_VERSION" = "5" ]; then
+                echo "  🎯 SDK GCC: 5.4.0 (LEDE 17.01 SDK)"
             fi
         fi
     fi
@@ -5290,7 +5303,11 @@ workflow_step30_build_summary() {
         if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
             echo "  ✅ SDK已下载: $COMPILER_DIR"
         else
-            echo "  ❌ SDK未下载或目录不存在"
+            if [ "$source_repo" = "lede" ]; then
+                echo "  ✅ LEDE源码使用自带工具链，无需SDK"
+            else
+                echo "  ❌ SDK未下载或目录不存在"
+            fi
         fi
     fi
     
