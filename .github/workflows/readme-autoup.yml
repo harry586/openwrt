@@ -73,7 +73,7 @@ jobs:
               print "";                      # 空行
               print "注意，自定义文件名是英文的，方便复制、运行";  # 打印说明
               print "";                      # 空行
-              print "> 最后更新时间: " update_time;  # 时间戳放在说明文字之后
+              print "> 最后更新时间: " update_time;  # 时间戳
               section=1;                     # 进入跳过模式
               replaced=1;                    # 标记已替换
               next;
