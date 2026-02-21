@@ -1063,40 +1063,59 @@ configure_feeds() {
         FEEDS_BRANCH="openwrt-21.02"
     fi
     
+    # 清空 feeds.conf.default
+    > feeds.conf.default
+    
     # 根据仓库类型调整feeds配置
     case "${SELECTED_REPO_TYPE:-immortalwrt}" in
         "immortalwrt")
-            # ImmortalWrt 使用自己的 feeds
-            echo "src-git packages ${PACKAGES_FEED_URL:-https://github.com/immortalwrt/packages.git};$FEEDS_BRANCH" > feeds.conf.default
+            log "使用 ImmortalWrt feeds"
+            echo "src-git packages ${PACKAGES_FEED_URL:-https://github.com/immortalwrt/packages.git};$FEEDS_BRANCH" >> feeds.conf.default
             echo "src-git luci ${LUCI_FEED_URL:-https://github.com/immortalwrt/luci.git};$FEEDS_BRANCH" >> feeds.conf.default
+            echo "src-git routing https://github.com/openwrt/routing.git;$FEEDS_BRANCH" >> feeds.conf.default
+            echo "src-git telephony https://github.com/openwrt/telephony.git;$FEEDS_BRANCH" >> feeds.conf.default
             ;;
         "openwrt")
-            # OpenWrt 官方使用官方的 feeds
-            echo "src-git packages https://git.openwrt.org/feed/packages.git;$FEEDS_BRANCH" > feeds.conf.default
+            log "使用 OpenWrt 官方 feeds"
+            echo "src-git packages https://git.openwrt.org/feed/packages.git;$FEEDS_BRANCH" >> feeds.conf.default
             echo "src-git luci https://git.openwrt.org/project/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
             echo "src-git routing https://git.openwrt.org/feed/routing.git;$FEEDS_BRANCH" >> feeds.conf.default
             echo "src-git telephony https://git.openwrt.org/feed/telephony.git;$FEEDS_BRANCH" >> feeds.conf.default
             ;;
         "lede")
-            # LEDE 使用 LEDE 项目的 feeds
-            echo "src-git packages https://github.com/lede-project/packages.git;master" > feeds.conf.default
-            echo "src-git luci https://github.com/lede-project/luci.git;master" >> feeds.conf.default
-            echo "src-git routing https://github.com/lede-project/routing.git;master" >> feeds.conf.default
-            echo "src-git telephony https://github.com/lede-project/telephony.git;master" >> feeds.conf.default
+            log "使用 LEDE feeds (使用官方 OpenWrt feeds 替代)"
+            # LEDE 项目已归档，使用 OpenWrt feeds 替代
+            echo "src-git packages https://git.openwrt.org/feed/packages.git;$FEEDS_BRANCH" >> feeds.conf.default
+            echo "src-git luci https://git.openwrt.org/project/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
+            echo "src-git routing https://git.openwrt.org/feed/routing.git;$FEEDS_BRANCH" >> feeds.conf.default
+            echo "src-git telephony https://git.openwrt.org/feed/telephony.git;$FEEDS_BRANCH" >> feeds.conf.default
             ;;
     esac
     
-    # 添加 TurboACC feed（仅 normal 模式且启用了 TurboACC）
-    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+    # 添加 TurboACC feed（仅 normal 模式且启用了 TurboACC，且不是 LEDE）
+    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "${SELECTED_REPO_TYPE:-immortalwrt}" != "lede" ]; then
         echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
         log "✅ 添加TurboACC feed"
+    elif [ "$CONFIG_MODE" = "normal" ] && [ "${SELECTED_REPO_TYPE:-immortalwrt}" = "lede" ]; then
+        log "⚠️ LEDE 不支持 TurboACC，跳过添加"
     fi
     
+    # 显示 feeds 配置
+    log "Feeds 配置文件内容:"
+    cat feeds.conf.default | while read line; do
+        log "  $line"
+    done
+    
     log "=== 更新Feeds ==="
-    ./scripts/feeds update -a || handle_error "更新feeds失败"
+    ./scripts/feeds update -a || {
+        log "⚠️ 更新 feeds 失败，尝试使用 -f 强制更新..."
+        ./scripts/feeds update -a -f || handle_error "更新feeds失败"
+    }
     
     log "=== 安装Feeds ==="
-    ./scripts/feeds install -a || handle_error "安装feeds失败"
+    ./scripts/feeds install -a || {
+        log "⚠️ 安装 feeds 失败，但继续..."
+    }
     
     local critical_feeds_dirs=("feeds/packages" "feeds/luci" "package/feeds")
     for dir in "${critical_feeds_dirs[@]}"; do
