@@ -3,7 +3,7 @@
 #【support.sh-01】
 # support.sh - 设备支持管理脚本
 # 位置: 根目录 /support.sh
-# 版本: 3.0.5 (修复版 - 修复has-function函数和libustream冲突)
+# 版本: 3.0.4 (修复版 - 修复has-function函数和libustream冲突)
 # 功能: 管理支持的设备列表、配置文件、工具链下载
 # 特点: 无硬编码，通过调用现有脚本和配置文件实现
 #【support.sh-01-end】
@@ -48,15 +48,15 @@ init_sdk_info() {
     SDK_INFO["mediatek/filogic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/mediatek/filogic/openwrt-sdk-23.05.5-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
     SDK_INFO["ath79/generic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/ath79/generic/openwrt-sdk-23.05.5-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
     
-    # LEDE 17.01 SDK (使用OpenWrt 17.01作为替代)
-    SDK_INFO["ipq40xx/generic/17.01"]=""
-    SDK_INFO["mediatek/filogic/17.01"]=""
-    SDK_INFO["ath79/generic/17.01"]="https://downloads.openwrt.org/releases/17.01.7/targets/ath79/generic/lede-sdk-17.01.7-ath79-generic_gcc-5.4.0_musl.Linux-x86_64.tar.xz"
+    # LEDE 没有官方SDK，使用源码自带工具链
+    SDK_INFO["ipq40xx/generic/lede"]=""
+    SDK_INFO["mediatek/filogic/lede"]=""
+    SDK_INFO["ath79/generic/lede"]=""
     
     # 通用SDK（如果找不到精确匹配）
     SDK_INFO["generic/21.02"]="https://downloads.openwrt.org/releases/21.02.7/targets/x86/64/openwrt-sdk-21.02.7-x86-64_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
     SDK_INFO["generic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/x86/64/openwrt-sdk-23.05.5-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-    SDK_INFO["generic/17.01"]="https://downloads.openwrt.org/releases/17.01.7/targets/x86/64/lede-sdk-17.01.7-x86-64_gcc-5.4.0_musl.Linux-x86_64.tar.xz"
+    SDK_INFO["generic/lede"]=""
 }
 #【support.sh-04-end】
 
@@ -190,6 +190,12 @@ get_sdk_info() {
     
     # 初始化SDK信息
     init_sdk_info
+    
+    # 如果是 LEDE 版本，直接返回空（LEDE 使用源码自带工具链）
+    if [ "$version" = "lede" ] || [ "$version" = "17.01" ]; then
+        echo ""
+        return 1
+    fi
     
     # 首先尝试精确匹配
     local sdk_key="$target/$subtarget/$version"
