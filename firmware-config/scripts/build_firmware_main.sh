@@ -1062,64 +1062,31 @@ configure_feeds() {
     case "${SELECTED_REPO_TYPE:-immortalwrt}" in
         "immortalwrt")
             log "使用 ImmortalWrt feeds"
-            echo "src-git packages https://github.com/immortalwrt/packages.git;openwrt-23.05" >> feeds.conf.default
-            echo "src-git luci https://github.com/immortalwrt/luci.git;openwrt-23.05" >> feeds.conf.default
-            echo "src-git routing https://github.com/openwrt/routing.git;openwrt-23.05" >> feeds.conf.default
-            echo "src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05" >> feeds.conf.default
+            echo "src-git packages https://github.com/immortalwrt/packages.git" >> feeds.conf.default
+            echo "src-git luci https://github.com/immortalwrt/luci.git" >> feeds.conf.default
+            echo "src-git routing https://github.com/openwrt/routing.git" >> feeds.conf.default
+            echo "src-git telephony https://github.com/openwrt/telephony.git" >> feeds.conf.default
             ;;
         "openwrt")
             log "使用 OpenWrt 官方 feeds"
-            echo "src-git packages https://git.openwrt.org/feed/packages.git;openwrt-23.05" >> feeds.conf.default
-            echo "src-git luci https://git.openwrt.org/project/luci.git;openwrt-23.05" >> feeds.conf.default
-            echo "src-git routing https://git.openwrt.org/feed/routing.git;openwrt-23.05" >> feeds.conf.default
-            echo "src-git telephony https://git.openwrt.org/feed/telephony.git;openwrt-23.05" >> feeds.conf.default
+            echo "src-git packages https://git.openwrt.org/feed/packages.git" >> feeds.conf.default
+            echo "src-git luci https://git.openwrt.org/project/luci.git" >> feeds.conf.default
+            echo "src-git routing https://git.openwrt.org/feed/routing.git" >> feeds.conf.default
+            echo "src-git telephony https://git.openwrt.org/feed/telephony.git" >> feeds.conf.default
             ;;
         "lede")
-            log "使用 coolsnowwolf/lede 的 feeds 配置（固定 master 分支）"
-            # coolsnowwolf/lede 使用自己的 feeds 配置，固定 master 分支
+            log "使用 coolsnowwolf/lede 的 feeds 配置"
+            # coolsnowwolf/lede 使用自己的 feeds 配置，不需要分支后缀
             if [ -f "feeds.conf.default" ] && [ -s "feeds.conf.default" ]; then
                 log "使用源码自带的 feeds.conf.default"
-                # 备份原文件
-                cp feeds.conf.default feeds.conf.default.orig
-                # 创建新文件
-                > feeds.conf.default.new
-                # 读取并处理原文件，确保所有 feed 使用 master 分支
-                while IFS= read -r line || [ -n "$line" ]; do
-                    # 跳过空行
-                    if [ -z "$line" ]; then
-                        echo "" >> feeds.conf.default.new
-                        continue
-                    fi
-                    # 跳过注释行
-                    if [[ "$line" =~ ^[[:space:]]*# ]]; then
-                        echo "$line" >> feeds.conf.default.new
-                        continue
-                    fi
-                    # 如果是 src-git 行，确保使用 master 分支
-                    if [[ "$line" =~ ^src-git ]]; then
-                        # 移除可能存在的 ;分支 后缀
-                        line=$(echo "$line" | sed 's/;.*$//')
-                        echo "$line;master" >> feeds.conf.default.new
-                    else
-                        echo "$line" >> feeds.conf.default.new
-                    fi
-                done < "feeds.conf.default"
-                
-                # 检查新文件是否创建成功且有内容
-                if [ -f "feeds.conf.default.new" ] && [ -s "feeds.conf.default.new" ]; then
-                    mv feeds.conf.default.new feeds.conf.default
-                    log "✅ feeds.conf.default 处理完成"
-                else
-                    log "⚠️ 处理 feeds.conf.default 失败，使用原始文件"
-                    rm -f feeds.conf.default.new
-                fi
+                # 直接使用原文件，不做任何修改
                 cat feeds.conf.default
             else
                 log "源码自带的 feeds.conf.default 不存在或为空，创建默认配置"
-                echo "src-git packages https://github.com/coolsnowwolf/packages.git;master" > feeds.conf.default
-                echo "src-git luci https://github.com/coolsnowwolf/luci.git;master" >> feeds.conf.default
-                echo "src-git routing https://github.com/coolsnowwolf/routing.git;master" >> feeds.conf.default
-                echo "src-git telephony https://github.com/coolsnowwolf/telephony.git;master" >> feeds.conf.default
+                echo "src-git packages https://github.com/coolsnowwolf/packages.git" > feeds.conf.default
+                echo "src-git luci https://github.com/coolsnowwolf/luci.git" >> feeds.conf.default
+                echo "src-git routing https://github.com/coolsnowwolf/routing.git" >> feeds.conf.default
+                echo "src-git telephony https://github.com/coolsnowwolf/telephony.git" >> feeds.conf.default
             fi
             ;;
     esac
@@ -1165,7 +1132,7 @@ configure_feeds() {
     # 等待一会让文件系统同步
     sleep 2
     
-    # 检查 feed 目录（LEDE 可能有不同的目录结构）
+    # 检查 feed 目录
     log "检查 Feed 目录结构:"
     if [ -d "feeds" ]; then
         log "✅ feeds 主目录存在"
