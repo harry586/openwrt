@@ -228,7 +228,7 @@ initialize_build_env() {
     # 根据仓库类型设置分支
     if [ "$repo_type" = "lede" ]; then
         SELECTED_BRANCH="${BRANCH_LEDE:-master}"
-        log "✅ LEDE 使用 master 分支"
+        log "✅ LEDE 固定使用 master 分支（忽略版本选择 $version_selection）"
     elif [ "$version_selection" = "23.05" ]; then
         SELECTED_BRANCH="${BRANCH_23_05:-openwrt-23.05}"
     else
@@ -384,7 +384,7 @@ initialize_build_env() {
         ls -d target/linux/*/ 2>/dev/null | sed 's/^/    /'
     fi
 
-    # 🔥 关键修复：正确识别和使用编译好的 config 工具
+    # 编译配置工具
     log "=== 编译配置工具 ==="
 
     local config_tool_created=0
@@ -593,14 +593,14 @@ EOF
         config_tool_created=1
     fi
 
-    # 创建统一调用接口 - 修复版，不使用 --help 测试
+    # 创建统一调用接口
     if [ $config_tool_created -eq 1 ]; then
         log "🔧 创建统一调用接口..."
 
         # 记录真实工具路径
         echo "$real_config_tool" > scripts/.config_tool_path
 
-        # 创建 scripts/config 软链接或副本，以便 make defconfig 能找到
+        # 创建 scripts/config 软链接或副本
         if [ ! -f "scripts/config" ]; then
             if [ -f "scripts/config/config" ]; then
                 ln -sf config scripts/config 2>/dev/null || cp scripts/config/config scripts/config 2>/dev/null || true
@@ -644,11 +644,9 @@ EOF
         chmod +x scripts/config-tool
         log "✅ 统一调用接口创建成功: scripts/config-tool"
 
-        # 不再测试 --help，而是测试基本功能
         if scripts/config-tool --version > /dev/null 2>&1 || scripts/config-tool -h > /dev/null 2>&1; then
             log "✅ 统一调用接口测试通过"
         else
-            # 尝试测试是否存在
             if [ -f scripts/config/config ] || [ -f scripts/config/conf ]; then
                 log "✅ 统一调用接口可用（跳过参数测试）"
             else
@@ -663,7 +661,6 @@ EOF
         log "📁 真实工具路径: $real_config_tool"
         log "📁 统一调用接口: scripts/config-tool"
 
-        # 显示工具信息
         if [ -f "$real_config_tool" ]; then
             if file "$real_config_tool" | grep -q "ELF"; then
                 log "📋 工具类型: 已编译二进制文件"
@@ -1078,15 +1075,32 @@ configure_feeds() {
             echo "src-git telephony https://git.openwrt.org/feed/telephony.git;openwrt-23.05" >> feeds.conf.default
             ;;
         "lede")
-            log "使用 coolsnowwolf/lede 的 feeds 配置"
-            # coolsnowwolf/lede 使用自己的 feeds 配置
+            log "使用 coolsnowwolf/lede 的 feeds 配置（固定 master 分支）"
+            # coolsnowwolf/lede 使用自己的 feeds 配置，固定 master 分支
             if [ -f "feeds.conf.default" ]; then
                 log "使用源码自带的 feeds.conf.default"
+                # 备份原文件
+                cp feeds.conf.default feeds.conf.default.orig
+                # 读取并处理原文件，确保所有 feed 使用 master 分支
+                while IFS= read -r line; do
+                    # 跳过注释行
+                    if [[ "$line" =~ ^[[:space:]]*# ]]; then
+                        echo "$line" >> feeds.conf.default.new
+                        continue
+                    fi
+                    # 如果是 src-git 行，确保使用 master 分支
+                    if [[ "$line" =~ ^src-git ]]; then
+                        # 移除可能存在的 ;分支 后缀
+                        line=$(echo "$line" | sed 's/;.*$//')
+                        echo "$line;master" >> feeds.conf.default.new
+                    else
+                        echo "$line" >> feeds.conf.default.new
+                    fi
+                done < "feeds.conf.default"
+                mv feeds.conf.default.new feeds.conf.default
                 cat feeds.conf.default
-                # 直接使用源码自带的配置文件
-                cp feeds.conf.default feeds.conf.default.bak
             else
-                log "创建默认 feeds 配置"
+                log "创建默认 feeds 配置（master 分支）"
                 echo "src-git packages https://github.com/coolsnowwolf/packages.git;master" > feeds.conf.default
                 echo "src-git luci https://github.com/coolsnowwolf/luci.git;master" >> feeds.conf.default
                 echo "src-git routing https://github.com/coolsnowwolf/routing.git;master" >> feeds.conf.default
@@ -1132,23 +1146,28 @@ configure_feeds() {
     # 等待一会让文件系统同步
     sleep 2
     
-    local critical_feeds_dirs=("feeds/packages" "feeds/luci" "package/feeds")
-    for dir in "${critical_feeds_dirs[@]}"; do
-        if [ -d "$dir" ]; then
-            log "✅ Feed目录存在: $dir"
-            # 显示目录内容的前几行
-            ls -la "$dir/" 2>/dev/null | head -3 | while read line; do
-                log "    $line"
-            done
-        else
-            log "❌ Feed目录缺失: $dir"
-            # 尝试创建必要的符号链接
-            if [ "$dir" = "package/feeds" ] && [ ! -d "package/feeds" ]; then
-                mkdir -p package/feeds
-                log "✅ 创建 package/feeds 目录"
+    # 检查 feed 目录（LEDE 可能有不同的目录结构）
+    log "检查 Feed 目录结构:"
+    if [ -d "feeds" ]; then
+        log "✅ feeds 主目录存在"
+        # 列出所有 feed 目录
+        find feeds -maxdepth 1 -type d | grep -v "^feeds$" | while read dir; do
+            feed_name=$(basename "$dir")
+            if [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
+                log "  ✅ $feed_name: 已安装 ($(find "$dir" -type f | wc -l) 个文件)"
+            else
+                log "  ⚠️ $feed_name: 目录为空"
             fi
-        fi
-    done
+        done
+    else
+        log "❌ feeds 主目录不存在"
+    fi
+    
+    # 检查 package/feeds 目录
+    if [ ! -d "package/feeds" ]; then
+        mkdir -p package/feeds
+        log "✅ 创建 package/feeds 目录"
+    fi
     
     log "✅ Feeds配置完成"
 }
@@ -1253,6 +1272,16 @@ generate_config() {
             search_device="acrh17"
             log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
             ;;
+        cmcc_rax3000m)
+            openwrt_device="cmcc_rax3000m"
+            search_device="rax3000m"
+            log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
+            ;;
+        netgear_wndr3800)
+            openwrt_device="netgear_wndr3800"
+            search_device="wndr3800"
+            log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
+            ;;
         *)
             openwrt_device=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
             search_device="$DEVICE"
@@ -1287,14 +1316,35 @@ EOF
     : ${CONFIG_USB_GENERIC:="usb-generic.config"}
     : ${CONFIG_NORMAL:="normal.config"}
     
-    append_config "$CONFIG_DIR/$CONFIG_BASE"
-    append_config "$CONFIG_DIR/$CONFIG_USB_GENERIC"
-    append_config "$CONFIG_DIR/$TARGET.config"
-    append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
-    append_config "$CONFIG_DIR/devices/$DEVICE.config"
+    # 检查是否存在设备专用配置文件
+    local device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
     
-    if [ "$CONFIG_MODE" = "normal" ]; then
-        append_config "$CONFIG_DIR/$CONFIG_NORMAL"
+    if [ -f "$device_config_file" ]; then
+        log "📁 检测到设备专用配置文件: $DEVICE.config"
+        log "🔧 采用精简配置模式: usb-generic.config + $DEVICE.config"
+        
+        # 只合并 USB 通用配置和设备专用配置
+        append_config "$CONFIG_DIR/$CONFIG_USB_GENERIC"
+        append_config "$device_config_file"
+        
+        # 如果存在平台配置文件，也合并（可选，根据需求）
+        if [ -f "$CONFIG_DIR/$TARGET.config" ]; then
+            log "📁 检测到平台配置文件: $TARGET.config，也合并"
+            append_config "$CONFIG_DIR/$TARGET.config"
+        fi
+    else
+        log "📁 未检测到设备专用配置文件，采用完整配置模式"
+        log "   合并: base.config + usb-generic.config + 平台配置 + 版本配置 + 模式配置"
+        
+        # 完整模式：合并所有配置文件
+        append_config "$CONFIG_DIR/$CONFIG_BASE"
+        append_config "$CONFIG_DIR/$CONFIG_USB_GENERIC"
+        append_config "$CONFIG_DIR/$TARGET.config"
+        append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
+        
+        if [ "$CONFIG_MODE" = "normal" ]; then
+            append_config "$CONFIG_DIR/$CONFIG_NORMAL"
+        fi
     fi
     
     if [ -n "$extra_packages" ]; then
@@ -1303,11 +1353,6 @@ EOF
 ' | while read pkg; do
             [ -n "$pkg" ] && echo "CONFIG_PACKAGE_$pkg=y" >> .config
         done
-    fi
-    
-    if [ -f "$CONFIG_DIR/devices/$DEVICE.config" ]; then
-        log "📋 从设备配置文件动态添加配置: $CONFIG_DIR/devices/$DEVICE.config"
-        append_config "$CONFIG_DIR/devices/$DEVICE.config"
     fi
     
     if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
@@ -1338,17 +1383,15 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # =========================================================================
-    # 静默获取内核配置文件（不再输出冗长日志）
-    # =========================================================================
+    # 静默获取内核配置文件
     local kernel_config_file=""
     local kernel_version=""
     local found_kernel=0
     
     if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
-        # 尝试从设备定义文件获取内核版本（静默）
+        # 尝试从设备定义文件获取内核版本
         if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
-            # 查找设备定义文件（复用之前的 search_device）
+            # 查找设备定义文件
             local device_def_file=""
             while IFS= read -r mkfile; do
                 if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
@@ -1427,7 +1470,6 @@ EOF
         
         rm -f "$usb_configs_file" "$usb_configs_file.sorted"
     else
-        # 未找到内核配置文件时不再输出警告，仅保留一个调试日志（可忽略）
         if [ "${DEBUG:-false}" = "true" ]; then
             log "ℹ️ 未找到目标平台 $TARGET 的内核配置文件，跳过内核配置添加"
         fi
@@ -1543,8 +1585,7 @@ EOF
         else
             existing_packages=$((existing_packages + 1))
         fi
-    done < <(printf "%s
-" "${base_usb_packages[@]}" "${extended_usb_packages[@]}" "${fs_support_packages[@]}" | sort -u)
+    done < <(printf "%s\n" "${base_usb_packages[@]}" "${extended_usb_packages[@]}" "${fs_support_packages[@]}" | sort -u)
     
     log "📊 USB软件包统计: 新增 $added_packages 个, 已存在 $existing_packages 个"
     
@@ -1642,28 +1683,21 @@ EOF
     log "  模块化软件包: $module_packages"
     log "  禁用软件包: $disabled_packages"
     
-    # =========================================================================
-    # 手动禁用特定插件（vssr, ssr-plus, rclone, passwall）
-    # 这些插件可能由feeds自动引入，这里强制禁用
-    # =========================================================================
+    # 手动禁用特定插件
     log "🔧 手动禁用 luci-app-vssr, luci-app-ssr-plus, luci-app-rclone, luci-app-passwall 及其子选项"
     
-    # 禁用 luci-app-vssr
     sed -i '/CONFIG_PACKAGE_luci-app-vssr=/d' .config
     echo '# CONFIG_PACKAGE_luci-app-vssr is not set' >> .config
     sed -i '/CONFIG_PACKAGE_luci-app-vssr_INCLUDE_/d' .config
     
-    # 禁用 luci-app-ssr-plus
     sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus=/d' .config
     echo '# CONFIG_PACKAGE_luci-app-ssr-plus is not set' >> .config
     sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_/d' .config
     
-    # 禁用 luci-app-rclone
     sed -i '/CONFIG_PACKAGE_luci-app-rclone=/d' .config
     echo '# CONFIG_PACKAGE_luci-app-rclone is not set' >> .config
     sed -i '/CONFIG_PACKAGE_luci-app-rclone_INCLUDE_/d' .config
     
-    # 禁用 luci-app-passwall
     sed -i '/CONFIG_PACKAGE_luci-app-passwall=/d' .config
     echo '# CONFIG_PACKAGE_luci-app-passwall is not set' >> .config
     sed -i '/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_/d' .config
@@ -2520,6 +2554,44 @@ apply_config() {
             fi
             ;;
     esac
+
+    echo ""
+    echo "=== 📦 功能性插件状态 ==="
+    echo ""
+    
+    # 定义功能性插件分类
+    declare -A plugin_categories=(
+        ["网络加速"]="luci-app-turboacc luci-app-flowoffload luci-app-sfe"
+        ["广告过滤"]="luci-app-adbyby luci-app-adguardhome luci-app-koolproxy"
+        ["科学上网"]="luci-app-ssr-plus luci-app-vssr luci-app-passwall luci-app-openclash"
+        ["文件共享"]="luci-app-samba4 luci-app-vsftpd luci-app-aria2 luci-app-transmission"
+        ["网络管理"]="luci-app-upnp luci-app-arpbind luci-app-sqm luci-app-nlbwmon"
+        ["系统工具"]="luci-app-diskman luci-app-hd-idle luci-app-cpulimit luci-app-wol"
+    )
+    
+    for category in "${!plugin_categories[@]}"; do
+        plugins=${plugin_categories[$category]}
+        found=0
+        for plugin in $plugins; do
+            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
+                if [ $found -eq 0 ]; then
+                    echo "🔹 $category:"
+                    found=1
+                fi
+                echo "    ✅ $plugin"
+            elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+                if [ $found -eq 0 ]; then
+                    echo "🔹 $category:"
+                    found=1
+                fi
+                echo "    📦 $plugin (模块)"
+            fi
+        done
+        if [ $found -eq 0 ]; then
+            echo "🔹 $category: 未启用"
+        fi
+        echo ""
+    done
 
     echo ""
     echo "=== 📦 固件格式验证 ==="
@@ -4882,7 +4954,6 @@ workflow_step23_pre_build_check() {
         if grep -q "^${expected_config}$" .config; then
             echo "   ✅ 设备配置正确: $expected_config"
         else
-            # 尝试查找任何包含该设备的配置行（兼容旧格式）
             if grep -q "CONFIG_TARGET_.*DEVICE.*${device_for_config}=y" .config; then
                 echo "   ✅ 设备配置正确 (模糊匹配)"
             else
@@ -4897,7 +4968,6 @@ workflow_step23_pre_build_check() {
     echo ""
     
     echo "2. ✅ SDK/编译器检查:"
-    # 根据仓库类型判断
     if [ "$SELECTED_REPO_TYPE" = "lede" ]; then
         echo "   ✅ LEDE 源码使用自带工具链，无需 SDK"
         echo "   📌 将使用源码中的工具链编译"
@@ -4927,13 +4997,11 @@ workflow_step23_pre_build_check() {
         feeds_count=$((feeds_count - 1))
         echo "   ✅ feeds目录存在, 包含 $feeds_count 个feed"
         
-        # 检查关键feed是否存在（可能是符号链接）
         for feed in packages luci; do
             if [ -d "feeds/$feed" ] || [ -L "feeds/$feed" ]; then
                 echo "   ✅ $feed feed: 存在"
             else
                 echo "   ⚠️ $feed feed: 不存在（可能是LEDE的特殊结构）"
-                # 检查是否有其他名称的feed
                 found_alt=$(find feeds -maxdepth 1 -type d | grep -v "^feeds$" | head -1)
                 if [ -n "$found_alt" ]; then
                     echo "     找到替代feed: $(basename $found_alt)"
@@ -4942,7 +5010,6 @@ workflow_step23_pre_build_check() {
             fi
         done
         
-        # 显示实际的feed目录结构
         echo "   📁 实际feed目录:"
         ls -la feeds/ 2>/dev/null | grep "^d" | head -3 | while read line; do
             echo "     $line"
