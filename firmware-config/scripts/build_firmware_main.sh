@@ -344,7 +344,7 @@ initialize_build_env() {
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
     
-    # 显示设备定义文件位置
+    # 显示设备定义文件位置 - 使用步骤15的清晰版本
     log "=== 设备定义文件查找 ==="
     local search_device=""
     case "$DEVICE" in
@@ -366,22 +366,50 @@ initialize_build_env() {
     esac
     log "搜索设备名: $search_device"
     
-    if [ -d "target/linux/$TARGET" ]; then
-        log "搜索路径: target/linux/$TARGET"
-        local device_file=$(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null | xargs grep -l "define Device.*$search_device" 2>/dev/null | head -1)
-        if [ -n "$device_file" ]; then
-            log "✅ 找到设备定义文件: $device_file"
-            log "📄 设备定义关键行:"
-            grep -E "define Device|DEVICE_|KERNEL|IMAGES" "$device_file" 2>/dev/null | head -10 | sed 's/^/    /'
+    echo ""
+    echo "📁 所有子平台 .mk 文件列表:"
+    local mk_files=()
+    while IFS= read -r file; do
+        mk_files+=("$file")
+    done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null | sort)
+    
+    if [ ${#mk_files[@]} -gt 0 ]; then
+        echo "----------------------------------------"
+        for i in "${!mk_files[@]}"; do
+            printf "[%2d] %s\n" $((i+1)) "${mk_files[$i]}"
+        done
+        echo "----------------------------------------"
+        echo "📊 共找到 ${#mk_files[@]} 个 .mk 文件"
+    else
+        echo "   未找到 .mk 文件"
+    fi
+    echo ""
+    
+    local device_file=""
+    for mkfile in "${mk_files[@]}"; do
+        if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
+            device_file="$mkfile"
+            log "✅ 找到设备定义文件: $mkfile"
+            break
+        fi
+    done
+    
+    if [ -n "$device_file" ] && [ -f "$device_file" ]; then
+        local device_block=""
+        device_block=$(awk "/define Device.*$search_device/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
+        
+        if [ -n "$device_block" ]; then
+            echo ""
+            echo "📋 设备定义信息（关键字段）:"
+            echo "----------------------------------------"
+            echo "$device_block" | grep -E "define Device" | head -1
+            echo "$device_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS|KERNEL|IMAGES|IMAGE)" | sed 's/^/    /'
+            echo "----------------------------------------"
         else
-            log "❌ 未找到设备 $search_device 的定义文件"
-            log "当前平台下的设备:"
-            find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null | xargs grep -l "define Device" 2>/dev/null | head -5 | sed 's/^/    /'
+            log "⚠️ 无法提取设备 $search_device 的配置块"
         fi
     else
-        log "❌ 平台目录不存在: target/linux/$TARGET"
-        log "当前可用的平台目录:"
-        ls -d target/linux/*/ 2>/dev/null | sed 's/^/    /'
+        log "❌ 未找到设备 $search_device 的定义文件"
     fi
 
     # 编译配置工具
@@ -5406,14 +5434,27 @@ workflow_step30_build_summary() {
     
     trap 'echo "⚠️ 步骤30 总结过程中出现错误，继续执行..."' ERR
     
+    # 获取源码名称映射
+    local source_name=""
+    case "$source_repo" in
+        "immortalwrt")
+            source_name="ImmortalWrt"
+            ;;
+        "openwrt")
+            source_name="OpenWrt"
+            ;;
+        "lede")
+            source_name="LEDE"
+            ;;
+        *)
+            source_name="$source_repo"
+            ;;
+    esac
+    
     echo "🚀 构建总结报告"
     echo "========================================"
     echo "设备: $device_name"
-    echo "源码仓库: $source_repo"
-    if [ "$source_repo" = "lede" ]; then
-        echo "  LEDE 仓库: coolsnowwolf/lede"
-        echo "  分支: master"
-    fi
+    echo "源码仓库: $source_name ($source_repo)"
     echo "版本: $version_selection"
     echo "配置模式: $config_mode"
     echo "时间戳: $timestamp_sec"
@@ -5435,7 +5476,25 @@ workflow_step30_build_summary() {
         
         if [ $FIRMWARE_COUNT -gt 0 ]; then
             echo "  产物位置: $BUILD_DIR/bin/targets/"
-            echo "  下载名称: firmware-$timestamp_sec.tar.gz"
+            echo "  下载名称: firmware-$timestamp_sec.zip"
+            
+            # 显示实际固件名称（替换源码前缀）
+            echo ""
+            echo "📋 固件文件列表:"
+            find "$BUILD_DIR/bin/targets" -type f -name "*.bin" -o -name "*.img" -o -name "*.itb" 2>/dev/null | sort | while read file; do
+                size=$(ls -lh "$file" | awk '{print $5}')
+                name=$(basename "$file")
+                # 替换源码前缀为实际源码名称
+                case "$source_repo" in
+                    "immortalwrt")
+                        name=$(echo "$name" | sed 's/^openwrt/immortalwrt/')
+                        ;;
+                    "lede")
+                        name=$(echo "$name" | sed 's/^openwrt/lede/')
+                        ;;
+                esac
+                echo "  🎯 $name ($size)"
+            done
         fi
         
         if [ $ITB_COUNT -gt 0 ]; then
