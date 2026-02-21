@@ -56,7 +56,7 @@ jobs:
           # 创建临时文件
           cp README.md README.md.tmp
           
-          # 使用 awk 处理文件替换
+          # 使用 awk 处理文件替换 - 修复时间戳后的空行问题
           awk -v tree="$TREE_OUTPUT" -v update_time="$UPDATE_TIME" '
           BEGIN { 
             section=0; 
@@ -74,6 +74,7 @@ jobs:
               print "注意，自定义文件名是英文的，方便复制、运行";  # 打印说明
               print "";                      # 空行
               print "> 最后更新时间: " update_time;  # 时间戳放在说明文字之后
+              # 注意：这里不再加空行，避免出现复制按钮
               section=1;                     # 进入跳过模式
               replaced=1;                    # 标记已替换
               next;
