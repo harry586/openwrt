@@ -56,7 +56,7 @@ jobs:
           # 创建临时文件
           cp README.md README.md.tmp
           
-          # 使用 awk 处理文件替换 - 保持原始格式
+          # 使用 awk 处理文件替换
           awk -v tree="$TREE_OUTPUT" -v update_time="$UPDATE_TIME" '
           BEGIN { 
             section=0; 
@@ -67,21 +67,21 @@ jobs:
             if ($0 ~ /^## 📁 项目结构/ && replaced==0) {
               print $0;                    # 打印标题
               print "";                     # 空行
-              print "\`\`\`";                # 代码块开始
+              print "```";                   # 代码块开始
               print tree;                   # 打印目录树
-              print "\`\`\`";                # 代码块结束
+              print "```";                   # 代码块结束
               print "";                      # 空行
               print "注意，自定义文件名是英文的，方便复制、运行";  # 打印说明
               print "";                      # 空行
-              print "> 最后更新时间: " update_time;  # 时间戳
+              print "> 最后更新时间: " update_time;  # 时间戳放在说明文字之后
               section=1;                     # 进入跳过模式
               replaced=1;                    # 标记已替换
               next;
             }
             
-            # 如果处于跳过模式，跳过直到找到时间戳行
+            # 如果处于跳过模式，跳过直到找到说明行
             if (section==1) {
-              if ($0 ~ /^> 最后更新时间:/) {
+              if ($0 ~ /注意，自定义文件名是英文的，方便复制、运行/) {
                 section=0;                    # 结束跳过模式
               }
               next;                           # 跳过当前行
