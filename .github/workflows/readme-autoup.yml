@@ -37,7 +37,7 @@ jobs:
           # 创建临时文件
           cp README.md README.md.tmp
           
-          # 使用 awk 处理文件替换 - 只替换第一个项目结构部分
+          # 使用 awk 处理文件替换 - 修复反引号警告
           awk -v tree="$TREE_OUTPUT" '
           BEGIN { section=0; replaced=0; }
           {
@@ -45,9 +45,9 @@ jobs:
             if ($0 ~ /^## 📁 项目结构/ && replaced==0) {
               print $0;                    # 打印标题
               print "";                     # 空行
-              print "\`\`\`";                # 代码块开始
+              print "```";                   # 代码块开始 - 不使用转义
               print tree;                   # 打印目录树
-              print "\`\`\`";                # 代码块结束
+              print "```";                   # 代码块结束 - 不使用转义
               print "";                      # 空行
               print "注意，自定义文件名是英文的，方便复制、运行";  # 打印说明
               section=1;                     # 进入跳过模式
@@ -70,6 +70,9 @@ jobs:
           # 替换原文件
           mv README.md.new README.md
           rm -f README.md.tmp
+          
+          # 添加简单注释到文件末尾（可选）
+          echo "# 最后更新时间: $(date '+%Y-%m-%d %H:%M:%S')" >> README.md
       # readme-autoup.yml-04-end
 
       # 【readme-autoup.yml-05】检查是否有变更
@@ -94,9 +97,10 @@ jobs:
           git add README.md
           git commit -m "docs: 自动更新项目目录结构
 
-          更新内容：
-          - 自动扫描并更新项目目录结构
-          - 保持文档与实际仓库结构同步
+          更新说明：
+          - 自动扫描仓库目录结构
+          - 同步更新 README.md 中的项目结构表
+          - 保持文档与实际目录一致
 
           [skip ci]"
           git push
