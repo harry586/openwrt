@@ -208,8 +208,8 @@ initialize_build_env() {
             SELECTED_REPO_URL="${OPENWRT_URL:-https://github.com/openwrt/openwrt.git}"
             ;;
         "lede")
-            SELECTED_REPO_URL="${LEDE_URL:-https://github.com/lede-project/source.git}"
-            log "⚠️ 使用 LEDE 源码仓库: $SELECTED_REPO_URL"
+            SELECTED_REPO_URL="${LEDE_URL:-https://github.com/coolsnowwolf/lede.git}"
+            log "⚠️ 使用 LEDE 源码仓库 (coolsnowwolf/lede): $SELECTED_REPO_URL"
             ;;
         "custom")
             if [ -z "$CUSTOM_REPO_URL" ]; then
@@ -225,8 +225,11 @@ initialize_build_env() {
     esac
     
     log "=== 版本选择 ==="
-    # 根据版本选择设置分支名（所有仓库类型都使用相同的分支命名规则）
-    if [ "$version_selection" = "23.05" ]; then
+    # 根据仓库类型设置分支
+    if [ "$repo_type" = "lede" ]; then
+        SELECTED_BRANCH="${BRANCH_LEDE:-master}"
+        log "✅ LEDE 使用 master 分支"
+    elif [ "$version_selection" = "23.05" ]; then
         SELECTED_BRANCH="${BRANCH_23_05:-openwrt-23.05}"
     else
         SELECTED_BRANCH="${BRANCH_21_02:-openwrt-21.02}"
@@ -270,10 +273,10 @@ initialize_build_env() {
         
         # 验证仓库类型
         if [ "$repo_type" = "lede" ]; then
-            if echo "$remote_url" | grep -q "lede-project"; then
-                log "✅ 已验证: 确实是 LEDE 源码仓库"
+            if echo "$remote_url" | grep -q "coolsnowwolf/lede"; then
+                log "✅ 已验证: 确实是 coolsnowwolf/lede 源码仓库"
             else
-                log "❌ 警告: 期望 LEDE 但实际克隆了: $remote_url"
+                log "❌ 警告: 期望 coolsnowwolf/lede 但实际克隆了: $remote_url"
             fi
         elif [ "$repo_type" = "openwrt" ]; then
             if echo "$remote_url" | grep -q "openwrt/openwrt"; then
@@ -915,7 +918,7 @@ initialize_compiler_env() {
     
     # 如果是 LEDE，跳过 SDK 下载（LEDE 使用源码自带工具链）
     if [ "$repo_type" = "lede" ]; then
-        log "⚠️ LEDE 源码使用自带工具链，跳过 SDK 下载"
+        log "⚠️ LEDE (coolsnowwolf/lede) 使用源码自带工具链，跳过 SDK 下载"
         log "✅ 将使用源码中的工具链编译"
         return 0
     fi
@@ -1055,14 +1058,6 @@ configure_feeds() {
     log "=== 配置Feeds ==="
     log "源码仓库类型: ${SELECTED_REPO_TYPE:-immortalwrt}"
     
-    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-        FEEDS_BRANCH="openwrt-23.05"
-    elif [ "$SELECTED_BRANCH" = "lede-17.01" ]; then
-        FEEDS_BRANCH="lede-17.01"
-    else
-        FEEDS_BRANCH="openwrt-21.02"
-    fi
-    
     # 清空 feeds.conf.default
     > feeds.conf.default
     
@@ -1070,25 +1065,31 @@ configure_feeds() {
     case "${SELECTED_REPO_TYPE:-immortalwrt}" in
         "immortalwrt")
             log "使用 ImmortalWrt feeds"
-            echo "src-git packages ${PACKAGES_FEED_URL:-https://github.com/immortalwrt/packages.git};$FEEDS_BRANCH" >> feeds.conf.default
-            echo "src-git luci ${LUCI_FEED_URL:-https://github.com/immortalwrt/luci.git};$FEEDS_BRANCH" >> feeds.conf.default
-            echo "src-git routing https://github.com/openwrt/routing.git;$FEEDS_BRANCH" >> feeds.conf.default
-            echo "src-git telephony https://github.com/openwrt/telephony.git;$FEEDS_BRANCH" >> feeds.conf.default
+            echo "src-git packages https://github.com/immortalwrt/packages.git;openwrt-23.05" >> feeds.conf.default
+            echo "src-git luci https://github.com/immortalwrt/luci.git;openwrt-23.05" >> feeds.conf.default
+            echo "src-git routing https://github.com/openwrt/routing.git;openwrt-23.05" >> feeds.conf.default
+            echo "src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05" >> feeds.conf.default
             ;;
         "openwrt")
             log "使用 OpenWrt 官方 feeds"
-            echo "src-git packages https://git.openwrt.org/feed/packages.git;$FEEDS_BRANCH" >> feeds.conf.default
-            echo "src-git luci https://git.openwrt.org/project/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
-            echo "src-git routing https://git.openwrt.org/feed/routing.git;$FEEDS_BRANCH" >> feeds.conf.default
-            echo "src-git telephony https://git.openwrt.org/feed/telephony.git;$FEEDS_BRANCH" >> feeds.conf.default
+            echo "src-git packages https://git.openwrt.org/feed/packages.git;openwrt-23.05" >> feeds.conf.default
+            echo "src-git luci https://git.openwrt.org/project/luci.git;openwrt-23.05" >> feeds.conf.default
+            echo "src-git routing https://git.openwrt.org/feed/routing.git;openwrt-23.05" >> feeds.conf.default
+            echo "src-git telephony https://git.openwrt.org/feed/telephony.git;openwrt-23.05" >> feeds.conf.default
             ;;
         "lede")
-            log "使用 LEDE feeds (使用官方 OpenWrt feeds 替代)"
-            # LEDE 项目已归档，使用 OpenWrt feeds 替代
-            echo "src-git packages https://git.openwrt.org/feed/packages.git;$FEEDS_BRANCH" >> feeds.conf.default
-            echo "src-git luci https://git.openwrt.org/project/luci.git;$FEEDS_BRANCH" >> feeds.conf.default
-            echo "src-git routing https://git.openwrt.org/feed/routing.git;$FEEDS_BRANCH" >> feeds.conf.default
-            echo "src-git telephony https://git.openwrt.org/feed/telephony.git;$FEEDS_BRANCH" >> feeds.conf.default
+            log "使用 coolsnowwolf/lede 的 feeds 配置"
+            # coolsnowwolf/lede 使用自己的 feeds 配置
+            if [ -f "feeds.conf.default" ]; then
+                log "使用源码自带的 feeds.conf.default"
+                cat feeds.conf.default
+            else
+                log "创建默认 feeds 配置"
+                echo "src-git packages https://github.com/coolsnowwolf/packages.git;master" > feeds.conf.default
+                echo "src-git luci https://github.com/coolsnowwolf/luci.git;master" >> feeds.conf.default
+                echo "src-git routing https://github.com/coolsnowwolf/routing.git;master" >> feeds.conf.default
+                echo "src-git telephony https://github.com/coolsnowwolf/telephony.git;master" >> feeds.conf.default
+            fi
             ;;
     esac
     
@@ -1097,7 +1098,7 @@ configure_feeds() {
         echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
         log "✅ 添加TurboACC feed"
     elif [ "$CONFIG_MODE" = "normal" ] && [ "${SELECTED_REPO_TYPE:-immortalwrt}" = "lede" ]; then
-        log "⚠️ LEDE 不支持 TurboACC，跳过添加"
+        log "⚠️ LEDE 使用自己的加速方案，跳过 TurboACC"
     fi
     
     # 显示 feeds 配置
@@ -5308,6 +5309,10 @@ workflow_step30_build_summary() {
     echo "========================================"
     echo "设备: $device_name"
     echo "源码仓库: $source_repo"
+    if [ "$source_repo" = "lede" ]; then
+        echo "  LEDE 仓库: coolsnowwolf/lede"
+        echo "  分支: master"
+    fi
     echo "版本: $version_selection"
     echo "配置模式: $config_mode"
     echo "时间戳: $timestamp_sec"
@@ -5360,7 +5365,7 @@ workflow_step30_build_summary() {
             elif [ "$MAJOR_VERSION" = "8" ]; then
                 echo "  🎯 SDK GCC: 8.4.0 (OpenWrt 21.02 SDK)"
             elif [ "$MAJOR_VERSION" = "5" ]; then
-                echo "  🎯 SDK GCC: 5.4.0 (LEDE 17.01 SDK)"
+                echo "  🎯 GCC: 5.4.0 (LEDE 工具链)"
             fi
         fi
     fi
@@ -5373,7 +5378,7 @@ workflow_step30_build_summary() {
             echo "  ✅ SDK已下载: $COMPILER_DIR"
         else
             if [ "$source_repo" = "lede" ]; then
-                echo "  ✅ LEDE源码使用自带工具链，无需SDK"
+                echo "  ✅ LEDE 使用源码自带工具链，无需 SDK"
             else
                 echo "  ❌ SDK未下载或目录不存在"
             fi
