@@ -56,7 +56,7 @@ jobs:
           # 创建临时文件
           cp README.md README.md.tmp
           
-          # 使用 awk 处理文件替换 - 修复时间戳后的空行问题
+          # 使用 awk 处理文件替换 - 确保时间戳后无空行，避免复制按钮
           awk -v tree="$TREE_OUTPUT" -v update_time="$UPDATE_TIME" '
           BEGIN { 
             section=0; 
@@ -73,19 +73,31 @@ jobs:
               print "";                      # 空行
               print "注意，自定义文件名是英文的，方便复制、运行";  # 打印说明
               print "";                      # 空行
-              print "> 最后更新时间: " update_time;  # 时间戳放在说明文字之后
-              # 注意：这里不再加空行，避免出现复制按钮
+              print "> 最后更新时间: " update_time;  # 时间戳（后面不加空行）
               section=1;                     # 进入跳过模式
               replaced=1;                    # 标记已替换
               next;
             }
             
-            # 如果处于跳过模式，跳过直到找到说明行
+            # 如果处于跳过模式，跳过旧的项目结构内容
             if (section==1) {
               if ($0 ~ /注意，自定义文件名是英文的，方便复制、运行/) {
-                section=0;                    # 结束跳过模式
+                section=2;                    # 进入第二阶段跳过
               }
               next;                           # 跳过当前行
+            }
+            
+            # 第二阶段：跳过旧的时间戳和空行
+            if (section==2) {
+              if ($0 ~ /^> 最后更新时间:/) {
+                section=0;                    # 结束跳过模式
+                next;
+              }
+              if ($0 ~ /^$/) {                 # 跳过空行
+                next;
+              }
+              section=0;                       # 如果不是空行，结束跳过
+              # 不跳过，继续打印当前行
             }
             
             # 打印其他所有行
