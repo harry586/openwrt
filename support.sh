@@ -192,7 +192,7 @@ get_sdk_info() {
     init_sdk_info
     
     # 如果是 LEDE 版本，直接返回空（LEDE 使用源码自带工具链）
-    if [ "$version" = "lede" ] || [ "$version" = "17.01" ]; then
+    if [ "$version" = "lede" ] || [ "$version" = "17.01" ] || [ "$version" = "master" ]; then
         echo ""
         return 1
     fi
