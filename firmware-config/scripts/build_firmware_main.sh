@@ -1057,43 +1057,49 @@ configure_feeds() {
     log "=== 配置Feeds ==="
     log "源码仓库类型: ${SELECTED_REPO_TYPE:-immortalwrt}"
     
-    > feeds.conf.default
-    
-    case "${SELECTED_REPO_TYPE:-immortalwrt}" in
-        "immortalwrt")
-            log "使用 ImmortalWrt feeds"
-            echo "src-git packages https://github.com/immortalwrt/packages.git" >> feeds.conf.default
-            echo "src-git luci https://github.com/immortalwrt/luci.git" >> feeds.conf.default
-            echo "src-git routing https://github.com/openwrt/routing.git" >> feeds.conf.default
-            echo "src-git telephony https://github.com/openwrt/telephony.git" >> feeds.conf.default
-            ;;
-        "openwrt")
-            log "使用 OpenWrt 官方 feeds"
-            echo "src-git packages https://git.openwrt.org/feed/packages.git" >> feeds.conf.default
-            echo "src-git luci https://git.openwrt.org/project/luci.git" >> feeds.conf.default
-            echo "src-git routing https://git.openwrt.org/feed/routing.git" >> feeds.conf.default
-            echo "src-git telephony https://git.openwrt.org/feed/telephony.git" >> feeds.conf.default
-            ;;
-        "lede")
-            log "使用 coolsnowwolf/lede 的 feeds 配置"
-            if [ -f "feeds.conf.default" ] && [ -s "feeds.conf.default" ]; then
-                log "使用源码自带的 feeds.conf.default"
-                cat feeds.conf.default
-            else
-                log "源码自带的 feeds.conf.default 不存在或为空，创建默认配置"
-                echo "src-git packages https://github.com/coolsnowwolf/packages.git" > feeds.conf.default
-                echo "src-git luci https://github.com/coolsnowwolf/luci.git" >> feeds.conf.default
-                echo "src-git routing https://github.com/coolsnowwolf/routing.git" >> feeds.conf.default
-                echo "src-git telephony https://github.com/coolsnowwolf/telephony.git" >> feeds.conf.default
-            fi
-            ;;
-    esac
-    
-    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "${SELECTED_REPO_TYPE:-immortalwrt}" != "lede" ]; then
-        echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
-        log "✅ 添加TurboACC feed"
-    elif [ "$CONFIG_MODE" = "normal" ] && [ "${SELECTED_REPO_TYPE:-immortalwrt}" = "lede" ]; then
-        log "⚠️ LEDE 使用自己的加速方案，跳过 TurboACC"
+    # 对于 LEDE，保留源码自带的 feeds.conf.default
+    if [ "${SELECTED_REPO_TYPE:-immortalwrt}" = "lede" ]; then
+        log "LEDE 源码，检查 feeds.conf.default..."
+        if [ -f "feeds.conf.default" ] && [ -s "feeds.conf.default" ]; then
+            log "使用源码自带的 feeds.conf.default:"
+            cat feeds.conf.default
+        else
+            log "⚠️ 源码自带的 feeds.conf.default 不存在或为空，创建正确的 LEDE feeds 配置"
+            cat > feeds.conf.default << 'EOF'
+src-git packages https://github.com/coolsnowwolf/packages.git
+src-git luci https://github.com/coolsnowwolf/luci.git
+src-git routing https://github.com/coolsnowwolf/routing.git
+src-git telephony https://github.com/coolsnowwolf/telephony.git
+EOF
+            log "创建完成:"
+            cat feeds.conf.default
+        fi
+    else
+        # 非 LEDE 源码，清空并创建标准配置
+        > feeds.conf.default
+        
+        case "${SELECTED_REPO_TYPE:-immortalwrt}" in
+            "immortalwrt")
+                log "使用 ImmortalWrt feeds"
+                echo "src-git packages https://github.com/immortalwrt/packages.git" >> feeds.conf.default
+                echo "src-git luci https://github.com/immortalwrt/luci.git" >> feeds.conf.default
+                echo "src-git routing https://github.com/openwrt/routing.git" >> feeds.conf.default
+                echo "src-git telephony https://github.com/openwrt/telephony.git" >> feeds.conf.default
+                ;;
+            "openwrt")
+                log "使用 OpenWrt 官方 feeds"
+                echo "src-git packages https://git.openwrt.org/feed/packages.git" >> feeds.conf.default
+                echo "src-git luci https://git.openwrt.org/project/luci.git" >> feeds.conf.default
+                echo "src-git routing https://git.openwrt.org/feed/routing.git" >> feeds.conf.default
+                echo "src-git telephony https://git.openwrt.org/feed/telephony.git" >> feeds.conf.default
+                ;;
+        esac
+        
+        # 添加 TurboACC feed（仅 normal 模式且启用了 TurboACC）
+        if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+            echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
+            log "✅ 添加TurboACC feed"
+        fi
     fi
     
     log "Feeds 配置文件内容:"
@@ -5329,7 +5335,7 @@ workflow_step26_check_artifacts() {
     if [ -d "bin/targets" ]; then
         echo "✅ 找到固件目录"
         
-        # 分别统计 .bin 和 .img 文件，避免括号转义问题
+        # 分别统计 .bin 和 .img 文件
         bin_count=$(find bin/targets -type f -name "*.bin" 2>/dev/null | wc -l)
         img_count=$(find bin/targets -type f -name "*.img" 2>/dev/null | wc -l)
         itb_count=$(find bin/targets -type f -name "*.itb" 2>/dev/null | wc -l)
@@ -5544,16 +5550,7 @@ workflow_step30_build_summary() {
         if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
             echo "  ✅ SDK已下载: $COMPILER_DIR"
         else
-            # 检查实际源码类型
-            local actual_source=""
-            if [ -f "$BUILD_DIR/.git/config" ]; then
-                remote_url=$(git --git-dir="$BUILD_DIR/.git" config --get remote.origin.url 2>/dev/null || echo "")
-                if echo "$remote_url" | grep -q "coolsnowwolf/lede"; then
-                    actual_source="lede"
-                fi
-            fi
-            
-            if [ "$actual_source" = "lede" ] || [ "$source_repo" = "lede" ]; then
+            if [ "$source_repo" = "lede" ]; then
                 echo "  ✅ LEDE 使用源码自带工具链，无需 SDK"
             else
                 echo "  ❌ SDK未下载或目录不存在"
