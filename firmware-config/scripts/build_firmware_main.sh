@@ -5342,13 +5342,36 @@ workflow_step26_check_artifacts() {
     
     cd "$BUILD_DIR"
     
+    # 获取源码名称
+    local source_name="openwrt"
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        case "${SELECTED_REPO_TYPE:-immortalwrt}" in
+            "immortalwrt")
+                source_name="immortalwrt"
+                ;;
+            "openwrt")
+                source_name="openwrt"
+                ;;
+            "lede")
+                source_name="lede"
+                ;;
+            *)
+                source_name="$SELECTED_REPO_TYPE"
+                ;;
+        esac
+    fi
+    
+    log "源码名称: $source_name"
+    
     if [ -d "bin/targets" ]; then
         echo "✅ 找到固件目录"
         
         # 分别统计 .bin 和 .img 文件，避免括号转义问题
         bin_count=$(find bin/targets -type f -name "*.bin" 2>/dev/null | wc -l)
         img_count=$(find bin/targets -type f -name "*.img" 2>/dev/null | wc -l)
-        FIRMWARE_COUNT=$((bin_count + img_count))
+        itb_count=$(find bin/targets -type f -name "*.itb" 2>/dev/null | wc -l)
+        FIRMWARE_COUNT=$((bin_count + img_count + itb_count))
         
         gz_count=$(find bin/targets -type f -name "*.gz" 2>/dev/null | wc -l)
         ipk_count=$(find bin/targets -type f -name "*.ipk" 2>/dev/null | wc -l)
@@ -5356,25 +5379,49 @@ workflow_step26_check_artifacts() {
         
         echo "=========================================="
         echo "📈 构建产物统计:"
-        echo "  固件文件: $FIRMWARE_COUNT 个 (.bin/.img)"
+        echo "  固件文件: $FIRMWARE_COUNT 个 (.bin/.img/.itb)"
         echo "  包文件: $PACKAGE_COUNT 个 (.gz/.ipk)"
         echo ""
         
         if [ $FIRMWARE_COUNT -gt 0 ]; then
             echo "📁 固件文件详细信息:"
             echo "------------------------------------------"
-            # 使用临时文件合并两个 find 结果，避免括号
+            # 使用临时文件合并 find 结果
             temp_list=$(mktemp)
             find bin/targets -type f -name "*.bin" 2>/dev/null >> "$temp_list"
             find bin/targets -type f -name "*.img" 2>/dev/null >> "$temp_list"
+            find bin/targets -type f -name "*.itb" 2>/dev/null >> "$temp_list"
             sort -u "$temp_list" | while read -r file; do
                 SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
                 FILE_NAME=$(basename "$file")
-                echo "🎯 $FILE_NAME ($SIZE)"
+                # 重命名显示：在 openwrt 后面添加源码名称
+                if [[ "$FILE_NAME" == openwrt-* ]]; then
+                    NEW_NAME="${source_name}${FILE_NAME#openwrt}"
+                    echo "🎯 $NEW_NAME ($SIZE) [原始: $FILE_NAME]"
+                else
+                    echo "🎯 $FILE_NAME ($SIZE)"
+                fi
+            done
+            rm -f "$temp_list"
+            
+            # 创建重命名后的文件列表（用于日志）
+            echo ""
+            echo "📋 重命名后的固件文件（将用于上传）:"
+            temp_list=$(mktemp)
+            find bin/targets -type f -name "*.bin" 2>/dev/null >> "$temp_list"
+            find bin/targets -type f -name "*.img" 2>/dev/null >> "$temp_list"
+            find bin/targets -type f -name "*.itb" 2>/dev/null >> "$temp_list"
+            sort -u "$temp_list" | while read -r file; do
+                SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
+                FILE_NAME=$(basename "$file")
+                if [[ "$FILE_NAME" == openwrt-* ]]; then
+                    NEW_NAME="${source_name}${FILE_NAME#openwrt}"
+                    echo "  🎯 $NEW_NAME ($SIZE)"
+                fi
             done
             rm -f "$temp_list"
         else
-            echo "⚠️ 警告: 未找到任何固件文件 (.bin/.img)"
+            echo "⚠️ 警告: 未找到任何固件文件 (.bin/.img/.itb)"
         fi
         
         echo "=========================================="
@@ -5438,13 +5485,13 @@ workflow_step30_build_summary() {
     local source_name=""
     case "$source_repo" in
         "immortalwrt")
-            source_name="ImmortalWrt"
+            source_name="immortalwrt"
             ;;
         "openwrt")
-            source_name="OpenWrt"
+            source_name="openwrt"
             ;;
         "lede")
-            source_name="LEDE"
+            source_name="lede"
             ;;
         *)
             source_name="$source_repo"
@@ -5476,34 +5523,22 @@ workflow_step30_build_summary() {
         
         if [ $FIRMWARE_COUNT -gt 0 ]; then
             echo "  产物位置: $BUILD_DIR/bin/targets/"
-            echo "  下载名称: firmware-$timestamp_sec.zip"
+            echo "  下载名称: ${source_name}-firmware-$timestamp_sec.zip"
             
-            # 显示实际固件名称（根据实际源码替换）
+            # 显示实际固件名称（已重命名）
             echo ""
-            echo "📋 固件文件列表:"
+            echo "📋 固件文件列表（已重命名）:"
             find "$BUILD_DIR/bin/targets" -type f -name "*.bin" -o -name "*.img" -o -name "*.itb" 2>/dev/null | sort | while read file; do
                 size=$(ls -lh "$file" | awk '{print $5}')
                 name=$(basename "$file")
                 
-                # 获取实际源码类型
-                local actual_source=""
-                if [ -f "$BUILD_DIR/.git/config" ]; then
-                    local remote_url=$(git --git-dir="$BUILD_DIR/.git" config --get remote.origin.url 2>/dev/null || echo "")
-                    if echo "$remote_url" | grep -q "coolsnowwolf/lede"; then
-                        actual_source="lede"
-                    elif echo "$remote_url" | grep -q "immortalwrt"; then
-                        actual_source="immortalwrt"
-                    elif echo "$remote_url" | grep -q "openwrt/openwrt"; then
-                        actual_source="openwrt"
-                    fi
+                # 重命名：在 openwrt 后面添加源码名称
+                if [[ "$name" == openwrt-* ]]; then
+                    new_name="${source_name}${name#openwrt}"
+                    echo "  🎯 $new_name ($size) [原始: $name]"
+                else
+                    echo "  🎯 $name ($size)"
                 fi
-                
-                # 根据实际源码替换前缀
-                if [ -n "$actual_source" ] && [ "$actual_source" != "openwrt" ]; then
-                    name=$(echo "$name" | sed "s/^openwrt/$actual_source/")
-                fi
-                
-                echo "  🎯 $name ($size)"
             done
         fi
         
