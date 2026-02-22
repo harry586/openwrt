@@ -22,7 +22,7 @@ on:
         required: false
         type: choice
         default: "ac42u"
-        options: ["ac42u", "cmcc_rax3000m", "netgear_wndr3800"]
+        options: ["ac42u", "cmcc_rax3000m-nand", "netgear_wndr3800"]
       
       # 手动输入框（竖向排列）
       manual_device_name:
