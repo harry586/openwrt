@@ -188,27 +188,30 @@ initialize_build_env() {
     local device_name=$1
     local version_selection=$2
     local config_mode=$3
-    local manual_target=$4   # 可选，手动指定的芯片型号
-    local manual_subtarget=$5 # 可选，手动指定的子平台
+    local manual_target=$4
+    local manual_subtarget=$5
     
-    # 从环境变量获取仓库类型，如果没有则默认 immortalwrt
-    local repo_type="${SOURCE_REPO_TYPE:-${SOURCE_REPO:-immortalwrt}}"
+    local repo_type="${SOURCE_REPO:-${SOURCE_REPO_TYPE:-immortalwrt}}"
+    
+    log "=== 源码仓库选择 ==="
+    log "选择的仓库类型: $repo_type"
+    log "SOURCE_REPO环境变量: ${SOURCE_REPO:-未设置}"
+    log "SOURCE_REPO_TYPE环境变量: ${SOURCE_REPO_TYPE:-未设置}"
 
     cd $BUILD_DIR || handle_error "进入构建目录失败"
 
-    log "=== 源码仓库选择 ==="
-    log "选择的仓库类型: $repo_type"
-    
-    # 根据仓库类型设置URL
     case "$repo_type" in
         "immortalwrt")
             SELECTED_REPO_URL="${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}"
+            SELECTED_REPO_TYPE="immortalwrt"
             ;;
         "openwrt")
             SELECTED_REPO_URL="${OPENWRT_URL:-https://github.com/openwrt/openwrt.git}"
+            SELECTED_REPO_TYPE="openwrt"
             ;;
         "lede")
             SELECTED_REPO_URL="${LEDE_URL:-https://github.com/coolsnowwolf/lede.git}"
+            SELECTED_REPO_TYPE="lede"
             log "⚠️ 使用 LEDE 源码仓库 (coolsnowwolf/lede): $SELECTED_REPO_URL"
             ;;
         "custom")
@@ -217,6 +220,7 @@ initialize_build_env() {
                 handle_error "请设置自定义仓库URL"
             fi
             SELECTED_REPO_URL="$CUSTOM_REPO_URL"
+            SELECTED_REPO_TYPE="custom"
             ;;
         *)
             log "❌ 未知的仓库类型: $repo_type"
@@ -225,7 +229,6 @@ initialize_build_env() {
     esac
     
     log "=== 版本选择 ==="
-    # 根据仓库类型设置分支
     if [ "$repo_type" = "lede" ]; then
         SELECTED_BRANCH="${BRANCH_LEDE:-master}"
         log "✅ LEDE 固定使用 master 分支（忽略版本选择 $version_selection）"
@@ -242,18 +245,15 @@ initialize_build_env() {
 
     sudo rm -rf ./* ./.git* 2>/dev/null || true
 
-    # 尝试克隆指定分支，如果失败则克隆默认分支
     if git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . 2>/dev/null; then
         log "✅ 成功克隆分支: $SELECTED_BRANCH"
     else
         log "⚠️ 克隆分支 $SELECTED_BRANCH 失败，尝试克隆默认分支..."
         git clone --depth 1 "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
-        # 显示实际克隆的分支
         local actual_branch=$(git branch --show-current 2>/dev/null || echo "detached HEAD")
         log "✅ 克隆成功，当前分支: $actual_branch"
     fi
     
-    # 显示详细的源码信息
     log "=== 源码信息详情 ==="
     log "当前工作目录: $(pwd)"
     log "源码仓库 URL: $SELECTED_REPO_URL"
@@ -271,7 +271,6 @@ initialize_build_env() {
         log "最后提交: $last_commit"
         log "提交日期: $commit_date"
         
-        # 验证仓库类型
         if [ "$repo_type" = "lede" ]; then
             if echo "$remote_url" | grep -q "coolsnowwolf/lede"; then
                 log "✅ 已验证: 确实是 coolsnowwolf/lede 源码仓库"
@@ -295,13 +294,11 @@ initialize_build_env() {
         log "⚠️ 不是 git 仓库，无法获取详细信息"
     fi
 
-    # 检查关键源码文件
     log "=== 关键源码文件检查 ==="
     local important_source_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
     for file in "${important_source_files[@]}"; do
         if [ -f "$file" ]; then
             log "✅ 存在: $file"
-            # 显示文件头部信息以验证版本
             head -3 "$file" 2>/dev/null | while read line; do
                 log "    $line"
             done
@@ -310,8 +307,14 @@ initialize_build_env() {
         fi
     done
 
+    if [ -f "feeds.conf.default" ]; then
+        log "=== feeds.conf.default 内容 ==="
+        cat feeds.conf.default | while read line; do
+            log "  $line"
+        done
+    fi
+
     log "=== 设备配置 ==="
-    # 判断是否使用手动输入的芯片型号和子平台
     if [ -n "$manual_target" ] && [ -n "$manual_subtarget" ]; then
         TARGET="$manual_target"
         SUBTARGET="$manual_subtarget"
@@ -344,8 +347,6 @@ initialize_build_env() {
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
     
-    # 显示设备定义文件位置 - 使用步骤15的清晰版本
-    log "=== 设备定义文件查找 ==="
     local search_device=""
     case "$DEVICE" in
         ac42u|rt-ac42u|asus_rt-ac42u)
@@ -412,24 +413,18 @@ initialize_build_env() {
         log "❌ 未找到设备 $search_device 的定义文件"
     fi
 
-    # 编译配置工具
-    log "=== 编译配置工具 ==="
-
     local config_tool_created=0
     local real_config_tool=""
 
-    # 方法1: 编译 scripts/config
-    log "🔧 尝试方法1: 编译 scripts/config..."
+    log "🔧 方法1: 编译 scripts/config..."
     if [ -d "scripts/config" ]; then
         cd scripts/config
         make
         cd $BUILD_DIR
 
-        # 检查编译生成的文件
         if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
             log "✅ 方法1成功: 编译生成 conf 工具"
 
-            # 创建 config 包装脚本，使用 conf
             mkdir -p scripts/config
             cat > scripts/config/config << 'EOF'
 #!/bin/sh
@@ -443,7 +438,6 @@ if [ ! -x "$CONF_TOOL" ]; then
     exit 1
 fi
 
-# 转换参数格式
 case "$1" in
     --enable)
         shift
@@ -480,14 +474,12 @@ EOF
         fi
     fi
 
-    # 方法2: 直接使用 conf 作为配置工具
     if [ $config_tool_created -eq 0 ]; then
         if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
             log "✅ 方法2成功: 直接使用 conf 工具"
             mkdir -p scripts/config
             cat > scripts/config/config << 'EOF'
 #!/bin/sh
-# 使用 conf 工具的包装脚本
 exec "$(dirname "$0")/conf" "$@"
 EOF
             chmod +x scripts/config/config
@@ -496,14 +488,12 @@ EOF
         fi
     fi
 
-    # 方法3: 使用 mconf (如果可用)
     if [ $config_tool_created -eq 0 ]; then
         if [ -f "scripts/config/mconf" ] && [ -x "scripts/config/mconf" ]; then
             log "✅ 方法3成功: 使用 mconf 工具"
             mkdir -p scripts/config
             cat > scripts/config/config << 'EOF'
 #!/bin/sh
-# 使用 mconf 工具的包装脚本
 exec "$(dirname "$0")/mconf" "$@"
 EOF
             chmod +x scripts/config/config
@@ -512,7 +502,6 @@ EOF
         fi
     fi
 
-    # 方法4: 从 SDK 复制
     if [ $config_tool_created -eq 0 ] && [ -n "$COMPILER_DIR" ]; then
         log "🔧 尝试方法4: 从 SDK 目录复制"
         if [ -f "$COMPILER_DIR/scripts/config/conf" ] && [ -x "$COMPILER_DIR/scripts/config/conf" ]; then
@@ -529,13 +518,11 @@ EOF
         fi
     fi
 
-    # 方法5: 创建功能完整的简易工具
     if [ $config_tool_created -eq 0 ]; then
         log "🔧 方法5: 创建功能完整的简易 config 工具"
         mkdir -p scripts/config
         cat > scripts/config/config << 'EOF'
 #!/bin/bash
-# 功能完整的 config 工具
 CONFIG_FILE=".config"
 
 show_help() {
@@ -546,7 +533,6 @@ show_help() {
     echo "  --set-str <name> <value> Set a string configuration option"
 }
 
-# 确保 .config 存在
 if [ ! -f "$CONFIG_FILE" ]; then
     touch "$CONFIG_FILE"
 fi
@@ -555,18 +541,14 @@ case "$1" in
     --enable)
         shift
         symbol="$1"
-        # 移除 CONFIG_ 前缀（如果存在）
         symbol="${symbol#CONFIG_}"
-        # 移除 PACKAGE_ 前缀（如果存在）
         symbol="${symbol#PACKAGE_}"
 
-        # 删除所有相关的行
         sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
         sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
         sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
         sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" "$CONFIG_FILE"
 
-        # 添加启用行
         echo "CONFIG_PACKAGE_${symbol}=y" >> "$CONFIG_FILE"
         ;;
     --disable)
@@ -621,14 +603,11 @@ EOF
         config_tool_created=1
     fi
 
-    # 创建统一调用接口
     if [ $config_tool_created -eq 1 ]; then
         log "🔧 创建统一调用接口..."
 
-        # 记录真实工具路径
         echo "$real_config_tool" > scripts/.config_tool_path
 
-        # 创建 scripts/config 软链接或副本
         if [ ! -f "scripts/config" ]; then
             if [ -f "scripts/config/config" ]; then
                 ln -sf config scripts/config 2>/dev/null || cp scripts/config/config scripts/config 2>/dev/null || true
@@ -638,7 +617,6 @@ EOF
 
         cat > scripts/config-tool << 'EOF'
 #!/bin/sh
-# 统一 config 工具调用接口
 CONFIG_TOOL_PATH="$(dirname "$0")/.config_tool_path"
 
 if [ -f "$CONFIG_TOOL_PATH" ]; then
@@ -648,19 +626,16 @@ if [ -f "$CONFIG_TOOL_PATH" ]; then
     fi
 fi
 
-# 备选1: 直接查找
 if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
     echo "scripts/config/config" > "$CONFIG_TOOL_PATH"
     exec scripts/config/config "$@"
 fi
 
-# 备选2: 使用 conf
 if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
     echo "scripts/config/conf" > "$CONFIG_TOOL_PATH"
     exec scripts/config/conf "$@"
 fi
 
-# 备选3: 使用 mconf
 if [ -f "scripts/config/mconf" ] && [ -x "scripts/config/mconf" ]; then
     echo "scripts/config/mconf" > "$CONFIG_TOOL_PATH"
     exec scripts/config/mconf "$@"
@@ -683,7 +658,6 @@ EOF
         fi
     fi
 
-    # 最终验证
     if [ $config_tool_created -eq 1 ]; then
         log "✅ 配置工具最终验证通过"
         log "📁 真实工具路径: $real_config_tool"
@@ -1083,10 +1057,8 @@ configure_feeds() {
     log "=== 配置Feeds ==="
     log "源码仓库类型: ${SELECTED_REPO_TYPE:-immortalwrt}"
     
-    # 清空 feeds.conf.default
     > feeds.conf.default
     
-    # 根据仓库类型调整feeds配置
     case "${SELECTED_REPO_TYPE:-immortalwrt}" in
         "immortalwrt")
             log "使用 ImmortalWrt feeds"
@@ -1104,10 +1076,8 @@ configure_feeds() {
             ;;
         "lede")
             log "使用 coolsnowwolf/lede 的 feeds 配置"
-            # coolsnowwolf/lede 使用自己的 feeds 配置，不需要分支后缀
             if [ -f "feeds.conf.default" ] && [ -s "feeds.conf.default" ]; then
                 log "使用源码自带的 feeds.conf.default"
-                # 直接使用原文件，不做任何修改
                 cat feeds.conf.default
             else
                 log "源码自带的 feeds.conf.default 不存在或为空，创建默认配置"
@@ -1119,7 +1089,6 @@ configure_feeds() {
             ;;
     esac
     
-    # 添加 TurboACC feed（仅 normal 模式且启用了 TurboACC，且不是 LEDE）
     if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "${SELECTED_REPO_TYPE:-immortalwrt}" != "lede" ]; then
         echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
         log "✅ 添加TurboACC feed"
@@ -1127,7 +1096,6 @@ configure_feeds() {
         log "⚠️ LEDE 使用自己的加速方案，跳过 TurboACC"
     fi
     
-    # 显示 feeds 配置
     log "Feeds 配置文件内容:"
     if [ -f "feeds.conf.default" ]; then
         cat feeds.conf.default | while read line; do
@@ -1146,10 +1114,8 @@ configure_feeds() {
     }
     
     log "=== 安装Feeds ==="
-    # 先尝试安装所有包
     ./scripts/feeds install -a 2>/dev/null || true
     
-    # 单独安装关键包
     log "安装关键包..."
     for pkg in base luci packages routing telephony; do
         if ./scripts/feeds install -p $pkg 2>/dev/null; then
@@ -1157,14 +1123,11 @@ configure_feeds() {
         fi
     done
     
-    # 等待一会让文件系统同步
     sleep 2
     
-    # 检查 feed 目录
     log "检查 Feed 目录结构:"
     if [ -d "feeds" ]; then
         log "✅ feeds 主目录存在"
-        # 列出所有 feed 目录
         find feeds -maxdepth 1 -type d | grep -v "^feeds$" | while read dir; do
             feed_name=$(basename "$dir")
             if [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
@@ -1177,7 +1140,6 @@ configure_feeds() {
         log "❌ feeds 主目录不存在"
     fi
     
-    # 检查 package/feeds 目录
     if [ ! -d "package/feeds" ]; then
         mkdir -p package/feeds
         log "✅ 创建 package/feeds 目录"
@@ -5732,6 +5694,34 @@ intelligent_platform_aware_compiler_search() {
 #【build_firmware_main.sh-45-end】
 
 #【build_firmware_main.sh-46】
+workflow_step08_initialize_build_env_hybrid() {
+    local device_name="$1"
+    local version_selection="$2"
+    local config_mode="$3"
+    local manual_target="$4"
+    local manual_subtarget="$5"
+    
+    local repo_type="${SOURCE_REPO:-${SOURCE_REPO_TYPE:-immortalwrt}}"
+    
+    log "=== 步骤08: 初始化构建环境（混合模式：优先使用手动输入） ==="
+    log "选择的源码仓库: $repo_type"
+    log "设备名称: $device_name"
+    log "版本选择: $version_selection"
+    log "配置模式: $config_mode"
+    log "手动芯片型号: $manual_target"
+    log "手动子平台: $manual_subtarget"
+
+    set -e
+    trap 'echo "❌ 步骤08 失败，退出代码: $?"; exit 1' ERR
+
+    export SOURCE_REPO_TYPE="$repo_type"
+    
+    initialize_build_env "$device_name" "$version_selection" "$config_mode" "$manual_target" "$manual_subtarget"
+
+    log "✅ 步骤08 完成"
+}
+#【build_firmware_main.sh-46-end】
+#【build_firmware_main.sh-46】
 # ============================================
 # 手动输入模式下的初始化函数（混合模式）
 # 对应工作流步骤08
@@ -5744,8 +5734,44 @@ workflow_step08_initialize_build_env_hybrid() {
     local manual_target="$4"
     local manual_subtarget="$5"
     
-    # 从环境变量获取源码仓库类型
-    local repo_type="${SOURCE_REPO:-immortalwrt}"
+    # 从环境变量获取源码仓库类型，优先从GITHUB_ENV获取
+    local repo_type="${SOURCE_REPO:-${SOURCE_REPO_TYPE:-immortalwrt}}"
+    
+    log "=== 步骤08: 初始化构建环境（混合模式：优先使用手动输入） ==="
+    log "选择的源码仓库: $repo_type"
+    log "设备名称: $device_name"
+    log "版本选择: $version_selection"
+    log "配置模式: $config_mode"
+    log "手动芯片型号: $manual_target"
+    log "手动子平台: $manual_subtarget"
+
+    set -e
+    trap 'echo "❌ 步骤08 失败，退出代码: $?"; exit 1' ERR
+
+    # 设置环境变量供后续步骤使用
+    export SOURCE_REPO_TYPE="$repo_type"
+    
+    # 调用初始化函数
+    initialize_build_env "$device_name" "$version_selection" "$config_mode" "$manual_target" "$manual_subtarget"
+
+    log "✅ 步骤08 完成"
+}
+#【build_firmware_main.sh-46-end】
+#【build_firmware_main.sh-46】
+# ============================================
+# 手动输入模式下的初始化函数（混合模式）
+# 对应工作流步骤08
+# ============================================
+
+workflow_step08_initialize_build_env_hybrid() {
+    local device_name="$1"
+    local version_selection="$2"
+    local config_mode="$3"
+    local manual_target="$4"
+    local manual_subtarget="$5"
+    
+    # 从环境变量获取源码仓库类型，优先从GITHUB_ENV获取
+    local repo_type="${SOURCE_REPO:-${SOURCE_REPO_TYPE:-immortalwrt}}"
     
     log "=== 步骤08: 初始化构建环境（混合模式：优先使用手动输入） ==="
     log "选择的源码仓库: $repo_type"
