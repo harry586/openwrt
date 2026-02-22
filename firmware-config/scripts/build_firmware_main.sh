@@ -1057,23 +1057,28 @@ configure_feeds() {
     log "=== 配置Feeds ==="
     log "源码仓库类型: ${SELECTED_REPO_TYPE:-immortalwrt}"
     
-    # 对于 LEDE，保留源码自带的 feeds.conf.default
+    # 对于 LEDE，需要修复 feeds.conf.default 中的错误格式
     if [ "${SELECTED_REPO_TYPE:-immortalwrt}" = "lede" ]; then
-        log "LEDE 源码，检查 feeds.conf.default..."
-        if [ -f "feeds.conf.default" ] && [ -s "feeds.conf.default" ]; then
-            log "使用源码自带的 feeds.conf.default:"
-            cat feeds.conf.default
-        else
-            log "⚠️ 源码自带的 feeds.conf.default 不存在或为空，创建正确的 LEDE feeds 配置"
-            cat > feeds.conf.default << 'EOF'
+        log "LEDE 源码，检查并修复 feeds.conf.default..."
+        
+        # 备份原始文件
+        if [ -f "feeds.conf.default" ]; then
+            cp feeds.conf.default feeds.conf.default.bak
+            log "已备份原始 feeds.conf.default 到 feeds.conf.default.bak"
+        fi
+        
+        # 创建正确的 LEDE feeds 配置（移除错误的 ;openwrt-23.05）
+        cat > feeds.conf.default << 'EOF'
 src-git packages https://github.com/coolsnowwolf/packages.git
 src-git luci https://github.com/coolsnowwolf/luci.git
 src-git routing https://github.com/coolsnowwolf/routing.git
 src-git telephony https://github.com/coolsnowwolf/telephony.git
 EOF
-            log "创建完成:"
-            cat feeds.conf.default
-        fi
+        log "已修复 feeds.conf.default，移除错误的 ;openwrt-23.05 后缀"
+        log "修复后的内容:"
+        cat feeds.conf.default | while read line; do
+            log "  $line"
+        done
     else
         # 非 LEDE 源码，清空并创建标准配置
         > feeds.conf.default
@@ -1102,7 +1107,7 @@ EOF
         fi
     fi
     
-    log "Feeds 配置文件内容:"
+    log "最终 feeds.conf.default 内容:"
     if [ -f "feeds.conf.default" ]; then
         cat feeds.conf.default | while read line; do
             log "  $line"
@@ -2438,13 +2443,11 @@ apply_config() {
     log "🔄 步骤6: 运行 make defconfig..."
     make defconfig || handle_error "应用配置失败"
 
-    log "🔧 步骤7: 验证关键配置..."
-
     echo ""
     echo "=== 🔍 USB驱动完整性检查 ==="
     echo ""
+    
     echo "🔍 检查基础USB驱动..."
-
     local base_drivers=(
         "kmod-usb-core"
         "kmod-usb2"
@@ -2462,7 +2465,6 @@ apply_config() {
 
     echo ""
     echo "🔍 检查USB 3.0驱动..."
-
     local usb3_found=0
 
     if grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
@@ -2538,44 +2540,6 @@ apply_config() {
     esac
 
     echo ""
-    echo "=== 📦 功能性插件状态 ==="
-    echo ""
-    
-    # 定义功能性插件分类
-    declare -A plugin_categories=(
-        ["网络加速"]="luci-app-turboacc luci-app-flowoffload luci-app-sfe"
-        ["广告过滤"]="luci-app-adbyby luci-app-adguardhome luci-app-koolproxy"
-        ["科学上网"]="luci-app-ssr-plus luci-app-vssr luci-app-passwall luci-app-openclash"
-        ["文件共享"]="luci-app-samba4 luci-app-vsftpd luci-app-aria2 luci-app-transmission"
-        ["网络管理"]="luci-app-upnp luci-app-arpbind luci-app-sqm luci-app-nlbwmon"
-        ["系统工具"]="luci-app-diskman luci-app-hd-idle luci-app-cpulimit luci-app-wol"
-    )
-    
-    for category in "${!plugin_categories[@]}"; do
-        plugins=${plugin_categories[$category]}
-        found=0
-        for plugin in $plugins; do
-            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
-                if [ $found -eq 0 ]; then
-                    echo "🔹 $category:"
-                    found=1
-                fi
-                echo "    ✅ $plugin"
-            elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
-                if [ $found -eq 0 ]; then
-                    echo "🔹 $category:"
-                    found=1
-                fi
-                echo "    📦 $plugin (模块)"
-            fi
-        done
-        if [ $found -eq 0 ]; then
-            echo "🔹 $category: 未启用"
-        fi
-        echo ""
-    done
-
-    echo ""
     echo "=== 📦 固件格式验证 ==="
     echo ""
     if grep -q "^CONFIG_TARGET_IMAGES_FIT=y" .config; then
@@ -2595,107 +2559,9 @@ apply_config() {
     else
         echo "⚠️ SquashFS: 未启用"
     fi
-    
-    echo ""
-    echo "=== 📦 插件配置状态 ==="
-
-    local plugins=$(grep "^CONFIG_PACKAGE_luci-app" .config | grep -E "=y|=m" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
-    local plugin_count=0
-
-    if [ -n "$plugins" ]; then
-        while read plugin; do
-            plugin_count=$((plugin_count + 1))
-            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
-                printf "%-4s ✅ %s: 已启用\n" "[$plugin_count]" "$plugin"
-            elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
-                printf "%-4s 📦 %s: 模块化\n" "[$plugin_count]" "$plugin"
-            fi
-        done <<< "$plugins"
-        echo ""
-        echo "📊 插件总数: $plugin_count 个"
-    else
-        echo "未找到Luci插件"
-    fi
 
     echo ""
-    echo "=== 📦 内核模块配置状态 ==="
-
-    local kernel_modules=$(grep "^CONFIG_PACKAGE_kmod-" .config | grep -E "=y|=m" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
-    local module_count=0
-
-    if [ -n "$kernel_modules" ]; then
-        while read module; do
-            module_count=$((module_count + 1))
-            if grep -q "^CONFIG_PACKAGE_${module}=y" .config; then
-                printf "%-4s ✅ %s: 已启用\n" "[$module_count]" "$module"
-            elif grep -q "^CONFIG_PACKAGE_${module}=m" .config; then
-                printf "%-4s 📦 %s: 模块化\n" "[$module_count]" "$module"
-            fi
-        done <<< "$kernel_modules"
-        echo ""
-        echo "📊 内核模块总数: $module_count 个"
-    else
-        echo "未找到内核模块"
-    fi
-
-    echo ""
-    echo "=== 📦 网络工具配置状态 ==="
-
-    local net_tools=$(grep "^CONFIG_PACKAGE_" .config | grep -E "=y|=m" | grep -E "iptables|nftables|firewall|qos|sfe|shortcut|acceler|tc|fullcone" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
-    local net_count=0
-
-    if [ -n "$net_tools" ]; then
-        while read tool; do
-            net_count=$((net_count + 1))
-            if grep -q "^CONFIG_PACKAGE_${tool}=y" .config; then
-                printf "%-4s ✅ %s: 已启用\n" "[$net_count]" "$tool"
-            elif grep -q "^CONFIG_PACKAGE_${tool}=m" .config; then
-                printf "%-4s 📦 %s: 模块化\n" "[$net_count]" "$tool"
-            fi
-        done <<< "$net_tools"
-        echo ""
-        echo "📊 网络工具总数: $net_count 个"
-    else
-        echo "未找到网络工具"
-    fi
-
-    echo ""
-    echo "=== 📦 文件系统支持 ==="
-
-    local fs_support=$(grep "^CONFIG_PACKAGE_kmod-fs-" .config | grep -E "=y|=m" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
-    local fs_count=0
-
-    if [ -n "$fs_support" ]; then
-        while read fs; do
-            fs_count=$((fs_count + 1))
-            if grep -q "^CONFIG_PACKAGE_${fs}=y" .config; then
-                printf "%-4s ✅ %s: 已启用\n" "[$fs_count]" "$fs"
-            elif grep -q "^CONFIG_PACKAGE_${fs}=m" .config; then
-                printf "%-4s 📦 %s: 模块化\n" "[$fs_count]" "$fs"
-            fi
-        done <<< "$fs_support"
-        echo ""
-        echo "📊 文件系统总数: $fs_count 个"
-    else
-        echo "未找到文件系统支持"
-    fi
-
-    echo ""
-    echo "=== 📊 配置统计 ==="
-
-    local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config 2>/dev/null || echo "0")
-    local module_packages=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config 2>/dev/null || echo "0")
-    local disabled_packages=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config 2>/dev/null || echo "0")
-    local kernel_configs=$(grep -c "^CONFIG_[A-Z].*=y$" .config | grep -v "PACKAGE" | wc -l)
-
-    echo "✅ 已启用插件/模块: $enabled_packages 个"
-    echo "📦 模块化插件/模块: $module_packages 个"
-    echo "❌ 已禁用插件/模块: $disabled_packages 个"
-    echo "⚙️ 内核配置: $kernel_configs 个"
-    echo "📊 总配置行数: $(wc -l < .config) 行"
-
-    log ""
-    log "=== 🔧 终极禁用不需要的插件系列（优化版 - 最多2次尝试） ==="
+    echo "=== 🔧 终极禁用不需要的插件系列（优化版 - 最多2次尝试） ==="
 
     local forbidden_plugins=(
         "luci-app-vssr"
@@ -2771,6 +2637,19 @@ apply_config() {
         log "⚠️ 有 $still_remaining 个插件未能彻底禁用，请检查 feeds 或依赖"
         log "提示: 这些插件可能被其他包依赖，请手动运行 make menuconfig 检查依赖关系"
     fi
+
+    echo ""
+    echo "=== 📊 配置统计 ==="
+    local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config 2>/dev/null || echo "0")
+    local module_packages=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config 2>/dev/null || echo "0")
+    local disabled_packages=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config 2>/dev/null || echo "0")
+    local kernel_configs=$(grep -c "^CONFIG_[A-Z].*=y$" .config | grep -v "PACKAGE" | wc -l)
+
+    echo "✅ 已启用插件/模块: $enabled_packages 个"
+    echo "📦 模块化插件/模块: $module_packages 个"
+    echo "❌ 已禁用插件/模块: $disabled_packages 个"
+    echo "⚙️ 内核配置: $kernel_configs 个"
+    echo "📊 总配置行数: $(wc -l < .config) 行"
 
     log "✅ 配置应用完成"
     log "最终配置文件: .config"
@@ -4037,7 +3916,6 @@ workflow_step14_pre_build_space_check() {
 #【firmware-build.yml-15】
 # ============================================
 #【build_firmware_main.sh-31】
-#【build_firmware_main.sh-31】
 workflow_step15_generate_config() {
     local extra_packages="$1"
     
@@ -4200,6 +4078,7 @@ workflow_step15_generate_config() {
         "luci-app-ssr-plus"
         "luci-app-rclone"
         "luci-app-passwall"
+        "vsftpd-alt"
     )
     
     cp .config .config.before_disable
