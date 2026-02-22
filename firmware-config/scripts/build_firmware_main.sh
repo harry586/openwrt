@@ -5324,32 +5324,81 @@ workflow_step30_build_summary() {
     local enable_parallel="$5"
     local source_repo="${6:-immortalwrt}"
     
-    log "=== 步骤30: 编译后总结（增强版） ==="
+    log "=== 步骤30: 编译后总结（修复版） ==="
     
     trap 'echo "⚠️ 步骤30 总结过程中出现错误，继续执行..."' ERR
     
-    # 获取源码名称映射
-    local source_name=""
-    case "$source_repo" in
-        "immortalwrt")
-            source_name="immortalwrt"
-            ;;
-        "openwrt")
-            source_name="openwrt"
-            ;;
-        "lede")
-            source_name="lede"
-            ;;
-        *)
-            source_name="$source_repo"
-            ;;
-    esac
+    # 从环境文件获取实际的仓库类型
+    local actual_repo_type=""
+    local actual_source_name=""
+    
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        actual_repo_type="${SELECTED_REPO_TYPE:-}"
+        log "从环境文件获取到仓库类型: $actual_repo_type"
+    fi
+    
+    # 确定最终的源码名称
+    local final_source_name=""
+    if [ -n "$actual_repo_type" ] && [ "$actual_repo_type" != "immortalwrt" ]; then
+        case "$actual_repo_type" in
+            "lede")
+                final_source_name="lede"
+                ;;
+            "openwrt")
+                final_source_name="openwrt"
+                ;;
+            "immortalwrt")
+                final_source_name="immortalwrt"
+                ;;
+            *)
+                final_source_name="$actual_repo_type"
+                ;;
+        esac
+    else
+        # 如果没有环境文件，使用传入的参数
+        case "$source_repo" in
+            "immortalwrt")
+                final_source_name="immortalwrt"
+                ;;
+            "openwrt")
+                final_source_name="openwrt"
+                ;;
+            "lede")
+                final_source_name="lede"
+                ;;
+            *)
+                final_source_name="$source_repo"
+                ;;
+        esac
+    fi
+    
+    # 获取实际的版本信息
+    local actual_version=""
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        if [ -n "$SELECTED_BRANCH" ]; then
+            if [[ "$SELECTED_BRANCH" == *"23.05"* ]]; then
+                actual_version="23.05"
+            elif [[ "$SELECTED_BRANCH" == *"21.02"* ]]; then
+                actual_version="21.02"
+            elif [[ "$SELECTED_BRANCH" == "master" ]]; then
+                actual_version="master (LEDE)"
+            else
+                actual_version="$SELECTED_BRANCH"
+            fi
+        fi
+    fi
+    
+    if [ -z "$actual_version" ]; then
+        actual_version="$version_selection"
+    fi
     
     echo "🚀 构建总结报告"
     echo "========================================"
     echo "设备: $device_name"
-    echo "源码仓库: $source_name ($source_repo)"
-    echo "版本: $version_selection"
+    echo "源码仓库: $final_source_name"
+    echo "版本: $actual_version"
     echo "配置模式: $config_mode"
     echo "时间戳: $timestamp_sec"
     echo "并行优化: $enable_parallel"
@@ -5370,18 +5419,18 @@ workflow_step30_build_summary() {
         
         if [ $FIRMWARE_COUNT -gt 0 ]; then
             echo "  产物位置: $BUILD_DIR/bin/targets/"
-            echo "  下载名称: ${source_name}-firmware-$timestamp_sec.zip"
+            echo "  下载名称: ${final_source_name}-firmware-$timestamp_sec.zip"
             
-            # 显示实际固件名称（已重命名）
+            # 显示实际固件名称
             echo ""
-            echo "📋 固件文件列表（已重命名）:"
+            echo "📋 固件文件列表:"
             find "$BUILD_DIR/bin/targets" -type f -name "*.bin" -o -name "*.img" -o -name "*.itb" 2>/dev/null | sort | while read file; do
                 size=$(ls -lh "$file" | awk '{print $5}')
                 name=$(basename "$file")
                 
-                # 重命名：在 openwrt 后面添加源码名称
+                # 根据实际源码替换前缀
                 if [[ "$name" == openwrt-* ]]; then
-                    new_name="${source_name}${name#openwrt}"
+                    new_name="${final_source_name}${name#openwrt}"
                     echo "  🎯 $new_name ($size) [原始: $name]"
                 else
                     echo "  🎯 $name ($size)"
@@ -5399,25 +5448,29 @@ workflow_step30_build_summary() {
     echo ""
     echo "🔧 编译器信息:"
     if [ -d "$BUILD_DIR" ]; then
-        GCC_FILE=$(find "$BUILD_DIR" -type f -executable \
-          -name "*gcc" \
-          ! -name "*gcc-ar" \
-          ! -name "*gcc-ranlib" \
-          ! -name "*gcc-nm" \
-          ! -path "*dummy-tools*" \
-          ! -path "*scripts*" \
-          2>/dev/null | head -1)
+        # 查找实际的编译器
+        local gcc_found=""
+        if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+            gcc_found=$(find "$COMPILER_DIR" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" ! -path "*dummy-tools*" 2>/dev/null | head -1)
+        fi
         
-        if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
-            SDK_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
-            MAJOR_VERSION=$(echo "$SDK_VERSION" | awk '{match($0, /[0-9]+/); print substr($0, RSTART, RLENGTH)}')
-            
-            if [ "$MAJOR_VERSION" = "12" ]; then
+        if [ -n "$gcc_found" ] && [ -x "$gcc_found" ]; then
+            local gcc_version=$("$gcc_found" --version 2>&1 | head -1)
+            if echo "$gcc_version" | grep -q "12.3.0"; then
                 echo "  🎯 SDK GCC: 12.3.0 (OpenWrt 23.05 SDK)"
-            elif [ "$MAJOR_VERSION" = "8" ]; then
+            elif echo "$gcc_version" | grep -q "8.4.0"; then
                 echo "  🎯 SDK GCC: 8.4.0 (OpenWrt 21.02 SDK)"
-            elif [ "$MAJOR_VERSION" = "5" ]; then
+            elif echo "$gcc_version" | grep -q "5.4.0"; then
                 echo "  🎯 GCC: 5.4.0 (LEDE 工具链)"
+            else
+                echo "  🎯 $(basename "$gcc_found"): $gcc_version"
+            fi
+        else
+            # 检查是否是 LEDE（LEDE 使用源码自带工具链）
+            if [ "$final_source_name" = "lede" ]; then
+                echo "  ℹ️ LEDE 使用源码自带工具链"
+            else
+                echo "  ⚠️ 未找到编译器信息"
             fi
         fi
     fi
@@ -5429,20 +5482,34 @@ workflow_step30_build_summary() {
         if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
             echo "  ✅ SDK已下载: $COMPILER_DIR"
         else
-            if [ "$source_repo" = "lede" ]; then
+            if [ "$final_source_name" = "lede" ]; then
                 echo "  ✅ LEDE 使用源码自带工具链，无需 SDK"
             else
-                echo "  ❌ SDK未下载或目录不存在"
+                echo "  ⚠️ SDK未下载或目录不存在"
             fi
+        fi
+    else
+        if [ "$final_source_name" = "lede" ]; then
+            echo "  ✅ LEDE 使用源码自带工具链，无需 SDK"
+        else
+            echo "  ⚠️ SDK状态未知"
         fi
     fi
     
     echo ""
     echo "⚙️ 功能开关状态:"
-    echo "  TurboACC: ${ENABLE_TURBOACC:-true}"
-    echo "  TCP BBR: ${ENABLE_TCP_BBR:-true}"
-    echo "  ath10k-ct强制: ${FORCE_ATH10K_CT:-true}"
-    echo "  USB自动修复: ${AUTO_FIX_USB_DRIVERS:-true}"
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        echo "  TurboACC: ${ENABLE_TURBOACC:-true}"
+        echo "  TCP BBR: ${ENABLE_TCP_BBR:-true}"
+        echo "  ath10k-ct强制: ${FORCE_ATH10K_CT:-true}"
+        echo "  USB自动修复: ${AUTO_FIX_USB_DRIVERS:-true}"
+    else
+        echo "  TurboACC: ${ENABLE_TURBOACC:-true}"
+        echo "  TCP BBR: ${ENABLE_TCP_BBR:-true}"
+        echo "  ath10k-ct强制: ${FORCE_ATH10K_CT:-true}"
+        echo "  USB自动修复: ${AUTO_FIX_USB_DRIVERS:-true}"
+    fi
     
     echo ""
     echo "✅ 构建流程完成"
