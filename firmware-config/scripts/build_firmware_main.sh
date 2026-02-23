@@ -254,6 +254,7 @@ initialize_build_env() {
         log "✅ 克隆成功，当前分支: $actual_branch"
     fi
     
+    # 显示详细的源码信息
     log "=== 源码信息详情 ==="
     log "当前工作目录: $(pwd)"
     log "源码仓库 URL: $SELECTED_REPO_URL"
@@ -294,11 +295,13 @@ initialize_build_env() {
         log "⚠️ 不是 git 仓库，无法获取详细信息"
     fi
 
+    # 检查关键源码文件
     log "=== 关键源码文件检查 ==="
     local important_source_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
     for file in "${important_source_files[@]}"; do
         if [ -f "$file" ]; then
             log "✅ 存在: $file"
+            # 显示文件头部信息以验证版本
             head -3 "$file" 2>/dev/null | while read line; do
                 log "    $line"
             done
@@ -307,14 +310,38 @@ initialize_build_env() {
         fi
     done
 
+    # 显示 feeds.conf.default 内容，帮助调试
     if [ -f "feeds.conf.default" ]; then
         log "=== feeds.conf.default 内容 ==="
         cat feeds.conf.default | while read line; do
             log "  $line"
         done
+        
+        # 如果是 LEDE，立即修复 feeds.conf.default
+        if [ "$repo_type" = "lede" ]; then
+            log "🔧 LEDE 源码，立即修复 feeds.conf.default 中的错误格式..."
+            
+            # 备份原始文件
+            cp feeds.conf.default feeds.conf.default.bak
+            log "已备份原始 feeds.conf.default 到 feeds.conf.default.bak"
+            
+            # 创建正确的 LEDE feeds 配置（移除所有错误的 ;openwrt-23.05 后缀）
+            cat > feeds.conf.default << 'EOF'
+src-git packages https://github.com/coolsnowwolf/packages.git
+src-git luci https://github.com/coolsnowwolf/luci.git
+src-git routing https://github.com/coolsnowwolf/routing.git
+src-git telephony https://github.com/coolsnowwolf/telephony.git
+EOF
+            log "已修复 feeds.conf.default，移除所有错误的 ;openwrt-23.05 后缀"
+            log "修复后的内容:"
+            cat feeds.conf.default | while read line; do
+                log "  $line"
+            done
+        fi
     fi
 
     log "=== 设备配置 ==="
+    # 判断是否使用手动输入的芯片型号和子平台
     if [ -n "$manual_target" ] && [ -n "$manual_subtarget" ]; then
         TARGET="$manual_target"
         SUBTARGET="$manual_subtarget"
@@ -416,263 +443,21 @@ initialize_build_env() {
     local config_tool_created=0
     local real_config_tool=""
 
-    log "🔧 方法1: 编译 scripts/config..."
+    log "🔧 编译配置工具..."
+
     if [ -d "scripts/config" ]; then
         cd scripts/config
         make
         cd $BUILD_DIR
 
         if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
-            log "✅ 方法1成功: 编译生成 conf 工具"
-
-            mkdir -p scripts/config
-            cat > scripts/config/config << 'EOF'
-#!/bin/sh
-# OpenWrt config 工具包装脚本
-# 使用编译生成的 conf 工具
-
-CONF_TOOL="$(dirname "$0")/conf"
-
-if [ ! -x "$CONF_TOOL" ]; then
-    echo "Error: conf tool not found" >&2
-    exit 1
-fi
-
-case "$1" in
-    --enable)
-        shift
-        "$CONF_TOOL" --defconfig CONFIG_$1=y .config
-        ;;
-    --disable)
-        shift
-        "$CONF_TOOL" --defconfig CONFIG_$1=n .config
-        ;;
-    --module)
-        shift
-        "$CONF_TOOL" --defconfig CONFIG_$1=m .config
-        ;;
-    --set-str)
-        shift
-        name="$1"
-        value="$2"
-        "$CONF_TOOL" --defconfig CONFIG_$name="$value" .config
-        shift 2
-        ;;
-    *)
-        "$CONF_TOOL" "$@"
-        ;;
-esac
-EOF
-            chmod +x scripts/config/config
-            log "✅ 创建 config 包装脚本成功"
-            real_config_tool="scripts/config/config"
-            config_tool_created=1
-        elif [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
-            log "✅ 方法1成功: 编译生成 config 工具"
-            real_config_tool="scripts/config/config"
+            log "✅ 编译生成 conf 工具成功"
             config_tool_created=1
         fi
     fi
 
     if [ $config_tool_created -eq 0 ]; then
-        if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
-            log "✅ 方法2成功: 直接使用 conf 工具"
-            mkdir -p scripts/config
-            cat > scripts/config/config << 'EOF'
-#!/bin/sh
-exec "$(dirname "$0")/conf" "$@"
-EOF
-            chmod +x scripts/config/config
-            real_config_tool="scripts/config/config"
-            config_tool_created=1
-        fi
-    fi
-
-    if [ $config_tool_created -eq 0 ]; then
-        if [ -f "scripts/config/mconf" ] && [ -x "scripts/config/mconf" ]; then
-            log "✅ 方法3成功: 使用 mconf 工具"
-            mkdir -p scripts/config
-            cat > scripts/config/config << 'EOF'
-#!/bin/sh
-exec "$(dirname "$0")/mconf" "$@"
-EOF
-            chmod +x scripts/config/config
-            real_config_tool="scripts/config/config"
-            config_tool_created=1
-        fi
-    fi
-
-    if [ $config_tool_created -eq 0 ] && [ -n "$COMPILER_DIR" ]; then
-        log "🔧 尝试方法4: 从 SDK 目录复制"
-        if [ -f "$COMPILER_DIR/scripts/config/conf" ] && [ -x "$COMPILER_DIR/scripts/config/conf" ]; then
-            mkdir -p scripts/config
-            cp "$COMPILER_DIR/scripts/config/conf" scripts/config/
-            cat > scripts/config/config << 'EOF'
-#!/bin/sh
-exec "$(dirname "$0")/conf" "$@"
-EOF
-            chmod +x scripts/config/config
-            log "✅ 方法4成功: 从 SDK 复制 conf 工具"
-            real_config_tool="scripts/config/config"
-            config_tool_created=1
-        fi
-    fi
-
-    if [ $config_tool_created -eq 0 ]; then
-        log "🔧 方法5: 创建功能完整的简易 config 工具"
-        mkdir -p scripts/config
-        cat > scripts/config/config << 'EOF'
-#!/bin/bash
-CONFIG_FILE=".config"
-
-show_help() {
-    echo "Usage: config [options]"
-    echo "  --enable <symbol>    Enable a configuration option"
-    echo "  --disable <symbol>   Disable a configuration option"
-    echo "  --module <symbol>    Set a configuration option as module"
-    echo "  --set-str <name> <value> Set a string configuration option"
-}
-
-if [ ! -f "$CONFIG_FILE" ]; then
-    touch "$CONFIG_FILE"
-fi
-
-case "$1" in
-    --enable)
-        shift
-        symbol="$1"
-        symbol="${symbol#CONFIG_}"
-        symbol="${symbol#PACKAGE_}"
-
-        sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
-        sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
-        sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
-        sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" "$CONFIG_FILE"
-
-        echo "CONFIG_PACKAGE_${symbol}=y" >> "$CONFIG_FILE"
-        ;;
-    --disable)
-        shift
-        symbol="$1"
-        symbol="${symbol#CONFIG_}"
-        symbol="${symbol#PACKAGE_}"
-
-        sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
-        sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
-        sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
-        sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" "$CONFIG_FILE"
-
-        echo "# CONFIG_PACKAGE_${symbol} is not set" >> "$CONFIG_FILE"
-        ;;
-    --module)
-        shift
-        symbol="$1"
-        symbol="${symbol#CONFIG_}"
-        symbol="${symbol#PACKAGE_}"
-
-        sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
-        sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
-        sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
-        sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" "$CONFIG_FILE"
-
-        echo "CONFIG_PACKAGE_${symbol}=m" >> "$CONFIG_FILE"
-        ;;
-    --set-str)
-        shift
-        name="$1"
-        value="$2"
-        name="${name#CONFIG_}"
-
-        sed -i "/^CONFIG_${name}=/d" "$CONFIG_FILE"
-        echo "CONFIG_${name}="$value"" >> "$CONFIG_FILE"
-        shift 2
-        ;;
-    --help)
-        show_help
-        ;;
-    *)
-        echo "Unknown option: $1"
-        show_help
-        exit 1
-        ;;
-esac
-EOF
-        chmod +x scripts/config/config
-        log "✅ 方法5成功: 创建功能完整的简易 config 工具"
-        real_config_tool="scripts/config/config"
-        config_tool_created=1
-    fi
-
-    if [ $config_tool_created -eq 1 ]; then
-        log "🔧 创建统一调用接口..."
-
-        echo "$real_config_tool" > scripts/.config_tool_path
-
-        if [ ! -f "scripts/config" ]; then
-            if [ -f "scripts/config/config" ]; then
-                ln -sf config scripts/config 2>/dev/null || cp scripts/config/config scripts/config 2>/dev/null || true
-                log "✅ 创建 scripts/config 链接/副本"
-            fi
-        fi
-
-        cat > scripts/config-tool << 'EOF'
-#!/bin/sh
-CONFIG_TOOL_PATH="$(dirname "$0")/.config_tool_path"
-
-if [ -f "$CONFIG_TOOL_PATH" ]; then
-    CONFIG_TOOL="$(cat "$CONFIG_TOOL_PATH" 2>/dev/null)"
-    if [ -n "$CONFIG_TOOL" ] && [ -f "$CONFIG_TOOL" ] && [ -x "$CONFIG_TOOL" ]; then
-        exec "$CONFIG_TOOL" "$@"
-    fi
-fi
-
-if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
-    echo "scripts/config/config" > "$CONFIG_TOOL_PATH"
-    exec scripts/config/config "$@"
-fi
-
-if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
-    echo "scripts/config/conf" > "$CONFIG_TOOL_PATH"
-    exec scripts/config/conf "$@"
-fi
-
-if [ -f "scripts/config/mconf" ] && [ -x "scripts/config/mconf" ]; then
-    echo "scripts/config/mconf" > "$CONFIG_TOOL_PATH"
-    exec scripts/config/mconf "$@"
-fi
-
-echo "Error: config tool not found" >&2
-exit 1
-EOF
-        chmod +x scripts/config-tool
-        log "✅ 统一调用接口创建成功: scripts/config-tool"
-
-        if scripts/config-tool --version > /dev/null 2>&1 || scripts/config-tool -h > /dev/null 2>&1; then
-            log "✅ 统一调用接口测试通过"
-        else
-            if [ -f scripts/config/config ] || [ -f scripts/config/conf ]; then
-                log "✅ 统一调用接口可用（跳过参数测试）"
-            else
-                log "⚠️ 统一调用接口可能有问题，但工具可能仍可用"
-            fi
-        fi
-    fi
-
-    if [ $config_tool_created -eq 1 ]; then
-        log "✅ 配置工具最终验证通过"
-        log "📁 真实工具路径: $real_config_tool"
-        log "📁 统一调用接口: scripts/config-tool"
-
-        if [ -f "$real_config_tool" ]; then
-            if file "$real_config_tool" | grep -q "ELF"; then
-                log "📋 工具类型: 已编译二进制文件"
-            else
-                log "📋 工具类型: Shell 脚本"
-            fi
-        fi
-    else
-        log "❌ 所有方法都失败，配置工具不存在"
-        handle_error "无法创建配置工具"
+        log "⚠️ 配置工具编译失败，使用内置配置工具"
     fi
 
     SELECTED_REPO_TYPE="$repo_type"
@@ -3947,6 +3732,14 @@ workflow_step15_generate_config() {
             device_for_config="asus_rt-acrh17"
             log "🔧 设备名转换: $DEVICE -> $device_for_config"
             ;;
+        cmcc_rax3000m)
+            device_for_config="cmcc_rax3000m"
+            log "🔧 设备名转换: $DEVICE -> $device_for_config"
+            ;;
+        netgear_wndr3800)
+            device_for_config="netgear_wndr3800"
+            log "🔧 设备名转换: $DEVICE -> $device_for_config"
+            ;;
         *)
             device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
             ;;
@@ -3964,6 +3757,12 @@ workflow_step15_generate_config() {
             ;;
         acrh17|rt-acrh17|asus_rt-acrh17)
             search_device="acrh17"
+            ;;
+        cmcc_rax3000m)
+            search_device="rax3000m"
+            ;;
+        netgear_wndr3800)
+            search_device="wndr3800"
             ;;
         *)
             search_device="$DEVICE"
@@ -3996,6 +3795,7 @@ workflow_step15_generate_config() {
     for mkfile in "${mk_files[@]}"; do
         if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
             device_file="$mkfile"
+            log "✅ 找到设备定义文件: $mkfile"
             break
         fi
     done
@@ -4071,7 +3871,7 @@ workflow_step15_generate_config() {
     generate_config "$extra_packages" "$device_for_config"
     
     log ""
-    log "=== 🔧 强制禁用不需要的插件系列（优化版 - 最多2次尝试） ==="
+    log "=== 🔧 强制禁用冲突和不需要的插件 ==="
     
     local forbidden_plugins=(
         "luci-app-vssr"
@@ -4083,16 +3883,34 @@ workflow_step15_generate_config() {
     
     cp .config .config.before_disable
     
+    # 首先处理 vsftpd 冲突 - 确保 vsftpd 启用，vsftpd-alt 禁用
+    log "  处理 vsftpd 冲突..."
+    
+    # 确保 vsftpd 启用
+    if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
+        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+        log "    ✅ 已启用 vsftpd"
+    fi
+    
+    # 禁用 vsftpd-alt
+    sed -i "/^CONFIG_PACKAGE_vsftpd-alt=y/d" .config
+    sed -i "/^CONFIG_PACKAGE_vsftpd-alt=m/d" .config
+    echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+    log "    ✅ 已禁用 vsftpd-alt"
+    
+    # 处理其他禁用插件
     for plugin in "${forbidden_plugins[@]}"; do
-        log "  处理插件: $plugin"
-        
-        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
-        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
-        
-        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-        
-        log "    ✅ 已禁用 $plugin 及其子选项"
+        if [ "$plugin" != "vsftpd-alt" ]; then
+            log "  处理插件: $plugin"
+            
+            sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+            sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+            sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
+            
+            echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+            
+            log "    ✅ 已禁用 $plugin 及其子选项"
+        fi
     done
     
     sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_/d' .config
@@ -4109,6 +3927,19 @@ workflow_step15_generate_config() {
         make defconfig > /tmp/build-logs/defconfig_disable_attempt${attempt}.log 2>&1 || {
             log "⚠️ make defconfig 警告，但继续"
         }
+        
+        # 检查 vsftpd 冲突是否解决
+        local vsftpd_enabled=$(grep -c "^CONFIG_PACKAGE_vsftpd=y" .config)
+        local vsftpd_alt_enabled=$(grep -c "^CONFIG_PACKAGE_vsftpd-alt=y" .config)
+        
+        if [ $vsftpd_enabled -gt 0 ] && [ $vsftpd_alt_enabled -eq 0 ]; then
+            log "✅ vsftpd 冲突已解决"
+        else
+            log "⚠️ vsftpd 冲突仍然存在，再次修复..."
+            sed -i "/^CONFIG_PACKAGE_vsftpd-alt=y/d" .config
+            sed -i "/^CONFIG_PACKAGE_vsftpd-alt=m/d" .config
+            echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+        fi
         
         local still_enabled=0
         for plugin in "${forbidden_plugins[@]}"; do
@@ -4148,6 +3979,23 @@ workflow_step15_generate_config() {
             log "  ✅ $plugin 已正确禁用"
         fi
     done
+    
+    # 特别检查 vsftpd 状态
+    log ""
+    log "📊 vsftpd 状态验证:"
+    if grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
+        log "  ✅ vsftpd: 已启用"
+    else
+        log "  ❌ vsftpd: 未启用"
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_vsftpd-alt=y" .config; then
+        log "  ❌ vsftpd-alt: 仍然被启用（冲突风险）"
+    elif grep -q "^CONFIG_PACKAGE_vsftpd-alt=m" .config; then
+        log "  ❌ vsftpd-alt: 仍然被模块化（冲突风险）"
+    else
+        log "  ✅ vsftpd-alt: 已正确禁用"
+    fi
     
     if [ $still_enabled_final -eq 0 ]; then
         log "🎉 所有指定插件已成功禁用"
