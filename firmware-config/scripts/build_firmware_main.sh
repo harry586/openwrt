@@ -191,16 +191,32 @@ initialize_build_env() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
 
     log "=== 版本选择 ==="
-    if [ "$version_selection" = "23.05" ]; then
-        SELECTED_REPO_URL="${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}"
-        SELECTED_BRANCH="${BRANCH_23_05:-openwrt-23.05}"
+    log "源码仓库类型: $SOURCE_REPO_TYPE"
+    
+    # 根据源码类型设置仓库URL和分支
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        SELECTED_REPO_URL="${LEDE_URL:-https://github.com/coolsnowwolf/lede.git}"
+        SELECTED_BRANCH="master"
+        log "✅ LEDE源码选择: 固定使用master分支"
+    elif [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
+        SELECTED_REPO_URL="${OPENWRT_URL:-https://github.com/openwrt/openwrt.git}"
+        if [ "$version_selection" = "23.05" ]; then
+            SELECTED_BRANCH="${BRANCH_23_05:-openwrt-23.05}"
+        else
+            SELECTED_BRANCH="${BRANCH_21_02:-openwrt-21.02}"
+        fi
+        log "✅ OpenWrt官方源码选择: $SELECTED_BRANCH"
     else
+        # 默认使用immortalwrt
         SELECTED_REPO_URL="${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}"
-        SELECTED_BRANCH="${BRANCH_21_02:-openwrt-21.02}"
+        if [ "$version_selection" = "23.05" ]; then
+            SELECTED_BRANCH="${BRANCH_23_05:-openwrt-23.05}"
+        else
+            SELECTED_BRANCH="${BRANCH_21_02:-openwrt-21.02}"
+        fi
+        log "✅ ImmortalWrt源码选择: $SELECTED_BRANCH"
     fi
-    log "✅ 版本选择完成: $SELECTED_BRANCH"
-
-    log "=== 克隆源码 ==="
+    
     log "仓库: $SELECTED_REPO_URL"
     log "分支: $SELECTED_BRANCH"
 
@@ -774,7 +790,25 @@ verify_sdk_files() {
 #【build_firmware_main.sh-08】
 initialize_compiler_env() {
     local device_name="$1"
-    log "=== 初始化编译器环境（下载OpenWrt官方SDK）- 修复版 ==="
+    log "=== 初始化编译器环境（根据源码类型选择SDK或源码工具链）==="
+    
+    # 如果是LEDE源码，直接返回（LEDE使用源码自带工具链）
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "✅ LEDE源码模式：使用源码自带工具链，无需下载SDK"
+        
+        # 设置编译器目录为源码目录（用于后续检查）
+        COMPILER_DIR="$BUILD_DIR"
+        save_env
+        
+        # 检查是否有基本的工具链目录
+        if [ -d "$BUILD_DIR/staging_dir" ]; then
+            log "✅ 找到staging_dir目录，源码工具链已准备就绪"
+        else
+            log "ℹ️ staging_dir目录将在编译过程中自动生成"
+        fi
+        
+        return 0
+    fi
     
     log "🔍 检查环境文件..."
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
@@ -5077,6 +5111,7 @@ workflow_step08_initialize_build_env_hybrid() {
     local manual_subtarget="$5"
 
     log "=== 步骤08: 初始化构建环境（混合模式：优先使用手动输入） ==="
+    log "源码仓库类型: $SOURCE_REPO_TYPE"
 
     set -e
     trap 'echo "❌ 步骤08 失败，退出代码: $?"; exit 1' ERR
