@@ -787,6 +787,12 @@ initialize_compiler_env() {
     local device_name="$1"
     log "=== 初始化编译器环境（根据源码类型选择SDK或源码工具链）==="
     
+    # 加载环境变量
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        log "✅ 从 $BUILD_DIR/build_env.sh 加载环境变量"
+    fi
+    
     # 如果是LEDE源码，直接返回（LEDE使用源码自带工具链）
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "✅ LEDE源码模式：使用源码自带工具链，无需下载SDK"
@@ -838,12 +844,7 @@ initialize_compiler_env() {
         log "✅ 使用环境变量中的编译器目录: $COMPILER_DIR"
         
         log "🔍 验证编译器目录有效性..."
-        local gcc_files=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable \
-          -name "*gcc" \
-          ! -name "*gcc-ar" \
-          ! -name "*gcc-ranlib" \
-          ! -name "*gcc-nm" \
-          2>/dev/null | head -1)
+        local gcc_files=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
         
         if [ -n "$gcc_files" ]; then
             log "✅ 确认编译器目录包含真正的GCC"
@@ -886,12 +887,7 @@ initialize_compiler_env() {
             log "📊 SDK目录信息:"
             log "  目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | awk '{print $1}' || echo '未知')"
             
-            local gcc_file=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable \
-              -name "*gcc" \
-              ! -name "*gcc-ar" \
-              ! -name "*gcc-ranlib" \
-              ! -name "*gcc-nm" \
-              2>/dev/null | head -1)
+            local gcc_file=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
             
             if [ -n "$gcc_file" ]; then
                 log "✅ 找到SDK中的GCC编译器: $(basename "$gcc_file")"
@@ -1106,11 +1102,35 @@ EOF
     : ${CONFIG_USB_GENERIC:="usb-generic.config"}
     : ${CONFIG_NORMAL:="normal.config"}
     
+    # 先添加基础配置
     append_config "$CONFIG_DIR/$CONFIG_BASE"
-    append_config "$CONFIG_DIR/$CONFIG_USB_GENERIC"
+    
+    # 检查是否有设备专用配置文件
+    local device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
+    local usb_generic_file="$CONFIG_DIR/$CONFIG_USB_GENERIC"
+    
+    if [ -f "$device_config_file" ]; then
+        log "📋 找到设备专用配置文件: $device_config_file"
+        log "📋 优先使用设备专用配置，USB通用配置作为补充"
+        
+        # 先添加设备专用配置
+        append_config "$device_config_file"
+        
+        # 然后添加USB通用配置作为补充（设备配置中没有的USB驱动）
+        if [ -f "$usb_generic_file" ]; then
+            log "📋 添加USB通用配置作为补充: $usb_generic_file"
+            append_config "$usb_generic_file"
+        fi
+    else
+        log "📋 未找到设备专用配置文件，使用USB通用配置"
+        if [ -f "$usb_generic_file" ]; then
+            append_config "$usb_generic_file"
+        fi
+    fi
+    
+    # 添加其他通用配置
     append_config "$CONFIG_DIR/$TARGET.config"
     append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
-    append_config "$CONFIG_DIR/devices/$DEVICE.config"
     
     if [ "$CONFIG_MODE" = "normal" ]; then
         append_config "$CONFIG_DIR/$CONFIG_NORMAL"
@@ -1122,11 +1142,6 @@ EOF
 ' | while read pkg; do
             [ -n "$pkg" ] && echo "CONFIG_PACKAGE_$pkg=y" >> .config
         done
-    fi
-    
-    if [ -f "$CONFIG_DIR/devices/$DEVICE.config" ]; then
-        log "📋 从设备配置文件动态添加配置: $CONFIG_DIR/devices/$DEVICE.config"
-        append_config "$CONFIG_DIR/devices/$DEVICE.config"
     fi
     
     if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
@@ -1246,7 +1261,6 @@ EOF
         
         rm -f "$usb_configs_file" "$usb_configs_file.sorted"
     else
-        # 未找到内核配置文件时不再输出警告，仅保留一个调试日志（可忽略）
         if [ "${DEBUG:-false}" = "true" ]; then
             log "ℹ️ 未找到目标平台 $TARGET 的内核配置文件，跳过内核配置添加"
         fi
@@ -1362,8 +1376,7 @@ EOF
         else
             existing_packages=$((existing_packages + 1))
         fi
-    done < <(printf "%s
-" "${base_usb_packages[@]}" "${extended_usb_packages[@]}" "${fs_support_packages[@]}" | sort -u)
+    done < <(printf "%s\n" "${base_usb_packages[@]}" "${extended_usb_packages[@]}" "${fs_support_packages[@]}" | sort -u)
     
     log "📊 USB软件包统计: 新增 $added_packages 个, 已存在 $existing_packages 个"
     
@@ -1461,28 +1474,20 @@ EOF
     log "  模块化软件包: $module_packages"
     log "  禁用软件包: $disabled_packages"
     
-    # =========================================================================
-    # 手动禁用特定插件（vssr, ssr-plus, rclone, passwall）
-    # 这些插件可能由feeds自动引入，这里强制禁用
-    # =========================================================================
     log "🔧 手动禁用 luci-app-vssr, luci-app-ssr-plus, luci-app-rclone, luci-app-passwall 及其子选项"
     
-    # 禁用 luci-app-vssr
     sed -i '/CONFIG_PACKAGE_luci-app-vssr=/d' .config
     echo '# CONFIG_PACKAGE_luci-app-vssr is not set' >> .config
     sed -i '/CONFIG_PACKAGE_luci-app-vssr_INCLUDE_/d' .config
     
-    # 禁用 luci-app-ssr-plus
     sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus=/d' .config
     echo '# CONFIG_PACKAGE_luci-app-ssr-plus is not set' >> .config
     sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_/d' .config
     
-    # 禁用 luci-app-rclone
     sed -i '/CONFIG_PACKAGE_luci-app-rclone=/d' .config
     echo '# CONFIG_PACKAGE_luci-app-rclone is not set' >> .config
     sed -i '/CONFIG_PACKAGE_luci-app-rclone_INCLUDE_/d' .config
     
-    # 禁用 luci-app-passwall
     sed -i '/CONFIG_PACKAGE_luci-app-passwall=/d' .config
     echo '# CONFIG_PACKAGE_luci-app-passwall is not set' >> .config
     sed -i '/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_/d' .config
@@ -3388,23 +3393,43 @@ workflow_step10_verify_sdk() {
     
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
-        echo "✅ 从环境文件加载变量: COMPILER_DIR=$COMPILER_DIR"
+        echo "✅ 从环境文件加载变量: COMPILER_DIR=$COMPILER_DIR, SOURCE_REPO_TYPE=$SOURCE_REPO_TYPE"
     else
         echo "❌ 环境文件不存在"
     fi
     
+    # 如果是LEDE源码模式，进行不同的验证
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        echo "✅ LEDE源码模式：使用源码自带工具链"
+        echo "📊 源码目录大小: $(du -sh "$BUILD_DIR" 2>/dev/null | awk '{print $1}' || echo '未知')"
+        
+        # 检查是否有staging_dir（可能在编译过程中生成）
+        if [ -d "$BUILD_DIR/staging_dir" ]; then
+            echo "✅ 找到staging_dir目录，源码工具链已准备就绪"
+            
+            GCC_FILE=$(find "$BUILD_DIR/staging_dir" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
+            if [ -n "$GCC_FILE" ]; then
+                echo "✅ 找到工具链中的GCC编译器: $(basename "$GCC_FILE")"
+                echo "🔧 GCC版本测试:"
+                "$GCC_FILE" --version 2>&1 | head -1
+            else
+                echo "ℹ️ 工具链将在编译过程中自动生成"
+            fi
+        else
+            echo "ℹ️ staging_dir目录将在编译过程中自动生成"
+        fi
+        
+        echo "✅ LEDE源码验证完成"
+        log "✅ 步骤10 完成"
+        return 0
+    fi
+    
+    # 原有的SDK验证逻辑
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
         echo "✅ SDK目录存在: $COMPILER_DIR"
         echo "📊 SDK目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | awk '{print $1}' || echo '未知')"
         
-        GCC_FILE=$(find "$COMPILER_DIR" -type f -executable \
-          -name "*gcc" \
-          ! -name "*gcc-ar" \
-          ! -name "*gcc-ranlib" \
-          ! -name "*gcc-nm" \
-          ! -path "*dummy-tools*" \
-          ! -path "*scripts*" \
-          2>/dev/null | head -1)
+        GCC_FILE=$(find "$COMPILER_DIR" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" ! -path "*dummy-tools*" ! -path "*scripts*" 2>/dev/null | head -1)
         
         if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
             echo "✅ 找到可执行GCC编译器: $(basename "$GCC_FILE")"
@@ -3426,10 +3451,7 @@ workflow_step10_verify_sdk() {
         else
             echo "❌ 未找到可执行的GCC编译器"
             
-            DUMMY_GCC=$(find "$COMPILER_DIR" -type f -executable \
-              -name "*gcc" \
-              -path "*dummy-tools*" \
-              2>/dev/null | head -1)
+            DUMMY_GCC=$(find "$COMPILER_DIR" -type f -executable -name "*gcc" -path "*dummy-tools*" 2>/dev/null | head -1)
             
             if [ -n "$DUMMY_GCC" ]; then
                 echo "⚠️ 检测到虚假的dummy-tools编译器: $DUMMY_GCC"
