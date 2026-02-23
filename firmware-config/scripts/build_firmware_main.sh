@@ -12,7 +12,10 @@ load_build_config() {
     local config_file="${1:-$REPO_ROOT/build-config.conf}"
     
     # 保存当前环境变量中已设置的值
-    local current_source_repo="$SOURCE_REPO_TYPE"
+    local current_source_repo="${SOURCE_REPO_TYPE:-${SOURCE_REPO:-}}"
+    local current_build_dir="${BUILD_DIR:-}"
+    local current_log_dir="${LOG_DIR:-}"
+    local current_backup_dir="${BACKUP_DIR:-}"
     
     if [ -f "$config_file" ]; then
         log "📁 加载统一配置文件: $config_file"
@@ -24,21 +27,38 @@ load_build_config() {
     # 恢复从 workflow 传入的环境变量（优先级更高）
     if [ -n "$current_source_repo" ]; then
         SOURCE_REPO_TYPE="$current_source_repo"
+        export SOURCE_REPO_TYPE
         log "✅ 使用 workflow 传入的源码仓库类型: $SOURCE_REPO_TYPE"
     fi
     
-    # 导出所有配置为环境变量
+    if [ -n "${SOURCE_REPO:-}" ] && [ -z "$SOURCE_REPO_TYPE" ]; then
+        SOURCE_REPO_TYPE="$SOURCE_REPO"
+        export SOURCE_REPO_TYPE
+        log "✅ 从 SOURCE_REPO 环境变量设置源码仓库类型: $SOURCE_REPO_TYPE"
+    fi
+    
+    : ${SOURCE_REPO_TYPE:="immortalwrt"}
+    export SOURCE_REPO_TYPE
+    
+    [ -n "$current_build_dir" ] && BUILD_DIR="$current_build_dir"
+    [ -n "$current_log_dir" ] && LOG_DIR="$current_log_dir"
+    [ -n "$current_backup_dir" ] && BACKUP_DIR="$current_backup_dir"
+    
     export BUILD_DIR LOG_DIR BACKUP_DIR CONFIG_DIR
     export IMMORTALWRT_URL OPENWRT_URL LEDE_URL PACKAGES_FEED_URL LUCI_FEED_URL TURBOACC_FEED_URL
     export ENABLE_TURBOACC ENABLE_TCP_BBR FORCE_ATH10K_CT AUTO_FIX_USB_DRIVERS
     export ENABLE_DYNAMIC_KERNEL_DETECTION ENABLE_DYNAMIC_PLATFORM_DRIVERS ENABLE_DYNAMIC_DEVICE_MAPPING
-    export SOURCE_REPO_TYPE
     
-    log "✅ 配置加载完成"
+    log "✅ 配置加载完成，当前源码仓库类型: $SOURCE_REPO_TYPE"
 }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONFIG_FILE="$REPO_ROOT/build-config.conf"
+
+if [ -n "${SOURCE_REPO:-}" ]; then
+    export SOURCE_REPO_TYPE="$SOURCE_REPO"
+fi
+
 if [ -f "$CONFIG_FILE" ]; then
     source "$CONFIG_FILE"
     load_build_config
@@ -195,15 +215,14 @@ initialize_build_env() {
     local device_name=$1
     local version_selection=$2
     local config_mode=$3
-    local manual_target=$4   # 可选，手动指定的芯片型号
-    local manual_subtarget=$5 # 可选，手动指定的子平台
+    local manual_target=$4
+    local manual_subtarget=$5
 
     cd $BUILD_DIR || handle_error "进入构建目录失败"
 
     log "=== 版本选择 ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
-    # 根据源码类型设置仓库URL和分支
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         SELECTED_REPO_URL="${LEDE_URL:-https://github.com/coolsnowwolf/lede.git}"
         SELECTED_BRANCH="master"
@@ -217,7 +236,6 @@ initialize_build_env() {
         fi
         log "✅ OpenWrt官方源码选择: $SELECTED_BRANCH"
     else
-        # 默认使用immortalwrt
         SELECTED_REPO_URL="${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}"
         if [ "$version_selection" = "23.05" ]; then
             SELECTED_BRANCH="${BRANCH_23_05:-openwrt-23.05}"
@@ -245,7 +263,6 @@ initialize_build_env() {
     done
 
     log "=== 设备配置 ==="
-    # 判断是否使用手动输入的芯片型号和子平台
     if [ -n "$manual_target" ] && [ -n "$manual_subtarget" ]; then
         TARGET="$manual_target"
         SUBTARGET="$manual_subtarget"
@@ -278,30 +295,22 @@ initialize_build_env() {
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
 
-    # 🔥 关键修复：正确识别和使用编译好的 config 工具
     log "=== 编译配置工具 ==="
 
     local config_tool_created=0
     local real_config_tool=""
 
-    # 方法1: 编译 scripts/config
-    log "🔧 尝试方法1: 编译 scripts/config..."
     if [ -d "scripts/config" ]; then
         cd scripts/config
         make
         cd $BUILD_DIR
 
-        # 检查编译生成的文件
         if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
             log "✅ 方法1成功: 编译生成 conf 工具"
 
-            # 创建 config 包装脚本，使用 conf
             mkdir -p scripts/config
             cat > scripts/config/config << 'EOF'
 #!/bin/sh
-# OpenWrt config 工具包装脚本
-# 使用编译生成的 conf 工具
-
 CONF_TOOL="$(dirname "$0")/conf"
 
 if [ ! -x "$CONF_TOOL" ]; then
@@ -309,7 +318,6 @@ if [ ! -x "$CONF_TOOL" ]; then
     exit 1
 fi
 
-# 转换参数格式
 case "$1" in
     --enable)
         shift
@@ -346,14 +354,12 @@ EOF
         fi
     fi
 
-    # 方法2: 直接使用 conf 作为配置工具
     if [ $config_tool_created -eq 0 ]; then
         if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
             log "✅ 方法2成功: 直接使用 conf 工具"
             mkdir -p scripts/config
             cat > scripts/config/config << 'EOF'
 #!/bin/sh
-# 使用 conf 工具的包装脚本
 exec "$(dirname "$0")/conf" "$@"
 EOF
             chmod +x scripts/config/config
@@ -362,14 +368,12 @@ EOF
         fi
     fi
 
-    # 方法3: 使用 mconf (如果可用)
     if [ $config_tool_created -eq 0 ]; then
         if [ -f "scripts/config/mconf" ] && [ -x "scripts/config/mconf" ]; then
             log "✅ 方法3成功: 使用 mconf 工具"
             mkdir -p scripts/config
             cat > scripts/config/config << 'EOF'
 #!/bin/sh
-# 使用 mconf 工具的包装脚本
 exec "$(dirname "$0")/mconf" "$@"
 EOF
             chmod +x scripts/config/config
@@ -378,7 +382,6 @@ EOF
         fi
     fi
 
-    # 方法4: 从 SDK 复制
     if [ $config_tool_created -eq 0 ] && [ -n "$COMPILER_DIR" ]; then
         log "🔧 尝试方法4: 从 SDK 目录复制"
         if [ -f "$COMPILER_DIR/scripts/config/conf" ] && [ -x "$COMPILER_DIR/scripts/config/conf" ]; then
@@ -395,13 +398,11 @@ EOF
         fi
     fi
 
-    # 方法5: 创建功能完整的简易工具
     if [ $config_tool_created -eq 0 ]; then
         log "🔧 方法5: 创建功能完整的简易 config 工具"
         mkdir -p scripts/config
         cat > scripts/config/config << 'EOF'
 #!/bin/bash
-# 功能完整的 config 工具
 CONFIG_FILE=".config"
 
 show_help() {
@@ -412,7 +413,6 @@ show_help() {
     echo "  --set-str <name> <value> Set a string configuration option"
 }
 
-# 确保 .config 存在
 if [ ! -f "$CONFIG_FILE" ]; then
     touch "$CONFIG_FILE"
 fi
@@ -421,18 +421,14 @@ case "$1" in
     --enable)
         shift
         symbol="$1"
-        # 移除 CONFIG_ 前缀（如果存在）
         symbol="${symbol#CONFIG_}"
-        # 移除 PACKAGE_ 前缀（如果存在）
         symbol="${symbol#PACKAGE_}"
 
-        # 删除所有相关的行
         sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
         sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
         sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
         sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" "$CONFIG_FILE"
 
-        # 添加启用行
         echo "CONFIG_PACKAGE_${symbol}=y" >> "$CONFIG_FILE"
         ;;
     --disable)
@@ -487,14 +483,11 @@ EOF
         config_tool_created=1
     fi
 
-    # 创建统一调用接口 - 修复版，不使用 --help 测试
     if [ $config_tool_created -eq 1 ]; then
         log "🔧 创建统一调用接口..."
 
-        # 记录真实工具路径
         echo "$real_config_tool" > scripts/.config_tool_path
 
-        # 创建 scripts/config 软链接或副本，以便 make defconfig 能找到
         if [ ! -f "scripts/config" ]; then
             if [ -f "scripts/config/config" ]; then
                 ln -sf config scripts/config 2>/dev/null || cp scripts/config/config scripts/config 2>/dev/null || true
@@ -504,7 +497,6 @@ EOF
 
         cat > scripts/config-tool << 'EOF'
 #!/bin/sh
-# 统一 config 工具调用接口
 CONFIG_TOOL_PATH="$(dirname "$0")/.config_tool_path"
 
 if [ -f "$CONFIG_TOOL_PATH" ]; then
@@ -514,19 +506,16 @@ if [ -f "$CONFIG_TOOL_PATH" ]; then
     fi
 fi
 
-# 备选1: 直接查找
 if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
     echo "scripts/config/config" > "$CONFIG_TOOL_PATH"
     exec scripts/config/config "$@"
 fi
 
-# 备选2: 使用 conf
 if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
     echo "scripts/config/conf" > "$CONFIG_TOOL_PATH"
     exec scripts/config/conf "$@"
 fi
 
-# 备选3: 使用 mconf
 if [ -f "scripts/config/mconf" ] && [ -x "scripts/config/mconf" ]; then
     echo "scripts/config/mconf" > "$CONFIG_TOOL_PATH"
     exec scripts/config/mconf "$@"
@@ -538,11 +527,9 @@ EOF
         chmod +x scripts/config-tool
         log "✅ 统一调用接口创建成功: scripts/config-tool"
 
-        # 不再测试 --help，而是测试基本功能
         if scripts/config-tool --version > /dev/null 2>&1 || scripts/config-tool -h > /dev/null 2>&1; then
             log "✅ 统一调用接口测试通过"
         else
-            # 尝试测试是否存在
             if [ -f scripts/config/config ] || [ -f scripts/config/conf ]; then
                 log "✅ 统一调用接口可用（跳过参数测试）"
             else
@@ -551,13 +538,11 @@ EOF
         fi
     fi
 
-    # 最终验证
     if [ $config_tool_created -eq 1 ]; then
         log "✅ 配置工具最终验证通过"
         log "📁 真实工具路径: $real_config_tool"
         log "📁 统一调用接口: scripts/config-tool"
 
-        # 显示工具信息
         if [ -f "$real_config_tool" ]; then
             if file "$real_config_tool" | grep -q "ELF"; then
                 log "📋 工具类型: 已编译二进制文件"
