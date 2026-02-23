@@ -569,212 +569,17 @@ EOF
 #【build_firmware_main.sh-06-end】
 
 #【build_firmware_main.sh-07】
+# 此函数已废弃，所有源码类型均使用自带工具链
 download_openwrt_sdk() {
-    local target="$1"
-    local subtarget="$2"
-    local version="$3"
-    
-    log "=== 下载OpenWrt官方SDK工具链 ==="
-    log "目标平台: $target/$subtarget"
-    log "OpenWrt版本: $version"
-    
-    if [ ! -f "$SUPPORT_SCRIPT" ]; then
-        log "❌ support.sh不存在，无法获取SDK信息"
-        return 1
-    fi
-    
-    if [ ! -x "$SUPPORT_SCRIPT" ]; then
-        chmod +x "$SUPPORT_SCRIPT"
-        log "✅ 已添加support.sh执行权限"
-    fi
-    
-    log "🔍 通过support.sh获取SDK信息..."
-    
-    local sdk_info
-    if sdk_info=$("$SUPPORT_SCRIPT" get-sdk-info "$target" "$subtarget" "$version" 2>/dev/null); then
-        local sdk_url=$(echo "$sdk_info" | cut -d'|' -f1)
-        local sdk_file=$(echo "$sdk_info" | cut -d'|' -f2)
-        
-        if [ -z "$sdk_url" ] || [ -z "$sdk_file" ]; then
-            log "❌ 无法从support.sh获取有效的SDK信息"
-            return 1
-        fi
-        
-        log "📥 SDK下载信息:"
-        log "  URL: $sdk_url"
-        log "  文件: $sdk_file"
-        
-        local sdk_download_dir="$BUILD_DIR/sdk-download"
-        mkdir -p "$sdk_download_dir"
-        
-        log "🚀 开始下载SDK文件..."
-        if wget -q --show-progress -O "$sdk_download_dir/$sdk_file" "$sdk_url"; then
-            log "✅ SDK文件下载成功: $sdk_file"
-            
-            rm -rf "$BUILD_DIR"/openwrt-sdk-* 2>/dev/null || true
-            
-            log "📦 解压SDK文件..."
-            if tar -xf "$sdk_download_dir/$sdk_file" -C "$BUILD_DIR"; then
-                log "✅ SDK文件解压成功"
-                
-                log "🔍 查找解压后的SDK目录..."
-                
-                local extracted_dir=""
-                local sdk_base_name="${sdk_file%.tar.xz}"
-                sdk_base_name="${sdk_base_name%.tar.gz}"
-                sdk_base_name="${sdk_base_name%.tar.bz2}"
-                
-                if [ -d "$BUILD_DIR/$sdk_base_name" ]; then
-                    extracted_dir="$BUILD_DIR/$sdk_base_name"
-                else
-                    extracted_dir=$(find "$BUILD_DIR" -maxdepth 2 -type d -name "openwrt-sdk-*" 2>/dev/null | head -1)
-                fi
-                
-                if [ -n "$extracted_dir" ] && [ -d "$extracted_dir" ]; then
-                    COMPILER_DIR="$extracted_dir"
-                    log "✅ 找到SDK目录: $COMPILER_DIR"
-                    
-                    if verify_sdk_files_v2 "$COMPILER_DIR"; then
-                        log "🎉 SDK下载、解压和验证完成"
-                        log "📌 编译器目录已设置为: $COMPILER_DIR"
-                        
-                        save_env
-                        
-                        return 0
-                    else
-                        log "❌ SDK文件验证失败"
-                        return 1
-                    fi
-                else
-                    log "❌ 无法找到SDK目录，检查解压结果"
-                    log "📋 解压文件列表:"
-                    tar -tf "$sdk_download_dir/$sdk_file" | head -20
-                    return 1
-                fi
-            else
-                log "❌ SDK文件解压失败"
-                return 1
-            fi
-        else
-            log "❌ SDK文件下载失败"
-            return 1
-        fi
-    else
-        log "❌ support.sh未提供SDK下载功能"
-        return 1
-    fi
+    log "=== SDK下载功能已废弃 ==="
+    log "✅ 所有源码类型均使用源码自带工具链，无需下载SDK"
+    return 0
 }
 
 verify_sdk_files_v2() {
-    local sdk_dir="$1"
-    
-    log "=== 验证SDK文件完整性V2（修复版） ==="
-    
-    if [ ! -d "$sdk_dir" ]; then
-        log "❌ SDK目录不存在: $sdk_dir"
-        return 1
-    fi
-    
-    log "✅ SDK目录存在: $sdk_dir"
-    log "📊 目录大小: $(du -sh "$sdk_dir" 2>/dev/null | awk '{print $1}' || echo '未知')"
-    log "📁 目录内容:"
-    ls -la "$sdk_dir/" | head -10
-    
-    log "🔍 检查SDK目录结构..."
-    
-    if [ -d "$sdk_dir/staging_dir" ]; then
-        log "✅ 找到 staging_dir 目录"
-        
-        local toolchain_dirs=$(find "$sdk_dir/staging_dir" -maxdepth 1 -type d -name "toolchain-*" 2>/dev/null)
-        if [ -n "$toolchain_dirs" ]; then
-            log "✅ 找到工具链目录"
-            
-            local gcc_files=$(find "$sdk_dir/staging_dir/toolchain-"* -maxdepth 3 -type f -executable \
-              -name "*gcc" \
-              ! -name "*gcc-ar" \
-              ! -name "*gcc-ranlib" \
-              ! -name "*gcc-nm" \
-              2>/dev/null | head -1)
-            
-            if [ -n "$gcc_files" ]; then
-                log "✅ 在工具链目录中找到GCC编译器: $(basename "$gcc_files")"
-                local gcc_version=$("$gcc_files" --version 2>&1 | head -1)
-                log "📋 GCC版本: $gcc_version"
-                return 0
-            fi
-        fi
-        
-        log "🔍 直接在 staging_dir 中搜索GCC..."
-        local gcc_files=$(find "$sdk_dir/staging_dir" -maxdepth 3 -type f -executable \
-          -name "*gcc" \
-          ! -name "*gcc-ar" \
-          ! -name "*gcc-ranlib" \
-          ! -name "*gcc-nm" \
-          2>/dev/null | head -1)
-        
-        if [ -n "$gcc_files" ]; then
-            log "✅ 在 staging_dir 中找到GCC编译器: $(basename "$gcc_files")"
-            local gcc_version=$("$gcc_files" --version 2>&1 | head -1)
-            log "📋 GCC版本: $gcc_version"
-            return 0
-        fi
-    fi
-    
-    if [ -d "$sdk_dir/toolchain" ]; then
-        log "✅ 找到 toolchain 目录"
-        
-        local gcc_files=$(find "$sdk_dir/toolchain" -maxdepth 3 -type f -executable \
-          -name "*gcc" \
-          ! -name "*gcc-ar" \
-          ! -name "*gcc-ranlib" \
-          ! -name "*gcc-nm" \
-          2>/dev/null | head -1)
-        
-        if [ -n "$gcc_files" ]; then
-            log "✅ 在 toolchain 目录中找到GCC编译器: $(basename "$gcc_files")"
-            local gcc_version=$("$gcc_files" --version 2>&1 | head -1)
-            log "📋 GCC版本: $gcc_version"
-            return 0
-        fi
-    fi
-    
-    log "🔍 在整个SDK目录中搜索GCC..."
-    local gcc_files=$(find "$sdk_dir" -maxdepth 5 -type f -executable \
-      -name "*gcc" \
-      ! -name "*gcc-ar" \
-      ! -name "*gcc-ranlib" \
-      ! -name "*gcc-nm" \
-      2>/dev/null | head -1)
-    
-    if [ -n "$gcc_files" ]; then
-        log "✅ 在SDK中找到GCC编译器: $(basename "$gcc_files")"
-        log "🔧 完整路径: $gcc_files"
-        local gcc_version=$("$gcc_files" --version 2>&1 | head -1)
-        log "📋 GCC版本: $gcc_version"
-        return 0
-    fi
-    
-    log "🔍 检查工具链工具..."
-    local toolchain_tools=$(find "$sdk_dir" -maxdepth 5 -type f -executable \
-      -name "*gcc*" \
-      2>/dev/null | head -5)
-    
-    if [ -n "$toolchain_tools" ]; then
-        log "📋 找到的工具链工具:"
-        while read tool; do
-            local tool_name=$(basename "$tool")
-            log "  🔧 $tool_name"
-        done <<< "$toolchain_tools"
-        
-        log "✅ 找到工具链工具，SDK可能有效"
-        return 0
-    fi
-    
-    log "❌ 未找到任何GCC编译器或工具链工具"
-    log "📁 SDK目录内容详细列表:"
-    find "$sdk_dir" -type f -executable -name "*" 2>/dev/null | head -20
-    
-    return 1
+    log "=== SDK验证功能已废弃 ==="
+    log "✅ 所有源码类型均使用源码自带工具链"
+    return 0
 }
 
 verify_sdk_files() {
@@ -785,7 +590,7 @@ verify_sdk_files() {
 #【build_firmware_main.sh-08】
 initialize_compiler_env() {
     local device_name="$1"
-    log "=== 初始化编译器环境（根据源码类型选择SDK或源码工具链）==="
+    log "=== 初始化编译器环境（所有源码类型均使用源码自带工具链）==="
     
     # 加载环境变量
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
@@ -793,116 +598,32 @@ initialize_compiler_env() {
         log "✅ 从 $BUILD_DIR/build_env.sh 加载环境变量"
     fi
     
-    # 如果是LEDE源码，直接返回（LEDE使用源码自带工具链）
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "✅ LEDE源码模式：使用源码自带工具链，无需下载SDK"
-        
-        # 设置编译器目录为源码目录（用于后续检查）
-        COMPILER_DIR="$BUILD_DIR"
-        save_env
-        
-        # 检查是否有基本的工具链目录
-        if [ -d "$BUILD_DIR/staging_dir" ]; then
-            log "✅ 找到staging_dir目录，源码工具链已准备就绪"
-        else
-            log "ℹ️ staging_dir目录将在编译过程中自动生成"
-        fi
-        
-        return 0
-    fi
+    # 所有源码类型都使用源码自带工具链
+    log "✅ 所有源码类型均使用源码自带工具链，无需下载SDK"
     
-    log "🔍 检查环境文件..."
-    if [ -f "$BUILD_DIR/build_env.sh" ]; then
-        source "$BUILD_DIR/build_env.sh"
-        log "✅ 从 $BUILD_DIR/build_env.sh 加载环境变量"
-    else
-        log "❌ 环境文件不存在: $BUILD_DIR/build_env.sh"
-        
-        if [ -f "$SUPPORT_SCRIPT" ]; then
-            log "🔍 调用support.sh获取设备信息..."
-            PLATFORM_INFO=$("$SUPPORT_SCRIPT" get-platform "$device_name")
-            if [ -n "$PLATFORM_INFO" ]; then
-                TARGET=$(echo "$PLATFORM_INFO" | awk '{print $1}')
-                SUBTARGET=$(echo "$PLATFORM_INFO" | awk '{print $2}')
-                DEVICE="$device_name"
-                CONFIG_MODE="normal"
-                log "✅ 从support.sh获取平台信息: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
-            else
-                log "❌ 无法从support.sh获取平台信息"
-                return 1
-            fi
-        else
-            log "❌ support.sh不存在"
-            return 1
-        fi
-        
-        save_env
-        log "✅ 已创建环境文件: $BUILD_DIR/build_env.sh"
-    fi
+    # 设置编译器目录为源码目录
+    COMPILER_DIR="$BUILD_DIR"
+    save_env
     
-    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-        log "✅ 使用环境变量中的编译器目录: $COMPILER_DIR"
+    # 检查是否有基本的工具链目录
+    if [ -d "$BUILD_DIR/staging_dir" ]; then
+        log "✅ 找到staging_dir目录，源码工具链已准备就绪"
         
-        log "🔍 验证编译器目录有效性..."
-        local gcc_files=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
+        # 查找工具链中的GCC编译器
+        local gcc_files=$(find "$BUILD_DIR/staging_dir" -maxdepth 5 -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
         
         if [ -n "$gcc_files" ]; then
-            log "✅ 确认编译器目录包含真正的GCC"
-            local first_gcc=$(echo "$gcc_files" | head -1)
-            log "  🎯 GCC文件: $(basename "$first_gcc")"
-            log "  🔧 GCC版本: $("$first_gcc" --version 2>&1 | head -1)"
-            
-            save_env
-            return 0
+            log "✅ 找到工具链中的GCC编译器: $(basename "$gcc_files")"
+            log "  🔧 GCC版本: $("$gcc_files" --version 2>&1 | head -1)"
         else
-            log "⚠️ 编译器目录存在但不包含真正的GCC，将重新下载SDK"
+            log "ℹ️ 工具链将在编译过程中自动生成"
         fi
     else
-        log "🔍 COMPILER_DIR未设置或目录不存在，将下载OpenWrt官方SDK"
+        log "ℹ️ staging_dir目录将在编译过程中自动生成"
     fi
     
-    log "目标平台: $TARGET/$SUBTARGET"
-    log "目标设备: $DEVICE"
-    log "OpenWrt版本: $SELECTED_BRANCH"
-    
-    local version_for_sdk=""
-    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-        version_for_sdk="23.05"
-    elif [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-        version_for_sdk="21.02"
-    else
-        log "❌ 不支持的OpenWrt版本: $SELECTED_BRANCH"
-        return 1
-    fi
-    
-    log "📌 SDK版本: $version_for_sdk"
-    log "📌 目标平台: $TARGET/$SUBTARGET"
-    
-    log "🚀 开始下载OpenWrt官方SDK..."
-    if download_openwrt_sdk "$TARGET" "$SUBTARGET" "$version_for_sdk"; then
-        log "🎉 OpenWrt SDK下载并设置成功"
-        log "📌 编译器目录: $COMPILER_DIR"
-        
-        if [ -d "$COMPILER_DIR" ]; then
-            log "📊 SDK目录信息:"
-            log "  目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | awk '{print $1}' || echo '未知')"
-            
-            local gcc_file=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
-            
-            if [ -n "$gcc_file" ]; then
-                log "✅ 找到SDK中的GCC编译器: $(basename "$gcc_file")"
-                log "  🔧 完整路径: $gcc_file"
-                log "  📋 版本信息: $("$gcc_file" --version 2>&1 | head -1)"
-            fi
-        fi
-        
-        save_env
-        
-        return 0
-    else
-        log "❌ OpenWrt SDK下载失败"
-        return 1
-    fi
+    log "✅ 编译器环境初始化完成"
+    return 0
 }
 #【build_firmware_main.sh-08-end】
 
@@ -912,12 +633,24 @@ add_turboacc_support() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
     log "=== 添加 TurboACC 支持 ==="
+    log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     # 使用配置文件中的开关
     if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
         log "🔧 为正常模式添加 TurboACC 支持"
-        echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
-        log "✅ TurboACC feed 添加完成"
+        
+        # 检查feeds.conf.default是否存在
+        if [ ! -f "feeds.conf.default" ]; then
+            touch feeds.conf.default
+        fi
+        
+        # 检查是否已经添加了turboacc feed
+        if ! grep -q "turboacc" feeds.conf.default; then
+            echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
+            log "✅ TurboACC feed 添加完成"
+        else
+            log "ℹ️ TurboACC feed 已存在"
+        fi
     else
         if [ "$CONFIG_MODE" = "normal" ]; then
             log "ℹ️ TurboACC 已被配置禁用"
@@ -934,21 +667,71 @@ configure_feeds() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
     log "=== 配置Feeds ==="
+    log "源码仓库类型: $SOURCE_REPO_TYPE"
     
-    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-        FEEDS_BRANCH="openwrt-23.05"
+    # 根据源码类型设置feeds
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 LEDE源码模式: 使用LEDE官方feeds"
+        
+        # LEDE使用自己的feeds
+        cat > feeds.conf.default << 'EOF'
+src-git packages https://github.com/coolsnowwolf/packages.git
+src-git luci https://github.com/coolsnowwolf/luci.git
+src-git routing https://github.com/coolsnowwolf/routing.git
+src-git telephony https://github.com/coolsnowwolf/telephony.git
+EOF
+        
+        # LEDE的TurboACC支持（如果启用）
+        if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+            echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
+            log "✅ 添加TurboACC feed"
+        fi
+        
+    elif [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
+        log "🔧 OpenWrt官方源码模式: 使用OpenWrt官方feeds"
+        
+        # OpenWrt官方feeds
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            FEEDS_BRANCH="openwrt-23.05"
+        else
+            FEEDS_BRANCH="openwrt-21.02"
+        fi
+        
+        cat > feeds.conf.default << EOF
+src-git packages https://github.com/openwrt/packages.git;$FEEDS_BRANCH
+src-git luci https://github.com/openwrt/luci.git;$FEEDS_BRANCH
+src-git routing https://github.com/openwrt/routing.git;$FEEDS_BRANCH
+src-git telephony https://github.com/openwrt/telephony.git;$FEEDS_BRANCH
+EOF
+        
+        if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+            echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
+            log "✅ 添加TurboACC feed"
+        fi
+        
     else
-        FEEDS_BRANCH="openwrt-21.02"
+        # 默认使用immortalwrt
+        log "🔧 ImmortalWrt源码模式: 使用ImmortalWrt官方feeds"
+        
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            FEEDS_BRANCH="openwrt-23.05"
+        else
+            FEEDS_BRANCH="openwrt-21.02"
+        fi
+        
+        cat > feeds.conf.default << EOF
+src-git packages ${PACKAGES_FEED_URL:-https://github.com/immortalwrt/packages.git};$FEEDS_BRANCH
+src-git luci ${LUCI_FEED_URL:-https://github.com/immortalwrt/luci.git};$FEEDS_BRANCH
+EOF
+        
+        if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+            echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
+            log "✅ 添加TurboACC feed"
+        fi
     fi
     
-    # 使用配置文件中的Feed URL
-    echo "src-git packages ${PACKAGES_FEED_URL:-https://github.com/immortalwrt/packages.git};$FEEDS_BRANCH" > feeds.conf.default
-    echo "src-git luci ${LUCI_FEED_URL:-https://github.com/immortalwrt/luci.git};$FEEDS_BRANCH" >> feeds.conf.default
-    
-    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
-        echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
-        log "✅ 添加TurboACC feed（所有版本）"
-    fi
+    log "📋 feeds.conf.default 内容:"
+    cat feeds.conf.default
     
     log "=== 更新Feeds ==="
     ./scripts/feeds update -a || handle_error "更新feeds失败"
@@ -2872,7 +2655,7 @@ EOF
 
 #【build_firmware_main.sh-20】
 verify_compiler_files() {
-    log "=== 验证预构建编译器文件 ==="
+    log "=== 验证源码自带工具链 ==="
     
     local target_platform=""
     local target_suffix=""
@@ -2908,182 +2691,29 @@ verify_compiler_files() {
             ;;
     esac
     
-    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-        log "✅ 使用环境变量中的编译器目录: $COMPILER_DIR"
-        local compiler_dir="$COMPILER_DIR"
-    else
-        log "🔍 编译器目录未设置或目录不存在"
-        log "💡 将使用OpenWrt自动构建的编译器"
-        return 0
-    fi
+    log "✅ 所有源码类型均使用源码自带工具链"
+    log "📊 源码目录大小: $(du -sh "$BUILD_DIR" 2>/dev/null | awk '{print $1}' || echo '未知')"
     
-    log "📊 编译器目录详细检查:"
-    log "  路径: $compiler_dir"
-    log "  大小: $(du -sh "$compiler_dir" 2>/dev/null | awk '{print $1}' || echo '未知')"
-    
-    log "⚙️ 可执行编译器检查:"
-    local gcc_executable=""
-    
-    if [ -d "$compiler_dir/bin" ]; then
-        gcc_executable=$(find "$compiler_dir/bin" -type f -executable \
-          -name "*gcc" \
-          ! -name "*gcc-ar" \
-          ! -name "*gcc-ranlib" \
-          ! -name "*gcc-nm" \
-          ! -path "*dummy-tools*" \
-          ! -path "*scripts*" \
-          2>/dev/null | head -1)
-    fi
-    
-    if [ -z "$gcc_executable" ]; then
-        gcc_executable=$(find "$compiler_dir" -maxdepth 5 -type f -executable \
-          -name "*gcc" \
-          ! -name "*gcc-ar" \
-          ! -name "*gcc-ranlib" \
-          ! -name "*gcc-nm" \
-          ! -path "*dummy-tools*" \
-          ! -path "*scripts*" \
-          2>/dev/null | head -1)
-    fi
-    
-    local gpp_executable=$(find "$compiler_dir" -maxdepth 5 -type f -executable \
-      -name "*g++" \
-      ! -name "*g++-*" \
-      ! -path "*dummy-tools*" \
-      ! -path "*scripts*" \
-      2>/dev/null | head -1)
-    
-    local gcc_version_valid=0
-    
-    if [ -n "$gcc_executable" ]; then
-        local executable_name=$(basename "$gcc_executable")
-        log "  ✅ 找到可执行GCC: $executable_name"
+    # 检查staging_dir
+    if [ -d "$BUILD_DIR/staging_dir" ]; then
+        log "✅ staging_dir目录存在"
+        log "📊 staging_dir大小: $(du -sh "$BUILD_DIR/staging_dir" 2>/dev/null | awk '{print $1}' || echo '未知')"
         
-        local version_output=$("$gcc_executable" --version 2>&1)
-        if echo "$version_output" | grep -qi "dummy-tools"; then
-            log "     ⚠️ 虚假的GCC编译器: scripts/dummy-tools/gcc"
-            log "     🔍 继续查找真正的GCC编译器..."
-            
-            gcc_executable=$(find "$compiler_dir" -maxdepth 5 -type f -executable \
-              -name "*gcc" \
-              ! -name "*gcc-ar" \
-              ! -name "*gcc-ranlib" \
-              ! -name "*gcc-nm" \
-              ! -path "*dummy-tools*" \
-              ! -path "*scripts*" \
-              ! -path "$(dirname "$gcc_executable")" \
-              2>/dev/null | head -1)
-            
-            if [ -n "$gcc_executable" ]; then
-                executable_name=$(basename "$gcc_executable")
-                log "     ✅ 找到新的GCC编译器: $executable_name"
-            fi
-        fi
+        # 查找工具链中的GCC编译器
+        local gcc_file=$(find "$BUILD_DIR/staging_dir" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
         
-        if [ -n "$gcc_executable" ]; then
-            if check_gcc_version "$gcc_executable" "11"; then
-                gcc_version_valid=1
-                log "     🎯 GCC 8-15.x 版本兼容验证成功"
-            else
-                log "     ⚠️ GCC版本检查警告"
-                
-                local version=$("$gcc_executable" --version 2>&1 | head -1)
-                log "     实际版本: $version"
-                
-                local major_version=$(echo "$version" | grep -o "[0-9]\+" | head -1)
-                if [ -n "$major_version" ]; then
-                    if [ "$major_version" -ge 8 ] && [ "$major_version" -le 15 ]; then
-                        log "     ✅ GCC $major_version.x 可以兼容使用"
-                        gcc_version_valid=1
-                    elif echo "$version" | grep -qi "12.3.0"; then
-                        log "     🎯 检测到OpenWrt 23.05 SDK GCC 12.3.0，自动兼容"
-                        gcc_version_valid=1
-                    fi
-                fi
-            fi
-        fi
-    else
-        log "  🔍 未找到真正的GCC编译器，查找工具链工具..."
-        
-        local toolchain_tools=$(find "$compiler_dir" -maxdepth 5 -type f -executable \
-          -name "*gcc*" \
-          ! -path "*dummy-tools*" \
-          ! -path "*scripts*" \
-          2>/dev/null | head -5)
-        
-        if [ -n "$toolchain_tools" ]; then
-            log "  找到的工具链工具:"
-            while read tool; do
-                local tool_name=$(basename "$tool")
-                log "    🔧 $tool_name"
-            done <<< "$toolchain_tools"
-        fi
-    fi
-    
-    if [ -n "$gpp_executable" ]; then
-        log "  ✅ 找到可执行G++: $(basename "$gpp_executable")"
-    fi
-    
-    log "🔨 工具链完整性检查:"
-    local required_tools=("as" "ld" "ar" "strip" "objcopy" "objdump" "nm" "ranlib")
-    local tool_found_count=0
-    
-    for tool in "${required_tools[@]}"; do
-        local tool_executable=$(find "$compiler_dir" -maxdepth 5 -type f -executable -name "*${tool}*" \
-          ! -path "*dummy-tools*" \
-          ! -path "*scripts*" \
-          2>/dev/null | head -1)
-        if [ -n "$tool_executable" ]; then
-            log "  ✅ $tool: 找到 ($(basename "$tool_executable"))"
-            tool_found_count=$((tool_found_count + 1))
+        if [ -n "$gcc_file" ]; then
+            log "✅ 找到工具链中的GCC编译器: $(basename "$gcc_file")"
+            log "  🔧 完整路径: $gcc_file"
+            log "  📋 版本信息: $("$gcc_file" --version 2>&1 | head -1)"
         else
-            log "  ⚠️ $tool: 未找到"
+            log "ℹ️ 工具链将在编译过程中生成"
         fi
-    done
-    
-    log "📈 编译器完整性评估:"
-    log "  真正的GCC编译器: $([ -n "$gcc_executable" ] && echo "是" || echo "否")"
-    log "  GCC兼容版本: $([ $gcc_version_valid -eq 1 ] && echo "是" || echo "否")"
-    log "  工具链工具: $tool_found_count/${#required_tools[@]} 找到"
-    
-    if [ -n "$gcc_executable" ] && [ $gcc_version_valid -eq 1 ] && [ $tool_found_count -ge 5 ]; then
-        log "🎉 预构建编译器文件完整，GCC版本兼容"
-        log "📌 编译器目录: $compiler_dir"
-        
-        if [ -d "$compiler_dir/bin" ]; then
-            export PATH="$compiler_dir/bin:$compiler_dir:$PATH"
-            log "🔧 已将编译器目录添加到PATH环境变量"
-        fi
-        
-        return 0
-    elif [ -n "$gcc_executable" ] && [ $gcc_version_valid -eq 1 ]; then
-        log "⚠️ GCC版本兼容，但工具链不完整"
-        log "💡 将尝试使用，但可能回退到自动构建"
-        
-        if [ -d "$compiler_dir/bin" ]; then
-            export PATH="$compiler_dir/bin:$compiler_dir:$PATH"
-        fi
-        return 0
-    elif [ -n "$gcc_executable" ]; then
-        log "⚠️ 找到GCC编译器但版本可能不兼容"
-        log "💡 建议使用GCC 8-15版本以获得最佳兼容性"
-        
-        if [ -n "$gcc_executable" ]; then
-            local actual_version=$("$gcc_executable" --version 2>&1 | head -1)
-            log "  实际GCC版本: $actual_version"
-            
-            if echo "$actual_version" | grep -qi "12.3.0"; then
-                log "  🎯 检测到OpenWrt 23.05 SDK GCC 12.3.0，允许继续"
-                return 0
-            fi
-        fi
-        
-        return 1
     else
-        log "⚠️ 预构建编译器文件可能不完整"
-        log "💡 将使用OpenWrt自动构建的编译器作为后备"
-        return 1
+        log "ℹ️ staging_dir目录将在编译过程中生成"
     fi
+    
+    log "✅ 源码工具链验证完成"
 }
 #【build_firmware_main.sh-20-end】
 
@@ -3385,98 +3015,93 @@ save_source_code_info() {
 # ============================================
 #【build_firmware_main.sh-26】
 workflow_step10_verify_sdk() {
-    log "=== 步骤10: 验证SDK下载结果（修复版：动态检查） ==="
+    log "=== 步骤10: 验证源码自带工具链 ==="
     
     trap 'echo "⚠️ 步骤10 验证过程中出现错误，继续执行..."' ERR
     
-    echo "🔍 检查SDK下载结果..."
+    echo "🔍 检查源码自带工具链..."
     
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
         echo "✅ 从环境文件加载变量: COMPILER_DIR=$COMPILER_DIR, SOURCE_REPO_TYPE=$SOURCE_REPO_TYPE"
-    else
-        echo "❌ 环境文件不存在"
     fi
     
-    # 如果是LEDE源码模式，进行不同的验证
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        echo "✅ LEDE源码模式：使用源码自带工具链"
-        echo "📊 源码目录大小: $(du -sh "$BUILD_DIR" 2>/dev/null | awk '{print $1}' || echo '未知')"
-        
-        # 检查是否有staging_dir（可能在编译过程中生成）
-        if [ -d "$BUILD_DIR/staging_dir" ]; then
-            echo "✅ 找到staging_dir目录，源码工具链已准备就绪"
-            
-            GCC_FILE=$(find "$BUILD_DIR/staging_dir" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
-            if [ -n "$GCC_FILE" ]; then
-                echo "✅ 找到工具链中的GCC编译器: $(basename "$GCC_FILE")"
-                echo "🔧 GCC版本测试:"
-                "$GCC_FILE" --version 2>&1 | head -1
-            else
-                echo "ℹ️ 工具链将在编译过程中自动生成"
-            fi
-        else
-            echo "ℹ️ staging_dir目录将在编译过程中自动生成"
-        fi
-        
-        echo "✅ LEDE源码验证完成"
-        log "✅ 步骤10 完成"
-        return 0
-    fi
+    echo "✅ 源码仓库类型: $SOURCE_REPO_TYPE"
+    echo "📊 源码目录大小: $(du -sh "$BUILD_DIR" 2>/dev/null | awk '{print $1}' || echo '未知')"
     
-    # 原有的SDK验证逻辑
-    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-        echo "✅ SDK目录存在: $COMPILER_DIR"
-        echo "📊 SDK目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | awk '{print $1}' || echo '未知')"
+    # 检查staging_dir目录
+    if [ -d "$BUILD_DIR/staging_dir" ]; then
+        echo "✅ 找到staging_dir目录，源码工具链已准备就绪"
+        echo "📊 staging_dir大小: $(du -sh "$BUILD_DIR/staging_dir" 2>/dev/null | awk '{print $1}' || echo '未知')"
         
-        GCC_FILE=$(find "$COMPILER_DIR" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" ! -path "*dummy-tools*" ! -path "*scripts*" 2>/dev/null | head -1)
+        # 查找工具链中的GCC编译器
+        GCC_FILE=$(find "$BUILD_DIR/staging_dir" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
         
-        if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
-            echo "✅ 找到可执行GCC编译器: $(basename "$GCC_FILE")"
+        if [ -n "$GCC_FILE" ]; then
+            echo "✅ 找到工具链中的GCC编译器: $(basename "$GCC_FILE")"
             echo "🔧 GCC版本测试:"
             "$GCC_FILE" --version 2>&1 | head -1
             
-            SDK_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
-            MAJOR_VERSION=$(echo "$SDK_VERSION" | grep -o "[0-9]\+" | head -1)
+            # 提取GCC版本信息
+            GCC_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
+            MAJOR_VERSION=$(echo "$GCC_VERSION" | grep -o "[0-9]\+" | head -1)
             
-            echo "💡 这是OpenWrt官方SDK交叉编译器，用于编译目标平台固件"
-            
-            if [ "$MAJOR_VERSION" = "12" ]; then
-                echo "💡 SDK GCC版本: 12.3.0 (OpenWrt 23.05 SDK)"
-            elif [ "$MAJOR_VERSION" = "8" ]; then
-                echo "💡 SDK GCC版本: 8.4.0 (OpenWrt 21.02 SDK)"
-            else
-                echo "💡 SDK GCC版本: $MAJOR_VERSION.x"
-            fi
+            case "$SOURCE_REPO_TYPE" in
+                "lede")
+                    echo "💡 LEDE源码工具链"
+                    ;;
+                "openwrt")
+                    if [ "$MAJOR_VERSION" = "12" ]; then
+                        echo "💡 OpenWrt 23.05源码工具链 (GCC 12.x)"
+                    elif [ "$MAJOR_VERSION" = "8" ]; then
+                        echo "💡 OpenWrt 21.02源码工具链 (GCC 8.x)"
+                    else
+                        echo "💡 OpenWrt源码工具链 (GCC $MAJOR_VERSION.x)"
+                    fi
+                    ;;
+                "immortalwrt")
+                    if [ "$MAJOR_VERSION" = "12" ]; then
+                        echo "💡 ImmortalWrt 23.05源码工具链 (GCC 12.x)"
+                    elif [ "$MAJOR_VERSION" = "8" ]; then
+                        echo "💡 ImmortalWrt 21.02源码工具链 (GCC 8.x)"
+                    else
+                        echo "💡 ImmortalWrt源码工具链 (GCC $MAJOR_VERSION.x)"
+                    fi
+                    ;;
+                *)
+                    echo "💡 源码工具链 (GCC $MAJOR_VERSION.x)"
+                    ;;
+            esac
         else
-            echo "❌ 未找到可执行的GCC编译器"
-            
-            DUMMY_GCC=$(find "$COMPILER_DIR" -type f -executable -name "*gcc" -path "*dummy-tools*" 2>/dev/null | head -1)
-            
-            if [ -n "$DUMMY_GCC" ]; then
-                echo "⚠️ 检测到虚假的dummy-tools编译器: $DUMMY_GCC"
-                echo "💡 这是OpenWrt构建系统的占位符，不是真正的编译器"
-            fi
+            echo "ℹ️ 工具链将在编译过程中自动生成"
         fi
     else
-        echo "❌ SDK目录不存在: $COMPILER_DIR"
-        echo "💡 检查可能的SDK目录..."
-        
-        found_dirs=$(find "$BUILD_DIR" -maxdepth 1 -type d -name "*sdk*" 2>/dev/null)
-        if [ -n "$found_dirs" ]; then
-            echo "找到可能的SDK目录:"
-            echo "$found_dirs"
-            
-            first_dir=$(echo "$found_dirs" | head -1)
-            echo "使用目录: $first_dir"
-            COMPILER_DIR="$first_dir"
-            
-            save_env
-            echo "✅ 已更新环境文件"
-        fi
+        echo "ℹ️ staging_dir目录尚未生成，将在编译过程中自动创建"
     fi
     
-    echo "✅ SDK验证完成"
+    # 检查关键目录
+    echo ""
+    echo "📁 源码关键目录检查:"
+    if [ -d "$BUILD_DIR/scripts" ]; then
+        echo "  ✅ scripts目录: 存在"
+    else
+        echo "  ❌ scripts目录: 不存在"
+    fi
+    
+    if [ -f "$BUILD_DIR/Makefile" ]; then
+        echo "  ✅ Makefile: 存在"
+    else
+        echo "  ❌ Makefile: 不存在"
+    fi
+    
+    if [ -f "$BUILD_DIR/feeds.conf.default" ]; then
+        echo "  ✅ feeds.conf.default: 存在"
+    else
+        echo "  ❌ feeds.conf.default: 不存在"
+    fi
+    
+    echo ""
+    echo "✅ 源码工具链验证完成"
     log "✅ 步骤10 完成"
 }
 #【build_firmware_main.sh-26-end】
@@ -3489,6 +3114,7 @@ workflow_step10_verify_sdk() {
 #【build_firmware_main.sh-27】
 workflow_step11_add_turboacc() {
     log "=== 步骤11: 添加 TurboACC 支持 ==="
+    log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     set -e
     trap 'echo "❌ 步骤11 失败，退出代码: $?"; exit 1' ERR
@@ -4449,6 +4075,7 @@ workflow_step23_pre_build_check() {
         echo "   SUBTARGET=$SUBTARGET"
         echo "   DEVICE=$DEVICE"
         echo "   CONFIG_MODE=$CONFIG_MODE"
+        echo "   SOURCE_REPO_TYPE=$SOURCE_REPO_TYPE"
         echo "   COMPILER_DIR=$COMPILER_DIR"
     else
         echo "❌ 错误: 环境文件不存在 ($BUILD_DIR/build_env.sh)"
@@ -4470,14 +4097,12 @@ workflow_step23_pre_build_check() {
         echo "   ✅ .config 文件存在"
         echo "   📊 大小: $config_size, 行数: $config_lines"
         
-        # 构建设备配置行
         local device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
         local expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_config}=y"
         
         if grep -q "^${expected_config}$" .config; then
             echo "   ✅ 设备配置正确: $expected_config"
         else
-            # 尝试查找任何包含该设备的配置行（兼容旧格式）
             if grep -q "CONFIG_TARGET_.*DEVICE.*${device_for_config}=y" .config; then
                 echo "   ✅ 设备配置正确 (模糊匹配)"
             else
@@ -4491,24 +4116,22 @@ workflow_step23_pre_build_check() {
     fi
     echo ""
     
-    echo "2. ✅ SDK/编译器检查:"
-    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-        echo "   ✅ SDK目录存在: $COMPILER_DIR"
-        local sdk_size=$(du -sh "$COMPILER_DIR" 2>/dev/null | awk '{print $1}')
-        echo "   📊 大小: $sdk_size"
+    echo "2. ✅ 源码工具链检查:"
+    echo "   ✅ 源码类型: $SOURCE_REPO_TYPE，使用源码自带工具链"
+    
+    if [ -d "$BUILD_DIR/staging_dir" ]; then
+        echo "   ✅ staging_dir目录存在"
+        local staging_size=$(du -sh "$BUILD_DIR/staging_dir" 2>/dev/null | awk '{print $1}')
+        echo "   📊 大小: $staging_size"
         
-        local gcc_file=$(find "$COMPILER_DIR" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" ! -path "*dummy-tools*" 2>/dev/null | head -1)
+        local gcc_file=$(find "$BUILD_DIR/staging_dir" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
         if [ -n "$gcc_file" ]; then
-            echo "   ✅ 找到GCC: $(basename "$gcc_file")"
-            local gcc_version=$("$gcc_file" --version 2>&1 | head -1)
-            echo "   🔧 版本: $gcc_version"
+            echo "   ✅ 找到GCC编译器: $(basename "$gcc_file")"
         else
-            echo "   ❌ 未找到GCC编译器"
-            error_count=$((error_count + 1))
+            echo "   ℹ️ 工具链将在编译过程中生成"
         fi
     else
-        echo "   ❌ SDK目录不存在"
-        error_count=$((error_count + 1))
+        echo "   ℹ️ staging_dir将在编译过程中生成"
     fi
     echo ""
     
