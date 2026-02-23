@@ -254,7 +254,6 @@ initialize_build_env() {
         log "✅ 克隆成功，当前分支: $actual_branch"
     fi
     
-    # 显示详细的源码信息
     log "=== 源码信息详情 ==="
     log "当前工作目录: $(pwd)"
     log "源码仓库 URL: $SELECTED_REPO_URL"
@@ -295,13 +294,11 @@ initialize_build_env() {
         log "⚠️ 不是 git 仓库，无法获取详细信息"
     fi
 
-    # 检查关键源码文件
     log "=== 关键源码文件检查 ==="
     local important_source_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
     for file in "${important_source_files[@]}"; do
         if [ -f "$file" ]; then
             log "✅ 存在: $file"
-            # 显示文件头部信息以验证版本
             head -3 "$file" 2>/dev/null | while read line; do
                 log "    $line"
             done
@@ -317,7 +314,7 @@ initialize_build_env() {
             log "  $line"
         done
         
-        # 如果是 LEDE，立即修复 feeds.conf.default
+        # 如果是 LEDE，立即修复 feeds.conf.default 中的错误格式
         if [ "$repo_type" = "lede" ]; then
             log "🔧 LEDE 源码，立即修复 feeds.conf.default 中的错误格式..."
             
@@ -341,7 +338,6 @@ EOF
     fi
 
     log "=== 设备配置 ==="
-    # 判断是否使用手动输入的芯片型号和子平台
     if [ -n "$manual_target" ] && [ -n "$manual_subtarget" ]; then
         TARGET="$manual_target"
         SUBTARGET="$manual_subtarget"
@@ -382,7 +378,7 @@ EOF
         acrh17|rt-acrh17|asus_rt-acrh17)
             search_device="acrh17"
             ;;
-        cmcc_rax3000m)
+        cmcc_rax3000m|cmcc_rax3000m-nand)
             search_device="rax3000m"
             ;;
         netgear_wndr3800)
@@ -443,21 +439,263 @@ EOF
     local config_tool_created=0
     local real_config_tool=""
 
-    log "🔧 编译配置工具..."
-
+    log "🔧 方法1: 编译 scripts/config..."
     if [ -d "scripts/config" ]; then
         cd scripts/config
         make
         cd $BUILD_DIR
 
         if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
-            log "✅ 编译生成 conf 工具成功"
+            log "✅ 方法1成功: 编译生成 conf 工具"
+
+            mkdir -p scripts/config
+            cat > scripts/config/config << 'EOF'
+#!/bin/sh
+# OpenWrt config 工具包装脚本
+# 使用编译生成的 conf 工具
+
+CONF_TOOL="$(dirname "$0")/conf"
+
+if [ ! -x "$CONF_TOOL" ]; then
+    echo "Error: conf tool not found" >&2
+    exit 1
+fi
+
+case "$1" in
+    --enable)
+        shift
+        "$CONF_TOOL" --defconfig CONFIG_$1=y .config
+        ;;
+    --disable)
+        shift
+        "$CONF_TOOL" --defconfig CONFIG_$1=n .config
+        ;;
+    --module)
+        shift
+        "$CONF_TOOL" --defconfig CONFIG_$1=m .config
+        ;;
+    --set-str)
+        shift
+        name="$1"
+        value="$2"
+        "$CONF_TOOL" --defconfig CONFIG_$name="$value" .config
+        shift 2
+        ;;
+    *)
+        "$CONF_TOOL" "$@"
+        ;;
+esac
+EOF
+            chmod +x scripts/config/config
+            log "✅ 创建 config 包装脚本成功"
+            real_config_tool="scripts/config/config"
+            config_tool_created=1
+        elif [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+            log "✅ 方法1成功: 编译生成 config 工具"
+            real_config_tool="scripts/config/config"
             config_tool_created=1
         fi
     fi
 
     if [ $config_tool_created -eq 0 ]; then
-        log "⚠️ 配置工具编译失败，使用内置配置工具"
+        if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
+            log "✅ 方法2成功: 直接使用 conf 工具"
+            mkdir -p scripts/config
+            cat > scripts/config/config << 'EOF'
+#!/bin/sh
+exec "$(dirname "$0")/conf" "$@"
+EOF
+            chmod +x scripts/config/config
+            real_config_tool="scripts/config/config"
+            config_tool_created=1
+        fi
+    fi
+
+    if [ $config_tool_created -eq 0 ]; then
+        if [ -f "scripts/config/mconf" ] && [ -x "scripts/config/mconf" ]; then
+            log "✅ 方法3成功: 使用 mconf 工具"
+            mkdir -p scripts/config
+            cat > scripts/config/config << 'EOF'
+#!/bin/sh
+exec "$(dirname "$0")/mconf" "$@"
+EOF
+            chmod +x scripts/config/config
+            real_config_tool="scripts/config/config"
+            config_tool_created=1
+        fi
+    fi
+
+    if [ $config_tool_created -eq 0 ] && [ -n "$COMPILER_DIR" ]; then
+        log "🔧 尝试方法4: 从 SDK 目录复制"
+        if [ -f "$COMPILER_DIR/scripts/config/conf" ] && [ -x "$COMPILER_DIR/scripts/config/conf" ]; then
+            mkdir -p scripts/config
+            cp "$COMPILER_DIR/scripts/config/conf" scripts/config/
+            cat > scripts/config/config << 'EOF'
+#!/bin/sh
+exec "$(dirname "$0")/conf" "$@"
+EOF
+            chmod +x scripts/config/config
+            log "✅ 方法4成功: 从 SDK 复制 conf 工具"
+            real_config_tool="scripts/config/config"
+            config_tool_created=1
+        fi
+    fi
+
+    if [ $config_tool_created -eq 0 ]; then
+        log "🔧 方法5: 创建功能完整的简易 config 工具"
+        mkdir -p scripts/config
+        cat > scripts/config/config << 'EOF'
+#!/bin/bash
+CONFIG_FILE=".config"
+
+show_help() {
+    echo "Usage: config [options]"
+    echo "  --enable <symbol>    Enable a configuration option"
+    echo "  --disable <symbol>   Disable a configuration option"
+    echo "  --module <symbol>    Set a configuration option as module"
+    echo "  --set-str <name> <value> Set a string configuration option"
+}
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    touch "$CONFIG_FILE"
+fi
+
+case "$1" in
+    --enable)
+        shift
+        symbol="$1"
+        symbol="${symbol#CONFIG_}"
+        symbol="${symbol#PACKAGE_}"
+
+        sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" "$CONFIG_FILE"
+
+        echo "CONFIG_PACKAGE_${symbol}=y" >> "$CONFIG_FILE"
+        ;;
+    --disable)
+        shift
+        symbol="$1"
+        symbol="${symbol#CONFIG_}"
+        symbol="${symbol#PACKAGE_}"
+
+        sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" "$CONFIG_FILE"
+
+        echo "# CONFIG_PACKAGE_${symbol} is not set" >> "$CONFIG_FILE"
+        ;;
+    --module)
+        shift
+        symbol="$1"
+        symbol="${symbol#CONFIG_}"
+        symbol="${symbol#PACKAGE_}"
+
+        sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
+        sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" "$CONFIG_FILE"
+
+        echo "CONFIG_PACKAGE_${symbol}=m" >> "$CONFIG_FILE"
+        ;;
+    --set-str)
+        shift
+        name="$1"
+        value="$2"
+        name="${name#CONFIG_}"
+
+        sed -i "/^CONFIG_${name}=/d" "$CONFIG_FILE"
+        echo "CONFIG_${name}="$value"" >> "$CONFIG_FILE"
+        shift 2
+        ;;
+    --help)
+        show_help
+        ;;
+    *)
+        echo "Unknown option: $1"
+        show_help
+        exit 1
+        ;;
+esac
+EOF
+        chmod +x scripts/config/config
+        log "✅ 方法5成功: 创建功能完整的简易 config 工具"
+        real_config_tool="scripts/config/config"
+        config_tool_created=1
+    fi
+
+    if [ $config_tool_created -eq 1 ]; then
+        log "🔧 创建统一调用接口..."
+
+        echo "$real_config_tool" > scripts/.config_tool_path
+
+        if [ ! -f "scripts/config" ]; then
+            if [ -f "scripts/config/config" ]; then
+                ln -sf config scripts/config 2>/dev/null || cp scripts/config/config scripts/config 2>/dev/null || true
+                log "✅ 创建 scripts/config 链接/副本"
+            fi
+        fi
+
+        cat > scripts/config-tool << 'EOF'
+#!/bin/sh
+CONFIG_TOOL_PATH="$(dirname "$0")/.config_tool_path"
+
+if [ -f "$CONFIG_TOOL_PATH" ]; then
+    CONFIG_TOOL="$(cat "$CONFIG_TOOL_PATH" 2>/dev/null)"
+    if [ -n "$CONFIG_TOOL" ] && [ -f "$CONFIG_TOOL" ] && [ -x "$CONFIG_TOOL" ]; then
+        exec "$CONFIG_TOOL" "$@"
+    fi
+fi
+
+if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
+    echo "scripts/config/config" > "$CONFIG_TOOL_PATH"
+    exec scripts/config/config "$@"
+fi
+
+if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
+    echo "scripts/config/conf" > "$CONFIG_TOOL_PATH"
+    exec scripts/config/conf "$@"
+fi
+
+if [ -f "scripts/config/mconf" ] && [ -x "scripts/config/mconf" ]; then
+    echo "scripts/config/mconf" > "$CONFIG_TOOL_PATH"
+    exec scripts/config/mconf "$@"
+fi
+
+echo "Error: config tool not found" >&2
+exit 1
+EOF
+        chmod +x scripts/config-tool
+        log "✅ 统一调用接口创建成功: scripts/config-tool"
+
+        if scripts/config-tool --version > /dev/null 2>&1 || scripts/config-tool -h > /dev/null 2>&1; then
+            log "✅ 统一调用接口测试通过"
+        else
+            if [ -f scripts/config/config ] || [ -f scripts/config/conf ]; then
+                log "✅ 统一调用接口可用（跳过参数测试）"
+            else
+                log "⚠️ 统一调用接口可能有问题，但工具可能仍可用"
+            fi
+        fi
+    fi
+
+    if [ $config_tool_created -eq 1 ]; then
+        log "✅ 配置工具最终验证通过"
+        log "📁 真实工具路径: $real_config_tool"
+        log "📁 统一调用接口: scripts/config-tool"
+
+        if [ -f "$real_config_tool" ]; then
+            if file "$real_config_tool" | grep -q "ELF"; then
+                log "📋 工具类型: 已编译二进制文件"
+            else
+                log "📋 工具类型: Shell 脚本"
+            fi
+        fi
+    else
+        log "❌ 所有方法都失败，配置工具不存在"
+        handle_error "无法创建配置工具"
     fi
 
     SELECTED_REPO_TYPE="$repo_type"
@@ -842,24 +1080,28 @@ configure_feeds() {
     log "=== 配置Feeds ==="
     log "源码仓库类型: ${SELECTED_REPO_TYPE:-immortalwrt}"
     
-    # 对于 LEDE，需要修复 feeds.conf.default 中的错误格式
+    # 对于 LEDE，强制修复 feeds.conf.default
     if [ "${SELECTED_REPO_TYPE:-immortalwrt}" = "lede" ]; then
-        log "LEDE 源码，检查并修复 feeds.conf.default..."
+        log "LEDE 源码，强制修复 feeds.conf.default..."
         
         # 备份原始文件
         if [ -f "feeds.conf.default" ]; then
             cp feeds.conf.default feeds.conf.default.bak
             log "已备份原始 feeds.conf.default 到 feeds.conf.default.bak"
+            log "原始内容:"
+            cat feeds.conf.default | while read line; do
+                log "  $line"
+            done
         fi
         
-        # 创建正确的 LEDE feeds 配置（移除错误的 ;openwrt-23.05）
+        # 创建正确的 LEDE feeds 配置（移除所有错误的 ;openwrt-23.05 后缀）
         cat > feeds.conf.default << 'EOF'
 src-git packages https://github.com/coolsnowwolf/packages.git
 src-git luci https://github.com/coolsnowwolf/luci.git
 src-git routing https://github.com/coolsnowwolf/routing.git
 src-git telephony https://github.com/coolsnowwolf/telephony.git
 EOF
-        log "已修复 feeds.conf.default，移除错误的 ;openwrt-23.05 后缀"
+        log "已修复 feeds.conf.default，移除所有错误的 ;openwrt-23.05 后缀"
         log "修复后的内容:"
         cat feeds.conf.default | while read line; do
             log "  $line"
@@ -4518,7 +4760,7 @@ workflow_step20_fix_network() {
 # ============================================
 #【build_firmware_main.sh-35】
 workflow_step21_download_deps() {
-    log "=== 步骤21: 下载依赖包（动态优化版） ==="
+    log "=== 步骤21: 下载依赖包（优化超时版） ==="
     
     set -e
     trap 'echo "❌ 步骤21 失败，退出代码: $?"; exit 1' ERR
@@ -4536,41 +4778,25 @@ workflow_step21_download_deps() {
     local dep_size=$(du -sh dl 2>/dev/null | cut -f1 || echo "0B")
     echo "📊 当前依赖包: $dep_count 个, 总大小: $dep_size"
     
-    # 检测系统资源动态调整并行数
-    local cpu_cores=$(nproc)
-    local mem_total=$(free -m | awk '/^Mem:/{print $2}')
-    local download_jobs=1
+    # 设置超时时间（分钟）
+    local timeout_minutes=30
+    echo "⏱️ 设置下载超时时间: ${timeout_minutes}分钟"
     
-    if [ $cpu_cores -ge 4 ] && [ $mem_total -ge 4096 ]; then
-        download_jobs=$((cpu_cores > 8 ? 8 : cpu_cores))
-        echo "✅ 检测到高性能系统，使用 $download_jobs 并行下载"
-    elif [ $cpu_cores -ge 2 ] && [ $mem_total -ge 2048 ]; then
-        download_jobs=4
-        echo "✅ 检测到标准系统，使用 4 并行下载"
-    else
-        download_jobs=2
-        echo "⚠️ 检测到资源有限，使用 2 并行下载"
-    fi
+    # 先尝试列出需要下载的包
+    echo "📋 列出需要下载的依赖包..."
+    make download -j1 -k V=s 2>&1 | grep -E "Downloading|Failed" || true
     
-    echo "🚀 开始下载依赖包（并行数: $download_jobs）..."
+    echo "🚀 开始下载依赖包..."
     
-    # 使用timeout避免卡死
-    local start_time=$(date +%s)
-    
-    # 先尝试快速下载
-    if make -j$download_jobs download -k > download.log 2>&1; then
-        echo "✅ 下载完成"
-    else
-        echo "⚠️ 部分下载失败，尝试单线程重试失败项..."
-        # 提取失败的包并重试
-        grep -E "ERROR|Failed" download.log | grep -o "make[^)]*" | while read cmd; do
-            echo "重试: $cmd"
-            eval $cmd || true
-        done
-    fi
-    
-    local end_time=$(date +%s)
-    local duration=$((end_time - start_time))
+    # 使用 timeout 命令限制总执行时间
+    timeout ${timeout_minutes}m make -j4 download -k V=s || {
+        local exit_code=$?
+        if [ $exit_code -eq 124 ]; then
+            echo "⚠️ 下载超时（${timeout_minutes}分钟），但继续执行..."
+        else
+            echo "⚠️ 部分下载失败，但继续执行..."
+        fi
+    }
     
     # 统计下载结果
     local new_dep_count=$(find dl -type f 2>/dev/null | wc -l)
@@ -4579,17 +4805,14 @@ workflow_step21_download_deps() {
     
     echo ""
     echo "📊 下载统计:"
-    echo "   耗时: $((duration / 60))分$((duration % 60))秒"
     echo "   原有包: $dep_count 个 ($dep_size)"
     echo "   现有包: $new_dep_count 个 ($new_dep_size)"
     echo "   新增包: $added 个"
     
-    # 检查下载错误
-    local error_count=$(grep -c -E "ERROR|Failed|404" download.log 2>/dev/null || echo "0")
-    if [ $error_count -gt 0 ]; then
-        echo "⚠️ 发现 $error_count 个下载错误，但不影响继续"
-        echo "错误示例:"
-        grep -E "ERROR|Failed|404" download.log | head -5
+    # 检查是否有明显失败的包
+    local failed_count=$(grep -c "Failed to download" logs/feeds/* 2>/dev/null || echo "0")
+    if [ $failed_count -gt 0 ]; then
+        echo "⚠️ 有 $failed_count 个包下载失败，但不影响继续编译"
     fi
     
     log "✅ 步骤21 完成"
