@@ -3,7 +3,7 @@
 #【support.sh-01】
 # support.sh - 设备支持管理脚本
 # 位置: 根目录 /support.sh
-# 版本: 3.0.5 (修复版 - 修复has-function函数和libustream冲突)
+# 版本: 3.0.5
 # 功能: 管理支持的设备列表、配置文件、工具链下载
 # 特点: 无硬编码，通过调用现有脚本和配置文件实现
 #【support.sh-01-end】
@@ -182,53 +182,14 @@ get_device_platform() {
 #【support.sh-08-end】
 
 #【support.sh-09】
-# 获取SDK下载信息函数 - 修复版（返回空目录名，由主脚本自动检测）
+# 获取SDK下载信息函数 - 已废弃，所有源码使用自带工具链
 get_sdk_info() {
     local target="$1"
     local subtarget="$2"
     local version="$3"
     
-    # 初始化SDK信息
-    init_sdk_info
-    
-    # 如果是 LEDE 版本，直接返回空（LEDE 使用源码自带工具链）
-    if [ "$version" = "lede" ] || [ "$version" = "17.01" ] || [ "$version" = "master" ]; then
-        echo ""
-        return 1
-    fi
-    
-    # 首先尝试精确匹配
-    local sdk_key="$target/$subtarget/$version"
-    if [ -n "${SDK_INFO[$sdk_key]}" ] && [ -n "${SDK_INFO[$sdk_key]}" ]; then
-        local sdk_url="${SDK_INFO[$sdk_key]}"
-        local sdk_file=$(basename "$sdk_url")
-        
-        # 返回格式: "SDK_URL|SDK_FILE|" （目录名为空，由build脚本自动检测）
-        echo "${sdk_url}|${sdk_file}|"
-        return 0
-    fi
-    
-    # 尝试通用匹配（只使用目标和版本）
-    local generic_key="$target/generic/$version"
-    if [ -n "${SDK_INFO[$generic_key]}" ] && [ -n "${SDK_INFO[$generic_key]}" ]; then
-        local sdk_url="${SDK_INFO[$generic_key]}"
-        local sdk_file=$(basename "$sdk_url")
-        
-        echo "${sdk_url}|${sdk_file}|"
-        return 0
-    fi
-    
-    # 尝试更通用的匹配
-    local fallback_key="generic/$version"
-    if [ -n "${SDK_INFO[$fallback_key]}" ] && [ -n "${SDK_INFO[$fallback_key]}" ]; then
-        local sdk_url="${SDK_INFO[$fallback_key]}"
-        local sdk_file=$(basename "$sdk_url")
-        
-        echo "${sdk_url}|${sdk_file}|"
-        return 0
-    fi
-    
-    # 如果没有找到，返回错误
+    # 所有版本都返回空，表示使用源码自带工具链
+    log "ℹ️ 所有源码类型均使用源码自带工具链，无需下载SDK"
     echo ""
     return 1
 }
@@ -329,7 +290,7 @@ apply_generic_config() {
 initialize_compiler() {
     local device_name="$1"
     
-    log "初始化编译器环境（调用主脚本）..."
+    log "初始化编译器环境（所有源码类型均使用源码自带工具链）..."
     
     check_build_main_script
     
