@@ -2091,18 +2091,15 @@ apply_config() {
     log "=== 🔍 最终配置状态检测（根据当前.config） ==="
     log ""
     
-    # 检测源码类型
     echo "📋 源码类型: $SOURCE_REPO_TYPE"
     echo ""
     
-    # 检测设备
     local device_config=$(grep "^CONFIG_TARGET.*DEVICE.*=y" .config | head -1)
     if [ -n "$device_config" ]; then
         echo "📱 目标设备: $(echo "$device_config" | cut -d'=' -f1)"
     fi
     echo ""
     
-    # 检测USB支持情况
     echo "🔌 USB支持检测:"
     local usb_core=$(grep -c "^CONFIG_PACKAGE_kmod-usb-core=y" .config)
     local usb2=$(grep -c "^CONFIG_PACKAGE_kmod-usb2=y" .config)
@@ -2117,7 +2114,6 @@ apply_config() {
     echo "  ✅ USB UAS: $([ $usb_uas -gt 0 ] && echo '已启用' || echo '未启用')"
     echo ""
     
-    # 检测文件系统支持
     echo "💾 文件系统支持:"
     local fs_ext4=$(grep -c "^CONFIG_PACKAGE_kmod-fs-ext4=y" .config)
     local fs_vfat=$(grep -c "^CONFIG_PACKAGE_kmod-fs-vfat=y" .config)
@@ -2130,7 +2126,6 @@ apply_config() {
     echo "  ✅ ntfs3: $([ $fs_ntfs -gt 0 ] && echo '已启用' || echo '未启用')"
     echo ""
     
-    # 检测网络加速
     echo "⚡ 网络加速支持:"
     local sfe=$(grep -c "^CONFIG_PACKAGE_kmod-shortcut-fe=y" .config)
     local fast_classifier=$(grep -c "^CONFIG_PACKAGE_kmod-fast-classifier=y" .config)
@@ -2143,7 +2138,6 @@ apply_config() {
     echo "  ✅ TCP BBR: $([ $bbr -gt 0 ] && echo '已启用' || echo '未启用')"
     echo ""
     
-    # 检测无线驱动
     echo "📶 无线驱动支持:"
     local ath10k=$(grep -c "^CONFIG_PACKAGE_kmod-ath10k=y" .config)
     local ath10k_ct=$(grep -c "^CONFIG_PACKAGE_kmod-ath10k-ct=y" .config)
@@ -2161,9 +2155,8 @@ apply_config() {
     fi
     echo ""
     
-    # 检测常用插件
     echo "🧩 常用插件状态:"
-    local常用插件=(
+    local common_plugins=(
         "luci-app-samba4"
         "luci-app-samba"
         "luci-app-openvpn"
@@ -2174,7 +2167,7 @@ apply_config() {
         "luci-app-statistics"
     )
     
-    for plugin in "${常用插件[@]}"; do
+    for plugin in "${common_plugins[@]}"; do
         local status=$(grep -c "^CONFIG_PACKAGE_${plugin}=y" .config)
         if [ $status -gt 0 ]; then
             echo "  ✅ $plugin: 已启用"
@@ -2182,16 +2175,15 @@ apply_config() {
     done
     echo ""
     
-    # 检测禁用插件
     echo "🚫 禁用插件状态:"
-    local禁用列表=(
+    local disabled_plugins=(
         "vssr"
         "ssr-plus"
         "rclone"
         "passwall"
     )
     
-    for plugin in "${禁用列表[@]}"; do
+    for plugin in "${disabled_plugins[@]}"; do
         local enabled=$(grep -c "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config)
         local disabled=$(grep -c "^# CONFIG_PACKAGE_luci-app-${plugin} is not set" .config)
         if [ $enabled -eq 0 ] && [ $disabled -gt 0 ]; then
@@ -2202,7 +2194,6 @@ apply_config() {
     done
     echo ""
     
-    # 最终统计
     echo "📊 最终统计:"
     local total_configs=$(wc -l < .config)
     local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config)
