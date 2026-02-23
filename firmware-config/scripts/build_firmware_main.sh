@@ -1460,7 +1460,6 @@ check_usb_drivers_integrity() {
 #【build_firmware_main.sh-15-end】
 
 #【build_firmware_main.sh-16】
-#【build_firmware_main.sh-16】
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -2087,6 +2086,135 @@ apply_config() {
         log "⚠️ 有 $still_remaining 个插件未能彻底禁用，请检查 feeds 或依赖"
         log "提示: 这些插件可能被其他包依赖，请手动运行 make menuconfig 检查依赖关系"
     fi
+
+    log ""
+    log "=== 🔍 最终配置状态检测（根据当前.config） ==="
+    log ""
+    
+    # 检测源码类型
+    echo "📋 源码类型: $SOURCE_REPO_TYPE"
+    echo ""
+    
+    # 检测设备
+    local device_config=$(grep "^CONFIG_TARGET.*DEVICE.*=y" .config | head -1)
+    if [ -n "$device_config" ]; then
+        echo "📱 目标设备: $(echo "$device_config" | cut -d'=' -f1)"
+    fi
+    echo ""
+    
+    # 检测USB支持情况
+    echo "🔌 USB支持检测:"
+    local usb_core=$(grep -c "^CONFIG_PACKAGE_kmod-usb-core=y" .config)
+    local usb2=$(grep -c "^CONFIG_PACKAGE_kmod-usb2=y" .config)
+    local usb3=$(grep -c "^CONFIG_PACKAGE_kmod-usb3=y" .config)
+    local usb_storage=$(grep -c "^CONFIG_PACKAGE_kmod-usb-storage=y" .config)
+    local usb_uas=$(grep -c "^CONFIG_PACKAGE_kmod-usb-storage-uas=y" .config)
+    
+    echo "  ✅ USB Core: $([ $usb_core -gt 0 ] && echo '已启用' || echo '未启用')"
+    echo "  ✅ USB 2.0: $([ $usb2 -gt 0 ] && echo '已启用' || echo '未启用')"
+    echo "  ✅ USB 3.0: $([ $usb3 -gt 0 ] && echo '已启用' || echo '未启用')"
+    echo "  ✅ USB存储: $([ $usb_storage -gt 0 ] && echo '已启用' || echo '未启用')"
+    echo "  ✅ USB UAS: $([ $usb_uas -gt 0 ] && echo '已启用' || echo '未启用')"
+    echo ""
+    
+    # 检测文件系统支持
+    echo "💾 文件系统支持:"
+    local fs_ext4=$(grep -c "^CONFIG_PACKAGE_kmod-fs-ext4=y" .config)
+    local fs_vfat=$(grep -c "^CONFIG_PACKAGE_kmod-fs-vfat=y" .config)
+    local fs_exfat=$(grep -c "^CONFIG_PACKAGE_kmod-fs-exfat=y" .config)
+    local fs_ntfs=$(grep -c "^CONFIG_PACKAGE_kmod-fs-ntfs3=y" .config)
+    
+    echo "  ✅ ext4: $([ $fs_ext4 -gt 0 ] && echo '已启用' || echo '未启用')"
+    echo "  ✅ vfat: $([ $fs_vfat -gt 0 ] && echo '已启用' || echo '未启用')"
+    echo "  ✅ exfat: $([ $fs_exfat -gt 0 ] && echo '已启用' || echo '未启用')"
+    echo "  ✅ ntfs3: $([ $fs_ntfs -gt 0 ] && echo '已启用' || echo '未启用')"
+    echo ""
+    
+    # 检测网络加速
+    echo "⚡ 网络加速支持:"
+    local sfe=$(grep -c "^CONFIG_PACKAGE_kmod-shortcut-fe=y" .config)
+    local fast_classifier=$(grep -c "^CONFIG_PACKAGE_kmod-fast-classifier=y" .config)
+    local turboacc=$(grep -c "^CONFIG_PACKAGE_luci-app-turboacc=y" .config)
+    local bbr=$(grep -c "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config)
+    
+    echo "  ✅ Shortcut-FE: $([ $sfe -gt 0 ] && echo '已启用' || echo '未启用')"
+    echo "  ✅ Fast Classifier: $([ $fast_classifier -gt 0 ] && echo '已启用' || echo '未启用')"
+    echo "  ✅ TurboACC: $([ $turboacc -gt 0 ] && echo '已启用' || echo '未启用')"
+    echo "  ✅ TCP BBR: $([ $bbr -gt 0 ] && echo '已启用' || echo '未启用')"
+    echo ""
+    
+    # 检测无线驱动
+    echo "📶 无线驱动支持:"
+    local ath10k=$(grep -c "^CONFIG_PACKAGE_kmod-ath10k=y" .config)
+    local ath10k_ct=$(grep -c "^CONFIG_PACKAGE_kmod-ath10k-ct=y" .config)
+    local mt76=$(grep -c "^CONFIG_PACKAGE_kmod-mt76=y" .config)
+    local mt7915=$(grep -c "^CONFIG_PACKAGE_kmod-mt7915e=y" .config)
+    
+    if [ $ath10k -gt 0 ] || [ $ath10k_ct -gt 0 ]; then
+        echo "  ✅ ath10k: $([ $ath10k_ct -gt 0 ] && echo '使用CT驱动' || echo '使用标准驱动')"
+    fi
+    if [ $mt76 -gt 0 ]; then
+        echo "  ✅ mt76: 已启用"
+    fi
+    if [ $mt7915 -gt 0 ]; then
+        echo "  ✅ mt7915e: 已启用"
+    fi
+    echo ""
+    
+    # 检测常用插件
+    echo "🧩 常用插件状态:"
+    local常用插件=(
+        "luci-app-samba4"
+        "luci-app-samba"
+        "luci-app-openvpn"
+        "luci-app-wireguard"
+        "luci-app-ddns"
+        "luci-app-upnp"
+        "luci-app-nlbwmon"
+        "luci-app-statistics"
+    )
+    
+    for plugin in "${常用插件[@]}"; do
+        local status=$(grep -c "^CONFIG_PACKAGE_${plugin}=y" .config)
+        if [ $status -gt 0 ]; then
+            echo "  ✅ $plugin: 已启用"
+        fi
+    done
+    echo ""
+    
+    # 检测禁用插件
+    echo "🚫 禁用插件状态:"
+    local禁用列表=(
+        "vssr"
+        "ssr-plus"
+        "rclone"
+        "passwall"
+    )
+    
+    for plugin in "${禁用列表[@]}"; do
+        local enabled=$(grep -c "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config)
+        local disabled=$(grep -c "^# CONFIG_PACKAGE_luci-app-${plugin} is not set" .config)
+        if [ $enabled -eq 0 ] && [ $disabled -gt 0 ]; then
+            echo "  ✅ luci-app-${plugin}: 已禁用"
+        elif [ $enabled -gt 0 ]; then
+            echo "  ⚠️ luci-app-${plugin}: 仍被启用"
+        fi
+    done
+    echo ""
+    
+    # 最终统计
+    echo "📊 最终统计:"
+    local total_configs=$(wc -l < .config)
+    local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config)
+    local module_packages=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config)
+    local disabled_packages=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config)
+    
+    echo "  📝 总配置行数: $total_configs 行"
+    echo "  ✅ 已启用软件包: $enabled_packages 个"
+    echo "  📦 模块化软件包: $module_packages 个"
+    echo "  ❌ 已禁用软件包: $disabled_packages 个"
+    echo ""
+    echo "========================================"
 
     log "✅ 配置应用完成"
     log "最终配置文件: .config"
