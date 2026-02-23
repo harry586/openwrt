@@ -3,7 +3,7 @@
 # OpenWrt 智能固件构建主脚本
 # 对应工作流: firmware-build.yml
 # 版本: 3.1.0
-# 最后更新: 2026-02-15
+# 最后更新: 2026-02-23
 #【build_firmware_main.sh-00-end】
 
 #【build_firmware_main.sh-00.5】
