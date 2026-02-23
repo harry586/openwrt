@@ -26,17 +26,17 @@ on:
       
       # 手动输入框（竖向排列）
       manual_device_name:
-        description: "📝 设备名称（若填写此项，将覆盖预定义设备）"
+        description: "📝 设备名称（使用自定义）"
         required: false
         type: string
         default: ""
       manual_target:
-        description: "🎯 芯片型号（ipq40xx、ath79等）"
+        description: "🎯 芯片型号（ipq40xx）"
         required: false
         type: string
         default: ""
       manual_subtarget:
-        description: "🔧 子平台（generic[一般]、filogic[特殊]）"
+        description: "🔧 子平台（generic、filogic）"
         required: false
         type: string
         default: ""
