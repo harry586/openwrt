@@ -11,6 +11,9 @@
 load_build_config() {
     local config_file="${1:-$REPO_ROOT/build-config.conf}"
     
+    # 保存当前环境变量中已设置的值
+    local current_source_repo="$SOURCE_REPO_TYPE"
+    
     if [ -f "$config_file" ]; then
         log "📁 加载统一配置文件: $config_file"
         source "$config_file"
@@ -18,11 +21,18 @@ load_build_config() {
         log "⚠️ 未找到配置文件 $config_file，使用脚本内默认值"
     fi
     
+    # 恢复从 workflow 传入的环境变量（优先级更高）
+    if [ -n "$current_source_repo" ]; then
+        SOURCE_REPO_TYPE="$current_source_repo"
+        log "✅ 使用 workflow 传入的源码仓库类型: $SOURCE_REPO_TYPE"
+    fi
+    
     # 导出所有配置为环境变量
     export BUILD_DIR LOG_DIR BACKUP_DIR CONFIG_DIR
-    export IMMORTALWRT_URL PACKAGES_FEED_URL LUCI_FEED_URL TURBOACC_FEED_URL
+    export IMMORTALWRT_URL OPENWRT_URL LEDE_URL PACKAGES_FEED_URL LUCI_FEED_URL TURBOACC_FEED_URL
     export ENABLE_TURBOACC ENABLE_TCP_BBR FORCE_ATH10K_CT AUTO_FIX_USB_DRIVERS
     export ENABLE_DYNAMIC_KERNEL_DETECTION ENABLE_DYNAMIC_PLATFORM_DRIVERS ENABLE_DYNAMIC_DEVICE_MAPPING
+    export SOURCE_REPO_TYPE
     
     log "✅ 配置加载完成"
 }
