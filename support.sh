@@ -26,9 +26,9 @@ CONFIG_DIR="$REPO_ROOT/firmware-config/config"
 # 支持的设备列表（仅3个设备）
 # 格式: DEVICES["设备名称"]="目标平台 子目标"
 declare -A DEVICES
-DEVICES["ac42u"]="ipq40xx generic"
-DEVICES["cmcc_rax3000m-nand"]="mediatek generic" 
-DEVICES["netgear_wndr3800"]="ath79 generic"
+DEVICES["ac42u"]="ipq40xx bcm47189"
+DEVICES["cmcc_rax3000m-nand"]="mediatek mt7981" 
+DEVICES["netgear_wndr3800"]="ath79 ar7161"
 #【support.sh-03-end】
 
 #【support.sh-04】
@@ -39,19 +39,19 @@ declare -A SDK_INFO
 # 初始化SDK信息
 init_sdk_info() {
     # OpenWrt 21.02 SDK
-    SDK_INFO["ipq40xx/generic/21.02"]="https://downloads.openwrt.org/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
-    SDK_INFO["mediatek/generic/21.02"]=""
-    SDK_INFO["ath79/generic/21.02"]="https://downloads.openwrt.org/releases/21.02.7/targets/ath79/generic/openwrt-sdk-21.02.7-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
+    SDK_INFO["ipq40xx/bcm47189/21.02"]="https://downloads.openwrt.org/releases/21.02.7/targets/ipq40xx/generic/openwrt-sdk-21.02.7-ipq40xx-generic_gcc-8.4.0_musl_eabi.Linux-x86_64.tar.xz"
+    SDK_INFO["mediatek/mt7981/21.02"]=""
+    SDK_INFO["ath79/ar7161/21.02"]="https://downloads.openwrt.org/releases/21.02.7/targets/ath79/generic/openwrt-sdk-21.02.7-ath79-generic_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
     
     # OpenWrt 23.05 SDK
-    SDK_INFO["ipq40xx/generic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/ipq40xx/generic/openwrt-sdk-23.05.5-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
-    SDK_INFO["mediatek/generic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/mediatek/filogic/openwrt-sdk-23.05.5-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-    SDK_INFO["ath79/generic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/ath79/generic/openwrt-sdk-23.05.5-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+    SDK_INFO["ipq40xx/bcm47189/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/ipq40xx/generic/openwrt-sdk-23.05.5-ipq40xx-generic_gcc-12.3.0_musl_eabi.Linux-x86_64.tar.xz"
+    SDK_INFO["mediatek/mt7981/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/mediatek/filogic/openwrt-sdk-23.05.5-mediatek-filogic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+    SDK_INFO["ath79/ar7161/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/ath79/generic/openwrt-sdk-23.05.5-ath79-generic_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
     
     # LEDE 没有官方SDK，使用源码自带工具链
-    SDK_INFO["ipq40xx/generic/lede"]=""
-    SDK_INFO["mediatek/generic/lede"]=""
-    SDK_INFO["ath79/generic/lede"]=""
+    SDK_INFO["ipq40xx/bcm47189/lede"]=""
+    SDK_INFO["mediatek/mt7981/lede"]=""
+    SDK_INFO["ath79/ar7161/lede"]=""
     
     # 通用SDK（如果找不到精确匹配）
     SDK_INFO["generic/21.02"]="https://downloads.openwrt.org/releases/21.02.7/targets/x86/64/openwrt-sdk-21.02.7-x86-64_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
