@@ -20,8 +20,7 @@ load_build_config() {
     
     # 导出所有配置为环境变量
     export BUILD_DIR LOG_DIR BACKUP_DIR CONFIG_DIR
-    export IMMORTALWRT_URL OPENWRT_URL LEDE_URL CUSTOM_REPO_URL
-    export SOURCE_REPO_TYPE PACKAGES_FEED_URL LUCI_FEED_URL TURBOACC_FEED_URL
+    export IMMORTALWRT_URL PACKAGES_FEED_URL LUCI_FEED_URL TURBOACC_FEED_URL
     export ENABLE_TURBOACC ENABLE_TCP_BBR FORCE_ATH10K_CT AUTO_FIX_USB_DRIVERS
     export ENABLE_DYNAMIC_KERNEL_DETECTION ENABLE_DYNAMIC_PLATFORM_DRIVERS ENABLE_DYNAMIC_DEVICE_MAPPING
     
@@ -71,7 +70,6 @@ save_env() {
     echo "#!/bin/bash" > $ENV_FILE
     echo "export SELECTED_REPO_URL=\"${SELECTED_REPO_URL}\"" >> $ENV_FILE
     echo "export SELECTED_BRANCH=\"${SELECTED_BRANCH}\"" >> $ENV_FILE
-    echo "export SELECTED_REPO_TYPE=\"${SELECTED_REPO_TYPE}\"" >> $ENV_FILE
     echo "export TARGET=\"${TARGET}\"" >> $ENV_FILE
     echo "export SUBTARGET=\"${SUBTARGET}\"" >> $ENV_FILE
     echo "export DEVICE=\"${DEVICE}\"" >> $ENV_FILE
@@ -88,7 +86,6 @@ save_env() {
     if [ -n "$GITHUB_ENV" ]; then
         echo "SELECTED_REPO_URL=${SELECTED_REPO_URL}" >> $GITHUB_ENV
         echo "SELECTED_BRANCH=${SELECTED_BRANCH}" >> $GITHUB_ENV
-        echo "SELECTED_REPO_TYPE=${SELECTED_REPO_TYPE}" >> $GITHUB_ENV
         echo "TARGET=${TARGET}" >> $GITHUB_ENV
         echo "SUBTARGET=${SUBTARGET}" >> $GITHUB_ENV
         echo "DEVICE=${DEVICE}" >> $GITHUB_ENV
@@ -188,56 +185,20 @@ initialize_build_env() {
     local device_name=$1
     local version_selection=$2
     local config_mode=$3
-    local manual_target=$4
-    local manual_subtarget=$5
-    
-    local repo_type="${SOURCE_REPO:-${SOURCE_REPO_TYPE:-immortalwrt}}"
-    
-    log "=== 源码仓库选择 ==="
-    log "选择的仓库类型: $repo_type"
-    log "SOURCE_REPO环境变量: ${SOURCE_REPO:-未设置}"
-    log "SOURCE_REPO_TYPE环境变量: ${SOURCE_REPO_TYPE:-未设置}"
+    local manual_target=$4   # 可选，手动指定的芯片型号
+    local manual_subtarget=$5 # 可选，手动指定的子平台
 
     cd $BUILD_DIR || handle_error "进入构建目录失败"
 
-    case "$repo_type" in
-        "immortalwrt")
-            SELECTED_REPO_URL="${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}"
-            SELECTED_REPO_TYPE="immortalwrt"
-            ;;
-        "openwrt")
-            SELECTED_REPO_URL="${OPENWRT_URL:-https://github.com/openwrt/openwrt.git}"
-            SELECTED_REPO_TYPE="openwrt"
-            ;;
-        "lede")
-            SELECTED_REPO_URL="${LEDE_URL:-https://github.com/coolsnowwolf/lede.git}"
-            SELECTED_REPO_TYPE="lede"
-            log "⚠️ 使用 LEDE 源码仓库 (coolsnowwolf/lede): $SELECTED_REPO_URL"
-            ;;
-        "custom")
-            if [ -z "$CUSTOM_REPO_URL" ]; then
-                log "❌ 自定义仓库类型但未设置 CUSTOM_REPO_URL"
-                handle_error "请设置自定义仓库URL"
-            fi
-            SELECTED_REPO_URL="$CUSTOM_REPO_URL"
-            SELECTED_REPO_TYPE="custom"
-            ;;
-        *)
-            log "❌ 未知的仓库类型: $repo_type"
-            handle_error "无效的仓库类型"
-            ;;
-    esac
-    
     log "=== 版本选择 ==="
-    if [ "$repo_type" = "lede" ]; then
-        SELECTED_BRANCH="${BRANCH_LEDE:-master}"
-        log "✅ LEDE 固定使用 master 分支（忽略版本选择 $version_selection）"
-    elif [ "$version_selection" = "23.05" ]; then
+    if [ "$version_selection" = "23.05" ]; then
+        SELECTED_REPO_URL="${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}"
         SELECTED_BRANCH="${BRANCH_23_05:-openwrt-23.05}"
     else
+        SELECTED_REPO_URL="${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}"
         SELECTED_BRANCH="${BRANCH_21_02:-openwrt-21.02}"
     fi
-    log "✅ 版本选择完成: $SELECTED_BRANCH (仓库: $repo_type)"
+    log "✅ 版本选择完成: $SELECTED_BRANCH"
 
     log "=== 克隆源码 ==="
     log "仓库: $SELECTED_REPO_URL"
@@ -245,99 +206,20 @@ initialize_build_env() {
 
     sudo rm -rf ./* ./.git* 2>/dev/null || true
 
-    if git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . 2>/dev/null; then
-        log "✅ 成功克隆分支: $SELECTED_BRANCH"
-    else
-        log "⚠️ 克隆分支 $SELECTED_BRANCH 失败，尝试克隆默认分支..."
-        git clone --depth 1 "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
-        local actual_branch=$(git branch --show-current 2>/dev/null || echo "detached HEAD")
-        log "✅ 克隆成功，当前分支: $actual_branch"
-    fi
-    
-    log "=== 源码信息详情 ==="
-    log "当前工作目录: $(pwd)"
-    log "源码仓库 URL: $SELECTED_REPO_URL"
-    log "源码仓库类型: $repo_type"
-    log "请求的分支: $SELECTED_BRANCH"
-    
-    if [ -d ".git" ]; then
-        local remote_url=$(git config --get remote.origin.url 2>/dev/null || echo "未知")
-        local current_branch=$(git branch --show-current 2>/dev/null || echo "detached HEAD")
-        local last_commit=$(git log -1 --pretty=format:'%h - %s' 2>/dev/null || echo "未知")
-        local commit_date=$(git log -1 --pretty=format:'%cd' --date=short 2>/dev/null || echo "未知")
-        
-        log "Git远程地址: $remote_url"
-        log "当前分支: $current_branch"
-        log "最后提交: $last_commit"
-        log "提交日期: $commit_date"
-        
-        if [ "$repo_type" = "lede" ]; then
-            if echo "$remote_url" | grep -q "coolsnowwolf/lede"; then
-                log "✅ 已验证: 确实是 coolsnowwolf/lede 源码仓库"
-            else
-                log "❌ 警告: 期望 coolsnowwolf/lede 但实际克隆了: $remote_url"
-            fi
-        elif [ "$repo_type" = "openwrt" ]; then
-            if echo "$remote_url" | grep -q "openwrt/openwrt"; then
-                log "✅ 已验证: 确实是 OpenWrt 官方源码仓库"
-            else
-                log "❌ 警告: 期望 OpenWrt 但实际克隆了: $remote_url"
-            fi
-        elif [ "$repo_type" = "immortalwrt" ]; then
-            if echo "$remote_url" | grep -q "immortalwrt"; then
-                log "✅ 已验证: 确实是 ImmortalWrt 源码仓库"
-            else
-                log "❌ 警告: 期望 ImmortalWrt 但实际克隆了: $remote_url"
-            fi
-        fi
-    else
-        log "⚠️ 不是 git 仓库，无法获取详细信息"
-    fi
+    git clone --depth 1 --branch "$SELECTED_BRANCH" "$SELECTED_REPO_URL" . || handle_error "克隆源码失败"
+    log "✅ 源码克隆完成"
 
-    log "=== 关键源码文件检查 ==="
     local important_source_files=("Makefile" "feeds.conf.default" "rules.mk" "Config.in")
     for file in "${important_source_files[@]}"; do
         if [ -f "$file" ]; then
-            log "✅ 存在: $file"
-            head -3 "$file" 2>/dev/null | while read line; do
-                log "    $line"
-            done
+            log "✅ 源码文件存在: $file"
         else
-            log "❌ 缺失: $file"
+            log "❌ 源码文件缺失: $file"
         fi
     done
 
-    # 显示 feeds.conf.default 内容，帮助调试
-    if [ -f "feeds.conf.default" ]; then
-        log "=== feeds.conf.default 内容 ==="
-        cat feeds.conf.default | while read line; do
-            log "  $line"
-        done
-        
-        # 如果是 LEDE，立即修复 feeds.conf.default 中的错误格式
-        if [ "$repo_type" = "lede" ]; then
-            log "🔧 LEDE 源码，立即修复 feeds.conf.default 中的错误格式..."
-            
-            # 备份原始文件
-            cp feeds.conf.default feeds.conf.default.bak
-            log "已备份原始 feeds.conf.default 到 feeds.conf.default.bak"
-            
-            # 创建正确的 LEDE feeds 配置（移除所有错误的 ;openwrt-23.05 后缀）
-            cat > feeds.conf.default << 'EOF'
-src-git packages https://github.com/coolsnowwolf/packages.git
-src-git luci https://github.com/coolsnowwolf/luci.git
-src-git routing https://github.com/coolsnowwolf/routing.git
-src-git telephony https://github.com/coolsnowwolf/telephony.git
-EOF
-            log "已修复 feeds.conf.default，移除所有错误的 ;openwrt-23.05 后缀"
-            log "修复后的内容:"
-            cat feeds.conf.default | while read line; do
-                log "  $line"
-            done
-        fi
-    fi
-
     log "=== 设备配置 ==="
+    # 判断是否使用手动输入的芯片型号和子平台
     if [ -n "$manual_target" ] && [ -n "$manual_subtarget" ]; then
         TARGET="$manual_target"
         SUBTARGET="$manual_subtarget"
@@ -369,85 +251,25 @@ EOF
     log "子目标: $SUBTARGET"
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
-    
-    local search_device=""
-    case "$DEVICE" in
-        ac42u|rt-ac42u|asus_rt-ac42u)
-            search_device="ac42u"
-            ;;
-        acrh17|rt-acrh17|asus_rt-acrh17)
-            search_device="acrh17"
-            ;;
-        cmcc_rax3000m|cmcc_rax3000m-nand)
-            search_device="rax3000m"
-            ;;
-        netgear_wndr3800)
-            search_device="wndr3800"
-            ;;
-        *)
-            search_device="$DEVICE"
-            ;;
-    esac
-    log "搜索设备名: $search_device"
-    
-    echo ""
-    echo "📁 所有子平台 .mk 文件列表:"
-    local mk_files=()
-    while IFS= read -r file; do
-        mk_files+=("$file")
-    done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null | sort)
-    
-    if [ ${#mk_files[@]} -gt 0 ]; then
-        echo "----------------------------------------"
-        for i in "${!mk_files[@]}"; do
-            printf "[%2d] %s\n" $((i+1)) "${mk_files[$i]}"
-        done
-        echo "----------------------------------------"
-        echo "📊 共找到 ${#mk_files[@]} 个 .mk 文件"
-    else
-        echo "   未找到 .mk 文件"
-    fi
-    echo ""
-    
-    local device_file=""
-    for mkfile in "${mk_files[@]}"; do
-        if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
-            device_file="$mkfile"
-            log "✅ 找到设备定义文件: $mkfile"
-            break
-        fi
-    done
-    
-    if [ -n "$device_file" ] && [ -f "$device_file" ]; then
-        local device_block=""
-        device_block=$(awk "/define Device.*$search_device/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
-        
-        if [ -n "$device_block" ]; then
-            echo ""
-            echo "📋 设备定义信息（关键字段）:"
-            echo "----------------------------------------"
-            echo "$device_block" | grep -E "define Device" | head -1
-            echo "$device_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS|KERNEL|IMAGES|IMAGE)" | sed 's/^/    /'
-            echo "----------------------------------------"
-        else
-            log "⚠️ 无法提取设备 $search_device 的配置块"
-        fi
-    else
-        log "❌ 未找到设备 $search_device 的定义文件"
-    fi
+
+    # 🔥 关键修复：正确识别和使用编译好的 config 工具
+    log "=== 编译配置工具 ==="
 
     local config_tool_created=0
     local real_config_tool=""
 
-    log "🔧 方法1: 编译 scripts/config..."
+    # 方法1: 编译 scripts/config
+    log "🔧 尝试方法1: 编译 scripts/config..."
     if [ -d "scripts/config" ]; then
         cd scripts/config
         make
         cd $BUILD_DIR
 
+        # 检查编译生成的文件
         if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
             log "✅ 方法1成功: 编译生成 conf 工具"
 
+            # 创建 config 包装脚本，使用 conf
             mkdir -p scripts/config
             cat > scripts/config/config << 'EOF'
 #!/bin/sh
@@ -461,6 +283,7 @@ if [ ! -x "$CONF_TOOL" ]; then
     exit 1
 fi
 
+# 转换参数格式
 case "$1" in
     --enable)
         shift
@@ -497,12 +320,14 @@ EOF
         fi
     fi
 
+    # 方法2: 直接使用 conf 作为配置工具
     if [ $config_tool_created -eq 0 ]; then
         if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
             log "✅ 方法2成功: 直接使用 conf 工具"
             mkdir -p scripts/config
             cat > scripts/config/config << 'EOF'
 #!/bin/sh
+# 使用 conf 工具的包装脚本
 exec "$(dirname "$0")/conf" "$@"
 EOF
             chmod +x scripts/config/config
@@ -511,12 +336,14 @@ EOF
         fi
     fi
 
+    # 方法3: 使用 mconf (如果可用)
     if [ $config_tool_created -eq 0 ]; then
         if [ -f "scripts/config/mconf" ] && [ -x "scripts/config/mconf" ]; then
             log "✅ 方法3成功: 使用 mconf 工具"
             mkdir -p scripts/config
             cat > scripts/config/config << 'EOF'
 #!/bin/sh
+# 使用 mconf 工具的包装脚本
 exec "$(dirname "$0")/mconf" "$@"
 EOF
             chmod +x scripts/config/config
@@ -525,6 +352,7 @@ EOF
         fi
     fi
 
+    # 方法4: 从 SDK 复制
     if [ $config_tool_created -eq 0 ] && [ -n "$COMPILER_DIR" ]; then
         log "🔧 尝试方法4: 从 SDK 目录复制"
         if [ -f "$COMPILER_DIR/scripts/config/conf" ] && [ -x "$COMPILER_DIR/scripts/config/conf" ]; then
@@ -541,11 +369,13 @@ EOF
         fi
     fi
 
+    # 方法5: 创建功能完整的简易工具
     if [ $config_tool_created -eq 0 ]; then
         log "🔧 方法5: 创建功能完整的简易 config 工具"
         mkdir -p scripts/config
         cat > scripts/config/config << 'EOF'
 #!/bin/bash
+# 功能完整的 config 工具
 CONFIG_FILE=".config"
 
 show_help() {
@@ -556,6 +386,7 @@ show_help() {
     echo "  --set-str <name> <value> Set a string configuration option"
 }
 
+# 确保 .config 存在
 if [ ! -f "$CONFIG_FILE" ]; then
     touch "$CONFIG_FILE"
 fi
@@ -564,14 +395,18 @@ case "$1" in
     --enable)
         shift
         symbol="$1"
+        # 移除 CONFIG_ 前缀（如果存在）
         symbol="${symbol#CONFIG_}"
+        # 移除 PACKAGE_ 前缀（如果存在）
         symbol="${symbol#PACKAGE_}"
 
+        # 删除所有相关的行
         sed -i "/^CONFIG_${symbol}=/d" "$CONFIG_FILE"
         sed -i "/^CONFIG_PACKAGE_${symbol}=/d" "$CONFIG_FILE"
         sed -i "/^# CONFIG_${symbol} is not set/d" "$CONFIG_FILE"
         sed -i "/^# CONFIG_PACKAGE_${symbol} is not set/d" "$CONFIG_FILE"
 
+        # 添加启用行
         echo "CONFIG_PACKAGE_${symbol}=y" >> "$CONFIG_FILE"
         ;;
     --disable)
@@ -626,11 +461,14 @@ EOF
         config_tool_created=1
     fi
 
+    # 创建统一调用接口 - 修复版，不使用 --help 测试
     if [ $config_tool_created -eq 1 ]; then
         log "🔧 创建统一调用接口..."
 
+        # 记录真实工具路径
         echo "$real_config_tool" > scripts/.config_tool_path
 
+        # 创建 scripts/config 软链接或副本，以便 make defconfig 能找到
         if [ ! -f "scripts/config" ]; then
             if [ -f "scripts/config/config" ]; then
                 ln -sf config scripts/config 2>/dev/null || cp scripts/config/config scripts/config 2>/dev/null || true
@@ -640,6 +478,7 @@ EOF
 
         cat > scripts/config-tool << 'EOF'
 #!/bin/sh
+# 统一 config 工具调用接口
 CONFIG_TOOL_PATH="$(dirname "$0")/.config_tool_path"
 
 if [ -f "$CONFIG_TOOL_PATH" ]; then
@@ -649,16 +488,19 @@ if [ -f "$CONFIG_TOOL_PATH" ]; then
     fi
 fi
 
+# 备选1: 直接查找
 if [ -f "scripts/config/config" ] && [ -x "scripts/config/config" ]; then
     echo "scripts/config/config" > "$CONFIG_TOOL_PATH"
     exec scripts/config/config "$@"
 fi
 
+# 备选2: 使用 conf
 if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
     echo "scripts/config/conf" > "$CONFIG_TOOL_PATH"
     exec scripts/config/conf "$@"
 fi
 
+# 备选3: 使用 mconf
 if [ -f "scripts/config/mconf" ] && [ -x "scripts/config/mconf" ]; then
     echo "scripts/config/mconf" > "$CONFIG_TOOL_PATH"
     exec scripts/config/mconf "$@"
@@ -670,9 +512,11 @@ EOF
         chmod +x scripts/config-tool
         log "✅ 统一调用接口创建成功: scripts/config-tool"
 
+        # 不再测试 --help，而是测试基本功能
         if scripts/config-tool --version > /dev/null 2>&1 || scripts/config-tool -h > /dev/null 2>&1; then
             log "✅ 统一调用接口测试通过"
         else
+            # 尝试测试是否存在
             if [ -f scripts/config/config ] || [ -f scripts/config/conf ]; then
                 log "✅ 统一调用接口可用（跳过参数测试）"
             else
@@ -681,11 +525,13 @@ EOF
         fi
     fi
 
+    # 最终验证
     if [ $config_tool_created -eq 1 ]; then
         log "✅ 配置工具最终验证通过"
         log "📁 真实工具路径: $real_config_tool"
         log "📁 统一调用接口: scripts/config-tool"
 
+        # 显示工具信息
         if [ -f "$real_config_tool" ]; then
             if file "$real_config_tool" | grep -q "ELF"; then
                 log "📋 工具类型: 已编译二进制文件"
@@ -698,12 +544,10 @@ EOF
         handle_error "无法创建配置工具"
     fi
 
-    SELECTED_REPO_TYPE="$repo_type"
     save_env
 
     echo "SELECTED_REPO_URL=$SELECTED_REPO_URL" >> $GITHUB_ENV
     echo "SELECTED_BRANCH=$SELECTED_BRANCH" >> $GITHUB_ENV
-    echo "SELECTED_REPO_TYPE=$SELECTED_REPO_TYPE" >> $GITHUB_ENV
     echo "TARGET=$TARGET" >> $GITHUB_ENV
     echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
     echo "DEVICE=$DEVICE" >> $GITHUB_ENV
@@ -718,12 +562,10 @@ download_openwrt_sdk() {
     local target="$1"
     local subtarget="$2"
     local version="$3"
-    local repo_type="${SELECTED_REPO_TYPE:-immortalwrt}"
     
     log "=== 下载OpenWrt官方SDK工具链 ==="
     log "目标平台: $target/$subtarget"
     log "OpenWrt版本: $version"
-    log "源码仓库: $repo_type"
     
     if [ ! -f "$SUPPORT_SCRIPT" ]; then
         log "❌ support.sh不存在，无法获取SDK信息"
@@ -932,18 +774,7 @@ verify_sdk_files() {
 #【build_firmware_main.sh-08】
 initialize_compiler_env() {
     local device_name="$1"
-    log "=== 初始化编译器环境（根据源码类型选择） ==="
-    
-    # 从环境变量获取仓库类型
-    local repo_type="${SELECTED_REPO_TYPE:-${SOURCE_REPO:-immortalwrt}}"
-    log "源码仓库类型: $repo_type"
-    
-    # 如果是 LEDE，跳过 SDK 下载（LEDE 使用源码自带工具链）
-    if [ "$repo_type" = "lede" ]; then
-        log "⚠️ LEDE (coolsnowwolf/lede) 使用源码自带工具链，跳过 SDK 下载"
-        log "✅ 将使用源码中的工具链编译"
-        return 0
-    fi
+    log "=== 初始化编译器环境（下载OpenWrt官方SDK）- 修复版 ==="
     
     log "🔍 检查环境文件..."
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
@@ -997,7 +828,7 @@ initialize_compiler_env() {
             log "⚠️ 编译器目录存在但不包含真正的GCC，将重新下载SDK"
         fi
     else
-        log "🔍 COMPILER_DIR未设置或目录不存在，将下载SDK"
+        log "🔍 COMPILER_DIR未设置或目录不存在，将下载OpenWrt官方SDK"
     fi
     
     log "目标平台: $TARGET/$SUBTARGET"
@@ -1078,110 +909,36 @@ configure_feeds() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
     log "=== 配置Feeds ==="
-    log "源码仓库类型: ${SELECTED_REPO_TYPE:-immortalwrt}"
     
-    # 对于 LEDE，强制修复 feeds.conf.default
-    if [ "${SELECTED_REPO_TYPE:-immortalwrt}" = "lede" ]; then
-        log "LEDE 源码，强制修复 feeds.conf.default..."
-        
-        # 备份原始文件
-        if [ -f "feeds.conf.default" ]; then
-            cp feeds.conf.default feeds.conf.default.bak
-            log "已备份原始 feeds.conf.default 到 feeds.conf.default.bak"
-            log "原始内容:"
-            cat feeds.conf.default | while read line; do
-                log "  $line"
-            done
-        fi
-        
-        # 创建正确的 LEDE feeds 配置（移除所有错误的 ;openwrt-23.05 后缀）
-        cat > feeds.conf.default << 'EOF'
-src-git packages https://github.com/coolsnowwolf/packages.git
-src-git luci https://github.com/coolsnowwolf/luci.git
-src-git routing https://github.com/coolsnowwolf/routing.git
-src-git telephony https://github.com/coolsnowwolf/telephony.git
-EOF
-        log "已修复 feeds.conf.default，移除所有错误的 ;openwrt-23.05 后缀"
-        log "修复后的内容:"
-        cat feeds.conf.default | while read line; do
-            log "  $line"
-        done
+    if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+        FEEDS_BRANCH="openwrt-23.05"
     else
-        # 非 LEDE 源码，清空并创建标准配置
-        > feeds.conf.default
-        
-        case "${SELECTED_REPO_TYPE:-immortalwrt}" in
-            "immortalwrt")
-                log "使用 ImmortalWrt feeds"
-                echo "src-git packages https://github.com/immortalwrt/packages.git" >> feeds.conf.default
-                echo "src-git luci https://github.com/immortalwrt/luci.git" >> feeds.conf.default
-                echo "src-git routing https://github.com/openwrt/routing.git" >> feeds.conf.default
-                echo "src-git telephony https://github.com/openwrt/telephony.git" >> feeds.conf.default
-                ;;
-            "openwrt")
-                log "使用 OpenWrt 官方 feeds"
-                echo "src-git packages https://git.openwrt.org/feed/packages.git" >> feeds.conf.default
-                echo "src-git luci https://git.openwrt.org/project/luci.git" >> feeds.conf.default
-                echo "src-git routing https://git.openwrt.org/feed/routing.git" >> feeds.conf.default
-                echo "src-git telephony https://git.openwrt.org/feed/telephony.git" >> feeds.conf.default
-                ;;
-        esac
-        
-        # 添加 TurboACC feed（仅 normal 模式且启用了 TurboACC）
-        if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
-            echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
-            log "✅ 添加TurboACC feed"
-        fi
+        FEEDS_BRANCH="openwrt-21.02"
     fi
     
-    log "最终 feeds.conf.default 内容:"
-    if [ -f "feeds.conf.default" ]; then
-        cat feeds.conf.default | while read line; do
-            log "  $line"
-        done
-    else
-        log "❌ feeds.conf.default 文件不存在"
+    # 使用配置文件中的Feed URL
+    echo "src-git packages ${PACKAGES_FEED_URL:-https://github.com/immortalwrt/packages.git};$FEEDS_BRANCH" > feeds.conf.default
+    echo "src-git luci ${LUCI_FEED_URL:-https://github.com/immortalwrt/luci.git};$FEEDS_BRANCH" >> feeds.conf.default
+    
+    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+        echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
+        log "✅ 添加TurboACC feed（所有版本）"
     fi
     
     log "=== 更新Feeds ==="
-    ./scripts/feeds update -a || {
-        log "⚠️ 更新 feeds 失败，尝试使用 -f 强制更新..."
-        ./scripts/feeds update -a -f || {
-            log "❌ 更新 feeds 失败，但继续尝试安装..."
-        }
-    }
+    ./scripts/feeds update -a || handle_error "更新feeds失败"
     
     log "=== 安装Feeds ==="
-    ./scripts/feeds install -a 2>/dev/null || true
+    ./scripts/feeds install -a || handle_error "安装feeds失败"
     
-    log "安装关键包..."
-    for pkg in base luci packages routing telephony; do
-        if ./scripts/feeds install -p $pkg 2>/dev/null; then
-            log "✅ 安装 $pkg 成功"
+    local critical_feeds_dirs=("feeds/packages" "feeds/luci" "package/feeds")
+    for dir in "${critical_feeds_dirs[@]}"; do
+        if [ -d "$dir" ]; then
+            log "✅ Feed目录存在: $dir"
+        else
+            log "❌ Feed目录缺失: $dir"
         fi
     done
-    
-    sleep 2
-    
-    log "检查 Feed 目录结构:"
-    if [ -d "feeds" ]; then
-        log "✅ feeds 主目录存在"
-        find feeds -maxdepth 1 -type d | grep -v "^feeds$" | while read dir; do
-            feed_name=$(basename "$dir")
-            if [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
-                log "  ✅ $feed_name: 已安装 ($(find "$dir" -type f | wc -l) 个文件)"
-            else
-                log "  ⚠️ $feed_name: 目录为空"
-            fi
-        done
-    else
-        log "❌ feeds 主目录不存在"
-    fi
-    
-    if [ ! -d "package/feeds" ]; then
-        mkdir -p package/feeds
-        log "✅ 创建 package/feeds 目录"
-    fi
     
     log "✅ Feeds配置完成"
 }
@@ -1286,16 +1043,6 @@ generate_config() {
             search_device="acrh17"
             log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
             ;;
-        cmcc_rax3000m)
-            openwrt_device="cmcc_rax3000m"
-            search_device="rax3000m"
-            log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
-            ;;
-        netgear_wndr3800)
-            openwrt_device="netgear_wndr3800"
-            search_device="wndr3800"
-            log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
-            ;;
         *)
             openwrt_device=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
             search_device="$DEVICE"
@@ -1330,35 +1077,14 @@ EOF
     : ${CONFIG_USB_GENERIC:="usb-generic.config"}
     : ${CONFIG_NORMAL:="normal.config"}
     
-    # 检查是否存在设备专用配置文件
-    local device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
+    append_config "$CONFIG_DIR/$CONFIG_BASE"
+    append_config "$CONFIG_DIR/$CONFIG_USB_GENERIC"
+    append_config "$CONFIG_DIR/$TARGET.config"
+    append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
+    append_config "$CONFIG_DIR/devices/$DEVICE.config"
     
-    if [ -f "$device_config_file" ]; then
-        log "📁 检测到设备专用配置文件: $DEVICE.config"
-        log "🔧 采用精简配置模式: usb-generic.config + $DEVICE.config"
-        
-        # 只合并 USB 通用配置和设备专用配置
-        append_config "$CONFIG_DIR/$CONFIG_USB_GENERIC"
-        append_config "$device_config_file"
-        
-        # 如果存在平台配置文件，也合并（可选，根据需求）
-        if [ -f "$CONFIG_DIR/$TARGET.config" ]; then
-            log "📁 检测到平台配置文件: $TARGET.config，也合并"
-            append_config "$CONFIG_DIR/$TARGET.config"
-        fi
-    else
-        log "📁 未检测到设备专用配置文件，采用完整配置模式"
-        log "   合并: base.config + usb-generic.config + 平台配置 + 版本配置 + 模式配置"
-        
-        # 完整模式：合并所有配置文件
-        append_config "$CONFIG_DIR/$CONFIG_BASE"
-        append_config "$CONFIG_DIR/$CONFIG_USB_GENERIC"
-        append_config "$CONFIG_DIR/$TARGET.config"
-        append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
-        
-        if [ "$CONFIG_MODE" = "normal" ]; then
-            append_config "$CONFIG_DIR/$CONFIG_NORMAL"
-        fi
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        append_config "$CONFIG_DIR/$CONFIG_NORMAL"
     fi
     
     if [ -n "$extra_packages" ]; then
@@ -1367,6 +1093,11 @@ EOF
 ' | while read pkg; do
             [ -n "$pkg" ] && echo "CONFIG_PACKAGE_$pkg=y" >> .config
         done
+    fi
+    
+    if [ -f "$CONFIG_DIR/devices/$DEVICE.config" ]; then
+        log "📋 从设备配置文件动态添加配置: $CONFIG_DIR/devices/$DEVICE.config"
+        append_config "$CONFIG_DIR/devices/$DEVICE.config"
     fi
     
     if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
@@ -1397,15 +1128,17 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 静默获取内核配置文件
+    # =========================================================================
+    # 静默获取内核配置文件（不再输出冗长日志）
+    # =========================================================================
     local kernel_config_file=""
     local kernel_version=""
     local found_kernel=0
     
     if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
-        # 尝试从设备定义文件获取内核版本
+        # 尝试从设备定义文件获取内核版本（静默）
         if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
-            # 查找设备定义文件
+            # 查找设备定义文件（复用之前的 search_device）
             local device_def_file=""
             while IFS= read -r mkfile; do
                 if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
@@ -1484,6 +1217,7 @@ EOF
         
         rm -f "$usb_configs_file" "$usb_configs_file.sorted"
     else
+        # 未找到内核配置文件时不再输出警告，仅保留一个调试日志（可忽略）
         if [ "${DEBUG:-false}" = "true" ]; then
             log "ℹ️ 未找到目标平台 $TARGET 的内核配置文件，跳过内核配置添加"
         fi
@@ -1599,7 +1333,8 @@ EOF
         else
             existing_packages=$((existing_packages + 1))
         fi
-    done < <(printf "%s\n" "${base_usb_packages[@]}" "${extended_usb_packages[@]}" "${fs_support_packages[@]}" | sort -u)
+    done < <(printf "%s
+" "${base_usb_packages[@]}" "${extended_usb_packages[@]}" "${fs_support_packages[@]}" | sort -u)
     
     log "📊 USB软件包统计: 新增 $added_packages 个, 已存在 $existing_packages 个"
     
@@ -1697,21 +1432,28 @@ EOF
     log "  模块化软件包: $module_packages"
     log "  禁用软件包: $disabled_packages"
     
-    # 手动禁用特定插件
+    # =========================================================================
+    # 手动禁用特定插件（vssr, ssr-plus, rclone, passwall）
+    # 这些插件可能由feeds自动引入，这里强制禁用
+    # =========================================================================
     log "🔧 手动禁用 luci-app-vssr, luci-app-ssr-plus, luci-app-rclone, luci-app-passwall 及其子选项"
     
+    # 禁用 luci-app-vssr
     sed -i '/CONFIG_PACKAGE_luci-app-vssr=/d' .config
     echo '# CONFIG_PACKAGE_luci-app-vssr is not set' >> .config
     sed -i '/CONFIG_PACKAGE_luci-app-vssr_INCLUDE_/d' .config
     
+    # 禁用 luci-app-ssr-plus
     sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus=/d' .config
     echo '# CONFIG_PACKAGE_luci-app-ssr-plus is not set' >> .config
     sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_/d' .config
     
+    # 禁用 luci-app-rclone
     sed -i '/CONFIG_PACKAGE_luci-app-rclone=/d' .config
     echo '# CONFIG_PACKAGE_luci-app-rclone is not set' >> .config
     sed -i '/CONFIG_PACKAGE_luci-app-rclone_INCLUDE_/d' .config
     
+    # 禁用 luci-app-passwall
     sed -i '/CONFIG_PACKAGE_luci-app-passwall=/d' .config
     echo '# CONFIG_PACKAGE_luci-app-passwall is not set' >> .config
     sed -i '/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_/d' .config
@@ -1832,286 +1574,81 @@ verify_usb_config() {
 #【build_firmware_main.sh-14-end】
 
 #【build_firmware_main.sh-15】
-workflow_step15_generate_config() {
-    local extra_packages="$1"
+check_usb_drivers_integrity() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 步骤15: 智能配置生成【修复版 - 强制bin格式】 ==="
-    log "当前设备: $DEVICE"
-    log "当前目标: $TARGET"
-    log "当前子目标: $SUBTARGET"
+    log "=== 🚨 USB驱动完整性检查（增强版） ==="
     
-    set -e
-    trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
-    
-    if [ -f "$BUILD_DIR/build_env.sh" ]; then
-        source "$BUILD_DIR/build_env.sh"
-        log "✅ 从环境文件重新加载: DEVICE=$DEVICE, TARGET=$TARGET"
-    fi
-    
-    if [ -z "$DEVICE" ] && [ -n "$2" ]; then
-        DEVICE="$2"
-        log "⚠️ DEVICE为空，使用参数: $DEVICE"
-    fi
-    
-    local device_for_config="$DEVICE"
-    case "$DEVICE" in
-        ac42u|rt-ac42u)
-            device_for_config="asus_rt-ac42u"
-            log "🔧 设备名转换: $DEVICE -> $device_for_config"
-            ;;
-        acrh17|rt-acrh17)
-            device_for_config="asus_rt-acrh17"
-            log "🔧 设备名转换: $DEVICE -> $device_for_config"
-            ;;
-        cmcc_rax3000m)
-            device_for_config="cmcc_rax3000m"
-            log "🔧 设备名转换: $DEVICE -> $device_for_config"
-            ;;
-        netgear_wndr3800)
-            device_for_config="netgear_wndr3800"
-            log "🔧 设备名转换: $DEVICE -> $device_for_config"
-            ;;
-        *)
-            device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-            ;;
-    esac
-    
-    cd "$BUILD_DIR" || handle_error "无法进入构建目录"
-    
-    log ""
-    log "=== 🔍 设备定义文件验证（前置检查） ==="
-    
-    local search_device=""
-    case "$DEVICE" in
-        ac42u|rt-ac42u|asus_rt-ac42u)
-            search_device="ac42u"
-            ;;
-        acrh17|rt-acrh17|asus_rt-acrh17)
-            search_device="acrh17"
-            ;;
-        cmcc_rax3000m)
-            search_device="rax3000m"
-            ;;
-        netgear_wndr3800)
-            search_device="wndr3800"
-            ;;
-        *)
-            search_device="$DEVICE"
-            ;;
-    esac
-    
-    log "搜索设备名: $search_device"
-    log "搜索路径: target/linux/$TARGET"
-    
-    echo ""
-    echo "📁 所有子平台 .mk 文件列表:"
-    local mk_files=()
-    while IFS= read -r file; do
-        mk_files+=("$file")
-    done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null | sort)
-    
-    if [ ${#mk_files[@]} -gt 0 ]; then
-        echo "----------------------------------------"
-        for i in "${!mk_files[@]}"; do
-            printf "[%2d] %s\n" $((i+1)) "${mk_files[$i]}"
-        done
-        echo "----------------------------------------"
-        echo "📊 共找到 ${#mk_files[@]} 个 .mk 文件"
-    else
-        echo "   未找到 .mk 文件"
-    fi
-    echo ""
-    
-    local device_file=""
-    for mkfile in "${mk_files[@]}"; do
-        if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
-            device_file="$mkfile"
-            log "✅ 找到设备定义文件: $mkfile"
-            break
-        fi
-    done
-    
-    if [ -z "$device_file" ] || [ ! -f "$device_file" ]; then
-        log "❌ 错误：未找到设备 $DEVICE (搜索名: $search_device) 的定义文件"
-        log "请检查设备名称是否正确，或 target/linux/$TARGET 目录下是否存在对应的 .mk 文件"
-        exit 1
-    fi
-    
-    log "✅ 找到设备定义文件: $device_file"
-    
-    local device_block=""
-    device_block=$(awk "/define Device.*$search_device/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
-    
-    if [ -n "$device_block" ]; then
-        echo ""
-        echo "📋 设备定义信息（关键字段）:"
-        echo "----------------------------------------"
-        echo "$device_block" | grep -E "define Device" | head -1
-        echo "$device_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS|KERNEL|IMAGES|IMAGE)" | sed 's/^/    /'
-        echo "----------------------------------------"
-    else
-        log "⚠️ 警告：无法提取设备 $search_device 的配置块"
-    fi
-    
-    # 检查镜像格式定义
-    log ""
-    log "=== 🔍 检查镜像格式定义 ==="
-    if [ -n "$device_block" ]; then
-        local images_def=$(echo "$device_block" | grep -E "^[[:space:]]*IMAGES\s*:=" | sed 's/^[[:space:]]*//')
-        if [ -n "$images_def" ]; then
-            log "当前 IMAGES 定义: $images_def"
-            if echo "$images_def" | grep -q "itb"; then
-                log "⚠️ 检测到 .itb 格式定义，将强制覆盖为 .bin"
-            fi
-        else
-            log "未找到 IMAGES 定义，将使用默认格式"
-        fi
-    fi
-    
-    log ""
-    log "=== 开始生成配置 ==="
-    
-    generate_config "$extra_packages" "$device_for_config"
-    
-    log ""
-    log "=== 🔧 强制设置固件输出格式为 .bin ==="
-    
-    # 强制设置固件输出格式
-    echo "" >> .config
-    echo "# 强制使用 .bin 格式" >> .config
-    echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
-    echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
-    
-    # 针对不同平台设置
-    case "$TARGET" in
-        mediatek)
-            echo "# mediatek 平台强制使用 squashfs" >> .config
-            echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-            echo "CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256" >> .config
-            ;;
-        ipq40xx|ipq806x)
-            echo "# ipq40xx 平台强制使用 squashfs" >> .config
-            echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-            echo "CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256" >> .config
-            ;;
-        ath79)
-            echo "# ath79 平台强制使用 squashfs" >> .config
-            echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-            ;;
-    esac
-    
-    # 禁用 FIT 格式
-    echo "# 禁用 FIT 镜像格式" >> .config
-    echo "# CONFIG_TARGET_IMAGES_FIT is not set" >> .config
-    echo "# CONFIG_TARGET_FIT is not set" >> .config
-    
-    # 强制生成 .bin 文件
-    echo "# 强制生成 .bin 文件" >> .config
-    echo "CONFIG_TARGET_IMAGES=y" >> .config
-    echo "CONFIG_TARGET_IMAGES_BIN=y" >> .config
-    
-    log "✅ 已强制设置固件输出格式为 .bin"
-    
-    log ""
-    log "=== 🔧 强制禁用不需要的插件系列 ==="
-    
-    local forbidden_plugins=(
-        "luci-app-vssr"
-        "luci-app-ssr-plus"
-        "luci-app-rclone"
-        "luci-app-passwall"
+    local missing_drivers=()
+    local required_drivers=(
+        # 核心驱动
+        "kmod-usb-core"
+        "kmod-usb2"
+        "kmod-usb3"
+        "kmod-usb-xhci-hcd"
+        "kmod-usb-storage"
+        "kmod-scsi-core"
+        "kmod-fs-ext4"
+        "kmod-fs-vfat"
+        # 扩展驱动（推荐启用）
+        "kmod-usb-xhci-pci"
+        "kmod-usb-xhci-plat-hcd"
+        "kmod-usb-storage-uas"
+        "kmod-scsi-generic"
+        "kmod-fs-exfat"
+        "kmod-fs-ntfs3"
+        "kmod-nls-utf8"
+        "kmod-nls-cp936"
     )
     
-    cp .config .config.before_disable
-    
-    for plugin in "${forbidden_plugins[@]}"; do
-        log "  处理插件: $plugin"
-        
-        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
-        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
-        
-        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-        
-        log "    ✅ 已禁用 $plugin 及其子选项"
-    done
-    
-    sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_/d' .config
-    sed -i '/CONFIG_PACKAGE_luci-app-vssr_INCLUDE_/d' .config
-    sed -i '/CONFIG_PACKAGE_luci-app-rclone_INCLUDE_/d' .config
-    sed -i '/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_/d' .config
-    
-    sort -u .config > .config.tmp && mv .config.tmp .config
-    
-    local max_attempts=2
-    local attempt=1
-    while [ $attempt -le $max_attempts ]; do
-        log "尝试 $attempt/$max_attempts: 运行 make defconfig..."
-        make defconfig > /tmp/build-logs/defconfig_disable_attempt${attempt}.log 2>&1 || {
-            log "⚠️ make defconfig 警告，但继续"
-        }
-        
-        local still_enabled=0
-        for plugin in "${forbidden_plugins[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
-                still_enabled=$((still_enabled + 1))
-            fi
-        done
-        
-        if [ $still_enabled -eq 0 ]; then
-            log "✅ 第 $attempt 次尝试后所有主插件已成功禁用"
-            break
-        else
-            if [ $attempt -lt $max_attempts ]; then
-                log "⚠️ 第 $attempt 次尝试后仍有 $still_enabled 个插件残留，再次强制禁用..."
-                for plugin in "${forbidden_plugins[@]}"; do
-                    sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
-                    sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-                    echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-                done
-                sort -u .config > .config.tmp && mv .config.tmp .config
-            fi
-        fi
-        attempt=$((attempt + 1))
-    done
-    
-    log ""
-    log "📊 最终插件状态验证:"
-    local still_enabled_final=0
-    for plugin in "${forbidden_plugins[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
-            log "  ❌ $plugin 仍然被启用"
-            still_enabled_final=$((still_enabled_final + 1))
-        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
-            log "  ❌ $plugin 仍然被模块化"
-            still_enabled_final=$((still_enabled_final + 1))
-        else
-            log "  ✅ $plugin 已正确禁用"
-        fi
-    done
-    
-    if [ $still_enabled_final -eq 0 ]; then
-        log "🎉 所有指定插件已成功禁用"
-    else
-        log "⚠️ 有 $still_enabled_final 个插件未能禁用，请检查 feeds 或依赖"
+    # 根据平台添加专用驱动
+    if [ "$TARGET" = "ipq40xx" ] || grep -q "^CONFIG_TARGET_ipq40xx=y" .config 2>/dev/null; then
+        required_drivers+=("kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3" "kmod-usb-dwc3-of-simple")
+    elif [ "$TARGET" = "ramips" ] || grep -q "^CONFIG_TARGET_ramips=y" .config 2>/dev/null; then
+        required_drivers+=("kmod-usb-xhci-mtk" "kmod-usb-ohci-pci" "kmod-usb2-pci")
+    elif [ "$TARGET" = "mediatek" ] || grep -q "^CONFIG_TARGET_mediatek=y" .config 2>/dev/null; then
+        required_drivers+=("kmod-usb-dwc3-mediatek" "kmod-phy-mediatek" "kmod-usb-dwc3")
+    elif [ "$TARGET" = "ath79" ] || grep -q "^CONFIG_TARGET_ath79=y" .config 2>/dev/null; then
+        required_drivers+=("kmod-usb2-ath79" "kmod-usb-ohci")
     fi
     
-    log ""
-    log "📊 配置统计（禁用后）:"
-    log "  总配置行数: $(wc -l < .config)"
-    log "  启用软件包: $(grep -c "^CONFIG_PACKAGE_.*=y$" .config)"
-    log "  模块化软件包: $(grep -c "^CONFIG_PACKAGE_.*=m$" .config)"
+    # 检查每个驱动
+    for driver in "${required_drivers[@]}"; do
+        if ! grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            log "❌ 缺失驱动: $driver"
+            missing_drivers+=("$driver")
+        else
+            log "✅ 驱动存在: $driver"
+        fi
+    done
     
-    log "✅ 步骤15 完成"
+    # 如果有缺失驱动，尝试修复
+    if [ ${#missing_drivers[@]} -gt 0 ]; then
+        log "🚨 发现 ${#missing_drivers[@]} 个缺失的USB驱动"
+        log "正在尝试修复..."
+        
+        for driver in "${missing_drivers[@]}"; do
+            echo "CONFIG_PACKAGE_${driver}=y" >> .config
+            log "✅ 已添加: $driver"
+        done
+        
+        # 重新运行defconfig
+        make defconfig || log "⚠️ make defconfig 修复后仍有问题"
+        log "✅ USB驱动修复完成"
+    else
+        log "🎉 所有必需USB驱动都已启用"
+    fi
 }
 #【build_firmware_main.sh-15-end】
 
+#【build_firmware_main.sh-16】
 #【build_firmware_main.sh-16】
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
 
-    log "=== 应用配置并显示详细信息（完整版 - 强制bin格式） ==="
+    log "=== 应用配置并显示详细信息（完整版） ==="
 
     if [ ! -f ".config" ]; then
         log "❌ 错误: .config 文件不存在，无法应用配置"
@@ -2426,17 +1963,6 @@ apply_config() {
         log "  ✅ kmod-ath10k-ct配置正常"
     fi
 
-    log "  🔧 强制设置固件输出格式为 .bin..."
-    echo "" >> .config
-    echo "# CONFIG_TARGET_IMAGES_FIT is not set" >> .config
-    echo "# CONFIG_TARGET_FIT is not set" >> .config
-    echo "CONFIG_TARGET_IMAGES=y" >> .config
-    echo "CONFIG_TARGET_IMAGES_BIN=y" >> .config
-    echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
-    echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
-    echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-    log "  ✅ 固件格式强制设置为 .bin"
-
     if [ $fix_count -eq 0 ]; then
         log "✅ 所有关键配置检查通过，无需修复"
     else
@@ -2470,11 +1996,13 @@ apply_config() {
     log "🔄 步骤6: 运行 make defconfig..."
     make defconfig || handle_error "应用配置失败"
 
+    log "🔧 步骤7: 验证关键配置..."
+
     echo ""
     echo "=== 🔍 USB驱动完整性检查 ==="
     echo ""
-    
     echo "🔍 检查基础USB驱动..."
+
     local base_drivers=(
         "kmod-usb-core"
         "kmod-usb2"
@@ -2492,6 +2020,7 @@ apply_config() {
 
     echo ""
     echo "🔍 检查USB 3.0驱动..."
+
     local usb3_found=0
 
     if grep -q "^CONFIG_PACKAGE_kmod-usb3=y" .config; then
@@ -2529,7 +2058,7 @@ apply_config() {
     local target=$(grep "^CONFIG_TARGET_" .config | grep "=y" | head -1 | cut -d'_' -f2 | tr '[:upper:]' '[:lower:]')
 
     case "$target" in
-        ipq40xx|ipq806x|qcom)
+        ipq40xx|qcom)
             echo "🔧 检测到高通IPQ40xx平台，检查专用驱动:"
 
             if grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config; then
@@ -2567,28 +2096,105 @@ apply_config() {
     esac
 
     echo ""
-    echo "=== 📦 固件格式验证 ==="
-    echo ""
-    if grep -q "^CONFIG_TARGET_IMAGES_FIT=y" .config; then
-        echo "⚠️ FIT格式: 已启用（可能导致 .itb 文件）"
+    echo "=== 📦 插件配置状态 ==="
+
+    local plugins=$(grep "^CONFIG_PACKAGE_luci-app" .config | grep -E "=y|=m" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
+    local plugin_count=0
+
+    if [ -n "$plugins" ]; then
+        while read plugin; do
+            plugin_count=$((plugin_count + 1))
+            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
+                printf "%-4s ✅ %s: 已启用\n" "[$plugin_count]" "$plugin"
+            elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+                printf "%-4s 📦 %s: 模块化\n" "[$plugin_count]" "$plugin"
+            fi
+        done <<< "$plugins"
+        echo ""
+        echo "📊 插件总数: $plugin_count 个"
     else
-        echo "✅ FIT格式: 已禁用"
-    fi
-    
-    if grep -q "^CONFIG_TARGET_IMAGES_BIN=y" .config; then
-        echo "✅ BIN格式: 已启用"
-    else
-        echo "⚠️ BIN格式: 未启用"
-    fi
-    
-    if grep -q "^CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config; then
-        echo "✅ SquashFS: 已启用"
-    else
-        echo "⚠️ SquashFS: 未启用"
+        echo "未找到Luci插件"
     fi
 
     echo ""
-    echo "=== 🔧 终极禁用不需要的插件系列（优化版 - 最多2次尝试） ==="
+    echo "=== 📦 内核模块配置状态 ==="
+
+    local kernel_modules=$(grep "^CONFIG_PACKAGE_kmod-" .config | grep -E "=y|=m" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
+    local module_count=0
+
+    if [ -n "$kernel_modules" ]; then
+        while read module; do
+            module_count=$((module_count + 1))
+            if grep -q "^CONFIG_PACKAGE_${module}=y" .config; then
+                printf "%-4s ✅ %s: 已启用\n" "[$module_count]" "$module"
+            elif grep -q "^CONFIG_PACKAGE_${module}=m" .config; then
+                printf "%-4s 📦 %s: 模块化\n" "[$module_count]" "$module"
+            fi
+        done <<< "$kernel_modules"
+        echo ""
+        echo "📊 内核模块总数: $module_count 个"
+    else
+        echo "未找到内核模块"
+    fi
+
+    echo ""
+    echo "=== 📦 网络工具配置状态 ==="
+
+    local net_tools=$(grep "^CONFIG_PACKAGE_" .config | grep -E "=y|=m" | grep -E "iptables|nftables|firewall|qos|sfe|shortcut|acceler|tc|fullcone" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
+    local net_count=0
+
+    if [ -n "$net_tools" ]; then
+        while read tool; do
+            net_count=$((net_count + 1))
+            if grep -q "^CONFIG_PACKAGE_${tool}=y" .config; then
+                printf "%-4s ✅ %s: 已启用\n" "[$net_count]" "$tool"
+            elif grep -q "^CONFIG_PACKAGE_${tool}=m" .config; then
+                printf "%-4s 📦 %s: 模块化\n" "[$net_count]" "$tool"
+            fi
+        done <<< "$net_tools"
+        echo ""
+        echo "📊 网络工具总数: $net_count 个"
+    else
+        echo "未找到网络工具"
+    fi
+
+    echo ""
+    echo "=== 📦 文件系统支持 ==="
+
+    local fs_support=$(grep "^CONFIG_PACKAGE_kmod-fs-" .config | grep -E "=y|=m" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
+    local fs_count=0
+
+    if [ -n "$fs_support" ]; then
+        while read fs; do
+            fs_count=$((fs_count + 1))
+            if grep -q "^CONFIG_PACKAGE_${fs}=y" .config; then
+                printf "%-4s ✅ %s: 已启用\n" "[$fs_count]" "$fs"
+            elif grep -q "^CONFIG_PACKAGE_${fs}=m" .config; then
+                printf "%-4s 📦 %s: 模块化\n" "[$fs_count]" "$fs"
+            fi
+        done <<< "$fs_support"
+        echo ""
+        echo "📊 文件系统总数: $fs_count 个"
+    else
+        echo "未找到文件系统支持"
+    fi
+
+    echo ""
+    echo "=== 📊 配置统计 ==="
+
+    local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config 2>/dev/null || echo "0")
+    local module_packages=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config 2>/dev/null || echo "0")
+    local disabled_packages=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config 2>/dev/null || echo "0")
+    local kernel_configs=$(grep -c "^CONFIG_[A-Z].*=y$" .config | grep -v "PACKAGE" | wc -l)
+
+    echo "✅ 已启用插件/模块: $enabled_packages 个"
+    echo "📦 模块化插件/模块: $module_packages 个"
+    echo "❌ 已禁用插件/模块: $disabled_packages 个"
+    echo "⚙️ 内核配置: $kernel_configs 个"
+    echo "📊 总配置行数: $(wc -l < .config) 行"
+
+    log ""
+    log "=== 🔧 终极禁用不需要的插件系列（优化版 - 最多2次尝试） ==="
 
     local forbidden_plugins=(
         "luci-app-vssr"
@@ -2664,19 +2270,6 @@ apply_config() {
         log "⚠️ 有 $still_remaining 个插件未能彻底禁用，请检查 feeds 或依赖"
         log "提示: 这些插件可能被其他包依赖，请手动运行 make menuconfig 检查依赖关系"
     fi
-
-    echo ""
-    echo "=== 📊 配置统计 ==="
-    local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config 2>/dev/null || echo "0")
-    local module_packages=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config 2>/dev/null || echo "0")
-    local disabled_packages=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config 2>/dev/null || echo "0")
-    local kernel_configs=$(grep -c "^CONFIG_[A-Z].*=y$" .config | grep -v "PACKAGE" | wc -l)
-
-    echo "✅ 已启用插件/模块: $enabled_packages 个"
-    echo "📦 模块化插件/模块: $module_packages 个"
-    echo "❌ 已禁用插件/模块: $disabled_packages 个"
-    echo "⚙️ 内核配置: $kernel_configs 个"
-    echo "📊 总配置行数: $(wc -l < .config) 行"
 
     log "✅ 配置应用完成"
     log "最终配置文件: .config"
@@ -3761,28 +3354,20 @@ workflow_step10_verify_sdk() {
     log "=== 步骤10: 验证SDK下载结果（修复版：动态检查） ==="
     
     trap 'echo "⚠️ 步骤10 验证过程中出现错误，继续执行..."' ERR
-
+    
     echo "🔍 检查SDK下载结果..."
-
+    
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
-        echo "✅ 从环境文件加载变量: COMPILER_DIR=$COMPILER_DIR, SELECTED_REPO_TYPE=$SELECTED_REPO_TYPE"
+        echo "✅ 从环境文件加载变量: COMPILER_DIR=$COMPILER_DIR"
     else
         echo "❌ 环境文件不存在"
     fi
-
-    # 检查是否是 LEDE
-    if [ "${SELECTED_REPO_TYPE:-immortalwrt}" = "lede" ]; then
-        echo "✅ LEDE 源码使用自带工具链，无需 SDK"
-        echo "✅ SDK验证跳过"
-        log "✅ 步骤10 完成"
-        return 0
-    fi
-
+    
     if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
         echo "✅ SDK目录存在: $COMPILER_DIR"
         echo "📊 SDK目录大小: $(du -sh "$COMPILER_DIR" 2>/dev/null | awk '{print $1}' || echo '未知')"
-
+        
         GCC_FILE=$(find "$COMPILER_DIR" -type f -executable \
           -name "*gcc" \
           ! -name "*gcc-ar" \
@@ -3791,17 +3376,17 @@ workflow_step10_verify_sdk() {
           ! -path "*dummy-tools*" \
           ! -path "*scripts*" \
           2>/dev/null | head -1)
-
+        
         if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
             echo "✅ 找到可执行GCC编译器: $(basename "$GCC_FILE")"
             echo "🔧 GCC版本测试:"
             "$GCC_FILE" --version 2>&1 | head -1
-
+            
             SDK_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
             MAJOR_VERSION=$(echo "$SDK_VERSION" | grep -o "[0-9]\+" | head -1)
-
+            
             echo "💡 这是OpenWrt官方SDK交叉编译器，用于编译目标平台固件"
-
+            
             if [ "$MAJOR_VERSION" = "12" ]; then
                 echo "💡 SDK GCC版本: 12.3.0 (OpenWrt 23.05 SDK)"
             elif [ "$MAJOR_VERSION" = "8" ]; then
@@ -3811,12 +3396,12 @@ workflow_step10_verify_sdk() {
             fi
         else
             echo "❌ 未找到可执行的GCC编译器"
-
+            
             DUMMY_GCC=$(find "$COMPILER_DIR" -type f -executable \
               -name "*gcc" \
               -path "*dummy-tools*" \
               2>/dev/null | head -1)
-
+            
             if [ -n "$DUMMY_GCC" ]; then
                 echo "⚠️ 检测到虚假的dummy-tools编译器: $DUMMY_GCC"
                 echo "💡 这是OpenWrt构建系统的占位符，不是真正的编译器"
@@ -3825,21 +3410,21 @@ workflow_step10_verify_sdk() {
     else
         echo "❌ SDK目录不存在: $COMPILER_DIR"
         echo "💡 检查可能的SDK目录..."
-
+        
         found_dirs=$(find "$BUILD_DIR" -maxdepth 1 -type d -name "*sdk*" 2>/dev/null)
         if [ -n "$found_dirs" ]; then
             echo "找到可能的SDK目录:"
             echo "$found_dirs"
-
+            
             first_dir=$(echo "$found_dirs" | head -1)
             echo "使用目录: $first_dir"
             COMPILER_DIR="$first_dir"
-
+            
             save_env
             echo "✅ 已更新环境文件"
         fi
     fi
-
+    
     echo "✅ SDK验证完成"
     log "✅ 步骤10 完成"
 }
@@ -3943,6 +3528,7 @@ workflow_step14_pre_build_space_check() {
 #【firmware-build.yml-15】
 # ============================================
 #【build_firmware_main.sh-31】
+#【build_firmware_main.sh-31】
 workflow_step15_generate_config() {
     local extra_packages="$1"
     
@@ -3974,14 +3560,6 @@ workflow_step15_generate_config() {
             device_for_config="asus_rt-acrh17"
             log "🔧 设备名转换: $DEVICE -> $device_for_config"
             ;;
-        cmcc_rax3000m)
-            device_for_config="cmcc_rax3000m"
-            log "🔧 设备名转换: $DEVICE -> $device_for_config"
-            ;;
-        netgear_wndr3800)
-            device_for_config="netgear_wndr3800"
-            log "🔧 设备名转换: $DEVICE -> $device_for_config"
-            ;;
         *)
             device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
             ;;
@@ -3999,12 +3577,6 @@ workflow_step15_generate_config() {
             ;;
         acrh17|rt-acrh17|asus_rt-acrh17)
             search_device="acrh17"
-            ;;
-        cmcc_rax3000m)
-            search_device="rax3000m"
-            ;;
-        netgear_wndr3800)
-            search_device="wndr3800"
             ;;
         *)
             search_device="$DEVICE"
@@ -4037,7 +3609,6 @@ workflow_step15_generate_config() {
     for mkfile in "${mk_files[@]}"; do
         if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
             device_file="$mkfile"
-            log "✅ 找到设备定义文件: $mkfile"
             break
         fi
     done
@@ -4113,46 +3684,27 @@ workflow_step15_generate_config() {
     generate_config "$extra_packages" "$device_for_config"
     
     log ""
-    log "=== 🔧 强制禁用冲突和不需要的插件 ==="
+    log "=== 🔧 强制禁用不需要的插件系列（优化版 - 最多2次尝试） ==="
     
     local forbidden_plugins=(
         "luci-app-vssr"
         "luci-app-ssr-plus"
         "luci-app-rclone"
         "luci-app-passwall"
-        "vsftpd-alt"
     )
     
     cp .config .config.before_disable
     
-    # 首先处理 vsftpd 冲突 - 确保 vsftpd 启用，vsftpd-alt 禁用
-    log "  处理 vsftpd 冲突..."
-    
-    # 确保 vsftpd 启用
-    if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
-        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
-        log "    ✅ 已启用 vsftpd"
-    fi
-    
-    # 禁用 vsftpd-alt
-    sed -i "/^CONFIG_PACKAGE_vsftpd-alt=y/d" .config
-    sed -i "/^CONFIG_PACKAGE_vsftpd-alt=m/d" .config
-    echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
-    log "    ✅ 已禁用 vsftpd-alt"
-    
-    # 处理其他禁用插件
     for plugin in "${forbidden_plugins[@]}"; do
-        if [ "$plugin" != "vsftpd-alt" ]; then
-            log "  处理插件: $plugin"
-            
-            sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
-            sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-            sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
-            
-            echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-            
-            log "    ✅ 已禁用 $plugin 及其子选项"
-        fi
+        log "  处理插件: $plugin"
+        
+        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
+        
+        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+        
+        log "    ✅ 已禁用 $plugin 及其子选项"
     done
     
     sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_/d' .config
@@ -4169,19 +3721,6 @@ workflow_step15_generate_config() {
         make defconfig > /tmp/build-logs/defconfig_disable_attempt${attempt}.log 2>&1 || {
             log "⚠️ make defconfig 警告，但继续"
         }
-        
-        # 检查 vsftpd 冲突是否解决
-        local vsftpd_enabled=$(grep -c "^CONFIG_PACKAGE_vsftpd=y" .config)
-        local vsftpd_alt_enabled=$(grep -c "^CONFIG_PACKAGE_vsftpd-alt=y" .config)
-        
-        if [ $vsftpd_enabled -gt 0 ] && [ $vsftpd_alt_enabled -eq 0 ]; then
-            log "✅ vsftpd 冲突已解决"
-        else
-            log "⚠️ vsftpd 冲突仍然存在，再次修复..."
-            sed -i "/^CONFIG_PACKAGE_vsftpd-alt=y/d" .config
-            sed -i "/^CONFIG_PACKAGE_vsftpd-alt=m/d" .config
-            echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
-        fi
         
         local still_enabled=0
         for plugin in "${forbidden_plugins[@]}"; do
@@ -4221,23 +3760,6 @@ workflow_step15_generate_config() {
             log "  ✅ $plugin 已正确禁用"
         fi
     done
-    
-    # 特别检查 vsftpd 状态
-    log ""
-    log "📊 vsftpd 状态验证:"
-    if grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
-        log "  ✅ vsftpd: 已启用"
-    else
-        log "  ❌ vsftpd: 未启用"
-    fi
-    
-    if grep -q "^CONFIG_PACKAGE_vsftpd-alt=y" .config; then
-        log "  ❌ vsftpd-alt: 仍然被启用（冲突风险）"
-    elif grep -q "^CONFIG_PACKAGE_vsftpd-alt=m" .config; then
-        log "  ❌ vsftpd-alt: 仍然被模块化（冲突风险）"
-    else
-        log "  ✅ vsftpd-alt: 已正确禁用"
-    fi
     
     if [ $still_enabled_final -eq 0 ]; then
         log "🎉 所有指定插件已成功禁用"
@@ -4760,7 +4282,7 @@ workflow_step20_fix_network() {
 # ============================================
 #【build_firmware_main.sh-35】
 workflow_step21_download_deps() {
-    log "=== 步骤21: 下载依赖包（优化超时版） ==="
+    log "=== 步骤21: 下载依赖包（动态优化版） ==="
     
     set -e
     trap 'echo "❌ 步骤21 失败，退出代码: $?"; exit 1' ERR
@@ -4778,25 +4300,41 @@ workflow_step21_download_deps() {
     local dep_size=$(du -sh dl 2>/dev/null | cut -f1 || echo "0B")
     echo "📊 当前依赖包: $dep_count 个, 总大小: $dep_size"
     
-    # 设置超时时间（分钟）
-    local timeout_minutes=30
-    echo "⏱️ 设置下载超时时间: ${timeout_minutes}分钟"
+    # 检测系统资源动态调整并行数
+    local cpu_cores=$(nproc)
+    local mem_total=$(free -m | awk '/^Mem:/{print $2}')
+    local download_jobs=1
     
-    # 先尝试列出需要下载的包
-    echo "📋 列出需要下载的依赖包..."
-    make download -j1 -k V=s 2>&1 | grep -E "Downloading|Failed" || true
+    if [ $cpu_cores -ge 4 ] && [ $mem_total -ge 4096 ]; then
+        download_jobs=$((cpu_cores > 8 ? 8 : cpu_cores))
+        echo "✅ 检测到高性能系统，使用 $download_jobs 并行下载"
+    elif [ $cpu_cores -ge 2 ] && [ $mem_total -ge 2048 ]; then
+        download_jobs=4
+        echo "✅ 检测到标准系统，使用 4 并行下载"
+    else
+        download_jobs=2
+        echo "⚠️ 检测到资源有限，使用 2 并行下载"
+    fi
     
-    echo "🚀 开始下载依赖包..."
+    echo "🚀 开始下载依赖包（并行数: $download_jobs）..."
     
-    # 使用 timeout 命令限制总执行时间
-    timeout ${timeout_minutes}m make -j4 download -k V=s || {
-        local exit_code=$?
-        if [ $exit_code -eq 124 ]; then
-            echo "⚠️ 下载超时（${timeout_minutes}分钟），但继续执行..."
-        else
-            echo "⚠️ 部分下载失败，但继续执行..."
-        fi
-    }
+    # 使用timeout避免卡死
+    local start_time=$(date +%s)
+    
+    # 先尝试快速下载
+    if make -j$download_jobs download -k > download.log 2>&1; then
+        echo "✅ 下载完成"
+    else
+        echo "⚠️ 部分下载失败，尝试单线程重试失败项..."
+        # 提取失败的包并重试
+        grep -E "ERROR|Failed" download.log | grep -o "make[^)]*" | while read cmd; do
+            echo "重试: $cmd"
+            eval $cmd || true
+        done
+    fi
+    
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
     
     # 统计下载结果
     local new_dep_count=$(find dl -type f 2>/dev/null | wc -l)
@@ -4805,14 +4343,17 @@ workflow_step21_download_deps() {
     
     echo ""
     echo "📊 下载统计:"
+    echo "   耗时: $((duration / 60))分$((duration % 60))秒"
     echo "   原有包: $dep_count 个 ($dep_size)"
     echo "   现有包: $new_dep_count 个 ($new_dep_size)"
     echo "   新增包: $added 个"
     
-    # 检查是否有明显失败的包
-    local failed_count=$(grep -c "Failed to download" logs/feeds/* 2>/dev/null || echo "0")
-    if [ $failed_count -gt 0 ]; then
-        echo "⚠️ 有 $failed_count 个包下载失败，但不影响继续编译"
+    # 检查下载错误
+    local error_count=$(grep -c -E "ERROR|Failed|404" download.log 2>/dev/null || echo "0")
+    if [ $error_count -gt 0 ]; then
+        echo "⚠️ 发现 $error_count 个下载错误，但不影响继续"
+        echo "错误示例:"
+        grep -E "ERROR|Failed|404" download.log | head -5
     fi
     
     log "✅ 步骤21 完成"
@@ -4858,7 +4399,6 @@ workflow_step23_pre_build_check() {
         echo "   DEVICE=$DEVICE"
         echo "   CONFIG_MODE=$CONFIG_MODE"
         echo "   COMPILER_DIR=$COMPILER_DIR"
-        echo "   SELECTED_REPO_TYPE=$SELECTED_REPO_TYPE"
     else
         echo "❌ 错误: 环境文件不存在 ($BUILD_DIR/build_env.sh)"
         exit 1
@@ -4886,6 +4426,7 @@ workflow_step23_pre_build_check() {
         if grep -q "^${expected_config}$" .config; then
             echo "   ✅ 设备配置正确: $expected_config"
         else
+            # 尝试查找任何包含该设备的配置行（兼容旧格式）
             if grep -q "CONFIG_TARGET_.*DEVICE.*${device_for_config}=y" .config; then
                 echo "   ✅ 设备配置正确 (模糊匹配)"
             else
@@ -4900,10 +4441,7 @@ workflow_step23_pre_build_check() {
     echo ""
     
     echo "2. ✅ SDK/编译器检查:"
-    if [ "$SELECTED_REPO_TYPE" = "lede" ]; then
-        echo "   ✅ LEDE 源码使用自带工具链，无需 SDK"
-        echo "   📌 将使用源码中的工具链编译"
-    elif [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
         echo "   ✅ SDK目录存在: $COMPILER_DIR"
         local sdk_size=$(du -sh "$COMPILER_DIR" 2>/dev/null | awk '{print $1}')
         echo "   📊 大小: $sdk_size"
@@ -4930,21 +4468,12 @@ workflow_step23_pre_build_check() {
         echo "   ✅ feeds目录存在, 包含 $feeds_count 个feed"
         
         for feed in packages luci; do
-            if [ -d "feeds/$feed" ] || [ -L "feeds/$feed" ]; then
+            if [ -d "feeds/$feed" ]; then
                 echo "   ✅ $feed feed: 存在"
             else
-                echo "   ⚠️ $feed feed: 不存在（可能是LEDE的特殊结构）"
-                found_alt=$(find feeds -maxdepth 1 -type d | grep -v "^feeds$" | head -1)
-                if [ -n "$found_alt" ]; then
-                    echo "     找到替代feed: $(basename $found_alt)"
-                fi
+                echo "   ❌ $feed feed: 不存在"
                 warning_count=$((warning_count + 1))
             fi
-        done
-        
-        echo "   📁 实际feed目录:"
-        ls -la feeds/ 2>/dev/null | grep "^d" | head -3 | while read line; do
-            echo "     $line"
         done
     else
         echo "   ❌ feeds目录不存在"
@@ -5260,36 +4789,13 @@ workflow_step26_check_artifacts() {
     
     cd "$BUILD_DIR"
     
-    # 获取源码名称
-    local source_name="openwrt"
-    if [ -f "$BUILD_DIR/build_env.sh" ]; then
-        source "$BUILD_DIR/build_env.sh"
-        case "${SELECTED_REPO_TYPE:-immortalwrt}" in
-            "immortalwrt")
-                source_name="immortalwrt"
-                ;;
-            "openwrt")
-                source_name="openwrt"
-                ;;
-            "lede")
-                source_name="lede"
-                ;;
-            *)
-                source_name="$SELECTED_REPO_TYPE"
-                ;;
-        esac
-    fi
-    
-    log "源码名称: $source_name"
-    
     if [ -d "bin/targets" ]; then
         echo "✅ 找到固件目录"
         
-        # 分别统计 .bin 和 .img 文件
+        # 分别统计 .bin 和 .img 文件，避免括号转义问题
         bin_count=$(find bin/targets -type f -name "*.bin" 2>/dev/null | wc -l)
         img_count=$(find bin/targets -type f -name "*.img" 2>/dev/null | wc -l)
-        itb_count=$(find bin/targets -type f -name "*.itb" 2>/dev/null | wc -l)
-        FIRMWARE_COUNT=$((bin_count + img_count + itb_count))
+        FIRMWARE_COUNT=$((bin_count + img_count))
         
         gz_count=$(find bin/targets -type f -name "*.gz" 2>/dev/null | wc -l)
         ipk_count=$(find bin/targets -type f -name "*.ipk" 2>/dev/null | wc -l)
@@ -5297,49 +4803,25 @@ workflow_step26_check_artifacts() {
         
         echo "=========================================="
         echo "📈 构建产物统计:"
-        echo "  固件文件: $FIRMWARE_COUNT 个 (.bin/.img/.itb)"
+        echo "  固件文件: $FIRMWARE_COUNT 个 (.bin/.img)"
         echo "  包文件: $PACKAGE_COUNT 个 (.gz/.ipk)"
         echo ""
         
         if [ $FIRMWARE_COUNT -gt 0 ]; then
             echo "📁 固件文件详细信息:"
             echo "------------------------------------------"
-            # 使用临时文件合并 find 结果
+            # 使用临时文件合并两个 find 结果，避免括号
             temp_list=$(mktemp)
             find bin/targets -type f -name "*.bin" 2>/dev/null >> "$temp_list"
             find bin/targets -type f -name "*.img" 2>/dev/null >> "$temp_list"
-            find bin/targets -type f -name "*.itb" 2>/dev/null >> "$temp_list"
             sort -u "$temp_list" | while read -r file; do
                 SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
                 FILE_NAME=$(basename "$file")
-                # 重命名显示：在 openwrt 后面添加源码名称
-                if [[ "$FILE_NAME" == openwrt-* ]]; then
-                    NEW_NAME="${source_name}${FILE_NAME#openwrt}"
-                    echo "🎯 $NEW_NAME ($SIZE) [原始: $FILE_NAME]"
-                else
-                    echo "🎯 $FILE_NAME ($SIZE)"
-                fi
-            done
-            rm -f "$temp_list"
-            
-            # 创建重命名后的文件列表（用于日志）
-            echo ""
-            echo "📋 重命名后的固件文件（将用于上传）:"
-            temp_list=$(mktemp)
-            find bin/targets -type f -name "*.bin" 2>/dev/null >> "$temp_list"
-            find bin/targets -type f -name "*.img" 2>/dev/null >> "$temp_list"
-            find bin/targets -type f -name "*.itb" 2>/dev/null >> "$temp_list"
-            sort -u "$temp_list" | while read -r file; do
-                SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-                FILE_NAME=$(basename "$file")
-                if [[ "$FILE_NAME" == openwrt-* ]]; then
-                    NEW_NAME="${source_name}${FILE_NAME#openwrt}"
-                    echo "  🎯 $NEW_NAME ($SIZE)"
-                fi
+                echo "🎯 $FILE_NAME ($SIZE)"
             done
             rm -f "$temp_list"
         else
-            echo "⚠️ 警告: 未找到任何固件文件 (.bin/.img/.itb)"
+            echo "⚠️ 警告: 未找到任何固件文件 (.bin/.img)"
         fi
         
         echo "=========================================="
@@ -5393,83 +4875,15 @@ workflow_step30_build_summary() {
     local config_mode="$3"
     local timestamp_sec="$4"
     local enable_parallel="$5"
-    local source_repo="${6:-immortalwrt}"
     
-    log "=== 步骤30: 编译后总结（修复版） ==="
+    log "=== 步骤30: 编译后总结（增强版） ==="
     
     trap 'echo "⚠️ 步骤30 总结过程中出现错误，继续执行..."' ERR
-    
-    # 从环境文件获取实际的仓库类型
-    local actual_repo_type=""
-    local actual_source_name=""
-    
-    if [ -f "$BUILD_DIR/build_env.sh" ]; then
-        source "$BUILD_DIR/build_env.sh"
-        actual_repo_type="${SELECTED_REPO_TYPE:-}"
-        log "从环境文件获取到仓库类型: $actual_repo_type"
-    fi
-    
-    # 确定最终的源码名称
-    local final_source_name=""
-    if [ -n "$actual_repo_type" ] && [ "$actual_repo_type" != "immortalwrt" ]; then
-        case "$actual_repo_type" in
-            "lede")
-                final_source_name="lede"
-                ;;
-            "openwrt")
-                final_source_name="openwrt"
-                ;;
-            "immortalwrt")
-                final_source_name="immortalwrt"
-                ;;
-            *)
-                final_source_name="$actual_repo_type"
-                ;;
-        esac
-    else
-        # 如果没有环境文件，使用传入的参数
-        case "$source_repo" in
-            "immortalwrt")
-                final_source_name="immortalwrt"
-                ;;
-            "openwrt")
-                final_source_name="openwrt"
-                ;;
-            "lede")
-                final_source_name="lede"
-                ;;
-            *)
-                final_source_name="$source_repo"
-                ;;
-        esac
-    fi
-    
-    # 获取实际的版本信息
-    local actual_version=""
-    if [ -f "$BUILD_DIR/build_env.sh" ]; then
-        source "$BUILD_DIR/build_env.sh"
-        if [ -n "$SELECTED_BRANCH" ]; then
-            if [[ "$SELECTED_BRANCH" == *"23.05"* ]]; then
-                actual_version="23.05"
-            elif [[ "$SELECTED_BRANCH" == *"21.02"* ]]; then
-                actual_version="21.02"
-            elif [[ "$SELECTED_BRANCH" == "master" ]]; then
-                actual_version="master (LEDE)"
-            else
-                actual_version="$SELECTED_BRANCH"
-            fi
-        fi
-    fi
-    
-    if [ -z "$actual_version" ]; then
-        actual_version="$version_selection"
-    fi
     
     echo "🚀 构建总结报告"
     echo "========================================"
     echo "设备: $device_name"
-    echo "源码仓库: $final_source_name"
-    echo "版本: $actual_version"
+    echo "版本: $version_selection"
     echo "配置模式: $config_mode"
     echo "时间戳: $timestamp_sec"
     echo "并行优化: $enable_parallel"
@@ -5477,71 +4891,31 @@ workflow_step30_build_summary() {
     echo ""
     
     if [ -d "$BUILD_DIR/bin/targets" ]; then
-        BIN_COUNT=$(find "$BUILD_DIR/bin/targets" -type f -name "*.bin" 2>/dev/null | wc -l)
-        ITB_COUNT=$(find "$BUILD_DIR/bin/targets" -type f -name "*.itb" 2>/dev/null | wc -l)
-        IMG_COUNT=$(find "$BUILD_DIR/bin/targets" -type f -name "*.img" 2>/dev/null | wc -l)
-        FIRMWARE_COUNT=$((BIN_COUNT + ITB_COUNT + IMG_COUNT))
+        FIRMWARE_COUNT=$(find "$BUILD_DIR/bin/targets" -type f -name "*.bin" -o -name "*.img" 2>/dev/null | wc -l)
         
         echo "📦 构建产物:"
-        echo "  固件总数: $FIRMWARE_COUNT 个"
-        echo "  .bin文件: $BIN_COUNT 个"
-        echo "  .itb文件: $ITB_COUNT 个"
-        echo "  .img文件: $IMG_COUNT 个"
+        echo "  固件数量: $FIRMWARE_COUNT 个 (.bin/.img)"
         
         if [ $FIRMWARE_COUNT -gt 0 ]; then
             echo "  产物位置: $BUILD_DIR/bin/targets/"
-            echo "  下载名称: ${final_source_name}-firmware-$timestamp_sec.zip"
-            
-            # 显示实际固件名称
-            echo ""
-            echo "📋 固件文件列表:"
-            find "$BUILD_DIR/bin/targets" -type f -name "*.bin" -o -name "*.img" -o -name "*.itb" 2>/dev/null | sort | while read file; do
-                size=$(ls -lh "$file" | awk '{print $5}')
-                name=$(basename "$file")
-                
-                # 根据实际源码替换前缀
-                if [[ "$name" == openwrt-* ]]; then
-                    new_name="${final_source_name}${name#openwrt}"
-                    echo "  🎯 $new_name ($size) [原始: $name]"
-                else
-                    echo "  🎯 $name ($size)"
-                fi
-            done
-        fi
-        
-        if [ $ITB_COUNT -gt 0 ]; then
-            echo ""
-            echo "⚠️ 警告: 检测到 .itb 格式固件，这可能是 initramfs/recovery 镜像"
-            echo "   正常 sysupgrade 固件应为 .bin 格式"
+            echo "  下载名称: firmware-$timestamp_sec"
         fi
     fi
     
     echo ""
     echo "🔧 编译器信息:"
     if [ -d "$BUILD_DIR" ]; then
-        # 查找实际的编译器
-        local gcc_found=""
-        if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-            gcc_found=$(find "$COMPILER_DIR" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" ! -path "*dummy-tools*" 2>/dev/null | head -1)
-        fi
+        GCC_FILE=$(find "$BUILD_DIR" -type f -executable             -name "*gcc"             ! -name "*gcc-ar"             ! -name "*gcc-ranlib"             ! -name "*gcc-nm"             ! -path "*dummy-tools*"             ! -path "*scripts*"             2>/dev/null | head -1)
         
-        if [ -n "$gcc_found" ] && [ -x "$gcc_found" ]; then
-            local gcc_version=$("$gcc_found" --version 2>&1 | head -1)
-            if echo "$gcc_version" | grep -q "12.3.0"; then
+        if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
+            SDK_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
+            # 使用 awk 替代 grep 来提取第一个数字
+            MAJOR_VERSION=$(echo "$SDK_VERSION" | awk '{match($0, /[0-9]+/); print substr($0, RSTART, RLENGTH)}')
+            
+            if [ "$MAJOR_VERSION" = "12" ]; then
                 echo "  🎯 SDK GCC: 12.3.0 (OpenWrt 23.05 SDK)"
-            elif echo "$gcc_version" | grep -q "8.4.0"; then
+            elif [ "$MAJOR_VERSION" = "8" ]; then
                 echo "  🎯 SDK GCC: 8.4.0 (OpenWrt 21.02 SDK)"
-            elif echo "$gcc_version" | grep -q "5.4.0"; then
-                echo "  🎯 GCC: 5.4.0 (LEDE 工具链)"
-            else
-                echo "  🎯 $(basename "$gcc_found"): $gcc_version"
-            fi
-        else
-            # 检查是否是 LEDE（LEDE 使用源码自带工具链）
-            if [ "$final_source_name" = "lede" ]; then
-                echo "  ℹ️ LEDE 使用源码自带工具链"
-            else
-                echo "  ⚠️ 未找到编译器信息"
             fi
         fi
     fi
@@ -5553,34 +4927,16 @@ workflow_step30_build_summary() {
         if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
             echo "  ✅ SDK已下载: $COMPILER_DIR"
         else
-            if [ "$final_source_name" = "lede" ]; then
-                echo "  ✅ LEDE 使用源码自带工具链，无需 SDK"
-            else
-                echo "  ⚠️ SDK未下载或目录不存在"
-            fi
-        fi
-    else
-        if [ "$final_source_name" = "lede" ]; then
-            echo "  ✅ LEDE 使用源码自带工具链，无需 SDK"
-        else
-            echo "  ⚠️ SDK状态未知"
+            echo "  ❌ SDK未下载或目录不存在"
         fi
     fi
     
     echo ""
     echo "⚙️ 功能开关状态:"
-    if [ -f "$BUILD_DIR/build_env.sh" ]; then
-        source "$BUILD_DIR/build_env.sh"
-        echo "  TurboACC: ${ENABLE_TURBOACC:-true}"
-        echo "  TCP BBR: ${ENABLE_TCP_BBR:-true}"
-        echo "  ath10k-ct强制: ${FORCE_ATH10K_CT:-true}"
-        echo "  USB自动修复: ${AUTO_FIX_USB_DRIVERS:-true}"
-    else
-        echo "  TurboACC: ${ENABLE_TURBOACC:-true}"
-        echo "  TCP BBR: ${ENABLE_TCP_BBR:-true}"
-        echo "  ath10k-ct强制: ${FORCE_ATH10K_CT:-true}"
-        echo "  USB自动修复: ${AUTO_FIX_USB_DRIVERS:-true}"
-    fi
+    echo "  TurboACC: ${ENABLE_TURBOACC:-true}"
+    echo "  TCP BBR: ${ENABLE_TCP_BBR:-true}"
+    echo "  ath10k-ct强制: ${FORCE_ATH10K_CT:-true}"
+    echo "  USB自动修复: ${AUTO_FIX_USB_DRIVERS:-true}"
     
     echo ""
     echo "✅ 构建流程完成"
@@ -5708,34 +5064,6 @@ intelligent_platform_aware_compiler_search() {
 #【build_firmware_main.sh-45-end】
 
 #【build_firmware_main.sh-46】
-workflow_step08_initialize_build_env_hybrid() {
-    local device_name="$1"
-    local version_selection="$2"
-    local config_mode="$3"
-    local manual_target="$4"
-    local manual_subtarget="$5"
-    
-    local repo_type="${SOURCE_REPO:-${SOURCE_REPO_TYPE:-immortalwrt}}"
-    
-    log "=== 步骤08: 初始化构建环境（混合模式：优先使用手动输入） ==="
-    log "选择的源码仓库: $repo_type"
-    log "设备名称: $device_name"
-    log "版本选择: $version_selection"
-    log "配置模式: $config_mode"
-    log "手动芯片型号: $manual_target"
-    log "手动子平台: $manual_subtarget"
-
-    set -e
-    trap 'echo "❌ 步骤08 失败，退出代码: $?"; exit 1' ERR
-
-    export SOURCE_REPO_TYPE="$repo_type"
-    
-    initialize_build_env "$device_name" "$version_selection" "$config_mode" "$manual_target" "$manual_subtarget"
-
-    log "✅ 步骤08 完成"
-}
-#【build_firmware_main.sh-46-end】
-#【build_firmware_main.sh-46】
 # ============================================
 # 手动输入模式下的初始化函数（混合模式）
 # 对应工作流步骤08
@@ -5747,61 +5075,12 @@ workflow_step08_initialize_build_env_hybrid() {
     local config_mode="$3"
     local manual_target="$4"
     local manual_subtarget="$5"
-    
-    # 从环境变量获取源码仓库类型，优先从GITHUB_ENV获取
-    local repo_type="${SOURCE_REPO:-${SOURCE_REPO_TYPE:-immortalwrt}}"
-    
+
     log "=== 步骤08: 初始化构建环境（混合模式：优先使用手动输入） ==="
-    log "选择的源码仓库: $repo_type"
-    log "设备名称: $device_name"
-    log "版本选择: $version_selection"
-    log "配置模式: $config_mode"
-    log "手动芯片型号: $manual_target"
-    log "手动子平台: $manual_subtarget"
 
     set -e
     trap 'echo "❌ 步骤08 失败，退出代码: $?"; exit 1' ERR
 
-    # 设置环境变量供后续步骤使用
-    export SOURCE_REPO_TYPE="$repo_type"
-    
-    # 调用初始化函数
-    initialize_build_env "$device_name" "$version_selection" "$config_mode" "$manual_target" "$manual_subtarget"
-
-    log "✅ 步骤08 完成"
-}
-#【build_firmware_main.sh-46-end】
-#【build_firmware_main.sh-46】
-# ============================================
-# 手动输入模式下的初始化函数（混合模式）
-# 对应工作流步骤08
-# ============================================
-
-workflow_step08_initialize_build_env_hybrid() {
-    local device_name="$1"
-    local version_selection="$2"
-    local config_mode="$3"
-    local manual_target="$4"
-    local manual_subtarget="$5"
-    
-    # 从环境变量获取源码仓库类型，优先从GITHUB_ENV获取
-    local repo_type="${SOURCE_REPO:-${SOURCE_REPO_TYPE:-immortalwrt}}"
-    
-    log "=== 步骤08: 初始化构建环境（混合模式：优先使用手动输入） ==="
-    log "选择的源码仓库: $repo_type"
-    log "设备名称: $device_name"
-    log "版本选择: $version_selection"
-    log "配置模式: $config_mode"
-    log "手动芯片型号: $manual_target"
-    log "手动子平台: $manual_subtarget"
-
-    set -e
-    trap 'echo "❌ 步骤08 失败，退出代码: $?"; exit 1' ERR
-
-    # 设置环境变量供后续步骤使用
-    export SOURCE_REPO_TYPE="$repo_type"
-    
-    # 调用初始化函数
     initialize_build_env "$device_name" "$version_selection" "$config_mode" "$manual_target" "$manual_subtarget"
 
     log "✅ 步骤08 完成"
