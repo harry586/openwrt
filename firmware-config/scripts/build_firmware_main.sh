@@ -1951,42 +1951,189 @@ apply_config() {
     esac
 
     echo ""
-    echo "=== 📦 插件配置状态 ==="
-
-    local plugins=$(grep "^CONFIG_PACKAGE_luci-app" .config | grep -E "=y|=m" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
+    echo "=== 📦 插件配置状态（从最终.config检测） ==="
+    echo "----------------------------------------"
+    
+    # 获取所有启用的插件（排除INCLUDE子选项）
+    local plugins=$(grep "^CONFIG_PACKAGE_luci-app" .config | grep -E "=y|=m" | grep -v "INCLUDE" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
     local plugin_count=0
-
+    
     if [ -n "$plugins" ]; then
-        while read plugin; do
-            plugin_count=$((plugin_count + 1))
-            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
-                printf "%-4s ✅ %s: 已启用\n" "[$plugin_count]" "$plugin"
-            elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
-                printf "%-4s 📦 %s: 模块化\n" "[$plugin_count]" "$plugin"
-            fi
-        done <<< "$plugins"
+        # 按类别显示插件
+        echo "📱 Luci应用插件:"
         echo ""
+        
+        # 基础系统类
+        local base_plugins=$(echo "$plugins" | grep -E "firewall|base|admin|statistics")
+        if [ -n "$base_plugins" ]; then
+            echo "  🔧 基础系统:"
+            echo "$base_plugins" | while read plugin; do
+                plugin_count=$((plugin_count + 1))
+                local val=$(grep "^CONFIG_PACKAGE_${plugin}=" .config | cut -d'=' -f2)
+                if [ "$val" = "y" ]; then
+                    printf "    ✅ %s\n" "$plugin"
+                else
+                    printf "    📦 %s\n" "$plugin"
+                fi
+            done
+            echo ""
+        fi
+        
+        # 网络应用类
+        local network_plugins=$(echo "$plugins" | grep -E "upnp|ddns|samba|vsftpd|ftp|nfs|aria2|qbittorrent|transmission")
+        if [ -n "$network_plugins" ]; then
+            echo "  🌐 网络应用:"
+            echo "$network_plugins" | while read plugin; do
+                plugin_count=$((plugin_count + 1))
+                local val=$(grep "^CONFIG_PACKAGE_${plugin}=" .config | cut -d'=' -f2)
+                if [ "$val" = "y" ]; then
+                    printf "    ✅ %s\n" "$plugin"
+                else
+                    printf "    📦 %s\n" "$plugin"
+                fi
+            done
+            echo ""
+        fi
+        
+        # 安全工具类
+        local security_plugins=$(echo "$plugins" | grep -E "openvpn|wireguard|ipsec|vpn|firewall|arpbind")
+        if [ -n "$security_plugins" ]; then
+            echo "  🔒 安全工具:"
+            echo "$security_plugins" | while read plugin; do
+                plugin_count=$((plugin_count + 1))
+                local val=$(grep "^CONFIG_PACKAGE_${plugin}=" .config | cut -d'=' -f2)
+                if [ "$val" = "y" ]; then
+                    printf "    ✅ %s\n" "$plugin"
+                else
+                    printf "    📦 %s\n" "$plugin"
+                fi
+            done
+            echo ""
+        fi
+        
+        # 系统工具类
+        local system_plugins=$(echo "$plugins" | grep -E "diskman|hd-idle|automount|autoreboot|wol|nlbwmon|sqm|accesscontrol")
+        if [ -n "$system_plugins" ]; then
+            echo "  ⚙️ 系统工具:"
+            echo "$system_plugins" | while read plugin; do
+                plugin_count=$((plugin_count + 1))
+                local val=$(grep "^CONFIG_PACKAGE_${plugin}=" .config | cut -d'=' -f2)
+                if [ "$val" = "y" ]; then
+                    printf "    ✅ %s\n" "$plugin"
+                else
+                    printf "    📦 %s\n" "$plugin"
+                fi
+            done
+            echo ""
+        fi
+        
+        # 其他插件
+        local other_plugins=$(echo "$plugins" | grep -v -E "firewall|base|admin|statistics|upnp|ddns|samba|vsftpd|ftp|nfs|aria2|qbittorrent|transmission|openvpn|wireguard|ipsec|vpn|arpbind|diskman|hd-idle|automount|autoreboot|wol|nlbwmon|sqm|accesscontrol")
+        if [ -n "$other_plugins" ]; then
+            echo "  📦 其他插件:"
+            echo "$other_plugins" | while read plugin; do
+                plugin_count=$((plugin_count + 1))
+                local val=$(grep "^CONFIG_PACKAGE_${plugin}=" .config | cut -d'=' -f2)
+                if [ "$val" = "y" ]; then
+                    printf "    ✅ %s\n" "$plugin"
+                else
+                    printf "    📦 %s\n" "$plugin"
+                fi
+            done
+            echo ""
+        fi
+        
         echo "📊 插件总数: $plugin_count 个"
     else
-        echo "未找到Luci插件"
+        echo "❌ 未找到任何Luci插件"
     fi
-
+    
+    echo ""
+    echo "=== 📦 插件子选项状态 ==="
+    echo "----------------------------------------"
+    
+    # 获取所有INCLUDE子选项
+    local includes=$(grep "^CONFIG_PACKAGE_luci-app.*INCLUDE" .config | grep -E "=y|=m" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
+    local include_count=0
+    
+    if [ -n "$includes" ]; then
+        echo "$includes" | while read include; do
+            include_count=$((include_count + 1))
+            local val=$(grep "^CONFIG_PACKAGE_${include}=" .config | cut -d'=' -f2)
+            if [ "$val" = "y" ]; then
+                printf "  ✅ %s\n" "$include"
+            else
+                printf "  📦 %s\n" "$include"
+            fi
+        done
+        echo ""
+        echo "📊 子选项总数: $include_count 个"
+    else
+        echo "❌ 未找到任何插件子选项"
+    fi
+    
     echo ""
     echo "=== 📦 内核模块配置状态 ==="
+    echo "----------------------------------------"
 
     local kernel_modules=$(grep "^CONFIG_PACKAGE_kmod-" .config | grep -E "=y|=m" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
     local module_count=0
 
     if [ -n "$kernel_modules" ]; then
-        while read module; do
-            module_count=$((module_count + 1))
-            if grep -q "^CONFIG_PACKAGE_${module}=y" .config; then
-                printf "%-4s ✅ %s: 已启用\n" "[$module_count]" "$module"
-            elif grep -q "^CONFIG_PACKAGE_${module}=m" .config; then
-                printf "%-4s 📦 %s: 模块化\n" "[$module_count]" "$module"
+        # USB相关模块
+        local usb_modules=$(echo "$kernel_modules" | grep "usb")
+        if [ -n "$usb_modules" ]; then
+            echo "🔌 USB模块:"
+            echo "$usb_modules" | head -10 | while read module; do
+                module_count=$((module_count + 1))
+                local val=$(grep "^CONFIG_PACKAGE_${module}=" .config | cut -d'=' -f2)
+                if [ "$val" = "y" ]; then
+                    printf "  ✅ %s\n" "$module"
+                else
+                    printf "  📦 %s\n" "$module"
+                fi
+            done
+            if [ $(echo "$usb_modules" | wc -l) -gt 10 ]; then
+                echo "  ... 还有 $(( $(echo "$usb_modules" | wc -l) - 10 )) 个USB模块未显示"
             fi
-        done <<< "$kernel_modules"
-        echo ""
+            echo ""
+        fi
+        
+        # 文件系统模块
+        local fs_modules=$(echo "$kernel_modules" | grep "fs-")
+        if [ -n "$fs_modules" ]; then
+            echo "💾 文件系统模块:"
+            echo "$fs_modules" | while read module; do
+                module_count=$((module_count + 1))
+                local val=$(grep "^CONFIG_PACKAGE_${module}=" .config | cut -d'=' -f2)
+                if [ "$val" = "y" ]; then
+                    printf "  ✅ %s\n" "$module"
+                else
+                    printf "  📦 %s\n" "$module"
+                fi
+            done
+            echo ""
+        fi
+        
+        # 网络模块
+        local net_modules=$(echo "$kernel_modules" | grep -E "net|ipt|nf-|tcp")
+        if [ -n "$net_modules" ]; then
+            echo "🌐 网络模块:"
+            echo "$net_modules" | head -10 | while read module; do
+                module_count=$((module_count + 1))
+                local val=$(grep "^CONFIG_PACKAGE_${module}=" .config | cut -d'=' -f2)
+                if [ "$val" = "y" ]; then
+                    printf "  ✅ %s\n" "$module"
+                else
+                    printf "  📦 %s\n" "$module"
+                fi
+            done
+            if [ $(echo "$net_modules" | wc -l) -gt 10 ]; then
+                echo "  ... 还有 $(( $(echo "$net_modules" | wc -l) - 10 )) 个网络模块未显示"
+            fi
+            echo ""
+        fi
+        
         echo "📊 内核模块总数: $module_count 个"
     else
         echo "未找到内核模块"
@@ -1994,6 +2141,7 @@ apply_config() {
 
     echo ""
     echo "=== 📦 网络工具配置状态 ==="
+    echo "----------------------------------------"
 
     local net_tools=$(grep "^CONFIG_PACKAGE_" .config | grep -E "=y|=m" | grep -E "iptables|nftables|firewall|qos|sfe|shortcut|acceler|tc|fullcone" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
     local net_count=0
@@ -2002,9 +2150,9 @@ apply_config() {
         while read tool; do
             net_count=$((net_count + 1))
             if grep -q "^CONFIG_PACKAGE_${tool}=y" .config; then
-                printf "%-4s ✅ %s: 已启用\n" "[$net_count]" "$tool"
+                printf "  ✅ %s\n" "$tool"
             elif grep -q "^CONFIG_PACKAGE_${tool}=m" .config; then
-                printf "%-4s 📦 %s: 模块化\n" "[$net_count]" "$tool"
+                printf "  📦 %s\n" "$tool"
             fi
         done <<< "$net_tools"
         echo ""
@@ -2015,6 +2163,7 @@ apply_config() {
 
     echo ""
     echo "=== 📦 文件系统支持 ==="
+    echo "----------------------------------------"
 
     local fs_support=$(grep "^CONFIG_PACKAGE_kmod-fs-" .config | grep -E "=y|=m" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
     local fs_count=0
@@ -2023,9 +2172,9 @@ apply_config() {
         while read fs; do
             fs_count=$((fs_count + 1))
             if grep -q "^CONFIG_PACKAGE_${fs}=y" .config; then
-                printf "%-4s ✅ %s: 已启用\n" "[$fs_count]" "$fs"
+                printf "  ✅ %s\n" "$fs"
             elif grep -q "^CONFIG_PACKAGE_${fs}=m" .config; then
-                printf "%-4s 📦 %s: 模块化\n" "[$fs_count]" "$fs"
+                printf "  📦 %s\n" "$fs"
             fi
         done <<< "$fs_support"
         echo ""
@@ -2036,267 +2185,18 @@ apply_config() {
 
     echo ""
     echo "=== 📊 配置统计 ==="
+    echo "----------------------------------------"
 
     local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config 2>/dev/null || echo "0")
     local module_packages=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config 2>/dev/null || echo "0")
     local disabled_packages=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config 2>/dev/null || echo "0")
     local kernel_configs=$(grep -c "^CONFIG_[A-Z].*=y$" .config | grep -v "PACKAGE" | wc -l)
 
-    echo "✅ 已启用插件/模块: $enabled_packages 个"
-    echo "📦 模块化插件/模块: $module_packages 个"
-    echo "❌ 已禁用插件/模块: $disabled_packages 个"
-    echo "⚙️ 内核配置: $kernel_configs 个"
-    echo "📊 总配置行数: $(wc -l < .config) 行"
-
-    log ""
-    log "=== 🔧 终极禁用不需要的插件系列（优化版 - 最多2次尝试） ==="
-
-    local forbidden_plugins=(
-        "luci-app-vssr"
-        "luci-app-ssr-plus"
-        "luci-app-rclone"
-        "luci-app-passwall"
-    )
-
-    force_disable_plugins() {
-        local config_file="$1"
-        for plugin in "${forbidden_plugins[@]}"; do
-            sed -i "/^CONFIG_PACKAGE_${plugin}[=_ ]/d" "$config_file"
-            sed -i "/^CONFIG_PACKAGE_${plugin}_/d" "$config_file"
-            sed -i "/^# CONFIG_PACKAGE_${plugin}[=_ ]/d" "$config_file"
-            if [ -n "$config_tool" ] && [ -x "$config_tool" ]; then
-                if [ "$config_tool" = "scripts/config/conf" ]; then
-                    echo "# CONFIG_PACKAGE_${plugin} is not set" >> "$config_file"
-                else
-                    $config_tool --disable "PACKAGE_${plugin}" 2>/dev/null || true
-                fi
-            else
-                echo "# CONFIG_PACKAGE_${plugin} is not set" >> "$config_file"
-            fi
-        done
-        sort -u "$config_file" > "$config_file.tmp" && mv "$config_file.tmp" "$config_file"
-    }
-
-    check_plugins_enabled() {
-        local enabled=0
-        for plugin in "${forbidden_plugins[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
-                enabled=$((enabled + 1))
-            fi
-        done
-        return $enabled
-    }
-
-    force_disable_plugins ".config"
-
-    local max_attempts=2
-    local attempt=1
-    while [ $attempt -le $max_attempts ]; do
-        log "尝试 $attempt/$max_attempts: 运行 make defconfig..."
-        make defconfig > /tmp/build-logs/defconfig_attempt${attempt}.log 2>&1 || {
-            log "⚠️ make defconfig 警告，但继续"
-        }
-
-        if check_plugins_enabled; then
-            log "✅ 第 $attempt 次尝试后所有主插件已成功禁用"
-            break
-        else
-            log "⚠️ 第 $attempt 次尝试后仍有插件残留，再次强制禁用..."
-            force_disable_plugins ".config"
-        fi
-        attempt=$((attempt + 1))
-    done
-
-    log ""
-    log "📊 最终插件状态验证:"
-    local still_remaining=0
-    for plugin in "${forbidden_plugins[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
-            log "  ❌ $plugin 仍有启用配置残留"
-            still_remaining=$((still_remaining + 1))
-        else
-            log "  ✅ $plugin 已正确禁用"
-        fi
-    done
-
-    if [ $still_remaining -eq 0 ]; then
-        log "🎉 所有指定插件已成功禁用"
-    else
-        log "⚠️ 有 $still_remaining 个插件未能彻底禁用，请检查 feeds 或依赖"
-        log "提示: 这些插件可能被其他包依赖，请手动运行 make menuconfig 检查依赖关系"
-    fi
-
-    log ""
-    log "=== 🔍 最终配置状态检测（根据配置模式检查） ==="
-    log ""
-    
-    echo "📋 源码类型: $SOURCE_REPO_TYPE"
-    echo "📋 配置模式: $CONFIG_MODE"
-    echo ""
-    
-    local device_config=$(grep "^CONFIG_TARGET.*DEVICE.*=y" .config | head -1)
-    if [ -n "$device_config" ]; then
-        echo "📱 目标设备: $(echo "$device_config" | cut -d'=' -f1 | sed 's/CONFIG_TARGET_//g')"
-    fi
-    echo ""
-    
-    # 检查 base.config
-    echo "🔍 检查基础配置 (base.config):"
-    echo "----------------------------------------"
-    if [ -f "$CONFIG_DIR/base.config" ]; then
-        local base_count=0
-        while read line; do
-            if [[ "$line" =~ ^CONFIG_ ]] && [[ ! "$line" =~ is\ not\ set ]]; then
-                local config_name=$(echo "$line" | cut -d'=' -f1)
-                if grep -q "^${config_name}=y" .config || grep -q "^${config_name}=m" .config; then
-                    local val=$(grep "^${config_name}=" .config | cut -d'=' -f2)
-                    if [ "$val" = "y" ]; then
-                        printf "  ✅ %s\n" "$config_name"
-                    elif [ "$val" = "m" ]; then
-                        printf "  📦 %s\n" "$config_name"
-                    fi
-                    base_count=$((base_count + 1))
-                fi
-            fi
-        done < "$CONFIG_DIR/base.config"
-        echo "  共 $base_count 个基础配置项已启用"
-    else
-        echo "  ❌ base.config 文件不存在"
-    fi
-    echo ""
-    
-    # 检查 usb-generic.config
-    echo "🔌 检查USB配置 (usb-generic.config):"
-    echo "----------------------------------------"
-    if [ -f "$CONFIG_DIR/usb-generic.config" ]; then
-        local usb_count=0
-        while read line; do
-            if [[ "$line" =~ ^CONFIG_ ]] && [[ ! "$line" =~ is\ not\ set ]]; then
-                local config_name=$(echo "$line" | cut -d'=' -f1)
-                if grep -q "^${config_name}=y" .config || grep -q "^${config_name}=m" .config; then
-                    local val=$(grep "^${config_name}=" .config | cut -d'=' -f2)
-                    if [ "$val" = "y" ]; then
-                        printf "  ✅ %s\n" "$config_name"
-                    elif [ "$val" = "m" ]; then
-                        printf "  📦 %s\n" "$config_name"
-                    fi
-                    usb_count=$((usb_count + 1))
-                fi
-            fi
-        done < "$CONFIG_DIR/usb-generic.config"
-        echo "  共 $usb_count 个USB配置项已启用"
-    else
-        echo "  ❌ usb-generic.config 文件不存在"
-    fi
-    echo ""
-    
-    # 检查 normal.config（如果是normal模式）
-    if [ "$CONFIG_MODE" = "normal" ]; then
-        echo "⚡ 检查增强配置 (normal.config):"
-        echo "----------------------------------------"
-        if [ -f "$CONFIG_DIR/normal.config" ]; then
-            local normal_count=0
-            while read line; do
-                if [[ "$line" =~ ^CONFIG_ ]] && [[ ! "$line" =~ is\ not\ set ]]; then
-                    local config_name=$(echo "$line" | cut -d'=' -f1)
-                    if grep -q "^${config_name}=y" .config || grep -q "^${config_name}=m" .config; then
-                        local val=$(grep "^${config_name}=" .config | cut -d'=' -f2)
-                        if [ "$val" = "y" ]; then
-                            printf "  ✅ %s\n" "$config_name"
-                        elif [ "$val" = "m" ]; then
-                            printf "  📦 %s\n" "$config_name"
-                        fi
-                        normal_count=$((normal_count + 1))
-                    fi
-                fi
-            done < "$CONFIG_DIR/normal.config"
-            echo "  共 $normal_count 个增强配置项已启用"
-        else
-            echo "  ❌ normal.config 文件不存在"
-        fi
-        echo ""
-    fi
-    
-    # 检查设备专用配置
-    local device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
-    if [ -f "$device_config_file" ]; then
-        echo "📱 检查设备专用配置 ($DEVICE.config):"
-        echo "----------------------------------------"
-        local device_count=0
-        while read line; do
-            if [[ "$line" =~ ^CONFIG_ ]] && [[ ! "$line" =~ is\ not\ set ]]; then
-                local config_name=$(echo "$line" | cut -d'=' -f1)
-                if grep -q "^${config_name}=y" .config || grep -q "^${config_name}=m" .config; then
-                    local val=$(grep "^${config_name}=" .config | cut -d'=' -f2)
-                    if [ "$val" = "y" ]; then
-                        printf "  ✅ %s\n" "$config_name"
-                    elif [ "$val" = "m" ]; then
-                        printf "  📦 %s\n" "$config_name"
-                    fi
-                    device_count=$((device_count + 1))
-                fi
-            fi
-        done < "$device_config_file"
-        echo "  共 $device_count 个设备专用配置项已启用"
-        echo ""
-    fi
-    
-    # 检查TurboACC（如果启用）
-    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
-        echo "⚡ 检查TurboACC插件:"
-        echo "----------------------------------------"
-        local turboacc_plugins=(
-            "luci-app-turboacc"
-            "kmod-shortcut-fe"
-            "kmod-fast-classifier"
-        )
-        local turboacc_count=0
-        for plugin in "${turboacc_plugins[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
-                printf "  ✅ %s: 已启用\n" "$plugin"
-                turboacc_count=$((turboacc_count + 1))
-            elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
-                printf "  📦 %s: 模块化\n" "$plugin"
-                turboacc_count=$((turboacc_count + 1))
-            else
-                printf "  ❌ %s: 未启用\n" "$plugin"
-            fi
-        done
-        echo "  共 $turboacc_count/3 个TurboACC组件已启用"
-        echo ""
-    fi
-    
-    # 检查额外添加的包（从extra_packages参数）
-    if [ -n "$extra_packages" ]; then
-        echo "📦 检查额外添加的包:"
-        echo "----------------------------------------"
-        local extra_count=0
-        echo "$extra_packages" | tr ',' '\n' | while read pkg; do
-            [ -z "$pkg" ] && continue
-            if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
-                printf "  ✅ %s: 已启用\n" "$pkg"
-                extra_count=$((extra_count + 1))
-            elif grep -q "^CONFIG_PACKAGE_${pkg}=m" .config; then
-                printf "  📦 %s: 模块化\n" "$pkg"
-                extra_count=$((extra_count + 1))
-            else
-                printf "  ❌ %s: 未启用\n" "$pkg"
-            fi
-        done
-        echo "  共 $extra_count 个额外包已启用"
-        echo ""
-    fi
-    
-    echo "📊 最终统计:"
-    local total_configs=$(wc -l < .config)
-    local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config)
-    local module_packages=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config)
-    local disabled_packages=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config)
-    
-    echo "  📝 总配置行数: $total_configs 行"
     echo "  ✅ 已启用软件包: $enabled_packages 个"
     echo "  📦 模块化软件包: $module_packages 个"
     echo "  ❌ 已禁用软件包: $disabled_packages 个"
+    echo "  ⚙️ 内核配置: $kernel_configs 个"
+    echo "  📝 总配置行数: $(wc -l < .config) 行"
     echo ""
     echo "========================================"
 
@@ -4197,6 +4097,33 @@ workflow_step21_download_deps() {
     echo "----------------------------------------"
     echo ""
     
+    # 设置国内镜像源（针对LEDE）
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        echo "🔧 LEDE源码模式，配置国内镜像源..."
+        
+        # 备份原配置
+        cp feeds.conf.default feeds.conf.default.bak
+        
+        # 替换为国内镜像源（如果使用默认的coolsnowwolf源）
+        if grep -q "github.com/coolsnowwolf" feeds.conf.default; then
+            sed -i 's|https://github.com/coolsnowwolf|https://mirrors.aliyun.com/lede|g' feeds.conf.default
+            sed -i 's|git://github.com/coolsnowwolf|https://mirrors.aliyun.com/lede|g' feeds.conf.default
+            echo "✅ 已替换为阿里云LEDE镜像: https://mirrors.aliyun.com/lede"
+        fi
+    fi
+    
+    # 设置通用镜像源环境变量
+    export OPENWRT_MIRROR="https://mirrors.aliyun.com/openwrt"
+    export SOURCE_MIRROR="https://mirrors.tuna.tsinghua.edu.cn"
+    export GNU_MIRROR="https://mirrors.aliyun.com/gnu"
+    export KERNEL_MIRROR="https://mirrors.aliyun.com/linux-kernel"
+    
+    echo "✅ 已设置国内镜像源:"
+    echo "   OPENWRT_MIRROR=$OPENWRT_MIRROR"
+    echo "   SOURCE_MIRROR=$SOURCE_MIRROR"
+    echo "   GNU_MIRROR=$GNU_MIRROR"
+    echo ""
+    
     # 统计现有依赖包
     local dep_count=$(find dl -type f 2>/dev/null | wc -l)
     local dep_size=$(du -sh dl 2>/dev/null | cut -f1 || echo "0B")
@@ -4296,22 +4223,55 @@ workflow_step21_download_deps() {
     else
         echo "⚠️ 部分下载失败，尝试使用镜像源重试..."
         
-        # 添加国内镜像源
-        echo ""
-        echo "🔧 添加国内镜像源重试..."
-        
-        # 备份原来的dl目录
-        if [ -d "dl" ] && [ "$(ls -A dl)" ]; then
-            mkdir -p dl_backup
-            cp -r dl/* dl_backup/ 2>/dev/null || true
-            echo "✅ 已备份现有下载文件到 dl_backup"
+        # 检查是否有404错误
+        local error_404=$(grep -c "404" download.log 2>/dev/null || echo "0")
+        if [ $error_404 -gt 0 ]; then
+            echo ""
+            echo "🔍 检测到 $error_404 个404错误，尝试使用镜像源重试..."
+            
+            # 备份原来的dl目录
+            if [ -d "dl" ] && [ "$(ls -A dl)" ]; then
+                mkdir -p dl_backup
+                cp -r dl/* dl_backup/ 2>/dev/null || true
+                echo "✅ 已备份现有下载文件到 dl_backup"
+            fi
+            
+            # 提取失败的包并重试
+            local failed_packages=$(grep -B1 "404" download.log | grep "Downloading" | sed 's/.*Downloading //g' | sort -u)
+            if [ -n "$failed_packages" ]; then
+                echo ""
+                echo "🔄 重试失败的包（使用镜像源）:"
+                echo "$failed_packages" | head -10 | while read url; do
+                    local filename=$(basename "$url")
+                    echo "   📥 $filename"
+                    
+                    # 尝试从镜像源下载
+                    if echo "$url" | grep -q "github.com"; then
+                        # GitHub源使用镜像
+                        local mirror_url="https://mirror.ghproxy.com/$url"
+                        echo "     尝试镜像: $mirror_url"
+                        wget -q --show-progress "$mirror_url" -O "dl/$filename" || true
+                    elif echo "$url" | grep -q "kernel.org"; then
+                        # kernel.org使用阿里云镜像
+                        local mirror_url="https://mirrors.aliyun.com/linux-kernel/$(basename $url)"
+                        echo "     尝试镜像: $mirror_url"
+                        wget -q --show-progress "$mirror_url" -O "dl/$filename" || true
+                    elif echo "$url" | grep -q "gnu.org"; then
+                        # GNU使用阿里云镜像
+                        local mirror_url="https://mirrors.aliyun.com/gnu/$(basename $url)"
+                        echo "     尝试镜像: $mirror_url"
+                        wget -q --show-progress "$mirror_url" -O "dl/$filename" || true
+                    fi
+                done
+                
+                if [ $(echo "$failed_packages" | wc -l) -gt 10 ]; then
+                    echo "  ... 还有 $(( $(echo "$failed_packages" | wc -l) - 10 )) 个包未显示"
+                fi
+            fi
         fi
         
-        # 设置镜像源环境变量
-        export OPENWRT_MIRROR="https://mirrors.aliyun.com/openwrt"
-        export SOURCE_MIRROR="https://mirrors.tuna.tsinghua.edu.cn"
-        
-        # 使用单线程重试，避免并行下载的冲突
+        # 使用单线程重试剩余的包
+        echo ""
         echo "🔄 使用单线程重试下载..."
         make download -j1 V=s >> download.log 2>&1 || true
         
@@ -4383,8 +4343,12 @@ workflow_step21_download_deps() {
         local error_404=$(grep -c "404" download.log 2>/dev/null || echo "0")
         echo "  404 Not Found: $error_404 个"
         
+        # 超时错误
+        local error_timeout=$(grep -c "Timeout\|timed out" download.log 2>/dev/null || echo "0")
+        echo "  超时错误: $error_timeout 个"
+        
         # 其他错误
-        local other_errors=$((error_count - error_404))
+        local other_errors=$((error_count - error_404 - error_timeout))
         echo "  其他错误: $other_errors 个"
         echo ""
         
@@ -4397,10 +4361,17 @@ workflow_step21_download_deps() {
             grep -B1 "404" download.log | grep "Downloading" | sed 's/.*Downloading //g' | sort -u | head -10 | while read url; do
                 echo "  ❌ $url"
                 
-                # 尝试提供镜像源替代
+                # 提供镜像源替代方案
                 local filename=$(basename "$url")
-                echo "     💡 可尝试手动下载: wget $url -O dl/$filename"
-                echo "     💡 或使用镜像: wget https://mirrors.aliyun.com/openwrt/$filename -O dl/$filename"
+                if echo "$url" | grep -q "github.com"; then
+                    echo "     💡 GitHub镜像: https://mirror.ghproxy.com/$url"
+                elif echo "$url" | grep -q "kernel.org"; then
+                    echo "     💡 阿里云镜像: https://mirrors.aliyun.com/linux-kernel/$filename"
+                elif echo "$url" | grep -q "gnu.org"; then
+                    echo "     💡 阿里云镜像: https://mirrors.aliyun.com/gnu/$filename"
+                elif echo "$url" | grep -q "openwrt.org"; then
+                    echo "     💡 清华镜像: https://mirrors.tuna.tsinghua.edu.cn/openwrt/$filename"
+                fi
             done
             
             local unique_404=$(grep -B1 "404" download.log | grep "Downloading" | sed 's/.*Downloading //g' | sort -u | wc -l)
@@ -4421,12 +4392,13 @@ workflow_step21_download_deps() {
         # 建议解决方案
         echo ""
         echo "💡 建议解决方案:"
-        echo "  1. 使用国内镜像源:"
-        echo "     export OPENWRT_MIRROR=https://mirrors.aliyun.com/openwrt"
-        echo "     export SOURCE_MIRROR=https://mirrors.tuna.tsinghua.edu.cn"
-        echo "  2. 手动下载失败的包（上面已提供命令）"
+        echo "  1. 使用国内镜像源（已自动配置）"
+        echo "  2. 手动下载失败的包（上面已提供镜像命令）"
         echo "  3. 重试构建，失败的包可能被缓存"
-        echo "  4. 检查网络连接和防火墙设置"
+        echo "  4. 如果持续失败，可以考虑："
+        echo "     - 使用 'make package/XXX/download V=s' 单独下载特定包"
+        echo "     - 检查网络连接和防火墙设置"
+        echo "     - 尝试使用代理或VPN"
         echo ""
     fi
     
@@ -4435,25 +4407,22 @@ workflow_step21_download_deps() {
     echo "🔍 检查可能导致编译失败的包:"
     echo "----------------------------------------"
     
-    # 检查samba相关
-    local samba_errors=$(grep -E "samba.*404|samba.*ERROR|samba.*Failed" download.log | wc -l)
-    if [ $samba_errors -gt 0 ]; then
-        echo "⚠️ 发现samba相关包下载问题: $samba_errors 个错误"
-        echo "   💡 可尝试: make package/samba4/download V=s"
-    fi
-    
-    # 检查vsftpd相关
-    local vsftpd_errors=$(grep -E "vsftpd.*404|vsftpd.*ERROR|vsftpd.*Failed" download.log | wc -l)
-    if [ $vsftpd_errors -gt 0 ]; then
-        echo "⚠️ 发现vsftpd相关包下载问题: $vsftpd_errors 个错误"
-        echo "   💡 可尝试: make package/vsftpd/download V=s"
-    fi
-    
-    # 检查curl相关
+    # 检查curl 404错误数量
     local curl_errors=$(grep -c "curl: (22)" download.log 2>/dev/null || echo "0")
     if [ $curl_errors -gt 0 ]; then
         echo "⚠️ 发现 $curl_errors 个curl 404错误"
-        echo "   💡 这通常是因为下载源不存在，建议使用镜像源"
+        echo "   💡 已自动配置国内镜像源，如果仍有问题，可以手动下载："
+        echo ""
+        
+        # 提取最常见的几个失败包
+        grep -B1 "curl: (22)" download.log | grep "Downloading" | sed 's/.*Downloading //g' | sort | uniq -c | sort -nr | head -5 | while read count url; do
+            local filename=$(basename "$url")
+            echo "   🔄 $filename (失败 $count 次)"
+            echo "     手动下载: wget $url -O dl/$filename"
+            if echo "$url" | grep -q "github.com"; then
+                echo "     镜像下载: wget https://mirror.ghproxy.com/$url -O dl/$filename"
+            fi
+        done
     fi
     
     echo "----------------------------------------"
