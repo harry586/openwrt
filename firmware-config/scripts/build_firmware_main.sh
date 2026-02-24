@@ -3,7 +3,7 @@
 # OpenWrt 智能固件构建主脚本
 # 对应工作流: firmware-build.yml
 # 版本: 3.1.0
-# 最后更新: 2026-02-16
+# 最后更新: 2026-02-15
 #【build_firmware_main.sh-00-end】
 
 #【build_firmware_main.sh-00.5】
@@ -1280,100 +1280,6 @@ EOF
     sed -i '/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_/d' .config
     
     log "✅ 插件禁用完成"
-    
-    # 根据实际配置文件中的包自动处理依赖和冲突
-    log "🔧 根据配置文件自动处理依赖和冲突..."
-    
-    # 读取所有已启用的包（来自配置文件）
-    local enabled_pkg_list=$(grep "^CONFIG_PACKAGE_.*=y$" .config | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
-    
-    # 定义通用冲突规则（不特定于某个版本）
-    declare -A conflict_patterns
-    conflict_patterns["samba"]="samba4 samba36 samba"  # 任何samba版本之间都可能冲突
-    
-    # 定义通用依赖规则
-    declare -A depend_patterns
-    depend_patterns["samba"]="libopenssl libpthread libtirpc"  # samba通用依赖
-    
-    # 处理同类型包的冲突（例如不同版本的samba）
-    local samba_pkgs=$(echo "$enabled_pkg_list" | grep -E "samba|samba4|samba36" | sort -u)
-    local samba_count=$(echo "$samba_pkgs" | wc -l)
-    
-    if [ $samba_count -gt 1 ]; then
-        log "  ⚠️ 检测到多个samba版本:"
-        echo "$samba_pkgs" | while read pkg; do
-            log "    - $pkg"
-        done
-        
-        # 优先保留配置文件中的samba版本（通常是samba36）
-        if echo "$enabled_pkg_list" | grep -q "samba36"; then
-            log "  🔧 保留 samba36，禁用其他samba版本"
-            echo "$samba_pkgs" | grep -v "samba36" | while read pkg; do
-                if [ -n "$pkg" ]; then
-                    sed -i "/CONFIG_PACKAGE_${pkg}=y/d" .config
-                    echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
-                    log "    ✅ 禁用 $pkg"
-                fi
-            done
-        elif echo "$enabled_pkg_list" | grep -q "samba4"; then
-            log "  🔧 保留 samba4，禁用其他samba版本"
-            echo "$samba_pkgs" | grep -v "samba4" | while read pkg; do
-                if [ -n "$pkg" ]; then
-                    sed -i "/CONFIG_PACKAGE_${pkg}=y/d" .config
-                    echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
-                    log "    ✅ 禁用 $pkg"
-                fi
-            done
-        fi
-    fi
-    
-    # 处理vsftpd冲突
-    if echo "$enabled_pkg_list" | grep -q "vsftpd" && echo "$enabled_pkg_list" | grep -q "vsftpd-alt"; then
-        log "  ⚠️ 检测到 vsftpd 和 vsftpd-alt 冲突"
-        if echo "$enabled_pkg_list" | grep -q "vsftpd"; then
-            log "  🔧 保留 vsftpd，禁用 vsftpd-alt"
-            sed -i "/CONFIG_PACKAGE_vsftpd-alt=y/d" .config
-            echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
-        else
-            log "  🔧 保留 vsftpd-alt，禁用 vsftpd"
-            sed -i "/CONFIG_PACKAGE_vsftpd=y/d" .config
-            echo "# CONFIG_PACKAGE_vsftpd is not set" >> .config
-        fi
-    fi
-    
-    # 根据实际启用的包添加通用依赖
-    if echo "$enabled_pkg_list" | grep -q "samba36"; then
-        log "  🔧 检测到 samba36，添加通用依赖"
-        for dep in libopenssl libpthread libtirpc; do
-            if ! echo "$enabled_pkg_list" | grep -q "$dep"; then
-                echo "CONFIG_PACKAGE_${dep}=y" >> .config
-                log "    ✅ 添加依赖: $dep"
-            fi
-        done
-    fi
-    
-    if echo "$enabled_pkg_list" | grep -q "samba4"; then
-        log "  🔧 检测到 samba4，添加通用依赖"
-        for dep in libopenssl libpthread libtirpc liburing; do
-            if ! echo "$enabled_pkg_list" | grep -q "$dep"; then
-                echo "CONFIG_PACKAGE_${dep}=y" >> .config
-                log "    ✅ 添加依赖: $dep"
-            fi
-        done
-    fi
-    
-    # 处理aria2相关依赖
-    if echo "$enabled_pkg_list" | grep -q "aria2"; then
-        log "  🔧 检测到 aria2，添加依赖"
-        for dep in libstdcpp libopenssl libuv libxml2; do
-            if ! echo "$enabled_pkg_list" | grep -q "$dep"; then
-                echo "CONFIG_PACKAGE_${dep}=y" >> .config
-                log "    ✅ 添加依赖: $dep"
-            fi
-        done
-    fi
-    
-    log "✅ 依赖和冲突处理完成"
     
     log "✅ 配置生成完成"
 }
