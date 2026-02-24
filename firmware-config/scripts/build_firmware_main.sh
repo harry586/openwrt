@@ -1957,89 +1957,99 @@ apply_config() {
     # 获取所有启用的插件（排除INCLUDE子选项）
     local plugins=$(grep "^CONFIG_PACKAGE_luci-app" .config | grep -E "=y|=m" | grep -v "INCLUDE" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
     local plugin_count=0
+    local plugin_list=""
     
     if [ -n "$plugins" ]; then
-        # 按类别显示插件
         echo "📱 Luci应用插件:"
         echo ""
         
         # 基础系统类
-        local base_plugins=$(echo "$plugins" | grep -E "firewall|base|admin|statistics")
+        local base_plugins=$(echo "$plugins" | grep -E "firewall|base|admin|statistics" | sort)
         if [ -n "$base_plugins" ]; then
             echo "  🔧 基础系统:"
-            echo "$base_plugins" | while read plugin; do
+            while read plugin; do
+                [ -z "$plugin" ] && continue
                 plugin_count=$((plugin_count + 1))
+                plugin_list="$plugin_list $plugin"
                 local val=$(grep "^CONFIG_PACKAGE_${plugin}=" .config | cut -d'=' -f2)
                 if [ "$val" = "y" ]; then
                     printf "    ✅ %s\n" "$plugin"
                 else
                     printf "    📦 %s\n" "$plugin"
                 fi
-            done
+            done <<< "$base_plugins"
             echo ""
         fi
         
         # 网络应用类
-        local network_plugins=$(echo "$plugins" | grep -E "upnp|ddns|samba|vsftpd|ftp|nfs|aria2|qbittorrent|transmission")
+        local network_plugins=$(echo "$plugins" | grep -E "upnp|ddns|samba|vsftpd|ftp|nfs|aria2|qbittorrent|transmission" | sort)
         if [ -n "$network_plugins" ]; then
             echo "  🌐 网络应用:"
-            echo "$network_plugins" | while read plugin; do
+            while read plugin; do
+                [ -z "$plugin" ] && continue
                 plugin_count=$((plugin_count + 1))
+                plugin_list="$plugin_list $plugin"
                 local val=$(grep "^CONFIG_PACKAGE_${plugin}=" .config | cut -d'=' -f2)
                 if [ "$val" = "y" ]; then
                     printf "    ✅ %s\n" "$plugin"
                 else
                     printf "    📦 %s\n" "$plugin"
                 fi
-            done
+            done <<< "$network_plugins"
             echo ""
         fi
         
         # 安全工具类
-        local security_plugins=$(echo "$plugins" | grep -E "openvpn|wireguard|ipsec|vpn|firewall|arpbind")
+        local security_plugins=$(echo "$plugins" | grep -E "openvpn|wireguard|ipsec|vpn|arpbind" | sort)
         if [ -n "$security_plugins" ]; then
             echo "  🔒 安全工具:"
-            echo "$security_plugins" | while read plugin; do
+            while read plugin; do
+                [ -z "$plugin" ] && continue
                 plugin_count=$((plugin_count + 1))
+                plugin_list="$plugin_list $plugin"
                 local val=$(grep "^CONFIG_PACKAGE_${plugin}=" .config | cut -d'=' -f2)
                 if [ "$val" = "y" ]; then
                     printf "    ✅ %s\n" "$plugin"
                 else
                     printf "    📦 %s\n" "$plugin"
                 fi
-            done
+            done <<< "$security_plugins"
             echo ""
         fi
         
         # 系统工具类
-        local system_plugins=$(echo "$plugins" | grep -E "diskman|hd-idle|automount|autoreboot|wol|nlbwmon|sqm|accesscontrol")
+        local system_plugins=$(echo "$plugins" | grep -E "diskman|hd-idle|automount|autoreboot|wol|nlbwmon|sqm|accesscontrol" | sort)
         if [ -n "$system_plugins" ]; then
             echo "  ⚙️ 系统工具:"
-            echo "$system_plugins" | while read plugin; do
+            while read plugin; do
+                [ -z "$plugin" ] && continue
                 plugin_count=$((plugin_count + 1))
+                plugin_list="$plugin_list $plugin"
                 local val=$(grep "^CONFIG_PACKAGE_${plugin}=" .config | cut -d'=' -f2)
                 if [ "$val" = "y" ]; then
                     printf "    ✅ %s\n" "$plugin"
                 else
                     printf "    📦 %s\n" "$plugin"
                 fi
-            done
+            done <<< "$system_plugins"
             echo ""
         fi
         
         # 其他插件
-        local other_plugins=$(echo "$plugins" | grep -v -E "firewall|base|admin|statistics|upnp|ddns|samba|vsftpd|ftp|nfs|aria2|qbittorrent|transmission|openvpn|wireguard|ipsec|vpn|arpbind|diskman|hd-idle|automount|autoreboot|wol|nlbwmon|sqm|accesscontrol")
+        local other_plugins=$(echo "$plugins" | grep -v -E "firewall|base|admin|statistics|upnp|ddns|samba|vsftpd|ftp|nfs|aria2|qbittorrent|transmission|openvpn|wireguard|ipsec|vpn|arpbind|diskman|hd-idle|automount|autoreboot|wol|nlbwmon|sqm|accesscontrol" | sort)
         if [ -n "$other_plugins" ]; then
             echo "  📦 其他插件:"
-            echo "$other_plugins" | while read plugin; do
+            while read plugin; do
+                [ -z "$plugin" ] && continue
                 plugin_count=$((plugin_count + 1))
+                plugin_list="$plugin_list $plugin"
                 local val=$(grep "^CONFIG_PACKAGE_${plugin}=" .config | cut -d'=' -f2)
                 if [ "$val" = "y" ]; then
                     printf "    ✅ %s\n" "$plugin"
                 else
                     printf "    📦 %s\n" "$plugin"
                 fi
-            done
+            done <<< "$other_plugins"
             echo ""
         fi
         
@@ -2057,7 +2067,8 @@ apply_config() {
     local include_count=0
     
     if [ -n "$includes" ]; then
-        echo "$includes" | while read include; do
+        while read include; do
+            [ -z "$include" ] && continue
             include_count=$((include_count + 1))
             local val=$(grep "^CONFIG_PACKAGE_${include}=" .config | cut -d'=' -f2)
             if [ "$val" = "y" ]; then
@@ -2065,7 +2076,7 @@ apply_config() {
             else
                 printf "  📦 %s\n" "$include"
             fi
-        done
+        done <<< "$includes"
         echo ""
         echo "📊 子选项总数: $include_count 个"
     else
@@ -2081,10 +2092,11 @@ apply_config() {
 
     if [ -n "$kernel_modules" ]; then
         # USB相关模块
-        local usb_modules=$(echo "$kernel_modules" | grep "usb")
+        local usb_modules=$(echo "$kernel_modules" | grep "usb" | sort)
         if [ -n "$usb_modules" ]; then
             echo "🔌 USB模块:"
-            echo "$usb_modules" | head -10 | while read module; do
+            while read module; do
+                [ -z "$module" ] && continue
                 module_count=$((module_count + 1))
                 local val=$(grep "^CONFIG_PACKAGE_${module}=" .config | cut -d'=' -f2)
                 if [ "$val" = "y" ]; then
@@ -2092,18 +2104,16 @@ apply_config() {
                 else
                     printf "  📦 %s\n" "$module"
                 fi
-            done
-            if [ $(echo "$usb_modules" | wc -l) -gt 10 ]; then
-                echo "  ... 还有 $(( $(echo "$usb_modules" | wc -l) - 10 )) 个USB模块未显示"
-            fi
+            done <<< "$usb_modules"
             echo ""
         fi
         
         # 文件系统模块
-        local fs_modules=$(echo "$kernel_modules" | grep "fs-")
+        local fs_modules=$(echo "$kernel_modules" | grep "fs-" | sort)
         if [ -n "$fs_modules" ]; then
             echo "💾 文件系统模块:"
-            echo "$fs_modules" | while read module; do
+            while read module; do
+                [ -z "$module" ] && continue
                 module_count=$((module_count + 1))
                 local val=$(grep "^CONFIG_PACKAGE_${module}=" .config | cut -d'=' -f2)
                 if [ "$val" = "y" ]; then
@@ -2111,15 +2121,16 @@ apply_config() {
                 else
                     printf "  📦 %s\n" "$module"
                 fi
-            done
+            done <<< "$fs_modules"
             echo ""
         fi
         
         # 网络模块
-        local net_modules=$(echo "$kernel_modules" | grep -E "net|ipt|nf-|tcp")
+        local net_modules=$(echo "$kernel_modules" | grep -E "net|ipt|nf-|tcp" | sort)
         if [ -n "$net_modules" ]; then
             echo "🌐 网络模块:"
-            echo "$net_modules" | head -10 | while read module; do
+            while read module; do
+                [ -z "$module" ] && continue
                 module_count=$((module_count + 1))
                 local val=$(grep "^CONFIG_PACKAGE_${module}=" .config | cut -d'=' -f2)
                 if [ "$val" = "y" ]; then
@@ -2127,10 +2138,24 @@ apply_config() {
                 else
                     printf "  📦 %s\n" "$module"
                 fi
-            done
-            if [ $(echo "$net_modules" | wc -l) -gt 10 ]; then
-                echo "  ... 还有 $(( $(echo "$net_modules" | wc -l) - 10 )) 个网络模块未显示"
-            fi
+            done <<< "$net_modules"
+            echo ""
+        fi
+        
+        # 其他内核模块
+        local other_modules=$(echo "$kernel_modules" | grep -v "usb\|fs-\|net\|ipt\|nf-\|tcp" | sort)
+        if [ -n "$other_modules" ]; then
+            echo "🔧 其他内核模块:"
+            while read module; do
+                [ -z "$module" ] && continue
+                module_count=$((module_count + 1))
+                local val=$(grep "^CONFIG_PACKAGE_${module}=" .config | cut -d'=' -f2)
+                if [ "$val" = "y" ]; then
+                    printf "  ✅ %s\n" "$module"
+                else
+                    printf "  📦 %s\n" "$module"
+                fi
+            done <<< "$other_modules"
             echo ""
         fi
         
@@ -2148,6 +2173,7 @@ apply_config() {
 
     if [ -n "$net_tools" ]; then
         while read tool; do
+            [ -z "$tool" ] && continue
             net_count=$((net_count + 1))
             if grep -q "^CONFIG_PACKAGE_${tool}=y" .config; then
                 printf "  ✅ %s\n" "$tool"
@@ -2170,6 +2196,7 @@ apply_config() {
 
     if [ -n "$fs_support" ]; then
         while read fs; do
+            [ -z "$fs" ] && continue
             fs_count=$((fs_count + 1))
             if grep -q "^CONFIG_PACKAGE_${fs}=y" .config; then
                 printf "  ✅ %s\n" "$fs"
@@ -4880,36 +4907,129 @@ workflow_step26_check_artifacts() {
     if [ -d "bin/targets" ]; then
         echo "✅ 找到固件目录"
         
-        # 分别统计 .bin 和 .img 文件，避免括号转义问题
-        bin_count=$(find bin/targets -type f -name "*.bin" 2>/dev/null | wc -l)
-        img_count=$(find bin/targets -type f -name "*.img" 2>/dev/null | wc -l)
-        FIRMWARE_COUNT=$((bin_count + img_count))
+        # 查找所有固件文件
+        echo ""
+        echo "📁 固件文件列表:"
+        echo "=========================================="
         
-        gz_count=$(find bin/targets -type f -name "*.gz" 2>/dev/null | wc -l)
-        ipk_count=$(find bin/targets -type f -name "*.ipk" 2>/dev/null | wc -l)
-        PACKAGE_COUNT=$((gz_count + ipk_count))
+        local sysupgrade_count=0
+        local initramfs_count=0
+        local factory_count=0
+        local other_count=0
+        
+        # 查找所有 .bin 文件
+        find bin/targets -type f -name "*.bin" 2>/dev/null | sort | while read file; do
+            SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
+            FILE_NAME=$(basename "$file")
+            FILE_PATH=$(echo "$file" | sed 's|^bin/targets/||')
+            
+            # 判断文件类型并添加注释
+            if echo "$FILE_NAME" | grep -q "sysupgrade"; then
+                echo "  ✅ $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🚀 刷机用 - 这是最终固件，通过路由器 Web 界面或 sysupgrade 命令刷入"
+                echo "    注释: *sysupgrade.bin - 刷机用"
+                echo ""
+                sysupgrade_count=$((sysupgrade_count + 1))
+            elif echo "$FILE_NAME" | grep -q "initramfs"; then
+                echo "  🔷 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🆘 恢复用 - 内存启动镜像，不写入闪存，用于恢复或测试"
+                echo "    注释: *initramfs-kernel.bin - 恢复用"
+                echo ""
+                initramfs_count=$((initramfs_count + 1))
+            elif echo "$FILE_NAME" | grep -q "factory"; then
+                echo "  🏭 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 📦 原厂刷机 - 用于从原厂固件第一次刷入 OpenWrt"
+                echo "    注释: *factory.img/*factory.bin - 原厂刷机用"
+                echo ""
+                factory_count=$((factory_count + 1))
+            elif echo "$FILE_NAME" | grep -q "kernel"; then
+                echo "  🔶 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🧩 内核镜像 - 仅包含内核，不包含根文件系统"
+                echo ""
+                other_count=$((other_count + 1))
+            elif echo "$FILE_NAME" | grep -q "rootfs"; then
+                echo "  📦 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🗄️ 根文件系统 - 仅包含根文件系统，不包含内核"
+                echo ""
+                other_count=$((other_count + 1))
+            else
+                echo "  📄 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: ❓ 其他固件文件"
+                echo ""
+                other_count=$((other_count + 1))
+            fi
+        done
+        
+        # 查找 .img 文件（通常是 factory 镜像）
+        find bin/targets -type f -name "*.img" 2>/dev/null | sort | while read file; do
+            SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
+            FILE_NAME=$(basename "$file")
+            FILE_PATH=$(echo "$file" | sed 's|^bin/targets/||')
+            
+            if echo "$FILE_NAME" | grep -q "factory"; then
+                echo "  🏭 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 📦 原厂刷机 - 用于从原厂固件第一次刷入 OpenWrt"
+                echo "    注释: *factory.img - 原厂刷机用"
+                echo ""
+                factory_count=$((factory_count + 1))
+            else
+                echo "  📀 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: ❓ 其他镜像文件"
+                echo ""
+                other_count=$((other_count + 1))
+            fi
+        done
         
         echo "=========================================="
-        echo "📈 构建产物统计:"
-        echo "  固件文件: $FIRMWARE_COUNT 个 (.bin/.img)"
-        echo "  包文件: $PACKAGE_COUNT 个 (.gz/.ipk)"
+        echo ""
+        echo "📊 固件统计:"
+        echo "----------------------------------------"
+        echo "  ✅ sysupgrade.bin: $sysupgrade_count 个 - 🚀 **刷机用** (通过Web界面或sysupgrade命令刷入)"
+        echo "  🔷 initramfs-kernel.bin: $initramfs_count 个 - 🆘 **恢复用** (内存启动，用于恢复或测试)"
+        echo "  🏭 factory: $factory_count 个 - 📦 **原厂刷机用** (从原厂固件第一次刷入)"
+        echo "  📦 其他文件: $other_count 个"
+        echo "----------------------------------------"
         echo ""
         
-        if [ $FIRMWARE_COUNT -gt 0 ]; then
-            echo "📁 固件文件详细信息:"
-            echo "------------------------------------------"
-            # 使用临时文件合并两个 find 结果，避免括号
-            temp_list=$(mktemp)
-            find bin/targets -type f -name "*.bin" 2>/dev/null >> "$temp_list"
-            find bin/targets -type f -name "*.img" 2>/dev/null >> "$temp_list"
-            sort -u "$temp_list" | while read -r file; do
-                SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
-                FILE_NAME=$(basename "$file")
-                echo "🎯 $FILE_NAME ($SIZE)"
-            done
-            rm -f "$temp_list"
+        # 重要提示
+        echo "🔔 重要提示:"
+        echo "  ✅ *sysupgrade.bin - **刷机用** (这是最终固件，通过路由器 Web 界面或 sysupgrade 命令刷入)"
+        echo "  🔷 *initramfs-kernel.bin - **恢复用** (内存启动镜像，不写入闪存，用于恢复或测试)"
+        echo "  🏭 *factory.img/*factory.bin - **原厂刷机用** (用于从原厂固件第一次刷入 OpenWrt)"
+        echo ""
+        
+        if [ $sysupgrade_count -eq 0 ]; then
+            echo "⚠️ 警告: 没有找到 sysupgrade 固件文件！"
+            echo "   编译可能不完整，请检查编译日志"
+            echo "   可能的原因:"
+            echo "   - 编译过程中出现错误"
+            echo "   - 内核模块问题导致固件生成失败"
+            echo "   - 磁盘空间不足"
         else
-            echo "⚠️ 警告: 未找到任何固件文件 (.bin/.img)"
+            echo "✅ 找到 $sysupgrade_count 个可刷机的 sysupgrade 固件"
+            echo ""
+            echo "📝 刷机说明:"
+            echo "   1. 下载 *sysupgrade.bin 文件"
+            echo "   2. 登录路由器 Web 界面 (LuCI)"
+            echo "   3. 进入 系统 -> 备份/升级"
+            echo "   4. 选择固件文件并点击'刷写固件'"
+            echo "   5. 或者使用命令行: sysupgrade -n /path/to/*sysupgrade.bin"
         fi
         
         echo "=========================================="
