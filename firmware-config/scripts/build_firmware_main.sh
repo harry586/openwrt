@@ -1275,26 +1275,16 @@ EOF
     
     log "🔧 手动禁用 luci-app-vssr, luci-app-ssr-plus, luci-app-rclone, luci-app-passwall 及其子选项"
     
-    sed -i '/CONFIG_PACKAGE_luci-app-vssr=/d' .config
-    echo '# CONFIG_PACKAGE_luci-app-vssr is not set' >> .config
-    sed -i '/CONFIG_PACKAGE_luci-app-vssr_INCLUDE_/d' .config
+    # 定义需要禁用的插件列表（主插件）
+    local forbidden_main=(
+        "luci-app-vssr"
+        "luci-app-ssr-plus"
+        "luci-app-rclone"
+        "luci-app-passwall"
+    )
     
-    sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus=/d' .config
-    echo '# CONFIG_PACKAGE_luci-app-ssr-plus is not set' >> .config
-    sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_/d' .config
-    
-    sed -i '/CONFIG_PACKAGE_luci-app-rclone=/d' .config
-    echo '# CONFIG_PACKAGE_luci-app-rclone is not set' >> .config
-    sed -i '/CONFIG_PACKAGE_luci-app-rclone_INCLUDE_/d' .config
-    
-    sed -i '/CONFIG_PACKAGE_luci-app-passwall=/d' .config
-    echo '# CONFIG_PACKAGE_luci-app-passwall is not set' >> .config
-    sed -i '/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_/d' .config
-    
-    # 新增禁用插件
-    log "🔧 手动禁用额外不需要的插件"
-    
-    local extra_forbidden=(
+    # 定义需要禁用的额外插件
+    local forbidden_extra=(
         "luci-app-autoreboot"
         "luci-app-ddns"
         "luci-app-nlbwmon"
@@ -1305,12 +1295,31 @@ EOF
         "luci-i18n-filetransfer-zh-cn"
     )
     
-    for plugin in "${extra_forbidden[@]}"; do
+    # 定义需要禁用的子选项（特殊处理）
+    local forbidden_subs=(
+        "luci-app-rclone_INCLUDE_rclone-ng"
+        "luci-app-rclone_INCLUDE_rclone-webui"
+        "luci-app-turboacc_INCLUDE_BBR_CCA"
+        "luci-app-turboacc_INCLUDE_OFFLOADING"
+        "luci-app-turboacc_INCLUDE_PDNSD"
+    )
+    
+    # 第一次禁用
+    log "第一次禁用不需要的插件..."
+    
+    # 禁用主插件
+    for plugin in "${forbidden_main[@]}" "${forbidden_extra[@]}"; do
         sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
         sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
         sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
         echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-        log "  ✅ 已禁用: $plugin"
+    done
+    
+    # 禁用子选项
+    for plugin in "${forbidden_subs[@]}"; do
+        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
     done
     
     # 特别处理 qbittorrent 相关
@@ -1318,12 +1327,62 @@ EOF
     sed -i '/CONFIG_PACKAGE_luci-app-qbittorrent/d' .config
     sed -i '/CONFIG_PACKAGE_luci-app-qbittorrent_dynamic/d' .config
     
-    # 特别处理 rclone 子选项
-    sed -i '/CONFIG_PACKAGE_luci-app-rclone_INCLUDE_/d' .config
-    
     # 特别处理 filetransfer 相关
     sed -i '/CONFIG_PACKAGE_luci-app-filetransfer/d' .config
     sed -i '/CONFIG_PACKAGE_luci-i18n-filetransfer-zh-cn/d' .config
+    
+    log "✅ 第一次插件禁用完成"
+    
+    # 运行 make defconfig 后可能会重新引入依赖，需要再次禁用
+    log "🔄 运行 make defconfig 后再次检查并禁用..."
+    
+    # 第二次运行 make defconfig（已在前面运行过）
+    # 这里只做禁用检查
+    
+    # 检查是否还有残留
+    local remaining=()
+    for plugin in "${forbidden_main[@]}" "${forbidden_extra[@]}" "${forbidden_subs[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+            remaining+=("$plugin")
+        fi
+    done
+    
+    # 如果有残留，再次禁用
+    if [ ${#remaining[@]} -gt 0 ]; then
+        log "⚠️ 发现 ${#remaining[@]} 个插件被重新引入，再次禁用..."
+        for plugin in "${remaining[@]}"; do
+            sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+            sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+            sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
+            echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+            log "  ✅ 再次禁用: $plugin"
+        done
+        
+        # 再次运行 make defconfig 使更改生效
+        make defconfig > /dev/null 2>&1
+    fi
+    
+    # 最终验证
+    log "📊 最终插件状态验证:"
+    local still_enabled=0
+    for plugin in "${forbidden_main[@]}" "${forbidden_extra[@]}" "${forbidden_subs[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
+            log "  ❌ $plugin 仍被启用"
+            still_enabled=$((still_enabled + 1))
+        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+            log "  ❌ $plugin 仍被模块化"
+            still_enabled=$((still_enabled + 1))
+        else
+            log "  ✅ $plugin 已禁用"
+        fi
+    done
+    
+    if [ $still_enabled -eq 0 ]; then
+        log "🎉 所有指定插件已成功禁用"
+    else
+        log "⚠️ 有 $still_enabled 个插件未能禁用，可能是被其他包依赖"
+        log "   可以尝试在配置文件中手动添加: # CONFIG_PACKAGE_xxx is not set"
+    fi
     
     log "✅ 插件禁用完成"
     
@@ -4827,9 +4886,14 @@ workflow_step25_build_firmware() {
     
     export FORCE_UNSAFE_CONFIGURE=1
     
-    # 增加文件描述符限制，防止 padjffs2 等工具出错
+    # 修复文件描述符问题 - 增加系统限制
+    echo "🔧 修复文件描述符限制..."
     ulimit -n 65536 2>/dev/null || ulimit -n 4096 2>/dev/null || true
-    echo "🔧 设置文件描述符限制: $(ulimit -n)"
+    echo "  当前文件描述符限制: $(ulimit -n)"
+    
+    # 设置其他系统限制
+    ulimit -s 16384 2>/dev/null || true  # 栈大小
+    ulimit -i 16384 2>/dev/null || true  # 信号队列
     
     local max_retries=2
     local retry_count=0
@@ -4840,11 +4904,12 @@ workflow_step25_build_firmware() {
         echo "🚀 开始编译固件 (尝试 $((retry_count + 1))/$max_retries)"
         echo "💡 编译配置:"
         echo "  - 并行任务: $MAKE_JOBS"
+        echo "  - 文件描述符限制: $(ulimit -n)"
         echo "  - 开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
         
         START_TIME=$(date +%s)
         
-        # 使用详细日志模式
+        # 使用详细日志模式，并处理文件描述符问题
         stdbuf -oL -eL time make -j$MAKE_JOBS V=s 2>&1 | tee build.log
         
         BUILD_EXIT_CODE=${PIPESTATUS[0]}
@@ -4865,8 +4930,8 @@ workflow_step25_build_firmware() {
             # 检查是否是文件描述符问题
             if grep -q "Bad file descriptor" build.log; then
                 echo "⚠️ 检测到文件描述符问题，尝试修复..."
-                # 增加文件描述符限制
-                ulimit -n 65536 2>/dev/null || ulimit -n 4096 2>/dev/null || true
+                # 进一步增加文件描述符限制
+                ulimit -n 131072 2>/dev/null || ulimit -n 65536 2>/dev/null || true
                 echo "  新的文件描述符限制: $(ulimit -n)"
                 retry_count=$((retry_count + 1))
                 if [ $retry_count -lt $max_retries ]; then
@@ -4914,72 +4979,74 @@ workflow_step25_build_firmware() {
         exit $BUILD_EXIT_CODE
     fi
     
-    # 编译成功后，检查并修复可能的文件描述符问题导致的文件缺失
+    # 编译成功后，等待文件系统同步
     echo ""
     echo "🔧 编译后检查..."
-    
-    # 等待文件系统同步
     sync
     
-    # 检查sysupgrade文件
-    local sysupgrade_files=$(find bin/targets -name "*sysupgrade*.bin" 2>/dev/null)
+    # 检查并修复可能缺失的固件文件
+    echo "🔍 检查固件文件..."
+    
+    # 查找临时目录中的固件文件
+    local tmp_dir="$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp"
+    local target_dir="$BUILD_DIR/bin/targets/ath79/generic"
+    
+    mkdir -p "$target_dir"
+    
+    # 查找 sysupgrade 文件
+    local sysupgrade_files=$(find "$tmp_dir" -name "*sysupgrade*.bin" 2>/dev/null)
     if [ -n "$sysupgrade_files" ]; then
-        echo "✅ 找到 sysupgrade 固件:"
+        echo "✅ 在临时目录找到 sysupgrade 固件:"
         echo "$sysupgrade_files" | while read file; do
             local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-            echo "  📄 $file ($size)"
+            local name=$(basename "$file")
+            echo "  📄 $name ($size)"
+            # 复制到目标目录
+            cp "$file" "$target_dir/" 2>/dev/null && echo "    已复制到 $target_dir/"
         done
     else
         echo "⚠️ 警告: 未找到 sysupgrade 固件"
-        echo "   尝试在临时目录中查找..."
-        
-        # 在临时目录中查找
-        local tmp_files=$(find build_dir -name "*sysupgrade*.bin" 2>/dev/null)
-        if [ -n "$tmp_files" ]; then
-            echo "   在临时目录中找到:"
-            echo "$tmp_files" | while read file; do
-                echo "     📄 $file"
-                # 尝试复制到目标目录
-                local dest="bin/targets/ath79/generic/$(basename "$file")"
-                mkdir -p bin/targets/ath79/generic
-                cp "$file" "$dest" 2>/dev/null && echo "     ✅ 已复制到 $dest"
-            done
-        fi
     fi
     
-    # 检查factory文件
-    local factory_files=$(find bin/targets -name "*factory*.bin" -o -name "*factory*.img" 2>/dev/null)
+    # 查找 factory 文件
+    local factory_files=$(find "$tmp_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null)
     if [ -n "$factory_files" ]; then
-        echo "✅ 找到 factory 固件:"
+        echo "✅ 在临时目录找到 factory 固件:"
         echo "$factory_files" | while read file; do
             local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-            echo "  📄 $file ($size)"
+            local name=$(basename "$file")
+            echo "  📄 $name ($size)"
+            # 复制到目标目录
+            cp "$file" "$target_dir/" 2>/dev/null && echo "    已复制到 $target_dir/"
         done
     else
-        echo "⚠️ 警告: 未找到 factory 固件，在临时目录中查找..."
-        
-        # 在临时目录中查找
-        local tmp_files=$(find build_dir -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null)
-        if [ -n "$tmp_files" ]; then
-            echo "   在临时目录中找到:"
-            echo "$tmp_files" | while read file; do
-                echo "     📄 $file"
-                # 尝试复制到目标目录
-                local dest="bin/targets/ath79/generic/$(basename "$file")"
-                mkdir -p bin/targets/ath79/generic
-                cp "$file" "$dest" 2>/dev/null && echo "     ✅ 已复制到 $dest"
-            done
-        fi
+        echo "ℹ️ 未找到 factory 固件（可选）"
+    fi
+    
+    # 查找 initramfs 文件
+    local initramfs_files=$(find "$tmp_dir" -name "*initramfs*.bin" 2>/dev/null)
+    if [ -n "$initramfs_files" ]; then
+        echo "✅ 在临时目录找到 initramfs 固件:"
+        echo "$initramfs_files" | while read file; do
+            local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
+            local name=$(basename "$file")
+            echo "  📄 $name ($size)"
+            # 复制到目标目录
+            cp "$file" "$target_dir/" 2>/dev/null && echo "    已复制到 $target_dir/"
+        done
     fi
     
     # 最终确认
     echo ""
     echo "📊 最终固件列表:"
     echo "----------------------------------------"
-    find bin/targets -type f -name "*.bin" -o -name "*.img" 2>/dev/null | sort | while read file; do
-        local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-        echo "  📄 $(basename "$file") ($size)"
-    done
+    if [ -d "$target_dir" ]; then
+        ls -lh "$target_dir"/*.bin "$target_dir"/*.img 2>/dev/null | while read line; do
+            echo "  📄 $line"
+        done
+    else
+        echo "  ❌ 未找到任何固件文件"
+    fi
     echo "----------------------------------------"
     
     log "✅ 步骤25 完成"
