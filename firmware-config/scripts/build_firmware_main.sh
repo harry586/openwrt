@@ -1273,75 +1273,124 @@ EOF
     log "  模块化软件包: $module_packages"
     log "  禁用软件包: $disabled_packages"
     
-    log "🔧 手动禁用 luci-app-vssr, luci-app-ssr-plus, luci-app-rclone, luci-app-passwall 及其子选项"
+    # ============================================
+    # 全面禁用不需要的插件
+    # ============================================
+    log "🔧 ===== 全面禁用不需要的插件 ===== "
     
-    # 定义需要禁用的插件列表（主插件）
-    local forbidden_main=(
+    # 定义所有需要禁用的插件（完整列表）
+    local forbidden_plugins=(
+        # 科学上网类
         "luci-app-vssr"
         "luci-app-ssr-plus"
-        "luci-app-rclone"
         "luci-app-passwall"
-    )
-    
-    # 定义需要禁用的额外插件
-    local forbidden_extra=(
+        "luci-app-openclash"
+        "luci-app-clash"
+        "luci-app-bypass"
+        "luci-app-helloworld"
+        
+        # rclone 相关
+        "luci-app-rclone"
+        "luci-app-rclone_INCLUDE_rclone-ng"
+        "luci-app-rclone_INCLUDE_rclone-webui"
+        "rclone"
+        "rclone-config"
+        "rclone-webui"
+        "rclone-ng"
+        
+        # qbittorrent 相关
+        "luci-app-qbittorrent"
+        "luci-app-qbittorrent_dynamic"
+        "qbittorrent"
+        "qbittorrent-static"
+        "qt5"
+        "libtorrent"
+        
+        # filetransfer 相关
+        "luci-app-filetransfer"
+        "luci-i18n-filetransfer-zh-cn"
+        "filetransfer"
+        "filebrowser"
+        
+        # 其他不需要的插件
         "luci-app-autoreboot"
         "luci-app-ddns"
         "luci-app-nlbwmon"
-        "luci-app-qbittorrent"
-        "luci-app-qbittorrent_dynamic"
         "luci-app-wol"
-        "luci-app-filetransfer"
-        "luci-i18n-filetransfer-zh-cn"
-    )
-    
-    # 定义需要禁用的子选项（特殊处理）
-    local forbidden_subs=(
-        "luci-app-rclone_INCLUDE_rclone-ng"
-        "luci-app-rclone_INCLUDE_rclone-webui"
+        "luci-app-accesscontrol"
+        "luci-app-statistics"
+        "luci-app-wireguard"
+        "luci-app-zerotier"
+        "luci-app-adblock"
+        "luci-app-adbyby-plus"
+        "luci-app-kodexplorer"
+        "luci-app-netdata"
+        "luci-app-pushbot"
+        "luci-app-serverchan"
+        "luci-app-tencentddns"
+        "luci-app-ttyd"
+        "luci-app-unblockmusic"
+        "luci-app-udpxy"
+        "luci-app-mwan3"
+        "luci-app-mwan3helper"
+        "luci-app-syncdial"
+        "luci-app-xlnetacc"
+        
+        # TurboACC 子选项（主插件保留）
         "luci-app-turboacc_INCLUDE_BBR_CCA"
         "luci-app-turboacc_INCLUDE_OFFLOADING"
         "luci-app-turboacc_INCLUDE_PDNSD"
+        "luci-app-turboacc_INCLUDE_SHORTCUT_FE"
     )
     
-    # 第一次禁用
-    log "第一次禁用不需要的插件..."
+    # 第一次禁用：删除所有启用配置
+    log "📋 第一次禁用：删除所有启用配置..."
     
-    # 禁用主插件
-    for plugin in "${forbidden_main[@]}" "${forbidden_extra[@]}"; do
+    for plugin in "${forbidden_plugins[@]}"; do
+        # 删除 CONFIG_PACKAGE_xxx=y
         sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+        # 删除 CONFIG_PACKAGE_xxx=m
         sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+        # 删除所有包含插件名的配置行
+        sed -i "/CONFIG_PACKAGE_.*${plugin}/d" .config
+        # 删除所有子选项
         sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
+        # 添加禁用配置
         echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
     done
     
-    # 禁用子选项
-    for plugin in "${forbidden_subs[@]}"; do
-        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
-        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-    done
+    # 特别处理：删除所有 qbittorrent 相关
+    sed -i '/qbittorrent/d' .config
+    sed -i '/QBITTORRENT/d' .config
     
-    # 特别处理 qbittorrent 相关
-    sed -i '/CONFIG_PACKAGE_qbittorrent/d' .config
-    sed -i '/CONFIG_PACKAGE_luci-app-qbittorrent/d' .config
-    sed -i '/CONFIG_PACKAGE_luci-app-qbittorrent_dynamic/d' .config
+    # 特别处理：删除所有 rclone 相关
+    sed -i '/rclone/d' .config
+    sed -i '/RCLONE/d' .config
     
-    # 特别处理 filetransfer 相关
-    sed -i '/CONFIG_PACKAGE_luci-app-filetransfer/d' .config
-    sed -i '/CONFIG_PACKAGE_luci-i18n-filetransfer-zh-cn/d' .config
+    # 特别处理：删除所有 filetransfer 相关
+    sed -i '/filetransfer/d' .config
+    sed -i '/FILETRANSFER/d' .config
     
-    log "✅ 第一次插件禁用完成"
+    # 特别处理：删除所有 INCLUDE 子选项
+    sed -i '/INCLUDE_/d' .config
     
-    # 运行 make defconfig 后可能会重新引入依赖，需要再次禁用
-    log "🔄 运行 make defconfig 后再次检查并禁用..."
+    log "✅ 第一次禁用完成"
     
-    # 第二次运行 make defconfig（已在前面运行过）
-    # 这里只做禁用检查
+    # 去重
+    sort .config | uniq > .config.tmp
+    mv .config.tmp .config
     
-    # 检查是否还有残留
+    # 再次运行 make defconfig
+    log "🔄 再次运行 make defconfig 使禁用生效..."
+    make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
+        log "⚠️ make defconfig 有警告，但继续..."
+    }
+    
+    # 第二次禁用：检查是否有残留
+    log "🔍 检查是否有插件残留..."
+    
     local remaining=()
-    for plugin in "${forbidden_main[@]}" "${forbidden_extra[@]}" "${forbidden_subs[@]}"; do
+    for plugin in "${forbidden_plugins[@]}"; do
         if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
             remaining+=("$plugin")
         fi
@@ -1349,7 +1398,8 @@ EOF
     
     # 如果有残留，再次禁用
     if [ ${#remaining[@]} -gt 0 ]; then
-        log "⚠️ 发现 ${#remaining[@]} 个插件被重新引入，再次禁用..."
+        log "⚠️ 发现 ${#remaining[@]} 个插件残留，再次禁用..."
+        
         for plugin in "${remaining[@]}"; do
             sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
             sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
@@ -1358,14 +1408,54 @@ EOF
             log "  ✅ 再次禁用: $plugin"
         done
         
-        # 再次运行 make defconfig 使更改生效
+        # 再次去重和 defconfig
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
         make defconfig > /dev/null 2>&1
     fi
+    
+    # 第三次禁用：全面搜索并删除所有可能相关的配置
+    log "🔍 第三次禁用：全面搜索并删除所有可能相关的配置..."
+    
+    local patterns=(
+        "qbittorrent"
+        "rclone"
+        "filetransfer"
+        "vssr"
+        "ssr-plus"
+        "passwall"
+        "openclash"
+        "clash"
+        "bypass"
+        "helloworld"
+        "INCLUDE_"
+    )
+    
+    for pattern in "${patterns[@]}"; do
+        # 删除所有包含该模式的 CONFIG_PACKAGE 行
+        sed -i "/CONFIG_PACKAGE_.*${pattern}/d" .config
+        # 添加禁用配置（如果还没有）
+        grep -q "^# CONFIG_PACKAGE_.*${pattern}" .config || echo "# CONFIG_PACKAGE_${pattern} is not set" >> .config
+    done
+    
+    # 最终去重
+    sort .config | uniq > .config.tmp
+    mv .config.tmp .config
     
     # 最终验证
     log "📊 最终插件状态验证:"
     local still_enabled=0
-    for plugin in "${forbidden_main[@]}" "${forbidden_extra[@]}" "${forbidden_subs[@]}"; do
+    
+    # 检查指定的几个插件
+    local check_plugins=(
+        "luci-app-filetransfer"
+        "luci-i18n-filetransfer-zh-cn"
+        "luci-app-rclone_INCLUDE_rclone-ng"
+        "luci-app-rclone_INCLUDE_rclone-webui"
+        "luci-app-qbittorrent_dynamic"
+    )
+    
+    for plugin in "${check_plugins[@]}"; do
         if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
             log "  ❌ $plugin 仍被启用"
             still_enabled=$((still_enabled + 1))
@@ -1380,8 +1470,8 @@ EOF
     if [ $still_enabled -eq 0 ]; then
         log "🎉 所有指定插件已成功禁用"
     else
-        log "⚠️ 有 $still_enabled 个插件未能禁用，可能是被其他包依赖"
-        log "   可以尝试在配置文件中手动添加: # CONFIG_PACKAGE_xxx is not set"
+        log "⚠️ 有 $still_enabled 个插件未能禁用，可能是被其他包强制依赖"
+        log "   可以在配置文件中手动添加: # CONFIG_PACKAGE_xxx is not set"
     fi
     
     log "✅ 插件禁用完成"
@@ -2295,6 +2385,50 @@ apply_config() {
     echo "  ⚙️ 内核配置: $kernel_configs 个"
     echo "  📝 总配置行数: $(wc -l < .config) 行"
     echo ""
+    
+    # ============================================
+    # 最终强制禁用不需要的插件
+    # ============================================
+    log ""
+    log "🔧 ===== 最终强制禁用不需要的插件 ===== "
+    
+    local final_forbidden=(
+        "luci-app-filetransfer"
+        "luci-i18n-filetransfer-zh-cn"
+        "luci-app-rclone_INCLUDE_rclone-ng"
+        "luci-app-rclone_INCLUDE_rclone-webui"
+        "luci-app-qbittorrent_dynamic"
+        "luci-app-qbittorrent"
+        "luci-app-rclone"
+        "luci-app-vssr"
+        "luci-app-ssr-plus"
+        "luci-app-passwall"
+        "luci-app-autoreboot"
+        "luci-app-ddns"
+        "luci-app-nlbwmon"
+        "luci-app-wol"
+        "luci-app-accesscontrol"
+    )
+    
+    local disabled_count=0
+    for plugin in "${final_forbidden[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+            sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+            sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+            sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
+            echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+            log "  ✅ 强制禁用: $plugin"
+            disabled_count=$((disabled_count + 1))
+        fi
+    done
+    
+    if [ $disabled_count -gt 0 ]; then
+        log "✅ 已强制禁用 $disabled_count 个插件"
+        # 重新运行 defconfig 使更改生效
+        make defconfig > /dev/null 2>&1
+    fi
+    
+    log "✅ 插件最终禁用完成"
     echo "========================================"
 
     log "✅ 配置应用完成"
