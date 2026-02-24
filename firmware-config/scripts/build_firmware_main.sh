@@ -1291,6 +1291,29 @@ EOF
     echo '# CONFIG_PACKAGE_luci-app-passwall is not set' >> .config
     sed -i '/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_/d' .config
     
+    # 新增禁用插件
+    log "🔧 手动禁用额外不需要的插件"
+    
+    local extra_forbidden=(
+        "luci-app-autoreboot"
+        "luci-app-ddns"
+        "luci-app-nlbwmon"
+        "luci-app-qbittorrent"
+        "luci-app-qbittorrent_dynamic"
+        "luci-app-wol"
+    )
+    
+    for plugin in "${extra_forbidden[@]}"; do
+        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
+        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+        log "  ✅ 已禁用: $plugin"
+    done
+    
+    # 特别处理 qbittorrent 相关
+    sed -i '/CONFIG_PACKAGE_qbittorrent/d' .config
+    
     log "✅ 插件禁用完成"
     
     log "✅ 配置生成完成"
