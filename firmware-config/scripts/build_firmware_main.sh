@@ -4347,8 +4347,11 @@ workflow_step21_download_deps() {
         local error_timeout=$(grep -c "Timeout\|timed out" download.log 2>/dev/null || echo "0")
         echo "  超时错误: $error_timeout 个"
         
-        # 其他错误
-        local other_errors=$((error_count - error_404 - error_timeout))
+        # 其他错误 - 添加默认值保护
+        local other_errors=0
+        if [ -n "$error_count" ] && [ -n "$error_404" ] && [ -n "$error_timeout" ]; then
+            other_errors=$((error_count - error_404 - error_timeout))
+        fi
         echo "  其他错误: $other_errors 个"
         echo ""
         
