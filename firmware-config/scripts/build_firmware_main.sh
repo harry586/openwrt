@@ -2111,8 +2111,10 @@ apply_config() {
         echo "📦 共启用 $total_packages 个软件包"
         echo ""
         
-        # 按类别分组显示
+        # 声明关联数组用于分类
         declare -A categories
+        
+        # 按类别分组显示
         categories["luci-app"]="🧩 Luci应用"
         categories["luci-theme"]="🎨 Luci主题"
         categories["luci-proto"]="🌐 协议支持"
@@ -2168,7 +2170,6 @@ apply_config() {
         categories["aria2"]="📥 Aria2"
         categories["transmission"]="📥 Transmission"
         categories["qbittorrent"]="📥 qBittorrent"
-        categories["vsftpd"]="📂 FTP"
         categories["filebrowser"]="📁 文件浏览器"
         categories["kodexplorer"]="📁 KodExplorer"
         categories["netdata"]="📊 NetData"
@@ -2207,7 +2208,6 @@ apply_config() {
         categories["collectd"]="📊 collectd"
         categories["prometheus"]="📊 Prometheus"
         categories["grafana"]="📊 Grafana"
-    )
     
         # 处理未分类的包
         local uncategorized_file=$(mktemp)
