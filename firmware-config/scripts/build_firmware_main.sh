@@ -891,32 +891,43 @@ EOF
     # 检查是否有设备专用配置文件
     local device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
     local usb_generic_file="$CONFIG_DIR/$CONFIG_USB_GENERIC"
+    local has_device_config=false
     
     if [ -f "$device_config_file" ]; then
+        has_device_config=true
         log "📋 找到设备专用配置文件: $device_config_file"
-        log "📋 优先使用设备专用配置，USB通用配置作为补充"
+        log "📋 根据规则: 设备.config + usb-generic.config"
         
-        # 先添加设备专用配置
+        # 添加设备专用配置
         append_config "$device_config_file"
         
-        # 然后添加USB通用配置作为补充（设备配置中没有的USB驱动）
+        # 添加USB通用配置作为补充
         if [ -f "$usb_generic_file" ]; then
             log "📋 添加USB通用配置作为补充: $usb_generic_file"
             append_config "$usb_generic_file"
         fi
+        
+        # 有设备配置时，不添加normal.config或$TARGET.config等通用配置
+        log "📋 有设备专用配置，跳过 normal.config 和 $TARGET.config 等通用配置"
     else
-        log "📋 未找到设备专用配置文件，使用USB通用配置"
+        log "📋 未找到设备专用配置文件，使用通用配置组合"
+        
+        # 添加USB通用配置
         if [ -f "$usb_generic_file" ]; then
             append_config "$usb_generic_file"
         fi
-    fi
-    
-    # 添加其他通用配置
-    append_config "$CONFIG_DIR/$TARGET.config"
-    append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
-    
-    if [ "$CONFIG_MODE" = "normal" ]; then
-        append_config "$CONFIG_DIR/$CONFIG_NORMAL"
+        
+        # 添加目标平台配置
+        append_config "$CONFIG_DIR/$TARGET.config"
+        
+        # 添加版本配置
+        append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
+        
+        # 根据模式添加配置
+        if [ "$CONFIG_MODE" = "normal" ]; then
+            log "📋 normal模式: 添加 $CONFIG_NORMAL"
+            append_config "$CONFIG_DIR/$CONFIG_NORMAL"
+        fi
     fi
     
     if [ -n "$extra_packages" ]; then
@@ -937,11 +948,12 @@ EOF
         log "✅ TCP BBR已启用"
     fi
     
-    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+    # TurboACC 在任何情况下都添加（如果启用）
+    if [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+        log "✅ TurboACC已启用（全局启用）"
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-        log "✅ TurboACC已启用"
     fi
     
     if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
@@ -4259,18 +4271,28 @@ workflow_step21_download_deps() {
     if make -j$download_jobs download -k V=s > download.log 2>&1; then
         echo "✅ 下载完成"
     else
-        echo "⚠️ 部分下载失败，尝试单线程重试失败项..."
+        echo "⚠️ 部分下载失败，尝试使用镜像源重试..."
         
-        # 提取失败的包并重试
-        local failed_packages=$(grep -E "ERROR|Failed|404" download.log | grep -o "make[^)]*" | sort -u)
-        if [ -n "$failed_packages" ]; then
-            echo ""
-            echo "🔄 重试失败的包:"
-            echo "$failed_packages" | while read cmd; do
-                echo "  重试: $cmd"
-                eval $cmd || true
-            done
+        # 添加国内镜像源
+        echo ""
+        echo "🔧 添加国内镜像源重试..."
+        
+        # 备份原来的dl目录
+        if [ -d "dl" ] && [ "$(ls -A dl)" ]; then
+            mkdir -p dl_backup
+            cp -r dl/* dl_backup/ 2>/dev/null || true
+            echo "✅ 已备份现有下载文件到 dl_backup"
         fi
+        
+        # 设置镜像源环境变量
+        export OPENWRT_MIRROR="https://mirrors.aliyun.com/openwrt"
+        export SOURCE_MIRROR="https://mirrors.tuna.tsinghua.edu.cn"
+        
+        # 使用单线程重试，避免并行下载的冲突
+        echo "🔄 使用单线程重试下载..."
+        make download -j1 V=s >> download.log 2>&1 || true
+        
+        echo "✅ 镜像源重试完成"
     fi
     
     # 停止监控进程
@@ -4312,34 +4334,13 @@ workflow_step21_download_deps() {
         echo "----------------------------------------"
     fi
     
-    # 分析下载耗时长的包
+    # 分析下载日志，提取实际URL
     echo ""
-    echo "⏱️ 下载耗时分析:"
+    echo "🔍 提取下载URL（从日志中）:"
     echo "----------------------------------------"
-    grep -B1 "Downloading" download.log | grep -E "flock|Downloading" | while read line; do
-        if echo "$line" | grep -q "Downloading"; then
-            local url=$(echo "$line" | sed 's/.*Downloading //g')
-            echo "  📥 $url"
-        fi
-    done | head -20
-    if [ $(grep -c "Downloading" download.log) -gt 20 ]; then
-        echo "  ... 还有 $(( $(grep -c "Downloading" download.log) - 20 )) 个下载未显示"
-    fi
-    echo "----------------------------------------"
-    
-    # 显示下载日志的最后50行
-    echo ""
-    echo "📋 下载日志摘要（最后50行）:"
-    echo "----------------------------------------"
-    tail -50 download.log | while read line; do
+    grep -E "Downloading|--\d{4}-\d{2}-\d{2}" download.log | head -30 | while read line; do
         if echo "$line" | grep -q "Downloading"; then
             echo "📥 $line"
-        elif echo "$line" | grep -q "ERROR\|Failed\|404"; then
-            echo "❌ $line"
-        elif echo "$line" | grep -q "done\|Complete"; then
-            echo "✅ $line"
-        else
-            echo "  $line"
         fi
     done
     echo "----------------------------------------"
@@ -4368,11 +4369,20 @@ workflow_step21_download_deps() {
         if [ $error_404 -gt 0 ]; then
             echo "🔍 404错误详情（无法下载的URL）:"
             echo ""
+            
+            # 从日志中提取404的URL
             grep -B1 "404" download.log | grep "Downloading" | sed 's/.*Downloading //g' | sort -u | head -10 | while read url; do
                 echo "  ❌ $url"
+                
+                # 尝试提供镜像源替代
+                local filename=$(basename "$url")
+                echo "     💡 可尝试手动下载: wget $url -O dl/$filename"
+                echo "     💡 或使用镜像: wget https://mirrors.aliyun.com/openwrt/$filename -O dl/$filename"
             done
-            if [ $error_404 -gt 10 ]; then
-                echo "  ... 还有 $((error_404 - 10)) 个404错误未显示"
+            
+            local unique_404=$(grep -B1 "404" download.log | grep "Downloading" | sed 's/.*Downloading //g' | sort -u | wc -l)
+            if [ $unique_404 -gt 10 ]; then
+                echo "  ... 还有 $((unique_404 - 10)) 个不同的404错误未显示"
             fi
             echo ""
         fi
@@ -4388,25 +4398,41 @@ workflow_step21_download_deps() {
         # 建议解决方案
         echo ""
         echo "💡 建议解决方案:"
-        echo "  1. 检查网络连接和防火墙设置"
-        echo "  2. 尝试使用国内镜像源（如清华、阿里云）"
-        echo "  3. 手动下载失败的包并放到 dl/ 目录"
-        echo "  4. 重试构建，失败的包可能被缓存"
+        echo "  1. 使用国内镜像源:"
+        echo "     export OPENWRT_MIRROR=https://mirrors.aliyun.com/openwrt"
+        echo "     export SOURCE_MIRROR=https://mirrors.tuna.tsinghua.edu.cn"
+        echo "  2. 手动下载失败的包（上面已提供命令）"
+        echo "  3. 重试构建，失败的包可能被缓存"
+        echo "  4. 检查网络连接和防火墙设置"
         echo ""
     fi
     
-    # 显示下载的URL来源统计
+    # 检查是否有特定的包导致问题
     echo ""
-    echo "🔍 下载来源统计:"
+    echo "🔍 检查可能导致编译失败的包:"
     echo "----------------------------------------"
-    grep "Downloading" download.log | sed 's/.*Downloading //g' | cut -d'/' -f1-3 | sort | uniq -c | sort -nr | head -10 | while read count url; do
-        printf "  %4d 个包来自: %s\n" "$count" "$url"
-    done
     
-    # 如果没有统计到，尝试另一种方式
-    if [ $(grep -c "Downloading" download.log) -eq 0 ]; then
-        echo "  无法统计下载来源（没有 Downloading 日志）"
+    # 检查samba相关
+    local samba_errors=$(grep -E "samba.*404|samba.*ERROR|samba.*Failed" download.log | wc -l)
+    if [ $samba_errors -gt 0 ]; then
+        echo "⚠️ 发现samba相关包下载问题: $samba_errors 个错误"
+        echo "   💡 可尝试: make package/samba4/download V=s"
     fi
+    
+    # 检查vsftpd相关
+    local vsftpd_errors=$(grep -E "vsftpd.*404|vsftpd.*ERROR|vsftpd.*Failed" download.log | wc -l)
+    if [ $vsftpd_errors -gt 0 ]; then
+        echo "⚠️ 发现vsftpd相关包下载问题: $vsftpd_errors 个错误"
+        echo "   💡 可尝试: make package/vsftpd/download V=s"
+    fi
+    
+    # 检查curl相关
+    local curl_errors=$(grep -c "curl: (22)" download.log 2>/dev/null || echo "0")
+    if [ $curl_errors -gt 0 ]; then
+        echo "⚠️ 发现 $curl_errors 个curl 404错误"
+        echo "   💡 这通常是因为下载源不存在，建议使用镜像源"
+    fi
+    
     echo "----------------------------------------"
     
     # 如果没有下载任何包，显示警告
@@ -4423,29 +4449,6 @@ workflow_step21_download_deps() {
         cat download.log
         echo "----------------------------------------"
     fi
-    
-    # 检查是否有特定的包导致问题
-    echo ""
-    echo "🔍 检查可能导致编译失败的包:"
-    echo "----------------------------------------"
-    
-    # 检查samba相关
-    if grep -q "samba" download.log; then
-        echo "⚠️ 发现samba相关包下载问题:"
-        grep "samba" download.log | grep -E "ERROR|Failed|404" | head -5 | while read line; do
-            echo "  ❌ $line"
-        done
-    fi
-    
-    # 检查vsftpd相关
-    if grep -q "vsftpd" download.log; then
-        echo "⚠️ 发现vsftpd相关包下载问题:"
-        grep "vsftpd" download.log | grep -E "ERROR|Failed|404" | head -5 | while read line; do
-            echo "  ❌ $line"
-        done
-    fi
-    
-    echo "----------------------------------------"
     
     log "✅ 步骤21 完成"
 }
