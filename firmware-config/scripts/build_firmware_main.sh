@@ -2088,10 +2088,11 @@ apply_config() {
     fi
 
     log ""
-    log "=== 🔍 最终配置状态检测（根据当前.config动态分析） ==="
+    log "=== 🔍 最终配置状态检测（根据配置模式检查） ==="
     log ""
     
     echo "📋 源码类型: $SOURCE_REPO_TYPE"
+    echo "📋 配置模式: $CONFIG_MODE"
     echo ""
     
     local device_config=$(grep "^CONFIG_TARGET.*DEVICE.*=y" .config | head -1)
@@ -2100,163 +2101,153 @@ apply_config() {
     fi
     echo ""
     
-    # 获取所有启用的包（排除内核配置）
-    local all_packages=$(grep "^CONFIG_PACKAGE_" .config | grep -E "=y|=m" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort -u)
-    
-    if [ -z "$all_packages" ]; then
-        echo "❌ 未找到任何启用的软件包"
-        echo ""
-    else
-        local total_packages=$(echo "$all_packages" | wc -l)
-        echo "📦 共启用 $total_packages 个软件包"
-        echo ""
-        
-        # 声明关联数组用于分类
-        declare -A categories
-        
-        # 按类别分组显示
-        categories["luci-app"]="🧩 Luci应用"
-        categories["luci-theme"]="🎨 Luci主题"
-        categories["luci-proto"]="🌐 协议支持"
-        categories["kmod-usb"]="🔌 USB驱动"
-        categories["kmod-fs"]="💾 文件系统"
-        categories["kmod-net"]="🌍 网络驱动"
-        categories["kmod-wireless"]="📶 无线驱动"
-        categories["kmod-video"]="📹 视频驱动"
-        categories["kmod-sound"]="🎵 音频驱动"
-        categories["kmod-i2c"]="🔧 I2C驱动"
-        categories["kmod-gpio"]="⚡ GPIO驱动"
-        categories["kmod-hwmon"]="🌡️ 硬件监控"
-        categories["kmod-leds"]="💡 LED驱动"
-        categories["kmod-mtd"]="💾 MTD驱动"
-        categories["kmod-nand"]="💾 NAND驱动"
-        categories["kmod-mm"]="📸 多媒体"
-        categories["kmod-crypto"]="🔐 加密模块"
-        categories["kmod-input"]="🖱️ 输入设备"
-        categories["kmod-rtc"]="⏰ RTC驱动"
-        categories["kmod-spi"]="🔌 SPI驱动"
-        categories["luci-i18n"]="🌍 语言包"
-        categories["default-settings"]="⚙️ 默认设置"
-        categories["automount"]="🔄 自动挂载"
-        categories["block-mount"]="📀 块设备挂载"
-        categories["samba"]="📁 Samba共享"
-        categories["vsftpd"]="📂 FTP服务器"
-        categories["nginx"]="🌐 Web服务器"
-        categories["uhttpd"]="🌐 Web服务器"
-        categories["openvpn"]="🔒 VPN"
-        categories["wireguard"]="🔒 VPN"
-        categories["zerotier"]="🔗 ZeroTier"
-        categories["frp"]="🔗 FRP内网穿透"
-        categories["nps"]="🔗 NPS内网穿透"
-        categories["ddns"]="🌐 DDNS"
-        categories["upnp"]="📡 UPnP"
-        categories["qos"]="⚡ QoS"
-        categories["sqm"]="📊 SQM"
-        categories["turboacc"]="⚡ TurboACC"
-        categories["shortcut-fe"]="⚡ Shortcut-FE"
-        categories["fast-classifier"]="⚡ Fast Classifier"
-        categories["tcp-bbr"]="⚡ TCP BBR"
-        categories["dnsmasq"]="📡 DNS"
-        categories["adguard"]="📡 AdGuard"
-        categories["smartdns"]="📡 SmartDNS"
-        categories["mosdns"]="📡 MosDNS"
-        categories["passwall"]="🔓 PassWall"
-        categories["ssr-plus"]="🔓 SSR Plus"
-        categories["vssr"]="🔓 VSSR"
-        categories["clash"]="🔓 Clash"
-        categories["openclash"]="🔓 OpenClash"
-        categories["bypass"]="🔓 Bypass"
-        categories["helloworld"]="🔓 HelloWorld"
-        categories["aria2"]="📥 Aria2"
-        categories["transmission"]="📥 Transmission"
-        categories["qbittorrent"]="📥 qBittorrent"
-        categories["filebrowser"]="📁 文件浏览器"
-        categories["kodexplorer"]="📁 KodExplorer"
-        categories["netdata"]="📊 NetData"
-        categories["node"]="🟢 Node.js"
-        categories["python"]="🐍 Python"
-        categories["perl"]="🐪 Perl"
-        categories["php"]="🐘 PHP"
-        categories["mysql"]="🗄️ MySQL"
-        categories["mariadb"]="🗄️ MariaDB"
-        categories["postgresql"]="🗄️ PostgreSQL"
-        categories["redis"]="🗄️ Redis"
-        categories["docker"]="🐳 Docker"
-        categories["dockerd"]="🐳 Dockerd"
-        categories["containerd"]="🐳 Containerd"
-        categories["runc"]="🐳 runc"
-        categories["luci-lib"]="📚 Luci库"
-        categories["luci-compat"]="🔄 Luci兼容"
-        categories["luci-base"]="🏗️ Luci基础"
-        categories["firewall"]="🔥 防火墙"
-        categories["iptables"]="🔥 iptables"
-        categories["nftables"]="🔥 nftables"
-        categories["ebtables"]="🔥 ebtables"
-        categories["ipset"]="🔧 ipset"
-        categories["iproute2"]="🔧 iproute2"
-        categories["tc"]="🔧 tc"
-        categories["bridge"]="🌉 网桥"
-        categories["hostapd"]="📡 hostapd"
-        categories["wpa-supplicant"]="📡 wpa_supplicant"
-        categories["relayd"]="🔄 relayd"
-        categories["igmpproxy"]="📡 igmpproxy"
-        categories["udpxy"]="📡 udpxy"
-        categories["mwan3"]="🌐 多线负载"
-        categories["nlbwmon"]="📊 流量监控"
-        categories["bandwidthd"]="📊 带宽监控"
-        categories["vnstat"]="📊 vnStat"
-        categories["collectd"]="📊 collectd"
-        categories["prometheus"]="📊 Prometheus"
-        categories["grafana"]="📊 Grafana"
-    
-        # 处理未分类的包
-        local uncategorized_file=$(mktemp)
-        echo "$all_packages" > "$uncategorized_file"
-        
-        # 按类别显示
-        for pattern in "${!categories[@]}"; do
-            local matches=$(grep "^${pattern}" "$uncategorized_file" | sort)
-            if [ -n "$matches" ]; then
-                local count=$(echo "$matches" | wc -l)
-                echo "${categories[$pattern]} (共 $count 个):"
-                echo "----------------------------------------"
-                echo "$matches" | while read pkg; do
-                    local val=$(grep "^CONFIG_PACKAGE_${pkg}=" .config | cut -d'=' -f2)
+    # 检查 base.config
+    echo "🔍 检查基础配置 (base.config):"
+    echo "----------------------------------------"
+    if [ -f "$CONFIG_DIR/base.config" ]; then
+        local base_count=0
+        while read line; do
+            if [[ "$line" =~ ^CONFIG_ ]] && [[ ! "$line" =~ is\ not\ set ]]; then
+                local config_name=$(echo "$line" | cut -d'=' -f1)
+                if grep -q "^${config_name}=y" .config || grep -q "^${config_name}=m" .config; then
+                    local val=$(grep "^${config_name}=" .config | cut -d'=' -f2)
                     if [ "$val" = "y" ]; then
-                        printf "  ✅ %s\n" "$pkg"
+                        printf "  ✅ %s\n" "$config_name"
                     elif [ "$val" = "m" ]; then
-                        printf "  📦 %s\n" "$pkg"
+                        printf "  📦 %s\n" "$config_name"
                     fi
-                done
-                echo ""
-                
-                # 从临时文件中移除已分类的包
-                for pkg in $matches; do
-                    sed -i "/^${pkg}$/d" "$uncategorized_file"
-                done
+                    base_count=$((base_count + 1))
+                fi
+            fi
+        done < "$CONFIG_DIR/base.config"
+        echo "  共 $base_count 个基础配置项已启用"
+    else
+        echo "  ❌ base.config 文件不存在"
+    fi
+    echo ""
+    
+    # 检查 usb-generic.config
+    echo "🔌 检查USB配置 (usb-generic.config):"
+    echo "----------------------------------------"
+    if [ -f "$CONFIG_DIR/usb-generic.config" ]; then
+        local usb_count=0
+        while read line; do
+            if [[ "$line" =~ ^CONFIG_ ]] && [[ ! "$line" =~ is\ not\ set ]]; then
+                local config_name=$(echo "$line" | cut -d'=' -f1)
+                if grep -q "^${config_name}=y" .config || grep -q "^${config_name}=m" .config; then
+                    local val=$(grep "^${config_name}=" .config | cut -d'=' -f2)
+                    if [ "$val" = "y" ]; then
+                        printf "  ✅ %s\n" "$config_name"
+                    elif [ "$val" = "m" ]; then
+                        printf "  📦 %s\n" "$config_name"
+                    fi
+                    usb_count=$((usb_count + 1))
+                fi
+            fi
+        done < "$CONFIG_DIR/usb-generic.config"
+        echo "  共 $usb_count 个USB配置项已启用"
+    else
+        echo "  ❌ usb-generic.config 文件不存在"
+    fi
+    echo ""
+    
+    # 检查 normal.config（如果是normal模式）
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        echo "⚡ 检查增强配置 (normal.config):"
+        echo "----------------------------------------"
+        if [ -f "$CONFIG_DIR/normal.config" ]; then
+            local normal_count=0
+            while read line; do
+                if [[ "$line" =~ ^CONFIG_ ]] && [[ ! "$line" =~ is\ not\ set ]]; then
+                    local config_name=$(echo "$line" | cut -d'=' -f1)
+                    if grep -q "^${config_name}=y" .config || grep -q "^${config_name}=m" .config; then
+                        local val=$(grep "^${config_name}=" .config | cut -d'=' -f2)
+                        if [ "$val" = "y" ]; then
+                            printf "  ✅ %s\n" "$config_name"
+                        elif [ "$val" = "m" ]; then
+                            printf "  📦 %s\n" "$config_name"
+                        fi
+                        normal_count=$((normal_count + 1))
+                    fi
+                fi
+            done < "$CONFIG_DIR/normal.config"
+            echo "  共 $normal_count 个增强配置项已启用"
+        else
+            echo "  ❌ normal.config 文件不存在"
+        fi
+        echo ""
+    fi
+    
+    # 检查设备专用配置
+    local device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
+    if [ -f "$device_config_file" ]; then
+        echo "📱 检查设备专用配置 ($DEVICE.config):"
+        echo "----------------------------------------"
+        local device_count=0
+        while read line; do
+            if [[ "$line" =~ ^CONFIG_ ]] && [[ ! "$line" =~ is\ not\ set ]]; then
+                local config_name=$(echo "$line" | cut -d'=' -f1)
+                if grep -q "^${config_name}=y" .config || grep -q "^${config_name}=m" .config; then
+                    local val=$(grep "^${config_name}=" .config | cut -d'=' -f2)
+                    if [ "$val" = "y" ]; then
+                        printf "  ✅ %s\n" "$config_name"
+                    elif [ "$val" = "m" ]; then
+                        printf "  📦 %s\n" "$config_name"
+                    fi
+                    device_count=$((device_count + 1))
+                fi
+            fi
+        done < "$device_config_file"
+        echo "  共 $device_count 个设备专用配置项已启用"
+        echo ""
+    fi
+    
+    # 检查TurboACC（如果启用）
+    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+        echo "⚡ 检查TurboACC插件:"
+        echo "----------------------------------------"
+        local turboacc_plugins=(
+            "luci-app-turboacc"
+            "kmod-shortcut-fe"
+            "kmod-fast-classifier"
+        )
+        local turboacc_count=0
+        for plugin in "${turboacc_plugins[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
+                printf "  ✅ %s: 已启用\n" "$plugin"
+                turboacc_count=$((turboacc_count + 1))
+            elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+                printf "  📦 %s: 模块化\n" "$plugin"
+                turboacc_count=$((turboacc_count + 1))
+            else
+                printf "  ❌ %s: 未启用\n" "$plugin"
             fi
         done
-        
-        # 显示其他未分类的包
-        local remaining=$(cat "$uncategorized_file" | sort)
-        if [ -n "$remaining" ]; then
-            local remain_count=$(echo "$remaining" | wc -l)
-            echo "📦 其他软件包 (共 $remain_count 个):"
-            echo "----------------------------------------"
-            echo "$remaining" | while read pkg; do
-                local val=$(grep "^CONFIG_PACKAGE_${pkg}=" .config | cut -d'=' -f2)
-                if [ "$val" = "y" ]; then
-                    printf "  ✅ %s\n" "$pkg"
-                elif [ "$val" = "m" ]; then
-                    printf "  📦 %s\n" "$pkg"
-                fi
-            done
-            echo ""
-        fi
-        
-        rm -f "$uncategorized_file"
+        echo "  共 $turboacc_count/3 个TurboACC组件已启用"
+        echo ""
     fi
-
+    
+    # 检查额外添加的包（从extra_packages参数）
+    if [ -n "$extra_packages" ]; then
+        echo "📦 检查额外添加的包:"
+        echo "----------------------------------------"
+        local extra_count=0
+        echo "$extra_packages" | tr ',' '\n' | while read pkg; do
+            [ -z "$pkg" ] && continue
+            if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
+                printf "  ✅ %s: 已启用\n" "$pkg"
+                extra_count=$((extra_count + 1))
+            elif grep -q "^CONFIG_PACKAGE_${pkg}=m" .config; then
+                printf "  📦 %s: 模块化\n" "$pkg"
+                extra_count=$((extra_count + 1))
+            else
+                printf "  ❌ %s: 未启用\n" "$pkg"
+            fi
+        done
+        echo "  共 $extra_count 个额外包已启用"
+        echo ""
+    fi
+    
     echo "📊 最终统计:"
     local total_configs=$(wc -l < .config)
     local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config)
@@ -4154,38 +4145,32 @@ workflow_step21_download_deps() {
         echo "✅ 创建依赖包目录: dl"
     fi
     
+    # 显示当前源码类型
+    echo "📋 源码类型: $SOURCE_REPO_TYPE"
+    echo "📋 目标设备: $DEVICE"
+    echo "📋 目标平台: $TARGET/$SUBTARGET"
+    echo ""
+    
+    # 显示 feeds 配置
+    echo "📋 feeds.conf.default 内容:"
+    echo "----------------------------------------"
+    cat feeds.conf.default
+    echo "----------------------------------------"
+    echo ""
+    
     # 统计现有依赖包
     local dep_count=$(find dl -type f 2>/dev/null | wc -l)
     local dep_size=$(du -sh dl 2>/dev/null | cut -f1 || echo "0B")
     echo "📊 当前依赖包: $dep_count 个, 总大小: $dep_size"
     
-    # 显示现有依赖包列表
+    # 显示现有依赖包列表（如果有）
     if [ $dep_count -gt 0 ]; then
         echo ""
-        echo "📋 现有依赖包列表（共 $dep_count 个）:"
-        echo "================================================================="
-        printf "%-70s %s\n" "文件名" "大小"
-        echo "================================================================="
-        
-        # 按文件名排序显示所有包
-        find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" -o -name "*.xz" -o -name "*.bz2" 2>/dev/null | sort | while read file; do
-            local name=$(basename "$file")
-            local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-            printf "%-70s %s\n" "$name" "$size"
-        done
-        
-        # 显示其他文件
-        local other_files=$(find dl -type f ! -name "*.tar.*" ! -name "*.zip" ! -name "*.gz" ! -name "*.xz" ! -name "*.bz2" 2>/dev/null | wc -l)
-        if [ $other_files -gt 0 ]; then
-            echo ""
-            echo "📁 其他文件: $other_files 个"
-            find dl -type f ! -name "*.tar.*" ! -name "*.zip" ! -name "*.gz" ! -name "*.xz" ! -name "*.bz2" 2>/dev/null | head -10 | while read file; do
-                local name=$(basename "$file")
-                local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-                printf "  📄 %-68s %s\n" "$name" "$size"
-            done
+        echo "📋 现有依赖包列表:"
+        ls -lh dl/ | head -20
+        if [ $dep_count -gt 20 ]; then
+            echo "... 还有 $((dep_count - 20)) 个文件未显示"
         fi
-        echo "================================================================="
         echo ""
     fi
     
@@ -4209,11 +4194,33 @@ workflow_step21_download_deps() {
     echo "下载日志将保存到: download.log"
     echo ""
     
+    # 创建日志文件并实时显示
+    touch download.log
+    
+    # 在后台启动日志监控（实时显示下载进度）
+    {
+        tail -f download.log | while read line; do
+            if echo "$line" | grep -q "Downloading"; then
+                echo "📥 $line"
+            elif echo "$line" | grep -q "ERROR\|Failed\|404"; then
+                echo "❌ $line"
+            elif echo "$line" | grep -q "done\|Complete"; then
+                echo "✅ $line"
+            elif echo "$line" | grep -q "Makefile\|package"; then
+                # 忽略一些无关信息
+                :
+            else
+                echo "  $line"
+            fi
+        done
+    } &
+    local monitor_pid=$!
+    
     # 使用timeout避免卡死
     local start_time=$(date +%s)
     
     # 先尝试快速下载
-    if make -j$download_jobs download -k > download.log 2>&1; then
+    if make -j$download_jobs download -k V=s > download.log 2>&1; then
         echo "✅ 下载完成"
     else
         echo "⚠️ 部分下载失败，尝试单线程重试失败项..."
@@ -4223,6 +4230,9 @@ workflow_step21_download_deps() {
             eval $cmd || true
         done
     fi
+    
+    # 停止日志监控
+    kill $monitor_pid 2>/dev/null || true
     
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
@@ -4239,55 +4249,47 @@ workflow_step21_download_deps() {
     echo "   现有包: $new_dep_count 个 ($new_dep_size)"
     echo "   新增包: $added 个"
     
-    # 显示新增的依赖包列表
+    # 显示下载的包列表
     if [ $added -gt 0 ]; then
         echo ""
-        echo "📦 新增依赖包列表（共 $added 个）:"
-        echo "================================================================="
-        printf "%-70s %s\n" "文件名" "大小"
-        echo "================================================================="
+        echo "📦 新增依赖包列表:"
+        echo "----------------------------------------"
         
-        # 获取新增的文件列表（按修改时间排序，最新的在前）
-        find dl -type f -printf "%T@ %p\n" 2>/dev/null | sort -nr | head -$added | while read line; do
+        # 获取新增的文件列表（按时间排序，最新的在前）
+        find dl -type f -printf "%T@ %p\n" 2>/dev/null | sort -nr | head -20 | while read line; do
             local file=$(echo "$line" | cut -d' ' -f2-)
-            local name=$(basename "$file")
             local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-            printf "%-70s %s\n" "$name" "$size"
+            local name=$(basename "$file")
+            printf "  📄 %-50s %s\n" "$name" "$size"
         done
-        echo "================================================================="
-        echo ""
+        
+        if [ $added -gt 20 ]; then
+            echo "  ... 还有 $((added - 20)) 个文件未显示"
+        fi
+        echo "----------------------------------------"
     fi
     
-    # 显示下载日志（30行）
+    # 显示下载日志的最后50行
     echo ""
-    echo "📋 下载日志摘要（最近30行）:"
-    echo "================================================================="
-    
-    # 显示下载进度和关键信息
-    grep -E "Downloading|ERROR|Failed|404|done|Complete" download.log | tail -30 | while read line; do
-        if echo "$line" | grep -q "ERROR\|Failed\|404"; then
-            echo "  ❌ $line"
-        elif echo "$line" | grep -q "Downloading"; then
-            echo "  📥 $line"
+    echo "📋 下载日志摘要（最后50行）:"
+    echo "----------------------------------------"
+    tail -50 download.log | while read line; do
+        if echo "$line" | grep -q "Downloading"; then
+            echo "📥 $line"
+        elif echo "$line" | grep -q "ERROR\|Failed\|404"; then
+            echo "❌ $line"
         elif echo "$line" | grep -q "done\|Complete"; then
-            echo "  ✅ $line"
+            echo "✅ $line"
+        elif echo "$line" | grep -q "Makefile\|package\|Config"; then
+            # 忽略一些无关信息
+            :
         else
             echo "  $line"
         fi
     done
+    echo "----------------------------------------"
     
-    # 如果没有足够的关键信息，显示原始日志
-    local log_lines=$(grep -E "Downloading|ERROR|Failed|404|done|Complete" download.log | wc -l)
-    if [ $log_lines -lt 10 ]; then
-        echo ""
-        echo "📋 原始下载日志（最近30行）:"
-        tail -30 download.log | while read line; do
-            echo "  $line"
-        done
-    fi
-    echo "================================================================="
-    
-    # 检查下载错误 - 修复语法问题
+    # 检查下载错误
     local error_count=$(grep -c -E "ERROR|Failed|404" download.log 2>/dev/null || echo "0")
     if [ "$error_count" -gt 0 ] 2>/dev/null; then
         echo ""
@@ -4300,25 +4302,30 @@ workflow_step21_download_deps() {
             echo "  ... 还有 $((error_count - 10)) 个错误未显示"
         fi
         echo "-----------------------------------------------------------------"
-    else
-        echo "✅ 没有发现下载错误"
     fi
     
-    # 显示下载成功的包数量
-    local success_count=$(grep -c "done\|Complete" download.log 2>/dev/null || echo "0")
-    if [ "$success_count" -gt 0 ] 2>/dev/null; then
-        echo "✅ 成功下载: $success_count 个包"
-    fi
-    
-    # 显示最终目录结构
+    # 显示下载的URL来源统计
     echo ""
-    echo "📁 dl目录结构:"
-    echo "-----------------------------------------------------------------"
-    ls -la dl/ | head -30
-    if [ $(ls -la dl/ | wc -l) -gt 30 ]; then
-        echo "... 还有 $(( $(ls -la dl/ | wc -l) - 30 )) 行未显示"
+    echo "🔍 下载来源统计:"
+    echo "----------------------------------------"
+    grep "Downloading" download.log | sed 's/.*Downloading //g' | cut -d'/' -f1-3 | sort | uniq -c | sort -nr | head -10 | while read count url; do
+        echo "  $url: $count 个包"
+    done
+    echo "----------------------------------------"
+    
+    # 如果没有下载任何包，显示警告
+    if [ $added -eq 0 ]; then
+        echo ""
+        echo "⚠️ 警告: 没有下载任何新包，请检查:"
+        echo "   1. feeds.conf.default 是否正确"
+        echo "   2. 网络连接是否正常"
+        echo "   3. 是否有足够的磁盘空间"
+        echo ""
+        echo "📋 完整下载日志内容:"
+        echo "----------------------------------------"
+        cat download.log
+        echo "----------------------------------------"
     fi
-    echo "-----------------------------------------------------------------"
     
     log "✅ 步骤21 完成"
 }
