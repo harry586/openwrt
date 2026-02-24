@@ -669,7 +669,51 @@ configure_feeds() {
     log "=== 配置Feeds ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
+    # ============================================
+    # 在配置 feeds 之前，先删除不需要的插件包
+    # ============================================
+    log "🔧 在配置 feeds 之前，删除不需要的插件包..."
+    
+    local packages_to_remove=(
+        "qbittorrent"
+        "rclone"
+        "filetransfer"
+        "vssr"
+        "ssr-plus"
+        "passwall"
+        "autoreboot"
+        "ddns"
+        "nlbwmon"
+        "wol"
+        "accesscontrol"
+    )
+    
+    # 查找并删除 package/feeds 中的相关目录
+    if [ -d "package/feeds" ]; then
+        for pkg in "${packages_to_remove[@]}"; do
+            # 查找所有包含这些包名的目录
+            find package/feeds -type d -name "*${pkg}*" 2>/dev/null | while read dir; do
+                log "  🗑️  删除包目录: $dir"
+                rm -rf "$dir"
+            done
+        done
+    fi
+    
+    # 查找并删除 feeds 目录中的相关目录（如果存在）
+    if [ -d "feeds" ]; then
+        for pkg in "${packages_to_remove[@]}"; do
+            find feeds -type d -name "*${pkg}*" 2>/dev/null | while read dir; do
+                log "  🗑️  删除 feeds 目录: $dir"
+                rm -rf "$dir"
+            done
+        done
+    fi
+    
+    log "✅ 不需要的插件包已删除"
+    
+    # ============================================
     # 根据源码类型设置feeds
+    # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "🔧 LEDE源码模式: 使用LEDE官方feeds"
         
@@ -736,8 +780,52 @@ EOF
     log "=== 更新Feeds ==="
     ./scripts/feeds update -a || handle_error "更新feeds失败"
     
+    # ============================================
+    # 在安装 feeds 之前，再次删除不需要的插件
+    # ============================================
+    log "🔧 在安装 feeds 之前，再次删除不需要的插件包..."
+    
+    # 等待 feeds 更新完成
+    sleep 2
+    
+    # 再次查找并删除相关目录
+    for pkg in "${packages_to_remove[@]}"; do
+        # 在 feeds 目录中查找
+        find feeds -type d -name "*${pkg}*" 2>/dev/null | while read dir; do
+            log "  🗑️  删除 feeds 目录: $dir"
+            rm -rf "$dir"
+        done
+        
+        # 在 package/feeds 目录中查找
+        if [ -d "package/feeds" ]; then
+            find package/feeds -type d -name "*${pkg}*" 2>/dev/null | while read dir; do
+                log "  🗑️  删除 package/feeds 目录: $dir"
+                rm -rf "$dir"
+            done
+        fi
+    done
+    
+    log "✅ 不需要的插件包已删除"
+    
     log "=== 安装Feeds ==="
     ./scripts/feeds install -a || handle_error "安装feeds失败"
+    
+    # ============================================
+    # 安装后再次检查并删除
+    # ============================================
+    log "🔧 安装后再次检查并删除不需要的插件..."
+    
+    for pkg in "${packages_to_remove[@]}"; do
+        # 在 package/feeds 目录中查找
+        if [ -d "package/feeds" ]; then
+            find package/feeds -type d -name "*${pkg}*" 2>/dev/null | while read dir; do
+                log "  🗑️  删除 package/feeds 目录: $dir"
+                rm -rf "$dir"
+            done
+        fi
+    done
+    
+    log "✅ 最终检查完成"
     
     local critical_feeds_dirs=("feeds/packages" "feeds/luci" "package/feeds")
     for dir in "${critical_feeds_dirs[@]}"; do
