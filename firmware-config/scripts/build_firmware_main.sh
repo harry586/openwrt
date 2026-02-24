@@ -1301,6 +1301,8 @@ EOF
         "luci-app-qbittorrent"
         "luci-app-qbittorrent_dynamic"
         "luci-app-wol"
+        "luci-app-filetransfer"
+        "luci-i18n-filetransfer-zh-cn"
     )
     
     for plugin in "${extra_forbidden[@]}"; do
@@ -1313,6 +1315,15 @@ EOF
     
     # 特别处理 qbittorrent 相关
     sed -i '/CONFIG_PACKAGE_qbittorrent/d' .config
+    sed -i '/CONFIG_PACKAGE_luci-app-qbittorrent/d' .config
+    sed -i '/CONFIG_PACKAGE_luci-app-qbittorrent_dynamic/d' .config
+    
+    # 特别处理 rclone 子选项
+    sed -i '/CONFIG_PACKAGE_luci-app-rclone_INCLUDE_/d' .config
+    
+    # 特别处理 filetransfer 相关
+    sed -i '/CONFIG_PACKAGE_luci-app-filetransfer/d' .config
+    sed -i '/CONFIG_PACKAGE_luci-i18n-filetransfer-zh-cn/d' .config
     
     log "✅ 插件禁用完成"
     
@@ -4816,6 +4827,10 @@ workflow_step25_build_firmware() {
     
     export FORCE_UNSAFE_CONFIGURE=1
     
+    # 增加文件描述符限制，防止 padjffs2 等工具出错
+    ulimit -n 65536 2>/dev/null || ulimit -n 4096 2>/dev/null || true
+    echo "🔧 设置文件描述符限制: $(ulimit -n)"
+    
     local max_retries=2
     local retry_count=0
     local build_success=0
@@ -4846,6 +4861,19 @@ workflow_step25_build_firmware() {
             build_success=1
         else
             echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
+            
+            # 检查是否是文件描述符问题
+            if grep -q "Bad file descriptor" build.log; then
+                echo "⚠️ 检测到文件描述符问题，尝试修复..."
+                # 增加文件描述符限制
+                ulimit -n 65536 2>/dev/null || ulimit -n 4096 2>/dev/null || true
+                echo "  新的文件描述符限制: $(ulimit -n)"
+                retry_count=$((retry_count + 1))
+                if [ $retry_count -lt $max_retries ]; then
+                    echo "🔄 修复后重试..."
+                    continue
+                fi
+            fi
             
             # 检查是否是补丁失败导致的
             if grep -q "Patch failed\|FAILED\|.rej" build.log; then
@@ -4885,6 +4913,74 @@ workflow_step25_build_firmware() {
     if [ $build_success -eq 0 ]; then
         exit $BUILD_EXIT_CODE
     fi
+    
+    # 编译成功后，检查并修复可能的文件描述符问题导致的文件缺失
+    echo ""
+    echo "🔧 编译后检查..."
+    
+    # 等待文件系统同步
+    sync
+    
+    # 检查sysupgrade文件
+    local sysupgrade_files=$(find bin/targets -name "*sysupgrade*.bin" 2>/dev/null)
+    if [ -n "$sysupgrade_files" ]; then
+        echo "✅ 找到 sysupgrade 固件:"
+        echo "$sysupgrade_files" | while read file; do
+            local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
+            echo "  📄 $file ($size)"
+        done
+    else
+        echo "⚠️ 警告: 未找到 sysupgrade 固件"
+        echo "   尝试在临时目录中查找..."
+        
+        # 在临时目录中查找
+        local tmp_files=$(find build_dir -name "*sysupgrade*.bin" 2>/dev/null)
+        if [ -n "$tmp_files" ]; then
+            echo "   在临时目录中找到:"
+            echo "$tmp_files" | while read file; do
+                echo "     📄 $file"
+                # 尝试复制到目标目录
+                local dest="bin/targets/ath79/generic/$(basename "$file")"
+                mkdir -p bin/targets/ath79/generic
+                cp "$file" "$dest" 2>/dev/null && echo "     ✅ 已复制到 $dest"
+            done
+        fi
+    fi
+    
+    # 检查factory文件
+    local factory_files=$(find bin/targets -name "*factory*.bin" -o -name "*factory*.img" 2>/dev/null)
+    if [ -n "$factory_files" ]; then
+        echo "✅ 找到 factory 固件:"
+        echo "$factory_files" | while read file; do
+            local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
+            echo "  📄 $file ($size)"
+        done
+    else
+        echo "⚠️ 警告: 未找到 factory 固件，在临时目录中查找..."
+        
+        # 在临时目录中查找
+        local tmp_files=$(find build_dir -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null)
+        if [ -n "$tmp_files" ]; then
+            echo "   在临时目录中找到:"
+            echo "$tmp_files" | while read file; do
+                echo "     📄 $file"
+                # 尝试复制到目标目录
+                local dest="bin/targets/ath79/generic/$(basename "$file")"
+                mkdir -p bin/targets/ath79/generic
+                cp "$file" "$dest" 2>/dev/null && echo "     ✅ 已复制到 $dest"
+            done
+        fi
+    fi
+    
+    # 最终确认
+    echo ""
+    echo "📊 最终固件列表:"
+    echo "----------------------------------------"
+    find bin/targets -type f -name "*.bin" -o -name "*.img" 2>/dev/null | sort | while read file; do
+        local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
+        echo "  📄 $(basename "$file") ($size)"
+    done
+    echo "----------------------------------------"
     
     log "✅ 步骤25 完成"
 }
