@@ -3,7 +3,7 @@
 # OpenWrt 智能固件构建主脚本
 # 对应工作流: firmware-build.yml
 # 版本: 3.1.0
-# 最后更新: 2026-02-15
+# 最后更新: 2026-02-16
 #【build_firmware_main.sh-00-end】
 
 #【build_firmware_main.sh-00.5】
@@ -921,9 +921,13 @@ EOF
     
     if [ -n "$extra_packages" ]; then
         log "📦 添加额外包: $extra_packages"
-        echo "$extra_packages" | tr ',' '
-' | while read pkg; do
-            [ -n "$pkg" ] && echo "CONFIG_PACKAGE_$pkg=y" >> .config
+        
+        # 将extra_packages按逗号分割
+        IFS=',' read -ra PKG_ARRAY <<< "$extra_packages"
+        for pkg in "${PKG_ARRAY[@]}"; do
+            pkg=$(echo "$pkg" | xargs) # 去除空格
+            [ -z "$pkg" ] && continue
+            echo "CONFIG_PACKAGE_$pkg=y" >> .config
         done
     fi
     
@@ -1276,6 +1280,100 @@ EOF
     sed -i '/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_/d' .config
     
     log "✅ 插件禁用完成"
+    
+    # 根据实际配置文件中的包自动处理依赖和冲突
+    log "🔧 根据配置文件自动处理依赖和冲突..."
+    
+    # 读取所有已启用的包（来自配置文件）
+    local enabled_pkg_list=$(grep "^CONFIG_PACKAGE_.*=y$" .config | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
+    
+    # 定义通用冲突规则（不特定于某个版本）
+    declare -A conflict_patterns
+    conflict_patterns["samba"]="samba4 samba36 samba"  # 任何samba版本之间都可能冲突
+    
+    # 定义通用依赖规则
+    declare -A depend_patterns
+    depend_patterns["samba"]="libopenssl libpthread libtirpc"  # samba通用依赖
+    
+    # 处理同类型包的冲突（例如不同版本的samba）
+    local samba_pkgs=$(echo "$enabled_pkg_list" | grep -E "samba|samba4|samba36" | sort -u)
+    local samba_count=$(echo "$samba_pkgs" | wc -l)
+    
+    if [ $samba_count -gt 1 ]; then
+        log "  ⚠️ 检测到多个samba版本:"
+        echo "$samba_pkgs" | while read pkg; do
+            log "    - $pkg"
+        done
+        
+        # 优先保留配置文件中的samba版本（通常是samba36）
+        if echo "$enabled_pkg_list" | grep -q "samba36"; then
+            log "  🔧 保留 samba36，禁用其他samba版本"
+            echo "$samba_pkgs" | grep -v "samba36" | while read pkg; do
+                if [ -n "$pkg" ]; then
+                    sed -i "/CONFIG_PACKAGE_${pkg}=y/d" .config
+                    echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
+                    log "    ✅ 禁用 $pkg"
+                fi
+            done
+        elif echo "$enabled_pkg_list" | grep -q "samba4"; then
+            log "  🔧 保留 samba4，禁用其他samba版本"
+            echo "$samba_pkgs" | grep -v "samba4" | while read pkg; do
+                if [ -n "$pkg" ]; then
+                    sed -i "/CONFIG_PACKAGE_${pkg}=y/d" .config
+                    echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
+                    log "    ✅ 禁用 $pkg"
+                fi
+            done
+        fi
+    fi
+    
+    # 处理vsftpd冲突
+    if echo "$enabled_pkg_list" | grep -q "vsftpd" && echo "$enabled_pkg_list" | grep -q "vsftpd-alt"; then
+        log "  ⚠️ 检测到 vsftpd 和 vsftpd-alt 冲突"
+        if echo "$enabled_pkg_list" | grep -q "vsftpd"; then
+            log "  🔧 保留 vsftpd，禁用 vsftpd-alt"
+            sed -i "/CONFIG_PACKAGE_vsftpd-alt=y/d" .config
+            echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+        else
+            log "  🔧 保留 vsftpd-alt，禁用 vsftpd"
+            sed -i "/CONFIG_PACKAGE_vsftpd=y/d" .config
+            echo "# CONFIG_PACKAGE_vsftpd is not set" >> .config
+        fi
+    fi
+    
+    # 根据实际启用的包添加通用依赖
+    if echo "$enabled_pkg_list" | grep -q "samba36"; then
+        log "  🔧 检测到 samba36，添加通用依赖"
+        for dep in libopenssl libpthread libtirpc; do
+            if ! echo "$enabled_pkg_list" | grep -q "$dep"; then
+                echo "CONFIG_PACKAGE_${dep}=y" >> .config
+                log "    ✅ 添加依赖: $dep"
+            fi
+        done
+    fi
+    
+    if echo "$enabled_pkg_list" | grep -q "samba4"; then
+        log "  🔧 检测到 samba4，添加通用依赖"
+        for dep in libopenssl libpthread libtirpc liburing; do
+            if ! echo "$enabled_pkg_list" | grep -q "$dep"; then
+                echo "CONFIG_PACKAGE_${dep}=y" >> .config
+                log "    ✅ 添加依赖: $dep"
+            fi
+        done
+    fi
+    
+    # 处理aria2相关依赖
+    if echo "$enabled_pkg_list" | grep -q "aria2"; then
+        log "  🔧 检测到 aria2，添加依赖"
+        for dep in libstdcpp libopenssl libuv libxml2; do
+            if ! echo "$enabled_pkg_list" | grep -q "$dep"; then
+                echo "CONFIG_PACKAGE_${dep}=y" >> .config
+                log "    ✅ 添加依赖: $dep"
+            fi
+        done
+    fi
+    
+    log "✅ 依赖和冲突处理完成"
     
     log "✅ 配置生成完成"
 }
@@ -4206,33 +4304,72 @@ workflow_step21_download_deps() {
                 echo "❌ $line"
             elif echo "$line" | grep -q "done\|Complete"; then
                 echo "✅ $line"
-            elif echo "$line" | grep -q "Makefile\|package"; then
-                # 忽略一些无关信息
-                :
-            else
-                echo "  $line"
+            elif echo "$line" | grep -q "flock\|download.pl"; then
+                # 显示下载命令
+                echo "  🔄 $line"
             fi
         done
     } &
     local monitor_pid=$!
     
-    # 使用timeout避免卡死
+    # 记录开始时间
     local start_time=$(date +%s)
+    local last_report_time=$start_time
+    local last_dl_count=$dep_count
     
-    # 先尝试快速下载
+    # 在后台启动进度监控（每30秒报告一次）
+    {
+        while true; do
+            sleep 30
+            local current_time=$(date +%s)
+            local current_dl_count=$(find dl -type f 2>/dev/null | wc -l)
+            local new_files=$((current_dl_count - last_dl_count))
+            local elapsed=$((current_time - start_time))
+            
+            echo ""
+            echo "⏱️ 下载进度报告 (已运行 $((elapsed / 60))分$((elapsed % 60))秒):"
+            echo "  当前依赖包: $current_dl_count 个 (+$new_files)"
+            echo "  最近30秒新增: $new_files 个"
+            echo ""
+            
+            # 显示最近下载的几个文件
+            if [ $new_files -gt 0 ]; then
+                echo "  最近下载的文件:"
+                find dl -type f -printf "%T@ %p\n" 2>/dev/null | sort -nr | head -5 | while read line; do
+                    local file=$(echo "$line" | cut -d' ' -f2-)
+                    local name=$(basename "$file")
+                    echo "    📄 $name"
+                done
+                echo ""
+            fi
+            
+            last_dl_count=$current_dl_count
+            last_report_time=$current_time
+        done
+    } &
+    local progress_pid=$!
+    
+    # 先尝试快速下载，使用 V=s 显示详细输出
     if make -j$download_jobs download -k V=s > download.log 2>&1; then
         echo "✅ 下载完成"
     else
         echo "⚠️ 部分下载失败，尝试单线程重试失败项..."
+        
         # 提取失败的包并重试
-        grep -E "ERROR|Failed" download.log | grep -o "make[^)]*" | while read cmd; do
-            echo "重试: $cmd"
-            eval $cmd || true
-        done
+        local failed_packages=$(grep -E "ERROR|Failed|404" download.log | grep -o "make[^)]*" | sort -u)
+        if [ -n "$failed_packages" ]; then
+            echo ""
+            echo "🔄 重试失败的包:"
+            echo "$failed_packages" | while read cmd; do
+                echo "  重试: $cmd"
+                eval $cmd || true
+            done
+        fi
     fi
     
-    # 停止日志监控
+    # 停止监控进程
     kill $monitor_pid 2>/dev/null || true
+    kill $progress_pid 2>/dev/null || true
     
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
@@ -4244,7 +4381,7 @@ workflow_step21_download_deps() {
     
     echo ""
     echo "📊 下载统计:"
-    echo "   耗时: $((duration / 60))分$((duration % 60))秒"
+    echo "   总耗时: $((duration / 60))分$((duration % 60))秒"
     echo "   原有包: $dep_count 个 ($dep_size)"
     echo "   现有包: $new_dep_count 个 ($new_dep_size)"
     echo "   新增包: $added 个"
@@ -4269,6 +4406,21 @@ workflow_step21_download_deps() {
         echo "----------------------------------------"
     fi
     
+    # 分析下载耗时长的包
+    echo ""
+    echo "⏱️ 下载耗时分析:"
+    echo "----------------------------------------"
+    grep -B1 "Downloading" download.log | grep -E "flock|Downloading" | while read line; do
+        if echo "$line" | grep -q "Downloading"; then
+            local url=$(echo "$line" | sed 's/.*Downloading //g')
+            echo "  📥 $url"
+        fi
+    done | head -20
+    if [ $(grep -c "Downloading" download.log) -gt 20 ]; then
+        echo "  ... 还有 $(( $(grep -c "Downloading" download.log) - 20 )) 个下载未显示"
+    fi
+    echo "----------------------------------------"
+    
     # 显示下载日志的最后50行
     echo ""
     echo "📋 下载日志摘要（最后50行）:"
@@ -4280,28 +4432,61 @@ workflow_step21_download_deps() {
             echo "❌ $line"
         elif echo "$line" | grep -q "done\|Complete"; then
             echo "✅ $line"
-        elif echo "$line" | grep -q "Makefile\|package\|Config"; then
-            # 忽略一些无关信息
-            :
         else
             echo "  $line"
         fi
     done
     echo "----------------------------------------"
     
-    # 检查下载错误
+    # 详细分析下载错误
     local error_count=$(grep -c -E "ERROR|Failed|404" download.log 2>/dev/null || echo "0")
     if [ "$error_count" -gt 0 ] 2>/dev/null; then
         echo ""
         echo "⚠️ 发现 $error_count 个下载错误:"
         echo "-----------------------------------------------------------------"
-        grep -E "ERROR|Failed|404" download.log | head -10 | while read line; do
+        
+        # 分类统计错误类型
+        echo "📊 错误类型统计:"
+        echo ""
+        
+        # 404错误统计
+        local error_404=$(grep -c "404" download.log 2>/dev/null || echo "0")
+        echo "  404 Not Found: $error_404 个"
+        
+        # 其他错误
+        local other_errors=$((error_count - error_404))
+        echo "  其他错误: $other_errors 个"
+        echo ""
+        
+        # 显示具体的404错误URL
+        if [ $error_404 -gt 0 ]; then
+            echo "🔍 404错误详情（无法下载的URL）:"
+            echo ""
+            grep -B1 "404" download.log | grep "Downloading" | sed 's/.*Downloading //g' | sort -u | head -10 | while read url; do
+                echo "  ❌ $url"
+            done
+            if [ $error_404 -gt 10 ]; then
+                echo "  ... 还有 $((error_404 - 10)) 个404错误未显示"
+            fi
+            echo ""
+        fi
+        
+        # 显示最近10个错误
+        echo "📋 最近10个错误:"
+        echo ""
+        grep -E "ERROR|Failed|404" download.log | tail -10 | while read line; do
             echo "  ❌ $line"
         done
-        if [ $error_count -gt 10 ]; then
-            echo "  ... 还有 $((error_count - 10)) 个错误未显示"
-        fi
         echo "-----------------------------------------------------------------"
+        
+        # 建议解决方案
+        echo ""
+        echo "💡 建议解决方案:"
+        echo "  1. 检查网络连接和防火墙设置"
+        echo "  2. 尝试使用国内镜像源（如清华、阿里云）"
+        echo "  3. 手动下载失败的包并放到 dl/ 目录"
+        echo "  4. 重试构建，失败的包可能被缓存"
+        echo ""
     fi
     
     # 显示下载的URL来源统计
@@ -4309,23 +4494,52 @@ workflow_step21_download_deps() {
     echo "🔍 下载来源统计:"
     echo "----------------------------------------"
     grep "Downloading" download.log | sed 's/.*Downloading //g' | cut -d'/' -f1-3 | sort | uniq -c | sort -nr | head -10 | while read count url; do
-        echo "  $url: $count 个包"
+        printf "  %4d 个包来自: %s\n" "$count" "$url"
     done
+    
+    # 如果没有统计到，尝试另一种方式
+    if [ $(grep -c "Downloading" download.log) -eq 0 ]; then
+        echo "  无法统计下载来源（没有 Downloading 日志）"
+    fi
     echo "----------------------------------------"
     
     # 如果没有下载任何包，显示警告
-    if [ $added -eq 0 ]; then
+    if [ $added -eq 0 ] && [ $dep_count -eq 0 ]; then
         echo ""
-        echo "⚠️ 警告: 没有下载任何新包，请检查:"
+        echo "⚠️ 警告: 没有下载任何包，请检查:"
         echo "   1. feeds.conf.default 是否正确"
         echo "   2. 网络连接是否正常"
         echo "   3. 是否有足够的磁盘空间"
+        echo "   4. 下载源是否可用"
         echo ""
         echo "📋 完整下载日志内容:"
         echo "----------------------------------------"
         cat download.log
         echo "----------------------------------------"
     fi
+    
+    # 检查是否有特定的包导致问题
+    echo ""
+    echo "🔍 检查可能导致编译失败的包:"
+    echo "----------------------------------------"
+    
+    # 检查samba相关
+    if grep -q "samba" download.log; then
+        echo "⚠️ 发现samba相关包下载问题:"
+        grep "samba" download.log | grep -E "ERROR|Failed|404" | head -5 | while read line; do
+            echo "  ❌ $line"
+        done
+    fi
+    
+    # 检查vsftpd相关
+    if grep -q "vsftpd" download.log; then
+        echo "⚠️ 发现vsftpd相关包下载问题:"
+        grep "vsftpd" download.log | grep -E "ERROR|Failed|404" | head -5 | while read line; do
+            echo "  ❌ $line"
+        done
+    fi
+    
+    echo "----------------------------------------"
     
     log "✅ 步骤21 完成"
 }
