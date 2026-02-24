@@ -4329,7 +4329,7 @@ workflow_step21_download_deps() {
     echo "----------------------------------------"
     
     # 详细分析下载错误
-    local error_count=$(grep -c -E "ERROR|Failed|404" download.log 2>/dev/null || echo "0")
+    local error_count=$(grep -c -E "ERROR|Failed|404" download.log 2>/dev/null | tr -d ' ' || echo "0")
     if [ "$error_count" -gt 0 ] 2>/dev/null; then
         echo ""
         echo "⚠️ 发现 $error_count 个下载错误:"
@@ -4339,19 +4339,21 @@ workflow_step21_download_deps() {
         echo "📊 错误类型统计:"
         echo ""
         
-        # 404错误统计
-        local error_404=$(grep -c "404" download.log 2>/dev/null || echo "0")
+        # 404错误统计 - 确保是数字
+        local error_404=$(grep -c "404" download.log 2>/dev/null | tr -d ' ' || echo "0")
         echo "  404 Not Found: $error_404 个"
         
-        # 超时错误
-        local error_timeout=$(grep -c "Timeout\|timed out" download.log 2>/dev/null || echo "0")
+        # 超时错误 - 确保是数字
+        local error_timeout=$(grep -c "Timeout\|timed out" download.log 2>/dev/null | tr -d ' ' || echo "0")
         echo "  超时错误: $error_timeout 个"
         
-        # 其他错误 - 添加默认值保护
+        # 其他错误 - 修复算术运算错误
         local other_errors=0
-        if [ -n "$error_count" ] && [ -n "$error_404" ] && [ -n "$error_timeout" ]; then
-            other_errors=$((error_count - error_404 - error_timeout))
-        fi
+        # 确保所有变量都是数字
+        local ec=$((error_count + 0))
+        local e404=$((error_404 + 0))
+        local et=$((error_timeout + 0))
+        other_errors=$((ec - e404 - et))
         echo "  其他错误: $other_errors 个"
         echo ""
         
@@ -4411,7 +4413,7 @@ workflow_step21_download_deps() {
     echo "----------------------------------------"
     
     # 检查curl 404错误数量
-    local curl_errors=$(grep -c "curl: (22)" download.log 2>/dev/null || echo "0")
+    local curl_errors=$(grep -c "curl: (22)" download.log 2>/dev/null | tr -d ' ' || echo "0")
     if [ $curl_errors -gt 0 ]; then
         echo "⚠️ 发现 $curl_errors 个curl 404错误"
         echo "   💡 已自动配置国内镜像源，如果仍有问题，可以手动下载："
