@@ -3,7 +3,7 @@
 # OpenWrt 智能固件构建主脚本
 # 对应工作流: firmware-build.yml
 # 版本: 3.1.0
-# 最后更新: 2026-02-23
+# 最后更新: 2026-02-15
 #【build_firmware_main.sh-00-end】
 
 #【build_firmware_main.sh-00.5】
@@ -2088,7 +2088,7 @@ apply_config() {
     fi
 
     log ""
-    log "=== 🔍 最终配置状态检测（根据当前.config） ==="
+    log "=== 🔍 最终配置状态检测（根据当前.config动态分析） ==="
     log ""
     
     echo "📋 源码类型: $SOURCE_REPO_TYPE"
@@ -2096,104 +2096,167 @@ apply_config() {
     
     local device_config=$(grep "^CONFIG_TARGET.*DEVICE.*=y" .config | head -1)
     if [ -n "$device_config" ]; then
-        echo "📱 目标设备: $(echo "$device_config" | cut -d'=' -f1)"
+        echo "📱 目标设备: $(echo "$device_config" | cut -d'=' -f1 | sed 's/CONFIG_TARGET_//g')"
     fi
     echo ""
     
-    echo "🔌 USB支持检测:"
-    local usb_core=$(grep -c "^CONFIG_PACKAGE_kmod-usb-core=y" .config)
-    local usb2=$(grep -c "^CONFIG_PACKAGE_kmod-usb2=y" .config)
-    local usb3=$(grep -c "^CONFIG_PACKAGE_kmod-usb3=y" .config)
-    local usb_storage=$(grep -c "^CONFIG_PACKAGE_kmod-usb-storage=y" .config)
-    local usb_uas=$(grep -c "^CONFIG_PACKAGE_kmod-usb-storage-uas=y" .config)
+    # 获取所有启用的包（排除内核配置）
+    local all_packages=$(grep "^CONFIG_PACKAGE_" .config | grep -E "=y|=m" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort -u)
     
-    echo "  ✅ USB Core: $([ $usb_core -gt 0 ] && echo '已启用' || echo '未启用')"
-    echo "  ✅ USB 2.0: $([ $usb2 -gt 0 ] && echo '已启用' || echo '未启用')"
-    echo "  ✅ USB 3.0: $([ $usb3 -gt 0 ] && echo '已启用' || echo '未启用')"
-    echo "  ✅ USB存储: $([ $usb_storage -gt 0 ] && echo '已启用' || echo '未启用')"
-    echo "  ✅ USB UAS: $([ $usb_uas -gt 0 ] && echo '已启用' || echo '未启用')"
-    echo ""
-    
-    echo "💾 文件系统支持:"
-    local fs_ext4=$(grep -c "^CONFIG_PACKAGE_kmod-fs-ext4=y" .config)
-    local fs_vfat=$(grep -c "^CONFIG_PACKAGE_kmod-fs-vfat=y" .config)
-    local fs_exfat=$(grep -c "^CONFIG_PACKAGE_kmod-fs-exfat=y" .config)
-    local fs_ntfs=$(grep -c "^CONFIG_PACKAGE_kmod-fs-ntfs3=y" .config)
-    
-    echo "  ✅ ext4: $([ $fs_ext4 -gt 0 ] && echo '已启用' || echo '未启用')"
-    echo "  ✅ vfat: $([ $fs_vfat -gt 0 ] && echo '已启用' || echo '未启用')"
-    echo "  ✅ exfat: $([ $fs_exfat -gt 0 ] && echo '已启用' || echo '未启用')"
-    echo "  ✅ ntfs3: $([ $fs_ntfs -gt 0 ] && echo '已启用' || echo '未启用')"
-    echo ""
-    
-    echo "⚡ 网络加速支持:"
-    local sfe=$(grep -c "^CONFIG_PACKAGE_kmod-shortcut-fe=y" .config)
-    local fast_classifier=$(grep -c "^CONFIG_PACKAGE_kmod-fast-classifier=y" .config)
-    local turboacc=$(grep -c "^CONFIG_PACKAGE_luci-app-turboacc=y" .config)
-    local bbr=$(grep -c "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config)
-    
-    echo "  ✅ Shortcut-FE: $([ $sfe -gt 0 ] && echo '已启用' || echo '未启用')"
-    echo "  ✅ Fast Classifier: $([ $fast_classifier -gt 0 ] && echo '已启用' || echo '未启用')"
-    echo "  ✅ TurboACC: $([ $turboacc -gt 0 ] && echo '已启用' || echo '未启用')"
-    echo "  ✅ TCP BBR: $([ $bbr -gt 0 ] && echo '已启用' || echo '未启用')"
-    echo ""
-    
-    echo "📶 无线驱动支持:"
-    local ath10k=$(grep -c "^CONFIG_PACKAGE_kmod-ath10k=y" .config)
-    local ath10k_ct=$(grep -c "^CONFIG_PACKAGE_kmod-ath10k-ct=y" .config)
-    local mt76=$(grep -c "^CONFIG_PACKAGE_kmod-mt76=y" .config)
-    local mt7915=$(grep -c "^CONFIG_PACKAGE_kmod-mt7915e=y" .config)
-    
-    if [ $ath10k -gt 0 ] || [ $ath10k_ct -gt 0 ]; then
-        echo "  ✅ ath10k: $([ $ath10k_ct -gt 0 ] && echo '使用CT驱动' || echo '使用标准驱动')"
-    fi
-    if [ $mt76 -gt 0 ]; then
-        echo "  ✅ mt76: 已启用"
-    fi
-    if [ $mt7915 -gt 0 ]; then
-        echo "  ✅ mt7915e: 已启用"
-    fi
-    echo ""
-    
-    echo "🧩 常用插件状态:"
-    local common_plugins=(
-        "luci-app-samba4"
-        "luci-app-samba"
-        "luci-app-openvpn"
-        "luci-app-wireguard"
-        "luci-app-ddns"
-        "luci-app-upnp"
-        "luci-app-nlbwmon"
-        "luci-app-statistics"
+    if [ -z "$all_packages" ]; then
+        echo "❌ 未找到任何启用的软件包"
+        echo ""
+    else
+        local total_packages=$(echo "$all_packages" | wc -l)
+        echo "📦 共启用 $total_packages 个软件包"
+        echo ""
+        
+        # 按类别分组显示
+        declare -A categories
+        categories["luci-app"]="🧩 Luci应用"
+        categories["luci-theme"]="🎨 Luci主题"
+        categories["luci-proto"]="🌐 协议支持"
+        categories["kmod-usb"]="🔌 USB驱动"
+        categories["kmod-fs"]="💾 文件系统"
+        categories["kmod-net"]="🌍 网络驱动"
+        categories["kmod-wireless"]="📶 无线驱动"
+        categories["kmod-video"]="📹 视频驱动"
+        categories["kmod-sound"]="🎵 音频驱动"
+        categories["kmod-i2c"]="🔧 I2C驱动"
+        categories["kmod-gpio"]="⚡ GPIO驱动"
+        categories["kmod-hwmon"]="🌡️ 硬件监控"
+        categories["kmod-leds"]="💡 LED驱动"
+        categories["kmod-mtd"]="💾 MTD驱动"
+        categories["kmod-nand"]="💾 NAND驱动"
+        categories["kmod-mm"]="📸 多媒体"
+        categories["kmod-crypto"]="🔐 加密模块"
+        categories["kmod-input"]="🖱️ 输入设备"
+        categories["kmod-rtc"]="⏰ RTC驱动"
+        categories["kmod-spi"]="🔌 SPI驱动"
+        categories["luci-i18n"]="🌍 语言包"
+        categories["default-settings"]="⚙️ 默认设置"
+        categories["automount"]="🔄 自动挂载"
+        categories["block-mount"]="📀 块设备挂载"
+        categories["samba"]="📁 Samba共享"
+        categories["vsftpd"]="📂 FTP服务器"
+        categories["nginx"]="🌐 Web服务器"
+        categories["uhttpd"]="🌐 Web服务器"
+        categories["openvpn"]="🔒 VPN"
+        categories["wireguard"]="🔒 VPN"
+        categories["zerotier"]="🔗 ZeroTier"
+        categories["frp"]="🔗 FRP内网穿透"
+        categories["nps"]="🔗 NPS内网穿透"
+        categories["ddns"]="🌐 DDNS"
+        categories["upnp"]="📡 UPnP"
+        categories["qos"]="⚡ QoS"
+        categories["sqm"]="📊 SQM"
+        categories["turboacc"]="⚡ TurboACC"
+        categories["shortcut-fe"]="⚡ Shortcut-FE"
+        categories["fast-classifier"]="⚡ Fast Classifier"
+        categories["tcp-bbr"]="⚡ TCP BBR"
+        categories["dnsmasq"]="📡 DNS"
+        categories["adguard"]="📡 AdGuard"
+        categories["smartdns"]="📡 SmartDNS"
+        categories["mosdns"]="📡 MosDNS"
+        categories["passwall"]="🔓 PassWall"
+        categories["ssr-plus"]="🔓 SSR Plus"
+        categories["vssr"]="🔓 VSSR"
+        categories["clash"]="🔓 Clash"
+        categories["openclash"]="🔓 OpenClash"
+        categories["bypass"]="🔓 Bypass"
+        categories["helloworld"]="🔓 HelloWorld"
+        categories["aria2"]="📥 Aria2"
+        categories["transmission"]="📥 Transmission"
+        categories["qbittorrent"]="📥 qBittorrent"
+        categories["vsftpd"]="📂 FTP"
+        categories["filebrowser"]="📁 文件浏览器"
+        categories["kodexplorer"]="📁 KodExplorer"
+        categories["netdata"]="📊 NetData"
+        categories["node"]="🟢 Node.js"
+        categories["python"]="🐍 Python"
+        categories["perl"]="🐪 Perl"
+        categories["php"]="🐘 PHP"
+        categories["mysql"]="🗄️ MySQL"
+        categories["mariadb"]="🗄️ MariaDB"
+        categories["postgresql"]="🗄️ PostgreSQL"
+        categories["redis"]="🗄️ Redis"
+        categories["docker"]="🐳 Docker"
+        categories["dockerd"]="🐳 Dockerd"
+        categories["containerd"]="🐳 Containerd"
+        categories["runc"]="🐳 runc"
+        categories["luci-lib"]="📚 Luci库"
+        categories["luci-compat"]="🔄 Luci兼容"
+        categories["luci-base"]="🏗️ Luci基础"
+        categories["firewall"]="🔥 防火墙"
+        categories["iptables"]="🔥 iptables"
+        categories["nftables"]="🔥 nftables"
+        categories["ebtables"]="🔥 ebtables"
+        categories["ipset"]="🔧 ipset"
+        categories["iproute2"]="🔧 iproute2"
+        categories["tc"]="🔧 tc"
+        categories["bridge"]="🌉 网桥"
+        categories["hostapd"]="📡 hostapd"
+        categories["wpa-supplicant"]="📡 wpa_supplicant"
+        categories["relayd"]="🔄 relayd"
+        categories["igmpproxy"]="📡 igmpproxy"
+        categories["udpxy"]="📡 udpxy"
+        categories["mwan3"]="🌐 多线负载"
+        categories["nlbwmon"]="📊 流量监控"
+        categories["bandwidthd"]="📊 带宽监控"
+        categories["vnstat"]="📊 vnStat"
+        categories["collectd"]="📊 collectd"
+        categories["prometheus"]="📊 Prometheus"
+        categories["grafana"]="📊 Grafana"
     )
     
-    for plugin in "${common_plugins[@]}"; do
-        local status=$(grep -c "^CONFIG_PACKAGE_${plugin}=y" .config)
-        if [ $status -gt 0 ]; then
-            echo "  ✅ $plugin: 已启用"
+        # 处理未分类的包
+        local uncategorized_file=$(mktemp)
+        echo "$all_packages" > "$uncategorized_file"
+        
+        # 按类别显示
+        for pattern in "${!categories[@]}"; do
+            local matches=$(grep "^${pattern}" "$uncategorized_file" | sort)
+            if [ -n "$matches" ]; then
+                local count=$(echo "$matches" | wc -l)
+                echo "${categories[$pattern]} (共 $count 个):"
+                echo "----------------------------------------"
+                echo "$matches" | while read pkg; do
+                    local val=$(grep "^CONFIG_PACKAGE_${pkg}=" .config | cut -d'=' -f2)
+                    if [ "$val" = "y" ]; then
+                        printf "  ✅ %s\n" "$pkg"
+                    elif [ "$val" = "m" ]; then
+                        printf "  📦 %s\n" "$pkg"
+                    fi
+                done
+                echo ""
+                
+                # 从临时文件中移除已分类的包
+                for pkg in $matches; do
+                    sed -i "/^${pkg}$/d" "$uncategorized_file"
+                done
+            fi
+        done
+        
+        # 显示其他未分类的包
+        local remaining=$(cat "$uncategorized_file" | sort)
+        if [ -n "$remaining" ]; then
+            local remain_count=$(echo "$remaining" | wc -l)
+            echo "📦 其他软件包 (共 $remain_count 个):"
+            echo "----------------------------------------"
+            echo "$remaining" | while read pkg; do
+                local val=$(grep "^CONFIG_PACKAGE_${pkg}=" .config | cut -d'=' -f2)
+                if [ "$val" = "y" ]; then
+                    printf "  ✅ %s\n" "$pkg"
+                elif [ "$val" = "m" ]; then
+                    printf "  📦 %s\n" "$pkg"
+                fi
+            done
+            echo ""
         fi
-    done
-    echo ""
-    
-    echo "🚫 禁用插件状态:"
-    local disabled_plugins=(
-        "vssr"
-        "ssr-plus"
-        "rclone"
-        "passwall"
-    )
-    
-    for plugin in "${disabled_plugins[@]}"; do
-        local enabled=$(grep -c "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config)
-        local disabled=$(grep -c "^# CONFIG_PACKAGE_luci-app-${plugin} is not set" .config)
-        if [ $enabled -eq 0 ] && [ $disabled -gt 0 ]; then
-            echo "  ✅ luci-app-${plugin}: 已禁用"
-        elif [ $enabled -gt 0 ]; then
-            echo "  ⚠️ luci-app-${plugin}: 仍被启用"
-        fi
-    done
-    echo ""
-    
+        
+        rm -f "$uncategorized_file"
+    fi
+
     echo "📊 最终统计:"
     local total_configs=$(wc -l < .config)
     local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config)
@@ -4096,6 +4159,36 @@ workflow_step21_download_deps() {
     local dep_size=$(du -sh dl 2>/dev/null | cut -f1 || echo "0B")
     echo "📊 当前依赖包: $dep_count 个, 总大小: $dep_size"
     
+    # 显示现有依赖包列表
+    if [ $dep_count -gt 0 ]; then
+        echo ""
+        echo "📋 现有依赖包列表（共 $dep_count 个）:"
+        echo "================================================================="
+        printf "%-70s %s\n" "文件名" "大小"
+        echo "================================================================="
+        
+        # 按文件名排序显示所有包
+        find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" -o -name "*.xz" -o -name "*.bz2" 2>/dev/null | sort | while read file; do
+            local name=$(basename "$file")
+            local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
+            printf "%-70s %s\n" "$name" "$size"
+        done
+        
+        # 显示其他文件
+        local other_files=$(find dl -type f ! -name "*.tar.*" ! -name "*.zip" ! -name "*.gz" ! -name "*.xz" ! -name "*.bz2" 2>/dev/null | wc -l)
+        if [ $other_files -gt 0 ]; then
+            echo ""
+            echo "📁 其他文件: $other_files 个"
+            find dl -type f ! -name "*.tar.*" ! -name "*.zip" ! -name "*.gz" ! -name "*.xz" ! -name "*.bz2" 2>/dev/null | head -10 | while read file; do
+                local name=$(basename "$file")
+                local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
+                printf "  📄 %-68s %s\n" "$name" "$size"
+            done
+        fi
+        echo "================================================================="
+        echo ""
+    fi
+    
     # 检测系统资源动态调整并行数
     local cpu_cores=$(nproc)
     local mem_total=$(free -m | awk '/^Mem:/{print $2}')
@@ -4113,6 +4206,8 @@ workflow_step21_download_deps() {
     fi
     
     echo "🚀 开始下载依赖包（并行数: $download_jobs）..."
+    echo "下载日志将保存到: download.log"
+    echo ""
     
     # 使用timeout避免卡死
     local start_time=$(date +%s)
@@ -4144,13 +4239,86 @@ workflow_step21_download_deps() {
     echo "   现有包: $new_dep_count 个 ($new_dep_size)"
     echo "   新增包: $added 个"
     
-    # 检查下载错误
-    local error_count=$(grep -c -E "ERROR|Failed|404" download.log 2>/dev/null || echo "0")
-    if [ $error_count -gt 0 ]; then
-        echo "⚠️ 发现 $error_count 个下载错误，但不影响继续"
-        echo "错误示例:"
-        grep -E "ERROR|Failed|404" download.log | head -5
+    # 显示新增的依赖包列表
+    if [ $added -gt 0 ]; then
+        echo ""
+        echo "📦 新增依赖包列表（共 $added 个）:"
+        echo "================================================================="
+        printf "%-70s %s\n" "文件名" "大小"
+        echo "================================================================="
+        
+        # 获取新增的文件列表（按修改时间排序，最新的在前）
+        find dl -type f -printf "%T@ %p\n" 2>/dev/null | sort -nr | head -$added | while read line; do
+            local file=$(echo "$line" | cut -d' ' -f2-)
+            local name=$(basename "$file")
+            local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
+            printf "%-70s %s\n" "$name" "$size"
+        done
+        echo "================================================================="
+        echo ""
     fi
+    
+    # 显示下载日志（30行）
+    echo ""
+    echo "📋 下载日志摘要（最近30行）:"
+    echo "================================================================="
+    
+    # 显示下载进度和关键信息
+    grep -E "Downloading|ERROR|Failed|404|done|Complete" download.log | tail -30 | while read line; do
+        if echo "$line" | grep -q "ERROR\|Failed\|404"; then
+            echo "  ❌ $line"
+        elif echo "$line" | grep -q "Downloading"; then
+            echo "  📥 $line"
+        elif echo "$line" | grep -q "done\|Complete"; then
+            echo "  ✅ $line"
+        else
+            echo "  $line"
+        fi
+    done
+    
+    # 如果没有足够的关键信息，显示原始日志
+    local log_lines=$(grep -E "Downloading|ERROR|Failed|404|done|Complete" download.log | wc -l)
+    if [ $log_lines -lt 10 ]; then
+        echo ""
+        echo "📋 原始下载日志（最近30行）:"
+        tail -30 download.log | while read line; do
+            echo "  $line"
+        done
+    fi
+    echo "================================================================="
+    
+    # 检查下载错误 - 修复语法问题
+    local error_count=$(grep -c -E "ERROR|Failed|404" download.log 2>/dev/null || echo "0")
+    if [ "$error_count" -gt 0 ] 2>/dev/null; then
+        echo ""
+        echo "⚠️ 发现 $error_count 个下载错误:"
+        echo "-----------------------------------------------------------------"
+        grep -E "ERROR|Failed|404" download.log | head -10 | while read line; do
+            echo "  ❌ $line"
+        done
+        if [ $error_count -gt 10 ]; then
+            echo "  ... 还有 $((error_count - 10)) 个错误未显示"
+        fi
+        echo "-----------------------------------------------------------------"
+    else
+        echo "✅ 没有发现下载错误"
+    fi
+    
+    # 显示下载成功的包数量
+    local success_count=$(grep -c "done\|Complete" download.log 2>/dev/null || echo "0")
+    if [ "$success_count" -gt 0 ] 2>/dev/null; then
+        echo "✅ 成功下载: $success_count 个包"
+    fi
+    
+    # 显示最终目录结构
+    echo ""
+    echo "📁 dl目录结构:"
+    echo "-----------------------------------------------------------------"
+    ls -la dl/ | head -30
+    if [ $(ls -la dl/ | wc -l) -gt 30 ]; then
+        echo "... 还有 $(( $(ls -la dl/ | wc -l) - 30 )) 行未显示"
+    fi
+    echo "-----------------------------------------------------------------"
     
     log "✅ 步骤21 完成"
 }
