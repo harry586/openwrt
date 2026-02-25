@@ -5100,12 +5100,37 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（智能并行优化版 - 带自动补丁修复） ==="
+    log "=== 步骤25: 编译固件（智能并行优化版 - 带文件描述符修复） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
     
     cd $BUILD_DIR
+    
+    # ============================================
+    # 修复文件描述符问题 - 大幅增加系统限制
+    # ============================================
+    log "🔧 修复文件描述符限制..."
+    
+    # 尝试设置极高的文件描述符限制
+    ulimit -n 1048576 2>/dev/null || ulimit -n 65536 2>/dev/null || ulimit -n 16384 2>/dev/null || true
+    
+    # 显示当前限制
+    local current_limit=$(ulimit -n)
+    log "  当前文件描述符限制: $current_limit"
+    
+    # 如果限制仍然太小，给出警告
+    if [ $current_limit -lt 1024 ]; then
+        log "⚠️ 警告: 文件描述符限制($current_limit)可能太小，编译可能失败"
+    fi
+    
+    # 设置其他系统限制
+    ulimit -s 16384 2>/dev/null || true  # 栈大小
+    ulimit -i 16384 2>/dev/null || true  # 信号队列
+    
+    # 导出环境变量
+    export OPENWRT_VERBOSE=1
+    export FORCE_UNSAFE_CONFIGURE=1
     
     # ============================================
     # 补丁自动检测和处理函数（内嵌）
@@ -5183,6 +5208,7 @@ workflow_step25_build_firmware() {
     echo "🔧 系统信息:"
     echo "  CPU核心数: $CPU_CORES"
     echo "  内存大小: ${TOTAL_MEM}MB"
+    echo "  文件描述符限制: $(ulimit -n)"
     echo "  并行优化: $enable_parallel"
     
     if [ "$enable_parallel" = "true" ]; then
@@ -5223,17 +5249,6 @@ workflow_step25_build_firmware() {
         echo "🔄 禁用并行优化，使用单线程编译"
     fi
     
-    export FORCE_UNSAFE_CONFIGURE=1
-    
-    # 修复文件描述符问题 - 增加系统限制
-    echo "🔧 修复文件描述符限制..."
-    ulimit -n 65536 2>/dev/null || ulimit -n 4096 2>/dev/null || true
-    echo "  当前文件描述符限制: $(ulimit -n)"
-    
-    # 设置其他系统限制
-    ulimit -s 16384 2>/dev/null || true  # 栈大小
-    ulimit -i 16384 2>/dev/null || true  # 信号队列
-    
     local max_retries=2
     local retry_count=0
     local build_success=0
@@ -5248,10 +5263,18 @@ workflow_step25_build_firmware() {
         
         START_TIME=$(date +%s)
         
-        # 使用详细日志模式，并处理文件描述符问题
-        stdbuf -oL -eL time make -j$MAKE_JOBS V=s 2>&1 | tee build.log
+        # 使用 stdbuf 避免缓冲区问题，并将 stderr 也重定向到 stdout
+        # 同时使用脚本命令来模拟终端环境，避免文件描述符问题
+        if command -v script >/dev/null 2>&1; then
+            # 使用 script 命令创建伪终端
+            script -q -c "make -j$MAKE_JOBS V=s" /dev/null 2>&1 | tee build.log
+            BUILD_EXIT_CODE=${PIPESTATUS[0]}
+        else
+            # 如果没有 script 命令，使用 stdbuf
+            stdbuf -oL -eL make -j$MAKE_JOBS V=s 2>&1 | tee build.log
+            BUILD_EXIT_CODE=${PIPESTATUS[0]}
+        fi
         
-        BUILD_EXIT_CODE=${PIPESTATUS[0]}
         END_TIME=$(date +%s)
         DURATION=$((END_TIME - START_TIME))
         
@@ -5270,8 +5293,13 @@ workflow_step25_build_firmware() {
             if grep -q "Bad file descriptor" build.log; then
                 echo "⚠️ 检测到文件描述符问题，尝试修复..."
                 # 进一步增加文件描述符限制
-                ulimit -n 131072 2>/dev/null || ulimit -n 65536 2>/dev/null || true
+                ulimit -n 1048576 2>/dev/null || ulimit -n 131072 2>/dev/null || ulimit -n 65536 2>/dev/null || true
                 echo "  新的文件描述符限制: $(ulimit -n)"
+                
+                # 清理可能锁定的文件
+                echo "🔧 清理可能锁定的文件..."
+                find build_dir -name "*.lock" -o -name "*.tmp" 2>/dev/null | xargs -r rm -f
+                
                 retry_count=$((retry_count + 1))
                 if [ $retry_count -lt $max_retries ]; then
                     echo "🔄 修复后重试..."
@@ -5322,6 +5350,7 @@ workflow_step25_build_firmware() {
     echo ""
     echo "🔧 编译后检查..."
     sync
+    sleep 2  # 给文件系统一点时间
     
     # 检查并修复可能缺失的固件文件
     echo "🔍 检查固件文件..."
@@ -5337,11 +5366,13 @@ workflow_step25_build_firmware() {
     if [ -n "$sysupgrade_files" ]; then
         echo "✅ 在临时目录找到 sysupgrade 固件:"
         echo "$sysupgrade_files" | while read file; do
-            local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-            local name=$(basename "$file")
-            echo "  📄 $name ($size)"
-            # 复制到目标目录
-            cp "$file" "$target_dir/" 2>/dev/null && echo "    已复制到 $target_dir/"
+            if [ -f "$file" ]; then
+                local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
+                local name=$(basename "$file")
+                echo "  📄 $name ($size)"
+                # 复制到目标目录
+                cp "$file" "$target_dir/" 2>/dev/null && echo "    已复制到 $target_dir/"
+            fi
         done
     else
         echo "⚠️ 警告: 未找到 sysupgrade 固件"
@@ -5352,11 +5383,13 @@ workflow_step25_build_firmware() {
     if [ -n "$factory_files" ]; then
         echo "✅ 在临时目录找到 factory 固件:"
         echo "$factory_files" | while read file; do
-            local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-            local name=$(basename "$file")
-            echo "  📄 $name ($size)"
-            # 复制到目标目录
-            cp "$file" "$target_dir/" 2>/dev/null && echo "    已复制到 $target_dir/"
+            if [ -f "$file" ]; then
+                local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
+                local name=$(basename "$file")
+                echo "  📄 $name ($size)"
+                # 复制到目标目录
+                cp "$file" "$target_dir/" 2>/dev/null && echo "    已复制到 $target_dir/"
+            fi
         done
     else
         echo "ℹ️ 未找到 factory 固件（可选）"
@@ -5367,11 +5400,13 @@ workflow_step25_build_firmware() {
     if [ -n "$initramfs_files" ]; then
         echo "✅ 在临时目录找到 initramfs 固件:"
         echo "$initramfs_files" | while read file; do
-            local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-            local name=$(basename "$file")
-            echo "  📄 $name ($size)"
-            # 复制到目标目录
-            cp "$file" "$target_dir/" 2>/dev/null && echo "    已复制到 $target_dir/"
+            if [ -f "$file" ]; then
+                local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
+                local name=$(basename "$file")
+                echo "  📄 $name ($size)"
+                # 复制到目标目录
+                cp "$file" "$target_dir/" 2>/dev/null && echo "    已复制到 $target_dir/"
+            fi
         done
     fi
     
