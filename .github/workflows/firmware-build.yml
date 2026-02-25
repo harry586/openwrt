@@ -1,7 +1,7 @@
 #【firmware-build.yml-00】
 # OpenWrt 智能固件构建工作流 - 系统主入口
-# 版本: 3.2.0
-# 最后更新: 2026-02-23
+# 版本: 3.3.0
+# 最后更新: 2026-02-25
 
 name: OpenWrt 智能固件构建工作流
 
@@ -59,6 +59,14 @@ on:
         required: false
         type: string
         default: ""
+      
+      # 新增：自定义禁用插件
+      forbidden_packages:
+        description: "🚫 自定义禁用插件 - 格式：用空格分隔，默认禁用 vssr ssr-plus passwall rclone ddns qbittorrent filetransfer"
+        required: false
+        type: string
+        default: "vssr ssr-plus passwall rclone ddns qbittorrent filetransfer"
+      
       enable_parallel:
         description: "⚡ 启用智能并行优化"
         required: false
@@ -70,6 +78,7 @@ env:
   REPO_ROOT: "${{ github.workspace }}"
   ENABLE_PARALLEL: "${{ github.event.inputs.enable_parallel }}"
   SOURCE_REPO: "${{ github.event.inputs.source_repo }}"
+  FORBIDDEN_PACKAGES: "${{ github.event.inputs.forbidden_packages }}"
 
 jobs:
   build-firmware:
