@@ -55,14 +55,14 @@ on:
         default: "normal"
         options: ["base", "normal"]
       extra_packages:
-        description: "额外安装插件 - 格式：用分号;分隔"
+        description: "额外安装插件 - 格式：分号;分隔"
         required: false
         type: string
         default: ""
       
       # 新增：自定义禁用插件
       forbidden_packages:
-        description: "🚫 自定义禁用插件 - 格式：用空格分隔，默认禁用 vssr ssr-plus passwall rclone ddns qbittorrent filetransfer"
+        description: "🚫 自定义禁用插件 - 格式：空格分隔"
         required: false
         type: string
         default: "vssr ssr-plus passwall rclone ddns qbittorrent filetransfer"
