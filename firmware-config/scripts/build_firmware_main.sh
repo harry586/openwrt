@@ -16,7 +16,6 @@ load_build_config() {
     local current_build_dir="${BUILD_DIR:-}"
     local current_log_dir="${LOG_DIR:-}"
     local current_backup_dir="${BACKUP_DIR:-}"
-    local current_forbidden_packages="${FORBIDDEN_PACKAGES:-}"
     
     if [ -f "$config_file" ]; then
         log "📁 加载统一配置文件: $config_file"
@@ -41,16 +40,6 @@ load_build_config() {
     : ${SOURCE_REPO_TYPE:="immortalwrt"}
     export SOURCE_REPO_TYPE
     
-    # 加载自定义禁用插件列表
-    if [ -n "$current_forbidden_packages" ]; then
-        FORBIDDEN_PACKAGES="$current_forbidden_packages"
-        export FORBIDDEN_PACKAGES
-        log "✅ 使用 workflow 传入的自定义禁用插件: $FORBIDDEN_PACKAGES"
-    fi
-    
-    : ${FORBIDDEN_PACKAGES:="vssr ssr-plus passwall rclone ddns qbittorrent filetransfer"}
-    export FORBIDDEN_PACKAGES
-    
     [ -n "$current_build_dir" ] && BUILD_DIR="$current_build_dir"
     [ -n "$current_log_dir" ] && LOG_DIR="$current_log_dir"
     [ -n "$current_backup_dir" ] && BACKUP_DIR="$current_backup_dir"
@@ -59,10 +48,8 @@ load_build_config() {
     export IMMORTALWRT_URL OPENWRT_URL LEDE_URL PACKAGES_FEED_URL LUCI_FEED_URL TURBOACC_FEED_URL
     export ENABLE_TURBOACC ENABLE_TCP_BBR FORCE_ATH10K_CT AUTO_FIX_USB_DRIVERS
     export ENABLE_DYNAMIC_KERNEL_DETECTION ENABLE_DYNAMIC_PLATFORM_DRIVERS ENABLE_DYNAMIC_DEVICE_MAPPING
-    export FORBIDDEN_PACKAGES
     
     log "✅ 配置加载完成，当前源码仓库类型: $SOURCE_REPO_TYPE"
-    log "✅ 自定义禁用插件: $FORBIDDEN_PACKAGES"
 }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -801,36 +788,29 @@ configure_feeds() {
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     # ============================================
-    # 获取需要禁用的插件列表
-    # ============================================
-    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
-    log "🔧 基础禁用插件: $base_forbidden"
-    
-    # 生成完整的禁用插件列表（包括子包）
-    local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
-    log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个):"
-    printf '    %s\n' "${full_forbidden_list[@]}" | head -20
-    if [ ${#full_forbidden_list[@]} -gt 20 ]; then
-        log "    ... 还有 $((${#full_forbidden_list[@]} - 20)) 个未显示"
-    fi
-    
-    # 提取基础关键词用于目录搜索
-    local search_keywords=()
-    IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
-    for pkg in "${BASE_PKGS[@]}"; do
-        search_keywords+=("$pkg")
-    done
-    
-    # ============================================
     # 在配置 feeds 之前，先删除不需要的插件包
     # ============================================
     log "🔧 在配置 feeds 之前，删除不需要的插件包..."
     
+    local packages_to_remove=(
+        "qbittorrent"
+        "rclone"
+        "filetransfer"
+        "vssr"
+        "ssr-plus"
+        "passwall"
+        "autoreboot"
+        "ddns"
+        "nlbwmon"
+        "wol"
+        "accesscontrol"
+    )
+    
     # 查找并删除 package/feeds 中的相关目录
     if [ -d "package/feeds" ]; then
-        for keyword in "${search_keywords[@]}"; do
+        for pkg in "${packages_to_remove[@]}"; do
             # 查找所有包含这些包名的目录
-            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+            find package/feeds -type d -name "*${pkg}*" 2>/dev/null | while read dir; do
                 log "  🗑️  删除包目录: $dir"
                 rm -rf "$dir"
             done
@@ -839,8 +819,8 @@ configure_feeds() {
     
     # 查找并删除 feeds 目录中的相关目录（如果存在）
     if [ -d "feeds" ]; then
-        for keyword in "${search_keywords[@]}"; do
-            find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+        for pkg in "${packages_to_remove[@]}"; do
+            find feeds -type d -name "*${pkg}*" 2>/dev/null | while read dir; do
                 log "  🗑️  删除 feeds 目录: $dir"
                 rm -rf "$dir"
             done
@@ -927,16 +907,16 @@ EOF
     sleep 2
     
     # 再次查找并删除相关目录
-    for keyword in "${search_keywords[@]}"; do
+    for pkg in "${packages_to_remove[@]}"; do
         # 在 feeds 目录中查找
-        find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+        find feeds -type d -name "*${pkg}*" 2>/dev/null | while read dir; do
             log "  🗑️  删除 feeds 目录: $dir"
             rm -rf "$dir"
         done
         
         # 在 package/feeds 目录中查找
         if [ -d "package/feeds" ]; then
-            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+            find package/feeds -type d -name "*${pkg}*" 2>/dev/null | while read dir; do
                 log "  🗑️  删除 package/feeds 目录: $dir"
                 rm -rf "$dir"
             done
@@ -949,510 +929,14 @@ EOF
     ./scripts/feeds install -a || handle_error "安装feeds失败"
     
     # ============================================
-    # 安装后立即删除不需要的插件源文件（彻底切断依赖）
+    # 安装后再次检查并删除
     # ============================================
-    log "🔧 安装后立即删除不需要的插件源文件（彻底切断依赖）..."
-    
-    # 在 feeds 目录中查找并删除
-    for keyword in "${search_keywords[@]}"; do
-        # 查找所有相关目录
-        find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-            log "  🗑️  删除 feeds 目录: $dir"
-            rm -rf "$dir"
-        done
-        
-        # 在 package/feeds 目录中查找
-        if [ -d "package/feeds" ]; then
-            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️  删除 package/feeds 目录: $dir"
-                rm -rf "$dir"
-            done
-        fi
-    done
-    
-    # 特别处理 INCLUDE 选项（这些不是目录，但确保没有残留）
-    local special_patterns=()
-    for pkg in "${BASE_PKGS[@]}"; do
-        case "$pkg" in
-            "rclone")
-                special_patterns+=("rclone_INCLUDE")
-                ;;
-            "qbittorrent")
-                special_patterns+=("qbittorrent_dynamic")
-                ;;
-        esac
-    done
-    
-    for pattern in "${special_patterns[@]}"; do
-        find feeds -name "*${pattern}*" 2>/dev/null | while read item; do
-            log "  🗑️  删除特殊项: $item"
-            rm -rf "$item"
-        done
-    done
-    
-    log "✅ 不需要的插件源文件已彻底删除"
-    
-    # 再次检查并删除
     log "🔧 安装后再次检查并删除不需要的插件..."
     
-    for keyword in "${search_keywords[@]}"; do
+    for pkg in "${packages_to_remove[@]}"; do
         # 在 package/feeds 目录中查找
         if [ -d "package/feeds" ]; then
-            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️  删除 package/feeds 目录: $dir"
-                rm -rf "$dir"
-            done
-        fi
-    done
-    
-    log "✅ 最终检查完成"
-    
-    local critical_feeds_dirs=("feeds/packages" "feeds/luci" "package/feeds")
-    for dir in "${critical_feeds_dirs[@]}"; do
-        if [ -d "$dir" ]; then
-            log "✅ Feed目录存在: $dir"
-        else
-            log "❌ Feed目录缺失: $dir"
-        fi
-    done
-    
-    log "✅ Feeds配置完成"
-}
-#【build_firmware_main.sh-10-end】
-#【build_firmware_main.sh-10】
-configure_feeds() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 配置Feeds ==="
-    log "源码仓库类型: $SOURCE_REPO_TYPE"
-    
-    # ============================================
-    # 获取需要禁用的插件列表
-    # ============================================
-    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
-    log "🔧 基础禁用插件: $base_forbidden"
-    
-    # 生成完整的禁用插件列表（包括子包）
-    local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
-    log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个):"
-    printf '    %s\n' "${full_forbidden_list[@]}" | head -20
-    if [ ${#full_forbidden_list[@]} -gt 20 ]; then
-        log "    ... 还有 $((${#full_forbidden_list[@]} - 20)) 个未显示"
-    fi
-    
-    # 提取基础关键词用于目录搜索
-    local search_keywords=()
-    IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
-    for pkg in "${BASE_PKGS[@]}"; do
-        search_keywords+=("$pkg")
-    done
-    
-    # ============================================
-    # 在配置 feeds 之前，先删除不需要的插件包
-    # ============================================
-    log "🔧 在配置 feeds 之前，删除不需要的插件包..."
-    
-    # 查找并删除 package/feeds 中的相关目录
-    if [ -d "package/feeds" ]; then
-        for keyword in "${search_keywords[@]}"; do
-            # 查找所有包含这些包名的目录
-            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️  删除包目录: $dir"
-                rm -rf "$dir"
-            done
-        done
-    fi
-    
-    # 查找并删除 feeds 目录中的相关目录（如果存在）
-    if [ -d "feeds" ]; then
-        for keyword in "${search_keywords[@]}"; do
-            find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️  删除 feeds 目录: $dir"
-                rm -rf "$dir"
-            done
-        done
-    fi
-    
-    log "✅ 不需要的插件包已删除"
-    
-    # ============================================
-    # 根据源码类型设置feeds
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 LEDE源码模式: 使用LEDE官方feeds"
-        
-        # LEDE使用自己的feeds
-        cat > feeds.conf.default << 'EOF'
-src-git packages https://github.com/coolsnowwolf/packages.git
-src-git luci https://github.com/coolsnowwolf/luci.git
-src-git routing https://github.com/coolsnowwolf/routing.git
-src-git telephony https://github.com/coolsnowwolf/telephony.git
-EOF
-        
-        # LEDE的TurboACC支持（如果启用）
-        if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
-            echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
-            log "✅ 添加TurboACC feed"
-        fi
-        
-    elif [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
-        log "🔧 OpenWrt官方源码模式: 使用OpenWrt官方feeds"
-        
-        # OpenWrt官方feeds
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            FEEDS_BRANCH="openwrt-23.05"
-        else
-            FEEDS_BRANCH="openwrt-21.02"
-        fi
-        
-        cat > feeds.conf.default << EOF
-src-git packages https://github.com/openwrt/packages.git;$FEEDS_BRANCH
-src-git luci https://github.com/openwrt/luci.git;$FEEDS_BRANCH
-src-git routing https://github.com/openwrt/routing.git;$FEEDS_BRANCH
-src-git telephony https://github.com/openwrt/telephony.git;$FEEDS_BRANCH
-EOF
-        
-        if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
-            echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
-            log "✅ 添加TurboACC feed"
-        fi
-        
-    else
-        # 默认使用immortalwrt
-        log "🔧 ImmortalWrt源码模式: 使用ImmortalWrt官方feeds"
-        
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            FEEDS_BRANCH="openwrt-23.05"
-        else
-            FEEDS_BRANCH="openwrt-21.02"
-        fi
-        
-        cat > feeds.conf.default << EOF
-src-git packages ${PACKAGES_FEED_URL:-https://github.com/immortalwrt/packages.git};$FEEDS_BRANCH
-src-git luci ${LUCI_FEED_URL:-https://github.com/immortalwrt/luci.git};$FEEDS_BRANCH
-EOF
-        
-        if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
-            echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
-            log "✅ 添加TurboACC feed"
-        fi
-    fi
-    
-    log "📋 feeds.conf.default 内容:"
-    cat feeds.conf.default
-    
-    log "=== 更新Feeds ==="
-    ./scripts/feeds update -a || handle_error "更新feeds失败"
-    
-    # ============================================
-    # 在安装 feeds 之前，再次删除不需要的插件
-    # ============================================
-    log "🔧 在安装 feeds 之前，再次删除不需要的插件包..."
-    
-    # 等待 feeds 更新完成
-    sleep 2
-    
-    # 再次查找并删除相关目录
-    for keyword in "${search_keywords[@]}"; do
-        # 在 feeds 目录中查找
-        find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-            log "  🗑️  删除 feeds 目录: $dir"
-            rm -rf "$dir"
-        done
-        
-        # 在 package/feeds 目录中查找
-        if [ -d "package/feeds" ]; then
-            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️  删除 package/feeds 目录: $dir"
-                rm -rf "$dir"
-            done
-        fi
-    done
-    
-    log "✅ 不需要的插件包已删除"
-    
-    log "=== 安装Feeds ==="
-    ./scripts/feeds install -a || handle_error "安装feeds失败"
-    
-    # ============================================
-    # 安装后立即删除不需要的插件源文件（彻底切断依赖）
-    # ============================================
-    log "🔧 安装后立即删除不需要的插件源文件（彻底切断依赖）..."
-    
-    # 在 feeds 目录中查找并删除
-    for keyword in "${search_keywords[@]}"; do
-        # 查找所有相关目录
-        find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-            log "  🗑️  删除 feeds 目录: $dir"
-            rm -rf "$dir"
-        done
-        
-        # 在 package/feeds 目录中查找
-        if [ -d "package/feeds" ]; then
-            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️  删除 package/feeds 目录: $dir"
-                rm -rf "$dir"
-            done
-        fi
-    done
-    
-    # 特别处理 INCLUDE 选项（这些不是目录，但确保没有残留）
-    local special_patterns=()
-    for pkg in "${BASE_PKGS[@]}"; do
-        case "$pkg" in
-            "rclone")
-                special_patterns+=("rclone_INCLUDE")
-                ;;
-            "qbittorrent")
-                special_patterns+=("qbittorrent_dynamic")
-                ;;
-        esac
-    done
-    
-    for pattern in "${special_patterns[@]}"; do
-        find feeds -name "*${pattern}*" 2>/dev/null | while read item; do
-            log "  🗑️  删除特殊项: $item"
-            rm -rf "$item"
-        done
-    done
-    
-    log "✅ 不需要的插件源文件已彻底删除"
-    
-    # 再次检查并删除
-    log "🔧 安装后再次检查并删除不需要的插件..."
-    
-    for keyword in "${search_keywords[@]}"; do
-        # 在 package/feeds 目录中查找
-        if [ -d "package/feeds" ]; then
-            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️  删除 package/feeds 目录: $dir"
-                rm -rf "$dir"
-            done
-        fi
-    done
-    
-    log "✅ 最终检查完成"
-    
-    local critical_feeds_dirs=("feeds/packages" "feeds/luci" "package/feeds")
-    for dir in "${critical_feeds_dirs[@]}"; do
-        if [ -d "$dir" ]; then
-            log "✅ Feed目录存在: $dir"
-        else
-            log "❌ Feed目录缺失: $dir"
-        fi
-    done
-    
-    log "✅ Feeds配置完成"
-}
-#【build_firmware_main.sh-10-end】
-#【build_firmware_main.sh-10】
-configure_feeds() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 配置Feeds ==="
-    log "源码仓库类型: $SOURCE_REPO_TYPE"
-    
-    # ============================================
-    # 获取需要禁用的插件列表
-    # ============================================
-    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
-    log "🔧 基础禁用插件: $base_forbidden"
-    
-    # 生成完整的禁用插件列表（包括子包）
-    local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
-    log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个):"
-    printf '    %s\n' "${full_forbidden_list[@]}" | head -20
-    if [ ${#full_forbidden_list[@]} -gt 20 ]; then
-        log "    ... 还有 $((${#full_forbidden_list[@]} - 20)) 个未显示"
-    fi
-    
-    # 提取基础关键词用于目录搜索
-    local search_keywords=()
-    IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
-    for pkg in "${BASE_PKGS[@]}"; do
-        search_keywords+=("$pkg")
-    done
-    
-    # ============================================
-    # 在配置 feeds 之前，先删除不需要的插件包
-    # ============================================
-    log "🔧 在配置 feeds 之前，删除不需要的插件包..."
-    
-    # 查找并删除 package/feeds 中的相关目录
-    if [ -d "package/feeds" ]; then
-        for keyword in "${search_keywords[@]}"; do
-            # 查找所有包含这些包名的目录
-            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️  删除包目录: $dir"
-                rm -rf "$dir"
-            done
-        done
-    fi
-    
-    # 查找并删除 feeds 目录中的相关目录（如果存在）
-    if [ -d "feeds" ]; then
-        for keyword in "${search_keywords[@]}"; do
-            find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️  删除 feeds 目录: $dir"
-                rm -rf "$dir"
-            done
-        done
-    fi
-    
-    log "✅ 不需要的插件包已删除"
-    
-    # ============================================
-    # 根据源码类型设置feeds
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 LEDE源码模式: 使用LEDE官方feeds"
-        
-        # LEDE使用自己的feeds
-        cat > feeds.conf.default << 'EOF'
-src-git packages https://github.com/coolsnowwolf/packages.git
-src-git luci https://github.com/coolsnowwolf/luci.git
-src-git routing https://github.com/coolsnowwolf/routing.git
-src-git telephony https://github.com/coolsnowwolf/telephony.git
-EOF
-        
-        # LEDE的TurboACC支持（如果启用）
-        if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
-            echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
-            log "✅ 添加TurboACC feed"
-        fi
-        
-    elif [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
-        log "🔧 OpenWrt官方源码模式: 使用OpenWrt官方feeds"
-        
-        # OpenWrt官方feeds
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            FEEDS_BRANCH="openwrt-23.05"
-        else
-            FEEDS_BRANCH="openwrt-21.02"
-        fi
-        
-        cat > feeds.conf.default << EOF
-src-git packages https://github.com/openwrt/packages.git;$FEEDS_BRANCH
-src-git luci https://github.com/openwrt/luci.git;$FEEDS_BRANCH
-src-git routing https://github.com/openwrt/routing.git;$FEEDS_BRANCH
-src-git telephony https://github.com/openwrt/telephony.git;$FEEDS_BRANCH
-EOF
-        
-        if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
-            echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
-            log "✅ 添加TurboACC feed"
-        fi
-        
-    else
-        # 默认使用immortalwrt
-        log "🔧 ImmortalWrt源码模式: 使用ImmortalWrt官方feeds"
-        
-        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
-            FEEDS_BRANCH="openwrt-23.05"
-        else
-            FEEDS_BRANCH="openwrt-21.02"
-        fi
-        
-        cat > feeds.conf.default << EOF
-src-git packages ${PACKAGES_FEED_URL:-https://github.com/immortalwrt/packages.git};$FEEDS_BRANCH
-src-git luci ${LUCI_FEED_URL:-https://github.com/immortalwrt/luci.git};$FEEDS_BRANCH
-EOF
-        
-        if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
-            echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
-            log "✅ 添加TurboACC feed"
-        fi
-    fi
-    
-    log "📋 feeds.conf.default 内容:"
-    cat feeds.conf.default
-    
-    log "=== 更新Feeds ==="
-    ./scripts/feeds update -a || handle_error "更新feeds失败"
-    
-    # ============================================
-    # 在安装 feeds 之前，再次删除不需要的插件
-    # ============================================
-    log "🔧 在安装 feeds 之前，再次删除不需要的插件包..."
-    
-    # 等待 feeds 更新完成
-    sleep 2
-    
-    # 再次查找并删除相关目录
-    for keyword in "${search_keywords[@]}"; do
-        # 在 feeds 目录中查找
-        find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-            log "  🗑️  删除 feeds 目录: $dir"
-            rm -rf "$dir"
-        done
-        
-        # 在 package/feeds 目录中查找
-        if [ -d "package/feeds" ]; then
-            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️  删除 package/feeds 目录: $dir"
-                rm -rf "$dir"
-            done
-        fi
-    done
-    
-    log "✅ 不需要的插件包已删除"
-    
-    log "=== 安装Feeds ==="
-    ./scripts/feeds install -a || handle_error "安装feeds失败"
-    
-    # ============================================
-    # 安装后立即删除不需要的插件源文件（彻底切断依赖）
-    # ============================================
-    log "🔧 安装后立即删除不需要的插件源文件（彻底切断依赖）..."
-    
-    # 在 feeds 目录中查找并删除
-    for keyword in "${search_keywords[@]}"; do
-        # 查找所有相关目录
-        find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-            log "  🗑️  删除 feeds 目录: $dir"
-            rm -rf "$dir"
-        done
-        
-        # 在 package/feeds 目录中查找
-        if [ -d "package/feeds" ]; then
-            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️  删除 package/feeds 目录: $dir"
-                rm -rf "$dir"
-            done
-        fi
-    done
-    
-    # 特别处理 INCLUDE 选项（这些不是目录，但确保没有残留）
-    local special_patterns=()
-    for pkg in "${BASE_PKGS[@]}"; do
-        case "$pkg" in
-            "rclone")
-                special_patterns+=("rclone_INCLUDE")
-                ;;
-            "qbittorrent")
-                special_patterns+=("qbittorrent_dynamic")
-                ;;
-        esac
-    done
-    
-    for pattern in "${special_patterns[@]}"; do
-        find feeds -name "*${pattern}*" 2>/dev/null | while read item; do
-            log "  🗑️  删除特殊项: $item"
-            rm -rf "$item"
-        done
-    done
-    
-    log "✅ 不需要的插件源文件已彻底删除"
-    
-    # 再次检查并删除
-    log "🔧 安装后再次检查并删除不需要的插件..."
-    
-    for keyword in "${search_keywords[@]}"; do
-        # 在 package/feeds 目录中查找
-        if [ -d "package/feeds" ]; then
-            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+            find package/feeds -type d -name "*${pkg}*" 2>/dev/null | while read dir; do
                 log "  🗑️  删除 package/feeds 目录: $dir"
                 rm -rf "$dir"
             done
@@ -1996,88 +1480,131 @@ EOF
     log "  禁用软件包: $disabled_packages"
     
     # ============================================
-    # 全面禁用不需要的插件（使用动态生成的列表）
+    # 全面禁用不需要的插件
     # ============================================
     log "🔧 ===== 全面禁用不需要的插件 ===== "
     
-    # 获取基础禁用列表
-    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
-    log "📋 基础禁用插件: $base_forbidden"
+    # 定义所有需要禁用的插件（完整列表）
+    local forbidden_plugins=(
+        # 科学上网类
+        "luci-app-vssr"
+        "luci-app-ssr-plus"
+        "luci-app-passwall"
+        "luci-app-openclash"
+        "luci-app-clash"
+        "luci-app-bypass"
+        "luci-app-helloworld"
+        
+        # rclone 相关
+        "luci-app-rclone"
+        "luci-app-rclone_INCLUDE_rclone-ng"
+        "luci-app-rclone_INCLUDE_rclone-webui"
+        "rclone"
+        "rclone-config"
+        "rclone-webui"
+        "rclone-ng"
+        
+        # qbittorrent 相关
+        "luci-app-qbittorrent"
+        "luci-app-qbittorrent_dynamic"
+        "qbittorrent"
+        "qbittorrent-static"
+        "qt5"
+        "libtorrent"
+        
+        # filetransfer 相关
+        "luci-app-filetransfer"
+        "luci-i18n-filetransfer-zh-cn"
+        "filetransfer"
+        "filebrowser"
+        
+        # 其他不需要的插件
+        "luci-app-autoreboot"
+        "luci-app-ddns"
+        "luci-app-nlbwmon"
+        "luci-app-wol"
+        "luci-app-accesscontrol"
+        "luci-app-statistics"
+        "luci-app-wireguard"
+        "luci-app-zerotier"
+        "luci-app-adblock"
+        "luci-app-adbyby-plus"
+        "luci-app-kodexplorer"
+        "luci-app-netdata"
+        "luci-app-pushbot"
+        "luci-app-serverchan"
+        "luci-app-tencentddns"
+        "luci-app-ttyd"
+        "luci-app-unblockmusic"
+        "luci-app-udpxy"
+        "luci-app-mwan3"
+        "luci-app-mwan3helper"
+        "luci-app-syncdial"
+        "luci-app-xlnetacc"
+        
+        # TurboACC 子选项（主插件保留）
+        "luci-app-turboacc_INCLUDE_BBR_CCA"
+        "luci-app-turboacc_INCLUDE_OFFLOADING"
+        "luci-app-turboacc_INCLUDE_PDNSD"
+        "luci-app-turboacc_INCLUDE_SHORTCUT_FE"
+    )
     
-    # 生成完整的禁用插件列表（包括主包和子包）
-    local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
-    log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个)"
+    # 第一次禁用：删除所有启用配置
+    log "📋 第一次禁用：删除所有启用配置..."
     
-    # 提取基础关键词用于目录搜索
-    local search_keywords=()
-    IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
-    for pkg in "${BASE_PKGS[@]}"; do
-        search_keywords+=("$pkg")
-    done
-    
-    # 第一轮：彻底删除源文件（确保没有残留）
-    log "🔧 第一轮：彻底删除源文件..."
-    for keyword in "${search_keywords[@]}"; do
-        # 在 package/feeds 中查找
-        if [ -d "package/feeds" ]; then
-            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️  删除 package/feeds 源目录: $dir"
-                rm -rf "$dir"
-            done
-        fi
-        # 在 feeds 中查找
-        if [ -d "feeds" ]; then
-            find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️  删除 feeds 源目录: $dir"
-                rm -rf "$dir"
-            done
-        fi
-    done
-    
-    # 第二轮：在 .config 中禁用所有相关包
-    log "📋 第二轮：在 .config 中禁用所有相关包..."
-    for plugin in "${full_forbidden_list[@]}"; do
-        # 删除 CONFIG_PACKAGE_xxx=y 或 =m
+    for plugin in "${forbidden_plugins[@]}"; do
+        # 删除 CONFIG_PACKAGE_xxx=y
         sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+        # 删除 CONFIG_PACKAGE_xxx=m
         sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-        # 删除所有包含插件名的配置行（处理子选项）
+        # 删除所有包含插件名的配置行
         sed -i "/CONFIG_PACKAGE_.*${plugin}/d" .config
+        # 删除所有子选项
+        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
         # 添加禁用配置
         echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
     done
     
-    # 特别处理：删除所有包含关键字的配置
-    for keyword in "${search_keywords[@]}"; do
-        sed -i "/${keyword}/d" .config
-        # 转大写版本也删除
-        local upper_keyword=$(echo "$keyword" | tr '[:lower:]' '[:upper:]')
-        sed -i "/${upper_keyword}/d" .config
-    done
+    # 特别处理：删除所有 qbittorrent 相关
+    sed -i '/qbittorrent/d' .config
+    sed -i '/QBITTORRENT/d' .config
     
-    log "✅ 第二轮禁用完成"
+    # 特别处理：删除所有 rclone 相关
+    sed -i '/rclone/d' .config
+    sed -i '/RCLONE/d' .config
+    
+    # 特别处理：删除所有 filetransfer 相关
+    sed -i '/filetransfer/d' .config
+    sed -i '/FILETRANSFER/d' .config
+    
+    # 特别处理：删除所有 INCLUDE 子选项
+    sed -i '/INCLUDE_/d' .config
+    
+    log "✅ 第一次禁用完成"
     
     # 去重
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 运行 make defconfig 使禁用生效
-    log "🔄 运行 make defconfig 使禁用生效..."
+    # 再次运行 make defconfig
+    log "🔄 再次运行 make defconfig 使禁用生效..."
     make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
         log "⚠️ make defconfig 有警告，但继续..."
     }
     
-    # 第三轮：检查残留并再次禁用
-    log "🔍 第三轮：检查插件残留..."
+    # 第二次禁用：检查是否有残留
+    log "🔍 检查是否有插件残留..."
     
     local remaining=()
-    for plugin in "${full_forbidden_list[@]}"; do
+    for plugin in "${forbidden_plugins[@]}"; do
         if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
             remaining+=("$plugin")
         fi
     done
     
+    # 如果有残留，再次禁用
     if [ ${#remaining[@]} -gt 0 ]; then
-        log "⚠️ 发现 ${#remaining[@]} 个插件残留，第三轮禁用..."
+        log "⚠️ 发现 ${#remaining[@]} 个插件残留，再次禁用..."
         
         for plugin in "${remaining[@]}"; do
             sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
@@ -2093,14 +1620,28 @@ EOF
         make defconfig > /dev/null 2>&1
     fi
     
-    # 第四轮：全面搜索并删除所有可能相关的配置
-    log "🔍 第四轮：全面搜索并删除所有可能相关的配置..."
+    # 第三次禁用：全面搜索并删除所有可能相关的配置
+    log "🔍 第三次禁用：全面搜索并删除所有可能相关的配置..."
     
-    for keyword in "${search_keywords[@]}"; do
-        # 删除所有包含该关键字的 CONFIG_PACKAGE 行
-        sed -i "/CONFIG_PACKAGE_.*${keyword}/d" .config
-        # 删除所有包含该关键字的行（大小写不敏感）
-        sed -i "/[Ii][Nn][Cc][Ll][Uu][Dd][Ee].*${keyword}/d" .config
+    local patterns=(
+        "qbittorrent"
+        "rclone"
+        "filetransfer"
+        "vssr"
+        "ssr-plus"
+        "passwall"
+        "openclash"
+        "clash"
+        "bypass"
+        "helloworld"
+        "INCLUDE_"
+    )
+    
+    for pattern in "${patterns[@]}"; do
+        # 删除所有包含该模式的 CONFIG_PACKAGE 行
+        sed -i "/CONFIG_PACKAGE_.*${pattern}/d" .config
+        # 添加禁用配置（如果还没有）
+        grep -q "^# CONFIG_PACKAGE_.*${pattern}" .config || echo "# CONFIG_PACKAGE_${pattern} is not set" >> .config
     done
     
     # 最终去重
@@ -2111,14 +1652,21 @@ EOF
     log "📊 最终插件状态验证:"
     local still_enabled=0
     
-    # 只检查基础包（因为子包太多）
-    for plugin in "${BASE_PKGS[@]}"; do
-        # 检查主包
-        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
-            log "  ❌ $plugin 相关包仍被启用"
+    # 检查指定的几个插件
+    local check_plugins=(
+        "luci-app-filetransfer"
+        "luci-i18n-filetransfer-zh-cn"
+        "luci-app-rclone_INCLUDE_rclone-ng"
+        "luci-app-rclone_INCLUDE_rclone-webui"
+        "luci-app-qbittorrent_dynamic"
+    )
+    
+    for plugin in "${check_plugins[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
+            log "  ❌ $plugin 仍被启用"
             still_enabled=$((still_enabled + 1))
-        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=m" .config; then
-            log "  ❌ $plugin 相关包仍被模块化"
+        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+            log "  ❌ $plugin 仍被模块化"
             still_enabled=$((still_enabled + 1))
         else
             log "  ✅ $plugin 已禁用"
@@ -2128,8 +1676,11 @@ EOF
     if [ $still_enabled -eq 0 ]; then
         log "🎉 所有指定插件已成功禁用"
     else
-        log "⚠️ 有 $still_enabled 个插件未能禁用，将在 apply_config 阶段再次尝试"
+        log "⚠️ 有 $still_enabled 个插件未能禁用，可能是被其他包强制依赖"
+        log "   可以在配置文件中手动添加: # CONFIG_PACKAGE_xxx is not set"
     fi
+    
+    log "✅ 插件禁用完成"
     
     log "✅ 配置生成完成"
 }
@@ -3042,22 +2593,31 @@ apply_config() {
     echo ""
     
     # ============================================
-    # 最终强制禁用不需要的插件（使用动态生成的列表）
+    # 最终强制禁用不需要的插件
     # ============================================
     log ""
     log "🔧 ===== 最终强制禁用不需要的插件 ===== "
     
-    # 获取基础禁用列表
-    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
-    IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
-    
-    # 生成完整的禁用插件列表
-    local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
+    local final_forbidden=(
+        "luci-app-filetransfer"
+        "luci-i18n-filetransfer-zh-cn"
+        "luci-app-rclone_INCLUDE_rclone-ng"
+        "luci-app-rclone_INCLUDE_rclone-webui"
+        "luci-app-qbittorrent_dynamic"
+        "luci-app-qbittorrent"
+        "luci-app-rclone"
+        "luci-app-vssr"
+        "luci-app-ssr-plus"
+        "luci-app-passwall"
+        "luci-app-autoreboot"
+        "luci-app-ddns"
+        "luci-app-nlbwmon"
+        "luci-app-wol"
+        "luci-app-accesscontrol"
+    )
     
     local disabled_count=0
-    local need_remake=0
-    
-    for plugin in "${full_forbidden_list[@]}"; do
+    for plugin in "${final_forbidden[@]}"; do
         if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
             sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
             sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
@@ -3065,23 +2625,16 @@ apply_config() {
             echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
             log "  ✅ 强制禁用: $plugin"
             disabled_count=$((disabled_count + 1))
-            need_remake=1
         fi
     done
     
     if [ $disabled_count -gt 0 ]; then
         log "✅ 已强制禁用 $disabled_count 个插件"
-        # 去重
-        sort .config | uniq > .config.tmp
-        mv .config.tmp .config
         # 重新运行 defconfig 使更改生效
-        log "🔄 重新运行 make defconfig 使最终禁用生效..."
         make defconfig > /dev/null 2>&1
-        log "✅ 最终禁用完成"
-    else
-        log "✅ 所有不需要的插件已正确禁用"
     fi
     
+    log "✅ 插件最终禁用完成"
     echo "========================================"
 
     log "✅ 配置应用完成"
@@ -4208,7 +3761,6 @@ workflow_step15_generate_config() {
     log "当前设备: $DEVICE"
     log "当前目标: $TARGET"
     log "当前子目标: $SUBTARGET"
-    log "当前禁用插件: ${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
     
     set -e
     trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
@@ -4359,65 +3911,31 @@ workflow_step15_generate_config() {
     log ""
     log "=== 🔧 强制禁用不需要的插件系列（优化版 - 最多2次尝试） ==="
     
-    # 获取基础禁用列表
-    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
-    IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
+    local forbidden_plugins=(
+        "luci-app-vssr"
+        "luci-app-ssr-plus"
+        "luci-app-rclone"
+        "luci-app-passwall"
+    )
     
     cp .config .config.before_disable
     
-    for pkg in "${BASE_PKGS[@]}"; do
-        log "  处理插件: $pkg"
+    for plugin in "${forbidden_plugins[@]}"; do
+        log "  处理插件: $plugin"
         
-        # 处理主包
-        sed -i "/^CONFIG_PACKAGE_${pkg}=y/d" .config
-        sed -i "/^CONFIG_PACKAGE_${pkg}=m/d" .config
-        sed -i "/^CONFIG_PACKAGE_${pkg}_/d" .config
-        echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
         
-        # 处理 luci-app- 版本
-        sed -i "/^CONFIG_PACKAGE_luci-app-${pkg}=y/d" .config
-        sed -i "/^CONFIG_PACKAGE_luci-app-${pkg}=m/d" .config
-        echo "# CONFIG_PACKAGE_luci-app-${pkg} is not set" >> .config
+        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
         
-        log "    ✅ 已禁用 $pkg"
+        log "    ✅ 已禁用 $plugin 及其子选项"
     done
     
-    # 特别处理 DDNS 子包
-    if [[ "$base_forbidden" == *"ddns"* ]]; then
-        log "  特别处理 DDNS 子包..."
-        local ddns_subpackages=(
-            "ddns-scripts"
-            "ddns-scripts_aliyun"
-            "ddns-scripts_dnspod"
-            "ddns-scripts_cloudflare.com-v4"
-            "ddns-scripts_digitalocean"
-            "ddns-scripts_dynv6"
-            "ddns-scripts_godaddy"
-            "ddns-scripts_no-ip_com"
-            "ddns-scripts_nsupdate"
-            "ddns-scripts_route53"
-        )
-        for sub in "${ddns_subpackages[@]}"; do
-            sed -i "/^CONFIG_PACKAGE_${sub}=y/d" .config
-            sed -i "/^CONFIG_PACKAGE_${sub}=m/d" .config
-            echo "# CONFIG_PACKAGE_${sub} is not set" >> .config
-        done
-    fi
-    
-    # 特别处理 rclone INCLUDE 选项
-    if [[ "$base_forbidden" == *"rclone"* ]]; then
-        log "  特别处理 rclone INCLUDE 选项..."
-        sed -i '/CONFIG_PACKAGE_luci-app-rclone_INCLUDE_/d' .config
-        echo "# CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-ng is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-rclone_INCLUDE_rclone-webui is not set" >> .config
-    fi
-    
-    # 特别处理 qbittorrent_dynamic
-    if [[ "$base_forbidden" == *"qbittorrent"* ]]; then
-        log "  特别处理 qbittorrent_dynamic..."
-        sed -i '/CONFIG_PACKAGE_luci-app-qbittorrent_dynamic/d' .config
-        echo "# CONFIG_PACKAGE_luci-app-qbittorrent_dynamic is not set" >> .config
-    fi
+    sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_/d' .config
+    sed -i '/CONFIG_PACKAGE_luci-app-vssr_INCLUDE_/d' .config
+    sed -i '/CONFIG_PACKAGE_luci-app-rclone_INCLUDE_/d' .config
+    sed -i '/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_/d' .config
     
     sort -u .config > .config.tmp && mv .config.tmp .config
     
@@ -4430,8 +3948,8 @@ workflow_step15_generate_config() {
         }
         
         local still_enabled=0
-        for pkg in "${BASE_PKGS[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-${pkg}=y" .config; then
+        for plugin in "${forbidden_plugins[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
                 still_enabled=$((still_enabled + 1))
             fi
         done
@@ -4442,13 +3960,10 @@ workflow_step15_generate_config() {
         else
             if [ $attempt -lt $max_attempts ]; then
                 log "⚠️ 第 $attempt 次尝试后仍有 $still_enabled 个插件残留，再次强制禁用..."
-                for pkg in "${BASE_PKGS[@]}"; do
-                    sed -i "/^CONFIG_PACKAGE_${pkg}=y/d" .config
-                    sed -i "/^CONFIG_PACKAGE_${pkg}=m/d" .config
-                    sed -i "/^CONFIG_PACKAGE_luci-app-${pkg}=y/d" .config
-                    sed -i "/^CONFIG_PACKAGE_luci-app-${pkg}=m/d" .config
-                    echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
-                    echo "# CONFIG_PACKAGE_luci-app-${pkg} is not set" >> .config
+                for plugin in "${forbidden_plugins[@]}"; do
+                    sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+                    sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+                    echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
                 done
                 sort -u .config > .config.tmp && mv .config.tmp .config
             fi
@@ -4459,15 +3974,15 @@ workflow_step15_generate_config() {
     log ""
     log "📊 最终插件状态验证:"
     local still_enabled_final=0
-    for pkg in "${BASE_PKGS[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-${pkg}=y" .config; then
-            log "  ❌ $pkg 仍然被启用"
+    for plugin in "${forbidden_plugins[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
+            log "  ❌ $plugin 仍然被启用"
             still_enabled_final=$((still_enabled_final + 1))
-        elif grep -q "^CONFIG_PACKAGE_${pkg}=m" .config || grep -q "^CONFIG_PACKAGE_luci-app-${pkg}=m" .config; then
-            log "  ❌ $pkg 仍然被模块化"
+        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+            log "  ❌ $plugin 仍然被模块化"
             still_enabled_final=$((still_enabled_final + 1))
         else
-            log "  ✅ $pkg 已正确禁用"
+            log "  ✅ $plugin 已正确禁用"
         fi
     done
     
