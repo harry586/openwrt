@@ -5100,7 +5100,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（智能并行优化版 - 带文件描述符修复） ==="
+    log "=== 步骤25: 编译固件（修复文件描述符问题） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
@@ -5108,20 +5108,31 @@ workflow_step25_build_firmware() {
     cd $BUILD_DIR
     
     # ============================================
-    # 修复文件描述符问题 - 大幅增加系统限制
+    # 关键修复：大幅提升文件描述符限制
     # ============================================
-    log "🔧 修复文件描述符限制..."
+    log "🔧 关键修复：大幅提升文件描述符限制..."
     
     # 尝试设置极高的文件描述符限制
     ulimit -n 1048576 2>/dev/null || ulimit -n 65536 2>/dev/null || ulimit -n 16384 2>/dev/null || true
     
     # 显示当前限制
     local current_limit=$(ulimit -n)
-    log "  当前文件描述符限制: $current_limit"
+    log "  ✅ 当前文件描述符限制: $current_limit"
     
-    # 如果限制仍然太小，给出警告
-    if [ $current_limit -lt 1024 ]; then
-        log "⚠️ 警告: 文件描述符限制($current_limit)可能太小，编译可能失败"
+    # 如果限制仍然太小，给出警告并尝试其他方法
+    if [ $current_limit -lt 65536 ]; then
+        log "⚠️ 警告: 文件描述符限制($current_limit)可能太小"
+        log "🔧 尝试通过系统配置提升限制..."
+        
+        # 尝试修改系统限制
+        sudo bash -c "echo '* soft nofile 1048576' >> /etc/security/limits.conf" 2>/dev/null || true
+        sudo bash -c "echo '* hard nofile 1048576' >> /etc/security/limits.conf" 2>/dev/null || true
+        
+        # 重新设置
+        ulimit -n 1048576 2>/dev/null || ulimit -n 65536 2>/dev/null || true
+        
+        local new_limit=$(ulimit -n)
+        log "  ✅ 尝试后文件描述符限制: $new_limit"
     fi
     
     # 设置其他系统限制
@@ -5175,18 +5186,6 @@ workflow_step25_build_firmware() {
                     fi
                 fi
             done
-            
-            # 预防性移除已知问题补丁
-            if [ "$platform" = "ipq40xx" ] && [ "$kernel_ver" = "5.15" ]; then
-                local problem_patch="401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
-                if [ -f "$patch_dir/$problem_patch" ]; then
-                    log "🔧 预防性移除已知问题补丁: $platform/$kernel_ver/$problem_patch"
-                    mkdir -p "$BUILD_DIR/patches-backup"
-                    cp "$patch_dir/$problem_patch" "$BUILD_DIR/patches-backup/${platform}-${kernel_ver}-${problem_patch}.bak" 2>/dev/null || true
-                    rm -f "$patch_dir/$problem_patch"
-                    fixed_patches=$((fixed_patches + 1))
-                fi
-            fi
         done
         
         # 清理残留文件
@@ -5227,8 +5226,9 @@ workflow_step25_build_firmware() {
                 MAKE_JOBS=$HIGH_PERF_JOBS
                 echo "✅ 检测到高性能Runner (${HIGH_PERF_CORES}核+${HIGH_PERF_MEM}MB)"
             else
+                # 内存不足时减少并行数，避免文件描述符耗尽
                 MAKE_JOBS=$((HIGH_PERF_JOBS - 1))
-                echo "✅ 检测到标准Runner (${HIGH_PERF_CORES}核)"
+                echo "✅ 检测到标准Runner (${HIGH_PERF_CORES}核，内存不足，降低并行数)"
             fi
         elif [ $CPU_CORES -ge $STD_PERF_CORES ]; then
             if [ $TOTAL_MEM -ge $STD_PERF_MEM ]; then
@@ -5236,11 +5236,17 @@ workflow_step25_build_firmware() {
                 echo "✅ 检测到GitHub标准Runner (${STD_PERF_CORES}核${STD_PERF_MEM}MB)"
             else
                 MAKE_JOBS=$((STD_PERF_JOBS - 1))
-                echo "✅ 检测到${STD_PERF_CORES}核Runner"
+                echo "✅ 检测到${STD_PERF_CORES}核Runner，内存不足，降低并行数"
             fi
         else
             MAKE_JOBS=$LOW_PERF_JOBS
             echo "⚠️ 检测到低性能系统"
+        fi
+        
+        # 文件描述符限制较低时进一步降低并行数
+        if [ $current_limit -lt 65536 ] && [ $MAKE_JOBS -gt 2 ]; then
+            MAKE_JOBS=2
+            echo "⚠️ 文件描述符限制较低，强制降低并行数到 $MAKE_JOBS"
         fi
         
         echo "🎯 决定使用 $MAKE_JOBS 个并行任务"
@@ -5263,14 +5269,12 @@ workflow_step25_build_firmware() {
         
         START_TIME=$(date +%s)
         
-        # 使用 stdbuf 避免缓冲区问题，并将 stderr 也重定向到 stdout
-        # 同时使用脚本命令来模拟终端环境，避免文件描述符问题
+        # 使用 script 命令创建伪终端，避免文件描述符问题
         if command -v script >/dev/null 2>&1; then
-            # 使用 script 命令创建伪终端
             script -q -c "make -j$MAKE_JOBS V=s" /dev/null 2>&1 | tee build.log
             BUILD_EXIT_CODE=${PIPESTATUS[0]}
         else
-            # 如果没有 script 命令，使用 stdbuf
+            # 如果没有 script 命令，使用 stdbuf 并设置更大的缓冲区
             stdbuf -oL -eL make -j$MAKE_JOBS V=s 2>&1 | tee build.log
             BUILD_EXIT_CODE=${PIPESTATUS[0]}
         fi
@@ -5292,6 +5296,7 @@ workflow_step25_build_firmware() {
             # 检查是否是文件描述符问题
             if grep -q "Bad file descriptor" build.log; then
                 echo "⚠️ 检测到文件描述符问题，尝试修复..."
+                
                 # 进一步增加文件描述符限制
                 ulimit -n 1048576 2>/dev/null || ulimit -n 131072 2>/dev/null || ulimit -n 65536 2>/dev/null || true
                 echo "  新的文件描述符限制: $(ulimit -n)"
@@ -5300,6 +5305,16 @@ workflow_step25_build_firmware() {
                 echo "🔧 清理可能锁定的文件..."
                 find build_dir -name "*.lock" -o -name "*.tmp" 2>/dev/null | xargs -r rm -f
                 
+                # 清理临时文件
+                echo "🔧 清理临时文件..."
+                rm -rf /tmp/* 2>/dev/null || true
+                
+                # 降低并行数重试
+                if [ $MAKE_JOBS -gt 1 ]; then
+                    MAKE_JOBS=1
+                    echo "🔄 降低并行数到 1 后重试..."
+                fi
+                
                 retry_count=$((retry_count + 1))
                 if [ $retry_count -lt $max_retries ]; then
                     echo "🔄 修复后重试..."
@@ -5307,38 +5322,22 @@ workflow_step25_build_firmware() {
                 fi
             fi
             
-            # 检查是否是补丁失败导致的
-            if grep -q "Patch failed\|FAILED\|.rej" build.log; then
-                retry_count=$((retry_count + 1))
-                if [ $retry_count -lt $max_retries ]; then
-                    echo ""
-                    echo "🔄 检测到补丁失败，尝试修复后重试..."
-                    echo "========================================"
-                    
-                    # 再次检查并修复补丁
-                    check_and_fix_failed_patches
-                    
-                    # 清理编译目录
-                    make clean 2>/dev/null || true
-                else
-                    echo "❌ 已达到最大重试次数 ($max_retries)，编译失败"
-                    echo ""
-                    echo "🔍 最后50行错误日志:"
-                    tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED|Patch" -A 5 -B 5 || true
-                    echo ""
-                    echo "📝 完整日志请查看: build.log"
-                    exit $BUILD_EXIT_CODE
-                fi
-            else
-                # 如果不是补丁问题，直接退出
-                echo "❌ 编译失败且不是补丁问题，退出"
-                echo ""
-                echo "🔍 最后50行错误日志:"
-                tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || true
-                echo ""
-                echo "📝 完整日志请查看: build.log"
-                exit $BUILD_EXIT_CODE
+            # 检查是否是磁盘空间问题
+            local available_space=$(df . --output=avail | tail -1)
+            local available_mb=$((available_space / 1024))
+            if [ $available_mb -lt 1024 ]; then
+                echo "❌ 磁盘空间不足: ${available_mb}MB"
+                exit 1
             fi
+            
+            # 如果不是文件描述符问题，直接退出
+            echo "❌ 编译失败，退出"
+            echo ""
+            echo "🔍 最后50行错误日志:"
+            tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || true
+            echo ""
+            echo "📝 完整日志请查看: build.log"
+            exit $BUILD_EXIT_CODE
         fi
     done
     
@@ -5350,7 +5349,7 @@ workflow_step25_build_firmware() {
     echo ""
     echo "🔧 编译后检查..."
     sync
-    sleep 2  # 给文件系统一点时间
+    sleep 5  # 给文件系统足够时间
     
     # 检查并修复可能缺失的固件文件
     echo "🔍 检查固件文件..."
@@ -5371,7 +5370,7 @@ workflow_step25_build_firmware() {
                 local name=$(basename "$file")
                 echo "  📄 $name ($size)"
                 # 复制到目标目录
-                cp "$file" "$target_dir/" 2>/dev/null && echo "    已复制到 $target_dir/"
+                cp -v "$file" "$target_dir/" 2>/dev/null && echo "    已复制到 $target_dir/"
             fi
         done
     else
@@ -5388,26 +5387,11 @@ workflow_step25_build_firmware() {
                 local name=$(basename "$file")
                 echo "  📄 $name ($size)"
                 # 复制到目标目录
-                cp "$file" "$target_dir/" 2>/dev/null && echo "    已复制到 $target_dir/"
+                cp -v "$file" "$target_dir/" 2>/dev/null && echo "    已复制到 $target_dir/"
             fi
         done
     else
         echo "ℹ️ 未找到 factory 固件（可选）"
-    fi
-    
-    # 查找 initramfs 文件
-    local initramfs_files=$(find "$tmp_dir" -name "*initramfs*.bin" 2>/dev/null)
-    if [ -n "$initramfs_files" ]; then
-        echo "✅ 在临时目录找到 initramfs 固件:"
-        echo "$initramfs_files" | while read file; do
-            if [ -f "$file" ]; then
-                local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-                local name=$(basename "$file")
-                echo "  📄 $name ($size)"
-                # 复制到目标目录
-                cp "$file" "$target_dir/" 2>/dev/null && echo "    已复制到 $target_dir/"
-            fi
-        done
     fi
     
     # 最终确认
