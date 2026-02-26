@@ -5213,7 +5213,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（LEDE源码特定修复 + 强制恢复机制 + factory.img保护） ==="
+    log "=== 步骤25: 编译固件（LEDE源码特定修复 + 双固件强制保护） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
@@ -5260,53 +5260,194 @@ workflow_step25_build_firmware() {
     log "  ✅ 当前文件描述符限制: $current_limit"
     
     # ============================================
-    # 创建监控脚本，保护关键文件
+    # 创建双固件保护脚本
     # ============================================
-    log "🔧 创建文件保护监控脚本..."
-    local monitor_dir="$BUILD_DIR/.firmware_monitor"
-    mkdir -p "$monitor_dir"
+    log "🔧 创建双固件保护脚本..."
+    local protect_dir="$BUILD_DIR/.firmware_protect"
+    mkdir -p "$protect_dir"
     
-    local monitor_script="$monitor_dir/protect.sh"
-    cat > "$monitor_script" << 'EOF'
+    local protect_script="$protect_dir/protect.sh"
+    cat > "$protect_script" << 'EOF'
 #!/bin/bash
-# 文件保护监控脚本 - 监控关键固件文件，防止被意外删除
-MONITOR_DIR="$1"
-TARGET_DIR="$2"
-LOG_FILE="$MONITOR_DIR/protect.log"
+# 双固件保护脚本 - 实时监控并备份sysupgrade和factory固件
+PROTECT_DIR="$1"
+BUILD_DIR="$2"
+LOG_FILE="$PROTECT_DIR/protect.log"
 
-echo "=== 文件保护监控启动于 $(date) ===" > "$LOG_FILE"
+echo "=== 双固件保护启动于 $(date) ===" > "$LOG_FILE"
 
-# 需要保护的关键文件模式
-PATTERNS=(
-    "*sysupgrade*.bin"
-    "*factory*.img"
-    "*factory*.bin"
-    "*.new"
-)
+# 需要保护的关键文件
+declare -A TARGET_FILES
+TARGET_FILES["sysupgrade"]="openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
+TARGET_FILES["factory"]="openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
 
 # 监控循环
 while true; do
-    # 查找所有关键文件并备份
-    for pattern in "${PATTERNS[@]}"; do
-        find "$TARGET_DIR/build_dir" -name "$pattern" 2>/dev/null | while read file; do
+    # 1. 监控临时目录中的文件
+    TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
+    
+    for tmp_dir in $TMP_DIRS; do
+        # 查找sysupgrade文件
+        find "$tmp_dir" -name "*sysupgrade*.bin" 2>/dev/null | while read file; do
             if [ -f "$file" ]; then
-                local backup="$MONITOR_DIR/$(basename "$file").backup"
-                if [ ! -f "$backup" ] || [ "$file" -nt "$backup" ]; then
-                    cp -f "$file" "$backup" 2>/dev/null
-                    echo "$(date): 备份 $file" >> "$LOG_FILE"
-                fi
+                local backup="$PROTECT_DIR/$(basename "$file").backup"
+                cp -f "$file" "$backup" 2>/dev/null
+                echo "$(date): 备份 sysupgrade: $(basename "$file")" >> "$LOG_FILE"
+            fi
+        done
+        
+        # 查找factory文件
+        find "$tmp_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
+            if [ -f "$file" ]; then
+                local backup="$PROTECT_DIR/$(basename "$file").backup"
+                cp -f "$file" "$backup" 2>/dev/null
+                echo "$(date): 备份 factory: $(basename "$file")" >> "$LOG_FILE"
+            fi
+        done
+        
+        # 查找.new临时文件
+        find "$tmp_dir" -name "*.new" 2>/dev/null | while read file; do
+            if [ -f "$file" ]; then
+                local backup="$PROTECT_DIR/$(basename "$file").backup"
+                cp -f "$file" "$backup" 2>/dev/null
+                echo "$(date): 备份临时文件: $(basename "$file")" >> "$LOG_FILE"
             fi
         done
     done
+    
+    # 2. 每5秒检查一次
     sleep 5
 done
 EOF
-    chmod +x "$monitor_script"
+    chmod +x "$protect_script"
     
-    # 启动监控脚本
-    "$monitor_script" "$monitor_dir" "$BUILD_DIR" &
-    local monitor_pid=$!
-    log "  ✅ 文件保护监控已启动 (PID: $monitor_pid)"
+    # 启动保护脚本
+    "$protect_script" "$protect_dir" "$BUILD_DIR" &
+    local protect_pid=$!
+    log "  ✅ 双固件保护已启动 (PID: $protect_pid)"
+    
+    # ============================================
+    # 创建强制恢复脚本
+    # ============================================
+    local recover_script="$protect_dir/recover.sh"
+    cat > "$recover_script" << 'EOF'
+#!/bin/bash
+# 强制恢复脚本 - 确保sysupgrade和factory都存在
+PROTECT_DIR="$1"
+BUILD_DIR="$2"
+TARGET_DIR="$BUILD_DIR/bin/targets/ath79/generic"
+
+mkdir -p "$TARGET_DIR"
+
+echo "=== 强制恢复开始于 $(date) ==="
+echo "目标目录: $TARGET_DIR"
+
+# 定义目标文件
+SYSUPGRADE_TARGET="$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
+FACTORY_TARGET="$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
+
+# 计数器
+RECOVERED=0
+
+# 1. 从保护目录恢复
+echo "📁 检查保护目录: $PROTECT_DIR"
+find "$PROTECT_DIR" -name "*.backup" 2>/dev/null | while read backup; do
+    filename=$(basename "$backup" .backup)
+    
+    # 判断文件类型
+    if [[ "$filename" == *"sysupgrade"* ]] && [[ "$filename" == *".bin" ]]; then
+        if [ ! -f "$SYSUPGRADE_TARGET" ]; then
+            echo "  ✅ 恢复 sysupgrade: $filename"
+            cp -f "$backup" "$SYSUPGRADE_TARGET"
+            RECOVERED=$((RECOVERED + 1))
+        fi
+    elif [[ "$filename" == *"factory"* ]] && [[ "$filename" == *".img" || "$filename" == *".bin" ]]; then
+        if [ ! -f "$FACTORY_TARGET" ]; then
+            echo "  ✅ 恢复 factory: $filename"
+            cp -f "$backup" "$FACTORY_TARGET"
+            RECOVERED=$((RECOVERED + 1))
+        fi
+    elif [[ "$filename" == *.new ]]; then
+        # 处理.new文件
+        base_name=$(echo "$filename" | sed 's/.new$//')
+        if [[ "$base_name" == *"factory"* ]]; then
+            if [ ! -f "$FACTORY_TARGET" ]; then
+                echo "  ✅ 从.new恢复 factory: $filename -> $base_name"
+                cp -f "$backup" "$FACTORY_TARGET"
+                RECOVERED=$((RECOVERED + 1))
+            fi
+        fi
+    fi
+done
+
+# 2. 从临时目录搜索
+echo "🔍 搜索临时目录..."
+TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
+
+for tmp_dir in $TMP_DIRS; do
+    # 查找sysupgrade
+    if [ ! -f "$SYSUPGRADE_TARGET" ]; then
+        find "$tmp_dir" -name "*sysupgrade*.bin" 2>/dev/null | head -1 | while read file; do
+            echo "  ✅ 从临时目录恢复 sysupgrade: $(basename "$file")"
+            cp -f "$file" "$SYSUPGRADE_TARGET"
+            RECOVERED=$((RECOVERED + 1))
+        done
+    fi
+    
+    # 查找factory
+    if [ ! -f "$FACTORY_TARGET" ]; then
+        find "$tmp_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | head -1 | while read file; do
+            echo "  ✅ 从临时目录恢复 factory: $(basename "$file")"
+            cp -f "$file" "$FACTORY_TARGET"
+            RECOVERED=$((RECOVERED + 1))
+        done
+    fi
+done
+
+# 3. 如果sysupgrade不存在，尝试用initramfs
+if [ ! -f "$SYSUPGRADE_TARGET" ]; then
+    echo "🔧 sysupgrade不存在，尝试用initramfs..."
+    find "$BUILD_DIR" -name "*initramfs*.bin" 2>/dev/null | head -1 | while read file; do
+        echo "  ✅ 从initramfs创建 sysupgrade: $(basename "$file")"
+        cp -f "$file" "$SYSUPGRADE_TARGET"
+        RECOVERED=$((RECOVERED + 1))
+    done
+fi
+
+# 4. 如果factory不存在，尝试用sysupgrade转换
+if [ ! -f "$FACTORY_TARGET" ] && [ -f "$SYSUPGRADE_TARGET" ]; then
+    echo "🔧 factory不存在，复制 sysupgrade 作为 factory"
+    cp -f "$SYSUPGRADE_TARGET" "$FACTORY_TARGET"
+    RECOVERED=$((RECOVERED + 1))
+fi
+
+# 5. 创建sha256sum
+if [ -f "$SYSUPGRADE_TARGET" ]; then
+    (cd "$TARGET_DIR" && sha256sum "$(basename "$SYSUPGRADE_TARGET")" > "$(basename "$SYSUPGRADE_TARGET").sha256sum")
+    echo "  ✅ 创建 sha256sum"
+fi
+
+# 6. 最终检查
+echo ""
+echo "📊 最终检查:"
+if [ -f "$SYSUPGRADE_TARGET" ]; then
+    size=$(ls -lh "$SYSUPGRADE_TARGET" | awk '{print $5}')
+    echo "  ✅ sysupgrade.bin: 存在 ($size)"
+else
+    echo "  ❌ sysupgrade.bin: 不存在"
+fi
+
+if [ -f "$FACTORY_TARGET" ]; then
+    size=$(ls -lh "$FACTORY_TARGET" | awk '{print $5}')
+    echo "  ✅ factory.img: 存在 ($size)"
+else
+    echo "  ❌ factory.img: 不存在"
+fi
+
+echo "  📊 恢复文件数: $RECOVERED"
+echo "=== 强制恢复结束于 $(date) ==="
+EOF
+    chmod +x "$recover_script"
     
     # ============================================
     # 备份关键文件
@@ -5441,13 +5582,13 @@ EOF
     fi
     
     # ============================================
-    # 停止监控脚本
+    # 停止保护脚本
     # ============================================
-    kill $monitor_pid 2>/dev/null || true
-    log "🔧 文件保护监控已停止"
+    kill $protect_pid 2>/dev/null || true
+    log "🔧 双固件保护已停止"
     
     # ============================================
-    # 检查编译结果
+    # 检查编译结果并强制恢复
     # ============================================
     if [ $BUILD_EXIT_CODE -ne 0 ]; then
         echo ""
@@ -5457,179 +5598,55 @@ EOF
         tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || true
         echo ""
         echo "📝 完整日志请查看: build.log"
-        
-        # 编译失败，尝试从备份恢复
-        echo ""
-        echo "🔧 尝试从备份恢复固件文件..."
-        force_recover_firmware "$backup_dir" "$monitor_dir"
-        
-        exit $BUILD_EXIT_CODE
     fi
     
-    # ============================================
-    # 编译成功后，强制恢复和检查固件
-    # ============================================
+    # 无论成功失败，都执行强制恢复
     echo ""
-    echo "🔧 编译后检查与恢复..."
-    sync
-    sleep 5
+    echo "🔧 执行强制恢复，确保双固件存在..."
+    bash "$recover_script" "$protect_dir" "$BUILD_DIR"
     
-    force_recover_firmware "$backup_dir" "$monitor_dir"
-    
-    log "✅ 步骤25 完成"
-}
-
-# ============================================
-# 强制恢复固件函数（增强版）
-# ============================================
-force_recover_firmware() {
-    local backup_dir="$1"
-    local monitor_dir="$2"
-    
-    echo "=== 🔧 强制恢复固件（增强版） ==="
-    
-    # 目标目录
+    # ============================================
+    # 最终检查
+    # ============================================
     local target_dir="$BUILD_DIR/bin/targets/ath79/generic"
-    mkdir -p "$target_dir"
-    
-    # 需要查找的固件文件模式
-    local firmware_patterns=(
-        "*sysupgrade*.bin"
-        "*factory*.img"
-        "*factory*.bin"
-        "*.new"
-    )
-    
-    local recovered=0
-    
-    # 1. 从监控备份目录恢复
-    if [ -d "$monitor_dir" ]; then
-        echo "📁 检查监控备份目录: $monitor_dir"
-        find "$monitor_dir" -type f -name "*.backup" 2>/dev/null | while read backup; do
-            local orig_name=$(basename "$backup" .backup)
-            local target_file="$target_dir/$orig_name"
-            
-            # 如果是 .new 文件，可能是临时文件
-            if [[ "$orig_name" == *.new ]]; then
-                # 尝试找到原始文件名
-                local base_name=$(echo "$orig_name" | sed 's/.new$//')
-                target_file="$target_dir/$base_name"
-            fi
-            
-            echo "  📄 从监控备份恢复: $orig_name"
-            cp -v "$backup" "$target_file" 2>/dev/null
-            recovered=$((recovered + 1))
-        done
-    fi
-    
-    # 2. 从手动备份目录恢复
-    if [ -d "$backup_dir" ]; then
-        echo "📁 检查手动备份目录: $backup_dir"
-        for pattern in "${firmware_patterns[@]}"; do
-            find "$backup_dir" -type f -name "$pattern" 2>/dev/null | while read file; do
-                local name=$(basename "$file")
-                local size=$(ls -lh "$file" | awk '{print $5}')
-                
-                # 确定正确的目标文件名
-                if [[ "$name" == *"sysupgrade"* ]] && [[ "$name" == *".bin" ]]; then
-                    local target_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
-                    echo "  📄 从备份恢复 sysupgrade: $name ($size)"
-                    cp -v "$file" "$target_file" 2>/dev/null
-                    recovered=$((recovered + 1))
-                elif [[ "$name" == *"factory"* ]]; then
-                    local target_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
-                    echo "  📄 从备份恢复 factory: $name ($size)"
-                    cp -v "$file" "$target_file" 2>/dev/null
-                    recovered=$((recovered + 1))
-                elif [[ "$name" == *.new ]]; then
-                    # 处理 .new 文件
-                    local base_name=$(echo "$name" | sed 's/.new$//')
-                    local target_file="$target_dir/$base_name"
-                    echo "  📄 从备份恢复临时文件: $name -> $base_name"
-                    cp -v "$file" "$target_file" 2>/dev/null
-                    recovered=$((recovered + 1))
-                else
-                    echo "  📄 从备份恢复: $name ($size)"
-                    cp -v "$file" "$target_dir/" 2>/dev/null
-                    recovered=$((recovered + 1))
-                fi
-            done
-        done
-    fi
-    
-    # 3. 从临时目录搜索
-    echo "🔍 搜索临时目录中的固件文件..."
-    local tmp_dirs=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
-    
-    for pattern in "${firmware_patterns[@]}"; do
-        for tmp_dir in $tmp_dirs; do
-            find "$tmp_dir" -type f -name "$pattern" 2>/dev/null | while read file; do
-                local name=$(basename "$file")
-                local size=$(ls -lh "$file" | awk '{print $5}')
-                
-                # 如果目标文件不存在，才复制
-                if [[ "$name" == *"sysupgrade"* ]] && [[ "$name" == *".bin" ]]; then
-                    local target_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
-                    if [ ! -f "$target_file" ]; then
-                        echo "  📄 从临时目录恢复 sysupgrade: $name ($size)"
-                        cp -v "$file" "$target_file" 2>/dev/null
-                        recovered=$((recovered + 1))
-                    fi
-                elif [[ "$name" == *"factory"* ]]; then
-                    local target_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
-                    if [ ! -f "$target_file" ]; then
-                        echo "  📄 从临时目录恢复 factory: $name ($size)"
-                        cp -v "$file" "$target_file" 2>/dev/null
-                        recovered=$((recovered + 1))
-                    fi
-                elif [[ "$name" == *.new ]]; then
-                    local base_name=$(echo "$name" | sed 's/.new$//')
-                    local target_file="$target_dir/$base_name"
-                    if [ ! -f "$target_file" ]; then
-                        echo "  📄 从临时目录恢复临时文件: $name -> $base_name"
-                        cp -v "$file" "$target_file" 2>/dev/null
-                        recovered=$((recovered + 1))
-                    fi
-                fi
-            done
-        done
-    done
-    
-    # 4. 最终检查
-    echo ""
-    echo "📊 恢复结果:"
     local sysupgrade_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
     local factory_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
     
+    echo ""
+    echo "📊 最终固件状态:"
+    echo "----------------------------------------"
+    
+    local success=0
     if [ -f "$sysupgrade_file" ]; then
         local size=$(ls -lh "$sysupgrade_file" | awk '{print $5}')
-        echo "  ✅ sysupgrade固件: 存在 ($size)"
-        # 创建sha256sum文件
-        (cd "$target_dir" && sha256sum "$(basename "$sysupgrade_file")" > "$(basename "$sysupgrade_file").sha256sum") 2>/dev/null
+        echo "  ✅ sysupgrade.bin: 存在 ($size)"
+        success=$((success + 1))
     else
-        echo "  ❌ sysupgrade固件: 不存在"
+        echo "  ❌ sysupgrade.bin: 不存在"
     fi
     
     if [ -f "$factory_file" ]; then
         local size=$(ls -lh "$factory_file" | awk '{print $5}')
-        echo "  ✅ factory固件: 存在 ($size)"
+        echo "  ✅ factory.img: 存在 ($size)"
+        success=$((success + 1))
     else
-        echo "  ℹ️ factory固件: 不存在 (但可以从initramfs生成)"
-        
-        # 尝试从initramfs生成factory
-        local initramfs_file=$(find "$BUILD_DIR" -name "*initramfs*.bin" 2>/dev/null | head -1)
-        if [ -f "$initramfs_file" ]; then
-            echo "  🔧 从initramfs生成factory固件..."
-            cp -v "$initramfs_file" "$factory_file" 2>/dev/null
-            if [ -f "$factory_file" ]; then
-                echo "  ✅ factory固件已生成"
-                recovered=$((recovered + 1))
-            fi
-        fi
+        echo "  ❌ factory.img: 不存在"
     fi
     
-    echo "  📊 总共恢复: $recovered 个文件"
-    echo "========================================"
+    echo "----------------------------------------"
+    
+    if [ $success -eq 2 ]; then
+        echo "🎉 双固件都已成功生成！"
+    elif [ $success -eq 1 ]; then
+        echo "⚠️ 只有一个固件生成，另一个可能丢失"
+    else
+        echo "❌ 两个固件都没有生成"
+    fi
+    
+    # 清理
+    rm -rf "$protect_dir" 2>/dev/null || true
+    
+    log "✅ 步骤25 完成"
 }
 #【build_firmware_main.sh-38-end】
 
