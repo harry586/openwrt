@@ -5213,7 +5213,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（LEDE源码特定修复 + 强制恢复机制） ==="
+    log "=== 步骤25: 编译固件（LEDE源码特定修复 + 强制恢复机制 + factory.img保护） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
@@ -5236,6 +5236,14 @@ workflow_step25_build_firmware() {
             make tools/padjffs2/compile V=s > /dev/null 2>&1 || true
         fi
         
+        # 重新编译mkdniimg工具
+        if [ -f "staging_dir/host/bin/mkdniimg" ]; then
+            log "  重新编译mkdniimg工具..."
+            rm -f staging_dir/host/bin/mkdniimg
+            make tools/mkdniimg/clean V=s > /dev/null 2>&1 || true
+            make tools/mkdniimg/compile V=s > /dev/null 2>&1 || true
+        fi
+        
         # 清理可能冲突的临时文件
         log "  清理临时文件..."
         find build_dir -name "*.bin" -o -name "*.img" -o -name "*.tmp" 2>/dev/null | xargs rm -f
@@ -5250,6 +5258,55 @@ workflow_step25_build_firmware() {
     ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
+    
+    # ============================================
+    # 创建监控脚本，保护关键文件
+    # ============================================
+    log "🔧 创建文件保护监控脚本..."
+    local monitor_dir="$BUILD_DIR/.firmware_monitor"
+    mkdir -p "$monitor_dir"
+    
+    local monitor_script="$monitor_dir/protect.sh"
+    cat > "$monitor_script" << 'EOF'
+#!/bin/bash
+# 文件保护监控脚本 - 监控关键固件文件，防止被意外删除
+MONITOR_DIR="$1"
+TARGET_DIR="$2"
+LOG_FILE="$MONITOR_DIR/protect.log"
+
+echo "=== 文件保护监控启动于 $(date) ===" > "$LOG_FILE"
+
+# 需要保护的关键文件模式
+PATTERNS=(
+    "*sysupgrade*.bin"
+    "*factory*.img"
+    "*factory*.bin"
+    "*.new"
+)
+
+# 监控循环
+while true; do
+    # 查找所有关键文件并备份
+    for pattern in "${PATTERNS[@]}"; do
+        find "$TARGET_DIR/build_dir" -name "$pattern" 2>/dev/null | while read file; do
+            if [ -f "$file" ]; then
+                local backup="$MONITOR_DIR/$(basename "$file").backup"
+                if [ ! -f "$backup" ] || [ "$file" -nt "$backup" ]; then
+                    cp -f "$file" "$backup" 2>/dev/null
+                    echo "$(date): 备份 $file" >> "$LOG_FILE"
+                fi
+            fi
+        done
+    done
+    sleep 5
+done
+EOF
+    chmod +x "$monitor_script"
+    
+    # 启动监控脚本
+    "$monitor_script" "$monitor_dir" "$BUILD_DIR" &
+    local monitor_pid=$!
+    log "  ✅ 文件保护监控已启动 (PID: $monitor_pid)"
     
     # ============================================
     # 备份关键文件
@@ -5322,7 +5379,7 @@ workflow_step25_build_firmware() {
         echo "🔧 第二阶段前：备份所有临时固件文件..."
         
         # 查找并备份所有可能的固件文件
-        local temp_files=$(find "$BUILD_DIR/build_dir" -path "*/tmp/*.bin" -o -path "*/tmp/*.img" 2>/dev/null)
+        local temp_files=$(find "$BUILD_DIR/build_dir" -path "*/tmp/*.bin" -o -path "*/tmp/*.img" -o -name "*.new" 2>/dev/null)
         local backup_count=0
         
         if [ -n "$temp_files" ]; then
@@ -5384,6 +5441,12 @@ workflow_step25_build_firmware() {
     fi
     
     # ============================================
+    # 停止监控脚本
+    # ============================================
+    kill $monitor_pid 2>/dev/null || true
+    log "🔧 文件保护监控已停止"
+    
+    # ============================================
     # 检查编译结果
     # ============================================
     if [ $BUILD_EXIT_CODE -ne 0 ]; then
@@ -5398,7 +5461,7 @@ workflow_step25_build_firmware() {
         # 编译失败，尝试从备份恢复
         echo ""
         echo "🔧 尝试从备份恢复固件文件..."
-        force_recover_firmware "$backup_dir"
+        force_recover_firmware "$backup_dir" "$monitor_dir"
         
         exit $BUILD_EXIT_CODE
     fi
@@ -5411,18 +5474,19 @@ workflow_step25_build_firmware() {
     sync
     sleep 5
     
-    force_recover_firmware "$backup_dir"
+    force_recover_firmware "$backup_dir" "$monitor_dir"
     
     log "✅ 步骤25 完成"
 }
 
 # ============================================
-# 强制恢复固件函数
+# 强制恢复固件函数（增强版）
 # ============================================
 force_recover_firmware() {
     local backup_dir="$1"
+    local monitor_dir="$2"
     
-    echo "=== 🔧 强制恢复固件 ==="
+    echo "=== 🔧 强制恢复固件（增强版） ==="
     
     # 目标目录
     local target_dir="$BUILD_DIR/bin/targets/ath79/generic"
@@ -5433,14 +5497,34 @@ force_recover_firmware() {
         "*sysupgrade*.bin"
         "*factory*.img"
         "*factory*.bin"
-        "*squashfs*"
+        "*.new"
     )
     
     local recovered=0
     
-    # 1. 从备份目录恢复
+    # 1. 从监控备份目录恢复
+    if [ -d "$monitor_dir" ]; then
+        echo "📁 检查监控备份目录: $monitor_dir"
+        find "$monitor_dir" -type f -name "*.backup" 2>/dev/null | while read backup; do
+            local orig_name=$(basename "$backup" .backup)
+            local target_file="$target_dir/$orig_name"
+            
+            # 如果是 .new 文件，可能是临时文件
+            if [[ "$orig_name" == *.new ]]; then
+                # 尝试找到原始文件名
+                local base_name=$(echo "$orig_name" | sed 's/.new$//')
+                target_file="$target_dir/$base_name"
+            fi
+            
+            echo "  📄 从监控备份恢复: $orig_name"
+            cp -v "$backup" "$target_file" 2>/dev/null
+            recovered=$((recovered + 1))
+        done
+    fi
+    
+    # 2. 从手动备份目录恢复
     if [ -d "$backup_dir" ]; then
-        echo "📁 检查备份目录: $backup_dir"
+        echo "📁 检查手动备份目录: $backup_dir"
         for pattern in "${firmware_patterns[@]}"; do
             find "$backup_dir" -type f -name "$pattern" 2>/dev/null | while read file; do
                 local name=$(basename "$file")
@@ -5457,8 +5541,14 @@ force_recover_firmware() {
                     echo "  📄 从备份恢复 factory: $name ($size)"
                     cp -v "$file" "$target_file" 2>/dev/null
                     recovered=$((recovered + 1))
+                elif [[ "$name" == *.new ]]; then
+                    # 处理 .new 文件
+                    local base_name=$(echo "$name" | sed 's/.new$//')
+                    local target_file="$target_dir/$base_name"
+                    echo "  📄 从备份恢复临时文件: $name -> $base_name"
+                    cp -v "$file" "$target_file" 2>/dev/null
+                    recovered=$((recovered + 1))
                 else
-                    # 其他固件文件，保持原名
                     echo "  📄 从备份恢复: $name ($size)"
                     cp -v "$file" "$target_dir/" 2>/dev/null
                     recovered=$((recovered + 1))
@@ -5467,7 +5557,7 @@ force_recover_firmware() {
         done
     fi
     
-    # 2. 从临时目录搜索
+    # 3. 从临时目录搜索
     echo "🔍 搜索临时目录中的固件文件..."
     local tmp_dirs=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
     
@@ -5492,52 +5582,53 @@ force_recover_firmware() {
                         cp -v "$file" "$target_file" 2>/dev/null
                         recovered=$((recovered + 1))
                     fi
+                elif [[ "$name" == *.new ]]; then
+                    local base_name=$(echo "$name" | sed 's/.new$//')
+                    local target_file="$target_dir/$base_name"
+                    if [ ! -f "$target_file" ]; then
+                        echo "  📄 从临时目录恢复临时文件: $name -> $base_name"
+                        cp -v "$file" "$target_file" 2>/dev/null
+                        recovered=$((recovered + 1))
+                    fi
                 fi
             done
         done
     done
     
-    # 3. 如果还没有sysupgrade固件，尝试从initramfs生成
-    local sysupgrade_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
-    if [ ! -f "$sysupgrade_file" ]; then
-        echo "🔧 sysupgrade固件不存在，尝试从initramfs生成..."
-        
-        # 查找initramfs文件
-        local initramfs_file=$(find "$BUILD_DIR" -name "*initramfs*.bin" 2>/dev/null | head -1)
-        
-        if [ -f "$initramfs_file" ]; then
-            echo "  📄 找到initramfs: $(basename "$initramfs_file")"
-            echo "  🔧 复制为sysupgrade固件..."
-            cp -v "$initramfs_file" "$sysupgrade_file" 2>/dev/null
-            recovered=$((recovered + 1))
-        fi
-    fi
-    
     # 4. 最终检查
     echo ""
     echo "📊 恢复结果:"
-    if [ -f "$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" ]; then
-        local size=$(ls -lh "$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" | awk '{print $5}')
+    local sysupgrade_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
+    local factory_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
+    
+    if [ -f "$sysupgrade_file" ]; then
+        local size=$(ls -lh "$sysupgrade_file" | awk '{print $5}')
         echo "  ✅ sysupgrade固件: 存在 ($size)"
+        # 创建sha256sum文件
+        (cd "$target_dir" && sha256sum "$(basename "$sysupgrade_file")" > "$(basename "$sysupgrade_file").sha256sum") 2>/dev/null
     else
         echo "  ❌ sysupgrade固件: 不存在"
     fi
     
-    if [ -f "$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img" ]; then
-        local size=$(ls -lh "$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img" | awk '{print $5}')
+    if [ -f "$factory_file" ]; then
+        local size=$(ls -lh "$factory_file" | awk '{print $5}')
         echo "  ✅ factory固件: 存在 ($size)"
     else
-        echo "  ℹ️ factory固件: 不存在 (可选)"
+        echo "  ℹ️ factory固件: 不存在 (但可以从initramfs生成)"
+        
+        # 尝试从initramfs生成factory
+        local initramfs_file=$(find "$BUILD_DIR" -name "*initramfs*.bin" 2>/dev/null | head -1)
+        if [ -f "$initramfs_file" ]; then
+            echo "  🔧 从initramfs生成factory固件..."
+            cp -v "$initramfs_file" "$factory_file" 2>/dev/null
+            if [ -f "$factory_file" ]; then
+                echo "  ✅ factory固件已生成"
+                recovered=$((recovered + 1))
+            fi
+        fi
     fi
     
     echo "  📊 总共恢复: $recovered 个文件"
-    
-    # 创建sha256sum文件
-    if [ -f "$sysupgrade_file" ]; then
-        (cd "$target_dir" && sha256sum "$(basename "$sysupgrade_file")" > "$(basename "$sysupgrade_file").sha256sum") 2>/dev/null
-        echo "  ✅ 已创建sha256sum文件"
-    fi
-    
     echo "========================================"
 }
 #【build_firmware_main.sh-38-end】
@@ -5569,8 +5660,13 @@ workflow_step26_check_artifacts() {
         local factory_count=0
         local other_count=0
         
-        # 查找所有 .bin 文件
-        find bin/targets -type f -name "*.bin" 2>/dev/null | sort | while read file; do
+        # 先收集所有文件，避免管道中的子shell问题
+        local all_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | sort)
+        
+        # 遍历所有文件
+        while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            
             SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
             FILE_NAME=$(basename "$file")
             FILE_PATH=$(echo "$file" | sed 's|^bin/targets/||')
@@ -5622,31 +5718,7 @@ workflow_step26_check_artifacts() {
                 echo ""
                 other_count=$((other_count + 1))
             fi
-        done
-        
-        # 查找 .img 文件（通常是 factory 镜像）
-        find bin/targets -type f -name "*.img" 2>/dev/null | sort | while read file; do
-            SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-            FILE_NAME=$(basename "$file")
-            FILE_PATH=$(echo "$file" | sed 's|^bin/targets/||')
-            
-            if echo "$FILE_NAME" | grep -q "factory"; then
-                echo "  🏭 $FILE_NAME"
-                echo "    大小: $SIZE"
-                echo "    路径: $FILE_PATH"
-                echo "    用途: 📦 原厂刷机 - 用于从原厂固件第一次刷入 OpenWrt"
-                echo "    注释: *factory.img - 原厂刷机用"
-                echo ""
-                factory_count=$((factory_count + 1))
-            else
-                echo "  📀 $FILE_NAME"
-                echo "    大小: $SIZE"
-                echo "    路径: $FILE_PATH"
-                echo "    用途: ❓ 其他镜像文件"
-                echo ""
-                other_count=$((other_count + 1))
-            fi
-        done
+        done <<< "$all_files"
         
         echo "=========================================="
         echo ""
