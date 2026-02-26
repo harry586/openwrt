@@ -3771,6 +3771,7 @@ workflow_step14_pre_build_space_check() {
     set -e
     trap 'echo "❌ 步骤14 失败，退出代码: $?"; exit 1' ERR
     
+    # 调用空间检查函数
     pre_build_space_check
     
     if [ $? -ne 0 ]; then
@@ -3779,6 +3780,45 @@ workflow_step14_pre_build_space_check() {
     fi
     
     log "✅ 步骤14 完成"
+}
+
+# ============================================
+# 编译前空间检查函数
+# ============================================
+pre_build_space_check() {
+    log "=== 编译前空间检查 ==="
+    
+    echo "当前目录: $(pwd)"
+    echo "构建目录: $BUILD_DIR"
+    
+    echo "=== 磁盘使用情况 ==="
+    df -h
+    
+    local build_dir_usage=$(du -sh $BUILD_DIR 2>/dev/null | awk '{print $1}') || echo "无法获取构建目录大小"
+    echo "构建目录大小: $build_dir_usage"
+    
+    local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1 || df / --output=avail | tail -1)
+    local available_gb=$((available_space / 1024 / 1024))
+    echo "/mnt 可用空间: ${available_gb}G"
+    
+    local root_available_space=$(df / --output=avail | tail -1)
+    local root_available_gb=$((root_available_space / 1024 / 1024))
+    echo "/ 可用空间: ${root_available_gb}G"
+    
+    echo "=== 内存使用情况 ==="
+    free -h
+    
+    echo "=== CPU信息 ==="
+    echo "CPU核心数: $(nproc)"
+    
+    local estimated_space=15
+    if [ $available_gb -lt $estimated_space ]; then
+        log "⚠️ 警告: 可用空间(${available_gb}G)可能不足，建议至少${estimated_space}G"
+    else
+        log "✅ 磁盘空间充足: ${available_gb}G 可用"
+    fi
+    
+    log "✅ 空间检查完成"
 }
 #【build_firmware_main.sh-30-end】
 
