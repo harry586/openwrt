@@ -5213,7 +5213,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（修复文件描述符问题） ==="
+    log "=== 步骤25: 编译固件（激进修复文件描述符问题） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
@@ -5221,71 +5221,29 @@ workflow_step25_build_firmware() {
     cd $BUILD_DIR
     
     # ============================================
-    # 关键修复：动态预分配文件描述符 + 分段编译
+    # 激进修复：完全避免管道和重定向 + 预分配 + 单线程生成固件
     # ============================================
-    log "🔧 关键修复：动态预分配文件描述符并提升限制..."
+    log "🔧 激进修复：完全避免管道和重定向问题..."
     
     # 1. 设置极高的文件描述符限制
     ulimit -n 1048576 2>/dev/null || ulimit -n 65536 2>/dev/null || ulimit -n 16384 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
-    # 2. 获取系统资源信息，动态计算需要预分配的文件描述符数量
-    local cpu_cores=$(nproc)
-    local total_mem=$(free -m | awk '/^Mem:/{print $2}')
-    local recommended_fds=0
-    
-    # 根据CPU核心数和内存大小动态计算
-    if [ $cpu_cores -ge 8 ] && [ $total_mem -ge 8192 ]; then
-        # 高性能系统（8核+8GB+）
-        recommended_fds=500
-    elif [ $cpu_cores -ge 4 ] && [ $total_mem -ge 4096 ]; then
-        # 中高性能系统（4核+4GB+）
-        recommended_fds=300
-    elif [ $cpu_cores -ge 2 ] && [ $total_mem -ge 2048 ]; then
-        # 标准系统（2核+2GB+）
-        recommended_fds=200
-    else
-        # 低性能系统
-        recommended_fds=100
-    fi
-    
-    # 根据并行优化选项调整
-    if [ "$enable_parallel" = "true" ]; then
-        # 启用并行时，需要更多文件描述符
-        recommended_fds=$((recommended_fds * 2))
-    fi
-    
-    # 确保不超过系统限制
-    if [ $recommended_fds -gt $((current_limit - 100)) ]; then
-        recommended_fds=$((current_limit - 100))
-    fi
-    
-    # 确保最小值
-    if [ $recommended_fds -lt 50 ]; then
-        recommended_fds=50
-    fi
-    
-    log "🔧 系统资源: CPU=${cpu_cores}核, 内存=${total_mem}MB"
-    log "🔧 动态计算: 需要预分配 ${recommended_fds} 个文件描述符"
-    
-    # 3. 预分配动态计算出的文件描述符数量
-    log "🔧 开始预分配文件描述符..."
+    # 2. 预分配1000个文件描述符（确保绝对够用）
+    log "🔧 预分配1000个文件描述符..."
     local tmp_fds=$(mktemp -d)
     local fd_pool=()
     local allocated=0
     
-    # 从10开始分配，避免使用低编号的描述符
-    local start_fd=10
-    local end_fd=$((start_fd + recommended_fds))
-    
-    for fd in $(seq $start_fd $end_fd); do
+    # 预分配1000个文件描述符（10-1010）
+    for fd in {10..1010}; do
         if exec {fd}> "$tmp_fds/fd_$fd" 2>/dev/null; then
             fd_pool+=($fd)
             allocated=$((allocated + 1))
             
-            # 每50个显示一次进度
-            if [ $((allocated % 50)) -eq 0 ]; then
+            # 每100个显示一次进度
+            if [ $((allocated % 100)) -eq 0 ]; then
                 echo "   已分配 $allocated 个文件描述符..."
             fi
         fi
@@ -5293,68 +5251,38 @@ workflow_step25_build_firmware() {
     
     log "  ✅ 成功预分配了 ${#fd_pool[@]} 个文件描述符"
     
-    # 4. 保持描述符活跃
-    log "🔧 保持文件描述符活跃..."
-    for fd in "${fd_pool[@]}"; do
-        echo "reserved" >&$fd 2>/dev/null || true
-    done
-    
-    # 5. 创建监控脚本，在编译过程中定期检查并补充文件描述符
-    local monitor_script="$tmp_fds/monitor.sh"
-    cat > "$monitor_script" << 'EOF'
+    # 3. 创建包装脚本来运行make，避免直接使用管道
+    local wrapper_script="$tmp_fds/build_wrapper.sh"
+    cat > "$wrapper_script" << 'EOF'
 #!/bin/bash
-# 文件描述符监控脚本
+# 编译包装脚本 - 完全避免管道和重定向
 BUILD_DIR="$1"
-TMP_DIR="$2"
-POOL_FILE="$TMP_DIR/pool.txt"
-LOG_FILE="$TMP_DIR/monitor.log"
+LOG_FILE="$2"
+PHASE="$3"
 
-# 读取已分配的文件描述符
-if [ -f "$POOL_FILE" ]; then
-    read -a FD_POOL < "$POOL_FILE"
+cd "$BUILD_DIR" || exit 1
+
+echo "=== $PHASE 开始于 $(date) ===" > "$LOG_FILE"
+
+# 直接运行make，输出到日志文件（不使用管道）
+if [ "$PHASE" = "第一阶段" ]; then
+    make -j${MAKE_JOBS} V=s >> "$LOG_FILE" 2>&1
+    exit_code=$?
+elif [ "$PHASE" = "第二阶段" ]; then
+    make -j1 V=s >> "$LOG_FILE" 2>&1
+    exit_code=$?
+else
+    make -j1 V=s >> "$LOG_FILE" 2>&1
+    exit_code=$?
 fi
 
-# 获取当前进程的PID
-CURRENT_PID=$$
-
-# 监控循环
-while true; do
-    # 获取当前打开的文件描述符数量
-    if [ -d "/proc/$CURRENT_PID/fd" ]; then
-        OPEN_FDS=$(ls -la /proc/$CURRENT_PID/fd 2>/dev/null | grep -c "->" || echo "0")
-        
-        # 如果打开的描述符接近限制，补充新的
-        if [ $OPEN_FDS -gt $((ULIMIT_N - 50)) ]; then
-            echo "$(date): 警告: 文件描述符使用率过高 ($OPEN_FDS/$ULIMIT_N)" >> "$LOG_FILE"
-            
-            # 补充10个新的描述符
-            for fd in {500..600}; do
-                if ! [[ " ${FD_POOL[@]} " =~ " ${fd} " ]]; then
-                    if exec {fd}> "$TMP_DIR/fd_$fd" 2>/dev/null; then
-                        FD_POOL+=($fd)
-                        echo "$fd" >> "$POOL_FILE"
-                        echo "$(date): 补充文件描述符 $fd" >> "$LOG_FILE"
-                        break
-                    fi
-                fi
-            done
-        fi
-    fi
-    sleep 30
-done
+echo "=== $PHASE 结束于 $(date)，退出代码: $exit_code ===" >> "$LOG_FILE"
+echo "$exit_code" > "/tmp/build_phase_exit_$$.txt"
+exit $exit_code
 EOF
-    chmod +x "$monitor_script"
+    chmod +x "$wrapper_script"
     
-    # 保存文件描述符池到文件
-    echo "${fd_pool[@]}" > "$tmp_fds/pool.txt"
-    echo "$current_limit" > "$tmp_fds/ulimit.txt"
-    
-    # 6. 在后台启动监控脚本
-    nohup "$monitor_script" "$BUILD_DIR" "$tmp_fds" > /dev/null 2>&1 &
-    local monitor_pid=$!
-    log "  ✅ 启动文件描述符监控进程 (PID: $monitor_pid)"
-    
-    # 7. 导出环境变量
+    # 4. 导出环境变量
     export OPENWRT_VERBOSE=1
     export FORCE_UNSAFE_CONFIGURE=1
     
@@ -5385,85 +5313,57 @@ EOF
         
         : ${HIGH_PERF_CORES:=4}
         : ${HIGH_PERF_MEM:=4096}
-        : ${HIGH_PERF_JOBS:=4}
-        : ${STD_PERF_JOBS:=3}
-        : ${LOW_PERF_JOBS:=2}
         
         if [ $CPU_CORES -ge $HIGH_PERF_CORES ] && [ $TOTAL_MEM -ge $HIGH_PERF_MEM ]; then
-            MAKE_JOBS=$HIGH_PERF_JOBS
+            MAKE_JOBS=4
             echo "✅ 高性能系统: 使用 $MAKE_JOBS 个并行任务"
         elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then
-            MAKE_JOBS=$STD_PERF_JOBS
+            MAKE_JOBS=2
             echo "✅ 标准系统: 使用 $MAKE_JOBS 个并行任务"
         else
-            MAKE_JOBS=$LOW_PERF_JOBS
+            MAKE_JOBS=1
             echo "⚠️ 低性能系统: 使用 $MAKE_JOBS 个并行任务"
         fi
         
-        # 根据预分配的描述符数量调整
-        if [ ${#fd_pool[@]} -lt 100 ] && [ $MAKE_JOBS -gt 2 ]; then
-            MAKE_JOBS=2
-            echo "⚠️ 预分配描述符较少，降低并行数到 $MAKE_JOBS"
-        fi
-        
         # ============================================
-        # 分段编译策略
+        # 分段编译策略 - 使用包装脚本
         # ============================================
         echo ""
-        echo "🚀 第一阶段：并行编译内核和模块 (make -j$MAKE_JOBS)"
+        echo "🚀 第一阶段：并行编译内核和模块"
         echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
         echo ""
         
         START_TIME=$(date +%s)
         
-        # 使用 script 命令创建伪终端，避免文件描述符问题
-        if command -v script >/dev/null 2>&1; then
-            script -q -c "make -j$MAKE_JOBS V=s" /dev/null 2>&1 | tee build.log
-            PHASE1_EXIT_CODE=${PIPESTATUS[0]}
-        else
-            stdbuf -oL -eL make -j$MAKE_JOBS V=s 2>&1 | tee build.log
-            PHASE1_EXIT_CODE=${PIPESTATUS[0]}
-        fi
+        # 使用包装脚本运行第一阶段
+        export MAKE_JOBS=$MAKE_JOBS
+        "$wrapper_script" "$BUILD_DIR" "$BUILD_DIR/build_phase1.log" "第一阶段"
+        PHASE1_EXIT_CODE=$?
+        
+        # 显示进度
+        tail -20 "$BUILD_DIR/build_phase1.log" | grep -E "warning|error" || true
         
         PHASE1_END=$(date +%s)
         PHASE1_DURATION=$((PHASE1_END - START_TIME))
         
         echo ""
         echo "✅ 第一阶段完成，耗时: $((PHASE1_DURATION / 60))分$((PHASE1_DURATION % 60))秒"
+        echo "   退出代码: $PHASE1_EXIT_CODE"
         
-        # 检查是否需要补充文件描述符
-        if [ $PHASE1_DURATION -gt 600 ]; then
-            # 如果第一阶段超过10分钟，补充更多文件描述符
-            log "🔧 编译时间较长，补充额外文件描述符..."
-            local extra_needed=$((recommended_fds / 2))
-            local extra_added=0
-            
-            for fd in $(seq 1000 $((1000 + extra_needed))); do
-                if ! [[ " ${fd_pool[@]} " =~ " ${fd} " ]]; then
-                    if exec {fd}> "$tmp_fds/fd_extra_$fd" 2>/dev/null; then
-                        fd_pool+=($fd)
-                        extra_added=$((extra_added + 1))
-                    fi
-                fi
-            done
-            log "  ✅ 补充了 $extra_added 个额外文件描述符"
-        fi
-        
+        # ============================================
+        # 第二阶段：单线程生成最终固件 - 关键修复
+        # ============================================
         echo ""
-        echo "🚀 第二阶段：单线程生成最终固件 (避免文件描述符问题)"
+        echo "🚀 第二阶段：单线程生成最终固件（避免文件描述符问题）"
         echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
         echo ""
         
         PHASE2_START=$(date +%s)
         
-        # 第二阶段强制单线程
-        if command -v script >/dev/null 2>&1; then
-            script -q -c "make -j1 V=s" /dev/null 2>&1 | tee -a build.log
-            BUILD_EXIT_CODE=${PIPESTATUS[0]}
-        else
-            make -j1 V=s 2>&1 | tee -a build.log
-            BUILD_EXIT_CODE=${PIPESTATUS[0]}
-        fi
+        # 第二阶段强制单线程，并使用包装脚本
+        export MAKE_JOBS=1
+        "$wrapper_script" "$BUILD_DIR" "$BUILD_DIR/build_phase2.log" "第二阶段"
+        BUILD_EXIT_CODE=$?
         
         PHASE2_END=$(date +%s)
         PHASE2_DURATION=$((PHASE2_END - PHASE2_START))
@@ -5472,6 +5372,9 @@ EOF
         echo ""
         echo "✅ 第二阶段完成，耗时: $((PHASE2_DURATION / 60))分$((PHASE2_DURATION % 60))秒"
         echo "📊 总编译时间: $((TOTAL_DURATION / 60))分$((TOTAL_DURATION % 60))秒"
+        
+        # 合并日志
+        cat "$BUILD_DIR/build_phase1.log" "$BUILD_DIR/build_phase2.log" > "$BUILD_DIR/build.log"
         
     else
         # 文件描述符不足时强制单线程
@@ -5483,8 +5386,9 @@ EOF
         
         START_TIME=$(date +%s)
         
-        # 使用简单的重定向，避免管道问题
-        make -j1 V=s > build.log 2>&1
+        # 使用包装脚本单线程编译
+        export MAKE_JOBS=1
+        "$wrapper_script" "$BUILD_DIR" "$BUILD_DIR/build.log" "单线程编译"
         BUILD_EXIT_CODE=$?
         
         END_TIME=$(date +%s)
@@ -5496,13 +5400,10 @@ EOF
     fi
     
     # ============================================
-    # 清理预分配的文件描述符和监控进程
+    # 清理预分配的文件描述符
     # ============================================
     echo ""
-    log "🔧 清理预分配的文件描述符和监控进程..."
-    
-    # 停止监控进程
-    kill $monitor_pid 2>/dev/null || true
+    log "🔧 清理预分配的文件描述符..."
     
     # 关闭所有预分配的文件描述符
     local closed=0
@@ -5525,7 +5426,7 @@ EOF
         echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
         echo ""
         echo "🔍 最后50行错误日志:"
-        tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || true
+        tail -50 "$BUILD_DIR/build.log" | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || true
         echo ""
         echo "📝 完整日志请查看: build.log"
         exit $BUILD_EXIT_CODE
@@ -5537,43 +5438,95 @@ EOF
     sync
     sleep 5  # 给文件系统足够时间
     
-    # 检查并修复可能缺失的固件文件
+    # ============================================
+    # 检查并修复可能缺失的固件文件（关键修复）
+    # ============================================
     echo "🔍 检查固件文件..."
     
-    # 查找临时目录中的固件文件
-    local tmp_dir="$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp"
-    local target_dir="$BUILD_DIR/bin/targets/ath79/generic"
-    
-    mkdir -p "$target_dir"
+    # 查找所有可能的固件目录
+    local target_dirs=$(find "$BUILD_DIR/bin/targets" -type d 2>/dev/null)
+    local tmp_dirs=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
     
     # 查找 sysupgrade 文件
-    local sysupgrade_files=$(find "$tmp_dir" -name "*sysupgrade*.bin" 2>/dev/null)
+    local sysupgrade_files=""
+    for dir in $tmp_dirs; do
+        sysupgrade_files="$sysupgrade_files $(find "$dir" -name "*sysupgrade*.bin" 2>/dev/null)"
+    done
+    
     if [ -n "$sysupgrade_files" ]; then
         echo "✅ 在临时目录找到 sysupgrade 固件:"
         echo "$sysupgrade_files" | while read file; do
             if [ -f "$file" ]; then
                 local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
                 local name=$(basename "$file")
+                
+                # 确定正确的目标目录
+                if [[ "$file" == *"ath79"* ]]; then
+                    local target_dir="$BUILD_DIR/bin/targets/ath79/generic"
+                elif [[ "$file" == *"ipq40xx"* ]]; then
+                    local target_dir="$BUILD_DIR/bin/targets/ipq40xx/generic"
+                elif [[ "$file" == *"mediatek"* ]]; then
+                    local target_dir="$BUILD_DIR/bin/targets/mediatek/filogic"
+                else
+                    local target_dir="$BUILD_DIR/bin/targets"
+                fi
+                
+                mkdir -p "$target_dir"
                 echo "  📄 $name ($size)"
-                # 复制到目标目录
-                cp -v "$file" "$target_dir/" 2>/dev/null && echo "    已复制到 $target_dir/"
+                echo "    复制到: $target_dir/"
+                cp -v "$file" "$target_dir/" 2>/dev/null
+                
+                # 同时创建sha256sum文件
+                (cd "$target_dir" && sha256sum "$name" > "$name.sha256sum") 2>/dev/null
             fi
         done
     else
         echo "⚠️ 警告: 未找到 sysupgrade 固件"
+        
+        # 尝试在构建目录中搜索
+        echo "🔍 深入搜索固件文件..."
+        find "$BUILD_DIR" -name "*.bin" -o -name "*.img" 2>/dev/null | grep -E "sysupgrade|factory" | while read file; do
+            if [ -f "$file" ]; then
+                local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
+                local name=$(basename "$file")
+                echo "  📄 找到: $name ($size) 在 $(dirname "$file")"
+                
+                # 复制到标准位置
+                local target_dir="$BUILD_DIR/bin/targets/$(basename $(dirname $(dirname "$file")))"
+                mkdir -p "$target_dir"
+                cp -v "$file" "$target_dir/" 2>/dev/null
+            fi
+        done
     fi
     
     # 查找 factory 文件
-    local factory_files=$(find "$tmp_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null)
+    local factory_files=""
+    for dir in $tmp_dirs; do
+        factory_files="$factory_files $(find "$dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null)"
+    done
+    
     if [ -n "$factory_files" ]; then
         echo "✅ 在临时目录找到 factory 固件:"
         echo "$factory_files" | while read file; do
             if [ -f "$file" ]; then
                 local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
                 local name=$(basename "$file")
+                
+                # 确定正确的目标目录
+                if [[ "$file" == *"ath79"* ]]; then
+                    local target_dir="$BUILD_DIR/bin/targets/ath79/generic"
+                elif [[ "$file" == *"ipq40xx"* ]]; then
+                    local target_dir="$BUILD_DIR/bin/targets/ipq40xx/generic"
+                elif [[ "$file" == *"mediatek"* ]]; then
+                    local target_dir="$BUILD_DIR/bin/targets/mediatek/filogic"
+                else
+                    local target_dir="$BUILD_DIR/bin/targets"
+                fi
+                
+                mkdir -p "$target_dir"
                 echo "  📄 $name ($size)"
-                # 复制到目标目录
-                cp -v "$file" "$target_dir/" 2>/dev/null && echo "    已复制到 $target_dir/"
+                echo "    复制到: $target_dir/"
+                cp -v "$file" "$target_dir/" 2>/dev/null
             fi
         done
     else
@@ -5584,9 +5537,12 @@ EOF
     echo ""
     echo "📊 最终固件列表:"
     echo "----------------------------------------"
-    if [ -d "$target_dir" ]; then
-        ls -lh "$target_dir"/*.bin "$target_dir"/*.img 2>/dev/null | while read line; do
-            echo "  📄 $line"
+    if [ -d "$BUILD_DIR/bin/targets" ]; then
+        find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
+            local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
+            local name=$(basename "$file")
+            local path=${file#$BUILD_DIR/bin/targets/}
+            printf "  📄 %-50s %s\n" "$name" "$size"
         done
     else
         echo "  ❌ 未找到任何固件文件"
