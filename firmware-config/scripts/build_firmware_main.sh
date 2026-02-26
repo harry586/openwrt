@@ -189,6 +189,20 @@ generate_forbidden_packages_list() {
             full_list+=("filetransfer")
             full_list+=("filebrowser")
             full_list+=("filemanager")
+        elif [[ "$pkg" == "nlbwmon" ]]; then
+            # nlbwmon 相关的所有可能变体
+            full_list+=("nlbwmon")
+            full_list+=("luci-app-nlbwmon")
+            full_list+=("luci-i18n-nlbwmon-zh-cn")
+            full_list+=("nlbwmon-database")
+            full_list+=("nlbwmon-legacy")
+        elif [[ "$pkg" == "wol" ]]; then
+            # wol 相关的所有可能变体
+            full_list+=("wol")
+            full_list+=("luci-app-wol")
+            full_list+=("luci-i18n-wol-zh-cn")
+            full_list+=("etherwake")
+            full_list+=("wol-utils")
         fi
     done
     
@@ -775,24 +789,81 @@ configure_feeds() {
     # ============================================
     # 获取需要禁用的插件列表
     # ============================================
-    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
+    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer nlbwmon wol}"
     log "🔧 基础禁用插件: $base_forbidden"
     
     # 生成完整的禁用插件列表（包括子包）
     local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
     log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个)"
     
-    # 提取基础关键词用于目录搜索
+    # 从完整列表中提取基础关键词用于目录搜索（去重）
     local search_keywords=()
+    local seen_keywords=()
     IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
     for pkg in "${BASE_PKGS[@]}"; do
-        search_keywords+=("$pkg")
-        search_keywords+=("luci-app-${pkg}")
-        search_keywords+=("${pkg}-scripts")
+        # 检查是否已添加
+        local skip=0
+        for seen in "${seen_keywords[@]}"; do
+            if [ "$seen" = "$pkg" ]; then
+                skip=1
+                break
+            fi
+        done
+        if [ $skip -eq 0 ]; then
+            search_keywords+=("$pkg")
+            seen_keywords+=("$pkg")
+        fi
+        
+        # 添加luci-app-前缀版本
+        local luci_pkg="luci-app-${pkg}"
+        skip=0
+        for seen in "${seen_keywords[@]}"; do
+            if [ "$seen" = "$luci_pkg" ]; then
+                skip=1
+                break
+            fi
+        done
+        if [ $skip -eq 0 ]; then
+            search_keywords+=("$luci_pkg")
+            seen_keywords+=("$luci_pkg")
+        fi
+        
+        # 添加常见变体
+        local variants=("${pkg}-scripts" "${pkg}-extra" "${pkg}-core" "${pkg}-ng" "${pkg}-webui")
+        for variant in "${variants[@]}"; do
+            skip=0
+            for seen in "${seen_keywords[@]}"; do
+                if [ "$seen" = "$variant" ]; then
+                    skip=1
+                    break
+                fi
+            done
+            if [ $skip -eq 0 ]; then
+                search_keywords+=("$variant")
+                seen_keywords+=("$variant")
+            fi
+        done
+        
+        # 特别处理 ddns-scripts
         if [[ "$pkg" == "ddns" ]]; then
-            search_keywords+=("ddns-scripts")
+            local ddns_variants=("ddns-scripts" "ddns-scripts_aliyun" "ddns-scripts_dnspod" "ddns-scripts_cloudflare" "ddns-scripts_no-ip" "ddns-scripts_route53")
+            for variant in "${ddns_variants[@]}"; do
+                skip=0
+                for seen in "${seen_keywords[@]}"; do
+                    if [ "$seen" = "$variant" ]; then
+                        skip=1
+                        break
+                    fi
+                done
+                if [ $skip -eq 0 ]; then
+                    search_keywords+=("$variant")
+                    seen_keywords+=("$variant")
+                fi
+            done
         fi
     done
+    
+    log "📋 搜索关键词列表 (${#search_keywords[@]} 个): ${search_keywords[*]}"
     
     # ============================================
     # 在配置 feeds 之前，先删除不需要的插件包
@@ -913,9 +984,9 @@ EOF
     ./scripts/feeds install -a || handle_error "安装feeds失败"
     
     # ============================================
-    # 安装后彻底删除不需要的插件源文件
+    # 安装后彻底删除不需要的插件源文件（动态删除）
     # ============================================
-    log "🔧 安装后彻底删除不需要的插件源文件..."
+    log "🔧 安装后彻底删除不需要的插件源文件（动态删除）..."
     
     # 再次删除所有相关目录
     for keyword in "${search_keywords[@]}"; do
@@ -932,44 +1003,65 @@ EOF
         fi
     done
     
-    # 特别处理：删除所有 DDNS 相关目录（无论是否在禁用列表中）
-    log "🔧 删除所有 DDNS 相关目录..."
-    find feeds -name "*ddns*" -type d 2>/dev/null | while read dir; do
-        log "  🗑️  删除 DDNS 目录: $dir"
-        rm -rf "$dir"
+    # 特别处理：根据禁用列表删除所有相关目录（使用完整列表）
+    log "🔧 根据完整禁用列表删除所有相关目录..."
+    
+    # 创建临时文件存储唯一的关键词
+    local unique_keywords_file=$(mktemp)
+    
+    # 从完整禁用列表中提取所有可能的关键词
+    for plugin in "${full_forbidden_list[@]}"; do
+        # 提取基础包名（去除前缀和后缀）
+        local base_name=$(echo "$plugin" | sed 's/^luci-app-//' | sed 's/^luci-i18n-//' | sed 's/-zh-cn$//' | sed 's/_INCLUDE_.*//' | sed 's/-[^-]*$//')
+        echo "$base_name" >> "$unique_keywords_file"
+        
+        # 添加原始名称
+        echo "$plugin" >> "$unique_keywords_file"
+        
+        # 提取核心名称（去除所有后缀）
+        local core_name=$(echo "$plugin" | sed 's/^luci-app-//' | sed 's/^luci-i18n-//' | sed 's/-zh-cn$//' | sed 's/_INCLUDE_.*//' | sed 's/-scripts$//' | sed 's/-extra$//' | sed 's/-core$//' | sed 's/-ng$//' | sed 's/-webui$//')
+        echo "$core_name" >> "$unique_keywords_file"
     done
     
-    find package -name "*ddns*" -type d 2>/dev/null | while read dir; do
-        log "  🗑️  删除 package 中的 DDNS 目录: $dir"
-        rm -rf "$dir"
-    done
+    # 去重
+    sort -u "$unique_keywords_file" > "$unique_keywords_file.sorted"
     
-    # 特别处理：删除所有 rclone 相关目录
-    if [[ "$base_forbidden" == *"rclone"* ]]; then
-        log "🔧 删除 rclone 相关目录..."
-        find feeds -name "*rclone*" -type d 2>/dev/null | while read dir; do
-            log "  🗑️  删除 rclone 目录: $dir"
+    log "🔍 使用 $(wc -l < "$unique_keywords_file.sorted") 个唯一关键词搜索目录..."
+    
+    # 遍历所有唯一关键词
+    while read keyword; do
+        [ -z "$keyword" ] && continue
+        
+        # 跳过太短的词
+        if [ ${#keyword} -lt 3 ]; then
+            continue
+        fi
+        
+        # 在 feeds 目录中搜索
+        find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+            log "  🗑️  删除 feeds 目录: $dir"
             rm -rf "$dir"
         done
-    fi
-    
-    # 特别处理：删除所有 qbittorrent 相关目录
-    if [[ "$base_forbidden" == *"qbittorrent"* ]]; then
-        log "🔧 删除 qbittorrent 相关目录..."
-        find feeds -name "*qbittorrent*" -type d 2>/dev/null | while read dir; do
-            log "  🗑️  删除 qbittorrent 目录: $dir"
-            rm -rf "$dir"
+        
+        # 在 package/feeds 目录中搜索
+        if [ -d "package/feeds" ]; then
+            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+                log "  🗑️  删除 package/feeds 目录: $dir"
+                rm -rf "$dir"
+            done
+        fi
+        
+        # 在 package 目录中搜索
+        find package -maxdepth 2 -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+            # 跳过核心目录
+            if [[ "$dir" != "package/feeds" && "$dir" != "package/kernel" && "$dir" != "package/libs" && "$dir" != "package/network" && "$dir" != "package/system" && "$dir" != "package/utils" ]]; then
+                log "  🗑️  删除 package 目录: $dir"
+                rm -rf "$dir"
+            fi
         done
-    fi
+    done < "$unique_keywords_file.sorted"
     
-    # 特别处理：删除所有 filetransfer 相关目录
-    if [[ "$base_forbidden" == *"filetransfer"* ]]; then
-        log "🔧 删除 filetransfer 相关目录..."
-        find feeds -name "*filetransfer*" -type d 2>/dev/null | while read dir; do
-            log "  🗑️  删除 filetransfer 目录: $dir"
-            rm -rf "$dir"
-        done
-    fi
+    rm -f "$unique_keywords_file" "$unique_keywords_file.sorted"
     
     log "✅ 所有不需要的插件源文件已彻底删除"
     
@@ -1004,41 +1096,35 @@ install_turboacc_packages() {
 #【build_firmware_main.sh-11-end】
 
 #【build_firmware_main.sh-12】
-pre_build_space_check() {
-    log "=== 编译前空间检查 ==="
-    
-    echo "当前目录: $(pwd)"
-    echo "构建目录: $BUILD_DIR"
-    
-    echo "=== 磁盘使用情况 ==="
-    df -h
-    
-    local build_dir_usage=$(du -sh $BUILD_DIR 2>/dev/null | awk '{print $1}') || echo "无法获取构建目录大小"
-    echo "构建目录大小: $build_dir_usage"
-    
-    local available_space=$(df /mnt --output=avail | tail -1)
-    local available_gb=$((available_space / 1024 / 1024))
-    echo "/mnt 可用空间: ${available_gb}G"
-    
-    local root_available_space=$(df / --output=avail | tail -1)
-    local root_available_gb=$((root_available_space / 1024 / 1024))
-    echo "/ 可用空间: ${root_available_gb}G"
-    
-    echo "=== 内存使用情况 ==="
-    free -h
-    
-    echo "=== CPU信息 ==="
-    echo "CPU核心数: $(nproc)"
-    
-    local estimated_space=15
-    if [ $available_gb -lt $estimated_space ]; then
-        log "⚠️ 警告: 可用空间(${available_gb}G)可能不足，建议至少${estimated_space}G"
-    else
-        log "✅ 磁盘空间充足: ${available_gb}G 可用"
-    fi
-    
-    log "✅ 空间检查完成"
-}
+#------------------------------------------------------------------------------
+# 第十一部分：功能开关 ##
+#   控制是否启用某些功能
+#   根据需要开启或关闭
+#------------------------------------------------------------------------------
+
+##常修改## 是否启用TurboACC（true/false）
+##常修改## normal模式下有效，基础模式忽略
+: ${ENABLE_TURBOACC:="true"}
+
+##常修改## 是否启用TCP BBR（true/false）
+##常修改## 开启BBR拥塞控制算法
+: ${ENABLE_TCP_BBR:="true"}
+
+##常修改## 是否强制使用ath10k-ct驱动（解决冲突）
+##常修改## 启用后会禁用标准ath10k，使用ct版
+: ${FORCE_ATH10K_CT:="true"}
+
+##常修改## 是否自动修复缺失的USB驱动（true/false）
+##常修改## 自动添加缺失的关键USB驱动
+: ${AUTO_FIX_USB_DRIVERS:="true"}
+
+##常修改## 是否启用详细日志（true/false）
+##常修改## 开启后会在编译时显示更详细的输出
+: ${ENABLE_VERBOSE_LOG:="false"}
+
+##常修改## 默认禁用的插件列表（空格分隔）
+##常修改## 在构建时会自动禁用这些插件及其相关子包
+: ${FORBIDDEN_PACKAGES:="vssr ssr-plus passwall rclone ddns qbittorrent filetransfer nlbwmon wol"}
 #【build_firmware_main.sh-12-end】
 
 #【build_firmware_main.sh-13】
@@ -5056,240 +5142,313 @@ workflow_step25_build_firmware() {
     cd $BUILD_DIR
     
     # ============================================
-    # 关键修复：大幅提升文件描述符限制
+    # 关键修复：动态预分配文件描述符 + 分段编译
     # ============================================
-    log "🔧 关键修复：大幅提升文件描述符限制..."
+    log "🔧 关键修复：动态预分配文件描述符并提升限制..."
     
-    # 尝试设置极高的文件描述符限制
+    # 1. 设置极高的文件描述符限制
     ulimit -n 1048576 2>/dev/null || ulimit -n 65536 2>/dev/null || ulimit -n 16384 2>/dev/null || true
-    
-    # 显示当前限制
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
-    # 如果限制仍然太小，给出警告并尝试其他方法
-    if [ $current_limit -lt 65536 ]; then
-        log "⚠️ 警告: 文件描述符限制($current_limit)可能太小"
-        log "🔧 尝试通过系统配置提升限制..."
-        
-        # 尝试修改系统限制
-        sudo bash -c "echo '* soft nofile 1048576' >> /etc/security/limits.conf" 2>/dev/null || true
-        sudo bash -c "echo '* hard nofile 1048576' >> /etc/security/limits.conf" 2>/dev/null || true
-        
-        # 重新设置
-        ulimit -n 1048576 2>/dev/null || ulimit -n 65536 2>/dev/null || true
-        
-        local new_limit=$(ulimit -n)
-        log "  ✅ 尝试后文件描述符限制: $new_limit"
+    # 2. 获取系统资源信息，动态计算需要预分配的文件描述符数量
+    local cpu_cores=$(nproc)
+    local total_mem=$(free -m | awk '/^Mem:/{print $2}')
+    local recommended_fds=0
+    
+    # 根据CPU核心数和内存大小动态计算
+    if [ $cpu_cores -ge 8 ] && [ $total_mem -ge 8192 ]; then
+        # 高性能系统（8核+8GB+）
+        recommended_fds=500
+    elif [ $cpu_cores -ge 4 ] && [ $total_mem -ge 4096 ]; then
+        # 中高性能系统（4核+4GB+）
+        recommended_fds=300
+    elif [ $cpu_cores -ge 2 ] && [ $total_mem -ge 2048 ]; then
+        # 标准系统（2核+2GB+）
+        recommended_fds=200
+    else
+        # 低性能系统
+        recommended_fds=100
     fi
+    
+    # 根据并行优化选项调整
+    if [ "$enable_parallel" = "true" ]; then
+        # 启用并行时，需要更多文件描述符
+        recommended_fds=$((recommended_fds * 2))
+    fi
+    
+    # 确保不超过系统限制
+    if [ $recommended_fds -gt $((current_limit - 100)) ]; then
+        recommended_fds=$((current_limit - 100))
+    fi
+    
+    # 确保最小值
+    if [ $recommended_fds -lt 50 ]; then
+        recommended_fds=50
+    fi
+    
+    log "🔧 系统资源: CPU=${cpu_cores}核, 内存=${total_mem}MB"
+    log "🔧 动态计算: 需要预分配 ${recommended_fds} 个文件描述符"
+    
+    # 3. 预分配动态计算出的文件描述符数量
+    log "🔧 开始预分配文件描述符..."
+    local tmp_fds=$(mktemp -d)
+    local fd_pool=()
+    local allocated=0
+    
+    # 从10开始分配，避免使用低编号的描述符
+    local start_fd=10
+    local end_fd=$((start_fd + recommended_fds))
+    
+    for fd in $(seq $start_fd $end_fd); do
+        if exec {fd}> "$tmp_fds/fd_$fd" 2>/dev/null; then
+            fd_pool+=($fd)
+            allocated=$((allocated + 1))
+            
+            # 每50个显示一次进度
+            if [ $((allocated % 50)) -eq 0 ]; then
+                echo "   已分配 $allocated 个文件描述符..."
+            fi
+        fi
+    done
+    
+    log "  ✅ 成功预分配了 ${#fd_pool[@]} 个文件描述符"
+    
+    # 4. 保持描述符活跃
+    log "🔧 保持文件描述符活跃..."
+    for fd in "${fd_pool[@]}"; do
+        echo "reserved" >&$fd 2>/dev/null || true
+    done
+    
+    # 5. 创建监控脚本，在编译过程中定期检查并补充文件描述符
+    local monitor_script="$tmp_fds/monitor.sh"
+    cat > "$monitor_script" << 'EOF'
+#!/bin/bash
+# 文件描述符监控脚本
+BUILD_DIR="$1"
+TMP_DIR="$2"
+POOL_FILE="$TMP_DIR/pool.txt"
+LOG_FILE="$TMP_DIR/monitor.log"
+
+# 读取已分配的文件描述符
+if [ -f "$POOL_FILE" ]; then
+    read -a FD_POOL < "$POOL_FILE"
+fi
+
+# 获取当前进程的PID
+CURRENT_PID=$$
+
+# 监控循环
+while true; do
+    # 获取当前打开的文件描述符数量
+    if [ -d "/proc/$CURRENT_PID/fd" ]; then
+        OPEN_FDS=$(ls -la /proc/$CURRENT_PID/fd 2>/dev/null | grep -c "->" || echo "0")
+        
+        # 如果打开的描述符接近限制，补充新的
+        if [ $OPEN_FDS -gt $((ULIMIT_N - 50)) ]; then
+            echo "$(date): 警告: 文件描述符使用率过高 ($OPEN_FDS/$ULIMIT_N)" >> "$LOG_FILE"
+            
+            # 补充10个新的描述符
+            for fd in {500..600}; do
+                if ! [[ " ${FD_POOL[@]} " =~ " ${fd} " ]]; then
+                    if exec {fd}> "$TMP_DIR/fd_$fd" 2>/dev/null; then
+                        FD_POOL+=($fd)
+                        echo "$fd" >> "$POOL_FILE"
+                        echo "$(date): 补充文件描述符 $fd" >> "$LOG_FILE"
+                        break
+                    fi
+                fi
+            done
+        fi
+    fi
+    sleep 30
+done
+EOF
+    chmod +x "$monitor_script"
+    
+    # 保存文件描述符池到文件
+    echo "${fd_pool[@]}" > "$tmp_fds/pool.txt"
+    echo "$current_limit" > "$tmp_fds/ulimit.txt"
+    
+    # 6. 在后台启动监控脚本
+    nohup "$monitor_script" "$BUILD_DIR" "$tmp_fds" > /dev/null 2>&1 &
+    local monitor_pid=$!
+    log "  ✅ 启动文件描述符监控进程 (PID: $monitor_pid)"
+    
+    # 7. 导出环境变量
+    export OPENWRT_VERBOSE=1
+    export FORCE_UNSAFE_CONFIGURE=1
     
     # 设置其他系统限制
     ulimit -s 16384 2>/dev/null || true  # 栈大小
     ulimit -i 16384 2>/dev/null || true  # 信号队列
     
-    # 导出环境变量
-    export OPENWRT_VERBOSE=1
-    export FORCE_UNSAFE_CONFIGURE=1
+    # 设置进程优先级
+    renice -n -5 $$ >/dev/null 2>&1 || true
     
     # ============================================
-    # 补丁自动检测和处理函数（内嵌）
+    # 智能判断最佳并行任务数
     # ============================================
-    check_and_fix_failed_patches() {
-        log "🔍 自动检测和处理失败的内核补丁..."
-        
-        local fixed_patches=0
-        local patch_dirs=$(find target/linux -type d -name "patches-*" 2>/dev/null | sort)
-        
-        for patch_dir in $patch_dirs; do
-            local platform=$(echo "$patch_dir" | cut -d'/' -f3)
-            local kernel_ver=$(basename "$patch_dir" | sed 's/patches-//')
-            
-            # 检查构建目录中的失败补丁
-            local build_dirs=$(find build_dir -maxdepth 3 -type d -path "*/linux-${platform}_*" 2>/dev/null)
-            
-            for build_dir in $build_dirs; do
-                if [ -d "$build_dir" ]; then
-                    local rej_files=$(find "$build_dir" -name "*.rej" 2>/dev/null | wc -l)
-                    
-                    if [ $rej_files -gt 0 ]; then
-                        log "⚠️ 在 $build_dir 中发现 $rej_files 个失败的补丁"
-                        
-                        local failed_patches=$(find "$build_dir" -name "*.rej" 2>/dev/null | sed 's/\.rej$/.patch/' | xargs -r basename -a 2>/dev/null | sort -u)
-                        
-                        for failed_patch in $failed_patches; do
-                            local source_patch="$patch_dir/$failed_patch"
-                            
-                            if [ -f "$source_patch" ]; then
-                                log "  🗑️  移除失败补丁: $platform/$kernel_ver/$failed_patch"
-                                
-                                # 备份
-                                mkdir -p "$BUILD_DIR/patches-backup"
-                                cp "$source_patch" "$BUILD_DIR/patches-backup/${platform}-${kernel_ver}-${failed_patch}.bak" 2>/dev/null || true
-                                
-                                # 移除
-                                rm -f "$source_patch"
-                                fixed_patches=$((fixed_patches + 1))
-                            fi
-                        done
-                    fi
-                fi
-            done
-        done
-        
-        # 清理残留文件
-        find build_dir -name "*.rej" -o -name "*.orig" 2>/dev/null | xargs -r rm -f
-        
-        if [ $fixed_patches -gt 0 ]; then
-            log "✅ 已处理 $fixed_patches 个失败的补丁"
-        else
-            log "✅ 未发现失败的补丁"
-        fi
-    }
-    
-    # 编译前先检查并修复补丁
-    check_and_fix_failed_patches
-    
     CPU_CORES=$(nproc)
     TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
     
+    echo ""
     echo "🔧 系统信息:"
     echo "  CPU核心数: $CPU_CORES"
     echo "  内存大小: ${TOTAL_MEM}MB"
     echo "  文件描述符限制: $(ulimit -n)"
+    echo "  预分配描述符: ${#fd_pool[@]} 个"
     echo "  并行优化: $enable_parallel"
     
-    if [ "$enable_parallel" = "true" ]; then
+    if [ "$enable_parallel" = "true" ] && [ $current_limit -ge 65536 ]; then
+        echo ""
         echo "🧠 智能判断最佳并行任务数..."
         
         : ${HIGH_PERF_CORES:=4}
         : ${HIGH_PERF_MEM:=4096}
-        : ${STD_PERF_CORES:=2}
-        : ${STD_PERF_MEM:=2048}
         : ${HIGH_PERF_JOBS:=4}
         : ${STD_PERF_JOBS:=3}
         : ${LOW_PERF_JOBS:=2}
         
-        if [ $CPU_CORES -ge $HIGH_PERF_CORES ]; then
-            if [ $TOTAL_MEM -ge $HIGH_PERF_MEM ]; then
-                MAKE_JOBS=$HIGH_PERF_JOBS
-                echo "✅ 检测到高性能Runner (${HIGH_PERF_CORES}核+${HIGH_PERF_MEM}MB)"
-            else
-                # 内存不足时减少并行数，避免文件描述符耗尽
-                MAKE_JOBS=$((HIGH_PERF_JOBS - 1))
-                echo "✅ 检测到标准Runner (${HIGH_PERF_CORES}核，内存不足，降低并行数)"
-            fi
-        elif [ $CPU_CORES -ge $STD_PERF_CORES ]; then
-            if [ $TOTAL_MEM -ge $STD_PERF_MEM ]; then
-                MAKE_JOBS=$STD_PERF_JOBS
-                echo "✅ 检测到GitHub标准Runner (${STD_PERF_CORES}核${STD_PERF_MEM}MB)"
-            else
-                MAKE_JOBS=$((STD_PERF_JOBS - 1))
-                echo "✅ 检测到${STD_PERF_CORES}核Runner，内存不足，降低并行数"
-            fi
+        if [ $CPU_CORES -ge $HIGH_PERF_CORES ] && [ $TOTAL_MEM -ge $HIGH_PERF_MEM ]; then
+            MAKE_JOBS=$HIGH_PERF_JOBS
+            echo "✅ 高性能系统: 使用 $MAKE_JOBS 个并行任务"
+        elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then
+            MAKE_JOBS=$STD_PERF_JOBS
+            echo "✅ 标准系统: 使用 $MAKE_JOBS 个并行任务"
         else
             MAKE_JOBS=$LOW_PERF_JOBS
-            echo "⚠️ 检测到低性能系统"
+            echo "⚠️ 低性能系统: 使用 $MAKE_JOBS 个并行任务"
         fi
         
-        # 文件描述符限制较低时进一步降低并行数
-        if [ $current_limit -lt 65536 ] && [ $MAKE_JOBS -gt 2 ]; then
+        # 根据预分配的描述符数量调整
+        if [ ${#fd_pool[@]} -lt 100 ] && [ $MAKE_JOBS -gt 2 ]; then
             MAKE_JOBS=2
-            echo "⚠️ 文件描述符限制较低，强制降低并行数到 $MAKE_JOBS"
+            echo "⚠️ 预分配描述符较少，降低并行数到 $MAKE_JOBS"
         fi
         
-        echo "🎯 决定使用 $MAKE_JOBS 个并行任务"
-    else
-        MAKE_JOBS=1
-        echo "🔄 禁用并行优化，使用单线程编译"
-    fi
-    
-    local max_retries=2
-    local retry_count=0
-    local build_success=0
-    
-    while [ $retry_count -lt $max_retries ] && [ $build_success -eq 0 ]; do
+        # ============================================
+        # 分段编译策略
+        # ============================================
         echo ""
-        echo "🚀 开始编译固件 (尝试 $((retry_count + 1))/$max_retries)"
-        echo "💡 编译配置:"
-        echo "  - 并行任务: $MAKE_JOBS"
-        echo "  - 文件描述符限制: $(ulimit -n)"
-        echo "  - 开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+        echo "🚀 第一阶段：并行编译内核和模块 (make -j$MAKE_JOBS)"
+        echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+        echo ""
         
         START_TIME=$(date +%s)
         
         # 使用 script 命令创建伪终端，避免文件描述符问题
         if command -v script >/dev/null 2>&1; then
             script -q -c "make -j$MAKE_JOBS V=s" /dev/null 2>&1 | tee build.log
+            PHASE1_EXIT_CODE=${PIPESTATUS[0]}
+        else
+            stdbuf -oL -eL make -j$MAKE_JOBS V=s 2>&1 | tee build.log
+            PHASE1_EXIT_CODE=${PIPESTATUS[0]}
+        fi
+        
+        PHASE1_END=$(date +%s)
+        PHASE1_DURATION=$((PHASE1_END - START_TIME))
+        
+        echo ""
+        echo "✅ 第一阶段完成，耗时: $((PHASE1_DURATION / 60))分$((PHASE1_DURATION % 60))秒"
+        
+        # 检查是否需要补充文件描述符
+        if [ $PHASE1_DURATION -gt 600 ]; then
+            # 如果第一阶段超过10分钟，补充更多文件描述符
+            log "🔧 编译时间较长，补充额外文件描述符..."
+            local extra_needed=$((recommended_fds / 2))
+            local extra_added=0
+            
+            for fd in $(seq 1000 $((1000 + extra_needed))); do
+                if ! [[ " ${fd_pool[@]} " =~ " ${fd} " ]]; then
+                    if exec {fd}> "$tmp_fds/fd_extra_$fd" 2>/dev/null; then
+                        fd_pool+=($fd)
+                        extra_added=$((extra_added + 1))
+                    fi
+                fi
+            done
+            log "  ✅ 补充了 $extra_added 个额外文件描述符"
+        fi
+        
+        echo ""
+        echo "🚀 第二阶段：单线程生成最终固件 (避免文件描述符问题)"
+        echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+        echo ""
+        
+        PHASE2_START=$(date +%s)
+        
+        # 第二阶段强制单线程
+        if command -v script >/dev/null 2>&1; then
+            script -q -c "make -j1 V=s" /dev/null 2>&1 | tee -a build.log
             BUILD_EXIT_CODE=${PIPESTATUS[0]}
         else
-            # 如果没有 script 命令，使用 stdbuf 并设置更大的缓冲区
-            stdbuf -oL -eL make -j$MAKE_JOBS V=s 2>&1 | tee build.log
+            make -j1 V=s 2>&1 | tee -a build.log
             BUILD_EXIT_CODE=${PIPESTATUS[0]}
         fi
+        
+        PHASE2_END=$(date +%s)
+        PHASE2_DURATION=$((PHASE2_END - PHASE2_START))
+        TOTAL_DURATION=$((PHASE2_END - START_TIME))
+        
+        echo ""
+        echo "✅ 第二阶段完成，耗时: $((PHASE2_DURATION / 60))分$((PHASE2_DURATION % 60))秒"
+        echo "📊 总编译时间: $((TOTAL_DURATION / 60))分$((TOTAL_DURATION % 60))秒"
+        
+    else
+        # 文件描述符不足时强制单线程
+        MAKE_JOBS=1
+        echo ""
+        echo "⚠️ 文件描述符限制较低或并行优化禁用，强制使用单线程编译"
+        echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+        echo ""
+        
+        START_TIME=$(date +%s)
+        
+        # 使用简单的重定向，避免管道问题
+        make -j1 V=s > build.log 2>&1
+        BUILD_EXIT_CODE=$?
         
         END_TIME=$(date +%s)
         DURATION=$((END_TIME - START_TIME))
         
         echo ""
-        echo "📊 编译统计 (尝试 $((retry_count + 1))):"
-        echo "  - 总耗时: $((DURATION / 60))分钟$((DURATION % 60))秒"
-        echo "  - 退出代码: $BUILD_EXIT_CODE"
-        
-        if [ $BUILD_EXIT_CODE -eq 0 ]; then
-            echo "✅ 固件编译成功"
-            build_success=1
-        else
-            echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
-            
-            # 检查是否是文件描述符问题
-            if grep -q "Bad file descriptor" build.log; then
-                echo "⚠️ 检测到文件描述符问题，尝试修复..."
-                
-                # 进一步增加文件描述符限制
-                ulimit -n 1048576 2>/dev/null || ulimit -n 131072 2>/dev/null || ulimit -n 65536 2>/dev/null || true
-                echo "  新的文件描述符限制: $(ulimit -n)"
-                
-                # 清理可能锁定的文件
-                echo "🔧 清理可能锁定的文件..."
-                find build_dir -name "*.lock" -o -name "*.tmp" 2>/dev/null | xargs -r rm -f
-                
-                # 清理临时文件
-                echo "🔧 清理临时文件..."
-                rm -rf /tmp/* 2>/dev/null || true
-                
-                # 降低并行数重试
-                if [ $MAKE_JOBS -gt 1 ]; then
-                    MAKE_JOBS=1
-                    echo "🔄 降低并行数到 1 后重试..."
-                fi
-                
-                retry_count=$((retry_count + 1))
-                if [ $retry_count -lt $max_retries ]; then
-                    echo "🔄 修复后重试..."
-                    continue
-                fi
-            fi
-            
-            # 检查是否是磁盘空间问题
-            local available_space=$(df . --output=avail | tail -1)
-            local available_mb=$((available_space / 1024))
-            if [ $available_mb -lt 1024 ]; then
-                echo "❌ 磁盘空间不足: ${available_mb}MB"
-                exit 1
-            fi
-            
-            # 如果不是文件描述符问题，直接退出
-            echo "❌ 编译失败，退出"
-            echo ""
-            echo "🔍 最后50行错误日志:"
-            tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || true
-            echo ""
-            echo "📝 完整日志请查看: build.log"
-            exit $BUILD_EXIT_CODE
+        echo "📊 编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
+        echo "   退出代码: $BUILD_EXIT_CODE"
+    fi
+    
+    # ============================================
+    # 清理预分配的文件描述符和监控进程
+    # ============================================
+    echo ""
+    log "🔧 清理预分配的文件描述符和监控进程..."
+    
+    # 停止监控进程
+    kill $monitor_pid 2>/dev/null || true
+    
+    # 关闭所有预分配的文件描述符
+    local closed=0
+    for fd in "${fd_pool[@]}"; do
+        if exec {fd}>&- 2>/dev/null; then
+            closed=$((closed + 1))
         fi
     done
     
-    if [ $build_success -eq 0 ]; then
+    # 清理临时目录
+    rm -rf "$tmp_fds"
+    
+    log "  ✅ 已关闭 $closed 个预分配的文件描述符"
+    
+    # ============================================
+    # 检查编译结果
+    # ============================================
+    if [ $BUILD_EXIT_CODE -ne 0 ]; then
+        echo ""
+        echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
+        echo ""
+        echo "🔍 最后50行错误日志:"
+        tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || true
+        echo ""
+        echo "📝 完整日志请查看: build.log"
         exit $BUILD_EXIT_CODE
     fi
     
