@@ -3945,31 +3945,49 @@ workflow_step15_generate_config() {
     log ""
     log "=== 🔧 强制禁用不需要的插件系列（优化版 - 最多2次尝试） ==="
     
-    local forbidden_plugins=(
-        "luci-app-vssr"
-        "luci-app-ssr-plus"
-        "luci-app-rclone"
-        "luci-app-passwall"
-    )
+    # 获取基础禁用列表
+    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer nlbwmon wol}"
+    IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
+    
+    # 生成完整禁用列表
+    local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
+    
+    log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个)"
     
     cp .config .config.before_disable
     
-    for plugin in "${forbidden_plugins[@]}"; do
-        log "  处理插件: $plugin"
-        
+    # 第一轮：禁用所有主包和子包
+    log "🔧 第一轮禁用..."
+    for plugin in "${full_forbidden_list[@]}"; do
+        [ -z "$plugin" ] && continue
         sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
         sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
         sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
-        
         echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-        
-        log "    ✅ 已禁用 $plugin 及其子选项"
     done
     
-    sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_/d' .config
-    sed -i '/CONFIG_PACKAGE_luci-app-vssr_INCLUDE_/d' .config
-    sed -i '/CONFIG_PACKAGE_luci-app-rclone_INCLUDE_/d' .config
-    sed -i '/CONFIG_PACKAGE_luci-app-passwall_INCLUDE_/d' .config
+    # 特别处理 nlbwmon 和 wol（确保彻底禁用）
+    log "🔧 特别处理 nlbwmon 和 wol..."
+    local special_plugins=(
+        "nlbwmon"
+        "luci-app-nlbwmon"
+        "luci-i18n-nlbwmon-zh-cn"
+        "nlbwmon-database"
+        "wol"
+        "luci-app-wol"
+        "luci-i18n-wol-zh-cn"
+        "etherwake"
+    )
+    
+    for plugin in "${special_plugins[@]}"; do
+        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
+        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+    done
+    
+    # 删除所有 INCLUDE 子选项
+    sed -i '/CONFIG_PACKAGE_luci-app-.*_INCLUDE_/d' .config
     
     sort -u .config > .config.tmp && mv .config.tmp .config
     
@@ -3982,9 +4000,11 @@ workflow_step15_generate_config() {
         }
         
         local still_enabled=0
-        for plugin in "${forbidden_plugins[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+        # 检查基础包
+        for plugin in "${BASE_PKGS[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
                 still_enabled=$((still_enabled + 1))
+                log "  ⚠️ 发现残留: $plugin"
             fi
         done
         
@@ -3994,10 +4014,13 @@ workflow_step15_generate_config() {
         else
             if [ $attempt -lt $max_attempts ]; then
                 log "⚠️ 第 $attempt 次尝试后仍有 $still_enabled 个插件残留，再次强制禁用..."
-                for plugin in "${forbidden_plugins[@]}"; do
+                for plugin in "${BASE_PKGS[@]}"; do
                     sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
                     sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+                    sed -i "/^CONFIG_PACKAGE_luci-app-${plugin}=y/d" .config
+                    sed -i "/^CONFIG_PACKAGE_luci-app-${plugin}=m/d" .config
                     echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+                    echo "# CONFIG_PACKAGE_luci-app-${plugin} is not set" >> .config
                 done
                 sort -u .config > .config.tmp && mv .config.tmp .config
             fi
@@ -4008,12 +4031,20 @@ workflow_step15_generate_config() {
     log ""
     log "📊 最终插件状态验证:"
     local still_enabled_final=0
-    for plugin in "${forbidden_plugins[@]}"; do
+    
+    # 检查所有需要禁用的插件
+    for plugin in "${BASE_PKGS[@]}"; do
         if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
             log "  ❌ $plugin 仍然被启用"
             still_enabled_final=$((still_enabled_final + 1))
         elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
             log "  ❌ $plugin 仍然被模块化"
+            still_enabled_final=$((still_enabled_final + 1))
+        elif grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
+            log "  ❌ luci-app-$plugin 仍然被启用"
+            still_enabled_final=$((still_enabled_final + 1))
+        elif grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=m" .config; then
+            log "  ❌ luci-app-$plugin 仍然被模块化"
             still_enabled_final=$((still_enabled_final + 1))
         else
             log "  ✅ $plugin 已正确禁用"
@@ -4024,6 +4055,14 @@ workflow_step15_generate_config() {
         log "🎉 所有指定插件已成功禁用"
     else
         log "⚠️ 有 $still_enabled_final 个插件未能禁用，请检查 feeds 或依赖"
+        
+        # 最终强力禁用
+        log "🔧 执行最终强力禁用..."
+        for plugin in "${BASE_PKGS[@]}"; do
+            sed -i "/${plugin}/d" .config
+            sed -i "/$(echo $plugin | tr '[:lower:]' '[:upper:]')/d" .config
+        done
+        make defconfig > /dev/null 2>&1
     fi
     
     log ""
