@@ -5213,7 +5213,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（激进修复文件描述符问题） ==="
+    log "=== 步骤25: 编译固件（激进修复文件描述符问题 + 实时日志） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
@@ -5221,7 +5221,7 @@ workflow_step25_build_firmware() {
     cd $BUILD_DIR
     
     # ============================================
-    # 激进修复：完全避免管道和重定向 + 预分配 + 单线程生成固件
+    # 激进修复：完全避免管道和重定向问题
     # ============================================
     log "🔧 激进修复：完全避免管道和重定向问题..."
     
@@ -5251,38 +5251,79 @@ workflow_step25_build_firmware() {
     
     log "  ✅ 成功预分配了 ${#fd_pool[@]} 个文件描述符"
     
-    # 3. 创建包装脚本来运行make，避免直接使用管道
+    # 3. 创建包装脚本来运行make，同时支持实时日志
     local wrapper_script="$tmp_fds/build_wrapper.sh"
     cat > "$wrapper_script" << 'EOF'
 #!/bin/bash
-# 编译包装脚本 - 完全避免管道和重定向
+# 编译包装脚本 - 避免管道问题，同时输出实时日志
 BUILD_DIR="$1"
 LOG_FILE="$2"
 PHASE="$3"
+MAKE_JOBS="$4"
 
 cd "$BUILD_DIR" || exit 1
 
-echo "=== $PHASE 开始于 $(date) ===" > "$LOG_FILE"
+echo "=== $PHASE 开始于 $(date) ===" | tee -a "$LOG_FILE"
 
-# 直接运行make，输出到日志文件（不使用管道）
-if [ "$PHASE" = "第一阶段" ]; then
-    make -j${MAKE_JOBS} V=s >> "$LOG_FILE" 2>&1
-    exit_code=$?
-elif [ "$PHASE" = "第二阶段" ]; then
-    make -j1 V=s >> "$LOG_FILE" 2>&1
-    exit_code=$?
+# 使用 tee 同时输出到终端和文件，但避免管道导致的文件描述符问题
+# 使用 unbuffer 或 stdbuf 来保持输出流畅
+if command -v unbuffer >/dev/null 2>&1; then
+    if [ "$PHASE" = "第一阶段" ]; then
+        unbuffer make -j${MAKE_JOBS} V=s 2>&1 | tee -a "$LOG_FILE"
+        exit_code=${PIPESTATUS[0]}
+    elif [ "$PHASE" = "第二阶段" ]; then
+        unbuffer make -j1 V=s 2>&1 | tee -a "$LOG_FILE"
+        exit_code=${PIPESTATUS[0]}
+    else
+        unbuffer make -j1 V=s 2>&1 | tee -a "$LOG_FILE"
+        exit_code=${PIPESTATUS[0]}
+    fi
 else
-    make -j1 V=s >> "$LOG_FILE" 2>&1
-    exit_code=$?
+    # 如果没有unbuffer，使用stdbuf
+    if [ "$PHASE" = "第一阶段" ]; then
+        stdbuf -oL -eL make -j${MAKE_JOBS} V=s 2>&1 | tee -a "$LOG_FILE"
+        exit_code=${PIPESTATUS[0]}
+    elif [ "$PHASE" = "第二阶段" ]; then
+        stdbuf -oL -eL make -j1 V=s 2>&1 | tee -a "$LOG_FILE"
+        exit_code=${PIPESTATUS[0]}
+    else
+        stdbuf -oL -eL make -j1 V=s 2>&1 | tee -a "$LOG_FILE"
+        exit_code=${PIPESTATUS[0]}
+    fi
 fi
 
-echo "=== $PHASE 结束于 $(date)，退出代码: $exit_code ===" >> "$LOG_FILE"
-echo "$exit_code" > "/tmp/build_phase_exit_$$.txt"
+echo "=== $PHASE 结束于 $(date)，退出代码: $exit_code ===" | tee -a "$LOG_FILE"
 exit $exit_code
 EOF
     chmod +x "$wrapper_script"
     
-    # 4. 导出环境变量
+    # 4. 创建后台监控脚本，实时显示编译进度
+    local monitor_script="$tmp_fds/monitor.sh"
+    cat > "$monitor_script" << 'EOF'
+#!/bin/bash
+LOG_FILE="$1"
+PHASE="$2"
+
+# 记录上次的位置
+last_position=0
+
+while true; do
+    if [ -f "$LOG_FILE" ]; then
+        # 获取文件当前大小
+        current_size=$(stat -c %s "$LOG_FILE" 2>/dev/null || echo "0")
+        
+        if [ $current_size -gt $last_position ]; then
+            # 显示新增的内容
+            dd if="$LOG_FILE" bs=1 skip=$last_position 2>/dev/null
+            last_position=$current_size
+        fi
+    fi
+    sleep 2
+done
+EOF
+    chmod +x "$monitor_script"
+    
+    # 5. 导出环境变量
     export OPENWRT_VERBOSE=1
     export FORCE_UNSAFE_CONFIGURE=1
     
@@ -5326,22 +5367,31 @@ EOF
         fi
         
         # ============================================
-        # 分段编译策略 - 使用包装脚本
+        # 第一阶段：并行编译（带实时监控）
         # ============================================
         echo ""
         echo "🚀 第一阶段：并行编译内核和模块"
         echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+        echo "   日志文件: $BUILD_DIR/build_phase1.log"
+        echo "   (日志将实时显示)"
         echo ""
+        
+        # 清空旧日志
+        > "$BUILD_DIR/build_phase1.log"
+        
+        # 启动后台监控进程
+        "$monitor_script" "$BUILD_DIR/build_phase1.log" "第一阶段" &
+        monitor_pid=$!
         
         START_TIME=$(date +%s)
         
         # 使用包装脚本运行第一阶段
         export MAKE_JOBS=$MAKE_JOBS
-        "$wrapper_script" "$BUILD_DIR" "$BUILD_DIR/build_phase1.log" "第一阶段"
+        "$wrapper_script" "$BUILD_DIR" "$BUILD_DIR/build_phase1.log" "第一阶段" "$MAKE_JOBS"
         PHASE1_EXIT_CODE=$?
         
-        # 显示进度
-        tail -20 "$BUILD_DIR/build_phase1.log" | grep -E "warning|error" || true
+        # 停止监控进程
+        kill $monitor_pid 2>/dev/null || true
         
         PHASE1_END=$(date +%s)
         PHASE1_DURATION=$((PHASE1_END - START_TIME))
@@ -5350,20 +5400,39 @@ EOF
         echo "✅ 第一阶段完成，耗时: $((PHASE1_DURATION / 60))分$((PHASE1_DURATION % 60))秒"
         echo "   退出代码: $PHASE1_EXIT_CODE"
         
+        # 显示最后50行日志作为摘要
+        echo ""
+        echo "📋 第一阶段最后50行日志摘要:"
+        echo "----------------------------------------"
+        tail -50 "$BUILD_DIR/build_phase1.log" | grep -E "warning|error|Error|ERROR|failed|Failed|FAILED|make|编译|error" -A 3 -B 3 || echo "  无关键日志"
+        echo "----------------------------------------"
+        
         # ============================================
-        # 第二阶段：单线程生成最终固件 - 关键修复
+        # 第二阶段：单线程生成最终固件
         # ============================================
         echo ""
-        echo "🚀 第二阶段：单线程生成最终固件（避免文件描述符问题）"
+        echo "🚀 第二阶段：单线程生成最终固件"
         echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+        echo "   日志文件: $BUILD_DIR/build_phase2.log"
+        echo "   (日志将实时显示)"
         echo ""
+        
+        # 清空日志
+        > "$BUILD_DIR/build_phase2.log"
+        
+        # 启动后台监控进程
+        "$monitor_script" "$BUILD_DIR/build_phase2.log" "第二阶段" &
+        monitor_pid=$!
         
         PHASE2_START=$(date +%s)
         
-        # 第二阶段强制单线程，并使用包装脚本
+        # 第二阶段强制单线程
         export MAKE_JOBS=1
-        "$wrapper_script" "$BUILD_DIR" "$BUILD_DIR/build_phase2.log" "第二阶段"
+        "$wrapper_script" "$BUILD_DIR" "$BUILD_DIR/build_phase2.log" "第二阶段" "1"
         BUILD_EXIT_CODE=$?
+        
+        # 停止监控进程
+        kill $monitor_pid 2>/dev/null || true
         
         PHASE2_END=$(date +%s)
         PHASE2_DURATION=$((PHASE2_END - PHASE2_START))
@@ -5372,6 +5441,13 @@ EOF
         echo ""
         echo "✅ 第二阶段完成，耗时: $((PHASE2_DURATION / 60))分$((PHASE2_DURATION % 60))秒"
         echo "📊 总编译时间: $((TOTAL_DURATION / 60))分$((TOTAL_DURATION % 60))秒"
+        
+        # 显示第二阶段最后50行
+        echo ""
+        echo "📋 第二阶段最后50行日志摘要:"
+        echo "----------------------------------------"
+        tail -50 "$BUILD_DIR/build_phase2.log" | grep -E "warning|error|Error|ERROR|failed|Failed|FAILED|make|编译|sysupgrade|factory|firmware" -A 3 -B 3 || echo "  无关键日志"
+        echo "----------------------------------------"
         
         # 合并日志
         cat "$BUILD_DIR/build_phase1.log" "$BUILD_DIR/build_phase2.log" > "$BUILD_DIR/build.log"
@@ -5382,14 +5458,26 @@ EOF
         echo ""
         echo "⚠️ 文件描述符限制较低或并行优化禁用，强制使用单线程编译"
         echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+        echo "   日志文件: $BUILD_DIR/build.log"
+        echo "   (日志将实时显示)"
         echo ""
+        
+        # 清空日志
+        > "$BUILD_DIR/build.log"
+        
+        # 启动后台监控进程
+        "$monitor_script" "$BUILD_DIR/build.log" "单线程编译" &
+        monitor_pid=$!
         
         START_TIME=$(date +%s)
         
         # 使用包装脚本单线程编译
         export MAKE_JOBS=1
-        "$wrapper_script" "$BUILD_DIR" "$BUILD_DIR/build.log" "单线程编译"
+        "$wrapper_script" "$BUILD_DIR" "$BUILD_DIR/build.log" "单线程编译" "1"
         BUILD_EXIT_CODE=$?
+        
+        # 停止监控进程
+        kill $monitor_pid 2>/dev/null || true
         
         END_TIME=$(date +%s)
         DURATION=$((END_TIME - START_TIME))
@@ -5397,6 +5485,12 @@ EOF
         echo ""
         echo "📊 编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
         echo "   退出代码: $BUILD_EXIT_CODE"
+        
+        echo ""
+        echo "📋 最后50行日志摘要:"
+        echo "----------------------------------------"
+        tail -50 "$BUILD_DIR/build.log" | grep -E "warning|error|Error|ERROR|failed|Failed|FAILED|make|编译|sysupgrade|factory|firmware" -A 3 -B 3 || echo "  无关键日志"
+        echo "----------------------------------------"
     fi
     
     # ============================================
@@ -5439,7 +5533,7 @@ EOF
     sleep 5  # 给文件系统足够时间
     
     # ============================================
-    # 检查并修复可能缺失的固件文件（关键修复）
+    # 检查并修复可能缺失的固件文件
     # ============================================
     echo "🔍 检查固件文件..."
     
@@ -5548,6 +5642,17 @@ EOF
         echo "  ❌ 未找到任何固件文件"
     fi
     echo "----------------------------------------"
+    
+    # 检查是否生成了sysupgrade固件
+    if [ -f "$BUILD_DIR/bin/targets/ath79/generic/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" ]; then
+        echo "✅ sysupgrade固件已生成: openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
+    else
+        echo "⚠️ 警告: sysupgrade固件未生成，请检查第二阶段日志"
+        echo "   可能的原因:"
+        echo "   - 编译过程中有错误"
+        echo "   - 内核模块问题"
+        echo "   - 文件系统问题"
+    fi
     
     log "✅ 步骤25 完成"
 }
