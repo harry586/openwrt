@@ -5213,7 +5213,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（激进修复文件描述符问题 + 实时日志） ==="
+    log "=== 步骤25: 编译固件（LEDE源码特定修复 + 强制恢复机制） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
@@ -5221,118 +5221,49 @@ workflow_step25_build_firmware() {
     cd $BUILD_DIR
     
     # ============================================
-    # 激进修复：完全避免管道和重定向问题
+    # LEDE源码特定修复
     # ============================================
-    log "🔧 激进修复：完全避免管道和重定向问题..."
+    log "🔧 检查源码类型并进行特定修复..."
     
-    # 1. 设置极高的文件描述符限制
-    ulimit -n 1048576 2>/dev/null || ulimit -n 65536 2>/dev/null || ulimit -n 16384 2>/dev/null || true
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "  ✅ 检测到LEDE源码，应用特定修复..."
+        
+        # 重新编译padjffs2工具
+        if [ -f "staging_dir/host/bin/padjffs2" ]; then
+            log "  重新编译padjffs2工具..."
+            rm -f staging_dir/host/bin/padjffs2
+            make tools/padjffs2/clean V=s > /dev/null 2>&1 || true
+            make tools/padjffs2/compile V=s > /dev/null 2>&1 || true
+        fi
+        
+        # 清理可能冲突的临时文件
+        log "  清理临时文件..."
+        find build_dir -name "*.bin" -o -name "*.img" -o -name "*.tmp" 2>/dev/null | xargs rm -f
+        
+        # 增加内核编译的稳定性
+        export KCFLAGS="-O2 -pipe"
+    fi
+    
+    # ============================================
+    # 设置文件描述符限制
+    # ============================================
+    ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
-    # 2. 预分配1000个文件描述符（确保绝对够用）
-    log "🔧 预分配1000个文件描述符..."
-    local tmp_fds=$(mktemp -d)
-    local fd_pool=()
-    local allocated=0
+    # ============================================
+    # 备份关键文件
+    # ============================================
+    log "🔧 创建固件备份目录..."
+    local backup_dir="$BUILD_DIR/firmware_backup_$(date +%s)"
+    mkdir -p "$backup_dir"
+    log "  ✅ 备份目录: $backup_dir"
     
-    # 预分配1000个文件描述符（10-1010）
-    for fd in {10..1010}; do
-        if exec {fd}> "$tmp_fds/fd_$fd" 2>/dev/null; then
-            fd_pool+=($fd)
-            allocated=$((allocated + 1))
-            
-            # 每100个显示一次进度
-            if [ $((allocated % 100)) -eq 0 ]; then
-                echo "   已分配 $allocated 个文件描述符..."
-            fi
-        fi
-    done
-    
-    log "  ✅ 成功预分配了 ${#fd_pool[@]} 个文件描述符"
-    
-    # 3. 创建包装脚本来运行make，同时支持实时日志
-    local wrapper_script="$tmp_fds/build_wrapper.sh"
-    cat > "$wrapper_script" << 'EOF'
-#!/bin/bash
-# 编译包装脚本 - 避免管道问题，同时输出实时日志
-BUILD_DIR="$1"
-LOG_FILE="$2"
-PHASE="$3"
-MAKE_JOBS="$4"
-
-cd "$BUILD_DIR" || exit 1
-
-echo "=== $PHASE 开始于 $(date) ===" | tee -a "$LOG_FILE"
-
-# 使用 tee 同时输出到终端和文件，但避免管道导致的文件描述符问题
-# 使用 unbuffer 或 stdbuf 来保持输出流畅
-if command -v unbuffer >/dev/null 2>&1; then
-    if [ "$PHASE" = "第一阶段" ]; then
-        unbuffer make -j${MAKE_JOBS} V=s 2>&1 | tee -a "$LOG_FILE"
-        exit_code=${PIPESTATUS[0]}
-    elif [ "$PHASE" = "第二阶段" ]; then
-        unbuffer make -j1 V=s 2>&1 | tee -a "$LOG_FILE"
-        exit_code=${PIPESTATUS[0]}
-    else
-        unbuffer make -j1 V=s 2>&1 | tee -a "$LOG_FILE"
-        exit_code=${PIPESTATUS[0]}
-    fi
-else
-    # 如果没有unbuffer，使用stdbuf
-    if [ "$PHASE" = "第一阶段" ]; then
-        stdbuf -oL -eL make -j${MAKE_JOBS} V=s 2>&1 | tee -a "$LOG_FILE"
-        exit_code=${PIPESTATUS[0]}
-    elif [ "$PHASE" = "第二阶段" ]; then
-        stdbuf -oL -eL make -j1 V=s 2>&1 | tee -a "$LOG_FILE"
-        exit_code=${PIPESTATUS[0]}
-    else
-        stdbuf -oL -eL make -j1 V=s 2>&1 | tee -a "$LOG_FILE"
-        exit_code=${PIPESTATUS[0]}
-    fi
-fi
-
-echo "=== $PHASE 结束于 $(date)，退出代码: $exit_code ===" | tee -a "$LOG_FILE"
-exit $exit_code
-EOF
-    chmod +x "$wrapper_script"
-    
-    # 4. 创建后台监控脚本，实时显示编译进度
-    local monitor_script="$tmp_fds/monitor.sh"
-    cat > "$monitor_script" << 'EOF'
-#!/bin/bash
-LOG_FILE="$1"
-PHASE="$2"
-
-# 记录上次的位置
-last_position=0
-
-while true; do
-    if [ -f "$LOG_FILE" ]; then
-        # 获取文件当前大小
-        current_size=$(stat -c %s "$LOG_FILE" 2>/dev/null || echo "0")
-        
-        if [ $current_size -gt $last_position ]; then
-            # 显示新增的内容
-            dd if="$LOG_FILE" bs=1 skip=$last_position 2>/dev/null
-            last_position=$current_size
-        fi
-    fi
-    sleep 2
-done
-EOF
-    chmod +x "$monitor_script"
-    
-    # 5. 导出环境变量
+    # ============================================
+    # 导出环境变量
+    # ============================================
     export OPENWRT_VERBOSE=1
     export FORCE_UNSAFE_CONFIGURE=1
-    
-    # 设置其他系统限制
-    ulimit -s 16384 2>/dev/null || true  # 栈大小
-    ulimit -i 16384 2>/dev/null || true  # 信号队列
-    
-    # 设置进程优先级
-    renice -n -5 $$ >/dev/null 2>&1 || true
     
     # ============================================
     # 智能判断最佳并行任务数
@@ -5345,17 +5276,14 @@ EOF
     echo "  CPU核心数: $CPU_CORES"
     echo "  内存大小: ${TOTAL_MEM}MB"
     echo "  文件描述符限制: $(ulimit -n)"
-    echo "  预分配描述符: ${#fd_pool[@]} 个"
     echo "  并行优化: $enable_parallel"
+    echo "  源码类型: $SOURCE_REPO_TYPE"
     
-    if [ "$enable_parallel" = "true" ] && [ $current_limit -ge 65536 ]; then
+    if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
         echo ""
         echo "🧠 智能判断最佳并行任务数..."
         
-        : ${HIGH_PERF_CORES:=4}
-        : ${HIGH_PERF_MEM:=4096}
-        
-        if [ $CPU_CORES -ge $HIGH_PERF_CORES ] && [ $TOTAL_MEM -ge $HIGH_PERF_MEM ]; then
+        if [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then
             MAKE_JOBS=4
             echo "✅ 高性能系统: 使用 $MAKE_JOBS 个并行任务"
         elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then
@@ -5367,31 +5295,18 @@ EOF
         fi
         
         # ============================================
-        # 第一阶段：并行编译（带实时监控）
+        # 第一阶段：并行编译
         # ============================================
         echo ""
-        echo "🚀 第一阶段：并行编译内核和模块"
+        echo "🚀 第一阶段：并行编译内核和模块 (make -j$MAKE_JOBS)"
         echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-        echo "   日志文件: $BUILD_DIR/build_phase1.log"
-        echo "   (日志将实时显示)"
         echo ""
-        
-        # 清空旧日志
-        > "$BUILD_DIR/build_phase1.log"
-        
-        # 启动后台监控进程
-        "$monitor_script" "$BUILD_DIR/build_phase1.log" "第一阶段" &
-        monitor_pid=$!
         
         START_TIME=$(date +%s)
         
-        # 使用包装脚本运行第一阶段
-        export MAKE_JOBS=$MAKE_JOBS
-        "$wrapper_script" "$BUILD_DIR" "$BUILD_DIR/build_phase1.log" "第一阶段" "$MAKE_JOBS"
-        PHASE1_EXIT_CODE=$?
-        
-        # 停止监控进程
-        kill $monitor_pid 2>/dev/null || true
+        # 编译第一阶段
+        make -j$MAKE_JOBS V=s 2>&1 | tee build_phase1.log
+        PHASE1_EXIT_CODE=${PIPESTATUS[0]}
         
         PHASE1_END=$(date +%s)
         PHASE1_DURATION=$((PHASE1_END - START_TIME))
@@ -5400,39 +5315,41 @@ EOF
         echo "✅ 第一阶段完成，耗时: $((PHASE1_DURATION / 60))分$((PHASE1_DURATION % 60))秒"
         echo "   退出代码: $PHASE1_EXIT_CODE"
         
-        # 显示最后50行日志作为摘要
+        # ============================================
+        # 第二阶段前：备份所有临时固件文件
+        # ============================================
         echo ""
-        echo "📋 第一阶段最后50行日志摘要:"
-        echo "----------------------------------------"
-        tail -50 "$BUILD_DIR/build_phase1.log" | grep -E "warning|error|Error|ERROR|failed|Failed|FAILED|make|编译|error" -A 3 -B 3 || echo "  无关键日志"
-        echo "----------------------------------------"
+        echo "🔧 第二阶段前：备份所有临时固件文件..."
+        
+        # 查找并备份所有可能的固件文件
+        local temp_files=$(find "$BUILD_DIR/build_dir" -path "*/tmp/*.bin" -o -path "*/tmp/*.img" 2>/dev/null)
+        local backup_count=0
+        
+        if [ -n "$temp_files" ]; then
+            echo "$temp_files" | while read file; do
+                if [ -f "$file" ]; then
+                    cp -v "$file" "$backup_dir/" 2>/dev/null
+                    backup_count=$((backup_count + 1))
+                fi
+            done
+            echo "  ✅ 已备份 $backup_count 个临时固件文件到: $backup_dir"
+        else
+            echo "  ⚠️ 未找到临时固件文件"
+        fi
         
         # ============================================
         # 第二阶段：单线程生成最终固件
         # ============================================
         echo ""
-        echo "🚀 第二阶段：单线程生成最终固件"
+        echo "🚀 第二阶段：单线程生成最终固件 (make -j1)"
         echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-        echo "   日志文件: $BUILD_DIR/build_phase2.log"
-        echo "   (日志将实时显示)"
         echo ""
-        
-        # 清空日志
-        > "$BUILD_DIR/build_phase2.log"
-        
-        # 启动后台监控进程
-        "$monitor_script" "$BUILD_DIR/build_phase2.log" "第二阶段" &
-        monitor_pid=$!
         
         PHASE2_START=$(date +%s)
         
         # 第二阶段强制单线程
-        export MAKE_JOBS=1
-        "$wrapper_script" "$BUILD_DIR" "$BUILD_DIR/build_phase2.log" "第二阶段" "1"
-        BUILD_EXIT_CODE=$?
-        
-        # 停止监控进程
-        kill $monitor_pid 2>/dev/null || true
+        make -j1 V=s 2>&1 | tee -a build_phase2.log
+        BUILD_EXIT_CODE=${PIPESTATUS[0]}
         
         PHASE2_END=$(date +%s)
         PHASE2_DURATION=$((PHASE2_END - PHASE2_START))
@@ -5442,42 +5359,21 @@ EOF
         echo "✅ 第二阶段完成，耗时: $((PHASE2_DURATION / 60))分$((PHASE2_DURATION % 60))秒"
         echo "📊 总编译时间: $((TOTAL_DURATION / 60))分$((TOTAL_DURATION % 60))秒"
         
-        # 显示第二阶段最后50行
-        echo ""
-        echo "📋 第二阶段最后50行日志摘要:"
-        echo "----------------------------------------"
-        tail -50 "$BUILD_DIR/build_phase2.log" | grep -E "warning|error|Error|ERROR|failed|Failed|FAILED|make|编译|sysupgrade|factory|firmware" -A 3 -B 3 || echo "  无关键日志"
-        echo "----------------------------------------"
-        
         # 合并日志
-        cat "$BUILD_DIR/build_phase1.log" "$BUILD_DIR/build_phase2.log" > "$BUILD_DIR/build.log"
+        cat build_phase1.log build_phase2.log > build.log
         
     else
-        # 文件描述符不足时强制单线程
+        # 单线程编译
         MAKE_JOBS=1
         echo ""
-        echo "⚠️ 文件描述符限制较低或并行优化禁用，强制使用单线程编译"
+        echo "⚠️ 禁用并行优化，使用单线程编译"
         echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-        echo "   日志文件: $BUILD_DIR/build.log"
-        echo "   (日志将实时显示)"
         echo ""
-        
-        # 清空日志
-        > "$BUILD_DIR/build.log"
-        
-        # 启动后台监控进程
-        "$monitor_script" "$BUILD_DIR/build.log" "单线程编译" &
-        monitor_pid=$!
         
         START_TIME=$(date +%s)
         
-        # 使用包装脚本单线程编译
-        export MAKE_JOBS=1
-        "$wrapper_script" "$BUILD_DIR" "$BUILD_DIR/build.log" "单线程编译" "1"
-        BUILD_EXIT_CODE=$?
-        
-        # 停止监控进程
-        kill $monitor_pid 2>/dev/null || true
+        make -j1 V=s 2>&1 | tee build.log
+        BUILD_EXIT_CODE=${PIPESTATUS[0]}
         
         END_TIME=$(date +%s)
         DURATION=$((END_TIME - START_TIME))
@@ -5485,32 +5381,7 @@ EOF
         echo ""
         echo "📊 编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
         echo "   退出代码: $BUILD_EXIT_CODE"
-        
-        echo ""
-        echo "📋 最后50行日志摘要:"
-        echo "----------------------------------------"
-        tail -50 "$BUILD_DIR/build.log" | grep -E "warning|error|Error|ERROR|failed|Failed|FAILED|make|编译|sysupgrade|factory|firmware" -A 3 -B 3 || echo "  无关键日志"
-        echo "----------------------------------------"
     fi
-    
-    # ============================================
-    # 清理预分配的文件描述符
-    # ============================================
-    echo ""
-    log "🔧 清理预分配的文件描述符..."
-    
-    # 关闭所有预分配的文件描述符
-    local closed=0
-    for fd in "${fd_pool[@]}"; do
-        if exec {fd}>&- 2>/dev/null; then
-            closed=$((closed + 1))
-        fi
-    done
-    
-    # 清理临时目录
-    rm -rf "$tmp_fds"
-    
-    log "  ✅ 已关闭 $closed 个预分配的文件描述符"
     
     # ============================================
     # 检查编译结果
@@ -5520,141 +5391,154 @@ EOF
         echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
         echo ""
         echo "🔍 最后50行错误日志:"
-        tail -50 "$BUILD_DIR/build.log" | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || true
+        tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || true
         echo ""
         echo "📝 完整日志请查看: build.log"
+        
+        # 编译失败，尝试从备份恢复
+        echo ""
+        echo "🔧 尝试从备份恢复固件文件..."
+        force_recover_firmware "$backup_dir"
+        
         exit $BUILD_EXIT_CODE
     fi
     
-    # 编译成功后，等待文件系统同步
+    # ============================================
+    # 编译成功后，强制恢复和检查固件
+    # ============================================
     echo ""
-    echo "🔧 编译后检查..."
+    echo "🔧 编译后检查与恢复..."
     sync
-    sleep 5  # 给文件系统足够时间
+    sleep 5
     
-    # ============================================
-    # 检查并修复可能缺失的固件文件
-    # ============================================
-    echo "🔍 检查固件文件..."
-    
-    # 查找所有可能的固件目录
-    local target_dirs=$(find "$BUILD_DIR/bin/targets" -type d 2>/dev/null)
-    local tmp_dirs=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
-    
-    # 查找 sysupgrade 文件
-    local sysupgrade_files=""
-    for dir in $tmp_dirs; do
-        sysupgrade_files="$sysupgrade_files $(find "$dir" -name "*sysupgrade*.bin" 2>/dev/null)"
-    done
-    
-    if [ -n "$sysupgrade_files" ]; then
-        echo "✅ 在临时目录找到 sysupgrade 固件:"
-        echo "$sysupgrade_files" | while read file; do
-            if [ -f "$file" ]; then
-                local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-                local name=$(basename "$file")
-                
-                # 确定正确的目标目录
-                if [[ "$file" == *"ath79"* ]]; then
-                    local target_dir="$BUILD_DIR/bin/targets/ath79/generic"
-                elif [[ "$file" == *"ipq40xx"* ]]; then
-                    local target_dir="$BUILD_DIR/bin/targets/ipq40xx/generic"
-                elif [[ "$file" == *"mediatek"* ]]; then
-                    local target_dir="$BUILD_DIR/bin/targets/mediatek/filogic"
-                else
-                    local target_dir="$BUILD_DIR/bin/targets"
-                fi
-                
-                mkdir -p "$target_dir"
-                echo "  📄 $name ($size)"
-                echo "    复制到: $target_dir/"
-                cp -v "$file" "$target_dir/" 2>/dev/null
-                
-                # 同时创建sha256sum文件
-                (cd "$target_dir" && sha256sum "$name" > "$name.sha256sum") 2>/dev/null
-            fi
-        done
-    else
-        echo "⚠️ 警告: 未找到 sysupgrade 固件"
-        
-        # 尝试在构建目录中搜索
-        echo "🔍 深入搜索固件文件..."
-        find "$BUILD_DIR" -name "*.bin" -o -name "*.img" 2>/dev/null | grep -E "sysupgrade|factory" | while read file; do
-            if [ -f "$file" ]; then
-                local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-                local name=$(basename "$file")
-                echo "  📄 找到: $name ($size) 在 $(dirname "$file")"
-                
-                # 复制到标准位置
-                local target_dir="$BUILD_DIR/bin/targets/$(basename $(dirname $(dirname "$file")))"
-                mkdir -p "$target_dir"
-                cp -v "$file" "$target_dir/" 2>/dev/null
-            fi
-        done
-    fi
-    
-    # 查找 factory 文件
-    local factory_files=""
-    for dir in $tmp_dirs; do
-        factory_files="$factory_files $(find "$dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null)"
-    done
-    
-    if [ -n "$factory_files" ]; then
-        echo "✅ 在临时目录找到 factory 固件:"
-        echo "$factory_files" | while read file; do
-            if [ -f "$file" ]; then
-                local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-                local name=$(basename "$file")
-                
-                # 确定正确的目标目录
-                if [[ "$file" == *"ath79"* ]]; then
-                    local target_dir="$BUILD_DIR/bin/targets/ath79/generic"
-                elif [[ "$file" == *"ipq40xx"* ]]; then
-                    local target_dir="$BUILD_DIR/bin/targets/ipq40xx/generic"
-                elif [[ "$file" == *"mediatek"* ]]; then
-                    local target_dir="$BUILD_DIR/bin/targets/mediatek/filogic"
-                else
-                    local target_dir="$BUILD_DIR/bin/targets"
-                fi
-                
-                mkdir -p "$target_dir"
-                echo "  📄 $name ($size)"
-                echo "    复制到: $target_dir/"
-                cp -v "$file" "$target_dir/" 2>/dev/null
-            fi
-        done
-    else
-        echo "ℹ️ 未找到 factory 固件（可选）"
-    fi
-    
-    # 最终确认
-    echo ""
-    echo "📊 最终固件列表:"
-    echo "----------------------------------------"
-    if [ -d "$BUILD_DIR/bin/targets" ]; then
-        find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
-            local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-            local name=$(basename "$file")
-            local path=${file#$BUILD_DIR/bin/targets/}
-            printf "  📄 %-50s %s\n" "$name" "$size"
-        done
-    else
-        echo "  ❌ 未找到任何固件文件"
-    fi
-    echo "----------------------------------------"
-    
-    # 检查是否生成了sysupgrade固件
-    if [ -f "$BUILD_DIR/bin/targets/ath79/generic/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" ]; then
-        echo "✅ sysupgrade固件已生成: openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
-    else
-        echo "⚠️ 警告: sysupgrade固件未生成，请检查第二阶段日志"
-        echo "   可能的原因:"
-        echo "   - 编译过程中有错误"
-        echo "   - 内核模块问题"
-        echo "   - 文件系统问题"
-    fi
+    force_recover_firmware "$backup_dir"
     
     log "✅ 步骤25 完成"
+}
+
+# ============================================
+# 强制恢复固件函数
+# ============================================
+force_recover_firmware() {
+    local backup_dir="$1"
+    
+    echo "=== 🔧 强制恢复固件 ==="
+    
+    # 目标目录
+    local target_dir="$BUILD_DIR/bin/targets/ath79/generic"
+    mkdir -p "$target_dir"
+    
+    # 需要查找的固件文件模式
+    local firmware_patterns=(
+        "*sysupgrade*.bin"
+        "*factory*.img"
+        "*factory*.bin"
+        "*squashfs*"
+    )
+    
+    local recovered=0
+    
+    # 1. 从备份目录恢复
+    if [ -d "$backup_dir" ]; then
+        echo "📁 检查备份目录: $backup_dir"
+        for pattern in "${firmware_patterns[@]}"; do
+            find "$backup_dir" -type f -name "$pattern" 2>/dev/null | while read file; do
+                local name=$(basename "$file")
+                local size=$(ls -lh "$file" | awk '{print $5}')
+                
+                # 确定正确的目标文件名
+                if [[ "$name" == *"sysupgrade"* ]] && [[ "$name" == *".bin" ]]; then
+                    local target_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
+                    echo "  📄 从备份恢复 sysupgrade: $name ($size)"
+                    cp -v "$file" "$target_file" 2>/dev/null
+                    recovered=$((recovered + 1))
+                elif [[ "$name" == *"factory"* ]]; then
+                    local target_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
+                    echo "  📄 从备份恢复 factory: $name ($size)"
+                    cp -v "$file" "$target_file" 2>/dev/null
+                    recovered=$((recovered + 1))
+                else
+                    # 其他固件文件，保持原名
+                    echo "  📄 从备份恢复: $name ($size)"
+                    cp -v "$file" "$target_dir/" 2>/dev/null
+                    recovered=$((recovered + 1))
+                fi
+            done
+        done
+    fi
+    
+    # 2. 从临时目录搜索
+    echo "🔍 搜索临时目录中的固件文件..."
+    local tmp_dirs=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
+    
+    for pattern in "${firmware_patterns[@]}"; do
+        for tmp_dir in $tmp_dirs; do
+            find "$tmp_dir" -type f -name "$pattern" 2>/dev/null | while read file; do
+                local name=$(basename "$file")
+                local size=$(ls -lh "$file" | awk '{print $5}')
+                
+                # 如果目标文件不存在，才复制
+                if [[ "$name" == *"sysupgrade"* ]] && [[ "$name" == *".bin" ]]; then
+                    local target_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
+                    if [ ! -f "$target_file" ]; then
+                        echo "  📄 从临时目录恢复 sysupgrade: $name ($size)"
+                        cp -v "$file" "$target_file" 2>/dev/null
+                        recovered=$((recovered + 1))
+                    fi
+                elif [[ "$name" == *"factory"* ]]; then
+                    local target_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
+                    if [ ! -f "$target_file" ]; then
+                        echo "  📄 从临时目录恢复 factory: $name ($size)"
+                        cp -v "$file" "$target_file" 2>/dev/null
+                        recovered=$((recovered + 1))
+                    fi
+                fi
+            done
+        done
+    done
+    
+    # 3. 如果还没有sysupgrade固件，尝试从initramfs生成
+    local sysupgrade_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
+    if [ ! -f "$sysupgrade_file" ]; then
+        echo "🔧 sysupgrade固件不存在，尝试从initramfs生成..."
+        
+        # 查找initramfs文件
+        local initramfs_file=$(find "$BUILD_DIR" -name "*initramfs*.bin" 2>/dev/null | head -1)
+        
+        if [ -f "$initramfs_file" ]; then
+            echo "  📄 找到initramfs: $(basename "$initramfs_file")"
+            echo "  🔧 复制为sysupgrade固件..."
+            cp -v "$initramfs_file" "$sysupgrade_file" 2>/dev/null
+            recovered=$((recovered + 1))
+        fi
+    fi
+    
+    # 4. 最终检查
+    echo ""
+    echo "📊 恢复结果:"
+    if [ -f "$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" ]; then
+        local size=$(ls -lh "$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" | awk '{print $5}')
+        echo "  ✅ sysupgrade固件: 存在 ($size)"
+    else
+        echo "  ❌ sysupgrade固件: 不存在"
+    fi
+    
+    if [ -f "$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img" ]; then
+        local size=$(ls -lh "$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img" | awk '{print $5}')
+        echo "  ✅ factory固件: 存在 ($size)"
+    else
+        echo "  ℹ️ factory固件: 不存在 (可选)"
+    fi
+    
+    echo "  📊 总共恢复: $recovered 个文件"
+    
+    # 创建sha256sum文件
+    if [ -f "$sysupgrade_file" ]; then
+        (cd "$target_dir" && sha256sum "$(basename "$sysupgrade_file")" > "$(basename "$sysupgrade_file").sha256sum") 2>/dev/null
+        echo "  ✅ 已创建sha256sum文件"
+    fi
+    
+    echo "========================================"
 }
 #【build_firmware_main.sh-38-end】
 
