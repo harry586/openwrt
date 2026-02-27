@@ -1,7 +1,7 @@
 #【firmware-build.yml-00】
 # OpenWrt 智能固件构建工作流 - 系统主入口
-# 版本: 3.3.0
-# 最后更新: 2026-02-25
+# 版本: 3.4.0
+# 最后更新: 2026-02-27
 
 name: OpenWrt 智能固件构建工作流
 
@@ -266,175 +266,112 @@ jobs:
       #【firmware-build.yml-08-end】
 
       #【firmware-build.yml-09】
-      - name: "09. 下载OpenWrt官方SDK"
+      - name: "09. 配置Feeds【动态禁用插件】"
         run: |
-          echo "=== 步骤09: 下载OpenWrt官方SDK ==="
+          echo "=== 步骤09: 配置Feeds【动态禁用插件】 ==="
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step09_download_sdk \
-            "$FINAL_DEVICE_NAME"
+            step11_configure_feeds
       #【firmware-build.yml-09-end】
 
       #【firmware-build.yml-10】
-      - name: "10. 验证SDK下载结果"
+      - name: "10. 安装TurboACC包"
+        if: github.event.inputs.config_mode == 'normal'
         run: |
-          echo "=== 步骤10: 验证SDK下载结果 ==="
+          echo "=== 步骤10: 安装TurboACC包 ==="
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step10_verify_sdk
+            step12_install_turboacc
       #【firmware-build.yml-10-end】
 
       #【firmware-build.yml-11】
-      - name: "11. 添加TurboACC支持"
+      - name: "11. 编译前空间检查"
         run: |
-          echo "=== 步骤11: 添加TurboACC支持 ==="
+          echo "=== 步骤11: 编译前空间检查 ==="
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step11_add_turboacc
+            step13_pre_build_space_check
       #【firmware-build.yml-11-end】
 
       #【firmware-build.yml-12】
-      - name: "12. 配置Feeds"
+      - name: "12. 智能配置生成【修复版】"
         run: |
-          echo "=== 步骤12: 配置Feeds ==="
+          echo "=== 步骤12: 智能配置生成【修复版】 ==="
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step12_configure_feeds
+            step14_generate_config \
+            "${{ github.event.inputs.extra_packages }}"
       #【firmware-build.yml-12-end】
 
       #【firmware-build.yml-13】
-      - name: "13. 安装TurboACC包"
-        if: github.event.inputs.config_mode == 'normal'
+      - name: "13. 验证USB配置"
         run: |
-          echo "=== 步骤13: 安装TurboACC包 ==="
+          echo "=== 步骤13: 验证USB配置 ==="
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step13_install_turboacc
+            step15_verify_usb
       #【firmware-build.yml-13-end】
 
       #【firmware-build.yml-14】
-      - name: "14. 编译前空间检查"
+      - name: "14. 应用配置并显示详细信息"
         run: |
-          echo "=== 步骤14: 编译前空间检查 ==="
-          
-          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step14_pre_build_space_check
-      #【firmware-build.yml-14-end】
-
-      #【firmware-build.yml-15】
-      - name: "15. 智能配置生成【修复版】"
-        run: |
-          echo "=== 步骤15: 智能配置生成【修复版】 ==="
-          
-          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step15_generate_config \
-            "${{ github.event.inputs.extra_packages }}"
-      #【firmware-build.yml-15-end】
-
-      #【firmware-build.yml-16】
-      - name: "16. 验证USB配置"
-        run: |
-          echo "=== 步骤16: 验证USB配置 ==="
-          
-          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step16_verify_usb
-      #【firmware-build.yml-16-end】
-
-      #【firmware-build.yml-17】
-      - name: "17. USB驱动完整性检查"
-        run: |
-          echo "=== 步骤17: USB驱动完整性检查 ==="
-          
-          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step17_check_usb_drivers
-      #【firmware-build.yml-17-end】
-
-      #【firmware-build.yml-18】
-      - name: "18. 应用配置并显示详细信息"
-        run: |
-          echo "=== 步骤18: 应用配置并显示详细信息 ==="
+          echo "=== 步骤14: 应用配置并显示详细信息 ==="
           
           set -e
-          trap 'echo "❌ 步骤18 失败，退出代码: $?"; exit 1' ERR
+          trap 'echo "❌ 步骤14 失败，退出代码: $?"; exit 1' ERR
           
           cd /mnt/openwrt-build
           
           echo "🔄 调用主脚本的 apply_config 函数..."
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            apply_config
+            step16_apply_config
           
-          echo "✅ 步骤18 完成"
+          echo "✅ 步骤14 完成"
+      #【firmware-build.yml-14-end】
+
+      #【firmware-build.yml-15】
+      - name: "15. 修复网络环境"
+        run: |
+          echo "=== 步骤15: 修复网络环境 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step17_fix_network
+      #【firmware-build.yml-15-end】
+
+      #【firmware-build.yml-16】
+      - name: "16. 下载依赖包"
+        run: |
+          echo "=== 步骤16: 下载依赖包 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step18_download_deps
+      #【firmware-build.yml-16-end】
+
+      #【firmware-build.yml-17】
+      - name: "17. 集成自定义文件"
+        run: |
+          echo "=== 步骤17: 集成自定义文件 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step19_integrate_custom_files
+      #【firmware-build.yml-17-end】
+
+      #【firmware-build.yml-18】
+      - name: "18. 前置错误检查"
+        run: |
+          echo "=== 步骤18: 前置错误检查 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step20_pre_build_check
       #【firmware-build.yml-18-end】
 
       #【firmware-build.yml-19】
-      - name: "19. 备份配置文件"
+      - name: "19. 编译前空间确认"
         run: |
-          echo "=== 步骤19: 备份配置文件 ==="
+          echo "=== 步骤19: 编译前空间确认 ==="
           
           set -e
           trap 'echo "❌ 步骤19 失败，退出代码: $?"; exit 1' ERR
-          
-          cd /mnt/openwrt-build
-          
-          if [ ! -f ".config" ]; then
-            echo "❌ 错误: .config 文件不存在"
-            exit 1
-          fi
-          
-          echo "✅ .config 文件存在"
-          echo "📊 文件大小: $(ls -lh .config | awk '{print $5}')"
-          echo "📝 文件行数: $(wc -l < .config)"
-          
-          mkdir -p ${{ github.workspace }}/firmware-config/config-backup
-          BACKUP_FILE="${{ github.workspace }}/firmware-config/config-backup/config_${{ env.TIMESTAMP_SEC }}.config"
-          
-          cp .config "$BACKUP_FILE"
-          echo "✅ 配置文件已备份到: $BACKUP_FILE"
-      #【firmware-build.yml-19-end】
-
-      #【firmware-build.yml-20】
-      - name: "20. 修复网络环境"
-        run: |
-          echo "=== 步骤20: 修复网络环境 ==="
-          
-          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step20_fix_network
-      #【firmware-build.yml-20-end】
-
-      #【firmware-build.yml-21】
-      - name: "21. 下载依赖包"
-        run: |
-          echo "=== 步骤21: 下载依赖包 ==="
-          
-          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step21_download_deps
-      #【firmware-build.yml-21-end】
-
-      #【firmware-build.yml-22】
-      - name: "22. 集成自定义文件"
-        run: |
-          echo "=== 步骤22: 集成自定义文件 ==="
-          
-          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step22_integrate_custom_files
-      #【firmware-build.yml-22-end】
-
-      #【firmware-build.yml-23】
-      - name: "23. 前置错误检查"
-        run: |
-          echo "=== 步骤23: 前置错误检查 ==="
-          
-          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step23_pre_build_check
-      #【firmware-build.yml-23-end】
-
-      #【firmware-build.yml-24】
-      - name: "24. 编译前空间确认"
-        run: |
-          echo "=== 步骤24: 编译前空间确认 ==="
-          
-          set -e
-          trap 'echo "❌ 步骤24 失败，退出代码: $?"; exit 1' ERR
           
           df -h /mnt
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
@@ -447,30 +384,30 @@ jobs:
           else
             echo "✅ 编译前空间充足"
           fi
-      #【firmware-build.yml-24-end】
+      #【firmware-build.yml-19-end】
 
-      #【firmware-build.yml-25】
-      - name: "25. 编译固件"
+      #【firmware-build.yml-20】
+      - name: "20. 编译固件"
         run: |
-          echo "=== 步骤25: 编译固件 ==="
+          echo "=== 步骤20: 编译固件 ==="
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step25_build_firmware \
+            step22_build_firmware \
             "${{ env.ENABLE_PARALLEL }}"
-      #【firmware-build.yml-25-end】
+      #【firmware-build.yml-20-end】
 
-      #【firmware-build.yml-26】
-      - name: "26. 检查构建产物"
+      #【firmware-build.yml-21】
+      - name: "21. 检查构建产物"
         if: success()
         run: |
-          echo "=== 步骤26: 检查构建产物 ==="
+          echo "=== 步骤21: 检查构建产物 ==="
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step26_check_artifacts
-      #【firmware-build.yml-26-end】
+            step23_check_artifacts
+      #【firmware-build.yml-21-end】
 
-      #【firmware-build.yml-27】
-      - name: "27. 上传固件"
+      #【firmware-build.yml-22】
+      - name: "22. 上传固件"
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -478,43 +415,32 @@ jobs:
           path: /mnt/openwrt-build/bin/targets/
           retention-days: 7
           if-no-files-found: error
-      #【firmware-build.yml-27-end】
+      #【firmware-build.yml-22-end】
 
-      #【firmware-build.yml-28】
-      - name: "28. 上传配置文件"
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: config-${{ env.TIMESTAMP_SEC }}
-          path: ${{ github.workspace }}/firmware-config/config-backup/
-          retention-days: 7
-          if-no-files-found: error
-      #【firmware-build.yml-28-end】
-
-      #【firmware-build.yml-29】
-      - name: "29. 编译后空间检查"
+      #【firmware-build.yml-23】
+      - name: "23. 编译后空间检查"
         if: always()
         run: |
-          echo "=== 步骤29: 编译后空间检查 ==="
+          echo "=== 步骤23: 编译后空间检查 ==="
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step29_post_build_space_check
-      #【firmware-build.yml-29-end】
+            step24_post_build_space_check
+      #【firmware-build.yml-23-end】
 
-      #【firmware-build.yml-30】
-      - name: "30. 编译总结"
+      #【firmware-build.yml-24】
+      - name: "24. 编译总结"
         if: always()
         run: |
-          echo "=== 步骤30: 编译总结 ==="
+          echo "=== 步骤24: 编译总结 ==="
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step30_build_summary \
+            step25_build_summary \
             "$FINAL_DEVICE_NAME" \
             "${{ github.event.inputs.version_selection }}" \
             "${{ github.event.inputs.config_mode }}" \
             "${{ env.TIMESTAMP_SEC }}" \
             "${{ github.event.inputs.enable_parallel }}"
-      #【firmware-build.yml-30-end】
+      #【firmware-build.yml-24-end】
 #【firmware-build.yml-99】
 # 工作流文件结束
 #【firmware-build.yml-99-end】
