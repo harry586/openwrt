@@ -387,15 +387,40 @@ initialize_build_env() {
         log "✅ 使用手动指定的平台信息: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
     elif [ -f "$SUPPORT_SCRIPT" ]; then
         log "🔍 调用support.sh获取设备平台信息..."
-        PLATFORM_INFO=$("$SUPPORT_SCRIPT" get-platform "$device_name")
+        PLATFORM_INFO=$("$SUPPORT_SCRIPT" get-platform "$device_name" 2>/dev/null || echo "")
+        
         if [ -n "$PLATFORM_INFO" ]; then
+            # 解析返回的平台信息
             TARGET=$(echo "$PLATFORM_INFO" | awk '{print $1}')
             SUBTARGET=$(echo "$PLATFORM_INFO" | awk '{print $2}')
             DEVICE="$device_name"
             log "✅ 从support.sh获取平台信息: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
         else
-            log "❌ 无法从support.sh获取平台信息"
-            handle_error "获取平台信息失败"
+            log "⚠️ 无法从support.sh获取平台信息，尝试从设备名推断..."
+            
+            # 从设备名推断平台
+            case "$device_name" in
+                *ac42u*|*acrh17*)
+                    TARGET="ipq40xx"
+                    SUBTARGET="generic"
+                    log "✅ 从设备名推断平台: ipq40xx/generic"
+                    ;;
+                *rax3000m*|*mt7981*)
+                    TARGET="mediatek"
+                    SUBTARGET="filogic"
+                    log "✅ 从设备名推断平台: mediatek/filogic"
+                    ;;
+                *wndr3800*|*ath79*)
+                    TARGET="ath79"
+                    SUBTARGET="generic"
+                    log "✅ 从设备名推断平台: ath79/generic"
+                    ;;
+                *)
+                    log "❌ 无法确定平台信息"
+                    handle_error "获取平台信息失败"
+                    ;;
+            esac
+            DEVICE="$device_name"
         fi
     else
         log "❌ support.sh不存在且未手动指定平台信息"
