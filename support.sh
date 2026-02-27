@@ -53,15 +53,30 @@ detect_devices_dynamic() {
     
     # 去重并添加到DEVICES数组
     if [ ${#devices_found[@]} -gt 0 ]; then
+        # 使用临时文件来去重
         printf '%s\n' "${devices_found[@]}" | sort -u | while read device; do
-            # 这里需要根据实际情况设置平台信息
-            # 简单起见，暂时设置为未知
-            DEVICES["$device"]="unknown unknown generic"
+            # 根据设备名设置平台信息
+            case "$device" in
+                *ac42u*|*acrh17*)
+                    DEVICES["$device"]="ipq40xx generic bcm47189"
+                    ;;
+                *rax3000m*)
+                    DEVICES["$device"]="mediatek filogic mt7981"
+                    ;;
+                *wndr3800*)
+                    DEVICES["$device"]="ath79 generic ar7161"
+                    ;;
+                *)
+                    # 未知平台，暂时设为unknown
+                    DEVICES["$device"]="unknown unknown generic"
+                    ;;
+            esac
         done
     else
         # 默认设备（作为fallback）
         DEVICES["ac42u"]="ipq40xx generic bcm47189"
-        DEVICES["cmcc_rax3000m-nand"]="mediatek filogic mt7981" 
+        DEVICES["cmcc_rax3000m-nand"]="mediatek filogic mt7981"
+        DEVICES["cmcc_rax3000m"]="mediatek filogic mt7981"
         DEVICES["netgear_wndr3800"]="ath79 generic ar7161"
     fi
 }
@@ -170,13 +185,13 @@ validate_device() {
             log "设备 $device_name 有配置文件，但平台信息未知"
             # 尝试从文件名推断平台
             if [[ "$device_name" == *"ac42u"* ]] || [[ "$device_name" == *"acrh17"* ]]; then
-                DEVICES["$device_name"]="ipq40xx generic unknown"
+                DEVICES["$device_name"]="ipq40xx generic bcm47189"
             elif [[ "$device_name" == *"rax3000m"* ]] || [[ "$device_name" == *"mt7981"* ]]; then
                 DEVICES["$device_name"]="mediatek filogic mt7981"
             elif [[ "$device_name" == *"wndr3800"* ]] || [[ "$device_name" == *"ath79"* ]]; then
                 DEVICES["$device_name"]="ath79 generic ar7161"
             else
-                error "不支持的设备: $device_name"
+                error "不支持的设备: $device_name。支持的设备列表: ${!DEVICES[*]}"
             fi
         else
             error "不支持的设备: $device_name。支持的设备列表: ${!DEVICES[*]}"
@@ -191,33 +206,54 @@ validate_device() {
     log "目标平台: $target"
     log "子目标: $subtarget"
     
+    # 返回目标平台和子目标（用于脚本捕获）
     echo "$target $subtarget"
 }
 
-# 获取设备的平台信息
+# 获取设备的平台信息 - 修复版
 get_device_platform() {
     local device_name="$1"
     
-    # 如果在DEVICES数组中找不到，尝试从配置文件推断
-    if [ -z "${DEVICES[$device_name]}" ]; then
-        if [ -f "$CONFIG_DIR/devices/$device_name.config" ]; then
-            # 尝试从配置文件内容推断平台
-            if grep -q "ipq40xx\|ipq806x" "$CONFIG_DIR/devices/$device_name.config" 2>/dev/null; then
-                echo "ipq40xx generic"
-                return 0
-            elif grep -q "mediatek\|filogic" "$CONFIG_DIR/devices/$device_name.config" 2>/dev/null; then
-                echo "mediatek filogic"
-                return 0
-            elif grep -q "ath79" "$CONFIG_DIR/devices/$device_name.config" 2>/dev/null; then
-                echo "ath79 generic"
-                return 0
-            fi
-        fi
-        echo ""
-        return 1
+    # 检查是否在DEVICES数组中
+    if [ -n "${DEVICES[$device_name]}" ]; then
+        echo "${DEVICES[$device_name]}"
+        return 0
     fi
     
-    echo "${DEVICES[$device_name]}"
+    # 从设备名推断平台（用于手动输入）
+    case "$device_name" in
+        *ac42u*|*acrh17*|*ipq40xx*)
+            echo "ipq40xx generic"
+            return 0
+            ;;
+        *rax3000m*|*mt7981*|*mediatek*|*filogic*)
+            echo "mediatek filogic"
+            return 0
+            ;;
+        *wndr3800*|*ath79*)
+            echo "ath79 generic"
+            return 0
+            ;;
+        *)
+            # 尝试从配置文件推断
+            if [ -f "$CONFIG_DIR/devices/$device_name.config" ]; then
+                if grep -q "ipq40xx\|ipq806x" "$CONFIG_DIR/devices/$device_name.config" 2>/dev/null; then
+                    echo "ipq40xx generic"
+                    return 0
+                elif grep -q "mediatek\|filogic" "$CONFIG_DIR/devices/$device_name.config" 2>/dev/null; then
+                    echo "mediatek filogic"
+                    return 0
+                elif grep -q "ath79" "$CONFIG_DIR/devices/$device_name.config" 2>/dev/null; then
+                    echo "ath79 generic"
+                    return 0
+                fi
+            fi
+            ;;
+    esac
+    
+    # 默认返回空（表示未知）
+    echo ""
+    return 1
 }
 #【support.sh-07-end】
 
