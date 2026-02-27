@@ -4962,12 +4962,33 @@ workflow_step21_pre_build_space_confirm() {
 workflow_step22_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤22: 编译固件（LEDE源码特定修复 + 双固件强制保护） ==="
+    log "=== 步骤22: 编译固件（增强错误处理 + 双固件强制保护） ==="
     
     set -e
     trap 'echo "❌ 步骤22 失败，退出代码: $?"; exit 1' ERR
     
     cd $BUILD_DIR
+    
+    # ============================================
+    # 预检查 dnsmasq-full 配置
+    # ============================================
+    log "🔧 预检查 dnsmasq-full 配置..."
+    if grep -q "^CONFIG_PACKAGE_dnsmasq-full=y" .config; then
+        log "  ✅ dnsmasq-full 已启用，检查依赖..."
+        
+        # 检查是否同时启用了 dnsmasq（非full版本）
+        if grep -q "^CONFIG_PACKAGE_dnsmasq=y" .config; then
+            log "  ⚠️ 检测到 dnsmasq 和 dnsmasq-full 同时启用，修复中..."
+            sed -i 's/^CONFIG_PACKAGE_dnsmasq=y/# CONFIG_PACKAGE_dnsmasq is not set/g' .config
+            make defconfig > /dev/null 2>&1
+            log "  ✅ 已禁用 dnsmasq，保留 dnsmasq-full"
+        fi
+        
+        # 预创建 dnsmasq 需要的目录
+        mkdir -p "$BUILD_DIR/files/etc/config"
+        mkdir -p "$BUILD_DIR/files/etc/init.d"
+        log "  ✅ 预创建 dnsmasq 配置目录"
+    fi
     
     # ============================================
     # LEDE源码特定修复
@@ -5025,11 +5046,6 @@ LOG_FILE="$PROTECT_DIR/protect.log"
 
 echo "=== 双固件保护启动于 $(date) ===" > "$LOG_FILE"
 
-# 需要保护的关键文件
-declare -A TARGET_FILES
-TARGET_FILES["sysupgrade"]="openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
-TARGET_FILES["factory"]="openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
-
 # 监控循环
 while true; do
     # 1. 监控临时目录中的文件
@@ -5084,116 +5100,32 @@ EOF
 # 强制恢复脚本 - 确保sysupgrade和factory都存在
 PROTECT_DIR="$1"
 BUILD_DIR="$2"
-TARGET_DIR="$BUILD_DIR/bin/targets/ath79/generic"
-
-mkdir -p "$TARGET_DIR"
 
 echo "=== 强制恢复开始于 $(date) ==="
-echo "目标目录: $TARGET_DIR"
 
-# 定义目标文件
-SYSUPGRADE_TARGET="$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
-FACTORY_TARGET="$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
+# 查找目标平台目录
+TARGET_DIRS=$(find "$BUILD_DIR/bin/targets" -type d 2>/dev/null)
 
-# 计数器
-RECOVERED=0
-
-# 1. 从保护目录恢复
-echo "📁 检查保护目录: $PROTECT_DIR"
-find "$PROTECT_DIR" -name "*.backup" 2>/dev/null | while read backup; do
-    filename=$(basename "$backup" .backup)
-    
-    # 判断文件类型
-    if [[ "$filename" == *"sysupgrade"* ]] && [[ "$filename" == *".bin" ]]; then
-        if [ ! -f "$SYSUPGRADE_TARGET" ]; then
-            echo "  ✅ 恢复 sysupgrade: $filename"
-            cp -f "$backup" "$SYSUPGRADE_TARGET"
-            RECOVERED=$((RECOVERED + 1))
-        fi
-    elif [[ "$filename" == *"factory"* ]] && [[ "$filename" == *".img" || "$filename" == *".bin" ]]; then
-        if [ ! -f "$FACTORY_TARGET" ]; then
-            echo "  ✅ 恢复 factory: $filename"
-            cp -f "$backup" "$FACTORY_TARGET"
-            RECOVERED=$((RECOVERED + 1))
-        fi
-    elif [[ "$filename" == *.new ]]; then
-        # 处理.new文件
-        base_name=$(echo "$filename" | sed 's/.new$//')
-        if [[ "$base_name" == *"factory"* ]]; then
-            if [ ! -f "$FACTORY_TARGET" ]; then
-                echo "  ✅ 从.new恢复 factory: $filename -> $base_name"
-                cp -f "$backup" "$FACTORY_TARGET"
-                RECOVERED=$((RECOVERED + 1))
+for target_dir in $TARGET_DIRS; do
+    if [ -d "$target_dir" ]; then
+        echo "📁 检查目录: $target_dir"
+        
+        # 从保护目录恢复
+        find "$PROTECT_DIR" -name "*.backup" 2>/dev/null | while read backup; do
+            filename=$(basename "$backup" .backup)
+            target_file="$target_dir/$filename"
+            
+            if [ ! -f "$target_file" ] && [ -f "$backup" ]; then
+                echo "  ✅ 恢复: $filename"
+                cp -f "$backup" "$target_file"
+                
+                # 创建 sha256sum
+                (cd "$target_dir" && sha256sum "$filename" > "$filename.sha256sum" 2>/dev/null)
             fi
-        fi
-    fi
-done
-
-# 2. 从临时目录搜索
-echo "🔍 搜索临时目录..."
-TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
-
-for tmp_dir in $TMP_DIRS; do
-    # 查找sysupgrade
-    if [ ! -f "$SYSUPGRADE_TARGET" ]; then
-        find "$tmp_dir" -name "*sysupgrade*.bin" 2>/dev/null | head -1 | while read file; do
-            echo "  ✅ 从临时目录恢复 sysupgrade: $(basename "$file")"
-            cp -f "$file" "$SYSUPGRADE_TARGET"
-            RECOVERED=$((RECOVERED + 1))
-        done
-    fi
-    
-    # 查找factory
-    if [ ! -f "$FACTORY_TARGET" ]; then
-        find "$tmp_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | head -1 | while read file; do
-            echo "  ✅ 从临时目录恢复 factory: $(basename "$file")"
-            cp -f "$file" "$FACTORY_TARGET"
-            RECOVERED=$((RECOVERED + 1))
         done
     fi
 done
 
-# 3. 如果sysupgrade不存在，尝试用initramfs
-if [ ! -f "$SYSUPGRADE_TARGET" ]; then
-    echo "🔧 sysupgrade不存在，尝试用initramfs..."
-    find "$BUILD_DIR" -name "*initramfs*.bin" 2>/dev/null | head -1 | while read file; do
-        echo "  ✅ 从initramfs创建 sysupgrade: $(basename "$file")"
-        cp -f "$file" "$SYSUPGRADE_TARGET"
-        RECOVERED=$((RECOVERED + 1))
-    done
-fi
-
-# 4. 如果factory不存在，尝试用sysupgrade转换
-if [ ! -f "$FACTORY_TARGET" ] && [ -f "$SYSUPGRADE_TARGET" ]; then
-    echo "🔧 factory不存在，复制 sysupgrade 作为 factory"
-    cp -f "$SYSUPGRADE_TARGET" "$FACTORY_TARGET"
-    RECOVERED=$((RECOVERED + 1))
-fi
-
-# 5. 创建sha256sum
-if [ -f "$SYSUPGRADE_TARGET" ]; then
-    (cd "$TARGET_DIR" && sha256sum "$(basename "$SYSUPGRADE_TARGET")" > "$(basename "$SYSUPGRADE_TARGET").sha256sum")
-    echo "  ✅ 创建 sha256sum"
-fi
-
-# 6. 最终检查
-echo ""
-echo "📊 最终检查:"
-if [ -f "$SYSUPGRADE_TARGET" ]; then
-    size=$(ls -lh "$SYSUPGRADE_TARGET" | awk '{print $5}')
-    echo "  ✅ sysupgrade.bin: 存在 ($size)"
-else
-    echo "  ❌ sysupgrade.bin: 不存在"
-fi
-
-if [ -f "$FACTORY_TARGET" ]; then
-    size=$(ls -lh "$FACTORY_TARGET" | awk '{print $5}')
-    echo "  ✅ factory.img: 存在 ($size)"
-else
-    echo "  ❌ factory.img: 不存在"
-fi
-
-echo "  📊 恢复文件数: $RECOVERED"
 echo "=== 强制恢复结束于 $(date) ==="
 EOF
     chmod +x "$recover_script"
@@ -5226,109 +5158,197 @@ EOF
     echo "  并行优化: $enable_parallel"
     echo "  源码类型: $SOURCE_REPO_TYPE"
     
-    if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
-        echo ""
-        echo "🧠 智能判断最佳并行任务数..."
+    # 最大重试次数
+    local max_retries=3
+    local retry_count=0
+    local build_success=0
+    
+    while [ $retry_count -lt $max_retries ] && [ $build_success -eq 0 ]; do
+        retry_count=$((retry_count + 1))
         
-        if [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then
-            MAKE_JOBS=4
-            echo "✅ 高性能系统: 使用 $MAKE_JOBS 个并行任务"
-        elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then
-            MAKE_JOBS=2
-            echo "✅ 标准系统: 使用 $MAKE_JOBS 个并行任务"
-        else
-            MAKE_JOBS=1
-            echo "⚠️ 低性能系统: 使用 $MAKE_JOBS 个并行任务"
+        if [ $retry_count -gt 1 ]; then
+            log ""
+            log "🔄 第 $retry_count 次重试编译..."
+            
+            # 重试前的清理和修复
+            log "  🔧 清理 package/install 阶段的临时文件..."
+            rm -rf "$BUILD_DIR/build_dir/target-*"/package-* 2>/dev/null || true
+            
+            # 特别处理 dnsmasq-full
+            log "  🔧 重新配置 dnsmasq-full..."
+            make package/dnsmasq/clean V=s > /dev/null 2>&1 || true
+            make package/dnsmasq/compile V=s > /dev/null 2>&1 || true
+            
+            # 重新运行 defconfig
+            make defconfig > /dev/null 2>&1
         fi
         
-        # ============================================
-        # 第一阶段：并行编译
-        # ============================================
-        echo ""
-        echo "🚀 第一阶段：并行编译内核和模块 (make -j$MAKE_JOBS)"
-        echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-        echo ""
-        
-        START_TIME=$(date +%s)
-        
-        # 编译第一阶段
-        make -j$MAKE_JOBS V=s 2>&1 | tee build_phase1.log
-        PHASE1_EXIT_CODE=${PIPESTATUS[0]}
-        
-        PHASE1_END=$(date +%s)
-        PHASE1_DURATION=$((PHASE1_END - START_TIME))
-        
-        echo ""
-        echo "✅ 第一阶段完成，耗时: $((PHASE1_DURATION / 60))分$((PHASE1_DURATION % 60))秒"
-        echo "   退出代码: $PHASE1_EXIT_CODE"
-        
-        # ============================================
-        # 第二阶段前：备份所有临时固件文件
-        # ============================================
-        echo ""
-        echo "🔧 第二阶段前：备份所有临时固件文件..."
-        
-        # 查找并备份所有可能的固件文件
-        local temp_files=$(find "$BUILD_DIR/build_dir" -path "*/tmp/*.bin" -o -path "*/tmp/*.img" -o -name "*.new" 2>/dev/null)
-        local backup_count=0
-        
-        if [ -n "$temp_files" ]; then
-            echo "$temp_files" | while read file; do
-                if [ -f "$file" ]; then
-                    cp -v "$file" "$backup_dir/" 2>/dev/null
-                    backup_count=$((backup_count + 1))
+        if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
+            echo ""
+            echo "🧠 智能判断最佳并行任务数..."
+            
+            if [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then
+                MAKE_JOBS=4
+                echo "✅ 高性能系统: 使用 $MAKE_JOBS 个并行任务"
+            elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then
+                MAKE_JOBS=2
+                echo "✅ 标准系统: 使用 $MAKE_JOBS 个并行任务"
+            else
+                MAKE_JOBS=1
+                echo "⚠️ 低性能系统: 使用 $MAKE_JOBS 个并行任务"
+            fi
+            
+            # ============================================
+            # 第一阶段：并行编译
+            # ============================================
+            echo ""
+            echo "🚀 第一阶段：并行编译内核和模块 (make -j$MAKE_JOBS)"
+            echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+            echo ""
+            
+            START_TIME=$(date +%s)
+            
+            # 编译第一阶段
+            set +e
+            make -j$MAKE_JOBS V=s 2>&1 | tee build_phase1.log
+            PHASE1_EXIT_CODE=${PIPESTATUS[0]}
+            set -e
+            
+            PHASE1_END=$(date +%s)
+            PHASE1_DURATION=$((PHASE1_END - START_TIME))
+            
+            echo ""
+            echo "✅ 第一阶段完成，耗时: $((PHASE1_DURATION / 60))分$((PHASE1_DURATION % 60))秒"
+            echo "   退出代码: $PHASE1_EXIT_CODE"
+            
+            # 检查第一阶段是否成功
+            if [ $PHASE1_EXIT_CODE -ne 0 ]; then
+                echo "⚠️ 第一阶段编译失败，退出代码: $PHASE1_EXIT_CODE"
+                
+                # 检查是否是 dnsmasq-full 错误
+                if grep -q "dnsmasq-full" build_phase1.log; then
+                    echo "  🔧 检测到 dnsmasq-full 相关错误，尝试单独编译..."
+                    make package/dnsmasq/clean V=s > /dev/null 2>&1 || true
+                    make package/dnsmasq/compile -j1 V=s >> build_phase1.log 2>&1
                 fi
-            done
-            echo "  ✅ 已备份 $backup_count 个临时固件文件到: $backup_dir"
+                
+                if [ $retry_count -lt $max_retries ]; then
+                    echo "🔄 准备第 $((retry_count + 1)) 次重试..."
+                    continue
+                else
+                    echo "❌ 已达到最大重试次数 ($max_retries)"
+                    build_success=1
+                    break
+                fi
+            fi
+            
+            # ============================================
+            # 第二阶段前：备份所有临时固件文件
+            # ============================================
+            echo ""
+            echo "🔧 第二阶段前：备份所有临时固件文件..."
+            
+            # 查找并备份所有可能的固件文件
+            local temp_files=$(find "$BUILD_DIR/build_dir" -path "*/tmp/*.bin" -o -path "*/tmp/*.img" -o -name "*.new" 2>/dev/null)
+            local backup_count=0
+            
+            if [ -n "$temp_files" ]; then
+                echo "$temp_files" | while read file; do
+                    if [ -f "$file" ]; then
+                        cp -v "$file" "$backup_dir/" 2>/dev/null
+                        backup_count=$((backup_count + 1))
+                    fi
+                done
+                echo "  ✅ 已备份 $backup_count 个临时固件文件到: $backup_dir"
+            else
+                echo "  ⚠️ 未找到临时固件文件"
+            fi
+            
+            # ============================================
+            # 第二阶段：单线程生成最终固件
+            # ============================================
+            echo ""
+            echo "🚀 第二阶段：单线程生成最终固件 (make -j1)"
+            echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+            echo ""
+            
+            PHASE2_START=$(date +%s)
+            
+            # 第二阶段强制单线程
+            set +e
+            make -j1 V=s 2>&1 | tee -a build_phase2.log
+            BUILD_EXIT_CODE=${PIPESTATUS[0]}
+            set -e
+            
+            PHASE2_END=$(date +%s)
+            PHASE2_DURATION=$((PHASE2_END - PHASE2_START))
+            TOTAL_DURATION=$((PHASE2_END - START_TIME))
+            
+            echo ""
+            echo "✅ 第二阶段完成，耗时: $((PHASE2_DURATION / 60))分$((PHASE2_DURATION % 60))秒"
+            echo "📊 总编译时间: $((TOTAL_DURATION / 60))分$((TOTAL_DURATION % 60))秒"
+            
+            # 合并日志
+            cat build_phase1.log build_phase2.log > build.log
+            
         else
-            echo "  ⚠️ 未找到临时固件文件"
+            # 单线程编译
+            MAKE_JOBS=1
+            echo ""
+            echo "⚠️ 禁用并行优化，使用单线程编译"
+            echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+            echo ""
+            
+            START_TIME=$(date +%s)
+            
+            set +e
+            make -j1 V=s 2>&1 | tee build.log
+            BUILD_EXIT_CODE=${PIPESTATUS[0]}
+            set -e
+            
+            END_TIME=$(date +%s)
+            DURATION=$((END_TIME - START_TIME))
+            
+            echo ""
+            echo "📊 编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
+            echo "   退出代码: $BUILD_EXIT_CODE"
         fi
         
-        # ============================================
-        # 第二阶段：单线程生成最终固件
-        # ============================================
-        echo ""
-        echo "🚀 第二阶段：单线程生成最终固件 (make -j1)"
-        echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-        echo ""
-        
-        PHASE2_START=$(date +%s)
-        
-        # 第二阶段强制单线程
-        make -j1 V=s 2>&1 | tee -a build_phase2.log
-        BUILD_EXIT_CODE=${PIPESTATUS[0]}
-        
-        PHASE2_END=$(date +%s)
-        PHASE2_DURATION=$((PHASE2_END - PHASE2_START))
-        TOTAL_DURATION=$((PHASE2_END - START_TIME))
-        
-        echo ""
-        echo "✅ 第二阶段完成，耗时: $((PHASE2_DURATION / 60))分$((PHASE2_DURATION % 60))秒"
-        echo "📊 总编译时间: $((TOTAL_DURATION / 60))分$((TOTAL_DURATION % 60))秒"
-        
-        # 合并日志
-        cat build_phase1.log build_phase2.log > build.log
-        
-    else
-        # 单线程编译
-        MAKE_JOBS=1
-        echo ""
-        echo "⚠️ 禁用并行优化，使用单线程编译"
-        echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-        echo ""
-        
-        START_TIME=$(date +%s)
-        
-        make -j1 V=s 2>&1 | tee build.log
-        BUILD_EXIT_CODE=${PIPESTATUS[0]}
-        
-        END_TIME=$(date +%s)
-        DURATION=$((END_TIME - START_TIME))
-        
-        echo ""
-        echo "📊 编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
-        echo "   退出代码: $BUILD_EXIT_CODE"
-    fi
+        # 检查编译是否成功
+        if [ $BUILD_EXIT_CODE -eq 0 ]; then
+            build_success=1
+            log "✅ 编译成功！"
+            break
+        else
+            if [ $retry_count -lt $max_retries ]; then
+                log "⚠️ 编译失败 (退出代码: $BUILD_EXIT_CODE)，准备第 $((retry_count + 1)) 次重试..."
+                
+                # 分析失败原因
+                if [ -f build.log ]; then
+                    if grep -q "dnsmasq-full" build.log; then
+                        log "  🔧 检测到 dnsmasq-full 错误，应用专项修复..."
+                        
+                        # 专项修复 dnsmasq-full
+                        sed -i 's/^CONFIG_PACKAGE_dnsmasq=y/# CONFIG_PACKAGE_dnsmasq is not set/g' .config
+                        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+                        make defconfig > /dev/null 2>&1
+                        
+                        # 清理 dnsmasq 构建目录
+                        rm -rf "$BUILD_DIR/build_dir/target-*"/dnsmasq-* 2>/dev/null || true
+                    fi
+                    
+                    if grep -q "Cannot open" build.log; then
+                        log "  🔧 检测到文件权限错误，修复权限..."
+                        find "$BUILD_DIR" -type d -exec chmod 755 {} \; 2>/dev/null || true
+                        find "$BUILD_DIR" -type f -exec chmod 644 {} \; 2>/dev/null || true
+                    fi
+                fi
+            else
+                build_success=0
+                log "❌ 已达到最大重试次数 ($max_retries)，编译失败"
+            fi
+        fi
+    done
     
     # ============================================
     # 停止保护脚本
@@ -5336,60 +5356,46 @@ EOF
     kill $protect_pid 2>/dev/null || true
     log "🔧 双固件保护已停止"
     
-    # ============================================
-    # 检查编译结果并强制恢复
-    # ============================================
-    if [ $BUILD_EXIT_CODE -ne 0 ]; then
-        echo ""
-        echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
-        echo ""
-        echo "🔍 最后50行错误日志:"
-        tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || true
-        echo ""
-        echo "📝 完整日志请查看: build.log"
-    fi
-    
     # 无论成功失败，都执行强制恢复
     echo ""
-    echo "🔧 执行强制恢复，确保双固件存在..."
+    echo "🔧 执行强制恢复，确保固件文件存在..."
     bash "$recover_script" "$protect_dir" "$BUILD_DIR"
     
     # ============================================
     # 最终检查
     # ============================================
-    local target_dir="$BUILD_DIR/bin/targets/ath79/generic"
-    local sysupgrade_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
-    local factory_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
-    
     echo ""
-    echo "📊 最终固件状态:"
+    echo "📊 最终固件检查:"
     echo "----------------------------------------"
     
-    local success=0
-    if [ -f "$sysupgrade_file" ]; then
-        local size=$(ls -lh "$sysupgrade_file" | awk '{print $5}')
-        echo "  ✅ sysupgrade.bin: 存在 ($size)"
-        success=$((success + 1))
-    else
-        echo "  ❌ sysupgrade.bin: 不存在"
-    fi
+    local sysupgrade_count=0
+    local factory_count=0
     
-    if [ -f "$factory_file" ]; then
-        local size=$(ls -lh "$factory_file" | awk '{print $5}')
-        echo "  ✅ factory.img: 存在 ($size)"
-        success=$((success + 1))
-    else
-        echo "  ❌ factory.img: 不存在"
+    if [ -d "$BUILD_DIR/bin/targets" ]; then
+        while read file; do
+            if [ -f "$file" ]; then
+                if echo "$file" | grep -q "sysupgrade"; then
+                    sysupgrade_count=$((sysupgrade_count + 1))
+                elif echo "$file" | grep -q "factory"; then
+                    factory_count=$((factory_count + 1))
+                fi
+            fi
+        done < <(find "$BUILD_DIR/bin/targets" -type f -name "*.bin" -o -name "*.img" 2>/dev/null)
+        
+        echo "  ✅ sysupgrade.bin: $sysupgrade_count 个"
+        echo "  ✅ factory.img: $factory_count 个"
     fi
     
     echo "----------------------------------------"
     
-    if [ $success -eq 2 ]; then
-        echo "🎉 双固件都已成功生成！"
-    elif [ $success -eq 1 ]; then
-        echo "⚠️ 只有一个固件生成，另一个可能丢失"
+    if [ $sysupgrade_count -eq 0 ] && [ $factory_count -eq 0 ]; then
+        echo "❌ 没有找到任何固件文件"
+        if [ $build_success -eq 0 ]; then
+            echo "  编译失败，请检查日志: build.log"
+            exit 1
+        fi
     else
-        echo "❌ 两个固件都没有生成"
+        echo "🎉 固件生成完成！"
     fi
     
     # 清理
