@@ -28,7 +28,7 @@ CONFIG_DIR="$REPO_ROOT/firmware-config/config"
 # 格式: DEVICES["设备名称"]="目标平台 子目标 芯片型号"
 declare -A DEVICES
 DEVICES["ac42u"]="ipq40xx generic bcm47189"
-DEVICES["cmcc_rax3000m-nand"]="mediatek filogic mt7981" 
+DEVICES["cmcc_rax3000m"]="mediatek filogic mt7981" 
 DEVICES["netgear_wndr3800"]="ath79 generic ar7161"
 #【support.sh-03-end】
 
