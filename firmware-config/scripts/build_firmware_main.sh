@@ -2,8 +2,8 @@
 #【build_firmware_main.sh-00】
 # OpenWrt 智能固件构建主脚本
 # 对应工作流: firmware-build.yml
-# 版本: 3.1.0
-# 最后更新: 2026-02-15
+# 版本: 3.2.0
+# 最后更新: 2026-02-27
 #【build_firmware_main.sh-00-end】
 
 #【build_firmware_main.sh-00.5】
@@ -686,25 +686,6 @@ EOF
 #【build_firmware_main.sh-06-end】
 
 #【build_firmware_main.sh-07】
-# 此函数已废弃，所有源码类型均使用自带工具链
-download_openwrt_sdk() {
-    log "=== SDK下载功能已废弃 ==="
-    log "✅ 所有源码类型均使用源码自带工具链，无需下载SDK"
-    return 0
-}
-
-verify_sdk_files_v2() {
-    log "=== SDK验证功能已废弃 ==="
-    log "✅ 所有源码类型均使用源码自带工具链"
-    return 0
-}
-
-verify_sdk_files() {
-    verify_sdk_files_v2 "$1"
-}
-#【build_firmware_main.sh-07-end】
-
-#【build_firmware_main.sh-08】
 initialize_compiler_env() {
     local device_name="$1"
     log "=== 初始化编译器环境（所有源码类型均使用源码自带工具链）==="
@@ -742,9 +723,9 @@ initialize_compiler_env() {
     log "✅ 编译器环境初始化完成"
     return 0
 }
-#【build_firmware_main.sh-08-end】
+#【build_firmware_main.sh-07-end】
 
-#【build_firmware_main.sh-09】
+#【build_firmware_main.sh-08】
 add_turboacc_support() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -776,14 +757,14 @@ add_turboacc_support() {
         fi
     fi
 }
-#【build_firmware_main.sh-09-end】
+#【build_firmware_main.sh-08-end】
 
-#【build_firmware_main.sh-10】
+#【build_firmware_main.sh-09】
 configure_feeds() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 配置Feeds ==="
+    log "=== 配置Feeds（动态禁用插件） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     # ============================================
@@ -1076,9 +1057,9 @@ EOF
     
     log "✅ Feeds配置完成"
 }
-#【build_firmware_main.sh-10-end】
+#【build_firmware_main.sh-09-end】
 
-#【build_firmware_main.sh-11】
+#【build_firmware_main.sh-10】
 install_turboacc_packages() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -1093,9 +1074,9 @@ install_turboacc_packages() {
     
     log "✅ TurboACC 包安装完成"
 }
-#【build_firmware_main.sh-11-end】
+#【build_firmware_main.sh-10-end】
 
-#【build_firmware_main.sh-12】
+#【build_firmware_main.sh-11】
 #------------------------------------------------------------------------------
 # 第十一部分：功能开关 ##
 #   控制是否启用某些功能
@@ -1125,9 +1106,9 @@ install_turboacc_packages() {
 ##常修改## 默认禁用的插件列表（空格分隔）
 ##常修改## 在构建时会自动禁用这些插件及其相关子包
 : ${FORBIDDEN_PACKAGES:="vssr ssr-plus passwall rclone ddns qbittorrent filetransfer nlbwmon wol"}
-#【build_firmware_main.sh-12-end】
+#【build_firmware_main.sh-11-end】
 
-#【build_firmware_main.sh-13】
+#【build_firmware_main.sh-12】
 generate_config() {
     local extra_packages=$1
     local device_override=$2
@@ -1718,9 +1699,9 @@ EOF
     
     log "✅ 配置生成完成"
 }
-#【build_firmware_main.sh-13-end】
+#【build_firmware_main.sh-12-end】
 
-#【build_firmware_main.sh-14】
+#【build_firmware_main.sh-13】
 verify_usb_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -1827,78 +1808,9 @@ verify_usb_config() {
         log "🎉 恭喜: 所有关键USB驱动都已启用"
     fi
 }
-#【build_firmware_main.sh-14-end】
+#【build_firmware_main.sh-13-end】
 
-#【build_firmware_main.sh-15】
-check_usb_drivers_integrity() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
-    log "=== 🚨 USB驱动完整性检查（增强版） ==="
-    
-    local missing_drivers=()
-    local required_drivers=(
-        # 核心驱动
-        "kmod-usb-core"
-        "kmod-usb2"
-        "kmod-usb3"
-        "kmod-usb-xhci-hcd"
-        "kmod-usb-storage"
-        "kmod-scsi-core"
-        "kmod-fs-ext4"
-        "kmod-fs-vfat"
-        # 扩展驱动（推荐启用）
-        "kmod-usb-xhci-pci"
-        "kmod-usb-xhci-plat-hcd"
-        "kmod-usb-storage-uas"
-        "kmod-scsi-generic"
-        "kmod-fs-exfat"
-        "kmod-fs-ntfs3"
-        "kmod-nls-utf8"
-        "kmod-nls-cp936"
-    )
-    
-    # 根据平台添加专用驱动
-    if [ "$TARGET" = "ipq40xx" ] || grep -q "^CONFIG_TARGET_ipq40xx=y" .config 2>/dev/null; then
-        required_drivers+=("kmod-usb-dwc3-qcom" "kmod-phy-qcom-dwc3" "kmod-usb-dwc3" "kmod-usb-dwc3-of-simple")
-    elif [ "$TARGET" = "ramips" ] || grep -q "^CONFIG_TARGET_ramips=y" .config 2>/dev/null; then
-        required_drivers+=("kmod-usb-xhci-mtk" "kmod-usb-ohci-pci" "kmod-usb2-pci")
-    elif [ "$TARGET" = "mediatek" ] || grep -q "^CONFIG_TARGET_mediatek=y" .config 2>/dev/null; then
-        required_drivers+=("kmod-usb-dwc3-mediatek" "kmod-phy-mediatek" "kmod-usb-dwc3")
-    elif [ "$TARGET" = "ath79" ] || grep -q "^CONFIG_TARGET_ath79=y" .config 2>/dev/null; then
-        required_drivers+=("kmod-usb2-ath79" "kmod-usb-ohci")
-    fi
-    
-    # 检查每个驱动
-    for driver in "${required_drivers[@]}"; do
-        if ! grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-            log "❌ 缺失驱动: $driver"
-            missing_drivers+=("$driver")
-        else
-            log "✅ 驱动存在: $driver"
-        fi
-    done
-    
-    # 如果有缺失驱动，尝试修复
-    if [ ${#missing_drivers[@]} -gt 0 ]; then
-        log "🚨 发现 ${#missing_drivers[@]} 个缺失的USB驱动"
-        log "正在尝试修复..."
-        
-        for driver in "${missing_drivers[@]}"; do
-            echo "CONFIG_PACKAGE_${driver}=y" >> .config
-            log "✅ 已添加: $driver"
-        done
-        
-        # 重新运行defconfig
-        make defconfig || log "⚠️ make defconfig 修复后仍有问题"
-        log "✅ USB驱动修复完成"
-    else
-        log "🎉 所有必需USB驱动都已启用"
-    fi
-}
-#【build_firmware_main.sh-15-end】
-
-#【build_firmware_main.sh-16】
+#【build_firmware_main.sh-14】
 apply_config() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -2676,9 +2588,9 @@ apply_config() {
     log "最终配置大小: $(ls -lh .config | awk '{print $5}')"
     log "最终配置行数: $(wc -l < .config)"
 }
-#【build_firmware_main.sh-16-end】
+#【build_firmware_main.sh-14-end】
 
-#【build_firmware_main.sh-17】
+#【build_firmware_main.sh-15】
 fix_network() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
@@ -2707,9 +2619,9 @@ fix_network() {
     
     log "✅ 网络环境修复完成"
 }
-#【build_firmware_main.sh-17-end】
+#【build_firmware_main.sh-15-end】
 
-#【build_firmware_main.sh-18】
+#【build_firmware_main.sh-16】
 download_dependencies() {
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
@@ -2744,9 +2656,9 @@ download_dependencies() {
     
     log "✅ 依赖包下载完成"
 }
-#【build_firmware_main.sh-18-end】
+#【build_firmware_main.sh-16-end】
 
-#【build_firmware_main.sh-19】
+#【build_firmware_main.sh-17】
 integrate_custom_files() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -3234,9 +3146,9 @@ EOF
     
     log "✅ 自定义文件集成完成"
 }
-#【build_firmware_main.sh-19-end】
+#【build_firmware_main.sh-17-end】
 
-#【build_firmware_main.sh-20】
+#【build_firmware_main.sh-18】
 verify_compiler_files() {
     log "=== 验证源码自带工具链 ==="
     
@@ -3298,9 +3210,9 @@ verify_compiler_files() {
     
     log "✅ 源码工具链验证完成"
 }
-#【build_firmware_main.sh-20-end】
+#【build_firmware_main.sh-18-end】
 
-#【build_firmware_main.sh-21】
+#【build_firmware_main.sh-19】
 check_compiler_invocation() {
     log "=== 检查编译器调用状态（增强版）==="
     
@@ -3397,9 +3309,9 @@ check_compiler_invocation() {
     
     log "✅ 编译器调用状态检查完成"
 }
-#【build_firmware_main.sh-21-end】
+#【build_firmware_main.sh-19-end】
 
-#【build_firmware_main.sh-22】
+#【build_firmware_main.sh-20】
 verify_sdk_directory() {
     log "=== 详细验证SDK目录 ==="
     
@@ -3436,9 +3348,9 @@ verify_sdk_directory() {
         return 1
     fi
 }
-#【build_firmware_main.sh-22-end】
+#【build_firmware_main.sh-20-end】
 
-#【build_firmware_main.sh-23】
+#【build_firmware_main.sh-21】
 # 此函数已废弃，现在用作公共函数库
 # ============================================================================
 # 公共函数库 - 先只实现列出所有mk文件
@@ -3520,9 +3432,9 @@ get_subtargets_by_platform() {
 find_kernel_config_by_version() {
     echo ""
 }
-#【build_firmware_main.sh-23-end】
+#【build_firmware_main.sh-21-end】
 
-#【build_firmware_main.sh-24】
+#【build_firmware_main.sh-22】
 cleanup() {
     log "=== 清理构建目录 ==="
     
@@ -3550,9 +3462,9 @@ cleanup() {
         log "ℹ️ 构建目录不存在，无需清理"
     fi
 }
-#【build_firmware_main.sh-24-end】
+#【build_firmware_main.sh-22-end】
 
-#【build_firmware_main.sh-25】
+#【build_firmware_main.sh-23】
 save_source_code_info() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
@@ -3589,14 +3501,12 @@ save_source_code_info() {
     
     log "✅ 源代码信息已保存到: $source_info_file"
 }
-#【build_firmware_main.sh-25-end】
+#【build_firmware_main.sh-23-end】
 
 # ============================================
-# 步骤10: 验证SDK下载结果
-# 对应 firmware-build.yml 步骤10
-#【firmware-build.yml-10】
+# 步骤10（原步骤11）: 验证源码自带工具链
 # ============================================
-#【build_firmware_main.sh-26】
+#【build_firmware_main.sh-24】
 workflow_step10_verify_sdk() {
     log "=== 步骤10: 验证源码自带工具链 ==="
     
@@ -3687,43 +3597,17 @@ workflow_step10_verify_sdk() {
     echo "✅ 源码工具链验证完成"
     log "✅ 步骤10 完成"
 }
-#【build_firmware_main.sh-26-end】
+#【build_firmware_main.sh-24-end】
 
 # ============================================
-# 步骤11: 添加TurboACC支持
-# 对应 firmware-build.yml 步骤11
-#【firmware-build.yml-11】
+# 步骤11（原步骤12）: 配置Feeds
 # ============================================
-#【build_firmware_main.sh-27】
-workflow_step11_add_turboacc() {
-    log "=== 步骤11: 添加 TurboACC 支持 ==="
-    log "源码仓库类型: $SOURCE_REPO_TYPE"
+#【build_firmware_main.sh-25】
+workflow_step11_configure_feeds() {
+    log "=== 步骤11: 配置Feeds【动态禁用插件】 ==="
     
     set -e
     trap 'echo "❌ 步骤11 失败，退出代码: $?"; exit 1' ERR
-    
-    add_turboacc_support
-    
-    if [ $? -ne 0 ]; then
-        echo "❌ 错误: 添加TurboACC支持失败"
-        exit 1
-    fi
-    
-    log "✅ 步骤11 完成"
-}
-#【build_firmware_main.sh-27-end】
-
-# ============================================
-# 步骤12: 配置Feeds
-# 对应 firmware-build.yml 步骤12
-#【firmware-build.yml-12】
-# ============================================
-#【build_firmware_main.sh-28】
-workflow_step12_configure_feeds() {
-    log "=== 步骤12: 配置Feeds ==="
-    
-    set -e
-    trap 'echo "❌ 步骤12 失败，退出代码: $?"; exit 1' ERR
     
     configure_feeds
     
@@ -3732,21 +3616,19 @@ workflow_step12_configure_feeds() {
         exit 1
     fi
     
-    log "✅ 步骤12 完成"
+    log "✅ 步骤11 完成"
 }
-#【build_firmware_main.sh-28-end】
+#【build_firmware_main.sh-25-end】
 
 # ============================================
-# 步骤13: 安装TurboACC包
-# 对应 firmware-build.yml 步骤13
-#【firmware-build.yml-13】
+# 步骤12（原步骤13）: 安装TurboACC包
 # ============================================
-#【build_firmware_main.sh-29】
-workflow_step13_install_turboacc() {
-    log "=== 步骤13: 安装 TurboACC 包 ==="
+#【build_firmware_main.sh-26】
+workflow_step12_install_turboacc() {
+    log "=== 步骤12: 安装 TurboACC 包 ==="
     
     set -e
-    trap 'echo "❌ 步骤13 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "❌ 步骤12 失败，退出代码: $?"; exit 1' ERR
     
     install_turboacc_packages
     
@@ -3755,21 +3637,19 @@ workflow_step13_install_turboacc() {
         exit 1
     fi
     
-    log "✅ 步骤13 完成"
+    log "✅ 步骤12 完成"
 }
-#【build_firmware_main.sh-29-end】
+#【build_firmware_main.sh-26-end】
 
 # ============================================
-# 步骤14: 编译前空间检查
-# 对应 firmware-build.yml 步骤14
-#【firmware-build.yml-14】
+# 步骤13（原步骤14）: 编译前空间检查
 # ============================================
-#【build_firmware_main.sh-30】
-workflow_step14_pre_build_space_check() {
-    log "=== 步骤14: 编译前空间检查 ==="
+#【build_firmware_main.sh-27】
+workflow_step13_pre_build_space_check() {
+    log "=== 步骤13: 编译前空间检查 ==="
     
     set -e
-    trap 'echo "❌ 步骤14 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "❌ 步骤13 失败，退出代码: $?"; exit 1' ERR
     
     # 调用空间检查函数
     pre_build_space_check
@@ -3779,7 +3659,7 @@ workflow_step14_pre_build_space_check() {
         exit 1
     fi
     
-    log "✅ 步骤14 完成"
+    log "✅ 步骤13 完成"
 }
 
 # ============================================
@@ -3820,24 +3700,22 @@ pre_build_space_check() {
     
     log "✅ 空间检查完成"
 }
-#【build_firmware_main.sh-30-end】
+#【build_firmware_main.sh-27-end】
 
 # ============================================
-# 步骤15: 智能配置生成
-# 对应 firmware-build.yml 步骤15
-#【firmware-build.yml-15】
+# 步骤14（原步骤15）: 智能配置生成
 # ============================================
-#【build_firmware_main.sh-31】
-workflow_step15_generate_config() {
+#【build_firmware_main.sh-28】
+workflow_step14_generate_config() {
     local extra_packages="$1"
     
-    log "=== 步骤15: 智能配置生成【优化版 - 最多2次尝试】 ==="
+    log "=== 步骤14: 智能配置生成【优化版 - 最多2次尝试】 ==="
     log "当前设备: $DEVICE"
     log "当前目标: $TARGET"
     log "当前子目标: $SUBTARGET"
     
     set -e
-    trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "❌ 步骤14 失败，退出代码: $?"; exit 1' ERR
     
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
@@ -4111,20 +3989,18 @@ workflow_step15_generate_config() {
     log "  启用软件包: $(grep -c "^CONFIG_PACKAGE_.*=y$" .config)"
     log "  模块化软件包: $(grep -c "^CONFIG_PACKAGE_.*=m$" .config)"
     
-    log "✅ 步骤15 完成"
+    log "✅ 步骤14 完成"
 }
-#【build_firmware_main.sh-31-end】
+#【build_firmware_main.sh-28-end】
 
 # ============================================
-# 步骤16: 验证USB配置
-# 对应 firmware-build.yml 步骤16
-#【firmware-build.yml-16】
+# 步骤15（原步骤16）: 验证USB配置
 # ============================================
-#【build_firmware_main.sh-32】
-workflow_step16_verify_usb() {
-    log "=== 步骤16: 验证USB配置（智能检测版） ==="
+#【build_firmware_main.sh-29】
+workflow_step15_verify_usb() {
+    log "=== 步骤15: 验证USB配置（智能检测版） ==="
     
-    trap 'echo "⚠️ 步骤16 验证过程中出现错误，继续执行..."' ERR
+    trap 'echo "⚠️ 步骤15 验证过程中出现错误，继续执行..."' ERR
     
     cd $BUILD_DIR
     
@@ -4370,185 +4246,38 @@ workflow_step16_verify_usb() {
     
     echo ""
     echo "✅ USB配置检查完成"
-    log "✅ 步骤16 完成"
+    log "✅ 步骤15 完成"
 }
-#【build_firmware_main.sh-32-end】
+#【build_firmware_main.sh-29-end】
 
 # ============================================
-# 步骤17: USB驱动完整性检查
-# 对应 firmware-build.yml 步骤17
-#【firmware-build.yml-17】
+# 步骤16（原步骤18）: 应用配置
+# 注意：步骤17已删除，步骤18变为步骤16
 # ============================================
-#【build_firmware_main.sh-33】
-workflow_step17_check_usb_drivers() {
-    log "=== 步骤17: USB驱动完整性检查（动态检测版） ==="
+#【build_firmware_main.sh-30】
+workflow_step16_apply_config() {
+    log "=== 步骤16: 应用配置并显示详细信息 ==="
     
-    trap 'echo "⚠️ 步骤17 检查过程中出现错误，继续执行..."' ERR
+    set -e
+    trap 'echo "❌ 步骤16 失败，退出代码: $?"; exit 1' ERR
     
     cd $BUILD_DIR
     
-    echo "=== USB驱动完整性动态检测 ==="
-    echo ""
+    echo "🔄 调用 apply_config 函数..."
+    apply_config
     
-    # 获取目标平台
-    local target=$(grep "^CONFIG_TARGET_" .config | grep "=y" | head -1 | cut -d'_' -f2 | tr '[:upper:]' '[:lower:]')
-    echo "目标平台: $target"
-    echo ""
-    
-    # 定义基础必需驱动
-    local base_required=(
-        "kmod-usb-core"
-    )
-    
-    # 根据平台定义必需驱动
-    local required_drivers=()
-    case "$target" in
-        ipq40xx|ipq806x|qcom)
-            required_drivers=(
-                "kmod-usb-core"
-                "kmod-usb2"
-                "kmod-usb3"
-                "kmod-usb-dwc3"
-                "kmod-usb-dwc3-qcom"
-                "kmod-usb-storage"
-                "kmod-scsi-core"
-            )
-            ;;
-        mediatek|ramips)
-            required_drivers=(
-                "kmod-usb-core"
-                "kmod-usb2"
-                "kmod-usb3"
-                "kmod-usb-xhci-mtk"
-                "kmod-usb-storage"
-                "kmod-scsi-core"
-            )
-            ;;
-        ath79)
-            required_drivers=(
-                "kmod-usb-core"
-                "kmod-usb2"
-                "kmod-usb-ohci"
-                "kmod-usb-storage"
-                "kmod-scsi-core"
-            )
-            ;;
-        *)
-            required_drivers=(
-                "kmod-usb-core"
-                "kmod-usb2"
-                "kmod-usb-storage"
-                "kmod-scsi-core"
-            )
-            ;;
-    esac
-    
-    echo "🔍 检查必需USB驱动:"
-    echo ""
-    
-    local missing_drivers=()
-    local enabled_drivers=()
-    
-    for driver in "${required_drivers[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-            echo "   ✅ $driver: 已启用"
-            enabled_drivers+=("$driver")
-        elif grep -q "^CONFIG_PACKAGE_${driver}=m" .config; then
-            echo "   📦 $driver: 模块化"
-            enabled_drivers+=("$driver")
-        else
-            # 检查是否有替代驱动
-            local alt_driver=$(grep "^CONFIG_PACKAGE_" .config | grep -i "${driver#kmod-}" | grep -E "=y|=m" | head -1)
-            if [ -n "$alt_driver" ]; then
-                local alt_name=$(echo "$alt_driver" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
-                echo "   🔄 $driver: 未找到，但发现替代: $alt_name"
-                enabled_drivers+=("$driver(替代:$alt_name)")
-            else
-                echo "   ❌ $driver: 未启用"
-                missing_drivers+=("$driver")
-            fi
-        fi
-    done
-    
-    echo ""
-    echo "📊 统计:"
-    echo "   必需驱动: ${#required_drivers[@]} 个"
-    echo "   已启用/替代: ${#enabled_drivers[@]} 个"
-    echo "   缺失驱动: ${#missing_drivers[@]} 个"
-    
-    if [ ${#missing_drivers[@]} -gt 0 ]; then
-        echo ""
-        echo "⚠️ 发现缺失驱动:"
-        for driver in "${missing_drivers[@]}"; do
-            echo "   - $driver"
-        done
-        
-        # 检查这些驱动是否被内核选项替代
-        echo ""
-        echo "🔍 检查内核配置替代:"
-        for driver in "${missing_drivers[@]}"; do
-            local kernel_config=$(grep -E "^CONFIG_.*${driver#kmod-}.*=y" .config | head -1)
-            if [ -n "$kernel_config" ]; then
-                echo "   ✅ $driver 可能被内核配置 $(echo $kernel_config | cut -d'=' -f1) 替代"
-            fi
-        done
-    fi
-    
-    echo ""
-    echo "🔍 检查所有实际启用的USB驱动:"
-    echo "----------------------------------------"
-    
-    # 获取所有启用的USB驱动
-    local all_enabled=$(grep "^CONFIG_PACKAGE_kmod-usb.*=y" .config | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
-    local all_module=$(grep "^CONFIG_PACKAGE_kmod-usb.*=m" .config | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
-    
-    # 显示所有启用的驱动
-    if [ -n "$all_enabled" ]; then
-        echo "✅ 已启用驱动 ($(echo "$all_enabled" | wc -l) 个):"
-        echo "$all_enabled" | while read driver; do
-            echo "   ✅ $driver"
-        done
-    else
-        echo "   没有已启用的USB驱动"
-    fi
-    
-    # 显示所有模块化的驱动
-    if [ -n "$all_module" ]; then
-        echo ""
-        echo "📦 模块化驱动 ($(echo "$all_module" | wc -l) 个):"
-        echo "$all_module" | while read driver; do
-            echo "   📦 $driver"
-        done
-    fi
-    
-    # 显示禁用的驱动（可选）
-    local all_disabled=$(grep "^# CONFIG_PACKAGE_kmod-usb" .config | grep "is not set" | sed 's/# CONFIG_PACKAGE_//g' | sed 's/ is not set//g' | sort)
-    if [ -n "$all_disabled" ]; then
-        echo ""
-        echo "❌ 禁用驱动 ($(echo "$all_disabled" | wc -l) 个，仅显示前20个):"
-        echo "$all_disabled" | head -20 | while read driver; do
-            echo "   ❌ $driver"
-        done
-        if [ $(echo "$all_disabled" | wc -l) -gt 20 ]; then
-            echo "   ... 还有 $(( $(echo "$all_disabled" | wc -l) - 20 )) 个禁用驱动未显示"
-        fi
-    fi
-    
-    echo "----------------------------------------"
-    log "✅ 步骤17 完成"
+    log "✅ 步骤16 完成"
 }
-#【build_firmware_main.sh-33-end】
+#【build_firmware_main.sh-30-end】
 
 # ============================================
-# 步骤20: 修复网络环境
-# 对应 firmware-build.yml 步骤20
-#【firmware-build.yml-20】
+# 步骤17（原步骤20）: 修复网络环境
 # ============================================
-#【build_firmware_main.sh-34】
-workflow_step20_fix_network() {
-    log "=== 步骤20: 修复网络环境（动态检测版） ==="
+#【build_firmware_main.sh-31】
+workflow_step17_fix_network() {
+    log "=== 步骤17: 修复网络环境（动态检测版） ==="
     
-    trap 'echo "⚠️ 步骤20 修复过程中出现错误，继续执行..."' ERR
+    trap 'echo "⚠️ 步骤17 修复过程中出现错误，继续执行..."' ERR
     
     cd $BUILD_DIR
     
@@ -4609,21 +4338,19 @@ workflow_step20_fix_network() {
         echo "⚠️ 网络连接可能有问题，但将继续尝试"
     fi
     
-    log "✅ 步骤20 完成"
+    log "✅ 步骤17 完成"
 }
-#【build_firmware_main.sh-34-end】
+#【build_firmware_main.sh-31-end】
 
 # ============================================
-# 步骤21: 下载依赖包
-# 对应 firmware-build.yml 步骤21
-#【firmware-build.yml-21】
+# 步骤18（原步骤21）: 下载依赖包
 # ============================================
-#【build_firmware_main.sh-35】
-workflow_step21_download_deps() {
-    log "=== 步骤21: 下载依赖包（动态优化版） ==="
+#【build_firmware_main.sh-32】
+workflow_step18_download_deps() {
+    log "=== 步骤18: 下载依赖包（动态优化版） ==="
     
     set -e
-    trap 'echo "❌ 步骤21 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "❌ 步骤18 失败，退出代码: $?"; exit 1' ERR
     
     cd $BUILD_DIR
     
@@ -4996,38 +4723,34 @@ workflow_step21_download_deps() {
         echo "----------------------------------------"
     fi
     
-    log "✅ 步骤21 完成"
+    log "✅ 步骤18 完成"
 }
-#【build_firmware_main.sh-35-end】
+#【build_firmware_main.sh-32-end】
 
 # ============================================
-# 步骤22: 集成自定义文件
-# 对应 firmware-build.yml 步骤22
-#【firmware-build.yml-22】
+# 步骤19（原步骤22）: 集成自定义文件
 # ============================================
-#【build_firmware_main.sh-36】
-workflow_step22_integrate_custom_files() {
-    log "=== 步骤22: 集成自定义文件（增强版） ==="
+#【build_firmware_main.sh-33】
+workflow_step19_integrate_custom_files() {
+    log "=== 步骤19: 集成自定义文件（增强版） ==="
     
-    trap 'echo "⚠️ 步骤22 集成过程中出现错误，继续执行..."' ERR
+    trap 'echo "⚠️ 步骤19 集成过程中出现错误，继续执行..."' ERR
     
     integrate_custom_files
     
-    log "✅ 步骤22 完成"
+    log "✅ 步骤19 完成"
 }
-#【build_firmware_main.sh-36-end】
+#【build_firmware_main.sh-33-end】
 
 # ============================================
-# 步骤23: 前置错误检查
-# 对应 firmware-build.yml 步骤23
-#【firmware-build.yml-23】
+# 步骤20（原步骤23）: 前置错误检查
 # ============================================
-#【build_firmware_main.sh-37】
-workflow_step23_pre_build_check() {
-    log "=== 步骤23: 前置错误检查（使用公共函数） ==="
+#【build_firmware_main.sh-34】
+workflow_step20_pre_build_check() {
+    log "=== 步骤20: 前置错误检查（使用公共函数） ==="
     
     set -e
-    trap 'echo "❌ 步骤23 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "❌ 步骤20 失败，退出代码: $?"; exit 1' ERR
     
     echo "🔍 检查当前环境..."
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
@@ -5200,23 +4923,49 @@ workflow_step23_pre_build_check() {
     fi
     echo "========================================"
     
-    log "✅ 步骤23 完成"
+    log "✅ 步骤20 完成"
 }
-#【build_firmware_main.sh-37-end】
+#【build_firmware_main.sh-34-end】
 
 # ============================================
-# 步骤25: 编译固件
-# 对应 firmware-build.yml 步骤25
-#【firmware-build.yml-25】
+# 步骤21（原步骤24）: 编译前空间确认
+# 注意：步骤19、20、21、22、23、24已重新编号
+# 步骤21对应原步骤24
 # ============================================
-#【build_firmware_main.sh-38】
-workflow_step25_build_firmware() {
-    local enable_parallel="$1"
-    
-    log "=== 步骤25: 编译固件（LEDE源码特定修复 + 双固件强制保护） ==="
+#【build_firmware_main.sh-35】
+workflow_step21_pre_build_space_confirm() {
+    log "=== 步骤21: 编译前空间确认 ==="
     
     set -e
-    trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "❌ 步骤21 失败，退出代码: $?"; exit 1' ERR
+    
+    df -h /mnt
+    AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
+    AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+    echo "/mnt 可用空间: ${AVAILABLE_GB}G"
+    
+    if [ $AVAILABLE_GB -lt 10 ]; then
+        echo "❌ 错误: 编译前空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
+        exit 1
+    else
+        echo "✅ 编译前空间充足"
+    fi
+    
+    log "✅ 步骤21 完成"
+}
+#【build_firmware_main.sh-35-end】
+
+# ============================================
+# 步骤22（原步骤25）: 编译固件
+# ============================================
+#【build_firmware_main.sh-36】
+workflow_step22_build_firmware() {
+    local enable_parallel="$1"
+    
+    log "=== 步骤22: 编译固件（LEDE源码特定修复 + 双固件强制保护） ==="
+    
+    set -e
+    trap 'echo "❌ 步骤22 失败，退出代码: $?"; exit 1' ERR
     
     cd $BUILD_DIR
     
@@ -5646,21 +5395,19 @@ EOF
     # 清理
     rm -rf "$protect_dir" 2>/dev/null || true
     
-    log "✅ 步骤25 完成"
+    log "✅ 步骤22 完成"
 }
-#【build_firmware_main.sh-38-end】
+#【build_firmware_main.sh-36-end】
 
 # ============================================
-# 步骤26: 检查构建产物
-# 对应 firmware-build.yml 步骤26
-#【firmware-build.yml-26】
+# 步骤23（原步骤26）: 检查构建产物
 # ============================================
-#【build_firmware_main.sh-39】
-workflow_step26_check_artifacts() {
-    log "=== 步骤26: 检查构建产物（完整显示） ==="
+#【build_firmware_main.sh-37】
+workflow_step23_check_artifacts() {
+    log "=== 步骤23: 检查构建产物（完整显示） ==="
     
     set -e
-    trap 'echo "❌ 步骤26 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "❌ 步骤23 失败，退出代码: $?"; exit 1' ERR
     
     cd "$BUILD_DIR"
     
@@ -5780,20 +5527,18 @@ workflow_step26_check_artifacts() {
         exit 1
     fi
     
-    log "✅ 步骤26 完成"
+    log "✅ 步骤23 完成"
 }
-#【build_firmware_main.sh-39-end】
+#【build_firmware_main.sh-37-end】
 
 # ============================================
-# 步骤29: 编译后空间检查
-# 对应 firmware-build.yml 步骤29
-#【firmware-build.yml-29】
+# 步骤24（原步骤29）: 编译后空间检查
 # ============================================
-#【build_firmware_main.sh-40】
-workflow_step29_post_build_space_check() {
-    log "=== 步骤29: 编译后空间检查（修复版） ==="
+#【build_firmware_main.sh-38】
+workflow_step24_post_build_space_check() {
+    log "=== 步骤24: 编译后空间检查（修复版） ==="
     
-    trap 'echo "⚠️ 步骤29 检查过程中出现错误，继续执行..."' ERR
+    trap 'echo "⚠️ 步骤24 检查过程中出现错误，继续执行..."' ERR
     
     echo "📊 磁盘使用情况:"
     df -h /mnt
@@ -5808,26 +5553,24 @@ workflow_step29_post_build_space_check() {
         echo "✅ 磁盘空间充足"
     fi
     
-    log "✅ 步骤29 完成"
+    log "✅ 步骤24 完成"
 }
-#【build_firmware_main.sh-40-end】
+#【build_firmware_main.sh-38-end】
 
 # ============================================
-# 步骤30: 编译总结
-# 对应 firmware-build.yml 步骤30
-#【firmware-build.yml-30】
+# 步骤25（原步骤30）: 编译总结
 # ============================================
-#【build_firmware_main.sh-41】
-workflow_step30_build_summary() {
+#【build_firmware_main.sh-39】
+workflow_step25_build_summary() {
     local device_name="$1"
     local version_selection="$2"
     local config_mode="$3"
     local timestamp_sec="$4"
     local enable_parallel="$5"
     
-    log "=== 步骤30: 编译后总结（增强版） ==="
+    log "=== 步骤25: 编译后总结（增强版） ==="
     
-    trap 'echo "⚠️ 步骤30 总结过程中出现错误，继续执行..."' ERR
+    trap 'echo "⚠️ 步骤25 总结过程中出现错误，继续执行..."' ERR
     
     echo "🚀 构建总结报告"
     echo "========================================"
@@ -5870,17 +5613,6 @@ workflow_step30_build_summary() {
     fi
     
     echo ""
-    echo "📦 SDK下载状态:"
-    if [ -f "$BUILD_DIR/build_env.sh" ]; then
-        source "$BUILD_DIR/build_env.sh"
-        if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-            echo "  ✅ SDK已下载: $COMPILER_DIR"
-        else
-            echo "  ❌ SDK未下载或目录不存在"
-        fi
-    fi
-    
-    echo ""
     echo "⚙️ 功能开关状态:"
     echo "  TurboACC: ${ENABLE_TURBOACC:-true}"
     echo "  TCP BBR: ${ENABLE_TCP_BBR:-true}"
@@ -5891,17 +5623,17 @@ workflow_step30_build_summary() {
     echo "✅ 构建流程完成"
     echo "========================================"
     
-    log "✅ 步骤30 完成"
+    log "✅ 步骤25 完成"
 }
-#【build_firmware_main.sh-41-end】
+#【build_firmware_main.sh-39-end】
 
 # ============================================
 # 已废弃的搜索函数（保留兼容性）
 # ============================================
-#【build_firmware_main.sh-42】
+#【build_firmware_main.sh-40】
 # ============================================
-# 工作流步骤函数 - 步骤05-09
-# 对应 firmware-build.yml 步骤05-09
+# 工作流步骤函数 - 步骤05-08
+# 对应 firmware-build.yml 步骤05-08
 # ============================================
 
 workflow_step05_install_basic_tools() {
@@ -5972,47 +5704,34 @@ workflow_step08_initialize_build_env() {
     log "✅ 步骤08 完成"
 }
 
-workflow_step09_download_sdk() {
-    local device_name="$1"
-    
-    log "=== 步骤09: 下载OpenWrt官方SDK ==="
-    
-    set -e
-    trap 'echo "❌ 步骤09 失败，退出代码: $?"; exit 1' ERR
-    
-    initialize_compiler_env "$device_name"
-    
-    log "✅ 步骤09 完成"
-}
-
 # 以下编译器搜索函数已废弃，由 initialize_compiler_env 替代
+#【build_firmware_main.sh-40-end】
+
+#【build_firmware_main.sh-41】
+universal_compiler_search() {
+    log "=== 通用编译器搜索 ==="
+    log "🔍 不再搜索本地编译器，将使用源码自带工具链"
+    return 1
+}
+#【build_firmware_main.sh-41-end】
+
+#【build_firmware_main.sh-42】
+search_compiler_files_simple() {
+    log "=== 简单编译器文件搜索 ==="
+    log "🔍 不再搜索本地编译器，将使用源码自带工具链"
+    return 1
+}
 #【build_firmware_main.sh-42-end】
 
 #【build_firmware_main.sh-43】
-universal_compiler_search() {
-    log "=== 通用编译器搜索 ==="
-    log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
+intelligent_platform_aware_compiler_search() {
+    log "=== 智能平台感知的编译器搜索 ==="
+    log "🔍 不再搜索本地编译器，将使用源码自带工具链"
     return 1
 }
 #【build_firmware_main.sh-43-end】
 
 #【build_firmware_main.sh-44】
-search_compiler_files_simple() {
-    log "=== 简单编译器文件搜索 ==="
-    log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
-    return 1
-}
-#【build_firmware_main.sh-44-end】
-
-#【build_firmware_main.sh-45】
-intelligent_platform_aware_compiler_search() {
-    log "=== 智能平台感知的编译器搜索 ==="
-    log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
-    return 1
-}
-#【build_firmware_main.sh-45-end】
-
-#【build_firmware_main.sh-46】
 # ============================================
 # 手动输入模式下的初始化函数（混合模式）
 # 对应工作流步骤08
@@ -6035,19 +5754,7 @@ workflow_step08_initialize_build_env_hybrid() {
 
     log "✅ 步骤08 完成"
 }
-#【build_firmware_main.sh-46-end】
-
-#【build_firmware_main.sh-47】
-
-#【build_firmware_main.sh-47-end】
-
-#【build_firmware_main.sh-48】
-
-#【build_firmware_main.sh-48-end】
-
-#【build_firmware_main.sh-49】
-
-#【build_firmware_main.sh-49-end】
+#【build_firmware_main.sh-44-end】
 
 # ============================================
 # 主函数 - 命令分发
@@ -6101,9 +5808,6 @@ main() {
         "verify_usb_config")
             verify_usb_config
             ;;
-        "check_usb_drivers_integrity")
-            check_usb_drivers_integrity
-            ;;
         "apply_config")
             apply_config
             ;;
@@ -6150,56 +5854,53 @@ main() {
         "step08_initialize_build_env_hybrid")
             workflow_step08_initialize_build_env_hybrid "$arg1" "$arg2" "$arg3" "$arg4" "$arg5"
             ;;
-        "step09_download_sdk")
-            workflow_step09_download_sdk "$arg1"
-            ;;
         "step10_verify_sdk")
             workflow_step10_verify_sdk
             ;;
-        "step11_add_turboacc")
-            workflow_step11_add_turboacc
+        "step11_configure_feeds")
+            workflow_step11_configure_feeds
             ;;
-        "step12_configure_feeds")
-            workflow_step12_configure_feeds
+        "step12_install_turboacc")
+            workflow_step12_install_turboacc
             ;;
-        "step13_install_turboacc")
-            workflow_step13_install_turboacc
+        "step13_pre_build_space_check")
+            workflow_step13_pre_build_space_check
             ;;
-        "step14_pre_build_space_check")
-            workflow_step14_pre_build_space_check
+        "step14_generate_config")
+            workflow_step14_generate_config "$arg1"
             ;;
-        "step15_generate_config")
-            workflow_step15_generate_config "$arg1"
+        "step15_verify_usb")
+            workflow_step15_verify_usb
             ;;
-        "step16_verify_usb")
-            workflow_step16_verify_usb
+        "step16_apply_config")
+            workflow_step16_apply_config
             ;;
-        "step17_check_usb_drivers")
-            workflow_step17_check_usb_drivers
+        "step17_fix_network")
+            workflow_step17_fix_network
             ;;
-        "step20_fix_network")
-            workflow_step20_fix_network
+        "step18_download_deps")
+            workflow_step18_download_deps
             ;;
-        "step21_download_deps")
-            workflow_step21_download_deps
+        "step19_integrate_custom_files")
+            workflow_step19_integrate_custom_files
             ;;
-        "step22_integrate_custom_files")
-            workflow_step22_integrate_custom_files
+        "step20_pre_build_check")
+            workflow_step20_pre_build_check
             ;;
-        "step23_pre_build_check")
-            workflow_step23_pre_build_check
+        "step21_pre_build_space_confirm")
+            workflow_step21_pre_build_space_confirm
             ;;
-        "step25_build_firmware")
-            workflow_step25_build_firmware "$arg1"
+        "step22_build_firmware")
+            workflow_step22_build_firmware "$arg1"
             ;;
-        "step26_check_artifacts")
-            workflow_step26_check_artifacts
+        "step23_check_artifacts")
+            workflow_step23_check_artifacts
             ;;
-        "step29_post_build_space_check")
-            workflow_step29_post_build_space_check
+        "step24_post_build_space_check")
+            workflow_step24_post_build_space_check
             ;;
-        "step30_build_summary")
-            workflow_step30_build_summary "$arg1" "$arg2" "$arg3" "$arg4" "$arg5"
+        "step25_build_summary")
+            workflow_step25_build_summary "$arg1" "$arg2" "$arg3" "$arg4" "$arg5"
             ;;
 
         "search_compiler_files")
@@ -6222,12 +5923,12 @@ main() {
             echo ""
             echo "  工作流步骤命令:"
             echo "    step05_install_basic_tools, step06_initial_space_check, step07_create_build_dir"
-            echo "    step08_initialize_build_env, step08_initialize_build_env_hybrid, step09_download_sdk, step10_verify_sdk"
-            echo "    step11_add_turboacc, step12_configure_feeds, step13_install_turboacc"
-            echo "    step14_pre_build_space_check, step15_generate_config, step16_verify_usb"
-            echo "    step17_check_usb_drivers, step20_fix_network, step21_download_deps"
-            echo "    step22_integrate_custom_files, step23_pre_build_check, step25_build_firmware"
-            echo "    step26_check_artifacts, step29_post_build_space_check, step30_build_summary"
+            echo "    step08_initialize_build_env, step08_initialize_build_env_hybrid, step10_verify_sdk"
+            echo "    step11_configure_feeds, step12_install_turboacc, step13_pre_build_space_check"
+            echo "    step14_generate_config, step15_verify_usb, step16_apply_config"
+            echo "    step17_fix_network, step18_download_deps, step19_integrate_custom_files"
+            echo "    step20_pre_build_check, step21_pre_build_space_confirm, step22_build_firmware"
+            echo "    step23_check_artifacts, step24_post_build_space_check, step25_build_summary"
             exit 1
             ;;
     esac
