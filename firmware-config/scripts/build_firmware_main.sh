@@ -5597,7 +5597,14 @@ workflow_step25_build_summary() {
     echo ""
     echo "🔧 编译器信息:"
     if [ -d "$BUILD_DIR" ]; then
-        GCC_FILE=$(find "$BUILD_DIR" -type f -executable             -name "*gcc"             ! -name "*gcc-ar"             ! -name "*gcc-ranlib"             ! -name "*gcc-nm"             ! -path "*dummy-tools*"             ! -path "*scripts*"             2>/dev/null | head -1)
+        GCC_FILE=$(find "$BUILD_DIR" -type f -executable \
+            -name "*gcc" \
+            ! -name "*gcc-ar" \
+            ! -name "*gcc-ranlib" \
+            ! -name "*gcc-nm" \
+            ! -path "*dummy-tools*" \
+            ! -path "*scripts*" \
+            2>/dev/null | head -1)
         
         if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
             SDK_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
