@@ -5070,6 +5070,36 @@ workflow_step22_build_firmware() {
     fi
     
     # ============================================
+    # 设置文件描述符限制（关键修复）
+    # ============================================
+    log "🔧 设置文件描述符限制..."
+    
+    # 检查当前限制
+    local current_limit=$(ulimit -n 2>/dev/null || echo "unknown")
+    log "  📊 当前文件描述符限制: $current_limit"
+    
+    # 尝试设置到 65536
+    if ulimit -n 65536 2>/dev/null; then
+        log "  ✅ 成功设置文件描述符限制为: 65536"
+    else
+        log "  ⚠️ 无法设置到 65536，尝试设置到 16384"
+        if ulimit -n 16384 2>/dev/null; then
+            log "  ✅ 成功设置文件描述符限制为: 16384"
+        else
+            log "  ⚠️ 无法设置到 16384，使用当前限制: $(ulimit -n)"
+        fi
+    fi
+    
+    local new_limit=$(ulimit -n)
+    log "  ✅ 当前文件描述符限制: $new_limit"
+    
+    # 同时设置系统级别的文件描述符限制
+    if [ -f /proc/sys/fs/file-max ]; then
+        local system_max=$(cat /proc/sys/fs/file-max 2>/dev/null || echo "unknown")
+        log "  📊 系统最大文件描述符: $system_max"
+    fi
+    
+    # ============================================
     # LEDE源码特定修复 - 增强版
     # ============================================
     log "🔧 检查源码类型并进行特定修复..."
@@ -5147,13 +5177,6 @@ workflow_step22_build_firmware() {
             done
         fi
     fi
-    
-    # ============================================
-    # 设置文件描述符限制
-    # ============================================
-    ulimit -n 65536 2>/dev/null || true
-    local current_limit=$(ulimit -n)
-    log "  ✅ 当前文件描述符限制: $current_limit"
     
     # ============================================
     # 创建双固件保护脚本（增强版）
@@ -5299,11 +5322,13 @@ if [ -d "$BUILD_DIR/bin/targets/ath79/generic" ]; then
 可能的原因：
 1. padjffs2 工具问题
 2. mkdniimg 工具问题
+3. 文件描述符限制问题
 
 解决方案：
 1. 重新运行编译：make -j1 V=s
 2. 单独编译工具：make tools/padjffs2/compile V=s
-3. 单独编译设备：make target/linux/install V=s
+3. 单独编译工具：make tools/mkdniimg/compile V=s
+4. 手动设置文件描述符：ulimit -n 65536
 
 临时文件可能保存在：build_dir/target-*/linux-ath79_generic/tmp/
 INNEREOF
@@ -5408,6 +5433,9 @@ EOF
         if [ $retry_count -gt 1 ]; then
             log ""
             log "🔄 第 $retry_count 次重试编译..."
+            
+            log "  🔧 再次设置文件描述符限制..."
+            ulimit -n 65536 2>/dev/null || ulimit -n 16384 2>/dev/null || true
             
             log "  🔧 运行工具修复脚本..."
             bash "$tool_fix_script" "$BUILD_DIR"
@@ -5600,42 +5628,6 @@ EOF
         done < <(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
     fi
     
-    # 如果 bin/targets 中没有文件，检查保护目录
-    if [ ${#all_firmware[@]} -eq 0 ]; then
-        log "⚠️ bin/targets 中未找到固件，检查保护目录..."
-        
-        local protect_files=$(find "$protect_dir" -name "*.backup" -o -name "final_*" 2>/dev/null)
-        if [ -n "$protect_files" ]; then
-            echo "$protect_files" | while read file; do
-                if [ -f "$file" ] && [ -s "$file" ]; then
-                    log "  ✅ 保护目录中存在: $(basename "$file")"
-                    
-                    # 尝试复制到 bin/targets
-                    local target_dir="$BUILD_DIR/bin/targets/ath79/generic"
-                    mkdir -p "$target_dir"
-                    local filename=$(basename "$file" .backup)
-                    filename=${filename#final_}
-                    cp -f "$file" "$target_dir/$filename" 2>/dev/null
-                    log "  ✅ 已恢复: $target_dir/$filename"
-                fi
-            done
-        fi
-        
-        # 再次检查
-        if [ -d "$BUILD_DIR/bin/targets" ]; then
-            while IFS= read -r file; do
-                if [ -f "$file" ] && [ -s "$file" ]; then
-                    all_firmware+=("$file")
-                    if echo "$file" | grep -q "sysupgrade"; then
-                        sysupgrade_count=$((sysupgrade_count + 1))
-                    elif echo "$file" | grep -q "factory"; then
-                        factory_count=$((factory_count + 1))
-                    fi
-                fi
-            done < <(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
-        fi
-    fi
-    
     if [ ${#all_firmware[@]} -gt 0 ]; then
         echo "  ✅ sysupgrade.bin: $sysupgrade_count 个"
         echo "  ✅ factory.img: $factory_count 个"
@@ -5650,8 +5642,26 @@ EOF
     
     if [ ${#all_firmware[@]} -eq 0 ]; then
         echo "❌ 没有找到任何固件文件"
+        
+        # 检查临时目录中的文件
+        echo ""
+        echo "📁 检查临时目录中的文件..."
+        local tmp_files=$(find "$BUILD_DIR/build_dir" -path "*/tmp/*.bin" -o -path "*/tmp/*.img" 2>/dev/null | head -10)
+        
+        if [ -n "$tmp_files" ]; then
+            echo "在临时目录中找到以下文件："
+            echo "$tmp_files" | while read file; do
+                if [ -f "$file" ] && [ -s "$file" ]; then
+                    echo "  📄 $(basename "$file") ($(ls -lh "$file" | awk '{print $5}'))"
+                    echo "    路径: $file"
+                fi
+            done
+            echo ""
+            echo "💡 可以手动复制这些文件作为固件使用："
+            echo "   cp $BUILD_DIR/build_dir/target-*/linux-*/tmp/*.bin $BUILD_DIR/bin/targets/ath79/generic/"
+        fi
+        
         if [ $build_success -eq 0 ]; then
-            echo "  编译失败，请检查日志: build.log"
             echo ""
             echo "📋 最近50行错误日志:"
             tail -50 build.log 2>/dev/null || echo "  无日志文件"
