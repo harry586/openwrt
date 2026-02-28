@@ -5199,61 +5199,47 @@ workflow_step22_build_firmware() {
     # ============================================
     log "🔧 检查并修复主机工具..."
     
-    # 重新编译 padjffs2 工具（通用）
-    if [ -f "staging_dir/host/bin/padjffs2" ]; then
-        log "  重新编译 padjffs2 工具..."
-        rm -f staging_dir/host/bin/padjffs2
-        rm -rf build_dir/host/padjffs2-*
-        make tools/padjffs2/clean V=s > /dev/null 2>&1 || true
-        make tools/padjffs2/compile V=s > /dev/null 2>&1 || true
-        
-        if [ -f "staging_dir/host/bin/padjffs2" ]; then
-            log "  ✅ padjffs2 编译成功"
+    # 重新编译所有主机工具
+    local host_tools=(
+        "tools/padjffs2"
+        "tools/mkdniimg"
+        "tools/fwtool"
+        "tools/mklibs"
+        "tools/mkimage"
+        "tools/squashfs"
+        "tools/mksquashfs"
+        "tools/mkfs.jffs2"
+        "tools/sumtool"
+    )
+    
+    for tool in "${host_tools[@]}"; do
+        log "  重新编译 $tool..."
+        make "$tool/clean" V=s > /dev/null 2>&1 || true
+        make "$tool/compile" V=s > /dev/null 2>&1 || true
+    done
+    
+    # 检查关键工具是否可用
+    local critical_tools=(
+        "staging_dir/host/bin/padjffs2"
+        "staging_dir/host/bin/mkdniimg"
+        "staging_dir/host/bin/fwtool"
+    )
+    
+    local missing_tools=()
+    for tool in "${critical_tools[@]}"; do
+        if [ ! -f "$tool" ] || [ ! -x "$tool" ]; then
+            missing_tools+=("$tool")
+            log "  ⚠️ 工具缺失: $tool"
         else
-            log "  ⚠️ padjffs2 编译失败，使用备用方案"
+            log "  ✅ 工具存在: $tool"
+            # 显示工具版本或信息
+            "$tool" --version 2>/dev/null | head -1 || echo "  ✅ $tool 可用"
         fi
-    fi
+    done
     
-    # 重新编译 mkdniimg 工具（通用）
-    if [ -f "staging_dir/host/bin/mkdniimg" ]; then
-        log "  重新编译 mkdniimg 工具..."
-        rm -f staging_dir/host/bin/mkdniimg
-        rm -rf build_dir/host/mkdniimg-*
-        make tools/mkdniimg/clean V=s > /dev/null 2>&1 || true
-        make tools/mkdniimg/compile V=s > /dev/null 2>&1 || true
-        
-        if [ -f "staging_dir/host/bin/mkdniimg" ]; then
-            log "  ✅ mkdniimg 编译成功"
-        else
-            log "  ⚠️ mkdniimg 编译失败，使用备用方案"
-        fi
-    fi
-    
-    # 重新编译 fwtool（通用）
-    if [ -f "staging_dir/host/bin/fwtool" ]; then
-        log "  重新编译 fwtool 工具..."
-        rm -f staging_dir/host/bin/fwtool
-        rm -rf build_dir/host/fwtool-*
-        make tools/fwtool/clean V=s > /dev/null 2>&1 || true
-        make tools/fwtool/compile V=s > /dev/null 2>&1 || true
-        
-        if [ -f "staging_dir/host/bin/fwtool" ]; then
-            log "  ✅ fwtool 编译成功"
-        fi
-    fi
-    
-    # 重新编译 mklibs（通用）
-    if [ -f "staging_dir/host/bin/mklibs" ]; then
-        log "  重新编译 mklibs 工具..."
-        make tools/mklibs/clean V=s > /dev/null 2>&1 || true
-        make tools/mklibs/compile V=s > /dev/null 2>&1 || true
-    fi
-    
-    # 重新编译 mkimage（通用）
-    if [ -f "staging_dir/host/bin/mkimage" ]; then
-        log "  重新编译 mkimage 工具..."
-        make tools/mkimage/clean V=s > /dev/null 2>&1 || true
-        make tools/mkimage/compile V=s > /dev/null 2>&1 || true
+    if [ ${#missing_tools[@]} -gt 0 ]; then
+        log "⚠️ 关键工具缺失，尝试重新编译所有工具..."
+        make tools/install V=s > /dev/null 2>&1 || true
     fi
     
     # 清理可能冲突的临时文件
@@ -5333,7 +5319,9 @@ while true; do
             if [ -f "$file" ] && [ -s "$file" ]; then
                 local backup="$PROTECT_DIR/$(basename "$file").backup"
                 cp -f "$file" "$backup" 2>/dev/null
-                echo "$(date): 备份: $(basename "$file") ($(ls -lh "$file" | awk '{print $5}'))" >> "$LOG_FILE"
+                if [ $? -eq 0 ]; then
+                    echo "$(date): ✅ 备份: $(basename "$file") ($(ls -lh "$file" | awk '{print $5}'))" >> "$LOG_FILE"
+                fi
             fi
         done
     done
@@ -5344,12 +5332,12 @@ while true; do
             if [ -f "$file" ] && [ -s "$file" ]; then
                 local backup="$PROTECT_DIR/final_$(basename "$file")"
                 cp -f "$file" "$backup" 2>/dev/null
-                echo "$(date): 备份最终固件: $(basename "$file")" >> "$LOG_FILE"
+                echo "$(date): ✅ 备份最终固件: $(basename "$file")" >> "$LOG_FILE"
             fi
         done
     fi
     
-    sleep 5
+    sleep 3
 done
 EOF
     chmod +x "$protect_script"
@@ -5398,36 +5386,37 @@ for target_dir in $TARGET_DIRS; do
     fi
 done
 
-# 检查所有目标平台目录中是否有固件文件
-for target_dir in $TARGET_DIRS; do
-    if [ -d "$target_dir" ]; then
-        file_count=$(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
-        
-        if [ $file_count -eq 0 ]; then
-            echo "⚠️ $target_dir 中没有固件文件，尝试从临时目录恢复..." >> "$LOG_FILE"
-            
-            # 查找临时目录中的备份
-            tmp_backups=$(find "$PROTECT_DIR" -name "*.backup" 2>/dev/null)
-            
-            if [ -n "$tmp_backups" ]; then
-                echo "$tmp_backups" | while read backup; do
-                    if [ -f "$backup" ] && [ -s "$backup" ]; then
-                        filename=$(basename "$backup" .backup)
-                        cp -f "$backup" "$target_dir/$filename" 2>/dev/null
-                        echo "  ✅ 从临时备份恢复: $filename" >> "$LOG_FILE"
-                    fi
-                done
+# 特别检查 ath79/generic 目录
+if [ -d "$BUILD_DIR/bin/targets/ath79/generic" ]; then
+    echo "📁 特别检查 ath79/generic 目录..." >> "$LOG_FILE"
+    
+    # 查找临时目录中的 wndr3800 相关文件
+    TMP_FILES=$(find "$BUILD_DIR/build_dir" -path "*/tmp/*wndr3800*.bin" -o -path "*/tmp/*wndr3800*.img" -o -path "*/tmp/*.new" 2>/dev/null)
+    
+    if [ -n "$TMP_FILES" ]; then
+        echo "$TMP_FILES" | while read tmp_file; do
+            if [ -f "$tmp_file" ] && [ -s "$tmp_file" ]; then
+                local filename=$(basename "$tmp_file" .new)
+                local target_file="$BUILD_DIR/bin/targets/ath79/generic/$filename"
+                
+                if [ ! -f "$target_file" ]; then
+                    echo "  ✅ 从临时目录恢复: $filename" >> "$LOG_FILE"
+                    cp -f "$tmp_file" "$target_file" 2>/dev/null
+                fi
             fi
-        fi
+        done
     fi
-done
+fi
 
 # 最终统计
 echo "" >> "$LOG_FILE"
 echo "📊 最终固件统计:" >> "$LOG_FILE"
+
+total_files=0
 for target_dir in $TARGET_DIRS; do
     if [ -d "$target_dir" ]; then
         file_count=$(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+        total_files=$((total_files + file_count))
         echo "  $target_dir: $file_count 个文件" >> "$LOG_FILE"
         
         if [ $file_count -gt 0 ]; then
@@ -5438,7 +5427,14 @@ for target_dir in $TARGET_DIRS; do
     fi
 done
 
+echo "总固件文件数: $total_files" >> "$LOG_FILE"
 echo "=== 强制恢复结束于 $(date) ===" >> "$LOG_FILE"
+
+# 输出结果到控制台
+echo ""
+echo "📊 恢复结果:"
+echo "  总固件文件数: $total_files"
+cat "$LOG_FILE" | grep "✅" | tail -10
 EOF
     chmod +x "$recover_script"
     
@@ -5464,6 +5460,8 @@ TOOLS=(
     "mkimage"
     "squashfs"
     "mksquashfs"
+    "mkfs.jffs2"
+    "sumtool"
 )
 
 for tool in "${TOOLS[@]}"; do
@@ -5483,6 +5481,24 @@ for tool in "${TOOLS[@]}"; do
                 cp "staging_dir/host/bin/$tool.bak" "staging_dir/host/bin/$tool" 2>/dev/null || true
             fi
         fi
+    else
+        echo "🔧 编译 $tool..."
+        make "tools/$tool/compile" V=s > /dev/null 2>&1
+        if [ -f "staging_dir/host/bin/$tool" ]; then
+            echo "✅ $tool 编译成功"
+        fi
+    fi
+done
+
+# 检查关键工具
+echo ""
+echo "📊 工具检查结果:"
+critical_tools=("padjffs2" "mkdniimg" "fwtool")
+for tool in "${critical_tools[@]}"; do
+    if [ -f "staging_dir/host/bin/$tool" ] && [ -x "staging_dir/host/bin/$tool" ]; then
+        echo "✅ $tool: 可用"
+    else
+        echo "❌ $tool: 不可用"
     fi
 done
 
@@ -5606,6 +5622,7 @@ EOF
                     if [ -f "$file" ] && [ -s "$file" ]; then
                         cp -v "$file" "$backup_dir/" 2>/dev/null
                         backup_count=$((backup_count + 1))
+                        log "    ✅ 备份临时文件: $(basename "$file")"
                     fi
                 done
                 echo "  ✅ 已备份 $backup_count 个临时固件文件到: $backup_dir"
@@ -5668,12 +5685,14 @@ EOF
                 if [ -f build.log ]; then
                     if grep -q "padjffs2" build.log; then
                         log "  🔧 检测到 padjffs2 错误，应用专项修复..."
-                        bash "$tool_fix_script" "$BUILD_DIR"
+                        make tools/padjffs2/clean V=s > /dev/null 2>&1 || true
+                        make tools/padjffs2/compile V=s > /dev/null 2>&1 || true
                     fi
                     
                     if grep -q "mkdniimg" build.log; then
                         log "  🔧 检测到 mkdniimg 错误，应用专项修复..."
-                        bash "$tool_fix_script" "$BUILD_DIR"
+                        make tools/mkdniimg/clean V=s > /dev/null 2>&1 || true
+                        make tools/mkdniimg/compile V=s > /dev/null 2>&1 || true
                     fi
                     
                     if grep -q "fwtool" build.log; then
@@ -5725,10 +5744,13 @@ EOF
                 all_firmware+=("$file")
                 if echo "$file" | grep -q "sysupgrade"; then
                     sysupgrade_count=$((sysupgrade_count + 1))
+                    log "  ✅ 找到 sysupgrade: $(basename "$file")"
                 elif echo "$file" | grep -q "factory"; then
                     factory_count=$((factory_count + 1))
+                    log "  ✅ 找到 factory: $(basename "$file")"
                 elif echo "$file" | grep -q "initramfs"; then
                     initramfs_count=$((initramfs_count + 1))
+                    log "  🔷 找到 initramfs: $(basename "$file")"
                 else
                     other_count=$((other_count + 1))
                 fi
@@ -5753,38 +5775,77 @@ EOF
                         local filename=$(basename "$file" .backup)
                         filename=${filename#final_}
                         cp -f "$file" "$target_dir/$filename" 2>/dev/null
-                        log "  ✅ 已恢复: $target_dir/$filename"
-                        all_firmware+=("$target_dir/$filename")
+                        if [ -f "$target_dir/$filename" ]; then
+                            log "  ✅ 已恢复: $target_dir/$filename"
+                            all_firmware+=("$target_dir/$filename")
+                        fi
                     fi
                 fi
             done
         fi
     fi
     
-    if [ ${#all_firmware[@]} -gt 0 ]; then
-        echo "  ✅ sysupgrade.bin: $sysupgrade_count 个"
-        echo "  ✅ factory.img: $factory_count 个"
-        echo "  🔷 initramfs: $initramfs_count 个"
-        echo "  📦 其他: $other_count 个"
+    # 检查临时目录中的文件
+    if [ ${#all_firmware[@]} -eq 0 ]; then
+        log "🔍 检查临时目录中的文件..."
+        local tmp_files=$(find "$BUILD_DIR/build_dir" -path "*/tmp/*.bin" -o -path "*/tmp/*.img" 2>/dev/null)
+        if [ -n "$tmp_files" ]; then
+            echo "$tmp_files" | while read file; do
+                if [ -f "$file" ] && [ -s "$file" ]; then
+                    log "  📁 临时文件: $(basename "$file") ($(ls -lh "$file" | awk '{print $5}'))"
+                    
+                    # 尝试复制到目标目录
+                    if [ -n "$TARGET" ] && [ -n "$SUBTARGET" ]; then
+                        local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
+                        mkdir -p "$target_dir"
+                        cp -f "$file" "$target_dir/$(basename "$file")" 2>/dev/null
+                        log "  ✅ 从临时目录恢复: $(basename "$file")"
+                        all_firmware+=("$target_dir/$(basename "$file")")
+                    fi
+                fi
+            done
+        fi
+    fi
+    
+    echo "----------------------------------------"
+    echo "📊 固件统计:"
+    echo "  ✅ sysupgrade.bin: $sysupgrade_count 个"
+    echo "  ✅ factory.img: $factory_count 个"
+    echo "  🔷 initramfs: $initramfs_count 个"
+    echo "  📦 其他: $other_count 个"
+    echo "  📊 总计: ${#all_firmware[@]} 个文件"
+    echo "----------------------------------------"
+    
+    if [ ${#all_firmware[@]} -eq 0 ]; then
+        echo "❌ 错误: 没有找到任何固件文件"
+        
+        # 显示最近的错误日志
+        echo ""
+        echo "📋 最近50行错误日志:"
+        tail -50 build.log 2>/dev/null | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 3 -B 3 || echo "  无错误日志"
+        
+        # 检查工具状态
+        echo ""
+        echo "🔧 工具状态检查:"
+        for tool in padjffs2 mkdniimg fwtool; do
+            if [ -f "staging_dir/host/bin/$tool" ]; then
+                echo "  ✅ $tool: 存在"
+                ls -l "staging_dir/host/bin/$tool"
+            else
+                echo "  ❌ $tool: 不存在"
+            fi
+        done
+        
+        exit 1
+    else
+        echo "🎉 固件生成完成！共 ${#all_firmware[@]} 个文件"
+        
+        # 列出所有固件文件
         echo ""
         echo "📋 固件列表:"
         for file in "${all_firmware[@]}"; do
             echo "  📄 $(basename "$file") ($(ls -lh "$file" | awk '{print $5}'))"
         done
-    fi
-    
-    echo "----------------------------------------"
-    
-    if [ ${#all_firmware[@]} -eq 0 ]; then
-        echo "❌ 没有找到任何固件文件"
-        if [ $build_success -eq 0 ]; then
-            echo ""
-            echo "📋 最近50行错误日志:"
-            tail -50 build.log 2>/dev/null || echo "  无日志文件"
-            exit 1
-        fi
-    else
-        echo "🎉 固件生成完成！共 ${#all_firmware[@]} 个文件"
     fi
     
     rm -rf "$protect_dir" 2>/dev/null || true
