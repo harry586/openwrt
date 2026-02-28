@@ -24,9 +24,14 @@ CONFIG_DIR="$REPO_ROOT/firmware-config/config"
 #【support.sh-02-end】
 
 #【support.sh-03】
-# 支持的设备列表（动态生成）
-# 格式: DEVICES["设备名称"]="目标平台 子目标 芯片型号"
+# 支持的设备列表（支持变体）
+# 格式: DEVICES["设备名称"]="目标平台 子目标 芯片型号 [变体类型]"
 declare -A DEVICES
+
+# 设备命名规范：
+# 1. 基础名称：厂商_型号（如 cmcc_rax3000m-nand、asus_rt-ac42u）
+# 2. 有变体的设备：基础名称-变体（如 cmcc_rax3000m-nand、cmcc_rax3000m-emmc）
+# 3. 无变体的设备：直接使用基础名称（如 asus_rt-ac42u）
 
 # 动态检测设备 - 通过扫描配置文件目录和源码
 detect_devices_dynamic() {
@@ -53,32 +58,208 @@ detect_devices_dynamic() {
     
     # 去重并添加到DEVICES数组
     if [ ${#devices_found[@]} -gt 0 ]; then
-        # 使用临时文件来去重
         printf '%s\n' "${devices_found[@]}" | sort -u | while read device; do
             # 根据设备名设置平台信息
             case "$device" in
-                *ac42u*|*acrh17*)
+                # ASUS 设备（无变体）
+                ac42u|rt-ac42u|asus_rt-ac42u)
                     DEVICES["$device"]="ipq40xx generic bcm47189"
                     ;;
-                *rax3000m*)
-                    DEVICES["$device"]="mediatek filogic mt7981"
+                acrh17|rt-acrh17|asus_rt-acrh17)
+                    DEVICES["$device"]="ipq40xx generic bcm47189"
                     ;;
-                *wndr3800*)
+                
+                # RAX3000M 设备（有变体）- 默认使用 nand 版本
+                cmcc_rax3000m-nand|rax3000m-nand)
+                    DEVICES["$device"]="mediatek filogic mt7981 nand"
+                    ;;
+                cmcc_rax3000m-emmc|rax3000m-emmc)
+                    DEVICES["$device"]="mediatek filogic mt7981 emmc"
+                    ;;
+                cmcc_rax3000m|rax3000m)
+                    # 兼容旧名称，指向 nand 版本
+                    DEVICES["$device"]="mediatek filogic mt7981 nand"
+                    ;;
+                
+                # Netgear 设备（可能有变体，但目前无）
+                netgear_wndr3800|wndr3800)
                     DEVICES["$device"]="ath79 generic ar7161"
                     ;;
+                netgear_wndr3700|wndr3700)
+                    DEVICES["$device"]="ath79 generic ar7161"
+                    ;;
+                
+                # Xiaomi 设备（可能有变体）
+                xiaomi_mi-router-4a-gigabit)
+                    DEVICES["$device"]="ramips mt7621 mips_24kc"
+                    ;;
+                xiaomi_mi-router-4a-100m)
+                    DEVICES["$device"]="ramips mt7621 mips_24kc"
+                    ;;
+                xiaomi_redmi-router-ac2100)
+                    DEVICES["$device"]="ramips mt7621 mips_24kc"
+                    ;;
+                
+                # 通用匹配模式
                 *)
-                    # 未知平台，暂时设为unknown
-                    DEVICES["$device"]="unknown unknown generic"
+                    # 尝试从设备名推断平台
+                    if [[ "$device" == *"ipq40xx"* ]] || [[ "$device" == *"ac42u"* ]] || [[ "$device" == *"acrh17"* ]]; then
+                        DEVICES["$device"]="ipq40xx generic unknown"
+                    elif [[ "$device" == *"mediatek"* ]] || [[ "$device" == *"filogic"* ]] || [[ "$device" == *"mt7981"* ]] || [[ "$device" == *"rax3000m"* ]]; then
+                        # 检查是否有变体
+                        if [[ "$device" == *"nand"* ]]; then
+                            DEVICES["$device"]="mediatek filogic mt7981 nand"
+                        elif [[ "$device" == *"emmc"* ]]; then
+                            DEVICES["$device"]="mediatek filogic mt7981 emmc"
+                        else
+                            # 默认使用 nand
+                            DEVICES["$device"]="mediatek filogic mt7981 nand"
+                        fi
+                    elif [[ "$device" == *"ath79"* ]] || [[ "$device" == *"wndr"* ]]; then
+                        DEVICES["$device"]="ath79 generic unknown"
+                    elif [[ "$device" == *"ramips"* ]] || [[ "$device" == *"mt7621"* ]] || [[ "$device" == *"xiaomi"* ]]; then
+                        DEVICES["$device"]="ramips mt7621 unknown"
+                    else
+                        # 未知平台，尝试从配置文件推断
+                        if [ -f "$config_dir/devices/$device.config" ]; then
+                            if grep -q "ipq40xx" "$config_dir/devices/$device.config" 2>/dev/null; then
+                                DEVICES["$device"]="ipq40xx generic unknown"
+                            elif grep -q "mediatek\|filogic" "$config_dir/devices/$device.config" 2>/dev/null; then
+                                if grep -q "nand" "$config_dir/devices/$device.config" 2>/dev/null; then
+                                    DEVICES["$device"]="mediatek filogic unknown nand"
+                                elif grep -q "emmc" "$config_dir/devices/$device.config" 2>/dev/null; then
+                                    DEVICES["$device"]="mediatek filogic unknown emmc"
+                                else
+                                    DEVICES["$device"]="mediatek filogic unknown nand"
+                                fi
+                            elif grep -q "ath79" "$config_dir/devices/$device.config" 2>/dev/null; then
+                                DEVICES["$device"]="ath79 generic unknown"
+                            else
+                                DEVICES["$device"]="unknown unknown unknown"
+                            fi
+                        else
+                            DEVICES["$device"]="unknown unknown unknown"
+                        fi
+                    fi
                     ;;
             esac
         done
     else
-        # 默认设备（作为fallback）
-        DEVICES["ac42u"]="ipq40xx generic bcm47189"
-        DEVICES["cmcc_rax3000m-nand"]="mediatek filogic mt7981"
-        DEVICES["cmcc_rax3000m"]="mediatek filogic mt7981"
+        # 默认设备列表（包含有变体和无变体的设备）
+        # 无变体设备
+        DEVICES["asus_rt-ac42u"]="ipq40xx generic bcm47189"
+        DEVICES["asus_rt-acrh17"]="ipq40xx generic bcm47189"
         DEVICES["netgear_wndr3800"]="ath79 generic ar7161"
+        
+        # 有变体设备 - 明确指定变体
+        DEVICES["cmcc_rax3000m-nand"]="mediatek filogic mt7981 nand"
+        DEVICES["cmcc_rax3000m-emmc"]="mediatek filogic mt7981 emmc"
+        
+        # 基础名称指向 nand 版本
+        DEVICES["cmcc_rax3000m"]="mediatek filogic mt7981 nand"
+        DEVICES["rax3000m"]="mediatek filogic mt7981 nand"
     fi
+}
+
+# 获取设备信息
+get_device_info() {
+    local device_name="$1"
+    local info_type="$2"  # target, subtarget, chip, variant
+    
+    if [ -z "${DEVICES[$device_name]}" ]; then
+        echo ""
+        return 1
+    fi
+    
+    local info="${DEVICES[$device_name]}"
+    
+    case "$info_type" in
+        target)
+            echo "$info" | awk '{print $1}'
+            ;;
+        subtarget)
+            echo "$info" | awk '{print $2}'
+            ;;
+        chip)
+            echo "$info" | awk '{print $3}'
+            ;;
+        variant)
+            echo "$info" | awk '{print $4}'
+            ;;
+        *)
+            echo "$info"
+            ;;
+    esac
+}
+
+# 获取设备变体信息
+get_device_variant() {
+    local device_name="$1"
+    get_device_info "$device_name" "variant"
+}
+
+# 检查设备是否有变体
+has_variant() {
+    local device_name="$1"
+    local variant=$(get_device_variant "$device_name")
+    
+    if [ -n "$variant" ] && [ "$variant" != "unknown" ]; then
+        return 0  # 有明确变体
+    else
+        return 1  # 无明确变体或未知
+    fi
+}
+
+# 获取设备的基础名称（不含变体）
+get_device_base_name() {
+    local device_name="$1"
+    
+    # 移除常见的变体后缀
+    local base_name=$(echo "$device_name" | sed -E 's/-(nand|emmc|spi|nor|sdcard|usb)$//' | sed -E 's/_(nand|emmc|spi|nor|sdcard|usb)$//')
+    echo "$base_name"
+}
+
+# 获取设备的所有可能变体名称
+get_device_variant_names() {
+    local device_name="$1"
+    local variant_names=()
+    
+    # 添加原始名称
+    variant_names+=("$device_name")
+    
+    # 获取基础名称
+    local base_name=$(get_device_base_name "$device_name")
+    if [ "$base_name" != "$device_name" ]; then
+        variant_names+=("$base_name")
+    fi
+    
+    # 常见变体后缀
+    local variants=("nand" "emmc" "spi" "nor" "sdcard" "usb")
+    
+    for v in "${variants[@]}"; do
+        variant_names+=("${base_name}-${v}")
+        variant_names+=("${base_name}_${v}")
+    done
+    
+    # 去重
+    printf '%s\n' "${variant_names[@]}" | sort -u
+}
+
+# 检查设备是否支持
+is_device_supported() {
+    local device_name="$1"
+    
+    if [ -n "${DEVICES[$device_name]}" ]; then
+        return 0
+    fi
+    
+    # 检查基础名称
+    local base_name=$(get_device_base_name "$device_name")
+    if [ -n "${DEVICES[$base_name]}" ]; then
+        return 0
+    fi
+    
+    return 1
 }
 
 # 初始化时调用动态检测
@@ -147,27 +328,61 @@ function_exists() {
 list_devices() {
     log "=== 支持的设备列表 (共 ${#DEVICES[@]} 个) ==="
     
-    local i=1
+    # 按平台分组显示
+    declare -A platform_devices
+    
     for device in "${!DEVICES[@]}"; do
         local platform_info="${DEVICES[$device]}"
         local target=$(echo "$platform_info" | awk '{print $1}')
-        local subtarget=$(echo "$platform_info" | awk '{print $2}')
+        local variant=$(echo "$platform_info" | awk '{print $4}')
         
-        echo "$i. 📱 $device"
-        echo "   目标平台: $target"
-        echo "   子目标: $subtarget"
-        
-        # 检查设备专用配置文件
-        local device_config="$CONFIG_DIR/devices/$device.config"
-        if [ -f "$device_config" ]; then
-            echo "   📁 设备专用配置: 存在 ($(basename "$device_config"))"
-        else
-            echo "   ℹ️  设备专用配置: 使用通用配置"
-        fi
-        
-        echo ""
-        i=$((i+1))
+        platform_devices["$target"]+="$device|$variant "
     done
+    
+    local i=1
+    for platform in $(echo "${!platform_devices[@]}" | tr ' ' '\n' | sort); do
+        echo ""
+        echo "📁 平台: $platform"
+        echo "----------------------------------------"
+        
+        for device_info in ${platform_devices[$platform]}; do
+            IFS='|' read -r device variant <<< "$device_info"
+            
+            local platform_info="${DEVICES[$device]}"
+            local target=$(echo "$platform_info" | awk '{print $1}')
+            local subtarget=$(echo "$platform_info" | awk '{print $2}')
+            local chip=$(echo "$platform_info" | awk '{print $3}')
+            
+            # 显示设备信息
+            if [ -n "$variant" ] && [ "$variant" != "unknown" ]; then
+                printf "[%2d] 📱 %-30s (变体: %s)\n" $i "$device" "$variant"
+            else
+                printf "[%2d] 📱 %-30s\n" $i "$device"
+            fi
+            echo "    目标平台: $target/$subtarget, 芯片: $chip"
+            
+            # 检查设备专用配置文件
+            local device_config="$CONFIG_DIR/devices/$device.config"
+            if [ -f "$device_config" ]; then
+                echo "    📁 设备专用配置: 存在 ($(basename "$device_config"))"
+            else
+                echo "    ℹ️ 设备专用配置: 使用通用配置"
+            fi
+            
+            i=$((i+1))
+            echo ""
+        done
+    done
+    
+    echo "========================================"
+    echo ""
+    echo "📝 命名规范说明:"
+    echo "  - 无变体设备: 直接使用基础名称 (如 asus_rt-ac42u)"
+    echo "  - 有变体设备: 基础名称-变体 (如 cmcc_rax3000m-nand)"
+    echo ""
+    echo "💡 使用建议:"
+    echo "  - RAX3000M 请明确指定变体: cmcc_rax3000m-nand 或 cmcc_rax3000m-emmc"
+    echo "  - 如果不指定变体，系统会尝试自动检测，但建议明确指定"
     
     success "设备列表显示完成"
 }
@@ -178,82 +393,126 @@ list_devices() {
 validate_device() {
     local device_name="$1"
     
-    # 如果DEVICES数组中没有，尝试动态检测
+    # 检查设备是否存在
     if [ -z "${DEVICES[$device_name]}" ]; then
-        # 检查是否有设备配置文件
-        if [ -f "$CONFIG_DIR/devices/$device_name.config" ]; then
-            log "设备 $device_name 有配置文件，但平台信息未知"
-            # 尝试从文件名推断平台
-            if [[ "$device_name" == *"ac42u"* ]] || [[ "$device_name" == *"acrh17"* ]]; then
-                DEVICES["$device_name"]="ipq40xx generic bcm47189"
-            elif [[ "$device_name" == *"rax3000m"* ]] || [[ "$device_name" == *"mt7981"* ]]; then
-                DEVICES["$device_name"]="mediatek filogic mt7981"
-            elif [[ "$device_name" == *"wndr3800"* ]] || [[ "$device_name" == *"ath79"* ]]; then
-                DEVICES["$device_name"]="ath79 generic ar7161"
-            else
-                error "不支持的设备: $device_name。支持的设备列表: ${!DEVICES[*]}"
-            fi
+        # 尝试查找基础名称
+        local base_name=$(get_device_base_name "$device_name")
+        
+        if [ -n "${DEVICES[$base_name]}" ]; then
+            log "设备 $device_name 基于 $base_name，使用默认变体"
+            # 使用基础设备的信息
+            local base_info="${DEVICES[$base_name]}"
+            local target=$(echo "$base_info" | awk '{print $1}')
+            local subtarget=$(echo "$base_info" | awk '{print $2}')
+            local chip=$(echo "$base_info" | awk '{print $3}')
+            local variant=$(echo "$base_info" | awk '{print $4}')
+            DEVICES["$device_name"]="$target $subtarget $chip $variant"
         else
-            error "不支持的设备: $device_name。支持的设备列表: ${!DEVICES[*]}"
+            # 检查是否有设备配置文件
+            if [ -f "$CONFIG_DIR/devices/$device_name.config" ]; then
+                log "设备 $device_name 有配置文件，尝试推断平台"
+                # 从配置文件推断
+                if grep -q "ipq40xx" "$CONFIG_DIR/devices/$device_name.config" 2>/dev/null; then
+                    DEVICES["$device_name"]="ipq40xx generic unknown"
+                elif grep -q "mediatek\|filogic" "$CONFIG_DIR/devices/$device_name.config" 2>/dev/null; then
+                    if [[ "$device_name" == *"nand"* ]]; then
+                        DEVICES["$device_name"]="mediatek filogic unknown nand"
+                    elif [[ "$device_name" == *"emmc"* ]]; then
+                        DEVICES["$device_name"]="mediatek filogic unknown emmc"
+                    else
+                        DEVICES["$device_name"]="mediatek filogic unknown nand"
+                    fi
+                elif grep -q "ath79" "$CONFIG_DIR/devices/$device_name.config" 2>/dev/null; then
+                    DEVICES["$device_name"]="ath79 generic unknown"
+                else
+                    error "不支持的设备: $device_name"
+                fi
+            else
+                error "不支持的设备: $device_name"
+            fi
         fi
     fi
     
     local platform_info="${DEVICES[$device_name]}"
     local target=$(echo "$platform_info" | awk '{print $1}')
     local subtarget=$(echo "$platform_info" | awk '{print $2}')
+    local variant=$(echo "$platform_info" | awk '{print $4}')
     
     log "设备验证通过: $device_name"
     log "目标平台: $target"
     log "子目标: $subtarget"
     
-    # 返回目标平台和子目标（用于脚本捕获）
+    if [ -n "$variant" ] && [ "$variant" != "unknown" ]; then
+        log "设备变体: $variant"
+    fi
+    
     echo "$target $subtarget"
 }
 
-# 获取设备的平台信息 - 修复版
+# 获取设备的平台信息
 get_device_platform() {
     local device_name="$1"
     
-    # 检查是否在DEVICES数组中
-    if [ -n "${DEVICES[$device_name]}" ]; then
-        echo "${DEVICES[$device_name]}"
-        return 0
+    # 如果在DEVICES数组中找不到，尝试从配置文件推断
+    if [ -z "${DEVICES[$device_name]}" ]; then
+        # 尝试基础名称
+        local base_name=$(get_device_base_name "$device_name")
+        if [ -n "${DEVICES[$base_name]}" ]; then
+            local base_info="${DEVICES[$base_name]}"
+            local target=$(echo "$base_info" | awk '{print $1}')
+            local subtarget=$(echo "$base_info" | awk '{print $2}')
+            echo "$target $subtarget"
+            return 0
+        fi
+        
+        if [ -f "$CONFIG_DIR/devices/$device_name.config" ]; then
+            if grep -q "ipq40xx\|ipq806x" "$CONFIG_DIR/devices/$device_name.config" 2>/dev/null; then
+                echo "ipq40xx generic"
+                return 0
+            elif grep -q "mediatek\|filogic" "$CONFIG_DIR/devices/$device_name.config" 2>/dev/null; then
+                echo "mediatek filogic"
+                return 0
+            elif grep -q "ath79" "$CONFIG_DIR/devices/$device_name.config" 2>/dev/null; then
+                echo "ath79 generic"
+                return 0
+            fi
+        fi
+        echo ""
+        return 1
     fi
     
-    # 从设备名推断平台（用于手动输入）
-    case "$device_name" in
-        *ac42u*|*acrh17*|*ipq40xx*)
-            echo "ipq40xx generic"
-            return 0
-            ;;
-        *rax3000m*|*mt7981*|*mediatek*|*filogic*)
-            echo "mediatek filogic"
-            return 0
-            ;;
-        *wndr3800*|*ath79*)
-            echo "ath79 generic"
-            return 0
-            ;;
-        *)
-            # 尝试从配置文件推断
-            if [ -f "$CONFIG_DIR/devices/$device_name.config" ]; then
-                if grep -q "ipq40xx\|ipq806x" "$CONFIG_DIR/devices/$device_name.config" 2>/dev/null; then
-                    echo "ipq40xx generic"
-                    return 0
-                elif grep -q "mediatek\|filogic" "$CONFIG_DIR/devices/$device_name.config" 2>/dev/null; then
-                    echo "mediatek filogic"
-                    return 0
-                elif grep -q "ath79" "$CONFIG_DIR/devices/$device_name.config" 2>/dev/null; then
-                    echo "ath79 generic"
-                    return 0
-                fi
-            fi
-            ;;
-    esac
+    local info="${DEVICES[$device_name]}"
+    local target=$(echo "$info" | awk '{print $1}')
+    local subtarget=$(echo "$info" | awk '{print $2}')
+    echo "$target $subtarget"
+}
+
+# 获取设备的搜索关键词
+get_device_search_names() {
+    local device_name="$1"
+    local search_names=()
     
-    # 默认返回空（表示未知）
-    echo ""
-    return 1
+    # 添加原始名称
+    search_names+=("$device_name")
+    
+    # 获取基础名称
+    local base_name=$(get_device_base_name "$device_name")
+    search_names+=("$base_name")
+    
+    # 添加常见变体形式
+    local variants=("nand" "emmc" "spi" "nor" "sdcard" "usb")
+    
+    for v in "${variants[@]}"; do
+        search_names+=("${base_name}-${v}")
+        search_names+=("${base_name}_${v}")
+    done
+    
+    # 添加下划线/连字符变体
+    search_names+=("$(echo "$device_name" | tr '-' '_')")
+    search_names+=("$(echo "$device_name" | tr '_' '-')")
+    
+    # 去重
+    printf '%s\n' "${search_names[@]}" | sort -u
 }
 #【support.sh-07-end】
 
