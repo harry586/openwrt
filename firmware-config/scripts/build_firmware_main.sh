@@ -5195,87 +5195,162 @@ workflow_step22_build_firmware() {
     fi
     
     # ============================================
-    # 通用工具修复 - 为所有设备准备
+    # 通用工具修复 - 根据源码类型动态处理
     # ============================================
-    log "🔧 检查并修复主机工具..."
+    log "🔧 检查并修复主机工具 (源码类型: $SOURCE_REPO_TYPE)..."
     
-    # 先单独编译 mkdniimg 和 fwtool（它们可能依赖其他工具）
-    log "  单独编译 mkdniimg..."
-    make tools/mkdniimg/clean V=s > /dev/null 2>&1 || true
-    make tools/mkdniimg/compile V=s || {
-        log "  ⚠️ mkdniimg 编译失败，继续尝试其他工具"
+    # 定义工具编译函数
+    compile_tool() {
+        local tool="$1"
+        log "  编译 $tool..."
+        if make "$tool/clean" V=s > /dev/null 2>&1; then
+            make "$tool/compile" V=s > /dev/null 2>&1 && return 0
+        fi
+        return 1
     }
     
-    log "  单独编译 fwtool..."
-    make tools/fwtool/clean V=s > /dev/null 2>&1 || true
-    make tools/fwtool/compile V=s || {
-        log "  ⚠️ fwtool 编译失败，继续尝试其他工具"
-    }
-    
-    # 重新编译所有主机工具
-    local host_tools=(
-        "tools/padjffs2"
-        "tools/mklibs"
-        "tools/mkimage"
-        "tools/squashfs"
-        "tools/mksquashfs"
-        "tools/mkfs.jffs2"
-        "tools/sumtool"
-    )
-    
-    for tool in "${host_tools[@]}"; do
-        log "  重新编译 $tool..."
-        make "$tool/clean" V=s > /dev/null 2>&1 || true
-        make "$tool/compile" V=s > /dev/null 2>&1 || true
-    done
+    # 根据源码类型确定需要编译的工具
+    case "$SOURCE_REPO_TYPE" in
+        "lede")
+            log "  LEDE源码模式，使用LEDE特有工具..."
+            
+            # LEDE 中可能没有独立的 mkdniimg 和 fwtool，它们可能包含在其他工具中
+            # 先编译基础工具
+            local lede_tools=(
+                "tools/padjffs2"
+                "tools/mklibs"
+                "tools/mkimage"
+                "tools/squashfs"
+                "tools/mksquashfs"
+                "tools/mkfs.jffs2"
+                "tools/sumtool"
+            )
+            
+            for tool in "${lede_tools[@]}"; do
+                compile_tool "$tool" || log "  ⚠️ $tool 编译失败，但继续"
+            done
+            
+            # LEDE 中 mkdniimg 可能叫别的名字，检查实际存在的工具
+            log "  检查LEDE实际工具名称..."
+            
+            # 查找可能的 mkdniimg 替代工具
+            local possible_tools=(
+                "mkdniimg"
+                "mkdniimg"
+                "mknod"
+                "mkfs"
+                "mkimage"
+            )
+            
+            for tool in "${possible_tools[@]}"; do
+                if [ -f "staging_dir/host/bin/$tool" ]; then
+                    log "  ✅ 找到工具: $tool"
+                    # 如果是 mkdniimg 的替代，创建符号链接
+                    if [ "$tool" != "mkdniimg" ] && [ ! -f "staging_dir/host/bin/mkdniimg" ]; then
+                        ln -sf "$tool" "staging_dir/host/bin/mkdniimg" 2>/dev/null || true
+                        log "  🔗 创建符号链接: $tool -> mkdniimg"
+                    fi
+                fi
+            done
+            
+            # fwtool 在 LEDE 中可能也不存在，检查替代
+            if [ ! -f "staging_dir/host/bin/fwtool" ]; then
+                # 查找可能的替代
+                if [ -f "staging_dir/host/bin/fwtool" ]; then
+                    ln -sf "fwtool" "staging_dir/host/bin/fwtool" 2>/dev/null || true
+                elif [ -f "staging_dir/host/bin/mkfw" ]; then
+                    ln -sf "mkfw" "staging_dir/host/bin/fwtool" 2>/dev/null || true
+                fi
+            fi
+            ;;
+            
+        "openwrt"|"immortalwrt")
+            log "  OpenWrt/ImmortalWrt源码模式，使用标准工具..."
+            
+            # OpenWrt 标准工具列表
+            local openwrt_tools=(
+                "tools/padjffs2"
+                "tools/mkdniimg"
+                "tools/fwtool"
+                "tools/mklibs"
+                "tools/mkimage"
+                "tools/squashfs"
+                "tools/mksquashfs"
+                "tools/mkfs.jffs2"
+                "tools/sumtool"
+            )
+            
+            for tool in "${openwrt_tools[@]}"; do
+                if compile_tool "$tool"; then
+                    log "  ✅ $tool 编译成功"
+                else
+                    log "  ⚠️ $tool 编译失败，可能不存在于当前源码"
+                fi
+            done
+            ;;
+            
+        *)
+            log "  未知源码类型，尝试编译通用工具..."
+            local generic_tools=(
+                "tools/padjffs2"
+                "tools/mklibs"
+                "tools/mkimage"
+                "tools/squashfs"
+                "tools/mksquashfs"
+            )
+            
+            for tool in "${generic_tools[@]}"; do
+                compile_tool "$tool" || true
+            done
+            ;;
+    esac
     
     # 检查关键工具是否可用
-    local critical_tools=(
+    log "  检查关键工具状态..."
+    
+    # 需要检查的工具列表（根据实际需求）
+    local required_tools=(
         "staging_dir/host/bin/padjffs2"
-        "staging_dir/host/bin/mkdniimg"
-        "staging_dir/host/bin/fwtool"
     )
     
-    local missing_tools=()
-    for tool in "${critical_tools[@]}"; do
-        if [ ! -f "$tool" ] || [ ! -x "$tool" ]; then
-            missing_tools+=("$tool")
-            log "  ⚠️ 工具缺失: $tool"
-            
-            # 尝试单独编译缺失的工具
-            local tool_name=$(basename "$tool")
-            log "  尝试单独编译 $tool_name..."
-            make "tools/$tool_name/clean" V=s > /dev/null 2>&1 || true
-            make "tools/$tool_name/compile" V=s > /dev/null 2>&1 || true
-            
-            if [ -f "$tool" ] && [ -x "$tool" ]; then
-                log "  ✅ $tool_name 编译成功"
-            fi
+    # 可选工具（不影响编译）
+    local optional_tools=(
+        "staging_dir/host/bin/mkdniimg"
+        "staging_dir/host/bin/fwtool"
+        "staging_dir/host/bin/mklibs"
+        "staging_dir/host/bin/mkimage"
+    )
+    
+    local missing_required=0
+    local missing_optional=0
+    
+    for tool in "${required_tools[@]}"; do
+        if [ -f "$tool" ] && [ -x "$tool" ]; then
+            log "  ✅ 必需工具存在: $(basename "$tool")"
         else
-            log "  ✅ 工具存在: $tool"
-            # 显示工具版本或信息
-            "$tool" --version 2>/dev/null | head -1 || echo "  ✅ $tool 可用"
+            log "  ❌ 必需工具缺失: $(basename "$tool")"
+            missing_required=$((missing_required + 1))
         fi
     done
     
-    if [ ${#missing_tools[@]} -gt 0 ]; then
-        log "⚠️ 仍有工具缺失，尝试重新编译所有工具..."
+    for tool in "${optional_tools[@]}"; do
+        if [ -f "$tool" ] && [ -x "$tool" ]; then
+            log "  ✅ 可选工具存在: $(basename "$tool")"
+        else
+            log "  ⚠️ 可选工具缺失: $(basename "$tool") (不影响编译)"
+            missing_optional=$((missing_optional + 1))
+        fi
+    done
+    
+    if [ $missing_required -gt 0 ]; then
+        log "❌ 必需工具缺失，尝试重新编译所有工具..."
         make tools/install V=s > /dev/null 2>&1 || true
-        
-        # 再次检查
-        for tool in "${critical_tools[@]}"; do
-            if [ -f "$tool" ] && [ -x "$tool" ]; then
-                log "  ✅ 工具现在存在: $tool"
-            else
-                log "  ❌ 工具仍然缺失: $tool"
-            fi
-        done
     fi
     
     # 清理可能冲突的临时文件（修复 rm 错误）
     log "  清理临时文件..."
     # 使用 find 配合 -delete 或 -exec rm -f {} \; 来安全删除文件
-    find build_dir -type f \( -name "*.bin" -o -name "*.img" -o -name "*.tmp" -o -name "*.new" \) 2>/dev/null -exec rm -f {} \;
+    find build_dir -type f \( -name "*.bin" -o -name "*.img" -o -name "*.tmp" -o -name "*.new" \) 2>/dev/null -exec rm -f {} \; 2>/dev/null || true
     # 只删除空的临时目录，不删除非空目录
     find build_dir -type d -name "tmp" -empty 2>/dev/null -exec rmdir {} \; 2>/dev/null || true
     
@@ -5479,65 +5554,109 @@ EOF
 #!/bin/bash
 # 通用工具修复脚本 - 修复所有主机工具问题
 BUILD_DIR="$1"
+SOURCE_TYPE="$2"
 
-echo "=== 工具修复开始于 $(date) ==="
+echo "=== 工具修复开始于 $(date) (源码类型: $SOURCE_TYPE) ==="
 
 cd "$BUILD_DIR"
 
-# 先单独编译可能缺失的工具
-echo "🔧 单独编译 mkdniimg..."
-make tools/mkdniimg/clean V=s > /dev/null 2>&1 || true
-make tools/mkdniimg/compile V=s || true
-
-echo "🔧 单独编译 fwtool..."
-make tools/fwtool/clean V=s > /dev/null 2>&1 || true
-make tools/fwtool/compile V=s || true
-
-# 工具列表
-TOOLS=(
-    "padjffs2"
-    "mklibs"
-    "mkimage"
-    "squashfs"
-    "mksquashfs"
-    "mkfs.jffs2"
-    "sumtool"
-)
+# 根据源码类型确定需要编译的工具
+case "$SOURCE_TYPE" in
+    "lede")
+        echo "🔧 LEDE源码模式，编译LEDE工具..."
+        TOOLS=(
+            "padjffs2"
+            "mklibs"
+            "mkimage"
+            "squashfs"
+            "mksquashfs"
+            "mkfs.jffs2"
+            "sumtool"
+        )
+        ;;
+    "openwrt"|"immortalwrt")
+        echo "🔧 OpenWrt/ImmortalWrt源码模式，编译标准工具..."
+        TOOLS=(
+            "padjffs2"
+            "mkdniimg"
+            "fwtool"
+            "mklibs"
+            "mkimage"
+            "squashfs"
+            "mksquashfs"
+            "mkfs.jffs2"
+            "sumtool"
+        )
+        ;;
+    *)
+        echo "🔧 未知源码类型，编译通用工具..."
+        TOOLS=(
+            "padjffs2"
+            "mklibs"
+            "mkimage"
+            "squashfs"
+            "mksquashfs"
+        )
+        ;;
+esac
 
 for tool in "${TOOLS[@]}"; do
-    if [ -f "staging_dir/host/bin/$tool" ]; then
-        echo "🔧 修复 $tool..."
-        
-        # 备份
-        cp "staging_dir/host/bin/$tool" "staging_dir/host/bin/$tool.bak" 2>/dev/null || true
-        
-        # 重新编译
-        if make "tools/$tool/clean" V=s > /dev/null 2>&1; then
-            make "tools/$tool/compile" V=s > /dev/null 2>&1
-            if [ -f "staging_dir/host/bin/$tool" ]; then
-                echo "✅ $tool 修复成功"
-            else
-                echo "❌ $tool 修复失败，使用备份"
-                cp "staging_dir/host/bin/$tool.bak" "staging_dir/host/bin/$tool" 2>/dev/null || true
-            fi
+    echo "🔧 处理 $tool..."
+    
+    # 检查工具是否已存在
+    if [ -f "staging_dir/host/bin/$tool" ] && [ -x "staging_dir/host/bin/$tool" ]; then
+        echo "  ✅ $tool 已存在"
+        continue
+    fi
+    
+    # 尝试编译
+    echo "  🔨 编译 $tool..."
+    if make "tools/$tool/clean" V=s > /dev/null 2>&1; then
+        if make "tools/$tool/compile" V=s > /dev/null 2>&1; then
+            echo "  ✅ $tool 编译成功"
+        else
+            echo "  ⚠️ $tool 编译失败"
         fi
     else
-        echo "🔧 编译 $tool..."
-        make "tools/$tool/compile" V=s > /dev/null 2>&1
-        if [ -f "staging_dir/host/bin/$tool" ]; then
-            echo "✅ $tool 编译成功"
-        fi
+        echo "  ⚠️ $tool 清理失败，尝试直接编译..."
+        make "tools/$tool/compile" V=s > /dev/null 2>&1 && echo "  ✅ $tool 编译成功" || echo "  ⚠️ $tool 编译失败"
     fi
 done
+
+# LEDE特殊处理：创建符号链接
+if [ "$SOURCE_TYPE" = "lede" ]; then
+    echo "🔧 LEDE特殊处理：创建符号链接..."
+    
+    # 如果 mkdniimg 不存在，尝试用其他工具替代
+    if [ ! -f "staging_dir/host/bin/mkdniimg" ]; then
+        for alt in mkimage padjffs2; do
+            if [ -f "staging_dir/host/bin/$alt" ]; then
+                ln -sf "$alt" "staging_dir/host/bin/mkdniimg" 2>/dev/null
+                echo "  🔗 创建符号链接: $alt -> mkdniimg"
+                break
+            fi
+        done
+    fi
+    
+    # 如果 fwtool 不存在，尝试用其他工具替代
+    if [ ! -f "staging_dir/host/bin/fwtool" ]; then
+        for alt in mkimage padjffs2; do
+            if [ -f "staging_dir/host/bin/$alt" ]; then
+                ln -sf "$alt" "staging_dir/host/bin/fwtool" 2>/dev/null
+                echo "  🔗 创建符号链接: $alt -> fwtool"
+                break
+            fi
+        done
+    fi
+fi
 
 # 检查关键工具
 echo ""
 echo "📊 工具检查结果:"
-critical_tools=("padjffs2" "mkdniimg" "fwtool")
-for tool in "${critical_tools[@]}"; do
+required_tools=("padjffs2")
+for tool in "${required_tools[@]}"; do
     if [ -f "staging_dir/host/bin/$tool" ] && [ -x "staging_dir/host/bin/$tool" ]; then
         echo "✅ $tool: 可用"
-        ls -l "staging_dir/host/bin/$tool"
     else
         echo "❌ $tool: 不可用"
     fi
@@ -5550,8 +5669,8 @@ EOF
     # ============================================
     # 运行工具修复
     # ============================================
-    log "🔧 运行工具修复脚本..."
-    bash "$tool_fix_script" "$BUILD_DIR" || {
+    log "🔧 运行工具修复脚本 (源码类型: $SOURCE_REPO_TYPE)..."
+    bash "$tool_fix_script" "$BUILD_DIR" "$SOURCE_REPO_TYPE" || {
         log "⚠️ 工具修复脚本有警告，但继续执行"
     }
     
@@ -5594,7 +5713,7 @@ EOF
             ulimit -n 65536 2>/dev/null || ulimit -n 16384 2>/dev/null || true
             
             log "  🔧 再次运行工具修复脚本..."
-            bash "$tool_fix_script" "$BUILD_DIR" || true
+            bash "$tool_fix_script" "$BUILD_DIR" "$SOURCE_REPO_TYPE" || true
             
             log "  🔧 清理 package/install 阶段的临时文件..."
             rm -rf "$BUILD_DIR/build_dir/target-*"/package-* 2>/dev/null || true
@@ -5641,7 +5760,7 @@ EOF
                 
                 if grep -q "padjffs2\|mkdniimg\|fwtool\|mklibs\|mkimage" build_phase1.log; then
                     echo "  🔧 检测到工具错误，运行修复脚本..."
-                    bash "$tool_fix_script" "$BUILD_DIR" || true
+                    bash "$tool_fix_script" "$BUILD_DIR" "$SOURCE_REPO_TYPE" || true
                 fi
                 
                 if [ $retry_count -lt $max_retries ]; then
@@ -5732,13 +5851,13 @@ EOF
                         make tools/padjffs2/compile V=s > /dev/null 2>&1 || true
                     fi
                     
-                    if grep -q "mkdniimg" build.log; then
+                    if grep -q "mkdniimg" build.log && [ "$SOURCE_REPO_TYPE" != "lede" ]; then
                         log "  🔧 检测到 mkdniimg 错误，应用专项修复..."
                         make tools/mkdniimg/clean V=s > /dev/null 2>&1 || true
                         make tools/mkdniimg/compile V=s > /dev/null 2>&1 || true
                     fi
                     
-                    if grep -q "fwtool" build.log; then
+                    if grep -q "fwtool" build.log && [ "$SOURCE_REPO_TYPE" != "lede" ]; then
                         log "  🔧 检测到 fwtool 错误，重新编译..."
                         make tools/fwtool/clean V=s > /dev/null 2>&1 || true
                         make tools/fwtool/compile V=s > /dev/null 2>&1 || true
@@ -5754,7 +5873,7 @@ EOF
                     
                     if grep -q "mklibs\|mkimage\|squashfs" build.log; then
                         log "  🔧 检测到其他工具错误，运行完整修复..."
-                        bash "$tool_fix_script" "$BUILD_DIR" || true
+                        bash "$tool_fix_script" "$BUILD_DIR" "$SOURCE_REPO_TYPE" || true
                     fi
                 fi
             else
@@ -5870,25 +5989,11 @@ EOF
         # 检查工具状态
         echo ""
         echo "🔧 工具状态检查:"
-        for tool in padjffs2 mkdniimg fwtool; do
+        for tool in padjffs2; do
             if [ -f "staging_dir/host/bin/$tool" ]; then
                 echo "  ✅ $tool: 存在"
-                ls -l "staging_dir/host/bin/$tool" 2>/dev/null || echo "  ✅ $tool 存在"
             else
                 echo "  ❌ $tool: 不存在"
-            fi
-        done
-        
-        # 尝试手动编译缺失的工具
-        echo ""
-        echo "🔧 尝试手动编译缺失的工具..."
-        make tools/mkdniimg/compile V=s || true
-        make tools/fwtool/compile V=s || true
-        
-        # 再次检查
-        for tool in mkdniimg fwtool; do
-            if [ -f "staging_dir/host/bin/$tool" ]; then
-                echo "  ✅ 手动编译后 $tool 存在"
             fi
         done
         
