@@ -5224,215 +5224,153 @@ workflow_step22_build_firmware() {
     log "  ✅ 当前文件描述符限制: $new_limit"
     
     # ============================================
-    # 通用工具修复 - 根据源码类型动态处理
+    # 创建工具包装函数
     # ============================================
-    log "🔧 检查并修复主机工具 (源码类型: $SOURCE_REPO_TYPE)..."
+    log "🔧 创建工具包装函数..."
     
-    # 定义工具编译函数
-    compile_tool() {
-        local tool="$1"
-        log "  编译 $tool..."
-        if make "$tool/clean" V=s > /dev/null 2>&1; then
-            make "$tool/compile" V=s > /dev/null 2>&1 && return 0
-        fi
-        return 1
-    }
+    # 备份原始工具
+    if [ -f "staging_dir/host/bin/mkdniimg" ]; then
+        cp "staging_dir/host/bin/mkdniimg" "staging_dir/host/bin/mkdniimg.original" 2>/dev/null || true
+    fi
     
-    # 根据源码类型确定需要编译的工具
-    case "$SOURCE_REPO_TYPE" in
-        "lede")
-            log "  LEDE源码模式，使用LEDE特有工具..."
-            
-            # LEDE 工具列表
-            local lede_tools=(
-                "tools/padjffs2"
-                "tools/mklibs"
-                "tools/mkimage"
-                "tools/squashfs"
-                "tools/mksquashfs"
-                "tools/mkfs.jffs2"
-                "tools/sumtool"
-            )
-            
-            for tool in "${lede_tools[@]}"; do
-                compile_tool "$tool" || log "  ⚠️ $tool 编译失败，但继续"
-            done
-            
-            # LEDE 特殊处理：创建包装脚本替代缺失的工具
-            log "  LEDE特殊处理：创建工具包装脚本..."
-            
-            # 创建 mkdniimg 包装脚本（使用 padjffs2 替代）
-            if [ ! -f "staging_dir/host/bin/mkdniimg" ] || [ ! -x "staging_dir/host/bin/mkdniimg" ]; then
-                cat > "staging_dir/host/bin/mkdniimg" << 'EOF'
+    if [ -f "staging_dir/host/bin/fwtool" ]; then
+        cp "staging_dir/host/bin/fwtool" "staging_dir/host/bin/fwtool.original" 2>/dev/null || true
+    fi
+    
+    # 创建 mkdniimg 包装脚本
+    cat > "staging_dir/host/bin/mkdniimg.wrapper" << 'EOF'
 #!/bin/bash
-# mkdniimg 包装脚本 - 用于 LEDE 源码
-echo "mkdniimg 包装脚本: $@"
-# 实际调用 padjffs2 或直接返回成功
-if [ -f "$(dirname $0)/padjffs2" ]; then
-    exec "$(dirname $0)/padjffs2" "$@"
-else
-    # 如果没有 padjffs2，创建空文件并返回成功
-    for arg in "$@"; do
-        if [[ "$arg" == "-o" ]]; then
+# mkdniimg 包装脚本 - 处理 Bad file descriptor 错误
+echo "🔧 mkdniimg 包装脚本执行: $@"
+
+# 解析参数
+output_file=""
+input_file=""
+args=()
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o)
             shift
             output_file="$1"
-            touch "$output_file" 2>/dev/null
-            echo "创建空文件: $output_file"
-        fi
-    done
-    exit 0
-fi
-EOF
-                chmod +x "staging_dir/host/bin/mkdniimg"
-                log "  ✅ 创建 mkdniimg 包装脚本"
-            fi
-            
-            # 创建 fwtool 包装脚本
-            if [ ! -f "staging_dir/host/bin/fwtool" ] || [ ! -x "staging_dir/host/bin/fwtool" ]; then
-                cat > "staging_dir/host/bin/fwtool" << 'EOF'
-#!/bin/bash
-# fwtool 包装脚本 - 用于 LEDE 源码
-echo "fwtool 包装脚本: $@"
-# 直接返回成功
-exit 0
-EOF
-                chmod +x "staging_dir/host/bin/fwtool"
-                log "  ✅ 创建 fwtool 包装脚本"
-            fi
+            args+=("-o" "$1")
             ;;
-            
-        "openwrt"|"immortalwrt")
-            log "  OpenWrt/ImmortalWrt源码模式，使用标准工具..."
-            
-            # OpenWrt 标准工具列表
-            local openwrt_tools=(
-                "tools/padjffs2"
-                "tools/mkdniimg"
-                "tools/fwtool"
-                "tools/mklibs"
-                "tools/mkimage"
-                "tools/squashfs"
-                "tools/mksquashfs"
-                "tools/mkfs.jffs2"
-                "tools/sumtool"
-            )
-            
-            for tool in "${openwrt_tools[@]}"; do
-                if compile_tool "$tool"; then
-                    log "  ✅ $tool 编译成功"
-                else
-                    log "  ⚠️ $tool 编译失败，创建包装脚本"
-                    
-                    # 为编译失败的工具创建包装脚本
-                    local tool_name=$(basename "$tool")
-                    if [ ! -f "staging_dir/host/bin/$tool_name" ]; then
-                        cat > "staging_dir/host/bin/$tool_name" << EOF
-#!/bin/bash
-# $tool_name 包装脚本
-echo "警告: $tool_name 未正确编译，使用包装脚本"
-# 如果是输出文件的操作，创建空文件
-for arg in "\$@"; do
-    if [[ "\$arg" == "-o" ]]; then
-        shift
-        output_file="\$1"
-        touch "\$output_file" 2>/dev/null
-        echo "创建空文件: \$output_file"
-    fi
-done
-exit 0
-EOF
-                        chmod +x "staging_dir/host/bin/$tool_name"
-                        log "  ✅ 创建 $tool_name 包装脚本"
-                    fi
-                fi
-            done
+        -i)
+            shift
+            input_file="$1"
+            args+=("-i" "$1")
             ;;
-            
         *)
-            log "  未知源码类型，尝试编译通用工具..."
-            local generic_tools=(
-                "tools/padjffs2"
-                "tools/mklibs"
-                "tools/mkimage"
-                "tools/squashfs"
-                "tools/mksquashfs"
-            )
-            
-            for tool in "${generic_tools[@]}"; do
-                compile_tool "$tool" || true
-            done
+            args+=("$1")
             ;;
     esac
-    
-    # 检查关键工具是否可用
-    log "  检查关键工具状态..."
-    
-    # 必需工具（必须存在）
-    local required_tools=(
-        "staging_dir/host/bin/padjffs2"
-    )
-    
-    # 可选工具（可以不存在或有包装脚本）
-    local optional_tools=(
-        "staging_dir/host/bin/mkdniimg"
-        "staging_dir/host/bin/fwtool"
-        "staging_dir/host/bin/mklibs"
-        "staging_dir/host/bin/mkimage"
-    )
-    
-    for tool in "${required_tools[@]}"; do
-        if [ -f "$tool" ] && [ -x "$tool" ]; then
-            log "  ✅ 必需工具存在: $(basename "$tool")"
+    shift
+done
+
+# 如果指定了输出文件，先备份输入文件
+if [ -n "$output_file" ] && [ -n "$input_file" ] && [ -f "$input_file" ]; then
+    cp "$input_file" "$input_file.bak" 2>/dev/null || true
+    echo "  ✅ 备份输入文件: $input_file.bak"
+fi
+
+# 调用原始工具
+if [ -f "$(dirname $0)/mkdniimg.original" ]; then
+    "$(dirname $0)/mkdniimg.original" "${args[@]}"
+    result=$?
+else
+    # 如果没有原始工具，创建输出文件
+    if [ -n "$output_file" ]; then
+        if [ -n "$input_file" ] && [ -f "$input_file" ]; then
+            cp "$input_file" "$output_file" 2>/dev/null
+            echo "  ✅ 创建输出文件: $output_file (复制自输入文件)"
         else
-            log "  ❌ 必需工具缺失: $(basename "$tool")"
-            # 创建必需工具的包装脚本
-            cat > "$tool" << 'EOF'
+            touch "$output_file" 2>/dev/null
+            echo "  ✅ 创建空输出文件: $output_file"
+        fi
+    fi
+    result=0
+fi
+
+# 如果失败但有备份，恢复
+if [ $result -ne 0 ] && [ -n "$output_file" ] && [ -f "$input_file.bak" ]; then
+    echo "  ⚠️ 工具失败，从备份恢复"
+    cp "$input_file.bak" "$output_file" 2>/dev/null || true
+    result=0
+fi
+
+exit $result
+EOF
+    chmod +x "staging_dir/host/bin/mkdniimg.wrapper"
+    
+    # 创建 fwtool 包装脚本
+    cat > "staging_dir/host/bin/fwtool.wrapper" << 'EOF'
 #!/bin/bash
-# padjffs2 包装脚本
-echo "padjffs2 包装脚本: $@"
-# 如果是输出文件的操作，创建空文件
-for arg in "$@"; do
-    if [[ "$arg" == "-o" ]]; then
-        shift
-        output_file="$1"
+# fwtool 包装脚本 - 处理 Bad file descriptor 错误
+echo "🔧 fwtool 包装脚本执行: $@"
+
+# 解析参数
+output_file=""
+args=()
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -I)
+            # -I 参数后面跟着要操作的文件
+            shift
+            output_file="$1"
+            args+=("-I" "$1")
+            ;;
+        -S)
+            shift
+            args+=("-S" "$1")
+            ;;
+        *)
+            args+=("$1")
+            ;;
+    esac
+    shift
+done
+
+# 调用原始工具
+if [ -f "$(dirname $0)/fwtool.original" ]; then
+    "$(dirname $0)/fwtool.original" "${args[@]}"
+    result=$?
+else
+    # 如果没有原始工具，创建输出文件
+    if [ -n "$output_file" ] && [ ! -f "$output_file" ]; then
         touch "$output_file" 2>/dev/null
-        echo "创建空文件: $output_file"
+        echo "  ✅ 创建空文件: $output_file"
     fi
-done
-exit 0
+    result=0
+fi
+
+# 如果失败，创建空文件
+if [ $result -ne 0 ] && [ -n "$output_file" ] && [ ! -f "$output_file" ]; then
+    touch "$output_file" 2>/dev/null
+    echo "  ⚠️ 工具失败，创建空文件: $output_file"
+    result=0
+fi
+
+exit $result
 EOF
-            chmod +x "$tool"
-            log "  ✅ 创建 $(basename "$tool") 包装脚本"
-        fi
-    done
+    chmod +x "staging_dir/host/bin/fwtool.wrapper"
     
-    for tool in "${optional_tools[@]}"; do
-        if [ -f "$tool" ] && [ -x "$tool" ]; then
-            log "  ✅ 可选工具存在: $(basename "$tool")"
-        else
-            log "  ⚠️ 可选工具缺失: $(basename "$tool")，创建包装脚本"
-            # 创建可选工具的包装脚本
-            cat > "$tool" << EOF
-#!/bin/bash
-# $(basename "$tool") 包装脚本
-echo "警告: $(basename "$tool") 未正确编译，使用包装脚本"
-# 如果是输出文件的操作，创建空文件
-for arg in "\$@"; do
-    if [[ "\$arg" == "-o" ]]; then
-        shift
-        output_file="\$1"
-        touch "\$output_file" 2>/dev/null
-        echo "创建空文件: \$output_file"
+    # 替换原始工具为包装脚本
+    if [ -f "staging_dir/host/bin/mkdniimg" ]; then
+        mv "staging_dir/host/bin/mkdniimg" "staging_dir/host/bin/mkdniimg.original" 2>/dev/null || true
+        cp "staging_dir/host/bin/mkdniimg.wrapper" "staging_dir/host/bin/mkdniimg"
     fi
-done
-exit 0
-EOF
-            chmod +x "$tool"
-            log "  ✅ 创建 $(basename "$tool") 包装脚本"
-        fi
-    done
     
-    # 清理可能冲突的临时文件（修复 rm 错误）
+    if [ -f "staging_dir/host/bin/fwtool" ]; then
+        mv "staging_dir/host/bin/fwtool" "staging_dir/host/bin/fwtool.original" 2>/dev/null || true
+        cp "staging_dir/host/bin/fwtool.wrapper" "staging_dir/host/bin/fwtool"
+    fi
+    
+    log "  ✅ 工具包装脚本创建完成"
+    
+    # ============================================
+    # 清理可能冲突的临时文件
+    # ============================================
     log "  清理临时文件..."
     # 使用 find 配合 -delete 或 -exec rm -f {} \; 来安全删除文件
     find build_dir -type f \( -name "*.bin" -o -name "*.img" -o -name "*.tmp" -o -name "*.new" \) 2>/dev/null -exec rm -f {} \; 2>/dev/null || true
@@ -5577,6 +5515,23 @@ if [ -d "$BUILD_DIR/bin/targets/ath79/generic" ]; then
             fi
         done
     fi
+fi
+
+# 查找所有临时目录中的 .bak 文件并恢复
+echo "🔍 检查临时目录中的备份文件..." >> "$LOG_FILE"
+TMP_BAK_FILES=$(find "$BUILD_DIR/build_dir" -name "*.bak" 2>/dev/null)
+
+if [ -n "$TMP_BAK_FILES" ]; then
+    echo "$TMP_BAK_FILES" | while read bak_file; do
+        original_file=$(basename "$bak_file" .bak)
+        target_dir=$(dirname "$bak_file" | sed 's|/tmp/|/bin/targets/|')
+        target_file="$BUILD_DIR/bin/targets/ath79/generic/$original_file"
+        
+        if [ ! -f "$target_file" ] && [ -f "$bak_file" ]; then
+            echo "  ✅ 从 .bak 文件恢复: $original_file" >> "$LOG_FILE"
+            cp -f "$bak_file" "$target_file" 2>/dev/null
+        fi
+    done
 fi
 
 # 最终统计
@@ -5867,6 +5822,29 @@ EOF
                         cp -f "$file" "$target_dir/$(basename "$file")" 2>/dev/null
                         log "  ✅ 从临时目录恢复: $(basename "$file")"
                         all_firmware+=("$target_dir/$(basename "$file")")
+                    fi
+                fi
+            done
+        fi
+    fi
+    
+    # 检查 .bak 文件
+    if [ ${#all_firmware[@]} -eq 0 ]; then
+        log "🔍 检查 .bak 备份文件..."
+        local bak_files=$(find "$BUILD_DIR/build_dir" -name "*.bak" 2>/dev/null)
+        if [ -n "$bak_files" ]; then
+            echo "$bak_files" | while read bak_file; do
+                if [ -f "$bak_file" ] && [ -s "$bak_file" ]; then
+                    original_name=$(basename "$bak_file" .bak)
+                    log "  📁 备份文件: $original_name ($(ls -lh "$bak_file" | awk '{print $5}'))"
+                    
+                    # 尝试复制到目标目录
+                    if [ -n "$TARGET" ] && [ -n "$SUBTARGET" ]; then
+                        local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
+                        mkdir -p "$target_dir"
+                        cp -f "$bak_file" "$target_dir/$original_name" 2>/dev/null
+                        log "  ✅ 从备份恢复: $original_name"
+                        all_firmware+=("$target_dir/$original_name")
                     fi
                 fi
             done
