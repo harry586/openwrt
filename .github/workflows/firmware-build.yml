@@ -1,7 +1,7 @@
 #【firmware-build.yml-00】
 # OpenWrt 智能固件构建工作流 - 系统主入口
 # 版本: 3.4.0
-# 最后更新: 2026-02-27
+# 最后更新: 2026-02-28
 
 name: OpenWrt 智能固件构建工作流
 
@@ -16,13 +16,17 @@ on:
         default: "immortalwrt"
         options: ["immortalwrt", "openwrt", "lede"]
       
-      # 预定义设备下拉选择（保留）
+      # 预定义设备下拉选择（包含完整名称）
       device_name:
         description: "📱 预定义设备（下拉选择）"
         required: false
         type: choice
         default: "ac42u"
-        options: ["ac42u", "cmcc_rax3000m", "netgear_wndr3800"]
+        options: [
+          "ac42u", 
+          "cmcc_rax3000m-nand",
+          "netgear_wndr3800"
+        ]
       
       # 手动输入框（竖向排列）
       manual_device_name:
@@ -60,7 +64,7 @@ on:
         type: string
         default: ""
       
-      # 新增：自定义禁用插件
+      # 自定义禁用插件
       forbidden_packages:
         description: "🚫 自定义禁用插件 - 格式：用空格分隔，默认禁用 vssr ssr-plus passwall rclone ddns qbittorrent filetransfer"
         required: false
