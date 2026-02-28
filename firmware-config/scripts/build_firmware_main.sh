@@ -1164,54 +1164,69 @@ generate_config() {
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
-    # 动态检测设备名 - 搜索所有可能的设备定义文件
-    log "🔍 动态检测设备 $DEVICE 在源码中的实际名称..."
-    
-    local found_device_name=""
-    local search_keywords=()
-    
-    # 生成搜索关键词
-    local base_name=$(echo "$DEVICE" | sed 's/-nand$//' | sed 's/-emmc$//' | sed 's/_nand$//' | sed 's/_emmc$//')
-    search_keywords+=("$base_name")
-    search_keywords+=("$DEVICE")
-    
-    # 添加变体
-    local with_underscore=$(echo "$DEVICE" | tr '-' '_')
-    local with_hyphen=$(echo "$DEVICE" | tr '_' '-')
-    search_keywords+=("$with_underscore")
-    search_keywords+=("$with_hyphen")
-    
-    # 在 target/linux 目录中搜索设备定义
-    if [ -d "target/linux/$TARGET" ]; then
-        for keyword in "${search_keywords[@]}"; do
-            while IFS= read -r mkfile; do
-                if grep -q "define Device.*$keyword" "$mkfile" 2>/dev/null; then
-                    # 提取设备名
-                    local device_line=$(grep -m1 "define Device.*$keyword" "$mkfile")
-                    found_device_name=$(echo "$device_line" | sed -n 's/^define Device\/\([^ ]*\).*/\1/p')
-                    if [ -n "$found_device_name" ]; then
-                        log "✅ 在 $mkfile 中找到设备: $found_device_name (匹配关键词: $keyword)"
-                        break 2
-                    fi
-                fi
-            done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
-        done
-    fi
-    
     local openwrt_device=""
     local search_device=""
     
-    if [ -n "$found_device_name" ]; then
-        # 使用找到的设备名
-        openwrt_device="$found_device_name"
-        search_device="$base_name"
-        log "🔧 动态检测到设备名: $openwrt_device"
-    else
-        # 降级使用基础名称
-        openwrt_device="$base_name"
-        search_device="$base_name"
-        log "⚠️ 未找到精确匹配，使用基础名称: $openwrt_device"
-    fi
+    # 根据不同源码类型和设备名称，动态映射正确的设备名
+    case "$DEVICE" in
+        ac42u|rt-ac42u|asus_rt-ac42u)
+            openwrt_device="asus_rt-ac42u"
+            search_device="ac42u"
+            log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
+            ;;
+        acrh17|rt-acrh17|asus_rt-acrh17)
+            openwrt_device="asus_rt-acrh17"
+            search_device="acrh17"
+            log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
+            ;;
+        cmcc_rax3000m-nand|rax3000m-nand)
+            # NAND 版本
+            if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+                openwrt_device="cmcc_rax3000m-nand"
+                search_device="rax3000m"
+                log "🔧 LEDE源码: 使用设备名 $openwrt_device"
+            else
+                # ImmortalWrt 和 OpenWrt 使用 common 定义中的 nand 版本
+                openwrt_device="cmcc_rax3000m-nand"
+                search_device="rax3000m"
+                log "🔧 ImmortalWrt/OpenWrt源码: 使用设备名 $openwrt_device"
+            fi
+            ;;
+        cmcc_rax3000m-emmc|rax3000m-emmc)
+            # eMMC 版本
+            if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+                openwrt_device="cmcc_rax3000m-emmc"
+                search_device="rax3000m"
+                log "🔧 LEDE源码: 使用设备名 $openwrt_device"
+            else
+                openwrt_device="cmcc_rax3000m-emmc"
+                search_device="rax3000m"
+                log "🔧 ImmortalWrt/OpenWrt源码: 使用设备名 $openwrt_device"
+            fi
+            ;;
+        cmcc_rax3000m|rax3000m)
+            # 默认使用 NAND 版本
+            if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+                openwrt_device="cmcc_rax3000m-nand"
+                search_device="rax3000m"
+                log "🔧 LEDE源码: 默认使用 NAND 版本 $openwrt_device"
+            else
+                openwrt_device="cmcc_rax3000m-nand"
+                search_device="rax3000m"
+                log "🔧 ImmortalWrt/OpenWrt源码: 默认使用 NAND 版本 $openwrt_device"
+            fi
+            ;;
+        netgear_wndr3800|wndr3800)
+            openwrt_device="netgear_wndr3800"
+            search_device="wndr3800"
+            log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
+            ;;
+        *)
+            openwrt_device=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+            search_device="$DEVICE"
+            log "🔧 使用原始设备名: $openwrt_device"
+            ;;
+    esac
     
     local device_lower="$openwrt_device"
     local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}"
@@ -1242,35 +1257,31 @@ EOF
     
     append_config "$CONFIG_DIR/$CONFIG_BASE"
     
-    # 动态查找设备配置文件
     local device_config_file=""
-    local possible_configs=()
     
-    # 尝试多种可能的设备配置文件名
-    possible_configs+=("$CONFIG_DIR/devices/$DEVICE.config")
-    possible_configs+=("$CONFIG_DIR/devices/$base_name.config")
-    possible_configs+=("$CONFIG_DIR/devices/${base_name}-nand.config")
-    possible_configs+=("$CONFIG_DIR/devices/${base_name}_nand.config")
-    
-    # 如果找到了实际设备名，也尝试
-    if [ -n "$found_device_name" ]; then
-        possible_configs+=("$CONFIG_DIR/devices/$found_device_name.config")
-    fi
-    
-    for config in "${possible_configs[@]}"; do
-        if [ -f "$config" ]; then
-            device_config_file="$config"
-            log "📋 找到设备配置文件: $device_config_file"
-            break
-        fi
-    done
+    # 尝试多个可能的设备配置文件路径
+    case "$DEVICE" in
+        cmcc_rax3000m-nand|cmcc_rax3000m-emmc|cmcc_rax3000m|rax3000m*)
+            if [ -f "$CONFIG_DIR/devices/cmcc_rax3000m-nand.config" ]; then
+                device_config_file="$CONFIG_DIR/devices/cmcc_rax3000m-nand.config"
+                log "📋 找到设备配置文件: $device_config_file"
+            elif [ -f "$CONFIG_DIR/devices/cmcc_rax3000m.config" ]; then
+                device_config_file="$CONFIG_DIR/devices/cmcc_rax3000m.config"
+                log "📋 找到设备配置文件: $device_config_file"
+            fi
+            ;;
+        *)
+            device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
+            ;;
+    esac
     
     local usb_generic_file="$CONFIG_DIR/$CONFIG_USB_GENERIC"
     local has_device_config=false
     
     if [ -f "$device_config_file" ]; then
         has_device_config=true
-        log "📋 使用设备专用配置文件: $device_config_file"
+        log "📋 找到设备专用配置文件: $device_config_file"
+        log "📋 根据规则: 设备.config + usb-generic.config"
         
         append_config "$device_config_file"
         
@@ -1343,28 +1354,31 @@ EOF
         if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
             local device_def_file=""
             
-            # 使用之前找到的设备定义文件或搜索
-            if [ -n "$found_device_name" ]; then
-                # 如果之前找到了设备名，查找包含该设备的文件
+            # 根据不同源码类型和设备名，使用不同的搜索关键词
+            local search_keywords=()
+            case "$DEVICE" in
+                cmcc_rax3000m-nand|cmcc_rax3000m|rax3000m*)
+                    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+                        search_keywords=("rax3000m" "cmcc_rax3000m-nand")
+                    else
+                        search_keywords=("rax3000m" "cmcc_rax3000m-nand" "mt7981b-cmcc-rax3000m")
+                    fi
+                    ;;
+                *)
+                    search_keywords=("$search_device")
+                    ;;
+            esac
+            
+            # 遍历所有可能的搜索关键词
+            for keyword in "${search_keywords[@]}"; do
                 while IFS= read -r mkfile; do
-                    if grep -q "define Device.*$found_device_name" "$mkfile" 2>/dev/null; then
+                    if grep -q "define Device.*$keyword" "$mkfile" 2>/dev/null; then
                         device_def_file="$mkfile"
-                        log "🔍 找到设备定义文件: $mkfile (设备名: $found_device_name)"
-                        break
+                        log "🔍 找到设备定义文件: $mkfile (关键词: $keyword)"
+                        break 2
                     fi
                 done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
-            else
-                # 否则使用关键词搜索
-                for keyword in "${search_keywords[@]}"; do
-                    while IFS= read -r mkfile; do
-                        if grep -q "define Device.*$keyword" "$mkfile" 2>/dev/null; then
-                            device_def_file="$mkfile"
-                            log "🔍 找到设备定义文件: $mkfile (关键词: $keyword)"
-                            break 2
-                        fi
-                    done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
-                done
-            fi
+            done
             
             if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
                 kernel_version=$(awk -F':=' '/^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}' "$device_def_file")
@@ -3824,17 +3838,23 @@ workflow_step14_generate_config() {
     log ""
     log "=== 🔍 动态检测设备定义文件 ==="
     
-    local search_keywords=()
-    local base_name=$(echo "$DEVICE" | sed 's/-nand$//' | sed 's/-emmc$//' | sed 's/_nand$//' | sed 's/_emmc$//')
-    search_keywords+=("$base_name")
-    search_keywords+=("$DEVICE")
+    # 获取设备的搜索关键词
+    local search_names=()
+    if [ -f "$SUPPORT_SCRIPT" ]; then
+        # 从 support.sh 获取搜索关键词
+        while IFS= read -r name; do
+            search_names+=("$name")
+        done < <("$SUPPORT_SCRIPT" get-search-names "$DEVICE" 2>/dev/null || echo "$DEVICE")
+    else
+        # 手动生成搜索关键词
+        search_names+=("$DEVICE")
+        local base_name=$(echo "$DEVICE" | sed -E 's/-(nand|emmc|spi|nor|sdcard|usb)$//' | sed -E 's/_(nand|emmc|spi|nor|sdcard|usb)$//')
+        search_names+=("$base_name")
+        search_names+=("$(echo "$DEVICE" | tr '-' '_')")
+        search_names+=("$(echo "$DEVICE" | tr '_' '-')")
+    fi
     
-    local with_underscore=$(echo "$DEVICE" | tr '-' '_')
-    local with_hyphen=$(echo "$DEVICE" | tr '_' '-')
-    search_keywords+=("$with_underscore")
-    search_keywords+=("$with_hyphen")
-    
-    log "搜索关键词: ${search_keywords[*]}"
+    log "搜索关键词: ${search_names[*]}"
     log "搜索路径: target/linux/$TARGET"
     
     echo ""
@@ -3856,53 +3876,114 @@ workflow_step14_generate_config() {
     fi
     echo ""
     
-    local device_file=""
-    local found_device_name=""
+    # 存储所有找到的设备
+    declare -A found_devices
+    local device_counter=0
     
     for mkfile in "${mk_files[@]}"; do
-        for keyword in "${search_keywords[@]}"; do
-            if grep -q "define Device.*$keyword" "$mkfile" 2>/dev/null; then
-                device_file="$mkfile"
-                local device_line=$(grep -m1 "define Device.*$keyword" "$mkfile")
-                found_device_name=$(echo "$device_line" | sed -n 's/^define Device\/\([^ ]*\).*/\1/p')
-                log "✅ 找到设备定义: $found_device_name (在 $mkfile 中)"
-                break 2
-            fi
+        for keyword in "${search_names[@]}"; do
+            # 查找包含关键词的设备定义行
+            while IFS= read -r line; do
+                if [[ "$line" =~ define[[:space:]]+Device[[:space:]]*[/]?([^[:space:]]+) ]]; then
+                    local dev_name="${BASH_REMATCH[1]}"
+                    # 多种匹配方式
+                    if [[ "$dev_name" == *"$keyword"* ]] || \
+                       [[ "$keyword" == *"$dev_name"* ]] || \
+                       [[ "${dev_name,,}" == *"${keyword,,}"* ]] || \
+                       [[ "${keyword,,}" == *"${dev_name,,}"* ]]; then
+                        if [ -z "${found_devices[$dev_name]}" ]; then
+                            found_devices["$dev_name"]="$mkfile"
+                            device_counter=$((device_counter + 1))
+                            log "  📍 发现设备: $dev_name (在 $mkfile 中)"
+                        fi
+                    fi
+                fi
+            done < <(grep -n "define Device" "$mkfile" 2>/dev/null)
         done
     done
     
-    if [ -z "$device_file" ] || [ ! -f "$device_file" ]; then
-        log "⚠️ 未找到设备 $DEVICE 的精确匹配，尝试模糊搜索..."
-        
-        # 模糊搜索：提取设备名的核心部分
-        local core_name=$(echo "$DEVICE" | sed 's/[_-]//g')
-        for mkfile in "${mk_files[@]}"; do
-            if grep -q "define Device" "$mkfile" 2>/dev/null; then
-                local devices_in_file=$(grep "define Device" "$mkfile" | sed 's/^define Device\/\([^ ]*\).*/\1/')
-                while read dev; do
-                    [ -z "$dev" ] && continue
-                    local dev_clean=$(echo "$dev" | sed 's/[_-]//g')
-                    if [[ "$dev_clean" == *"$core_name"* ]] || [[ "$core_name" == *"$dev_clean"* ]]; then
-                        device_file="$mkfile"
-                        found_device_name="$dev"
-                        log "✅ 模糊匹配找到设备: $found_device_name (在 $mkfile 中)"
-                        break 2
-                    fi
-                done <<< "$devices_in_file"
+    echo ""
+    log "📊 共找到 $device_counter 个相关设备定义:"
+    echo "----------------------------------------"
+    local dev_list=()
+    local index=1
+    for dev in $(for d in "${!found_devices[@]}"; do echo "$d"; done | sort); do
+        dev_list+=("$dev")
+        echo "[$index] $dev (在 ${found_devices[$dev]})"
+        index=$((index + 1))
+    done
+    echo "----------------------------------------"
+    echo ""
+    
+    # 根据设备名特征自动选择正确的设备
+    local selected_device=""
+    local device_file=""
+    
+    # 检查是否有明确的变体请求
+    local requested_variant=""
+    if [[ "$DEVICE" == *"-nand"* ]] || [[ "$DEVICE" == *"_nand"* ]]; then
+        requested_variant="nand"
+    elif [[ "$DEVICE" == *"-emmc"* ]] || [[ "$DEVICE" == *"_emmc"* ]]; then
+        requested_variant="emmc"
+    elif [[ "$DEVICE" == *"-spi"* ]] || [[ "$DEVICE" == *"_spi"* ]]; then
+        requested_variant="spi"
+    elif [[ "$DEVICE" == *"-nor"* ]] || [[ "$DEVICE" == *"_nor"* ]]; then
+        requested_variant="nor"
+    fi
+    
+    if [ -n "$requested_variant" ]; then
+        log "🔍 检测到明确的变体请求: $requested_variant"
+        # 优先选择匹配变体的设备
+        for dev in "${dev_list[@]}"; do
+            if [[ "$dev" == *"$requested_variant"* ]] || \
+               [[ "$dev" == *"${requested_variant^^}"* ]] || \
+               [[ "$dev" == *"${requested_variant,,}"* ]]; then
+                selected_device="$dev"
+                device_file="${found_devices[$dev]}"
+                log "✅ 找到匹配变体的设备: $selected_device"
+                break
             fi
         done
     fi
     
-    if [ -z "$device_file" ] || [ ! -f "$device_file" ]; then
-        log "❌ 错误：未找到设备 $DEVICE 的定义文件"
+    # 如果没有匹配变体，检查是否只有一个设备
+    if [ -z "$selected_device" ] && [ $device_counter -eq 1 ]; then
+        selected_device="${dev_list[0]}"
+        device_file="${found_devices[$selected_device]}"
+        log "✅ 只有一个设备，自动选择: $selected_device"
+    fi
+    
+    # 如果仍然没有选择，检查设备名是否完全匹配
+    if [ -z "$selected_device" ]; then
+        for dev in "${dev_list[@]}"; do
+            if [ "$dev" = "$DEVICE" ]; then
+                selected_device="$dev"
+                device_file="${found_devices[$dev]}"
+                log "✅ 找到完全匹配的设备: $selected_device"
+                break
+            fi
+        done
+    fi
+    
+    # 如果还是没有，尝试模糊匹配
+    if [ -z "$selected_device" ] && [ $device_counter -gt 0 ]; then
+        log "⚠️ 警告: 找到多个相关设备，将记录警告并临时选择第一个"
+        selected_device="${dev_list[0]}"
+        device_file="${found_devices[$selected_device]}"
+        log "⚠️ 临时选择: $selected_device (将在前置错误检查中确认)"
+    fi
+    
+    if [ -z "$selected_device" ] || [ ! -f "$device_file" ]; then
+        log "❌ 错误：未找到设备 $DEVICE 的相关定义"
         log "请检查设备名称是否正确，或 target/linux/$TARGET 目录下是否存在对应的 .mk 文件"
         exit 1
     fi
     
-    log "✅ 找到设备定义文件: $device_file"
+    log "✅ 最终选择设备: $selected_device"
+    log "✅ 设备定义文件: $device_file"
     
     local device_block=""
-    device_block=$(awk "/define Device.*$found_device_name/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
+    device_block=$(awk "/define Device.*$selected_device/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
     
     if [ -n "$device_block" ]; then
         echo ""
@@ -3912,73 +3993,26 @@ workflow_step14_generate_config() {
         echo "$device_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS)[[:space:]]*:="
         echo "----------------------------------------"
     else
-        log "⚠️ 警告：无法提取设备 $found_device_name 的配置块"
-    fi
-    
-    local soc_define=""
-    local model_define=""
-    local title_define=""
-    local kernel_define=""
-    local packages_define=""
-    
-    if [ -n "$device_block" ]; then
-        soc_define=$(echo "$device_block" | awk -F':=' '/^[[:space:]]*SOC[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')
-        model_define=$(echo "$device_block" | awk -F':=' '/^[[:space:]]*DEVICE_MODEL[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')
-        title_define=$(echo "$device_block" | awk -F':=' '/^[[:space:]]*DEVICE_TITLE[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')
-        kernel_define=$(echo "$device_block" | awk -F':=' '/^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')
-        packages_define=$(echo "$device_block" | awk -F':=' '/^[[:space:]]*DEVICE_PACKAGES[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')
-    fi
-    
-    log ""
-    log "📊 与 support.sh 信息对比:"
-    
-    local support_info
-    support_info=$("$SUPPORT_SCRIPT" get-platform "$DEVICE" 2>/dev/null)
-    if [ -n "$support_info" ]; then
-        local support_target
-        local support_subtarget
-        support_target=$(echo "$support_info" | awk '{print $1}')
-        support_subtarget=$(echo "$support_info" | awk '{print $2}')
-        
-        echo ""
-        echo "  来源          | 目标平台       | 子目标         | SOC/型号       | 内核版本"
-        echo "  --------------|----------------|----------------|----------------|----------------"
-        
-        printf "  support.sh    | %-14s | %-14s | %-14s | %s\n"                "$support_target" "$support_subtarget"                "${soc_define:-N/A}" "${kernel_define:-N/A}"
-        
-        printf "  定义文件      | %-14s | %-14s | %-14s | %s\n"                "$TARGET" "$SUBTARGET"                "${soc_define:-N/A}" "${kernel_define:-N/A}"
-        
-        if [ "$support_target" = "$TARGET" ] && [ "$support_subtarget" = "$SUBTARGET" ]; then
-            log "  ✅ 目标/子目标与 support.sh 一致"
-        else
-            log "  ⚠️ 警告：目标/子目标与 support.sh 不一致"
-            log "     support.sh: $support_target/$support_subtarget"
-            log "     当前配置:   $TARGET/$SUBTARGET"
-        fi
-    else
-        log "  ⚠️ 无法从 support.sh 获取信息，跳过对比"
+        log "⚠️ 警告：无法提取设备 $selected_device 的配置块"
     fi
     
     log "✅ 设备定义文件验证通过，继续生成配置"
     
     # 使用找到的设备名生成配置
-    generate_config "$extra_packages" "$found_device_name"
+    generate_config "$extra_packages" "$selected_device"
     
     log ""
-    log "=== 🔧 强制禁用不需要的插件系列（优化版 - 最多2次尝试） ==="
+    log "=== 🔧 强制禁用不需要的插件系列 ==="
     
-    # 获取基础禁用列表
     local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer nlbwmon wol}"
     IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
     
-    # 生成完整禁用列表
     local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
     
     log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个)"
     
     cp .config .config.before_disable
     
-    # 第一轮：禁用所有主包和子包
     log "🔧 第一轮禁用..."
     for plugin in "${full_forbidden_list[@]}"; do
         [ -z "$plugin" ] && continue
@@ -3988,7 +4022,6 @@ workflow_step14_generate_config() {
         echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
     done
     
-    # 删除所有 INCLUDE 子选项
     sed -i '/CONFIG_PACKAGE_luci-app-.*_INCLUDE_/d' .config
     
     sort -u .config > .config.tmp && mv .config.tmp .config
@@ -4828,7 +4861,7 @@ workflow_step19_integrate_custom_files() {
 # ============================================
 #【build_firmware_main.sh-34】
 workflow_step20_pre_build_check() {
-    log "=== 步骤20: 前置错误检查（使用公共函数） ==="
+    log "=== 步骤20: 前置错误检查（增强版 - 多设备检测） ==="
     
     set -e
     trap 'echo "❌ 步骤20 失败，退出代码: $?"; exit 1' ERR
@@ -4864,18 +4897,44 @@ workflow_step20_pre_build_check() {
         echo "   ✅ .config 文件存在"
         echo "   📊 大小: $config_size, 行数: $config_lines"
         
-        local device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-        local expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_config}=y"
-        
-        if grep -q "^${expected_config}$" .config; then
-            echo "   ✅ 设备配置正确: $expected_config"
-        else
-            if grep -q "CONFIG_TARGET_.*DEVICE.*${device_for_config}=y" .config; then
-                echo "   ✅ 设备配置正确 (模糊匹配)"
-            else
-                echo "   ❌ 设备配置可能不正确，未找到: $expected_config"
-                error_count=$((error_count + 1))
+        # 动态检测设备配置
+        local found_device_configs=()
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_(.+)=y$ ]]; then
+                found_device_configs+=("${BASH_REMATCH[1]}")
             fi
+        done < .config
+        
+        if [ ${#found_device_configs[@]} -eq 0 ]; then
+            echo "   ❌ 没有找到任何设备配置"
+            error_count=$((error_count + 1))
+        elif [ ${#found_device_configs[@]} -eq 1 ]; then
+            echo "   ✅ 找到一个设备配置: ${found_device_configs[0]}"
+        else
+            echo "   ⚠️ 警告: 找到多个设备配置 (${#found_device_configs[@]} 个):"
+            for dev in "${found_device_configs[@]}"; do
+                echo "      - $dev"
+            done
+            echo "   💡 建议: 只应启用一个设备，其他应该禁用"
+            warning_count=$((warning_count + 1))
+        fi
+        
+        # 检查设备名是否正确
+        local device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+        local found=false
+        for dev in "${found_device_configs[@]}"; do
+            if [[ "$dev" == *"$device_for_config"* ]] || [[ "$device_for_config" == *"$dev"* ]]; then
+                found=true
+                echo "   ✅ 找到匹配的设备: $dev"
+                break
+            fi
+        done
+        
+        if [ "$found" = false ] && [ ${#found_device_configs[@]} -gt 0 ]; then
+            echo "   ⚠️ 警告: 启用的设备与请求的 $DEVICE 不匹配"
+            echo "      请求设备: $DEVICE"
+            echo "      实际启用: ${found_device_configs[*]}"
+            warning_count=$((warning_count + 1))
         fi
     else
         echo "   ❌ .config 文件不存在"
@@ -4993,9 +5052,75 @@ workflow_step20_pre_build_check() {
     echo "   📊 型号: $cpu_model"
     echo ""
     
+    # 8. 检测设备变体（重要）
+    echo "8. 🔍 设备变体检测:"
+    if [[ "$DEVICE" == *"rax3000m"* ]]; then
+        echo "   📱 检测到 RAX3000M 设备"
+        
+        # 检查是否有多个变体
+        local variants=()
+        if grep -q "cmcc_rax3000m-emmc" .config 2>/dev/null; then
+            variants+=("emmc")
+        fi
+        if grep -q "cmcc_rax3000m-nand" .config 2>/dev/null; then
+            variants+=("nand")
+        fi
+        if grep -q "cmcc_rax3000m" .config 2>/dev/null; then
+            variants+=("generic")
+        fi
+        
+        if [ ${#variants[@]} -gt 1 ]; then
+            echo "   ⚠️ 警告: 检测到多个设备变体: ${variants[*]}"
+            echo "   💡 建议: 只应启用一个变体 (根据你的硬件选择 nand 或 emmc)"
+            warning_count=$((warning_count + 1))
+        elif [ ${#variants[@]} -eq 1 ]; then
+            echo "   ✅ 检测到设备变体: ${variants[0]}"
+            
+            # 检查变体是否匹配
+            if [[ "$DEVICE" == *"nand"* ]] && [ "${variants[0]}" != "nand" ]; then
+                echo "   ❌ 变体不匹配: 请求 NAND 但启用 ${variants[0]}"
+                error_count=$((error_count + 1))
+            elif [[ "$DEVICE" == *"emmc"* ]] && [ "${variants[0]}" != "emmc" ]; then
+                echo "   ❌ 变体不匹配: 请求 eMMC 但启用 ${variants[0]}"
+                error_count=$((error_count + 1))
+            fi
+        fi
+    fi
+    echo ""
+    
+    # 9. 检查关键工具
+    echo "9. 🔧 主机工具检查:"
+    local tools=("padjffs2" "mkdniimg" "fwtool" "mklibs" "mkimage")
+    local missing_tools=0
+    
+    for tool in "${tools[@]}"; do
+        if [ -f "staging_dir/host/bin/$tool" ] && [ -x "staging_dir/host/bin/$tool" ]; then
+            echo "   ✅ $tool: 存在"
+        else
+            echo "   ⚠️ $tool: 不存在 (将在编译时生成)"
+            missing_tools=$((missing_tools + 1))
+        fi
+    done
+    
+    if [ $missing_tools -gt 0 ]; then
+        echo "   💡 将自动重新编译缺失的工具"
+    fi
+    echo ""
+    
     echo "========================================"
     if [ $error_count -gt 0 ]; then
         echo "❌❌❌ 检测到 $error_count 个错误，请修复后重试 ❌❌❌"
+        echo ""
+        echo "📋 错误详情:"
+        echo "1. 设备配置错误 - 请检查设备名是否正确"
+        echo "   - 如果是 RAX3000M，请明确指定 nand 或 emmc 版本"
+        echo "   - 示例: cmcc_rax3000m-nand 或 cmcc_rax3000m-emmc"
+        echo ""
+        echo "2. 可以在 .config 中手动修改:"
+        echo "   # 启用 NAND 版本"
+        echo "   CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_rax3000m-nand=y"
+        echo "   # 禁用其他版本"
+        echo "   # CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_rax3000m-emmc is not set"
         exit 1
     elif [ $warning_count -gt 0 ]; then
         echo "⚠️⚠️⚠️ 检测到 $warning_count 个警告，但可以继续 ⚠️⚠️⚠️"
@@ -5043,7 +5168,7 @@ workflow_step21_pre_build_space_confirm() {
 workflow_step22_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤22: 编译固件（增强错误处理 + 双固件强制保护） ==="
+    log "=== 步骤22: 编译固件（通用固件保护机制） ==="
     
     set -e
     trap 'echo "❌ 步骤22 失败，退出代码: $?"; exit 1' ERR
@@ -5070,125 +5195,127 @@ workflow_step22_build_firmware() {
     fi
     
     # ============================================
-    # 设置文件描述符限制（关键修复）
+    # 通用工具修复 - 为所有设备准备
     # ============================================
-    log "🔧 设置文件描述符限制..."
+    log "🔧 检查并修复主机工具..."
     
-    # 检查当前限制
-    local current_limit=$(ulimit -n 2>/dev/null || echo "unknown")
-    log "  📊 当前文件描述符限制: $current_limit"
-    
-    # 尝试设置到 65536
-    if ulimit -n 65536 2>/dev/null; then
-        log "  ✅ 成功设置文件描述符限制为: 65536"
-    else
-        log "  ⚠️ 无法设置到 65536，尝试设置到 16384"
-        if ulimit -n 16384 2>/dev/null; then
-            log "  ✅ 成功设置文件描述符限制为: 16384"
-        else
-            log "  ⚠️ 无法设置到 16384，使用当前限制: $(ulimit -n)"
-        fi
-    fi
-    
-    local new_limit=$(ulimit -n)
-    log "  ✅ 当前文件描述符限制: $new_limit"
-    
-    # 同时设置系统级别的文件描述符限制
-    if [ -f /proc/sys/fs/file-max ]; then
-        local system_max=$(cat /proc/sys/fs/file-max 2>/dev/null || echo "unknown")
-        log "  📊 系统最大文件描述符: $system_max"
-    fi
-    
-    # ============================================
-    # LEDE源码特定修复 - 增强版
-    # ============================================
-    log "🔧 检查源码类型并进行特定修复..."
-    
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "  ✅ 检测到LEDE源码，应用特定修复..."
+    # 重新编译 padjffs2 工具（通用）
+    if [ -f "staging_dir/host/bin/padjffs2" ]; then
+        log "  重新编译 padjffs2 工具..."
+        rm -f staging_dir/host/bin/padjffs2
+        rm -rf build_dir/host/padjffs2-*
+        make tools/padjffs2/clean V=s > /dev/null 2>&1 || true
+        make tools/padjffs2/compile V=s > /dev/null 2>&1 || true
         
-        # 重新编译 padjffs2 工具（重要！）
         if [ -f "staging_dir/host/bin/padjffs2" ]; then
-            log "  重新编译 padjffs2 工具..."
-            rm -f staging_dir/host/bin/padjffs2
-            rm -rf build_dir/host/padjffs2-*
-            make tools/padjffs2/clean V=s > /dev/null 2>&1 || true
-            make tools/padjffs2/compile V=s > /dev/null 2>&1 || true
-            
-            # 验证 padjffs2 是否可用
-            if [ -f "staging_dir/host/bin/padjffs2" ]; then
-                log "  ✅ padjffs2 编译成功"
-                # 创建符号链接以确保路径正确
-                ln -sf staging_dir/host/bin/padjffs2 staging_dir/host/bin/padjffs2 2>/dev/null || true
-            else
-                log "  ⚠️ padjffs2 编译失败，使用备用方案"
-            fi
+            log "  ✅ padjffs2 编译成功"
+        else
+            log "  ⚠️ padjffs2 编译失败，使用备用方案"
         fi
+    fi
+    
+    # 重新编译 mkdniimg 工具（通用）
+    if [ -f "staging_dir/host/bin/mkdniimg" ]; then
+        log "  重新编译 mkdniimg 工具..."
+        rm -f staging_dir/host/bin/mkdniimg
+        rm -rf build_dir/host/mkdniimg-*
+        make tools/mkdniimg/clean V=s > /dev/null 2>&1 || true
+        make tools/mkdniimg/compile V=s > /dev/null 2>&1 || true
         
-        # 重新编译 mkdniimg 工具（重要！）
         if [ -f "staging_dir/host/bin/mkdniimg" ]; then
-            log "  重新编译 mkdniimg 工具..."
-            rm -f staging_dir/host/bin/mkdniimg
-            rm -rf build_dir/host/mkdniimg-*
-            make tools/mkdniimg/clean V=s > /dev/null 2>&1 || true
-            make tools/mkdniimg/compile V=s > /dev/null 2>&1 || true
-            
-            # 验证 mkdniimg 是否可用
-            if [ -f "staging_dir/host/bin/mkdniimg" ]; then
-                log "  ✅ mkdniimg 编译成功"
-                ln -sf staging_dir/host/bin/mkdniimg staging_dir/host/bin/mkdniimg 2>/dev/null || true
-            else
-                log "  ⚠️ mkdniimg 编译失败，使用备用方案"
-            fi
+            log "  ✅ mkdniimg 编译成功"
+        else
+            log "  ⚠️ mkdniimg 编译失败，使用备用方案"
         fi
+    fi
+    
+    # 重新编译 fwtool（通用）
+    if [ -f "staging_dir/host/bin/fwtool" ]; then
+        log "  重新编译 fwtool 工具..."
+        rm -f staging_dir/host/bin/fwtool
+        rm -rf build_dir/host/fwtool-*
+        make tools/fwtool/clean V=s > /dev/null 2>&1 || true
+        make tools/fwtool/compile V=s > /dev/null 2>&1 || true
         
-        # 重新编译 fwtool
         if [ -f "staging_dir/host/bin/fwtool" ]; then
-            log "  重新编译 fwtool 工具..."
-            rm -f staging_dir/host/bin/fwtool
-            rm -rf build_dir/host/fwtool-*
-            make tools/fwtool/clean V=s > /dev/null 2>&1 || true
-            make tools/fwtool/compile V=s > /dev/null 2>&1 || true
-            
-            if [ -f "staging_dir/host/bin/fwtool" ]; then
-                log "  ✅ fwtool 编译成功"
-            fi
+            log "  ✅ fwtool 编译成功"
         fi
+    fi
+    
+    # 重新编译 mklibs（通用）
+    if [ -f "staging_dir/host/bin/mklibs" ]; then
+        log "  重新编译 mklibs 工具..."
+        make tools/mklibs/clean V=s > /dev/null 2>&1 || true
+        make tools/mklibs/compile V=s > /dev/null 2>&1 || true
+    fi
+    
+    # 重新编译 mkimage（通用）
+    if [ -f "staging_dir/host/bin/mkimage" ]; then
+        log "  重新编译 mkimage 工具..."
+        make tools/mkimage/clean V=s > /dev/null 2>&1 || true
+        make tools/mkimage/compile V=s > /dev/null 2>&1 || true
+    fi
+    
+    # 清理可能冲突的临时文件
+    log "  清理临时文件..."
+    find build_dir -name "*.bin" -o -name "*.img" -o -name "*.tmp" -o -name "*.new" 2>/dev/null | xargs rm -f
+    
+    export KCFLAGS="-O2 -pipe"
+    
+    # ============================================
+    # 为所有设备创建通用固件目录结构
+    # ============================================
+    log "🔧 预创建固件输出目录..."
+    
+    # 根据 TARGET 和 SUBTARGET 创建对应的输出目录
+    if [ -n "$TARGET" ] && [ -n "$SUBTARGET" ]; then
+        local target_dir="bin/targets/$TARGET/$SUBTARGET"
+        mkdir -p "$target_dir"
+        log "  ✅ 创建固件目录: $target_dir"
         
-        # 清理可能冲突的临时文件
-        log "  清理临时文件..."
-        find build_dir -name "*.bin" -o -name "*.img" -o -name "*.tmp" -o -name "*.new" 2>/dev/null | xargs rm -f
-        
-        export KCFLAGS="-O2 -pipe"
-        
-        # 特别为 netgear 设备创建符号链接修复
-        if [ "$DEVICE" = "netgear_wndr3800" ] || [ "$DEVICE" = "wndr3800" ]; then
-            log "  🔧 检测到 netgear_wndr3800 设备，应用专项修复..."
-            
-            local tmp_dir="$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp"
-            mkdir -p "$tmp_dir"
-            
-            # 预先创建空的固件文件，避免 cp 失败
-            for file_type in factory sysupgrade; do
-                local target_file="$tmp_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-${file_type}.img"
-                if [ ! -f "$target_file" ]; then
-                    touch "$target_file" 2>/dev/null || true
-                fi
+        # 创建临时目录（如果存在对应的 build_dir）
+        local build_target_dir="build_dir/target-*"
+        local tmp_dirs=$(find $build_target_dir -name "tmp" -type d 2>/dev/null | head -5)
+        if [ -n "$tmp_dirs" ]; then
+            echo "$tmp_dirs" | while read tmp_dir; do
+                log "  ✅ 临时目录存在: $tmp_dir"
             done
         fi
     fi
     
     # ============================================
-    # 创建双固件保护脚本（增强版）
+    # 设置文件描述符限制（强制设置）
     # ============================================
-    log "🔧 创建双固件保护脚本（增强版）..."
+    log "🔧 设置文件描述符限制..."
+    
+    local current_limit=$(ulimit -n 2>/dev/null || echo "unknown")
+    log "  📊 当前文件描述符限制: $current_limit"
+    
+    # 尝试多种方式设置文件描述符
+    if ulimit -n 65536 2>/dev/null; then
+        log "  ✅ 成功设置文件描述符限制为: 65536"
+    elif ulimit -n 16384 2>/dev/null; then
+        log "  ✅ 成功设置文件描述符限制为: 16384"
+    elif ulimit -n 8192 2>/dev/null; then
+        log "  ✅ 成功设置文件描述符限制为: 8192"
+    else
+        log "  ⚠️ 无法设置文件描述符限制，使用当前值: $(ulimit -n)"
+    fi
+    
+    local new_limit=$(ulimit -n)
+    log "  ✅ 当前文件描述符限制: $new_limit"
+    
+    # ============================================
+    # 创建通用双固件保护脚本
+    # ============================================
+    log "🔧 创建通用双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
     mkdir -p "$protect_dir"
     
     local protect_script="$protect_dir/protect.sh"
     cat > "$protect_script" << 'EOF'
 #!/bin/bash
-# 双固件保护脚本 - 实时监控并备份所有固件相关文件
+# 通用双固件保护脚本 - 实时监控并备份所有固件文件
 PROTECT_DIR="$1"
 BUILD_DIR="$2"
 LOG_FILE="$PROTECT_DIR/protect.log"
@@ -5197,41 +5324,23 @@ echo "=== 双固件保护启动于 $(date) ===" > "$LOG_FILE"
 
 # 监控循环
 while true; do
-    # 1. 监控临时目录中的文件
+    # 1. 监控所有临时目录中的文件
     TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
     
     for tmp_dir in $TMP_DIRS; do
-        # 查找sysupgrade文件
-        find "$tmp_dir" -name "*sysupgrade*.bin" -o -name "*sysupgrade*.img" 2>/dev/null | while read file; do
+        # 查找所有可能的固件文件
+        find "$tmp_dir" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.new" \) 2>/dev/null | while read file; do
             if [ -f "$file" ] && [ -s "$file" ]; then
                 local backup="$PROTECT_DIR/$(basename "$file").backup"
                 cp -f "$file" "$backup" 2>/dev/null
-                echo "$(date): 备份 sysupgrade: $(basename "$file") ($(ls -lh "$file" | awk '{print $5}'))" >> "$LOG_FILE"
-            fi
-        done
-        
-        # 查找factory文件
-        find "$tmp_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
-            if [ -f "$file" ] && [ -s "$file" ]; then
-                local backup="$PROTECT_DIR/$(basename "$file").backup"
-                cp -f "$file" "$backup" 2>/dev/null
-                echo "$(date): 备份 factory: $(basename "$file") ($(ls -lh "$file" | awk '{print $5}'))" >> "$LOG_FILE"
-            fi
-        done
-        
-        # 查找.new临时文件
-        find "$tmp_dir" -name "*.new" 2>/dev/null | while read file; do
-            if [ -f "$file" ] && [ -s "$file" ]; then
-                local backup="$PROTECT_DIR/$(basename "$file").backup"
-                cp -f "$file" "$backup" 2>/dev/null
-                echo "$(date): 备份临时文件: $(basename "$file")" >> "$LOG_FILE"
+                echo "$(date): 备份: $(basename "$file") ($(ls -lh "$file" | awk '{print $5}'))" >> "$LOG_FILE"
             fi
         done
     done
     
     # 2. 监控最终的 bin/targets 目录
     if [ -d "$BUILD_DIR/bin/targets" ]; then
-        find "$BUILD_DIR/bin/targets" -type f -name "*.bin" -o -name "*.img" 2>/dev/null | while read file; do
+        find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
             if [ -f "$file" ] && [ -s "$file" ]; then
                 local backup="$PROTECT_DIR/final_$(basename "$file")"
                 cp -f "$file" "$backup" 2>/dev/null
@@ -5250,19 +5359,19 @@ EOF
     log "  ✅ 双固件保护已启动 (PID: $protect_pid)"
     
     # ============================================
-    # 创建强制恢复脚本 - 增强版
+    # 创建通用强制恢复脚本
     # ============================================
     local recover_script="$protect_dir/recover.sh"
     cat > "$recover_script" << 'EOF'
 #!/bin/bash
-# 强制恢复脚本 - 确保所有固件文件都存在
+# 通用强制恢复脚本 - 确保所有固件文件都存在
 PROTECT_DIR="$1"
 BUILD_DIR="$2"
 LOG_FILE="$PROTECT_DIR/recover.log"
 
 echo "=== 强制恢复开始于 $(date) ===" > "$LOG_FILE"
 
-# 查找目标平台目录
+# 查找所有目标平台目录
 TARGET_DIRS=$(find "$BUILD_DIR/bin/targets" -type d 2>/dev/null)
 
 for target_dir in $TARGET_DIRS; do
@@ -5289,117 +5398,103 @@ for target_dir in $TARGET_DIRS; do
     fi
 done
 
-# 特别为 netgear 设备创建固件文件（如果完全丢失）
-if [ -d "$BUILD_DIR/bin/targets/ath79/generic" ]; then
-    echo "📁 检查 ath79/generic 目录..." >> "$LOG_FILE"
-    
-    FILE_COUNT=$(find "$BUILD_DIR/bin/targets/ath79/generic" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
-    
-    if [ $FILE_COUNT -eq 0 ]; then
-        echo "⚠️ 未找到任何固件文件，尝试从临时目录恢复..." >> "$LOG_FILE"
+# 检查所有目标平台目录中是否有固件文件
+for target_dir in $TARGET_DIRS; do
+    if [ -d "$target_dir" ]; then
+        file_count=$(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
         
-        # 查找临时目录中的备份
-        TMP_BACKUPS=$(find "$PROTECT_DIR" -name "*.backup" 2>/dev/null)
-        
-        if [ -n "$TMP_BACKUPS" ]; then
-            echo "$TMP_BACKUPS" | while read backup; do
-                if [ -f "$backup" ] && [ -s "$backup" ]; then
-                    filename=$(basename "$backup" .backup)
-                    cp -f "$backup" "$BUILD_DIR/bin/targets/ath79/generic/$filename" 2>/dev/null
-                    echo "  ✅ 从临时备份恢复: $filename" >> "$LOG_FILE"
-                fi
-            done
-        fi
-        
-        # 再次检查是否有文件
-        NEW_COUNT=$(find "$BUILD_DIR/bin/targets/ath79/generic" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
-        
-        if [ $NEW_COUNT -eq 0 ]; then
-            echo "⚠️ 仍然没有固件文件，创建说明文件" >> "$LOG_FILE"
-            cat > "$BUILD_DIR/bin/targets/ath79/generic/README.txt" << 'INNEREOF'
-固件生成过程中出现工具错误，但编译已完成。
-
-可能的原因：
-1. padjffs2 工具问题
-2. mkdniimg 工具问题
-3. 文件描述符限制问题
-
-解决方案：
-1. 重新运行编译：make -j1 V=s
-2. 单独编译工具：make tools/padjffs2/compile V=s
-3. 单独编译工具：make tools/mkdniimg/compile V=s
-4. 手动设置文件描述符：ulimit -n 65536
-
-临时文件可能保存在：build_dir/target-*/linux-ath79_generic/tmp/
-INNEREOF
+        if [ $file_count -eq 0 ]; then
+            echo "⚠️ $target_dir 中没有固件文件，尝试从临时目录恢复..." >> "$LOG_FILE"
+            
+            # 查找临时目录中的备份
+            tmp_backups=$(find "$PROTECT_DIR" -name "*.backup" 2>/dev/null)
+            
+            if [ -n "$tmp_backups" ]; then
+                echo "$tmp_backups" | while read backup; do
+                    if [ -f "$backup" ] && [ -s "$backup" ]; then
+                        filename=$(basename "$backup" .backup)
+                        cp -f "$backup" "$target_dir/$filename" 2>/dev/null
+                        echo "  ✅ 从临时备份恢复: $filename" >> "$LOG_FILE"
+                    fi
+                done
+            fi
         fi
     fi
-fi
+done
+
+# 最终统计
+echo "" >> "$LOG_FILE"
+echo "📊 最终固件统计:" >> "$LOG_FILE"
+for target_dir in $TARGET_DIRS; do
+    if [ -d "$target_dir" ]; then
+        file_count=$(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+        echo "  $target_dir: $file_count 个文件" >> "$LOG_FILE"
+        
+        if [ $file_count -gt 0 ]; then
+            find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
+                echo "    📄 $(basename "$file") ($(ls -lh "$file" | awk '{print $5}'))" >> "$LOG_FILE"
+            done
+        fi
+    fi
+done
 
 echo "=== 强制恢复结束于 $(date) ===" >> "$LOG_FILE"
 EOF
     chmod +x "$recover_script"
     
     # ============================================
-    # 创建工具修复脚本
+    # 创建通用工具修复脚本
     # ============================================
     local tool_fix_script="$protect_dir/fix_tools.sh"
     cat > "$tool_fix_script" << 'EOF'
 #!/bin/bash
-# 工具修复脚本 - 专门修复 padjffs2 和 mkdniimg 问题
+# 通用工具修复脚本 - 修复所有主机工具问题
 BUILD_DIR="$1"
 
 echo "=== 工具修复开始于 $(date) ==="
 
 cd "$BUILD_DIR"
 
-# 修复 padjffs2
-if [ -f "staging_dir/host/bin/padjffs2" ]; then
-    echo "🔧 修复 padjffs2..."
-    
-    # 备份原文件
-    cp staging_dir/host/bin/padjffs2 staging_dir/host/bin/padjffs2.bak
-    
-    # 重新编译
-    make tools/padjffs2/clean V=s > /dev/null 2>&1
-    make tools/padjffs2/compile V=s > /dev/null 2>&1
-    
-    if [ -f "staging_dir/host/bin/padjffs2" ]; then
-        echo "✅ padjffs2 修复成功"
-    else
-        echo "❌ padjffs2 修复失败，使用备份"
-        cp staging_dir/host/bin/padjffs2.bak staging_dir/host/bin/padjffs2 2>/dev/null || true
-    fi
-fi
+# 工具列表
+TOOLS=(
+    "padjffs2"
+    "mkdniimg"
+    "fwtool"
+    "mklibs"
+    "mkimage"
+    "squashfs"
+    "mksquashfs"
+)
 
-# 修复 mkdniimg
-if [ -f "staging_dir/host/bin/mkdniimg" ]; then
-    echo "🔧 修复 mkdniimg..."
-    
-    cp staging_dir/host/bin/mkdniimg staging_dir/host/bin/mkdniimg.bak
-    
-    make tools/mkdniimg/clean V=s > /dev/null 2>&1
-    make tools/mkdniimg/compile V=s > /dev/null 2>&1
-    
-    if [ -f "staging_dir/host/bin/mkdniimg" ]; then
-        echo "✅ mkdniimg 修复成功"
-    else
-        echo "❌ mkdniimg 修复失败，使用备份"
-        cp staging_dir/host/bin/mkdniimg.bak staging_dir/host/bin/mkdniimg 2>/dev/null || true
+for tool in "${TOOLS[@]}"; do
+    if [ -f "staging_dir/host/bin/$tool" ]; then
+        echo "🔧 修复 $tool..."
+        
+        # 备份
+        cp "staging_dir/host/bin/$tool" "staging_dir/host/bin/$tool.bak" 2>/dev/null || true
+        
+        # 重新编译
+        if make "tools/$tool/clean" V=s > /dev/null 2>&1; then
+            make "tools/$tool/compile" V=s > /dev/null 2>&1
+            if [ -f "staging_dir/host/bin/$tool" ]; then
+                echo "✅ $tool 修复成功"
+            else
+                echo "❌ $tool 修复失败，使用备份"
+                cp "staging_dir/host/bin/$tool.bak" "staging_dir/host/bin/$tool" 2>/dev/null || true
+            fi
+        fi
     fi
-fi
-
-# 修复 fwtool
-if [ -f "staging_dir/host/bin/fwtool" ]; then
-    echo "🔧 修复 fwtool..."
-    make tools/fwtool/clean V=s > /dev/null 2>&1
-    make tools/fwtool/compile V=s > /dev/null 2>&1
-    echo "✅ fwtool 修复完成"
-fi
+done
 
 echo "=== 工具修复结束于 $(date) ==="
 EOF
     chmod +x "$tool_fix_script"
+    
+    # ============================================
+    # 运行工具修复
+    # ============================================
+    log "🔧 运行工具修复脚本..."
+    bash "$tool_fix_script" "$BUILD_DIR"
     
     # ============================================
     # 备份关键文件
@@ -5422,6 +5517,8 @@ EOF
     echo "  文件描述符限制: $(ulimit -n)"
     echo "  并行优化: $enable_parallel"
     echo "  源码类型: $SOURCE_REPO_TYPE"
+    echo "  当前设备: $DEVICE"
+    echo "  目标平台: $TARGET/$SUBTARGET"
     
     local max_retries=3
     local retry_count=0
@@ -5437,7 +5534,7 @@ EOF
             log "  🔧 再次设置文件描述符限制..."
             ulimit -n 65536 2>/dev/null || ulimit -n 16384 2>/dev/null || true
             
-            log "  🔧 运行工具修复脚本..."
+            log "  🔧 再次运行工具修复脚本..."
             bash "$tool_fix_script" "$BUILD_DIR"
             
             log "  🔧 清理 package/install 阶段的临时文件..."
@@ -5483,7 +5580,7 @@ EOF
             if [ $PHASE1_EXIT_CODE -ne 0 ]; then
                 echo "⚠️ 第一阶段编译失败，退出代码: $PHASE1_EXIT_CODE"
                 
-                if grep -q "padjffs2\|mkdniimg\|fwtool" build_phase1.log; then
+                if grep -q "padjffs2\|mkdniimg\|fwtool\|mklibs\|mkimage" build_phase1.log; then
                     echo "  🔧 检测到工具错误，运行修复脚本..."
                     bash "$tool_fix_script" "$BUILD_DIR"
                 fi
@@ -5592,6 +5689,11 @@ EOF
                         make defconfig > /dev/null 2>&1
                         rm -rf "$BUILD_DIR/build_dir/target-*"/dnsmasq-* 2>/dev/null || true
                     fi
+                    
+                    if grep -q "mklibs\|mkimage\|squashfs" build.log; then
+                        log "  🔧 检测到其他工具错误，运行完整修复..."
+                        bash "$tool_fix_script" "$BUILD_DIR"
+                    fi
                 fi
             else
                 build_success=0
@@ -5613,6 +5715,8 @@ EOF
     
     local sysupgrade_count=0
     local factory_count=0
+    local initramfs_count=0
+    local other_count=0
     local all_firmware=()
     
     if [ -d "$BUILD_DIR/bin/targets" ]; then
@@ -5623,14 +5727,45 @@ EOF
                     sysupgrade_count=$((sysupgrade_count + 1))
                 elif echo "$file" | grep -q "factory"; then
                     factory_count=$((factory_count + 1))
+                elif echo "$file" | grep -q "initramfs"; then
+                    initramfs_count=$((initramfs_count + 1))
+                else
+                    other_count=$((other_count + 1))
                 fi
             fi
         done < <(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
     fi
     
+    # 如果 bin/targets 中没有文件，检查保护目录
+    if [ ${#all_firmware[@]} -eq 0 ] && [ -d "$protect_dir" ]; then
+        log "⚠️ bin/targets 中未找到固件，检查保护目录..."
+        
+        local protect_files=$(find "$protect_dir" -name "*.backup" -o -name "final_*" 2>/dev/null)
+        if [ -n "$protect_files" ]; then
+            echo "$protect_files" | while read file; do
+                if [ -f "$file" ] && [ -s "$file" ]; then
+                    log "  ✅ 保护目录中存在: $(basename "$file")"
+                    
+                    # 尝试复制到合适的目录
+                    if [ -n "$TARGET" ] && [ -n "$SUBTARGET" ]; then
+                        local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
+                        mkdir -p "$target_dir"
+                        local filename=$(basename "$file" .backup)
+                        filename=${filename#final_}
+                        cp -f "$file" "$target_dir/$filename" 2>/dev/null
+                        log "  ✅ 已恢复: $target_dir/$filename"
+                        all_firmware+=("$target_dir/$filename")
+                    fi
+                fi
+            done
+        fi
+    fi
+    
     if [ ${#all_firmware[@]} -gt 0 ]; then
         echo "  ✅ sysupgrade.bin: $sysupgrade_count 个"
         echo "  ✅ factory.img: $factory_count 个"
+        echo "  🔷 initramfs: $initramfs_count 个"
+        echo "  📦 其他: $other_count 个"
         echo ""
         echo "📋 固件列表:"
         for file in "${all_firmware[@]}"; do
@@ -5642,25 +5777,6 @@ EOF
     
     if [ ${#all_firmware[@]} -eq 0 ]; then
         echo "❌ 没有找到任何固件文件"
-        
-        # 检查临时目录中的文件
-        echo ""
-        echo "📁 检查临时目录中的文件..."
-        local tmp_files=$(find "$BUILD_DIR/build_dir" -path "*/tmp/*.bin" -o -path "*/tmp/*.img" 2>/dev/null | head -10)
-        
-        if [ -n "$tmp_files" ]; then
-            echo "在临时目录中找到以下文件："
-            echo "$tmp_files" | while read file; do
-                if [ -f "$file" ] && [ -s "$file" ]; then
-                    echo "  📄 $(basename "$file") ($(ls -lh "$file" | awk '{print $5}'))"
-                    echo "    路径: $file"
-                fi
-            done
-            echo ""
-            echo "💡 可以手动复制这些文件作为固件使用："
-            echo "   cp $BUILD_DIR/build_dir/target-*/linux-*/tmp/*.bin $BUILD_DIR/bin/targets/ath79/generic/"
-        fi
-        
         if [ $build_success -eq 0 ]; then
             echo ""
             echo "📋 最近50行错误日志:"
