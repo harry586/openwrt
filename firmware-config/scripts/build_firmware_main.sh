@@ -5199,11 +5199,22 @@ workflow_step22_build_firmware() {
     # ============================================
     log "🔧 检查并修复主机工具..."
     
+    # 先单独编译 mkdniimg 和 fwtool（它们可能依赖其他工具）
+    log "  单独编译 mkdniimg..."
+    make tools/mkdniimg/clean V=s > /dev/null 2>&1 || true
+    make tools/mkdniimg/compile V=s || {
+        log "  ⚠️ mkdniimg 编译失败，继续尝试其他工具"
+    }
+    
+    log "  单独编译 fwtool..."
+    make tools/fwtool/clean V=s > /dev/null 2>&1 || true
+    make tools/fwtool/compile V=s || {
+        log "  ⚠️ fwtool 编译失败，继续尝试其他工具"
+    }
+    
     # 重新编译所有主机工具
     local host_tools=(
         "tools/padjffs2"
-        "tools/mkdniimg"
-        "tools/fwtool"
         "tools/mklibs"
         "tools/mkimage"
         "tools/squashfs"
@@ -5230,6 +5241,16 @@ workflow_step22_build_firmware() {
         if [ ! -f "$tool" ] || [ ! -x "$tool" ]; then
             missing_tools+=("$tool")
             log "  ⚠️ 工具缺失: $tool"
+            
+            # 尝试单独编译缺失的工具
+            local tool_name=$(basename "$tool")
+            log "  尝试单独编译 $tool_name..."
+            make "tools/$tool_name/clean" V=s > /dev/null 2>&1 || true
+            make "tools/$tool_name/compile" V=s > /dev/null 2>&1 || true
+            
+            if [ -f "$tool" ] && [ -x "$tool" ]; then
+                log "  ✅ $tool_name 编译成功"
+            fi
         else
             log "  ✅ 工具存在: $tool"
             # 显示工具版本或信息
@@ -5238,13 +5259,25 @@ workflow_step22_build_firmware() {
     done
     
     if [ ${#missing_tools[@]} -gt 0 ]; then
-        log "⚠️ 关键工具缺失，尝试重新编译所有工具..."
+        log "⚠️ 仍有工具缺失，尝试重新编译所有工具..."
         make tools/install V=s > /dev/null 2>&1 || true
+        
+        # 再次检查
+        for tool in "${critical_tools[@]}"; do
+            if [ -f "$tool" ] && [ -x "$tool" ]; then
+                log "  ✅ 工具现在存在: $tool"
+            else
+                log "  ❌ 工具仍然缺失: $tool"
+            fi
+        done
     fi
     
-    # 清理可能冲突的临时文件
+    # 清理可能冲突的临时文件（修复 rm 错误）
     log "  清理临时文件..."
-    find build_dir -name "*.bin" -o -name "*.img" -o -name "*.tmp" -o -name "*.new" 2>/dev/null | xargs rm -f
+    # 使用 find 配合 -delete 或 -exec rm -f {} \; 来安全删除文件
+    find build_dir -type f \( -name "*.bin" -o -name "*.img" -o -name "*.tmp" -o -name "*.new" \) 2>/dev/null -exec rm -f {} \;
+    # 只删除空的临时目录，不删除非空目录
+    find build_dir -type d -name "tmp" -empty 2>/dev/null -exec rmdir {} \; 2>/dev/null || true
     
     export KCFLAGS="-O2 -pipe"
     
@@ -5261,7 +5294,7 @@ workflow_step22_build_firmware() {
         
         # 创建临时目录（如果存在对应的 build_dir）
         local build_target_dir="build_dir/target-*"
-        local tmp_dirs=$(find $build_target_dir -name "tmp" -type d 2>/dev/null | head -5)
+        local tmp_dirs=$(find $build_target_dir -name "tmp" -type d 2>/dev/null | head -5 || true)
         if [ -n "$tmp_dirs" ]; then
             echo "$tmp_dirs" | while read tmp_dir; do
                 log "  ✅ 临时目录存在: $tmp_dir"
@@ -5451,11 +5484,18 @@ echo "=== 工具修复开始于 $(date) ==="
 
 cd "$BUILD_DIR"
 
+# 先单独编译可能缺失的工具
+echo "🔧 单独编译 mkdniimg..."
+make tools/mkdniimg/clean V=s > /dev/null 2>&1 || true
+make tools/mkdniimg/compile V=s || true
+
+echo "🔧 单独编译 fwtool..."
+make tools/fwtool/clean V=s > /dev/null 2>&1 || true
+make tools/fwtool/compile V=s || true
+
 # 工具列表
 TOOLS=(
     "padjffs2"
-    "mkdniimg"
-    "fwtool"
     "mklibs"
     "mkimage"
     "squashfs"
@@ -5497,6 +5537,7 @@ critical_tools=("padjffs2" "mkdniimg" "fwtool")
 for tool in "${critical_tools[@]}"; do
     if [ -f "staging_dir/host/bin/$tool" ] && [ -x "staging_dir/host/bin/$tool" ]; then
         echo "✅ $tool: 可用"
+        ls -l "staging_dir/host/bin/$tool"
     else
         echo "❌ $tool: 不可用"
     fi
@@ -5510,7 +5551,9 @@ EOF
     # 运行工具修复
     # ============================================
     log "🔧 运行工具修复脚本..."
-    bash "$tool_fix_script" "$BUILD_DIR"
+    bash "$tool_fix_script" "$BUILD_DIR" || {
+        log "⚠️ 工具修复脚本有警告，但继续执行"
+    }
     
     # ============================================
     # 备份关键文件
@@ -5551,7 +5594,7 @@ EOF
             ulimit -n 65536 2>/dev/null || ulimit -n 16384 2>/dev/null || true
             
             log "  🔧 再次运行工具修复脚本..."
-            bash "$tool_fix_script" "$BUILD_DIR"
+            bash "$tool_fix_script" "$BUILD_DIR" || true
             
             log "  🔧 清理 package/install 阶段的临时文件..."
             rm -rf "$BUILD_DIR/build_dir/target-*"/package-* 2>/dev/null || true
@@ -5598,7 +5641,7 @@ EOF
                 
                 if grep -q "padjffs2\|mkdniimg\|fwtool\|mklibs\|mkimage" build_phase1.log; then
                     echo "  🔧 检测到工具错误，运行修复脚本..."
-                    bash "$tool_fix_script" "$BUILD_DIR"
+                    bash "$tool_fix_script" "$BUILD_DIR" || true
                 fi
                 
                 if [ $retry_count -lt $max_retries ]; then
@@ -5711,7 +5754,7 @@ EOF
                     
                     if grep -q "mklibs\|mkimage\|squashfs" build.log; then
                         log "  🔧 检测到其他工具错误，运行完整修复..."
-                        bash "$tool_fix_script" "$BUILD_DIR"
+                        bash "$tool_fix_script" "$BUILD_DIR" || true
                     fi
                 fi
             else
@@ -5726,7 +5769,7 @@ EOF
     
     echo ""
     echo "🔧 执行强制恢复，确保固件文件存在..."
-    bash "$recover_script" "$protect_dir" "$BUILD_DIR"
+    bash "$recover_script" "$protect_dir" "$BUILD_DIR" || true
     
     echo ""
     echo "📊 最终固件检查:"
@@ -5830,9 +5873,22 @@ EOF
         for tool in padjffs2 mkdniimg fwtool; do
             if [ -f "staging_dir/host/bin/$tool" ]; then
                 echo "  ✅ $tool: 存在"
-                ls -l "staging_dir/host/bin/$tool"
+                ls -l "staging_dir/host/bin/$tool" 2>/dev/null || echo "  ✅ $tool 存在"
             else
                 echo "  ❌ $tool: 不存在"
+            fi
+        done
+        
+        # 尝试手动编译缺失的工具
+        echo ""
+        echo "🔧 尝试手动编译缺失的工具..."
+        make tools/mkdniimg/compile V=s || true
+        make tools/fwtool/compile V=s || true
+        
+        # 再次检查
+        for tool in mkdniimg fwtool; do
+            if [ -f "staging_dir/host/bin/$tool" ]; then
+                echo "  ✅ 手动编译后 $tool 存在"
             fi
         done
         
