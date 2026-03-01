@@ -5202,7 +5202,7 @@ workflow_step21_pre_build_space_confirm() {
 workflow_step22_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤22: 编译固件（终极强制复制方案） ==="
+    log "=== 步骤22: 编译固件（专门备份关键固件） ==="
     
     set -e
     trap 'echo "❌ 步骤22 失败，退出代码: $?"; exit 1' ERR
@@ -5241,21 +5241,24 @@ workflow_step22_build_firmware() {
     fi
     
     # ============================================
-    # 创建强制复制脚本
+    # 创建专门备份关键固件的脚本
     # ============================================
-    log "🔧 创建强制复制脚本..."
+    log "🔧 创建专门备份关键固件的脚本..."
     
-    local copy_dir="$BUILD_DIR/.firmware_copy"
-    mkdir -p "$copy_dir"
+    local backup_dir="$BUILD_DIR/.firmware_critical"
+    mkdir -p "$backup_dir"
     
-    cat > "$copy_dir/copy.sh" << 'EOF'
+    cat > "$backup_dir/backup.sh" << 'EOF'
 #!/bin/bash
-# 强制复制脚本 - 在关键操作前后复制文件
-COPY_DIR="$1"
+# 专门备份关键固件文件
+BACKUP_DIR="$1"
 BUILD_DIR="$2"
 TARGET_DIR="$BUILD_DIR/bin/targets/ath79/generic"
 
 mkdir -p "$TARGET_DIR"
+mkdir -p "$BACKUP_DIR"/{pre,mid,post,final}
+
+echo "=== 关键固件备份启动于 $(date) ==="
 
 # 关键文件列表
 declare -A CRITICAL_FILES
@@ -5263,119 +5266,107 @@ CRITICAL_FILES["sysupgrade"]="openwrt-ath79-generic-netgear_wndr3800-squashfs-sy
 CRITICAL_FILES["factory"]="openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
 CRITICAL_FILES["initramfs"]="openwrt-ath79-generic-netgear_wndr3800-initramfs-kernel.bin"
 
-# 查找所有可能的位置
-SEARCH_PATHS=(
-    "$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic"
-    "$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp"
-    "$BUILD_DIR/build_dir/target-mips_24kc_musl"
-    "$BUILD_DIR/bin/targets/ath79/generic"
-    "$BUILD_DIR"
-)
+# 备份函数
+backup_file() {
+    local file="$1"
+    local phase="$2"
+    
+    if [ -f "$file" ] && [ -s "$file" ]; then
+        local filename=$(basename "$file")
+        local size=$(ls -l "$file" | awk '{print $5}')
+        local backup_path="$BACKUP_DIR/$phase/$filename"
+        
+        # 备份文件
+        cp -f "$file" "$backup_path"
+        echo "✅ [$phase] 备份: $filename ($size 字节)"
+        
+        # 如果是关键文件，也复制到目标目录
+        for key in "${!CRITICAL_FILES[@]}"; do
+            if [ "$filename" = "${CRITICAL_FILES[$key]}" ]; then
+                cp -f "$file" "$TARGET_DIR/$filename"
+                echo "  └─> 已复制到目标目录"
+            fi
+        done
+        
+        return 0
+    fi
+    return 1
+}
 
-# 复制函数
-copy_files() {
+# 搜索特定目录
+search_and_backup() {
     local phase="$1"
-    echo "=== 复制固件文件 [$phase] ==="
+    local search_path="$2"
+    
+    if [ ! -d "$search_path" ]; then
+        return
+    fi
     
     for key in "${!CRITICAL_FILES[@]}"; do
         local filename="${CRITICAL_FILES[$key]}"
-        local found=0
+        local file_path="$search_path/$filename"
         
-        # 搜索文件
-        for search_path in "${SEARCH_PATHS[@]}"; do
-            if [ -f "$search_path/$filename" ]; then
-                local size=$(ls -l "$search_path/$filename" | awk '{print $5}')
-                echo "✅ 找到 $filename: $size 字节"
-                
-                # 复制到目标目录
-                cp -f "$search_path/$filename" "$TARGET_DIR/$filename"
-                
-                # 复制到备份目录
-                cp -f "$search_path/$filename" "$COPY_DIR/${phase}_${filename}"
-                
-                found=1
-                break
+        if [ -f "$file_path" ]; then
+            backup_file "$file_path" "$phase"
+        fi
+        
+        # 搜索 .new 文件
+        local new_path="$search_path/${filename}.new"
+        if [ -f "$new_path" ]; then
+            backup_file "$new_path" "${phase}_new"
+        fi
+    done
+    
+    # 搜索任何匹配的文件
+    find "$search_path" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" \) -size +1M 2>/dev/null | while read file; do
+        filename=$(basename "$file")
+        for key in "${!CRITICAL_FILES[@]}"; do
+            if [[ "$filename" == *"${CRITICAL_FILES[$key]}"* ]] || [[ "${CRITICAL_FILES[$key]}" == *"$filename"* ]]; then
+                backup_file "$file" "${phase}_related"
             fi
         done
-        
-        # 如果没找到，搜索任何包含关键字的文件
-        if [ $found -eq 0 ]; then
-            local base=$(echo "$filename" | cut -d'-' -f1-5)
-            local matches=$(find "$BUILD_DIR" -name "*$base*" -type f 2>/dev/null)
-            if [ -n "$matches" ]; then
-                echo "$matches" | while read match; do
-                    local match_name=$(basename "$match")
-                    local match_size=$(ls -l "$match" | awk '{print $5}')
-                    echo "📄 找到相关文件: $match_name ($match_size 字节)"
-                    
-                    # 如果文件名匹配，复制
-                    if [ "$match_name" = "$filename" ] || [ "$match_name" = "${filename}.new" ]; then
-                        cp -f "$match" "$TARGET_DIR/$filename"
-                        cp -f "$match" "$COPY_DIR/${phase}_$match_name"
-                    fi
-                done
-            fi
-        fi
     done
 }
 
-# 监控特定目录
-monitor_directory() {
-    local dir="$1"
-    if [ -d "$dir" ]; then
-        find "$dir" -type f \( -name "*.bin" -o -name "*.img" \) -size +1M 2>/dev/null | while read file; do
-            local filename=$(basename "$file")
-            local size=$(ls -l "$file" | awk '{print $5}')
-            echo "📁 监控到: $filename ($size 字节)"
-            cp -f "$file" "$COPY_DIR/monitor_$filename"
-            
-            # 如果是关键文件，也复制到目标目录
-            for target in "${CRITICAL_FILES[@]}"; do
-                if [ "$filename" = "$target" ] || [ "$filename" = "${target}.new" ]; then
-                    cp -f "$file" "$TARGET_DIR/$target"
-                fi
-            done
-        done
-    fi
-}
-
-# 第一阶段：预编译复制
-copy_files "pre"
+# 第一阶段：预编译备份
+search_and_backup "pre" "$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp"
+search_and_backup "pre" "$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic"
+search_and_backup "pre" "$TARGET_DIR"
 
 # 监控循环
 while true; do
     # 监控临时目录
-    monitor_directory "$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp"
+    search_and_backup "mid" "$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp"
     
     # 监控内核目录
-    monitor_directory "$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic"
+    search_and_backup "mid" "$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic"
     
     # 监控目标目录
-    monitor_directory "$TARGET_DIR"
+    search_and_backup "mid" "$TARGET_DIR"
     
     sleep 2
 done
 EOF
-    chmod +x "$copy_dir/copy.sh"
+    chmod +x "$backup_dir/backup.sh"
     
-    # 启动复制脚本
-    "$copy_dir/copy.sh" "$copy_dir" "$BUILD_DIR" &
-    local copy_pid=$!
-    log "  ✅ 强制复制已启动 (PID: $copy_pid)"
+    # 启动备份脚本
+    "$backup_dir/backup.sh" "$backup_dir" "$BUILD_DIR" &
+    local backup_pid=$!
+    log "  ✅ 关键固件备份已启动 (PID: $backup_pid)"
     
     # ============================================
     # 创建最终恢复脚本
     # ============================================
-    cat > "$copy_dir/final_copy.sh" << 'EOF'
+    cat > "$backup_dir/restore.sh" << 'EOF'
 #!/bin/bash
 # 最终恢复脚本
-COPY_DIR="$1"
+BACKUP_DIR="$1"
 BUILD_DIR="$2"
 TARGET_DIR="$BUILD_DIR/bin/targets/ath79/generic"
 
 mkdir -p "$TARGET_DIR"
 
-echo "=== 执行最终恢复 ==="
+echo "=== 最终恢复开始于 $(date) ==="
 
 # 关键文件列表
 FILES=(
@@ -5384,46 +5375,94 @@ FILES=(
     "openwrt-ath79-generic-netgear_wndr3800-initramfs-kernel.bin"
 )
 
-# 从复制目录恢复
-if [ -d "$COPY_DIR" ]; then
-    find "$COPY_DIR" -type f -size +1M 2>/dev/null | while read backup; do
-        filename=$(basename "$backup" | sed 's/^[^_]*_//')
-        size=$(ls -l "$backup" | awk '{print $5}')
-        echo "📦 找到备份: $filename ($size 字节)"
-        
-        # 检查是否是关键文件
-        for target in "${FILES[@]}"; do
-            if [ "$filename" = "$target" ] || [ "$filename" = "${target}.new" ]; then
-                cp -f "$backup" "$TARGET_DIR/$target"
-                echo "✅ 恢复: $target"
-            fi
+# 从所有备份阶段恢复
+for phase in pre mid post final; do
+    phase_dir="$BACKUP_DIR/$phase"
+    if [ -d "$phase_dir" ]; then
+        find "$phase_dir" -type f 2>/dev/null | while read backup; do
+            filename=$(basename "$backup")
+            target_file="$TARGET_DIR/$filename"
+            
+            # 检查是否是要恢复的文件
+            for f in "${FILES[@]}"; do
+                if [ "$filename" = "$f" ] || [ "$filename" = "$f.new" ]; then
+                    if [ -f "$backup" ] && [ -s "$backup" ]; then
+                        size=$(ls -l "$backup" | awk '{print $5}')
+                        # 只恢复大于 5MB 的文件
+                        if [ $size -gt 5000000 ]; then
+                            cp -f "$backup" "$target_file"
+                            echo "✅ [$phase] 恢复: $filename ($size 字节)"
+                        else
+                            echo "⚠️ [$phase] 跳过: $filename (太小: $size 字节)"
+                        fi
+                    fi
+                fi
+            done
         done
-    done
-fi
+    fi
+done
 
-# 从构建目录搜索
+# 从构建目录直接搜索
 echo ""
-echo "🔍 搜索构建目录..."
-find "$BUILD_DIR" -type f \( -name "*.bin" -o -name "*.img" \) -size +5M 2>/dev/null | while read file; do
+echo "🔍 从构建目录搜索..."
+find "$BUILD_DIR/build_dir" -type f \( -name "*.bin" -o -name "*.img" \) -size +5M 2>/dev/null | while read file; do
     filename=$(basename "$file")
-    size=$(ls -lh "$file" | awk '{print $5}')
-    echo "📄 找到: $filename ($size)"
+    size=$(ls -l "$file" | awk '{print $5}')
     
-    # 如果是关键文件，复制
-    for target in "${FILES[@]}"; do
-        if [ "$filename" = "$target" ]; then
-            cp -f "$file" "$TARGET_DIR/$target"
-            echo "✅ 复制: $target"
+    for f in "${FILES[@]}"; do
+        if [ "$filename" = "$f" ]; then
+            cp -f "$file" "$TARGET_DIR/$filename"
+            echo "✅ 从构建目录恢复: $filename ($size 字节)"
         fi
     done
 done
 
-# 列出最终结果
+# 最终检查
 echo ""
-echo "📊 最终固件:"
+echo "📊 最终固件列表:"
 ls -la "$TARGET_DIR/" 2>/dev/null | grep -E "\.bin|\.img" || echo "没有找到固件文件"
+
+# 验证关键文件
+echo ""
+echo "🔍 验证关键文件:"
+sysupgrade_ok=0
+factory_ok=0
+
+if [ -f "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" ]; then
+    size=$(stat -c %s "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" 2>/dev/null || echo "0")
+    if [ $size -gt 5000000 ]; then
+        echo "✅ sysupgrade.bin: 存在且大小正常 ($size 字节)"
+        sysupgrade_ok=1
+    else
+        echo "⚠️ sysupgrade.bin: 存在但大小异常 ($size 字节)"
+    fi
+else
+    echo "❌ sysupgrade.bin: 不存在"
+fi
+
+if [ -f "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img" ]; then
+    size=$(stat -c %s "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img" 2>/dev/null || echo "0")
+    if [ $size -gt 5000000 ]; then
+        echo "✅ factory.img: 存在且大小正常 ($size 字节)"
+        factory_ok=1
+    else
+        echo "⚠️ factory.img: 存在但大小异常 ($size 字节)"
+    fi
+else
+    echo "❌ factory.img: 不存在"
+fi
+
+if [ $sysupgrade_ok -eq 1 ] && [ $factory_ok -eq 1 ]; then
+    echo ""
+    echo "🎉 成功！所有关键固件文件都已恢复"
+    exit 0
+else
+    echo ""
+    echo "❌ 失败：缺少关键固件文件"
+    exit 1
+fi
 EOF
-    chmod +x "$copy_dir/final_copy.sh"
+    chmod +x "$backup_dir/restore.sh"
     
     # ============================================
     # 清理临时文件
@@ -5506,15 +5545,16 @@ EOF
         fi
     done
     
-    kill $copy_pid 2>/dev/null || true
-    log "🔧 强制复制已停止"
+    kill $backup_pid 2>/dev/null || true
+    log "🔧 关键固件备份已停止"
     
     # ============================================
     # 执行最终恢复
     # ============================================
     echo ""
     echo "🔧 执行最终恢复..."
-    bash "$copy_dir/final_copy.sh" "$copy_dir" "$BUILD_DIR"
+    bash "$backup_dir/restore.sh" "$backup_dir" "$BUILD_DIR"
+    RESTORE_RESULT=$?
     
     # ============================================
     # 最终检查
@@ -5526,19 +5566,9 @@ EOF
     if [ -d "$target_dir" ]; then
         ls -la "$target_dir/" 2>/dev/null | while read line; do
             if echo "$line" | grep -q "sysupgrade.*\.bin"; then
-                size=$(echo "$line" | awk '{print $5}')
-                if [ $size -gt 5000000 ]; then
-                    echo "  ✅ $(echo "$line" | awk '{print $9" ("$5" bytes)"}')"
-                else
-                    echo "  ⚠️ $(echo "$line" | awk '{print $9" ("$5" bytes) - 可能不完整"}')"
-                fi
+                echo "  ✅ $(echo "$line" | awk '{print $9" ("$5" bytes)"}')"
             elif echo "$line" | grep -q "factory.*\.img"; then
-                size=$(echo "$line" | awk '{print $5}')
-                if [ $size -gt 5000000 ]; then
-                    echo "  ✅ $(echo "$line" | awk '{print $9" ("$5" bytes)"}')"
-                else
-                    echo "  ⚠️ $(echo "$line" | awk '{print $9" ("$5" bytes) - 可能不完整"}')"
-                fi
+                echo "  ✅ $(echo "$line" | awk '{print $9" ("$5" bytes)"}')"
             elif echo "$line" | grep -q "initramfs.*\.bin"; then
                 echo "  🔷 $(echo "$line" | awk '{print $9" ("$5" bytes)"}')"
             fi
@@ -5547,53 +5577,26 @@ EOF
     
     echo "----------------------------------------"
     
-    # 验证关键文件
-    local sysupgrade_ok=0
-    local factory_ok=0
-    
-    if [ -f "$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" ]; then
-        size=$(stat -c %s "$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" 2>/dev/null || echo "0")
-        if [ $size -gt 5000000 ]; then
-            sysupgrade_ok=1
-            echo "✅ sysupgrade.bin: 存在且大小正常 ($size 字节)"
-        else
-            echo "⚠️ sysupgrade.bin: 存在但大小异常 ($size 字节)"
-        fi
-    else
-        echo "❌ sysupgrade.bin: 不存在"
-    fi
-    
-    if [ -f "$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img" ]; then
-        size=$(stat -c %s "$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img" 2>/dev/null || echo "0")
-        if [ $size -gt 5000000 ]; then
-            factory_ok=1
-            echo "✅ factory.img: 存在且大小正常 ($size 字节)"
-        else
-            echo "⚠️ factory.img: 存在但大小异常 ($size 字节)"
-        fi
-    else
-        echo "❌ factory.img: 不存在"
-    fi
-    
-    if [ $sysupgrade_ok -eq 1 ] && [ $factory_ok -eq 1 ]; then
+    if [ $RESTORE_RESULT -eq 0 ]; then
         echo ""
         echo "🎉 成功生成完整的固件文件！"
+        
+        # 显示固件文件大小
+        echo ""
+        echo "📋 固件文件详情:"
+        for file in "$target_dir"/*; do
+            if [ -f "$file" ]; then
+                size=$(ls -lh "$file" | awk '{print $5}')
+                echo "  📄 $(basename "$file"): $size"
+            fi
+        done
     else
         echo ""
         echo "❌ 错误: 未能生成完整的固件文件"
-        
-        # 列出所有找到的固件文件
-        echo ""
-        echo "📁 所有找到的固件文件:"
-        find "$BUILD_DIR" -type f \( -name "*.bin" -o -name "*.img" \) -size +1M 2>/dev/null | while read file; do
-            size=$(ls -lh "$file" | awk '{print $5}')
-            echo "  📄 $(basename "$file") ($size)"
-        done
-        
         exit 1
     fi
     
-    rm -rf "$copy_dir" 2>/dev/null || true
+    rm -rf "$backup_dir" 2>/dev/null || true
     
     log "✅ 步骤22 完成"
 }
