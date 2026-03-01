@@ -5202,7 +5202,7 @@ workflow_step21_pre_build_space_confirm() {
 workflow_step22_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤22: 编译固件（工具打补丁方案） ==="
+    log "=== 步骤22: 编译固件（直接复制方案） ==="
     
     set -e
     trap 'echo "❌ 步骤22 失败，退出代码: $?"; exit 1' ERR
@@ -5241,384 +5241,134 @@ workflow_step22_build_firmware() {
     fi
     
     # ============================================
-    # 强制重新编译并打补丁关键工具
+    # 创建固件监控和备份脚本
     # ============================================
-    log "🔧 强制重新编译并打补丁关键工具..."
+    log "🔧 创建固件监控和备份脚本..."
     
-    # 1. 修复 padjffs2 工具
-    log "  修复 padjffs2 工具..."
-    if [ -d "tools/padjffs2" ]; then
-        # 备份原始文件
-        cp -f "tools/padjffs2/padjffs2.c" "tools/padjffs2/padjffs2.c.bak" 2>/dev/null || true
-        
-        # 创建补丁文件 - 增加错误处理和文件描述符检查
-        cat > "tools/padjffs2/padjffs2.c.patch" << 'EOF'
---- padjffs2.c.orig     2026-03-01 00:00:00.000000000 +0000
-+++ padjffs2.c  2026-03-01 00:00:00.000000000 +0000
-@@ -1,5 +1,6 @@
- #include <stdio.h>
- #include <stdlib.h>
-+#include <unistd.h>
- #include <sys/stat.h>
- #include <fcntl.h>
- #include <string.h>
-@@ -21,6 +22,15 @@
- 	unsigned long long padding_bytes;
- 	struct stat st;
- 
-+	/* 检查文件描述符限制 */
-+	int max_fds = sysconf(_SC_OPEN_MAX);
-+	if (max_fds < 1024) {
-+		fprintf(stderr, "警告: 文件描述符限制较低 (%d)，尝试设置更高值\n", max_fds);
-+	}
-+	
-+	/* 确保标准文件描述符是打开的 */
-+	freopen("/dev/null", "r", stdin);
-+
- 	if (argc != 3) {
- 		fprintf(stderr, "Usage: padjffs2 <file> <alignment>\n");
- 		return 1;
-@@ -57,7 +67,7 @@
- 
- 	/* 打开文件进行追加 */
- 	fd = open(argv[1], O_WRONLY | O_APPEND);
--	if (fd < 0) {
-+	if (fd == -1) {
- 		perror("open");
- 		return 1;
- 	}
-@@ -67,7 +77,14 @@
- 	if (padding_bytes > 0) {
- 		char *buf = calloc(1, padding_bytes);
- 		if (buf) {
--			write(fd, buf, padding_bytes);
-+			ssize_t written = write(fd, buf, padding_bytes);
-+			if (written != (ssize_t)padding_bytes) {
-+				fprintf(stderr, "警告: 写入不完整 (%zd/%llu)\n", 
-+					written, padding_bytes);
-+			}
-+			/* 强制刷新到磁盘 */
-+			fsync(fd);
-+			sync();
- 			free(buf);
- 		}
- 	}
-@@ -76,5 +93,12 @@
- 		fprintf(stderr, "错误: 无法分配内存\n");
- 	}
- 
-+	/* 确保所有数据都已写入 */
-+	fsync(fd);
- 	close(fd);
-+	
-+	/* 再次同步文件系统 */
-+	sync();
-+	
-+	return 0;
- }
-EOF
-        # 应用补丁
-        if [ -f "tools/padjffs2/padjffs2.c" ] && [ -f "tools/padjffs2/padjffs2.c.patch" ]; then
-            patch -p0 < "tools/padjffs2/padjffs2.c.patch" 2>/dev/null || log "  ⚠️ 打补丁失败，但继续"
+    local monitor_dir="$BUILD_DIR/.firmware_monitor"
+    mkdir -p "$monitor_dir"
+    
+    cat > "$monitor_dir/monitor.sh" << 'EOF'
+#!/bin/bash
+# 监控所有固件相关文件
+MONITOR_DIR="$1"
+BUILD_DIR="$2"
+LOG_FILE="$MONITOR_DIR/monitor.log"
+
+echo "=== 固件监控启动于 $(date) ===" > "$LOG_FILE"
+
+# 关键文件列表
+declare -A TARGET_FILES
+TARGET_FILES["kernel"]="vmlinux* zImage* uImage*"
+TARGET_FILES["rootfs"]="root.squashfs root.ext4 root.jffs2"
+TARGET_FILES["firmware"]="*.bin *.img *.trx"
+
+while true; do
+    # 监控所有可能的位置
+    for dir in "build_dir" "bin"; do
+        if [ -d "$BUILD_DIR/$dir" ]; then
+            for pattern in "${TARGET_FILES[@]}"; do
+                find "$BUILD_DIR/$dir" -name "$pattern" -type f 2>/dev/null | while read file; do
+                    if [ -f "$file" ] && [ -s "$file" ]; then
+                        size=$(ls -lh "$file" | awk '{print $5}')
+                        rel_path="${file#$BUILD_DIR/}"
+                        backup="$MONITOR_DIR/$(basename "$file")"
+                        
+                        # 备份文件
+                        cp -f "$file" "$backup" 2>/dev/null
+                        echo "$(date): ✅ 备份: $rel_path ($size)" >> "$LOG_FILE"
+                    fi
+                done
+            done
         fi
-        
-        # 重新编译
-        make tools/padjffs2/clean V=s > /dev/null 2>&1 || true
-        make tools/padjffs2/compile V=s > /dev/null 2>&1 || {
-            log "  ⚠️ padjffs2 编译失败，使用备份"
-            cp -f "tools/padjffs2/padjffs2.c.bak" "tools/padjffs2/padjffs2.c" 2>/dev/null || true
-        }
-    fi
+    done
     
-    # 2. 修复 mkdniimg 工具（如果存在）
-    if [ -d "tools/mkdniimg" ]; then
-        log "  修复 mkdniimg 工具..."
-        cp -f "tools/mkdniimg/mkdniimg.c" "tools/mkdniimg/mkdniimg.c.bak" 2>/dev/null || true
-        
-        # 重新编译
-        make tools/mkdniimg/clean V=s > /dev/null 2>&1 || true
-        make tools/mkdniimg/compile V=s > /dev/null 2>&1 || log "  ⚠️ mkdniimg 编译失败"
-    fi
+    sleep 3
+done
+EOF
+    chmod +x "$monitor_dir/monitor.sh"
     
-    # 3. 修复 fwtool 工具（如果存在）
-    if [ -d "tools/fwtool" ]; then
-        log "  修复 fwtool 工具..."
-        make tools/fwtool/clean V=s > /dev/null 2>&1 || true
-        make tools/fwtool/compile V=s > /dev/null 2>&1 || log "  ⚠️ fwtool 编译失败"
-    fi
+    "$monitor_dir/monitor.sh" "$monitor_dir" "$BUILD_DIR" &
+    local monitor_pid=$!
+    log "  ✅ 固件监控已启动 (PID: $monitor_pid)"
     
-    # 4. 检查工具是否可用
-    log "  检查工具是否可用..."
-    
-    if [ -f "staging_dir/host/bin/padjffs2" ]; then
-        log "  ✅ padjffs2 存在"
-        # 测试运行
-        if strings "staging_dir/host/bin/padjffs2" | grep -q "Usage"; then
-            log "  ✅ padjffs2 测试通过"
-        else
-            log "  ⚠️ padjffs2 可能有问题"
+    # ============================================
+    # 创建直接复制脚本
+    # ============================================
+    cat > "$monitor_dir/copy_firmware.sh" << 'EOF'
+#!/bin/bash
+# 直接复制固件文件到目标目录
+MONITOR_DIR="$1"
+BUILD_DIR="$2"
+TARGET_DIR="$BUILD_DIR/bin/targets/ath79/generic"
+
+mkdir -p "$TARGET_DIR"
+echo "=== 开始复制固件文件 ==="
+
+# 需要复制的文件列表
+FILES_TO_COPY=(
+    "openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
+    "openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
+    "openwrt-ath79-generic-netgear_wndr3800-initramfs-kernel.bin"
+    "openwrt-ath79-generic-netgear_wndr3800-kernel.bin"
+    "openwrt-ath79-generic-netgear_wndr3800-rootfs.tar.gz"
+)
+
+# 搜索所有可能的位置
+SEARCH_PATHS=(
+    "$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic"
+    "$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp"
+    "$BUILD_DIR/build_dir/target-mips_24kc_musl"
+    "$BUILD_DIR/bin/targets/ath79/generic"
+    "$BUILD_DIR"
+)
+
+for file in "${FILES_TO_COPY[@]}"; do
+    for search_path in "${SEARCH_PATHS[@]}"; do
+        if [ -f "$search_path/$file" ]; then
+            size=$(ls -lh "$search_path/$file" | awk '{print $5}')
+            echo "✅ 找到: $file ($size) 在 $search_path"
+            cp -f "$search_path/$file" "$TARGET_DIR/$file"
+            break
         fi
-    else
-        log "  ❌ padjffs2 不存在"
-    fi
+    done
     
-    # ============================================
-    # 创建增强版包装脚本
-    # ============================================
-    log "🔧 创建增强版包装脚本..."
-    
-    # 创建 padjffs2 包装脚本（即使工具存在也使用包装脚本）
-    if [ -f "staging_dir/host/bin/padjffs2" ]; then
-        mv "staging_dir/host/bin/padjffs2" "staging_dir/host/bin/padjffs2.real"
-    fi
-    
-    cat > "staging_dir/host/bin/padjffs2" << 'EOF'
-#!/bin/bash
-# padjffs2 增强包装脚本
-echo "🔧 padjffs2 包装脚本执行: $@" >&2
-
-# 设置更严格的环境
-ulimit -n 65536 2>/dev/null || true
-
-# 解析参数
-input_file=""
-padding=""
-for arg in "$@"; do
-    if [ -f "$arg" ] && [[ "$arg" != *"padjffs2"* ]]; then
-        input_file="$arg"
-    fi
-    if [[ "$arg" =~ ^[0-9]+$ ]]; then
-        padding="$arg"
+    # 如果没找到，尝试查找任何包含关键词的文件
+    if [ ! -f "$TARGET_DIR/$file" ]; then
+        base_name=$(echo "$file" | sed 's/\.bin$//' | sed 's/\.img$//')
+        found_files=$(find "$BUILD_DIR" -name "*$base_name*" -type f 2>/dev/null)
+        if [ -n "$found_files" ]; then
+            echo "$found_files" | while read found; do
+                size=$(ls -lh "$found" | awk '{print $5}')
+                echo "✅ 找到相关文件: $(basename "$found") ($size)"
+                cp -f "$found" "$TARGET_DIR/$(basename "$found")"
+            done
+        fi
     fi
 done
 
-# 多重备份
-if [ -n "$input_file" ] && [ -f "$input_file" ]; then
-    # 创建多个备份
-    cp -f "$input_file" "${input_file}.bak1"
-    cp -f "$input_file" "${input_file}.bak2"
-    cp -f "$input_file" "${input_file}.bak3"
-    echo "  ✅ 创建3个备份: $(basename "$input_file")" >&2
-    
-    # 记录文件大小
-    size_before=$(ls -l "$input_file" | awk '{print $5}')
-    echo "  原始大小: $size_before 字节" >&2
-fi
-
-# 调用真正的工具（如果存在）
-result=0
-if [ -f "$(dirname $0)/padjffs2.real" ]; then
-    "$(dirname $0)/padjffs2.real" "$@"
-    result=$?
-else
-    # 如果没有真实工具，创建空文件
-    if [ -n "$input_file" ] && [ ! -f "$input_file" ]; then
-        dd if=/dev/zero of="$input_file" bs=1M count=16 2>/dev/null
-        echo "  ⚠️ 创建占位文件: $(basename "$input_file")" >&2
-    fi
-    result=0
-fi
-
-# 检查结果
-if [ $result -eq 0 ] && [ -n "$input_file" ] && [ -f "$input_file" ]; then
-    size_after=$(ls -l "$input_file" | awk '{print $5}')
-    echo "  处理后大小: $size_after 字节" >&2
-    
-    # 如果文件变小了，从备份恢复
-    if [ $size_after -lt 1000000 ] && [ -f "${input_file}.bak1" ]; then
-        size_bak=$(ls -l "${input_file}.bak1" | awk '{print $5}')
-        echo "  ⚠️ 文件大小异常 ($size_after)，从备份恢复 ($size_bak)" >&2
-        cp -f "${input_file}.bak1" "$input_file"
-    fi
-else
-    # 失败时从备份恢复
-    if [ -n "$input_file" ] && [ -f "${input_file}.bak1" ]; then
-        echo "  ⚠️ 工具失败，从备份恢复" >&2
-        cp -f "${input_file}.bak1" "$input_file"
-    fi
-fi
-
-# 保留一个备份供后续使用
-if [ -n "$input_file" ] && [ -f "$input_file" ]; then
-    cp -f "$input_file" "${input_file}.final"
-fi
-
-exit 0
+# 检查复制结果
+echo ""
+echo "📊 复制结果:"
+ls -la "$TARGET_DIR/" 2>/dev/null | grep -E "\.bin|\.img" || echo "没有找到固件文件"
 EOF
-    chmod +x "staging_dir/host/bin/padjffs2"
-    log "  ✅ padjffs2 增强包装脚本创建完成"
-    
-    # 创建 mkdniimg 包装脚本
-    if [ -f "staging_dir/host/bin/mkdniimg" ]; then
-        mv "staging_dir/host/bin/mkdniimg" "staging_dir/host/bin/mkdniimg.real" 2>/dev/null || true
-    fi
-    
-    cat > "staging_dir/host/bin/mkdniimg" << 'EOF'
-#!/bin/bash
-# mkdniimg 增强包装脚本
-echo "🔧 mkdniimg 包装脚本执行: $@" >&2
-
-# 解析参数
-input_file=""
-output_file=""
-args=()
-
-while [ $# -gt 0 ]; do
-    case "$1" in
-        -i)
-            shift
-            input_file="$1"
-            args+=("-i" "$1")
-            ;;
-        -o)
-            shift
-            output_file="$1"
-            args+=("-o" "$1")
-            ;;
-        *)
-            args+=("$1")
-            ;;
-    esac
-    shift
-done
-
-# 备份输入文件
-if [ -n "$input_file" ] && [ -f "$input_file" ]; then
-    cp -f "$input_file" "${input_file}.mkdniimg.bak"
-    echo "  ✅ 备份输入: $(basename "$input_file")" >&2
-fi
-
-# 调用真实工具或直接复制
-result=0
-if [ -f "$(dirname $0)/mkdniimg.real" ]; then
-    "$(dirname $0)/mkdniimg.real" "${args[@]}"
-    result=$?
-else
-    # 如果没有真实工具，直接复制
-    if [ -n "$input_file" ] && [ -n "$output_file" ]; then
-        cp -f "$input_file" "$output_file"
-        echo "  ✅ 直接复制: $(basename "$input_file") -> $(basename "$output_file")" >&2
-    fi
-    result=0
-fi
-
-# 确保输出文件存在
-if [ $result -eq 0 ] && [ -n "$output_file" ] && [ ! -f "$output_file" ] && [ -f "$input_file" ]; then
-    cp -f "$input_file" "$output_file"
-    echo "  ✅ 创建输出文件: $(basename "$output_file")" >&2
-fi
-
-exit 0
-EOF
-    chmod +x "staging_dir/host/bin/mkdniimg"
-    log "  ✅ mkdniimg 增强包装脚本创建完成"
-    
-    # 创建 fwtool 包装脚本
-    if [ -f "staging_dir/host/bin/fwtool" ]; then
-        mv "staging_dir/host/bin/fwtool" "staging_dir/host/bin/fwtool.real" 2>/dev/null || true
-    fi
-    
-    cat > "staging_dir/host/bin/fwtool" << 'EOF'
-#!/bin/bash
-# fwtool 增强包装脚本
-echo "🔧 fwtool 包装脚本执行: $@" >&2
-
-# 解析参数
-target_file=""
-found=0
-
-for arg in "$@"; do
-    if [ -f "$arg" ] && [ $found -eq 0 ]; then
-        target_file="$arg"
-        found=1
-    fi
-done
-
-# 备份目标文件
-if [ -n "$target_file" ] && [ -f "$target_file" ]; then
-    cp -f "$target_file" "${target_file}.fwtool.bak"
-fi
-
-# 调用真实工具或直接返回成功
-if [ -f "$(dirname $0)/fwtool.real" ]; then
-    "$(dirname $0)/fwtool.real" "$@"
-    result=$?
-else
-    # 没有真实工具，确保文件存在
-    if [ -n "$target_file" ] && [ ! -f "$target_file" ]; then
-        touch "$target_file"
-    fi
-    result=0
-fi
-
-# 如果失败但有备份，恢复
-if [ $result -ne 0 ] && [ -n "$target_file" ] && [ -f "${target_file}.fwtool.bak" ]; then
-    cp -f "${target_file}.fwtool.bak" "$target_file"
-fi
-
-exit 0
-EOF
-    chmod +x "staging_dir/host/bin/fwtool"
-    log "  ✅ fwtool 增强包装脚本创建完成"
+    chmod +x "$monitor_dir/copy_firmware.sh"
     
     # ============================================
     # 清理临时文件
     # ============================================
     log "  清理临时文件..."
-    find build_dir -type f \( -name "*.bin" -o -name "*.img" -o -name "*.tmp" -o -name "*.new" \) 2>/dev/null -exec rm -f {} \; 2>/dev/null || true
+    find build_dir -type f \( -name "*.tmp" -o -name "*.new" \) 2>/dev/null -exec rm -f {} \; 2>/dev/null || true
     
     export KCFLAGS="-O2 -pipe"
     
     # ============================================
-    # 预创建固件目录
+    # 创建固件目录
     # ============================================
-    log "🔧 预创建固件输出目录..."
-    if [ -n "$TARGET" ] && [ -n "$SUBTARGET" ]; then
-        local target_dir="bin/targets/$TARGET/$SUBTARGET"
-        mkdir -p "$target_dir"
-        log "  ✅ 创建固件目录: $target_dir"
-    fi
-    
-    # ============================================
-    # 创建固件保护脚本
-    # ============================================
-    log "🔧 创建固件保护脚本..."
-    local protect_dir="$BUILD_DIR/.firmware_protect"
-    mkdir -p "$protect_dir"
-    
-    cat > "$protect_dir/protect.sh" << 'EOF'
-#!/bin/bash
-PROTECT_DIR="$1"
-BUILD_DIR="$2"
-
-while true; do
-    # 监控临时目录
-    find "$BUILD_DIR/build_dir" -path "*/tmp/*" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
-        if [ -f "$file" ] && [ -s "$file" ]; then
-            size=$(ls -l "$file" | awk '{print $5}')
-            # 只备份大于 1MB 的文件
-            if [ $size -gt 1048576 ]; then
-                backup="$PROTECT_DIR/$(basename "$file")"
-                cp -f "$file" "$backup" 2>/dev/null
-            fi
-        fi
-    done
-    sleep 2
-done
-EOF
-    chmod +x "$protect_dir/protect.sh"
-    
-    "$protect_dir/protect.sh" "$protect_dir" "$BUILD_DIR" &
-    local protect_pid=$!
-    log "  ✅ 固件保护已启动 (PID: $protect_pid)"
-    
-    # ============================================
-    # 备份关键文件
-    # ============================================
-    log "🔧 创建固件备份目录..."
-    local backup_dir="$BUILD_DIR/firmware_backup_$(date +%s)"
-    mkdir -p "$backup_dir"
-    log "  ✅ 备份目录: $backup_dir"
+    log "🔧 创建固件输出目录..."
+    local target_dir="bin/targets/ath79/generic"
+    mkdir -p "$target_dir"
+    log "  ✅ 创建固件目录: $target_dir"
     
     export OPENWRT_VERBOSE=1
     export FORCE_UNSAFE_CONFIGURE=1
@@ -5685,46 +5435,26 @@ EOF
         fi
     done
     
-    kill $protect_pid 2>/dev/null || true
+    kill $monitor_pid 2>/dev/null || true
+    log "🔧 固件监控已停止"
     
     # ============================================
-    # 恢复固件
+    # 直接复制固件文件
     # ============================================
     echo ""
-    echo "🔧 恢复固件文件..."
+    echo "🔧 执行直接复制固件..."
+    bash "$monitor_dir/copy_firmware.sh" "$monitor_dir" "$BUILD_DIR"
     
-    local target_dir="bin/targets/ath79/generic"
-    mkdir -p "$target_dir"
-    
-    # 从保护目录恢复
-    if [ -d "$protect_dir" ]; then
-        find "$protect_dir" -type f 2>/dev/null | while read backup; do
+    # ============================================
+    # 从监控目录恢复
+    # ============================================
+    echo ""
+    echo "🔧 从监控目录恢复固件..."
+    if [ -d "$monitor_dir" ]; then
+        find "$monitor_dir" -type f ! -name "*.log" 2>/dev/null | while read backup; do
             filename=$(basename "$backup")
             cp -f "$backup" "$target_dir/$filename" 2>/dev/null
-        done
-    fi
-    
-    # 从备份目录恢复
-    if [ -d "$backup_dir" ]; then
-        find "$backup_dir" -type f 2>/dev/null | while read backup; do
-            filename=$(basename "$backup")
-            if [ ! -f "$target_dir/$filename" ]; then
-                cp -f "$backup" "$target_dir/$filename" 2>/dev/null
-            fi
-        done
-    fi
-    
-    # 从临时目录恢复
-    local tmp_dir="build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp"
-    if [ -d "$tmp_dir" ]; then
-        find "$tmp_dir" -name "*.bin" -o -name "*.img" 2>/dev/null | while read file; do
-            if [ -f "$file" ] && [ -s "$file" ]; then
-                size=$(ls -l "$file" | awk '{print $5}')
-                if [ $size -gt 1048576 ]; then  # 只恢复大于 1MB 的文件
-                    filename=$(basename "$file")
-                    cp -f "$file" "$target_dir/$filename" 2>/dev/null
-                fi
-            fi
+            echo "  ✅ 恢复: $filename"
         done
     fi
     
@@ -5740,27 +5470,16 @@ EOF
     local initramfs_count=0
     
     if [ -d "$target_dir" ]; then
-        find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
-            if [ -f "$file" ] && [ -s "$file" ]; then
-                size=$(ls -lh "$file" | awk '{print $5}')
-                size_kb=$(du -k "$file" | cut -f1)
-                
-                if echo "$file" | grep -q "sysupgrade"; then
-                    sysupgrade_count=$((sysupgrade_count + 1))
-                    echo "  ✅ sysupgrade: $(basename "$file") ($size)"
-                    if [ $size_kb -lt 5000 ]; then
-                        echo "     ⚠️ 警告: 文件可能不完整 (仅 ${size_kb}KB)"
-                    fi
-                elif echo "$file" | grep -q "factory"; then
-                    factory_count=$((factory_count + 1))
-                    echo "  ✅ factory: $(basename "$file") ($size)"
-                    if [ $size_kb -lt 5000 ]; then
-                        echo "     ⚠️ 警告: 文件可能不完整 (仅 ${size_kb}KB)"
-                    fi
-                elif echo "$file" | grep -q "initramfs"; then
-                    initramfs_count=$((initramfs_count + 1))
-                    echo "  🔷 initramfs: $(basename "$file") ($size)"
-                fi
+        ls -la "$target_dir/" 2>/dev/null | while read line; do
+            if echo "$line" | grep -q "sysupgrade.*\.bin"; then
+                sysupgrade_count=$((sysupgrade_count + 1))
+                echo "  ✅ $(echo "$line" | awk '{print $9" ("$5" bytes)"}')"
+            elif echo "$line" | grep -q "factory.*\.img"; then
+                factory_count=$((factory_count + 1))
+                echo "  ✅ $(echo "$line" | awk '{print $9" ("$5" bytes)"}')"
+            elif echo "$line" | grep -q "initramfs.*\.bin"; then
+                initramfs_count=$((initramfs_count + 1))
+                echo "  🔷 $(echo "$line" | awk '{print $9" ("$5" bytes)"}')"
             fi
         done
     fi
@@ -5768,12 +5487,83 @@ EOF
     echo "----------------------------------------"
     echo "📊 统计: sysupgrade: $sysupgrade_count, factory: $factory_count, initramfs: $initramfs_count"
     
+    # 如果缺少关键固件，尝试从备份中查找
     if [ $sysupgrade_count -eq 0 ] || [ $factory_count -eq 0 ]; then
-        echo "❌ 错误: 缺少关键固件文件"
+        echo ""
+        echo "🔍 在监控目录中搜索固件..."
+        
+        if [ -d "$monitor_dir" ]; then
+            find "$monitor_dir" -type f -name "*.bin" -o -name "*.img" 2>/dev/null | while read file; do
+                size=$(ls -l "$file" | awk '{print $5}')
+                if [ $size -gt 5000000 ]; then  # 大于 5MB
+                    filename=$(basename "$file")
+                    cp -f "$file" "$target_dir/$filename"
+                    echo "  ✅ 从监控恢复: $filename ($size bytes)"
+                    
+                    if echo "$filename" | grep -q "sysupgrade"; then
+                        sysupgrade_count=$((sysupgrade_count + 1))
+                    elif echo "$filename" | grep -q "factory"; then
+                        factory_count=$((factory_count + 1))
+                    fi
+                fi
+            done
+        fi
+        
+        # 在构建目录中搜索
+        echo ""
+        echo "🔍 在构建目录中搜索固件..."
+        find "$BUILD_DIR" -path "*/tmp/*.bin" -o -path "*/tmp/*.img" 2>/dev/null | while read file; do
+            size=$(ls -l "$file" | awk '{print $5}')
+            if [ $size -gt 5000000 ]; then  # 大于 5MB
+                filename=$(basename "$file")
+                cp -f "$file" "$target_dir/$filename"
+                echo "  ✅ 从临时目录恢复: $filename ($size bytes)"
+                
+                if echo "$filename" | grep -q "sysupgrade"; then
+                    sysupgrade_count=$((sysupgrade_count + 1))
+                elif echo "$filename" | grep -q "factory"; then
+                    factory_count=$((factory_count + 1))
+                fi
+            fi
+        done
+    fi
+    
+    # 最终验证
+    echo ""
+    if [ $sysupgrade_count -gt 0 ] && [ $factory_count -gt 0 ]; then
+        echo "🎉 成功生成固件文件！"
+        
+        # 验证文件大小
+        for file in "$target_dir"/*sysupgrade*.bin "$target_dir"/*factory*.img; do
+            if [ -f "$file" ]; then
+                size_kb=$(du -k "$file" | cut -f1)
+                if [ $size_kb -lt 5000 ]; then
+                    echo "⚠️ 警告: $(basename "$file") 可能不完整 (仅 ${size_kb}KB)"
+                else
+                    echo "✅ $(basename "$file"): ${size_kb}KB"
+                fi
+            fi
+        done
+        
+        # 列出所有固件文件
+        echo ""
+        echo "📋 固件文件列表:"
+        ls -la "$target_dir/" | grep -E "\.bin|\.img" || true
+    else
+        echo "❌ 错误: 未能找到完整的固件文件"
+        
+        # 显示所有可能的固件文件
+        echo ""
+        echo "📁 搜索所有可能的固件文件:"
+        find "$BUILD_DIR" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
+            size=$(ls -lh "$file" | awk '{print $5}')
+            echo "  📄 $(basename "$file") ($size)"
+        done
+        
         exit 1
     fi
     
-    rm -rf "$protect_dir" 2>/dev/null || true
+    rm -rf "$monitor_dir" 2>/dev/null || true
     
     log "✅ 步骤22 完成"
 }
