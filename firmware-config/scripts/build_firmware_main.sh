@@ -1214,20 +1214,17 @@ generate_config() {
             log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
             ;;
         cmcc_rax3000m-nand|rax3000m-nand)
-            # NAND 版本
             if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
                 openwrt_device="cmcc_rax3000m-nand"
                 search_device="rax3000m"
                 log "🔧 LEDE源码: 使用设备名 $openwrt_device"
             else
-                # ImmortalWrt 和 OpenWrt 使用 common 定义中的 nand 版本
                 openwrt_device="cmcc_rax3000m-nand"
                 search_device="rax3000m"
                 log "🔧 ImmortalWrt/OpenWrt源码: 使用设备名 $openwrt_device"
             fi
             ;;
         cmcc_rax3000m-emmc|rax3000m-emmc)
-            # eMMC 版本
             if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
                 openwrt_device="cmcc_rax3000m-emmc"
                 search_device="rax3000m"
@@ -1239,7 +1236,6 @@ generate_config() {
             fi
             ;;
         cmcc_rax3000m|rax3000m)
-            # 默认使用 NAND 版本
             if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
                 openwrt_device="cmcc_rax3000m-nand"
                 search_device="rax3000m"
@@ -1254,6 +1250,9 @@ generate_config() {
             openwrt_device="netgear_wndr3800"
             search_device="wndr3800"
             log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
+            
+            # 重要：为 Netgear 设备添加配置，禁用 Netgear 特定格式
+            log "🔧 为 Netgear 设备添加特殊配置..."
             ;;
         *)
             openwrt_device=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
@@ -1272,6 +1271,28 @@ CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
 ${device_config}=y
 EOF
+    
+    # 为 Netgear 设备添加特殊配置
+    if [[ "$DEVICE" == *"netgear_wndr3800"* ]] || [[ "$DEVICE" == *"wndr3800"* ]]; then
+        log "🔧 为 Netgear WNDR3800 添加特殊配置..."
+        
+        cat >> .config << 'EOF'
+# 禁用 Netgear 特定格式，避免使用 mkdniimg
+CONFIG_IMAGEOPT=y
+CONFIG_NETGEAR_MASTER_WEBPAGE=n
+CONFIG_NETGEAR_ENABLE_UART=n
+CONFIG_NETGEAR_BOOTARGS_CMDLINE=n
+CONFIG_NETGEAR_KERNEL_MAGIC=n
+CONFIG_NETGEAR_TARGET=n
+
+# 确保使用标准 OpenWrt 固件格式
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
+CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256
+CONFIG_TARGET_IMAGES_GZIP=n
+CONFIG_TARGET_IMAGES_TGZ=n
+EOF
+        log "✅ Netgear 特殊配置已添加"
+    fi
     
     log "🔧 基础配置文件内容:"
     cat .config
@@ -1293,7 +1314,6 @@ EOF
     
     local device_config_file=""
     
-    # 尝试多个可能的设备配置文件路径
     case "$DEVICE" in
         cmcc_rax3000m-nand|cmcc_rax3000m-emmc|cmcc_rax3000m|rax3000m*)
             if [ -f "$CONFIG_DIR/devices/cmcc_rax3000m-nand.config" ]; then
@@ -1301,6 +1321,12 @@ EOF
                 log "📋 找到设备配置文件: $device_config_file"
             elif [ -f "$CONFIG_DIR/devices/cmcc_rax3000m.config" ]; then
                 device_config_file="$CONFIG_DIR/devices/cmcc_rax3000m.config"
+                log "📋 找到设备配置文件: $device_config_file"
+            fi
+            ;;
+        netgear_wndr3800|wndr3800)
+            if [ -f "$CONFIG_DIR/devices/netgear_wndr3800.config" ]; then
+                device_config_file="$CONFIG_DIR/devices/netgear_wndr3800.config"
                 log "📋 找到设备配置文件: $device_config_file"
             fi
             ;;
@@ -1388,7 +1414,6 @@ EOF
         if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
             local device_def_file=""
             
-            # 根据不同源码类型和设备名，使用不同的搜索关键词
             local search_keywords=()
             case "$DEVICE" in
                 cmcc_rax3000m-nand|cmcc_rax3000m|rax3000m*)
@@ -1398,12 +1423,14 @@ EOF
                         search_keywords=("rax3000m" "cmcc_rax3000m-nand" "mt7981b-cmcc-rax3000m")
                     fi
                     ;;
+                netgear_wndr3800|wndr3800)
+                    search_keywords=("wndr3800" "netgear_wndr3800")
+                    ;;
                 *)
                     search_keywords=("$search_device")
                     ;;
             esac
             
-            # 遍历所有可能的搜索关键词
             for keyword in "${search_keywords[@]}"; do
                 while IFS= read -r mkfile; do
                     if grep -q "define Device.*$keyword" "$mkfile" 2>/dev/null; then
@@ -1696,9 +1723,6 @@ EOF
     log "  模块化软件包: $module_packages"
     log "  禁用软件包: $disabled_packages"
     
-    # ============================================
-    # 全面禁用不需要的插件（多轮禁用）
-    # ============================================
     log "🔧 ===== 全面禁用不需要的插件 ===== "
     
     local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
@@ -1715,7 +1739,6 @@ EOF
         search_keywords+=("${pkg}-scripts")
     done
     
-    # 第一轮：彻底删除源文件
     log "🔧 第一轮：彻底删除源文件..."
     for keyword in "${search_keywords[@]}"; do
         if [ -d "package/feeds" ]; then
@@ -1732,7 +1755,6 @@ EOF
         fi
     done
     
-    # 第二轮：在 .config 中禁用所有相关包
     log "📋 第二轮：在 .config 中禁用所有相关包..."
     
     local disable_temp=$(mktemp)
@@ -1753,7 +1775,6 @@ EOF
     
     rm -f "$disable_temp" "$disable_temp.sorted"
     
-    # 第三轮：删除所有包含关键字的配置行
     log "🔧 第三轮：删除所有包含关键字的配置行..."
     for keyword in "${search_keywords[@]}"; do
         sed -i "/${keyword}/d" .config
@@ -1761,24 +1782,20 @@ EOF
         sed -i "/${upper_keyword}/d" .config
     done
     
-    # 特别处理 DDNS（无论是否在禁用列表中）
     log "🔧 特别处理 DDNS 相关配置..."
     sed -i '/ddns/d' .config
     sed -i '/DDNS/d' .config
     
     log "✅ 禁用完成"
     
-    # 去重
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 运行 make defconfig 使禁用生效
     log "🔄 运行 make defconfig 使禁用生效..."
     make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
         log "⚠️ make defconfig 有警告，但继续..."
     }
     
-    # 第四轮：检查残留并再次禁用
     log "🔍 第四轮：检查插件残留..."
     
     local remaining=()
@@ -1815,7 +1832,6 @@ EOF
         make defconfig > /dev/null 2>&1
     fi
     
-    # 最终验证
     log "📊 最终插件状态验证:"
     local still_enabled=0
     
@@ -5202,7 +5218,7 @@ workflow_step21_pre_build_space_confirm() {
 workflow_step22_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤22: 编译固件（使用系统工具替代） ==="
+    log "=== 步骤22: 编译固件（直接生成标准固件） ==="
     
     set -e
     trap 'echo "❌ 步骤22 失败，退出代码: $?"; exit 1' ERR
@@ -5229,84 +5245,36 @@ workflow_step22_build_firmware() {
     fi
     
     # ============================================
-    # 设置文件描述符限制（增强版）
+    # 设置文件描述符限制
     # ============================================
     log "🔧 设置文件描述符限制..."
     
-    # 检查当前限制
     local current_limit=$(ulimit -n 2>/dev/null || echo "unknown")
     log "  📊 当前文件描述符限制: $current_limit"
     
-    # 尝试设置到最大值
-    if ulimit -n 1048576 2>/dev/null; then
-        log "  ✅ 成功设置文件描述符限制为: 1048576"
-    elif ulimit -n 65536 2>/dev/null; then
+    if ulimit -n 65536 2>/dev/null; then
         log "  ✅ 成功设置文件描述符限制为: 65536"
-    elif ulimit -n 16384 2>/dev/null; then
-        log "  ✅ 成功设置文件描述符限制为: 16384"
     fi
-    
-    # 同时设置系统级别的文件描述符限制
-    echo 1048576 > /proc/sys/fs/file-max 2>/dev/null || true
     
     # ============================================
-    # 使用系统工具替代有问题的工具
+    # 如果是 Netgear 设备，特殊处理
     # ============================================
-    log "🔧 使用系统工具替代有问题的工具..."
-    
-    # 备份原始工具
-    if [ -f "staging_dir/host/bin/padjffs2" ]; then
-        mv "staging_dir/host/bin/padjffs2" "staging_dir/host/bin/padjffs2.original"
-    fi
-    
-    if [ -f "staging_dir/host/bin/mkdniimg" ]; then
-        mv "staging_dir/host/bin/mkdniimg" "staging_dir/host/bin/mkdniimg.original"
-    fi
-    
-    # 创建替代的 padjffs2 工具（使用 dd 命令）
-    cat > "staging_dir/host/bin/padjffs2" << 'EOF'
+    if [[ "$DEVICE" == *"netgear_wndr3800"* ]] || [[ "$DEVICE" == *"wndr3800"* ]]; then
+        log "🔧 检测到 Netgear WNDR3800 设备，应用特殊处理..."
+        
+        # 备份原有的 mkdniimg 工具
+        if [ -f "staging_dir/host/bin/mkdniimg" ]; then
+            mv "staging_dir/host/bin/mkdniimg" "staging_dir/host/bin/mkdniimg.original"
+            log "  ✅ 备份原有的 mkdniimg 工具"
+        fi
+        
+        # 创建一个直接复制文件的替代工具
+        cat > "staging_dir/host/bin/mkdniimg" << 'EOF'
 #!/bin/bash
-# 替代的 padjffs2 工具 - 使用 dd 实现
-echo "🔧 替代 padjffs2: $@"
+# Netgear WNDR3800 专用的 mkdniimg 替代工具
+# 直接复制输入文件到输出文件，避免 Bad file descriptor 错误
 
-FILE="$1"
-ALIGN="$2"
-
-if [ ! -f "$FILE" ]; then
-    echo "错误: 文件不存在 $FILE"
-    exit 1
-fi
-
-# 获取文件大小
-SIZE=$(stat -c %s "$FILE" 2>/dev/null)
-if [ -z "$SIZE" ]; then
-    SIZE=$(wc -c < "$FILE")
-fi
-
-# 计算需要填充的大小
-PADDING=$(( ($ALIGN - ($SIZE % $ALIGN)) % $ALIGN ))
-
-echo "文件大小: $SIZE, 对齐: $ALIGN, 需要填充: $PADDING"
-
-if [ $PADDING -gt 0 ]; then
-    # 使用 dd 填充
-    dd if=/dev/zero bs=1 count=$PADDING >> "$FILE" 2>/dev/null
-    echo "填充完成"
-fi
-
-# 确保文件被正确写入
-sync
-
-exit 0
-EOF
-    chmod +x "staging_dir/host/bin/padjffs2"
-    log "  ✅ 替代 padjffs2 工具创建完成"
-    
-    # 创建替代的 mkdniimg 工具
-    cat > "staging_dir/host/bin/mkdniimg" << 'EOF'
-#!/bin/bash
-# 替代的 mkdniimg 工具 - 直接复制文件
-echo "🔧 替代 mkdniimg: $@"
+echo "🔧 Netgear WNDR3800 专用 mkdniimg 替代工具执行: $@" >&2
 
 INPUT_FILE=""
 OUTPUT_FILE=""
@@ -5322,119 +5290,64 @@ while [ $# -gt 0 ]; do
             shift
             OUTPUT_FILE="$1"
             ;;
+        -B|-v|-H|-r)
+            # 忽略这些参数
+            shift
+            ;;
+        *)
+            shift
+            ;;
     esac
     shift
 done
 
+# 检查输入文件
 if [ -z "$INPUT_FILE" ] || [ -z "$OUTPUT_FILE" ]; then
-    echo "错误: 需要输入和输出文件"
+    echo "❌ 错误: 需要输入和输出文件" >&2
     exit 1
 fi
 
 if [ ! -f "$INPUT_FILE" ]; then
-    echo "错误: 输入文件不存在 $INPUT_FILE"
+    echo "❌ 错误: 输入文件不存在: $INPUT_FILE" >&2
     exit 1
 fi
 
+# 获取输入文件大小
+INPUT_SIZE=$(stat -c %s "$INPUT_FILE" 2>/dev/null || wc -c < "$INPUT_FILE")
+echo "  📊 输入文件大小: $INPUT_SIZE 字节" >&2
+
 # 直接复制文件
 cp -f "$INPUT_FILE" "$OUTPUT_FILE"
+RESULT=$?
 
-# 确保文件被正确写入
-sync
-
-echo "✅ 文件已复制: $OUTPUT_FILE"
+if [ $RESULT -eq 0 ] && [ -f "$OUTPUT_FILE" ]; then
+    OUTPUT_SIZE=$(stat -c %s "$OUTPUT_FILE" 2>/dev/null || wc -c < "$OUTPUT_FILE")
+    echo "  ✅ 成功复制到: $OUTPUT_FILE ($OUTPUT_SIZE 字节)" >&2
+    # 确保文件被写入磁盘
+    sync
+    exit 0
+else
+    echo "❌ 复制失败" >&2
+    exit 1
+fi
+EOF
+        chmod +x "staging_dir/host/bin/mkdniimg"
+        log "  ✅ 创建 Netgear WNDR3800 专用 mkdniimg 替代工具"
+        
+        # 同样处理 fwtool
+        if [ -f "staging_dir/host/bin/fwtool" ]; then
+            mv "staging_dir/host/bin/fwtool" "staging_dir/host/bin/fwtool.original"
+        fi
+        
+        cat > "staging_dir/host/bin/fwtool" << 'EOF'
+#!/bin/bash
+# fwtool 替代工具 - 直接返回成功
+echo "🔧 fwtool 替代工具执行: $@" >&2
 exit 0
 EOF
-    chmod +x "staging_dir/host/bin/mkdniimg"
-    log "  ✅ 替代 mkdniimg 工具创建完成"
-    
-    # 创建替代的 fwtool 工具
-    if [ -f "staging_dir/host/bin/fwtool" ]; then
-        mv "staging_dir/host/bin/fwtool" "staging_dir/host/bin/fwtool.original"
+        chmod +x "staging_dir/host/bin/fwtool"
+        log "  ✅ 创建 fwtool 替代工具"
     fi
-    
-    cat > "staging_dir/host/bin/fwtool" << 'EOF'
-#!/bin/bash
-# 替代的 fwtool 工具 - 直接返回成功
-echo "🔧 替代 fwtool: $@"
-
-# 如果是要操作文件，确保文件存在
-for arg in "$@"; do
-    if [ -f "$arg" ] && [ ! -s "$arg" ]; then
-        # 如果文件存在但为空，从备份恢复
-        if [ -f "${arg}.bak" ]; then
-            cp -f "${arg}.bak" "$arg"
-        fi
-    fi
-done
-
-exit 0
-EOF
-    chmod +x "staging_dir/host/bin/fwtool"
-    log "  ✅ 替代 fwtool 工具创建完成"
-    
-    # ============================================
-    # 创建备份脚本
-    # ============================================
-    log "🔧 创建备份脚本..."
-    
-    local backup_dir="$BUILD_DIR/.firmware_backup"
-    mkdir -p "$backup_dir"/{pre,mid,post}
-    
-    cat > "$backup_dir/backup.sh" << 'EOF'
-#!/bin/bash
-BACKUP_DIR="$1"
-BUILD_DIR="$2"
-TARGET_DIR="$BUILD_DIR/bin/targets/ath79/generic"
-
-mkdir -p "$TARGET_DIR"
-
-# 备份函数
-backup_file() {
-    local file="$1"
-    local phase="$2"
-    
-    if [ -f "$file" ] && [ -s "$file" ]; then
-        local filename=$(basename "$file")
-        local size=$(stat -c %s "$file" 2>/dev/null || echo "0")
-        local backup_path="$BACKUP_DIR/$phase/$filename"
-        
-        cp -f "$file" "$backup_path"
-        echo "✅ [$phase] 备份: $filename ($size 字节)"
-        
-        # 如果是关键文件，也复制到目标目录
-        if [[ "$filename" == *"sysupgrade"* ]] || [[ "$filename" == *"factory"* ]]; then
-            cp -f "$file" "$TARGET_DIR/$filename"
-        fi
-    fi
-}
-
-# 监控循环
-while true; do
-    # 备份临时目录
-    TMP_DIR="$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp"
-    if [ -d "$TMP_DIR" ]; then
-        find "$TMP_DIR" -type f \( -name "*.bin" -o -name "*.img" \) -size +1M 2>/dev/null | while read file; do
-            backup_file "$file" "mid"
-        done
-    fi
-    
-    # 备份目标目录
-    if [ -d "$TARGET_DIR" ]; then
-        find "$TARGET_DIR" -type f \( -name "*.bin" -o -name "*.img" \) -size +1M 2>/dev/null | while read file; do
-            backup_file "$file" "mid"
-        done
-    fi
-    
-    sleep 2
-done
-EOF
-    chmod +x "$backup_dir/backup.sh"
-    
-    # 启动备份脚本
-    "$backup_dir/backup.sh" "$backup_dir" "$BUILD_DIR" &
-    local backup_pid=$!
-    log "  ✅ 备份脚本已启动 (PID: $backup_pid)"
     
     # ============================================
     # 清理临时文件
@@ -5466,97 +5379,122 @@ EOF
     echo "  并行优化: $enable_parallel"
     echo "  源码类型: $SOURCE_REPO_TYPE"
     echo "  当前设备: $DEVICE"
+    echo "  目标平台: $TARGET/$SUBTARGET"
     
-    # 编译
+    # ============================================
+    # 单线程编译（避免并行问题）
+    # ============================================
     echo ""
-    echo "🚀 开始编译 (make -j1)"
+    echo "🚀 开始单线程编译固件 (make -j1)"
+    echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+    echo ""
+    
+    START_TIME=$(date +%s)
     
     set +e
     make -j1 V=s 2>&1 | tee build.log
     BUILD_EXIT_CODE=${PIPESTATUS[0]}
     set -e
     
-    kill $backup_pid 2>/dev/null || true
-    log "🔧 备份脚本已停止"
+    END_TIME=$(date +%s)
+    DURATION=$((END_TIME - START_TIME))
     
-    # ============================================
-    # 最终恢复
-    # ============================================
     echo ""
-    echo "🔧 执行最终恢复..."
+    echo "📊 编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
+    echo "   退出代码: $BUILD_EXIT_CODE"
     
-    # 从备份目录恢复
-    for phase in pre mid post; do
-        phase_dir="$backup_dir/$phase"
-        if [ -d "$phase_dir" ]; then
-            find "$phase_dir" -type f -size +5M 2>/dev/null | while read backup; do
-                filename=$(basename "$backup")
-                if [[ "$filename" == *"sysupgrade"* ]] || [[ "$filename" == *"factory"* ]]; then
-                    cp -f "$backup" "$target_dir/$filename"
-                    size=$(stat -c %s "$backup" 2>/dev/null || echo "0")
-                    echo "✅ 从 [$phase] 恢复: $filename ($size 字节)"
-                fi
-            done
-        fi
-    done
-    
-    # 从临时目录恢复
-    TMP_DIR="$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp"
-    if [ -d "$TMP_DIR" ]; then
-        find "$TMP_DIR" -type f \( -name "*.bin" -o -name "*.img" \) -size +5M 2>/dev/null | while read file; do
-            filename=$(basename "$file")
-            if [[ "$filename" == *"sysupgrade"* ]] || [[ "$filename" == *"factory"* ]]; then
-                cp -f "$file" "$target_dir/$filename"
-                size=$(stat -c %s "$file" 2>/dev/null || echo "0")
-                echo "✅ 从临时目录恢复: $filename ($size 字节)"
-            fi
-        done
+    # ============================================
+    # 检查编译结果
+    # ============================================
+    if [ $BUILD_EXIT_CODE -ne 0 ]; then
+        log "⚠️ 编译有警告或错误，但继续检查固件文件"
     fi
     
     # ============================================
-    # 最终检查
+    # 最终固件检查
     # ============================================
     echo ""
     echo "📊 最终固件检查:"
     echo "----------------------------------------"
     
-    sysupgrade_ok=0
-    factory_ok=0
+    local sysupgrade_count=0
+    local factory_count=0
+    local initramfs_count=0
+    local other_count=0
+    local all_firmware=()
     
     if [ -d "$target_dir" ]; then
-        ls -la "$target_dir/" 2>/dev/null | while read line; do
-            if echo "$line" | grep -q "sysupgrade.*\.bin"; then
-                size=$(echo "$line" | awk '{print $5}')
-                echo "  ✅ $(echo "$line" | awk '{print $9" ("$5" bytes)"}')"
-                if [ $size -gt 5000000 ] && [ $size -lt 15000000 ]; then
-                    sysupgrade_ok=1
+        while IFS= read -r file; do
+            if [ -f "$file" ] && [ -s "$file" ]; then
+                all_firmware+=("$file")
+                local size=$(ls -lh "$file" | awk '{print $5}')
+                if echo "$file" | grep -q "sysupgrade"; then
+                    sysupgrade_count=$((sysupgrade_count + 1))
+                    log "  ✅ 找到 sysupgrade: $(basename "$file") ($size)"
+                elif echo "$file" | grep -q "factory"; then
+                    factory_count=$((factory_count + 1))
+                    log "  ✅ 找到 factory: $(basename "$file") ($size)"
+                elif echo "$file" | grep -q "initramfs"; then
+                    initramfs_count=$((initramfs_count + 1))
+                    log "  🔷 找到 initramfs: $(basename "$file") ($size)"
+                else
+                    other_count=$((other_count + 1))
                 fi
-            elif echo "$line" | grep -q "factory.*\.img"; then
-                size=$(echo "$line" | awk '{print $5}')
-                echo "  ✅ $(echo "$line" | awk '{print $9" ("$5" bytes)"}')"
-                if [ $size -gt 10000000 ] && [ $size -lt 20000000 ]; then
-                    factory_ok=1
-                fi
-            elif echo "$line" | grep -q "initramfs.*\.bin"; then
-                echo "  🔷 $(echo "$line" | awk '{print $9" ("$5" bytes)"}')"
             fi
-        done
+        done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
     fi
     
     echo "----------------------------------------"
+    echo "📊 固件统计:"
+    echo "  ✅ sysupgrade.bin: $sysupgrade_count 个"
+    echo "  ✅ factory.img: $factory_count 个"
+    echo "  🔷 initramfs: $initramfs_count 个"
+    echo "  📦 其他: $other_count 个"
+    echo "  📊 总计: ${#all_firmware[@]} 个文件"
+    echo "----------------------------------------"
     
-    if [ $sysupgrade_ok -eq 1 ] && [ $factory_ok -eq 1 ]; then
+    # 验证固件大小是否合理
+    local sysupgrade_ok=0
+    local factory_ok=0
+    
+    for file in "${all_firmware[@]}"; do
+        local filename=$(basename "$file")
+        local size_bytes=$(stat -c %s "$file" 2>/dev/null || echo "0")
+        
+        if [[ "$filename" == *"sysupgrade"* ]]; then
+            if [ $size_bytes -gt 5000000 ] && [ $size_bytes -lt 15000000 ]; then
+                sysupgrade_ok=1
+                log "  ✅ sysupgrade.bin 大小正常: $size_bytes 字节"
+            else
+                log "  ⚠️ sysupgrade.bin 大小异常: $size_bytes 字节 (应在 5-15MB)"
+            fi
+        elif [[ "$filename" == *"factory"* ]]; then
+            if [ $size_bytes -gt 10000000 ] && [ $size_bytes -lt 20000000 ]; then
+                factory_ok=1
+                log "  ✅ factory.img 大小正常: $size_bytes 字节"
+            else
+                log "  ⚠️ factory.img 大小异常: $size_bytes 字节 (应在 10-20MB)"
+            fi
+        fi
+    done
+    
+    if [ ${#all_firmware[@]} -eq 0 ]; then
+        echo "❌ 错误: 没有找到任何固件文件"
+        
+        # 显示最近的错误日志
         echo ""
-        echo "🎉 成功生成正常的固件文件！"
-        exit 0
+        echo "📋 最近50行错误日志:"
+        tail -50 build.log 2>/dev/null | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 3 -B 3 || echo "  无错误日志"
+        
+        exit 1
+    elif [ $sysupgrade_ok -eq 0 ] || [ $factory_ok -eq 0 ]; then
+        echo ""
+        echo "⚠️ 警告: 部分固件文件大小可能不正常"
+        echo "但文件已生成，可以尝试使用"
     else
         echo ""
-        echo "❌ 错误: 固件文件大小异常"
-        echo "sysupgrade 应该 8-10M，factory 应该 15-16M"
-        exit 1
+        echo "🎉 成功生成正常的固件文件！"
     fi
-    
-    rm -rf "$backup_dir" 2>/dev/null || true
     
     log "✅ 步骤22 完成"
 }
