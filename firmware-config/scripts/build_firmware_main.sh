@@ -1250,9 +1250,6 @@ generate_config() {
             openwrt_device="netgear_wndr3800"
             search_device="wndr3800"
             log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
-            
-            # 重要：为 Netgear 设备添加配置，禁用 Netgear 特定格式
-            log "🔧 为 Netgear 设备添加特殊配置..."
             ;;
         *)
             openwrt_device=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
@@ -1272,26 +1269,33 @@ CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
 ${device_config}=y
 EOF
     
-    # 为 Netgear 设备添加特殊配置
+    # 为 Netgear 设备添加必要的内核配置
     if [[ "$DEVICE" == *"netgear_wndr3800"* ]] || [[ "$DEVICE" == *"wndr3800"* ]]; then
-        log "🔧 为 Netgear WNDR3800 添加特殊配置..."
+        log "🔧 为 Netgear WNDR3800 添加必要的内核配置..."
         
         cat >> .config << 'EOF'
-# 禁用 Netgear 特定格式，避免使用 mkdniimg
-CONFIG_IMAGEOPT=y
-CONFIG_NETGEAR_MASTER_WEBPAGE=n
-CONFIG_NETGEAR_ENABLE_UART=n
-CONFIG_NETGEAR_BOOTARGS_CMDLINE=n
-CONFIG_NETGEAR_KERNEL_MAGIC=n
-CONFIG_NETGEAR_TARGET=n
-
-# 确保使用标准 OpenWrt 固件格式
+# Netgear WNDR3800 必要的内核配置
+CONFIG_TARGET_ath79_generic_DEVICE_netgear_wndr3800=y
+CONFIG_TARGET_IMAGES_GZIP=y
+CONFIG_TARGET_ROOTFS_PARTSIZE=256
 CONFIG_TARGET_ROOTFS_SQUASHFS=y
 CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256
-CONFIG_TARGET_IMAGES_GZIP=n
-CONFIG_TARGET_IMAGES_TGZ=n
+CONFIG_GRUB_CONSOLE=y
+CONFIG_GRUB_SERIAL=y
+CONFIG_GRUB_TERMINALS=y
+CONFIG_PACKAGE_kmod-usb-ohci=y
+CONFIG_PACKAGE_kmod-usb2=y
+CONFIG_PACKAGE_kmod-usb-ledtrig-usbport=y
+CONFIG_PACKAGE_kmod-leds-reset=y
+CONFIG_PACKAGE_kmod-owl-loader=y
+CONFIG_PACKAGE_kmod-ath9k=y
+CONFIG_PACKAGE_kmod-ath9k-htc=y
+CONFIG_PACKAGE_hostapd-common=y
+CONFIG_PACKAGE_wpad-basic=y
+CONFIG_PACKAGE_iw=y
+CONFIG_PACKAGE_iwinfo=y
 EOF
-        log "✅ Netgear 特殊配置已添加"
+        log "✅ Netgear 内核配置已添加"
     fi
     
     log "🔧 基础配置文件内容:"
